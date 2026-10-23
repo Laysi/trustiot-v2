@@ -90,6 +90,15 @@ const INSERT_ASSETS_OUTBOX: &str = "INSERT INTO assets.outbox_event
      envelope)
 VALUES (pg_current_xact_id()::text::bigint, $1::uuid, $2, $3::uuid, 'device_model', $4, $5,
         $6::jsonb)";
+/// The consumer of certs' outbox (factory registrations, Laysi/trustiot-v2#79).
+const CERTS_SUBSCRIPTION: &str = "identity.event-log.certs";
+/// A platform-wide registration event written to certs' outbox by hand, as the certs service
+/// writes it: `$1` event ID, `$2` the envelope.
+const INSERT_CERTS_OUTBOX: &str = "INSERT INTO certs.outbox_event
+    (tx_order, event_id, event_type, tenant_id, aggregate_type, aggregate_id, aggregate_seq,
+     envelope)
+VALUES (pg_current_xact_id()::text::bigint, $1::uuid, 'certs.gateway_registered', NULL,
+        'gateway_registration', 'gw-0001', 1, $2::jsonb)";
 /// A recorded event's producer, type, aggregate and actor, by its ID.
 const LOGGED_ROW: &str =
     "SELECT tenant_id::text, producer, event_type, aggregate_type, aggregate_id,
@@ -584,6 +593,38 @@ async fn the_event_log_records_each_operation_once_and_serves_it_by_tenant_and_t
         .map(|(id, _, _)| id.clone())
         .collect();
 
+    // 5c. certs' factory registrations (Laysi/trustiot-v2#79) are platform-wide: recorded in the
+    //     platform log only.
+    let registration = contract::EventId::generate().to_string();
+    let envelope = json!({
+        "id": registration,
+        "type": "certs.gateway_registered",
+        "version": 1,
+        "tenant_id": null,
+        "occurred_at": "2026-10-23T09:00:00.000001Z",
+        "producer": "certs",
+        "payload": {"hardware_id": "gw-0001", "probe": registration},
+        "actor": {"kind": "user", "user_id": platform_user},
+    });
+    sqlx::query(INSERT_CERTS_OUTBOX)
+        .bind(&registration)
+        .bind(envelope.to_string())
+        .execute(&mut admin)
+        .await
+        .expect("write a registration event to certs' outbox");
+    wait_for(
+        &mut admin,
+        "certs' registration event in the platform log",
+        PLATFORM_LOGGED_BY_ID,
+        &[&registration],
+    )
+    .await;
+    assert_eq!(count(&mut admin, LOGGED_BY_ID, &[&registration]).await, 0);
+    assert_eq!(
+        count(&mut admin, INBOX_HAS, &[CERTS_SUBSCRIPTION, &registration]).await,
+        1
+    );
+
     // 6. Append-only: neither of the service's roles may change or remove a recorded event,
     //    and the platform role writes nothing.
     for role in ["identity_app", "identity_platform"] {
@@ -765,6 +806,7 @@ async fn the_event_log_records_each_operation_once_and_serves_it_by_tenant_and_t
     let platform_wide = page(&service, &platform_cookie, PLATFORM_LOG);
     let platform_ids = ids(&platform_wide);
     assert!(platform_ids.contains(&platform_event), "{platform_wide}");
+    assert!(platform_ids.contains(&registration), "{platform_wide}");
     assert!(
         !platform_ids.contains(&outbox[0]),
         "tenant events are not platform-wide"

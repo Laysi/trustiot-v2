@@ -360,10 +360,18 @@ export function migrationJobsOf(objects: K8sObject[]): string[] {
     .flatMap((o) => (o.metadata?.name === undefined ? [] : [o.metadata.name]));
 }
 
+/** The migration Job's variables that bind generated passwords to Secrets (`key=Secret,...`). */
+const PASSWORD_BINDINGS: ReadonlySet<string> = new Set([
+  "TRUSTIOT__PASSWORDS__POSTGRES",
+  "TRUSTIOT__PASSWORDS__CLICKHOUSE_COLLECTOR",
+  "TRUSTIOT__PASSWORDS__CLICKHOUSE_TELEMETRY_QUERY",
+]);
+
 /**
  * The Secrets the migration Job fills with the passwords it generates (Laysi/trustiot-v2#60), each
- * with the keys it writes, from the Job's TRUSTIOT__PASSWORDS__POSTGRES (`role=Secret,...`) and
- * TRUSTIOT__PASSWORDS__CLICKHOUSE_COLLECTOR (`account=Secret`); and the bundled ClickHouse's admin
+ * with the keys it writes, from the Job's TRUSTIOT__PASSWORDS__POSTGRES (`role=Secret,...`),
+ * TRUSTIOT__PASSWORDS__CLICKHOUSE_COLLECTOR and TRUSTIOT__PASSWORDS__CLICKHOUSE_TELEMETRY_QUERY
+ * (`account=Secret`, Laysi/trustiot-v2#539); and the bundled ClickHouse's admin
  * password Secret, which the ClickHouse pod's init container fills and the Job reads
  * (Laysi/trustiot-v2#403), from TRUSTIOT__CLICKHOUSE__PASSWORD_SECRET, keyed by the account in
  * TRUSTIOT__CLICKHOUSE__USERNAME.
@@ -382,7 +390,7 @@ export function passwordSecretsOf(objects: K8sObject[]): Map<string, string[]> {
         secrets.set(adminSecret, [...(secrets.get(adminSecret) ?? []), adminUser].sort());
       }
       for (const env of envs) {
-        if (env.name !== "TRUSTIOT__PASSWORDS__POSTGRES" && env.name !== "TRUSTIOT__PASSWORDS__CLICKHOUSE_COLLECTOR") continue;
+        if (!PASSWORD_BINDINGS.has(asString(env.name) ?? "")) continue;
         for (const binding of (asString(env.value) ?? "").split(",").filter((b) => b !== "")) {
           const [key, secret] = binding.split("=");
           if (key === undefined || secret === undefined || key === "" || secret === "") continue;
@@ -510,6 +518,17 @@ export function servicePortOf(objects: K8sObject[], component: string, portName:
     .find((candidate) => candidate.name === portName)?.port;
   if (typeof port !== "number") throw new Error(`Service ${service.metadata?.name} has no port named ${portName}`);
   return { service: service.metadata?.name ?? "", port };
+}
+
+/**
+ * The pod of the release's bundled ClickHouse (templates/clickhouse.yaml): the first pod of its
+ * one StatefulSet, which runs a single replica. Throws when the release has no such StatefulSet,
+ * as with an external ClickHouse.
+ */
+export function clickhousePodOf(objects: K8sObject[]): string {
+  const sets = flatten(objects).filter((o) => o.kind === "StatefulSet" && o.metadata?.labels?.["app.kubernetes.io/component"] === "clickhouse");
+  if (sets.length !== 1) throw new Error(`the release should have one bundled ClickHouse StatefulSet, found ${sets.length}`);
+  return `${sets[0]!.metadata?.name ?? ""}-0`;
 }
 
 /**

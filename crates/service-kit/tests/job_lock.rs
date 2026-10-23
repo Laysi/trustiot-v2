@@ -132,6 +132,7 @@ async fn periodic_runs_on_two_replicas_never_overlap() {
     let Some(database) = test_database().await else {
         return;
     };
+    let _scheduler = scheduler_alone().await;
     let job = unique_name("periodic");
     let shutdown = Shutdown::new();
     let intervals = Arc::new(Mutex::new(Vec::<(Instant, Instant)>::new()));
@@ -671,8 +672,26 @@ impl<S: tracing::Subscriber> tracing_subscriber::Layer<S> for Captured {
     }
 }
 
+/// Held by every test here that runs `run_periodically`, for as long as its schedule runs.
+///
+/// The tests that capture logs check the scheduler's log statements, so no other test may reach
+/// those statements while one captures (Laysi/trustiot-v2#581). tracing caches once per process
+/// whether a statement is enabled, and while at most one scoped subscriber exists, tracing-core
+/// 0.1.36 asks only the subscriber of the thread that reaches the statement first
+/// (`DefaultCallsite::register` with `Rebuilder::JustOne` in src/callsite.rs). A thread
+/// without a capture, such as a worker of `periodic_runs_on_two_replicas_never_overlap`, would
+/// cache "never" and hide the statement from the capturing test. The other tests here do not
+/// reach the scheduler.
+static SCHEDULER: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+/// Waits until no other test runs a schedule, and keeps them waiting until the guard drops.
+async fn scheduler_alone() -> tokio::sync::MutexGuard<'static, ()> {
+    SCHEDULER.lock().await
+}
+
 /// Starts capturing this thread's log events; the capture ends when the guard drops. The test
-/// must run on a current-thread runtime so that the scheduled task logs on this thread.
+/// must run on a current-thread runtime so that the scheduled task logs on this thread, and hold
+/// `scheduler_alone()` while it captures.
 fn capture_logs() -> (Captured, tracing::subscriber::DefaultGuard) {
     use tracing_subscriber::layer::SubscriberExt;
     let captured = Captured::default();
@@ -712,6 +731,7 @@ where
     let Some(database) = test_database().await else {
         return;
     };
+    let _scheduler = scheduler_alone().await;
     let (captured, _logs) = capture_logs();
     let job_name = unique_name(name);
     let lock = JobLock::new(replica(&database.url).await, "example-service", &job_name);
@@ -819,6 +839,7 @@ async fn a_job_that_panics_in_a_partition_gives_up_its_lock_within_the_timeout()
     let Some(database) = test_database().await else {
         return;
     };
+    let _scheduler = scheduler_alone().await;
     let (captured, _logs) = capture_logs();
     let job = unique_name("partition-panic");
     let proxy = Proxy::start(&database.url).await;

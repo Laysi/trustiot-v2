@@ -582,9 +582,21 @@ mod tests {
         assert!(!text.contains("not granted"), "{text}");
     }
 
+    /// Held by every test that calls `judge`, for its whole run (Laysi/trustiot-v2#581).
+    ///
+    /// tracing caches once per process whether a log statement is enabled, and while at most one
+    /// scoped subscriber exists, tracing-core 0.1.36 asks only the subscriber of the thread that
+    /// reaches the statement first (`DefaultCallsite::register` with `Rebuilder::JustOne` in
+    /// src/callsite.rs, which calls `dispatcher::get_default`). When
+    /// `a_passed_check_runs_no_query_again`, which captures nothing, reached the success line
+    /// first, the capturing test below lost that line (9 of 100 runs of this binary on
+    /// 2026-10-23). No other test in this crate reaches `judge`.
+    static JUDGE: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
     // A Tokio runtime only because the lazy pool needs one; `judge` runs no query.
     #[tokio::test]
     async fn a_failure_is_logged_once_with_each_file_and_a_success_is_kept() {
+        let _judge = JUDGE.lock().await;
         let (subscriber, capture, _provider) = capture_subscriber("info");
         let check = check();
         tracing::subscriber::with_default(subscriber, || {
@@ -631,14 +643,26 @@ mod tests {
             message.contains("run the migration Job of this release"),
             "{message}"
         );
-        // The success line (INFO) is not counted here: in full runs of this test binary it was
-        // missing from the thread-local capture now and then (2026-10-15, 1 run in 4), so the
-        // services' tests/migrations.rs check it in the real binary's log instead.
+        // The success is logged once, at INFO, although the check passed twice.
+        let passed: Vec<&serde_json::Value> = lines
+            .iter()
+            .filter(|line| line["level"] == "INFO")
+            .collect();
+        assert_eq!(passed.len(), 1, "{lines:#?}");
+        assert!(
+            passed[0]["message"]
+                .as_str()
+                .unwrap_or_default()
+                .starts_with("the database has every migration this image expects"),
+            "{lines:#?}"
+        );
+        assert_eq!(passed[0]["fields"]["expected"], 2);
         assert!(check.inner.passed.load(Ordering::Acquire));
     }
 
     #[tokio::test]
     async fn a_passed_check_runs_no_query_again() {
+        let _judge = JUDGE.lock().await;
         let check = check();
         check
             .judge(&SCHEMA.expected(), false)

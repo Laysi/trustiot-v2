@@ -235,7 +235,7 @@ bun scripts/flux/components.ts    # 重寫 gotk-components.yaml 與控制器映�
 | chart 版本 | 自己的 `chart.yaml` 與 `values-saas.yaml`；deploy PR 把它與 SaaS 一起移到新版，只動它時用 `pin-chart.ts` | 換版與 SaaS 一樣是「合併即部署、revert 即回滾」，簽章驗證也相同；代價是一個 deploy PR 可能同時動兩個叢集 |
 | values | HelmRelease 依序讀 `values-saas.yaml`、`values-demo.yaml`，最後是 SOPS 加密的 Secret `trustiot-demo-values` 的四個 key，各自以 `targetPath` 與 `literal: true` 寫進一個值：`app-host` → `hosts.app`、`gateway-host` → `hosts.gateway`、`ota-host` → `hosts.ota`、`smtp-from` → `smtp.from` | 主機名稱與寄件人不公開（[密鑰與權限](../../docs/architecture/secrets.md)「公開 repo 的資訊規則」），只在加密的 Secret 裡。加密的內容在 PR 裡看不到，所以它只能設這四個值：整份 values 的寫法能改任何設定（映像、ingress、環境變數），沒有 `literal` 時 Flux 以 Helm 的 `--set` 語法讀值，逗號就能接上另一個 `路徑=值`。Secret 帶 `reconcile.fluxcd.io/watch: Enabled`，改了就升級 |
 | 入口的 ClusterIP | 固定：`values-demo.yaml` 以 `ingress.tunnel.clusterIP` 設一個展示機 Service 網段（`10.43.0.0/16`）靜態區段裡沒被使用的位址，tunnel 的路由指向這個位址（Laysi/trustiot-v2#478）。設為 `10.43.0.80`（Laysi/trustiot-v2#480），與換到含這個欄位的 chart 版本在同一個 PR，而且在展示環境第一次部署（Laysi/trustiot-v2#467）之前；較舊的 chart 不認得這個欄位，schema 拒絕整份 values，HelmRelease 就失敗 | 入口 Service 重建後拿回同一個位址，路由不失效，舊位址也不會被別的 Service 拿走而經 tunnel 公開；ClusterIP 建立後不能改，所以要在 Service 第一次建立前設好。選法與改位址的步驟見 [chart 的 README](../chart/README.md)「固定的入口 ClusterIP」 |
-| 服務 | `values-demo.yaml` 的 `services` 逐一打開切片的服務（目前 `identity`、`assets`） | 只開部署中那一版 chart 有映像的服務；切片的 issue 進了 release 後，在這裡打開（AI 閘道要另設的值見下方「打開 AI 閘道」） |
+| 服務 | `values-demo.yaml` 的 `services` 逐一打開切片的服務（目前 `identity`、`assets`） | 只開部署中那一版 chart 有映像的服務；切片的 issue 進了 release 後，在這裡打開（AI 閘道與 telemetry-query 要另設的值見下方「打開 AI 閘道」「打開 telemetry-query」） |
 | 外部端點 | Qdrant 的網址在 `.invalid`（RFC 6761，不會解析）；Sentry 關閉 | 切片不用知識庫，SaaS 型態的 schema 又要求外部網址；沒有展示用的 Sentry 專案，錯誤留在 ClickHouse 的日誌 |
 | 備份與磁碟 | 沒有備份；Postgres 10Gi、ClickHouse 20Gi | 里程碑「展示切片」接受展示資料遺失；一台閘道器加幾具電表的量 |
 
@@ -324,6 +324,20 @@ age-keygen 的輸出不是終端機時，私鑰寫到管線、`Public key: …` 
     roles:
       main:                      # 例子：角色與模型由呼叫端的 issue 決定
         models: [anthropic/claude-sonnet-5-5]
+  ```
+
+- **打開 telemetry-query**（Laysi/trustiot-v2#539）：展示叢集部署的 chart 含 `deploy/images/telemetry-query` 之後，`values-demo.yaml` 加上下面兩個值：打開服務，加一條 app 主機的 cookie 路由 `/api/telemetry`（設備圖表的歷史查詢 API `/api/telemetry/v1`，[服務的 README](../../services/telemetry-query/README.md)「API」）。不用加 Secret：Postgres 角色與 ClickHouse 服務帳號的密碼由 migration Job 在叢集裡產生（`<release>-telemetry-query-password`），每個租戶的 ClickHouse 唯讀帳號由服務自己建立。路由的 `host: app` 是 `hosts.app` 這個欄位的名稱，不是主機名稱；真的主機名稱仍只在加密的 `trustiot-demo-values` 裡。`ingress.routes` 是清單，Helm 會整個取代，所以加這條路由時要保留 `values-demo.yaml` 已有的路由，之後加別的路由也要保留這一條。服務第一次啟動時從頭讀身分服務的事件，打開之前就有的租戶也會有帳號。打開前確認展示機的記憶體還放得下（服務的記憶體上限是 chart 預設的 256Mi）；打開後確認 pod 就緒，再以一個租戶成員的 session 呼叫 `GET /api/telemetry/v1/devices/<設備 ID>/latest`：帳號建好之前回 404（`telemetry.account_not_ready`），之後回 200。nightly 每晚以同樣的服務與路由部署並這樣呼叫一次，也在 ClickHouse 的 `system.users` 確認新租戶的帳號（[CI 與發版](../../docs/architecture/ci-release.md)「nightly.yml」）。
+
+  ```yaml
+  services:
+    telemetry-query:
+      enabled: true
+  ingress:
+    routes:                      # 整個清單：連同 values-demo.yaml 已有的路由
+      - host: app
+        path: /api/telemetry
+        match: PathPrefix
+        service: telemetry-query
   ```
 
 - **換版**：同 SaaS（上方「發版與回滾」），或以 `pin-chart.ts` 只換展示叢集。合併之前先照[展示環境 runbook](../../docs/runbooks/demo-environment.md)「換 chart 版本」比對新舊版本的 `deploy/istio/istiod-values.yaml`，有改就先對齊 istiod。

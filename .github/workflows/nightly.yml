@@ -53,8 +53,8 @@ on:
       - .dockerignore
       # What goes into the nightly's Rust images (scripts/nightly/image-cache.ts, NIGHTLY_IMAGES):
       # the workspace, the toolchain, the build scripts and every local crate tools/migrate,
-      # services/identity, services/assets and services/ai-gateway build from
-      # (scripts/nightly/image-cache.test.ts keeps this list complete), plus the files
+      # services/identity, services/assets, services/ai-gateway and services/telemetry-query build
+      # from (scripts/nightly/image-cache.test.ts keeps this list complete), plus the files
       # tools/migrate compiles in with #[path].
       - Cargo.toml
       - Cargo.lock
@@ -78,11 +78,13 @@ on:
       - deploy/images/identity/**
       - deploy/images/assets/**
       - deploy/images/ai-gateway/**
+      - deploy/images/telemetry-query/**
       - deploy/istio/**
       - tools/migrate/**
       - services/identity/**
       - services/assets/**
       - services/ai-gateway/**
+      - services/telemetry-query/**
       - services/*/migrations/**
 
 # No token scopes by default; each job asks for what it needs.
@@ -160,7 +162,10 @@ jobs:
     # test once (SaaS shape, no image build) and about a dozen requests per shape.
     # Laysi/trustiot-v2#536 adds the AI gateway's image (one more cold build, whose AI client
     # crates no other image uses) and per shape its rollout, with no request to it.
-    timeout-minutes: 60
+    # Laysi/trustiot-v2#539 adds the telemetry-query image (one more cold build on the same
+    # dependencies) and per shape its rollout, a few requests through the ingress and two
+    # ClickHouse queries in the pod.
+    timeout-minutes: 65
     permissions:
       contents: read
     env:
@@ -194,10 +199,10 @@ jobs:
         with:
           tools: bun helm k3d kubectl
       # The Rust images (NIGHTLY_IMAGES in scripts/nightly/image-cache.ts: deploy/images/migrate,
-      # identity, assets and ai-gateway) are reused while nothing that goes into them changed: the key is a
-      # digest of the git object hashes of every input of their builds. One entry holds every
-      # tarball, and it is saved only with all of them. Exact key only, no restore-keys: an image
-      # of other sources would test code that is not this commit's.
+      # identity, assets, ai-gateway and telemetry-query) are reused while nothing that goes into
+      # them changed: the key is a digest of the git object hashes of every input of their builds.
+      # One entry holds every tarball, and it is saved only with all of them. Exact key only, no
+      # restore-keys: an image of other sources would test code that is not this commit's.
       - name: Compute the cache key of the Rust images
         id: rust-images
         run: bun scripts/nightly/image-cache.ts key >> "$GITHUB_OUTPUT"

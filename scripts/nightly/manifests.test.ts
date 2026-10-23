@@ -170,6 +170,14 @@ spec:
       "rel-assets-password": ["assets_app"],
       "rel-identity-password": ["identity_app"],
     });
+    // telemetry-query's ClickHouse account shares the Secret of its Postgres roles (Laysi/trustiot-v2#539).
+    const telemetry = job([
+      { name: "TRUSTIOT__PASSWORDS__POSTGRES", value: "telemetry_query_app=rel-telemetry-query-password,telemetry_query_platform=rel-telemetry-query-password" },
+      { name: "TRUSTIOT__PASSWORDS__CLICKHOUSE_TELEMETRY_QUERY", value: "trustiot_telemetry_query=rel-telemetry-query-password" },
+    ]);
+    expect(Object.fromEntries(passwordSecretsOf(telemetry))).toEqual({
+      "rel-telemetry-query-password": ["telemetry_query_app", "telemetry_query_platform", "trustiot_telemetry_query"],
+    });
     expect(passwordSecretsOf(job([])).size).toBe(0);
   });
 

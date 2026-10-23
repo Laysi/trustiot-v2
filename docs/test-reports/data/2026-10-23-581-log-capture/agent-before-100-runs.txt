@@ -1,0 +1,8 @@
+agent-before: run 24 failed
+every_step_is_logged_with_its_duration --- FAILED
+---- every_step_is_logged_with_its_duration stdout ----
+thread 'every_step_is_logged_with_its_duration' (3472380) panicked at services/assistant/tests/agent.rs:657:5:
+  left: 2
+ right: 3
+test result: FAILED. 11 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.00s
+agent-before: 1 of 100 runs failed

@@ -1,0 +1,64 @@
+service-kit-lib-before: run 5 failed
+migrations::tests::a_failure_is_logged_once_with_each_file_and_a_success_is_kept --- FAILED
+---- migrations::tests::a_failure_is_logged_once_with_each_file_and_a_success_is_kept stdout ----
+thread 'migrations::tests::a_failure_is_logged_once_with_each_file_and_a_success_is_kept' (3531321) panicked at crates/service-kit/src/migrations.rs:639:9:
+  left: 0
+ right: 1
+test result: FAILED. 106 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.80s
+service-kit-lib-before: run 18 failed
+migrations::tests::a_failure_is_logged_once_with_each_file_and_a_success_is_kept --- FAILED
+---- migrations::tests::a_failure_is_logged_once_with_each_file_and_a_success_is_kept stdout ----
+thread 'migrations::tests::a_failure_is_logged_once_with_each_file_and_a_success_is_kept' (3533047) panicked at crates/service-kit/src/migrations.rs:639:9:
+  left: 0
+ right: 1
+test result: FAILED. 106 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.80s
+service-kit-lib-before: run 29 failed
+migrations::tests::a_failure_is_logged_once_with_each_file_and_a_success_is_kept --- FAILED
+---- migrations::tests::a_failure_is_logged_once_with_each_file_and_a_success_is_kept stdout ----
+thread 'migrations::tests::a_failure_is_logged_once_with_each_file_and_a_success_is_kept' (3534553) panicked at crates/service-kit/src/migrations.rs:639:9:
+  left: 0
+ right: 1
+test result: FAILED. 106 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.81s
+service-kit-lib-before: run 37 failed
+migrations::tests::a_failure_is_logged_once_with_each_file_and_a_success_is_kept --- FAILED
+---- migrations::tests::a_failure_is_logged_once_with_each_file_and_a_success_is_kept stdout ----
+thread 'migrations::tests::a_failure_is_logged_once_with_each_file_and_a_success_is_kept' (3535854) panicked at crates/service-kit/src/migrations.rs:639:9:
+  left: 0
+ right: 1
+test result: FAILED. 106 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.80s
+service-kit-lib-before: run 43 failed
+migrations::tests::a_failure_is_logged_once_with_each_file_and_a_success_is_kept --- FAILED
+---- migrations::tests::a_failure_is_logged_once_with_each_file_and_a_success_is_kept stdout ----
+thread 'migrations::tests::a_failure_is_logged_once_with_each_file_and_a_success_is_kept' (3536719) panicked at crates/service-kit/src/migrations.rs:639:9:
+  left: 0
+ right: 1
+test result: FAILED. 106 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.80s
+service-kit-lib-before: run 44 failed
+migrations::tests::a_failure_is_logged_once_with_each_file_and_a_success_is_kept --- FAILED
+---- migrations::tests::a_failure_is_logged_once_with_each_file_and_a_success_is_kept stdout ----
+thread 'migrations::tests::a_failure_is_logged_once_with_each_file_and_a_success_is_kept' (3536847) panicked at crates/service-kit/src/migrations.rs:639:9:
+  left: 0
+ right: 1
+test result: FAILED. 106 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.80s
+service-kit-lib-before: run 47 failed
+migrations::tests::a_failure_is_logged_once_with_each_file_and_a_success_is_kept --- FAILED
+---- migrations::tests::a_failure_is_logged_once_with_each_file_and_a_success_is_kept stdout ----
+thread 'migrations::tests::a_failure_is_logged_once_with_each_file_and_a_success_is_kept' (3537252) panicked at crates/service-kit/src/migrations.rs:639:9:
+  left: 0
+ right: 1
+test result: FAILED. 106 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.81s
+service-kit-lib-before: run 72 failed
+migrations::tests::a_failure_is_logged_once_with_each_file_and_a_success_is_kept --- FAILED
+---- migrations::tests::a_failure_is_logged_once_with_each_file_and_a_success_is_kept stdout ----
+thread 'migrations::tests::a_failure_is_logged_once_with_each_file_and_a_success_is_kept' (3540593) panicked at crates/service-kit/src/migrations.rs:639:9:
+  left: 0
+ right: 1
+test result: FAILED. 106 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.80s
+service-kit-lib-before: run 79 failed
+migrations::tests::a_failure_is_logged_once_with_each_file_and_a_success_is_kept --- FAILED
+---- migrations::tests::a_failure_is_logged_once_with_each_file_and_a_success_is_kept stdout ----
+thread 'migrations::tests::a_failure_is_logged_once_with_each_file_and_a_success_is_kept' (3541513) panicked at crates/service-kit/src/migrations.rs:639:9:
+  left: 0
+ right: 1
+test result: FAILED. 106 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.80s
+service-kit-lib-before: 9 of 100 runs failed

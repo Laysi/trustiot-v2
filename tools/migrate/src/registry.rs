@@ -28,6 +28,10 @@ mod telemetry_query_schema;
 #[path = "../../../services/certs/src/schema.rs"]
 mod certs_schema;
 
+/// The assistant service's files (compiled into the service as well).
+#[path = "../../../services/assistant/src/schema.rs"]
+mod assistant_schema;
+
 /// The outbox tables (crates/outbox) in a service's schema.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Outbox {
@@ -161,9 +165,10 @@ pub const PRODUCT: Registry = Registry {
     services: &[
         // Writes `identity.tenant_created` (Laysi/trustiot-v2#65) with its service role, in the
         // new tenant's transaction, and keeps the event log (Laysi/trustiot-v2#130): it reads the
-        // events of every producer in `CONSUMES` (its own and assets', which comes later in this
-        // list) as its platform role, so the chart binds a password to `identity_platform` as
-        // well ("trustiot.migrate.platformLogins" in deploy/chart/templates/_migrate.tpl).
+        // events of every producer in `CONSUMES` (its own, and assets' and certs', which come
+        // later in this list) as its platform role, so the chart binds a password to
+        // `identity_platform` as well ("trustiot.migrate.platformLogins" in
+        // deploy/chart/templates/_migrate.tpl).
         Service {
             name: identity_schema::SCHEMA.service,
             platform_role: true,
@@ -201,16 +206,33 @@ pub const PRODUCT: Registry = Registry {
             },
             migrations: telemetry_query_schema::SCHEMA.migrations,
         },
-        // The ledger of issued certificates and the CRLs (Laysi/trustiot-v2#78): no tenant data
-        // and no events, so no platform role.
+        // The ledger of issued certificates and the CRLs (Laysi/trustiot-v2#78): no tenant data.
+        // The factory registration (Laysi/trustiot-v2#79) writes the platform-wide
+        // `certs.gateway_registered` (a gateway belongs to no tenant at the factory), which only
+        // a producer's platform role may write, so the chart binds a password to
+        // `certs_platform` as well ("trustiot.migrate.platformLogins" in
+        // deploy/chart/templates/_migrate.tpl). identity's event log reads these events.
         Service {
             name: certs_schema::SCHEMA.service,
-            platform_role: false,
+            platform_role: true,
             outbox: Outbox {
                 producer: certs_schema::SCHEMA.outbox_producer,
                 consumes: &[],
             },
             migrations: certs_schema::SCHEMA.migrations,
+        },
+        // The AI assistant's conversations and their append-only history
+        // (Laysi/trustiot-v2#553): tenant data under row-level security, no events, and nothing
+        // read across tenants, so no platform role. Its `assistant_app` stays NOLOGIN in a
+        // cluster until the chart gives the assistant Postgres (Laysi/trustiot-v2#552).
+        Service {
+            name: assistant_schema::SCHEMA.service,
+            platform_role: false,
+            outbox: Outbox {
+                producer: assistant_schema::SCHEMA.outbox_producer,
+                consumes: &[],
+            },
+            migrations: assistant_schema::SCHEMA.migrations,
         },
     ],
     clickhouse: crate::clickhouse_files::FILES,
