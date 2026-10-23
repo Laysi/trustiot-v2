@@ -622,6 +622,19 @@ mqttBroker:
   # How often the broker pod's trust sidecar fetches the CA certificates and CRLs from the certs
   # service and checks the server certificate Secret; the broker reloads them when they changed.
   trustInterval: 30s
+  # The broker's server certificate (Laysi/trustiot-v2#535) is issued in the cluster: the CronJob
+  # <release>-mqtt-broker-certificate (migration image, arm64 only) generates a P-256 key in its
+  # pod, has the certs service sign it, and writes both into the Secret <release>-mqtt-broker-tls,
+  # which the chart declares empty; it renews the certificate, with a new key, once half of its
+  # validity has passed (the certs service's broker.validity, 30 days by default). Increase this
+  # number to renew it at the CronJob's next run instead, for example after the issuing CA changed.
+  certificateGeneration: "1"
+  # When that CronJob runs, in Etc/UTC: @hourly, or a cron schedule whose hour, day of month, month
+  # and day of week are *, so it runs at least every hour; the minute is a comma-separated list of
+  # *, */<step> (1 to 59) or minutes from 0 to 59, no ranges. A run that finds a certificate it
+  # keeps only reads the Secret. The first certificate comes at the first run after the certs
+  # service can sign (README.md, "MQTT broker").
+  certificateSchedule: "*/15 * * * *"
   storage:
     # Sessions, queued and retained messages, the dynamic security file and the trust files.
     size: 1Gi

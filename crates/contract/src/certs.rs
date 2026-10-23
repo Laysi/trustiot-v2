@@ -273,10 +273,21 @@ pub struct GatewayRegistration {
     pub root_certificate: String,
 }
 
+/// The name every MQTT client verifies the broker's server certificate against, in every
+/// deployment, SaaS and on premises alike (services/certs/README.md, "broker 伺服器憑證"): the
+/// certs service puts it in every broker certificate it signs, and the broker's certificate
+/// issuer (tools/migrate, `migrate mqtt-broker-certificate`) accepts only certificates for it. It
+/// depends on no host name of a deployment, so a gateway's trust settings never change with one.
+/// It is under `.internal`, the top-level domain ICANN reserved for private use on 2024-07-29,
+/// which no public CA can certify; nothing resolves it: a client connects to the address it is
+/// given and checks this name.
+pub const BROKER_SERVER_NAME: &str = "mqtt-broker.trustiot.internal";
+
 /// The MQTT broker's server certificate, as `POST /internal/certs/v1/broker-certificate` answers
 /// it (Laysi/trustiot-v2#557; services/certs/README.md, "broker 伺服器憑證"). An internal
-/// endpoint on a port the mesh opens to the broker alone, so not in the OpenAPI document. The
-/// request body is the CSR itself, DER, `Content-Type: application/pkcs10`.
+/// endpoint on a port the mesh opens to the broker's certificate issuer alone
+/// (Laysi/trustiot-v2#535), so not in the OpenAPI document. The request body is the CSR itself,
+/// DER, `Content-Type: application/pkcs10`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BrokerCertificate {
     /// The serial number, lower-case hex.
@@ -291,8 +302,8 @@ pub struct BrokerCertificate {
     /// When it expires; renew once half of its validity has passed.
     pub not_after: DateTime<Utc>,
     /// The certificate, then the issuing CA certificate that signed it, PEM: the chain a TLS
-    /// server sends (`tls.crt` of a `kubernetes.io/tls` Secret). Clients trust the root, which
-    /// is not in it.
+    /// server sends (`tls.crt` of the broker's Secret). Clients trust the root, which is not in
+    /// it.
     pub certificate_chain: String,
 }
 

@@ -13,6 +13,10 @@
 //!   security's control topic. 1 MiB passes, a packet above the limit does not.
 //! - A retained message, a session and a queued message survive SIGKILL.
 //! - The probe leaves no error or warning in the log.
+//! - Without a server certificate (before the first one, Laysi/trustiot-v2#535) the gateway
+//!   listener is not included: the broker starts and serves the services, nothing listens on the
+//!   gateway port, and once the listener file and the certificate are in place a restart opens
+//!   it.
 //!
 //! The broker runs in a throwaway container (podman or docker) that publishes no port; the MQTT
 //! clients are the image's own `mosquitto_pub`, `mosquitto_sub` and `mosquitto_rr`, run with
@@ -32,7 +36,9 @@ use std::time::{Duration, Instant};
 
 use migrate::Report;
 use migrate::mqtt_accounts::{converge, reconcile};
-use migrate::mqtt_trust::{TrustSet, install, placeholder, validate};
+use migrate::mqtt_trust::{
+    GATEWAY_LISTENER_FILE, TrustSet, install, listener_port, placeholder, validate,
+};
 use protocol::GatewayId;
 use protocol::acl::GATEWAY_ROLE;
 use protocol::topic::{Channel, MAX_LARGE_BYTES, MIN_MAX_PACKET_BYTES};
@@ -48,6 +54,16 @@ const MOSQUITTO_IMAGE: &str = "docker.io/library/eclipse-mosquitto:2.1.2-alpine@
 
 /// The chart's configuration file; the chart's template carries the same text.
 const CONFIG: &str = include_str!("../../../deploy/chart/files/mosquitto/mosquitto.conf");
+
+/// The gateway listener, which the trust init container or sidecar writes into the listeners
+/// directory once the server certificate is usable (Laysi/trustiot-v2#535); the chart's
+/// template carries the same text.
+const GATEWAY_LISTENER: &str =
+    include_str!("../../../deploy/chart/files/mosquitto/gateway-listener.conf");
+
+/// Where the configuration includes the gateway listener from, and the file name the trust
+/// containers give it.
+const LISTENERS_DIR: &str = "/mosquitto/listeners";
 
 /// The container's memory limit, and the line the chart appends to [`CONFIG`]: three quarters of
 /// the container's limit.
@@ -267,12 +283,18 @@ impl Broker {
     /// the gateway role, as Laysi/trustiot-v2#82 will register them. `None` when no container
     /// runtime is available outside CI.
     async fn start(pki: &Pki, trust: &TrustSet, server: &Leaf) -> Option<Self> {
+        Self::start_with(pki, trust, Some(server)).await
+    }
+
+    /// Starts the broker as above; without `server`, the Secret is still empty and the listeners
+    /// directory too, as before the first certificate.
+    async fn start_with(pki: &Pki, trust: &TrustSet, server: Option<&Leaf>) -> Option<Self> {
         let Some(runtime) = container_runtime() else {
             unavailable("podman or docker");
             return None;
         };
         let dir = scratch_dir("mqtt-broker");
-        for sub in ["pki", "trust", "tls"] {
+        for sub in ["pki", "trust", "tls", "listeners"] {
             std::fs::create_dir(dir.join(sub)).expect("a directory");
         }
         pki.write(&dir.join("pki"));
@@ -284,7 +306,10 @@ impl Broker {
         )
         .expect("the configuration");
         install(&dir.join("trust"), trust).expect("the trust files");
-        pki::mount_secret(&dir.join("tls"), 1, server);
+        if let Some(server) = server {
+            pki::mount_secret(&dir.join("tls"), 1, server);
+            enable_gateway_listener(&dir);
+        }
 
         // The accounts init container's output, plus the gateways' clients.
         let secrets = FakeSecrets::start().await;
@@ -318,6 +343,7 @@ impl Broker {
         let config = mount("mosquitto.conf", "/mosquitto/config/mosquitto.conf");
         let trust_dir = mount("trust", "/mosquitto/data/trust");
         let tls = mount("tls", "/etc/trustiot/mqtt-broker-tls");
+        let listeners = mount("listeners", LISTENERS_DIR);
         let pki_dir = mount("pki", "/pki");
         let output = Command::new(runtime)
             .args([
@@ -340,6 +366,8 @@ impl Broker {
                 &trust_dir,
                 "--volume",
                 &tls,
+                "--volume",
+                &listeners,
                 "--volume",
                 &pki_dir,
                 "--entrypoint",
@@ -710,6 +738,17 @@ fn write_payload(path: &Path, len: usize) {
     std::fs::write(path, vec![b'x'; len]).expect("a payload file");
 }
 
+/// What the trust init container or sidecar does once the server certificate is usable: the
+/// gateway listener into the listeners directory (`dir/listeners`, mounted at
+/// [`LISTENERS_DIR`]).
+fn enable_gateway_listener(dir: &Path) {
+    std::fs::write(
+        dir.join("listeners").join(GATEWAY_LISTENER_FILE),
+        GATEWAY_LISTENER,
+    )
+    .expect("the gateway listener");
+}
+
 fn gateway<'a>(name: &'a str) -> Login<'a> {
     Login::Gateway {
         name,
@@ -746,6 +785,95 @@ fn the_configuration_follows_the_protocol_limits() {
             .lines()
             .any(|line| line.starts_with("message_size_limit"))
     );
+}
+
+/// The gateway listener comes from the listeners directory only, included after every listener
+/// of the main file, and the trust sidecar reads its port from the same file.
+#[test]
+fn the_gateway_listener_is_included_last_and_names_one_port() {
+    let directives: Vec<&str> = CONFIG
+        .lines()
+        .filter(|line| !line.is_empty() && !line.starts_with('#'))
+        .collect();
+    let include = format!("include_dir {LISTENERS_DIR}");
+    assert_eq!(directives.last(), Some(&include.as_str()));
+    assert!(
+        !directives
+            .iter()
+            .any(|line| line.starts_with("listener 8883"))
+    );
+    assert_eq!(listener_port(GATEWAY_LISTENER), Ok(8883));
+    assert_eq!(
+        GATEWAY_LISTENER
+            .lines()
+            .find(|line| !line.is_empty() && !line.starts_with('#')),
+        Some("listener 8883"),
+        "the included file starts its own listener, so none of its options lands on another"
+    );
+}
+
+#[tokio::test]
+async fn without_a_server_certificate_the_broker_serves_the_services_but_no_gateway_port() {
+    let pki = Pki::new();
+    let Some(broker) = Broker::start_with(&pki, &pki.trust(1, &[]), None).await else {
+        return;
+    };
+
+    // Before the first certificate: the probe and the services work, and nothing listens on the
+    // gateway port, so no gateway is ever served a certificate it cannot verify.
+    let probe = broker.probe();
+    assert!(probe.status.success(), "probe: {}", describe(&probe));
+    broker.publish_ok(
+        &Login::Service("ingest"),
+        &topic(Channel::TelemetryAck, "gw-a"),
+        &["-m", "ack"],
+        false,
+    );
+    let line = broker.refused(
+        "the gateway port before the first certificate",
+        &gateway("gw-a"),
+    );
+    assert!(line.contains("Connection refused"), "{line}");
+    let log = broker.log();
+    assert_eq!(problem_lines(&log), Vec::<&str>::new(), "log:\n{log}");
+    assert!(!log.contains("8883"), "log:\n{log}");
+    evidence("no server certificate: the broker started, served 1883, refused connections on 8883");
+
+    // The CronJob filled the Secret; the sidecar wrote the listener and stopped the broker with
+    // SIGTERM, and the kubelet starts it again.
+    pki::mount_secret(&broker.dir.join("tls"), 1, &pki::server(&pki.server_ca));
+    enable_gateway_listener(&broker.dir);
+    let runtime = broker.container.runtime;
+    let name = &broker.container.name;
+    for command in [
+        &["kill", "--signal", "TERM", name][..],
+        &["wait", name][..],
+        &["start", name][..],
+    ] {
+        let output = Command::new(runtime)
+            .args(command)
+            .output()
+            .expect("the container runtime runs");
+        assert!(
+            output.status.success(),
+            "{command:?}: {}",
+            describe(&output)
+        );
+    }
+    broker.wait_ready();
+    broker.accepted(
+        "a valid certificate once the listener is in place",
+        &gateway("gw-a"),
+    );
+    broker.refused("a certificate of another CA, CN gw-a", &gateway("foreign"));
+    let log = broker.log();
+    let opened: Vec<&str> = log
+        .lines()
+        .filter(|line| line.contains("listen socket on port 8883"))
+        .collect();
+    assert!(!opened.is_empty(), "log:\n{log}");
+    assert_eq!(problem_lines(&log), Vec::<&str>::new(), "log:\n{log}");
+    evidence(format!("after the restart: {}", opened[0]));
 }
 
 #[tokio::test]

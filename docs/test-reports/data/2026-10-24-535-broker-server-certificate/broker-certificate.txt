@@ -1,0 +1,52 @@
+# cargo test --locked -p certs --test broker_certificate -- --nocapture
+# Build host (x86_64 Linux, CI=1, rootless podman), 2026-10-24. Container network addresses replaced with <client>.
+
+running 1 test
+evidence: first run at 1792789115: the Secret holds no certificate yet; serial 52cd0260d28265aafa8ec4f18e0b2737 for mqtt-broker.trustiot.internal, trustiot-mqtt-broker.trustiot.svc, notBefore 1792788815, notAfter 1792792715, renewed from 1792790765
+evidence: trusting the root, mqtt-broker.trustiot.internal: verified serial 52cd0260d28265aafa8ec4f18e0b2737, CONNACK success
+evidence: trusting the root, wrong-name.trustiot.internal: refused, InvalidCertificate(NotValidForNameContext { expected: DnsName("wrong-name.trustiot.internal"), presented: ["DnsName(\"mqtt-broker.trustiot.internal\")", "DnsName(\"trustiot-mqtt-broker.trustiot.svc\")"] })
+evidence: trusting another CA, mqtt-broker.trustiot.internal: refused, InvalidCertificate(UnknownIssuer)
+evidence: run at 1792790705 (renewal from 1792790765): kept serial 52cd0260d28265aafa8ec4f18e0b2737
+evidence: run at 1792790765: half of the certificate's validity has passed; serial 6d91a0f26daec8645686cbc3d7edfbdb, notBefore 1792788816, notAfter 1792792716
+evidence: after SIGHUP, a new connection trusting the root verified serial 6d91a0f26daec8645686cbc3d7edfbdb (1 attempt(s))
+evidence: the connection opened before the reload answered PINGRESP
+evidence: serving another CA's certificate for mqtt-broker.trustiot.internal: refused, InvalidCertificate(UnknownIssuer)
+== broker log
+1792789116: mosquitto version 2.1.2 starting
+1792789116: Config loaded from /run/trustiot/mosquitto.conf.
+1792789116: Bridge support available.
+1792789116: Persistence support available.
+1792789116: TLS support available.
+1792789116: TLS-PSK support available.
+1792789116: Websockets support available.
+1792789116: Opening ipv4 listen socket on port 8883.
+1792789116: Opening ipv6 listen socket on port 8883.
+1792789116: mosquitto version 2.1.2 running
+1792789116: New connection from <client> on port 8883.
+1792789116: New client connected from <client> as gw-535-kept (p5, c1, k600, u'gw-535-kept').
+1792789116: No will message specified.
+1792789116: Client gw-535-kept negotiated TLSv1.3 cipher TLS_CHACHA20_POLY1305_SHA256
+1792789116: Sending CONNACK to gw-535-kept (0, 0)
+1792789116: New connection from <client> on port 8883.
+1792789116: OpenSSL Error while trying to get the error[0]: error:0A000412:SSL routines::ssl/tls alert bad certificate
+1792789116: Client <client> [<client>] disconnected: Protocol error.
+1792789116: New connection from <client> on port 8883.
+1792789116: OpenSSL Error while trying to get the error[0]: error:0A000418:SSL routines::tlsv1 alert unknown ca
+1792789116: Client <client> [<client>] disconnected: Protocol error.
+1792789117: Reloading config.
+1792789117: New connection from <client> on port 8883.
+1792789117: New client connected from <client> as gw-535-probe (p5, c1, k600, u'gw-535-probe').
+1792789117: No will message specified.
+1792789117: Client gw-535-probe negotiated TLSv1.3 cipher TLS_CHACHA20_POLY1305_SHA256
+1792789117: Sending CONNACK to gw-535-probe (0, 0)
+1792789117: Received PINGREQ from gw-535-kept
+1792789117: Sending PINGRESP to gw-535-kept
+1792789117: Reloading config.
+1792789117: New connection from <client> on port 8883.
+1792789117: OpenSSL Error while trying to get the error[0]: error:0A000418:SSL routines::tlsv1 alert unknown ca
+1792789117: Client <client> [<client>] disconnected: Protocol error.
+1792789116: Info: running mosquitto as user: mosquitto.
+
+test the_issuer_fills_the_secret_mosquitto_serves_it_and_loads_a_renewal ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.53s

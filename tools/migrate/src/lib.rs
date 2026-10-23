@@ -19,8 +19,13 @@
 //!   (Laysi/trustiot-v2#78).
 //! - [`mqtt_accounts::converge`] and [`mqtt_trust`]: the MQTT broker's init containers and
 //!   sidecar, which keep the cloud services' broker accounts, the dynamic-security file, the
-//!   gateway trust files, and reload the broker when they or its server certificate change
-//!   (Laysi/trustiot-v2#84).
+//!   gateway trust files, open the gateway listener once the server certificate is usable, and
+//!   reload the broker when they or its server certificate change (Laysi/trustiot-v2#84,
+//!   Laysi/trustiot-v2#535).
+//! - [`mqtt_certificate::converge`]: the MQTT broker's certificate CronJob, which keeps the
+//!   broker's server certificate and key in the Secret the chart declares: a new key and a
+//!   certificate from the certs service when there is none, and before half of its validity has
+//!   passed (Laysi/trustiot-v2#535).
 //! - [`platform_admin::bootstrap`]: `migrate bootstrap-platform-admin`, which an operator runs
 //!   once to make the deployment's first platform administrator (Laysi/trustiot-v2#582).
 //!
@@ -39,6 +44,7 @@ pub mod http;
 pub mod identity_email;
 pub mod kube;
 pub mod mqtt_accounts;
+pub mod mqtt_certificate;
 pub mod mqtt_trust;
 pub mod passwords;
 pub mod platform_admin;
@@ -108,6 +114,9 @@ pub enum Error {
     CaKeys(String),
     #[error("MQTT broker: {0}")]
     MqttBroker(String),
+    /// `migrate mqtt-broker-certificate`; never contains the key or the Secret's data.
+    #[error("MQTT broker server certificate: {0}")]
+    BrokerCertificate(String),
     #[error("Kubernetes API: {0}")]
     Kube(String),
     /// `migrate bootstrap-platform-admin`; never contains the address.

@@ -8,12 +8,22 @@
 //! (Mosquitto 2.1.2, `src/signals.c` and `src/security_default.c`). If a file it rereads cannot
 //! be loaded, it stops, so nothing here signals it unless every file loads.
 //!
+//! The gateway listener (Laysi/trustiot-v2#535) is a file of its own, which the broker's
+//! configuration includes from `listeners_dir` (`include_dir`, empty when the pod starts): it
+//! names the server certificate, so the broker serves the gateway port only once the Secret holds
+//! a usable certificate and key. Before the broker certificate CronJob (src/mqtt_certificate.rs)
+//! first fills the Secret, for example before the CA ceremony, the broker serves the cloud
+//! services on the service port and no gateway, and both containers log why.
+//!
 //! `migrate mqtt-broker-trust` runs twice in the broker pod:
 //!
 //! - as an init container with `--once` ([`once`]): installs the trust files before the broker
-//!   starts and checks the server certificate and key;
+//!   starts, checks the server certificate and key, and writes the gateway listener's file when
+//!   they are usable;
 //! - as a sidecar ([`run`]): every `interval` fetches both files again and installs them when they
-//!   changed, watches the server certificate Secret, and sends the broker SIGHUP after either
+//!   changed, watches the server certificate Secret, writes the gateway listener's file once it is
+//!   usable and restarts the broker once so that it opens the port (Mosquitto adds no listener on
+//!   SIGHUP), and sends the broker SIGHUP after the trust files or the server certificate
 //!   changed. The pod shares its process namespace, and the sidecar runs as the broker's user, so
 //!   it can signal it and nothing else.
 //!
@@ -595,7 +605,18 @@ pub fn check_server(tls_dir: &Path) -> Result<ServerFiles, String> {
         std::fs::read(&key_path)
             .map_err(|error| format!("cannot read {}: {error}", key_path.display()))?,
     );
-    let chain: Vec<CertificateDer<'static>> = CertificateDer::pem_slice_iter(&chain_bytes)
+    check_pair(&chain_bytes, &key_bytes)
+}
+
+/// Checks that `chain_bytes` (`tls.crt`: PEM, the server certificate first) and `key_bytes`
+/// (`tls.key`: a PEM private key) load and belong together, as the broker needs them; the
+/// broker's certificate issuer checks the Secret with the same rules (src/mqtt_certificate.rs).
+///
+/// # Errors
+///
+/// What is wrong, without echoing either.
+pub fn check_pair(chain_bytes: &[u8], key_bytes: &[u8]) -> Result<ServerFiles, String> {
+    let chain: Vec<CertificateDer<'static>> = CertificateDer::pem_slice_iter(chain_bytes)
         .collect::<Result<_, _>>()
         .map_err(|error| format!("{SERVER_CERTIFICATE} is not valid PEM: {error:?}"))?;
     let leaf = chain
@@ -609,7 +630,7 @@ pub fn check_server(tls_dir: &Path) -> Result<ServerFiles, String> {
             ));
         }
     };
-    let key = PrivateKeyDer::from_pem_slice(&key_bytes)
+    let key = PrivateKeyDer::from_pem_slice(key_bytes)
         .map_err(|_| format!("{SERVER_KEY} holds no private key in PEM"))?;
     let provider = rustls::crypto::ring::default_provider();
     let signing_key = provider
@@ -624,9 +645,9 @@ pub fn check_server(tls_dir: &Path) -> Result<ServerFiles, String> {
             )
         })?;
     let mut hash = Sha256::new();
-    hash.update(&chain_bytes);
+    hash.update(chain_bytes);
     hash.update([0]);
-    hash.update(key_bytes.as_slice());
+    hash.update(key_bytes);
     Ok(ServerFiles {
         digest: hash.finalize().into(),
         not_after,
@@ -693,20 +714,29 @@ pub fn find_broker(proc_root: &Path, uid: u32) -> Result<i32, String> {
 ///
 /// # Errors
 ///
+/// As [`send_signal`].
+pub fn send_sighup(pid: i32) -> std::io::Result<()> {
+    send_signal(pid, libc::SIGHUP)
+}
+
+/// Sends `signal` to `pid`.
+///
+/// # Errors
+///
 /// When `pid` is not a single process (1 or below) or the kernel refuses.
 #[allow(
     unsafe_code,
     reason = "the standard library cannot signal another process; kill(2) has no safe binding \
               among the workspace's dependencies"
 )]
-pub fn send_sighup(pid: i32) -> std::io::Result<()> {
+pub fn send_signal(pid: i32, signal: libc::c_int) -> std::io::Result<()> {
     // 0 and negative values signal process groups, 1 is the pod's pause process.
     if pid <= 1 {
         return Err(std::io::Error::other(format!("{pid} is not a broker pid")));
     }
     // SAFETY: kill(2) takes two integers and touches no memory of this process; `pid` is a single
     // process above 1, so it cannot address a process group or every process.
-    let result = unsafe { libc::kill(pid, libc::SIGHUP) };
+    let result = unsafe { libc::kill(pid, signal) };
     if result == 0 {
         Ok(())
     } else {
@@ -714,26 +744,141 @@ pub fn send_sighup(pid: i32) -> std::io::Result<()> {
     }
 }
 
-/// The init container: installs the trust files (one attempt at the certs service, so the broker
-/// starts without it) and checks the server certificate and key.
+/// The port of the gateway listener's configuration: the number after its only `listener` line.
 ///
 /// # Errors
 ///
-/// When the trust directory cannot be written, or the server certificate or key cannot be
-/// loaded: the broker would not start with them.
+/// When the text holds no `listener <port>` line, or more than one.
+pub fn listener_port(configuration: &str) -> Result<u16, String> {
+    let mut ports = configuration.lines().filter_map(|line| {
+        let mut words = line.split_whitespace();
+        (words.next() == Some("listener"))
+            .then(|| words.next().and_then(|port| port.parse::<u16>().ok()))
+    });
+    match (ports.next(), ports.next()) {
+        (Some(Some(port)), None) if port != 0 => Ok(port),
+        (None, _) => Err("it has no listener line".to_owned()),
+        (Some(_), None) => Err("its listener line names no TCP port".to_owned()),
+        (Some(_), Some(_)) => Err("it has more than one listener line".to_owned()),
+    }
+}
+
+/// The gateway listener's configuration and port, read from `settings.gateway_listener`.
+fn gateway_listener(settings: &MqttTrustSettings) -> Result<(String, u16), Error> {
+    let path = &settings.gateway_listener;
+    let text = std::fs::read_to_string(path).map_err(|error| {
+        Error::MqttBroker(format!(
+            "cannot read the gateway listener's configuration {}: {error}",
+            path.display()
+        ))
+    })?;
+    let port = listener_port(&text).map_err(|problem| {
+        Error::MqttBroker(format!(
+            "the gateway listener's configuration {}: {problem}",
+            path.display()
+        ))
+    })?;
+    Ok((text, port))
+}
+
+/// Whether a TCP socket of this network namespace listens on `port`, from `proc_root`'s
+/// `net/tcp` and `net/tcp6`. The containers of a pod share one network namespace, so the sidecar
+/// sees the broker's sockets.
+///
+/// # Errors
+///
+/// When neither file can be read.
+pub fn listens_on(proc_root: &Path, port: u16) -> Result<bool, String> {
+    let wanted = format!("{port:04X}");
+    let mut read_any = false;
+    for table in ["tcp", "tcp6"] {
+        let Ok(text) = std::fs::read_to_string(proc_root.join("net").join(table)) else {
+            continue;
+        };
+        read_any = true;
+        // `sl local_address rem_address st ...`: the local address is `<address>:<port>` in hex,
+        // and state 0A is LISTEN.
+        let listening = text.lines().skip(1).any(|line| {
+            let mut fields = line.split_whitespace();
+            let local = fields.nth(1);
+            let state = fields.nth(1);
+            state == Some("0A")
+                && local
+                    .and_then(|local| local.rsplit_once(':'))
+                    .is_some_and(|(_, local_port)| local_port.eq_ignore_ascii_case(&wanted))
+        });
+        if listening {
+            return Ok(true);
+        }
+    }
+    if read_any {
+        Ok(false)
+    } else {
+        Err(format!(
+            "cannot read {}/net/tcp or tcp6",
+            proc_root.display()
+        ))
+    }
+}
+
+/// The file in the listeners directory that holds the gateway listener.
+pub const GATEWAY_LISTENER_FILE: &str = "gateway.conf";
+
+/// Writes the gateway listener into `settings.listeners_dir`, so the broker opens the gateway
+/// port the next time it starts.
+fn enable_gateway_listener(settings: &MqttTrustSettings, text: &str) -> Result<(), Error> {
+    let path = settings.listeners_dir.join(GATEWAY_LISTENER_FILE);
+    write_atomically(&path, text.as_bytes(), 0o644)
+        .map_err(|error| Error::MqttBroker(format!("cannot write {}: {error}", path.display())))
+}
+
+/// Why the broker serves no gateway port, for the logs: an empty Secret (before the first
+/// certificate) reads better than a missing file.
+fn no_gateway_port(tls_dir: &Path, problem: &str) -> String {
+    if !tls_dir.join(SERVER_CERTIFICATE).exists() && !tls_dir.join(SERVER_KEY).exists() {
+        "the server certificate Secret holds no certificate yet; the broker certificate CronJob \
+         fills it once the certs service can sign (deploy/chart/README.md, \"MQTT broker\")"
+            .to_owned()
+    } else {
+        format!("the server certificate Secret is unusable: {problem}")
+    }
+}
+
+/// The init container: installs the trust files (one attempt at the certs service, so the broker
+/// starts without it), checks the server certificate and key, and enables the gateway listener
+/// when they are usable. Without a usable pair the broker starts without its gateway port, so it
+/// never serves gateways a certificate they cannot verify, and still serves the cloud services on
+/// the service port; the sidecar opens the gateway port once the Secret is filled.
+///
+/// # Errors
+///
+/// When the trust or listeners directory cannot be written, or the gateway listener's
+/// configuration cannot be read.
 pub async fn once(settings: &MqttTrustSettings, report: &mut Report) -> Result<(), Error> {
     create_dir(&settings.dir)?;
     let set = sync_trust(&http::plain(), settings, report).await?;
-    let server = check_server(&settings.tls_dir).map_err(|problem| {
-        Error::MqttBroker(format!(
-            "the broker's server certificate Secret is unusable: {problem}"
-        ))
-    })?;
-    log_expiry(&set, &server, unix_now());
-    tracing::info!(
-        placeholder = set.placeholder,
-        "the broker's trust files and server certificate are in place"
-    );
+    let (listener, port) = gateway_listener(settings)?;
+    match check_server(&settings.tls_dir) {
+        Ok(server) => {
+            log_expiry(&set, &server, unix_now());
+            enable_gateway_listener(settings, &listener)?;
+            tracing::info!(
+                placeholder = set.placeholder,
+                gateway_port = port,
+                "the broker's trust files and server certificate are in place; it serves the \
+                 gateway port"
+            );
+        }
+        Err(problem) => {
+            tracing::warn!(
+                placeholder = set.placeholder,
+                gateway_port = port,
+                problem = %no_gateway_port(&settings.tls_dir, &problem),
+                "the broker starts without its gateway port; it opens once the server \
+                 certificate Secret holds a usable certificate and key"
+            );
+        }
+    }
     Ok(())
 }
 
@@ -770,66 +915,148 @@ fn log_expiry(set: &TrustSet, server: &ServerFiles, now: i64) {
     if server.not_after <= now {
         tracing::error!(
             not_after = server.not_after,
-            "the broker's server certificate has expired: gateways refuse the broker"
+            "the broker's server certificate has expired: gateways refuse the broker. Check the \
+             runs of the broker certificate CronJob"
         );
     } else if server.not_after - now < SERVER_EXPIRY_WARNING_SECONDS {
         tracing::warn!(
             not_after = server.not_after,
-            "the broker's server certificate expires within 7 days"
+            "the broker's server certificate expires within 7 days; the broker certificate \
+             CronJob renews it at half of its validity, so check its runs"
         );
     }
 }
 
-/// What the sidecar last had the broker load.
+/// What the sidecar knows between its rounds.
 #[derive(Default)]
 struct Loaded {
+    /// What it last had the broker load.
     trust: Option<[u8; 32]>,
     server: Option<[u8; 32]>,
+    /// The broker it asked to stop so that it starts again with the gateway listener.
+    restarted: Option<i32>,
+    /// When it last logged that the broker serves no gateway port.
+    no_gateway_logged: Option<Instant>,
 }
 
-/// The sidecar: keeps the trust files current and has the broker reload them, and the server
-/// certificate, whenever either changed (and once at its own start, so a change it could not see
-/// before it started is loaded too). Runs until the pod stops.
+/// The broker as the sidecar finds it: its processes under `proc_root` that run as `uid`, and the
+/// gateway listener it should open.
+struct Broker<'a> {
+    proc_root: &'a Path,
+    uid: u32,
+    listener: &'a str,
+    port: u16,
+}
+
+/// The sidecar: keeps the trust files current, opens the gateway port once the server certificate
+/// Secret is usable, and has the broker reload the trust files and the server certificate
+/// whenever either changed (and once at its own start, so a change it could not see before it
+/// started is loaded too). Runs until the pod stops.
 ///
 /// # Errors
 ///
-/// When the trust directory cannot be created or this process's user cannot be read.
+/// When the trust directory cannot be created, the gateway listener's configuration cannot be
+/// read, or this process's user cannot be read.
 pub async fn run(settings: &MqttTrustSettings, proc_root: &Path) -> Result<(), Error> {
     create_dir(&settings.dir)?;
+    let (listener, port) = gateway_listener(settings)?;
     let uid = std::fs::metadata(proc_root.join("self"))
         .map_err(|error| Error::MqttBroker(format!("cannot read this process's user: {error}")))?
         .uid();
     let client = http::plain();
     let mut loaded = Loaded::default();
     let mut last_expiry_log = None::<Instant>;
+    let broker = Broker {
+        proc_root,
+        uid,
+        listener: &listener,
+        port,
+    };
     loop {
         let mut report = Report::default();
         match sync_trust(&client, settings, &mut report).await {
-            Ok(set) => reload_if_changed(
-                settings,
-                proc_root,
-                uid,
-                &set,
-                &mut loaded,
-                &mut last_expiry_log,
-            ),
+            Ok(set) => {
+                reload_if_changed(settings, &broker, &set, &mut loaded, &mut last_expiry_log);
+            }
             Err(error) => {
-                tracing::error!(error = %error, "cannot bring the trust files up to date")
+                tracing::error!(error = %error, "cannot bring the trust files up to date");
             }
         }
         tokio::time::sleep(settings.interval).await;
     }
 }
 
+/// One round of the sidecar after the trust files are current: the gateway listener (written
+/// once the server certificate is usable, and the broker restarted once when it started without
+/// it), then a reload when the trust files or the server certificate changed.
+///
+/// Mosquitto opens its listeners at start only (2.1 refuses to add one on SIGHUP), and it opens
+/// them before it handles SIGHUP; so a broker that handles SIGHUP but does not listen on the
+/// gateway port started before the listener's file existed, and SIGTERM (which Mosquitto takes
+/// as a clean shutdown, saving its state) has the kubelet start it again with the file. The
+/// sidecar never sends SIGHUP to such a broker: the reload would fail on the listener it cannot
+/// add.
 fn reload_if_changed(
     settings: &MqttTrustSettings,
-    proc_root: &Path,
-    uid: u32,
+    broker: &Broker<'_>,
     set: &TrustSet,
     loaded: &mut Loaded,
     last_expiry_log: &mut Option<Instant>,
 ) {
-    let server = match check_server(&settings.tls_dir) {
+    let server = check_server(&settings.tls_dir);
+    if !settings.listeners_dir.join(GATEWAY_LISTENER_FILE).exists() {
+        match &server {
+            Ok(_) => match enable_gateway_listener(settings, broker.listener) {
+                Ok(()) => tracing::info!(
+                    gateway_port = broker.port,
+                    "the server certificate Secret holds a usable certificate and key: enabled \
+                     the gateway listener"
+                ),
+                Err(error) => {
+                    tracing::error!(error = %error, "cannot enable the gateway listener");
+                    return;
+                }
+            },
+            Err(problem) => {
+                if loaded
+                    .no_gateway_logged
+                    .is_none_or(|at| at.elapsed() >= EXPIRY_LOG_EVERY)
+                {
+                    tracing::warn!(
+                        gateway_port = broker.port,
+                        problem = %no_gateway_port(&settings.tls_dir, problem),
+                        "the broker serves no gateway port; it opens once the server certificate \
+                         Secret holds a usable certificate and key"
+                    );
+                    loaded.no_gateway_logged = Some(Instant::now());
+                }
+                // Nothing the broker loaded names the trust files or the Secret yet.
+                return;
+            }
+        }
+    }
+    let pid = match find_broker(broker.proc_root, broker.uid) {
+        Ok(pid) => pid,
+        Err(why) => {
+            tracing::info!(reason = %why, "not reloading the broker yet");
+            return;
+        }
+    };
+    match listens_on(broker.proc_root, broker.port) {
+        Ok(true) => {}
+        Ok(false) => {
+            restart_for_listener(broker, pid, loaded);
+            return;
+        }
+        Err(problem) => {
+            tracing::error!(
+                problem = %problem,
+                "cannot tell whether the broker serves the gateway port"
+            );
+            return;
+        }
+    }
+    let server = match server {
         Ok(server) => server,
         Err(problem) => {
             // Reloading now would stop the broker; it keeps what it loaded before.
@@ -849,13 +1076,6 @@ fn reload_if_changed(
     if loaded.trust == Some(trust) && loaded.server == Some(server.digest) {
         return;
     }
-    let pid = match find_broker(proc_root, uid) {
-        Ok(pid) => pid,
-        Err(why) => {
-            tracing::info!(reason = %why, "not reloading the broker yet");
-            return;
-        }
-    };
     match send_sighup(pid) {
         Ok(()) => {
             tracing::info!(
@@ -869,6 +1089,47 @@ fn reload_if_changed(
             loaded.server = Some(server.digest);
         }
         Err(error) => tracing::error!(pid, error = %error, "cannot signal the broker"),
+    }
+}
+
+/// The broker `pid` handles SIGHUP but does not listen on the gateway port although the
+/// listener's file exists: it started before the file did. A broker still starting is never
+/// taken for one: Mosquitto 2.1.2's `main` (src/mosquitto.c) calls `listeners__start` before
+/// `signal__setup`, so its listeners are open by the time `find_broker` accepts it. Asks it to
+/// stop once, so the kubelet starts it again with the listener; a broker started after that which
+/// still does not listen is reported, never stopped again.
+fn restart_for_listener(broker: &Broker<'_>, pid: i32, loaded: &mut Loaded) {
+    match loaded.restarted {
+        // Still shutting down.
+        Some(restarted) if restarted == pid => {}
+        Some(_) => {
+            if loaded
+                .no_gateway_logged
+                .is_none_or(|at| at.elapsed() >= EXPIRY_LOG_EVERY)
+            {
+                tracing::error!(
+                    pid,
+                    gateway_port = broker.port,
+                    "the broker started again with the gateway listener but does not listen on \
+                     its port; see the mosquitto container's log"
+                );
+                loaded.no_gateway_logged = Some(Instant::now());
+            }
+        }
+        None => match send_signal(pid, libc::SIGTERM) {
+            Ok(()) => {
+                tracing::info!(
+                    pid,
+                    gateway_port = broker.port,
+                    "the broker started without the gateway listener: asked it to stop (SIGTERM) \
+                     so that it starts again with it"
+                );
+                loaded.restarted = Some(pid);
+                loaded.trust = None;
+                loaded.server = None;
+            }
+            Err(error) => tracing::error!(pid, error = %error, "cannot signal the broker"),
+        },
     }
 }
 
@@ -1331,5 +1592,59 @@ mod tests {
             std::thread::sleep(Duration::from_millis(50));
         };
         assert_eq!(status.signal(), Some(libc::SIGHUP));
+    }
+
+    #[test]
+    fn the_gateway_port_is_the_listener_files_only_listener_line() {
+        let file = "# Gateways\nlistener 8883\nprotocol mqtt\ncertfile /x/tls.crt\n";
+        assert_eq!(listener_port(file), Ok(8883));
+        assert_eq!(listener_port("  listener   1884  \n"), Ok(1884));
+        for broken in [
+            "",
+            "# listener 8883\n",
+            "listener\n",
+            "listener 0 /run/mosquitto/probe.sock\n",
+            "listener 70000\n",
+            "listener 8883\nlistener 8884\n",
+        ] {
+            assert!(listener_port(broken).is_err(), "{broken:?}");
+        }
+    }
+
+    const TCP_HEADER: &str = "  sl  local_address rem_address   st tx_queue rx_queue tr tm->when \
+                              retrnsmt   uid  timeout inode\n";
+    const TCP6_HEADER: &str = "  sl  local_address                         remote_address              \
+                               st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode\n";
+
+    #[test]
+    fn listening_sockets_are_read_from_proc_net() {
+        let root = temporary_dir("mqtt-trust-net");
+        assert!(listens_on(&root, 8883).is_err(), "no table to read");
+        std::fs::create_dir(root.join("net")).expect("net");
+        // 1883 listens; 8883 only has an established connection (state 01).
+        std::fs::write(
+            root.join("net").join("tcp"),
+            format!(
+                "{TCP_HEADER}   0: 00000000:075B 00000000:0000 0A 00000000:00000000 00:00000000 \
+                 00000000  1883        0 1 1 0000000000000000 100 0 0 10 0\n   1: \
+                 0A2A0005:22B3 0A2A0009:D431 01 00000000:00000000 00:00000000 00000000  1883 \
+                 0 2 1 0000000000000000 20 4 30 10 -1\n"
+            ),
+        )
+        .expect("tcp");
+        assert_eq!(listens_on(&root, 1883), Ok(true));
+        assert_eq!(listens_on(&root, 8883), Ok(false));
+        // Mosquitto's `listener 8883` without an address binds IPv6 too.
+        std::fs::write(
+            root.join("net").join("tcp6"),
+            format!(
+                "{TCP6_HEADER}   0: 00000000000000000000000000000000:22B3 \
+                 00000000000000000000000000000000:0000 0A 00000000:00000000 00:00000000 00000000  \
+                 1883        0 3 1 0000000000000000 100 0 0 10 0\n"
+            ),
+        )
+        .expect("tcp6");
+        assert_eq!(listens_on(&root, 8883), Ok(true));
+        assert_eq!(listens_on(&root, 8884), Ok(false));
     }
 }
