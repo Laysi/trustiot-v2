@@ -1,0 +1,41 @@
+check queue: queued on the build host at 22:15:42 as 610-c426da67; running now: nothing
+FMT_OK
+api/openapi.json is up to date
+$ bun tools/api-client.ts --check
+    Checking telemetry-query v0.1.0 (<host copy>/src/services/telemetry-query)
+    Checking certs v0.1.0 (<host copy>/src/services/certs)
+    Checking testkit v0.1.0 (<host copy>/src/crates/testkit)
+    Checking openapi v0.1.0 (<host copy>/src/tools/openapi)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 13.60s
+test result: ok. 43 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.30s
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.07s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running unittests src/lib.rs (<host copy>/target/debug/deps/certs-e86a3adc6431d02a)
+test result: ok. 18 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/broker.rs (<host copy>/target/debug/deps/broker-7e1f767d8d7cd4a9)
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.67s
+     Running tests/ceremony.rs (<host copy>/target/debug/deps/ceremony-4830d7e5916c2e2a)
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.74s
+     Running tests/crl.rs (<host copy>/target/debug/deps/crl-25e0a98164dde8af)
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 22.55s
+     Running tests/cross_tenant.rs (<host copy>/target/debug/deps/cross_tenant-a5eab79ab0adffc4)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.85s
+     Running tests/issuance.rs (<host copy>/target/debug/deps/issuance-e9465dcff3ac038d)
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.74s
+     Running tests/key_custody.rs (<host copy>/target/debug/deps/key_custody-9acda0f7ea2b8fd9)
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.40s
+     Running tests/registration.rs (<host copy>/target/debug/deps/registration-384d164244874d06)
+test registration_is_idempotent_and_needs_a_workstation_and_an_administrator ... FAILED
+thread 'registration_is_idempotent_and_needs_a_workstation_and_an_administrator' (383238) panicked at services/certs/tests/registration.rs:659:5:
+test result: FAILED. 4 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.39s
+check queue: removed 0 dangling test volumes
+check queue: removed 0 dangling podman test volumes
+check queue: exit 101 at 22:17:19 (build host, 610-c426da67)
+
