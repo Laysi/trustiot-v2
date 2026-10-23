@@ -368,6 +368,7 @@ dependencies = [
  "humantime",
  "opentelemetry",
  "opentelemetry-proto",
+ "outbox",
  "prost",
  "protocol",
  "rcgen",

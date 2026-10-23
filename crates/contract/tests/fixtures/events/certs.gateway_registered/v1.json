@@ -1,0 +1,19 @@
+{
+  "id": "01928f6e-7a3c-7d4e-8f00-000000000401",
+  "type": "certs.gateway_registered",
+  "version": 1,
+  "tenant_id": null,
+  "occurred_at": "2026-10-23T08:00:00.123Z",
+  "producer": "certs",
+  "payload": {
+    "hardware_id": "tg-0001",
+    "public_key_sha256": "1f2d4c6a8e0b3d5f7a9c1e3b5d7f9a2c4e6b8d0f2a4c6e8b0d2f4a6c8e0b2d4f",
+    "endorsement_key_sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+    "certificate_serial": "4c2a19e0f3b85d7a6e01c2d3b4a59687",
+    "workstation": "line-1"
+  },
+  "actor": {
+    "kind": "user",
+    "user_id": "01928f6e-7a3c-7d4e-8f00-0000000000ad"
+  }
+}

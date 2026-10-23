@@ -531,6 +531,7 @@ describe.skipIf(!ENABLED)("the dev environment with podman", () => {
           "telemetry_query_app",
           "telemetry_query_platform",
           "certs_app",
+          "certs_platform",
           "assistant_app",
         ]);
         for (const login of logins) {

@@ -4,4 +4,5 @@
 //! `tests/events.rs` decodes.
 
 pub mod assets;
+pub mod certs;
 pub mod identity;

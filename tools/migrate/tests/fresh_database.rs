@@ -156,6 +156,7 @@ async fn a_fresh_database_gets_every_migration_once() {
             "telemetry_query_app",
             "telemetry_query_platform",
             "certs_app",
+            "certs_platform",
             "assistant_app"
         ]
     );

@@ -36,6 +36,8 @@ getrandom.workspace = true
 humantime.workspace = true
 # The CRL gauges.
 opentelemetry = { workspace = true, features = ["metrics"] }
+# The factory registration writes `certs.gateway_registered` in its transaction.
+outbox = { path = "../../crates/outbox" }
 # The gateway id, which is a gateway certificate's common name (decision 6).
 protocol = { path = "../../crates/protocol" }
 # Signs certificates and CRLs; `x509-parser` reads the issuing CA certificates as issuers,
