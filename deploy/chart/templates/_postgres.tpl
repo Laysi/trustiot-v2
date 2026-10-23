@@ -190,7 +190,8 @@ Per service that may use Postgres, what one replica opens at most:
   otherPools      every other pool the replica opens, at its largest, whatever role it logs in as:
                   ai-gateway       none: the settings pool is its only one
                   assets           PLATFORM_CONNECTIONS (its platform role)
-                  certs            REGISTRATION_CONNECTIONS (its platform role)
+                  assistant        none: only the service role's pool (Laysi/trustiot-v2#592)
+                  certs           REGISTRATION_CONNECTIONS (its platform role)
                   identity         the tenant, login, login send, delegation and event log pools
                                    as identity_app (16), and the event log's pool as
                                    identity_platform, its consumed producers plus 2 (5)
@@ -204,6 +205,7 @@ these numbers differ.
 {
   "ai-gateway": { "maxConnections": { "min": 2, "max": 32 }, "otherPools": 0 },
   "assets": { "maxConnections": { "min": 2, "max": 100 }, "otherPools": 4 },
+  "assistant": { "maxConnections": { "min": 2, "max": 100 }, "otherPools": 0 },
   "certs": { "maxConnections": { "min": 2, "max": 100 }, "otherPools": 4 },
   "identity": { "maxConnections": { "min": 3, "max": 100 }, "otherPools": 21 },
   "telemetry-query": { "maxConnections": { "min": 2, "max": 100 }, "otherPools": 2 }

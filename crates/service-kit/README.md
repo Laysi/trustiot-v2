@@ -166,6 +166,7 @@ kit 的設定與預設值（環境變數以 `TRUSTIOT` 前綴為例）：
 - 每個請求一行 `request completed`（5xx 是 ERROR 等級的 `request failed`），只記 method、路由樣板（不記實際路徑與 query）、狀態碼與耗時；不記標頭與 body。health 端點不記。
 - handler panic 時回 500，並記一行 ERROR `thread panicked`，含位置與 panic 訊息，所以 panic 與 `expect` 的訊息不能放資料。handler 超過 `http.request_timeout` 時回 504，記一行 WARN。兩者的回應 body 見 [contract feature](#contract-feature)。
 - `telemetry.log_filter` 調整等級，`target=level` 指令對所有 target 都有效：經 `log` crate 橋接進來的事件（`reqwest` 等相依套件用 `log` 發日誌）以事件原本的 target 比對，日誌行的 `target` 也是原本的，所以 `debug,reqwest=warn` 讓 reqwest 只剩 WARN 以上。span 不受它影響，一律在 INFO 以上建立，等級調到 `warn` 時，warn 日誌仍帶 trace id。
+- 相依套件在詳細等級會寫出不能離開行程的資料時，服務以 `ServiceInfo::with_log_ceilings(&[LogCeiling::new("<target>", Level::DEBUG)])` 固定那個 target（含子模組，`tungstenite` 涵蓋 `tungstenite::protocol`，不涵蓋 `tungstenite_extra`）的上限：`telemetry.log_filter` 怎麼設都打不開更詳細的等級，經 `tracing` 與經 `log` crate 的事件、stdout 與 OTLP 都一樣（`src/telemetry/log_layer.rs` 的測試）。例如 `services/mqtt-bridge` 把 `tungstenite` 固定在 DEBUG：它在 TRACE 會寫出每個 frame 的內容（Laysi/trustiot-v2#600）。
 
 規則（[觀測文件](../../docs/architecture/observability.md)、功能重建清單 M2）：
 

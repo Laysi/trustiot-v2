@@ -229,8 +229,8 @@ pub const PRODUCT: Registry = Registry {
         },
         // The AI assistant's conversations and their append-only history
         // (Laysi/trustiot-v2#553): tenant data under row-level security, no events, and nothing
-        // read across tenants, so no platform role. Its `assistant_app` stays NOLOGIN in a
-        // cluster until the chart gives the assistant Postgres (Laysi/trustiot-v2#552).
+        // read across tenants, so no platform role. The chart lists `postgres` for the assistant
+        // (Laysi/trustiot-v2#592), so the Job lets its `assistant_app` log in like every client's.
         Service {
             name: assistant_schema::SCHEMA.service,
             platform_role: false,

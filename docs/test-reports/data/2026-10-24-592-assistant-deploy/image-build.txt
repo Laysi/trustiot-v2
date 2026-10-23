@@ -1,0 +1,27 @@
+# The assistant's arm64 image, built with the release scripts on the build host (x86_64 Linux,
+# podman 5.7.0) on 2026-10-24. plan.ts --dry-run, then plan.json filtered to the assistant image
+# (build.ts builds every image of a plan; only this one is new), then build.ts. Excerpt of the
+# output; the cargo progress lines and the base image's blob list are left out.
+
+[release:plan] helm lint --strict passed with values-saas.yaml
+[release:plan] helm lint --strict passed with values-onprem.yaml
+[release:plan] image 127.0.0.1:5068/laysi/trustiot-v2/assistant:0.0.0-rc.1 (Rust package assistant)
+[release:build] cross-compiling assistant for aarch64-unknown-linux-musl
+    Finished `release` profile [optimized] target(s) in 44.54s
+[release:build] packing with podman 5.7.0, buildah 1.42.1
+[release:build] building 127.0.0.1:5068/laysi/trustiot-v2/assistant:0.0.0-rc.1 for linux/arm64
+STEP 1/5: FROM gcr.io/distroless/static-debian13:nonroot@sha256:e2e927ec666bae08560abb3c55d0659eceabb657f56b6782ab500a9fc7f555e3
+STEP 2/5: COPY --chmod=0555 assistant /usr/local/bin/assistant
+STEP 3/5: USER 65532:65532
+STEP 4/5: ENTRYPOINT ["/usr/local/bin/assistant"]
+STEP 5/5: LABEL "org.opencontainers.image.source"="https://github.com/Laysi/trustiot-v2" ... "org.opencontainers.image.title"="assistant"
+[release:build] 127.0.0.1:5068/laysi/trustiot-v2/assistant:0.0.0-rc.1 → sha256:bb2db5d1d12ac667820d10d9d632a5074a67f58f7fad9024d473c3f29ac540e0, SBOM SPDX-2.3 with 221 packages
+
+build.json (images):
+  name: assistant
+  digest: sha256:bb2db5d1d12ac667820d10d9d632a5074a67f58f7fad9024d473c3f29ac540e0
+  size: 4236288
+  sbomPackages: 221
+
+build.ts checks that the binary is an aarch64 ELF without a program interpreter (static) before
+packing it (scripts/release/rust-build.ts, staticElfProblem); it did not stop, so both held.

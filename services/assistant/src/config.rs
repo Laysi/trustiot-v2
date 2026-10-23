@@ -1,12 +1,16 @@
 //! The assistant's settings (README.md, 「設定」): where the AI gateway is, the model call, the
-//! token budget of a question and the limits of tool calls. They come from `TRUSTIOT__*`
-//! variables or the TOML file named by `TRUSTIOT_CONFIG_FILE`, through service-kit, and are
-//! checked at startup. Error messages name keys, never values.
+//! token budget of a question, the limits of tool calls and the service role's database login.
+//! They come from `TRUSTIOT__*` variables (the platform settings from `TRUSTIOT_*`) or the TOML
+//! file named by `TRUSTIOT_CONFIG_FILE`, through service-kit, and are checked at startup. Error
+//! messages name keys, never values.
 
+use std::fmt;
+use std::path::PathBuf;
 use std::time::Duration;
 
 use serde::Deserialize;
 use service_kit::config::{Invalid, Validate};
+use service_kit::postgres::{PostgresConfig, SslMode};
 
 use crate::model::{CacheTtl, Effort};
 
@@ -27,10 +31,21 @@ pub const MAX_CALLS_PER_STEP: usize = 32;
 /// The API's limit on one image: 5 MB (<https://platform.claude.com/docs/en/build-with-claude/vision>).
 pub const MAX_IMAGE_BYTES: usize = 5 << 20;
 
+/// Fewest connections of the service role's pool: the two readiness checks (a ping and the
+/// migration check) may run at the same time.
+pub const MIN_DATABASE_CONNECTIONS: u32 = 2;
+
+/// Most connections of the service role's pool per replica.
+pub const MAX_DATABASE_CONNECTIONS: u32 = 100;
+
 /// The assistant's own settings (service-kit adds `http`, `shutdown` and `telemetry`).
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Config {
+    /// Platform settings, set only by the deployment: where Postgres is.
+    pub platform: Platform,
+    /// The service role's login and the pool size.
+    pub database: Database,
     pub ai_gateway: AiGateway,
     #[serde(default)]
     pub model: Model,
@@ -48,6 +63,69 @@ pub struct Config {
     /// The assets service: the device model tool.
     #[serde(default)]
     pub assets: Peer,
+}
+
+/// The platform settings the service reads. No `deny_unknown_fields`: every service gets every
+/// platform setting.
+#[derive(Debug, Deserialize)]
+pub struct Platform {
+    /// `TRUSTIOT_POSTGRES_HOST`.
+    pub postgres_host: String,
+    /// `TRUSTIOT_POSTGRES_PORT`.
+    pub postgres_port: u16,
+    /// `TRUSTIOT_POSTGRES_DATABASE`.
+    pub postgres_database: String,
+    /// `TRUSTIOT_POSTGRES_SSLMODE`: only `verify-full` is accepted.
+    pub postgres_sslmode: SslMode,
+    /// `TRUSTIOT_POSTGRES_CA_FILE`: the CA of the server certificate, the only trust anchor.
+    pub postgres_ca_file: PathBuf,
+}
+
+/// `database.*`: the service role (`assistant_app`), which reads and writes the conversations
+/// under row-level security. No platform role: nothing reads conversations across tenants.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Database {
+    /// `TRUSTIOT__DATABASE__USERNAME`.
+    pub username: String,
+    /// `TRUSTIOT__DATABASE__PASSWORD`, from a Secret.
+    pub password: String,
+    /// `TRUSTIOT__DATABASE__MAX_CONNECTIONS`: most connections of the service role's pool per
+    /// replica, from [`MIN_DATABASE_CONNECTIONS`] to [`MAX_DATABASE_CONNECTIONS`]. Default 4:
+    /// only readiness uses the pool until the chat API (Laysi/trustiot-v2#146) stores
+    /// conversations.
+    #[serde(default = "default_max_connections")]
+    pub max_connections: u32,
+}
+
+const fn default_max_connections() -> u32 {
+    4
+}
+
+/// Never prints the password.
+impl fmt::Debug for Database {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Database")
+            .field("username", &self.username)
+            .field("max_connections", &self.max_connections)
+            .finish_non_exhaustive()
+    }
+}
+
+impl Config {
+    /// Where and how the service role connects: TLS with verify-full against the deployment's CA.
+    #[must_use]
+    pub fn service_role(&self) -> PostgresConfig {
+        PostgresConfig {
+            host: self.platform.postgres_host.clone(),
+            port: self.platform.postgres_port,
+            database: self.platform.postgres_database.clone(),
+            ssl_mode: self.platform.postgres_sslmode,
+            ca_file: self.platform.postgres_ca_file.clone(),
+            username: self.database.username.clone(),
+            password: self.database.password.clone(),
+        }
+    }
 }
 
 /// The shortest run delegation a question may have: a question needs time for a few model calls.
@@ -255,6 +333,23 @@ fn default_max_image_bytes() -> usize {
 
 impl Validate for Config {
     fn validate(&self) -> Result<(), Invalid> {
+        let database = &self.database;
+        if !(MIN_DATABASE_CONNECTIONS..=MAX_DATABASE_CONNECTIONS)
+            .contains(&database.max_connections)
+        {
+            return Err(Invalid::new(
+                "database.max_connections",
+                format!(
+                    "must be between {MIN_DATABASE_CONNECTIONS} and {MAX_DATABASE_CONNECTIONS}"
+                ),
+            ));
+        }
+        if database.username.trim().is_empty() {
+            return Err(Invalid::new("database.username", "must not be blank"));
+        }
+        if database.password.is_empty() {
+            return Err(Invalid::new("database.password", "must not be empty"));
+        }
         check_gateway_url(&self.ai_gateway.url)
             .map_err(|message| Invalid::new("ai_gateway.url", message))?;
         if !is_role_name(&self.ai_gateway.role) {
@@ -425,6 +520,18 @@ mod tests {
 
     fn config() -> Config {
         Config {
+            platform: Platform {
+                postgres_host: "trustiot-postgres-rw".into(),
+                postgres_port: 5432,
+                postgres_database: "trustiot".into(),
+                postgres_sslmode: SslMode::VerifyFull,
+                postgres_ca_file: "/etc/trustiot/postgres-ca/ca.crt".into(),
+            },
+            database: Database {
+                username: "assistant_app".into(),
+                password: "generated in the cluster".into(),
+                max_connections: default_max_connections(),
+            },
             ai_gateway: AiGateway {
                 url: "http://ai-gateway:8080".into(),
                 role: default_role(),
@@ -510,6 +617,19 @@ mod tests {
     #[test]
     fn the_settings_read_from_the_environment() {
         let vars = [
+            ("TRUSTIOT_POSTGRES_HOST", "trustiot-postgres-rw"),
+            ("TRUSTIOT_POSTGRES_PORT", "5432"),
+            ("TRUSTIOT_POSTGRES_DATABASE", "trustiot"),
+            ("TRUSTIOT_POSTGRES_SSLMODE", "verify-full"),
+            (
+                "TRUSTIOT_POSTGRES_CA_FILE",
+                "/etc/trustiot/postgres-ca/ca.crt",
+            ),
+            // Another platform setting the chart gives every service: ignored, not refused.
+            ("TRUSTIOT_DEPLOYMENT_MODE", "saas"),
+            ("TRUSTIOT__DATABASE__USERNAME", "assistant_app"),
+            ("TRUSTIOT__DATABASE__PASSWORD", "from the password Secret"),
+            ("TRUSTIOT__DATABASE__MAX_CONNECTIONS", "6"),
             ("TRUSTIOT__AI_GATEWAY__URL", "http://ai-gateway:8080"),
             (
                 "TRUSTIOT__IDENTITY__EXCHANGE_URL",
@@ -541,6 +661,41 @@ mod tests {
             Some("http://telemetry-query:8080")
         );
         assert_eq!(config.assets.url.as_deref(), Some("http://assets:8080"));
+        assert_eq!(config.database.max_connections, 6);
+        let role = config.service_role();
+        assert_eq!(
+            (role.host.as_str(), role.port, role.username.as_str()),
+            ("trustiot-postgres-rw", 5432, "assistant_app")
+        );
+        assert_eq!(role.ssl_mode, SslMode::VerifyFull);
+        // The password never reaches a log line through Debug.
+        let debug = format!("{config:?}");
+        assert!(!debug.contains("from the password Secret"), "{debug}");
+    }
+
+    #[test]
+    fn the_database_login_and_pool_are_checked() {
+        for (connections, valid) in [
+            (MIN_DATABASE_CONNECTIONS - 1, false),
+            (MIN_DATABASE_CONNECTIONS, true),
+            (MAX_DATABASE_CONNECTIONS, true),
+            (MAX_DATABASE_CONNECTIONS + 1, false),
+        ] {
+            let mut config = config();
+            config.database.max_connections = connections;
+            let expected = if valid {
+                Ok(())
+            } else {
+                Err("database.max_connections".to_owned())
+            };
+            assert_eq!(key_of(&config), expected, "{connections} connections");
+        }
+        let mut blank = config();
+        blank.database.username = " ".into();
+        assert_eq!(key_of(&blank), Err("database.username".into()));
+        let mut no_password = config();
+        no_password.database.password = String::new();
+        assert_eq!(key_of(&no_password), Err("database.password".into()));
     }
 
     #[test]

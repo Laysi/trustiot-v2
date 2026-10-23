@@ -1,0 +1,21 @@
+2026-10-23T13:54:04Z: mosquitto version 2.1.2 starting
+2026-10-23T13:54:04Z: Config loaded from /mosquitto/config/mosquitto.conf.
+2026-10-23T13:54:04Z: Bridge support available.
+2026-10-23T13:54:04Z: Persistence support available.
+2026-10-23T13:54:04Z: TLS support available.
+2026-10-23T13:54:04Z: TLS-PSK support available.
+2026-10-23T13:54:04Z: Websockets support available.
+2026-10-23T13:54:04Z: Info: running mosquitto as user: mosquitto.
+2026-10-23T13:54:04Z: Opening ipv4 listen socket on port 8883.
+2026-10-23T13:54:04Z: Opening ipv6 listen socket on port 8883.
+2026-10-23T13:54:04Z: mosquitto version 2.1.2 running
+2026-10-23T13:54:09Z: New connection from <client>:38882 on port 8883.
+2026-10-23T13:54:09Z: New connection from <client>:38890 on port 8883.
+2026-10-23T13:54:09Z: New connection from <client>:38900 on port 8883.
+2026-10-23T13:54:40Z: Client <client> [<client>:38882] disconnected: exceeded timeout.
+2026-10-23T13:54:40Z: Client <client> [<client>:38890] disconnected: exceeded timeout.
+2026-10-23T13:54:40Z: Client <client> [<client>:38900] disconnected: exceeded timeout.
+2026-10-23T13:55:39Z: New connection from <client>:41098 on port 8883.
+2026-10-23T13:55:39Z: New connection from <client>:41108 on port 8883.
+2026-10-23T13:56:09Z: Client <client> [<client>:41098] disconnected: exceeded timeout.
+2026-10-23T13:56:09Z: Client <client> [<client>:41108] disconnected: exceeded timeout.

@@ -66,24 +66,14 @@ pub const MIN_REMAINING_SECS: i64 = 3600;
 /// its next bit set (always 16 octets in DER).
 pub const SERIAL_BYTES: usize = 16;
 
-/// The extended key usage of workstation certificates, "TrustIoT production workstation": an
-/// OID under the UUID arc 2.25 (ITU-T X.667; UUID `edc7e7d8-ab9e-4c72-a01b-aa39eb83e905`), which
-/// needs no registration. Neither clientAuth, serverAuth nor anyExtendedKeyUsage, so no TLS peer
-/// accepts a workstation certificate; the registration API (Laysi/trustiot-v2#79) requires it.
-pub const WORKSTATION_PURPOSE: &str = "2.25.316065004478888347166512336770143873285";
-
-/// [`WORKSTATION_PURPOSE`] as DER content octets (no tag and length), the form verifiers
-/// compare: the first two arcs as 2 × 40 + 25 = 105, then the UUID's 128 bits in base 128.
-pub const WORKSTATION_PURPOSE_DER: [u8; 20] = [
-    0x69, 0x83, 0xdb, 0xc7, 0xf3, 0xf6, 0x95, 0xb9, 0xf2, 0xb1, 0xe5, 0xa0, 0x8d, 0xea, 0xc7, 0x9e,
-    0xdc, 0x8f, 0xd2, 0x05,
-];
+// The workstation profile's purpose and subject prefix live in `contract::certs`, which the
+// workstation tool (factory/workstation) shares, so the issuer and its verifiers cannot drift.
+pub use contract::certs::{
+    WORKSTATION_PURPOSE, WORKSTATION_PURPOSE_DER, WORKSTATION_SUBJECT_PREFIX,
+};
 
 /// The extendedKeyUsage extension (RFC 5280 section 4.2.1.12).
 const EXTENDED_KEY_USAGE_OID: [u64; 4] = [2, 5, 29, 37];
-
-/// What every workstation certificate's common name starts with.
-pub const WORKSTATION_SUBJECT_PREFIX: &str = "workstation:";
 
 /// Longest workstation name, in bytes: with [`WORKSTATION_SUBJECT_PREFIX`] the common name stays
 /// within the ledger's 64 characters.

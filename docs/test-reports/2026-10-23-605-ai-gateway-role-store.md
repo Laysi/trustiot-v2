@@ -4,7 +4,7 @@ Laysi/trustiot-v2#605：ai-gateway 把模型角色的模型清單覆寫存進 Po
 
 ## 環境
 
-- **程式碼**：分支 `feat/605-ai-gateway-role-store`，rebase 到 main `74216494`（Laysi/trustiot-v2#604）之後的 commit。下表除了 `bun test scripts`（rebase 之後那棵樹的結果），都是 2026-10-24 安全審查的修正、再 merge main `d1269a0d`（Laysi/trustiot-v2#609 的 Postgres 連線預算，含 Laysi/trustiot-v2#622 的 tokio 1.53.3）之後在同一棵樹上重跑的結果（見「安全審查之後的修正」與「連線預算」）。
+- **程式碼**：分支 `feat/605-ai-gateway-role-store`，rebase 到 main `74216494`（Laysi/trustiot-v2#604）之後的 commit。下表都是 2026-10-24 安全審查的修正、merge main `d1269a0d`（Laysi/trustiot-v2#609 的 Postgres 連線預算，含 Laysi/trustiot-v2#622 的 tokio 1.53.3）、再 merge main `0dc8fd96`（Laysi/trustiot-v2#628，assistant 的部署）並把 `max_connections` 預設調高到 200 之後在同一棵樹上重跑的結果（見「安全審查之後的修正」與「連線預算」）。
 - **機器**：建置主機（x86_64 Linux），經檢查佇列執行；容器測試由 podman 起 service-kit 的拋棄式 TLS Postgres（`crates/service-kit/tests/support/postgres.rs`，每個測試自己的資料庫，以 `ai_gateway_owner` 跑 `crates/service-kit/sql/database.sql`、建立 schema、跑 `0001_model_roles.sql` 與 migration 紀錄，與 migration Job 的順序相同）。
 - **工具**：Rust 1.99.0（`rust-toolchain.toml`）、bun 1.4.2（`.prototools`）。
 - **設定**：`CI=1`，沒有容器執行環境時測試失敗而不是略過。不連真正的供應商：供應商是 loopback 上的腳本化 HTTP/1.1 伺服器。
@@ -17,14 +17,15 @@ Laysi/trustiot-v2#605：ai-gateway 把模型角色的模型清單覆寫存進 Po
 cargo fmt --all --check
 cargo clippy --locked --workspace --all-targets -- -D warnings
 CI=1 cargo test --locked --no-fail-fast -p ai-gateway
-CI=1 cargo test --locked --no-fail-fast -p migrate -p sql-check -p repo-check -p testkit
+CI=1 cargo test --locked --no-fail-fast -p assets -p assistant -p certs -p identity -p telemetry-query -p ai-gateway --test chart_connections
+CI=1 cargo test --locked --no-fail-fast -p migrate -p sql-check -p repo-check
 cargo run --locked -p openapi -- --check
 cargo deny --locked check
 cargo tree -p ai-gateway --prefix none | grep -c '^contract '   # 0
 bun test deploy/chart
 bun test deploy/flux
-bun test scripts/ci
 bun install --cwd scripts --frozen-lockfile && bun test scripts
+bun run --cwd scripts typecheck
 ```
 
 驗收證據可以單獨重跑：`CI=1 cargo test -p ai-gateway --test roles_store --test process`。
@@ -36,14 +37,15 @@ bun install --cwd scripts --frozen-lockfile && bun test scripts
 | `cargo fmt --all --check` | 通過 |
 | `cargo clippy --workspace --all-targets -- -D warnings` | 通過 |
 | `cargo test -p ai-gateway` | 單元 23、`chart_connections` 1、`decisions` 4、`fallback` 9、`messages` 7、`no_contract` 2、`process` 6、`roles_store` 9，共 61 個全部通過；每個測試的名稱見 [ai-gateway-tests.txt](data/2026-10-23-605-ai-gateway-role-store/ai-gateway-tests.txt) |
-| `cargo test -p migrate -p sql-check -p repo-check -p testkit` | 全部通過，含 `registry` 6（ai-gateway 的 migration 登記與目錄一致）、`fresh_database` 1（叢集裡沒綁密碼的 `ai_gateway_app` 維持 NOLOGIN）、sql-check 26（`store.rs` 的 SQL 全是靜態字串） |
+| `cargo test ... --test chart_connections`（六個用 Postgres 的服務） | 6 個全部通過 |
+| `cargo test -p migrate -p sql-check -p repo-check` | 185 個全部通過，含 `registry` 6（ai-gateway 的 migration 登記與目錄一致）、`fresh_database` 1（叢集裡沒綁密碼的 `ai_gateway_app` 維持 NOLOGIN）、sql-check 26（`store.rs` 的 SQL 全是靜態字串） |
 | `cargo tree -p ai-gateway` 的 `contract` | 0 行 |
 | `cargo run -p openapi -- --check` | 通過 |
 | `cargo deny --locked check` | advisories、bans、licenses、sources 都通過 |
-| `bun test deploy/chart` | 646 通過、0 失敗 |
+| `bun test deploy/chart` | 655 通過、0 失敗 |
 | `bun test deploy/flux` | 77 通過、0 失敗 |
-| `bun test scripts/ci` | 488 通過、0 失敗 |
-| `bun test scripts` | 1659 通過、9 略過（需要 podman 或 arm64 的端對端測試，與這次變更無關）、0 失敗 |
+| `bun test scripts` | 1662 通過、9 略過（需要 podman 或 arm64 的端對端測試，與這次變更無關）、0 失敗 |
+| `bun run --cwd scripts typecheck` | 通過 |
 
 ## 結論
 
@@ -77,10 +79,12 @@ chart 的接線另由 `deploy/chart/tests/chart.test.ts` 檢查（`AI gateway se
 
 ## 連線預算（merge Laysi/trustiot-v2#609 之後）
 
-Laysi/trustiot-v2#609 讓 chart 檢查整版滾動時所有服務的連線池加總。閘道加入預算：`trustiot.postgres.connectionBudgets` 的 `ai-gateway` 是 `maxConnections` 2 到 32、`otherPools` 0（設定的連線池是它唯一的連線池），`services.ai-gateway.database.maxConnections` 預設 4，chart 以 `AI_GATEWAY__DATABASE__MAX_CONNECTIONS` 傳入、自訂 `env` 不能設定。五個用 Postgres 的服務各一個副本時需要 140 + 18 = 158 條，`max_connections` 預設 160。
+Laysi/trustiot-v2#609 讓 chart 檢查整版滾動時所有服務的連線池加總。閘道加入預算：`trustiot.postgres.connectionBudgets` 的 `ai-gateway` 是 `maxConnections` 2 到 32、`otherPools` 0（設定的連線池是它唯一的連線池），`services.ai-gateway.database.maxConnections` 預設 4，chart 以 `AI_GATEWAY__DATABASE__MAX_CONNECTIONS` 傳入、自訂 `env` 不能設定。
+
+merge main `0dc8fd96`（Laysi/trustiot-v2#628）帶進 assistant 的預算（每副本 4）之後，六個用 Postgres 的服務各一個副本全部滾動時需要 148 + 18 = 166 條，超過原本的預設 160，所以 `postgres.bundled.parameters.max_connections` 預設改成 200，還有 34 條餘裕。記憶體估算（`deploy/chart/README.md`「叢集內的 Postgres」）的共享記憶體在建置主機實測：釘選的 `ghcr.io/cloudnative-pg/postgresql:18.6-minimal-trixie`（`deploy/images/postgres` 的基底）initdb 之後以 `postgres -C shared_memory_size` 讀，`max_connections` 100、160、200 分別是 152、157、159 MB。
 
 - `chart_connections::the_chart_budgets_every_pool_the_service_opens`：程式裡唯一的 `.max_connections(...)` 是 `store.rs` 的 `config.database.max_connections`，chart 的範圍等於 `MIN_DATABASE_CONNECTIONS`、`MAX_DATABASE_CONNECTIONS`，`otherPools` 是 0。testkit 依賴 `contract`，不能進閘道的依賴樹（`no_contract`），所以這個測試自己讀同一段 JSON。
-- `chart.test.ts` 的 `Postgres connection budget`：預設的五個服務、每副本 4、加總 158；剛好 158 時通過、157 時失敗並列出 `ai-gateway 4 x 2`；閘道拿到 `AI_GATEWAY__DATABASE__MAX_CONNECTIONS=4`（設 32 時是 32），33 與自訂 `env` 都渲染失敗。
+- `chart.test.ts` 的 `Postgres connection budget`：預設的六個服務、閘道每副本 4、加總 166、預設 200；剛好 166 時通過、165 時失敗並列出 `ai-gateway 4 x 2` 與 `assistant 4 x 2`；預設值下 identity 多兩個副本（31 × 4）時失敗；閘道拿到 `AI_GATEWAY__DATABASE__MAX_CONNECTIONS=4`（設 32 時是 32），33 與自訂 `env` 都渲染失敗。
 
 ### nightly（待補）
 

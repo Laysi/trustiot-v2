@@ -229,7 +229,7 @@ services:
       maxConnections: 10
   assets:
     enabled: false
-    # 2 to 100. Each replica opens 2 more to read the identity service's events: 12 in all.
+    # 2 to 100. Each replica opens 4 more as its platform role (README.md, 「連線預算」): 14 in all.
     database:
       maxConnections: 10
   certs:
@@ -275,8 +275,18 @@ services:
   # Laysi/trustiot-v2#446 and does not start with any other.
   mqtt-bridge:
     enabled: false
+  # The AI assistant (services/assistant, decision 31): keeps its conversations in Postgres as
+  # assistant_app, calls the models through the AI gateway, and runs its tools as the asking user
+  # against telemetry-query and assets (mesh.calls.assistant below). The chart sets the address of
+  # each of those services from mesh.calls.assistant, and env cannot (README.md, 「AI 助理」); it
+  # does not start without the AI gateway's (services.ai-gateway.enabled and ai-gateway listed).
+  # It has no API yet (the chat API is Laysi/trustiot-v2#146).
   assistant:
     enabled: false
+    # 2 to 100. It opens no other pool: 4 in all. Until the chat API (Laysi/trustiot-v2#146) only
+    # the readiness check uses it.
+    database:
+      maxConnections: 4
   # The AI gateway (services/ai-gateway, decisions 15 and 28): the providers, model roles and limits
   # come from `ai` below. Only the AI assistant, the knowledge base and alerts may call it
   # (mesh.calls; README.md, "服務間授權（mesh）").
@@ -361,6 +371,15 @@ mesh:
       - mqtt-broker
     mqtt-bridge:
       - mqtt-broker
+    # The AI assistant (Laysi/trustiot-v2#592): the AI gateway for the models; telemetry-query and
+    # assets for its tools, which call them as the asking user, so it also reaches the identity
+    # service's token exchange and the exchange grants exactly these audiences (README.md,
+    # 「代表使用者呼叫」); Postgres for its conversations (services/assistant/README.md).
+    assistant:
+      - ai-gateway
+      - telemetry-query
+      - assets
+      - postgres
 
 # Internal identity (decision 27): for every request that passes the cookie check, the identity
 # service signs a short-lived token for the backend, and every service verifies it with the
@@ -519,11 +538,12 @@ postgres:
       effective_cache_size: 384MB
       work_mem: 4MB
       maintenance_work_mem: 64MB
-      # Fits identity, assets, certs and telemetry-query at one replica each while all of them
-      # roll at once (128) plus the 18 reserved connections, with room for 14 more; the render
-      # fails when the enabled services need more. The memory estimate is in README.md
-      # (「叢集內的 Postgres」).
-      max_connections: 160
+      # Fits identity, assets, certs, telemetry-query, assistant and ai-gateway at one replica
+      # each while all of them roll at once (148) plus the 18 reserved connections (166), with 34
+      # to spare for the next service that uses Postgres; the render fails when the enabled
+      # services need more. Changing it restarts the bundled Postgres. The memory estimate is in
+      # README.md (「叢集內的 Postgres」).
+      max_connections: 200
     # The image is built for arm64 only (decision 5).
     nodeSelector:
       kubernetes.io/arch: arm64
@@ -642,7 +662,8 @@ mqttBroker:
   image:
     # eclipse-mosquitto 2.1 (Alpine), pinned to the multi-arch index digest (arm64 included).
     # crates/protocol/tests/broker.rs, tools/migrate/tests/mqtt_broker.rs and scripts/lib/stack.ts
-    # use the same tag and digest; the chart tests fail when they differ.
+    # use the same tag and digest; the chart tests fail when they differ. When the version changes,
+    # repeat the pre-CONNECT timeout measurement (services/mqtt-bridge/README.md, connection limits).
     repository: docker.io/library/eclipse-mosquitto
     tag: 2.1.2-alpine
     digest: sha256:38c0da4f2ef84284d47b3b3eeea1cb3bdeabe81ee10caf0cd5c5ff61ee3ea408
