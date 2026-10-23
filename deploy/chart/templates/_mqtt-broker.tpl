@@ -164,6 +164,11 @@ max_keepalive 120
 # Sessions of clients that never come back are removed after 30 days.
 persistent_client_expiration 30d
 
+# Decision 6: send small packets at once. Without it, Nagle's algorithm holds each CONNACK back
+# until the client acknowledges the TLS data sent before it (the session ticket), about 40 ms
+# (docs/feasibility/2026-10-12-tpm-poc.md).
+set_tcp_nodelay true
+
 # Gateways, through mqtt-bridge only (the mesh admits no other caller on this port): TLS 1.3 with
 # a client certificate from our CA, checked against the CRL. The certificate's CN is the
 # username and the client id, so a gateway cannot act as, or take over the session of, another
@@ -180,6 +185,11 @@ require_certificate true
 use_identity_as_username true
 use_username_as_clientid true
 tls_version tlsv1.3
+# Decision 6: ChaCha20-Poly1305 first. The gateway's CPU has no AES instructions, so ChaCha20
+# costs it 21-34% less CPU (Laysi/trustiot-v2#75). Mosquitto picks the suite in this order, not
+# in the client's: without this line it negotiates AES-256-GCM although the gateway lists
+# ChaCha20 first (Mosquitto 2.1.2, Laysi/trustiot-v2#86).
+ciphers_tls1.3 TLS_CHACHA20_POLY1305_SHA256:TLS_AES_256_GCM_SHA384:TLS_AES_128_GCM_SHA256
 
 # Cloud services (ingest, gateway-ops, and certs as dynamic security's administrator), inside the
 # mesh only: ztunnel's mTLS carries the connection, the mesh admits only those services on this
