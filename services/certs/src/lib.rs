@@ -24,6 +24,10 @@
 //! - [`http`]: the CRLs and the CA chain for the MQTT broker.
 //! - [`workstations`]: the API platform administrators issue and revoke workstation
 //!   certificates with.
+//! - [`registrations`]: the factory registration (Laysi/trustiot-v2#79), which a production
+//!   workstation calls with a platform administrator's session and its own signature, written
+//!   as the platform role with the platform-wide `certs.gateway_registered` event.
+//! - [`api`]: what the client API's handlers share.
 //! - [`broker`]: the MQTT broker's server certificate, on its own port.
 //! - [`ceremony`]: the offline root's certificates, for the `certs-ca` tool.
 //! - [`schema`]: the migration files this release expects; [`config`]: the settings.
@@ -32,6 +36,7 @@
 //! types that neither serialize nor print them, and no endpoint or log line carries one
 //! (`tests/key_custody.rs`).
 
+mod api;
 pub mod authority;
 pub mod broker;
 pub mod ceremony;
@@ -41,6 +46,7 @@ pub mod http;
 pub mod issue;
 pub mod monitor;
 pub mod pem;
+pub mod registrations;
 pub mod schema;
 pub mod workstations;
 
@@ -50,7 +56,7 @@ use axum::Router;
 use contract::ServiceName;
 use service_kit::identity::{IdentityVerifier, PublishedKeys, ServiceIdentity};
 use service_kit::migrations::MigrationCheck;
-use service_kit::tenant::TenantDb;
+use service_kit::tenant::{PlatformDb, TenantDb};
 use service_kit::{BoxError, Context};
 use sqlx::postgres::PgPoolOptions;
 use utoipa::OpenApi;
@@ -61,11 +67,19 @@ use crate::config::Config;
 /// How long getting a database connection may take, opening a new one included.
 pub const ACQUIRE_TIMEOUT: Duration = Duration::from_secs(5);
 
+/// Connections of the platform role's pool per replica: factory registrations, one
+/// transaction each, at the pace of a production line.
+pub const REGISTRATION_CONNECTIONS: u32 = 4;
+
 /// The client API's OpenAPI document (merged into `api/openapi.json` by `tools/openapi`).
 #[derive(OpenApi)]
 #[openapi(
-    paths(workstations::issue_certificate, workstations::revoke_certificate),
-    tags((name = "certs", description = "Workstation certificates from the issuing CA (services/certs)."))
+    paths(
+        workstations::issue_certificate,
+        workstations::revoke_certificate,
+        registrations::register_gateway
+    ),
+    tags((name = "certs", description = "Workstation certificates and factory registration from the issuing CA (services/certs)."))
 )]
 struct ApiDoc;
 
@@ -78,8 +92,9 @@ pub fn openapi() -> utoipa::openapi::OpenApi {
 
 /// The service's startup for `service_kit::run`: opens the service role's pool lazily (with the
 /// session check of `crates/service-kit`), loads the CA files and follows them, starts the CRL
-/// job and the monitor, follows the identity service's public keys file, serves the endpoints
-/// of [`http`] and [`workstations`], and serves [`broker`] on its own port
+/// job and the monitor, follows the identity service's public keys file, opens the platform
+/// role's pool lazily for [`registrations`], serves the endpoints of [`http`],
+/// [`workstations`] and [`registrations`], and serves [`broker`] on its own port
 /// (`broker.listen_addr`). Readiness passes while the role can open a checked
 /// session, the service has a usable set of public keys, and the database has every migration
 /// file this release expects ([`schema::SCHEMA`]); whether an issuing CA can sign is reported by
@@ -97,6 +112,15 @@ pub async fn start(context: Context<Config>) -> Result<Router, BoxError> {
             .max_connections(config.database.max_connections)
             .acquire_timeout(ACQUIRE_TIMEOUT),
         ServiceIdentity::new(ServiceName::Certs),
+    )?;
+    // Not part of readiness: the CRLs and the CA chain the MQTT broker reads must keep being
+    // served while the platform role cannot log in; a registration answers 503 then.
+    let platform = PlatformDb::connect_lazy(
+        config.platform_role().connect_options(),
+        PgPoolOptions::new()
+            .max_connections(REGISTRATION_CONNECTIONS)
+            .min_connections(0)
+            .acquire_timeout(ACQUIRE_TIMEOUT),
     )?;
     let ping = db.clone();
     context.health().add_check("postgres", move || {
@@ -122,13 +146,17 @@ pub async fn start(context: Context<Config>) -> Result<Router, BoxError> {
     .await;
     let verifier = IdentityVerifier::new(ServiceName::Certs, keys);
     let api = workstations::routes(
-        verifier,
+        verifier.clone(),
         db.pool().clone(),
         ca.clone(),
         config.workstation.validity,
     );
+    let registrations =
+        registrations::routes(verifier, platform, ca.clone(), config.gateway.validity);
     serve_broker(&context, db.pool().clone(), ca.clone()).await?;
-    Ok(http::routes(ca, db.pool().clone()).merge(api))
+    Ok(http::routes(ca, db.pool().clone())
+        .merge(api)
+        .merge(registrations))
 }
 
 /// Serves the MQTT broker's certificate issuance on its own port (`broker.listen_addr`), apart
