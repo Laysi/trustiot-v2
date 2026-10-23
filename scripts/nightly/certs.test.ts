@@ -409,6 +409,9 @@ describe("inside the mesh", () => {
 
 // ---------------------------------------------------------------------------------------------
 
+/** The user ID of the platform administrator the bootstrap made (runApiCheck). */
+const BOOTSTRAPPED = "0199f0a1-0000-7000-8000-000000000582";
+
 /** An ingress with the certs service behind it; `issue` answers the platform administrator's issue requests in turn. */
 /** A gate that is open: `actor` gets what a platform administrator gets on `call`. */
 interface OpenGate {
@@ -430,8 +433,10 @@ function fakeIngress(options: { routeAfter?: number; issue: (RawResponse | Error
     psql: async (text) => {
       sql.push(text);
       const cookie = /'\\x([0-9a-f]{64})'/.exec(text)?.[1];
-      if (text.includes("platform_admin")) admin = cookie;
-      else tenantAdmin = cookie;
+      // The tenant administrator comes with a membership; the platform administrator's SQL is only
+      // a session for the user the bootstrap made.
+      if (text.includes("identity.memberships")) tenantAdmin = cookie;
+      else admin = cookie;
     },
     send: async (request) => {
       sent.push(request);
@@ -484,18 +489,21 @@ describe("the workstation certificate API through the ingress", () => {
 
   async function waitingActors(): Promise<WorkstationActors> {
     const ingress = fakeIngress({ issue: [notReady()] });
-    return (await checkWorkstationWaiting(ingress.deps, APP, fx.workstationRequest, "t")).actors;
+    return (await checkWorkstationWaiting(ingress.deps, APP, fx.workstationRequest, BOOTSTRAPPED, "t")).actors;
   }
 
   test("while waiting: 403 to the tenant administrator once routed, 401 without a cookie, 503 ca_not_ready to the platform administrator", async () => {
     const ingress = fakeIngress({ routeAfter: 2, issue: [notReady()] });
-    const { detail, actors } = await checkWorkstationWaiting(ingress.deps, APP, fx.workstationRequest, "nightly smoke certs saas");
+    const { detail, actors } = await checkWorkstationWaiting(ingress.deps, APP, fx.workstationRequest, BOOTSTRAPPED, "nightly smoke certs saas");
     expect(detail).toContain("routed after 2 s");
     expect(detail).toContain(`as a platform administrator 503 ${CA_NOT_READY}`);
     // The tenant administrator is an administrator of the new tenant, and no platform administrator.
     expect(ingress.sql[1]).toContain(`'${actors.tenantId}', '${actors.tenantAdmin.userId}', 'admin'`);
     expect(ingress.sql[1]).not.toContain("platform_admin");
-    expect(ingress.sql[0]).toContain("platform_admin");
+    // The platform administrator is the user the bootstrap made: a session of theirs, no new user.
+    expect(actors.platformAdmin.userId).toBe(BOOTSTRAPPED);
+    expect(ingress.sql[0]).toContain(`'${BOOTSTRAPPED}', now()`);
+    expect(ingress.sql[0]).not.toContain("identity.users");
     // The cookie of each request, and the body: the workstation's request, as JSON.
     const issueRequests = ingress.sent.filter((r) => r.target === WORKSTATION_CERTIFICATES_PATH);
     expect(issueRequests.map((r) => r.headers?.find(([n]) => n === "cookie")?.[1].startsWith(`${SESSION_COOKIE}=`) ?? false)).toEqual([true, true, true, false, true]);
@@ -508,15 +516,15 @@ describe("the workstation certificate API through the ingress", () => {
 
   test("while waiting, fails when the platform administrator gets a certificate: the CA must not sign yet", async () => {
     const ingress = fakeIngress({ issue: [issued()] });
-    await expect(checkWorkstationWaiting(ingress.deps, APP, fx.workstationRequest, "t")).rejects.toThrow(`expected 503 ${CA_NOT_READY}`);
+    await expect(checkWorkstationWaiting(ingress.deps, APP, fx.workstationRequest, BOOTSTRAPPED, "t")).rejects.toThrow(`expected 503 ${CA_NOT_READY}`);
   });
 
   test("once signing: 401 and 403, then 201 once the CA signs, the certificate checked; revoke 401, 403, 200 and 409", async () => {
     const actors = await waitingActors();
     const ingress = fakeIngress({ issue: [notReady(), issued()], revoke: [revoked()] });
     // The sessions of the waiting check, which this ingress learns from its own SQL.
-    await ingress.deps.psql(`platform_admin '\\x${actors.platformAdmin.tokenHash}'`);
-    await ingress.deps.psql(`'\\x${actors.tenantAdmin.tokenHash}'`);
+    await ingress.deps.psql(`identity.sessions '\\x${actors.platformAdmin.tokenHash}'`);
+    await ingress.deps.psql(`identity.memberships '\\x${actors.tenantAdmin.tokenHash}'`);
     const detail = await checkWorkstationSigning(ingress.deps, APP, workstation(), actors, issuing());
     expect(detail).toContain("as a platform administrator 201 after 1 s with certificate 1a2b3c");
     expect(detail).toContain("again 409 already_revoked");
@@ -529,8 +537,8 @@ describe("the workstation certificate API through the ingress", () => {
   test("once signing, never sends an issue request again after a lost connection: it may have issued", async () => {
     const actors = await waitingActors();
     const ingress = fakeIngress({ issue: [new ConnectionError("connection reset"), issued()] });
-    await ingress.deps.psql(`platform_admin '\\x${actors.platformAdmin.tokenHash}'`);
-    await ingress.deps.psql(`'\\x${actors.tenantAdmin.tokenHash}'`);
+    await ingress.deps.psql(`identity.sessions '\\x${actors.platformAdmin.tokenHash}'`);
+    await ingress.deps.psql(`identity.memberships '\\x${actors.tenantAdmin.tokenHash}'`);
     await expect(checkWorkstationSigning(ingress.deps, APP, workstation(), actors, issuing())).rejects.toThrow("connection reset");
     expect(ingress.sent.filter((r) => r.target === WORKSTATION_CERTIFICATES_PATH)).toHaveLength(3);
   });
@@ -538,12 +546,12 @@ describe("the workstation certificate API through the ingress", () => {
   // An open gate must fail the check: these are what the nightly proves about /api/certs.
   test("while waiting, fails when the tenant administrator is let through: it never sees the 403 it waits for", async () => {
     const ingress = fakeIngress({ issue: [notReady()], open: { actor: "tenant administrator", call: "issue" } });
-    await expect(checkWorkstationWaiting(ingress.deps, APP, fx.workstationRequest, "t")).rejects.toThrow("permission_denied");
+    await expect(checkWorkstationWaiting(ingress.deps, APP, fx.workstationRequest, BOOTSTRAPPED, "t")).rejects.toThrow("permission_denied");
   });
 
   test("while waiting, fails when issuing without a cookie is let through", async () => {
     const ingress = fakeIngress({ issue: [notReady()], open: { actor: "anonymous", call: "issue" } });
-    await expect(checkWorkstationWaiting(ingress.deps, APP, fx.workstationRequest, "t")).rejects.toThrow("expected 401 unauthenticated");
+    await expect(checkWorkstationWaiting(ingress.deps, APP, fx.workstationRequest, BOOTSTRAPPED, "t")).rejects.toThrow("expected 401 unauthenticated");
   });
 
   test.each([
@@ -554,8 +562,8 @@ describe("the workstation certificate API through the ingress", () => {
   ] as const)("once signing, fails when the %s may %s", async (actor, call, message) => {
     const actors = await waitingActors();
     const ingress = fakeIngress({ issue: [issued()], revoke: [revoked(), revoked()], open: { actor, call } });
-    await ingress.deps.psql(`platform_admin '\\x${actors.platformAdmin.tokenHash}'`);
-    await ingress.deps.psql(`'\\x${actors.tenantAdmin.tokenHash}'`);
+    await ingress.deps.psql(`identity.sessions '\\x${actors.platformAdmin.tokenHash}'`);
+    await ingress.deps.psql(`identity.memberships '\\x${actors.tenantAdmin.tokenHash}'`);
     await expect(checkWorkstationSigning(ingress.deps, APP, workstation(), actors, issuing())).rejects.toThrow(message);
   });
 

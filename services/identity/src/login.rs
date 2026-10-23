@@ -82,7 +82,7 @@ use zeroize::Zeroizing;
 
 use crate::csrf::{CROSS_SITE_REQUEST, cross_site};
 use crate::issuer::{CodeKey, Issuer, unix_now};
-use crate::mail::{self, Mailer, Message};
+use crate::mail::{Mailer, Message};
 use crate::session::{
     SESSION_IDLE_LIFETIME, SessionHash, SessionSecret, error_kind, session_secret, set_cookie,
 };
@@ -242,31 +242,10 @@ WHERE user_id = $1::uuid AND revoked_at IS NULL AND expires_at > now()";
 /// SQLSTATE `unique_violation`: another code for the user was issued at the same moment.
 const UNIQUE_VIOLATION: &str = "23505";
 
-/// An email address as the service compares and stores it: trimmed, ASCII lower case, and
-/// accepted by [`mail::is_address`]. Personal data: `Debug` never prints it, and nothing logs it.
-#[derive(Clone, PartialEq, Eq)]
-pub struct EmailAddress(String);
-
-impl EmailAddress {
-    /// Normalizes and checks an address; `None` when it is not one.
-    #[must_use]
-    pub fn parse(text: &str) -> Option<Self> {
-        let address = text.trim().to_ascii_lowercase();
-        mail::is_address(&address).then_some(Self(address))
-    }
-
-    /// The address.
-    #[must_use]
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-}
-
-impl fmt::Debug for EmailAddress {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str("EmailAddress(<redacted>)")
-    }
-}
+/// An email address as the service compares and stores it (src/email.rs, which the migration
+/// Job's `bootstrap-platform-admin` compiles too, so the address it stores is the one a login
+/// looks up).
+pub use crate::email::EmailAddress;
 
 /// A login code: [`CODE_DIGITS`] ASCII digits. `Debug` never prints it; wiped on drop.
 #[derive(Clone, PartialEq, Eq)]
@@ -1114,21 +1093,6 @@ async fn verify_code(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn addresses_are_trimmed_and_lower_cased() {
-        assert_eq!(
-            EmailAddress::parse("  User.Name+Tag@Example.COM \n").map(|email| email.0),
-            Some("user.name+tag@example.com".to_owned())
-        );
-        for invalid in ["", "user", "user@", "user @example.com", "üser@example.com"] {
-            assert!(EmailAddress::parse(invalid).is_none(), "{invalid:?}");
-        }
-        assert_eq!(
-            format!("{:?}", EmailAddress::parse("user@example.com")),
-            "Some(EmailAddress(<redacted>))"
-        );
-    }
 
     #[test]
     fn codes_are_eight_digits_and_never_printed() {

@@ -353,12 +353,7 @@ fn check_wait(key: &str, value: Duration) -> Result<(), Invalid> {
 
 impl Validate for RunConfig {
     fn validate(&self) -> Result<(), Invalid> {
-        if !is_plain_identifier(&self.postgres.username) {
-            return Err(Invalid::new(
-                "postgres.username",
-                "must be a lower-case role name (letters, digits, _)",
-            ));
-        }
+        check_migration_role(&self.postgres)?;
         if let Some(passwords) = &self.passwords {
             check_api_url("passwords.api_url", &passwords.api_url)?;
             if !is_dns_label(&passwords.namespace) {
@@ -473,15 +468,74 @@ impl RunConfig {
     /// How the run connects to Postgres as the migration role.
     #[must_use]
     pub fn postgres(&self) -> PostgresConfig {
-        PostgresConfig {
-            host: self.platform.postgres_host.clone(),
-            port: self.platform.postgres_port,
-            database: self.platform.postgres_database.clone(),
-            ssl_mode: self.platform.postgres_sslmode,
-            ca_file: self.platform.postgres_ca_file.clone(),
-            username: self.postgres.username.clone(),
-            password: self.postgres.password.clone(),
+        migration_role(&self.platform, &self.postgres)
+    }
+}
+
+fn migration_role(platform: &Platform, postgres: &PostgresSettings) -> PostgresConfig {
+    PostgresConfig {
+        host: platform.postgres_host.clone(),
+        port: platform.postgres_port,
+        database: platform.postgres_database.clone(),
+        ssl_mode: platform.postgres_sslmode,
+        ca_file: platform.postgres_ca_file.clone(),
+        username: postgres.username.clone(),
+        password: postgres.password.clone(),
+    }
+}
+
+fn check_migration_role(postgres: &PostgresSettings) -> Result<(), Invalid> {
+    if is_plain_identifier(&postgres.username) {
+        Ok(())
+    } else {
+        Err(Invalid::new(
+            "postgres.username",
+            "must be a lower-case role name (letters, digits, _)",
+        ))
+    }
+}
+
+/// Settings of `migrate bootstrap-platform-admin` (Laysi/trustiot-v2#582): the migration role,
+/// as for a run, and nothing else. The address comes from stdin, never from a setting.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BootstrapConfig {
+    pub platform: Platform,
+    pub postgres: PostgresSettings,
+    #[serde(default)]
+    pub wait: BootstrapWait,
+}
+
+/// `wait.*` of `migrate bootstrap-platform-admin`.
+#[derive(Debug, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct BootstrapWait {
+    /// `TRUSTIOT__WAIT__DATABASES`: for Postgres to accept the migration role. Default 10
+    /// minutes.
+    #[serde(deserialize_with = "service_kit::config::duration")]
+    pub databases: Duration,
+}
+
+impl Default for BootstrapWait {
+    fn default() -> Self {
+        Self {
+            databases: DEFAULT_WAIT,
         }
+    }
+}
+
+impl Validate for BootstrapConfig {
+    fn validate(&self) -> Result<(), Invalid> {
+        check_migration_role(&self.postgres)?;
+        check_wait("wait.databases", self.wait.databases)
+    }
+}
+
+impl BootstrapConfig {
+    /// How the command connects to Postgres: as the migration role.
+    #[must_use]
+    pub fn postgres(&self) -> PostgresConfig {
+        migration_role(&self.platform, &self.postgres)
     }
 }
 

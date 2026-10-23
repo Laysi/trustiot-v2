@@ -7,7 +7,7 @@
 | `error` | M1 錯誤格式：`ErrorBody`、`ErrorCode`、`MessageKey`、`FieldError` |
 | `id` | `TenantId`、`UserId`、`EventId`、`DeviceModelId`：新 ID 一律 UUIDv7（[可搬移規則 3](../../docs/architecture/deployment.md)） |
 | `event` | `Event` trait 與事件信封 `EventEnvelope` |
-| `events` | 事件本身，每個產生端服務一個子模組；目前有 `events::identity::TenantCreated`（`identity.tenant_created`，Laysi/trustiot-v2#65）與 `MemberRoleChanged`（`identity.member_role_changed`，Laysi/trustiot-v2#583），以及設備型號的 `events::assets::DeviceModelCreated`、`DeviceModelUpdated`、`DeviceModelDeleted`（`assets.device_model_{created,updated,deleted}`，Laysi/trustiot-v2#99；型號本身是 `protocol::config::DeviceModel`，閘道器設定用的同一個格式），以及出廠登錄的 `events::certs::GatewayRegistered`（`certs.gateway_registered`，Laysi/trustiot-v2#79；全平台事件，沒有租戶） |
+| `events` | 事件本身，每個產生端服務一個子模組；目前有 `events::identity::TenantCreated`（`identity.tenant_created`，Laysi/trustiot-v2#65）、`MemberRoleChanged`（`identity.member_role_changed`，Laysi/trustiot-v2#583）、`events::identity::PlatformAdminGranted`（`identity.platform_admin_granted`，全平台事件，payload 只有使用者 ID 與 `via`，Laysi/trustiot-v2#582），以及設備型號的 `events::assets::DeviceModelCreated`、`DeviceModelUpdated`、`DeviceModelDeleted`（`assets.device_model_{created,updated,deleted}`，Laysi/trustiot-v2#99；型號本身是 `protocol::config::DeviceModel`，閘道器設定用的同一個格式），以及出廠登錄的 `events::certs::GatewayRegistered`（`certs.gateway_registered`，Laysi/trustiot-v2#79；全平台事件，沒有租戶） |
 | `identity` | 內部身分標頭 `x-internal-identity`、claims `InternalClaims`、遮蔽內容的 `InternalToken` |
 | `client` | 內部 API 的 `Endpoint` 與有型別的 client `InternalClient<S>` |
 | `api` | 內部 API 本身，每個提供 API 的服務一個子模組；目前有 `api::identity::ExchangeToken`（身分服務的 token 交換，Laysi/trustiot-v2#106）與 `CreateRunDelegation`、`ExchangeRunDelegation`（agent run 的委派，Laysi/trustiot-v2#551） |
