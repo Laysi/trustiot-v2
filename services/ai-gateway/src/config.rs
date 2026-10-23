@@ -81,7 +81,10 @@ pub struct Platform {
 /// Connections of the settings pool per replica, by default: every forwarded request runs one
 /// short query on it, and a reload one short read-only transaction.
 pub const DEFAULT_DATABASE_CONNECTIONS: u32 = 4;
-const MAX_DATABASE_CONNECTIONS: u32 = 32;
+/// The range of `database.max_connections`, which the chart's connection budget mirrors
+/// (deploy/chart/templates/_postgres.tpl, `trustiot.postgres.connectionBudgets`).
+pub const MIN_DATABASE_CONNECTIONS: u32 = 2;
+pub const MAX_DATABASE_CONNECTIONS: u32 = 32;
 /// How long a forwarded request waits for the settings check by default.
 pub const DEFAULT_DATABASE_TIMEOUT: Duration = Duration::from_secs(5);
 const MIN_DATABASE_TIMEOUT: Duration = Duration::from_millis(100);
@@ -444,10 +447,10 @@ fn validate_database(database: &Database) -> Result<(), Invalid> {
     if database.password.is_empty() {
         return Err(Invalid::new("database.password", "must not be empty"));
     }
-    if database.max_connections == 0 || database.max_connections > MAX_DATABASE_CONNECTIONS {
+    if !(MIN_DATABASE_CONNECTIONS..=MAX_DATABASE_CONNECTIONS).contains(&database.max_connections) {
         return Err(Invalid::new(
             "database.max_connections",
-            format!("must be between 1 and {MAX_DATABASE_CONNECTIONS}"),
+            format!("must be between {MIN_DATABASE_CONNECTIONS} and {MAX_DATABASE_CONNECTIONS}"),
         ));
     }
     if database.timeout < MIN_DATABASE_TIMEOUT || database.timeout > MAX_DATABASE_TIMEOUT {

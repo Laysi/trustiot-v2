@@ -131,7 +131,7 @@ HTTP 200 而且 `ai-gateway-model` 是那個供應商的模型，表示金鑰可
 | 平台設定 | `AI_GATEWAY_POSTGRES_HOST`、`_PORT`、`_DATABASE`、`_SSLMODE`、`_CA_FILE` | 必填 | Postgres 的位置與驗證伺服器憑證的 CA，與其他服務的 `TRUSTIOT_POSTGRES_*` 相同，只是用閘道自己的前綴；`_SSLMODE` 只收 `verify-full` |
 | `database.username` | `AI_GATEWAY__DATABASE__USERNAME` | 必填 | 服務角色 `ai_gateway_app` |
 | `database.password` | `AI_GATEWAY__DATABASE__PASSWORD` | 必填 | 由 Secret 提供；不進日誌與 `Debug` |
-| `database.max_connections` | `AI_GATEWAY__DATABASE__MAX_CONNECTIONS` | `4` | 每個副本的連線池大小，1 到 32 |
+| `database.max_connections` | `AI_GATEWAY__DATABASE__MAX_CONNECTIONS` | `4` | 每個副本的連線池大小，2 到 32（chart 的連線預算記同一個範圍，`deploy/chart/README.md`「連線預算」） |
 | `database.timeout` | `AI_GATEWAY__DATABASE__TIMEOUT` | `5s` | 每個轉送請求等設定確認（取得連線、讀世代、必要時重載）的上限，100 ms 到 60 s，而且不超過這次呼叫剩下的時間預算；超過回 503。也是伺服器端 `lock_timeout` 與 `statement_timeout` 的上限（見「資料庫」） |
 
 至少要有一個角色。一個最小的設定：

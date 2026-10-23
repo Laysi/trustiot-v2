@@ -184,9 +184,11 @@ where it does not (README.md, 「叢集內的 Postgres」).
 
 Per service that may use Postgres, what one replica opens at most:
   maxConnections  {min, max}: the range of services.<name>.database.maxConnections, which the chart
-                  passes as TRUSTIOT__DATABASE__MAX_CONNECTIONS, the size of the service's main
-                  pool; the service refuses to start outside this range.
+                  passes as <prefix>__DATABASE__MAX_CONNECTIONS (TRUSTIOT, or AI_GATEWAY for
+                  ai-gateway), the size of the service's main pool; the service refuses to start
+                  outside this range.
   otherPools      every other pool the replica opens, at its largest, whatever role it logs in as:
+                  ai-gateway       none: the settings pool is its only one
                   assets           PLATFORM_CONNECTIONS (its platform role)
                   certs            REGISTRATION_CONNECTIONS (its platform role)
                   identity         the tenant, login, login send, delegation and event log pools
@@ -200,6 +202,7 @@ these numbers differ.
 */}}
 {{- define "trustiot.postgres.connectionBudgets" -}}
 {
+  "ai-gateway": { "maxConnections": { "min": 2, "max": 32 }, "otherPools": 0 },
   "assets": { "maxConnections": { "min": 2, "max": 100 }, "otherPools": 4 },
   "certs": { "maxConnections": { "min": 2, "max": 100 }, "otherPools": 4 },
   "identity": { "maxConnections": { "min": 3, "max": 100 }, "otherPools": 21 },

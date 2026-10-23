@@ -2784,7 +2784,11 @@ describe("Postgres connection budget (Laysi/trustiot-v2#575)", () => {
   const services = defaults.services as Record<string, { database?: { maxConnections?: number } }>;
   const calls = (defaults.mesh as { calls: Record<string, string[]> }).calls;
   const postgresServices = Object.keys(calls).filter((name) => calls[name]?.includes("postgres")).sort();
-  const enable = (names: readonly string[]) => names.flatMap((name) => ["--set", `services.${name}.enabled=true`]);
+  // The gateway does not render without its providers and roles (AI_GATEWAY_SETTINGS).
+  const enable = (names: readonly string[]) => [
+    ...names.flatMap((name) => ["--set", `services.${name}.enabled=true`]),
+    ...(names.includes("ai-gateway") ? AI_GATEWAY_SETTINGS : []),
+  ];
   // What the defaults need with every Postgres service on at one replica, computed here from the
   // budgets and values.yaml, independently of the template's arithmetic.
   const perReplica = (name: string) => (services[name]?.database?.maxConnections ?? NaN) + (budgets[name]?.otherPools ?? NaN);
@@ -2792,22 +2796,23 @@ describe("Postgres connection budget (Laysi/trustiot-v2#575)", () => {
   const limit = Number((defaults.postgres as { bundled: { parameters: { max_connections: number } } }).bundled.parameters.max_connections);
 
   test("every service that uses Postgres by default has a budget and a pool size, and the numbers are the ones README.md states", () => {
-    expect(postgresServices).toEqual(["assets", "certs", "identity", "telemetry-query"]);
+    expect(postgresServices).toEqual(["ai-gateway", "assets", "certs", "identity", "telemetry-query"]);
     expect(Object.keys(budgets).sort()).toEqual(postgresServices);
     expect(Object.fromEntries(postgresServices.map((name) => [name, perReplica(name)]))).toEqual({
+      "ai-gateway": 4,
       assets: 14,
       certs: 9,
       identity: 31,
       "telemetry-query": 12,
     });
     expect(reserved).toBe(18);
-    expect(needed).toBe(150);
+    expect(needed).toBe(158);
     expect(limit).toBe(160);
     const readme = readFileSync(join(CHART_DIR, "README.md"), "utf8");
     for (const name of postgresServices) {
       expect(readme).toContain(`| \`${name}\` | \`${services[name]?.database?.maxConnections}\` | ${budgets[name]?.otherPools} | ${perReplica(name)} |`);
     }
-    expect(readme).toContain(`| 合計 | | | 66 | 132 |`);
+    expect(readme).toContain(`| 合計 | | | 70 | 140 |`);
   });
 
   test.each(SHAPE_NAMES)("%s: the defaults, every Postgres service and every planned service pass the check", (shape) => {
@@ -2827,7 +2832,7 @@ describe("Postgres connection budget (Laysi/trustiot-v2#575)", () => {
     expect(below.code).not.toBe(0);
     expect(below.stderr).toContain(
       `postgres.bundled.parameters.max_connections is ${needed - 1}, but ${needed} connections are needed: the services can open ${needed - reserved} while all of them roll at once ` +
-        "(per replica x pods: assets 14 x 2, certs 9 x 2, identity 31 x 2, telemetry-query 12 x 2), " +
+        "(per replica x pods: ai-gateway 4 x 2, assets 14 x 2, certs 9 x 2, identity 31 x 2, telemetry-query 12 x 2), " +
         `and ${reserved} stay reserved for superusers, CloudNativePG, the migration Job and the platform administrator bootstrap.`,
     );
     // The string form of max_connections counts the same.
@@ -2885,6 +2890,23 @@ describe("Postgres connection budget (Laysi/trustiot-v2#575)", () => {
     ]);
     expect(custom.code).not.toBe(0);
     expect(custom.stderr).toContain("services.assets: env trustiot__database__max_connections is set by the chart from services.assets.database.maxConnections");
+    // The gateway's settings carry its own prefix, and the name is the chart's there too.
+    const gatewayEnv = (args: string[]) =>
+      (podSpec(find(render(SHAPES.saas, [...enable(["ai-gateway"]), ...args]), "Deployment", `${RELEASE}-ai-gateway`)).containers[0]?.env ?? []).filter(
+        (e) => /DATABASE__MAX_CONNECTIONS$/.test(e.name),
+      );
+    expect(gatewayEnv([])).toEqual([{ name: "AI_GATEWAY__DATABASE__MAX_CONNECTIONS", value: "4" }]);
+    expect(gatewayEnv(["--set", "services.ai-gateway.database.maxConnections=32"])).toEqual([{ name: "AI_GATEWAY__DATABASE__MAX_CONNECTIONS", value: "32" }]);
+    const gatewayAbove = helmTemplate(SHAPES.saas, [...enable(["ai-gateway"]), "--set", "services.ai-gateway.database.maxConnections=33", "--skip-schema-validation"]);
+    expect(gatewayAbove.code).not.toBe(0);
+    expect(gatewayAbove.stderr).toContain("services.ai-gateway.database.maxConnections must be a whole number from 2 to 32");
+    const gatewayCustom = helmTemplate(SHAPES.saas, [
+      ...enable(postgresServices),
+      "--set-json",
+      'services.ai-gateway.env=[{"name":"ai_gateway__database__max_connections","value":"30"}]',
+    ]);
+    expect(gatewayCustom.code).not.toBe(0);
+    expect(gatewayCustom.stderr).toContain("services.ai-gateway: env ai_gateway__database__max_connections is set by the chart from services.ai-gateway.database.maxConnections");
     // Nor can serviceDefaults set a pool size for every service (values.schema.json).
     const everyService = helmTemplate(SHAPES.saas, ["--set", "serviceDefaults.database.maxConnections=10"]);
     expect(everyService.code).not.toBe(0);
