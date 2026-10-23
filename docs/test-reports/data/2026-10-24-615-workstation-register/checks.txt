@@ -1,0 +1,68 @@
+# Laysi/trustiot-v2#615, 2026-10-24, build host, CI=1, branch feat/615-workstation-register rebased
+# on origin/main 0dc8fd96 (commit 2fae93f6; the hash below is the host copy's snapshot commit).
+# Command (output filtered to the result lines):
+#   cargo clippy --locked --workspace --all-targets -- -D warnings
+#   cargo run --locked -q -p openapi -- --check
+#   cargo test --locked -p workstation -p certs -p repo-check --no-fail-fast
+#   cargo deny --locked check
+rcheck: queued on the build host at 05:08:45
+2176ee8
+== clippy workspace
+    Checking testkit v0.1.0 (<host copy>/src/crates/testkit)
+    Checking openapi v0.1.0 (<host copy>/src/tools/openapi)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 11.51s
+== openapi check
+api/openapi.json is up to date
+== tests
+     Running unittests src/lib.rs (<host copy>/target/debug/deps/certs-3025d58895534f60)
+test result: ok. 18 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/broker.rs (<host copy>/target/debug/deps/broker-0c940913c59dea96)
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 7.02s
+     Running tests/ceremony.rs (<host copy>/target/debug/deps/ceremony-70877e182cff0365)
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.88s
+     Running tests/chart_connections.rs (<host copy>/target/debug/deps/chart_connections-73510bb1dcb98ba3)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/crl.rs (<host copy>/target/debug/deps/crl-e92a207fcec19d1f)
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 22.63s
+     Running tests/cross_tenant.rs (<host copy>/target/debug/deps/cross_tenant-9c41b4bd5526153d)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.83s
+     Running tests/issuance.rs (<host copy>/target/debug/deps/issuance-2b4a119f55b4cf01)
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.48s
+     Running tests/key_custody.rs (<host copy>/target/debug/deps/key_custody-ac5a9d5d611112fb)
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.45s
+     Running tests/registration.rs (<host copy>/target/debug/deps/registration-d3b804d48c1c8378)
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.08s
+     Running tests/workstation.rs (<host copy>/target/debug/deps/workstation-4afd18b1b381788b)
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 15.14s
+     Running tests/workstation_tool.rs (<host copy>/target/debug/deps/workstation_tool-fcce958c44a54706)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.78s
+     Running unittests src/lib.rs (<host copy>/target/debug/deps/repo_check-bcdd8915540fedcd)
+test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/repository.rs (<host copy>/target/debug/deps/repository-4bf5f5e43d5bc66f)
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.08s
+     Running unittests src/lib.rs (<host copy>/target/debug/deps/workstation-08bd0c0968f76359)
+test journal::tests::records_round_trip_with_mode_0600_and_temporary_files_are_ignored ... ok
+test result: ok. 44 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+     Running unittests src/main.rs (<host copy>/target/debug/deps/trustiot_workstation-3229947f4de4fa69)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/identity.rs (<host copy>/target/debug/deps/identity-b3ed5745bebdc639)
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+     Running tests/login.rs (<host copy>/target/debug/deps/login-cec8e10b5077c667)
+test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.03s
+     Running tests/register.rs (<host copy>/target/debug/deps/register-8d5a8678e8180985)
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.97s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+== deny
+          │   └── telemetry-query v0.1.0 (*)
+          ├── telemetry-query v0.1.0 (*)
+          ├── testkit v0.1.0 (*)
+          └── web v0.1.0
+
+advisories ok, bans ok, licenses ok, sources ok
+rcheck: removed 0 dangling test volumes
+rcheck: removed 0 dangling podman test volumes
+rcheck: exit 0 at 05:11:02 (build host, 615-62196d05)
+
+[exited with code 0]
