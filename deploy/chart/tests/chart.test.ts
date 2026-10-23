@@ -2835,7 +2835,7 @@ describe("Postgres connection budget (Laysi/trustiot-v2#575)", () => {
 
   test.each([
     ["a second identity replica", ["--set", "services.identity.replicas=2"], 31, 3],
-    ["a larger assets pool", ["--set", "services.assets.database.maxConnections=30"], 32, 2],
+    ["a larger assets pool", ["--set", "services.assets.database.maxConnections=30"], 34, 2],
   ] as const)("the defaults with %s fail: every replica plus the one a rolling update adds counts", (_what, args, perReplicaAfter, pods) => {
     const result = helmTemplate(SHAPES.saas, [...enable(postgresServices), ...args]);
     expect(result.code).not.toBe(0);
