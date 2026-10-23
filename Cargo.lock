@@ -158,6 +158,8 @@ dependencies = [
  "serde",
  "serde_json",
  "service-kit",
+ "sqlx",
+ "testkit",
  "thiserror",
  "tokio",
  "tracing",

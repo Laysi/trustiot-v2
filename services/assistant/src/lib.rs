@@ -12,7 +12,10 @@
 //!   Laysi/trustiot-v2#551, wired in by Laysi/trustiot-v2#552): [`tools::Delegation`], handed
 //!   to [`Agent::ask`];
 //! - the real tools (Laysi/trustiot-v2#552): [`tools::Tool`] in the [`tools::ToolRegistry`];
-//! - stored history (Laysi/trustiot-v2#553): [`history::Conversation`], append-only;
+//! - the database (Laysi/trustiot-v2#552 gives the service its Postgres settings and pool, and
+//!   registers [`schema::SCHEMA`] with service-kit's readiness check): [`store`] keeps
+//!   conversations and their append-only history (Laysi/trustiot-v2#553) in transactions of
+//!   the conversation's tenant, which the chat API (Laysi/trustiot-v2#146) opens;
 //! - the per-call quota pre-deduction of the AI gateway's ledger (Laysi/trustiot-v2#140): each
 //!   call's [`model::ModelRequest::call_id`] (the ledger's `llm_call_id`), and the gateway's
 //!   refusal reaching the agent as a [`model::ModelError`].
@@ -28,6 +31,8 @@ pub mod config;
 pub mod history;
 pub mod model;
 pub mod prompt;
+pub mod schema;
+pub mod store;
 pub mod tools;
 
 pub use agent::{Agent, AgentError, AgentSettings, Answer};

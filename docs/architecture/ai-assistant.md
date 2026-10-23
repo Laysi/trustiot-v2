@@ -106,6 +106,7 @@ Claude Opus 5.5 的 thinking 綁定產生它的對話：system prompt、工具�
 3. 每個對話的工具集合固定，從第一個請求就宣告；要動態增加時用 tool search 的延遲載入，不替換工具清單。
 4. 重新產生最後一則回答（J1）只捨棄最後一輪，前面的訊息不動。
 5. 實作（Laysi/trustiot-v2#145，[services/assistant](../../services/assistant/README.md)）：每則訊息以收到或第一次寫出的 JSON 文字保存、原樣寫回請求，所以下一次請求的 `messages` 逐位元組以上一次的開頭。模型的一回合與它回應的訊息（工具結果、收尾指示）一起加入歷史：呼叫失敗、拒答或中途取消時不留下半套，對話中的 system 訊息不會落在下一個問題之前。拒答的回合不加入歷史。
+6. 儲存（Laysi/trustiot-v2#553）：對話與歷史存在 assistant 的 Postgres schema，依租戶啟用 RLS（決策 29）。每則訊息一列，存送給模型的 JSON 文字的位元組（`bytea`，不用 jsonb，它會重排鍵、改寫數字），讀回時確認位元組不變才送出；對話開始時固定的 system prompt 全文、租戶脈絡、工具定義、effort 與快取時效存在對話那一列，新版本的 prompt 不影響舊對話。服務角色只有 SELECT 與 INSERT，資料庫拒絕任何 UPDATE、DELETE、TRUNCATE；寫入依位置只往後加，同一位置已有不同訊息時拒絕、不覆寫，所以兩個寫入者不會讓歷史分岔。刪除對話的做法由對話串（Laysi/trustiot-v2#146）決定。細節見 [services/assistant](../../services/assistant/README.md) 的「對話的儲存」。
 
 ### Prompt caching
 

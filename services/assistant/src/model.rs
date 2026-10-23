@@ -44,6 +44,13 @@ impl Effort {
             Self::Max => "max",
         }
     }
+
+    /// The effort called `name` (see [`Effort::as_str`]).
+    pub fn from_name(name: &str) -> Option<Self> {
+        [Self::Low, Self::Medium, Self::High, Self::Xhigh, Self::Max]
+            .into_iter()
+            .find(|effort| effort.as_str() == name)
+    }
 }
 
 /// The lifetime of the cache breakpoints (docs/architecture/ai-assistant.md, 「Prompt
@@ -57,11 +64,44 @@ pub enum CacheTtl {
     OneHour,
 }
 
+impl CacheTtl {
+    /// The lifetime as the configuration writes it.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::FiveMinutes => "5m",
+            Self::OneHour => "1h",
+        }
+    }
+
+    /// The lifetime called `name` (see [`CacheTtl::as_str`]).
+    pub fn from_name(name: &str) -> Option<Self> {
+        [Self::FiveMinutes, Self::OneHour]
+            .into_iter()
+            .find(|ttl| ttl.as_str() == name)
+    }
+}
+
 /// The native format a [`NativeMessage`] is written in.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Format {
     /// An element of `messages` in Anthropic Messages.
     AnthropicMessages,
+}
+
+impl Format {
+    /// The format's name where a message is stored ([`crate::store`]).
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::AnthropicMessages => "anthropic_messages",
+        }
+    }
+
+    /// The format called `name` (see [`Format::as_str`]).
+    pub fn from_name(name: &str) -> Option<Self> {
+        [Self::AnthropicMessages]
+            .into_iter()
+            .find(|format| format.as_str() == name)
+    }
 }
 
 /// One message of the history in its model's own format, as the JSON text received or first

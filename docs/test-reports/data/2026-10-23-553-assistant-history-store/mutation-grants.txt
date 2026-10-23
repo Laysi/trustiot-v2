@@ -1,0 +1,41 @@
+# Mutation check: 0001_assistant.sql temporarily granted UPDATE, DELETE on assistant.messages to
+# assistant_app; CI=1 cargo test -p assistant --test cross_tenant --test history_store.
+# The migration was restored afterwards.
+
+   Compiling migrate v0.1.0 (<worktree>/tools/migrate)
+   Compiling assistant v0.1.0 (<worktree>/services/assistant)
+   Compiling testkit v0.1.0 (<worktree>/crates/testkit)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 16.34s
+     Running tests/cross_tenant.rs (target/debug/deps/cross_tenant-c87f844ef118038f)
+
+running 1 test
+test tenants_are_isolated ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 10.00s
+
+     Running tests/history_store.rs (target/debug/deps/history_store-d7a30e1f6409c963)
+
+running 5 tests
+test the_service_role_cannot_change_or_remove_stored_history ... FAILED
+test other_tenants_and_other_users_get_nothing ... ok
+test a_corrupt_history_fails_the_load ... ok
+test a_stored_conversation_reads_back_byte_for_byte_and_continues ... ok
+test appending_is_idempotent_and_never_overwrites ... ok
+
+failures:
+
+---- the_service_role_cannot_change_or_remove_stored_history stdout ----
+
+thread 'the_service_role_cannot_change_or_remove_stored_history' (<thread>) panicked at services/assistant/tests/history_store.rs:387:13:
+assertion `left == right` failed: assistant_app's UPDATE on assistant.messages
+  left: true
+ right: false
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    the_service_role_cannot_change_or_remove_stored_history
+
+test result: FAILED. 4 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.71s
+
+error: test failed, to rerun pass `-p assistant --test history_store`
