@@ -26,4 +26,3 @@ error: expect(received).toEqual(expected)
  1 fail
  2 expect() calls
 Ran 1 test across 9 files. [2.90s]
-rc=0

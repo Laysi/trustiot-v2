@@ -6,7 +6,7 @@
 
 - 機器：開發者工作站（x86_64 Linux），podman 6.1.4，OpenSSL 4.0.3（TLS 用戶端），helm 4.3.0、bun 1.4.2（`.prototools` 釘選）。
 - broker：chart 釘選的映像 `docker.io/library/eclipse-mosquitto:2.1.2-alpine@sha256:38c0da4f2ef84284d47b3b3eeea1cb3bdeabe81ee10caf0cd5c5ff61ee3ea408`（Mosquitto 2.1.2），以 amd64 執行。
-- 程式碼：分支 `fix/564-mosquitto-tls13-nodelay`，基於 main `34f777e9`；「修正前」用 main `34f777e9` 的 `deploy/chart`。
+- 程式碼：分支 `fix/564-mosquitto-tls13-nodelay`，實測時基於 main `34f777e9`，之後 rebase 到 main `1cd3da21`；兩者之間 broker 的兩份設定（`files/mosquitto/mosquitto.conf`、`templates/_mqtt-broker.tpl`）沒有變動。「修正前」用 main `34f777e9` 的 `deploy/chart`。
 - 設定：以 SaaS 形態（`values-saas.yaml` 加 `tests/values/saas-instance.yaml`）、`mqttBroker.enabled=true` 渲染 chart，取 ConfigMap `trustiot-mqtt-broker-config` 的 `mosquitto.conf`，原封不動給容器使用。
 
 ## 指令
@@ -21,7 +21,7 @@
 2. TLS 實測：[`render.ts.txt`](data/2026-10-23-564-mosquitto-tls13-nodelay/render.ts.txt) 渲染 chart 並取出 `mosquitto.conf`；[`tls-check.sh.txt`](data/2026-10-23-564-mosquitto-tls13-nodelay/tls-check.sh.txt) 在執行時產生一次性的 CA、伺服器憑證、閘道器用戶端憑證（EKU clientAuth）與空的 CRL，放在 repo 以外的暫存目錄，像 chart 的 pod 一樣以 UID/GID 1883、唯讀根目錄、唯讀掛載設定檔與憑證目錄啟動一個 broker 容器，再以 OpenSSL 用 TLS 1.3 帶用戶端憑證連 8883 兩次：一次 ChaCha20 排第一（閘道器的順序），一次 AES 排第一。結束時 `podman rm --force --volumes` 移除容器並刪除憑證。
 
    ```sh
-   bun render.ts "$(env -u AI_AGENT -u CLAUDECODE proto bin helm)" deploy/chart fixed.conf
+   bun render.ts "$(proto bin helm)" deploy/chart fixed.conf
    bash tls-check.sh fixed.conf fixed TLS_CHACHA20_POLY1305_SHA256   # 寫出 tls-fixed.log
    # 修正前：chart 目錄改用 main 34f777e9 的 deploy/chart（git archive 匯出）
    bash tls-check.sh main.conf main TLS_AES_256_GCM_SHA384
