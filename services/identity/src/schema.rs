@@ -36,6 +36,11 @@ pub const SCHEMA: Schema = Schema {
             name: "0004_login.sql",
             sql: include_str!("../migrations/postgres/0004_login.sql"),
         },
+        // Platform administrators set members' roles (Laysi/trustiot-v2#583).
+        Migration {
+            name: "0005_member_roles.sql",
+            sql: include_str!("../migrations/postgres/0005_member_roles.sql"),
+        },
     ],
 };
 

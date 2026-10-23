@@ -44,6 +44,8 @@ use unicode_properties::GeneralCategory;
 use unicode_properties::general_category::UnicodeGeneralCategory;
 use utoipa::ToSchema;
 
+use crate::members::MemberStore;
+
 /// The route, as the ingress gateway forwards it (no prefix is stripped).
 pub const TENANTS_PATH: &str = "/api/identity/v1/tenants";
 
@@ -51,8 +53,9 @@ pub const TENANTS_PATH: &str = "/api/identity/v1/tenants";
 /// counts them).
 pub const MAX_NAME_CHARS: usize = 100;
 
-/// Connections of the pool that creates tenants, separate from the session store's, so a burst
-/// of tenant creations never takes a connection the ext_authz check is waiting for.
+/// Connections of the pool that creates tenants and sets members' roles
+/// ([`TenantStore::members`]), separate from the session store's, so a burst of these platform
+/// administrator writes never takes a connection the ext_authz check is waiting for.
 pub const POOL_CONNECTIONS: u32 = 2;
 
 /// How long creating a tenant may wait for a connection (opening one included).
@@ -186,7 +189,8 @@ impl CreateError {
 /// Creates tenants: the only code in the service that opens a transaction for a tenant that no
 /// request names. It holds the background handle of its own pool privately, and its only
 /// method makes the tenant ID itself, so a request can never choose the tenant a transaction
-/// runs in (services/identity/README.md, "租戶"; crates/service-kit/README.md).
+/// runs in (services/identity/README.md, "租戶"; crates/service-kit/README.md). The pool is
+/// shared with [`MemberStore`], which [`TenantStore::members`] makes.
 #[derive(Clone, Debug)]
 pub struct TenantStore {
     db: BackgroundTenantDb,
@@ -209,6 +213,13 @@ impl TenantStore {
         let (_requests, db): (TenantDb, BackgroundTenantDb) =
             TenantDb::connect_lazy_with_background(options, pool, actor)?;
         Ok(Self { db })
+    }
+
+    /// The store that sets members' roles, on this store's pool: both are platform
+    /// administrator writes, rare and small, so they share [`POOL_CONNECTIONS`] instead of each
+    /// adding connections to every replica's budget (README, "連線池").
+    pub(crate) fn members(&self) -> MemberStore {
+        MemberStore::new(self.db.clone())
     }
 
     /// Creates a tenant named `name` for the platform administrator `admin`: a new tenant ID,
