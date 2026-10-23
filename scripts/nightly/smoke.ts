@@ -3,7 +3,9 @@
 // Cluster is healthy, each ingress gateway's NetworkPolicy admits exactly the ports its Istio pods
 // use, every Service that exposes a probe routes to a ready pod, the migration Job generated the
 // passwords into the Secrets the chart declares, the identity and assets services built from the
-// commit answer through the ingress with a session cookie (api.ts, Laysi/trustiot-v2#65), and an
+// commit answer through the ingress with a session cookie (api.ts, Laysi/trustiot-v2#65), so does
+// the telemetry-query service once it made the new tenant's ClickHouse account, which the smoke
+// then finds in ClickHouse (api.ts, Laysi/trustiot-v2#539), and an
 // uninstall leaves nothing behind but the objects the chart keeps on purpose (the database and the
 // password Secrets), which are then deleted. The same request through the ingress also proves the
 // MS0 edges with the real services (api.ts, Laysi/trustiot-v2#77): a stolen identity header never
@@ -221,12 +223,13 @@ export async function smokeShape(ctx: SmokeContext, shape: Shape): Promise<Shape
       (await check("the values of the API check", async () => {
         // Laysi/trustiot-v2#65: the release runs the identity and assets services built from this
         // commit, behind the smoke namespace's ext_authz provider (platform.ts). No key is made
-        // here: the identity pod's init container generates it (Laysi/trustiot-v2#404).
+        // here: the identity pod's init container generates it (Laysi/trustiot-v2#404). Also the
+        // AI gateway (Laysi/trustiot-v2#536) and telemetry-query (Laysi/trustiot-v2#539).
         const file = join(ctx.outDir, `values-api-${shape.name}.yaml`);
         const routes = routesOfValues(ctx.chartDir, shape.valuesFiles);
         writeFileSync(file, Bun.YAML.stringify(apiValues(shape.name, routes), null, 2));
         values.push("-f", file);
-        return `${basename(file)}: identity, assets, ai-gateway and certs, provider ${smokeProviderNameOf(shape.name)}`;
+        return `${basename(file)}: identity, assets, ai-gateway, telemetry-query and certs, provider ${smokeProviderNameOf(shape.name)}`;
       })) &&
       (await check("a test root CA for the certs service, made for this run, sets certificateAuthority.rootCertificate (Laysi/trustiot-v2#517)", async () => {
         // The README's ceremony, step 1 and 2 (services/certs/README.md, 「發簽發 CA 憑證」): the
@@ -443,7 +446,7 @@ export async function smokeShape(ctx: SmokeContext, shape: Shape): Promise<Shape
         return `${count} Services, each ClusterIP without node ports or external addresses; MQTT broker: ${broker.length === 0 ? "not in this release" : `${broker.join(", ")}, named by no route`}`;
       })) &&
       (await check(
-        "through the ingress, a new tenant reaches the assets service, a stolen identity header never does, and Host ports and normalized paths reach it (Laysi/trustiot-v2#65, #77)",
+        "through the ingress, a new tenant reaches the assets service and, with its ClickHouse account, the telemetry API; a stolen identity header never does, and Host ports and normalized paths reach it (Laysi/trustiot-v2#65, #77, #539)",
         () => runApiCheck(ctx, namespace, parseManifests(manifest), ingressCa, `nightly smoke ${shape.name}`),
       )) &&
       (await check(

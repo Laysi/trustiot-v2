@@ -53,8 +53,9 @@ on:
       - .dockerignore
       # What goes into the nightly's Rust images (scripts/nightly/image-cache.ts, NIGHTLY_IMAGES):
       # the workspace, the toolchain, the build scripts and every local crate tools/migrate,
-      # services/identity, services/assets, services/ai-gateway and services/certs build from
-      # (scripts/nightly/image-cache.test.ts keeps this list complete), plus the files
+      # services/identity, services/assets, services/ai-gateway, services/telemetry-query and
+      # services/certs build from (scripts/nightly/image-cache.test.ts keeps this list complete),
+      # plus the files
       # tools/migrate compiles in with #[path].
       - Cargo.toml
       - Cargo.lock
@@ -78,12 +79,14 @@ on:
       - deploy/images/identity/**
       - deploy/images/assets/**
       - deploy/images/ai-gateway/**
+      - deploy/images/telemetry-query/**
       - deploy/images/certs/**
       - deploy/istio/**
       - tools/migrate/**
       - services/identity/**
       - services/assets/**
       - services/ai-gateway/**
+      - services/telemetry-query/**
       - services/certs/**
       - services/*/migrations/**
 
@@ -162,11 +165,14 @@ jobs:
     # test once (SaaS shape, no image build) and about a dozen requests per shape.
     # Laysi/trustiot-v2#536 adds the AI gateway's image (one more cold build, whose AI client
     # crates no other image uses) and per shape its rollout, with no request to it.
+    # Laysi/trustiot-v2#539 adds the telemetry-query image (one more cold build on the same
+    # dependencies) and per shape its rollout, a few requests through the ingress and two
+    # ClickHouse queries in the pod.
     # Laysi/trustiot-v2#517 adds the certs image (one more cold build, which also links certs-ca)
     # and per shape the CA ceremony: a helm upgrade and the wait for the service to load the
     # issuing CA certificate from the updated ConfigMap (the kubelet's sync, about 1 to 2 minutes)
     # and to publish its first CRL, plus a dozen requests.
-    timeout-minutes: 75
+    timeout-minutes: 80
     permissions:
       contents: read
     env:
@@ -200,11 +206,12 @@ jobs:
         with:
           tools: bun helm k3d kubectl
       # The Rust images (NIGHTLY_IMAGES in scripts/nightly/image-cache.ts: deploy/images/migrate,
-      # identity, assets, ai-gateway and certs) are reused while nothing that goes into them changed: the key is a
-      # digest of the git object hashes of every input of their builds. One entry holds every
-      # tarball, and the programs built with them (certs-ca, NIGHTLY_PROGRAMS), and it is saved
-      # only with all of them. Exact key only, no restore-keys: an image
-      # of other sources would test code that is not this commit's.
+      # identity, assets, ai-gateway, telemetry-query and certs) are reused while nothing that goes
+      # into them changed: the key is a digest of the git object hashes of every input of their
+      # builds. One entry holds every tarball and the programs built with them (certs-ca,
+      # NIGHTLY_PROGRAMS), and it is saved only with all of them. Exact key only, no restore-keys:
+      # an image of other sources would test code that is not this commit's, and certs-ca runs on
+      # the runner itself.
       - name: Compute the cache key of the Rust images
         id: rust-images
         run: bun scripts/nightly/image-cache.ts key >> "$GITHUB_OUTPUT"

@@ -28,6 +28,7 @@ const PACKAGE_DIRS: Record<(typeof NIGHTLY_IMAGES)[number], string> = {
   identity: "services/identity",
   assets: "services/assets",
   "ai-gateway": "services/ai-gateway",
+  "telemetry-query": "services/telemetry-query",
   certs: "services/certs",
 };
 

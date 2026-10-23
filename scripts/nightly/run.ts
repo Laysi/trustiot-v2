@@ -149,9 +149,10 @@ async function main(): Promise<number> {
       },
       shapes.map((shape) => shape.name),
     );
-    // The Rust images deploy/chart/tests/values/smoke.yaml names: the migration Job's
-    // (tools/migrate) and the services the smoke deploys (NIGHTLY_IMAGES), with certs-ca from the
-    // certs image's build.
+    // The Rust images the smoke deploys (NIGHTLY_IMAGES): the migration Job's (tools/migrate,
+    // named by deploy/chart/tests/values/smoke.yaml) and the services the API check's values turn
+    // on (api.ts): identity, assets and telemetry-query, which it calls through the ingress,
+    // ai-gateway, and certs, whose build also makes certs-ca (NIGHTLY_PROGRAMS).
     const cacheDir = process.env.NIGHTLY_IMAGE_CACHE_DIR;
     const cache = cacheDir ? { cache: { dir: cacheDir, save: process.env.NIGHTLY_IMAGE_CACHE_SAVE === "true" } } : {};
     for (const name of NIGHTLY_IMAGES) {
