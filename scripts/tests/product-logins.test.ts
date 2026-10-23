@@ -159,11 +159,11 @@ describe("the local login roles against the product", () => {
 
   test("the parsers read the real files, so the comparison above cannot pass on an empty read", () => {
     const registry = registryServices(registrySource);
-    expect(registry.find((service) => service.name === "identity")).toEqual({ name: "identity", platformRole: true, consumes: ["identity", "assets"] });
+    expect(registry.find((service) => service.name === "identity")).toEqual({ name: "identity", platformRole: true, consumes: ["identity", "assets", "certs"] });
     // "assets" reads its own outbox only until the gateway configuration's consumer registers
     // (Laysi/trustiot-v2#93), which drops it from this list.
     expect(registry.find((service) => service.name === "assets")).toEqual({ name: "assets", platformRole: true, consumes: ["identity", "assets"] });
-    expect(chartPlatformLogins(chartSource)).toEqual(["assets", "identity", "telemetry-query"]);
+    expect(chartPlatformLogins(chartSource)).toEqual(["assets", "certs", "identity", "telemetry-query"]);
   });
 
   test("every role the local Job binds is a login role the registry creates", () => {
@@ -265,6 +265,7 @@ describe("the logins", () => {
         stateKey: "telemetry-query-platform",
       },
       { service: "certs", kind: "app", role: "certs_app", secret: "dev-certs-password", stateKey: "certs" },
+      { service: "certs", kind: "platform", role: "certs_platform", secret: "dev-certs-password", stateKey: "certs-platform" },
     ]);
   });
 

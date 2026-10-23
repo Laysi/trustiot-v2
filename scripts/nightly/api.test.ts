@@ -7,11 +7,16 @@ import { ConnectionError } from "../../deploy/chart/tests/e2e/raw-client.ts";
 import { COMMAND_TIMEOUT_MS, SLOW_TEST_MS, throwIfTimedOut } from "../../deploy/chart/tests/timing.ts";
 import type { RawRequest, RawResponse } from "../../deploy/chart/tests/e2e/raw-client.ts";
 import {
+  ACCOUNT_NOT_READY,
+  ACCOUNT_ROLES_SQL,
+  ACCOUNT_USER_SQL,
   adminSessionSql,
   API_ROUTES,
   apiValues,
   ASSETS_TENANT_PATH,
   checkIngressEdges,
+  checkTelemetryApi,
+  checkTenantAccount,
   checkTenantApi,
   errorCode,
   EXT_AUTHZ_PREFIX,
@@ -22,11 +27,26 @@ import {
   routesOfValues,
   SESSION_COOKIE,
   stealIdentityToken,
+  TELEMETRY_LATEST_PATH,
+  telemetryLatestPath,
+  TENANT_ACCOUNT_PREFIX,
+  TENANT_READER_ROLE,
+  tenantAccountName,
+  tenantAccountProblems,
   TENANTS_PATH,
 } from "./api.ts";
 import type { EdgeCheckDeps, TenantApiResult } from "./api.ts";
 import { pinnedTool } from "./exec.ts";
-import { ingressHostsOf, ingressListenerOf, missingSecrets, missingTlsSecrets, parseManifests, platformSettingsOf } from "./manifests.ts";
+import {
+  clickhousePodOf,
+  ingressHostsOf,
+  ingressListenerOf,
+  missingSecrets,
+  missingTlsSecrets,
+  parseManifests,
+  passwordSecretsOf,
+  platformSettingsOf,
+} from "./manifests.ts";
 import type { K8sObject } from "./manifests.ts";
 import { discoverShapes, valuesArgs } from "./smoke.ts";
 
@@ -98,11 +118,16 @@ describe("the check's sessions", () => {
     );
     expect(readFileSync(join(REPO_ROOT, "services", "identity", "src", "tenants.rs"), "utf8")).toContain(`"${TENANTS_PATH}"`);
     expect(readFileSync(join(REPO_ROOT, "services", "assets", "src", "tenants.rs"), "utf8")).toContain(`"${ASSETS_TENANT_PATH}"`);
+    const history = readFileSync(join(REPO_ROOT, "services", "telemetry-query", "src", "history.rs"), "utf8");
+    expect(history).toContain(`pub const LATEST_PATH: &str = "${TELEMETRY_LATEST_PATH}";`);
+    expect(history).toContain(`MessageKey::new("${ACCOUNT_NOT_READY}")`);
   });
 });
 
 const json = (status: number, body: unknown): RawResponse => ({ status, headers: {}, body: JSON.stringify(body), ms: 1 });
-const problem = (status: number, code: string) => json(status, { code, message_key: `error.${code}` });
+const problem = (status: number, code: string, messageKey = `error.${code}`) => json(status, { code, message_key: messageKey });
+/** What the telemetry-query service answers until the tenant's account is ready. */
+const notReady = () => problem(404, "not_found", ACCOUNT_NOT_READY);
 
 /** A gateway that answers from a script per request kind, and records what it was sent. */
 function fakeGateway(script: { admin: RawResponse[]; anonymous: RawResponse[]; create: RawResponse[]; member: RawResponse[] }) {
@@ -218,6 +243,162 @@ describe("checkTenantApi", () => {
   });
 });
 
+// ---------------------------------------------------------------------------------------------
+// Laysi/trustiot-v2#539: the telemetry-query service's history API and the tenant's ClickHouse account.
+
+describe("checkTelemetryApi", () => {
+  const made = (): TenantApiResult => ({ detail: "", tenantId: TENANT, admin: newSession(), member: newSession() });
+  /** The latest values the service answers for the device the request names, with no points. */
+  const empty = (request: RawRequest) =>
+    json(200, { device_id: /\/devices\/([^/]+)\/latest$/.exec(request.target)?.[1], earliest: "2026-10-16T00:00:00Z", points: [] });
+
+  /** A gateway answering by cookie from a script per caller; the last answer of a script repeats. */
+  function telemetryGateway(result: TenantApiResult, script: Record<"admin" | "anonymous" | "member", ((request: RawRequest) => RawResponse)[]>) {
+    const sent: RawRequest[] = [];
+    let clock = 0;
+    const deps = {
+      send: async (request: RawRequest) => {
+        sent.push(request);
+        const cookie = request.headers?.find(([name]) => name === "cookie")?.[1];
+        const queue = cookie === undefined ? script.anonymous : cookie.endsWith(result.admin.cookie) ? script.admin : script.member;
+        const next = queue.length > 1 ? queue.shift()! : queue[0];
+        if (next === undefined) throw new Error(`no answer scripted for ${request.target}`);
+        const response = next(request);
+        if (response.status === 0) throw new ConnectionError("connection refused");
+        return response;
+      },
+      log: () => {},
+      sleep: async (ms: number) => {
+        clock += ms;
+      },
+      now: () => clock,
+      limits: { routeMs: 20_000, eventMs: 20_000, pollMs: 1_000 },
+    };
+    return { deps, sent };
+  }
+
+  test("waits for the route, then for the tenant's account, and reads a device with no points", async () => {
+    const result = made();
+    const gateway = telemetryGateway(result, {
+      // Not routed yet, then Istio's own denial, then the service's answer for a user without a tenant.
+      admin: [() => ({ status: 0, headers: {}, body: "", ms: 0 }), () => json(404, ""), () => ({ status: 403, headers: {}, body: "RBAC: access denied", ms: 1 }), () => problem(403, "permission_denied")],
+      anonymous: [() => problem(401, "unauthenticated")],
+      member: [notReady, () => problem(503, "unavailable"), empty],
+    });
+    const detail = await checkTelemetryApi(gateway.deps, APP, result);
+    expect(detail).toContain("200 with no points after 2 s");
+    expect(detail).toContain("without a cookie: 401 unauthenticated");
+    expect(detail).toContain("the administrator without a tenant: 403 permission_denied");
+    // One random device for every request, on the app host, with the identity service's cookie.
+    const targets = new Set(gateway.sent.map((request) => request.target));
+    expect(targets.size).toBe(1);
+    const [target] = [...targets];
+    expect(target).toMatch(/^\/api\/telemetry\/v1\/devices\/[0-9a-f-]{36}\/latest$/);
+    for (const request of gateway.sent) {
+      expect(request.hostHeader).toBe(APP);
+      expect(request.method ?? "GET").toBe("GET");
+    }
+    // The administrator until routed, one request without a cookie, then the member.
+    const who = gateway.sent.map((request) => {
+      const cookie = request.headers?.find(([name]) => name === "cookie")?.[1];
+      return cookie === undefined ? "anonymous" : cookie === `${SESSION_COOKIE}=${result.admin.cookie}` ? "admin" : "member";
+    });
+    expect(who).toEqual(["admin", "admin", "admin", "admin", "anonymous", "member", "member", "member"]);
+  });
+
+  test("a missing 401, an unexpected answer or a wrong body fails the check", async () => {
+    const result = made();
+    const base = { admin: [() => problem(403, "permission_denied")], anonymous: [() => problem(401, "unauthenticated")], member: [empty] };
+    await expect(checkTelemetryApi(telemetryGateway(result, { ...base, anonymous: [() => problem(404, "not_found")] }).deps, APP, result)).rejects.toThrow(
+      "without a cookie answered 404",
+    );
+    // The member refused outright: neither the account being made nor a passing outage.
+    await expect(checkTelemetryApi(telemetryGateway(result, { ...base, member: [() => problem(403, "permission_denied")] }).deps, APP, result)).rejects.toThrow(
+      "unexpected answer 403",
+    );
+    // A 404 that is not the account being made (another route, a device lookup) does not wait.
+    await expect(checkTelemetryApi(telemetryGateway(result, { ...base, member: [() => problem(404, "not_found")] }).deps, APP, result)).rejects.toThrow(
+      "unexpected answer 404",
+    );
+    // The administrator without a tenant served: authorization is broken, so no waiting either.
+    await expect(checkTelemetryApi(telemetryGateway(result, { ...base, admin: [empty] }).deps, APP, result)).rejects.toThrow(
+      "telemetry-query service (403 permission_denied): unexpected answer 200",
+    );
+    const wrong = [
+      () => json(200, { device_id: "0b6f3a52-3c1e-4c39-9d36-2f4f7f6a8e10", earliest: "2026-10-16T00:00:00Z", points: [] }),
+      (request: RawRequest) => ({ ...empty(request), body: JSON.stringify({ ...JSON.parse(empty(request).body), points: [{ point: "p" }] }) }),
+      () => ({ status: 200, headers: {}, body: "<html>", ms: 1 }),
+    ];
+    for (const answer of wrong) {
+      await expect(checkTelemetryApi(telemetryGateway(result, { ...base, member: [answer] }).deps, APP, result)).rejects.toThrow("answered 200 with");
+    }
+  });
+
+  test("gives up after the bound and names the tenant whose account it waited for", async () => {
+    const result = made();
+    const never = telemetryGateway(result, {
+      admin: [() => problem(403, "permission_denied")],
+      anonymous: [() => problem(401, "unauthenticated")],
+      member: [notReady],
+    });
+    await expect(checkTelemetryApi(never.deps, APP, result)).rejects.toThrow(
+      `timed out after 20 s waiting for the telemetry-query service to answer tenant ${TENANT}'s member with its ClickHouse account (200); last answer: 404`,
+    );
+  });
+
+  test("the device in the path is a UUID", () => {
+    expect(telemetryLatestPath(TENANT)).toBe(`/api/telemetry/v1/devices/${TENANT}/latest`);
+    expect(() => telemetryLatestPath("../../identity")).toThrow("not a UUID");
+  });
+});
+
+describe("the tenant's ClickHouse account", () => {
+  const account = tenantAccountName(TENANT);
+  const user = `${account}\t${TENANT_READER_ROLE}\n`;
+  const roles = `${TENANT_READER_ROLE}\t0\n`;
+
+  test("is named as the telemetry-query service names it", () => {
+    // services/telemetry-query/src/accounts.rs: the prefix, and its unit test's example name.
+    const accounts = readFileSync(join(REPO_ROOT, "services", "telemetry-query", "src", "accounts.rs"), "utf8");
+    expect(accounts).toContain(`pub const ACCOUNT_PREFIX: &str = "${TENANT_ACCOUNT_PREFIX}";`);
+    expect(accounts).toContain('"0192a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b"');
+    expect(accounts).toContain(`"${tenantAccountName("0192a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b")}"`);
+    expect(readFileSync(join(REPO_ROOT, "services", "ingest", "migrations", "clickhouse", "0004_access.sql"), "utf8")).toContain(
+      `CREATE ROLE IF NOT EXISTS ${TENANT_READER_ROLE};`,
+    );
+    expect(() => tenantAccountName("x' OR 1 = 1")).toThrow("not a UUID");
+  });
+
+  test("the queries read names and roles only, and take the account as a parameter", () => {
+    for (const sql of [ACCOUNT_USER_SQL, ACCOUNT_ROLES_SQL]) {
+      expect(sql).toContain("{user:String}");
+      expect(sql).not.toMatch(/auth_params|password|hash|\*/i);
+    }
+  });
+
+  test("passes as the service creates it, and names what differs otherwise", async () => {
+    expect(tenantAccountProblems(account, user, roles)).toEqual([]);
+    expect(tenantAccountProblems(account, "", "")).toEqual([`ClickHouse has no user ${account}`]);
+    expect(tenantAccountProblems(account, `${account}\ttrustiot_ingest\n`, roles)[0]).toContain("expected the default role trustiot_tenant_reader only");
+    expect(tenantAccountProblems(account, `${account}\t${TENANT_READER_ROLE},other_role\n`, roles)[0]).toContain("expected the default role trustiot_tenant_reader only");
+    expect(tenantAccountProblems(account, `${account}\t\n`, roles)[0]).toContain("expected the default role trustiot_tenant_reader only");
+    expect(tenantAccountProblems(account, user, `${TENANT_READER_ROLE}\t1\n`)[0]).toContain("without admin option only");
+    expect(tenantAccountProblems(account, user, `${roles}other_role\t0\n`)[0]).toContain("without admin option only");
+
+    const asked: [string, string][] = [];
+    const detail = await checkTenantAccount(async (sql, name) => {
+      asked.push([sql, name]);
+      return sql === ACCOUNT_USER_SQL ? user : roles;
+    }, TENANT);
+    expect(detail).toBe(`ClickHouse user ${account} of tenant ${TENANT} exists with the default role ${TENANT_READER_ROLE}, granted without admin option`);
+    expect(asked).toEqual([
+      [ACCOUNT_USER_SQL, account],
+      [ACCOUNT_ROLES_SQL, account],
+    ]);
+    await expect(checkTenantAccount(async () => "", TENANT)).rejects.toThrow(`ClickHouse has no user ${account}`);
+  });
+});
+
 describe("the API check's routes", () => {
   const existing = { host: "gateway", path: "/certs", match: "PathPrefix", service: "certs" };
 
@@ -251,7 +432,7 @@ describe("the API check's values on each deployment shape", () => {
   for (const shape of discoverShapes(CHART_DIR)) {
     // Two commands (resolving the pinned helm, one render), each with its own limit: the test's
     // limit covers both on a loaded machine (CLAUDE.md, "Test time limits").
-    test(`values-${shape.name}.yaml with them renders identity and assets behind the smoke namespace's provider`, async () => {
+    test(`values-${shape.name}.yaml with them renders identity, assets and telemetry-query behind the smoke namespace's provider`, async () => {
       const helm = await pinnedTool("helm", REPO_ROOT);
       const dir = mkdtempSync(join(tmpdir(), "nightly-api-values-"));
       let objects: K8sObject[];
@@ -278,16 +459,28 @@ describe("the API check's values on each deployment shape", () => {
       expect(gatewayConfig?.AI_GATEWAY__ROLES__SMOKE__MODELS).toBe("anthropic/claude-smoke");
       expect(gatewayConfig?.AI_GATEWAY__PROVIDERS__ANTHROPIC__KEY_ENV).toBe("TRUSTIOT_AI_ANTHROPIC_API_KEY");
       expect(missingSecrets(objects).get("trustiot-anthropic")).toEqual(new Set(["api-key"]));
+      // telemetry-query (Laysi/trustiot-v2#539) runs from the nightly image with the passwords the
+      // migration Job generates into the Secret the chart declares: no dummy is made for it.
+      const telemetry = named("Deployment", "trustiot-telemetry-query");
+      expect(telemetry).toBeDefined();
+      expect(JSON.stringify(telemetry)).toContain('"image":"localhost/trustiot-e2e/telemetry-query:nightly"');
+      expect(passwordSecretsOf(objects).get("trustiot-telemetry-query-password")).toEqual(
+        expect.arrayContaining(["telemetry_query_app", "telemetry_query_platform", "trustiot_telemetry_query"]),
+      );
+      expect([...missingSecrets(objects).keys()].filter((name) => name.includes("telemetry"))).toEqual([]);
+      // The tenant account check runs SQL in the bundled ClickHouse's pod.
+      expect(clickhousePodOf(objects)).toBe("trustiot-clickhouse-0");
       // The cookie check goes to this namespace's identity service (platform.ts).
       const custom = objects.filter((o) => o.kind === "AuthorizationPolicy" && o.spec?.action === "CUSTOM");
       expect(custom.length).toBeGreaterThan(0);
       for (const policy of custom) expect((policy.spec?.provider as { name?: string }).name).toBe(`trustiot-smoke-${shape.name}`);
-      // Both APIs are cookie routes on the app host.
+      // The three APIs are cookie routes on the app host.
       const settings = platformSettingsOf(objects);
       const routes = objects.filter((o) => o.kind === "HTTPRoute").map((o) => JSON.stringify(o.spec));
-      for (const path of ["/api/identity", "/api/assets"]) {
+      for (const path of ["/api/identity", "/api/assets", "/api/telemetry"]) {
         expect(routes.some((r) => r.includes(`"value":"${path}"`) && r.includes(settings.TRUSTIOT_APP_HOST!)), path).toBe(true);
       }
+      expect(routes.some((r) => r.includes('"value":"/api/telemetry"') && r.includes('"name":"trustiot-telemetry-query"'))).toBe(true);
       // Nothing makes a key for the identity service: the chart declares the Secret its init
       // container fills, so no dummy is made for it, and nothing names another one.
       expect(named("Secret", "trustiot-identity-signing-keys")).toBeDefined();

@@ -154,7 +154,8 @@ async fn a_fresh_database_gets_every_migration_once() {
             "assets_platform",
             "telemetry_query_app",
             "telemetry_query_platform",
-            "certs_app"
+            "certs_app",
+            "certs_platform"
         ]
     );
     let first = db.password("identity_app");

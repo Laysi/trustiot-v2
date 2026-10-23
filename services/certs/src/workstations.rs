@@ -38,9 +38,8 @@ use axum::Router;
 use axum::body::{Body, Bytes};
 use axum::extract::rejection::PathRejection;
 use axum::extract::{FromRef, Path, State};
-use axum::http::header::{CACHE_CONTROL, CONTENT_TYPE};
-use axum::http::{HeaderMap, HeaderValue, StatusCode};
-use axum::response::{IntoResponse, Response};
+use axum::http::{HeaderMap, StatusCode};
+use axum::response::Response;
 use axum::routing::post;
 use chrono::{DateTime, Utc};
 use contract::certs::{
@@ -48,12 +47,12 @@ use contract::certs::{
     WorkstationCertificate,
 };
 use contract::{ErrorBody, ErrorCode, FieldError, MessageKey};
-use serde::Serialize;
 use serde_json::{Map, Value};
 use service_kit::identity::{IdentityVerifier, UserIdentity};
 use sqlx::postgres::PgRow;
 use sqlx::{PgPool, Row as _};
 
+use crate::api::{self, BodyKeys, Problems, error, ok, refuse};
 use crate::authority::CaState;
 use crate::issue::{
     self, IssueError, IssuedCertificate, MAX_REQUEST_BYTES, MAX_WORKSTATION_NAME_LEN, Refusal,
@@ -69,12 +68,6 @@ pub const REVOKE_PATH: &str = "/api/certs/v1/workstation-certificates/{serial}/r
 
 /// The largest body accepted: a CSR of [`MAX_REQUEST_BYTES`] as PEM and a name fit with room.
 pub const MAX_BODY_BYTES: usize = 16 * 1024;
-
-/// Most field errors one response lists; `details.omitted_field_errors` counts the rest.
-const MAX_FIELD_ERRORS: usize = 10;
-
-/// Longest unknown field name a field error repeats; longer or odd names point at the body.
-const MAX_ECHOED_FIELD_LEN: usize = 64;
 
 /// The body is larger than [`MAX_BODY_BYTES`] (400); `details.max_bytes`.
 pub const BODY_TOO_LARGE: MessageKey = MessageKey::new("workstation_certificate.body_too_large");
@@ -126,7 +119,7 @@ pub fn routes(verifier: IdentityVerifier, pool: PgPool, ca: CaState, validity: D
     Router::new()
         .route(CERTIFICATES_PATH, post(issue_certificate))
         .route(REVOKE_PATH, post(revoke_certificate))
-        .route_layer(axum::middleware::map_response(no_store))
+        .route_layer(axum::middleware::map_response(api::no_store))
         .with_state(Routes {
             verifier,
             pool,
@@ -135,13 +128,24 @@ pub fn routes(verifier: IdentityVerifier, pool: PgPool, ca: CaState, validity: D
         })
 }
 
-/// Marks every response of these routes as not to be stored, including the 401 that the
-/// [`UserIdentity`] extractor answers.
-async fn no_store(mut response: Response) -> Response {
-    response
-        .headers_mut()
-        .insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
-    response
+/// The message keys of a body that is not a JSON object or has unknown fields.
+const BODY_KEYS: BodyKeys = BodyKeys {
+    invalid: BODY_INVALID,
+    unknown_field: UNKNOWN_FIELD,
+};
+
+/// The body, at most [`MAX_BODY_BYTES`], after the content type check.
+async fn read_json(headers: &HeaderMap, body: Body) -> Result<Bytes, ErrorBody> {
+    api::read_json(headers, body, MAX_BODY_BYTES, BODY_TOO_LARGE).await
+}
+
+/// The body as a JSON object, with a field error for each field not in `allowed`.
+fn object(
+    body: &[u8],
+    allowed: &[&str],
+    problems: &mut Problems,
+) -> Result<Map<String, Value>, ErrorBody> {
+    api::object(body, allowed, BODY_KEYS, problems)
 }
 
 /// Issues a workstation certificate for the public key of a CSR. The CA decides everything
@@ -266,17 +270,7 @@ async fn revoke_certificate(
         );
         error(ErrorBody::new(ErrorCode::Unavailable))
     };
-    let revoked = sqlx::query(
-        "UPDATE certs.issued_certificates
-         SET revoked_at = now(), revocation_reason = $2
-         WHERE serial = $1 AND profile = 'workstation' AND revoked_at IS NULL
-         RETURNING ca_key_id, subject, not_before, not_after, certificate, revoked_at,
-                   revocation_reason",
-    )
-    .bind(&serial)
-    .bind(reason.map(RevocationReason::code))
-    .fetch_optional(&state.pool)
-    .await;
+    let revoked = revoke(&state.pool, &serial, reason).await;
     let row = match revoked {
         Ok(Some(row)) => row,
         Ok(None) => {
@@ -314,103 +308,32 @@ async fn revoke_certificate(
     }
 }
 
-/// The 403 to answer unless the user is a platform administrator whose token the ingress's
-/// cookie check issued: an exchanged token (`act`) means another service calls on the
-/// administrator's behalf, and issuing or revoking credentials is the administrator's own act.
-fn refuse(user: &UserIdentity, action: &'static str) -> Option<Response> {
-    if user.is_platform_admin() && user.claims().act.is_none() {
-        return None;
-    }
-    tracing::info!(
-        user_id = %user.user_id(),
-        action,
-        exchanged = user.claims().act.is_some(),
-        "refused: not a platform administrator, or not the administrator's own request"
-    );
-    Some(error(ErrorBody::new(ErrorCode::PermissionDenied)))
-}
-
-/// Whether the request has exactly one `Content-Type`, `application/json` with or without
-/// parameters, compared without regard to ASCII case. A page of another origin cannot send that
-/// type with the administrator's cookie without a CORS preflight, which nothing answers.
-fn is_json(headers: &HeaderMap) -> bool {
-    let mut values = headers.get_all(CONTENT_TYPE).iter();
-    let (Some(value), None) = (values.next(), values.next()) else {
-        return false;
-    };
-    value.to_str().is_ok_and(|value| {
-        let essence = value.split(';').next().unwrap_or_default();
-        essence.trim().eq_ignore_ascii_case("application/json")
-    })
-}
-
-/// The body, at most [`MAX_BODY_BYTES`], after the content type check.
-async fn read_json(headers: &HeaderMap, body: Body) -> Result<Bytes, ErrorBody> {
-    if !is_json(headers) {
-        return Err(ErrorBody::new(ErrorCode::InvalidRequest));
-    }
-    axum::body::to_bytes(body, MAX_BODY_BYTES)
-        .await
-        .map_err(|_| {
-            ErrorBody::new(ErrorCode::InvalidRequest)
-                .with_message_key(BODY_TOO_LARGE)
-                .with_detail("max_bytes", MAX_BODY_BYTES)
-        })
-}
-
-/// The field errors of one request, at most [`MAX_FIELD_ERRORS`] of them listed.
-#[derive(Default)]
-struct Problems {
-    listed: Vec<FieldError>,
-    omitted: usize,
-}
-
-impl Problems {
-    fn add(&mut self, error: FieldError) {
-        if self.listed.len() < MAX_FIELD_ERRORS {
-            self.listed.push(error);
-        } else {
-            self.omitted += 1;
-        }
-    }
-
-    fn into_result(self) -> Result<(), ErrorBody> {
-        if self.listed.is_empty() {
-            return Ok(());
-        }
-        let mut body = ErrorBody::new(ErrorCode::ValidationFailed);
-        for error in self.listed {
-            body = body.with_field_error(error);
-        }
-        if self.omitted > 0 {
-            body = body.with_detail("omitted_field_errors", self.omitted);
-        }
-        Err(body)
-    }
-}
-
-/// The body as a JSON object, with a field error for each field not in `allowed`.
-fn object(
-    body: &[u8],
-    allowed: &[&str],
-    problems: &mut Problems,
-) -> Result<Map<String, Value>, ErrorBody> {
-    let Ok(Value::Object(fields)) = serde_json::from_slice::<Value>(body) else {
-        return Err(ErrorBody::new(ErrorCode::InvalidRequest).with_message_key(BODY_INVALID));
-    };
-    for field in fields.keys() {
-        if !allowed.contains(&field.as_str()) {
-            let echo = field.len() <= MAX_ECHOED_FIELD_LEN
-                && field.bytes().all(|byte| byte.is_ascii_graphic());
-            let pointer = if echo {
-                format!("/{}", field.replace('~', "~0").replace('/', "~1"))
-            } else {
-                String::new()
-            };
-            problems.add(FieldError::new(pointer, UNKNOWN_FIELD));
-        }
-    }
-    Ok(fields)
+/// Revokes the workstation certificate `serial` unless it is revoked already, in a transaction
+/// that first takes [`issue::LOCK_WORKSTATION`], so a factory registration that already read the
+/// certificate as valid commits before the revocation does; the revoked row, or `None`.
+async fn revoke(
+    pool: &PgPool,
+    serial: &[u8],
+    reason: Option<RevocationReason>,
+) -> Result<Option<PgRow>, sqlx::Error> {
+    let mut tx = pool.begin().await?;
+    sqlx::query(issue::LOCK_WORKSTATION)
+        .bind(serial)
+        .execute(&mut *tx)
+        .await?;
+    let row = sqlx::query(
+        "UPDATE certs.issued_certificates
+         SET revoked_at = now(), revocation_reason = $2
+         WHERE serial = $1 AND profile = 'workstation' AND revoked_at IS NULL
+         RETURNING ca_key_id, subject, not_before, not_after, certificate, revoked_at,
+                   revocation_reason",
+    )
+    .bind(serial)
+    .bind(reason.map(RevocationReason::code))
+    .fetch_optional(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    Ok(row)
 }
 
 /// The workstation name and the CSR (DER) of an issue request, once the CSR is shown to be a
@@ -577,24 +500,12 @@ fn ledger_view(serial: &[u8], row: &PgRow) -> Result<WorkstationCertificate, sql
     })
 }
 
-fn ok<T: Serialize>(status: StatusCode, body: &T) -> Response {
-    (status, [(CACHE_CONTROL, "no-store")], axum::Json(body)).into_response()
-}
-
-fn error(body: ErrorBody) -> Response {
-    (
-        body.http_status(),
-        [(CACHE_CONTROL, "no-store")],
-        axum::Json(body),
-    )
-        .into_response()
-}
-
 #[cfg(test)]
 mod tests {
     use serde_json::json;
 
     use super::*;
+    use crate::api::MAX_FIELD_ERRORS;
 
     fn bytes(value: &Value) -> Vec<u8> {
         serde_json::to_vec(value).unwrap()

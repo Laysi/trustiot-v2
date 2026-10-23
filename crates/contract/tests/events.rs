@@ -14,6 +14,7 @@ use std::path::PathBuf;
 use chrono::{DateTime, Timelike, Utc};
 use contract::event::{Actor, parse_payload};
 use contract::events::assets::{DeviceModelCreated, DeviceModelDeleted, DeviceModelUpdated};
+use contract::events::certs::GatewayRegistered;
 use contract::events::identity::{
     MEMBERSHIP_AGGREGATE, MemberRoleChanged, TenantCreated, membership_aggregate_id,
 };
@@ -21,8 +22,8 @@ use contract::{
     DecodeError, DeviceModelId, EncodeError, Event, EventEnvelope, ServiceName, TenantId,
     TenantRole, UserId,
 };
-use protocol::ModelName;
 use protocol::config::{ByteOrder, DataType};
+use protocol::{GatewayId, ModelName};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use uuid::Version;
@@ -230,6 +231,49 @@ fn member_role_changed_decodes_every_version() {
         "01928f6e-7a3c-7d4e-8f00-00000000000c:01928f6e-7a3c-7d4e-8f00-0000000000b1"
     );
     assert_eq!(MEMBERSHIP_AGGREGATE, "membership");
+}
+
+/// `certs.gateway_registered` (Laysi/trustiot-v2#79): platform-wide, so no tenant, written by
+/// the certs service, with the platform administrator as the actor.
+#[test]
+fn gateway_registered_decodes_every_version() {
+    let decoded = decode_fixtures::<GatewayRegistered>();
+    let names: Vec<&str> = decoded.iter().map(|(name, _)| name.as_str()).collect();
+    assert_eq!(names, ["v1"]);
+    let registered = GatewayRegistered {
+        hardware_id: GatewayId::new("tg-0001").expect("hardware id"),
+        public_key_sha256: "1f2d4c6a8e0b3d5f7a9c1e3b5d7f9a2c4e6b8d0f2a4c6e8b0d2f4a6c8e0b2d4f"
+            .to_owned(),
+        endorsement_key_sha256: "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+            .to_owned(),
+        certificate_serial: "4c2a19e0f3b85d7a6e01c2d3b4a59687".to_owned(),
+        workstation: "line-1".to_owned(),
+    };
+    assert_eq!(decoded[0].1, registered);
+
+    let path = common::fixture_path("events/certs.gateway_registered/v1.json");
+    let fixture: EventEnvelope =
+        serde_json::from_str(&fs::read_to_string(path).expect("read fixture")).expect("envelope");
+    assert_eq!(fixture.tenant_id, None);
+    let user: UserId = "01928f6e-7a3c-7d4e-8f00-0000000000ad"
+        .parse()
+        .expect("user id");
+    assert_eq!(fixture.actor, Some(Actor::User { user_id: user }));
+
+    let envelope = EventEnvelope::new(&registered, None).expect("encode");
+    assert_eq!(envelope.producer, ServiceName::Certs);
+    assert_eq!(envelope.event_type, "certs.gateway_registered");
+    assert_eq!(envelope.tenant_id, None);
+    assert_eq!(
+        envelope.payload,
+        json!({
+            "hardware_id": "tg-0001",
+            "public_key_sha256": "1f2d4c6a8e0b3d5f7a9c1e3b5d7f9a2c4e6b8d0f2a4c6e8b0d2f4a6c8e0b2d4f",
+            "endorsement_key_sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+            "certificate_serial": "4c2a19e0f3b85d7a6e01c2d3b4a59687",
+            "workstation": "line-1",
+        })
+    );
 }
 
 /// The device model events (Laysi/trustiot-v2#99) carry a model the gateway's configuration
