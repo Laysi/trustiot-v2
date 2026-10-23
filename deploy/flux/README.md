@@ -235,7 +235,7 @@ bun scripts/flux/components.ts    # 重寫 gotk-components.yaml 與控制器映�
 | chart 版本 | 自己的 `chart.yaml` 與 `values-saas.yaml`；deploy PR 把它與 SaaS 一起移到新版，只動它時用 `pin-chart.ts` | 換版與 SaaS 一樣是「合併即部署、revert 即回滾」，簽章驗證也相同；代價是一個 deploy PR 可能同時動兩個叢集 |
 | values | HelmRelease 依序讀 `values-saas.yaml`、`values-demo.yaml`，最後是 SOPS 加密的 Secret `trustiot-demo-values` 的四個 key，各自以 `targetPath` 與 `literal: true` 寫進一個值：`app-host` → `hosts.app`、`gateway-host` → `hosts.gateway`、`ota-host` → `hosts.ota`、`smtp-from` → `smtp.from` | 主機名稱與寄件人不公開（[密鑰與權限](../../docs/architecture/secrets.md)「公開 repo 的資訊規則」），只在加密的 Secret 裡。加密的內容在 PR 裡看不到，所以它只能設這四個值：整份 values 的寫法能改任何設定（映像、ingress、環境變數），沒有 `literal` 時 Flux 以 Helm 的 `--set` 語法讀值，逗號就能接上另一個 `路徑=值`。Secret 帶 `reconcile.fluxcd.io/watch: Enabled`，改了就升級 |
 | 入口的 ClusterIP | 固定：`values-demo.yaml` 以 `ingress.tunnel.clusterIP` 設一個展示機 Service 網段（`10.43.0.0/16`）靜態區段裡沒被使用的位址，tunnel 的路由指向這個位址（Laysi/trustiot-v2#478）。設為 `10.43.0.80`（Laysi/trustiot-v2#480），與換到含這個欄位的 chart 版本在同一個 PR，而且在展示環境第一次部署（Laysi/trustiot-v2#467）之前；較舊的 chart 不認得這個欄位，schema 拒絕整份 values，HelmRelease 就失敗 | 入口 Service 重建後拿回同一個位址，路由不失效，舊位址也不會被別的 Service 拿走而經 tunnel 公開；ClusterIP 建立後不能改，所以要在 Service 第一次建立前設好。選法與改位址的步驟見 [chart 的 README](../chart/README.md)「固定的入口 ClusterIP」 |
-| 服務 | `values-demo.yaml` 的 `services` 逐一打開切片的服務（目前 `identity`、`assets`） | 只開部署中那一版 chart 有映像的服務；切片的 issue 進了 release 後，在這裡打開 |
+| 服務 | `values-demo.yaml` 的 `services` 逐一打開切片的服務（目前 `identity`、`assets`） | 只開部署中那一版 chart 有映像的服務；切片的 issue 進了 release 後，在這裡打開（AI 閘道要另設的值見下方「打開 AI 閘道」） |
 | 外部端點 | Qdrant 的網址在 `.invalid`（RFC 6761，不會解析）；Sentry 關閉 | 切片不用知識庫，SaaS 型態的 schema 又要求外部網址；沒有展示用的 Sentry 專案，錯誤留在 ClickHouse 的日誌 |
 | 備份與磁碟 | 沒有備份；Postgres 10Gi、ClickHouse 20Gi | 里程碑「展示切片」接受展示資料遺失；一台閘道器加幾具電表的量 |
 
@@ -245,7 +245,7 @@ SOPS 加密的 Secret（建立後列進 `clusters/demo/trustiot/kustomization.ya
 | --- | --- | --- |
 | `ghcr-pull.sops.yaml` | `ghcr-pull`，`.dockerconfigjson` | 展示環境自己的 GHCR 拉取 token，一位組織成員的 classic token，只有 `read:packages`（上方「GHCR 拉取 token」）：`<輸出 token 的指令> \| bun scripts/flux/ghcr-pull-secret.ts --cluster demo --username <GitHub 帳號>` |
 | `trustiot-smtp.sops.yaml` | `trustiot-smtp`，`username`、`password` | Resend 的 API key，權限只能寄信並限定寄件網域（[密鑰與權限](../../docs/architecture/secrets.md)「外部服務」）：`<輸出 API key 的指令> \| bun scripts/flux/sops-secret.ts --cluster demo --name trustiot-smtp --key password --set username=resend` |
-| `trustiot-anthropic.sops.yaml` | `trustiot-anthropic`，`api-key` | 展示專用的 Anthropic 工作區（設每月用量上限）的 API key；AI 閘道（Laysi/trustiot-v2#139）加入前沒有服務使用：`... \| bun scripts/flux/sops-secret.ts --cluster demo --name trustiot-anthropic --key api-key` |
+| `trustiot-anthropic.sops.yaml` | `trustiot-anthropic`，`api-key` | 展示專用的 Anthropic 工作區（設每月用量上限）的 API key；只有 AI 閘道讀它（`ai.providers.anthropic.apiKeySecret.name`，見下方「打開 AI 閘道」）：`... \| bun scripts/flux/sops-secret.ts --cluster demo --name trustiot-anthropic --key api-key` |
 | `trustiot-demo-values.sops.yaml` | `trustiot-demo-values`，`app-host`、`gateway-host`、`ota-host`、`smtp-from` | 三個主機名稱與寄件人（例如 `TrustIoT Demo <no-reply@寄件網域>`）；不是密鑰，只是不公開。stdin 每行一個 `<key>=<值>`：`<輸出四行的指令> \| bun scripts/flux/demo-values.ts`。剛好這四個 key，每個值一行，主機名稱要是小寫的 DNS 名稱；錯誤訊息不引用值 |
 
 加密的值 CI 看不到：`check-secret-handling.ts` 只確認它們加密了，`bun test deploy/flux` 只看得到 key 的名稱。所以改到 `trustiot-demo-values.sops.yaml`（或其他 demo 的 SOPS 檔）的 PR，由持有維運人員私鑰的人審查：以 `SOPS_AGE_KEY_FILE=<私鑰檔> sops -d <檔案>` 解開，確認內容與 PR 說的相同；PR 內文寫明改了哪些 key（只寫 key，不寫值）。
@@ -309,6 +309,23 @@ age-keygen 的輸出不是終端機時，私鑰寫到管線、`Public key: …` 
 
 - **私有 values**（主機名稱、寄件人）：收件者以自己的私鑰 `SOPS_AGE_KEY_FILE=<私鑰檔> sops edit deploy/flux/clusters/demo/trustiot/trustiot-demo-values.sops.yaml` 改其中一個 key 的值（不加 key；HelmRelease 只讀那四個），或以上表的 `demo-values.ts` 整份重新產生；開 PR，內文寫明改了哪些 key，由另一位維運人員解開審查後合併。Secret 帶 watch label，Flux 套用後 helm-controller 立刻升級。改主機名稱時，Cloudflare 的路由、DNS 與 Access 要一起改。
 - **打開切片的服務**：服務的 issue 進了某一版 chart、展示叢集也部署了那一版之後，在 `values-demo.yaml` 的 `services` 加上 `<服務>: {enabled: true}`；它用到的 Secret 以 SOPS 檔一起加進來並列進 `kustomization.yaml`；開 PR 合併。`bun test deploy/flux` 以 HEAD 的 chart 渲染展示叢集的 values，打開的服務若少了 chart 要求的設定，測試會失敗。打開前確認展示機的記憶體還放得下。
+- **打開 AI 閘道**（Laysi/trustiot-v2#536）：展示叢集部署的 chart 含 `deploy/images/ai-gateway` 之後，`values-demo.yaml` 加上下面的值，`trustiot-anthropic.sops.yaml` 已在 main 上並列在 `kustomization.yaml`（上表）。`credentials: [ai]` 是 chart 的預設，仍寫出來：`scripts/demo/flux.ts` 只從展示叢集的 values 判斷要哪些 Secret，看不到 chart 的預設。展示環境只有 Anthropic 的金鑰，所以角色只能用 `anthropic/` 的模型；角色名稱與模型由呼叫端的 issue 決定（AI 助理是 Laysi/trustiot-v2#145），沒有角色時 chart 拒絕渲染。`baseUrl` 留空是 Anthropic 自己的 API，要經 Cloudflare AI Gateway 時才設。閘道沒有呼叫端時誰都連不到它（`mesh.calls` 由呼叫端的 issue 加上），打開後確認 pod 就緒；金鑰能不能用，以 chart README「AI 閘道」的 port-forward 送一次最小的呼叫確認。
+
+  ```yaml
+  services:
+    ai-gateway:
+      enabled: true
+      credentials: [ai]
+  ai:
+    providers:
+      anthropic:
+        apiKeySecret:
+          name: trustiot-anthropic
+    roles:
+      main:                      # 例子：角色與模型由呼叫端的 issue 決定
+        models: [anthropic/claude-sonnet-5-5]
+  ```
+
 - **換版**：同 SaaS（上方「發版與回滾」），或以 `pin-chart.ts` 只換展示叢集。合併之前先照[展示環境 runbook](../../docs/runbooks/demo-environment.md)「換 chart 版本」比對新舊版本的 `deploy/istio/istiod-values.yaml`，有改就先對齊 istiod。
 
 打開服務、換版、重設展示資料、金鑰輪替與共用叢集的完整步驟在[展示環境 runbook](../../docs/runbooks/demo-environment.md)。

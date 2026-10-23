@@ -204,7 +204,10 @@ Who may call each enabled service and in-cluster component. Callers come from th
   both run (templates/mqtt-broker.yaml).
 The MQTT broker admits each of its callers on one port only ("trustiot.mqtt-broker.callers"):
 its entry also has portRules, [{callers, ports}], and mesh.calls may list it as the callee of
-those callers only.
+those callers only. mesh.calls may list ai-gateway as the callee of the AI assistant, the knowledge
+base and alerts only ("trustiot.aiGateway.callers"), whether or not they are enabled; the ingress
+gateway never reaches it, because "trustiot.ingress.plan" refuses every cookie route to ai-gateway
+and no public path leads there.
 Every other connection is refused. Callers must be keys under services and callees keys under
 services, components ("trustiot.mesh.components") or direct callees ("trustiot.mesh.directCallees",
 which get no entry here); other names fail the render.
@@ -231,7 +234,11 @@ only port they reach); the render fails when there are such callers but no token
 {{- fail (printf "mesh.calls.%s: must be a list of services" $caller) -}}
 {{- end -}}
 {{- $brokerCallers := include "trustiot.mqtt-broker.callers" $ | fromYaml -}}
+{{- $aiGatewayCallers := include "trustiot.aiGateway.callers" $ | fromYamlArray -}}
 {{- range $callees -}}
+{{- if and (eq (toString .) "ai-gateway") (not (has $caller $aiGatewayCallers)) -}}
+{{- fail (printf "mesh.calls.%s: only %s may call ai-gateway (decision 28): it verifies no internal identity and spends the AI provider accounts, so the mesh alone keeps every other service out (deploy/chart/README.md, \"服務間授權（mesh）\")" $caller (join ", " $aiGatewayCallers)) -}}
+{{- end -}}
 {{- if and (eq (toString .) "mqtt-broker") (not (has $caller (concat $brokerCallers.gateway.callers $brokerCallers.service.callers))) -}}
 {{- fail (printf "mesh.calls.%s: the MQTT broker admits only %s on its gateway port and %s on its service port (deploy/chart/README.md, \"MQTT broker\")" $caller (join ", " $brokerCallers.gateway.callers) (join ", " $brokerCallers.service.callers)) -}}
 {{- end -}}

@@ -34,6 +34,15 @@ Returns YAML {ports: [{name, containerPort, ...}]}; use with fromYaml.
 {{- dict "ports" $ports | toYaml -}}
 {{- end -}}
 
+{{/*
+Prefix of a service's own settings (service-kit's env prefix, crates/service-kit/README.md, 「設定」):
+TRUSTIOT, except the AI gateway, which carries no product name (decision 28) and reads AI_GATEWAY.
+Argument: the service name.
+*/}}
+{{- define "trustiot.service.envPrefix" -}}
+{{- ternary "AI_GATEWAY" "TRUSTIOT" (eq . "ai-gateway") -}}
+{{- end -}}
+
 {{- define "trustiot.service.serviceAccount" -}}
 apiVersion: v1
 kind: ServiceAccount
@@ -94,13 +103,23 @@ Custom env cannot take over what the chart controls:
   are the chart's, and so are TRUSTIOT__DATABASE__PLATFORM_USERNAME and
   TRUSTIOT__DATABASE__PLATFORM_PASSWORD (set for a service whose platform role logs in);
 - for telemetry-query, TRUSTIOT__CLICKHOUSE__USERNAME and TRUSTIOT__CLICKHOUSE__PASSWORD are the
-  chart's: its ClickHouse account and the password the migration Job generates for it.
+  chart's: its ClickHouse account and the password the migration Job generates for it;
+- for ai-gateway, whose settings carry the prefix AI_GATEWAY ("trustiot.service.envPrefix"), the
+  names of its platform settings and settings file (AI_GATEWAY_ plus a letter or digit), its
+  providers and roles (AI_GATEWAY__PROVIDERS__*, AI_GATEWAY__ROLES__*) and every other variable of
+  its ConfigMap are the chart's ("trustiot.aiGateway.config"), so the providers' key variables,
+  endpoints and models come from values.ai only; container env would win over the ConfigMap.
 Returns a YAML list; use with fromYamlArray.
 */}}
 {{- define "trustiot.service.env" -}}
 {{- $name := .name -}}
 {{- $config := .config -}}
 {{- $values := .root.Values -}}
+{{- $prefix := include "trustiot.service.envPrefix" .name -}}
+{{- $aiGatewayNames := list -}}
+{{- if eq $name "ai-gateway" -}}
+{{- $aiGatewayNames = keys (include "trustiot.aiGateway.config" .root | fromYaml).data -}}
+{{- end -}}
 {{- $dbEnv := list -}}
 {{- if has $name (include "trustiot.postgres.clients" .root | fromYaml).services -}}
 {{- /* The service's own Postgres login role and its password, which the migration Job generates
@@ -136,8 +155,14 @@ generates its password into the service's Secret and sets it
 {{- if regexMatch "(?i)^(TRUSTIOT_[A-Z0-9]|SENTRY_|OTEL_)" .name -}}
 {{- fail (printf "services.%s: env %s: names starting with TRUSTIOT_, SENTRY_ or OTEL_ are set by the chart" $name .name) -}}
 {{- end -}}
-{{- if and $values.observability.collector.enabled (regexMatch "(?i)^TRUSTIOT__TELEMETRY__OTLP_ENDPOINT$" .name) -}}
+{{- if and $values.observability.collector.enabled (eq (upper .name) (printf "%s__TELEMETRY__OTLP_ENDPOINT" $prefix)) -}}
 {{- fail (printf "services.%s: env %s is set by the chart: it points at the OpenTelemetry collector (observability.collector)" $name .name) -}}
+{{- end -}}
+{{- if eq $name "ai-gateway" -}}
+{{- $reserved := or (regexMatch "(?i)^AI_GATEWAY_[A-Z0-9]" .name) (regexMatch "(?i)^AI_GATEWAY__(PROVIDERS|ROLES)__" .name) (has (upper .name) $aiGatewayNames) -}}
+{{- if $reserved -}}
+{{- fail (printf "services.ai-gateway: env %s is set by the chart from values.ai (the providers, their key variables and endpoints, the model roles and the gateway's time limits)" .name) -}}
+{{- end -}}
 {{- end -}}
 {{- if and $dbEnv (regexMatch "(?i)^TRUSTIOT__DATABASE__(PLATFORM_)?(USERNAME|PASSWORD)$" .name) -}}
 {{- fail (printf "services.%s: env %s is set by the chart: the service's login roles and the passwords the migration Job generates for them" $name .name) -}}
@@ -162,8 +187,9 @@ generates its password into the service's Secret and sets it
 {{- end -}}
 {{- $env := list (dict "name" "OTEL_SERVICE_NAME" "value" $name) -}}
 {{- if $values.observability.collector.enabled -}}
-{{- /* service-kit exports logs, traces and metrics only when its own setting names the endpoint. */ -}}
-{{- $env = append $env (dict "name" "TRUSTIOT__TELEMETRY__OTLP_ENDPOINT" "value" (include "trustiot.collector.endpoint" .root)) -}}
+{{- /* service-kit exports logs, traces and metrics only when its own setting names the endpoint,
+under the service's own prefix. */ -}}
+{{- $env = append $env (dict "name" (printf "%s__TELEMETRY__OTLP_ENDPOINT" $prefix) "value" (include "trustiot.collector.endpoint" .root)) -}}
 {{- end -}}
 {{- with $values.observability.sentry -}}
 {{- if .enabled -}}
@@ -274,6 +300,10 @@ spec:
         {{- /* Restart pods when the platform settings they read through envFrom change. */}}
         {{- $checksum := include (print .root.Template.BasePath "/platform-config.yaml") .root | sha256sum }}
         {{- $annotations := dict "checksum/platform-config" $checksum }}
+        {{- /* The AI gateway reads its settings at startup only (templates/ai-gateway.yaml). */}}
+        {{- if eq .name "ai-gateway" }}
+        {{- $_ := set $annotations "checksum/ai-gateway-config" (include (print .root.Template.BasePath "/ai-gateway.yaml") .root | sha256sum) }}
+        {{- end }}
         {{- toYaml (merge $annotations ($config.podAnnotations | default dict)) | nindent 8 }}
     spec:
       serviceAccountName: {{ include "trustiot.componentName" . }}
@@ -328,6 +358,10 @@ spec:
           envFrom:
             - configMapRef:
                 name: {{ include "trustiot.platformConfigName" .root }}
+            {{- if eq .name "ai-gateway" }}
+            - configMapRef:
+                name: {{ include "trustiot.aiGateway.configName" .root }}
+            {{- end }}
           env:
             {{- toYaml $env | nindent 12 }}
           {{- with $config.probes.startup }}

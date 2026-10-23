@@ -89,11 +89,24 @@ export function routesOfValues(chartDir: string, valuesFiles: string[]): Ingress
 }
 
 /**
+ * The AI gateway's settings the smoke adds (Laysi/trustiot-v2#536): one provider and one role, so
+ * the gateway starts on either shape (the SaaS instance values add their own). No key reaches CI:
+ * the provider's Secret is one of the dummies smoke.ts makes for every Secret the pods read, which
+ * the gateway only checks for printable ASCII at startup. It calls no provider before a request,
+ * so its readiness proves that the image and the chart's settings start it, not that a key works.
+ */
+export const AI_GATEWAY_SMOKE = {
+  providers: { anthropic: { apiKeySecret: { name: "trustiot-anthropic" } } },
+  roles: { smoke: { models: ["anthropic/claude-smoke"] } },
+} as const;
+
+/**
  * The values the smoke adds for the check (after tests/values/smoke.yaml): the identity and assets
  * services from the images the nightly built, the cookie routes to their APIs after the routes the
  * shape's values already set (`routes`, from routesOfValues; helm would otherwise drop them), and
  * the smoke namespace's ext_authz provider (platform.ts). No key: the identity pod's init
- * container generates it in the cluster (Laysi/trustiot-v2#404).
+ * container generates it in the cluster (Laysi/trustiot-v2#404). Also the AI gateway from its
+ * image, with no caller and no route (AI_GATEWAY_SMOKE).
  */
 export function apiValues(shape: string, routes: readonly IngressRoute[]): Record<string, unknown> {
   const image = (name: string) => {
@@ -110,7 +123,9 @@ export function apiValues(shape: string, routes: readonly IngressRoute[]): Recor
     services: {
       identity: { enabled: true, image: image("identity") },
       assets: { enabled: true, image: image("assets") },
+      "ai-gateway": { enabled: true, image: image("ai-gateway") },
     },
+    ai: AI_GATEWAY_SMOKE,
     ingress: {
       authzProvider: smokeProviderNameOf(shape),
       routes: [...routes, ...API_ROUTES],

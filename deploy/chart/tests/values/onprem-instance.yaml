@@ -42,11 +42,6 @@ smtp:
   security: starttls
   from: TrustIoT <trustiot@factory.test>
 
-ai:
-  # Customer OpenAI-compatible servers (vLLM, Ollama) inside the plant network.
-  chat:
-    baseUrl: http://vllm.factory.test:8000/v1
-  embedding:
-    baseUrl: http://ollama.factory.test:11434/v1
-  rerank:
-    baseUrl: http://vllm.factory.test:8000/v1
+# No AI providers: the AI gateway speaks the providers' native protocols only, and on-prem
+# endpoints (for example the customer's OpenAI-compatible servers) come after SaaS
+# (docs/architecture/ai-assistant.md).

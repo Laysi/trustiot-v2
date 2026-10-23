@@ -754,9 +754,8 @@ const CREDENTIAL_SECRETS: Record<string, string[][]> = {
   "qdrant-read": [["qdrant", "external", "credentialsSecret", "name"]],
   "qdrant-write": [["qdrant", "external", "credentialsSecret", "name"]],
   ai: [
-    ["ai", "chat", "apiKeySecret", "name"],
-    ["ai", "embedding", "apiKeySecret", "name"],
-    ["ai", "rerank", "apiKeySecret", "name"],
+    ["ai", "providers", "anthropic", "apiKeySecret", "name"],
+    ["ai", "providers", "openai", "apiKeySecret", "name"],
   ],
 };
 

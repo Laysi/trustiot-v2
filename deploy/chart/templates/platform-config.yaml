@@ -80,15 +80,8 @@ data:
   TRUSTIOT_SMTP_FROM: {{ .from | quote }}
   {{- end }}
   {{- end }}
-  {{- with $v.ai.chat.baseUrl }}
-  TRUSTIOT_AI_CHAT_BASE_URL: {{ . | quote }}
-  {{- end }}
-  {{- with $v.ai.embedding.baseUrl }}
-  TRUSTIOT_AI_EMBEDDING_BASE_URL: {{ . | quote }}
-  {{- end }}
-  {{- with $v.ai.rerank.baseUrl }}
-  TRUSTIOT_AI_RERANK_BASE_URL: {{ . | quote }}
-  {{- end }}
+  {{- /* The AI providers' endpoints are the AI gateway's own settings (templates/ai-gateway.yaml):
+  no other service calls a provider (decision 28). */}}
   {{- /* SENTRY_DSN comes from its Secret in the service template; without it Sentry stays off. */}}
   {{- if $v.observability.sentry.enabled }}
   SENTRY_ENVIRONMENT: {{ $v.observability.sentry.environment | quote }}

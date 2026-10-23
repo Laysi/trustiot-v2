@@ -25,6 +25,7 @@ const PACKAGE_DIRS: Record<(typeof NIGHTLY_IMAGES)[number], string> = {
   migrate: "tools/migrate",
   identity: "services/identity",
   assets: "services/assets",
+  "ai-gateway": "services/ai-gateway",
 };
 
 /**

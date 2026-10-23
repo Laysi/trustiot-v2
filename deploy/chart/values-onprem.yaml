@@ -22,7 +22,8 @@ qdrant:
 # smtp: the customer's SMTP relay. The instance overlay sets host, port, security, from and,
 # when the relay needs it, the credentials Secret.
 # objectStorage: the customer's S3-compatible storage (decision 20; details not decided yet).
-# ai: the customer's OpenAI-compatible endpoints, for example vLLM or Ollama (decision 16).
+# ai: the AI gateway speaks the providers' native protocols only (decision 15); the customer's
+# own endpoints, for example vLLM or Ollama (decision 16), come after SaaS.
 
 observability:
   sentry:

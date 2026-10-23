@@ -306,7 +306,7 @@ SaaS 叢集的 Secret 來源是 `deploy/flux/` 內以 SOPS 加密的檔案，由
 
 | 密鑰 | 用途與使用者 | SaaS | 地端 | 注入方式 | 實作 issue |
 | --- | --- | --- | --- | --- | --- |
-| AI 供應商憑證：Anthropic 與 OpenAI 的 API key；Vertex AI 優先用 Workload Identity Federation（不放長期金鑰，規則 8），不可行時才用服務帳號金鑰 | AI 閘道呼叫供應商（決策 15、26、28、32） | SOPS | 客戶端點需要時，客戶建立的 Secret（地端排在 SaaS 完成後） | 環境變數，只給 `ai-gateway`（chart 強制）；Vertex AI 的憑證形式在接入的 issue 決定 | Laysi/trustiot-v2#139、Laysi/trustiot-v2#536、Laysi/trustiot-v2#440、Laysi/trustiot-v2#468 |
+| AI 供應商憑證：Anthropic 與 OpenAI 的 API key；Vertex AI 優先用 Workload Identity Federation（不放長期金鑰，規則 8），不可行時才用服務帳號金鑰 | AI 閘道呼叫供應商（決策 15、26、28、32） | SOPS | 客戶端點需要時，客戶建立的 Secret（地端排在 SaaS 完成後） | 環境變數，依供應商分開（`TRUSTIOT_AI_ANTHROPIC_API_KEY`、`TRUSTIOT_AI_OPENAI_API_KEY`，Secret 由 `ai.providers.<供應商>.apiKeySecret` 指定），以 `secretKeyRef` 只給 `ai-gateway`（chart 強制，閘道設定的 ConfigMap 只放變數名稱）；Vertex AI 的憑證形式在接入的 issue 決定 | Laysi/trustiot-v2#139、Laysi/trustiot-v2#536、Laysi/trustiot-v2#440、Laysi/trustiot-v2#468 |
 | Qdrant 唯讀與寫入 API key | knowledge 檢索與背景處理（決策 19） | SOPS（Qdrant Cloud 主控台發的兩把 key） | `bundled`：部署時在叢集內產生 | 環境變數，只給 `knowledge`（chart 強制） | Laysi/trustiot-v2#194 |
 | 物件儲存存取金鑰 | PDF、頁面圖、附件（決策 20） | SOPS | 客戶建立的 Secret | 環境變數，只給列出 `object-storage` 的服務 | Laysi/trustiot-v2#133 |
 | 備份用的物件儲存金鑰 | Postgres 的 WAL 與完整備份、ClickHouse 備份（M8） | SOPS；與服務用的金鑰分開、只能寫備份 bucket | 客戶建立的 Secret | 只給備份元件 | Laysi/trustiot-v2#134、Laysi/trustiot-v2#135 |

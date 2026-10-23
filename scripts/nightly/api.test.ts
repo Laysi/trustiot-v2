@@ -271,6 +271,13 @@ describe("the API check's values on each deployment shape", () => {
       const named = (kind: string, name: string) => objects.find((o) => o.kind === kind && o.metadata?.name === name);
       expect(named("Deployment", "trustiot-identity")).toBeDefined();
       expect(named("Deployment", "trustiot-assets")).toBeDefined();
+      // The AI gateway starts with the smoke's provider and role (Laysi/trustiot-v2#536); its key
+      // is a dummy the smoke makes, like every Secret the pods read and the chart does not declare.
+      expect(named("Deployment", "trustiot-ai-gateway")).toBeDefined();
+      const gatewayConfig = named("ConfigMap", "trustiot-ai-gateway")?.data as Record<string, string> | undefined;
+      expect(gatewayConfig?.AI_GATEWAY__ROLES__SMOKE__MODELS).toBe("anthropic/claude-smoke");
+      expect(gatewayConfig?.AI_GATEWAY__PROVIDERS__ANTHROPIC__KEY_ENV).toBe("TRUSTIOT_AI_ANTHROPIC_API_KEY");
+      expect(missingSecrets(objects).get("trustiot-anthropic")).toEqual(new Set(["api-key"]));
       // The cookie check goes to this namespace's identity service (platform.ts).
       const custom = objects.filter((o) => o.kind === "AuthorizationPolicy" && o.spec?.action === "CUSTOM");
       expect(custom.length).toBeGreaterThan(0);

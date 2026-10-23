@@ -488,7 +488,7 @@ Laysi/trustiot-v2#113（限流）、Laysi/trustiot-v2#107（停權）、Laysi/tr
 
 1. 在主控台建立新金鑰（權限、限定的網域或工作區同上），舊的先留著。
 2. 以上面的管線指令重新產生整個 SOPS 檔（不用 `sops edit`），開 PR。服務以環境變數讀金鑰，Secret 換了 pod 不會自己重啟：已有服務使用時（寄信在 Laysi/trustiot-v2#103 之後，Anthropic 在 Laysi/trustiot-v2#139 之後），同一個 PR 在 `values-demo.yaml` 為該服務的 `services.<name>.podAnnotations` 加上或更新 `trustiot.io/secret-rotated: "<YYYY-MM-DD>"`。
-3. 合併、Flux 套用後確認：SMTP 照下方「寄測試信」寄一封（測試 pod 每次都從 Secret 讀，直接驗證新金鑰）；Anthropic 金鑰以 AI 閘道的一次呼叫確認（請求見 [services/ai-gateway/README.md](../../services/ai-gateway/README.md)「範例：一次最小的呼叫」；在叢集裡從哪裡送出，由部署閘道的 Laysi/trustiot-v2#536 補上）。
+3. 合併、Flux 套用後確認：SMTP 照下方「寄測試信」寄一封（測試 pod 每次都從 Secret 讀，直接驗證新金鑰）；Anthropic 金鑰以 AI 閘道的一次呼叫確認：閘道的 pod 滾動更新完成後，以 `kubectl -n trustiot port-forward deploy/trustiot-ai-gateway 18080:8080` 連進閘道的 pod，送 [services/ai-gateway/README.md](../../services/ai-gateway/README.md)「範例：一次最小的呼叫」的請求到 `http://127.0.0.1:18080`，角色換成 `values-demo.yaml` 裡用 Anthropic 的角色（port-forward 不經 mesh，需要展示機上的叢集管理權限；說明見 [chart README](../../deploy/chart/README.md)「AI 閘道」）。
 4. 在主控台刪掉舊金鑰（Anthropic 的 Disable 可以還原，Delete 不行）。外洩時不保留舊金鑰：先刪掉，再做第 1 步。
 
 ### 寄測試信

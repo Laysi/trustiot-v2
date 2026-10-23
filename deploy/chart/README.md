@@ -214,6 +214,8 @@ mesh:
     assistant: [ai-gateway, telemetry-query]   # 例子：assistant 可以呼叫這兩個服務
 ```
 
+`ai-gateway` 只能由 AI 助理（`assistant`）、知識庫（`knowledge`）與警報（`alerts`）呼叫（決策 28，Laysi/trustiot-v2#536）：它不驗證內部身分、花的是供應商的帳號，所以只有 mesh 擋得住其他服務。`mesh.calls` 裡任何其他服務把 `ai-gateway` 列為被呼叫端時渲染失敗，不論兩邊有沒有啟用、有沒有做 schema 驗證（`templates/_ai-gateway.tpl` 的 `trustiot.aiGateway.callers`，`_mesh.tpl` 的 `trustiot.mesh.plan` 執行）；它也不能有 cookie 路由（見「入口 gateway」）。這三個服務真的呼叫它時，由各自的 issue 加上 `mesh.calls`（例如 Laysi/trustiot-v2#145 的 `assistant: [ai-gateway]`）；預設 values 沒有，所以 AuthorizationPolicy 沒有規則、拒絕所有連線（下方「呼叫矩陣」）。
+
 除了 `mesh.calls`，入口 gateway（ServiceAccount `<release>-ingress-istio`）自動可以呼叫它路由到的服務（例外路徑與 `ingress.routes` 的後端），以及做 cookie 驗證（ext_authz）的身分服務（只到它的 API 埠 `http`，見下一段）。
 
 代表使用者呼叫（決策 27，Laysi/trustiot-v2#106）：ztunnel 不把呼叫端的身分交給應用程式，所以服務 A 處理使用者的請求、要以同一個使用者呼叫服務 B 時，先拿自己收到的內部身分 token（受眾是 A）向身分服務的 `POST /internal/token-exchange` 換一張受眾是 B 的 token，再帶著它呼叫 B（`crates/service-kit` 的 `OnBehalf`）。token exchange 在身分服務自己的埠（`token-exchange`，預設 8082），不在 API 埠，有自己的 Service `<release>-identity-exchange`（`http://<release>-identity-exchange:8082`，`templates/token-exchange.yaml`）；身分服務的 Service 不開這個埠。身分服務只沿著 `mesh.calls` 換：
@@ -327,15 +329,15 @@ chart 產生下列物件：
 | `services.<name>.replicas` | 覆寫副本數 |
 | `services.<name>.ports` | 整個取代埠清單；埠名與埠號不能重複，也不能用 `health` 或健康埠的埠號；探針只能指向清單內的埠名與 `health`。只有 `identity` 有預設值：`http` 8080 與 token exchange 的 `token-exchange` 8082（服務的 `exchange.listen_addr`），`token-exchange` 由自己的 Service `<release>-identity-exchange` 提供，mesh 依這兩個埠分開授權（見「服務間授權（mesh）」的代表使用者呼叫），覆寫時兩個都要保留 |
 | `services.<name>.healthPort` | 覆寫健康埠的埠號；服務的 `http.health_listen_addr` 要跟著改 |
-| `services.<name>.env` | 接在 `serviceDefaults.env` 後面，名稱不能重複。`TRUSTIOT_` 後面接英數字、`SENTRY_`、`OTEL_` 開頭的名稱（不分大小寫）保留給 chart，避免覆寫平台設定與 chart 給的密鑰；`TRUSTIOT__`（兩個底線）開頭的名稱不在保留範圍。名稱像密鑰（含 SECRET、PASSW、PASSPHRASE、PWD、TOKEN、API_KEY、DSN、PRIVATE、CREDENTIAL，或以 `_KEY` 結尾，不分大小寫）的變數只能用 `valueFrom.secretKeyRef`，不能用字面值或 ConfigMap 等其他來源；每一項只能有 `value` 或一個 `valueFrom` 來源。任何變數都不能讀 values 指定的依賴帳密與 Sentry DSN（同一個 Secret 的同一個 key），依賴帳密要改列在 `credentials` |
-| `services.<name>.credentials` | 只給這個服務的依賴帳密，可列 `qdrant-read`、`qdrant-write`、`object-storage`、`smtp`、`ai`，變數見「密鑰的環境變數」；不能放在 `serviceDefaults`，避免每個服務都拿到。`identity` 預設列 `smtp`：它用 `smtp` 的 relay 寄登入驗證碼（`services/identity/README.md`）。`ai` 只能給 `ai-gateway`（決策 28）；`qdrant-read` 與 `qdrant-write` 只能給 `knowledge`，因為 Qdrant 查詢的租戶條件由知識庫服務加上（docs/architecture/rag.md） |
+| `services.<name>.env` | 接在 `serviceDefaults.env` 後面，名稱不能重複。`TRUSTIOT_` 後面接英數字、`SENTRY_`、`OTEL_` 開頭的名稱（不分大小寫）保留給 chart，避免覆寫平台設定與 chart 給的密鑰；`TRUSTIOT__`（兩個底線）開頭的名稱不在保留範圍。名稱像密鑰（含 SECRET、PASSW、PASSPHRASE、PWD、TOKEN、API_KEY、DSN、PRIVATE、CREDENTIAL，或以 `_KEY` 結尾，不分大小寫）的變數只能用 `valueFrom.secretKeyRef`，不能用字面值或 ConfigMap 等其他來源；每一項只能有 `value` 或一個 `valueFrom` 來源。任何變數都不能讀 values 指定的依賴帳密與 Sentry DSN（同一個 Secret 的同一個 key），依賴帳密要改列在 `credentials`。`ai-gateway` 的設定前綴是 `AI_GATEWAY`（見「AI 閘道」），所以它另外保留 `AI_GATEWAY_` 後接英數字（平台設定與設定檔的名稱）、`AI_GATEWAY__PROVIDERS__`、`AI_GATEWAY__ROLES__` 開頭的名稱，以及它的 ConfigMap 裡的每個變數：供應商、金鑰變數、端點與模型只能來自 `ai`，container 的 `env` 會蓋過 ConfigMap |
+| `services.<name>.credentials` | 只給這個服務的依賴帳密，可列 `qdrant-read`、`qdrant-write`、`object-storage`、`smtp`、`ai`，變數見「密鑰的環境變數」；不能放在 `serviceDefaults`，避免每個服務都拿到。`identity` 預設列 `smtp`：它用 `smtp` 的 relay 寄登入驗證碼（`services/identity/README.md`）。`ai` 只能給 `ai-gateway`（決策 28），`ai-gateway` 預設就列 `ai`，拿掉時開啟它會渲染失敗（閘道沒有金鑰不啟動）；`qdrant-read` 與 `qdrant-write` 只能給 `knowledge`，因為 Qdrant 查詢的租戶條件由知識庫服務加上（docs/architecture/rag.md） |
 | `services.<name>.resources` | 逐欄覆寫資源設定 |
 | `services.<name>.podSecurityContext` | 逐欄覆寫；限制同 `serviceDefaults` |
 | `services.<name>.podSecurityContext.fsGroup` | 只有 `identity`（`65532`）與 `certs`（`65533`）有預設值：簽章金鑰檔與簽發 CA 金鑰檔的權限是 0440、屬於 root 與這個群組，服務以群組身分讀它，容器裡其他使用者讀不到（見「內部身分」與「閘道器憑證 CA」）；兩者不同，其他 pod 都不在這兩個群組。OpenShift 設成 `null`，由 restricted-v2 SCC 從 namespace 的範圍指派；其他平台拿掉它，服務會讀不到金鑰而一直不就緒 |
 | `services.<name>.securityContext` | 逐欄覆寫；限制同 `serviceDefaults` |
 | `services.<name>.probes` | 每個 probe 整個取代；liveness 與 readiness 不能是空的 |
 | `services.<name>.preStopSleepSeconds` | 覆寫 preStop 等待秒數 |
-| `services.<name>.drainSeconds` | 覆寫收尾秒數，例如持有長連線的服務 |
+| `services.<name>.drainSeconds` | 覆寫收尾秒數，例如持有長連線的服務。`ai-gateway` 預設 `310`：模型的回答會串流好幾分鐘，又不能換到別的 pod 接著回，所以收尾時讓進行中的串流跑完；chart 把它的 `shutdown.drain_timeout` 設成 `drainSeconds` 減 10 秒，只接受 11 到 3605（見「AI 閘道」） |
 | `services.<name>.tmpSizeLimit` | 覆寫 `/tmp` 大小上限 |
 | `services.<name>.automountServiceAccountToken` | 需要呼叫 Kubernetes API 的服務才設 `true`；`identity` 不能設（渲染失敗，見「內部身分」） |
 | `services.<name>.nodeSelector` | 逐個 key 合併 |
@@ -514,15 +516,14 @@ chart 產生下列物件：
 | `smtp.credentialsSecret.name` | `""` | relay 不需要驗證時留空；有值時平台設定多一個 `TRUSTIOT_SMTP_AUTH_REQUIRED`，引用是 optional（見「密鑰的環境變數」） |
 | `smtp.credentialsSecret.usernameKey` | `username` | |
 | `smtp.credentialsSecret.passwordKey` | `password` | |
-| `ai.chat.baseUrl` | `""` | OpenAI 相容的聊天端點，例如 `https://api.openai.com/v1`；SaaS 只接受 https |
-| `ai.chat.apiKeySecret.name` | `""` | 只有 AI 閘道服務拿到金鑰（決策 28） |
-| `ai.chat.apiKeySecret.key` | `api-key` | |
-| `ai.embedding.baseUrl` | `""` | embedding 端點（決策 26） |
-| `ai.embedding.apiKeySecret.name` | `""` | |
-| `ai.embedding.apiKeySecret.key` | `api-key` | |
-| `ai.rerank.baseUrl` | `""` | 重排用的聊天端點，搭配快速模型（決策 26） |
-| `ai.rerank.apiKeySecret.name` | `""` | |
-| `ai.rerank.apiKeySecret.key` | `api-key` | |
+| `ai.providers.anthropic.baseUrl` | `""` | Anthropic Messages 的端點；空字串是 Anthropic 自己的 API，要經 Cloudflare AI Gateway 時只改這裡（例如 `https://gateway.ai.cloudflare.com/v1/<account>/<gateway>/anthropic`）。只接受 https、有主機名稱、不含帳密、query 與 fragment（閘道把金鑰送到這裡），兩種部署形態都一樣。見「AI 閘道」 |
+| `ai.providers.anthropic.apiKeySecret.name` | `""` | 放 Anthropic 金鑰的 Secret；有名稱這個供應商才算設定，只有 `ai-gateway` 拿到（決策 28） |
+| `ai.providers.anthropic.apiKeySecret.key` | `api-key` | |
+| `ai.providers.openai.baseUrl` | `""` | OpenAI Decisions 的端點；空字串是 OpenAI 自己的 API，規則同上 |
+| `ai.providers.openai.apiKeySecret.name` | `""` | 放 OpenAI 金鑰的 Secret |
+| `ai.providers.openai.apiKeySecret.key` | `api-key` | |
+| `ai.roles` | `{}` | 模型角色：`<角色>: {models: [<供應商>/<模型 ID>, ...]}`，第一個是首選、後面依序備援（1 到 8 個），可另設上限與逾時；`ai-gateway` 開啟時至少要一個角色，每個用到的供應商都要有 `apiKeySecret.name`。欄位見「AI 閘道」 |
+| `ai.requestTimeout` | `10m` | 閘道的 `http.request_timeout`，最多 `1h`；每個角色第一次嘗試的時間（`queueWait` 加上 `timeouts.response` 與 `timeouts.firstToken` 較長者）要放得下這個值減去十分之一（最多 2 秒），否則渲染失敗（閘道也不會啟動）；預設上限需要 300 秒 |
 | `observability.sentry.enabled` | `false` | SaaS 開、地端預設關（決策 24）；開啟時每個服務都拿到 `SENTRY_DSN` 與 `SENTRY_ENVIRONMENT` |
 | `observability.sentry.environment` | `""` | 開啟時必填，例如 `production`、`staging` |
 | `observability.sentry.dsnSecret.name` | `""` | 開啟時必填；DSN 含金鑰，放在 Secret |
@@ -548,6 +549,46 @@ chart 產生下列物件：
 | `observability.collector.tolerations` | `[]` | |
 
 URL 欄位都不接受 `user:password@` 這種帶帳密的寫法。
+
+## AI 閘道
+
+`services.ai-gateway`（`services/ai-gateway`，決策 15、28，Laysi/trustiot-v2#536）保管 AI 供應商的金鑰，依模型角色以供應商的原生協定轉送請求。它與產品無關，設定前綴是 `AI_GATEWAY`，不讀平台設定（`TRUSTIOT_*`）；chart 從 `ai` 產生它的設定，放在 ConfigMap `<release>-ai-gateway`，只以 `envFrom` 交給它的 container（`templates/ai-gateway.yaml`，規則在 `templates/_ai-gateway.tpl` 的 `trustiot.aiGateway.config`）。閘道只在啟動時讀設定，所以 pod 帶這份 ConfigMap 的 checksum，設定一變就滾動更新。
+
+ConfigMap 只有名稱與上限，沒有金鑰（chart 測試檢查）：
+
+| 變數 | 來源 | 何時有 |
+| --- | --- | --- |
+| `AI_GATEWAY__PROVIDERS__<供應商>__PROTOCOL` | `anthropic` 是 `anthropic-messages`，`openai` 是 `openai-decisions` | 該供應商的 `apiKeySecret.name` 有值時 |
+| `AI_GATEWAY__PROVIDERS__<供應商>__KEY_ENV` | `TRUSTIOT_AI_ANTHROPIC_API_KEY`、`TRUSTIOT_AI_OPENAI_API_KEY`：chart 以 `secretKeyRef` 從 `apiKeySecret` 放進這兩個變數（「密鑰的環境變數」） | 同上 |
+| `AI_GATEWAY__PROVIDERS__<供應商>__BASE_URL` | `ai.providers.<供應商>.baseUrl` | 同上，而且有值時；沒有時閘道用供應商自己的 API |
+| `AI_GATEWAY__ROLES__<角色>__MODELS` 與角色的上限 | `ai.roles.<角色>`，見下表 | 每個角色 |
+| `AI_GATEWAY__HTTP__REQUEST_TIMEOUT` | `ai.requestTimeout` | 一律 |
+| `AI_GATEWAY__SHUTDOWN__DRAIN_TIMEOUT` | `services.ai-gateway.drainSeconds` 減 10 秒（預設 300 秒）：service-kit 的 5 秒 drain delay 加上取消剩餘工作與送出遙測的 3 秒，要在 SIGTERM 後的 `drainSeconds` 內做完，再留 2 秒 | 一律 |
+
+collector 開啟時另有 `AI_GATEWAY__TELEMETRY__OTLP_ENDPOINT`（與其他服務的 `TRUSTIOT__TELEMETRY__OTLP_ENDPOINT` 相同，只是前綴不同）。`ai.roles.<角色>` 的欄位（閘道的鍵與預設見 `services/ai-gateway/README.md`「設定」）：
+
+| 欄位 | 變數（`<P>` 是 `AI_GATEWAY__ROLES__<角色>__`） | 規則 |
+| --- | --- | --- |
+| `models` | `<P>MODELS`，以逗號串接 | 必填，1 到 8 個、不重複，`<供應商>/<模型 ID>`，第一個是首選；模型 ID 是 1 到 256 個可列印 ASCII，不含空白與逗號；供應商要有 `apiKeySecret.name` |
+| `maxConcurrent` | `<P>MAX_CONCURRENT` | 1 到 10000（閘道預設 32） |
+| `queueWait` | `<P>QUEUE_WAIT` | 最多 `1h`（預設 0） |
+| `timeouts.connect`、`firstToken`、`streamIdle`、`streamTotal`、`response` | `<P>TIMEOUTS__CONNECT` 等 | 大於 0、最多 `1h`，`streamTotal` 最多 `24h`（預設 10 秒、60 秒、60 秒、60 分、300 秒） |
+| `maxResponseBytes` | `<P>MAX_RESPONSE_BYTES` | 1024 到 268435456（預設 32 MiB） |
+| `maxEventBytes` | `<P>MAX_EVENT_BYTES` | 1024 到 `maxResponseBytes`（預設 4 MiB；`maxResponseBytes` 沒設時以 32 MiB 比較） |
+
+角色名稱是 1 到 32 個小寫英文字母、數字或 `_`，字母開頭。時間寫成一個數字加一個單位（`500ms`、`30s`、`10m`、`1h`）。
+
+開啟 `ai-gateway` 時，閘道會拒絕啟動的設定都讓渲染失敗，不論有沒有做 schema 驗證，所以 values 的錯誤不會變成一直重啟的 pod：`credentials` 沒有 `ai`、沒有角色、角色或模型不合規則、用到沒有 `apiKeySecret.name` 的供應商、上限超出範圍、某個角色的 `queueWait` 加上 `timeouts.response` 與 `timeouts.firstToken` 較長者放不進 `ai.requestTimeout` 減去十分之一（最多 2 秒；chart 以毫秒計算並無條件進位，所以不會比閘道寬鬆）、`drainSeconds` 不在 11 到 3605 之間。chart 只認得 `anthropic` 與 `openai` 兩個供應商。
+
+閘道在收到請求之前不連供應商，readiness 也不依賴供應商連得到：沒有金鑰的 CI 與 nightly 以假的 Secret 值就能讓它就緒（`scripts/nightly/api.ts` 的 `AI_GATEWAY_SMOKE`），但這不證明金鑰能用。確認一把金鑰能用要送一次真的請求（`services/ai-gateway/README.md` 的「範例：一次最小的呼叫」）。內部 API 只開給 mesh 授權的三個呼叫端，所以從叢集外送時以 `kubectl port-forward` 連進閘道的 pod：port-forward 進入 pod 自己的網路命名空間，不經 ztunnel 與 NetworkPolicy，需要能對那個 namespace 的 pod 做 `pods/portforward` 的權限，與 `kubectl exec` 同級，只給維運的管理者：
+
+```sh
+kubectl -n <namespace> port-forward deploy/<release>-ai-gateway 18080:8080
+# 另一個終端機；main 換成用那個供應商的角色
+curl -sS -D - -X POST "http://127.0.0.1:18080/internal/roles/main/v1/messages" \
+  -H 'content-type: application/json' -H 'ai-gateway-tenant: key-check' \
+  -d '{"max_tokens":16,"messages":[{"role":"user","content":"Reply with OK."}]}'
+```
 
 ## migration Job
 
@@ -802,7 +843,7 @@ SIEM 連不上時 exporter 在記憶體佇列重試 5 分鐘，不影響寫進 C
 
 服務照下列約定實作，就能直接用通用樣板部署（docs/architecture/deployment.md 的服務設計規則）：
 
-- **設定**：ConfigMap `<release>-platform` 以 `envFrom` 交給每個服務，另外每個服務有 `OTEL_SERVICE_NAME=<服務名稱>`，collector 開啟時還有 `TRUSTIOT__TELEMETRY__OTLP_ENDPOINT`（service-kit 的 OTLP 匯出位址，見「OpenTelemetry collector」）。`TRUSTIOT_` 後接英數字、`SENTRY_` 與 `OTEL_` 開頭的變數只由 chart 設定，`env` 不能覆寫，服務讀到的平台設定一定是 values 決定的值。沒有設定的項目不會出現，服務可以分辨「沒設定」與「空字串」。平台設定變更時 pod 會自動滾動更新。
+- **設定**：ConfigMap `<release>-platform` 以 `envFrom` 交給每個服務，另外每個服務有 `OTEL_SERVICE_NAME=<服務名稱>`，collector 開啟時還有 `TRUSTIOT__TELEMETRY__OTLP_ENDPOINT`（service-kit 的 OTLP 匯出位址，見「OpenTelemetry collector」；`ai-gateway` 的設定前綴不同，是 `AI_GATEWAY__TELEMETRY__OTLP_ENDPOINT`，它也不讀平台設定，見「AI 閘道」）。`TRUSTIOT_` 後接英數字、`SENTRY_` 與 `OTEL_` 開頭的變數只由 chart 設定，`env` 不能覆寫，服務讀到的平台設定一定是 values 決定的值。沒有設定的項目不會出現，服務可以分辨「沒設定」與「空字串」。平台設定變更時 pod 會自動滾動更新。
 - **密鑰**：不放進 ConfigMap，以 `valueFrom.secretKeyRef` 從 values 指定的 Secret 取用。Sentry 開啟時每個服務有 `SENTRY_DSN`；其他依賴的帳密只給在 `services.<name>.credentials` 列出它的服務（見後面「密鑰的環境變數」），Secret 名稱空白的項目不注入。資料庫的 CA 憑證以唯讀方式掛在 `/etc/trustiot/<postgres|clickhouse>-ca/ca.crt`：外部 ClickHouse 的掛進每個服務；Postgres 的（`external` 是 `postgres.external.caSecret`，`bundled` 是 CloudNativePG 產生的 CA 裡的 `ca.crt`）只掛進在 `mesh.calls` 列出 `postgres` 的服務。內部身分的簽章私鑰只掛進身分服務，公鑰的 ConfigMap 掛進每個服務（見「內部身分」）；簽發 CA 的私鑰只掛進 certs（見「閘道器憑證 CA」）。服務自己的資料庫帳號（每個服務一個角色，決策 4）由 migration 的 issue 加入（Laysi/trustiot-v2#60）。
 - **埠與探針**：API 監聽 8080（埠名 `http`）；健康埠 8081（埠名 `health`）只提供 `GET /healthz`（startup 與 liveness）與 `GET /readyz`（readiness），其他路徑回 404。探針連健康埠，節點上的行程因此碰不到 API（「節點來源」）。service-kit 預設就是這樣（`http.listen_addr`、`http.health_listen_addr`），`crates/service-kit/tests/chart_contract.rs` 對照 `values.yaml` 檢查。
 - **SIGTERM**：pod 刪除時先等 `preStopSleepSeconds`（預設 5 秒），再送 SIGTERM；服務收到後 readiness 立即回失敗、處理完進行中的請求、主動關閉長連線，在 `drainSeconds`（預設 30 秒）內結束，之後才會被 SIGKILL。服務是容器內的 PID 1，要自己處理 SIGTERM。
@@ -822,7 +863,6 @@ SIEM 連不上時 exporter 在記憶體佇列重試 5 分鐘，不影響寫進 C
 | `TRUSTIOT_S3_ENDPOINT`、`_REGION`、`_BUCKET`、`_FORCE_PATH_STYLE` | `objectStorage.*` | 各自有值時；`_FORCE_PATH_STYLE` 隨 bucket |
 | `TRUSTIOT_SMTP_HOST`、`_PORT`、`_SECURITY`、`_FROM` | `smtp.*` | 有 host 時（`_FROM` 有值時） |
 | `TRUSTIOT_SMTP_AUTH_REQUIRED` | `"true"`：relay 需要帳號 | 有 host 且 `smtp.credentialsSecret.name` 有值時；身分服務據此把缺少的帳密當成不能用的寄信設定（見「密鑰的環境變數」） |
-| `TRUSTIOT_AI_CHAT_BASE_URL`、`TRUSTIOT_AI_EMBEDDING_BASE_URL`、`TRUSTIOT_AI_RERANK_BASE_URL` | `ai.*.baseUrl` | 各自有值時 |
 | `TRUSTIOT_CLICKHOUSE_CA_FILE` | 掛載的 CA 憑證路徑 `/etc/trustiot/clickhouse-ca/ca.crt` | `clickhouse.mode` 為 `external` 且設定了 `caSecret.name` |
 | `SENTRY_ENVIRONMENT` | `observability.sentry.environment` | Sentry 開啟時（`SENTRY_DSN` 來自 Secret，見上） |
 
@@ -837,7 +877,7 @@ SIEM 連不上時 exporter 在記憶體佇列重試 5 分鐘，不影響寫進 C
 | `TRUSTIOT_QDRANT_WRITE_API_KEY` | `qdrant.external.credentialsSecret` 的 `writeApiKeyKey` | `knowledge` 的 `credentials` 含 `qdrant-write`，且 `qdrant.mode` 為 `external` |
 | `TRUSTIOT_S3_ACCESS_KEY_ID`、`TRUSTIOT_S3_SECRET_ACCESS_KEY` | `objectStorage.credentialsSecret` | `credentials` 含 `object-storage` |
 | `TRUSTIOT_SMTP_USERNAME`、`TRUSTIOT_SMTP_PASSWORD` | `smtp.credentialsSecret`，引用是 `optional: true` | `credentials` 含 `smtp` |
-| `TRUSTIOT_AI_CHAT_API_KEY`、`TRUSTIOT_AI_EMBEDDING_API_KEY`、`TRUSTIOT_AI_RERANK_API_KEY` | `ai.*.apiKeySecret` | `ai-gateway` 的 `credentials` 含 `ai`（決策 28） |
+| `TRUSTIOT_AI_ANTHROPIC_API_KEY`、`TRUSTIOT_AI_OPENAI_API_KEY` | `ai.providers.<供應商>.apiKeySecret` | `ai-gateway` 的 `credentials` 含 `ai`（決策 28；預設就含），各自的 Secret 有名稱時。閘道的設定以 `KEY_ENV` 指向這兩個名稱（見「AI 閘道」） |
 
 引用的 Secret 不存在時，pod 停在 `CreateContainerConfigError`，只有 SMTP 帳密例外：它的引用是 `optional: true`。身分服務以它寄登入驗證碼，又負責每個帶 cookie 的請求都要經過的 ext_authz 檢查，寄信的帳密缺了不該讓整個平台的請求都失敗。Secret 或其中的 key 不存在時 pod 照常啟動、沒有這兩個變數；平台設定 `TRUSTIOT_SMTP_AUTH_REQUIRED` 告訴服務 relay 需要帳號，所以它啟動時記一行 ERROR、`send_code` 回 503，而不是不帶帳號寄信（`services/identity/README.md`「寄信（SMTP）」）。這也表示 Secret 漏建時 `helm install --wait` 與 Flux 不會失敗：要看身分服務的 ERROR。叢集測試（`tests/e2e/`）的 namespace 沒有實例 overlay 指定的依賴 Secret，chart 測試確認每個叢集測試的安裝都不需要它們（「e2e overlays」）。
 

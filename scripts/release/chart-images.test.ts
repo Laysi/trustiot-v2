@@ -310,6 +310,9 @@ describe("packagePinnedChart", () => {
           rewriteRepositories: false,
         });
         const services = pins.filter((pin) => pin.image.kind === "service").flatMap((pin) => ["--set", `services.${pin.image.name}.enabled=true`]);
+        // The AI gateway renders only with a provider key and a model role (deploy/chart/README.md,
+        // "AI 閘道"); on-prem's instance values set none.
+        const aiGateway = ["--set", "ai.providers.anthropic.apiKeySecret.name=trustiot-anthropic", "--set-json", 'ai.roles.test={"models":["anthropic/claude-test"]}'];
         const { stdout } = await run([
           helm,
           "template",
@@ -322,6 +325,7 @@ describe("packagePinnedChart", () => {
           "-f",
           join(CHART, "tests", "values", `${shape}-instance.yaml`),
           ...services,
+          ...aiGateway,
         ]);
         const images = renderedImages(stdout);
         for (const pin of pins) {
