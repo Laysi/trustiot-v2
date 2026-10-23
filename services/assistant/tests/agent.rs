@@ -1,7 +1,8 @@
 //! The main agent loop against a stand-in AI gateway that answers with recorded responses
 //! (tests/fixtures): long analyses without a step limit, the wind-down near the token budget,
-//! an append-only history sent back byte for byte, concurrent users, generic errors and the
-//! per-step logs (Laysi/trustiot-v2#145).
+//! an append-only history sent back byte for byte, concurrent users and generic errors
+//! (Laysi/trustiot-v2#145). The tests that check the agent's logs are in tests/agent_logs.rs:
+//! they must not run alongside these (Laysi/trustiot-v2#581).
 
 mod support;
 
@@ -14,13 +15,11 @@ use assistant::prompt::{BUDGET_EXHAUSTED_RESULT, WIND_DOWN};
 use assistant::tools::{NoDelegation, Tool, ToolContext, ToolError, ToolOutput, ToolSpec};
 use assistant::{AgentError, AgentSettings};
 use serde_json::Value;
-use service_kit::telemetry::is_sensitive;
 use support::{
-    Capture, CountReadings, Reply, StandIn, WAIT, agent, fixture, ok, principal, respond, settings,
+    CountReadings, Reply, StandIn, WAIT, agent, fixture, ok, principal, respond, settings,
     tool_step,
 };
 use tokio::sync::{Barrier, Notify};
-use tracing_subscriber::layer::SubscriberExt as _;
 
 /// Tokens one recorded step processes: 312 input, 4096 cache reads, 188 output.
 const STEP_TOKENS: u64 = 312 + 4096 + 188;
@@ -515,59 +514,6 @@ async fn a_model_call_that_times_out_ends_with_a_generic_error() {
 }
 
 #[tokio::test]
-async fn gateway_errors_reach_the_user_without_their_text() {
-    let detail = format!("upstream detail {}", uuid::Uuid::now_v7());
-    for (status, error_type, expected) in [
-        (504, "timeout_error", AgentError::ModelTimeout),
-        (529, "overloaded_error", AgentError::ModelUnavailable),
-        (502, "api_error", AgentError::ModelUnavailable),
-        (400, "invalid_request_error", AgentError::ModelFailed),
-    ] {
-        let body = serde_json::json!({
-            "type": "error",
-            "error": {"type": error_type, "message": detail},
-        })
-        .to_string();
-        let stand_in = StandIn::start(respond(move |_request, _index| {
-            Reply::Json(status, body.clone())
-        }))
-        .await;
-        let agent = agent(&stand_in, tools(), settings());
-        let mut conversation = agent.start_conversation(principal(), "");
-        let capture = Capture::default();
-        let subscriber = tracing_subscriber::registry().with(capture.clone());
-        let _guard = tracing::subscriber::set_default(subscriber);
-
-        let error = agent
-            .ask(&mut conversation, "Anything?", Arc::new(NoDelegation))
-            .await
-            .expect_err("no answer");
-
-        assert_eq!(error, expected, "status {status}");
-        assert!(!error.to_string().contains(&detail));
-        let events = capture.events();
-        let failed = events
-            .iter()
-            .find(|event| event.message == "model call failed")
-            .expect("the failure is logged");
-        assert_eq!(
-            failed.fields.get("status").map(String::as_str),
-            Some(&*status.to_string())
-        );
-        assert_eq!(
-            failed.fields.get("error_type").map(String::as_str),
-            Some(error_type)
-        );
-        for event in &events {
-            assert!(
-                !format!("{event:?}").contains(&detail),
-                "the gateway's message reached the logs: {event:?}"
-            );
-        }
-    }
-}
-
-#[tokio::test]
 async fn an_unreachable_gateway_is_unavailable() {
     // A port nothing listens on: bind one, then close it.
     let address = {
@@ -622,94 +568,4 @@ async fn a_refusal_is_not_kept_and_the_conversation_goes_on() {
         kinds,
         [EntryKind::Question, EntryKind::Question, EntryKind::Answer]
     );
-}
-
-#[tokio::test]
-async fn every_step_is_logged_with_its_duration() {
-    let stand_in = StandIn::start(respond(|_request, index| {
-        if index < 2 {
-            ok(tool_step(index))
-        } else {
-            ok(fixture("answer_end_turn.json"))
-        }
-    }))
-    .await;
-    let agent = agent(&stand_in, tools(), settings());
-    let mut conversation = agent.start_conversation(principal(), "");
-    let capture = Capture::default();
-    let subscriber = tracing_subscriber::registry().with(capture.clone());
-    let _guard = tracing::subscriber::set_default(subscriber);
-    let question = "Which meters on floor 3 are quiet?";
-
-    agent
-        .ask(&mut conversation, question, Arc::new(NoDelegation))
-        .await
-        .expect("an answer");
-
-    let events = capture.events();
-    let named = |message: &str| -> Vec<&support::Event> {
-        events
-            .iter()
-            .filter(|event| event.message == message)
-            .collect()
-    };
-    let model_calls = named("model call completed");
-    assert_eq!(model_calls.len(), 3);
-    let mut call_ids = Vec::new();
-    for (index, event) in model_calls.iter().enumerate() {
-        let field = |name: &str| {
-            event
-                .fields
-                .get(name)
-                .unwrap_or_else(|| panic!("model call {index} has no {name}"))
-                .clone()
-        };
-        assert_eq!(field("step"), (index + 1).to_string());
-        field("duration_ms")
-            .parse::<u64>()
-            .expect("a duration in ms");
-        call_ids.push(field("llm_call_id"));
-        assert_eq!(field("model"), "anthropic/claude-opus-5-5");
-        let expected_cache_read = if index < 2 { "4096" } else { "100000" };
-        assert_eq!(field("usage.cache_read"), expected_cache_read);
-    }
-    call_ids.sort();
-    call_ids.dedup();
-    assert_eq!(
-        call_ids.len(),
-        3,
-        "every model call has its own llm_call_id"
-    );
-    let tool_calls = named("tool call completed");
-    assert_eq!(tool_calls.len(), 2);
-    for event in &tool_calls {
-        assert_eq!(event.fields.get("outcome").map(String::as_str), Some("ok"));
-        assert!(event.fields.contains_key("duration_ms"));
-    }
-    let finished = named("agent run finished");
-    assert_eq!(finished.len(), 1);
-    assert_eq!(
-        finished[0].fields.get("steps").map(String::as_str),
-        Some("3")
-    );
-    assert!(finished[0].fields.contains_key("duration_ms"));
-    // Nothing the assistant logs is chat content, and no field name is one the log pipeline
-    // would redact.
-    for event in events
-        .iter()
-        .filter(|event| event.target.starts_with("assistant"))
-    {
-        let text = format!("{event:?}");
-        assert!(
-            !text.contains(question),
-            "the question reached the logs: {text}"
-        );
-        assert!(
-            !text.contains("60 readings"),
-            "a tool result reached the logs: {text}"
-        );
-        for name in event.fields.keys() {
-            assert!(!is_sensitive(name), "field {name} would be redacted");
-        }
-    }
 }
