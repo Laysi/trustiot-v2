@@ -455,7 +455,7 @@ schema `certs`，DDL 在 `migrations/postgres/`，由 migration Job（登記在 
 
 ## 映像
 
-`deploy/images/certs/image.toml`：與其他服務相同，交叉編譯成 `aarch64-unknown-linux-musl` 的靜態執行檔（只有 `certs`，`certs-ca` 不進映像），以 `deploy/images/rust-binary.Containerfile` 包成映像。chart 的 `services.certs.enabled` 預設 `false`；nightly 與展示環境的啟用是後續工作。chart 的設定在 [deploy/chart/README.md](../../deploy/chart/README.md) 的「閘道器憑證 CA」。
+`deploy/images/certs/image.toml`：與其他服務相同，交叉編譯成 `aarch64-unknown-linux-musl` 的靜態執行檔（只有 `certs`，`certs-ca` 不進映像），以 `deploy/images/rust-binary.Containerfile` 包成映像。chart 的 `services.certs.enabled` 預設 `false`；2026-10-23（Laysi/trustiot-v2#517）起 nightly 從原始碼建置它、以兩份 values 啟用，並以每次執行自建的測試根 CA 照上面「發簽發 CA 憑證」的步驟走一次（`certs-ca` 隨映像的建置一起編出，只在 runner 上執行；檢查項目見 [CI 與發佈](../../docs/architecture/ci-release.md)「nightly.yml」的「做什麼」第 12 項）。展示環境的啟用是後續工作。chart 的設定在 [deploy/chart/README.md](../../deploy/chart/README.md) 的「閘道器憑證 CA」。
 
 ## 測試
 
