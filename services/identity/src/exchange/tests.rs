@@ -61,6 +61,7 @@ fn claims(audience: ServiceName, iat: i64, exp: i64) -> InternalClaims {
         }),
         platform_admin: true,
         act: None,
+        sid: None,
     }
 }
 

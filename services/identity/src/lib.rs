@@ -20,6 +20,8 @@
 //! - [`csrf`]: the check's refusal of cross-site requests, before the session is looked up.
 //! - [`exchange`]: the token exchange, for services that call another one on behalf of the
 //!   request's user (Laysi/trustiot-v2#106).
+//! - [`delegation`]: run delegations, for an agent run that acts for its user longer than the
+//!   request's token lives (Laysi/trustiot-v2#551).
 //! - [`tenants`]: creating tenants, and the event that announces them.
 //! - [`event_log`]: the event layer: recording every producer's events, and reading them.
 //! - [`schema`]: the migration files this release expects, which readiness checks
@@ -32,6 +34,7 @@
 pub mod audience;
 pub mod config;
 pub mod csrf;
+pub mod delegation;
 pub mod event_log;
 pub mod exchange;
 pub mod ext_authz;
@@ -54,6 +57,7 @@ use sqlx::postgres::PgPoolOptions;
 use utoipa::OpenApi;
 
 use crate::config::Config;
+use crate::delegation::{PgDelegationStore, RunDelegations};
 use crate::event_log::{EventLog, EventLogRecorder};
 use crate::exchange::Exchange;
 use crate::ext_authz::ExtAuthz;
@@ -65,8 +69,9 @@ use crate::tenants::TenantStore;
 
 /// The client API's OpenAPI document (merged into `api/openapi.json` by `tools/openapi`). The
 /// ext_authz check and the token exchange under `/internal` are not part of it: clients never
-/// reach them (the ingress gateway refuses `/internal*`), and the exchange's contract is
-/// `contract::api::identity::ExchangeToken`.
+/// reach them (the ingress gateway refuses `/internal*`), and the contracts of the exchange and
+/// of run delegations are `contract::api::identity::ExchangeToken`, `CreateRunDelegation` and
+/// `ExchangeRunDelegation`.
 #[derive(OpenApi)]
 #[openapi(
     paths(
@@ -91,8 +96,8 @@ pub fn openapi() -> utoipa::openapi::OpenApi {
 /// The service's startup for `service_kit::run`: starts following the public keys file and the
 /// signing keys file ([`Issuer::watch`]), starts keeping the Postgres connections open (with the
 /// session check of `crates/service-kit`), starts the worker that mails login codes, starts
-/// recording the event log ([`event_log`]), serves the token exchange on its own port
-/// ([`serve_exchange`]), and returns the ext_authz check, login, logout, the tenant API and the
+/// recording the event log ([`event_log`]), serves the token exchange and run delegations on
+/// their own port ([`serve_exchange`]), and returns the ext_authz check, login, logout, the tenant API and the
 /// event log API for the API port. Readiness passes once the connections are open
 /// (`PgSessionStore::keep_warm`), the public keys have arrived, a key may sign, and the database
 /// has every migration file this release expects ([`schema::SCHEMA`]).
@@ -159,11 +164,23 @@ pub async fn start(context: Context<Config>) -> Result<Router, BoxError> {
     // Services that call another one on behalf of a user exchange the request's token here, along
     // the deployment's call list (Laysi/trustiot-v2#106), on a port of its own.
     let exchange = Exchange::new(
-        ExchangeVerifier::new(published),
+        ExchangeVerifier::new(published.clone()),
         issuer.clone(),
         platform.on_behalf_calls.clone(),
     );
-    serve_exchange(&context, exchange).await?;
+    // An agent run that acts for its user longer than the request's token lives holds a
+    // delegation, exchanged on the same port along the same call list (Laysi/trustiot-v2#551).
+    let delegations = RunDelegations::new(
+        ExchangeVerifier::new(published),
+        issuer.clone(),
+        platform.on_behalf_calls.clone(),
+        PgDelegationStore::connect_lazy(config.postgres().connect_options())?,
+    );
+    serve_exchange(
+        &context,
+        exchange::routes(exchange).merge(delegation::routes(delegations)),
+    )
+    .await?;
     // Two pools, so a flood of `send_code` never takes the connections `verify_code` and the
     // logouts need (README, "連線池").
     let logins =
@@ -234,18 +251,18 @@ fn start_event_log(context: &Context<Config>) -> Result<Option<EventLog>, BoxErr
     Ok(Some(EventLog::new(db, platform)))
 }
 
-/// Serves the token exchange on its own port (`exchange.listen_addr`), apart from the API port,
-/// so the mesh can grant the services that call on behalf of users this port and nothing else
-/// (deploy/chart/README.md, "呼叫矩陣"). `Context::serve_port` gives it the API port's layers
+/// Serves the token exchange and run delegations (`routes`) on their own port
+/// (`exchange.listen_addr`), apart from the API port, so the mesh can grant the services that
+/// call on behalf of users this port and nothing else (deploy/chart/README.md, "呼叫矩陣"). `Context::serve_port` gives it the API port's layers
 /// (handler timeout, panic recovery, request logs and trace context) and drain.
 ///
 /// # Errors
 ///
 /// When the port is taken: the service does not start.
-async fn serve_exchange(context: &Context<Config>, exchange: Exchange) -> Result<(), BoxError> {
+async fn serve_exchange(context: &Context<Config>, routes: Router) -> Result<(), BoxError> {
     let address = context.config().exchange.listen_addr;
     let bound = context
-        .serve_port(address, exchange::routes(exchange))
+        .serve_port(address, routes)
         .await
         .map_err(|error| format!("token exchange, exchange.listen_addr: {error}"))?;
     tracing::info!(

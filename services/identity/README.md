@@ -47,7 +47,7 @@ SPA 與 API 同源（決策 2），SPA 自己送的請求一律是同源；別�
 JWS compact serialization，格式與驗證規則在 [`crates/service-kit` 的「內部身分」](../../crates/service-kit/README.md)：
 
 - 保護標頭剛好是 `{"alg":"EdDSA","typ":"internal-identity+jwt","kid":"<kid>"}`，Ed25519 簽章。
-- payload 是 `contract::InternalClaims`：`iss` 一律 `identity`；`sub` 是使用者；`aud` 是請求要去的服務；`iat` 是簽發時間，`exp = iat + 60`；`tenant` 是 session 目前的租戶與使用者在那裡的角色（沒有選租戶、或已不是成員時省略）；`platform_admin` 是平台管理者（A2）。
+- payload 是 `contract::InternalClaims`：`iss` 一律 `identity`；`sub` 是使用者；`aud` 是請求要去的服務；`iat` 是簽發時間，`exp = iat + 60`；`tenant` 是 session 目前的租戶與使用者在那裡的角色（沒有選租戶、或已不是成員時省略）；`platform_admin` 是平台管理者（A2）；`sid` 是 session 的 ID（Laysi/trustiot-v2#551 起），只有身分服務用它把 [run 委派](#agent-執行期間的委派)綁在 session 上，其他服務忽略它，換出的 token 不帶。session ID 不是 credential：cookie 裡的是另一個隨機值，資料庫只存它的雜湊。
 - 效期 60 秒（`TOKEN_LIFETIME_SECS`）：token 在效期內是受眾服務的 bearer credential，所以要短；輪替也要等驗證端接受的最長效期（300 秒）。
 
 角色每個請求都從 `memberships` 重新讀：改角色或移除成員，下一個請求就生效，不必等 session 過期。
@@ -82,6 +82,36 @@ token 交換在自己的埠（`exchange.listen_addr`，預設 `0.0.0.0:8082`，c
 呼叫清單是 `TRUSTIOT_ON_BEHALF_CALLS`（JSON `{"<呼叫端>": ["<被呼叫端>", ...]}`），chart 從 `mesh.calls` 推得：兩個啟用的服務之間的呼叫，`ai-gateway` 兩個方向都不在（[chart README](../../deploy/chart/README.md) 的「服務間授權（mesh）」與「呼叫矩陣」）。沒設時是空的，什麼都不換；不是 JSON、名稱不認得或含 `ai-gateway` 時拒絕啟動，訊息只寫變數名稱與原因，不引用設定值。啟動時 INFO `serving the token exchange` 寫出清單的呼叫數。
 
 背景工作沒有使用者的請求，不換 token（[service-kit README](../../crates/service-kit/README.md) 的「背景工作沒有使用者身分」）。
+
+## agent 執行期間的委派
+
+Laysi/trustiot-v2#551（2026-10-23 決定，決策 27 的補充）：AI 助理的主 agent 回答一個問題時，可能跑上好幾分鐘，每次工具呼叫都要以使用者的身分呼叫其他服務，但請求帶來的 token 只活 60 秒，token 交換換出的 token 也不會比它晚到期。這時持有者（目前只有 `assistant`，`delegation::HOLDERS`，加一個要改程式並審查，不是設定）在請求的 token 還有效時建立一個 run 委派，之後每次呼叫前用它換一張 60 秒的 token。契約是 `contract::api::identity::CreateRunDelegation` 與 `ExchangeRunDelegation`，呼叫端用 `crates/service-kit` 的 `RunDelegations`；程式在 `src/delegation.rs`。兩個路徑都在 token 交換的埠（8082），mesh 與 NetworkPolicy 和 token 交換相同。
+
+**建立**：`POST /internal/run-delegations`，`x-internal-identity` 帶入口 gateway 的請求簽給持有者的 token，本文 `{"run_id", "key", "lifetime_secs"}`（最多 1 KiB）。`key` 是持有者為這次 run 產生的 Ed25519 公鑰（base64url），私鑰只留在持有者的行程裡。依序：token 驗不過 401、沒有公鑰 503；本文不對、效期不在 1–900 秒、`key` 不是可用的 Ed25519 公鑰（含 small-order 點）400；token 帶 `act` 403（只換一跳）；token 的受眾不是持有者 403；token 沒有 `sid`（#551 之前簽的）401；session 已撤銷、過期或使用者已刪除 401，使用者已不是 token 租戶的成員 403，資料庫失敗 503。成功回 200 `{"delegation", "expires_at"}`。
+
+**換 token**：`POST /internal/run-delegations/token`，`x-internal-identity` 帶委派，本文 `{"audience", "iat", "proof"}`，`proof` 是 run 私鑰對 `run_proof_message(委派, audience, iat)` 的簽章，`iat` 要在現在的 ±30 秒內（`RUN_PROOF_WINDOW_SECS`）。依序：委派的 MAC 驗不過 401、還沒讀到簽章金鑰檔 503；過期、`iat` 在未來超過 5 秒、或效期超過 900 秒（即使 MAC 正確）401；本文不對 400；proof 過期或驗不過 401；持有者已不在 `HOLDERS` 403；呼叫清單沒有「持有者 → `audience`」403；**每次都重查**：session 不再有效 401，使用者已不是委派租戶的成員 403，資料庫失敗 503。成功回 200 `{"token"}`：和 token 交換換出的形狀相同（`sub`、委派的租戶與**現在**的角色、現在的 `platform_admin`、`act` 是持有者、沒有 `sid`），`iat` 是現在，`exp` 是現在加 60 秒與委派到期取早者。被呼叫端不用改任何東西。
+
+**格式**：委派是 `trd1.<payload>.<mac>`，payload 是 `DelegationClaims`（`sub`、`sid`、`tenant`、`holder`、`run`、`key`、`iat`、`exp`）的 JSON，MAC 是 HMAC-SHA-256，金鑰是當下簽章的那把 Ed25519 私鑰對標籤 `trustiot-run-delegation-key:v1` 的 HMAC-SHA-256（和驗證碼的金鑰同樣的導出方式、不同的標籤，`src/issuer.rs`）。只有身分服務有簽章金鑰，所以只有它做得出、驗得了委派；它不是 JWS，任何服務的驗證端與 token 交換都不接受它。驗證時接受簽章金鑰檔裡每一把沒被撤銷的金鑰導出的 MAC，所以換簽章金鑰不影響進行中的 run；調 `revokeBeforeGeneration` 撤銷一代時，以那代簽的委派立即失效。委派不存在資料庫，換 token 只讀 session 與成員資格。
+
+**上限**：
+
+- 委派最長 900 秒（`RUN_DELEGATION_MAX_LIFETIME_SECS`，15 分鐘），持有者可以要更短的。到期後換不到 token，run 要以使用者的新請求重新開始。900 秒不超過舊金鑰從換金鑰到被移除的最短時間（`keyPropagationSeconds` 預設 600 加 305 秒）；`keyPropagationSeconds` 設得比 595 秒短時，換金鑰後的下一次重啟可能讓剛開始的 run 提早結束（換 token 回 401），不會延長任何委派。
+- 換出的 token 一張 60 秒，每次呼叫換一張，不重用。
+- 只換一跳：換出的 token 帶 `act`，兩個路徑與 token 交換都不接受帶 `act` 的 token。
+- 只到呼叫清單（`mesh.calls`）上持有者可以呼叫的服務。
+
+**撤銷**：登出、登出所有裝置、session 被撤銷、session 過期或使用者被刪除之後，下一次換 token 就回 401；使用者被移出委派的租戶，下一次回 403；角色改變時下一張 token 帶新角色、平台管理者旗標也重讀。已經換出的 token 在剩下的效期（最多 60 秒）內仍有效，和入口簽的 token 相同。
+
+**威脅模型**：
+
+- 委派外洩（日誌、存下來的 run、錯誤報告）：沒有 run 私鑰換不到 token。持有者以外的服務拿到委派也一樣（每個呼叫端都連得到這個埠，ztunnel 不把呼叫端身分交給應用程式，所以呼叫端以 proof 認定）。
+- proof 被截取：proof 綁定委派、受眾與 `iat`，只能在 ±30 秒內、對同一個受眾重播。這需要同時拿到委派與 mesh mTLS 裡的流量，代價和直接截取換出的 60 秒 token 相同。
+- 竄改委派（換掉公鑰、持有者、租戶、延長期限）：MAC 驗不過；未知欄位一律拒絕。
+- 持有者行程被控制：可以在進行中的 run 期間代表那些使用者呼叫清單上的服務，和它拿著請求 token 時能做的相同，只是時間多到委派的上限；撤銷 session 或把使用者移出租戶會在下一次呼叫生效。不擋的部分記在 Laysi/trustiot-v2#509（呼叫端工作負載驗證）。
+
+**連線池**：查 session 與成員資格用自己的連線池（`delegation::POOL_CONNECTIONS` 4 條，取得連線最多等 5 秒，每次查詢最多 5 秒，同時最多 64 個在等，多的立即回 503），和 ext_authz 的分開：大量換 token 不會讓每個請求都要的 cookie 檢查等連線。成員資格是租戶資料，以委派裡的租戶開 RLS 交易讀（`BackgroundTenantDb`，只在這個查詢裡用）；那個租戶來自身分服務自己簽的委派，建立時查過成員資格，不是請求給的。
+
+**日誌**：建立記 INFO（持有者、run、效期）；換到記 DEBUG（持有者、受眾、run）；session 不再有效、委派到期、使用者不再是成員記 INFO（run 照預期結束）；其他 401、403 記 WARN（原因如 `invalid_delegation`、`invalid_proof`、`stale_proof`、`not_listed`）；503 記 WARN。委派、proof、公鑰、token 與使用者都不進日誌。
 
 ## session
 
@@ -280,10 +310,11 @@ schema `identity`，DDL 在 `migrations/postgres/`，由 migration Job（Laysi/t
 | 租戶（`tenants::POOL_CONNECTIONS`） | 租戶 API | 2 |
 | 登入請求（`login::POOL_CONNECTIONS`） | `verify_code`、登出、登出所有裝置 | 4 |
 | 寄信（`login::SEND_POOL_CONNECTIONS`） | 發驗證碼的 worker（發碼、作廢沒寄出的驗證碼）、每小時刪除舊的驗證碼 | 2 |
+| run 委派（`delegation::POOL_CONNECTIONS`） | 建立 run 委派與每次換 token 時查 session 與成員資格（見[agent 執行期間的委派](#agent-執行期間的委派)） | 4 |
 | 事件紀錄的服務角色（`event_log::SERVICE_CONNECTIONS`） | 事件紀錄的消費端寫入、租戶的事件紀錄 API | 4 |
 | 事件紀錄的平台角色 | 消費端讀各產生端的 outbox、後台的事件紀錄 API（以 `identity_platform` 連線，見[事件層與操作紀錄](#事件層與操作紀錄)） | `CONSUMES` 數加 2，目前 4 |
 
-寄信的連線池與登入請求的分開，所以大量的 `send_code` 不會讓 `verify_code` 與登出等連線、逾時回 503。worker 同時寄 4 封，但每封只在發碼的短交易裡用一條連線，寄信的期間不佔連線，所以 2 條就夠；等連線超過 5 秒（`ACQUIRE_TIMEOUT`）的那一封記 ERROR、不寄，使用者再要一次。預設設定下每個副本最多 26 條：22 條以 `identity_app`、4 條以 `identity_platform` 連線（這兩個角色沒有個別的連線數上限）；所有服務、所有副本的連線池加總要低於 Postgres 的 `max_connections`（chart 的 `postgres.bundled.parameters.max_connections`，預設 100，見 [chart 的 README](../../deploy/chart/README.md)），換版時新舊副本會同時存在。
+寄信的連線池與登入請求的分開，所以大量的 `send_code` 不會讓 `verify_code` 與登出等連線、逾時回 503。worker 同時寄 4 封，但每封只在發碼的短交易裡用一條連線，寄信的期間不佔連線，所以 2 條就夠；等連線超過 5 秒（`ACQUIRE_TIMEOUT`）的那一封記 ERROR、不寄，使用者再要一次。預設設定下每個副本最多 30 條：26 條以 `identity_app`、4 條以 `identity_platform` 連線（這兩個角色沒有個別的連線數上限）；所有服務、所有副本的連線池加總要低於 Postgres 的 `max_connections`（chart 的 `postgres.bundled.parameters.max_connections`，預設 100，見 [chart 的 README](../../deploy/chart/README.md)），換版時新舊副本會同時存在。
 
 ## 簽章金鑰
 
@@ -381,7 +412,9 @@ CARGO_BUILD_JOBS=2 cargo test -p identity
 | `src/login.rs` | 地址的正規化、驗證碼的格式與產生（每一位數字都出現、`Debug` 不顯示）、驗證碼雜湊是帶金鑰的 HMAC 並綁定金鑰、用途與地址（與 OpenSSL 算出的值比對）、`redirect_to` 接受與拒絕的寫法、請求的解析（`password` 等多餘欄位、未知的 `step`、重複的鍵都拒絕）、信件只在內文帶驗證碼 |
 | `src/mail.rs` | 地址與寄件者的格式（拒絕換行與非 ASCII 地址）、標頭的編碼、信件的組成與 dot-stuffing、SMTP 回應的解析、錯誤訊息只有步驟與回應碼、`Debug` 不顯示信件 |
 | `tests/login.rs` | 真的服務、產品 schema 與測試起的假 SMTP relay（`tests/support/smtp.rs`，測試 CA 簽的 TLS，地址都在 example.com）：完整流程（202、經 STARTTLS 與 AUTH 寄出、200 與 cookie 屬性、12 小時的 session、通過 ext_authz；資料表裡的不是不帶金鑰的 SHA-256），重放、過期、猜錯 5 次、別的地址的驗證碼、新驗證碼作廢舊的都被拒，4 個同時送出只有一個成功；網址帶驗證碼回 400 且不算嘗試；TRACE 等級的日誌與回應都沒有驗證碼、地址、cookie 與 relay 密碼；`redirect_to` 指到別的網域都 422 且不算嘗試；登出與登出所有裝置後下一個請求 401、別人的 session 不受影響、重新登入撤銷舊 session；角色變更與移除成員在下一個請求生效；寄送限制與不存在的地址（同樣的 202、不寄），同一個地址 8 個同時送出只寄一封；relay 不提供 STARTTLS、STARTTLS 後注入、憑證不是設定的 CA 簽的都不寄並作廢驗證碼；沒有 relay 時 503，設定不完整（含 `TRUSTIOT_SMTP_AUTH_REQUIRED` 是 `true` 卻沒有帳密，chart 的 Secret 不存在時就是這樣）時照常服務、記 ERROR 且不印出值、`send_code` 回 503；延長期限與 7 天上限；兩步的跨站請求（`Sec-Fetch-Site: cross-site`、`same-site`、沒有 `Sec-Fetch-Site` 時不符的 `Origin`）都回 403 `security.cross_site_request` 且什麼都沒改變（沒有驗證碼列、沒有寄信、不算嘗試、沒有新 session、瀏覽器原本的 session 不被撤銷，日誌只有標頭名稱），跨站的登出被 cookie 檢查擋下，同源的請求（`Sec-Fetch-Site: same-origin` 或相符的 `Origin`）照常登入；路由測試（只有 OpenAPI 的四個端點，沒有密碼、註冊與假登入，cookie 開不了）；編譯期檢查（沒有 Cargo feature、optional dependency、build script 與依建置設定或建置環境改變的程式） |
-| `src/issuer.rs` | token 的標頭與 claims 剛好是約定的格式、只有受眾驗得過、過期後被拒；`kid` 的判斷；公鑰沒部署時拒絕；錯誤與 `Debug` 不含私鑰；驗證碼的金鑰由簽章金鑰導出（換簽章金鑰就換、切換前的仍可驗證、撤銷的代與沒有金鑰時沒有） |
+| `src/issuer.rs` | token 的標頭與 claims 剛好是約定的格式、只有受眾驗得過、過期後被拒；`kid` 的判斷；公鑰沒部署時拒絕；錯誤與 `Debug` 不含私鑰；驗證碼的金鑰與 run 委派的 MAC 金鑰由簽章金鑰導出（換簽章金鑰就換、兩者不同、切換前的仍可驗證、撤銷的代與沒有金鑰時沒有）；ext_authz 簽的 token 帶 session 的 `sid` |
+| `src/delegation/tests.rs` | run 委派（Laysi/trustiot-v2#551），以假的 store 控制 session 與成員資格：10 分鐘前建立的委派（請求的 token 早已過期）仍換得到受眾正確、被呼叫端接受的 60 秒 token，`act` 是 assistant、沒有 `sid`，每次建立與換 token 都查一次 store；委派先到期時 token 跟著到期；session 結束後換 token 與建立都 401；過期、在未來簽的、效期超過 900 秒（MAC 正確也一樣）的委派 401，900 秒剛好可以，超過上限的效期不簽；角色改變時下一張 token 帶新角色與管理者旗標，移出租戶後 403；換出的 token（兩種來源）不能建立委派、不能當委派換、也不能在 token 交換再換，委派不被任何服務的驗證端與 token 交換接受；只有清單上的受眾與 `HOLDERS` 的服務換得到；冒用與重播：別的私鑰、給別的受眾、別的委派、別的時間的 proof，±30 秒外的 proof，空的、不是 base64url、長度不對的 proof，換掉公鑰、別的服務金鑰、改過 MAC、改前綴的委派，撤銷的代，重複或缺少的標頭都 401；換簽章金鑰後舊金鑰簽的委派仍可用；壞 token、沒有 `sid`、壞本文、small-order 公鑰、超過 1 KiB 400 或 401，`GET` 405；沒有公鑰、沒有簽章金鑰、資料庫失敗 503；未知欄位的 payload 被拒；以 service-kit 的 `RunDelegations` 端到端呼叫：被呼叫端看到同一個使用者與 `act`，清單外 `permission_denied`，session 結束後 `unauthenticated` |
+| `tests/ext_authz.rs` 的 run 委派 | Laysi/trustiot-v2#551，真的服務與 Postgres：ext_authz 給 assistant 的 token 建立委派，在 token 交換的埠換到 certs 接受的 60 秒 token（同一個使用者、`act` 是 assistant），清單外 403，別的私鑰 401；以服務自己的測試金鑰簽一個 10 分鐘前建立的委派，仍換得到 token；改角色後下一張帶新角色，刪除成員資格後 403、加回後恢復；撤銷 session 後兩個委派都 401；日誌有建立的 INFO，沒有委派與 token |
 | `src/audience.rs` | `Exact` 優先與最長 `PathPrefix`、主機比對；不能用的路由設定拒絕啟動且不引用設定值 |
 | `src/csrf.rs` | 跨站請求的判斷：`Sec-Fetch-Site` 的每個值、重複與合併的值，`Origin` 的主機、埠號、scheme 與格式，沒有標頭時放行 |
 | `src/exchange/tests.rs` | token 交換（Laysi/trustiot-v2#106）：清單上的呼叫端換到同一個使用者、租戶、角色的 token，到期不晚於原 token；重播：受眾不是驗證端的 token 被每個服務拒絕，過期的 token 換不到；只有清單上的組合換得到；換來的 token 帶 `act`，即使清單上有對應的呼叫也不能再換（只換一跳）；缺少、重複、偽造的 token 401，token 先於本文檢查，各種壞本文 400，`GET` 405，沒有公鑰或簽章金鑰 503；清單的解析錯誤不引用設定值；以 `OnBehalf` 端到端呼叫：被呼叫端看到的是同一個使用者 |

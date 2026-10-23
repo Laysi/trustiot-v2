@@ -14,8 +14,15 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use contract::{ServiceName, TenantRole};
+use base64::Engine;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use contract::api::identity::{CreateRunDelegation, ExchangeRunDelegation, run_proof_message};
+use contract::client::Endpoint;
+use contract::{RunId, ServiceName, TenantRole};
+use identity::delegation::DelegationClaims;
+use identity::issuer::Issuer;
 use identity::session::{SessionSecret, WARM_CONNECTIONS};
+use identity_keys::SigningKeys;
 use serde_json::json;
 use service_kit::identity::{IdentityError, IdentityKeys, IdentityVerifier, UserIdentity};
 use sqlx::{Connection, PgConnection};
@@ -142,6 +149,7 @@ impl Fixture {
         let routes = json!([
             {"host": APP, "path": "/", "match": "PathPrefix", "service": "assets"},
             {"host": APP, "path": "/api/certs", "match": "PathPrefix", "service": "certs"},
+            {"host": APP, "path": "/api/assistant", "match": "PathPrefix", "service": "assistant"},
         ]);
         let mut env = self.files.env();
         env.extend([
@@ -438,6 +446,208 @@ async fn a_routed_token_is_exchanged_along_the_call_list_only() {
     }
     assert_unauthenticated(&exchange(&service, None, "certs"));
     assert_unauthenticated(&exchange(&service, Some("forged"), "certs"));
+}
+
+/// Revokes every session of a user, as logging out everywhere does.
+const REVOKE_SESSIONS: &str = "UPDATE identity.sessions SET revoked_at = now()
+WHERE user_id = $1::uuid AND revoked_at IS NULL";
+
+/// A run's key, derived in code from a one-byte seed: a throwaway test key.
+fn run_key(seed: u8) -> ed25519_dalek::SigningKey {
+    ed25519_dalek::SigningKey::from_bytes(&[seed; 32])
+}
+
+fn public(key: &ed25519_dalek::SigningKey) -> String {
+    URL_SAFE_NO_PAD.encode(key.verifying_key().as_bytes())
+}
+
+/// One request to a run delegation route, on the exchange's port, with `credential` in
+/// `x-internal-identity`.
+fn delegation_request(
+    service: &Service,
+    route: &str,
+    credential: &str,
+    body: &serde_json::Value,
+) -> support::Response {
+    request_with_body(
+        service.exchange_address,
+        "POST",
+        route,
+        &[
+            ("Content-Type", "application/json"),
+            ("x-internal-identity", credential),
+        ],
+        body.to_string().as_bytes(),
+    )
+    .expect("run delegation request")
+}
+
+/// Exchanges `delegation` for a token to `audience`, with a proof of `key` made now.
+fn exchange_delegation(
+    service: &Service,
+    delegation: &str,
+    key: &ed25519_dalek::SigningKey,
+    audience: ServiceName,
+) -> support::Response {
+    use ed25519_dalek::Signer;
+    let iat = identity::issuer::unix_now();
+    let message = run_proof_message(delegation, audience, iat);
+    let proof = URL_SAFE_NO_PAD.encode(key.sign(&message).to_bytes());
+    delegation_request(
+        service,
+        ExchangeRunDelegation::ROUTE,
+        delegation,
+        &json!({"audience": audience.as_str(), "iat": iat, "proof": proof}),
+    )
+}
+
+/// Acceptance (Laysi/trustiot-v2#551), with the real binary and Postgres: the assistant starts
+/// a delegation with the token the check signed for it, and exchanges it for certs, which the
+/// call list lets it call, and for nothing else. A delegation issued ten minutes ago still works;
+/// each exchange reads the role again; a removed member and a revoked session stop the next
+/// exchange; neither the delegation nor a token reaches the logs.
+#[tokio::test]
+async fn a_run_delegation_acts_for_the_user_until_the_session_ends() {
+    let Some(fixture) = Fixture::new(
+        "CREATE DATABASE identity_run_delegation OWNER identity_owner",
+        "identity_run_delegation",
+    )
+    .await
+    else {
+        return;
+    };
+    fixture.add_user(USER, false).await;
+    fixture.add_membership(TENANT_A, USER, "viewer").await;
+    let secret = fixture
+        .add_session(USER, Some(TENANT_A), SESSION_SECS, false)
+        .await;
+    let calls = json!({"assistant": ["certs"]}).to_string();
+    let service = fixture.service_with(&[("TRUSTIOT_ON_BEHALF_CALLS", &calls)]);
+
+    let response = check(&service, "/api/assistant/chat", Some(&cookie(&secret)));
+    let user = verified(&fixture, &response, ServiceName::Assistant);
+    let session = user.claims().sid.expect("the token names its session");
+    let token = response.header_values("x-internal-identity")[0].to_owned();
+    let key = run_key(21);
+    let run: RunId = "01928f6e-7a3c-7d4e-8f00-0000000000a1"
+        .parse()
+        .expect("run id");
+    let created = delegation_request(
+        &service,
+        CreateRunDelegation::ROUTE,
+        &token,
+        &json!({"run_id": run.to_string(), "key": public(&key), "lifetime_secs": 900}),
+    );
+    assert_eq!(created.status, 200, "{}", created.raw());
+    assert_eq!(created.header_values("cache-control"), ["no-store"]);
+    let delegation = created.json()["delegation"]
+        .as_str()
+        .expect("a delegation")
+        .to_owned();
+    for audience in ServiceName::ALL {
+        assert!(
+            fixture.verifier(audience).verify(&delegation).is_err(),
+            "{audience} refuses the delegation as a token"
+        );
+    }
+
+    let role_at_certs = |response: &support::Response| {
+        assert_eq!(response.status, 200, "{}", response.raw());
+        let token = response.json()["token"]
+            .as_str()
+            .expect("a token")
+            .to_owned();
+        let at_certs = fixture
+            .verifier(ServiceName::Certs)
+            .verify(&token)
+            .expect("certs accepts the token");
+        assert_eq!(at_certs.user_id(), user.user_id());
+        assert_eq!(
+            at_certs.claims().act.as_ref().map(|act| act.sub),
+            Some(ServiceName::Assistant)
+        );
+        assert_eq!(at_certs.claims().sid, None);
+        assert_eq!(at_certs.claims().exp - at_certs.claims().iat, 60);
+        at_certs.tenant().map(|grant| grant.role)
+    };
+    let to_certs =
+        |delegation: &str| exchange_delegation(&service, delegation, &key, ServiceName::Certs);
+    assert_eq!(
+        role_at_certs(&to_certs(&delegation)),
+        Some(TenantRole::Viewer)
+    );
+    // Not on the call list.
+    let refused = exchange_delegation(&service, &delegation, &key, ServiceName::Alerts);
+    assert_eq!(refused.status, 403, "{}", refused.raw());
+    // Someone who has the delegation but not the run's key.
+    assert_unauthenticated(&exchange_delegation(
+        &service,
+        &delegation,
+        &run_key(22),
+        ServiceName::Certs,
+    ));
+
+    // A delegation this service issued ten minutes ago, long after the request's token expired:
+    // signed here with the service's own test key, as the create route would have then.
+    let issuer = Issuer::with_keys(
+        SigningKeys::parse(&signing_keys(&[(&fixture.key, KID, 1, 0)])).expect("signing keys"),
+        IdentityKeys::from_jwks(&fixture.keys())
+            .expect("keys")
+            .into(),
+        0,
+    );
+    let now = identity::issuer::unix_now();
+    let old = identity::delegation::sign(
+        &issuer,
+        &DelegationClaims {
+            sub: user.user_id(),
+            sid: session,
+            tenant: user.tenant_id(),
+            holder: ServiceName::Assistant,
+            run,
+            key: public(&key),
+            iat: now - 600,
+            exp: now + 300,
+        },
+        now - 600,
+    )
+    .expect("sign")
+    .expose()
+    .to_owned();
+    assert_eq!(role_at_certs(&to_certs(&old)), Some(TenantRole::Viewer));
+
+    // The role is read on every exchange; a removed member gets nothing.
+    fixture
+        .owner_execute(UPDATE_ROLE, &[TENANT_A, USER, "editor"])
+        .await;
+    assert_eq!(
+        role_at_certs(&to_certs(&delegation)),
+        Some(TenantRole::Editor)
+    );
+    fixture
+        .owner_execute(DELETE_MEMBERSHIP, &[TENANT_A, USER])
+        .await;
+    let refused = to_certs(&delegation);
+    assert_eq!(refused.status, 403, "{}", refused.raw());
+    assert_eq!(refused.json()["code"], json!("permission_denied"));
+    fixture.add_membership(TENANT_A, USER, "viewer").await;
+    assert_eq!(
+        role_at_certs(&to_certs(&delegation)),
+        Some(TenantRole::Viewer)
+    );
+
+    // Logging out everywhere stops the run's next call.
+    fixture.owner_execute(REVOKE_SESSIONS, &[USER]).await;
+    for delegation in [&delegation, &old] {
+        assert_unauthenticated(&to_certs(delegation));
+    }
+
+    let logs = service.stop();
+    assert!(logs.contains("issued a run delegation"), "{logs}");
+    for credential in [&delegation, &old, &token] {
+        let (_, mac) = credential.rsplit_once('.').expect("a signed value");
+        assert!(!logs.contains(mac), "a credential reached the logs");
+    }
 }
 
 /// Acceptance: missing, malformed, unknown, expired and revoked sessions get 401.
