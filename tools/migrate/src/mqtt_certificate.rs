@@ -82,6 +82,11 @@ const RETRY_EVERY: Duration = Duration::from_secs(5);
 /// copy of the key behind.
 const PATCH_CAPACITY: usize = 64 * 1024;
 
+/// The PEM label of a PKCS #8 private key (RFC 7468, section 10). Kept apart from the
+/// encapsulation boundaries in `KeyRequest::key_pem` so this source file does not have the
+/// shape of a PEM private key, which secret scanners report (no key is in it).
+const PKCS8_KEY_LABEL: &str = "PRIVATE KEY";
+
 /// What the errors about the Secret tell an operator.
 const SECRET_HINTS: Hints = Hints {
     missing: "does not exist. The chart declares it without data while the MQTT broker is \
@@ -330,13 +335,17 @@ impl KeyRequest {
         let mut encoded = Zeroizing::new(String::with_capacity(encoded_len));
         STANDARD.encode_string(der, &mut encoded);
         let mut pem = Zeroizing::new(String::with_capacity(encoded.len() * 2 + 64));
-        pem.push_str("-----BEGIN PRIVATE KEY-----\n");
+        pem.push_str("-----BEGIN ");
+        pem.push_str(PKCS8_KEY_LABEL);
+        pem.push_str("-----\n");
         for line in encoded.as_bytes().chunks(64) {
             // Base64 is ASCII, so every chunk is valid UTF-8.
             pem.push_str(std::str::from_utf8(line).unwrap_or_default());
             pem.push('\n');
         }
-        pem.push_str("-----END PRIVATE KEY-----\n");
+        pem.push_str("-----END ");
+        pem.push_str(PKCS8_KEY_LABEL);
+        pem.push_str("-----\n");
         pem
     }
 }

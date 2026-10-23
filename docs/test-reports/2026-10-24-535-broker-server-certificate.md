@@ -6,7 +6,7 @@ Laysi/trustiot-v2#535：broker 的伺服器憑證改由 chart 的 CronJob `<rele
 
 ## 環境
 
-- **程式碼**：分支 `feat/535-broker-server-certificate`：功能的 commit 9dc4cae7、合併 main（0dc8fd96）的 b86e34aa，以及修正兩個測試的 commit（這份報告與它在同一個 commit）。最後一輪檢查在這三個 commit 的樹上執行。
+- **程式碼**：分支 `feat/535-broker-server-certificate`：功能的 commit 9dc4cae7、合併 main（0dc8fd96）的 b86e34aa、修正兩個測試的 b3233160，以及改寫私鑰 PEM 邊界寫法的 commit（這份報告與它在同一個 commit）。下面「指令」的完整一輪在前三個 commit 的樹上執行；第四個 commit 只改 `tools/migrate/src/mqtt_certificate.rs` 組 PEM 邊界的方式與 `.gitleaksignore`，在它的樹上重跑的檢查列在「推送前的 secret 掃描」。
 - **建置主機**（經檢查佇列）：x86_64 Linux，`CI=1`；需要容器的測試以 rootless podman 起拋棄式的 TLS Postgres（`crates/testkit`）與 Mosquitto（`docker.io/library/eclipse-mosquitto:2.1.2-alpine`，以 digest 釘選）。Rust 1.99.0（`rust-toolchain.toml`），bun 1.4.2、helm 4.3.0、kubeconform 0.8.0（`.prototools` 釘選的版本）。
 - **工作站**：gitleaks（`.prototools` 釘選的版本）。
 
@@ -92,6 +92,15 @@ chart 層的放行規則由上面的 chart 測試證明；在 ambient mesh 裡�
 這一輪之前，完整的測試抓到兩個這個分支自己的問題，已在同一個 PR 修正：`services/certs/tests/key_custody.rs` 掃描 `tools/migrate/src` 裡把私鑰變成位元組的程式碼，CronJob 寫 `tls.key` 的那一處需要審查後列入清單；`tools/migrate/tests/mqtt_broker.rs` 原本比對閘道器埠關閉時用戶端的錯誤文字，libmosquitto 依非阻塞 connect 失敗的時機回 `Connection refused` 或 `Bad file descriptor`，改成以 trust sidecar 的 `listens_on` 讀容器的 socket 表（1883 在聽、8883 沒有）；同一個測試在故意被拒的 TLS 握手之後檢查日誌沒有問題行，順序改成先檢查日誌再做被拒的連線。
 
 證據檔是最後的程式碼在建置主機上重跑 `broker_certificate.rs` 的輸出。
+
+### 推送前的 secret 掃描
+
+在工作站以 `docs/architecture/secrets.md`「公開 repo 的資訊規則」的兩處掃描檢查。第一次掃描分支的 commit 範圍時，gitleaks 的 `private-key` 規則在功能的 commit（9dc4cae7）報了一筆：`tools/migrate/src/mqtt_certificate.rs` 把 CronJob 執行時產生的私鑰包成 PEM 的程式碼，BEGIN 與 END 兩行是字面字串，中間是組 base64 的迴圈，形狀像一把 PEM 私鑰；原始碼裡沒有金鑰。處理方式：
+
+- 邊界改由常數 `PKCS8_KEY_LABEL` 組出，tree 不再符合這條規則，輸出的位元組不變（單元測試 `the_key_is_pkcs8_pem_and_matches_the_request` 仍以字面文字比對兩條邊界，並以 rcgen 解析出同一把金鑰）。
+- CI 會掃 PR 的每個 commit，後面的 commit 清不掉前面 commit 的發現，所以 9dc4cae7 的那一筆依 `.gitleaksignore` 對其他只在分支上的 commit 的慣例，附理由列入。
+
+改完之後在建置主機重跑，全部 exit 0：`cargo fmt --all --check` 沒有差異；`cargo clippy --locked --workspace --all-targets -- -D warnings` 沒有警告；`CI=1 cargo test --locked -p migrate -p repo-check --no-fail-fast` 26 個測試目標，181 通過，0 失敗，0 略過；`cargo test --locked -p certs --test key_custody` 3 通過。兩處掃描的結果在 PR 描述（掃描的對象包含這份報告所在的 commit）。
 
 ## nightly（待補）
 
