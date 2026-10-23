@@ -1,15 +1,48 @@
-import { isLocale, type Locale } from "../i18n/messages.ts";
+import { LOCALES, type Locale } from "../i18n/messages.ts";
+import { z } from "../lib/zod.ts";
 
-export type Theme = "system" | "light" | "dark";
-export const THEMES: readonly Theme[] = ["system", "light", "dark"];
+export const THEMES = ["system", "light", "dark"] as const;
+export type Theme = (typeof THEMES)[number];
+
+export function isTimeZone(zone: string): boolean {
+  try {
+    new Intl.DateTimeFormat(undefined, { timeZone: zone });
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 /** "auto" follows the browser's time zone; anything else is an IANA name such as Asia/Taipei. */
-export type TimeZonePreference = "auto" | (string & {});
+const TimeZoneSchema = z.union([z.literal("auto"), z.string().refine(isTimeZone)]);
+export type TimeZonePreference = z.output<typeof TimeZoneSchema>;
 
-export interface Preferences {
-  locale: Locale;
-  timeZone: TimeZonePreference;
-  theme: Theme;
+/** The preferences, each field with the values it may have. */
+const PreferencesShape = z.object({
+  locale: z.enum(LOCALES),
+  timeZone: TimeZoneSchema,
+  theme: z.enum(THEMES),
+});
+export type Preferences = z.output<typeof PreferencesShape>;
+
+/** The storage key and the format version of the stored value. */
+export const STORAGE_KEY = "trustiot.preferences";
+const VERSION = 1;
+
+/**
+ * What is stored: the version and every field. A field that is missing or not allowed falls back
+ * to its own default, so one bad value (an old time zone name, a hand-edited entry) does not reset
+ * the rest; another version, or something that is not an object, fails as a whole.
+ */
+function storedSchema(fallback: Preferences) {
+  return z
+    .object({
+      v: z.literal(VERSION),
+      locale: PreferencesShape.shape.locale.catch(fallback.locale),
+      timeZone: PreferencesShape.shape.timeZone.catch(fallback.timeZone),
+      theme: PreferencesShape.shape.theme.catch(fallback.theme),
+    })
+    .transform(({ locale, timeZone, theme }): Preferences => ({ locale, timeZone, theme }));
 }
 
 /**
@@ -21,10 +54,6 @@ export interface PreferencesStore {
   save(preferences: Preferences): void;
 }
 
-/** The storage key and the format version of the stored value. */
-export const STORAGE_KEY = "trustiot.preferences";
-const VERSION = 1;
-
 /** The first browser language we have a translation for decides; English otherwise. */
 export function defaultLocale(languages: readonly string[]): Locale {
   for (const language of languages) {
@@ -35,26 +64,13 @@ export function defaultLocale(languages: readonly string[]): Locale {
   return "en";
 }
 
-export function isTimeZone(zone: string): boolean {
-  try {
-    new Intl.DateTimeFormat(undefined, { timeZone: zone });
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-function isTheme(value: unknown): value is Theme {
-  return typeof value === "string" && (THEMES as readonly string[]).includes(value);
-}
-
 export function defaults(languages: readonly string[]): Preferences {
   return { locale: defaultLocale(languages), timeZone: "auto", theme: "system" };
 }
 
 /**
- * Preferences from their stored text. Each field is checked on its own and falls back to its
- * default, so one bad value (an old time zone name, a hand-edited entry) does not reset the rest.
+ * Preferences from their stored text (browser storage, so anything can be in it). Each field
+ * falls back to its own default; unreadable text or another version gives the defaults.
  */
 export function parsePreferences(raw: string | null, languages: readonly string[]): Preferences {
   const fallback = defaults(languages);
@@ -67,18 +83,8 @@ export function parsePreferences(raw: string | null, languages: readonly string[
   } catch {
     return fallback;
   }
-  if (typeof value !== "object" || value === null || (value as { v?: unknown }).v !== VERSION) {
-    return fallback;
-  }
-  const stored = value as Record<string, unknown>;
-  return {
-    locale: isLocale(stored.locale) ? stored.locale : fallback.locale,
-    timeZone:
-      stored.timeZone === "auto" || (typeof stored.timeZone === "string" && isTimeZone(stored.timeZone))
-        ? stored.timeZone
-        : fallback.timeZone,
-    theme: isTheme(stored.theme) ? stored.theme : fallback.theme,
-  };
+  const parsed = storedSchema(fallback).safeParse(value);
+  return parsed.success ? parsed.data : fallback;
 }
 
 export function serializePreferences(preferences: Preferences): string {
