@@ -101,6 +101,10 @@
   "login.code_invalid": "請輸入 email 裡完整的驗證碼。",
   "login.redirect_invalid": "登入後要回到的頁面不在這個網站上。",
 
+  "member.email_invalid": "請輸入有效的 email 地址。",
+  "member.email_unknown": "沒有使用者使用這個 email 地址。成員要先有帳號才能加入。",
+  "member.role_invalid": "請選擇 viewer、editor 或 admin。",
+
   "nav.home": "首頁",
 
   "tenant_switcher.label": "組織",

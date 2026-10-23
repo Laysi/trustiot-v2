@@ -26,11 +26,26 @@
 // environment provides: the smoke issues one from a CA it makes for the run, for the names of the
 // broker's Services, and checks that no Service of the release is reachable from outside the
 // cluster and that no route sends traffic to the broker.
+// The certs service (Laysi/trustiot-v2#517) runs with a root CA the smoke makes for the run with
+// certs-ca: it checks that the service waits for its issuing CA certificate, signs the request the
+// init container wrote, upgrades the release with the certificate, and checks that the service then
+// signs, inside the mesh and through the ingress, for platform administrators only (certs.ts).
 import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 
 import { apiValues, routesOfValues, runApiCheck } from "./api.ts";
+import {
+  CERTS_CA,
+  checkCertsSigning,
+  checkCertsWaiting,
+  type CertsWaiting,
+  issuingValues,
+  rootCommonName,
+  rootValues,
+  signIssuingCa,
+  TestRoot,
+} from "./certs.ts";
 import { gatherDiagnostics } from "./diagnostics.ts";
 import { E2E_SUITES, installEvidenceSection, runClusterE2e, suitesOf } from "./e2e.ts";
 import { exec, retry, run, RunLog, waitUntilGone } from "./exec.ts";
@@ -92,6 +107,8 @@ export interface SmokeContext {
   log: RunLog;
   /** Fails a run on purpose after the install, to exercise the failure path and notification. */
   simulateFailure: boolean;
+  /** The `certs-ca` program built with the certs image (run.ts), which makes the run's test root CA (certs.ts). */
+  certsCa: string;
 }
 
 export const RELEASE = "trustiot";
@@ -189,6 +206,12 @@ export async function smokeShape(ctx: SmokeContext, shape: Shape): Promise<Shape
   // The ClusterIP the release pins for the tunnel ingress (ingress-address.ts); undefined for a
   // shape whose ingress faces the network directly.
   let fixedClusterIp: string | undefined;
+  // The certs service's CA (certs.ts, Laysi/trustiot-v2#517): the run's test root, whose private
+  // key lives only in this object until it signs or the shape ends; what the waiting check found;
+  // and the issuing CA certificate the root signed.
+  let testRoot: TestRoot | undefined;
+  let certsWaiting: CertsWaiting | undefined;
+  let issuingCa: { certificate: string; keyId: string } | undefined;
   try {
     passed =
       (await check("namespace with the restricted Pod Security level", async () => {
@@ -206,7 +229,16 @@ export async function smokeShape(ctx: SmokeContext, shape: Shape): Promise<Shape
         const routes = routesOfValues(ctx.chartDir, shape.valuesFiles);
         writeFileSync(file, Bun.YAML.stringify(apiValues(shape.name, routes), null, 2));
         values.push("-f", file);
-        return `${basename(file)}: identity, assets, ai-gateway and telemetry-query, provider ${smokeProviderNameOf(shape.name)}`;
+        return `${basename(file)}: identity, assets, ai-gateway, telemetry-query and certs, provider ${smokeProviderNameOf(shape.name)}`;
+      })) &&
+      (await check("a test root CA for the certs service, made for this run, sets certificateAuthority.rootCertificate (Laysi/trustiot-v2#517)", async () => {
+        // The README's ceremony, step 1 and 2 (services/certs/README.md, 「發簽發 CA 憑證」): the
+        // root's private key stays in testRoot, never on a disk; only its certificate is written.
+        testRoot = await TestRoot.create((cmd, options) => run(ctx.log, cmd, options), ctx.certsCa, rootCommonName(shape.name));
+        const file = join(ctx.outDir, `values-certs-${shape.name}.yaml`);
+        writeFileSync(file, Bun.YAML.stringify(rootValues(testRoot.certificate), null, 2));
+        values.push("-f", file);
+        return `${CERTS_CA} root create made "${testRoot.commonName}"; ${basename(file)}: its certificate`;
       })) &&
       (await check("the tunnel ingress gets a fixed ClusterIP from the static band of the cluster's Service range (Laysi/trustiot-v2#478)", async () => {
         // cloudflared forwards to the ingress Service's ClusterIP, so the chart pins it
@@ -417,6 +449,34 @@ export async function smokeShape(ctx: SmokeContext, shape: Shape): Promise<Shape
         "through the ingress, a new tenant reaches the assets service and, with its ClickHouse account, the telemetry API; a stolen identity header never does, and Host ports and normalized paths reach it (Laysi/trustiot-v2#65, #77, #539)",
         () => runApiCheck(ctx, namespace, parseManifests(manifest), ingressCa, `nightly smoke ${shape.name}`),
       )) &&
+      (await check(
+        "certs waits for its issuing CA certificate: the init container wrote the key Secret and the request ConfigMap, the mesh serves the root alone, and the workstation certificate API answers 401, 403 and 503 ca_not_ready (Laysi/trustiot-v2#517)",
+        async () => {
+          if (testRoot === undefined) throw new Error("no test root was made");
+          const found = await checkCertsWaiting(ctx, namespace, parseManifests(manifest), ingressCa, testRoot, `nightly smoke certs ${shape.name}`);
+          certsWaiting = found.waiting;
+          return found.detail;
+        },
+      )) &&
+      (await check("the test root signs the issuing CA's request from the ConfigMap, and helm upgrade sets the certificate (Laysi/trustiot-v2#517)", async () => {
+        // The README's ceremony, step 4 and 5: the key id certs-ca prints must be the request's.
+        if (testRoot === undefined || certsWaiting === undefined) throw new Error("the waiting check left nothing to sign");
+        issuingCa = await signIssuingCa(ctx, ctx.certsCa, testRoot, certsWaiting, shape.name);
+        const file = join(ctx.outDir, `values-certs-issuing-${shape.name}.yaml`);
+        writeFileSync(file, Bun.YAML.stringify(issuingValues(issuingCa.certificate), null, 2));
+        values.push("-f", file);
+        await helm(["upgrade", RELEASE, ctx.chartDir, "--namespace", namespace, ...values, "--wait", "--wait-for-jobs", "--timeout", "5m"], 6 * 60_000);
+        // The uninstall check compares with the release's objects as they are now.
+        manifest = (await helm(["get", "manifest", RELEASE, "--namespace", namespace], 60_000, true)).stdout;
+        return `${CERTS_CA} root sign certified key ${issuingCa.keyId}, the key of ${certsWaiting.objects.configMap}'s request; ${basename(file)}: issuingCertificates; release upgraded`;
+      })) &&
+      (await check(
+        "certs signs with the issuing CA without a restart: the mesh serves the root and the issuing CA and a CRL the issuing CA signed, and only a platform administrator issues and revokes a workstation certificate (Laysi/trustiot-v2#517)",
+        async () => {
+          if (testRoot === undefined || certsWaiting === undefined || issuingCa === undefined) throw new Error("no issuing CA certificate was set");
+          return checkCertsSigning(ctx, namespace, parseManifests(manifest), ingressCa, testRoot, issuingCa, certsWaiting);
+        },
+      )) &&
       (await check("helm uninstall leaves no object of the release but the kept database and password Secrets", async () => {
         await helm(["uninstall", RELEASE, "--namespace", namespace, "--wait", "--timeout", "3m"], 4 * 60_000);
         const left = await exec(
@@ -452,6 +512,9 @@ export async function smokeShape(ctx: SmokeContext, shape: Shape): Promise<Shape
     const detail = error instanceof Error ? (error.stack ?? error.message) : String(error);
     checks.push({ name: "smoke test internal error", ok: false, detail, durationMs: 0 });
     passed = false;
+  } finally {
+    // Signing dropped the key already; a shape that failed before that drops it here.
+    testRoot?.discard();
   }
 
   if (!passed) diagnostics = await collectDiagnostics(ctx, namespace, shape);

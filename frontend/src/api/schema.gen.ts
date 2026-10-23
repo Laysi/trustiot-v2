@@ -256,6 +256,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/identity/v1/platform/tenants/{tenant_id}/members": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Sets a user's role in a tenant, creating the membership when the user has none there.
+         *     Platform administrators only, in their own request.
+         */
+        put: operations["setPlatformTenantMemberRole"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/identity/v1/sessions": {
         parameters: {
             query?: never;
@@ -801,6 +821,21 @@ export interface components {
             step: "verify_code";
         };
         /**
+         * @description A role in a tenant, as this API takes and returns it.
+         * @enum {string}
+         */
+        MemberRole: "viewer" | "editor" | "admin";
+        /** @description A user's membership of a tenant. */
+        Membership: {
+            previous_role?: components["schemas"]["MemberRole"] | null;
+            /** @description The role now. */
+            role: components["schemas"]["MemberRole"];
+            /** @description The tenant. */
+            tenant_id: components["schemas"]["TenantId"];
+            /** @description The member. */
+            user_id: components["schemas"]["UserId"];
+        };
+        /**
          * @description Key of the translated message the client shows; never the message itself.
          * @example error.not_found
          */
@@ -966,6 +1001,19 @@ export interface components {
              * @description The bucket's start (for `raw`, the reading's time), UTC.
              */
             time: string;
+        };
+        /**
+         * @description The body of `PUT /api/identity/v1/platform/tenants/{tenant_id}/members`. Unknown fields are
+         *     ignored. Its `Debug` leaves the address out: it is personal data.
+         */
+        SetMemberRole: {
+            /**
+             * @description The email address of an existing user, compared after trimming and in ASCII lower case,
+             *     as logging in compares it.
+             */
+            email: string;
+            /** @description The role to give the user in the tenant. */
+            role: components["schemas"]["MemberRole"];
         };
         /** @description A tenant. */
         Tenant: {
@@ -2249,6 +2297,96 @@ export interface operations {
                 };
             };
             /** @description The database failed, or the event log is off (`unavailable`). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    setPlatformTenantMemberRole: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The tenant's ID. */
+                tenant_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SetMemberRole"];
+            };
+        };
+        responses: {
+            /** @description The user was a member: the role is set, and `identity.member_role_changed` written in the same transaction unless the role was already this one (then nothing was written). */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Membership"];
+                };
+            };
+            /** @description The user was not a member: the membership was created, and `identity.member_role_changed` written in the same transaction. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Membership"];
+                };
+            };
+            /** @description The tenant ID is not a UUID, the `Content-Type` is not `application/json`, or the body is over 4096 bytes or not a JSON object with a string `email` and a string `role` (`invalid_request`). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No valid session (`unauthenticated`). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Not a platform administrator, or not the administrator's own request: another service exchanged the token (`permission_denied`). */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No tenant has the ID; nothing was written (`not_found`). */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The email is not an address (`/email`, `member.email_invalid`), no user has it (`/email`, `member.email_unknown`; no user is created), or the role is not `viewer`, `editor` or `admin` (`/role`, `member.role_invalid`) (`validation_failed`). Nothing was written. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The database failed; nothing was written (`unavailable`). */
             503: {
                 headers: {
                     [name: string]: unknown;

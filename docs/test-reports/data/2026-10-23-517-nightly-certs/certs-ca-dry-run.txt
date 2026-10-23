@@ -1,0 +1,15 @@
+2026-10-23T09:46:46.291Z $ <repo>/target/debug/certs-ca root create --common-name TrustIoT nightly test root CA saas --days 7 --certificate /tmp/nightly-root-ca-voaulc/root.pem
+    certs-ca: wrote the root certificate to /tmp/nightly-root-ca-voaulc/root.pem; the root private key went to stdout
+ok: root created: "TrustIoT nightly test root CA saas" and holds its key
+ok: root CN=TrustIoT nightly test root CA saas is a CA; notAfter Oct 30 09:46:46 2026 GMT
+ok: root key is secp384r1
+2026-10-23T09:46:46.341Z $ openssl req -in /tmp/nightly-request-1cpIW7/request.pem -noout -verify -pubkey
+2026-10-23T09:46:46.353Z $ <repo>/target/debug/certs-ca root sign --root-certificate /tmp/nightly-issuing-ca-H0P3GB/root.pem --request /tmp/nightly-issuing-ca-H0P3GB/request.pem --common-name TrustIoT nightly issuing CA G1 saas --days 2 --certificate /tmp/nightly-issuing-ca-H0P3GB/issuing.pem
+    certs-ca: wrote the issuing CA certificate to /tmp/nightly-issuing-ca-H0P3GB/issuing.pem for key 6e22e665bcd5c78cc7a260be36e9e4d7d3160e993346e15708ec8d1fdd3a2212; set it only if the certs service reports this key as waiting (services/certs/README.md)
+ok: the key id certs-ca printed (6e22e665bcd5c78cc7a260be36e9e4d7d3160e993346e15708ec8d1fdd3a2212) is the request's (6e22e665bcd5c78cc7a260be36e9e4d7d3160e993346e15708ec8d1fdd3a2212)
+ok: issuing CN=TrustIoT nightly issuing CA G1 saas is a CA signed by CN=TrustIoT nightly test root CA saas; notAfter Oct 25 09:46:46 2026 GMT
+ok: after one signature the test root no longer holds its key
+ok: a second signature is refused: the test root's key was already used or discarded
+ok: the run log (5 lines) holds no private key
+ok: no temporary directory of TestRoot or requestKeyId is left behind
+ok: the request's temporary directory is removed
