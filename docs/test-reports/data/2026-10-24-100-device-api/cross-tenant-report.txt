@@ -1,3 +1,5 @@
+$ CI=1 cargo test --locked -p assets --test cross_tenant -- --nocapture
+(tree: feat/100-device-api at 5111efb2, after the security review fixes; 2026-10-24)
 
 running 1 test
 result | subject | probe | outcome
@@ -48,7 +50,7 @@ pass | assets.gateway_bindings | move own rows into tenant B | refused (42501)
 pass | assets.gateway_bindings | insert into tenant B | refused (42501)
 pass | assets.devices | read as tenant A | 9 rows visible, all own, none of tenant B
 pass | assets.devices | read without a tenant | no row visible
-pass | assets.devices | update own rows as tenant A | 9 rows reached, none of tenant B
+pass | assets.devices | update own rows as tenant A | refused (42501)
 pass | assets.devices | move own rows into tenant B | refused (42501)
 pass | assets.devices | insert into tenant B | refused (42501)
 pass | assets.outbox_event | read as tenant A | refused (42501)
@@ -79,7 +81,7 @@ pass | assets.gateway_bindings | update own rows as tenant B | refused (42501)
 pass | assets.gateway_bindings | move own rows into tenant A | refused (42501)
 pass | assets.gateway_bindings | insert into tenant A | refused (42501)
 pass | assets.devices | read as tenant B | 9 rows visible, all own, none of tenant A
-pass | assets.devices | update own rows as tenant B | 9 rows reached, none of tenant A
+pass | assets.devices | update own rows as tenant B | refused (42501)
 pass | assets.devices | move own rows into tenant A | refused (42501)
 pass | assets.devices | insert into tenant A | refused (42501)
 pass | assets.outbox_event | read as tenant B | refused (42501)
@@ -161,4 +163,4 @@ pass | api | tenant A rows after tenant B's endpoint probes | 105 rows, all unch
 157 probes, 0 failed
 test tenants_are_isolated ... ok
 
-test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.83s
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.00s
