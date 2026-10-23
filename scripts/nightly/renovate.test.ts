@@ -310,9 +310,9 @@ describe("every copy of a pin is updated by the same pull request", () => {
     const copies = (image: string) => new Set(pins.filter((p) => p.image === image).map((p) => p.file)).size;
     // The chart, the dev environment, services/ingest/tests and tools/migrate/tests.
     expect(copies("docker.io/clickhouse/clickhouse-server")).toBe(4);
-    // The chart, the dev environment, crates/protocol/tests, tools/migrate/tests and
-    // services/certs/tests.
-    expect(copies("docker.io/library/eclipse-mosquitto")).toBe(5);
+    // The chart, the dev environment, crates/protocol/tests, crates/testkit (the agent's test
+    // broker), tools/migrate/tests and services/certs/tests.
+    expect(copies("docker.io/library/eclipse-mosquitto")).toBe(6);
     expect(copies("gcr.io/distroless/cc-debian13")).toBe(4);
   });
 
