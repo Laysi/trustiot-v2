@@ -86,8 +86,8 @@ spec:
 {{/*
 Container env: the chart's variables first (OTEL_SERVICE_NAME, the collector endpoint, SENTRY_DSN,
 the Postgres CA file, login role and password for a service that uses Postgres, the credentials
-the service lists, for identity, its routes and signing key settings, for certs, its CA files, and for mqtt-bridge,
-the broker's address),
+the service lists, for identity, its routes and signing key settings, for certs, its CA files, for mqtt-bridge,
+the broker's address, and for assistant, the addresses of the services it calls),
 then serviceDefaults.env and services.<name>.env.
 Custom env cannot take over what the chart controls:
 - names starting with TRUSTIOT_ plus a letter or digit, SENTRY_ or OTEL_ are reserved, so the
@@ -106,6 +106,10 @@ Custom env cannot take over what the chart controls:
   TRUSTIOT__DATABASE__PLATFORM_PASSWORD (set for a service whose platform role logs in);
 - for mqtt-bridge, TRUSTIOT__BROKER__ADDRESS is the chart's ("trustiot.mqttBridge.env"): the bridge
   relays the gateways' connections to the in-cluster broker only, even while it is off;
+- for assistant, the addresses of the AI gateway, the identity service's token exchange,
+  telemetry-query and assets are the chart's ("trustiot.assistant.env"), derived from
+  mesh.calls.assistant, even while unset: an address in env would point it at a service the mesh
+  does not let it call;
 - for telemetry-query, TRUSTIOT__CLICKHOUSE__USERNAME and TRUSTIOT__CLICKHOUSE__PASSWORD are the
   chart's: its ClickHouse account and the password the migration Job generates for it;
 - for ai-gateway, whose settings carry the prefix AI_GATEWAY ("trustiot.service.envPrefix"), the
@@ -120,6 +124,10 @@ Returns a YAML list; use with fromYamlArray.
 {{- $config := .config -}}
 {{- $values := .root.Values -}}
 {{- $prefix := include "trustiot.service.envPrefix" .name -}}
+{{- $assistantNames := list -}}
+{{- if eq $name "assistant" -}}
+{{- $assistantNames = include "trustiot.assistant.reserved" .root | fromYamlArray -}}
+{{- end -}}
 {{- $aiGatewayNames := list -}}
 {{- if eq $name "ai-gateway" -}}
 {{- $aiGatewayNames = keys (include "trustiot.aiGateway.config" .root | fromYaml).data -}}
@@ -164,6 +172,9 @@ generates its password into the service's Secret and sets it
 {{- end -}}
 {{- if and (eq $name "mqtt-bridge") (regexMatch "(?i)^TRUSTIOT__BROKER__ADDRESS$" .name) -}}
 {{- fail (printf "services.mqtt-bridge: env %s is set by the chart: the bridge relays only to the in-cluster broker's gateway port (mqttBroker.enabled)" .name) -}}
+{{- end -}}
+{{- if and (eq $name "assistant") (has (upper .name) $assistantNames) -}}
+{{- fail (printf "services.assistant: env %s is set by the chart from mesh.calls.assistant: the assistant calls only the services the mesh lets it call" .name) -}}
 {{- end -}}
 {{- if eq $name "ai-gateway" -}}
 {{- $reserved := or (regexMatch "(?i)^AI_GATEWAY_[A-Z0-9]" .name) (regexMatch "(?i)^AI_GATEWAY__(PROVIDERS|ROLES)__" .name) (has (upper .name) $aiGatewayNames) -}}
@@ -222,7 +233,11 @@ under the service's own prefix. */ -}}
 {{- if eq $name "mqtt-bridge" -}}
 {{- $mqttBridgeEnv = include "trustiot.mqttBridge.env" .root | fromYamlArray -}}
 {{- end -}}
-{{- $env = concat $env $dbEnv $clickhouseEnv $credentialEnv $identityEnv $certsEnv $mqttBridgeEnv ($config.env | default list) -}}
+{{- $assistantEnv := list -}}
+{{- if eq $name "assistant" -}}
+{{- $assistantEnv = include "trustiot.assistant.env" .root | fromYamlArray -}}
+{{- end -}}
+{{- $env = concat $env $dbEnv $clickhouseEnv $credentialEnv $identityEnv $certsEnv $mqttBridgeEnv $assistantEnv ($config.env | default list) -}}
 {{- $names := list -}}
 {{- range $env -}}
 {{- $names = append $names .name -}}

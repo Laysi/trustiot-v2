@@ -14,6 +14,8 @@ import {
   API_ROUTES,
   apiValues,
   ASSETS_TENANT_PATH,
+  ASSISTANT_ROLE,
+  checkAssistantLogin,
   checkIngressEdges,
   checkTelemetryApi,
   checkTenantAccount,
@@ -25,6 +27,7 @@ import {
   memberSessionSql,
   newSession,
   NORMALIZED_TENANT_PATHS,
+  roleSessionsSql,
   routesOfValues,
   SESSION_COOKIE,
   stealIdentityToken,
@@ -488,6 +491,54 @@ describe("the tenant's ClickHouse account", () => {
   });
 });
 
+// Laysi/trustiot-v2#592: a ready assistant holds a Postgres session of its own role.
+describe("the assistant's login", () => {
+  const fixed = { sleep: async () => {}, limits: { loginMs: 10_000, pollMs: 1_000 } };
+  // A clock that moves one poll interval per reading, so the limit is reached without waiting.
+  const ticking = () => {
+    let now = 0;
+    return () => (now += 1_000);
+  };
+
+  test("reads only the role's login flag and its session count, never a password", () => {
+    const sql = roleSessionsSql(ASSISTANT_ROLE);
+    expect(sql).toContain("FROM pg_roles r WHERE r.rolname = 'assistant_app'");
+    expect(sql).toContain("pg_stat_activity a WHERE a.usename = 'assistant_app' AND a.datname = current_database()");
+    expect(sql).not.toMatch(/passw|pg_authid|select \*/i);
+    expect(() => roleSessionsSql("x' OR '1' = '1")).toThrow("not a role name");
+  });
+
+  test("passes once the role may log in and has a session, after waiting for it", async () => {
+    const answers = ["f|0\n", "t|0\n", "t|2\n"];
+    const asked: string[] = [];
+    const detail = await checkAssistantLogin(
+      {
+        ...fixed,
+        now: ticking(),
+        psql: async (sql) => {
+          asked.push(sql);
+          return answers.shift() ?? "t|2\n";
+        },
+      },
+      "deployment/trustiot-assistant",
+      1,
+    );
+    expect(detail).toStartWith("deployment/trustiot-assistant: 1 ready replica(s); assistant_app may log in and has 2 session(s) open");
+    expect(asked).toEqual(Array(3).fill(roleSessionsSql(ASSISTANT_ROLE)));
+  });
+
+  test("fails without a ready replica, a role, a login or a session", async () => {
+    const psql = (out: string) => async () => out;
+    await expect(checkAssistantLogin({ ...fixed, now: ticking(), psql: psql("t|1\n") }, "deployment/a", 0)).rejects.toThrow("deployment/a has no ready replica");
+    await expect(checkAssistantLogin({ ...fixed, now: ticking(), psql: psql("") }, "deployment/a", 1)).rejects.toThrow("the role assistant_app does not exist");
+    await expect(checkAssistantLogin({ ...fixed, now: ticking(), psql: psql("f|0\n") }, "deployment/a", 1)).rejects.toThrow(
+      'timed out after 10 s waiting for a session of assistant_app; psql printed "f|0"',
+    );
+    await expect(checkAssistantLogin({ ...fixed, now: ticking(), psql: psql("t|0\n") }, "deployment/a", 1)).rejects.toThrow("waiting for a session of assistant_app");
+    await expect(checkAssistantLogin({ ...fixed, now: ticking(), psql: psql("error\n") }, "deployment/a", 1)).rejects.toThrow('unexpected psql output "error"');
+  });
+});
+
 describe("the API check's routes", () => {
   const existing = { host: "gateway", path: "/certs", match: "PathPrefix", service: "certs" };
 
@@ -578,6 +629,25 @@ describe("the API check's values on each deployment shape", () => {
       );
       expect(certsContainer?.image).toBe(serviceImageRef("certs"));
       expect(certsContainer?.env.find((e) => e.name === "TRUSTIOT__CRL__CHECK_INTERVAL")?.value).toBe("10s");
+      // The assistant from its image (Laysi/trustiot-v2#592): the smoke's model role, the
+      // addresses the chart derives from mesh.calls.assistant, and its own database login, whose
+      // password the migration Job generates into the Secret the chart declares.
+      const assistant = named("Deployment", "trustiot-assistant");
+      const assistantContainer = (assistant?.spec?.template as { spec: { containers: { name: string; image: string; env: { name: string; value?: string }[] }[] } } | undefined)?.spec.containers.find(
+        (c) => c.name === "assistant",
+      );
+      expect(assistantContainer?.image).toBe(serviceImageRef("assistant"));
+      const assistantEnv = Object.fromEntries((assistantContainer?.env ?? []).map((e) => [e.name, e.value]));
+      expect(assistantEnv).toMatchObject({
+        TRUSTIOT__AI_GATEWAY__ROLE: "smoke",
+        TRUSTIOT__AI_GATEWAY__URL: "http://trustiot-ai-gateway:8080",
+        TRUSTIOT__TELEMETRY_QUERY__URL: "http://trustiot-telemetry-query:8080",
+        TRUSTIOT__ASSETS__URL: "http://trustiot-assets:8080",
+        TRUSTIOT__IDENTITY__EXCHANGE_URL: "http://trustiot-identity-exchange:8082",
+        TRUSTIOT__DATABASE__USERNAME: ASSISTANT_ROLE,
+      });
+      expect(passwordSecretsOf(objects).get("trustiot-assistant-password")).toEqual(expect.arrayContaining([ASSISTANT_ROLE]));
+      expect([...missingSecrets(objects).keys()].filter((name) => name.includes("assistant"))).toEqual([]);
       // Nothing makes a key for the identity service: the chart declares the Secret its init
       // container fills, so no dummy is made for it, and nothing names another one.
       expect(named("Secret", "trustiot-identity-signing-keys")).toBeDefined();

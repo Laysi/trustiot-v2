@@ -256,6 +256,12 @@ services:
   # Laysi/trustiot-v2#446 and does not start with any other.
   mqtt-bridge:
     enabled: false
+  # The AI assistant (services/assistant, decision 31): keeps its conversations in Postgres as
+  # assistant_app, calls the models through the AI gateway, and runs its tools as the asking user
+  # against telemetry-query and assets (mesh.calls.assistant below). The chart sets the address of
+  # each of those services from mesh.calls.assistant, and env cannot (README.md, 「AI 助理」); it
+  # does not start without the AI gateway's (services.ai-gateway.enabled and ai-gateway listed).
+  # It has no API yet (the chat API is Laysi/trustiot-v2#146).
   assistant:
     enabled: false
   # The AI gateway (services/ai-gateway, decisions 15 and 28): the providers, model roles and limits
@@ -331,6 +337,15 @@ mesh:
       - mqtt-broker
     mqtt-bridge:
       - mqtt-broker
+    # The AI assistant (Laysi/trustiot-v2#592): the AI gateway for the models; telemetry-query and
+    # assets for its tools, which call them as the asking user, so it also reaches the identity
+    # service's token exchange and the exchange grants exactly these audiences (README.md,
+    # 「代表使用者呼叫」); Postgres for its conversations (services/assistant/README.md).
+    assistant:
+      - ai-gateway
+      - telemetry-query
+      - assets
+      - postgres
 
 # Internal identity (decision 27): for every request that passes the cookie check, the identity
 # service signs a short-lived token for the backend, and every service verifies it with the
