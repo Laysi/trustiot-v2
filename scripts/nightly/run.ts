@@ -144,8 +144,10 @@ async function main(): Promise<number> {
       },
       shapes.map((shape) => shape.name),
     );
-    // The Rust images deploy/chart/tests/values/smoke.yaml names: the migration Job's
-    // (tools/migrate) and the services the smoke calls through the ingress (identity, assets).
+    // The Rust images the smoke deploys (NIGHTLY_IMAGES): the migration Job's (tools/migrate,
+    // named by deploy/chart/tests/values/smoke.yaml) and the services the API check's values turn
+    // on (api.ts): identity, assets and telemetry-query, which it calls through the ingress, and
+    // ai-gateway.
     const cacheDir = process.env.NIGHTLY_IMAGE_CACHE_DIR;
     const cache = cacheDir ? { cache: { dir: cacheDir, save: process.env.NIGHTLY_IMAGE_CACHE_SAVE === "true" } } : {};
     for (const name of NIGHTLY_IMAGES) {
