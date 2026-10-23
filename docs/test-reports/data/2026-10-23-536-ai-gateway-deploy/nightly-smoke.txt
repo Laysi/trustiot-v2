@@ -1,0 +1,39 @@
+2026-10-23T05:20:06.3089310Z     deployment "coredns" successfully rolled out
+2026-10-23T05:20:06.3448249Z 2026-10-23T05:20:06.344Z == platform: Gateway API CRDs
+2026-10-23T05:20:07.5282394Z 2026-10-23T05:20:07.528Z == platform: Istio ambient
+2026-10-23T05:20:25.5184395Z 2026-10-23T05:20:25.518Z == platform: CloudNativePG operator
+2026-10-23T05:20:32.3528256Z     deployment "cnpg-controller-manager" successfully rolled out
+2026-10-23T05:20:32.3537098Z 2026-10-23T05:20:32.352Z == platform: identity double image
+2026-10-23T05:20:39.8646768Z 2026-10-23T05:20:39.864Z == platform: Postgres image
+2026-10-23T05:21:08.9304077Z 2026-10-23T05:21:08.930Z == platform: migrate image
+2026-10-23T05:23:14.2810417Z 2026-10-23T05:23:14.280Z == platform: identity image
+2026-10-23T05:24:19.3096921Z 2026-10-23T05:24:19.309Z == platform: assets image
+2026-10-23T05:24:59.2723556Z 2026-10-23T05:24:59.272Z == platform: ai-gateway image
+2026-10-23T05:24:59.2724165Z 2026-10-23T05:24:59.272Z no cached image at /home/runner/work/_temp/image-cache/ai-gateway.tar: building localhost/trustiot-e2e/ai-gateway:nightly
+2026-10-23T05:24:59.3250421Z 2026-10-23T05:24:59.324Z == service image localhost/trustiot-e2e/ai-gateway:nightly: package ai-gateway for aarch64-unknown-linux-musl
+2026-10-23T05:24:59.5900248Z 2026-10-23T05:24:59.589Z $ /home/runner/.cargo/bin/cargo auditable zigbuild --locked --release --target aarch64-unknown-linux-musl --bins --package ai-gateway
+2026-10-23T05:25:38.7343230Z        Compiling ai-gateway v0.1.0 (/home/runner/work/trustiot-v2/trustiot-v2/services/ai-gateway)
+2026-10-23T05:25:38.7344785Z     warning: `ai-gateway` (bin "ai-gateway") generated 1 warning
+2026-10-23T05:25:38.7401756Z 2026-10-23T05:25:38.740Z $ docker build --platform linux/arm64 --file /tmp/nightly-image-ai-gateway-Mlm5jf/Containerfile --tag localhost/trustiot-e2e/ai-gateway:nightly /tmp/nightly-image-ai-gateway-Mlm5jf
+2026-10-23T05:25:40.0226267Z     #6 [2/2] COPY --chmod=0555 ai-gateway /usr/local/bin/ai-gateway
+2026-10-23T05:25:40.0228753Z     #7 naming to localhost/trustiot-e2e/ai-gateway:nightly done
+2026-10-23T05:25:40.0229497Z 2026-10-23T05:25:40.022Z built localhost/trustiot-e2e/ai-gateway:nightly from ai-gateway (5776808 bytes)
+2026-10-23T05:25:40.0230301Z 2026-10-23T05:25:40.022Z $ /home/runner/.proto/tools/k3d/5.9.0/k3d image import localhost/trustiot-e2e/ai-gateway:nightly --cluster nightly --mode direct
+2026-10-23T05:25:41.3119374Z 2026-10-23T05:25:41.311Z image localhost/trustiot-e2e/ai-gateway:nightly is present on node k3d-nightly-server-0
+2026-10-23T05:25:41.3120261Z 2026-10-23T05:25:41.311Z image localhost/trustiot-e2e/ai-gateway:nightly confirmed on 1 node(s): k3d-nightly-server-0
+2026-10-23T05:25:41.3128083Z 2026-10-23T05:25:41.312Z == values-onprem.yaml in namespace nightly-onprem
+2026-10-23T05:26:14.2028253Z     deployment "trustiot-otel-collector" successfully rolled out
+2026-10-23T05:26:14.2029100Z 2026-10-23T05:26:14.202Z $ /home/runner/.proto/tools/kubectl/1.36.5/kubectl rollout status --namespace nightly-onprem deployment/trustiot-ai-gateway --timeout=180s
+2026-10-23T05:26:14.2524336Z     deployment "trustiot-ai-gateway" successfully rolled out
+2026-10-23T05:26:14.3042380Z     deployment "trustiot-assets" successfully rolled out
+2026-10-23T05:26:14.3528205Z     deployment "trustiot-identity" successfully rolled out
+2026-10-23T05:26:14.4018143Z     deployment "trustiot-smoke-echo" successfully rolled out
+2026-10-23T05:26:14.6419795Z 2026-10-23T05:26:14.641Z    ok: Deployment/trustiot-otel-collector, Deployment/trustiot-ai-gateway, Deployment/trustiot-assets, Deployment/trustiot-identity, Deployment/trustiot-smoke-echo, StatefulSet/trustiot-clickhouse, StatefulSet/trustiot-mqtt-broker, Job/trustiot-migrate-e4ed7d43
+2026-10-23T05:28:05.6515101Z 2026-10-23T05:28:05.651Z == values-saas.yaml in namespace nightly-saas
+2026-10-23T05:28:35.8489811Z     deployment "trustiot-otel-collector" successfully rolled out
+2026-10-23T05:28:35.8491291Z 2026-10-23T05:28:35.848Z $ /home/runner/.proto/tools/kubectl/1.36.5/kubectl rollout status --namespace nightly-saas deployment/trustiot-ai-gateway --timeout=180s
+2026-10-23T05:28:35.9002155Z     deployment "trustiot-ai-gateway" successfully rolled out
+2026-10-23T05:28:35.9511447Z     deployment "trustiot-assets" successfully rolled out
+2026-10-23T05:28:36.0059176Z     deployment "trustiot-identity" successfully rolled out
+2026-10-23T05:28:36.0551250Z     deployment "trustiot-smoke-echo" successfully rolled out
+2026-10-23T05:28:36.2922999Z 2026-10-23T05:28:36.292Z    ok: Deployment/trustiot-otel-collector, Deployment/trustiot-ai-gateway, Deployment/trustiot-assets, Deployment/trustiot-identity, Deployment/trustiot-smoke-echo, StatefulSet/trustiot-clickhouse, StatefulSet/trustiot-mqtt-broker, Job/trustiot-migrate-3a59ca5e
