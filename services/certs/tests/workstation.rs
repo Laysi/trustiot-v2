@@ -476,7 +476,13 @@ async fn only_platform_administrators_issue_and_revoke_and_the_crl_lists_a_revoc
             -1
         )]
     );
-    let issue_lines = service.stdout.messages("issued a workstation certificate");
+    // The service's stdout reaches the test through a reader thread, so a line can arrive after
+    // its response does.
+    let issue_lines = wait_for("the issuance log line", || async {
+        let lines = service.stdout.messages("issued a workstation certificate");
+        (!lines.is_empty()).then_some(lines)
+    })
+    .await;
     assert_eq!(issue_lines.len(), 1);
     assert_eq!(issue_lines[0]["fields"]["serial"], json!(control.serial));
 
@@ -683,7 +689,11 @@ async fn only_platform_administrators_issue_and_revoke_and_the_crl_lists_a_revoc
         revoked.revocation_reason,
         Some(RevocationReason::KeyCompromise)
     );
-    let lines = service.stdout.messages("revoked a workstation certificate");
+    let lines = wait_for("the revocation log line", || async {
+        let lines = service.stdout.messages("revoked a workstation certificate");
+        (!lines.is_empty()).then_some(lines)
+    })
+    .await;
     assert_eq!(lines.len(), 1);
     assert_eq!(lines[0]["fields"]["serial"], json!(control.serial));
     let mut expected = vec![

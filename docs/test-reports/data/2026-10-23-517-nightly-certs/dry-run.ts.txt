@@ -1,0 +1,71 @@
+// Dry run of certs.ts's TestRoot against the real certs-ca (#517). Every invariant throws when it
+// does not hold, so the exit status is the result. Key material stays in memory and in a temporary
+// directory under <out>, removed at the end.
+// Usage: bun dryrun.ts <worktree> <certs-ca binary> <out>
+import { X509Certificate } from "node:crypto";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+const [worktree, certsCa, out] = process.argv.slice(2) as [string, string, string];
+const nightly = join(worktree, "scripts", "nightly");
+const certs = await import(join(nightly, "certs.ts"));
+const { run, RunLog } = await import(join(nightly, "exec.ts"));
+
+/** Prints `line` when `condition` holds, and throws with it otherwise. */
+function must(condition: boolean, line: string): void {
+  if (!condition) throw new Error(`FAILED: ${line}`);
+  console.log(`ok: ${line}`);
+}
+
+mkdirSync(out, { recursive: true });
+const logFile = join(out, "dryrun-run.log");
+rmSync(logFile, { force: true });
+const log = new RunLog(logFile);
+const runner = (cmd: string[], options: object) => run(log, cmd, options);
+const leftovers = () => readdirSync(tmpdir()).filter((name) => /^nightly-(root-ca|request|issuing-ca)-/.test(name));
+const before = new Set(leftovers());
+
+const work = mkdtempSync(join(out, "csr-"));
+try {
+  const root = await certs.TestRoot.create(runner, certsCa, certs.rootCommonName("saas"));
+  must(root.holdsKey, `root created: "${root.commonName}" and holds its key`);
+  const rootCert = new X509Certificate(root.certificate);
+  const curve = rootCert.publicKey.asymmetricKeyDetails?.namedCurve;
+  must(rootCert.subject === `CN=${certs.rootCommonName("saas")}` && rootCert.ca, `root ${rootCert.subject} is a CA; notAfter ${rootCert.validTo}`);
+  must(curve === "secp384r1", `root key is ${curve}`);
+
+  // A P-256 request like the one crates/ca-keys writes (PKCS_ECDSA_P256_SHA256).
+  const sh = (cmd: string[]) => {
+    const r = Bun.spawnSync(cmd, { cwd: work, stdout: "pipe", stderr: "pipe" });
+    if (r.exitCode !== 0) throw new Error(`${cmd.join(" ")}: ${r.stderr.toString()}`);
+  };
+  sh(["openssl", "req", "-new", "-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:P-256", "-nodes", "-subj", "/CN=dry run issuing key", "-keyout", "k.pem", "-out", "r.csr"]);
+  const request = readFileSync(join(work, "r.csr"), "utf8");
+  const requestKey = await certs.requestKeyId(runner, request);
+
+  const signed = await root.sign(runner, certsCa, request, certs.issuingCommonName("saas"));
+  const issuing = new X509Certificate(signed.certificate);
+  must(signed.keyId === requestKey, `the key id certs-ca printed (${signed.keyId}) is the request's (${requestKey})`);
+  must(
+    issuing.checkIssued(rootCert) && issuing.verify(rootCert.publicKey) && issuing.ca,
+    `issuing ${issuing.subject} is a CA signed by ${issuing.issuer}; notAfter ${issuing.validTo}`,
+  );
+  must(!root.holdsKey, "after one signature the test root no longer holds its key");
+  let second: string | undefined;
+  try {
+    await root.sign(runner, certsCa, request, certs.issuingCommonName("saas"));
+  } catch (error) {
+    second = (error as Error).message;
+  }
+  must(second !== undefined, `a second signature is refused: ${second}`);
+  root.discard();
+
+  const logText = readFileSync(logFile, "utf8");
+  must(!/PRIVATE KEY/.test(logText), `the run log (${logText.trim().split("\n").length} lines) holds no private key`);
+} finally {
+  rmSync(work, { recursive: true, force: true });
+}
+const left = leftovers().filter((name) => !before.has(name));
+must(left.length === 0, "no temporary directory of TestRoot or requestKeyId is left behind");
+must(!existsSync(work), "the request's temporary directory is removed");

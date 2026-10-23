@@ -15,9 +15,12 @@ use chrono::{DateTime, Timelike, Utc};
 use contract::event::{Actor, parse_payload};
 use contract::events::assets::{DeviceModelCreated, DeviceModelDeleted, DeviceModelUpdated};
 use contract::events::certs::GatewayRegistered;
-use contract::events::identity::TenantCreated;
+use contract::events::identity::{
+    MEMBERSHIP_AGGREGATE, MemberRoleChanged, TenantCreated, membership_aggregate_id,
+};
 use contract::{
-    DecodeError, DeviceModelId, EncodeError, Event, EventEnvelope, ServiceName, TenantId, UserId,
+    DecodeError, DeviceModelId, EncodeError, Event, EventEnvelope, ServiceName, TenantId,
+    TenantRole, UserId,
 };
 use protocol::config::{ByteOrder, DataType};
 use protocol::{GatewayId, ModelName};
@@ -169,6 +172,65 @@ fn tenant_created_decodes_every_version() {
     assert_eq!(envelope.producer, ServiceName::Identity);
     assert_eq!(envelope.payload, json!({}));
     assert_eq!(envelope.tenant_id, Some(tenant));
+}
+
+/// `identity.member_role_changed` (Laysi/trustiot-v2#583): the member by ID only (no email),
+/// the role before (none for a new member) and after, the tenant the envelope's, the actor who
+/// set it. `v1-new-member` is a new membership.
+#[test]
+fn member_role_changed_decodes_every_version() {
+    let decoded = decode_fixtures::<MemberRoleChanged>();
+    let names: Vec<&str> = decoded.iter().map(|(name, _)| name.as_str()).collect();
+    // Sorted by path: `-` sorts before `.`.
+    assert_eq!(names, ["v1-new-member", "v1"]);
+    let user = |id: &str| -> UserId { id.parse().expect("user id") };
+    assert_eq!(
+        decoded[0].1,
+        MemberRoleChanged {
+            user_id: user("01928f6e-7a3c-7d4e-8f00-0000000000b2"),
+            previous_role: None,
+            role: TenantRole::Admin,
+        }
+    );
+    assert_eq!(
+        decoded[1].1,
+        MemberRoleChanged {
+            user_id: user("01928f6e-7a3c-7d4e-8f00-0000000000b1"),
+            previous_role: Some(TenantRole::Viewer),
+            role: TenantRole::Editor,
+        }
+    );
+
+    let tenant: TenantId = "01928f6e-7a3c-7d4e-8f00-00000000000c"
+        .parse()
+        .expect("tenant id");
+    let event = decoded[1].1.clone();
+    let envelope = EventEnvelope::new(&event, Some(tenant)).expect("encode");
+    assert_eq!(envelope.producer, ServiceName::Identity);
+    assert_eq!(envelope.tenant_id, Some(tenant));
+    assert_eq!(
+        envelope.payload,
+        json!({
+            "user_id": "01928f6e-7a3c-7d4e-8f00-0000000000b1",
+            "previous_role": "viewer",
+            "role": "editor"
+        }),
+        "the user by ID, never an email address"
+    );
+    // A new member's previous role is written as null, and a payload without it still decodes.
+    let new_member = EventEnvelope::new(&decoded[0].1, Some(tenant)).expect("encode");
+    assert_eq!(new_member.payload["previous_role"], Value::Null);
+    let without: MemberRoleChanged = serde_json::from_value(json!({
+        "user_id": "01928f6e-7a3c-7d4e-8f00-0000000000b2",
+        "role": "viewer"
+    }))
+    .expect("decode without previous_role");
+    assert_eq!(without.previous_role, None);
+    assert_eq!(
+        membership_aggregate_id(tenant, event.user_id),
+        "01928f6e-7a3c-7d4e-8f00-00000000000c:01928f6e-7a3c-7d4e-8f00-0000000000b1"
+    );
+    assert_eq!(MEMBERSHIP_AGGREGATE, "membership");
 }
 
 /// `certs.gateway_registered` (Laysi/trustiot-v2#79): platform-wide, so no tenant, written by

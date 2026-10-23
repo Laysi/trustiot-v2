@@ -1342,6 +1342,12 @@ async fn there_is_no_password_login_sign_up_or_fake_login() {
                 "/api/identity/v1/platform/tenants/{tenant_id}/event-log".to_owned(),
                 vec!["get".to_owned()]
             ),
+            // Platform administrators set existing users' roles (Laysi/trustiot-v2#583); it
+            // never creates a user.
+            (
+                "/api/identity/v1/platform/tenants/{tenant_id}/members".to_owned(),
+                vec!["put".to_owned()]
+            ),
             (
                 "/api/identity/v1/sessions".to_owned(),
                 vec!["delete".to_owned()]

@@ -793,6 +793,49 @@
           }
         ]
       },
+      "MemberRole": {
+        "description": "A role in a tenant, as this API takes and returns it.",
+        "enum": [
+          "viewer",
+          "editor",
+          "admin"
+        ],
+        "type": "string"
+      },
+      "Membership": {
+        "description": "A user's membership of a tenant.",
+        "properties": {
+          "previous_role": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/MemberRole",
+                "description": "The role before this request; `null` when the user was not a member. Equal to `role`\nwhen nothing changed."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "role": {
+            "$ref": "#/components/schemas/MemberRole",
+            "description": "The role now."
+          },
+          "tenant_id": {
+            "$ref": "#/components/schemas/TenantId",
+            "description": "The tenant."
+          },
+          "user_id": {
+            "$ref": "#/components/schemas/UserId",
+            "description": "The member."
+          }
+        },
+        "required": [
+          "tenant_id",
+          "user_id",
+          "role"
+        ],
+        "type": "object"
+      },
       "MessageKey": {
         "description": "Key of the translated message the client shows; never the message itself.",
         "examples": [
@@ -1055,6 +1098,24 @@
           "time",
           "count",
           "last"
+        ],
+        "type": "object"
+      },
+      "SetMemberRole": {
+        "description": "The body of `PUT /api/identity/v1/platform/tenants/{tenant_id}/members`. Unknown fields are\nignored. Its `Debug` leaves the address out: it is personal data.",
+        "properties": {
+          "email": {
+            "description": "The email address of an existing user, compared after trimming and in ASCII lower case,\nas logging in compares it.",
+            "type": "string"
+          },
+          "role": {
+            "$ref": "#/components/schemas/MemberRole",
+            "description": "The role to give the user in the tenant."
+          }
+        },
+        "required": [
+          "email",
+          "role"
         ],
         "type": "object"
       },
@@ -2459,6 +2520,118 @@
           }
         },
         "summary": "One tenant's operation log, for the back office. Platform administrators only.",
+        "tags": [
+          "identity"
+        ]
+      }
+    },
+    "/api/identity/v1/platform/tenants/{tenant_id}/members": {
+      "put": {
+        "operationId": "setPlatformTenantMemberRole",
+        "parameters": [
+          {
+            "description": "The tenant's ID.",
+            "in": "path",
+            "name": "tenant_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetMemberRole"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Membership"
+                }
+              }
+            },
+            "description": "The user was a member: the role is set, and `identity.member_role_changed` written in the same transaction unless the role was already this one (then nothing was written)."
+          },
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Membership"
+                }
+              }
+            },
+            "description": "The user was not a member: the membership was created, and `identity.member_role_changed` written in the same transaction."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The tenant ID is not a UUID, the `Content-Type` is not `application/json`, or the body is over 4096 bytes or not a JSON object with a string `email` and a string `role` (`invalid_request`)."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No valid session (`unauthenticated`)."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Not a platform administrator, or not the administrator's own request: another service exchanged the token (`permission_denied`)."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No tenant has the ID; nothing was written (`not_found`)."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The email is not an address (`/email`, `member.email_invalid`), no user has it (`/email`, `member.email_unknown`; no user is created), or the role is not `viewer`, `editor` or `admin` (`/role`, `member.role_invalid`) (`validation_failed`). Nothing was written."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The database failed; nothing was written (`unavailable`)."
+          }
+        },
+        "summary": "Sets a user's role in a tenant, creating the membership when the user has none there.\nPlatform administrators only, in their own request.",
         "tags": [
           "identity"
         ]
