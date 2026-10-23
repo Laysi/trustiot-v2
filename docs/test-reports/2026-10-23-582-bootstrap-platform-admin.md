@@ -57,3 +57,13 @@ bun test deploy/chart
 | 沒有新的 HTTP 路由：`cargo run -p openapi -- --check` 通過、`api/openapi.json` 不變 | 通過 |
 | 帶 `smoke` 標籤的 PR 上，nightly 以 chart 的方式建立 API 檢查的平台管理員，兩個 namespace 都通過 | 待測：要在這個 PR 掛上 `smoke` 標籤後的 nightly 執行確認（工作站不跑 Kubernetes）；nightly 的單元測試與 chart 渲染已通過 |
 | runbook 與 `tools/migrate/README.md` 寫明步驟、結束碼與復原 SQL | 完成：`docs/runbooks/platform-admin.md`、`tools/migrate/README.md` |
+
+## 合併 main 之後（2026-10-23）
+
+main 到了 b7da9509，多了 Laysi/trustiot-v2#583 的 `0005_member_roles.sql` 與事件 `identity.member_role_changed`，以及 Laysi/trustiot-v2#517 的 nightly 憑證服務檢查。這個分支以合併 commit 70dbd741 併入 main：
+
+- migration 改名為 `0006_platform_admin_bootstrap.sql`（`git mv`），`src/schema.rs` 先列 main 的 `0005_member_roles.sql` 再列它，身分服務與 migrate 的 README、`tools/migrate` 的註解一起更新。舊名只在這個未合併的 PR 分支上出現過，沒有任何 release 或部署的資料庫記過它。`0005_member_roles.sql` 沒有新增資料表，`tools/migrate/tests/fresh_database.rs` 預期的 identity 表數仍是 15。
+- 兩個事件、各自的 fixture 與解碼測試、README 的說明都保留；展示環境 runbook 第 8 步先照第一位平台管理員 runbook 建立平台管理員，再建立租戶、設定成員角色。
+- nightly：憑證服務的檢查不再以 SQL 新增平台管理員，改用 API 檢查以 bootstrap 建立的那一位（`runApiCheck` 回傳他的使用者 ID，`smoke.ts` 交給 `checkCertsWaiting`），只為他再建一個 session；API 檢查原有的 0 與 3 兩次執行、操作紀錄的檢查都不變。
+
+在開發者工作站（x86_64 Linux）上於 70dbd741 重跑，全部通過（[after-merge.txt](data/2026-10-23-582-bootstrap-platform-admin/after-merge.txt)）：`cargo fmt --all --check`、`cargo clippy --workspace --all-targets -- -D warnings`、`cargo run -p openapi -- --check`；`CI=1 cargo test -p identity -p migrate -p contract -p repo-check -p sql-check --no-fail-fast`（identity 含 `tests/members.rs` 與 `tests/platform_admin.rs`，migrate 含 `tests/platform_admin.rs` 與 `tests/fresh_database.rs`，contract 的 `tests/events.rs` 15 個）；`bun test scripts` 1659 個通過、9 個略過（dev 環境的 podman e2e、aarch64 binary 與測試 pod 映像的測試，這次沒有啟用）、`bun run --cwd scripts typecheck`；`bun test deploy/chart` 627 個；`bun run --cwd frontend api:check` 與 `bun run --cwd frontend test` 131 個。帶 `smoke` 標籤的 nightly 仍待這個 PR 上的執行確認。
