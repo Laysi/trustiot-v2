@@ -28,6 +28,7 @@ import type { EdgeCheckDeps, TenantApiResult } from "./api.ts";
 import { pinnedTool } from "./exec.ts";
 import { ingressHostsOf, ingressListenerOf, missingSecrets, missingTlsSecrets, parseManifests, platformSettingsOf } from "./manifests.ts";
 import type { K8sObject } from "./manifests.ts";
+import { serviceImageRef } from "./service-image.ts";
 import { discoverShapes, valuesArgs } from "./smoke.ts";
 
 const REPO_ROOT = join(import.meta.dir, "..", "..");
@@ -62,6 +63,13 @@ describe("the check's sessions", () => {
       expect(sql.trim().startsWith("BEGIN;")).toBe(true);
       expect(sql.trim().endsWith("COMMIT;")).toBe(true);
     }
+  });
+
+  test("a member with another tenant role, which only a known role may be (the certs check's tenant administrator)", () => {
+    const session = newSession();
+    expect(memberSessionSql(session, TENANT, "admin")).toContain(`VALUES ('${TENANT}', '${session.userId}', 'admin');`);
+    expect(memberSessionSql(session, TENANT, "admin")).not.toContain("platform_admin");
+    expect(() => memberSessionSql(session, TENANT, "owner'); --" as "admin")).toThrow("not a tenant role");
   });
 
   test("only UUIDs and hashes reach the SQL", () => {
@@ -285,9 +293,17 @@ describe("the API check's values on each deployment shape", () => {
       // Both APIs are cookie routes on the app host.
       const settings = platformSettingsOf(objects);
       const routes = objects.filter((o) => o.kind === "HTTPRoute").map((o) => JSON.stringify(o.spec));
-      for (const path of ["/api/identity", "/api/assets"]) {
+      for (const path of ["/api/identity", "/api/assets", "/api/certs"]) {
         expect(routes.some((r) => r.includes(`"value":"${path}"`) && r.includes(settings.TRUSTIOT_APP_HOST!)), path).toBe(true);
       }
+      // The certs service from its image, its CRL job every 10 s (Laysi/trustiot-v2#517).
+      const certs = named("Deployment", "trustiot-certs");
+      expect(certs).toBeDefined();
+      const certsContainer = (certs?.spec?.template as { spec: { containers: { name: string; image: string; env: { name: string; value?: string }[] }[] } }).spec.containers.find(
+        (c) => c.name === "certs",
+      );
+      expect(certsContainer?.image).toBe(serviceImageRef("certs"));
+      expect(certsContainer?.env.find((e) => e.name === "TRUSTIOT__CRL__CHECK_INTERVAL")?.value).toBe("10s");
       // Nothing makes a key for the identity service: the chart declares the Secret its init
       // container fills, so no dummy is made for it, and nothing names another one.
       expect(named("Secret", "trustiot-identity-signing-keys")).toBeDefined();

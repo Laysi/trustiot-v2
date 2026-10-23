@@ -11,7 +11,7 @@
 // workflow provides rustup (the pinned toolchain comes from rust-toolchain.toml) and the pinned
 // zig, cargo-zigbuild and cargo-auditable (`tools:` of setup-proto). Cost:
 // docs/architecture/ci-release.md, nightly.yml.
-import { chmodSync, copyFileSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -28,7 +28,7 @@ import {
 } from "../release/lib.ts";
 import { rustCrossCompileCommand, staticElfProblem, toolchainChannel } from "../release/rust-build.ts";
 import { exec, pinnedTool, retry, run } from "./exec.ts";
-import { loadCachedImage, saveImageForCache } from "./image-cache.ts";
+import { loadCachedImage, programCacheFile, reportUnusableCache, saveImageForCache } from "./image-cache.ts";
 import { importImageIntoCluster } from "./platform.ts";
 import type { ImportCommands, Platform } from "./platform.ts";
 
@@ -99,16 +99,41 @@ const IMAGE_BUILD_TIMEOUT_MS = 10 * 60_000;
 const RETRY_PAUSE_MS = 10_000;
 
 /**
+ * Programs of an image's package that the run needs on the runner (image-cache.ts,
+ * NIGHTLY_PROGRAMS): `names` are binaries of the package, written to `dir` as `dir/<name>`.
+ */
+export interface ImagePrograms {
+  names: readonly string[];
+  dir: string;
+}
+
+/** Why `bytes` cannot run on the arm64 runner as it is: not an aarch64 ELF, or not static. */
+export function programProblem(bytes: Uint8Array): string | undefined {
+  return aarch64ElfProblem(bytes) ?? staticElfProblem(bytes);
+}
+
+/** Copies the program at `from` to `to` (a new file, mode 0755), through a partial file. */
+function installProgram(from: string, to: string): void {
+  const partial = `${to}.partial`;
+  rmSync(partial, { force: true });
+  copyFileSync(from, partial);
+  chmodSync(partial, 0o755);
+  renameSync(partial, to);
+}
+
+/**
  * Builds the image of the Rust service `name` (a directory under deploy/images/ with an
  * image.toml) for linux/arm64 and returns its local tag. The binary must be an aarch64 ELF
  * without a program interpreter, because the distroless static base has no loader or libc.
+ * `programs`: other binaries of the same package, which the build compiles anyway (`--bins`),
+ * checked the same way and copied to `programs.dir`; they never go into the image.
  */
 export async function buildServiceImage(
   context: Pick<Platform, "repoRoot" | "log">,
   name: string,
   tools: ServiceImageTools,
   commands: Pick<ImportCommands, "run"> = { run },
-  { pauseMs = RETRY_PAUSE_MS }: { pauseMs?: number } = {},
+  { pauseMs = RETRY_PAUSE_MS, programs }: { pauseMs?: number; programs?: ImagePrograms } = {},
 ): Promise<string> {
   const { repoRoot, log } = context;
   const images = discoverImages(repoRoot);
@@ -154,8 +179,26 @@ export async function buildServiceImage(
   const binary = join(metadata.target_directory, RUST_TARGET, "release", bin);
   if (!existsSync(binary)) throw new Error(`cargo did not produce ${binary}`);
   const bytes = new Uint8Array(readFileSync(binary));
-  const problem = aarch64ElfProblem(bytes) ?? staticElfProblem(bytes);
+  const problem = programProblem(bytes);
   if (problem !== undefined) throw new Error(`${binary} cannot go into the image: ${problem}`);
+
+  if (programs !== undefined) {
+    const pkg = metadata.packages.find((candidate) => candidate.name === spec.package);
+    const bins = pkg?.targets.filter((target) => target.kind.includes("bin")).map((target) => target.name) ?? [];
+    for (const program of programs.names) {
+      if (program === bin || !bins.includes(program)) {
+        throw new Error(`package ${spec.package} has no other binary named ${program} (binaries: ${bins.join(", ") || "none"})`);
+      }
+      const built = join(metadata.target_directory, RUST_TARGET, "release", program);
+      if (!existsSync(built)) throw new Error(`cargo did not produce ${built}`);
+      const programBytes = new Uint8Array(readFileSync(built));
+      const unusable = programProblem(programBytes);
+      if (unusable !== undefined) throw new Error(`${built} cannot run on the arm64 runner: ${unusable}`);
+      mkdirSync(programs.dir, { recursive: true });
+      installProgram(built, join(programs.dir, program));
+      log.line(`built ${program} with ${spec.package} (${programBytes.byteLength} bytes) for this run; it does not go into the image`);
+    }
+  }
 
   // The build context holds only the binary and the rendered Containerfile, as in release.yml.
   const dir = mkdtempSync(join(tmpdir(), `nightly-image-${name}-`));
@@ -196,17 +239,36 @@ export interface ImageCache {
  * skipped on the hit. The chart runs it with
  * `services.<name>.image` set to serviceImageValues(name). For Laysi/trustiot-v2#65 and
  * Laysi/trustiot-v2#77.
+ * `programs` (Laysi/trustiot-v2#517): the package's other binaries the run executes on the runner
+ * end up in `programs.dir`, from the same cache entry (a missing or broken one counts like an
+ * unusable tarball) or from the build, which then also writes them for the cache when `save` is set.
  */
 export async function loadServiceImage(
   platform: Pick<Platform, "repoRoot" | "log" | "k3d" | "cluster">,
   name: string,
-  options: { tools?: ServiceImageTools; commands?: ImportCommands; pauseMs?: number; cache?: ImageCache } = {},
+  options: { tools?: ServiceImageTools; commands?: ImportCommands; pauseMs?: number; cache?: ImageCache; programs?: ImagePrograms } = {},
 ): Promise<string> {
   const commands = options.commands ?? { run, exec };
   const pause = options.pauseMs === undefined ? {} : { pauseMs: options.pauseMs };
   const image = serviceImageRef(name);
   const cache = options.cache;
-  const cached = cache === undefined ? "missing" : await loadCachedImage(platform.log, cache.dir, name, image, commands);
+  const programs = options.programs;
+  let cached = cache === undefined ? "missing" : await loadCachedImage(platform.log, cache.dir, name, image, commands);
+  if (cached === "loaded" && cache !== undefined && programs !== undefined) {
+    // The programs come from the same entry; one that is missing or broken means a build, as
+    // for an unusable tarball.
+    const problem = cachedProgramsProblem(cache.dir, programs.names);
+    if (problem === undefined) {
+      for (const program of programs.names) {
+        mkdirSync(programs.dir, { recursive: true });
+        installProgram(programCacheFile(cache.dir, program), join(programs.dir, program));
+      }
+      platform.log.line(`took ${programs.names.join(", ")} from the cache, no Rust build`);
+    } else {
+      reportUnusableCache(platform.log, image, problem);
+      cached = "unusable";
+    }
+  }
   if (cached !== "loaded") {
     if (cached === "unusable" && options.tools === undefined) {
       // nightly.yml installs the build tools only on a miss; a hit whose tarball turned out
@@ -214,9 +276,26 @@ export async function loadServiceImage(
       await installBuildTools(platform, commands);
     }
     const tools = options.tools ?? (await findServiceImageTools(platform.repoRoot));
-    await buildServiceImage(platform, name, tools, commands, pause);
-    if (cache?.save === true) await saveImageForCache(platform.log, cache.dir, name, image, commands);
+    await buildServiceImage(platform, name, tools, commands, { ...pause, ...(programs === undefined ? {} : { programs }) });
+    if (cache?.save === true) {
+      await saveImageForCache(platform.log, cache.dir, name, image, commands);
+      for (const program of programs?.names ?? []) {
+        installProgram(join(programs!.dir, program), programCacheFile(cache.dir, program));
+        platform.log.line(`wrote ${program} to ${programCacheFile(cache.dir, program)} for the cache`);
+      }
+    }
   }
   await importImageIntoCluster(platform, image, commands, pause);
   return image;
+}
+
+/** Why the cached programs cannot be used: one is missing, or cannot run on the arm64 runner. */
+export function cachedProgramsProblem(dir: string, names: readonly string[]): string | undefined {
+  for (const program of names) {
+    const file = programCacheFile(dir, program);
+    if (!existsSync(file)) return `the entry has no ${program}`;
+    const problem = programProblem(new Uint8Array(readFileSync(file)));
+    if (problem !== undefined) return `its ${program} cannot run on the arm64 runner: ${problem}`;
+  }
+  return undefined;
 }

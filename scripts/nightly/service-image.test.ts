@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
@@ -10,7 +10,7 @@ import { CommandError, RunLog } from "./exec.ts";
 import type { ExecOptions, ExecResult } from "./exec.ts";
 import { NIGHTLY_IMAGES } from "./image-cache.ts";
 import type { ImportCommands } from "./platform.ts";
-import { buildServiceImage, installBuildTools, loadServiceImage, MIGRATE_IMAGE_NAME, serviceImageRef, serviceImageValues } from "./service-image.ts";
+import { buildServiceImage, cachedProgramsProblem, installBuildTools, loadServiceImage, MIGRATE_IMAGE_NAME, serviceImageRef, serviceImageValues } from "./service-image.ts";
 import type { ServiceImageTools } from "./service-image.ts";
 
 const REPO_ROOT = join(import.meta.dir, "..", "..");
@@ -112,13 +112,15 @@ describe("buildServiceImage and loadServiceImage", () => {
   /**
    * Fake rustup, cargo, docker and k3d. `binary` is what cargo writes, or null for a build
    * that produces nothing; `imageBuildFailures` docker builds fail first; `hasImage` says whether
-   * the node holds the image after an import.
+   * the node holds the image after an import; `extraBins` are the package's other binaries and
+   * what cargo writes for each (null: nothing).
    */
   function fakeTools({
     binary = staticAarch64Binary() as Uint8Array | null,
     imageBuildFailures = 0,
     hasImage = true,
     loadFails = false,
+    extraBins = {} as Record<string, Uint8Array | null>,
   } = {}) {
     const seen: Seen = { commands: [], imports: 0 };
     const target = join(root, "target");
@@ -129,7 +131,7 @@ describe("buildServiceImage and loadServiceImage", () => {
         if (cmd[0] === TOOLS.rustup) return ok();
         if (cmd[0] === TOOLS.cargo && cmd[1] === "metadata") {
           expect(options?.cwd).toBe(root);
-          return ok(JSON.stringify({ packages: [{ name: "identity", targets: [{ name: "identity", kind: ["bin"] }] }], target_directory: target }));
+          return ok(JSON.stringify({ packages: [{ name: "identity", targets: [{ name: "identity", kind: ["bin"] }, ...Object.keys(extraBins).map((name) => ({ name, kind: ["bin"] }))] }], target_directory: target }));
         }
         if (cmd[0] === TOOLS.cargo) {
           seen.cargoEnv = options?.env;
@@ -138,6 +140,7 @@ describe("buildServiceImage and loadServiceImage", () => {
             const out = join(target, "aarch64-unknown-linux-musl", "release");
             mkdirSync(out, { recursive: true });
             writeFileSync(join(out, "identity"), binary);
+            for (const [name, bytes] of Object.entries(extraBins)) if (bytes !== null) writeFileSync(join(out, name), bytes);
           }
           return ok();
         }
@@ -321,6 +324,92 @@ describe("buildServiceImage and loadServiceImage", () => {
     const { seen, commands } = fakeTools({ binary });
     await expect(build(commands)).rejects.toThrow(message);
     expect(seen.commands.some((cmd) => cmd[0] === "docker")).toBe(false);
+  });
+
+  describe("programs built with an image (certs-ca, Laysi/trustiot-v2#517)", () => {
+    const PROGRAM = "identity-tool";
+    const programsDir = () => join(root, "programs");
+    // A package with two binaries names the image's, like deploy/images/certs/image.toml.
+    beforeEach(() => writeFileSync(join(root, "deploy/images/identity/image.toml"), '[rust]\npackage = "identity"\nbin = "identity"\n'));
+
+    test("the build checks another binary of the package and copies it out, never into the image", async () => {
+      const { seen, commands } = fakeTools({ extraBins: { [PROGRAM]: staticAarch64Binary() } });
+      expect(await buildServiceImage({ repoRoot: root, log }, "identity", TOOLS, commands, { pauseMs: 0, programs: { names: [PROGRAM], dir: programsDir() } })).toBe(IMAGE);
+      const copied = join(programsDir(), PROGRAM);
+      expect(readFileSync(copied)).toEqual(Buffer.from(staticAarch64Binary()));
+      expect(statSync(copied).mode & 0o777).toBe(0o755);
+      // One compile for both (`--bins`), and the image's context holds the service binary only.
+      expect(seen.commands.filter((cmd) => cmd[0] === TOOLS.cargo && cmd[1] === "auditable")).toHaveLength(1);
+      expect(seen.contextFiles).toEqual(["Containerfile", "identity"]);
+    });
+
+    test.each([
+      ["a name that is not a binary of the package", "missing", { [PROGRAM]: staticAarch64Binary() }, "package identity has no other binary named missing"],
+      ["the image's own binary", "identity", {}, "package identity has no other binary named identity"],
+      ["a program cargo did not produce", PROGRAM, { [PROGRAM]: null }, "cargo did not produce"],
+      ["a dynamically linked program", PROGRAM, { [PROGRAM]: dynamicAarch64Binary() }, "cannot run on the arm64 runner: it is dynamically linked"],
+    ])("refuses %s and builds no image", async (_label, name, extraBins, message) => {
+      const { seen, commands } = fakeTools({ extraBins });
+      await expect(
+        buildServiceImage({ repoRoot: root, log }, "identity", TOOLS, commands, { pauseMs: 0, programs: { names: [name], dir: programsDir() } }),
+      ).rejects.toThrow(message);
+      expect(seen.commands.some((cmd) => cmd[0] === "docker")).toBe(false);
+      expect(existsSync(join(programsDir(), name))).toBe(false);
+    });
+
+    test("a cache hit takes the programs from the entry, without a Rust build", async () => {
+      const cacheDir = join(root, "image-cache");
+      mkdirSync(cacheDir);
+      writeFileSync(join(cacheDir, "identity.tar"), "tarball");
+      writeFileSync(join(cacheDir, PROGRAM), staticAarch64Binary());
+      const { seen, commands } = fakeTools();
+      await loadServiceImage({ repoRoot: root, log, k3d: K3D, cluster: CLUSTER }, "identity", {
+        commands,
+        pauseMs: 0,
+        cache: { dir: cacheDir, save: true },
+        programs: { names: [PROGRAM], dir: programsDir() },
+      });
+      expect(seen.cargoEnv).toBeUndefined();
+      expect(readFileSync(join(programsDir(), PROGRAM))).toEqual(Buffer.from(staticAarch64Binary()));
+      expect(cachedProgramsProblem(cacheDir, [PROGRAM])).toBeUndefined();
+    });
+
+    test.each([
+      ["lacks a program", null, "the entry has no identity-tool"],
+      ["holds a program that cannot run on the runner", elfFile(ELF_X86_64, [PT_LOAD]), "its identity-tool cannot run on the arm64 runner"],
+    ])("a cache entry that %s is built again, and the run says so", async (_label, cachedProgram, message) => {
+      const cacheDir = join(root, "image-cache");
+      mkdirSync(cacheDir);
+      writeFileSync(join(cacheDir, "identity.tar"), "tarball");
+      if (cachedProgram !== null) writeFileSync(join(cacheDir, PROGRAM), cachedProgram);
+      const { seen, commands } = fakeTools({ extraBins: { [PROGRAM]: staticAarch64Binary() } });
+      await loadServiceImage({ repoRoot: root, log, k3d: K3D, cluster: CLUSTER }, "identity", {
+        tools: TOOLS,
+        commands,
+        pauseMs: 0,
+        cache: { dir: cacheDir, save: false },
+        programs: { names: [PROGRAM], dir: programsDir() },
+      });
+      expect(seen.cargoEnv).toBeDefined();
+      expect(readFileSync(logPath, "utf8")).toContain(`the cached ${IMAGE} cannot be used (${message}`);
+      expect(readFileSync(join(programsDir(), PROGRAM))).toEqual(Buffer.from(staticAarch64Binary()));
+    });
+
+    test("a build writes the programs for the cache only when asked, so a saved entry has them", async () => {
+      for (const save of [false, true]) {
+        const cacheDir = mkdtempSync(join(root, "image-cache-"));
+        const { commands } = fakeTools({ extraBins: { [PROGRAM]: staticAarch64Binary() } });
+        await loadServiceImage({ repoRoot: root, log, k3d: K3D, cluster: CLUSTER }, "identity", {
+          tools: TOOLS,
+          commands,
+          pauseMs: 0,
+          cache: { dir: cacheDir, save },
+          programs: { names: [PROGRAM], dir: programsDir() },
+        });
+        expect(existsSync(join(cacheDir, PROGRAM))).toBe(save);
+        expect(existsSync(join(cacheDir, `${PROGRAM}.partial`))).toBe(false);
+      }
+    });
   });
 
   test("refuses an image that is not declared, or not a Rust service, before running anything", async () => {

@@ -14,6 +14,8 @@ import {
   imageCacheKey,
   imagesCacheKey,
   loadCachedImage,
+  programCacheFile,
+  programsOf,
   saveImageForCache,
 } from "./image-cache.ts";
 import type { ObjectHashes } from "./image-cache.ts";
@@ -26,6 +28,7 @@ const PACKAGE_DIRS: Record<(typeof NIGHTLY_IMAGES)[number], string> = {
   identity: "services/identity",
   assets: "services/assets",
   "ai-gateway": "services/ai-gateway",
+  certs: "services/certs",
 };
 
 /**
@@ -165,11 +168,30 @@ describe("the one cache entry of the nightly's images", () => {
   test("is complete only with every image's tarball, so a hit never lacks one", () => {
     const dir = mkdtempSync(join(tmpdir(), "nightly-image-cache-complete-"));
     try {
+      for (const name of NIGHTLY_IMAGES) for (const program of programsOf(name)) writeFileSync(programCacheFile(dir, program), "program");
       expect(cacheComplete(dir, NIGHTLY_IMAGES)).toBe(false);
       for (const name of NIGHTLY_IMAGES.slice(0, -1)) writeFileSync(imageCacheFile(dir, name), "tarball");
       expect(cacheComplete(dir, NIGHTLY_IMAGES)).toBe(false);
       writeFileSync(imageCacheFile(dir, NIGHTLY_IMAGES.at(-1)!), "tarball");
       expect(cacheComplete(dir, NIGHTLY_IMAGES)).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("is complete only with every program built with the images (certs-ca), so a hit never lacks one", () => {
+    expect(programsOf("certs")).toEqual(["certs-ca"]);
+    expect(programsOf("migrate")).toEqual([]);
+    const dir = mkdtempSync(join(tmpdir(), "nightly-image-cache-programs-"));
+    try {
+      for (const name of NIGHTLY_IMAGES) writeFileSync(imageCacheFile(dir, name), "tarball");
+      expect(cacheComplete(dir, NIGHTLY_IMAGES)).toBe(false);
+      writeFileSync(programCacheFile(dir, "certs-ca"), "program");
+      expect(cacheComplete(dir, NIGHTLY_IMAGES)).toBe(true);
+      // Every program is a binary of its image's package, so the image's build makes it.
+      for (const name of NIGHTLY_IMAGES) {
+        for (const program of programsOf(name)) expect(existsSync(join(REPO_ROOT, PACKAGE_DIRS[name], "src", "bin", `${program}.rs`)), program).toBe(true);
+      }
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
