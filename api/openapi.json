@@ -675,6 +675,10 @@
             "description": "The initial certificate, PEM: the gateway's MQTT client certificate, subject\n`CN=<hardware_id>`, extended key usage client authentication only.",
             "type": "string"
           },
+          "certificate_chain": {
+            "description": "The initial certificate, then the issuing CA certificate that signed it (the loaded\nissuing CA whose key id is `ca_key_id`), PEM: the chain the gateway presents as its MQTT\nclient certificate. The root is not in it. When that issuing CA is no longer loaded (a\nrepeat after rotation removed it, services/certs/README.md, \"輪替\" step 3), the chain is\nthe initial certificate alone.",
+            "type": "string"
+          },
           "endorsement_key_sha256": {
             "description": "The SHA-256 of the endorsement key (its DER SubjectPublicKeyInfo), 64 lower-case hex\ndigits.",
             "pattern": "^[0-9a-f]{64}$",
@@ -729,6 +733,7 @@
           "not_before",
           "not_after",
           "certificate",
+          "certificate_chain",
           "root_certificate"
         ],
         "type": "object"

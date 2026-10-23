@@ -261,6 +261,12 @@ pub struct GatewayRegistration {
     /// The initial certificate, PEM: the gateway's MQTT client certificate, subject
     /// `CN=<hardware_id>`, extended key usage client authentication only.
     pub certificate: String,
+    /// The initial certificate, then the issuing CA certificate that signed it (the loaded
+    /// issuing CA whose key id is `ca_key_id`), PEM: the chain the gateway presents as its MQTT
+    /// client certificate. The root is not in it. When that issuing CA is no longer loaded (a
+    /// repeat after rotation removed it, services/certs/README.md, "輪替" step 3), the chain is
+    /// the initial certificate alone.
+    pub certificate_chain: String,
     /// The root CA certificate, PEM: the gateway's only trust anchor for the MQTT broker's
     /// server certificate (services/certs/README.md, "閘道器對 broker 伺服器憑證的信任"). The
     /// root CRL (Laysi/trustiot-v2#560) can join it here as a new field.

@@ -816,6 +816,14 @@ export interface components {
              */
             certificate: string;
             /**
+             * @description The initial certificate, then the issuing CA certificate that signed it (the loaded
+             *     issuing CA whose key id is `ca_key_id`), PEM: the chain the gateway presents as its MQTT
+             *     client certificate. The root is not in it. When that issuing CA is no longer loaded (a
+             *     repeat after rotation removed it, services/certs/README.md, "輪替" step 3), the chain is
+             *     the initial certificate alone.
+             */
+            certificate_chain: string;
+            /**
              * @description The SHA-256 of the endorsement key (its DER SubjectPublicKeyInfo), 64 lower-case hex
              *     digits.
              */
