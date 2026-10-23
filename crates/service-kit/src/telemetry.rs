@@ -147,6 +147,7 @@ impl Telemetry {
         subscriber(
             info.name,
             targets,
+            info.log_ceilings,
             tracer_provider.tracer("service-kit"),
             logger,
             Stdout,
@@ -203,6 +204,37 @@ impl Telemetry {
     }
 }
 
+/// A level that a target's events never exceed, whatever `telemetry.log_filter` says: neither
+/// its stdout line nor its OTLP record is written. The target matches itself and its submodules
+/// (`tungstenite` covers `tungstenite::protocol`, not `tungstenite_extra`), for events sent
+/// through `tracing` and events bridged from the `log` crate alike. A service sets its ceilings
+/// with [`ServiceInfo::with_log_ceilings`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct LogCeiling {
+    target: &'static str,
+    level: Level,
+}
+
+impl LogCeiling {
+    /// Events of `target` (and its submodules) above `level` are never written.
+    pub const fn new(target: &'static str, level: Level) -> Self {
+        Self { target, level }
+    }
+
+    /// Whether this ceiling drops an event of `target` at `level`.
+    fn drops(&self, target: &str, level: &Level) -> bool {
+        *level > self.level
+            && target
+                .strip_prefix(self.target)
+                .is_some_and(|rest| rest.is_empty() || rest.starts_with("::"))
+    }
+}
+
+/// Whether one of `ceilings` drops an event of `target` at `level`.
+pub(crate) fn above_ceiling(ceilings: &[LogCeiling], target: &str, level: &Level) -> bool {
+    ceilings.iter().any(|ceiling| ceiling.drops(target, level))
+}
+
 /// Logs to stdout at `info` without trace context or export. For reporting a configuration
 /// error before the real telemetry settings are known.
 pub fn init_fallback(info: &ServiceInfo) {
@@ -212,6 +244,7 @@ pub fn init_fallback(info: &ServiceInfo) {
     let _ = subscriber(
         info.name,
         targets,
+        info.log_ceilings,
         tracer_provider.tracer("service-kit"),
         None,
         Stdout,
@@ -247,7 +280,8 @@ fn span_enabled(metadata: &Metadata<'_>) -> bool {
 
 /// The log layer's filter: spans as above, events by the configured directives, except that
 /// the OpenTelemetry SDK's diagnostics below INFO are always dropped (they can print the OTLP
-/// endpoint's path; see [`sdk_diagnostic_suppressed`]).
+/// endpoint's path; see [`sdk_diagnostic_suppressed`]), and so are events above the service's
+/// [`LogCeiling`]s.
 ///
 /// Events bridged from the `log` crate (what `reqwest` sends) need no special case here: the
 /// bridge first asks the subscriber whether a record with the `log` crate's own target is
@@ -255,6 +289,7 @@ fn span_enabled(metadata: &Metadata<'_>) -> bool {
 /// The tests in `log_layer.rs` and `tests/otlp.rs` pin this down.
 struct LogFilter {
     targets: Targets,
+    ceilings: &'static [LogCeiling],
 }
 
 impl<S> Filter<S> for LogFilter {
@@ -263,6 +298,7 @@ impl<S> Filter<S> for LogFilter {
             span_enabled(metadata)
         } else {
             !sdk_diagnostic_suppressed(metadata.target(), metadata.level())
+                && !above_ceiling(self.ceilings, metadata.target(), metadata.level())
                 && self
                     .targets
                     .would_enable(metadata.target(), metadata.level())
@@ -298,6 +334,7 @@ impl<S> Filter<S> for LogFilter {
 fn subscriber<W: LineSink>(
     service: &'static str,
     targets: Targets,
+    ceilings: &'static [LogCeiling],
     tracer: SdkTracer,
     logger: Option<SdkLogger>,
     sink: W,
@@ -306,7 +343,8 @@ fn subscriber<W: LineSink>(
     let spans = tracing_opentelemetry::layer()
         .with_tracer(tracer)
         .with_filter(filter_fn(span_enabled).with_max_level_hint(LevelFilter::INFO));
-    let logs = LogLayer::new(sink, service, logger).with_filter(LogFilter { targets });
+    let logs =
+        LogLayer::new(sink, service, logger, ceilings).with_filter(LogFilter { targets, ceilings });
     tracing_subscriber::registry().with(spans).with(logs)
 }
 
@@ -324,11 +362,24 @@ pub(crate) mod test_support {
         Capture,
         SdkTracerProvider,
     ) {
+        capture_subscriber_with_ceilings(filter, &[])
+    }
+
+    /// [`capture_subscriber`] for a service with `ceilings`.
+    pub(crate) fn capture_subscriber_with_ceilings(
+        filter: &str,
+        ceilings: &'static [LogCeiling],
+    ) -> (
+        impl Subscriber + Send + Sync + 'static,
+        Capture,
+        SdkTracerProvider,
+    ) {
         let provider = SdkTracerProvider::builder().build();
         let capture = Capture::default();
         let subscriber = subscriber(
             "unit-test",
             filter.parse().expect("valid test filter"),
+            ceilings,
             provider.tracer("unit-test"),
             None,
             capture.clone(),
@@ -402,6 +453,7 @@ mod tests {
         let hint = |filter: &str| {
             Filter::<tracing_subscriber::Registry>::max_level_hint(&LogFilter {
                 targets: filter.parse().expect("valid filter"),
+                ceilings: &[],
             })
         };
         assert_eq!(hint("warn"), Some(LevelFilter::INFO));

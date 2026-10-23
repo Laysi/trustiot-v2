@@ -630,7 +630,8 @@ mqttBroker:
   image:
     # eclipse-mosquitto 2.1 (Alpine), pinned to the multi-arch index digest (arm64 included).
     # crates/protocol/tests/broker.rs, tools/migrate/tests/mqtt_broker.rs and scripts/lib/stack.ts
-    # use the same tag and digest; the chart tests fail when they differ.
+    # use the same tag and digest; the chart tests fail when they differ. When the version changes,
+    # repeat the pre-CONNECT timeout measurement (services/mqtt-bridge/README.md, connection limits).
     repository: docker.io/library/eclipse-mosquitto
     tag: 2.1.2-alpine
     digest: sha256:38c0da4f2ef84284d47b3b3eeea1cb3bdeabe81ee10caf0cd5c5ff61ee3ea408
