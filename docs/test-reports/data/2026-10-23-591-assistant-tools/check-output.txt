@@ -27,3 +27,30 @@ test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out    (t
 test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
 test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
 test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+
+# After merging main 994ffae7 (Laysi/trustiot-v2#588), build host, CI=1.
+# cargo fmt --all --check && echo FMT_OK
+FMT_OK
+# cargo clippy --locked --workspace --all-targets -- -D warnings (last line)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 7.49s
+# cargo test --locked -p assistant, three runs in a row, each with this result:
+     Running unittests src/lib.rs
+test result: ok. 29 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+     Running tests/agent.rs
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+     Running tests/agent_logs.rs
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+     Running tests/cross_tenant.rs
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+     Running tests/delegated_tools.rs
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+     Running tests/history_store.rs
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+     Running tests/tools.rs
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+# cargo test --locked -p repo-check
+test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+# cargo run --locked -q -p openapi -- --check
+api/openapi.json is up to date

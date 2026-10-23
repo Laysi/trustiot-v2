@@ -5,7 +5,7 @@
 ## 環境
 
 - 建置主機（x86_64 Linux，Rust 1.99.0，見 `rust-toolchain.toml`），經共用的檢查佇列執行，`CI=1`。
-- 分支 `feat/591-assistant-tools`，基於 `7371f15b`；測試時的工作樹是本報告所在 commit 的內容。
+- 分支 `feat/591-assistant-tools`，基於 `7371f15b`，之後合併 main 的 `994ffae7`（Laysi/trustiot-v2#588 的對話儲存）；兩個樹都測過，見「結果」。`tests/history_store.rs` 與 `tests/cross_tenant.rs`（來自 main）以 podman 起拋棄式 TLS Postgres。
 - 不需要容器、叢集或 API key：身分服務、telemetry-query、assets 與 AI 閘道都是測試在 127.0.0.1 上起的替身。身分服務替身以 `testkit::TestIssuer` 簽真的內部身分 token（測試金鑰），服務替身以 `IdentityVerifier` 依自己的受眾驗證，與真的服務相同。
 
 ## 指令
@@ -31,6 +31,8 @@ cargo deny --locked check
 | `cargo test -p assistant` | 單元測試 25 個、`tests/agent.rs` 12 個、`tests/delegated_tools.rs` 9 個、`tests/tools.rs` 7 個全部通過；連跑 5 次都通過 |
 | `cargo test -p repo-check` | 通過 |
 | `cargo deny --locked check` | 通過 |
+| 合併 main 後：`cargo fmt --all --check`、`cargo clippy --workspace --all-targets -- -D warnings`、`cargo test -p repo-check`、`cargo run -p openapi -- --check` | 都通過 |
+| 合併 main 後：`cargo test -p assistant`，連跑 3 次 | 每次都全部通過：單元測試 29 個、`tests/agent.rs` 10 個、`tests/agent_logs.rs` 2 個、`tests/cross_tenant.rs` 1 個、`tests/delegated_tools.rs` 9 個、`tests/history_store.rs` 5 個、`tests/tools.rs` 7 個 |
 
 `tests/delegated_tools.rs` 的替身以虛擬時鐘模擬時間：每次模型呼叫算過了 61 秒（一個「分鐘」），服務替身只接受在當下這一分鐘換來的 token，所以重用前一步的 token 會像過期的 token 一樣被拒，測試不需要真的等 60 秒。
 
