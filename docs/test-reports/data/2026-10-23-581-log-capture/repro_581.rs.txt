@@ -1,0 +1,84 @@
+//! Temporary reproduction for Laysi/trustiot-v2#581, run as services/assistant/tests/repro_581.rs before the fix (kept here as text, not a test target): a thread without a
+//! subscriber that hits the agent's log callsites first, while the capture test's dispatcher is
+//! the only scoped one alive, caches `Interest::never` for them.
+
+mod support;
+
+use std::sync::Arc;
+
+use assistant::tools::{NoDelegation, Tool};
+use support::{
+    Capture, CountReadings, StandIn, agent, fixture, ok, principal, respond, settings, tool_step,
+};
+use tracing_subscriber::layer::SubscriberExt as _;
+
+fn tools() -> Vec<Arc<dyn Tool>> {
+    vec![Arc::new(CountReadings)]
+}
+
+async fn one_question() {
+    let stand_in = StandIn::start(respond(|_request, index| {
+        if index < 2 {
+            ok(tool_step(index))
+        } else {
+            ok(fixture("answer_end_turn.json"))
+        }
+    }))
+    .await;
+    let agent = agent(&stand_in, tools(), settings());
+    let mut conversation = agent.start_conversation(principal(), "");
+    agent
+        .ask(
+            &mut conversation,
+            "Which meters are quiet?",
+            Arc::new(NoDelegation),
+        )
+        .await
+        .expect("an answer");
+}
+
+/// Runs one question on a fresh thread with its own runtime and no subscriber.
+fn on_another_thread() {
+    std::thread::spawn(|| {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("a runtime")
+            .block_on(one_question());
+    })
+    .join()
+    .expect("the other thread");
+}
+
+fn model_calls(capture: &Capture) -> usize {
+    capture
+        .events()
+        .iter()
+        .filter(|event| event.message == "model call completed")
+        .count()
+}
+
+#[tokio::test]
+async fn another_thread_registers_the_callsites_after_set_default() {
+    // REPRO_ORDER=before: the other thread runs before the capture exists (control).
+    let before = std::env::var("REPRO_ORDER").as_deref() == Ok("before");
+    if before {
+        on_another_thread();
+    }
+    let capture = Capture::default();
+    let _guard =
+        tracing::subscriber::set_default(tracing_subscriber::registry().with(capture.clone()));
+    if !before {
+        on_another_thread();
+    }
+    one_question().await;
+    println!(
+        "REPRO other thread {}: captured",
+        if before {
+            "before set_default"
+        } else {
+            "after set_default"
+        }
+    );
+    println!("REPRO captured {} model call events", model_calls(&capture));
+}
