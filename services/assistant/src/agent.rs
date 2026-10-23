@@ -79,6 +79,11 @@ pub enum AgentError {
         "Your access changed while the assistant was working, so it stopped. Please sign in again."
     )]
     AccessRevoked,
+    /// The question's run was started for another tenant or user than the conversation's
+    /// ([`Delegation::principal`]): a fault of the caller. Nothing was sent and the history is
+    /// unchanged.
+    #[error("The assistant could not start this question. Please try again.")]
+    NotTheConversationsRun,
 }
 
 impl AgentError {
@@ -92,6 +97,7 @@ impl AgentError {
             Self::BudgetExhausted => "budget_exhausted",
             Self::RunExpired => "run_expired",
             Self::AccessRevoked => "access_revoked",
+            Self::NotTheConversationsRun => "not_the_conversations_run",
         }
     }
 
@@ -172,10 +178,16 @@ impl Agent {
             budget: Budget::new(self.settings.budget_tokens, self.settings.wind_down_percent),
         };
         let deadline = delegation.deadline();
+        // A run acts for the user it was started for; the tools would call as that user with
+        // this conversation's principal, so a run of anyone else does not start.
+        let foreign = delegation
+            .principal()
+            .is_some_and(|principal| principal != conversation.principal());
         // Every await of the loop leaves the history whole (a turn and its results join it
         // together), so cutting the question off at the deadline is safe. A question with no
         // time left does not start: nothing is sent or added to the history.
         let result = match deadline {
+            _ if foreign => Err(AgentError::NotTheConversationsRun),
             Some(deadline) if deadline <= Instant::now() => Err(AgentError::RunExpired),
             Some(deadline) => tokio::time::timeout_at(
                 deadline,

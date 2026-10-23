@@ -102,9 +102,11 @@ impl QuestionRuns {
         Ok(QuestionRun {
             inner: Arc::new(Inner {
                 delegation,
+                principal,
                 run_id: Uuid::from(run_id),
                 deadline,
                 revoked: AtomicBool::new(false),
+                exchanged: AtomicBool::new(false),
             }),
         })
     }
@@ -137,11 +139,16 @@ pub struct QuestionRun {
 
 struct Inner {
     delegation: RunDelegation,
+    /// The conversation's tenant and user the delegation was started for: the agent refuses to
+    /// run it for any other conversation's principal.
+    principal: Principal,
     run_id: Uuid,
     deadline: Instant,
     /// Set by the first exchange the identity service refused for the user: no later call asks
     /// again.
     revoked: AtomicBool,
+    /// Set by the first exchange that gave a token.
+    exchanged: AtomicBool,
 }
 
 impl fmt::Debug for QuestionRun {
@@ -158,6 +165,11 @@ impl QuestionRun {
     pub fn id(&self) -> Uuid {
         self.inner.run_id
     }
+
+    /// The conversation's tenant and user the run was started for.
+    pub fn principal(&self) -> Principal {
+        self.inner.principal
+    }
 }
 
 impl Delegation for QuestionRun {
@@ -171,11 +183,27 @@ impl Delegation for QuestionRun {
                 return Err(DelegationError::Revoked);
             }
             match inner.delegation.token_for(audience).await {
-                Ok(token) => Ok(token),
+                Ok(token) => {
+                    inner.exchanged.store(true, Ordering::Release);
+                    Ok(token)
+                }
                 Err(error) => {
+                    let code = error.code();
                     let error = delegation_error(&error);
                     if error == DelegationError::Revoked {
-                        inner.revoked.store(true, Ordering::Release);
+                        let already_refused = inner.revoked.swap(true, Ordering::AcqRel);
+                        // The delegation was issued moments ago while the user's session was
+                        // valid, so a refusal before any exchange succeeded more likely means
+                        // the deployment's mesh.calls lacks this call than a revocation.
+                        if !already_refused && !inner.exchanged.load(Ordering::Acquire) {
+                            tracing::warn!(
+                                run_id = %inner.run_id,
+                                audience = audience.as_str(),
+                                code = code.as_str(),
+                                "the identity service refused the first token exchange of a \
+                                 question's run: check that mesh.calls lists this call"
+                            );
+                        }
                     }
                     Err(error)
                 }
@@ -190,12 +218,18 @@ impl Delegation for QuestionRun {
     fn deadline(&self) -> Option<Instant> {
         Some(self.inner.deadline)
     }
+
+    fn principal(&self) -> Option<Principal> {
+        Some(self.inner.principal)
+    }
 }
 
 /// What a refused exchange means for the question: `unauthenticated` (the session ended or was
 /// revoked, the delegation expired) and `permission_denied` (the user left the tenant, or the
-/// deployment's call list lacks the call, which service-kit logs as an ERROR) end it; a timeout
-/// or an unavailable or failing identity service fails only the call.
+/// deployment's `mesh.calls` lacks the call) end it; a timeout or an unavailable or failing
+/// identity service fails only the call. service-kit logs both refusals at INFO, and the
+/// question cannot tell a missing `mesh.calls` entry from a revocation: both end it with
+/// [`crate::AgentError::AccessRevoked`].
 fn delegation_error(error: &RunDelegationError) -> DelegationError {
     match error.code() {
         ErrorCode::Unauthenticated | ErrorCode::PermissionDenied => DelegationError::Revoked,

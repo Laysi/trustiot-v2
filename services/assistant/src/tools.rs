@@ -183,6 +183,14 @@ pub trait Delegation: Send + Sync {
     fn deadline(&self) -> Option<Instant> {
         None
     }
+
+    /// The tenant and user the delegation acts for. [`crate::Agent::ask`] refuses a question
+    /// whose conversation belongs to anyone else ([`crate::AgentError::NotTheConversationsRun`]),
+    /// so a run started for one conversation cannot read data for another. `None`: a delegation
+    /// that acts for no one ([`NoDelegation`]).
+    fn principal(&self) -> Option<Principal> {
+        None
+    }
 }
 
 /// The user's delegation could not give a token.
@@ -594,6 +602,32 @@ pub(crate) fn millis(duration: Duration) -> u64 {
     u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
 }
 
+/// The most characters of one text value from a service that a tool hands the model. Readings,
+/// data point keys and model names are written by devices and members, so they are untrusted
+/// input to the model: the cap keeps one value from filling the result or carrying a long text,
+/// it does not make the text trustworthy (see README.md, 「工具」).
+pub const MAX_RESULT_TEXT_CHARS: usize = 256;
+
+/// Ends a text value that [`cap_text`] cut.
+pub const CUT_MARKER: &str = "…[cut]";
+
+/// Cuts every string in `value` (array elements and object values, recursively; object keys
+/// are the tool's own) to [`MAX_RESULT_TEXT_CHARS`] characters, ending a cut one with
+/// [`CUT_MARKER`]. Tools call it on what they built from a service's answer.
+pub fn cap_text(value: &mut Value) {
+    match value {
+        Value::String(text) => {
+            if let Some((end, _)) = text.char_indices().nth(MAX_RESULT_TEXT_CHARS) {
+                text.truncate(end);
+                text.push_str(CUT_MARKER);
+            }
+        }
+        Value::Array(items) => items.iter_mut().for_each(cap_text),
+        Value::Object(fields) => fields.values_mut().for_each(cap_text),
+        Value::Null | Value::Bool(_) | Value::Number(_) => {}
+    }
+}
+
 /// At most `max` characters of `text`, cut at a character boundary.
 fn truncate(text: &str, max: usize) -> &str {
     match text.char_indices().nth(max) {
@@ -626,4 +660,32 @@ fn check_spec(spec: &ToolSpec) -> Result<(), RegistryError> {
         return Err(RegistryError::InvalidSchema(spec.name.clone()));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::*;
+
+    #[test]
+    fn long_text_is_cut_with_a_visible_marker_and_short_text_is_kept() {
+        let long: String = "é".repeat(MAX_RESULT_TEXT_CHARS + 1);
+        let exact: String = "a".repeat(MAX_RESULT_TEXT_CHARS);
+        let mut value = json!({
+            "rows": [[long.clone(), 1.5, true, null], [exact.clone()]],
+            "nested": {"name": long},
+            "short": "ok",
+        });
+        cap_text(&mut value);
+        let cut = format!("{}{CUT_MARKER}", "é".repeat(MAX_RESULT_TEXT_CHARS));
+        assert_eq!(
+            value,
+            json!({
+                "rows": [[cut.clone(), 1.5, true, null], [exact]],
+                "nested": {"name": cut},
+                "short": "ok",
+            })
+        );
+    }
 }
