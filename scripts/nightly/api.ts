@@ -85,13 +85,24 @@ export interface IngressRoute {
 /**
  * The cookie routes the check needs: the identity service's tenant API, the assets service's API
  * and the telemetry-query service's history API (Laysi/trustiot-v2#539). The same routes a
- * deployment sets to serve the SPA (deploy/flux/README.md, 「展示叢集」).
+ * deployment sets to serve the SPA (deploy/flux/README.md, 「展示叢集」). Also the certs service's
+ * workstation certificate API, which certs.ts calls (Laysi/trustiot-v2#517; services/certs/README.md,
+ * 「簽發、撤銷與換發」).
  */
 export const API_ROUTES: readonly IngressRoute[] = [
   { host: "app", path: "/api/identity", match: "PathPrefix", service: "identity" },
   { host: "app", path: "/api/assets", match: "PathPrefix", service: "assets" },
   { host: "app", path: "/api/telemetry", match: "PathPrefix", service: "telemetry-query" },
+  { host: "app", path: "/api/certs", match: "PathPrefix", service: "certs" },
 ];
+
+/**
+ * The certs service's settings the smoke adds (Laysi/trustiot-v2#517): its CRL job and monitor run
+ * every 10 s instead of every 5 minutes, so the first CRL of the issuing CA the smoke sets up comes
+ * within seconds of the service loading it, not minutes. 10 s keeps the service's own rule (at most
+ * half of crl.renew_before minus crl.alert_before, 2 days by default). Production keeps the default.
+ */
+export const CERTS_SMOKE_ENV = [{ name: "TRUSTIOT__CRL__CHECK_INTERVAL", value: "10s" }] as const;
 
 /**
  * The ingress.routes that the chart's values.yaml and then each of `valuesFiles` (relative to the
@@ -128,9 +139,11 @@ export const AI_GATEWAY_SMOKE = {
  * shape's values already set (`routes`, from routesOfValues; helm would otherwise drop them), and
  * the smoke namespace's ext_authz provider (platform.ts). No key: the identity pod's init
  * container generates it in the cluster (Laysi/trustiot-v2#404). Also the AI gateway from its
- * image, with no caller and no route (AI_GATEWAY_SMOKE), and the telemetry-query service from its
+ * image, with no caller and no route (AI_GATEWAY_SMOKE), the telemetry-query service from its
  * image (Laysi/trustiot-v2#539), whose Postgres roles and ClickHouse account the migration Job
- * sets up with generated passwords: it needs no value besides its image and its route.
+ * sets up with generated passwords (it needs no value besides its image and its route), and the
+ * certs service from its image (CERTS_SMOKE_ENV; its test root CA comes in a values file of its
+ * own, certs.ts).
  */
 export function apiValues(shape: string, routes: readonly IngressRoute[]): Record<string, unknown> {
   const image = (name: string) => {
@@ -149,6 +162,7 @@ export function apiValues(shape: string, routes: readonly IngressRoute[]): Recor
       assets: { enabled: true, image: image("assets") },
       "ai-gateway": { enabled: true, image: image("ai-gateway") },
       "telemetry-query": { enabled: true, image: image("telemetry-query") },
+      certs: { enabled: true, image: image("certs"), env: CERTS_SMOKE_ENV.map((entry) => ({ ...entry })) },
     },
     ai: AI_GATEWAY_SMOKE,
     ingress: {
@@ -233,12 +247,19 @@ export function adminSessionSql(session: TestSession): string {
   ].join("\n");
 }
 
-/** SQL for a viewer of `tenantId` and a session of theirs acting in that tenant, valid for an hour. */
-export function memberSessionSql(session: TestSession, tenantId: string): string {
+/** The tenant roles of identity.memberships (services/identity/migrations/postgres/0001_identity.sql). */
+export type TenantRole = "viewer" | "editor" | "admin";
+
+/**
+ * SQL for a member of `tenantId` with `role` (a viewer unless given) who is no platform
+ * administrator, and a session of theirs acting in that tenant, valid for an hour.
+ */
+export function memberSessionSql(session: TestSession, tenantId: string, role: TenantRole = "viewer"): string {
+  if (!["viewer", "editor", "admin"].includes(role)) throw new Error(`not a tenant role: ${JSON.stringify(role)}`);
   return [
     "BEGIN;",
     `INSERT INTO identity.users (id) VALUES ('${uuid(session.userId)}');`,
-    `INSERT INTO identity.memberships (tenant_id, user_id, tenant_role) VALUES ('${uuid(tenantId)}', '${uuid(session.userId)}', 'viewer');`,
+    `INSERT INTO identity.memberships (tenant_id, user_id, tenant_role) VALUES ('${uuid(tenantId)}', '${uuid(session.userId)}', '${role}');`,
     "INSERT INTO identity.sessions (id, token_hash, user_id, active_tenant_id, expires_at)",
     `  VALUES ('${uuid(session.sessionId)}', '\\x${sha256Hex(session.tokenHash)}', '${uuid(session.userId)}', '${uuid(tenantId)}', now() + interval '1 hour');`,
     "COMMIT;",
@@ -697,20 +718,22 @@ export interface ApiCheckContext {
   log: RunLog;
 }
 
+/** How a check reaches the release: the app host, the ingress listener, SQL as the superuser, and the gateway. */
+export interface IngressAccess {
+  appHost: string;
+  listener: ReturnType<typeof ingressListenerOf>;
+  /** Runs SQL as the database superuser and returns what psql printed; the SQL and its output stay out of the log. */
+  psql: (sql: string) => Promise<string>;
+  /** A port-forward to the ingress gateway's Service, not open yet. */
+  gateway: PortForward;
+}
+
 /**
- * Runs checkTenantApi, checkTelemetryApi, checkTenantAccount and checkIngressEdges against the
- * release in `namespace`: psql through `kubectl exec` in the CloudNativePG primary, ClickHouse
- * queries through `kubectl exec` in the bundled ClickHouse's pod, requests through `kubectl
- * port-forward` to the ingress gateway's Service (`ca`: the certificate the smoke made for an
- * HTTPS listener).
+ * What runApiCheck and the certs check (certs.ts) need from the release in `namespace`: psql
+ * through `kubectl exec` in the CloudNativePG primary, and a `kubectl port-forward` to the ingress
+ * gateway's Service (`ca`: the certificate the smoke made for an HTTPS listener).
  */
-export async function runApiCheck(
-  ctx: ApiCheckContext,
-  namespace: string,
-  objects: K8sObject[],
-  ca: string | undefined,
-  name: string,
-): Promise<string> {
+export async function ingressAccess(ctx: ApiCheckContext, namespace: string, objects: K8sObject[], ca: string | undefined): Promise<IngressAccess> {
   const env = { KUBECONFIG: ctx.kubeconfig };
   const settings = platformSettingsOf(objects);
   const appHost = settings.TRUSTIOT_APP_HOST;
@@ -723,9 +746,6 @@ export async function runApiCheck(
   if (primary === "") throw new Error(`Cluster ${clusters[0]} has no current primary`);
   const listener = ingressListenerOf(objects);
   if (listener.tls && ca === undefined) throw new Error(`Gateway ${listener.gateway} listens with TLS, but the smoke made no certificate for it`);
-  const assets = servicePortOf(objects, "assets", "http");
-  const clickhousePod = clickhousePodOf(objects);
-  const identity = servicePortOf(objects, "identity", "http");
 
   // SQL on stdin; the output (row counts only) and the SQL stay out of the log.
   const psql = async (sql: string): Promise<string> => {
@@ -736,6 +756,30 @@ export async function runApiCheck(
     );
     return result.stdout;
   };
+  const gateway = new PortForward(ctx, namespace, `service/${listener.gateway}-istio`, listener.port, listener.tls ? { ca } : undefined);
+  return { appHost, listener, psql, gateway };
+}
+
+/**
+ * Runs checkTenantApi, checkTelemetryApi, checkTenantAccount and checkIngressEdges against the
+ * release in `namespace`: psql through `kubectl exec` in the CloudNativePG primary, ClickHouse
+ * queries through `kubectl exec` in the bundled ClickHouse's pod, requests through `kubectl
+ * port-forward` to the ingress gateway's Service (`ca`: the certificate the smoke made for an
+ * HTTPS listener). Returns the report line and the user ID of the platform administrator the
+ * bootstrap made, whom the certs check (certs.ts) acts as.
+ */
+export async function runApiCheck(
+  ctx: ApiCheckContext,
+  namespace: string,
+  objects: K8sObject[],
+  ca: string | undefined,
+  name: string,
+): Promise<{ detail: string; platformAdmin: string }> {
+  const { appHost, listener, psql, gateway } = await ingressAccess(ctx, namespace, objects, ca);
+  const env = { KUBECONFIG: ctx.kubeconfig };
+  const assets = servicePortOf(objects, "assets", "http");
+  const clickhousePod = clickhousePodOf(objects);
+  const identity = servicePortOf(objects, "identity", "http");
 
   // The platform administrator bootstrap: the chart's CronJob, as the migration Job's account.
   const bootstrap = bootstrapCronJobOf(objects);
@@ -761,7 +805,6 @@ export async function runApiCheck(
     return result.stdout;
   };
 
-  const gateway = new PortForward(ctx, namespace, `service/${listener.gateway}-istio`, listener.port, listener.tls ? { ca } : undefined);
   // The assets service without the ingress: kubectl port-forward enters its pod, so the request
   // passes neither the gateway nor the mesh's policies, only the service's own token check.
   const direct = new PortForward(ctx, namespace, `service/${assets.service}`, assets.port, undefined);
@@ -787,7 +830,7 @@ export async function runApiCheck(
       listener.port,
       made,
     );
-    return `${made.detail}; ${telemetry}; ${account}; ${edges}`;
+    return { detail: `${made.detail}; ${telemetry}; ${account}; ${edges}`, platformAdmin: made.admin.userId };
   } finally {
     gateway.close();
     direct.close();
@@ -799,7 +842,7 @@ export async function runApiCheck(
  * A `kubectl port-forward` to `target` on a free local port, reopened when it is lost while a GET
  * is in flight (tunnel-recovery.ts). `tls`: the target speaks HTTPS with this CA.
  */
-class PortForward {
+export class PortForward {
   private tunnel: Subprocess | undefined;
   private endpoint: RawEndpoint | undefined;
 

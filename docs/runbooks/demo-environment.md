@@ -169,7 +169,20 @@ Laysi/trustiot-v2#500（commit `26b454d`）起，入口的跨站請求檢查要 
    ```
 
 7. **確認**：`flux.ts status` 的根 Kustomization 停在合併的 commit、HelmRelease 與 Kustomization 都沒有暫停、每個 Deployment available；`kubectl -n trustiot get helmreleases.helm.toolkit.fluxcd.io trustiot` 的 READY 為 True，訊息是這次的升級；`kubectl -n trustiot get cluster trustiot-postgres` 的 STATUS 是 `Cluster in healthy state`，`kubectl -n trustiot get database trustiot-postgres-trustiot` 的 APPLIED 是 `true`；`kubectl -n trustiot get jobs` 有完成的 `trustiot-migrate-<新的 hash>`；`kubectl -n trustiot get pvc` 有新的兩個 PVC。最後跑 `tunnel.ts check --stage 2`。升級失敗時看 `describe helmrelease` 與 Job 的日誌（deploy/chart/README.md「migration Job」的「失敗時」）。
-8. **重建帳號與租戶**：repo 沒有展示環境的種子資料（`bun scripts/dev.ts seed` 只給本機的開發環境），使用者、租戶與成員資格照它們第一次建立的方式重建：第一位平台管理員照[第一位平台管理員 runbook](platform-admin.md) 的「步驟」建立（資料重設後標記也不在了，所以指令以 0 結束），再由他登入、建立租戶。所有 session 都已失效，受邀的人要重新登入 app（Access 的 session 不受影響）。
+8. **重建帳號與租戶**：repo 沒有展示環境的種子資料（`bun scripts/dev.ts seed` 只給本機的開發環境），使用者、租戶與成員資格照它們第一次建立的方式重建。所有 session 都已失效，受邀的人要重新登入 app（Access 的 session 不受影響）。
+   - 第一位平台管理員照[第一位平台管理員 runbook](platform-admin.md) 的「步驟」建立（資料重設後標記也不在了，所以指令以 0 結束），再以 email 驗證碼登入 app。其他使用者照它們第一次建立的方式重建（身分服務還沒有管理使用者的 API，見 [services/identity](../../services/identity/README.md)）。
+   - 租戶：平台管理者以 `POST /api/identity/v1/tenants` 建立（services/identity 的「租戶」）。
+   - 成員資格與角色：平台管理者以 `PUT /api/identity/v1/platform/tenants/<租戶 ID>/members` 設定，每個成員一次，使用者要先存在（services/identity 的「成員」，Laysi/trustiot-v2#583）。在 app 的頁面以平台管理者登入，在瀏覽器開發者工具的 Console 執行（同源請求，瀏覽器帶上 session cookie 與 `Sec-Fetch-Site: same-origin`，ext_authz 的跨站檢查才放行）：
+
+     ```js
+     await fetch("/api/identity/v1/platform/tenants/<租戶 ID>/members", {
+       method: "PUT",
+       headers: { "Content-Type": "application/json" },
+       body: JSON.stringify({ email: "<成員的 email>", role: "admin" }),
+     }).then(async (r) => [r.status, await r.json()]);
+     ```
+
+     新成員回 201、改角色回 200，`previous_role` 是原本的角色；404 是沒有這個租戶，422 `member.email_unknown` 是這個 email 還沒有使用者。`role` 是 `viewer`、`editor` 或 `admin`；展示者自己要進入展示租戶時，也以這個方式把自己設為成員。每次變更都記在那個租戶的操作紀錄（`identity.member_role_changed`），成員下一個請求就帶新角色；已經在用的 app 頁面要切到這個租戶（或重新登入）才會以它為目前的租戶。
 9. **釋放 lab 鎖**，在重建完成之後：
 
    ```sh

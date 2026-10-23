@@ -5,7 +5,8 @@
 //! token signed for the service the request is routed to. Users log in with a code sent to their
 //! email address, the only way to create a session (Laysi/trustiot-v2#103); they log out of one
 //! session or of all. Platform administrators create tenants (Laysi/trustiot-v2#65), which other
-//! services learn of from the `identity.tenant_created` event. The service also keeps the
+//! services learn of from the `identity.tenant_created` event, and set users' roles in them
+//! (Laysi/trustiot-v2#583), which the `identity.member_role_changed` event records. The service also keeps the
 //! platform's event layer and operation log (Laysi/trustiot-v2#130, decision 34): it records
 //! every producer's events once and serves them to tenant administrators and the back office.
 //!
@@ -23,6 +24,8 @@
 //! - [`delegation`]: run delegations, for an agent run that acts for its user longer than the
 //!   request's token lives (Laysi/trustiot-v2#551).
 //! - [`tenants`]: creating tenants, and the event that announces them.
+//! - [`members`]: platform administrators setting users' roles in tenants, and the event that
+//!   records each change.
 //! - [`event_log`]: the event layer: recording every producer's events, and reading them.
 //! - [`schema`]: the migration files this release expects, which readiness checks
 //!   (Laysi/trustiot-v2#402) and the migration Job applies.
@@ -43,6 +46,7 @@ pub mod issuer;
 pub mod login;
 pub mod logout;
 pub mod mail;
+pub mod members;
 pub mod schema;
 pub mod session;
 pub mod tenants;
@@ -77,6 +81,7 @@ use crate::tenants::TenantStore;
 #[openapi(
     paths(
         tenants::create_tenant,
+        members::set_member_role,
         login::log_in,
         logout::log_out,
         logout::log_out_everywhere,
@@ -98,8 +103,8 @@ pub fn openapi() -> utoipa::openapi::OpenApi {
 /// signing keys file ([`Issuer::watch`]), starts keeping the Postgres connections open (with the
 /// session check of `crates/service-kit`), starts the worker that mails login codes, starts
 /// recording the event log ([`event_log`]), serves the token exchange and run delegations on
-/// their own port ([`serve_exchange`]), and returns the ext_authz check, login, logout, the tenant API and the
-/// event log API for the API port. Readiness passes once the connections are open
+/// their own port ([`serve_exchange`]), and returns the ext_authz check, login, logout, the tenant API, the
+/// member API and the event log API for the API port. Readiness passes once the connections are open
 /// (`PgSessionStore::keep_warm`), the public keys have arrived, a key may sign, and the database
 /// has every migration file this release expects ([`schema::SCHEMA`]).
 ///
@@ -158,6 +163,8 @@ pub async fn start(context: Context<Config>) -> Result<Router, BoxError> {
     });
     MigrationCheck::new(&schema::SCHEMA, store.pool().clone()).register(context.health());
     let tenants = TenantStore::connect_lazy(config.postgres().connect_options())?;
+    // Setting members' roles shares the tenant store's pool (README, "連線池").
+    let members = tenants.members();
     let log = start_event_log(&context)?;
     // Requests to the service's own API come through the ingress gateway like any other, with a
     // token the ext_authz check signed for `identity`.
@@ -200,6 +207,7 @@ pub async fn start(context: Context<Config>) -> Result<Router, BoxError> {
         .merge(login::routes(login))
         .merge(logout::routes(verifier.clone(), logins))
         .merge(tenants::routes(verifier.clone(), tenants))
+        .merge(members::routes(verifier.clone(), members))
         .merge(event_log::routes(verifier, log)))
 }
 

@@ -3,7 +3,8 @@
 use serde::{Deserialize, Serialize};
 
 use crate::event::Event;
-use crate::id::UserId;
+use crate::id::{TenantId, UserId};
+use crate::identity::TenantRole;
 use crate::service::ServiceName;
 
 /// The aggregate kind of tenant events; the aggregate ID is the tenant ID.
@@ -25,6 +26,47 @@ pub struct TenantCreated {}
 
 impl Event for TenantCreated {
     const TYPE: &'static str = "identity.tenant_created";
+    const VERSION: u32 = 1;
+    const PRODUCER: ServiceName = ServiceName::Identity;
+}
+
+/// The aggregate kind of membership events; the aggregate ID is [`membership_aggregate_id`]: the
+/// tenant ID and the user ID, so one user's memberships in different tenants are different
+/// aggregates (an aggregate belongs to the tenant of its first event, crates/outbox).
+pub const MEMBERSHIP_AGGREGATE: &str = "membership";
+
+/// The aggregate ID of the membership of `user` in `tenant`: `<tenant ID>:<user ID>`.
+#[must_use]
+pub fn membership_aggregate_id(tenant: TenantId, user: UserId) -> String {
+    format!("{tenant}:{user}")
+}
+
+/// A member's role in a tenant was set: a new membership, or a different role for an existing
+/// one (Laysi/trustiot-v2#583). Setting the role a member already has writes no event.
+///
+/// The identity service writes it in the transaction that changes the membership, in that
+/// tenant's row-level security context, so the envelope's `tenant_id` is the membership's tenant
+/// and consumers take the tenant from there, never from the payload. The envelope's `actor` is
+/// who set the role: a platform administrator through the back office (Laysi/trustiot-v2#583),
+/// later also a tenant administrator (Laysi/trustiot-v2#105). The aggregate is
+/// [`MEMBERSHIP_AGGREGATE`] with [`membership_aggregate_id`], so a membership's events arrive in
+/// the order they were written.
+///
+/// The payload names the user by ID only: the email address is personal data and stays with the
+/// identity service, as it does in the operation log that records this event.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MemberRoleChanged {
+    /// The member.
+    pub user_id: UserId,
+    /// The role before the change; `None` when the user was not a member.
+    #[serde(default)]
+    pub previous_role: Option<TenantRole>,
+    /// The role now: `viewer`, `editor` or `admin`.
+    pub role: TenantRole,
+}
+
+impl Event for MemberRoleChanged {
+    const TYPE: &'static str = "identity.member_role_changed";
     const VERSION: u32 = 1;
     const PRODUCER: ServiceName = ServiceName::Identity;
 }

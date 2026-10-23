@@ -8,7 +8,7 @@
 - 有 ext_authz 端點與內部身分簽發。
 - 有 token 交換：服務代表使用者呼叫另一個服務時，拿自己收到的 token 換一張受眾是對方的 token（見 [token 交換](#token-交換代表使用者呼叫)，Laysi/trustiot-v2#106，2026-10-21）。
 - **email 驗證碼登入、登出與登出所有裝置**（Laysi/trustiot-v2#103，2026-10-21，見[登入](#登入)）：這是建立 session 的唯一方式，沒有密碼登入、公開註冊，任何版本都沒有假登入；驗證碼經 chart `smtp.*` 的 relay 寄出。使用者與 email 目前由擁有者角色寫入（[測試工具怎麼建立 session](#測試工具怎麼建立-session)），沒有管理使用者的 API。
-- 一個對外的 HTTP API：平台管理者建立租戶，同一個交易寫出 `identity.tenant_created` 事件（見[租戶](#租戶)，Laysi/trustiot-v2#65，2026-10-14）；規格在 `api/openapi.json`（`tools/openapi`）。
+- 一個對外的 HTTP API：平台管理者建立租戶，同一個交易寫出 `identity.tenant_created` 事件（見[租戶](#租戶)，Laysi/trustiot-v2#65，2026-10-14）；平台管理者設定既有使用者在租戶裡的角色，同一個交易寫出 `identity.member_role_changed` 事件（見[成員](#成員)，Laysi/trustiot-v2#583，2026-10-23）；規格在 `api/openapi.json`（`tools/openapi`）。
 - 映像見下方[映像](#映像)；chart 的 `services.identity.enabled` 預設仍是 `false`。nightly 的 smoke 從 Laysi/trustiot-v2#65 起啟用它與資產服務，經入口建立租戶；其餘啟用工作在 Laysi/trustiot-v2#77。
 
 ## 與入口的約定（ext_authz）
@@ -218,6 +218,39 @@ ext_authz 每個請求都查資料庫，所以被撤銷的 session 下一個請�
 - 新租戶的 ID 由服務產生（UUIDv7），租戶的列與 `identity.tenant_created`（`crates/contract` 的 `events::identity::TenantCreated`，aggregate `tenant`/租戶 ID，事件帶租戶，`actor` 是建立它的平台管理者）在**同一個新租戶的 RLS 交易**裡寫入（`outbox::publish_as`），一起 commit 或一起放棄：有租戶就一定有事件，沒有租戶就沒有事件（`tests/tenants.rs` 撤銷寫 outbox 的權限後證明 503 且沒有留下列）。其他服務從這個事件建立自己的租戶資料，第一個是[資產服務](../assets/README.md)。
 - 成功時記一行 INFO `created a tenant`，帶 `user_id` 與 `tenant_id`；租戶名稱可能是公司名，不寫日誌，事件也不帶名稱（要名稱的服務以後經 API 取得）。
 
+## 成員
+
+平台管理者（A2）以 `PUT /api/identity/v1/platform/tenants/{tenant_id}/members` 設定既有使用者在租戶裡的角色（`src/members.rs`，Laysi/trustiot-v2#583）：使用者還不是成員時建立成員資格，已經是成員時改角色。body 是 `{"email", "role"}`，`role` 是 `viewer`、`editor` 或 `admin`。
+
+2026-10-23 的決定（Laysi/trustiot-v2#104 的留言）：
+
+- 平台管理者對租戶的資料沒有隱含的權限：要看或改一個租戶的資料，要有明確的成員資格，就是這支 API 寫的那一筆，而且留在操作紀錄。平台管理者也可以用它設定自己的角色（展示環境的展示者就是這樣進入展示租戶）。
+- 只設定既有使用者，不建立使用者：舊系統曾因「加成員時默默建立帳號」出問題（Laysi/trustiot#46）。建立使用者與邀請在 Laysi/trustiot-v2#105。
+- 只接受平台管理者本人的請求：經其他服務換發、帶 `act` 的 token（例如 AI 助理代表平台管理者呼叫）一律 403，與 certs 的工作站憑證相同。identity 其他的平台路徑由 Laysi/trustiot-v2#584 統一。
+- 租戶管理者自己改角色、移除成員與「至少一位 admin」的原子檢查在 Laysi/trustiot-v2#105；這支 API 不檢查租戶是否還有 admin。
+
+| 請求 | 回應 |
+| --- | --- |
+| 沒有有效的內部身分 token | 401 `unauthenticated` |
+| 不是平台管理者（租戶的 `admin` 也不是），或 token 帶 `act` | 403 `permission_denied`，在讀 body 與資料庫之前判斷（body 不讀進記憶體） |
+| 租戶 ID 不是 UUID | 400 `invalid_request` |
+| `Content-Type` 不是 `application/json`（可帶參數），或沒有 `Content-Type` | 400 `invalid_request` |
+| body 超過 4096 位元組（`MAX_BODY_BYTES`），或不是帶字串 `email` 與字串 `role` 的 JSON 物件 | 400 `invalid_request` |
+| `email` 不是地址、`role` 不是三種角色之一 | 422 `validation_failed`，欄位 `/email`（`member.email_invalid`）、`/role`（`member.role_invalid`），兩個都錯時兩個都列 |
+| 沒有這個租戶 | 404 `not_found`，什麼都沒寫 |
+| 沒有使用者用這個 email | 422 `validation_failed`，欄位 `/email`，`member.email_unknown`；什麼都沒寫，也不建立使用者 |
+| 資料庫出錯或拒絕交易 | 503 `unavailable`，什麼都沒寫 |
+| 使用者原本不是成員 | 201，`{"tenant_id", "user_id", "role", "previous_role": null}` |
+| 使用者原本是成員 | 200，`previous_role` 是原本的角色；角色本來就是這個時什麼都不寫、不發事件 |
+
+- 不存在的租戶回 404、不存在的 email 回 422：租戶是路徑上的資源，email 是 body 的欄位，前端可以把錯誤標在欄位上。能分辨某個 email 有沒有帳號的只有平台管理者本人，他們本來就管理使用者；其他人在讀任何資料之前就拿到 403，看不出 email 是否存在。
+- email 照登入的規則正規化（去前後空白、ASCII 小寫）後比對 `users.email`。
+- 交易以**路徑的租戶**開（`BackgroundTenantDb`，見[資料庫](#資料庫)），先確認租戶存在、找到使用者，再以 `SELECT ... FOR UPDATE` 鎖住成員資格，所以同一筆成員資格的兩個請求依序執行，每個事件記的「原本的角色」都正確。成員資格還不存在時以 `INSERT ... ON CONFLICT DO NOTHING` 建立；同時有另一個請求先建立了，就等它 commit 後鎖住再改。交易開頭設 `lock_timeout` 5 秒（`LOCK_TIMEOUT`）：等鎖超過就回 503，不長時間佔住租戶連線池僅有的兩條連線。
+- 成員資格與事件 `identity.member_role_changed`（`crates/contract` 的 `events::identity::MemberRoleChanged`）在同一個交易寫入（`outbox::publish_as`）：payload 是 `user_id`、`previous_role`（新成員是 `null`）與 `role`，不含 email；信封的租戶是成員資格的租戶，`actor` 是平台管理者；aggregate 是 `membership` 加 `<租戶 ID>:<使用者 ID>`，同一筆成員資格的事件依序送達。事件層把它記進該租戶的操作紀錄，租戶的 `admin` 以 `GET /api/identity/v1/event-log` 看得到。
+- **何時生效**：ext_authz 每個請求都在那個租戶的 RLS 交易裡重讀角色，沒有快取，所以使用者下一個請求就帶新角色。已經簽出的 token 最多還活 60 秒（`TOKEN_LIFETIME_SECS`，驗證端另有 5 秒時鐘誤差），它在這段期間仍帶舊角色；run 委派每次換 token 也重讀角色。使用者的 session 要以這個租戶為目前的租戶（`active_tenant_id`），請求才帶這個租戶；切換租戶在 Laysi/trustiot-v2#497。
+- 每次變更記一行 INFO `set a member's role`，帶平台管理者的 `user_id`、`tenant_id`、`member_user_id` 與兩個角色；拒絕記 INFO `refused to set a member's role`，帶 `user_id` 與 `exchanged`。不寫 email。
+- 路由：與其他身分服務的 API 一樣在 `/api/identity` 的 cookie 路由底下（chart 的路由以路徑前綴比對，不分方法），跨站請求由 ext_authz 擋下（PUT 不是 GET 或 HEAD，`Sec-Fetch-Site` 或 `Origin` 不符時 403），服務另外要求 JSON 的 `Content-Type`（見[租戶](#租戶)）。
+
 ## 事件層與操作紀錄
 
 平台的事件層與操作紀錄（清單 K2，[決策 34](../../docs/architecture/decisions.md)，Laysi/trustiot-v2#130）由身分服務保存（`src/event_log.rs`）：
@@ -258,7 +291,7 @@ schema `identity`，DDL 在 `migrations/postgres/`，由 migration Job（Laysi/t
 | 角色 | 權限 |
 | --- | --- |
 | `identity_owner`（migration 角色） | 擁有 schema 與所有表 |
-| `identity_app`（服務角色） | `identity.users`、`identity.memberships`、`identity.sessions` 的 `SELECT`；`identity.sessions` 的 `INSERT`（只限 `id`、`token_hash`、`user_id`、`active_tenant_id`、`expires_at` 五欄：建立時間一律是資料庫的預設 `now()`，7 天上限才從真正的建立時間算起）與 `expires_at`、`revoked_at` 兩欄的 `UPDATE`（登入、延長、登出；不能刪除、不能改使用者、建立時間與租戶，trigger 另擋超過 7 天與撤銷後復原）；`identity.login_codes` 的 `SELECT`、`INSERT`、`DELETE` 與 `attempts`、`consumed_at`、`invalidated_at` 三欄的 `UPDATE`；`identity.tenants` 的 `SELECT`、`INSERT`；outbox 的寫入權限（`outbox_event` 的 `INSERT`、`outbox_aggregate` 的 `SELECT`、`INSERT`、`UPDATE`，由 migration Job 授權，見 [crates/outbox](../../crates/outbox/README.md)）；兩張表都有 RLS，它只碰得到目前租戶的事件與聚合。事件紀錄：`event_log` 的 `SELECT`、`INSERT`（RLS），`platform_event_log` 的 `INSERT`，outbox 消費端的表（Job 授權） |
+| `identity_app`（服務角色） | `identity.users`、`identity.memberships`、`identity.sessions` 的 `SELECT`；`identity.memberships` 的 `INSERT`（只限 `tenant_id`、`user_id`、`tenant_role` 三欄）與 `tenant_role` 一欄的 `UPDATE`（設定成員角色，`0005_member_roles.sql`；不能刪除成員資格，不能改租戶、使用者與建立時間，RLS 只放行交易的租戶）；`identity.sessions` 的 `INSERT`（只限 `id`、`token_hash`、`user_id`、`active_tenant_id`、`expires_at` 五欄：建立時間一律是資料庫的預設 `now()`，7 天上限才從真正的建立時間算起）與 `expires_at`、`revoked_at` 兩欄的 `UPDATE`（登入、延長、登出；不能刪除、不能改使用者、建立時間與租戶，trigger 另擋超過 7 天與撤銷後復原）；`identity.login_codes` 的 `SELECT`、`INSERT`、`DELETE` 與 `attempts`、`consumed_at`、`invalidated_at` 三欄的 `UPDATE`；`identity.tenants` 的 `SELECT`、`INSERT`；outbox 的寫入權限（`outbox_event` 的 `INSERT`、`outbox_aggregate` 的 `SELECT`、`INSERT`、`UPDATE`，由 migration Job 授權，見 [crates/outbox](../../crates/outbox/README.md)）；兩張表都有 RLS，它只碰得到目前租戶的事件與聚合。事件紀錄：`event_log` 的 `SELECT`、`INSERT`（RLS），`platform_event_log` 的 `INSERT`，outbox 消費端的表（Job 授權） |
 | `identity_platform`（平台角色） | 事件紀錄的消費端以它讀 `CONSUMES` 每個產生端的 `outbox_event`（Job 授權），後台以它讀 `event_log`（`platform_access` policy，只有 `FOR SELECT`）與 `platform_event_log` 的 `SELECT`；沒有寫入權限。chart 綁它的密碼（`trustiot.migrate.platformLogins`，2026-10-21 起，Laysi/trustiot-v2#130） |
 
 | 表 | 內容 | RLS |
@@ -271,7 +304,7 @@ schema `identity`，DDL 在 `migrations/postgres/`，由 migration Job（Laysi/t
 | `outbox_event`、`outbox_aggregate` | 這個服務寫出的事件與每個聚合的序號（由 Job 建立，見 [crates/outbox](../../crates/outbox/README.md)）；`tenant` 聚合屬於該租戶 | outbox 範本的 policy（`outbox-event.sql`、`outbox-aggregate.sql`） |
 | `event_log` | 租戶事件的紀錄（`0003_event_log.sql`，見[事件層與操作紀錄](#事件層與操作紀錄)）：信封的欄位、aggregate、`actor_user_id` 或 `actor_service`、`payload`、`recorded_at`；主鍵 `(tenant_id, event_id)` | `tenant_isolation`，另有只給 `identity_platform` 的 `platform_access FOR SELECT` |
 | `platform_event_log` | 全平台事件的紀錄，欄位同上但沒有 `tenant_id` | 無：不是租戶資料 |
-| `platform_admin_bootstrap` | 第一位平台管理員建立過的標記：最多一列（`singleton`、使用者 ID、時間，`0005_platform_admin_bootstrap.sql`），只有 `identity_owner` 碰得到（見[第一位平台管理員](#第一位平台管理員)） | 無：不是租戶資料 |
+| `platform_admin_bootstrap` | 第一位平台管理員建立過的標記：最多一列（`singleton`、使用者 ID、時間，`0006_platform_admin_bootstrap.sql`），只有 `identity_owner` 碰得到（見[第一位平台管理員](#第一位平台管理員)） | 無：不是租戶資料 |
 | `outbox_subscription`、`outbox_inbox`、`outbox_dead_letter`、`outbox_version` | 事件紀錄的消費端的進度、已處理與放棄的事件 ID（由 Job 建立，因為 `CONSUMES` 不是空的） | 無：不是租戶資料 |
 | `trustiot_migrate_applied` | migration Job 在這個 schema 套用過的檔案（component、檔名、SHA-256），由 Job 寫入；`identity_app` 只能 `SELECT`，給 readiness 的 migration 檢查用 | 無：不是租戶資料 |
 
@@ -280,6 +313,8 @@ schema `identity`，DDL 在 `migrations/postgres/`，由 migration Job（Laysi/t
 讀角色用 `BackgroundTenantDb`，這是 kit 規則的例外：kit 只把它交給背景工作，handler 只拿 `TenantDb`。這裡的租戶來自剛從資料庫讀出的 session 列，不來自請求，所以由 `PgSessionStore` 私下持有 `BackgroundTenantDb`，只在 `lookup` 裡使用，ext_authz handler 拿不到它。
 
 建立租戶是第二個例外：新租戶的交易沒有請求可以提供租戶（token 是平台管理者的，沒有那個租戶）。`TenantStore` 有自己的連線池（服務角色 2 條連線，`POOL_CONNECTIONS`，和 session 查詢的連線池分開，大量建立租戶不會佔走 ext_authz 等著用的連線），私下持有它的 `BackgroundTenantDb`；唯一的方法 `create` 自己產生租戶 ID，所以請求無法選擇交易的租戶，handler 也拿不到 `BackgroundTenantDb`。
+
+設定成員角色是第三個例外（Laysi/trustiot-v2#583），也是唯一以**請求指定、但 token 沒有的租戶**開交易的地方：平台管理者的 token 沒有那個租戶，交易的租戶取自路徑。`MemberStore` 由 `TenantStore::members` 產生，共用同一個連線池與 `BackgroundTenantDb`（兩者都是平台管理者少量的寫入，不另外佔每個副本的連線數），並私下持有它；唯一的方法 `set_role` 在開交易之前先確認是平台管理者本人的請求（`is_own_platform_admin`：平台管理者，而且 token 沒有 `act`），handler 在讀 body 之前也先判斷一次，所以其他人無法讓服務在任何租戶開交易。交易裡只做三件事：確認租戶存在、以 email 找使用者（`users` 不是租戶資料）、寫那一筆成員資格與事件；RLS 讓它碰不到其他租戶的列。
 
 ## 連線池
 
@@ -308,7 +343,7 @@ schema `identity`，DDL 在 `migrations/postgres/`，由 migration Job（Laysi/t
 | 連線池 | 誰用 | 連線數 |
 | --- | --- | --- |
 | ext_authz（`PgSessionStore`） | ext_authz 檢查、保溫工作、session 延長 | `TRUSTIOT__DATABASE__MAX_CONNECTIONS`，預設 10 |
-| 租戶（`tenants::POOL_CONNECTIONS`） | 租戶 API | 2 |
+| 租戶（`tenants::POOL_CONNECTIONS`） | 租戶 API、設定成員角色 | 2 |
 | 登入請求（`login::POOL_CONNECTIONS`） | `verify_code`、登出、登出所有裝置 | 4 |
 | 寄信（`login::SEND_POOL_CONNECTIONS`） | 發驗證碼的 worker（發碼、作廢沒寄出的驗證碼）、每小時刪除舊的驗證碼 | 2 |
 | run 委派（`delegation::POOL_CONNECTIONS`） | 建立 run 委派與每次換 token 時查 session 與成員資格（見[agent 執行期間的委派](#agent-執行期間的委派)） | 4 |
@@ -401,7 +436,7 @@ curl -i -H 'Host: localhost' -H 'Cookie: __Host-trustiot-session=<seed 印出的
 
 部署的第一位平台管理員（A2）不經這個服務的任何 HTTP 路由建立：操作者以 chart 的 CronJob `<release>-platform-admin-bootstrap` 建一個 Job，經 `kubectl attach -i` 把地址寫進它的 stdin，Job 以 migration 角色執行 `migrate bootstrap-platform-admin`（[tools/migrate](../../tools/migrate/README.md)，步驟、結束碼與復原在 [docs/runbooks/platform-admin.md](../../docs/runbooks/platform-admin.md)）。
 
-- 一個交易裡：以 `identity_owner` 依地址找使用者（`FOR UPDATE`）、在 `identity.platform_admin_bootstrap` 寫下唯一的一列（主鍵是固定為 `true` 的 `singleton`，`0005_platform_admin_bootstrap.sql`）、把已有的使用者設為平台管理員或建立新使用者，再以 outbox 寫 `identity.platform_admin_granted`（`crates/contract` 的 `events::identity::PlatformAdminGranted`，aggregate `user`/使用者 ID，沒有租戶、沒有 `actor`，payload 只有 `user_id` 與 `via: "bootstrap"`）。事件紀錄的消費端把它收進 `platform_event_log`。
+- 一個交易裡：以 `identity_owner` 依地址找使用者（`FOR UPDATE`）、在 `identity.platform_admin_bootstrap` 寫下唯一的一列（主鍵是固定為 `true` 的 `singleton`，`0006_platform_admin_bootstrap.sql`）、把已有的使用者設為平台管理員或建立新使用者，再以 outbox 寫 `identity.platform_admin_granted`（`crates/contract` 的 `events::identity::PlatformAdminGranted`，aggregate `user`/使用者 ID，沒有租戶、沒有 `actor`，payload 只有 `user_id` 與 `via: "bootstrap"`）。事件紀錄的消費端把它收進 `platform_event_log`。
 - 一列已經存在時（之前成功過，或同時執行的另一次先 commit），不改任何東西、以結束碼 3 結束，日誌寫出當時那位的 `user_id` 與時間。這一列不跟著使用者刪除或取消平台管理員而消失（沒有外鍵），所以「只有一次」在所有平台管理員都被移除之後仍然成立；要再建立一位，以 superuser 刪除這一列（runbook 的「復原」）。
 - 地址以 `src/email.rs` 的同一份規則正規化（去掉前後空白、ASCII 小寫、`is_address`），`tools/migrate` 編譯同一個檔案，所以建立的 `users.email` 一定是登入比對的寫法。地址不寫進日誌、事件與錯誤訊息。
 - 平台管理員不會自動成為任何租戶的成員：登入之後以 `POST /api/identity/v1/tenants` 建立租戶。
@@ -415,7 +450,7 @@ curl -i -H 'Host: localhost' -H 'Cookie: __Host-trustiot-session=<seed 印出的
 CARGO_BUILD_JOBS=2 cargo test -p identity
 ```
 
-`tests/ext_authz.rs` 需要 podman 或 docker：起一個帶 TLS 的暫時 Postgres（與 `crates/service-kit` 的測試共用同一份支援程式），每個測試建自己的資料庫、套用 migration、以 `identity_app` 啟動真的 binary（它與 `tests/adversarial.rs` 只套用 `0001_identity.sql` 與 `0004_login.sql`，並代替 Job 寫入這一版每個檔案的紀錄，`tests/support/mod.rs` 的 `record_release_migrations`，readiness 的 migration 檢查才會通過；沒有給平台角色的帳密，所以事件紀錄關閉，ext_authz 不受影響）。`tests/tenants.rs`、`tests/login.rs`、`tests/event_log.rs`、`tests/platform_admin.rs` 與 `tests/cross_tenant.rs`（[crates/testkit](../../crates/testkit/README.md) 的跨租戶負向測試）用 testkit 的 TLS Postgres，schema 由 migration Job 的程式套用（`testkit::product`）。沒有容器時都略過，設了 `CI` 時改為失敗。
+`tests/ext_authz.rs` 需要 podman 或 docker：起一個帶 TLS 的暫時 Postgres（與 `crates/service-kit` 的測試共用同一份支援程式），每個測試建自己的資料庫、套用 migration、以 `identity_app` 啟動真的 binary（它與 `tests/adversarial.rs` 只套用 `0001_identity.sql` 與 `0004_login.sql`，並代替 Job 寫入這一版每個檔案的紀錄，`tests/support/mod.rs` 的 `record_release_migrations`，readiness 的 migration 檢查才會通過；沒有給平台角色的帳密，所以事件紀錄關閉，ext_authz 不受影響）。`tests/tenants.rs`、`tests/members.rs`、`tests/login.rs`、`tests/event_log.rs`、`tests/platform_admin.rs` 與 `tests/cross_tenant.rs`（[crates/testkit](../../crates/testkit/README.md) 的跨租戶負向測試）用 testkit 的 TLS Postgres，schema 由 migration Job 的程式套用（`testkit::product`）。沒有容器時都略過，設了 `CI` 時改為失敗。
 
 | 測試 | 驗證 |
 | --- | --- |
@@ -438,7 +473,9 @@ CARGO_BUILD_JOBS=2 cargo test -p identity
 | `src/tenants.rs` | 租戶名稱的規則（去空白、長度以字元計、控制字元、格式字元與行／段落分隔符）；只接受 JSON 的 `Content-Type`（可帶參數，表單、`text/plain`、相近的型別與兩個 `Content-Type` 都拒絕） |
 | `tests/tenants.rs` | 真的服務與 migration Job 套用的產品 schema：平台管理者的 session 經這個服務的 ext_authz 換成 token 後建立租戶得到 201，列與 `identity.tenant_created` 在同一個交易（同一個 `xmin`）；撤銷寫 outbox 的權限時回 503 且沒有留下列；不是平台管理者 403（租戶的 `admin` 也是）、沒有 token 401、平台管理者給資產服務的 token 401、沒有 `Content-Type` 或是表單與 `text/plain` 400、壞的 body 400、壞的名稱 422，都不建立租戶；`application/json; charset=utf-8` 201；日誌不含租戶名稱 |
 | `tests/platform_admin.rs` | Laysi/trustiot-v2#582，真的服務、migration Job 套用的產品 schema 與假 SMTP relay：`migrate::platform_admin::bootstrap`（`migrate bootstrap-platform-admin` 的程式）以大小寫混雜、帶空白的地址建立第一位平台管理員，`platform_event_log` 收到剛好一筆 `identity.platform_admin_granted`（payload 只有 `user_id` 與 `via`、沒有 `actor`、沒有地址），沒有任何成員資格；這個使用者以驗證碼登入、經 ext_authz 換到 token，`POST /api/identity/v1/tenants` 201；再執行一次回報同一個使用者、什麼都不改；服務的日誌沒有地址。指令本身（結束碼、同時執行、復原）在 `tools/migrate/tests/platform_admin.rs` |
+| `src/members.rs` | 角色只接受 `viewer`、`editor`、`admin` 三種寫法（`unrecognized`、大小寫不同都拒絕），與 token、事件、資料表的寫法相同；body 的每個錯誤欄位都列出，body 的 `Debug` 不印 email；只有平台管理者本人的請求（沒有 `act`）可以設定，租戶的 `admin` 不行；OpenAPI 列出每個回應 |
+| `tests/members.rs` | Laysi/trustiot-v2#583，真的服務與 migration Job 套用的產品 schema：平台管理者設定之後，成員下一個經 ext_authz 的請求帶新角色（新成員 201、改角色 200、同樣的角色 200 且什麼都不寫）；每次變更在成員資格的租戶寫一筆 `identity.member_role_changed`（actor 是平台管理者、原本與新的角色、沒有 email），租戶 `admin` 讀到的操作紀錄有這兩筆，另一個租戶沒有；租戶 `admin`、別的租戶的 `admin`、沒有租戶的使用者、平台管理者經其他服務換發的 token 都 403，對不存在的租戶、壞的 body 與超過上限的 body 也是 403（先於讀取），成員資格、使用者與 outbox 都不變；不存在的租戶 404、不存在的 email 422，不寫入、不建立使用者；壞的租戶 ID、非 JSON 的 `Content-Type`、壞的 body 與超過 4096 位元組的 body 400，壞的 email 與角色 422；同時兩個請求建立同一個成員資格，一個 201、一個 200，事件前後相接；服務角色在租戶 A 的交易裡不能新增租戶 B 的成員資格、看不到也改不了它，也不能改成員資格的租戶、使用者、建立時間或刪除；日誌有設定與拒絕、沒有 email |
 | `tests/migrations.rs` | 真的服務與 migration Job 套用的產品 schema（Laysi/trustiot-v2#402）：Job 寫的紀錄就是 `src/schema.rs` 預期的清單（outbox 的兩個範本與 `migrations/postgres/` 的每個檔案），服務 ready 並記 INFO；以 superuser 拿掉 `0002_tenants.sql` 的紀錄時，新的行程 503，ERROR 日誌的 `missing` 寫出它，已經通過的行程維持 ready；紀錄回來後同一個行程轉為 ready；`outbox-aggregate.sql` 的 SHA-256 不同時 503，`changed` 寫出它；`identity_app` 讀得到自己的紀錄、讀不到 `trustiot_migrate.applied` 與 `assets` 的紀錄，也不能新增、修改、刪除自己的紀錄 |
-| `tests/cross_tenant.rs` | 產品 schema（`testkit::product`）上，服務角色讀不到也改不了其他租戶的 `memberships`、`tenants`（每個租戶一列）、`outbox_event` 與 `outbox_aggregate`（讀、無租戶讀、更新、搬移、插入五種探測；`outbox_aggregate` 在 2026-10-15 前豁免，Laysi/trustiot-v2#413 起照租戶表測）與 `event_log`（種子是 `assets` 的設備型號事件：每個產生端的事件都在這張表、受同一個 RLS），服務角色碰得到的每個關聯都已宣告：`users`、`sessions`、`login_codes`、`trustiot_migrate_applied`、`platform_event_log` 與消費端的表不是租戶資料而豁免；真的服務上，一個租戶的 `admin` 呼叫 `GET /api/identity/v1/event-log` 只看得到自己租戶的事件、沒有租戶時看不到任何事件；建立租戶、登入與兩個登出的 API 不讀租戶資料、兩個平台路徑只給平台管理者，都豁免 |
+| `tests/cross_tenant.rs` | 產品 schema（`testkit::product`）上，服務角色讀不到也改不了其他租戶的 `memberships`、`tenants`（每個租戶一列）、`outbox_event` 與 `outbox_aggregate`（讀、無租戶讀、更新、搬移、插入五種探測；`outbox_aggregate` 在 2026-10-15 前豁免，Laysi/trustiot-v2#413 起照租戶表測）與 `event_log`（種子是 `assets` 的設備型號事件：每個產生端的事件都在這張表、受同一個 RLS），服務角色碰得到的每個關聯都已宣告：`users`、`sessions`、`login_codes`、`trustiot_migrate_applied`、`platform_event_log` 與消費端的表不是租戶資料而豁免；真的服務上，一個租戶的 `admin` 呼叫 `GET /api/identity/v1/event-log` 只看得到自己租戶的事件、沒有租戶時看不到任何事件；建立租戶、登入與兩個登出的 API 不讀租戶資料、平台路徑（兩個事件紀錄與設定成員角色）只給平台管理者，都豁免，設定成員角色的隔離由 `tests/members.rs` 測 |
 | `src/event_log.rs` | 查詢參數（時間轉成 UTC、`from` 不早於 `to`、`limit` 的範圍、壞的 cursor）、cursor 到微秒來回不失真、`actor` 寫成哪個欄位（不認得的種類重試）、訂閱名稱 |
 | `tests/event_log.rs` | 真的服務與產品 schema，事件紀錄打開（Laysi/trustiot-v2#130）：建立租戶的操作在紀錄裡剛好一筆、`actor` 是平台管理者；寫 outbox 被拒時 503、沒有租戶也沒有紀錄，之後的操作照常收進來，紀錄數等於 outbox 的租戶事件數；已在紀錄裡的事件再投遞不多一列、訂閱不停；信封的 `producer` 不是讀取的 schema 時進死信；全平台事件進 `platform_event_log`；`assets` outbox 的設備型號事件（`assets.device_model_created`、`_updated`、`_deleted`）以 `identity.event-log.assets` 收進該租戶的紀錄，`producer`、aggregate 與 `actor` 照原樣，另一個租戶的 `admin` 看不到；`identity_app` 與 `identity_platform` 對兩張表的 `UPDATE`、`DELETE`、`TRUNCATE` 都是 42501，平台角色不能寫、服務角色不能讀全平台紀錄；租戶 `admin` 依時間範圍與分頁讀到自己租戶的紀錄（最新在前、每筆一次），另一個租戶看不到，`viewer`、沒有租戶、沒有 token 與壞參數被拒；平台管理者依租戶與時間讀任何租戶、讀全平台紀錄，不存在的租戶回空頁，租戶 `admin` 讀平台路徑 403；後台讀取記 `platform database access`，日誌沒有 payload |

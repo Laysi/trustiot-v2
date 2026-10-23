@@ -8,7 +8,7 @@
 //!
 //! 1. finds the user with that address, if there is one;
 //! 2. writes the only row of `identity.platform_admin_bootstrap`, the once-only marker
-//!    (services/identity/migrations/postgres/0005_platform_admin_bootstrap.sql);
+//!    (services/identity/migrations/postgres/0006_platform_admin_bootstrap.sql);
 //! 3. makes that user a platform administrator, or creates one with the address;
 //! 4. publishes `identity.platform_admin_granted` (payload: the user ID and `via: "bootstrap"`)
 //!    to the identity outbox, which the identity service records in
