@@ -1,5 +1,5 @@
 # CI=1 cargo test -p identity --test cross_tenant -- --nocapture
-     Running tests/cross_tenant.rs (target/debug/deps/cross_tenant-6a4f5c4b8e316389)
+     Running tests/cross_tenant.rs
 running 1 test
 result | subject | probe | outcome
 pass | identity.event_log | coverage | declared table
@@ -25,7 +25,7 @@ pass | GET /api/identity/v1/preferences | coverage | exempt: the caller's own se
 pass | PATCH /api/identity/v1/preferences | coverage | exempt: changes the caller's own settings, not tenant data: the user comes from the token, never from the request (tests/account.rs covers it)
 pass | POST /api/identity/v1/tenants | coverage | exempt: platform administrators only, and it creates a new tenant whose ID the service makes: it takes no tenant from the request and serves no existing tenant's data (tests/tenants.rs covers it)
 pass | POST /auth/login | coverage | exempt: logging in happens before there is a session or a tenant: it takes an email address and a code, and the session it creates acts in no tenant the user is not a member of (tests/login.rs covers it)
-pass | PUT /api/identity/v1/sessions/current/tenant | coverage | exempt: switches the caller's own session, found by its cookie and the token's session claim, which a probe's token cannot name; it serves no tenant data, and a tenant the user is not a member of is refused with the session unchanged (tests/account.rs covers it, across users, sessions and tenants)
+pass | PUT /api/identity/v1/sessions/current/tenant | coverage | exempt: switches the caller's own session, found by its cookie and the token's session claim, which a probe's token cannot name; its answer shows only the tenants the caller is a member of (the same as GET /api/identity/v1/sessions/current, declared above), and a tenant the user is not a member of is refused with the session unchanged (tests/account.rs covers it, across users, sessions and tenants)
 pass | identity.memberships | seed | 2 rows per tenant
 pass | identity.tenants | seed | 1 row per tenant (one_per_tenant)
 pass | identity.outbox_event | seed | 2 rows per tenant
@@ -90,4 +90,4 @@ pass | GET /api/identity/v1/sessions/current | without a tenant | 200, nothing s
 pass | api | tenant A rows after tenant B's endpoint probes | 9 rows, all unchanged
 86 probes, 0 failed
 test tenants_are_isolated ... ok
-test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.75s
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.96s

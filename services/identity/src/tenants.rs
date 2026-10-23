@@ -52,7 +52,8 @@ pub const TENANTS_PATH: &str = "/api/identity/v1/tenants";
 pub const MAX_NAME_CHARS: usize = 100;
 
 /// Connections of the pool that creates tenants, separate from the session store's, so a burst
-/// of tenant creations never takes a connection the ext_authz check is waiting for.
+/// of tenant creations never takes a connection the ext_authz check is waiting for. The
+/// signed-in user's own account API shares it ([`TenantStore::connect_lazy_shared`]).
 pub const POOL_CONNECTIONS: u32 = 2;
 
 /// How long creating a tenant may wait for a connection (opening one included).
@@ -200,15 +201,29 @@ impl TenantStore {
     ///
     /// When `options` would not verify the server.
     pub fn connect_lazy(options: PgConnectOptions) -> Result<Self, InsecureConnection> {
+        Self::connect_lazy_shared(options).map(|(store, _requests)| store)
+    }
+
+    /// [`TenantStore::connect_lazy`], also returning the pool's handle for request handlers,
+    /// which the service gives the signed-in user's own account API (the current session and
+    /// the preferences; services/identity/README.md, "連線池"). That handle opens transactions
+    /// only for the tenant of a request's verified token; the background handle, which picks a
+    /// tenant, stays private to the store.
+    ///
+    /// # Errors
+    ///
+    /// When `options` would not verify the server.
+    pub fn connect_lazy_shared(
+        options: PgConnectOptions,
+    ) -> Result<(Self, TenantDb), InsecureConnection> {
         let pool = PgPoolOptions::new()
             .max_connections(POOL_CONNECTIONS)
             .min_connections(0)
             .acquire_timeout(ACQUIRE_TIMEOUT);
         let actor = ServiceIdentity::new(ServiceName::Identity);
-        // The request-scoped handle is dropped: tenant creation is the pool's only use.
-        let (_requests, db): (TenantDb, BackgroundTenantDb) =
+        let (requests, db): (TenantDb, BackgroundTenantDb) =
             TenantDb::connect_lazy_with_background(options, pool, actor)?;
-        Ok(Self { db })
+        Ok((Self { db }, requests))
     }
 
     /// Creates a tenant named `name` for the platform administrator `admin`: a new tenant ID,

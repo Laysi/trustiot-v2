@@ -58,9 +58,7 @@ use contract::ServiceName;
 use outbox::{Consumer, ConsumerConfig};
 use service_kit::identity::{ExchangeVerifier, IdentityVerifier, PublishedKeys, ServiceIdentity};
 use service_kit::migrations::MigrationCheck;
-use service_kit::tenant::{
-    BackgroundTenantDb, PlatformActor, PlatformDb, PlatformReader, TenantDb,
-};
+use service_kit::tenant::{BackgroundTenantDb, PlatformActor, PlatformDb, TenantDb};
 use service_kit::{BoxError, Context};
 use sqlx::postgres::PgPoolOptions;
 use utoipa::OpenApi;
@@ -171,7 +169,9 @@ pub async fn start(context: Context<Config>) -> Result<Router, BoxError> {
         async move { store.ping().await }
     });
     MigrationCheck::new(&schema::SCHEMA, store.pool().clone()).register(context.health());
-    let tenants = TenantStore::connect_lazy(config.postgres().connect_options())?;
+    // The tenant API's pool also serves the signed-in user's own account (`accounts`).
+    let (tenants, accounts) =
+        TenantStore::connect_lazy_shared(config.postgres().connect_options())?;
     let log = start_event_log(&context)?;
     // Requests to the service's own API come through the ingress gateway like any other, with a
     // token the ext_authz check signed for `identity`.
@@ -209,17 +209,17 @@ pub async fn start(context: Context<Config>) -> Result<Router, BoxError> {
     if let Some(worker) = worker {
         context.spawn(worker.run(context.shutdown().clone()));
     }
-    // The signed-in user's own account (Laysi/trustiot-v2#497): one small pool of the service
-    // role for the current session and the preferences, and the platform role's reader of
-    // memberships.
-    let accounts = TenantDb::connect_lazy(
-        config.postgres().connect_options(),
-        PgPoolOptions::new()
-            .max_connections(current_session::POOL_CONNECTIONS)
-            .min_connections(0)
-            .acquire_timeout(current_session::ACQUIRE_TIMEOUT),
-    )?;
-    let account = AccountStore::new(accounts.clone(), memberships_reader(&context)?);
+    // The signed-in user's own account (Laysi/trustiot-v2#497) opens no pool of its own: the
+    // service role's queries use the tenant API's pool, and the platform role's reads of a
+    // user's memberships the event log's platform pool, at most `MEMBERSHIP_READS` at once
+    // (README, "連線池").
+    let memberships = log.as_ref().map(|(_, platform)| {
+        platform.reader(
+            PlatformActor::service(ServiceIdentity::new(ServiceName::Identity)),
+            current_session::MEMBERSHIPS_PURPOSE,
+        )
+    });
+    let account = AccountStore::new(accounts.clone(), memberships);
     let ext_authz = ExtAuthz::new(store, issuer, platform.ingress_routes.clone());
     Ok(ext_authz::routes(ext_authz)
         .merge(login::routes(login))
@@ -230,50 +230,61 @@ pub async fn start(context: Context<Config>) -> Result<Router, BoxError> {
             PreferencesStore::new(accounts),
         ))
         .merge(tenants::routes(verifier.clone(), tenants))
-        .merge(event_log::routes(verifier, log)))
+        .merge(event_log::routes(verifier, log.map(|(log, _)| log))))
 }
 
-/// The platform role's reader of users' memberships, on a lazily connecting pool of its own
-/// ([`current_session::PLATFORM_CONNECTIONS`]): listing the tenants a user belongs to reads
-/// memberships across tenants, which the service role cannot. `None`, with a WARN, when the
-/// platform role has no credentials; the current session API answers 503 then. Not part of
-/// readiness, like the event log's pools: the ext_authz check must not depend on it.
-fn memberships_reader(context: &Context<Config>) -> Result<Option<PlatformReader>, BoxError> {
-    let config = context.config();
-    let Some(platform_role) = config.platform_role() else {
-        tracing::warn!(
-            "the current session API is off: the platform role has no credentials \
-             (TRUSTIOT__DATABASE__PLATFORM_USERNAME, TRUSTIOT__DATABASE__PLATFORM_PASSWORD)"
-        );
-        return Ok(None);
-    };
-    let platform = PlatformDb::connect_lazy(
-        platform_role.connect_options(),
-        PgPoolOptions::new()
-            .max_connections(current_session::PLATFORM_CONNECTIONS)
-            .min_connections(0)
-            .acquire_timeout(current_session::ACQUIRE_TIMEOUT),
-    )?;
-    Ok(Some(platform.reader(
-        PlatformActor::service(ServiceIdentity::new(ServiceName::Identity)),
-        current_session::MEMBERSHIPS_PURPOSE,
-    )))
+/// Most connections one replica opens to Postgres, per role, when the ext_authz check's pool has
+/// `max_connections` (`TRUSTIOT__DATABASE__MAX_CONNECTIONS`): every pool [`start`] opens, at its
+/// largest. The roles have no connection limits of their own, so all services' sums, old and new
+/// replicas during a rollout included, must stay under Postgres' `max_connections`
+/// (services/identity/README.md, "連線池", which a test holds to these numbers).
+#[must_use]
+pub fn connections_per_replica(max_connections: u32) -> ReplicaConnections {
+    ReplicaConnections {
+        service: max_connections
+            + tenants::POOL_CONNECTIONS
+            + login::POOL_CONNECTIONS
+            + login::SEND_POOL_CONNECTIONS
+            + delegation::POOL_CONNECTIONS
+            + event_log::SERVICE_CONNECTIONS,
+        platform: event_log::platform_connections(),
+    }
+}
+
+/// Connections per database role; see [`connections_per_replica`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ReplicaConnections {
+    /// As the service role (`identity_app`).
+    pub service: u32,
+    /// As the platform role (`identity_platform`).
+    pub platform: u32,
+}
+
+impl ReplicaConnections {
+    /// Both roles together.
+    #[must_use]
+    pub const fn total(self) -> u32 {
+        self.service + self.platform
+    }
 }
 
 /// Opens the event log's pools lazily and starts one consumer per producer in
-/// [`schema::CONSUMES`], each recording that producer's events. `None`, with a WARN, when the
-/// platform role has no credentials ([`Config::platform_role`]).
+/// [`schema::CONSUMES`], each recording that producer's events; returns the event log and its
+/// platform pool, which the current session API also reads users' memberships from. `None`,
+/// with a WARN, when the platform role has no credentials ([`Config::platform_role`]); the
+/// current session API answers 503 then.
 ///
 /// Neither pool is part of readiness: the ext_authz check every request passes through must not
 /// fail because the platform role cannot log in, or the event log fell behind. A recorder that
 /// cannot work retries and its consumer's lag grows (`outbox.consumer.lag.age`, crates/outbox),
 /// which is what alerts; the event log's API answers 503 while its pools cannot connect.
-fn start_event_log(context: &Context<Config>) -> Result<Option<EventLog>, BoxError> {
+fn start_event_log(context: &Context<Config>) -> Result<Option<(EventLog, PlatformDb)>, BoxError> {
     let config = context.config();
     let Some(platform_role) = config.platform_role() else {
         tracing::warn!(
-            "the event log is off: the platform role has no credentials \
-             (TRUSTIOT__DATABASE__PLATFORM_USERNAME, TRUSTIOT__DATABASE__PLATFORM_PASSWORD)"
+            "the event log and the current session API are off: the platform role has no \
+             credentials (TRUSTIOT__DATABASE__PLATFORM_USERNAME, \
+             TRUSTIOT__DATABASE__PLATFORM_PASSWORD)"
         );
         return Ok(None);
     };
@@ -306,7 +317,7 @@ fn start_event_log(context: &Context<Config>) -> Result<Option<EventLog>, BoxErr
             let _ = consumer.run(stop).await;
         });
     }
-    Ok(Some(EventLog::new(db, platform)))
+    Ok(Some((EventLog::new(db, platform.clone()), platform)))
 }
 
 /// Serves the token exchange and run delegations (`routes`) on their own port
@@ -329,4 +340,84 @@ async fn serve_exchange(context: &Context<Config>, routes: Router) -> Result<(),
         "serving the token exchange"
     );
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::DEFAULT_MAX_CONNECTIONS;
+
+    const README: &str = include_str!("../README.md");
+
+    /// The README's table of pools, one row per pool: from its header to the first line that is
+    /// not a table row.
+    fn pool_rows() -> Vec<&'static str> {
+        let (_, after) = README
+            .split_once("| 連線池 | 誰用 | 連線數 |")
+            .expect("the README's pool table");
+        after
+            .lines()
+            .skip(2)
+            .take_while(|line| line.starts_with('|'))
+            .collect()
+    }
+
+    /// The README states what one replica opens; the numbers come from the constants the pools
+    /// are opened with, so a pool that grows or a new one changes the README with it.
+    #[test]
+    fn the_readme_states_the_connections_per_replica() {
+        let connections = connections_per_replica(DEFAULT_MAX_CONNECTIONS);
+        let stated = format!(
+            "預設設定下每個副本最多 {} 條：{} 條以 `identity_app`、{} 條以 `identity_platform` 連線",
+            connections.total(),
+            connections.service,
+            connections.platform
+        );
+        assert!(README.contains(&stated), "the README should say: {stated}");
+        // The chart's Postgres connections (`postgres.bundled.parameters.max_connections`) were
+        // sized for 30 per replica of this service, a rollout's extra replica included; the user's
+        // own account API (Laysi/trustiot-v2#497) shares the tenant API's and the event log's
+        // pools so as not to add to it. More needs that budget checked again first.
+        assert!(connections.total() <= 30, "{connections:?}");
+
+        let rows = pool_rows();
+        let pools = [
+            (
+                "`TRUSTIOT__DATABASE__MAX_CONNECTIONS`".to_owned(),
+                format!("`TRUSTIOT__DATABASE__MAX_CONNECTIONS`，預設 {DEFAULT_MAX_CONNECTIONS} |"),
+            ),
+            (
+                "`tenants::POOL_CONNECTIONS`".to_owned(),
+                format!("| {} |", tenants::POOL_CONNECTIONS),
+            ),
+            (
+                "`login::POOL_CONNECTIONS`".to_owned(),
+                format!("| {} |", login::POOL_CONNECTIONS),
+            ),
+            (
+                "`login::SEND_POOL_CONNECTIONS`".to_owned(),
+                format!("| {} |", login::SEND_POOL_CONNECTIONS),
+            ),
+            (
+                "`delegation::POOL_CONNECTIONS`".to_owned(),
+                format!("| {} |", delegation::POOL_CONNECTIONS),
+            ),
+            (
+                "`event_log::SERVICE_CONNECTIONS`".to_owned(),
+                format!("| {} |", event_log::SERVICE_CONNECTIONS),
+            ),
+            (
+                "`event_log::platform_connections()`".to_owned(),
+                format!("目前 {} |", event_log::platform_connections()),
+            ),
+        ];
+        assert_eq!(rows.len(), pools.len(), "one row per pool: {rows:#?}");
+        for (name, ending) in &pools {
+            let row = rows
+                .iter()
+                .find(|row| row.contains(name.as_str()))
+                .unwrap_or_else(|| panic!("no row for {name}: {rows:#?}"));
+            assert!(row.ends_with(ending.as_str()), "{name}: {row}");
+        }
+    }
 }

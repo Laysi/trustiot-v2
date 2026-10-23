@@ -6,9 +6,9 @@
 //! | Request | Response |
 //! | --- | --- |
 //! | No valid internal identity token | 401 `unauthenticated` |
+//! | Either, with a token another service exchanged (`act`) | 403 `permission_denied`: only the user's own requests read or change their preferences |
 //! | `GET` | 200 [`Preferences`]; [`Preferences::default`] for a user who never changed one |
 //! | `PATCH`, cross-site ([`crate::csrf::cross_site`], checked again after the cookie check) | 403 `permission_denied`, message key `security.cross_site_request` |
-//! | `PATCH` with a token another service exchanged (`act`) | 403 `permission_denied`: only the user's own requests change their preferences |
 //! | `PATCH` with a `Content-Type` other than `application/json`, a body over [`MAX_BODY_BYTES`], or a body that is not a JSON object of the four fields, each a string (unknown fields and `null` included) | 400 `invalid_request` |
 //! | `PATCH` with a value outside its allow list | 422 `validation_failed`, one field error per value: `/language` (`preferences.language_invalid`), `/ai_language` (`preferences.ai_language_invalid`), `/time_zone` (`preferences.time_zone_invalid`), `/theme` (`preferences.theme_invalid`); nothing changed |
 //! | `PATCH` | 200 [`Preferences`] after the change; fields left out keep their value |
@@ -32,7 +32,7 @@ use service_kit::identity::{IdentityVerifier, UserIdentity};
 use service_kit::tenant::{TenantDb, TenantDbError};
 use utoipa::ToSchema;
 
-use crate::current_session::{json_object, own_write_refusal};
+use crate::current_session::{exchanged_refusal, json_object, own_write_refusal};
 use crate::session::error_kind;
 use crate::tenants::error;
 
@@ -369,7 +369,8 @@ pub struct PreferencesStore {
 }
 
 impl PreferencesStore {
-    /// A store on the service role's pool `db` (shared with the current session API).
+    /// A store on the service role's pool `db` (the tenant API's, shared with the current session
+    /// API).
     #[must_use]
     pub fn new(db: TenantDb) -> Self {
         Self { db }
@@ -393,8 +394,9 @@ impl PreferencesStore {
     ///
     /// # Errors
     ///
-    /// [`PreferencesError::NoUser`] when the user no longer exists; otherwise when the database
-    /// fails, and then nothing changed.
+    /// [`PreferencesError::NoUser`] when the user no longer exists; [`PreferencesError::Inconsistent`]
+    /// when the change would touch any row but the user's own; otherwise when the database fails.
+    /// Nothing changed then.
     pub async fn update(
         &self,
         user: UserId,
@@ -412,14 +414,18 @@ impl PreferencesStore {
             return Err(PreferencesError::NoUser);
         }
         created?;
-        let row: Row = sqlx::query_as(UPDATE_PREFERENCES)
+        let rows: Vec<Row> = sqlx::query_as(UPDATE_PREFERENCES)
             .bind(&user)
             .bind(changes.language.map(Language::as_str))
             .bind(changes.ai_language.map(Language::as_str))
             .bind(changes.time_zone.as_ref().map(TimeZone::as_str))
             .bind(changes.theme.map(Theme::as_str))
-            .fetch_one(&mut *tx)
+            .fetch_all(&mut *tx)
             .await?;
+        // The user's own row and no other, or nothing is committed: the transaction rolls back
+        // when it is dropped on the way out.
+        let [row] = <[Row; 1]>::try_from(rows)
+            .map_err(|_| PreferencesError::Inconsistent("rows changed"))?;
         let preferences = from_row(row)?;
         tx.commit().await?;
         Ok(preferences)
@@ -479,10 +485,14 @@ fn answer(preferences: &Preferences) -> Response {
     responses(
         (status = 200, description = "The user's preferences; the defaults (`auto`, `auto`, `auto`, `system`) for a user who never changed one.", body = Preferences),
         (status = 401, description = "No valid session (`unauthenticated`).", body = ErrorBody),
+        (status = 403, description = "A token another service exchanged for a call on the user's behalf (`permission_denied`): only the user's own requests read their preferences.", body = ErrorBody),
         (status = 503, description = "The database failed (`unavailable`).", body = ErrorBody),
     )
 )]
 async fn get_preferences(State(state): State<PreferencesRoutes>, user: UserIdentity) -> Response {
+    if let Some(refusal) = exchanged_refusal(&user, "refused to read preferences") {
+        return refusal;
+    }
     match state.store.read(user.user_id()).await {
         Ok(preferences) => answer(&preferences),
         Err(failure) => {

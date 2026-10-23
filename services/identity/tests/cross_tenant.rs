@@ -196,9 +196,10 @@ async fn tenants_are_isolated() {
         .exempt_endpoint(
             "PUT /api/identity/v1/sessions/current/tenant",
             "switches the caller's own session, found by its cookie and the token's session \
-             claim, which a probe's token cannot name; it serves no tenant data, and a tenant \
-             the user is not a member of is refused with the session unchanged \
-             (tests/account.rs covers it, across users, sessions and tenants)",
+             claim, which a probe's token cannot name; its answer shows only the tenants the \
+             caller is a member of (the same as GET /api/identity/v1/sessions/current, declared \
+             above), and a tenant the user is not a member of is refused with the session \
+             unchanged (tests/account.rs covers it, across users, sessions and tenants)",
         )
         .exempt_endpoint(
             "GET /api/identity/v1/preferences",

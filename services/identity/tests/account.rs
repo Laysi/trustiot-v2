@@ -12,9 +12,11 @@
 //!   user's role in that tenant; a switch to any other tenant, existing or not, is refused the
 //!   same way and leaves the session where it was. Only the session the request came with
 //!   changes: not the user's other sessions, not another user's.
-//! - Preferences are the user's own and stay within their allow lists.
-//! - Both writes need the user's own same-origin JSON request: a cross-site one is refused by the
-//!   cookie check and again by the handler, and so is a token another service exchanged.
+//! - Preferences are the user's own and stay within their allow lists; a change never reaches
+//!   another user's.
+//! - Both writes need the user's own same-origin JSON request of at most 1024 bytes: a cross-site
+//!   one is refused by the cookie check and again by the handler. A token another service
+//!   exchanged neither writes nor reads.
 //! - The database roles get only the rights these APIs use.
 //!
 //! Starts a throwaway Postgres with TLS (podman or docker); skipped without either unless `CI`
@@ -44,6 +46,9 @@ const PREFERENCES: &str = "/api/identity/v1/preferences";
 /// role another service would act with.
 const ASSETS: &str = "/api/assets/v1/tenant";
 const READY_LIMIT: Duration = Duration::from_secs(60);
+/// The largest body of both writes, as the API document states it. Written out rather than
+/// taken from the service's constants, so a change of those fails here.
+const BODY_LIMIT: usize = 1024;
 
 const INSUFFICIENT_PRIVILEGE: &str = "42501";
 const CHECK_VIOLATION: &str = "23514";
@@ -63,6 +68,12 @@ VALUES ($1::uuid, $2, $3::uuid, $4::uuid, now() + interval '1 hour')";
 const ACTIVE_TENANT: &str =
     "SELECT active_tenant_id::text FROM identity.sessions WHERE id = $1::uuid";
 const REVOKE_SESSION: &str = "UPDATE identity.sessions SET revoked_at = now() WHERE id = $1::uuid";
+/// Ends a session by time, moving its start back too (a session ends after it starts). The
+/// cookie check's background extension never moves an ended session's end again
+/// (`expires_at > now()` in its condition), so this holds.
+const EXPIRE_SESSION: &str = "UPDATE identity.sessions
+SET created_at = now() - interval '2 minutes', expires_at = now() - interval '1 minute'
+WHERE id = $1::uuid";
 const STORED_PREFERENCES: &str = "SELECT language, ai_language, time_zone, theme
 FROM identity.preferences WHERE user_id = $1::uuid";
 const DELETE_USER: &str = "DELETE FROM identity.users WHERE id = $1::uuid";
@@ -299,6 +310,16 @@ fn write(
     )
 }
 
+/// `json` followed by spaces, `size` bytes in all: still the same JSON value.
+fn padded(json: &str, size: usize) -> String {
+    let spaces = size
+        .checked_sub(json.len())
+        .expect("a body shorter than the size");
+    let body = format!("{json}{}", " ".repeat(spaces));
+    assert_eq!(body.len(), size);
+    body
+}
+
 fn membership(tenant: &Tenant, role: &str) -> Value {
     json!({"tenant_id": tenant.id, "name": tenant.name, "role": role})
 }
@@ -460,6 +481,27 @@ async fn a_session_switches_only_to_the_users_own_tenants() {
     assert_eq!(active_tenant(&mut admin, &second).await, Some(a.id.clone()));
     assert_eq!(active_tenant(&mut admin, &bobs).await, Some(c.id.clone()));
 
+    // 4b. Only a session that has not ended: Alice's other session, ended by time (the
+    //     database clock, not revoked) between the cookie check and the switch, switches
+    //     nothing, to a tenant she is a member of.
+    let late = token(&service, "PUT", SWITCH, &second.cookie);
+    run(&mut admin, EXPIRE_SESSION, &[&second.id]).await;
+    let body = json!({"tenant_id": b.id}).to_string();
+    let response = send(
+        &service,
+        "PUT",
+        SWITCH,
+        &[
+            ("Sec-Fetch-Site", "same-origin"),
+            ("Cookie", &second.cookie),
+            ("x-internal-identity", &late),
+            ("Content-Type", "application/json"),
+        ],
+        body.as_bytes(),
+    );
+    assert_error(&response, 401, &unauthenticated());
+    assert_eq!(active_tenant(&mut admin, &second).await, Some(a.id.clone()));
+
     // 5. Back to A: the editor role again.
     let response = write(
         &service,
@@ -540,7 +582,8 @@ async fn a_session_switches_only_to_the_users_own_tenants() {
 
 /// Decision 27 for both new writes: a cross-site request is refused by the cookie check and
 /// again by the handler; a token another service exchanged, a token that names no session, a
-/// body that is not JSON or is too big, and a token for another service change nothing.
+/// body that is not JSON or is over 1024 bytes, and a token for another service change nothing.
+/// An exchanged token reads nothing either.
 #[tokio::test(flavor = "multi_thread")]
 async fn account_writes_need_the_users_own_same_origin_json_request() {
     let Some(product) = product_postgres(&["identity_app", "identity_platform"]).await else {
@@ -584,13 +627,20 @@ async fn account_writes_need_the_users_own_same_origin_json_request() {
     sessionless.sid = None;
     let sessionless = issuer.token(&sessionless);
 
+    // Each write with a body that changes something, and one that changes nothing (the tenant
+    // the session is in; no setting), for the size limit's accepted side.
     let writes = [
-        ("PUT", SWITCH, json!({"tenant_id": b.id})),
-        ("PATCH", PREFERENCES, json!({"theme": "dark"})),
+        (
+            "PUT",
+            SWITCH,
+            json!({"tenant_id": b.id}),
+            json!({"tenant_id": a.id}),
+        ),
+        ("PATCH", PREFERENCES, json!({"theme": "dark"}), json!({})),
     ];
     let attacker = "https://attacker.example.test";
     let same_origin = format!("https://{APP}");
-    for (method, path, body) in &writes {
+    for (method, path, body, harmless) in &writes {
         let body = body.to_string();
         // 1. The cookie check refuses a cross-site write before it looks the session up.
         for extra in [
@@ -649,34 +699,58 @@ async fn account_writes_need_the_users_own_same_origin_json_request() {
             assert_eq!(response.status, 400, "{content_type:?}: {}", response.raw());
             assert_eq!(response.json()["code"], "invalid_request");
         }
-        // Over 1024 bytes, whatever it holds. The service answers without reading the rest, so
-        // the connection may be reset before the client reads the answer; either way nothing
-        // changes (checked below).
-        let padded = format!("{{\"padding\": \"{}\"}}", "x".repeat(1100));
-        let outcome = request_with_body(
+        // The size limit: a valid body padded with JSON whitespace, so only its size can be the
+        // reason for a refusal. Exactly the limit is read whole and answered...
+        let same_origin_json = [
+            ("Host", APP),
+            ("Sec-Fetch-Site", "same-origin"),
+            ("Cookie", first.cookie.as_str()),
+            ("x-internal-identity", signed.as_str()),
+            ("Content-Type", "application/json"),
+        ];
+        let at_limit = padded(&harmless.to_string(), BODY_LIMIT);
+        let response = request_with_body(
             service.address,
             method,
             path,
-            &[
-                ("Host", APP),
-                ("Sec-Fetch-Site", "same-origin"),
-                ("Cookie", first.cookie.as_str()),
-                ("x-internal-identity", signed.as_str()),
-                ("Content-Type", "application/json"),
-            ],
-            padded.as_bytes(),
+            &same_origin_json,
+            at_limit.as_bytes(),
+        )
+        .expect("call the service");
+        assert_eq!(
+            response.status,
+            200,
+            "{method} {path} at the limit: {}",
+            response.raw()
         );
-        match outcome {
-            Ok(response) => assert_eq!(response.status, 400, "{}", response.raw()),
-            Err(error) => assert!(
-                matches!(
-                    error.kind(),
-                    ErrorKind::ConnectionReset
-                        | ErrorKind::BrokenPipe
-                        | ErrorKind::ConnectionAborted
+        // ...one byte more, or many, is refused. The service answers without reading the rest,
+        // so the connection may be reset before the client reads the answer; either way nothing
+        // changes.
+        for size in [BODY_LIMIT + 1, body.len() + 1100] {
+            let over = padded(&body, size);
+            match request_with_body(
+                service.address,
+                method,
+                path,
+                &same_origin_json,
+                over.as_bytes(),
+            ) {
+                Ok(response) => {
+                    assert_eq!(response.status, 400, "{size} bytes: {}", response.raw());
+                    assert_eq!(response.json()["code"], "invalid_request");
+                }
+                Err(error) => assert!(
+                    matches!(
+                        error.kind(),
+                        ErrorKind::ConnectionReset
+                            | ErrorKind::BrokenPipe
+                            | ErrorKind::ConnectionAborted
+                    ),
+                    "{method} {path} with {size} bytes: {error}"
                 ),
-                "{method} {path} with a big body: {error}"
-            ),
+            }
+            assert_eq!(active_tenant(&mut admin, &first).await, Some(a.id.clone()));
+            assert_eq!(stored(&mut admin, &alice).await, None);
         }
 
         // 4. Not the user's own request: an exchanged token, with or without the cookie.
@@ -747,16 +821,32 @@ async fn account_writes_need_the_users_own_same_origin_json_request() {
     assert_eq!(active_tenant(&mut admin, &first).await, Some(a.id.clone()));
     assert_eq!(stored(&mut admin, &alice).await, None);
 
-    // 7. Reading is allowed with an exchanged token: it changes nothing.
+    // 7. Reading is the user's own too: an exchanged token reads neither the session (the
+    //    user's tenants and address) nor the preferences, with or without the cookie.
     for path in [SESSION, PREFERENCES] {
-        let response = send(
-            &service,
-            "GET",
-            path,
-            &[("x-internal-identity", exchanged.as_str())],
-            b"",
-        );
-        assert_eq!(response.status, 200, "{path}: {}", response.raw());
+        for cookie in [Some(first.cookie.as_str()), None] {
+            let mut headers = vec![
+                ("Sec-Fetch-Site", "same-origin"),
+                ("x-internal-identity", exchanged.as_str()),
+            ];
+            if let Some(cookie) = cookie {
+                headers.push(("Cookie", cookie));
+            }
+            let response = send(&service, "GET", path, &headers, b"");
+            assert_error(
+                &response,
+                403,
+                &json!({"code": "permission_denied", "message_key": "error.permission_denied"}),
+            );
+            for leaked in [&a.name, &b.name, &alice.email] {
+                assert!(
+                    !response.raw().contains(leaked.as_str()),
+                    "{path}: {leaked}"
+                );
+            }
+        }
+        // The user's own token reads them.
+        assert_eq!(get(&service, path, &first.cookie).status, 200, "{path}");
     }
 
     // 8. The positive control: the same writes as the SPA sends them (Origin of its own, or
@@ -795,8 +885,14 @@ async fn account_writes_need_the_users_own_same_origin_json_request() {
     );
 
     let output = service.stop();
-    for reason in ["cross_site_request", "exchanged_token", "no_session_claim"] {
-        assert!(output.contains(reason), "{reason}: {output}");
+    for logged in [
+        "cross_site_request",
+        "exchanged_token",
+        "no_session_claim",
+        "refused to read the current session",
+        "refused to read preferences",
+    ] {
+        assert!(output.contains(logged), "{logged}: {output}");
     }
 }
 
@@ -817,12 +913,35 @@ async fn users_change_only_their_own_preferences_within_the_allow_lists() {
     let defaults =
         json!({"language": "auto", "ai_language": "auto", "time_zone": "auto", "theme": "system"});
 
+    let as_stored = |language: &str, ai_language: &str, time_zone: &str, theme: &str| {
+        Some((
+            language.to_owned(),
+            ai_language.to_owned(),
+            time_zone.to_owned(),
+            theme.to_owned(),
+        ))
+    };
+
     // 1. The defaults, with nothing stored.
     let response = get(&service, PREFERENCES, &alices.cookie);
     assert_eq!(response.status, 200, "{}", response.raw());
     assert_eq!(response.header_values("cache-control"), ["no-store"]);
     assert_eq!(response.json(), defaults);
     assert_eq!(stored(&mut admin, &alice).await, None);
+    // Bob keeps preferences of his own, so a change of Alice's that reached other users' rows
+    // would show in his (checked after each of hers below).
+    let response = write(
+        &service,
+        "PATCH",
+        PREFERENCES,
+        &bobs.cookie,
+        &json!({"language": "en", "theme": "light"}),
+    );
+    assert_eq!(response.status, 200, "{}", response.raw());
+    let bobs_stored = as_stored("en", "auto", "auto", "light");
+    assert_eq!(stored(&mut admin, &bob).await, bobs_stored);
+    let bobs_shown =
+        json!({"language": "en", "ai_language": "auto", "time_zone": "auto", "theme": "light"});
 
     // 2. A change of two settings: the answer, what is stored, and the next read agree.
     let response = write(
@@ -839,21 +958,13 @@ async fn users_change_only_their_own_preferences_within_the_allow_lists() {
     });
     assert_eq!(response.json(), changed);
     assert_eq!(get(&service, PREFERENCES, &alices.cookie).json(), changed);
-    let as_stored = |language: &str, ai_language: &str, time_zone: &str, theme: &str| {
-        Some((
-            language.to_owned(),
-            ai_language.to_owned(),
-            time_zone.to_owned(),
-            theme.to_owned(),
-        ))
-    };
     assert_eq!(
         stored(&mut admin, &alice).await,
         as_stored("zh-TW", "auto", "Asia/Taipei", "system")
     );
     // Bob's are his own.
-    assert_eq!(get(&service, PREFERENCES, &bobs.cookie).json(), defaults);
-    assert_eq!(stored(&mut admin, &bob).await, None);
+    assert_eq!(get(&service, PREFERENCES, &bobs.cookie).json(), bobs_shown);
+    assert_eq!(stored(&mut admin, &bob).await, bobs_stored);
 
     // 3. Fields left out keep their value; an empty change changes nothing.
     let response = write(
@@ -868,11 +979,13 @@ async fn users_change_only_their_own_preferences_within_the_allow_lists() {
         "language": "zh-TW", "ai_language": "en", "time_zone": "Asia/Taipei", "theme": "dark"
     });
     assert_eq!(response.json(), all);
+    assert_eq!(stored(&mut admin, &bob).await, bobs_stored);
     let response = write(&service, "PATCH", PREFERENCES, &alices.cookie, &json!({}));
     assert_eq!(response.status, 200, "{}", response.raw());
     assert_eq!(response.json(), all);
     let alices_stored = as_stored("zh-TW", "en", "Asia/Taipei", "dark");
     assert_eq!(stored(&mut admin, &alice).await, alices_stored);
+    assert_eq!(stored(&mut admin, &bob).await, bobs_stored);
 
     // 4. Values outside the allow lists: 422 naming the field, and nothing changes, not even
     //    the valid fields of the same request.
@@ -918,6 +1031,7 @@ async fn users_change_only_their_own_preferences_within_the_allow_lists() {
         );
     }
     assert_eq!(stored(&mut admin, &alice).await, alices_stored);
+    assert_eq!(stored(&mut admin, &bob).await, bobs_stored);
 
     // 5. Bodies that are not the four settings as strings: 400, nothing changes. None can name
     //    another user.
@@ -937,7 +1051,8 @@ async fn users_change_only_their_own_preferences_within_the_allow_lists() {
         assert_eq!(response.json()["code"], "invalid_request");
     }
     assert_eq!(stored(&mut admin, &alice).await, alices_stored);
-    assert_eq!(stored(&mut admin, &bob).await, None);
+    assert_eq!(stored(&mut admin, &bob).await, bobs_stored);
+    assert_eq!(get(&service, PREFERENCES, &bobs.cookie).json(), bobs_shown);
 
     // 6. A user deleted after the cookie check keeps no preferences.
     let carol = person(&mut admin, false).await;

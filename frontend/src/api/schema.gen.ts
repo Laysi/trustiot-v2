@@ -384,9 +384,9 @@ export interface components {
         };
         /** @description The session of the request. */
         CurrentSession: {
-            active_tenant?: components["schemas"]["TenantMembership"] | null;
+            active_tenant: components["schemas"]["TenantMembership"] | null;
             /** @description The address the user logs in with; `null` for a user who cannot log in by email. */
-            email?: string | null;
+            email: string | null;
             /** @description Whether the user is a platform administrator (A2), independent of any tenant. */
             platform_admin: boolean;
             /**
@@ -872,7 +872,7 @@ export interface components {
              * @description The tenant's name; `null` only for a tenant that has no record, which only data written
              *     outside the API has.
              */
-            name?: string | null;
+            name: string | null;
             /** @description The user's role in the tenant. */
             role: components["schemas"]["MemberRole"];
             /** @description The tenant. */
@@ -1883,6 +1883,15 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
+            /** @description A token another service exchanged for a call on the user's behalf (`permission_denied`): only the user's own requests read their preferences. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
             /** @description The database failed (`unavailable`). */
             503: {
                 headers: {
@@ -2026,7 +2035,16 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description The database failed (`unavailable`). */
+            /** @description A token another service exchanged for a call on the user's behalf (`permission_denied`): only the user's own requests read the session. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The database failed, too many reads of users' tenants were waiting, or the platform role has no credentials (`unavailable`). */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -2122,7 +2140,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description The database failed; nothing changed (`unavailable`). */
+            /** @description The database failed, too many reads of users' tenants were waiting, or the platform role has no credentials; nothing changed (`unavailable`). */
             503: {
                 headers: {
                     [name: string]: unknown;

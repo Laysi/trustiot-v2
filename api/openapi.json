@@ -125,7 +125,9 @@
         },
         "required": [
           "user_id",
+          "email",
           "platform_admin",
+          "active_tenant",
           "tenants"
         ],
         "type": "object"
@@ -1116,6 +1118,7 @@
         },
         "required": [
           "tenant_id",
+          "name",
           "role"
         ],
         "type": "object"
@@ -2415,6 +2418,16 @@
             },
             "description": "No valid session (`unauthenticated`)."
           },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "A token another service exchanged for a call on the user's behalf (`permission_denied`): only the user's own requests read their preferences."
+          },
           "503": {
             "content": {
               "application/json": {
@@ -2601,6 +2614,16 @@
             },
             "description": "No valid session (`unauthenticated`)."
           },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "A token another service exchanged for a call on the user's behalf (`permission_denied`): only the user's own requests read the session."
+          },
           "503": {
             "content": {
               "application/json": {
@@ -2609,7 +2632,7 @@
                 }
               }
             },
-            "description": "The database failed (`unavailable`)."
+            "description": "The database failed, too many reads of users' tenants were waiting, or the platform role has no credentials (`unavailable`)."
           }
         },
         "summary": "Reads the current session: the user, the tenant it acts in with the user's role there, and\nthe user's tenants.",
@@ -2680,7 +2703,7 @@
                 }
               }
             },
-            "description": "The database failed; nothing changed (`unavailable`)."
+            "description": "The database failed, too many reads of users' tenants were waiting, or the platform role has no credentials; nothing changed (`unavailable`)."
           }
         },
         "summary": "Switches the session to another of the user's tenants; its next request acts there with the\nuser's role in it.",

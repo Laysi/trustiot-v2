@@ -6,14 +6,14 @@
 //! | Request | Response |
 //! | --- | --- |
 //! | No valid internal identity token | 401 `unauthenticated` |
+//! | Either, with a token another service exchanged (`act`) | 403 `permission_denied`: the session, its tenants and the user's address are for the user's own requests only |
 //! | `GET /api/identity/v1/sessions/current` | 200 [`CurrentSession`] |
 //! | `PUT /api/identity/v1/sessions/current/tenant`, cross-site ([`crate::csrf::cross_site`], checked again after the cookie check) | 403 `permission_denied`, message key `security.cross_site_request` |
-//! | `PUT …/tenant` with a token another service exchanged (`act`) | 403 `permission_denied` |
 //! | `PUT …/tenant` with a `Content-Type` other than `application/json`, a body over [`MAX_BODY_BYTES`], or a body that is not `{"tenant_id": "<uuid>"}` | 400 `invalid_request` |
 //! | `PUT …/tenant` with a token that names no session (`sid`), without a usable session cookie, or when the cookie's session is not the token's session, is not the token user's, or has ended | 401 `unauthenticated`; nothing changed |
 //! | `PUT …/tenant` naming a tenant the user is not a member of, existing or not | 403 `permission_denied`, message key `session.tenant_not_member`; the session keeps its tenant |
 //! | `PUT …/tenant` naming one of the user's tenants | 200 [`CurrentSession`] as it is now: the session's next request acts in that tenant with the user's role there |
-//! | The database failed, or the platform role has no credentials | 503 `unavailable`; nothing changed |
+//! | The database failed, more membership reads are waiting than [`MEMBERSHIP_READS`] serve within [`ACQUIRE_TIMEOUT`], or the platform role has no credentials | 503 `unavailable`; nothing changed |
 //!
 //! Where each part comes from:
 //!
@@ -23,7 +23,8 @@
 //! - The user's tenants: every membership of the token's user, read with the platform role
 //!   (memberships are tenant data, and the service role sees one tenant at a time;
 //!   `0005_preferences_and_tenant_switch.sql` lets the platform role read them, nothing more),
-//!   in a `READ ONLY` transaction, for the token's user only.
+//!   in a `READ ONLY` transaction, for the token's user only: the query's only condition comes
+//!   from the verified token, never from the request's body, path or query (decision 29).
 //! - Switching: the target must be one of those memberships; then the session the request
 //!   came with points at it: the session of its cookie, which must also be the session the
 //!   token was signed from (`sid`), the token user's, and still active. The pointer grants
@@ -45,6 +46,7 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use service_kit::identity::{IdentityVerifier, UserIdentity};
 use service_kit::tenant::{PlatformReader, TenantDb, TenantDbError};
+use tokio::sync::Semaphore;
 use utoipa::ToSchema;
 
 use crate::csrf::{CROSS_SITE_REQUEST, cross_site};
@@ -58,16 +60,15 @@ pub const TENANT_PATH: &str = "/api/identity/v1/sessions/current/tenant";
 /// The largest switch body: `{"tenant_id": "<uuid>"}` fits many times over.
 pub const MAX_BODY_BYTES: usize = 1024;
 
-/// Connections of the service role's pool for the current session and preferences APIs,
-/// separate from the cookie check's, so a burst of them never takes a connection the check is
-/// waiting for.
-pub const POOL_CONNECTIONS: u32 = 2;
+/// Membership reads that may run at once per replica. They use the event log's platform pool
+/// (services/identity/README.md, "連線池"), which has one connection for each producer's consumer
+/// ([`crate::schema::CONSUMES`]) and two more ([`crate::event_log::platform_connections`]); these
+/// reads never hold more than those two, so a burst of signed-in users never keeps a consumer
+/// waiting for a connection. A test holds the sum to the pool's size.
+pub const MEMBERSHIP_READS: usize = 2;
 
-/// Connections of the platform role's pool that reads users' memberships, separate from the
-/// event log's.
-pub const PLATFORM_CONNECTIONS: u32 = 2;
-
-/// How long these APIs may wait for a connection (opening one included).
+/// How long a membership read may wait for its turn ([`MEMBERSHIP_READS`]); then the request
+/// answers 503. The pool's own wait for a connection comes after it.
 pub const ACQUIRE_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Names the platform role's reads of memberships in its INFO line (`platform database reader`).
@@ -130,6 +131,7 @@ pub struct TenantMembership {
     pub tenant_id: TenantId,
     /// The tenant's name; `null` only for a tenant that has no record, which only data written
     /// outside the API has.
+    #[schema(required = true)]
     pub name: Option<String>,
     /// The user's role in the tenant.
     pub role: MemberRole,
@@ -141,11 +143,13 @@ pub struct CurrentSession {
     /// The signed-in user.
     pub user_id: UserId,
     /// The address the user logs in with; `null` for a user who cannot log in by email.
+    #[schema(required = true)]
     pub email: Option<String>,
     /// Whether the user is a platform administrator (A2), independent of any tenant.
     pub platform_admin: bool,
     /// The tenant the session acts in, with the user's role there; `null` when it acts in none:
     /// none was picked yet, or the user is no longer a member of it.
+    #[schema(required = true)]
     pub active_tenant: Option<TenantMembership>,
     /// Every tenant the user belongs to, by name; switch with
     /// `PUT /api/identity/v1/sessions/current/tenant`.
@@ -166,6 +170,9 @@ pub enum AccountError {
     /// The platform role has no credentials, so the user's tenants cannot be read.
     #[error("the platform role has no credentials")]
     NoPlatformRole,
+    /// [`MEMBERSHIP_READS`] reads were running for all of [`ACQUIRE_TIMEOUT`].
+    #[error("every membership read stayed in use")]
+    Busy,
     /// The database failed or refused the session.
     #[error(transparent)]
     Database(#[from] TenantDbError),
@@ -205,13 +212,14 @@ pub enum Switched {
 /// One membership row: tenant, name, role.
 type MembershipRow = (String, Option<String>, String);
 
-/// Reads the current session and switches its tenant: the service role's pool (shared with the
-/// preferences) and, when the platform role has credentials, a reader of its own pool for
-/// memberships.
+/// Reads the current session and switches its tenant: the service role's pool (the tenant API's,
+/// shared with the preferences) and, when the platform role has credentials, a reader of the
+/// event log's platform pool for memberships, at most [`MEMBERSHIP_READS`] at once.
 #[derive(Clone, Debug)]
 pub struct AccountStore {
     db: TenantDb,
     memberships: Option<PlatformReader>,
+    reads: Arc<Semaphore>,
 }
 
 impl AccountStore {
@@ -219,7 +227,11 @@ impl AccountStore {
     /// ([`MEMBERSHIPS_PURPOSE`]); without a reader every request answers 503.
     #[must_use]
     pub fn new(db: TenantDb, memberships: Option<PlatformReader>) -> Self {
-        Self { db, memberships }
+        Self {
+            db,
+            memberships,
+            reads: Arc::new(Semaphore::new(MEMBERSHIP_READS)),
+        }
     }
 
     /// The session of the request `user` came with.
@@ -289,12 +301,23 @@ impl AccountStore {
         }))
     }
 
-    /// Every membership of `user`, by the platform role.
+    /// Every membership of `user`, by the platform role; `user` is always the verified token's.
     async fn memberships(&self, user: UserId) -> Result<Vec<TenantMembership>, AccountError> {
         let reader = self
             .memberships
             .as_ref()
             .ok_or(AccountError::NoPlatformRole)?;
+        // Held until the transaction ends, at the end of this function.
+        let _turn = tokio::time::timeout(ACQUIRE_TIMEOUT, self.reads.acquire())
+            .await
+            .map_err(|_| AccountError::Busy)?
+            .map_err(|_| AccountError::Busy)?;
+        // The kit logs the purpose of every platform read; this line adds whose memberships.
+        tracing::debug!(
+            user_id = %user,
+            purpose = MEMBERSHIPS_PURPOSE,
+            "reading a user's memberships with the platform role"
+        );
         let mut tx = reader.begin().await?;
         let rows: Vec<MembershipRow> = sqlx::query_as(USER_MEMBERSHIPS)
             .bind(user.to_string())
@@ -342,12 +365,27 @@ impl AccountStore {
     }
 }
 
+/// Refuses any request to the user's own account (the session, its tenants, the preferences)
+/// that comes with a token another service exchanged for a call on the user's behalf: these
+/// APIs are for the user's own requests, through the cookie check. Logs the refusal at INFO
+/// with `message`, the reason and the calling service.
+pub(crate) fn exchanged_refusal(user: &UserIdentity, message: &'static str) -> Option<Response> {
+    let actor = user.claims().act?;
+    tracing::info!(
+        user_id = %user.user_id(),
+        reason = "exchanged_token",
+        actor = actor.sub.as_str(),
+        "{message}"
+    );
+    Some(error(ErrorBody::new(ErrorCode::PermissionDenied)))
+}
+
 /// Refuses a write to the user's own account (switching the session's tenant, changing
 /// preferences) that is not the user's own request, before its body is read: a cross-site
 /// request, checked again here although the cookie check refused it already, in case the
 /// gateway stops passing it the headers (services/identity/README.md, "跨站請求"); a token
-/// another service exchanged for a call on the user's behalf; and a body that is not JSON.
-/// Logs a refusal at INFO with `message` and the reason, never a header's value.
+/// another service exchanged ([`exchanged_refusal`]); and a body that is not JSON. Logs a
+/// refusal at INFO with `message` and the reason, never a header's value.
 pub(crate) fn own_write_refusal(
     parts: &Parts,
     user: &UserIdentity,
@@ -364,14 +402,8 @@ pub(crate) fn own_write_refusal(
             ErrorBody::new(ErrorCode::PermissionDenied).with_message_key(CROSS_SITE_REQUEST),
         ));
     }
-    if let Some(actor) = user.claims().act {
-        tracing::info!(
-            user_id = %user.user_id(),
-            reason = "exchanged_token",
-            actor = actor.sub.as_str(),
-            "{message}"
-        );
-        return Some(error(ErrorBody::new(ErrorCode::PermissionDenied)));
+    if let Some(refusal) = exchanged_refusal(user, message) {
+        return Some(refusal);
     }
     if !is_json(&parts.headers) {
         return Some(error(ErrorBody::new(ErrorCode::InvalidRequest)));
@@ -428,10 +460,14 @@ fn answer(session: &CurrentSession) -> Response {
     responses(
         (status = 200, description = "The session: the user, the tenant it acts in with the user's role there (as of this request), and every tenant the user belongs to.", body = CurrentSession),
         (status = 401, description = "No valid session (`unauthenticated`).", body = ErrorBody),
-        (status = 503, description = "The database failed (`unavailable`).", body = ErrorBody),
+        (status = 403, description = "A token another service exchanged for a call on the user's behalf (`permission_denied`): only the user's own requests read the session.", body = ErrorBody),
+        (status = 503, description = "The database failed, too many reads of users' tenants were waiting, or the platform role has no credentials (`unavailable`).", body = ErrorBody),
     )
 )]
 async fn current_session(State(state): State<SessionRoutes>, user: UserIdentity) -> Response {
+    if let Some(refusal) = exchanged_refusal(&user, "refused to read the current session") {
+        return refusal;
+    }
     match state.store.current(&user).await {
         Ok(session) => answer(&session),
         Err(failure) => {
@@ -458,7 +494,7 @@ async fn current_session(State(state): State<SessionRoutes>, user: UserIdentity)
         (status = 400, description = "The `Content-Type` is not `application/json`, the body is over 1024 bytes, or it is not the JSON object `{\"tenant_id\": \"<uuid>\"}` (`invalid_request`).", body = ErrorBody),
         (status = 401, description = "No valid session, a token that names no session, or a session cookie that is missing, is not the session the token was signed from, or whose session has ended (`unauthenticated`); nothing changed.", body = ErrorBody),
         (status = 403, description = "The user is not a member of the tenant, or there is no such tenant (`permission_denied`, message key `session.tenant_not_member`); a cross-site request (message key `security.cross_site_request`); or a token another service exchanged (`permission_denied`). The session keeps its tenant.", body = ErrorBody),
-        (status = 503, description = "The database failed; nothing changed (`unavailable`).", body = ErrorBody),
+        (status = 503, description = "The database failed, too many reads of users' tenants were waiting, or the platform role has no credentials; nothing changed (`unavailable`).", body = ErrorBody),
     )
 )]
 async fn switch_tenant(
@@ -598,6 +634,56 @@ mod tests {
         assert_eq!(
             serde_json::to_value(&switched).expect("serialize")["active_tenant"],
             json!({"tenant_id": TENANT, "name": "Plant A", "role": "editor"})
+        );
+    }
+
+    /// Every field of the session is in every response, `null` or not, so the API document
+    /// lists each as `required` and the generated client types never make one optional.
+    #[test]
+    fn every_field_of_the_session_is_required_in_the_api_document() {
+        let document = serde_json::to_value(crate::openapi()).expect("serialize the document");
+        for name in ["CurrentSession", "TenantMembership"] {
+            let schema = &document["components"]["schemas"][name];
+            let mut properties: Vec<&String> = schema["properties"]
+                .as_object()
+                .expect("properties")
+                .keys()
+                .collect();
+            let mut required: Vec<&str> = schema["required"]
+                .as_array()
+                .expect("required")
+                .iter()
+                .map(|field| field.as_str().expect("a field name"))
+                .collect();
+            properties.sort();
+            required.sort_unstable();
+            assert_eq!(properties, required, "{name}");
+        }
+        // The fields that may be null are the ones this is about.
+        for (schema, field) in [
+            ("CurrentSession", "email"),
+            ("CurrentSession", "active_tenant"),
+            ("TenantMembership", "name"),
+        ] {
+            assert!(
+                document["components"]["schemas"][schema]["required"]
+                    .as_array()
+                    .is_some_and(|required| required.contains(&json!(field))),
+                "{schema}.{field}"
+            );
+        }
+    }
+
+    /// Membership reads share the event log's platform pool and never take the connection a
+    /// producer's consumer needs (services/identity/README.md, "連線池").
+    #[test]
+    fn membership_reads_leave_every_consumer_a_connection() {
+        const { assert!(MEMBERSHIP_READS >= 1) };
+        let pool = usize::try_from(crate::event_log::platform_connections()).expect("fits");
+        assert!(
+            MEMBERSHIP_READS + crate::schema::CONSUMES.len() <= pool,
+            "{MEMBERSHIP_READS} reads and {} consumers in {pool} connections",
+            crate::schema::CONSUMES.len()
         );
     }
 
