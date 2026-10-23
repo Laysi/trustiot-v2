@@ -915,6 +915,13 @@ async fn register(
             not_before: issue::utc(issued.not_before),
             not_after: issue::utc(issued.not_after),
             certificate: pem::encode(pem::CERTIFICATE, &issued.der),
+            // `issuer_der` is the certificate of the issuing CA that just signed: the loaded
+            // one whose key id is `ca_key_id`.
+            certificate_chain: format!(
+                "{}{}",
+                pem::encode(pem::CERTIFICATE, &issued.der),
+                pem::encode(pem::CERTIFICATE, &issued.issuer_der)
+            ),
             root_certificate: pem::encode(pem::CERTIFICATE, authority.root_der()),
         },
     ))
@@ -958,7 +965,8 @@ async fn check_ledger(tx: &mut PlatformTransaction, signed: &SignedBy) -> Result
 
 /// The answer to a registration of a hardware ID that is already registered: the first
 /// registration when the keys are the same and it is active, a conflict otherwise. The root
-/// certificate is the current one of `authority`.
+/// certificate is the current one of `authority`, and the chain's issuing CA the one of
+/// `authority` that signed the certificate ([`certificate_chain`]).
 fn repeat(
     registration: &Registration,
     endorsement_key_sha256: &[u8; 32],
@@ -980,6 +988,7 @@ fn repeat(
     }
     let serial: Vec<u8> = row.try_get("serial").map_err(read)?;
     let certificate: Vec<u8> = row.try_get("certificate").map_err(read)?;
+    let ca_key_id: String = row.try_get("ca_key_id").map_err(read)?;
     let public_key_sha256: [u8; 32] = Sha256::digest(&public_key).into();
     Ok((
         StatusCode::OK,
@@ -990,13 +999,36 @@ fn repeat(
             workstation: row.try_get("workstation").map_err(read)?,
             registered_at: row.try_get("registered_at").map_err(read)?,
             serial: issue::hex(&serial),
-            ca_key_id: row.try_get("ca_key_id").map_err(read)?,
             not_before: row.try_get("not_before").map_err(read)?,
             not_after: row.try_get("not_after").map_err(read)?,
             certificate: pem::encode(pem::CERTIFICATE, &certificate),
+            certificate_chain: certificate_chain(authority, &ca_key_id, &certificate),
             root_certificate: pem::encode(pem::CERTIFICATE, authority.root_der()),
+            ca_key_id,
         },
     ))
+}
+
+/// `certificate` (DER), then the certificate of the issuing CA of `authority` whose key id is
+/// `ca_key_id`, PEM. When that issuing CA is no longer loaded (rotation step 3 removed it after
+/// every certificate it signed expired, services/certs/README.md, "輪替"), the chain is
+/// `certificate` alone and a WARN names the key id: a repeat still answers with the first
+/// registration.
+fn certificate_chain(authority: &Authority, ca_key_id: &str, certificate: &[u8]) -> String {
+    let mut chain = pem::encode(pem::CERTIFICATE, certificate);
+    match authority
+        .issuing()
+        .iter()
+        .find(|issuing| issuing.key_id() == ca_key_id)
+    {
+        Some(issuing) => chain.push_str(&pem::encode(pem::CERTIFICATE, issuing.certificate_der())),
+        None => tracing::warn!(
+            ca_key_id = %ca_key_id,
+            "the issuing CA of a repeated gateway registration is no longer loaded, so its \
+             certificate chain is the gateway certificate alone"
+        ),
+    }
+    chain
 }
 
 /// Signs the gateway certificate and records it in the ledger within `tx`, through the path

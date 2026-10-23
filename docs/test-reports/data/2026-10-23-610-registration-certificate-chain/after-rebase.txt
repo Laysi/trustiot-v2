@@ -1,0 +1,43 @@
+check queue: queued on the build host at 22:34:06 as 610-c426da67; running now: 605-931c5d21 since 22:32:45
+FMT_OK
+api/openapi.json is up to date
+$ bun tools/api-client.ts --check
+    Checking agent v0.1.0 (<host copy>/src/edge/agent)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 7.90s
+test result: ok. 18 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/broker.rs (<host copy>/target/debug/deps/broker-7e1f767d8d7cd4a9)
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.09s
+     Running tests/ceremony.rs (<host copy>/target/debug/deps/ceremony-4830d7e5916c2e2a)
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.54s
+     Running tests/crl.rs (<host copy>/target/debug/deps/crl-25e0a98164dde8af)
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 22.69s
+     Running tests/cross_tenant.rs (<host copy>/target/debug/deps/cross_tenant-a5eab79ab0adffc4)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.88s
+     Running tests/issuance.rs (<host copy>/target/debug/deps/issuance-e9465dcff3ac038d)
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.52s
+     Running tests/key_custody.rs (<host copy>/target/debug/deps/key_custody-9acda0f7ea2b8fd9)
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.46s
+     Running tests/registration.rs (<host copy>/target/debug/deps/registration-384d164244874d06)
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.75s
+     Running tests/workstation.rs (<host copy>/target/debug/deps/workstation-7618f8762203f767)
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 14.99s
+test result: ok. 43 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/client.rs (<host copy>/target/debug/deps/client-937a495e8490bb51)
+test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.30s
+     Running tests/client_logging.rs (<host copy>/target/debug/deps/client_logging-45d5528cfff970e4)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/error_format.rs (<host copy>/target/debug/deps/error_format-fe41c1de6fe07c7c)
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/events.rs (<host copy>/target/debug/deps/events-9a98d84400d6f37f)
+test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/repository.rs (<host copy>/target/debug/deps/repository-4bf5f5e43d5bc66f)
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.08s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+check queue: removed 0 dangling test volumes
+check queue: removed 0 dangling podman test volumes
+check queue: exit 0 at 22:39:51 (build host, 610-c426da67)
+

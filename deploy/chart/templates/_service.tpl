@@ -43,6 +43,15 @@ Argument: the service name.
 {{- ternary "AI_GATEWAY" "TRUSTIOT" (eq . "ai-gateway") -}}
 {{- end -}}
 
+{{/*
+Pods a rolling update starts above a service's replicas before it stops old ones (the Deployment's
+maxSurge; maxUnavailable is 0, so a single replica rolls without downtime). The Postgres connection
+check counts them ("trustiot.postgres.connectionPlan"), so both read it here.
+*/}}
+{{- define "trustiot.service.maxSurge" -}}
+1
+{{- end -}}
+
 {{- define "trustiot.service.serviceAccount" -}}
 apiVersion: v1
 kind: ServiceAccount
@@ -85,9 +94,9 @@ spec:
 
 {{/*
 Container env: the chart's variables first (OTEL_SERVICE_NAME, the collector endpoint, SENTRY_DSN,
-the Postgres CA file, login role and password for a service that uses Postgres, the credentials
-the service lists, for identity, its routes and signing key settings, for certs, its CA files, and for mqtt-bridge,
-the broker's address),
+the Postgres CA file, login role, password and pool size for a service that uses Postgres, the
+credentials the service lists, for identity, its routes and signing key settings, for certs, its CA
+files, and for mqtt-bridge, the broker's address),
 then serviceDefaults.env and services.<name>.env.
 Custom env cannot take over what the chart controls:
 - names starting with TRUSTIOT_ plus a letter or digit, SENTRY_ or OTEL_ are reserved, so the
@@ -103,11 +112,13 @@ Custom env cannot take over what the chart controls:
   through the chart;
 - for a service that uses Postgres, <prefix>__DATABASE__USERNAME and <prefix>__DATABASE__PASSWORD
   are the chart's, and so are <prefix>__DATABASE__PLATFORM_USERNAME and
-  <prefix>__DATABASE__PLATFORM_PASSWORD (set for a service whose platform role logs in), where
-  <prefix> is the service's settings prefix ("trustiot.service.envPrefix"); a service whose prefix
-  is not TRUSTIOT does not read the platform ConfigMap's TRUSTIOT_POSTGRES_*, so it also gets
-  <prefix>_POSTGRES_HOST, _PORT, _DATABASE and _SSLMODE ("trustiot.postgres.connection"), which
-  are the chart's too, like <prefix>_POSTGRES_CA_FILE;
+  <prefix>__DATABASE__PLATFORM_PASSWORD (set for a service whose platform role logs in) and
+  <prefix>__DATABASE__MAX_CONNECTIONS (services.<name>.database.maxConnections, which the
+  Postgres connection check counts), where <prefix> is the service's settings prefix
+  ("trustiot.service.envPrefix"); a service whose prefix is not TRUSTIOT does not read the
+  platform ConfigMap's TRUSTIOT_POSTGRES_*, so it also gets <prefix>_POSTGRES_HOST, _PORT,
+  _DATABASE and _SSLMODE ("trustiot.postgres.connection"), which are the chart's too, like
+  <prefix>_POSTGRES_CA_FILE;
 - for mqtt-bridge, TRUSTIOT__BROKER__ADDRESS is the chart's ("trustiot.mqttBridge.env"): the bridge
   relays the gateways' connections to the in-cluster broker only, even while it is off;
 - for telemetry-query, TRUSTIOT__CLICKHOUSE__USERNAME and TRUSTIOT__CLICKHOUSE__PASSWORD are the
@@ -135,6 +146,10 @@ into the service's own Secret and sets. */ -}}
 {{- $secret := include "trustiot.migrate.passwordSecret" (dict "root" .root "component" $name) | fromYaml -}}
 {{- $dbEnv = append $dbEnv (dict "name" (printf "%s__DATABASE__USERNAME" $prefix) "value" $secret.key) -}}
 {{- $dbEnv = append $dbEnv (dict "name" (printf "%s__DATABASE__PASSWORD" $prefix) "valueFrom" (dict "secretKeyRef" (dict "name" $secret.name "key" $secret.key))) -}}
+{{- /* The size of its main pool, which the connection check counts with its other pools
+("trustiot.postgres.connectionPlan", Laysi/trustiot-v2#575). */ -}}
+{{- $poolSize := include "trustiot.postgres.poolSize" (dict "root" .root "name" $name "config" $config) -}}
+{{- $dbEnv = append $dbEnv (dict "name" (printf "%s__DATABASE__MAX_CONNECTIONS" $prefix) "value" $poolSize) -}}
 {{- if ne $prefix "TRUSTIOT" -}}
 {{- /* Where Postgres is, under the service's own prefix: the platform ConfigMap names it
 TRUSTIOT_POSTGRES_*, which such a service does not read. */ -}}
@@ -185,6 +200,9 @@ generates its password into the service's Secret and sets it
 {{- end -}}
 {{- if and $dbEnv (or (regexMatch (printf "(?i)^%s__DATABASE__(PLATFORM_)?(USERNAME|PASSWORD)$" $prefix) .name) (regexMatch (printf "(?i)^%s_POSTGRES_" $prefix) .name)) -}}
 {{- fail (printf "services.%s: env %s is set by the chart: where Postgres is, the service's login roles and the passwords the migration Job generates for them" $name .name) -}}
+{{- end -}}
+{{- if and $dbEnv (regexMatch (printf "(?i)^%s__DATABASE__MAX_CONNECTIONS$" $prefix) .name) -}}
+{{- fail (printf "services.%s: env %s is set by the chart from services.%s.database.maxConnections, which the Postgres connection check counts" $name .name $name) -}}
 {{- end -}}
 {{- if and $clickhouseEnv (regexMatch "(?i)^TRUSTIOT__CLICKHOUSE__(USERNAME|PASSWORD)$" .name) -}}
 {{- fail (printf "services.%s: env %s is set by the chart: the service's ClickHouse account and the password the migration Job generates for it" $name .name) -}}
@@ -306,7 +324,7 @@ spec:
     rollingUpdate:
       # Start the new pod before stopping the old one, so a single replica rolls without downtime.
       maxUnavailable: 0
-      maxSurge: 1
+      maxSurge: {{ include "trustiot.service.maxSurge" .root }}
   selector:
     matchLabels:
       {{- include "trustiot.selectorLabels" . | nindent 6 }}

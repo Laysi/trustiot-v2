@@ -561,16 +561,25 @@ describe("secrets reach only the services that need them", () => {
     expect(JSON.stringify(smoke)).not.toContain("TRUSTIOT_POSTGRES_CA_FILE");
     for (const pod of [identity, smoke]) expect(pod.containers[0]?.volumeMounts).toContainEqual(clickhouseMount);
     expect(platformConfig(manifests).TRUSTIOT_CLICKHOUSE_CA_FILE).toBe("/etc/trustiot/clickhouse-ca/ca.crt");
-    // Listing postgres is what gives a service the CA. The migration Job is off here: the smoke
-    // service's image is not a TrustIoT release, which the Job's tag rule refuses for a service
-    // that uses Postgres (see "a service that uses Postgres must have the migration Job's tag").
-    const listed = render(
+    // Listing postgres is what gives a service the CA: assets without it has none.
+    const assets = (calls: string) =>
+      podSpec(find(render([...SHAPES.saas, SMOKE], [...external, "--set", "services.assets.enabled=true", "--set-json", `mesh.calls.assets=${calls}`]), "Deployment", `${RELEASE}-assets`));
+    const unlisted = assets("[]");
+    expect(JSON.stringify(unlisted)).not.toContain("postgres-ca");
+    expect(JSON.stringify(unlisted)).not.toContain("TRUSTIOT_POSTGRES_CA_FILE");
+    const listed = assets('["postgres"]');
+    expect(listed.volumes).toContainEqual(postgresVolume);
+    expect(listed.containers[0]?.volumeMounts).toContainEqual(postgresMount);
+    // A service the chart has no connection budget for, such as the smoke stand-in, cannot list
+    // postgres in either mode: its pools would go uncounted (README.md, 「叢集內的 Postgres」).
+    // The migration Job is off: the smoke service's image is not a TrustIoT release, which the
+    // Job's tag rule refuses for a service that uses Postgres.
+    const smokeListed = helmTemplate(
       [...SHAPES.saas, SMOKE],
       [...external, "--set-json", 'mesh.calls.smoke-echo=["postgres"]', "--set", "migrate.enabled=false"],
     );
-    const listedSmoke = podSpec(find(listed, "Deployment", `${RELEASE}-smoke-echo`));
-    expect(listedSmoke.volumes).toContainEqual(postgresVolume);
-    expect(listedSmoke.containers[0]?.volumeMounts).toContainEqual(postgresMount);
+    expect(smokeListed.code).not.toBe(0);
+    expect(smokeListed.stderr).toContain("services.smoke-echo lists postgres under mesh.calls, but the chart has no connection budget for it");
   });
 });
 
@@ -2513,7 +2522,7 @@ describe("bundled Postgres (CloudNativePG, Laysi/trustiot-v2#58)", () => {
       effective_cache_size: "384MB",
       work_mem: "4MB",
       maintenance_work_mem: "64MB",
-      max_connections: "100",
+      max_connections: "160",
     });
     // The string form takes the same 10–1000 as the number (values.schema.json).
     const most = clusterSpec(render(SHAPES.saas, ["--set-string", "postgres.bundled.parameters.max_connections=1000"]));
@@ -2759,6 +2768,148 @@ const EXPORTER_COLUMNS = {
     "Events", "Links",
   ],
 };
+
+describe("Postgres connection budget (Laysi/trustiot-v2#575)", () => {
+  // The chart's budgets and reserved connections, read from the template the way the services'
+  // Rust tests read them (crates/testkit, `chart`): the JSON body of each helper.
+  const template = readFileSync(join(CHART_DIR, "templates/_postgres.tpl"), "utf8");
+  function helperJson(name: string): Record<string, unknown> {
+    const body = template.split(`{{- define "${name}" -}}`)[1]?.split("{{- end -}}")[0];
+    if (body === undefined) throw new Error(`no helper ${name} in templates/_postgres.tpl`);
+    return JSON.parse(body) as Record<string, unknown>;
+  }
+  type Budget = { maxConnections: { min: number; max: number }; otherPools: number };
+  const budgets = helperJson("trustiot.postgres.connectionBudgets") as Record<string, Budget>;
+  const reserved = Object.values(helperJson("trustiot.postgres.reservedConnections") as Record<string, number>).reduce((a, b) => a + b, 0);
+  const services = defaults.services as Record<string, { database?: { maxConnections?: number } }>;
+  const calls = (defaults.mesh as { calls: Record<string, string[]> }).calls;
+  const postgresServices = Object.keys(calls).filter((name) => calls[name]?.includes("postgres")).sort();
+  const enable = (names: readonly string[]) => names.flatMap((name) => ["--set", `services.${name}.enabled=true`]);
+  // What the defaults need with every Postgres service on at one replica, computed here from the
+  // budgets and values.yaml, independently of the template's arithmetic.
+  const perReplica = (name: string) => (services[name]?.database?.maxConnections ?? NaN) + (budgets[name]?.otherPools ?? NaN);
+  const needed = postgresServices.reduce((sum, name) => sum + perReplica(name) * 2, 0) + reserved;
+  const limit = Number((defaults.postgres as { bundled: { parameters: { max_connections: number } } }).bundled.parameters.max_connections);
+
+  test("every service that uses Postgres by default has a budget and a pool size, and the numbers are the ones README.md states", () => {
+    expect(postgresServices).toEqual(["assets", "certs", "identity", "telemetry-query"]);
+    expect(Object.keys(budgets).sort()).toEqual(postgresServices);
+    expect(Object.fromEntries(postgresServices.map((name) => [name, perReplica(name)]))).toEqual({
+      assets: 14,
+      certs: 9,
+      identity: 31,
+      "telemetry-query": 12,
+    });
+    expect(reserved).toBe(18);
+    expect(needed).toBe(150);
+    expect(limit).toBe(160);
+    const readme = readFileSync(join(CHART_DIR, "README.md"), "utf8");
+    for (const name of postgresServices) {
+      expect(readme).toContain(`| \`${name}\` | \`${services[name]?.database?.maxConnections}\` | ${budgets[name]?.otherPools} | ${perReplica(name)} |`);
+    }
+    expect(readme).toContain(`| 合計 | | | 66 | 132 |`);
+  });
+
+  test.each(SHAPE_NAMES)("%s: the defaults, every Postgres service and every planned service pass the check", (shape) => {
+    for (const args of [[], enable(postgresServices), enableAllServices]) {
+      const result = helmTemplate([...SHAPES[shape], SMOKE], args);
+      expect(result.stderr).toBe("");
+      expect(result.code).toBe(0);
+    }
+  });
+
+  test("the check passes at exactly what the services and the reserved connections need, and fails one below with the breakdown", () => {
+    const at = (n: number) => helmTemplate(SHAPES.saas, [...enable(postgresServices), "--set", `postgres.bundled.parameters.max_connections=${n}`]);
+    const exact = at(needed);
+    expect(exact.stderr).toBe("");
+    expect(exact.code).toBe(0);
+    const below = at(needed - 1);
+    expect(below.code).not.toBe(0);
+    expect(below.stderr).toContain(
+      `postgres.bundled.parameters.max_connections is ${needed - 1}, but ${needed} connections are needed: the services can open ${needed - reserved} while all of them roll at once ` +
+        "(per replica x pods: assets 14 x 2, certs 9 x 2, identity 31 x 2, telemetry-query 12 x 2), " +
+        `and ${reserved} stay reserved for superusers, CloudNativePG, the migration Job and the platform administrator bootstrap.`,
+    );
+    // The string form of max_connections counts the same.
+    const asString = helmTemplate(SHAPES.saas, [...enable(postgresServices), "--set-string", `postgres.bundled.parameters.max_connections=${needed - 1}`]);
+    expect(asString.code).not.toBe(0);
+    expect(asString.stderr).toContain(`but ${needed} connections are needed`);
+  });
+
+  test.each([
+    ["a second identity replica", ["--set", "services.identity.replicas=2"], 31, 3],
+    ["a larger assets pool", ["--set", "services.assets.database.maxConnections=30"], 34, 2],
+  ] as const)("the defaults with %s fail: every replica plus the one a rolling update adds counts", (_what, args, perReplicaAfter, pods) => {
+    const result = helmTemplate(SHAPES.saas, [...enable(postgresServices), ...args]);
+    expect(result.code).not.toBe(0);
+    expect(result.stderr).toContain("postgres.bundled.parameters.max_connections is 160, but");
+    expect(result.stderr).toMatch(new RegExp(`(identity|assets) ${perReplicaAfter} x ${pods}`));
+    // The same values fit once max_connections is raised by what they add.
+    const raised = helmTemplate(SHAPES.saas, [...enable(postgresServices), ...args, "--set", "postgres.bundled.parameters.max_connections=1000"]);
+    expect(raised.stderr).toBe("");
+    expect(raised.code).toBe(0);
+  });
+
+  test("the Deployments roll with the surge the check counts", () => {
+    const manifests = render(SHAPES.saas, enable(postgresServices));
+    for (const name of postgresServices) {
+      const strategy = (find(manifests, "Deployment", `${RELEASE}-${name}`).spec as { strategy: { rollingUpdate: { maxSurge: number; maxUnavailable: number } } }).strategy;
+      expect(strategy.rollingUpdate).toEqual({ maxSurge: 1, maxUnavailable: 0 });
+    }
+  });
+
+  test("each service gets its pool size from database.maxConnections, within the range it accepts, and custom env cannot change it", () => {
+    const env = (args: string[], name: string) =>
+      (podSpec(find(render(SHAPES.saas, [...enable(postgresServices), ...args]), "Deployment", `${RELEASE}-${name}`)).containers[0]?.env ?? []).filter(
+        (e) => e.name === "TRUSTIOT__DATABASE__MAX_CONNECTIONS",
+      );
+    expect(env([], "certs")).toEqual([{ name: "TRUSTIOT__DATABASE__MAX_CONNECTIONS", value: "5" }]);
+    expect(env(["--set", "services.certs.database.maxConnections=2"], "certs")).toEqual([{ name: "TRUSTIOT__DATABASE__MAX_CONNECTIONS", value: "2" }]);
+    // identity keeps 3 connections open, so it refuses fewer (services/identity/src/config.rs);
+    // the schema's floor is 2 for every service, so the template refuses it, with and without
+    // schema validation.
+    for (const schema of [[], ["--skip-schema-validation"]]) {
+      const result = helmTemplate(SHAPES.saas, [...enable(postgresServices), "--set", "services.identity.database.maxConnections=2", ...schema]);
+      expect(result.code).not.toBe(0);
+      expect(result.stderr).toContain("services.identity.database.maxConnections must be a whole number from 3 to 100");
+    }
+    const unchecked = helmTemplate(SHAPES.saas, [...enable(postgresServices), "--set", "services.assets.database.maxConnections=101", "--skip-schema-validation"]);
+    expect(unchecked.stderr).toContain("services.assets.database.maxConnections must be a whole number from 2 to 100");
+    const missing = helmTemplate(SHAPES.saas, [...enable(postgresServices), "--set", "services.assets.database=null"]);
+    expect(missing.code).not.toBe(0);
+    expect(missing.stderr).toContain("services.assets.database.maxConnections is required");
+    const custom = helmTemplate(SHAPES.saas, [
+      ...enable(postgresServices),
+      "--set-json",
+      'services.assets.env=[{"name":"trustiot__database__max_connections","value":"90"}]',
+    ]);
+    expect(custom.code).not.toBe(0);
+    expect(custom.stderr).toContain("services.assets: env trustiot__database__max_connections is set by the chart from services.assets.database.maxConnections");
+    // Nor can serviceDefaults set a pool size for every service (values.schema.json).
+    const everyService = helmTemplate(SHAPES.saas, ["--set", "serviceDefaults.database.maxConnections=10"]);
+    expect(everyService.code).not.toBe(0);
+    expect(everyService.stderr).toMatch(/serviceDefaults/);
+  });
+
+  test("external mode checks no total, since the customer sizes that server, but still the range of each pool", () => {
+    const external = [
+      "--set",
+      "postgres.mode=external",
+      "--set",
+      "postgres.external.host=pg.saas.trustiot.test",
+      "--set",
+      "postgres.external.caSecret.name=trustiot-pg-ca",
+      ...EXTERNAL_MIGRATION,
+      ...enable(postgresServices),
+    ];
+    const many = helmTemplate(SHAPES.saas, [...external, "--set", "services.identity.replicas=10", "--set", "postgres.bundled.parameters.max_connections=10"]);
+    expect(many.stderr).toBe("");
+    expect(many.code).toBe(0);
+    const tooSmall = helmTemplate(SHAPES.saas, [...external, "--set", "services.identity.database.maxConnections=2"]);
+    expect(tooSmall.code).not.toBe(0);
+    expect(tooSmall.stderr).toContain("services.identity.database.maxConnections must be a whole number from 3 to 100");
+  });
+});
 
 describe("migration Job (Laysi/trustiot-v2#60)", () => {
   type JobSpec = YamlMap & {
@@ -3134,6 +3285,8 @@ describe("migration Job (Laysi/trustiot-v2#60)", () => {
     expect(identity.env?.filter((e) => e.name.startsWith("TRUSTIOT__DATABASE__"))).toEqual([
       { name: "TRUSTIOT__DATABASE__USERNAME", value: "identity_app" },
       { name: "TRUSTIOT__DATABASE__PASSWORD", valueFrom: { secretKeyRef: { name: IDENTITY_SECRET, key: "identity_app" } } },
+      // Its main pool, from services.identity.database.maxConnections (Laysi/trustiot-v2#575).
+      { name: "TRUSTIOT__DATABASE__MAX_CONNECTIONS", value: "10" },
       // identity keeps the event log, which reads events as its platform role (Laysi/trustiot-v2#130).
       { name: "TRUSTIOT__DATABASE__PLATFORM_USERNAME", value: "identity_platform" },
       { name: "TRUSTIOT__DATABASE__PLATFORM_PASSWORD", valueFrom: { secretKeyRef: { name: IDENTITY_SECRET, key: "identity_platform" } } },
@@ -3151,6 +3304,7 @@ describe("migration Job (Laysi/trustiot-v2#60)", () => {
         name: "TRUSTIOT__DATABASE__PASSWORD",
         valueFrom: { secretKeyRef: { name: `${RELEASE}-telemetry-query-password`, key: "telemetry_query_app" } },
       },
+      { name: "TRUSTIOT__DATABASE__MAX_CONNECTIONS", value: "10" },
       { name: "TRUSTIOT__DATABASE__PLATFORM_USERNAME", value: "telemetry_query_platform" },
       {
         name: "TRUSTIOT__DATABASE__PLATFORM_PASSWORD",
@@ -3201,6 +3355,7 @@ describe("migration Job (Laysi/trustiot-v2#60)", () => {
     expect(assets.env?.filter((e) => e.name.startsWith("TRUSTIOT__DATABASE__"))).toEqual([
       { name: "TRUSTIOT__DATABASE__USERNAME", value: "assets_app" },
       { name: "TRUSTIOT__DATABASE__PASSWORD", valueFrom: { secretKeyRef: { name: ASSETS_SECRET, key: "assets_app" } } },
+      { name: "TRUSTIOT__DATABASE__MAX_CONNECTIONS", value: "10" },
       { name: "TRUSTIOT__DATABASE__PLATFORM_USERNAME", value: "assets_platform" },
       { name: "TRUSTIOT__DATABASE__PLATFORM_PASSWORD", valueFrom: { secretKeyRef: { name: ASSETS_SECRET, key: "assets_platform" } } },
     ]);
