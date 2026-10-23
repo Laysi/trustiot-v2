@@ -271,7 +271,7 @@ Laysi/trustiot-v2#79 照這個清單實作（`src/registrations.rs` 的 `verify_
 - 呼叫者是平台管理員（`platform_admin`）。API 只接受入口 cookie 檢查簽出的 token：沒有或驗不過 401 `unauthenticated`；不是平台管理員，或是別的服務以 token 交換代為呼叫（token 帶 `act`）時 403 `permission_denied`。簽發與撤銷憑證是管理員自己的動作，不讓任何服務代為執行。
 - 所有回應帶 `cache-control: no-store`；請求的 `Content-Type` 要是 `application/json`（跨來源的網頁因此要先過 CORS preflight，沒有任何東西回應它）。
 
-管理介面不在這個 issue 的範圍；在那之前以 HTTP 呼叫，帶平台管理員的 session cookie（`__Host-trustiot-session`，它是密鑰，不要留在 shell 歷史或檔案裡）。
+工作站上以產線工作站工具做這些步驟（[factory/workstation](../../factory/workstation/README.md)，Laysi/trustiot-v2#614）：`init` 產生私鑰與 CSR，平台管理員在工作站上 `login` 之後 `enroll` 簽發並檢查、存放憑證。以下的 openssl 與 curl 步驟是沒有工具時的做法，也說明 API 本身。管理介面不在這個 issue 的範圍；在那之前以 HTTP 呼叫，帶平台管理員的 session cookie（`__Host-trustiot-session`，它是密鑰，不要留在 shell 歷史或檔案裡）。
 
 **簽發**：在工作站上產生金鑰與 CSR，私鑰不離開工作站（之後由 Laysi/trustiot-v2#80 的工作站工具取代），例如：
 
