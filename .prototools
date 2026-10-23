@@ -11,7 +11,7 @@
 
 # renovate: datasource=github-releases depName=rhysd/actionlint extractVersion=^v(?<version>.+)$
 actionlint = "1.7.12"
-bun = "1.4.2"
+bun = "1.4.4"
 # renovate: datasource=github-releases depName=rust-secure-code/cargo-auditable extractVersion=^v(?<version>.+)$
 cargo-auditable = "0.7.6"
 # renovate: datasource=github-releases depName=EmbarkStudios/cargo-deny
