@@ -13,6 +13,7 @@ release.yml 發佈的容器映像。每個子目錄是一個映像，目錄名�
 | `certs` | 憑證服務（`services/certs`），chart 的 `services.certs`；只放服務本身的執行檔 `certs`（`bin = "certs"`），離線根 CA 儀式工具 `certs-ca` 不進映像。2026-10-21 加入（Laysi/trustiot-v2#78），nightly 還沒有建置它 |
 | `identity` | 身分服務（`services/identity`），chart 的 `services.identity`；2026-10-11 加入（Laysi/trustiot-v2#308），arm64 啟動驗證見[測試報告](../../docs/test-reports/2026-10-11-308-identity-image.md)；nightly 從 Laysi/trustiot-v2#65 起從原始碼建置並部署它 |
 | `migrate` | migration Job（`tools/migrate`），chart 的 `migrate.image`；Job 執行 `migrate run`，每個服務 pod 的 init container 執行 `migrate wait-for-job`，叢集內 ClickHouse 的 init container 執行 `migrate clickhouse-admin-password`（Laysi/trustiot-v2#403），身分服務 pod 的 init container 執行 `migrate identity-signing-keys`（Laysi/trustiot-v2#404），憑證服務 pod 的 init container 執行 `migrate certs-ca-keys`（Laysi/trustiot-v2#78），MQTT broker pod 的 init container 與 sidecar 執行 `migrate mqtt-broker-accounts`、`migrate mqtt-broker-trust`（Laysi/trustiot-v2#84）。2026-10-13 加入（Laysi/trustiot-v2#60），nightly 從原始碼建置它 |
+| `mqtt-bridge` | MQTT 轉接（`services/mqtt-bridge`），chart 的 `services.mqtt-bridge`；2026-10-23 加入（Laysi/trustiot-v2#85），nightly 還沒有建置或部署它 |
 | `telemetry-query` | 遙測查詢服務（`services/telemetry-query`），chart 的 `services.telemetry-query`；2026-10-21 加入（Laysi/trustiot-v2#119）；nightly 從 Laysi/trustiot-v2#539（2026-10-23）起從原始碼建置並以兩份 values 部署它，經入口呼叫它的歷史查詢 API，並在 ClickHouse 確認新租戶的唯讀帳號 |
 | `web` | web 服務（`services/web`）加上 SPA（`frontend/`）的建置結果，chart 的 `services.web`；2026-10-21 加入（Laysi/trustiot-v2#123），見下方「帶靜態網站的 Rust 服務」 |
 

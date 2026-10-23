@@ -86,6 +86,8 @@ proto 的 shim 偶爾會把自己的訊息寫進 stdout（例如另一個 proto 
 
 `web` 提供 SPA 的靜態檔（決策 2，Laysi/trustiot-v2#123）：開啟後 `hosts.app` 上 `/api`、`/auth` 以外的路徑都由它回應，不經 cookie 檢查，也拿不到 cookie 與身分標頭；不能有 cookie 路由（見「入口 gateway」的「SPA 的靜態檔」）。
 
+`mqtt-bridge` 把閘道器的 WebSocket（`ingress.publicPaths.mqtt`）原封不動轉成 TCP 送到 broker 的閘道器埠（決策 6，Laysi/trustiot-v2#85，services/mqtt-bridge/README.md）。`mqttBroker.enabled` 時 chart 設定 `TRUSTIOT__BROKER__ADDRESS`（`<release>-mqtt-broker.<namespace>.svc:8883`），broker 沒開時不設，服務拒絕啟動；不論 broker 開不開，`services.mqtt-bridge.env` 與 `serviceDefaults.env` 都不能設定它（渲染失敗），轉接服務只連叢集內的 broker。記錄的來源 IP 依 `TRUSTIOT_CLIENT_IP_SOURCE`：目前只支援 `tunnel`（`cf-connecting-ip`），其他 `ingress.exposure`（`x-forwarded-for-rightmost`）在 Laysi/trustiot-v2#446 之前拒絕啟動。渲染不因此失敗，因為 e2e 與「每個服務都開」的渲染測試要在 onprem 形態開啟它。`mesh.calls` 不能把 `mqtt-bridge` 列為被呼叫端（渲染失敗）：只有入口 gateway 連得到它，否則呼叫端能自己設可信的來源 IP 標頭，也能經它連到 broker 的閘道器埠。
+
 ## values 欄位
 
 「必填」指 schema 要求非空值。Secret 欄位一律是既有 Secret 的名稱與 key，名稱空白代表不設定。

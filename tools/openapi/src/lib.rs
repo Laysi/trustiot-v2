@@ -93,6 +93,10 @@ pub const SERVICES_WITHOUT_API: &[&str] = &[
     // health endpoints until the chat API (Laysi/trustiot-v2#146) adds its routes and its
     // `openapi()`; move it to `SERVICES` then.
     "assistant",
+    // Relays the gateways' MQTT inside WebSocket to the broker as TCP (Laysi/trustiot-v2#85,
+    // decision 6); its only endpoint is the WebSocket upgrade on the public path, described in
+    // services/mqtt-bridge/README.md, and no HTTP API besides the health endpoints.
+    "mqtt-bridge",
 ];
 
 fn shared_schemas() -> OpenApi {
