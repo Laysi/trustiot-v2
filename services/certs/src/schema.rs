@@ -24,5 +24,9 @@ pub const SCHEMA: Schema = Schema {
             name: "0002_workstation_certificates.sql",
             sql: include_str!("../migrations/postgres/0002_workstation_certificates.sql"),
         },
+        Migration {
+            name: "0003_broker_certificates.sql",
+            sql: include_str!("../migrations/postgres/0003_broker_certificates.sql"),
+        },
     ],
 };

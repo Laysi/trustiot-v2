@@ -121,7 +121,11 @@ Argument: the path. Returns "true" or "".
 {{- end -}}
 
 {{/*
-Backend of a route: the Service name and port number of an enabled service.
+Backend of a route: the Service name and port number of an enabled service. The ports with a
+Service and policies of their own fail the render, because the service's Service leaves them out
+and only their own callers may reach them: the identity service's token-exchange
+(templates/token-exchange.yaml) and the certs service's broker-certs, which issues the MQTT
+broker's server certificate (templates/certs-broker.yaml, Laysi/trustiot-v2#557).
 Argument: dict "root" $ "service" <key under services> "port" <port name> "where" <for errors>.
 Returns YAML {name, port}; use with fromYaml.
 */}}
@@ -129,6 +133,9 @@ Returns YAML {name, port}; use with fromYaml.
 {{- $entry := get .root.Values.services .service -}}
 {{- if not $entry -}}
 {{- fail (printf "%s: unknown service %q" .where .service) -}}
+{{- end -}}
+{{- if or (and (eq .service "identity") (eq .port "token-exchange")) (and (eq .service "certs") (eq .port "broker-certs")) -}}
+{{- fail (printf "%s: port %q of service %q has a Service and policies of its own; the ingress gateway never reaches it" .where .port .service) -}}
 {{- end -}}
 {{- $config := include "trustiot.serviceConfig" (dict "root" .root "name" .service "values" $entry) | fromYaml -}}
 {{- $number := 0 -}}

@@ -7,7 +7,8 @@
 //!   reviewed and listed;
 //! - at run time: the real service, with its log at `trace`, OTLP export on, a key set whose
 //!   newest key still waits for a certificate, a workstation certificate signed through the API
-//!   (Laysi/trustiot-v2#534), a reload, and two broken key files, prints and serves nothing that
+//!   (Laysi/trustiot-v2#534), the MQTT broker's server certificate signed on the broker port
+//!   (Laysi/trustiot-v2#557), a reload, and two broken key files, prints and serves nothing that
 //!   contains any piece of a private key: not the PKCS#8 document (any 24
 //!   characters of its base64 that cover the private scalar; the rest is the algorithm and the
 //!   public key, which the CA certificates publish), not the 32-byte private scalar (hex,
@@ -22,6 +23,7 @@ use std::path::{Path, PathBuf};
 
 use base64::Engine as _;
 use base64::engine::general_purpose::{STANDARD, STANDARD_NO_PAD, URL_SAFE_NO_PAD};
+use certs::broker::{BROKER_CERTIFICATE_PATH, REQUEST_TYPE};
 use certs::http::{CHAIN_PATH, CRL_PATH};
 use certs::workstations::CERTIFICATES_PATH;
 use rcgen::{CertificateParams, KeyPair, PKCS_ECDSA_P256_SHA256};
@@ -417,6 +419,29 @@ async fn no_private_key_leaves_through_logs_endpoints_or_telemetry() {
         .await;
     assert_eq!(issued.status, 201, "{}", issued.body);
     bodies.push(issued.body);
+    // And the broker's server certificate on the broker port. The broker's own key is generated
+    // by the test, as the broker generates it (Laysi/trustiot-v2#535); the service gets the CSR
+    // only, and its reply and log carry no piece of the issuing CA's key either.
+    let broker_key = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256).expect("a key");
+    let request = CertificateParams::default()
+        .serialize_request(&broker_key)
+        .expect("a CSR");
+    let issued = service
+        .post_broker(
+            BROKER_CERTIFICATE_PATH,
+            Some(REQUEST_TYPE),
+            request.der().to_vec(),
+        )
+        .await;
+    assert_eq!(issued.status, 201, "{}", issued.body);
+    bodies.push(issued.body);
+    for path in [
+        "/",
+        "/internal/certs/v1/keys",
+        "/internal/certs/v1/issuing-ca-keys.json",
+    ] {
+        bodies.push(service.get_broker(path).await.1);
+    }
     for path in [
         CHAIN_PATH,
         "/",

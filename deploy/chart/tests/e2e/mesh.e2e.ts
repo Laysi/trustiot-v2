@@ -414,15 +414,19 @@ beforeAll(async () => {
   manifests = (Array.isArray(parsed) ? parsed : [parsed]).filter(
     (m): m is Manifest => typeof m === "object" && m !== null && "kind" in m,
   );
-  // One per service, the default deny, the ingress gateway's, and the token exchange's.
-  expect(networkPolicies().length).toBe(SERVICES.length + 3);
-  // One per service and the token exchange's.
-  expect(servicePolicies().length).toBe(SERVICES.length + 1);
-  expect(manifests.filter((m) => m.metadata.name === `${OBJECT_PREFIX}-${EXCHANGE_SERVICE}`).map((m) => m.kind).sort()).toEqual([
-    "AuthorizationPolicy",
-    "NetworkPolicy",
-    "Service",
-  ]);
+  // One per service, the default deny, the ingress gateway's, the token exchange's, and the certs
+  // service's broker-certs port's (templates/certs-broker.yaml), which admits nothing here because
+  // no MQTT broker runs.
+  expect(networkPolicies().length).toBe(SERVICES.length + 4);
+  // One per service, the token exchange's and the broker-certs port's.
+  expect(servicePolicies().length).toBe(SERVICES.length + 2);
+  for (const name of [`${OBJECT_PREFIX}-${EXCHANGE_SERVICE}`, `${OBJECT_PREFIX}-certs-broker`]) {
+    expect(manifests.filter((m) => m.metadata.name === name).map((m) => m.kind).sort()).toEqual([
+      "AuthorizationPolicy",
+      "NetworkPolicy",
+      "Service",
+    ]);
+  }
   // The identity service is enabled and internalIdentity.maxKeyAgeSeconds keeps its default, so
   // the rotation CronJob and its two policies render, all under the CronJob's name.
   const rotation = manifests.filter((m) => m.kind === "CronJob" && isRotation(m)).map((m) => m.metadata.name);
