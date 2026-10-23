@@ -4,7 +4,11 @@ Laysi/trustiot-v2#101：出廠登錄過的閘道器（`certs.gateway_registered`
 
 ## 環境
 
-- **程式碼**：分支 `feat/101-gateway-pool-binding`，commit `f6fd81ed`（以 main `47713f04` 為基底）。檢查跑的樹就是這個 commit 的樹（這份報告與它的 data 目錄在之後的 commit 才加入）。
+- **程式碼**：分支 `feat/101-gateway-pool-binding`。
+  - 下面的完整檢查跑在以 main `47713f04` 為基底的實作 commit 上。
+  - 之後 rebase 到 main `994ffae7`（Laysi/trustiot-v2#588 的 assistant 對話儲存，也改了 `tools/migrate/src/registry.rs` 與 `scripts/tests/product-logins.test.ts`），沒有衝突，實作 commit 變成 `236930c6`。
+  - rebase 後的樹重跑了 `cargo fmt --all --check`、`cargo clippy --workspace --all-targets -- -D warnings`、`cargo test -p repo-check`、`CI=1 cargo test -p migrate`、`cargo run -p openapi -- --check`、`CI=1 cargo test -p assets`、`cargo test -p testkit`、`cargo test -p contract`、`bun test scripts`（1597 通過、9 略過、0 失敗）、`bun run --cwd scripts typecheck`、`bun run --cwd frontend api:check`、`bun run --cwd frontend test`（131 通過），全部通過。
+  - 這份報告與它的 data 目錄在實作之後的 commit 才加入。
 - **本機檢查**：開發者工作站（x86_64 Linux），本機檢查佇列一次一個工作，`CARGO_BUILD_JOBS=2`。
   - 需要容器的測試設了 `CI=1`，以拋棄式的 TLS Postgres（podman）執行，不略過。
   - 工具版本是 `.prototools` 與 `rust-toolchain.toml` 釘選的版本。
