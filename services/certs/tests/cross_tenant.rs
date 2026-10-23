@@ -9,9 +9,11 @@
 //! The ledger's gateway ids and workstation names are not tenant data: a gateway belongs to a
 //! tenant through its assignment in the assets service, and certificates are issued before a
 //! gateway is assigned (factory registration, Laysi/trustiot-v2#79); production workstations
-//! belong to the platform, not to a tenant (Laysi/trustiot-v2#534). The workstation API is for
-//! platform administrators only, which `tests/workstation.rs` tests. If a later issue stores
-//! tenant ids here, the tables become tenant tables and get the probes.
+//! belong to the platform, not to a tenant (Laysi/trustiot-v2#534); the MQTT broker's server
+//! certificate belongs to the platform's broker (Laysi/trustiot-v2#557), and its issuance is on a
+//! port of its own outside the OpenAPI document, which only the broker's workload reaches. The
+//! workstation API is for platform administrators only, which `tests/workstation.rs` tests. If a
+//! later issue stores tenant ids here, the tables become tenant tables and get the probes.
 //!
 //! Starts a throwaway Postgres with TLS (podman or docker); skipped without either unless `CI`
 //! is set.
@@ -33,10 +35,11 @@ async fn every_relation_and_operation_the_service_has_is_declared() {
     )
     .exempt(
         "certs.issued_certificates",
-        "the ledger of signed gateway and workstation certificates: serial numbers, the issuing \
-         CA's key id, the gateway id or workstation name, validity, the certificate and its \
-         revocation, which are public data of the PKI; no tenant id (a gateway's tenant is the \
-         assets service's assignment, workstations belong to the platform)",
+        "the ledger of signed gateway, workstation and MQTT broker certificates: serial \
+         numbers, the issuing CA's key id, the gateway id, workstation name or broker name, \
+         validity, the certificate and its revocation, which are public data of the PKI; no \
+         tenant id (a gateway's tenant is the assets service's assignment, workstations and the \
+         broker belong to the platform)",
     )
     .exempt(
         "certs.crls",
@@ -64,7 +67,7 @@ async fn every_relation_and_operation_the_service_has_is_declared() {
         )
         .without_tenant_data(
             "the CA's ledger and CRLs are public PKI data of gateways and the platform's \
-             workstations, with no tenant id",
+             workstations and MQTT broker, with no tenant id",
         )
         .run(None)
         .await;
