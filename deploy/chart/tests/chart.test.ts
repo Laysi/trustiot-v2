@@ -2792,19 +2792,19 @@ describe("Postgres connection budget (Laysi/trustiot-v2#575)", () => {
     expect(postgresServices).toEqual(["assets", "certs", "identity", "telemetry-query"]);
     expect(Object.keys(budgets).sort()).toEqual(postgresServices);
     expect(Object.fromEntries(postgresServices.map((name) => [name, perReplica(name)]))).toEqual({
-      assets: 12,
+      assets: 14,
       certs: 9,
       identity: 31,
       "telemetry-query": 12,
     });
     expect(reserved).toBe(18);
-    expect(needed).toBe(146);
+    expect(needed).toBe(150);
     expect(limit).toBe(160);
     const readme = readFileSync(join(CHART_DIR, "README.md"), "utf8");
     for (const name of postgresServices) {
       expect(readme).toContain(`| \`${name}\` | \`${services[name]?.database?.maxConnections}\` | ${budgets[name]?.otherPools} | ${perReplica(name)} |`);
     }
-    expect(readme).toContain(`| 合計 | | | 64 | 128 |`);
+    expect(readme).toContain(`| 合計 | | | 66 | 132 |`);
   });
 
   test.each(SHAPE_NAMES)("%s: the defaults, every Postgres service and every planned service pass the check", (shape) => {
@@ -2824,7 +2824,7 @@ describe("Postgres connection budget (Laysi/trustiot-v2#575)", () => {
     expect(below.code).not.toBe(0);
     expect(below.stderr).toContain(
       `postgres.bundled.parameters.max_connections is ${needed - 1}, but ${needed} connections are needed: the services can open ${needed - reserved} while all of them roll at once ` +
-        "(per replica x pods: assets 12 x 2, certs 9 x 2, identity 31 x 2, telemetry-query 12 x 2), " +
+        "(per replica x pods: assets 14 x 2, certs 9 x 2, identity 31 x 2, telemetry-query 12 x 2), " +
         `and ${reserved} stay reserved for superusers, CloudNativePG, the migration Job and the platform administrator bootstrap.`,
     );
     // The string form of max_connections counts the same.
