@@ -2789,22 +2789,24 @@ describe("Postgres connection budget (Laysi/trustiot-v2#575)", () => {
   const limit = Number((defaults.postgres as { bundled: { parameters: { max_connections: number } } }).bundled.parameters.max_connections);
 
   test("every service that uses Postgres by default has a budget and a pool size, and the numbers are the ones README.md states", () => {
-    expect(postgresServices).toEqual(["assets", "certs", "identity", "telemetry-query"]);
+    expect(postgresServices).toEqual(["assets", "assistant", "certs", "identity", "telemetry-query"]);
     expect(Object.keys(budgets).sort()).toEqual(postgresServices);
     expect(Object.fromEntries(postgresServices.map((name) => [name, perReplica(name)]))).toEqual({
       assets: 14,
+      assistant: 4,
       certs: 9,
       identity: 31,
       "telemetry-query": 12,
     });
     expect(reserved).toBe(18);
-    expect(needed).toBe(150);
+    // 2 to spare: the next service that uses Postgres raises max_connections (README.md, 「連線預算」).
+    expect(needed).toBe(158);
     expect(limit).toBe(160);
     const readme = readFileSync(join(CHART_DIR, "README.md"), "utf8");
     for (const name of postgresServices) {
       expect(readme).toContain(`| \`${name}\` | \`${services[name]?.database?.maxConnections}\` | ${budgets[name]?.otherPools} | ${perReplica(name)} |`);
     }
-    expect(readme).toContain(`| 合計 | | | 66 | 132 |`);
+    expect(readme).toContain(`| 合計 | | | 70 | 140 |`);
   });
 
   test.each(SHAPE_NAMES)("%s: the defaults, every Postgres service and every planned service pass the check", (shape) => {
@@ -2824,7 +2826,7 @@ describe("Postgres connection budget (Laysi/trustiot-v2#575)", () => {
     expect(below.code).not.toBe(0);
     expect(below.stderr).toContain(
       `postgres.bundled.parameters.max_connections is ${needed - 1}, but ${needed} connections are needed: the services can open ${needed - reserved} while all of them roll at once ` +
-        "(per replica x pods: assets 14 x 2, certs 9 x 2, identity 31 x 2, telemetry-query 12 x 2), " +
+        "(per replica x pods: assets 14 x 2, assistant 4 x 2, certs 9 x 2, identity 31 x 2, telemetry-query 12 x 2), " +
         `and ${reserved} stay reserved for superusers, CloudNativePG, the migration Job and the platform administrator bootstrap.`,
     );
     // The string form of max_connections counts the same.
@@ -5257,10 +5259,12 @@ describe("service-to-service authorization (decision 27)", () => {
         .sort();
       const postgres = manifests.some((m) => m.kind === "NetworkPolicy" && m.metadata.name === `${RELEASE}-postgres`) ? ["postgres:5432"] : [];
       expect(reached).toEqual([...["ai-gateway", "assets", "identity-exchange", "otel-collector", "telemetry-query"].map((s) => `${s}:15008`), ...postgres].sort());
-      // Its database login is assistant_app, with the password from its own Secret.
+      // Its database login is assistant_app, with the password from its own Secret, and its pool is
+      // the size the connection budget counts (Laysi/trustiot-v2#575).
       expect(assistantEnv(manifests).filter((e) => e.name.startsWith("TRUSTIOT__DATABASE__"))).toEqual([
         { name: "TRUSTIOT__DATABASE__USERNAME", value: "assistant_app" },
         { name: "TRUSTIOT__DATABASE__PASSWORD", valueFrom: { secretKeyRef: { name: `${RELEASE}-assistant-password`, key: "assistant_app" } } },
+        { name: "TRUSTIOT__DATABASE__MAX_CONNECTIONS", value: "4" },
       ]);
     });
 

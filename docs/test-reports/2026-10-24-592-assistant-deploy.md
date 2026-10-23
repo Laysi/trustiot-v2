@@ -6,7 +6,7 @@
 
 ## 環境
 
-- 程式碼：分支 `feat/592-assistant-deploy`，基於 main `74216494`。
+- 程式碼：分支 `feat/592-assistant-deploy`，基於 main `74216494`；之後合併 main 的 `6da9b15f` 與 `d1269a0d`（Laysi/trustiot-v2#575 的 Postgres 連線預算，PR Laysi/trustiot-v2#609），合併後重跑的結果在「合併連線預算之後」。
 - 開發者工作站（x86_64 Linux），Bun 1.4.2，其餘工具依 `.prototools` 釘選（helm 4.3.0、kubeconform 0.8.0、actionlint 1.7.12）。
 - 建置主機（x86_64 Linux，rootless podman 5.7.0）：Rust 的 clippy 與測試（容器測試以 podman 起 Postgres，`CI=1`，所以沒有容器執行環境時會失敗而不是略過）、`bun test deploy/chart`、`bun test scripts`，以及以發佈腳本建置 arm64 映像。每次在工作樹的快照上執行。
 
@@ -67,11 +67,30 @@ chart 測試（`deploy/chart/tests/chart.test.ts` 的「the assistant (decision 
 - 驗收條件 3：從渲染出的 assistant Deployment 取出每個 URL，經它指名的 Service 找到後面唯一的工作負載與 container 埠，再找出在那個埠放行 assistant 的 AuthorizationPolicy：服務一定在 `mesh.calls.assistant`、政策就是它自己的；token exchange 只到身分服務的 `identity-exchange` 政策；工具的服務都在身分服務的 `TRUSTIOT_ON_BEHALF_CALLS` 上，反過來清單上的每個服務都有位址。六種組合（預設、清單少了 assets、telemetry-query 關閉、只有 AI 閘道、AI 閘道關閉、空清單）× 兩種形態。
 - `services.assistant.env` 與 `serviceDefaults.env` 設定四個位址變數（不分大小寫、有沒有 schema 驗證、清單空或不空）都讓渲染失敗；被呼叫端沒有 `http` 埠時渲染失敗；其他服務拿不到這些變數。
 
+## 合併連線預算之後
+
+Laysi/trustiot-v2#575 讓 chart 加總每個用 Postgres 的服務在整版滾動時的連線池，超過 `postgres.bundled.parameters.max_connections` 就渲染失敗；沒有預算或沒有 `database.maxConnections` 的服務也渲染失敗。這個分支合併它之後為 assistant 加上：
+
+- `trustiot.postgres.connectionBudgets` 的 `assistant`：`database.maxConnections` 2 到 100（與 `assistant::config` 的 `MIN_DATABASE_CONNECTIONS`、`MAX_DATABASE_CONNECTIONS` 相同），沒有其他連線池；
+- `services.assistant.database.maxConnections: 4`（服務程式的預設值，chart 以 `TRUSTIOT__DATABASE__MAX_CONNECTIONS` 傳入）；
+- `services/assistant/tests/chart_connections.rs`：程式裡的 `.max_connections(...)` 只有 `lib.rs` 的服務角色連線池（另一個在 `store.rs` 的單元測試裡）、預算與範圍一致。
+
+加總：assistant 每副本 4 條、整版滾動 8 條。五個服務全開時服務共 140 條，加上保留的 18 條是 158 條，預設 `max_connections` 160 只剩 2 條餘裕；下一個用 Postgres 的服務（例如 Laysi/trustiot-v2#605）要一起調高它。chart README「連線預算」的表格與 chart 測試的 `needed`（158）、合計列（70、140）與錯誤訊息的明細都跟著更新。展示環境的 overlay 沒有啟用 assistant，`bun test deploy/flux` 的數字不變。
+
+| 檢查 | 在哪裡 | 結果 |
+| --- | --- | --- |
+| `cargo clippy --workspace --all-targets -- -D warnings` | 建置主機 | 通過 |
+| `cargo test -p assistant -p testkit -p assets` | 建置主機 | 全部通過；assistant 的新測試 `tests/chart_connections.rs` 通過，`tests/startup.rs` 仍通過，testkit 的 `chart::tests::reads_every_budget_of_the_chart` 也讀到 assistant 的預算 |
+| `bun test deploy/chart` | 建置主機 | 648 pass、0 fail（含「Postgres connection budget (Laysi/trustiot-v2#575)」：`needed` 158，`max_connections` 157 時渲染失敗、明細列出 `assistant 4 x 2`） |
+| `bun test deploy/flux` | 工作站 | 77 pass、0 fail |
+| `bun run --cwd scripts typecheck` | 工作站 | 通過 |
+| `cargo fmt --all --check` | 工作站 | 通過 |
+
 ## 結論
 
 | 驗收條件 | 結果 |
 | --- | --- |
-| chart 只允許 assistant 呼叫 `ai-gateway`、`telemetry-query`、`assets` 與身分服務的 `token-exchange` 埠；授權矩陣文件與 chart 測試一致（`bun test deploy/chart`） | 通過（上方 chart 測試；`bun test deploy/chart` 639 pass） |
+| chart 只允許 assistant 呼叫 `ai-gateway`、`telemetry-query`、`assets` 與身分服務的 `token-exchange` 埠；授權矩陣文件與 chart 測試一致（`bun test deploy/chart`） | 通過（上方 chart 測試；`bun test deploy/chart` 639 pass，合併連線預算之後 648 pass） |
 | 帶 `smoke` label 的 PR 的 nightly 以兩份 values 部署 assistant，pod 就緒，`assistant_app` 能登入（nightly run 為證據） | 待測：要等 PR 帶上 `smoke` label 後的 nightly run，見下方「nightly（待補）」 |
 | chart 測試確認 assistant 設了位址的每個被呼叫端都在 `mesh.calls.assistant`；叢集內真正的工具呼叫是 Laysi/trustiot-v2#146 的前提條件 | 通過（chart 測試與突變測試）；叢集內的工具呼叫留給 Laysi/trustiot-v2#146 |
 | `bun test scripts`、`bun test deploy/chart`、`bun run --cwd scripts typecheck` 通過 | 通過 |

@@ -171,7 +171,8 @@ Per service that may use Postgres, what one replica opens at most:
                   pool; the service refuses to start outside this range.
   otherPools      every other pool the replica opens, at its largest, whatever role it logs in as:
                   assets           PLATFORM_CONNECTIONS (its platform role)
-                  certs            REGISTRATION_CONNECTIONS (its platform role)
+                  assistant        none: only the service role's pool (Laysi/trustiot-v2#592)
+                  certs           REGISTRATION_CONNECTIONS (its platform role)
                   identity         the tenant, login, login send, delegation and event log pools
                                    as identity_app (16), and the event log's pool as
                                    identity_platform, its consumed producers plus 2 (5)
@@ -184,6 +185,7 @@ these numbers differ.
 {{- define "trustiot.postgres.connectionBudgets" -}}
 {
   "assets": { "maxConnections": { "min": 2, "max": 100 }, "otherPools": 4 },
+  "assistant": { "maxConnections": { "min": 2, "max": 100 }, "otherPools": 0 },
   "certs": { "maxConnections": { "min": 2, "max": 100 }, "otherPools": 4 },
   "identity": { "maxConnections": { "min": 3, "max": 100 }, "otherPools": 21 },
   "telemetry-query": { "maxConnections": { "min": 2, "max": 100 }, "otherPools": 2 }

@@ -129,7 +129,13 @@ mod tests {
 
     #[test]
     fn reads_every_budget_of_the_chart() {
-        for service in ["assets", "certs", "identity", "telemetry-query"] {
+        for service in [
+            "assets",
+            "assistant",
+            "certs",
+            "identity",
+            "telemetry-query",
+        ] {
             let budget = postgres_connection_budget(service);
             assert!(
                 budget.min_max_connections <= budget.max_max_connections,

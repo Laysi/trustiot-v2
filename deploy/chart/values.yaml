@@ -228,7 +228,7 @@ services:
       maxConnections: 10
   assets:
     enabled: false
-    # 2 to 100. Each replica opens 2 more to read the identity service's events: 12 in all.
+    # 2 to 100. Each replica opens 4 more as its platform role (README.md, 「連線預算」): 14 in all.
     database:
       maxConnections: 10
   certs:
@@ -282,6 +282,10 @@ services:
   # It has no API yet (the chat API is Laysi/trustiot-v2#146).
   assistant:
     enabled: false
+    # 2 to 100. It opens no other pool: 4 in all. Until the chat API (Laysi/trustiot-v2#146) only
+    # the readiness check uses it.
+    database:
+      maxConnections: 4
   # The AI gateway (services/ai-gateway, decisions 15 and 28): the providers, model roles and limits
   # come from `ai` below. Only the AI assistant, the knowledge base and alerts may call it
   # (mesh.calls; README.md, "服務間授權（mesh）").
@@ -522,9 +526,10 @@ postgres:
       effective_cache_size: 384MB
       work_mem: 4MB
       maintenance_work_mem: 64MB
-      # Fits identity, assets, certs and telemetry-query at one replica each while all of them
-      # roll at once (128) plus the 18 reserved connections, with room for 14 more; the render
-      # fails when the enabled services need more. The memory estimate is in README.md
+      # Fits identity, assets, certs, telemetry-query and assistant at one replica each while all
+      # of them roll at once (140) plus the 18 reserved connections, with room for 2 more only;
+      # the render fails when the enabled services need more, so the next service that uses
+      # Postgres raises it. The memory estimate is in README.md
       # (「叢集內的 Postgres」).
       max_connections: 160
     # The image is built for arm64 only (decision 5).
