@@ -37,7 +37,7 @@ use std::time::{Duration, Instant};
 use migrate::Report;
 use migrate::mqtt_accounts::{converge, reconcile};
 use migrate::mqtt_trust::{
-    GATEWAY_LISTENER_FILE, TrustSet, install, listener_port, placeholder, validate,
+    GATEWAY_LISTENER_FILE, TrustSet, install, listener_port, listens_on, placeholder, validate,
 };
 use protocol::GatewayId;
 use protocol::acl::GATEWAY_ROLE;
@@ -829,11 +829,22 @@ async fn without_a_server_certificate_the_broker_serves_the_services_but_no_gate
         &["-m", "ack"],
         false,
     );
-    let line = broker.refused(
+    broker.refused(
         "the gateway port before the first certificate",
         &gateway("gw-a"),
     );
-    assert!(line.contains("Connection refused"), "{line}");
+    // Nothing listens there, as the container's socket tables show, read the way the trust
+    // sidecar reads them. The client's own error says so unreliably: it reports "Connection
+    // refused" or "Bad file descriptor" depending on when its non-blocking connect fails.
+    let proc_root = scratch_dir("mqtt-broker-net");
+    std::fs::create_dir(proc_root.join("net")).expect("a directory for the socket tables");
+    for table in ["tcp", "tcp6"] {
+        let output = broker.exec_ok(&["cat", &format!("/proc/net/{table}")]);
+        std::fs::write(proc_root.join("net").join(table), &output.stdout)
+            .expect("the socket table");
+    }
+    assert_eq!(listens_on(&proc_root, 1883), Ok(true));
+    assert_eq!(listens_on(&proc_root, 8883), Ok(false));
     let log = broker.log();
     assert_eq!(problem_lines(&log), Vec::<&str>::new(), "log:\n{log}");
     assert!(!log.contains("8883"), "log:\n{log}");
@@ -865,7 +876,6 @@ async fn without_a_server_certificate_the_broker_serves_the_services_but_no_gate
         "a valid certificate once the listener is in place",
         &gateway("gw-a"),
     );
-    broker.refused("a certificate of another CA, CN gw-a", &gateway("foreign"));
     let log = broker.log();
     let opened: Vec<&str> = log
         .lines()
@@ -874,6 +884,8 @@ async fn without_a_server_certificate_the_broker_serves_the_services_but_no_gate
     assert!(!opened.is_empty(), "log:\n{log}");
     assert_eq!(problem_lines(&log), Vec::<&str>::new(), "log:\n{log}");
     evidence(format!("after the restart: {}", opened[0]));
+    // Checked after the log: the refusal itself logs the failed TLS handshake.
+    broker.refused("a certificate of another CA, CN gw-a", &gateway("foreign"));
 }
 
 #[tokio::test]

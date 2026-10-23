@@ -6,7 +6,7 @@ Laysi/trustiot-v2#535：broker 的伺服器憑證改由 chart 的 CronJob `<rele
 
 ## 環境
 
-- **程式碼**：分支 `feat/535-broker-server-certificate`。
+- **程式碼**：分支 `feat/535-broker-server-certificate`：功能的 commit 9dc4cae7、合併 main（0dc8fd96）的 b86e34aa，以及修正兩個測試的 commit（這份報告與它在同一個 commit）。最後一輪檢查在這三個 commit 的樹上執行。
 - **建置主機**（經檢查佇列）：x86_64 Linux，`CI=1`；需要容器的測試以 rootless podman 起拋棄式的 TLS Postgres（`crates/testkit`）與 Mosquitto（`docker.io/library/eclipse-mosquitto:2.1.2-alpine`，以 digest 釘選）。Rust 1.99.0（`rust-toolchain.toml`），bun 1.4.2、helm 4.3.0、kubeconform 0.8.0（`.prototools` 釘選的版本）。
 - **工作站**：gitleaks（`.prototools` 釘選的版本）。
 
@@ -17,15 +17,17 @@ Laysi/trustiot-v2#535：broker 的伺服器憑證改由 chart 的 CronJob `<rele
 ```sh
 cargo fmt --all --check
 cargo clippy --locked --workspace --all-targets -- -D warnings
-cargo test --locked -p migrate -p certs -p contract --no-fail-fast
+CI=1 cargo test --locked -p migrate -p certs -p contract -p repo-check --no-fail-fast
+cargo run --locked -p openapi -- --check
 cargo deny --locked check
-bun test deploy/chart
-bun test deploy/flux
 bun install --cwd scripts --frozen-lockfile
 bun run --cwd scripts typecheck
 bun test scripts
+bun test deploy/chart
+bun test deploy/flux
 bun scripts/ci/check-secret-handling.ts
 bun scripts/ci/check-workflows.ts
+bun scripts/ci/lint-workflows.ts
 ```
 
 驗收證據的測試可以單獨重跑：`cargo test -p certs --test broker_certificate -- --nocapture`（印出下面引用的證據行；沒有 podman 或 docker 時略過，設 `CI` 時失敗）、`cargo test -p migrate --test mqtt_certificate --test mqtt_trust --test mqtt_broker -- --nocapture`、`bun test deploy/chart -t "MQTT broker"`、`bun test scripts/nightly/broker-certificate.test.ts`。
@@ -70,7 +72,26 @@ chart 層的放行規則由上面的 chart 測試證明；在 ambient mesh 裡�
 
 ### 其他檢查
 
-（填入最後一輪的結果）
+最後一輪，2026-10-24，建置主機，上方「指令」依序執行，全部 exit 0：
+
+| 檢查 | 結果 |
+| --- | --- |
+| `cargo fmt --all --check` | 沒有差異 |
+| `cargo clippy --locked --workspace --all-targets -- -D warnings` | 沒有警告 |
+| `CI=1 cargo test --locked -p migrate -p certs -p contract -p repo-check --no-fail-fast` | 44 個測試目標，317 通過，0 失敗，0 略過（容器測試以 `CI=1` 執行，不能略過） |
+| `cargo run --locked -p openapi -- --check` | 與提交的 `api/openapi.json` 相同 |
+| `cargo deny --locked check` | advisories、bans、licenses、sources 都 ok |
+| `bun run --cwd scripts typecheck` | 沒有錯誤 |
+| `bun test scripts` | 1697 通過，9 略過（需要 podman 端到端、arm64 執行檔或測試 pod 映像的測試，與這個變更無關），0 失敗 |
+| `bun test deploy/chart` | 652 通過，0 失敗 |
+| `bun test deploy/flux` | 77 通過，0 失敗 |
+| `bun scripts/ci/check-secret-handling.ts` | 525 個檔案，沒有違規 |
+| `bun scripts/ci/check-workflows.ts` | 4 個 workflow，沒有違規 |
+| `bun scripts/ci/lint-workflows.ts` | 3 個 workflow，沒有錯誤 |
+
+這一輪之前，完整的測試抓到兩個這個分支自己的問題，已在同一個 PR 修正：`services/certs/tests/key_custody.rs` 掃描 `tools/migrate/src` 裡把私鑰變成位元組的程式碼，CronJob 寫 `tls.key` 的那一處需要審查後列入清單；`tools/migrate/tests/mqtt_broker.rs` 原本比對閘道器埠關閉時用戶端的錯誤文字，libmosquitto 依非阻塞 connect 失敗的時機回 `Connection refused` 或 `Bad file descriptor`，改成以 trust sidecar 的 `listens_on` 讀容器的 socket 表（1883 在聽、8883 沒有）；同一個測試在故意被拒的 TLS 握手之後檢查日誌沒有問題行，順序改成先檢查日誌再做被拒的連線。
+
+證據檔是最後的程式碼在建置主機上重跑 `broker_certificate.rs` 的輸出。
 
 ## nightly（待補）
 
