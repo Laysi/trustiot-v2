@@ -14,20 +14,24 @@
 //!   [`delegation::QuestionRun`] to [`Agent::ask`] (Laysi/trustiot-v2#591);
 //! - more tools (the semantic layer, read-only SQL, dashboards): [`tools::Tool`] in the
 //!   [`tools::ToolRegistry`], calling services through [`callee::Callee`];
-//! - the database (Laysi/trustiot-v2#552 gives the service its Postgres settings and pool, and
-//!   registers [`schema::SCHEMA`] with service-kit's readiness check): [`store`] keeps
-//!   conversations and their append-only history (Laysi/trustiot-v2#553) in transactions of
-//!   the conversation's tenant, which the chat API (Laysi/trustiot-v2#146) opens;
+//! - the database: [`start`] opens the service role's pool (Laysi/trustiot-v2#592) and readiness
+//!   checks it and [`schema::SCHEMA`]; [`store`] keeps conversations and their append-only
+//!   history (Laysi/trustiot-v2#553) in transactions of the conversation's tenant, which the
+//!   chat API (Laysi/trustiot-v2#146) opens on that pool;
 //! - the per-call quota pre-deduction of the AI gateway's ledger (Laysi/trustiot-v2#140): each
 //!   call's [`model::ModelRequest::call_id`] (the ledger's `llm_call_id`), and the gateway's
 //!   refusal reaching the agent as a [`model::ModelError`].
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use axum::Router;
 use contract::client::InternalClient;
 use contract::{ServiceName, service};
+use service_kit::migrations::MigrationCheck;
+use service_kit::tenant::TenantDb;
 use service_kit::{BoxError, Context};
+use sqlx::postgres::PgPoolOptions;
 
 pub mod agent;
 pub mod budget;
@@ -44,11 +48,37 @@ pub mod tools;
 pub use agent::{Agent, AgentError, AgentSettings, Answer};
 pub use config::Config;
 
-/// Builds the agent and its tools from the configuration, which fails startup when they cannot
-/// be built. The service has no API of its own yet (the chat API is Laysi/trustiot-v2#146), so
-/// it serves only service-kit's health endpoints, and the assistant is not kept.
+/// How long getting a database connection may take, opening a new one included.
+pub const ACQUIRE_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// The service's startup for `service_kit::run`: builds the agent and its tools from the
+/// configuration, which fails startup when they cannot be built, and opens the service role's
+/// pool lazily (with the session check of `crates/service-kit`). Readiness passes while the role
+/// (`assistant_app`) can open a checked session and the database has every migration file this
+/// release expects ([`schema::SCHEMA`]). It calls neither the AI gateway nor the services the
+/// tools call, so the service is ready without a model. The service has no API of its own yet
+/// (the chat API is Laysi/trustiot-v2#146), so it serves only service-kit's health endpoints,
+/// and the assistant is not kept.
+///
+/// # Errors
+///
+/// When the agent cannot be built or the database settings would not verify the server. Nothing
+/// is served then: the service exits with code 1.
 pub async fn start(context: Context<Config>) -> Result<Router, BoxError> {
-    let assistant = build(context.config())?;
+    let config = context.config();
+    let assistant = build(config)?;
+    let db = TenantDb::connect_lazy(
+        config.service_role().connect_options(),
+        PgPoolOptions::new()
+            .max_connections(config.database.max_connections)
+            .acquire_timeout(ACQUIRE_TIMEOUT),
+    )?;
+    let ping = db.clone();
+    context.health().add_check("postgres", move || {
+        let db = ping.clone();
+        async move { db.ping().await }
+    });
+    MigrationCheck::new(&schema::SCHEMA, db.pool().clone()).register(context.health());
     tracing::info!(
         tools = assistant.agent.tool_count(),
         delegation = assistant.runs.is_some(),

@@ -5,7 +5,8 @@
 // passwords into the Secrets the chart declares, the identity and assets services built from the
 // commit answer through the ingress with a session cookie (api.ts, Laysi/trustiot-v2#65), so does
 // the telemetry-query service once it made the new tenant's ClickHouse account, which the smoke
-// then finds in ClickHouse (api.ts, Laysi/trustiot-v2#539), and an
+// then finds in ClickHouse (api.ts, Laysi/trustiot-v2#539), the AI assistant is ready with a
+// Postgres session of its own role (api.ts, Laysi/trustiot-v2#592), and an
 // uninstall leaves nothing behind but the objects the chart keeps on purpose (the database and the
 // password Secrets), which are then deleted. The same request through the ingress also proves the
 // MS0 edges with the real services (api.ts, Laysi/trustiot-v2#77): a stolen identity header never
@@ -34,7 +35,7 @@ import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSy
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 
-import { apiValues, routesOfValues, runApiCheck } from "./api.ts";
+import { apiValues, checkAssistantLogin, ingressAccess, routesOfValues, runApiCheck } from "./api.ts";
 import {
   CERTS_CA,
   checkCertsSigning,
@@ -226,12 +227,13 @@ export async function smokeShape(ctx: SmokeContext, shape: Shape): Promise<Shape
         // Laysi/trustiot-v2#65: the release runs the identity and assets services built from this
         // commit, behind the smoke namespace's ext_authz provider (platform.ts). No key is made
         // here: the identity pod's init container generates it (Laysi/trustiot-v2#404). Also the
-        // AI gateway (Laysi/trustiot-v2#536) and telemetry-query (Laysi/trustiot-v2#539).
+        // AI gateway (Laysi/trustiot-v2#536), telemetry-query (Laysi/trustiot-v2#539) and the AI
+        // assistant (Laysi/trustiot-v2#592).
         const file = join(ctx.outDir, `values-api-${shape.name}.yaml`);
         const routes = routesOfValues(ctx.chartDir, shape.valuesFiles);
         writeFileSync(file, Bun.YAML.stringify(apiValues(shape.name, routes), null, 2));
         values.push("-f", file);
-        return `${basename(file)}: identity, assets, ai-gateway, telemetry-query and certs, provider ${smokeProviderNameOf(shape.name)}`;
+        return `${basename(file)}: identity, assets, ai-gateway, telemetry-query, certs and assistant, provider ${smokeProviderNameOf(shape.name)}`;
       })) &&
       (await check("a test root CA for the certs service, made for this run, sets certificateAuthority.rootCertificate (Laysi/trustiot-v2#517)", async () => {
         // The README's ceremony, step 1 and 2 (services/certs/README.md, 「發簽發 CA 憑證」): the
@@ -446,6 +448,18 @@ export async function smokeShape(ctx: SmokeContext, shape: Shape): Promise<Shape
         const count = objects.filter((o) => o.kind === "Service").length;
         const broker = mqttBrokerServicesOf(objects);
         return `${count} Services, each ClusterIP without node ports or external addresses; MQTT broker: ${broker.length === 0 ? "not in this release" : `${broker.join(", ")}, named by no route`}`;
+      })) &&
+      (await check("the AI assistant is ready: it logged in to Postgres as assistant_app on its current schema (Laysi/trustiot-v2#592)", async () => {
+        // Its readiness is a connection of its own role and the migration check of its schema
+        // (services/assistant/README.md); it calls no model or service before a question.
+        const objects = parseManifests(manifest);
+        const deployments = objects.filter((o) => o.kind === "Deployment" && o.metadata?.labels?.["app.kubernetes.io/component"] === "assistant");
+        if (deployments.length !== 1) throw new Error(`the release should have one assistant Deployment, found ${deployments.length}`);
+        const name = deployments[0]!.metadata?.name ?? "";
+        const status = await kubectlJson(["get", "--namespace", namespace, `deployment/${name}`, "--output", "json"]);
+        const ready = (JSON.parse(status.stdout) as { status?: { readyReplicas?: number } }).status?.readyReplicas ?? 0;
+        const { psql } = await ingressAccess(ctx, namespace, objects, ingressCa);
+        return checkAssistantLogin({ psql }, `deployment/${name}`, ready);
       })) &&
       (await check(
         "through the ingress, a new tenant reaches the assets service and, with its ClickHouse account, the telemetry API; a stolen identity header never does, and Host ports and normalized paths reach it (Laysi/trustiot-v2#65, #77, #539)",

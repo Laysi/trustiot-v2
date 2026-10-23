@@ -88,6 +88,8 @@ proto 的 shim 偶爾會把自己的訊息寫進 stdout（例如另一個 proto 
 
 `mqtt-bridge` 把閘道器的 WebSocket（`ingress.publicPaths.mqtt`）原封不動轉成 TCP 送到 broker 的閘道器埠（決策 6，Laysi/trustiot-v2#85，services/mqtt-bridge/README.md）。`mqttBroker.enabled` 時 chart 設定 `TRUSTIOT__BROKER__ADDRESS`（`<release>-mqtt-broker.<namespace>.svc:8883`），broker 沒開時不設，服務拒絕啟動；不論 broker 開不開，`services.mqtt-bridge.env` 與 `serviceDefaults.env` 都不能設定它（渲染失敗），轉接服務只連叢集內的 broker。記錄的來源 IP 依 `TRUSTIOT_CLIENT_IP_SOURCE`：目前只支援 `tunnel`（`cf-connecting-ip`），其他 `ingress.exposure`（`x-forwarded-for-rightmost`）在 Laysi/trustiot-v2#446 之前拒絕啟動。渲染不因此失敗，因為 e2e 與「每個服務都開」的渲染測試要在 onprem 形態開啟它。`mesh.calls` 不能把 `mqtt-bridge` 列為被呼叫端（渲染失敗）：只有入口 gateway 連得到它，否則呼叫端能自己設可信的來源 IP 標頭，也能經它連到 broker 的閘道器埠。
 
+`assistant` 是 AI 助理（決策 31，Laysi/trustiot-v2#592）：chart 從 `mesh.calls.assistant` 設定它呼叫的 AI 閘道、時序查詢、資產服務與 token exchange 的位址，`env` 不能設定這些位址；AI 閘道沒有開啟時它拒絕啟動（見「AI 助理」）。
+
 ## values 欄位
 
 「必填」指 schema 要求非空值。Secret 欄位一律是既有 Secret 的名稱與 key，名稱空白代表不設定。
@@ -208,15 +210,15 @@ ingress:
 | 欄位 | 預設值 | 說明 |
 | --- | --- | --- |
 | `mesh.trustDomain` | `cluster.local` | mesh 的 SPIFFE trust domain（Istio 的 `meshConfig.trustDomain`）；呼叫端身分寫成 `<trustDomain>/ns/<namespace>/sa/<ServiceAccount>` |
-| `mesh.calls` | `mesh.calls.ingest` 是 `[clickhouse, mqtt-broker]`，`mesh.calls.telemetry-query` 是 `[clickhouse, postgres]`，`mesh.calls.gateway-ops` 與 `mesh.calls.mqtt-bridge` 是 `[mqtt-broker]`，`mesh.calls.identity`、`mesh.calls.assets` 與 `mesh.calls.certs` 是 `[postgres]` | 誰可以呼叫誰：`<呼叫端>: [<被呼叫端>, ...]`。呼叫端是 `services` 的 key；被呼叫端是 `services` 的 key、叢集內元件 `clickhouse`（`clickhouse.mode: bundled` 時）、`otel-collector`（collector 開啟時）與 `mqtt-broker`（`mqttBroker.enabled` 時，只接受固定的幾個呼叫端，見「MQTT broker」），或 `postgres`（兩種 `postgres.mode` 都可以列，見下方）。遙測的呼叫由 chart 自動加上，不必列：每個啟用的服務 → `otel-collector`，`otel-collector` → `clickhouse`。不認得的名稱讓安裝失敗；服務未啟用或元件沒有部署時略過這條，所以可以先列還沒出映像的服務。預設值是決策 14 與 docs/architecture/deployment.md 寫明的 ClickHouse 用戶端：資料接收寫入、時序查詢以每租戶唯讀帳號讀取；以及使用 Postgres 的身分服務、資產服務、時序查詢（資產服務與時序查詢也以平台角色讀身分服務的事件，Laysi/trustiot-v2#65、Laysi/trustiot-v2#119）與 certs 服務（簽發紀錄與 CRL，Laysi/trustiot-v2#78）；以及 MQTT broker 的用戶端（決策 6）：mqtt-bridge 轉接閘道器的連線，資料接收與閘道器維運各以自己的 broker 帳號收送訊息（broker 沒有開啟時這三條略過）。各服務的 issue 加入它要呼叫的內部 API，用 Postgres 的服務加上 `postgres` |
+| `mesh.calls` | `mesh.calls.ingest` 是 `[clickhouse, mqtt-broker]`，`mesh.calls.telemetry-query` 是 `[clickhouse, postgres]`，`mesh.calls.gateway-ops` 與 `mesh.calls.mqtt-bridge` 是 `[mqtt-broker]`，`mesh.calls.identity`、`mesh.calls.assets` 與 `mesh.calls.certs` 是 `[postgres]`，`mesh.calls.assistant` 是 `[ai-gateway, telemetry-query, assets, postgres]` | 誰可以呼叫誰：`<呼叫端>: [<被呼叫端>, ...]`。呼叫端是 `services` 的 key；被呼叫端是 `services` 的 key、叢集內元件 `clickhouse`（`clickhouse.mode: bundled` 時）、`otel-collector`（collector 開啟時）與 `mqtt-broker`（`mqttBroker.enabled` 時，只接受固定的幾個呼叫端，見「MQTT broker」），或 `postgres`（兩種 `postgres.mode` 都可以列，見下方）。遙測的呼叫由 chart 自動加上，不必列：每個啟用的服務 → `otel-collector`，`otel-collector` → `clickhouse`。不認得的名稱讓安裝失敗；服務未啟用或元件沒有部署時略過這條，所以可以先列還沒出映像的服務。預設值是決策 14 與 docs/architecture/deployment.md 寫明的 ClickHouse 用戶端：資料接收寫入、時序查詢以每租戶唯讀帳號讀取；以及使用 Postgres 的身分服務、資產服務、時序查詢（資產服務與時序查詢也以平台角色讀身分服務的事件，Laysi/trustiot-v2#65、Laysi/trustiot-v2#119）與 certs 服務（簽發紀錄與 CRL，Laysi/trustiot-v2#78）；AI 助理呼叫 AI 閘道、代表使用者呼叫時序查詢與資產服務的工具 API，並把對話存在 Postgres（決策 31，Laysi/trustiot-v2#592，見「AI 助理」）；以及 MQTT broker 的用戶端（決策 6）：mqtt-bridge 轉接閘道器的連線，資料接收與閘道器維運各以自己的 broker 帳號收送訊息（broker 沒有開啟時這三條略過）。各服務的 issue 加入它要呼叫的內部 API，用 Postgres 的服務加上 `postgres` |
 
 ```yaml
 mesh:
   calls:
-    assistant: [ai-gateway, telemetry-query]   # 例子：assistant 可以呼叫這兩個服務
+    knowledge: [ai-gateway, postgres]   # 例子：knowledge 可以呼叫 AI 閘道，並使用 Postgres
 ```
 
-`ai-gateway` 只能由 AI 助理（`assistant`）、知識庫（`knowledge`）與警報（`alerts`）呼叫（決策 28，Laysi/trustiot-v2#536）：它不驗證內部身分、花的是供應商的帳號，所以只有 mesh 擋得住其他服務。`mesh.calls` 裡任何其他服務把 `ai-gateway` 列為被呼叫端時渲染失敗，不論兩邊有沒有啟用、有沒有做 schema 驗證（`templates/_ai-gateway.tpl` 的 `trustiot.aiGateway.callers`，`_mesh.tpl` 的 `trustiot.mesh.plan` 執行）；它也不能有 cookie 路由（見「入口 gateway」）。這三個服務真的呼叫它時，由各自的 issue 加上 `mesh.calls`（例如 Laysi/trustiot-v2#145 的 `assistant: [ai-gateway]`）；預設 values 沒有，所以 AuthorizationPolicy 沒有規則、拒絕所有連線（下方「呼叫矩陣」）。
+`ai-gateway` 只能由 AI 助理（`assistant`）、知識庫（`knowledge`）與警報（`alerts`）呼叫（決策 28，Laysi/trustiot-v2#536）：它不驗證內部身分、花的是供應商的帳號，所以只有 mesh 擋得住其他服務。`mesh.calls` 裡任何其他服務把 `ai-gateway` 列為被呼叫端時渲染失敗，不論兩邊有沒有啟用、有沒有做 schema 驗證（`templates/_ai-gateway.tpl` 的 `trustiot.aiGateway.callers`，`_mesh.tpl` 的 `trustiot.mesh.plan` 執行）；它也不能有 cookie 路由（見「入口 gateway」）。這三個服務真的呼叫它時，由各自的 issue 加上 `mesh.calls`：預設 values 目前只有 `assistant` 列它（Laysi/trustiot-v2#592），所以它的 AuthorizationPolicy 只放行 AI 助理（下方「呼叫矩陣」）。
 
 除了 `mesh.calls`，入口 gateway（ServiceAccount `<release>-ingress-istio`）自動可以呼叫它路由到的服務（例外路徑與 `ingress.routes` 的後端），以及做 cookie 驗證（ext_authz）的身分服務（只到它的 API 埠 `http`，見下一段）。
 
@@ -235,7 +237,7 @@ mesh:
 - agent 執行期間的委派（Laysi/trustiot-v2#551）：一次 run 比 60 秒的 token 活得久的服務（只有 `assistant`），在請求的 token 還有效時在同一個 `token-exchange` 埠建立 run 委派（`POST /internal/run-delegations`），之後每次呼叫前換一張 60 秒的 token（`POST /internal/run-delegations/token`，`crates/service-kit` 的 `RunDelegations`）。它沿用同一份清單：換得到的受眾就是 `mesh.calls` 上 `assistant` 可以呼叫的服務，chart 不需要新的設定，`assistant` 有列任何服務時就連得到這個埠。委派最長 900 秒，每次換 token 身分服務都重查 session 與使用者在租戶的角色，登出或移出租戶後下一次呼叫就失敗；換出的 token 帶 `act`，不能再換。上限、撤銷與威脅模型在 [services/identity/README.md](../../services/identity/README.md) 的「agent 執行期間的委派」。
 - 還沒處理、記在 Laysi/trustiot-v2#509 的：入口 gateway 把 session cookie 轉給身分服務以外的後端（應只轉給身分服務）。
 - 背景工作與事件消費者沒有使用者的請求，不換 token，以服務自己的身分工作（自己的資料庫角色、事件；`crates/service-kit` 的 `ServiceIdentity`）。
-- 預設 values 沒有服務之間的呼叫，所以清單是 `{}`；目前的矩陣見下方「呼叫矩陣」。
+- 預設 values 裡服務之間的呼叫只有 AI 助理的工具（Laysi/trustiot-v2#592），所以所有服務啟用時清單是 `{"assistant":["assets","telemetry-query"]}`（`ai-gateway` 不在清單上），只有 `assistant` 連得到 `token-exchange` 埠；`assistant` 沒有啟用時清單是 `{}`。目前的矩陣見下方「呼叫矩陣」。
 
 chart 產生下列物件：
 
@@ -266,13 +268,13 @@ chart 產生下列物件：
 
 #### 呼叫矩陣
 
-預設 values、所有服務啟用時渲染出的授權，兩種部署形態相同。「允許的呼叫端」是被呼叫端的 AuthorizationPolicy 的 principals（省略 `<release>-`），NetworkPolicy 放行同一批 pod；身分服務的政策依埠分開：`identity` 的呼叫端（入口 gateway）只連得到 API 埠 `http`；`identity-exchange` 是身分服務的 token exchange（`token-exchange` 埠，選的是身分服務的 pod），呼叫端是 `TRUSTIOT_ON_BEHALF_CALLS` 的呼叫端，預設 values 沒有，它自己不是服務，所以「代表使用者呼叫」是 `—`；certs 服務同樣依埠分開：`certs` 的呼叫端只連得到 `http`，`certs-broker` 是簽 MQTT broker 伺服器憑證的 `broker-certs` 埠（選的是 certs 的 pod），只放行 MQTT broker，預設 values 不部署 broker，所以沒有呼叫端；「代表使用者呼叫」是身分服務願意為誰換出以它為受眾的 token（`TRUSTIOT_ON_BEHALF_CALLS`），`—` 表示被呼叫端不是服務、不收內部身分 token。`tests/chart.test.ts` 的「README.md's call matrix」比對這張表與渲染結果：改了預設的 `mesh.calls`、例外路徑或預設的 `ingress.routes`，要在同一個變更更新這張表。
+預設 values、所有服務啟用時渲染出的授權，兩種部署形態相同。「允許的呼叫端」是被呼叫端的 AuthorizationPolicy 的 principals（省略 `<release>-`），NetworkPolicy 放行同一批 pod；身分服務的政策依埠分開：`identity` 的呼叫端（入口 gateway）只連得到 API 埠 `http`；`identity-exchange` 是身分服務的 token exchange（`token-exchange` 埠，選的是身分服務的 pod），呼叫端是 `TRUSTIOT_ON_BEHALF_CALLS` 的呼叫端，預設 values 只有 `assistant`，它自己不是服務，所以「代表使用者呼叫」是 `—`；certs 服務同樣依埠分開：`certs` 的呼叫端只連得到 `http`，`certs-broker` 是簽 MQTT broker 伺服器憑證的 `broker-certs` 埠（選的是 certs 的 pod），只放行 MQTT broker，預設 values 不部署 broker，所以沒有呼叫端；「代表使用者呼叫」是身分服務願意為誰換出以它為受眾的 token（`TRUSTIOT_ON_BEHALF_CALLS`），`—` 表示被呼叫端不是服務、不收內部身分 token。`tests/chart.test.ts` 的「README.md's call matrix」比對這張表與渲染結果：改了預設的 `mesh.calls`、例外路徑或預設的 `ingress.routes`，要在同一個變更更新這張表。
 
 | 被呼叫端 | 允許的呼叫端 | 代表使用者呼叫 |
 | --- | --- | --- |
-| `ai-gateway` | （無） | （無） |
+| `ai-gateway` | `assistant` | （無） |
 | `alerts` | （無） | （無） |
-| `assets` | （無） | （無） |
+| `assets` | `assistant` | `assistant` |
 | `assistant` | （無） | （無） |
 | `certs` | `ingress-istio` | （無） |
 | `certs-broker` | （無） | — |
@@ -280,14 +282,14 @@ chart 產生下列物件：
 | `field-context` | （無） | （無） |
 | `gateway-ops` | （無） | （無） |
 | `identity` | `ingress-istio` | （無） |
-| `identity-exchange` | （無） | — |
+| `identity-exchange` | `assistant` | — |
 | `identity-key-rotation` | （無） | — |
 | `ingest` | （無） | （無） |
 | `knowledge` | （無） | （無） |
 | `migrate` | （無） | — |
 | `mqtt-bridge` | `ingress-istio` | （無） |
 | `otel-collector` | 每個啟用的服務 | — |
-| `telemetry-query` | （無） | （無） |
+| `telemetry-query` | `assistant` | `assistant` |
 | `web` | `ingress-istio` | （無） |
 
 入口 gateway 到 `identity` 是 cookie 檢查與登入、到 `certs` 與 `mqtt-bridge` 是決策 27 的例外路徑，到 `web` 是 `hosts.app` 上 SPA 的靜態檔（見「SPA 的靜態檔」）；服務的 cookie 路由（`ingress.routes`）預設是空的，各服務的 issue 加上。`postgres` 不經 mesh，沒有 AuthorizationPolicy，連得到它的服務見上方 `postgres` 一條。預設 values 不部署 MQTT broker，所以表上沒有它；開啟後誰連得到它的哪個埠見「MQTT broker」的「誰連得到」。
@@ -453,7 +455,7 @@ chart 產生下列物件：
 | `postgres.bundled.parameters.effective_cache_size` | `384MB` | 查詢規劃用的快取估計，不實際配置記憶體 |
 | `postgres.bundled.parameters.work_mem` | `4MB` | 每個排序或 hash 的上限，一個查詢可能用好幾份 |
 | `postgres.bundled.parameters.maintenance_work_mem` | `64MB` | VACUUM、建索引用 |
-| `postgres.bundled.parameters.max_connections` | `160` | 10–1000；`bundled` 時 chart 檢查：啟用的服務在整版滾動時所有連線池的加總，加上保留給 superuser、CloudNativePG、migration Job 與第一位平台管理員的 bootstrap 的 18 條，不能超過它，超過就渲染失敗。預設值放得下四個用 Postgres 的服務各一個副本（150 條），記憶體估算在 1Gi 以內；算法、每個服務的數字與估算見「叢集內的 Postgres」的連線預算 |
+| `postgres.bundled.parameters.max_connections` | `160` | 10–1000；`bundled` 時 chart 檢查：啟用的服務在整版滾動時所有連線池的加總，加上保留給 superuser、CloudNativePG、migration Job 與第一位平台管理員的 bootstrap 的 18 條，不能超過它，超過就渲染失敗。預設值放得下五個用 Postgres 的服務各一個副本（158 條，只剩 2 條餘裕），記憶體估算在 1Gi 以內；算法、每個服務的數字與估算見「叢集內的 Postgres」的連線預算 |
 | `postgres.bundled.nodeSelector` | `kubernetes.io/arch: arm64` | 映像只有 arm64（決策 5） |
 | `postgres.bundled.tolerations` | `[]` | |
 | `postgres.bundled.operator.namespace` | `cnpg-system` | CloudNativePG operator 所在的 namespace；NetworkPolicy 只放行它的 pod 連 Postgres pod 的 8000（instance manager） |
@@ -595,6 +597,27 @@ curl -sS -D - -X POST "http://127.0.0.1:18080/internal/roles/main/v1/messages" \
   -d '{"max_tokens":16,"messages":[{"role":"user","content":"Reply with OK."}]}'
 ```
 
+## AI 助理
+
+`services.assistant`（`services/assistant`，決策 31，Laysi/trustiot-v2#592）是 AI 助理的主 agent：經 AI 閘道呼叫模型，工具以提問的使用者身分呼叫時序查詢與資產服務的 API（決策 27 的代表使用者呼叫），對話以服務角色 `assistant_app` 存在 Postgres。它還沒有自己的 API（聊天 API 是 Laysi/trustiot-v2#146），開啟後只有健康檢查。
+
+預設的 `mesh.calls.assistant` 是 `[ai-gateway, telemetry-query, assets, postgres]`。chart 從這份清單產生它要呼叫的每個位址，所以它只會被指向 mesh 放行的服務（`templates/_assistant.tpl` 的 `trustiot.assistant.env`）：
+
+| 變數 | 值 | 何時有 |
+| --- | --- | --- |
+| `TRUSTIOT__AI_GATEWAY__URL` | `http://<release>-ai-gateway:<http 埠>` | `services.ai-gateway.enabled` 而且 `mesh.calls.assistant` 列了 `ai-gateway` |
+| `TRUSTIOT__TELEMETRY_QUERY__URL` | `http://<release>-telemetry-query:<http 埠>` | `services.telemetry-query.enabled` 而且清單列了 `telemetry-query` |
+| `TRUSTIOT__ASSETS__URL` | `http://<release>-assets:<http 埠>` | `services.assets.enabled` 而且清單列了 `assets` |
+| `TRUSTIOT__IDENTITY__EXCHANGE_URL` | `http://<release>-identity-exchange:<token-exchange 埠>`（見「代表使用者呼叫」） | 身分服務開啟，而且 `assistant` 在 `TRUSTIOT_ON_BEHALF_CALLS` 上，也就是清單列了另一個啟用的服務（`ai-gateway` 不算） |
+| `TRUSTIOT__DATABASE__USERNAME`、`TRUSTIOT__DATABASE__PASSWORD` | `assistant_app` 與 Secret `<release>-assistant-password` 的 `assistant_app` key（與其他用 Postgres 的服務相同，見「chart 與服務的約定」） | 清單列了 `postgres` |
+
+- `<http 埠>` 是被呼叫端名為 `http` 的埠（`servicePort`，沒有時是 `containerPort`），沒有這個埠時渲染失敗。位址用同一個 namespace 的短名稱，mesh 內是純 HTTP，由 ztunnel 加上 mTLS。
+- 身分服務只為 `TRUSTIOT_ON_BEHALF_CALLS` 上的受眾換 token，而這份清單與上面的位址都來自同一份 `mesh.calls`：chart 設了位址的時序查詢與資產服務，一定是身分服務願意為 AI 助理換出 token、AuthorizationPolicy 放行 AI 助理的服務（`tests/chart.test.ts` 的「the assistant」檢查）。
+- 前四個變數由 chart 決定：`services.assistant.env` 與 `serviceDefaults.env` 設定其中任何一個（不分大小寫）都讓渲染失敗，即使 chart 這次沒有設它。否則 env 能把 AI 助理指向清單以外的服務，而那個呼叫只會被 mesh 拒絕。
+- 少了時序查詢或資產服務的位址時 AI 助理少掉那些工具；少了 `TRUSTIOT__IDENTITY__EXCHANGE_URL` 時沒有任何工具；少了 `TRUSTIOT__AI_GATEWAY__URL`（AI 閘道沒有開啟或清單沒列）時它拒絕啟動。渲染不因此失敗，與 `mqtt-bridge` 相同：只開部分服務的測試與 values 要能渲染。
+- 它以 `TRUSTIOT__AI_GATEWAY__ROLE` 選模型角色（預設 `main`），角色要在 `ai.roles`；其他設定（模型、預算、工具上限、資料庫連線池）見 [services/assistant/README.md](../../services/assistant/README.md)「設定」，以 `services.assistant.env` 設定。
+- readiness 只檢查 `assistant_app` 登得進 Postgres、資料庫有這一版的 migration，不呼叫 AI 閘道或其他服務，所以 nightly 沒有供應商金鑰也能等它就緒；工具在叢集內真的呼叫成功要等聊天 API（Laysi/trustiot-v2#146）。
+
 ## migration Job
 
 `migrate.enabled: true`（預設，SaaS 與地端相同）部署 `templates/migrate.yaml`，程式是 [tools/migrate](../../tools/migrate/README.md)（Laysi/trustiot-v2#60，決策 4、14、29，清單 M8）。每次執行都是冪等的：設定沒變時再跑一次，資料庫裡什麼都不變（測試比對整份 catalog）。
@@ -694,14 +717,16 @@ operator 依 Cluster 再產生：pod 與 PVC `<cluster>-1`；Service `<cluster>-
 | 服務 | `database.maxConnections` 預設 | 其他連線池 | 每副本 | 整版滾動（一個副本加一個新的） |
 | --- | --- | --- | --- | --- |
 | `assets` | `10` | 4 | 14 | 28 |
+| `assistant` | `4` | 0 | 4 | 8 |
 | `certs` | `5` | 4 | 9 | 18 |
 | `identity` | `10` | 21 | 31 | 62 |
 | `telemetry-query` | `10` | 2 | 12 | 24 |
-| 合計 | | | 66 | 132 |
+| 合計 | | | 70 | 140 |
 
 - `assets`：平台角色的連線池（`PLATFORM_CONNECTIONS`）：讀身分服務與 certs 事件的兩個消費端各一條、就緒檢查一條、平台管理員讀設備池一條。`telemetry-query`：平台角色讀身分服務事件的連線池（`EVENT_READER_CONNECTIONS`）。`certs`：平台角色的出廠登錄連線池（`REGISTRATION_CONNECTIONS`）。
 - `identity`：以 `identity_app` 連線的租戶、登入、寄信、run 委派與事件紀錄連線池共 16 條，以 `identity_platform` 連線的事件紀錄連線池 5 條（消費的產生端數加 2；certs 在 2026-10-23 加入後是 3 個產生端），見 [services/identity/README.md](../../services/identity/README.md) 的「連線池」。
-- assistant 的程式已經會用 Postgres（Laysi/trustiot-v2#588），但 chart 還沒讓它連（`mesh.calls` 沒有列）。讓它連的 issue 要在預算加上它的連線池、在 values 給它 `database.maxConnections`，檢查自動算進去；`max_connections` 不夠時，依下方的記憶體估算調整。
+- `assistant`：只有服務角色 `assistant_app` 的連線池，沒有其他連線池（Laysi/trustiot-v2#592）；聊天 API（Laysi/trustiot-v2#146）之前只有 readiness 使用。
+- 之後開始用 Postgres 的服務要在預算加上它的連線池、在 values 給它 `database.maxConnections`，檢查自動算進去；`max_connections` 不夠時，依下方的記憶體估算調整。
 
 **保留的連線**（`trustiot.postgres.reservedConnections`，共 18 條，依 CloudNativePG 1.30.1 的原始碼與 PostgreSQL 18 的預設值）：
 
@@ -713,7 +738,7 @@ operator 依 Cluster 再產生：pod 與 PVC `<cluster>-1`；Service `<cluster>-
 | migration Job | 2 | 它以 owner 開的一條 session，與檢查角色密碼時的一次登入（`tools/migrate/src/postgres.rs`） |
 | 第一位平台管理員的 bootstrap | 1 | 操作者從 CronJob `<release>-platform-admin-bootstrap` 建立的 Job（`templates/platform-admin-bootstrap.yaml`、[docs/runbooks/platform-admin.md](../../docs/runbooks/platform-admin.md)），以 owner 開一條 session（`tools/migrate/src/platform_admin.rs`）；操作者可能在換版時執行它 |
 
-所以預設值、`values-saas.yaml`、`values-onprem.yaml` 與展示環境（`deploy/flux/clusters/demo/trustiot/values-demo.yaml`）在四個服務全開時需要 132 + 18 = 150 條；`max_connections` 預設 160，還有 10 條餘裕。只換一個服務、或只開部分服務時需要的更少。2026-10-23 之前預設是 100，四個服務全開時整版滾動會超過（Laysi/trustiot-v2#497 的安全審查 F3）。
+所以預設值、`values-saas.yaml`、`values-onprem.yaml` 與展示環境（`deploy/flux/clusters/demo/trustiot/values-demo.yaml`）在五個服務全開時需要 140 + 18 = 158 條；`max_connections` 預設 160，只剩 2 條餘裕，下一個用 Postgres 的服務（例如 Laysi/trustiot-v2#605 的 AI 閘道角色儲存）要一起調高它。只換一個服務、或只開部分服務時需要的更少。2026-10-23 之前預設是 100，四個服務全開時整版滾動會超過（Laysi/trustiot-v2#497 的安全審查 F3）。
 
 **程式與預算的綁定**：預算是 JSON，Helm 以 `fromJson` 讀，用 Postgres 的服務各有一個 Rust 測試（`services/<服務>/tests/chart_connections.rs`）以 `crates/testkit` 的 `chart::postgres_connection_budget` 讀同一段文字，比對程式的常數（其他連線池、`database.maxConnections` 接受的範圍），並以 `chart::pool_size_calls` 列出程式裡每個 `.max_connections(...)`：連線池變大、或多了一個連線池而預算沒跟著改，測試就失敗。身分服務的其他連線池目前由測試把各連線池的常數加總；Laysi/trustiot-v2#497 會改用身分服務自己的 `connections_per_replica()`。主要連線池的預設值由 chart 傳入，程式裡的預設值不影響部署。
 
@@ -980,6 +1005,8 @@ SIEM 連不上時 exporter 在記憶體佇列重試 5 分鐘，不影響寫進 C
 | `TRUSTIOT__CA__KEYS_FILE` | 掛載的簽發 CA 金鑰檔 `/etc/trustiot/certs-ca-keys/issuing-ca-keys.json` | 一律 |
 | `TRUSTIOT__CA__ROOT_CERTIFICATE_FILE` | 掛載的根憑證 `/etc/trustiot/certs-ca/root.pem`（`certificateAuthority.rootCertificate`） | 一律 |
 | `TRUSTIOT__CA__CERTIFICATES_FILE` | 掛載的簽發 CA 憑證 `/etc/trustiot/certs-ca/issuing.pem`（`certificateAuthority.issuingCertificates`） | 一律 |
+
+只給 `assistant` 的變數是它呼叫的服務的位址：`TRUSTIOT__AI_GATEWAY__URL`、`TRUSTIOT__TELEMETRY_QUERY__URL`、`TRUSTIOT__ASSETS__URL` 與 `TRUSTIOT__IDENTITY__EXCHANGE_URL`，從 `mesh.calls.assistant` 產生，自訂 `env` 不能用同樣的名稱（見「AI 助理」）。
 
 ## 擴充 chart
 

@@ -196,7 +196,7 @@ pub trait Delegation: Send + Sync {
 /// The user's delegation could not give a token.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum DelegationError {
-    /// No delegation is configured (until Laysi/trustiot-v2#552 wires the run delegation in).
+    /// No delegation is configured: the deployment gives no `identity.exchange_url`.
     #[error("no delegation is configured")]
     NotConfigured,
     /// The user's session ended or lost access; the run must stop.

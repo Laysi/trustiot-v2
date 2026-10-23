@@ -2789,22 +2789,24 @@ describe("Postgres connection budget (Laysi/trustiot-v2#575)", () => {
   const limit = Number((defaults.postgres as { bundled: { parameters: { max_connections: number } } }).bundled.parameters.max_connections);
 
   test("every service that uses Postgres by default has a budget and a pool size, and the numbers are the ones README.md states", () => {
-    expect(postgresServices).toEqual(["assets", "certs", "identity", "telemetry-query"]);
+    expect(postgresServices).toEqual(["assets", "assistant", "certs", "identity", "telemetry-query"]);
     expect(Object.keys(budgets).sort()).toEqual(postgresServices);
     expect(Object.fromEntries(postgresServices.map((name) => [name, perReplica(name)]))).toEqual({
       assets: 14,
+      assistant: 4,
       certs: 9,
       identity: 31,
       "telemetry-query": 12,
     });
     expect(reserved).toBe(18);
-    expect(needed).toBe(150);
+    // 2 to spare: the next service that uses Postgres raises max_connections (README.md, 「連線預算」).
+    expect(needed).toBe(158);
     expect(limit).toBe(160);
     const readme = readFileSync(join(CHART_DIR, "README.md"), "utf8");
     for (const name of postgresServices) {
       expect(readme).toContain(`| \`${name}\` | \`${services[name]?.database?.maxConnections}\` | ${budgets[name]?.otherPools} | ${perReplica(name)} |`);
     }
-    expect(readme).toContain(`| 合計 | | | 66 | 132 |`);
+    expect(readme).toContain(`| 合計 | | | 70 | 140 |`);
   });
 
   test.each(SHAPE_NAMES)("%s: the defaults, every Postgres service and every planned service pass the check", (shape) => {
@@ -2824,7 +2826,7 @@ describe("Postgres connection budget (Laysi/trustiot-v2#575)", () => {
     expect(below.code).not.toBe(0);
     expect(below.stderr).toContain(
       `postgres.bundled.parameters.max_connections is ${needed - 1}, but ${needed} connections are needed: the services can open ${needed - reserved} while all of them roll at once ` +
-        "(per replica x pods: assets 14 x 2, certs 9 x 2, identity 31 x 2, telemetry-query 12 x 2), " +
+        "(per replica x pods: assets 14 x 2, assistant 4 x 2, certs 9 x 2, identity 31 x 2, telemetry-query 12 x 2), " +
         `and ${reserved} stay reserved for superusers, CloudNativePG, the migration Job and the platform administrator bootstrap.`,
     );
     // The string form of max_connections counts the same.
@@ -4873,7 +4875,8 @@ describe("service-to-service authorization (decision 27)", () => {
     });
 
     test.each(SHAPE_NAMES)("%s: without calls on behalf of users the token exchange's policies admit nobody", (shape) => {
-      const manifests = render(SHAPES[shape], enableAllServices);
+      // The assistant's tool calls are the default values' only ones; lists replace, maps merge.
+      const manifests = render(SHAPES[shape], [...enableAllServices, "--set-json", "mesh.calls.assistant=[]"]);
       expect(meshPolicy(manifests, "identity-exchange").rules).toBeUndefined();
       expect(networkPolicy(manifests, "identity-exchange").ingress).toEqual([]);
       // The identity service's own policy keeps the gateway on its API port.
@@ -4885,8 +4888,14 @@ describe("service-to-service authorization (decision 27)", () => {
       expect(manifests.some((m) => m.metadata.name === `${RELEASE}-identity-exchange`)).toBe(false);
     });
 
-    test.each(SHAPE_NAMES)("%s: the default values list no call on behalf of users", (shape) => {
-      expect(onBehalfCalls(render(SHAPES[shape], enableAllServices))).toEqual({});
+    // The assistant's tools call telemetry-query and assets as the asking user
+    // (Laysi/trustiot-v2#592); ai-gateway takes no internal identity, so it is not on the list.
+    test.each(SHAPE_NAMES)("%s: the default values list only the assistant's tool calls on behalf of users", (shape) => {
+      expect(onBehalfCalls(render(SHAPES[shape], enableAllServices))).toEqual({ assistant: ["assets", "telemetry-query"] });
+      // Without the assistant, or without the services it calls, nothing is left.
+      expect(onBehalfCalls(render(SHAPES[shape], ["--set", "services.identity.enabled=true"]))).toEqual({});
+      const withoutTools = ["telemetry-query", "assets"].flatMap((s) => ["--set", `services.${s}.enabled=false`]);
+      expect(onBehalfCalls(render(SHAPES[shape], [...enableAllServices, ...withoutTools]))).toEqual({});
     });
 
     // README.md, "呼叫矩陣": the callers of every workload with the default values and every
@@ -4926,12 +4935,17 @@ describe("service-to-service authorization (decision 27)", () => {
     });
   });
 
-  test("with the default empty call list only the ingress gateway reaches its backends and the identity service", () => {
+  test("with the default call list only the ingress gateway and the assistant reach other services", () => {
     const manifests = render(SHAPES.saas, enableAllServices);
     for (const service of plannedServices) {
       // Public paths keep identity, certs and mqtt-bridge reachable from the gateway, and the
-      // SPA's static files keep web.
-      const expected = ["identity", "certs", "mqtt-bridge", "web"].includes(service) ? [principal(GATEWAY_SA)] : [];
+      // SPA's static files keep web. The assistant calls the AI gateway and its tools' services
+      // (Laysi/trustiot-v2#592).
+      const expected = ["identity", "certs", "mqtt-bridge", "web"].includes(service)
+        ? [principal(GATEWAY_SA)]
+        : ["ai-gateway", "assets", "telemetry-query"].includes(service)
+          ? [principal(`${RELEASE}-assistant`)]
+          : [];
       expect(principalsOf(meshPolicy(manifests, service))).toEqual(expected);
       expect(networkPolicy(manifests, service).ingress?.length).toBe(expected.length > 0 ? 2 : 1);
     }
@@ -5062,7 +5076,8 @@ describe("service-to-service authorization (decision 27)", () => {
       expect(principalsOf(meshPolicy(one, "ai-gateway"))).toEqual([principal(`${RELEASE}-assistant`)]);
       expect(hboneSources(one, networkPolicy(one, "ai-gateway"))).toEqual({ services: ["assistant"], gateway: false });
       // None listed: no service, and never the ingress gateway (no cookie route may lead to it).
-      const none = render([...SHAPES[shape], E2E_VALUES], [...enable, "--set-json", "mesh.calls={}"]);
+      // Maps merge, so the default values' assistant entry goes with an empty list.
+      const none = render([...SHAPES[shape], E2E_VALUES], [...enable, "--set-json", 'mesh.calls={"assistant":[]}']);
       expect(principalsOf(meshPolicy(none, "ai-gateway"))).toEqual([]);
       expect(hboneSources(none, networkPolicy(none, "ai-gateway"))).toEqual({ services: [], gateway: false });
     });
@@ -5089,6 +5104,194 @@ describe("service-to-service authorization (decision 27)", () => {
         expect(result.code).not.toBe(0);
         expect(result.stderr).toMatch(`mesh.calls.${caller}: only alerts, assistant, knowledge may call ai-gateway (decision 28)`);
       }
+    });
+  });
+
+  // The AI assistant (decision 31, Laysi/trustiot-v2#592): the mesh lets it reach the AI gateway,
+  // its tools' services and the identity service's token exchange, and the chart points it only at
+  // services the mesh lets it call (README.md, 「AI 助理」).
+  describe("the assistant (decision 31, Laysi/trustiot-v2#592)", () => {
+    const ASSISTANT = principal(`${RELEASE}-assistant`);
+    const ADDRESS_VARIABLES = ["TRUSTIOT__AI_GATEWAY__URL", "TRUSTIOT__ASSETS__URL", "TRUSTIOT__IDENTITY__EXCHANGE_URL", "TRUSTIOT__TELEMETRY_QUERY__URL"];
+    type ServiceSpec = { selector: Record<string, string>; ports: { name: string; port: number; targetPort: string | number }[] };
+    const assistantEnv = (manifests: Manifest[]) => podSpec(find(manifests, "Deployment", `${RELEASE}-assistant`)).containers[0]?.env ?? [];
+    const onBehalfOf = (manifests: Manifest[]) =>
+      JSON.parse((podSpec(find(manifests, "Deployment", `${RELEASE}-identity`)).containers[0]?.env ?? []).find((e) => e.name === "TRUSTIOT_ON_BEHALF_CALLS")?.value ?? "null") as Record<string, string[]>;
+    // Every URL in the assistant's env, followed through the Service it names to the one workload
+    // and container port behind it, with the AuthorizationPolicies that admit the assistant on
+    // that port. Read from the rendered objects only, so a new address is checked without a list.
+    function addressesOf(manifests: Manifest[]) {
+      return assistantEnv(manifests)
+        .filter((e) => /^[a-z][a-z0-9+.-]*:\/\//.test(e.value ?? ""))
+        .map((e) => {
+          const url = new URL(e.value ?? "");
+          expect(url.protocol, e.name).toBe("http:");
+          // A Service of this release and namespace: its short name or <name>.<namespace>.svc.
+          const [name = "", ...domain] = url.hostname.split(".");
+          if (domain.length > 0) expect(domain.join("."), e.name).toBe(`${NAMESPACE}.svc`);
+          const service = find(manifests, "Service", name).spec as ServiceSpec;
+          const servicePort = service.ports.find((p) => p.port === Number(url.port));
+          if (servicePort === undefined) throw new Error(`${e.name}: Service ${name} has no port ${url.port}`);
+          const workloads = manifests.filter((m) => ["Deployment", "StatefulSet", "DaemonSet"].includes(m.kind) && selects(service.selector, podLabels(m)));
+          expect(workloads.map((w) => w.metadata.name), e.name).toHaveLength(1);
+          const workload = workloads[0] as Manifest;
+          const containerPort =
+            typeof servicePort.targetPort === "number"
+              ? servicePort.targetPort
+              : podSpec(workload)
+                  .containers.flatMap((c) => c.ports ?? [])
+                  .find((p) => p.name === servicePort.targetPort)?.containerPort;
+          if (containerPort === undefined) throw new Error(`${e.name}: ${workload.metadata.name} has no port ${servicePort.targetPort}`);
+          const admittedBy = manifests
+            .filter((m) => m.kind === "AuthorizationPolicy")
+            .filter((m) => {
+              const spec = m.spec as MeshPolicy;
+              const selector = spec.selector?.matchLabels ?? {};
+              return (
+                Object.keys(selector).length > 0 &&
+                selects(selector, podLabels(workload)) &&
+                (spec.rules ?? []).some(
+                  (rule) =>
+                    (rule.from ?? []).some((f) => (f.source?.principals ?? []).includes(ASSISTANT)) &&
+                    (rule.to === undefined || rule.to.some((t) => t.operation.ports.includes(String(containerPort)))),
+                )
+              );
+            })
+            .map((m) => serviceOf(m.metadata.name))
+            .sort();
+          return { variable: e.name, service: serviceOf(name), workload: serviceOf(workload.metadata.name), admittedBy };
+        });
+    }
+
+    // Acceptance criterion 3: every service the chart gives the assistant an address of is in
+    // mesh.calls.assistant, the mesh admits the assistant on the very port of that address, and the
+    // token exchange grants every tool's service. [case, extra args, mesh.calls.assistant, the
+    // addresses the case leads to].
+    const CASES: [string, string[], string[], Record<string, string>][] = [
+      [
+        "the default values",
+        [],
+        ["ai-gateway", "telemetry-query", "assets", "postgres"],
+        {
+          TRUSTIOT__AI_GATEWAY__URL: "ai-gateway",
+          TRUSTIOT__ASSETS__URL: "assets",
+          TRUSTIOT__IDENTITY__EXCHANGE_URL: "identity-exchange",
+          TRUSTIOT__TELEMETRY_QUERY__URL: "telemetry-query",
+        },
+      ],
+      [
+        "a list without assets",
+        ["--set-json", 'mesh.calls.assistant=["ai-gateway","telemetry-query","postgres"]'],
+        ["ai-gateway", "telemetry-query", "postgres"],
+        { TRUSTIOT__AI_GATEWAY__URL: "ai-gateway", TRUSTIOT__IDENTITY__EXCHANGE_URL: "identity-exchange", TRUSTIOT__TELEMETRY_QUERY__URL: "telemetry-query" },
+      ],
+      [
+        "telemetry-query disabled",
+        ["--set", "services.telemetry-query.enabled=false"],
+        ["ai-gateway", "telemetry-query", "assets", "postgres"],
+        { TRUSTIOT__AI_GATEWAY__URL: "ai-gateway", TRUSTIOT__ASSETS__URL: "assets", TRUSTIOT__IDENTITY__EXCHANGE_URL: "identity-exchange" },
+      ],
+      // No call on behalf of users, so no token exchange either.
+      ["the AI gateway alone", ["--set-json", 'mesh.calls.assistant=["ai-gateway"]'], ["ai-gateway"], { TRUSTIOT__AI_GATEWAY__URL: "ai-gateway" }],
+      ["the AI gateway disabled", ["--set", "services.ai-gateway.enabled=false"], ["ai-gateway", "telemetry-query", "assets", "postgres"], {
+        TRUSTIOT__ASSETS__URL: "assets",
+        TRUSTIOT__IDENTITY__EXCHANGE_URL: "identity-exchange",
+        TRUSTIOT__TELEMETRY_QUERY__URL: "telemetry-query",
+      }],
+      ["an empty list", ["--set-json", "mesh.calls.assistant=[]"], [], {}],
+    ];
+    test.each(SHAPE_NAMES)("%s: every address the chart gives the assistant leads to a service in mesh.calls.assistant that admits it there", (shape) => {
+      for (const [name, args, listed, expected] of CASES) {
+        const manifests = render(SHAPES[shape], [...enableAllServices, ...args]);
+        const addresses = addressesOf(manifests);
+        expect(Object.fromEntries(addresses.filter((a) => ADDRESS_VARIABLES.includes(a.variable)).map((a) => [a.variable, a.service])), name).toEqual(expected);
+        const exchanges = onBehalfOf(manifests).assistant ?? [];
+        for (const address of addresses) {
+          const where = `${name}: ${address.variable}`;
+          if (address.service === "identity-exchange") {
+            // The token exchange's port only, never the identity service's API port; and only
+            // while the assistant calls a service on behalf of users.
+            expect(address.workload, where).toBe("identity");
+            expect(address.admittedBy, where).toEqual(["identity-exchange"]);
+            expect(exchanges.length, where).toBeGreaterThan(0);
+          } else if (plannedServices.includes(address.workload)) {
+            expect(listed, where).toContain(address.workload);
+            expect(address.admittedBy, where).toEqual([address.workload]);
+            // A tool's service is an audience the token exchange grants the assistant.
+            if (address.workload !== "ai-gateway") expect(exchanges, where).toContain(address.workload);
+          } else {
+            // A component the chart lets every service reach (the OpenTelemetry collector).
+            expect(address.service, where).toBe("otel-collector");
+            expect(address.admittedBy, where).toEqual(["otel-collector"]);
+          }
+        }
+        // The other way: every service on the token exchange's list for the assistant has its
+        // address, so the list and the addresses never drift apart.
+        for (const callee of exchanges) expect(addresses.map((a) => a.workload), `${name}: ${callee}`).toContain(callee);
+      }
+    }, SLOW_TEST_MS);
+
+    // Acceptance criterion 1: with the default values the assistant reaches the AI gateway,
+    // telemetry-query, assets and the identity service's token exchange port, plus the collector
+    // every service sends its telemetry to, and Postgres; nothing else, in either layer.
+    test.each(SHAPE_NAMES)("%s: the default values let the assistant reach only ai-gateway, telemetry-query, assets and the token exchange", (shape) => {
+      const manifests = render(SHAPES[shape], enableAllServices);
+      // The mesh's ALLOW policies; the ingress gateway's own policies admit no service account.
+      const admitting = manifests
+        .filter((m) => m.kind === "AuthorizationPolicy" && !m.metadata.name.startsWith(`${RELEASE}-ingress-`))
+        .filter((m) => (m.spec as MeshPolicy).action === "ALLOW" && principalsOf(m.spec as MeshPolicy).includes(ASSISTANT))
+        .map((m) => serviceOf(m.metadata.name))
+        .sort();
+      expect(admitting).toEqual(["ai-gateway", "assets", "identity-exchange", "otel-collector", "telemetry-query"]);
+      // The token exchange's port only; the identity service's own policy keeps the assistant out.
+      expect(meshPolicy(manifests, "identity-exchange").rules).toEqual([identityRule(EXCHANGE_PORT, [ASSISTANT])]);
+      expect(principalsOf(meshPolicy(manifests, "identity"))).not.toContain(ASSISTANT);
+      // NetworkPolicies admit the assistant's pods to the same workloads, on HBONE, and to the
+      // bundled Postgres (not in the mesh) on its own port.
+      const assistantPods = podLabels(find(manifests, "Deployment", `${RELEASE}-assistant`));
+      const reached = manifests
+        .filter((m) => m.kind === "NetworkPolicy")
+        .flatMap((m) =>
+          ((m.spec as NetworkPolicySpec).ingress ?? [])
+            .filter((rule) => (rule.from ?? []).some((peer) => peer.podSelector !== undefined && selects(peer.podSelector.matchLabels, assistantPods)))
+            .map((rule) => `${serviceOf(m.metadata.name)}:${(rule.ports ?? []).map((p) => p.port).join(",")}`),
+        )
+        .sort();
+      const postgres = manifests.some((m) => m.kind === "NetworkPolicy" && m.metadata.name === `${RELEASE}-postgres`) ? ["postgres:5432"] : [];
+      expect(reached).toEqual([...["ai-gateway", "assets", "identity-exchange", "otel-collector", "telemetry-query"].map((s) => `${s}:15008`), ...postgres].sort());
+      // Its database login is assistant_app, with the password from its own Secret, and its pool is
+      // the size the connection budget counts (Laysi/trustiot-v2#575).
+      expect(assistantEnv(manifests).filter((e) => e.name.startsWith("TRUSTIOT__DATABASE__"))).toEqual([
+        { name: "TRUSTIOT__DATABASE__USERNAME", value: "assistant_app" },
+        { name: "TRUSTIOT__DATABASE__PASSWORD", valueFrom: { secretKeyRef: { name: `${RELEASE}-assistant-password`, key: "assistant_app" } } },
+        { name: "TRUSTIOT__DATABASE__MAX_CONNECTIONS", value: "4" },
+      ]);
+    });
+
+    // The addresses are the chart's: custom env could otherwise point the assistant at a service
+    // mesh.calls does not list, whether the chart sets that address this time or not.
+    test.each(ADDRESS_VARIABLES)("services.assistant.env and serviceDefaults.env cannot set %s, with or without schema validation", (variable) => {
+      for (const lists of [[], ["--set-json", "mesh.calls.assistant=[]"]]) {
+        for (const field of ["services.assistant.env", "serviceDefaults.env"]) {
+          for (const skip of [[], ["--skip-schema-validation"]]) {
+            const result = helmTemplate(SHAPES.saas, [...skip, ...enableAllServices, ...lists, "--set-json", `${field}=[{"name":"${variable.toLowerCase()}","value":"http://elsewhere:8080"}]`]);
+            expect(result.code, `${field} ${lists.join(" ")}`).not.toBe(0);
+            expect(result.stderr).toContain(`services.assistant: env ${variable.toLowerCase()} is set by the chart from mesh.calls.assistant`);
+          }
+        }
+      }
+    }, SLOW_TEST_MS);
+
+    test("other services do not get the assistant's addresses, and a callee without an http port fails the render", () => {
+      const manifests = render(SHAPES.saas, enableAllServices);
+      for (const deployment of manifests.filter(isServiceDeployment)) {
+        if (deployment.metadata.name === `${RELEASE}-assistant`) continue;
+        const names = podSpec(deployment).containers.flatMap((c) => (c.env ?? []).map((e) => e.name));
+        expect(names.filter((n) => ADDRESS_VARIABLES.includes(n)), deployment.metadata.name).toEqual([]);
+      }
+      const result = helmTemplate(SHAPES.saas, [...enableAllServices, "--set-json", 'services.assets.ports=[{"name":"api","containerPort":8080}]']);
+      expect(result.code).not.toBe(0);
+      expect(result.stderr).toContain("services.assets.ports: the assistant calls it on the port named http (mesh.calls.assistant), and there is none");
     });
   });
 
