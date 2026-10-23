@@ -43,9 +43,9 @@ toml.workspace = true
 tracing.workspace = true
 tracing-subscriber = { workspace = true, features = ["fmt", "std"] }
 # The gateway ID (CN), the public key and the expiry of the client certificate; the root checks
-# of broker.ca and the root CRL's issuer, number and dates. `verify` checks their signatures with
-# ring, the crypto library already in the build.
-x509-parser = { workspace = true, features = ["verify"] }
+# of broker.ca and the root CRL's issuer, number, dates and extensions. Signatures are checked
+# with the TLS provider's algorithms instead (tls.rs), so x509-parser's `verify` is not used.
+x509-parser.workspace = true
 
 [dev-dependencies]
 # PEM-encodes tampered root CRLs in the TLS unit tests.

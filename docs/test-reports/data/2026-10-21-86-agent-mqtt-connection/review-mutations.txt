@@ -1243,3 +1243,84 @@ mutation in edge/agent/src/config.rs
 $ cargo test -p agent --lib the_broker_name_is_fixed_and_an_old_broker_name_key_is_refused
 failed: config::tests::the_broker_name_is_fixed_and_an_old_broker_name_key_is_refused at edge/agent/src/config.rs:340:29
 exit code: 101
+
+## security review 2026-10-23, L1: a root CRL with an issuing distribution point loads
+mutation in edge/agent/src/tls.rs
+-             .any(|extension| extension.oid == OID_X509_EXT_ISSUER_DISTRIBUTION_POINT)
++             .any(|extension| false && extension.oid == OID_X509_EXT_ISSUER_DISTRIBUTION_POINT)
+$ cargo test -p agent --lib a_root_crl_with_an_issuing_distribution_point_is_refused
+failed: tls::tests::a_root_crl_with_an_issuing_distribution_point_is_refused at edge/agent/src/tls.rs:809:22
+first assertion: expected BadCrl, got Ok(Loaded { path: "<scratch dir>/root-crl.pem", der: CertificateRevocationListDer(0x308201113081b8020101300a06082a8648ce3d040302301a3118 [...]
+exit code: 101
+
+## security review 2026-10-23, L2: signature algorithms matched loosely (parameters ignored), as x509-parser does
+mutation in edge/agent/src/tls.rs
+-         if candidate.signature_alg_id().as_ref() != algorithm.contents {
++         if !algorithm.contents.starts_with(candidate.signature_alg_id().as_ref()) {
+$ cargo test -p agent --lib signatures_are_checked_only_with_the_algorithms_the_handshake_accepts
+failed: tls::tests::signatures_are_checked_only_with_the_algorithms_the_handshake_accepts at edge/agent/src/tls.rs:809:22
+first assertion: expected BadCrl, got Ok(Loaded { path: "<scratch dir>/root-crl.pem", der: CertificateRevocationListDer(0x3081d8307e020101300c06082a8648ce3d04030205003 [...]
+exit code: 101
+
+## security review 2026-10-23, L2: a root's own signature is not checked
+mutation in edge/agent/src/tls.rs
+-     verify_as_the_handshake_does(der, certificate.public_key().raw) ...
++ 
+$ cargo test -p agent --lib signatures_are_checked_only_with_the_algorithms_the_handshake_accepts
+failed: tls::tests::signatures_are_checked_only_with_the_algorithms_the_handshake_accepts at edge/agent/src/tls.rs:714:22
+first assertion: expected NotARoot, got Ok(BrokerTrust { path: "<scratch dir>/broker-ca.pem", anchors: [CertificateDer(0x3082018130820125a00302010202144f05aa26d10fd9ff [...]
+exit code: 101
+
+## security review 2026-10-23, L2: the root CRL's signature is not checked
+mutation in edge/agent/src/tls.rs
+-     verify_as_the_handshake_does(der, anchor.public_key().raw).map_err(|reason| {
++     Ok::<(), String>(()).map_err(|reason| {
+$ cargo test -p agent --test transport a_root_crl_the_root_did_not_sign_stops_the_agent_from_starting
+failed: a_root_crl_the_root_did_not_sign_stops_the_agent_from_starting at edge/agent/tests/transport.rs:528:37
+first assertion: called `Option::unwrap()` on a `None` value
+exit code: 101
+
+## security review 2026-10-23, L3: two roots with the same subject load
+mutation in edge/agent/src/tls.rs
+-             if let Some(first) = subjects.iter().position(|seen| *seen == subject) {
++             if let Some(first) = subjects.iter().position(|seen| false && *seen == subject) {
+$ cargo test -p agent --lib two_roots_with_the_same_subject_are_refused
+failed: tls::tests::two_roots_with_the_same_subject_are_refused at edge/agent/src/tls.rs:1063:26
+first assertion: same name, other key: expected DuplicateRoot, got Ok(BrokerTrust { path: "<scratch dir>/broker-ca.pem", anchors: [CertificateDer(0x3082016d30820114a003 [...]
+exit code: 101
+
+## security review 2026-10-23, L4: names go into error messages as they are
+mutation in edge/agent/src/tls.rs
+-     crate::link::printable(&name.to_string(), MAX_NAME_CHARS)
++     name.to_string()
+$ cargo test -p agent --lib names_in_errors_have_no_control_characters_and_are_cut_short
+failed: tls::tests::names_in_errors_have_no_control_characters_and_are_cut_short at edge/agent/src/tls.rs:1087:13
+first assertion: "the CA file <scratch dir>/broker-ca.pem may hold only root CA certificates (self-issued, self-signed, cA set), but certificate 1 is issued by CN=evil\n202 [...]
+exit code: 101
+
+## security review 2026-10-23, gap: no webpki parse of the root CRL at load
+mutation in edge/agent/src/tls.rs
+-         WebPkiServerVerifier::builder_with_provider(Arc::clone(&trust.roots), Arc::new(provider())) ...
++ 
+$ cargo test -p agent --lib what_webpki_refuses_in_a_crl_is_refused_at_load
+failed: tls::tests::what_webpki_refuses_in_a_crl_is_refused_at_load at edge/agent/src/tls.rs:806:22
+first assertion: expected BadCrl, got Ok(Loaded { path: "<scratch dir>/root-crl.pem", der: CertificateRevocationListDer(0x3081e8308190020101300a06082a8648ce3d040302301a311 [...]
+exit code: 101
+
+## security review 2026-10-23, gap: a root CRL of exactly the size limit is refused
+mutation in edge/agent/src/tls.rs
+-         if u64::try_from(bytes.len()).map_or(true, |len| len > MAX_ROOT_CRL_BYTES) {
++         if u64::try_from(bytes.len()).map_or(true, |len| len >= MAX_ROOT_CRL_BYTES) {
+$ cargo test -p agent --lib a_root_crl_of_exactly_the_size_limit_is_read
+failed: tls::tests::a_root_crl_of_exactly_the_size_limit_is_read at edge/agent/src/tls.rs:1226:9
+first assertion: assertion failed: matches!(load(&dir, &trust, Some(padded(limit).as_bytes())),
+exit code: 101
+
+## security review 2026-10-23, gap: a root CRL one byte over the size limit is read
+mutation in edge/agent/src/tls.rs
+-         if u64::try_from(bytes.len()).map_or(true, |len| len > MAX_ROOT_CRL_BYTES) {
++         if u64::try_from(bytes.len()).map_or(true, |len| len > MAX_ROOT_CRL_BYTES + 1) {
+$ cargo test -p agent --lib a_root_crl_of_exactly_the_size_limit_is_read
+failed: tls::tests::a_root_crl_of_exactly_the_size_limit_is_read at edge/agent/src/tls.rs:809:22
+first assertion: expected BadCrl, got Ok(Loaded { path: "<scratch dir>/root-crl.pem", der: CertificateRevocationListDer(0x3081d3307c020101300a06082a8648ce3d040302301a3118301 [...]
+exit code: 101

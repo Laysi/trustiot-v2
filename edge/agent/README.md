@@ -50,8 +50,8 @@ trustiot-agent [--config <file>] [--check]
 | --- | --- |
 | `cloud.url` | 雲端的閘道器入口：`wss://<我們的網域>[:port]/mqtt`。只接受 `wss`、DNS 名稱（不接受 IP，也不接受最後一段是數字的名稱，例如 `127.1`、`0x7f000001`：解析器會把它們當成 IPv4 位址）、路徑 `/mqtt`，不能帶查詢字串與帳密。寫了 port 就必須是 1–65535 的數字（`:`、`:0`、`:65536`、`:abc`、`:+443` 都拒絕），沒寫才是 443 |
 | `cloud.trust` | 外層 TLS 信任的 PEM 檔，至少一個，每個檔至少要有一張可用的憑證。SaaS 用作業系統的 CA bundle；地端用客戶的 CA 或我們的 CA；工廠防火牆會解開 443 時，把它的攔截 CA 加成另一個檔 |
-| `broker.ca` | 內層 mTLS 的信任錨：我們的根 CA 憑證（PEM）。只能放根 CA（主體與簽發者相同、以自己的金鑰簽章、basicConstraints 的 cA），可以放多張（之後換根用）；放了簽發 CA 或 leaf 就拒絕啟動，錯誤訊息指出第幾張。內層只信任這些根，不用作業系統或 WebPKI 的根，也不用 `cloud.trust`。broker 的名稱固定是 `mqtt-broker.trustiot.internal`（Laysi/trustiot-v2#557），沒有設定的鍵：舊設定檔的 `broker.name` 是未知的鍵，會拒絕啟動，刪掉那一行即可。`cloud.url` 的主機不可以是這個名稱：兩層驗證的是不同的伺服器。規則見下方「內層 TLS 對 broker 的信任」 |
-| `broker.crl` | 選填：根 CRL 的檔案（範例是 `/var/lib/trustiot-agent/root-crl.pem`）。一個 PEM 區塊 `X509 CRL`、最多 64 KiB，要由 `broker.ca` 的根簽章，啟動時就驗證。檔案不存在表示還沒收到根 CRL：照常連線、不檢查撤銷，啟動時記一筆 INFO；檔案在但不能用（不是一個 PEM CRL、太大、不是根簽的）就拒絕啟動。沒有這個鍵時也不檢查撤銷 |
+| `broker.ca` | 內層 mTLS 的信任錨：我們的根 CA 憑證（PEM）。只能放根 CA（主體與簽發者相同、以自己的金鑰簽章、basicConstraints 的 cA），可以放多張（之後換根用），但主體（subject）不能重複；放了簽發 CA 或 leaf、或兩張根同名，就拒絕啟動，錯誤訊息指出第幾張。內層只信任這些根，不用作業系統或 WebPKI 的根，也不用 `cloud.trust`。broker 的名稱固定是 `mqtt-broker.trustiot.internal`（Laysi/trustiot-v2#557），沒有設定的鍵：舊設定檔的 `broker.name` 是未知的鍵，會拒絕啟動，刪掉那一行即可。`cloud.url` 的主機不可以是這個名稱：兩層驗證的是不同的伺服器。規則見下方「內層 TLS 對 broker 的信任」 |
+| `broker.crl` | 選填：根 CRL 的檔案（範例是 `/var/lib/trustiot-agent/root-crl.pem`）。一個 PEM 區塊 `X509 CRL`、最多 64 KiB、不帶 issuing distribution point，要由 `broker.ca` 的根簽章，啟動時就驗證。檔案不存在表示還沒收到根 CRL：照常連線、不檢查撤銷，啟動時記一筆 INFO；檔案在但不能用（不是一個 PEM CRL、太大、不是根簽的）就拒絕啟動。沒有這個鍵時也不檢查撤銷 |
 | `identity.certificate` | 閘道器的憑證鏈（leaf 在前，接著簽發 CA）。閘道器 ID 取自 leaf 的 CN（必須是合法的 `GatewayId`），不另外設定，兩者不可能不一致 |
 | `identity.key` | 正式環境是 `{ source = "tpm", device = "/dev/tpmrm0", handle = 0x81000100 }`（handle 要在 persistent 範圍 0x81000000–0x81FFFFFF）；`{ source = "file", path = "..." }` 只給開發與測試，啟動時會記一筆警告 |
 | `connection.*` | 心跳間隔（10–3600 秒，預設 60）、重連退避的起始與上限（預設 1 秒、60 秒）、同時等 PUBACK 的 QoS 1 訊息數（1–256，預設 32） |
@@ -80,12 +80,15 @@ trustiot-agent [--config <file>] [--check]
 
 依 Laysi/trustiot-v2#556 的決定（[services/certs](../../services/certs/README.md)「閘道器對 broker 伺服器憑證的信任」與「根 CRL」），在 `src/tls.rs`：
 
-- **信任錨**：`broker.ca` 的根 CA，可以多張；簽發 CA 或 leaf 拒絕啟動。以簽發 CA 當信任錨時，根 CRL 撤銷它也沒有用，換一代簽發 CA 還要改每台閘道器的設定。
+- **信任錨**：`broker.ca` 的根 CA，可以多張；簽發 CA 或 leaf 拒絕啟動。以簽發 CA 當信任錨時，根 CRL 撤銷它也沒有用，換一代簽發 CA 還要改每台閘道器的設定。每張根的主體要不同：CRL 只以主體指出簽發者，同名的兩個根會讓 webpki 拿錯的金鑰驗 CRL，經另一個根的連線全部失敗。
 - **憑證鏈**：broker 送它的憑證與簽發 CA，agent 由此接到根；broker 只送自己的憑證時連線失敗（`UnknownIssuer`）。
 - **名稱**：SNI 與驗證都用 `tls::BROKER_NAME`（`mqtt-broker.trustiot.internal`），SaaS 與地端相同，與 `cloud.url` 無關；名稱驗證不能關。
 - **用途**：broker 的憑證要有 EKU serverAuth（webpki 的檢查），只有 clientAuth 的憑證（例如同一個簽發 CA 簽的閘道器憑證）被拒。沒有 EKU 的憑證 webpki 不檢查用途，由 CA 不簽這種憑證來保證（services/certs）。
 - **撤銷**：rustls 的 `WebPkiServerVerifier` 以 `with_crls` 帶入根 CRL、設 `allow_unknown_revocation_status`，不用 `only_check_end_entity_revocation` 與 `enforce_revocation_expiration`。所以根以下的每張憑證都以根 CRL 檢查，被撤銷的簽發 CA 拒絕；broker 自己的憑證由簽發 CA 簽，閘道器沒有簽發 CA 的 CRL，狀態未知，照樣通過；根 CRL 過期仍然以它檢查、照常連線。沒有根 CRL 時不檢查撤銷。
-- **載入**：只在啟動時讀一次。根 CRL 要由 `broker.ca` 中名稱相符的根簽章（以 x509-parser 驗章；根有 key usage 時要有 cRLSign），webpki 也要能解析；不符就拒絕啟動，壞掉或偽造的檔案不會被默默略過。
+- **載入**：只在啟動時讀一次。根 CRL 要由 `broker.ca` 中名稱相符的根簽章（根有 key usage 時要有 cRLSign），webpki 也要能解析；不符就拒絕啟動，壞掉或偽造的檔案不會被默默略過。帶 issuing distribution point 的根 CRL 也拒絕：webpki 只把它用在範圍內的憑證，範圍排除簽發 CA 時等於不檢查，又因為允許狀態未知而不會報錯（根 CRL 的格式規則在 services/certs「根 CRL」）。
+- **簽章演算法**：載入時驗根的自簽章與根 CRL 的簽章，用的是握手時 webpki 用的同一份清單（ring provider 的 `signature_verification_algorithms`），依 AlgorithmIdentifier 的位元組比對；x509-parser 只負責解析。所以不會有載入時通過、每次握手卻失敗的根或根 CRL（例如 SHA-1，或多帶參數的 ecdsa-with-SHA256）。
+- **錯誤訊息裡的名稱**：憑證與 CRL 的名稱來自任何人都能寫的檔案，寫進錯誤訊息前把控制字元換成空白、最多 200 個字元，免得偽造或切開日誌的行。
+- **已知的限制**：一張根 CRL 只涵蓋簽它的根底下的簽發 CA。換根期間 `broker.ca` 有兩個根時，另一個根底下的簽發 CA 不檢查撤銷，支援多張根 CRL 與換根一起規劃（Laysi/trustiot-v2#563 的範圍）。根 CRL 檔被刪除時 agent 當成「還沒有」而不檢查撤銷；有了取用管道之後這是降級的入口，防止的做法在 Laysi/trustiot-v2#563（記下曾接受過的最高編號）。
 - **還沒做**（Laysi/trustiot-v2#563，等 Laysi/trustiot-v2#560 的發佈管道）：接受編號更大的新根 CRL 並存下、定期取得、換上新的根 CRL 時清掉 resumption 的快取、在心跳回報根 CRL 的編號與是否過期。在那之前換根 CRL 要重新啟動 agent，新的行程也就有新的 resumption 快取。
 
 ### MQTT 用戶端

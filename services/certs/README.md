@@ -203,6 +203,11 @@ age --decrypt -i <自己的 identity> root-key.age \
 - **順序**：撤銷某一代的根 CRL 放進 values 之前，broker 要已換上新一代簽的伺服器憑證（Laysi/trustiot-v2#535 的換新），否則取到新 CRL 的閘道器連不上 broker。儀式可以同時簽出新的簽發 CA 憑證與根 CRL，根 CRL 晚一步放進 values。
 - **過期**：nextUpdate 過了，閘道器仍然以手上的根 CRL 驗證、照常連線，並在狀態回報裡標出根 CRL 已過期。不擋連線，是因為根 CRL 要靠人到離線的機器簽，儀式晚了不該讓整個機隊斷線；改由 certs 的告警與閘道器的狀態回報讓人知道。
 - **還沒有根 CRL 時**（目前，以及後續 issue 完成前出廠的閘道器）：閘道器不檢查撤銷，照常連線；取到第一張之後開始檢查。
+- **格式**（2026-10-23，Laysi/trustiot-v2#86 的安全審查；`certs-ca` 簽根 CRL 時照做，Laysi/trustiot-v2#560）：閘道器的 agent 拒絕不符的根 CRL、不啟動。
+  - 不帶 issuing distribution point：webpki 只把帶它的 CRL 用在範圍內的憑證，範圍排除簽發 CA（例如 onlyContainsUserCerts）或 URI 對不上簽發 CA 的 CRL distribution point 時，等於不檢查。
+  - 不是 delta CRL，也不帶 webpki 不認得的 critical extension。
+  - 簽章演算法要是 rustls 的 ring provider 接受的（根是 P-384，就是 ecdsa-with-SHA384），AlgorithmIdentifier 照標準編碼、不多帶參數：webpki 依位元組比對演算法，對不上時每次握手都失敗。
+- **換根與主體**：新的根要用新的主體（subject）。CRL 只以主體指出簽發者，兩個同名的根同時在信任錨裡時，webpki 會拿錯的根的金鑰驗 CRL，經另一個根的連線全部失敗；agent 拒絕主體重複的 `broker.ca`。一張根 CRL 只涵蓋簽它的根底下的簽發 CA：換根期間 `broker.ca` 有兩個根時，agent 只載入一張根 CRL（`broker.crl`），另一個根底下的簽發 CA 不檢查撤銷。這是已知的限制，支援多張根 CRL 與換根的做法一起規劃（根 CA 換新還沒有做法，見[已知的限制](#ca-階層與私鑰保管)；取用多張根 CRL 屬於 Laysi/trustiot-v2#563 的範圍）。
 
 剩下的風險：
 
