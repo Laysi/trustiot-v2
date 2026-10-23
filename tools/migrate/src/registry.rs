@@ -163,7 +163,8 @@ pub const PRODUCT: Registry = Registry {
         // new tenant's transaction, and keeps the event log (Laysi/trustiot-v2#130): it reads the
         // events of every producer in `CONSUMES` (its own, and assets' and certs', which come
         // later in this list) as its platform role, so the chart binds a password to
-        // `identity_platform` as well ("trustiot.migrate.platformLogins" in deploy/chart/templates/_migrate.tpl).
+        // `identity_platform` as well ("trustiot.migrate.platformLogins" in
+        // deploy/chart/templates/_migrate.tpl).
         Service {
             name: identity_schema::SCHEMA.service,
             platform_role: true,
