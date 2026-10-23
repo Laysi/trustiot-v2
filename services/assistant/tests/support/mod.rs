@@ -285,7 +285,9 @@ pub struct Event {
     pub fields: BTreeMap<String, String>,
 }
 
-/// Captures every event of the thread it is installed on.
+/// Captures every event of the thread it is installed on. Another test's thread can hide the
+/// events (Laysi/trustiot-v2#581): tests/agent_logs.rs runs its tests one at a time, and
+/// [`Capture::install`] works while other tests run in parallel.
 #[derive(Clone, Default)]
 pub struct Capture(Arc<Mutex<Vec<Event>>>);
 

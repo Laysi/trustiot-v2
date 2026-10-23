@@ -1,9 +1,9 @@
 //! A conversation: its fixed preamble and its append-only history
 //! (docs/architecture/ai-assistant.md, 「對話歷史只往後加」).
 //!
-//! The history lives in memory here. Laysi/trustiot-v2#553 stores it in Postgres: it keeps the
-//! same append-only interface ([`Conversation::append`] is the only way in) and adds loading a
-//! stored conversation back, with the preamble it started with.
+//! The history lives in memory here; [`crate::store`] keeps it in Postgres
+//! (Laysi/trustiot-v2#553) with the same append-only rule ([`Conversation::append`] is the only
+//! way a message joins), and loads a stored conversation back with the preamble it started with.
 
 use std::fmt;
 use std::sync::Arc;
@@ -119,6 +119,19 @@ impl EntryKind {
             Self::Note => "note",
         }
     }
+
+    /// The kind called `name` (see [`EntryKind::as_str`]).
+    pub fn from_name(name: &str) -> Option<Self> {
+        [
+            Self::Question,
+            Self::Answer,
+            Self::Step,
+            Self::ToolResults,
+            Self::Note,
+        ]
+        .into_iter()
+        .find(|kind| kind.as_str() == name)
+    }
 }
 
 /// A conversation. Messages are only appended; nothing in the history is changed or removed,
@@ -150,6 +163,25 @@ impl Conversation {
             preamble,
             messages: Vec::new(),
             kinds: Vec::new(),
+            measured: None,
+        }
+    }
+
+    /// A stored conversation as it was saved ([`crate::store::load`]). The model's last count
+    /// of the history is not stored, so the first call after loading estimates it again.
+    pub(crate) fn restore(
+        id: Uuid,
+        principal: Principal,
+        preamble: Arc<Preamble>,
+        entries: Vec<(EntryKind, NativeMessage)>,
+    ) -> Self {
+        let (kinds, messages) = entries.into_iter().unzip();
+        Self {
+            id,
+            principal,
+            preamble,
+            messages,
+            kinds,
             measured: None,
         }
     }

@@ -1,0 +1,25 @@
+# Mutation check: store::append's owner and preamble comparison temporarily disabled;
+# CI=1 cargo test -p assistant --lib store:: -- --nocapture. Restored afterwards.
+
+   Compiling assistant v0.1.0 (<worktree>/services/assistant)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.48s
+     Running unittests src/lib.rs (target/debug/deps/assistant-19fbd53440c272ba)
+
+running 4 tests
+test store::tests::text_with_u0000_is_refused_up_front ... ok
+test store::tests::a_message_reads_back_only_as_its_exact_bytes ... ok
+test store::tests::tool_definitions_read_back_as_the_same_json ... ok
+
+thread 'store::tests::append_refuses_a_conversation_of_another_owner_or_preamble' (<thread>) panicked at services/assistant/src/store.rs:575:17:
+append of another owner from 0
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test store::tests::append_refuses_a_conversation_of_another_owner_or_preamble ... FAILED
+
+failures:
+
+failures:
+    store::tests::append_refuses_a_conversation_of_another_owner_or_preamble
+
+test result: FAILED. 3 passed; 1 failed; 0 ignored; 0 measured; 14 filtered out; finished in 6.97s
+
+error: test failed, to rerun pass `-p assistant --lib`

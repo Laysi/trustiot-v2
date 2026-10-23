@@ -28,6 +28,10 @@ mod telemetry_query_schema;
 #[path = "../../../services/certs/src/schema.rs"]
 mod certs_schema;
 
+/// The assistant service's files (compiled into the service as well).
+#[path = "../../../services/assistant/src/schema.rs"]
+mod assistant_schema;
+
 /// The outbox tables (crates/outbox) in a service's schema.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Outbox {
@@ -216,6 +220,19 @@ pub const PRODUCT: Registry = Registry {
                 consumes: &[],
             },
             migrations: certs_schema::SCHEMA.migrations,
+        },
+        // The AI assistant's conversations and their append-only history
+        // (Laysi/trustiot-v2#553): tenant data under row-level security, no events, and nothing
+        // read across tenants, so no platform role. Its `assistant_app` stays NOLOGIN in a
+        // cluster until the chart gives the assistant Postgres (Laysi/trustiot-v2#552).
+        Service {
+            name: assistant_schema::SCHEMA.service,
+            platform_role: false,
+            outbox: Outbox {
+                producer: assistant_schema::SCHEMA.outbox_producer,
+                consumes: &[],
+            },
+            migrations: assistant_schema::SCHEMA.migrations,
         },
     ],
     clickhouse: crate::clickhouse_files::FILES,

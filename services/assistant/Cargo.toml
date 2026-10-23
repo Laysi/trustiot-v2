@@ -33,6 +33,9 @@ serde = { workspace = true, features = ["derive"] }
 # `raw_value`: the conversation history is kept as the JSON text received and sent back as it is.
 serde_json = { workspace = true, features = ["raw_value"] }
 service-kit = { path = "../../crates/service-kit" }
+# The conversation store (src/store.rs) in the service role's tenant transactions; same TLS
+# stack as service-kit, which verifies the server on every connection (checklist M3).
+sqlx = { workspace = true, features = ["postgres", "runtime-tokio", "tls-rustls-ring-webpki"] }
 thiserror.workspace = true
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "sync", "time"] }
 tracing.workspace = true
@@ -47,7 +50,8 @@ assets = { path = "../assets" }
 axum = { workspace = true, features = ["http1", "tokio"] }
 chrono = { workspace = true, features = ["now"] }
 telemetry-query = { path = "../telemetry-query" }
-# The request's verified identity a question's delegation starts from.
+# The product's schema (the migration Job), test identity tokens (and the request's verified
+# identity a question's delegation starts from), and the cross-tenant suite.
 testkit = { path = "../../crates/testkit" }
 tokio = { workspace = true, features = ["macros", "net", "rt-multi-thread", "sync", "time"] }
 # Captures the log events the tests check.
