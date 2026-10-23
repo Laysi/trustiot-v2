@@ -53,6 +53,8 @@ import { discoverShapes, valuesArgs } from "./smoke.ts";
 const REPO_ROOT = join(import.meta.dir, "..", "..");
 const CHART_DIR = join(REPO_ROOT, "deploy", "chart");
 const APP = "app.nightly.test";
+/** The prefix of the certs objects' names for release `trustiot` (deploy/chart/templates/_certs.tpl). */
+const CERTS = "trustiot-certs";
 
 const ok = (stdout = "", stderr = ""): ExecResult => ({ code: 0, stdout, stderr, timedOut: false });
 /** Runs a command in `cwd` with the bounded time every test command gets; throws on failure. */
@@ -222,8 +224,8 @@ describe("the release's objects", () => {
     expect(certsObjectsOf([deployment])).toEqual({
       deployment: "trustiot-certs",
       selector: "app.kubernetes.io/name=trustiot,app.kubernetes.io/component=certs",
-      secret: "trustiot-certs-ca-keys",
-      configMap: "trustiot-certs-ca-requests",
+      secret: `${CERTS}-ca-keys`,
+      configMap: `${CERTS}-ca-requests`,
       generation: "1",
     });
     expect(() => certsObjectsOf([])).toThrow("one certs Deployment, found 0");
@@ -615,7 +617,7 @@ describe("the chart with the smoke's certs values", () => {
       expect(deployment(signing)).toEqual(deployment(waiting)!);
       // What the check reads: the key objects, and where it fetches inside the mesh.
       const objects = certsObjectsOf(signing);
-      expect(objects).toMatchObject({ secret: "trustiot-certs-ca-keys", configMap: "trustiot-certs-ca-requests", generation: "1" });
+      expect(objects).toMatchObject({ secret: `${CERTS}-ca-keys`, configMap: `${CERTS}-ca-requests`, generation: "1" });
       expect(signing.find((o) => o.kind === "Secret" && o.metadata?.name === objects.secret)).toBeDefined();
       const fetcher = meshFetcherOf(signing);
       expect(fetcher).toEqual({ pod: "trustiot-mqtt-broker-0", container: "mosquitto", certsUrl: `http://trustiot-certs.nightly-${shape.name}.svc:8080` });
