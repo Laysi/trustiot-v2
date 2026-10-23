@@ -1,0 +1,73 @@
+     Running unittests src/lib.rs (<host copy>/target/debug/deps/ai_gateway-d74b2ca9bf8078d4)
+test body::tests::a_missing_model_is_added_first ... ok
+test body::tests::bodies_that_cannot_be_forwarded_are_refused_without_quoting_them ... ok
+test body::tests::only_the_model_value_changes ... ok
+test config::tests::roles_and_providers_load_from_environment_variables ... ok
+test gateway::tests::overlapping_keys_leave_no_part_visible_in_any_order ... ok
+test reject::tests::retry_after_is_whole_seconds_up_to_an_hour ... ok
+test body::tests::stream_is_read_only_when_asked ... ok
+test relay::tests::a_key_in_an_error_event_is_scrubbed_however_it_is_written ... ok
+test config::tests::time_limits_are_bounded ... ok
+test config::tests::endpoint_and_key_settings_are_checked_without_echoing_them ... ok
+test gateway::tests::keys_are_scrubbed_and_never_printed ... ok
+test relay::tests::error_events_are_relayed_unchanged_without_a_key ... ok
+test config::tests::a_role_must_name_configured_providers_of_one_protocol ... ok
+test gateway::tests::a_missing_or_unusable_key_names_the_variable_only ... ok
+test config::tests::names_must_be_lower_case_words ... ok
+test gateway::tests::every_role_must_fit_in_the_request_timeout ... ok
+test reject::tests::gateway_errors_use_each_protocols_envelope ... ok
+test reject::tests::provider_errors_keep_status_type_and_message_without_keys ... ok
+test reject::tests::refused_credentials_and_odd_statuses_become_bad_gateway ... ok
+test relay::tests::only_rate_limits_overload_timeouts_and_full_queues_fall_back ... ok
+test store::tests::operators_and_versions_are_checked ... ok
+test relay::tests::tenant_and_beta_headers_are_checked ... ok
+test gateway::tests::stored_models_replace_the_configured_ones_and_reuse_their_clients ... ok
+test result: ok. 23 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/decisions.rs (<host copy>/target/debug/deps/decisions-6f0484497be88740)
+test invalid_requests_and_unknown_roles_are_refused_before_anything_is_sent ... ok
+test a_refused_question_is_returned_as_the_models_answer ... ok
+test a_recorded_request_is_forwarded_and_its_response_returned ... ok
+test rate_limits_and_overload_move_to_the_next_model ... ok
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/fallback.rs (<host copy>/target/debug/deps/fallback-0a01839f838b4e79)
+test a_provider_error_never_echoes_the_gateways_key ... ok
+test when_every_model_is_rate_limited_the_last_error_comes_back ... ok
+test a_model_at_its_concurrency_limit_moves_to_the_next ... ok
+test a_refusal_is_the_models_answer_not_a_failure ... ok
+test other_errors_come_back_without_trying_the_next_model ... ok
+test rate_limits_overload_and_provider_timeouts_move_to_the_next_model ... ok
+test a_stream_that_fails_before_its_first_output_moves_to_the_next_model ... ok
+test a_single_model_that_does_not_answer_in_time_is_a_timeout ... ok
+test a_model_that_does_not_answer_in_time_moves_to_the_next ... ok
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 15.00s
+     Running tests/messages.rs (<host copy>/target/debug/deps/messages-ceef7a3307dc3d41)
+test a_missing_model_is_filled_in_from_the_role ... ok
+test a_stream_comes_back_unchanged ... ok
+test requests_that_cannot_be_forwarded_are_refused_before_anything_is_sent ... ok
+test the_body_reaches_the_provider_byte_for_byte_except_the_model ... ok
+test a_refused_stream_is_relayed_as_it_came ... ok
+test a_stream_that_fails_after_its_first_output_is_relayed_as_it_came ... ok
+test a_body_that_does_not_arrive_in_time_is_a_timeout ... ok
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.70s
+     Running tests/no_contract.rs (<host copy>/target/debug/deps/no_contract-4b2c2b8530eb2d53)
+test ai_gateway_does_not_depend_on_contract ... ok
+test the_check_finds_contract_where_it_is ... ok
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.14s
+     Running tests/process.rs (<host copy>/target/debug/deps/process-0b033e7cdc1e0f16)
+test the_binary_does_not_start_without_its_key_or_with_limits_that_cannot_be_kept ... ok
+test the_key_is_used_but_never_logged_or_returned ... ok
+test a_stored_list_the_configuration_no_longer_allows_is_ignored_with_an_error ... ok
+test a_change_reaches_every_process_for_its_next_request ... ok
+test a_restarted_process_uses_the_last_change ... ok
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.38s
+     Running tests/roles_store.rs (<host copy>/target/debug/deps/roles_store-554722882d3b1a7b)
+test the_service_role_cannot_rewrite_or_remove_the_change_log ... ok
+test versions_keep_rising_after_a_reset ... ok
+test refused_changes_write_nothing_and_each_change_writes_one_record ... ok
+test a_stream_keeps_its_model_after_a_change ... ok
+test a_reload_keeps_the_concurrency_count_of_a_model_that_stays ... ok
+test a_change_is_used_by_the_next_request_and_only_then_reloaded ... ok
+test no_provider_is_called_while_the_database_cannot_be_read ... ok
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 16.20s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+== ai-gateway rc 0
