@@ -2,7 +2,9 @@
 # Applies each mutation patch in this directory to a clean tree, runs the rust job's clippy step
 # and the acceptance criterion's cargo check, records exit codes and the compiler's error lines,
 # and reverts the tree. Run from the repository root, in a git work tree whose HEAD is the
-# unmutated code (Laysi/trustiot-v2#8, acceptance criterion 2).
+# unmutated code (Laysi/trustiot-v2#8, acceptance criterion 2). p2 was added on 2026-10-21 for
+# edge/agent, the first crate that depends on protocol (Laysi/trustiot-v2#86, acceptance
+# criterion 5).
 set -uo pipefail
 
 dir=docs/test-reports/data/2026-10-13-8-contract-type-changes
@@ -66,7 +68,7 @@ for patch in "$dir"/*.patch; do
   git diff --cached --stat | tail -n 8
   echo
   case "$name" in
-    p1-*) check_all protocol --all-targets ;;
+    p[0-9]*) check_all protocol --all-targets ;;
     *) check_all contract --all-targets ;;
   esac
   git reset --quiet --hard HEAD

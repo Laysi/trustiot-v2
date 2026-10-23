@@ -1,0 +1,15 @@
+$ CI=true cargo test --locked -p agent --test broker which_ends_make_mosquitto_publish_the_will -- --nocapture
+# broker: docker.io/library/eclipse-mosquitto:2.1.2-alpine@sha256:38c0da4f2ef84284d47b3b3eeea1cb3bdeabe81ee10caf0cd5c5ff61ee3ea408 (testkit::mqtt::mosquitto::MOSQUITTO_IMAGE), date 2026-10-22
+# each row: a raw MQTT 5 client with the gateway certificate connects (Clean Start, retained QoS 1 will on its
+# up/status), ends the connection as named, waits until the broker closes it, and reads the retained status
+DISCONNECT 0x00            will published: false
+DISCONNECT 0x04            will published: true
+DISCONNECT 0x80            will published: false
+DISCONNECT 0x81            will published: false
+DISCONNECT 0x82            will published: false
+DISCONNECT 0x83            will published: false
+DISCONNECT 0x94            will published: false
+DISCONNECT 0x95            will published: false
+close without DISCONNECT   will published: true
+test which_ends_make_mosquitto_publish_the_will ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 5.32s

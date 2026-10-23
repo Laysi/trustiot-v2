@@ -1,6 +1,6 @@
 # testkit
 
-服務測試用的共用工具。主角是跨租戶負向測試框架：每個服務在 `tests/` 用它證明租戶 A 讀不到、也改不了租戶 B 的資料（[決策 29](../../docs/architecture/decisions.md)「跨租戶負向測試列入每個服務的 CI」）。另外提供測試用的內部身分 token、帶 TLS 的拋棄式 Postgres 與容器工具，以及閘道器採集測試用的假 Modbus 端點與故障注入（M7，見[假 Modbus 端點](#假-modbus-端點)）。
+服務測試用的共用工具。主角是跨租戶負向測試框架：每個服務在 `tests/` 用它證明租戶 A 讀不到、也改不了租戶 B 的資料（[決策 29](../../docs/architecture/decisions.md)「跨租戶負向測試列入每個服務的 CI」）。另外提供測試用的內部身分 token、帶 TLS 的拋棄式 Postgres 與容器工具，閘道器採集測試用的假 Modbus 端點與故障注入（M7，見[假 Modbus 端點](#假-modbus-端點)），以及閘道器連線測試用的 WebSocket 前端、測試 CA 與 Mosquitto 容器（見[MQTT 測試環境](#mqtt-測試環境)）。
 
 只能當 `[dev-dependencies]` 使用：`tools/repo-check` 擋下其他用法，因為 `tools/sql-check` 把本 crate 當測試程式檢查（它把巨集組好的靜態 SQL 以變數交給 sqlx）。
 
@@ -13,6 +13,7 @@
 | `product` | `product_postgres(logins)`：在 `tls_postgres` 上以 migration Job 本身（`migrate::run` 與 `PRODUCT`）套用整個產品的 schema，與部署得到的一樣（Laysi/trustiot-v2#65）；見[產品 schema](#產品-schema) |
 | `container` | podman 或 docker 的容器，drop 時刪除；`unavailable(what)`：本機缺容器執行環境時略過測試，設了 `CI` 時改為失敗 |
 | `modbus` | `FakeModbus`：測試行程內的假 Modbus TCP 與 RTU-over-TCP 端點，支援站號、故障注入（`Fault`）與請求紀錄；見[假 Modbus 端點](#假-modbus-端點) |
+| `mqtt` | 閘道器到 broker 的整條路：`TestPki`、`front::WsFront`（入口與 mqtt-bridge 的替身）、`mosquitto::Mosquitto`；見[MQTT 測試環境](#mqtt-測試環境) |
 | `clock` | 真實 socket 上的時間控制：`manual()` 讓暫停的 tokio 時鐘只在測試 `advance` 時前進；`bounded(what, future)` 以牆上時間限制等待；見[時間控制](#時間控制) |
 
 ## 新服務怎麼接上
@@ -263,12 +264,36 @@ async fn the_reader_survives_a_converter() {
 - Modbus TCP 的連線各自處理，沒有模擬 TCP 閘道器背後的序列匯流排；轉換器的行為用 `RtuOverTcp` 測。
 - 半開連線的 socket 一直留到端點 drop；client 持續寫入會填滿 kernel 的接收緩衝，之後 client 的寫入會卡住而不是失敗，與現場相同。
 
+## MQTT 測試環境
+
+閘道器到 broker 的整條路，給 agent 的測試用（Laysi/trustiot-v2#86）。模組 `mqtt`：
+
+- `TestPki`：測試時產生的兩個 CA，不寫進 repo。「公開」CA 簽前端的憑證（`FRONT_HOST`，即 `localhost`），是 agent 的外層信任；broker CA 簽 broker 的憑證（`BROKER_NAME`）與閘道器的憑證（`pki.gateway(cn)`，EKU clientAuth），是 agent 的內層信任與 broker 的用戶端 CA。另有 `Authority::new(name)` 做不相干的 CA（測拒絕用）、`front_tls(leaf, versions)`、`mtls_server(leaf, client_ca)`（要求用戶端憑證的 TLS 1.3 伺服器；`mtls_server_with_versions` 可指定 TLS 版本，測拒絕用）、`Authority::client_valid(cn, not_before, not_after)`（指定效期的用戶端憑證，測過期用）與 `ScratchDir`（drop 時刪除的暫存目錄，放設定與金鑰檔）。
+- `front::WsFront`：測試行程內的入口與 mqtt-bridge 替身：外層 TLS（ALPN `http/1.1`，依用戶端的套件順序選）、`/mqtt` 上 subprotocol 為 `mqtt` 的 WebSocket（路徑不對回 404、沒要求 `mqtt` 回 400），再把 binary message 原樣轉給 TCP 上游（8 KiB 緩衝，與 mqtt-bridge 相同）。內層 mTLS 由閘道器直達上游，前端只看到加密的位元組。`sessions()` 記錄每條連線協商出的 TLS 版本、套件、ALPN、SNI、是否 resumption、路徑與 subprotocol；`FrontOptions` 可改成不回 subprotocol、定時送 WebSocket ping、換外層 TLS 設定（例如只有 TLS 1.2）。`stop().await` 一次切斷所有連線、不送 WebSocket close（與轉接服務當掉相同），等 listener 關閉、每條連線都結束才回來；`restart()` 先這樣停下再在同一個 port 重新開始，所以不會因為舊的 listener 還開著而 `AddrInUse`。停下時（`stop`、`restart` 或 drop）先對 listener `shutdown` 再關閉：同一個測試行程裡別的測試啟動子行程（例如 podman）時，子行程在 fork 到 exec 之間拿著所有描述子的副本，只 drop 的 listener 會繼續 listen（重新綁定 `AddrInUse`、連線照樣成功）；`shutdown` 讓 socket 本身離開 LISTEN。`Mosquitto` 挑 port 時放掉的試探 listener 也一樣處理。
+- `mosquitto::Mosquitto`：拋棄式容器裡的 Mosquitto 2.1.2（`MOSQUITTO_IMAGE`，以 multi-arch digest 釘選，與 `crates/protocol/tests/broker.rs` 相同），設定與產品給閘道器的 listener 相同：mTLS（`require_certificate`、`use_identity_as_username`、TLS 1.3）、`set_tcp_nodelay`、dynamic security 與協定的閘道器角色（`protocol::acl::gateway_role_acls`）、不允許匿名。`ciphers_tls1.3` 把 ChaCha20-Poly1305 排第一：Mosquitto 依自己的順序選套件，不設時即使閘道器把 ChaCha20 排第一也協商出 AES-256-GCM（2026-10-21 實測）。mTLS listener 發布在主機的回送位址（`address()`）；容器內另有只用密碼的 listener，給 dynamic security 指令與雲端帳號（`CLOUD_USER`）的 `mosquitto_pub`／`mosquitto_sub` 以 `exec` 使用。憑證由環境變數傳進容器，不經過指令列。
+
+```rust
+let pki = TestPki::new();
+let Some(broker) = Mosquitto::start(&pki) else { return };   // 沒有容器執行環境時略過
+broker.register_gateway("gw-test-1");                          // dynsec client，綁定閘道器角色
+let front = WsFront::start(FrontOptions::new(pki.front_tls(), broker.address())).await?;
+let up = broker.subscribe("trustiot/v1/gw/gw-test-1/up/#");    // 雲端帳號在背景訂閱
+// agent 的設定：cloud.url = wss://localhost:<front port>/mqtt，trust = pki.public_ca.pem，
+// broker.name = BROKER_NAME，broker.ca = pki.broker_ca.pem，憑證與金鑰 = pki.gateway("gw-test-1")
+let online = up.wait_for("online", limit, |message| message.topic.ends_with("/up/status"));
+broker.remove_gateway_rule("publishClientSend", "trustiot/v1/gw/%u/up/log");   // 之後的 log 拿到 0x87
+broker.restart();                                              // SIGTERM 後重新啟動，retained 訊息消失
+```
+
+`Mosquitto` 的方法（`publish`、`subscribe`、`restart`、`wait_for_log`、`control`）會阻塞（它們執行容器指令），在 async 測試裡以 multi-thread runtime 加 `tokio::task::block_in_place` 呼叫，agent 的 task 才不會被卡住。`start` 先挑一個空的 port 再交給容器執行環境，中間被別人拿走時換一個 port 重試（最多 5 次）；`Subscription` 被丟掉時連容器裡的 `mosquitto_sub` 一起停掉。`publish` 回傳 PUBACK 的 reason code；`Subscription::wait_for` 略過不要的訊息、逾時時列出看到的 topic。broker 的日誌（`logs()`、`wait_for_log`）含連線的來源位址，不要原樣貼進測試報告。
+
 ## 執行
 
 ```sh
 cargo test -p testkit                       # 單元測試與容器測試（需要 podman 或 docker）
 cargo test -p testkit -- --nocapture        # 加上每個探測的報告
 cargo test -p testkit --test modbus_endpoint --test modbus_example   # 只跑假 Modbus 端點（不需要容器）
+cargo test -p agent --test transport --test broker                    # MQTT 測試環境的使用者（broker 需要容器）
 ```
 
 沒有 podman 或 docker 時容器測試在本機略過；設了 `CI` 時改為失敗，CI 綠燈就代表真的跑過。

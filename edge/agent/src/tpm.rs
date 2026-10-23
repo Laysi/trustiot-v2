@@ -38,9 +38,12 @@ pub const DEFAULT_KEY_HANDLE: u32 = 0x8100_0100;
 /// The kernel's TPM resource manager, which the agent uses rather than `/dev/tpm0` so other
 /// programs (the LUKS unlock, tpm2-tools) can use the TPM too.
 pub const DEFAULT_DEVICE: &str = "/dev/tpmrm0";
-/// How long a TPM command may take before the caller gives up. The kernel's own command timeout
-/// is shorter for these commands, so this only guards against a stuck worker.
-pub const RESPONSE_TIMEOUT: Duration = Duration::from_secs(30);
+/// How long a TPM command may take before the caller gives up, queueing included. The kernel's
+/// own command timeout is shorter for these commands, so this only guards against a stuck
+/// worker. A signature blocks the connection thread, so this plus one progress tick must fit in
+/// half of the unit's `WatchdogSec`, and two commands (opening the key) in its
+/// `TimeoutStartSec` (`tests/systemd_unit.rs` checks both).
+pub const RESPONSE_TIMEOUT: Duration = Duration::from_secs(10);
 /// The largest TPM response accepted.
 pub const MAX_RESPONSE_BYTES: usize = marshal::MAX_RESPONSE_BYTES;
 
