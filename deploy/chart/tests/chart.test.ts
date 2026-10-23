@@ -1083,6 +1083,15 @@ describe("gateway certificate authority (decision 12, Laysi/trustiot-v2#78)", ()
       ]);
       // It uses Postgres (values.yaml mesh.calls): its own role and password.
       expect((certs.containers[0]?.env ?? []).find((e) => e.name === "TRUSTIOT__DATABASE__USERNAME")?.value).toBe("certs_app");
+      // Its platform role writes the platform-wide factory registration event
+      // (Laysi/trustiot-v2#79), from the same Secret.
+      expect((certs.containers[0]?.env ?? []).filter((e) => e.name.startsWith("TRUSTIOT__DATABASE__PLATFORM_"))).toEqual([
+        { name: "TRUSTIOT__DATABASE__PLATFORM_USERNAME", value: "certs_platform" },
+        {
+          name: "TRUSTIOT__DATABASE__PLATFORM_PASSWORD",
+          valueFrom: { secretKeyRef: { name: `${RELEASE}-certs-password`, key: "certs_platform" } },
+        },
+      ]);
       for (const { name, pod } of podsOf(manifests)) {
         if (name === `Deployment/${RELEASE}-certs`) continue;
         expect(JSON.stringify(pod), name).not.toContain("certs-ca");

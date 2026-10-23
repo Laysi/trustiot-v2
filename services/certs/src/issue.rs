@@ -83,6 +83,21 @@ pub const WORKSTATION_SUBJECT_PREFIX: &str = "workstation:";
 /// within the ledger's 64 characters.
 pub const MAX_WORKSTATION_NAME_LEN: usize = 48;
 
+/// Serializes a workstation certificate's revocation with the factory registrations it signs
+/// (Laysi/trustiot-v2#79): a registration holds this transaction lock shared from before it
+/// reads the certificate's ledger row until it commits, and a revocation takes it exclusively
+/// before it updates the row. A revocation committed first is seen by the registration's read; a
+/// registration that read the row first commits before the revocation can. A row lock would
+/// need an UPDATE grant the platform role does not have. `$1` is the certificate's serial number;
+/// the first key is a fixed class, so these locks never meet the one-key locks of
+/// `service_kit::job_lock` or the outbox, and a hash collision only makes one wait for the other.
+pub const LOCK_WORKSTATION_SHARED: &str =
+    "SELECT pg_advisory_xact_lock_shared(1953983347, hashtext(encode($1, 'hex')))";
+
+/// The exclusive form of [`LOCK_WORKSTATION_SHARED`], for a revocation.
+pub const LOCK_WORKSTATION: &str =
+    "SELECT pg_advisory_xact_lock(1953983347, hashtext(encode($1, 'hex')))";
+
 /// Why no certificate was issued. Names the problem, never the request's content.
 #[derive(Debug, thiserror::Error)]
 pub enum IssueError {

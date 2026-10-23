@@ -96,6 +96,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/certs/v1/gateway-registrations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Registers a gateway at the factory and returns its initial certificate. */
+        post: operations["registerGateway"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/certs/v1/workstation-certificates": {
         parameters: {
             query?: never;
@@ -532,6 +549,54 @@ export interface components {
             /** @description The message the client shows next to the field. */
             message_key: components["schemas"]["MessageKey"];
         };
+        /** @description A gateway's factory registration, as the service records it. */
+        GatewayRegistration: {
+            /** @description The issuing CA that signed the initial certificate: the SHA-256 of its public key. */
+            ca_key_id: string;
+            /**
+             * @description The initial certificate, PEM: the gateway's MQTT client certificate, subject
+             *     `CN=<hardware_id>`, extended key usage client authentication only.
+             */
+            certificate: string;
+            /**
+             * @description The SHA-256 of the endorsement key (its DER SubjectPublicKeyInfo), 64 lower-case hex
+             *     digits.
+             */
+            endorsement_key_sha256: string;
+            /** @description The gateway's hardware ID. */
+            hardware_id: string;
+            /**
+             * Format: date-time
+             * @description When the initial certificate expires; the gateway renews it through the renewal endpoint
+             *     before then.
+             */
+            not_after: string;
+            /**
+             * Format: date-time
+             * @description When the initial certificate becomes valid.
+             */
+            not_before: string;
+            /**
+             * @description The SHA-256 of the registered public key (its DER SubjectPublicKeyInfo), 64 lower-case
+             *     hex digits.
+             */
+            public_key_sha256: string;
+            /**
+             * Format: date-time
+             * @description When it was registered.
+             */
+            registered_at: string;
+            /**
+             * @description The root CA certificate, PEM: the gateway's only trust anchor for the MQTT broker's
+             *     server certificate (services/certs/README.md, "閘道器對 broker 伺服器憑證的信任"). The
+             *     root CRL (Laysi/trustiot-v2#560) can join it here as a new field.
+             */
+            root_certificate: string;
+            /** @description The serial number of the initial certificate, lower-case hex. */
+            serial: string;
+            /** @description The name of the workstation that registered it. */
+            workstation: string;
+        };
         /**
          * @description How readings are grouped: `raw` (no grouping) or a bucket length.
          * @enum {string}
@@ -685,6 +750,36 @@ export interface components {
             type: "string";
             /** @description A text reading. */
             value: string;
+        };
+        /**
+         * @description The body of `POST /api/certs/v1/gateway-registrations` (factory registration, rebuild
+         *     checklist D1, decision 12). Unknown fields are refused. The request carries the workstation's
+         *     signature in the `trustiot-workstation-*` headers; see the certs service's README
+         *     ("出廠登錄").
+         */
+        RegisterGateway: {
+            /**
+             * @description A PKCS #10 certificate signing request from the gateway's TPM, PEM (`-----BEGIN
+             *     CERTIFICATE REQUEST-----`), at most 4096 bytes as DER, signed with ecdsa-with-SHA256 by
+             *     the TPM's ECDSA P-256 key. Its public key is registered and never changes; everything else
+             *     in it is ignored.
+             */
+            certificate_request: string;
+            /**
+             * @description The public part of the TPM's endorsement key, PEM (`-----BEGIN PUBLIC KEY-----`, an X.509
+             *     SubjectPublicKeyInfo of at most 2048 bytes as DER): RSA of 2048 to 4096 bits, or ECDSA
+             *     P-256 or P-384. The workstation reads and checks it before it calls; the service records
+             *     it to recognise the TPM.
+             */
+            endorsement_key: string;
+            /**
+             * @description The gateway's hardware ID, which becomes its identity everywhere: the common name of its
+             *     certificates, its MQTT username and the gateway segment of its topics. 1-64 ASCII
+             *     letters, digits, `.`, `_` or `-`, starting with a letter or digit. A hardware ID is
+             *     registered once and never reused, not even after it is decommissioned.
+             * @example gw-0042
+             */
+            hardware_id: string;
         };
         /**
          * @description A reason a workstation certificate can be revoked for: the RFC 5280 CRLReason codes that
@@ -1369,6 +1464,102 @@ export interface operations {
                 };
             };
             /** @description The database failed (`unavailable`). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    registerGateway: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description The workstation certificate, DER, standard base64 with padding. */
+                "trustiot-workstation-certificate": string;
+                /** @description When the workstation signed the request, Unix seconds; within 300 seconds of the service's clock. */
+                "trustiot-workstation-timestamp": string;
+                /** @description 22 to 64 base64url characters, never used twice with the same certificate. */
+                "trustiot-workstation-nonce": string;
+                /** @description ECDSA P-256 with SHA-256 by the workstation certificate's key over `trustiot-workstation-request-v1`, the method, the path, the timestamp, the nonce and the lower-case hex SHA-256 of the body, one per line; the DER signature in standard base64 with padding. */
+                "trustiot-workstation-signature": string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RegisterGateway"];
+            };
+        };
+        responses: {
+            /** @description The same hardware ID, public key and endorsement key were registered before: the first registration and its certificate. Nothing was signed or written. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GatewayRegistration"];
+                };
+            };
+            /** @description Registered: the gateway certificate was signed and recorded with the registration, and `certs.gateway_registered` was written. The certificate's subject is `CN=<hardware_id>`, its extended key usage client authentication only, valid for the configured gateway validity (default 90 days). */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GatewayRegistration"];
+                };
+            };
+            /** @description The `Content-Type` is not `application/json`, the body is larger than 16 KiB (`gateway_registration.body_too_large`), or it is not a JSON object (`gateway_registration.body_invalid`) (`invalid_request`). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No valid session (`unauthenticated`). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Not a platform administrator (`permission_denied`), or the workstation signature does not hold (`gateway_registration.workstation_refused`, `details.reason`: `missing`, `malformed`, `untrusted`, `expired`, `not_workstation`, `signature_invalid`, `stale`, `revoked` or `replayed`). */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The hardware ID is registered with another public key (`gateway_registration.public_key_mismatch`) or endorsement key (`gateway_registration.endorsement_key_mismatch`), or was decommissioned (`gateway_registration.decommissioned`); or another gateway has the public key (`gateway_registration.public_key_in_use`) or, active, the endorsement key (`gateway_registration.endorsement_key_in_use`) (`conflict`). Nothing was registered. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description An unknown or missing field, a hardware ID that breaks the gateway ID rule (`gateway_registration.hardware_id_invalid`), a certificate request that is not one PEM CSR (`gateway_registration.request_invalid`), not for ECDSA P-256 with ecdsa-with-SHA256 (`gateway_registration.request_unsupported`) or not signed by its own key (`gateway_registration.request_signature_invalid`), or an endorsement key that is not one PEM public key (`gateway_registration.endorsement_key_invalid`) or not RSA 2048/3072/4096 or ECDSA P-256/P-384 (`gateway_registration.endorsement_key_unsupported`) (`validation_failed`). Nothing was registered. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No issuing CA is loaded or can sign yet (`gateway_registration.ca_not_ready`), or the database failed (`unavailable`). Nothing was registered. */
             503: {
                 headers: {
                     [name: string]: unknown;

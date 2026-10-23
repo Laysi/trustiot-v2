@@ -1,6 +1,7 @@
 //! The certs service's Postgres schema as this release expects it: its migrations/postgres
-//! files in apply order (Laysi/trustiot-v2#402). It neither produces nor consumes outbox events,
-//! so its schema gets no outbox template.
+//! files in apply order (Laysi/trustiot-v2#402). Since the factory registration
+//! (Laysi/trustiot-v2#79) it produces outbox events (`certs.gateway_registered`, platform-wide),
+//! so its schema gets the outbox producer's tables and policies; it consumes none.
 //!
 //! Two crates compile this file: the service, whose readiness check
 //! ([`service_kit::migrations::MigrationCheck`]) keeps failing until the database has every
@@ -14,7 +15,7 @@ use service_kit::migrations::{Migration, Schema};
 /// What the certs service expects of its schema.
 pub const SCHEMA: Schema = Schema {
     service: "certs",
-    outbox_producer: false,
+    outbox_producer: true,
     migrations: &[
         Migration {
             name: "0001_certs.sql",
@@ -23,6 +24,10 @@ pub const SCHEMA: Schema = Schema {
         Migration {
             name: "0002_workstation_certificates.sql",
             sql: include_str!("../migrations/postgres/0002_workstation_certificates.sql"),
+        },
+        Migration {
+            name: "0003_gateway_registrations.sql",
+            sql: include_str!("../migrations/postgres/0003_gateway_registrations.sql"),
         },
     ],
 };

@@ -76,7 +76,9 @@ pub struct Platform {
     pub postgres_ca_file: PathBuf,
 }
 
-/// `database.*`: the service role (`certs_app`).
+/// `database.*`: the service role (`certs_app`), and the platform role (`certs_platform`), which
+/// the factory registration (Laysi/trustiot-v2#79) writes with, because only a producer's
+/// platform role may write platform-wide outbox events (crates/outbox).
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Database {
@@ -84,8 +86,13 @@ pub struct Database {
     pub username: String,
     /// `TRUSTIOT__DATABASE__PASSWORD`, from a Secret.
     pub password: String,
-    /// `TRUSTIOT__DATABASE__MAX_CONNECTIONS`: most connections of the pool per replica, from
-    /// [`MIN_DATABASE_CONNECTIONS`] to [`MAX_DATABASE_CONNECTIONS`]. Default 5.
+    /// `TRUSTIOT__DATABASE__PLATFORM_USERNAME`.
+    pub platform_username: String,
+    /// `TRUSTIOT__DATABASE__PLATFORM_PASSWORD`, from a Secret.
+    pub platform_password: String,
+    /// `TRUSTIOT__DATABASE__MAX_CONNECTIONS`: most connections of the service role's pool per
+    /// replica, from [`MIN_DATABASE_CONNECTIONS`] to [`MAX_DATABASE_CONNECTIONS`]. Default 5.
+    /// The platform role's pool has [`crate::REGISTRATION_CONNECTIONS`].
     #[serde(default = "default_max_connections")]
     pub max_connections: u32,
 }
@@ -94,11 +101,12 @@ const fn default_max_connections() -> u32 {
     5
 }
 
-/// Never prints the password.
+/// Never prints the passwords.
 impl fmt::Debug for Database {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Database")
             .field("username", &self.username)
+            .field("platform_username", &self.platform_username)
             .field("max_connections", &self.max_connections)
             .finish_non_exhaustive()
     }
@@ -252,14 +260,27 @@ impl Config {
     /// Where and how the service role connects.
     #[must_use]
     pub fn service_role(&self) -> PostgresConfig {
+        self.postgres(&self.database.username, &self.database.password)
+    }
+
+    /// Where and how the platform role connects.
+    #[must_use]
+    pub fn platform_role(&self) -> PostgresConfig {
+        self.postgres(
+            &self.database.platform_username,
+            &self.database.platform_password,
+        )
+    }
+
+    fn postgres(&self, username: &str, password: &str) -> PostgresConfig {
         PostgresConfig {
             host: self.platform.postgres_host.clone(),
             port: self.platform.postgres_port,
             database: self.platform.postgres_database.clone(),
             ssl_mode: self.platform.postgres_sslmode,
             ca_file: self.platform.postgres_ca_file.clone(),
-            username: self.database.username.clone(),
-            password: self.database.password.clone(),
+            username: username.to_owned(),
+            password: password.to_owned(),
         }
     }
 }
@@ -277,11 +298,28 @@ impl Validate for Config {
                 ),
             ));
         }
-        if database.username.trim().is_empty() {
-            return Err(Invalid::new("database.username", "must not be blank"));
+        for (key, username) in [
+            ("database.username", &database.username),
+            ("database.platform_username", &database.platform_username),
+        ] {
+            if username.trim().is_empty() {
+                return Err(Invalid::new(key, "must not be blank"));
+            }
         }
-        if database.password.is_empty() {
-            return Err(Invalid::new("database.password", "must not be empty"));
+        if database.username == database.platform_username {
+            return Err(Invalid::new(
+                "database.platform_username",
+                "must be another role than database.username: only the platform role may write \
+                 platform-wide events",
+            ));
+        }
+        for (key, password) in [
+            ("database.password", &database.password),
+            ("database.platform_password", &database.platform_password),
+        ] {
+            if password.is_empty() {
+                return Err(Invalid::new(key, "must not be empty"));
+            }
         }
         for (key, path) in [
             ("ca.keys_file", &self.ca.keys_file),
@@ -369,6 +407,8 @@ mod tests {
             database: Database {
                 username: "certs_app".to_owned(),
                 password: "secret-password".to_owned(),
+                platform_username: "certs_platform".to_owned(),
+                platform_password: "platform-secret".to_owned(),
                 max_connections: 5,
             },
             ca: CaFiles {
@@ -398,7 +438,7 @@ mod tests {
         };
         assert!(short.validate().is_ok());
 
-        let broken: [Breakage; 14] = [
+        let broken: [Breakage; 17] = [
             ("database.max_connections", |c| {
                 c.database.max_connections = 1
             }),
@@ -406,6 +446,15 @@ mod tests {
                 c.database.username = " ".to_owned()
             }),
             ("database.password", |c| c.database.password = String::new()),
+            ("database.platform_username", |c| {
+                c.database.platform_username = String::new()
+            }),
+            ("database.platform_username", |c| {
+                c.database.platform_username = "certs_app".to_owned()
+            }),
+            ("database.platform_password", |c| {
+                c.database.platform_password = String::new()
+            }),
             ("ca.keys_file", |c| {
                 c.ca.keys_file = PathBuf::from("keys.json")
             }),
@@ -447,7 +496,9 @@ mod tests {
     }
 
     #[test]
-    fn debug_hides_the_password() {
-        assert!(!format!("{:?}", config()).contains("secret-password"));
+    fn debug_hides_the_passwords() {
+        let printed = format!("{:?}", config());
+        assert!(!printed.contains("secret-password"));
+        assert!(!printed.contains("platform-secret"));
     }
 }

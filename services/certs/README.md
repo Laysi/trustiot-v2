@@ -6,13 +6,17 @@
 
 - 服務骨架：自己的 schema `certs`、服務角色、簽發紀錄與 CRL 兩張表（沒有租戶資料，見[資料庫](#資料庫)）。
 - CA 階層與私鑰保管（見下一節），以及根 CA 的離線儀式工具 `certs-ca`。
-- 從 CSR 簽閘道器憑證的程式（`src/issue.rs`）：只取 CSR 的公鑰，CN、EKU 與效期由 CA 決定。還沒有對外的簽發 API：出廠登錄（Laysi/trustiot-v2#79）與換發端點（Laysi/trustiot-v2#81）呼叫它，撤銷（Laysi/trustiot-v2#82）寫簽發紀錄的撤銷欄位。
+- 從 CSR 簽閘道器憑證的程式（`src/issue.rs`）：只取 CSR 的公鑰，CN、EKU 與效期由 CA 決定。出廠登錄（Laysi/trustiot-v2#79，已完成）與換發端點（Laysi/trustiot-v2#81）呼叫它，撤銷（Laysi/trustiot-v2#82）寫簽發紀錄的撤銷欄位。
 - CRL 依排程重發、到期前告警，以及給 broker 的 `crl.pem` 與 `ca.pem`。broker 怎麼取用它們見 [deploy/chart/README.md](../../deploy/chart/README.md) 的「MQTT broker」（Laysi/trustiot-v2#84）。
 
 Laysi/trustiot-v2#534（2026-10-22）加上：
 
 - 產線工作站憑證的 profile（broker 拒絕它），以及平台管理員簽發與撤銷它的 API（見[工作站憑證](#工作站憑證)）。這是 certs 第一個對外的 API。
 - 簽發 CA 有了第一張 CRL 才簽章（見[發簽發 CA 憑證](#發簽發-ca-憑證)第 5 步）。
+
+Laysi/trustiot-v2#79（2026-10-23）加上：
+
+- 出廠登錄 API（見[出廠登錄](#出廠登錄)）：產線工作站以工作站憑證簽請求、平台管理員登入，登錄閘道器的硬體 ID、TPM 金鑰與背書金鑰，取得第一張閘道器憑證；以平台角色 `certs_platform` 寫入，並發出全平台事件 `certs.gateway_registered`。certs 從此是事件的產生者。
 
 ## CA 階層與私鑰保管
 
@@ -248,9 +252,11 @@ Cloudflare Tunnel 在邊緣終止外層 TLS，登錄 API 拿不到工作站的 T
 1. 憑證由 `ca.pem` 裡的一個簽發 CA 簽發、鏈到根，現在在效期內。
 2. extendedKeyUsage **含**工作站用途。比對 OID 的 DER 內容（`issue::WORKSTATION_PURPOSE_DER`），不要比對文字：有些函式庫把超過 64 位元的弧印成十六進位。這是必要條件：閘道器憑證沒有這個用途，所以同一個簽發 CA 的閘道器憑證不能冒充工作站。
 3. 主體只有一個 CN，以 `workstation:` 開頭，之後是工作站名稱，寫進操作紀錄。
-4. keyUsage 有 digitalSignature，請求的簽章以憑證的公鑰驗證通過。簽的內容由 Laysi/trustiot-v2#79 決定，要綁定請求本身（方法、路徑、本文的雜湊與時間或 nonce），不能重送。
-5. 簽發紀錄有這個序號、`profile` 是 `workstation`、`revoked_at` 是 NULL。撤銷**立即**經由這一項生效；CRL 要等下一張排程的 CRL（見下面的「撤銷」）。登錄 API 不在 certs 服務裡時，經 certs 的內部 API 查（由 Laysi/trustiot-v2#79 定義），不直接讀這張表。
+4. keyUsage 有 digitalSignature，請求的簽章以憑證的公鑰驗證通過。簽的內容綁定請求本身（方法、路徑、本文的雜湊、時間與 nonce），不能重送；格式見[出廠登錄](#出廠登錄)的「工作站簽章」。
+5. 簽發紀錄有這個序號、`profile` 是 `workstation`、內容相同、`revoked_at` 是 NULL。撤銷**立即**經由這一項生效；CRL 要等下一張排程的 CRL（見下面的「撤銷」）。登錄 API 在 certs 服務裡，在登錄的交易中直接讀這張表。
 6. 呼叫者同時以平台管理員帳號登入（決策 12）。
+
+Laysi/trustiot-v2#79 照這個清單實作（`src/registrations.rs` 的 `verify_workstation` 與 `check_ledger`）。
 
 ### 簽發、撤銷與換發
 
@@ -303,6 +309,90 @@ curl -sS --fail-with-body -X POST "https://<app 主機>/api/certs/v1/workstation
 
 每次簽發與撤銷記一行 INFO（`issued a workstation certificate`、`revoked a workstation certificate`），欄位有平台管理員的使用者 id、序號、簽發 CA 的金鑰 id 與工作站名稱，不含 CSR 或憑證；被拒絕的請求記 INFO `refused: not a platform administrator, ...`。
 
+## 出廠登錄
+
+2026-10-23 決定（Laysi/trustiot-v2#79，重建清單 D1，決策 12）。產線工作站為每台閘道器登錄一次：硬體 ID、TPM 金鑰的公鑰（以 CSR 送來，同時證明持有私鑰）與 TPM 背書金鑰（EK）的公鑰，取得閘道器的第一張憑證（profile 見[閘道器憑證](#閘道器憑證)）。程式在 `src/registrations.rs`，請求與回應的型別是 `contract::certs::RegisterGateway`、`GatewayRegistration`。
+
+### 兩個身分，缺一不可
+
+| 身分 | 來源 | 少了它 |
+| --- | --- | --- |
+| 平台管理員（A2） | 入口 cookie 檢查簽出的內部身分 token，規則同[工作站憑證](#工作站憑證)的「簽發、撤銷與換發」：沒有或驗不過 401，不是平台管理員或 token 帶 `act` 時 403 | 什麼都不登錄 |
+| 產線工作站 | 請求以工作站憑證的私鑰簽章（下一節），憑證要通過「出廠登錄 API 可以依賴的欄位」的六項 | 403 `permission_denied`，鍵 `gateway_registration.workstation_refused`，`details.reason` 說明原因 |
+
+平台管理員怎麼來（2026-10-23 決定）：Laysi/trustiot-v2#103 的 email 一次性驗證碼登入已經上線，所以沒有 MS1 專用的過渡做法。平台管理員帳號照 [services/identity/README.md](../../services/identity/README.md) 以擁有者角色寫入 `users`（`platform_admin = true`），正式建立流程在 Laysi/trustiot-v2#104；管理員在工作站上登入，取得 session cookie，請求經入口換成內部身分 token。工作站沒有自己的帳號，它的身分只來自工作站憑證。
+
+工作站被拒時回 403 而不是 401：401 會讓前端當成 session 過期而要求重新登入，但問題在工作站，不在管理員的 session。`details.reason` 是 `missing`（少了標頭）、`malformed`（標頭重複或格式錯）、`untrusted`（不是載入的簽發 CA 簽的，或簽發紀錄沒有這張、內容不同）、`expired`、`not_workstation`（例如閘道器憑證）、`signature_invalid`、`stale`（時間差超過 5 分鐘）、`revoked`、`replayed`（nonce 用過）。
+
+### 工作站簽章
+
+Cloudflare 與 mesh 在服務之前終止 TLS，用戶端憑證到不了服務，所以由工作站簽請求。四個標頭各一個：
+
+| 標頭 | 值 |
+| --- | --- |
+| `trustiot-workstation-certificate` | 工作站憑證，DER 的標準 base64（含 padding） |
+| `trustiot-workstation-timestamp` | 簽章時間，Unix 秒，只有十進位數字；與服務的時鐘差不超過 300 秒 |
+| `trustiot-workstation-nonce` | 22 到 64 個 base64url 字元，同一張憑證永不重複，例如 16 bytes 亂數的 base64url（不含 padding） |
+| `trustiot-workstation-signature` | ECDSA P-256、SHA-256 的簽章（DER），標準 base64 |
+
+簽的內容是下面六行，以 `\n` 分隔、最後沒有換行（`contract::certs::workstation_signing_input`）：`trustiot-workstation-request-v1`、方法（`POST`）、路徑與查詢字串（`/api/certs/v1/gateway-registrations`）、時間、nonce、本文 bytes 的 SHA-256（小寫十六進位）。簽章因此綁定這一個請求：換本文、路徑或時間都驗不過；完全相同的請求再送一次，nonce 已經記在資料庫（`certs.workstation_request_nonces`，過了時間的接受範圍就刪除），回 `replayed`。工作站的時鐘要校時。
+
+在 Laysi/trustiot-v2#80 的工作站工具之前，可以這樣簽（`registration.json` 是要送的本文，送出時要是同一份 bytes）：
+
+```sh
+ts=$(date +%s)
+nonce=$(openssl rand 16 | openssl base64 -A | tr '+/' '-_' | tr -d '=')
+digest=$(openssl dgst -sha256 -r registration.json | cut -d' ' -f1)
+printf 'trustiot-workstation-request-v1\nPOST\n/api/certs/v1/gateway-registrations\n%s\n%s\n%s' \
+  "$ts" "$nonce" "$digest" \
+  | openssl dgst -sha256 -sign workstation-key.pem | openssl base64 -A > signature.b64
+openssl x509 -in workstation.pem -outform DER | openssl base64 -A > certificate.b64
+curl -sS --fail-with-body -X POST "https://<app 主機>/api/certs/v1/gateway-registrations" \
+  -H 'content-type: application/json' --cookie "__Host-trustiot-session=$SESSION" \
+  -H "trustiot-workstation-certificate: $(cat certificate.b64)" \
+  -H "trustiot-workstation-timestamp: $ts" -H "trustiot-workstation-nonce: $nonce" \
+  -H "trustiot-workstation-signature: $(cat signature.b64)" \
+  --data-binary @registration.json
+```
+
+### 請求與回應
+
+本文是 JSON 物件，三個欄位都必填，不認得的欄位拒絕：
+
+| 欄位 | 值 |
+| --- | --- |
+| `hardware_id` | 閘道器的 ID，也是它憑證的 CN 與 MQTT 身分：1 到 64 個 ASCII 英數字、`.`、`_`、`-`，以英數字開頭（`protocol::GatewayId`） |
+| `certificate_request` | 閘道器在 TPM 裡產生的金鑰的 CSR，PEM；規則同閘道器憑證（ECDSA P-256、ecdsa-with-SHA256、DER 不超過 4096 bytes），CSR 的主體與延伸欄位一律忽略 |
+| `endorsement_key` | TPM 背書金鑰的公鑰，PEM `PUBLIC KEY`（SubjectPublicKeyInfo），DER 不超過 2048 bytes：RSA 2048、3072 或 4096 位元，或 ECDSA P-256、P-384（TPM 2.0 的 EK 範本） |
+
+| 情況 | 回應 |
+| --- | --- |
+| 新的硬體 ID | 201：簽出閘道器憑證、寫進簽發紀錄、寫入登錄，並寫一筆 `certs.gateway_registered` 事件，全在平台角色的同一個交易裡 |
+| 同一個硬體 ID、同一把公鑰與 EK 再登錄 | 200：第一次的登錄與同一張憑證；除了 nonce 什麼都不寫，不簽新憑證、不發事件。工作站沒收到回應而重送時就是這樣 |
+| 同一個硬體 ID、不同的公鑰或 EK | 409 `conflict`，`gateway_registration.public_key_mismatch` 或 `endorsement_key_mismatch` |
+| 已除役的硬體 ID | 409，`gateway_registration.decommissioned`；硬體 ID 永不重複使用 |
+| 新的硬體 ID，公鑰已經登錄過，或 EK 屬於一台使用中的閘道器 | 409，`gateway_registration.public_key_in_use` 或 `endorsement_key_in_use` |
+| 兩個相同的新登錄同時到達 | 一個 201、一個 200，只有一張憑證與一筆事件（第二個的寫入撞到唯一鍵，交易整個回滾，重試一次就看到第一個的結果） |
+
+回應的欄位：`hardware_id`、`public_key_sha256`、`endorsement_key_sha256`（DER 的 SHA-256，小寫十六進位）、`workstation`（登錄它的工作站名稱）、`registered_at`、`serial`、`ca_key_id`、`not_before`、`not_after`、PEM 的 `certificate`，以及 PEM 的 `root_certificate`（根 CA 憑證，閘道器驗 broker 伺服器憑證的唯一信任錨，見[閘道器對 broker 伺服器憑證的信任](#閘道器對-broker-伺服器憑證的信任)；新登錄與重送都回目前的根憑證）。根 CRL（Laysi/trustiot-v2#560）實作後，可以在這個回應加一個欄位一起交給閘道器。
+
+其他錯誤照 M1 格式、依序檢查：`Content-Type` 不是 JSON、本文超過 16 KiB 或不是 JSON 物件 400（`gateway_registration.body_too_large`、`body_invalid`）；還沒載入簽發 CA、無法檢查工作站時 503（`gateway_registration.ca_not_ready`）；工作站被拒 403；欄位問題 422，`field_errors` 指出每一個（鍵 `gateway_registration.unknown_field`、`field_required`、`hardware_id_invalid`、`request_invalid`、`request_unsupported`、`request_signature_invalid`、`endorsement_key_invalid`、`endorsement_key_unsupported`）；現在沒有能簽章的簽發 CA 或資料庫失敗 503，什麼都沒登錄。所有回應帶 `cache-control: no-store`。
+
+### 規則與取捨
+
+- **硬體 ID 永不重複使用**，除役後也一樣：它是憑證的 CN、MQTT 使用者名稱與事件的 aggregate id，重用會讓舊憑證、舊紀錄與新裝置混在一起。換主機板或 TPM 就是一台新的閘道器、新的硬體 ID。登錄的列不能刪除或改寫，對所有角色都一樣（trigger `gateway_registrations_guard`，見[資料庫](#資料庫)）；唯一能做的改變是設定一次 `decommissioned_at`，除役 API 是 Laysi/trustiot-v2#115。
+- **公鑰永不登錄兩次**；**EK 只在使用中的閘道器之間唯一**：除役閘道器的 TPM 可以用新的硬體 ID 再登錄。
+- **重送回原本的憑證**：即使那張憑證之後被撤銷或過期，重送仍回同一筆登錄與同一張憑證；新憑證走換發（Laysi/trustiot-v2#81），不走登錄。
+- **EK 只記錄、比對，不驗證**：服務檢查 EK 的格式與演算法，但不驗證 TPM 製造商的 EK 憑證鏈，也不做 TPM 的 credential activation；信任來自產線工作站與平台管理員兩個身分。要證明 CSR 的金鑰真的在那顆 TPM 裡，是之後的工作。
+- **撤銷與登錄不會交錯**：登錄從讀工作站的簽發紀錄到 commit 都持有那張憑證的共享 advisory lock（`issue::LOCK_WORKSTATION_SHARED`），撤銷工作站憑證先取它的排他鎖。所以先 commit 的撤銷一定被登錄讀到；已經讀到「有效」的登錄，會在撤銷之前 commit。用 advisory lock 而不是列鎖，是因為列鎖需要平台角色沒有的 `UPDATE` 權限。
+- **readiness 不看平台角色**：平台角色的連線池（每個副本最多 4 條）是 lazy 的，登不進去時只有登錄回 503，CRL 與 `ca.pem` 照常提供給 broker。
+
+### 事件與紀錄
+
+`certs.gateway_registered`（`contract::events::certs::GatewayRegistered`，版本 1）：全平台事件（`tenant_id` 是 null），aggregate 是 `gateway_registration`、id 是硬體 ID，actor 是平台管理員；payload 有 `hardware_id`、`public_key_sha256`、`endorsement_key_sha256`、`certificate_serial`、`workstation`。只有產生者的平台角色能寫全平台事件，所以登錄整個以 `certs_platform` 執行。身分服務的事件紀錄消費它，記在全平台的事件紀錄（`services/identity/README.md`）。之後的 Laysi/trustiot-v2#115 等以它建立閘道器的資產。
+
+每次新登錄記一行 INFO `registered a gateway`（平台管理員的使用者 id、工作站、硬體 ID、序號、簽發 CA 的金鑰 id、到期時間），重送記 `a gateway registration repeated an existing one`，工作站被拒記 `refused a gateway registration: ...` 與原因；都不含 CSR、金鑰或憑證。平台角色的每個交易另有 service-kit 的 `platform database access`（用途 `gateway-registration`）。
+
 ## CRL 與告警
 
 `src/crl.rs`、`src/monitor.rs`（驗收條件 2）：
@@ -334,6 +424,7 @@ curl -sS --fail-with-body -X POST "https://<app 主機>/api/certs/v1/workstation
 | --- | --- |
 | `POST /api/certs/v1/workstation-certificates` | 201，簽出並記錄的工作站憑證 |
 | `POST /api/certs/v1/workstation-certificates/{serial}/revoke` | 200，撤銷後的紀錄 |
+| `POST /api/certs/v1/gateway-registrations` | 201 新登錄、200 重送，登錄紀錄與閘道器憑證；另外要工作站的簽章（[出廠登錄](#出廠登錄)，`src/registrations.rs`） |
 
 規格在 `api/openapi.json`（`tools/openapi` 的 `SERVICES`；`/internal` 的端點不在其中），請求與回應的型別在 `crates/contract` 的 `certs` 模組。
 
@@ -346,7 +437,8 @@ curl -sS --fail-with-body -X POST "https://<app 主機>/api/certs/v1/workstation
 | `TRUSTIOT_POSTGRES_HOST`、`_PORT`、`_DATABASE`、`_SSLMODE`、`_CA_FILE` | 平台設定：Postgres 位置；只接受 `verify-full`，`_CA_FILE` 必填 |
 | `TRUSTIOT_INTERNAL_IDENTITY_KEYS_FILE` | 平台設定：身分服務的公鑰（JWK Set），驗內部身分 token 用；chart 在身分服務啟用時設定，檔案變更時不必重啟就重讀。沒有這個變數時服務不啟動 |
 | `TRUSTIOT__DATABASE__USERNAME`、`TRUSTIOT__DATABASE__PASSWORD` | 服務角色 `certs_app` 的帳密：密碼來自 Secret `<release>-certs-password` 的 `certs_app` key |
-| `TRUSTIOT__DATABASE__MAX_CONNECTIONS` | 每個副本的連線上限，2–100，預設 5 |
+| `TRUSTIOT__DATABASE__PLATFORM_USERNAME`、`TRUSTIOT__DATABASE__PLATFORM_PASSWORD` | 平台角色 `certs_platform` 的帳密（出廠登錄寫全平台事件用）：密碼來自同一個 Secret 的 `certs_platform` key；帳號不能和服務角色相同，密碼不能是空的 |
+| `TRUSTIOT__DATABASE__MAX_CONNECTIONS` | 每個副本服務角色的連線上限，2–100，預設 5；平台角色另有最多 4 條 |
 | `TRUSTIOT__CA__KEYS_FILE` | 簽發 CA 金鑰檔；chart 設成 `/etc/trustiot/certs-ca-keys/issuing-ca-keys.json` |
 | `TRUSTIOT__CA__ROOT_CERTIFICATE_FILE` | 根憑證；chart 設成 `/etc/trustiot/certs-ca/root.pem` |
 | `TRUSTIOT__CA__CERTIFICATES_FILE` | 簽發 CA 憑證；chart 設成 `/etc/trustiot/certs-ca/issuing.pem` |
@@ -362,12 +454,13 @@ curl -sS --fail-with-body -X POST "https://<app 主機>/api/certs/v1/workstation
 
 ## 資料庫
 
-schema `certs`，DDL 在 `migrations/postgres/`，由 migration Job（登記在 `tools/migrate/src/registry.rs` 的 `PRODUCT`；不產生也不消費事件）以 migration 角色套用。檔案清單在 `src/schema.rs`，Job 與服務的 readiness 編譯同一份。
+schema `certs`，DDL 在 `migrations/postgres/`，由 migration Job（登記在 `tools/migrate/src/registry.rs` 的 `PRODUCT`；從 Laysi/trustiot-v2#79 起產生事件、有平台角色，不消費事件）以 migration 角色套用。outbox 的表（`outbox_event`、`outbox_aggregate` 等）與它們的租戶政策由 Job 依 `crates/outbox` 建立，同每個產生者。檔案清單在 `src/schema.rs`，Job 與服務的 readiness 編譯同一份。
 
 | 角色 | 權限 |
 | --- | --- |
 | `certs_owner`（migration 角色） | 擁有 schema 與所有表 |
-| `certs_app`（服務角色） | `issued_certificates` 的 `SELECT`、`INSERT`，以及只限 `revoked_at`、`revocation_reason` 兩欄的 `UPDATE`（`0002_workstation_certificates.sql`，Laysi/trustiot-v2#534；閘道器的撤銷 Laysi/trustiot-v2#82 沿用），改不了簽出的內容、也不能刪除；`crls` 的 `SELECT`、`INSERT`、`UPDATE` |
+| `certs_app`（服務角色） | `issued_certificates` 的 `SELECT`、`INSERT`，以及只限 `revoked_at`、`revocation_reason` 兩欄的 `UPDATE`（`0002_workstation_certificates.sql`，Laysi/trustiot-v2#534；閘道器的撤銷 Laysi/trustiot-v2#82 沿用），改不了簽出的內容、也不能刪除；`crls` 的 `SELECT`、`INSERT`、`UPDATE`；登錄的兩張表完全碰不到 |
+| `certs_platform`（平台角色，Laysi/trustiot-v2#79） | `0003_gateway_registrations.sql`：`crls` 的 `SELECT`；`issued_certificates` 與 `gateway_registrations` 的 `SELECT`、`INSERT`；`workstation_request_nonces` 的 `SELECT`、`INSERT`、`DELETE`；outbox 的寫入（Job 授予每個產生者的平台角色）。沒有任何 `UPDATE` |
 
 撤銷是最終的，對所有角色都一樣，包括擁有者與 superuser：`0002_workstation_certificates.sql` 的 trigger `issued_certificates_guard` 在每次 `UPDATE` 前檢查兩件事。一是撤銷過的列不能再改：不能收回撤銷、改撤銷時間或原因，否則有問題或被入侵的服務能讓憑證從下一張 CRL 消失。二是 `UPDATE` 只能改撤銷的兩欄：欄位權限已經這樣限制服務角色，trigger 再擋下擁有者與 superuser；它比對撤銷兩欄以外的整列，所以之後新增的欄位也不能改，除非新的 migration 另外處理。違反時錯誤是 SQLSTATE 42501（`insufficient_privilege`），訊息寫明序號。服務撤銷時只更新 `revoked_at IS NULL` 的列，不會碰到 trigger；trigger 只有擁有者能停用（`ALTER TABLE`），只有 superuser 能略過（`session_replication_role`）。
 
@@ -375,6 +468,8 @@ schema `certs`，DDL 在 `migrations/postgres/`，由 migration Job（登記在 
 | --- | --- | --- |
 | `issued_certificates` | 每張簽出的憑證：序號（主鍵）、簽發 CA 的金鑰 id、profile（`gateway` 或 `workstation`）、CN、效期、簽發時間、DER，撤銷時間與原因 | 無：不是租戶資料。閘道器憑證屬於閘道器，閘道器屬於哪個租戶是登錄（Laysi/trustiot-v2#79）與資產服務的紀錄；產線工作站屬於平台，不屬於租戶；之後在這裡存租戶 id 時要改成租戶表 |
 | `crls` | 每個簽發 CA 目前的 CRL：金鑰 id（主鍵）、CRL 編號、thisUpdate、nextUpdate、DER | 無：公開資料 |
+| `gateway_registrations` | 每台登錄的閘道器：硬體 ID（主鍵）、TPM 金鑰的公鑰（唯一）、EK 與它的 SHA-256（使用中的列之間唯一）、第一張憑證的序號、登錄的工作站與它的憑證序號、平台管理員、登錄時間、除役時間。trigger 讓所有角色（含擁有者與 superuser）都不能刪除、清空或改寫，只能把 `decommissioned_at` 從 NULL 設定一次，違反時 SQLSTATE 42501 | 無：閘道器出廠時不屬於任何租戶，之後由資產服務指派 |
+| `workstation_request_nonces` | 工作站請求用過的 nonce：憑證序號、nonce、過期時間；過了時間的接受範圍才刪除 | 無 |
 | `trustiot_migrate_applied` | migration Job 套用過的檔案，`certs_app` 只能 `SELECT` | 無 |
 
 這裡不存任何私鑰：簽發 CA 私鑰在 Secret，根私鑰離線，閘道器的私鑰不離開 TPM，工作站的私鑰不離開工作站。
@@ -391,7 +486,7 @@ schema `certs`，DDL 在 `migrations/postgres/`，由 migration Job（登記在 
 CARGO_BUILD_JOBS=2 cargo test -p certs
 ```
 
-標註需要容器的測試以 `testkit::product` 起一個帶 TLS 的暫時 Postgres（podman 或 docker），由 migration Job 的程式套用整個產品的 schema，再以 `certs_app` 啟動真的 binary；沒有容器時略過，設了 `CI` 時改為失敗。
+標註需要容器的測試以 `testkit::product` 起一個帶 TLS 的暫時 Postgres（podman 或 docker），由 migration Job 的程式套用整個產品的 schema，再以 `certs_app`（與平台角色 `certs_platform`）啟動真的 binary；沒有容器時略過，設了 `CI` 時改為失敗。
 
 | 測試 | 驗證 |
 | --- | --- |
@@ -399,7 +494,8 @@ CARGO_BUILD_JOBS=2 cargo test -p certs
 | `tests/crl.rs` | 驗收條件 2：CRL 的內容，以及 TLS 伺服器依它拒絕撤銷的憑證、CRL 過期後拒絕全部；新 CRL 的 nextUpdate 減 thisUpdate 是 `crl.validity` 加往前的 5 分鐘；真的服務依排程為每個簽發 CA 重發 CRL 並由 `crl.pem` 發布；以 superuser 拿住工作鎖、把 nextUpdate 調近時 `certs.crl.expiring` 經 OTLP 變成 1 並記 ERROR，放開後工作重發、指標回到 0（容器） |
 | `tests/key_custody.rs` | 驗收條件 3：程式檢查，只有列出並說明理由的位置能把私鑰變成位元組或文字；執行時，日誌開到 `trace`、開 OTLP、有等待中的金鑰、重讀與兩種壞掉的金鑰檔，日誌、端點（含簽發工作站憑證的回應）與遙測都不含私鑰的任何片段（PKCS#8 涵蓋私鑰純量的任 24 個 base64 字元，其餘部分是演算法與公鑰，簽發 CA 憑證本來就公開；私鑰純量的十六進位、base64 與十進位位元組）（容器） |
 | `tests/ceremony.rs` | 真的 `certs-ca`：`root create` 的私鑰只到 stdout、`root sign` 只從 stdin 讀、簽出的簽發 CA 服務接受並印出金鑰 id、`root check` 認得自己的私鑰；別的私鑰、P-256 私鑰、根的名稱、0 天、已存在的輸出檔都拒絕，且不印出私鑰；真的服務在儀式前就緒、`certs.ca.signing` 是 0、每次檢查記 WARN 與等待中的金鑰 id，掛上憑證後不重啟就變成 1 並發出第一張 CRL（容器） |
-| `tests/cross_tenant.rs` | [crates/testkit](../../crates/testkit/README.md) 的覆蓋檢查：服務角色碰得到的每張表、規格裡的每個端點都要宣告；這裡的表都不是租戶資料、工作站憑證的兩個端點只給平台管理員，都豁免，並以 `without_tenant_data` 說明理由（容器） |
+| `tests/cross_tenant.rs` | [crates/testkit](../../crates/testkit/README.md) 的覆蓋檢查：服務角色碰得到的每張表、規格裡的每個端點都要宣告；CA 的表都不是租戶資料而豁免，outbox 的兩張表照租戶表探測（服務角色寫不了別的租戶的事件），登錄的表服務角色碰不到；工作站憑證的兩個端點與出廠登錄只給平台管理員，豁免並說明理由（容器） |
+| `tests/registration.rs` | Laysi/trustiot-v2#79：工作站簽章只接受工作站憑證，閘道器憑證、別的 CA、別的金鑰、別的本文或路徑、超過 300 秒的時間、過期的憑證、缺少、重複或格式錯的標頭都拒絕並說明原因；EK 只接受 RSA 2048/3072/4096 與 P-256、P-384。真的服務：新的硬體 ID 201、憑證 CN 是硬體 ID 且在根之下驗證為用戶端憑證、寫一筆全平台事件；重送 200 同一張憑證、什麼都不寫；完全相同的請求重送回 `replayed`；換公鑰或 EK 409，別台的公鑰或 EK 409，不支援的 EK 422；少了工作站簽章、沒有 token、別的簽發者、租戶管理員、交換來的 token、別的金鑰或本文、以閘道器憑證冒充工作站，都不登錄；兩個相同的登錄同時到達只簽一張；除役的硬體 ID 409，superuser 也刪不掉、清不掉、改不了；`certs_app` 讀不到登錄；撤銷的工作站憑證 403 `revoked`（容器） |
 | `tests/workstation.rs` | Laysi/trustiot-v2#534：CSR 要求別的 CN、O、SAN、CA、keyUsage 與 clientAuth、serverAuth、anyExtendedKeyUsage 時，簽出的仍是 CA 決定的工作站 profile（EKU 只有工作站用途），rustls 驗用戶端憑證時接受閘道器憑證、拒絕工作站憑證；簽章驗不過、主體改過或 P-384 的 CSR 拒絕；沒有 token、不是 token、別的金鑰簽的、別的 audience、過期的 token 回 401，租戶管理員、沒有租戶的使用者與代使用者交換來的平台管理員 token 回 403，簽發與撤銷都一樣，而且簽發紀錄不變；壞的 CSR、不認得的欄位與錯的 Content-Type 不簽發；閘道器憑證、不存在或格式錯的序號撤銷回 404，撤銷寫入原因並記 INFO，重複撤銷回 409，下一張排程 CRL 列出它與原因；Mosquitto（OpenSSL）以 `ca.pem` 與 `crl.pem` 驗用戶端憑證時接受閘道器憑證，拒絕撤銷的閘道器憑證與 API 簽出的工作站憑證（容器） |
 
 chart 的部分（Secret、Role、掛載、values 的檢查）在 `deploy/chart/tests/chart.test.ts` 的 “gateway certificate authority”，init container 對假的 Kubernetes API 的行為在 `tools/migrate/tests/ca_keys.rs`，金鑰檔的格式與規則在 `crates/ca-keys` 的單元測試。
