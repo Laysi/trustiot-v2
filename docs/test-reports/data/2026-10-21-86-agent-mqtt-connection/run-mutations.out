@@ -1,0 +1,326 @@
+rustc: rustc 1.99.0 (b940084d7 2026-09-28)
+cargo: cargo 1.99.0 (5f94df478 2026-08-27)
+base commit: 1aab6b8
+
+## baseline (no mutation)
+### baseline: acceptance criterion command
+$ cargo check --workspace --all-targets --locked
+exit code: 0
+
+### baseline: ci.yml rust job, clippy step
+$ cargo clippy --workspace --all-targets --locked -- -D warnings
+exit code: 0
+
+## mutation m1-contract-claims-exp-type
+ crates/contract/src/identity.rs | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+### changed crate on its own: contract
+$ cargo check --package contract --all-targets --locked
+exit code: 0
+
+### ci.yml rust job, clippy step
+$ cargo clippy --workspace --all-targets --locked -- -D warnings
+exit code: 101
+error[E0308]: mismatched types
+   --> crates/service-kit/src/identity/token.rs:118:43
+   --> /rustc/b940084d7eb6a299eb4bfeb8e34901bc051e7ac4/library/core/src/num/uint_macros.rs:1086:21
+   --> /rustc/b940084d7eb6a299eb4bfeb8e34901bc051e7ac4/library/core/src/num/mod.rs:1322:4
+error[E0308]: mismatched types
+   --> crates/service-kit/src/identity/token.rs:119:66
+error[E0308]: mismatched types
+   --> crates/service-kit/src/identity/token.rs:123:41
+   --> /rustc/b940084d7eb6a299eb4bfeb8e34901bc051e7ac4/library/core/src/num/uint_macros.rs:2495:21
+   --> /rustc/b940084d7eb6a299eb4bfeb8e34901bc051e7ac4/library/core/src/num/mod.rs:1322:4
+error[E0308]: mismatched types
+   --> crates/service-kit/src/identity/token.rs:123:15
+error: could not compile `service-kit` (lib) due to 4 previous errors
+warning: build failed, waiting for other jobs to finish...
+error: could not compile `service-kit` (lib test) due to 4 previous errors
+
+### acceptance criterion command
+$ cargo check --workspace --all-targets --locked
+exit code: 101
+error[E0308]: mismatched types
+   --> crates/service-kit/src/identity/token.rs:118:43
+   --> /rustc/b940084d7eb6a299eb4bfeb8e34901bc051e7ac4/library/core/src/num/uint_macros.rs:1086:21
+   --> /rustc/b940084d7eb6a299eb4bfeb8e34901bc051e7ac4/library/core/src/num/mod.rs:1322:4
+error[E0308]: mismatched types
+   --> crates/service-kit/src/identity/token.rs:119:66
+error[E0308]: mismatched types
+   --> crates/service-kit/src/identity/token.rs:123:41
+   --> /rustc/b940084d7eb6a299eb4bfeb8e34901bc051e7ac4/library/core/src/num/uint_macros.rs:2495:21
+   --> /rustc/b940084d7eb6a299eb4bfeb8e34901bc051e7ac4/library/core/src/num/mod.rs:1322:4
+error[E0308]: mismatched types
+   --> crates/service-kit/src/identity/token.rs:123:15
+error: could not compile `service-kit` (lib) due to 4 previous errors
+warning: build failed, waiting for other jobs to finish...
+error: could not compile `service-kit` (lib test) due to 4 previous errors
+
+### acceptance criterion command with --keep-going (lists every failing crate)
+$ cargo check --workspace --all-targets --locked --keep-going
+exit code: 101
+error[E0308]: mismatched types
+   --> crates/service-kit/src/identity/token.rs:118:43
+   --> /rustc/b940084d7eb6a299eb4bfeb8e34901bc051e7ac4/library/core/src/num/uint_macros.rs:1086:21
+   --> /rustc/b940084d7eb6a299eb4bfeb8e34901bc051e7ac4/library/core/src/num/mod.rs:1322:4
+error[E0308]: mismatched types
+   --> crates/service-kit/src/identity/token.rs:119:66
+error[E0308]: mismatched types
+   --> crates/service-kit/src/identity/token.rs:123:41
+   --> /rustc/b940084d7eb6a299eb4bfeb8e34901bc051e7ac4/library/core/src/num/uint_macros.rs:2495:21
+   --> /rustc/b940084d7eb6a299eb4bfeb8e34901bc051e7ac4/library/core/src/num/mod.rs:1322:4
+error[E0308]: mismatched types
+   --> crates/service-kit/src/identity/token.rs:123:15
+error: could not compile `service-kit` (lib) due to 4 previous errors
+warning: build failed, waiting for other jobs to finish...
+error: could not compile `service-kit` (lib test) due to 4 previous errors
+
+## mutation m2-contract-envelope-tenant-rename
+ crates/contract/src/event.rs    | 5 +++--
+ crates/contract/tests/events.rs | 2 +-
+ 2 files changed, 4 insertions(+), 3 deletions(-)
+
+### changed crate on its own: contract
+$ cargo check --package contract --all-targets --locked
+exit code: 101
+error[E0609]: no field `tenant_id` on type `EventEnvelope`
+   --> crates/contract/tests/events.rs:163:25
+error: could not compile `contract` (test "events") due to 1 previous error
+
+### ci.yml rust job, clippy step
+$ cargo clippy --workspace --all-targets --locked -- -D warnings
+exit code: 101
+error[E0609]: no field `tenant_id` on type `contract::EventEnvelope`
+   --> crates/contract/tests/events.rs:163:25
+error: could not compile `contract` (test "events") due to 1 previous error
+warning: build failed, waiting for other jobs to finish...
+
+### acceptance criterion command
+$ cargo check --workspace --all-targets --locked
+exit code: 101
+error[E0609]: no field `tenant_id` on type `EventEnvelope`
+   --> crates/contract/tests/events.rs:163:25
+error: could not compile `contract` (test "events") due to 1 previous error
+warning: build failed, waiting for other jobs to finish...
+
+### acceptance criterion command with --keep-going (lists every failing crate)
+$ cargo check --workspace --all-targets --locked --keep-going
+exit code: 101
+error[E0609]: no field `tenant_id` on type `EventEnvelope`
+    --> crates/outbox/src/consumer.rs:1112:25
+error[E0609]: no field `tenant_id` on type `&EventEnvelope`
+  --> crates/outbox/src/producer.rs:75:27
+error[E0609]: no field `tenant_id` on type `EventEnvelope`
+   --> crates/outbox/src/consumer.rs:234:23
+error: could not compile `outbox` (lib) due to 3 previous errors
+warning: build failed, waiting for other jobs to finish...
+error: could not compile `outbox` (lib test) due to 3 previous errors
+error[E0609]: no field `tenant_id` on type `EventEnvelope`
+   --> crates/contract/tests/events.rs:163:25
+error: could not compile `contract` (test "events") due to 1 previous error
+
+## mutation m3-contract-error-code-timeout-removed
+ crates/contract/src/client.rs   | 13 ++++++-------
+ crates/contract/src/error.rs    | 13 +++----------
+ crates/contract/tests/client.rs |  8 ++++----
+ 3 files changed, 13 insertions(+), 21 deletions(-)
+
+### changed crate on its own: contract
+$ cargo check --package contract --all-targets --locked
+exit code: 0
+
+### ci.yml rust job, clippy step
+$ cargo clippy --workspace --all-targets --locked -- -D warnings
+exit code: 101
+error[E0599]: no variant, associated function, or constant named `Timeout` found for enum `contract::ErrorCode` in the current scope
+   --> crates/service-kit/src/http.rs:127:55
+error: could not compile `service-kit` (lib) due to 1 previous error
+warning: build failed, waiting for other jobs to finish...
+error: could not compile `service-kit` (lib test) due to 1 previous error
+
+### acceptance criterion command
+$ cargo check --workspace --all-targets --locked
+exit code: 101
+error[E0599]: no variant, associated function, or constant named `Timeout` found for enum `ErrorCode` in the current scope
+   --> crates/service-kit/src/http.rs:127:55
+error: could not compile `service-kit` (lib) due to 1 previous error
+warning: build failed, waiting for other jobs to finish...
+error: could not compile `service-kit` (lib test) due to 1 previous error
+
+### acceptance criterion command with --keep-going (lists every failing crate)
+$ cargo check --workspace --all-targets --locked --keep-going
+exit code: 101
+error[E0599]: no variant, associated function, or constant named `Timeout` found for enum `ErrorCode` in the current scope
+   --> crates/service-kit/src/http.rs:127:55
+error: could not compile `service-kit` (lib) due to 1 previous error
+warning: build failed, waiting for other jobs to finish...
+error: could not compile `service-kit` (lib test) due to 1 previous error
+
+## mutation m4-contract-tenant-role-admin-renamed
+ crates/contract/src/identity.rs | 13 +++++++------
+ 1 file changed, 7 insertions(+), 6 deletions(-)
+
+### changed crate on its own: contract
+$ cargo check --package contract --all-targets --locked
+exit code: 0
+
+### ci.yml rust job, clippy step
+$ cargo clippy --workspace --all-targets --locked -- -D warnings
+exit code: 101
+error[E0599]: no variant, associated function, or constant named `Admin` found for enum `contract::TenantRole` in the current scope
+   --> services/identity/src/session.rs:574:35
+error: could not compile `identity` (lib) due to 1 previous error
+warning: build failed, waiting for other jobs to finish...
+
+### acceptance criterion command
+$ cargo check --workspace --all-targets --locked
+exit code: 101
+error[E0599]: no variant, associated function, or constant named `Admin` found for enum `TenantRole` in the current scope
+   --> services/identity/src/session.rs:574:35
+error: could not compile `identity` (lib) due to 1 previous error
+warning: build failed, waiting for other jobs to finish...
+error[E0599]: no variant, associated function, or constant named `Admin` found for enum `TenantRole` in the current scope
+   --> crates/testkit/src/isolation.rs:265:31
+error: could not compile `testkit` (lib) due to 1 previous error
+
+### acceptance criterion command with --keep-going (lists every failing crate)
+$ cargo check --workspace --all-targets --locked --keep-going
+exit code: 101
+error[E0599]: no variant, associated function, or constant named `Admin` found for enum `TenantRole` in the current scope
+   --> crates/testkit/src/isolation.rs:265:31
+error[E0599]: no variant, associated function, or constant named `Admin` found for enum `TenantRole` in the current scope
+   --> services/identity/src/session.rs:574:35
+error[E0599]: no variant, associated function, or constant named `Admin` found for enum `contract::TenantRole` in the current scope
+   --> crates/testkit/src/identity.rs:167:82
+error[E0599]: no variant, associated function, or constant named `Admin` found for enum `contract::TenantRole` in the current scope
+   --> crates/testkit/src/isolation.rs:265:31
+error: could not compile `testkit` (lib) due to 1 previous error
+warning: build failed, waiting for other jobs to finish...
+error: could not compile `identity` (lib) due to 1 previous error
+error: could not compile `testkit` (lib test) due to 2 previous errors
+
+## mutation p1-protocol-ack-server-time-rename
+ crates/protocol/src/telemetry.rs | 5 +++--
+ 1 file changed, 3 insertions(+), 2 deletions(-)
+
+### changed crate on its own: protocol
+$ cargo check --package protocol --all-targets --locked
+exit code: 101
+error[E0560]: struct `protocol::telemetry::TelemetryAck` has no field named `server_time`
+   --> crates/protocol/tests/common/mod.rs:115:9
+error[E0560]: struct `protocol::telemetry::TelemetryAck` has no field named `server_time`
+  --> crates/protocol/tests/limits.rs:66:9
+error: could not compile `protocol` (test "limits") due to 2 previous errors
+warning: build failed, waiting for other jobs to finish...
+error: could not compile `protocol` (test "golden") due to 1 previous error
+error: could not compile `protocol` (test "fuzz") due to 1 previous error
+
+### ci.yml rust job, clippy step
+$ cargo clippy --workspace --all-targets --locked -- -D warnings
+exit code: 101
+error[E0560]: struct `protocol::telemetry::TelemetryAck` has no field named `server_time`
+   --> crates/protocol/tests/common/mod.rs:115:9
+error: could not compile `protocol` (test "split") due to 1 previous error
+warning: build failed, waiting for other jobs to finish...
+
+### acceptance criterion command
+$ cargo check --workspace --all-targets --locked
+exit code: 101
+error[E0560]: struct `protocol::telemetry::TelemetryAck` has no field named `server_time`
+   --> crates/protocol/tests/common/mod.rs:115:9
+error: could not compile `protocol` (test "split") due to 1 previous error
+warning: build failed, waiting for other jobs to finish...
+
+### acceptance criterion command with --keep-going (lists every failing crate)
+$ cargo check --workspace --all-targets --locked --keep-going
+exit code: 101
+error[E0560]: struct `protocol::telemetry::TelemetryAck` has no field named `server_time`
+   --> crates/protocol/tests/common/mod.rs:115:9
+error: could not compile `protocol` (test "validation") due to 1 previous error
+warning: build failed, waiting for other jobs to finish...
+error: could not compile `protocol` (test "split") due to 1 previous error
+error: could not compile `protocol` (test "compat") due to 1 previous error
+error: could not compile `protocol` (test "robustness") due to 1 previous error
+error[E0560]: struct `protocol::telemetry::TelemetryAck` has no field named `server_time`
+  --> crates/protocol/tests/limits.rs:66:9
+error: could not compile `protocol` (test "allocation") due to 1 previous error
+error: could not compile `protocol` (test "limits") due to 2 previous errors
+error: could not compile `protocol` (test "adversarial") due to 1 previous error
+error: could not compile `protocol` (test "golden") due to 1 previous error
+error: could not compile `protocol` (test "fuzz") due to 1 previous error
+
+## mutation p2-protocol-heartbeat-interval-rename
+ crates/protocol/src/health.rs | 5 +++--
+ 1 file changed, 3 insertions(+), 2 deletions(-)
+
+### changed crate on its own: protocol
+$ cargo check --package protocol --all-targets --locked
+exit code: 101
+error[E0560]: struct `protocol::health::Heartbeat` has no field named `interval_s`
+   --> crates/protocol/tests/common/mod.rs:309:9
+error: could not compile `protocol` (test "allocation") due to 1 previous error
+warning: build failed, waiting for other jobs to finish...
+error[E0609]: no field `interval_s` on type `&mut protocol::health::Heartbeat`
+   --> crates/protocol/tests/validation.rs:575:23
+error[E0609]: no field `interval_s` on type `protocol::health::Heartbeat`
+   --> crates/protocol/tests/validation.rs:839:15
+error: could not compile `protocol` (test "split") due to 1 previous error
+error: could not compile `protocol` (test "adversarial") due to 1 previous error
+error: could not compile `protocol` (test "validation") due to 3 previous errors
+
+### ci.yml rust job, clippy step
+$ cargo clippy --workspace --all-targets --locked -- -D warnings
+exit code: 101
+error[E0560]: struct `protocol::health::Heartbeat` has no field named `interval_s`
+   --> crates/protocol/tests/common/mod.rs:309:9
+error[E0609]: no field `interval_s` on type `&mut protocol::health::Heartbeat`
+   --> crates/protocol/tests/validation.rs:575:23
+error[E0609]: no field `interval_s` on type `protocol::health::Heartbeat`
+   --> crates/protocol/tests/validation.rs:839:15
+error: could not compile `protocol` (test "split") due to 1 previous error
+warning: build failed, waiting for other jobs to finish...
+error: could not compile `protocol` (test "validation") due to 3 previous errors
+error[E0560]: struct `protocol::health::Heartbeat` has no field named `interval_s`
+   --> edge/agent/src/heartbeat.rs:112:9
+error: could not compile `agent` (lib) due to 1 previous error
+
+### acceptance criterion command
+$ cargo check --workspace --all-targets --locked
+exit code: 101
+error[E0560]: struct `protocol::health::Heartbeat` has no field named `interval_s`
+   --> crates/protocol/tests/common/mod.rs:309:9
+error: could not compile `protocol` (test "robustness") due to 1 previous error
+warning: build failed, waiting for other jobs to finish...
+error: could not compile `protocol` (test "compat") due to 1 previous error
+error[E0560]: struct `protocol::health::Heartbeat` has no field named `interval_s`
+   --> edge/agent/src/heartbeat.rs:112:9
+error: could not compile `agent` (lib) due to 1 previous error
+
+### acceptance criterion command with --keep-going (lists every failing crate)
+$ cargo check --workspace --all-targets --locked --keep-going
+exit code: 101
+error[E0560]: struct `protocol::health::Heartbeat` has no field named `interval_s`
+   --> edge/agent/src/heartbeat.rs:112:9
+error: could not compile `agent` (lib) due to 1 previous error
+warning: build failed, waiting for other jobs to finish...
+error[E0609]: no field `interval_s` on type `protocol::health::Heartbeat`
+   --> edge/agent/src/heartbeat.rs:189:28
+error: could not compile `agent` (lib test) due to 2 previous errors
+error[E0560]: struct `protocol::health::Heartbeat` has no field named `interval_s`
+   --> crates/protocol/tests/common/mod.rs:309:9
+error: could not compile `protocol` (test "golden") due to 1 previous error
+error[E0609]: no field `interval_s` on type `&mut protocol::health::Heartbeat`
+   --> crates/protocol/tests/validation.rs:575:23
+error[E0609]: no field `interval_s` on type `protocol::health::Heartbeat`
+   --> crates/protocol/tests/validation.rs:839:15
+error: could not compile `protocol` (test "validation") due to 3 previous errors
+error: could not compile `protocol` (test "fuzz") due to 1 previous error
+error: could not compile `protocol` (test "split") due to 1 previous error
+error: could not compile `protocol` (test "compat") due to 1 previous error
+error: could not compile `protocol` (test "robustness") due to 1 previous error
+error: could not compile `protocol` (test "allocation") due to 1 previous error
+error: could not compile `protocol` (test "limits") due to 1 previous error
+error: could not compile `protocol` (test "adversarial") due to 1 previous error
+
+all mutations reverted; tree clean

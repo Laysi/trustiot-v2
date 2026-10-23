@@ -1,0 +1,3 @@
+# The account trustiot-agent.service runs as (edge/agent/README.md, section "systemd").
+# Installed as /usr/lib/sysusers.d/trustiot-agent.conf.
+u trustiot-agent - "TrustIoT gateway agent" /var/lib/trustiot-agent /usr/sbin/nologin
