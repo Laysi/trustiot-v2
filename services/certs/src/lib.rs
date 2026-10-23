@@ -12,6 +12,10 @@
 //! administrators through [`workstations`]. An issuing CA signs only once it has a CRL
 //! ([`authority::Authority::signer`]).
 //!
+//! Laysi/trustiot-v2#557: the MQTT broker's TLS server certificate (`README.md`, "broker 伺服器
+//! 憑證"), from the same issuing CA with a server-only profile, issued through [`broker`] on a
+//! port of its own that the mesh opens to the broker alone.
+//!
 //! - [`authority`]: the root certificate, the issuing CA keys the pod's init container keeps in a
 //!   Secret, and the issuing CA certificates the root signed; reloaded when the files change.
 //! - [`issue`]: gateway and workstation certificates from CSRs, and the ledger of what was
@@ -20,6 +24,7 @@
 //! - [`http`]: the CRLs and the CA chain for the MQTT broker.
 //! - [`workstations`]: the API platform administrators issue and revoke workstation
 //!   certificates with.
+//! - [`broker`]: the MQTT broker's server certificate, on its own port.
 //! - [`ceremony`]: the offline root's certificates, for the `certs-ca` tool.
 //! - [`schema`]: the migration files this release expects; [`config`]: the settings.
 //!
@@ -28,6 +33,7 @@
 //! (`tests/key_custody.rs`).
 
 pub mod authority;
+pub mod broker;
 pub mod ceremony;
 pub mod config;
 pub mod crl;
@@ -72,16 +78,17 @@ pub fn openapi() -> utoipa::openapi::OpenApi {
 
 /// The service's startup for `service_kit::run`: opens the service role's pool lazily (with the
 /// session check of `crates/service-kit`), loads the CA files and follows them, starts the CRL
-/// job and the monitor, follows the identity service's public keys file, and serves the
-/// endpoints of [`http`] and [`workstations`]. Readiness passes while the role can open a checked
+/// job and the monitor, follows the identity service's public keys file, serves the endpoints
+/// of [`http`] and [`workstations`], and serves [`broker`] on its own port
+/// (`broker.listen_addr`). Readiness passes while the role can open a checked
 /// session, the service has a usable set of public keys, and the database has every migration
 /// file this release expects ([`schema::SCHEMA`]); whether an issuing CA can sign is reported by
 /// the monitor, not by readiness ([`authority::CaState::watch`]).
 ///
 /// # Errors
 ///
-/// When the database settings would not verify the server. Nothing is served then: the service
-/// exits with code 1.
+/// When the database settings would not verify the server, or the broker port is taken. Nothing
+/// is served then: the service exits with code 1.
 pub async fn start(context: Context<Config>) -> Result<Router, BoxError> {
     let config = context.config();
     let (db, background) = TenantDb::connect_lazy_with_background(
@@ -120,5 +127,39 @@ pub async fn start(context: Context<Config>) -> Result<Router, BoxError> {
         ca.clone(),
         config.workstation.validity,
     );
+    serve_broker(&context, db.pool().clone(), ca.clone()).await?;
     Ok(http::routes(ca, db.pool().clone()).merge(api))
+}
+
+/// Serves the MQTT broker's certificate issuance on its own port (`broker.listen_addr`), apart
+/// from the API port, so the mesh can let the broker alone reach it (deploy/chart/README.md,
+/// "呼叫矩陣"). `Context::serve_port` gives it the API port's layers (handler timeout, panic
+/// recovery, request logs and trace context) and drain.
+///
+/// # Errors
+///
+/// When the port is taken or the names are invalid (the configuration check refuses those
+/// first): the service does not start.
+async fn serve_broker(
+    context: &Context<Config>,
+    pool: sqlx::PgPool,
+    ca: CaState,
+) -> Result<(), BoxError> {
+    let config = &context.config().broker;
+    let names = config
+        .names()
+        .map_err(|problem| format!("broker.service_name: {problem}"))?;
+    let bound = context
+        .serve_port(
+            config.listen_addr,
+            broker::routes(pool, ca, names.clone(), config.validity),
+        )
+        .await
+        .map_err(|error| format!("broker certificates, broker.listen_addr: {error}"))?;
+    tracing::info!(
+        address = %bound,
+        names = %names.as_slice().join(","),
+        "serving the MQTT broker's certificate issuance"
+    );
+    Ok(())
 }

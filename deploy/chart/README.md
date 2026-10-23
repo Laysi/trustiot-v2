@@ -240,8 +240,8 @@ chart 產生下列物件：
 | 物件 | 內容 |
 | --- | --- |
 | NetworkPolicy `<release>-default-deny` | 選取 namespace 內所有 pod、不放行任何連入：沒有其他 NetworkPolicy 放行的連線一律拒絕。服務全關時也會產生 |
-| AuthorizationPolicy `<release>-<服務或元件>` | 每個啟用的服務與每個部署的叢集內元件（目前是 `bundled` 的 ClickHouse）一個，ALLOW，以 selector 選它的 pod，只允許呼叫端的 principals（ztunnel 在 L4 執行）。沒有任何呼叫端時是沒有規則的 ALLOW，拒絕所有連線。身分服務的政策只到 API 埠，token exchange 另有 `<release>-identity-exchange`（見上方「代表使用者呼叫」） |
-| NetworkPolicy `<release>-<服務或元件>` | 同上，每個一個（token exchange 另有 `<release>-identity-exchange`）：只從同一批呼叫端的 pod（與入口 gateway 的 pod）放行 TCP 15008，也就是 ztunnel 的 HBONE 埠，mesh 內的連線都從這裡進來，不直接連應用程式的埠；另對節點來源 `169.254.7.127/32`（kubelet 的健康檢查由 istio-cni SNAT 成這個位址）只放行該工作負載探針實際連的 TCP 埠，服務是健康埠（`healthPort`，預設 8081），見下方「節點來源」。只有 exec 探針時不產生這條規則；沒有呼叫端也沒有探針埠時 `ingress: []`，拒絕所有連入 |
+| AuthorizationPolicy `<release>-<服務或元件>` | 每個啟用的服務與每個部署的叢集內元件（目前是 `bundled` 的 ClickHouse）一個，ALLOW，以 selector 選它的 pod，只允許呼叫端的 principals（ztunnel 在 L4 執行）。沒有任何呼叫端時是沒有規則的 ALLOW，拒絕所有連線。身分服務的政策只到 API 埠，token exchange 另有 `<release>-identity-exchange`（見上方「代表使用者呼叫」）；certs 服務的政策也只到 API 埠，簽 MQTT broker 伺服器憑證的埠另有 `<release>-certs-broker`（見下方 MQTT broker 一條） |
+| NetworkPolicy `<release>-<服務或元件>` | 同上，每個一個（token exchange 另有 `<release>-identity-exchange`，broker 憑證的埠另有 `<release>-certs-broker`）：只從同一批呼叫端的 pod（與入口 gateway 的 pod）放行 TCP 15008，也就是 ztunnel 的 HBONE 埠，mesh 內的連線都從這裡進來，不直接連應用程式的埠；另對節點來源 `169.254.7.127/32`（kubelet 的健康檢查由 istio-cni SNAT 成這個位址）只放行該工作負載探針實際連的 TCP 埠，服務是健康埠（`healthPort`，預設 8081），見下方「節點來源」。只有 exec 探針時不產生這條規則；沒有呼叫端也沒有探針埠時 `ingress: []`，拒絕所有連入 |
 
 - 兩層的分工：AuthorizationPolicy 驗證 mTLS 憑證裡的身分，ztunnel 對每條代理的連線檢查；NetworkPolicy 只看來源 pod 的 label 與 IP，擋的是新建立的 TCP 連線。拿掉 NetworkPolicy 時，清單外的呼叫仍被 ztunnel 重置；拿掉 AuthorizationPolicy 時，清單外的服務連不到對方的 15008，非 mesh 的 pod 連不到任何埠。被拒時呼叫端看到的是連線重置或拒絕，不是 HTTP 403（docs/feasibility/2026-10-10-edge-poc.md）。2026-10-10 在實驗機實測兩個方向（docs/test-reports/2026-10-10-63-mesh-authz.md）。
 - NetworkPolicy 這一層的限制，主要防線是 AuthorizationPolicy：
@@ -256,7 +256,7 @@ chart 產生下列物件：
 - NetworkPolicy 只管連入（`Ingress`），不限制連出：外部依賴（Qdrant Cloud、S3、SMTP、AI 端點、外部資料庫）以主機名稱指定，NetworkPolicy 無法依主機名稱放行。
 - 不部署 waypoint：L4 的身分已足夠。服務之間需要 L7 規則（例如依路徑或方法）時才為該服務加 waypoint，並把它的 AuthorizationPolicy 改成以 `targetRefs` 指向 Service、在 ztunnel 層放行 waypoint 的 ServiceAccount；代表使用者呼叫的授權（內部身分 token）由身分服務換 token 時依清單檢查、被呼叫端驗證 token 的受眾，不靠 waypoint（Laysi/trustiot-v2#106）。
 - 叢集測試 `tests/e2e/mesh.e2e.ts` 以真實連線驗證清單內放行、清單外被拒，以及兩層各自生效；也驗證清單內的呼叫端連得到 `token-exchange`、連不到身分服務的 API 埠，清單外的服務帶著使用者的 token 仍被拒，用法見該目錄的 README。服務在這個測試裡跑身分服務替身，不驗證 token，所以它看到的拒絕都是 L4 的；token exchange 自己的檢查（清單、只換一跳）由 Rust 測試驗證。
-- MQTT broker（`mqttBroker.enabled`）也在 `trustiot.mesh.components`，但它的 AuthorizationPolicy 依埠分開：`mqtt-bridge` 只到閘道器埠，有 broker 帳號的服務只到服務埠，`mesh.calls` 也只能列這幾個呼叫端（見「MQTT broker」）。它的探針是 exec，所以沒有節點來源的規則；它的 trust sidecar 連 certs 服務由 chart 自動加上。
+- MQTT broker（`mqttBroker.enabled`）也在 `trustiot.mesh.components`，但它的 AuthorizationPolicy 依埠分開：`mqtt-bridge` 只到閘道器埠，有 broker 帳號的服務只到服務埠，`mesh.calls` 也只能列這幾個呼叫端（見「MQTT broker」）。它的探針是 exec，所以沒有節點來源的規則；它的 trust sidecar 連 certs 服務由 chart 自動加上。broker 取得自己的伺服器憑證也由 chart 自動放行（Laysi/trustiot-v2#557）：certs 服務在自己的埠 `broker-certs`（預設 8082，服務的 `broker.listen_addr`）簽這張憑證，那個埠有自己的 Service、AuthorizationPolicy 與 NetworkPolicy `<release>-certs-broker`，只放行 broker 的 ServiceAccount，而且只到這個埠；certs 自己的政策只放行它的呼叫端到 API 埠（`trustiot.mesh.certsPorts`），certs 的 Service 也不開這個埠。拿到 broker 名稱的憑證就能對每台閘道器冒充 broker，所以其他服務與入口 gateway 都連不到它；`ingress.routes` 指向 `broker-certs`（或身分服務的 `token-exchange`）時渲染失敗，`services.certs.ports` 覆寫時要保留 `broker-certs`（broker 開啟而沒有這個埠時渲染失敗），`services` 底下不能有叫 `certs-broker` 的服務。broker 沒有部署時這兩個政策沒有規則，什麼都不放行。
 - 叢集內的 ClickHouse 走同一套規則：只有 `mesh.calls` 列出的 `ingest` 與 `telemetry-query`，以及 chart 自動加上的 OpenTelemetry collector（Laysi/trustiot-v2#73）與 migration Job（`migrate.enabled` 為 true 時，Laysi/trustiot-v2#60）連得到它，其他服務與 pod 都被拒，kubelet 的 `/ping` 探測經 `169.254.7.127/32` 照常通過，節點來源只開 HTTP 8123。`mesh.calls` 的呼叫端只能是服務，元件之間的呼叫由 `trustiot.mesh.plan` 自己加（`_mesh.tpl`），collector 與 migration Job 都是這樣；還沒有的 Grafana（Laysi/trustiot-v2#183）加入時也要這樣加進來。ClickHouse 的政策只以 chart 測試驗證，2026-10-10 的實驗機測試沒有部署它（見測試報告）。
 - collector 也是 mesh 內的元件（`trustiot.mesh.components` 的 `otel-collector`，埠與探針定義在 `trustiot.otel-collector.pod`）：每個啟用的服務都自動是它的呼叫端（送 OTLP），其他 pod 連不到它，節點來源只開健康檢查的 13133。它連出到外部 ClickHouse 或 SIEM 不受 NetworkPolicy 限制（只管連入）；SIEM 在同一個 namespace 時，要另外以 NetworkPolicy 放行 collector 的 pod 連它。
 - `postgres` 是「這個服務用 Postgres」的宣告，不經 mesh：Postgres 的每條連線本身就是 TLS 並以 verify-full 驗證伺服器，叢集內的 Postgres pod 也不加入 ambient mesh（見「叢集內的 Postgres」），所以它沒有 AuthorizationPolicy，也不走 HBONE。列出 `postgres` 的服務才會掛上 Postgres 的 CA 並拿到 `TRUSTIOT_POSTGRES_CA_FILE`（`external` 也一樣）；`bundled` 時 `<release>-postgres` 這個 NetworkPolicy 也只放行這些服務的 pod 連 5432。同一份清單決定兩件事，不會一邊有、一邊沒有。
@@ -264,7 +264,7 @@ chart 產生下列物件：
 
 #### 呼叫矩陣
 
-預設 values、所有服務啟用時渲染出的授權，兩種部署形態相同。「允許的呼叫端」是被呼叫端的 AuthorizationPolicy 的 principals（省略 `<release>-`），NetworkPolicy 放行同一批 pod；身分服務的政策依埠分開：`identity` 的呼叫端（入口 gateway）只連得到 API 埠 `http`；`identity-exchange` 是身分服務的 token exchange（`token-exchange` 埠，選的是身分服務的 pod），呼叫端是 `TRUSTIOT_ON_BEHALF_CALLS` 的呼叫端，預設 values 沒有，它自己不是服務，所以「代表使用者呼叫」是 `—`；「代表使用者呼叫」是身分服務願意為誰換出以它為受眾的 token（`TRUSTIOT_ON_BEHALF_CALLS`），`—` 表示被呼叫端不是服務、不收內部身分 token。`tests/chart.test.ts` 的「README.md's call matrix」比對這張表與渲染結果：改了預設的 `mesh.calls`、例外路徑或預設的 `ingress.routes`，要在同一個變更更新這張表。
+預設 values、所有服務啟用時渲染出的授權，兩種部署形態相同。「允許的呼叫端」是被呼叫端的 AuthorizationPolicy 的 principals（省略 `<release>-`），NetworkPolicy 放行同一批 pod；身分服務的政策依埠分開：`identity` 的呼叫端（入口 gateway）只連得到 API 埠 `http`；`identity-exchange` 是身分服務的 token exchange（`token-exchange` 埠，選的是身分服務的 pod），呼叫端是 `TRUSTIOT_ON_BEHALF_CALLS` 的呼叫端，預設 values 沒有，它自己不是服務，所以「代表使用者呼叫」是 `—`；certs 服務同樣依埠分開：`certs` 的呼叫端只連得到 `http`，`certs-broker` 是簽 MQTT broker 伺服器憑證的 `broker-certs` 埠（選的是 certs 的 pod），只放行 MQTT broker，預設 values 不部署 broker，所以沒有呼叫端；「代表使用者呼叫」是身分服務願意為誰換出以它為受眾的 token（`TRUSTIOT_ON_BEHALF_CALLS`），`—` 表示被呼叫端不是服務、不收內部身分 token。`tests/chart.test.ts` 的「README.md's call matrix」比對這張表與渲染結果：改了預設的 `mesh.calls`、例外路徑或預設的 `ingress.routes`，要在同一個變更更新這張表。
 
 | 被呼叫端 | 允許的呼叫端 | 代表使用者呼叫 |
 | --- | --- | --- |
@@ -273,6 +273,7 @@ chart 產生下列物件：
 | `assets` | （無） | （無） |
 | `assistant` | （無） | （無） |
 | `certs` | `ingress-istio` | （無） |
+| `certs-broker` | （無） | — |
 | `clickhouse` | `ingest`、`migrate`、`otel-collector`、`telemetry-query` | — |
 | `field-context` | （無） | （無） |
 | `gateway-ops` | （無） | （無） |
@@ -704,7 +705,7 @@ bootstrap 管理帳號只給 migration Job 用，密碼在叢集內產生，沒�
 
 - `mesh.calls` 只能把 `mqtt-broker` 列在這四個服務底下，列在其他服務底下渲染失敗（清單在 `templates/_mqtt-broker.tpl` 的 `trustiot.mqtt-broker.callers`）。預設 values 列了 `ingest`、`gateway-ops` 與 `mqtt-bridge`；`certs` 沒有列，負責閘道器帳號登記與撤銷的 Laysi/trustiot-v2#82 加上。
 - AuthorizationPolicy `<release>-mqtt-broker` 每個埠一條規則（`to.operation.ports`，ztunnel 在 L4 執行）：`mqtt-bridge` 只到 8883，其他三個只到 1883；沒有呼叫端時沒有規則，拒絕所有連線。NetworkPolicy 看不到 HBONE 通道裡的應用程式埠，只放行同一批呼叫端的 pod 連 15008，分埠只靠 AuthorizationPolicy（與身分服務的 token exchange 相同）。
-- broker 這一側也有一條呼叫：`services.certs.enabled` 時 chart 自動讓 broker 的 pod 連 certs 服務的 `http` 埠，取 CA 憑證與 CRL（`TRUSTIOT__TRUST__CERTS_URL`，見下方「信任檔與重新載入」）。
+- broker 這一側也有兩條呼叫：`services.certs.enabled` 時 chart 自動讓 broker 的 pod 連 certs 服務的 `http` 埠，取 CA 憑證與 CRL（`TRUSTIOT__TRUST__CERTS_URL`，見下方「信任檔與重新載入」），以及 certs 服務的 `broker-certs` 埠（`http://<release>-certs-broker.<namespace>.svc:8082`），取自己的伺服器憑證（見下方「伺服器憑證」）。後者只有 broker 連得到（AuthorizationPolicy 與 NetworkPolicy `<release>-certs-broker`，見「服務間授權（mesh）」）。
 
 ### 角色（dynamic security）
 
@@ -753,7 +754,13 @@ broker 的權限全部在 dynamic security，預設拒絕：`defaultACLAccess` �
 
 ### 伺服器憑證（給 Laysi/trustiot-v2#535）
 
-chart 不渲染、不建立伺服器憑證或私鑰，它的簽發與輪替在 Laysi/trustiot-v2#535。broker 讀這個 Secret：
+chart 不渲染、不建立伺服器憑證或私鑰。certs 服務簽它（Laysi/trustiot-v2#557：profile、名稱、效期與換發時機在 [services/certs/README.md](../../services/certs/README.md) 的「broker 伺服器憑證」），broker 這一側產生私鑰、向 certs 取得憑證並輪替是 Laysi/trustiot-v2#535。簽發的端點：
+
+- `POST http://<release>-certs-broker.<namespace>.svc:8082/internal/certs/v1/broker-certificate`，本文是 DER 的 PKCS #10 CSR（`Content-Type: application/pkcs10`），201 回 JSON，`certificate_chain` 是伺服器憑證接著簽發 CA 憑證（PEM），可以直接當 `tls.crt`。certs 只取 CSR 的公鑰，名稱與用途由它決定；私鑰不經過 certs。
+- Service `<release>-certs-broker` 的埠固定是 8082，以埠名轉到 certs 容器的 `broker-certs` 埠：改 `services.certs.ports` 裡 `broker-certs` 的 `containerPort` 時，broker 呼叫的位址不變，AuthorizationPolicy 跟著比對新的容器埠（ztunnel 看到的是容器埠）。
+- 只有 broker 的 pod 連得到（見上方「誰連得到」）；certs 開啟 broker 時以 `TRUSTIOT__BROKER__SERVICE_NAME` 把下表的 Service 名稱加進憑證。
+
+broker 讀這個 Secret：
 
 | 項目 | 約定 |
 | --- | --- |
@@ -761,7 +768,7 @@ chart 不渲染、不建立伺服器憑證或私鑰，它的簽發與輪替在 L
 | 型別 | `kubernetes.io/tls` |
 | `tls.crt` | 伺服器憑證，後面接著中繼 CA（如果有），PEM |
 | `tls.key` | 伺服器憑證的私鑰，PEM |
-| 憑證內容 | EKU serverAuth；SAN 要有 mqtt-bridge 連線時用的名稱，Service 的 `<release>-mqtt-broker.<namespace>.svc`。nightly 簽的那張另外有 `<release>-mqtt-broker`、`<release>-mqtt-broker.<namespace>` 與 `<release>-mqtt-broker.<namespace>.svc.cluster.local`。閘道器只信任根 CA、以根 CRL 檢查簽發 CA（[services/certs/README.md](../../services/certs/README.md) 的「閘道器對 broker 伺服器憑證的信任」，Laysi/trustiot-v2#556），驗證的名稱由 Laysi/trustiot-v2#557 決定 |
+| 憑證內容 | EKU 只有 serverAuth；SAN 是閘道器驗證的固定名稱 `mqtt-broker.trustiot.internal`（SaaS 與地端相同），以及 Service 的 `<release>-mqtt-broker.<namespace>.svc`（certs 簽的那張都有，Laysi/trustiot-v2#557）。nightly 以自己的 CA 簽的那張另外有 `<release>-mqtt-broker`、`<release>-mqtt-broker.<namespace>` 與 `<release>-mqtt-broker.<namespace>.svc.cluster.local`。閘道器只信任根 CA、以根 CRL 檢查簽發 CA（[services/certs/README.md](../../services/certs/README.md) 的「閘道器對 broker 伺服器憑證的信任」，Laysi/trustiot-v2#556） |
 
 - 只有 broker 的 pod 掛它：主容器、init container `trust-files` 與 sidecar，唯讀，整個 Secret 掛在 `/etc/trustiot/mqtt-broker-tls/`（0440，root 與 pod 的 `fsGroup`），不用 subPath，kubelet 才會在 Secret 改變時更新檔案。Mosquitto 經 kubelet 的 `..data` symlink 讀檔（Rust 測試以同樣的目錄結構驗證）。chart 測試檢查沒有別的 pod、Role 或自訂 `env` 指到它。
 - Secret 還不存在時 pod 停在 `ContainerCreating`，等它建立後才啟動；`helm install --wait` 因此等不到 broker 就緒。nightly 在安裝 chart 之前，以這次執行自己產生的 CA 簽一張放進去（`scripts/nightly/smoke.ts`）。

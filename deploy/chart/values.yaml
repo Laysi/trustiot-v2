@@ -221,6 +221,21 @@ services:
     enabled: false
   certs:
     enabled: false
+    # The API (http: the CA chain and CRLs for the MQTT broker, the workstation certificate API)
+    # and the MQTT broker's server certificate issuance on a port of its own (broker-certs, the
+    # service's broker.listen_addr; Laysi/trustiot-v2#557). The mesh lets the ingress gateway and
+    # the services that list certs in mesh.calls reach the API port only, and the MQTT broker's
+    # pod the broker-certs port too (README.md, "呼叫矩陣"). The numbers are the service's
+    # defaults; keep both ports when overriding the list: the render fails without broker-certs
+    # while the MQTT broker is enabled. The broker always calls the Service
+    # <release>-certs-broker on 8082, which forwards to whatever containerPort broker-certs has.
+    ports:
+      - name: http
+        containerPort: 8080
+        appProtocol: http
+      - name: broker-certs
+        containerPort: 8082
+        appProtocol: http
     # The issuing CA keys file is mode 0440, owned by root and the pod's fsGroup, so the service
     # reads it through this group and no other user in the container can (README.md, "閘道器憑證
     # CA"). A group of its own, not identity's: no other pod is in it. On OpenShift set fsGroup to
