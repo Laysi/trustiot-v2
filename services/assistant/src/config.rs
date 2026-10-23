@@ -38,6 +38,61 @@ pub struct Config {
     pub budget: Budget,
     #[serde(default)]
     pub tools: Tools,
+    /// The identity service's token exchange, where a question's run delegation starts and is
+    /// exchanged for a token before every tool call (Laysi/trustiot-v2#551).
+    #[serde(default)]
+    pub identity: Identity,
+    /// The telemetry query service: the time series and latest-value tools.
+    #[serde(default)]
+    pub telemetry_query: Peer,
+    /// The assets service: the device model tool.
+    #[serde(default)]
+    pub assets: Peer,
+}
+
+/// The shortest run delegation a question may have: a question needs time for a few model calls.
+pub const MIN_RUN_LIFETIME: Duration = Duration::from_secs(120);
+/// The longest: the identity service's limit (`RUN_DELEGATION_MAX_LIFETIME_SECS`, 900 s).
+pub const MAX_RUN_LIFETIME: Duration =
+    Duration::from_secs(contract::api::identity::RUN_DELEGATION_MAX_LIFETIME_SECS as u64);
+
+/// The identity service's token exchange port.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Identity {
+    /// `http://<release>-identity-exchange:8082`. Without it the assistant has no tools.
+    #[serde(default)]
+    pub exchange_url: Option<String>,
+    /// How long a question's run delegation lives; the question ends a little before
+    /// (`delegation::RUN_END_MARGIN`). 2 to 15 minutes, whole seconds.
+    #[serde(
+        default = "default_run_lifetime",
+        deserialize_with = "service_kit::config::duration"
+    )]
+    pub run_lifetime: Duration,
+}
+
+impl Default for Identity {
+    fn default() -> Self {
+        Self {
+            exchange_url: None,
+            run_lifetime: default_run_lifetime(),
+        }
+    }
+}
+
+fn default_run_lifetime() -> Duration {
+    MAX_RUN_LIFETIME
+}
+
+/// A service the tools call as the user.
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Peer {
+    /// `http://<host>[:<port>]`, the service's Kubernetes Service; ztunnel encrypts the hop.
+    /// Without it the service's tools are left out.
+    #[serde(default)]
+    pub url: Option<String>,
 }
 
 /// The AI gateway (services/ai-gateway) and the model role the main agent uses there.
@@ -256,6 +311,34 @@ impl Validate for Config {
                 "must be between 1 byte and 5 MiB",
             ));
         }
+        if let Some(url) = &self.identity.exchange_url {
+            check_service_url(url)
+                .map_err(|message| Invalid::new("identity.exchange_url", message))?;
+        }
+        let lifetime = self.identity.run_lifetime;
+        if !(MIN_RUN_LIFETIME..=MAX_RUN_LIFETIME).contains(&lifetime)
+            || lifetime.subsec_nanos() != 0
+        {
+            return Err(Invalid::new(
+                "identity.run_lifetime",
+                "must be whole seconds between 2 and 15 minutes",
+            ));
+        }
+        for (key, peer) in [
+            ("telemetry_query.url", &self.telemetry_query),
+            ("assets.url", &self.assets),
+        ] {
+            let Some(url) = &peer.url else {
+                continue;
+            };
+            check_service_url(url).map_err(|message| Invalid::new(key, message))?;
+            if self.identity.exchange_url.is_none() {
+                return Err(Invalid::new(
+                    "identity.exchange_url",
+                    "is required when a service the tools call is set: tools call as the user",
+                ));
+            }
+        }
         Ok(())
     }
 }
@@ -279,6 +362,19 @@ pub(crate) fn is_role_name(name: &str) -> bool {
 /// A plain `http` origin: the gateway is a Service inside the mesh, where ztunnel adds mutual
 /// TLS, and the paths are the gateway's own (`/internal/roles/...`).
 pub(crate) fn check_gateway_url(raw: &str) -> Result<(), &'static str> {
+    check_origin(
+        raw,
+        "must not have a path: the gateway's paths start at /internal/",
+    )
+}
+
+/// A plain `http` origin of a service inside the mesh, where ztunnel adds mutual TLS; the paths
+/// are the service's own routes.
+pub(crate) fn check_service_url(raw: &str) -> Result<(), &'static str> {
+    check_origin(raw, "must not have a path: the routes start at the origin")
+}
+
+fn check_origin(raw: &str, with_path: &'static str) -> Result<(), &'static str> {
     let url = reqwest::Url::parse(raw).map_err(|_| "is not an absolute URL")?;
     if url.scheme() != "http" {
         return Err("must use http: ztunnel adds mutual TLS between services");
@@ -290,7 +386,7 @@ pub(crate) fn check_gateway_url(raw: &str) -> Result<(), &'static str> {
         return Err("must not carry credentials");
     }
     if url.path() != "/" {
-        return Err("must not have a path: the gateway's paths start at /internal/");
+        return Err(with_path);
     }
     if url.query().is_some() || url.fragment().is_some() {
         return Err("must not have a query or fragment");
@@ -337,7 +433,114 @@ mod tests {
             model: Model::default(),
             budget: Budget::default(),
             tools: Tools::default(),
+            identity: Identity::default(),
+            telemetry_query: Peer::default(),
+            assets: Peer::default(),
         }
+    }
+
+    fn key_of(config: &Config) -> Result<(), String> {
+        config.validate().map_err(|error| error.key)
+    }
+
+    #[test]
+    fn the_services_the_tools_call_are_plain_http_origins_and_need_the_exchange() {
+        // No address at all: valid, the assistant runs without tools.
+        assert_eq!(key_of(&config()), Ok(()));
+
+        let mut all = config();
+        all.identity.exchange_url = Some("http://trustiot-identity-exchange:8082".into());
+        all.telemetry_query.url = Some("http://trustiot-telemetry-query:8080".into());
+        all.assets.url = Some("http://trustiot-assets:8080".into());
+        assert_eq!(key_of(&all), Ok(()));
+
+        // A service without the exchange cannot be called as the user.
+        let mut no_exchange = config();
+        no_exchange.assets.url = Some("http://trustiot-assets:8080".into());
+        assert_eq!(key_of(&no_exchange), Err("identity.exchange_url".into()));
+
+        for (bad, key) in [
+            ("https://trustiot-assets:8080", "assets.url"),
+            ("http://trustiot-assets:8080/api", "assets.url"),
+            ("http://user:secret@trustiot-assets:8080", "assets.url"),
+        ] {
+            let mut invalid = all_but_assets(&all);
+            invalid.assets.url = Some(bad.into());
+            assert_eq!(key_of(&invalid), Err(key.into()), "{bad}");
+        }
+        let mut bad_exchange = config();
+        bad_exchange.identity.exchange_url = Some("http://identity:8082/internal".into());
+        assert_eq!(key_of(&bad_exchange), Err("identity.exchange_url".into()));
+        let mut bad_telemetry = config();
+        bad_telemetry.identity.exchange_url = Some("http://identity:8082".into());
+        bad_telemetry.telemetry_query.url = Some("telemetry-query:8080".into());
+        assert_eq!(key_of(&bad_telemetry), Err("telemetry_query.url".into()));
+    }
+
+    fn all_but_assets(all: &Config) -> Config {
+        let mut config = config();
+        config.identity.exchange_url = all.identity.exchange_url.clone();
+        config.telemetry_query.url = all.telemetry_query.url.clone();
+        config
+    }
+
+    #[test]
+    fn the_run_lifetime_is_two_to_fifteen_whole_minutes_of_seconds() {
+        assert_eq!(config().identity.run_lifetime, Duration::from_secs(900));
+        for (lifetime, valid) in [
+            (Duration::from_secs(120), true),
+            (Duration::from_secs(600), true),
+            (Duration::from_secs(900), true),
+            (Duration::from_secs(119), false),
+            (Duration::from_secs(901), false),
+            (Duration::from_millis(300_500), false),
+            (Duration::ZERO, false),
+        ] {
+            let mut config = config();
+            config.identity.run_lifetime = lifetime;
+            let expected = if valid {
+                Ok(())
+            } else {
+                Err("identity.run_lifetime".to_owned())
+            };
+            assert_eq!(key_of(&config), expected, "{lifetime:?}");
+        }
+    }
+
+    #[test]
+    fn the_settings_read_from_the_environment() {
+        let vars = [
+            ("TRUSTIOT__AI_GATEWAY__URL", "http://ai-gateway:8080"),
+            (
+                "TRUSTIOT__IDENTITY__EXCHANGE_URL",
+                "http://identity-exchange:8082",
+            ),
+            ("TRUSTIOT__IDENTITY__RUN_LIFETIME", "10m"),
+            (
+                "TRUSTIOT__TELEMETRY_QUERY__URL",
+                "http://telemetry-query:8080",
+            ),
+            ("TRUSTIOT__ASSETS__URL", "http://assets:8080"),
+        ]
+        .map(|(name, value)| {
+            (
+                std::ffi::OsString::from(name),
+                std::ffi::OsString::from(value),
+            )
+        });
+        let config = service_kit::config::load_from::<Config, _>("TRUSTIOT", vars)
+            .expect("the settings load")
+            .app;
+        assert_eq!(
+            config.identity.exchange_url.as_deref(),
+            Some("http://identity-exchange:8082")
+        );
+        assert_eq!(config.identity.run_lifetime, Duration::from_secs(600));
+        assert_eq!(
+            config.telemetry_query.url.as_deref(),
+            Some("http://telemetry-query:8080")
+        );
+        assert_eq!(config.assets.url.as_deref(), Some("http://assets:8080"));
     }
 
     #[test]

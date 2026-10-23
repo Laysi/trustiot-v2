@@ -150,8 +150,10 @@ name = "assistant"
 version = "0.1.0"
 dependencies = [
  "ai-clients",
+ "assets",
  "axum",
  "base64 0.22.1",
+ "chrono",
  "contract",
  "opentelemetry",
  "reqwest",
@@ -159,6 +161,7 @@ dependencies = [
  "serde_json",
  "service-kit",
  "sqlx",
+ "telemetry-query",
  "testkit",
  "thiserror",
  "tokio",
