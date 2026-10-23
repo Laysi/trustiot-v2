@@ -1,0 +1,141 @@
+=== fmt: cargo fmt --all --check
+=== fmt exit 1
+=== clippy: cargo clippy -p contract -p identity -p migrate --all-targets -- -D warnings
+=== clippy exit 0
+=== openapi: cargo run -p openapi -- --check
+=== openapi exit 0
+=== test-contract: env CI=1 cargo test -p contract
+     Running unittests src/lib.rs 
+test identity::tests::claims_tolerate_unknown_claims_and_default_platform_admin ... ok
+test identity::tests::tokens_are_header_safe_and_redacted ... ok
+test result: ok. 42 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/client.rs 
+test a_refused_connection_maps_to_unavailable ... ok
+test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.30s
+     Running tests/client_logging.rs 
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/error_format.rs 
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/events.rs 
+test platform_admin_granted_decodes_every_version ... ok
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.11s
+=== test-contract exit 0
+=== test-migrate: env CI=1 cargo test -p migrate
+     Running unittests src/lib.rs 
+test identity_email::tests::addresses_are_plain_ascii_dot_atoms_at_hostnames ... ok
+test identity_email::tests::addresses_are_trimmed_and_lower_cased ... ok
+test mqtt_accounts::tests::entries_the_broker_would_skip_or_misread_are_refused ... ok
+test mqtt_trust::tests::a_crl_without_next_update_is_refused ... ok
+test mqtt_trust::tests::incomplete_or_foreign_pairs_are_refused ... ok
+test platform_admin::tests::anything_else_is_refused_without_quoting_it ... ok
+test platform_admin::tests::database_errors_never_quote_the_row ... ok
+test platform_admin::tests::the_owner_role_is_the_registry_s ... ok
+test retention::tests::a_retention_up_to_the_buffer_age_is_refused ... ok
+test retention::tests::an_implausibly_long_retention_is_refused ... ok
+test platform_admin::tests::the_first_line_is_the_address ... ok
+test secret::tests::short_long_and_odd_passwords_are_refused_without_echoing_them ... ok
+test result: ok. 61 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.43s
+     Running tests/ca_keys.rs 
+test missing_objects_and_refused_access_stop_the_run_with_the_way_out ... ok
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.13s
+     Running tests/clickhouse.rs 
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 19.29s
+     Running tests/clickhouse_admin.rs 
+test a_missing_secret_or_refused_access_stops_it_with_the_way_out ... ok
+test the_job_uses_only_the_password_the_init_container_wrote_and_rereads_it_when_refused ... ok
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 20.30s
+     Running tests/clickhouse_telemetry_query.rs 
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 14.86s
+     Running tests/concurrent_runs.rs 
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 13.64s
+     Running tests/file_escapes.rs 
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.47s
+     Running tests/fresh_database.rs 
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.42s
+=== test-migrate exit 101
+=== test-identity: env CI=1 cargo test -p identity
+     Running unittests src/lib.rs 
+test delegation::tests::expired_or_over_long_delegations_are_refused ... ok
+test email::tests::addresses_are_plain_ascii_dot_atoms_at_hostnames ... ok
+test email::tests::addresses_are_trimmed_and_lower_cased ... ok
+test delegation::tests::role_changes_show_in_the_next_token_and_a_removed_member_is_refused ... ok
+test delegation::tests::requests_without_one_valid_token_and_a_valid_body_are_refused ... ok
+test exchange::tests::requests_without_one_valid_token_and_a_valid_body_are_refused ... ok
+test login::tests::the_email_holds_the_code_in_its_body_only ... ok
+test session::tests::a_missing_repeated_or_malformed_session_cookie_is_refused ... ok
+test exchange::tests::tokens_are_refused_by_other_audiences_and_once_expired ... ok
+test result: ok. 95 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.05s
+     Running tests/adversarial.rs 
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 39.60s
+     Running tests/cross_tenant.rs 
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 10.33s
+     Running tests/event_log.rs 
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 17.36s
+     Running tests/ext_authz.rs 
+test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 26.19s
+     Running tests/login.rs 
+test a_code_from_the_email_logs_in_once ... ok
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 17.12s
+     Running tests/migrations.rs 
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 9.28s
+     Running tests/platform_admin.rs 
+test the_first_platform_admin_logs_in_and_creates_a_tenant ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 7.22s
+     Running tests/tenants.rs 
+test platform_administrators_create_tenants_with_their_event ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.84s
+     Running tests/token_claims.rs 
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.18s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+=== test-identity exit 0
+=== test-sql-check: env CI=1 cargo test -p sql-check
+     Running unittests src/lib.rs 
+test tests::assert_sql_safe_is_always_found ... ok
+test result: ok. 20 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+     Running tests/check.rs 
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.83s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+=== test-sql-check exit 0
+=== test-repo-check: env CI=1 cargo test -p repo-check
+     Running unittests src/lib.rs 
+test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/repository.rs 
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.17s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+=== test-repo-check exit 0
+=== test-testkit: env CI=1 cargo test -p testkit
+     Running unittests src/lib.rs 
+test result: ok. 32 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.47s
+     Running tests/container_volumes.rs 
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 11.20s
+     Running tests/modbus_endpoint.rs 
+test result: ok. 20 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.12s
+     Running tests/modbus_example.rs 
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+     Running tests/postgres_isolation.rs 
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 22.16s
+     Running tests/postgres_start.rs 
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 11.81s
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+=== test-testkit exit 0
+=== deny: cargo deny --locked check
+   ├ Advisory: https://rustsec.org/advisories/RUSTSEC-2026-0385
+advisories FAILED, bans ok, licenses ok, sources ok
+=== deny exit 1
+=== bun-install: bun install --cwd scripts --frozen-lockfile
+=== bun-install exit 0
+=== bun-scripts: bun test scripts
+ 1608 pass
+ 0 fail
+Ran 1617 tests across 52 files. [21.40s]
+=== bun-scripts exit 0
+=== bun-typecheck: bun run --cwd scripts typecheck
+=== bun-typecheck exit 0
+=== bun-chart: bun test deploy/chart
+ 627 pass
+ 0 fail
+Ran 627 tests across 9 files. [133.52s]
+=== bun-chart exit 0
+=== summary: fmt=1 clippy=0 openapi=0 test-contract=0 test-migrate=101 test-identity=0 test-sql-check=0 test-repo-check=0 test-testkit=0 deny=1 bun-install=0 bun-scripts=0 bun-typecheck=0 bun-chart=0

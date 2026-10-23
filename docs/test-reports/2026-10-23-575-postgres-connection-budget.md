@@ -40,15 +40,15 @@ cargo deny --locked check
 
 | 安裝 | 需要的連線 | 結果 |
 | --- | --- | --- |
-| SaaS 型態，預設（沒有開服務） | 17 | 通過 |
-| SaaS 型態，四個用 Postgres 的服務 | 145 | 通過 |
-| 地端型態，四個用 Postgres 的服務 | 145 | 通過 |
-| 四個服務，`max_connections=145` | 145 | 通過（剛好） |
-| 四個服務，`max_connections=144` | 145 | 失敗：`max_connections is 144, but 145 connections are needed: ... (per replica x pods: assets 12 x 2, certs 9 x 2, identity 31 x 2, telemetry-query 12 x 2), and 17 stay reserved ...` |
-| 四個服務，原本的 `max_connections=100` | 145 | 失敗 |
-| 展示環境的 overlay（目前開 identity、assets） | 103 | 通過 |
-| 展示環境的 overlay，四個服務全開 | 145 | 通過 |
-| 展示環境的 overlay，四個服務、identity 兩個副本 | 176 | 失敗：`identity 31 x 3` |
+| SaaS 型態，預設（沒有開服務） | 18 | 通過 |
+| SaaS 型態，四個用 Postgres 的服務 | 146 | 通過 |
+| 地端型態，四個用 Postgres 的服務 | 146 | 通過 |
+| 四個服務，`max_connections=146` | 146 | 通過（剛好） |
+| 四個服務，`max_connections=145` | 146 | 失敗：`max_connections is 145, but 146 connections are needed: ... (per replica x pods: assets 12 x 2, certs 9 x 2, identity 31 x 2, telemetry-query 12 x 2), and 18 stay reserved ...` |
+| 四個服務，原本的 `max_connections=100` | 146 | 失敗 |
+| 展示環境的 overlay（目前開 identity、assets） | 104 | 通過 |
+| 展示環境的 overlay，四個服務全開 | 146 | 通過 |
+| 展示環境的 overlay，四個服務、identity 兩個副本 | 177 | 失敗：`identity 31 x 3` |
 
 chart 測試另外驗證：全部規劃中的服務都開時兩種型態都通過；identity 的連線池小於 3、任何服務大於 100、用 Postgres 卻沒有 `database.maxConnections`、以自訂 `env` 設定 `TRUSTIOT__DATABASE__MAX_CONNECTIONS`、在 `serviceDefaults` 設定 `database` 都渲染失敗；smoke 替身列出 `postgres` 時因為沒有預算而失敗；`external` 模式不檢查加總、仍檢查每個連線池的範圍；Deployment 的 `maxSurge` 是 1。
 
@@ -66,7 +66,7 @@ PostgreSQL 18.6 以 chart 的參數與 CloudNativePG 的預設算出的共享記
 
 | 突變 | 改了什麼 | 抓到它的檢查 | 結果 |
 | --- | --- | --- | --- |
-| m1 | 拿掉 `values-check.yaml` 呼叫的 `trustiot.postgres.checkConnections` | `bun test deploy/chart -t "Postgres connection budget"` | 3 個測試失敗（144 該失敗卻通過、identity 第二個副本與較大的 assets 連線池該失敗卻通過） |
+| m1 | 拿掉 `values-check.yaml` 呼叫的 `trustiot.postgres.checkConnections` | `bun test deploy/chart -t "Postgres connection budget"` | 3 個測試失敗（145 該失敗卻通過、identity 第二個副本與較大的 assets 連線池該失敗卻通過） |
 | m2 | assets 的 `EVENT_READER_CONNECTIONS` 2 → 3 | `cargo test -p assets --test chart_connections` | 失敗：`the chart's otherPools for assets`，left 2、right 3 |
 | m3 | certs 的 `REGISTRATION_CONNECTIONS` 4 → 6 | `cargo test -p certs --test chart_connections` | 失敗：otherPools 4 對 6 |
 | m4 | telemetry-query 的 `start` 多開一個連線池 | `cargo test -p telemetry-query --test chart_connections` | 失敗：`.max_connections(...)` 多了一處 |
@@ -102,9 +102,15 @@ PostgreSQL 18.6 以 chart 的參數與 CloudNativePG 的預設算出的共享記
 | `bun test scripts` | 1621 pass、26 fail；main `dbe476c` 上同一台工作站跑出完全相同的 26 個失敗（`scripts/flux`、`scripts/nightly/certs.test.ts` 與 `scripts/dev` 的憑證測試，工作站的 openssl、`sha256sum` 與 sudo 環境），這次只改了 `scripts/ci/changes.ts` |
 | `bun run --cwd scripts typecheck`、`bun scripts/ci/check-secret-handling.ts`、`cargo deny --locked check` | 通過 |
 
+同日再合併 main `87b51f3`（Laysi/trustiot-v2#595 mqtt-bridge、Laysi/trustiot-v2#602 assistant 代表使用者呼叫其他服務、Laysi/trustiot-v2#594 第一位平台管理員的 bootstrap）：`deploy/chart/templates/_service.tpl` 的 env 說明與 mqtt-bridge 的 env 兩邊都保留。
+
+- Laysi/trustiot-v2#594 加了操作者從 CronJob 建立的 bootstrap Job，以 owner 開一條 session（`tools/migrate/src/platform_admin.rs`），可能在換版時執行，所以保留的連線加 1 條，共 18 條；四個服務全開時需要 146 條，`max_connections` 160 還有 14 條餘裕。
+- 上方「各種安裝的檢查結果」的表、[renders.txt](data/2026-10-23-575-postgres-connection-budget/renders.txt) 與突變 m1 都依合併後的程式重跑。
+- mqtt-bridge 不連 Postgres（`mesh.calls` 只列 `mqtt-broker`），assistant 仍沒有在 `mesh.calls` 列出 `postgres`，所以兩者都不在預算裡。
+
 ## 結論
 
-- 連線總數超過 `max_connections` 時檢查失敗：**通過**（上表的 144、100 與 identity 兩個副本；chart 測試；突變 m1 證明測試靠的是這個檢查）。
+- 連線總數超過 `max_connections` 時檢查失敗：**通過**（上表的 145、100 與 identity 兩個副本；chart 測試；突變 m1 證明測試靠的是這個檢查）。
 - 預設、`values-saas.yaml`、`values-onprem.yaml` 與展示環境四個服務全開都通過檢查：**通過**（`bun test deploy/chart`、`bun test deploy/flux` 的新測試）。
 - 服務的程式改了連線池而 chart 沒跟著改時有測試失敗：**通過**（突變 m2–m7）。身分服務在 `lib.rs` 再呼叫一次既有的連線池建構函式（例如多開一個 `LoginStore`）時，這次的測試抓不到，等 Laysi/trustiot-v2#497 的 `connections_per_replica()` 接上。
 - README 寫明算法、每個服務的數字與記憶體估算，新的 `max_connections` 估算在 1Gi 以內：**通過**，前提是估算以「固定部分加上可同時滿額的排序數」計算；若要求每條連線同時跑一個滿額 `work_mem` 排序，160 需要 1393 MB（原本的 100 也要 1028 MB），超過 1Gi，見 chart README。

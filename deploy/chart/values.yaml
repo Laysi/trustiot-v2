@@ -266,6 +266,12 @@ services:
       maxConnections: 10
   gateway-ops:
     enabled: false
+  # The gateways' MQTT inside WebSocket (services/mqtt-bridge, decision 6): ingress.publicPaths.mqtt
+  # on hosts.gateway reaches it without the cookie check, and it relays each connection unchanged
+  # to the broker's gateway port, so it needs mqttBroker.enabled (the chart sets the address) or it
+  # does not start. It records the gateway's address from the header that ingress.exposure implies
+  # (TRUSTIOT_CLIENT_IP_SOURCE); it supports the tunnel exposure only until
+  # Laysi/trustiot-v2#446 and does not start with any other.
   mqtt-bridge:
     enabled: false
   assistant:
@@ -502,7 +508,7 @@ postgres:
       work_mem: 4MB
       maintenance_work_mem: 64MB
       # Fits identity, assets, certs and telemetry-query at one replica each while all of them
-      # roll at once (128) plus the 17 reserved connections, with room for 15 more; the render
+      # roll at once (128) plus the 18 reserved connections, with room for 14 more; the render
       # fails when the enabled services need more. The memory estimate is in README.md
       # (「叢集內的 Postgres」).
       max_connections: 160

@@ -70,3 +70,46 @@ impl Event for MemberRoleChanged {
     const VERSION: u32 = 1;
     const PRODUCER: ServiceName = ServiceName::Identity;
 }
+
+/// The aggregate kind of user events; the aggregate ID is the user ID.
+pub const USER_AGGREGATE: &str = "user";
+
+/// A user became a platform administrator (A2, Laysi/trustiot-v2#582).
+///
+/// A platform-wide event: the envelope's `tenant_id` is null, since a platform administrator
+/// belongs to no tenant (and gets no tenant's data by being one). The aggregate is
+/// [`USER_AGGREGATE`] with the user ID. The payload names the user by ID only, never by email
+/// address: the operation log keeps it for good.
+///
+/// Today one path grants it: `migrate bootstrap-platform-admin`, which an operator runs once to
+/// create the first platform administrator ([`PlatformAdminGrant::Bootstrap`]). It writes the
+/// event as the identity schema's owner, in the transaction that sets the user's flag, without
+/// an `actor`: the operator who ran it is not a user of the platform.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PlatformAdminGranted {
+    /// The user who is now a platform administrator.
+    pub user_id: UserId,
+    /// How the grant was made.
+    pub via: PlatformAdminGrant,
+}
+
+impl Event for PlatformAdminGranted {
+    const TYPE: &'static str = "identity.platform_admin_granted";
+    const VERSION: u32 = 1;
+    const PRODUCER: ServiceName = ServiceName::Identity;
+}
+
+/// How a user became a platform administrator ([`PlatformAdminGranted::via`]). Only add
+/// variants, never rename one: a consumer built before a variant existed decodes it as
+/// [`PlatformAdminGrant::Unrecognized`] instead of failing.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PlatformAdminGrant {
+    /// The one-time creation of the first platform administrator (`migrate
+    /// bootstrap-platform-admin`, tools/migrate/README.md).
+    Bootstrap,
+    /// A way this build does not know, written by a newer producer. Decode only: serializing it
+    /// fails, so it never reaches an outbox.
+    #[serde(other, skip_serializing)]
+    Unrecognized,
+}

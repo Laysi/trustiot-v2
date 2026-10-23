@@ -86,6 +86,8 @@ proto 的 shim 偶爾會把自己的訊息寫進 stdout（例如另一個 proto 
 
 `web` 提供 SPA 的靜態檔（決策 2，Laysi/trustiot-v2#123）：開啟後 `hosts.app` 上 `/api`、`/auth` 以外的路徑都由它回應，不經 cookie 檢查，也拿不到 cookie 與身分標頭；不能有 cookie 路由（見「入口 gateway」的「SPA 的靜態檔」）。
 
+`mqtt-bridge` 把閘道器的 WebSocket（`ingress.publicPaths.mqtt`）原封不動轉成 TCP 送到 broker 的閘道器埠（決策 6，Laysi/trustiot-v2#85，services/mqtt-bridge/README.md）。`mqttBroker.enabled` 時 chart 設定 `TRUSTIOT__BROKER__ADDRESS`（`<release>-mqtt-broker.<namespace>.svc:8883`），broker 沒開時不設，服務拒絕啟動；不論 broker 開不開，`services.mqtt-bridge.env` 與 `serviceDefaults.env` 都不能設定它（渲染失敗），轉接服務只連叢集內的 broker。記錄的來源 IP 依 `TRUSTIOT_CLIENT_IP_SOURCE`：目前只支援 `tunnel`（`cf-connecting-ip`），其他 `ingress.exposure`（`x-forwarded-for-rightmost`）在 Laysi/trustiot-v2#446 之前拒絕啟動。渲染不因此失敗，因為 e2e 與「每個服務都開」的渲染測試要在 onprem 形態開啟它。`mesh.calls` 不能把 `mqtt-bridge` 列為被呼叫端（渲染失敗）：只有入口 gateway 連得到它，否則呼叫端能自己設可信的來源 IP 標頭，也能經它連到 broker 的閘道器埠。
+
 ## values 欄位
 
 「必填」指 schema 要求非空值。Secret 欄位一律是既有 Secret 的名稱與 key，名稱空白代表不設定。
@@ -451,7 +453,7 @@ chart 產生下列物件：
 | `postgres.bundled.parameters.effective_cache_size` | `384MB` | 查詢規劃用的快取估計，不實際配置記憶體 |
 | `postgres.bundled.parameters.work_mem` | `4MB` | 每個排序或 hash 的上限，一個查詢可能用好幾份 |
 | `postgres.bundled.parameters.maintenance_work_mem` | `64MB` | VACUUM、建索引用 |
-| `postgres.bundled.parameters.max_connections` | `160` | 10–1000；`bundled` 時 chart 檢查：啟用的服務在整版滾動時所有連線池的加總，加上保留給 superuser、CloudNativePG 與 migration Job 的 17 條，不能超過它，超過就渲染失敗。預設值放得下四個用 Postgres 的服務各一個副本（145 條），記憶體估算在 1Gi 以內；算法、每個服務的數字與估算見「叢集內的 Postgres」的連線預算 |
+| `postgres.bundled.parameters.max_connections` | `160` | 10–1000；`bundled` 時 chart 檢查：啟用的服務在整版滾動時所有連線池的加總，加上保留給 superuser、CloudNativePG、migration Job 與第一位平台管理員的 bootstrap 的 18 條，不能超過它，超過就渲染失敗。預設值放得下四個用 Postgres 的服務各一個副本（146 條），記憶體估算在 1Gi 以內；算法、每個服務的數字與估算見「叢集內的 Postgres」的連線預算 |
 | `postgres.bundled.nodeSelector` | `kubernetes.io/arch: arm64` | 映像只有 arm64（決策 5） |
 | `postgres.bundled.tolerations` | `[]` | |
 | `postgres.bundled.operator.namespace` | `cnpg-system` | CloudNativePG operator 所在的 namespace；NetworkPolicy 只放行它的 pod 連 Postgres pod 的 8000（instance manager） |
@@ -635,6 +637,15 @@ Job 做的事，依序：
 
 **失敗時**：Job 在 `migrate.backoffLimit` 次重試後失敗，服務停在 `Init`，舊版的 pod 繼續服務。看 `kubectl -n <namespace> logs job/<release>-migrate-<hash>`（JSON 行，只寫 stdout）；每一項變更與停止的原因都寫在裡面，不含密碼。處理方式見 [docs/runbooks/migrations.md](../../docs/runbooks/migrations.md)。
 
+### 第一位平台管理員
+
+`migrate.enabled` 與身分服務都啟用時，chart 另外渲染 CronJob `<release>-platform-admin-bootstrap`（`templates/platform-admin-bootstrap.yaml`，Laysi/trustiot-v2#582）。它不會自己執行（`suspend: true`，排程是不存在的 2 月 31 日），只是操作者建立第一位平台管理員時 `kubectl create job --from=cronjob/...` 的範本；步驟、結束碼與復原在 [docs/runbooks/platform-admin.md](../../docs/runbooks/platform-admin.md)。
+
+- 執行同一個 migrate 映像的 `migrate bootstrap-platform-admin`（[tools/migrate](../../tools/migrate/README.md)），以 migration 角色連 Postgres：與 Job 相同的 CA、`TRUSTIOT__POSTGRES__*` 與 `migrate.wait.databases`，沒有 `TRUSTIOT__PASSWORDS__*`、ClickHouse 設定與 projected token（它不碰 Kubernetes API）。
+- 電子郵件地址只從 stdin 來：容器 `stdin: true`、`stdinOnce: true`，操作者以 `kubectl attach -i` 寫入一行。chart、values、Job 的參數與環境變數裡都沒有地址，程式也不把它寫進日誌。
+- pod 用 migration Job 的 ServiceAccount（不掛 token）與 selector 標籤（`app.kubernetes.io/component: migrate`，另加 `trustiot.io/task: platform-admin-bootstrap`），在 ambient mesh 內，所以 `<release>-postgres` 的 NetworkPolicy 放行它，migration Job 的 AuthorizationPolicy 與 NetworkPolicy 讓任何東西都連不進它的 pod（上方呼叫矩陣的 `migrate` 一條；測試比對每個 policy 的 selector 對兩者的結果相同）。
+- 一次嘗試（`backoffLimit: 0`）：第二個 pod 會等一個沒人再寫的地址。`activeDeadlineSeconds: 900` 結束沒人 attach 的 pod；Job 與 pod（日誌有使用者 ID）在結束一天後刪除（`ttlSecondsAfterFinished: 86400`），runbook 要求操作者看完日誌就刪。`kubectl create job --from=cronjob/...` 讓 CronJob 成為 Job 的 controller，CronJob controller 即使在暫停中也會刪掉超過保留數的已結束 Job，所以 `successfulJobsHistoryLimit` 與 `failedJobsHistoryLimit` 都是 1：設 0 時成功的 Job 結束後幾秒就被刪掉，操作者讀不到結束碼。CronJob 名稱最多 52 個字元，release 名稱太長時截短前綴。`services.platform-admin-bootstrap` 保留給它。
+
 ## 叢集內的 Postgres
 
 `postgres.mode: bundled`（預設，SaaS 與地端相同）部署 `templates/postgres.yaml`：一個由 CloudNativePG 管理的 Postgres，映像是我們的 PostgreSQL 18 加 Apache AGE（[deploy/images/postgres](../images/postgres/README.md)，決策 21、清單 M8）。
@@ -692,7 +703,7 @@ operator 依 Cluster 再產生：pod 與 PVC `<cluster>-1`；Service `<cluster>-
 - `identity`：以 `identity_app` 連線的租戶、登入、寄信、run 委派與事件紀錄連線池共 16 條，以 `identity_platform` 連線的事件紀錄連線池 5 條（消費的產生端數加 2；certs 在 2026-10-23 加入後是 3 個產生端），見 [services/identity/README.md](../../services/identity/README.md) 的「連線池」。
 - assistant 的程式已經會用 Postgres（Laysi/trustiot-v2#588），但 chart 還沒讓它連（`mesh.calls` 沒有列）。讓它連的 issue 要在預算加上它的連線池、在 values 給它 `database.maxConnections`，檢查自動算進去；`max_connections` 不夠時，依下方的記憶體估算調整。
 
-**保留的連線**（`trustiot.postgres.reservedConnections`，共 17 條，依 CloudNativePG 1.30.1 的原始碼與 PostgreSQL 18 的預設值）：
+**保留的連線**（`trustiot.postgres.reservedConnections`，共 18 條，依 CloudNativePG 1.30.1 的原始碼與 PostgreSQL 18 的預設值）：
 
 | 用途 | 條數 | 來源 |
 | --- | --- | --- |
@@ -700,8 +711,9 @@ operator 依 Cluster 再產生：pod 與 PVC `<cluster>-1`；Service `<cluster>-
 | CloudNativePG 的 instance manager（`postgres`，pod 內的 local socket） | 6 | 每個資料庫一個連線池，最多 3 條、不留閒置連線（`pkg/management/postgres/pool/pool.go` 的 `SetMaxOpenConns(3)`、`SetMaxIdleConns(0)`）；`postgres` 與 `trustiot`（AGE extension 的調和），`template1` 只在 bootstrap，服務還沒啟動 |
 | `cnpg_metrics_exporter` | 6 | 同樣的連線池，`postgres` 與 `trustiot` |
 | migration Job | 2 | 它以 owner 開的一條 session，與檢查角色密碼時的一次登入（`tools/migrate/src/postgres.rs`） |
+| 第一位平台管理員的 bootstrap | 1 | 操作者從 CronJob `<release>-platform-admin-bootstrap` 建立的 Job（`templates/platform-admin-bootstrap.yaml`、[docs/runbooks/platform-admin.md](../../docs/runbooks/platform-admin.md)），以 owner 開一條 session（`tools/migrate/src/platform_admin.rs`）；操作者可能在換版時執行它 |
 
-所以預設值、`values-saas.yaml`、`values-onprem.yaml` 與展示環境（`deploy/flux/clusters/demo/trustiot/values-demo.yaml`）在四個服務全開時需要 128 + 17 = 145 條；`max_connections` 預設 160，還有 15 條餘裕。只換一個服務、或只開部分服務時需要的更少。2026-10-23 之前預設是 100，四個服務全開時整版滾動會超過（Laysi/trustiot-v2#497 的安全審查 F3）。
+所以預設值、`values-saas.yaml`、`values-onprem.yaml` 與展示環境（`deploy/flux/clusters/demo/trustiot/values-demo.yaml`）在四個服務全開時需要 128 + 18 = 146 條；`max_connections` 預設 160，還有 14 條餘裕。只換一個服務、或只開部分服務時需要的更少。2026-10-23 之前預設是 100，四個服務全開時整版滾動會超過（Laysi/trustiot-v2#497 的安全審查 F3）。
 
 **程式與預算的綁定**：預算是 JSON，Helm 以 `fromJson` 讀，用 Postgres 的服務各有一個 Rust 測試（`services/<服務>/tests/chart_connections.rs`）以 `crates/testkit` 的 `chart::postgres_connection_budget` 讀同一段文字，比對程式的常數（其他連線池、`database.maxConnections` 接受的範圍），並以 `chart::pool_size_calls` 列出程式裡每個 `.max_connections(...)`：連線池變大、或多了一個連線池而預算沒跟著改，測試就失敗。身分服務的其他連線池目前由測試把各連線池的常數加總；Laysi/trustiot-v2#497 會改用身分服務自己的 `connections_per_replica()`。主要連線池的預設值由 chart 傳入，程式裡的預設值不影響部署。
 

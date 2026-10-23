@@ -275,6 +275,9 @@ and brokerPort; the render fails when the broker runs but there is no broker-cer
 {{- if and (eq (toString .) "ai-gateway") (not (has $caller $aiGatewayCallers)) -}}
 {{- fail (printf "mesh.calls.%s: only %s may call ai-gateway (decision 28): it verifies no internal identity and spends the AI provider accounts, so the mesh alone keeps every other service out (deploy/chart/README.md, \"服務間授權（mesh）\")" $caller (join ", " $aiGatewayCallers)) -}}
 {{- end -}}
+{{- if eq (toString .) "mqtt-bridge" -}}
+{{- fail (printf "mesh.calls.%s: no service may call mqtt-bridge: only the ingress gateway reaches it (decisions 6 and 27), because a caller could set the trusted source-IP header itself and reach the broker's gateway port through it (services/mqtt-bridge/README.md, \"來源 IP\")" $caller) -}}
+{{- end -}}
 {{- if and (eq (toString .) "mqtt-broker") (not (has $caller (concat $brokerCallers.gateway.callers $brokerCallers.service.callers))) -}}
 {{- fail (printf "mesh.calls.%s: the MQTT broker admits only %s on its gateway port and %s on its service port (deploy/chart/README.md, \"MQTT broker\")" $caller (join ", " $brokerCallers.gateway.callers) (join ", " $brokerCallers.service.callers)) -}}
 {{- end -}}

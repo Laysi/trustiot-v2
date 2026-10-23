@@ -765,7 +765,7 @@ describe("the demo release", () => {
       // The control: a second identity replica is 31 x 3 instead of 31 x 2, past the default 160.
       const more = helmTemplate([overlay, allFour], [...setLiteral, "--set", "services.identity.replicas=2"]);
       expect(more.code).not.toBe(0);
-      expect(more.stderr).toContain("postgres.bundled.parameters.max_connections is 160, but 176 connections are needed");
+      expect(more.stderr).toContain("postgres.bundled.parameters.max_connections is 160, but 177 connections are needed");
     },
     SLOW_TEST_MS,
   );

@@ -12,7 +12,7 @@ use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
 use service_kit::migrations::{RECORDS_TABLE, RECORDS_TEMPLATE, outbox_component};
-use service_kit::postgres::require_verify_full;
+use service_kit::postgres::{PostgresConfig, require_verify_full};
 use sqlx::postgres::PgConnectOptions;
 use sqlx::{Connection, Executor, PgConnection, Row};
 
@@ -429,9 +429,20 @@ impl Session {
     ///
     /// When the connection settings are not verify-full, or no connection succeeded in time.
     pub async fn connect(config: &RunConfig) -> Result<Self, Error> {
-        let options = config.postgres().connect_options();
+        Self::connect_with(&config.postgres(), config.wait.databases).await
+    }
+
+    /// [`Self::connect`] with explicit settings: `postgres` names the migration role, and the
+    /// session retries for up to `wait`. `migrate bootstrap-platform-admin` connects this way
+    /// (crate::platform_admin).
+    ///
+    /// # Errors
+    ///
+    /// When the connection settings are not verify-full, or no connection succeeded in time.
+    pub async fn connect_with(postgres: &PostgresConfig, wait: Duration) -> Result<Self, Error> {
+        let options = postgres.connect_options();
         require_verify_full(&options).map_err(|error| Error::MigrationRole {
-            role: config.postgres.username.clone(),
+            role: postgres.username.clone(),
             problem: error.to_string(),
         })?;
         let started = Instant::now();
@@ -440,11 +451,8 @@ impl Session {
             match PgConnection::connect_with(&options).await {
                 Ok(conn) => break conn,
                 Err(error) => {
-                    if started.elapsed() >= config.wait.databases {
-                        return Err(Error::PostgresUnavailable(
-                            config.wait.databases,
-                            error.to_string(),
-                        ));
+                    if started.elapsed() >= wait {
+                        return Err(Error::PostgresUnavailable(wait, error.to_string()));
                     }
                     if reported.is_none_or(|at| at.elapsed() >= REPORT_EVERY) {
                         tracing::warn!(error = %error, "Postgres does not accept the migration role yet; retrying");
@@ -456,7 +464,7 @@ impl Session {
         };
         let mut session = Self {
             conn,
-            migrator: config.postgres.username.clone(),
+            migrator: postgres.username.clone(),
             locked: false,
         };
         sqlx::query(APPLICATION_NAME)
@@ -464,6 +472,47 @@ impl Session {
             .await
             .map_err(Error::postgres("set the application name"))?;
         Ok(session)
+    }
+
+    /// Begins a transaction that runs as the owner role `owner`, with `search_path` set to its
+    /// schema `schema`, so unqualified names (the outbox tables) resolve there. Role and
+    /// `search_path` are transaction-local (`set_config(..., true)`): they end with the
+    /// transaction, committed or not. `migrate bootstrap-platform-admin` writes the identity
+    /// service's tables this way (crate::platform_admin); the role switch stays in this file
+    /// (see the module documentation).
+    ///
+    /// # Errors
+    ///
+    /// When `owner` or `schema` is not a plain identifier, or a statement fails (for example the
+    /// migration role may not SET `owner`).
+    pub async fn begin_as_owner(
+        &mut self,
+        owner: &str,
+        schema: &str,
+    ) -> Result<sqlx::Transaction<'_, sqlx::Postgres>, Error> {
+        if !is_plain_identifier(owner) || !is_plain_identifier(schema) {
+            return Err(Error::Role {
+                role: owner.to_owned(),
+                problem: format!("{owner} or {schema} is not a plain identifier"),
+            });
+        }
+        let context = format!("begin a transaction as {owner} in {schema}");
+        let mut tx = self
+            .conn
+            .begin()
+            .await
+            .map_err(Error::postgres(context.clone()))?;
+        sqlx::query(SET_SEARCH_PATH)
+            .bind(schema)
+            .execute(&mut *tx)
+            .await
+            .map_err(Error::postgres(context.clone()))?;
+        sqlx::query(SET_ROLE)
+            .bind(owner)
+            .execute(&mut *tx)
+            .await
+            .map_err(Error::postgres(context))?;
+        Ok(tx)
     }
 
     /// Takes the migration lock, waiting up to `wait` while another run holds it.

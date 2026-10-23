@@ -20,6 +20,9 @@ base64.workspace = true
 # The certs service's issuing CA keys the certs pod's init container keeps
 # (`migrate certs-ca-keys`, src/ca_keys.rs).
 ca-keys = { path = "../../crates/ca-keys" }
+# The event `migrate bootstrap-platform-admin` publishes (`identity.platform_admin_granted`) and
+# the user ID it carries (src/platform_admin.rs).
+contract = { path = "../../crates/contract" }
 getrandom.workspace = true
 hmac.workspace = true
 # The internal identity signing keys the identity pod's init container keeps

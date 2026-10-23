@@ -201,6 +201,10 @@ Connections of the bundled Postgres that no service's pool may take (README.md, 
   metricsExporter    cnpg_metrics_exporter, the same kind of pool, on postgres and trustiot
   migrationJob       tools/migrate: its session as the owner, and one login at a time to check a
                      role's password
+  platformAdminBootstrap
+                     the Job an operator starts from the platform-admin-bootstrap CronJob
+                     (templates/platform-admin-bootstrap.yaml): one session as the owner, which
+                     may overlap a rollout
 JSON like the budgets above.
 */}}
 {{- define "trustiot.postgres.reservedConnections" -}}
@@ -208,7 +212,8 @@ JSON like the budgets above.
   "superuserReserved": 3,
   "instanceManager": 6,
   "metricsExporter": 6,
-  "migrationJob": 2
+  "migrationJob": 2,
+  "platformAdminBootstrap": 1
 }
 {{- end -}}
 
@@ -280,7 +285,7 @@ server's max_connections (README.md says how many it must allow). Renders nothin
 {{- range $plan.services -}}
 {{- $parts = append $parts (printf "%s %d x %d" .name (int .perReplica) (int .pods)) -}}
 {{- end -}}
-{{- fail (printf "postgres.bundled.parameters.max_connections is %d, but %d connections are needed: the services can open %d while all of them roll at once (per replica x pods: %s), and %d stay reserved for superusers, CloudNativePG and the migration Job. Raise max_connections within the memory limit, or lower replicas or services.<name>.database.maxConnections (README.md, 「叢集內的 Postgres」)" $limit (int $plan.total) (int $plan.servicesTotal) (join ", " $parts) (int $plan.reserved)) -}}
+{{- fail (printf "postgres.bundled.parameters.max_connections is %d, but %d connections are needed: the services can open %d while all of them roll at once (per replica x pods: %s), and %d stay reserved for superusers, CloudNativePG, the migration Job and the platform administrator bootstrap. Raise max_connections within the memory limit, or lower replicas or services.<name>.database.maxConnections (README.md, 「叢集內的 Postgres」)" $limit (int $plan.total) (int $plan.servicesTotal) (join ", " $parts) (int $plan.reserved)) -}}
 {{- end -}}
 {{- end -}}
 {{- end -}}
