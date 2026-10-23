@@ -111,8 +111,6 @@ fn tokens<'a>(headers: &'a HeaderMap, name: &HeaderName) -> impl Iterator<Item =
 
 #[cfg(test)]
 mod tests {
-    use base64::Engine as _;
-
     use super::*;
 
     fn request(pairs: &[(&'static str, &'static str)]) -> HeaderMap {
