@@ -16,7 +16,7 @@ use crate::config::{self, KitConfig, Settings, Validate};
 use crate::health::Health;
 use crate::http;
 use crate::shutdown::{self, Shutdown};
-use crate::telemetry::{self, Telemetry, duration_ms};
+use crate::telemetry::{self, LogCeiling, Telemetry, duration_ms};
 
 /// The error type service startup may return.
 pub type BoxError = Box<dyn std::error::Error + Send + Sync + 'static>;
@@ -38,6 +38,9 @@ pub struct ServiceInfo {
     pub version: &'static str,
     /// The prefix of configuration variables (see [`crate::config`]).
     pub env_prefix: &'static str,
+    /// Levels that some targets' events never exceed, whatever `telemetry.log_filter` says
+    /// (see [`ServiceInfo::with_log_ceilings`]). Empty by default.
+    pub log_ceilings: &'static [LogCeiling],
 }
 
 impl ServiceInfo {
@@ -47,12 +50,24 @@ impl ServiceInfo {
             name,
             version,
             env_prefix: config::DEFAULT_ENV_PREFIX,
+            log_ceilings: &[],
         }
     }
 
     /// Uses another configuration prefix, for a service that must not carry the product name.
     pub const fn with_env_prefix(self, env_prefix: &'static str) -> Self {
         Self { env_prefix, ..self }
+    }
+
+    /// Caps the level of these targets (and their submodules) whatever `telemetry.log_filter`
+    /// says, in the stdout lines and in the OTLP export alike: for a dependency whose verbose
+    /// levels write data that must never leave the process, for example a WebSocket library
+    /// that writes every frame's payload at TRACE (services/mqtt-bridge).
+    pub const fn with_log_ceilings(self, log_ceilings: &'static [LogCeiling]) -> Self {
+        Self {
+            log_ceilings,
+            ..self
+        }
     }
 }
 

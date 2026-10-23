@@ -2,8 +2,8 @@
 //! files in apply order (Laysi/trustiot-v2#553). No outbox: the assistant writes no events yet.
 //!
 //! Two crates compile this file: the service, whose readiness check
-//! ([`service_kit::migrations::MigrationCheck`]) will keep failing until the database has every
-//! file once the service connects to Postgres (Laysi/trustiot-v2#552 wires the database in), and
+//! ([`service_kit::migrations::MigrationCheck`], registered in `start`) fails until the database
+//! has every file (Laysi/trustiot-v2#592), and
 //! the migration Job (`tools/migrate/src/registry.rs` includes it with `#[path]`), which applies
 //! exactly these files. One list, so the two cannot disagree. Keep the file self-contained: it
 //! may use `service_kit` only. A new file is a new entry at the end; applied files never change

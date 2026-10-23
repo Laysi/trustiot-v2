@@ -24,6 +24,7 @@ use tracing_subscriber::layer::Context;
 use tracing_subscriber::registry::LookupSpan;
 
 use super::redact::{REDACTED, is_sensitive};
+use super::{LogCeiling, above_ceiling};
 
 /// Whether events with this target come from the OpenTelemetry SDK crates (`opentelemetry`,
 /// `opentelemetry_sdk`, `opentelemetry-otlp`, `opentelemetry-http`, ...). The SDK names its
@@ -247,15 +248,22 @@ pub(crate) struct LogLayer<W> {
     sink: W,
     service: &'static str,
     otel: Option<SdkLogger>,
+    ceilings: &'static [LogCeiling],
     dispatch: OnceLock<WeakDispatch>,
 }
 
 impl<W: LineSink> LogLayer<W> {
-    pub(crate) fn new(sink: W, service: &'static str, otel: Option<SdkLogger>) -> Self {
+    pub(crate) fn new(
+        sink: W,
+        service: &'static str,
+        otel: Option<SdkLogger>,
+        ceilings: &'static [LogCeiling],
+    ) -> Self {
         Self {
             sink,
             service,
             otel,
+            ceilings,
             dispatch: OnceLock::new(),
         }
     }
@@ -294,7 +302,9 @@ where
         let target = recorded.log_target.as_deref().unwrap_or(metadata.target());
         // The filter judges by the event's own target; an event bridged from the `log` crate
         // carries its real target only as a field, so the decision is repeated here.
-        if sdk_diagnostic_suppressed(target, metadata.level()) {
+        if sdk_diagnostic_suppressed(target, metadata.level())
+            || above_ceiling(self.ceilings, target, metadata.level())
+        {
             return;
         }
         let span_context = self.span_context(event, &ctx);
@@ -585,6 +595,72 @@ mod tests {
             .expect("JSON is UTF-8");
         assert!(!raw.contains("canary"), "{raw}");
         assert_eq!(messages(&capture), ["warn kept", "native"]);
+    }
+
+    /// What services/mqtt-bridge sets: the WebSocket library's TRACE writes frame payloads.
+    const WEBSOCKET_CEILING: &[LogCeiling] = &[LogCeiling::new("tungstenite", Level::DEBUG)];
+
+    #[test]
+    fn log_ceilings_hold_whatever_the_filter_says() {
+        for filter in [
+            "trace",
+            "info,tungstenite=trace",
+            "tungstenite::protocol=trace",
+        ] {
+            let (subscriber, capture, _provider) =
+                crate::telemetry::test_support::capture_subscriber_with_ceilings(
+                    filter,
+                    WEBSOCKET_CEILING,
+                );
+            tracing::subscriber::with_default(subscriber, || {
+                // As tungstenite logs: through the `log` crate, from its own modules.
+                bridge(
+                    "tungstenite::protocol::frame",
+                    log::Level::Trace,
+                    "frame canary",
+                );
+                bridge("tungstenite::protocol", log::Level::Debug, "close debug");
+                bridge("tungstenite", log::Level::Warn, "crate warn");
+                tracing::trace!(target: "tungstenite::protocol", "native canary");
+                // Other targets keep what the filter gives them, including look-alike names.
+                bridge("tungstenite_extra", log::Level::Trace, "look-alike trace");
+                tracing::trace!(target: "other", "other trace");
+            });
+            let raw = String::from_utf8(capture.0.lock().expect("capture lock").clone())
+                .expect("JSON is UTF-8");
+            assert!(!raw.contains("canary"), "{filter}: {raw}");
+            let kept = messages(&capture);
+            assert!(
+                kept.contains(&"close debug".to_owned()),
+                "{filter}: {kept:?}"
+            );
+            if filter == "trace" {
+                assert_eq!(
+                    kept,
+                    [
+                        "close debug",
+                        "crate warn",
+                        "look-alike trace",
+                        "other trace"
+                    ],
+                    "{filter}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn without_a_ceiling_the_filter_alone_decides() {
+        // The control for the test above: the same events are written when no ceiling is set.
+        let (subscriber, capture, _provider) = capture_subscriber("info,tungstenite=trace");
+        tracing::subscriber::with_default(subscriber, || {
+            bridge(
+                "tungstenite::protocol::frame",
+                log::Level::Trace,
+                "frame canary",
+            );
+        });
+        assert_eq!(messages(&capture), ["frame canary"]);
     }
 
     #[test]

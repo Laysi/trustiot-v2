@@ -112,6 +112,7 @@ async fn connection_and_traffic_metrics_reach_the_collector() {
         &[
             ("TRUSTIOT__TELEMETRY__OTLP_ENDPOINT", endpoint.as_str()),
             ("TRUSTIOT__MAX_CONNECTIONS", "2"),
+            ("TRUSTIOT__MAX_CONNECTIONS_PER_IP", "1"),
         ],
     )
     .await;
@@ -128,6 +129,22 @@ async fn connection_and_traffic_metrics_reach_the_collector() {
         .await,
     );
     assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+    let status = refused_status(
+        connect_ws(
+            bridge.address,
+            &bridge.url(),
+            &via_cloudflare("203.0.113.7"),
+        )
+        .await,
+    );
+    assert_eq!(status, StatusCode::TOO_MANY_REQUESTS);
+    // The same source again, and through its 6to4 address (2002:cb00:7107::/48 is 203.0.113.7).
+    for address in ["203.0.113.7", "2002:cb00:7107::1"] {
+        let status = refused_status(
+            connect_ws(bridge.address, &bridge.url(), &via_cloudflare(address)).await,
+        );
+        assert_eq!(status, StatusCode::TOO_MANY_REQUESTS, "{address}");
+    }
     let status = refused_status(connect_ws(bridge.address, &bridge.url(), &[]).await);
     assert_eq!(status, StatusCode::BAD_REQUEST);
     send_binary(&mut first, &support::PINGREQ).await;
@@ -138,6 +155,14 @@ async fn connection_and_traffic_metrics_reach_the_collector() {
     // The kit flushes the metrics at exit.
     bridge.terminate();
     assert_eq!(bridge.wait_exit().await, 0, "{}", bridge.dump());
+    // Three refusals of one bucket within a minute: one WARN line.
+    let over: Vec<_> = bridge
+        .messages("refused a gateway WebSocket")
+        .into_iter()
+        .filter(|line| line["fields"]["reason"] == "over_source_limit")
+        .collect();
+    assert_eq!(over.len(), 1, "{}", bridge.dump());
+    assert_eq!(over[0]["fields"]["source.bucket"], "203.0.113.7");
     let sums = wait_until("the exported metrics", || {
         let sums = collector.sums();
         sums.contains_key(&("mqtt_bridge.connections.active".to_owned(), String::new()))
@@ -166,6 +191,13 @@ async fn connection_and_traffic_metrics_reach_the_collector() {
             "reason=client_ip_missing"
         ),
         1
+    );
+    assert_eq!(
+        value(
+            "mqtt_bridge.connections.refused",
+            "reason=over_source_limit"
+        ),
+        3
     );
     // CONNECT twice and PINGREQ once to the broker; CONNACK twice and PINGRESP once back.
     let to_broker = 2 * support::CONNECT_KEEPALIVE_0.len() + support::PINGREQ.len();

@@ -747,6 +747,30 @@ describe("the demo release", () => {
   );
 
   test(
+    "with all four Postgres services on, the overlay passes the chart's connection check, which still refuses one replica more (Laysi/trustiot-v2#575)",
+    () => {
+      // The demo slice turns certs and telemetry-query on next to identity and assets, and Flux rolls
+      // every service at once: the chart refuses values whose pools could then exceed Postgres'
+      // max_connections (deploy/chart/README.md, 「連線預算」).
+      const allFour: YamlMap = { services: { certs: { enabled: true }, "telemetry-query": { enabled: true } } };
+      const result = helmTemplate([overlay, allFour], setLiteral);
+      expect(result.stderr).toBe("");
+      expect(result.code).toBe(0);
+      const objects = parseAll(result.stdout);
+      const postgresClients = objects
+        .filter((m) => m.kind === "Deployment" && JSON.stringify(m).includes("TRUSTIOT__DATABASE__MAX_CONNECTIONS"))
+        .map((m) => m.metadata.name)
+        .sort();
+      expect(postgresClients).toEqual(["trustiot-assets", "trustiot-certs", "trustiot-identity", "trustiot-telemetry-query"]);
+      // The control: a second identity replica is 31 x 3 instead of 31 x 2, past the default 160.
+      const more = helmTemplate([overlay, allFour], [...setLiteral, "--set", "services.identity.replicas=2"]);
+      expect(more.code).not.toBe(0);
+      expect(more.stderr).toContain("postgres.bundled.parameters.max_connections is 160, but 181 connections are needed");
+    },
+    SLOW_TEST_MS,
+  );
+
+  test(
     "the README's values that turn telemetry-query on render with the overlay: the service, its cookie route on the private app host, no Secret to add (Laysi/trustiot-v2#539)",
     () => {
       // The YAML block under 「打開 telemetry-query」 in deploy/flux/README.md, as an operator copies it.

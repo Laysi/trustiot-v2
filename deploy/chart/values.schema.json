@@ -166,6 +166,7 @@
           "properties": {
             "enabled": false,
             "credentials": false,
+            "database": false,
             "env": {
               "description": "Every service gets serviceDefaults.env, so it must not read Secrets.",
               "items": { "properties": { "valueFrom": { "not": { "required": ["secretKeyRef"] } } } }
@@ -1217,6 +1218,19 @@
           "type": "array",
           "uniqueItems": true,
           "items": { "enum": ["qdrant-read", "qdrant-write", "object-storage", "smtp", "ai"] }
+        },
+        "database": {
+          "description": "Postgres settings of a service that lists postgres under mesh.calls; never set in serviceDefaults.",
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "maxConnections": {
+              "description": "Size of the service's main pool (TRUSTIOT__DATABASE__MAX_CONNECTIONS); the chart checks the service's own range and the sum against postgres.bundled.parameters.max_connections.",
+              "type": "integer",
+              "minimum": 2,
+              "maximum": 100
+            }
+          }
         },
         "preStopSleepSeconds": { "type": "integer", "minimum": 0, "maximum": 60 },
         "drainSeconds": { "type": "integer", "minimum": 1, "maximum": 3600 },

@@ -143,6 +143,23 @@ pub struct WorkstationCertificate {
     pub revocation_reason: Option<RevocationReason>,
 }
 
+/// The extended key usage of workstation certificates, "TrustIoT production workstation": an
+/// OID under the UUID arc 2.25 (ITU-T X.667; UUID `edc7e7d8-ab9e-4c72-a01b-aa39eb83e905`), which
+/// needs no registration. Neither clientAuth, serverAuth nor anyExtendedKeyUsage, so no TLS peer
+/// accepts a workstation certificate; the registration API (Laysi/trustiot-v2#79) and the
+/// workstation tool (factory/workstation) require it.
+pub const WORKSTATION_PURPOSE: &str = "2.25.316065004478888347166512336770143873285";
+
+/// [`WORKSTATION_PURPOSE`] as DER content octets (no tag and length), the form verifiers
+/// compare: the first two arcs as 2 × 40 + 25 = 105, then the UUID's 128 bits in base 128.
+pub const WORKSTATION_PURPOSE_DER: [u8; 20] = [
+    0x69, 0x83, 0xdb, 0xc7, 0xf3, 0xf6, 0x95, 0xb9, 0xf2, 0xb1, 0xe5, 0xa0, 0x8d, 0xea, 0xc7, 0x9e,
+    0xdc, 0x8f, 0xd2, 0x05,
+];
+
+/// What every workstation certificate's common name starts with; the workstation's name follows.
+pub const WORKSTATION_SUBJECT_PREFIX: &str = "workstation:";
+
 /// The workstation certificate a registration request is signed with, DER, in standard base64
 /// with padding (RFC 4648 section 4), on one line (Laysi/trustiot-v2#79).
 pub const WORKSTATION_CERTIFICATE_HEADER: &str = "trustiot-workstation-certificate";
