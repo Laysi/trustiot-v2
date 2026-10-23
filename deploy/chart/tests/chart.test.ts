@@ -1953,6 +1953,31 @@ describe("MQTT broker (decision 6, Laysi/trustiot-v2#84)", () => {
     expect(broker.volumeMounts).toContainEqual({ name: "config", mountPath: "/mosquitto/config/mosquitto.conf", subPath: "mosquitto.conf", readOnly: true });
   }, SLOW_TEST_MS);
 
+  test("decision 6: TCP_NODELAY broker-wide, and the gateways' listener puts ChaCha20-Poly1305 first (Laysi/trustiot-v2#564)", () => {
+    // Split the rendered configuration at each `listener` line: the part before the first one
+    // holds the broker-wide options. Comments and blank lines are dropped.
+    const sections = new Map<string, string[]>([["global", []]]);
+    let current = sections.get("global") as string[];
+    for (const line of configOf(manifests).split("\n")) {
+      if (line === "" || line.startsWith("#")) continue;
+      if (line.startsWith("listener ")) {
+        current = [];
+        sections.set(line, current);
+      } else current.push(line);
+    }
+    expect([...sections.keys()]).toEqual(["global", `listener ${GATEWAY_PORT}`, `listener ${SERVICE_PORT}`, "listener 0 /run/mosquitto/probe.sock"]);
+    const optionsOf = (section: string, option: string) => (sections.get(section) ?? []).filter((line) => line.split(" ")[0] === option);
+    // Mosquitto picks the TLS 1.3 suite in its own order, not the client's, so ChaCha20 must lead.
+    expect(optionsOf(`listener ${GATEWAY_PORT}`, "ciphers_tls1.3")).toEqual([
+      "ciphers_tls1.3 TLS_CHACHA20_POLY1305_SHA256:TLS_AES_256_GCM_SHA384:TLS_AES_128_GCM_SHA256",
+    ]);
+    expect(optionsOf(`listener ${GATEWAY_PORT}`, "tls_version")).toEqual(["tls_version tlsv1.3"]);
+    expect(optionsOf("global", "set_tcp_nodelay")).toEqual(["set_tcp_nodelay true"]);
+    for (const section of sections.keys()) if (section !== "global") expect(optionsOf(section, "set_tcp_nodelay"), section).toEqual([]);
+    // The services' listener stays plain MQTT inside the mesh (ztunnel's mTLS), with no TLS options.
+    expect((sections.get(`listener ${SERVICE_PORT}`) ?? []).filter((line) => /^(ciphers|tls_|certfile|keyfile)/.test(line))).toEqual([]);
+  });
+
   test("the probes run the broker tests' command on the probe socket: no TCP probe, no TLS handshake, no port for the node", () => {
     const probe = rustConst(brokerTest, "PROBE");
     for (const [kind, found] of [

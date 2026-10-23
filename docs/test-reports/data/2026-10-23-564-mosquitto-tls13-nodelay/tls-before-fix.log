@@ -1,0 +1,74 @@
+== image: docker.io/library/eclipse-mosquitto:2.1.2-alpine@sha256:38c0da4f2ef84284d47b3b3eeea1cb3bdeabe81ee10caf0cd5c5ff61ee3ea408
+== config lines under test (from the rendered ConfigMap):
+61:listener 8883
+71:tls_version tlsv1.3
+76:listener 1883
+85:listener 0 /run/mosquitto/probe.sock
+88:listener_allow_anonymous true
+
+== client: openssl s_client -tls1_3 -ciphersuites TLS_CHACHA20_POLY1305_SHA256:TLS_AES_256_GCM_SHA384:TLS_AES_128_GCM_SHA256 (client certificate CN=gw-test-0001)
+CONNECTION ESTABLISHED
+Protocol version: TLSv1.3
+Ciphersuite: TLS_AES_256_GCM_SHA384
+Verification: OK
+openssl exit status: 0
+RESULT: PASS (negotiated TLS_AES_256_GCM_SHA384)
+
+== client: openssl s_client -tls1_3 -ciphersuites TLS_AES_256_GCM_SHA384:TLS_AES_128_GCM_SHA256:TLS_CHACHA20_POLY1305_SHA256 (client certificate CN=gw-test-0001)
+CONNECTION ESTABLISHED
+Protocol version: TLSv1.3
+Ciphersuite: TLS_AES_256_GCM_SHA384
+Verification: OK
+openssl exit status: 0
+RESULT: PASS (negotiated TLS_AES_256_GCM_SHA384)
+
+== broker log:
+2026-10-23T08:37:28Z: Info: running mosquitto as user: mosquitto.
+2026-10-23T08:37:28Z: mosquitto version 2.1.2 starting
+2026-10-23T08:37:28Z: Config loaded from /mosquitto/config/mosquitto.conf.
+2026-10-23T08:37:28Z: Bridge support available.
+2026-10-23T08:37:28Z: Persistence support available.
+2026-10-23T08:37:28Z: TLS support available.
+2026-10-23T08:37:28Z: TLS-PSK support available.
+2026-10-23T08:37:28Z: Websockets support available.
+2026-10-23T08:37:28Z: Loading plugin: /usr/lib/mosquitto_dynamic_security.so
+2026-10-23T08:37:28Z: Plugin dynamic-security has registered to receive 'control' events on topic $CONTROL/dynamic-security/v1.
+2026-10-23T08:37:28Z: Plugin dynamic-security has registered to receive 'basic-auth' events.
+2026-10-23T08:37:28Z: Plugin dynamic-security has registered to receive 'acl-check' events.
+2026-10-23T08:37:28Z: Plugin dynamic-security has registered to receive 'tick' events.
+2026-10-23T08:37:28Z: Plugin dynamic-security loaded.
+2026-10-23T08:37:28Z: Loading plugin: /usr/lib/mosquitto_persist_sqlite.so
+2026-10-23T08:37:28Z: Plugin has registered to receive 'persist-restore' events.
+2026-10-23T08:37:28Z: Plugin has registered to receive 'persist-base-msg-add' events.
+2026-10-23T08:37:28Z: Plugin has registered to receive 'persist-base-msg-delete' events.
+2026-10-23T08:37:28Z: Plugin has registered to receive 'persist-retain-msg-set' events.
+2026-10-23T08:37:28Z: Plugin has registered to receive 'persist-retain-msg-delete' events.
+2026-10-23T08:37:28Z: Plugin has registered to receive 'persist-client-add' events.
+2026-10-23T08:37:28Z: Plugin has registered to receive 'persist-client-delete' events.
+2026-10-23T08:37:28Z: Plugin has registered to receive 'persist-client-update' events.
+2026-10-23T08:37:28Z: Plugin has registered to receive 'persist-subscription-add' events.
+2026-10-23T08:37:28Z: Plugin has registered to receive 'persist-subscription-delete' events.
+2026-10-23T08:37:28Z: Plugin has registered to receive 'persist-client-msg-add' events.
+2026-10-23T08:37:28Z: Plugin has registered to receive 'persist-client-msg-delete' events.
+2026-10-23T08:37:28Z: Plugin has registered to receive 'persist-client-msg-update' events.
+2026-10-23T08:37:28Z: Plugin has registered to receive 'persist-will-add' events.
+2026-10-23T08:37:28Z: Plugin has registered to receive 'persist-will-delete' events.
+2026-10-23T08:37:28Z: Plugin has registered to receive 'tick' events.
+2026-10-23T08:37:28Z: sqlite: Restored 0 base messages (0 failed)
+2026-10-23T08:37:28Z: sqlite: Restored 0 retained messages (0 failed)
+2026-10-23T08:37:28Z: sqlite: Restored 0 clients (0 failed)
+2026-10-23T08:37:28Z: sqlite: Restored 0 subscriptions (0 failed)
+2026-10-23T08:37:28Z: sqlite: Restored 0 client messages (0 failed)
+2026-10-23T08:37:28Z: sqlite: Restored 0 will messages (0 failed)
+2026-10-23T08:37:28Z: Opening ipv4 listen socket on port 8883.
+2026-10-23T08:37:28Z: Opening ipv6 listen socket on port 8883.
+2026-10-23T08:37:28Z: Opening ipv4 listen socket on port 1883.
+2026-10-23T08:37:28Z: Opening ipv6 listen socket on port 1883.
+2026-10-23T08:37:28Z: Opening unix listen socket on path /run/mosquitto/probe.sock.
+2026-10-23T08:37:28Z: mosquitto version 2.1.2 running
+2026-10-23T08:37:29Z: New connection from <client> on port 8883.
+2026-10-23T08:37:29Z: Client <client> [<client>] disconnected: connection closed by client.
+2026-10-23T08:37:29Z: New connection from <client> on port 8883.
+2026-10-23T08:37:29Z: Client <client> [<client>] disconnected: connection closed by client.
+
+== handshakes failed: 0

@@ -700,7 +700,7 @@ bootstrap 管理帳號只給 migration Job 用，密碼在叢集內產生，沒�
 
 | 埠 | 呼叫端（mesh 放行） | broker 的驗證 |
 | --- | --- | --- |
-| `mqtt-gateways` 8883 | `mqtt-bridge`，轉送閘道器的連線 | TLS 1.3，閘道器的用戶端憑證要由 certs 服務的 CA 簽發、在效期內、EKU 有 clientAuth、不在 CRL 上（沒有憑證、別的 CA、過期、沒有 clientAuth、已撤銷都在 TLS 握手被拒，Rust 測試逐一驗證）。憑證的 CN 就是 username（`use_identity_as_username`）也是 client id（`use_username_as_clientid`），所以閘道器不能冒用別的閘道器，也接不走它的 session |
+| `mqtt-gateways` 8883 | `mqtt-bridge`，轉送閘道器的連線 | TLS 1.3，套件依 broker 的順序選、ChaCha20-Poly1305 排第一（`ciphers_tls1.3`，決策 6：閘道器的 CPU 沒有 AES 指令；不設時 Mosquitto 選 AES-256-GCM，Laysi/trustiot-v2#564），閘道器的用戶端憑證要由 certs 服務的 CA 簽發、在效期內、EKU 有 clientAuth、不在 CRL 上（沒有憑證、別的 CA、過期、沒有 clientAuth、已撤銷都在 TLS 握手被拒，Rust 測試逐一驗證）。憑證的 CN 就是 username（`use_identity_as_username`）也是 client id（`use_username_as_clientid`），所以閘道器不能冒用別的閘道器，也接不走它的 session |
 | `mqtt-services` 1883 | 有 broker 帳號的服務：`ingest`、`gateway-ops`、`certs` | mesh 的 mTLS（ztunnel），再以 dynamic security 的帳號 `service:<服務>` 與密碼登入（見下方「服務的帳號」）。閘道器 ID 不能有 `:`，所以沒有閘道器憑證能帶服務的名稱 |
 
 - `mesh.calls` 只能把 `mqtt-broker` 列在這四個服務底下，列在其他服務底下渲染失敗（清單在 `templates/_mqtt-broker.tpl` 的 `trustiot.mqtt-broker.callers`）。預設 values 列了 `ingest`、`gateway-ops` 與 `mqtt-bridge`；`certs` 沒有列，負責閘道器帳號登記與撤銷的 Laysi/trustiot-v2#82 加上。
