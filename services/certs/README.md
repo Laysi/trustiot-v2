@@ -511,7 +511,7 @@ broker 埠（`broker.listen_addr`，預設 8082）只有一個端點，mesh 只�
 | `TRUSTIOT_INTERNAL_IDENTITY_KEYS_FILE` | 平台設定：身分服務的公鑰（JWK Set），驗內部身分 token 用；chart 在身分服務啟用時設定，檔案變更時不必重啟就重讀。沒有這個變數時服務不啟動 |
 | `TRUSTIOT__DATABASE__USERNAME`、`TRUSTIOT__DATABASE__PASSWORD` | 服務角色 `certs_app` 的帳密：密碼來自 Secret `<release>-certs-password` 的 `certs_app` key |
 | `TRUSTIOT__DATABASE__PLATFORM_USERNAME`、`TRUSTIOT__DATABASE__PLATFORM_PASSWORD` | 平台角色 `certs_platform` 的帳密（出廠登錄寫全平台事件用）：密碼來自同一個 Secret 的 `certs_platform` key；帳號不能和服務角色相同，密碼不能是空的 |
-| `TRUSTIOT__DATABASE__MAX_CONNECTIONS` | 每個副本服務角色的連線上限，2–100，預設 5；平台角色另有最多 4 條 |
+| `TRUSTIOT__DATABASE__MAX_CONNECTIONS` | 每個副本服務角色的連線上限，2–100，預設 5；平台角色另有最多 4 條；chart 以 `services.certs.database.maxConnections` 設定。連線池的大小或數量改變時，chart 的連線預算（`deploy/chart/templates/_postgres.tpl`，見 chart README 的「連線預算」）要一起改，`tests/chart_connections.rs` 比對兩者 |
 | `TRUSTIOT__CA__KEYS_FILE` | 簽發 CA 金鑰檔；chart 設成 `/etc/trustiot/certs-ca-keys/issuing-ca-keys.json` |
 | `TRUSTIOT__CA__ROOT_CERTIFICATE_FILE` | 根憑證；chart 設成 `/etc/trustiot/certs-ca/root.pem` |
 | `TRUSTIOT__CA__CERTIFICATES_FILE` | 簽發 CA 憑證；chart 設成 `/etc/trustiot/certs-ca/issuing.pem` |

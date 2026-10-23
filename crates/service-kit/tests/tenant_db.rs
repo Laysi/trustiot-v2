@@ -3161,6 +3161,12 @@ async fn the_example_service_serves_each_user_only_their_tenant() {
                 "TRUSTIOT__DATABASE__PASSWORD".to_owned(),
                 "service-kit-test".to_owned(),
             ),
+            // The chart sets the pool size for every service that uses Postgres
+            // (Laysi/trustiot-v2#575); the example accepts it, as in the chart's Postgres e2e.
+            (
+                "TRUSTIOT__DATABASE__MAX_CONNECTIONS".to_owned(),
+                "10".to_owned(),
+            ),
             ("TRUSTIOT_POSTGRES_HOST".to_owned(), SERVER_HOST.to_owned()),
             ("TRUSTIOT_POSTGRES_PORT".to_owned(), port.clone()),
             (

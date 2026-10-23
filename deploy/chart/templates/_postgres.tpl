@@ -158,3 +158,134 @@ Image of the bundled Cluster: our CloudNativePG operand image with AGE, released
 {{- printf "%s:%s" $image.repository $tag -}}
 {{- end -}}
 {{- end -}}
+
+{{/*
+Connection budget (Laysi/trustiot-v2#575). The services' roles have no connection limit of their
+own, so what all their replicas can open together, old and new ones during a rolling update
+included, must fit Postgres' max_connections; "trustiot.postgres.checkConnections" refuses values
+where it does not (README.md, 「叢集內的 Postgres」).
+
+Per service that may use Postgres, what one replica opens at most:
+  maxConnections  {min, max}: the range of services.<name>.database.maxConnections, which the chart
+                  passes as TRUSTIOT__DATABASE__MAX_CONNECTIONS, the size of the service's main
+                  pool; the service refuses to start outside this range.
+  otherPools      every other pool the replica opens, at its largest, whatever role it logs in as:
+                  assets           PLATFORM_CONNECTIONS (its platform role)
+                  certs            REGISTRATION_CONNECTIONS (its platform role)
+                  identity         the tenant, login, login send, delegation and event log pools
+                                   as identity_app (16), and the event log's pool as
+                                   identity_platform, its consumed producers plus 2 (5)
+                  telemetry-query  EVENT_READER_CONNECTIONS (its platform role)
+A service that lists postgres under mesh.calls without an entry here fails the render: give it one
+when it starts using Postgres. JSON, not YAML, so that each service's Rust test reads this very
+text (crates/testkit, `chart::postgres_connection_budget`) and fails when the pools in its code and
+these numbers differ.
+*/}}
+{{- define "trustiot.postgres.connectionBudgets" -}}
+{
+  "assets": { "maxConnections": { "min": 2, "max": 100 }, "otherPools": 4 },
+  "certs": { "maxConnections": { "min": 2, "max": 100 }, "otherPools": 4 },
+  "identity": { "maxConnections": { "min": 3, "max": 100 }, "otherPools": 21 },
+  "telemetry-query": { "maxConnections": { "min": 2, "max": 100 }, "otherPools": 2 }
+}
+{{- end -}}
+
+{{/*
+Connections of the bundled Postgres that no service's pool may take (README.md, 「叢集內的 Postgres」):
+  superuserReserved  superuser_reserved_connections, PostgreSQL's default 3, which neither
+                     CloudNativePG 1.30.1 nor these values change: the last 3 are for superusers
+  instanceManager    CloudNativePG's instance manager as postgres over the local socket: a pool of
+                     at most 3 per database (pkg/management/postgres/pool/pool.go,
+                     SetMaxOpenConns(3)) on postgres and trustiot (the AGE extension); template1
+                     only at bootstrap, before any service runs
+  metricsExporter    cnpg_metrics_exporter, the same kind of pool, on postgres and trustiot
+  migrationJob       tools/migrate: its session as the owner, and one login at a time to check a
+                     role's password
+  platformAdminBootstrap
+                     the Job an operator starts from the platform-admin-bootstrap CronJob
+                     (templates/platform-admin-bootstrap.yaml): one session as the owner, which
+                     may overlap a rollout
+JSON like the budgets above.
+*/}}
+{{- define "trustiot.postgres.reservedConnections" -}}
+{
+  "superuserReserved": 3,
+  "instanceManager": 6,
+  "metricsExporter": 6,
+  "migrationJob": 2,
+  "platformAdminBootstrap": 1
+}
+{{- end -}}
+
+{{/*
+The size of one service's main pool: services.<name>.database.maxConnections, within the range in
+"trustiot.postgres.connectionBudgets". Fails when the service has no budget or no value, or the
+value is out of that range.
+Argument: dict "root" $ "name" <service> "config" <effective settings>.
+*/}}
+{{- define "trustiot.postgres.poolSize" -}}
+{{- $budget := get (include "trustiot.postgres.connectionBudgets" .root | fromJson) .name -}}
+{{- if not $budget -}}
+{{- fail (printf "services.%s lists postgres under mesh.calls, but the chart has no connection budget for it: add the pools it opens to trustiot.postgres.connectionBudgets (templates/_postgres.tpl)" .name) -}}
+{{- end -}}
+{{- $size := dig "database" "maxConnections" nil .config -}}
+{{- if kindIs "invalid" $size -}}
+{{- fail (printf "services.%s.database.maxConnections is required: the service uses Postgres (mesh.calls), and the connection check counts its pool" .name) -}}
+{{- end -}}
+{{- $min := int $budget.maxConnections.min -}}
+{{- $max := int $budget.maxConnections.max -}}
+{{- if or (ne (toString (int $size)) (toString $size)) (lt (int $size) $min) (gt (int $size) $max) -}}
+{{- fail (printf "services.%s.database.maxConnections must be a whole number from %d to %d, the range the service accepts" .name $min $max) -}}
+{{- end -}}
+{{- int $size -}}
+{{- end -}}
+
+{{/*
+What the enabled services that use Postgres ("trustiot.postgres.clients") can open together while
+all of them roll at once (decision 4: services are released together), and what stays reserved.
+Each service: (database.maxConnections + otherPools) per replica, times its replicas plus the pods
+a rolling update adds ("trustiot.service.maxSurge").
+Returns YAML {services: [{name, perReplica, pods, connections}], servicesTotal, reserved, total};
+use with fromYaml.
+*/}}
+{{- define "trustiot.postgres.connectionPlan" -}}
+{{- $budgets := include "trustiot.postgres.connectionBudgets" . | fromJson -}}
+{{- $surge := int (include "trustiot.service.maxSurge" .) -}}
+{{- $rows := list -}}
+{{- $sum := 0 -}}
+{{- range $name := (include "trustiot.postgres.clients" . | fromYaml).services -}}
+{{- $config := include "trustiot.serviceConfig" (dict "root" $ "name" $name "values" (get $.Values.services $name)) | fromYaml -}}
+{{- $pool := int (include "trustiot.postgres.poolSize" (dict "root" $ "name" $name "config" $config)) -}}
+{{- $perReplica := add $pool (int (get $budgets $name).otherPools) -}}
+{{- $pods := add (int $config.replicas) $surge -}}
+{{- $connections := mul $perReplica $pods -}}
+{{- $rows = append $rows (dict "name" $name "perReplica" $perReplica "pods" $pods "connections" $connections) -}}
+{{- $sum = add $sum $connections -}}
+{{- end -}}
+{{- $reserved := 0 -}}
+{{- range $_, $count := include "trustiot.postgres.reservedConnections" . | fromJson -}}
+{{- $reserved = add $reserved (int $count) -}}
+{{- end -}}
+{{- dict "services" $rows "servicesTotal" $sum "reserved" $reserved "total" (add $sum $reserved) | toYaml -}}
+{{- end -}}
+
+{{/*
+Refuses values under which the services could open more connections than the bundled Postgres
+accepts ("trustiot.postgres.connectionPlan"): a connection past max_connections fails with
+SQLSTATE 53300, and a new replica that cannot open its connections never gets ready, so the
+rollout stalls. In external mode only each service's pool size is checked: the customer sets that
+server's max_connections (README.md says how many it must allow). Renders nothing.
+*/}}
+{{- define "trustiot.postgres.checkConnections" -}}
+{{- $plan := include "trustiot.postgres.connectionPlan" . | fromYaml -}}
+{{- if eq .Values.postgres.mode "bundled" -}}
+{{- $limit := int .Values.postgres.bundled.parameters.max_connections -}}
+{{- if gt (int $plan.total) $limit -}}
+{{- $parts := list -}}
+{{- range $plan.services -}}
+{{- $parts = append $parts (printf "%s %d x %d" .name (int .perReplica) (int .pods)) -}}
+{{- end -}}
+{{- fail (printf "postgres.bundled.parameters.max_connections is %d, but %d connections are needed: the services can open %d while all of them roll at once (per replica x pods: %s), and %d stay reserved for superusers, CloudNativePG, the migration Job and the platform administrator bootstrap. Raise max_connections within the memory limit, or lower replicas or services.<name>.database.maxConnections (README.md, 「叢集內的 Postgres」)" $limit (int $plan.total) (int $plan.servicesTotal) (join ", " $parts) (int $plan.reserved)) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
