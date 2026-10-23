@@ -49,7 +49,7 @@ use x509_parser::certification_request::X509CertificationRequest;
 use x509_parser::oid_registry::OID_SIG_ECDSA_WITH_SHA256;
 use x509_parser::prelude::FromDer;
 
-use crate::authority::{CaState, IssuingCa, unix_now};
+use crate::authority::{Authority, CaState, IssuingCa, unix_now};
 
 /// Largest CSR accepted, DER. A P-256 CSR is about 250 bytes; the limit leaves room for
 /// attributes a client adds, which are ignored.
@@ -88,6 +88,21 @@ pub const WORKSTATION_SUBJECT_PREFIX: &str = "workstation:";
 /// Longest workstation name, in bytes: with [`WORKSTATION_SUBJECT_PREFIX`] the common name stays
 /// within the ledger's 64 characters.
 pub const MAX_WORKSTATION_NAME_LEN: usize = 48;
+
+/// Serializes a workstation certificate's revocation with the factory registrations it signs
+/// (Laysi/trustiot-v2#79): a registration holds this transaction lock shared from before it
+/// reads the certificate's ledger row until it commits, and a revocation takes it exclusively
+/// before it updates the row. A revocation committed first is seen by the registration's read; a
+/// registration that read the row first commits before the revocation can. A row lock would
+/// need an UPDATE grant the platform role does not have. `$1` is the certificate's serial number;
+/// the first key is a fixed class, so these locks never meet the one-key locks of
+/// `service_kit::job_lock` or the outbox, and a hash collision only makes one wait for the other.
+pub const LOCK_WORKSTATION_SHARED: &str =
+    "SELECT pg_advisory_xact_lock_shared(1953983347, hashtext(encode($1, 'hex')))";
+
+/// The exclusive form of [`LOCK_WORKSTATION_SHARED`], for a revocation.
+pub const LOCK_WORKSTATION: &str =
+    "SELECT pg_advisory_xact_lock(1953983347, hashtext(encode($1, 'hex')))";
 
 /// The name every MQTT client verifies the broker's server certificate against, in every
 /// deployment, SaaS and on premises alike (services/certs/README.md, "broker 伺服器憑證"). It
@@ -531,8 +546,8 @@ pub async fn record(
     Ok(())
 }
 
-/// Why [`sign_and_record`] issued nothing. The caller turns it into its response; the log line
-/// is already written.
+/// Why [`sign_and_record`] or [`sign_and_record_in`] issued nothing. The caller turns it into its
+/// response; the log line is already written.
 #[derive(Debug)]
 pub enum Refusal {
     /// No issuing CA can sign now: none is loaded, none that is valid has a CRL yet, or the
@@ -566,11 +581,27 @@ pub async fn sign_and_record(
         tracing::warn!("refused {what}: no issuing CA is loaded");
         return Err(Refusal::NotReady);
     };
-    let database = |error: &dyn std::fmt::Display| {
-        tracing::error!(error = %error, "could not issue {what}");
-        Refusal::Database
-    };
-    let mut tx = pool.begin().await.map_err(|e| database(&e))?;
+    let mut tx = pool.begin().await.map_err(|e| database(what, &e))?;
+    let issued = sign_and_record_in(&mut tx, &authority, what, sign).await?;
+    tx.commit().await.map_err(|e| database(what, &e))?;
+    Ok(issued)
+}
+
+/// [`sign_and_record`] inside the caller's transaction, with the issuing CAs of `authority`:
+/// reads which of them have a CRL, signs with the newest valid one that has, and records the
+/// certificate, all on `connection`. The caller commits, so the certificate is recorded together
+/// with whatever else the transaction writes (the factory registration, Laysi/trustiot-v2#79,
+/// writes the registration and its event with it); on any refusal the caller rolls back.
+///
+/// # Errors
+///
+/// [`Refusal`], after logging why.
+pub async fn sign_and_record_in(
+    connection: &mut PgConnection,
+    authority: &Authority,
+    what: &str,
+    sign: impl FnOnce(&IssuingCa, i64) -> Result<IssuedCertificate, IssueError>,
+) -> Result<IssuedCertificate, Refusal> {
     let ids: Vec<String> = authority
         .issuing()
         .iter()
@@ -579,9 +610,9 @@ pub async fn sign_and_record(
     let with_crl: Vec<String> =
         sqlx::query_scalar("SELECT ca_key_id FROM certs.crls WHERE ca_key_id = ANY($1)")
             .bind(&ids)
-            .fetch_all(&mut *tx)
+            .fetch_all(&mut *connection)
             .await
-            .map_err(|e| database(&e))?;
+            .map_err(|e| database(what, &e))?;
     let now = unix_now();
     let Some(signer) = authority.signer(now, |id| with_crl.iter().any(|known| known == id)) else {
         tracing::warn!(
@@ -601,18 +632,22 @@ pub async fn sign_and_record(
         }
         refused => Refusal::Request(refused),
     })?;
-    match record(&mut tx, &issued).await {
-        Ok(()) => {}
+    match record(connection, &issued).await {
+        Ok(()) => Ok(issued),
         Err(RecordError::NoCrl(ca_key_id)) => {
             // The CRL was read in this transaction and CRLs are never removed, so this means a
             // broken invariant; refuse rather than hand out an uncheckable certificate.
             tracing::error!(ca_key_id = %ca_key_id, "the signing CA has no CRL after all");
-            return Err(Refusal::NotReady);
+            Err(Refusal::NotReady)
         }
-        Err(RecordError::Database(e)) => return Err(database(&e)),
+        Err(RecordError::Database(e)) => Err(database(what, &e)),
     }
-    tx.commit().await.map_err(|e| database(&e))?;
-    Ok(issued)
+}
+
+/// Logs a database failure while issuing `what`; [`Refusal::Database`].
+fn database(what: &str, error: &dyn std::fmt::Display) -> Refusal {
+    tracing::error!(error = %error, "could not issue {what}");
+    Refusal::Database
 }
 
 /// `seconds` as a UTC time for Postgres; out-of-range times clamp to the epoch.

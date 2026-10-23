@@ -277,6 +277,8 @@ impl Service {
             .env("TRUSTIOT__SHUTDOWN__DRAIN_TIMEOUT", "5s")
             .env("TRUSTIOT__DATABASE__USERNAME", "certs_app")
             .env("TRUSTIOT__DATABASE__PASSWORD", TEST_PASSWORD)
+            .env("TRUSTIOT__DATABASE__PLATFORM_USERNAME", "certs_platform")
+            .env("TRUSTIOT__DATABASE__PLATFORM_PASSWORD", TEST_PASSWORD)
             .envs(product.platform_env())
             .envs(ca.env())
             .env(
