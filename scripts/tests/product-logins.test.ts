@@ -265,6 +265,7 @@ describe("the logins", () => {
         stateKey: "telemetry-query-platform",
       },
       { service: "certs", kind: "app", role: "certs_app", secret: "dev-certs-password", stateKey: "certs" },
+      { service: "assistant", kind: "app", role: "assistant_app", secret: "dev-assistant-password", stateKey: "assistant" },
     ]);
   });
 

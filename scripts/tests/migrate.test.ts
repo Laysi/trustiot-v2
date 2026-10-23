@@ -79,7 +79,7 @@ describe("password bindings", () => {
       "identity_app=dev-identity-password,identity_platform=dev-identity-password," +
         "assets_app=dev-assets-password,assets_platform=dev-assets-password," +
         "telemetry_query_app=dev-telemetry-query-password,telemetry_query_platform=dev-telemetry-query-password," +
-        "certs_app=dev-certs-password",
+        "certs_app=dev-certs-password,assistant_app=dev-assistant-password",
     );
     // The Job refuses a binding whose Secret the API does not declare, and the same Secret holds
     // a service's two passwords: declared once.
@@ -88,6 +88,7 @@ describe("password bindings", () => {
       "dev-assets-password",
       "dev-telemetry-query-password",
       "dev-certs-password",
+      "dev-assistant-password",
     ]);
     const env = jobEnvironment({ ...run, logins }, { url: "http://127.0.0.1:4321" }, "/state/kube-token.abc", {});
     expect(env.TRUSTIOT__PASSWORDS__POSTGRES).toBe(text);
