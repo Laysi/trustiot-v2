@@ -89,6 +89,10 @@ pub const SERVICES_WITHOUT_API: &[&str] = &[
     // crates/contract, whose error types every spec here shares, and the client API never
     // reaches it (decision 27).
     "ai-gateway",
+    // The AI assistant's agent loop (Laysi/trustiot-v2#145, decision 31). It serves only the
+    // health endpoints until the chat API (Laysi/trustiot-v2#146) adds its routes and its
+    // `openapi()`; move it to `SERVICES` then.
+    "assistant",
 ];
 
 fn shared_schemas() -> OpenApi {

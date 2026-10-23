@@ -1,0 +1,36 @@
+{
+  "id": "msg_01AtJ8W9mfHkb5SzVZWv__STEP__",
+  "type": "message",
+  "role": "assistant",
+  "content": [
+    {
+      "type": "thinking",
+      "thinking": "",
+      "signature": "EqMBCkYICxIM__STEP__"
+    },
+    {
+      "type": "thinking",
+      "thinking": "Step __STEP__: the hourly counts so far look normal. Reading the next meter.",
+      "signature": "Es8CCkYICxIM__STEP__"
+    },
+    {
+      "type": "tool_use",
+      "id": "toolu_01D7FLrfh4GYq7yT1ULF__STEP__",
+      "name": "count_readings",
+      "input": {
+        "meter": "floor-3-__STEP__",
+        "hours": 24
+      }
+    }
+  ],
+  "model": "claude-opus-5-5",
+  "stop_reason": "tool_use",
+  "stop_sequence": null,
+  "stop_details": null,
+  "usage": {
+    "input_tokens": 312,
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 4096,
+    "output_tokens": 188
+  }
+}

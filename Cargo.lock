@@ -146,6 +146,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "assistant"
+version = "0.1.0"
+dependencies = [
+ "ai-clients",
+ "axum",
+ "base64 0.22.1",
+ "contract",
+ "opentelemetry",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "service-kit",
+ "thiserror",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "uuid",
+]
+
+[[package]]
 name = "async-trait"
 version = "0.1.92"
 source = "registry+https://github.com/rust-lang/crates.io-index"
