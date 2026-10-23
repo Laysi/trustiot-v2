@@ -13,7 +13,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use contract::{InternalClaims, ServiceName, TenantGrant, TenantId, TenantRole, UserId};
+use contract::{InternalClaims, ServiceName, SessionId, TenantGrant, TenantId, TenantRole, UserId};
 use ed25519_dalek::{Signer, SigningKey};
 use serde_json::json;
 use service_kit::identity::{IdentityKeys, IdentityVerifier, UserIdentity};
@@ -88,6 +88,8 @@ impl TestIssuer {
             tenant,
             platform_admin: false,
             act: None,
+            // As the ext_authz check signs it: the ingress gateway's request has a session.
+            sid: Some(SessionId::generate()),
         }
     }
 

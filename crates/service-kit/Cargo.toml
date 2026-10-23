@@ -22,16 +22,19 @@ default = ["contract"]
 # transactions (`tenant`), which take the tenant from that identity. services/ai-gateway must not
 # depend on crates/contract (decision 28), so it turns default features off;
 # tests/dependency_isolation.rs checks that this keeps contract out.
-contract = ["dep:base64", "dep:contract", "dep:ed25519-dalek"]
+contract = ["dep:base64", "dep:contract", "dep:ed25519-dalek", "dep:getrandom", "dep:zeroize"]
 
 [dependencies]
 axum = { workspace = true, features = ["http1", "json", "matched-path", "query", "tokio"] }
 # Strict base64url decoding of the internal identity token's segments (`contract` feature).
 base64 = { workspace = true, optional = true }
 contract = { path = "../contract", optional = true }
-# Ed25519 signature verification of internal identity tokens (`contract` feature). Only
-# verification is used; `fast` adds the precomputed tables that speed it up.
-ed25519-dalek = { workspace = true, optional = true, features = ["fast"] }
+# Ed25519 signature verification of internal identity tokens (`contract` feature); `fast` adds the
+# precomputed tables that speed it up. It also signs the proofs of a run delegation
+# (Laysi/trustiot-v2#551) with the run's own key, which `zeroize` wipes on drop.
+ed25519-dalek = { workspace = true, optional = true, features = ["fast", "zeroize"] }
+# The operating system's CSPRNG, for a run delegation's key (`contract` feature).
+getrandom = { workspace = true, optional = true }
 humantime.workspace = true
 opentelemetry = { workspace = true, features = ["internal-logs", "logs", "metrics", "trace"] }
 opentelemetry-otlp = { workspace = true, features = ["http-proto", "internal-logs", "logs", "metrics", "reqwest-blocking-client", "trace"] }
@@ -54,6 +57,8 @@ tower-http = { workspace = true, features = ["catch-panic"] }
 tracing.workspace = true
 tracing-opentelemetry.workspace = true
 tracing-subscriber = { workspace = true, features = ["registry", "std", "tracing-log"] }
+# Wipes the seed of a run delegation's key (`contract` feature).
+zeroize = { workspace = true, optional = true }
 
 [dev-dependencies]
 # The `log` crate and its tracing bridge, to send events through the same path a dependency such

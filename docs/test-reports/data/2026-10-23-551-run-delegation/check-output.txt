@@ -1,0 +1,39 @@
+error: very complex type used. Consider factoring parts into `type` definitions
+  --> services/identity/src/delegation/tests.rs:71:12
+   |
+71 |     asked: Arc<Mutex<Vec<(SessionId, UserId, Option<TenantId>)>>>,
+   |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#type_complexity
+   = note: `-D clippy::type-complexity` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(clippy::type_complexity)]`
+
+error: could not compile `identity` (lib test) due to 1 previous error
+CLIPPY_DONE
+test result: ok. 42 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (<host copy>/target/debug/deps/identity-f49d4e570dc16aec)
+
+--
+test result: ok. 95 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.44s
+
+test result: ok. 39 passed; 0 failed; 0 ignored; 0 measured; 68 filtered out; finished in 0.11s
+
+test unusable_settings_stop_startup ... ok
+test an_unreachable_database_fails_closed ... ok
+test the_service_role_writes_sessions_only_within_the_login_rules ... ok
+test cross_site_writes_get_403_and_same_origin_ones_go_on ... ok
+test a_routed_token_is_exchanged_along_the_call_list_only ... ok
+test secrets_never_reach_logs_or_responses ... ok
+test an_active_session_gets_one_token_that_the_routed_service_accepts ... ok
+test invalid_or_expired_sessions_get_401 ... ok
+test role_changes_apply_to_the_next_request ... ok
+test a_run_delegation_acts_for_the_user_until_the_session_ends ... ok
+test a_keep_warm_round_replaces_every_dropped_connection ... ok
+test a_revoked_generation_never_signs ... ok
+test a_slow_database_connect_never_fails_a_check_after_ready ... ok
+test a_key_rotation_needs_no_restart_and_tokens_verify_throughout ... ok
+
+test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 19.52s
+
+exit 0

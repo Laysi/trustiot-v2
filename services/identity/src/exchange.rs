@@ -249,6 +249,8 @@ pub fn exchanged_claims(
         tenant: subject.tenant,
         platform_admin: subject.platform_admin,
         act: Some(Actor { sub: subject.aud }),
+        // The session binds delegations only (`crate::delegation`); the callee needs none.
+        sid: None,
     })
 }
 

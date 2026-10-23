@@ -56,17 +56,35 @@ const CODE_KEY_LABEL: &[u8] = b"trustiot-login-code-key:v1";
 /// `crate::login::code_hash`). Wiped on drop.
 pub type CodeKey = Zeroizing<[u8; 32]>;
 
+/// What the run-delegation key of a signing key is derived for ([`derive_key`],
+/// `crate::delegation`). Changing it makes every delegation in use unusable.
+const DELEGATION_KEY_LABEL: &[u8] = b"trustiot-run-delegation-key:v1";
+
 /// The login-code key of a signing key: HMAC-SHA-256 of [`CODE_KEY_LABEL`] under its private
 /// key. It lives only where the signing keys live, outside the database, so a copy of the
 /// database cannot test codes offline; it reveals nothing about the private key (HMAC is a
 /// PRF) and rotates with it.
 fn derive_code_key(key: &identity_keys::SigningKey) -> CodeKey {
+    derive_key(key, CODE_KEY_LABEL)
+}
+
+/// HMAC-SHA-256 of `label` under the private key of `key`: a key for one purpose, which reveals
+/// nothing about the private key or the keys derived for other labels.
+fn derive_key(key: &identity_keys::SigningKey, label: &[u8]) -> Zeroizing<[u8; 32]> {
     // HMAC accepts keys of any length, so this never fails.
     let mut mac = <Hmac<Sha256> as KeyInit>::new_from_slice(key.signer().as_bytes())
         .unwrap_or_else(|_| unreachable!("HMAC-SHA-256 takes keys of any length"));
-    mac.update(CODE_KEY_LABEL);
+    mac.update(label);
     let derived: [u8; 32] = mac.finalize().into_bytes().into();
     Zeroizing::new(derived)
+}
+
+/// HMAC-SHA-256 of `message` under `key`.
+fn delegation_mac(key: &[u8; 32], message: &[u8]) -> Hmac<Sha256> {
+    let mut mac = <Hmac<Sha256> as KeyInit>::new_from_slice(key)
+        .unwrap_or_else(|_| unreachable!("HMAC-SHA-256 takes keys of any length"));
+    mac.update(message);
+    mac
 }
 
 /// The protected header, serialized in this field order.
@@ -170,6 +188,42 @@ impl Issuer {
             .unwrap_or_default()
     }
 
+    /// The MAC of a run delegation's signed part (`crate::delegation`) under the delegation key
+    /// of the key that signs at `now`, which every replica selects alike. `None` while no key
+    /// may sign.
+    #[must_use]
+    pub(crate) fn sign_delegation(&self, now: i64, message: &[u8]) -> Option<[u8; 32]> {
+        self.with_signing_key(now, |key| {
+            let key = derive_key(key, DELEGATION_KEY_LABEL);
+            delegation_mac(&key, message).finalize().into_bytes().into()
+        })
+    }
+
+    /// Whether `mac` is the MAC of `message` under the delegation key of a key of the signing
+    /// keys file whose generation is not revoked, whether or not it signs now: a delegation
+    /// signed just before a key switch stays valid until its key leaves the file (at the
+    /// earliest the propagation time plus 305 s after the switch), and one signed with a revoked
+    /// generation is refused at once. Compared in constant time. `None` until a file has been
+    /// read.
+    #[must_use]
+    pub(crate) fn delegation_signed(&self, message: &[u8], mac: &[u8]) -> Option<bool> {
+        let keys = self
+            .shared
+            .keys
+            .read()
+            .unwrap_or_else(PoisonError::into_inner);
+        let keys = keys.as_ref()?;
+        Some(
+            keys.keys()
+                .iter()
+                .filter(|key| key.generation() >= self.shared.revoke_before)
+                .any(|key| {
+                    let key = derive_key(key, DELEGATION_KEY_LABEL);
+                    delegation_mac(&key, message).verify_slice(mac).is_ok()
+                }),
+        )
+    }
+
     fn with_signing_key<R>(
         &self,
         now: i64,
@@ -240,6 +294,9 @@ impl Issuer {
             platform_admin: grant.platform_admin,
             // Signed for the ingress gateway's request: nobody acts for the user yet.
             act: None,
+            // The session the request came with, so a delegation can be bound to it
+            // (`crate::delegation`).
+            sid: Some(grant.session),
         };
         self.sign_claims(&claims, now)
     }
@@ -656,9 +713,11 @@ mod tests {
 
     const USER: &str = "01928f6e-7a3c-7d4e-8f00-0123456789ab";
     const TENANT: &str = "01928f6e-7a3c-7d4e-8f00-00000000000a";
+    const SESSION: &str = "01928f6e-7a3c-7d4e-8f00-00000000005e";
 
     fn grant() -> SessionGrant {
         SessionGrant {
+            session: SESSION.parse().expect("session"),
             user: USER.parse().expect("user"),
             tenant: Some(TenantGrant {
                 id: TENANT.parse().expect("tenant"),
@@ -727,9 +786,57 @@ mod tests {
                 "iat": now,
                 "exp": now + 60,
                 "tenant": {"id": TENANT, "role": "editor"},
-                "platform_admin": true
+                "platform_admin": true,
+                "sid": SESSION
             })
         );
+    }
+
+    /// The run-delegation key (Laysi/trustiot-v2#551) is derived from the signing key like the
+    /// login-code key, but for its own label: a delegation's MAC is not a login code's hash, it
+    /// is checked against every key of the file that is not revoked, and nothing verifies before
+    /// a file has been read.
+    #[test]
+    fn delegation_macs_come_from_the_signing_keys() {
+        let message = b"trd1.payload";
+        let issuer = issuer(1, &[(1, "k")]);
+        let mac = issuer.sign_delegation(0, message).expect("a key signs");
+        assert_eq!(issuer.delegation_signed(message, &mac), Some(true));
+        assert_eq!(issuer.delegation_signed(b"trd1.other", &mac), Some(false));
+        assert_eq!(issuer.delegation_signed(message, &mac[..31]), Some(false));
+        let keys_file = signing_keys(&[(1, "k", 0)]);
+        let key = &keys_file.keys()[0];
+        assert_ne!(
+            *derive_key(key, DELEGATION_KEY_LABEL),
+            *derive_code_key(key),
+            "not the login-code key"
+        );
+        // Another signing key: another MAC, and the first issuer does not accept it.
+        let other = issuer_with(signing_keys(&[(2, "k2", 0)]), 0);
+        let other_mac = other.sign_delegation(0, message).expect("a key signs");
+        assert_ne!(other_mac, mac);
+        assert_eq!(issuer.delegation_signed(message, &other_mac), Some(false));
+        // After a switch to a new key, the old key's delegations still verify while the old
+        // key is in the file.
+        let both = issuer_with(signing_keys(&[(1, "k", 0), (2, "k2", 100)]), 0);
+        assert_eq!(both.sign_delegation(200, message), Some(other_mac));
+        assert_eq!(both.delegation_signed(message, &mac), Some(true));
+        // A revoked generation verifies nothing (the test keys are of generation 1).
+        let revoked = issuer_with(signing_keys(&[(1, "k", 0)]), 2);
+        assert_eq!(revoked.delegation_signed(message, &mac), Some(false));
+        assert_eq!(revoked.sign_delegation(0, message), None);
+        // No file read yet.
+        let empty = Issuer::new(keys(&[(1, "k")]).into(), 0);
+        assert_eq!(empty.delegation_signed(message, &mac), None);
+        assert_eq!(empty.sign_delegation(0, message), None);
+    }
+
+    fn issuer_with(keys_file: SigningKeys, revoke_before: u64) -> Issuer {
+        Issuer::with_keys(
+            keys_file,
+            keys(&[(1, "k"), (2, "k2")]).into(),
+            revoke_before,
+        )
     }
 
     /// The replay window of a captured token is its 60 s lifetime plus the verifiers' 5 s of

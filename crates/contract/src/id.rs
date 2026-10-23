@@ -85,6 +85,16 @@ uuid_id!(
     EventId
 );
 uuid_id!(
+    /// A login session of the identity service (`identity.sessions`). It names the session but
+    /// is no credential: the session's cookie is, and only its hash is stored.
+    SessionId
+);
+uuid_id!(
+    /// One run of an agent on behalf of a user, such as one answer of the assistant's main agent
+    /// (Laysi/trustiot-v2#551); the identity service binds the run's delegation to it.
+    RunId
+);
+uuid_id!(
     /// A device model of a tenant (rebuild checklist C1), made by the assets service; unlike the
     /// model's name, which is unique per tenant only, it is unique across tenants.
     DeviceModelId

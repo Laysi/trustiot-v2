@@ -384,6 +384,26 @@ async fn device_certs(State(state): State<AppState>, user: UserIdentity) -> Resu
 - `OnBehalfError` 實作 `IntoResponse`，回 M1：交換失敗（`Exchange`）只有 `timeout`、`unavailable` 照傳，其他一律 `internal`，並記一筆 ERROR，欄位是呼叫端、受眾與身分服務回的代碼，提示檢查 `mesh.calls` 或請求的剩餘效期；呼叫對方失敗（`Call`）照 `CallError::code()`，例如對方的 `not_found` 原樣傳遞。token 不進日誌。
 - 身分服務自己用 `ExchangeVerifier` 驗證交換請求帶的 token：與 `IdentityVerifier` 做同樣的檢查，只是接受任何受眾。只有 token 交換可以用它；其他地方一律用 `IdentityVerifier`，受眾是自己。它目前是公開型別，其他服務也拿得到，限制它只給身分服務記在 Laysi/trustiot-v2#509。
 
+### agent 執行期間的委派（`RunDelegations`）
+
+`OnBehalf` 換的是請求自己的 token，所以呼叫最晚跟著請求的 token 在 60 秒內結束。AI 助理的主 agent 回答一個問題可能跑上好幾分鐘，每次工具呼叫都要以使用者的身分呼叫其他服務，這時用 `RunDelegations`（決策 27，Laysi/trustiot-v2#551）：請求的 token 還有效時建立一個 run 委派，之後每次呼叫前以它換一張受眾是對方的 60 秒 token。契約是 `contract::api::identity::CreateRunDelegation` 與 `ExchangeRunDelegation`（[contract README](../contract/README.md) 的「run 委派」），身分服務那邊的規則、上限與威脅模型在 [services/identity/README.md](../../services/identity/README.md) 的「agent 執行期間的委派」。
+
+```rust
+// 啟動時建一次，和 OnBehalf 用同一個身分服務 token 交換埠的 client
+let delegations = RunDelegations::new(InternalClient::<service::Identity>::new(identity_url, timeout)?);
+
+// handler 裡，請求的 token 還有效時
+let run = delegations.start(&user, RunId::generate(), Duration::from_secs(600)).await?;
+// 幾分鐘後，每次工具呼叫
+let devices = run.call(&state.assets, &ListDevices { /* ... */ }).await?;
+```
+
+- 只有身分服務列為持有者的服務（目前只有 `assistant`）建立得了委派；其他服務拿到 403。
+- `start` 為每個 run 以作業系統的 CSPRNG 產生一把 Ed25519 金鑰，公鑰交給身分服務綁進委派，私鑰只留在 `RunDelegation` 裡（drop 時清零）；每次換 token 都以它簽 `run_proof_message(委派, 受眾, 現在)`。所以委派本身外洩（日誌、存下的 run）換不到 token。`RunDelegation` 不能序列化，`Debug` 只顯示 run、持有者與到期時間；clone 共用同一把金鑰，run 裡的平行工作可以同時呼叫。run 結束就 drop。
+- 效期 1–900 秒（`RUN_DELEGATION_MAX_LIFETIME_SECS`），以整秒計，超出時 `start` 不送請求就回 `Lifetime`。到期後換不到 token，要以使用者的新請求重新開始。
+- 身分服務每次換 token 都重查：session 結束（登出、撤銷、過期）後回 `unauthenticated`，使用者被移出租戶後回 `permission_denied`，改角色時下一張 token 就帶新角色。`RunDelegationError` 實作 `IntoResponse`：建立與換 token 被拒時把 `unauthenticated`、`permission_denied` 照傳給使用者（記 INFO，run 照預期結束），`timeout`、`unavailable` 照傳，其他一律 `internal`（記 ERROR）；呼叫對方失敗（`Call`）照 `CallError::code()`。`permission_denied` 也可能是 `mesh.calls` 少了這條呼叫，身分服務的 WARN 日誌寫出 `not_listed`。
+- 受眾只到 `mesh.calls` 上本服務可以呼叫的服務，和 `OnBehalf` 同一份清單；換出的 token 帶 `act`，對方不能再換。
+
 ### 背景工作沒有使用者身分
 
 `UserIdentity` 只能由 `IdentityVerifier` 從通過檢查的 token 建立，handler 透過 extractor 拿到它。它沒有其他建構方式、沒有 `Default`、沒有 `Deserialize`，`ServiceIdentity` 也不能轉成它，所以背景工作、排程工作與事件消費這些沒有請求的程式拿不到使用者身分，只能以 `ServiceIdentity`（服務自己）執行：
@@ -396,7 +416,7 @@ let actor = ServiceIdentity::new(ServiceName::Assets); // 或 verifier.service_i
 context.spawn(purge_expired(actor));
 ```
 
-這由 `src/identity.rs` 的 compile-fail doctest 證明：以欄位、`From`、`Into`、`Deserialize`、`Default` 建立 `UserIdentity` 都無法編譯。不要把 handler 拿到的 `UserIdentity` 移進 `Context::spawn` 或 `tokio::spawn`：token 60 秒就過期，背景工作要做的事以服務自己的身分執行。
+這由 `src/identity.rs` 的 compile-fail doctest 證明：以欄位、`From`、`Into`、`Deserialize`、`Default` 建立 `UserIdentity` 都無法編譯。不要把 handler 拿到的 `UserIdentity` 移進 `Context::spawn` 或 `tokio::spawn`：token 60 秒就過期，背景工作要做的事以服務自己的身分執行。使用者發起、要以使用者身分跑得比 60 秒久的 agent run 用上一節的 `RunDelegations`，在請求裡建立委派，run 結束就丟掉。
 
 決定（2026-10-21，Laysi/trustiot-v2#106，決策 27）：背景工作不冒用使用者，也不換 token。它以服務自己的資料庫角色（`BackgroundTenantDb`、`PlatformDb`）做事，跨服務的影響走事件（決策 4）；`OnBehalf` 只收 `UserIdentity`，所以背景工作無法代表使用者呼叫。呼叫 `ai-gateway` 不需要 token（決策 28，只靠 mesh 授權）。背景工作需要同步呼叫另一個服務的內部 API 時（目前沒有），另以服務自己的 token 處理，屆時再定。`services/assets/tests/background_identity.rs` 以資產服務驗證：沒有任何 token 驗得過時，事件消費者照樣完成工作。
 

@@ -85,6 +85,7 @@ impl SessionStore for Arc<MemoryStore> {
 
 fn grant() -> SessionGrant {
     SessionGrant {
+        session: contract::SessionId::generate(),
         user: USER.parse().expect("user"),
         tenant: Some(TenantGrant {
             id: TENANT.parse().expect("tenant"),
@@ -221,6 +222,7 @@ async fn forged_identity_headers_never_reach_the_allow() {
     let fixture = Fixture::new(Behaviour::Answer);
     let forger = issuer(2, &[(2, KID)]);
     let other_user = SessionGrant {
+        session: contract::SessionId::generate(),
         user: "01928f6e-7a3c-7d4e-8f00-ffffffffffff"
             .parse()
             .expect("user"),
@@ -524,6 +526,7 @@ async fn grants_without_a_tenant_or_with_admin_rights_are_signed_as_they_are() {
     let fixture = Fixture::new(Behaviour::Answer);
     let secret = SessionSecret::from_bytes([44; 32]);
     let admin = SessionGrant {
+        session: contract::SessionId::generate(),
         user: UserId::from_uuid(Default::default()),
         tenant: None,
         platform_admin: true,

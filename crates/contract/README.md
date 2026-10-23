@@ -10,7 +10,7 @@
 | `events` | 事件本身，每個產生端服務一個子模組；目前有 `events::identity::TenantCreated`（`identity.tenant_created`，Laysi/trustiot-v2#65），以及設備型號的 `events::assets::DeviceModelCreated`、`DeviceModelUpdated`、`DeviceModelDeleted`（`assets.device_model_{created,updated,deleted}`，Laysi/trustiot-v2#99；型號本身是 `protocol::config::DeviceModel`，閘道器設定用的同一個格式） |
 | `identity` | 內部身分標頭 `x-internal-identity`、claims `InternalClaims`、遮蔽內容的 `InternalToken` |
 | `client` | 內部 API 的 `Endpoint` 與有型別的 client `InternalClient<S>` |
-| `api` | 內部 API 本身，每個提供 API 的服務一個子模組；目前有 `api::identity::ExchangeToken`（身分服務的 token 交換，Laysi/trustiot-v2#106） |
+| `api` | 內部 API 本身，每個提供 API 的服務一個子模組；目前有 `api::identity::ExchangeToken`（身分服務的 token 交換，Laysi/trustiot-v2#106）與 `CreateRunDelegation`、`ExchangeRunDelegation`（agent run 的委派，Laysi/trustiot-v2#551） |
 | `certs` | certs 服務的用戶端 API：平台管理員簽發與撤銷工作站憑證的請求與回應（`IssueWorkstationCertificate`、`RevokeWorkstationCertificate`、`RevocationReason`、`WorkstationCertificate`，Laysi/trustiot-v2#534）。經入口以 cookie 呼叫，不是內部 API；請求拒絕不認得的欄位，讓送出主體、延伸欄位或效期的用戶端立刻知道這些由 CA 決定。profile 與步驟見 [certs README](../../services/certs/README.md) 的「工作站憑證」 |
 | `service` | `ServiceName` 與型別層級的服務標記（`service::Identity` 等） |
 | `openapi` | `SharedSchemas`：每個服務規格共用的 OpenAPI schema（M1 錯誤格式） |
@@ -115,6 +115,32 @@
 
 client 每次失敗都記一筆日誌，欄位有 `peer`、`route`（路由樣板，不含參數值）、`kind`、`status`、`peer_code`、`code`、`timeout_ms`、`cause`。層級依結果而定：傳輸類失敗（`timeout`、`connect`、`connection_reset`、`transport`）與對應到 `unavailable` 或 `timeout` 的對方回應記 warn；對方回應原樣傳遞的其他代碼（例如 `not_found`，呼叫端自己處理）記 debug；對應到 `internal` 的失敗（請求或回應不合法、對方的內部錯誤、本服務的 token 被拒）記 error。token、請求與回應 body、路徑參數值都不進日誌。
 
+### run 委派（`api::identity::CreateRunDelegation`、`ExchangeRunDelegation`）
+
+一次 agent run 要以使用者身分跑得比 60 秒的 token 久時（只有 `assistant`），在同一個 token 交換埠建立 run 委派、再以它換 token（決策 27，Laysi/trustiot-v2#551）。服務不自己組這些請求，而是用 `crates/service-kit` 的 `RunDelegations`；身分服務那邊的順序、上限、撤銷與威脅模型在 [services/identity/README.md](../../services/identity/README.md) 的「agent 執行期間的委派」。
+
+`POST /internal/run-delegations`：`x-internal-identity` 帶入口 gateway 的請求簽給呼叫端的 token（要有 `sid`），本文 `{"run_id", "key", "lifetime_secs"}`，`key` 是呼叫端為這次 run 產生的 Ed25519 公鑰（base64url），`lifetime_secs` 是 1 到 `RUN_DELEGATION_MAX_LIFETIME_SECS`（900）。
+
+| 結果 | 狀態 | 本文 |
+| --- | --- | --- |
+| 建立 | 200 | `RunDelegationCreated` `{"delegation", "expires_at"}` |
+| 沒有 token、token 無效或過期、沒有 `sid`、session 已不有效 | 401 | `unauthenticated` |
+| token 是換來的（帶 `act`）、呼叫端不能持有委派、使用者已不是 token 租戶的成員 | 403 | `permission_denied` |
+| 本文不是這個請求、`key` 不是可用的 Ed25519 公鑰、效期超出範圍 | 400 | `invalid_request` |
+| 還沒有公鑰或簽章金鑰、資料庫失敗 | 503 | `unavailable` |
+
+`POST /internal/run-delegations/token`：`x-internal-identity` 帶委派，本文 `{"audience", "iat", "proof"}`，`proof` 是 run 私鑰對 `run_proof_message(委派, audience, iat)` 的 Ed25519 簽章（base64url），`iat` 在現在的 ±`RUN_PROOF_WINDOW_SECS`（30）秒內。
+
+| 結果 | 狀態 | 本文 |
+| --- | --- | --- |
+| 換到 | 200 | `ExchangedToken` `{"token"}`：使用者、委派的租戶與現在的角色、現在的平台管理員旗標，受眾是 `audience`，`act` 是持有者，`iat` 是現在，到期是 60 秒後與委派到期取早者 |
+| 沒有委派、委派無效、過期或效期超過上限；proof 無效或超出時間窗；session 已不有效 | 401 | `unauthenticated` |
+| 持有者不能呼叫 `audience`、使用者已不是委派租戶的成員 | 403 | `permission_denied` |
+| 本文不是這個請求，或服務名稱不認得 | 400 | `invalid_request` |
+| 還沒有簽章金鑰、資料庫失敗 | 503 | `unavailable` |
+
+回應一律 `cache-control: no-store`。委派對呼叫端是不透明的字串，`RunDelegationCreated` 只能反序列化，委派照樣是遮蔽內容的 `InternalToken`，只放在 `x-internal-identity` 送到換 token 的路徑。和 `OnBehalf` 不同，`RunDelegations` 把身分服務回的 `unauthenticated`、`permission_denied` 照傳給使用者：被拒絕的是使用者的 session 或成員資格，不是部署的問題。
+
 ## 事件
 
 跨服務的寫入一律走事件（決策 4）：產生端與業務資料同一筆交易寫進 outbox，消費端冪等處理。outbox 的寫入、投遞與重播在 `crates/outbox`（Laysi/trustiot-v2#54）。
@@ -163,6 +189,7 @@ payload 經身分服務的事件紀錄給租戶的管理員看，並隨租戶的
 | `tenant` | 使用者目前所在的租戶 `{"id", "role"}`；還沒選或沒有加入任何租戶時是 `null`，需要租戶的端點拒絕這種 token |
 | `platform_admin` | 是否為平台管理員（A2），與租戶角色無關；缺少時視為 `false` |
 | `act` | 選填，只有 token 交換換出的 token 有：`{"sub": "<服務>"}`，替使用者呼叫 `aud` 的服務（RFC 8693 的 actor，`Actor`）。入口 gateway 的請求簽出的 token 沒有它；身分服務不再換帶 `act` 的 token（Laysi/trustiot-v2#106） |
+| `sid` | 選填，只有入口 gateway 的請求簽出的 token 有：使用者登入的 session 的 ID（`SessionId`），身分服務以它把 run 委派綁在 session 上（Laysi/trustiot-v2#551）。其他服務不必看它；它不是 credential，cookie 的值與它無關。換出的 token 沒有它 |
 
 - claim 的名稱沿用 JWT（RFC 7519），claims 可以直接當 JWT payload。
 - 驗證端忽略不認得的 claim，所以新 claim 只能是選填。

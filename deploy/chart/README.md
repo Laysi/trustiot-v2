@@ -228,6 +228,7 @@ mesh:
 - 不在清單上的：`ai-gateway` 兩個方向都不在（決策 28：它不驗證內部身分，也不持有使用者的 token，呼叫它與它的呼叫只靠 mesh 授權）；叢集內元件與 `postgres` 不是服務的 API。
 - 所以同一份 `mesh.calls` 同時決定連得到（AuthorizationPolicy 與 NetworkPolicy）與可以代表使用者。清單外的呼叫換不到 token（連不到 `token-exchange`，或身分服務回 403），直接把自己收到的 token 轉給別的服務則被對方以受眾不符拒絕（401）；換來的 token 不會比原本的晚到期，最多 60 秒。
 - 只換一跳：身分服務以 token 的受眾認定呼叫端，所以清單套用在入口 gateway 簽給呼叫端的那張 token 上；換來的 token 帶 `act` claim（RFC 8693，記下替使用者呼叫的服務），身分服務不再換它（403）。否則清單會被串接：A 可以呼叫 B、B 可以呼叫 C 時，A 拿換來的 B token 就能再換出 C 的 token。A → B → C 這種多跳的鏈要先能驗證呼叫端的工作負載身分，記在 Laysi/trustiot-v2#509；在那之前 B 收到 A 換來的 token 時不能再代表同一個使用者往下呼叫。
+- agent 執行期間的委派（Laysi/trustiot-v2#551）：一次 run 比 60 秒的 token 活得久的服務（只有 `assistant`），在請求的 token 還有效時在同一個 `token-exchange` 埠建立 run 委派（`POST /internal/run-delegations`），之後每次呼叫前換一張 60 秒的 token（`POST /internal/run-delegations/token`，`crates/service-kit` 的 `RunDelegations`）。它沿用同一份清單：換得到的受眾就是 `mesh.calls` 上 `assistant` 可以呼叫的服務，chart 不需要新的設定，`assistant` 有列任何服務時就連得到這個埠。委派最長 900 秒，每次換 token 身分服務都重查 session 與使用者在租戶的角色，登出或移出租戶後下一次呼叫就失敗；換出的 token 帶 `act`，不能再換。上限、撤銷與威脅模型在 [services/identity/README.md](../../services/identity/README.md) 的「agent 執行期間的委派」。
 - 還沒處理、記在 Laysi/trustiot-v2#509 的：入口 gateway 把 session cookie 轉給身分服務以外的後端（應只轉給身分服務）。
 - 背景工作與事件消費者沒有使用者的請求，不換 token，以服務自己的身分工作（自己的資料庫角色、事件；`crates/service-kit` 的 `ServiceIdentity`）。
 - 預設 values 沒有服務之間的呼叫，所以清單是 `{}`；目前的矩陣見下方「呼叫矩陣」。
