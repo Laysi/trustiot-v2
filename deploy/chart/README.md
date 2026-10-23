@@ -589,9 +589,9 @@ collector 開啟時另有 `AI_GATEWAY__TELEMETRY__OTLP_ENDPOINT`（與其他服�
 | `AI_GATEWAY_POSTGRES_CA_FILE` | `/etc/trustiot/postgres-ca/ca.crt` |
 | `AI_GATEWAY__DATABASE__USERNAME`、`AI_GATEWAY__DATABASE__PASSWORD` | `ai_gateway_app` 與 Secret `<release>-ai-gateway-password` 的同名 key |
 
-這些名稱保留給 chart，自訂 `env` 不能設定。閘道讀不到 Postgres 時以 503 拒絕 AI 呼叫，readiness 也包含 migration 與 Postgres 的檢查；從 `mesh.calls` 拿掉 `postgres` 時閘道缺少設定、不會啟動。
+這些名稱保留給 chart，自訂 `env` 不能設定。閘道讀不到 Postgres 時以 503 拒絕 AI 呼叫，readiness 也包含 migration 與 Postgres 的檢查；`mesh.calls.ai-gateway` 沒有 `postgres` 時閘道缺少資料庫設定、不會啟動，所以渲染失敗（見下一段）。
 
-開啟 `ai-gateway` 時，閘道會拒絕啟動的設定都讓渲染失敗，不論有沒有做 schema 驗證，所以 values 的錯誤不會變成一直重啟的 pod：`credentials` 沒有 `ai`、沒有角色、角色或模型不合規則、用到沒有 `apiKeySecret.name` 的供應商、上限超出範圍、某個角色的 `queueWait` 加上 `timeouts.response` 與 `timeouts.firstToken` 較長者放不進 `ai.requestTimeout` 減去十分之一（最多 2 秒；chart 以毫秒計算並無條件進位，所以不會比閘道寬鬆）、`drainSeconds` 不在 11 到 3605 之間。chart 只認得 `anthropic` 與 `openai` 兩個供應商。
+開啟 `ai-gateway` 時，閘道會拒絕啟動的設定都讓渲染失敗，不論有沒有做 schema 驗證，所以 values 的錯誤不會變成一直重啟的 pod：`credentials` 沒有 `ai`、`mesh.calls.ai-gateway` 沒有 `postgres`、沒有角色、角色或模型不合規則、用到沒有 `apiKeySecret.name` 的供應商、上限超出範圍、某個角色的 `queueWait` 加上 `timeouts.response` 與 `timeouts.firstToken` 較長者放不進 `ai.requestTimeout` 減去十分之一（最多 2 秒；chart 以毫秒計算並無條件進位，所以不會比閘道寬鬆）、`drainSeconds` 不在 11 到 3605 之間。chart 只認得 `anthropic` 與 `openai` 兩個供應商。
 
 閘道在收到請求之前不連供應商，readiness 也不依賴供應商連得到：沒有金鑰的 CI 與 nightly 以假的 Secret 值就能讓它就緒（`scripts/nightly/api.ts` 的 `AI_GATEWAY_SMOKE`），但這不證明金鑰能用。確認一把金鑰能用要送一次真的請求（`services/ai-gateway/README.md` 的「範例：一次最小的呼叫」）。內部 API 只開給 mesh 授權的三個呼叫端，所以從叢集外送時以 `kubectl port-forward` 連進閘道的 pod：port-forward 進入 pod 自己的網路命名空間，不經 ztunnel 與 NetworkPolicy，需要能對那個 namespace 的 pod 做 `pods/portforward` 的權限，與 `kubectl exec` 同級，只給維運的管理者：
 

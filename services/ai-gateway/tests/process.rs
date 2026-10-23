@@ -4,8 +4,8 @@
 //! included) or its responses. It does not start without its key, or when a role's limits do
 //! not fit in the request timeout. With a real Postgres (tests/support/database.rs): two
 //! processes on one database both use a change for their next request, a restarted process uses
-//! the last change, and a stored model list that the configuration no longer allows is ignored
-//! with an ERROR. The database tests skip without podman or docker, and fail without them when
+//! the last change, a stored model list that the configuration no longer allows is ignored
+//! with an ERROR, and settings restored from an older backup are adopted with a WARN. The database tests skip without podman or docker, and fail without them when
 //! `CI` is set.
 
 mod support;
@@ -34,6 +34,22 @@ const BODY: &str = r#"{"max_tokens":16,"messages":[{"role":"user","content":"Hi"
 
 /// The ERROR a stored model list that no longer fits is logged with.
 const IGNORED: &str = "ignored the stored models of a model role; it uses its configured models";
+
+/// The WARN a settings generation that went back is logged with.
+const WENT_BACK: &str = "the settings generation in the database went back, as after restoring a \
+     backup; using the stored settings";
+
+/// Puts the database back to how it was after the first change (version 1), as restoring a backup
+/// taken then would: the rows are written anew, which the triggers that keep the generation and
+/// the versions rising do not stop. Run by the owner role, which owns the tables.
+const RESTORE_FIRST_CHANGE: &str = "
+DELETE FROM ai_gateway.role_model_changes WHERE version > 1;
+DELETE FROM ai_gateway.role_models;
+INSERT INTO ai_gateway.role_models (role, models, version, updated_by)
+VALUES ('main', ARRAY['second/model-two'], 1, 'test-admin');
+DELETE FROM ai_gateway.settings_generation;
+INSERT INTO ai_gateway.settings_generation (singleton, generation) VALUES (true, 1);
+";
 
 /// The test CA's certificate in a file of this test's own, for `SSL_CERT_FILE`.
 fn ca_file(ca: &TestCa, name: &str) -> PathBuf {
@@ -578,4 +594,59 @@ async fn a_stored_list_the_configuration_no_longer_allows_is_ignored_with_an_err
     assert_eq!(ignored["fields"]["version"], version, "{ignored}");
     let reason = ignored["fields"]["reason"].as_str().expect("a reason");
     assert!(reason.contains("not configured"), "{reason}");
+}
+
+#[tokio::test]
+async fn settings_restored_from_an_older_backup_are_adopted_with_a_warning() {
+    let Some(database) = Database::new(
+        "CREATE DATABASE ai_gateway_restored OWNER ai_gateway_owner",
+        "ai_gateway_restored",
+    )
+    .await
+    else {
+        return;
+    };
+    let first = Server::start(vec![message_reply()]).await;
+    let second = Server::start(vec![message_reply(), message_reply()]).await;
+    let store = database.store();
+    let rules = rules();
+    assert_eq!(
+        set_models(&store, &rules, "main", &["second/model-two"], 0).await,
+        1
+    );
+    let running = Running::start(&settings(&database, &first, Some(&second))).await;
+    assert_eq!(
+        running.call().await,
+        (200, Some("second/model-two".to_owned()))
+    );
+    assert_eq!(
+        set_models(&store, &rules, "main", &["first/model-three"], 1).await,
+        2
+    );
+    assert_eq!(
+        running.call().await,
+        (200, Some("first/model-three".to_owned()))
+    );
+
+    // The backup from before the second change comes back: generation 1 again.
+    let mut owner = database.connect("ai_gateway_owner").await;
+    sqlx::raw_sql(RESTORE_FIRST_CHANGE)
+        .execute(&mut owner)
+        .await
+        .expect("restore the earlier settings");
+    assert_eq!(
+        running.call().await,
+        (200, Some("second/model-two".to_owned()))
+    );
+    assert_eq!(model_of(&second, 1), "model-two");
+    assert_eq!(model_of(&first, 0), "model-three");
+
+    let log = running.stop().await;
+    let warned = log
+        .iter()
+        .find(|line| line["message"] == WENT_BACK)
+        .unwrap_or_else(|| panic!("no `{WENT_BACK}` in {log:?}"));
+    assert_eq!(warned["level"], "WARN", "{warned}");
+    assert_eq!(warned["fields"]["loaded"], 2, "{warned}");
+    assert_eq!(warned["fields"]["stored"], 1, "{warned}");
 }

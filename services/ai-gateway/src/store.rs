@@ -7,16 +7,29 @@
 //! caller read, writes the role and one change record, and commits. The new generation is the
 //! change's version, so versions only go up, across resets too. A change is checked against the
 //! configuration ([`RoleRules`]) before the transaction starts; a refused change writes nothing.
+//!
+//! Every query runs in a transaction that bounds it on the server too (`SET LOCAL lock_timeout`
+//! and `statement_timeout`): a forwarded request's reads until its deadline, never longer than
+//! `database.timeout`; a change's statements `database.timeout` each. A query the gateway has
+//! given up on, such as a read blocked by a migration's lock or a change waiting behind another
+//! writer, does not keep a server process waiting after the caller has its answer.
 
-use sqlx::PgPool;
+use std::time::Duration;
+
 use sqlx::postgres::PgPoolOptions;
+use sqlx::{PgPool, Postgres, Transaction};
+use tokio::time::Instant;
 
-use crate::config::{Config, ModelsError, RoleRules, is_name};
+use crate::config::{Config, DEFAULT_DATABASE_TIMEOUT, ModelsError, RoleRules, is_name};
 
 /// The longest operator name a change records, in characters.
 pub const MAX_OPERATOR_CHARS: usize = 128;
 
 const READ_GENERATION: &str = "SELECT generation FROM ai_gateway.settings_generation";
+/// Bounds the rest of the transaction on the server, like `SET LOCAL`: `$1` is milliseconds.
+const SET_TIMEOUTS: &str = "SELECT set_config('lock_timeout', $1, true), \
+     set_config('statement_timeout', $1, true)";
+const BEGIN_READ: &str = "BEGIN READ ONLY";
 const BUMP_GENERATION: &str = "UPDATE ai_gateway.settings_generation \
      SET generation = generation + 1 RETURNING generation";
 /// The role's version and whether it has stored models (they are NULL after a reset).
@@ -99,6 +112,9 @@ pub enum StoreError {
 #[derive(Debug, Clone)]
 pub struct Store {
     pool: PgPool,
+    /// `database.timeout`: the longest server-side `lock_timeout` and `statement_timeout` of
+    /// any statement.
+    timeout: Duration,
 }
 
 impl Store {
@@ -118,40 +134,106 @@ impl Store {
                 .min_connections(0)
                 .acquire_timeout(config.database.timeout),
         )?;
-        Ok(Self { pool })
+        Ok(Self::with_timeout(pool, config.database.timeout))
     }
 
-    /// A store on an existing pool of the service role (tests).
+    /// A store on an existing pool of the service role, with the default `database.timeout`
+    /// (tests).
     pub fn from_pool(pool: PgPool) -> Self {
-        Self { pool }
+        Self::with_timeout(pool, DEFAULT_DATABASE_TIMEOUT)
+    }
+
+    /// A store on an existing pool whose statements the server ends after `timeout` at most.
+    pub fn with_timeout(pool: PgPool, timeout: Duration) -> Self {
+        Self { pool, timeout }
+    }
+
+    /// `database.timeout` from now.
+    fn deadline(&self) -> Instant {
+        Instant::now() + self.timeout
+    }
+
+    /// Opens a transaction with `begin` and bounds it on the server until `deadline`.
+    async fn begin(
+        &self,
+        begin: &'static str,
+        deadline: Instant,
+    ) -> Result<Transaction<'static, Postgres>, sqlx::Error> {
+        let mut transaction = self.pool.begin_with(begin).await?;
+        self.bound(&mut transaction, deadline).await?;
+        Ok(transaction)
+    }
+
+    /// Sets the transaction's `lock_timeout` and `statement_timeout` to the time left until
+    /// `deadline`, at most `database.timeout` and at least 1 ms (0 would turn them off). Each
+    /// applies per statement, so a transaction of several statements sets them again before
+    /// each one; the server then never runs past the caller's deadline.
+    async fn bound(
+        &self,
+        transaction: &mut Transaction<'static, Postgres>,
+        deadline: Instant,
+    ) -> Result<(), sqlx::Error> {
+        let left = deadline
+            .saturating_duration_since(Instant::now())
+            .min(self.timeout);
+        sqlx::query(SET_TIMEOUTS)
+            .bind(left.as_millis().max(1).to_string())
+            .execute(&mut **transaction)
+            .await?;
+        Ok(())
     }
 
     pub fn pool(&self) -> &PgPool {
         &self.pool
     }
 
-    /// The settings generation: one short query, which every forwarded request runs.
+    /// The settings generation, bounded by `database.timeout` (readiness, tests).
     ///
     /// # Errors
     ///
     /// When the database cannot be reached or refuses the query.
     pub async fn generation(&self) -> Result<i64, sqlx::Error> {
-        sqlx::query_scalar(READ_GENERATION)
-            .fetch_one(&self.pool)
-            .await
+        self.generation_by(self.deadline()).await
     }
 
-    /// Every stored role and the generation they belong to, in one read-only `REPEATABLE READ`
-    /// transaction, so the roles are exactly those of that generation.
+    /// The settings generation: one short query, which every forwarded request runs, in a
+    /// read-only transaction the server ends at `deadline` or after `database.timeout`,
+    /// whichever comes first.
+    ///
+    /// # Errors
+    ///
+    /// When the database cannot be reached or refuses the query.
+    pub async fn generation_by(&self, deadline: Instant) -> Result<i64, sqlx::Error> {
+        let mut transaction = self.begin(BEGIN_READ, deadline).await?;
+        let generation = sqlx::query_scalar(READ_GENERATION)
+            .fetch_one(&mut *transaction)
+            .await?;
+        transaction.commit().await?;
+        Ok(generation)
+    }
+
+    /// [`Store::load_by`], bounded by `database.timeout` (tests).
     ///
     /// # Errors
     ///
     /// When the database cannot be reached or refuses a query.
     pub async fn load(&self) -> Result<Stored, sqlx::Error> {
-        let mut transaction = self.pool.begin_with(BEGIN_SNAPSHOT).await?;
+        self.load_by(self.deadline()).await
+    }
+
+    /// Every stored role and the generation they belong to, in one read-only `REPEATABLE READ`
+    /// transaction, so the roles are exactly those of that generation. The server ends each
+    /// statement at `deadline` or after `database.timeout`, whichever comes first.
+    ///
+    /// # Errors
+    ///
+    /// When the database cannot be reached or refuses a query.
+    pub async fn load_by(&self, deadline: Instant) -> Result<Stored, sqlx::Error> {
+        let mut transaction = self.begin(BEGIN_SNAPSHOT, deadline).await?;
         let generation: i64 = sqlx::query_scalar(READ_GENERATION)
             .fetch_one(&mut *transaction)
             .await?;
+        self.bound(&mut transaction, deadline).await?;
         let rows: Vec<RoleRow> = sqlx::query_as(LOAD_ROLES)
             .fetch_all(&mut *transaction)
             .await?;
@@ -172,8 +254,8 @@ impl Store {
     }
 
     /// Replaces the model list of `role` with `models`, if the role is still at
-    /// `expected_version` (its row's version, or 0 when it has none). The list must pass the configuration's checks
-    /// and use the role's own protocol ([`RoleRules::check`]).
+    /// `expected_version` (its row's version, or 0 when it has none). The list must pass the
+    /// configuration's checks and use the role's own protocol ([`RoleRules::check`]).
     ///
     /// # Errors
     ///
@@ -226,7 +308,8 @@ impl Store {
         expected_version: i64,
         operator: &str,
     ) -> Result<Changed, StoreError> {
-        let mut transaction = self.pool.begin().await?;
+        // Each statement waits at most `database.timeout` on the server.
+        let mut transaction = self.begin("BEGIN", self.deadline()).await?;
         // First, so that writers queue on this row and versions follow commit order.
         let version: i64 = sqlx::query_scalar(BUMP_GENERATION)
             .fetch_one(&mut *transaction)

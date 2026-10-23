@@ -4653,9 +4653,10 @@ describe("service-to-service authorization (decision 27)", () => {
         // Two services and Postgres: only the services are calls on behalf of users.
         assets: ["certs", "alerts", "postgres"],
         // ai-gateway verifies no internal identity (decision 28): the mesh alone authorizes calls
-        // to it, and it holds no user's token to exchange.
+        // to it, and it holds no user's token to exchange. It keeps `postgres`, without which the
+        // render fails.
         assistant: ["ai-gateway", "knowledge"],
-        "ai-gateway": ["knowledge"],
+        "ai-gateway": ["knowledge", "postgres"],
         // In-cluster components are no service APIs.
         ingest: ["clickhouse"],
         // Disabled services on either side are skipped, as in the mesh plan.
@@ -5375,6 +5376,19 @@ describe("AI gateway settings (decisions 15 and 28, Laysi/trustiot-v2#536)", () 
       ["--set-json", 'services.ai-gateway.env=[{"name":"AI_GATEWAY__TELEMETRY__OTLP_ENDPOINT","value":"http://elsewhere:4318"}]'],
       /services\.ai-gateway: env AI_GATEWAY__TELEMETRY__OTLP_ENDPOINT is set by the chart/,
     ],
+    // Without its database the gateway refuses to start (services/ai-gateway/README.md, 「資料庫」).
+    [
+      "a gateway without postgres under mesh.calls",
+      SHAPES.saas,
+      ["--set-json", "mesh.calls.ai-gateway=[]"],
+      /mesh\.calls\.ai-gateway must list postgres: the gateway keeps the model roles' settings there/,
+    ],
+    [
+      "an on-premises gateway without postgres under mesh.calls",
+      SHAPES.onprem,
+      [...AI_GATEWAY_SETTINGS, "--set-json", "mesh.calls.ai-gateway=[]"],
+      /mesh\.calls\.ai-gateway must list postgres/,
+    ],
   ];
 
   test.each(cases)("the templates refuse %s, without schema validation", (_name, files, args, expected) => {
@@ -5447,11 +5461,6 @@ describe("AI gateway settings (decisions 15 and 28, Laysi/trustiot-v2#536)", () 
     expect(jobs).toContain(`ai_gateway_app=${RELEASE}-ai-gateway-password`);
   });
 
-  test("without postgres under mesh.calls the gateway gets no database settings", () => {
-    const manifests = render([...SHAPES.saas, SMOKE], [...ON, "--set-json", 'mesh.calls.ai-gateway=[]']);
-    const env = JSON.stringify(gatewayContainer(manifests).env ?? []);
-    expect(env).not.toMatch(/AI_GATEWAY_POSTGRES_|AI_GATEWAY__DATABASE__/);
-  });
 });
 
 // Values of ingress.tunnel.clusterIP that are not one plain IPv4 address (Laysi/trustiot-v2#478):

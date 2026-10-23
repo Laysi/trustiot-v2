@@ -5,7 +5,7 @@
 //! the role's limits.
 //!
 //! With a store attached ([`Gateway::with_store`]), every forwarded request reads the settings
-//! generation once and loads the settings again only when the database has a newer one
+//! generation once and loads the settings again only when the database has another one
 //! (README.md, 「多副本」). A request keeps the snapshot it got for its whole call: every model it
 //! falls back to and the stream it relays. A client is reused across snapshots for the same role
 //! and `<provider>/<model>` while any snapshot or request still holds it, so reloading never
@@ -398,7 +398,7 @@ impl Gateway {
     }
 
     /// The snapshot a forwarded request uses: the one in memory when the database's settings
-    /// generation is not newer, otherwise the settings loaded again. Waits at most the store's
+    /// generation is the same, otherwise the settings loaded again. Waits at most the store's
     /// timeout and never past `deadline`. Without a store, the configured models.
     ///
     /// # Errors
@@ -409,32 +409,41 @@ impl Gateway {
             return Ok(self.current());
         };
         let limit = deadline.min(Instant::now() + live.timeout);
-        match tokio::time::timeout_at(limit, self.refresh(live)).await {
+        match tokio::time::timeout_at(limit, self.refresh(live, limit)).await {
             Ok(result) => result,
             Err(_) => Err(SettingsError::TimedOut),
         }
     }
 
-    async fn refresh(&self, live: &Live) -> Result<Arc<Snapshot>, SettingsError> {
-        let generation = live.store.generation().await?;
+    /// The database's server also gives up at `limit` (src/store.rs), so no query outlives the
+    /// call that waited for it.
+    async fn refresh(&self, live: &Live, limit: Instant) -> Result<Arc<Snapshot>, SettingsError> {
+        let generation = live.store.generation_by(limit).await?;
         let current = self.current();
-        // An older generation than the one in memory only comes from restoring an older backup
-        // under a running gateway, which needs a restart (README.md, 「資料庫」).
-        if generation <= current.generation {
+        if generation == current.generation {
             return Ok(current);
         }
+        // The database is the source of truth: a newer generation is a change, an older one a
+        // restored backup (README.md, 「多副本」). Either way the stored settings are loaded and
+        // used. One reload at a time; only the holder of this lock replaces the snapshot.
         let _reloading = live.reload.lock().await;
         let current = self.current();
-        if generation <= current.generation {
+        if generation == current.generation {
             return Ok(current);
         }
-        let stored = live.store.load().await?;
-        let snapshot = Arc::new(self.assemble(stored));
-        let mut slot = self.current.write().unwrap_or_else(PoisonError::into_inner);
-        if snapshot.generation > slot.generation {
-            *slot = Arc::clone(&snapshot);
+        // Read after the lock: no snapshot in memory is from a later read of the database.
+        let stored = live.store.load_by(limit).await?;
+        if stored.generation < current.generation {
+            tracing::warn!(
+                loaded = current.generation,
+                stored = stored.generation,
+                "the settings generation in the database went back, as after restoring a backup; \
+                 using the stored settings"
+            );
         }
-        Ok(Arc::clone(&slot))
+        let snapshot = Arc::new(self.assemble(stored));
+        *self.current.write().unwrap_or_else(PoisonError::into_inner) = Arc::clone(&snapshot);
+        Ok(snapshot)
     }
 
     /// A snapshot of `stored`: each configured role with its stored model list when that list

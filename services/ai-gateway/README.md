@@ -87,6 +87,7 @@ HTTP 200 而且 `ai-gateway-model` 是那個供應商的模型，表示金鑰可
 - 每次嘗試受角色的 `timeouts` 限制（ai-clients 的 `Timeouts`）：`connect` 連線與 TLS 交握；`response` 非串流的回應標頭與本文；`first_token` 串流從送出到第一個內容區塊事件；`stream_idle` 串流兩段資料之間；`stream_total` 整條串流。另有 `queue_wait`：等並發名額的時間，等不到算過載。
 - 整個呼叫（讀請求本文加上所有嘗試，到非串流的回應或串流的第一個輸出為止）不超過時間預算：service-kit 的 `http.request_timeout` 減去它的十分之一、最多 2 秒。預算用完回 504（呼叫端協定的格式），不再嘗試下一個模型；這比 service-kit 自己沒有本文的 504 早到。
 - 啟動時檢查每個角色：`queue_wait` 加上 `response` 與 `first_token` 較長者，要在時間預算內，否則不啟動（錯誤訊息寫出角色的設定名稱與 `AI_GATEWAY__HTTP__REQUEST_TIMEOUT`）。service-kit 的預設 `http.request_timeout` 是 30 秒，角色預設的 `response` 是 300 秒，所以部署一定要調高 `AI_GATEWAY__HTTP__REQUEST_TIMEOUT`，例如 `10m`（上限 1 小時）。
+- 這個檢查只保證角色設定的模型上限放得進時間預算，不包含 `database.timeout`：設定確認（見「資料庫」）在同一個時間預算裡跑，它自己的上限是 `database.timeout` 與這次呼叫剩下的預算較短者，平常是一次很短的查詢。把它最壞的情況加進靜態檢查，等於要每個部署為了資料庫異常多留 `database.timeout`（預設 5 秒）的預算，也會讓 chart 鏡像的同一個檢查拒絕現有的 values。資料庫慢只會縮短那一次呼叫：預算用完回 504，或設定確認逾時回 503，不會超過時間預算。
 - 串流的第一個輸出之後不受時間預算限制，只受 `stream_idle` 與 `stream_total`。
 
 ## 設定
@@ -131,7 +132,7 @@ HTTP 200 而且 `ai-gateway-model` 是那個供應商的模型，表示金鑰可
 | `database.username` | `AI_GATEWAY__DATABASE__USERNAME` | 必填 | 服務角色 `ai_gateway_app` |
 | `database.password` | `AI_GATEWAY__DATABASE__PASSWORD` | 必填 | 由 Secret 提供；不進日誌與 `Debug` |
 | `database.max_connections` | `AI_GATEWAY__DATABASE__MAX_CONNECTIONS` | `4` | 每個副本的連線池大小，1 到 32 |
-| `database.timeout` | `AI_GATEWAY__DATABASE__TIMEOUT` | `5s` | 每個轉送請求等設定確認（取得連線、讀世代、必要時重載）的上限，100 ms 到 60 s，而且不超過這次呼叫剩下的時間預算；超過回 503 |
+| `database.timeout` | `AI_GATEWAY__DATABASE__TIMEOUT` | `5s` | 每個轉送請求等設定確認（取得連線、讀世代、必要時重載）的上限，100 ms 到 60 s，而且不超過這次呼叫剩下的時間預算；超過回 503。也是伺服器端 `lock_timeout` 與 `statement_timeout` 的上限（見「資料庫」） |
 
 至少要有一個角色。一個最小的設定：
 
@@ -155,9 +156,13 @@ chart 的 `ai.roles` 決定有哪些角色、各自的協定、上限、時間�
 
 | 表 | 內容 | 服務角色的權限 |
 | --- | --- | --- |
-| `role_models` | 每個更換過的角色一列：`models`（1 到 8 個 `<provider>/<model>`，重設之後是 NULL）、`version`、`updated_at`、`updated_by` | SELECT、INSERT、UPDATE（不能 DELETE、TRUNCATE） |
+| `role_models` | 每個更換過的角色一列：`models`（1 到 8 個 `<provider>/<model>`，重設之後是 NULL）、`version`、`updated_at`、`updated_by` | SELECT、INSERT、UPDATE（只有 `models`、`version`、`updated_at`、`updated_by` 欄；不能 DELETE、TRUNCATE） |
 | `settings_generation` | 只有一列的 `generation`，每次更換或重設加一 | SELECT、UPDATE（只有 `generation` 欄） |
 | `role_model_changes` | append-only 的變更紀錄：`version`、`role`、`action`（`set` 或 `reset`）、`models`、`changed_at`、`changed_by` | SELECT、INSERT（UPDATE、DELETE、TRUNCATE 被資料庫拒絕） |
+
+兩個 trigger 讓每個角色（owner 也一樣）的 UPDATE 都要讓數字上升：`settings_generation` 的 `generation` 要變大，`role_models` 的 `version` 要變大而且 `role` 不能改，否則資料庫以 SQLSTATE 42501 拒絕。版本比對依賴這兩個順序，所以不只靠程式碼保證。從備份還原是重新寫入列（INSERT 或 COPY），trigger 不擋，副本怎麼處理見「多副本」。
+
+每個交易在伺服器端也有上限：開始後先 `set_config('lock_timeout', …, true)` 與 `set_config('statement_timeout', …, true)`（等同 `SET LOCAL`）。轉送請求的讀取設成這次設定確認剩下的時間（`database.timeout` 與呼叫剩下的時間預算較短者，從同一個期限算起），而且兩者都是每個敘述各自計算，所以重載的兩個查詢之前各設一次；更換與重設的每個敘述是 `database.timeout`。閘道放棄的查詢（例如被 migration 的鎖擋住的讀取，或排在另一個寫入者後面的更換）不會在呼叫端拿到回應之後還佔著伺服器的程序。每個轉送請求的世代讀取也在這樣的短交易裡（`BEGIN READ ONLY`、設定上限、`SELECT generation`、`COMMIT`）：比連線啟動參數多幾次來回，但 `SET LOCAL` 在連線池（例如 PgBouncer 的交易模式）後面也成立，與 identity 的 `members.rs` 做法一致。
 
 更換與重設（`src/store.rs` 的 `Store::set_models`、`Store::reset`；管理 API 在 Laysi/trustiot-v2#606）：
 
@@ -173,9 +178,9 @@ chart 的 `ai.roles` 決定有哪些角色、各自的協定、上限、時間�
 
 更換的呼叫回 200 之後才開始的請求，在任何副本都用新的模型。
 
-做法：每個轉送請求在讀完本文之後讀一次 `SELECT generation`（小的連線池，算在這次呼叫的時間預算內）。與記憶體裡快照的世代相同就用快照；資料庫的世代較新時，在 `REPEATABLE READ READ ONLY` 的交易裡一次讀入所有覆寫與世代，建新的快照，只在它比目前的新時換上（同一個副本同時只有一個重載）。重載以（角色、`<provider>/<model>`）為鍵重用既有的 client，所以沒變的模型的並發計數不會歸零。進行中的請求、串流與同一個請求內的備援，沿用它開始時拿到的快照；串流結束前它的 client 不會被釋放。
+做法：每個轉送請求在讀完本文之後讀一次 `SELECT generation`（小的連線池，算在這次呼叫的時間預算內）。與記憶體裡快照的世代相同就用快照；不同時，在 `REPEATABLE READ READ ONLY` 的交易裡一次讀入所有覆寫與世代，建新的快照並換上（同一個副本同時只有一個重載，拿到重載的鎖之後才讀，所以換上的一定是最後一次讀到的資料庫）。重載以（角色、`<provider>/<model>`）為鍵重用既有的 client，所以沒變的模型的並發計數不會歸零。進行中的請求、串流與同一個請求內的備援，沿用它開始時拿到的快照；串流結束前它的 client 不會被釋放。
 
-資料庫的世代比副本記憶體裡的舊（例如從備份還原）時不會重載：還原之後要重新啟動閘道。
+資料庫是設定的來源：資料庫的世代比副本記憶體裡的舊（例如從備份還原）時，副本同樣改用資料庫裡的設定，並記 WARN `the settings generation in the database went back, as after restoring a backup; using the stored settings`（`loaded`：記憶體裡的世代，`stored`：資料庫的世代；不記模型清單）。不需要重新啟動閘道。
 
 ## 金鑰與 TLS
 
@@ -186,7 +191,7 @@ chart 的 `ai.roles` 決定有哪些角色、各自的協定、上限、時間�
 
 ## 日誌
 
-每次呼叫記一行，欄位有 `role`、`protocol`、`tenant`、`model`、`attempts`、`provider_request_id`、`duration_ms`：成功是 INFO `model call completed`（加 `streaming`、`outcome`），換模型是 WARN `falling back to the next model`（加 `next_model`、`class`、`status`、`error_type`），失敗是 WARN `model call failed`（串流途中是 `model stream failed`，加 `class`、`status`、`error_type`，連線與協定錯誤加 `detail`），呼叫端在串流結束前離開是 WARN `the caller left before the stream ended`。啟動時每個角色記一行 INFO `model role ready`（`role`、`protocol`、`models`，啟動時資料庫還沒讀，所以是設定的模型）；讀不到設定、忽略或使用存下的模型清單的日誌見「資料庫」。不記請求或回應的本文、供應商的錯誤訊息與 key。
+每次呼叫記一行，欄位有 `role`、`protocol`、`tenant`、`model`、`attempts`、`provider_request_id`、`duration_ms`：成功是 INFO `model call completed`（加 `streaming`、`outcome`），換模型是 WARN `falling back to the next model`（加 `next_model`、`class`、`status`、`error_type`），失敗是 WARN `model call failed`（串流途中是 `model stream failed`，加 `class`、`status`、`error_type`，連線與協定錯誤加 `detail`），呼叫端在串流結束前離開是 WARN `the caller left before the stream ended`。啟動時每個角色記一行 INFO `model role ready`（`role`、`protocol`、`models`，啟動時資料庫還沒讀，所以是設定的模型）；讀不到設定、忽略或使用存下的模型清單的日誌見「資料庫」，資料庫的世代倒退的日誌見「多副本」。不記請求或回應的本文、供應商的錯誤訊息與 key。
 
 ## 關機
 
@@ -201,8 +206,8 @@ service-kit 對長連線的建議是在 `Shutdown::stopping` 時結束 SSE，讓
 | `tests/messages.rs` | 本文除了 `model` 逐位元組相同（thinking 與 signature、快取斷點、對話中的 system 訊息）、缺 `model` 時補上、串流原樣交回、第一個輸出之後的錯誤原樣轉送且不換模型、拒答的串流、各種不能轉送的請求在送出前拒絕、本文沒在時間預算內送完時回 504 |
 | `tests/fallback.rs` | 429、529、供應商 504、閘道自己的逾時（`TIMEOUT_UNDER_TEST`，15 秒）與並發上限都換下一個模型；串流第一個輸出之前的 `error` 事件與 429 也換；全部失敗時交回最後一個錯誤；400、401、500 與拒答不換；供應商訊息裡的 key 被遮蔽 |
 | `tests/decisions.rs` | 錄製的 Decisions 請求逐位元組轉送、回應原樣交回、拒答、429 與 503 換模型、不合格的請求與未知角色 |
-| `tests/process.rs` | 真正的程式：以測試 CA 與 `SSL_CERT_FILE` 走 TLS、key 從 `key_env` 讀取並送到供應商、trace 等級的日誌與回應裡都沒有 key 與資料庫密碼；沒有 key、沒有 Postgres 的平台設定或角色的時間上限超過 `http.request_timeout` 時不啟動；兩個程序共用一個資料庫時，一邊的更換在另一邊的下一個請求生效；重新啟動後用最後一次更換；不再成立的覆寫被忽略並記 ERROR |
-| `tests/roles_store.rs` | 更換與重設：被拒絕的更換不寫任何東西、每次更換寫一筆紀錄、重設之後版本仍上升與衝突、服務角色不能改寫或刪除變更紀錄；下一個請求用新的模型、只在世代改變時重載；資料庫連不上（從啟動起、或中途斷線）時回 503 而不呼叫供應商；進行中的串流保留它的模型；重載不讓沒變的模型的並發計數歸零 |
+| `tests/process.rs` | 真正的程式：以測試 CA 與 `SSL_CERT_FILE` 走 TLS、key 從 `key_env` 讀取並送到供應商、trace 等級的日誌與回應裡都沒有 key 與資料庫密碼；沒有 key、沒有 Postgres 的平台設定或角色的時間上限超過 `http.request_timeout` 時不啟動；兩個程序共用一個資料庫時，一邊的更換在另一邊的下一個請求生效；重新啟動後用最後一次更換；資料庫還原成較舊的設定時副本改用它並記 WARN；不再成立的覆寫被忽略並記 ERROR |
+| `tests/roles_store.rs` | 更換與重設：被拒絕的更換不寫任何東西、每次更換寫一筆紀錄、重設之後版本仍上升與衝突、服務角色不能改寫或刪除變更紀錄；服務角色與 owner 都不能讓世代或版本不升反降、也不能改角色名稱（trigger 回 42501）；被鎖擋住的讀取由伺服器在呼叫的期限結束（`lock_timeout` 的 55P03 或 `statement_timeout` 的 57014），不等到 `database.timeout`；下一個請求用新的模型、只在世代改變時重載；資料庫連不上（從啟動起、或中途斷線）時回 503 而不呼叫供應商；進行中的串流保留它的模型；重載不讓沒變的模型的並發計數歸零 |
 | `tests/no_contract.rs` | `cargo tree -p ai-gateway` 沒有 `contract` |
 
 `src/` 裡的單元測試涵蓋設定檢查、本文的換 `model`、錯誤格式與備援條件，以及 key 的遮蔽：互相重疊的 key、錯誤的 `type` 與 `code`、串流 `error` 事件裡用 JSON 跳脫寫成的 key。

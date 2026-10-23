@@ -11,14 +11,15 @@
 mod support;
 
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use ai_gateway::config::{Protocol, RoleRules};
-use ai_gateway::store::{Changed, StoreError};
+use ai_gateway::store::{Changed, Store, StoreError};
 use ai_gateway::{CONFIGURED_ONLY, MODEL_HEADER, TENANT_HEADER};
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use http_body_util::BodyExt;
-use sqlx::PgConnection;
+use sqlx::{Connection, PgConnection};
 use support::database::{Database, models, set_models};
 use support::{
     DECISIONS, MESSAGES, Server, Step, TENANT, Vars, WAIT, fixture, json_reply, post, sse_head,
@@ -26,6 +27,7 @@ use support::{
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{oneshot, watch};
+use tokio::time::Instant;
 use tower::ServiceExt;
 
 const BODY: &str = r#"{"max_tokens":16,"messages":[{"role":"user","content":"Hi"}]}"#;
@@ -367,6 +369,133 @@ async fn the_service_role_cannot_rewrite_or_remove_the_change_log() {
         );
     }
     assert_eq!(counts(&mut app).await, (1, 1, 1));
+}
+
+/// UPDATEs that would move the generation or a role's version back, keep them, or rename a role.
+const NOT_RISING: [&str; 5] = [
+    "UPDATE ai_gateway.settings_generation SET generation = generation",
+    "UPDATE ai_gateway.settings_generation SET generation = generation - 1",
+    "UPDATE ai_gateway.role_models SET version = version WHERE role = 'main'",
+    "UPDATE ai_gateway.role_models SET version = version - 1, models = NULL WHERE role = 'main'",
+    "UPDATE ai_gateway.role_models SET models = NULL WHERE role = 'main'",
+];
+// `role` comes second: sql-check reads `SET role` as switching the session role.
+const RENAME_ROLE: &str =
+    "UPDATE ai_gateway.role_models SET version = version + 1, role = 'router' WHERE role = 'main'";
+const READ_MAIN_VERSION: &str = "SELECT version FROM ai_gateway.role_models WHERE role = 'main'";
+
+fn sqlstate(error: &sqlx::Error) -> Option<String> {
+    error
+        .as_database_error()
+        .and_then(|error| error.code().map(|code| code.into_owned()))
+}
+
+#[tokio::test]
+async fn the_generation_and_the_versions_only_rise_for_every_role() {
+    let Some(database) = Database::new(
+        "CREATE DATABASE ai_gateway_rising OWNER ai_gateway_owner",
+        "ai_gateway_rising",
+    )
+    .await
+    else {
+        return;
+    };
+    let store = database.store();
+    let version = set_models(&store, &rules(), "main", &["second/model-two"], 0).await;
+
+    // The triggers hold the owner to the same order as the service role.
+    for role in ["ai_gateway_app", "ai_gateway_owner"] {
+        let mut connection = database.connect(role).await;
+        for statement in NOT_RISING {
+            let error = sqlx::query(statement)
+                .execute(&mut connection)
+                .await
+                .expect_err("an UPDATE that does not raise the number");
+            assert_eq!(
+                sqlstate(&error).as_deref(),
+                Some(INSUFFICIENT_PRIVILEGE),
+                "{role}: {statement}: {error}"
+            );
+        }
+        // The service role may not change the role column at all; the owner may not either,
+        // because the trigger keeps it.
+        let error = sqlx::query(RENAME_ROLE)
+            .execute(&mut connection)
+            .await
+            .expect_err("renaming a role");
+        assert_eq!(
+            sqlstate(&error).as_deref(),
+            Some(INSUFFICIENT_PRIVILEGE),
+            "{role}: {error}"
+        );
+        assert_eq!(counts(&mut connection).await, (version, 1, 1), "{role}");
+        let kept: i64 = sqlx::query_scalar(READ_MAIN_VERSION)
+            .fetch_one(&mut connection)
+            .await
+            .expect("read the version");
+        assert_eq!(kept, version, "{role}");
+    }
+
+    // What the store does still works: the next change raises both.
+    let next = set_models(&store, &rules(), "main", &["first/model-one"], version).await;
+    assert!(next > version);
+}
+
+/// What a migration's lock does to every reader of the settings.
+const LOCK_GENERATION: &str = "LOCK TABLE ai_gateway.settings_generation IN ACCESS EXCLUSIVE MODE";
+/// The longest `database.timeout`, which a read bounded by an earlier deadline must not wait for.
+const LONGEST_DATABASE_TIMEOUT: Duration = Duration::from_secs(60);
+/// The deadline the reads below are given: far shorter than `LONGEST_DATABASE_TIMEOUT`.
+const READ_DEADLINE: Duration = Duration::from_millis(500);
+/// The server's own timeouts, which are equal, so either may end the wait first: SQLSTATE 55P03
+/// (lock_not_available, `lock_timeout`) or 57014 (query_canceled, `statement_timeout`).
+const SERVER_TIMEOUTS: [&str; 2] = ["55P03", "57014"];
+/// Well before `LONGEST_DATABASE_TIMEOUT`, so that a read the server bounded by that timeout
+/// instead of the deadline fails here rather than racing it.
+const ENDS_WITHIN: Duration = Duration::from_secs(50);
+
+#[tokio::test]
+async fn the_server_stops_a_blocked_read_at_the_calls_deadline() {
+    let Some(database) = Database::new(
+        "CREATE DATABASE ai_gateway_deadline OWNER ai_gateway_owner",
+        "ai_gateway_deadline",
+    )
+    .await
+    else {
+        return;
+    };
+    let store = Store::with_timeout(database.app_pool(), LONGEST_DATABASE_TIMEOUT);
+    let mut owner = database.connect("ai_gateway_owner").await;
+    let mut lock = owner.begin().await.expect("begin the lock's transaction");
+    sqlx::query(LOCK_GENERATION)
+        .execute(&mut *lock)
+        .await
+        .expect("lock the generation");
+
+    // Nothing on this side cancels either read before `ENDS_WITHIN`: only the server's own
+    // timeouts, set from the deadline, can end them that early.
+    let read = tokio::time::timeout(
+        ENDS_WITHIN,
+        store.generation_by(Instant::now() + READ_DEADLINE),
+    )
+    .await
+    .expect("the generation read ended before database.timeout")
+    .expect_err("the generation is locked");
+    assert!(
+        sqlstate(&read).is_some_and(|code| SERVER_TIMEOUTS.contains(&code.as_str())),
+        "{read}"
+    );
+    let load = tokio::time::timeout(ENDS_WITHIN, store.load_by(Instant::now() + READ_DEADLINE))
+        .await
+        .expect("the load ended before database.timeout")
+        .expect_err("the generation is locked");
+    assert!(
+        sqlstate(&load).is_some_and(|code| SERVER_TIMEOUTS.contains(&code.as_str())),
+        "{load}"
+    );
+
+    lock.rollback().await.expect("release the lock");
+    assert_eq!(store.generation().await.expect("read after the lock"), 0);
 }
 
 #[tokio::test]

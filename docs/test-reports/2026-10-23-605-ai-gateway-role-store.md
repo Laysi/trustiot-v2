@@ -4,7 +4,7 @@ Laysi/trustiot-v2#605：ai-gateway 把模型角色的模型清單覆寫存進 Po
 
 ## 環境
 
-- **程式碼**：分支 `feat/605-ai-gateway-role-store`，rebase 到 main `74216494`（Laysi/trustiot-v2#604）之後的 commit。下表是 rebase 之後在同一棵樹上跑的結果。
+- **程式碼**：分支 `feat/605-ai-gateway-role-store`，rebase 到 main `74216494`（Laysi/trustiot-v2#604）之後的 commit。下表是 rebase 之後在同一棵樹上跑的結果；`cargo test -p ai-gateway`、sql-check 與 `bun test deploy/chart` 是 2026-10-24 安全審查的修正之後重跑的結果（見「安全審查之後的修正」）。
 - **機器**：建置主機（x86_64 Linux），經檢查佇列執行；容器測試由 podman 起 service-kit 的拋棄式 TLS Postgres（`crates/service-kit/tests/support/postgres.rs`，每個測試自己的資料庫，以 `ai_gateway_owner` 跑 `crates/service-kit/sql/database.sql`、建立 schema、跑 `0001_model_roles.sql` 與 migration 紀錄，與 migration Job 的順序相同）。
 - **工具**：Rust 1.99.0（`rust-toolchain.toml`）、bun 1.4.2（`.prototools`）。
 - **設定**：`CI=1`，沒有容器執行環境時測試失敗而不是略過。不連真正的供應商：供應商是 loopback 上的腳本化 HTTP/1.1 伺服器。
@@ -31,10 +31,10 @@ bun install --cwd scripts --frozen-lockfile && bun test scripts
 | --- | --- |
 | `cargo fmt --all --check` | 通過 |
 | `cargo clippy --workspace --all-targets -- -D warnings` | 通過 |
-| `cargo test -p ai-gateway` | 單元 23、`decisions` 4、`fallback` 9、`messages` 7、`no_contract` 2、`process` 5、`roles_store` 7，全部通過；每個測試的名稱見 [ai-gateway-tests.txt](data/2026-10-23-605-ai-gateway-role-store/ai-gateway-tests.txt) |
+| `cargo test -p ai-gateway` | 單元 23、`decisions` 4、`fallback` 9、`messages` 7、`no_contract` 2、`process` 6、`roles_store` 8，全部通過；每個測試的名稱見 [ai-gateway-tests.txt](data/2026-10-23-605-ai-gateway-role-store/ai-gateway-tests.txt) |
 | `cargo test -p migrate -p sql-check -p repo-check` | 全部通過，含 `registry` 6（ai-gateway 的 migration 登記與目錄一致）、`fresh_database` 1（叢集裡沒綁密碼的 `ai_gateway_app` 維持 NOLOGIN）、sql-check 26（`store.rs` 的 SQL 全是靜態字串） |
 | `cargo tree -p ai-gateway` 的 `contract` | 0 行 |
-| `bun test deploy/chart` | 636 通過、0 失敗 |
+| `bun test deploy/chart` | 637 通過、0 失敗 |
 | `bun test scripts` | 1659 通過、9 略過（需要 podman 或 arm64 的端對端測試，與這次變更無關）、0 失敗 |
 
 ## 結論
@@ -53,7 +53,19 @@ bun install --cwd scripts --frozen-lockfile && bun test scripts
 | `cargo test -p ai-gateway`、`-p migrate`、`-p sql-check`、`bun test deploy/chart`、workspace clippy 通過 | 通過 | 上表 |
 | 帶 `smoke` label 的 PR 的 nightly 部署啟用資料庫的 ai-gateway，pod 就緒 | 待測 | PR 推上去並加上 `smoke` label 之後由 nightly 執行；結果補在下一節 |
 
-chart 的接線另由 `deploy/chart/tests/chart.test.ts` 檢查（`AI gateway settings`）：bundled 與 external 兩種 Postgres，閘道的 `AI_GATEWAY_POSTGRES_{HOST,PORT,DATABASE,SSLMODE}` 與平台 ConfigMap 的 `TRUSTIOT_POSTGRES_*` 相同、`AI_GATEWAY_POSTGRES_CA_FILE` 與 CA 掛載、`AI_GATEWAY__DATABASE__USERNAME=ai_gateway_app`、密碼來自 `<release>-ai-gateway-password`、沒有 `TRUSTIOT__DATABASE__*`、migration Job 綁定 `ai_gateway_app`；自訂 `env` 設 `AI_GATEWAY_POSTGRES_HOST`、`AI_GATEWAY__DATABASE__USERNAME` 或（小寫、經 `valueFrom`）`AI_GATEWAY__DATABASE__PASSWORD` 時渲染失敗；`mesh.calls.ai-gateway` 拿掉 `postgres` 時沒有這些變數。
+chart 的接線另由 `deploy/chart/tests/chart.test.ts` 檢查（`AI gateway settings`）：bundled 與 external 兩種 Postgres，閘道的 `AI_GATEWAY_POSTGRES_{HOST,PORT,DATABASE,SSLMODE}` 與平台 ConfigMap 的 `TRUSTIOT_POSTGRES_*` 相同、`AI_GATEWAY_POSTGRES_CA_FILE` 與 CA 掛載、`AI_GATEWAY__DATABASE__USERNAME=ai_gateway_app`、密碼來自 `<release>-ai-gateway-password`、沒有 `TRUSTIOT__DATABASE__*`、migration Job 綁定 `ai_gateway_app`；自訂 `env` 設 `AI_GATEWAY_POSTGRES_HOST`、`AI_GATEWAY__DATABASE__USERNAME` 或（小寫、經 `valueFrom`）`AI_GATEWAY__DATABASE__PASSWORD` 時渲染失敗；`mesh.calls.ai-gateway` 拿掉 `postgres` 時渲染失敗（saas 與 onprem 兩種形狀，訊息 `mesh.calls.ai-gateway must list postgres`）。
+
+## 安全審查之後的修正（2026-10-24）
+
+協調者的安全審查沒有 Critical 或 High；以下修正在同一個分支的新 commit，同樣在建置主機以 `CI=1` 執行：workspace clippy 通過；`cargo test -p ai-gateway` 59 通過（上表）；`cargo test -p migrate -p sql-check -p repo-check` 全部通過（migrate 的 `registry` 6、`fresh_database` 1，sql-check `check` 6）；`bun test deploy/chart` 637 通過。
+
+| 項目 | 修正 | 證據 |
+| --- | --- | --- |
+| 資料庫的世代倒退（例如從備份還原）時，副本原本留著記憶體裡較新、已經不在資料庫的設定 | 資料庫是來源：世代與記憶體不同就重載，較舊時也採用並記 WARN（`loaded`、`stored`） | `process::settings_restored_from_an_older_backup_are_adopted_with_a_warning`：兩次更換之後以 owner 把三張表還原成第一次更換的內容（世代 1），下一個請求用第一次更換的模型，日誌有 WARN，`loaded` 2、`stored` 1 |
+| 交易沒有伺服器端的上限 | 每個交易開始後設 `lock_timeout` 與 `statement_timeout`（`set_config(..., true)`，等於 `database.timeout`），每個請求的世代讀取也是 | 既有的 `roles_store` 與 `process` 測試都經過新的交易路徑；`sql-check` 通過 |
+| 啟動時的時間預算檢查不含 `database.timeout` | 不加入；在 `services/ai-gateway/README.md`「時間上限」寫明檢查保證的範圍與理由 | 文件 |
+| chart 允許啟用閘道卻沒有 `postgres`，pod 會一直重啟 | 渲染失敗並說明原因 | `chart.test.ts` 的 `the templates refuse a gateway without postgres under mesh.calls, without schema validation` 與 `... an on-premises gateway without postgres under mesh.calls ...` |
+| 世代與版本只升不降只靠程式碼 | migration：`role_models` 只給 `models`、`version`、`updated_at`、`updated_by` 欄的 UPDATE；兩個 trigger 拒絕不讓世代或版本上升、或改角色名稱的 UPDATE（42501），owner 也一樣 | `roles_store::the_generation_and_the_versions_only_rise_for_every_role`：`ai_gateway_app` 與 `ai_gateway_owner` 的 5 種不上升的 UPDATE 與改名都回 42501，資料不變，之後 `set_models` 照常成功且版本上升 |
 
 ### nightly（待補）
 
