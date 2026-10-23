@@ -4081,9 +4081,11 @@ describe("ingress gateway (decision 27)", () => {
   const SMOKE_API = [
     "--set", "services.identity.enabled=true",
     "--set", "services.assets.enabled=true",
+    "--set", "services.certs.enabled=true",
     "--set-json", `ingress.routes=${JSON.stringify([
       { host: "app", path: "/api/identity", match: "PathPrefix", service: "identity" },
       { host: "app", path: "/api/assets", match: "PathPrefix", service: "assets" },
+      { host: "app", path: "/api/certs", match: "PathPrefix", service: "certs" },
     ])}`,
   ];
   const ROUTE_LIST_CASES = SHAPE_NAMES.flatMap((shape) => [
