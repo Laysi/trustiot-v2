@@ -2074,6 +2074,51 @@ describe("MQTT broker (decision 6, Laysi/trustiot-v2#84)", () => {
     expect(withoutCerts.some((m) => m.metadata.name === `${RELEASE}-certs`)).toBe(false);
   });
 
+  // Laysi/trustiot-v2#85: mqtt-bridge relays each gateway's WebSocket to the broker's gateway port,
+  // the one port the mesh admits it on, and reads the source-IP mode from the platform settings.
+  test.each(SHAPE_NAMES)("%s: mqtt-bridge gets the broker's gateway port, and no address without the broker", (shape) => {
+    const BRIDGE = `${RELEASE}-mqtt-bridge`;
+    const bridge = (rendered: Manifest[]) => {
+      const container = (podSpec(find(rendered, "Deployment", BRIDGE)).containers as Container[])[0];
+      if (!container) throw new Error(`no container in ${BRIDGE}`);
+      return container;
+    };
+    const withBroker = bridge(render(SHAPES[shape], [...brokerOn, ...callers]));
+    expect((withBroker.env ?? []).filter((e) => e.name.startsWith("TRUSTIOT__BROKER__"))).toEqual([
+      { name: "TRUSTIOT__BROKER__ADDRESS", value: `${NAME}.${NAMESPACE}.svc:${GATEWAY_PORT}` },
+    ]);
+    expect(withBroker.envFrom).toEqual([{ configMapRef: { name: `${RELEASE}-platform` } }]);
+    // Without the broker the bridge has nowhere to relay to and refuses to start
+    // (services/mqtt-bridge/README.md, 「設定」).
+    const withoutBroker = bridge(render(SHAPES[shape], ["--set", "services.mqtt-bridge.enabled=true"]));
+    expect((withoutBroker.env ?? []).some((e) => e.name.startsWith("TRUSTIOT__BROKER__"))).toBe(false);
+    // The address is the chart's: custom env cannot point the bridge elsewhere, with the broker or
+    // without it, through the service's env or serviceDefaults.env.
+    for (const broker of [[...brokerOn, ...callers], ["--set", "services.mqtt-bridge.enabled=true"]]) {
+      for (const field of ["services.mqtt-bridge.env", "serviceDefaults.env"]) {
+        const result = helmTemplate(SHAPES[shape], [...broker, "--set-json", `${field}=[{"name":"trustiot__broker__address","value":"elsewhere:8883"}]`]);
+        expect(result.code).not.toBe(0);
+        expect(result.stderr).toContain("services.mqtt-bridge: env trustiot__broker__address is set by the chart");
+      }
+    }
+  });
+
+  // Security review of Laysi/trustiot-v2#85: a service allowed to call mqtt-bridge could set
+  // CF-Connecting-IP itself and reach the broker's gateway port through the bridge, so the ingress
+  // gateway stays its only caller.
+  test("no service may list mqtt-bridge in mesh.calls", () => {
+    const result = helmTemplate(SHAPES.saas, [
+      ...brokerOn,
+      ...callers,
+      "--set",
+      "services.assets.enabled=true",
+      "--set-json",
+      'mesh.calls.assets=["postgres","mqtt-bridge"]',
+    ]);
+    expect(result.code).not.toBe(0);
+    expect(result.stderr).toContain("mesh.calls.assets: no service may call mqtt-bridge");
+  });
+
   // Laysi/trustiot-v2#557: a certificate for the broker's name lets its holder pose as the broker
   // to every gateway, so only the broker's pod reaches the port that issues it.
   test.each(SHAPE_NAMES)("%s: the broker alone reaches the certs service's broker-certs port, which the certs Service leaves out", (shape) => {
@@ -2147,9 +2192,11 @@ describe("MQTT broker (decision 6, Laysi/trustiot-v2#84)", () => {
     const env = Object.fromEntries((container?.env ?? []).map((e) => [e.name, e.value]));
     expect(env.TRUSTIOT__BROKER__LISTEN_ADDR).toBe(`0.0.0.0:${BROKER_CERTS_PORT}`);
     expect(env.TRUSTIOT__BROKER__SERVICE_NAME).toBe(`${NAME}.${NAMESPACE}.svc`);
-    // No other workload gets the broker's settings.
+    // No other workload gets the broker's settings; mqtt-bridge gets only the broker's address
+    // (Laysi/trustiot-v2#85).
     for (const other of rendered.filter((m) => m.kind === "Deployment" && m.metadata.name !== CERTS)) {
-      expect(podSpec(other).containers.flatMap((c) => (c.env ?? []).map((e) => e.name)).filter((name) => name.startsWith("TRUSTIOT__BROKER__"))).toEqual([]);
+      const expected = other.metadata.name === `${RELEASE}-mqtt-bridge` ? ["TRUSTIOT__BROKER__ADDRESS"] : [];
+      expect(podSpec(other).containers.flatMap((c) => (c.env ?? []).map((e) => e.name)).filter((name) => name.startsWith("TRUSTIOT__BROKER__"))).toEqual(expected);
     }
 
     // Without the broker the port's policies admit nobody, and the certificate names no Service.
