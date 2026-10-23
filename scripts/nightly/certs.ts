@@ -26,7 +26,11 @@
 // The root private key never touches a disk: `root create` prints it to a pipe, it stays in this
 // process's memory (TestRoot), `root sign` reads it from a pipe, and TestRoot drops it after that
 // one signature, or when the shape ends. Neither command's standard output reaches the run log
-// (exec.ts, quiet). The certificates, the request and the CRL are public.
+// (exec.ts, quiet). The certificates, the request and the CRL are public. Dropping is not erasing:
+// JavaScript strings cannot be zeroed, so copies of the key (the command's result, this object's
+// field, the stdin buffer) stay in this process's heap until it is collected or the job ends. That
+// is accepted: the runner is thrown away after the job, which holds no secret, and the root lives
+// 7 days and is trusted only by the throwaway cluster. certs-ca zeroes its own copies.
 import { X509Certificate, createHash } from "node:crypto";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -261,8 +265,9 @@ const PRIVATE_KEY_PEM = /^-----BEGIN PRIVATE KEY-----\r?\n[A-Za-z0-9+/=\r\n]+---
 
 /**
  * The run's root CA: its certificate (public) and its private key, which lives only in this
- * object, never on a disk or in the log, and signs one issuing CA: `sign` drops it, and so does
- * `discard`, which the smoke calls when the shape ends either way.
+ * object, never on a disk or in the log, and signs one issuing CA: `sign` drops its reference, and
+ * so does `discard`, which the smoke calls when the shape ends either way (dropped, not erased:
+ * see the top of this file).
  */
 export class TestRoot {
   #key: string | undefined;

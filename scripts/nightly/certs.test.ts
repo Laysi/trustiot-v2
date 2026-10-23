@@ -406,7 +406,13 @@ describe("inside the mesh", () => {
 // ---------------------------------------------------------------------------------------------
 
 /** An ingress with the certs service behind it; `issue` answers the platform administrator's issue requests in turn. */
-function fakeIngress(options: { routeAfter?: number; issue: (RawResponse | Error)[]; revoke?: RawResponse[] }) {
+/** A gate that is open: `actor` gets what a platform administrator gets on `call`. */
+interface OpenGate {
+  actor: "anonymous" | "tenant administrator";
+  call: "issue" | "revoke";
+}
+
+function fakeIngress(options: { routeAfter?: number; issue: (RawResponse | Error)[]; revoke?: RawResponse[]; open?: OpenGate }) {
   const sent: RawRequest[] = [];
   const sql: string[] = [];
   let routeAfter = options.routeAfter ?? 0;
@@ -428,13 +434,15 @@ function fakeIngress(options: { routeAfter?: number; issue: (RawResponse | Error
       const cookie = cookieOf(request);
       const hash = cookie === undefined ? undefined : new Bun.CryptoHasher("sha256").update(Buffer.from(cookie.split("=")[1]!, "base64url")).digest("hex");
       if (request.target === TENANTS_PATH) return { status: 201, headers: {}, body: JSON.stringify({ tenant_id: "0b5e4f8e-8f2e-4c3e-9d4a-2f1b3c4d5e6f", name: "t" }), ms: 1 };
-      if (hash === undefined) return error(401, "unauthenticated");
+      const call = request.target === WORKSTATION_CERTIFICATES_PATH ? "issue" : "revoke";
+      const openTo = (actor: OpenGate["actor"]) => options.open?.actor === actor && options.open.call === call;
+      if (hash === undefined && !openTo("anonymous")) return error(401, "unauthenticated");
       if (routeAfter > 0) {
         routeAfter -= 1;
         return { status: 404, headers: {}, body: "", ms: 1 };
       }
-      if (hash === tenantAdmin) return error(403, "permission_denied");
-      expect(hash).toBe(admin ?? "no platform administrator");
+      if (hash !== undefined && hash === tenantAdmin && !openTo("tenant administrator")) return error(403, "permission_denied");
+      if (options.open === undefined) expect(hash).toBe(admin ?? "no platform administrator");
       if (request.target === WORKSTATION_CERTIFICATES_PATH) {
         const next = options.issue.length > 1 ? options.issue.shift()! : options.issue[0]!;
         if (next instanceof Error) throw next;
@@ -521,6 +529,30 @@ describe("the workstation certificate API through the ingress", () => {
     await ingress.deps.psql(`'\\x${actors.tenantAdmin.tokenHash}'`);
     await expect(checkWorkstationSigning(ingress.deps, APP, workstation(), actors, issuing())).rejects.toThrow("connection reset");
     expect(ingress.sent.filter((r) => r.target === WORKSTATION_CERTIFICATES_PATH)).toHaveLength(3);
+  });
+
+  // An open gate must fail the check: these are what the nightly proves about /api/certs.
+  test("while waiting, fails when the tenant administrator is let through: it never sees the 403 it waits for", async () => {
+    const ingress = fakeIngress({ issue: [notReady()], open: { actor: "tenant administrator", call: "issue" } });
+    await expect(checkWorkstationWaiting(ingress.deps, APP, fx.workstationRequest, "t")).rejects.toThrow("permission_denied");
+  });
+
+  test("while waiting, fails when issuing without a cookie is let through", async () => {
+    const ingress = fakeIngress({ issue: [notReady()], open: { actor: "anonymous", call: "issue" } });
+    await expect(checkWorkstationWaiting(ingress.deps, APP, fx.workstationRequest, "t")).rejects.toThrow("expected 401 unauthenticated");
+  });
+
+  test.each([
+    ["anonymous", "issue", "expected 401 unauthenticated"],
+    ["tenant administrator", "issue", "expected 403 permission_denied"],
+    ["anonymous", "revoke", "expected 401 unauthenticated"],
+    ["tenant administrator", "revoke", "expected 403 permission_denied"],
+  ] as const)("once signing, fails when the %s may %s", async (actor, call, message) => {
+    const actors = await waitingActors();
+    const ingress = fakeIngress({ issue: [issued()], revoke: [revoked(), revoked()], open: { actor, call } });
+    await ingress.deps.psql(`platform_admin '\\x${actors.platformAdmin.tokenHash}'`);
+    await ingress.deps.psql(`'\\x${actors.tenantAdmin.tokenHash}'`);
+    await expect(checkWorkstationSigning(ingress.deps, APP, workstation(), actors, issuing())).rejects.toThrow(message);
   });
 
   test("issuedProblems checks the certificate against the issuing CA, the key id certs-ca printed and the request's key", () => {
