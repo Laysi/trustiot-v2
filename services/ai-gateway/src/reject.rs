@@ -35,6 +35,9 @@ pub enum Kind {
     /// The provider could not be reached, refused the gateway's credentials, or sent a
     /// response that cannot be used: 502.
     BadGateway,
+    /// The model role settings could not be checked (the database is unreachable or too slow),
+    /// so no provider was called: 503.
+    Unavailable,
 }
 
 impl Kind {
@@ -47,6 +50,7 @@ impl Kind {
             (Self::Overloaded, Protocol::AnthropicMessages) => overloaded(),
             (Self::Overloaded, Protocol::OpenaiDecisions) => StatusCode::SERVICE_UNAVAILABLE,
             (Self::BadGateway, _) => StatusCode::BAD_GATEWAY,
+            (Self::Unavailable, _) => StatusCode::SERVICE_UNAVAILABLE,
         }
     }
 
@@ -60,14 +64,16 @@ impl Kind {
                     Self::TooLarge => "request_too_large",
                     Self::Timeout => "timeout_error",
                     Self::Overloaded => "overloaded_error",
-                    Self::BadGateway => "api_error",
+                    Self::BadGateway | Self::Unavailable => "api_error",
                 },
                 None,
             ),
             Protocol::OpenaiDecisions => match self {
                 Self::InvalidRequest | Self::TooLarge => ("invalid_request_error", None),
                 Self::NotFound => ("invalid_request_error", Some("role_not_found")),
-                Self::Timeout | Self::Overloaded | Self::BadGateway => ("server_error", None),
+                Self::Timeout | Self::Overloaded | Self::BadGateway | Self::Unavailable => {
+                    ("server_error", None)
+                }
             },
         }
     }
@@ -342,6 +348,17 @@ mod tests {
         let response = Rejection::from_error(&late, &keys).render(Protocol::AnthropicMessages);
         assert_eq!(response.status(), StatusCode::GATEWAY_TIMEOUT);
         assert_eq!(json(response).await["error"]["type"], "timeout_error");
+
+        for protocol in [Protocol::AnthropicMessages, Protocol::OpenaiDecisions] {
+            let response = Rejection::new(Kind::Unavailable, "settings").render(protocol);
+            assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+            let body = json(response).await;
+            let error_type = match protocol {
+                Protocol::AnthropicMessages => "api_error",
+                Protocol::OpenaiDecisions => "server_error",
+            };
+            assert_eq!(body["error"]["type"], error_type, "{body}");
+        }
 
         let missing = Rejection::new(Kind::NotFound, "no such model role");
         let response = missing.render(Protocol::OpenaiDecisions);

@@ -53,6 +53,7 @@ dependencies = [
  "serde",
  "serde_json",
  "service-kit",
+ "sqlx",
  "thiserror",
  "tokio",
  "tokio-rustls",

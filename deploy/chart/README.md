@@ -208,7 +208,7 @@ ingress:
 | 欄位 | 預設值 | 說明 |
 | --- | --- | --- |
 | `mesh.trustDomain` | `cluster.local` | mesh 的 SPIFFE trust domain（Istio 的 `meshConfig.trustDomain`）；呼叫端身分寫成 `<trustDomain>/ns/<namespace>/sa/<ServiceAccount>` |
-| `mesh.calls` | `mesh.calls.ingest` 是 `[clickhouse, mqtt-broker]`，`mesh.calls.telemetry-query` 是 `[clickhouse, postgres]`，`mesh.calls.gateway-ops` 與 `mesh.calls.mqtt-bridge` 是 `[mqtt-broker]`，`mesh.calls.identity`、`mesh.calls.assets` 與 `mesh.calls.certs` 是 `[postgres]` | 誰可以呼叫誰：`<呼叫端>: [<被呼叫端>, ...]`。呼叫端是 `services` 的 key；被呼叫端是 `services` 的 key、叢集內元件 `clickhouse`（`clickhouse.mode: bundled` 時）、`otel-collector`（collector 開啟時）與 `mqtt-broker`（`mqttBroker.enabled` 時，只接受固定的幾個呼叫端，見「MQTT broker」），或 `postgres`（兩種 `postgres.mode` 都可以列，見下方）。遙測的呼叫由 chart 自動加上，不必列：每個啟用的服務 → `otel-collector`，`otel-collector` → `clickhouse`。不認得的名稱讓安裝失敗；服務未啟用或元件沒有部署時略過這條，所以可以先列還沒出映像的服務。預設值是決策 14 與 docs/architecture/deployment.md 寫明的 ClickHouse 用戶端：資料接收寫入、時序查詢以每租戶唯讀帳號讀取；以及使用 Postgres 的身分服務、資產服務、時序查詢（資產服務與時序查詢也以平台角色讀身分服務的事件，Laysi/trustiot-v2#65、Laysi/trustiot-v2#119）與 certs 服務（簽發紀錄與 CRL，Laysi/trustiot-v2#78）；以及 MQTT broker 的用戶端（決策 6）：mqtt-bridge 轉接閘道器的連線，資料接收與閘道器維運各以自己的 broker 帳號收送訊息（broker 沒有開啟時這三條略過）。各服務的 issue 加入它要呼叫的內部 API，用 Postgres 的服務加上 `postgres` |
+| `mesh.calls` | `mesh.calls.ingest` 是 `[clickhouse, mqtt-broker]`，`mesh.calls.telemetry-query` 是 `[clickhouse, postgres]`，`mesh.calls.gateway-ops` 與 `mesh.calls.mqtt-bridge` 是 `[mqtt-broker]`，`mesh.calls.identity`、`mesh.calls.assets`、`mesh.calls.certs` 與 `mesh.calls.ai-gateway` 是 `[postgres]` | 誰可以呼叫誰：`<呼叫端>: [<被呼叫端>, ...]`。呼叫端是 `services` 的 key；被呼叫端是 `services` 的 key、叢集內元件 `clickhouse`（`clickhouse.mode: bundled` 時）、`otel-collector`（collector 開啟時）與 `mqtt-broker`（`mqttBroker.enabled` 時，只接受固定的幾個呼叫端，見「MQTT broker」），或 `postgres`（兩種 `postgres.mode` 都可以列，見下方）。遙測的呼叫由 chart 自動加上，不必列：每個啟用的服務 → `otel-collector`，`otel-collector` → `clickhouse`。不認得的名稱讓安裝失敗；服務未啟用或元件沒有部署時略過這條，所以可以先列還沒出映像的服務。預設值是決策 14 與 docs/architecture/deployment.md 寫明的 ClickHouse 用戶端：資料接收寫入、時序查詢以每租戶唯讀帳號讀取；以及使用 Postgres 的身分服務、資產服務、時序查詢（資產服務與時序查詢也以平台角色讀身分服務的事件，Laysi/trustiot-v2#65、Laysi/trustiot-v2#119）、certs 服務（簽發紀錄與 CRL，Laysi/trustiot-v2#78）與 AI 閘道（模型角色的設定，Laysi/trustiot-v2#605）；以及 MQTT broker 的用戶端（決策 6）：mqtt-bridge 轉接閘道器的連線，資料接收與閘道器維運各以自己的 broker 帳號收送訊息（broker 沒有開啟時這三條略過）。各服務的 issue 加入它要呼叫的內部 API，用 Postgres 的服務加上 `postgres` |
 
 ```yaml
 mesh:
@@ -261,7 +261,7 @@ chart 產生下列物件：
 - MQTT broker（`mqttBroker.enabled`）也在 `trustiot.mesh.components`，但它的 AuthorizationPolicy 依埠分開：`mqtt-bridge` 只到閘道器埠，有 broker 帳號的服務只到服務埠，`mesh.calls` 也只能列這幾個呼叫端（見「MQTT broker」）。它的探針是 exec，所以沒有節點來源的規則；它的 trust sidecar 連 certs 服務由 chart 自動加上。broker 取得自己的伺服器憑證也由 chart 自動放行（Laysi/trustiot-v2#557）：certs 服務在自己的埠 `broker-certs`（預設 8082，服務的 `broker.listen_addr`）簽這張憑證，那個埠有自己的 Service、AuthorizationPolicy 與 NetworkPolicy `<release>-certs-broker`，只放行 broker 的 ServiceAccount，而且只到這個埠；certs 自己的政策只放行它的呼叫端到 API 埠（`trustiot.mesh.certsPorts`），certs 的 Service 也不開這個埠。拿到 broker 名稱的憑證就能對每台閘道器冒充 broker，所以其他服務與入口 gateway 都連不到它；`ingress.routes` 指向 `broker-certs`（或身分服務的 `token-exchange`）時渲染失敗，`services.certs.ports` 覆寫時要保留 `broker-certs`（broker 開啟而沒有這個埠時渲染失敗），`services` 底下不能有叫 `certs-broker` 的服務。broker 沒有部署時這兩個政策沒有規則，什麼都不放行。
 - 叢集內的 ClickHouse 走同一套規則：只有 `mesh.calls` 列出的 `ingest` 與 `telemetry-query`，以及 chart 自動加上的 OpenTelemetry collector（Laysi/trustiot-v2#73）與 migration Job（`migrate.enabled` 為 true 時，Laysi/trustiot-v2#60）連得到它，其他服務與 pod 都被拒，kubelet 的 `/ping` 探測經 `169.254.7.127/32` 照常通過，節點來源只開 HTTP 8123。`mesh.calls` 的呼叫端只能是服務，元件之間的呼叫由 `trustiot.mesh.plan` 自己加（`_mesh.tpl`），collector 與 migration Job 都是這樣；還沒有的 Grafana（Laysi/trustiot-v2#183）加入時也要這樣加進來。ClickHouse 的政策只以 chart 測試驗證，2026-10-10 的實驗機測試沒有部署它（見測試報告）。
 - collector 也是 mesh 內的元件（`trustiot.mesh.components` 的 `otel-collector`，埠與探針定義在 `trustiot.otel-collector.pod`）：每個啟用的服務都自動是它的呼叫端（送 OTLP），其他 pod 連不到它，節點來源只開健康檢查的 13133。它連出到外部 ClickHouse 或 SIEM 不受 NetworkPolicy 限制（只管連入）；SIEM 在同一個 namespace 時，要另外以 NetworkPolicy 放行 collector 的 pod 連它。
-- `postgres` 是「這個服務用 Postgres」的宣告，不經 mesh：Postgres 的每條連線本身就是 TLS 並以 verify-full 驗證伺服器，叢集內的 Postgres pod 也不加入 ambient mesh（見「叢集內的 Postgres」），所以它沒有 AuthorizationPolicy，也不走 HBONE。列出 `postgres` 的服務才會掛上 Postgres 的 CA 並拿到 `TRUSTIOT_POSTGRES_CA_FILE`（`external` 也一樣）；`bundled` 時 `<release>-postgres` 這個 NetworkPolicy 也只放行這些服務的 pod 連 5432。同一份清單決定兩件事，不會一邊有、一邊沒有。
+- `postgres` 是「這個服務用 Postgres」的宣告，不經 mesh：Postgres 的每條連線本身就是 TLS 並以 verify-full 驗證伺服器，叢集內的 Postgres pod 也不加入 ambient mesh（見「叢集內的 Postgres」），所以它沒有 AuthorizationPolicy，也不走 HBONE。列出 `postgres` 的服務才會掛上 Postgres 的 CA 並拿到 `TRUSTIOT_POSTGRES_CA_FILE`（`ai-gateway` 是 `AI_GATEWAY_POSTGRES_CA_FILE`；`external` 也一樣）；`bundled` 時 `<release>-postgres` 這個 NetworkPolicy 也只放行這些服務的 pod 連 5432。同一份清單決定兩件事，不會一邊有、一邊沒有。
 - 預設拒絕套用到 namespace 內所有 pod，包括之後加入的叢集內元件（broker 等）：在 mesh 內的元件加進 `trustiot.mesh.components`，由同一份清單產生政策；不在 mesh 內的元件自帶 NetworkPolicy，只放行實際的用戶端（見「擴充 chart」），叢集內的 Postgres 就是這樣。chart 測試檢查每個 Deployment 與 StatefulSet 的 pod 都有自己的 NetworkPolicy 與 AuthorizationPolicy。
 
 #### 呼叫矩陣
@@ -555,7 +555,7 @@ URL 欄位都不接受 `user:password@` 這種帶帳密的寫法。
 
 ## AI 閘道
 
-`services.ai-gateway`（`services/ai-gateway`，決策 15、28，Laysi/trustiot-v2#536）保管 AI 供應商的金鑰，依模型角色以供應商的原生協定轉送請求。它與產品無關，設定前綴是 `AI_GATEWAY`，不讀平台設定（`TRUSTIOT_*`）；chart 從 `ai` 產生它的設定，放在 ConfigMap `<release>-ai-gateway`，只以 `envFrom` 交給它的 container（`templates/ai-gateway.yaml`，規則在 `templates/_ai-gateway.tpl` 的 `trustiot.aiGateway.config`）。閘道只在啟動時讀設定，所以 pod 帶這份 ConfigMap 的 checksum，設定一變就滾動更新。
+`services.ai-gateway`（`services/ai-gateway`，決策 15、28，Laysi/trustiot-v2#536）保管 AI 供應商的金鑰，依模型角色以供應商的原生協定轉送請求。它與產品無關，設定前綴是 `AI_GATEWAY`，不讀平台設定（`TRUSTIOT_*`），所以 Postgres 的位置與帳號由 chart 以它的前綴另外給（下方「資料庫」）；chart 從 `ai` 產生它的設定，放在 ConfigMap `<release>-ai-gateway`，只以 `envFrom` 交給它的 container（`templates/ai-gateway.yaml`，規則在 `templates/_ai-gateway.tpl` 的 `trustiot.aiGateway.config`）。閘道只在啟動時讀設定，所以 pod 帶這份 ConfigMap 的 checksum，設定一變就滾動更新。
 
 ConfigMap 只有名稱與上限，沒有金鑰（chart 測試檢查）：
 
@@ -580,6 +580,16 @@ collector 開啟時另有 `AI_GATEWAY__TELEMETRY__OTLP_ENDPOINT`（與其他服�
 | `maxEventBytes` | `<P>MAX_EVENT_BYTES` | 1024 到 `maxResponseBytes`（預設 4 MiB；`maxResponseBytes` 沒設時以 32 MiB 比較） |
 
 角色名稱是 1 到 32 個小寫英文字母、數字或 `_`，字母開頭。時間寫成一個數字加一個單位（`500ms`、`30s`、`10m`、`1h`）。
+
+**資料庫**（Laysi/trustiot-v2#605）：閘道把管理員更換的模型清單、每個請求確認的設定世代與變更紀錄存在 Postgres 的 schema `ai_gateway`（`services/ai-gateway/README.md`「資料庫」），所以預設的 `mesh.calls.ai-gateway` 是 `[postgres]`。chart 照其他用 Postgres 的服務處理它：掛 Postgres 的 CA、`bundled` 時 `<release>-postgres` 的 NetworkPolicy 放行它，migration Job 為 `ai_gateway_app` 產生密碼到 Secret `<release>-ai-gateway-password`；只是變數用閘道的前綴（`templates/_service.tpl`）：
+
+| 變數 | 來源 |
+| --- | --- |
+| `AI_GATEWAY_POSTGRES_HOST`、`_PORT`、`_DATABASE`、`_SSLMODE` | 與平台 ConfigMap 的 `TRUSTIOT_POSTGRES_*` 相同的值（`templates/_postgres.tpl` 的 `trustiot.postgres.connection`），`bundled` 與 `external` 都一樣 |
+| `AI_GATEWAY_POSTGRES_CA_FILE` | `/etc/trustiot/postgres-ca/ca.crt` |
+| `AI_GATEWAY__DATABASE__USERNAME`、`AI_GATEWAY__DATABASE__PASSWORD` | `ai_gateway_app` 與 Secret `<release>-ai-gateway-password` 的同名 key |
+
+這些名稱保留給 chart，自訂 `env` 不能設定。閘道讀不到 Postgres 時以 503 拒絕 AI 呼叫，readiness 也包含 migration 與 Postgres 的檢查；從 `mesh.calls` 拿掉 `postgres` 時閘道缺少設定、不會啟動。
 
 開啟 `ai-gateway` 時，閘道會拒絕啟動的設定都讓渲染失敗，不論有沒有做 schema 驗證，所以 values 的錯誤不會變成一直重啟的 pod：`credentials` 沒有 `ai`、沒有角色、角色或模型不合規則、用到沒有 `apiKeySecret.name` 的供應商、上限超出範圍、某個角色的 `queueWait` 加上 `timeouts.response` 與 `timeouts.firstToken` 較長者放不進 `ai.requestTimeout` 減去十分之一（最多 2 秒；chart 以毫秒計算並無條件進位，所以不會比閘道寬鬆）、`drainSeconds` 不在 11 到 3605 之間。chart 只認得 `anthropic` 與 `openai` 兩個供應商。
 
@@ -621,7 +631,7 @@ Job 做的事，依序：
 
 **權限**：Job 的 pod 與 ServiceAccount 都是 `automountServiceAccountToken: false`；有密碼 Secret 要填時，只有 Job 的容器掛一個 1 小時效期的 projected token 與叢集的 CA，Role `<release>-migrate` 只讓它 `get` 與 `patch` 這些 Secret（以 `resourceNames` 列名），叢集內 ClickHouse 的管理帳號 Secret 則只能 `get`：沒有 `create`（無法以名稱限制，而且能替 namespace 裡任何 ServiceAccount 建 token Secret）、`list`、`watch`，也碰不到別的 Secret。另外兩個碰 Secret 的 Role 是 `<release>-clickhouse`：只讓 ClickHouse 的 ServiceAccount `get` 與 `patch` 它的管理帳號 Secret，以及 `<release>-identity-signing-keys`：只讓身分服務的 ServiceAccount `get` 與 `patch` 它的簽章金鑰 Secret 與公鑰 ConfigMap（身分服務 pod 的 init container 與輪替 CronJob 用它，見「內部身分」）；chart 的其他 Role 都不碰 Secret，也不能寫 ConfigMap（測試檢查）。服務與 collector 的 pod 仍然 `automountServiceAccountToken: false`；只有 init container 掛同樣的 projected token 與 CA（`kube-root-ca.crt`），Role `<release>-migrate-status` 只讓服務與 collector 的 ServiceAccount `get` 這一個 Job，沒有任何新的 Secret 權限。chart 的 NetworkPolicy 都只限制連入，init container 可以連到 API server。Job 的 pod 在 ambient mesh 內，叢集內的 ClickHouse 以它的 ServiceAccount 放行它；`<release>-postgres` 的 NetworkPolicy 也放行它；沒有任何東西能連進 Job 的 pod。
 
-**服務的資料庫帳號**：在 `mesh.calls` 列出 `postgres` 的服務，chart 給它 `TRUSTIOT__DATABASE__USERNAME=<服務>_app` 與從自己的 Secret `<release>-<服務>-password` 同名 key 讀的 `TRUSTIOT__DATABASE__PASSWORD`。outbox 的消費端還要以平台角色讀 producer 的事件（決策 29，`crates/outbox`），寫全平台事件的產生端也要以平台角色寫，列在 `templates/_migrate.tpl` 的 `trustiot.migrate.platformLogins`（目前是 `assets`，Laysi/trustiot-v2#65，保存事件紀錄、以平台角色讀事件的 `identity`，Laysi/trustiot-v2#130，`telemetry-query`，Laysi/trustiot-v2#119，以及寫出廠登錄事件的 `certs`，Laysi/trustiot-v2#79）：同一個 Secret 多一個 `<服務>_platform` key，服務多拿到 `TRUSTIOT__DATABASE__PLATFORM_USERNAME=<服務>_platform` 與 `TRUSTIOT__DATABASE__PLATFORM_PASSWORD`。不在清單裡的服務，平台角色沒有綁密碼，Job 讓它維持 `NOLOGIN`。這四個名稱保留給 chart，自訂 `env` 不能設定。Job 開始前先確認這些角色都在 tools/migrate 的服務清單裡，否則什麼都不改就停止；清單與 `PRODUCT` 的一致由 `tools/migrate/tests/registry.rs` 檢查。
+**服務的資料庫帳號**：在 `mesh.calls` 列出 `postgres` 的服務，chart 給它 `TRUSTIOT__DATABASE__USERNAME=<服務>_app` 與從自己的 Secret `<release>-<服務>-password` 同名 key 讀的 `TRUSTIOT__DATABASE__PASSWORD`。outbox 的消費端還要以平台角色讀 producer 的事件（決策 29，`crates/outbox`），寫全平台事件的產生端也要以平台角色寫，列在 `templates/_migrate.tpl` 的 `trustiot.migrate.platformLogins`（目前是 `assets`，Laysi/trustiot-v2#65，保存事件紀錄、以平台角色讀事件的 `identity`，Laysi/trustiot-v2#130，`telemetry-query`，Laysi/trustiot-v2#119，以及寫出廠登錄事件的 `certs`，Laysi/trustiot-v2#79）：同一個 Secret 多一個 `<服務>_platform` key，服務多拿到 `TRUSTIOT__DATABASE__PLATFORM_USERNAME=<服務>_platform` 與 `TRUSTIOT__DATABASE__PLATFORM_PASSWORD`。不在清單裡的服務，平台角色沒有綁密碼，Job 讓它維持 `NOLOGIN`。這四個名稱保留給 chart，自訂 `env` 不能設定。設定前綴不是 `TRUSTIOT` 的服務（`ai-gateway`）以自己的前綴拿到同樣的變數，另加 `<前綴>_POSTGRES_*`（見「AI 閘道」）。Job 開始前先確認這些角色都在 tools/migrate 的服務清單裡，否則什麼都不改就停止；清單與 `PRODUCT` 的一致由 `tools/migrate/tests/registry.rs` 檢查。
 
 **產生的密碼**（docs/architecture/secrets.md）：服務登入角色與 collector 的 ClickHouse 帳號是 Job 自己建立的內部帳號，密碼也由它產生，沒有人建立、複製或輪替它們。
 
@@ -884,7 +894,7 @@ SIEM 連不上時 exporter 在記憶體佇列重試 5 分鐘，不影響寫進 C
 | `TRUSTIOT_CLICKHOUSE_CA_FILE` | 掛載的 CA 憑證路徑 `/etc/trustiot/clickhouse-ca/ca.crt` | `clickhouse.mode` 為 `external` 且設定了 `caSecret.name` |
 | `SENTRY_ENVIRONMENT` | `observability.sentry.environment` | Sentry 開啟時（`SENTRY_DSN` 來自 Secret，見上） |
 
-`TRUSTIOT_POSTGRES_CA_FILE`（`/etc/trustiot/postgres-ca/ca.crt`）不在 ConfigMap：chart 只設給在 `mesh.calls` 列出 `postgres` 的服務，和 CA 的掛載一起出現，`bundled` 與 `external` 都一樣。`bundled` 模式的叢集內端點，由部署該元件的 issue 加進這張表（Postgres 與 ClickHouse 見上面）。服務連 ClickHouse 的帳號與密碼還沒有：ingest 的寫入帳號在 ingest 服務加入時由 migration Job 建立（Laysi/trustiot-v2#91），每租戶唯讀帳號由 Laysi/trustiot-v2#119 加入。
+`TRUSTIOT_POSTGRES_CA_FILE`（`/etc/trustiot/postgres-ca/ca.crt`）不在 ConfigMap：chart 只設給在 `mesh.calls` 列出 `postgres` 的服務，和 CA 的掛載一起出現，`bundled` 與 `external` 都一樣（`ai-gateway` 的名稱是 `AI_GATEWAY_POSTGRES_CA_FILE`，Postgres 的位置也以 `AI_GATEWAY_POSTGRES_*` 給它，見「AI 閘道」）。`bundled` 模式的叢集內端點，由部署該元件的 issue 加進這張表（Postgres 與 ClickHouse 見上面）。服務連 ClickHouse 的帳號與密碼還沒有：ingest 的寫入帳號在 ingest 服務加入時由 migration Job 建立（Laysi/trustiot-v2#91），每租戶唯讀帳號由 Laysi/trustiot-v2#119 加入。
 
 密鑰的環境變數（以 `valueFrom.secretKeyRef` 注入，不在 ConfigMap）：
 

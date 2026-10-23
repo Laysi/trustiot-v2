@@ -1,14 +1,19 @@
-//! The gateway's settings: the providers, the model roles with their fallback lists, and the time
-//! and size limits (README.md, 「設定」). They come from `AI_GATEWAY__*` variables or the TOML
-//! file named by `AI_GATEWAY_CONFIG_FILE`, through service-kit, and are checked at startup.
-//! Error messages name keys, never values.
+//! The gateway's settings: the providers, the model roles with their fallback lists, the time
+//! and size limits, and the database that keeps the platform administrator's changes to the
+//! roles' models (README.md, 「設定」 and 「資料庫」). They come from `AI_GATEWAY__*` variables or
+//! the TOML file named by `AI_GATEWAY_CONFIG_FILE`, through service-kit, plus the platform
+//! settings `AI_GATEWAY_POSTGRES_*`, and are checked at startup. Error messages name keys, never
+//! values.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::fmt;
+use std::path::PathBuf;
 use std::time::Duration;
 
 use ai_clients::Timeouts;
 use serde::Deserialize;
 use service_kit::config::{Invalid, Validate};
+use service_kit::postgres::{PostgresConfig, SslMode};
 use url::{Host, Url};
 
 /// The prefix of the gateway's configuration variables. Not `TRUSTIOT`: the gateway carries no
@@ -37,6 +42,10 @@ pub const MAX_STREAM_TOTAL: Duration = Duration::from_secs(24 * 60 * 60);
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Config {
+    /// Platform settings, set only by the deployment: where Postgres is.
+    pub platform: Platform,
+    /// The service role's credentials and the limits of the settings check.
+    pub database: Database,
     /// The AI providers by name: protocol, endpoint and where the key is.
     #[serde(default)]
     pub providers: BTreeMap<String, Provider>,
@@ -50,6 +59,88 @@ pub struct Config {
 
 fn default_max_request_bytes() -> usize {
     DEFAULT_MAX_REQUEST_BYTES
+}
+
+/// The platform settings the gateway reads, under its own prefix: `AI_GATEWAY_POSTGRES_*` (the
+/// chart sets them for this service only). No `deny_unknown_fields`: every platform setting under
+/// the prefix reaches this table.
+#[derive(Debug, Deserialize)]
+pub struct Platform {
+    /// `AI_GATEWAY_POSTGRES_HOST`.
+    pub postgres_host: String,
+    /// `AI_GATEWAY_POSTGRES_PORT`.
+    pub postgres_port: u16,
+    /// `AI_GATEWAY_POSTGRES_DATABASE`.
+    pub postgres_database: String,
+    /// `AI_GATEWAY_POSTGRES_SSLMODE`: only `verify-full` is accepted.
+    pub postgres_sslmode: SslMode,
+    /// `AI_GATEWAY_POSTGRES_CA_FILE`: the CA of the server certificate, the only trust anchor.
+    pub postgres_ca_file: PathBuf,
+}
+
+/// Connections of the settings pool per replica, by default: every forwarded request runs one
+/// short query on it, and a reload one short read-only transaction.
+pub const DEFAULT_DATABASE_CONNECTIONS: u32 = 4;
+const MAX_DATABASE_CONNECTIONS: u32 = 32;
+/// How long a forwarded request waits for the settings check by default.
+pub const DEFAULT_DATABASE_TIMEOUT: Duration = Duration::from_secs(5);
+const MIN_DATABASE_TIMEOUT: Duration = Duration::from_millis(100);
+const MAX_DATABASE_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// `database.*`: the service role (`ai_gateway_app`) and the limits of the settings check.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Database {
+    /// `AI_GATEWAY__DATABASE__USERNAME`.
+    pub username: String,
+    /// `AI_GATEWAY__DATABASE__PASSWORD`, from a Secret.
+    pub password: String,
+    /// `AI_GATEWAY__DATABASE__MAX_CONNECTIONS`: connections of the pool per replica, 1 to 32.
+    #[serde(default = "default_database_connections")]
+    pub max_connections: u32,
+    /// `AI_GATEWAY__DATABASE__TIMEOUT`: the longest a forwarded request waits for the settings
+    /// check (a pooled connection, the generation query and, when the settings changed, their
+    /// reload), within the call's time budget; 100 ms to 60 s. Past it the call is refused with
+    /// 503.
+    #[serde(
+        default = "default_database_timeout",
+        deserialize_with = "service_kit::config::duration"
+    )]
+    pub timeout: Duration,
+}
+
+fn default_database_connections() -> u32 {
+    DEFAULT_DATABASE_CONNECTIONS
+}
+
+fn default_database_timeout() -> Duration {
+    DEFAULT_DATABASE_TIMEOUT
+}
+
+/// Never prints the password.
+impl fmt::Debug for Database {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Database")
+            .field("username", &self.username)
+            .field("max_connections", &self.max_connections)
+            .field("timeout", &self.timeout)
+            .finish_non_exhaustive()
+    }
+}
+
+impl Config {
+    /// Where and as whom the gateway connects to Postgres.
+    pub fn postgres(&self) -> PostgresConfig {
+        PostgresConfig {
+            host: self.platform.postgres_host.clone(),
+            port: self.platform.postgres_port,
+            database: self.platform.postgres_database.clone(),
+            ssl_mode: self.platform.postgres_sslmode,
+            ca_file: self.platform.postgres_ca_file.clone(),
+            username: self.database.username.clone(),
+            password: self.database.password.clone(),
+        }
+    }
 }
 
 /// A provider's native protocol (decision 15).
@@ -104,7 +195,7 @@ impl Provider {
 }
 
 /// A model role: its models in fallback order and the limits of each call to one of them.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Role {
     /// `<provider>/<model>`, first choice first; every model of a role uses the same protocol.
@@ -196,6 +287,135 @@ pub fn split_model(reference: &str) -> Option<(&str, &str)> {
     reference.split_once('/')
 }
 
+/// Why a model list cannot be a role's. The same rules hold for the configured lists and for the
+/// lists stored in the database (src/store.rs). `index` counts from 0; the text never repeats a
+/// model.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum ModelsError {
+    #[error("a role lists between 1 and {MAX_MODELS} models")]
+    Count,
+    #[error("model {index} must be <provider>/<model>")]
+    Format { index: usize },
+    #[error("model {index} names a provider that is not configured under `providers`")]
+    UnknownProvider { index: usize },
+    #[error(
+        "model {index}: the model ID must be 1 to {MAX_MODEL_ID_CHARS} printable ASCII characters \
+         without spaces or commas"
+    )]
+    ModelId { index: usize },
+    #[error("model {index} is listed twice")]
+    Duplicate { index: usize },
+    #[error("every model of a role must use the same protocol")]
+    MixedProtocols,
+    #[error("the models use {found}, but the role speaks {expected}")]
+    WrongProtocol {
+        expected: &'static str,
+        found: &'static str,
+    },
+}
+
+/// The protocol of each configured provider, which is what a model list is checked against.
+pub type ProviderProtocols = BTreeMap<String, Protocol>;
+
+/// Checks `models` as a role's model list (README.md, 「設定」): 1 to [`MAX_MODELS`] distinct
+/// `<provider>/<model>`, each provider configured, each model ID 1 to 256 printable ASCII
+/// characters without spaces or commas (the variable is a comma-separated list), all of one
+/// protocol, which is returned.
+pub fn check_models(
+    models: &[String],
+    providers: &ProviderProtocols,
+) -> Result<Protocol, ModelsError> {
+    if models.is_empty() || models.len() > MAX_MODELS {
+        return Err(ModelsError::Count);
+    }
+    let mut protocol = None;
+    let mut seen = BTreeSet::new();
+    for (index, reference) in models.iter().enumerate() {
+        let Some((provider, model)) = split_model(reference) else {
+            return Err(ModelsError::Format { index });
+        };
+        let Some(&found) = providers.get(provider) else {
+            return Err(ModelsError::UnknownProvider { index });
+        };
+        if model.is_empty()
+            || model.chars().count() > MAX_MODEL_ID_CHARS
+            || !model
+                .bytes()
+                .all(|byte| byte.is_ascii_graphic() && byte != b',')
+        {
+            return Err(ModelsError::ModelId { index });
+        }
+        if !seen.insert(reference.as_str()) {
+            return Err(ModelsError::Duplicate { index });
+        }
+        match protocol {
+            Some(first) if first != found => return Err(ModelsError::MixedProtocols),
+            _ => protocol = Some(found),
+        }
+    }
+    protocol.ok_or(ModelsError::Count)
+}
+
+/// Whether `name` is a valid provider or role name: 1 to 32 lower-case letters, digits or `_`,
+/// starting with a letter.
+pub fn is_name(name: &str) -> bool {
+    name.len() <= MAX_NAME_CHARS
+        && name
+            .bytes()
+            .next()
+            .is_some_and(|byte| byte.is_ascii_lowercase())
+        && name
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_')
+}
+
+/// What a model list is checked against: the configured providers' protocols and the configured
+/// roles' protocols. A role speaks the protocol of its configured models; only the chart (and the
+/// callers' code) can change it, never a stored list.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RoleRules {
+    pub providers: ProviderProtocols,
+    pub roles: BTreeMap<String, Protocol>,
+}
+
+impl RoleRules {
+    /// The rules of a configuration. A role whose configured models do not check is left out;
+    /// validation refuses such a configuration before the gateway starts.
+    pub fn of(config: &Config) -> Self {
+        let providers: ProviderProtocols = config
+            .providers
+            .iter()
+            .map(|(name, provider)| (name.clone(), provider.protocol))
+            .collect();
+        let roles = config
+            .roles
+            .iter()
+            .filter_map(|(name, role)| {
+                check_models(&role.models, &providers)
+                    .ok()
+                    .map(|protocol| (name.clone(), protocol))
+            })
+            .collect();
+        Self { providers, roles }
+    }
+
+    /// Checks `models` as the new model list of `role`: the configuration's rules, and the
+    /// role's own protocol. `None` when no such role is configured.
+    pub fn check(&self, role: &str, models: &[String]) -> Option<Result<(), ModelsError>> {
+        let expected = *self.roles.get(role)?;
+        Some(check_models(models, &self.providers).and_then(|found| {
+            if found == expected {
+                Ok(())
+            } else {
+                Err(ModelsError::WrongProtocol {
+                    expected: expected.name(),
+                    found: found.name(),
+                })
+            }
+        }))
+    }
+}
+
 impl Validate for Config {
     fn validate(&self) -> Result<(), Invalid> {
         if self.roles.is_empty() {
@@ -204,11 +424,39 @@ impl Validate for Config {
         for (name, provider) in &self.providers {
             validate_provider(name, provider)?;
         }
+        let protocols: ProviderProtocols = self
+            .providers
+            .iter()
+            .map(|(name, provider)| (name.clone(), provider.protocol))
+            .collect();
         for (name, role) in &self.roles {
-            validate_role(name, role, &self.providers)?;
+            validate_role(name, role, &protocols)?;
         }
-        check_bytes("max_request_bytes", self.max_request_bytes, MAX_BYTES)
+        check_bytes("max_request_bytes", self.max_request_bytes, MAX_BYTES)?;
+        validate_database(&self.database)
     }
+}
+
+fn validate_database(database: &Database) -> Result<(), Invalid> {
+    if database.username.is_empty() {
+        return Err(Invalid::new("database.username", "must not be empty"));
+    }
+    if database.password.is_empty() {
+        return Err(Invalid::new("database.password", "must not be empty"));
+    }
+    if database.max_connections == 0 || database.max_connections > MAX_DATABASE_CONNECTIONS {
+        return Err(Invalid::new(
+            "database.max_connections",
+            format!("must be between 1 and {MAX_DATABASE_CONNECTIONS}"),
+        ));
+    }
+    if database.timeout < MIN_DATABASE_TIMEOUT || database.timeout > MAX_DATABASE_TIMEOUT {
+        return Err(Invalid::new(
+            "database.timeout",
+            "must be between 100ms and 60s",
+        ));
+    }
+    Ok(())
 }
 
 fn validate_provider(name: &str, provider: &Provider) -> Result<(), Invalid> {
@@ -220,55 +468,28 @@ fn validate_provider(name: &str, provider: &Provider) -> Result<(), Invalid> {
     check_key_env(&format!("{key}.key_env"), &provider.key_env)
 }
 
-fn validate_role(
-    name: &str,
-    role: &Role,
-    providers: &BTreeMap<String, Provider>,
-) -> Result<(), Invalid> {
+fn validate_role(name: &str, role: &Role, providers: &ProviderProtocols) -> Result<(), Invalid> {
     let key = format!("roles.{name}");
     check_name(&key, name)?;
     let models_key = format!("{key}.models");
-    if role.models.is_empty() || role.models.len() > MAX_MODELS {
-        return Err(Invalid::new(
-            &models_key,
-            format!("a role lists between 1 and {MAX_MODELS} models"),
-        ));
-    }
-    let mut protocols = BTreeSet::new();
-    let mut seen = BTreeSet::new();
-    for (index, reference) in role.models.iter().enumerate() {
-        let item = format!("{models_key}[{index}]");
-        let Some((provider, model)) = split_model(reference) else {
-            return Err(Invalid::new(item, "must be <provider>/<model>"));
-        };
-        let Some(provider) = providers.get(provider) else {
+    match check_models(&role.models, providers) {
+        Ok(_) => {}
+        Err(
+            error @ (ModelsError::Count
+            | ModelsError::MixedProtocols
+            | ModelsError::WrongProtocol { .. }),
+        ) => return Err(Invalid::new(models_key, error.to_string())),
+        Err(
+            error @ (ModelsError::Format { index }
+            | ModelsError::UnknownProvider { index }
+            | ModelsError::ModelId { index }
+            | ModelsError::Duplicate { index }),
+        ) => {
             return Err(Invalid::new(
-                item,
-                "names a provider that is not configured under `providers`",
-            ));
-        };
-        if model.is_empty()
-            || model.chars().count() > MAX_MODEL_ID_CHARS
-            || !model.bytes().all(|byte| byte.is_ascii_graphic())
-        {
-            return Err(Invalid::new(
-                item,
-                format!(
-                    "the model ID must be 1 to {MAX_MODEL_ID_CHARS} printable ASCII characters \
-                     without spaces"
-                ),
+                format!("{models_key}[{index}]"),
+                error.to_string(),
             ));
         }
-        if !seen.insert(reference.as_str()) {
-            return Err(Invalid::new(item, "the model is listed twice"));
-        }
-        protocols.insert(provider.protocol.name());
-    }
-    if protocols.len() > 1 {
-        return Err(Invalid::new(
-            models_key,
-            "every model of a role must use the same protocol",
-        ));
     }
     if role.max_concurrent == 0 || role.max_concurrent > MAX_CONCURRENT {
         return Err(Invalid::new(
@@ -315,15 +536,7 @@ fn validate_role(
 }
 
 fn check_name(key: &str, name: &str) -> Result<(), Invalid> {
-    let valid = name.len() <= MAX_NAME_CHARS
-        && name
-            .bytes()
-            .next()
-            .is_some_and(|byte| byte.is_ascii_lowercase())
-        && name
-            .bytes()
-            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_');
-    if valid {
+    if is_name(name) {
         Ok(())
     } else {
         Err(Invalid::new(
@@ -412,11 +625,33 @@ mod tests {
 
     use super::*;
 
+    /// The platform and database settings the chart gives the gateway; nothing connects here.
+    const DATABASE: [(&str, &str); 7] = [
+        ("AI_GATEWAY_POSTGRES_HOST", "postgres.example.test"),
+        ("AI_GATEWAY_POSTGRES_PORT", "5432"),
+        ("AI_GATEWAY_POSTGRES_DATABASE", "trustiot"),
+        ("AI_GATEWAY_POSTGRES_SSLMODE", "verify-full"),
+        (
+            "AI_GATEWAY_POSTGRES_CA_FILE",
+            "/etc/trustiot/postgres-ca/ca.crt",
+        ),
+        ("AI_GATEWAY__DATABASE__USERNAME", "ai_gateway_app"),
+        ("AI_GATEWAY__DATABASE__PASSWORD", "not-a-real-password"),
+    ];
+
+    fn database_vars() -> impl Iterator<Item = (OsString, OsString)> {
+        DATABASE
+            .iter()
+            .map(|(name, value)| (OsString::from(name), OsString::from(value)))
+    }
+
     fn load(vars: &[(&str, &str)]) -> Result<Config, ConfigError> {
         load_from::<Config, _>(
             ENV_PREFIX,
-            vars.iter()
-                .map(|(name, value)| (OsString::from(name), OsString::from(value))),
+            database_vars().chain(
+                vars.iter()
+                    .map(|(name, value)| (OsString::from(name), OsString::from(value))),
+            ),
         )
         .map(|settings| settings.app)
     }
@@ -589,6 +824,7 @@ mod tests {
                 .iter()
                 .filter(|(name, _)| *name != variable)
                 .map(|(name, value)| (OsString::from(name), OsString::from(value)))
+                .chain(database_vars())
                 .collect();
             vars.push((
                 OsString::from("AI_GATEWAY__ROLES__MAIN__MODELS"),

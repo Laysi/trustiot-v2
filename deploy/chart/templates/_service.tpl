@@ -101,9 +101,13 @@ Custom env cannot take over what the chart controls:
   and owner password) and the password Secrets the migration Job fills (each service's and the
   collector's) are out of reach in every key: a service gets its own database password only
   through the chart;
-- for a service that uses Postgres, TRUSTIOT__DATABASE__USERNAME and TRUSTIOT__DATABASE__PASSWORD
-  are the chart's, and so are TRUSTIOT__DATABASE__PLATFORM_USERNAME and
-  TRUSTIOT__DATABASE__PLATFORM_PASSWORD (set for a service whose platform role logs in);
+- for a service that uses Postgres, <prefix>__DATABASE__USERNAME and <prefix>__DATABASE__PASSWORD
+  are the chart's, and so are <prefix>__DATABASE__PLATFORM_USERNAME and
+  <prefix>__DATABASE__PLATFORM_PASSWORD (set for a service whose platform role logs in), where
+  <prefix> is the service's settings prefix ("trustiot.service.envPrefix"); a service whose prefix
+  is not TRUSTIOT does not read the platform ConfigMap's TRUSTIOT_POSTGRES_*, so it also gets
+  <prefix>_POSTGRES_HOST, _PORT, _DATABASE and _SSLMODE ("trustiot.postgres.connection"), which
+  are the chart's too, like <prefix>_POSTGRES_CA_FILE;
 - for mqtt-bridge, TRUSTIOT__BROKER__ADDRESS is the chart's ("trustiot.mqttBridge.env"): the bridge
   relays the gateways' connections to the in-cluster broker only, even while it is off;
 - for telemetry-query, TRUSTIOT__CLICKHOUSE__USERNAME and TRUSTIOT__CLICKHOUSE__PASSWORD are the
@@ -129,14 +133,22 @@ Returns a YAML list; use with fromYamlArray.
 {{- /* The service's own Postgres login role and its password, which the migration Job generates
 into the service's own Secret and sets. */ -}}
 {{- $secret := include "trustiot.migrate.passwordSecret" (dict "root" .root "component" $name) | fromYaml -}}
-{{- $dbEnv = append $dbEnv (dict "name" "TRUSTIOT__DATABASE__USERNAME" "value" $secret.key) -}}
-{{- $dbEnv = append $dbEnv (dict "name" "TRUSTIOT__DATABASE__PASSWORD" "valueFrom" (dict "secretKeyRef" (dict "name" $secret.name "key" $secret.key))) -}}
+{{- $dbEnv = append $dbEnv (dict "name" (printf "%s__DATABASE__USERNAME" $prefix) "value" $secret.key) -}}
+{{- $dbEnv = append $dbEnv (dict "name" (printf "%s__DATABASE__PASSWORD" $prefix) "valueFrom" (dict "secretKeyRef" (dict "name" $secret.name "key" $secret.key))) -}}
+{{- if ne $prefix "TRUSTIOT" -}}
+{{- /* Where Postgres is, under the service's own prefix: the platform ConfigMap names it
+TRUSTIOT_POSTGRES_*, which such a service does not read. */ -}}
+{{- $postgres := include "trustiot.postgres.connection" .root | fromYaml -}}
+{{- range $setting, $field := dict "HOST" "host" "PORT" "port" "DATABASE" "database" "SSLMODE" "sslMode" -}}
+{{- $dbEnv = append $dbEnv (dict "name" (printf "%s_POSTGRES_%s" $prefix $setting) "value" (get $postgres $field)) -}}
+{{- end -}}
+{{- end -}}
 {{- /* Its platform role too, when it logs in ("trustiot.migrate.platformLogins"): the role an
 outbox consumer reads its producers' events with. */ -}}
 {{- if include "trustiot.migrate.platformLogin" (dict "root" .root "name" $name) -}}
 {{- $platform := include "trustiot.migrate.passwordSecret" (dict "root" .root "component" $name "role" "platform") | fromYaml -}}
-{{- $dbEnv = append $dbEnv (dict "name" "TRUSTIOT__DATABASE__PLATFORM_USERNAME" "value" $platform.key) -}}
-{{- $dbEnv = append $dbEnv (dict "name" "TRUSTIOT__DATABASE__PLATFORM_PASSWORD" "valueFrom" (dict "secretKeyRef" (dict "name" $platform.name "key" $platform.key))) -}}
+{{- $dbEnv = append $dbEnv (dict "name" (printf "%s__DATABASE__PLATFORM_USERNAME" $prefix) "value" $platform.key) -}}
+{{- $dbEnv = append $dbEnv (dict "name" (printf "%s__DATABASE__PLATFORM_PASSWORD" $prefix) "valueFrom" (dict "secretKeyRef" (dict "name" $platform.name "key" $platform.key))) -}}
 {{- end -}}
 {{- end -}}
 {{- $clickhouseEnv := list -}}
@@ -171,8 +183,8 @@ generates its password into the service's Secret and sets it
 {{- fail (printf "services.ai-gateway: env %s is set by the chart from values.ai (the providers, their key variables and endpoints, the model roles and the gateway's time limits)" .name) -}}
 {{- end -}}
 {{- end -}}
-{{- if and $dbEnv (regexMatch "(?i)^TRUSTIOT__DATABASE__(PLATFORM_)?(USERNAME|PASSWORD)$" .name) -}}
-{{- fail (printf "services.%s: env %s is set by the chart: the service's login roles and the passwords the migration Job generates for them" $name .name) -}}
+{{- if and $dbEnv (or (regexMatch (printf "(?i)^%s__DATABASE__(PLATFORM_)?(USERNAME|PASSWORD)$" $prefix) .name) (regexMatch (printf "(?i)^%s_POSTGRES_" $prefix) .name)) -}}
+{{- fail (printf "services.%s: env %s is set by the chart: where Postgres is, the service's login roles and the passwords the migration Job generates for them" $name .name) -}}
 {{- end -}}
 {{- if and $clickhouseEnv (regexMatch "(?i)^TRUSTIOT__CLICKHOUSE__(USERNAME|PASSWORD)$" .name) -}}
 {{- fail (printf "services.%s: env %s is set by the chart: the service's ClickHouse account and the password the migration Job generates for it" $name .name) -}}
@@ -206,7 +218,7 @@ under the service's own prefix. */ -}}
 {{- /* The Postgres server's CA, only where the service template mounts it ("trustiot.caMounts"). */ -}}
 {{- range include "trustiot.caMounts" (dict "root" .root "name" $name) | fromYamlArray -}}
 {{- if eq .volume "postgres-ca" -}}
-{{- $env = append $env (dict "name" "TRUSTIOT_POSTGRES_CA_FILE" "value" (printf "%s/ca.crt" .dir)) -}}
+{{- $env = append $env (dict "name" (printf "%s_POSTGRES_CA_FILE" $prefix) "value" (printf "%s/ca.crt" .dir)) -}}
 {{- end -}}
 {{- end -}}
 {{- $credentialEnv := include "trustiot.credentialEnv" (dict "root" .root "name" $name "credentials" ($config.credentials | default list)) | fromYamlArray -}}

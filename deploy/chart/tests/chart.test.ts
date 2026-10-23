@@ -179,14 +179,14 @@ function platformConfig(manifests: Manifest[]): Record<string, string> {
 
 /**
  * The password Secrets of the migration Job a render must declare: one per enabled service that
- * lists postgres under mesh.calls (its Deployment carries TRUSTIOT__DATABASE__USERNAME) and one
- * for the collector, when it is rendered.
+ * lists postgres under mesh.calls (its Deployment carries <prefix>__DATABASE__USERNAME, the prefix
+ * being TRUSTIOT or, for the AI gateway, AI_GATEWAY) and one for the collector, when it is rendered.
  */
 function jobPasswordSecretNames(manifests: Manifest[]): string[] {
   const names: string[] = [];
   for (const deployment of manifests.filter((m) => m.kind === "Deployment")) {
     const env = podSpec(deployment).containers[0]?.env ?? [];
-    if (env.some((e) => e.name === "TRUSTIOT__DATABASE__USERNAME")) names.push(`${deployment.metadata.name}-password`);
+    if (env.some((e) => /^(TRUSTIOT|AI_GATEWAY)__DATABASE__USERNAME$/.test(e.name))) names.push(`${deployment.metadata.name}-password`);
     if (deployment.metadata.name.endsWith("-otel-collector")) names.push(`${deployment.metadata.name}-password`);
   }
   return names.sort();
@@ -497,8 +497,11 @@ describe("secrets reach only the services that need them", () => {
     });
     // values.yaml lists `ai` for the AI gateway: one key per configured provider, each from the
     // Secret the overlay names.
+    // It lists postgres under mesh.calls too (values.yaml): its own role's password, under its
+    // own prefix.
     expect(secretRefs(manifests, "ai-gateway")).toEqual({
       SENTRY_DSN: "trustiot-sentry/dsn",
+      AI_GATEWAY__DATABASE__PASSWORD: "trustiot-ai-gateway-password/ai_gateway_app",
       TRUSTIOT_AI_ANTHROPIC_API_KEY: "trustiot-anthropic/api-key",
       TRUSTIOT_AI_OPENAI_API_KEY: "trustiot-openai/api-key",
     });
@@ -5349,6 +5352,24 @@ describe("AI gateway settings (decisions 15 and 28, Laysi/trustiot-v2#536)", () 
       /services\.ai-gateway: env TRUSTIOT_AI_OPENAI_API_KEY: names starting with TRUSTIOT_, SENTRY_ or OTEL_ are set by the chart/,
     ],
     [
+      "custom env that moves the gateway's database",
+      SHAPES.saas,
+      ["--set-json", 'services.ai-gateway.env=[{"name":"AI_GATEWAY_POSTGRES_HOST","value":"elsewhere.test"}]'],
+      /services\.ai-gateway: env AI_GATEWAY_POSTGRES_HOST is set by the chart/,
+    ],
+    [
+      "custom env that replaces the gateway's database login",
+      SHAPES.saas,
+      ["--set-json", 'services.ai-gateway.env=[{"name":"AI_GATEWAY__DATABASE__USERNAME","value":"postgres"}]'],
+      /services\.ai-gateway: env AI_GATEWAY__DATABASE__USERNAME is set by the chart: where Postgres is, the service's login roles/,
+    ],
+    [
+      "custom env that replaces the gateway's database password",
+      SHAPES.saas,
+      ["--set-json", 'services.ai-gateway.env=[{"name":"ai_gateway__database__password","valueFrom":{"secretKeyRef":{"name":"elsewhere","key":"k"}}}]'],
+      /services\.ai-gateway: env ai_gateway__database__password is set by the chart/,
+    ],
+    [
       "custom env that redirects the gateway's telemetry",
       SHAPES.saas,
       ["--set-json", 'services.ai-gateway.env=[{"name":"AI_GATEWAY__TELEMETRY__OTLP_ENDPOINT","value":"http://elsewhere:4318"}]'],
@@ -5369,6 +5390,67 @@ describe("AI gateway settings (decisions 15 and 28, Laysi/trustiot-v2#536)", () 
       'services.ai-gateway.env=[{"name":"AI_GATEWAY__MAX_REQUEST_BYTES","value":"1048576"}]',
     ]);
     expect(gatewayContainer(manifests).env).toContainEqual({ name: "AI_GATEWAY__MAX_REQUEST_BYTES", value: "1048576" });
+  });
+
+  // values.yaml lists postgres for the gateway under mesh.calls (Laysi/trustiot-v2#605): it reads
+  // the platform's Postgres settings under its own prefix, logs in as its own role with the
+  // password the migration Job generates, and gets the server's CA like every Postgres client.
+  test.each([
+    ["bundled", [] as string[], "trustiot-postgres-rw.trustiot.svc", "5432", "trustiot"],
+    [
+      "external",
+      [
+        "--set",
+        "postgres.mode=external",
+        "--set",
+        "postgres.external.host=pg.saas.trustiot.test",
+        "--set",
+        "postgres.external.port=6432",
+        "--set",
+        "postgres.external.database=gateway_db",
+        "--set",
+        "postgres.external.caSecret.name=trustiot-pg-ca",
+        ...EXTERNAL_MIGRATION,
+      ],
+      "pg.saas.trustiot.test",
+      "6432",
+      "gateway_db",
+    ],
+  ])("%s Postgres: the gateway gets its settings, role and password under its own prefix", (_mode, args, host, port, database) => {
+    const manifests = render([...SHAPES.saas, SMOKE], [...ON, ...args]);
+    const env = gatewayContainer(manifests).env ?? [];
+    const named = (name: string) => env.find((e) => e.name === name);
+    const platform = find(manifests, "ConfigMap", `${RELEASE}-platform`).data as Record<string, string>;
+    expect(platform.TRUSTIOT_POSTGRES_HOST).toBe(host);
+    for (const [setting, value] of [
+      ["HOST", host],
+      ["PORT", port],
+      ["DATABASE", database],
+      ["SSLMODE", "verify-full"],
+    ]) {
+      expect(named(`AI_GATEWAY_POSTGRES_${setting}`), setting).toEqual({ name: `AI_GATEWAY_POSTGRES_${setting}`, value });
+      // The same place the platform ConfigMap names for every other service.
+      expect(platform[`TRUSTIOT_POSTGRES_${setting}`], setting).toBe(value);
+    }
+    expect(named("AI_GATEWAY_POSTGRES_CA_FILE")).toEqual({ name: "AI_GATEWAY_POSTGRES_CA_FILE", value: "/etc/trustiot/postgres-ca/ca.crt" });
+    expect(gatewayContainer(manifests).volumeMounts).toContainEqual({ name: "postgres-ca", mountPath: "/etc/trustiot/postgres-ca", readOnly: true });
+    expect(named("AI_GATEWAY__DATABASE__USERNAME")).toEqual({ name: "AI_GATEWAY__DATABASE__USERNAME", value: "ai_gateway_app" });
+    expect(named("AI_GATEWAY__DATABASE__PASSWORD")).toEqual({
+      name: "AI_GATEWAY__DATABASE__PASSWORD",
+      valueFrom: { secretKeyRef: { name: `${RELEASE}-ai-gateway-password`, key: "ai_gateway_app" } },
+    });
+    // No platform role, and nothing under the names the gateway does not read.
+    expect(env.filter((e) => /^(TRUSTIOT__DATABASE__|TRUSTIOT_POSTGRES_|AI_GATEWAY__DATABASE__PLATFORM_)/.test(e.name))).toEqual([]);
+    // The migration Job generates the password into the gateway's own Secret.
+    expect(find(manifests, "Secret", `${RELEASE}-ai-gateway-password`)).toBeDefined();
+    const jobs = JSON.stringify(manifests.filter((m) => m.kind === "Job"));
+    expect(jobs).toContain(`ai_gateway_app=${RELEASE}-ai-gateway-password`);
+  });
+
+  test("without postgres under mesh.calls the gateway gets no database settings", () => {
+    const manifests = render([...SHAPES.saas, SMOKE], [...ON, "--set-json", 'mesh.calls.ai-gateway=[]']);
+    const env = JSON.stringify(gatewayContainer(manifests).env ?? []);
+    expect(env).not.toMatch(/AI_GATEWAY_POSTGRES_|AI_GATEWAY__DATABASE__/);
   });
 });
 

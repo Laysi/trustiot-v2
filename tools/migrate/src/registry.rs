@@ -32,6 +32,10 @@ mod certs_schema;
 #[path = "../../../services/assistant/src/schema.rs"]
 mod assistant_schema;
 
+/// The AI gateway's files (compiled into the service as well).
+#[path = "../../../services/ai-gateway/src/schema.rs"]
+mod ai_gateway_schema;
+
 /// The outbox tables (crates/outbox) in a service's schema.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Outbox {
@@ -235,6 +239,19 @@ pub const PRODUCT: Registry = Registry {
                 consumes: &[],
             },
             migrations: assistant_schema::SCHEMA.migrations,
+        },
+        // The AI gateway's model role overrides, its settings generation and the append-only log
+        // of changes (Laysi/trustiot-v2#605): deployment settings, no tenant data, no events, and
+        // nothing read across tenants, so no platform role. The gateway never depends on
+        // crates/contract (decision 28); its schema.rs uses service_kit only, like every other.
+        Service {
+            name: ai_gateway_schema::SCHEMA.service,
+            platform_role: false,
+            outbox: Outbox {
+                producer: ai_gateway_schema::SCHEMA.outbox_producer,
+                consumes: &[],
+            },
+            migrations: ai_gateway_schema::SCHEMA.migrations,
         },
     ],
     clickhouse: crate::clickhouse_files::FILES,

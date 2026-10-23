@@ -314,6 +314,12 @@ mesh:
     # (services/certs/README.md).
     certs:
       - postgres
+    # The AI gateway keeps the platform administrator's changes to the model roles' models, the
+    # settings generation every forwarded request checks, and the log of every change in Postgres
+    # (services/ai-gateway/README.md, 「資料庫」). It refuses AI calls with 503 while Postgres
+    # cannot be read.
+    ai-gateway:
+      - postgres
     # ClickHouse (decision 14): ingest writes telemetry, telemetry-query reads it with per-tenant
     # read-only accounts (docs/architecture/deployment.md). telemetry-query keeps which tenants
     # have an account in Postgres and reads the identity service's events from there as its
