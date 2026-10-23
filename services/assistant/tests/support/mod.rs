@@ -11,7 +11,7 @@ use std::collections::BTreeMap;
 use std::future::Future;
 use std::path::PathBuf;
 use std::pin::Pin;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
 use assistant::history::Principal;
@@ -290,6 +290,25 @@ pub struct Event {
 pub struct Capture(Arc<Mutex<Vec<Event>>>);
 
 impl Capture {
+    /// Captures the events of the current thread until the guard is dropped.
+    ///
+    /// tracing caches per callsite whether any subscriber wants its events. While only one
+    /// dispatcher exists in the process, tracing-core computes that from the default of the
+    /// thread that reaches the callsite first, so a callsite another test thread (with no
+    /// subscriber) reached first is cached as "never" for every thread, and this capture misses
+    /// its events (seen on 2026-10-23: no `tool call completed` while the tests ran in
+    /// parallel). A second dispatcher kept alive for the whole test binary makes tracing-core
+    /// ask every live dispatcher instead.
+    pub fn install() -> (Self, tracing::subscriber::DefaultGuard) {
+        use tracing_subscriber::layer::SubscriberExt as _;
+        static KEEPER: OnceLock<tracing::Dispatch> = OnceLock::new();
+        KEEPER.get_or_init(|| tracing::Dispatch::new(tracing::subscriber::NoSubscriber::new()));
+        let capture = Self::default();
+        let guard =
+            tracing::subscriber::set_default(tracing_subscriber::registry().with(capture.clone()));
+        (capture, guard)
+    }
+
     pub fn events(&self) -> Vec<Event> {
         self.0.lock().expect("the lock").clone()
     }

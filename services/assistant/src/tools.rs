@@ -1,7 +1,11 @@
 //! The tools the main agent calls (docs/architecture/ai-assistant.md, 「Tools」): the [`Tool`]
 //! trait, the [`ToolRegistry`] that runs a turn's calls concurrently under the limits, and the
-//! [`ToolContext`] each call gets. The real tools (time series, events, the knowledge graph)
-//! come with Laysi/trustiot-v2#552.
+//! [`ToolContext`] each call gets. The tools that read telemetry and device models as the user
+//! are in [`telemetry`] and [`device_models`] (Laysi/trustiot-v2#591); they call the other
+//! services through [`crate::callee`] with a token from the question's [`Delegation`].
+
+pub mod device_models;
+pub mod telemetry;
 
 use std::collections::{BTreeMap, HashMap};
 use std::fmt;
@@ -133,20 +137,52 @@ pub enum ToolError {
     /// gets a fixed message; nothing of the underlying error reaches it or the logs.
     #[error("tool failed")]
     Failed,
+    /// The service refused the user (403) or has nothing of this for the user (404): the user may
+    /// not read it, or it does not exist in the user's tenant. The model gets a fixed message
+    /// that says not to retry; nothing of the service's answer reaches it or the logs.
+    #[error("the service refused the request")]
+    Denied,
+    /// The user's delegation was revoked: the user signed out, the session ended or the user
+    /// left the tenant ([`DelegationError::Revoked`]). The question ends: the other calls of
+    /// the step are cancelled, no result goes to the model, and no tool runs again.
+    #[error("the user's access ended")]
+    Revoked,
+}
+
+impl From<DelegationError> for ToolError {
+    /// A revoked delegation ends the question; anything else is a failure of this call.
+    fn from(error: DelegationError) -> Self {
+        match error {
+            DelegationError::Revoked => Self::Revoked,
+            DelegationError::NotConfigured | DelegationError::Unavailable => Self::Failed,
+        }
+    }
 }
 
 /// Gives a tool internal identity tokens for the conversation's user while a question runs
 /// (decision 27). The internal token lives 60 seconds, shorter than a long analysis, so a tool
 /// asks for a fresh one before each call to another service. The run delegation of
-/// Laysi/trustiot-v2#551 (`service_kit::identity::RunDelegation::token_for`) is what backs it;
-/// wiring it in comes with the first real tools (Laysi/trustiot-v2#552). Until then
-/// [`NoDelegation`] refuses.
+/// Laysi/trustiot-v2#551 backs it: [`crate::delegation::QuestionRun`], which
+/// [`crate::delegation::QuestionRuns::start`] makes for one question. [`NoDelegation`] refuses.
 pub trait Delegation: Send + Sync {
     /// A token that lets the conversation's user call `audience`, for this call only.
     fn token_for(
         &self,
         audience: ServiceName,
     ) -> BoxFuture<'_, Result<InternalToken, DelegationError>>;
+
+    /// The run the delegation was started for: the question is logged under this ID, so the
+    /// assistant's logs and the identity service's agree. `None`: the agent makes one.
+    fn run_id(&self) -> Option<Uuid> {
+        None
+    }
+
+    /// The time by which the question must have ended, a little before the delegation stops
+    /// giving tokens. The agent stops the question there with
+    /// [`crate::AgentError::RunExpired`]. `None`: no limit.
+    fn deadline(&self) -> Option<Instant> {
+        None
+    }
 }
 
 /// The user's delegation could not give a token.
@@ -249,6 +285,8 @@ enum Outcome {
     Ok,
     InputError,
     Failed,
+    Denied,
+    Revoked,
     Timeout,
     UnknownTool,
     TooLarge,
@@ -262,6 +300,8 @@ impl Outcome {
             Self::Ok => "ok",
             Self::InputError => "input_error",
             Self::Failed => "failed",
+            Self::Denied => "denied",
+            Self::Revoked => "revoked",
             Self::Timeout => "timeout",
             Self::UnknownTool => "unknown_tool",
             Self::TooLarge => "too_large",
@@ -273,6 +313,15 @@ impl Outcome {
 
 const FAILED_MESSAGE: &str = "The tool failed for a reason outside your control. You may call \
 it once more; if it fails again, answer without it and say which data could not be read.";
+
+const DENIED_MESSAGE: &str = "The service refused this request for the user: the user may not \
+read this data, or it does not exist in the user's organisation. Do not call the tool again with \
+the same input; tell the user which data could not be read.";
+
+/// A step's tool calls ended the question: the user's access ended ([`ToolError::Revoked`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
+#[error("the user's access ended during a tool call")]
+pub struct AccessRevoked;
 
 /// The tools of the main agent.
 pub struct ToolRegistry {
@@ -330,7 +379,16 @@ impl ToolRegistry {
     /// [`ToolLimits::max_calls_per_step`] calls run; each later one gets an error result.
     /// Returns one result per call, in the order of the calls. Dropping the future cancels the
     /// calls still running.
-    pub async fn run(&self, context: &ToolContext, calls: &[ToolCall]) -> Vec<ToolResult> {
+    ///
+    /// # Errors
+    ///
+    /// [`AccessRevoked`] as soon as one call ends with [`ToolError::Revoked`]: the calls still
+    /// running are cancelled and no result is returned, so the question can end.
+    pub async fn run(
+        &self,
+        context: &ToolContext,
+        calls: &[ToolCall],
+    ) -> Result<Vec<ToolResult>, AccessRevoked> {
         let mut results: Vec<Option<ToolOutput>> = vec![None; calls.len()];
         let mut started = Vec::with_capacity(calls.len());
         let mut tasks = JoinSet::new();
@@ -388,6 +446,24 @@ impl ToolRegistry {
                     id,
                     Err((Outcome::Failed, ToolOutput::error(FAILED_MESSAGE))),
                 ),
+                Ok((id, Ok(Err(ToolError::Denied)))) => (
+                    id,
+                    Err((Outcome::Denied, ToolOutput::error(DENIED_MESSAGE))),
+                ),
+                Ok((id, Ok(Err(ToolError::Revoked)))) => {
+                    if let Some(&index) = index_of.get(&id) {
+                        log_call(
+                            context,
+                            &calls[index],
+                            Outcome::Revoked,
+                            started[index],
+                            &ToolOutput::error(""),
+                        );
+                    }
+                    // The other calls of the step are cancelled; none of their results goes on.
+                    tasks.abort_all();
+                    return Err(AccessRevoked);
+                }
                 Ok((id, Err(_elapsed))) => (
                     id,
                     Err((
@@ -417,14 +493,14 @@ impl ToolRegistry {
             log_call(context, &calls[index], outcome, started[index], &output);
             results[index] = Some(output);
         }
-        calls
+        Ok(calls
             .iter()
             .zip(results)
             .map(|(call, output)| ToolResult {
                 call_id: call.id.clone(),
                 output: output.unwrap_or_else(|| ToolOutput::error(FAILED_MESSAGE)),
             })
-            .collect()
+            .collect())
     }
 
     /// The limits on what a tool hands the model. A result over them is replaced by an error

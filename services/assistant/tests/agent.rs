@@ -20,7 +20,6 @@ use support::{
     tool_step,
 };
 use tokio::sync::{Barrier, Notify};
-use tracing_subscriber::layer::SubscriberExt as _;
 
 /// Tokens one recorded step processes: 312 input, 4096 cache reads, 188 output.
 const STEP_TOKENS: u64 = 312 + 4096 + 188;
@@ -534,9 +533,7 @@ async fn gateway_errors_reach_the_user_without_their_text() {
         .await;
         let agent = agent(&stand_in, tools(), settings());
         let mut conversation = agent.start_conversation(principal(), "");
-        let capture = Capture::default();
-        let subscriber = tracing_subscriber::registry().with(capture.clone());
-        let _guard = tracing::subscriber::set_default(subscriber);
+        let (capture, _guard) = Capture::install();
 
         let error = agent
             .ask(&mut conversation, "Anything?", Arc::new(NoDelegation))
@@ -636,9 +633,7 @@ async fn every_step_is_logged_with_its_duration() {
     .await;
     let agent = agent(&stand_in, tools(), settings());
     let mut conversation = agent.start_conversation(principal(), "");
-    let capture = Capture::default();
-    let subscriber = tracing_subscriber::registry().with(capture.clone());
-    let _guard = tracing::subscriber::set_default(subscriber);
+    let (capture, _guard) = Capture::install();
     let question = "Which meters on floor 3 are quiet?";
 
     agent

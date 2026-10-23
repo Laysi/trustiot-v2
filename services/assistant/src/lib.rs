@@ -9,9 +9,11 @@
 //! - the chat API and its streaming (Laysi/trustiot-v2#146): [`Agent::start_conversation`] and
 //!   [`Agent::ask`];
 //! - the user's identity for tool calls during a long run (the run delegation of
-//!   Laysi/trustiot-v2#551, wired in by Laysi/trustiot-v2#552): [`tools::Delegation`], handed
-//!   to [`Agent::ask`];
-//! - the real tools (Laysi/trustiot-v2#552): [`tools::Tool`] in the [`tools::ToolRegistry`];
+//!   Laysi/trustiot-v2#551): the chat API starts a question's delegation with
+//!   [`delegation::QuestionRuns::start`] while it handles the request, and hands the
+//!   [`delegation::QuestionRun`] to [`Agent::ask`] (Laysi/trustiot-v2#591);
+//! - more tools (the semantic layer, read-only SQL, dashboards): [`tools::Tool`] in the
+//!   [`tools::ToolRegistry`], calling services through [`callee::Callee`];
 //! - stored history (Laysi/trustiot-v2#553): [`history::Conversation`], append-only;
 //! - the per-call quota pre-deduction of the AI gateway's ledger (Laysi/trustiot-v2#140): each
 //!   call's [`model::ModelRequest::call_id`] (the ledger's `llm_call_id`), and the gateway's
@@ -20,11 +22,15 @@
 use std::sync::Arc;
 
 use axum::Router;
+use contract::client::InternalClient;
+use contract::{ServiceName, service};
 use service_kit::{BoxError, Context};
 
 pub mod agent;
 pub mod budget;
+pub mod callee;
 pub mod config;
+pub mod delegation;
 pub mod history;
 pub mod model;
 pub mod prompt;
@@ -33,13 +39,65 @@ pub mod tools;
 pub use agent::{Agent, AgentError, AgentSettings, Answer};
 pub use config::Config;
 
-/// Builds the agent from the configuration, which fails startup when it cannot be built. The
-/// service has no API of its own yet (the chat API is Laysi/trustiot-v2#146), so it serves only
-/// service-kit's health endpoints, and the agent is not kept.
+/// Builds the agent and its tools from the configuration, which fails startup when they cannot
+/// be built. The service has no API of its own yet (the chat API is Laysi/trustiot-v2#146), so
+/// it serves only service-kit's health endpoints, and the assistant is not kept.
 pub async fn start(context: Context<Config>) -> Result<Router, BoxError> {
-    let agent = build_agent(context.config(), Vec::new())?;
-    tracing::info!(tools = agent.tool_count(), "assistant ready");
+    let assistant = build(context.config())?;
+    tracing::info!(
+        tools = assistant.agent.tool_count(),
+        delegation = assistant.runs.is_some(),
+        "assistant ready"
+    );
     Ok(Router::new())
+}
+
+/// The agent with its tools, and how a question starts its delegation.
+pub struct Assistant {
+    pub agent: Agent,
+    /// `None` without `identity.exchange_url`: the agent has no tools, and a question is asked
+    /// with [`tools::NoDelegation`].
+    pub runs: Option<delegation::QuestionRuns>,
+}
+
+/// The assistant the configuration describes. The tools of a service are left out when its
+/// address is not set; without the identity service's token exchange there are none, since a
+/// tool only calls as the user. Each case is logged.
+pub fn build(config: &Config) -> Result<Assistant, BoxError> {
+    let Some(exchange_url) = &config.identity.exchange_url else {
+        tracing::info!(
+            "no tools: identity.exchange_url is not set, so the assistant cannot call other \
+             services as the user"
+        );
+        return Ok(Assistant {
+            agent: build_agent(config, Vec::new())?,
+            runs: None,
+        });
+    };
+    let identity =
+        InternalClient::<service::Identity>::new(exchange_url, delegation::IDENTITY_TIMEOUT)?;
+    let runs = delegation::QuestionRuns::new(identity, config.identity.run_lifetime);
+    let timeout = config.tools.call_timeout;
+    let mut tools: Vec<Arc<dyn tools::Tool>> = Vec::new();
+    match &config.telemetry_query.url {
+        Some(url) => {
+            let telemetry = callee::Callee::new(ServiceName::TelemetryQuery, url, timeout)?;
+            tools.push(tools::telemetry::TelemetrySeries::new(telemetry.clone()));
+            tools.push(tools::telemetry::TelemetryLatest::new(telemetry));
+        }
+        None => tracing::info!("no telemetry tools: telemetry_query.url is not set"),
+    }
+    match &config.assets.url {
+        Some(url) => {
+            let assets = callee::Callee::new(ServiceName::Assets, url, timeout)?;
+            tools.push(tools::device_models::DeviceModels::new(assets));
+        }
+        None => tracing::info!("no device model tool: assets.url is not set"),
+    }
+    Ok(Assistant {
+        agent: build_agent(config, tools)?,
+        runs: Some(runs),
+    })
 }
 
 /// The agent the configuration describes, with `tools`.
