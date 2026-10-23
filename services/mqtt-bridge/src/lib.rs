@@ -53,7 +53,7 @@ use crate::config::Config;
 use crate::handshake::SUBPROTOCOL;
 use crate::metrics::Metrics;
 use crate::relay::{Settings, Totals};
-use crate::source_limit::{SourceLimit, SourceSlot};
+use crate::source_limit::{Bucket, RefusalLog, SourceLimit, SourceSlot};
 
 /// The levels the WebSocket library's logs never exceed, whatever `telemetry.log_filter` says
 /// (`main` passes them to service-kit): at TRACE tungstenite writes every frame it reads or
@@ -93,6 +93,7 @@ pub async fn start(context: Context<Config>) -> Result<Router, BoxError> {
         },
         permits: Arc::new(Semaphore::new(config.max_connections)),
         sources: SourceLimit::new(config.connections_per_ip()),
+        refusals: RefusalLog::new(RefusalLog::WINDOW, RefusalLog::CAPACITY),
         connections: connections.clone(),
         shutdown: context.shutdown().clone(),
         metrics: Metrics::new(),
@@ -137,6 +138,8 @@ struct Inner {
     settings: Settings,
     permits: Arc<Semaphore>,
     sources: SourceLimit,
+    /// Keeps the WARN lines of `over_source_limit` refusals to one per bucket per minute.
+    refusals: RefusalLog,
     connections: TaskTracker,
     shutdown: Shutdown,
     metrics: Metrics,
@@ -170,13 +173,9 @@ async fn upgrade(State(bridge): State<Bridge>, mut request: Request) -> Response
     };
     // Before the total: a source over its own cap is told so (429, and the ingress does not
     // retry it on another pod), even while the bridge is full as well.
-    let Some(source) = inner.sources.try_acquire(client) else {
-        return refuse(
-            inner,
-            StatusCode::TOO_MANY_REQUESTS,
-            "over_source_limit",
-            Some(client),
-        );
+    let source = match inner.sources.try_acquire(client) {
+        Ok(source) => source,
+        Err(bucket) => return refuse_over_source_limit(inner, client, bucket),
     };
     let Ok(permit) = Arc::clone(&inner.permits).try_acquire_owned() else {
         return refuse(
@@ -335,6 +334,25 @@ fn refuse(
         None => tracing::warn!(reason, "refused a gateway WebSocket"),
     }
     (status, format!("{reason}\n")).into_response()
+}
+
+/// Refuses an upgrade whose `bucket` is full. Every refusal is counted; the WARN line is limited
+/// to the first one per bucket per [`RefusalLog::WINDOW`], and reports the refusals it stood for.
+/// A client that keeps retrying would otherwise write one line per attempt.
+fn refuse_over_source_limit(inner: &Inner, client: IpAddr, bucket: Bucket) -> Response {
+    const REASON: &str = "over_source_limit";
+    inner.metrics.refused(REASON);
+    if let Some(logged) = inner.refusals.note(bucket, std::time::Instant::now()) {
+        tracing::warn!(
+            reason = REASON,
+            client.address = %client,
+            source.bucket = %bucket,
+            refusals.suppressed = logged.suppressed,
+            refusals.suppressed_elsewhere = logged.suppressed_elsewhere,
+            "refused a gateway WebSocket"
+        );
+    }
+    (StatusCode::TOO_MANY_REQUESTS, format!("{REASON}\n")).into_response()
 }
 
 /// A random id that ties a connection's two log lines together.

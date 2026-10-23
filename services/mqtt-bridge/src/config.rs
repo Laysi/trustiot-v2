@@ -74,8 +74,8 @@ pub struct Config {
     #[serde(default = "default_max_connections")]
     pub max_connections: usize,
     /// `TRUSTIOT__MAX_CONNECTIONS_PER_IP`: relayed connections at once from one source (an IPv4
-    /// address or an IPv6 /64, by the trusted client IP); an upgrade beyond it is refused with
-    /// 429. From 1 to [`MAX_MAX_CONNECTIONS`]; a value above `max_connections` leaves only that cap
+    /// address or an IPv6 /64, by the trusted client IP; an IPv6 /56 gets twice and a /48 four
+    /// times as many, [`crate::source_limit`]); an upgrade beyond it is refused with 429. From 1 to [`MAX_MAX_CONNECTIONS`]; a value above `max_connections` leaves only that cap
     /// ([`Config::connections_per_ip`]). Default [`DEFAULT_MAX_CONNECTIONS_PER_IP`].
     #[serde(default = "default_max_connections_per_ip")]
     pub max_connections_per_ip: usize,

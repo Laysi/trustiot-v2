@@ -22,9 +22,9 @@
 | `TRUSTIOT__BROKER__HANDSHAKE_TIMEOUT` | `10s` | 開始轉送之後，內層連線要在多久內有進展（broker 送出資料、閘道器回應、broker 再送出資料），否則送 close 1008 結束連線；100 ms 到 60 s。見「連線上限」 |
 | `TRUSTIOT__WEBSOCKET__PING_INTERVAL` | `50s` | 每隔多久對閘道器送一次 WebSocket ping；100 ms 到 100 s（Cloudflare 125 秒無資料就切斷，上限保留一次延遲的空間） |
 | `TRUSTIOT__WEBSOCKET__PONG_TIMEOUT` | `30s` | 送出 ping 之後，閘道器多久沒有送來任何東西（pong、資料或 ping）就結束連線，不送 close；送給閘道器的一則訊息多久沒被收走也一樣；100 ms 到 100 s。見「保持連線」 |
-| `TRUSTIOT__WEBSOCKET__CLOSE_TIMEOUT` | `5s` | 服務送出 close 之後（關機、broker 結束連線、收到文字訊息），等閘道器回 close 多久就直接斷線；1 ms 到 20 s |
+| `TRUSTIOT__WEBSOCKET__CLOSE_TIMEOUT` | `5s` | 服務送出 close 之後（關機、broker 結束連線、收到文字訊息），等閘道器回 close 多久就直接斷線；進展期限到時不等回應（「連線上限」）；1 ms 到 20 s |
 | `TRUSTIOT__MAX_CONNECTIONS` | `1536` | 同時轉送的連線上限，超過的升級回 503；1 到 65536。乘上每條連線最壞的 128 KiB 超過容器記憶體上限的四分之三時拒絕啟動（見「記憶體」） |
-| `TRUSTIOT__MAX_CONNECTIONS_PER_IP` | `32` | 每個來源（可信的來源 IP；IPv6 以 /64 計）同時轉送的連線上限，超過的升級回 429；1 到 65536，大於 `max_connections` 時以 `max_connections` 為準（只調低總上限的小型部署不必跟著改）。每個副本各自計算。見「連線上限」 |
+| `TRUSTIOT__MAX_CONNECTIONS_PER_IP` | `32` | 每個來源（可信的來源 IP；IPv4 每個位址、IPv6 每個 /64，6to4 算成它的 IPv4；IPv6 的 /56 與 /48 另有兩倍、四倍的上限）同時轉送的連線上限，超過的升級回 429；1 到 65536，大於 `max_connections` 時以 `max_connections` 為準（只調低總上限的小型部署不必跟著改）。每個副本各自計算。見「連線上限」 |
 
 ## 轉送
 
@@ -71,25 +71,31 @@ pong 逾時（Laysi/trustiot-v2#600）：送出 ping 之後 `websocket.pong_time
 
 | 防護 | 擋什麼 | 設定與預設 |
 | --- | --- | --- |
-| 每個來源的連線上限 | 少數來源開滿 `max_connections` | `max_connections_per_ip`，32 |
+| 每個來源的連線上限 | 少數來源開滿 `max_connections` | `max_connections_per_ip`，32；IPv6 的 /56 兩倍、/48 四倍 |
 | 內層連線的進展期限 | 連上之後不完成內層 TLS 的連線一直佔著名額 | `broker.handshake_timeout`，10 秒 |
 | pong 逾時 | 對方已經消失（斷電、斷網）的連線一直佔著名額 | `websocket.pong_timeout`，30 秒（「保持連線」） |
 | Cloudflare 的速率限制 | 同一個 IP 短時間內大量升級 | 每個 IP 每 10 秒 40 次，2026-10-23 決定（[展示環境 runbook](../../docs/runbooks/demo-environment.md)「`/mqtt` 的速率限制」） |
 
-**每個來源的連線上限**：來源就是「來源 IP」一節的可信來源 IP（SaaS 只讀 `CF-Connecting-IP`），所以用戶端偽造的 X-Forwarded-For、True-Client-IP、X-Real-IP 改變不了它算在哪個來源。IPv4 每個位址一個來源；IPv6 以 /64 為一個來源，因為一個用戶通常拿到整個 /64，可以任意換位址；IPv4-mapped 的 IPv6 位址算成那個 IPv4。超過時回 429 `over_source_limit`，記一行 `refused a gateway WebSocket`（WARN，`reason`、`client.address`），計入 `mqtt_bridge.connections.refused`；這時還沒有升級，沒有任何 frame。這一項排在總上限之前，所以總名額已滿時，超過自己上限的來源仍得到 429；不重試別的 pod（503 才可能被入口重試）。計數在每個副本各自做，兩個副本時一個來源最多約 64 條。預設 32 的理由：同一個場域的閘道器可能共用一個對外位址（NAT），要留空間；一個來源最多佔預設總上限的 1/48，開滿總上限至少要 48 個來源（IPv6 是 48 個 /64）。這是產品判斷，場域的閘道器更多時以 `services.mqtt-bridge.env` 調高。計數表只有開著連線的來源，最多 `max_connections` 筆。
+**每個來源的連線上限**：來源就是「來源 IP」一節的可信來源 IP（SaaS 只讀 `CF-Connecting-IP`），所以用戶端偽造的 X-Forwarded-For、True-Client-IP、X-Real-IP 改變不了它算在哪個來源。一條連線同時算在它的位址所屬的每一個桶，任何一個桶滿了就拒絕（`src/source_limit.rs`）：
 
-**內層連線的進展期限**：服務看不到內層 TLS，只能看位元組的順序。開始轉送之後 `broker.handshake_timeout` 內，必須依序出現「broker 送出資料、閘道器送出資料、broker 再送出資料」，否則服務送 close 1008（policy）結束連線，原因 `handshake_timeout`。broker 要求用戶端憑證（TLS 1.3），它的第二輪只會出現在閘道器送出第二段交握之後：交握完成時的 session ticket 與 CONNACK，或是拒絕時的 alert（之後 broker 自己關閉連線）。所以連上之後什麼都不送、只送 ClientHello 就停，或送不完整的 ClientHello 的連線，都在期限到時結束；交握完成之後，期限就不再適用。極限：broker 的第一段交握被切成兩次讀取、而對方剛好在中間送了任意位元組時，服務會誤以為有進展；這時仍由下面 Mosquitto 自己的 30 秒期限結束連線。預設 10 秒：TLS 1.3 的交握是兩個來回加上閘道器以 TPM 簽章，慢的行動網路也在幾秒內完成。
+- IPv4 每個位址一個桶，上限 `max_connections_per_ip`。IPv4-mapped 的 IPv6 位址與 6to4 位址（`2002::/16`，第 16 到 47 位元是一個 IPv4 位址，持有那個 IPv4 的人就有整個 /48）都算成那個 IPv4。
+- 其他 IPv6 位址同時算在它的 /64（上限 `max_connections_per_ip`）、/56（兩倍）與 /48（四倍）。一般用戶拿到的是 /56 或 /48，免費的 tunnel broker 也給 /48，只限 /64 時一個用戶就能用幾百、幾萬個 /64 佔滿名額。兩倍與四倍留給閘道器分在同一個前綴下幾個 /64 的場域；一個 /48 最多佔 `4 × max_connections_per_ip`（預設 128 條）。
 
-**Mosquitto 自己何時切斷**（2026-10-23 以 chart 鎖定的映像 `eclipse-mosquitto:2.1.2-alpine`、與 chart 相同的 8883 listener 設定實測，[測試報告](../../docs/test-reports/2026-10-23-600-mqtt-bridge-exposure-limits.md)）：沒有完成 MQTT CONNECT 的連線，從 TCP 連上起約 30 秒被 broker 結束（日誌 `disconnected: exceeded timeout`），不論是只連 TCP 不送 ClientHello、送了 ClientHello 就停、完成 mTLS 交握但不送 CONNECT，或每 5 秒送一個位元組：送進來的位元組不會延後它。broker 結束時服務送 close 1000（`broker_closed`）。所以沒有這個服務的期限，一條連線也最多佔 30 秒；服務的期限更短，也不依賴 broker 的版本與設定。
+超過時回 429 `over_source_limit`，計入 `mqtt_bridge.connections.refused`；這時還沒有升級，沒有任何 frame。日誌記一行 `refused a gateway WebSocket`（WARN，`reason`、`client.address`、滿的桶 `source.bucket`），同一個桶一分鐘內只記第一次，下一次記的那行以 `refusals.suppressed` 寫出中間沒記的次數；一直重試的來源因此不會每次都寫一行。同時追蹤的桶最多 1,024 個，超過時或被遺忘的桶沒記的次數由下一行的 `refusals.suppressed_elsewhere` 帶出，不會不見；指標每次都計。這一項排在總上限之前，所以總名額已滿時，超過自己上限的來源仍得到 429；不重試別的 pod（503 才可能被入口重試）。計數在每個副本各自做，兩個副本時一個來源最多約 64 條。預設 32 的理由：同一個場域的閘道器可能共用一個對外位址（NAT），要留空間。這是產品判斷，場域的閘道器更多時以 `services.mqtt-bridge.env` 調高。一個 IPv4 位址最多佔預設總上限的 1/48、一個 IPv6 /48 最多 1/12，這擋得住單一用戶，但不是高門檻：48 個 IPv4 位址或 12 個 /48 就能開滿（見「還擋不住的」）。電信業者的共用 NAT（CGNAT）後面的閘道器，與同一個對外位址後面不相關的用戶共用一個桶，這是接受的行為：那些用戶開滿 32 條時，閘道器得到 429。計數表只有開著連線的桶，最多 `3 × max_connections` 筆。
 
-**還擋不住的**：會完成 TCP、在期限內反覆重連的來源。每條連線最多佔 10 秒，要一直佔滿預設的 1,536 個名額，每秒要開約 150 條新連線，而且至少來自 48 個來源（每個來源 32 條）；Cloudflare 的速率限制讓每個 IP 每秒最多 4 次升級，也要約 38 個 IP 才開得出這個速度。擁有大量 IP 的攻擊者仍能做到，這時以 Cloudflare 的防護與擴充副本處理。
+**內層連線的進展期限**：服務看不到內層 TLS，只能看位元組的順序。開始轉送之後 `broker.handshake_timeout` 內，必須依序出現「broker 送出資料、閘道器送出資料、broker 再送出資料」，否則服務送 close 1008（policy）結束連線，原因 `handshake_timeout`。broker 要求用戶端憑證（TLS 1.3），它的第二輪只會出現在閘道器送出第二段交握之後：交握完成時的 session ticket 與 CONNACK，或是拒絕時的 alert（之後 broker 自己關閉連線）。所以連上之後什麼都不送、只送 ClientHello 就停，或送不完整的 ClientHello 的連線，都在期限到時結束；交握完成之後，期限就不再適用。期限到時服務送 close 最多 1 秒、不等對方回應，所以這種連線的名額最晚在 `handshake_timeout` 加 1 秒（預設 11 秒）釋出。極限有兩個，服務都會誤以為有進展，這時由下面 Mosquitto 自己約 30 秒的期限結束連線：broker 的第一段交握被切成兩次讀取、而對方剛好在中間送了任意位元組；以及 TLS 1.3 的 HelloRetryRequest（用戶端的 ClientHello 沒帶 broker 接受的 key_share 時，broker 先回 HelloRetryRequest，用戶端再送一次 ClientHello，broker 回第一段交握：不必有用戶端憑證就走完三輪）。為了排除 HelloRetryRequest 而多要求一輪，交握完成後沒有馬上再送資料的正常閘道器也會被結束，所以不做。預設 10 秒：TLS 1.3 的交握是兩個來回加上閘道器以 TPM 簽章，慢的行動網路也在幾秒內完成。
+
+**Mosquitto 自己何時切斷**（2026-10-23 以 chart 鎖定的映像 `eclipse-mosquitto:2.1.2-alpine`、與 chart 相同的 8883 listener 設定實測，[測試報告](../../docs/test-reports/2026-10-23-600-mqtt-bridge-exposure-limits.md)）：沒有完成 MQTT CONNECT 的連線，從 TCP 連上起約 30 秒被 broker 結束（日誌 `disconnected: exceeded timeout`），不論是只連 TCP 不送 ClientHello、送了 ClientHello 就停、完成 mTLS 交握但不送 CONNECT，或每 5 秒送一個位元組：送進來的位元組不會延後它。broker 結束時服務送 close 1000（`broker_closed`）。所以沒有這個服務的期限，一條連線也最多佔 30 秒；服務的期限更短，但上面兩種極限仍靠 broker 的這 30 秒。**broker 的版本改變時**（`deploy/chart/values.yaml` 的 `mqttBroker.image`）要重做這個量測：測試報告有指令，腳本在它的 `data/` 目錄；結果不同時更新這一段，並重新評估進展期限是否夠用。
+
+**還擋不住的**：會完成 TCP、在期限內反覆重連，而且位址分散在夠多桶的攻擊者。每條連線最多佔約 11 秒（進展期限加上送 close 的 1 秒），要一直佔滿預設的 1,536 個名額，每秒要開約 140 條新連線，分散在 48 個 IPv4 位址或 12 個 IPv6 /48 上。這不是高門檻：12 個 tunnel broker 帳號就有 12 個 /48。Cloudflare 的速率限制以 IP 計，IPv4 要約 35 個位址才開得出這個速度；IPv6 換位址就換了計數，擋它的是每個 /48 的連線上限。HelloRetryRequest 或切開的第一段交握讓連線佔到 broker 的約 30 秒時，需要的速度更低。這時以 Cloudflare 的防護與擴充副本處理。沒有另外限制「還沒有進展的連線」佔總上限的比例：滾動更新時正常閘道器一起重連，同樣還沒有進展，這種限制會擋到它們，而每個桶的上限與進展期限已經限制了每個位址能佔多少、多久。
 
 測試：`tests/exposure.rs`（時間都縮小、由測試設定）：
 
-- 不回應的 broker 前，連線在 500 ms 的期限後收到 1008、原因 `handshake_timeout`，名額釋出後下一條連線就能轉送；期限內佔著唯一的名額時，別的連線得到 503。
+- 不回應的 broker 前，連線在 500 ms 的期限後收到 1008、原因 `handshake_timeout`；用戶端到結束前都不讀，所以回不了 close，服務仍不等滿設定的 20 秒 close 等待就結束連線，名額釋出後下一條連線就能轉送；期限內佔著唯一的名額時，別的連線得到 503。
 - 只完成一輪（送一則、收到回音就停）的連線以 `handshake_timeout` 結束；比它早開始、多完成一輪的連線（期限比它早到）仍在轉送。
-- 同一個來源 IP 第 3 條被拒（429），帶著不同的 X-Forwarded-For、True-Client-IP、X-Real-IP 也一樣，偽造的位址不出現在日誌，被拒的升級沒有連到 broker；別的 IPv4 與別的 /64 不受影響，同一個 /64 的第 3 個位址被拒；關掉一條之後同一個來源又能連上。
-- `tests/limits.rs` 的指標測試核對 `refused{reason=over_source_limit}`。
+- 同一個來源 IP 第 3 條被拒（429），帶著不同的 X-Forwarded-For、True-Client-IP、X-Real-IP 也一樣，偽造的位址不出現在日誌，被拒的升級沒有連到 broker，連續兩次被拒只記一行；別的 IPv4 與別的 /64 不受影響，同一個 /64 的第 3 個位址被拒；同一個 /48 的不同 /64 合起來超過它的上限時被拒（`source.bucket` 是那個 /48），另一個 /48 不受影響；關掉一條之後同一個來源又能連上。
+- `tests/limits.rs` 的指標測試：同一個 IPv4 位址與它的 6to4 位址共三次被拒，`refused{reason=over_source_limit}` 是 3，日誌只有一行。
+- `src/source_limit.rs` 的單元測試：/56 與 /48 的上限、6to4 與 IPv4-mapped 位址、每個桶一分鐘一行與被略過次數的計算（以指定的時間點，不等一分鐘）。
 
 ## 日誌
 
@@ -141,7 +147,7 @@ pong 逾時（Laysi/trustiot-v2#600）：送出 ping 之後 `websocket.pong_time
 cargo test -p mqtt-bridge
 ```
 
-整合測試直接啟動服務的執行檔（`env!("CARGO_BIN_EXE_mqtt-bridge")`），前面放假的 broker（回聲、不回應、MQTT CONNECT／PINGREQ 的最小回應、要求用戶端憑證的 TLS 1.3），不需要容器、叢集或網路。等待一律以條件為準，上限 120 秒，逾時的訊息寫明在等什麼；測試自己設定的時間只有 `tests/shutdown.rs` 的 drain 延遲（10 秒）、`tests/keepalive.rs` 的代理切斷時間（3 秒），以及 `tests/exposure.rs` 的進展期限（500 ms、5 秒）與 pong 逾時（3 秒）；那些測試只斷言順序，以及連線不早於設定的期限結束。假的 broker 不說內層 TLS，所以其他測試的進展期限設成上限 60 秒（`tests/support` 的 `Bridge::start`）。
+整合測試直接啟動服務的執行檔（`env!("CARGO_BIN_EXE_mqtt-bridge")`），前面放假的 broker（回聲、不回應、MQTT CONNECT／PINGREQ 的最小回應、要求用戶端憑證的 TLS 1.3），不需要容器、叢集或網路。等待一律以條件為準，上限 120 秒，逾時的訊息寫明在等什麼；測試自己設定的時間只有 `tests/shutdown.rs` 的 drain 延遲（10 秒）、`tests/keepalive.rs` 的代理切斷時間（3 秒），以及 `tests/exposure.rs` 的進展期限（500 ms、5 秒）、pong 逾時（3 秒）與不該等滿的 close 等待（20 秒）；那些測試只斷言順序，以及連線不早於設定的期限結束。假的 broker 不說內層 TLS，所以其他測試的進展期限設成上限 60 秒（`tests/support` 的 `Bridge::start`）。
 
 ## 待辦
 

@@ -302,6 +302,16 @@ where
     // The broker's connection closes when its halves drop at the end of this function, after the
     // gateway was told; nothing more is forwarded to it.
     match end.close_frame() {
+        Some(frame) if end == End::HandshakeTimeout => {
+            // A client that made no progress gets its close, but neither the full close timeout
+            // to take it nor a wait for its answer: its slot is free within
+            // `broker.handshake_timeout` + [`HANDSHAKE_CLOSE_SEND`].
+            let _ = tokio::time::timeout(
+                HANDSHAKE_CLOSE_SEND.min(settings.close_timeout),
+                to_gateway.send(Message::Close(Some(frame))),
+            )
+            .await;
+        }
         Some(frame) => {
             let closing = async {
                 if to_gateway.send(Message::Close(Some(frame))).await.is_ok() {
@@ -323,6 +333,10 @@ where
     }
     end
 }
+
+/// The longest the bridge tries to send the close of a connection ended for
+/// [`End::HandshakeTimeout`].
+pub const HANDSHAKE_CLOSE_SEND: Duration = Duration::from_secs(1);
 
 /// Sends `message` to the gateway. A gateway that stops reading makes the write wait (TCP
 /// backpressure) and, with it, everything else the broker sends; one that has not taken a

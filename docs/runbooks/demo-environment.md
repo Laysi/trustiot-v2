@@ -290,7 +290,7 @@ token 由同一個人在 Cloudflare 的 API 執行環境裡取得並加密（見
 
 ### `/mqtt` 的速率限制
 
-2026-10-23 決定設（Laysi/trustiot-v2#600）：gateway 主機名稱的 `/mqtt` 不經 Access，任何人都能升級。mqtt-bridge 自己限制每個來源 IP 同時的連線數，並結束內層 TLS 沒有進展的連線（[services/mqtt-bridge/README.md](../../services/mqtt-bridge/README.md)「連線上限」），但擋不住同一個 IP 不斷重連：每次升級都讓 broker 做一次 TLS 交握，也在服務的日誌留一行。Cloudflare 在最前面把每個 IP 的升級次數壓住。
+2026-10-23 決定設（Laysi/trustiot-v2#600）：gateway 主機名稱的 `/mqtt` 不經 Access，任何人都能升級。mqtt-bridge 自己限制每個來源 IP 同時的連線數，並結束內層 TLS 沒有進展的連線（[services/mqtt-bridge/README.md](../../services/mqtt-bridge/README.md)「連線上限」），但擋不住同一個 IP 不斷重連：每次升級都讓 broker 做一次 TLS 交握。Cloudflare 在最前面把每個 IP 的升級次數壓住。
 
 規則（zone 是 Free 方案，[rate limiting rules 的方案差異](https://developers.cloudflare.com/waf/rate-limiting-rules/#availability)：Free 只有一條規則、運算式只能用 Path、只能以 IP 計數、計數期間與封鎖時間都只有 10 秒）：
 
@@ -301,7 +301,12 @@ token 由同一個人在 Cloudflare 的 API 執行環境裡取得並加密（見
 | 門檻 | 每 10 秒 40 次（`period` 10、`requests_per_period` 40） |
 | 動作 | 封鎖 10 秒（`action` 為 `block`、`mitigation_timeout` 10），回 429（預設） |
 
-門檻為什麼是 40：同一個場域的閘道器可能共用一個對外 IP，mqtt-bridge 每個副本讓一個 IP 同時有 32 條連線；滾動更新時這些閘道器一起收到 close、一起重連，40 讓它們一次連上。攻擊者每個 IP 每秒最多 4 次升級，每條連線最多佔 10 秒（mqtt-bridge 的進展期限），要佔滿一個副本的 1,536 個名額至少要 48 個 IP（每個 IP 的上限 32 已經要求這麼多）。被封鎖的閘道器收到 429，照自己的重連間隔再試。
+門檻為什麼是 40：同一個場域的閘道器可能共用一個對外 IP，mqtt-bridge 每個副本讓一個 IP 同時有 32 條連線；滾動更新時這些閘道器一起收到 close、一起重連，40 讓它們一次連上。攻擊者每個 IP 每秒最多 4 次升級，每條連線最多佔約 11 秒（mqtt-bridge 的進展期限加上送 close 的 1 秒），要一直佔滿一個副本的 1,536 個名額每秒要約 140 次升級，約 35 個 IPv4 位址。這不是高門檻：IPv6 換位址就換了計數，擁有很多位址（例如幾個 IPv6 /48）的攻擊者做得到，那時靠 mqtt-bridge 每個桶的上限（IPv6 每個 /48 最多 128 條）與擴充副本。被封鎖的閘道器收到 429，照自己的重連間隔再試。
+
+這條規則依賴兩個前提，改 Cloudflare 或 tunnel 的設定時要確認仍成立：
+
+- zone 的「Normalize incoming URLs」（URL normalization）保持開啟：`/%6Dqtt` 這類編碼過的路徑先正規化成 `/mqtt` 再比對，才會被計數。
+- tunnel 的錨定路由 `^/mqtt$` 比對的是解碼後的路徑：`/%2Fmqtt`、`//mqtt` 這類不等於 `/mqtt` 的路徑比對不到，走同一主機名稱其他路徑的 `originRequest.access`（沒有 JWT 回 403），到不了 mqtt-bridge，所以不會繞過計數連上它。
 
 這條規則用掉 Free 方案唯一的一條；`/certs/renew` 也要限制時，把運算式改成 `http.request.uri.path in {"/mqtt" "/certs/renew"}`，共用同一個門檻。
 

@@ -52,15 +52,19 @@ fn duration_ms(line: &serde_json::Value) -> u64 {
 }
 
 /// A broker that never answers is Mosquitto waiting for a ClientHello that never comes. The
-/// connection is ended with close 1008 once the deadline passed, and its slot is free again.
+/// connection is ended with close 1008 once the deadline passed, and its slot is free again
+/// without waiting for the client to answer the close.
 #[tokio::test]
 async fn a_connection_whose_broker_never_answers_is_ended_and_frees_its_slot() {
     const DEADLINE: Duration = Duration::from_millis(500);
+    // The longest close timeout: the bridge must not wait it out for this connection.
+    const CLOSE_TIMEOUT: Duration = Duration::from_secs(20);
     let broker = FakeBroker::start(Behaviour::Silent).await;
     let mut bridge = Bridge::start(
         broker.address,
         &[
             ("TRUSTIOT__BROKER__HANDSHAKE_TIMEOUT", "500ms"),
+            ("TRUSTIOT__WEBSOCKET__CLOSE_TIMEOUT", "20s"),
             ("TRUSTIOT__MAX_CONNECTIONS", "1"),
         ],
     )
@@ -84,13 +88,20 @@ async fn a_connection_whose_broker_never_answers_is_ended_and_frees_its_slot() {
     );
     assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
 
-    assert_eq!(expect_close(&mut holder).await, CloseCode::Policy);
+    // The holder reads nothing until the connection ended, so it cannot answer the close.
     let ended = bridge.wait_for_line("gateway connection ended").await;
     assert_eq!(ended_reason(&ended), "handshake_timeout", "{ended}");
+    let deadline_ms = u64::try_from(DEADLINE.as_millis()).expect("small");
     assert!(
-        duration_ms(&ended) >= u64::try_from(DEADLINE.as_millis()).expect("small"),
+        duration_ms(&ended) >= deadline_ms,
         "ended before the configured deadline: {ended}"
     );
+    assert!(
+        duration_ms(&ended)
+            < deadline_ms + u64::try_from(CLOSE_TIMEOUT.as_millis()).expect("small"),
+        "waited for the close answer: {ended}"
+    );
+    assert_eq!(expect_close(&mut holder).await, CloseCode::Policy);
 
     // The slot is free: the next connection is relayed.
     let _next = connect_ws(
@@ -278,8 +289,9 @@ async fn a_gateway_that_stops_reading_while_it_sends_is_ended() {
 }
 
 /// One source gets `max_connections_per_ip` slots and no more; forged forwarding headers do not
-/// move a connection to another source, other sources are not affected, IPv6 counts by /64, and
-/// a freed slot can be taken again.
+/// move a connection to another source, other sources are not affected, IPv6 counts by /64 and
+/// the wider /56 and /48 caps hold across many /64s, refusals are logged once per bucket, and a
+/// freed slot can be taken again.
 #[tokio::test]
 async fn one_source_cannot_take_more_than_its_share() {
     let broker = FakeBroker::start(Behaviour::Echo).await;
@@ -337,19 +349,67 @@ async fn one_source_cannot_take_more_than_its_share() {
             .await
             .expect("another /64"),
     );
+    // The /56 2001:db8:1::/56 (cap 4) has 3; one more /64 fills it.
+    held.push(
+        open(via_cloudflare("2001:db8:1:4::1"))
+            .await
+            .expect("4th of the /56"),
+    );
+    let status = refused_status(open(via_cloudflare("2001:db8:1:5::1")).await);
+    assert_eq!(
+        status,
+        StatusCode::TOO_MANY_REQUESTS,
+        "a new /64 of a full /56"
+    );
+    // The /48 (cap 8) fills across /64s of other /56s, each of them new and empty.
+    for address in [
+        "2001:db8:1:100::1",
+        "2001:db8:1:101::1",
+        "2001:db8:1:200::1",
+        "2001:db8:1:201::1",
+    ] {
+        held.push(open(via_cloudflare(address)).await.expect(address));
+    }
+    let status = refused_status(open(via_cloudflare("2001:db8:1:300::1")).await);
+    assert_eq!(
+        status,
+        StatusCode::TOO_MANY_REQUESTS,
+        "a new /56 of a full /48"
+    );
+    held.push(
+        open(via_cloudflare("2001:db8:2::1"))
+            .await
+            .expect("another /48"),
+    );
 
+    // One line per full bucket: the second refusal of 203.0.113.7 is counted, not logged.
     let refused = bridge
-        .wait_for_lines("refused a gateway WebSocket", 3)
+        .wait_for_lines("refused a gateway WebSocket", 4)
         .await;
     for line in &refused {
         assert_eq!(line["fields"]["reason"], "over_source_limit", "{line}");
         assert_eq!(line["level"], "WARN", "{line}");
+        assert_eq!(line["fields"]["refusals.suppressed"], 0, "{line}");
     }
-    assert_eq!(refused[0]["fields"]["client.address"], "203.0.113.7");
-    assert_eq!(refused[1]["fields"]["client.address"], "203.0.113.7");
+    let seen: Vec<(&str, &str)> = refused
+        .iter()
+        .map(|line| {
+            (
+                line["fields"]["client.address"]
+                    .as_str()
+                    .unwrap_or_default(),
+                line["fields"]["source.bucket"].as_str().unwrap_or_default(),
+            )
+        })
+        .collect();
     assert_eq!(
-        refused[2]["fields"]["client.address"],
-        "2001:db8:1:2:ffff::3"
+        seen,
+        [
+            ("203.0.113.7", "203.0.113.7"),
+            ("2001:db8:1:2:ffff::3", "2001:db8:1:2::/64"),
+            ("2001:db8:1:5::1", "2001:db8:1::/56"),
+            ("2001:db8:1:300::1", "2001:db8:1::/48"),
+        ]
     );
     // The forged addresses never reach the log, and refused upgrades never reach the broker.
     assert!(!bridge.dump().contains("198.51.100."), "{}", bridge.dump());
