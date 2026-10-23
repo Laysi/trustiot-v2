@@ -284,8 +284,50 @@ token 一年到期，在到期前 14 天輪替（建立的人在團隊行事曆�
 3. tunnel 的路由（先回 418；入口部署後，照「架構」的「路由」的步驟，改成 `route-origin` 通過時印出的 origin，也就是展示叢集 values 固定的入口 ClusterIP；切換後讀回路由設定，再馬上執行 `check --stage 2`）：兩條略過路徑的錨定規則在前、不要求 JWT，其餘每條都設 `originRequest.access`（team 名稱與三個主機名稱那個 application 的 AUD），最後 catch-all 回 404。
 4. gateway 主機名稱的 configuration rule（Browser Integrity Check 關閉）。
 5. 三筆 proxied CNAME 指向 `<tunnel ID>.cfargotunnel.com`。DNS 紀錄一定在 Access application 之後建立，主機名稱不會有一段沒有保護的時間。
+6. `/mqtt` 升級的速率限制（下方「`/mqtt` 的速率限制」）。展示環境部署 mqtt-bridge 之前就要套用。
 
 token 由同一個人在 Cloudflare 的 API 執行環境裡取得並加密（見下方「安裝 connector」第 2 步），不經過其他地方。在那個執行環境裡依序：以 `GET /accounts/<帳號>/cfd_tunnel/<tunnel>` 確認名稱是 `trustiot-demo`、`config_src` 是 `cloudflare`；以 `GET …/cfd_tunnel/<tunnel>/token` 取得 token，確認它是以 `eyJhIjoi` 開頭的字串、解開後的 `t` 等於 tunnel ID；以 `crypto.subtle.exportKey("spki")` 算公鑰的 SHA-256，與 `handoff-key` 印出的相同才加密；只回傳 tunnel ID、指紋、密文與它的位元組數。
+
+### `/mqtt` 的速率限制
+
+2026-10-23 決定設（Laysi/trustiot-v2#600）：gateway 主機名稱的 `/mqtt` 不經 Access，任何人都能升級。mqtt-bridge 自己限制每個來源 IP 同時的連線數，並結束內層 TLS 沒有進展的連線（[services/mqtt-bridge/README.md](../../services/mqtt-bridge/README.md)「連線上限」），但擋不住同一個 IP 不斷重連：每次升級都讓 broker 做一次 TLS 交握，也在服務的日誌留一行。Cloudflare 在最前面把每個 IP 的升級次數壓住。
+
+規則（zone 是 Free 方案，[rate limiting rules 的方案差異](https://developers.cloudflare.com/waf/rate-limiting-rules/#availability)：Free 只有一條規則、運算式只能用 Path、只能以 IP 計數、計數期間與封鎖時間都只有 10 秒）：
+
+| 欄位 | 值 |
+| --- | --- |
+| 運算式 | `http.request.uri.path eq "/mqtt"`（Free 不能用主機名稱；app 與 ota 主機名稱沒有這個路徑，而且在 Access 後面） |
+| 計數 | 每個 IP（API 的 `characteristics` 是 `["cf.colo.id", "ip.src"]`，`cf.colo.id` 是 API 規定必帶的，[參數說明](https://developers.cloudflare.com/waf/rate-limiting-rules/parameters/)） |
+| 門檻 | 每 10 秒 40 次（`period` 10、`requests_per_period` 40） |
+| 動作 | 封鎖 10 秒（`action` 為 `block`、`mitigation_timeout` 10），回 429（預設） |
+
+門檻為什麼是 40：同一個場域的閘道器可能共用一個對外 IP，mqtt-bridge 每個副本讓一個 IP 同時有 32 條連線；滾動更新時這些閘道器一起收到 close、一起重連，40 讓它們一次連上。攻擊者每個 IP 每秒最多 4 次升級，每條連線最多佔 10 秒（mqtt-bridge 的進展期限），要佔滿一個副本的 1,536 個名額至少要 48 個 IP（每個 IP 的上限 32 已經要求這麼多）。被封鎖的閘道器收到 429，照自己的重連間隔再試。
+
+這條規則用掉 Free 方案唯一的一條；`/certs/renew` 也要限制時，把運算式改成 `http.request.uri.path in {"/mqtt" "/certs/renew"}`，共用同一個門檻。
+
+套用（有 Cloudflare 權限的維運人員，在 Cloudflare 的 API 執行環境裡，照本節開頭的規則先寫進變更清單、經使用者同意）：
+
+1. 以「Get a zone entry point ruleset」讀 `http_ratelimit` phase 的 entry point ruleset（[以 API 建立規則](https://developers.cloudflare.com/waf/rate-limiting-rules/create-api/)）。回 404 時以「Create a zone ruleset」建立它（`kind` 為 `zone`、`phase` 為 `http_ratelimit`），規則一起放進去；已經有規則時，先確認它是不是這一條，不是就停下來問。
+2. 以「Create a zone ruleset rule」把規則加進那個 ruleset，內容：
+
+   ```json
+   {
+     "description": "mqtt-bridge: /mqtt upgrades per IP (Laysi/trustiot-v2#600)",
+     "expression": "(http.request.uri.path eq \"/mqtt\")",
+     "action": "block",
+     "ratelimit": {
+       "characteristics": ["cf.colo.id", "ip.src"],
+       "period": 10,
+       "requests_per_period": 40,
+       "mitigation_timeout": 10
+     }
+   }
+   ```
+
+3. 讀回 ruleset，確認只有這一條規則、`enabled` 為 true、四個值與上表相同。記下規則的 `id`（還原用），只把 `id`、`version` 與四個值寫進紀錄，不寫 zone ID。
+4. 確認規則有效、閘道器仍連得上：從工作站在 10 秒內連續送 41 次與「檢查對外的請求」相同的 `/mqtt` 升級請求，第 41 次起得到 Cloudflare 的 429（`server: cloudflare`；mqtt-bridge 自己的 429 body 是 `over_source_limit`，那是另一回事），等 10 秒後再送一次，不再是 Cloudflare 的 429。mqtt-bridge 部署之後，展示用閘道器的連線出現在 mqtt-bridge 的 `relaying a gateway connection` 日誌。
+
+還原：以「Delete a zone ruleset rule」刪除記下的規則 `id`，再讀回 ruleset 確認它不在了。
 
 ## 安裝 connector
 

@@ -1,0 +1,6 @@
+captured ClientHello: 1401 bytes, first byte 0x16
+A tcp-only: broker closed (EOF) after 30867 ms (received 0 bytes)
+B client-hello-then-silence: broker closed (EOF) after 30866 ms (received 2264 bytes)
+C tls-done-no-connect: broker closed (EOF) after 30865 ms (received 0 bytes)
+D client-hello-1-byte-per-5s: broker closed after 30706 ms (6 trickled bytes, received 0)
+E client-hello-then-1-byte-per-5s: broker closed after 30706 ms (6 trickled bytes, received 2263)

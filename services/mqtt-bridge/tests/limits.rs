@@ -112,6 +112,7 @@ async fn connection_and_traffic_metrics_reach_the_collector() {
         &[
             ("TRUSTIOT__TELEMETRY__OTLP_ENDPOINT", endpoint.as_str()),
             ("TRUSTIOT__MAX_CONNECTIONS", "2"),
+            ("TRUSTIOT__MAX_CONNECTIONS_PER_IP", "1"),
         ],
     )
     .await;
@@ -128,6 +129,15 @@ async fn connection_and_traffic_metrics_reach_the_collector() {
         .await,
     );
     assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+    let status = refused_status(
+        connect_ws(
+            bridge.address,
+            &bridge.url(),
+            &via_cloudflare("203.0.113.7"),
+        )
+        .await,
+    );
+    assert_eq!(status, StatusCode::TOO_MANY_REQUESTS);
     let status = refused_status(connect_ws(bridge.address, &bridge.url(), &[]).await);
     assert_eq!(status, StatusCode::BAD_REQUEST);
     send_binary(&mut first, &support::PINGREQ).await;
@@ -164,6 +174,13 @@ async fn connection_and_traffic_metrics_reach_the_collector() {
         value(
             "mqtt_bridge.connections.refused",
             "reason=client_ip_missing"
+        ),
+        1
+    );
+    assert_eq!(
+        value(
+            "mqtt_bridge.connections.refused",
+            "reason=over_source_limit"
         ),
         1
     );

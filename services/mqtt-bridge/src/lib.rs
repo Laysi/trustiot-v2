@@ -9,8 +9,12 @@
 //!   `X-Forwarded-For` or `True-Client-IP` ([`client_ip`]); it is logged with the connection;
 //! - a WebSocket ping every 50 s keeps idle connections open through Cloudflare; on SIGTERM every
 //!   gateway gets a WebSocket close, so it reconnects to another pod at once;
-//! - small buffers (8 KiB), a cap on connections, and connection and traffic metrics
-//!   ([`metrics`]).
+//! - small buffers (8 KiB), a cap on connections and on connections per source IP
+//!   ([`source_limit`]), deadlines that free the slot of a connection whose inner TLS makes no
+//!   progress or whose gateway stopped answering pings ([`relay`]), and connection and traffic
+//!   metrics ([`metrics`]);
+//! - the WebSocket library's logs never go above DEBUG ([`LOG_CEILINGS`]): at TRACE it writes
+//!   every frame's payload.
 //!
 //! See `README.md` in this crate.
 
@@ -20,6 +24,7 @@ pub mod handshake;
 pub mod memory;
 pub mod metrics;
 pub mod relay;
+pub mod source_limit;
 
 use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
@@ -33,6 +38,7 @@ use axum::http::{HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use hyper_util::rt::TokioIo;
 use service_kit::shutdown::Shutdown;
+use service_kit::telemetry::LogCeiling;
 use service_kit::{BoxError, Context};
 use tokio::net::TcpStream;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
@@ -40,12 +46,24 @@ use tokio::time::Instant;
 use tokio_tungstenite::WebSocketStream;
 use tokio_tungstenite::tungstenite::protocol::Role;
 use tokio_util::task::TaskTracker;
+use tracing::Level;
 
 use crate::client_ip::ClientIpSource;
 use crate::config::Config;
 use crate::handshake::SUBPROTOCOL;
 use crate::metrics::Metrics;
 use crate::relay::{Settings, Totals};
+use crate::source_limit::{SourceLimit, SourceSlot};
+
+/// The levels the WebSocket library's logs never exceed, whatever `telemetry.log_filter` says
+/// (`main` passes them to service-kit): at TRACE tungstenite writes every frame it reads or
+/// writes, payload included, and the payload is the gateway's inner TLS (security review of
+/// Laysi/trustiot-v2#85, Low; Laysi/trustiot-v2#600). Its DEBUG lines carry close frames and
+/// errors only.
+pub const LOG_CEILINGS: &[LogCeiling] = &[
+    LogCeiling::new("tungstenite", Level::DEBUG),
+    LogCeiling::new("tokio_tungstenite", Level::DEBUG),
+];
 
 /// The service's startup for `service_kit::run`.
 ///
@@ -69,9 +87,12 @@ pub async fn start(context: Context<Config>) -> Result<Router, BoxError> {
         connect_timeout: config.broker.connect_timeout,
         settings: Settings {
             ping_interval: config.websocket.ping_interval,
+            pong_timeout: config.websocket.pong_timeout,
+            handshake_timeout: config.broker.handshake_timeout,
             close_timeout: config.websocket.close_timeout,
         },
         permits: Arc::new(Semaphore::new(config.max_connections)),
+        sources: SourceLimit::new(config.connections_per_ip()),
         connections: connections.clone(),
         shutdown: context.shutdown().clone(),
         metrics: Metrics::new(),
@@ -87,9 +108,12 @@ pub async fn start(context: Context<Config>) -> Result<Router, BoxError> {
     tracing::info!(
         client_ip_source = bridge.0.source.header(),
         broker.address = %config.broker.address,
+        broker.handshake_timeout_ms = millis(config.broker.handshake_timeout),
         websocket.ping_interval_ms = millis(config.websocket.ping_interval),
+        websocket.pong_timeout_ms = millis(config.websocket.pong_timeout),
         websocket.close_timeout_ms = millis(config.websocket.close_timeout),
         max_connections = config.max_connections,
+        max_connections_per_ip = config.connections_per_ip(),
         "relaying gateway WebSockets to the MQTT broker"
     );
     Ok(routes(bridge))
@@ -112,6 +136,7 @@ struct Inner {
     connect_timeout: Duration,
     settings: Settings,
     permits: Arc<Semaphore>,
+    sources: SourceLimit,
     connections: TaskTracker,
     shutdown: Shutdown,
     metrics: Metrics,
@@ -142,6 +167,16 @@ async fn upgrade(State(bridge): State<Bridge>, mut request: Request) -> Response
     let client = match inner.source.client_ip(request.headers()) {
         Ok(client) => client,
         Err(error) => return refuse(inner, StatusCode::BAD_REQUEST, error.reason(), None),
+    };
+    // Before the total: a source over its own cap is told so (429, and the ingress does not
+    // retry it on another pod), even while the bridge is full as well.
+    let Some(source) = inner.sources.try_acquire(client) else {
+        return refuse(
+            inner,
+            StatusCode::TOO_MANY_REQUESTS,
+            "over_source_limit",
+            Some(client),
+        );
     };
     let Ok(permit) = Arc::clone(&inner.permits).try_acquire_owned() else {
         return refuse(
@@ -179,7 +214,14 @@ async fn upgrade(State(bridge): State<Bridge>, mut request: Request) -> Response
     }
     let on_upgrade = hyper::upgrade::on(&mut request);
     let id = connection_id();
-    let task = run(bridge.clone(), on_upgrade, broker, client, id, permit);
+    let task = run(
+        bridge.clone(),
+        on_upgrade,
+        broker,
+        client,
+        id,
+        (permit, source),
+    );
     tokio::spawn(async move {
         task.await;
         drop(tracked);
@@ -216,9 +258,10 @@ async fn run(
     broker: TcpStream,
     client: IpAddr,
     id: String,
-    permit: OwnedSemaphorePermit,
+    slots: (OwnedSemaphorePermit, SourceSlot),
 ) {
-    let _permit = permit;
+    // Both slots are held until the relay ends, and given back when this returns.
+    let _slots = slots;
     let inner = &*bridge.0;
     let upgraded = match on_upgrade.await {
         Ok(upgraded) => upgraded,

@@ -17,11 +17,30 @@ pub const MAX_PING_INTERVAL: Duration = Duration::from_secs(100);
 /// The shortest `websocket.ping_interval` accepted: tests use short intervals, nothing needs
 /// shorter ones.
 pub const MIN_PING_INTERVAL: Duration = Duration::from_millis(100);
+/// Default `websocket.pong_timeout`: a gateway that answers nothing for this long after a ping is
+/// gone (a half-open connection), and its slot is freed. Cellular round trips of a few seconds
+/// fit many times over.
+pub const DEFAULT_PONG_TIMEOUT: Duration = Duration::from_secs(30);
+/// The longest `websocket.pong_timeout` accepted.
+pub const MAX_PONG_TIMEOUT: Duration = Duration::from_secs(100);
+/// The shortest `websocket.pong_timeout` accepted: tests use short ones.
+pub const MIN_PONG_TIMEOUT: Duration = Duration::from_millis(100);
 /// Default `websocket.close_timeout`.
 pub const DEFAULT_CLOSE_TIMEOUT: Duration = Duration::from_secs(5);
 /// The longest `websocket.close_timeout` accepted. The whole close must fit in the chart's
 /// `drainSeconds` (30 s by default) together with the kit's drain.
 pub const MAX_CLOSE_TIMEOUT: Duration = Duration::from_secs(20);
+/// Default `broker.handshake_timeout`: how long the inner connection may take to make progress
+/// (README.md, "連線上限"). Mosquitto 2.1.2 itself ends a connection that has not completed MQTT
+/// CONNECT 30 s after it opened, whatever bytes trickle in (measured 2026-10-23,
+/// docs/test-reports/2026-10-23-600-mqtt-bridge-exposure-limits.md); the bridge frees the slot
+/// sooner and does not depend on the broker for it. A gateway's TLS 1.3 handshake takes two round
+/// trips and a TPM signature, a few seconds on a slow cellular link.
+pub const DEFAULT_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
+/// The longest `broker.handshake_timeout` accepted.
+pub const MAX_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(60);
+/// The shortest `broker.handshake_timeout` accepted: tests use short ones.
+pub const MIN_HANDSHAKE_TIMEOUT: Duration = Duration::from_millis(100);
 /// Default `broker.connect_timeout`.
 pub const DEFAULT_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 /// The longest `broker.connect_timeout` accepted.
@@ -32,6 +51,10 @@ pub const MAX_CONNECT_TIMEOUT: Duration = Duration::from_secs(20);
 pub const DEFAULT_MAX_CONNECTIONS: usize = 1536;
 /// The largest `max_connections` accepted.
 pub const MAX_MAX_CONNECTIONS: usize = 65_536;
+/// Default `max_connections_per_ip`: room for a site whose gateways share one public address
+/// (NAT) behind each bridge replica, while a single source can take at most 1/48 of the default
+/// `max_connections` (README.md, "連線上限").
+pub const DEFAULT_MAX_CONNECTIONS_PER_IP: usize = 32;
 
 /// The bridge's settings.
 #[derive(Debug, Deserialize)]
@@ -50,6 +73,12 @@ pub struct Config {
     /// with 503. Default [`DEFAULT_MAX_CONNECTIONS`].
     #[serde(default = "default_max_connections")]
     pub max_connections: usize,
+    /// `TRUSTIOT__MAX_CONNECTIONS_PER_IP`: relayed connections at once from one source (an IPv4
+    /// address or an IPv6 /64, by the trusted client IP); an upgrade beyond it is refused with
+    /// 429. From 1 to [`MAX_MAX_CONNECTIONS`]; a value above `max_connections` leaves only that cap
+    /// ([`Config::connections_per_ip`]). Default [`DEFAULT_MAX_CONNECTIONS_PER_IP`].
+    #[serde(default = "default_max_connections_per_ip")]
+    pub max_connections_per_ip: usize,
 }
 
 /// The platform settings the bridge reads. No `deny_unknown_fields`: every service gets every
@@ -77,6 +106,14 @@ pub struct BrokerSettings {
         deserialize_with = "service_kit::config::duration"
     )]
     pub connect_timeout: Duration,
+    /// `TRUSTIOT__BROKER__HANDSHAKE_TIMEOUT`: how long, from the start of the relay, the inner
+    /// connection has to make progress (the broker sent data, the gateway answered it, and the
+    /// broker sent data again) before the bridge ends it. Default [`DEFAULT_HANDSHAKE_TIMEOUT`].
+    #[serde(
+        default = "default_handshake_timeout",
+        deserialize_with = "service_kit::config::duration"
+    )]
+    pub handshake_timeout: Duration,
 }
 
 /// `websocket.*`.
@@ -87,6 +124,11 @@ pub struct WebSocketSettings {
     /// [`DEFAULT_PING_INTERVAL`].
     #[serde(deserialize_with = "service_kit::config::duration")]
     pub ping_interval: Duration,
+    /// `TRUSTIOT__WEBSOCKET__PONG_TIMEOUT`: after a ping, how long the gateway has to send
+    /// anything (the pong, data, a ping) before the bridge ends the connection. Default
+    /// [`DEFAULT_PONG_TIMEOUT`].
+    #[serde(deserialize_with = "service_kit::config::duration")]
+    pub pong_timeout: Duration,
     /// `TRUSTIOT__WEBSOCKET__CLOSE_TIMEOUT`: after the bridge sends a close (SIGTERM, the broker
     /// ended the connection), how long it waits for the gateway's close before it drops the
     /// connection. Default [`DEFAULT_CLOSE_TIMEOUT`].
@@ -98,6 +140,7 @@ impl Default for WebSocketSettings {
     fn default() -> Self {
         Self {
             ping_interval: DEFAULT_PING_INTERVAL,
+            pong_timeout: DEFAULT_PONG_TIMEOUT,
             close_timeout: DEFAULT_CLOSE_TIMEOUT,
         }
     }
@@ -108,6 +151,7 @@ impl Default for BrokerSettings {
         Self {
             address: String::new(),
             connect_timeout: DEFAULT_CONNECT_TIMEOUT,
+            handshake_timeout: DEFAULT_HANDSHAKE_TIMEOUT,
         }
     }
 }
@@ -116,8 +160,16 @@ fn default_connect_timeout() -> Duration {
     DEFAULT_CONNECT_TIMEOUT
 }
 
+fn default_handshake_timeout() -> Duration {
+    DEFAULT_HANDSHAKE_TIMEOUT
+}
+
 fn default_max_connections() -> usize {
     DEFAULT_MAX_CONNECTIONS
+}
+
+fn default_max_connections_per_ip() -> usize {
+    DEFAULT_MAX_CONNECTIONS_PER_IP
 }
 
 impl Config {
@@ -130,6 +182,13 @@ impl Config {
     pub fn client_ip_source(&self) -> ClientIpSource {
         ClientIpSource::parse(&self.platform.client_ip_source)
             .expect("platform.client_ip_source is validated at startup")
+    }
+
+    /// The cap per source in effect: `max_connections_per_ip`, but never above
+    /// `max_connections`, so lowering the total alone (a small deployment) keeps the default
+    /// valid.
+    pub fn connections_per_ip(&self) -> usize {
+        self.max_connections_per_ip.min(self.max_connections)
     }
 
     /// The broker's host and port. Only call after [`Validate::validate`] passed.
@@ -187,10 +246,22 @@ impl Validate for Config {
             MAX_CONNECT_TIMEOUT,
         )?;
         within(
+            "broker.handshake_timeout",
+            self.broker.handshake_timeout,
+            MIN_HANDSHAKE_TIMEOUT,
+            MAX_HANDSHAKE_TIMEOUT,
+        )?;
+        within(
             "websocket.ping_interval",
             self.websocket.ping_interval,
             MIN_PING_INTERVAL,
             MAX_PING_INTERVAL,
+        )?;
+        within(
+            "websocket.pong_timeout",
+            self.websocket.pong_timeout,
+            MIN_PONG_TIMEOUT,
+            MAX_PONG_TIMEOUT,
         )?;
         within(
             "websocket.close_timeout",
@@ -201,6 +272,12 @@ impl Validate for Config {
         if self.max_connections == 0 || self.max_connections > MAX_MAX_CONNECTIONS {
             return Err(Invalid::new(
                 "max_connections",
+                format!("must be from 1 to {MAX_MAX_CONNECTIONS}"),
+            ));
+        }
+        if self.max_connections_per_ip == 0 || self.max_connections_per_ip > MAX_MAX_CONNECTIONS {
+            return Err(Invalid::new(
+                "max_connections_per_ip",
                 format!("must be from 1 to {MAX_MAX_CONNECTIONS}"),
             ));
         }
@@ -257,8 +334,11 @@ mod tests {
         let config = load(&REQUIRED).expect("defaults");
         assert_eq!(config.websocket.ping_interval, Duration::from_secs(50));
         assert_eq!(config.websocket.close_timeout, Duration::from_secs(5));
+        assert_eq!(config.websocket.pong_timeout, Duration::from_secs(30));
         assert_eq!(config.broker.connect_timeout, Duration::from_secs(5));
+        assert_eq!(config.broker.handshake_timeout, Duration::from_secs(10));
         assert_eq!(config.max_connections, 1536);
+        assert_eq!(config.max_connections_per_ip, 32);
         assert_eq!(config.client_ip_source(), ClientIpSource::CfConnectingIp);
         assert_eq!(
             config.broker_address(),
@@ -353,6 +433,14 @@ mod tests {
             ("TRUSTIOT__BROKER__CONNECT_TIMEOUT", "500000000000y"),
             ("TRUSTIOT__MAX_CONNECTIONS", "0"),
             ("TRUSTIOT__MAX_CONNECTIONS", "65537"),
+            ("TRUSTIOT__WEBSOCKET__PONG_TIMEOUT", "0s"),
+            ("TRUSTIOT__WEBSOCKET__PONG_TIMEOUT", "99ms"),
+            ("TRUSTIOT__WEBSOCKET__PONG_TIMEOUT", "101s"),
+            ("TRUSTIOT__BROKER__HANDSHAKE_TIMEOUT", "0s"),
+            ("TRUSTIOT__BROKER__HANDSHAKE_TIMEOUT", "99ms"),
+            ("TRUSTIOT__BROKER__HANDSHAKE_TIMEOUT", "61s"),
+            ("TRUSTIOT__MAX_CONNECTIONS_PER_IP", "0"),
+            ("TRUSTIOT__MAX_CONNECTIONS_PER_IP", "65537"),
         ] {
             let Err(error) = load(&with(&[(name, bad)])) else {
                 panic!("{name}={bad} was accepted");
@@ -362,11 +450,39 @@ mod tests {
         let config = load(&with(&[
             ("TRUSTIOT__WEBSOCKET__PING_INTERVAL", "100ms"),
             ("TRUSTIOT__WEBSOCKET__CLOSE_TIMEOUT", "20s"),
+            ("TRUSTIOT__WEBSOCKET__PONG_TIMEOUT", "100ms"),
+            ("TRUSTIOT__BROKER__HANDSHAKE_TIMEOUT", "100ms"),
             ("TRUSTIOT__MAX_CONNECTIONS", "1"),
+            ("TRUSTIOT__MAX_CONNECTIONS_PER_IP", "1"),
         ]))
-        .expect("bounds");
+        .expect("lower bounds");
         assert_eq!(config.websocket.ping_interval, Duration::from_millis(100));
+        assert_eq!(config.websocket.pong_timeout, Duration::from_millis(100));
+        assert_eq!(config.broker.handshake_timeout, Duration::from_millis(100));
         assert_eq!(config.max_connections, 1);
+        assert_eq!(config.max_connections_per_ip, 1);
+        let config = load(&with(&[
+            ("TRUSTIOT__WEBSOCKET__PONG_TIMEOUT", "100s"),
+            ("TRUSTIOT__BROKER__HANDSHAKE_TIMEOUT", "60s"),
+            ("TRUSTIOT__MAX_CONNECTIONS", "64"),
+            ("TRUSTIOT__MAX_CONNECTIONS_PER_IP", "64"),
+        ]))
+        .expect("upper bounds");
+        assert_eq!(config.websocket.pong_timeout, Duration::from_secs(100));
+        assert_eq!(config.broker.handshake_timeout, Duration::from_secs(60));
+        assert_eq!(config.max_connections_per_ip, 64);
+        let config = load(&with(&[("TRUSTIOT__MAX_CONNECTIONS_PER_IP", "65536")])).expect("max");
+        assert_eq!(config.max_connections_per_ip, 65_536);
+    }
+
+    #[test]
+    fn the_cap_per_source_never_exceeds_the_total() {
+        // A small deployment lowers the total alone; the default per source still starts.
+        let config = load(&with(&[("TRUSTIOT__MAX_CONNECTIONS", "8")])).expect("total only");
+        assert_eq!(config.max_connections_per_ip, 32);
+        assert_eq!(config.connections_per_ip(), 8);
+        let config = load(&with(&[("TRUSTIOT__MAX_CONNECTIONS_PER_IP", "4")])).expect("per source");
+        assert_eq!(config.connections_per_ip(), 4);
     }
 
     #[test]
