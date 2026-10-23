@@ -912,7 +912,13 @@ async fn registration_is_idempotent_and_needs_a_workstation_and_an_administrator
     assert_eq!(totals(&product).await, (2, 2, 2));
     println!("a revoked workstation: 403 revoked; totals (2, 2, 2)");
 
-    let lines = service.stdout.messages("registered a gateway");
+    // The service's stdout reaches the test through a reader thread, so a line can arrive after
+    // its response does.
+    let lines = wait_for("both registration log lines", || async {
+        let lines = service.stdout.messages("registered a gateway");
+        (lines.len() >= 2).then_some(lines)
+    })
+    .await;
     assert_eq!(lines.len(), 2);
     for line in &lines {
         for secret in ["certificate_request", "BEGIN"] {
