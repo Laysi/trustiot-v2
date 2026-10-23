@@ -11,13 +11,16 @@ url = "wss://gw.trustiot.example/mqtt"
 trust = ["/etc/ssl/certs/ca-certificates.crt"]
 
 [broker]
-# The broker's name in its certificate (inner mTLS); must differ from the host of cloud.url.
-name = "mqtt.trustiot.example"
-# Our CA: the only trust anchor of the inner mTLS.
+# Our root CA certificate(s), PEM: the only trust anchors of the inner mTLS. Roots only
+# (self-issued, self-signed CA certificates); an issuing CA or a leaf here is refused. The
+# broker's name is fixed (mqtt-broker.trustiot.internal); there is no name key.
 ca = "/etc/trustiot/broker-ca.pem"
+# Optional: where the root CRL is kept (one PEM "X509 CRL", signed by a root above). A file that
+# does not exist yet means no root CRL: the agent connects without checking revocation.
+crl = "/var/lib/trustiot-agent/root-crl.pem"
 
 [identity]
-# The gateway certificate chain (PEM, leaf first). Its CN is the gateway ID.
+# The gateway certificate chain (PEM, leaf first, then the issuing CA). Its CN is the gateway ID.
 certificate = "/var/lib/trustiot-agent/gateway.pem"
 # Production: the TPM key. device defaults to /dev/tpmrm0, handle to 0x81000100.
 # Development and tests only: key = { source = "file", path = "/path/to/key.pem" }

@@ -2,9 +2,10 @@
 //!
 //! It holds how the gateway reaches the cloud and who it is; the device configuration
 //! (`DesiredConfig`) arrives over MQTT later (Laysi/trustiot-v2#94) and is not in this file.
-//! Every security-relevant field (the URL, both trust lists, the broker name, the certificate
-//! and the key) must be given: there are no defaults for them. Unknown keys are errors, so a
-//! misspelled key is never silently ignored. The other fields have defaults and bounds.
+//! Every security-relevant field (the URL, both trust lists, the certificate and the key) must be
+//! given: there are no defaults for them. Unknown keys are errors, so a misspelled key is never
+//! silently ignored; that includes `broker.name`, which earlier versions had: the broker's name
+//! is now the fixed [`crate::tls::BROKER_NAME`]. The other fields have defaults and bounds.
 //!
 //! ```toml
 //! [cloud]
@@ -12,8 +13,8 @@
 //! trust = ["/etc/ssl/certs/ca-certificates.crt"]
 //!
 //! [broker]
-//! name = "mqtt.trustiot.example"
 //! ca = "/etc/trustiot/broker-ca.pem"
+//! crl = "/var/lib/trustiot-agent/root-crl.pem"
 //!
 //! [identity]
 //! certificate = "/var/lib/trustiot-agent/gateway.pem"
@@ -23,12 +24,12 @@
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use rustls_pki_types::ServerName;
 use serde::Deserialize;
 
 use crate::backoff::BackoffSettings;
 use crate::identity::{DEFAULT_TPM_DEVICE, DEFAULT_TPM_HANDLE, KeySource};
 use crate::link::DEFAULT_INFLIGHT_LIMIT;
+use crate::tls::BROKER_NAME;
 use crate::transport::CloudUrl;
 
 /// Where the agent reads its configuration unless told otherwise.
@@ -51,10 +52,10 @@ pub struct Config {
     pub url: CloudUrl,
     /// PEM files whose certificates the outer TLS trusts.
     pub outer_trust: Vec<PathBuf>,
-    /// The broker's name in its certificate, for the inner TLS.
-    pub broker_name: ServerName<'static>,
-    /// Our CA, the only trust anchor of the inner TLS.
+    /// Our root CA certificates, the only trust anchors of the inner TLS.
     pub broker_ca: PathBuf,
+    /// Where the root CRL is kept, if set; the file may not exist yet.
+    pub broker_crl: Option<PathBuf>,
     /// The gateway's certificate chain (PEM, leaf first).
     pub certificate: PathBuf,
     /// The gateway's private key.
@@ -118,8 +119,9 @@ struct RawCloud {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RawBroker {
-    name: String,
     ca: PathBuf,
+    #[serde(default)]
+    crl: Option<PathBuf>,
 }
 
 #[derive(Deserialize)]
@@ -223,31 +225,26 @@ impl Config {
             .into_iter()
             .map(|path| absolute("cloud.trust", path))
             .collect::<Result<Vec<_>, _>>()?;
-        let lower_broker_name = raw.broker.name.to_ascii_lowercase();
         // The outer TLS and the inner mTLS authenticate different servers, each against its own
         // trust anchors. One name for both would blur that line (Laysi/trustiot-v2#86 review).
-        if lower_broker_name.trim_end_matches('.') == url.host().trim_end_matches('.') {
+        if url
+            .host()
+            .trim_end_matches('.')
+            .eq_ignore_ascii_case(BROKER_NAME)
+        {
             return Err(invalid(
-                "broker.name",
-                "must differ from the host of cloud.url (the outer TLS and the inner mTLS name different servers)",
+                "cloud.url",
+                format!(
+                    "must not be the broker's inner name {BROKER_NAME} (the outer TLS and the inner mTLS name different servers)"
+                ),
             ));
         }
-        let broker_name = match ServerName::try_from(lower_broker_name) {
-            Ok(name @ ServerName::DnsName(_)) => name,
-            Ok(_) => {
-                return Err(invalid(
-                    "broker.name",
-                    "must be a DNS name, not an IP address",
-                ));
-            }
-            Err(_) => {
-                return Err(invalid(
-                    "broker.name",
-                    format!("{:?} is not a valid DNS name", raw.broker.name),
-                ));
-            }
-        };
         let broker_ca = absolute("broker.ca", raw.broker.ca)?;
+        let broker_crl = raw
+            .broker
+            .crl
+            .map(|path| absolute("broker.crl", path))
+            .transpose()?;
         let certificate = absolute("identity.certificate", raw.identity.certificate)?;
         let key = match raw.identity.key {
             RawKey::Tpm { device, handle } => {
@@ -308,8 +305,8 @@ impl Config {
         Ok(Self {
             url,
             outer_trust,
-            broker_name,
             broker_ca,
+            broker_crl,
             certificate,
             key,
             heartbeat_interval: Duration::from_secs(u64::from(connection.heartbeat_interval_s)),
@@ -332,7 +329,6 @@ url = "wss://gw.trustiot.example/mqtt"
 trust = ["/etc/ssl/certs/ca-certificates.crt"]
 
 [broker]
-name = "mqtt.trustiot.example"
 ca = "/etc/trustiot/broker-ca.pem"
 
 [identity]
@@ -358,6 +354,7 @@ key = { source = "tpm" }
         assert_eq!(config.heartbeat_interval, Duration::from_secs(60));
         assert_eq!(config.reconnect, BackoffSettings::default());
         assert_eq!(config.inflight_limit, 32);
+        assert_eq!(config.broker_crl, None, "no root CRL unless configured");
     }
 
     #[test]
@@ -365,6 +362,25 @@ key = { source = "tpm" }
         let example = include_str!("../agent.example.toml");
         let config = Config::parse(example).unwrap();
         assert!(matches!(config.key, KeySource::Tpm { .. }));
+        assert_eq!(
+            config.broker_crl,
+            Some(PathBuf::from("/var/lib/trustiot-agent/root-crl.pem"))
+        );
+    }
+
+    #[test]
+    fn the_broker_name_is_fixed_and_an_old_broker_name_key_is_refused() {
+        let error =
+            error_of(&MINIMAL.replace("[broker]", "[broker]\nname = \"mqtt.trustiot.example\""));
+        assert!(error.contains("unknown field `name`"), "{error}");
+        let error = error_of(&MINIMAL.replace(
+            "wss://gw.trustiot.example/mqtt",
+            "wss://MQTT-broker.trustiot.internal./mqtt",
+        ));
+        assert!(
+            error.contains("cloud.url: must not be the broker's inner name"),
+            "{error}"
+        );
     }
 
     #[test]
@@ -372,7 +388,6 @@ key = { source = "tpm" }
         for (key, line) in [
             ("url", "url = \"wss://gw.trustiot.example/mqtt\""),
             ("trust", "trust = [\"/etc/ssl/certs/ca-certificates.crt\"]"),
-            ("name", "name = \"mqtt.trustiot.example\""),
             ("ca", "ca = \"/etc/trustiot/broker-ca.pem\""),
             (
                 "certificate",
@@ -419,18 +434,12 @@ key = { source = "tpm" }
                 "[\"certs.pem\"]",
                 "cloud.trust: certs.pem must be an absolute path",
             ),
-            (
-                "\"mqtt.trustiot.example\"",
-                "\"192.0.2.1\"",
-                "broker.name: must be a DNS name",
-            ),
-            ("\"mqtt.trustiot.example\"", "\"not a name\"", "broker.name"),
-            (
-                "\"mqtt.trustiot.example\"",
-                "\"GW.trustiot.example\"",
-                "broker.name: must differ from the host of cloud.url",
-            ),
             ("\"/etc/trustiot/broker-ca.pem\"", "\"ca.pem\"", "broker.ca"),
+            (
+                "ca = \"/etc/trustiot/broker-ca.pem\"",
+                "ca = \"/etc/trustiot/broker-ca.pem\"\ncrl = \"root-crl.pem\"",
+                "broker.crl: root-crl.pem must be an absolute path",
+            ),
             (
                 "\"/var/lib/trustiot-agent/gateway.pem\"",
                 "\"gateway.pem\"",

@@ -11,7 +11,7 @@ use rustls_pki_types::UnixTime;
 use crate::config::Config;
 use crate::identity::{self, IdentityError, KeySource};
 use crate::link::LinkSettings;
-use crate::tls::{self, TlsError, Validity};
+use crate::tls::{self, BrokerTrust, RootCrl, TlsError, Validity};
 use crate::transport::WssConnector;
 
 /// This agent's release, from the crate version.
@@ -35,6 +35,9 @@ pub enum SetupError {
     /// The inner TLS trust.
     #[error("broker.ca: {0}")]
     InnerTls(TlsError),
+    /// The root CRL.
+    #[error("broker.crl: {0}")]
+    RootCrl(TlsError),
     /// The agent's own version string.
     #[error("agent version: {0}")]
     Version(#[from] IdError),
@@ -61,6 +64,8 @@ pub struct Setup {
     pub certificate_validity: Validity,
     /// Whether the key comes from a file (development and tests) instead of the TPM.
     pub file_key: bool,
+    /// The root CRL the inner TLS checks the broker's chain against.
+    pub root_crl: RootCrl,
 }
 
 impl Setup {
@@ -72,28 +77,26 @@ impl Setup {
     pub fn new(config: &Config) -> Result<Self, SetupError> {
         let identity = identity::load(&config.certificate, &config.key)?;
         let outer = tls::outer_config(&config.outer_trust).map_err(SetupError::OuterTls)?;
+        let trust = BrokerTrust::load(&config.broker_ca).map_err(SetupError::InnerTls)?;
+        let root_crl = RootCrl::load(config.broker_crl.as_deref(), &trust, clock_now())
+            .map_err(SetupError::RootCrl)?;
         let inner =
-            tls::inner_config(&config.broker_ca, &identity).map_err(SetupError::InnerTls)?;
-        let certificate_validity =
-            tls::check_client_certificate(&config.broker_ca, &identity, clock_now())
-                .map_err(SetupError::InnerTls)?;
+            tls::inner_config(&trust, &root_crl, &identity).map_err(SetupError::InnerTls)?;
+        let certificate_validity = tls::check_client_certificate(&trust, &identity, clock_now())
+            .map_err(SetupError::InnerTls)?;
         let mut link = LinkSettings::new(identity.gateway.clone(), agent_version()?);
         link.inflight_limit = config.inflight_limit;
         link.reconnect = config.reconnect;
         Ok(Self {
             gateway: identity.gateway,
-            connector: WssConnector::new(
-                config.url.clone(),
-                outer,
-                inner,
-                config.broker_name.clone(),
-            ),
+            connector: WssConnector::new(config.url.clone(), outer, inner),
             link,
             heartbeat_interval: config.heartbeat_interval,
             certificate_not_before: identity.not_before,
             certificate_not_after: identity.not_after,
             certificate_validity,
             file_key: matches!(config.key, KeySource::File { .. }),
+            root_crl,
         })
     }
 }

@@ -320,3 +320,39 @@ async fn an_expired_certificate_only_warns_because_the_clock_may_be_wrong() {
         "{stderr}"
     );
 }
+
+#[tokio::test]
+async fn check_reports_the_root_crl_and_refuses_one_the_root_did_not_sign() {
+    let pki = TestPki::new();
+    let closed = ClosedPort::new();
+    let files = Files::new(&pki, closed.port());
+    // Configured, not received yet.
+    let output = check(&files).await;
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "{stderr}");
+    assert!(stderr.contains("no root CRL yet"), "{stderr}");
+
+    // Received and expired: used anyway, with a warning.
+    files.write("root-crl.pem", &pki.broker_ca.crl(3, &[], (2021, 1, 1)));
+    let output = check(&files).await;
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "{stderr}");
+    assert!(
+        stderr.contains("root CRL loaded")
+            && stderr.contains("number=\"3\"")
+            && stderr.contains("2021-01-01T00:00:00Z")
+            && stderr.contains("WARN"),
+        "{stderr}"
+    );
+
+    // Signed by another key under our root's name.
+    let forged = Authority::new("testkit broker CA").crl(4, &[], (2099, 1, 1));
+    files.write("root-crl.pem", &forged);
+    let output = check(&files).await;
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(output.status.code(), Some(1), "{stderr}");
+    assert!(
+        stderr.contains("refusing to start") && stderr.contains("broker.crl"),
+        "{stderr}"
+    );
+}

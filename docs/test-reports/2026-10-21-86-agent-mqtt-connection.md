@@ -6,7 +6,7 @@
 
 - 機器：一台 x86_64 Linux 工作站，以 podman 執行容器，沒有 arm64 模擬器；`systemd-analyze` 用這台機器上的（CI 用 runner 的）。
 - 工具：rustc 1.99.0（`rust-toolchain.toml`）；zig 0.16.0、cargo-zigbuild 0.23.4（`.prototools`）。
-- 程式：分支 `feat/86-agent-mqtt-connection`，以 main 的 `cc185b9` 為基礎；2026-10-22 的審查修正以 `630021f`（同一張 issue 的 TPM 部分）為基礎；2026-10-23 合併 main 的 `50fe899`（Modbus 的 RTU over TCP 與輪詢、Mosquitto chart 等）之後重跑全部 agent 測試。rustls 0.23.46 加 ring 0.17.14、tokio 1.53.2、tokio-tungstenite 0.30.0；MQTT 5 編解碼是 agent 自己的（`edge/agent/src/mqtt/`）。
+- 程式：分支 `feat/86-agent-mqtt-connection`（最初以 main 的 `cc185b9` 為基礎）上的 `630021f`（同一張 issue 的 TPM 部分）、`6829bfa`（連線與 2026-10-22、23 的審查修正）、`8df3fe2`（合併 main 的 `50fe899`：Modbus 的 RTU over TCP 與輪詢、Mosquitto chart、broker 伺服器憑證的信任決定等），以及在 `8df3fe2` 之上的內層 TLS 信任（2026-10-23，「內層 TLS 對 broker 的信任」一節）；最後一次在這之後重跑全部 agent 測試。rustls 0.23.46 加 ring 0.17.14、tokio 1.53.2、tokio-tungstenite 0.30.0；MQTT 5 編解碼是 agent 自己的（`edge/agent/src/mqtt/`）。
 - 金鑰：這些測試都用 `identity.key` 的 `file` 來源。TPM 的簽章金鑰（`src/tpm.rs`）是同一張 issue 的另一部分，本報告不涵蓋。
 - broker：Mosquitto 2.1.2（`docker.io/library/eclipse-mosquitto:2.1.2-alpine@sha256:38c0da4f2ef84284d47b3b3eeea1cb3bdeabe81ee10caf0cd5c5ff61ee3ea408`），設定見 `crates/testkit/src/mqtt/mosquitto.rs`：mTLS listener（`require_certificate`、`use_identity_as_username`、TLS 1.3、`ciphers_tls1.3` 把 ChaCha20 排第一）、dynamic security 與協定的閘道器角色。入口與 mqtt-bridge 由測試行程內的 WebSocket 前端（`testkit::mqtt::front`）替代。
 - 測試 CA、所有憑證與金鑰都在測試時以 rcgen 產生，沒有進 repo。
@@ -16,9 +16,9 @@
 全部在 repo 根目錄執行。
 
 ```sh
-CI=true cargo test --locked -p agent               # 259 個測試，含 Mosquitto 與 swtpm 容器
+CI=true cargo test --locked -p agent               # 272 個測試，含 Mosquitto 與 swtpm 容器
 cargo test --locked -p agent --test broker         # 驗收 1、2：對 Mosquitto
-cargo test --locked -p agent --test transport      # 整條連線在行程內：協商內容、resumption、重連、拒絕
+cargo test --locked -p agent --test transport      # 整條連線在行程內：協商內容、resumption、重連、拒絕、內層的信任
 cargo test --locked -p agent --test link           # 驗收 3 與 MQTT 行為（停住的時鐘）
 cargo test --locked -p agent --test binary         # 執行檔：--check、sd_notify、SIGTERM
 cargo test --locked -p agent --test systemd_unit   # 驗收 4
@@ -44,7 +44,7 @@ bun test scripts/ci/changes.test.ts scripts/ci/workflow-conditions.test.ts
 
 ## 結果
 
-`CI=true cargo test --locked -p agent`：259 個測試全部通過（2026-10-23，合併 main 的 `50fe899` 之後，含 TPM 部分、Modbus 與輪詢的測試；[cargo-test-agent.txt](data/2026-10-21-86-agent-mqtt-connection/cargo-test-agent.txt)）。以下依驗收條件整理。
+`CI=true cargo test --locked -p agent`：272 個測試全部通過（2026-10-23，在 `8df3fe2` 之上加上內層 TLS 的信任之後，含 TPM 部分、Modbus 與輪詢的測試；[cargo-test-agent.txt](data/2026-10-21-86-agent-mqtt-connection/cargo-test-agent.txt)）。以下依驗收條件整理。
 
 ### 1. WebSocket 內的 mTLS 連到 broker（驗收 1）
 
@@ -114,7 +114,7 @@ p2 在 CI 的 clippy 步驟（`cargo clippy --workspace --all-targets -- -D warn
 
 ### 7. 發現：Mosquitto 依自己的順序選套件
 
-agent 的內層 TLS 依序提供 ChaCha20-Poly1305、AES-256-GCM、AES-128-GCM。Mosquitto 的 listener 沒設 `ciphers_tls1.3` 時協商出 `TLS_AES_256_GCM_SHA384`；設成 `TLS_CHACHA20_POLY1305_SHA256:TLS_AES_256_GCM_SHA384:TLS_AES_128_GCM_SHA256` 後協商出 ChaCha20（[mosquitto-cipher-order.txt](data/2026-10-21-86-agent-mqtt-connection/mosquitto-cipher-order.txt)）。所以 Mosquitto 依自己的順序選，不是決策 6 原本寫的依用戶端的順序；2026-10-13 的測試用戶端只提供 ChaCha20，看不出這點。閘道器的 CPU 沒有 AES 指令，broker 給閘道器的 listener 要設這一行；已更正決策 6 與 2026-10-13 的可行性文件，testkit 的 Mosquitto 也加上這一行，`tests/broker.rs` 檢查日誌裡的套件。2026-10-23 併入 main 的 chart（Laysi/trustiot-v2#84）給閘道器的 listener 還沒有這一行。
+agent 的內層 TLS 依序提供 ChaCha20-Poly1305、AES-256-GCM、AES-128-GCM。Mosquitto 的 listener 沒設 `ciphers_tls1.3` 時協商出 `TLS_AES_256_GCM_SHA384`；設成 `TLS_CHACHA20_POLY1305_SHA256:TLS_AES_256_GCM_SHA384:TLS_AES_128_GCM_SHA256` 後協商出 ChaCha20（[mosquitto-cipher-order.txt](data/2026-10-21-86-agent-mqtt-connection/mosquitto-cipher-order.txt)）。所以 Mosquitto 依自己的順序選，不是決策 6 原本寫的依用戶端的順序；2026-10-13 的測試用戶端只提供 ChaCha20，看不出這點。閘道器的 CPU 沒有 AES 指令，broker 給閘道器的 listener 要設這一行；已更正決策 6 與 2026-10-13 的可行性文件，testkit 的 Mosquitto 也加上這一行，`tests/broker.rs` 檢查日誌裡的套件。2026-10-23 併入 main 的 chart（Laysi/trustiot-v2#84）給閘道器的 listener 還沒有這一行（Laysi/trustiot-v2#564）。
 
 ### 8. 發現：Mosquitto 只在 DISCONNECT 0x04 或沒有 DISCONNECT 時發布 will
 
@@ -132,8 +132,8 @@ MQTT 5 規格寫的是：除了 DISCONNECT 0x00 之外，連線怎麼結束 brok
 ### 其他檢查
 
 - `cargo fmt --all --check`、`cargo clippy --workspace --all-targets --locked -- -D warnings`：通過。
-- `cargo deny --locked check`：advisories、bans、licenses、sources 都 ok。新增的 crate 只有 `tokio-tungstenite` 0.30.0（MIT）與 `tungstenite` 0.30.0（MIT OR Apache-2.0）；duplicate 的警告都是 main 原本就有的。2026-10-22 起 agent 直接使用 `socket2` 0.6.5（MIT OR Apache-2.0，原本就經由 tokio 在 `Cargo.lock` 裡），開 `all` feature 以設定 TCP keepalive 的間隔與次數。
-- `bun scripts/ci/check-workflows.ts`、`bun scripts/ci/lint-workflows.ts`、`bun scripts/ci/check-secret-handling.ts`：沒有違規。`bun test scripts/ci/changes.test.ts scripts/ci/workflow-conditions.test.ts`：309 個通過。
+- `cargo deny --locked check`：advisories、bans、licenses、sources 都 ok。新增的 crate 只有 `tokio-tungstenite` 0.30.0（MIT）與 `tungstenite` 0.30.0（MIT OR Apache-2.0）；duplicate 的警告都是 main 原本就有的。2026-10-22 起 agent 直接使用 `socket2` 0.6.5（MIT OR Apache-2.0，原本就經由 tokio 在 `Cargo.lock` 裡），開 `all` feature 以設定 TCP keepalive 的間隔與次數。2026-10-23 的內層信任讓 agent 開 `x509-parser` 的 `verify` feature（以 ring 驗章，services/certs 原本就開），測試另用 workspace 的 `base64`（testkit 原本就用）；`Cargo.lock` 沒有新的 crate。
+- `bun scripts/ci/check-workflows.ts`、`bun scripts/ci/lint-workflows.ts`、`bun scripts/ci/check-secret-handling.ts`：沒有違規。`bun test scripts/ci/changes.test.ts scripts/ci/workflow-conditions.test.ts`：340 個通過（2026-10-23）。
 - 每次容器測試後確認沒有留下 Mosquitto 容器，podman 的 volume 數不變。
 
 ## 審查後的修正（2026-10-22）
@@ -142,7 +142,7 @@ MQTT 5 規格寫的是：除了 DISCONNECT 0x00 之外，連線怎麼結束 brok
 
 | 項目 | 修正 | 測試 | 把修正改回去時 |
 | --- | --- | --- | --- |
-| 兩層的信任互相分開 | 原本就分開，補上測試；設定另外拒絕 `broker.name` 等於 `cloud.url` 的主機 | `tests/transport.rs`：broker 憑證由外層的 CA 簽發、前端憑證由 broker CA 簽發、外層憑證簽給別的主機、broker 只有 TLS 1.2，都拒絕；`config.rs` 的 `values_that_break_a_rule_are_refused_with_their_key` | 讓外層也信任 `broker.ca`、內層也信任 `cloud.trust`：前兩個測試失敗（握手成功，等到 CONNACK 逾時）；拿掉名稱檢查：設定測試失敗 |
+| 兩層的信任互相分開 | 原本就分開，補上測試；設定另外拒絕 `broker.name` 等於 `cloud.url` 的主機（2026-10-23 起名稱固定、沒有 `broker.name`，改為拒絕 `cloud.url` 的主機等於固定名稱，見「內層 TLS 對 broker 的信任」） | `tests/transport.rs`：broker 憑證由外層的 CA 簽發、前端憑證由 broker CA 簽發、外層憑證簽給別的主機、broker 只有 TLS 1.2，都拒絕；`config.rs` 的 `values_that_break_a_rule_are_refused_with_their_key` | 讓外層也信任 `broker.ca`、內層也信任 `cloud.trust`：前兩個測試失敗（握手成功，等到 CONNACK 逾時）；拿掉名稱檢查：設定測試失敗 |
 | 退避只在連線維持 60 秒後歸零 | 規則不變，原本沒有測試；退避的亂數來源改成可注入（`LinkSettings::jitter`） | `tests/link.rs` 的 `only_a_connection_that_stayed_up_resets_the_backoff`：固定抽最長延遲，7 次連上就被 DISCONNECT 的連線，間隔是 1、2、4、8、16、32 秒；維持 61 秒的連線斷掉後回到 1 秒 | 改成「連上過就歸零」：第二個間隔是 1 秒而不是 2 秒；改成「從不歸零」：穩定連線之後等了 60 秒 |
 | Server Keep Alive 0 | 0 時保留自己的 60 秒 keepalive，只採用非 0 的值；TCP 另開 keepalive（60 秒後每 15 秒、4 次，`socket2`） | `a_server_keep_alive_of_zero_keeps_the_agents_own_keepalive`：CONNACK 帶 0、broker 不回應時，60 秒送 PINGREQ、90 秒斷線；`transport.rs` 的單元測試讀回 socket 的 keepalive 設定 | 照收 0：等不到 PINGREQ |
 | 等 CONNACK 時收到 SIGTERM | 在 5 秒內繼續等 CONNACK，來了就照一般的停止（`online`、`offline`／`shutdown`、PUBACK、DISCONNECT 0x00）；沒來就關閉 | `a_stop_while_waiting_for_connack_still_ends_with_offline_and_a_normal_disconnect`、`a_stop_without_any_connack_gives_up_after_the_stop_deadline` | 回到直接返回：串流被丟掉，broker 會發布 will |
@@ -178,6 +178,23 @@ MQTT 5 規格寫的是：除了 DISCONNECT 0x00 之外，連線怎麼結束 brok
 
 `the_inflight_limit_bounds_unacknowledged_publishes` 隨之調整：第二段（回一個 PUBACK 剛好再送一則）原本再等一整個 keepalive 的 PINGREQ，那時第一批 publish 已等了兩個 keepalive，會先碰到 PUBACK 期限；改成確認之後 30 秒內沒有其他封包。
 
+## 內層 TLS 對 broker 的信任（2026-10-23）
+
+Laysi/trustiot-v2#556 決定閘道器如何驗 broker 的伺服器憑證（[services/certs](../../services/certs/README.md)「閘道器對 broker 伺服器憑證的信任」與「根 CRL」，交接在 Laysi/trustiot-v2#86 的 2026-10-22 留言）。這次實作其中的信任錨、憑證鏈、固定名稱、EKU、撤銷檢查與根 CRL 的載入；接受編號更大的新根 CRL、定期取得、換上新 CRL 時清掉 resumption 快取、心跳回報根 CRL 是 Laysi/trustiot-v2#563（等 Laysi/trustiot-v2#560 的發佈管道）。協定不變（TLS 1.3、ChaCha20 排第一、resumption）。測試的 PKI 照正式環境：根 CA（`broker.ca`）→ 簽發 CA → broker 與閘道器的憑證，broker 在自己的憑證後面送出簽發 CA（`testkit::mqtt` 的 `Authority::issuing`、`Authority::crl`、`mtls_server_with_chain`）。
+
+| 規則 | 實作 | 測試 |
+| --- | --- | --- |
+| 信任錨只有根 CA | `BrokerTrust::load`：`broker.ca` 的每張憑證都要主體等於簽發者、basicConstraints 的 cA、以自己的金鑰驗得過簽章，否則拒絕啟動並指出第幾張；可以有多張根 | `tls::tests::the_inner_trust_anchors_are_root_ca_certificates_only`：一張根、兩張根（含 P-384，正式根 CA 的演算法）可以；簽發 CA（單獨或排在根後面）、leaf、自簽但不是 CA、主體等於簽發者但由別的金鑰簽的，都拒絕 |
+| 憑證鏈經 broker 送出的簽發 CA 接到根 | rustls 的 `WebPkiServerVerifier`，信任錨只有上面的根 | `transport`：`the_broker_s_chain_through_the_issuing_ca_it_sends_is_accepted`（閘道器也送出自己的憑證與簽發 CA，broker 看到兩張）；`a_broker_that_does_not_send_its_issuing_ca_is_refused`（`UnknownIssuer`） |
+| 固定名稱，驗證不能關 | `tls::BROKER_NAME` = `mqtt-broker.trustiot.internal`（Laysi/trustiot-v2#557），SNI 與驗證都用它；拿掉 `broker.name`，舊設定檔因未知的鍵拒絕啟動；`cloud.url` 的主機不可以是這個名稱 | `the_broker_s_chain_…` 確認 broker 收到的 SNI；`a_broker_certificate_for_another_name_is_refused`；`config::tests::the_broker_name_is_fixed_and_an_old_broker_name_key_is_refused`；`tls::tests::the_broker_name_is_one_fixed_dns_name`（也確認與 testkit 的 `BROKER_NAME` 相同） |
+| EKU serverAuth | webpki 的檢查 | `a_certificate_without_server_auth_is_refused_as_the_broker_s`：簽給固定名稱、只有 clientAuth 的憑證被拒（`does not allow extended key usage for server authentication`）。沒有 EKU 的憑證 webpki 不檢查用途，只記錄在 README，由 CA 不簽這種憑證保證 |
+| 撤銷：以根 CRL 檢查鏈上的簽發 CA | `with_crls(根 CRL)` 加 `allow_unknown_revocation_status()`，不用 `only_check_end_entity_revocation` 與 `enforce_revocation_expiration`；沒有根 CRL 時不檢查 | `a_root_crl_that_revokes_the_issuing_ca_refuses_the_broker`（`Revoked`）；`a_root_crl_that_does_not_list_the_issuing_ca_lets_the_agent_connect`（broker 自己的憑證狀態未知，照樣通過）；`an_expired_root_crl_still_counts_and_still_lets_the_agent_connect`（過期的根 CRL 不擋連線，但列在上面的簽發 CA 仍然被拒）；`the_broker_s_chain_…`（設定了 `broker.crl` 但檔案還不存在：照常連線） |
+| 根 CRL 只在啟動時載入，要由信任錨簽章 | `RootCrl::load`：檔案不存在是「還沒有」；存在時要是一個 PEM `X509 CRL`、最多 64 KiB、沒有多餘的位元組，由 `broker.ca` 中名稱相符的根以 x509-parser 驗得過簽章（根有 key usage 時要有 cRLSign），webpki 也要能解析，否則拒絕啟動。啟動時記下 CRL 編號、nextUpdate，過期另記一筆警告 | `tls::tests::a_root_crl_is_loaded_only_when_a_trust_anchor_signed_it`：沒設定、還沒有、編號與 nextUpdate、過期的旗標；同名但別的金鑰、別的根、簽發 CA 簽的、兩個 PEM 區塊、憑證或文字或空檔、壞掉的 base64、改過的 DER、多餘的位元組、超過 64 KiB、路徑是目錄，都拒絕。`tls::tests::a_root_crl_needs_a_root_that_may_sign_crls`（P-384 的根；沒有 cRLSign 時拒絕）。`a_root_crl_the_root_did_not_sign_stops_the_agent_from_starting`；`binary` 的 `check_reports_the_root_crl_and_refuses_one_the_root_did_not_sign`（執行檔的日誌：還沒有、載入的編號與 nextUpdate、過期的 WARN；偽造的根 CRL 讓 `--check` 以 1 結束並指出 `broker.crl`） |
+
+把每一項檢查或 verifier 的設定改掉，對應的測試都失敗（13 個變異，全部 exit code 101，[review-mutations.txt](data/2026-10-21-86-agent-mqtt-connection/review-mutations.txt) 中以 `inner trust,` 開頭的各段）：信任錨的三項檢查各拿掉一項；拿掉 `with_crls`、拿掉 `allow_unknown_revocation_status`、加上 `only_check_end_entity_revocation`、加上 `enforce_revocation_expiration`；載入時不驗根 CRL 的簽章、完全不檢查簽發者、接受沒有 cRLSign 的根；檔案不存在時拒絕啟動；SNI 與驗證改用別的名稱；設定不再拒絕 `cloud.url` 的主機等於固定名稱。拿掉 `with_crls` 或加上 `only_check_end_entity_revocation` 時，agent 與替身 broker 完成握手，測試等到 agent 的 CONNACK 逾時（30 秒）才失敗。
+
+Mosquitto 容器的測試（`tests/broker.rs`）改用簽給固定名稱的 broker 憑證，照樣通過；testkit 的 Mosquitto 與 chart 給閘道器的 listener 的差異（`ciphers_tls1.3`、`set_tcp_nodelay`）是 Laysi/trustiot-v2#564。
+
 ## 結論
 
 | 驗收條件 | 結果 |
@@ -187,6 +204,7 @@ MQTT 5 規格寫的是：除了 DISCONNECT 0x00 之外，連線怎麼結束 brok
 | 3. 每條連線的記憶體有上限（in-flight 上限可設定，測試或量測紀錄） | 通過（第 3 節，測試）。在閘道器上量測實際 RSS：待測，屬於量測，依驗證分級延後 |
 | 4. systemd unit 以非 root 執行（檢查 unit 檔） | 通過（第 4 節）。在 lab 的閘道器上以 systemd 實際執行（沙箱、watchdog、`/dev/tpmrm0` 權限）：待測，需要映像安裝與 TPM 金鑰，見下方 |
 | 5. protocol 型別變更使 edge/agent 編譯失敗（重跑 run-mutations.sh 加一個 protocol 變更） | 通過（第 5 節）。2026-10-13 報告中 protocol 部分的「待測」由本報告補上 |
+| Laysi/trustiot-v2#556 交接的內層 TLS 信任（2026-10-23） | 通過（「內層 TLS 對 broker 的信任」一節）。取用與換上新的根 CRL、心跳回報：Laysi/trustiot-v2#563 |
 
 待測與原因：
 

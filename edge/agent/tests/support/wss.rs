@@ -17,7 +17,7 @@ use agent::setup::Setup;
 use rustls::{CipherSuite, HandshakeKind, ProtocolVersion};
 use testkit::clock::bounded;
 use testkit::mqtt::front::{FrontOptions, WsFront};
-use testkit::mqtt::{BROKER_NAME, FRONT_HOST, ScratchDir, TestPki};
+use testkit::mqtt::{Authority, FRONT_HOST, ScratchDir, TestPki};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
@@ -27,7 +27,8 @@ use tokio_util::sync::CancellationToken;
 
 use super::{FakeBroker, GATEWAY, gateway};
 
-/// The files of one gateway: the configuration and what it names.
+/// The files of one gateway: the configuration and what it names. The configuration names a
+/// root CRL `root-crl.pem`, which does not exist until a test writes it.
 pub struct Files {
     dir: ScratchDir,
 }
@@ -41,8 +42,16 @@ impl Files {
         files.write("broker-ca.pem", &pki.broker_ca.pem);
         files.write("gateway.pem", &leaf.cert_pem);
         files.write("gateway.key", &leaf.key_pem);
-        files.write_config(front_port, "public-ca.pem", BROKER_NAME);
+        files.write_config(front_port, "public-ca.pem");
         files
+    }
+
+    /// Gives the gateway a certificate from `issuing` with `issuing` after it in the
+    /// certificate file, as production gateways have (services/certs/README.md).
+    pub fn use_issuing_ca(&self, issuing: &Authority) {
+        let leaf = issuing.client(GATEWAY);
+        self.write("gateway.pem", &format!("{}{}", leaf.cert_pem, issuing.pem));
+        self.write("gateway.key", &leaf.key_pem);
     }
 
     pub fn write(&self, name: &str, contents: &str) {
@@ -53,7 +62,7 @@ impl Files {
         self.dir.path().join(name).to_str().unwrap().to_owned()
     }
 
-    pub fn write_config(&self, front_port: u16, outer_trust: &str, broker_name: &str) {
+    pub fn write_config(&self, front_port: u16, outer_trust: &str) {
         let config = format!(
             r#"
 [cloud]
@@ -61,8 +70,8 @@ url = "wss://{FRONT_HOST}:{front_port}/mqtt"
 trust = [{trust:?}]
 
 [broker]
-name = "{broker_name}"
 ca = {ca:?}
+crl = {crl:?}
 
 [identity]
 certificate = {certificate:?}
@@ -75,10 +84,18 @@ reconnect_cap_ms = 1000
 "#,
             trust = self.path(outer_trust),
             ca = self.path("broker-ca.pem"),
+            crl = self.path("root-crl.pem"),
             certificate = self.path("gateway.pem"),
             key = self.path("gateway.key"),
         );
         self.write("agent.toml", &config);
+    }
+
+    /// The agent's setup from the configuration, as the binary makes it.
+    pub fn setup(&self) -> Result<Setup, String> {
+        let config = Config::load(std::path::Path::new(&self.path("agent.toml")))
+            .map_err(|error| error.to_string())?;
+        Setup::new(&config).map_err(|error| error.to_string())
     }
 
     pub fn gateway_cert(&self) -> Vec<u8> {
@@ -105,8 +122,7 @@ impl Agent {
 
     /// The agent as the binary sets it up, subscribed to `subscriptions`.
     pub fn start_with(files: &Files, subscriptions: Subscriptions) -> Self {
-        let config = Config::load(std::path::Path::new(&files.path("agent.toml"))).unwrap();
-        let mut setup = Setup::new(&config).unwrap();
+        let mut setup = files.setup().unwrap();
         setup.link.subscriptions = subscriptions;
         assert_eq!(
             setup.gateway,

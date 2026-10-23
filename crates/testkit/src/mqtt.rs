@@ -5,7 +5,8 @@
 //!
 //! - [`TestPki`]: two CAs made at test time, never written to the repository: a "public" CA for
 //!   the front's certificate (the outer TLS) and our broker CA, which signs the broker's and the
-//!   gateways' certificates (the inner mTLS).
+//!   gateways' certificates (the inner mTLS). [`Authority::issuing`] adds an issuing CA under a
+//!   root and [`Authority::crl`] a CRL, for the inner TLS's chain and root CRL checks.
 //! - [`front::WsFront`]: outer TLS, WebSocket on `/mqtt` with subprotocol `mqtt`, and a byte
 //!   relay to the broker; it records what each connection negotiated and can be stopped and
 //!   started again on the same port.
@@ -14,14 +15,16 @@
 //!
 //! How to use them is in the crate README, section 「MQTT 測試環境」.
 
+use std::hash::BuildHasher;
 use std::os::fd::AsFd;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 
 use rcgen::{
-    BasicConstraints, CertificateParams, DistinguishedName, DnType, ExtendedKeyUsagePurpose, IsCa,
-    Issuer, KeyPair, KeyUsagePurpose,
+    BasicConstraints, CertificateParams, CertificateRevocationListParams, DistinguishedName,
+    DnType, ExtendedKeyUsagePurpose, IsCa, Issuer, KeyIdMethod, KeyPair, KeyUsagePurpose,
+    RevokedCertParams, SerialNumber,
 };
 use rustls_pki_types::pem::PemObject;
 use rustls_pki_types::{CertificateDer, PrivateKeyDer};
@@ -32,13 +35,16 @@ pub mod mosquitto;
 /// The outer TLS host name the front's certificate is for; it resolves to the loopback
 /// interface.
 pub const FRONT_HOST: &str = "localhost";
-/// The broker's name in its certificate; the inner TLS checks it, nothing resolves it.
-pub const BROKER_NAME: &str = "mqtt.trustiot.test";
+/// The broker's name in its certificate; the inner TLS checks it, nothing resolves it. The
+/// agent's fixed name (`agent::tls::BROKER_NAME`, Laysi/trustiot-v2#557).
+pub const BROKER_NAME: &str = "mqtt-broker.trustiot.internal";
 
-/// A CA made for one test.
+/// A CA made for one test: a root ([`Authority::new`]) or an issuing CA under one
+/// ([`Authority::issuing`]).
 pub struct Authority {
     /// The CA certificate in PEM.
     pub pem: String,
+    serial: u64,
     issuer: Issuer<'static, KeyPair>,
 }
 
@@ -72,16 +78,94 @@ impl Authority {
     #[must_use]
     pub fn new(name: &str) -> Self {
         let key = KeyPair::generate().expect("CA key");
-        let mut params = CertificateParams::new(Vec::<String>::new()).expect("CA params");
-        params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
-        params.key_usages = vec![KeyUsagePurpose::KeyCertSign, KeyUsagePurpose::CrlSign];
-        params.distinguished_name = DistinguishedName::new();
-        params.distinguished_name.push(DnType::CommonName, name);
+        let (params, serial) = Self::ca_params(name, BasicConstraints::Unconstrained);
         let pem = params.self_signed(&key).expect("CA certificate").pem();
         Self {
             pem,
+            serial,
             issuer: Issuer::new(params, key),
         }
+    }
+
+    /// An issuing CA named `name` under this CA (path length 0, keyCertSign and cRLSign), as the
+    /// root CA signs the issuing CA that signs the broker's and the gateways' certificates.
+    ///
+    /// # Panics
+    ///
+    /// When key or certificate generation fails.
+    #[must_use]
+    pub fn issuing(&self, name: &str) -> Self {
+        let key = KeyPair::generate().expect("issuing CA key");
+        let (params, serial) = Self::ca_params(name, BasicConstraints::Constrained(0));
+        let pem = params
+            .signed_by(&key, &self.issuer)
+            .expect("issuing CA certificate")
+            .pem();
+        Self {
+            pem,
+            serial,
+            issuer: Issuer::new(params, key),
+        }
+    }
+
+    fn ca_params(name: &str, constraints: BasicConstraints) -> (CertificateParams, u64) {
+        let mut params = CertificateParams::new(Vec::<String>::new()).expect("CA params");
+        params.is_ca = IsCa::Ca(constraints);
+        params.key_usages = vec![KeyUsagePurpose::KeyCertSign, KeyUsagePurpose::CrlSign];
+        params.distinguished_name = DistinguishedName::new();
+        params.distinguished_name.push(DnType::CommonName, name);
+        // A known serial, so that a CRL can list this CA. Random per CA, like a real CA's.
+        let serial = std::hash::RandomState::new().hash_one(name) >> 1;
+        params.serial_number = Some(SerialNumber::from(serial));
+        (params, serial)
+    }
+
+    /// A certificate for `names` (DNS names or IP addresses) with exactly the extended key
+    /// usages `usages` (none: no EKU extension), for checking which certificates a TLS client
+    /// accepts as a server's.
+    ///
+    /// # Panics
+    ///
+    /// When key or certificate generation fails.
+    #[must_use]
+    pub fn leaf(&self, names: &[&str], usages: &[ExtendedKeyUsagePurpose]) -> Leaf {
+        let names: Vec<String> = names.iter().map(|name| (*name).to_owned()).collect();
+        let mut params = CertificateParams::new(names).expect("leaf params");
+        params.extended_key_usages = usages.to_vec();
+        self.sign(params)
+    }
+
+    /// A CRL signed by this CA in PEM, with the CRL number `number`, revoking the CAs in
+    /// `revoked` (which this CA signed), issued 2020-01-01 and with the nextUpdate
+    /// `next_update` (year, month, day; a past date makes an expired CRL).
+    ///
+    /// # Panics
+    ///
+    /// When rcgen refuses the parameters, for example a nextUpdate before 2020-01-02.
+    #[must_use]
+    pub fn crl(&self, number: u64, revoked: &[&Authority], next_update: (i32, u8, u8)) -> String {
+        let this_update = rcgen::date_time_ymd(2020, 1, 1);
+        let params = CertificateRevocationListParams {
+            this_update,
+            next_update: rcgen::date_time_ymd(next_update.0, next_update.1, next_update.2),
+            crl_number: SerialNumber::from(number),
+            issuing_distribution_point: None,
+            revoked_certs: revoked
+                .iter()
+                .map(|authority| RevokedCertParams {
+                    serial_number: SerialNumber::from(authority.serial),
+                    revocation_time: this_update,
+                    reason_code: None,
+                    invalidity_date: None,
+                })
+                .collect(),
+            key_identifier_method: KeyIdMethod::Sha256,
+        };
+        params
+            .signed_by(&self.issuer)
+            .expect("CRL")
+            .pem()
+            .expect("CRL PEM")
     }
 
     /// A server certificate for `names` (DNS names or IP addresses), for TLS servers.
@@ -263,6 +347,26 @@ pub fn mtls_server(leaf: &Leaf, client_ca: &Authority) -> Arc<rustls::ServerConf
     mtls_server_with_versions(leaf, client_ca, &[&rustls::version::TLS13])
 }
 
+/// [`mtls_server`] that sends `chain` (the issuing CAs, leaf side first) after the leaf, as the
+/// broker sends its issuing CA.
+///
+/// # Panics
+///
+/// When rustls refuses the settings or the certificates.
+#[must_use]
+pub fn mtls_server_with_chain(
+    leaf: &Leaf,
+    chain: &[&Authority],
+    client_ca: &Authority,
+) -> Arc<rustls::ServerConfig> {
+    let certificates = std::iter::once(leaf.cert_der())
+        .chain(chain.iter().map(|authority| {
+            CertificateDer::from_pem_slice(authority.pem.as_bytes()).expect("CA PEM")
+        }))
+        .collect();
+    mtls_server_config(certificates, leaf, client_ca, &[&rustls::version::TLS13])
+}
+
 /// [`mtls_server`] with the given protocol versions (for example only TLS 1.2, to see a client
 /// refuse it).
 ///
@@ -271,6 +375,15 @@ pub fn mtls_server(leaf: &Leaf, client_ca: &Authority) -> Arc<rustls::ServerConf
 /// When rustls refuses the settings or the certificates.
 #[must_use]
 pub fn mtls_server_with_versions(
+    leaf: &Leaf,
+    client_ca: &Authority,
+    versions: &[&'static rustls::SupportedProtocolVersion],
+) -> Arc<rustls::ServerConfig> {
+    mtls_server_config(vec![leaf.cert_der()], leaf, client_ca, versions)
+}
+
+fn mtls_server_config(
+    certificates: Vec<CertificateDer<'static>>,
     leaf: &Leaf,
     client_ca: &Authority,
     versions: &[&'static rustls::SupportedProtocolVersion],
@@ -290,7 +403,7 @@ pub fn mtls_server_with_versions(
         .with_protocol_versions(versions)
         .expect("protocol versions")
         .with_client_cert_verifier(verifier)
-        .with_single_cert(vec![leaf.cert_der()], leaf.key_der())
+        .with_single_cert(certificates, leaf.key_der())
         .expect("server certificate");
     Arc::new(config)
 }

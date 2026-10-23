@@ -1127,3 +1127,119 @@ $ cargo test -p agent --test binary connected_the_agent_subscribes_to_nothing_re
 failed: connected_the_agent_subscribes_to_nothing_reports_its_session_and_stops_on_sigterm at edge/agent/tests/binary.rs:238:18
 first assertion: expected the first heartbeat right after online, got Some(Subscribe { id: 2, filters: [("trustiot/v1/gw/gw-test-1/down/telemetry-ack", 1), ("trustiot/v1/gw/gw-test-1/down/config",  [...]
 exit code: 101
+
+## inner trust, anchor: a certificate not issued by itself passes as a root
+mutation in edge/agent/src/tls.rs
+-     if certificate.subject().as_raw() != certificate.issuer().as_raw() {
++     if false {
+$ cargo test -p agent --lib the_inner_trust_anchors_are_root_ca_certificates_only
+failed: tls::tests::the_inner_trust_anchors_are_root_ca_certificates_only at edge/agent/src/tls.rs:621:9
+first assertion: is not signed by its own key: signature verification error
+exit code: 101
+
+## inner trust, anchor: a certificate without cA passes as a root
+mutation in edge/agent/src/tls.rs
+-         Ok(Some(constraints)) if constraints.value.ca => {}
++         Ok(_) if true => {}
+$ cargo test -p agent --lib the_inner_trust_anchors_are_root_ca_certificates_only
+failed: tls::tests::the_inner_trust_anchors_are_root_ca_certificates_only at edge/agent/src/tls.rs:571:22
+first assertion: expected NotARoot, got Ok(BrokerTrust { path: "<scratch dir>/broker-ca.pem", anchors: [CertificateDer(0x308201943082013ba0030201020214071e42b63fd92528b79 [...]
+exit code: 101
+
+## inner trust, anchor: a certificate not signed by its own key passes as a root
+mutation in edge/agent/src/tls.rs
+-     certificate ...
++     Ok(())
+$ cargo test -p agent --lib the_inner_trust_anchors_are_root_ca_certificates_only
+failed: tls::tests::the_inner_trust_anchors_are_root_ca_certificates_only at edge/agent/src/tls.rs:569:22
+first assertion: expected NotARoot, got Ok(BrokerTrust { path: "<scratch dir>/broker-ca.pem", anchors: [CertificateDer(0x3082017130820117a003020102020828038228424668b4300 [...]
+exit code: 101
+
+## inner trust, verifier: without with_crls
+mutation in edge/agent/src/tls.rs
+-             .with_crls(crl.crls()) ...
++             .allow_unknown_revocation_status() ...
+$ cargo test -p agent --test transport a_root_crl_that_revokes_the_issuing_ca_refuses_the_broker
+failed: a_root_crl_that_revokes_the_issuing_ca_refuses_the_broker at edge/agent/tests/transport.rs:460:5
+first assertion: timed out after 30s waiting for CONNACK
+exit code: 101
+
+## inner trust, verifier: without allow_unknown_revocation_status
+mutation in edge/agent/src/tls.rs
+-             .with_crls(crl.crls()) ...
++             .with_crls(crl.crls()) ...
+$ cargo test -p agent --test transport a_root_crl_that_does_not_list_the_issuing_ca_lets_the_agent_connect
+failed: a_root_crl_that_does_not_list_the_issuing_ca_lets_the_agent_connect at edge/agent/tests/support/wss.rs:229:40
+first assertion: called `Result::unwrap()` on an `Err` value: "tls handshake eof"
+exit code: 101
+
+## inner trust, verifier: with only_check_end_entity_revocation
+mutation in edge/agent/src/tls.rs
+-             .with_crls(crl.crls()) ...
++             .with_crls(crl.crls()) ...
+$ cargo test -p agent --test transport a_root_crl_that_revokes_the_issuing_ca_refuses_the_broker
+failed: a_root_crl_that_revokes_the_issuing_ca_refuses_the_broker at edge/agent/tests/transport.rs:460:5
+first assertion: timed out after 30s waiting for CONNACK
+exit code: 101
+
+## inner trust, verifier: with enforce_revocation_expiration
+mutation in edge/agent/src/tls.rs
+-             .with_crls(crl.crls()) ...
++             .with_crls(crl.crls()) ...
+$ cargo test -p agent --test transport an_expired_root_crl_still_counts_and_still_lets_the_agent_connect
+failed: an_expired_root_crl_still_counts_and_still_lets_the_agent_connect at edge/agent/tests/support/wss.rs:229:40
+first assertion: called `Result::unwrap()` on an `Err` value: "tls handshake eof"
+exit code: 101
+
+## inner trust, root CRL: the signature is not checked at load
+mutation in edge/agent/src/tls.rs
+-         if crl.verify_signature(anchor.public_key()).is_err() {
++         if false {
+$ cargo test -p agent --test transport a_root_crl_the_root_did_not_sign_stops_the_agent_from_starting
+failed: a_root_crl_the_root_did_not_sign_stops_the_agent_from_starting at edge/agent/tests/transport.rs:528:37
+first assertion: called `Option::unwrap()` on a `None` value
+exit code: 101
+
+## inner trust, root CRL: no anchor check at load at all
+mutation in edge/agent/src/tls.rs
+-         signed_by_an_anchor(&crl, trust).map_err(bad)?;
++ 
+$ cargo test -p agent --lib a_root_crl_is_loaded_only_when_a_trust_anchor_signed_it
+failed: tls::tests::a_root_crl_is_loaded_only_when_a_trust_anchor_signed_it at edge/agent/src/tls.rs:665:22
+first assertion: expected BadCrl, got Ok(Loaded { path: "<scratch dir>/root-crl.pem", der: CertificateRevocationListDer(0x3081d4307c020101300a06082a8648ce3d040302301a31183016 [...]
+exit code: 101
+
+## inner trust, root CRL: an anchor without cRLSign may sign it
+mutation in edge/agent/src/tls.rs
+-             Ok(Some(usage)) if !usage.value.crl_sign() => Err(format!(
++             Ok(Some(usage)) if false && !usage.value.crl_sign() => Err(format!(
+$ cargo test -p agent --lib a_root_crl_needs_a_root_that_may_sign_crls
+failed: tls::tests::a_root_crl_needs_a_root_that_may_sign_crls at edge/agent/src/tls.rs:665:22
+first assertion: expected BadCrl, got Ok(Loaded { path: "<scratch dir>/root-crl.pem", der: CertificateRevocationListDer(0x3081fc308182020101300a06082a8648ce3d04030330203 [...]
+exit code: 101
+
+## inner trust, root CRL: a missing file stops the agent instead of meaning no CRL yet
+mutation in edge/agent/src/tls.rs
+-                 return Ok(Self::Missing(path.to_owned()));
++                 return Err(TlsError::BadCrl { path: path.to_owned(), reason: "missing".to_owned() });
+$ cargo test -p agent --test transport the_broker_s_chain_through_the_issuing_ca_it_sends_is_accepted
+failed: the_broker_s_chain_through_the_issuing_ca_it_sends_is_accepted at edge/agent/tests/transport.rs:392:23
+first assertion: called `Result::unwrap()` on an `Err` value: "broker.crl: the root CRL <scratch dir>/root-crl.pem cannot be used: missing"
+exit code: 101
+
+## inner trust, name: SNI and the name check use another name
+mutation in edge/agent/src/tls.rs
+-     ServerName::try_from(BROKER_NAME) ...
++     ServerName::try_from("other.trustiot.test") ...
+$ cargo test -p agent --test transport the_broker_s_chain_through_the_issuing_ca_it_sends_is_accepted
+failed: the_broker_s_chain_through_the_issuing_ca_it_sends_is_accepted at edge/agent/tests/support/wss.rs:229:40
+first assertion: called `Result::unwrap()` on an `Err` value: "tls handshake eof"
+exit code: 101
+
+## inner trust, config: cloud.url may be the broker's inner name
+mutation in edge/agent/src/config.rs
+-             .eq_ignore_ascii_case(BROKER_NAME)
++             .eq_ignore_ascii_case("never.trustiot.test")
+$ cargo test -p agent --lib the_broker_name_is_fixed_and_an_old_broker_name_key_is_refused
+failed: config::tests::the_broker_name_is_fixed_and_an_old_broker_name_key_is_refused at edge/agent/src/config.rs:340:29
+exit code: 101

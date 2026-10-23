@@ -35,7 +35,7 @@ use agent::link::{self, Link, LinkState, Subscriptions};
 use agent::liveness::{self, Progress};
 use agent::sdnotify::{self, Notification, Notifier, PROGRESS_TICK};
 use agent::setup::Setup;
-use agent::tls::Validity;
+use agent::tls::{RootCrl, Validity};
 use tokio::signal::unix::{SignalKind, signal};
 use tokio_util::sync::CancellationToken;
 use tracing::Level;
@@ -128,6 +128,7 @@ fn main() -> ExitCode {
             utc(setup.certificate_not_after)
         );
     }
+    log_root_crl(&setup.root_crl);
     if args.check {
         println!(
             "ok: gateway {}, certificate valid until {}, configuration {}",
@@ -138,6 +139,41 @@ fn main() -> ExitCode {
         return ExitCode::SUCCESS;
     }
     run(setup)
+}
+
+/// Says once at start whether the broker's chain is checked against a root CRL.
+fn log_root_crl(root_crl: &RootCrl) {
+    match root_crl {
+        RootCrl::NotConfigured => tracing::info!(
+            "broker.crl is not set: the broker's certificate chain is not checked for revocation"
+        ),
+        RootCrl::Missing(path) => tracing::info!(
+            path = %path.display(),
+            "no root CRL yet: the broker's certificate chain is not checked for revocation"
+        ),
+        RootCrl::Loaded {
+            path,
+            number,
+            next_update,
+            expired,
+            ..
+        } => {
+            let next_update = next_update.map_or_else(|| "none".to_owned(), utc);
+            tracing::info!(
+                path = %path.display(),
+                number = number.as_deref().unwrap_or("none"),
+                %next_update,
+                "root CRL loaded: the broker's issuing CA is checked against it"
+            );
+            if *expired {
+                tracing::warn!(
+                    path = %path.display(),
+                    %next_update,
+                    "the root CRL's nextUpdate has passed; it is still used and the agent still connects, until the root CA signs a new one"
+                );
+            }
+        }
+    }
 }
 
 /// Logs to stderr, which systemd hands to the journal; the journal adds its own timestamps.

@@ -26,7 +26,7 @@ Laysi/trustiot-v2#534（2026-10-22）加上：
        └─ broker 伺服器憑證（EKU 只有 serverAuth，profile 在 Laysi/trustiot-v2#557，金鑰與輪替在 Laysi/trustiot-v2#535）
 ```
 
-根 CA 在每次儀式另簽一張根 CRL，列出撤銷的簽發 CA，給閘道器驗 broker 的伺服器憑證用（2026-10-23 決定，見[閘道器對 broker 伺服器憑證的信任](#閘道器對-broker-伺服器憑證的信任)；還沒實作）。
+根 CA 在每次儀式另簽一張根 CRL，列出撤銷的簽發 CA，給閘道器驗 broker 的伺服器憑證用（2026-10-23 決定，見[閘道器對 broker 伺服器憑證的信任](#閘道器對-broker-伺服器憑證的信任)；閘道器端從檔案載入並檢查已在 Laysi/trustiot-v2#86，簽發與提供還沒實作，Laysi/trustiot-v2#560）。
 
 - **根 CA**：私鑰只在離線的機器上產生與使用，不進叢集、不進 git（加密的也不放）、不在任何連網主機；以 age 加密給兩位維運人員，存兩份離線媒體，各由一人保管（2026-10-22 決定；與 [docs/architecture/secrets.md](../../docs/architecture/secrets.md) 的「根 CA 私鑰」相同）。只在簽發 CA 的儀式與備份檢查時取出。根憑證是公開資料，放在 chart 的 values。
 - **簽發 CA**：私鑰在叢集內產生，沒有人建立、看到、複製或輸入它，做法與內部身分簽章金鑰相同（[docs/architecture/secrets.md](../../docs/architecture/secrets.md) 的「閘道器憑證 CA」）：
@@ -47,7 +47,7 @@ Laysi/trustiot-v2#534（2026-10-22）加上：
 
 已知的限制（後續 issue 見 Laysi/trustiot-v2#78 的實作紀錄）：
 
-- 根 CRL 還沒實作：簽發 CA 外洩時，broker 這一側靠「移除它的金鑰、broker 不再讀到它的 CRL」拒絕它簽的閘道器憑證（見[簽發 CA 金鑰遺失或外洩](#簽發-ca-金鑰遺失或外洩)）；閘道器這一側要靠根 CRL 才拒絕外洩的簽發 CA 簽的假伺服器憑證（2026-10-23 決定，見[閘道器對 broker 伺服器憑證的信任](#閘道器對-broker-伺服器憑證的信任)）。`certs-ca` 簽根 CRL、certs 提供它、閘道器取用與檢查都還沒做，這之前閘道器端的這個風險只能靠換根解除，而換根也還沒有做法（下一點）。
+- 根 CRL 還沒實作：簽發 CA 外洩時，broker 這一側靠「移除它的金鑰、broker 不再讀到它的 CRL」拒絕它簽的閘道器憑證（見[簽發 CA 金鑰遺失或外洩](#簽發-ca-金鑰遺失或外洩)）；閘道器這一側要靠根 CRL 才拒絕外洩的簽發 CA 簽的假伺服器憑證（2026-10-23 決定，見[閘道器對 broker 伺服器憑證的信任](#閘道器對-broker-伺服器憑證的信任)）。`certs-ca` 簽根 CRL、certs 提供它（Laysi/trustiot-v2#560）、閘道器取用新的根 CRL（Laysi/trustiot-v2#563）都還沒做（閘道器從檔案載入並檢查已在 Laysi/trustiot-v2#86），這之前閘道器端的這個風險只能靠換根解除，而換根也還沒有做法（下一點）。
 - 根 CRL 擋不住一直站在連線路徑上的攻擊者：它可以擋下新的根 CRL，閘道器手上的舊 CRL 不列外洩的簽發 CA。根 CRL 過期也不擋連線（理由見同一節），所以這段期間沒有上限。
 - 根 CA 換新還沒有做法。地端的 CA 階層（誰保管客戶的根 CA）延後：地端專用的工作排在 SaaS 之後（決策 1 的 2026-10-18 補充，Laysi/trustiot-v2#446）；chart 本身兩種型態相同。
 
@@ -171,7 +171,7 @@ age --decrypt -i <自己的 identity> root-key.age \
 
 ## 閘道器對 broker 伺服器憑證的信任
 
-2026-10-23 決定（Laysi/trustiot-v2#556）。閘道器的內層 TLS 在 WebSocket 裡直達 broker（決策 6），閘道器 agent（Laysi/trustiot-v2#86）照下表驗證 broker 的伺服器憑證。根 CRL 那一列還沒實作（見[根 CRL](#根-crl)），其他各列在 agent 實作內層 TLS 時就照做。
+2026-10-23 決定（Laysi/trustiot-v2#556）。閘道器的內層 TLS 在 WebSocket 裡直達 broker（決策 6），閘道器 agent（Laysi/trustiot-v2#86）照下表驗證 broker 的伺服器憑證（[edge/agent](../../edge/agent/README.md)「內層 TLS 對 broker 的信任」）。根 CRL 那一列，agent 從設定的檔案載入根 CRL 並檢查；換上新的根 CRL 時清掉 resumption 快取屬於取用新 CRL 的部分（Laysi/trustiot-v2#563），簽發與提供見[根 CRL](#根-crl)。
 
 | 項目 | 設定 |
 | --- | --- |

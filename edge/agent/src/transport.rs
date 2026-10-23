@@ -204,14 +204,12 @@ pub struct WssConnector {
     url: CloudUrl,
     outer: Arc<ClientConfig>,
     inner: Arc<ClientConfig>,
-    broker: ServerName<'static>,
 }
 
 impl std::fmt::Debug for WssConnector {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("WssConnector")
             .field("url", &self.url.as_str())
-            .field("broker", &self.broker)
             .finish_non_exhaustive()
     }
 }
@@ -220,19 +218,10 @@ impl std::fmt::Debug for WssConnector {
 pub type BrokerStream = TlsStream<WsStream<TlsStream<TcpStream>>>;
 
 impl WssConnector {
-    /// A connector to `url` whose inner TLS expects the broker certificate for `broker`.
-    pub fn new(
-        url: CloudUrl,
-        outer: Arc<ClientConfig>,
-        inner: Arc<ClientConfig>,
-        broker: ServerName<'static>,
-    ) -> Self {
-        Self {
-            url,
-            outer,
-            inner,
-            broker,
-        }
+    /// A connector to `url` whose inner TLS expects the broker certificate for
+    /// [`tls::BROKER_NAME`](crate::tls::BROKER_NAME).
+    pub fn new(url: CloudUrl, outer: Arc<ClientConfig>, inner: Arc<ClientConfig>) -> Self {
+        Self { url, outer, inner }
     }
 
     async fn tcp(&self) -> Result<TcpStream, ConnectError> {
@@ -304,8 +293,10 @@ impl Connector for WssConnector {
                 .map_err(|error| {
                     ConnectError::new(ConnectStage::WebSocket, describe_ws_error(error))
                 })?;
+        let broker = crate::tls::broker_name()
+            .map_err(|error| ConnectError::new(ConnectStage::InnerTls, error))?;
         let inner = TlsConnector::from(Arc::clone(&self.inner))
-            .connect(self.broker.clone(), WsStream::new(websocket))
+            .connect(broker, WsStream::new(websocket))
             .await
             .map_err(|error| ConnectError::new(ConnectStage::InnerTls, error))?;
         if let Some(suite) = inner.get_ref().1.negotiated_cipher_suite() {

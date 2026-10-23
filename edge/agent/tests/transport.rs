@@ -2,7 +2,9 @@
 //! outer TLS and the WebSocket to a stand-in front (`testkit::mqtt::front`), and the inner mTLS
 //! to a stand-in broker that speaks MQTT through `support::FakeBroker`. The container test
 //! (`tests/broker.rs`) runs the same path against Mosquitto; these tests cover what only a
-//! scripted peer can show: what each layer negotiated, resumption, and every refusal.
+//! scripted peer can show: what each layer negotiated, resumption, and every refusal, including
+//! the inner TLS's trust in the broker's certificate (Laysi/trustiot-v2#556): root anchors, the
+//! issuing CA the broker sends, the fixed name, serverAuth and the root CRL.
 //!
 //! Real sockets need real time; every wait is bounded by `testkit::clock::bounded`.
 
@@ -14,13 +16,16 @@
 mod support;
 
 use agent::link::{DownMessage, LinkState, Published, Subscriptions};
+use agent::tls::RootCrl;
 use protocol::topic::Channel;
 use rustls::{CipherSuite, HandshakeKind, ProtocolVersion};
 use support::wss::{Agent, Files, InnerBroker, front};
 use support::{FakeBroker, Packet, gateway, publish};
 use testkit::clock::bounded;
-use testkit::mqtt::front::FrontSession;
-use testkit::mqtt::{Authority, BROKER_NAME, FRONT_HOST, TestPki, front_tls, mtls_server};
+use testkit::mqtt::front::{FrontSession, WsFront};
+use testkit::mqtt::{
+    Authority, BROKER_NAME, FRONT_HOST, TestPki, front_tls, mtls_server, mtls_server_with_chain,
+};
 use tokio::net::TcpStream;
 use tokio_rustls::server::TlsStream;
 
@@ -173,7 +178,7 @@ async fn an_outer_certificate_from_another_ca_is_refused() {
     let front = front(&pki, broker.address, |_| {}).await;
     let files = Files::new(&pki, front.address().port());
     files.write("other-ca.pem", &Authority::new("another public CA").pem);
-    files.write_config(front.address().port(), "other-ca.pem", BROKER_NAME);
+    files.write_config(front.address().port(), "other-ca.pem");
     let agent = Agent::start(&files);
     let error = agent.first_error().await;
     assert!(
@@ -222,18 +227,15 @@ async fn a_front_that_does_not_answer_the_mqtt_subprotocol_is_refused() {
 #[tokio::test]
 async fn a_broker_certificate_for_another_name_is_refused() {
     let pki = TestPki::new();
-    let broker = InnerBroker::start(mtls_server(&pki.broker, &pki.broker_ca)).await;
+    let leaf = pki.broker_ca.server(&["other.trustiot.test"]);
+    let broker = InnerBroker::start(mtls_server(&leaf, &pki.broker_ca)).await;
     let front = front(&pki, broker.address, |_| {}).await;
     let files = Files::new(&pki, front.address().port());
-    files.write_config(
-        front.address().port(),
-        "public-ca.pem",
-        "other.trustiot.test",
-    );
     let agent = Agent::start(&files);
     let error = agent.first_error().await;
     assert!(
-        error.contains("inner mTLS") && error.contains("not valid for name"),
+        error.contains("inner mTLS")
+            && error.contains(&format!("not valid for name \"{BROKER_NAME}\"")),
         "{error}"
     );
     agent.stop().await;
@@ -341,4 +343,191 @@ async fn a_broker_without_tls_1_3_is_refused() {
     let error = agent.first_error().await;
     assert!(error.contains("inner mTLS"), "{error}");
     agent.stop().await;
+}
+
+// The broker's chain as production has it (services/certs/README.md, 「閘道器對 broker 伺服器憑證的
+// 信任」): `broker.ca` holds only the root; the issuing CA signs the broker's certificate and the
+// gateway's, and the broker sends its certificate with the issuing CA after it.
+
+/// The stand-in broker with a certificate from `issuing`, sending `issuing` after it or not,
+/// the front, and a gateway with a certificate from `issuing`.
+async fn with_issuing_ca(
+    pki: &TestPki,
+    issuing: &Authority,
+    sends_issuing_ca: bool,
+) -> (InnerBroker, WsFront, Files) {
+    let leaf = issuing.server(&[BROKER_NAME]);
+    let tls = if sends_issuing_ca {
+        mtls_server_with_chain(&leaf, &[issuing], &pki.broker_ca)
+    } else {
+        mtls_server(&leaf, &pki.broker_ca)
+    };
+    let broker = InnerBroker::start(tls).await;
+    let front = front(pki, broker.address, |_| {}).await;
+    let files = Files::new(pki, front.address().port());
+    files.use_issuing_ca(issuing);
+    (broker, front, files)
+}
+
+/// Waits for the agent to connect, answering as the broker; returns the broker's side.
+async fn connected(broker: &mut InnerBroker, agent: &Agent) -> FakeBroker<TlsStream<TcpStream>> {
+    let (mut mqtt, _) = broker.next_broker().await;
+    let (_, session) = mqtt.accept().await;
+    let state = agent
+        .wait_state("connected", |state| {
+            matches!(state, LinkState::Connected { .. })
+        })
+        .await;
+    assert_eq!(state, LinkState::Connected { session });
+    mqtt
+}
+
+#[tokio::test]
+async fn the_broker_s_chain_through_the_issuing_ca_it_sends_is_accepted() {
+    let pki = TestPki::new();
+    let issuing = pki.broker_ca.issuing("testkit issuing CA");
+    let (mut broker, _front, files) = with_issuing_ca(&pki, &issuing, true).await;
+    // The configuration names a root CRL that has not arrived: no revocation check.
+    assert!(matches!(
+        files.setup().unwrap().root_crl,
+        RootCrl::Missing(_)
+    ));
+    let agent = Agent::start(&files);
+    let mqtt = connected(&mut broker, &agent).await;
+    let (_, server) = mqtt.stream().get_ref();
+    assert_eq!(
+        server.peer_certificates().unwrap().len(),
+        2,
+        "the gateway sends its certificate and the issuing CA"
+    );
+    assert_eq!(
+        server.server_name(),
+        Some(BROKER_NAME),
+        "SNI is the fixed broker name"
+    );
+    agent.stop().await;
+}
+
+#[tokio::test]
+async fn a_broker_that_does_not_send_its_issuing_ca_is_refused() {
+    let pki = TestPki::new();
+    let issuing = pki.broker_ca.issuing("testkit issuing CA");
+    let (_broker, _front, files) = with_issuing_ca(&pki, &issuing, false).await;
+    let agent = Agent::start(&files);
+    let error = agent.first_error().await;
+    assert!(
+        error.contains("inner mTLS") && error.contains("UnknownIssuer"),
+        "{error}"
+    );
+    agent.stop().await;
+}
+
+#[tokio::test]
+async fn a_certificate_without_server_auth_is_refused_as_the_broker_s() {
+    let pki = TestPki::new();
+    let issuing = pki.broker_ca.issuing("testkit issuing CA");
+    // A certificate for the broker's name that only allows client authentication, like every
+    // gateway certificate from the same issuing CA.
+    let leaf = issuing.leaf(
+        &[BROKER_NAME],
+        &[rcgen::ExtendedKeyUsagePurpose::ClientAuth],
+    );
+    let broker =
+        InnerBroker::start(mtls_server_with_chain(&leaf, &[&issuing], &pki.broker_ca)).await;
+    let front = front(&pki, broker.address, |_| {}).await;
+    let files = Files::new(&pki, front.address().port());
+    let agent = Agent::start(&files);
+    let error = agent.first_error().await;
+    assert!(
+        error.contains("inner mTLS")
+            && error.contains("does not allow extended key usage for server authentication"),
+        "{error}"
+    );
+    agent.stop().await;
+}
+
+#[tokio::test]
+async fn a_root_crl_that_revokes_the_issuing_ca_refuses_the_broker() {
+    let pki = TestPki::new();
+    let issuing = pki.broker_ca.issuing("testkit issuing CA");
+    let (_broker, _front, files) = with_issuing_ca(&pki, &issuing, true).await;
+    files.write(
+        "root-crl.pem",
+        &pki.broker_ca.crl(2, &[&issuing], (2099, 1, 1)),
+    );
+    let agent = Agent::start(&files);
+    let error = agent.first_error().await;
+    assert!(
+        error.contains("inner mTLS") && error.contains("Revoked"),
+        "{error}"
+    );
+    agent.stop().await;
+}
+
+#[tokio::test]
+async fn a_root_crl_that_does_not_list_the_issuing_ca_lets_the_agent_connect() {
+    let pki = TestPki::new();
+    let issuing = pki.broker_ca.issuing("testkit issuing CA");
+    let retired = pki.broker_ca.issuing("testkit retired issuing CA");
+    let (mut broker, _front, files) = with_issuing_ca(&pki, &issuing, true).await;
+    files.write(
+        "root-crl.pem",
+        &pki.broker_ca.crl(2, &[&retired], (2099, 1, 1)),
+    );
+    let root_crl = files.setup().unwrap().root_crl;
+    assert!(
+        matches!(&root_crl, RootCrl::Loaded { number: Some(number), expired: false, .. } if number == "2"),
+        "{root_crl:?}"
+    );
+    // The broker's own certificate has no CRL here (its issuer is the issuing CA): it passes.
+    let agent = Agent::start(&files);
+    let _mqtt = connected(&mut broker, &agent).await;
+    agent.stop().await;
+}
+
+#[tokio::test]
+async fn an_expired_root_crl_still_counts_and_still_lets_the_agent_connect() {
+    let pki = TestPki::new();
+    let issuing = pki.broker_ca.issuing("testkit issuing CA");
+    let retired = pki.broker_ca.issuing("testkit retired issuing CA");
+    let (mut broker, _front, files) = with_issuing_ca(&pki, &issuing, true).await;
+    files.write(
+        "root-crl.pem",
+        &pki.broker_ca.crl(3, &[&retired], (2021, 1, 1)),
+    );
+    assert!(matches!(
+        files.setup().unwrap().root_crl,
+        RootCrl::Loaded { expired: true, .. }
+    ));
+    let agent = Agent::start(&files);
+    let mqtt = connected(&mut broker, &agent).await;
+    agent.stop().await;
+    drop(mqtt);
+
+    // Expired, it still revokes.
+    files.write(
+        "root-crl.pem",
+        &pki.broker_ca.crl(4, &[&retired, &issuing], (2021, 1, 1)),
+    );
+    let agent = Agent::start(&files);
+    let error = agent.first_error().await;
+    assert!(
+        error.contains("inner mTLS") && error.contains("Revoked"),
+        "{error}"
+    );
+    agent.stop().await;
+}
+
+#[tokio::test]
+async fn a_root_crl_the_root_did_not_sign_stops_the_agent_from_starting() {
+    let pki = TestPki::new();
+    let files = Files::new(&pki, 1);
+    // Same issuer name as our root, another key.
+    let forged = Authority::new("testkit broker CA");
+    files.write("root-crl.pem", &forged.crl(5, &[], (2099, 1, 1)));
+    let error = files.setup().err().unwrap();
+    assert!(
+        error.contains("broker.crl") && error.contains("does not verify"),
+        "{error}"
+    );
 }

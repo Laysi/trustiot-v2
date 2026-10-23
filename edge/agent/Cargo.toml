@@ -42,10 +42,14 @@ tokio-util.workspace = true
 toml.workspace = true
 tracing.workspace = true
 tracing-subscriber = { workspace = true, features = ["fmt", "std"] }
-# The gateway ID (CN), the public key and the expiry of the client certificate.
-x509-parser.workspace = true
+# The gateway ID (CN), the public key and the expiry of the client certificate; the root checks
+# of broker.ca and the root CRL's issuer, number and dates. `verify` checks their signatures with
+# ring, the crypto library already in the build.
+x509-parser = { workspace = true, features = ["verify"] }
 
 [dev-dependencies]
+# PEM-encodes tampered root CRLs in the TLS unit tests.
+base64.workspace = true
 # A test CA and certificates made at test time, also for the TPM key in the TPM tests.
 rcgen = { workspace = true, features = ["crypto", "pem", "ring"] }
 # The fake TPM's software key (`ring::signature::EcdsaKeyPair`).

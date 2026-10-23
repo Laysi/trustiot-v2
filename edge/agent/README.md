@@ -50,12 +50,13 @@ trustiot-agent [--config <file>] [--check]
 | --- | --- |
 | `cloud.url` | 雲端的閘道器入口：`wss://<我們的網域>[:port]/mqtt`。只接受 `wss`、DNS 名稱（不接受 IP，也不接受最後一段是數字的名稱，例如 `127.1`、`0x7f000001`：解析器會把它們當成 IPv4 位址）、路徑 `/mqtt`，不能帶查詢字串與帳密。寫了 port 就必須是 1–65535 的數字（`:`、`:0`、`:65536`、`:abc`、`:+443` 都拒絕），沒寫才是 443 |
 | `cloud.trust` | 外層 TLS 信任的 PEM 檔，至少一個，每個檔至少要有一張可用的憑證。SaaS 用作業系統的 CA bundle；地端用客戶的 CA 或我們的 CA；工廠防火牆會解開 443 時，把它的攔截 CA 加成另一個檔 |
-| `broker.name`、`broker.ca` | 內層 mTLS 的 broker 名稱與我們的 CA；內層只信任這個 CA。依決策 6（2026-10-23，[services/certs](../../services/certs/README.md)「閘道器對 broker 伺服器憑證的信任」），`broker.ca` 是根 CA 的憑證，`broker.name` 是 Laysi/trustiot-v2#557 定的固定名稱；以根 CRL 檢查簽發 CA 的部分還沒實作，agent 目前不檢查撤銷。`broker.name` 不可與 `cloud.url` 的主機相同：兩層驗證的是不同的伺服器 |
-| `identity.certificate` | 閘道器的憑證鏈（leaf 在前）。閘道器 ID 取自 leaf 的 CN（必須是合法的 `GatewayId`），不另外設定，兩者不可能不一致 |
+| `broker.ca` | 內層 mTLS 的信任錨：我們的根 CA 憑證（PEM）。只能放根 CA（主體與簽發者相同、以自己的金鑰簽章、basicConstraints 的 cA），可以放多張（之後換根用）；放了簽發 CA 或 leaf 就拒絕啟動，錯誤訊息指出第幾張。內層只信任這些根，不用作業系統或 WebPKI 的根，也不用 `cloud.trust`。broker 的名稱固定是 `mqtt-broker.trustiot.internal`（Laysi/trustiot-v2#557），沒有設定的鍵：舊設定檔的 `broker.name` 是未知的鍵，會拒絕啟動，刪掉那一行即可。`cloud.url` 的主機不可以是這個名稱：兩層驗證的是不同的伺服器。規則見下方「內層 TLS 對 broker 的信任」 |
+| `broker.crl` | 選填：根 CRL 的檔案（範例是 `/var/lib/trustiot-agent/root-crl.pem`）。一個 PEM 區塊 `X509 CRL`、最多 64 KiB，要由 `broker.ca` 的根簽章，啟動時就驗證。檔案不存在表示還沒收到根 CRL：照常連線、不檢查撤銷，啟動時記一筆 INFO；檔案在但不能用（不是一個 PEM CRL、太大、不是根簽的）就拒絕啟動。沒有這個鍵時也不檢查撤銷 |
+| `identity.certificate` | 閘道器的憑證鏈（leaf 在前，接著簽發 CA）。閘道器 ID 取自 leaf 的 CN（必須是合法的 `GatewayId`），不另外設定，兩者不可能不一致 |
 | `identity.key` | 正式環境是 `{ source = "tpm", device = "/dev/tpmrm0", handle = 0x81000100 }`（handle 要在 persistent 範圍 0x81000000–0x81FFFFFF）；`{ source = "file", path = "..." }` 只給開發與測試，啟動時會記一筆警告 |
 | `connection.*` | 心跳間隔（10–3600 秒，預設 60）、重連退避的起始與上限（預設 1 秒、60 秒）、同時等 PUBACK 的 QoS 1 訊息數（1–256，預設 32） |
 
-啟動時讀設定、建好兩層 TLS 的設定、讀憑證並確認金鑰與憑證的公鑰相同（TPM 的金鑰也一樣）；有 EKU 時必須含 clientAuth，有 key usage 時必須含 digitalSignature。接著以 webpki 的用戶端憑證檢查（rustls 的 `WebPkiClientVerifier`）確認憑證鏈接到 `broker.ca`，broker 一定會拒絕的憑證（例如別的 CA 簽的）就不啟動。只有時間不對（過期或還沒生效）時記一筆警告，寫出憑證的 notBefore 與 notAfter，照樣啟動：閘道器有硬體 RTC，但時間仍可能是錯的（例如 RTC 沒設定過或遺失了時間），效期以 broker 的時鐘為準，拒絕啟動只會把時鐘的問題變成停機；真的過期時 broker 會拒絕，由換發（Laysi/trustiot-v2#83）處理。全部通過才通知 systemd `READY=1`，不等第一次連線：沒有網路的現場也要能啟動，之後自己重試。`--check` 做完這些檢查就結束（0 是可用並印出閘道器 ID 與憑證的到期時間，1 是不可用並印出原因），給維運與更新後的健康檢查用。設備的設定（`DesiredConfig`）之後由 MQTT 送來（Laysi/trustiot-v2#94），不在這個檔案裡。
+啟動時讀設定、確認 `broker.ca` 只有根 CA、載入根 CRL（記下 CRL 編號與 nextUpdate；已過期時另記一筆警告）、建好兩層 TLS 的設定、讀憑證並確認金鑰與憑證的公鑰相同（TPM 的金鑰也一樣）；有 EKU 時必須含 clientAuth，有 key usage 時必須含 digitalSignature。接著以 webpki 的用戶端憑證檢查（rustls 的 `WebPkiClientVerifier`）確認憑證鏈接到 `broker.ca`，broker 一定會拒絕的憑證（例如別的 CA 簽的）就不啟動。只有時間不對（過期或還沒生效）時記一筆警告，寫出憑證的 notBefore 與 notAfter，照樣啟動：閘道器有硬體 RTC，但時間仍可能是錯的（例如 RTC 沒設定過或遺失了時間），效期以 broker 的時鐘為準，拒絕啟動只會把時鐘的問題變成停機；真的過期時 broker 會拒絕，由換發（Laysi/trustiot-v2#83）處理。全部通過才通知 systemd `READY=1`，不等第一次連線：沒有網路的現場也要能啟動，之後自己重試。`--check` 做完這些檢查就結束（0 是可用並印出閘道器 ID 與憑證的到期時間，1 是不可用並印出原因），給維運與更新後的健康檢查用。設備的設定（`DesiredConfig`）之後由 MQTT 送來（Laysi/trustiot-v2#94），不在這個檔案裡。
 
 日誌寫到 stderr，由 systemd 交給 journal；等級由 `TRUSTIOT_AGENT_LOG` 設定（預設 `info`）。
 
@@ -68,12 +69,24 @@ trustiot-agent [--config <file>] [--check]
 1. TCP（`TCP_NODELAY`，每個解析出的位址各等 10 秒），連到 `cloud.url` 的主機。開 TCP keepalive：閒置 60 秒後每 15 秒探一次，4 次沒回應就由核心斷線，是 MQTT keepalive 之外的保險。
 2. 外層 TLS：SNI 是 URL 的主機，ALPN `http/1.1`，信任 `cloud.trust` 的檔案；不用 `webpki-roots` 也不讀作業系統的憑證庫。
 3. WebSocket：`GET /mqtt`，subprotocol `mqtt`，只送收 binary message；對方沒回 `mqtt` subprotocol 就失敗。每則送出的 message 最多 32 KiB（一筆內層 TLS record 放得下），收到的 message 與 frame 最多 64 KiB，讀取緩衝 16 KiB。text message 視為協定錯誤；close 視為連線結束。
-4. 內層 mTLS：broker 名稱是 `broker.name`，只信任 `broker.ca`，用閘道器的憑證與金鑰（TPM）。
+4. 內層 mTLS：SNI 與名稱驗證都用固定的 `mqtt-broker.trustiot.internal`，只信任 `broker.ca` 的根 CA，有根 CRL 時以它檢查簽發 CA，用閘道器的憑證與金鑰（TPM）。
 5. MQTT 5。
 
 開一條連線（上面 1–4 步）最多 30 秒（`CONNECT_TIMEOUT`），之後等 CONNACK 另外最多 30 秒；逾時都算連線失敗，照退避重試。
 
-兩層都只用 TLS 1.3，套件順序是 ChaCha20-Poly1305、AES-256-GCM、AES-128-GCM（閘道器的 CPU 沒有 AES 指令，rustls 預設會選 AES-256-GCM），都開 session resumption（每層各記 8 個）：resumption 不需要 TPM 簽章，重連省下約 70 ms。加密實作只用 `ring`。Mosquitto 依自己的套件順序選，不依用戶端的順序，所以 broker 的 mTLS listener 要以 `ciphers_tls1.3` 把 `TLS_CHACHA20_POLY1305_SHA256` 排第一（chart 給閘道器的 listener 在 2026-10-23 還沒有這一行），否則協商出 AES-256-GCM（2026-10-21 實測，[測試報告](../../docs/test-reports/2026-10-21-86-agent-mqtt-connection.md)）。
+兩層都只用 TLS 1.3，套件順序是 ChaCha20-Poly1305、AES-256-GCM、AES-128-GCM（閘道器的 CPU 沒有 AES 指令，rustls 預設會選 AES-256-GCM），都開 session resumption（每層各記 8 個）：resumption 不需要 TPM 簽章，重連省下約 70 ms。加密實作只用 `ring`。Mosquitto 依自己的套件順序選，不依用戶端的順序，所以 broker 的 mTLS listener 要以 `ciphers_tls1.3` 把 `TLS_CHACHA20_POLY1305_SHA256` 排第一（chart 給閘道器的 listener 在 2026-10-23 還沒有這一行，Laysi/trustiot-v2#564），否則協商出 AES-256-GCM（2026-10-21 實測，[測試報告](../../docs/test-reports/2026-10-21-86-agent-mqtt-connection.md)）。
+
+### 內層 TLS 對 broker 的信任
+
+依 Laysi/trustiot-v2#556 的決定（[services/certs](../../services/certs/README.md)「閘道器對 broker 伺服器憑證的信任」與「根 CRL」），在 `src/tls.rs`：
+
+- **信任錨**：`broker.ca` 的根 CA，可以多張；簽發 CA 或 leaf 拒絕啟動。以簽發 CA 當信任錨時，根 CRL 撤銷它也沒有用，換一代簽發 CA 還要改每台閘道器的設定。
+- **憑證鏈**：broker 送它的憑證與簽發 CA，agent 由此接到根；broker 只送自己的憑證時連線失敗（`UnknownIssuer`）。
+- **名稱**：SNI 與驗證都用 `tls::BROKER_NAME`（`mqtt-broker.trustiot.internal`），SaaS 與地端相同，與 `cloud.url` 無關；名稱驗證不能關。
+- **用途**：broker 的憑證要有 EKU serverAuth（webpki 的檢查），只有 clientAuth 的憑證（例如同一個簽發 CA 簽的閘道器憑證）被拒。沒有 EKU 的憑證 webpki 不檢查用途，由 CA 不簽這種憑證來保證（services/certs）。
+- **撤銷**：rustls 的 `WebPkiServerVerifier` 以 `with_crls` 帶入根 CRL、設 `allow_unknown_revocation_status`，不用 `only_check_end_entity_revocation` 與 `enforce_revocation_expiration`。所以根以下的每張憑證都以根 CRL 檢查，被撤銷的簽發 CA 拒絕；broker 自己的憑證由簽發 CA 簽，閘道器沒有簽發 CA 的 CRL，狀態未知，照樣通過；根 CRL 過期仍然以它檢查、照常連線。沒有根 CRL 時不檢查撤銷。
+- **載入**：只在啟動時讀一次。根 CRL 要由 `broker.ca` 中名稱相符的根簽章（以 x509-parser 驗章；根有 key usage 時要有 cRLSign），webpki 也要能解析；不符就拒絕啟動，壞掉或偽造的檔案不會被默默略過。
+- **還沒做**（Laysi/trustiot-v2#563，等 Laysi/trustiot-v2#560 的發佈管道）：接受編號更大的新根 CRL 並存下、定期取得、換上新的根 CRL 時清掉 resumption 的快取、在心跳回報根 CRL 的編號與是否過期。在那之前換根 CRL 要重新啟動 agent，新的行程也就有新的 resumption 快取。
 
 ### MQTT 用戶端
 
@@ -309,9 +322,9 @@ cargo test -p agent                                     # 全部
 cargo test -p agent --lib                               # 單元測試：設定、憑證、TLS、MQTT 編解碼、退避、心跳、sd_notify、liveness，以及 Modbus 的規劃、PDU、解碼、輪詢、MBAP 與 RTU 切框、共用連線的輪流、keepalive、一小時的節拍漂移、設定範圍
 cargo test -p agent --test link                         # MQTT 行為，對腳本化的 broker：在線狀態、訂閱、in-flight 上限、PUBACK、keepalive、退避、協定錯誤、停止
 cargo test -p agent --test liveness                     # systemd watchdog 的進度判斷：連線的每個等待都宣告期限、卡住的連線工作讓通知停下
-cargo test -p agent --test transport                    # 整條連線在行程內：兩層 TLS 協商的內容、resumption、重連、每種拒絕
+cargo test -p agent --test transport                    # 整條連線在行程內：兩層 TLS 協商的內容、resumption、重連、每種拒絕、內層的憑證鏈、名稱、用途與根 CRL
 cargo test -p agent --test broker                       # 對 Mosquitto 容器（podman 或 docker）：mTLS、retained、0x87、will、broker 與轉接重啟後重連
-cargo test -p agent --test binary                       # 執行檔：--check、sd_notify、SIGTERM
+cargo test -p agent --test binary                       # 執行檔：--check（含根 CRL 的狀態）、sd_notify、SIGTERM
 cargo test -p agent --test systemd_unit                 # unit 檔與 systemd-analyze
 cargo test -p agent --test dependencies                 # 閘道器建置的相依
 cargo test -p agent --test modbus_fake_endpoint         # 對 testkit 假端點：型別、合併讀取、每種故障
