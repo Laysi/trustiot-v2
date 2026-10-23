@@ -76,6 +76,11 @@
   "login.email_invalid": "Enter a valid email address.",
   "login.code_invalid": "Enter the whole code from the email.",
   "login.redirect_invalid": "The page to return to after signing in isn't on this site.",
+  "session.tenant_not_member": "You aren't a member of this organization, so you can't switch to it.",
+  "preferences.language_invalid": "Choose one of the listed languages.",
+  "preferences.ai_language_invalid": "Choose one of the listed languages for AI answers.",
+  "preferences.time_zone_invalid": "Choose a valid time zone.",
+  "preferences.theme_invalid": "Choose one of the listed themes.",
 
   "nav.home": "Home",
 

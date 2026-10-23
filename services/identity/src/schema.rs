@@ -36,6 +36,11 @@ pub const SCHEMA: Schema = Schema {
             name: "0004_login.sql",
             sql: include_str!("../migrations/postgres/0004_login.sql"),
         },
+        // Preferences and switching a session's tenant (Laysi/trustiot-v2#497).
+        Migration {
+            name: "0005_preferences_and_tenant_switch.sql",
+            sql: include_str!("../migrations/postgres/0005_preferences_and_tenant_switch.sql"),
+        },
     ],
 };
 

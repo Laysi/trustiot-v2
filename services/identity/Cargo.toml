@@ -32,6 +32,9 @@ hmac.workspace = true
 # The signing keys the identity pod's init container generates (Laysi/trustiot-v2#404): their
 # file format and which key signs when.
 identity-keys = { path = "../../crates/identity-keys" }
+# The time zone names a user's preference may hold (src/preferences.rs): the IANA Time Zone
+# Database's, compiled in, so every replica accepts the same names whatever its system has.
+jiff-tzdb.workspace = true
 # Writes `identity.tenant_created` in the transaction that creates the tenant, and consumes every
 # producer's events into the event log (Laysi/trustiot-v2#130).
 outbox = { path = "../../crates/outbox" }

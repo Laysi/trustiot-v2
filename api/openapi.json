@@ -86,6 +86,50 @@
         ],
         "type": "object"
       },
+      "CurrentSession": {
+        "description": "The session of the request.",
+        "properties": {
+          "active_tenant": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/TenantMembership",
+                "description": "The tenant the session acts in, with the user's role there; `null` when it acts in none:\nnone was picked yet, or the user is no longer a member of it."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "email": {
+            "description": "The address the user logs in with; `null` for a user who cannot log in by email.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "platform_admin": {
+            "description": "Whether the user is a platform administrator (A2), independent of any tenant.",
+            "type": "boolean"
+          },
+          "tenants": {
+            "description": "Every tenant the user belongs to, by name; switch with\n`PUT /api/identity/v1/sessions/current/tenant`.",
+            "items": {
+              "$ref": "#/components/schemas/TenantMembership"
+            },
+            "type": "array"
+          },
+          "user_id": {
+            "$ref": "#/components/schemas/UserId",
+            "description": "The signed-in user."
+          }
+        },
+        "required": [
+          "user_id",
+          "platform_admin",
+          "tenants"
+        ],
+        "type": "object"
+      },
       "DeviceModel": {
         "description": "A device model.",
         "properties": {
@@ -463,6 +507,15 @@
         ],
         "type": "object"
       },
+      "Language": {
+        "description": "A language the interface or AI answers may use.",
+        "enum": [
+          "auto",
+          "zh-TW",
+          "en"
+        ],
+        "type": "string"
+      },
       "Latest": {
         "description": "The latest value of each data point of a device that has a reading in the raw period.",
         "properties": {
@@ -723,6 +776,15 @@
           }
         ]
       },
+      "MemberRole": {
+        "description": "A user's role in a tenant, as this API shows it.",
+        "enum": [
+          "viewer",
+          "editor",
+          "admin"
+        ],
+        "type": "string"
+      },
       "MessageKey": {
         "description": "Key of the translated message the client shows; never the message itself.",
         "examples": [
@@ -731,6 +793,35 @@
         "maxLength": 128,
         "pattern": "^[a-z0-9_]+(\\.[a-z0-9_]+)+$",
         "type": "string"
+      },
+      "Preferences": {
+        "description": "A user's preferences.",
+        "properties": {
+          "ai_language": {
+            "$ref": "#/components/schemas/Language",
+            "description": "The language AI answers are written in; `auto` answers in the language of the question."
+          },
+          "language": {
+            "$ref": "#/components/schemas/Language",
+            "description": "The interface's language; `auto` follows the browser."
+          },
+          "theme": {
+            "$ref": "#/components/schemas/Theme",
+            "description": "The interface's colors."
+          },
+          "time_zone": {
+            "description": "An IANA time zone name such as `Asia/Taipei`, or `auto` to follow the browser.",
+            "example": "Asia/Taipei",
+            "type": "string"
+          }
+        },
+        "required": [
+          "language",
+          "ai_language",
+          "time_zone",
+          "theme"
+        ],
+        "type": "object"
       },
       "Reading": {
         "description": "One reading's value, as its type stored it.",
@@ -961,6 +1052,20 @@
         ],
         "type": "object"
       },
+      "SwitchTenant": {
+        "additionalProperties": false,
+        "description": "The body of `PUT /api/identity/v1/sessions/current/tenant`.",
+        "properties": {
+          "tenant_id": {
+            "$ref": "#/components/schemas/TenantId",
+            "description": "One of the user's tenants."
+          }
+        },
+        "required": [
+          "tenant_id"
+        ],
+        "type": "object"
+      },
       "Tenant": {
         "description": "A tenant.",
         "properties": {
@@ -988,6 +1093,40 @@
       "TenantId": {
         "description": "A tenant: one customer organisation; every tenant-scoped row and event carries it.\n\nSerialized as a lowercase hyphenated UUID string.",
         "format": "uuid",
+        "type": "string"
+      },
+      "TenantMembership": {
+        "description": "A tenant the user belongs to, with their role there.",
+        "properties": {
+          "name": {
+            "description": "The tenant's name; `null` only for a tenant that has no record, which only data written\noutside the API has.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "role": {
+            "$ref": "#/components/schemas/MemberRole",
+            "description": "The user's role in the tenant."
+          },
+          "tenant_id": {
+            "$ref": "#/components/schemas/TenantId",
+            "description": "The tenant."
+          }
+        },
+        "required": [
+          "tenant_id",
+          "role"
+        ],
+        "type": "object"
+      },
+      "Theme": {
+        "description": "The interface's colors.",
+        "enum": [
+          "system",
+          "light",
+          "dark"
+        ],
         "type": "string"
       },
       "UpdateDeviceModel": {
@@ -1019,6 +1158,30 @@
           "revision",
           "points"
         ],
+        "type": "object"
+      },
+      "UpdatePreferences": {
+        "additionalProperties": false,
+        "description": "The body of `PATCH /api/identity/v1/preferences`: the settings to change. A field left out\nkeeps its value; `null` and unknown fields are refused.",
+        "properties": {
+          "ai_language": {
+            "$ref": "#/components/schemas/Language",
+            "description": "The language AI answers are written in."
+          },
+          "language": {
+            "$ref": "#/components/schemas/Language",
+            "description": "The interface's language."
+          },
+          "theme": {
+            "$ref": "#/components/schemas/Theme",
+            "description": "The interface's colors."
+          },
+          "time_zone": {
+            "description": "`auto` or an IANA time zone name, spelled as the tzdb spells it.",
+            "example": "Asia/Taipei",
+            "type": "string"
+          }
+        },
         "type": "object"
       },
       "UserId": {
@@ -2228,6 +2391,126 @@
         ]
       }
     },
+    "/api/identity/v1/preferences": {
+      "get": {
+        "operationId": "getPreferences",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Preferences"
+                }
+              }
+            },
+            "description": "The user's preferences; the defaults (`auto`, `auto`, `auto`, `system`) for a user who never changed one."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No valid session (`unauthenticated`)."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The database failed (`unavailable`)."
+          }
+        },
+        "summary": "Reads the user's own preferences.",
+        "tags": [
+          "identity"
+        ]
+      },
+      "patch": {
+        "operationId": "updatePreferences",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdatePreferences"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Preferences"
+                }
+              }
+            },
+            "description": "The preferences after the change; fields left out kept their value."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The `Content-Type` is not `application/json`, the body is over 1024 bytes, or it is not a JSON object of the four fields with string values; unknown fields and `null` are refused (`invalid_request`)."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No valid session, or the user no longer exists (`unauthenticated`)."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "A cross-site request (`permission_denied`, message key `security.cross_site_request`), or a token another service exchanged for a call on the user's behalf (`permission_denied`); nothing changed."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "A value outside its allow list (`validation_failed`; `/language` `preferences.language_invalid`, `/ai_language` `preferences.ai_language_invalid`, `/time_zone` `preferences.time_zone_invalid`, `/theme` `preferences.theme_invalid`); nothing changed."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The database failed; nothing changed (`unavailable`)."
+          }
+        },
+        "summary": "Changes the user's own preferences: the fields given, each from its allow list.",
+        "tags": [
+          "identity"
+        ]
+      }
+    },
     "/api/identity/v1/sessions": {
       "delete": {
         "operationId": "logOutEverywhere",
@@ -2291,6 +2574,116 @@
           }
         },
         "summary": "Logs out: revokes the session of the request's cookie.",
+        "tags": [
+          "identity"
+        ]
+      },
+      "get": {
+        "operationId": "getCurrentSession",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CurrentSession"
+                }
+              }
+            },
+            "description": "The session: the user, the tenant it acts in with the user's role there (as of this request), and every tenant the user belongs to."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No valid session (`unauthenticated`)."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The database failed (`unavailable`)."
+          }
+        },
+        "summary": "Reads the current session: the user, the tenant it acts in with the user's role there, and\nthe user's tenants.",
+        "tags": [
+          "identity"
+        ]
+      }
+    },
+    "/api/identity/v1/sessions/current/tenant": {
+      "put": {
+        "operationId": "switchTenant",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SwitchTenant"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CurrentSession"
+                }
+              }
+            },
+            "description": "The session acts in the tenant from its next request on; the body is the session as it is now."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The `Content-Type` is not `application/json`, the body is over 1024 bytes, or it is not the JSON object `{\"tenant_id\": \"<uuid>\"}` (`invalid_request`)."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No valid session, a token that names no session, or a session cookie that is missing, is not the session the token was signed from, or whose session has ended (`unauthenticated`); nothing changed."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The user is not a member of the tenant, or there is no such tenant (`permission_denied`, message key `session.tenant_not_member`); a cross-site request (message key `security.cross_site_request`); or a token another service exchanged (`permission_denied`). The session keeps its tenant."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The database failed; nothing changed (`unavailable`)."
+          }
+        },
+        "summary": "Switches the session to another of the user's tenants; its next request acts there with the\nuser's role in it.",
         "tags": [
           "identity"
         ]

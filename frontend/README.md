@@ -124,7 +124,7 @@ zh-TW 與 en 兩種語言，字串在 `src/i18n/locales/zh-TW.json` 與 `en.json
 ## 偏好設定、租戶與工作階段
 
 - 偏好設定（語言、時區、主題）存在 `localStorage` 的 `trustiot.preferences`，讀寫失敗（隱私模式、配額）時用預設值而不出錯。預設語言取瀏覽器語言清單中第一個 zh 或 en，都沒有時用 en；時區預設跟隨瀏覽器；主題預設跟隨系統。改了立刻套用，不需重新整理。
-- 工作階段（使用者、目前租戶、可切換的租戶）由 `SessionSource` 提供（`src/session/session.ts`）。身分服務還沒有給 SPA 讀工作階段與切換租戶的端點，所以 `main.tsx` 目前接的是 `noSessionSource`（沒有工作階段，不顯示租戶切換）；端點加入後換成實作即可，元件與測試不用改。
+- 工作階段（使用者、目前租戶、可切換的租戶）由 `SessionSource` 提供（`src/session/session.ts`）。身分服務的端點在 Laysi/trustiot-v2#497 加入：`GET /api/identity/v1/sessions/current`（使用者、`active_tenant`、`tenants`，見[身分服務](../services/identity/README.md#目前的-session-與切換租戶)）與 `PUT /api/identity/v1/sessions/current/tenant`（`{"tenant_id"}`，回應同前者）；偏好的端點是 `GET`／`PATCH /api/identity/v1/preferences`。`main.tsx` 目前仍接 `noSessionSource`（沒有工作階段，不顯示租戶切換），把它換成呼叫這些端點的實作、偏好改存到伺服器是 Laysi/trustiot-v2#124 的範圍，元件與測試不用改。
 - 切換租戶時先取消進行中的請求，再把其他查詢全部重設：還開著的頁面會為新租戶重新查詢，不會短暫顯示前一個租戶的資料。不用 `queryClient.clear()`：它移除查詢後，還在畫面上的元件仍拿著被移除的查詢，畫面停在舊租戶（測試抓到的問題）。分頁標題是「<租戶名稱> · TrustIoT」。
 
 ## 開發伺服器

@@ -207,9 +207,10 @@ async fn a_fresh_database_gets_every_migration_once() {
         .await
         .expect("count tables");
     assert_eq!(
-        tables, 14,
+        tables, 15,
         "users, memberships, sessions, tenants, login_codes, event_log and platform_event_log, \
-         the outbox's outbox_aggregate and outbox_event, its consumer tables \
+         preferences (Laysi/trustiot-v2#497), the outbox's outbox_aggregate and outbox_event, \
+         its consumer tables \
          outbox_subscription, outbox_inbox, outbox_dead_letter and outbox_version (the event log \
          consumes identity's own events, Laysi/trustiot-v2#130), and the migration records \
          trustiot_migrate_applied"

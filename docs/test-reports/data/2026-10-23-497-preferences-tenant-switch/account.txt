@@ -1,0 +1,23 @@
+# CI=1 cargo test -p identity --lib -- preferences:: current_session::
+     Running unittests src/lib.rs (target/debug/deps/identity-5256d39b8d251390)
+running 10 tests
+test preferences::tests::stored_rows_outside_the_allow_lists_are_inconsistent ... ok
+test current_session::tests::roles_show_as_the_memberships_store_them ... ok
+test preferences::tests::languages_and_themes_are_spelled_exactly ... ok
+test preferences::tests::time_zones_are_auto_or_tzdb_names_as_the_tzdb_spells_them ... ok
+test preferences::tests::the_defaults_and_allow_lists_match_the_migration ... ok
+test preferences::tests::a_change_names_strings_of_the_four_fields_only ... ok
+test preferences::tests::every_value_outside_its_allow_list_is_named ... ok
+test current_session::tests::a_switch_names_one_tenant_and_nothing_else ... ok
+test current_session::tests::the_session_serializes_with_every_field ... ok
+test preferences::tests::every_accepted_time_zone_fits_the_database_check ... ok
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 95 filtered out; finished in 0.01s
+
+# CI=1 cargo test -p identity --test account
+     Running tests/account.rs (target/debug/deps/account-37e5d1090934dedc)
+running 4 tests
+test the_roles_get_only_the_rights_these_apis_use ... ok
+test users_change_only_their_own_preferences_within_the_allow_lists ... ok
+test account_writes_need_the_users_own_same_origin_json_request ... ok
+test a_session_switches_only_to_the_users_own_tenants ... ok
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.49s

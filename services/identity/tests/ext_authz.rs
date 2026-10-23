@@ -872,7 +872,9 @@ async fn the_service_role_writes_sessions_only_within_the_login_rules() {
         "UPDATE identity.sessions SET user_id = '01928f6e-7a3c-7d4e-8f00-0000000000ad'",
         "UPDATE identity.sessions SET token_hash = sha256('z')",
         "UPDATE identity.sessions SET created_at = now()",
-        "UPDATE identity.sessions SET active_tenant_id = '01928f6e-7a3c-7d4e-8f00-00000000000b'",
+        // `active_tenant_id` is not here: 0005_preferences_and_tenant_switch.sql, which this
+        // fixture does not apply, grants it for switching tenants (Laysi/trustiot-v2#497), and
+        // tests/account.rs checks that grant on the product's schema.
         "DELETE FROM identity.sessions",
         "TRUNCATE identity.sessions",
         "INSERT INTO identity.users (id) VALUES (gen_random_uuid())",

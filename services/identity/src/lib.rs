@@ -8,10 +8,15 @@
 //! services learn of from the `identity.tenant_created` event. The service also keeps the
 //! platform's event layer and operation log (Laysi/trustiot-v2#130, decision 34): it records
 //! every producer's events once and serves them to tenant administrators and the back office.
+//! A signed-in user reads their session and tenants, switches the session to another of their
+//! tenants, and keeps their preferences (Laysi/trustiot-v2#497).
 //!
 //! - [`session`]: the cookie, its hash, its lifetime, and the Postgres session store.
 //! - [`login`]: `POST /auth/login`, the login codes and the sessions they create.
 //! - [`logout`]: revoking one session or all of a user's.
+//! - [`current_session`]: the current session and the user's tenants, and switching the session
+//!   to one of them.
+//! - [`preferences`]: the user's language, AI answer language, time zone and theme.
 //! - [`mail`]: the SMTP client that sends the codes.
 //! - [`issuer`]: the signing keys the cluster generates, which one signs when, and the token
 //!   format `crates/service-kit` verifies.
@@ -34,6 +39,7 @@
 pub mod audience;
 pub mod config;
 pub mod csrf;
+pub mod current_session;
 pub mod delegation;
 pub mod event_log;
 pub mod exchange;
@@ -42,6 +48,7 @@ pub mod issuer;
 pub mod login;
 pub mod logout;
 pub mod mail;
+pub mod preferences;
 pub mod schema;
 pub mod session;
 pub mod tenants;
@@ -51,12 +58,15 @@ use contract::ServiceName;
 use outbox::{Consumer, ConsumerConfig};
 use service_kit::identity::{ExchangeVerifier, IdentityVerifier, PublishedKeys, ServiceIdentity};
 use service_kit::migrations::MigrationCheck;
-use service_kit::tenant::{BackgroundTenantDb, PlatformDb, TenantDb};
+use service_kit::tenant::{
+    BackgroundTenantDb, PlatformActor, PlatformDb, PlatformReader, TenantDb,
+};
 use service_kit::{BoxError, Context};
 use sqlx::postgres::PgPoolOptions;
 use utoipa::OpenApi;
 
 use crate::config::Config;
+use crate::current_session::AccountStore;
 use crate::delegation::{PgDelegationStore, RunDelegations};
 use crate::event_log::{EventLog, EventLogRecorder};
 use crate::exchange::Exchange;
@@ -64,6 +74,7 @@ use crate::ext_authz::ExtAuthz;
 use crate::issuer::{Issuer, IssuerSettings};
 use crate::login::{Login, LoginStore};
 use crate::mail::Mailer;
+use crate::preferences::PreferencesStore;
 use crate::session::{PgSessionStore, SessionStore};
 use crate::tenants::TenantStore;
 
@@ -79,6 +90,10 @@ use crate::tenants::TenantStore;
         login::log_in,
         logout::log_out,
         logout::log_out_everywhere,
+        current_session::current_session,
+        current_session::switch_tenant,
+        preferences::get_preferences,
+        preferences::update_preferences,
         event_log::tenant_event_log,
         event_log::platform_tenant_event_log,
         event_log::platform_event_log
@@ -194,12 +209,55 @@ pub async fn start(context: Context<Config>) -> Result<Router, BoxError> {
     if let Some(worker) = worker {
         context.spawn(worker.run(context.shutdown().clone()));
     }
+    // The signed-in user's own account (Laysi/trustiot-v2#497): one small pool of the service
+    // role for the current session and the preferences, and the platform role's reader of
+    // memberships.
+    let accounts = TenantDb::connect_lazy(
+        config.postgres().connect_options(),
+        PgPoolOptions::new()
+            .max_connections(current_session::POOL_CONNECTIONS)
+            .min_connections(0)
+            .acquire_timeout(current_session::ACQUIRE_TIMEOUT),
+    )?;
+    let account = AccountStore::new(accounts.clone(), memberships_reader(&context)?);
     let ext_authz = ExtAuthz::new(store, issuer, platform.ingress_routes.clone());
     Ok(ext_authz::routes(ext_authz)
         .merge(login::routes(login))
         .merge(logout::routes(verifier.clone(), logins))
+        .merge(current_session::routes(verifier.clone(), account))
+        .merge(preferences::routes(
+            verifier.clone(),
+            PreferencesStore::new(accounts),
+        ))
         .merge(tenants::routes(verifier.clone(), tenants))
         .merge(event_log::routes(verifier, log)))
+}
+
+/// The platform role's reader of users' memberships, on a lazily connecting pool of its own
+/// ([`current_session::PLATFORM_CONNECTIONS`]): listing the tenants a user belongs to reads
+/// memberships across tenants, which the service role cannot. `None`, with a WARN, when the
+/// platform role has no credentials; the current session API answers 503 then. Not part of
+/// readiness, like the event log's pools: the ext_authz check must not depend on it.
+fn memberships_reader(context: &Context<Config>) -> Result<Option<PlatformReader>, BoxError> {
+    let config = context.config();
+    let Some(platform_role) = config.platform_role() else {
+        tracing::warn!(
+            "the current session API is off: the platform role has no credentials \
+             (TRUSTIOT__DATABASE__PLATFORM_USERNAME, TRUSTIOT__DATABASE__PLATFORM_PASSWORD)"
+        );
+        return Ok(None);
+    };
+    let platform = PlatformDb::connect_lazy(
+        platform_role.connect_options(),
+        PgPoolOptions::new()
+            .max_connections(current_session::PLATFORM_CONNECTIONS)
+            .min_connections(0)
+            .acquire_timeout(current_session::ACQUIRE_TIMEOUT),
+    )?;
+    Ok(Some(platform.reader(
+        PlatformActor::service(ServiceIdentity::new(ServiceName::Identity)),
+        current_session::MEMBERSHIPS_PURPOSE,
+    )))
 }
 
 /// Opens the event log's pools lazily and starts one consumer per producer in

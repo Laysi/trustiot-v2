@@ -167,6 +167,13 @@ async fn tenants_are_isolated() {
          (services/identity/README.md)",
     )
     .exempt(
+        "identity.preferences",
+        "a user's own settings (language, AI answer language, time zone, theme), not tenant \
+         data: no tenant column; every query names the user of the request's token \
+         (services/identity/README.md, 偏好設定; tests/account.rs covers that users see and \
+         change only their own)",
+    )
+    .exempt(
         "identity.login_codes",
         "a login code belongs to a user and is checked before any session or tenant exists; it \
          holds a hash, a count and times, no tenant data (services/identity/README.md, 登入)",
@@ -179,6 +186,30 @@ async fn tenants_are_isolated() {
             "/api/identity/v1/event-log",
             "identity.event_log",
         ))
+        // The current session shows the token's tenant with its name, read under row-level
+        // security, and the user's own memberships, read with the platform role for the
+        // token's user only (Laysi/trustiot-v2#497): never another tenant's name or members.
+        .endpoint(Endpoint::list(
+            "/api/identity/v1/sessions/current",
+            "identity.tenants",
+        ))
+        .exempt_endpoint(
+            "PUT /api/identity/v1/sessions/current/tenant",
+            "switches the caller's own session, found by its cookie and the token's session \
+             claim, which a probe's token cannot name; it serves no tenant data, and a tenant \
+             the user is not a member of is refused with the session unchanged \
+             (tests/account.rs covers it, across users, sessions and tenants)",
+        )
+        .exempt_endpoint(
+            "GET /api/identity/v1/preferences",
+            "the caller's own settings, not tenant data: the user comes from the token, never \
+             from the request (tests/account.rs covers it)",
+        )
+        .exempt_endpoint(
+            "PATCH /api/identity/v1/preferences",
+            "changes the caller's own settings, not tenant data: the user comes from the token, \
+             never from the request (tests/account.rs covers it)",
+        )
         .exempt_endpoint(
             "GET /api/identity/v1/platform/tenants/{tenant_id}/event-log",
             "platform administrators only (A2): the back office reads any tenant's log by \
