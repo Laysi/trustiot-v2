@@ -4,11 +4,15 @@
 //! The MS0 skeleton (Laysi/trustiot-v2#65) gave it its own Postgres schema under row-level
 //! security, the consumer of the identity service's `identity.tenant_created`, which gives every
 //! new tenant its row here, and one tenant-scoped example API that needs an internal identity
-//! token; Laysi/trustiot-v2#99 added the tenants' device models.
+//! token; Laysi/trustiot-v2#99 added the tenants' device models, and Laysi/trustiot-v2#101 the
+//! device pool and gateway binding.
 //!
 //! - [`tenants`]: the consumer and the API.
 //! - [`device_models`]: the device models' API (Laysi/trustiot-v2#99), which writes
 //!   `assets.device_model_*` events.
+//! - [`gateways`]: the device pool, filled by the consumer of `certs.gateway_registered`, and the
+//!   platform administrators' binding of a gateway to a tenant (Laysi/trustiot-v2#101), which
+//!   writes `assets.gateway_bound`.
 //! - [`schema`]: the migration files this release expects, which readiness checks
 //!   (Laysi/trustiot-v2#402) and the migration Job applies.
 //! - [`config`]: the settings.
@@ -17,6 +21,7 @@
 
 pub mod config;
 pub mod device_models;
+pub mod gateways;
 pub mod schema;
 pub mod tenants;
 
@@ -33,11 +38,14 @@ use sqlx::postgres::PgPoolOptions;
 use utoipa::OpenApi;
 
 use crate::config::Config;
+use crate::gateways::binding::GatewayBinder;
+use crate::gateways::pool::GatewayRegisteredHandler;
 use crate::tenants::TenantCreatedHandler;
 
-/// Connections of the platform role's pool: the consumer's reads of the identity service's
-/// events, one read-only transaction at a time, plus one for readiness.
-pub const EVENT_READER_CONNECTIONS: u32 = 2;
+/// Connections of the platform role's pool: the two consumers' reads of the identity and certs
+/// services' events, one read-only transaction each at a time, one for readiness, and one for
+/// the platform administrators' reads of the device pool.
+pub const PLATFORM_CONNECTIONS: u32 = 4;
 
 /// How long getting a database connection may take, opening a new one included.
 pub const ACQUIRE_TIMEOUT: Duration = Duration::from_secs(5);
@@ -54,6 +62,9 @@ pub const ACQUIRE_TIMEOUT: Duration = Duration::from_secs(5);
         device_models::export_model,
         device_models::update_model,
         device_models::delete_model,
+        gateways::list_pool,
+        gateways::get_pool_gateway,
+        gateways::bind_gateway,
     ),
     tags((name = "assets", description = "Sites, devices and data points (services/assets)."))
 )]
@@ -66,8 +77,8 @@ pub fn openapi() -> utoipa::openapi::OpenApi {
 }
 
 /// The service's startup for `service_kit::run`: opens the service role's and the platform
-/// role's pools lazily (with the session check of `crates/service-kit`), starts the consumer of
-/// `identity.tenant_created`, follows the identity service's public keys file, and serves the
+/// role's pools lazily (with the session check of `crates/service-kit`), starts the consumers of
+/// `identity.tenant_created` and `certs.gateway_registered`, follows the identity service's public keys file, and serves the
 /// API. Readiness passes while both roles can open a checked session, the service has a usable set
 /// of public keys, and the database has every migration file this release expects
 /// ([`schema::SCHEMA`]).
@@ -89,7 +100,7 @@ pub async fn start(context: Context<Config>) -> Result<Router, BoxError> {
     let events = PlatformDb::connect_lazy(
         config.platform_role().connect_options(),
         PgPoolOptions::new()
-            .max_connections(EVENT_READER_CONNECTIONS)
+            .max_connections(PLATFORM_CONNECTIONS)
             .acquire_timeout(ACQUIRE_TIMEOUT),
     )?;
     let (ping_db, ping_events) = (db.clone(), events.clone());
@@ -102,18 +113,31 @@ pub async fn start(context: Context<Config>) -> Result<Router, BoxError> {
     });
     MigrationCheck::new(&schema::SCHEMA, db.pool().clone()).register(context.health());
 
-    let consumer = Consumer::new(
+    // `run` retries everything but a configuration mistake, which it logs; the service keeps
+    // serving then and the consumer's lag shows the problem.
+    let tenant_consumer = Consumer::new(
         &events,
-        background,
+        background.clone(),
         ConsumerConfig::new(tenants::SUBSCRIPTION, tenants::SOURCE_SCHEMA)?,
         TenantCreatedHandler,
     );
     let stop = context.shutdown().stopping_token();
     context.spawn(async move {
-        // `run` retries everything but a configuration mistake, which it logs; the service keeps
-        // serving then and the consumer's lag shows the problem.
-        let _ = consumer.run(stop).await;
+        let _ = tenant_consumer.run(stop).await;
     });
+    let pool_consumer = Consumer::new(
+        &events,
+        background.clone(),
+        ConsumerConfig::new(gateways::pool::SUBSCRIPTION, gateways::pool::SOURCE_SCHEMA)?,
+        GatewayRegisteredHandler,
+    );
+    let stop = context.shutdown().stopping_token();
+    context.spawn(async move {
+        let _ = pool_consumer.run(stop).await;
+    });
+    // Besides the consumers, the binder is the only holder of the background handle: a binding
+    // writes into the tenant the request's body names (gateways/binding.rs).
+    let binder = GatewayBinder::new(background);
 
     let keys = PublishedKeys::watch(
         &context,
@@ -121,5 +145,7 @@ pub async fn start(context: Context<Config>) -> Result<Router, BoxError> {
     )
     .await;
     let verifier = IdentityVerifier::new(ServiceName::Assets, keys);
-    Ok(tenants::routes(verifier.clone(), db.clone()).merge(device_models::routes(verifier, db)))
+    Ok(tenants::routes(verifier.clone(), db.clone())
+        .merge(device_models::routes(verifier.clone(), db))
+        .merge(gateways::routes(verifier, events, binder)))
 }

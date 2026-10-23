@@ -394,7 +394,7 @@ curl -sS --fail-with-body -X POST "https://<app 主機>/api/certs/v1/gateway-reg
 
 ### 事件與紀錄
 
-`certs.gateway_registered`（`contract::events::certs::GatewayRegistered`，版本 1）：全平台事件（`tenant_id` 是 null），aggregate 是 `gateway_registration`、id 是硬體 ID，actor 是平台管理員；payload 有 `hardware_id`、`public_key_sha256`、`endorsement_key_sha256`、`certificate_serial`、`workstation`。只有產生者的平台角色能寫全平台事件，所以登錄整個以 `certs_platform` 執行。身分服務的事件紀錄消費它，記在全平台的事件紀錄（`services/identity/README.md`）。之後的 Laysi/trustiot-v2#115 等以它建立閘道器的資產。
+`certs.gateway_registered`（`contract::events::certs::GatewayRegistered`，版本 1）：全平台事件（`tenant_id` 是 null），aggregate 是 `gateway_registration`、id 是硬體 ID，actor 是平台管理員；payload 有 `hardware_id`、`public_key_sha256`、`endorsement_key_sha256`、`certificate_serial`、`workstation`。只有產生者的平台角色能寫全平台事件，所以登錄整個以 `certs_platform` 執行。身分服務的事件紀錄消費它，記在全平台的事件紀錄（`services/identity/README.md`）；資產服務消費它，把閘道器放進設備池（Laysi/trustiot-v2#101，`services/assets/README.md` 的「閘道器設備池與綁定」）。
 
 每次新登錄記一行 INFO `registered a gateway`（平台管理員的使用者 id、工作站、硬體 ID、序號、簽發 CA 的金鑰 id、到期時間），重送記 `a gateway registration repeated an existing one`，工作站被拒記 `refused a gateway registration: ...` 與原因；都不含 CSR、金鑰或憑證。平台角色的每個交易另有 service-kit 的 `platform database access`（用途 `gateway-registration`）。
 

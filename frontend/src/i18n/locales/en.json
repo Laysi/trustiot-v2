@@ -89,6 +89,13 @@
   "gateway_registration.public_key_in_use": "Another gateway is already registered with this key.",
   "gateway_registration.endorsement_key_in_use": "Another active gateway is already registered with this endorsement key.",
   "gateway_registration.ca_not_ready": "The certificate authority can't register gateways yet. Try again in a few minutes.",
+  "gateway_binding.body_too_large": "The request is too large. The limit is {max_bytes} bytes.",
+  "gateway_binding.body_invalid": "The request must be a JSON object.",
+  "gateway_binding.unknown_field": "This field isn't recognized. Only the tenant is set here.",
+  "gateway_binding.field_required": "This field is required.",
+  "gateway_binding.tenant_id_invalid": "Choose a tenant.",
+  "gateway_binding.tenant_unknown": "This tenant doesn't exist, or it was created a moment ago and isn't ready yet. Check the tenant or try again in a moment.",
+  "gateway_binding.bound_to_another_tenant": "This gateway is bound to another tenant. Unbind it first.",
 
   "login.email_invalid": "Enter a valid email address.",
   "login.code_invalid": "Enter the whole code from the email.",

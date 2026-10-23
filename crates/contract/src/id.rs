@@ -99,6 +99,12 @@ uuid_id!(
     /// model's name, which is unique per tenant only, it is unique across tenants.
     DeviceModelId
 );
+uuid_id!(
+    /// One binding of a gateway to a tenant (rebuild checklist D3, Laysi/trustiot-v2#101), made
+    /// by the assets service. A gateway gets a new one every time it is bound, so a binding and
+    /// its events always belong to one tenant.
+    GatewayBindingId
+);
 
 #[cfg(test)]
 mod tests {
