@@ -131,6 +131,9 @@ const RUST_READ_FILES: ReadonlySet<string> = new Set([
   "deploy/chart/values.yaml",
   // tools/migrate/tests/registry.rs: which login roles the chart binds a Secret to
   "deploy/chart/templates/_migrate.tpl",
+  // crates/testkit/src/chart.rs: the Postgres connection budgets that the services' tests
+  // (services/*/tests/chart_connections.rs) hold their pools to
+  "deploy/chart/templates/_postgres.tpl",
   // tools/migrate/tests/mqtt_broker.rs runs the MQTT broker's configuration (include_str!)
   "deploy/chart/files/mosquitto/mosquitto.conf",
 ]);

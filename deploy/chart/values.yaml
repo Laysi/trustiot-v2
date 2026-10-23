@@ -185,7 +185,12 @@ serviceDefaults:
 # that ships its image; until then it stays disabled. Besides the serviceDefaults fields, an
 # entry can list `credentials`: the dependency Secrets that only this service receives
 # (qdrant-read, qdrant-write, object-storage, smtp, ai; the AI keys only for ai-gateway and the
-# Qdrant keys only for knowledge); see README.md.
+# Qdrant keys only for knowledge); see README.md. A service that uses Postgres (mesh.calls) also
+# has `database.maxConnections`: the size of its main pool, which the chart passes as
+# TRUSTIOT__DATABASE__MAX_CONNECTIONS. Its other pools are fixed by its code; the render fails when
+# every replica of every such service, plus one more of each during a rolling update, could open
+# more connections than postgres.bundled.parameters.max_connections allows (README.md,
+# 「叢集內的 Postgres」).
 services:
   # The SPA's static files (services/web, decision 2). While enabled, every path on hosts.app
   # outside /api and /auth reaches it without the cookie check, and without the Cookie and
@@ -217,10 +222,20 @@ services:
     # Mails login codes through the relay in `smtp` (services/identity/README.md, "登入").
     credentials:
       - smtp
+    # The ext_authz check's pool, 3 to 100 (it always keeps 3 open). Each replica opens 21 more
+    # in its other pools: 31 in all.
+    database:
+      maxConnections: 10
   assets:
     enabled: false
+    # 2 to 100. Each replica opens 2 more to read the identity service's events: 12 in all.
+    database:
+      maxConnections: 10
   certs:
     enabled: false
+    # 2 to 100. Each replica opens 4 more for factory registrations: 9 in all.
+    database:
+      maxConnections: 5
     # The API (http: the CA chain and CRLs for the MQTT broker, the workstation certificate API)
     # and the MQTT broker's server certificate issuance on a port of its own (broker-certs, the
     # service's broker.listen_addr; Laysi/trustiot-v2#557). The mesh lets the ingress gateway and
@@ -246,6 +261,9 @@ services:
     enabled: false
   telemetry-query:
     enabled: false
+    # 2 to 100. Each replica opens 2 more to read the identity service's events: 12 in all.
+    database:
+      maxConnections: 10
   gateway-ops:
     enabled: false
   # The gateways' MQTT inside WebSocket (services/mqtt-bridge, decision 6): ingress.publicPaths.mqtt
@@ -504,7 +522,11 @@ postgres:
       effective_cache_size: 384MB
       work_mem: 4MB
       maintenance_work_mem: 64MB
-      max_connections: 100
+      # Fits identity, assets, certs and telemetry-query at one replica each while all of them
+      # roll at once (128) plus the 18 reserved connections, with room for 14 more; the render
+      # fails when the enabled services need more. The memory estimate is in README.md
+      # (「叢集內的 Postgres」).
+      max_connections: 160
     # The image is built for arm64 only (decision 5).
     nodeSelector:
       kubernetes.io/arch: arm64
