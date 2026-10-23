@@ -243,3 +243,197 @@ test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
 test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
 test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.04s
 test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+## Run 6: after the security review fixes, rebased on origin/main 6da9b15f (Laysi/trustiot-v2#622, tokio 1.53.3)
+
+### cargo fmt --all --check
+### cargo clippy --workspace --all-targets -- -D warnings
+    Checking openapi v0.1.0 (<host copy>/src/tools/openapi)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 16.05s
+### cargo run -p openapi -- --check
+api/openapi.json is up to date
+### cargo test -p workstation -p contract -p certs -p repo-check --no-fail-fast
+     Running unittests src/lib.rs (<host copy>/target/debug/deps/certs-6e14ad5f8805b2db)
+test broker::tests::only_one_pkcs10_content_type_is_accepted ... ok
+test pem::tests::encodes_in_64_character_lines_and_decodes_back ... ok
+test result: ok. 18 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/broker.rs (<host copy>/target/debug/deps/broker-a322ec4b402e785d)
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.04s
+     Running tests/ceremony.rs (<host copy>/target/debug/deps/ceremony-30798fc7f499bc35)
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.77s
+     Running tests/crl.rs (<host copy>/target/debug/deps/crl-9c337c206ed0eee7)
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 21.99s
+     Running tests/cross_tenant.rs (<host copy>/target/debug/deps/cross_tenant-94137c143977f734)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.24s
+     Running tests/issuance.rs (<host copy>/target/debug/deps/issuance-4df4233e74f89ba7)
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.87s
+     Running tests/key_custody.rs (<host copy>/target/debug/deps/key_custody-61902354014b7e1a)
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.78s
+     Running tests/registration.rs (<host copy>/target/debug/deps/registration-4eaf1a8700ebc30b)
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.86s
+     Running tests/workstation.rs (<host copy>/target/debug/deps/workstation-82edf166e1818618)
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 15.39s
+     Running unittests src/lib.rs (<host copy>/target/debug/deps/contract-b7c45619d25ef589)
+test client::tests::only_json_objects_count_as_m1_bodies ... ok
+test client::tests::peer_m1_errors_pass_through_except_unauthenticated ... ok
+test client::tests::statuses_without_an_m1_body_map_by_status ... ok
+test client::tests::transport_failures_map_to_m1_codes ... ok
+test error::tests::malformed_key_literal_panics_outside_const - should panic ... ok
+test id::tests::generated_ids_are_time_ordered_uuid_v7 ... ok
+test result: ok. 43 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/client.rs (<host copy>/target/debug/deps/client-e5edd060465109e4)
+test peer_m1_errors_pass_through ... ok
+test statuses_without_an_m1_body_map_by_status ... ok
+test a_silent_peer_times_out_as_m1_timeout ... ok
+test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.30s
+     Running tests/client_logging.rs (<host copy>/target/debug/deps/client_logging-80948c54b487f4d0)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/error_format.rs (<host copy>/target/debug/deps/error_format-4ef36a150ff13807)
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/events.rs (<host copy>/target/debug/deps/events-f4e199c5cc9884f8)
+test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running unittests src/lib.rs (<host copy>/target/debug/deps/repo_check-bcdd8915540fedcd)
+test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/repository.rs (<host copy>/target/debug/deps/repository-4bf5f5e43d5bc66f)
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.08s
+     Running unittests src/lib.rs (<host copy>/target/debug/deps/workstation-4438922ee93a44f0)
+test files::tests::secret_files_are_created_0600_and_never_overwritten ... ok
+test http::tests::api_errors_show_only_m1_codes_keys_and_fields ... ok
+test http::tests::a_headers_file_wider_than_0600_is_refused ... ok
+test http::tests::only_the_platforms_own_401_rejects_a_session ... ok
+test identity::tests::keys_round_trip_through_pkcs8_pem_and_never_show_in_debug ... ok
+test result: ok. 30 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running unittests src/main.rs (<host copy>/target/debug/deps/trustiot_workstation-74954ccb1d275e5e)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/identity.rs (<host copy>/target/debug/deps/identity-0684134a5f786ee1)
+test a_key_file_wider_than_0600_is_refused_by_name_without_its_contents ... ok
+test init_creates_a_0600_key_and_a_csr_and_never_replaces_the_key ... ok
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+     Running tests/login.rs (<host copy>/target/debug/deps/login-b7f3317858c06f6e)
+test a_proxys_401_keeps_the_session_file ... ok
+test a_session_file_wider_than_0600_is_refused ... ok
+test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.04s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test crates/contract/src/client.rs - client::Endpoint (line 74) ... ok
+test crates/contract/src/error.rs - error::message_key (line 239) ... ok
+test crates/contract/src/client.rs - client::InternalClient<S>::call (line 327) ... ok
+test crates/contract/src/client.rs - client::InternalClient<S>::new (line 249) ... ok
+test crates/contract/src/event.rs - event::Event (line 22) ... ok
+test crates/contract/src/event.rs - event::Actor (line 174) ... ok
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test crates/contract/src/client.rs - client::InternalClient<S>::new (line 262) - compile fail ... ok
+test crates/contract/src/error.rs - error::message_key (line 246) - compile fail ... ok
+test crates/contract/src/client.rs - client::InternalClient<S>::call (line 347) - compile fail ... ok
+test crates/contract/src/event.rs - event::Event (line 45) - compile fail ... ok
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test config::tests::the_session_lives_only_under_an_absolute_runtime_directory ... ok
+test config::tests::options_are_named_once_with_a_value ... ok
+test config::tests::the_workstation_directory_follows_xdg ... ok
+test config::tests::timeouts_are_whole_seconds_within_bounds ... ok
+test config::tests::origins_are_https_or_loopback_http_without_anything_else ... ok
+test files::tests::a_link_to_a_directory_is_refused ... ok
+test files::tests::directories_writable_by_others_are_refused ... ok
+test files::tests::files_and_directories_of_other_users_are_refused ... ok
+test files::tests::replacements_are_whole_files_with_the_mode_asked_for ... ok
+test files::tests::wider_secret_files_are_refused_by_name_without_contents ... ok
+test files::tests::links_and_oversized_files_are_refused ... ok
+test files::tests::secret_files_are_created_0600_and_never_overwritten ... ok
+test http::tests::api_errors_show_only_m1_codes_keys_and_fields ... ok
+test http::tests::a_headers_file_wider_than_0600_is_refused ... ok
+test http::tests::only_the_platforms_own_401_rejects_a_session ... ok
+test http::tests::plain_http_takes_no_ca_file ... ok
+test http::tests::the_headers_file_names_exactly_the_access_headers ... ok
+test identity::tests::workstation_names_follow_the_certs_rule ... ok
+test identity::tests::serials_are_lower_case_hex_compared_without_leading_zeros ... ok
+test secret::tests::codes_are_eight_digits ... ok
+test identity::tests::certificates_are_re_encoded_and_other_blocks_refused ... ok
+test secret::tests::session_cookies_have_the_identity_services_form ... ok
+test secret::tests::debug_and_display_never_show_a_secret ... ok
+test identity::tests::only_one_private_key_block_is_accepted ... ok
+test identity::tests::keys_round_trip_through_pkcs8_pem_and_never_show_in_debug ... ok
+test session::tests::emails_are_checked_without_being_repeated ... ok
+test session::tests::session_files_round_trip_and_refuse_anything_else ... ok
+test secret::tests::the_session_cookie_is_found_in_exactly_one_set_cookie_header ... ok
+test files::tests::fifos_are_refused_without_blocking ... ok
+test http::tests::https_trusts_only_the_ca_file_and_carries_the_extra_headers ... ok
+test result: ok. 30 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test a_key_file_wider_than_0600_is_refused_by_name_without_its_contents ... ok
+test init_creates_a_0600_key_and_a_csr_and_never_replaces_the_key ... ok
+test install_certificate_refuses_every_profile_but_the_workstation_one ... ok
+test the_binary_initialises_and_installs ... ok
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+test login_refuses_to_start_without_a_runtime_directory ... ok
+test a_proxys_401_keeps_the_session_file ... ok
+test logout_of_an_ended_session_removes_the_file ... ok
+test init_login_enroll_and_logout_at_trace_leak_no_secret ... ok
+test send_code_is_sent_once_when_the_connection_drops ... ok
+test send_code_is_sent_once_when_the_service_is_unavailable ... ok
+test a_wrong_code_can_be_entered_again_without_a_new_email ... ok
+test an_accepted_send_code_with_an_unreadable_answer_still_asks_for_the_code ... ok
+test a_session_that_cannot_be_stored_is_revoked ... ok
+test the_headers_file_is_checked_before_any_request ... ok
+test a_rejected_session_is_revoked_before_its_file_is_removed ... ok
+test a_rejected_session_that_cannot_be_revoked_keeps_its_file ... ok
+test enroll_after_the_session_ended_removes_the_session_file ... ok
+test a_session_file_wider_than_0600_is_refused ... ok
+test the_session_is_only_sent_to_its_own_origin ... ok
+test an_answer_whose_serial_is_not_the_certificates_is_refused ... ok
+test send_code_is_sent_once_when_the_answer_times_out ... ok
+test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.04s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+### cargo deny --locked check
+advisories ok, bans ok, licenses ok, sources ok
+### cargo build --release --locked -p workstation
+    Finished `release` profile [optimized] target(s) in 22.56s
+### cargo test -p workstation --test login init_login_enroll_and_logout_at_trace_leak_no_secret -- --nocapture
+
+running 1 test
+===== init (exit Some(0))
+created the workstation key /tmp/workstation-flow-774935-1792773764220939241-0/ws/workstation-key.pem
+wrote the certificate signing request /tmp/workstation-flow-774935-1792773764220939241-0/ws/workstation.csr
+
+2026-10-23T16:42:44.222448Z  INFO created the workstation key path=/tmp/workstation-flow-774935-1792773764220939241-0/ws/workstation-key.pem
+2026-10-23T16:42:44.222690Z  INFO wrote the certificate signing request path=/tmp/workstation-flow-774935-1792773764220939241-0/ws/workstation.csr
+
+===== login (exit Some(0))
+logged in to http://127.0.0.1:46615; the session is kept in /tmp/workstation-flow-774935-1792773764220939241-0/run/trustiot-workstation/session until logout, or until it ends (12 hours without use, 7 days at most)
+
+2026-10-23T16:42:44.224124Z DEBUG sending a request method=POST path="/auth/login" origin=http://127.0.0.1:46615
+2026-10-23T16:42:44.224299Z TRACE connected host="127.0.0.1" port=46615
+2026-10-23T16:42:44.224730Z TRACE received the response head
+2026-10-23T16:42:44.224779Z DEBUG received a response method=POST path="/auth/login" status=202
+2026-10-23T16:42:44.224797Z DEBUG send_code was accepted
+If the address belongs to an account, a login code of 8 digits is on its way; it is valid for 10 minutes. If none arrives, wait at least 60 seconds and run login again (each address gets at most 5 codes an hour and 20 a day).
+Enter the code from the email (attempt 1 of 3):
+2026-10-23T16:42:44.224823Z DEBUG sending a request method=POST path="/auth/login" origin=http://127.0.0.1:46615
+2026-10-23T16:42:44.224933Z TRACE connected host="127.0.0.1" port=46615
+2026-10-23T16:42:44.225202Z TRACE received the response head
+2026-10-23T16:42:44.225235Z DEBUG received a response method=POST path="/auth/login" status=200
+2026-10-23T16:42:44.225252Z DEBUG verify_code opened a session
+2026-10-23T16:42:44.225304Z  INFO stored the session path=/tmp/workstation-flow-774935-1792773764220939241-0/run/trustiot-workstation/session origin=http://127.0.0.1:46615
+
+===== enroll (exit Some(0))
+installed workstation:line-a-ws-01 as /tmp/workstation-flow-774935-1792773764220939241-0/ws/workstation.pem (serial 4f3a9c1e2b7d6058a1c3e5f708192a3b, valid until 2027-04-21T16:42:44+00:00); keep the serial, it is how the certificate is revoked
+
+2026-10-23T16:42:44.227005Z DEBUG sending a request method=POST path="/api/certs/v1/workstation-certificates" origin=http://127.0.0.1:46615
+2026-10-23T16:42:44.227119Z TRACE connected host="127.0.0.1" port=46615
+2026-10-23T16:42:44.227772Z TRACE received the response head
+2026-10-23T16:42:44.227809Z DEBUG received a response method=POST path="/api/certs/v1/workstation-certificates" status=201
+2026-10-23T16:42:44.227845Z DEBUG the certs service issued a workstation certificate serial=4f3a9c1e2b7d6058a1c3e5f708192a3b
+2026-10-23T16:42:44.228007Z  INFO installed the workstation certificate path=/tmp/workstation-flow-774935-1792773764220939241-0/ws/workstation.pem subject=workstation:line-a-ws-01 serial=4f3a9c1e2b7d6058a1c3e5f708192a3b not_after=2027-04-21T16:42:44+00:00
+
+===== logout (exit Some(0))
+logged out: the session is revoked and its file removed
+
+2026-10-23T16:42:44.229313Z DEBUG sending a request method=DELETE path="/api/identity/v1/sessions/current" origin=http://127.0.0.1:46615
+2026-10-23T16:42:44.229440Z TRACE connected host="127.0.0.1" port=46615
+2026-10-23T16:42:44.229710Z TRACE received the response head
+2026-10-23T16:42:44.229756Z DEBUG received a response method=DELETE path="/api/identity/v1/sessions/current" status=204
+2026-10-23T16:42:44.229786Z  INFO removed the session file path=/tmp/workstation-flow-774935-1792773764220939241-0/run/trustiot-workstation/session
+
+test init_login_enroll_and_logout_at_trace_leak_no_secret ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 16 filtered out; finished in 0.01s
