@@ -29,6 +29,7 @@
 //! | Another device of the gateway at the endpoint with the other transport | 409 `conflict`, key `device.transport_mismatch`, `{"device_id", "transport"}` |
 //! | Another device of the gateway at the endpoint with the unit ID | 409 `conflict`, key `device.unit_taken`, `{"device_id"}` |
 //! | An update whose `revision` is not the current one | 409 `conflict`, key `device.revision_mismatch`, `{"current"}` |
+//! | An update of a device whose gateway binding has ended | 409 `conflict`, key `device.binding_ended`; the device can still be deleted |
 //! | The database failed | 503 `unavailable`; nothing was written |
 //!
 //! Every response carries `cache-control: no-store`. A write that changed something logs one
@@ -88,6 +89,9 @@ pub const TRANSPORT_MISMATCH: MessageKey = MessageKey::new("device.transport_mis
 pub const UNIT_TAKEN: MessageKey = MessageKey::new("device.unit_taken");
 /// The device changed since the revision the update expected (409); `details.current`.
 pub const REVISION_MISMATCH: MessageKey = MessageKey::new("device.revision_mismatch");
+/// The device's gateway binding is no longer the gateway's current one (409): the gateway was
+/// unbound, and perhaps bound again, so the device can only be deleted.
+pub const BINDING_ENDED: MessageKey = MessageKey::new("device.binding_ended");
 
 /// A device: a Modbus endpoint one of the tenant's gateways polls with one of its models.
 #[derive(Clone, Debug, PartialEq, Serialize, ToSchema)]
@@ -168,6 +172,8 @@ pub struct DeviceList {
 
 /// The body of `POST /api/assets/v1/devices`. Unknown fields are refused.
 #[derive(ToSchema)]
+// Read by utoipa only: the schema says `additionalProperties: false`, as document.rs enforces.
+#[serde(deny_unknown_fields)]
 #[allow(
     dead_code,
     reason = "documents the request body; the handler reads the JSON by hand (document.rs)"
@@ -201,6 +207,7 @@ pub struct CreateDevice {
 /// The body of `PUT /api/assets/v1/devices/{device_id}`: the device's settings, which replace
 /// all of the current ones (a field left out takes its default). Unknown fields are refused.
 #[derive(ToSchema)]
+#[serde(deny_unknown_fields)]
 #[allow(
     dead_code,
     reason = "documents the request body; the handler reads the JSON by hand (document.rs)"
@@ -413,7 +420,7 @@ async fn create_device(
         (status = 401, description = "No valid session (`unauthenticated`).", body = ErrorBody),
         (status = 403, description = "No tenant, or a role below editor (`permission_denied`).", body = ErrorBody),
         (status = 404, description = "No such device in the caller's tenant (`not_found`).", body = ErrorBody),
-        (status = 409, description = "The device is no longer at the `revision` sent (`device.revision_mismatch`, `details.current`), or another device of the gateway at the same host and port uses the other transport (`device.transport_mismatch`) or the same unit ID (`device.unit_taken`) (`conflict`). Nothing was written.", body = ErrorBody),
+        (status = 409, description = "The device's gateway binding has ended, so it can only be deleted (`device.binding_ended`), the device is no longer at the `revision` sent (`device.revision_mismatch`, `details.current`), or another device of the gateway at the same host and port uses the other transport (`device.transport_mismatch`) or the same unit ID (`device.unit_taken`) (`conflict`). Nothing was written.", body = ErrorBody),
         (status = 422, description = "A field rule is broken, `revision` is missing or not a positive integer, or `name`, `hardware_id` or `model_id` is not the device's (`device.name_immutable`, `device.gateway_immutable`, `device.model_immutable`) (`validation_failed`). Nothing was written.", body = ErrorBody),
         (status = 503, description = "The database failed (`unavailable`). Nothing was written.", body = ErrorBody),
     )
@@ -625,6 +632,9 @@ fn refusal(failure: &StoreError) -> Option<ErrorBody> {
                 }
             }
             body
+        }
+        StoreError::BindingEnded => {
+            ErrorBody::new(ErrorCode::Conflict).with_message_key(BINDING_ENDED)
         }
         StoreError::RevisionMismatch { current } => ErrorBody::new(ErrorCode::Conflict)
             .with_message_key(REVISION_MISMATCH)

@@ -489,6 +489,39 @@ async fn invalid_settings_are_refused_and_nothing_is_written() {
         (json!({"host": "::1"}), "/host", "device.host_invalid"),
         (json!({"host": "localhost"}), "/host", "device.host_invalid"),
         (json!({"host": "0.0.0.0"}), "/host", "device.host_invalid"),
+        // Names a resolver reads as numbers (127.0.0.1, 0.0.0.0, multicast, broadcast) and the
+        // names Debian's /etc/hosts gives ::1.
+        (
+            json!({"host": "0x7f000001"}),
+            "/host",
+            "device.host_invalid",
+        ),
+        (
+            json!({"host": "0x7f.0.0.0x1"}),
+            "/host",
+            "device.host_invalid",
+        ),
+        (json!({"host": "0x0"}), "/host", "device.host_invalid"),
+        (
+            json!({"host": "0xe0000001"}),
+            "/host",
+            "device.host_invalid",
+        ),
+        (
+            json!({"host": "0xffffffff"}),
+            "/host",
+            "device.host_invalid",
+        ),
+        (
+            json!({"host": "ip6-localhost"}),
+            "/host",
+            "device.host_invalid",
+        ),
+        (
+            json!({"host": "IP6-Loopback"}),
+            "/host",
+            "device.host_invalid",
+        ),
         (
             json!({"host": "192.0.2.1:502"}),
             "/host",
@@ -605,6 +638,129 @@ async fn invalid_settings_are_refused_and_nothing_is_written() {
         before,
         "a refused write changed a device or wrote an event"
     );
+    // Devices sit on the site's LAN: private ranges, link-local (APIPA converters), IPv6 ULA
+    // and names whose earlier labels only look like numbers are accepted.
+    for (index, host) in [
+        "10.1.2.3",
+        "172.16.0.10",
+        "192.168.10.21",
+        "169.254.1.20",
+        "fd12:3456:789a::10",
+        "0x7f.plc.example",
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let reply = assets
+            .json(
+                Method::POST,
+                DEVICES,
+                Some(&editor),
+                &with(
+                    &create,
+                    &json!({"name": format!("lan-{index}"), "host": host}),
+                ),
+            )
+            .await;
+        assert_eq!(reply.status, 201, "{host}: {}", reply.body);
+        assert_eq!(reply.json()["host"], host);
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn devices_of_an_ended_binding_can_only_be_deleted() {
+    let Some(product) = product_postgres(LOGINS).await else {
+        return;
+    };
+    let issuer = TestIssuer::new();
+    let assets = start(&product, &issuer).await;
+    let mut admin = product.superuser().await;
+    let tenant = known_tenant(&mut admin).await;
+    let other = known_tenant(&mut admin).await;
+    let editor = issuer.tenant_token(ServiceName::Assets, tenant, TenantRole::Editor);
+    let gateway = bound(&mut admin, tenant, "tg-rebind").await;
+    let model_id = model(&assets, &editor, "meter").await;
+    let mut paths = Vec::new();
+    for (name, unit_id) in [("kept-meter", 1), ("dropped-meter", 2)] {
+        let created = assets
+            .json(
+                Method::POST,
+                DEVICES,
+                Some(&editor),
+                &json!({"name": name, "hardware_id": gateway, "model_id": model_id,
+                        "transport": "modbus_tcp", "host": "192.0.2.70", "port": 502,
+                        "unit_id": unit_id}),
+            )
+            .await;
+        assert_eq!(created.status, 201, "{}", created.body);
+        paths.push(format!(
+            "{DEVICES}/{}",
+            created.json()["device_id"].as_str().expect("ID")
+        ));
+    }
+    let update = json!({"revision": 1, "transport": "modbus_tcp", "host": "198.51.100.70",
+                        "port": 502, "unit_id": 1});
+
+    // The binding ends (the service role cannot do that; unbinding is Laysi/trustiot-v2#115),
+    // and the gateway is bound to another tenant.
+    sqlx::query(UNBIND)
+        .bind(&gateway)
+        .execute(&mut admin)
+        .await
+        .expect("end the binding");
+    sqlx::query(INSERT_BINDING)
+        .bind(other.to_string())
+        .bind(&gateway)
+        .execute(&mut admin)
+        .await
+        .expect("bind the gateway to the other tenant");
+    let before = (
+        footprint(&mut admin, tenant).await,
+        footprint(&mut admin, other).await,
+    );
+
+    // The old tenant cannot change its device on the gateway any more, nor add one.
+    let refused = assets
+        .json(Method::PUT, &paths[0], Some(&editor), &update)
+        .await;
+    assert_refused(&refused, 409, "conflict", Some("device.binding_ended"));
+    let refused = assets
+        .json(
+            Method::POST,
+            DEVICES,
+            Some(&editor),
+            &json!({"name": "late-meter", "hardware_id": gateway, "model_id": model_id,
+                    "transport": "modbus_tcp", "host": "192.0.2.70", "port": 502,
+                    "unit_id": 3}),
+        )
+        .await;
+    assert_eq!(
+        field_errors(&refused),
+        one_error("/hardware_id", "device.gateway_not_bound")
+    );
+    assert_eq!(
+        (
+            footprint(&mut admin, tenant).await,
+            footprint(&mut admin, other).await,
+        ),
+        before,
+        "a refused write changed a device or wrote an event"
+    );
+    // It can still read and delete it.
+    let read = assets
+        .call(Method::GET, &paths[1], Some(&editor), None)
+        .await;
+    assert_eq!(read.status, 200, "{}", read.body);
+    let deleted = assets
+        .call(Method::DELETE, &paths[1], Some(&editor), None)
+        .await;
+    assert_eq!(deleted.status, 204, "{}", deleted.body);
+    let stored = events(&mut admin, tenant).await;
+    let event = stored.last().expect("an event");
+    assert_eq!(event.event_type, "assets.device_deleted");
+    let payload: DeviceDeleted = event.envelope.decode().expect("decode the event");
+    assert_eq!(payload.hardware_id.as_str(), gateway);
+    assert_eq!(footprint(&mut admin, other).await, before.1);
 }
 
 #[tokio::test(flavor = "multi_thread")]

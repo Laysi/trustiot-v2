@@ -109,7 +109,7 @@
 | `hardware_id` | 硬體 ID 規則（`protocol::GatewayId`）；必須是目前綁定到呼叫者租戶的閘道器（`unbound_at IS NULL`），否則 422 `gateway_not_bound`；建立後不能換（422 `gateway_immutable`） | `hardware_id_invalid`（`details.max` 64） |
 | `model_id` | UUID；必須是呼叫者租戶的型號，否則 422 `model_not_found`；建立後不能換（422 `model_immutable`） | `model_id_invalid` |
 | `transport` | `modbus_tcp` 或 `rtu_over_tcp` | `transport_invalid`（`details.allowed`） |
-| `host` | IP 位址或最多 253 位元組的 DNS 名稱（`protocol::config::Host`：不能是未指定、多播、廣播位址，最後一段全是數字的名稱當成打錯的 IPv4 拒絕）；另外不能是 loopback 位址（含 `::ffff:127.0.0.1`）、`localhost` 或 `*.localhost` | `host_invalid`（`details.max` 253） |
+| `host` | IP 位址或最多 253 位元組的 DNS 名稱（`protocol::config::Host`：不能是未指定、多播、廣播位址，最後一段是數字（全是十進位數字，或 `0x` 加十六進位數字，WHATWG URL 的「ends in a number」規則）的名稱不是名稱，因為解析器會把 `0x7f000001` 這類寫法讀成 IPv4 位址）；另外不能是 loopback 位址（含 `::ffff:127.0.0.1`）、`localhost`、`*.localhost`、`ip6-localhost` 或 `ip6-loopback`（不分大小寫，結尾可帶 `.`）。私有位址（10/8、172.16/12、192.168/16、IPv6 ULA）與 169.254/16 都接受：現場設備就在這些網段 | `host_invalid`（`details.max` 253） |
 | `port` | 1–65535 的整數，必填、沒有預設 | `port_invalid`（`details.min`、`details.max`） |
 | `unit_id` | 整數，預設 1；Modbus TCP 0–255，RTU over TCP 1–247 | `unit_id_invalid`（`details.min`、`details.max`） |
 | `poll_interval_ms` | 整數毫秒，預設 60000；1000–86400000 | `poll_interval_invalid`（`details.min`、`details.max`） |
@@ -131,15 +131,16 @@
 | 取樣間隔上限 1 天 | `protocol` 的上限 |
 | 預設站號 1 | 舊系統的預設、RTU 的第一個位址 |
 | 連接埠沒有預設 | 現場的連接埠各不相同（502、8899、4196 都見過），預設值只會讓錯的設定看起來是對的 |
-| 拒絕 loopback 與 `localhost` | 指向閘道器自己的連接埠，那裡沒有現場設備，當成打錯拒絕。這只是輸入檢查，不是安全邊界：雲端無法照閘道器在現場網路上的方式解析名稱，其他任何 DNS 名稱在那裡都可能解析成 loopback（或在檢查之後才改成），所以不讓輪詢連到閘道器本機的服務，要由閘道器在解析與連線時把關（`edge/agent` 的 `modbus::tcp::connect`），這個檢查不能取代它（後續工作） |
+| 拒絕 loopback 與 `localhost` | 指向閘道器自己的連接埠，那裡沒有現場設備，當成打錯拒絕；Debian 的 `/etc/hosts` 把 `ip6-localhost`、`ip6-loopback` 指向 `::1`，所以一起拒絕。這只是輸入檢查，不是安全邊界：雲端無法照閘道器在現場網路上的方式解析名稱，其他任何 DNS 名稱在那裡都可能解析成 loopback（或在檢查之後才改成），所以不讓輪詢連到閘道器本機的服務，要由閘道器在解析與連線時把關（`edge/agent` 的 `modbus::tcp::connect`），這個檢查不能取代它（後續工作） |
+| 收緊主機規則要一起處理既有的列 | 讀取設備時會用 `protocol::config::Host::new` 重新檢查存下的 `host`，不通過就當成資料損壞（503），列表（整個租戶的）、讀取、更新那台設備都會失敗（刪除不讀主機，仍然可以）。所以之後收緊 `Host` 的規則（例如這次的「結尾是數字」），要在同一個變更裡先查出現有不符合新規則的列並處理（遷移或通知租戶改掉），不能只改程式。本服務自己的 loopback 名稱檢查（`localhost`、`ip6-*`）讀取時不重查，收緊它不影響既有的列，但仍要決定既有的列怎麼辦 |
 | 只有 `modbus_tcp`、`rtu_over_tcp` | `protocol` 只有這兩種；模擬模式已棄用（F6），被動模式（F3）還沒做 |
 | 設備名稱在租戶內唯一 | 與型號一樣，名稱是使用者辨認設備的方式 |
 | 不分辨閘道器是別的租戶的、沒綁定、還是不在設備池 | 都回同一個 `gateway_not_bound`，租戶無法藉此探知別的租戶握有哪些閘道器 |
-| 更新不再檢查綁定 | 解綁或重新綁定時已有的設備怎麼處理是 Laysi/trustiot-v2#115 的範圍；設備的外鍵指向建立時的綁定（綁定不會被刪除） |
+| 綁定結束後只能刪除 | 設備的外鍵指向建立時的綁定（綁定不會被刪除）。更新在拿到閘道器的 advisory lock、鎖住設備的列之後，檢查那個綁定還是閘道器目前的綁定（`unbound_at IS NULL`）；不是就回 409 `device.binding_ended`，什麼都不寫、不發事件，因為閘道器可能已經綁到別的租戶，更新事件不能把設備送回去。讀取與刪除照常可以做。解綁或重新綁定時已有的設備怎麼處理是 Laysi/trustiot-v2#115 的範圍 |
 
-建立設備時，綁定是在拿到閘道器的 advisory lock 之後、同一個交易裡讀的。服務角色對 `gateway_bindings` 沒有 `UPDATE`，不能以 `FOR SHARE` 鎖住綁定的列，所以解綁（Laysi/trustiot-v2#115）設定 `unbound_at` 前要在同一個租戶交易裡拿同一把鎖（`assets.devices/<租戶>/<硬體 ID>`），解綁與建立設備才不會交錯，解綁之後也不會再有設備掛上那個綁定。
+建立設備時，綁定是在拿到閘道器的 advisory lock 之後、同一個交易裡讀的。服務角色對 `gateway_bindings` 沒有 `UPDATE`，不能以 `FOR SHARE` 鎖住綁定的列，所以解綁（Laysi/trustiot-v2#115）設定 `unbound_at` 前要在同一個租戶交易裡拿同一把鎖（`assets.devices/<租戶>/<硬體 ID>`），解綁與建立、更新設備才不會交錯，解綁之後也不會再有設備掛上或更新那個綁定。
 
-其他錯誤（M1）：沒有有效的內部身分 token 401；沒有租戶或角色不夠 403；`device_id` 不是 UUID 或不是呼叫者租戶的設備 404；寫入的 `Content-Type` 不是 `application/json` 400；body 超過 16 KiB 400 `body_too_large`；body 不是 JSON 物件 400 `body_invalid`；資料庫出錯 503（什麼都沒寫）。每個回應都帶 `cache-control: no-store`。每次成功的寫入記一行 INFO（`created a device`、`updated a device`、`deleted a device`），只帶 `user_id`、`tenant_id`、`device_id`、`revision`，不記名稱、主機與連接埠。
+其他錯誤（M1）：沒有有效的內部身分 token 401；沒有租戶或角色不夠 403；`device_id` 不是 UUID 或不是呼叫者租戶的設備 404；更新綁定已結束的設備 409 `device.binding_ended`；寫入的 `Content-Type` 不是 `application/json` 400；body 超過 16 KiB 400 `body_too_large`；body 不是 JSON 物件 400 `body_invalid`；資料庫出錯 503（什麼都沒寫）。每個回應都帶 `cache-control: no-store`。每次成功的寫入記一行 INFO（`created a device`、`updated a device`、`deleted a device`），只帶 `user_id`、`tenant_id`、`device_id`、`revision`，不記名稱、主機與連接埠。
 
 **事件**（`contract::events::assets`，aggregate `device`、ID 是設備 ID，在變更的同一個租戶交易裡寫入 `assets.outbox_event`）：
 
@@ -173,7 +174,7 @@ schema `assets`，DDL 在 `migrations/postgres/`，由 migration Job（登記在
 | 角色 | 權限 |
 | --- | --- |
 | `assets_owner`（migration 角色） | 擁有 schema 與所有表 |
-| `assets_app`（服務角色） | `assets.tenants` 的 `SELECT`、`INSERT`；`device_models` 的 `SELECT`、`INSERT`、`UPDATE`、`DELETE`；`device_model_points` 的 `SELECT`、`INSERT`、`DELETE`；`gateway_pool` 只有 `INSERT`（讀不到設備池，綁定靠外鍵找到閘道器）；`gateway_bindings` 的 `SELECT`、`INSERT`；`devices` 的 `SELECT`、`INSERT`、`UPDATE`、`DELETE`；`outbox_event` 的 `INSERT`、`outbox_aggregate` 的 `SELECT`、`INSERT`、`UPDATE`（Job 照 outbox 範本授權，只限自己租戶的列）；消費端自己的表（Job 授權） |
+| `assets_app`（服務角色） | `assets.tenants` 的 `SELECT`、`INSERT`；`device_models` 的 `SELECT`、`INSERT`、`UPDATE`、`DELETE`；`device_model_points` 的 `SELECT`、`INSERT`、`DELETE`；`gateway_pool` 只有 `INSERT`（讀不到設備池，綁定靠外鍵找到閘道器）；`gateway_bindings` 的 `SELECT`、`INSERT`；`devices` 的 `SELECT`、`INSERT`、`DELETE`，`UPDATE` 只限更新可以改的欄（`transport`、`host`、`host_key`、`port`、`unit_id`、`poll_interval_ms`、`revision`、`updated_at`，`0005_device_update_columns.sql`；名稱、閘道器、綁定、型號改不了，這也是 `SELECT ... FOR UPDATE` 需要的權限）；`outbox_event` 的 `INSERT`、`outbox_aggregate` 的 `SELECT`、`INSERT`、`UPDATE`（Job 照 outbox 範本授權，只限自己租戶的列）；消費端自己的表（Job 授權） |
 | `assets_platform`（平台角色） | 讀 `identity.outbox_event` 與 `certs.outbox_event`（Job 授權）；照 outbox 範本能寫平台層級（沒有租戶）的事件。在閘道器設定（Laysi/trustiot-v2#93）登記為消費端之前，`assets` 暫時是自己事件的讀者，所以它也讀得到 `assets.outbox_event`（每個租戶的型號與綁定事件），沒有任何訂閱讀它。為平台管理員的設備池列表讀 `gateway_pool` 與每個租戶的 `gateway_bindings`（`platform_access` 只限 `SELECT`）；讀不到 `assets` 的其他租戶資料 |
 
 | 表 | 內容 | RLS |
@@ -225,5 +226,5 @@ CARGO_BUILD_JOBS=2 cargo test -p assets
 | `tests/cross_tenant.rs` | [crates/testkit](../../crates/testkit/README.md) 的跨租戶負向測試：服務角色讀不到也改不了其他租戶的 `tenants`、`device_models`、`device_model_points`、`gateway_bindings`、`devices`，寫不了其他租戶的事件與 aggregate 序號；API（租戶、型號的列表、讀取、匯出、更新、刪除、建立、匯入，設備的列表、讀取、更新、刪除）不把一個租戶的資料給另一個租戶，也不寫進另一個租戶；建立設備的 body 必須指向呼叫者租戶已綁定的閘道器與型號，suite 的 body 範本做不到，所以豁免，由 `tests/devices.rs` 測別的租戶的閘道器與型號都被拒絕、兩個租戶都沒有寫入；消費端自己的表、設備池 `gateway_pool` 與 migration 紀錄不是租戶資料而豁免；設備池的三個平台路由只給平台管理員，租戶使用者一律 403，由 `tests/gateway_pool.rs` 測，在這裡豁免 |
 | `tests/gateway_pool.rs` | Laysi/trustiot-v2#101：以 `certs_platform` 照出廠登錄的方式寫 `certs.gateway_registered`，閘道器出現在設備池（未綁定），同一個硬體 ID 再來一次仍只有一列、內容不變、沒有 dead letter；`workstation` 超過 255 字的事件，與表的 CHECK 拒絕的事件（測試暫時加一個 CHECK）都進 dead letter，之後的合法閘道器照樣進入設備池；綁定回 201、寫出綁定與一個 `assets.gateway_bound`（目標租戶、actor 是平台管理員、payload 只有 `binding_id` 與 `hardware_id`），同一個綁定再送回 200、什麼都不寫，別的租戶 409、什麼都不寫；以 trigger 讓事件寫入失敗時回 503、綁定與事件都沒留下，重試 201；兩個租戶同時綁定一台時一個 201 一個 409，同一個租戶同時兩次時一個 201 一個 200，都只有一個綁定與一個事件；沒有 token、錯的受眾 401，租戶管理員與帶 `act` 的平台管理員 403，而且他們沒有任何平台交易或租戶交易的 INFO 日誌；對照組是平台管理員本人：讀取有 `platform database access`，綁定有一行 `tenant transaction for a platform administrator`（帶 `user_id`、`tenant_id`、`hardware_id`）；路徑、列表參數、body 的每種錯誤；日誌沒有 token |
 | `tests/device_models.rs` | Laysi/trustiot-v2#99：建立、匯入、讀取、匯出、更新、刪除各寫出對的列與事件（`revision` 依序、事件內容就是閘道器格式的型號），匯出的文件匯入後相同；每一條命名與資料點規則經建立、更新、匯入三個入口都回 422 與對的 field error，什麼都不寫；重複的名稱 409、改名 422、過期的 `revision` 409；被參照的型號刪除 409 `in_use`；viewer 只能讀、沒有租戶 403、沒有 token 401；還沒處理到 `identity.tenant_created` 的租戶 503 |
-| `tests/devices.rs` | Laysi/trustiot-v2#100：建立（沒送站號與取樣間隔時是預設的 1 與 60000）、讀取、列表、更新、刪除各回對的內容，並依序寫出 `assets.device_created`、`device_updated`、`device_deleted`（aggregate `device`、序號依序、payload 的 `device` 通過閘道器設定的檢查、payload 不含租戶）；設備存在時刪它的型號 409 `device_model.in_use`，刪掉設備後可以刪；每種不合法的連線設定與取樣間隔經建立、更新兩個入口都回 422 與對的 field error，非 JSON、錯的 `Content-Type`、超過 16 KiB 回 400，什麼都不寫；違反命名規則的名稱、重複的名稱、改名、換閘道器、換型號、過期的 `revision`、別的租戶的閘道器、沒綁定或綁定已結束的閘道器、不在設備池的閘道器、別的租戶的型號都被拒絕，兩個租戶都沒有寫入；同一個端點的站號重複（含 IPv4-mapped 的寫法）與傳輸方式混用 409，換連接埠或換閘道器就可以；兩個請求同時搶同一個站號或混用傳輸方式時一個 201 一個 409；viewer 只能讀、沒有租戶 403、沒有 token 或錯的受眾 401；日誌不含主機 |
+| `tests/devices.rs` | Laysi/trustiot-v2#100：建立（沒送站號與取樣間隔時是預設的 1 與 60000）、讀取、列表、更新、刪除各回對的內容，並依序寫出 `assets.device_created`、`device_updated`、`device_deleted`（aggregate `device`、序號依序、payload 的 `device` 通過閘道器設定的檢查、payload 不含租戶）；設備存在時刪它的型號 409 `device_model.in_use`，刪掉設備後可以刪；每種不合法的連線設定與取樣間隔經建立、更新兩個入口都回 422 與對的 field error，非 JSON、錯的 `Content-Type`、超過 16 KiB 回 400，什麼都不寫；違反命名規則的名稱、重複的名稱、改名、換閘道器、換型號、過期的 `revision`、讀成數字的名稱（`0x7f000001` 等）與 `ip6-localhost`、`ip6-loopback`、別的租戶的閘道器、沒綁定或綁定已結束的閘道器、不在設備池的閘道器、別的租戶的型號都被拒絕，兩個租戶都沒有寫入；同一個端點的站號重複（含 IPv4-mapped 的寫法）與傳輸方式混用 409，換連接埠或換閘道器就可以；兩個請求同時搶同一個站號或混用傳輸方式時一個 201 一個 409；私有位址、169.254/16、IPv6 ULA 與 `0x7f.plc.example` 這類名稱可以建立；綁定結束（直接在資料庫設定 `unbound_at`，閘道器再綁到別的租戶）後更新回 409 `device.binding_ended`、建立回 422，兩個租戶都沒有寫入也沒有事件，讀取與刪除照常；viewer 只能讀、沒有租戶 403、沒有 token 或錯的受眾 401；日誌不含主機 |
 | `tests/migrations.rs` | Laysi/trustiot-v2#402：Job 寫的紀錄就是 `src/schema.rs` 預期的清單，服務 ready 並記 INFO；以 superuser 拿掉 `0001_assets.sql` 的紀錄時，新的行程 503，ERROR 日誌的 `missing` 寫出它，已經通過的行程維持 ready；紀錄回來後同一個行程轉為 ready；SHA-256 不同時 503，`changed` 寫出它；資料庫多一個較新版本的紀錄（映像被回退）時照常 ready，INFO 的 `newer` 寫出它；`assets_app` 只讀得到自己的紀錄、不能改，讀不到 `identity` 的紀錄與 `trustiot_migrate.applied`；`assets_platform`（能進 `identity` schema 讀事件）讀不到任何一個服務的紀錄；`identity_app` 讀不到 `assets` 的紀錄 |

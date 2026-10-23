@@ -83,6 +83,7 @@
   "device.poll_interval_invalid": "取樣間隔需為 {min} 到 {max} 毫秒的整數。",
   "device.revision_invalid": "版本必須是正整數。",
   "device.revision_mismatch": "這台設備已被其他人變更（目前是第 {current} 版），請重新載入後再修改一次。",
+  "device.binding_ended": "這台設備所屬的閘道器已經解除綁定，設備不能再修改，只能刪除。",
   "device.settings_invalid": "連線設定無效。",
   "workstation_certificate.body_too_large": "請求的內容太大，上限是 {max_bytes} 位元組。",
   "workstation_certificate.body_invalid": "請求必須是 JSON 物件。",

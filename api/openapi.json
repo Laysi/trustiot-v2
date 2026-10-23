@@ -63,6 +63,7 @@
         "type": "object"
       },
       "CreateDevice": {
+        "additionalProperties": false,
         "description": "The body of `POST /api/assets/v1/devices`. Unknown fields are refused.",
         "properties": {
           "hardware_id": {
@@ -1458,6 +1459,7 @@
         "type": "string"
       },
       "UpdateDevice": {
+        "additionalProperties": false,
         "description": "The body of `PUT /api/assets/v1/devices/{device_id}`: the device's settings, which replace\nall of the current ones (a field left out takes its default). Unknown fields are refused.",
         "properties": {
           "hardware_id": {
@@ -2565,7 +2567,7 @@
                 }
               }
             },
-            "description": "The device is no longer at the `revision` sent (`device.revision_mismatch`, `details.current`), or another device of the gateway at the same host and port uses the other transport (`device.transport_mismatch`) or the same unit ID (`device.unit_taken`) (`conflict`). Nothing was written."
+            "description": "The device's gateway binding has ended, so it can only be deleted (`device.binding_ended`), the device is no longer at the `revision` sent (`device.revision_mismatch`, `details.current`), or another device of the gateway at the same host and port uses the other transport (`device.transport_mismatch`) or the same unit ID (`device.unit_taken`) (`conflict`). Nothing was written."
           },
           "422": {
             "content": {

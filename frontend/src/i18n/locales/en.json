@@ -83,6 +83,7 @@
   "device.poll_interval_invalid": "Use a poll interval from {min} to {max} milliseconds.",
   "device.revision_invalid": "The revision must be a positive whole number.",
   "device.revision_mismatch": "Someone else changed this device (it is now at revision {current}). Reload it and make your changes again.",
+  "device.binding_ended": "The gateway this device belongs to was unbound, so the device can't be changed. You can only delete it.",
   "device.settings_invalid": "The connection settings aren't valid.",
   "workstation_certificate.body_too_large": "The request is too large. The limit is {max_bytes} bytes.",
   "workstation_certificate.body_invalid": "The request must be a JSON object.",

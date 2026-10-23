@@ -403,9 +403,11 @@ pub fn gateway_device(id: GatewayDeviceId, model: ModelName, settings: &Settings
 }
 
 /// A host the gateway may poll: crates/protocol's rule (a unicast IP address or a DNS name),
-/// and not spelled as the gateway itself. A loopback address or `localhost` would point the
-/// gateway's Modbus client at the gateway's own ports, which hold no field device, so it is
-/// refused as a mistake.
+/// and not spelled as the gateway itself. A loopback address, `localhost`, `*.localhost`, or
+/// `ip6-localhost` and `ip6-loopback` (which the default /etc/hosts of Raspberry Pi OS and
+/// other Debian systems maps to ::1) would point the gateway's Modbus client at the gateway's
+/// own ports, which hold no field device, so it is refused as a mistake. Names that a resolver
+/// reads as numbers (`0x7f000001`) are refused by crates/protocol's rule already.
 ///
 /// This is input validation, not a security boundary: the cloud cannot resolve a name the way
 /// the gateway will on the site's network, and any other DNS name may resolve to a loopback
@@ -418,12 +420,17 @@ pub fn parse_host(text: &str) -> Option<Host> {
     let local = match IpAddr::from_str(host.as_str()) {
         Ok(ip) => ip.to_canonical().is_loopback(),
         Err(_) => {
-            let name = host.canonical();
-            name == "localhost" || name.ends_with(".localhost")
+            let canonical = host.canonical();
+            let name = canonical.trim_end_matches('.');
+            LOCAL_NAMES.contains(&name) || name.ends_with(".localhost")
         }
     };
     (!local).then_some(host)
 }
+
+/// Names that point at the gateway itself on every gateway, in lowercase: `localhost`, and the
+/// names the default /etc/hosts of Debian systems (Raspberry Pi OS included) gives ::1.
+const LOCAL_NAMES: [&str; 3] = ["localhost", "ip6-localhost", "ip6-loopback"];
 
 /// The body as a JSON object.
 fn object(body: &[u8]) -> Result<Map<String, Value>, ErrorBody> {
@@ -621,6 +628,13 @@ mod tests {
             (json!({"host": "localhost"}), "/host", HOST_INVALID),
             (json!({"host": "LocalHost"}), "/host", HOST_INVALID),
             (json!({"host": "plc.localhost"}), "/host", HOST_INVALID),
+            (json!({"host": "ip6-localhost"}), "/host", HOST_INVALID),
+            (json!({"host": "IP6-Loopback"}), "/host", HOST_INVALID),
+            (json!({"host": "0x7f000001"}), "/host", HOST_INVALID),
+            (json!({"host": "0x7f.0.0.0x1"}), "/host", HOST_INVALID),
+            (json!({"host": "0x0"}), "/host", HOST_INVALID),
+            (json!({"host": "0xe0000001"}), "/host", HOST_INVALID),
+            (json!({"host": "0xffffffff"}), "/host", HOST_INVALID),
             (json!({"host": "-bad.example"}), "/host", HOST_INVALID),
             (json!({"host": "a b"}), "/host", HOST_INVALID),
             (json!({"host": "http://192.0.2.1"}), "/host", HOST_INVALID),
@@ -722,6 +736,13 @@ mod tests {
             json!({"host": "2001:db8::10"}),
             json!({"host": "::ffff:192.0.2.1"}),
             json!({"host": "169.254.10.20"}),
+            // The site LAN: private ranges and IPv6 ULA.
+            json!({"host": "10.1.2.3"}),
+            json!({"host": "172.16.0.10"}),
+            json!({"host": "192.168.10.21"}),
+            json!({"host": "fd12:3456:789a::10"}),
+            json!({"host": "0x7f.plc.example"}),
+            json!({"host": "localhost-meter"}),
             json!({"host": "Meter-1.Plant.Example"}),
             json!({"host": format!("{}.example", "a".repeat(63))}),
         ] {

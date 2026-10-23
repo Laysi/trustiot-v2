@@ -11,7 +11,7 @@
 
 use chrono::{DateTime, Utc};
 use contract::events::assets::{DEVICE_AGGREGATE, DeviceCreated, DeviceDeleted, DeviceUpdated};
-use contract::{DeviceId, DeviceModelId, Event, TenantId};
+use contract::{DeviceId, DeviceModelId, Event, GatewayBindingId, TenantId};
 use outbox::Aggregate;
 use protocol::config::{Host, Transport};
 use protocol::{DeviceId as GatewayDeviceId, GatewayId, ModelName};
@@ -55,7 +55,7 @@ RETURNING revision, created_at, updated_at";
 /// The tenant's devices by name, each with its model's name.
 const LIST_DEVICES: &str =
     "SELECT device.device_id::text AS device_id, device.name, device.hardware_id,
-    device.model_id::text AS model_id, model.name AS model_name, device.transport, device.host,
+    device.binding_id::text AS binding_id, device.model_id::text AS model_id, model.name AS model_name, device.transport, device.host,
     device.port, device.unit_id, device.poll_interval_ms, device.revision, device.created_at,
     device.updated_at
 FROM assets.devices AS device
@@ -66,7 +66,7 @@ ORDER BY device.name COLLATE \"C\"";
 /// One device. `$1`: the device ID.
 const SELECT_DEVICE: &str =
     "SELECT device.device_id::text AS device_id, device.name, device.hardware_id,
-    device.model_id::text AS model_id, model.name AS model_name, device.transport, device.host,
+    device.binding_id::text AS binding_id, device.model_id::text AS model_id, model.name AS model_name, device.transport, device.host,
     device.port, device.unit_id, device.poll_interval_ms, device.revision, device.created_at,
     device.updated_at
 FROM assets.devices AS device
@@ -75,15 +75,18 @@ JOIN assets.device_models AS model
 WHERE device.device_id = $1::uuid";
 
 /// The same, with the device's row locked until the transaction ends, so concurrent updates
-/// and deletes of the device queue up. `$1`: the device ID.
+/// and deletes of the device queue up, and whether the device's binding is still the gateway's
+/// current one (`binding_current`). `$1`: the device ID.
 const LOCK_DEVICE: &str =
     "SELECT device.device_id::text AS device_id, device.name, device.hardware_id,
-    device.model_id::text AS model_id, model.name AS model_name, device.transport, device.host,
+    device.binding_id::text AS binding_id, device.model_id::text AS model_id, model.name AS model_name, device.transport, device.host,
     device.port, device.unit_id, device.poll_interval_ms, device.revision, device.created_at,
-    device.updated_at
+    device.updated_at, binding.unbound_at IS NULL AS binding_current
 FROM assets.devices AS device
 JOIN assets.device_models AS model
     ON model.tenant_id = device.tenant_id AND model.model_id = device.model_id
+JOIN assets.gateway_bindings AS binding
+    ON binding.tenant_id = device.tenant_id AND binding.binding_id = device.binding_id
 WHERE device.device_id = $1::uuid
 FOR UPDATE OF device";
 
@@ -124,6 +127,9 @@ pub struct StoredDevice {
     pub name: ModelName,
     /// The gateway that polls it, never changed.
     pub hardware_id: GatewayId,
+    /// The gateway's binding the device belongs to: the current one when it was created; never
+    /// changed.
+    pub binding_id: GatewayBindingId,
     /// The model it uses, never changed.
     pub model_id: DeviceModelId,
     /// The model's name, which the gateway's configuration names the model by.
@@ -185,6 +191,10 @@ pub enum StoreError {
     /// An update sent another value for a field that never changes.
     #[error("the name, gateway and model of a device never change")]
     Immutable(Changed),
+    /// The device's binding is no longer its gateway's current one (the gateway was unbound, and
+    /// perhaps bound again): the device can only be deleted.
+    #[error("the device's gateway binding has ended")]
+    BindingEnded,
     /// An update expected another revision than the current one.
     #[error("the device is at revision {current}")]
     RevisionMismatch {
@@ -330,7 +340,10 @@ pub async fn create(
     else {
         return Err(StoreError::GatewayNotBound);
     };
-    let binding_id: String = binding.try_get("binding_id")?;
+    let binding_id: GatewayBindingId = binding
+        .try_get::<String, _>("binding_id")?
+        .parse()
+        .map_err(|_| StoreError::Corrupt)?;
     let Some(model) = sqlx::query(MODEL_NAME)
         .bind(device.model_id.to_string())
         .fetch_optional(&mut *tx)
@@ -346,7 +359,7 @@ pub async fn create(
         .bind(tenant.to_string())
         .bind(device_id.to_string())
         .bind(device.name.as_str())
-        .bind(binding_id)
+        .bind(binding_id.to_string())
         .bind(device.hardware_id.as_str())
         .bind(device.model_id.to_string())
         .bind(wire_name(settings.transport))
@@ -362,6 +375,7 @@ pub async fn create(
         device_id,
         name: device.name,
         hardware_id: device.hardware_id,
+        binding_id,
         model_id: device.model_id,
         model_name,
         settings: device.settings,
@@ -392,7 +406,8 @@ pub async fn create(
 ///
 /// # Errors
 ///
-/// [`StoreError::NotFound`], [`StoreError::Immutable`] when the change sends another name,
+/// [`StoreError::NotFound`], [`StoreError::BindingEnded`] when the device's binding is no
+/// longer the gateway's current one, [`StoreError::Immutable`] when the change sends another name,
 /// gateway or model, [`StoreError::RevisionMismatch`] when it expects another revision,
 /// [`StoreError::TransportMismatch`], [`StoreError::UnitTaken`], [`StoreError::NoTenant`] or a
 /// failure; nothing is written then.
@@ -426,6 +441,12 @@ pub async fn replace(
     let current = stored_device(&row)?;
     if current.device_id != device_id || current.hardware_id != hardware_id {
         return Err(StoreError::Corrupt);
+    }
+    // Read under the gateway's lock, which unbinding takes too (Laysi/trustiot-v2#115): a device
+    // of an ended binding is never changed, so no event can put it back on the gateway, which
+    // may serve another tenant now.
+    if !row.try_get::<bool, _>("binding_current")? {
+        return Err(StoreError::BindingEnded);
     }
     let changed = Changed {
         name: change
@@ -642,6 +663,9 @@ fn stored_device(row: &PgRow) -> Result<StoredDevice, StoreError> {
             .map_err(|_| StoreError::Corrupt)?,
         name: ModelName::new(text("name")?).map_err(|_| StoreError::Corrupt)?,
         hardware_id: GatewayId::new(text("hardware_id")?).map_err(|_| StoreError::Corrupt)?,
+        binding_id: text("binding_id")?
+            .parse()
+            .map_err(|_| StoreError::Corrupt)?,
         model_id: text("model_id")?.parse().map_err(|_| StoreError::Corrupt)?,
         model_name: ModelName::new(text("model_name")?).map_err(|_| StoreError::Corrupt)?,
         settings,
