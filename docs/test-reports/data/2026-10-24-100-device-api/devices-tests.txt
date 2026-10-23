@@ -1,0 +1,16 @@
+$ CI=1 cargo test --locked -p assets --test devices
+(tree: feat/100-device-api at 8ee0bb71, main 6da9b15f merged; 2026-10-24)
+
+test roles_decide_who_reads_and_who_writes ... ok
+test concurrent_writes_on_one_converter_give_one_device ... ok
+test devices_behind_one_converter_share_its_transport_and_not_a_unit_id ... ok
+test devices_are_written_with_their_events ... ok
+test invalid_settings_are_refused_and_nothing_is_written ... ok
+test names_gateways_and_models_are_checked ... ok
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.16s
+
+$ cargo test --locked -p assets --lib
+test result: ok. 36 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+
+$ cargo test --locked -p contract --test events
+test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
