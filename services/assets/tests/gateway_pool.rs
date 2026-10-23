@@ -28,7 +28,7 @@ use serde_json::{Value, json};
 use service_kit::tenant::{PlatformActor, PlatformDb};
 use sqlx::PgConnection;
 use sqlx::postgres::PgPoolOptions;
-use support::{EVENT_LIMIT, Reply, Service, wait_for};
+use support::{EVENT_LIMIT, LOG_LIMIT, Reply, Service, wait_for};
 use testkit::identity::TestIssuer;
 use testkit::product::{DATABASE, ProductPostgres, product_postgres};
 
@@ -364,10 +364,16 @@ async fn factory_registrations_fill_the_pool() {
     assert_eq!(rows, 1);
     let again = assets.call(Method::GET, &path, Some(&token), None).await;
     assert_eq!(again.json()["workstation"], "ws-line-1");
-    assert!(
-        assets.stdout.text().contains("platform database access"),
-        "reads of the pool are logged with the administrator"
-    );
+    // Reads of the pool are logged with the administrator. The service's stdout reaches the
+    // test through a reader thread, so a line can arrive after its response does.
+    wait_for("the pool read's log line", LOG_LIMIT, || async {
+        assets
+            .stdout
+            .text()
+            .contains(PLATFORM_TRANSACTION)
+            .then_some(())
+    })
+    .await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -524,13 +530,18 @@ async fn a_binding_is_written_with_its_event_once() {
         .await;
     assert!(bound.body.contains(&gateway), "{}", bound.body);
 
-    // 5. The log line of each binding.
-    let lines: Vec<Value> = assets
-        .stdout
-        .messages("bound a gateway")
-        .into_iter()
-        .filter(|line| line["fields"]["hardware_id"] == gateway.as_str())
-        .collect();
+    // 5. The log line of each binding. The service's stdout reaches the test through a reader
+    // thread, so a line can arrive after its response does.
+    let lines: Vec<Value> = wait_for("both bindings' log lines", LOG_LIMIT, || async {
+        let lines: Vec<Value> = assets
+            .stdout
+            .messages("bound a gateway")
+            .into_iter()
+            .filter(|line| line["fields"]["hardware_id"] == gateway.as_str())
+            .collect();
+        (lines.len() >= 2).then_some(lines)
+    })
+    .await;
     assert_eq!(lines.len(), 2, "{lines:?}");
     assert_eq!(lines[0]["fields"]["created"], true);
     assert_eq!(lines[1]["fields"]["created"], false);
@@ -572,12 +583,22 @@ async fn a_failed_binding_leaves_nothing_and_the_retry_succeeds() {
     assert_refused(&failed, 503, "unavailable", None);
     assert!(bindings(&mut admin, &gateway).await.is_empty());
     assert!(bound_events(&mut admin, &gateway).await.is_empty());
-    let errors = assets.stdout.messages("could not bind a gateway");
+    // The service's stdout reaches the test through a reader thread, so a line can arrive after
+    // its response does.
+    let errors = wait_for("the failed binding's log line", LOG_LIMIT, || async {
+        let errors: Vec<Value> = assets
+            .stdout
+            .messages("could not bind a gateway")
+            .into_iter()
+            .filter(|line| line["fields"]["hardware_id"] == gateway.as_str())
+            .collect();
+        (!errors.is_empty()).then_some(errors)
+    })
+    .await;
     assert!(
         errors
             .iter()
-            .any(|line| line["fields"]["hardware_id"] == gateway.as_str()
-                && line["fields"]["error_kind"] == "outbox database"),
+            .any(|line| line["fields"]["error_kind"] == "outbox database"),
         "{errors:?}"
     );
     assert!(
@@ -714,7 +735,21 @@ async fn only_a_platform_administrators_own_request_gets_anywhere() {
             .filter(|line| line["fields"]["user_id"] == user)
             .collect()
     };
-    let opened = accesses(&allowed_claims.sub.to_string());
+    // The service's stdout reaches the test through a reader thread, so a line can arrive after
+    // its response does. The lines arrive in order: once the binding's line is here, so are the
+    // lines of every request before it.
+    let opened = wait_for(
+        "the binding's tenant transaction line",
+        LOG_LIMIT,
+        || async {
+            let opened = accesses(&allowed_claims.sub.to_string());
+            opened
+                .iter()
+                .any(|line| line["message"] == TENANT_TRANSACTION)
+                .then_some(opened)
+        },
+    )
+    .await;
     let tenant_lines: Vec<&Value> = opened
         .iter()
         .filter(|line| line["message"] == TENANT_TRANSACTION)

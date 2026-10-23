@@ -172,3 +172,24 @@ bun run --cwd frontend lint
 | `cargo run -p openapi -- --check` | 通過 |
 | `bun run --cwd frontend api:check`、`bun run --cwd frontend test` | 通過；131 通過、0 失敗 |
 | `bun test scripts` | 1648 通過、9 略過、0 失敗 |
+
+## 日誌斷言改為先等待（2026-10-23）
+
+測試以讀取執行緒收集服務的 stdout（`tests/support/mod.rs` 的 `Output`），所以一行日誌可能比它的回應晚到。`tests/gateway_pool.rs` 原本在回應之後立刻讀日誌，有四處，和 Laysi/trustiot-v2#597（certs 測試在 CI 偶發失敗）是同一類問題。
+
+四處都改用 `wait_for`，先等到預期的日誌行出現，再做原本的斷言：
+
+- 設備池讀取的平台交易日誌行；
+- 兩次綁定各一行的 `bound a gateway`；
+- 失敗的綁定的 `could not bind a gateway`；
+- 允許的綁定開啟租戶交易時的那一行。
+
+等待的上限是新的 `LOG_LIMIT`（30 秒）。日誌行依序到達，所以等到允許的綁定那一行之後，被拒的請求有沒有日誌行，就可以照原本的方式斷言。
+
+經建置主機的檢查佇列執行（`CI=1`）：
+
+| 指令 | 結果 |
+| --- | --- |
+| `cargo fmt --all --check` | 通過 |
+| `cargo clippy --locked -p assets --all-targets -- -D warnings` | 通過 |
+| `cargo test --locked -p assets --test gateway_pool`，連跑 3 次 | 每次 7 通過、0 失敗 |
