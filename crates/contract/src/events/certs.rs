@@ -7,7 +7,7 @@
 //! `actor` is the platform administrator who signed in on the workstation. The aggregate is
 //! [`GATEWAY_REGISTRATION_AGGREGATE`] with the hardware ID, which the platform assigns and never
 //! reuses. The identity service's event log records it (the operation log, K2); the assets
-//! service will put the gateway in the device pool from it (Laysi/trustiot-v2#101).
+//! service puts the gateway in its device pool from it (Laysi/trustiot-v2#101).
 
 use protocol::GatewayId;
 use serde::{Deserialize, Serialize};

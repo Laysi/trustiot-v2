@@ -20,6 +20,19 @@
         ],
         "type": "object"
       },
+      "BindGateway": {
+        "description": "The body of a binding.",
+        "properties": {
+          "tenant_id": {
+            "$ref": "#/components/schemas/TenantId",
+            "description": "The tenant to bind the gateway to."
+          }
+        },
+        "required": [
+          "tenant_id"
+        ],
+        "type": "object"
+      },
       "CodeSent": {
         "description": "The answer to `send_code`, the same whether or not a user has the address.",
         "properties": {
@@ -425,6 +438,43 @@
           "message_key"
         ],
         "type": "object"
+      },
+      "GatewayBinding": {
+        "description": "A gateway's binding to a tenant.",
+        "properties": {
+          "binding_id": {
+            "$ref": "#/components/schemas/GatewayBindingId",
+            "description": "The binding: a new one every time the gateway is bound."
+          },
+          "bound_at": {
+            "description": "When it was bound, by the database clock.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "hardware_id": {
+            "description": "The gateway's hardware ID.",
+            "example": "tg-0001",
+            "maxLength": 64,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$",
+            "type": "string"
+          },
+          "tenant_id": {
+            "$ref": "#/components/schemas/TenantId",
+            "description": "The tenant the gateway is bound to."
+          }
+        },
+        "required": [
+          "binding_id",
+          "hardware_id",
+          "tenant_id",
+          "bound_at"
+        ],
+        "type": "object"
+      },
+      "GatewayBindingId": {
+        "description": "One binding of a gateway to a tenant (rebuild checklist D3, Laysi/trustiot-v2#101), made\nby the assets service. A gateway gets a new one every time it is bound, so a binding and\nits events always belong to one tenant.\n\nSerialized as a lowercase hyphenated UUID string.",
+        "format": "uuid",
+        "type": "string"
       },
       "GatewayRegistration": {
         "description": "A gateway's factory registration, as the service records it.",
@@ -844,6 +894,73 @@
         "maxLength": 128,
         "pattern": "^[a-z0-9_]+(\\.[a-z0-9_]+)+$",
         "type": "string"
+      },
+      "PoolGateway": {
+        "description": "A gateway of the device pool.",
+        "properties": {
+          "binding": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/GatewayBinding",
+                "description": "Its current binding; `null` while it is bound to no tenant."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "hardware_id": {
+            "description": "The hardware ID: the common name of its certificates and its MQTT identity.",
+            "example": "tg-0001",
+            "maxLength": 64,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$",
+            "type": "string"
+          },
+          "pooled_at": {
+            "description": "When the assets service put it in the pool.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "registered_at": {
+            "description": "When the certs service registered it at the factory.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "workstation": {
+            "description": "The production workstation that registered it.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "hardware_id",
+          "registered_at",
+          "workstation",
+          "pooled_at"
+        ],
+        "type": "object"
+      },
+      "PoolGatewayList": {
+        "description": "A page of the device pool, by hardware ID (byte order).",
+        "properties": {
+          "gateways": {
+            "description": "The gateways.",
+            "items": {
+              "$ref": "#/components/schemas/PoolGateway"
+            },
+            "type": "array"
+          },
+          "next_after": {
+            "description": "The `after` of the next page; `null` on the last one.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "gateways"
+        ],
+        "type": "object"
       },
       "Reading": {
         "description": "One reading's value, as its type stored it.",
@@ -1812,6 +1929,293 @@
           }
         },
         "summary": "One device model as a document to download, which the import accepts.",
+        "tags": [
+          "assets"
+        ]
+      }
+    },
+    "/api/assets/v1/platform/gateways": {
+      "get": {
+        "operationId": "listPoolGateways",
+        "parameters": [
+          {
+            "description": "`unbound` for the gateways bound to no tenant (the ones to bind), `bound` for the bound ones; absent for every gateway.",
+            "in": "query",
+            "name": "state",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The previous page's `next_after`, for the next page.",
+            "in": "query",
+            "name": "after",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Gateways per page, 1 to 500; default 100.",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "format": "int32",
+              "maximum": 500,
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PoolGatewayList"
+                }
+              }
+            },
+            "description": "A page of the pool, by hardware ID."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "An unknown or malformed parameter (`invalid_request`)."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No valid session (`unauthenticated`)."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Not a platform administrator, or not the administrator's own request (`permission_denied`)."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The database failed (`unavailable`)."
+          }
+        },
+        "summary": "The device pool with each gateway's current binding. Platform administrators only.",
+        "tags": [
+          "assets"
+        ]
+      }
+    },
+    "/api/assets/v1/platform/gateways/{hardware_id}": {
+      "get": {
+        "operationId": "getPoolGateway",
+        "parameters": [
+          {
+            "description": "The gateway's hardware ID.",
+            "in": "path",
+            "name": "hardware_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PoolGateway"
+                }
+              }
+            },
+            "description": "The gateway."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No valid session (`unauthenticated`)."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Not a platform administrator, or not the administrator's own request (`permission_denied`)."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The pool has no such gateway (`not_found`)."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The database failed (`unavailable`)."
+          }
+        },
+        "summary": "One gateway of the device pool with its current binding. Platform administrators only.",
+        "tags": [
+          "assets"
+        ]
+      }
+    },
+    "/api/assets/v1/platform/gateways/{hardware_id}/binding": {
+      "put": {
+        "operationId": "bindGateway",
+        "parameters": [
+          {
+            "description": "The gateway's hardware ID.",
+            "in": "path",
+            "name": "hardware_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BindGateway"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GatewayBinding"
+                }
+              }
+            },
+            "description": "The gateway was bound to this tenant already: the existing binding. Nothing was written, so retrying after a lost response is safe."
+          },
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GatewayBinding"
+                }
+              }
+            },
+            "description": "The gateway is now bound to the tenant; `assets.gateway_bound` was written in the same transaction."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The `Content-Type` is not `application/json`, the body is larger than 4 KiB (`gateway_binding.body_too_large`), or it is not a JSON object (`gateway_binding.body_invalid`) (`invalid_request`)."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No valid session (`unauthenticated`)."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Not a platform administrator, or not the administrator's own request (`permission_denied`)."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The device pool has no such gateway (`not_found`)."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Another tenant holds the gateway (`conflict`, `gateway_binding.bound_to_another_tenant`). Nothing was written."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "An unknown field, `tenant_id` missing or not a UUID, or a tenant the assets service does not know (`gateway_binding.tenant_unknown`) (`validation_failed`). Nothing was written."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The database failed (`unavailable`). Nothing was written; retrying is safe."
+          }
+        },
+        "summary": "Binds a gateway of the device pool to a tenant; idempotent. Platform administrators only.",
         "tags": [
           "assets"
         ]

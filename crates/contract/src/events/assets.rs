@@ -11,13 +11,22 @@
 //! M4): a consumer such as the gateway configuration (Laysi/trustiot-v2#93) keeps its own copy
 //! from the events alone and never has to ask the assets service for the current state. The data
 //! points' descriptions are not in the events; they are read through the assets service's API.
+//!
+//! Gateway binding (Laysi/trustiot-v2#101, rebuild checklist D3): binding a gateway of the
+//! device pool to a tenant writes one [`GatewayBound`] in the transaction of the binding, in the
+//! tenant the gateway is bound to, so the envelope's `tenant_id` is that tenant (consumers take
+//! it from there). The aggregate is [`GATEWAY_BINDING_AGGREGATE`] with the binding ID, not the
+//! hardware ID: an aggregate belongs to the tenant of its first event (crates/outbox), and a
+//! gateway that is unbound and bound again (Laysi/trustiot-v2#115) gets a new binding, in
+//! whatever tenant it goes to. The certs service (renewal and broker permissions), the gateway
+//! configuration and ingest map the hardware ID to the tenant from these events.
 
-use protocol::ModelName;
 use protocol::config::DeviceModel;
+use protocol::{GatewayId, ModelName};
 use serde::{Deserialize, Serialize};
 
 use crate::event::Event;
-use crate::id::DeviceModelId;
+use crate::id::{DeviceModelId, GatewayBindingId};
 use crate::service::ServiceName;
 
 /// The aggregate kind of device model events; the aggregate ID is the model ID.
@@ -73,6 +82,26 @@ pub struct DeviceModelDeleted {
 
 impl Event for DeviceModelDeleted {
     const TYPE: &'static str = "assets.device_model_deleted";
+    const VERSION: u32 = 1;
+    const PRODUCER: ServiceName = ServiceName::Assets;
+}
+
+/// The aggregate kind of gateway binding events; the aggregate ID is the binding ID.
+pub const GATEWAY_BINDING_AGGREGATE: &str = "gateway_binding";
+
+/// A platform administrator bound a gateway of the device pool to the event's tenant. The
+/// gateway was bound to no tenant before. Binding it again to the same tenant writes no event.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GatewayBound {
+    /// The binding: new for every binding of the gateway, so it is unique across tenants.
+    pub binding_id: GatewayBindingId,
+    /// The gateway's hardware ID: the common name of its certificates and its MQTT identity
+    /// (`certs.gateway_registered`).
+    pub hardware_id: GatewayId,
+}
+
+impl Event for GatewayBound {
+    const TYPE: &'static str = "assets.gateway_bound";
     const VERSION: u32 = 1;
     const PRODUCER: ServiceName = ServiceName::Assets;
 }

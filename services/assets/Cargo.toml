@@ -1,6 +1,6 @@
 [package]
 name = "assets"
-description = "TrustIoT v2 assets service: tenants' sites, devices and data points: its own schema under row-level security, the consumer of identity.tenant_created, and the device model API."
+description = "TrustIoT v2 assets service: tenants' sites, devices and data points: its own schema under row-level security, the consumer of identity.tenant_created, the device model API, and the gateway device pool and binding API."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -14,10 +14,11 @@ test = false
 doc = false
 
 [dependencies]
-axum = { workspace = true, features = ["http1", "json", "tokio"] }
+axum = { workspace = true, features = ["http1", "json", "query", "tokio"] }
 chrono = { workspace = true, features = ["serde"] }
 contract = { path = "../../crates/contract" }
-# Consumes identity.tenant_created and writes assets.device_model_* (decision 4).
+# Consumes identity.tenant_created and certs.gateway_registered, writes assets.device_model_*
+# and assets.gateway_bound (decision 4).
 outbox = { path = "../../crates/outbox" }
 # The data point format the gateway reads (rebuild checklist M4) and its rules.
 protocol = { path = "../../crates/protocol" }

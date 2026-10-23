@@ -1,0 +1,7 @@
+test only_a_platform_administrators_own_request_gets_anywhere ... ok
+test a_binding_is_written_with_its_event_once ... ok
+test bad_requests_are_refused_and_write_nothing ... ok
+test a_failed_binding_leaves_nothing_and_the_retry_succeeds ... ok
+test concurrent_bindings_give_one_binding ... ok
+test factory_registrations_fill_the_pool ... ok
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.90s
