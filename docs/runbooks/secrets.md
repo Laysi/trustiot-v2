@@ -55,14 +55,15 @@
 - **Qdrant**：唯讀與寫入兩把 key 分開輪替，換完以知識庫的一次檢索與一次背景處理確認（Laysi/trustiot-v2#194）。
 - **Sentry DSN**：所有服務都用到，以 `serviceDefaults.podAnnotations` 讓全部 pod 滾動。
 - **SMTP（暫用 Resend）**：新 key 的權限選只能寄信（`sending_access`）並限定寄件網域，不選完整權限（`full_access`）；帳號固定是 `resend`，只換密碼。
+- **展示環境的 SMTP 與 Anthropic 金鑰**：與 SaaS 分開，步驟（含 Anthropic 工作區的用量上限與換完後的測試信）見 [展示環境 runbook](demo-environment.md)「輪替 Resend 與 Anthropic 金鑰」。
 
 ### GHCR 拉取 token
 
-GHCR 只接受 classic personal access token，所以以專用機器帳號建立，只勾 `read:packages`，並設定到期日。
+GHCR 只接受 classic personal access token。2026-10-21 決定不另建機器帳號：只有展示叢集用這把 token，由一位組織成員建立，只勾 `read:packages`，一年到期（為什麼與外洩範圍見 [deploy/flux/README.md](../../deploy/flux/README.md)「GHCR 拉取 token」）。SaaS 叢集不放個人的 token，拉取憑證等 Laysi/trustiot-v2#502。
 
-1. 以機器帳號建立新 token（到期日最長一年），在團隊行事曆記下到期前 14 天的提醒。
-2. 重新產生 `deploy/flux/clusters/saas/trustiot/ghcr-pull.sops.yaml`（Secret `ghcr-pull`，namespace `trustiot`），token 只經 stdin：`<輸出 token 的指令> | bun scripts/flux/ghcr-pull-secret.ts --username <機器帳號>`。整份檔案換新，所以不必 `sops edit`；開 PR 合併（「通用步驟：SaaS」的第 4 步）。
-3. 確認 Flux 拉得到：合併後在主機上以 `sudo k3s kubectl -n trustiot annotate --overwrite ocirepository/trustiot reconcile.fluxcd.io/requestedAt="$(date +%s)"` 立刻觸發，再 `sudo k3s kubectl -n trustiot get ocirepository trustiot`，READY 為 True。每次 reconcile 都以這個 Secret 向 GHCR 重新認證，不靠快取。
+1. 由一位組織成員建立新 token（只勾 `read:packages`，到期日一年），在團隊行事曆記下到期前 14 天的提醒；以 README 第 2 步確認 token 只有 `read:packages` 一個 scope。
+2. 重新產生 `deploy/flux/clusters/demo/trustiot/ghcr-pull.sops.yaml`（Secret `ghcr-pull`，namespace `trustiot`），token 只經 stdin：`<輸出 token 的指令> | bun scripts/flux/ghcr-pull-secret.ts --username <GitHub 帳號> --cluster demo`。整份檔案換新，所以不必 `sops edit`；開 PR 合併。這把 token 只在展示叢集，以下第 3、4 步都在展示機上執行（存取方式見[展示環境 runbook](demo-environment.md)），不是 SaaS 主機。
+3. 確認 Flux 拉得到：合併後在展示機上以 `sudo k3s kubectl -n trustiot annotate --overwrite ocirepository/trustiot reconcile.fluxcd.io/requestedAt="$(date +%s)"` 立刻觸發，再 `sudo k3s kubectl -n trustiot get ocirepository trustiot`，READY 為 True。每次 reconcile 都以這個 Secret 向 GHCR 重新認證，不靠快取。
 4. 確認 kubelet 拉得到：節點上已有快取的映像不會重新拉取，所以另起一個 `imagePullPolicy: Always` 的一次性 Pod，強迫 kubelet 以新 token 向 GHCR 認證。把下列內容存成 `ghcr-pull-check.yaml`（填入 Secret 名稱與目前版本的任一個服務映像）：
 
    ```yaml
@@ -157,11 +158,11 @@ SaaS 目前沒有人建立的這個 Secret（`deploy/flux` 的 values 沒有設�
 
 ### CA 私鑰
 
-Laysi/trustiot-v2#78 補上確切指令。原則：
+確切指令在 [services/certs/README.md](../../services/certs/README.md)（Laysi/trustiot-v2#78）：「發簽發 CA 憑證」、「輪替」、「根 CA 私鑰的備份」與「簽發 CA 金鑰遺失或外洩」。原則：
 
-- **根 CA 私鑰**：只在簽發或撤銷簽發 CA 時取出，在離線的機器上操作，完成後確認兩份離線備份都還能解密。根 CA 換新是重大變更：所有閘道器的信任設定都要更新，另開 issue 規劃。
-- **簽發 CA 私鑰**：以根 CA 簽一張新的簽發 CA 憑證，新舊兩張同時列在信任清單；certs 服務改用新的簽，舊的簽發 CA 簽過的憑證全部到期或換發後，才移除舊的簽發 CA 並撤銷它。
-- **外洩**：立即撤銷該簽發 CA、發新 CRL，所有它簽過的憑證要求換發（決策 12 的換發端點，閘道器不必寄回）。
+- **根 CA 私鑰**：只在簽發 CA 的儀式與備份檢查時取出，在離線的機器上以 `certs-ca` 操作（私鑰只經 stdin、stdout 與 age），完成後兩位保管人各自以 `certs-ca root check` 確認自己那一份離線備份還能解密、是這張根憑證的私鑰。根 CA 換新是重大變更：所有閘道器的信任設定都要更新，另開 issue 規劃。
+- **簽發 CA 私鑰**：在叢集內產生，人不碰。輪替是調大 `certificateAuthority.keyGeneration`，以根 CA 簽新一代的 CSR，新舊兩張同時列在 `certificateAuthority.issuingCertificates`；最新的一代簽新憑證，舊的一代簽過的憑證全部到期後，以 `removeKeysBeforeGeneration` 移除它。
+- **外洩**：`keyGeneration` 與 `removeKeysBeforeGeneration` 同時調到新的一代：舊金鑰立即移除，它的 CRL 不再發布，broker 拒絕它簽的每張憑證；簽新一代之後閘道器經換發端點取得新憑證（決策 12，不必寄回）。
 
 ### 叢集內 ClickHouse 的管理帳號密碼
 
@@ -199,7 +200,15 @@ TLS 憑證（`<cluster>-ca`、`<cluster>-server`、`<cluster>-replication`）由
 
 ### 叢集內產生的帳號
 
-ClickHouse、MQTT dynsec、Grafana 的帳號由叢集內產生，值不經過人。各自的 issue 補上指令（Laysi/trustiot-v2#59、Laysi/trustiot-v2#84、Laysi/trustiot-v2#183）；Postgres 的 owner 見上一節。各服務自己的 Postgres 角色與 OpenTelemetry collector 的 ClickHouse 帳號，密碼由 migration Job 產生並設定（`<release>-<服務>-password`、`<release>-otel-collector-password`），沒有人經手；輪替是調大 `migrate.passwordGeneration`，步驟見 [migration Job 的 runbook](migrations.md) 的「輪替服務角色與 collector 的密碼」，資料遺失時見同一份的「密碼 Secret 的資料遺失」。原則：在叢集內重新產生值、更新資料庫裡的帳號、重啟使用它的服務，三步在一次維護中完成；只有懷疑外洩或人員異動時才需要輪替。
+ClickHouse、MQTT dynsec、Grafana 的帳號由叢集內產生，值不經過人。各自的 issue 補上指令（Laysi/trustiot-v2#59、Laysi/trustiot-v2#84、Laysi/trustiot-v2#183）；Postgres 的 owner 見上一節。各服務自己的 Postgres 角色、時序查詢服務與 OpenTelemetry collector 的 ClickHouse 帳號，密碼由 migration Job 產生並設定（`<release>-<服務>-password`、`<release>-otel-collector-password`），沒有人經手（每個租戶的 ClickHouse 帳號密碼由時序查詢服務帳號的密碼推導，不另外保存）；輪替是調大 `migrate.passwordGeneration`，步驟見 [migration Job 的 runbook](migrations.md) 的「輪替服務角色與 collector 的密碼」，資料遺失時見同一份的「密碼 Secret 的資料遺失」。原則：在叢集內重新產生值、更新資料庫裡的帳號、重啟使用它的服務，三步在一次維護中完成；只有懷疑外洩或人員異動時才需要輪替。
+
+**MQTT broker 的服務帳號密碼**（`mqttBroker.enabled`，Laysi/trustiot-v2#84；設計見 `docs/architecture/secrets.md`「MQTT broker 的服務帳號密碼」）：
+
+1. 把 values 的 `mqttBroker.passwordGeneration` 加一，升級。broker 的 pod 重啟，init container `accounts` 先產生新密碼寫進 Secret `<release>-mqtt-broker-accounts`（key 是服務名稱），再把雜湊寫進 broker 的 dynamic security 檔。broker 是單一副本：重啟期間閘道器與服務斷線、之後重連，session、排隊與 retained 訊息在 SQLite 裡保留。
+2. 確認：`kubectl -n <namespace> logs <release>-mqtt-broker-0 -c accounts` 有 `generated the password of <服務> in Secret <release>-mqtt-broker-accounts`（日誌只有名稱）；`kubectl -n <namespace> get secret <release>-mqtt-broker-accounts -o jsonpath='{.metadata.annotations.trustiot\.io/password-generation}'` 是新的代；broker 的 pod Ready。
+3. 使用 broker 的服務要重啟才拿到新密碼，在那之前以舊密碼重連會被拒（CONNACK 135）。第一個接上 broker 的服務在它的 issue 把重啟的方式寫進這一步。
+
+代只往上走，rollback 不換。Secret 遺失時同 ClickHouse 的管理帳號：把 `mqttBroker.passwordGeneration` 加一再升級，Helm 重建 Secret，init container 產生新密碼；Secret 不存在時 init container 失敗並寫出這個處理方式，broker 停在 `Init`。不要自己建立這個 Secret。
 
 ### OTA 簽章私鑰
 
@@ -233,6 +242,8 @@ Laysi/trustiot-v2#164 補上。原則：閘道器的 updater 內建公鑰，所�
 
 3. 立刻同步並確認：`sudo k3s kubectl -n flux-system annotate --overwrite gitrepository/flux-system reconcile.fluxcd.io/requestedAt="$(date +%s)"`，再 `sudo k3s kubectl -n flux-system get gitrepository flux-system` 的 READY 為 True。
 4. 在 GitHub 刪除舊的 deploy key。
+
+以上是 SaaS 叢集。展示叢集的 deploy key 由 `scripts/demo/flux.ts deploy-key` 在展示機上產生、不離開展示機，它不取代已經存在的 Secret，換新的步驟見 [deploy/flux/README.md](../../deploy/flux/README.md)「在展示機安裝 Flux」。
 
 外洩時先在 GitHub 刪除該 deploy key（同步會停止，正在跑的服務不受影響），再依上面的步驟換新的。它是唯讀的，外洩的影響是 repo 內容被讀取：依「外洩處理」檢查範圍。
 

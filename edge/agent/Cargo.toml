@@ -1,6 +1,6 @@
 [package]
 name = "agent"
-description = "The TrustIoT gateway agent (decision 10): the trustiot-agent service with its MQTT 5 connection to the cloud (a 443 WebSocket with mTLS inside), its TPM identity key (decision 12), presence and heartbeat, and its Modbus reading (rebuild checklist F1, F5)."
+description = "The TrustIoT gateway agent (decision 10): the trustiot-agent service with its MQTT 5 connection to the cloud (a 443 WebSocket with mTLS inside), its TPM identity key (decision 12), presence and heartbeat; and its Modbus reading (rebuild checklist F1, F2, F5): merged reads, a Modbus TCP and RTU-over-TCP client for the read function codes 1-4 with one shared connection per endpoint, decoding, and scaling; and polling each device on a fixed schedule with timeouts, reconnect backoff, TCP keepalive and a per-device watchdog (F4)."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -29,8 +29,9 @@ ring.workspace = true
 rustls = { workspace = true, features = ["ring", "std"] }
 rustls-pki-types = { workspace = true, features = ["std"] }
 serde = { workspace = true, features = ["derive"] }
-# TCP keepalive with its interval and probe count (`transport::configure_tcp`); tokio can only
-# switch keepalive on. `all` adds those options (and their getters), no code of its own.
+# TCP keepalive's idle time, probe interval and probe count, for the MQTT connection
+# (`transport::configure_tcp`) and the Modbus connections; tokio can only switch keepalive on.
+# `all` has the last two (and their getters), no code of its own.
 socket2 = { workspace = true, features = ["all"] }
 thiserror.workspace = true
 tokio = { workspace = true, features = ["io-util", "macros", "net", "rt", "rt-multi-thread", "signal", "sync", "time"] }

@@ -66,7 +66,7 @@ async fn start(context: Context<Config>) -> Result<Router, BoxError> {
 4. 監聽 `http.listen_addr`（API，加上 health 路由與 kit 的 layer）與 `http.health_listen_addr`（只有 health 路由），readiness 開始回 200。任一個位址被占用就 exit code 1，不啟動。
 5. 收到 SIGTERM 後依[收尾](#收尾sigterm)結束，回傳 exit code。
 
-`Context` 提供 `config()`（已驗證的服務設定）、`health()`（註冊 readiness 檢查）、`shutdown()`（收尾狀態）與 `spawn(task)`（收尾時會等待的背景工作）。
+`Context` 提供 `config()`（已驗證的服務設定）、`health()`（註冊 readiness 檢查）、`shutdown()`（收尾狀態）、`request_timeout()`（`http.request_timeout`，handler 要等慢的上游時，啟動時拿自己的時間上限與它比對，例如 `services/ai-gateway`）、`spawn(task)`（收尾時會等待的背景工作）與 `serve_port(位址, routes)`：在另一個埠提供一組路由，和 API 埠有同樣的 layer（handler 逾時、panic 處理、請求的 span 與存取日誌）與收尾，給 mesh 要和 API 分開授權的內部 API 用，例如身分服務的 token 交換（Laysi/trustiot-v2#106）。埠被占用時回錯誤，服務不要啟動。
 
 ## 設定
 
@@ -360,6 +360,30 @@ JWS compact serialization（RFC 7515），payload 是 contract 的 `InternalClai
 
 輪替與撤銷不需要服務做任何事：身分服務 pod 的 init container 依 `internalIdentity.keyGeneration` 與 `revokeBeforeGeneration` 先公開新公鑰，`keyPropagationSeconds` 之後身分服務才用新私鑰簽章，舊公鑰在它簽的 token 全部過期（效期上限 300 秒加 5 秒時鐘誤差）之後才移除。服務在重疊期間同時接受新舊兩把。操作步驟在 [docs/runbooks/secrets.md](../../docs/runbooks/secrets.md)。
 
+### 代表使用者呼叫其他服務（`OnBehalf`）
+
+handler 收到的 token 受眾是自己，對方會以 `wrong_audience` 拒絕，所以不能轉送。要以同一個使用者呼叫另一個服務的內部 API 時，用 `OnBehalf`：它先拿請求的 token 向身分服務的 token 交換換一張受眾是對方的 token（`contract::api::identity::ExchangeToken`，[contract README](../contract/README.md) 的「token 交換」），再帶著它呼叫（決策 27，Laysi/trustiot-v2#106）。
+
+```rust
+// 啟動時各建一次，放進 router 的 state
+let on_behalf = OnBehalf::new(InternalClient::<service::Identity>::new(identity_url, timeout)?);
+let certs = InternalClient::<service::Certs>::new(certs_url, timeout)?;
+
+// handler 裡
+async fn device_certs(State(state): State<AppState>, user: UserIdentity) -> Result<Json<Certs>, OnBehalfError> {
+    let certs = state.on_behalf.call(&state.certs, &ListCerts { /* ... */ }, &user).await?;
+    Ok(Json(certs))
+}
+```
+
+- 只收 `&UserIdentity`：只有驗證過的請求能代表使用者，`ServiceIdentity` 傳不進去（compile-fail doctest 證明）。需要先拿 token 再自己呼叫時用 `token_for(&user, 受眾)`。
+- `identity_url` 是身分服務 token 交換自己的 Service 與埠（chart 的 `<release>-identity-exchange`，埠名 `token-exchange`，`http://<release>-identity-exchange:8082`），不是身分服務的 API：mesh 只讓代表使用者呼叫的服務連到這個埠。
+- 身分服務只替 chart 依 `mesh.calls` 列出的呼叫換 token（`TRUSTIOT_ON_BEHALF_CALLS`）：要代表使用者呼叫一個服務，把它加進 `mesh.calls`，chart 同時讓本服務連得到對方與身分服務的 `token-exchange` 埠（[chart README](../../deploy/chart/README.md) 的「服務間授權（mesh）」）。
+- 只換一跳：清單套用在入口 gateway 簽給本服務的 token 上，換來的 token 帶 `act`，身分服務不再換它（403）。所以本服務以換來的 token 被呼叫時，不能再代表同一個使用者往下呼叫；多跳的鏈要等呼叫端的工作負載驗證（Laysi/trustiot-v2#509）。
+- 換來的 token 不會比請求的 token 晚到期，最多 60 秒；請求快到期時（剩不到 1 秒）換不到。
+- `OnBehalfError` 實作 `IntoResponse`，回 M1：交換失敗（`Exchange`）只有 `timeout`、`unavailable` 照傳，其他一律 `internal`，並記一筆 ERROR，欄位是呼叫端、受眾與身分服務回的代碼，提示檢查 `mesh.calls` 或請求的剩餘效期；呼叫對方失敗（`Call`）照 `CallError::code()`，例如對方的 `not_found` 原樣傳遞。token 不進日誌。
+- 身分服務自己用 `ExchangeVerifier` 驗證交換請求帶的 token：與 `IdentityVerifier` 做同樣的檢查，只是接受任何受眾。只有 token 交換可以用它；其他地方一律用 `IdentityVerifier`，受眾是自己。它目前是公開型別，其他服務也拿得到，限制它只給身分服務記在 Laysi/trustiot-v2#509。
+
 ### 背景工作沒有使用者身分
 
 `UserIdentity` 只能由 `IdentityVerifier` 從通過檢查的 token 建立，handler 透過 extractor 拿到它。它沒有其他建構方式、沒有 `Default`、沒有 `Deserialize`，`ServiceIdentity` 也不能轉成它，所以背景工作、排程工作與事件消費這些沒有請求的程式拿不到使用者身分，只能以 `ServiceIdentity`（服務自己）執行：
@@ -372,7 +396,9 @@ let actor = ServiceIdentity::new(ServiceName::Assets); // 或 verifier.service_i
 context.spawn(purge_expired(actor));
 ```
 
-這由 `src/identity.rs` 的 compile-fail doctest 證明：以欄位、`From`、`Into`、`Deserialize`、`Default` 建立 `UserIdentity` 都無法編譯。不要把 handler 拿到的 `UserIdentity` 移進 `Context::spawn` 或 `tokio::spawn`：token 60 秒就過期，背景工作要做的事以服務自己的身分執行。背景工作代表服務呼叫其他服務的完整流程在 Laysi/trustiot-v2#106。
+這由 `src/identity.rs` 的 compile-fail doctest 證明：以欄位、`From`、`Into`、`Deserialize`、`Default` 建立 `UserIdentity` 都無法編譯。不要把 handler 拿到的 `UserIdentity` 移進 `Context::spawn` 或 `tokio::spawn`：token 60 秒就過期，背景工作要做的事以服務自己的身分執行。
+
+決定（2026-10-21，Laysi/trustiot-v2#106，決策 27）：背景工作不冒用使用者，也不換 token。它以服務自己的資料庫角色（`BackgroundTenantDb`、`PlatformDb`）做事，跨服務的影響走事件（決策 4）；`OnBehalf` 只收 `UserIdentity`，所以背景工作無法代表使用者呼叫。呼叫 `ai-gateway` 不需要 token（決策 28，只靠 mesh 授權）。背景工作需要同步呼叫另一個服務的內部 API 時（目前沒有），另以服務自己的 token 處理，屆時再定。`services/assets/tests/background_identity.rs` 以資產服務驗證：沒有任何 token 驗得過時，事件消費者照樣完成工作。
 
 ## 租戶隔離（`tenant`）
 
@@ -426,7 +452,7 @@ async fn device_names(db: &TenantDb, user: &UserIdentity) -> Result<Vec<String>,
 | `TenantDb::begin(&UserIdentity)` | handler | 請求的內部身分 token（已驗證）；token 沒有租戶時回 `TenantDbError::NoTenant`，端點回 403 `permission_denied` |
 | `BackgroundTenantDb::begin(TenantId, purpose)` | 排程工作、事件消費 | 工作本身：事件帶的租戶，或平台角色查詢找出的租戶。以 DEBUG 記下服務、租戶與 `purpose` |
 | `BackgroundTenantDb::begin_without_tenant(purpose)` | 不帶租戶資料的表（例如 outbox 消費端自己的表）、全平台事件的處理 | 不設定租戶：看不到也寫不進任何租戶的列。以 DEBUG 記下服務與 `purpose` |
-| `PlatformDb::begin(PlatformActor, purpose)` | 平台後台、跨租戶的工作 | 不設定租戶；平台角色只看得到表上有 `platform_access` policy 的資料。以 INFO 記一行 `platform database access`（actor、`purpose`），操作本身的紀錄在 Laysi/trustiot-v2#130 |
+| `PlatformDb::begin(PlatformActor, purpose)` | 平台後台、跨租戶的工作 | 不設定租戶；平台角色只看得到表上有 `platform_access` policy 的資料。以 INFO 記一行 `platform database access`（actor、`purpose`）；操作本身由寫入的事件記進身分服務的事件紀錄（`outbox::publish_as` 帶 actor，[services/identity](../../services/identity/README.md) 的「事件層與操作紀錄」，Laysi/trustiot-v2#130） |
 | `PlatformDb::reader(PlatformActor, purpose)` → `PlatformReader::begin()` | 每隔幾秒就要跨租戶讀一次的例行工作，例如 outbox 消費端輪詢事件 | 同 `PlatformDb::begin`，但交易是 `READ ONLY`（資料庫拒絕寫入）。`begin()` 在 `BEGIN READ ONLY` 之後立刻執行 `SELECT 1`：在交易的第一個查詢之前，`SET TRANSACTION READ WRITE` 還能改回讀寫，之後 Postgres 拒絕（Laysi/trustiot-v2#271 驗證的 F-4）。actor 與 `purpose` 在建立 `PlatformReader` 時以 INFO 記一次（`platform database reader`），每筆交易只記 DEBUG，免得每秒一行 INFO |
 
 - 交易的第一個陳述就是 `SELECT set_config('trustiot.tenant_id', $1, true)`：等同 `SET LOCAL`，但值以參數綁定。交易結束（commit、rollback、drop、出錯）設定就消失，連線回到 pool 時不帶租戶。

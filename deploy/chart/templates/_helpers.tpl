@@ -155,6 +155,12 @@ Secrets named in values. One row per variable:
   secret/key  the Secret reference; an empty name means not configured
   available   false when this deployment does not use the dependency (Qdrant in bundled mode)
   owners      the only services allowed to request it, with the reason; empty means any service
+  optional    true when a pod must start without the Secret: smtp only, because the identity
+              service serves the ext_authz check every request with a cookie needs, so a missing
+              relay account must not keep it from starting (services/identity/README.md,
+              "寄信（SMTP）"). The platform setting TRUSTIOT_SMTP_AUTH_REQUIRED tells the
+              service that the account is expected, so it reports a missing one instead of
+              sending without it.
 Returns a YAML list; use with fromYamlArray.
 */}}
 {{- define "trustiot.credentialCatalog" -}}
@@ -172,8 +178,8 @@ Returns a YAML list; use with fromYamlArray.
 {{- $rows = append $rows (dict "credential" "qdrant-write" "env" "TRUSTIOT_QDRANT_WRITE_API_KEY" "secret" $qdrant.name "key" $qdrant.writeApiKeyKey "available" $qdrantExternal "owners" $qdrantOwners) -}}
 {{- $rows = append $rows (dict "credential" "object-storage" "env" "TRUSTIOT_S3_ACCESS_KEY_ID" "secret" $s3.name "key" $s3.accessKeyIdKey "available" true "owners" $anyService) -}}
 {{- $rows = append $rows (dict "credential" "object-storage" "env" "TRUSTIOT_S3_SECRET_ACCESS_KEY" "secret" $s3.name "key" $s3.secretAccessKeyKey "available" true "owners" $anyService) -}}
-{{- $rows = append $rows (dict "credential" "smtp" "env" "TRUSTIOT_SMTP_USERNAME" "secret" $smtp.name "key" $smtp.usernameKey "available" true "owners" $anyService) -}}
-{{- $rows = append $rows (dict "credential" "smtp" "env" "TRUSTIOT_SMTP_PASSWORD" "secret" $smtp.name "key" $smtp.passwordKey "available" true "owners" $anyService) -}}
+{{- $rows = append $rows (dict "credential" "smtp" "env" "TRUSTIOT_SMTP_USERNAME" "secret" $smtp.name "key" $smtp.usernameKey "available" true "owners" $anyService "optional" true) -}}
+{{- $rows = append $rows (dict "credential" "smtp" "env" "TRUSTIOT_SMTP_PASSWORD" "secret" $smtp.name "key" $smtp.passwordKey "available" true "owners" $anyService "optional" true) -}}
 {{- $rows = append $rows (dict "credential" "ai" "env" "TRUSTIOT_AI_CHAT_API_KEY" "secret" $ai.chat.apiKeySecret.name "key" $ai.chat.apiKeySecret.key "available" true "owners" $aiOwners) -}}
 {{- $rows = append $rows (dict "credential" "ai" "env" "TRUSTIOT_AI_EMBEDDING_API_KEY" "secret" $ai.embedding.apiKeySecret.name "key" $ai.embedding.apiKeySecret.key "available" true "owners" $aiOwners) -}}
 {{- $rows = append $rows (dict "credential" "ai" "env" "TRUSTIOT_AI_RERANK_API_KEY" "secret" $ai.rerank.apiKeySecret.name "key" $ai.rerank.apiKeySecret.key "available" true "owners" $aiOwners) -}}
@@ -207,7 +213,11 @@ Returns a YAML list; use with fromYamlArray.
 {{- fail (printf "services.%s: only %s may receive the %s credential: %s" $name (join ", " .owners.services) $credential .owners.reason) -}}
 {{- end -}}
 {{- if and .available .secret -}}
-{{- $env = append $env (dict "name" .env "valueFrom" (dict "secretKeyRef" (dict "name" .secret "key" .key))) -}}
+{{- $ref := dict "name" .secret "key" .key -}}
+{{- if .optional -}}
+{{- $_ := set $ref "optional" true -}}
+{{- end -}}
+{{- $env = append $env (dict "name" .env "valueFrom" (dict "secretKeyRef" $ref)) -}}
 {{- end -}}
 {{- end -}}
 {{- end -}}
@@ -265,7 +275,8 @@ key: CloudNativePG's Secrets of the bundled Postgres (the CA's private key, the 
 database owner's password), the password Secrets the migration Job fills (each service's database
 password and the collector's ClickHouse password; the chart hands each consumer only its own), the
 bundled ClickHouse's generated admin password Secret, the internal identity signing keys Secret
-(only the identity service mounts it), and the migration accounts of an external Postgres and
+(only the identity service mounts it), the MQTT broker's accounts Secret and server certificate
+Secret (only the broker pod uses them), and the migration accounts of an external Postgres and
 ClickHouse (only the migration Job uses those).
 Returns a YAML list of names; use with fromYamlArray.
 */}}
@@ -282,6 +293,11 @@ migration Job (through the API) may use it. */ -}}
 {{- end -}}
 {{- /* The identity service's signing keys, whether or not the service is enabled. */ -}}
 {{- $names = append $names (include "trustiot.identity.keys" . | fromYaml).secret -}}
+{{- /* The certs service's issuing CA keys, whether or not the service is enabled. */ -}}
+{{- $names = append $names (include "trustiot.certs.ca" . | fromYaml).secret -}}
+{{- /* The MQTT broker's service passwords and server key, whether or not the broker is enabled. */ -}}
+{{- $names = append $names (include "trustiot.mqttBroker.accountsSecret" .) -}}
+{{- $names = append $names (include "trustiot.mqttBroker.tlsSecret" .) -}}
 {{- if eq .Values.postgres.mode "external" -}}
 {{- with .Values.postgres.external.migrationSecret.name -}}
 {{- $names = append $names . -}}

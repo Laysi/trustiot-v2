@@ -1,0 +1,19 @@
+{
+  "id": "msg_01Rw4Xc7Lp2QzN8kTb5VhJ3M",
+  "type": "message",
+  "role": "assistant",
+  "content": [
+    {
+      "type": "text",
+      "text": "Quantum physics describes"
+    }
+  ],
+  "model": "claude-opus-5-5",
+  "stop_reason": "max_tokens",
+  "stop_sequence": null,
+  "stop_details": null,
+  "usage": {
+    "input_tokens": 12,
+    "output_tokens": 10
+  }
+}

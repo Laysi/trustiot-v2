@@ -9,13 +9,17 @@
 //!   ([`transport`]), with presence (`online`, the last will, `offline` on shutdown),
 //!   reconnects with backoff ([`backoff`]) and bounded memory. The MQTT client is the agent's
 //!   own (`mqtt`); its module documentation says why.
-//! - [`heartbeat`]: the basic heartbeat; [`sdnotify`]: readiness and the systemd watchdog, fed
-//!   while the connection task makes progress ([`liveness`]).
-//! - [`modbus`]: reads the data points of one device over Modbus TCP (rebuild checklist F1,
-//!   F5).
+//! - [`heartbeat`]: the basic heartbeat; [`sdnotify`]: readiness and the systemd watchdog, which
+//!   restarts the whole service and is fed only while the connection task makes progress
+//!   ([`liveness`]).
+//! - [`modbus`]: reads the data points of devices over Modbus TCP or over RTU-over-TCP to an
+//!   RS485 converter, with one shared connection per endpoint (rebuild checklist F1, F2, F5).
+//! - [`polling`]: polls each device on a fixed schedule with bounded waits, reconnect backoff
+//!   and a per-device watchdog that closes the connection of a device that stopped answering
+//!   (F4); not the systemd watchdog. The service does not run it yet.
 //!
-//! Scheduling, the offline buffer and configuration apply build on these (`README.md` lists
-//! what is where).
+//! Scheduling the polls in the service, the offline buffer and configuration apply build on
+//! these (`README.md` lists what is where).
 
 pub mod backoff;
 pub mod config;
@@ -25,6 +29,7 @@ pub mod link;
 pub mod liveness;
 pub mod modbus;
 mod mqtt;
+pub mod polling;
 pub mod sdnotify;
 pub mod setup;
 pub mod tls;

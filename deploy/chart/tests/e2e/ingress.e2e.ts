@@ -55,6 +55,8 @@ type HostKey = keyof typeof HOSTS;
 const TLS_SECRET = `trustiot-e2e-tls-${crypto.randomUUID().slice(0, 8)}`;
 // Markers that whoami prints as "Name: <WHOAMI_NAME>" (tests/e2e/values-e2e.yaml).
 const PROTECTED_MARKER = "Name: protected-backend";
+// The SPA's static files (services.web): every path on hosts.app outside /api and /auth.
+const SPA_MARKER = "Name: spa-static";
 const FORGED = `forged.${crypto.randomUUID()}`;
 const VALID_COOKIE = `sid=valid-${crypto.randomUUID().replaceAll("-", "")}`;
 const SLOW_COOKIE = `sid=slow-${crypto.randomUUID().replaceAll("-", "")}`;
@@ -363,8 +365,9 @@ describe("paths that need the cookie", () => {
 
   // Laysi/trustiot-v2#255 (F1 of docs/test-reports/2026-10-10-62-e2e-verify.md): without the mesh's
   // path normalization (deploy/istio/istiod-values.yaml, DECODE_AND_MERGE_SLASHES) these
-  // spellings slip past the /internal* DENY and reach the catch-all backend, which may clean the
-  // path up to /internal/... itself. MERGE_SLASHES alone still lets the %2f forms through.
+  // spellings slip past the /internal* DENY and the cookie check and reach the SPA's static files
+  // (a catch-all backend), which may clean the path up to /internal/... itself. MERGE_SLASHES
+  // alone still lets the %2f forms through.
   test.each(INTERNAL_SLASH_CASES)("/internal behind doubled or encoded slashes is denied: %s", async (target) => {
     for (const [cookie, expected] of [
       [undefined, 401],
@@ -480,21 +483,22 @@ describe("public paths", () => {
 
   // Laysi/trustiot-v2#255 (F3): a gateway, its WebSocket library or a proxy may put the port in
   // Host. The route matches the host with any port, so the exemption does too, and only on the
-  // public path's own host (deploy/chart/README.md).
+  // public path's own host (deploy/chart/README.md). On hosts.app the gateway's public paths are
+  // the SPA's static files.
   test("Host with a port: a public path is public on its own host only", async () => {
     const port = SHAPE === "saas" ? 80 : 443;
-    for (const [host, path, expected] of [
+    for (const [host, path, expected, marker] of [
       [`${HOSTS.gateway}:${port}`, "/mqtt", 200],
       [`${HOSTS.gateway}:${port}`, "/certs/renew", 200],
       [`${HOSTS.gateway}:8443`, "/mqtt", 200],
       [`${HOSTS.app}:${port}`, "/healthz", 200],
       [`${HOSTS.app}:${port}`, "/auth/login", 200],
-      [`${HOSTS.app}:${port}`, "/mqtt", 401],
-      [`${HOSTS.app}:${port}`, "/certs/renew", 401],
+      [`${HOSTS.app}:${port}`, "/mqtt", 200, SPA_MARKER],
+      [`${HOSTS.app}:${port}`, "/certs/renew", 200, SPA_MARKER],
       [`${HOSTS.app}:${port}`, "/api/whoami", 401],
       [`${HOSTS.gateway}:${port}`, "/auth/login", 404],
       [`${HOSTS.ota}:${port}`, "/mqtt", 404],
-    ] as [string, string, number][]) {
+    ] as [string, string, number, string?][]) {
       const response = await raw(path, {
         host,
         method: "POST",
@@ -505,6 +509,7 @@ describe("public paths", () => {
       });
       record("public, host with port", `${path} on ${host}`, path, host, response);
       expect(response.status).toBe(expected);
+      if (marker !== undefined) expect(response.body).toContain(marker);
       expect(response.body).not.toContain(PROTECTED_MARKER);
       expect(response.body).not.toContain(FORGED);
     }
@@ -518,20 +523,22 @@ describe("public paths", () => {
   });
 
   test("a public path on another host is not public", async () => {
-    // hosts.app has a catch-all cookie route, so the request is checked and refused (401).
-    // hosts.gateway and hosts.ota have no route for these paths, so the gateway answers 404
-    // itself without calling the identity service or any backend.
-    for (const [host, path, expected] of [
-      ["app", "/mqtt", 401],
-      ["app", "/certs/renew", 401],
+    // On hosts.app every path outside /api and /auth is the SPA's static files, so the request
+    // gets them, not the gateway's backend, and without the forged header. hosts.gateway and
+    // hosts.ota have no route for these paths, so the gateway answers 404 itself without calling
+    // the identity service or any backend.
+    for (const [host, path, expected, marker] of [
+      ["app", "/mqtt", 200, SPA_MARKER],
+      ["app", "/certs/renew", 200, SPA_MARKER],
       ["gateway", "/auth/login", 404],
       ["gateway", "/healthz", 404],
       ["ota", "/mqtt", 404],
       ["ota", "/auth/login", 404],
-    ] as [HostKey, string, number][]) {
+    ] as [HostKey, string, number, string?][]) {
       const response = await raw(path, { host, headers: [["x-internal-identity", FORGED]] });
       record("public on another host", `${path} on hosts.${host}`, path, HOSTS[host], response);
       expect(response.status).toBe(expected);
+      if (marker !== undefined) expect(response.body).toContain(marker);
       expect(response.body).not.toContain(PROTECTED_MARKER);
       expect(response.body).not.toContain(FORGED);
       expect(response.body).not.toContain("identity-double");
@@ -588,10 +595,10 @@ describe("path-bypass attempts never reach a cookie route without a cookie", () 
     record("bypass", name, resolved, HOSTS[host ?? "app"], response);
     expect(response.body).not.toContain(PROTECTED_MARKER);
     expect(response.body).not.toContain(FORGED);
-    // Rejected (400 bad request, 401 no cookie, 403 denied, 404 no route) or, at most, the
-    // public health check itself.
+    // Rejected (400 bad request, 401 no cookie, 403 denied, 404 no route) or, at most, a public
+    // answer: the health check itself or, on hosts.app, the SPA's static files.
     if (response.status === 200) {
-      expect(response.body).toBe("ok");
+      if (response.body !== "ok") expect(response.body).toContain(SPA_MARKER);
     } else {
       expect([400, 401, 403, 404]).toContain(response.status);
     }

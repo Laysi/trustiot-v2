@@ -1,6 +1,6 @@
 [package]
 name = "assets"
-description = "TrustIoT v2 assets service: tenants' sites, devices and data points. MS0 skeleton: its own schema under row-level security, the consumer of identity.tenant_created, and a tenant-scoped example API."
+description = "TrustIoT v2 assets service: tenants' sites, devices and data points: its own schema under row-level security, the consumer of identity.tenant_created, and the device model API."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -17,21 +17,27 @@ doc = false
 axum = { workspace = true, features = ["http1", "json", "tokio"] }
 chrono = { workspace = true, features = ["serde"] }
 contract = { path = "../../crates/contract" }
-# Consumes identity.tenant_created (decision 4).
+# Consumes identity.tenant_created and writes assets.device_model_* (decision 4).
 outbox = { path = "../../crates/outbox" }
+# The data point format the gateway reads (rebuild checklist M4) and its rules.
+protocol = { path = "../../crates/protocol" }
 serde = { workspace = true, features = ["derive"] }
+# Device model bodies are read by hand, so every rule broken becomes an M1 field error.
+serde_json.workspace = true
 service-kit = { path = "../../crates/service-kit" }
 # Same TLS stack as service-kit: every connection verifies the server (checklist M3).
 sqlx = { workspace = true, features = ["chrono", "postgres", "runtime-tokio", "tls-rustls-ring-webpki"] }
+thiserror.workspace = true
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 tracing.workspace = true
+# Refuses invisible and direction-changing characters in data point descriptions.
+unicode-properties = { workspace = true, features = ["general-category"] }
 # The client API's OpenAPI document (tools/openapi merges it into api/openapi.json).
 utoipa = { workspace = true, features = ["chrono", "uuid"] }
 
 [dev-dependencies]
 # Creates tenants through the identity service's own code, as the producer of the event.
 identity = { path = "../identity" }
-serde_json.workspace = true
 # The product's schema (the migration Job), test identity tokens, and the cross-tenant suite.
 testkit = { path = "../../crates/testkit" }
 tokio = { workspace = true, features = ["macros", "process", "rt-multi-thread", "time"] }

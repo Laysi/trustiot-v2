@@ -12,7 +12,8 @@
 //! Threads: the connection (TLS handshakes, MQTT) runs on its own thread with a single-threaded
 //! tokio runtime, because a full inner handshake waits about 70 ms for the TPM signature inside
 //! rustls' synchronous signing call; that blocks only this thread. Everything else (heartbeat,
-//! watchdog, signals, and later the Modbus polling) runs on a two-thread runtime.
+//! the systemd watchdog's notifications, signals, and later the Modbus polling of
+//! [`agent::polling`], with its own per-device watchdog) runs on a two-thread runtime.
 //!
 //! The systemd watchdog is fed only while the connection task makes progress and both runtimes
 //! run: the connection task declares every wait with its deadline ([`agent::liveness`]), the

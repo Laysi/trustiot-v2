@@ -95,6 +95,7 @@ async fn tenants_are_isolated() {
 | `Suite::openapi(doc)` | 有 HTTP API 的服務 | 服務的 OpenAPI 文件（`serde_json::to_value(openapi())`）；每個 operation 都要宣告或豁免 |
 | `Suite::exempt_endpoint("METHOD /path", "理由")` | 沒有租戶資料的 operation，或另有手寫測試的巢狀路徑 | |
 | `Suite::without_api("理由")` | 沒有 HTTP API 的服務（例如只消費事件） | 兩者都沒呼叫時測試失敗 |
+| `Suite::without_tenant_data("理由")` | 完全沒有租戶資料的服務：每個關聯都 `exempt`、每個 operation 都 `exempt_endpoint`，例如 `services/certs/tests/cross_tenant.rs` | 沒有它時，什麼都沒宣告的 suite 以「nothing is declared」失敗；有它時只跑涵蓋檢查，而一旦宣告了租戶表或要攻擊的端點就失敗，因為說法不再成立 |
 
 ## 怎麼測
 
@@ -270,7 +271,7 @@ async fn the_reader_survives_a_converter() {
 
 - `TestPki`：測試時產生的兩個 CA，不寫進 repo。「公開」CA 簽前端的憑證（`FRONT_HOST`，即 `localhost`），是 agent 的外層信任；broker CA 簽 broker 的憑證（`BROKER_NAME`）與閘道器的憑證（`pki.gateway(cn)`，EKU clientAuth），是 agent 的內層信任與 broker 的用戶端 CA。另有 `Authority::new(name)` 做不相干的 CA（測拒絕用）、`front_tls(leaf, versions)`、`mtls_server(leaf, client_ca)`（要求用戶端憑證的 TLS 1.3 伺服器；`mtls_server_with_versions` 可指定 TLS 版本，測拒絕用）、`Authority::client_valid(cn, not_before, not_after)`（指定效期的用戶端憑證，測過期用）與 `ScratchDir`（drop 時刪除的暫存目錄，放設定與金鑰檔）。
 - `front::WsFront`：測試行程內的入口與 mqtt-bridge 替身：外層 TLS（ALPN `http/1.1`，依用戶端的套件順序選）、`/mqtt` 上 subprotocol 為 `mqtt` 的 WebSocket（路徑不對回 404、沒要求 `mqtt` 回 400），再把 binary message 原樣轉給 TCP 上游（8 KiB 緩衝，與 mqtt-bridge 相同）。內層 mTLS 由閘道器直達上游，前端只看到加密的位元組。`sessions()` 記錄每條連線協商出的 TLS 版本、套件、ALPN、SNI、是否 resumption、路徑與 subprotocol；`FrontOptions` 可改成不回 subprotocol、定時送 WebSocket ping、換外層 TLS 設定（例如只有 TLS 1.2）。`stop().await` 一次切斷所有連線、不送 WebSocket close（與轉接服務當掉相同），等 listener 關閉、每條連線都結束才回來；`restart()` 先這樣停下再在同一個 port 重新開始，所以不會因為舊的 listener 還開著而 `AddrInUse`。停下時（`stop`、`restart` 或 drop）先對 listener `shutdown` 再關閉：同一個測試行程裡別的測試啟動子行程（例如 podman）時，子行程在 fork 到 exec 之間拿著所有描述子的副本，只 drop 的 listener 會繼續 listen（重新綁定 `AddrInUse`、連線照樣成功）；`shutdown` 讓 socket 本身離開 LISTEN。`Mosquitto` 挑 port 時放掉的試探 listener 也一樣處理。
-- `mosquitto::Mosquitto`：拋棄式容器裡的 Mosquitto 2.1.2（`MOSQUITTO_IMAGE`，以 multi-arch digest 釘選，與 `crates/protocol/tests/broker.rs` 相同），設定與產品給閘道器的 listener 相同：mTLS（`require_certificate`、`use_identity_as_username`、TLS 1.3）、`set_tcp_nodelay`、dynamic security 與協定的閘道器角色（`protocol::acl::gateway_role_acls`）、不允許匿名。`ciphers_tls1.3` 把 ChaCha20-Poly1305 排第一：Mosquitto 依自己的順序選套件，不設時即使閘道器把 ChaCha20 排第一也協商出 AES-256-GCM（2026-10-21 實測）。mTLS listener 發布在主機的回送位址（`address()`）；容器內另有只用密碼的 listener，給 dynamic security 指令與雲端帳號（`CLOUD_USER`）的 `mosquitto_pub`／`mosquitto_sub` 以 `exec` 使用。憑證由環境變數傳進容器，不經過指令列。
+- `mosquitto::Mosquitto`：拋棄式容器裡的 Mosquitto 2.1.2（`MOSQUITTO_IMAGE`，以 multi-arch digest 釘選，與 `crates/protocol/tests/broker.rs` 相同），設定照決策 6 給閘道器的 listener：mTLS（`require_certificate`、`use_identity_as_username`、TLS 1.3）、`set_tcp_nodelay`、dynamic security 與協定的閘道器角色（`protocol::acl::gateway_role_acls`）、不允許匿名。`ciphers_tls1.3` 把 ChaCha20-Poly1305 排第一：Mosquitto 依自己的順序選套件，不設時即使閘道器把 ChaCha20 排第一也協商出 AES-256-GCM（2026-10-21 實測）。它不是 chart 的設定（`deploy/chart/files/mosquitto/mosquitto.conf`，Laysi/trustiot-v2#84）：chart 另外檢查 CRL、只接受 MQTT 5、以 username 當 client ID，而在 2026-10-23 還沒有 `ciphers_tls1.3` 與 `set_tcp_nodelay`。mTLS listener 發布在主機的回送位址（`address()`）；容器內另有只用密碼的 listener，給 dynamic security 指令與雲端帳號（`CLOUD_USER`）的 `mosquitto_pub`／`mosquitto_sub` 以 `exec` 使用。憑證由環境變數傳進容器，不經過指令列。
 
 ```rust
 let pki = TestPki::new();

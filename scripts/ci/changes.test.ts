@@ -7,6 +7,7 @@ import {
   affectsCargoDeny,
   affectsEveryJob,
   DECISION_CODE,
+  affectsFrontend,
   affectsHelm,
   affectsHost,
   affectsPostgresImage,
@@ -56,7 +57,7 @@ function running(files: readonly string[]): string[] {
 }
 
 describe("path rules", () => {
-  test("a docs-only change skips rust, cargo-deny, helm, host and postgres-image", () => {
+  test("a docs-only change skips rust, cargo-deny, helm, host, postgres-image and frontend", () => {
     expect(running(["docs/architecture/ci-release.md"])).toEqual([]);
     expect(
       running([
@@ -100,6 +101,7 @@ describe("path rules", () => {
     ["a Rust file under scripts", "scripts/ci/fixture.rs"],
     ["SQL outside the crates (a Rust file may include it)", "deploy/sql/seed.sql"],
     ["the chart values a service-kit test reads", "deploy/chart/values.yaml"],
+    ["the MQTT broker configuration a migrate test runs", "deploy/chart/files/mosquitto/mosquitto.conf"],
     ["the git ignore rules (the OpenAPI diff uses git status)", ".gitignore"],
     ["ci.yml", ".github/workflows/ci.yml"],
     ["a local action", ".github/actions/setup-proto/action.yml"],
@@ -177,6 +179,9 @@ describe("path rules", () => {
     "scripts/ci/check-secret-handling.ts",
     "scripts/lib/stack.ts",
     "services/ingest/tests/common/mod.rs",
+    // The MQTT broker's image pin, probe and memory limit, shared with its tests.
+    "crates/protocol/tests/broker.rs",
+    "tools/migrate/tests/mqtt_broker.rs",
     "services/ingest/migrations/clickhouse",
     "services/ingest/migrations/clickhouse/0006_logs.sql",
     "crates/service-kit/src/telemetry/redact.rs",
@@ -254,6 +259,39 @@ describe("path rules", () => {
     },
   );
 
+  test.each([
+    "frontend/src/main.tsx",
+    "frontend/src/i18n/locales/zh-TW.json",
+    "frontend/package.json",
+    "frontend/bun.lock",
+    "frontend/vite.config.ts",
+    "frontend/README.md",
+    "api/openapi.json",
+    "crates/contract/src/error.rs",
+    "services/identity/src/tenants.rs",
+    "services/new-service/src/routes/devices.rs",
+    ".prototools",
+    ".github/workflows/ci.yml",
+    ".github/actions/setup-proto/action.yml",
+    "scripts/ci/changes.ts",
+  ])("frontend runs for %s", (path) => {
+    expect(affectsFrontend(path)).toBe(true);
+  });
+
+  test.each([
+    "crates/contract/Cargo.toml",
+    "crates/contract/tests/fixtures/openapi/m1-error-schemas.json",
+    "crates/service-kit/src/lib.rs",
+    "services/identity/Cargo.toml",
+    "services/identity/tests/sessions.rs",
+    "services/ingest/migrations/clickhouse/0006_logs.sql",
+    "deploy/chart/values.yaml",
+    "docs/architecture/ci-release.md",
+    "scripts/dev.ts",
+  ])("frontend skips %s", (path) => {
+    expect(affectsFrontend(path)).toBe(false);
+  });
+
   test("typical pull requests", () => {
     // The chart pins the image's PostgreSQL major and AGE version, so its tests run too.
     expect(running(["deploy/images/postgres/Containerfile", "docs/test-reports/2026-10-11-57-age-postgres-image.md"])).toEqual(["helm", "postgres-image"]);
@@ -264,8 +302,12 @@ describe("path rules", () => {
     expect(running(["crates/outbox/src/lib.rs"])).toEqual(["rust"]);
     expect(running(["crates/outbox/src/lib.rs", "Cargo.lock"])).toEqual(["cargo-deny", "rust"]);
     expect(running(["deploy/chart/values.yaml"])).toEqual(["helm", "rust"]);
-    expect(running([".prototools"])).toEqual(["cargo-deny", "helm", "host", "postgres-image", "rust"]);
+    expect(running([".prototools"])).toEqual(["cargo-deny", "frontend", "helm", "host", "postgres-image", "rust"]);
     expect(running([".github/workflows/nightly.yml", "scripts/nightly/run.ts"])).toEqual([]);
+    expect(running(["frontend/src/app/routes.tsx", "frontend/src/app/routes.test.tsx"])).toEqual(["frontend"]);
+    // A new message key in a service must come with its translations (frontend/README.md).
+    expect(running(["services/identity/src/tenants.rs"])).toEqual(["frontend", "rust"]);
+    expect(running(["services/identity/tests/tenants.rs", "services/identity/Cargo.toml"])).toEqual(["cargo-deny", "rust"]);
   });
 
   test("changes to the workflow, its actions, this script, its imports and the tool pins run every job", () => {
@@ -569,6 +611,63 @@ describe("guards: files the jobs read are covered", () => {
       }
     }
     expect(checked).toBeGreaterThan(0);
+    expect(uncovered).toEqual([]);
+  });
+
+  /**
+   * Directories the frontend tests walk from the repository root, with the files in them they
+   * read: frontend/src/i18n/server-keys.test.ts scans the Rust sources for message keys. A walk of
+   * any other directory fails the guard below until it is listed here and in the rules.
+   */
+  const FRONTEND_WALKS: Record<string, (path: string) => boolean> = {
+    "crates/contract/src": (path) => path.endsWith(".rs"),
+    services: (path) => /^services\/[^/]+\/src\/.+\.rs$/.test(path),
+  };
+
+  test("the frontend reads and imports nothing outside frontend/, or the rules cover it", () => {
+    const frontendDir = join(ROOT, "frontend");
+    const uncovered: string[] = [];
+    let checked = 0;
+    const walked = new Set<string>();
+    for (const file of sources(frontendDir, [".ts", ".tsx"]).filter((path) => !relative(frontendDir, path).startsWith("dist/"))) {
+      const source = readFileSync(file, "utf8");
+      const where = relative(ROOT, file);
+      const dir = posix.dirname(where);
+      for (const match of source.matchAll(/from\s+["'](\.{1,2}\/[^"']+)["']/g)) {
+        checked++;
+        const imported = posix.normalize(posix.join(dir, match[1] ?? ""));
+        if (!affectsFrontend(imported)) uncovered.push(`${where}: import of ${imported}`);
+      }
+      // Literals relative to the file, as in `new URL("../../api/openapi.json", import.meta.url)`,
+      // or to the repository root.
+      for (const match of source.matchAll(/["']([^"'\n]+)["']/g)) {
+        const literal = match[1] ?? "";
+        const path = /^\.{1,2}\//.test(literal) ? repositoryPath(posix.join(dir, literal)) : repositoryPath(literal);
+        if (path !== undefined && path.includes("/") && existsSync(join(ROOT, path)) && statSync(join(ROOT, path)).isFile()) {
+          checked++;
+          if (!affectsFrontend(path)) uncovered.push(`${where}: "${literal}"`);
+        }
+      }
+      // Paths built from the repository root, as in `join(ROOT, "crates", "contract", "src")`: the
+      // literal segments before the first computed one.
+      for (const match of source.matchAll(/join\(\s*ROOT\s*((?:,\s*["'][^"'\n]+["'])+)/g)) {
+        const path = Array.from((match[1] ?? "").matchAll(/["']([^"'\n]+)["']/g), (segment) => segment[1]).join("/");
+        checked++;
+        if (existsSync(join(ROOT, path)) && statSync(join(ROOT, path)).isDirectory()) {
+          if (FRONTEND_WALKS[path] === undefined) uncovered.push(`${where}: walks ${path}`);
+          walked.add(path);
+        } else if (!affectsFrontend(path)) {
+          uncovered.push(`${where}: "${path}"`);
+        }
+      }
+    }
+    for (const [dir, reads] of Object.entries(FRONTEND_WALKS)) {
+      const read = sources(join(ROOT, dir), [""]).map((path) => relative(ROOT, path)).filter(reads);
+      expect(`${dir}: ${read.length > 0}`).toBe(`${dir}: true`);
+      uncovered.push(...read.filter((path) => !affectsFrontend(path)).map((path) => `${dir}: ${path}`));
+    }
+    expect([...walked].toSorted()).toEqual(Object.keys(FRONTEND_WALKS).toSorted());
+    expect(checked).toBeGreaterThan(3);
     expect(uncovered).toEqual([]);
   });
 });
@@ -919,7 +1018,7 @@ describe("same tree as the merged pull request", () => {
   }
 
   /** What the pull request's own run did: its path rules ran rust and helm only. */
-  const PR_JOBS = jobs({ "cargo-deny": "skipped", host: "skipped", "postgres-image": "skipped" });
+  const PR_JOBS = jobs({ "cargo-deny": "skipped", host: "skipped", "postgres-image": "skipped", frontend: "skipped" });
 
   /** When GitHub created (squash-merged) the parent: just before main's push run of it at 01:00. */
   const PARENT_CREATED = "2026-10-15T00:55:00Z";
@@ -975,7 +1074,12 @@ describe("same tree as the merged pull request", () => {
       runs: [{ id: PR_RUN, url: `https://github.com/${REPOSITORY}/actions/runs/${PR_RUN}` }],
       forwardSince: SINCE,
       passed: ["rust", "helm"],
-      notPassed: { "cargo-deny": `skipped in run ${PR_RUN}`, host: `skipped in run ${PR_RUN}`, "postgres-image": `skipped in run ${PR_RUN}` },
+      notPassed: {
+        "cargo-deny": `skipped in run ${PR_RUN}`,
+        host: `skipped in run ${PR_RUN}`,
+        "postgres-image": `skipped in run ${PR_RUN}`,
+        frontend: `skipped in run ${PR_RUN}`,
+      },
     });
     expect(result.decision.rust).toEqual({ run: false, reason: `passed in run ${PR_RUN} of pull request #7 on the same tree` });
     expect(result.decision.helm.run).toBe(false);
@@ -1066,7 +1170,7 @@ describe("same tree as the merged pull request", () => {
     ];
     const result = await plan(scenario.root, PUSH, github(scenario, { mainRuns: async () => mainRuns }));
     expect(result.everything).toContain("has a successful ci run");
-    expect(jobsRunning(result)).toEqual(["cargo-deny", "host", "postgres-image"]);
+    expect(jobsRunning(result)).toEqual(["cargo-deny", "host", "postgres-image", "frontend"]);
   });
 
   test("the trees differ", async () => {
@@ -1229,7 +1333,7 @@ describe("same tree as the merged pull request", () => {
       applies: true,
       runs: [{ id: PR_RUN }, { id: second }],
       // cargo-deny passed too, but its result changes with time: the path rules decide it on main.
-      passed: ["rust", "cargo-deny"],
+      passed: ["rust", "cargo-deny", "frontend"],
       notPassed: {
         helm: `skipped in run ${second}`,
         host: `no job of that name in attempt 1 of run ${second}`,
@@ -1614,8 +1718,8 @@ describe("what the decision reads from GitHub", () => {
 
 describe("outputs", () => {
   test("one line per job for GITHUB_OUTPUT", () => {
-    expect(outputLines(decide(["docs/a.md", "deploy/chart/Chart.yaml"]))).toBe("rust=false\ncargo-deny=false\nhelm=true\nhost=false\npostgres-image=false\n");
-    expect(outputLines(runEverything("x"))).toBe("rust=true\ncargo-deny=true\nhelm=true\nhost=true\npostgres-image=true\n");
+    expect(outputLines(decide(["docs/a.md", "deploy/chart/Chart.yaml"]))).toBe("rust=false\ncargo-deny=false\nhelm=true\nhost=false\npostgres-image=false\nfrontend=false\n");
+    expect(outputLines(runEverything("x"))).toBe("rust=true\ncargo-deny=true\nhelm=true\nhost=true\npostgres-image=true\nfrontend=true\n");
   });
 
   test("the summary lists each job, the reason and the files", () => {
@@ -1635,7 +1739,7 @@ describe("outputs", () => {
     writeFileSync(stepSummary, "");
     const status = await main({ GITHUB_EVENT_NAME: "workflow_dispatch", GITHUB_OUTPUT: output, GITHUB_STEP_SUMMARY: stepSummary });
     expect(status).toBe(0);
-    expect(readFileSync(output, "utf8")).toBe("rust=true\ncargo-deny=true\nhelm=true\nhost=true\npostgres-image=true\n");
+    expect(readFileSync(output, "utf8")).toBe("rust=true\ncargo-deny=true\nhelm=true\nhost=true\npostgres-image=true\nfrontend=true\n");
     expect(readFileSync(stepSummary, "utf8")).toContain("| `helm` | yes |");
   });
 });

@@ -3,6 +3,7 @@ import { join } from "node:path";
 
 import { pinnedTool } from "./exec.ts";
 import {
+  exposureProblems,
   gatewayPortProblems,
   gatewayPorts,
   gatewaysOf,
@@ -13,6 +14,7 @@ import {
   migrationOrderProblems,
   missingTlsSecrets,
   missingSecrets,
+  mqttBrokerServicesOf,
   passwordSecretProblems,
   passwordSecretsOf,
   operatorSecretsOf,
@@ -22,6 +24,7 @@ import {
   podProblems,
   restartsOf,
   readyEndpointsFor,
+  serverTlsSecretsOf,
   workloadsOf,
 } from "./manifests.ts";
 import { discoverShapes, valuesArgs } from "./smoke.ts";
@@ -554,11 +557,13 @@ describe("the chart as deployed by the nightly", () => {
       // The password Secrets the migration Job fills are kept too (Laysi/trustiot-v2#60); the
       // smoke values enable the collector, whose ClickHouse password the Job generates.
       // So is the bundled ClickHouse's admin password Secret, which its init container fills and
-      // the Job reads (Laysi/trustiot-v2#403).
+      // the Job reads (Laysi/trustiot-v2#403), and the MQTT broker's accounts Secret, which its
+      // init container fills (Laysi/trustiot-v2#84).
       expect(keptObjectsOf(objects)).toEqual([
         "cluster.postgresql.cnpg.io/trustiot-postgres",
         "secret/trustiot-otel-collector-password",
         "secret/trustiot-clickhouse-admin-password",
+        "secret/trustiot-mqtt-broker-accounts",
         "imagecatalog.postgresql.cnpg.io/trustiot-postgres",
       ]);
       expect([...passwordSecretsOf(objects)]).toEqual([
@@ -568,6 +573,18 @@ describe("the chart as deployed by the nightly", () => {
       // The empty Secrets are the release's own: no dummy is made for them.
       expect(missingSecrets(objects).has("trustiot-otel-collector-password")).toBe(false);
       expect(missingSecrets(objects).has("trustiot-clickhouse-admin-password")).toBe(false);
+      // The smoke values run the MQTT broker (Laysi/trustiot-v2#84): the smoke issues its server
+      // certificate for its Service's names instead of a dummy, and checks that nothing exposes it.
+      const namespace = `nightly-${shape}`;
+      expect(serverTlsSecretsOf(objects, namespace)).toEqual([
+        {
+          name: "trustiot-mqtt-broker-tls",
+          hosts: ["", `.${namespace}`, `.${namespace}.svc`, `.${namespace}.svc.cluster.local`].map((suffix) => `trustiot-mqtt-broker${suffix}`),
+        },
+      ]);
+      expect(missingSecrets(objects).has("trustiot-mqtt-broker-tls")).toBe(false);
+      expect(mqttBrokerServicesOf(objects)).toEqual(["trustiot-mqtt-broker"]);
+      expect(exposureProblems(objects, { items: objects.filter((o) => o.kind === "Service") })).toEqual([]);
     }, 60_000);
   }
 });
@@ -758,5 +775,118 @@ spec:
   podSelector: { matchExpressions: [{ key: app, operator: Exists }] }
 `);
     expect(() => gatewayPorts("gw", generated, expressions)).toThrow("matchExpressions");
+  });
+});
+
+describe("the MQTT broker's server certificate and exposure (Laysi/trustiot-v2#84)", () => {
+  const RELEASE_OBJECTS = `
+apiVersion: apps/v1
+kind: StatefulSet
+metadata: { name: trustiot-mqtt-broker, labels: { app.kubernetes.io/component: mqtt-broker } }
+spec:
+  template:
+    metadata: { labels: { app.kubernetes.io/instance: trustiot, app.kubernetes.io/component: mqtt-broker } }
+    spec:
+      containers: [{ name: mosquitto }]
+      volumes:
+        - { name: server-tls, secret: { secretName: broker-tls, defaultMode: 288 } }
+        - { name: other-tls, secret: { secretName: not-a-server-certificate } }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: made-here-user }
+spec:
+  template:
+    metadata: { labels: { app.kubernetes.io/component: other } }
+    spec:
+      containers: [{ name: c }]
+      volumes:
+        - { name: server-tls, secret: { secretName: made-here } }
+---
+apiVersion: v1
+kind: Secret
+metadata: { name: made-here }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: trustiot-mqtt-broker }
+spec:
+  type: ClusterIP
+  selector: { app.kubernetes.io/instance: trustiot, app.kubernetes.io/component: mqtt-broker }
+  ports: [{ name: mqtt-services, port: 1883 }]
+---
+apiVersion: v1
+kind: Service
+metadata: { name: everything }
+spec:
+  selector: {}
+  ports: [{ name: http, port: 80 }]
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata: { name: app }
+spec:
+  rules:
+    - backendRefs: [{ name: everything, port: 80 }]
+`;
+  const objects = parseManifests(RELEASE_OBJECTS);
+  /** The release's Services as `kubectl get services -o json` lists them, with `change` applied to the one named. */
+  const deployed = (name?: string, change: Record<string, unknown> = {}) => ({
+    items: [
+      ...objects.filter((o) => o.kind === "Service").map((o) => (o.metadata?.name === name ? { ...o, ...change } : o)),
+      // Istio's Service for a Gateway is not the release's: never looked at.
+      { metadata: { name: "trustiot-ingress-istio" }, spec: { type: "LoadBalancer" } },
+    ],
+  });
+
+  test("the smoke issues a certificate for the server-tls volume's Secret, for the Services in front of its pods, and no dummy", () => {
+    expect(serverTlsSecretsOf(objects, "nightly-saas")).toEqual([
+      {
+        name: "broker-tls",
+        hosts: [
+          "trustiot-mqtt-broker",
+          "trustiot-mqtt-broker.nightly-saas",
+          "trustiot-mqtt-broker.nightly-saas.svc",
+          "trustiot-mqtt-broker.nightly-saas.svc.cluster.local",
+        ],
+      },
+    ]);
+    // A Service with an empty selector selects no pod; a Secret the release creates needs nothing.
+    expect([...missingSecrets(objects).keys()]).toEqual(["not-a-server-certificate"]);
+    expect(mqttBrokerServicesOf(objects)).toEqual(["trustiot-mqtt-broker"]);
+  });
+
+  test("the release's Services deployed as ClusterIP without node ports or external addresses pass", () => {
+    expect(exposureProblems(objects, deployed())).toEqual([]);
+  });
+
+  test("a Service of another type, with node ports, external IPs or a load balancer address, or not deployed, is reported", () => {
+    const broker = "trustiot-mqtt-broker";
+    expect(exposureProblems(objects, deployed(broker, { spec: { type: "NodePort", ports: [{ port: 1883, nodePort: 31883 }] } }))).toEqual([
+      `Service ${broker} is of type NodePort`,
+      `Service ${broker} has node ports`,
+    ]);
+    expect(exposureProblems(objects, deployed(broker, { spec: { type: "ClusterIP", externalIPs: ["192.0.2.10"] } }))).toEqual([`Service ${broker} has external IPs`]);
+    expect(exposureProblems(objects, deployed(broker, { status: { loadBalancer: { ingress: [{ ip: "192.0.2.11" }] } } }))).toEqual([
+      `Service ${broker} has a load balancer address`,
+    ]);
+    expect(exposureProblems(objects, { items: [] })).toEqual(["Service trustiot-mqtt-broker is not deployed", "Service everything is not deployed"]);
+  });
+
+  test("a route of the release that sends traffic to the broker is reported, of any route kind", () => {
+    for (const kind of ["HTTPRoute", "TCPRoute", "TLSRoute"]) {
+      const route = `
+---
+apiVersion: gateway.networking.k8s.io/v1alpha2
+kind: ${kind}
+metadata: { name: mqtt }
+spec:
+  rules:
+    - backendRefs: [{ name: everything, port: 80 }, { name: trustiot-mqtt-broker, port: 1883 }]
+`;
+      expect(exposureProblems(parseManifests(RELEASE_OBJECTS + route), deployed())).toEqual([
+        `${kind} mqtt sends traffic to the MQTT broker's Service trustiot-mqtt-broker`,
+      ]);
+    }
   });
 });

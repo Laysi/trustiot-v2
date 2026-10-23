@@ -24,10 +24,12 @@ use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use contract::{InternalClaims, InternalToken, ServiceName};
 use ed25519_dalek::{Signer, SigningKey};
+use hmac::{Hmac, KeyInit, Mac};
 use identity_keys::{MAX_DOCUMENT_BYTES, SigningKeys};
 use serde::Serialize;
 use service_kit::Context;
 use service_kit::identity::{ALGORITHM, PublishedKeys, RELOAD_INTERVAL, TOKEN_TYPE};
+use sha2::Sha256;
 use zeroize::Zeroizing;
 
 use crate::session::SessionGrant;
@@ -45,6 +47,27 @@ pub const SIGNING_KEYS_FILE_SETTING: &str = "TRUSTIOT_IDENTITY_SIGNING_KEYS_FILE
 
 /// The readiness check [`Issuer::watch`] adds: it fails while no key may sign.
 pub const READINESS_CHECK: &str = "signing_key";
+
+/// What the login-code key of a signing key is derived for ([`derive_code_key`]). Changing it
+/// makes every code in use unusable.
+const CODE_KEY_LABEL: &[u8] = b"trustiot-login-code-key:v1";
+
+/// A key that login codes are hashed with (HMAC-SHA-256; Laysi/trustiot-v2#103,
+/// `crate::login::code_hash`). Wiped on drop.
+pub type CodeKey = Zeroizing<[u8; 32]>;
+
+/// The login-code key of a signing key: HMAC-SHA-256 of [`CODE_KEY_LABEL`] under its private
+/// key. It lives only where the signing keys live, outside the database, so a copy of the
+/// database cannot test codes offline; it reveals nothing about the private key (HMAC is a
+/// PRF) and rotates with it.
+fn derive_code_key(key: &identity_keys::SigningKey) -> CodeKey {
+    // HMAC accepts keys of any length, so this never fails.
+    let mut mac = <Hmac<Sha256> as KeyInit>::new_from_slice(key.signer().as_bytes())
+        .unwrap_or_else(|_| unreachable!("HMAC-SHA-256 takes keys of any length"));
+    mac.update(CODE_KEY_LABEL);
+    let derived: [u8; 32] = mac.finalize().into_bytes().into();
+    Zeroizing::new(derived)
+}
 
 /// The protected header, serialized in this field order.
 #[derive(Serialize)]
@@ -120,6 +143,33 @@ impl Issuer {
         self.with_signing_key(now, |key| key.kid().to_owned())
     }
 
+    /// The key a new login code is hashed with at `now`: that of the key that signs at `now`,
+    /// which every replica selects alike. `None` while no key may sign.
+    #[must_use]
+    pub fn code_key(&self, now: i64) -> Option<CodeKey> {
+        self.with_signing_key(now, derive_code_key)
+    }
+
+    /// The keys a login code in use may have been hashed with: one for each key of the signing
+    /// keys file whose generation is not revoked, whether or not it signs now, so a code issued
+    /// just before a key switch still works. Empty until a file has been read.
+    #[must_use]
+    pub fn code_keys(&self) -> Vec<CodeKey> {
+        self.shared
+            .keys
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .as_ref()
+            .map(|keys| {
+                keys.keys()
+                    .iter()
+                    .filter(|key| key.generation() >= self.shared.revoke_before)
+                    .map(derive_code_key)
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
     fn with_signing_key<R>(
         &self,
         now: i64,
@@ -188,9 +238,26 @@ impl Issuer {
                 .ok_or(IssueError::Build)?,
             tenant: grant.tenant,
             platform_admin: grant.platform_admin,
+            // Signed for the ingress gateway's request: nobody acts for the user yet.
+            act: None,
         };
+        self.sign_claims(&claims, now)
+    }
+
+    /// Signs `claims` with the key that may sign at `now`. The caller builds claims the verifiers
+    /// accept: issued by this service at `now`, living at most [`TOKEN_LIFETIME_SECS`]
+    /// ([`Issuer::issue`] for a session, [`crate::exchange`] for a token exchange).
+    ///
+    /// # Errors
+    ///
+    /// As [`Issuer::issue`].
+    pub(crate) fn sign_claims(
+        &self,
+        claims: &InternalClaims,
+        now: i64,
+    ) -> Result<InternalToken, IssueError> {
         let token = self
-            .with_signing_key(now, |key| sign(key.signer(), key.kid(), &claims))
+            .with_signing_key(now, |key| sign(key.signer(), key.kid(), claims))
             .ok_or(IssueError::NoSigningKey)??;
         InternalToken::new(token).map_err(|_| IssueError::Build)
     }
@@ -735,6 +802,37 @@ mod tests {
             0,
         );
         assert_eq!(later.signing_kid(unix_now()), None);
+    }
+
+    /// Laysi/trustiot-v2#103: login codes are hashed with a key derived from the key that signs,
+    /// and checked against the keys of every signing key that is not revoked.
+    #[test]
+    fn login_code_keys_come_from_the_signing_keys() {
+        let issuer = Issuer::with_keys(
+            signing_keys(&[(1, "old", 0), (2, "new", 1000)]),
+            PublishedKeys::from(keys(&[(1, "old"), (2, "new")])),
+            0,
+        );
+        let old = issuer.code_key(999).expect("the old key signs at 999");
+        let new = issuer.code_key(1000).expect("the new key signs at 1000");
+        assert_ne!(old, new);
+        assert_eq!(issuer.code_key(1000), Some(new.clone()), "stable");
+        // Derived, not the private key itself.
+        assert_ne!(*old, [1_u8; 32]);
+        assert_ne!(*new, [2_u8; 32]);
+        // A code hashed just before the switch can still be checked after it.
+        let all = issuer.code_keys();
+        assert_eq!(all.len(), 2);
+        assert!(all.contains(&old) && all.contains(&new));
+
+        // A revoked generation hashes and checks nothing; neither does an issuer without keys.
+        let published = PublishedKeys::from(keys(&[(1, "k")]));
+        let revoked = Issuer::with_keys(signing_keys(&[(1, "k", 0)]), published.clone(), 2);
+        assert_eq!(revoked.code_key(unix_now()), None);
+        assert!(revoked.code_keys().is_empty());
+        let empty = Issuer::new(published, 0);
+        assert_eq!(empty.code_key(unix_now()), None);
+        assert!(empty.code_keys().is_empty());
     }
 
     /// Acceptance (Laysi/trustiot-v2#61): the private key never appears in error messages or

@@ -1,0 +1,239 @@
+{{- /*
+MQTT broker (Mosquitto 2.1, decision 6, Laysi/trustiot-v2#84; README.md, "MQTT broker"; helpers in
+_mqtt-broker.tpl): one StatefulSet with a persistent volume, reachable only inside the cluster
+through a ClusterIP Service that no ingress route names. The mesh admits mqtt-bridge on the
+gateway port and the cloud services with a broker account on the service port, nobody else
+(templates/mesh.yaml).
+- The broker container runs Mosquitto with the configuration of "trustiot.mqttBroker.config",
+  mounted with subPath, so it is a regular file; a change restarts the pod (its checksum).
+- The init container `accounts` writes the dynamic security file and fills the empty Secret of
+  templates/passwords.yaml with the services' passwords, so the Role below lets the broker's
+  ServiceAccount get and patch that one Secret. Only that container mounts the token.
+- The init container `trust-files` and the sidecar `trust` keep the gateway CA certificates and
+  CRLs on the volume and have the broker reload them, and the server certificate, with SIGHUP,
+  which keeps every connection. The pod shares its process namespace for that, and every
+  container runs as the pod's user, so the sidecar may signal the broker; they mount the same
+  volumes anyway, and no token is left in the pod once the init containers are done.
+- The server certificate Secret is not part of the chart ("trustiot.mqttBroker.tlsSecret"): the
+  pod starts once it exists.
+*/ -}}
+{{- if include "trustiot.mqttBroker.enabled" . }}
+{{- $broker := .Values.mqttBroker }}
+{{- $ctx := dict "root" . "name" "mqtt-broker" }}
+{{- $pod := include "trustiot.mqtt-broker.pod" . | fromYaml }}
+{{- $name := include "trustiot.componentName" $ctx }}
+{{- $configName := include "trustiot.componentName" (dict "root" . "name" "mqtt-broker-config") }}
+{{- $accounts := (include "trustiot.mqttBroker.accounts" . | fromYaml).services }}
+{{- $nodeSelector := $broker.nodeSelector | default dict }}
+{{- /* The init containers and the sidecar run the migration image, which is built for arm64 only (decision 5). */}}
+{{- $arch := get $nodeSelector "kubernetes.io/arch" }}
+{{- if and $arch (ne $arch "arm64") }}
+{{- fail "mqttBroker.nodeSelector: kubernetes.io/arch must be arm64: the broker pod's init containers and sidecar run the migration image, which is built for arm64 only" }}
+{{- end }}
+{{- $nodeSelector = merge (dict "kubernetes.io/arch" "arm64") $nodeSelector }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $configName }}
+  labels:
+    {{- include "trustiot.componentLabels" $ctx | nindent 4 }}
+data:
+  mosquitto.conf: |
+    {{- include "trustiot.mqttBroker.config" . | nindent 4 }}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "trustiot.componentLabels" $ctx | nindent 4 }}
+automountServiceAccountToken: false
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "trustiot.componentLabels" $ctx | nindent 4 }}
+spec:
+  # In-cluster only, like every Service of this chart: gateways reach the broker through
+  # mqtt-bridge, never directly (decision 6).
+  type: ClusterIP
+  selector:
+    {{- include "trustiot.selectorLabels" $ctx | nindent 4 }}
+  ports:
+    {{- range $pod.ports }}
+    - name: {{ .name }}
+      port: {{ .containerPort }}
+      targetPort: {{ .name }}
+      protocol: TCP
+      appProtocol: tcp
+    {{- end }}
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "trustiot.componentLabels" $ctx | nindent 4 }}
+spec:
+  serviceName: {{ $name }}
+  replicas: 1
+  revisionHistoryLimit: 3
+  updateStrategy:
+    type: RollingUpdate
+  # Keep the data volume (sessions, queued and retained messages, gateway clients) when the
+  # StatefulSet is deleted or scaled down.
+  persistentVolumeClaimRetentionPolicy:
+    whenDeleted: Retain
+    whenScaled: Retain
+  selector:
+    matchLabels:
+      {{- include "trustiot.selectorLabels" $ctx | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "trustiot.componentLabels" $ctx | nindent 8 }}
+        # Istio ambient: ztunnel adds mTLS to every connection to the broker and enforces its
+        # AuthorizationPolicy (decision 27).
+        istio.io/dataplane-mode: ambient
+      annotations:
+        # The configuration is a subPath mount, which the kubelet never updates: restart instead.
+        checksum/mqtt-broker-config: {{ include "trustiot.mqttBroker.config" . | sha256sum }}
+        # A new account holder or passwordGeneration restarts the broker, whose init container
+        # writes the accounts first.
+        checksum/mqtt-broker-accounts: {{ list (include "trustiot.mqttBroker.accountsSecret" .) $accounts (include "trustiot.mqttBroker.passwordGeneration" .) | toJson | sha256sum }}
+    spec:
+      serviceAccountName: {{ $name }}
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      # The trust sidecar sends the broker SIGHUP (tools/migrate/src/mqtt_trust.rs).
+      shareProcessNamespace: true
+      # Mosquitto writes its last changes to SQLite on SIGTERM and exits.
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        {{- toYaml $broker.podSecurityContext | nindent 8 }}
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- range . }}
+        - name: {{ . }}
+        {{- end }}
+      {{- end }}
+      nodeSelector:
+        {{- toYaml $nodeSelector | nindent 8 }}
+      {{- with $broker.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      initContainers:
+        - {{ include "trustiot.mqttBroker.accountsInitContainer" . | nindent 10 | trim }}
+        - {{ include "trustiot.mqttBroker.trustContainer" (dict "root" . "name" "trust-files" "once" true) | nindent 10 | trim }}
+      containers:
+        - name: mosquitto
+          image: {{ printf "%s:%s@%s" $broker.image.repository $broker.image.tag $broker.image.digest }}
+          imagePullPolicy: {{ $broker.image.pullPolicy }}
+          # The image's command, without its entrypoint script, which only changes file owners
+          # when it runs as root.
+          command:
+            - /usr/sbin/mosquitto
+            - -c
+            - /mosquitto/config/mosquitto.conf
+          {{- /* The mesh reads the probe ports from the same definition (exec probes: none). */}}
+          ports:
+            {{- toYaml $pod.ports | nindent 12 }}
+          startupProbe:
+            {{- toYaml $pod.probes.startup | nindent 12 }}
+          livenessProbe:
+            {{- toYaml $pod.probes.liveness | nindent 12 }}
+          readinessProbe:
+            {{- toYaml $pod.probes.readiness | nindent 12 }}
+          resources:
+            {{- toYaml $broker.resources | nindent 12 }}
+          securityContext:
+            {{- include "trustiot.mqttBroker.securityContext" . | nindent 12 }}
+          volumeMounts:
+            - name: data
+              mountPath: /mosquitto/data
+            - name: config
+              mountPath: /mosquitto/config/mosquitto.conf
+              subPath: mosquitto.conf
+              readOnly: true
+            # Mounted whole, never with subPath: the kubelet updates the files when the Secret
+            # changes, and the sidecar has the broker reload them.
+            - name: server-tls
+              mountPath: {{ include "trustiot.mqttBroker.tlsDir" . }}
+              readOnly: true
+            # The probes' Unix socket.
+            - name: run
+              mountPath: /run/mosquitto
+            - name: tmp
+              mountPath: /tmp
+        - {{ include "trustiot.mqttBroker.trustContainer" (dict "root" . "name" "trust" "once" false) | nindent 10 | trim }}
+      volumes:
+        - name: config
+          configMap:
+            name: {{ $configName }}
+        - name: server-tls
+          secret:
+            secretName: {{ include "trustiot.mqttBroker.tlsSecret" . }}
+            {{- /* 0440, written in decimal: YAML 1.1 (Kubernetes) reads a leading 0 as octal, YAML 1.2 does not. */}}
+            defaultMode: 288
+        - name: run
+          emptyDir:
+            medium: Memory
+            sizeLimit: 1Mi
+        - name: tmp
+          emptyDir:
+            sizeLimit: 64Mi
+        - {{ include "trustiot.migrate.kubeApiVolume" . | indent 10 | trim }}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+        # Selector labels only: volumeClaimTemplates cannot change after creation, and the
+        # full label set carries the chart version.
+        labels:
+          {{- include "trustiot.selectorLabels" $ctx | nindent 10 }}
+      spec:
+        accessModes: [ReadWriteOnce]
+        {{- with $broker.storage.storageClassName }}
+        storageClassName: {{ . }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ $broker.storage.size }}
+---
+# The accounts Secret, by name; nothing else. get and patch only: no create (which cannot be
+# limited by name), no list or watch. Only the accounts init container mounts this
+# ServiceAccount's token.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "trustiot.componentLabels" $ctx | nindent 4 }}
+rules:
+  - apiGroups:
+      - ""
+    resources:
+      - secrets
+    resourceNames:
+      - {{ include "trustiot.mqttBroker.accountsSecret" . }}
+    verbs:
+      - get
+      - patch
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "trustiot.componentLabels" $ctx | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ $name }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ $name }}
+    namespace: {{ .Release.Namespace }}
+{{- end }}

@@ -56,8 +56,8 @@ pub struct Setup {
     /// When the client certificate expires (reported in heartbeats).
     pub certificate_not_after: UnixMillis,
     /// Whether the clock's time lies in the certificate's validity. The agent starts either
-    /// way: the clock may be wrong (the gateway has no real-time clock), and the broker has
-    /// the last word.
+    /// way: the gateway's clock may be wrong (its hardware RTC never set, or its time lost), and
+    /// the broker has the last word.
     pub certificate_validity: Validity,
     /// Whether the key comes from a file (development and tests) instead of the TPM.
     pub file_key: bool,
@@ -99,7 +99,7 @@ impl Setup {
 }
 
 /// The clock's time for the certificate check. `UnixTime::now` panics on a clock before 1970,
-/// which a gateway without a real-time clock can have; such a time is simply "too early".
+/// which a gateway whose RTC lost its time can have; such a time is simply "too early".
 fn clock_now() -> UnixTime {
     UnixTime::since_unix_epoch(
         SystemTime::now()

@@ -21,7 +21,7 @@
  *
  * Path rules: `rust` is the safe direction. It runs unless every changed file is in a short
  * list of paths that nothing in the rust job reads; a new top-level directory or file runs it
- * by default. `cargo-deny`, `helm`, `host` and `postgres-image` read a known, small set of files
+ * by default. `cargo-deny`, `helm`, `host`, `postgres-image` and `frontend` read a known, small set of files
  * and run when one of them changes. Changes to this script or any repository file it imports (transitively;
  * DECISION_CODE), ci.yml, the local actions or the tool pins run every job. `gitleaks` and `workflow-policy` do not depend on this script and always run.
  *
@@ -59,7 +59,7 @@ import {
 } from "./tested-tree.ts";
 
 /** The ci.yml jobs whose run depends on the changed paths, by job id. */
-export const PATH_JOBS = ["rust", "cargo-deny", "helm", "host", "postgres-image"] as const;
+export const PATH_JOBS = ["rust", "cargo-deny", "helm", "host", "postgres-image", "frontend"] as const;
 export type PathJob = (typeof PATH_JOBS)[number];
 
 /**
@@ -131,6 +131,8 @@ const RUST_READ_FILES: ReadonlySet<string> = new Set([
   "deploy/chart/values.yaml",
   // tools/migrate/tests/registry.rs: which login roles the chart binds a Secret to
   "deploy/chart/templates/_migrate.tpl",
+  // tools/migrate/tests/mqtt_broker.rs runs the MQTT broker's configuration (include_str!)
+  "deploy/chart/files/mosquitto/mosquitto.conf",
 ]);
 
 /**
@@ -172,6 +174,8 @@ export function affectsCargoDeny(path: string): boolean {
 
 /** Files outside the chart that `bun test deploy/chart` reads (checked by changes.test.ts). */
 const HELM_READ_FILES: ReadonlySet<string> = new Set([
+  // The MQTT broker's image pin, and the probe and memory limit its configuration test runs.
+  "crates/protocol/tests/broker.rs",
   // The bundled Postgres e2e runs it as the database owner.
   "crates/service-kit/sql/database.sql",
   // The collector's key redaction rules are checked against service-kit's names.
@@ -185,13 +189,15 @@ const HELM_READ_FILES: ReadonlySet<string> = new Set([
   "services/ingest/tests/common/mod.rs",
   // The labels and annotations the Job keeps on the password Secrets it binds.
   "tools/migrate/src/passwords.rs",
+  "tools/migrate/tests/mqtt_broker.rs",
 ]);
 
 /**
  * What `bun test deploy/flux` reads besides deploy/flux/ and the chart (Laysi/trustiot-v2#70):
- * the SOPS rules and the scripts that its tests load (checked by changes.test.ts).
+ * the SOPS rules and the scripts that its tests load (checked by changes.test.ts), such as the
+ * Service range's static band for the demo overlay's fixed ingress ClusterIP.
  */
-const FLUX_READ_FILES: ReadonlySet<string> = new Set([".sops.yaml", "scripts/release/flux.ts"]);
+const FLUX_READ_FILES: ReadonlySet<string> = new Set([".sops.yaml", "scripts/release/flux.ts", "scripts/nightly/ingress-address.ts"]);
 
 /**
  * ClickHouse migrations: the chart tests check the collector's exporter columns against the log
@@ -248,12 +254,31 @@ export function affectsPostgresImage(path: string): boolean {
   return affectsEveryJob(path) || path.startsWith("deploy/images/postgres/") || POSTGRES_IMAGE_READ_FILES.has(path);
 }
 
+/**
+ * The Rust sources whose message keys reach the browser: frontend/src/i18n/server-keys.test.ts
+ * scans `crates/contract/src` and every `services/<name>/src` and fails on a key without a
+ * translation, so a Rust change that adds one runs the frontend job (checked by changes.test.ts).
+ */
+const FRONTEND_MESSAGE_KEY_SOURCES = /^(?:crates\/contract|services\/[^/]+)\/src\/.+\.rs$/;
+
+/**
+ * The single-page app: its sources, tests, lock file and build live in `frontend`; the API client
+ * is generated from api/openapi.json, and the translations are checked against the message keys
+ * the services send.
+ */
+export function affectsFrontend(path: string): boolean {
+  return (
+    affectsEveryJob(path) || path.startsWith("frontend/") || path === "api/openapi.json" || FRONTEND_MESSAGE_KEY_SOURCES.test(path)
+  );
+}
+
 const RULES: Record<PathJob, (path: string) => boolean> = {
   rust: affectsRust,
   "cargo-deny": affectsCargoDeny,
   helm: affectsHelm,
   host: affectsHost,
   "postgres-image": affectsPostgresImage,
+  frontend: affectsFrontend,
 };
 
 /** Every job runs, for the given reason. */

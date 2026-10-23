@@ -139,6 +139,19 @@
       matchManagers: ["npm", "bun"],
       groupName: "scripts packages",
     },
+    {
+      description: "Bun packages of the single-page app (frontend/): one weekly pull request of their own, which the frontend job in ci.yml checks (type check, lint, tests, build)",
+      matchManagers: ["npm", "bun"],
+      matchFileNames: ["frontend/**"],
+      groupName: "frontend packages",
+    },
+    {
+      description: "The frontend stays on TypeScript 6: openapi-typescript generates the API client through the TypeScript JS API, which TypeScript 7 does not ship (frontend/README.md). Moving to 7 is a deliberate change once the generator supports it",
+      matchManagers: ["npm", "bun"],
+      matchFileNames: ["frontend/**"],
+      matchPackageNames: ["typescript"],
+      allowedVersions: "/^6\\./",
+    },
   ],
   customManagers: [
     {

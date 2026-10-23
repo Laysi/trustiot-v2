@@ -20,6 +20,59 @@
         ],
         "type": "object"
       },
+      "CodeSent": {
+        "description": "The answer to `send_code`, the same whether or not a user has the address.",
+        "properties": {
+          "code_length": {
+            "description": "Digits in the code.",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "expires_in_secs": {
+            "description": "How long the code is valid, in seconds.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "resend_after_secs": {
+            "description": "How long to wait before asking for another code, in seconds.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "code_length",
+          "expires_in_secs",
+          "resend_after_secs"
+        ],
+        "type": "object"
+      },
+      "CreateDeviceModel": {
+        "description": "The body of `POST /api/assets/v1/device-models`. Unknown fields are refused.",
+        "properties": {
+          "name": {
+            "description": "The new model's name, unique in the tenant (see [`DeviceModel::name`]).",
+            "maxLength": 40,
+            "pattern": "^[a-z][a-z0-9]*(-[a-z0-9]+)*$",
+            "type": "string"
+          },
+          "points": {
+            "description": "The data points, at most 1000, in order; may be empty.",
+            "items": {
+              "$ref": "#/components/schemas/DeviceModelPoint"
+            },
+            "maxItems": 1000,
+            "type": "array"
+          }
+        },
+        "required": [
+          "name",
+          "points"
+        ],
+        "type": "object"
+      },
       "CreateTenant": {
         "description": "The body of `POST /api/identity/v1/tenants`. Unknown fields are ignored.",
         "properties": {
@@ -30,6 +83,249 @@
         },
         "required": [
           "name"
+        ],
+        "type": "object"
+      },
+      "DeviceModel": {
+        "description": "A device model.",
+        "properties": {
+          "created_at": {
+            "description": "When the model was created, by the database clock.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "model_id": {
+            "$ref": "#/components/schemas/DeviceModelId",
+            "description": "The model's ID."
+          },
+          "name": {
+            "description": "The name, unique in the tenant, never changed after creation: 1-40 lowercase letters or\ndigits in groups joined by single hyphens, starting with a letter.",
+            "example": "power-meter",
+            "maxLength": 40,
+            "pattern": "^[a-z][a-z0-9]*(-[a-z0-9]+)*$",
+            "type": "string"
+          },
+          "points": {
+            "description": "The data points, in order.",
+            "items": {
+              "$ref": "#/components/schemas/DeviceModelPoint"
+            },
+            "type": "array"
+          },
+          "revision": {
+            "description": "1 at creation, one more with every update; send it back with an update to refuse\noverwriting someone else's change.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "updated_at": {
+            "description": "When the model was last changed.",
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "model_id",
+          "name",
+          "revision",
+          "created_at",
+          "updated_at",
+          "points"
+        ],
+        "type": "object"
+      },
+      "DeviceModelDocument": {
+        "description": "A device model as a file: what the export downloads and the import uploads. It holds no\nIDs, revisions or times, so it can be imported in another tenant or deployment.",
+        "properties": {
+          "format": {
+            "description": "Always `trustiot.device_model`.",
+            "example": "trustiot.device_model",
+            "type": "string"
+          },
+          "format_version": {
+            "description": "The document's version; this release writes and reads 1.",
+            "format": "int64",
+            "maximum": 1,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "name": {
+            "description": "The model's name, under the naming rule of [`DeviceModel::name`].",
+            "maxLength": 40,
+            "pattern": "^[a-z][a-z0-9]*(-[a-z0-9]+)*$",
+            "type": "string"
+          },
+          "points": {
+            "description": "The data points, in order.",
+            "items": {
+              "$ref": "#/components/schemas/DeviceModelPoint"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "format",
+          "format_version",
+          "name",
+          "points"
+        ],
+        "type": "object"
+      },
+      "DeviceModelId": {
+        "description": "A device model of a tenant (rebuild checklist C1), made by the assets service; unlike the\nmodel's name, which is unique per tenant only, it is unique across tenants.\n\nSerialized as a lowercase hyphenated UUID string.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "DeviceModelList": {
+        "description": "The tenant's device models, by name.",
+        "properties": {
+          "models": {
+            "description": "Every model of the tenant.",
+            "items": {
+              "$ref": "#/components/schemas/DeviceModelSummary"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "models"
+        ],
+        "type": "object"
+      },
+      "DeviceModelPoint": {
+        "description": "A data point of a device model: how the gateway reads one value, and what the value means.",
+        "properties": {
+          "address": {
+            "description": "The 0-based protocol address of the first coil or register (40001 in a device manual is\naddress 0). A point's registers end at 65535 at most and do not overlap another point's\nof the same function code.",
+            "format": "int32",
+            "maximum": 65535,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "byte_order": {
+            "description": "Where the bytes of the 32-bit value 0xAABBCCDD end up in the registers: `abcd` big-endian (the default), `badc` bytes swapped in each register, `cdab` registers reversed, `dcba` both.",
+            "enum": [
+              "abcd",
+              "badc",
+              "cdab",
+              "dcba"
+            ],
+            "type": "string"
+          },
+          "data_type": {
+            "description": "How the registers decode: `bool` (a bit, or a register that is not 0), `u16`/`i16` (1 register), `u32`/`i32`/`f32` (2), `u64`/`i64`/`f64` (4), `string` (`length` registers of ASCII). Function codes 1 and 2 read `bool` only.",
+            "enum": [
+              "bool",
+              "u16",
+              "i16",
+              "u32",
+              "i32",
+              "u64",
+              "i64",
+              "f32",
+              "f64",
+              "string"
+            ],
+            "type": "string"
+          },
+          "description": {
+            "description": "What the value means, for people and for the AI features: up to 512 characters, without\ncontrol characters other than line feed and tab, format characters, or line and\nparagraph separators. Trimmed; empty means none.",
+            "maxLength": 512,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "function_code": {
+            "description": "The Modbus read function: 1 coils, 2 discrete inputs, 3 holding registers, 4 input\nregisters.",
+            "format": "int32",
+            "maximum": 4,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "key": {
+            "description": "The key telemetry uses, unique within the model: 1-64 ASCII letters, digits, `.`, `_`\nor `-`, starting with a letter or digit.",
+            "example": "voltage",
+            "maxLength": 64,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$",
+            "type": "string"
+          },
+          "length": {
+            "description": "For `string` only, which requires it: the number of registers, 2 characters each.",
+            "format": "int32",
+            "maximum": 125,
+            "minimum": 1,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "offset": {
+            "description": "Added after `scale`; finite. Numeric types only.",
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "scale": {
+            "description": "Multiplier applied to the raw number (rebuild checklist F5); finite and not 0. Numeric\ntypes only.",
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "key",
+          "function_code",
+          "address",
+          "data_type"
+        ],
+        "type": "object"
+      },
+      "DeviceModelSummary": {
+        "description": "A device model in the tenant's list.",
+        "properties": {
+          "created_at": {
+            "description": "When the model was created.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "model_id": {
+            "$ref": "#/components/schemas/DeviceModelId",
+            "description": "The model's ID."
+          },
+          "name": {
+            "description": "The name.",
+            "type": "string"
+          },
+          "point_count": {
+            "description": "How many data points it has.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "revision": {
+            "description": "The current revision.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "updated_at": {
+            "description": "When the model was last changed.",
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "model_id",
+          "name",
+          "revision",
+          "point_count",
+          "created_at",
+          "updated_at"
         ],
         "type": "object"
       },
@@ -80,6 +376,34 @@
         ],
         "type": "string"
       },
+      "EventId": {
+        "description": "An event, unique across services; consumers deduplicate deliveries by it.\n\nSerialized as a lowercase hyphenated UUID string.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "EventLogPage": {
+        "description": "One page of the log, newest first.",
+        "properties": {
+          "events": {
+            "description": "The events, newest first (by `occurred_at`, then `event_id`).",
+            "items": {
+              "$ref": "#/components/schemas/LoggedEvent"
+            },
+            "type": "array"
+          },
+          "next_cursor": {
+            "description": "Pass it as `cursor` for the next, older page; `null` on the last page. Opaque.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "events"
+        ],
+        "type": "object"
+      },
       "FieldError": {
         "description": "A rejected field of the request body.",
         "properties": {
@@ -102,6 +426,303 @@
         ],
         "type": "object"
       },
+      "Interval": {
+        "description": "How readings are grouped: `raw` (no grouping) or a bucket length.",
+        "enum": [
+          "raw",
+          "1m",
+          "5m",
+          "15m",
+          "1h",
+          "3h",
+          "6h",
+          "12h",
+          "1d"
+        ],
+        "type": "string"
+      },
+      "IssueWorkstationCertificate": {
+        "additionalProperties": false,
+        "description": "The body of `POST /api/certs/v1/workstation-certificates`. Unknown fields are refused.",
+        "properties": {
+          "certificate_request": {
+            "description": "A PKCS #10 certificate signing request, PEM (`-----BEGIN CERTIFICATE REQUEST-----`), at\nmost 4096 bytes as DER, signed with ecdsa-with-SHA256 by the workstation's ECDSA P-256\nkey. Only its public key is used, once its signature shows the workstation holds the\nprivate key: the CA decides the subject, the extensions and the validity, and the private\nkey never leaves the workstation.",
+            "type": "string"
+          },
+          "workstation": {
+            "description": "The workstation's name: 1-48 ASCII letters, digits, `.`, `_` or `-`, starting with a\nletter or digit. The certificate's subject is `CN=workstation:<name>`.",
+            "example": "line-a-ws-01",
+            "maxLength": 48,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,47}$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "workstation",
+          "certificate_request"
+        ],
+        "type": "object"
+      },
+      "Latest": {
+        "description": "The latest value of each data point of a device that has a reading in the raw period.",
+        "properties": {
+          "device_id": {
+            "description": "The device.",
+            "format": "uuid",
+            "type": "string"
+          },
+          "earliest": {
+            "description": "The start of the period searched (the raw period), UTC.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "points": {
+            "description": "One entry per data point, ordered by data point.",
+            "items": {
+              "$ref": "#/components/schemas/LatestPoint"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "device_id",
+          "earliest",
+          "points"
+        ],
+        "type": "object"
+      },
+      "LatestPoint": {
+        "description": "The latest value of one data point.",
+        "properties": {
+          "point": {
+            "description": "The data point.",
+            "type": "string"
+          },
+          "time": {
+            "description": "When the reading was taken, UTC.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "value": {
+            "$ref": "#/components/schemas/Reading",
+            "description": "The reading."
+          }
+        },
+        "required": [
+          "point",
+          "time",
+          "value"
+        ],
+        "type": "object"
+      },
+      "LoggedActor": {
+        "description": "Who made a logged change.",
+        "oneOf": [
+          {
+            "description": "A person, through the API (a platform administrator too).",
+            "properties": {
+              "kind": {
+                "enum": [
+                  "user"
+                ],
+                "type": "string"
+              },
+              "user_id": {
+                "$ref": "#/components/schemas/UserId",
+                "description": "The user."
+              }
+            },
+            "required": [
+              "user_id",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "A service's own work, such as a scheduled job.",
+            "properties": {
+              "kind": {
+                "enum": [
+                  "service"
+                ],
+                "type": "string"
+              },
+              "service": {
+                "description": "The service, for example `assets`.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "service",
+              "kind"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "LoggedEvent": {
+        "description": "One event in the log.",
+        "properties": {
+          "actor": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/LoggedActor",
+                "description": "Who made the change; `null` when the producer did not say."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "aggregate_id": {
+            "description": "What changed: the aggregate's ID.",
+            "type": "string"
+          },
+          "aggregate_seq": {
+            "description": "The event's number within its aggregate, from 1.",
+            "format": "int64",
+            "type": "integer"
+          },
+          "aggregate_type": {
+            "description": "What changed: the aggregate's kind, for example `tenant`.",
+            "type": "string"
+          },
+          "event_id": {
+            "$ref": "#/components/schemas/EventId",
+            "description": "The event's ID (UUIDv7)."
+          },
+          "occurred_at": {
+            "description": "When the change happened, by the producer's clock.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "payload": {
+            "additionalProperties": {},
+            "description": "The event's payload as the producer wrote it, in the version above; a JSON object.",
+            "propertyNames": {
+              "type": "string"
+            },
+            "type": "object"
+          },
+          "producer": {
+            "description": "The service that wrote the event, for example `identity`.",
+            "type": "string"
+          },
+          "recorded_at": {
+            "description": "When the event log stored the event, by the database clock.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "tenant_id": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/TenantId",
+                "description": "The tenant; `null` for a platform-wide event."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "type": {
+            "description": "The event type, for example `identity.tenant_created`.",
+            "type": "string"
+          },
+          "version": {
+            "description": "The payload's version.",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "event_id",
+          "type",
+          "version",
+          "producer",
+          "occurred_at",
+          "recorded_at",
+          "aggregate_type",
+          "aggregate_id",
+          "aggregate_seq",
+          "payload"
+        ],
+        "type": "object"
+      },
+      "LoggedIn": {
+        "description": "The answer to a valid code; the session cookie is in `Set-Cookie`.",
+        "properties": {
+          "redirect_to": {
+            "description": "The validated `redirect_to`, or `/`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "redirect_to"
+        ],
+        "type": "object"
+      },
+      "LoginRequest": {
+        "description": "The body of `POST /auth/login`: a JSON object that names one of the two steps in `step`. Any other field is refused.",
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "description": "Step 1: mail a login code to this address.",
+            "properties": {
+              "email": {
+                "description": "The address to log in with.",
+                "type": "string"
+              },
+              "step": {
+                "enum": [
+                  "send_code"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "step",
+              "email"
+            ],
+            "title": "send_code",
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "description": "Step 2: log in with the code from the email.",
+            "properties": {
+              "code": {
+                "description": "The code, 8 digits.",
+                "type": "string"
+              },
+              "email": {
+                "description": "The address the code was sent to.",
+                "type": "string"
+              },
+              "redirect_to": {
+                "description": "Where to go after logging in: a path on this site such as `/devices?page=2`. Default `/`.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "step": {
+                "enum": [
+                  "verify_code"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "step",
+              "email",
+              "code"
+            ],
+            "title": "verify_code",
+            "type": "object"
+          }
+        ]
+      },
       "MessageKey": {
         "description": "Key of the translated message the client shows; never the message itself.",
         "examples": [
@@ -110,6 +731,235 @@
         "maxLength": 128,
         "pattern": "^[a-z0-9_]+(\\.[a-z0-9_]+)+$",
         "type": "string"
+      },
+      "Reading": {
+        "description": "One reading's value, as its type stored it.",
+        "oneOf": [
+          {
+            "description": "A floating-point reading; `null` for NaN or an infinity.",
+            "properties": {
+              "type": {
+                "enum": [
+                  "float"
+                ],
+                "type": "string"
+              },
+              "value": {
+                "description": "A floating-point reading; `null` for NaN or an infinity.",
+                "format": "double",
+                "type": [
+                  "number",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "value",
+              "type"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "An integer reading.",
+            "properties": {
+              "type": {
+                "enum": [
+                  "int"
+                ],
+                "type": "string"
+              },
+              "value": {
+                "description": "An integer reading.",
+                "format": "int64",
+                "type": "integer"
+              }
+            },
+            "required": [
+              "value",
+              "type"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "A boolean reading.",
+            "properties": {
+              "type": {
+                "enum": [
+                  "bool"
+                ],
+                "type": "string"
+              },
+              "value": {
+                "description": "A boolean reading.",
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "value",
+              "type"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "A text reading.",
+            "properties": {
+              "type": {
+                "enum": [
+                  "string"
+                ],
+                "type": "string"
+              },
+              "value": {
+                "description": "A text reading.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "value",
+              "type"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "RevocationReason": {
+        "description": "A reason a workstation certificate can be revoked for: the RFC 5280 CRLReason codes that\napply to an end entity, without `certificateHold` (a revocation here is final).",
+        "enum": [
+          "unspecified",
+          "key_compromise",
+          "affiliation_changed",
+          "superseded",
+          "cessation_of_operation",
+          "privilege_withdrawn"
+        ],
+        "type": "string"
+      },
+      "RevokeWorkstationCertificate": {
+        "additionalProperties": false,
+        "description": "The body of `POST /api/certs/v1/workstation-certificates/{serial}/revoke`. Unknown fields are\nrefused.",
+        "properties": {
+          "reason": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/RevocationReason",
+                "description": "Why it is revoked. Absent leaves the reason out of the CRL, as RFC 5280 recommends over\n`unspecified`."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "Series": {
+        "description": "A data point's series.",
+        "properties": {
+          "device_id": {
+            "description": "The device.",
+            "format": "uuid",
+            "type": "string"
+          },
+          "earliest": {
+            "description": "The start of the queryable period for this interval at the time of the request.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "from": {
+            "description": "The range queried, `from` inclusive and `to` exclusive, UTC; `from` is later than\nrequested when the request started before the queryable period.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "interval": {
+            "$ref": "#/components/schemas/Interval",
+            "description": "The interval used: the requested one, or the automatic choice."
+          },
+          "point": {
+            "description": "The data point.",
+            "type": "string"
+          },
+          "points": {
+            "description": "The buckets with readings, in time order; buckets without readings are left out.",
+            "items": {
+              "$ref": "#/components/schemas/SeriesPoint"
+            },
+            "type": "array"
+          },
+          "to": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "truncated": {
+            "description": "Whether `from` was moved to the start of the queryable period.",
+            "type": "boolean"
+          },
+          "tz": {
+            "description": "The time zone the buckets follow.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "device_id",
+          "point",
+          "tz",
+          "interval",
+          "from",
+          "to",
+          "truncated",
+          "earliest",
+          "points"
+        ],
+        "type": "object"
+      },
+      "SeriesPoint": {
+        "description": "One bucket of a series (for `raw`, one reading).",
+        "properties": {
+          "avg": {
+            "description": "The mean of the numeric values.",
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "count": {
+            "description": "How many readings the bucket holds.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "last": {
+            "$ref": "#/components/schemas/Reading",
+            "description": "The bucket's latest reading."
+          },
+          "max": {
+            "description": "The largest numeric value.",
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "min": {
+            "description": "The smallest numeric value (a bool counts as 0 or 1); `null` when the bucket holds only\ntext readings.",
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "time": {
+            "description": "The bucket's start (for `raw`, the reading's time), UTC.",
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "time",
+          "count",
+          "last"
+        ],
+        "type": "object"
       },
       "Tenant": {
         "description": "A tenant.",
@@ -139,6 +989,109 @@
         "description": "A tenant: one customer organisation; every tenant-scoped row and event carries it.\n\nSerialized as a lowercase hyphenated UUID string.",
         "format": "uuid",
         "type": "string"
+      },
+      "UpdateDeviceModel": {
+        "description": "The body of `PUT /api/assets/v1/device-models/{model_id}`: the new data points, which replace\nall of the model's. Unknown fields are refused.",
+        "properties": {
+          "name": {
+            "description": "The model's name, if sent, must be its current name: names never change.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "points": {
+            "description": "The data points, at most 1000, in order; may be empty.",
+            "items": {
+              "$ref": "#/components/schemas/DeviceModelPoint"
+            },
+            "maxItems": 1000,
+            "type": "array"
+          },
+          "revision": {
+            "description": "The revision the client last read (`revision` of the model it read): the update is\nrefused with 409 when the model changed since, so concurrent editors never overwrite each\nother's points unseen. Required.",
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "revision",
+          "points"
+        ],
+        "type": "object"
+      },
+      "UserId": {
+        "description": "A user account; one user can be a member of several tenants.\n\nSerialized as a lowercase hyphenated UUID string.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "WorkstationCertificate": {
+        "description": "A workstation certificate as the ledger records it.",
+        "properties": {
+          "ca_key_id": {
+            "description": "The issuing CA that signed it: the SHA-256 of its public key, 64 lower-case hex digits.",
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "certificate": {
+            "description": "The certificate, PEM. It goes to the workstation, which keeps it with its private key.",
+            "type": "string"
+          },
+          "not_after": {
+            "description": "When it expires; a renewal is another issue request before then.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "not_before": {
+            "description": "When it becomes valid: five minutes before it was signed.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "revocation_reason": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/RevocationReason",
+                "description": "Why it was revoked, when a reason was given."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "revoked_at": {
+            "description": "When it was revoked; absent while it is not.",
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "serial": {
+            "description": "The serial number, lower-case hex (32 digits for the certificates this service signs):\nthe `{serial}` of the revoke request. Keep it; it is how the certificate is revoked.",
+            "example": "4f3a9c1e2b7d6058a1c3e5f708192a3b",
+            "pattern": "^[0-9a-f]{2,40}$",
+            "type": "string"
+          },
+          "subject": {
+            "description": "The certificate's common name: `workstation:<workstation>`.",
+            "type": "string"
+          },
+          "workstation": {
+            "description": "The workstation's name.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "serial",
+          "workstation",
+          "subject",
+          "ca_key_id",
+          "not_before",
+          "not_after",
+          "certificate"
+        ],
+        "type": "object"
       }
     }
   },
@@ -148,6 +1101,564 @@
   },
   "openapi": "3.1.0",
   "paths": {
+    "/api/assets/v1/device-models": {
+      "get": {
+        "operationId": "listDeviceModels",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeviceModelList"
+                }
+              }
+            },
+            "description": "The caller's tenant's models, by name."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No valid session (`unauthenticated`)."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No tenant or no role in it (`permission_denied`)."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The database failed (`unavailable`)."
+          }
+        },
+        "summary": "The tenant's device models.",
+        "tags": [
+          "assets"
+        ]
+      },
+      "post": {
+        "operationId": "createDeviceModel",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateDeviceModel"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeviceModel"
+                }
+              }
+            },
+            "description": "The model was created; `Location` is its URL."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The `Content-Type` is not `application/json`, the body is larger than 2 MiB (`device_model.body_too_large`), or it is not a JSON object (`device_model.body_invalid`) (`invalid_request`)."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No valid session (`unauthenticated`)."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No tenant, or a role below editor (`permission_denied`)."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The tenant has a model of this name (`conflict`, `device_model.name_taken`)."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "A naming or data point rule is broken (`validation_failed`); `field_errors` names each problem with a JSON Pointer and a `device_model.*` key. Nothing was written."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The service does not know the tenant yet (`device_model.tenant_not_ready`), or the database failed (`unavailable`). Nothing was written."
+          }
+        },
+        "summary": "Creates a device model; `assets.device_model_created` is written in the same transaction.",
+        "tags": [
+          "assets"
+        ]
+      }
+    },
+    "/api/assets/v1/device-models/import": {
+      "post": {
+        "operationId": "importDeviceModel",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DeviceModelDocument"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeviceModel"
+                }
+              }
+            },
+            "description": "The model was created; `Location` is its URL."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The `Content-Type` is not `application/json`, the body is larger than 2 MiB (`device_model.body_too_large`), or it is not a JSON object (`device_model.body_invalid`) (`invalid_request`)."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No valid session (`unauthenticated`)."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No tenant, or a role below editor (`permission_denied`)."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The tenant has a model of this name (`conflict`, `device_model.name_taken`)."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The document is not `trustiot.device_model` version 1, or a naming or data point rule is broken (`validation_failed`). Nothing was written."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The service does not know the tenant yet (`device_model.tenant_not_ready`), or the database failed (`unavailable`). Nothing was written."
+          }
+        },
+        "summary": "Creates a device model from an exported document, under the same rules as a create.",
+        "tags": [
+          "assets"
+        ]
+      }
+    },
+    "/api/assets/v1/device-models/{model_id}": {
+      "delete": {
+        "operationId": "deleteDeviceModel",
+        "parameters": [
+          {
+            "description": "The model's ID.",
+            "in": "path",
+            "name": "model_id",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/DeviceModelId"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "The model and its data points were deleted."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No valid session (`unauthenticated`)."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No tenant, or a role below editor (`permission_denied`)."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No such model in the caller's tenant (`not_found`)."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "A device uses the model (`conflict`, `device_model.in_use`). Nothing was deleted."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The database failed (`unavailable`). Nothing was deleted."
+          }
+        },
+        "summary": "Deletes a device model that no device uses; `assets.device_model_deleted` is written in the\nsame transaction.",
+        "tags": [
+          "assets"
+        ]
+      },
+      "get": {
+        "operationId": "getDeviceModel",
+        "parameters": [
+          {
+            "description": "The model's ID.",
+            "in": "path",
+            "name": "model_id",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/DeviceModelId"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeviceModel"
+                }
+              }
+            },
+            "description": "The model."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No valid session (`unauthenticated`)."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No tenant or no role in it (`permission_denied`)."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No such model in the caller's tenant (`not_found`)."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The database failed (`unavailable`)."
+          }
+        },
+        "summary": "One device model with its data points.",
+        "tags": [
+          "assets"
+        ]
+      },
+      "put": {
+        "operationId": "updateDeviceModel",
+        "parameters": [
+          {
+            "description": "The model's ID.",
+            "in": "path",
+            "name": "model_id",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/DeviceModelId"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateDeviceModel"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeviceModel"
+                }
+              }
+            },
+            "description": "The model after the update, at its next revision."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The `Content-Type` is not `application/json`, the body is larger than 2 MiB (`device_model.body_too_large`), or it is not a JSON object (`device_model.body_invalid`) (`invalid_request`)."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No valid session (`unauthenticated`)."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No tenant, or a role below editor (`permission_denied`)."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No such model in the caller's tenant (`not_found`)."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The model is no longer at the `revision` sent (`conflict`, `device_model.revision_mismatch`, `details.current`)."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "A data point rule is broken, `revision` is missing (`device_model.field_required`) or not a positive integer, or `name` is not the model's (`device_model.name_immutable`) (`validation_failed`). Nothing was written."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The database failed (`unavailable`). Nothing was written."
+          }
+        },
+        "summary": "Replaces the data points of a device model; `assets.device_model_updated` is written in the\nsame transaction.",
+        "tags": [
+          "assets"
+        ]
+      }
+    },
+    "/api/assets/v1/device-models/{model_id}/export": {
+      "get": {
+        "operationId": "exportDeviceModel",
+        "parameters": [
+          {
+            "description": "The model's ID.",
+            "in": "path",
+            "name": "model_id",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/DeviceModelId"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeviceModelDocument"
+                }
+              }
+            },
+            "description": "The model as a document, with `Content-Disposition: attachment` and the model's name as the file name."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No valid session (`unauthenticated`)."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No tenant or no role in it (`permission_denied`)."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No such model in the caller's tenant (`not_found`)."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The database failed (`unavailable`)."
+          }
+        },
+        "summary": "One device model as a document to download, which the import accepts.",
+        "tags": [
+          "assets"
+        ]
+      }
+    },
     "/api/assets/v1/tenant": {
       "get": {
         "operationId": "getAssetsTenant",
@@ -206,6 +1717,582 @@
         "summary": "The caller's tenant, once this service has processed its `identity.tenant_created`.",
         "tags": [
           "assets"
+        ]
+      }
+    },
+    "/api/certs/v1/workstation-certificates": {
+      "post": {
+        "operationId": "issueWorkstationCertificate",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/IssueWorkstationCertificate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkstationCertificate"
+                }
+              }
+            },
+            "description": "Issued and recorded in the ledger. The subject is `CN=workstation:<workstation>`, the extended key usage the TrustIoT workstation purpose only (never client authentication, so the MQTT broker refuses it), valid for the configured workstation validity (default 180 days). Keep `serial`: it is how the certificate is revoked."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The `Content-Type` is not `application/json`, the body is larger than 16 KiB (`workstation_certificate.body_too_large`), or it is not a JSON object (`workstation_certificate.body_invalid`) (`invalid_request`)."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No valid session (`unauthenticated`)."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Not a platform administrator (`permission_denied`)."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "An unknown or missing field, a name that breaks its rule (`workstation_certificate.name_invalid`), or a certificate request that is not one PEM CSR (`workstation_certificate.request_invalid`), not for ECDSA P-256 with ecdsa-with-SHA256 (`workstation_certificate.request_unsupported`) or not signed by its own key (`workstation_certificate.request_signature_invalid`) (`validation_failed`). Nothing was issued."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No issuing CA can sign yet (`workstation_certificate.ca_not_ready`), or the database failed (`unavailable`). Nothing was issued."
+          }
+        },
+        "summary": "Issues a workstation certificate for the public key of a CSR. The CA decides everything\nelse; the private key never reaches the service.",
+        "tags": [
+          "certs"
+        ]
+      }
+    },
+    "/api/certs/v1/workstation-certificates/{serial}/revoke": {
+      "post": {
+        "operationId": "revokeWorkstationCertificate",
+        "parameters": [
+          {
+            "description": "The certificate's serial number, hex, as `serial` of the issue response.",
+            "in": "path",
+            "name": "serial",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RevokeWorkstationCertificate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkstationCertificate"
+                }
+              }
+            },
+            "description": "Revoked now; the ledger records the time and the reason, and the issuing CA's next scheduled CRL lists it."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The `Content-Type` is not `application/json`, the body is larger than 16 KiB (`workstation_certificate.body_too_large`), or it is not a JSON object (`workstation_certificate.body_invalid`) (`invalid_request`)."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No valid session (`unauthenticated`)."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Not a platform administrator (`permission_denied`)."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No workstation certificate has this serial number (`not_found`)."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "It is already revoked (`conflict`, `workstation_certificate.already_revoked`)."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "An unknown field, or a reason that is not one of the listed ones (`workstation_certificate.reason_invalid`) (`validation_failed`). Nothing was revoked."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The database failed (`unavailable`). Nothing was revoked."
+          }
+        },
+        "summary": "Revokes a workstation certificate. Its issuing CA's next scheduled CRL lists it; the\nregistration API (Laysi/trustiot-v2#79) reads the ledger, so it refuses the certificate at\nonce.",
+        "tags": [
+          "certs"
+        ]
+      }
+    },
+    "/api/identity/v1/event-log": {
+      "get": {
+        "operationId": "getTenantEventLog",
+        "parameters": [
+          {
+            "description": "Only events that occurred at or after this RFC 3339 time.",
+            "in": "query",
+            "name": "from",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Only events that occurred before this RFC 3339 time; after `from`.",
+            "in": "query",
+            "name": "to",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Events per page, 1 to 500; default 100.",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "format": "int32",
+              "maximum": 500,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "The previous page's `next_cursor`, for the next, older page.",
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EventLogPage"
+                }
+              }
+            },
+            "description": "A page of the tenant's events, newest first."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "A malformed parameter, or `from` not before `to` (`invalid_request`)."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No valid session (`unauthenticated`)."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The user has no tenant, or is not an administrator of it (`permission_denied`)."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The database failed, or the event log is off (`unavailable`)."
+          }
+        },
+        "summary": "The caller's tenant's operation log. Administrators of the tenant only.",
+        "tags": [
+          "identity"
+        ]
+      }
+    },
+    "/api/identity/v1/platform/event-log": {
+      "get": {
+        "operationId": "getPlatformEventLog",
+        "parameters": [
+          {
+            "description": "Only events that occurred at or after this RFC 3339 time.",
+            "in": "query",
+            "name": "from",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Only events that occurred before this RFC 3339 time; after `from`.",
+            "in": "query",
+            "name": "to",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Events per page, 1 to 500; default 100.",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "format": "int32",
+              "maximum": 500,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "The previous page's `next_cursor`, for the next, older page.",
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EventLogPage"
+                }
+              }
+            },
+            "description": "A page of the platform-wide events, newest first."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "A malformed parameter, or `from` not before `to` (`invalid_request`)."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No valid session (`unauthenticated`)."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The user is not a platform administrator (`permission_denied`)."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The database failed, or the event log is off (`unavailable`)."
+          }
+        },
+        "summary": "The platform-wide operation log, for the back office. Platform administrators only.",
+        "tags": [
+          "identity"
+        ]
+      }
+    },
+    "/api/identity/v1/platform/tenants/{tenant_id}/event-log": {
+      "get": {
+        "operationId": "getPlatformTenantEventLog",
+        "parameters": [
+          {
+            "description": "The tenant's ID. An ID no tenant has gives an empty page.",
+            "in": "path",
+            "name": "tenant_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Only events that occurred at or after this RFC 3339 time.",
+            "in": "query",
+            "name": "from",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Only events that occurred before this RFC 3339 time; after `from`.",
+            "in": "query",
+            "name": "to",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Events per page, 1 to 500; default 100.",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "format": "int32",
+              "maximum": 500,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "The previous page's `next_cursor`, for the next, older page.",
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EventLogPage"
+                }
+              }
+            },
+            "description": "A page of the tenant's events, newest first."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "A malformed tenant ID or parameter, or `from` not before `to` (`invalid_request`)."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No valid session (`unauthenticated`)."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The user is not a platform administrator (`permission_denied`)."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The database failed, or the event log is off (`unavailable`)."
+          }
+        },
+        "summary": "One tenant's operation log, for the back office. Platform administrators only.",
+        "tags": [
+          "identity"
+        ]
+      }
+    },
+    "/api/identity/v1/sessions": {
+      "delete": {
+        "operationId": "logOutEverywhere",
+        "responses": {
+          "204": {
+            "description": "Every session of the user is revoked; `Set-Cookie` clears the session cookie. The next request of any of them is refused."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No valid session (`unauthenticated`)."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The database failed; nothing was revoked (`unavailable`)."
+          }
+        },
+        "summary": "Logs out on every device: revokes every session of the user, this one included.",
+        "tags": [
+          "identity"
+        ]
+      }
+    },
+    "/api/identity/v1/sessions/current": {
+      "delete": {
+        "operationId": "logOut",
+        "responses": {
+          "204": {
+            "description": "The session is revoked; `Set-Cookie` clears the session cookie. Its next request is refused."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No valid session (`unauthenticated`)."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The database failed; nothing was revoked (`unavailable`)."
+          }
+        },
+        "summary": "Logs out: revokes the session of the request's cookie.",
+        "tags": [
+          "identity"
         ]
       }
     },
@@ -289,6 +2376,370 @@
           "identity"
         ]
       }
+    },
+    "/api/telemetry/v1/devices/{device_id}/latest": {
+      "get": {
+        "operationId": "getTelemetryLatest",
+        "parameters": [
+          {
+            "description": "The device.",
+            "in": "path",
+            "name": "device_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Latest"
+                }
+              }
+            },
+            "description": "The latest values; empty when the device has no reading in the raw period, or is not the tenant's."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "A malformed device ID (`invalid_request`)."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No valid session (`unauthenticated`)."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The user has not picked or joined a tenant (`permission_denied`)."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The tenant's account has not been created yet (`not_found`, `telemetry.account_not_ready`)."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The device has more data points than one answer holds (`telemetry.too_many_points`), or the query reads or holds too much (`telemetry.query_too_heavy`)."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The tenant's query quota or concurrency limit is used up (`rate_limited`)."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Postgres or ClickHouse failed, or the tenant's ClickHouse account is not as the service creates it (`unavailable`)."
+          },
+          "504": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The query ran into its time limit (`timeout`)."
+          }
+        },
+        "summary": "The latest value of each data point of a device, from the readings of the raw period.",
+        "tags": [
+          "telemetry"
+        ]
+      }
+    },
+    "/api/telemetry/v1/devices/{device_id}/series": {
+      "get": {
+        "operationId": "getTelemetrySeries",
+        "parameters": [
+          {
+            "description": "The device.",
+            "in": "path",
+            "name": "device_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "description": "The data point key (1 to 128 characters).",
+            "in": "query",
+            "name": "point",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The range's start, RFC 3339 (inclusive). Percent-encode a `+` offset, or use `Z`.",
+            "in": "query",
+            "name": "from",
+            "required": true,
+            "schema": {
+              "format": "date-time",
+              "type": "string"
+            }
+          },
+          {
+            "description": "The range's end, RFC 3339 (exclusive).",
+            "in": "query",
+            "name": "to",
+            "required": true,
+            "schema": {
+              "format": "date-time",
+              "type": "string"
+            }
+          },
+          {
+            "description": "An IANA time zone name, for example `Asia/Taipei`: hour and day buckets start at its local hours and midnights.",
+            "in": "query",
+            "name": "tz",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "`raw`, `1m`, `5m`, `15m`, `1h`, `3h`, `6h`, `12h` or `1d`; without it, the finest interval that gives at most 1500 buckets.",
+            "in": "query",
+            "name": "interval",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/Interval"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Series"
+                }
+              }
+            },
+            "description": "The series."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "A malformed device ID or query string (`invalid_request`)."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No valid session (`unauthenticated`)."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No tenant (`permission_denied`), or the range lies wholly before the queryable period (`quota_exceeded`, `telemetry.outside_queryable_period`, detail `earliest`)."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The tenant's account has not been created yet (`not_found`, `telemetry.account_not_ready`)."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "A parameter breaks a rule (`validation_failed`, detail `parameter`), the series would have too many points (`telemetry.too_many_points`), or the query reads or holds too much (`telemetry.query_too_heavy`)."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The tenant's query quota or concurrency limit is used up (`rate_limited`)."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Postgres or ClickHouse failed, or the tenant's ClickHouse account is not as the service creates it (`unavailable`)."
+          },
+          "504": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The query ran into its time limit (`timeout`)."
+          }
+        },
+        "summary": "A data point's series over a time range: raw readings, or buckets of an interval that\nfollow the time zone `tz`, within the queryable period.",
+        "tags": [
+          "telemetry"
+        ]
+      }
+    },
+    "/auth/login": {
+      "post": {
+        "operationId": "logIn",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LoginRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LoggedIn"
+                }
+              }
+            },
+            "description": "`verify_code`: the code matched. `Set-Cookie` holds the session cookie `__Host-trustiot-session` (`HttpOnly`, `Secure`, `SameSite=Lax`, `Path=/`)."
+          },
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodeSent"
+                }
+              }
+            },
+            "description": "`send_code`: if a user has the address, a code is on its way. The same answer whether or not one has."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "A query string, a `Content-Type` other than `application/json`, a body over 4096 bytes, or a body that is not one of the two steps; unknown fields such as `password` are refused (`invalid_request`)."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "`verify_code`: no usable code for the address, or a wrong code (`unauthenticated`). A code dies after 5 attempts and 10 minutes."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "A cross-site request: `Sec-Fetch-Site` other than `same-origin`, or without it an `Origin` that is not this site's (`permission_denied`, message key `security.cross_site_request`). Checked before anything else; nothing changed."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The email is not an address (`/email`, `login.email_invalid`), the code is not 8 digits (`/code`, `login.code_invalid`), or `redirect_to` is not a path on this site (`/redirect_to`, `login.redirect_invalid`) (`validation_failed`)."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No usable SMTP relay is configured, too many codes are waiting to be sent, the signing keys have not been read, or the database failed; nothing changed (`unavailable`)."
+          }
+        },
+        "summary": "Logs in with an email code, in two steps (see the module documentation).",
+        "tags": [
+          "identity"
+        ]
+      }
     }
   },
   "tags": [
@@ -297,8 +2748,16 @@
       "name": "assets"
     },
     {
+      "description": "Workstation certificates from the issuing CA (services/certs).",
+      "name": "certs"
+    },
+    {
       "description": "Sessions, users and tenants (services/identity).",
       "name": "identity"
+    },
+    {
+      "description": "Device telemetry history (services/telemetry-query).",
+      "name": "telemetry"
     }
   ]
 }

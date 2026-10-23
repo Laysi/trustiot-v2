@@ -1,6 +1,6 @@
 # 里程碑
 
-依相依順序切分（2026-10-09 定案）：資料面先做，AI 助理用 lab 錄下的資料並行；MS3 之後先做現場上線與警報規則。編號用 MS，避免與清單的 M1–M8 混淆。每個完成條件都寫成自動測試，不靠人工驗收；MS0 的每個條件由哪些測試證明、在哪裡執行，見 [MS0 完成條件與測試](ms0-acceptance.md)。
+依相依順序切分（2026-10-09 定案）：資料面先做，AI 助理用 lab 錄下的資料並行；MS3 之後先做現場上線與警報規則。編號用 MS，避免與清單的 M1–M8 混淆。每個完成條件至少在它要求的環境實測一次，證據存進 docs/test-reports/。把完成條件寫成自動測試，包括完成條件裡寫明的自動測試與故障注入，另開 P2 issue 之後再補。安全關卡不延後：密鑰與公開 repo 的檢查、權限與存取控制、對外開放前的防護，以及 Critical、High 等級的漏洞。這是 2026-10-21 的決定，以產品完成度優先；原本的規定是每個完成條件都寫成自動測試、不靠人工驗收，MS0 照原本的規定完成，每個條件由哪些測試證明、在哪裡執行，見 [MS0 完成條件與測試](ms0-acceptance.md)。
 
 | 里程碑 | 內容 | 完成條件 |
 | --- | --- | --- |
@@ -30,7 +30,7 @@
   3. 以 email 驗證碼登入，用一句話要儀表板（例如「做一個儀表板：過去 7 天每台電表每天的用電，標出最高的一天」）；儀表板出現在對話側邊，點任一數字看得到它的 SQL 與查詢時間。
   4. 在對話中修改儀表板（例如「改成每小時，只看 A 線」），再問 AI 用電的問題，回答逐字串流；儲存儀表板後重新整理，儀表板以最新的資料重新查詢。
 
-  劇本由 Laysi/trustiot-v2#459 寫成在展示環境執行的自動測試，和里程碑一樣不靠人工驗收。
+  展示前照展示 runbook 在展示環境完整預演一次劇本（Laysi/trustiot-v2#459）。劇本的自動測試與展示環境的資源量測依上面 2026-10-21 的規定另開 Laysi/trustiot-v2#493（P2）。
 - **展示環境**（Laysi/trustiot-v2#457）：lab 的 Mac M1 展示機（[CI 與發佈](../architecture/ci-release.md)），以 Flux 部署；與 lab 的 e2e 共用叢集，各用自己的命名空間。
 - **展示用閘道器**（Laysi/trustiot-v2#458）：2026-10-19 決定用 lab 的閘道器（含 TPM），重灌 Raspberry Pi OS，上面的舊系統（v1）直接棄用，不保留也不遷移；以產線工作站工具登錄、以 API 綁定，和出貨的閘道器走同一條路。重灌不會重置 TPM：模組原有的 SRK 與 2026-10-12 可行性測試留下的金鑰都還在，沿用或清除依產線工作站工具（Laysi/trustiot-v2#80）的決定。
 - **資料面先通**：AI 要回答「上週」的問題，展示環境得先累積一兩週的真實資料，所以資料一進展示環境就不中斷。lab 的閘道器兼作展示用閘道器，會中斷資料的 lab 測試（重刷映像、OTA 回滾、斷電、換上測試版的 agent，例如 Laysi/trustiot-v2#95、Laysi/trustiot-v2#162 與 Laysi/trustiot-v2#102 的實機驗證）要避開累積期與展示，否則圖表留下缺口。agent 開始輪詢 lab 的 RS485 轉換器後，其他程式不再連同一台轉換器（[現場硬限制](../requirements/field-constraints.md)：轉換器會把設備的回應送給所有 TCP 連線）；Laysi/trustiot-v2#98 若要在那之後再錄，改從展示環境匯出資料。
@@ -39,22 +39,22 @@
 
 | 泳道 | issue |
 | --- | --- |
-| 雲端資料面 | Laysi/trustiot-v2#78 自建 CA → Laysi/trustiot-v2#79 出廠登錄 → Laysi/trustiot-v2#101 綁定 → Laysi/trustiot-v2#100 設備（← Laysi/trustiot-v2#99 型號）→ Laysi/trustiot-v2#93 設定下發；Laysi/trustiot-v2#78 → Laysi/trustiot-v2#84 Mosquitto → Laysi/trustiot-v2#85 WebSocket 轉接；另有 Laysi/trustiot-v2#80 產線工作站工具、Laysi/trustiot-v2#82 dynsec 整合、Laysi/trustiot-v2#91 ingest、Laysi/trustiot-v2#92 保存期限 |
+| 雲端資料面 | Laysi/trustiot-v2#78 自建 CA → Laysi/trustiot-v2#534 工作站憑證 → Laysi/trustiot-v2#79 出廠登錄 → Laysi/trustiot-v2#101 綁定 → Laysi/trustiot-v2#100 設備（← Laysi/trustiot-v2#99 型號）→ Laysi/trustiot-v2#93 設定下發；Laysi/trustiot-v2#78 → Laysi/trustiot-v2#84 Mosquitto → Laysi/trustiot-v2#85 WebSocket 轉接；Laysi/trustiot-v2#84 與 Laysi/trustiot-v2#534 → Laysi/trustiot-v2#535 broker 伺服器憑證（展示用閘道器 Laysi/trustiot-v2#458 等它）；Laysi/trustiot-v2#79 與 Laysi/trustiot-v2#101 → Laysi/trustiot-v2#81 憑證換發端點 → Laysi/trustiot-v2#83 閘道器自動換發（← Laysi/trustiot-v2#86 agent 骨架）；另有 Laysi/trustiot-v2#80 產線工作站工具、Laysi/trustiot-v2#82 dynsec 整合、Laysi/trustiot-v2#91 ingest、Laysi/trustiot-v2#92 保存期限 |
 | 閘道器 agent | Laysi/trustiot-v2#97 假 Modbus 端點 → Laysi/trustiot-v2#87 Modbus 讀取 → Laysi/trustiot-v2#88 RS485、Laysi/trustiot-v2#89 取樣排程 → Laysi/trustiot-v2#94 套用設定；Laysi/trustiot-v2#86 骨架 → Laysi/trustiot-v2#90 離線緩衝與端到端確認 |
 | 登入與畫面 | Laysi/trustiot-v2#103 登入；Laysi/trustiot-v2#130 事件層 → Laysi/trustiot-v2#104 第一位平台管理員；Laysi/trustiot-v2#106 服務間身分；Laysi/trustiot-v2#123 SPA 骨架 → Laysi/trustiot-v2#124 登入畫面；Laysi/trustiot-v2#119 telemetry-query |
-| AI | Laysi/trustiot-v2#138 AI client → Laysi/trustiot-v2#139 AI 閘道 → Laysi/trustiot-v2#145 主 agent（← Laysi/trustiot-v2#106）→ Laysi/trustiot-v2#146 對話串 → Laysi/trustiot-v2#147 串流 → Laysi/trustiot-v2#149 對話畫面；Laysi/trustiot-v2#98 lab 資料集與 Laysi/trustiot-v2#92 → Laysi/trustiot-v2#141 彙總表 → Laysi/trustiot-v2#142 語意層工具與 Laysi/trustiot-v2#143 唯讀 SQL（兩者也等 Laysi/trustiot-v2#119）→ Laysi/trustiot-v2#150 儀表板（← Laysi/trustiot-v2#145）→ Laysi/trustiot-v2#462 儀表板頁（← Laysi/trustiot-v2#123）→ Laysi/trustiot-v2#149 |
+| AI | Laysi/trustiot-v2#138 AI client → Laysi/trustiot-v2#139 AI 閘道 → Laysi/trustiot-v2#145 主 agent（← Laysi/trustiot-v2#106）→ Laysi/trustiot-v2#146 對話串 → Laysi/trustiot-v2#147 串流 → Laysi/trustiot-v2#149 對話畫面；Laysi/trustiot-v2#139 → Laysi/trustiot-v2#536 AI 閘道部署（展示驗收 Laysi/trustiot-v2#459 等它）→ Laysi/trustiot-v2#537 模型角色管理；Laysi/trustiot-v2#98 lab 資料集與 Laysi/trustiot-v2#92 → Laysi/trustiot-v2#141 彙總表 → Laysi/trustiot-v2#142 語意層工具與 Laysi/trustiot-v2#143 唯讀 SQL（兩者也等 Laysi/trustiot-v2#119）→ Laysi/trustiot-v2#150 儀表板（← Laysi/trustiot-v2#145）→ Laysi/trustiot-v2#462 儀表板頁（← Laysi/trustiot-v2#123）→ Laysi/trustiot-v2#149 |
 | 展示 | Laysi/trustiot-v2#457 展示環境、Laysi/trustiot-v2#458 展示用閘道器、Laysi/trustiot-v2#459 展示驗收 |
 
-- **拆分**：2026-10-19 把 Laysi/trustiot-v2#119、Laysi/trustiot-v2#128、Laysi/trustiot-v2#142 只留切片需要的部分，其餘移到 Laysi/trustiot-v2#453（健康歷史、首頁卡片、依方案的可查期間）、Laysi/trustiot-v2#454（即時點、健康狀態、CSV 匯出）、Laysi/trustiot-v2#455（異常區段、斷訊、停機、月增率、年增率與碳排），留在原里程碑。不拆的話，telemetry-query 要等方案權益（Laysi/trustiot-v2#111）與健康資料（Laysi/trustiot-v2#118）兩條長鏈。Laysi/trustiot-v2#453 完成前，可查期間固定用[方案與權益](../product/plans.md)最嚴的例子值（原始資料 7 天、彙總資料 3 個月）。2026-10-20 改成儀表板後，設備頁 Laysi/trustiot-v2#128 移出切片：它仍是 I3 要的固定畫面（不經 AI 也看得到數據、不耗 AI 額度），留在 MS2；AI 唯讀 SQL Laysi/trustiot-v2#143 加入切片，作為儀表板資料集的來源。
-- **關鍵路徑**：最長的相依鏈在 AI 泳道，Laysi/trustiot-v2#138 到 Laysi/trustiot-v2#149 共 6 張；儀表板那條（Laysi/trustiot-v2#145 → Laysi/trustiot-v2#150 → Laysi/trustiot-v2#462 → Laysi/trustiot-v2#149）一樣長；Laysi/trustiot-v2#150 先合併 API 規格，Laysi/trustiot-v2#462 就能照規格並行；Laysi/trustiot-v2#146、Laysi/trustiot-v2#147 先合併 API 規格，Laysi/trustiot-v2#149 的對話畫面就能先做，最後等 Laysi/trustiot-v2#462 合併後接上儀表板。風險最高的在資料面：雲端從 Laysi/trustiot-v2#78 到 Laysi/trustiot-v2#93 共 5 張，再加上硬體、TPM 與 lab 存取的變數。
+- **拆分**：2026-10-19 把 Laysi/trustiot-v2#119、Laysi/trustiot-v2#128、Laysi/trustiot-v2#142 只留切片需要的部分，其餘移到 Laysi/trustiot-v2#453（健康歷史、首頁卡片、依方案的可查期間）、Laysi/trustiot-v2#454（即時點、健康狀態、CSV 匯出）、Laysi/trustiot-v2#455（異常區段、斷訊、停機、月增率、年增率與碳排），留在原里程碑。不拆的話，telemetry-query 要等方案權益（Laysi/trustiot-v2#111）與健康資料（Laysi/trustiot-v2#118）兩條長鏈。Laysi/trustiot-v2#453 完成前，可查期間固定用[方案與權益](../product/plans.md)最嚴的例子值（原始資料 7 天、彙總資料 3 個月）。2026-10-20 改成儀表板後，設備頁 Laysi/trustiot-v2#128 移出切片：它仍是 I3 要的固定畫面（不經 AI 也看得到數據、不耗 AI 額度），留在 MS2；AI 唯讀 SQL Laysi/trustiot-v2#143 加入切片，作為儀表板資料集的來源。2026-10-22 把 Laysi/trustiot-v2#139、Laysi/trustiot-v2#79、Laysi/trustiot-v2#84 拆成一次一個可審查的變更，拆出的 Laysi/trustiot-v2#537（執行中更換模型角色與管理 API）、Laysi/trustiot-v2#536（AI 閘道部署）、Laysi/trustiot-v2#534（工作站憑證）、Laysi/trustiot-v2#535（broker 伺服器憑證與閘道器的信任設定）都留在切片內。
+- **關鍵路徑**：最長的相依鏈在 AI 泳道，Laysi/trustiot-v2#138 到 Laysi/trustiot-v2#149 共 6 張；儀表板那條（Laysi/trustiot-v2#145 → Laysi/trustiot-v2#150 → Laysi/trustiot-v2#462 → Laysi/trustiot-v2#149）一樣長；Laysi/trustiot-v2#150 先合併 API 規格，Laysi/trustiot-v2#462 就能照規格並行；Laysi/trustiot-v2#146、Laysi/trustiot-v2#147 先合併 API 規格，Laysi/trustiot-v2#149 的對話畫面就能先做，最後等 Laysi/trustiot-v2#462 合併後接上儀表板。風險最高的在資料面：雲端從 Laysi/trustiot-v2#78 到 Laysi/trustiot-v2#93 共 6 張（2026-10-22 自 Laysi/trustiot-v2#79 拆出工作站憑證），再加上硬體、TPM 與 lab 存取的變數。
 - **提前決定的事**：Laysi/trustiot-v2#103 登入要寄驗證碼，SMTP 供應商原本在 Laysi/trustiot-v2#169（MS4）才選，2026-10-19 決定暫用 Resend（帳號與金鑰權限見[密鑰與權限](../architecture/secrets.md)「外部服務」）。服務只經 SMTP 寄信（chart 的 `smtp.*`），不呼叫 Resend 的 API，換供應商只改 values 與 Secret；Laysi/trustiot-v2#169 開工時再確認是否續用。
-- **待確認**：Laysi/trustiot-v2#78 訂出閘道器憑證的有效期後，若短於展示期，把憑證換發（Laysi/trustiot-v2#81、Laysi/trustiot-v2#83）加入切片。
+- **閘道器憑證的有效期**（2026-10-23 決定）：維持 Laysi/trustiot-v2#78 的預設 90 天，不為展示加長；展示期可能超過 90 天，所以憑證換發的端點與閘道器的自動換發用戶端（Laysi/trustiot-v2#81、Laysi/trustiot-v2#83）加入切片。
 
 延後的項目與展示環境的補償：
 
 | 延後 | 展示環境的補償 |
 | --- | --- |
-| API 閘道限流（Laysi/trustiot-v2#113）、停權（Laysi/trustiot-v2#107）、AI 額度（Laysi/trustiot-v2#140）、分析護欄（Laysi/trustiot-v2#148）、注入題庫（Laysi/trustiot-v2#445） | app 主機名稱前加 Cloudflare Access，只放行受邀名單；Anthropic 金鑰所在的工作區設用量上限；切片內的 AI 工具除了建立與修改儀表板都是唯讀，以使用者的內部身分執行，租戶隔離由資料庫強制；儀表板頁面只在不能連網的沙箱執行（Laysi/trustiot-v2#462 以確定性測試驗證） |
+| API 閘道限流（Laysi/trustiot-v2#113）、登入端點的濫用防護（Laysi/trustiot-v2#508）、停權（Laysi/trustiot-v2#107）、AI 額度（Laysi/trustiot-v2#140）、分析護欄（Laysi/trustiot-v2#148）、注入題庫（Laysi/trustiot-v2#445） | app 主機名稱前加 Cloudflare Access，只放行受邀名單；Anthropic 金鑰所在的工作區設用量上限；切片內的 AI 工具除了建立與修改儀表板都是唯讀，以使用者的內部身分執行，租戶隔離由資料庫強制；儀表板頁面只在不能連網的沙箱執行（Laysi/trustiot-v2#462 以確定性測試驗證） |
 | 閘道器映像強化與防火牆（Laysi/trustiot-v2#95、Laysi/trustiot-v2#96） | 展示用閘道器只留在 lab，不出貨到現場 |
 | 備份與還原（Laysi/trustiot-v2#134、Laysi/trustiot-v2#135、Laysi/trustiot-v2#136） | 不補：接受展示資料遺失的風險 |
 | 自助綁定（Laysi/trustiot-v2#114）、型號與設備、閘道器的管理畫面（Laysi/trustiot-v2#126、Laysi/trustiot-v2#127） | 型號、設備與綁定以 Laysi/trustiot-v2#99、Laysi/trustiot-v2#100、Laysi/trustiot-v2#101 的 API 建立 |

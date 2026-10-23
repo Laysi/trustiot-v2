@@ -48,6 +48,8 @@ flowchart TB
 
 ## AI 閘道
 
+內部 API、設定（供應商端點、key 的環境變數、角色與備援、時間上限）、錯誤與日誌見 [services/ai-gateway/README.md](../../services/ai-gateway/README.md)（2026-10-22，Laysi/trustiot-v2#139：Anthropic Messages 與 OpenAI Decisions）。
+
 1. **照原生協定轉送，不轉換格式**（決策 15）：呼叫端（assistant、knowledge、alerts）以內部 API 指定模型角色，請求本文用該角色供應商的原生格式；閘道依角色填入模型與憑證、轉送到供應商，回應與串流原樣交回。SaaS 支援三種協定：Anthropic Messages、Vertex AI 的 Gemini（生成、嵌入、顯式快取）、OpenAI Decisions；地端的 OpenAI 相容端點在 SaaS 完成後加入。不採用相容層的理由：Anthropic 的 OpenAI 相容層官方定位不是給正式環境用的，不支援 prompt caching、用量的快取欄位永遠是空的、不回傳 thinking、`strict` 與 effort 被忽略，也用不到 tool search 與 context editing；Gemini 的相容端點仍在 beta，不能用 Files API，影片輸入沒有文件。LiteLLM、Envoy AI Gateway 等閘道支援快取，也是靠自己轉成原生協定。
 2. **角色、備援與逾時**：platform admin 隨時可以更換角色的模型（J8），換成同一協定的模型不必改程式，換協定要呼叫端支援。每個角色設一串備援模型，429、過載或逾時時改用下一個（例如 main 從 Opus 5.5 換成 Sonnet 5.5）；快取依模型分開，換模型後從零開始。供應商的拒答（例如 Anthropic 的 `stop_reason: refusal`）照常記帳，交回呼叫端，由它回通用訊息（J2）。
 3. **帳本**（決策 28）：以 llm\_call\_id 去重，依供應商回報的分類記錄用量：一般輸入、快取寫入（5 分鐘與 1 小時分開）、快取讀取、輸出（含 thinking），以及 Gemini 各模態的輸入（文字、圖片、影片、音訊）。單價表依這些類別定價，另外記 Gemini 顯式快取的儲存費（token 數乘以時數）；Decisions 只收輸入費；Embedding 2 依模態計價（文字 token、圖片張數、音訊秒數、影片格數）。供應商沒回報用量時（含串流中途中斷，J8），輸入與已產生的輸出（含 thinking）分別在本地估算並標記，絕不記 0：輸入用 `count_tokens` 或本地 tokenizer 計算，輸出依已收到的內容計算；thinking 只回傳摘要或不回傳時看不到實際長度，這筆估算標為下限。Claude 的 token 數以供應商回報或 `count_tokens` 為準，本地 tokenizer 會偏差。
@@ -118,7 +120,7 @@ Claude Opus 5.5 的 thinking 綁定產生它的對話：system prompt、工具�
 
 ## 分流
 
-1. 一次 Decisions 請求問兩題：predicate「這則訊息不需要查資料、讀文件或執行動作就能完整回答」（回傳機率），以及 score「需要多少推理」（low、medium、high，對應主 agent 的 effort）。輸入是最新的訊息、最近幾輪的文字與附圖的縮圖；Decisions 只收 base64 圖片，不收音訊與影片，影音只送檔案類型與長度。
+1. 一次 Decisions 請求問兩題：predicate「這則訊息不需要查資料、讀文件或執行動作就能完整回答」（回傳機率），以及 score「需要多少推理」（low、medium、high，對應主 agent 的 effort）。輸入是最新的訊息、最近幾輪的文字與附圖的縮圖；Decisions 的圖片收 base64 data URL 或公開網址（我們的圖片不公開，所以只送 base64，crates/ai-clients 送出前檢查），不收音訊與影片，影音只送檔案類型與長度。
 2. 只有機率超過門檻才交給 worker，門檻用 MS3 題庫校準；其他的、不確定的，以及分流失敗（逾時、錯誤、beta 期間的介面變更）一律交給主 agent。
 3. worker 只回答簡單訊息，沒有查詢工具，只有 `escalate(reason)`：覺得超出能力時，把對話交給主 agent。主 agent 接手同一個對話，worker 的回答以一般訊息附加在歷史後面。
 4. 分流要與「全部交給主 agent、用低 effort」比較（MS3 題庫，Laysi/trustiot-v2#444）。依 2026-10-18 的單價估算，分流每題只省約 $0.01–0.02，主要的好處是簡單問題回得快；比不過就拿掉分流。Decisions API 仍在 public beta（2026-10-06 推出），沒有 SLA。

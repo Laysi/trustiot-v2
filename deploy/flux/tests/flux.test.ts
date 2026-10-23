@@ -39,6 +39,7 @@ import {
   sopsRuleTexts,
 } from "../../../scripts/flux/lib.ts";
 import { SOPS_SCOPE_LINE, enc, fakeSops } from "../../../scripts/flux/sops-fixture.ts";
+import { ipv4ToNumber, staticBandOf } from "../../../scripts/nightly/ingress-address.ts";
 
 const REPO_ROOT = join(import.meta.dir, "..", "..", "..");
 const REPOSITORY = "Laysi/trustiot-v2";
@@ -558,13 +559,21 @@ function isChartValuesPath(word: string): boolean {
 }
 
 /**
+ * The demo machine's Service range, k3s's default (deploy/flux/README.md, 「展示叢集」). The only IP
+ * address the public overlay may hold is the ingress Service's fixed ClusterIP in its static band:
+ * an address inside the cluster, never one of the demo machine's LAN, which could not share the
+ * range with the cluster's Services.
+ */
+const DEMO_SERVICE_RANGE = "10.43.0.0/16";
+
+/**
  * Host names, mail addresses and IP addresses in a public file of the demo environment (empty when
  * none): every host-like word, in values, URLs and comments alike, must be under .invalid or .test
  * (RFC 6761), a listed public service, a file name or a path of the chart's values; no `@` and no
- * IPv4 address. Problems name the line and column only, so that the CI log does not repeat what
- * should not have been written.
+ * IPv4 address other than `allowedAddresses`. Problems name the line and column only, so that the
+ * CI log does not repeat what should not have been written.
  */
-function hostProblems(text: string): string[] {
+function hostProblems(text: string, allowedAddresses: readonly string[] = []): string[] {
   const problems: string[] = [];
   text.split("\n").forEach((line, index) => {
     const at = line.indexOf("@");
@@ -573,6 +582,7 @@ function hostProblems(text: string): string[] {
       const word = match[0].toLowerCase();
       const where = `line ${index + 1}, column ${(match.index ?? 0) + 1}`;
       if (/^\d+(?:\.\d+){3}$/.test(word)) {
+        if (allowedAddresses.includes(word)) continue;
         problems.push(`${where}: an IP address`);
         continue;
       }
@@ -666,19 +676,46 @@ describe("the demo release", () => {
     expect(Object.keys(secret.stringData as YamlMap).sort()).toEqual(Object.keys(DEMO_PRIVATE_VALUES).sort());
   });
 
-  test("the public overlay names no private host and no mail address", () => {
+  const band = staticBandOf(DEMO_SERVICE_RANGE)!;
+  const clusterIpOf = (values: YamlMap) => (isMap(values.ingress) && isMap(values.ingress.tunnel) ? values.ingress.tunnel.clusterIP : undefined);
+  /** The overlay's fixed ClusterIP, as the one address it may name, only while it is in the band. */
+  const allowedAddressesOf = (values: YamlMap): string[] => {
+    const address = clusterIpOf(values);
+    if (typeof address !== "string" || !/^\d+(?:\.\d+){3}$/.test(address)) return [];
+    const value = ipv4ToNumber(address);
+    return value >= ipv4ToNumber(band.first) && value <= ipv4ToNumber(band.last) ? [address] : [];
+  };
+  const clusterIp = clusterIpOf(overlay);
+  const allowedAddresses = allowedAddressesOf(overlay);
+
+  test("the ingress Service's fixed ClusterIP is in the static band of the demo machine's Service range, clear of kubernetes and kube-dns", () => {
+    expect(band).toEqual({ first: "10.43.0.1", last: "10.43.1.0" });
+    expect(typeof clusterIp).toBe("string");
+    expect(allowedAddresses).toEqual([clusterIp as string]);
+    // k3s gives these two to the kubernetes and kube-dns Services.
+    expect(["10.43.0.1", "10.43.0.10"]).not.toContain(clusterIp);
+  });
+
+  test("the public overlay names no private host, no mail address and no IP address but the fixed ClusterIP", () => {
     expect(overlay.hosts).toBeUndefined();
     expect(isMap(overlay.smtp) ? overlay.smtp.from : undefined).toBeUndefined();
-    expect(hostProblems(overlayText)).toEqual([]);
+    expect(hostProblems(overlayText, allowedAddresses)).toEqual([]);
   });
 
   test("the host check refuses any other host name, a mail address and an IP address", () => {
     const lines = overlayText.split("\n").length;
-    expect(hostProblems(`${overlayText}# see api.example.com\n`)).toEqual([`line ${lines}, column 7: a host name that is not under .invalid or .test and not a listed public service`]);
-    expect(hostProblems(overlayText.replace("https://qdrant.invalid:6333", "https://kb.example.com:6333"))).toHaveLength(1);
-    expect(hostProblems(overlayText.replace("host: smtp.resend.com", "host: smtp.example.com"))).toHaveLength(1);
-    expect(hostProblems(`${overlayText}# no-reply@x\n`)).toEqual([`line ${lines}, column 11: "@", as in a mail address`]);
-    expect(hostProblems(`${overlayText}# 192.0.2.10\n`)).toEqual([`line ${lines}, column 3: an IP address`]);
+    const problems = (text: string) => hostProblems(text, allowedAddresses);
+    expect(problems(`${overlayText}# see api.example.com\n`)).toEqual([`line ${lines}, column 7: a host name that is not under .invalid or .test and not a listed public service`]);
+    expect(problems(overlayText.replace("https://qdrant.invalid:6333", "https://kb.example.com:6333"))).toHaveLength(1);
+    expect(problems(overlayText.replace("host: smtp.resend.com", "host: smtp.example.com"))).toHaveLength(1);
+    expect(problems(`${overlayText}# no-reply@x\n`)).toEqual([`line ${lines}, column 11: "@", as in a mail address`]);
+    expect(problems(`${overlayText}# 192.0.2.10\n`)).toEqual([`line ${lines}, column 3: an IP address`]);
+    // Another address in the Service range is no exception either.
+    expect(problems(`${overlayText}# 10.43.0.81\n`)).toEqual([`line ${lines}, column 3: an IP address`]);
+    // A fixed ClusterIP outside the band is no exception at all.
+    const outside = overlayText.replace(`clusterIP: ${clusterIp as string}`, "clusterIP: 10.43.2.80");
+    expect(outside).not.toBe(overlayText);
+    expect(hostProblems(outside, allowedAddressesOf(Bun.YAML.parse(outside) as YamlMap))).toHaveLength(1);
   });
 
   test(
@@ -702,6 +739,9 @@ describe("the demo release", () => {
       expect(platform.SENTRY_ENVIRONMENT).toBeUndefined();
       expect(new URL(platform.TRUSTIOT_QDRANT_URL ?? "").hostname.endsWith(".invalid")).toBe(true);
       expect(objects.some((m) => /qdrant/i.test(m.metadata.name))).toBe(false);
+      // The overlay that Istio applies to the ingress Service it generates: the fixed ClusterIP.
+      const options = objects.find((m) => m.kind === "ConfigMap" && m.metadata.name === "trustiot-ingress-options")?.data as Record<string, string>;
+      expect((Bun.YAML.parse(options.service ?? "") as { spec: YamlMap }).spec).toEqual({ type: "ClusterIP", clusterIP: clusterIp });
     },
     SLOW_TEST_MS,
   );
@@ -739,6 +779,25 @@ describe("the demo release", () => {
     },
     SLOW_TEST_MS,
   );
+});
+
+// The MQTT broker (Laysi/trustiot-v2#84) needs a server certificate Secret that nothing in a
+// cluster issues yet (Laysi/trustiot-v2#535), so no cluster turns it on: the chart's shapes leave
+// it off, and so must every values file and value a cluster's release reads.
+describe.each([...CLUSTERS])("the MQTT broker stays off in the %s cluster", (cluster) => {
+  test("no values file of the release sets mqttBroker, and no private value targets it", () => {
+    const data = one(cluster, "ConfigMap", "trustiot-values").data as Record<string, string>;
+    expect(Object.keys(data).length).toBeGreaterThan(0);
+    for (const [file, text] of Object.entries(data)) {
+      const values = Bun.YAML.parse(text);
+      expect({ file, mqttBroker: isMap(values) ? values.mqttBroker : undefined }).toEqual({ file, mqttBroker: undefined });
+    }
+    const release = spec(one(cluster, "HelmRelease", "trustiot"));
+    expect(release.values).toBeUndefined();
+    for (const entry of (release.valuesFrom ?? []) as YamlMap[]) {
+      expect(String(entry.targetPath ?? "")).not.toStartWith("mqttBroker");
+    }
+  });
 });
 
 interface SopsRule {

@@ -17,6 +17,9 @@ doc = false
 # SCRAM-SHA-256 verifiers for the service roles' passwords, computed here so a plaintext password
 # never appears in an SQL statement.
 base64.workspace = true
+# The certs service's issuing CA keys the certs pod's init container keeps
+# (`migrate certs-ca-keys`, src/ca_keys.rs).
+ca-keys = { path = "../../crates/ca-keys" }
 getrandom.workspace = true
 hmac.workspace = true
 # The internal identity signing keys the identity pod's init container keeps
@@ -25,6 +28,9 @@ identity-keys = { path = "../../crates/identity-keys" }
 # The outbox tables' DDL (crates/outbox/src/schema.rs), applied in producers' and consumers'
 # schemas.
 outbox = { path = "../../crates/outbox" }
+# The gateway buffer's maximum age, which the raw data retention must exceed
+# (services/ingest/src/retention.rs, compiled in as src/lib.rs's `retention`).
+protocol = { path = "../../crates/protocol" }
 # The Kubernetes API (wait-for-job) and an HTTPS ClickHouse: HTTP/1.1 over hyper with rustls and
 # ring, and only the CA the deployment names as trust anchor (no system or public roots). Not
 # reqwest: see src/http.rs.
@@ -33,7 +39,12 @@ http.workspace = true
 http-body-util.workspace = true
 hyper = { workspace = true, features = ["client", "http1"] }
 hyper-util = { workspace = true, features = ["tokio"] }
+# kill(2): the MQTT broker's trust sidecar sends the broker SIGHUP (src/mqtt_trust.rs).
+libc.workspace = true
 percent-encoding.workspace = true
+# The MQTT broker's placeholder CA and its CRL, generated when no gateway CA is available
+# (src/mqtt_trust.rs).
+rcgen = { workspace = true, features = ["crypto", "ring"] }
 rustls = { workspace = true, features = ["ring", "std", "tls12"] }
 rustls-pki-types = { workspace = true, features = ["std"] }
 tokio-rustls = { workspace = true, features = ["ring"] }
@@ -49,6 +60,8 @@ thiserror.workspace = true
 tokio = { workspace = true, features = ["fs", "macros", "net", "rt-multi-thread", "time"] }
 tracing.workspace = true
 uuid.workspace = true
+# Parses the CA certificates and CRLs the MQTT broker is to load (src/mqtt_trust.rs).
+x509-parser = { workspace = true, features = ["verify"] }
 # Wipes key material read from a file or the Secret.
 zeroize.workspace = true
 

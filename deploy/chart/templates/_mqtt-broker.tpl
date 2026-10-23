@@ -1,0 +1,367 @@
+{{/*
+MQTT broker helpers (Mosquitto 2.1, decision 6, Laysi/trustiot-v2#84; README.md, "MQTT broker";
+the objects are in templates/mqtt-broker.yaml).
+*/}}
+
+{{/* Whether this release runs the broker. */}}
+{{- define "trustiot.mqttBroker.enabled" -}}
+{{- if .Values.mqttBroker.enabled -}}true{{- end -}}
+{{- end -}}
+
+{{/*
+Who may connect to the broker, and on which port. The mesh admits (templates/mesh.yaml):
+- on the gateway port (8883), mqtt-bridge, which carries the gateways' connections; the broker
+  itself checks each gateway's client certificate (TLS 1.3, our CA, the CRL);
+- on the service port (1883), the cloud services that hold a broker account: ingest, gateway-ops,
+  and certs, dynamic security's administrator. Each logs in with its account and password
+  ("trustiot.mqttBroker.accounts").
+These are the only services mesh.calls may list as the broker's callers; any other fails the
+render ("trustiot.mesh.plan"). tools/migrate/src/mqtt_accounts.rs gives each account holder its
+role. Returns YAML {gateway: {port, callers}, service: {port, callers}}; use with fromYaml.
+*/}}
+{{- define "trustiot.mqtt-broker.callers" -}}
+gateway:
+  port: 8883
+  callers:
+    - mqtt-bridge
+service:
+  port: 1883
+  callers:
+    - certs
+    - gateway-ops
+    - ingest
+{{- end -}}
+
+{{/*
+The services that get a broker account: the enabled account holders ("trustiot.mqtt-broker.callers",
+service) that list mqtt-broker in mesh.calls, sorted. The accounts init container creates exactly
+these (TRUSTIOT__ACCOUNTS__SERVICES) and removes the account of a service that left the list.
+Returns YAML {services: [...]}; use with fromYaml.
+*/}}
+{{- define "trustiot.mqttBroker.accounts" -}}
+{{- $holders := (include "trustiot.mqtt-broker.callers" . | fromYaml).service.callers -}}
+{{- $services := list -}}
+{{- range $caller, $callees := .Values.mesh.calls | default dict -}}
+{{- $entry := get $.Values.services $caller -}}
+{{- if and $entry $entry.enabled (has $caller $holders) (kindIs "slice" $callees) (has "mqtt-broker" $callees) -}}
+{{- $services = append $services $caller -}}
+{{- end -}}
+{{- end -}}
+{{- dict "services" ($services | sortAlpha) | toYaml -}}
+{{- end -}}
+
+{{/*
+The Secret the chart declares empty while the broker is enabled ("trustiot.filledSecretObjects"),
+which the broker pod's accounts init container fills with one password per account holder, under
+the service's name. Only that init container may read or write it (the Role in
+templates/mqtt-broker.yaml); each service will read its own key (README.md, "MQTT broker").
+*/}}
+{{- define "trustiot.mqttBroker.accountsSecret" -}}
+{{- include "trustiot.componentName" (dict "root" . "name" "mqtt-broker-accounts") -}}
+{{- end -}}
+
+{{/*
+The broker's server certificate: a kubernetes.io/tls Secret (tls.crt, the certificate and its
+chain; tls.key) that the chart does not create (Laysi/trustiot-v2#535 issues it, README.md, "MQTT
+broker"). Only the broker pod mounts it, whole, so a renewed certificate reaches the pod without
+a restart.
+*/}}
+{{- define "trustiot.mqttBroker.tlsSecret" -}}
+{{- include "trustiot.componentName" (dict "root" . "name" "mqtt-broker-tls") -}}
+{{- end -}}
+
+{{/* Where the pod mounts the server certificate Secret. */}}
+{{- define "trustiot.mqttBroker.tlsDir" -}}
+/etc/trustiot/mqtt-broker-tls
+{{- end -}}
+
+{{/*
+mqttBroker.passwordGeneration as the init container reads it: 1 to 9 decimal digits
+(tools/migrate compares generations as numbers). Fails the render otherwise.
+*/}}
+{{- define "trustiot.mqttBroker.passwordGeneration" -}}
+{{- $text := include "trustiot.decimal" (dict "value" .Values.mqttBroker.passwordGeneration "key" "mqttBroker.passwordGeneration") -}}
+{{- if not (regexMatch "^[0-9]{1,9}$" $text) -}}
+{{- fail (printf "mqttBroker.passwordGeneration: %q must render as 1 to 9 decimal digits" $text) -}}
+{{- end -}}
+{{- $text -}}
+{{- end -}}
+
+{{/*
+The broker's memory_limit in bytes: three quarters of mqttBroker.resources.limits.memory, so the
+broker refuses new messages before the kernel kills it. Fails unless the limit is a whole number
+of Mi or Gi.
+*/}}
+{{- define "trustiot.mqttBroker.memoryLimit" -}}
+{{- $limit := toString (.Values.mqttBroker.resources.limits.memory | default "") -}}
+{{- if not (regexMatch "^[1-9][0-9]{0,5}(Mi|Gi)$" $limit) -}}
+{{- fail (printf "mqttBroker.resources.limits.memory: %q must be a whole number of Mi or Gi; the broker's memory_limit is three quarters of it" $limit) -}}
+{{- end -}}
+{{- $number := atoi (regexReplaceAll "(Mi|Gi)$" $limit "") -}}
+{{- $unit := ternary 1073741824 1048576 (hasSuffix "Gi" $limit) -}}
+{{- div (mul (mul $number $unit) 3) 4 -}}
+{{- end -}}
+
+{{/*
+The broker's configuration, mounted as /mosquitto/config/mosquitto.conf. The text up to
+memory_limit is files/mosquitto/mosquitto.conf word for word, which
+tools/migrate/tests/mqtt_broker.rs runs in the pinned image; the chart tests fail when the two
+differ. Templates never read chart files (scripts/ci/check-secret-handling.ts), hence the copy.
+*/}}
+{{- define "trustiot.mqttBroker.config" -}}
+# Mosquitto 2.1 configuration of the chart's MQTT broker (Laysi/trustiot-v2#84; README.md,
+# "MQTT broker"). templates/_mqtt-broker.tpl carries the same text, because chart templates never
+# read chart files (scripts/ci/check-secret-handling.ts), and appends memory_limit from
+# mqttBroker.resources.limits.memory; the chart test fails when the two differ.
+# tools/migrate/tests/mqtt_broker.rs runs this file in the pinned image. Every path below is a
+# mount of the broker's pod (templates/mqtt-broker.yaml):
+#   /mosquitto/data                  the persistent volume: dynamic security, sessions and
+#                                    messages, and the CA and CRL files
+#   /mosquitto/data/trust/current    the CA and CRL files, written by the trust sidecar
+#                                    (`migrate mqtt-broker-trust`)
+#   /etc/trustiot/mqtt-broker-tls    the Secret with the server certificate (tls.crt, tls.key)
+#   /run/mosquitto                   the probes' Unix socket
+
+# Logging: stdout only (the root filesystem is read-only). Connection messages stay on: they are
+# the record of which gateway connected when.
+log_dest stdout
+log_type error
+log_type warning
+log_type notice
+log_type information
+log_timestamp true
+log_timestamp_format %Y-%m-%dT%H:%M:%SZ
+connection_messages true
+
+# No anonymous clients, except on the probes' socket (its listener below).
+allow_anonymous false
+
+# Dynamic security: every client and role. Its file lives on the persistent volume; the init
+# container `migrate mqtt-broker-accounts` writes it before every start, so Mosquitto never
+# creates its own default file (which would hold an admin account and a client allowed on `#`).
+plugin /usr/lib/mosquitto_dynamic_security.so
+plugin_opt_config_file /mosquitto/data/dynamic-security.json
+
+# Persistence: sessions, queued and retained messages in SQLite. A flush period of 0 commits the
+# changes of each turn of the event loop at the start of the next turn, before the broker waits
+# for more traffic: a SIGKILL loses at most the turn it interrupts, not the default 5 seconds.
+plugin /usr/lib/mosquitto_persist_sqlite.so
+plugin_opt_db_file /mosquitto/data/mosquitto.sqlite3
+plugin_opt_flush_period 0
+plugin_opt_sync normal
+
+# Limits (README.md, "MQTT broker"). The packet limit is crates/protocol's MIN_MAX_PACKET_BYTES:
+# its largest payload (MAX_LARGE_BYTES, 1 MiB) plus 8 KiB for the topic and properties. A client
+# that sends a larger packet is disconnected. Each channel's own, smaller limit is checked by the
+# side that receives it. No message_size_limit: Mosquitto 2.1 recommends max_packet_size instead.
+max_packet_size 1056768
+# Per client: QoS 1 messages queued for a client that is offline or slow, beyond those in flight.
+max_queued_messages 1000
+max_queued_bytes 16777216
+max_inflight_messages 20
+# Gateways use 60 s (docs/architecture/deployment.md); no client may go without keepalive.
+max_keepalive 120
+# Sessions of clients that never come back are removed after 30 days.
+persistent_client_expiration 30d
+
+# Gateways, through mqtt-bridge only (the mesh admits no other caller on this port): TLS 1.3 with
+# a client certificate from our CA, checked against the CRL. The certificate's CN is the
+# username and the client id, so a gateway cannot act as, or take over the session of, another
+# gateway. The CA and CRL files are read at start and on SIGHUP, which the trust sidecar sends;
+# a reload does not end connections made before it.
+listener 8883
+protocol mqtt
+accept_protocol_versions 5
+certfile /etc/trustiot/mqtt-broker-tls/tls.crt
+keyfile /etc/trustiot/mqtt-broker-tls/tls.key
+cafile /mosquitto/data/trust/current/ca.pem
+crlfile /mosquitto/data/trust/current/crl.pem
+require_certificate true
+use_identity_as_username true
+use_username_as_clientid true
+tls_version tlsv1.3
+
+# Cloud services (ingest, gateway-ops, and certs as dynamic security's administrator), inside the
+# mesh only: ztunnel's mTLS carries the connection, the mesh admits only those services on this
+# port, and each logs in with its dynamic security account and password.
+listener 1883
+protocol mqtt
+accept_protocol_versions 5
+
+# The probes: a Unix socket in the pod, no TLS. Anonymous clients may connect here and nothing
+# more: they have no role, so dynamic security refuses every publish and subscription.
+# max_connections is a listener option: it limits this socket only (Mosquitto 2.1 src/conf.c sets
+# it on the current listener; the broker-wide limit would be global_max_connections, not set
+# here). tools/migrate/tests/mqtt_broker.rs holds more service connections than that at once.
+listener 0 /run/mosquitto/probe.sock
+protocol mqtt
+accept_protocol_versions 5
+listener_allow_anonymous true
+max_connections 8
+memory_limit {{ include "trustiot.mqttBroker.memoryLimit" . }}
+{{- end -}}
+
+{{/*
+Container ports and probes of the broker. The StatefulSet renders them from here, and the mesh
+reads the same definition ("trustiot.mesh.probePorts"): the probes run mosquitto_pub inside the
+container against the probe socket (an MQTT connection the broker accepted, not just an open TCP
+port, and no TLS handshake that would log an error), so the node reaches no port of the broker.
+tools/migrate/tests/mqtt_broker.rs runs the same command (PROBE); the chart tests compare them.
+Returns YAML {ports, probes: {startup, liveness, readiness}}; use with fromYaml.
+*/}}
+{{- define "trustiot.mqtt-broker.pod" -}}
+{{- $callers := include "trustiot.mqtt-broker.callers" . | fromYaml -}}
+{{- $probe := list "mosquitto_pub" "--unix" "/run/mosquitto/probe.sock" "-V" "5" "-I" "probe:" "-t" "trustiot/probe" "-n" "-q" "0" -}}
+ports:
+  - name: mqtt-gateways
+    containerPort: {{ $callers.gateway.port }}
+    protocol: TCP
+  - name: mqtt-services
+    containerPort: {{ $callers.service.port }}
+    protocol: TCP
+probes:
+  # A restart restores every session and message from SQLite before it accepts connections.
+  startup:
+    exec:
+      command: {{ toJson $probe }}
+    periodSeconds: 2
+    timeoutSeconds: 5
+    failureThreshold: 150
+  liveness:
+    exec:
+      command: {{ toJson $probe }}
+    periodSeconds: 30
+    timeoutSeconds: 5
+    failureThreshold: 4
+  readiness:
+    exec:
+      command: {{ toJson $probe }}
+    periodSeconds: 10
+    timeoutSeconds: 5
+    failureThreshold: 3
+{{- end -}}
+
+{{/*
+Where the trust sidecar fetches the CA certificates and CRLs: the certs service's http port, plain
+HTTP that ztunnel carries over mTLS ("trustiot.mesh.plan" adds the broker to the certs service's
+callers). Empty while the certs service is off: the broker then trusts no gateway.
+*/}}
+{{- define "trustiot.mqttBroker.certsUrl" -}}
+{{- if include "trustiot.certs.enabled" . -}}
+{{- $config := include "trustiot.serviceConfig" (dict "root" . "name" "certs" "values" .Values.services.certs) | fromYaml -}}
+{{- $port := 0 -}}
+{{- range $config.ports -}}
+{{- if eq .name "http" -}}
+{{- $port = int (.servicePort | default .containerPort) -}}
+{{- end -}}
+{{- end -}}
+{{- if not $port -}}
+{{- fail "services.certs.ports: the MQTT broker fetches the CA certificates and CRLs from the port named http" -}}
+{{- end -}}
+{{- printf "http://%s.%s.svc:%d" (include "trustiot.componentName" (dict "root" . "name" "certs")) .Release.Namespace $port -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+Settings of `migrate mqtt-broker-trust` (tools/migrate/src/mqtt_trust.rs), for the init container
+and the sidecar alike. Returns a YAML list; use with fromYamlArray.
+*/}}
+{{- define "trustiot.mqttBroker.trustEnv" -}}
+- name: TRUSTIOT__TRUST__CERTS_URL
+  value: {{ include "trustiot.mqttBroker.certsUrl" . | quote }}
+- name: TRUSTIOT__TRUST__DIR
+  value: /mosquitto/data/trust
+- name: TRUSTIOT__TRUST__TLS_DIR
+  value: {{ include "trustiot.mqttBroker.tlsDir" . }}
+- name: TRUSTIOT__TRUST__INTERVAL
+  value: {{ .Values.mqttBroker.trustInterval | quote }}
+{{- end -}}
+
+{{/* The security context of every container of the broker pod. */}}
+{{- define "trustiot.mqttBroker.securityContext" -}}
+allowPrivilegeEscalation: false
+readOnlyRootFilesystem: true
+capabilities:
+  drop: [ALL]
+{{- end -}}
+
+{{/*
+Init container that keeps the cloud services' broker accounts: `migrate mqtt-broker-accounts`
+(tools/migrate/src/mqtt_accounts.rs) makes sure the Secret ("trustiot.mqttBroker.accountsSecret")
+holds a password of mqttBroker.passwordGeneration for every account holder, generating one with
+the operating system's CSPRNG when it holds none or an older generation, and writes the dynamic
+security file on the broker's volume: the release's roles, deny by default, and each account with
+only the PBKDF2-SHA512 hash of its password, keeping every gateway client the broker stored. It
+authenticates with a projected token of the broker's ServiceAccount, which only this container
+mounts, and the Role in templates/mqtt-broker.yaml lets that ServiceAccount get and patch this one
+Secret. It runs the migration image (arm64 only, like the Job).
+*/}}
+{{- define "trustiot.mqttBroker.accountsInitContainer" -}}
+{{- $dir := include "trustiot.migrate.kubeDir" . -}}
+name: accounts
+image: {{ include "trustiot.migrate.image" . }}
+imagePullPolicy: {{ .Values.migrate.image.pullPolicy }}
+args:
+  - mqtt-broker-accounts
+env:
+  - name: TRUSTIOT__ACCOUNTS__API_URL
+    value: https://kubernetes.default.svc
+  - name: TRUSTIOT__ACCOUNTS__NAMESPACE
+    valueFrom:
+      fieldRef:
+        fieldPath: metadata.namespace
+  - name: TRUSTIOT__ACCOUNTS__TOKEN_FILE
+    value: {{ printf "%s/token" $dir }}
+  - name: TRUSTIOT__ACCOUNTS__CA_FILE
+    value: {{ printf "%s/ca.crt" $dir }}
+  - name: TRUSTIOT__ACCOUNTS__SECRET
+    value: {{ include "trustiot.mqttBroker.accountsSecret" . }}
+  - name: TRUSTIOT__ACCOUNTS__SERVICES
+    value: {{ (include "trustiot.mqttBroker.accounts" . | fromYaml).services | join "," | quote }}
+  - name: TRUSTIOT__ACCOUNTS__GENERATION
+    value: {{ include "trustiot.mqttBroker.passwordGeneration" . | quote }}
+  - name: TRUSTIOT__ACCOUNTS__DYNSEC_FILE
+    value: /mosquitto/data/dynamic-security.json
+resources:
+  {{- toYaml .Values.migrate.resources | nindent 2 }}
+securityContext:
+  {{- include "trustiot.mqttBroker.securityContext" . | nindent 2 }}
+volumeMounts:
+  - name: data
+    mountPath: /mosquitto/data
+  - name: migrate-kube-api
+    mountPath: {{ $dir }}
+    readOnly: true
+{{- end -}}
+
+{{/*
+`migrate mqtt-broker-trust` (tools/migrate/src/mqtt_trust.rs) as the init container `trust-files`
+(with --once: installs the CA certificates and CRLs from the certs service, or a placeholder that
+trusts no gateway, and checks that the server certificate and key belong together) and as the
+sidecar `trust` (fetches them again every mqttBroker.trustInterval, watches the server
+certificate Secret, and sends the broker SIGHUP after either changed). Argument: dict "root" $
+"name" <container name> "once" <bool>.
+*/}}
+{{- define "trustiot.mqttBroker.trustContainer" -}}
+{{- $root := .root -}}
+name: {{ .name }}
+image: {{ include "trustiot.migrate.image" $root }}
+imagePullPolicy: {{ $root.Values.migrate.image.pullPolicy }}
+args:
+  - mqtt-broker-trust
+  {{- if .once }}
+  - --once
+  {{- end }}
+env:
+  {{- include "trustiot.mqttBroker.trustEnv" $root | nindent 2 }}
+resources:
+  {{- toYaml $root.Values.migrate.resources | nindent 2 }}
+securityContext:
+  {{- include "trustiot.mqttBroker.securityContext" $root | nindent 2 }}
+volumeMounts:
+  - name: data
+    mountPath: /mosquitto/data
+  - name: server-tls
+    mountPath: {{ include "trustiot.mqttBroker.tlsDir" $root }}
+    readOnly: true
+{{- end -}}

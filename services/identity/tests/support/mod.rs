@@ -16,6 +16,9 @@ pub mod postgres;
 #[path = "../../../../crates/service-kit/tests/support/start.rs"]
 pub mod start;
 
+/// The fake SMTP relay of tests/login.rs.
+pub mod smtp;
+
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{SocketAddr, TcpStream};
 use std::path::{Path, PathBuf};
@@ -327,6 +330,8 @@ pub struct Service {
     pub address: SocketAddr,
     /// The health port, which serves only `/healthz` and `/readyz` (the kubelet probes it).
     pub health_address: SocketAddr,
+    /// The token exchange's own port (`exchange.listen_addr`).
+    pub exchange_address: SocketAddr,
 }
 
 impl Service {
@@ -349,12 +354,21 @@ impl Service {
                 .and_then(|address| address.parse().ok())
                 .unwrap_or_else(|| panic!("no {field} in {listening}"))
         };
+        // The exchange's port is bound during startup, before the service listens.
+        let exchange = stdout
+            .wait_for_message("serving the token exchange", Duration::from_secs(30))
+            .unwrap_or_else(|| panic!("no token exchange port\nstdout:\n{}", stdout.text()));
+        let exchange_address = exchange["fields"]["address"]
+            .as_str()
+            .and_then(|address| address.parse().ok())
+            .unwrap_or_else(|| panic!("no address in {exchange}"));
         Self {
             child,
             stdout,
             stderr,
             address: parse("address"),
             health_address: parse("health_address"),
+            exchange_address,
         }
     }
 
@@ -410,6 +424,7 @@ pub fn spawn(env: &[(&str, &str)]) -> (Child, Output, Output) {
         .env_clear()
         .env("TRUSTIOT__HTTP__LISTEN_ADDR", "127.0.0.1:0")
         .env("TRUSTIOT__HTTP__HEALTH_LISTEN_ADDR", "127.0.0.1:0")
+        .env("TRUSTIOT__EXCHANGE__LISTEN_ADDR", "127.0.0.1:0")
         .env("TRUSTIOT__SHUTDOWN__DRAIN_DELAY", "100ms")
         .env("TRUSTIOT__SHUTDOWN__DRAIN_TIMEOUT", "5s")
         .envs(env.iter().copied())
@@ -765,9 +780,9 @@ VALUES ($1, $2, $3)";
 /// Stands in for the migration Job's records in a database these tests set up by hand: creates
 /// `identity.trustiot_migrate_applied` from service-kit's template and records every file the
 /// identity image expects (`identity::schema::SCHEMA`), so the service's `migrations` readiness
-/// check passes. These tests apply only `0001_identity.sql`, which is all the ext_authz check
-/// needs; the readiness check itself runs against the real Job in tests/migrations.rs. Run it as
-/// the schema's owner.
+/// check passes. These tests apply only `0001_identity.sql` and `0004_login.sql`, which is all
+/// the ext_authz check and extending sessions need; the readiness check itself runs against the
+/// real Job in tests/migrations.rs. Run it as the schema's owner.
 pub async fn record_release_migrations(owner: &mut sqlx::PgConnection) {
     sqlx::raw_sql(RECORDS_FUNCTION)
         .execute(&mut *owner)

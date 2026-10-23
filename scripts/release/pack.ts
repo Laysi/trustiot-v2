@@ -16,7 +16,8 @@
  * earlier build. With vfs, rootless podman 4.9.3 packs the image that root podman always did.
  * Containerfile images (with RUN steps, where vfs copies every layer in full) use the user's
  * store as before. The build context is made here by the user that runs podman, so podman sees
- * its files as 0:0 either way, which keeps the history's `COPY file:<hash>` the same.
+ * its files as 0:0 either way, which keeps the history's `COPY file:<hash>` the same. A static
+ * site goes into the context with fixed modes and times (static-build.ts, copyStaticSite).
  *
  * Output:
  *   <out>/images/<name>.oci.tar     the image as an OCI archive, pushed byte for byte by publish
@@ -38,6 +39,7 @@ import {
   type ReleaseBuilder,
   type ReleasePlan,
   ReleaseError,
+  STATIC_CONTEXT_DIR,
   errorMessage,
   imagePlatformProblems,
   parseBuilder,
@@ -45,6 +47,7 @@ import {
   renderRustContainerfile,
   summarizeSpdx,
 } from "./lib.ts";
+import { copyStaticSite } from "./static-build.ts";
 
 const ROOT = resolve(import.meta.dir, "..", "..");
 
@@ -126,6 +129,7 @@ async function buildImage(
   plan: ReleasePlan,
   image: PlannedImage,
   binary: string | undefined,
+  site: string | undefined,
   outDir: string,
   workDir: string,
   rustStore: ImageStore,
@@ -143,14 +147,22 @@ async function buildImage(
     if (binary === undefined) {
       throw new ReleaseError(`no binary was built for ${image.name}`);
     }
-    // The build context holds only the binary and the rendered Containerfile.
+    // The build context holds only the binary, the rendered Containerfile and, for an image
+    // with a [static] project, its checked build output.
     context = join(workDir, image.name);
     mkdirSync(context, { recursive: true });
     const bin = binary.split("/").at(-1) ?? "";
     copyFileSync(binary, join(context, bin));
     chmodSync(join(context, bin), 0o755);
+    const staticSite = image.staticSite !== undefined;
+    if (staticSite) {
+      if (site === undefined) {
+        throw new ReleaseError(`no static site was built for ${image.name}`);
+      }
+      copyStaticSite(site, join(context, STATIC_CONTEXT_DIR), plan.sourceDateEpoch);
+    }
     containerfile = join(context, "Containerfile");
-    writeFileSync(containerfile, renderRustContainerfile(readFileSync(join(ROOT, RUST_CONTAINERFILE), "utf8"), bin));
+    writeFileSync(containerfile, renderRustContainerfile(readFileSync(join(ROOT, RUST_CONTAINERFILE), "utf8"), bin, { staticSite }));
   } else {
     context = join(ROOT, image.context ?? "");
     containerfile = join(context, "Containerfile");
@@ -261,9 +273,15 @@ async function removeWorkDir(podman: string, workDir: string, store: ImageStore)
 
 /**
  * Packs every planned image into `outDir` (see the file comment); `binaries` maps each Rust
- * image to its aarch64 binary. Writes build.json last.
+ * image to its aarch64 binary, and `sites` each image with a `[static]` project to its checked
+ * build output (static-build.ts). Writes build.json last.
  */
-export async function packImages(plan: ReleasePlan, binaries: ReadonlyMap<string, string>, outDir: string): Promise<void> {
+export async function packImages(
+  plan: ReleasePlan,
+  binaries: ReadonlyMap<string, string>,
+  outDir: string,
+  sites: ReadonlyMap<string, string> = new Map(),
+): Promise<void> {
   const workDir = mkdtempSync(join(tmpdir(), "trustiot-release-"));
   const podman = systemTool("podman");
   const rustStore = imageStore(join(workDir, "store"), RUST_IMAGE_DRIVER);
@@ -275,7 +293,7 @@ export async function packImages(plan: ReleasePlan, binaries: ReadonlyMap<string
     log("build", `packing with podman ${builder.podman}, buildah ${builder.buildah}${packages.length > 0 ? `; packages: ${packages.join(", ")}` : ""}`);
     const built: BuiltImage[] = [];
     for (const image of plan.images) {
-      built.push(await buildImage(plan, image, binaries.get(image.name), outDir, workDir, rustStore));
+      built.push(await buildImage(plan, image, binaries.get(image.name), sites.get(image.name), outDir, workDir, rustStore));
     }
     const images = built.map(({ archive, sbom, ...rest }) => ({ ...rest, archive: archive.slice(outDir.length + 1), sbom: sbom.slice(outDir.length + 1) }));
     writeFileSync(join(outDir, "build.json"), `${JSON.stringify({ tag: plan.tag, commit: plan.commit, builder, images }, null, 2)}\n`);

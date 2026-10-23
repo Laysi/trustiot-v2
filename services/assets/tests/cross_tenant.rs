@@ -1,8 +1,10 @@
-//! Cross-tenant negative tests (decision 29, crates/testkit; Laysi/trustiot-v2#65 acceptance 3):
-//! the assets service's role cannot read or change another tenant's rows, its API never shows
-//! one tenant another tenant's data, and every relation the role can reach is declared. The
-//! schema is the product's, applied by the migration Job (`testkit::product`), and the service is
-//! the real binary.
+//! Cross-tenant negative tests (decision 29, crates/testkit; Laysi/trustiot-v2#65 acceptance 3,
+//! Laysi/trustiot-v2#99 acceptance 3): the assets service's role cannot read or change another
+//! tenant's rows (tenants, device models and their points, events and their aggregates'
+//! sequences), its API never shows one tenant another tenant's data or writes into another
+//! tenant, and every relation the role can reach and every API operation is declared. The schema
+//! is the product's, applied by the migration Job (`testkit::product`), and the service is the
+//! real binary.
 //!
 //! Starts a throwaway Postgres with TLS (podman or docker); skipped without either unless `CI`
 //! is set. Run with `--nocapture` to see every probe.
@@ -10,10 +12,11 @@
 mod support;
 
 use contract::ServiceName;
+use serde_json::json;
 use support::Service;
 use testkit::identity::TestIssuer;
 use testkit::isolation::Suite;
-use testkit::isolation::api::Endpoint;
+use testkit::isolation::api::{Endpoint, Method};
 use testkit::isolation::postgres::PgStore;
 use testkit::pg_table;
 use testkit::product::{DATABASE, product_postgres};
@@ -23,9 +26,45 @@ use testkit::product::{DATABASE, product_postgres};
 const SEED_TENANT: &str = "INSERT INTO assets.tenants (tenant_id)
 SELECT $1::uuid WHERE $2::uuid IS NOT NULL AND $3::text IS NOT NULL";
 
+/// One device model: `$2` is the model id, which the name repeats; the canary does not fit the
+/// naming rule, so no column holds it. The tenant's row must exist (the foreign key); it does
+/// when `assets.tenants` was seeded first, and the CTE adds it otherwise.
+const SEED_MODEL: &str = "WITH tenant AS (
+    INSERT INTO assets.tenants (tenant_id) VALUES ($1::uuid) ON CONFLICT (tenant_id) DO NOTHING
+)
+INSERT INTO assets.device_models (tenant_id, model_id, name)
+SELECT $1::uuid, $2::uuid, 'm' || replace($2::text, '-', '') WHERE $3::text IS NOT NULL";
+
+/// One data point of a new model: `$2` is the model id, the canary the point's description.
+const SEED_POINT: &str = "WITH tenant AS (
+    INSERT INTO assets.tenants (tenant_id) VALUES ($1::uuid) ON CONFLICT (tenant_id) DO NOTHING
+), model AS (
+    INSERT INTO assets.device_models (tenant_id, model_id, name)
+    VALUES ($1::uuid, $2::uuid, 'p' || replace($2::text, '-', ''))
+    RETURNING tenant_id, model_id
+)
+INSERT INTO assets.device_model_points
+    (tenant_id, model_id, position, key, function_code, address, data_type, description)
+SELECT tenant_id, model_id, 0, 'canary', 3, 0, 'u16', $3 FROM model";
+
+/// One event of the tenant in the outbox: `$2` is the event id, the canary the aggregate id.
+const SEED_EVENT: &str = "INSERT INTO assets.outbox_event
+    (tx_order, event_id, event_type, tenant_id, aggregate_type, aggregate_id, aggregate_seq,
+     envelope)
+VALUES (1, $2::uuid, 'testkit.canary', $1::uuid, 'testkit', $3, 1, '{}'::jsonb)";
+
+/// One aggregate of the tenant, its sequence in the outbox: the canary is the aggregate id; the
+/// table has no column for `$2`.
+const SEED_AGGREGATE: &str = "INSERT INTO assets.outbox_aggregate
+    (aggregate_type, aggregate_id, tenant_id, last_seq, last_tx)
+SELECT 'testkit', $3, $1::uuid, 1, 1 WHERE $2::uuid IS NOT NULL";
+
 const CONSUMER_TABLE: &str = "the outbox consumer's bookkeeping (crates/outbox): subscription \
      positions and processed or failed event IDs, no tenant data; the consumer reads and writes \
      it in transactions without a tenant";
+
+const MODELS: &str = "/api/assets/v1/device-models";
+const MODEL: &str = "/api/assets/v1/device-models/{model_id}";
 
 #[tokio::test(flavor = "multi_thread")]
 async fn tenants_are_isolated() {
@@ -45,6 +84,13 @@ async fn tenants_are_isolated() {
         seed = SEED_TENANT,
         one_per_tenant
     ))
+    .table(pg_table!("assets.device_models", seed = SEED_MODEL))
+    .table(pg_table!("assets.device_model_points", seed = SEED_POINT))
+    // The service role only inserts events (no SELECT or UPDATE): the probes check that it
+    // cannot write one for another tenant.
+    .table(pg_table!("assets.outbox_event", seed = SEED_EVENT))
+    // The service role reads and advances the sequence of its tenant's aggregates only.
+    .table(pg_table!("assets.outbox_aggregate", seed = SEED_AGGREGATE))
     .exempt("assets.outbox_subscription", CONSUMER_TABLE)
     .exempt("assets.outbox_inbox", CONSUMER_TABLE)
     .exempt("assets.outbox_dead_letter", CONSUMER_TABLE)
@@ -61,9 +107,44 @@ async fn tenants_are_isolated() {
          (Laysi/trustiot-v2#402)",
     );
 
+    // A valid model whose point's description is the canary; `{id}` makes the name unique and
+    // keeps it within the naming rule (a letter, then the UUID's groups).
+    let points = json!([{"key": "p", "function_code": 3, "address": 0, "data_type": "u16",
+                         "description": "{canary}"}]);
     Suite::new(ServiceName::Assets, &issuer, store)
         .openapi(serde_json::to_value(assets::openapi()).expect("the OpenAPI document"))
         .endpoint(Endpoint::list("/api/assets/v1/tenant", "assets.tenants"))
+        .endpoint(Endpoint::list(MODELS, "assets.device_models"))
+        .endpoint(Endpoint::get(MODEL, "assets.device_models"))
+        .endpoint(Endpoint::get(
+            "/api/assets/v1/device-models/{model_id}/export",
+            "assets.device_models",
+        ))
+        .endpoint(
+            // Each write probe gets a seeded row of its own, still at revision 1.
+            Endpoint::item(Method::PUT, MODEL, "assets.device_models")
+                .body(json!({"revision": 1, "points": points})),
+        )
+        .endpoint(Endpoint::item(
+            Method::DELETE,
+            MODEL,
+            "assets.device_models",
+        ))
+        .endpoint(
+            Endpoint::create(Method::POST, MODELS, "assets.device_models")
+                .body(json!({"name": "c{id}", "points": points})),
+        )
+        .endpoint(
+            Endpoint::create(
+                Method::POST,
+                "/api/assets/v1/device-models/import",
+                "assets.device_models",
+            )
+            .body(
+                json!({"format": "trustiot.device_model", "format_version": 1,
+                         "name": "i{id}", "points": points}),
+            ),
+        )
         .run(Some(&assets.base_url))
         .await
         .assert_isolated();

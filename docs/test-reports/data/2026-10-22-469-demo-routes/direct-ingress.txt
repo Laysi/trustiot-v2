@@ -1,0 +1,22 @@
+== GET /mqtt (Host: gateway)
+HTTP/1.1 404 Not Found
+server: istio-envoy
+content-length: 0
+== POST /certs/renew (Host: gateway)
+HTTP/1.1 404 Not Found
+server: istio-envoy
+content-length: 0
+== GET /healthz (Host: gateway)
+HTTP/1.1 404 Not Found
+server: istio-envoy
+content-length: 0
+== GET /healthz (Host: app)
+HTTP/1.1 200 OK
+content-type: application/json
+content-length: 15
+server: istio-envoy
+
+== GET / (Host: app)
+HTTP/1.1 404 Not Found
+server: istio-envoy
+content-length: 0

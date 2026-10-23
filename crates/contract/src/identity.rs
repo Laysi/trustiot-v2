@@ -43,6 +43,20 @@ pub struct InternalClaims {
     /// role. Absent means `false`.
     #[serde(default)]
     pub platform_admin: bool,
+    /// The actor (RFC 8693, section 4.1): the service that got this token from the identity
+    /// service's token exchange for a call on the user's behalf. Absent on the tokens the
+    /// identity service signs for the ingress gateway's requests. The exchange never exchanges a
+    /// token that has one, so a user's identity goes at most one service further than the
+    /// service the request was routed to (Laysi/trustiot-v2#106).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub act: Option<Actor>,
+}
+
+/// The `act` claim of an exchanged token: who acts for the user.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct Actor {
+    /// The service that exchanged the token it received, addressed to itself, for this one.
+    pub sub: ServiceName,
 }
 
 impl InternalClaims {
@@ -167,6 +181,7 @@ mod tests {
                 role: TenantRole::Editor,
             }),
             platform_admin: false,
+            act: None,
         }
     }
 

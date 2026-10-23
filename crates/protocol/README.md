@@ -147,6 +147,7 @@ Mosquitto 以 `use_identity_as_username` 把憑證 CN 當成 username，dynsec �
 2. 同一串流一次只送一批，收到確認才送下一批；確認逾時就原封不動重送同一批。
 3. 雲端以「topic 的閘道器 + 串流 ID」為單位記錄已提交的最高序號。只靠串流 ID 選高水位是錯的：閘道器可以自己取任何串流 ID。
 4. 雲端在整批落盤並寫入批次完成紀錄後才回 `committed`；序號不高於高水位的批次直接回 `duplicate`；永遠不可能接受的批次（解碼失敗、驗證失敗）回 `rejected`，雲端可用 `TelemetryBatch::peek_header` 從壞掉的 payload 取出串流與序號來回應。
+5. 緩衝的最長保存時間是 `telemetry::BUFFER_MAX_AGE_DAYS`（30 天，Laysi/trustiot-v2#92）：一批從形成起超過 30 天還沒收到確認，閘道器就丟棄它並記錄，丟棄的筆數進心跳的 `buffer`。雲端的原始資料保存期限一定比它長（migration Job 拒絕更短的設定），因為串流的高水位存在批次完成紀錄裡、與原始資料一起過期：雲端已提交、但確認遺失的批次，必須在它的完成紀錄過期前重送，否則會被寫入兩次。閘道器以哪個時鐘量測批次的年齡由 Laysi/trustiot-v2#90 決定，條件是時鐘往回調整不會讓批次留得比 30 天久。理由與數字的推導見 [資料保存期限](../../docs/architecture/data-retention.md)。
 
 `down/telemetry-ack` 的 `TelemetryAck`：`v`、`stream`、`seq`、`server_time`（雲端時鐘，閘道器可用來察覺自己的時鐘錯誤）與 `outcome`。`outcome` 是以 `status` 區分的 map：
 
@@ -178,7 +179,7 @@ Mosquitto 以 `use_identity_as_username` 把憑證 CN 當成 username，dynsec �
 | `models[].points[]` | 資料點：`key`、`function_code`（1–4，只讀）、`address`（0 起算的協定位址）、`data_type`（`bool`、`u16`、`i16`、`u32`、`i32`、`u64`、`i64`、`f32`、`f64`、`string`）、`byte_order`（`abcd` 預設省略、`badc`、`cdab`、`dcba`）、`length`（只有 `string`，1–125 個暫存器）、`scale`、`offset` |
 | `devices[]` | 設備：`id`、`model`、`transport`（`modbus_tcp` 或 `rtu_over_tcp`）、`host`（IP 或 DNS 名稱）、`port`、`unit_id`（RTU 為 1–247）、`poll_interval_ms`（100 ms–1 天）；最多 `MAX_DEVICES`（1000）台 |
 
-`DesiredConfig::validate` 集中了所有結構規則：型號與資料點鍵不重複、位址不重疊（四種功能碼各自的位址空間）、功能碼 1、2 只能是 `bool`、字串需要長度、不能超過位址 65535、scale 與 offset 必須是有限值且 scale 不為 0、同一個 host 與 port 不能混用兩種傳輸方式、設備引用的型號必須存在。資產服務（每次寫入）、設定產生器（發布前）與閘道器（套用前）執行同一套規則；`encode` 拒絕送出無效的設定。
+`DesiredConfig::validate` 集中了所有結構規則：型號與資料點鍵不重複、位址不重疊（四種功能碼各自的位址空間）、功能碼 1、2 只能是 `bool`、字串需要長度、不能超過位址 65535、scale 與 offset 必須是有限值且 scale 不為 0、同一個 host 與 port 不能混用兩種傳輸方式、設備引用的型號必須存在。資產服務（每次寫入）、設定產生器（發布前）與閘道器（套用前）執行同一套規則；`encode` 拒絕送出無效的設定。`config::validate_model_points`（與呼叫它的 `DeviceModel::validate`）對單一型號的資料點執行其中的資料點規則，issue 的路徑從型號起算（例如 `points[2].address`）：資產服務每次寫入型號都用它（Laysi/trustiot-v2#99），存下的型號因此一定通過設定的檢查。
 
 `MAX_DEVICES` 是協定能承載的上限：心跳要帶每台設備的統計且不能拆包，1000 台在最壞情況下仍放得進 1 MiB（`tests/limits.rs`）。每台閘道器實際的設備技術上限（清單 B2）由 Laysi/trustiot-v2#116 訂定，不得超過這個值。
 

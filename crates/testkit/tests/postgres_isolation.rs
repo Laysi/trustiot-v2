@@ -584,3 +584,80 @@ async fn a_table_with_one_row_per_tenant_is_attacked_too() {
         "the suite must fail with row-level security off:\n{failures}"
     );
 }
+
+/// A service that keeps and serves no tenant data (for example the certs service) exempts every
+/// relation and operation; `without_tenant_data` lets such a suite pass, only while nothing is
+/// declared to attack. Without it the suite fails ("nothing is declared"), and with it a tenant
+/// table the suite declares fails the run.
+#[tokio::test]
+async fn a_suite_without_tenant_data_passes_only_while_that_holds() {
+    const REASON: &str = "the service keeps public data only";
+    let Some(fixture) = Fixture::new(
+        "CREATE DATABASE testkit_no_tenant_data OWNER example_owner",
+        "testkit_no_tenant_data",
+    )
+    .await
+    else {
+        return;
+    };
+    let issuer = TestIssuer::new();
+
+    // The service role can still use example_items, a tenant table: the claim is false.
+    let wrong = Suite::new(SERVICE, &issuer, fixture.store())
+        .without_api("the database probes only")
+        .without_tenant_data(REASON)
+        .run(None)
+        .await;
+    println!("{wrong}");
+    assert!(
+        has_failure(
+            &wrong,
+            "suite | declarations | declared without tenant data"
+        ),
+        "a declared tenant table contradicts the claim:\n{}",
+        wrong.failures().join("\n")
+    );
+
+    // Now the service role reaches only a table without tenant data.
+    fixture
+        .as_owner(
+            "REVOKE ALL ON example_items FROM example_app;
+             CREATE TABLE example_catalogue (id integer PRIMARY KEY, name text NOT NULL);
+             GRANT SELECT ON example_catalogue TO example_app;",
+        )
+        .await;
+    let store = || {
+        PgStore::new(
+            fixture.postgres.options("example_owner", fixture.database),
+            fixture.postgres.options("example_app", fixture.database),
+        )
+        .exempt(
+            "public.example_catalogue",
+            "a shared catalogue, no tenant data",
+        )
+    };
+    let document = json!({
+        "openapi": "3.1.0",
+        "info": {"title": "example", "version": "0.1.0"},
+        "paths": {"/v1/catalogue": {"get": {}}}
+    });
+    let suite = || {
+        Suite::new(SERVICE, &issuer, store())
+            .openapi(document.clone())
+            .exempt_endpoint("GET /v1/catalogue", "the shared catalogue, no tenant data")
+    };
+
+    let undeclared = suite().run(None).await;
+    println!("{undeclared}");
+    assert!(
+        has_failure(
+            &undeclared,
+            "suite | declarations | nothing is declared, so nothing was tested"
+        ),
+        "{}",
+        undeclared.failures().join("\n")
+    );
+
+    let declared = suite().without_tenant_data(REASON).run(None).await;
+    declared.assert_isolated();
+}

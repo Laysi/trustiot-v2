@@ -7,7 +7,7 @@ import { tmpdir } from "node:os";
 import { isAbsolute, join } from "node:path";
 import { checkRenderedManifests } from "../../../scripts/ci/check-secret-handling.ts";
 import { routeListProblems, sampleRequests } from "./ingress-authz.ts";
-import type { PolicyRule, RouteRule } from "./ingress-authz.ts";
+import type { Exception, PolicyRule, RouteRule } from "./ingress-authz.ts";
 import { COMMAND_TIMEOUT_MS, SLOW_TEST_MS, throwIfTimedOut, useProcessTestTimeouts } from "./timing.ts";
 
 // Every test starts helm, and some also kubeconform: see timing.ts for the limits.
@@ -69,7 +69,8 @@ const EXTERNAL_MIGRATION = [
   "--set",
   "clickhouse.external.migrationSecret.name=trustiot-ch-migrate",
 ];
-// Ingress e2e overlay: identity, certs, mqtt-bridge and assets on, plus a catch-all cookie route.
+// Ingress e2e overlay: identity, certs, mqtt-bridge, assets and web (the SPA's static files) on,
+// plus a cookie route for /api.
 const E2E_VALUES = "tests/e2e/values-e2e.yaml";
 
 type YamlMap = { [key: string]: unknown };
@@ -81,7 +82,7 @@ type Manifest = YamlMap & {
 type Container = YamlMap & {
   name: string;
   image: string;
-  env?: { name: string; value?: string; valueFrom?: { secretKeyRef?: { name: string; key: string }; fieldRef?: { fieldPath: string } } }[];
+  env?: { name: string; value?: string; valueFrom?: { secretKeyRef?: { name: string; key: string; optional?: boolean }; fieldRef?: { fieldPath: string } } }[];
   envFrom?: { configMapRef?: { name: string } }[];
   ports?: { name: string; containerPort: number; hostPort?: number }[];
   volumeMounts?: YamlMap[];
@@ -213,9 +214,37 @@ function signingKeysSecretNames(manifests: Manifest[]): string[] {
     .map((c) => c.env?.find((e) => e.name === "TRUSTIOT__KEYS__SECRET")?.value ?? "(no TRUSTIOT__KEYS__SECRET)");
 }
 
+/**
+ * The certs service's issuing CA keys Secret, while the service is enabled: the Secret its init
+ * container `ca-keys` fills (Laysi/trustiot-v2#78).
+ */
+function caKeysSecretNames(manifests: Manifest[]): string[] {
+  return manifests
+    .filter((m) => m.kind === "Deployment" && m.metadata.labels?.["app.kubernetes.io/component"] === "certs")
+    .flatMap((m) => ((podSpec(m).initContainers ?? []) as Container[]).filter((c) => c.name === "ca-keys"))
+    .map((c) => c.env?.find((e) => e.name === "TRUSTIOT__KEYS__SECRET")?.value ?? "(no TRUSTIOT__KEYS__SECRET)");
+}
+
+/**
+ * The MQTT broker's accounts Secret, while the broker is enabled: the Secret its init container
+ * `accounts` fills with the cloud services' broker passwords (Laysi/trustiot-v2#84).
+ */
+function brokerAccountsSecretNames(manifests: Manifest[]): string[] {
+  return manifests
+    .filter((m) => m.kind === "StatefulSet" && m.metadata.labels?.["app.kubernetes.io/component"] === "mqtt-broker")
+    .flatMap((m) => ((podSpec(m).initContainers ?? []) as Container[]).filter((c) => c.name === "accounts"))
+    .map((c) => c.env?.find((e) => e.name === "TRUSTIOT__ACCOUNTS__SECRET")?.value ?? "(no TRUSTIOT__ACCOUNTS__SECRET)");
+}
+
 /** Every Secret a render must declare empty for tools/migrate to fill. */
 function passwordSecretNames(manifests: Manifest[]): string[] {
-  return [...jobPasswordSecretNames(manifests), ...adminPasswordSecretNames(manifests), ...signingKeysSecretNames(manifests)].sort();
+  return [
+    ...jobPasswordSecretNames(manifests),
+    ...adminPasswordSecretNames(manifests),
+    ...signingKeysSecretNames(manifests),
+    ...caKeysSecretNames(manifests),
+    ...brokerAccountsSecretNames(manifests),
+  ].sort();
 }
 
 function readYaml(relativePath: string): YamlMap {
@@ -355,6 +384,9 @@ describe("deployment shapes", () => {
     expect(config.TRUSTIOT_CLIENT_IP_SOURCE).toBe("cf-connecting-ip");
     expect(config.TRUSTIOT_QDRANT_URL).toBe("https://qdrant.saas.trustiot.test:6333");
     expect(config.SENTRY_ENVIRONMENT).toBe("test");
+    // smtp.credentialsSecret names a Secret: the relay needs an account, so the identity service
+    // reports a missing one (its reference to the Secret is optional).
+    expect(config.TRUSTIOT_SMTP_AUTH_REQUIRED).toBe("true");
   });
 
   test("on-prem: direct ingress, bundled Qdrant, customer SMTP, Sentry off", () => {
@@ -363,6 +395,8 @@ describe("deployment shapes", () => {
     expect(config.TRUSTIOT_CLIENT_IP_SOURCE).toBe("x-forwarded-for-rightmost");
     expect(config.TRUSTIOT_QDRANT_URL).toBeUndefined();
     expect(config.TRUSTIOT_SMTP_HOST).toBe("smtp.factory.test");
+    // The customer's relay takes mail without an account: no credentials Secret.
+    expect(config.TRUSTIOT_SMTP_AUTH_REQUIRED).toBeUndefined();
     expect(config.SENTRY_ENVIRONMENT).toBeUndefined();
   });
 
@@ -419,7 +453,7 @@ describe("secrets reach only the services that need them", () => {
     return Object.fromEntries(
       env.flatMap((e) => {
         const ref = e.valueFrom?.secretKeyRef;
-        return ref ? [[e.name, `${ref.name}/${ref.key}`]] : [];
+        return ref ? [[e.name, `${ref.name}/${ref.key}${ref.optional === true ? " (optional)" : ""}`]] : [];
       }),
     );
   };
@@ -439,8 +473,15 @@ describe("secrets reach only the services that need them", () => {
     ]);
     expect(secretRefs(manifests, "identity")).toEqual({
       SENTRY_DSN: "trustiot-sentry/dsn",
-      // Its own database password only, from its own Secret (the migration Job's tests).
+      // Its own database passwords only, from its own Secret (the migration Job's tests): the
+      // service role, and the platform role that reads the event log (Laysi/trustiot-v2#130).
       TRUSTIOT__DATABASE__PASSWORD: "trustiot-identity-password/identity_app",
+      TRUSTIOT__DATABASE__PLATFORM_PASSWORD: "trustiot-identity-password/identity_platform",
+      // The relay account for login codes: values.yaml lists `smtp` for identity. Optional, so
+      // a missing Secret does not keep the pod, and the ext_authz check, from starting; the
+      // service reports it (TRUSTIOT_SMTP_AUTH_REQUIRED). The only optional reference.
+      TRUSTIOT_SMTP_USERNAME: "trustiot-smtp/username (optional)",
+      TRUSTIOT_SMTP_PASSWORD: "trustiot-smtp/password (optional)",
     });
     expect(secretRefs(manifests, "knowledge")).toEqual({
       SENTRY_DSN: "trustiot-sentry/dsn",
@@ -871,7 +912,7 @@ describe("internal identity (decision 27, Laysi/trustiot-v2#61; keys generated i
     expect(JSON.stringify(podSpec(find(fresh, "Deployment", `${RELEASE}-identity`)))).not.toContain("LEGACY");
   });
 
-  test("no Role but the identity service's may write a ConfigMap or name its signing keys", () => {
+  test("no Role but the identity service's may write a ConfigMap or name its signing keys (the certs service's writes only its requests)", () => {
     // Every optional component on, as "with every optional component on" below does.
     const switchesOf = (node: unknown, path: string[] = []): string[] =>
       isMap(node)
@@ -895,7 +936,13 @@ describe("internal identity (decision 27, Laysi/trustiot-v2#61; keys generated i
           const resources = rule.resources ?? [];
           const writes = (rule.verbs ?? []).some((verb) => verb !== "get" && verb !== "list" && verb !== "watch");
           if (role.metadata.name === SIGNING_KEYS) continue;
-          expect({ role: role.metadata.name, writesConfigMaps: core && writes && resources.some((r) => r === "configmaps" || r === "*") }).toEqual({
+          // The certs service's Role patches the one ConfigMap it fills with certificate signing
+          // requests, by name ("gateway certificate authority" below).
+          const certsRequests =
+            role.metadata.name === `${RELEASE}-certs-ca-keys` &&
+            JSON.stringify(rule.resourceNames) === JSON.stringify([`${RELEASE}-certs-ca-requests`]) &&
+            resources.length === 1;
+          expect({ role: role.metadata.name, writesConfigMaps: core && writes && resources.some((r) => r === "configmaps" || r === "*") && !certsRequests }).toEqual({
             role: role.metadata.name,
             writesConfigMaps: false,
           });
@@ -910,19 +957,213 @@ describe("internal identity (decision 27, Laysi/trustiot-v2#61; keys generated i
   test("the identity service alone gets the cookie routes, with host names, to address its tokens", () => {
     const manifests = render(e2e, [
       "--set-json",
-      'ingress.routes=[{"host":"app","path":"/","match":"PathPrefix","service":"assets"},{"host":"gateway","path":"/api/certs","match":"Exact","service":"certs"}]',
+      'ingress.routes=[{"host":"app","path":"/api","match":"PathPrefix","service":"assets"},{"host":"gateway","path":"/api/certs","match":"Exact","service":"certs"}]',
     ]);
+    // Cookie routes only: the public paths and the SPA's static files get no token.
     expect(JSON.parse(envValue(manifests, "identity", "TRUSTIOT_INGRESS_ROUTES") ?? "null")).toEqual([
-      { host: "app.saas.trustiot.test", path: "/", match: "PathPrefix", service: "assets" },
+      { host: "app.saas.trustiot.test", path: "/api", match: "PathPrefix", service: "assets" },
       { host: "gw.saas.trustiot.test", path: "/api/certs", match: "Exact", service: "certs" },
     ]);
-    for (const service of ["assets", "certs", "mqtt-bridge"]) {
+    for (const service of ["assets", "certs", "mqtt-bridge", "web"]) {
       expect(envValue(manifests, service, "TRUSTIOT_INGRESS_ROUTES")).toBeUndefined();
     }
     expect(platformConfig(manifests).TRUSTIOT_INGRESS_ROUTES).toBeUndefined();
     // No cookie routes: an empty list, so the identity service starts and denies every check.
     const none = render([...SHAPES.saas, SMOKE], ["--set", "services.identity.enabled=true"]);
     expect(envValue(none, "identity", "TRUSTIOT_INGRESS_ROUTES")).toBe("[]");
+  });
+});
+
+describe("gateway certificate authority (decision 12, Laysi/trustiot-v2#78)", () => {
+  const KEYS = `${RELEASE}-certs-ca-keys`;
+  const REQUESTS = `${RELEASE}-certs-ca-requests`;
+  const CERTIFICATES = `${RELEASE}-certs-ca-certificates`;
+  const withCerts = ["--set", "services.certs.enabled=true"];
+  type Rule = { apiGroups?: string[]; resources?: string[]; resourceNames?: string[]; verbs?: string[] };
+  const cronPod = (cronJob: Manifest) =>
+    (cronJob.spec as { jobTemplate: { spec: { template: { spec: PodSpec } } } }).jobTemplate.spec.template.spec;
+  // Every pod template the chart renders; CloudNativePG's Cluster has none.
+  const podsOf = (manifests: Manifest[]) =>
+    manifests
+      .filter((m) => ["Deployment", "StatefulSet", "Job", "DaemonSet", "CronJob"].includes(m.kind))
+      .map((m) => ({ name: `${m.kind}/${m.metadata.name}`, pod: m.kind === "CronJob" ? cronPod(m) : podSpec(m) }));
+  // A stand-in for a certificate's DER in base64: "MII", a two-byte length, as a certificate has.
+  const certificate = (fill: string) => `MII${fill.repeat(149)}`;
+
+  test("while the certs service is off, nothing of the CA is rendered, but the values are checked", () => {
+    const others = plannedServices.filter((name) => name !== "certs").flatMap((name) => ["--set", `services.${name}.enabled=true`]);
+    const off = render([...SHAPES.saas, SMOKE], others);
+    expect(off.filter(isServiceDeployment).length).toBeGreaterThan(0);
+    expect(JSON.stringify(off)).not.toContain("certs-ca");
+    const result = helmTemplate(SHAPES.saas, ["--set", "certificateAuthority.keyGeneration=2", "--set", "certificateAuthority.removeKeysBeforeGeneration=3"]);
+    expect(result.code).not.toBe(0);
+    expect(result.stderr).toContain("certificateAuthority.keyGeneration (2) must not be below certificateAuthority.removeKeysBeforeGeneration (3)");
+  });
+
+  test("the certs pod's init container fills the keys Secret and the requests ConfigMap with a token only it mounts, and the Role names exactly those two", () => {
+    for (const migrate of ["true", "false"]) {
+      const manifests = render(SHAPES.saas, [...withCerts, "--set", `migrate.enabled=${migrate}`]);
+      const deployment = find(manifests, "Deployment", `${RELEASE}-certs`);
+      const pod = podSpec(deployment);
+      const inits = (pod.initContainers ?? []) as (Container & { args: string[] })[];
+      // First, before the wait for the migration Job: it needs no database.
+      expect(inits.map((c) => c.name)).toEqual(migrate === "true" ? ["ca-keys", "wait-for-migrations"] : ["ca-keys"]);
+      const init = inits[0] as Container & { args: string[] };
+      expect(init.image).toBe(`ghcr.io/laysi/trustiot-v2/migrate:${chart.appVersion}`);
+      expect(init.args).toEqual(["certs-ca-keys"]);
+      expect(init.env).toEqual([
+        { name: "TRUSTIOT__KEYS__API_URL", value: "https://kubernetes.default.svc" },
+        { name: "TRUSTIOT__KEYS__NAMESPACE", valueFrom: { fieldRef: { fieldPath: "metadata.namespace" } } },
+        { name: "TRUSTIOT__KEYS__TOKEN_FILE", value: "/var/run/secrets/trustiot/kube/token" },
+        { name: "TRUSTIOT__KEYS__CA_FILE", value: "/var/run/secrets/trustiot/kube/ca.crt" },
+        { name: "TRUSTIOT__KEYS__SECRET", value: KEYS },
+        { name: "TRUSTIOT__KEYS__CONFIG_MAP", value: REQUESTS },
+        { name: "TRUSTIOT__KEYS__GENERATION", value: "1" },
+        { name: "TRUSTIOT__KEYS__REMOVE_BEFORE_GENERATION", value: "0" },
+      ]);
+      expect(init.securityContext).toEqual(pod.containers[0]?.securityContext);
+      expect(init.volumeMounts).toEqual([{ name: "migrate-kube-api", mountPath: "/var/run/secrets/trustiot/kube", readOnly: true }]);
+      // No token in the service's own container.
+      expect(pod.automountServiceAccountToken).toBe(false);
+      for (const container of pod.containers) {
+        expect(JSON.stringify(container.volumeMounts ?? [])).not.toContain("migrate-kube-api");
+      }
+      // The Secret and the requests ConfigMap are declared without data, kept by Helm and filled
+      // by tools/migrate.
+      for (const [kind, name] of [
+        ["Secret", KEYS],
+        ["ConfigMap", REQUESTS],
+      ] as const) {
+        const declared = find(manifests, kind, name);
+        expect(Object.keys(declared).sort(), name).toEqual(kind === "Secret" ? ["apiVersion", "kind", "metadata", "type"] : ["apiVersion", "kind", "metadata"]);
+        expect(declared.metadata.labels?.["trustiot.io/filled-by"]).toBe("migrate");
+        expect(declared.metadata.labels?.["app.kubernetes.io/component"]).toBe("certs");
+        expect(declared.metadata.annotations?.["helm.sh/resource-policy"]).toBe("keep");
+      }
+      const role = find(manifests, "Role", KEYS) as Manifest & { rules: Rule[] };
+      expect(role.rules).toEqual([
+        { apiGroups: [""], resources: ["secrets"], resourceNames: [KEYS], verbs: ["get", "patch"] },
+        { apiGroups: [""], resources: ["configmaps"], resourceNames: [REQUESTS], verbs: ["get", "patch"] },
+      ]);
+      const binding = find(manifests, "RoleBinding", KEYS) as Manifest & { roleRef: unknown; subjects: unknown[] };
+      expect(binding.roleRef).toEqual({ apiGroup: "rbac.authorization.k8s.io", kind: "Role", name: KEYS });
+      expect(binding.subjects).toEqual([{ kind: "ServiceAccount", name: `${RELEASE}-certs`, namespace: NAMESPACE }]);
+    }
+  });
+
+  test("only the certs service mounts the issuing CA keys, read-only and mode 0440 in a group of its own, and no other Role or pod names them", () => {
+    const everything = [...enableAllServices, "--set", "observability.collector.enabled=true"];
+    for (const shape of SHAPE_NAMES) {
+      const manifests = render([...SHAPES[shape], SMOKE], everything);
+      const certs = podSpec(find(manifests, "Deployment", `${RELEASE}-certs`));
+      expect(certs.volumes).toContainEqual({
+        name: "certs-ca-keys",
+        secret: { secretName: KEYS, defaultMode: 0o440, optional: true, items: [{ key: "issuing-ca-keys.json", path: "issuing-ca-keys.json" }] },
+      });
+      expect(certs.volumes).toContainEqual({ name: "certs-ca-certificates", configMap: { name: CERTIFICATES } });
+      expect(certs.securityContext?.fsGroup).toBe(65533);
+      expect(certs.containers[0]?.volumeMounts).toEqual(
+        expect.arrayContaining([
+          { name: "certs-ca-keys", mountPath: "/etc/trustiot/certs-ca-keys", readOnly: true },
+          { name: "certs-ca-certificates", mountPath: "/etc/trustiot/certs-ca", readOnly: true },
+        ]),
+      );
+      expect((certs.containers[0]?.env ?? []).filter((e) => e.name.startsWith("TRUSTIOT__CA__"))).toEqual([
+        { name: "TRUSTIOT__CA__KEYS_FILE", value: "/etc/trustiot/certs-ca-keys/issuing-ca-keys.json" },
+        { name: "TRUSTIOT__CA__ROOT_CERTIFICATE_FILE", value: "/etc/trustiot/certs-ca/root.pem" },
+        { name: "TRUSTIOT__CA__CERTIFICATES_FILE", value: "/etc/trustiot/certs-ca/issuing.pem" },
+      ]);
+      // It uses Postgres (values.yaml mesh.calls): its own role and password.
+      expect((certs.containers[0]?.env ?? []).find((e) => e.name === "TRUSTIOT__DATABASE__USERNAME")?.value).toBe("certs_app");
+      for (const { name, pod } of podsOf(manifests)) {
+        if (name === `Deployment/${RELEASE}-certs`) continue;
+        expect(JSON.stringify(pod), name).not.toContain("certs-ca");
+        expect(pod.securityContext?.fsGroup, name).not.toBe(65533);
+      }
+      for (const role of manifests.filter((m) => (m.kind === "Role" || m.kind === "ClusterRole") && m.metadata.name !== KEYS)) {
+        expect(JSON.stringify(role), role.metadata.name).not.toContain("certs-ca");
+      }
+      // Nothing of the keys reaches a ConfigMap but their names.
+      for (const configMap of manifests.filter((m) => m.kind === "ConfigMap")) {
+        expect(JSON.stringify(configMap), configMap.metadata.name).not.toContain("issuing-ca-keys.json");
+      }
+    }
+  });
+
+  test("the root and issuing CA certificates come from the values as PEM, and only certificates do", () => {
+    const root = certificate("A");
+    const issuing = [certificate("B"), certificate("C")];
+    const manifests = render(SHAPES.saas, [
+      ...withCerts,
+      "--set",
+      `certificateAuthority.rootCertificate=${root}`,
+      "--set-json",
+      `certificateAuthority.issuingCertificates=${JSON.stringify(issuing)}`,
+    ]);
+    const data = (find(manifests, "ConfigMap", CERTIFICATES) as Manifest & { data: Record<string, string> }).data;
+    const pem = (der: string) => `-----BEGIN CERTIFICATE-----\n${(der.match(/.{1,64}/g) ?? []).join("\n")}\n-----END CERTIFICATE-----\n`;
+    expect(data).toEqual({ "root.pem": pem(root), "issuing.pem": issuing.map(pem).join("") });
+    // Before the ceremony both files are empty: the service starts but cannot sign.
+    const empty = (find(render(SHAPES.saas, withCerts), "ConfigMap", CERTIFICATES) as Manifest & { data: Record<string, string> }).data;
+    expect(empty).toEqual({ "root.pem": "", "issuing.pem": "" });
+  });
+
+  test("a private key, PEM text or too many certificates in the values fail the render, with or without the schema", () => {
+    // An EC private key's DER is shorter than a certificate's, so its base64 starts "MIG" or "MHc".
+    const pkcs8 = `MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQg${"A".repeat(40)}`;
+    const sec1 = `MHcCAQEEI${"A".repeat(43)}`;
+    for (const [what, args, schema, template] of [
+      ["a PKCS#8 key as the root", ["--set", `certificateAuthority.rootCertificate=${pkcs8}`], /rootCertificate/, /rootCertificate must be one certificate/],
+      ["a SEC 1 key among the issuing CAs", ["--set-json", `certificateAuthority.issuingCertificates=["${sec1}"]`], /issuingCertificates/, /issuingCertificates\[0\] must be one certificate/],
+      ["base64 of the wrong length", ["--set", `certificateAuthority.rootCertificate=${certificate("A")}A`], null, /rootCertificate must be one certificate/],
+      [
+        "five issuing CAs",
+        ["--set-json", `certificateAuthority.issuingCertificates=${JSON.stringify(["A", "B", "C", "D", "E"].map(certificate))}`],
+        /issuingCertificates/,
+        /holds more than 4 certificates/,
+      ],
+      ["a generation below the removal", ["--set", "certificateAuthority.keyGeneration=2", "--set", "certificateAuthority.removeKeysBeforeGeneration=3"], null, /must not be below/],
+    ] as const) {
+      const checked = helmTemplate(SHAPES.saas, [...withCerts, ...args]);
+      expect(checked.code, what).not.toBe(0);
+      if (schema) expect(checked.stderr, what).toMatch(schema);
+      const unchecked = helmTemplate(SHAPES.saas, [...withCerts, ...args, "--skip-schema-validation"]);
+      expect(unchecked.code, what).not.toBe(0);
+      expect(unchecked.stderr, what).toMatch(template);
+    }
+    // PEM text has line breaks, which no value may hold (templates/values-check.yaml).
+    const pemText = helmTemplate(SHAPES.saas, [
+      ...withCerts,
+      "--skip-schema-validation",
+      "--set-json",
+      `certificateAuthority.rootCertificate=${JSON.stringify(`-----BEGIN CERTIFICATE-----\n${certificate("A")}\n-----END CERTIFICATE-----`)}`,
+    ]);
+    expect(pemText.code).not.toBe(0);
+  }, SLOW_TEST_MS);
+
+  test("the certs container gets no token, and custom env can neither read the keys nor move the CA files", () => {
+    const token = helmTemplate(SHAPES.saas, [...withCerts, "--set", "services.certs.automountServiceAccountToken=true"]);
+    expect(token.code).not.toBe(0);
+    expect(token.stderr).toContain("services.certs.automountServiceAccountToken must be false");
+    for (const [service, env, expected] of [
+      ["assets", `[{"name":"STOLEN","valueFrom":{"secretKeyRef":{"name":"${KEYS}","key":"issuing-ca-keys.json"}}}]`, `env reads Secret ${KEYS}`],
+      ["certs", '[{"name":"TRUSTIOT__CA__KEYS_FILE","value":"/tmp/keys.json"}]', "env names must be unique"],
+      ["certs", '[{"name":"TRUSTIOT__CA__ROOT_CERTIFICATE_FILE","value":"/tmp/root.pem"}]', "env names must be unique"],
+    ] as const) {
+      const result = helmTemplate(SHAPES.saas, [...withCerts, "--set", `services.${service}.enabled=true`, "--set-json", `services.${service}.env=${env}`]);
+      expect(result.code, env).not.toBe(0);
+      expect(result.stderr, env).toContain(expected);
+    }
+  }, SLOW_TEST_MS);
+
+  test("raising keyGeneration restarts the certs pods with the new generation, and nothing else", () => {
+    const before = render(SHAPES.saas, [...withCerts, "--set", "services.identity.enabled=true"]);
+    const after = render(SHAPES.saas, [...withCerts, "--set", "services.identity.enabled=true", "--set", "certificateAuthority.keyGeneration=2"]);
+    const template = (manifests: Manifest[], name: string) => JSON.stringify((find(manifests, "Deployment", `${RELEASE}-${name}`).spec as YamlMap).template);
+    expect(template(after, "certs")).not.toBe(template(before, "certs"));
+    expect(template(after, "certs")).toContain('{"name":"TRUSTIOT__KEYS__GENERATION","value":"2"}');
+    expect(template(after, "identity")).toBe(template(before, "identity"));
+    expect(jobPasswordSecretNames(after)).toEqual(jobPasswordSecretNames(before));
   });
 });
 
@@ -1134,7 +1375,12 @@ describe("values reference Secrets by name only and hold no secret material", ()
             }
             if (!ref) continue;
             references += 1;
-            expect(Object.keys(ref).sort()).toEqual(["key", "name"]);
+            // By name and key only. The SMTP account's references are also optional, and only
+            // they: a missing Secret must not keep the identity service, and with it the ext_authz
+            // check, from starting (the service reports it, TRUSTIOT_SMTP_AUTH_REQUIRED).
+            const smtp = env.name.startsWith("TRUSTIOT_SMTP_");
+            expect(Object.keys(ref).sort(), env.name).toEqual(smtp ? ["key", "name", "optional"] : ["key", "name"]);
+            if (smtp) expect(ref.optional, env.name).toBe(true);
             expect(names).toContain(ref.name);
           }
         }
@@ -1600,6 +1846,325 @@ describe("bundled ClickHouse (decision 14)", () => {
   });
 });
 
+// tools/migrate/tests/mqtt_broker.rs runs the configuration, the probe and the files of the init
+// containers and the sidecar in the pinned image; these tests check that the chart deploys exactly
+// that, and the boundaries around it (README.md, "MQTT broker").
+describe("MQTT broker (decision 6, Laysi/trustiot-v2#84)", () => {
+  const NAME = `${RELEASE}-mqtt-broker`;
+  const ACCOUNTS = `${RELEASE}-mqtt-broker-accounts`;
+  const TLS = `${RELEASE}-mqtt-broker-tls`;
+  const TLS_DIR = "/etc/trustiot/mqtt-broker-tls";
+  const GATEWAY_PORT = 8883;
+  const SERVICE_PORT = 1883;
+  const brokerOn = ["--set", "mqttBroker.enabled=true"];
+  // The broker's callers in values.yaml's mesh.calls, and certs, which only calls it once it
+  // lists the broker there (Laysi/trustiot-v2#82).
+  const callers = ["ingest", "gateway-ops", "mqtt-bridge", "certs"].flatMap((name) => ["--set", `services.${name}.enabled=true`]);
+  const certsCalls = ["--set-json", 'mesh.calls.certs=["postgres","mqtt-broker"]'];
+  const manifests = render(SHAPES.saas, [...brokerOn, ...callers]);
+  const statefulSet = find(manifests, "StatefulSet", NAME);
+  const pod = podSpec(statefulSet) as PodSpec & { initContainers: Container[]; shareProcessNamespace?: boolean; nodeSelector?: Record<string, string> };
+  const containerOf = (spec: YamlMap, name: string) => {
+    const found = [...((spec.initContainers ?? []) as Container[]), ...((spec.containers ?? []) as Container[])].find((c) => c.name === name);
+    if (!found) throw new Error(`no container ${name}`);
+    return found as Container & { command?: string[]; args?: string[]; volumeMounts: YamlMap[] };
+  };
+  const broker = containerOf(pod, "mosquitto");
+  const brokerTest = readFileSync(join(REPO_ROOT, "tools/migrate/tests/mqtt_broker.rs"), "utf8");
+  const rustConst = (text: string, name: string) => text.match(new RegExp(`const ${name}: &str =\\s*"([^"]+)"`))?.[1] ?? `(no ${name})`;
+  const configOf = (rendered: Manifest[]) => (find(rendered, "ConfigMap", `${NAME}-config`).data as Record<string, string>)["mosquitto.conf"] ?? "";
+  const principal = (service: string) => `cluster.local/ns/${NAMESPACE}/sa/${RELEASE}-${service}`;
+  type Rule = { from: { source: { principals: string[] } }[]; to?: { operation: { ports: string[] } }[] };
+  type Peer = { podSelector?: { matchLabels: Record<string, string> }; ipBlock?: unknown };
+  const policyOf = (rendered: Manifest[], kind: "AuthorizationPolicy" | "NetworkPolicy", name = NAME) => find(rendered, kind, name).spec as YamlMap;
+  const principalsOfPolicy = (rendered: Manifest[], service: string) =>
+    ((policyOf(rendered, "AuthorizationPolicy", `${RELEASE}-${service}`).rules ?? []) as Rule[]).flatMap((rule) => rule.from.flatMap((from) => from.source.principals));
+  // The components whose pods the broker's NetworkPolicy admits, and whether any rule admits an address block.
+  const networkSources = (rendered: Manifest[]) => {
+    const rules = (policyOf(rendered, "NetworkPolicy").ingress ?? []) as { from?: Peer[]; ports?: unknown[] }[];
+    const peers = rules.flatMap((rule) => rule.from ?? []);
+    for (const rule of rules) expect(rule.ports).toEqual([{ port: 15008, protocol: "TCP" }]);
+    return {
+      components: peers.map((peer) => peer.podSelector?.matchLabels["app.kubernetes.io/component"] ?? "(not a pod)").sort(),
+      ipBlocks: peers.filter((peer) => peer.ipBlock !== undefined).length,
+    };
+  };
+  const cronPod = (cronJob: Manifest) =>
+    (cronJob.spec as { jobTemplate: { spec: { template: { spec: PodSpec } } } }).jobTemplate.spec.template.spec;
+  const podsOf = (rendered: Manifest[]) =>
+    rendered
+      .filter((m) => ["Deployment", "StatefulSet", "Job", "DaemonSet", "CronJob"].includes(m.kind))
+      .map((m) => ({ name: `${m.kind}/${m.metadata.name}`, pod: m.kind === "CronJob" ? cronPod(m) : podSpec(m) }));
+
+  test("off by default and in both deployment shapes: nothing of the broker renders", () => {
+    for (const shape of SHAPE_NAMES) {
+      expect((readYaml(SHAPES[shape][0]).mqttBroker as YamlMap | undefined)?.enabled, shape).toBeUndefined();
+      expect((readYaml(SHAPES[shape][1]).mqttBroker as YamlMap | undefined)?.enabled, shape).toBeUndefined();
+      const rendered = render(SHAPES[shape], enableAllServices);
+      expect(rendered.filter((m) => m.metadata.name.includes("mqtt-broker")).map((m) => `${m.kind}/${m.metadata.name}`), shape).toEqual([]);
+      // The services that list the broker in mesh.calls keep running; their calls to it are skipped.
+      expect(principalsOfPolicy(rendered, "certs"), shape).not.toContain(principal("mqtt-broker"));
+    }
+    expect((defaults.mqttBroker as YamlMap).enabled).toBe(false);
+  }, SLOW_TEST_MS);
+
+  test("the image is Mosquitto 2.1, pinned like the broker tests and the dev environment", () => {
+    expect(broker.image).toMatch(/^docker\.io\/library\/eclipse-mosquitto:2\.1\.\d+-alpine@sha256:[0-9a-f]{64}$/);
+    const protocolTest = readFileSync(join(REPO_ROOT, "crates/protocol/tests/broker.rs"), "utf8");
+    const stack = readFileSync(join(REPO_ROOT, "scripts/lib/stack.ts"), "utf8");
+    // Same tag and digest everywhere: Renovate reads each as one copy of the same pin and updates
+    // them in one pull request.
+    expect({
+      protocolTest: rustConst(protocolTest, "MOSQUITTO_IMAGE"),
+      brokerTest: rustConst(brokerTest, "MOSQUITTO_IMAGE"),
+      stack: stack.match(/mosquitto:\s*"([^"]+)"/)?.[1],
+    }).toEqual({ protocolTest: broker.image, brokerTest: broker.image, stack: broker.image });
+    // The image's own command, without the entrypoint script, as the broker tests run it.
+    expect(broker.command).toEqual(["/usr/sbin/mosquitto", "-c", "/mosquitto/config/mosquitto.conf"]);
+    expect(brokerTest).toContain(`exec ${broker.command?.join(" ")}`);
+  });
+
+  test("the configuration is the file the broker tests run, plus memory_limit at three quarters of the memory limit", () => {
+    const file = readFileSync(join(CHART_DIR, "files/mosquitto/mosquitto.conf"), "utf8");
+    expect(configOf(manifests)).toBe(`${file}${rustConst(brokerTest, "MEMORY_LIMIT")}\n`);
+    expect(rustConst(brokerTest, "MEMORY_LIMIT")).toBe("memory_limit 201326592");
+    expect(rustConst(brokerTest, "CONTAINER_MEMORY")).toBe("256m");
+    expect(broker.resources?.limits?.memory).toBe("256Mi");
+    const larger = render(SHAPES.saas, [...brokerOn, "--set", "mqttBroker.resources.limits.memory=1Gi"]);
+    expect(configOf(larger)).toBe(`${file}memory_limit 805306368\n`);
+    for (const limit of ["300M", "1.5Gi", "0Mi"]) {
+      for (const schema of [[], ["--skip-schema-validation"]]) {
+        const result = helmTemplate(SHAPES.saas, [...brokerOn, ...schema, "--set", `mqttBroker.resources.limits.memory=${limit}`]);
+        expect({ limit, schema, code: result.code }).toEqual({ limit, schema, code: 1 });
+        if (schema.length > 0) expect(result.stderr).toContain("mqttBroker.resources.limits.memory");
+      }
+    }
+    // A regular file from a subPath mount, read-only, as the issue requires (no symlink to follow).
+    expect(broker.volumeMounts).toContainEqual({ name: "config", mountPath: "/mosquitto/config/mosquitto.conf", subPath: "mosquitto.conf", readOnly: true });
+  }, SLOW_TEST_MS);
+
+  test("the probes run the broker tests' command on the probe socket: no TCP probe, no TLS handshake, no port for the node", () => {
+    const probe = rustConst(brokerTest, "PROBE");
+    for (const [kind, found] of [
+      ["startup", broker.startupProbe],
+      ["liveness", broker.livenessProbe],
+      ["readiness", broker.readinessProbe],
+    ] as const) {
+      const spec = found as { exec?: { command: string[] }; httpGet?: unknown; tcpSocket?: unknown; grpc?: unknown } | undefined;
+      expect({ kind, command: spec?.exec?.command.join(" ") }).toEqual({ kind, command: probe });
+      expect({ kind, other: [spec?.httpGet, spec?.tcpSocket, spec?.grpc].filter((x) => x !== undefined) }).toEqual({ kind, other: [] });
+    }
+    expect(probe).toContain("--unix /run/mosquitto/probe.sock");
+    expect(configOf(manifests)).toContain("\nlistener 0 /run/mosquitto/probe.sock\n");
+    expect(broker.volumeMounts).toContainEqual({ name: "run", mountPath: "/run/mosquitto" });
+    expect(pod.volumes).toContainEqual({ name: "run", emptyDir: { medium: "Memory", sizeLimit: "1Mi" } });
+    expect(networkSources(manifests).ipBlocks).toBe(0);
+  });
+
+  test.each(SHAPE_NAMES)("%s: reachable inside the cluster only: a ClusterIP Service, no host port, no ingress route", (shape) => {
+    const rendered = render([...SHAPES[shape], SMOKE], [...enableAllServices]);
+    const service = find(rendered, "Service", NAME).spec as { type: string; ports: YamlMap[]; externalIPs?: unknown; loadBalancerIP?: unknown };
+    expect(service.type).toBe("ClusterIP");
+    expect(service.ports.map((p) => [p.name, p.port, p.nodePort])).toEqual([
+      ["mqtt-gateways", GATEWAY_PORT, undefined],
+      ["mqtt-services", SERVICE_PORT, undefined],
+    ]);
+    expect(service.externalIPs).toBeUndefined();
+    expect(service.loadBalancerIP).toBeUndefined();
+    const brokerPod = podSpec(find(rendered, "StatefulSet", NAME)) as PodSpec & { hostNetwork?: unknown; hostPID?: unknown };
+    expect(brokerPod.hostNetwork).toBeUndefined();
+    expect(brokerPod.hostPID).toBeUndefined();
+    for (const port of brokerPod.containers.flatMap((c) => c.ports ?? [])) expect(port.hostPort).toBeUndefined();
+    // No route of any kind names the broker's Service, and none can be made to.
+    const routes = rendered.filter((m) => /Route$/.test(m.kind));
+    expect(routes.length).toBeGreaterThan(0);
+    expect(routes.filter((m) => JSON.stringify(m.spec).includes(`"${NAME}"`)).map((m) => m.metadata.name)).toEqual([]);
+    const routed = helmTemplate([...SHAPES[shape], SMOKE], ["--set-json", 'ingress.routes=[{"host":"app","path":"/mqtt","match":"PathPrefix","service":"mqtt-broker"}]']);
+    expect(routed.code).not.toBe(0);
+    expect(routed.stderr).toContain('service "mqtt-broker" is not enabled');
+  });
+
+  test("the mesh admits mqtt-bridge on the gateway port and the account holders on the service port, nobody else", () => {
+    const rendered = render(SHAPES.saas, [...brokerOn, ...callers, ...certsCalls]);
+    const policy = policyOf(rendered, "AuthorizationPolicy");
+    expect(policy.action).toBe("ALLOW");
+    expect(policy.rules as Rule[]).toEqual([
+      { from: [{ source: { principals: [principal("mqtt-bridge")] } }], to: [{ operation: { ports: [String(GATEWAY_PORT)] } }] },
+      {
+        from: [{ source: { principals: [principal("certs"), principal("gateway-ops"), principal("ingest")] } }],
+        to: [{ operation: { ports: [String(SERVICE_PORT)] } }],
+      },
+    ]);
+    // HBONE hides the destination port from a NetworkPolicy: it admits the same callers'
+    // pods, and ztunnel enforces the ports above. No address block: the probes need none.
+    expect(networkSources(rendered)).toEqual({ components: ["certs", "gateway-ops", "ingest", "mqtt-bridge"], ipBlocks: 0 });
+    // certs gets a broker account only once it lists the broker (Laysi/trustiot-v2#82).
+    expect(principalsOfPolicy(manifests, "mqtt-broker")).not.toContain(principal("certs"));
+    // A service that is not one of the broker's callers fails the render, so it cannot be let in
+    // by accident (and gets no account).
+    for (const caller of ["assets", "telemetry-query", "knowledge"]) {
+      const result = helmTemplate(SHAPES.saas, [...brokerOn, "--set", `services.${caller}.enabled=true`, "--set-json", `mesh.calls.${caller}=["mqtt-broker"]`]);
+      expect({ caller, code: result.code }).toEqual({ caller, code: 1 });
+      expect(result.stderr).toContain(`mesh.calls.${caller}: the MQTT broker admits only`);
+    }
+    // Without its callers, nobody: an ALLOW policy without rules refuses every connection.
+    const alone = render(SHAPES.saas, brokerOn);
+    expect(policyOf(alone, "AuthorizationPolicy").rules).toBeUndefined();
+    expect(policyOf(alone, "NetworkPolicy").ingress).toEqual([]);
+  }, SLOW_TEST_MS);
+
+  test("the broker reaches the certs service for the CA certificates and CRLs, only while both run", () => {
+    expect(principalsOfPolicy(manifests, "certs")).toContain(principal("mqtt-broker"));
+    const trustEnv = (rendered: Manifest[], name: string) => containerOf(podSpec(find(rendered, "StatefulSet", NAME)), name).env;
+    for (const name of ["trust-files", "trust"]) {
+      expect(trustEnv(manifests, name)).toEqual([
+        { name: "TRUSTIOT__TRUST__CERTS_URL", value: `http://${RELEASE}-certs.${NAMESPACE}.svc:8080` },
+        { name: "TRUSTIOT__TRUST__DIR", value: "/mosquitto/data/trust" },
+        { name: "TRUSTIOT__TRUST__TLS_DIR", value: TLS_DIR },
+        { name: "TRUSTIOT__TRUST__INTERVAL", value: "30s" },
+      ]);
+    }
+    // Without the certs service the broker trusts no gateway (tools/migrate's placeholder CA).
+    const withoutCerts = render(SHAPES.saas, [...brokerOn, "--set", "services.mqtt-bridge.enabled=true"]);
+    expect(trustEnv(withoutCerts, "trust")?.[0]).toEqual({ name: "TRUSTIOT__TRUST__CERTS_URL", value: "" });
+    expect(withoutCerts.some((m) => m.metadata.name === `${RELEASE}-certs`)).toBe(false);
+  });
+
+  test("the accounts: a token only the accounts init container mounts, a Role on the accounts Secret alone, an account per holder", () => {
+    expect(pod.initContainers.map((c) => c.name)).toEqual(["accounts", "trust-files"]);
+    expect(pod.containers.map((c) => c.name)).toEqual(["mosquitto", "trust"]);
+    const accounts = containerOf(pod, "accounts");
+    expect(accounts.image).toBe(`ghcr.io/laysi/trustiot-v2/migrate:${chart.appVersion}`);
+    expect(accounts.args).toEqual(["mqtt-broker-accounts"]);
+    expect(accounts.env).toEqual([
+      { name: "TRUSTIOT__ACCOUNTS__API_URL", value: "https://kubernetes.default.svc" },
+      { name: "TRUSTIOT__ACCOUNTS__NAMESPACE", valueFrom: { fieldRef: { fieldPath: "metadata.namespace" } } },
+      { name: "TRUSTIOT__ACCOUNTS__TOKEN_FILE", value: "/var/run/secrets/trustiot/kube/token" },
+      { name: "TRUSTIOT__ACCOUNTS__CA_FILE", value: "/var/run/secrets/trustiot/kube/ca.crt" },
+      { name: "TRUSTIOT__ACCOUNTS__SECRET", value: ACCOUNTS },
+      // The enabled account holders that list the broker: mqtt-bridge carries gateways and has no
+      // account, and certs does not list the broker by default.
+      { name: "TRUSTIOT__ACCOUNTS__SERVICES", value: "gateway-ops,ingest" },
+      { name: "TRUSTIOT__ACCOUNTS__GENERATION", value: "1" },
+      { name: "TRUSTIOT__ACCOUNTS__DYNSEC_FILE", value: "/mosquitto/data/dynamic-security.json" },
+    ]);
+    expect(accounts.volumeMounts).toEqual([
+      { name: "data", mountPath: "/mosquitto/data" },
+      { name: "migrate-kube-api", mountPath: "/var/run/secrets/trustiot/kube", readOnly: true },
+    ]);
+    for (const container of [...pod.initContainers, ...pod.containers].filter((c) => c.name !== "accounts")) {
+      expect({ container: container.name, token: JSON.stringify(container.volumeMounts ?? []).includes("migrate-kube-api") }).toEqual({ container: container.name, token: false });
+    }
+    expect(pod.automountServiceAccountToken).toBe(false);
+    expect(pod.serviceAccountName).toBe(NAME);
+    expect((find(manifests, "ServiceAccount", NAME) as Manifest & { automountServiceAccountToken?: boolean }).automountServiceAccountToken).toBe(false);
+    const role = find(manifests, "Role", NAME) as Manifest & { rules: unknown[] };
+    expect(role.rules).toEqual([{ apiGroups: [""], resources: ["secrets"], resourceNames: [ACCOUNTS], verbs: ["get", "patch"] }]);
+    const binding = find(manifests, "RoleBinding", NAME) as Manifest & { roleRef: unknown; subjects: unknown[] };
+    expect(binding.roleRef).toEqual({ apiGroup: "rbac.authorization.k8s.io", kind: "Role", name: NAME });
+    expect(binding.subjects).toEqual([{ kind: "ServiceAccount", name: NAME, namespace: NAMESPACE }]);
+    const declared = find(manifests, "Secret", ACCOUNTS);
+    expect(Object.keys(declared).sort()).toEqual(["apiVersion", "kind", "metadata", "type"]);
+    expect(declared.metadata.labels?.["trustiot.io/filled-by"]).toBe("migrate");
+    expect(declared.metadata.labels?.["app.kubernetes.io/component"]).toBe("mqtt-broker");
+    expect(declared.metadata.annotations?.["helm.sh/resource-policy"]).toBe("keep");
+    const withCerts = render(SHAPES.saas, [...brokerOn, ...callers, ...certsCalls]);
+    expect(containerOf(podSpec(find(withCerts, "StatefulSet", NAME)), "accounts").env?.find((e) => e.name === "TRUSTIOT__ACCOUNTS__SERVICES")?.value).toBe(
+      "certs,gateway-ops,ingest",
+    );
+  });
+
+  test("the server certificate: a Secret the chart never renders, mounted whole and read-only by the broker pod alone", () => {
+    expect(pod.volumes).toContainEqual({ name: "server-tls", secret: { secretName: TLS, defaultMode: 0o440 } });
+    const mount = { name: "server-tls", mountPath: TLS_DIR, readOnly: true };
+    for (const name of ["mosquitto", "trust-files", "trust"]) expect(containerOf(pod, name).volumeMounts).toContainEqual(mount);
+    expect(JSON.stringify(containerOf(pod, "accounts").volumeMounts)).not.toContain("server-tls");
+    // Never through subPath, which the kubelet does not update when the Secret changes.
+    for (const container of [...pod.initContainers, ...pod.containers]) {
+      for (const volumeMount of container.volumeMounts ?? []) {
+        if (volumeMount.name === "server-tls") expect(volumeMount.subPath).toBeUndefined();
+      }
+    }
+    expect(configOf(manifests)).toContain(`\ncertfile ${TLS_DIR}/tls.crt\nkeyfile ${TLS_DIR}/tls.key\n`);
+    const everything = render([...SHAPES.saas, SMOKE], [...enableAllServices, ...certsCalls]);
+    expect(everything.filter((m) => m.kind === "Secret").map((m) => m.metadata.name)).not.toContain(TLS);
+    // No other pod and no Role names the broker's Secrets.
+    for (const { name, pod: other } of podsOf(everything)) {
+      if (name === `StatefulSet/${NAME}`) continue;
+      expect({ name, names: JSON.stringify(other).includes(`${NAME}-`) }).toEqual({ name, names: false });
+    }
+    for (const role of everything.filter((m) => (m.kind === "Role" || m.kind === "ClusterRole") && m.metadata.name !== NAME)) {
+      expect(JSON.stringify(role), role.metadata.name).not.toContain(NAME);
+    }
+  }, SLOW_TEST_MS);
+
+  test("custom env of a service can read neither of the broker's Secrets", () => {
+    for (const [secret, key] of [
+      [ACCOUNTS, "ingest"],
+      [TLS, "tls.key"],
+    ]) {
+      const env = `[{"name":"STOLEN","valueFrom":{"secretKeyRef":{"name":"${secret}","key":"${key}"}}}]`;
+      const result = helmTemplate(SHAPES.saas, [...brokerOn, "--set", "services.ingest.enabled=true", "--set-json", `services.ingest.env=${env}`]);
+      expect({ secret, code: result.code }).toEqual({ secret, code: 1 });
+      expect(result.stderr).toContain(`env reads Secret ${secret}`);
+    }
+  }, SLOW_TEST_MS);
+
+  test("the pod: restricted Pod Security Standard, one user in every container, a shared process namespace for the reload signal, the ambient mesh", () => {
+    const template = (statefulSet.spec as { template: { metadata: { labels: Record<string, string> } } }).template;
+    expect(template.metadata.labels["istio.io/dataplane-mode"]).toBe("ambient");
+    expect(pod.securityContext).toEqual({ runAsNonRoot: true, runAsUser: 1883, runAsGroup: 1883, fsGroup: 1883, seccompProfile: { type: "RuntimeDefault" } });
+    // The trust sidecar signals the broker (tools/migrate/src/mqtt_trust.rs), which it may only
+    // as the same user: no container sets a user of its own.
+    expect(pod.shareProcessNamespace).toBe(true);
+    for (const container of [...pod.initContainers, ...pod.containers]) {
+      expect({ container: container.name, securityContext: container.securityContext }).toEqual({
+        container: container.name,
+        securityContext: { allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: { drop: ["ALL"] } },
+      });
+      if (container.name !== "mosquitto") expect(container.image).toBe(`ghcr.io/laysi/trustiot-v2/migrate:${chart.appVersion}`);
+      if (container.name !== "mosquitto") expect(container.ports).toBeUndefined();
+    }
+    expect(containerOf(pod, "trust-files").args).toEqual(["mqtt-broker-trust", "--once"]);
+    expect(containerOf(pod, "trust").args).toEqual(["mqtt-broker-trust"]);
+    // The init containers and the sidecar run the migration image, built for arm64 only.
+    expect(pod.nodeSelector).toEqual({ "kubernetes.io/arch": "arm64" });
+    const amd64 = helmTemplate(SHAPES.saas, [...brokerOn, "--set", "mqttBroker.nodeSelector.kubernetes\\.io/arch=amd64"]);
+    expect(amd64.code).not.toBe(0);
+    expect(amd64.stderr).toContain("mqttBroker.nodeSelector: kubernetes.io/arch must be arm64");
+    const spec = statefulSet.spec as YamlMap & { replicas: number; persistentVolumeClaimRetentionPolicy: unknown; volumeClaimTemplates: { metadata: { name: string; labels: Record<string, string> }; spec: YamlMap }[] };
+    expect(spec.replicas).toBe(1);
+    expect(spec.persistentVolumeClaimRetentionPolicy).toEqual({ whenDeleted: "Retain", whenScaled: "Retain" });
+    expect(spec.volumeClaimTemplates.map((claim) => claim.metadata.name)).toEqual(["data"]);
+    expect(Object.keys(spec.volumeClaimTemplates[0]?.metadata.labels ?? {})).not.toContain("helm.sh/chart");
+    expect(spec.volumeClaimTemplates[0]?.spec).toMatchObject({ accessModes: ["ReadWriteOnce"], resources: { requests: { storage: "1Gi" } } });
+  });
+
+  test("a new configuration, account holder or password generation restarts the broker, and nothing else", () => {
+    const template = (rendered: Manifest[], kind: string, name: string) => JSON.stringify((find(rendered, kind, name).spec as YamlMap).template);
+    const before = render(SHAPES.saas, [...brokerOn, ...callers]);
+    expect(template(before, "StatefulSet", NAME)).toBe(template(manifests, "StatefulSet", NAME));
+    for (const change of [
+      ["--set", "mqttBroker.resources.limits.memory=512Mi"],
+      ["--set", "mqttBroker.passwordGeneration=2"],
+      certsCalls,
+    ]) {
+      const after = render(SHAPES.saas, [...brokerOn, ...callers, ...change]);
+      expect({ change, restarted: template(after, "StatefulSet", NAME) !== template(before, "StatefulSet", NAME) }).toEqual({ change, restarted: true });
+      if (change !== certsCalls) {
+        for (const service of ["ingest", "gateway-ops", "mqtt-bridge", "certs"]) {
+          expect({ change, service, same: template(after, "Deployment", `${RELEASE}-${service}`) === template(before, "Deployment", `${RELEASE}-${service}`) }).toEqual({ change, service, same: true });
+        }
+      }
+    }
+    for (const generation of ["0x10", "1234567890", "-1"]) {
+      const result = helmTemplate(SHAPES.saas, [...brokerOn, "--skip-schema-validation", "--set-string", `mqttBroker.passwordGeneration=${generation}`]);
+      expect({ generation, code: result.code }).toEqual({ generation, code: 1 });
+      expect(result.stderr).toContain("mqttBroker.passwordGeneration");
+    }
+  }, SLOW_TEST_MS);
+});
+
 describe("bundled Postgres (CloudNativePG, Laysi/trustiot-v2#58)", () => {
   const cluster = `${RELEASE}-postgres`;
   type ClusterSpec = YamlMap & {
@@ -1628,7 +2193,7 @@ describe("bundled Postgres (CloudNativePG, Laysi/trustiot-v2#58)", () => {
     };
     return spec;
   };
-  const manifests = render([...SHAPES.saas, SMOKE], ["--set", "services.identity.enabled=true", "--set", "services.certs.enabled=true"]);
+  const manifests = render([...SHAPES.saas, SMOKE], ["--set", "services.identity.enabled=true", "--set", "services.mqtt-bridge.enabled=true"]);
 
   // deploy/images/postgres/Containerfile: `FROM ghcr.io/cloudnative-pg/postgresql:<major>.<minor>-...`
   // and `ARG AGE_VERSION=<version>`.
@@ -1751,7 +2316,7 @@ describe("bundled Postgres (CloudNativePG, Laysi/trustiot-v2#58)", () => {
     const policy = policyRules(manifests);
     expect(policy.podSelector.matchLabels).toEqual({ "cnpg.io/cluster": cluster, "cnpg.io/podRole": "instance" });
     expect(policy.policyTypes).toEqual(["Ingress"]);
-    // identity lists postgres under mesh.calls; certs does not.
+    // identity lists postgres under mesh.calls; mqtt-bridge does not.
     const pods = (component: string) => ({
       podSelector: { matchLabels: { "app.kubernetes.io/name": "trustiot", "app.kubernetes.io/instance": RELEASE, "app.kubernetes.io/component": component } },
     });
@@ -1807,7 +2372,7 @@ describe("bundled Postgres (CloudNativePG, Laysi/trustiot-v2#58)", () => {
     });
     expect(identity.containers[0]?.volumeMounts).toContainEqual({ name: "postgres-ca", mountPath: "/etc/trustiot/postgres-ca", readOnly: true });
     expect(identity.containers[0]?.env).toContainEqual({ name: "TRUSTIOT_POSTGRES_CA_FILE", value: "/etc/trustiot/postgres-ca/ca.crt" });
-    for (const name of ["certs", "smoke-echo"]) {
+    for (const name of ["mqtt-bridge", "smoke-echo"]) {
       const pod = JSON.stringify(podSpec(find(manifests, "Deployment", `${RELEASE}-${name}`)));
       expect(pod).not.toContain("postgres-ca");
       expect(pod).not.toContain("TRUSTIOT_POSTGRES_CA_FILE");
@@ -1999,7 +2564,7 @@ describe("migration Job (Laysi/trustiot-v2#60)", () => {
   const jobEnv = (manifests: Manifest[]): Env => jobSpec(manifests).template.spec.containers[0]?.env ?? [];
   const initContainers = (deployment: Manifest) => (podSpec(deployment).initContainers ?? []) as Container[];
   const envValue = (env: Env, name: string) => env.find((e) => e.name === name);
-  const withIdentity = ["--set", "services.identity.enabled=true", "--set", "services.certs.enabled=true"];
+  const withIdentity = ["--set", "services.identity.enabled=true", "--set", "services.mqtt-bridge.enabled=true"];
   const manifests = render(SHAPES.saas, withIdentity);
 
   test("one Job, named after a hash of its spec, runs the migrate image once, one pod at a time, with a token only its container mounts", () => {
@@ -2055,8 +2620,8 @@ describe("migration Job (Laysi/trustiot-v2#60)", () => {
       { name: "TRUSTIOT__PASSWORDS__CA_FILE", value: "/var/run/secrets/trustiot/kube/ca.crt" },
       { name: "TRUSTIOT__PASSWORDS__GENERATION", value: "1" },
       { name: "TRUSTIOT__PASSWORDS__CLICKHOUSE_COLLECTOR", value: `trustiot_collector=${COLLECTOR_SECRET}` },
-      // Only identity uses Postgres here (certs does not).
-      { name: "TRUSTIOT__PASSWORDS__POSTGRES", value: `identity_app=${IDENTITY_SECRET}` },
+      // Only identity uses Postgres here (mqtt-bridge does not).
+      { name: "TRUSTIOT__PASSWORDS__POSTGRES", value: `identity_app=${IDENTITY_SECRET},identity_platform=${IDENTITY_SECRET}` },
     ]);
     expect(envValue(env, "TRUSTIOT__WAIT__DATABASES")?.value).toBe("10m");
     expect(envValue(env, "TRUSTIOT__WAIT__LOCK")?.value).toBe("10m");
@@ -2211,7 +2776,8 @@ describe("migration Job (Laysi/trustiot-v2#60)", () => {
   });
 
   test("the Job's ServiceAccount may get and patch exactly its password Secrets and get the ClickHouse admin Secret, and no other Role but ClickHouse's touches Secrets", () => {
-    const everything = render(SHAPES.saas, [...enableAllServices, "--set-json", 'mesh.calls.telemetry-query=["postgres"]']);
+    const everything = render(SHAPES.saas, [...enableAllServices, "--set-json", 'mesh.calls.telemetry-query=["postgres"]', "--set", "mqttBroker.enabled=true"]);
+    expect(everything.some((m) => m.kind === "Role" && m.metadata.name === `${RELEASE}-mqtt-broker`)).toBe(true);
     for (const rendered of [manifests, everything]) {
       const fills = jobPasswordSecretNames(rendered);
       const role = find(rendered, "Role", `${RELEASE}-migrate`) as Manifest & {
@@ -2225,10 +2791,18 @@ describe("migration Job (Laysi/trustiot-v2#60)", () => {
       expect(binding.roleRef).toEqual({ apiGroup: "rbac.authorization.k8s.io", kind: "Role", name: `${RELEASE}-migrate` });
       expect(binding.subjects).toEqual([{ kind: "ServiceAccount", name: `${RELEASE}-migrate`, namespace: NAMESPACE }]);
       // Every Role of the chart: only the Job's, ClickHouse's (which names only the admin
-      // Secret, "bundled ClickHouse" above) and the identity service's (which names only its
-      // signing keys, "internal identity" above) may name secrets (or a wildcard), and no Role
-      // anywhere may create, list, watch, update or delete them.
-      const allowed = [`${RELEASE}-migrate`, `${RELEASE}-clickhouse`, `${RELEASE}-identity-signing-keys`];
+      // Secret, "bundled ClickHouse" above), the identity service's (which names only its
+      // signing keys, "internal identity" above), the certs service's (which names only its
+      // issuing CA keys, "gateway certificate authority" below) and the MQTT broker's (which
+      // names only its accounts Secret, "MQTT broker" below) may name secrets (or a wildcard),
+      // and no Role anywhere may create, list, watch, update or delete them.
+      const allowed = [
+        `${RELEASE}-migrate`,
+        `${RELEASE}-clickhouse`,
+        `${RELEASE}-identity-signing-keys`,
+        `${RELEASE}-certs-ca-keys`,
+        `${RELEASE}-mqtt-broker`,
+      ];
       for (const other of rendered.filter((m) => m.kind === "Role" || m.kind === "ClusterRole")) {
         const rules = (other as Manifest & { rules: { apiGroups?: string[]; resources?: string[]; verbs?: string[] }[] }).rules;
         const touches = rules.some((rule) => (rule.resources ?? []).some((r) => r === "secrets" || r === "*") && (rule.apiGroups ?? []).some((g) => g === "" || g === "*"));
@@ -2239,6 +2813,48 @@ describe("migration Job (Laysi/trustiot-v2#60)", () => {
       }
     }
     expect(passwordSecretNames(everything)).toContain(`${RELEASE}-telemetry-query-password`);
+  });
+
+  test("telemetry-query's ClickHouse account: the Job generates its password into the service's Secret, and only the service reads it", () => {
+    const secret = `${RELEASE}-telemetry-query-password`;
+    // Disabled (the default): no binding, so the Job keeps the account from logging in.
+    expect(jobEnv(manifests).map((e) => e.name)).not.toContain("TRUSTIOT__PASSWORDS__CLICKHOUSE_TELEMETRY_QUERY");
+    for (const shape of SHAPE_NAMES) {
+      const rendered = render(SHAPES[shape], [...withIdentity, "--set", "services.telemetry-query.enabled=true"]);
+      const env = jobEnv(rendered);
+      expect(env.find((e) => e.name === "TRUSTIOT__PASSWORDS__CLICKHOUSE_TELEMETRY_QUERY"), shape).toEqual({
+        name: "TRUSTIOT__PASSWORDS__CLICKHOUSE_TELEMETRY_QUERY",
+        value: `trustiot_telemetry_query=${secret}`,
+      });
+      expect(env.find((e) => e.name === "TRUSTIOT__PASSWORDS__CLICKHOUSE_COLLECTOR")?.value, shape).not.toContain(secret);
+      expect(env.find((e) => e.name === "TRUSTIOT__PASSWORDS__POSTGRES")?.value, shape).toContain(
+        `telemetry_query_app=${secret},telemetry_query_platform=${secret}`,
+      );
+      const tq = podSpec(find(rendered, "Deployment", `${RELEASE}-telemetry-query`)).containers[0] as Container;
+      expect(tq.env?.filter((e) => e.name.startsWith("TRUSTIOT__CLICKHOUSE__")), shape).toEqual([
+        { name: "TRUSTIOT__CLICKHOUSE__USERNAME", value: "trustiot_telemetry_query" },
+        { name: "TRUSTIOT__CLICKHOUSE__PASSWORD", valueFrom: { secretKeyRef: { name: secret, key: "trustiot_telemetry_query" } } },
+      ]);
+      // No other workload reads the account's password.
+      for (const other of rendered.filter((m) => m.kind === "Deployment" && m.metadata.name !== `${RELEASE}-telemetry-query`)) {
+        expect(JSON.stringify(other), other.metadata.name).not.toContain("trustiot_telemetry_query");
+      }
+    }
+    // Custom env cannot replace the account or read the Secret from another service.
+    for (const name of ["TRUSTIOT__CLICKHOUSE__USERNAME", "TRUSTIOT__CLICKHOUSE__PASSWORD"]) {
+      const result = helmTemplate(SHAPES.saas, [
+        ...withIdentity, "--set", "services.telemetry-query.enabled=true",
+        "--set-json", `services.telemetry-query.env=[{"name":"${name}","valueFrom":{"secretKeyRef":{"name":"elsewhere","key":"k"}}}]`,
+      ]);
+      expect(result.code, name).not.toBe(0);
+      expect(result.stderr, name).toContain(`env ${name} is set by the chart`);
+    }
+    const stolen = helmTemplate(SHAPES.saas, [
+      ...withIdentity, "--set", "services.telemetry-query.enabled=true",
+      "--set-json", `services.mqtt-bridge.env=[{"name":"STOLEN","valueFrom":{"secretKeyRef":{"name":"${secret}","key":"trustiot_telemetry_query"}}}]`,
+    ]);
+    expect(stolen.code).not.toBe(0);
+    expect(stolen.stderr).toContain(`env reads Secret ${secret}`);
   });
 
   test("external Postgres and ClickHouse: the Job uses their migration Secrets and CAs, which no service reads", () => {
@@ -2286,7 +2902,7 @@ describe("migration Job (Laysi/trustiot-v2#60)", () => {
         "--set", "clickhouse.external.caSecret.name=factory-clickhouse-ca",
         "--set", "clickhouse.external.migrationSecret.name=factory-clickhouse-migrate",
         "--set-json",
-        `services.certs.env=[{"name":"STOLEN","valueFrom":{"secretKeyRef":{"name":"${secret}","key":"${key}"}}}]`,
+        `services.mqtt-bridge.env=[{"name":"STOLEN","valueFrom":{"secretKeyRef":{"name":"${secret}","key":"${key}"}}}]`,
       ]);
       expect(result.code, secret).not.toBe(0);
       expect(result.stderr).toContain(`env reads Secret ${secret}`);
@@ -2298,18 +2914,27 @@ describe("migration Job (Laysi/trustiot-v2#60)", () => {
     expect(identity.env?.filter((e) => e.name.startsWith("TRUSTIOT__DATABASE__"))).toEqual([
       { name: "TRUSTIOT__DATABASE__USERNAME", value: "identity_app" },
       { name: "TRUSTIOT__DATABASE__PASSWORD", valueFrom: { secretKeyRef: { name: IDENTITY_SECRET, key: "identity_app" } } },
+      // identity keeps the event log, which reads events as its platform role (Laysi/trustiot-v2#130).
+      { name: "TRUSTIOT__DATABASE__PLATFORM_USERNAME", value: "identity_platform" },
+      { name: "TRUSTIOT__DATABASE__PLATFORM_PASSWORD", valueFrom: { secretKeyRef: { name: IDENTITY_SECRET, key: "identity_platform" } } },
     ]);
-    const certs = JSON.stringify(find(manifests, "Deployment", `${RELEASE}-certs`));
-    expect(certs).not.toContain("TRUSTIOT__DATABASE__");
-    expect(certs).not.toContain(IDENTITY_SECRET);
-    // A service name with "-" makes a role with "_".
-    const telemetry = render(SHAPES.saas, ["--set", "services.telemetry-query.enabled=true", "--set-json", 'mesh.calls.telemetry-query=["postgres"]']);
+    const bridge = JSON.stringify(find(manifests, "Deployment", `${RELEASE}-mqtt-bridge`));
+    expect(bridge).not.toContain("TRUSTIOT__DATABASE__");
+    expect(bridge).not.toContain(IDENTITY_SECRET);
+    // A service name with "-" makes a role with "_"; telemetry-query's platform role logs in too
+    // (it consumes the identity service's events).
+    const telemetry = render(SHAPES.saas, ["--set", "services.telemetry-query.enabled=true"]);
     const tq = podSpec(find(telemetry, "Deployment", `${RELEASE}-telemetry-query`)).containers[0] as Container;
     expect(tq.env?.filter((e) => e.name.startsWith("TRUSTIOT__DATABASE__"))).toEqual([
       { name: "TRUSTIOT__DATABASE__USERNAME", value: "telemetry_query_app" },
       {
         name: "TRUSTIOT__DATABASE__PASSWORD",
         valueFrom: { secretKeyRef: { name: `${RELEASE}-telemetry-query-password`, key: "telemetry_query_app" } },
+      },
+      { name: "TRUSTIOT__DATABASE__PLATFORM_USERNAME", value: "telemetry_query_platform" },
+      {
+        name: "TRUSTIOT__DATABASE__PLATFORM_PASSWORD",
+        valueFrom: { secretKeyRef: { name: `${RELEASE}-telemetry-query-password`, key: "telemetry_query_platform" } },
       },
     ]);
     // Custom env cannot read another consumer's password Secret, in any key, nor replace the
@@ -2318,7 +2943,7 @@ describe("migration Job (Laysi/trustiot-v2#60)", () => {
       [`[{"name":"STOLEN","valueFrom":{"secretKeyRef":{"name":"${IDENTITY_SECRET}","key":"identity_app"}}}]`, `env reads Secret ${IDENTITY_SECRET}`],
       [`[{"name":"STOLEN","valueFrom":{"secretKeyRef":{"name":"${COLLECTOR_SECRET}","key":"other"}}}]`, `env reads Secret ${COLLECTOR_SECRET}`],
     ] as const) {
-      const result = helmTemplate(SHAPES.saas, [...withIdentity, "--set-json", `services.certs.env=${env}`]);
+      const result = helmTemplate(SHAPES.saas, [...withIdentity, "--set-json", `services.mqtt-bridge.env=${env}`]);
       expect(result.code, env).not.toBe(0);
       expect(result.stderr, env).toContain(expected);
     }
@@ -2333,14 +2958,14 @@ describe("migration Job (Laysi/trustiot-v2#60)", () => {
     }
   });
 
-  test("a service whose platform role logs in (assets) gets both passwords from its one Secret, and the Job fills both keys", () => {
+  test("a service whose platform role logs in (assets, identity) gets both passwords from its one Secret, and the Job fills both keys", () => {
     // Laysi/trustiot-v2#65: an outbox consumer reads its producers' events as its platform role,
     // so the chart binds <schema>_platform too ("trustiot.migrate.platformLogins"), in the same
     // Secret; tools/migrate/tests/registry.rs keeps that list in line with the registry.
     const ASSETS_SECRET = `${RELEASE}-assets-password`;
     const both = render(SHAPES.saas, [...withIdentity, "--set", "services.assets.enabled=true"]);
     expect(envValue(jobEnv(both), "TRUSTIOT__PASSWORDS__POSTGRES")?.value).toBe(
-      `assets_app=${ASSETS_SECRET},assets_platform=${ASSETS_SECRET},identity_app=${IDENTITY_SECRET}`,
+      `assets_app=${ASSETS_SECRET},assets_platform=${ASSETS_SECRET},identity_app=${IDENTITY_SECRET},identity_platform=${IDENTITY_SECRET}`,
     );
     // One Secret per consumer, however many keys it holds, and the Job's Role names each once.
     // (ClickHouse's admin Secret is the init container's, and the Job's Role only reads it.)
@@ -2359,9 +2984,12 @@ describe("migration Job (Laysi/trustiot-v2#60)", () => {
       { name: "TRUSTIOT__DATABASE__PLATFORM_USERNAME", value: "assets_platform" },
       { name: "TRUSTIOT__DATABASE__PLATFORM_PASSWORD", valueFrom: { secretKeyRef: { name: ASSETS_SECRET, key: "assets_platform" } } },
     ]);
-    // identity's platform role exists for platform-wide events but logs in with nothing.
+    // identity's platform role logs in too, with its own Secret (Laysi/trustiot-v2#130).
     const identity = podSpec(find(both, "Deployment", `${RELEASE}-identity`)).containers[0] as Container;
-    expect(JSON.stringify(identity.env)).not.toContain("PLATFORM_");
+    expect(identity.env?.filter((e) => e.name.startsWith("TRUSTIOT__DATABASE__PLATFORM_"))).toEqual([
+      { name: "TRUSTIOT__DATABASE__PLATFORM_USERNAME", value: "identity_platform" },
+      { name: "TRUSTIOT__DATABASE__PLATFORM_PASSWORD", valueFrom: { secretKeyRef: { name: IDENTITY_SECRET, key: "identity_platform" } } },
+    ]);
     expect(JSON.stringify(identity)).not.toContain(ASSETS_SECRET);
     // The service's platform login is the chart's too, and no other service may read its Secret.
     for (const name of ["TRUSTIOT__DATABASE__PLATFORM_USERNAME", "TRUSTIOT__DATABASE__PLATFORM_PASSWORD"]) {
@@ -2433,7 +3061,7 @@ describe("migration Job (Laysi/trustiot-v2#60)", () => {
     const binding = find(manifests, "RoleBinding", `${RELEASE}-migrate-status`) as Manifest & { roleRef: unknown; subjects: unknown[] };
     expect(binding.roleRef).toEqual({ apiGroup: "rbac.authorization.k8s.io", kind: "Role", name: `${RELEASE}-migrate-status` });
     expect(binding.subjects).toEqual(
-      ["certs", "identity", "otel-collector"].map((name) => ({ kind: "ServiceAccount", name: `${RELEASE}-${name}`, namespace: NAMESPACE })),
+      ["identity", "mqtt-bridge", "otel-collector"].map((name) => ({ kind: "ServiceAccount", name: `${RELEASE}-${name}`, namespace: NAMESPACE })),
     );
     expect(manifests.filter((m) => m.kind === "ClusterRole" || m.kind === "ClusterRoleBinding")).toEqual([]);
     // Without services and without the collector there is nobody to bind and nothing for the Job
@@ -2487,7 +3115,7 @@ describe("migration Job (Laysi/trustiot-v2#60)", () => {
     // A service's own settings, or the image of a service that does not use Postgres, do not run
     // the Job again.
     expect(name(["--set", "services.identity.replicas=2"])).toBe(base);
-    expect(name(["--set", `services.certs.image.digest=sha256:${"2".repeat(64)}`])).toBe(base);
+    expect(name(["--set", `services.mqtt-bridge.image.digest=sha256:${"2".repeat(64)}`])).toBe(base);
     for (const change of [
       ["--set", "migrate.revision=2"],
       // A new image of a service that uses Postgres, a digest-only hotfix too: the service waits
@@ -2528,7 +3156,7 @@ describe("migration Job (Laysi/trustiot-v2#60)", () => {
       expect(initContainers(identity)[0]?.image).toBe("ghcr.io/laysi/trustiot-v2/migrate:9.9.9");
     }
     // A service that does not use Postgres, or a chart without the Job, is not held to it.
-    expect(helmTemplate(SHAPES.saas, [...withIdentity, "--set", "services.certs.image.tag=9.9.9"]).code).toBe(0);
+    expect(helmTemplate(SHAPES.saas, [...withIdentity, "--set", "services.mqtt-bridge.image.tag=9.9.9"]).code).toBe(0);
     expect(
       helmTemplate(SHAPES.saas, [...withIdentity, "--set", "services.identity.image.tag=9.9.9", "--set", "migrate.enabled=false"]).code,
     ).toBe(0);
@@ -2986,6 +3614,13 @@ describe("ingress gateway (decision 27)", () => {
     ],
   } as const;
   const withBackends = (shape: Shape, args: string[] = []) => render([...SHAPES[shape], E2E_VALUES], args);
+  // hosts.app of the shape's instance overlay, where the SPA's static files are served.
+  const appHost = (shape: Shape) => PUBLIC_PATHS[shape][0][0];
+  // The SPA's static files off: the e2e overlay and enableAllServices turn them on.
+  const WEB_OFF = ["--set", "services.web.enabled=false"];
+  // The paths of hosts.app that keep the cookie check while the SPA is on (templates/_ingress.tpl).
+  const COOKIE_PREFIXES = ["/api", "/auth"];
+  const underCookiePrefix = (path: string) => COOKIE_PREFIXES.some((prefix) => path === prefix || path.startsWith(`${prefix}/`));
 
   function rules(manifests: Manifest[]) {
     return manifests
@@ -3099,7 +3734,8 @@ describe("ingress gateway (decision 27)", () => {
   });
 
   test.each(SHAPE_NAMES)("%s: public paths are exact, strip the identity header and skip the cookie check only on their host", (shape) => {
-    const manifests = withBackends(shape);
+    // Without the SPA's static files, as every install before Laysi/trustiot-v2#123 renders.
+    const manifests = withBackends(shape, WEB_OFF);
     const rendered = rules(manifests);
     const publicRules = rendered.filter(({ rule }) => strips(rule));
     expect(
@@ -3137,6 +3773,78 @@ describe("ingress gateway (decision 27)", () => {
     for (const { rule } of cookieRules) {
       expect(modifier(rule).remove).toEqual(UNDERSCORE_SPELLINGS);
       expect(exempt).not.toContain(rule.matches[0]?.path.value);
+    }
+  });
+
+  test.each(SHAPE_NAMES)("%s: with the SPA, every other path on hosts.app is its static files, without the cookie check, the Cookie or the identity header", (shape) => {
+    const manifests = withBackends(shape);
+    const app = appHost(shape);
+    const rendered = rules(manifests);
+    const statics = rendered.filter(({ rule }) => (modifier(rule).remove ?? []).includes("cookie"));
+    expect(statics.map(({ host, rule }) => ({ host, matches: rule.matches, backendRefs: rule.backendRefs }))).toEqual([
+      { host: app, matches: [{ path: { type: "PathPrefix", value: "/" } }], backendRefs: [{ name: `${RELEASE}-web`, port: 8080 }] },
+    ]);
+    // The web service holds neither the session cookie nor an identity, in any spelling.
+    expect(modifier(statics[0]?.rule as HttpRouteRule).remove).toEqual(["cookie", "x-internal-identity", ...UNDERSCORE_SPELLINGS]);
+    // The public paths keep their exact routes and lose only the identity header; no cookie
+    // route of hosts.app lies outside the cookie prefixes.
+    const others = rendered.filter((r) => !statics.includes(r));
+    expect(
+      others.filter(({ rule }) => strips(rule)).map(({ host, rule }) => [host, rule.matches[0]?.path.value, rule.backendRefs[0]?.name]).sort(),
+    ).toEqual(PUBLIC_PATHS[shape].map((p) => [...p]).sort());
+    const appCookieRoutes = others.filter(({ host, rule }) => host === app && !strips(rule));
+    expect(appCookieRoutes.length).toBeGreaterThan(0);
+    for (const { rule } of appCookieRoutes) expect(underCookiePrefix(rule.matches[0]?.path.value ?? "")).toBe(true);
+    // Rule 1 checks every other host as without the SPA, rule 2 the cookie prefixes and /internal
+    // on every host, and one more rule per public path checks it on any other host; a public path
+    // outside the prefixes reaches the static files on hosts.app, so it is not checked there.
+    const exempt = PUBLIC_PATHS[shape].map(([, path]) => path).sort();
+    const check = policy(manifests, "cookie-check");
+    expect(check.rules).toEqual([
+      { to: [{ operation: { notHosts: withPorts([app]), notPaths: exempt } }] },
+      { to: [{ operation: { paths: ["/api", "/api/*", "/auth", "/auth/*", "/internal*"], notPaths: exempt } }] },
+      ...exempt.map((path) => {
+        const hosts = PUBLIC_PATHS[shape].filter(([, p]) => p === path).map(([host]) => host as string);
+        return { to: [{ operation: { paths: [path], notHosts: withPorts([...new Set(underCookiePrefix(path) ? hosts : [...hosts, app])].sort()) } }] };
+      }),
+    ]);
+  });
+
+  test("with the SPA, a cookie route on hosts.app outside /api and /auth, a cookie route to web, or a host named like hosts.app fails to render", () => {
+    const withRoutes = (routes: object[], args: string[] = []) =>
+      helmTemplate([...SHAPES.saas, E2E_VALUES], [...args, "--set-json", `ingress.routes=${JSON.stringify(routes)}`]);
+    const outside =
+      "while services.web is enabled, every path on hosts.app outside /api and /auth is the SPA's static files, so a cookie route there must be one of them or below one";
+    for (const [path, match] of [["/", "PathPrefix"], ["/apix", "PathPrefix"], ["/authz", "Exact"], ["/settings", "PathPrefix"], ["/healthz/details", "Exact"]]) {
+      const refused = withRoutes([{ host: "app", path: "/api", match: "PathPrefix", service: "assets" }, { host: "app", path, match, service: "assets" }]);
+      expect(refused.code).not.toBe(0);
+      expect(refused.stderr).toContain(`ingress.routes[1]: ${outside}`);
+      // Without the SPA, the same route is the host's own.
+      expect(withRoutes([{ host: "app", path, match, service: "assets" }], WEB_OFF).code).toBe(0);
+    }
+    // The prefixes themselves, paths below them, and other hosts' paths render.
+    const allowed = withRoutes([
+      { host: "app", path: "/api", match: "Exact", service: "assets" },
+      { host: "app", path: "/api/assets", match: "PathPrefix", service: "assets" },
+      { host: "app", path: "/auth", match: "PathPrefix", service: "identity" },
+      { host: "app", path: "/auth/logout", match: "Exact", service: "identity" },
+      { host: "gateway", path: "/", match: "PathPrefix", service: "certs" },
+      { host: "ota", path: "/", match: "PathPrefix", service: "certs" },
+    ]);
+    expect(allowed.stderr).toBe("");
+    expect(allowed.code).toBe(0);
+    const toWeb = withRoutes([{ host: "app", path: "/api/web", match: "PathPrefix", service: "web" }]);
+    expect(toWeb.code).not.toBe(0);
+    expect(toWeb.stderr).toContain(
+      "ingress.routes[0]: web serves only the SPA's static files, which need neither the session cookie nor an internal identity, so it gets no cookie route",
+    );
+    // The exemption of hosts.app would cover every route of a host with the same name.
+    for (const host of ["gateway", "ota"]) {
+      const same = helmTemplate([...SHAPES.saas, E2E_VALUES], ["--set", `hosts.${host}=app.saas.trustiot.test`]);
+      expect(same.code).not.toBe(0);
+      expect(same.stderr).toContain(
+        `hosts.${host}: must differ from hosts.app while services.web is enabled, because every path on hosts.app outside /api and /auth skips the cookie check`,
+      );
     }
   });
 
@@ -3192,6 +3900,23 @@ describe("ingress gateway (decision 27)", () => {
     { host: "ota", path: "/", match: "PathPrefix", service: "gateway-ops" },
     { host: "ota", path: "/mqtt", match: "Exact", service: "mqtt-bridge" },
   ];
+  // The same overlaps with the SPA's static files on: cookie routes on hosts.app only under the
+  // cookie prefixes, and the public paths' backends also routed on the other hosts.
+  const ROUTE_LIST_SPA = [
+    { host: "app", path: "/api", match: "PathPrefix", service: "assets" },
+    { host: "app", path: "/api/identity", match: "PathPrefix", service: "identity" },
+    { host: "app", path: "/api/mqtt", match: "Exact", service: "mqtt-bridge" },
+    { host: "app", path: "/auth", match: "PathPrefix", service: "identity" },
+    { host: "app", path: "/auth/login/details", match: "Exact", service: "identity" },
+    { host: "gateway", path: "/", match: "PathPrefix", service: "gateway-ops" },
+    { host: "gateway", path: "/api", match: "PathPrefix", service: "certs" },
+    { host: "gateway", path: "/certs", match: "PathPrefix", service: "certs" },
+    { host: "gateway", path: "/healthz", match: "Exact", service: "certs" },
+    { host: "gateway", path: "/auth/login", match: "Exact", service: "certs" },
+    { host: "ota", path: "/", match: "PathPrefix", service: "gateway-ops" },
+    { host: "ota", path: "/mqtt", match: "Exact", service: "mqtt-bridge" },
+    { host: "ota", path: "/static", match: "PathPrefix", service: "assets" },
+  ];
   // What the nightly smoke adds for its API check (scripts/nightly/api.ts, API_ROUTES).
   const SMOKE_API = [
     "--set", "services.identity.enabled=true",
@@ -3202,9 +3927,12 @@ describe("ingress gateway (decision 27)", () => {
     ])}`,
   ];
   const ROUTE_LIST_CASES = SHAPE_NAMES.flatMap((shape) => [
-    { name: `${shape}: every service, routes that overlap the exceptions`, shape, files: SHAPES[shape], args: [...enableAllServices, "--set-json", `ingress.routes=${JSON.stringify(ROUTE_LIST)}`] },
+    { name: `${shape}: every service, routes that overlap the exceptions`, shape, files: SHAPES[shape], args: [...enableAllServices, ...WEB_OFF, "--set-json", `ingress.routes=${JSON.stringify(ROUTE_LIST)}`] },
+    { name: `${shape}: every service and the SPA, routes that overlap the exceptions`, shape, files: SHAPES[shape], args: [...enableAllServices, "--set-json", `ingress.routes=${JSON.stringify(ROUTE_LIST_SPA)}`] },
     { name: `${shape}: the nightly smoke with its API routes`, shape, files: [...SHAPES[shape], SMOKE], args: SMOKE_API },
+    { name: `${shape}: the nightly smoke with its API routes and the SPA`, shape, files: [...SHAPES[shape], SMOKE], args: [...SMOKE_API, "--set", "services.web.enabled=true"] },
     { name: `${shape}: the ingress e2e overlay`, shape, files: [...SHAPES[shape], E2E_VALUES], args: [] },
+    { name: `${shape}: the ingress e2e overlay without the SPA`, shape, files: [...SHAPES[shape], E2E_VALUES], args: WEB_OFF },
   ]).concat([{ name: "saas: the service-to-service e2e overlay", shape: "saas", files: [...SHAPES.saas, E2E_VALUES, "tests/e2e/values-mesh-e2e.yaml"], args: [] }]);
 
   test.each(ROUTE_LIST_CASES.map((c) => [c.name, c] as const))(
@@ -3222,14 +3950,26 @@ describe("ingress gateway (decision 27)", () => {
         public: strips(rule),
         backend: rule.backendRefs[0]?.name ?? "",
       }));
-      // Decision 27's exceptions whose backend this render runs: the others are neither routed nor exempt.
+      // Decision 27's exceptions whose backend this render runs: the others are neither routed nor
+      // exempt. With the SPA, every path of hosts.app outside the cookie prefixes is one more.
       const running = new Set(manifests.filter((m) => m.kind === "Deployment").map((m) => m.metadata.name));
-      const exceptions = PUBLIC_PATHS[shape].filter(([, , backend]) => running.has(backend)).map(([hostname, path]) => ({ hostname, path }));
+      const exceptions: Exception[] = PUBLIC_PATHS[shape].filter(([, , backend]) => running.has(backend)).map(([hostname, path]) => ({ hostname, path }));
+      if (running.has(`${RELEASE}-web`)) exceptions.push({ hostname: appHost(shape), outside: COOKIE_PREFIXES });
       expect(exceptions.length).toBeGreaterThan(0);
       const check = policy(manifests, "cookie-check");
       expect(check.action).toBe("CUSTOM");
+      const deny = policy(manifests, "deny-internal");
+      expect(deny.action).toBe("DENY");
+      // The proof lets the identity service refuse a checked request no cookie route matches; it
+      // matches the cookie routes it is given, and those are exactly the rendered ones.
+      if (running.has(`${RELEASE}-identity`)) {
+        const given = podSpec(find(manifests, "Deployment", `${RELEASE}-identity`)).containers[0]?.env?.find((e) => e.name === "TRUSTIOT_INGRESS_ROUTES")?.value;
+        expect((JSON.parse(given ?? "null") as { host: string; path: string; match: string }[]).map((r) => `${r.host} ${r.match} ${r.path}`).sort()).toEqual(
+          routes.filter((r) => !r.public).map((r) => `${r.hostname} ${r.match} ${r.path}`).sort(),
+        );
+      }
       const ports = [shape === "saas" ? 80 : 443, 8443];
-      expect(routeListProblems(routes, check.rules as PolicyRule[], exceptions, ports)).toEqual([]);
+      expect(routeListProblems(routes, check.rules as PolicyRule[], exceptions, ports, deny.rules as PolicyRule[])).toEqual([]);
       // Not a vacuous pass: the render has cookie routes, and each exception has its route.
       expect(routes.filter((r) => !r.public).length).toBeGreaterThan(0);
       expect(routes.filter((r) => r.public).length).toBe(exceptions.length);
@@ -3314,7 +4054,8 @@ describe("ingress gateway (decision 27)", () => {
     expect(http.statusOnError).toBe("503");
     expect(String(http.timeout)).toMatch(/^0\.\d+s$/);
     expect(http.pathPrefix).toBe("/internal/ext-authz");
-    expect(http.includeRequestHeadersInCheck).toEqual(["cookie"]);
+    // The cookie, and the headers of the identity service's cross-site request check (CSRF).
+    expect(http.includeRequestHeadersInCheck).toEqual(["cookie", "origin", "sec-fetch-site"]);
     expect(http.headersToUpstreamOnAllow).toEqual(["x-internal-identity"]);
     // The identity service of the release "trustiot" in namespace "trustiot" (README.md).
     const identity = find(render(SHAPES.saas, ["--set", "services.identity.enabled=true"]), "Service", `${RELEASE}-identity`);
@@ -3334,7 +4075,7 @@ describe("ingress gateway (decision 27)", () => {
 type MeshPolicy = {
   selector: { matchLabels: Record<string, string> };
   action: string;
-  rules?: { from: { source: { principals: string[] } }[] }[];
+  rules?: { from: { source: { principals: string[] } }[]; to?: { operation: { ports: string[] } }[] }[];
 };
 type NetworkPolicyPeer = { podSelector?: { matchLabels: Record<string, string> }; ipBlock?: { cidr: string } };
 type NetworkPolicySpec = {
@@ -3361,12 +4102,16 @@ describe("service-to-service authorization (decision 27)", () => {
   // serviceDefaults.probes), which serves nothing else; their API listens on http.
   const HEALTH_PORT = 8081;
   const API_PORT = 8080;
+  // The identity service's token exchange listens on a port of its own (Laysi/trustiot-v2#106).
+  const EXCHANGE_PORT = 8082;
+  // An identity AuthorizationPolicy rule: these principals, on this port only.
+  const identityRule = (port: number, principals: string[]) => ({ from: [{ source: { principals } }], to: [{ operation: { ports: [String(port)] } }] });
   // Test stand-ins that run traefik/whoami, which listens on http only, so their overlays probe
   // http. The identity double (identity in the e2e overlay) listens on the health port like a
   // TrustIoT service.
   const WHOAMI_STAND_INS: Record<string, string[]> = {
     [SMOKE]: ["smoke-echo"],
-    [E2E_VALUES]: ["assets", "certs", "mqtt-bridge"],
+    [E2E_VALUES]: ["assets", "certs", "mqtt-bridge", "web"],
   };
   const standInsOf = (overlays: readonly string[]) => new Set(overlays.flatMap((overlay) => WHOAMI_STAND_INS[overlay] ?? []));
   // Bundled ClickHouse probes /ping on its HTTP port; the native protocol (9000) stays closed.
@@ -3427,16 +4172,22 @@ describe("service-to-service authorization (decision 27)", () => {
     }
   });
 
-  test("the call list and the ingress routes generate one AuthorizationPolicy per service", () => {
+  test("the call list and the ingress routes generate one AuthorizationPolicy per service, and one for the token exchange", () => {
     const manifests = withCalls();
     const sa = (service: string) => principal(`${RELEASE}-${service}`);
     // Callers from mesh.calls first (sorted), then the ingress gateway where it routes or, for
-    // identity, where it sends the cookie check (ext_authz).
+    // identity, where it sends the cookie check (ext_authz), on its API port only. The services
+    // that call another one on behalf of users reach the identity service through the token
+    // exchange's own policy, on the exchange's port only (Laysi/trustiot-v2#106): assets (certs,
+    // alerts) and identity itself (assets).
     const expected: Record<string, string[]> = {
       identity: [principal(GATEWAY_SA)],
+      "identity-exchange": [sa("assets"), sa("identity")],
       assets: [sa("identity"), principal(GATEWAY_SA)],
       certs: [sa("assets"), principal(GATEWAY_SA)],
       "mqtt-bridge": [principal(GATEWAY_SA)],
+      // The SPA's static files: the gateway only, like a public path.
+      web: [principal(GATEWAY_SA)],
       alerts: [sa("assets")],
       knowledge: [],
     };
@@ -3448,13 +4199,19 @@ describe("service-to-service authorization (decision 27)", () => {
     for (const [service, principals] of Object.entries(expected)) {
       const policy = meshPolicy(manifests, service);
       expect(policy.action).toBe("ALLOW");
-      // The selector picks exactly this service's pods.
+      // The selector picks exactly this service's pods; the token exchange's, the identity
+      // service's.
+      const workload = service === "identity-exchange" ? "identity" : service;
       for (const deployment of manifests.filter((m) => m.kind === "Deployment")) {
-        expect(selects(policy.selector.matchLabels, podLabels(deployment))).toBe(serviceOf(deployment.metadata.name) === service);
+        expect(selects(policy.selector.matchLabels, podLabels(deployment))).toBe(serviceOf(deployment.metadata.name) === workload);
       }
       if (principals.length === 0) {
         // An ALLOW policy without rules refuses every connection.
         expect(policy.rules).toBeUndefined();
+      } else if (service === "identity") {
+        expect(policy.rules).toEqual([identityRule(API_PORT, principals)]);
+      } else if (service === "identity-exchange") {
+        expect(policy.rules).toEqual([identityRule(EXCHANGE_PORT, principals)]);
       } else {
         expect(policy.rules).toEqual([{ from: [{ source: { principals } }] }]);
       }
@@ -3464,7 +4221,7 @@ describe("service-to-service authorization (decision 27)", () => {
   test.each(SHAPE_NAMES)("%s: each service's NetworkPolicy admits HBONE from the same callers, and kubelet probes", (shape) => {
     const manifests = withCalls(shape);
     const services = manifests.filter((m) => m.kind === "Deployment").map((d) => serviceOf(d.metadata.name));
-    expect(services.length).toBe(6);
+    expect(services.length).toBe(7);
     for (const service of services) {
       const spec = networkPolicy(manifests, service);
       for (const deployment of manifests.filter((m) => m.kind === "Deployment")) {
@@ -3499,11 +4256,147 @@ describe("service-to-service authorization (decision 27)", () => {
     expect(manifests.some((m) => m.metadata.name === `${RELEASE}-knowledge`)).toBe(false);
   });
 
+  describe("calls on behalf of users (decision 27, Laysi/trustiot-v2#106)", () => {
+    const envOf = (manifests: Manifest[], workload: string) =>
+      podSpec(find(manifests, "Deployment", `${RELEASE}-${workload}`)).containers[0]?.env ?? [];
+    const onBehalfCalls = (manifests: Manifest[]) => {
+      const value = envOf(manifests, "identity").find((e) => e.name === "TRUSTIOT_ON_BEHALF_CALLS")?.value;
+      if (value === undefined) throw new Error("the identity service has no TRUSTIOT_ON_BEHALF_CALLS");
+      return JSON.parse(value) as Record<string, string[]>;
+    };
+
+    test("the identity service exchanges along mesh.calls between enabled services, and every such caller reaches it", () => {
+      const calls = {
+        // Two services and Postgres: only the services are calls on behalf of users.
+        assets: ["certs", "alerts", "postgres"],
+        // ai-gateway verifies no internal identity (decision 28): the mesh alone authorizes calls
+        // to it, and it holds no user's token to exchange.
+        assistant: ["ai-gateway", "knowledge"],
+        "ai-gateway": ["knowledge"],
+        // In-cluster components are no service APIs.
+        ingest: ["clickhouse"],
+        // Disabled services on either side are skipped, as in the mesh plan.
+        "gateway-ops": ["certs"],
+        certs: ["field-context"],
+      };
+      const enable = ["alerts", "knowledge", "assistant", "ai-gateway", "ingest"].flatMap((s) => ["--set", `services.${s}.enabled=true`]);
+      for (const shape of SHAPE_NAMES) {
+        const manifests = render([...SHAPES[shape], E2E_VALUES], [...enable, "--set-json", `mesh.calls=${JSON.stringify(calls)}`]);
+        expect(onBehalfCalls(manifests)).toEqual({ assets: ["alerts", "certs"], assistant: ["knowledge"] });
+        // Both layers of the token exchange admit exactly these callers, on the exchange's port
+        // only; the identity service's own policies admit the ingress gateway's cookie check, on
+        // the API port only. The NetworkPolicies see HBONE only, so they split the callers, not
+        // the ports.
+        expect(meshPolicy(manifests, "identity-exchange").rules).toEqual([
+          identityRule(EXCHANGE_PORT, [principal(`${RELEASE}-assets`), principal(`${RELEASE}-assistant`)]),
+        ]);
+        expect(meshPolicy(manifests, "identity").rules).toEqual([identityRule(API_PORT, [principal(GATEWAY_SA)])]);
+        const exchangeNetwork = networkPolicy(manifests, "identity-exchange");
+        expect(exchangeNetwork.podSelector.matchLabels).toEqual(networkPolicy(manifests, "identity").podSelector.matchLabels);
+        expect(hboneSources(manifests, exchangeNetwork)).toEqual({ services: ["assets", "assistant"], gateway: false });
+        // HBONE only: the kubelet's probes are the identity service's own NetworkPolicy's.
+        expect(exchangeNetwork.ingress).toHaveLength(1);
+        expect(hboneSources(manifests, networkPolicy(manifests, "identity"))).toEqual({ services: [], gateway: true });
+        // The call list is the identity service's alone: other services and the shared platform
+        // settings never see it.
+        for (const deployment of manifests.filter(isServiceDeployment)) {
+          if (deployment.metadata.name === `${RELEASE}-identity`) continue;
+          expect(envOf(manifests, serviceOf(deployment.metadata.name)).map((e) => e.name)).not.toContain("TRUSTIOT_ON_BEHALF_CALLS");
+        }
+        expect(platformConfig(manifests).TRUSTIOT_ON_BEHALF_CALLS).toBeUndefined();
+      }
+    });
+
+    test("a caller listed in mesh.calls for the identity service itself reaches both ports, each through its own policies", () => {
+      const manifests = render([...SHAPES.saas, E2E_VALUES], ["--set-json", 'mesh.calls={"assets":["identity","certs"]}']);
+      expect(onBehalfCalls(manifests)).toEqual({ assets: ["certs", "identity"] });
+      expect(meshPolicy(manifests, "identity").rules).toEqual([identityRule(API_PORT, [principal(`${RELEASE}-assets`), principal(GATEWAY_SA)])]);
+      expect(meshPolicy(manifests, "identity-exchange").rules).toEqual([identityRule(EXCHANGE_PORT, [principal(`${RELEASE}-assets`)])]);
+      expect(hboneSources(manifests, networkPolicy(manifests, "identity"))).toEqual({ services: ["assets"], gateway: true });
+      expect(hboneSources(manifests, networkPolicy(manifests, "identity-exchange"))).toEqual({ services: ["assets"], gateway: false });
+    });
+
+    // M2 of the 2026-10-21 security review: the cookie check (ext_authz) and the token exchange
+    // never share a grant. Each has its own Service, AuthorizationPolicy and NetworkPolicy.
+    test.each(SHAPE_NAMES)("%s: the token exchange has its own Service, and the identity service's Service leaves its port out", (shape) => {
+      for (const args of [enableAllServices, [...enableAllServices, "--set-json", 'mesh.calls={"assets":["certs"]}']]) {
+        const manifests = render(SHAPES[shape], args);
+        const ports = (name: string) =>
+          (find(manifests, "Service", `${RELEASE}-${name}`).spec as { ports: { name: string; port: number; targetPort: string }[] }).ports.map((p) => [p.name, p.port, p.targetPort]);
+        expect(ports("identity")).toEqual([["http", API_PORT, "http"]]);
+        expect(ports("identity-exchange")).toEqual([["token-exchange", EXCHANGE_PORT, "token-exchange"]]);
+        const exchange = find(manifests, "Service", `${RELEASE}-identity-exchange`);
+        expect((exchange.spec as { selector: Record<string, string> }).selector).toEqual(
+          (find(manifests, "Service", `${RELEASE}-identity`).spec as { selector: Record<string, string> }).selector,
+        );
+        expect((exchange.spec as { type: string }).type).toBe("ClusterIP");
+        // Its own component label, so the identity service still has one Service of its component.
+        expect(exchange.metadata.labels?.["app.kubernetes.io/component"]).toBe("identity-exchange");
+        const container = podSpec(find(manifests, "Deployment", `${RELEASE}-identity`)).containers[0];
+        expect(container?.ports?.find((p) => p.name === "token-exchange")?.containerPort).toBe(EXCHANGE_PORT);
+      }
+    });
+
+    test.each(SHAPE_NAMES)("%s: without calls on behalf of users the token exchange's policies admit nobody", (shape) => {
+      const manifests = render(SHAPES[shape], enableAllServices);
+      expect(meshPolicy(manifests, "identity-exchange").rules).toBeUndefined();
+      expect(networkPolicy(manifests, "identity-exchange").ingress).toEqual([]);
+      // The identity service's own policy keeps the gateway on its API port.
+      expect(meshPolicy(manifests, "identity").rules).toEqual([identityRule(API_PORT, [principal(GATEWAY_SA)])]);
+    });
+
+    test("without the identity service there is no token exchange", () => {
+      const manifests = render(SHAPES.saas, []);
+      expect(manifests.some((m) => m.metadata.name === `${RELEASE}-identity-exchange`)).toBe(false);
+    });
+
+    test.each(SHAPE_NAMES)("%s: the default values list no call on behalf of users", (shape) => {
+      expect(onBehalfCalls(render(SHAPES[shape], enableAllServices))).toEqual({});
+    });
+
+    // README.md, "呼叫矩陣": the callers of every workload with the default values and every
+    // service enabled, so the documented matrix is the rendered one. A change to the default
+    // mesh.calls, public paths or ingress.routes updates the table in the same change.
+    test.each(SHAPE_NAMES)("%s: README.md's call matrix is what the default values render", (shape) => {
+      const readme = readFileSync(join(CHART_DIR, "README.md"), "utf8");
+      const section = readme.split("#### 呼叫矩陣")[1]?.split(/\n#{2,4} /)[0] ?? "";
+      const EVERY_SERVICE = "每個啟用的服務";
+      const NOT_A_SERVICE = "—";
+      const names = (cell: string) =>
+        cell === "（無）" || cell === NOT_A_SERVICE
+          ? []
+          : cell === EVERY_SERVICE
+            ? [...plannedServices]
+            : cell.split("、").map((name) => /^`([a-z-]+)`$/.exec(name)?.[1] ?? `unparsed ${name}`);
+      const rows = section
+        .split("\n")
+        .filter((line) => line.startsWith("| `"))
+        .map((line) => line.split("|").slice(1, -1).map((cell) => cell.trim()));
+      expect(rows.length).toBeGreaterThan(0);
+      const documented = Object.fromEntries(rows.map(([callee = "", callers = "", onBehalf = ""]) => [callee.replaceAll("`", ""), { callers: names(callers).sort(), onBehalf: names(onBehalf).sort(), service: onBehalf !== NOT_A_SERVICE }]));
+
+      const manifests = render(SHAPES[shape], enableAllServices);
+      const exchanges = onBehalfCalls(manifests);
+      const rendered = Object.fromEntries(
+        manifests
+          .filter((m) => m.kind === "AuthorizationPolicy" && (m.spec as MeshPolicy).action === "ALLOW")
+          .map((m) => {
+            const callee = serviceOf(m.metadata.name);
+            const callers = principalsOf(m.spec as MeshPolicy).map((p) => serviceOf(p.split("/sa/")[1] ?? "")).sort();
+            const onBehalf = Object.entries(exchanges).filter(([, callees]) => callees.includes(callee)).map(([caller]) => caller).sort();
+            return [callee, { callers, onBehalf, service: plannedServices.includes(callee) }];
+          }),
+      );
+      expect(documented).toEqual(rendered);
+    });
+  });
+
   test("with the default empty call list only the ingress gateway reaches its backends and the identity service", () => {
     const manifests = render(SHAPES.saas, enableAllServices);
     for (const service of plannedServices) {
-      // Public paths keep identity, certs and mqtt-bridge reachable from the gateway.
-      const expected = ["identity", "certs", "mqtt-bridge"].includes(service) ? [principal(GATEWAY_SA)] : [];
+      // Public paths keep identity, certs and mqtt-bridge reachable from the gateway, and the
+      // SPA's static files keep web.
+      const expected = ["identity", "certs", "mqtt-bridge", "web"].includes(service) ? [principal(GATEWAY_SA)] : [];
       expect(principalsOf(meshPolicy(manifests, service))).toEqual(expected);
       expect(networkPolicy(manifests, service).ingress?.length).toBe(expected.length > 0 ? 2 : 1);
     }
@@ -3524,10 +4417,16 @@ describe("service-to-service authorization (decision 27)", () => {
         expect(manifest.metadata.labels?.["istio.io/use-waypoint"]).toBeUndefined();
         if (manifest.kind === "Gateway") expect((manifest.spec as { gatewayClassName: string }).gatewayClassName).toBe("istio");
         if (manifest.kind === "AuthorizationPolicy" && !manifest.metadata.name.startsWith(`${RELEASE}-ingress-`)) {
-          // Workload selector and source principals only: no targetRefs and no L7 conditions.
+          // Workload selector, source principals and, for the identity service's port split,
+          // destination ports only, all L4: no targetRefs and no L7 conditions.
           const spec = manifest.spec as MeshPolicy & { targetRefs?: unknown };
           expect(spec.targetRefs).toBeUndefined();
-          expect(JSON.stringify(spec.rules ?? [])).not.toMatch(/"(to|when)"/);
+          for (const rule of spec.rules ?? []) {
+            expect(JSON.stringify(rule.from)).not.toMatch(/"(to|when)"/);
+            expect(Object.keys(rule).sort()).toEqual(rule.to ? ["from", "to"] : ["from"]);
+            for (const to of rule.to ?? []) expect(Object.keys(to)).toEqual(["operation"]);
+            for (const to of rule.to ?? []) expect(Object.keys(to.operation)).toEqual(["ports"]);
+          }
         }
       }
       for (const deployment of manifests.filter((m) => m.kind === "Deployment")) {
@@ -3699,12 +4598,12 @@ describe("service-to-service authorization (decision 27)", () => {
         expect({ label, rules }).toEqual({ label, rules: [hostRule(HEALTH_PORT)] });
         expect({ label, nodePorts }).toEqual({ label, nodePorts: [HEALTH_PORT] });
         const [container] = podSpec(workload).containers;
+        // The identity service also serves its token exchange on a port of its own, which has a
+        // Service of its own (Laysi/trustiot-v2#106).
+        const servedPorts: [string, number][] = service === "identity" ? [["http", API_PORT], ["token-exchange", EXCHANGE_PORT]] : [["http", API_PORT]];
         expect({ label, ports: container?.ports?.map(({ name: port, containerPort }) => ({ name: port, containerPort })) }).toEqual({
           label,
-          ports: [
-            { name: "http", containerPort: API_PORT },
-            { name: "health", containerPort: HEALTH_PORT },
-          ],
+          ports: [...servedPorts.map(([port, containerPort]) => ({ name: port, containerPort })), { name: "health", containerPort: HEALTH_PORT }],
         });
         for (const probe of [container?.startupProbe, container?.livenessProbe, container?.readinessProbe]) {
           expect({ label, port: (probe as Probe | undefined)?.httpGet?.port }).toEqual({ label, port: "health" });
@@ -3928,6 +4827,8 @@ describe("values validation rejects unsafe or incomplete settings", () => {
       ["--set-json", 'smtp.from="a@factory.test\\r\\nBcc: x@evil.test"'],
       /\/smtp\/from/,
     ],
+    // The identity service cannot send login codes without a sender (Laysi/trustiot-v2#103).
+    ["SMTP relay without a sender", onprem, ["--set", "smtp.from="], /\/smtp\/from/],
     ["root user allowed", saas, ["--set", "serviceDefaults.podSecurityContext.runAsNonRoot=false"], /runAsNonRoot/],
     [
       "privilege escalation allowed",
@@ -4622,6 +5523,33 @@ describe("the templates keep the secret and env boundaries without schema valida
       /services\.identity-key-rotation: the name belongs to the CronJob/,
     ],
     [
+      "a service named after the token exchange's Service and policies",
+      ["--set", "services.identity-exchange.enabled=true"],
+      /services\.identity-exchange: the name belongs to the identity service's token exchange/,
+    ],
+    [
+      "calls on behalf of users while the identity service has no token-exchange port",
+      [
+        "--set",
+        "services.identity.enabled=true",
+        "--set-json",
+        'services.identity.ports=[{"name":"http","containerPort":8080}]',
+        "--set",
+        "services.assets.enabled=true",
+        "--set",
+        "services.certs.enabled=true",
+        "--set-json",
+        'mesh.calls={"assets":["certs"]}',
+      ],
+      /services\.identity\.ports: the token exchange needs the port named token-exchange .* because assets call other services on behalf of users/,
+    ],
+    [
+      "an identity service with the token-exchange port only",
+      ["--set", "services.identity.enabled=true", "--set-json", 'services.identity.ports=[{"name":"token-exchange","containerPort":8082}]'],
+      // The ingress routes to the API port by name, so their check may fail the render first.
+      /services\.identity\.ports: the API port \(http\) is missing|service "identity" has no port named "http"/,
+    ],
+    [
       "a token in the identity service's container",
       ["--set", "services.identity.enabled=true", "--set", "services.identity.automountServiceAccountToken=true"],
       /services\.identity\.automountServiceAccountToken must be false/,
@@ -4838,7 +5766,7 @@ describe("documentation and packaging", () => {
   // Leaf paths of values.yaml; services.<entry> collapses to services.<name>, and
   // Kubernetes-native objects under serviceDefaults count as one field.
   function documentedPaths(value: unknown, path: string): string[] {
-    const prefix = ["serviceDefaults.", "clickhouse.bundled.", "postgres.bundled.", "observability.collector.", "migrate."].find((p) =>
+    const prefix = ["serviceDefaults.", "clickhouse.bundled.", "postgres.bundled.", "observability.collector.", "migrate.", "mqttBroker."].find((p) =>
       path.startsWith(p),
     );
     const relative = prefix ? path.slice(prefix.length) : "";
@@ -4976,8 +5904,9 @@ describe("e2e overlays", () => {
 
   const isMigrationJob = (m: Manifest) => m.kind === "Job" && m.metadata.labels?.["app.kubernetes.io/component"] === "migrate";
 
-  // "<kind>/<name> reads <Secret>" for every Secret a workload's pods read: environment
-  // variables, envFrom and volumes, projected ones included, in every container.
+  // "<kind>/<name> reads <Secret>" for every Secret a workload's pods need: environment
+  // variables, envFrom and volumes, projected ones included, in every container. An optional
+  // reference is left out: it never holds a pod back.
   function secretReads(manifests: Manifest[]): { read: string; secret: string }[] {
     const reads = new Map<string, string>();
     for (const m of manifests) {
@@ -4987,8 +5916,13 @@ describe("e2e overlays", () => {
         if (secret) reads.set(`${m.kind}/${m.metadata.name} reads ${secret}`, secret);
       };
       for (const container of [...pod.containers, ...((pod.initContainers ?? []) as Container[])]) {
-        for (const env of container.env ?? []) read(env.valueFrom?.secretKeyRef?.name);
-        for (const from of (container.envFrom ?? []) as { secretRef?: { name?: string } }[]) read(from.secretRef?.name);
+        for (const env of container.env ?? []) {
+          const ref = env.valueFrom?.secretKeyRef;
+          if (ref?.optional !== true) read(ref?.name);
+        }
+        for (const from of (container.envFrom ?? []) as { secretRef?: { name?: string; optional?: boolean } }[]) {
+          if (from.secretRef?.optional !== true) read(from.secretRef?.name);
+        }
       }
       for (const volume of pod.volumes ?? []) {
         // An optional Secret volume never holds a pod back: the identity service mounts its
@@ -5020,7 +5954,39 @@ describe("e2e overlays", () => {
       .map(({ read }) => read);
   }
 
+  // The dependency Secrets the instance overlays name (the SMTP relay's account, the Sentry DSN,
+  // object storage, Qdrant, the AI keys): a real cluster gets them from outside the chart
+  // (Laysi/trustiot-v2#72), and no cluster test creates them. A pod that needs one never starts,
+  // and `helm install --wait` runs into its timeout: PR Laysi/trustiot-v2#525's smoke (2026-10-22)
+  // failed so in the ingress e2e, when values.yaml gave identity the smtp credential, which
+  // saas-instance.yaml names trustiot-smtp for, with a required reference.
+  function namedDependencySecrets(files: readonly string[]): Set<string> {
+    const names = new Set<string>();
+    const walk = (node: unknown, key: string): void => {
+      if (Array.isArray(node)) {
+        for (const item of node) walk(item, key);
+        return;
+      }
+      if (!isMap(node)) return;
+      if (key.endsWith("Secret") && typeof node.name === "string" && node.name !== "") names.add(node.name);
+      for (const [child, value] of Object.entries(node)) walk(value, child);
+    };
+    for (const file of files.filter((f) => f.startsWith("tests/values/"))) walk(readYaml(file), "");
+    return names;
+  }
+
+  function dependencyReads(manifests: Manifest[], files: readonly string[]): string[] {
+    const named = namedDependencySecrets(files);
+    return secretReads(manifests)
+      .filter(({ secret }) => named.has(secret))
+      .map(({ read }) => read);
+  }
+
   for (const install of INSTALLS) {
+    test(`${install.name}: no pod needs a dependency Secret that the instance overlay names`, () => {
+      expect(dependencyReads(render(install.files, install.args), install.files)).toEqual([]);
+    });
+
     test(`${install.name}: no pod reads a password Secret that nothing fills`, () => {
       const manifests = render(install.files, install.args);
       expect(manifests.filter(isMigrationJob).length, "migration Jobs").toBe(install.migrate ? 1 : 0);
@@ -5037,5 +6003,19 @@ describe("e2e overlays", () => {
     expect(unfilledReads(manifests, [])).toEqual([`Deployment/${RELEASE}-assets reads ${RELEASE}-assets-password`]);
     // A Secret the test fills itself is no finding.
     expect(unfilledReads(manifests, [`${RELEASE}-assets-password`])).toEqual([]);
+  });
+
+  test("the check catches a required reference to a dependency Secret, and passes identity's optional one to the relay account", () => {
+    const ingress = INSTALLS[0];
+    if (ingress === undefined) throw new Error("no ingress install");
+    expect(namedDependencySecrets(ingress.files)).toContain("trustiot-smtp");
+    expect(namedDependencySecrets(ingress.files)).toContain("trustiot-sentry");
+    // The identity stand-in has the relay account's variables, from an optional reference.
+    const manifests = render(ingress.files, ingress.args);
+    const identity = podSpec(find(manifests, "Deployment", `${RELEASE}-identity`)).containers[0]?.env ?? [];
+    expect(identity.filter((e) => e.valueFrom?.secretKeyRef?.name === "trustiot-smtp").map((e) => e.valueFrom?.secretKeyRef?.optional)).toEqual([true, true]);
+    // Sentry's DSN is a required reference: with Sentry on, every service would wait for it.
+    const sentry = dependencyReads(render(ingress.files, [...ingress.args, "--set", "observability.sentry.enabled=true"]), ingress.files);
+    expect(sentry).toContain(`Deployment/${RELEASE}-identity reads trustiot-sentry`);
   });
 });

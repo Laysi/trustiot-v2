@@ -1,0 +1,53 @@
+[package]
+name = "ai-gateway"
+description = "AI gateway (decision 28): holds the AI provider keys and forwards requests and streams in each provider's native protocol by model role, with time limits and fallback models."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "ai-gateway"
+path = "src/main.rs"
+test = false
+doc = false
+
+# Never depend on crates/contract (or anything that pulls it in), not even as a dev-dependency:
+# the gateway stays free of product contracts so it can be split out (decision 28).
+# tests/no_contract.rs checks it.
+[dependencies]
+ai-clients = { path = "../../crates/ai-clients" }
+axum = { workspace = true, features = ["http1", "tokio"] }
+bytes.workspace = true
+# `stream::unfold`: a provider stream relayed as the response body (src/relay.rs).
+futures-util.workspace = true
+# The caller's request body, read up to the configured limit.
+http-body-util.workspace = true
+serde = { workspace = true, features = ["derive"] }
+# `raw_value`: the caller's request body is read without re-encoding it (src/body.rs).
+serde_json = { workspace = true, features = ["raw_value"] }
+# Default features off: the `contract` feature pulls in crates/contract.
+service-kit = { path = "../../crates/service-kit", default-features = false }
+thiserror.workspace = true
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time"] }
+tracing.workspace = true
+# Provider endpoint URL checks at startup.
+url.workspace = true
+# The provider keys the gateway keeps for scrubbing provider error messages are wiped on drop.
+zeroize.workspace = true
+
+[dev-dependencies]
+# The scripted provider servers of crates/ai-clients/tests/support (included by path) need these.
+rcgen = { workspace = true, features = ["crypto", "pem", "ring"] }
+# Requests to the real binary in tests/process.rs.
+reqwest.workspace = true
+rustls = { workspace = true, features = ["ring", "std", "tls12"] }
+serde_json.workspace = true
+tokio = { workspace = true, features = ["io-util", "macros", "net", "process", "rt-multi-thread", "sync", "time"] }
+tokio-rustls = { workspace = true, features = ["ring"] }
+# Requests to the router without a socket.
+tower = { workspace = true, features = ["util"] }
+
+[lints]
+workspace = true

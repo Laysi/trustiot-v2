@@ -21,8 +21,8 @@ use service_kit::identity::{IdentityError, IdentityKeys, IdentityVerifier, UserI
 use sqlx::{Connection, PgConnection};
 use support::postgres::{SERVER_HOST, TEST_PASSWORD, TlsPostgres, tls_postgres};
 use support::{
-    KeyFiles, Service, SlowProxy, TestKey, cookie, jwks, kid_of, new_secret, request, run_to_exit,
-    scratch_dir, signing_keys,
+    KeyFiles, Service, SlowProxy, TestKey, cookie, jwks, kid_of, new_secret, request,
+    request_with_body, run_to_exit, scratch_dir, signing_keys,
 };
 
 /// The roles of decision 29 for this service, created once per Postgres, with the service role's
@@ -35,6 +35,9 @@ ALTER ROLE identity_app SET search_path = identity;
 ";
 
 const MIGRATION: &str = include_str!("../migrations/postgres/0001_identity.sql");
+/// The writes on sessions that logging in and extending a session need, and their guard
+/// (Laysi/trustiot-v2#103).
+const LOGIN_MIGRATION: &str = include_str!("../migrations/postgres/0004_login.sql");
 /// The migration Job creates the service's schema, owned by the owner role, before it runs the
 /// migrations (tools/migrate); the tests do the same as the owner.
 const SCHEMA: &str = "CREATE SCHEMA identity";
@@ -114,10 +117,12 @@ impl Fixture {
             .execute(&mut owner)
             .await
             .expect("create the schema");
-        sqlx::raw_sql(MIGRATION)
-            .execute(&mut owner)
-            .await
-            .expect("run the migration");
+        for migration in [MIGRATION, LOGIN_MIGRATION] {
+            sqlx::raw_sql(migration)
+                .execute(&mut owner)
+                .await
+                .expect("run the migration");
+        }
         support::record_release_migrations(&mut owner).await;
         Some(fixture)
     }
@@ -161,7 +166,17 @@ impl Fixture {
     /// Starts the service and waits until it is ready, which needs a session that passed
     /// service-kit's row-level security check.
     fn service(&self) -> Service {
-        let env = self.env();
+        self.service_with(&[])
+    }
+
+    /// [`Fixture::service`] with `extra` settings added.
+    fn service_with(&self, extra: &[(&str, &str)]) -> Service {
+        let mut env = self.env();
+        env.extend(
+            extra
+                .iter()
+                .map(|(name, value)| ((*name).to_owned(), (*value).to_owned())),
+        );
         let env: Vec<(&str, &str)> = env.iter().map(|(n, v)| (n.as_str(), v.as_str())).collect();
         let service = Service::start(&env);
         service.wait_ready(Duration::from_secs(30));
@@ -346,6 +361,85 @@ async fn an_active_session_gets_one_token_that_the_routed_service_accepts() {
     assert!(response.header_values("x-internal-identity").is_empty());
 }
 
+/// One token exchange request, as service-kit's `OnBehalf` sends it, to the exchange's own port.
+fn exchange(service: &Service, token: Option<&str>, audience: &str) -> support::Response {
+    let mut headers = vec![("Content-Type", "application/json")];
+    if let Some(token) = token {
+        headers.push(("x-internal-identity", token));
+    }
+    request_with_body(
+        service.exchange_address,
+        "POST",
+        "/internal/token-exchange",
+        &headers,
+        json!({ "audience": audience }).to_string().as_bytes(),
+    )
+    .expect("exchange request")
+}
+
+/// Acceptance (on-behalf calls and impersonation, Laysi/trustiot-v2#106), with the real binary:
+/// the token the check signed for assets is exchanged for certs, which the call list lets assets
+/// call, and for nothing else. The exchanged token carries the session's identity, expires no
+/// later than the original, and works at certs only.
+#[tokio::test]
+async fn a_routed_token_is_exchanged_along_the_call_list_only() {
+    let Some(fixture) = Fixture::new(
+        "CREATE DATABASE identity_exchange OWNER identity_owner",
+        "identity_exchange",
+    )
+    .await
+    else {
+        return;
+    };
+    fixture.add_user(USER, false).await;
+    fixture.add_membership(TENANT_A, USER, "viewer").await;
+    let secret = fixture
+        .add_session(USER, Some(TENANT_A), SESSION_SECS, false)
+        .await;
+    let calls = json!({"assets": ["certs"]}).to_string();
+    let service = fixture.service_with(&[("TRUSTIOT_ON_BEHALF_CALLS", &calls)]);
+
+    let response = check(&service, "/api/devices", Some(&cookie(&secret)));
+    let user = verified(&fixture, &response, ServiceName::Assets);
+    let token = response.header_values("x-internal-identity")[0].to_owned();
+
+    let response = exchange(&service, Some(&token), "certs");
+    assert_eq!(response.status, 200, "{}", response.raw());
+    assert_eq!(response.header_values("cache-control"), ["no-store"]);
+    let exchanged = response.json()["token"]
+        .as_str()
+        .expect("a token")
+        .to_owned();
+    let at_certs = fixture
+        .verifier(ServiceName::Certs)
+        .verify(&exchanged)
+        .expect("certs accepts the exchanged token");
+    assert_eq!(at_certs.user_id(), user.user_id());
+    assert_eq!(at_certs.tenant(), user.tenant());
+    assert_eq!(at_certs.tenant().map(|t| t.role), Some(TenantRole::Viewer));
+    assert!(!at_certs.is_platform_admin());
+    assert!(at_certs.claims().exp <= user.claims().exp);
+    for audience in [ServiceName::Assets, ServiceName::Alerts] {
+        assert_eq!(
+            fixture.verifier(audience).verify(&exchanged).err(),
+            Some(IdentityError::WrongAudience),
+            "{audience} refuses a token for certs"
+        );
+    }
+
+    // Refused: assets may not call alerts, and certs, holding the exchanged token, may call
+    // nobody (that an exchanged token is never exchanged again, even along the list, is
+    // src/exchange/tests.rs).
+    for (holder, audience) in [(&token, "alerts"), (&exchanged, "assets")] {
+        let response = exchange(&service, Some(holder), audience);
+        assert_eq!(response.status, 403, "{}", response.raw());
+        assert_eq!(response.json()["code"], json!("permission_denied"));
+        assert!(!response.body.contains("token"), "{}", response.raw());
+    }
+    assert_unauthenticated(&exchange(&service, None, "certs"));
+    assert_unauthenticated(&exchange(&service, Some("forged"), "certs"));
+}
+
 /// Acceptance: missing, malformed, unknown, expired and revoked sessions get 401.
 #[tokio::test]
 async fn invalid_or_expired_sessions_get_401() {
@@ -388,6 +482,67 @@ async fn invalid_or_expired_sessions_get_401() {
     );
     fixture.owner_execute(DELETE_USER, &[USER]).await;
     assert_unauthenticated(&check(&service, "/", Some(&still)));
+}
+
+/// Acceptance (Laysi/trustiot-v2#123): a cross-site write gets 403 `security.cross_site_request`
+/// with a valid session, and so does one with an unknown session (not 401: the session is never
+/// looked up); the SPA's own write goes on.
+#[tokio::test]
+async fn cross_site_writes_get_403_and_same_origin_ones_go_on() {
+    let Some(fixture) = Fixture::new(
+        "CREATE DATABASE identity_csrf OWNER identity_owner",
+        "identity_csrf",
+    )
+    .await
+    else {
+        return;
+    };
+    fixture.add_user(USER, false).await;
+    fixture.add_membership(TENANT_A, USER, "editor").await;
+    let secret = fixture
+        .add_session(USER, Some(TENANT_A), SESSION_SECS, false)
+        .await;
+    let service = fixture.service();
+    let post = |cookie: &str, extra: &[(&str, &str)]| {
+        let mut headers = vec![("Host", APP), ("Cookie", cookie)];
+        headers.extend_from_slice(extra);
+        request(
+            service.address,
+            "POST",
+            "/internal/ext-authz/api/devices",
+            &headers,
+        )
+        .expect("check request")
+    };
+    let valid = cookie(&secret);
+    let origin = format!("https://{APP}");
+    let response = post(
+        &valid,
+        &[("Sec-Fetch-Site", "same-origin"), ("Origin", &origin)],
+    );
+    verified(&fixture, &response, ServiceName::Assets);
+    verified(
+        &fixture,
+        &post(&valid, &[("Origin", &origin)]),
+        ServiceName::Assets,
+    );
+
+    let unknown = cookie(&new_secret());
+    let cross_site: [&[(&str, &str)]; 2] = [
+        &[("Origin", "https://attacker.example.test")],
+        &[("Sec-Fetch-Site", "cross-site")],
+    ];
+    for extra in cross_site {
+        for cookie in [&valid, &unknown] {
+            let response = post(cookie, extra);
+            assert_eq!(response.status, 403, "{extra:?}: {}", response.raw());
+            assert!(response.header_values("x-internal-identity").is_empty());
+            assert_eq!(
+                response.json(),
+                json!({"code": "permission_denied", "message_key": "security.cross_site_request"})
+            );
+        }
+    }
 }
 
 /// Decision 13: role changes and removed memberships apply to the next request of the same
@@ -458,10 +613,12 @@ async fn role_changes_apply_to_the_next_request() {
     );
 }
 
-/// MS0 has no login: the service role can read sessions but not create, extend or revoke them,
-/// and memberships are invisible without a tenant.
+/// The service role writes sessions only as logging in, logging out and extending a session do
+/// (Laysi/trustiot-v2#103): it creates sessions of at most 7 days, moves their expiry within
+/// that, and revokes them, and nothing else. A revoked session stays revoked; users, roles and
+/// memberships stay read-only; memberships are invisible without a tenant.
 #[tokio::test]
-async fn the_service_role_cannot_create_or_change_sessions() {
+async fn the_service_role_writes_sessions_only_within_the_login_rules() {
     let Some(fixture) = Fixture::new(
         "CREATE DATABASE identity_grants OWNER identity_owner",
         "identity_grants",
@@ -472,15 +629,53 @@ async fn the_service_role_cannot_create_or_change_sessions() {
     };
     fixture.add_user(USER, false).await;
     fixture.add_membership(TENANT_A, USER, "viewer").await;
+    // One active and one revoked session for the statements below to touch.
+    fixture
+        .add_session(USER, Some(TENANT_A), SESSION_SECS, false)
+        .await;
+    fixture
+        .add_session(USER, Some(TENANT_A), SESSION_SECS, true)
+        .await;
     let mut app = fixture.connect("identity_app").await;
+    // What the service does: allowed.
     for statement in [
-        "INSERT INTO identity.sessions (id, token_hash, user_id, expires_at) VALUES (gen_random_uuid(), sha256('x'), '01928f6e-7a3c-7d4e-8f00-0123456789ab', now() + interval '1 hour')",
-        "UPDATE identity.sessions SET expires_at = now() + interval '1 year'",
-        "UPDATE identity.sessions SET revoked_at = NULL",
+        "INSERT INTO identity.sessions (id, token_hash, user_id, expires_at) VALUES (gen_random_uuid(), sha256('x'), '01928f6e-7a3c-7d4e-8f00-0123456789ab', now() + interval '12 hours')",
+        "UPDATE identity.sessions SET expires_at = LEAST(now() + interval '12 hours', created_at + interval '7 days') WHERE revoked_at IS NULL",
+        "UPDATE identity.sessions SET revoked_at = now() WHERE token_hash = sha256('x')",
+    ] {
+        sqlx::raw_sql(statement)
+            .execute(&mut app)
+            .await
+            .unwrap_or_else(|error| panic!("{statement}: {error}"));
+    }
+    for statement in [
+        // Longer than the absolute lifetime, new or extended (the trigger).
+        "INSERT INTO identity.sessions (id, token_hash, user_id, expires_at) VALUES (gen_random_uuid(), sha256('y'), '01928f6e-7a3c-7d4e-8f00-0123456789ab', now() + interval '8 days')",
+        "UPDATE identity.sessions SET expires_at = created_at + interval '7 days 1 second'",
+        // A revoked session coming back, or its revocation moved (the trigger).
+        "UPDATE identity.sessions SET revoked_at = NULL WHERE revoked_at IS NOT NULL",
+        "UPDATE identity.sessions SET revoked_at = now() + interval '1 day' WHERE revoked_at IS NOT NULL",
+        // A creation time of its own choosing, which would move the 7-day cap (no column grant).
+        "INSERT INTO identity.sessions (id, token_hash, user_id, created_at, expires_at) VALUES (gen_random_uuid(), sha256('v'), '01928f6e-7a3c-7d4e-8f00-0123456789ab', now() + interval '30 days', now() + interval '36 days')",
+        "INSERT INTO identity.sessions (id, token_hash, user_id, expires_at, revoked_at) VALUES (gen_random_uuid(), sha256('u'), '01928f6e-7a3c-7d4e-8f00-0123456789ab', now() + interval '1 hour', NULL)",
+        // Columns and tables without a grant.
+        "UPDATE identity.sessions SET user_id = '01928f6e-7a3c-7d4e-8f00-0000000000ad'",
+        "UPDATE identity.sessions SET token_hash = sha256('z')",
+        "UPDATE identity.sessions SET created_at = now()",
+        "UPDATE identity.sessions SET active_tenant_id = '01928f6e-7a3c-7d4e-8f00-00000000000b'",
+        "DELETE FROM identity.sessions",
+        "TRUNCATE identity.sessions",
         "INSERT INTO identity.users (id) VALUES (gen_random_uuid())",
         "UPDATE identity.users SET platform_admin = true",
+        "UPDATE identity.users SET email = 'someone@example.com'",
         "INSERT INTO identity.memberships (tenant_id, user_id, tenant_role) VALUES ('01928f6e-7a3c-7d4e-8f00-00000000000a', '01928f6e-7a3c-7d4e-8f00-0123456789ab', 'admin')",
-        "TRUNCATE identity.sessions",
+        "UPDATE identity.login_codes SET code_hash = sha256('w')",
+        "UPDATE identity.login_codes SET expires_at = now() + interval '1 year'",
+        "UPDATE identity.login_codes SET user_id = '01928f6e-7a3c-7d4e-8f00-0000000000ad'",
+        "TRUNCATE identity.login_codes",
+        // The guard itself.
+        "DROP TRIGGER sessions_guard ON identity.sessions",
+        "ALTER TABLE identity.sessions DISABLE TRIGGER sessions_guard",
         "CREATE TABLE identity.extra (id int)",
     ] {
         let error = sqlx::raw_sql(statement)
@@ -887,6 +1082,29 @@ fn unusable_settings_stop_startup() {
             "TRUSTIOT_INGRESS_ROUTES",
         ),
         (
+            "an on-behalf call to a service that takes no tokens",
+            with(
+                base_env(&files, 1),
+                "TRUSTIOT_ON_BEHALF_CALLS",
+                &json!({"assistant": ["ai-gateway"]}).to_string(),
+            ),
+            "TRUSTIOT_ON_BEHALF_CALLS",
+        ),
+        (
+            "an on-behalf call list that is not one",
+            with(base_env(&files, 1), "TRUSTIOT_ON_BEHALF_CALLS", "assets=certs"),
+            "TRUSTIOT_ON_BEHALF_CALLS",
+        ),
+        (
+            "on-behalf calls overridden by a service setting",
+            with(
+                base_env(&files, 1),
+                "TRUSTIOT__PLATFORM__ON_BEHALF_CALLS",
+                &json!({"assets": ["certs"]}).to_string(),
+            ),
+            "TRUSTIOT__PLATFORM__ON_BEHALF_CALLS",
+        ),
+        (
             "no signing keys file setting",
             without(base_env(&files, 1), support::SIGNING_KEYS_FILE),
             support::SIGNING_KEYS_FILE,
@@ -913,6 +1131,39 @@ fn unusable_settings_stop_startup() {
                 &files.public_keys.display().to_string(),
             ),
             "TRUSTIOT__PLATFORM__INTERNAL_IDENTITY_KEYS_FILE",
+        ),
+        // The event log's platform role (Laysi/trustiot-v2#130): both credentials or neither,
+        // and never the service role.
+        (
+            "a platform role without its password",
+            with(
+                base_env(&files, 1),
+                "TRUSTIOT__DATABASE__PLATFORM_USERNAME",
+                "identity_platform",
+            ),
+            "database.platform_password",
+        ),
+        (
+            "a platform password without its role",
+            with(
+                base_env(&files, 1),
+                "TRUSTIOT__DATABASE__PLATFORM_PASSWORD",
+                "do-not-log-this-password",
+            ),
+            "database.platform_username",
+        ),
+        (
+            "the service role as the platform role",
+            with(
+                with(
+                    base_env(&files, 1),
+                    "TRUSTIOT__DATABASE__PLATFORM_USERNAME",
+                    "identity_app",
+                ),
+                "TRUSTIOT__DATABASE__PLATFORM_PASSWORD",
+                "do-not-log-this-password",
+            ),
+            "database.platform_username",
         ),
         (
             "a propagation time below the chart's minimum",

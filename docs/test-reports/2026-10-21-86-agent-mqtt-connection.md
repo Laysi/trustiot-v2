@@ -6,7 +6,7 @@
 
 - 機器：一台 x86_64 Linux 工作站，以 podman 執行容器，沒有 arm64 模擬器；`systemd-analyze` 用這台機器上的（CI 用 runner 的）。
 - 工具：rustc 1.99.0（`rust-toolchain.toml`）；zig 0.16.0、cargo-zigbuild 0.23.4（`.prototools`）。
-- 程式：分支 `feat/86-agent-mqtt-connection`，以 main 的 `cc185b9` 為基礎，變更尚未提交；2026-10-22 的審查修正以 `630021f`（同一張 issue 的 TPM 部分）為基礎。rustls 0.23.46 加 ring 0.17.14、tokio 1.53.2、tokio-tungstenite 0.30.0；MQTT 5 編解碼是 agent 自己的（`edge/agent/src/mqtt/`）。
+- 程式：分支 `feat/86-agent-mqtt-connection`，以 main 的 `cc185b9` 為基礎；2026-10-22 的審查修正以 `630021f`（同一張 issue 的 TPM 部分）為基礎；2026-10-23 合併 main 的 `50fe899`（Modbus 的 RTU over TCP 與輪詢、Mosquitto chart 等）之後重跑全部 agent 測試。rustls 0.23.46 加 ring 0.17.14、tokio 1.53.2、tokio-tungstenite 0.30.0；MQTT 5 編解碼是 agent 自己的（`edge/agent/src/mqtt/`）。
 - 金鑰：這些測試都用 `identity.key` 的 `file` 來源。TPM 的簽章金鑰（`src/tpm.rs`）是同一張 issue 的另一部分，本報告不涵蓋。
 - broker：Mosquitto 2.1.2（`docker.io/library/eclipse-mosquitto:2.1.2-alpine@sha256:38c0da4f2ef84284d47b3b3eeea1cb3bdeabe81ee10caf0cd5c5ff61ee3ea408`），設定見 `crates/testkit/src/mqtt/mosquitto.rs`：mTLS listener（`require_certificate`、`use_identity_as_username`、TLS 1.3、`ciphers_tls1.3` 把 ChaCha20 排第一）、dynamic security 與協定的閘道器角色。入口與 mqtt-bridge 由測試行程內的 WebSocket 前端（`testkit::mqtt::front`）替代。
 - 測試 CA、所有憑證與金鑰都在測試時以 rcgen 產生，沒有進 repo。
@@ -16,7 +16,7 @@
 全部在 repo 根目錄執行。
 
 ```sh
-CI=true cargo test --locked -p agent               # 217 個測試，含 Mosquitto 與 swtpm 容器
+CI=true cargo test --locked -p agent               # 259 個測試，含 Mosquitto 與 swtpm 容器
 cargo test --locked -p agent --test broker         # 驗收 1、2：對 Mosquitto
 cargo test --locked -p agent --test transport      # 整條連線在行程內：協商內容、resumption、重連、拒絕
 cargo test --locked -p agent --test link           # 驗收 3 與 MQTT 行為（停住的時鐘）
@@ -44,7 +44,7 @@ bun test scripts/ci/changes.test.ts scripts/ci/workflow-conditions.test.ts
 
 ## 結果
 
-`CI=true cargo test --locked -p agent`：217 個測試全部通過（2026-10-23，含 TPM 部分與 Modbus 的測試；[cargo-test-agent.txt](data/2026-10-21-86-agent-mqtt-connection/cargo-test-agent.txt)）。以下依驗收條件整理。
+`CI=true cargo test --locked -p agent`：259 個測試全部通過（2026-10-23，合併 main 的 `50fe899` 之後，含 TPM 部分、Modbus 與輪詢的測試；[cargo-test-agent.txt](data/2026-10-21-86-agent-mqtt-connection/cargo-test-agent.txt)）。以下依驗收條件整理。
 
 ### 1. WebSocket 內的 mTLS 連到 broker（驗收 1）
 
@@ -114,7 +114,7 @@ p2 在 CI 的 clippy 步驟（`cargo clippy --workspace --all-targets -- -D warn
 
 ### 7. 發現：Mosquitto 依自己的順序選套件
 
-agent 的內層 TLS 依序提供 ChaCha20-Poly1305、AES-256-GCM、AES-128-GCM。Mosquitto 的 listener 沒設 `ciphers_tls1.3` 時協商出 `TLS_AES_256_GCM_SHA384`；設成 `TLS_CHACHA20_POLY1305_SHA256:TLS_AES_256_GCM_SHA384:TLS_AES_128_GCM_SHA256` 後協商出 ChaCha20（[mosquitto-cipher-order.txt](data/2026-10-21-86-agent-mqtt-connection/mosquitto-cipher-order.txt)）。所以 Mosquitto 依自己的順序選，不是決策 6 原本寫的依用戶端的順序；2026-10-13 的測試用戶端只提供 ChaCha20，看不出這點。閘道器的 CPU 沒有 AES 指令，broker 給閘道器的 listener 要設這一行；已更正決策 6 與 2026-10-13 的可行性文件，testkit 的 Mosquitto 也加上這一行，`tests/broker.rs` 檢查日誌裡的套件。
+agent 的內層 TLS 依序提供 ChaCha20-Poly1305、AES-256-GCM、AES-128-GCM。Mosquitto 的 listener 沒設 `ciphers_tls1.3` 時協商出 `TLS_AES_256_GCM_SHA384`；設成 `TLS_CHACHA20_POLY1305_SHA256:TLS_AES_256_GCM_SHA384:TLS_AES_128_GCM_SHA256` 後協商出 ChaCha20（[mosquitto-cipher-order.txt](data/2026-10-21-86-agent-mqtt-connection/mosquitto-cipher-order.txt)）。所以 Mosquitto 依自己的順序選，不是決策 6 原本寫的依用戶端的順序；2026-10-13 的測試用戶端只提供 ChaCha20，看不出這點。閘道器的 CPU 沒有 AES 指令，broker 給閘道器的 listener 要設這一行；已更正決策 6 與 2026-10-13 的可行性文件，testkit 的 Mosquitto 也加上這一行，`tests/broker.rs` 檢查日誌裡的套件。2026-10-23 併入 main 的 chart（Laysi/trustiot-v2#84）給閘道器的 listener 還沒有這一行。
 
 ### 8. 發現：Mosquitto 只在 DISCONNECT 0x04 或沒有 DISCONNECT 時發布 will
 

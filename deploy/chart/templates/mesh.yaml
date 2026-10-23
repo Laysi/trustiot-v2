@@ -4,13 +4,20 @@ still refuses a call that is not on the list.
 1. AuthorizationPolicy (enforced by ztunnel, L4): each service and in-cluster component (bundled
    ClickHouse) accepts mTLS connections only from the ServiceAccounts of its listed callers and,
    where it routes, the ingress gateway. One nobody may call gets a policy without rules, which
-   refuses every connection.
+   refuses every connection. The identity service's policy admits its callers and the ingress
+   gateway on its API ports only ("trustiot.mesh.identityPorts", to.operation.ports, an L4
+   attribute ztunnel enforces): its token exchange port has its own Service and policies, for
+   the services that call on behalf of users (templates/token-exchange.yaml,
+   Laysi/trustiot-v2#106). The MQTT broker's policy admits each caller on its own port only
+   (portRules: mqtt-bridge on the gateway port, the services with a broker account on the
+   service port; Laysi/trustiot-v2#84).
 2. NetworkPolicy: everything in the namespace is denied by default; each service and component
    then admits ztunnel's HBONE port from the pods of the same callers, and connections from the
    node (kubelet probes, "trustiot.mesh.hostSource") on its probe ports only, because ztunnel
    lets those through unauthorized. It only stops new connections: ztunnel reuses HBONE
    connections, and a NetworkPolicy never cuts one that is already open, so the
-   AuthorizationPolicy is the primary layer.
+   AuthorizationPolicy is the primary layer. It sees HBONE only, never the application port
+   inside the tunnel, so the identity service's port split is the AuthorizationPolicy's alone.
 No waypoint is deployed: L4 identity is all these rules need. Add one only for L7 rules between
 services, and move the affected policies to it (README.md).
 */ -}}
@@ -51,7 +58,27 @@ spec:
     matchLabels:
       {{- include "trustiot.selectorLabels" $ctx | nindent 6 }}
   action: ALLOW
-  {{- if $principals }}
+  {{- if hasKey $service "portRules" }}
+  {{- if $service.portRules }}
+  rules:
+    {{- range $rule := $service.portRules }}
+    - from:
+        - source:
+            principals:
+              {{- range $rule.callers }}
+              - {{ include "trustiot.mesh.principal" (dict "root" $ "serviceAccount" (include "trustiot.componentName" (dict "root" $ "name" .))) | quote }}
+              {{- end }}
+      to:
+        - operation:
+            ports:
+              {{- range $rule.ports }}
+              - {{ printf "%d" (int .) | quote }}
+              {{- end }}
+    {{- end }}
+  {{- else }}
+  # No caller is listed: an ALLOW policy without rules refuses every connection.
+  {{- end }}
+  {{- else if $principals }}
   rules:
     - from:
         - source:
@@ -59,6 +86,16 @@ spec:
               {{- range $principals }}
               - {{ . | quote }}
               {{- end }}
+      {{- with $service.apiPorts }}
+      # The identity service: its API ports only, never the token exchange's
+      # (templates/token-exchange.yaml).
+      to:
+        - operation:
+            ports:
+              {{- range . }}
+              - {{ printf "%d" (int .) | quote }}
+              {{- end }}
+      {{- end }}
   {{- else }}
   # No caller is listed: an ALLOW policy without rules refuses every connection.
   {{- end }}

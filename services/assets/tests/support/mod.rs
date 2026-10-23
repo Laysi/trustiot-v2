@@ -193,6 +193,69 @@ impl Service {
         let status = response.status().as_u16();
         (status, response.text().await.expect("read the body"))
     }
+
+    /// `method path` with an `x-internal-identity` token (none: without the header), and a body
+    /// with its `Content-Type` (none: no body and no header).
+    pub async fn call(
+        &self,
+        method: reqwest::Method,
+        path: &str,
+        token: Option<&str>,
+        body: Option<(&str, Vec<u8>)>,
+    ) -> Reply {
+        let mut request = reqwest::Client::new()
+            .request(method, format!("{}{path}", self.base_url))
+            .timeout(Duration::from_secs(15));
+        if let Some(token) = token {
+            request = request.header("x-internal-identity", token);
+        }
+        if let Some((content_type, body)) = body {
+            request = request.header("content-type", content_type).body(body);
+        }
+        let response = request.send().await.expect("call the assets service");
+        let status = response.status().as_u16();
+        let headers = response.headers().clone();
+        let body = response.text().await.expect("read the body");
+        Reply {
+            status,
+            headers,
+            body,
+        }
+    }
+
+    /// `method path` with a JSON body.
+    pub async fn json(
+        &self,
+        method: reqwest::Method,
+        path: &str,
+        token: Option<&str>,
+        body: &Value,
+    ) -> Reply {
+        let bytes = serde_json::to_vec(body).expect("serialize the body");
+        self.call(method, path, token, Some(("application/json", bytes)))
+            .await
+    }
+}
+
+/// A response of the service.
+#[derive(Debug)]
+pub struct Reply {
+    pub status: u16,
+    pub headers: reqwest::header::HeaderMap,
+    pub body: String,
+}
+
+impl Reply {
+    /// The body as JSON; fails naming the status and the body when it is not.
+    pub fn json(&self) -> Value {
+        serde_json::from_str(&self.body)
+            .unwrap_or_else(|error| panic!("{} {}: not JSON: {error}", self.status, self.body))
+    }
+
+    /// The value of a response header, if it is there.
+    pub fn header(&self, name: &str) -> Option<&str> {
+        self.headers.get(name).and_then(|value| value.to_str().ok())
+    }
 }
 
 impl Drop for Service {

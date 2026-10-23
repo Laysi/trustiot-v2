@@ -10,7 +10,7 @@
 //! Both are TLS 1.3 only with ChaCha20-Poly1305 first: the gateway's Cortex-A72 has no AES
 //! instructions, ChaCha20 took 21–34% less CPU there, and rustls would otherwise offer
 //! AES-256-GCM first (Laysi/trustiot-v2#75). Cloudflare and Envoy follow the client's order;
-//! Mosquitto follows its own, so the broker's gateway listener sets `ciphers_tls1.3` with
+//! Mosquitto follows its own, so the broker's gateway listener must set `ciphers_tls1.3` with
 //! ChaCha20 first (decision 6). Session resumption stays on in both, with a small in-memory
 //! cache: a resumed inner handshake needs no TPM signature (about 70 ms less per reconnect),
 //! and revocation still works because SIGHUP on the broker invalidates every ticket. The
@@ -183,8 +183,9 @@ pub enum Validity {
 /// Checks the gateway certificate as the broker will, with webpki's client certificate check:
 /// the chain must lead to our CA in `ca`, and the extended key usage must allow client
 /// authentication (`identity::load` already checked the key usage). A certificate that fails only because of the time
-/// is [`Validity::OutsideNow`], not an error: a gateway without a real-time clock may start
-/// with a wrong one, and refusing to start would leave it unable to fix it.
+/// is [`Validity::OutsideNow`], not an error: the gateway's clock may be wrong (its hardware RTC
+/// never set, or its time lost), the broker judges the validity by its own clock, and refusing
+/// to start would only turn a wrong clock into an outage.
 ///
 /// # Errors
 ///

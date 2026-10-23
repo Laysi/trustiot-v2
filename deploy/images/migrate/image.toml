@@ -1,6 +1,8 @@
 # The migration Job (tools/migrate): the chart's migration Job runs it as `migrate run`, and every
 # service pod's init container runs it as `migrate wait-for-job`, and the bundled ClickHouse's init
-# container as `migrate clickhouse-admin-password` (Laysi/trustiot-v2#403). Not a service. Packed with
+# container as `migrate clickhouse-admin-password` (Laysi/trustiot-v2#403), and the MQTT broker's
+# init containers and sidecar as `migrate mqtt-broker-accounts` and `migrate mqtt-broker-trust`
+# (Laysi/trustiot-v2#84). Not a service. Packed with
 # deploy/images/rust-binary.Containerfile.
 [rust]
 package = "migrate"

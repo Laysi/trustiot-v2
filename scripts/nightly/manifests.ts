@@ -112,6 +112,8 @@ export function missingSecrets(objects: K8sObject[]): Map<string, Set<string>> {
   const created = new Set<string | undefined>(flat.filter((o) => o.kind === "Secret").map((o) => o.metadata?.name));
   // CloudNativePG creates these for each Cluster; a dummy one would stop it from making its own.
   for (const name of operatorSecretsOf(objects)) created.add(name);
+  // The smoke issues a real certificate for these (serverTlsSecretsOf).
+  for (const { name } of serverTlsSecretsOf(objects, "")) created.add(name);
   const needed = new Map<string, Set<string>>();
   const need = (name: unknown, key?: unknown): void => {
     if (typeof name !== "string" || created.has(name)) return;
@@ -552,6 +554,119 @@ export function missingTlsSecrets(objects: K8sObject[]): string[] {
     }
   }
   return [...names].sort();
+}
+
+/**
+ * The volume name under which a pod of the release mounts a server certificate Secret that the
+ * installing environment provides (the MQTT broker's, deploy/chart/README.md, "MQTT broker",
+ * Laysi/trustiot-v2#84). A dummy generic Secret would not load, so the smoke issues a real one.
+ */
+export const SERVER_TLS_VOLUME = "server-tls";
+
+/** A server certificate Secret a pod mounts, and the DNS names its clients reach the pod by. */
+export interface ServerTlsSecret {
+  name: string;
+  /** For every Service of the release that selects the pod: `<service>`, `<service>.<namespace>`, `.svc`, `.svc.cluster.local`. */
+  hosts: string[];
+}
+
+/** Whether a Service's selector (a plain label map) selects pods with these labels. */
+function serviceSelects(service: K8sObject, labels: Record<string, string>): boolean {
+  const selector = asMap(asMap(service.spec).selector);
+  const entries = Object.entries(selector);
+  return entries.length > 0 && entries.every(([key, value]) => labels[key] === value);
+}
+
+/**
+ * The server certificate Secrets that pods of the release mount as {@link SERVER_TLS_VOLUME} and
+ * the release does not create, each with the host names of the Services in front of those pods.
+ */
+export function serverTlsSecretsOf(objects: K8sObject[], namespace: string): ServerTlsSecret[] {
+  const flat = flatten(objects);
+  const created = new Set(flat.filter((o) => o.kind === "Secret").map((o) => o.metadata?.name));
+  const services = flat.filter((o) => o.kind === "Service");
+  const found = new Map<string, Set<string>>();
+  for (const object of flat) {
+    const template = podTemplate(object);
+    if (template === undefined) continue;
+    for (const volume of asArray(template.spec.volumes).filter(isMap)) {
+      const name = asString(asMap(volume.secret).secretName);
+      if (volume.name !== SERVER_TLS_VOLUME || name === undefined || created.has(name)) continue;
+      const hosts = found.get(name) ?? new Set<string>();
+      for (const service of services.filter((s) => serviceSelects(s, template.labels))) {
+        const short = service.metadata?.name;
+        if (short === undefined) continue;
+        for (const host of [short, `${short}.${namespace}`, `${short}.${namespace}.svc`, `${short}.${namespace}.svc.cluster.local`]) hosts.add(host);
+      }
+      found.set(name, hosts);
+    }
+  }
+  return [...found]
+    .map(([name, hosts]) => ({ name, hosts: [...hosts].sort() }))
+    .sort((a, b) => a.name.localeCompare(b.name));
+}
+
+/** The pod label that names a component of the chart, and the MQTT broker's value of it. */
+const COMPONENT_LABEL = "app.kubernetes.io/component";
+export const MQTT_BROKER_COMPONENT = "mqtt-broker";
+
+/** The release's Services in front of the MQTT broker's pods (Laysi/trustiot-v2#84), by name. */
+export function mqttBrokerServicesOf(objects: K8sObject[]): string[] {
+  const flat = flatten(objects);
+  const pods = flat
+    .filter((o) => o.metadata?.labels?.[COMPONENT_LABEL] === MQTT_BROKER_COMPONENT)
+    .flatMap((o) => {
+      const template = podTemplate(o);
+      return template === undefined ? [] : [template.labels];
+    });
+  return flat
+    .filter((o) => o.kind === "Service" && pods.some((labels) => serviceSelects(o, labels)))
+    .flatMap((o) => (o.metadata?.name === undefined ? [] : [o.metadata.name]))
+    .sort();
+}
+
+/**
+ * Why a Service of the release would be reachable from outside the cluster, read from the
+ * Services as deployed (`kubectl get services -o json`): every one of the release's must be
+ * there, of type ClusterIP, without node ports, external IPs or load balancer addresses. And
+ * why the MQTT broker would be: a route of the release that sends traffic to one of its
+ * Services. Empty when neither. Services that are not the release's own (the ones Istio
+ * generates for a Gateway) are not looked at.
+ */
+export function exposureProblems(release: K8sObject[], deployed: { items?: unknown[] }): string[] {
+  const flat = flatten(release);
+  const live = new Map(
+    asArray(deployed.items)
+      .filter(isMap)
+      .map((service) => [asString(asMap(service.metadata).name), service] as const),
+  );
+  const problems: string[] = [];
+  for (const name of flat.filter((o) => o.kind === "Service").flatMap((o) => (o.metadata?.name === undefined ? [] : [o.metadata.name]))) {
+    const service = live.get(name);
+    if (service === undefined) {
+      problems.push(`Service ${name} is not deployed`);
+      continue;
+    }
+    const spec = asMap(service.spec);
+    const type = asString(spec.type) ?? "ClusterIP";
+    if (type !== "ClusterIP") problems.push(`Service ${name} is of type ${type}`);
+    const nodePorts = asArray(spec.ports).filter(isMap).filter((port) => port.nodePort !== undefined);
+    if (nodePorts.length > 0) problems.push(`Service ${name} has node ports`);
+    if (asArray(spec.externalIPs).length > 0) problems.push(`Service ${name} has external IPs`);
+    if (asArray(asMap(asMap(service.status).loadBalancer).ingress).length > 0) problems.push(`Service ${name} has a load balancer address`);
+  }
+  const broker = new Set(mqttBrokerServicesOf(release));
+  for (const route of flat.filter((o) => o.kind.endsWith("Route"))) {
+    const backends = asArray(asMap(route.spec).rules)
+      .filter(isMap)
+      .flatMap((rule) => asArray(rule.backendRefs).filter(isMap))
+      .map((ref) => asString(ref.name))
+      .filter((name): name is string => name !== undefined);
+    for (const backend of backends.filter((name) => broker.has(name))) {
+      problems.push(`${route.kind} ${route.metadata?.name ?? "(unnamed)"} sends traffic to the MQTT broker's Service ${backend}`);
+    }
+  }
+  return problems;
 }
 
 /** The TCP ports one Istio gateway's pods use, and what the release's NetworkPolicies admit for them. */

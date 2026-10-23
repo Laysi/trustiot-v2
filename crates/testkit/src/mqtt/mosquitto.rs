@@ -1,7 +1,9 @@
-//! Mosquitto 2.1 in a throwaway container, set up like the product's broker for gateways: an
-//! mTLS listener (TLS 1.3, `require_certificate`, `use_identity_as_username`,
+//! Mosquitto 2.1 in a throwaway container, set up like the broker decision 6 asks for gateways:
+//! an mTLS listener (TLS 1.3, `require_certificate`, `use_identity_as_username`,
 //! `set_tcp_nodelay`), dynamic security with the protocol's gateway role
-//! ([`protocol::acl::gateway_role_acls`]), anonymous access off.
+//! ([`protocol::acl::gateway_role_acls`]), anonymous access off. It is not the chart's
+//! configuration (`deploy/chart/files/mosquitto/mosquitto.conf`), which also checks a CRL,
+//! accepts only MQTT 5 and takes the username as the client ID.
 //!
 //! The listener lists ChaCha20-Poly1305 first in `ciphers_tls1.3`: Mosquitto picks the cipher
 //! suite by its own order, not the client's, and without the setting it negotiates AES-256-GCM

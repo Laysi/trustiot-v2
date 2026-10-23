@@ -5,7 +5,7 @@
 | 模組 | 內容 |
 | --- | --- |
 | `schema` | 產生端與消費端的資料表（`PRODUCER_DDL`、`CONSUMER_DDL`、`install_*`） |
-| `publish`、`write` | 在呼叫端的交易內寫入事件 |
+| `publish`、`publish_as`、`write` | 在呼叫端的交易內寫入事件（`publish_as` 另記誰做了變更） |
 | `Consumer`、`Handler` | 讀取產生端的事件、依序交給 handler、記錄進度 |
 | `replay_from` | 把訂閱移到指定位置重新讀取 |
 | `notify` | 通知模式：只存比目前更新的版本 |
@@ -38,6 +38,7 @@ tx.commit().await?;
 ```
 
 - `publish` 只接受交易（`&mut Transaction`），不能在交易外寫事件。交易回滾，事件與它的序號一起消失。
+- 人經 API 做的變更用 `publish_as`，多帶一個 `contract::event::Actor`：`Actor::User { user_id }`（請求的使用者，`UserIdentity::user_id()`）或服務自己的工作 `Actor::Service { service }`。它寫進信封的 `actor`，身分服務的事件紀錄（操作紀錄，K2）以它記下「誰」（[services/identity](../../services/identity/README.md) 的「事件層與操作紀錄」，Laysi/trustiot-v2#130）。`publish` 不帶 actor。
 - 每個事件屬於一個聚合（`Aggregate`：種類加 ID，例如 `tenant` 加租戶 ID）。同一聚合的事件依寫入順序送達，不同聚合之間不保證順序。寫入時會鎖住該聚合在 `outbox_aggregate` 的列直到交易結束，同一聚合的寫入因此排隊；`REPEATABLE READ` 以上的隔離層級則會以序列化錯誤失敗，由呼叫端重試整筆交易。
 - `Published::aggregate_seq` 是事件在聚合內的序號（1、2、3…），通知模式拿它當版本。
 - 聚合屬於它的事件的租戶，或屬於平台（全平台事件）：第一筆事件決定。之後別的租戶（或平台角色）為它寫事件，資料庫以 SQLSTATE 42501 拒絕，該聚合的序號不變（見[聚合的租戶隔離](#聚合的租戶隔離laysitrustiot-v24132026-10-15)）。所以聚合 ID 要是服務自己產生、全平台唯一的值（例如 UUID），不能是租戶自己選的值（例如租戶輸入的序號）；要用這種值時，在前面加上租戶 ID。
@@ -305,7 +306,7 @@ ALTER ROLE assets_app SET search_path = assets;      -- 消費端的表在服務
 
 ## 限制與後續
 
-- 保留期限：`outbox_event` 與 `outbox_inbox` 目前只增不刪。事件層也是操作紀錄（[現場脈絡](../../docs/architecture/field-context.md) AI 記憶第 4 點），保留與查詢介面由 Laysi/trustiot-v2#130 一併決定；刪除事件前要先確認每個訂閱都已讀過。
+- 保留期限：`outbox_event` 與 `outbox_inbox` 目前只增不刪。2026-10-21 決定（Laysi/trustiot-v2#130，[決策 34](../../docs/architecture/decisions.md)）：長期保存的操作紀錄是身分服務的事件紀錄（`identity.event_log`），不是各服務的 outbox，所以 outbox 只是投遞的緩衝，可以刪。刪除規則：一個事件要等**讀這個產生端的每個訂閱**（各消費端 `outbox_subscription` 中 `source_schema` 是它的列）的位置都超過它，再過一段重播用的保留期，才刪 `outbox_event` 的列；`outbox_inbox` 的列在它的訂閱位置超過它、過了同樣的保留期之後刪。還沒有訂閱的新消費端從頭讀（`StartFrom::Beginning`）時只讀得到保留期內的事件，所以要先建訂閱、再刪。刪除工作（排程、保留期長度、監控）在 Laysi/trustiot-v2#521 實作，在那之前照舊只增不刪。
 - 讀取上限受整個叢集最舊的寫入交易影響，見[順序與不漏讀](#順序與不漏讀)；影響範圍與監控見[長寫入交易與 prepared transaction](#長寫入交易與-prepared-transaction)。
 - 每個事件一筆交易，適合控制面的事件量；大量資料（遙測）不走 outbox（決策 8）。
 
