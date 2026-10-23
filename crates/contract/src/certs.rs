@@ -1,7 +1,8 @@
 //! The certs service's client API (`services/certs`, Laysi/trustiot-v2#534): production
 //! workstation certificates, which only platform administrators issue and revoke, through the
 //! ingress with a session cookie (`/api/certs/v1/...`). The service's README ("工作站憑證")
-//! describes the profile and the steps.
+//! describes the profile and the steps. Also the MQTT broker's server certificate
+//! ([`BrokerCertificate`], Laysi/trustiot-v2#557), on an internal port only the broker reaches.
 //!
 //! The requests refuse unknown fields: a client that sends a subject, an extension or a
 //! validity of its own learns at once that the CA decides them. The response may gain optional
@@ -264,6 +265,29 @@ pub struct GatewayRegistration {
     /// server certificate (services/certs/README.md, "閘道器對 broker 伺服器憑證的信任"). The
     /// root CRL (Laysi/trustiot-v2#560) can join it here as a new field.
     pub root_certificate: String,
+}
+
+/// The MQTT broker's server certificate, as `POST /internal/certs/v1/broker-certificate` answers
+/// it (Laysi/trustiot-v2#557; services/certs/README.md, "broker 伺服器憑證"). An internal
+/// endpoint on a port the mesh opens to the broker alone, so not in the OpenAPI document. The
+/// request body is the CSR itself, DER, `Content-Type: application/pkcs10`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BrokerCertificate {
+    /// The serial number, lower-case hex.
+    pub serial: String,
+    /// The issuing CA that signed it: the SHA-256 of its public key, 64 lower-case hex digits.
+    pub ca_key_id: String,
+    /// Its DNS names (subject alternative names): the fixed name every client verifies first,
+    /// then the broker's Service name when the deployment has one.
+    pub names: Vec<String>,
+    /// When it becomes valid: five minutes before it was signed.
+    pub not_before: DateTime<Utc>,
+    /// When it expires; renew once half of its validity has passed.
+    pub not_after: DateTime<Utc>,
+    /// The certificate, then the issuing CA certificate that signed it, PEM: the chain a TLS
+    /// server sends (`tls.crt` of a `kubernetes.io/tls` Secret). Clients trust the root, which
+    /// is not in it.
+    pub certificate_chain: String,
 }
 
 #[cfg(test)]

@@ -231,6 +231,9 @@ pub struct Service {
     pub stderr: Output,
     /// Where the API listens, as a base URL.
     pub base_url: String,
+    /// Where the MQTT broker's certificate issuance listens (`broker.listen_addr`), as a base
+    /// URL.
+    pub broker_url: String,
     health: SocketAddr,
     /// The stand-in for the identity service whose public key the service trusts.
     pub issuer: TestIssuer,
@@ -269,6 +272,7 @@ impl Service {
             .env_clear()
             .env("TRUSTIOT__HTTP__LISTEN_ADDR", "127.0.0.1:0")
             .env("TRUSTIOT__HTTP__HEALTH_LISTEN_ADDR", "127.0.0.1:0")
+            .env("TRUSTIOT__BROKER__LISTEN_ADDR", "127.0.0.1:0")
             .env("TRUSTIOT__SHUTDOWN__DRAIN_DELAY", "100ms")
             .env("TRUSTIOT__SHUTDOWN__DRAIN_TIMEOUT", "5s")
             .env("TRUSTIOT__DATABASE__USERNAME", "certs_app")
@@ -302,16 +306,23 @@ impl Service {
             );
             tokio::time::sleep(Duration::from_millis(50)).await;
         };
-        let address = |field: &str| -> SocketAddr {
-            listening["fields"][field]
+        let address = |line: &Value, field: &str| -> SocketAddr {
+            line["fields"][field]
                 .as_str()
                 .and_then(|address| address.parse().ok())
-                .unwrap_or_else(|| panic!("no {field} in {listening}"))
+                .unwrap_or_else(|| panic!("no {field} in {line}"))
         };
+        // Logged during startup, before `listening`.
+        let broker = stdout
+            .messages("serving the MQTT broker's certificate issuance")
+            .into_iter()
+            .next()
+            .unwrap_or_else(|| panic!("no broker port in the log:\n{}", stdout.text()));
         Self {
             child,
-            base_url: format!("http://{}", address("address")),
-            health: address("health_address"),
+            base_url: format!("http://{}", address(&listening, "address")),
+            broker_url: format!("http://{}", address(&broker, "address")),
+            health: address(&listening, "health_address"),
             stdout,
             stderr,
             issuer,
@@ -370,6 +381,39 @@ impl Service {
             body: response.text().await.expect("read the body"),
             cache_control,
         }
+    }
+
+    /// `POST path` on the broker port with `content_type` (none: no header) and `body`.
+    pub async fn post_broker(
+        &self,
+        path: &str,
+        content_type: Option<&str>,
+        body: impl Into<reqwest::Body>,
+    ) -> Reply {
+        let mut request = reqwest::Client::new()
+            .post(format!("{}{path}", self.broker_url))
+            .timeout(Duration::from_secs(30))
+            .body(body);
+        if let Some(content_type) = content_type {
+            request = request.header("content-type", content_type);
+        }
+        let response = request.send().await.expect("call the broker port");
+        let status = response.status().as_u16();
+        let cache_control = response
+            .headers()
+            .get("cache-control")
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_owned);
+        Reply {
+            status,
+            body: response.text().await.expect("read the body"),
+            cache_control,
+        }
+    }
+
+    /// `GET path` on the broker port; the status and the body.
+    pub async fn get_broker(&self, path: &str) -> (u16, String) {
+        get(&format!("{}{path}", self.broker_url)).await
     }
 
     /// `POST path` with a JSON `body` and `token`.

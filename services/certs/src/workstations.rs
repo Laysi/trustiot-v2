@@ -53,9 +53,9 @@ use sqlx::postgres::PgRow;
 use sqlx::{PgPool, Row as _};
 
 use crate::api::{self, BodyKeys, Problems, error, ok, refuse};
-use crate::authority::{CaState, unix_now};
+use crate::authority::CaState;
 use crate::issue::{
-    self, IssueError, IssuedCertificate, MAX_REQUEST_BYTES, MAX_WORKSTATION_NAME_LEN, RecordError,
+    self, IssueError, IssuedCertificate, MAX_REQUEST_BYTES, MAX_WORKSTATION_NAME_LEN, Refusal,
     WORKSTATION_SUBJECT_PREFIX, WorkstationName,
 };
 use crate::pem;
@@ -205,63 +205,19 @@ async fn issue_for(
     name: &WorkstationName,
     request: &[u8],
 ) -> Result<IssuedCertificate, ErrorBody> {
-    let not_ready = || ErrorBody::new(ErrorCode::Unavailable).with_message_key(CA_NOT_READY);
-    let Some(authority) = state.ca.authority() else {
-        tracing::warn!("refused a workstation certificate: no issuing CA is loaded");
-        return Err(not_ready());
-    };
-    let database = |error: &dyn std::fmt::Display| {
-        tracing::error!(error = %error, "could not issue a workstation certificate");
-        ErrorBody::new(ErrorCode::Unavailable)
-    };
-    let mut tx = state.pool.begin().await.map_err(|e| database(&e))?;
-    let ids: Vec<String> = authority
-        .issuing()
-        .iter()
-        .map(|ca| ca.key_id().to_owned())
-        .collect();
-    let with_crl: Vec<String> =
-        sqlx::query_scalar("SELECT ca_key_id FROM certs.crls WHERE ca_key_id = ANY($1)")
-            .bind(&ids)
-            .fetch_all(&mut *tx)
-            .await
-            .map_err(|e| database(&e))?;
-    let now = unix_now();
-    let Some(ca) = authority.signer(now, |id| with_crl.iter().any(|known| known == id)) else {
-        tracing::warn!(
-            "refused a workstation certificate: no valid issuing CA has a CRL yet (the CRL job \
-             gives a new one its first CRL within crl.check_interval)"
-        );
-        return Err(not_ready());
-    };
-    let issued = issue::workstation_certificate(ca, request, name, state.validity, now).map_err(
-        |failure| match failure {
-            IssueError::IssuingCaExpiring => {
-                tracing::warn!(
-                    ca_key_id = %ca.key_id(),
-                    "refused a workstation certificate: {failure}"
-                );
-                not_ready()
-            }
-            IssueError::Random | IssueError::Sign(_) => {
-                tracing::error!(problem = %failure, "could not sign a workstation certificate");
-                ErrorBody::new(ErrorCode::Internal)
-            }
-            refused => request_error(&refused),
-        },
-    )?;
-    match issue::record(&mut tx, &issued).await {
-        Ok(()) => {}
-        Err(RecordError::NoCrl(ca_key_id)) => {
-            // The CRL was read in this transaction and CRLs are never removed, so this means a
-            // broken invariant; refuse rather than hand out an uncheckable certificate.
-            tracing::error!(ca_key_id = %ca_key_id, "the signing CA has no CRL after all");
-            return Err(not_ready());
-        }
-        Err(RecordError::Database(e)) => return Err(database(&e)),
-    }
-    tx.commit().await.map_err(|e| database(&e))?;
-    Ok(issued)
+    issue::sign_and_record(
+        &state.pool,
+        &state.ca,
+        "a workstation certificate",
+        |ca, now| issue::workstation_certificate(ca, request, name, state.validity, now),
+    )
+    .await
+    .map_err(|refusal| match refusal {
+        Refusal::NotReady => ErrorBody::new(ErrorCode::Unavailable).with_message_key(CA_NOT_READY),
+        Refusal::Request(refused) => request_error(&refused),
+        Refusal::Failed => ErrorBody::new(ErrorCode::Internal),
+        Refusal::Database => ErrorBody::new(ErrorCode::Unavailable),
+    })
 }
 
 /// Revokes a workstation certificate. Its issuing CA's next scheduled CRL lists it; the

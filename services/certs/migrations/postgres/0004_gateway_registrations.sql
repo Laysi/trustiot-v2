@@ -2,6 +2,16 @@
 -- services/certs/README.md, "出廠登錄"). Run by `certs_owner` like 0001_certs.sql, in one
 -- transaction.
 --
+-- Numbered 0004, after 0003_broker_certificates.sql (Laysi/trustiot-v2#557). On its pull
+-- request's branch this file was briefly 0003_gateway_registrations.sql. It was renumbered while
+-- merging main, before it reached main. Releases and the chart's migration Job are built from
+-- main only, so only throwaway test databases ever applied the old name. The rule that applied
+-- files never change (tools/migrate/src/registry.rs; tools/migrate/src/lib.rs refuses a changed
+-- file) protects files on main. That is why 0003_broker_certificates.sql, which main already has,
+-- keeps its number. This file adds tables, a guard and grants and leaves the
+-- issued_certificates profile CHECK that 0003 widened alone, so it applies on top of 0003's
+-- result.
+--
 -- A production workstation registers each gateway once: its hardware ID, the public key of its
 -- TPM key (from a CSR), the public part of the TPM's endorsement key, and the initial gateway
 -- certificate the CA signed for it. A registration is platform data, not tenant data: a gateway

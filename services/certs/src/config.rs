@@ -1,12 +1,15 @@
 //! The certs service's configuration (services/certs/README.md, "設定").
 
 use std::fmt;
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
 use std::time::Duration;
 
 use serde::Deserialize;
 use service_kit::config::{Invalid, Validate};
 use service_kit::postgres::{PostgresConfig, SslMode};
+
+use crate::issue::BrokerNames;
 
 /// Fewest connections of the service role's pool: one for the CRL job, one for the monitor and
 /// requests.
@@ -30,6 +33,20 @@ pub const MIN_WORKSTATION_VALIDITY: Duration = Duration::from_secs(3600);
 /// Longest workstation certificate validity: the same ceiling as gateway certificates.
 pub const MAX_WORKSTATION_VALIDITY: Duration = MAX_GATEWAY_VALIDITY;
 
+/// Shortest MQTT broker server certificate validity: whoever renews it needs room to do so
+/// before expiry, and the CA refuses to sign anything valid for less ([`crate::issue`]'s
+/// `MIN_REMAINING_SECS`).
+pub const MIN_BROKER_VALIDITY: Duration = Duration::from_secs(3600);
+
+/// Longest MQTT broker server certificate validity: the gateway certificates' default. The
+/// broker renews its certificate in the cluster without a person, so a long validity buys
+/// nothing and keeps a stolen key usable for longer.
+pub const MAX_BROKER_VALIDITY: Duration = Duration::from_secs(90 * 86_400);
+
+/// The default port of the MQTT broker's certificate issuance; the chart names it
+/// `broker-certs`.
+pub const DEFAULT_BROKER_PORT: u16 = 8082;
+
 /// Longest CRL validity: Mosquitto rejects every gateway of an issuing CA once its CRL expires,
 /// so a CRL that lives long only delays revocation news, never helps.
 pub const MAX_CRL_VALIDITY: Duration = Duration::from_secs(31 * 86_400);
@@ -51,6 +68,9 @@ pub struct Config {
     /// The workstation certificate profile.
     #[serde(default)]
     pub workstation: WorkstationProfile,
+    /// The MQTT broker's server certificate profile and the port it is issued on.
+    #[serde(default)]
+    pub broker: BrokerProfile,
     /// When CRLs are regenerated and when their expiry raises the alert.
     #[serde(default)]
     pub crl: CrlSchedule,
@@ -192,6 +212,62 @@ impl Default for WorkstationProfile {
 
 const fn default_workstation_validity() -> Duration {
     Duration::from_secs(180 * 86_400)
+}
+
+/// `broker.*`: the MQTT broker's server certificate (Laysi/trustiot-v2#557; README.md, "broker
+/// 伺服器憑證"). Everything else in the profile is fixed: the subject and the first DNS name are
+/// `issue::BROKER_SERVER_NAME`, the extended key usage is server authentication only.
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BrokerProfile {
+    /// `TRUSTIOT__BROKER__LISTEN_ADDR`: the port that issues it and serves nothing else, apart
+    /// from the API port, so the mesh can let the MQTT broker alone reach it (the chart's port
+    /// `broker-certs` and its own Service and policies `<release>-certs-broker`). Default
+    /// `0.0.0.0:8082`. Startup fails when it is taken.
+    #[serde(default = "default_broker_listen_addr")]
+    pub listen_addr: SocketAddr,
+    /// `TRUSTIOT__BROKER__VALIDITY`: how long a broker server certificate is valid, from
+    /// [`MIN_BROKER_VALIDITY`] to [`MAX_BROKER_VALIDITY`], never past the issuing CA certificate.
+    /// Default 30 days; renewal is due once half of it has passed (README.md).
+    #[serde(
+        default = "default_broker_validity",
+        deserialize_with = "service_kit::config::duration"
+    )]
+    pub validity: Duration,
+    /// `TRUSTIOT__BROKER__SERVICE_NAME`: the broker's Service name, a second DNS name in the
+    /// certificate after `issue::BROKER_SERVER_NAME` (the chart's
+    /// `<release>-mqtt-broker.<namespace>.svc`). Default none.
+    #[serde(default)]
+    pub service_name: Option<String>,
+}
+
+impl Default for BrokerProfile {
+    fn default() -> Self {
+        Self {
+            listen_addr: default_broker_listen_addr(),
+            validity: default_broker_validity(),
+            service_name: None,
+        }
+    }
+}
+
+impl BrokerProfile {
+    /// The DNS names of the certificate.
+    ///
+    /// # Errors
+    ///
+    /// When `service_name` is not a DNS name; [`Config::validate`] checks it at startup.
+    pub fn names(&self) -> Result<BrokerNames, String> {
+        BrokerNames::new(self.service_name.as_deref())
+    }
+}
+
+const fn default_broker_listen_addr() -> SocketAddr {
+    SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), DEFAULT_BROKER_PORT)
+}
+
+const fn default_broker_validity() -> Duration {
+    Duration::from_secs(30 * 86_400)
 }
 
 /// `crl.*`: the CRL schedule. Every `check_interval` the replica that holds the job lock gives
@@ -351,6 +427,15 @@ impl Validate for Config {
                 "must be between 1 hour and 398 days",
             ));
         }
+        if !(MIN_BROKER_VALIDITY..=MAX_BROKER_VALIDITY).contains(&self.broker.validity) {
+            return Err(Invalid::new(
+                "broker.validity",
+                "must be between 1 hour and 90 days",
+            ));
+        }
+        if let Err(problem) = self.broker.names() {
+            return Err(Invalid::new("broker.service_name", problem));
+        }
         self.crl.validate()
     }
 }
@@ -419,6 +504,7 @@ mod tests {
             },
             gateway: GatewayProfile::default(),
             workstation: WorkstationProfile::default(),
+            broker: BrokerProfile::default(),
             crl: CrlSchedule::default(),
         }
     }
@@ -438,7 +524,22 @@ mod tests {
         };
         assert!(short.validate().is_ok());
 
-        let broken: [Breakage; 17] = [
+        let mut named = config();
+        named.broker.service_name = Some("trustiot-mqtt-broker.trustiot.svc".to_owned());
+        assert!(named.validate().is_ok());
+        assert_eq!(
+            named.broker.names().expect("names").as_slice(),
+            [
+                crate::issue::BROKER_SERVER_NAME,
+                "trustiot-mqtt-broker.trustiot.svc"
+            ]
+        );
+        assert_eq!(
+            config().broker.listen_addr,
+            "0.0.0.0:8082".parse().expect("an address")
+        );
+
+        let broken: [Breakage; 21] = [
             ("database.max_connections", |c| {
                 c.database.max_connections = 1
             }),
@@ -475,6 +576,18 @@ mod tests {
             }),
             ("workstation.validity", |c| {
                 c.workstation.validity = MAX_WORKSTATION_VALIDITY + Duration::from_secs(1);
+            }),
+            ("broker.validity", |c| {
+                c.broker.validity = MIN_BROKER_VALIDITY - Duration::from_secs(1);
+            }),
+            ("broker.validity", |c| {
+                c.broker.validity = MAX_BROKER_VALIDITY + Duration::from_secs(1);
+            }),
+            ("broker.service_name", |c| {
+                c.broker.service_name = Some("*.trustiot.svc".to_owned());
+            }),
+            ("broker.service_name", |c| {
+                c.broker.service_name = Some(String::new());
             }),
             ("crl.validity", |c| {
                 c.crl.validity = MAX_CRL_VALIDITY + Duration::from_secs(1);

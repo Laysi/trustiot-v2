@@ -92,7 +92,7 @@ use x509_parser::x509::{AlgorithmIdentifier, SubjectPublicKeyInfo};
 use crate::api::{self, BodyKeys, Problems, error, ok, refuse};
 use crate::authority::{Authority, CaState, unix_now};
 use crate::issue::{
-    self, IssueError, IssuedCertificate, MAX_REQUEST_BYTES, RecordError, WORKSTATION_PURPOSE_DER,
+    self, IssueError, IssuedCertificate, MAX_REQUEST_BYTES, Refusal, WORKSTATION_PURPOSE_DER,
     WORKSTATION_SUBJECT_PREFIX, WorkstationName,
 };
 use crate::pem;
@@ -858,15 +858,6 @@ async fn register(
     }
 
     let issued = sign(state, authority, &mut tx, registration).await?;
-    match issue::record(&mut tx, &issued).await {
-        Ok(()) => {}
-        Err(RecordError::NoCrl(ca_key_id)) => {
-            // The CRL was read in this transaction and CRLs are never removed.
-            tracing::error!(ca_key_id = %ca_key_id, "the signing CA has no CRL after all");
-            return Err(not_ready().into());
-        }
-        Err(RecordError::Database(e)) => return Err(sql(&e)),
-    }
     let registered_at: DateTime<Utc> = sqlx::query_scalar(
         "INSERT INTO certs.gateway_registrations
              (hardware_id, public_key, endorsement_key, endorsement_key_sha256,
@@ -1008,55 +999,33 @@ fn repeat(
     ))
 }
 
-/// Signs the gateway certificate with the newest issuing CA that has a CRL (read in `tx`).
+/// Signs the gateway certificate and records it in the ledger within `tx`, through the path
+/// every certificate takes ([`issue::sign_and_record_in`]): the newest valid issuing CA that has
+/// a CRL, read in `tx`. The registration and its event commit with it, or nothing does.
 async fn sign(
     state: &Routes,
     authority: &Authority,
     tx: &mut PlatformTransaction,
     registration: &Registration,
 ) -> Result<IssuedCertificate, Failure> {
-    let ids: Vec<String> = authority
-        .issuing()
-        .iter()
-        .map(|ca| ca.key_id().to_owned())
-        .collect();
-    let with_crl: Vec<String> =
-        sqlx::query_scalar("SELECT ca_key_id FROM certs.crls WHERE ca_key_id = ANY($1)")
-            .bind(&ids)
-            .fetch_all(&mut **tx)
-            .await
-            .map_err(|e| sql(&e))?;
-    let now = unix_now();
-    let Some(ca) = authority.signer(now, |id| with_crl.iter().any(|known| known == id)) else {
-        tracing::warn!(
-            "refused a gateway registration: no valid issuing CA has a CRL yet (the CRL job \
-             gives a new one its first CRL within crl.check_interval)"
-        );
-        return Err(not_ready().into());
-    };
-    issue::gateway_certificate(
-        ca,
-        &registration.request,
-        &registration.hardware_id,
-        state.validity,
-        now,
-    )
-    .map_err(|failure| match failure {
-        IssueError::IssuingCaExpiring => {
-            tracing::warn!(
-                ca_key_id = %ca.key_id(),
-                "refused a gateway registration: {failure}"
-            );
-            not_ready().into()
-        }
-        IssueError::Random | IssueError::Sign(_) => {
-            tracing::error!(problem = %failure, "could not sign a gateway certificate");
-            ErrorBody::new(ErrorCode::Internal).into()
-        }
+    issue::sign_and_record_in(tx, authority, "a gateway certificate", |ca, now| {
+        issue::gateway_certificate(
+            ca,
+            &registration.request,
+            &registration.hardware_id,
+            state.validity,
+            now,
+        )
+    })
+    .await
+    .map_err(|refusal| match refusal {
+        Refusal::NotReady => not_ready().into(),
         // Not expected: the request was parsed with the same checks.
-        refused => ErrorBody::new(ErrorCode::ValidationFailed)
+        Refusal::Request(refused) => ErrorBody::new(ErrorCode::ValidationFailed)
             .with_field_error(request_field_error(request_message(&refused)))
             .into(),
+        Refusal::Failed => ErrorBody::new(ErrorCode::Internal).into(),
+        Refusal::Database => ErrorBody::new(ErrorCode::Unavailable).into(),
     })
 }
 

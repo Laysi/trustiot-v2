@@ -1,0 +1,48 @@
+[package]
+name = "assistant"
+description = "TrustIoT v2 AI assistant (decision 31): the main agent loop with tools, an append-only conversation history, prompt caching and a token budget per question, calling Claude through the AI gateway."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "assistant"
+path = "src/main.rs"
+test = false
+doc = false
+
+[dependencies]
+# Anthropic Messages types: content blocks (thinking, tool calls) kept as received, usage by
+# billing category, stop reasons (src/model/anthropic.rs only).
+ai-clients = { path = "../../crates/ai-clients" }
+axum.workspace = true
+# Tool result images are checked to be base64 before they go to the model.
+base64.workspace = true
+# Tenant and user IDs, the internal identity token a tool calls with, service names.
+contract = { path = "../../crates/contract" }
+# The `assistant.model_calls` counter (cache reads, docs/architecture/ai-assistant.md).
+opentelemetry = { workspace = true, features = ["metrics"] }
+# The AI gateway's internal API over plain HTTP: ztunnel adds mutual TLS inside the mesh, so no
+# TLS stack here (the same rule as crates/contract's internal client).
+reqwest.workspace = true
+serde = { workspace = true, features = ["derive"] }
+# `raw_value`: the conversation history is kept as the JSON text received and sent back as it is.
+serde_json = { workspace = true, features = ["raw_value"] }
+service-kit = { path = "../../crates/service-kit" }
+thiserror.workspace = true
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "sync", "time"] }
+tracing.workspace = true
+# Run and model call IDs (UUIDv7).
+uuid = { workspace = true, features = ["v7"] }
+
+[dev-dependencies]
+# The stand-in AI gateway of tests/gateway.rs.
+axum = { workspace = true, features = ["http1", "tokio"] }
+tokio = { workspace = true, features = ["macros", "net", "rt-multi-thread", "sync", "time"] }
+# Captures the log events the tests check.
+tracing-subscriber = { workspace = true, features = ["registry", "std"] }
+
+[lints]
+workspace = true

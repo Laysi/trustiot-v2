@@ -2049,6 +2049,122 @@ describe("MQTT broker (decision 6, Laysi/trustiot-v2#84)", () => {
     expect(withoutCerts.some((m) => m.metadata.name === `${RELEASE}-certs`)).toBe(false);
   });
 
+  // Laysi/trustiot-v2#557: a certificate for the broker's name lets its holder pose as the broker
+  // to every gateway, so only the broker's pod reaches the port that issues it.
+  test.each(SHAPE_NAMES)("%s: the broker alone reaches the certs service's broker-certs port, which the certs Service leaves out", (shape) => {
+    const BROKER_CERTS_PORT = 8082;
+    const CERTS = `${RELEASE}-certs`;
+    const BROKER_CERTS = `${RELEASE}-certs-broker`;
+    // Every service, one of them calling certs, and the broker with its callers.
+    const rendered = render(SHAPES[shape], [...brokerOn, ...enableAllServices, "--set-json", 'mesh.calls.assets=["certs","postgres"]']);
+    const deployment = find(rendered, "Deployment", CERTS);
+    const certsLabels = (deployment.spec as { template: { metadata: { labels: Record<string, string> } } }).template.metadata.labels;
+    const selectsCerts = (selector: Record<string, string>) => Object.entries(selector).every(([key, value]) => certsLabels[key] === value);
+
+    // The certs service's own policy: its callers on the API port only.
+    expect(policyOf(rendered, "AuthorizationPolicy", CERTS).rules as Rule[]).toEqual([
+      {
+        from: [{ source: { principals: [principal("assets"), principal("mqtt-broker"), principal("ingress-istio")] } }],
+        to: [{ operation: { ports: ["8080"] } }],
+      },
+    ]);
+    // The broker certificate's policy, on the certs pods: the broker on broker-certs only.
+    const brokerPolicy = policyOf(rendered, "AuthorizationPolicy", BROKER_CERTS);
+    expect(brokerPolicy.action).toBe("ALLOW");
+    expect(selectsCerts((brokerPolicy.selector as { matchLabels: Record<string, string> }).matchLabels)).toBe(true);
+    expect(brokerPolicy.rules as Rule[]).toEqual([
+      { from: [{ source: { principals: [principal("mqtt-broker")] } }], to: [{ operation: { ports: [String(BROKER_CERTS_PORT)] } }] },
+    ]);
+    // Across every AuthorizationPolicy that selects the certs pods: a rule that admits anyone but
+    // the broker names its ports, and broker-certs is not one of them. ALLOW policies add up, so
+    // this is what decides who reaches the port. A policy with neither selector nor targetRefs
+    // would apply to every workload of the namespace, so it counts as one on the certs pods; one
+    // with targetRefs applies to its targets (the ingress gateway's) only.
+    const onCerts = rendered.filter((m) => {
+      if (m.kind !== "AuthorizationPolicy") return false;
+      const spec = m.spec as { selector?: { matchLabels?: Record<string, string> }; targetRefs?: unknown[] };
+      if (spec.targetRefs !== undefined) return false;
+      return selectsCerts(spec.selector?.matchLabels ?? {});
+    });
+    expect(onCerts.map((m) => m.metadata.name).sort()).toEqual([CERTS, BROKER_CERTS]);
+    const reachBrokerPort = onCerts.flatMap((m) =>
+      (((m.spec as YamlMap).rules ?? []) as Rule[]).flatMap((rule) => {
+        const ports = rule.to?.flatMap((to) => to.operation.ports);
+        return ports === undefined || ports.includes(String(BROKER_CERTS_PORT)) ? rule.from.flatMap((from) => from.source.principals) : [];
+      }),
+    );
+    expect(reachBrokerPort).toEqual([principal("mqtt-broker")]);
+    // The NetworkPolicy sees HBONE only: it admits the broker's pods.
+    const network = policyOf(rendered, "NetworkPolicy", BROKER_CERTS);
+    expect(network.podSelector).toEqual(policyOf(rendered, "NetworkPolicy", CERTS).podSelector);
+    expect(network.ingress).toEqual([
+      { from: [{ podSelector: { matchLabels: (find(rendered, "Service", NAME).spec as { selector: Record<string, string> }).selector } }], ports: [{ port: 15008, protocol: "TCP" }] },
+    ]);
+
+    // The certs Service leaves the port out; its own Service has it alone.
+    const servicePorts = (name: string) =>
+      (find(rendered, "Service", name).spec as { ports: { name: string; port: number; targetPort: string }[] }).ports.map((p) => [p.name, p.port, p.targetPort]);
+    expect(servicePorts(CERTS)).toEqual([["http", 8080, "http"]]);
+    expect(servicePorts(BROKER_CERTS)).toEqual([["broker-certs", BROKER_CERTS_PORT, "broker-certs"]]);
+    const brokerService = find(rendered, "Service", BROKER_CERTS);
+    expect((brokerService.spec as { type: string }).type).toBe("ClusterIP");
+    expect((brokerService.spec as { selector: Record<string, string> }).selector).toEqual((find(rendered, "Service", CERTS).spec as { selector: Record<string, string> }).selector);
+    expect(brokerService.metadata.labels?.["app.kubernetes.io/component"]).toBe("certs-broker");
+
+    // The service listens where the Service points and names the broker's Service in the
+    // certificate (services/certs/README.md, "broker 伺服器憑證").
+    const container = podSpec(deployment).containers[0];
+    expect(container?.ports?.map((p) => [p.name, p.containerPort])).toEqual([
+      ["http", 8080],
+      ["broker-certs", BROKER_CERTS_PORT],
+      ["health", 8081],
+    ]);
+    const env = Object.fromEntries((container?.env ?? []).map((e) => [e.name, e.value]));
+    expect(env.TRUSTIOT__BROKER__LISTEN_ADDR).toBe(`0.0.0.0:${BROKER_CERTS_PORT}`);
+    expect(env.TRUSTIOT__BROKER__SERVICE_NAME).toBe(`${NAME}.${NAMESPACE}.svc`);
+    // No other workload gets the broker's settings.
+    for (const other of rendered.filter((m) => m.kind === "Deployment" && m.metadata.name !== CERTS)) {
+      expect(podSpec(other).containers.flatMap((c) => (c.env ?? []).map((e) => e.name)).filter((name) => name.startsWith("TRUSTIOT__BROKER__"))).toEqual([]);
+    }
+
+    // Without the broker the port's policies admit nobody, and the certificate names no Service.
+    const alone = render(SHAPES[shape], enableAllServices);
+    expect(policyOf(alone, "AuthorizationPolicy", BROKER_CERTS).rules).toBeUndefined();
+    expect(policyOf(alone, "NetworkPolicy", BROKER_CERTS).ingress).toEqual([]);
+    const aloneEnv = (podSpec(find(alone, "Deployment", CERTS)).containers[0]?.env ?? []).map((e) => e.name);
+    expect(aloneEnv).toContain("TRUSTIOT__BROKER__LISTEN_ADDR");
+    expect(aloneEnv).not.toContain("TRUSTIOT__BROKER__SERVICE_NAME");
+    // Without the certs service, nothing of it.
+    expect(render(SHAPES[shape], brokerOn).some((m) => m.metadata.name === BROKER_CERTS)).toBe(false);
+  }, SLOW_TEST_MS);
+
+  test.each(SHAPE_NAMES)("%s: the broker-certs Service stays on 8082 when the container port changes, and the policies follow the container port", (shape) => {
+    const SERVICE_PORT = 8082;
+    const CONTAINER_PORT = 9443;
+    const CERTS = `${RELEASE}-certs`;
+    const BROKER_CERTS = `${RELEASE}-certs-broker`;
+    const rendered = render(SHAPES[shape], [
+      ...brokerOn,
+      ...enableAllServices,
+      "--set-json",
+      `services.certs.ports=[{"name":"http","containerPort":8080,"appProtocol":"http"},{"name":"broker-certs","containerPort":${CONTAINER_PORT},"appProtocol":"http"}]`,
+    ]);
+    // The broker's address does not move: the Service keeps 8082 and forwards by name.
+    const service = find(rendered, "Service", BROKER_CERTS).spec as { ports: { name: string; port: number; targetPort: string }[] };
+    expect(service.ports.map((p) => [p.name, p.port, p.targetPort])).toEqual([["broker-certs", SERVICE_PORT, "broker-certs"]]);
+    // The service listens on the new container port, and ztunnel matches that port.
+    const container = podSpec(find(rendered, "Deployment", CERTS)).containers[0];
+    expect(container?.ports?.find((p) => p.name === "broker-certs")?.containerPort).toBe(CONTAINER_PORT);
+    const env = Object.fromEntries((container?.env ?? []).map((e) => [e.name, e.value]));
+    expect(env.TRUSTIOT__BROKER__LISTEN_ADDR).toBe(`0.0.0.0:${CONTAINER_PORT}`);
+    expect(policyOf(rendered, "AuthorizationPolicy", BROKER_CERTS).rules as Rule[]).toEqual([
+      { from: [{ source: { principals: [principal("mqtt-broker")] } }], to: [{ operation: { ports: [String(CONTAINER_PORT)] } }] },
+    ]);
+    // The certs service's own policy still admits its callers on the API port alone.
+    const own = (policyOf(rendered, "AuthorizationPolicy", CERTS).rules as Rule[]).flatMap((rule) => rule.to?.flatMap((to) => to.operation.ports) ?? []);
+    expect(own).toEqual(["8080"]);
+  }, SLOW_TEST_MS);
+
   test("the accounts: a token only the accounts init container mounts, a Role on the accounts Secret alone, an account per holder", () => {
     expect(pod.initContainers.map((c) => c.name)).toEqual(["accounts", "trust-files"]);
     expect(pod.containers.map((c) => c.name)).toEqual(["mosquitto", "trust"]);
@@ -4123,7 +4239,10 @@ describe("service-to-service authorization (decision 27)", () => {
   const API_PORT = 8080;
   // The identity service's token exchange listens on a port of its own (Laysi/trustiot-v2#106).
   const EXCHANGE_PORT = 8082;
-  // An identity AuthorizationPolicy rule: these principals, on this port only.
+  // The certs service issues the MQTT broker's server certificate on a port of its own
+  // (Laysi/trustiot-v2#557).
+  const BROKER_CERTS_PORT = 8082;
+  // An identity (or certs) AuthorizationPolicy rule: these principals, on this port only.
   const identityRule = (port: number, principals: string[]) => ({ from: [{ source: { principals } }], to: [{ operation: { ports: [String(port)] } }] });
   // Test stand-ins that run traefik/whoami, which listens on http only, so their overlays probe
   // http. The identity double (identity in the e2e overlay) listens on the health port like a
@@ -4191,7 +4310,7 @@ describe("service-to-service authorization (decision 27)", () => {
     }
   });
 
-  test("the call list and the ingress routes generate one AuthorizationPolicy per service, and one for the token exchange", () => {
+  test("the call list and the ingress routes generate one AuthorizationPolicy per service, and one each for the token exchange and the broker certificate", () => {
     const manifests = withCalls();
     const sa = (service: string) => principal(`${RELEASE}-${service}`);
     // Callers from mesh.calls first (sorted), then the ingress gateway where it routes or, for
@@ -4204,6 +4323,9 @@ describe("service-to-service authorization (decision 27)", () => {
       "identity-exchange": [sa("assets"), sa("identity")],
       assets: [sa("identity"), principal(GATEWAY_SA)],
       certs: [sa("assets"), principal(GATEWAY_SA)],
+      // The MQTT broker's server certificate: the broker alone, which this overlay does not
+      // deploy (Laysi/trustiot-v2#557).
+      "certs-broker": [],
       "mqtt-bridge": [principal(GATEWAY_SA)],
       // The SPA's static files: the gateway only, like a public path.
       web: [principal(GATEWAY_SA)],
@@ -4219,15 +4341,15 @@ describe("service-to-service authorization (decision 27)", () => {
       const policy = meshPolicy(manifests, service);
       expect(policy.action).toBe("ALLOW");
       // The selector picks exactly this service's pods; the token exchange's, the identity
-      // service's.
-      const workload = service === "identity-exchange" ? "identity" : service;
+      // service's, and the broker certificate's, the certs service's.
+      const workload = service === "identity-exchange" ? "identity" : service === "certs-broker" ? "certs" : service;
       for (const deployment of manifests.filter((m) => m.kind === "Deployment")) {
         expect(selects(policy.selector.matchLabels, podLabels(deployment))).toBe(serviceOf(deployment.metadata.name) === workload);
       }
       if (principals.length === 0) {
         // An ALLOW policy without rules refuses every connection.
         expect(policy.rules).toBeUndefined();
-      } else if (service === "identity") {
+      } else if (service === "identity" || service === "certs") {
         expect(policy.rules).toEqual([identityRule(API_PORT, principals)]);
       } else if (service === "identity-exchange") {
         expect(policy.rules).toEqual([identityRule(EXCHANGE_PORT, principals)]);
@@ -4666,8 +4788,14 @@ describe("service-to-service authorization (decision 27)", () => {
         expect({ label, nodePorts }).toEqual({ label, nodePorts: [HEALTH_PORT] });
         const [container] = podSpec(workload).containers;
         // The identity service also serves its token exchange on a port of its own, which has a
-        // Service of its own (Laysi/trustiot-v2#106).
-        const servedPorts: [string, number][] = service === "identity" ? [["http", API_PORT], ["token-exchange", EXCHANGE_PORT]] : [["http", API_PORT]];
+        // Service of its own (Laysi/trustiot-v2#106); the certs service likewise the MQTT broker's
+        // server certificate (Laysi/trustiot-v2#557).
+        const servedPorts: [string, number][] =
+          service === "identity"
+            ? [["http", API_PORT], ["token-exchange", EXCHANGE_PORT]]
+            : service === "certs"
+              ? [["http", API_PORT], ["broker-certs", BROKER_CERTS_PORT]]
+              : [["http", API_PORT]];
         expect({ label, ports: container?.ports?.map(({ name: port, containerPort }) => ({ name: port, containerPort })) }).toEqual({
           label,
           ports: [...servedPorts.map(([port, containerPort]) => ({ name: port, containerPort })), { name: "health", containerPort: HEALTH_PORT }],
@@ -5901,6 +6029,44 @@ describe("the templates keep the secret and env boundaries without schema valida
         'mesh.calls={"assets":["certs"]}',
       ],
       /services\.identity\.ports: the token exchange needs the port named token-exchange .* because assets call other services on behalf of users/,
+    ],
+    // The MQTT broker's server certificate (Laysi/trustiot-v2#557): its port has its own Service
+    // and policies, for the broker alone.
+    [
+      "a service named after the broker certificate's Service and policies",
+      ["--set", "services.certs-broker.enabled=true"],
+      /services\.certs-broker: the name belongs to the certs service's MQTT broker certificate issuance/,
+    ],
+    [
+      "the MQTT broker while the certs service has no broker-certs port",
+      ["--set", "services.certs.enabled=true", "--set-json", 'services.certs.ports=[{"name":"http","containerPort":8080}]', "--set", "mqttBroker.enabled=true"],
+      /services\.certs\.ports: the MQTT broker's server certificate needs the port named broker-certs/,
+    ],
+    [
+      "a certs service with the broker-certs port only",
+      ["--set", "services.certs.enabled=true", "--set-json", 'services.certs.ports=[{"name":"broker-certs","containerPort":8082}]'],
+      // The ingress routes to the API port by name, so their check may fail the render first.
+      /services\.certs\.ports: the API port \(http\) is missing|service "certs" has no port named "http"/,
+    ],
+    [
+      "an ingress route to the certs service's broker-certs port",
+      [
+        "--set",
+        "services.certs.enabled=true",
+        "--set-json",
+        'ingress.routes=[{"host":"app","path":"/api/certs","match":"PathPrefix","service":"certs","port":"broker-certs"}]',
+      ],
+      /ingress\.routes\[0\]: port "broker-certs" of service "certs" has a Service and policies of its own/,
+    ],
+    [
+      "an ingress route to the identity service's token-exchange port",
+      [
+        "--set",
+        "services.identity.enabled=true",
+        "--set-json",
+        'ingress.routes=[{"host":"app","path":"/api/identity","match":"PathPrefix","service":"identity","port":"token-exchange"}]',
+      ],
+      /ingress\.routes\[0\]: port "token-exchange" of service "identity" has a Service and policies of its own/,
     ],
     [
       "an identity service with the token-exchange port only",

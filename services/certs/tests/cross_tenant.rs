@@ -10,15 +10,20 @@
 //! The ledger's gateway ids and workstation names are not tenant data: a gateway belongs to a
 //! tenant through its assignment in the assets service, and certificates are issued before a
 //! gateway is assigned (factory registration, Laysi/trustiot-v2#79); production workstations
-//! belong to the platform, not to a tenant (Laysi/trustiot-v2#534). The registrations themselves
-//! (`certs.gateway_registrations`, `certs.workstation_request_nonces`) are platform data the
-//! service role cannot reach at all, only the platform role. If a later issue stores tenant ids
-//! here, the tables become tenant tables and get the probes.
+//! belong to the platform, not to a tenant (Laysi/trustiot-v2#534); the MQTT broker's server
+//! certificate belongs to the platform's broker (Laysi/trustiot-v2#557), and its issuance is on a
+//! port of its own outside the OpenAPI document, which only the broker's workload reaches. The
+//! workstation API is for platform administrators only, which `tests/workstation.rs` tests. The
+//! registrations themselves (`certs.gateway_registrations`, `certs.workstation_request_nonces`)
+//! are platform data the service role cannot reach at all, only the platform role. If a later
+//! issue stores tenant ids here, the tables become tenant tables and get the probes.
 //!
 //! Since the factory registration the service is an outbox producer (`certs.gateway_registered`,
 //! platform-wide), so its schema has the outbox's tables with the tenant policies of every
 //! producer; the service role's grants on them are probed like any tenant table: it cannot write
-//! another tenant's events or advance another tenant's aggregates.
+//! another tenant's events or advance another tenant's aggregates. So the suite no longer
+//! declares the service as one without tenant data (`Suite::without_tenant_data`), which a
+//! tenant table would contradict.
 //!
 //! Starts a throwaway Postgres with TLS (podman or docker); skipped without either unless `CI`
 //! is set. Run with `--nocapture` to see every probe.
@@ -58,10 +63,11 @@ async fn every_relation_and_operation_the_service_has_is_declared() {
     .table(pg_table!("certs.outbox_aggregate", seed = SEED_AGGREGATE))
     .exempt(
         "certs.issued_certificates",
-        "the ledger of signed gateway and workstation certificates: serial numbers, the issuing \
-         CA's key id, the gateway id or workstation name, validity, the certificate and its \
-         revocation, which are public data of the PKI; no tenant id (a gateway's tenant is the \
-         assets service's assignment, workstations belong to the platform)",
+        "the ledger of signed gateway, workstation and MQTT broker certificates: serial \
+         numbers, the issuing CA's key id, the gateway id, workstation name or broker name, \
+         validity, the certificate and its revocation, which are public data of the PKI; no \
+         tenant id (a gateway's tenant is the assets service's assignment, workstations and the \
+         broker belong to the platform)",
     )
     .exempt(
         "certs.crls",
