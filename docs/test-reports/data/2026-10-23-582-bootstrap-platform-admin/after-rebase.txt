@@ -1,0 +1,615 @@
+=== fmt: cargo fmt --all --check
+=== fmt exit 0
+=== clippy: cargo clippy -p contract -p identity -p migrate --all-targets -- -D warnings
+=== clippy exit 0
+=== openapi: cargo run -p openapi -- --check
+=== openapi exit 0
+=== test-contract: env CI=1 cargo test -p contract
+     Running unittests src/lib.rs 
+test api::identity::tests::the_proof_message_binds_the_delegation_the_audience_and_the_time ... ok
+test api::identity::tests::the_created_delegation_is_redacted ... ok
+test api::identity::tests::the_request_names_the_audience_by_its_wire_name ... ok
+test api::identity::tests::the_response_holds_a_redacted_token ... ok
+test api::identity::tests::the_route_follows_the_rules_and_has_no_path_parameters ... ok
+test certs::tests::reasons_round_trip_by_name_and_code ... ok
+test api::identity::tests::the_run_delegation_requests_use_wire_names ... ok
+test certs::tests::requests_refuse_unknown_fields ... ok
+test client::tests::display_names_peer_route_and_kind_without_values ... ok
+test api::identity::tests::the_run_delegation_routes_follow_the_rules ... ok
+test client::tests::base_urls_must_be_plain_http_origins ... ok
+test certs::tests::the_signing_input_names_every_part_of_the_request_on_its_own_line ... ok
+test client::tests::peer_m1_errors_pass_through_except_unauthenticated ... ok
+test client::tests::only_json_objects_count_as_m1_bodies ... ok
+test client::tests::routes_follow_the_rules ... ok
+test client::tests::statuses_without_an_m1_body_map_by_status ... ok
+test client::tests::transport_failures_map_to_m1_codes ... ok
+test client::tests::path_parameters_are_encoded_as_single_segments ... ok
+test error::tests::display_names_code_and_key_only ... ok
+test error::tests::internal_errors_never_carry_details ... ok
+test client::tests::timeouts_are_mandatory_and_bounded ... ok
+test error::tests::message_keys_are_validated ... ok
+test error::tests::malformed_key_literal_panics_outside_const - should panic ... ok
+test error::tests::only_transient_codes_are_retryable ... ok
+test error::tests::wire_values_status_and_default_keys_follow_the_code ... ok
+test id::tests::generated_ids_are_time_ordered_uuid_v7 ... ok
+test id::tests::rejects_text_that_is_not_a_uuid ... ok
+test id::tests::serializes_as_a_plain_uuid_string ... ok
+test identity::tests::claims_tolerate_unknown_claims_and_default_platform_admin ... ok
+test identity::tests::claims_without_a_tenant_have_no_tenant_id ... ok
+test identity::tests::claims_use_jwt_names_and_round_trip ... ok
+test identity::tests::roles_include_lower_roles_and_unknown_roles_grant_nothing ... ok
+test identity::tests::tokens_are_header_safe_and_redacted ... ok
+test identity::tests::the_session_claim_round_trips_and_is_omitted_when_absent ... ok
+test json::tests::missing_field_names_are_kept ... ok
+test json::tests::syntax_errors_keep_their_position ... ok
+test naming::tests::accepts_dotted_lowercase_names ... ok
+test json::tests::values_from_the_document_are_dropped ... ok
+test naming::tests::rejects_malformed_names ... ok
+test service::tests::ai_gateway_is_not_a_contract_service ... ok
+test service::tests::all_lists_each_service_once ... ok
+test service::tests::markers_name_their_service ... ok
+test service::tests::wire_names_match_serde_and_parse_back ... ok
+test result: ok. 43 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/client.rs 
+test bad_requests_fail_before_reaching_the_network ... ok
+test a_refused_connection_maps_to_unavailable ... ok
+test a_reset_connection_maps_to_unavailable ... ok
+test a_connection_closed_without_a_response_is_a_reset ... ok
+test a_peer_rejecting_our_credential_is_internal ... ok
+test an_oversized_response_is_rejected ... ok
+test a_response_that_breaks_the_contract_is_internal ... ok
+test get_sends_the_token_and_decodes_the_response ... ok
+test no_content_decodes_as_unit ... ok
+test post_sends_a_json_body ... ok
+test peer_m1_errors_pass_through ... ok
+test redirects_are_not_followed ... ok
+test statuses_without_an_m1_body_map_by_status ... ok
+test a_silent_peer_times_out_as_m1_timeout ... ok
+test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.30s
+     Running tests/client_logging.rs 
+test failures_are_logged_with_peer_and_kind_but_not_the_token ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/error_format.rs 
+test malformed_bodies_are_rejected ... ok
+test specific_message_keys_round_trip ... ok
+test unknown_fields_from_newer_peers_are_ignored ... ok
+test full_body_round_trips_in_the_documented_shape ... ok
+test every_code_round_trips_with_its_default_key ... ok
+test openapi_schema_describes_the_error_body ... ok
+test openapi_schema_matches_the_fixture ... ok
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/events.rs 
+test a_newer_version_waits_for_the_consumer_upgrade ... ok
+test envelopes_round_trip_in_the_documented_shape ... ok
+test fields_added_later_are_ignored_by_older_consumers ... ok
+test actors_are_optional_tagged_and_open_to_new_kinds ... ok
+test new_envelopes_carry_type_version_tenant_time_and_producer ... ok
+test mismatched_envelopes_are_rejected_for_good ... ok
+test platform_wide_events_have_no_tenant ... ok
+test positional_array_payloads_are_rejected ... ok
+test old_versions_decode_with_the_current_consumer ... ok
+test gateway_registered_decodes_every_version ... ok
+test platform_admin_granted_decodes_every_version ... ok
+test tenant_created_decodes_every_version ... ok
+test payloads_must_be_json_objects ... ok
+test device_model_events_decode_every_version ... ok
+test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test crates/contract/src/error.rs - error::message_key (line 239) ... ok
+test crates/contract/src/client.rs - client::Endpoint (line 74) ... ok
+test crates/contract/src/client.rs - client::InternalClient<S>::call (line 327) ... ok
+test crates/contract/src/client.rs - client::InternalClient<S>::new (line 249) ... ok
+test crates/contract/src/event.rs - event::Actor (line 174) ... ok
+test crates/contract/src/event.rs - event::Event (line 22) ... ok
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test crates/contract/src/client.rs - client::InternalClient<S>::new (line 262) - compile fail ... ok
+test crates/contract/src/client.rs - client::InternalClient<S>::call (line 347) - compile fail ... ok
+test crates/contract/src/error.rs - error::message_key (line 246) - compile fail ... ok
+test crates/contract/src/event.rs - event::Event (line 45) - compile fail ... ok
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.09s
+=== test-contract exit 0
+=== test-migrate: env CI=1 cargo test -p migrate --no-fail-fast
+     Running unittests src/lib.rs 
+test clickhouse::tests::reads_only_the_ttl_it_manages ... ok
+test clickhouse::tests::splits_like_the_ingest_tests ... ok
+test ca_keys::tests::the_config_map_patch_sets_every_request_and_removes_the_rest ... ok
+test config::tests::clickhouse_admin_settings ... ok
+test config::tests::mqtt_trust_settings ... ok
+test config::tests::plain_identifiers ... ok
+test config::tests::password_bindings ... ok
+test config::tests::generations ... ok
+test config::tests::the_clickhouse_password_comes_from_exactly_one_place ... ok
+test config::tests::mqtt_accounts_settings ... ok
+test clickhouse::tests::every_product_file_splits ... ok
+test config::tests::telemetry_query_and_collector_accounts_stay_apart ... ok
+test config::tests::signing_keys_settings ... ok
+test http::tests::public_files_are_fetched_without_credentials ... ok
+test http::tests::credentials_are_sensitive_headers ... ok
+test identity_email::tests::addresses_are_plain_ascii_dot_atoms_at_hostnames ... ok
+test kube::tests::reads_the_job_conditions ... ok
+test http::tests::a_client_never_switches_scheme ... ok
+test mqtt_accounts::tests::every_channel_has_its_cloud_side ... ok
+test mqtt_accounts::tests::files_are_replaced_whole_with_their_mode ... ok
+test config::tests::the_raw_retention_must_outlast_the_gateway_buffer ... ok
+test identity_email::tests::addresses_are_trimmed_and_lower_cased ... ok
+test mqtt_accounts::tests::entries_the_broker_would_skip_or_misread_are_refused ... ok
+test mqtt_accounts::tests::a_fresh_file_denies_by_default_and_holds_the_accounts ... ok
+test mqtt_accounts::tests::entries_the_broker_reads_as_written_are_kept ... ok
+test mqtt_accounts::tests::service_lists ... ok
+test mqtt_accounts::tests::files_the_broker_cannot_use_are_left_alone ... ok
+test mqtt_accounts::tests::service_rules_cover_shared_subscriptions_and_nothing_else ... ok
+test mqtt_trust::tests::a_crl_without_next_update_is_refused ... ok
+test mqtt_trust::tests::a_complete_pair_passes_and_is_re_encoded ... ok
+test mqtt_accounts::tests::reconciling_keeps_gateways_and_replaces_what_the_release_manages ... ok
+test mqtt_trust::tests::the_broker_is_found_only_when_it_is_alone_and_ready ... ok
+test mqtt_trust::tests::only_crls_valid_now_are_fetched ... ok
+test passwords::tests::binding_a_secret_removes_metadata_neither_the_chart_nor_the_job_sets ... ok
+test mqtt_trust::tests::incomplete_or_foreign_pairs_are_refused ... ok
+test passwords::tests::data_is_trusted_only_in_the_object_the_job_filled ... ok
+test passwords::tests::generations_are_decimal_digits ... ok
+test passwords::tests::generations_only_go_up ... ok
+test passwords::tests::keys_are_kept_only_when_present_usable_and_of_this_generation ... ok
+test passwords::tests::only_a_plain_status_reason_is_quoted ... ok
+test mqtt_trust::tests::installing_swaps_the_link_and_leaves_one_directory ... ok
+test passwords::tests::the_patch_carries_the_resource_version_the_generation_the_uid_and_only_the_new_keys ... ok
+test platform_admin::tests::database_errors_never_quote_the_row ... ok
+test platform_admin::tests::the_first_line_is_the_address ... ok
+test platform_admin::tests::the_owner_role_is_the_registry_s ... ok
+test retention::tests::a_retention_up_to_the_buffer_age_is_refused ... ok
+test retention::tests::an_implausibly_long_retention_is_refused ... ok
+test retention::tests::the_platform_value_is_longer_than_the_buffer ... ok
+test secret::tests::debug_hides_the_password ... ok
+test secret::tests::generated_passwords_are_256_bit_hex_and_never_repeat ... ok
+test secret::tests::short_long_and_odd_passwords_are_refused_without_echoing_them ... ok
+test platform_admin::tests::anything_else_is_refused_without_quoting_it ... ok
+test mqtt_trust::tests::the_placeholder_trusts_a_ca_nobody_holds ... ok
+test mqtt_trust::tests::the_server_certificate_is_read_through_the_secret_links ... ok
+test signing_keys::tests::only_a_bound_secret_with_a_usable_set_is_trusted ... ok
+test mqtt_trust::tests::sighup_reaches_the_process ... ok
+test signing_keys::tests::the_patch_binds_writes_the_set_and_removes_the_rest ... ok
+test mqtt_accounts::tests::pbkdf2_matches_known_vectors ... ok
+test secret::tests::the_verifier_matches_rfc_7677 ... ok
+test secret::tests::verifiers_use_fresh_salts ... ok
+test mqtt_accounts::tests::encoded_passwords_have_mosquittos_layout ... ok
+test result: ok. 61 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.43s
+     Running tests/ca_keys.rs 
+test missing_objects_and_refused_access_stop_the_run_with_the_way_out ... ok
+test a_fresh_install_gets_one_key_and_its_request ... ok
+test a_run_stopped_halfway_is_finished_by_the_next ... ok
+test a_secret_not_filled_by_the_init_container_is_not_trusted ... ok
+test two_runs_at_once_agree_on_one_key ... ok
+test generations_add_keys_and_removal_takes_them_out ... ok
+test the_set_never_grows_past_four_keys ... ok
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.14s
+     Running tests/clickhouse.rs 
+test clickhouse_ddl_and_the_collector_account ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 24.48s
+     Running tests/clickhouse_admin.rs 
+test a_missing_secret_or_refused_access_stops_it_with_the_way_out ... ok
+test a_secret_someone_else_created_is_never_trusted ... ok
+test the_init_container_fills_the_secret_and_the_file_once ... ok
+test a_new_generation_rotates_once_and_a_rollback_keeps_it ... ok
+test on_a_fresh_install_the_job_waits_for_the_init_container ... ok
+test the_job_uses_only_the_password_the_init_container_wrote_and_rereads_it_when_refused ... ok
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 20.60s
+     Running tests/clickhouse_telemetry_query.rs 
+test telemetry_query_account ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 16.25s
+     Running tests/concurrent_runs.rs 
+test only_one_run_at_a_time ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 13.66s
+     Running tests/file_escapes.rs 
+test a_file_that_leaves_its_transaction_or_role_stops_the_run ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 8.40s
+     Running tests/fresh_database.rs 
+test a_fresh_database_gets_every_migration_once ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 12.34s
+     Running tests/mqtt_accounts.rs 
+test a_release_without_callers_needs_no_api ... ok
+test an_unreadable_file_or_a_missing_secret_stops_the_start ... ok
+test passwords_go_to_the_secret_and_only_their_hashes_to_the_broker ... ok
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.81s
+     Running tests/mqtt_broker.rs 
+test the_configuration_follows_the_protocol_limits ... ok
+test retained_messages_and_sessions_survive_sigkill ... ok
+test services_log_in_with_their_accounts_and_reach_only_their_channels ... ok
+test gateways_need_a_current_certificate_of_our_ca ... ok
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 12.80s
+     Running tests/mqtt_trust.rs 
+test the_init_container_refuses_a_server_key_of_another_certificate ... ok
+test the_init_container_installs_the_certs_services_files_or_the_placeholder ... ok
+test the_sidecar_waits_for_a_broker_that_handles_sighup ... ok
+test the_sidecar_reloads_the_broker_after_every_change_it_can_load ... ok
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 8.37s
+     Running tests/one_instance_per_cluster.rs 
+test a_second_instance_on_the_same_cluster_is_refused ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.75s
+     Running tests/outbox_and_tenant_roles.rs 
+test outbox_wiring_and_tenant_roles ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 15.26s
+     Running tests/passwords.rs 
+test a_secret_being_deleted_is_never_filled ... ok
+test a_value_the_api_did_not_store_as_written_stops_the_run ... ok
+test nothing_bound_makes_no_request ... ok
+test a_first_run_fills_the_empty_secrets_and_a_second_changes_nothing ... ok
+test binding_a_foreign_secret_removes_metadata_neither_the_chart_nor_the_job_sets ... ok
+test a_secret_someone_else_created_never_keeps_its_passwords ... ok
+test a_new_generation_rotates_every_managed_key_and_nothing_else ... ok
+test a_lost_or_unusable_key_is_regenerated_alone ... ok
+test a_concurrent_change_is_never_overwritten ... ok
+test a_rollback_keeps_the_passwords_and_so_does_the_re_upgrade ... ok
+test refused_access_and_transient_failures ... ok
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.02s
+     Running tests/platform_admin.rs 
+test the_first_platform_admin_is_created_once ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.75s
+     Running tests/registry.rs 
+test a_consumer_may_come_before_its_producer ... ok
+test inconsistent_registries_are_refused ... ok
+test the_lint_sees_through_whitespace_and_case ... ok
+test the_chart_binds_every_login_role_of_the_product ... ok
+test the_product_registry_lists_every_file_in_order ... ok
+test postgres_migrations_follow_the_jobs_rules ... ok
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/service_records.rs 
+test each_schema_keeps_its_records_and_the_service_waits_for_them ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 10.80s
+     Running tests/signing_keys.rs 
+test a_fresh_install_gets_one_key_that_signs_at_once ... ok
+test an_unusable_key_set_is_replaced ... ok
+test a_secret_not_filled_by_the_init_container_is_not_trusted ... ok
+test a_run_stopped_halfway_is_finished_by_the_next ... ok
+test a_person_made_key_is_imported_then_replaced ... ok
+test a_published_view_counts_only_while_the_secret_is_unchanged ... ok
+test an_older_view_never_unpublishes_a_newer_key ... ok
+test missing_objects_and_refused_access_stop_the_run_with_the_way_out ... ok
+test a_rotation_publishes_first_and_retires_later ... ok
+test two_runs_at_once_agree_on_one_key ... ok
+test revocation_replaces_every_older_key_at_once ... ok
+test the_cronjob_and_an_init_container_with_a_new_generation_at_once ... ok
+test manual_rotation_and_revocation_work_with_rotation_by_age_on ... ok
+test the_cronjob_rotates_a_key_that_reached_the_maximum_age ... ok
+test the_set_never_grows_past_eight_keys ... ok
+test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.21s
+     Running tests/system_databases.rs 
+test the_split_matches_the_chart_tests_rule ... ok
+test service_roles_cannot_use_the_other_databases ... ok
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.71s
+     Running tests/wait_for_job.rs 
+test a_failed_job_or_a_refused_token_ends_the_wait_with_an_error ... ok
+test waits_through_missing_and_running_until_complete ... ok
+test an_api_signed_by_another_ca_is_never_believed ... ok
+test a_missing_job_names_the_cause_and_the_way_out ... ok
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.01s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+=== test-migrate exit 0
+=== test-identity: env CI=1 cargo test -p identity --no-fail-fast
+     Running unittests src/lib.rs 
+test audience::tests::the_setting_deserializes_from_its_json_text ... ok
+test csrf::tests::reads_and_requests_without_either_header_go_on ... ok
+test audience::tests::exact_wins_then_the_longest_prefix_on_segment_boundaries ... ok
+test csrf::tests::the_message_key_is_the_contract_one ... ok
+test audience::tests::the_host_must_match_with_any_port_and_in_any_case ... ok
+test audience::tests::without_routes_nothing_has_an_audience ... ok
+test csrf::tests::sec_fetch_site_decides_when_present ... ok
+test audience::tests::unusable_routes_stop_startup_without_quoting_the_setting ... ok
+test csrf::tests::without_sec_fetch_site_origin_decides_for_writes ... ok
+test delegation::tests::delegations_round_trip_and_bind_every_claim ... ok
+test audience::tests::the_setting_must_be_an_array_of_exact_route_objects ... ok
+test delegation::tests::a_delegation_survives_a_key_switch ... ok
+test delegation::tests::an_ended_session_stops_the_next_exchange ... ok
+test delegation::tests::a_delegation_outlives_the_request_token_and_exchanges_for_minute_tokens ... ok
+test delegation::tests::expired_or_over_long_delegations_are_refused ... ok
+test delegation::tests::exchanged_tokens_go_no_further_and_a_delegation_is_no_token ... ok
+test delegation::tests::another_caller_with_the_delegation_gets_no_token ... ok
+test email::tests::addresses_are_plain_ascii_dot_atoms_at_hostnames ... ok
+test email::tests::addresses_are_trimmed_and_lower_cased ... ok
+test event_log::tests::actors_become_columns ... ok
+test event_log::tests::cursors_round_trip_with_microseconds ... ok
+test event_log::tests::parameters_are_checked ... ok
+test event_log::tests::subscriptions_are_named_after_the_producer ... ok
+test event_log::tests::the_spec_documents_the_page_limits_the_handlers_accept ... ok
+test delegation::tests::the_token_expires_with_the_delegation_when_that_is_sooner ... ok
+test delegation::tests::role_changes_show_in_the_next_token_and_a_removed_member_is_refused ... ok
+test delegation::tests::the_proof_window_is_thirty_seconds_either_side ... ok
+test delegation::tests::only_listed_audiences_and_holders ... ok
+test delegation::tests::without_keys_or_the_database_it_answers_503 ... ok
+test exchange::tests::a_token_without_a_second_left_is_not_exchanged ... ok
+test exchange::tests::the_call_list_names_services_that_receive_tokens_only ... ok
+test exchange::tests::the_new_token_expires_with_the_old_one_and_at_most_a_minute_from_now ... ok
+test exchange::tests::a_listed_caller_gets_a_token_for_the_callee_with_the_same_identity ... ok
+test delegation::tests::requests_without_one_valid_token_and_a_valid_body_are_refused ... ok
+test delegation::tests::run_delegations_reach_the_callee_as_the_user ... ok
+test ext_authz::tests::a_failing_store_gets_503_without_an_identity ... ok
+test ext_authz::tests::a_cross_site_request_gets_403_before_the_session_is_looked_up ... ok
+test ext_authz::tests::a_session_without_a_route_for_the_request_gets_403 ... ok
+test exchange::tests::without_keys_or_a_signing_key_it_answers_503 ... ok
+test ext_authz::tests::an_issued_token_expires_after_the_replay_window ... ok
+test exchange::tests::an_exchanged_token_is_never_exchanged_again ... ok
+test exchange::tests::on_behalf_calls_reach_the_callee_as_the_same_user ... ok
+test ext_authz::tests::an_active_session_gets_one_verified_identity_for_the_routed_service ... ok
+test ext_authz::tests::no_signing_key_gets_503_without_an_identity ... ok
+test ext_authz::tests::nothing_but_the_check_is_served ... ok
+test ext_authz::tests::grants_without_a_tenant_or_with_admin_rights_are_signed_as_they_are ... ok
+test ext_authz::tests::sessions_that_are_missing_unknown_or_malformed_get_401 ... ok
+test issuer::tests::a_lasting_difference_between_the_two_files_is_reported_once ... ok
+test issuer::tests::a_signing_key_overdue_for_its_rotation_is_reported_once ... ok
+test ext_authz::tests::forged_identity_headers_never_reach_the_allow ... ok
+test exchange::tests::requests_without_one_valid_token_and_a_valid_body_are_refused ... ok
+test issuer::tests::a_token_stops_working_after_its_lifetime_and_the_skew ... ok
+test issuer::tests::errors_and_debug_output_never_show_the_private_key ... ok
+test issuer::tests::delegation_macs_come_from_the_signing_keys ... ok
+test issuer::tests::revoked_generations_and_missing_keys_never_sign ... ok
+test issuer::tests::login_code_keys_come_from_the_signing_keys ... ok
+test exchange::tests::only_listed_pairs_are_exchanged ... ok
+test issuer::tests::the_header_and_claims_are_exactly_the_contract ... ok
+test login::tests::codes_are_eight_digits_and_never_printed ... ok
+test issuer::tests::the_signing_key_switches_at_its_scheduled_time ... ok
+test login::tests::only_paths_on_this_site_are_redirect_targets ... ok
+test login::tests::the_code_hash_binds_the_key_the_purpose_the_address_and_the_code ... ok
+test login::tests::the_documented_body_is_the_one_that_is_read ... ok
+test login::tests::the_email_holds_the_code_in_its_body_only ... ok
+test login::tests::codes_use_every_digit_position ... ok
+test login::tests::the_request_names_one_step_and_nothing_else ... ok
+test mail::tests::debug_output_never_shows_the_message ... ok
+test mail::tests::ehlo_extensions_and_enhanced_codes_are_read_from_the_reply ... ok
+test mail::tests::errors_name_the_step_and_codes_only ... ok
+test mail::tests::lines_that_start_with_a_dot_are_doubled ... ok
+test mail::tests::a_rendered_message_has_crlf_headers_and_a_base64_body ... ok
+test mail::tests::long_text_becomes_several_encoded_words_split_at_characters ... ok
+test mail::tests::reply_lines_are_parsed_strictly ... ok
+test mail::tests::sender_names_are_quoted_or_encoded ... ok
+test mail::tests::the_sender_is_read_in_its_usual_forms ... ok
+test session::tests::a_missing_repeated_or_malformed_session_cookie_is_refused ... ok
+test session::tests::a_secret_round_trips_through_its_cookie_value ... ok
+test session::tests::a_store_error_logs_the_tenant_db_message_once ... ok
+test session::tests::cookie_errors_have_distinct_reasons ... ok
+test session::tests::debug_output_never_shows_the_secret_or_its_hash ... ok
+test session::tests::generated_secrets_differ ... ok
+test session::tests::only_the_one_canonical_spelling_is_a_secret ... ok
+test session::tests::only_the_three_schema_roles_are_issued ... ok
+test session::tests::the_absolute_lifetime_matches_the_migration ... ok
+test session::tests::the_hash_is_sha256_of_the_secret_bytes ... ok
+test session::tests::the_session_cookie_is_found_among_other_cookies_and_headers ... ok
+test session::tests::the_session_cookie_is_set_and_cleared_with_the_same_attributes ... ok
+test tenants::tests::names_are_trimmed_and_bounded ... ok
+test tenants::tests::only_a_json_content_type_is_accepted ... ok
+test issuer::tests::the_last_usable_signing_keys_stay_until_usable_ones_replace_them ... ok
+test ext_authz::tests::same_origin_requests_and_requests_without_the_headers_are_checked_as_before ... ok
+test issuer::tests::tokens_pass_service_kit_verification_for_their_audience_only ... ok
+test ext_authz::tests::a_hanging_store_gets_503_within_the_deadline ... ok
+test exchange::tests::tokens_are_refused_by_other_audiences_and_once_expired ... ok
+test ext_authz::tests::every_method_and_path_shape_of_the_check_is_served ... ok
+test result: ok. 95 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.13s
+     Running tests/adversarial.rs 
+test the_audience_follows_the_route_and_an_allow_carries_only_the_identity_header ... ok
+test cookie_parsing_accepts_only_one_exact_session_cookie ... ok
+test slow_or_locked_database_answers_503_and_recovers_without_failing_open ... ok
+test the_health_port_serves_only_the_health_routes ... ok
+test killed_connections_never_turn_into_401_or_200_for_the_wrong_person ... ok
+test session_expiry_and_revocation_are_decided_by_the_database_clock ... ok
+test memberships_are_isolated_by_tenant_and_by_user ... ok
+test wrong_credentials_or_database_fail_closed ... ok
+test nothing_secret_is_logged_at_any_level ... ok
+test replicas_switch_keys_by_the_schedule_without_a_restart ... ok
+test the_service_signs_nothing_without_a_usable_published_signing_key ... ok
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 41.79s
+     Running tests/cross_tenant.rs 
+test tenants_are_isolated ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 8.48s
+     Running tests/event_log.rs 
+test the_event_log_records_each_operation_once_and_serves_it_by_tenant_and_time ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 16.39s
+     Running tests/ext_authz.rs 
+test an_unreachable_database_fails_closed ... ok
+test a_routed_token_is_exchanged_along_the_call_list_only ... ok
+test cross_site_writes_get_403_and_same_origin_ones_go_on ... ok
+test an_active_session_gets_one_token_that_the_routed_service_accepts ... ok
+test a_run_delegation_acts_for_the_user_until_the_session_ends ... ok
+test secrets_never_reach_logs_or_responses ... ok
+test invalid_or_expired_sessions_get_401 ... ok
+test unusable_settings_stop_startup ... ok
+test the_service_role_writes_sessions_only_within_the_login_rules ... ok
+test a_revoked_generation_never_signs ... ok
+test role_changes_apply_to_the_next_request ... ok
+test a_keep_warm_round_replaces_every_dropped_connection ... ok
+test a_slow_database_connect_never_fails_a_check_after_ready ... ok
+test a_key_rotation_needs_no_restart_and_tokens_verify_throughout ... ok
+test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 27.33s
+     Running tests/login.rs 
+test no_build_switch_can_add_a_fake_login ... ok
+test cross_site_login_requests_change_nothing ... ok
+test a_role_change_applies_to_the_next_request ... ok
+test logging_out_refuses_the_sessions_next_request ... ok
+test a_code_from_the_email_logs_in_once ... ok
+test redirects_stay_on_this_site ... ok
+test sessions_are_extended_up_to_seven_days ... ok
+test sending_is_limited_and_tells_nobody_who_has_an_account ... ok
+test codes_travel_only_over_verified_tls ... ok
+test there_is_no_password_login_sign_up_or_fake_login ... ok
+test a_missing_or_incomplete_relay_is_reported ... ok
+test codes_are_used_once_and_die_after_five_attempts ... ok
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 20.06s
+     Running tests/migrations.rs 
+test readiness_follows_the_migration_records ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 10.34s
+     Running tests/platform_admin.rs 
+test the_first_platform_admin_logs_in_and_creates_a_tenant ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 7.99s
+     Running tests/tenants.rs 
+test platform_administrators_create_tenants_with_their_event ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 7.10s
+     Running tests/token_claims.rs 
+test header_extras_and_type_confusion_are_rejected ... ok
+test a_token_signed_with_another_key_or_under_another_kid_is_rejected ... ok
+test the_baseline_forgery_helper_produces_an_accepted_token ... ok
+test algorithm_confusion_is_rejected_before_any_key_is_used ... ok
+test rotation_keeps_old_tokens_valid_until_they_expire ... ok
+test payload_or_header_tampering_after_signing_is_rejected ... ok
+test expiry_issued_at_and_skew_boundaries ... ok
+test audience_and_issuer_are_exact ... ok
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.23s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+=== test-identity exit 0
+=== test-sql-check: env CI=1 cargo test -p sql-check
+     Running unittests src/lib.rs 
+test tests::assert_sql_safe_is_always_found ... ok
+test tests::doc_comments_are_not_checked ... ok
+test tests::invalid_rust_is_an_error ... ok
+test tests::findings_name_the_file_line_and_rule ... ok
+test tests::dynamic_sql_is_found ... ok
+test tests::query_builders_in_macros_take_only_static_text ... ok
+test tests::concat_is_checked_as_its_joined_text ... ok
+test tests::query_calls_in_macro_definitions_need_static_sql ... ok
+test tests::sql_like_text_needs_a_sql_word_and_a_space ... ok
+test tests::included_files_are_checked ... ok
+test tests::renamed_and_aliased_query_builders_are_followed ... ok
+test tests::only_declared_constants_count_as_static ... ok
+test tests::session_settings_are_found_outside_the_kit ... ok
+test tests::unrelated_functions_named_query_are_ignored ... ok
+test tests::query_builders_take_only_static_text ... ok
+test tests::sql_built_with_strings_is_found ... ok
+test tests::static_sql_passes ... ok
+test tests::query_builder_text_is_checked_joined ... ok
+test tests::test_code_may_pass_sql_through_variables ... ok
+test tests::test_support_crates_are_test_code ... ok
+test result: ok. 20 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+     Running tests/check.rs 
+test listed_paths_exist ... ok
+test parameterized_sql_is_not_reported ... ok
+test concatenated_sql_is_reported_on_every_marked_line ... ok
+test every_rule_is_exercised_by_the_fixture ... ok
+test the_allowed_files_are_the_only_exceptions ... ok
+test the_workspace_has_no_string_built_sql ... ok
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.63s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+=== test-sql-check exit 0
+=== test-repo-check: env CI=1 cargo test -p repo-check
+     Running unittests src/lib.rs 
+test tests::container_removals_with_volumes_and_other_removals_are_not_found ... ok
+test tests::data_statements_comments_and_identifiers_are_not_schema_changes ... ok
+test tests::container_removals_that_keep_volumes_are_found ... ok
+test tests::errors_name_the_file_and_key ... ok
+test tests::dev_only_crates_must_be_dev_dependencies ... ok
+test tests::exact_version_accepts_only_major_minor_patch ... ok
+test tests::metadata_errors_are_reported ... ok
+test tests::different_rust_pins_fail ... ok
+test tests::matching_rust_pins_pass ... ok
+test tests::metadata_lists_member_manifests ... ok
+test tests::rust_version_accepts_two_or_three_parts ... ok
+test tests::member_must_inherit_edition_and_lints ... ok
+test tests::inexact_rust_pins_fail ... ok
+test tests::missing_or_malformed_pins_fail ... ok
+test tests::versions_order_numerically ... ok
+test tests::schema_changes_are_found ... ok
+test tests::rust_version_must_not_exceed_toolchain ... ok
+test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/repository.rs 
+test agents_md_search_finds_planted_files ... ok
+test runtime_sources_are_the_rust_files_under_services_src ... ok
+test container_removal_sources_are_the_rust_files_in_the_code_trees ... ok
+test toolchain_pins_agree ... ok
+test dev_only_crates_are_only_dev_dependencies ... ok
+test repository_has_no_agents_md ... ok
+test members_inherit_workspace_edition_and_lints ... ok
+test test_containers_are_removed_together_with_their_volumes ... ok
+test runtime_code_never_changes_the_schema ... ok
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.17s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+=== test-repo-check exit 0
+=== test-testkit: env CI=1 cargo test -p testkit
+     Running unittests src/lib.rs 
+test isolation::api::tests::a_stale_or_repeated_declaration_fails ... ok
+test isolation::api::tests::an_undeclared_api_fails ... ok
+test isolation::api::tests::each_write_to_a_row_gets_its_own_row ... ok
+test isolation::api::tests::every_operation_declared_or_exempt_passes ... ok
+test isolation::api::tests::paths_must_match_the_kind ... ok
+test isolation::api::tests::an_undeclared_operation_fails ... ok
+test isolation::api::tests::placeholders_are_filled ... ok
+test isolation::postgres::tests::a_forgotten_relation_fails ... ok
+test isolation::postgres::tests::declared_relations_pass ... ok
+test isolation::postgres::tests::a_repeated_declaration_fails ... ok
+test isolation::postgres::tests::names_are_validated_and_qualified ... ok
+test isolation::postgres::tests::the_macros_build_static_sql_from_the_name ... ok
+test isolation::postgres::tests::wrong_declarations_fail ... ok
+test isolation::tests::a_tenant_id_sent_in_the_request_is_not_a_leak ... ok
+test isolation::tests::an_empty_report_is_not_isolated ... ok
+test isolation::tests::markers_cover_the_tenant_and_each_row ... ok
+test isolation::tests::shows_finds_a_row_by_id_or_canary ... ok
+test isolation::tests::snapshot_changes_fail ... ok
+test isolation::tests::leaks_find_any_marker_in_any_case ... ok
+test isolation::tests::the_requested_id_is_not_a_leak_but_its_canary_is ... ok
+test modbus::frame::tests::a_split_mbap_frame_is_cut_once_complete ... ok
+test modbus::frame::tests::bits_are_packed_lsb_first ... ok
+test modbus::frame::tests::crc_matches_the_specification_example ... ok
+test modbus::frame::tests::reads_check_quantity_before_address ... ok
+test modbus::frame::tests::rtu_frames_are_cut_by_function_code ... ok
+test modbus::frame::tests::rtu_requests_are_cut_however_tcp_splits_or_joins_them ... ok
+test modbus::tests::a_task_started_after_the_drop_is_aborted ... ok
+test identity::tests::another_issuers_tokens_do_not_verify ... ok
+test modbus::tests::a_connection_accepted_after_the_drop_is_closed ... ok
+test identity::tests::a_user_without_a_tenant_has_none ... ok
+test identity::tests::tokens_verify_for_their_audience_only ... ok
+test modbus::frame::tests::rtu_bytes_that_never_end_with_a_valid_crc_are_cut_at_the_rtu_maximum ... ok
+test result: ok. 32 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.49s
+     Running tests/container_volumes.rs 
+test dropping_a_container_removes_its_volumes ... ok
+test removing_a_container_without_volumes_leaves_them_behind ... ok
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 11.18s
+     Running tests/modbus_endpoint.rs 
+test an_mbap_header_no_client_sends_closes_the_connection ... ok
+test each_unit_has_its_own_tables ... ok
+test fault_broadcast_sends_the_answer_to_every_connection ... ok
+test fault_disconnect_rst_resets_the_connection ... ok
+test fault_exception_answers_with_the_chosen_code ... ok
+test fault_half_open_keeps_the_socket_silent ... ok
+test fault_matchers_select_the_requests ... ok
+test a_frame_with_a_bad_crc_is_logged_and_never_answered ... ok
+test an_unknown_unit_is_silent_on_rtu_and_exception_0b_on_tcp ... ok
+test fault_unit_mismatch_answers_with_another_unit ... ok
+test fault_hold_answers_when_the_test_releases_it ... ok
+test fault_no_response_leaves_the_connection_healthy ... ok
+test release_before_the_hold_lets_the_answer_through ... ok
+test fault_delay_answers_once_the_clock_reaches_the_delay ... ok
+test the_request_log_records_every_frame ... ok
+test fault_disconnect_fin_ends_the_stream ... ok
+test function_codes_1_to_4_are_served_on_both_transports ... ok
+test requests_outside_the_served_range_get_standard_exceptions ... ok
+test rtu_requests_are_answered_however_tcp_splits_or_joins_them ... ok
+test dropping_the_endpoint_closes_every_socket_on_a_multi_thread_runtime ... ok
+test result: ok. 20 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.13s
+     Running tests/modbus_example.rs 
+test read_the_fake_endpoint_and_trigger_each_fault ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+     Running tests/postgres_isolation.rs 
+test a_forgotten_table_fails ... ok
+test a_suite_without_tenant_data_passes_only_while_that_holds ... ok
+test an_endpoint_that_reads_across_tenants_fails ... ok
+test an_endpoint_that_writes_across_tenants_fails ... ok
+test a_table_with_one_row_per_tenant_is_attacked_too ... ok
+test the_example_fails_with_rls_off_and_passes_with_it_on ... ok
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 23.11s
+     Running tests/postgres_start.rs 
+test a_container_whose_published_port_stays_dead_is_replaced ... ok
+test a_server_that_does_not_come_up_is_reported_with_what_was_awaited_and_the_container ... ok
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 13.02s
+test crates/testkit/src/isolation.rs - isolation::Suite (line 341) - compile ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+=== test-testkit exit 0
+=== deny: cargo deny --locked check
+advisories ok, bans ok, licenses ok, sources ok
+=== deny exit 0
+=== bun-install: bun install --cwd scripts --frozen-lockfile
+=== bun-install exit 0
+=== bun-scripts: bun test scripts
+ 1608 pass
+ 0 fail
+Ran 1617 tests across 52 files. [26.52s]
+=== bun-scripts exit 0
+=== bun-typecheck: bun run --cwd scripts typecheck
+=== bun-typecheck exit 0
+=== bun-chart: bun test deploy/chart
+ 627 pass
+ 0 fail
+Ran 627 tests across 9 files. [152.80s]
+=== bun-chart exit 0
+=== summary: fmt=0 clippy=0 openapi=0 test-contract=0 test-migrate=0 test-identity=0 test-sql-check=0 test-repo-check=0 test-testkit=0 deny=0 bun-install=0 bun-scripts=0 bun-typecheck=0 bun-chart=0
