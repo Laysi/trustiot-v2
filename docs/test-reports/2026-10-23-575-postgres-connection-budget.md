@@ -5,7 +5,7 @@ Laysi/trustiot-v2#575：整版滾動更新時，所有用 Postgres 的服務新�
 ## 環境
 
 - **程式碼**：分支 `feat/575-postgres-connection-budget`，從 main `994ffae7` 建立。
-- **本機檢查**：開發者工作站（arm64 macOS），容器執行環境是 docker。需要容器的 Rust 測試設了 `CI=1`，不略過。
+- **本機檢查**：開發者工作站。需要容器的 Rust 測試設了 `CI=1`，不略過。
 - **工具版本**：`.prototools` 與 `rust-toolchain.toml` 釘選的 Rust 1.99.0、bun 1.4.2、helm 4.3.0。
 - **共享記憶體的計算**：`docker.io/library/postgres:18.6-alpine`，以 `crates/service-kit/tests/support/start.rs` 釘選的 digest。
 - **日期**：2026-10-23。
@@ -80,14 +80,27 @@ PostgreSQL 18.6 以 chart 的參數與 CloudNativePG 的預設算出的共享記
 | 指令 | 結果 |
 | --- | --- |
 | `bun test deploy/chart` | 628 pass、0 fail |
-| `bun test deploy/flux` | `flux.test.ts` 全部通過，含新的「with all four Postgres services on …」；`readme-commands.test.ts` 的 3 個測試在這台工作站失敗（展示機 age 金鑰指令的 bash 區塊回 127）。它只讀 `deploy/flux/README.md`，這次沒有改，CI 在 Linux 上執行它 |
+| `bun test deploy/flux` | `flux.test.ts` 全部通過，含新的「with all four Postgres services on …」；`readme-commands.test.ts` 的 3 個測試在這台工作站失敗（展示機 age 金鑰指令的 bash 區塊回 127：測試把 `PATH` 設為 `/usr/bin:/bin`，這台工作站的 `sha256sum` 不在其中），main 上相同。它只讀 `deploy/flux/README.md`，這次沒有改，CI 在 Linux 上執行它 |
 | `bun run --cwd scripts typecheck` | 通過 |
 | `bun test scripts/ci/changes.test.ts` | 282 pass |
 | `bun scripts/ci/check-secret-handling.ts` | 沒有違規 |
 | `cargo fmt --all --check`、兩個 `cargo clippy` | 通過 |
-| `CI=1 cargo test --workspace --no-fail-fast` | 1301 pass、4 fail。新的四個 `chart_connections`、`testkit` 的 `chart` 單元測試、`repo-check` 與 `service-kit` 的 `tenant_db`（以 `TRUSTIOT__DATABASE__MAX_CONNECTIONS=10` 跑 example-service）都通過。失敗的 4 個與這次的變更無關，都是這台工作站的環境：`service-kit` 的 `container` 與 `verify_container` 把主機建的 example-service 放進 Linux 容器，在 macOS 上它是 Mach-O 執行檔，容器起不來；`ai-clients` 的 `an_unanswered_connection_attempt_is_a_connect_timeout` 在 macOS 上填不滿 accept 佇列；`migrate` 的 `mqtt_broker` 在 Mosquitto 重新載入後容器停止，重跑一次結果相同。這次沒有改 `service-kit` 的函式庫、`tools/migrate` 或 `deploy/chart/files`，CI 在 Linux 上執行這些測試 |
+| `CI=1 cargo test --workspace --no-fail-fast` | 1301 pass、4 fail。新的四個 `chart_connections`、`testkit` 的 `chart` 單元測試、`repo-check` 與 `service-kit` 的 `tenant_db`（以 `TRUSTIOT__DATABASE__MAX_CONNECTIONS=10` 跑 example-service）都通過。失敗的 4 個與這次的變更無關，都是這台工作站的環境：`service-kit` 的 `container` 與 `verify_container` 把主機建的 example-service 放進 Linux 容器，這台工作站建出的不是 Linux 執行檔，容器起不來；`ai-clients` 的 `an_unanswered_connection_attempt_is_a_connect_timeout` 在這台工作站填不滿 accept 佇列；`migrate` 的 `mqtt_broker` 在 Mosquitto 重新載入後容器停止，重跑一次結果相同。這次沒有改 `service-kit` 的函式庫、`tools/migrate` 或 `deploy/chart/files`，CI 在 Linux 上執行這些測試 |
 | `cargo run -p openapi -- --check` | `api/openapi.json is up to date` |
 | `cargo deny --locked check` | advisories、bans、licenses、sources 都 ok |
+
+### 合併 main 之後
+
+2026-10-23 把 main `dbe476c`（Laysi/trustiot-v2#589 nightly 部署 certs、Laysi/trustiot-v2#593 成員角色）合併進本分支：`docs/roadmap/milestones.md` 的「拆分」段兩邊各加一句，兩句都保留；其餘自動合併。合併後在 `git archive` 解出的乾淨目錄重跑：
+
+| 指令 | 結果 |
+| --- | --- |
+| `cargo fmt --all --check`、兩個 `cargo clippy`、`cargo run -p openapi -- --check` | 通過 |
+| `CI=1 cargo test -p assets -p certs -p identity -p telemetry-query -p testkit -p repo-check -p contract`、`CI=1 cargo test -p service-kit --test tenant_db` | 全部通過（含四個 `chart_connections` 與 identity 新的 `members`） |
+| `bun test deploy/chart` | 628 pass、0 fail |
+| `bun test deploy/flux` | 74 pass、3 fail，失敗的是上面同樣 3 個 `readme-commands.test.ts`，main 上相同 |
+| `bun test scripts` | 1621 pass、26 fail；main `dbe476c` 上同一台工作站跑出完全相同的 26 個失敗（`scripts/flux`、`scripts/nightly/certs.test.ts` 與 `scripts/dev` 的憑證測試，工作站的 openssl、`sha256sum` 與 sudo 環境），這次只改了 `scripts/ci/changes.ts` |
+| `bun run --cwd scripts typecheck`、`bun scripts/ci/check-secret-handling.ts`、`cargo deny --locked check` | 通過 |
 
 ## 結論
 
