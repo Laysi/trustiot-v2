@@ -119,6 +119,21 @@ PostgreSQL 18.6 以 chart 的參數與 CloudNativePG 的預設算出的共享記
 | `bun test scripts` | 1632 pass、26 fail，失敗的與 main `dbe476c` 上的 26 個相同 |
 | `bun run --cwd scripts typecheck`、`bun scripts/ci/check-secret-handling.ts` | 通過 |
 
+2026-10-24 再合併 main `74216494`（Laysi/trustiot-v2#604 assets 的設備池與綁定）與 `83e159cd`（Laysi/trustiot-v2#620 certs 的憑證鏈）：`services/assets/README.md` 的 `TRUSTIOT__DATABASE__MAX_CONNECTIONS` 一列兩邊都保留。
+
+- Laysi/trustiot-v2#604 把 assets 平台角色的連線池改名為 `PLATFORM_CONNECTIONS`，從 2 條加到 4 條：讀身分服務與 certs 事件的兩個消費端、就緒檢查、平台管理員讀設備池各一條。assets 的 `otherPools` 改為 4，每副本 14 條；四個服務全開時需要 132 + 18 = 150 條，`max_connections` 160 還有 10 條餘裕。`services/assets/tests/chart_connections.rs`、chart 與 flux 的測試、chart README 的數字跟著改。
+- 上方「各種安裝的檢查結果」的表是改之前的數字。有開 assets 的列，需要的連線各加 4：四個服務全開 146 → 150（`max_connections=149` 失敗，150 剛好通過）；展示環境的 overlay 104 → 108、146 → 150，identity 兩個副本 177 → 181；assets 連線池 30 時每副本 32 → 34。chart 與 flux 的測試以預算與 values 重算這些數字，下表重跑通過。
+- Laysi/trustiot-v2#620 沒有改任何連線池。
+
+合併後重跑：
+
+| 指令 | 結果 |
+| --- | --- |
+| `cargo fmt --all --check`、`cargo clippy --workspace --all-targets -- -D warnings`（建置主機，`CI=1`） | 通過 |
+| `CI=1 cargo test -p assets -p certs -p identity -p telemetry-query --test chart_connections`、`cargo test -p testkit --lib chart`（建置主機） | 全部通過 |
+| `bun test deploy/chart`（開發者工作站） | 639 pass、0 fail |
+| `bun test deploy/flux`（開發者工作站） | 77 pass、0 fail |
+
 ## 結論
 
 - 連線總數超過 `max_connections` 時檢查失敗：**通過**（上表的 145、100 與 identity 兩個副本；chart 測試；突變 m1 證明測試靠的是這個檢查）。
