@@ -108,6 +108,17 @@ PostgreSQL 18.6 以 chart 的參數與 CloudNativePG 的預設算出的共享記
 - 上方「各種安裝的檢查結果」的表、[renders.txt](data/2026-10-23-575-postgres-connection-budget/renders.txt) 與突變 m1 都依合併後的程式重跑。
 - mqtt-bridge 不連 Postgres（`mesh.calls` 只列 `mqtt-broker`），assistant 仍沒有在 `mesh.calls` 列出 `postgres`，所以兩者都不在預算裡。
 
+合併後重跑（Rust 在 `git archive` 解出的乾淨目錄，Bun 在 checkout 裡）：
+
+| 指令 | 結果 |
+| --- | --- |
+| `cargo fmt --all --check`、兩個 `cargo clippy`、`cargo run -p openapi -- --check`、`cargo deny --locked check` | 通過 |
+| `CI=1 cargo test --no-fail-fast -p assets -p certs -p identity -p telemetry-query -p testkit -p repo-check -p contract -p migrate`、`CI=1 cargo test -p service-kit --test tenant_db` | 只有 `migrate` 的 `mqtt_broker` 1 個失敗，就是上面記錄過的這台工作站的環境問題；`migrate` 新的 `platform_admin` 與其餘測試都通過 |
+| `bun test deploy/chart` | 639 pass、0 fail |
+| `bun test deploy/flux` | 74 pass、3 fail，同樣 3 個 `readme-commands.test.ts` |
+| `bun test scripts` | 1632 pass、26 fail，失敗的與 main `dbe476c` 上的 26 個相同 |
+| `bun run --cwd scripts typecheck`、`bun scripts/ci/check-secret-handling.ts` | 通過 |
+
 ## 結論
 
 - 連線總數超過 `max_connections` 時檢查失敗：**通過**（上表的 145、100 與 identity 兩個副本；chart 測試；突變 m1 證明測試靠的是這個檢查）。
