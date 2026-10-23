@@ -1,0 +1,52 @@
+[package]
+name = "mqtt-bridge"
+description = "TrustIoT v2 MQTT bridge (decisions 6 and 27): relays each gateway's WebSocket to a TCP connection to the MQTT broker, byte for byte, and records the gateway's source IP from the trusted header only."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "mqtt-bridge"
+path = "src/main.rs"
+test = false
+doc = false
+
+[dependencies]
+axum = { workspace = true, features = ["http1", "tokio"] }
+# Strict decoding of the client's Sec-WebSocket-Key (16 bytes, RFC 6455 section 4.2.1).
+base64.workspace = true
+# The WebSocket's Stream and Sink halves, relayed in both directions at once.
+futures-util = { workspace = true, features = ["sink", "std"] }
+# The id that ties a connection's log lines together.
+getrandom.workspace = true
+# The HTTP upgrade of the request (hyper::upgrade::on) and its I/O as a tokio stream.
+hyper = { workspace = true, features = ["http1", "server"] }
+hyper-util = { workspace = true, features = ["tokio"] }
+# Connection and traffic counters, exported through service-kit's meter provider.
+opentelemetry = { workspace = true, features = ["metrics"] }
+serde = { workspace = true, features = ["derive"] }
+service-kit = { path = "../../crates/service-kit" }
+tokio = { workspace = true, features = ["io-util", "macros", "net", "rt-multi-thread", "sync", "time"] }
+# The WebSocket protocol over the upgraded connection; `handshake` derives Sec-WebSocket-Accept.
+tokio-tungstenite = { workspace = true, features = ["handshake"] }
+# Waits for the relayed connections while the service drains.
+tokio-util = { workspace = true, features = ["rt"] }
+tracing.workspace = true
+
+[dev-dependencies]
+# Decodes the OTLP metric export the metrics test receives.
+opentelemetry-proto = { workspace = true, features = ["gen-tonic-messages", "metrics"] }
+prost = { workspace = true, features = ["std"] }
+# A throwaway CA and server certificate for the TLS that must pass through the bridge unchanged.
+rcgen = { workspace = true, features = ["crypto", "pem", "ring"] }
+rustls = { workspace = true, features = ["ring", "std"] }
+serde_json.workspace = true
+tokio = { workspace = true, features = ["io-util", "macros", "net", "process", "rt-multi-thread", "sync", "time"] }
+tokio-rustls = { workspace = true, features = ["ring"] }
+# The test gateway's WebSocket client.
+tokio-tungstenite = { workspace = true, features = ["handshake"] }
+
+[lints]
+workspace = true

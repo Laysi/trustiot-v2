@@ -66,6 +66,24 @@ pub enum AgentError {
         "This question needed more work than its budget allows. Please ask a narrower question."
     )]
     BudgetExhausted,
+    /// The question reached its deadline, a little before its run delegation expires
+    /// ([`Delegation::deadline`]): without a delegation no tool could read data as the user.
+    #[error(
+        "This question took longer than the assistant may work on one question. Please ask a \
+         narrower question."
+    )]
+    RunExpired,
+    /// The user's access ended while the question ran: the identity service refused to act for
+    /// the user any longer (signed out, session ended, removed from the organisation).
+    #[error(
+        "Your access changed while the assistant was working, so it stopped. Please sign in again."
+    )]
+    AccessRevoked,
+    /// The question's run was started for another tenant or user than the conversation's
+    /// ([`Delegation::principal`]): a fault of the caller. Nothing was sent and the history is
+    /// unchanged.
+    #[error("The assistant could not start this question. Please try again.")]
+    NotTheConversationsRun,
 }
 
 impl AgentError {
@@ -77,6 +95,9 @@ impl AgentError {
             Self::Refused => "refused",
             Self::ContextFull => "context_full",
             Self::BudgetExhausted => "budget_exhausted",
+            Self::RunExpired => "run_expired",
+            Self::AccessRevoked => "access_revoked",
+            Self::NotTheConversationsRun => "not_the_conversations_run",
         }
     }
 
@@ -135,7 +156,10 @@ impl Agent {
     }
 
     /// Answers one question in `conversation`. `delegation` lets the tools call other services
-    /// as the conversation's user while the question runs.
+    /// as the conversation's user while the question runs; the question is logged under its
+    /// run ID and ends at its deadline ([`AgentError::RunExpired`]), so it never outlives the
+    /// delegation. A revoked delegation ends it at the tool call that found out
+    /// ([`AgentError::AccessRevoked`]).
     ///
     /// The history only grows. A model turn joins it together with the messages it answers (the
     /// tool results, a wind-down note), so a failed or cancelled question leaves a history the
@@ -147,13 +171,32 @@ impl Agent {
         delegation: Arc<dyn Delegation>,
     ) -> Result<Answer, AgentError> {
         let mut run = Run {
-            id: Uuid::now_v7(),
+            id: delegation.run_id().unwrap_or_else(Uuid::now_v7),
             started: Instant::now(),
             steps: 0,
             usage: TokenCount::default(),
             budget: Budget::new(self.settings.budget_tokens, self.settings.wind_down_percent),
         };
-        let result = self.run(&mut run, conversation, question, delegation).await;
+        let deadline = delegation.deadline();
+        // A run acts for the user it was started for; the tools would call as that user with
+        // this conversation's principal, so a run of anyone else does not start.
+        let foreign = delegation
+            .principal()
+            .is_some_and(|principal| principal != conversation.principal());
+        // Every await of the loop leaves the history whole (a turn and its results join it
+        // together), so cutting the question off at the deadline is safe. A question with no
+        // time left does not start: nothing is sent or added to the history.
+        let result = match deadline {
+            _ if foreign => Err(AgentError::NotTheConversationsRun),
+            Some(deadline) if deadline <= Instant::now() => Err(AgentError::RunExpired),
+            Some(deadline) => tokio::time::timeout_at(
+                deadline,
+                self.run(&mut run, conversation, question, delegation),
+            )
+            .await
+            .unwrap_or(Err(AgentError::RunExpired)),
+            None => self.run(&mut run, conversation, question, delegation).await,
+        };
         tracing::info!(
             run_id = %run.id,
             conversation_id = %conversation.id(),
@@ -233,7 +276,12 @@ impl Agent {
                     } else if run.budget.exhausted() {
                         not_run(&turn, prompt::BUDGET_EXHAUSTED_RESULT)
                     } else {
-                        self.tools.run(&context, &turn.tool_calls).await
+                        // The step is not kept: its tool calls have no results, and no tool
+                        // runs again for this question.
+                        self.tools
+                            .run(&context, &turn.tool_calls)
+                            .await
+                            .map_err(|_revoked| AgentError::AccessRevoked)?
                     };
                     let results = self
                         .model

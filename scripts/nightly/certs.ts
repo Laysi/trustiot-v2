@@ -9,7 +9,9 @@
 //    into the requests ConfigMap; inside the mesh (from the MQTT broker's pod, an authorized
 //    caller) ca.pem is the root alone and crl.pem is empty; through the ingress the workstation
 //    certificate API answers 401 without a cookie, 403 to a tenant administrator and 503
-//    workstation_certificate.ca_not_ready to a platform administrator: the CA cannot sign yet.
+//    workstation_certificate.ca_not_ready to the platform administrator: the CA cannot sign yet.
+//    The platform administrator is the one the chart's bootstrap made in the API check (api.ts,
+//    Laysi/trustiot-v2#582), with a session of its own; the tenant administrator is inserted.
 // 3. `certs-ca root sign` signs the request from the ConfigMap; the key id it prints must be the
 //    one of the request's key; helm upgrade sets the certificate in issuingCertificates.
 // 4. Signing: without a restart of the certs pod, ca.pem inside the mesh becomes the root and the
@@ -551,8 +553,8 @@ export async function checkMeshSigning(deps: MeshDeps, root: string, issuing: st
 export interface WorkstationDeps extends Clock {
   /** Sends one request to the ingress gateway. */
   send: (request: RawRequest) => Promise<RawResponse>;
-  /** Runs SQL as the database superuser. */
-  psql: (sql: string) => Promise<void>;
+  /** Runs SQL as the database superuser; what psql prints is not read. */
+  psql: (sql: string) => Promise<unknown>;
   log: (line: string) => void;
   limits?: { routeMs?: number; signerMs?: number; pollMs?: number };
 }
@@ -599,18 +601,20 @@ function post(appHost: string, target: string, body: unknown, session?: TestSess
 export const issueBody = (request: string): Record<string, string> => ({ workstation: WORKSTATION, certificate_request: request });
 
 /**
- * While the CA cannot sign: a platform administrator creates a tenant and the check makes an
- * administrator of it; the issue API answers 403 to the tenant administrator (awaited: the route),
- * 401 without a cookie, and 503 ca_not_ready to the platform administrator.
+ * While the CA cannot sign: the platform administrator the bootstrap made (`platformAdminId`, a
+ * user ID; api.ts) creates a tenant with a new session, and the check makes an administrator of
+ * it; the issue API answers 403 to the tenant administrator (awaited: the route), 401 without a
+ * cookie, and 503 ca_not_ready to the platform administrator.
  */
 export async function checkWorkstationWaiting(
   deps: WorkstationDeps,
   appHost: string,
   request: string,
+  platformAdminId: string,
   tenantName: string,
 ): Promise<{ detail: string; actors: WorkstationActors }> {
   const pollMs = deps.limits?.pollMs ?? POLL_MS;
-  const platformAdmin = newSession();
+  const platformAdmin: TestSession = { ...newSession(), userId: platformAdminId };
   await deps.psql(adminSessionSql(platformAdmin));
   const created = await deps.send(post(appHost, TENANTS_PATH, { name: tenantName }, platformAdmin));
   if (created.status !== 201) throw new Error(`creating a tenant answered ${summary(created)}, expected 201`);
@@ -618,7 +622,7 @@ export async function checkWorkstationWaiting(
   if (tenantId === undefined || !UUID.test(tenantId)) throw new Error(`creating a tenant answered 201 with ${created.body.slice(0, 200)}`);
   const tenantAdmin = newSession();
   await deps.psql(memberSessionSql(tenantAdmin, tenantId, "admin"));
-  deps.log(`made a platform administrator ${platformAdmin.userId} and an administrator ${tenantAdmin.userId} of tenant ${tenantId}`);
+  deps.log(`added a session for platform administrator ${platformAdmin.userId} and made an administrator ${tenantAdmin.userId} of tenant ${tenantId}`);
 
   const body = issueBody(request);
   // The certs service's own 403 proves the route and the token; Istio's or a missing route's
@@ -789,13 +793,18 @@ async function certsPods(ctx: ApiCheckContext, namespace: string, objects: Certs
   return certsPodsOf(JSON.parse(listed.stdout));
 }
 
-/** The waiting check against the release; returns the report line and what the next steps need. */
+/**
+ * The waiting check against the release, acting as `platformAdmin` (the user ID of the platform
+ * administrator the bootstrap made, runApiCheck); returns the report line and what the next steps
+ * need.
+ */
 export async function checkCertsWaiting(
   ctx: ApiCheckContext,
   namespace: string,
   manifest: K8sObject[],
   ingressCa: string | undefined,
   root: TestRoot,
+  platformAdmin: string,
   tenantName: string,
 ): Promise<{ detail: string; waiting: CertsWaiting }> {
   const kubectl = kubectlOf(ctx, namespace);
@@ -830,6 +839,7 @@ export async function checkCertsWaiting(
       { send: (request) => access.gateway.send(request), psql: access.psql, log: (line) => ctx.log.line(line) },
       access.appHost,
       workstation.request,
+      platformAdmin,
       tenantName,
     );
     return {

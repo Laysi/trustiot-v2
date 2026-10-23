@@ -70,6 +70,7 @@ time = { version = "0.3.55", default-features = false }
 tokio = "1.53.2"
 tokio-modbus = { version = "0.17.0", default-features = false }
 tokio-rustls = { version = "0.26.4", default-features = false }
+tokio-tungstenite = { version = "0.30.0", default-features = false }
 tokio-util = "0.7.20"
 toml = "1.1.8"
 tower = { version = "0.5.3", default-features = false }

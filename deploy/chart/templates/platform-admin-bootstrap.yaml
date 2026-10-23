@@ -1,0 +1,128 @@
+{{- /*
+The first platform administrator (Laysi/trustiot-v2#582; docs/runbooks/platform-admin.md): a
+CronJob that never runs on its own (suspended, with a schedule that never comes), only the template
+an operator starts a Job from once:
+
+  kubectl create job --from=cronjob/<release>-platform-admin-bootstrap <job>
+  kubectl attach -i job/<job> -c bootstrap-platform-admin    (then type the address and Enter)
+
+It runs `migrate bootstrap-platform-admin` with the migration Job's image, ServiceAccount (no token
+mounted), labels, Postgres CA and migration role, so the Postgres NetworkPolicy, the mesh and the
+migration Job's AuthorizationPolicy and NetworkPolicy (nobody connects to its pod) treat it as
+they treat the Job. The address reaches the container on stdin only (`stdin`, `stdinOnce`): it is
+in no object of the chart or of the operator, no argument and no environment variable, and the
+command never logs it. Rendered while the migration Job and the identity service are enabled.
+*/ -}}
+{{- if hasKey .Values.services "platform-admin-bootstrap" }}
+{{- fail "services.platform-admin-bootstrap: the name belongs to the CronJob that creates the first platform administrator" }}
+{{- end }}
+{{- if and (include "trustiot.migrate.enabled" .) (include "trustiot.identity.enabled" .) }}
+{{- $v := .Values }}
+{{- $m := $v.migrate }}
+{{- $ctx := dict "root" . "name" "migrate" }}
+{{- /* At most 52 characters, not 63: the CronJob controller appends 11 to name each Job. */}}
+{{- $suffix := "-platform-admin-bootstrap" }}
+{{- $name := printf "%s%s" (include "trustiot.fullname" . | trunc (int (sub 52 (len $suffix))) | trimSuffix "-") $suffix }}
+{{- $postgresCa := include "trustiot.postgres.caSecret" . | fromYaml }}
+{{- $labels := include "trustiot.componentLabels" $ctx | fromYaml }}
+{{- $_ := set $labels "trustiot.io/task" "platform-admin-bootstrap" }}
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- toYaml $labels | nindent 4 }}
+  annotations:
+    trustiot.io/description: Template for the one Job that creates the first platform administrator; never runs on a schedule (docs/runbooks/platform-admin.md).
+spec:
+  {{- /* February 31st never comes, and suspend keeps the controller from starting anything:
+  only `kubectl create job --from=cronjob/...` runs it. */}}
+  schedule: "0 0 31 2 *"
+  timeZone: Etc/UTC
+  suspend: true
+  concurrencyPolicy: Forbid
+  {{- /* `kubectl create job --from=cronjob/...` makes the CronJob the Job's controller, and the
+  CronJob controller prunes finished Jobs beyond these limits even while suspended: 0 would delete
+  the successful Job and its pod seconds after it ends, before the operator reads the exit code.
+  At 1 only ttlSecondsAfterFinished removes them. */}}
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 1
+  jobTemplate:
+    metadata:
+      labels:
+        {{- toYaml $labels | nindent 8 }}
+    spec:
+      parallelism: 1
+      completions: 1
+      podReplacementPolicy: Failed
+      {{- /* One attempt: a second pod would wait for an address nobody writes again. The deadline
+      ends a pod nobody attached to; the Job and its pod (with the log that names the user ID)
+      go a day after it finished, unless the operator deletes them first. */}}
+      backoffLimit: 0
+      activeDeadlineSeconds: 900
+      ttlSecondsAfterFinished: 86400
+      template:
+        metadata:
+          labels:
+            {{- $podLabels := deepCopy $labels }}
+            {{- /* In the mesh like the migration Job. */}}
+            {{- $_ := set $podLabels "istio.io/dataplane-mode" "ambient" }}
+            {{- toYaml $podLabels | nindent 12 }}
+        spec:
+          serviceAccountName: {{ include "trustiot.componentName" $ctx }}
+          automountServiceAccountToken: false
+          enableServiceLinks: false
+          restartPolicy: Never
+          securityContext:
+            {{- toYaml $v.serviceDefaults.podSecurityContext | nindent 12 }}
+          {{- with $v.global.imagePullSecrets }}
+          imagePullSecrets:
+            {{- range . }}
+            - name: {{ . }}
+            {{- end }}
+          {{- end }}
+          {{- with $m.nodeSelector }}
+          nodeSelector:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with $m.tolerations }}
+          tolerations:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          containers:
+            - name: bootstrap-platform-admin
+              image: {{ include "trustiot.migrate.image" . }}
+              imagePullPolicy: {{ $m.image.pullPolicy }}
+              args:
+                - bootstrap-platform-admin
+              {{- /* The address arrives here, from `kubectl attach -i`, and nowhere else. */}}
+              stdin: true
+              stdinOnce: true
+              tty: false
+              envFrom:
+                - configMapRef:
+                    name: {{ include "trustiot.platformConfigName" . }}
+              env:
+                {{- $env := include "trustiot.migrate.postgresEnv" . | fromYamlArray }}
+                {{- $env = append $env (dict "name" "TRUSTIOT__WAIT__DATABASES" "value" $m.wait.databases) }}
+                {{- toYaml $env | nindent 16 }}
+              resources:
+                {{- toYaml $m.resources | nindent 16 }}
+              securityContext:
+                {{- toYaml $v.serviceDefaults.securityContext | nindent 16 }}
+              {{- if $postgresCa.name }}
+              volumeMounts:
+                - name: postgres-ca
+                  mountPath: /etc/trustiot/postgres-ca
+                  readOnly: true
+              {{- end }}
+          {{- if $postgresCa.name }}
+          volumes:
+            - name: postgres-ca
+              secret:
+                secretName: {{ $postgresCa.name }}
+                items:
+                  - key: {{ $postgresCa.key }}
+                    path: ca.crt
+          {{- end }}
+{{- end }}

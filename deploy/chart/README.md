@@ -86,6 +86,8 @@ proto 的 shim 偶爾會把自己的訊息寫進 stdout（例如另一個 proto 
 
 `web` 提供 SPA 的靜態檔（決策 2，Laysi/trustiot-v2#123）：開啟後 `hosts.app` 上 `/api`、`/auth` 以外的路徑都由它回應，不經 cookie 檢查，也拿不到 cookie 與身分標頭；不能有 cookie 路由（見「入口 gateway」的「SPA 的靜態檔」）。
 
+`mqtt-bridge` 把閘道器的 WebSocket（`ingress.publicPaths.mqtt`）原封不動轉成 TCP 送到 broker 的閘道器埠（決策 6，Laysi/trustiot-v2#85，services/mqtt-bridge/README.md）。`mqttBroker.enabled` 時 chart 設定 `TRUSTIOT__BROKER__ADDRESS`（`<release>-mqtt-broker.<namespace>.svc:8883`），broker 沒開時不設，服務拒絕啟動；不論 broker 開不開，`services.mqtt-bridge.env` 與 `serviceDefaults.env` 都不能設定它（渲染失敗），轉接服務只連叢集內的 broker。記錄的來源 IP 依 `TRUSTIOT_CLIENT_IP_SOURCE`：目前只支援 `tunnel`（`cf-connecting-ip`），其他 `ingress.exposure`（`x-forwarded-for-rightmost`）在 Laysi/trustiot-v2#446 之前拒絕啟動。渲染不因此失敗，因為 e2e 與「每個服務都開」的渲染測試要在 onprem 形態開啟它。`mesh.calls` 不能把 `mqtt-bridge` 列為被呼叫端（渲染失敗）：只有入口 gateway 連得到它，否則呼叫端能自己設可信的來源 IP 標頭，也能經它連到 broker 的閘道器埠。
+
 ## values 欄位
 
 「必填」指 schema 要求非空值。Secret 欄位一律是既有 Secret 的名稱與 key，名稱空白代表不設定。
@@ -632,6 +634,15 @@ Job 做的事，依序：
 - 停用某個服務時，下一次 Job 讓它的登入角色 `NOLOGIN`（角色、它擁有的物件與權限都留著，重新啟用時 Job 先設密碼再恢復 LOGIN）；關掉 collector 或改它的帳號名稱時，舊的 ClickHouse 帳號改成 `HOST NONE`。Secret 留著（`keep`），Role 不再列它；裡面的密碼已經登不進去，清掉的步驟見 [docs/runbooks/migrations.md](../../docs/runbooks/migrations.md) 的「停用服務之後留下的 Secret」。
 
 **失敗時**：Job 在 `migrate.backoffLimit` 次重試後失敗，服務停在 `Init`，舊版的 pod 繼續服務。看 `kubectl -n <namespace> logs job/<release>-migrate-<hash>`（JSON 行，只寫 stdout）；每一項變更與停止的原因都寫在裡面，不含密碼。處理方式見 [docs/runbooks/migrations.md](../../docs/runbooks/migrations.md)。
+
+### 第一位平台管理員
+
+`migrate.enabled` 與身分服務都啟用時，chart 另外渲染 CronJob `<release>-platform-admin-bootstrap`（`templates/platform-admin-bootstrap.yaml`，Laysi/trustiot-v2#582）。它不會自己執行（`suspend: true`，排程是不存在的 2 月 31 日），只是操作者建立第一位平台管理員時 `kubectl create job --from=cronjob/...` 的範本；步驟、結束碼與復原在 [docs/runbooks/platform-admin.md](../../docs/runbooks/platform-admin.md)。
+
+- 執行同一個 migrate 映像的 `migrate bootstrap-platform-admin`（[tools/migrate](../../tools/migrate/README.md)），以 migration 角色連 Postgres：與 Job 相同的 CA、`TRUSTIOT__POSTGRES__*` 與 `migrate.wait.databases`，沒有 `TRUSTIOT__PASSWORDS__*`、ClickHouse 設定與 projected token（它不碰 Kubernetes API）。
+- 電子郵件地址只從 stdin 來：容器 `stdin: true`、`stdinOnce: true`，操作者以 `kubectl attach -i` 寫入一行。chart、values、Job 的參數與環境變數裡都沒有地址，程式也不把它寫進日誌。
+- pod 用 migration Job 的 ServiceAccount（不掛 token）與 selector 標籤（`app.kubernetes.io/component: migrate`，另加 `trustiot.io/task: platform-admin-bootstrap`），在 ambient mesh 內，所以 `<release>-postgres` 的 NetworkPolicy 放行它，migration Job 的 AuthorizationPolicy 與 NetworkPolicy 讓任何東西都連不進它的 pod（上方呼叫矩陣的 `migrate` 一條；測試比對每個 policy 的 selector 對兩者的結果相同）。
+- 一次嘗試（`backoffLimit: 0`）：第二個 pod 會等一個沒人再寫的地址。`activeDeadlineSeconds: 900` 結束沒人 attach 的 pod；Job 與 pod（日誌有使用者 ID）在結束一天後刪除（`ttlSecondsAfterFinished: 86400`），runbook 要求操作者看完日誌就刪。`kubectl create job --from=cronjob/...` 讓 CronJob 成為 Job 的 controller，CronJob controller 即使在暫停中也會刪掉超過保留數的已結束 Job，所以 `successfulJobsHistoryLimit` 與 `failedJobsHistoryLimit` 都是 1：設 0 時成功的 Job 結束後幾秒就被刪掉，操作者讀不到結束碼。CronJob 名稱最多 52 個字元，release 名稱太長時截短前綴。`services.platform-admin-bootstrap` 保留給它。
 
 ## 叢集內的 Postgres
 

@@ -589,6 +589,9 @@ describe("internal identity (decision 27, Laysi/trustiot-v2#61; keys generated i
     env(manifests, service).find((e) => e.name === name)?.value;
   const initsOf = (pod: PodSpec) => (pod.initContainers ?? []) as Container[];
   const ROTATION = `${RELEASE}-identity-key-rotation`;
+  // The suspended CronJob an operator starts the first platform administrator's bootstrap from
+  // (Laysi/trustiot-v2#582); its own tests are in the describe block below.
+  const BOOTSTRAP = `${RELEASE}-platform-admin-bootstrap`;
   const cronPod = (cronJob: Manifest) =>
     (cronJob.spec as { jobTemplate: { spec: { template: { spec: PodSpec } } } }).jobTemplate.spec.template.spec;
   // Every pod template the chart renders: Deployments, StatefulSets, Jobs, the rotation CronJob;
@@ -843,13 +846,13 @@ describe("internal identity (decision 27, Laysi/trustiot-v2#61; keys generated i
       const off = render([...SHAPES[shape], SMOKE], [...everything, "--set", "internalIdentity.maxKeyAgeSeconds=0"]);
       expect(rbac(manifests)).toEqual(rbac(off));
       // Acceptance: maxKeyAgeSeconds 0 renders no CronJob, and the identity service checks nothing.
-      expect(off.filter((m) => m.kind === "CronJob")).toEqual([]);
+      expect(off.filter((m) => m.kind === "CronJob" && m.metadata.name !== BOOTSTRAP)).toEqual([]);
       expect(JSON.stringify(off)).not.toContain("identity-key-rotation");
       expect(envValue(off, "identity", "TRUSTIOT_IDENTITY_MAX_KEY_AGE_SECONDS")).toBe("0");
     }
     // Nothing rotates while a person's key is moved over, or without the identity service.
     const moving = render([...SHAPES.saas, SMOKE], [...everything, ...legacy]);
-    expect(moving.filter((m) => m.kind === "CronJob")).toEqual([]);
+    expect(moving.filter((m) => m.kind === "CronJob" && m.metadata.name !== BOOTSTRAP)).toEqual([]);
     expect(envValue(moving, "identity", "TRUSTIOT_IDENTITY_MAX_KEY_AGE_SECONDS")).toBe("0");
     const without = render([...SHAPES.saas, SMOKE], ["--set", "services.assets.enabled=true"]);
     expect(without.filter((m) => m.kind === "CronJob")).toEqual([]);
@@ -879,7 +882,7 @@ describe("internal identity (decision 27, Laysi/trustiot-v2#61; keys generated i
     // name (Helm caps it at 53); its policies carry the same name.
     for (const release of ["r", `trustiot-${"x".repeat(44)}`]) {
       const long = render(SHAPES.saas, base, release);
-      const cronJobs = long.filter((m) => m.kind === "CronJob");
+      const cronJobs = long.filter((m) => m.kind === "CronJob" && m.metadata.name.endsWith("-identity-key-rotation"));
       expect(cronJobs).toHaveLength(1);
       const name = cronJobs[0]?.metadata.name ?? "";
       expect(name.length, release).toBeLessThanOrEqual(52);
@@ -2074,6 +2077,51 @@ describe("MQTT broker (decision 6, Laysi/trustiot-v2#84)", () => {
     expect(withoutCerts.some((m) => m.metadata.name === `${RELEASE}-certs`)).toBe(false);
   });
 
+  // Laysi/trustiot-v2#85: mqtt-bridge relays each gateway's WebSocket to the broker's gateway port,
+  // the one port the mesh admits it on, and reads the source-IP mode from the platform settings.
+  test.each(SHAPE_NAMES)("%s: mqtt-bridge gets the broker's gateway port, and no address without the broker", (shape) => {
+    const BRIDGE = `${RELEASE}-mqtt-bridge`;
+    const bridge = (rendered: Manifest[]) => {
+      const container = (podSpec(find(rendered, "Deployment", BRIDGE)).containers as Container[])[0];
+      if (!container) throw new Error(`no container in ${BRIDGE}`);
+      return container;
+    };
+    const withBroker = bridge(render(SHAPES[shape], [...brokerOn, ...callers]));
+    expect((withBroker.env ?? []).filter((e) => e.name.startsWith("TRUSTIOT__BROKER__"))).toEqual([
+      { name: "TRUSTIOT__BROKER__ADDRESS", value: `${NAME}.${NAMESPACE}.svc:${GATEWAY_PORT}` },
+    ]);
+    expect(withBroker.envFrom).toEqual([{ configMapRef: { name: `${RELEASE}-platform` } }]);
+    // Without the broker the bridge has nowhere to relay to and refuses to start
+    // (services/mqtt-bridge/README.md, 「設定」).
+    const withoutBroker = bridge(render(SHAPES[shape], ["--set", "services.mqtt-bridge.enabled=true"]));
+    expect((withoutBroker.env ?? []).some((e) => e.name.startsWith("TRUSTIOT__BROKER__"))).toBe(false);
+    // The address is the chart's: custom env cannot point the bridge elsewhere, with the broker or
+    // without it, through the service's env or serviceDefaults.env.
+    for (const broker of [[...brokerOn, ...callers], ["--set", "services.mqtt-bridge.enabled=true"]]) {
+      for (const field of ["services.mqtt-bridge.env", "serviceDefaults.env"]) {
+        const result = helmTemplate(SHAPES[shape], [...broker, "--set-json", `${field}=[{"name":"trustiot__broker__address","value":"elsewhere:8883"}]`]);
+        expect(result.code).not.toBe(0);
+        expect(result.stderr).toContain("services.mqtt-bridge: env trustiot__broker__address is set by the chart");
+      }
+    }
+  });
+
+  // Security review of Laysi/trustiot-v2#85: a service allowed to call mqtt-bridge could set
+  // CF-Connecting-IP itself and reach the broker's gateway port through the bridge, so the ingress
+  // gateway stays its only caller.
+  test("no service may list mqtt-bridge in mesh.calls", () => {
+    const result = helmTemplate(SHAPES.saas, [
+      ...brokerOn,
+      ...callers,
+      "--set",
+      "services.assets.enabled=true",
+      "--set-json",
+      'mesh.calls.assets=["postgres","mqtt-bridge"]',
+    ]);
+    expect(result.code).not.toBe(0);
+    expect(result.stderr).toContain("mesh.calls.assets: no service may call mqtt-bridge");
+  });
+
   // Laysi/trustiot-v2#557: a certificate for the broker's name lets its holder pose as the broker
   // to every gateway, so only the broker's pod reaches the port that issues it.
   test.each(SHAPE_NAMES)("%s: the broker alone reaches the certs service's broker-certs port, which the certs Service leaves out", (shape) => {
@@ -2147,9 +2195,11 @@ describe("MQTT broker (decision 6, Laysi/trustiot-v2#84)", () => {
     const env = Object.fromEntries((container?.env ?? []).map((e) => [e.name, e.value]));
     expect(env.TRUSTIOT__BROKER__LISTEN_ADDR).toBe(`0.0.0.0:${BROKER_CERTS_PORT}`);
     expect(env.TRUSTIOT__BROKER__SERVICE_NAME).toBe(`${NAME}.${NAMESPACE}.svc`);
-    // No other workload gets the broker's settings.
+    // No other workload gets the broker's settings; mqtt-bridge gets only the broker's address
+    // (Laysi/trustiot-v2#85).
     for (const other of rendered.filter((m) => m.kind === "Deployment" && m.metadata.name !== CERTS)) {
-      expect(podSpec(other).containers.flatMap((c) => (c.env ?? []).map((e) => e.name)).filter((name) => name.startsWith("TRUSTIOT__BROKER__"))).toEqual([]);
+      const expected = other.metadata.name === `${RELEASE}-mqtt-bridge` ? ["TRUSTIOT__BROKER__ADDRESS"] : [];
+      expect(podSpec(other).containers.flatMap((c) => (c.env ?? []).map((e) => e.name)).filter((name) => name.startsWith("TRUSTIOT__BROKER__"))).toEqual(expected);
     }
 
     // Without the broker the port's policies admit nobody, and the certificate names no Service.
@@ -2538,17 +2588,24 @@ describe("bundled Postgres (CloudNativePG, Laysi/trustiot-v2#58)", () => {
       expect(pod).not.toContain("TRUSTIOT_POSTGRES_CA_FILE");
     }
     // The CA's private key and the server key stay with the operator; the owner's password
-    // reaches the migration Job only.
+    // reaches the migration Job only, and the first platform administrator's bootstrap CronJob,
+    // which runs as the migration role (Laysi/trustiot-v2#582).
     const rendered = JSON.stringify(manifests);
     expect(rendered).not.toContain("ca.key");
     for (const suffix of ["server", "replication", "superuser"]) expect(rendered).not.toContain(`${cluster}-${suffix}`);
     const readers = manifests.filter((m) => JSON.stringify(m).includes(`${cluster}-app`));
-    expect(readers.map((m) => m.kind)).toEqual(["Job"]);
-    const job = (readers[0]?.spec as { template: { spec: PodSpec } }).template.spec.containers[0];
-    expect(job?.env?.filter((e) => e.valueFrom?.secretKeyRef?.name === `${cluster}-app`)).toEqual([
-      { name: "TRUSTIOT__POSTGRES__USERNAME", valueFrom: { secretKeyRef: { name: `${cluster}-app`, key: "username" } } },
-      { name: "TRUSTIOT__POSTGRES__PASSWORD", valueFrom: { secretKeyRef: { name: `${cluster}-app`, key: "password" } } },
+    expect(readers.map((m) => `${m.kind}/${m.metadata.name}`).sort()).toEqual([
+      `CronJob/${RELEASE}-platform-admin-bootstrap`,
+      expect.stringMatching(new RegExp(`^Job/${RELEASE}-migrate-[0-9a-f]{8}$`)),
     ]);
+    for (const reader of readers) {
+      const spec = reader.spec as { template?: { spec: PodSpec }; jobTemplate?: { spec: { template: { spec: PodSpec } } } };
+      const container = (spec.template ?? spec.jobTemplate?.spec.template)?.spec.containers[0];
+      expect(container?.env?.filter((e) => e.valueFrom?.secretKeyRef?.name === `${cluster}-app`)).toEqual([
+        { name: "TRUSTIOT__POSTGRES__USERNAME", valueFrom: { secretKeyRef: { name: `${cluster}-app`, key: "username" } } },
+        { name: "TRUSTIOT__POSTGRES__PASSWORD", valueFrom: { secretKeyRef: { name: `${cluster}-app`, key: "password" } } },
+      ]);
+    }
   });
 
   test("the Cluster name stays within CloudNativePG's 50 characters for the longest release name", () => {
@@ -3416,6 +3473,161 @@ describe("migration Job (Laysi/trustiot-v2#60)", () => {
     const result = helmTemplate(SHAPES.saas, args);
     expect(result.code).not.toBe(0);
     expect(result.stderr).toMatch(expected);
+  });
+});
+
+describe("first platform administrator (Laysi/trustiot-v2#582)", () => {
+  const BOOTSTRAP = `${RELEASE}-platform-admin-bootstrap`;
+  const withIdentity = ["--set", "services.identity.enabled=true"];
+  type CronJobSpec = {
+    schedule: string;
+    timeZone: string;
+    suspend: boolean;
+    concurrencyPolicy: string;
+    successfulJobsHistoryLimit: number;
+    failedJobsHistoryLimit: number;
+    jobTemplate: {
+      metadata: { labels: Record<string, string> };
+      spec: {
+        parallelism: number;
+        completions: number;
+        podReplacementPolicy: string;
+        backoffLimit: number;
+        activeDeadlineSeconds: number;
+        ttlSecondsAfterFinished: number;
+        template: { metadata: { labels: Record<string, string> }; spec: PodSpec & { restartPolicy: string; initContainers?: unknown } };
+      };
+    };
+  };
+  type BootstrapContainer = Container & { args: string[]; stdin: boolean; stdinOnce: boolean; tty: boolean };
+  type Peer = { podSelector?: { matchLabels: Record<string, string> } };
+  const cronJobSpec = (manifests: Manifest[]) => find(manifests, "CronJob", BOOTSTRAP).spec as CronJobSpec;
+  const migrationJob = (manifests: Manifest[]) => {
+    const jobs = manifests.filter((m) => m.kind === "Job");
+    expect(jobs).toHaveLength(1);
+    return jobs[0]?.spec as { template: { metadata: { labels: Record<string, string> }; spec: PodSpec } };
+  };
+  const selects = (selector: Record<string, string>, labels: Record<string, string>) =>
+    Object.entries(selector).every(([key, value]) => labels[key] === value);
+
+  test.each(SHAPE_NAMES)("%s: a suspended CronJob that never runs on its own, one attempt, reading the address on stdin", (shape) => {
+    const manifests = render([...SHAPES[shape], SMOKE], withIdentity);
+    const spec = cronJobSpec(manifests);
+    // Only `kubectl create job --from=cronjob/...` starts it: suspended, and February 31st never comes.
+    expect(spec.suspend).toBe(true);
+    expect(spec.schedule).toBe("0 0 31 2 *");
+    expect(spec.timeZone).toBe("Etc/UTC");
+    expect(spec.concurrencyPolicy).toBe("Forbid");
+    // The Job an operator creates from it is the CronJob's; the controller prunes finished ones
+    // beyond these limits even while suspended, so 0 would delete a successful run before its exit
+    // code is read. At 1 only ttlSecondsAfterFinished removes it.
+    expect(spec.successfulJobsHistoryLimit).toBe(1);
+    expect(spec.failedJobsHistoryLimit).toBe(1);
+    const job = spec.jobTemplate.spec;
+    // A second pod would wait for an address nobody writes again.
+    expect({ parallelism: job.parallelism, completions: job.completions, backoffLimit: job.backoffLimit, podReplacementPolicy: job.podReplacementPolicy }).toEqual({
+      parallelism: 1,
+      completions: 1,
+      backoffLimit: 0,
+      podReplacementPolicy: "Failed",
+    });
+    expect(job.activeDeadlineSeconds).toBe(900);
+    expect(job.ttlSecondsAfterFinished).toBe(86400);
+    const pod = job.template.spec;
+    expect(pod.restartPolicy).toBe("Never");
+    expect(pod.initContainers).toBeUndefined();
+    expect(pod.containers).toHaveLength(1);
+    const container = pod.containers[0] as BootstrapContainer;
+    expect(container.name).toBe("bootstrap-platform-admin");
+    expect(container.args).toEqual(["bootstrap-platform-admin"]);
+    // The address arrives on stdin, from the first `kubectl attach -i`, and nowhere else.
+    expect({ stdin: container.stdin, stdinOnce: container.stdinOnce, tty: container.tty }).toEqual({ stdin: true, stdinOnce: true, tty: false });
+    expect(JSON.stringify(spec)).not.toContain("@");
+    // The migration Job's image, ServiceAccount (no token), security settings and Postgres CA.
+    const migration = migrationJob(manifests);
+    const migrate = migration.template.spec.containers[0] as Container;
+    expect(container.image).toBe(migrate.image);
+    expect(pod.serviceAccountName).toBe(`${RELEASE}-migrate`);
+    expect(pod.serviceAccountName).toBe(migration.template.spec.serviceAccountName);
+    expect(pod.automountServiceAccountToken).toBe(false);
+    expect(pod.securityContext).toEqual(migration.template.spec.securityContext);
+    expect(container.securityContext).toEqual(migrate.securityContext);
+    expect(container.envFrom).toEqual(migrate.envFrom);
+    expect(pod.volumes).toEqual(migration.template.spec.volumes?.filter((v) => v.name === "postgres-ca"));
+    expect(container.volumeMounts).toEqual(migrate.volumeMounts?.filter((v) => v.name === "postgres-ca"));
+  });
+
+  test.each(SHAPE_NAMES)("%s: the pod holds the migration role and nothing else of the migration Job: no Kubernetes API token, no password Secret to fill, no ClickHouse", (shape) => {
+    const manifests = render([...SHAPES[shape], SMOKE], withIdentity);
+    const container = cronJobSpec(manifests).jobTemplate.spec.template.spec.containers[0] as BootstrapContainer;
+    const migrate = migrationJob(manifests).template.spec.containers[0] as Container;
+    const env = container.env ?? [];
+    // Exactly the migration Job's Postgres settings (CA file and the migration role's Secret), in
+    // its order, plus the wait for the database.
+    const postgres = (migrate.env ?? []).filter((e) => e.name.startsWith("TRUSTIOT__POSTGRES__") || e.name === "TRUSTIOT_POSTGRES_CA_FILE");
+    expect(postgres.length).toBeGreaterThan(0);
+    expect(env).toEqual([...postgres, { name: "TRUSTIOT__WAIT__DATABASES", value: "10m" }]);
+    const text = JSON.stringify(cronJobSpec(manifests));
+    for (const absent of ["TRUSTIOT__PASSWORDS__", "TRUSTIOT__CLICKHOUSE__", "migrate-kube-api", "serviceAccountToken"]) {
+      expect(text, absent).not.toContain(absent);
+    }
+    // The wait follows the migration Job's.
+    const slower = render([...SHAPES[shape], SMOKE], [...withIdentity, "--set", "migrate.wait.databases=20m"]);
+    expect((cronJobSpec(slower).jobTemplate.spec.template.spec.containers[0]?.env ?? []).at(-1)).toEqual({ name: "TRUSTIOT__WAIT__DATABASES", value: "20m" });
+  });
+
+  test.each(SHAPE_NAMES)("%s: every NetworkPolicy and AuthorizationPolicy treats its pod as it treats the migration Job's", (shape) => {
+    const manifests = render([...SHAPES[shape], SMOKE], [...enableAllServices, "--set", "observability.collector.enabled=true"]);
+    const job = migrationJob(manifests).template.metadata.labels;
+    const pod = cronJobSpec(manifests).jobTemplate.spec.template.metadata.labels;
+    expect(pod["app.kubernetes.io/component"]).toBe("migrate");
+    expect(pod["trustiot.io/task"]).toBe("platform-admin-bootstrap");
+    expect(pod["istio.io/dataplane-mode"]).toBe("ambient");
+    // Every selector in the policies: the ones that pick the pods a policy applies to and the
+    // peers a NetworkPolicy admits.
+    const selectors: Record<string, string>[] = [];
+    for (const m of manifests.filter((m) => m.kind === "NetworkPolicy" || m.kind === "AuthorizationPolicy")) {
+      const s = m.spec as {
+        selector?: { matchLabels?: Record<string, string> };
+        podSelector?: { matchLabels?: Record<string, string> };
+        ingress?: { from?: Peer[] }[];
+        egress?: { to?: Peer[] }[];
+      };
+      for (const selector of [s.selector?.matchLabels, s.podSelector?.matchLabels]) if (selector) selectors.push(selector);
+      for (const peer of [...(s.ingress ?? []).flatMap((r) => r.from ?? []), ...(s.egress ?? []).flatMap((r) => r.to ?? [])]) {
+        if (peer.podSelector) selectors.push(peer.podSelector.matchLabels);
+      }
+    }
+    // Some policy names the migration Job's pods (the Postgres NetworkPolicy admits them), so the
+    // comparison below is not vacuous.
+    expect(selectors.some((selector) => selects(selector, job) && "app.kubernetes.io/component" in selector)).toBe(true);
+    for (const selector of selectors) {
+      expect({ selector, bootstrap: selects(selector, pod) }).toEqual({ selector, bootstrap: selects(selector, job) });
+    }
+  }, SLOW_TEST_MS);
+
+  test("rendered only while the migration Job and the identity service are, with a name the Job controller can extend", () => {
+    for (const shape of SHAPE_NAMES) {
+      // The identity service is off in both shapes' defaults.
+      expect(render(SHAPES[shape]).some((m) => m.metadata.name === BOOTSTRAP), shape).toBe(false);
+      expect(render(SHAPES[shape], withIdentity).filter((m) => m.metadata.name === BOOTSTRAP).map((m) => m.kind), shape).toEqual(["CronJob"]);
+    }
+    const withoutMigrate = render(SHAPES.saas, [...withIdentity, "--set", "migrate.enabled=false"]);
+    expect(withoutMigrate.some((m) => m.metadata.name.endsWith("-platform-admin-bootstrap"))).toBe(false);
+    // The CronJob controller appends 11 characters to name each Job; Helm caps a release name at 53.
+    for (const release of ["r", `trustiot-${"x".repeat(44)}`]) {
+      const names = render(SHAPES.saas, withIdentity, release)
+        .filter((m) => m.kind === "CronJob" && m.metadata.name.endsWith("-platform-admin-bootstrap"))
+        .map((m) => m.metadata.name);
+      expect(names).toHaveLength(1);
+      expect((names[0] ?? "").length, release).toBeLessThanOrEqual(52);
+    }
+  }, SLOW_TEST_MS);
+
+  test("the chart refuses a service named after the CronJob", () => {
+    const result = helmTemplate(SHAPES.saas, ["--skip-schema-validation", "--set", "services.platform-admin-bootstrap.enabled=false"]);
+    expect(result.code).not.toBe(0);
+    expect(result.stderr).toMatch(/services\.platform-admin-bootstrap: the name belongs to the CronJob that creates the first platform administrator/);
   });
 });
 

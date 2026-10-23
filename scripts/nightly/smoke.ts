@@ -212,6 +212,8 @@ export async function smokeShape(ctx: SmokeContext, shape: Shape): Promise<Shape
   let testRoot: TestRoot | undefined;
   let certsWaiting: CertsWaiting | undefined;
   let issuingCa: { certificate: string; keyId: string } | undefined;
+  // The platform administrator the bootstrap made in the API check (api.ts), whom the certs check acts as.
+  let platformAdmin: string | undefined;
   try {
     passed =
       (await check("namespace with the restricted Pod Security level", async () => {
@@ -447,13 +449,18 @@ export async function smokeShape(ctx: SmokeContext, shape: Shape): Promise<Shape
       })) &&
       (await check(
         "through the ingress, a new tenant reaches the assets service and, with its ClickHouse account, the telemetry API; a stolen identity header never does, and Host ports and normalized paths reach it (Laysi/trustiot-v2#65, #77, #539)",
-        () => runApiCheck(ctx, namespace, parseManifests(manifest), ingressCa, `nightly smoke ${shape.name}`),
+        async () => {
+          const checked = await runApiCheck(ctx, namespace, parseManifests(manifest), ingressCa, `nightly smoke ${shape.name}`);
+          platformAdmin = checked.platformAdmin;
+          return checked.detail;
+        },
       )) &&
       (await check(
         "certs waits for its issuing CA certificate: the init container wrote the key Secret and the request ConfigMap, the mesh serves the root alone, and the workstation certificate API answers 401, 403 and 503 ca_not_ready (Laysi/trustiot-v2#517)",
         async () => {
           if (testRoot === undefined) throw new Error("no test root was made");
-          const found = await checkCertsWaiting(ctx, namespace, parseManifests(manifest), ingressCa, testRoot, `nightly smoke certs ${shape.name}`);
+          if (platformAdmin === undefined) throw new Error("the API check made no platform administrator");
+          const found = await checkCertsWaiting(ctx, namespace, parseManifests(manifest), ingressCa, testRoot, platformAdmin, `nightly smoke certs ${shape.name}`);
           certsWaiting = found.waiting;
           return found.detail;
         },

@@ -21,6 +21,8 @@
 //!   sidecar, which keep the cloud services' broker accounts, the dynamic-security file, the
 //!   gateway trust files, and reload the broker when they or its server certificate change
 //!   (Laysi/trustiot-v2#84).
+//! - [`platform_admin::bootstrap`]: `migrate bootstrap-platform-admin`, which an operator runs
+//!   once to make the deployment's first platform administrator (Laysi/trustiot-v2#582).
 //!
 //! Every step is idempotent: a second run on the same databases changes nothing, which
 //! [`Report::changes`] states and the tests check against the catalogs.
@@ -31,10 +33,15 @@ pub mod clickhouse_admin;
 pub mod clickhouse_files;
 pub mod config;
 pub mod http;
+/// Email addresses as the identity service normalizes them (compiled into the service as well),
+/// for `migrate bootstrap-platform-admin` (Laysi/trustiot-v2#582).
+#[path = "../../../services/identity/src/email.rs"]
+pub mod identity_email;
 pub mod kube;
 pub mod mqtt_accounts;
 pub mod mqtt_trust;
 pub mod passwords;
+pub mod platform_admin;
 pub mod postgres;
 pub mod registry;
 /// The raw data retention, the ingest service's file (compiled into the service as well): the
@@ -103,6 +110,9 @@ pub enum Error {
     MqttBroker(String),
     #[error("Kubernetes API: {0}")]
     Kube(String),
+    /// `migrate bootstrap-platform-admin`; never contains the address.
+    #[error("platform administrator: {0}")]
+    PlatformAdmin(String),
 }
 
 impl Error {
