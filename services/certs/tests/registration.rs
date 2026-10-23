@@ -3,7 +3,8 @@
 //! - The workstation identity (no container): a request signed with a workstation certificate's
 //!   key holds; one signed with a gateway certificate, a certificate of another CA, another key,
 //!   over another body or path, too old, or with a missing or malformed header does not, and an
-//!   expired workstation certificate does not either.
+//!   expired workstation certificate does not either; nor does a certificate of the issuing CA
+//!   that has the workstation profile but no keyUsage digitalSignature, or is a CA.
 //! - The API (a throwaway Postgres with TLS and the real binary): a new hardware ID is
 //!   registered with its initial gateway certificate and one `certs.gateway_registered` event; a
 //!   repeat returns the same record and certificate and writes nothing (acceptance 1, 5), also
@@ -23,7 +24,7 @@ use std::time::Duration;
 use base64::Engine as _;
 use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
 use certs::authority::Authority;
-use certs::issue::{self, WorkstationName};
+use certs::issue::{self, WORKSTATION_PURPOSE_DER, WORKSTATION_SUBJECT_PREFIX, WorkstationName};
 use certs::pem;
 use certs::registrations::{
     DECOMMISSIONED, ENDORSEMENT_KEY_IN_USE, ENDORSEMENT_KEY_MISMATCH, ENDORSEMENT_KEY_UNSUPPORTED,
@@ -39,9 +40,11 @@ use contract::certs::{
 use contract::{ServiceName, TenantGrant, TenantId, TenantRole};
 use protocol::GatewayId;
 use rcgen::{
-    CertificateParams, DistinguishedName, DnType, KeyPair, PKCS_ECDSA_P256_SHA256,
-    PKCS_ECDSA_P384_SHA384, PublicKeyData as _, SigningKey as _,
+    BasicConstraints, CertificateParams, CustomExtension, DistinguishedName, DnType, IsCa, Issuer,
+    KeyPair, KeyUsagePurpose, PKCS_ECDSA_P256_SHA256, PKCS_ECDSA_P384_SHA384, PublicKeyData as _,
+    SigningKey as _,
 };
+use rustls_pki_types::CertificateDer;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use sqlx::Row as _;
@@ -289,6 +292,88 @@ fn only_a_workstation_certificate_signs_for_a_workstation() {
             WorkstationRefusal::Malformed,
             "{name}: {value}"
         );
+    }
+}
+
+/// A workstation certificate for a new key that `issue::workstation_certificate` would sign
+/// (common name `workstation:<WORKSTATION>`, keyUsage digitalSignature, not a CA, the workstation
+/// purpose as the only extended key usage), signed by the first issuing CA of `ca`, with
+/// `adjust` applied to its parameters first.
+fn workstation_variant(
+    ca: &TestCa,
+    adjust: impl FnOnce(&mut CertificateParams),
+) -> (KeyPair, Vec<u8>) {
+    let key = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256).expect("a key");
+    let signing_key = ca.keys().into_keys().remove(0).into_signing_key();
+    let issuing = ca.issuing_ders().remove(0);
+    let issuer = Issuer::from_ca_cert_der(&CertificateDer::from(issuing.as_slice()), signing_key)
+        .expect("the issuing CA as an issuer");
+    let mut params = CertificateParams::default();
+    let mut name = DistinguishedName::new();
+    let common_name = format!("{WORKSTATION_SUBJECT_PREFIX}{WORKSTATION}");
+    name.push(DnType::CommonName, common_name.as_str());
+    params.distinguished_name = name;
+    params.is_ca = IsCa::ExplicitNoCa;
+    params.key_usages = vec![KeyUsagePurpose::DigitalSignature];
+    // extendedKeyUsage (2.5.29.37): SEQUENCE { OBJECT IDENTIFIER <the workstation purpose> }.
+    let mut purposes = vec![0x30, 0x16, 0x06, 0x14];
+    purposes.extend_from_slice(&WORKSTATION_PURPOSE_DER);
+    params.custom_extensions = vec![CustomExtension::from_oid_content(&[2, 5, 29, 37], purposes)];
+    params.use_authority_key_identifier_extension = true;
+    let start = now() - 60;
+    params.not_before = time::OffsetDateTime::from_unix_timestamp(start).expect("a time");
+    params.not_after = time::OffsetDateTime::from_unix_timestamp(start + 86_400).expect("a time");
+    adjust(&mut params);
+    let certificate = params.signed_by(&key, &issuer).expect("signed");
+    (key, certificate.der().to_vec())
+}
+
+/// One change to an otherwise valid workstation certificate's parameters.
+type Adjust = fn(&mut CertificateParams);
+
+#[test]
+fn a_workstation_certificate_needs_digital_signature_and_no_ca() {
+    let ca = TestCa::new(&[1]);
+    let authority = ca.authority();
+    let body = br#"{"hardware_id":"gw-1"}"#;
+    let at = now();
+    let check = |key: &KeyPair, certificate: &[u8]| {
+        let headers = signed_headers(key, certificate, REGISTRATIONS_PATH, body, at, &nonce());
+        verify_workstation(
+            &header_map(&headers),
+            "POST",
+            REGISTRATIONS_PATH,
+            body,
+            &authority,
+            at,
+        )
+    };
+
+    // The control: built here rather than by the CA, the profile holds, so each refusal below
+    // is the one change it makes.
+    let (key, certificate) = workstation_variant(&ca, |_| {});
+    let signed = check(&key, &certificate).expect("the workstation profile");
+    assert_eq!(signed.name.as_str(), WORKSTATION);
+
+    let cases: [(&str, Adjust); 3] = [
+        ("keyUsage without digitalSignature", |params| {
+            params.key_usages = vec![KeyUsagePurpose::KeyEncipherment];
+        }),
+        ("no keyUsage at all", |params| {
+            params.key_usages = Vec::new();
+        }),
+        ("basicConstraints CA:TRUE", |params| {
+            params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
+        }),
+    ];
+    for (case, adjust) in cases {
+        let (key, certificate) = workstation_variant(&ca, adjust);
+        assert_eq!(
+            check(&key, &certificate).unwrap_err(),
+            WorkstationRefusal::NotWorkstation,
+            "{case}"
+        );
+        println!("a workstation certificate with {case}: not_workstation");
     }
 }
 
