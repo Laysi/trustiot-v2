@@ -1,8 +1,8 @@
-onprem waiting k8s 1.30.0: kubeconform exit 0; Summary: 93 resources found parsing stdin - Valid: 93, Invalid: 0, Errors: 0, Skipped: 0; documents naming trustiot-certs*: 17
-onprem waiting k8s 1.36.0: kubeconform exit 0; Summary: 93 resources found parsing stdin - Valid: 93, Invalid: 0, Errors: 0, Skipped: 0; documents naming trustiot-certs*: 17
-onprem signing k8s 1.30.0: kubeconform exit 0; Summary: 93 resources found parsing stdin - Valid: 93, Invalid: 0, Errors: 0, Skipped: 0; documents naming trustiot-certs*: 17
-onprem signing k8s 1.36.0: kubeconform exit 0; Summary: 93 resources found parsing stdin - Valid: 93, Invalid: 0, Errors: 0, Skipped: 0; documents naming trustiot-certs*: 17
-saas waiting k8s 1.30.0: kubeconform exit 0; Summary: 93 resources found parsing stdin - Valid: 93, Invalid: 0, Errors: 0, Skipped: 0; documents naming trustiot-certs*: 17
-saas waiting k8s 1.36.0: kubeconform exit 0; Summary: 93 resources found parsing stdin - Valid: 93, Invalid: 0, Errors: 0, Skipped: 0; documents naming trustiot-certs*: 17
-saas signing k8s 1.30.0: kubeconform exit 0; Summary: 93 resources found parsing stdin - Valid: 93, Invalid: 0, Errors: 0, Skipped: 0; documents naming trustiot-certs*: 17
-saas signing k8s 1.36.0: kubeconform exit 0; Summary: 93 resources found parsing stdin - Valid: 93, Invalid: 0, Errors: 0, Skipped: 0; documents naming trustiot-certs*: 17
+onprem waiting k8s 1.30.0: kubeconform exit 0; Summary: 99 resources found parsing stdin - Valid: 99, Invalid: 0, Errors: 0, Skipped: 0; documents naming trustiot-certs*: 17
+onprem waiting k8s 1.36.0: kubeconform exit 0; Summary: 99 resources found parsing stdin - Valid: 99, Invalid: 0, Errors: 0, Skipped: 0; documents naming trustiot-certs*: 17
+onprem signing k8s 1.30.0: kubeconform exit 0; Summary: 99 resources found parsing stdin - Valid: 99, Invalid: 0, Errors: 0, Skipped: 0; documents naming trustiot-certs*: 17
+onprem signing k8s 1.36.0: kubeconform exit 0; Summary: 99 resources found parsing stdin - Valid: 99, Invalid: 0, Errors: 0, Skipped: 0; documents naming trustiot-certs*: 17
+saas waiting k8s 1.30.0: kubeconform exit 0; Summary: 99 resources found parsing stdin - Valid: 99, Invalid: 0, Errors: 0, Skipped: 0; documents naming trustiot-certs*: 17
+saas waiting k8s 1.36.0: kubeconform exit 0; Summary: 99 resources found parsing stdin - Valid: 99, Invalid: 0, Errors: 0, Skipped: 0; documents naming trustiot-certs*: 17
+saas signing k8s 1.30.0: kubeconform exit 0; Summary: 99 resources found parsing stdin - Valid: 99, Invalid: 0, Errors: 0, Skipped: 0; documents naming trustiot-certs*: 17
+saas signing k8s 1.36.0: kubeconform exit 0; Summary: 99 resources found parsing stdin - Valid: 99, Invalid: 0, Errors: 0, Skipped: 0; documents naming trustiot-certs*: 17
