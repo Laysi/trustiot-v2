@@ -1,0 +1,44 @@
+## defaults, saas shape, no service
+helm template trustiot deploy/chart --namespace trustiot -f deploy/chart/values-saas.yaml -f deploy/chart/tests/values/saas-instance.yaml
+exit status: 0
+rendered; Deployments: 1
+
+## saas shape, four Postgres services
+helm template trustiot deploy/chart --namespace trustiot -f deploy/chart/values-saas.yaml -f deploy/chart/tests/values/saas-instance.yaml --set=services.identity.enabled=true --set=services.assets.enabled=true --set=services.certs.enabled=true --set=services.telemetry-query.enabled=true
+exit status: 0
+rendered; Deployments: 5
+
+## onprem shape, four Postgres services
+helm template trustiot deploy/chart --namespace trustiot -f deploy/chart/values-onprem.yaml -f deploy/chart/tests/values/onprem-instance.yaml --set=services.identity.enabled=true --set=services.assets.enabled=true --set=services.certs.enabled=true --set=services.telemetry-query.enabled=true
+exit status: 0
+rendered; Deployments: 5
+
+## saas shape, four services, max_connections=145 (exactly what is needed)
+helm template trustiot deploy/chart --namespace trustiot -f deploy/chart/values-saas.yaml -f deploy/chart/tests/values/saas-instance.yaml --set=services.identity.enabled=true --set=services.assets.enabled=true --set=services.certs.enabled=true --set=services.telemetry-query.enabled=true --set postgres.bundled.parameters.max_connections=145
+exit status: 0
+rendered; Deployments: 5
+
+## saas shape, four services, max_connections=144
+helm template trustiot deploy/chart --namespace trustiot -f deploy/chart/values-saas.yaml -f deploy/chart/tests/values/saas-instance.yaml --set=services.identity.enabled=true --set=services.assets.enabled=true --set=services.certs.enabled=true --set=services.telemetry-query.enabled=true --set postgres.bundled.parameters.max_connections=144
+exit status: 1
+Error: execution error at (trustiot/templates/values-check.yaml:11:9): postgres.bundled.parameters.max_connections is 144, but 145 connections are needed: the services can open 128 while all of them roll at once (per replica x pods: assets 12 x 2, certs 9 x 2, identity 31 x 2, telemetry-query 12 x 2), and 17 stay reserved for superusers, CloudNativePG and the migration Job. Raise max_connections within the memory limit, or lower replicas or services.<name>.database.maxConnections (README.md, 「叢集內的 Postgres」)
+
+## saas shape, four services, max_connections=100 (the old default)
+helm template trustiot deploy/chart --namespace trustiot -f deploy/chart/values-saas.yaml -f deploy/chart/tests/values/saas-instance.yaml --set=services.identity.enabled=true --set=services.assets.enabled=true --set=services.certs.enabled=true --set=services.telemetry-query.enabled=true --set postgres.bundled.parameters.max_connections=100
+exit status: 1
+Error: execution error at (trustiot/templates/values-check.yaml:11:9): postgres.bundled.parameters.max_connections is 100, but 145 connections are needed: the services can open 128 while all of them roll at once (per replica x pods: assets 12 x 2, certs 9 x 2, identity 31 x 2, telemetry-query 12 x 2), and 17 stay reserved for superusers, CloudNativePG and the migration Job. Raise max_connections within the memory limit, or lower replicas or services.<name>.database.maxConnections (README.md, 「叢集內的 Postgres」)
+
+## demo overlay as deployed (identity, assets)
+helm template trustiot deploy/chart --namespace trustiot -f deploy/chart/values-saas.yaml -f deploy/flux/clusters/demo/trustiot/values-demo.yaml --set-literal=hosts.app=app.demo.trustiot.test --set-literal=hosts.gateway=gw.demo.trustiot.test --set-literal=hosts.ota=ota.demo.trustiot.test --set-literal=smtp.from=no-reply@mail.demo.trustiot.test
+exit status: 0
+rendered; Deployments: 3
+
+## demo overlay, all four Postgres services
+helm template trustiot deploy/chart --namespace trustiot -f deploy/chart/values-saas.yaml -f deploy/flux/clusters/demo/trustiot/values-demo.yaml --set-literal=hosts.app=app.demo.trustiot.test --set-literal=hosts.gateway=gw.demo.trustiot.test --set-literal=hosts.ota=ota.demo.trustiot.test --set-literal=smtp.from=no-reply@mail.demo.trustiot.test --set=services.identity.enabled=true --set=services.assets.enabled=true --set=services.certs.enabled=true --set=services.telemetry-query.enabled=true
+exit status: 0
+rendered; Deployments: 5
+
+## demo overlay, all four, identity replicas=2
+helm template trustiot deploy/chart --namespace trustiot -f deploy/chart/values-saas.yaml -f deploy/flux/clusters/demo/trustiot/values-demo.yaml --set-literal=hosts.app=app.demo.trustiot.test --set-literal=hosts.gateway=gw.demo.trustiot.test --set-literal=hosts.ota=ota.demo.trustiot.test --set-literal=smtp.from=no-reply@mail.demo.trustiot.test --set=services.identity.enabled=true --set=services.assets.enabled=true --set=services.certs.enabled=true --set=services.telemetry-query.enabled=true --set services.identity.replicas=2
+exit status: 1
+Error: execution error at (trustiot/templates/values-check.yaml:11:9): postgres.bundled.parameters.max_connections is 160, but 176 connections are needed: the services can open 159 while all of them roll at once (per replica x pods: assets 12 x 2, certs 9 x 2, identity 31 x 3, telemetry-query 12 x 2), and 17 stay reserved for superusers, CloudNativePG and the migration Job. Raise max_connections within the memory limit, or lower replicas or services.<name>.database.maxConnections (README.md, 「叢集內的 Postgres」)

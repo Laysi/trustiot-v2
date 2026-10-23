@@ -1,0 +1,52 @@
+mutation: m1-check-removed
+file: deploy/chart/templates/values-check.yaml
+- {{- $_ = include "trustiot.postgres.checkConnections" . -}}
++ (removed)
+command: bun test deploy/chart -t Postgres connection budget
+exit status: 1
+
+bun test v1.4.2 (744846f84)
+
+deploy/chart/tests/chart.test.ts:
+2762 |     const at = (n: number) => helmTemplate(SHAPES.saas, [...enable(postgresServices), "--set", `postgres.bundled.parameters.max_connections=${n}`]);
+2763 |     const exact = at(needed);
+2764 |     expect(exact.stderr).toBe("");
+2765 |     expect(exact.code).toBe(0);
+2766 |     const below = at(needed - 1);
+2767 |     expect(below.code).not.toBe(0);
+                                  ^
+error: expect(received).not.toBe(expected)
+
+Expected: not 0
+
+(fail) Postgres connection budget (Laysi/trustiot-v2#575) > the check passes at exactly what the services and the reserved connections need, and fails one below with the breakdown [212.35ms]
+2779 |   test.each([
+2780 |     ["a second identity replica", ["--set", "services.identity.replicas=2"], 31, 3],
+2781 |     ["a larger assets pool", ["--set", "services.assets.database.maxConnections=30"], 32, 2],
+2782 |   ] as const)("the defaults with %s fail: every replica plus the one a rolling update adds counts", (_what, args, perReplicaAfter, pods) => {
+2783 |     const result = helmTemplate(SHAPES.saas, [...enable(postgresServices), ...args]);
+2784 |     expect(result.code).not.toBe(0);
+                                   ^
+error: expect(received).not.toBe(expected)
+
+Expected: not 0
+
+(fail) Postgres connection budget (Laysi/trustiot-v2#575) > the defaults with a second identity replica fail: every replica plus the one a rolling update adds counts [105.87ms]
+2779 |   test.each([
+2780 |     ["a second identity replica", ["--set", "services.identity.replicas=2"], 31, 3],
+2781 |     ["a larger assets pool", ["--set", "services.assets.database.maxConnections=30"], 32, 2],
+2782 |   ] as const)("the defaults with %s fail: every replica plus the one a rolling update adds counts", (_what, args, perReplicaAfter, pods) => {
+2783 |     const result = helmTemplate(SHAPES.saas, [...enable(postgresServices), ...args]);
+2784 |     expect(result.code).not.toBe(0);
+                                   ^
+error: expect(received).not.toBe(expected)
+
+Expected: not 0
+
+(fail) Postgres connection budget (Laysi/trustiot-v2#575) > the defaults with a larger assets pool fail: every replica plus the one a rolling update adds counts [107.91ms]
+
+ 6 pass
+ 619 filtered out
+ 3 fail
+ 49 expect() calls
+Ran 9 tests across 9 files. [3.01s]

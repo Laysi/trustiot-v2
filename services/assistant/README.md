@@ -51,7 +51,7 @@ AI 助理（決策 31）的主 agent 迴圈：使用者對自己租戶的資料�
 - **租戶與擁有者**：每個函式都收 service-kit 的 `TenantTransaction`，交易的租戶不是對話的租戶時回 `StoreError::WrongTenant`。`store::load` 只回傳屬於該使用者的對話，同租戶的其他使用者拿到 `None`：對話的工具以擁有者的身分執行，別人接著問會變成以擁有者的身分讀資料。`store::create` 與 `store::append` 也自己核對已存的擁有者與 `Preamble`，不同就回 `StoreError::Conflict`、什麼都不寫，不靠呼叫端怎麼建出 `Conversation`（單元測試 `append_refuses_a_conversation_of_another_owner_or_preamble`）。誰可以檢視別人的對話由 Laysi/trustiot-v2#146 決定。
 - 模型上一次回報的歷史大小（`Conversation::measured`）不儲存，載入後的第一次呼叫重新估計。
 
-服務本身還沒連 Postgres：設定、連線池與 readiness 的 migration 檢查（`MigrationCheck` 與 `schema::SCHEMA`）在部署的 Laysi/trustiot-v2#552 接上，對話串的 API 在 Laysi/trustiot-v2#146 呼叫 `store::create`、`store::append`、`store::load`。叢集裡的 `assistant_app` 在 chart 給 assistant Postgres 之前維持 NOLOGIN。
+服務本身還沒連 Postgres：設定、連線池與 readiness 的 migration 檢查（`MigrationCheck` 與 `schema::SCHEMA`）在部署的 Laysi/trustiot-v2#552 接上，對話串的 API 在 Laysi/trustiot-v2#146 呼叫 `store::create`、`store::append`、`store::load`。叢集裡的 `assistant_app` 在 chart 給 assistant Postgres 之前維持 NOLOGIN。chart 給它 Postgres 時（`mesh.calls` 列出 `postgres`），也要在 chart 的連線預算加上它的連線池、在 values 給它 `database.maxConnections`，否則渲染失敗（chart README 的「連線預算」，Laysi/trustiot-v2#575）。
 
 ## 設定
 

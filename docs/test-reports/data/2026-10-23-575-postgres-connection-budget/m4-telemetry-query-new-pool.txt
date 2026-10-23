@@ -1,0 +1,29 @@
+mutation: m4-telemetry-query-new-pool
+file: services/telemetry-query/src/lib.rs
+- let events = PlatformDb::connect_lazy(
++ let _extra = PgPoolOptions::new().max_connections(EVENT_READER_CONNECTIONS);
+    let events = PlatformDb::connect_lazy(
+command: cargo test -p telemetry-query --test chart_connections
+exit status: 101
+
+
+running 1 test
+test the_chart_budgets_every_pool_the_service_opens ... FAILED
+
+failures:
+
+---- the_chart_budgets_every_pool_the_service_opens stdout ----
+
+thread 'the_chart_budgets_every_pool_the_service_opens' (13808508) panicked at services/telemetry-query/tests/chart_connections.rs:18:5:
+assertion `left == right` failed: the service's pools changed: update trustiot.postgres.connectionBudgets in deploy/chart/templates/_postgres.tpl and this test
+  left: [("lib.rs", "EVENT_READER_CONNECTIONS"), ("lib.rs", "EVENT_READER_CONNECTIONS"), ("lib.rs", "config.database.max_connections")]
+ right: [("lib.rs", "EVENT_READER_CONNECTIONS"), ("lib.rs", "config.database.max_connections")]
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    the_chart_budgets_every_pool_the_service_opens
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p telemetry-query --test chart_connections`
