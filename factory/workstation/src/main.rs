@@ -1,13 +1,14 @@
 //! `trustiot-workstation`: the production workstation tool (factory/workstation/README.md).
 //!
-//! Exit codes: 0 done, 1 failed, 2 usage. Results go to stdout, prompts and log lines to stderr
+//! Exit codes: 0 done, 1 failed, 2 usage, and `register`'s own (10 to 18 and 75,
+//! [`workstation::register::StopKind`]). Results go to stdout, prompts and log lines to stderr
 //! (`TRUSTIOT_WORKSTATION_LOG`: off, error, warn, info (default), debug or trace). Neither ever
 //! shows the login code, the session cookie, the private key or a `--headers-file` value.
 
 use std::ffi::OsString;
 use std::io::{BufRead as _, Write as _};
 use std::process::ExitCode;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use http::StatusCode;
 use tracing_subscriber::filter::{LevelFilter, Targets};
@@ -16,6 +17,9 @@ use tracing_subscriber::util::SubscriberInitExt as _;
 use workstation::config::{self, Options, Origin};
 use workstation::http::{Client, ExtraHeaders};
 use workstation::identity::{self, KeyOrigin, WorkstationDirectory};
+use workstation::journal::Journal;
+use workstation::register::{self, Backoff, Gateway, InputError, Registrar, StopKind, Workstation};
+use workstation::retry;
 use workstation::secret::VerificationCode;
 use workstation::session::{
     self, Accepted, LoggedOut, SendCodeError, Session, SessionStore, VerifyError,
@@ -30,8 +34,11 @@ const USAGE: &str = "usage:
 [network options]
   trustiot-workstation install-certificate --certificate <file> [--dir <dir>]
   trustiot-workstation logout [--url <platform URL>] [network options]
+  trustiot-workstation register --hardware-id <id> --csr <file> --ek <file> [--url <platform URL>] \
+[--dir <dir>] [--root-sha256 <hex>] [--attempts <n>] [--retry-for <seconds>] [network options]
 network options: [--ca-file <file>] [--headers-file <file>] [--timeout <seconds>]
-login reads the code from the email on stdin. The guide is factory/workstation/README.md.";
+login reads the code from the email on stdin. The guide, with register's exit codes, is
+factory/workstation/README.md.";
 
 /// The options every command that calls the platform takes.
 const NETWORK: [&str; 3] = ["ca-file", "headers-file", "timeout"];
@@ -42,6 +49,9 @@ const CODE_ATTEMPTS: u32 = 3;
 
 /// Largest certificate file `install-certificate` reads.
 const MAX_CERTIFICATE_BYTES: usize = 64 * 1024;
+
+/// Largest CSR or endorsement key file `register` reads.
+const MAX_GATEWAY_FILE_BYTES: usize = 64 * 1024;
 
 /// The log level variable.
 const LOG_VARIABLE: &str = "TRUSTIOT_WORKSTATION_LOG";
@@ -139,6 +149,22 @@ fn run(arguments: &[String]) -> Result<(), Error> {
             &allowed(&["name", "url", "dir"], true),
         )?)),
         "logout" => network(logout(&Options::parse(rest, &allowed(&["url"], true))?)),
+        "register" => network(register(&Options::parse(
+            rest,
+            &allowed(
+                &[
+                    "hardware-id",
+                    "csr",
+                    "ek",
+                    "url",
+                    "dir",
+                    "root-sha256",
+                    "attempts",
+                    "retry-for",
+                ],
+                true,
+            ),
+        )?)),
         "help" | "--help" | "-h" => {
             say(USAGE);
             Ok(())
@@ -369,6 +395,112 @@ async fn enroll(options: &Options) -> Result<(), Error> {
         directory.certificate().display(),
         enrolled.installed.serial,
         enrolled.installed.not_after.to_rfc3339()
+    ));
+    Ok(())
+}
+
+/// The retry limits of `register`: the defaults, with `--attempts` and `--retry-for`.
+fn backoff(options: &Options) -> Result<Backoff, Error> {
+    let mut backoff = Backoff::default();
+    if let Some(text) = options.optional("attempts") {
+        backoff.max_attempts = text
+            .parse::<u32>()
+            .ok()
+            .filter(|attempts| (1..=retry::MAX_ATTEMPTS).contains(attempts))
+            .ok_or_else(|| {
+                Error::Usage(format!(
+                    "--attempts must be a whole number from 1 to {}",
+                    retry::MAX_ATTEMPTS
+                ))
+            })?;
+    }
+    if let Some(text) = options.optional("retry-for") {
+        backoff.max_total = text
+            .parse::<u64>()
+            .ok()
+            .filter(|seconds| (1..=retry::MAX_TOTAL_SECS).contains(seconds))
+            .map(Duration::from_secs)
+            .ok_or_else(|| {
+                Error::Usage(format!(
+                    "--retry-for must be a whole number of seconds from 1 to {}",
+                    retry::MAX_TOTAL_SECS
+                ))
+            })?;
+    }
+    Ok(backoff)
+}
+
+/// Reads a CSR or endorsement key file named by `--<name>`.
+fn gateway_file(options: &Options, name: &str) -> Result<(Vec<u8>, std::path::PathBuf), Error> {
+    let path = config::path_option(options, name)?
+        .ok_or_else(|| Error::Usage(format!("--{name} is required")))?;
+    Ok((
+        files::read_public(path, MAX_GATEWAY_FILE_BYTES)?,
+        path.to_owned(),
+    ))
+}
+
+async fn register(options: &Options) -> Result<(), Error> {
+    let hardware_id = options.required("hardware-id")?;
+    let (request, request_path) = gateway_file(options, "csr")?;
+    let (endorsement_key, endorsement_path) = gateway_file(options, "ek")?;
+    let gateway =
+        Gateway::new(hardware_id, &request, &endorsement_key).map_err(|error| match error {
+            InputError::CertificateRequest(reason) => Error::BadFile {
+                path: request_path.clone(),
+                reason,
+            },
+            InputError::EndorsementKey(reason) => Error::BadFile {
+                path: endorsement_path.clone(),
+                reason,
+            },
+            other @ InputError::HardwareId(_) => other.into(),
+        })?;
+    let root_sha256 = options
+        .optional("root-sha256")
+        .map(register::parse_root_sha256)
+        .transpose()?;
+    let backoff = backoff(options)?;
+    let directory = directory(options)?;
+    let workstation = Workstation::load(&directory, now())?;
+    let store = SessionStore::new(config::session_directory(&env)?);
+    let (session, client) = session_client(options, &store)?;
+    let journal = Journal::new(directory.path());
+    let registrar = Registrar {
+        client: &client,
+        cookie: &session.cookie,
+        workstation: &workstation,
+        journal: &journal,
+        backoff,
+        root_sha256,
+    };
+    let registered = match register::register(&registrar, &gateway, now).await {
+        Ok(registered) => registered,
+        Err(Error::Registration(mut stopped)) if stopped.kind == StopKind::LoginRequired => {
+            // As for enroll: the platform's own 401 revokes and forgets the session; the exit
+            // code stays the registration's.
+            if let Some(api) = stopped.api.clone() {
+                let advice = forget_ended_session(&client, &store, &session, api.into()).await;
+                stopped.message = format!("{advice}; then run the same register command again");
+            }
+            return Err(Error::Registration(stopped));
+        }
+        Err(error) => return Err(error),
+    };
+    let record = journal.record_path(gateway.hardware_id());
+    let registration = &registered.registration;
+    say(&format!(
+        "{} hardware ID {} (serial {}, valid until {}) after {} attempt(s); recorded in {}",
+        if registered.status == StatusCode::CREATED {
+            "registered"
+        } else {
+            "the platform already had the registration of"
+        },
+        registration.hardware_id,
+        registration.serial,
+        registration.not_after.to_rfc3339(),
+        registered.attempts,
+        record.display()
     ));
     Ok(())
 }
