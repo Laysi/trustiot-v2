@@ -147,3 +147,28 @@ bun run --cwd frontend lint
 | 讓表會拒絕的值照舊重試（拿掉 handler 的檢查與 SQLSTATE 對應） | `events_the_pool_refuses_are_dead_lettered_and_later_gateways_still_enter` 失敗：之後的閘道器 60 秒內沒有進入設備池 |
 
 只拿掉其中一道檢查時，回應仍是 403：另一道檢查在任何交易開始前就拒絕了，所以這種退化在行為上看不出來，兩道檢查是互相備援。
+
+## 合併 main（2026-10-23）
+
+把 main `b7da9509` 合併進分支，merge commit 是 `4e414977`。這次的 main 含 Laysi/trustiot-v2#589（nightly 部署 certs）與 Laysi/trustiot-v2#593（平台管理員設定租戶成員角色，事件 `identity.member_role_changed`）。
+
+三個內容衝突，都保留兩邊：
+
+| 檔案 | 解法 |
+| --- | --- |
+| `crates/contract/README.md` | 事件列表同時列出 `MemberRoleChanged` 與 `GatewayBound`；ID 列表保留 `GatewayBindingId` |
+| `crates/contract/tests/events.rs` | 同時匯入 `TenantRole` 與 `GatewayBindingId`；兩個事件的解碼測試都保留 |
+| `tools/migrate/README.md` | identity 的檔案列出 `0005_member_roles.sql`；assets 的 `0003_gateway_pool.sql` 與 certs 消費端的說明保留 |
+
+生成的檔案沒有直接相信文字合併的結果，而是重新產生：`cargo run -p openapi`，以及 `bun install --cwd frontend --frozen-lockfile && bun run --cwd frontend api:generate`。產生的 `api/openapi.json` 與 `frontend/src/api/schema.gen.ts`，和合併結果逐位元組相同。
+
+合併後經本機檢查佇列執行，全部通過：
+
+| 指令 | 結果 |
+| --- | --- |
+| `cargo fmt --all --check` | 通過 |
+| `cargo clippy --workspace --all-targets -- -D warnings` | 通過 |
+| `CI=1 cargo test -p assets -p contract -p migrate -p repo-check --no-fail-fast` | 全部通過，0 失敗；`gateway_bound_decodes_every_version` 與 `member_role_changed_decodes_every_version` 都通過 |
+| `cargo run -p openapi -- --check` | 通過 |
+| `bun run --cwd frontend api:check`、`bun run --cwd frontend test` | 通過；131 通過、0 失敗 |
+| `bun test scripts` | 1648 通過、9 略過、0 失敗 |
