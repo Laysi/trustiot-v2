@@ -3,7 +3,8 @@
 //!
 //! - a gateway the certs service registers at the factory (`certs.gateway_registered`, written
 //!   here through the certs service's platform role as its registration writes it) enters the
-//!   pool; the same hardware ID again adds nothing (acceptance 1);
+//!   pool; the same hardware ID again adds nothing (acceptance 1); an event whose values the
+//!   table refuses is dead-lettered and does not hold up the gateways after it;
 //! - a binding writes the binding and `assets.gateway_bound` in the target tenant, with the
 //!   administrator as the actor (acceptance 3); the same binding again answers the existing one
 //!   and writes nothing; another tenant is refused and nothing is written;
@@ -32,6 +33,11 @@ use testkit::identity::TestIssuer;
 use testkit::product::{DATABASE, ProductPostgres, product_postgres};
 
 const POOL: &str = "/api/assets/v1/platform/gateways";
+
+/// The INFO line of every platform role transaction (`PlatformDb::begin`).
+const PLATFORM_TRANSACTION: &str = "platform database access";
+/// The INFO line of every tenant transaction the binder opens for an administrator.
+const TENANT_TRANSACTION: &str = "tenant transaction for a platform administrator";
 
 /// The roles these tests log in with: the service's two, and the certs service's platform role,
 /// which writes `certs.gateway_registered`.
@@ -78,6 +84,15 @@ END
 $$;
 CREATE OR REPLACE TRIGGER fail_gateway_bound BEFORE INSERT ON assets.outbox_event
     FOR EACH ROW EXECUTE FUNCTION public.fail_gateway_bound()";
+/// The workstation name the CHECK below refuses; no other test uses it.
+const REFUSED_WORKSTATION: &str = "ws-refused-by-the-table";
+/// A CHECK the pool's handler does not know about, as a later migration might add, so the
+/// insert itself fails with SQLSTATE 23514. `NOT VALID`: existing rows are not checked.
+const ADD_REFUSING_CHECK: &str = "ALTER TABLE assets.gateway_pool
+    ADD CONSTRAINT test_refused_workstation
+    CHECK (workstation <> 'ws-refused-by-the-table') NOT VALID";
+const DROP_REFUSING_CHECK: &str =
+    "ALTER TABLE assets.gateway_pool DROP CONSTRAINT IF EXISTS test_refused_workstation";
 const DROP_FAILURE: &str = "DROP TRIGGER IF EXISTS fail_gateway_bound ON assets.outbox_event";
 
 /// A hardware ID no other test uses.
@@ -356,6 +371,56 @@ async fn factory_registrations_fill_the_pool() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn events_the_pool_refuses_are_dead_lettered_and_later_gateways_still_enter() {
+    let Some(product) = product_postgres(LOGINS).await else {
+        return;
+    };
+    let issuer = TestIssuer::new();
+    let assets = Service::start(&product, &issuer.jwks()).await;
+    let mut admin = product.superuser().await;
+    let token = issuer.token(&admin_claims());
+
+    // 1. A workstation name longer than the table stores: refused by the handler's own check.
+    let too_long = hardware_id("tg-long");
+    let first = register_at_factory(&product, &issuer, &too_long, &"w".repeat(256)).await;
+    // 2. A value only the table refuses (a CHECK this test adds): the insert's SQLSTATE 23514.
+    sqlx::raw_sql(ADD_REFUSING_CHECK)
+        .execute(&mut admin)
+        .await
+        .expect("add the refusing CHECK");
+    let refused = hardware_id("tg-check");
+    let second = register_at_factory(&product, &issuer, &refused, REFUSED_WORKSTATION).await;
+    // 3. A valid gateway after both: it enters the pool, so neither held the subscription up.
+    let valid = hardware_id("tg-after");
+    register_at_factory(&product, &issuer, &valid, "ws-line-1").await;
+    let path = format!("{POOL}/{valid}");
+    wait_for("the later gateway in the pool", EVENT_LIMIT, || async {
+        let reply = assets.call(Method::GET, &path, Some(&token), None).await;
+        (reply.status == 200).then_some(())
+    })
+    .await;
+    sqlx::raw_sql(DROP_REFUSING_CHECK)
+        .execute(&mut admin)
+        .await
+        .expect("drop the refusing CHECK");
+
+    let dead: i64 = sqlx::query_scalar(DEAD_LETTERS)
+        .bind(vec![first, second])
+        .fetch_one(&mut admin)
+        .await
+        .expect("read the dead letters");
+    assert_eq!(dead, 2, "both refused events were dead-lettered");
+    for gateway in [&too_long, &refused] {
+        let rows: i64 = sqlx::query_scalar(POOL_ROWS)
+            .bind(gateway)
+            .fetch_one(&mut admin)
+            .await
+            .expect("count the pool rows");
+        assert_eq!(rows, 0, "{gateway} is not in the pool");
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn a_binding_is_written_with_its_event_once() {
     let Some(product) = product_postgres(LOGINS).await else {
         return;
@@ -626,19 +691,54 @@ async fn only_a_platform_administrators_own_request_gets_anywhere() {
         }
     }
     assert!(bindings(&mut admin, &gateway).await.is_empty());
-    // Refused before anything is read: no database access was logged for those users.
+
+    // The control: the platform administrator's own requests read the pool and open the
+    // tenant's transaction, and both are logged with the administrator's user ID.
+    let allowed_claims = admin_claims();
+    let allowed = issuer.token(&allowed_claims);
+    let read = assets
+        .call(
+            Method::GET,
+            &format!("{POOL}/{gateway}"),
+            Some(&allowed),
+            None,
+        )
+        .await;
+    assert_eq!(read.status, 200, "{}", read.body);
+    let bound = bind(&assets, &allowed, &gateway, tenant).await;
+    assert_eq!(bound.status, 201, "{}", bound.body);
+    let accesses = |user: &str| -> Vec<Value> {
+        [PLATFORM_TRANSACTION, TENANT_TRANSACTION]
+            .into_iter()
+            .flat_map(|message| assets.stdout.messages(message))
+            .filter(|line| line["fields"]["user_id"] == user)
+            .collect()
+    };
+    let opened = accesses(&allowed_claims.sub.to_string());
+    let tenant_lines: Vec<&Value> = opened
+        .iter()
+        .filter(|line| line["message"] == TENANT_TRANSACTION)
+        .collect();
+    assert_eq!(tenant_lines.len(), 1, "{opened:?}");
+    assert_eq!(tenant_lines[0]["level"], "INFO", "{opened:?}");
+    assert_eq!(tenant_lines[0]["fields"]["tenant_id"], tenant.to_string());
+    assert_eq!(tenant_lines[0]["fields"]["hardware_id"], gateway.as_str());
+    assert!(
+        opened
+            .iter()
+            .any(|line| line["message"] == PLATFORM_TRANSACTION),
+        "{opened:?}"
+    );
+
+    // Refused before anything is read: no transaction was opened for the refused users.
     let text = assets.stdout.text();
     for claims in refused_users {
         let user = claims.sub.to_string();
-        let accesses: Vec<Value> = ["platform database access", "tenant database access"]
-            .into_iter()
-            .flat_map(|message| assets.stdout.messages(message))
-            .filter(|line| line.to_string().contains(&user))
-            .collect();
-        assert!(accesses.is_empty(), "{accesses:?}");
+        let opened = accesses(&user);
+        assert!(opened.is_empty(), "{opened:?}");
         assert!(text.contains(&user), "the refusal is logged with the user");
     }
-    for token in [&tenant_admin, &exchanged, &elsewhere] {
+    for token in [&tenant_admin, &exchanged, &elsewhere, &allowed] {
         assert!(!text.contains(token.as_str()), "no token in the logs");
     }
 }

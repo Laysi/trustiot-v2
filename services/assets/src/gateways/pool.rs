@@ -4,7 +4,9 @@
 //! - [`GatewayRegisteredHandler`] puts a gateway in `assets.gateway_pool` when
 //!   `certs.gateway_registered` arrives. The event is platform-wide, so the consumer runs it in
 //!   a transaction of the service role without a tenant; the insert does nothing when the row
-//!   exists, so a replay or the same event delivered again never adds a second one.
+//!   exists, so a replay or the same event delivered again never adds a second one. An event
+//!   whose values the table refuses is dead-lettered, not retried, so it cannot hold up the
+//!   gateways registered after it.
 //! - [`list`] and [`get`] read the pool with the current binding of each gateway, as the
 //!   platform role for a platform administrator (`PlatformDb`, which logs the actor and the
 //!   purpose of every transaction).
@@ -27,6 +29,12 @@ pub const SOURCE_SCHEMA: &str = "certs";
 
 /// The purpose the platform role's transactions name in their log line.
 const LIST_PURPOSE: &str = "list-gateway-pool";
+
+/// The longest workstation name the pool stores, in characters (the table's CHECK).
+pub const MAX_WORKSTATION_CHARS: usize = 255;
+
+/// SQLSTATE `check_violation`.
+const CHECK_VIOLATION: &str = "23514";
 
 /// A gateway of the pool; nothing when it is there already. `$1` hardware ID, `$2` when it was
 /// registered, `$3` the workstation. No conflict target: the service role has no SELECT on the
@@ -81,12 +89,21 @@ impl Handler for GatewayRegisteredHandler {
                 "certs.gateway_registered with a tenant",
             ));
         }
+        // The table's CHECK, checked first: a value the table refuses would otherwise be a
+        // database error, which the consumer retries forever, holding up every later gateway.
+        let workstation_chars = registered.workstation.chars().count();
+        if !(1..=MAX_WORKSTATION_CHARS).contains(&workstation_chars) {
+            return Err(HandlerError::permanent(
+                "certs.gateway_registered with a workstation name the pool cannot store",
+            ));
+        }
         let inserted = sqlx::query(INSERT_GATEWAY)
             .bind(registered.hardware_id.as_str())
             .bind(delivery.envelope.occurred_at)
             .bind(&registered.workstation)
             .execute(&mut **tx)
-            .await?;
+            .await
+            .map_err(insert_error)?;
         tracing::info!(
             hardware_id = registered.hardware_id.as_str(),
             event_id = %delivery.envelope.id,
@@ -95,6 +112,27 @@ impl Handler for GatewayRegisteredHandler {
         );
         Ok(())
     }
+}
+
+/// The pool's error for a failed insert. A value the table refuses (SQLSTATE class 22, data
+/// exception, or 23514, a CHECK) fails the same way on every attempt, so the event is
+/// dead-lettered, where it shows, and the subscription moves on; every other database error is
+/// retried (`outbox`'s rule).
+fn insert_error(error: sqlx::Error) -> HandlerError {
+    let refused = error
+        .as_database_error()
+        .and_then(|database| database.code())
+        .is_some_and(|code| is_refused_value(&code));
+    if refused {
+        HandlerError::permanent("the device pool refuses the event's values").with_source(error)
+    } else {
+        HandlerError::from(error)
+    }
+}
+
+/// Whether `sqlstate` means the row's values are refused, whatever the attempt.
+fn is_refused_value(sqlstate: &str) -> bool {
+    sqlstate.starts_with("22") || sqlstate == CHECK_VIOLATION
 }
 
 /// A gateway of the pool as the platform administrators see it.
@@ -249,4 +287,27 @@ fn entry(row: &PgRow) -> Result<PoolEntry, ReadError> {
         pooled_at: row.try_get("pooled_at")?,
         binding,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use outbox::FailureKind;
+
+    use super::*;
+
+    #[test]
+    fn values_the_table_refuses_are_permanent_and_other_failures_are_retried() {
+        for refused in ["22001", "22021", "22P02", "23514"] {
+            assert!(is_refused_value(refused), "{refused}");
+        }
+        for retried in [
+            "23505", "23503", "40001", "40P01", "57P01", "08006", "42501",
+        ] {
+            assert!(!is_refused_value(retried), "{retried}");
+        }
+        assert_eq!(
+            insert_error(sqlx::Error::PoolTimedOut).kind(),
+            FailureKind::Retry
+        );
+    }
 }

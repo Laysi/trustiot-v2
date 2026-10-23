@@ -95,3 +95,55 @@ bun run --cwd frontend lint
 | 4. 跨租戶負向測試通過 | 通過：`tests/cross_tenant.rs` |
 
 待測：沒有 Kubernetes 上的端到端驗證（nightly 的 smoke 沒有這條流程）；平台管理員的畫面還不存在。
+
+## 安全審查後的修正（2026-10-23）
+
+安全審查沒有 Critical、High 或 Medium。以下修正其中兩項 Low，修正在 `3e6623e1` 之後的 commit。
+
+### L2：設備池消費端遇到表會拒絕的值時，永遠重試
+
+**問題**：outbox 對資料庫錯誤一律重試。如果寫入違反 CHECK（23514）或值太長（22001），這個事件會一直重試，卡住 `assets.certs-events`，之後的閘道器都進不了設備池。
+
+**修正**：
+- handler 寫入前先依表的 CHECK 檢查 `workstation`：必須是 1–255 字。不合就是永久錯誤。
+- 寫入回 SQLSTATE class 22 或 23514 時也是永久錯誤，事件進 dead letter；其他資料庫錯誤照舊重試。
+
+**新測試**：
+- 單元測試 `values_the_table_refuses_are_permanent_and_other_failures_are_retried`：列出哪些 SQLSTATE 是永久錯誤、哪些重試。
+- 整合測試 `events_the_pool_refuses_are_dead_lettered_and_later_gateways_still_enter`，依序寫三個事件：
+  1. `workstation` 有 256 字的事件：被 handler 拒絕。
+  2. 表的 CHECK 拒絕的事件：測試以 superuser 暫時加一個 `NOT VALID` 的 CHECK，寫入時回 23514。
+  3. 一台合法的閘道器：照樣進入設備池。
+
+  前兩個事件都在 dead letter，也都不在設備池。
+
+### L3：「拒絕前沒讀任何資料」的測試看不到綁定的租戶交易
+
+**問題**：背景 handle 開租戶交易時只在 DEBUG 記錄，而且不帶使用者，所以測試看不到綁定開的租戶交易。
+
+**修正**：`GatewayBinder::bind` 每開一個租戶交易，就記一行 INFO `tenant transaction for a platform administrator`，帶 `user_id`、`tenant_id`、`hardware_id`、`purpose`，不記 token。
+
+**測試**：`only_a_platform_administrators_own_request_gets_anywhere` 加了對照組：平台管理員本人讀設備池並綁定，讀取有 `platform database access`、綁定有一行上述的 INFO 日誌（含租戶與硬體 ID）。被拒的租戶管理員與帶 `act` 的平台管理員，兩種日誌都沒有。
+
+### 指令與結果
+
+經本機檢查佇列執行，全部通過：
+
+| 指令 | 結果 |
+| --- | --- |
+| `cargo fmt --all --check` | 通過 |
+| `cargo clippy --workspace --all-targets -- -D warnings` | 通過 |
+| `cargo test -p repo-check` | 17 + 9 通過 |
+| `cargo run -p openapi -- --check` | 通過（API 型別沒有改變） |
+| `CI=1 cargo test -p assets` | 全部通過：單元測試 21、`gateway_pool.rs` 7，其餘測試檔與之前相同 |
+
+### 證明測試抓得到退化
+
+在檢查用的副本裡暫時改程式碼，跑對應的測試，跑完還原：
+
+| 改動 | 結果 |
+| --- | --- |
+| 拿掉綁定的兩道檢查（handler 的 `refuse` 與 `GatewayBinder` 的檢查） | `only_a_platform_administrators_own_request_gets_anywhere` 失敗：租戶管理員的綁定回 201，不是 403 |
+| 讓表會拒絕的值照舊重試（拿掉 handler 的檢查與 SQLSTATE 對應） | `events_the_pool_refuses_are_dead_lettered_and_later_gateways_still_enter` 失敗：之後的閘道器 60 秒內沒有進入設備池 |
+
+只拿掉其中一道檢查時，回應仍是 403：另一道檢查在任何交易開始前就拒絕了，所以這種退化在行為上看不出來，兩道檢查是互相備援。

@@ -8,7 +8,9 @@
 //! holds the service role's background handle privately, and its only method checks the caller
 //! itself before it opens the transaction: a platform administrator's own request, never a token
 //! another service exchanged (`act`; Laysi/trustiot-v2#104). Keep it that way; the handler checks
-//! the same thing first, so a refusal never reads anything.
+//! the same thing first, so a refusal never reads anything. Every transaction it opens is logged
+//! at INFO (`tenant transaction for a platform administrator`, with the administrator's user ID,
+//! the tenant and the hardware ID), as `PlatformDb` logs its own.
 //!
 //! One binding is one transaction of the target tenant:
 //!
@@ -189,6 +191,16 @@ impl GatewayBinder {
         if !is_own_platform_request(admin) {
             return Err(BindError::NotPlatformAdmin);
         }
+        // The audit line of every transaction opened here, like the actor line of
+        // `PlatformDb::begin`: the background handle logs only at DEBUG and names no user.
+        tracing::info!(
+            actor = "platform_admin",
+            user_id = %admin.user_id(),
+            tenant_id = %tenant,
+            hardware_id = hardware_id.as_str(),
+            purpose = BIND_PURPOSE,
+            "tenant transaction for a platform administrator"
+        );
         let mut tx = self.db.begin(tenant, BIND_PURPOSE).await?;
         let known: i64 = sqlx::query_scalar(TENANT_KNOWN).fetch_one(&mut *tx).await?;
         if known != 1 {
