@@ -15,7 +15,7 @@ use chrono::{DateTime, Timelike, Utc};
 use contract::event::{Actor, parse_payload};
 use contract::events::assets::{DeviceModelCreated, DeviceModelDeleted, DeviceModelUpdated};
 use contract::events::certs::GatewayRegistered;
-use contract::events::identity::TenantCreated;
+use contract::events::identity::{PlatformAdminGrant, PlatformAdminGranted, TenantCreated};
 use contract::{
     DecodeError, DeviceModelId, EncodeError, Event, EventEnvelope, ServiceName, TenantId, UserId,
 };
@@ -211,6 +211,58 @@ fn gateway_registered_decodes_every_version() {
             "certificate_serial": "4c2a19e0f3b85d7a6e01c2d3b4a59687",
             "workstation": "line-1",
         })
+    );
+}
+
+/// `identity.platform_admin_granted` (Laysi/trustiot-v2#582): a platform-wide event that names
+/// the user by ID only. `v1-unknown-via` is a grant a later build may write: it decodes as
+/// `Unrecognized`, which never encodes.
+#[test]
+fn platform_admin_granted_decodes_every_version() {
+    let decoded = decode_fixtures::<PlatformAdminGranted>();
+    let user: UserId = "01928f6e-7a3c-7d4e-8f00-0000000000ae"
+        .parse()
+        .expect("user id");
+    let later: UserId = "01928f6e-7a3c-7d4e-8f00-0000000000af"
+        .parse()
+        .expect("user id");
+    assert_eq!(
+        decoded,
+        [
+            (
+                "v1-unknown-via".to_owned(),
+                PlatformAdminGranted {
+                    user_id: later,
+                    via: PlatformAdminGrant::Unrecognized,
+                }
+            ),
+            (
+                "v1".to_owned(),
+                PlatformAdminGranted {
+                    user_id: user,
+                    via: PlatformAdminGrant::Bootstrap,
+                }
+            ),
+        ]
+    );
+    let event = PlatformAdminGranted {
+        user_id: user,
+        via: PlatformAdminGrant::Bootstrap,
+    };
+    let envelope = EventEnvelope::new(&event, None).expect("encode");
+    assert_eq!(envelope.producer, ServiceName::Identity);
+    assert_eq!(envelope.tenant_id, None);
+    assert_eq!(
+        envelope.payload,
+        json!({"user_id": user.to_string(), "via": "bootstrap"})
+    );
+    let unknown = PlatformAdminGranted {
+        user_id: user,
+        via: PlatformAdminGrant::Unrecognized,
+    };
+    assert!(
+        EventEnvelope::new(&unknown, None).is_err(),
+        "Unrecognized is decode only"
     );
 }
 

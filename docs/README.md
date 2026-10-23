@@ -20,6 +20,7 @@ TrustIoT 將以 Rust 從零重建，不沿用舊架構。本目錄是重建的�
 | [密鑰與權限](architecture/secrets.md) | 密鑰的規則、注入方式與清冊；一次性 token 的規則（M3）；公開 repo 的資訊規則 |
 | [密鑰輪替 runbook](runbooks/secrets.md) | 每項密鑰的輪替步驟與外洩處理 |
 | [migration Job runbook](runbooks/migrations.md) | 既有叢集補 owner 的 CREATEROLE、收回 `postgres` 與 `template1` 的 PUBLIC 權限（叢集內與外部 Postgres）、一個 Postgres 叢集一個 TrustIoT 資料庫、服務資料庫密碼的輪替、Job 停止或服務等不到 Job 時的處理、原始資料保存期限的設定被拒或 TTL 被手動改過 |
+| [第一位平台管理員 runbook](runbooks/platform-admin.md) | 部署後以 chart 的 CronJob 執行一次 `migrate bootstrap-platform-admin`、結束碼、再建立一次的復原 SQL |
 | [展示環境 runbook](runbooks/demo-environment.md) | 展示機的 Cloudflare Tunnel 與 connector（安裝、檢查、輪替 token、移除）、app 主機名稱前的 Access 與受邀名單的管理 |
 | [AI 助理與 AI 閘道](architecture/ai-assistant.md) | 主 agent 加工具、分流、模型角色、AI 閘道的原生協定轉送與帳本、安全與題庫 |
 | [知識與文件庫（RAG）](architecture/rag.md) | 文件與影音的檢索流程與去 AWS 化調整 |

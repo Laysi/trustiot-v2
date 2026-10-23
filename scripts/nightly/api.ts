@@ -27,12 +27,17 @@
 // with a token addressed to it (200 with the tenant), so the identity service resolves the
 // audience from the Host and path the gateway hands it, not from what the client wrote.
 //
-// The k3d cluster has no mail relay for the email login (Laysi/trustiot-v2#103), so the check
-// makes its two sessions the way the service's own tests do: rows in identity.users,
-// identity.memberships and identity.sessions,
-// written as the database superuser over the Postgres pod's local socket. Only the SHA-256 of a
-// session secret reaches the database and the SQL; the secret itself lives in this process and is
-// never logged. The cluster and its sessions are thrown away after the run.
+// The platform administrator is made the way an operator makes the first one
+// (Laysi/trustiot-v2#582; docs/runbooks/platform-admin.md): a Job from the chart's suspended
+// CronJob <release>-platform-admin-bootstrap, with an example.com address on stdin
+// (platform-admin.ts). A second run must exit with code 3 and name the same user, and the identity
+// service must record exactly one identity.platform_admin_granted in the platform-wide operation
+// log. The k3d cluster has no mail relay for the email login (Laysi/trustiot-v2#103), so the check
+// then makes its sessions the way the service's own tests do: a row in identity.sessions for that
+// administrator, and rows in identity.users, identity.memberships and identity.sessions for the
+// tenant's member, written as the database superuser over the Postgres pod's local socket. Only
+// the SHA-256 of a session secret reaches the database and the SQL; the secret itself lives in
+// this process and is never logged. The cluster and its sessions are thrown away after the run.
 import type { Subprocess } from "bun";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -43,8 +48,10 @@ import { freePort } from "../../deploy/chart/tests/e2e/ports.ts";
 import { withTunnelRecovery } from "../../deploy/chart/tests/e2e/tunnel-recovery.ts";
 import { run } from "./exec.ts";
 import type { RunLog } from "./exec.ts";
-import { clickhousePodOf, ingressListenerOf, platformSettingsOf, postgresClustersOf, servicePortOf } from "./manifests.ts";
+import { clickhousePodOf, ingressListenerOf, migrationJobsOf, platformSettingsOf, postgresClustersOf, servicePortOf } from "./manifests.ts";
 import type { K8sObject } from "./manifests.ts";
+import { bootstrapCronJobOf, EXIT_ALREADY_CREATED, EXIT_CREATED, exampleAddress, runBootstrap } from "./platform-admin.ts";
+import type { BootstrapRun } from "./platform-admin.ts";
 import { smokeProviderNameOf } from "./platform.ts";
 import { serviceImageValues } from "./service-image.ts";
 
@@ -211,11 +218,14 @@ function sha256Hex(value: string): string {
   return value;
 }
 
-/** SQL for a platform administrator without a tenant and a session of theirs, valid for an hour. */
+/**
+ * SQL for a session of the platform administrator the bootstrap made (`session.userId`), without a
+ * tenant, valid for an hour. The user row is the bootstrap's; the session's foreign key fails the
+ * statement when there is none.
+ */
 export function adminSessionSql(session: TestSession): string {
   return [
     "BEGIN;",
-    `INSERT INTO identity.users (id, platform_admin) VALUES ('${uuid(session.userId)}', true);`,
     "INSERT INTO identity.sessions (id, token_hash, user_id, expires_at)",
     `  VALUES ('${uuid(session.sessionId)}', '\\x${sha256Hex(session.tokenHash)}', '${uuid(session.userId)}', now() + interval '1 hour');`,
     "COMMIT;",
@@ -236,10 +246,26 @@ export function memberSessionSql(session: TestSession, tenantId: string): string
   ].join("\n");
 }
 
+/**
+ * SQL that counts the identity.platform_admin_granted events in the platform-wide operation log:
+ * those of `userId` made by the bootstrap with no address in the payload, then all of them.
+ * psql prints `<of the user>|<all>`.
+ */
+export function grantsLoggedSql(userId: string): string {
+  return [
+    `SELECT count(*) FILTER (WHERE payload->>'user_id' = '${uuid(userId)}' AND payload->>'via' = 'bootstrap'`,
+    "    AND position('@' in payload::text) = 0), count(*)",
+    "FROM identity.platform_event_log WHERE event_type = 'identity.platform_admin_granted';",
+    "",
+  ].join("\n");
+}
+
 /** What the check needs from the cluster; tests replace it, so no cluster is needed. */
 export interface ApiCheckDeps {
-  /** Runs SQL as the database superuser. */
-  psql: (sql: string) => Promise<void>;
+  /** Runs SQL as the database superuser; returns what psql printed (unaligned, tuples only). */
+  psql: (sql: string) => Promise<string>;
+  /** Runs the platform administrator bootstrap once with `address` on stdin (platform-admin.ts). */
+  bootstrapAdmin: (address: string) => Promise<BootstrapRun>;
   /** Sends one request to the ingress gateway. */
   send: (request: RawRequest) => Promise<RawResponse>;
   log: (line: string) => void;
@@ -321,6 +347,29 @@ async function pollUntil(
 }
 
 /**
+ * Runs `sql` through `deps.psql` until `done` accepts what it printed (it may throw to fail at
+ * once) or `limitMs` passes; returns how long it waited.
+ */
+async function pollSql(
+  deps: Pick<ApiCheckDeps, "psql" | "sleep" | "now" | "limits">,
+  what: string,
+  limitMs: number,
+  sql: string,
+  done: (out: string) => boolean,
+): Promise<number> {
+  const sleep = deps.sleep ?? Bun.sleep;
+  const now = deps.now ?? Date.now;
+  const pollMs = deps.limits?.pollMs ?? POLL_MS;
+  const started = now();
+  for (;;) {
+    const out = await deps.psql(sql);
+    if (done(out)) return now() - started;
+    if (now() - started >= limitMs) throw new Error(`timed out after ${Math.round(limitMs / 1000)} s waiting for ${what}; psql printed ${JSON.stringify(out.trim())}`);
+    await sleep(pollMs);
+  }
+}
+
+/**
  * The check itself. `appHost` is hosts.app, where the cookie routes are; `name` is the tenant's
  * name. Returns the report line and what it made; throws with what was awaited or what differed.
  */
@@ -335,9 +384,22 @@ export async function checkTenantApi(deps: ApiCheckDeps, appHost: string, name: 
   const poll = (what: string, limitMs: number, request: RawRequest, done: (r: RawResponse) => boolean, pending: (r: RawResponse) => boolean) =>
     pollUntil(deps, what, limitMs, request, done, pending);
 
-  const admin = newSession();
+  // 0. The platform administrator, from the chart's bootstrap CronJob: the first run makes it, a
+  //    second run with another address changes nothing and names the same user.
+  const first = await deps.bootstrapAdmin(exampleAddress());
+  if (first.exitCode !== EXIT_CREATED) throw new Error(`the platform administrator bootstrap (Job ${first.job}) exited with ${first.exitCode}, expected ${EXIT_CREATED}`);
+  deps.log(`Job ${first.job}: the platform administrator bootstrap exited ${EXIT_CREATED} and made user ${first.userId} the first platform administrator`);
+  const again = await deps.bootstrapAdmin(exampleAddress());
+  if (again.exitCode !== EXIT_ALREADY_CREATED || again.userId !== first.userId) {
+    throw new Error(
+      `a second platform administrator bootstrap (Job ${again.job}) exited with ${again.exitCode} naming user ${again.userId}, ` +
+        `expected ${EXIT_ALREADY_CREATED} naming ${first.userId}`,
+    );
+  }
+  deps.log(`Job ${again.job}: a second bootstrap exited ${EXIT_ALREADY_CREATED} and named user ${again.userId}; nothing changed`);
+  const admin: TestSession = { ...newSession(), userId: uuid(first.userId) };
   await deps.psql(adminSessionSql(admin));
-  deps.log(`made a platform administrator ${admin.userId} with a session`);
+  deps.log(`added a session for platform administrator ${admin.userId}`);
 
   // 1. The gateway has the routes and the cookie check: the administrator's cookie passes the
   //    identity service, the token reaches the assets service, which answers 403 (no tenant).
@@ -351,6 +413,15 @@ export async function checkTenantApi(deps: ApiCheckDeps, appHost: string, name: 
     () => true,
   );
   deps.log(`the ingress routes the cookie check after ${Math.round(routed.waitedMs / 1000)} s`);
+
+  // 1b. The identity service recorded the grant in the platform-wide operation log, once, with
+  //     the user ID and `via` only.
+  const logged = await pollSql(deps, `the identity service to record identity.platform_admin_granted of user ${admin.userId}`, eventMs, grantsLoggedSql(admin.userId), (out) => {
+    const [own, all] = out.trim().split("|").map(Number);
+    if (all !== undefined && all > 1) throw new Error(`identity.platform_event_log has ${all} identity.platform_admin_granted events, expected one`);
+    return own === 1 && all === 1;
+  });
+  deps.log(`identity.platform_event_log has the one identity.platform_admin_granted, of user ${admin.userId} via bootstrap, after ${Math.round(logged / 1000)} s`);
 
   // 2. No cookie: the identity service rejects the request at the gateway.
   const anonymous = await deps.send(get());
@@ -392,6 +463,8 @@ export async function checkTenantApi(deps: ApiCheckDeps, appHost: string, name: 
   if (body.tenant_id !== tenantId) throw new Error(`the assets service answered 200 with ${served.response.body.slice(0, 200)}, not tenant ${tenantId}`);
 
   const detail =
+    `platform administrator ${admin.userId} from the chart's bootstrap CronJob (Job ${first.job} exit ${EXIT_CREATED}, Job ${again.job} exit ${EXIT_ALREADY_CREATED}, ` +
+    "one identity.platform_admin_granted in the operation log); " +
     `POST ${TENANTS_PATH} as a platform administrator: 201, tenant ${tenantId}; ` +
     `GET ${ASSETS_TENANT_PATH} as its member: 200 with that tenant after ${Math.round(served.waitedMs / 1000)} s; ` +
     "without a cookie: 401 unauthenticated; the administrator without a tenant: 403 permission_denied";
@@ -413,7 +486,7 @@ export function telemetryLatestPath(device: string): string {
  * ClickHouse account, then 200 with the device and no points. The 200 runs a real query as the
  * tenant's account. Returns the report line; throws with what was awaited or what differed.
  */
-export async function checkTelemetryApi(deps: Omit<ApiCheckDeps, "psql">, appHost: string, made: TenantApiResult): Promise<string> {
+export async function checkTelemetryApi(deps: Omit<ApiCheckDeps, "psql" | "bootstrapAdmin">, appHost: string, made: TenantApiResult): Promise<string> {
   const routeMs = deps.limits?.routeMs ?? ROUTE_LIMIT_MS;
   const eventMs = deps.limits?.eventMs ?? EVENT_LIMIT_MS;
   const device = crypto.randomUUID();
@@ -655,13 +728,25 @@ export async function runApiCheck(
   const identity = servicePortOf(objects, "identity", "http");
 
   // SQL on stdin; the output (row counts only) and the SQL stay out of the log.
-  const psql = async (sql: string) => {
-    await run(
+  const psql = async (sql: string): Promise<string> => {
+    const result = await run(
       ctx.log,
       [ctx.kubectl, "exec", "--namespace", namespace, "-i", primary, "-c", "postgres", "--", "psql", "--no-psqlrc", "--quiet", "--tuples-only", "--no-align", "--set", "ON_ERROR_STOP=1", "--dbname", database],
       { env, stdin: sql, timeoutMs: 60_000, quiet: true },
     );
+    return result.stdout;
   };
+
+  // The platform administrator bootstrap: the chart's CronJob, as the migration Job's account.
+  const bootstrap = bootstrapCronJobOf(objects);
+  const migrationJob = objects.find((o) => o.kind === "Job" && o.metadata?.name === migrationJobsOf(objects)[0]);
+  const migrationAccount = (migrationJob?.spec?.template as { spec?: { serviceAccountName?: string } } | undefined)?.spec?.serviceAccountName ?? "";
+  if (bootstrap.cronJob !== undefined && bootstrap.cronJob.serviceAccount !== migrationAccount) {
+    bootstrap.problems.push(`${bootstrap.cronJob.name}: runs as ${bootstrap.cronJob.serviceAccount || "the default ServiceAccount"}, not the migration Job's ${migrationAccount}`);
+  }
+  if (bootstrap.problems.length > 0 || bootstrap.cronJob === undefined) throw new Error(bootstrap.problems.join("; "));
+  const cronJob = bootstrap.cronJob.name;
+  const bootstrapAdmin = (address: string) => runBootstrap(ctx, namespace, cronJob, address);
 
   // SQL as the bundled ClickHouse's admin, in its pod: the client reads the password from the
   // file the init container wrote (CLICKHOUSE_PASSWORD_FILE), so it never leaves the pod. The SQL
@@ -685,7 +770,7 @@ export async function runApiCheck(
   const authz = new PortForward(ctx, namespace, `service/${identity.service}`, identity.port, undefined);
   try {
     await gateway.open();
-    const made = await checkTenantApi({ psql, send: (request) => gateway.send(request), log: (line) => ctx.log.line(line) }, appHost, name);
+    const made = await checkTenantApi({ psql, bootstrapAdmin, send: (request) => gateway.send(request), log: (line) => ctx.log.line(line) }, appHost, name);
     const telemetry = await checkTelemetryApi({ send: (request) => gateway.send(request), log: (line) => ctx.log.line(line) }, appHost, made);
     const account = await checkTenantAccount(clickhouse, made.tenantId);
     ctx.log.line(account);

@@ -20,6 +20,7 @@ import {
   checkTenantApi,
   errorCode,
   EXT_AUTHZ_PREFIX,
+  grantsLoggedSql,
   IDENTITY_HEADER,
   memberSessionSql,
   newSession,
@@ -69,10 +70,14 @@ describe("the check's sessions", () => {
     }
   });
 
-  test("an administrator without a tenant, and a viewer acting in the new tenant", () => {
+  test("a session for the administrator the bootstrap made, without a tenant, and a viewer acting in the new tenant", () => {
     const session = newSession();
     const admin = adminSessionSql(session);
-    expect(admin).toContain(`INSERT INTO identity.users (id, platform_admin) VALUES ('${session.userId}', true);`);
+    // The user is the bootstrap's (Laysi/trustiot-v2#582): the check never makes a platform
+    // administrator with SQL.
+    expect(admin).not.toContain("identity.users");
+    expect(admin).not.toContain("platform_admin");
+    expect(admin).toContain(`'${session.userId}', now() + interval '1 hour');`);
     expect(admin).not.toContain("memberships");
     expect(admin).not.toContain("active_tenant_id");
     const member = memberSessionSql(session, TENANT);
@@ -89,6 +94,19 @@ describe("the check's sessions", () => {
     expect(() => memberSessionSql(session, "x'); DROP TABLE identity.users; --")).toThrow("not a UUID");
     expect(() => adminSessionSql({ ...session, userId: "1" })).toThrow("not a UUID");
     expect(() => adminSessionSql({ ...session, tokenHash: "'" })).toThrow("not a SHA-256");
+    expect(() => grantsLoggedSql("x' OR true --")).toThrow("not a UUID");
+  });
+
+  test("the operation log query counts the user's bootstrap grants without an address, then all grants", () => {
+    const session = newSession();
+    const sql = grantsLoggedSql(session.userId);
+    expect(sql).toContain(`payload->>'user_id' = '${session.userId}'`);
+    expect(sql).toContain("payload->>'via' = 'bootstrap'");
+    expect(sql).toContain("position('@' in payload::text) = 0");
+    expect(sql).toContain("FROM identity.platform_event_log WHERE event_type = 'identity.platform_admin_granted';");
+    // The table and its columns are the identity service's.
+    const schema = readFileSync(join(REPO_ROOT, "services", "identity", "migrations", "postgres", "0003_event_log.sql"), "utf8");
+    expect(schema).toMatch(/CREATE TABLE identity\.platform_event_log \([\s\S]*?\n    event_type text NOT NULL,[\s\S]*?\n    payload jsonb NOT NULL/);
   });
 
   test("the tables and columns exist in the identity service's schema", () => {
@@ -129,16 +147,37 @@ const problem = (status: number, code: string, messageKey = `error.${code}`) => 
 /** What the telemetry-query service answers until the tenant's account is ready. */
 const notReady = () => problem(404, "not_found", ACCOUNT_NOT_READY);
 
-/** A gateway that answers from a script per request kind, and records what it was sent. */
-function fakeGateway(script: { admin: RawResponse[]; anonymous: RawResponse[]; create: RawResponse[]; member: RawResponse[] }) {
+/** The bootstrap's user in the fakes below. */
+const ADMIN_USER = "2c1d0e4f-5a6b-4c7d-8e9f-0a1b2c3d4e5f";
+
+/**
+ * A gateway that answers from a script per request kind, and records what it was sent; a
+ * bootstrap that answers from `bootstraps` (default: created, then already created) and records
+ * the addresses; psql that answers the operation log query from `grants` (default `1|1`).
+ */
+function fakeGateway(
+  script: { admin: RawResponse[]; anonymous: RawResponse[]; create: RawResponse[]; member: RawResponse[] },
+  options: { bootstraps?: { exitCode: number; userId: string }[]; grants?: string[] } = {},
+) {
   const sent: RawRequest[] = [];
   const sql: string[] = [];
+  const addresses: string[] = [];
+  const bootstraps = [...(options.bootstraps ?? [{ exitCode: 0, userId: ADMIN_USER }, { exitCode: 3, userId: ADMIN_USER }])];
+  const grants = [...(options.grants ?? ["1|1"])];
   let clock = 0;
   // The administrator's GETs come before the POST, the member's after it.
   let posted = false;
   const deps = {
     psql: async (statement: string) => {
       sql.push(statement);
+      if (!statement.includes("platform_event_log")) return "";
+      return grants.length > 1 ? grants.shift()! : (grants[0] ?? "");
+    },
+    bootstrapAdmin: async (address: string) => {
+      addresses.push(address);
+      const next = bootstraps.shift();
+      if (next === undefined) throw new Error("no bootstrap scripted");
+      return { job: `platform-admin-bootstrap-${addresses.length}`, ...next };
     },
     send: async (request: RawRequest) => {
       sent.push(request);
@@ -161,7 +200,7 @@ function fakeGateway(script: { admin: RawResponse[]; anonymous: RawResponse[]; c
     now: () => clock,
     limits: { routeMs: 20_000, eventMs: 20_000, pollMs: 1_000 },
   };
-  return { deps, sent, sql };
+  return { deps, sent, sql, addresses };
 }
 
 const created = json(201, { tenant_id: TENANT, name: "nightly smoke saas", created_at: "2026-10-14T00:00:00Z" });
@@ -179,9 +218,22 @@ describe("checkTenantApi", () => {
     expect(made.detail).toContain(`tenant ${TENANT}`);
     expect(made.detail).toContain("200 with that tenant after 2 s");
     expect(made.tenantId).toBe(TENANT);
-    // The sessions it made are the ones the following checks use.
+    // The administrator is the bootstrap's: two runs, each with its own example.com address, and
+    // no SQL makes a platform administrator.
+    expect(made.admin.userId).toBe(ADMIN_USER);
+    expect(gateway.addresses).toHaveLength(2);
+    for (const address of gateway.addresses) expect(address).toMatch(/^nightly-admin-[0-9a-f]{8}@example\.com$/);
+    expect(gateway.addresses[0]).not.toBe(gateway.addresses[1]);
+    for (const statement of gateway.sql) {
+      expect(statement).not.toContain("platform_admin)");
+      for (const address of gateway.addresses) expect(statement).not.toContain(address);
+    }
+    expect(made.detail).toContain(`platform administrator ${ADMIN_USER} from the chart's bootstrap CronJob`);
+    // The sessions it made are the ones the following checks use; between them, the operation log.
     expect(gateway.sql[0]).toContain(made.admin.tokenHash);
-    expect(gateway.sql[1]).toContain(made.member.tokenHash);
+    expect(gateway.sql[0]).toContain(`'${ADMIN_USER}'`);
+    expect(gateway.sql[1]).toBe(grantsLoggedSql(ADMIN_USER));
+    expect(gateway.sql[2]).toContain(made.member.tokenHash);
     // One POST, with the administrator's cookie and the name as JSON.
     const posts = gateway.sent.filter((r) => r.method === "POST");
     expect(posts).toHaveLength(1);
@@ -193,8 +245,37 @@ describe("checkTenantApi", () => {
       for (const [name, value] of request.headers ?? []) if (name === "cookie") expect(value).toMatch(new RegExp(`^${SESSION_COOKIE}=[A-Za-z0-9_-]{43}$`));
     }
     // The member is made only after the tenant exists, in that tenant.
-    expect(gateway.sql).toHaveLength(2);
-    expect(gateway.sql[1]).toContain(`'${TENANT}'`);
+    expect(gateway.sql).toHaveLength(3);
+    expect(gateway.sql[2]).toContain(`'${TENANT}'`);
+  });
+
+  test("the bootstrap must make the administrator once, and the operation log must record it once", async () => {
+    const script = () => ({
+      admin: [problem(403, "permission_denied")],
+      anonymous: [problem(401, "unauthenticated")],
+      create: [created],
+      member: [json(200, { tenant_id: TENANT })],
+    });
+    const OTHER = "3d2e1f50-6b7c-4d8e-9fa0-1b2c3d4e5f60";
+    const failedFirst = fakeGateway(script(), { bootstraps: [{ exitCode: 1, userId: ADMIN_USER }] });
+    await expect(checkTenantApi(failedFirst.deps, APP, "nightly smoke saas")).rejects.toThrow("exited with 1, expected 0");
+    expect(failedFirst.sql).toEqual([]);
+    const twice = fakeGateway(script(), { bootstraps: [{ exitCode: 0, userId: ADMIN_USER }, { exitCode: 0, userId: OTHER }] });
+    await expect(checkTenantApi(twice.deps, APP, "nightly smoke saas")).rejects.toThrow(`exited with 0 naming user ${OTHER}, expected 3 naming ${ADMIN_USER}`);
+    const otherUser = fakeGateway(script(), { bootstraps: [{ exitCode: 0, userId: ADMIN_USER }, { exitCode: 3, userId: OTHER }] });
+    await expect(checkTenantApi(otherUser.deps, APP, "nightly smoke saas")).rejects.toThrow(`naming user ${OTHER}`);
+    // The grant reaches the operation log a little later: the check waits for it.
+    const late = fakeGateway(script(), { grants: ["0|0", "0|0", "1|1"] });
+    await checkTenantApi(late.deps, APP, "nightly smoke saas");
+    expect(late.sql.filter((statement) => statement.includes("platform_event_log"))).toHaveLength(3);
+    // Two grants: fails at once.
+    const doubled = fakeGateway(script(), { grants: ["1|2"] });
+    await expect(checkTenantApi(doubled.deps, APP, "nightly smoke saas")).rejects.toThrow("has 2 identity.platform_admin_granted events, expected one");
+    // Never recorded: fails at the bound, naming what it waited for.
+    const never = fakeGateway(script(), { grants: ["0|0"] });
+    await expect(checkTenantApi(never.deps, APP, "nightly smoke saas")).rejects.toThrow(
+      `timed out after 20 s waiting for the identity service to record identity.platform_admin_granted of user ${ADMIN_USER}`,
+    );
   });
 
   test("an answer that is neither the expected one nor pending fails at once", async () => {

@@ -36,6 +36,11 @@ pub const SCHEMA: Schema = Schema {
             name: "0004_login.sql",
             sql: include_str!("../migrations/postgres/0004_login.sql"),
         },
+        // The first platform administrator's once-only marker (Laysi/trustiot-v2#582).
+        Migration {
+            name: "0005_platform_admin_bootstrap.sql",
+            sql: include_str!("../migrations/postgres/0005_platform_admin_bootstrap.sql"),
+        },
     ],
 };
 

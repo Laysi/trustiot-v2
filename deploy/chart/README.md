@@ -633,6 +633,15 @@ Job 做的事，依序：
 
 **失敗時**：Job 在 `migrate.backoffLimit` 次重試後失敗，服務停在 `Init`，舊版的 pod 繼續服務。看 `kubectl -n <namespace> logs job/<release>-migrate-<hash>`（JSON 行，只寫 stdout）；每一項變更與停止的原因都寫在裡面，不含密碼。處理方式見 [docs/runbooks/migrations.md](../../docs/runbooks/migrations.md)。
 
+### 第一位平台管理員
+
+`migrate.enabled` 與身分服務都啟用時，chart 另外渲染 CronJob `<release>-platform-admin-bootstrap`（`templates/platform-admin-bootstrap.yaml`，Laysi/trustiot-v2#582）。它不會自己執行（`suspend: true`，排程是不存在的 2 月 31 日），只是操作者建立第一位平台管理員時 `kubectl create job --from=cronjob/...` 的範本；步驟、結束碼與復原在 [docs/runbooks/platform-admin.md](../../docs/runbooks/platform-admin.md)。
+
+- 執行同一個 migrate 映像的 `migrate bootstrap-platform-admin`（[tools/migrate](../../tools/migrate/README.md)），以 migration 角色連 Postgres：與 Job 相同的 CA、`TRUSTIOT__POSTGRES__*` 與 `migrate.wait.databases`，沒有 `TRUSTIOT__PASSWORDS__*`、ClickHouse 設定與 projected token（它不碰 Kubernetes API）。
+- 電子郵件地址只從 stdin 來：容器 `stdin: true`、`stdinOnce: true`，操作者以 `kubectl attach -i` 寫入一行。chart、values、Job 的參數與環境變數裡都沒有地址，程式也不把它寫進日誌。
+- pod 用 migration Job 的 ServiceAccount（不掛 token）與 selector 標籤（`app.kubernetes.io/component: migrate`，另加 `trustiot.io/task: platform-admin-bootstrap`），在 ambient mesh 內，所以 `<release>-postgres` 的 NetworkPolicy 放行它，migration Job 的 AuthorizationPolicy 與 NetworkPolicy 讓任何東西都連不進它的 pod（上方呼叫矩陣的 `migrate` 一條；測試比對每個 policy 的 selector 對兩者的結果相同）。
+- 一次嘗試（`backoffLimit: 0`）：第二個 pod 會等一個沒人再寫的地址。`activeDeadlineSeconds: 900` 結束沒人 attach 的 pod；Job 與 pod（日誌有使用者 ID）在結束一天後刪除（`ttlSecondsAfterFinished: 86400`），runbook 要求操作者看完日誌就刪。`kubectl create job --from=cronjob/...` 讓 CronJob 成為 Job 的 controller，CronJob controller 即使在暫停中也會刪掉超過保留數的已結束 Job，所以 `successfulJobsHistoryLimit` 與 `failedJobsHistoryLimit` 都是 1：設 0 時成功的 Job 結束後幾秒就被刪掉，操作者讀不到結束碼。CronJob 名稱最多 52 個字元，release 名稱太長時截短前綴。`services.platform-admin-bootstrap` 保留給它。
+
 ## 叢集內的 Postgres
 
 `postgres.mode: bundled`（預設，SaaS 與地端相同）部署 `templates/postgres.yaml`：一個由 CloudNativePG 管理的 Postgres，映像是我們的 PostgreSQL 18 加 Apache AGE（[deploy/images/postgres](../images/postgres/README.md)，決策 21、清單 M8）。

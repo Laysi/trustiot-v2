@@ -62,6 +62,9 @@ zeroize.workspace = true
 # The PKCS#8 PEM form of a test key, to show the service refuses a key file of the format before
 # Laysi/trustiot-v2#404 and never logs any form of the key.
 ed25519-dalek = { workspace = true, features = ["pem", "pkcs8"] }
+# The migration Job's `bootstrap-platform-admin`, which creates the first platform administrator
+# that tests/platform_admin.rs logs in (Laysi/trustiot-v2#582).
+migrate = { path = "../../tools/migrate" }
 # The TLS Postgres the integration tests start (shared with crates/service-kit's tests), and the
 # certificate of the fake SMTP relay of tests/login.rs.
 rcgen = { workspace = true, features = ["crypto", "pem", "ring"] }

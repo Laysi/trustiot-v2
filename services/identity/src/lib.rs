@@ -35,6 +35,7 @@ pub mod audience;
 pub mod config;
 pub mod csrf;
 pub mod delegation;
+pub mod email;
 pub mod event_log;
 pub mod exchange;
 pub mod ext_authz;
