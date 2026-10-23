@@ -335,7 +335,8 @@ pub async fn verify_code(
 pub enum LoggedOut {
     /// The identity service revoked the session.
     Revoked,
-    /// The identity service no longer knew the session (401): it had ended already.
+    /// The identity service no longer knew the session (401 with the code `unauthenticated`):
+    /// it had ended already.
     AlreadyEnded,
 }
 
@@ -344,8 +345,9 @@ pub enum LoggedOut {
 ///
 /// # Errors
 ///
-/// When there is no answer or the answer is neither 204 nor 401: the session may still be
-/// valid, so the file is kept.
+/// When there is no answer or the answer is neither 204 nor the platform's own 401 (code
+/// `unauthenticated`; a bare 401 may come from a proxy in front of it): the session may still
+/// be valid, so the file is kept.
 pub async fn logout(client: &Client, session: &Session) -> Result<LoggedOut, Error> {
     let response = client
         .send(Call {
@@ -355,10 +357,14 @@ pub async fn logout(client: &Client, session: &Session) -> Result<LoggedOut, Err
             json: None,
         })
         .await?;
-    match response.status {
-        StatusCode::NO_CONTENT => Ok(LoggedOut::Revoked),
-        StatusCode::UNAUTHORIZED => Ok(LoggedOut::AlreadyEnded),
-        _ => Err(ApiError::new(&Method::DELETE, LOGOUT_PATH, &response).into()),
+    if response.status == StatusCode::NO_CONTENT {
+        return Ok(LoggedOut::Revoked);
+    }
+    let error = ApiError::new(&Method::DELETE, LOGOUT_PATH, &response);
+    if error.is_session_rejected() {
+        Ok(LoggedOut::AlreadyEnded)
+    } else {
+        Err(error.into())
     }
 }
 
@@ -384,10 +390,13 @@ pub fn session_for(store: &SessionStore, origin: Option<&Origin>) -> Result<Sess
     Ok(session)
 }
 
-/// Whether `error` says the session is no longer valid (401 from the platform).
+/// Whether `error` is the platform rejecting the session: 401 with the code `unauthenticated`
+/// (see [`ApiError::is_session_rejected`]). Even then the session may be live (the certs service
+/// also answers so when it cannot check the internal token, during a key rotation for example),
+/// so the caller revokes it with [`logout`] before it forgets it.
 #[must_use]
 pub fn is_unauthenticated(error: &Error) -> bool {
-    matches!(error, Error::Api(api) if api.status == StatusCode::UNAUTHORIZED)
+    matches!(error, Error::Api(api) if api.is_session_rejected())
 }
 
 #[cfg(test)]

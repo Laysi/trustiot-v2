@@ -9,6 +9,7 @@ use std::io::{BufRead as _, Write as _};
 use std::process::ExitCode;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use http::StatusCode;
 use tracing_subscriber::filter::{LevelFilter, Targets};
 use tracing_subscriber::layer::SubscriberExt as _;
 use tracing_subscriber::util::SubscriberInitExt as _;
@@ -318,17 +319,38 @@ fn session_client(options: &Options, store: &SessionStore) -> Result<(Session, C
     Ok((session, client))
 }
 
-/// Removes the session file after a 401 and says so.
-fn forget_ended_session(store: &SessionStore, error: Error) -> Error {
-    if session::is_unauthenticated(&error) {
-        if let Err(remove) = store.remove() {
-            return Error::Failed(format!("{error}; and the session file: {remove}"));
+/// After `error` from a call made with `session`: when the platform rejected the session (its
+/// own 401), revokes it and removes the file only once the identity service confirms it is
+/// gone. The file is the only copy of the cookie, so on anything else it is kept and the
+/// operator is told to run logout.
+async fn forget_ended_session(
+    client: &Client,
+    store: &SessionStore,
+    session: &Session,
+    error: Error,
+) -> Error {
+    if !session::is_unauthenticated(&error) {
+        if matches!(&error, Error::Api(api) if api.status == StatusCode::UNAUTHORIZED) {
+            return Error::Failed(format!(
+                "{error}. That is not the platform's own answer (a proxy in front of it?), so \
+                 the session file is kept"
+            ));
         }
-        return Error::Failed(format!(
-            "{error}: the session has ended or was revoked; log in again"
-        ));
+        return error;
     }
-    error
+    match session::logout(client, session).await {
+        Ok(_) => match store.remove() {
+            Ok(_) => Error::Failed(format!(
+                "{error}: the session has ended or was revoked and its file is removed; log in \
+                 again"
+            )),
+            Err(remove) => Error::Failed(format!("{error}; and the session file: {remove}")),
+        },
+        Err(logout) => Error::Failed(format!(
+            "{error}. The session could not be confirmed as ended ({logout}), so its file is \
+             kept: run logout, then login"
+        )),
+    }
 }
 
 async fn enroll(options: &Options) -> Result<(), Error> {
@@ -336,15 +358,16 @@ async fn enroll(options: &Options) -> Result<(), Error> {
     let directory = directory(options)?;
     let store = SessionStore::new(config::session_directory(&env)?);
     let (session, client) = session_client(options, &store)?;
-    let enrolled = identity::enroll(&client, &session.cookie, &directory, name, now)
-        .await
-        .map_err(|error| forget_ended_session(&store, error))?;
+    let enrolled = match identity::enroll(&client, &session.cookie, &directory, name, now).await {
+        Ok(enrolled) => enrolled,
+        Err(error) => return Err(forget_ended_session(&client, &store, &session, error).await),
+    };
     say(&format!(
         "installed {} as {} (serial {}, valid until {}); keep the serial, it is how the \
          certificate is revoked",
         enrolled.installed.subject,
         directory.certificate().display(),
-        enrolled.issued.serial,
+        enrolled.installed.serial,
         enrolled.installed.not_after.to_rfc3339()
     ));
     Ok(())

@@ -110,8 +110,8 @@ pub struct Origin {
 }
 
 impl Origin {
-    /// Parses `--url`: `https://` (plain `http://` only on loopback), a host, an optional port,
-    /// and no credentials, path, query or fragment (a trailing `/` is fine).
+    /// Parses `--url`: `https://` (plain `http://` only on a loopback IP address), a host, an
+    /// optional port, and no credentials, path, query or fragment (a trailing `/` is fine).
     ///
     /// # Errors
     ///
@@ -129,12 +129,17 @@ impl Origin {
             return Err(invalid("has no host"));
         };
         let bare = host.trim_start_matches('[').trim_end_matches(']');
-        let loopback = host.eq_ignore_ascii_case("localhost")
-            || bare.parse::<IpAddr>().is_ok_and(|ip| ip.is_loopback());
+        // Only loopback IP literals: the name localhost is resolved, and a resolver or hosts file
+        // could send it elsewhere.
+        let loopback = bare.parse::<IpAddr>().is_ok_and(|ip| ip.is_loopback());
         let https = match url.scheme() {
             "https" => true,
             "http" if loopback => false,
-            _ => return Err(invalid("must be https:// (plain http:// only on loopback)")),
+            _ => {
+                return Err(invalid(
+                    "must be https:// (plain http:// only on a loopback IP address such as 127.0.0.1)",
+                ));
+            }
         };
         if !url.username().is_empty() || url.password().is_some() {
             return Err(invalid("must not contain credentials"));
@@ -330,6 +335,8 @@ mod tests {
         assert_eq!(origin.authority(), "[::1]:4000");
         for wrong in [
             "http://app.example",
+            "http://localhost:4000",
+            "http://LocalHost",
             "https://user:pw@app.example",
             "https://app.example/api",
             "https://app.example/?a=1",

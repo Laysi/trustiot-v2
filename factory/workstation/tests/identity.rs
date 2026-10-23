@@ -220,6 +220,44 @@ fn install_certificate_refuses_every_profile_but_the_workstation_one() {
         pem
     );
     assert_eq!(mode(&directory.certificate()), 0o644);
+
+    // A bundle with the private key in it is refused, and nothing of it is written.
+    let key_pem = std::fs::read_to_string(directory.key()).expect("the key file");
+    std::fs::remove_file(directory.certificate()).expect("removed");
+    for bundle in [format!("{pem}{key_pem}"), format!("{key_pem}{pem}")] {
+        let error =
+            identity::install_certificate(&directory, bundle.as_bytes(), now).expect_err("bundle");
+        assert!(
+            matches!(
+                error,
+                Error::Certificate(CertificateProblem::NotOneCertificate)
+            ),
+            "{error}"
+        );
+        assert!(!directory.certificate().exists());
+    }
+
+    // Text around the one certificate (an escape sequence included) is not stored: the file is
+    // the certificate re-encoded from its DER.
+    let noisy = format!("Subject: x\n\u{1b}]0;title\u{7}\u{1b}[2J\n{pem}\nmore text\n");
+    let checked =
+        identity::install_certificate(&directory, noisy.as_bytes(), now).expect("text is ignored");
+    let stored = std::fs::read_to_string(directory.certificate()).expect("stored");
+    assert_eq!(stored, pem, "the stored file is the bare certificate");
+    assert_eq!(stored, checked.pem);
+    assert_eq!(stored, identity::certificate_pem(&pem_der(&pem)));
+}
+
+/// The DER of the one PEM block in `pem`.
+fn pem_der(pem: &str) -> Vec<u8> {
+    use base64::Engine as _;
+    let body: String = pem
+        .lines()
+        .filter(|line| !line.starts_with("-----"))
+        .collect();
+    base64::engine::general_purpose::STANDARD
+        .decode(body)
+        .expect("base64")
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

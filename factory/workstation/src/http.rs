@@ -72,8 +72,9 @@ impl ExtraHeaders {
     ///
     /// # Errors
     ///
-    /// When the file is refused or a line is wrong; messages give the line number and the
-    /// header name, never a value.
+    /// When the file is refused or a line is wrong; messages give the line number and, for a
+    /// duplicate or a missing header, one of the two accepted names, never any text of the file
+    /// (a value written where the name belongs would otherwise be shown).
     pub fn load(path: &Path) -> Result<Self, Error> {
         let bytes = files::read_secret(path, MAX_HEADERS_FILE_BYTES)?;
         Self::parse(&bytes).map_err(|reason| Error::Failed(format!("{}: {reason}", path.display())))
@@ -94,7 +95,7 @@ impl ExtraHeaders {
             let name = name.trim().to_ascii_lowercase();
             if !EXTRA_HEADER_NAMES.contains(&name.as_str()) {
                 return Err(format!(
-                    "line {number}: only {} may be set, not {name:?}",
+                    "line {number} names another header: only {} may be set",
                     EXTRA_HEADER_NAMES.join(" and ")
                 ));
             }
@@ -179,8 +180,31 @@ pub struct Response {
     pub body: Bytes,
 }
 
+/// Longest server-supplied text [`printable`] keeps, in characters.
+const MAX_PRINTED_CHARS: usize = 120;
+
+/// `text` from a server, made safe to print on a terminal: control characters (escape
+/// sequences, carriage returns, line breaks) are written as `\u{..}` and the text is cut to
+/// [`MAX_PRINTED_CHARS`] characters.
+#[must_use]
+pub fn printable(text: &str) -> String {
+    let mut shown = String::with_capacity(text.len().min(MAX_PRINTED_CHARS));
+    for (index, character) in text.chars().enumerate() {
+        if index == MAX_PRINTED_CHARS {
+            shown.push_str("...");
+            break;
+        }
+        if character.is_control() {
+            shown.extend(character.escape_unicode());
+        } else {
+            shown.push(character);
+        }
+    }
+    shown
+}
+
 /// An error status from the platform, with the M1 error body's code, message key and the
-/// fields it names; the body's other content is never shown.
+/// fields it names (each through [`printable`]); the body's other content is never shown.
 #[derive(Debug, thiserror::Error)]
 pub struct ApiError {
     /// The request, as `METHOD /path`.
@@ -202,18 +226,35 @@ impl ApiError {
         Self {
             request: format!("{method} {path}"),
             status: response.status,
-            code: parsed.as_ref().map(|body| body.code().to_string()),
-            message_key: parsed.as_ref().map(|body| body.message_key().to_string()),
+            code: parsed
+                .as_ref()
+                .map(|body| printable(&body.code().to_string())),
+            message_key: parsed
+                .as_ref()
+                .map(|body| printable(&body.message_key().to_string())),
             field_errors: parsed
                 .as_ref()
                 .map(|body| {
                     body.field_errors()
                         .iter()
-                        .map(|error| (error.field.clone(), error.message_key.to_string()))
+                        .map(|error| {
+                            (
+                                printable(&error.field),
+                                printable(&error.message_key.to_string()),
+                            )
+                        })
                         .collect()
                 })
                 .unwrap_or_default(),
         }
+    }
+
+    /// Whether this is the platform saying the session is not valid: 401 with the M1 body's code
+    /// `unauthenticated`. A bare 401, from a proxy in front of the platform for example, is not:
+    /// the session may still be live, so it is never forgotten on that alone.
+    #[must_use]
+    pub fn is_session_rejected(&self) -> bool {
+        self.status == StatusCode::UNAUTHORIZED && self.code.as_deref() == Some("unauthenticated")
     }
 }
 
@@ -521,10 +562,22 @@ mod tests {
             format!("cf-access-client-id: has space\ncf-access-client-secret: {secret}\n"),
             format!("cf-access-client-id:\ncf-access-client-secret: {secret}\n"),
             format!("authorization: Bearer {secret}\n"),
+            // A value pasted where the name belongs, and a line with only a value.
+            format!("{secret}: {id}\n"),
+            format!("{secret}\n"),
+            format!("x-{id}: 1\n"),
         ] {
             let error = ExtraHeaders::parse(wrong.as_bytes()).expect_err(&wrong);
             assert!(
-                !error.contains(&secret) && !error.contains(&id) && !error.contains("has space"),
+                !error.contains(&secret)
+                    && !error.contains(&id)
+                    && !error.contains("has space")
+                    && !error.contains("authorization")
+                    && !error.contains("x-other"),
+                "{error}"
+            );
+            assert!(
+                error.starts_with("line ") || error.ends_with(" is missing"),
                 "{error}"
             );
         }
@@ -713,28 +766,41 @@ mod tests {
             set_cookies: Vec::new(),
             date: None,
             body: Bytes::from_static(
-                br#"{"code":"validation_failed","message_key":"workstation_certificate.name_invalid","field_errors":[{"field":"/workstation","message_key":"workstation_certificate.name_invalid"}],"details":{"echo":"secret-echo"}}"#,
+                br#"{"code":"validation_failed","message_key":"workstation_certificate.name_invalid","field_errors":[{"field":"/w\u001b[2J\u001b]0;owned\u0007\r\nfake line","message_key":"workstation_certificate.name_invalid"}]}"#,
             ),
         };
-        let error = ApiError::new(
-            &Method::POST,
-            "/api/certs/v1/workstation-certificates",
-            &response,
+        let shown = ApiError::new(&Method::POST, "/", &response).to_string();
+        assert!(!shown.chars().any(char::is_control), "{shown:?}");
+        assert!(
+            shown.contains(r"/w\u{1b}[2J\u{1b}]0;owned\u{7}\u{d}\u{a}fake line"),
+            "{shown}"
         );
-        let shown = error.to_string();
-        assert_eq!(
-            shown,
-            "POST /api/certs/v1/workstation-certificates answered 422 validation_failed \
-             (workstation_certificate.name_invalid); /workstation: \
-             workstation_certificate.name_invalid"
-        );
-        let response = Response {
-            status: StatusCode::BAD_GATEWAY,
+        let long = "x".repeat(500);
+        assert_eq!(printable(&long).chars().count(), MAX_PRINTED_CHARS + 3);
+    }
+
+    #[test]
+    fn only_the_platforms_own_401_rejects_a_session() {
+        let answer = |status: StatusCode, body: &'static [u8]| Response {
+            status,
             set_cookies: Vec::new(),
             date: None,
-            body: Bytes::from_static(b"<html>upstream secret-echo</html>"),
+            body: Bytes::from_static(body),
         };
-        let shown = ApiError::new(&Method::GET, "/", &response).to_string();
-        assert_eq!(shown, "GET / answered 502 without an M1 error body");
+        let platform = answer(
+            StatusCode::UNAUTHORIZED,
+            br#"{"code":"unauthenticated","message_key":"error.unauthenticated","field_errors":[]}"#,
+        );
+        assert!(ApiError::new(&Method::GET, "/", &platform).is_session_rejected());
+        for other in [
+            answer(StatusCode::UNAUTHORIZED, b"<html>Access denied</html>"),
+            answer(StatusCode::UNAUTHORIZED, b""),
+            answer(
+                StatusCode::FORBIDDEN,
+                br#"{"code":"permission_denied","message_key":"error.permission_denied","field_errors":[]}"#,
+            ),
+        ] {
+            assert!(!ApiError::new(&Method::GET, "/", &other).is_session_rejected());
+        }
     }
 }

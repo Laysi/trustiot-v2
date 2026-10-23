@@ -277,6 +277,13 @@ pub struct Behaviour {
     /// A directory made read-only (0500) right before `verify_code` is answered, so the tool
     /// cannot store the session it gets.
     pub lock_on_verify: Option<PathBuf>,
+    /// The issue endpoint answers the platform's own 401 (code `unauthenticated`) while the
+    /// session is still live, as the certs service does when it cannot check the internal token.
+    pub issue_rejects_session: bool,
+    /// A path a proxy in front of the platform answers with a bare 401 (no M1 body).
+    pub proxy_401_on: Option<&'static str>,
+    /// The serial the issue answer gives instead of the certificate's.
+    pub issued_serial: Option<String>,
 }
 
 impl Default for Behaviour {
@@ -285,6 +292,9 @@ impl Default for Behaviour {
             send_code_status: StatusCode::ACCEPTED,
             unreadable_send_code_answer: false,
             lock_on_verify: None,
+            issue_rejects_session: false,
+            proxy_401_on: None,
+            issued_serial: None,
         }
     }
 }
@@ -374,6 +384,12 @@ async fn handle(State(shared): State<Arc<Shared>>, request: Request<Body>) -> Re
     let session_cookie = format!("__Host-trustiot-session={}", secrets.cookie);
     let has_cookie = recorded.header("cookie") == Some(session_cookie.as_str());
     match (parts.method.as_str(), parts.uri.path()) {
+        (_, path) if shared.behaviour.proxy_401_on == Some(path) => (
+            StatusCode::UNAUTHORIZED,
+            [(header::CONTENT_TYPE, "text/html")],
+            "<html>401 Authorization Required</html>",
+        )
+            .into_response(),
         ("POST", "/auth/login") => {
             let json: serde_json::Value = match serde_json::from_slice(&body) {
                 Ok(json) => json,
@@ -423,7 +439,10 @@ async fn handle(State(shared): State<Arc<Shared>>, request: Request<Body>) -> Re
             }
         }
         ("POST", "/api/certs/v1/workstation-certificates") => {
-            if !has_cookie || *shared.revoked.lock().expect("unpoisoned") {
+            if !has_cookie
+                || *shared.revoked.lock().expect("unpoisoned")
+                || shared.behaviour.issue_rejects_session
+            {
                 return m1(StatusCode::UNAUTHORIZED, "unauthenticated");
             }
             let json: serde_json::Value = serde_json::from_slice(&body).expect("a JSON body");
@@ -433,7 +452,11 @@ async fn handle(State(shared): State<Arc<Shared>>, request: Request<Body>) -> Re
             let profile = Profile::workstation(&name);
             let certificate = shared.ca.issue(&request.public_key, &profile);
             let answer = serde_json::json!({
-                "serial": profile.serial_hex(),
+                "serial": shared
+                    .behaviour
+                    .issued_serial
+                    .clone()
+                    .unwrap_or_else(|| profile.serial_hex()),
                 "workstation": name,
                 "subject": profile.common_name,
                 "ca_key_id": "0".repeat(64),

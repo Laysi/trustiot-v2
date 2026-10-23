@@ -8,7 +8,7 @@
 //! | --- | --- | --- |
 //! | [`KEY_FILE`] | 0600, never overwritten | the private key, PKCS #8 PEM |
 //! | [`CSR_FILE`] | 0644 | the certificate signing request, PEM (public) |
-//! | [`CERTIFICATE_FILE`] | 0644 | the workstation certificate, PEM (public), once it passed [`check_certificate`] |
+//! | [`CERTIFICATE_FILE`] | 0644 | the workstation certificate, PEM (public), once it passed [`check_certificate`]; re-encoded from the checked DER, never the input as given |
 
 use std::fmt;
 use std::path::{Path, PathBuf};
@@ -24,8 +24,8 @@ use http::{Method, StatusCode};
 use rcgen::{
     CertificateParams, DistinguishedName, DnType, KeyPair, PKCS_ECDSA_P256_SHA256, PublicKeyData,
 };
+use rustls_pki_types::CertificateSigningRequestDer;
 use rustls_pki_types::pem::PemObject as _;
-use rustls_pki_types::{CertificateDer, CertificateSigningRequestDer};
 use tracing::{debug, info};
 use x509_parser::certification_request::X509CertificationRequest;
 use x509_parser::oid_registry::OID_X509_COMMON_NAME;
@@ -204,6 +204,64 @@ impl WorkstationKey {
     }
 }
 
+const CERTIFICATE_BEGIN: &str = "-----BEGIN CERTIFICATE-----";
+const CERTIFICATE_END: &str = "-----END CERTIFICATE-----";
+
+/// The DER of the one certificate in `pem`: the text must hold exactly one PEM block, labelled
+/// `CERTIFICATE`. Any other block (a private key, a second certificate, a chain) refuses the
+/// whole input; text outside the block is ignored, because only the certificate re-encoded from
+/// its DER is ever stored ([`certificate_pem`]).
+fn certificate_der(pem: &[u8]) -> Result<Vec<u8>, CertificateProblem> {
+    let text = std::str::from_utf8(pem).map_err(|_| CertificateProblem::NotOneCertificate)?;
+    if text.matches("-----BEGIN").count() != 1 || text.matches("-----END").count() != 1 {
+        return Err(CertificateProblem::NotOneCertificate);
+    }
+    let (_, after_begin) = text
+        .split_once(CERTIFICATE_BEGIN)
+        .ok_or(CertificateProblem::NotOneCertificate)?;
+    let (body, _) = after_begin
+        .split_once(CERTIFICATE_END)
+        .ok_or(CertificateProblem::NotOneCertificate)?;
+    let compact: String = body
+        .chars()
+        .filter(|character| !character.is_ascii_whitespace())
+        .collect();
+    STANDARD
+        .decode(compact.as_bytes())
+        .map_err(|_| CertificateProblem::Malformed)
+}
+
+/// `der` as a PEM `CERTIFICATE` block: 64 base64 characters a line, LF line ends.
+#[must_use]
+pub fn certificate_pem(der: &[u8]) -> String {
+    let body = STANDARD.encode(der);
+    let mut pem = String::with_capacity(body.len() + body.len() / 64 + 64);
+    pem.push_str(CERTIFICATE_BEGIN);
+    pem.push('\n');
+    for line in body.as_bytes().chunks(64) {
+        pem.push_str(&String::from_utf8_lossy(line));
+        pem.push('\n');
+    }
+    pem.push_str(CERTIFICATE_END);
+    pem.push('\n');
+    pem
+}
+
+/// Whether `serial` is how the certs service writes a serial number: 2 to 40 lower-case hex
+/// digits.
+fn is_serial(serial: &str) -> bool {
+    (2..=40).contains(&serial.len())
+        && serial
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
+
+/// `serial` without leading zeros (`0` stays `0`), to compare two spellings of one number.
+fn serial_value(serial: &str) -> &str {
+    let trimmed = serial.trim_start_matches('0');
+    if trimmed.is_empty() { "0" } else { trimmed }
+}
+
 /// The DER bytes of the one `PRIVATE KEY` block in `pem`, wiped when dropped. `None` unless the
 /// text is exactly one such block (surrounding white space aside).
 fn pkcs8_der(pem: &[u8]) -> Option<Zeroizing<Vec<u8>>> {
@@ -272,7 +330,7 @@ pub fn is_workstation_name(name: &str) -> bool {
 /// Why a certificate is not kept as the workstation certificate.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum CertificateProblem {
-    #[error("the file does not hold exactly one PEM certificate")]
+    #[error("the input does not hold exactly one PEM certificate and no other PEM block")]
     NotOneCertificate,
     #[error("the certificate cannot be parsed")]
     Malformed,
@@ -305,6 +363,8 @@ pub struct CheckedCertificate {
     pub serial: String,
     pub not_before: DateTime<Utc>,
     pub not_after: DateTime<Utc>,
+    /// The certificate as stored: one PEM block re-encoded from the DER that was checked.
+    pub pem: String,
 }
 
 fn time_text(timestamp: i64) -> String {
@@ -313,7 +373,7 @@ fn time_text(timestamp: i64) -> String {
 }
 
 /// Checks `pem` as the certificate of `key` at `now` (Unix seconds): exactly one PEM
-/// certificate; not a CA; key usage digitalSignature; the TrustIoT workstation purpose in its
+/// certificate and no other PEM block (see [`certificate_der`]); not a CA; key usage digitalSignature; the TrustIoT workstation purpose in its
 /// extended key usage (compared as DER) and no TLS purpose; a subject of one common name
 /// `workstation:<name>`; valid at `now`; the public key of `key`. The issuing CA is not checked
 /// here: the workstation has no copy of it, and the certs service checks it on every request.
@@ -326,13 +386,9 @@ pub fn check_certificate(
     key: &WorkstationKey,
     now: i64,
 ) -> Result<CheckedCertificate, CertificateProblem> {
-    let mut certificates = CertificateDer::pem_slice_iter(pem);
-    let der = match (certificates.next(), certificates.next()) {
-        (Some(Ok(der)), None) => der,
-        _ => return Err(CertificateProblem::NotOneCertificate),
-    };
+    let der = certificate_der(pem)?;
     let (rest, certificate) =
-        X509Certificate::from_der(der.as_ref()).map_err(|_| CertificateProblem::Malformed)?;
+        X509Certificate::from_der(&der).map_err(|_| CertificateProblem::Malformed)?;
     if !rest.is_empty() {
         return Err(CertificateProblem::Malformed);
     }
@@ -403,6 +459,7 @@ pub fn check_certificate(
         serial,
         not_before: time(not_before)?,
         not_after: time(not_after)?,
+        pem: certificate_pem(&der),
     })
 }
 
@@ -419,8 +476,17 @@ pub fn install_certificate(
 ) -> Result<CheckedCertificate, Error> {
     let key = WorkstationKey::load(&directory.key())?;
     let checked = check_certificate(pem, &key, now)?;
+    store_certificate(directory, &checked)?;
+    Ok(checked)
+}
+
+/// Stores `checked` (its re-encoded PEM, never the input it came from) as [`CERTIFICATE_FILE`].
+fn store_certificate(
+    directory: &WorkstationDirectory,
+    checked: &CheckedCertificate,
+) -> Result<(), Error> {
     let path = directory.certificate();
-    files::replace_public(&path, pem)?;
+    files::replace_public(&path, checked.pem.as_bytes())?;
     info!(
         path = %path.display(),
         subject = %checked.subject,
@@ -428,7 +494,7 @@ pub fn install_certificate(
         not_after = %checked.not_after.to_rfc3339(),
         "installed the workstation certificate"
     );
-    Ok(checked)
+    Ok(())
 }
 
 /// What `enroll` got: the certs service's record and the certificate as checked and stored.
@@ -507,15 +573,34 @@ pub async fn enroll(
             "POST {ISSUE_PATH} answered 201 with a body that is not a workstation certificate"
         ))
     })?;
+    // The serial is server text that ends up on the terminal: only the documented form is shown.
+    if !is_serial(&issued.serial) {
+        return Err(Error::Failed(format!(
+            "POST {ISSUE_PATH} answered 201 with a serial number that is not 2 to 40 lower-case \
+             hex digits; nothing was installed. Have a platform administrator revoke the \
+             certificates issued for workstation {name} that it does not use."
+        )));
+    }
     debug!(serial = %issued.serial, "the certs service issued a workstation certificate");
-    let installed =
-        install_certificate(directory, issued.certificate.as_bytes(), now()).map_err(|error| {
-            Error::Failed(format!(
-                "the certs service issued the certificate with serial {}, but it was not \
-                 installed: {error}. Have a platform administrator revoke that serial.",
-                issued.serial
-            ))
-        })?;
+    let not_installed = |serial: &str, error: &dyn fmt::Display| {
+        Error::Failed(format!(
+            "the certs service issued the certificate with serial {serial}, but it was not \
+             installed: {error}. Have a platform administrator revoke that serial."
+        ))
+    };
+    let installed = check_certificate(issued.certificate.as_bytes(), &key, now())
+        .map_err(|problem| not_installed(&issued.serial, &Error::Certificate(problem)))?;
+    if serial_value(&issued.serial) != serial_value(&installed.serial) {
+        return Err(not_installed(
+            &installed.serial,
+            &format!(
+                "the answer gives serial {} but the certificate's serial is {}",
+                issued.serial, installed.serial
+            ),
+        ));
+    }
+    store_certificate(directory, &installed)
+        .map_err(|error| not_installed(&installed.serial, &error))?;
     Ok(Enrolled { issued, installed })
 }
 
@@ -544,6 +629,56 @@ mod tests {
         assert!(pkcs8_der(format!("{}{}", pem.as_str(), pem.as_str()).as_bytes()).is_none());
         let sec1 = pem.replace("PRIVATE KEY", "EC PRIVATE KEY");
         assert!(pkcs8_der(sec1.as_bytes()).is_none());
+    }
+
+    #[test]
+    fn serials_are_lower_case_hex_compared_without_leading_zeros() {
+        let longest = "f".repeat(40);
+        let too_long = "f".repeat(41);
+        for good in ["00", "4f3a", "0f", longest.as_str()] {
+            assert!(is_serial(good), "{good}");
+        }
+        for bad in [
+            "",
+            "0",
+            "4F3A",
+            "4f3g",
+            "4f 3a",
+            "\u{1b}[31m",
+            too_long.as_str(),
+        ] {
+            assert!(!is_serial(bad), "{bad:?}");
+        }
+        assert_eq!(serial_value("004f3a"), serial_value("4f3a"));
+        assert_eq!(serial_value("00"), "0");
+        assert_ne!(serial_value("4f3a"), serial_value("4f3b"));
+    }
+
+    #[test]
+    fn certificates_are_re_encoded_and_other_blocks_refused() {
+        let der: Vec<u8> = (0..=255u8).cycle().take(700).collect();
+        let pem = certificate_pem(&der);
+        assert!(pem.lines().all(|line| line.len() <= 64), "{pem}");
+        assert_eq!(certificate_der(pem.as_bytes()).expect("one block"), der);
+        let noisy = format!("Certificate:\n  \u{1b}[2Jtext\n{pem}trailing text\n");
+        assert_eq!(
+            certificate_der(noisy.as_bytes()).expect("text is ignored"),
+            der
+        );
+        let key = WorkstationKey::generate().expect("a key");
+        for refused in [
+            format!("{pem}{}", key.pem().as_str()),
+            format!("{}{pem}", key.pem().as_str()),
+            format!("{pem}{pem}"),
+            pem.replace("CERTIFICATE", "TRUSTED CERTIFICATE"),
+            String::new(),
+        ] {
+            assert_eq!(
+                certificate_der(refused.as_bytes()),
+                Err(CertificateProblem::NotOneCertificate),
+                "{refused}"
+            );
+        }
     }
 
     #[test]

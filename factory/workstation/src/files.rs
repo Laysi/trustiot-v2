@@ -2,11 +2,17 @@
 //! is wider; replacements are atomic (a temporary file in the same directory, then `rename`), so
 //! an interrupted write never leaves half a file behind.
 //!
+//! Secret files and the directories the tool keeps files in must belong to the user running the
+//! tool. Files are opened with `O_NONBLOCK`, so a FIFO put in a file's place is refused by the
+//! regular-file check instead of blocking the tool.
+//!
 //! Errors name the file and the problem, never its contents.
 
 use std::fs::{self, DirBuilder, File, OpenOptions, Permissions};
 use std::io::{self, Read as _, Write as _};
-use std::os::unix::fs::{DirBuilderExt as _, OpenOptionsExt as _, PermissionsExt as _};
+use std::os::unix::fs::{
+    DirBuilderExt as _, MetadataExt as _, OpenOptionsExt as _, PermissionsExt as _,
+};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -30,6 +36,34 @@ const SECRET_FORBIDDEN: u32 = 0o177;
 /// could otherwise replace the files in it.
 const DIRECTORY_FORBIDDEN: u32 = 0o022;
 
+/// The effective user id of this process.
+#[allow(
+    unsafe_code,
+    reason = "geteuid has no safe wrapper in std or in the crates the workspace locks"
+)]
+#[must_use]
+pub fn effective_uid() -> u32 {
+    // SAFETY: geteuid takes no arguments, always succeeds and touches no memory of ours.
+    unsafe { libc::geteuid() }
+}
+
+/// Refuses `path` unless `owner` (its owner's user id) is `expected`.
+///
+/// # Errors
+///
+/// [`Error::NotOwned`] when they differ.
+pub fn check_owner(path: &Path, owner: u32, expected: u32) -> Result<(), Error> {
+    if owner == expected {
+        Ok(())
+    } else {
+        Err(Error::NotOwned {
+            path: path.to_owned(),
+            owner,
+            expected,
+        })
+    }
+}
+
 fn io_error(action: &'static str, path: &Path, source: io::Error) -> Error {
     Error::Io {
         action,
@@ -39,7 +73,8 @@ fn io_error(action: &'static str, path: &Path, source: io::Error) -> Error {
 }
 
 /// Creates `path` (and missing parents) with mode 0700 when it does not exist; refuses a path
-/// that is not a directory or that the group or others can write to.
+/// that is not a directory (a symbolic link included), that belongs to another user, or that the
+/// group or others can write to.
 ///
 /// # Errors
 ///
@@ -53,13 +88,14 @@ pub fn ensure_directory(path: &Path) -> Result<(), Error> {
         Ok(()) => {}
         Err(error) => return Err(io_error("create the directory", path, error)),
     }
-    let metadata = fs::metadata(path).map_err(|error| io_error("inspect", path, error))?;
+    let metadata = fs::symlink_metadata(path).map_err(|error| io_error("inspect", path, error))?;
     if !metadata.is_dir() {
         return Err(Error::BadFile {
             path: path.to_owned(),
-            reason: "is not a directory",
+            reason: "is not a directory (a symbolic link is not followed)",
         });
     }
+    check_owner(path, metadata.uid(), effective_uid())?;
     let mode = metadata.permissions().mode() & 0o7777;
     if mode & DIRECTORY_FORBIDDEN != 0 {
         return Err(Error::DirectoryTooOpen {
@@ -70,13 +106,30 @@ pub fn ensure_directory(path: &Path) -> Result<(), Error> {
     Ok(())
 }
 
-/// Opens `path` for reading without following a symbolic link.
-fn open_no_follow(path: &Path) -> Result<File, Error> {
-    OpenOptions::new()
+/// Opens `path` for reading, without following a symbolic link when `follow` is false, and
+/// without blocking on a FIFO (`O_NONBLOCK`, which regular files ignore); then refuses anything
+/// but a regular file. The checks use the opened file, so the file read is the file checked.
+fn open_regular(path: &Path, follow: bool) -> Result<(File, fs::Metadata), Error> {
+    let flags = if follow {
+        libc::O_NONBLOCK
+    } else {
+        libc::O_NONBLOCK | libc::O_NOFOLLOW
+    };
+    let file = OpenOptions::new()
         .read(true)
-        .custom_flags(libc::O_NOFOLLOW)
+        .custom_flags(flags)
         .open(path)
-        .map_err(|error| io_error("open", path, error))
+        .map_err(|error| io_error("open", path, error))?;
+    let metadata = file
+        .metadata()
+        .map_err(|error| io_error("inspect", path, error))?;
+    if !metadata.is_file() {
+        return Err(Error::BadFile {
+            path: path.to_owned(),
+            reason: "is not a regular file",
+        });
+    }
+    Ok((file, metadata))
 }
 
 /// Reads at most `max_bytes` of `file` into `buffer`; refuses a larger file.
@@ -102,23 +155,15 @@ fn read_limited(
 }
 
 /// Reads a file that holds a secret, at most `max_bytes`. Refused unless it is a regular file
-/// (not a symbolic link) of mode 0600 or narrower. The bytes are wiped when dropped.
+/// (not a symbolic link) of mode 0600 or narrower that belongs to the user running the tool. The
+/// bytes are wiped when dropped.
 ///
 /// # Errors
 ///
 /// When the file cannot be read, is refused, or is too large.
 pub fn read_secret(path: &Path, max_bytes: usize) -> Result<Zeroizing<Vec<u8>>, Error> {
-    let mut file = open_no_follow(path)?;
-    // The checks use the opened file, so the file read is the file checked.
-    let metadata = file
-        .metadata()
-        .map_err(|error| io_error("inspect", path, error))?;
-    if !metadata.is_file() {
-        return Err(Error::BadFile {
-            path: path.to_owned(),
-            reason: "is not a regular file",
-        });
-    }
+    let (mut file, metadata) = open_regular(path, false)?;
+    check_owner(path, metadata.uid(), effective_uid())?;
     let mode = metadata.permissions().mode() & 0o7777;
     if mode & SECRET_FORBIDDEN != 0 {
         return Err(Error::TooOpen {
@@ -132,13 +177,13 @@ pub fn read_secret(path: &Path, max_bytes: usize) -> Result<Zeroizing<Vec<u8>>, 
     Ok(buffer)
 }
 
-/// Reads a public file, at most `max_bytes`.
+/// Reads a public file, at most `max_bytes`: a regular file, through symbolic links.
 ///
 /// # Errors
 ///
-/// When the file cannot be read or is too large.
+/// When the file cannot be read, is not a regular file, or is too large.
 pub fn read_public(path: &Path, max_bytes: usize) -> Result<Vec<u8>, Error> {
-    let mut file = File::open(path).map_err(|error| io_error("open", path, error))?;
+    let (mut file, _) = open_regular(path, true)?;
     let mut buffer = Vec::new();
     read_limited(&mut file, path, max_bytes, &mut buffer)?;
     Ok(buffer)
@@ -357,6 +402,61 @@ mod tests {
             .map(|entry| entry.expect("an entry").file_name())
             .collect();
         assert_eq!(left.len(), 2, "no temporary file is left: {left:?}");
+        fs::remove_dir_all(directory).expect("cleaned up");
+    }
+
+    #[test]
+    fn fifos_are_refused_without_blocking() {
+        let directory = scratch("fifo");
+        let fifo = directory.join("fifo");
+        let made = std::process::Command::new("mkfifo")
+            .arg(&fifo)
+            .status()
+            .expect("mkfifo runs");
+        assert!(made.success());
+        fs::set_permissions(&fifo, Permissions::from_mode(0o600)).expect("chmod");
+        // Without O_NONBLOCK, opening a FIFO nobody writes to blocks for ever.
+        for result in [
+            read_secret(&fifo, 64).map(|_| ()),
+            read_public(&fifo, 64).map(|_| ()),
+        ] {
+            assert!(
+                matches!(result, Err(Error::BadFile { reason, .. }) if reason == "is not a regular file"),
+                "{result:?}"
+            );
+        }
+        fs::remove_dir_all(directory).expect("cleaned up");
+    }
+
+    #[test]
+    fn files_and_directories_of_other_users_are_refused() {
+        // Files owned by another user cannot be made without root, so the check itself is
+        // tested; read_secret and ensure_directory call it with the file's owner.
+        let path = Path::new("/somewhere/session");
+        let me = effective_uid();
+        check_owner(path, me, me).expect("the user's own file");
+        let error = check_owner(path, me.wrapping_add(1), me).expect_err("refused");
+        assert!(matches!(error, Error::NotOwned { .. }), "{error}");
+        assert!(error.to_string().contains("/somewhere/session"), "{error}");
+        // And the files this test makes are the user's own.
+        let directory = scratch("owner");
+        let secret = directory.join("key");
+        create_secret(&secret, b"x").expect("created");
+        read_secret(&secret, 4).expect("owned by the user running the tool");
+        fs::remove_dir_all(directory).expect("cleaned up");
+    }
+
+    #[test]
+    fn a_link_to_a_directory_is_refused() {
+        let directory = scratch("dirlink");
+        let real = directory.join("real");
+        ensure_directory(&real).expect("created");
+        let link = directory.join("link");
+        symlink(&real, &link).expect("a link");
+        assert!(matches!(
+            ensure_directory(&link),
+            Err(Error::BadFile { .. })
+        ));
         fs::remove_dir_all(directory).expect("cleaned up");
     }
 

@@ -48,6 +48,18 @@ pub enum Error {
         path.display()
     )]
     DirectoryTooOpen { path: PathBuf, mode: u32 },
+    /// A secret file, or a directory the tool keeps files in, belongs to another user, who could
+    /// read or replace it.
+    #[error(
+        "{} belongs to user id {owner}, not to the user running the tool ({expected}): each \
+         operator keeps their own files",
+        path.display()
+    )]
+    NotOwned {
+        path: PathBuf,
+        owner: u32,
+        expected: u32,
+    },
     /// A file system operation failed.
     #[error("cannot {action} {}: {source}", path.display())]
     Io {

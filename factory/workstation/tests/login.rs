@@ -6,7 +6,7 @@ mod support;
 
 use axum::http::{Method, StatusCode};
 use support::{
-    Behaviour, Environment, FakeSecrets, Run, Scratch, Silence, Silent, StandIn, mode,
+    Behaviour, Environment, FakeSecrets, Profile, Run, Scratch, Silence, Silent, StandIn, mode,
     pem_body_lines, run, set_mode,
 };
 
@@ -628,6 +628,178 @@ async fn the_headers_file_is_checked_before_any_request() {
             ("Access client secret", secrets.access_secret.clone()),
         ],
     );
+}
+
+/// Runs `init` into `<scratch>/ws` and logs in to `platform`; returns the `--dir` value.
+async fn init_and_login(
+    scratch: &Scratch,
+    environment: &Environment,
+    platform: &StandIn,
+) -> String {
+    let dir = scratch.join("ws").display().to_string();
+    assert!(run(environment, &["init", "--dir", &dir], "").await.success);
+    let login = run(
+        environment,
+        &[
+            "login",
+            "--url",
+            &platform.url,
+            "--email",
+            "admin@example.com",
+        ],
+        &format!("{}\n", platform.secrets().code),
+    )
+    .await;
+    assert!(login.success, "{login:?}");
+    dir
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_rejected_session_is_revoked_before_its_file_is_removed() {
+    let scratch = Scratch::new("enroll-rejected");
+    let environment = Environment::in_scratch(&scratch);
+    let platform = StandIn::start(
+        FakeSecrets::new(),
+        Behaviour {
+            issue_rejects_session: true,
+            ..Behaviour::default()
+        },
+    )
+    .await;
+    let dir = init_and_login(&scratch, &environment, &platform).await;
+    let enroll = run(
+        &environment,
+        &["enroll", "--name", "ws-1", "--dir", &dir],
+        "",
+    )
+    .await;
+    assert_eq!(enroll.code, Some(1), "{enroll:?}");
+    let calls: Vec<String> = platform
+        .requests()
+        .iter()
+        .map(|r| format!("{} {}", r.method, r.path))
+        .collect();
+    assert_eq!(
+        calls.last().map(String::as_str),
+        Some("DELETE /api/identity/v1/sessions/current"),
+        "{calls:?}"
+    );
+    assert!(platform.revoked(), "the live session was revoked first");
+    assert!(!environment.session_file().exists(), "{enroll:?}");
+    assert!(enroll.stderr.contains("log in again"), "{enroll:?}");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_proxys_401_keeps_the_session_file() {
+    let scratch = Scratch::new("enroll-proxy");
+    let environment = Environment::in_scratch(&scratch);
+    let platform = StandIn::start(
+        FakeSecrets::new(),
+        Behaviour {
+            proxy_401_on: Some("/api/certs/v1/workstation-certificates"),
+            ..Behaviour::default()
+        },
+    )
+    .await;
+    let dir = init_and_login(&scratch, &environment, &platform).await;
+    let enroll = run(
+        &environment,
+        &["enroll", "--name", "ws-1", "--dir", &dir],
+        "",
+    )
+    .await;
+    assert_eq!(enroll.code, Some(1), "{enroll:?}");
+    assert!(
+        enroll.stderr.contains("without an M1 error body"),
+        "{enroll:?}"
+    );
+    assert!(
+        environment.session_file().exists(),
+        "the only copy of a live cookie is kept"
+    );
+    assert!(!platform.revoked());
+    assert!(
+        platform
+            .requests()
+            .iter()
+            .all(|r| r.method != Method::DELETE),
+        "a proxy's 401 says nothing about the session"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_rejected_session_that_cannot_be_revoked_keeps_its_file() {
+    let scratch = Scratch::new("enroll-unrevoked");
+    let environment = Environment::in_scratch(&scratch);
+    let platform = StandIn::start(
+        FakeSecrets::new(),
+        Behaviour {
+            issue_rejects_session: true,
+            proxy_401_on: Some("/api/identity/v1/sessions/current"),
+            ..Behaviour::default()
+        },
+    )
+    .await;
+    let dir = init_and_login(&scratch, &environment, &platform).await;
+    let enroll = run(
+        &environment,
+        &["enroll", "--name", "ws-1", "--dir", &dir],
+        "",
+    )
+    .await;
+    assert_eq!(enroll.code, Some(1), "{enroll:?}");
+    assert!(enroll.stderr.contains("run logout"), "{enroll:?}");
+    assert!(environment.session_file().exists(), "{enroll:?}");
+
+    // logout itself keeps the file on a proxy's 401 too.
+    let logout = run(&environment, &["logout"], "").await;
+    assert_eq!(logout.code, Some(1), "{logout:?}");
+    assert!(environment.session_file().exists(), "{logout:?}");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_answer_whose_serial_is_not_the_certificates_is_refused() {
+    for (case, serial) in [
+        ("another serial", "0123456789abcdef".to_owned()),
+        ("terminal escape", "\u{1b}[2J4f3a".to_owned()),
+        ("upper case", "4F3A9C1E2B7D6058A1C3E5F708192A3B".to_owned()),
+    ] {
+        let scratch = Scratch::new("enroll-serial");
+        let environment = Environment::in_scratch(&scratch);
+        let platform = StandIn::start(
+            FakeSecrets::new(),
+            Behaviour {
+                issued_serial: Some(serial.clone()),
+                ..Behaviour::default()
+            },
+        )
+        .await;
+        let dir = init_and_login(&scratch, &environment, &platform).await;
+        let enroll = run(
+            &environment,
+            &["enroll", "--name", "ws-1", "--dir", &dir],
+            "",
+        )
+        .await;
+        assert_eq!(enroll.code, Some(1), "{case}: {enroll:?}");
+        assert!(
+            !scratch.join("ws/workstation.pem").exists(),
+            "{case}: nothing is installed"
+        );
+        assert!(
+            !enroll.output().chars().any(|c| c.is_control() && c != '\n'),
+            "{case}: {enroll:?}"
+        );
+        if case == "another serial" {
+            assert!(
+                enroll.stderr.contains("revoke that serial")
+                    && enroll
+                        .stderr
+                        .contains(&Profile::workstation("ws-1").serial_hex()),
+                "{case}: the certificate's own serial is named: {enroll:?}"
+            );
+        }
+    }
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
