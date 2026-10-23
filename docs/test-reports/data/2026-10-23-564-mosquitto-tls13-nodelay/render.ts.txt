@@ -1,0 +1,24 @@
+// Render the chart (SaaS shape, broker on) from the given chart directory and print the broker
+// ConfigMap's mosquitto.conf. Usage: bun render.ts <helm> <chart dir> <out file>
+import { writeFileSync } from "node:fs";
+import { join } from "node:path";
+
+const [helm, chart, out] = process.argv.slice(2);
+if (!helm || !chart || !out) throw new Error("usage: render.ts <helm> <chart dir> <out file>");
+const result = Bun.spawnSync([
+  helm, "template", "trustiot", chart, "-n", "trustiot",
+  "-f", join(chart, "values-saas.yaml"), "-f", join(chart, "tests/values/saas-instance.yaml"),
+  "--set", "mqttBroker.enabled=true",
+]);
+if (result.exitCode !== 0) throw new Error(`helm template failed: ${result.stderr.toString()}`);
+const docs = Bun.YAML.parse(result.stdout.toString());
+for (const doc of Array.isArray(docs) ? docs : [docs]) {
+  const m = doc as { kind?: string; metadata?: { name?: string }; data?: Record<string, string> } | null;
+  if (m?.kind === "ConfigMap" && m.metadata?.name === "trustiot-mqtt-broker-config") {
+    const conf = m.data?.["mosquitto.conf"];
+    if (!conf) throw new Error("no mosquitto.conf in the ConfigMap");
+    writeFileSync(out, conf);
+    process.exit(0);
+  }
+}
+throw new Error("no broker ConfigMap rendered");
