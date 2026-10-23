@@ -776,7 +776,8 @@ export interface components {
              * @description The gateway's hardware ID, which becomes its identity everywhere: the common name of its
              *     certificates, its MQTT username and the gateway segment of its topics. 1-64 ASCII
              *     letters, digits, `.`, `_` or `-`, starting with a letter or digit. A hardware ID is
-             *     registered once and never reused, not even after it is decommissioned.
+             *     registered once, and for now it stays taken after it is decommissioned; whether a
+             *     decommissioned hardware ID may be registered again is decided in Laysi/trustiot-v2#115.
              * @example gw-0042
              */
             hardware_id: string;

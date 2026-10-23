@@ -85,7 +85,7 @@
   "gateway_registration.workstation_refused": "This request didn't come from a trusted production workstation. Check the workstation's certificate and clock, then try again.",
   "gateway_registration.public_key_mismatch": "This hardware ID is already registered with another key. A gateway keeps the key it was registered with.",
   "gateway_registration.endorsement_key_mismatch": "This hardware ID is already registered with another endorsement key.",
-  "gateway_registration.decommissioned": "This hardware ID was decommissioned. Hardware IDs are never reused.",
+  "gateway_registration.decommissioned": "This hardware ID was decommissioned and cannot be registered.",
   "gateway_registration.public_key_in_use": "Another gateway is already registered with this key.",
   "gateway_registration.endorsement_key_in_use": "Another active gateway is already registered with this endorsement key.",
   "gateway_registration.ca_not_ready": "The certificate authority can't register gateways yet. Try again in a few minutes.",

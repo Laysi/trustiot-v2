@@ -159,7 +159,8 @@ pub const PUBLIC_KEY_MISMATCH: MessageKey =
 /// The hardware ID is registered with another endorsement key (409).
 pub const ENDORSEMENT_KEY_MISMATCH: MessageKey =
     MessageKey::new("gateway_registration.endorsement_key_mismatch");
-/// The hardware ID was decommissioned; hardware IDs are never reused (409).
+/// The hardware ID was decommissioned, and for now a decommissioned hardware ID is not
+/// registered again (provisional until Laysi/trustiot-v2#115) (409).
 pub const DECOMMISSIONED: MessageKey = MessageKey::new("gateway_registration.decommissioned");
 /// Another hardware ID is registered with this public key (409).
 pub const PUBLIC_KEY_IN_USE: MessageKey = MessageKey::new("gateway_registration.public_key_in_use");

@@ -370,7 +370,7 @@ curl -sS --fail-with-body -X POST "https://<app 主機>/api/certs/v1/gateway-reg
 | 新的硬體 ID | 201：簽出閘道器憑證、寫進簽發紀錄、寫入登錄，並寫一筆 `certs.gateway_registered` 事件，全在平台角色的同一個交易裡 |
 | 同一個硬體 ID、同一把公鑰與 EK 再登錄 | 200：第一次的登錄與同一張憑證；除了 nonce 什麼都不寫，不簽新憑證、不發事件。工作站沒收到回應而重送時就是這樣 |
 | 同一個硬體 ID、不同的公鑰或 EK | 409 `conflict`，`gateway_registration.public_key_mismatch` 或 `endorsement_key_mismatch` |
-| 已除役的硬體 ID | 409，`gateway_registration.decommissioned`；硬體 ID 永不重複使用 |
+| 已除役的硬體 ID | 409，`gateway_registration.decommissioned`；除役的硬體 ID 目前不能再登錄（暫定，見[規則與取捨](#規則與取捨)） |
 | 新的硬體 ID，公鑰已經登錄過，或 EK 屬於一台使用中的閘道器 | 409，`gateway_registration.public_key_in_use` 或 `endorsement_key_in_use` |
 | 兩個相同的新登錄同時到達 | 一個 201、一個 200，只有一張憑證與一筆事件（第二個的寫入撞到唯一鍵，交易整個回滾，重試一次就看到第一個的結果） |
 
@@ -380,7 +380,7 @@ curl -sS --fail-with-body -X POST "https://<app 主機>/api/certs/v1/gateway-reg
 
 ### 規則與取捨
 
-- **硬體 ID 永不重複使用**，除役後也一樣：它是憑證的 CN、MQTT 使用者名稱與事件的 aggregate id，重用會讓舊憑證、舊紀錄與新裝置混在一起。換主機板或 TPM 就是一台新的閘道器、新的硬體 ID。登錄的列不能刪除或改寫，對所有角色都一樣（trigger `gateway_registrations_guard`，見[資料庫](#資料庫)）；唯一能做的改變是設定一次 `decommissioned_at`，除役 API 是 Laysi/trustiot-v2#115。
+- **硬體 ID 只登錄一次，除役後目前也不能再登錄（暫定，2026-10-23）**：硬體 ID 是憑證的 CN、MQTT 使用者名稱與事件的 aggregate id，重用會讓舊憑證、舊紀錄與新裝置混在一起，所以現在從嚴。換主機板或 TPM 就是一台新的閘道器、新的硬體 ID。登錄的列不能刪除或改寫，對所有角色都一樣（trigger `gateway_registrations_guard`，見[資料庫](#資料庫)）；唯一能做的改變是設定一次 `decommissioned_at`，除役 API 是 Laysi/trustiot-v2#115。除役本身不可逆；但除役的硬體 ID 能不能再登錄（例如維修後當作一筆新的登錄），與資產服務一起在 Laysi/trustiot-v2#115 決定。要放寬就需要新的 migration：登錄表的主鍵是硬體 ID，`certs.gateway_registered` 事件的 aggregate id 也是硬體 ID。
 - **公鑰永不登錄兩次**；**EK 只在使用中的閘道器之間唯一**：除役閘道器的 TPM 可以用新的硬體 ID 再登錄。
 - **重送回原本的憑證**：即使那張憑證之後被撤銷或過期，重送仍回同一筆登錄與同一張憑證；新憑證走換發（Laysi/trustiot-v2#81），不走登錄。
 - **EK 只記錄、比對，不驗證**：服務檢查 EK 的格式與演算法，但不驗證 TPM 製造商的 EK 憑證鏈，也不做 TPM 的 credential activation；信任來自產線工作站與平台管理員兩個身分。要證明 CSR 的金鑰真的在那顆 TPM 裡，是之後的工作。

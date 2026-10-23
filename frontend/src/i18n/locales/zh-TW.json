@@ -85,7 +85,7 @@
   "gateway_registration.workstation_refused": "這個請求不是來自受信任的產線工作站，請檢查工作站的憑證與時鐘後再試。",
   "gateway_registration.public_key_mismatch": "這個硬體 ID 已經以另一把金鑰登錄；閘道器會沿用登錄時的金鑰。",
   "gateway_registration.endorsement_key_mismatch": "這個硬體 ID 已經以另一把背書金鑰登錄。",
-  "gateway_registration.decommissioned": "這個硬體 ID 已經除役，硬體 ID 不會重複使用。",
+  "gateway_registration.decommissioned": "這個硬體 ID 已經除役，無法登錄。",
   "gateway_registration.public_key_in_use": "已有另一台閘道器以這把金鑰登錄。",
   "gateway_registration.endorsement_key_in_use": "已有另一台使用中的閘道器以這把背書金鑰登錄。",
   "gateway_registration.ca_not_ready": "憑證機構還不能登錄閘道器，請過幾分鐘再試。",

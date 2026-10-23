@@ -905,7 +905,7 @@
             "type": "string"
           },
           "hardware_id": {
-            "description": "The gateway's hardware ID, which becomes its identity everywhere: the common name of its\ncertificates, its MQTT username and the gateway segment of its topics. 1-64 ASCII\nletters, digits, `.`, `_` or `-`, starting with a letter or digit. A hardware ID is\nregistered once and never reused, not even after it is decommissioned.",
+            "description": "The gateway's hardware ID, which becomes its identity everywhere: the common name of its\ncertificates, its MQTT username and the gateway segment of its topics. 1-64 ASCII\nletters, digits, `.`, `_` or `-`, starting with a letter or digit. A hardware ID is\nregistered once, and for now it stays taken after it is decommissioned; whether a\ndecommissioned hardware ID may be registered again is decided in Laysi/trustiot-v2#115.",
             "example": "gw-0042",
             "maxLength": 64,
             "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$",

@@ -14,9 +14,12 @@
 
 GRANT USAGE ON SCHEMA certs TO certs_platform;
 
--- One row per registered gateway. A hardware ID is registered once and never reused, not even
+-- One row per registered gateway. For now a hardware ID is registered once and stays taken even
 -- after decommissioning: its certificates, MQTT identity and event history keep naming the
--- same device. A replaced board or TPM is a new gateway with a new hardware ID.
+-- same device. A replaced board or TPM is a new gateway with a new hardware ID. This rule is
+-- provisional (2026-10-23): whether a decommissioned hardware ID may be registered again is
+-- decided in Laysi/trustiot-v2#115, and allowing it needs a new migration, since the hardware
+-- ID is this table's primary key and the aggregate id of its events.
 CREATE TABLE certs.gateway_registrations (
     -- The gateway's identity everywhere (protocol::GatewayId): its certificates' common name,
     -- its MQTT username and the gateway segment of its topics.
@@ -39,7 +42,7 @@ CREATE TABLE certs.gateway_registrations (
     registered_by uuid NOT NULL,
     registered_at timestamptz NOT NULL DEFAULT now(),
     -- Set once when the gateway is decommissioned (Laysi/trustiot-v2#115); the row stays, so the
-    -- hardware ID stays taken.
+    -- hardware ID stays taken (provisional, see the table's comment).
     decommissioned_at timestamptz
 );
 
@@ -81,7 +84,7 @@ BEGIN
             OLD.hardware_id
             USING ERRCODE = 'insufficient_privilege';
     END IF;
-    RAISE EXCEPTION 'gateway registrations are never removed: a hardware ID is never reused'
+    RAISE EXCEPTION 'gateway registrations are never removed'
         USING ERRCODE = 'insufficient_privilege';
 END;
 $$;
