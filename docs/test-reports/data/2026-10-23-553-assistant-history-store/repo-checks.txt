@@ -1,0 +1,16 @@
+# cargo test --locked -p repo-check -p sql-check && cargo run --locked -q -p openapi -- --check && bun test scripts
+
+     Running unittests src/lib.rs (target/debug/deps/repo_check-d890b7c933de2941)
+test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/repository.rs (target/debug/deps/repository-b6073db44722dc5b)
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.12s
+     Running unittests src/lib.rs (target/debug/deps/sql_check-d43a023a876df706)
+test result: ok. 20 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/check.rs (target/debug/deps/check-8dc07596307bd3be)
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.27s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+api/openapi.json is up to date
+ 1590 pass
+ 0 fail
+Ran 1599 tests across 51 files. [24.24s]

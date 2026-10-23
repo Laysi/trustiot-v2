@@ -29,14 +29,13 @@ use crate::history::{Conversation, EntryKind, Preamble, Principal, SystemPrompt}
 use crate::model::{CacheTtl, Effort, Format, NativeMessage};
 use crate::tools::ToolSpec;
 
-/// `$1` tenant, `$2` conversation, `$3` user, then the preamble. Returns the conversation when
-/// this statement stored it, nothing when it was stored before.
+/// `$1` tenant, `$2` conversation, `$3` user, then the preamble. Stores nothing when the
+/// conversation was stored before.
 const INSERT_CONVERSATION: &str = "INSERT INTO assistant.conversations
     (tenant_id, conversation_id, user_id, prompt_version, system_prompt, tenant_context, tools,
      effort, cache_ttl)
 VALUES ($1::uuid, $2::uuid, $3::uuid, $4, $5, $6, $7, $8, $9)
-ON CONFLICT (tenant_id, conversation_id) DO NOTHING
-RETURNING conversation_id";
+ON CONFLICT (tenant_id, conversation_id) DO NOTHING";
 
 /// `$1` tenant, `$2` conversation.
 const SELECT_CONVERSATION: &str = "SELECT user_id::text AS user_id, prompt_version,
@@ -195,7 +194,7 @@ pub async fn create(
     check_tenant(tx, principal.tenant_id)?;
     let preamble = conversation.preamble();
     let tools = tools_json(preamble.tools())?;
-    let inserted = sqlx::query(INSERT_CONVERSATION)
+    sqlx::query(INSERT_CONVERSATION)
         .bind(principal.tenant_id.to_string())
         .bind(conversation.id().to_string())
         .bind(principal.user_id.to_string())
@@ -214,19 +213,10 @@ pub async fn create(
         .bind(&tools)
         .bind(preamble.effort().as_str())
         .bind(preamble.cache_ttl().as_str())
-        .fetch_optional(&mut **tx)
+        .execute(&mut **tx)
         .await?;
-    if inserted.is_none() {
-        // Stored before: only a retry of the same conversation may pass.
-        let stored = select_conversation(tx, principal.tenant_id, conversation.id())
-            .await?
-            .ok_or(StoreError::Corrupt(
-                "a conversation that conflicted on insert is not readable",
-            ))?;
-        if stored.user_id != principal.user_id || *stored.preamble != **preamble {
-            return Err(StoreError::Conflict("the conversation's owner or preamble"));
-        }
-    }
+    // Stored now or before: `append` compares the stored owner and preamble with this
+    // conversation's, so only a retry of the same conversation passes.
     append(tx, conversation, 0).await
 }
 
@@ -234,8 +224,10 @@ pub async fn create(
 /// transaction of the conversation's tenant. `stored` is what [`create`] or the previous
 /// [`append`] returned; returns the new count, the conversation's length.
 ///
-/// A message already stored at its position with the same kind and bytes is skipped, so a
-/// retry is harmless. One that differs means another writer appended first: the call fails
+/// The stored conversation must have the same owner and preamble as `conversation`: its tools
+/// run as the stored owner, so a conversation built for another user (or with another
+/// preamble) under a stored ID never adds to that history. A message already stored at its
+/// position with the same kind and bytes is skipped, so a retry is harmless. One that differs means another writer appended first: the call fails
 /// with [`StoreError::Conflict`] and writes nothing (the caller rolls `tx` back).
 ///
 /// # Errors
@@ -256,6 +248,13 @@ pub async fn append(
             from: stored,
             stored: conversation.len(),
         });
+    }
+    let principal = conversation.principal();
+    let owner = select_conversation(tx, tenant, conversation.id())
+        .await?
+        .ok_or(StoreError::NotStored)?;
+    if owner.user_id != principal.user_id || *owner.preamble != **conversation.preamble() {
+        return Err(StoreError::Conflict("the conversation's owner or preamble"));
     }
     let next: i64 = sqlx::query(NEXT_SEQ)
         .bind(&tenant_text)
@@ -470,6 +469,147 @@ mod tests {
                 "refused"
             );
         }
+    }
+
+    /// A conversation under a stored ID but with another owner or preamble can only be built
+    /// inside the crate (`Conversation::restore`), so this regression test lives here: `append`
+    /// itself checks the stored owner and preamble and does not rely on how the caller built
+    /// the conversation. Starts a throwaway Postgres (podman or docker); skipped without either
+    /// unless `CI` is set.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn append_refuses_a_conversation_of_another_owner_or_preamble() {
+        use contract::ServiceName;
+        use contract::identity::{TenantGrant, TenantRole};
+        use service_kit::identity::UserIdentity;
+        use service_kit::tenant::TenantDb;
+        use sqlx::postgres::PgPoolOptions;
+        use testkit::identity::TestIssuer;
+        use testkit::product::{DATABASE, product_postgres};
+
+        use crate::model::ModelClient;
+        use crate::model::anthropic::AnthropicGateway;
+
+        let Some(product) = product_postgres(&["assistant_app"]).await else {
+            return;
+        };
+        let db = TenantDb::connect_lazy(
+            product.postgres.options("assistant_app", DATABASE),
+            PgPoolOptions::new().max_connections(2),
+        )
+        .expect("the service role's pool verifies the server");
+        let issuer = TestIssuer::new();
+        let tenant = TenantId::generate();
+        let user = |issuer: &TestIssuer| -> UserIdentity {
+            let claims = TestIssuer::claims(
+                ServiceName::Assistant,
+                Some(TenantGrant {
+                    id: tenant,
+                    role: TenantRole::Viewer,
+                }),
+            );
+            issuer.user(ServiceName::Assistant, &claims)
+        };
+        let principal = |user: &UserIdentity| Principal {
+            tenant_id: tenant,
+            user_id: user.user_id(),
+        };
+        let model = AnthropicGateway::new("http://127.0.0.1:9", "main", 1 << 20)
+            .expect("a valid gateway URL");
+        let preamble = |effort: Effort| {
+            Arc::new(Preamble::new(
+                SystemPrompt {
+                    version: "test-1".into(),
+                    text: "You answer questions about devices.".into(),
+                },
+                String::new(),
+                vec![tool(json!({"type": "object"}))],
+                effort,
+                CacheTtl::FiveMinutes,
+            ))
+        };
+        let question = |text: &str| model.user_text(text).expect("a question");
+
+        let owner = user(&issuer);
+        let colleague = user(&issuer);
+        let mut conversation = Conversation::new(principal(&owner), preamble(Effort::High));
+        conversation.append(EntryKind::Question, question("Mine?"));
+        let mut tx = db.begin(&owner).await.expect("a tenant transaction");
+        assert_eq!(create(&mut tx, &conversation).await.expect("stored"), 1);
+        tx.commit().await.expect("commit");
+
+        let entries_then = |extra: &str| {
+            let mut entries: Vec<_> = conversation
+                .entries()
+                .map(|(kind, message)| (kind, message.clone()))
+                .collect();
+            entries.push((EntryKind::Question, question(extra)));
+            entries
+        };
+        // The same ID and history with another user of the tenant as owner, or with another
+        // preamble, appended from the stored end: refused before anything is written.
+        let forgeries = [
+            (
+                "another owner",
+                Conversation::restore(
+                    conversation.id(),
+                    principal(&colleague),
+                    preamble(Effort::High),
+                    entries_then("Injected by a colleague"),
+                ),
+                &colleague,
+            ),
+            (
+                "another preamble",
+                Conversation::restore(
+                    conversation.id(),
+                    principal(&owner),
+                    preamble(Effort::Low),
+                    entries_then("Under another preamble"),
+                ),
+                &owner,
+            ),
+        ];
+        for (what, forged, acting) in &forgeries {
+            for stored in [0, 1] {
+                let mut tx = db.begin(acting).await.expect("a tenant transaction");
+                assert!(
+                    matches!(
+                        append(&mut tx, forged, stored).await,
+                        Err(StoreError::Conflict(_))
+                    ),
+                    "append of {what} from {stored}"
+                );
+                tx.rollback().await.expect("roll back");
+            }
+            let mut tx = db.begin(acting).await.expect("a tenant transaction");
+            assert!(
+                matches!(create(&mut tx, forged).await, Err(StoreError::Conflict(_))),
+                "create of {what}"
+            );
+            tx.rollback().await.expect("roll back");
+        }
+
+        // A conversation that is not stored is refused even with nothing to write.
+        let unknown = Conversation::new(principal(&owner), preamble(Effort::High));
+        let mut tx = db.begin(&owner).await.expect("a tenant transaction");
+        assert!(matches!(
+            append(&mut tx, &unknown, 0).await,
+            Err(StoreError::NotStored)
+        ));
+        tx.rollback().await.expect("roll back");
+
+        // The owner's history is as it was.
+        let mut tx = db.begin(&owner).await.expect("a tenant transaction");
+        let loaded = load(&mut tx, principal(&owner), conversation.id())
+            .await
+            .expect("load")
+            .expect("stored");
+        tx.commit().await.expect("commit");
+        assert_eq!(loaded.len(), 1);
+        assert_eq!(
+            loaded.messages()[0].json(),
+            conversation.messages()[0].json()
+        );
     }
 
     #[test]

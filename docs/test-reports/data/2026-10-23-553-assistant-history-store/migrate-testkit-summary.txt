@@ -1,0 +1,84 @@
+# CI=1 cargo test --locked -p assistant -p migrate -p testkit --no-fail-fast -- --nocapture
+# The migrate and testkit part: each test binary and its result.
+
+     Running unittests src/lib.rs (target/debug/deps/migrate-770ba20784fbaaab)
+running 55 tests
+test result: ok. 55 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.19s
+     Running tests/ca_keys.rs (target/debug/deps/ca_keys-0cf1b615746ecad4)
+running 7 tests
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.08s
+     Running tests/clickhouse.rs (target/debug/deps/clickhouse-a53f085033118499)
+running 1 test
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 23.43s
+     Running tests/clickhouse_admin.rs (target/debug/deps/clickhouse_admin-fac1a1d6ed2e6226)
+running 6 tests
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 21.22s
+     Running tests/clickhouse_telemetry_query.rs (target/debug/deps/clickhouse_telemetry_query-d2c95a5ac765fce8)
+running 1 test
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 16.60s
+     Running tests/concurrent_runs.rs (target/debug/deps/concurrent_runs-f5b57e03c3a1e7a3)
+running 1 test
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 13.59s
+     Running tests/file_escapes.rs (target/debug/deps/file_escapes-03a1ef66d777312e)
+running 1 test
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 8.02s
+     Running tests/fresh_database.rs (target/debug/deps/fresh_database-fb493ac3f41f328d)
+running 1 test
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 10.48s
+     Running tests/mqtt_accounts.rs (target/debug/deps/mqtt_accounts-1b6b06c1a55f71e2)
+running 3 tests
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.53s
+     Running tests/mqtt_broker.rs (target/debug/deps/mqtt_broker-71783dd0f6546dd0)
+running 4 tests
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 13.67s
+     Running tests/mqtt_trust.rs (target/debug/deps/mqtt_trust-c2496107d1756a7c)
+running 4 tests
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 8.36s
+     Running tests/one_instance_per_cluster.rs (target/debug/deps/one_instance_per_cluster-392ed3ad78391ec5)
+running 1 test
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.80s
+     Running tests/outbox_and_tenant_roles.rs (target/debug/deps/outbox_and_tenant_roles-f706c37e055a5180)
+running 1 test
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 15.80s
+     Running tests/passwords.rs (target/debug/deps/passwords-d31f7fb4e9c0bd59)
+running 11 tests
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.03s
+     Running tests/registry.rs (target/debug/deps/registry-ea814a6e7e25250a)
+running 6 tests
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/service_records.rs (target/debug/deps/service_records-68d1ac253bdd8917)
+running 1 test
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 9.50s
+     Running tests/signing_keys.rs (target/debug/deps/signing_keys-a0136d6c9b686d41)
+running 15 tests
+test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.25s
+     Running tests/system_databases.rs (target/debug/deps/system_databases-cf182b3b259457dd)
+running 2 tests
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.80s
+     Running tests/wait_for_job.rs (target/debug/deps/wait_for_job-1483b0d1f5e3720f)
+running 4 tests
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.01s
+     Running unittests src/lib.rs (target/debug/deps/testkit-67852aa1a21d5872)
+running 32 tests
+test result: ok. 32 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.29s
+     Running tests/container_volumes.rs (target/debug/deps/container_volumes-eef67d1b765713d7)
+running 2 tests
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 10.96s
+     Running tests/modbus_endpoint.rs (target/debug/deps/modbus_endpoint-39e918329f3eb95b)
+running 20 tests
+test result: ok. 20 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.30s
+     Running tests/modbus_example.rs (target/debug/deps/modbus_example-56ab3745f168c7ba)
+running 1 test
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s
+     Running tests/postgres_isolation.rs (target/debug/deps/postgres_isolation-c6b0190acdd6dffb)
+running 6 tests
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 24.24s
+     Running tests/postgres_start.rs (target/debug/deps/postgres_start-bd3d2a74da8d941b)
+running 2 tests
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 12.86s
+running 0 tests
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+running 0 tests
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+running 1 test
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
