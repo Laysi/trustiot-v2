@@ -168,8 +168,10 @@ describe("PEM, certificates and key ids", () => {
     expect(pemBlocks(request, "CERTIFICATE REQUEST")).toHaveLength(1);
     expect(request).not.toContain("PRIVATE KEY");
     expect(await requestKeyId(runner(), request)).toMatch(/^[0-9a-f]{64}$/);
+    // RFC 2253 output is the same across OpenSSL versions; the default -text form is not (3.0 prints "CN = ...").
+    const subject = await runner()(["openssl", "req", "-noout", "-subject", "-nameopt", "RFC2253"], { stdin: request });
+    expect(subject.stdout.trim().replace(/^subject=\s*/, "")).toBe(`CN=workstation:${WORKSTATION}`);
     const text = await runner()(["openssl", "req", "-noout", "-text"], { stdin: request });
-    expect(text.stdout).toContain(`CN=workstation:${WORKSTATION}`);
     expect(text.stdout).toContain("prime256v1");
   });
 
