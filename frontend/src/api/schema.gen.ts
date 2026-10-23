@@ -79,6 +79,57 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/assets/v1/platform/gateways": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The device pool with each gateway's current binding. Platform administrators only. */
+        get: operations["listPoolGateways"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/assets/v1/platform/gateways/{hardware_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** One gateway of the device pool with its current binding. Platform administrators only. */
+        get: operations["getPoolGateway"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/assets/v1/platform/gateways/{hardware_id}/binding": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Binds a gateway of the device pool to a tenant; idempotent. Platform administrators only. */
+        put: operations["bindGateway"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/assets/v1/tenant": {
         parameters: {
             query?: never;
@@ -344,6 +395,11 @@ export interface components {
             /** @description The tenant's ID. */
             tenant_id: components["schemas"]["TenantId"];
         };
+        /** @description The body of a binding. */
+        BindGateway: {
+            /** @description The tenant to bind the gateway to. */
+            tenant_id: components["schemas"]["TenantId"];
+        };
         /** @description The answer to `send_code`, the same whether or not a user has the address. */
         CodeSent: {
             /**
@@ -569,6 +625,32 @@ export interface components {
             /** @description The message the client shows next to the field. */
             message_key: components["schemas"]["MessageKey"];
         };
+        /** @description A gateway's binding to a tenant. */
+        GatewayBinding: {
+            /** @description The binding: a new one every time the gateway is bound. */
+            binding_id: components["schemas"]["GatewayBindingId"];
+            /**
+             * Format: date-time
+             * @description When it was bound, by the database clock.
+             */
+            bound_at: string;
+            /**
+             * @description The gateway's hardware ID.
+             * @example tg-0001
+             */
+            hardware_id: string;
+            /** @description The tenant the gateway is bound to. */
+            tenant_id: components["schemas"]["TenantId"];
+        };
+        /**
+         * Format: uuid
+         * @description One binding of a gateway to a tenant (rebuild checklist D3, Laysi/trustiot-v2#101), made
+         *     by the assets service. A gateway gets a new one every time it is bound, so a binding and
+         *     its events always belong to one tenant.
+         *
+         *     Serialized as a lowercase hyphenated UUID string.
+         */
+        GatewayBindingId: string;
         /** @description A gateway's factory registration, as the service records it. */
         GatewayRegistration: {
             /** @description The issuing CA that signed the initial certificate: the SHA-256 of its public key. */
@@ -758,6 +840,34 @@ export interface components {
          * @example error.not_found
          */
         MessageKey: string;
+        /** @description A gateway of the device pool. */
+        PoolGateway: {
+            binding?: components["schemas"]["GatewayBinding"] | null;
+            /**
+             * @description The hardware ID: the common name of its certificates and its MQTT identity.
+             * @example tg-0001
+             */
+            hardware_id: string;
+            /**
+             * Format: date-time
+             * @description When the assets service put it in the pool.
+             */
+            pooled_at: string;
+            /**
+             * Format: date-time
+             * @description When the certs service registered it at the factory.
+             */
+            registered_at: string;
+            /** @description The production workstation that registered it. */
+            workstation: string;
+        };
+        /** @description A page of the device pool, by hardware ID (byte order). */
+        PoolGatewayList: {
+            /** @description The gateways. */
+            gateways: components["schemas"]["PoolGateway"][];
+            /** @description The `after` of the next page; `null` on the last one. */
+            next_after?: string | null;
+        };
         /** @description One reading's value, as its type stored it. */
         Reading: {
             /** @enum {string} */
@@ -1457,6 +1567,227 @@ export interface operations {
                 };
             };
             /** @description The database failed (`unavailable`). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    listPoolGateways: {
+        parameters: {
+            query?: {
+                /** @description `unbound` for the gateways bound to no tenant (the ones to bind), `bound` for the bound ones; absent for every gateway. */
+                state?: string;
+                /** @description The previous page's `next_after`, for the next page. */
+                after?: string;
+                /** @description Gateways per page, 1 to 500; default 100. */
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description A page of the pool, by hardware ID. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PoolGatewayList"];
+                };
+            };
+            /** @description An unknown or malformed parameter (`invalid_request`). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No valid session (`unauthenticated`). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Not a platform administrator, or not the administrator's own request (`permission_denied`). */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The database failed (`unavailable`). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    getPoolGateway: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The gateway's hardware ID. */
+                hardware_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The gateway. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PoolGateway"];
+                };
+            };
+            /** @description No valid session (`unauthenticated`). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Not a platform administrator, or not the administrator's own request (`permission_denied`). */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The pool has no such gateway (`not_found`). */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The database failed (`unavailable`). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    bindGateway: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The gateway's hardware ID. */
+                hardware_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BindGateway"];
+            };
+        };
+        responses: {
+            /** @description The gateway was bound to this tenant already: the existing binding. Nothing was written, so retrying after a lost response is safe. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GatewayBinding"];
+                };
+            };
+            /** @description The gateway is now bound to the tenant; `assets.gateway_bound` was written in the same transaction. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GatewayBinding"];
+                };
+            };
+            /** @description The `Content-Type` is not `application/json`, the body is larger than 4 KiB (`gateway_binding.body_too_large`), or it is not a JSON object (`gateway_binding.body_invalid`) (`invalid_request`). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No valid session (`unauthenticated`). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Not a platform administrator, or not the administrator's own request (`permission_denied`). */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The device pool has no such gateway (`not_found`). */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Another tenant holds the gateway (`conflict`, `gateway_binding.bound_to_another_tenant`). Nothing was written. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description An unknown field, `tenant_id` missing or not a UUID, or a tenant the assets service does not know (`gateway_binding.tenant_unknown`) (`validation_failed`). Nothing was written. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The database failed (`unavailable`). Nothing was written; retrying is safe. */
             503: {
                 headers: {
                     [name: string]: unknown;

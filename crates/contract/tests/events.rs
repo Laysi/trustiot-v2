@@ -13,15 +13,17 @@ use std::path::PathBuf;
 
 use chrono::{DateTime, Timelike, Utc};
 use contract::event::{Actor, parse_payload};
-use contract::events::assets::{DeviceModelCreated, DeviceModelDeleted, DeviceModelUpdated};
+use contract::events::assets::{
+    DeviceModelCreated, DeviceModelDeleted, DeviceModelUpdated, GatewayBound,
+};
 use contract::events::certs::GatewayRegistered;
 use contract::events::identity::{
     MEMBERSHIP_AGGREGATE, MemberRoleChanged, PlatformAdminGrant, PlatformAdminGranted,
     TenantCreated, membership_aggregate_id,
 };
 use contract::{
-    DecodeError, DeviceModelId, EncodeError, Event, EventEnvelope, ServiceName, TenantId,
-    TenantRole, UserId,
+    DecodeError, DeviceModelId, EncodeError, Event, EventEnvelope, GatewayBindingId, ServiceName,
+    TenantId, TenantRole, UserId,
 };
 use protocol::config::{ByteOrder, DataType};
 use protocol::{GatewayId, ModelName};
@@ -383,6 +385,48 @@ fn device_model_events_decode_every_version() {
     assert_eq!(
         envelope.decode::<DeviceModelCreated>().expect("round trip"),
         *created
+    );
+}
+
+/// `assets.gateway_bound` (Laysi/trustiot-v2#101): a tenant event of the tenant the gateway is
+/// bound to, written by the assets service with the platform administrator as the actor; the
+/// payload has the binding and the hardware ID, nothing secret.
+#[test]
+fn gateway_bound_decodes_every_version() {
+    let decoded = decode_fixtures::<GatewayBound>();
+    let names: Vec<&str> = decoded.iter().map(|(name, _)| name.as_str()).collect();
+    assert_eq!(names, ["v1"]);
+    let binding: GatewayBindingId = "01928f6e-7a3c-7d4e-8f00-000000000b01"
+        .parse()
+        .expect("binding id");
+    let bound = GatewayBound {
+        binding_id: binding,
+        hardware_id: GatewayId::new("tg-0001").expect("hardware id"),
+    };
+    assert_eq!(decoded[0].1, bound);
+
+    let path = common::fixture_path("events/assets.gateway_bound/v1.json");
+    let fixture: EventEnvelope =
+        serde_json::from_str(&fs::read_to_string(path).expect("read fixture")).expect("envelope");
+    let bound_to: TenantId = "01928f6e-7a3c-7d4e-8f00-00000000000b"
+        .parse()
+        .expect("tenant id");
+    assert_eq!(fixture.tenant_id, Some(bound_to));
+    let user: UserId = "01928f6e-7a3c-7d4e-8f00-0000000000ad"
+        .parse()
+        .expect("user id");
+    assert_eq!(fixture.actor, Some(Actor::User { user_id: user }));
+
+    let envelope = EventEnvelope::new(&bound, Some(tenant())).expect("encode");
+    assert_eq!(envelope.producer, ServiceName::Assets);
+    assert_eq!(envelope.event_type, "assets.gateway_bound");
+    assert_eq!(envelope.tenant_id, Some(tenant()));
+    assert_eq!(
+        envelope.payload,
+        json!({
+            "binding_id": "01928f6e-7a3c-7d4e-8f00-000000000b01",
+            "hardware_id": "tg-0001",
+        })
     );
 }
 

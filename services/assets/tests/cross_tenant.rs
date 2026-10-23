@@ -1,7 +1,7 @@
 //! Cross-tenant negative tests (decision 29, crates/testkit; Laysi/trustiot-v2#65 acceptance 3,
-//! Laysi/trustiot-v2#99 acceptance 3): the assets service's role cannot read or change another
-//! tenant's rows (tenants, device models and their points, events and their aggregates'
-//! sequences), its API never shows one tenant another tenant's data or writes into another
+//! Laysi/trustiot-v2#99 acceptance 3, Laysi/trustiot-v2#101 acceptance 4): the assets service's
+//! role cannot read or change another tenant's rows (tenants, device models and their points,
+//! gateway bindings, events and their aggregates' sequences), its API never shows one tenant another tenant's data or writes into another
 //! tenant, and every relation the role can reach and every API operation is declared. The schema
 //! is the product's, applied by the migration Job (`testkit::product`), and the service is the
 //! real binary.
@@ -59,6 +59,25 @@ const SEED_AGGREGATE: &str = "INSERT INTO assets.outbox_aggregate
     (aggregate_type, aggregate_id, tenant_id, last_seq, last_tx)
 SELECT 'testkit', $3, $1::uuid, 1, 1 WHERE $2::uuid IS NOT NULL";
 
+/// One binding of a new gateway: `$2` is the binding id, the canary the gateway's hardware ID
+/// (`canary-a-<32 hex>` fits the hardware ID rule). The gateway enters the pool and the tenant's
+/// row is added in the same statement (the foreign keys).
+const SEED_BINDING: &str = "WITH tenant AS (
+    INSERT INTO assets.tenants (tenant_id) VALUES ($1::uuid) ON CONFLICT (tenant_id) DO NOTHING
+), gateway AS (
+    INSERT INTO assets.gateway_pool (hardware_id, registered_at, workstation)
+    VALUES ($3, now(), 'testkit')
+    RETURNING hardware_id
+)
+INSERT INTO assets.gateway_bindings (tenant_id, binding_id, hardware_id)
+SELECT $1::uuid, $2::uuid, hardware_id FROM gateway";
+
+/// Why the platform routes of the device pool are not probed here.
+const PLATFORM_ROUTE: &str = "platform administrators only (Laysi/trustiot-v2#101): every tenant \
+     user, the tenant admins this suite probes with included, gets 403 before anything is read, \
+     and the platform role reads across tenants by design; tests/gateway_pool.rs checks the \
+     refusals, and that a binding is written into the tenant of its body only";
+
 const CONSUMER_TABLE: &str = "the outbox consumer's bookkeeping (crates/outbox): subscription \
      positions and processed or failed event IDs, no tenant data; the consumer reads and writes \
      it in transactions without a tenant";
@@ -86,11 +105,21 @@ async fn tenants_are_isolated() {
     ))
     .table(pg_table!("assets.device_models", seed = SEED_MODEL))
     .table(pg_table!("assets.device_model_points", seed = SEED_POINT))
+    // The service role reads its tenant's bindings and inserts new ones; it has no UPDATE or
+    // DELETE, and the unique index across tenants tells it only that a gateway is taken.
+    .table(pg_table!("assets.gateway_bindings", seed = SEED_BINDING))
     // The service role only inserts events (no SELECT or UPDATE): the probes check that it
     // cannot write one for another tenant.
     .table(pg_table!("assets.outbox_event", seed = SEED_EVENT))
     // The service role reads and advances the sequence of its tenant's aggregates only.
     .table(pg_table!("assets.outbox_aggregate", seed = SEED_AGGREGATE))
+    .exempt(
+        "assets.gateway_pool",
+        "the device pool (Laysi/trustiot-v2#101): gateways registered at the factory, which \
+         belong to no tenant; no tenant_id. The service role may only insert (the consumer of \
+         certs.gateway_registered) and cannot read it; which tenant holds a gateway is in \
+         assets.gateway_bindings",
+    )
     .exempt("assets.outbox_subscription", CONSUMER_TABLE)
     .exempt("assets.outbox_inbox", CONSUMER_TABLE)
     .exempt("assets.outbox_dead_letter", CONSUMER_TABLE)
@@ -144,6 +173,15 @@ async fn tenants_are_isolated() {
                 json!({"format": "trustiot.device_model", "format_version": 1,
                          "name": "i{id}", "points": points}),
             ),
+        )
+        .exempt_endpoint("GET /api/assets/v1/platform/gateways", PLATFORM_ROUTE)
+        .exempt_endpoint(
+            "GET /api/assets/v1/platform/gateways/{hardware_id}",
+            PLATFORM_ROUTE,
+        )
+        .exempt_endpoint(
+            "PUT /api/assets/v1/platform/gateways/{hardware_id}/binding",
+            PLATFORM_ROUTE,
         )
         .run(Some(&assets.base_url))
         .await

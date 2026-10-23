@@ -162,7 +162,7 @@ describe("the local login roles against the product", () => {
     expect(registry.find((service) => service.name === "identity")).toEqual({ name: "identity", platformRole: true, consumes: ["identity", "assets", "certs"] });
     // "assets" reads its own outbox only until the gateway configuration's consumer registers
     // (Laysi/trustiot-v2#93), which drops it from this list.
-    expect(registry.find((service) => service.name === "assets")).toEqual({ name: "assets", platformRole: true, consumes: ["identity", "assets"] });
+    expect(registry.find((service) => service.name === "assets")).toEqual({ name: "assets", platformRole: true, consumes: ["identity", "certs", "assets"] });
     expect(chartPlatformLogins(chartSource)).toEqual(["assets", "certs", "identity", "telemetry-query"]);
   });
 
