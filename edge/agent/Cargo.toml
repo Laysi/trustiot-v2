@@ -7,15 +7,27 @@ rust-version.workspace = true
 publish.workspace = true
 repository.workspace = true
 
+[features]
+# Test code only: `TcpConnection::exempt_for_tests` and `Endpoints::exempt_for_tests`, which let a
+# test reach the fake Modbus endpoint on 127.0.0.1 although the address guard refuses loopback
+# (src/modbus/address.rs, Laysi/trustiot-v2#653). Only the dev-dependency on this crate below
+# enables it, so a build of the agent never has it; `cargo test -p repo-check` fails when a
+# normal dependency, another feature or a default enables it.
+test-exempt-addresses = []
+
 # The agent runs on the gateway: every dependency must build for aarch64-unknown-linux-gnu
 # without a C toolchain (ci.yml builds every edge/ member for that target).
 [dependencies]
+# getifaddrs: the gateway's own interface addresses, which the address guard refuses.
+libc.workspace = true
 protocol = { path = "../../crates/protocol" }
 # TCP keepalive's idle time, probe interval and probe count (`all` has the last two).
 socket2 = { workspace = true, features = ["all"] }
 tokio = { workspace = true, features = ["io-util", "net", "sync", "time"] }
 
 [dev-dependencies]
+# This crate's own tests, with the feature that lets them reach the fake endpoint on loopback.
+agent = { path = ".", features = ["test-exempt-addresses"] }
 # The fake Modbus endpoint with fault injection (`testkit::modbus`) and the paused clock.
 testkit = { path = "../../crates/testkit" }
 tokio = { workspace = true, features = ["macros", "rt", "test-util"] }

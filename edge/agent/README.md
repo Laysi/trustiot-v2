@@ -9,6 +9,7 @@
 | `src/modbus/pdu.rs` | 功能碼 1–4 的請求與回應 PDU | Laysi/trustiot-v2#87 |
 | `src/modbus/decode.rs` | 型別、位元組順序、scale 與 offset | Laysi/trustiot-v2#87 |
 | `src/modbus/tcp.rs` | 兩種傳輸方式共用的 `Connection`（`TcpConnection`）：連線管理、送出、接收到找到回應或逾時 | Laysi/trustiot-v2#87、Laysi/trustiot-v2#88 |
+| `src/modbus/address.rs` | 連線位址的限制：主機只解析一次，只連檢查過的位址（見「連線位址的限制」） | Laysi/trustiot-v2#653 |
 | `src/modbus/mbap.rs` | Modbus TCP 的框架（MBAP）：交易 ID、哪個回應算數 | Laysi/trustiot-v2#87、Laysi/trustiot-v2#88 |
 | `src/modbus/rtu.rs` | RTU over TCP 的框架：CRC、由功能碼與 byte 數切框、重新同步、哪個回應算數 | Laysi/trustiot-v2#88 |
 | `src/modbus/endpoint.rs` | `Endpoints`、`SharedConnection`：同一個端點的設備共用一條連線、逐個請求輪流 | Laysi/trustiot-v2#88 |
@@ -30,6 +31,32 @@
 ### 只讀
 
 請求只能從 `protocol::config::FunctionCode` 建立，它只有 1–4，所以程式送不出功能碼 5 以上（閘道器對現場設備唯讀）。整合測試在每次輪詢後檢查假端點的請求紀錄，確認沒有 1–4 以外的功能碼。
+
+### 連線位址的限制
+
+設備的主機由租戶的 editor 在雲端設定。雲端的設備 API（Laysi/trustiot-v2#100）只擋字面上指向閘道器本身的寫法，那是輸入檢查，不是安全邊界：雲端無法知道一個 DNS 名稱在現場解析成什麼，也擋不住檢查之後才改變的解析結果（DNS rebinding）。若 agent 照設定連到閘道器本機，輪詢就成了探測閘道器本機服務的管道，回應還會變成遙測回到雲端。所以真正的把關在閘道器連線的那一刻（`src/modbus/address.rs`，Laysi/trustiot-v2#653）：
+
+- 每次開連線時把主機解析一次（`tokio::net::lookup_host`；IP 位址的寫法不查 DNS，但走同一條檢查），逐一檢查解析出的位址，再直接連到檢查過的 `SocketAddr`。名稱不會再交給連線函式，所以不會有第二次解析。重連時重新解析、重新檢查。
+- 比對前先把 IPv4-mapped 的 IPv6 位址轉回 IPv4（`::ffff:127.0.0.1` 就是 `127.0.0.1`），連線也連到轉回後的位址。
+- 拒絕的位址：
+  - loopback：127.0.0.0/8、`::1`
+  - 未指定：0.0.0.0/8（`0.0.0.0` 與 RFC 1122 的「本網路」，連過去都會到閘道器本身）、`::`
+  - 閘道器自己網卡上的位址：每次連線時以 `getifaddrs` 讀目前的介面位址（不論介面是否啟用），因為 DHCP 可能改變它們
+  - 多播：224.0.0.0/4、`ff00::/8`
+  - 廣播：`255.255.255.255`，以及閘道器每個 IPv4 網段的廣播位址（由位址與 netmask 算出；/31 與 /32 沒有廣播位址，/31 的另一個位址是對端）
+  - 雲端 metadata：`169.254.169.254`、`fd00:ec2::254`
+  - IPv4-compatible 的 `::/96`（`::a.b.c.d`，RFC 4291 2.5.5.1 已廢止；`::` 與 `::1` 照上面的規則）：整段拒絕
+  - 帶著 IPv4 位址、轉譯器或中繼可能轉送過去的 IPv6 寫法：內嵌的 IPv4 位址被上面任何一條 IPv4 規則（loopback、0.0.0.0/8、多播、廣播、metadata、閘道器自己的 IPv4 位址）拒絕時就拒絕，說明裡寫的是原本的 IPv6 位址。
+    - NAT64 `64:ff9b::/96`：最後 32 位元
+    - 本地用 NAT64 `64:ff9b:1::/48`（RFC 8215）：最後 32 位元，也就是業者在其中通常使用的 /96 配置；其中其他前綴長度的配置不解讀
+    - 6to4 `2002::/16`：第 16–47 位元
+- 其他位址都允許：169.254.0.0/16 的其他位址（沒有 DHCP 的 RS485 轉換器常用 APIPA 位址）、私有位址（10/8、172.16/12、192.168/16、IPv6 ULA），以及閘道器自己網段裡的其他位址，現場設備就在這些網段。IPv6 link-local（`fe80::/10`）不在拒絕之列，但這種設備實際上連不上：Linux 不接受沒有 scope ID 的 link-local 連線，而 `Host` 不收 zone ID，DNS 回答的 scope 也是 0。
+- 名稱解析成多個位址時，被拒絕的跳過，依解析的順序連允許的位址，第一個接受的就用；都連不上時回報最後一個錯誤。
+- 所有位址都被拒絕時，不開 socket、不送任何封包，讀取以 `ReadError::Connect`（`connect`）失敗，說明是「refused: every address the host resolved to points at the gateway itself or is not allowed (<解析出的位址>)」，最多列 8 個位址，不帶解析結果以外的資料。讀不到介面位址時也不連線（fail closed），一樣是 `connect` 失敗。這和連不上一樣算連線失敗：其餘請求不送，下一次輪詢在退避之後重試，所以名稱之後解析成允許的位址時會自己恢復。
+
+正式的路徑（`Endpoints::new`、`TcpConnection::new`）一律檢查，沒有任何設定能關掉它。測試的假 Modbus 端點（`crates/testkit` 的 `FakeModbus`）聽在 127.0.0.1，所以測試要用 `exempt_for_tests([127.0.0.1])` 放行那個位址。這個方法只存在於本 crate 的單元測試，以及 `test-exempt-addresses` feature 打開時；只有 `Cargo.toml` 裡本 crate 對自己的 dev-dependency 打開它，所以只有測試建置才有，agent 的建置（`cargo build -p agent`）沒有。設定檔、環境變數或經 MQTT 下發的設定都碰不到它。`cargo test -p repo-check` 會在任何正式依賴、其他 feature 或 `default` 打開這個 feature 時失敗。在閘道器上以 systemd 執行 agent 的端到端測試（Laysi/trustiot-v2#102）用的是正式路徑，所以假 Modbus 要放在閘道器以外的位址（另一個網路命名空間或另一台主機），不能放在閘道器本機。
+
+這個檢查擋不到的：經路由器或 NAT 轉回閘道器的位址（含 hairpin NAT 與 port forward）、`64:ff9b:1::/48` 裡 /96 以外的 NAT64 配置、以 `ip route add local` 加入本機路由表但不在任何介面上的網段。這些由下一層的閘道器防火牆處理（Laysi/trustiot-v2#96），不在這裡處理。
 
 ### 合併讀取
 
@@ -89,6 +116,7 @@ RTU 沒有交易 ID，也沒有長度欄位；序列線上以 3.5 個字元的�
 | 狀況 | `ReadError` | 回報的種類（`FailureKind`） | 輪詢 |
 | --- | --- | --- | --- |
 | 連不上（含連線逾時） | `Connect` | `connect` | 其餘請求不送 |
+| 主機只解析成被拒絕的位址（見「連線位址的限制」），或讀不到閘道器的介面位址 | `Connect` | `connect` | 其餘請求不送，沒有開 socket |
 | 請求途中連線被關閉或 reset、送出失敗（重送一次之後仍然如此，見下方） | `ConnectionLost` | `connect` | 其餘請求不送，下一次輪詢重連 |
 | 串流不是 Modbus TCP（例如講 RTU over TCP 的轉換器被設成 Modbus TCP；只有 Modbus TCP 會這樣，RTU 改為重新同步） | `Protocol` | `invalid_value` | 其餘請求不送，下一次輪詢重連 |
 | 等不到符合的回應 | `Timeout` | `timeout` | 繼續下一個請求，連線保留 |
@@ -186,7 +214,8 @@ polling::run(&reader, polling::poll_period(&device), &mut connection, &clock, &s
 
 ```sh
 cargo test -p agent                                     # 全部
-cargo test -p agent --lib                               # 單元測試：規劃、PDU、解碼、輪詢、MBAP 與 RTU 切框、共用連線的輪流、keepalive、一小時的節拍漂移、設定範圍
+cargo test -p agent --lib                               # 單元測試：規劃、PDU、解碼、輪詢、MBAP 與 RTU 切框、共用連線的輪流、keepalive、一小時的節拍漂移、設定範圍、連線位址的限制
+cargo test -p agent --test modbus_address_guard         # 正式路徑（Endpoints::new、TcpConnection::new）拒絕閘道器本機與 metadata 位址，假端點收不到連線
 cargo test -p agent --test modbus_fake_endpoint         # 對 testkit 假端點：型別、合併讀取、每種故障
 cargo test -p agent --test modbus_tcp_framing           # 以 raw socket 驗證哪個回應算數、框架同步
 cargo test -p agent --test modbus_rtu_converter         # 對 testkit 假 RS485 轉換器：共用連線、輪流、廣播、站號與形狀的過濾
@@ -194,4 +223,4 @@ cargo test -p agent --test modbus_rtu_framing           # 以 raw socket 驗證 
 cargo test -p agent --test polling_recovery             # 對 testkit 假端點跑輪詢迴圈：watchdog 救回不回答與半開的連線、只有讀到值才重置退避
 ```
 
-整合測試都用 `#[tokio::test(start_paused = true)]` 加 `testkit::clock::manual()`：逾時只在測試推進時鐘時觸發，機器再忙也不會誤判逾時。假端點的用法見 [`crates/testkit/README.md`](../../crates/testkit/README.md)「假 Modbus 端點」。
+整合測試都用 `#[tokio::test(start_paused = true)]` 加 `testkit::clock::manual()`：逾時只在測試推進時鐘時觸發，機器再忙也不會誤判逾時。位址限制的測試例外：被拒絕的連線不等任何計時器，它們用真的時鐘與 60 秒的連線逾時，正常情況下碰不到。連到假端點的測試都以 `exempt_for_tests` 放行 127.0.0.1（見「連線位址的限制」）。位址限制的單元測試以替身解析器與撥號紀錄驗證只查一次、只撥檢查過的位址；替身只真的撥 loopback，所以測試不會對執行機器所在的網路送封包。假端點的用法見 [`crates/testkit/README.md`](../../crates/testkit/README.md)「假 Modbus 端點」。
