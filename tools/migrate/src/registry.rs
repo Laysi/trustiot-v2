@@ -182,8 +182,9 @@ pub const PRODUCT: Registry = Registry {
         // `assets_platform` as well ("trustiot.migrate.platformLogins" in
         // deploy/chart/templates/_migrate.tpl), and certs' (Laysi/trustiot-v2#101): every
         // `certs.gateway_registered` puts the gateway in the device pool. Writes
-        // `assets.device_model_*` (Laysi/trustiot-v2#99) and `assets.gateway_bound`
-        // (Laysi/trustiot-v2#101) with its service role. A producer needs a reader for the outbox
+        // `assets.device_model_*` (Laysi/trustiot-v2#99), `assets.gateway_bound`
+        // (Laysi/trustiot-v2#101) and `assets.device_*` (Laysi/trustiot-v2#100) with its service
+        // role. A producer needs a reader for the outbox
         // policy, and the gateway configuration that will consume these events
         // (Laysi/trustiot-v2#93) does not exist yet, so assets reads its own events for now: no
         // subscription does. When the real consumer is listed here, drop "assets" and the Job

@@ -100,6 +100,12 @@ uuid_id!(
     DeviceModelId
 );
 uuid_id!(
+    /// A device of a tenant (rebuild checklist C2, Laysi/trustiot-v2#100): one Modbus endpoint
+    /// a gateway polls, made by the assets service. Unique across tenants; telemetry and the
+    /// gateway configuration name the device by it (as text, `protocol::DeviceId`).
+    DeviceId
+);
+uuid_id!(
     /// One binding of a gateway to a tenant (rebuild checklist D3, Laysi/trustiot-v2#101), made
     /// by the assets service. A gateway gets a new one every time it is bound, so a binding and
     /// its events always belong to one tenant.
