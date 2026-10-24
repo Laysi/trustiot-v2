@@ -187,7 +187,8 @@ serviceDefaults:
 # (qdrant-read, qdrant-write, object-storage, smtp, ai; the AI keys only for ai-gateway and the
 # Qdrant keys only for knowledge); see README.md. A service that uses Postgres (mesh.calls) also
 # has `database.maxConnections`: the size of its main pool, which the chart passes as
-# TRUSTIOT__DATABASE__MAX_CONNECTIONS. Its other pools are fixed by its code; the render fails when
+# TRUSTIOT__DATABASE__MAX_CONNECTIONS (AI_GATEWAY__DATABASE__MAX_CONNECTIONS for ai-gateway). Its
+# other pools are fixed by its code; the render fails when
 # every replica of every such service, plus one more of each during a rolling update, could open
 # more connections than postgres.bundled.parameters.max_connections allows (README.md,
 # 「叢集內的 Postgres」).
@@ -300,6 +301,11 @@ services:
     # 「關機」). The chart sets its shutdown.drain_timeout to drainSeconds - 10 s (300 s here);
     # 11 to 3605.
     drainSeconds: 310
+    # The settings pool (AI_GATEWAY__DATABASE__MAX_CONNECTIONS), 2 to 32: one short query per
+    # forwarded request. It is the gateway's only pool: 4 in all. templates/_service.tpl
+    # ("trustiot.service.env") passes it under the gateway's prefix, like every service's pool.
+    database:
+      maxConnections: 4
   alerts:
     enabled: false
   field-context:
@@ -341,6 +347,12 @@ mesh:
     # The certs service keeps the ledger of the certificates it signed and its CRLs in Postgres
     # (services/certs/README.md).
     certs:
+      - postgres
+    # The AI gateway keeps the platform administrator's changes to the model roles' models, the
+    # settings generation every forwarded request checks, and the log of every change in Postgres
+    # (services/ai-gateway/README.md, 「資料庫」). It refuses AI calls with 503 while Postgres
+    # cannot be read.
+    ai-gateway:
       - postgres
     # ClickHouse (decision 14): ingest writes telemetry, telemetry-query reads it with per-tenant
     # read-only accounts (docs/architecture/deployment.md). telemetry-query keeps which tenants
@@ -526,12 +538,12 @@ postgres:
       effective_cache_size: 384MB
       work_mem: 4MB
       maintenance_work_mem: 64MB
-      # Fits identity, assets, certs, telemetry-query and assistant at one replica each while all
-      # of them roll at once (140) plus the 18 reserved connections, with room for 2 more only;
-      # the render fails when the enabled services need more, so the next service that uses
-      # Postgres raises it. The memory estimate is in README.md
-      # (「叢集內的 Postgres」).
-      max_connections: 160
+      # Fits identity, assets, certs, telemetry-query, assistant and ai-gateway at one replica
+      # each while all of them roll at once (148) plus the 18 reserved connections (166), with 34
+      # to spare for the next service that uses Postgres; the render fails when the enabled
+      # services need more. Changing it restarts the bundled Postgres. The memory estimate is in
+      # README.md (「叢集內的 Postgres」).
+      max_connections: 200
     # The image is built for arm64 only (decision 5).
     nodeSelector:
       kubernetes.io/arch: arm64
