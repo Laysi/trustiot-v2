@@ -36,6 +36,10 @@ mod assistant_schema;
 #[path = "../../../services/ai-gateway/src/schema.rs"]
 mod ai_gateway_schema;
 
+/// The ingest service's Postgres files (compiled into the service as well).
+#[path = "../../../services/ingest/src/schema.rs"]
+mod ingest_schema;
+
 /// The outbox tables (crates/outbox) in a service's schema.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Outbox {
@@ -253,6 +257,20 @@ pub const PRODUCT: Registry = Registry {
                 consumes: &[],
             },
             migrations: ai_gateway_schema::SCHEMA.migrations,
+        },
+        // The gateway binding projection (Laysi/trustiot-v2#640): reads the assets service's
+        // events as its platform role, which also looks a gateway's tenant up across tenants
+        // (read only), so the chart binds a password to `ingest_platform` as well
+        // ("trustiot.migrate.platformLogins" in deploy/chart/templates/_migrate.tpl). Its
+        // ClickHouse DDL is `clickhouse` below.
+        Service {
+            name: ingest_schema::SCHEMA.service,
+            platform_role: true,
+            outbox: Outbox {
+                producer: ingest_schema::SCHEMA.outbox_producer,
+                consumes: &["assets"],
+            },
+            migrations: ingest_schema::SCHEMA.migrations,
         },
     ],
     clickhouse: crate::clickhouse_files::FILES,

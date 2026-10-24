@@ -1,25 +1,63 @@
 [package]
 name = "ingest"
-description = "TrustIoT v2 ingest service: telemetry from gateways into ClickHouse with end-to-end acknowledgement. Holds the ClickHouse schema (migrations/clickhouse)."
+description = "TrustIoT v2 ingest service: telemetry from gateways into ClickHouse with end-to-end acknowledgement, tenants from its own gateway binding projection. Holds the ClickHouse schema (migrations/clickhouse)."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 publish.workspace = true
 repository.workspace = true
 
-# The service itself arrives with Laysi/trustiot-v2#91. Until then the crate carries the ClickHouse
-# DDL in migrations/clickhouse, the raw data retention (src/retention.rs), the disk watermark alert
-# (alerts/), and the tests that run them against a real ClickHouse.
+# The service is built in steps under Laysi/trustiot-v2#91: this release (Laysi/trustiot-v2#640)
+# starts it with readiness and the gateway binding projection; the telemetry path is
+# Laysi/trustiot-v2#641. The crate also carries the ClickHouse DDL in migrations/clickhouse, the
+# raw data retention (src/retention.rs), the disk watermark alert (alerts/), and the tests that run
+# them against a real ClickHouse.
+
+[[bin]]
+name = "ingest"
+path = "src/main.rs"
+test = false
+doc = false
 
 [dependencies]
-# The gateway buffer's maximum age, which the raw data retention must exceed (src/retention.rs).
+axum.workspace = true
+contract = { path = "../../crates/contract" }
+# Consumes assets.gateway_bound (decision 4).
+outbox = { path = "../../crates/outbox" }
+# The gateway's hardware ID, and the gateway buffer's maximum age, which the raw data retention
+# must exceed (src/retention.rs).
 protocol = { path = "../../crates/protocol" }
+serde = { workspace = true, features = ["derive"] }
+service-kit = { path = "../../crates/service-kit" }
+# Same TLS stack as service-kit: every connection verifies the server (checklist M3).
+sqlx = { workspace = true, features = ["chrono", "postgres", "runtime-tokio", "tls-rustls-ring-webpki"] }
+thiserror.workspace = true
+tokio = { workspace = true, features = ["macros", "net", "rt-multi-thread", "time"] }
+tracing.workspace = true
+# ClickHouse over its HTTP interface: HTTP/1.1 over hyper with rustls and ring, and only the CA the
+# deployment names as trust anchor (no system or public roots). Not reqwest: see src/transport.rs.
+base64.workspace = true
+bytes.workspace = true
+http.workspace = true
+http-body-util.workspace = true
+hyper = { workspace = true, features = ["client", "http1"] }
+hyper-util = { workspace = true, features = ["tokio"] }
+percent-encoding.workspace = true
+rustls = { workspace = true, features = ["ring", "std", "tls12"] }
+rustls-pki-types = { workspace = true, features = ["std"] }
+tokio-rustls = { workspace = true, features = ["ring"] }
 
 [dev-dependencies]
+# Binds gateways through the assets service's own code, as the producer of the event.
+assets = { path = "../assets" }
+# Event times a step earlier or later than a binding's, for the ordering test.
+chrono.workspace = true
 # Talks to ClickHouse over its HTTP interface, plain HTTP to a local test container.
 reqwest.workspace = true
 serde_json.workspace = true
-tokio = { workspace = true, features = ["macros", "rt", "time"] }
+# The product's schema (the migration Job), test identity tokens, and the cross-tenant suite.
+testkit = { path = "../../crates/testkit" }
+tokio = { workspace = true, features = ["macros", "process", "rt", "rt-multi-thread", "time"] }
 uuid = { workspace = true, features = ["v4"] }
 
 [lints]
