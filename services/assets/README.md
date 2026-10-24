@@ -35,7 +35,7 @@
 
 錯誤（M1，依序檢查）：沒有有效的內部身分 token 401；不是平台管理員、或 token 帶 `act` 403（在讀任何資料之前）；路徑的硬體 ID 不合規則 404；列表參數未知或格式不對 400 `invalid_request`；綁定的 `Content-Type` 不是 `application/json` 400，body 超過 4 KiB 400 `gateway_binding.body_too_large`，不是 JSON 物件 400 `gateway_binding.body_invalid`；未知欄位 422 `gateway_binding.unknown_field`，`tenant_id` 缺漏或 `null` 422 `gateway_binding.field_required`，不是 UUID 422 `gateway_binding.tenant_id_invalid`；租戶不認得 422；不在設備池 404；別的租戶握有 409；資料庫出錯 503（什麼都沒寫，可以重試）。每個回應都帶 `cache-control: no-store`。每次綁定記一行 INFO `bound a gateway`，帶 `user_id`、`tenant_id`、`hardware_id`、`binding_id`、`created`；拒絕記 INFO，失敗記 ERROR，只帶錯誤種類；不記 token。
 
-**事件**：`assets.gateway_bound`（`contract::events::assets::GatewayBound`），payload 是 `binding_id` 與 `hardware_id`，租戶在信封上，actor 是做綁定的平台管理員（使用者 ID），沒有任何密鑰。aggregate 是 `gateway_binding`、ID 是綁定 ID：aggregate 屬於它第一個事件的租戶，閘道器之後可能換租戶，所以每次綁定一個新的 aggregate。閘道器設定（Laysi/trustiot-v2#93）與連線服務之後會消費它。
+**事件**：`assets.gateway_bound`（`contract::events::assets::GatewayBound`），payload 是 `binding_id` 與 `hardware_id`，租戶在信封上，actor 是做綁定的平台管理員（使用者 ID），沒有任何密鑰。aggregate 是 `gateway_binding`、ID 是綁定 ID：aggregate 屬於它第一個事件的租戶，閘道器之後可能換租戶，所以每次綁定一個新的 aggregate。certs（換發與 broker 權限，Laysi/trustiot-v2#632）、ingest（Laysi/trustiot-v2#640）與閘道器設定（gateway-ops，Laysi/trustiot-v2#93）之後各自消費它，維護自己的「硬體 ID → 租戶」對照表；閘道器的租戶一律是它目前的綁定（[架構決策](../../docs/architecture/decisions.md)的決策 12，2026-10-24）。
 
 **為 Laysi/trustiot-v2#115 留的設計**：綁定從不刪除也不改寫。解綁將設定 `unbound_at`（欄位已在，現在一律是 `NULL`），重新綁定則在目標租戶新增一列、新的 `binding_id`；`gateway_bindings_one_current` 只限 `unbound_at IS NULL` 的列，所以歷史不必遷移。
 
