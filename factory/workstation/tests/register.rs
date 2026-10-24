@@ -327,11 +327,7 @@ async fn a_lost_answer_is_sent_again_and_the_repeat_counts_as_success() {
         .iter()
         .map(|byte| format!("{byte:02x}"))
         .collect();
-    assert_eq!(
-        record.root_sha256,
-        Some(pinned),
-        "the pinned root is recorded"
-    );
+    assert_eq!(record.root_sha256, pinned, "the pinned root is recorded");
     let registration = record.registration.expect("the registration");
     assert_eq!(registration.hardware_id, "gw-lost-0001");
     assert!(

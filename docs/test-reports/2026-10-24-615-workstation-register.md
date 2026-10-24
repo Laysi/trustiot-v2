@@ -62,7 +62,7 @@ evidence: forwarded registrations [(201, true), (200, true), (200, false), (200,
 
 | 項目 | 修正 | 既有測試的更新 |
 | --- | --- | --- |
-| M1：根憑證指紋原本是選用，沒有它時能改寫回應的人可以換掉閘道器唯一的信任錨 | `--root-sha256` 必填（沒有替代方式），`Registrar::root_sha256` 不再是 `Option`；紀錄與 `started` 日誌記下釘住的 `root_sha256`。紀錄的格式升為版本 2（必有 `root_sha256`）；先前寫下的版本 1 紀錄照樣讀得了，下次登錄同一個硬體 ID 時改寫成版本 2 | 每個 `tests/register.rs` 的指令都帶替身根憑證的指紋（`a_root_certificate_*` 照舊給自己的）；`a_lost_answer_*` 檢查紀錄的 `root_sha256`；函式庫測試與 `services/certs/tests/workstation_tool.rs` 傳入已知的指紋；`journal` 的單元測試多讀一筆版本 1 的紀錄，並拒絕沒有 `root_sha256` 的版本 2 |
+| M1：根憑證指紋原本是選用，沒有它時能改寫回應的人可以換掉閘道器唯一的信任錨 | `--root-sha256` 必填（沒有替代方式），`Registrar::root_sha256` 不再是 `Option`；紀錄（必填欄位，不是 64 個小寫十六進位數字的紀錄一律拒絕讀取）與 `started` 日誌記下釘住的 `root_sha256`。紀錄格式在這個分支才出現、沒有發佈過，所以只有一種格式（版本 1），沒有舊紀錄的相容路徑 | 每個 `tests/register.rs` 的指令都帶替身根憑證的指紋（`a_root_certificate_*` 照舊給自己的）；`a_lost_answer_*` 檢查紀錄的 `root_sha256`；函式庫測試與 `services/certs/tests/workstation_tool.rs` 傳入已知的指紋；`journal` 的單元測試多拒絕一筆 `root_sha256` 不是小寫十六進位的紀錄 |
 | L1：403 `workstation_refused` 除了 `stale` 都叫操作員重新 `enroll` | 15 只留給 `revoked`、`expired`、`untrusted`、`not_workstation`；`missing`、`malformed`、`signature_invalid`、`replayed` 與不認得的原因改為結束碼 19，訊息指向改寫標頭的 proxy（或工具的 bug）、請操作員回報 | `each_refusal_*` 的表多一列 `signature_invalid` → 19，結束碼的數量改成 9 |
 | L2：一筆讀不了或過大的紀錄擋住所有登錄 | 記錄前拒絕欄位過大的回應（結束碼 18），`Journal::write` 拒絕超過 256 KiB 的紀錄；重複公鑰掃描讀不了某筆紀錄時，訊息寫出檔案路徑與處理方式 | 無 |
 | L3：寫日誌失敗會取代停止原因 | 停止結果保留原本的種類與結束碼，日誌錯誤附加在訊息後面 | 無 |

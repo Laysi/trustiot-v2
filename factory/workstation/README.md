@@ -25,7 +25,7 @@ cargo build --release --locked -p workstation
 | `workstation-key.pem` | 工作站目錄 | 0600，已存在就不覆寫 | 工作站的 ECDSA P-256 私鑰（PKCS #8 PEM），不離開這台工作站 |
 | `workstation.csr` | 工作站目錄 | 0644 | CSR（公開資料） |
 | `workstation.pem` | 工作站目錄 | 0644 | 工作站憑證（公開資料），通過檢查才寫入；寫入的是由檢查過的 DER 重新編碼的那一張，不是輸入的原文 |
-| `registrations/<硬體 ID>.json` | 工作站目錄 | 0600 | 一台閘道器的登錄紀錄：`pending`（送出前）或 `registered`（回應通過檢查後，含平台回的整筆登錄與憑證鏈），以及操作員釘住的根憑證 SHA-256（`root_sha256`，Laysi/trustiot-v2#617 安裝根憑證前再比對一次）；整檔原子替換。格式版本 2；指紋改為必填之前寫下的版本 1 紀錄沒有 `root_sha256`，照樣讀得了，下次對同一個硬體 ID 執行 `register` 時改寫成版本 2 |
+| `registrations/<硬體 ID>.json` | 工作站目錄 | 0600 | 一台閘道器的登錄紀錄：`pending`（送出前）或 `registered`（回應通過檢查後，含平台回的整筆登錄與憑證鏈），以及操作員釘住的根憑證 SHA-256（`root_sha256`，Laysi/trustiot-v2#617 安裝根憑證前再比對一次）；整檔原子替換 |
 | `registrations.jsonl` | 工作站目錄 | 0600 | 登錄的日誌，只附加：每次執行的開始、每次失敗的嘗試、成功、停止或放棄，各一行 JSON |
 | `session` | `$XDG_RUNTIME_DIR/trustiot-workstation/` | 0600 | 平台管理員的 session cookie 與它所屬的平台網址 |
 | `--headers-file` 指定的檔案 | 操作員自己放 | 0600 | Cloudflare Access 的 service token（見下方） |
