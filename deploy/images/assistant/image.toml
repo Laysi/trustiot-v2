@@ -1,0 +1,6 @@
+# The AI assistant (services/assistant, decision 31): the main agent loop, its tools that call
+# telemetry-query and assets as the asking user, and its conversations in Postgres. It reaches the
+# models only through the AI gateway, over plain HTTP inside the mesh, so it needs no CA bundle
+# for the providers. Packed with deploy/images/rust-binary.Containerfile.
+[rust]
+package = "assistant"

@@ -105,6 +105,20 @@ export const API_ROUTES: readonly IngressRoute[] = [
 export const CERTS_SMOKE_ENV = [{ name: "TRUSTIOT__CRL__CHECK_INTERVAL", value: "10s" }] as const;
 
 /**
+ * The AI assistant's settings the smoke adds (Laysi/trustiot-v2#592): the model role of
+ * AI_GATEWAY_SMOKE, the only one the smoke's AI gateway has. The chart sets the addresses of the
+ * gateway and the tools' services from mesh.calls.assistant; the assistant calls none of them
+ * before a question, and it has no API yet (Laysi/trustiot-v2#146), so the smoke only waits for it
+ * to be ready.
+ */
+export const ASSISTANT_SMOKE_ENV = [{ name: "TRUSTIOT__AI_GATEWAY__ROLE", value: "smoke" }] as const;
+
+/** The assistant's database login, which the migration Job lets log in once the chart lists it. */
+export const ASSISTANT_ROLE = "assistant_app";
+/** How long the assistant's login may take to show in pg_stat_activity after its pod is ready. */
+export const ASSISTANT_LOGIN_LIMIT_MS = 120_000;
+
+/**
  * The ingress.routes that the chart's values.yaml and then each of `valuesFiles` (relative to the
  * chart, in `helm -f` order) set: helm replaces a list as a whole, so the last file that sets it wins.
  */
@@ -134,6 +148,42 @@ export const AI_GATEWAY_SMOKE = {
 } as const;
 
 /**
+ * SQL that prints `<may log in>|<sessions>` for `role`: whether it may log in (`t` or `f`; nothing
+ * when the role does not exist) and how many sessions it has open in the current database. Only
+ * names and counts, no password.
+ */
+export function roleSessionsSql(role: string): string {
+  if (!/^[a-z][a-z0-9_]*$/.test(role)) throw new Error(`not a role name: ${JSON.stringify(role)}`);
+  return [
+    "SELECT r.rolcanlogin,",
+    `  (SELECT count(*) FROM pg_stat_activity a WHERE a.usename = '${role}' AND a.datname = current_database())`,
+    `FROM pg_roles r WHERE r.rolname = '${role}';`,
+    "",
+  ].join("\n");
+}
+
+/**
+ * The assistant logged in to Postgres as ASSISTANT_ROLE (Laysi/trustiot-v2#592): its readiness
+ * needs a connection of that role and the migrations of its schema (services/assistant/README.md,
+ * 「對話的儲存」), and its pool keeps the connection open, so a ready assistant has a session.
+ * `readyReplicas` is what its Deployment reports. Polls psql until the role may log in and has a
+ * session, for up to ASSISTANT_LOGIN_LIMIT_MS; throws with what it last saw.
+ */
+export async function checkAssistantLogin(deps: Pick<ApiCheckDeps, "psql" | "sleep" | "now" | "limits">, deployment: string, readyReplicas: number): Promise<string> {
+  if (readyReplicas < 1) throw new Error(`${deployment} has no ready replica`);
+  let sessions = 0;
+  const waited = await pollSql(deps, `a session of ${ASSISTANT_ROLE}`, deps.limits?.loginMs ?? ASSISTANT_LOGIN_LIMIT_MS, roleSessionsSql(ASSISTANT_ROLE), (out) => {
+    const row = out.trim();
+    if (row === "") throw new Error(`the role ${ASSISTANT_ROLE} does not exist`);
+    const [login, count] = row.split("|");
+    if (login !== "t" && login !== "f") throw new Error(`unexpected psql output ${JSON.stringify(row)}`);
+    sessions = Number(count);
+    return login === "t" && Number.isInteger(sessions) && sessions > 0;
+  });
+  return `${deployment}: ${readyReplicas} ready replica(s); ${ASSISTANT_ROLE} may log in and has ${sessions} session(s) open (after ${Math.round(waited / 1000)} s)`;
+}
+
+/**
  * The values the smoke adds for the check (after tests/values/smoke.yaml): the identity and assets
  * services from the images the nightly built, the cookie routes to their APIs after the routes the
  * shape's values already set (`routes`, from routesOfValues; helm would otherwise drop them), and
@@ -143,7 +193,9 @@ export const AI_GATEWAY_SMOKE = {
  * image (Laysi/trustiot-v2#539), whose Postgres roles and ClickHouse account the migration Job
  * sets up with generated passwords (it needs no value besides its image and its route), and the
  * certs service from its image (CERTS_SMOKE_ENV; its test root CA comes in a values file of its
- * own, certs.ts).
+ * own, certs.ts), and the AI assistant from its image (ASSISTANT_SMOKE_ENV, Laysi/trustiot-v2#592),
+ * which reaches the AI gateway, telemetry-query and assets through the chart's default
+ * mesh.calls.assistant and logs in to Postgres with the password the migration Job generates.
  */
 export function apiValues(shape: string, routes: readonly IngressRoute[]): Record<string, unknown> {
   const image = (name: string) => {
@@ -163,6 +215,7 @@ export function apiValues(shape: string, routes: readonly IngressRoute[]): Recor
       "ai-gateway": { enabled: true, image: image("ai-gateway") },
       "telemetry-query": { enabled: true, image: image("telemetry-query") },
       certs: { enabled: true, image: image("certs"), env: CERTS_SMOKE_ENV.map((entry) => ({ ...entry })) },
+      assistant: { enabled: true, image: image("assistant"), env: ASSISTANT_SMOKE_ENV.map((entry) => ({ ...entry })) },
     },
     ai: AI_GATEWAY_SMOKE,
     ingress: {
@@ -292,7 +345,7 @@ export interface ApiCheckDeps {
   log: (line: string) => void;
   sleep?: (ms: number) => Promise<void>;
   now?: () => number;
-  limits?: { routeMs?: number; eventMs?: number; pollMs?: number };
+  limits?: { routeMs?: number; eventMs?: number; loginMs?: number; pollMs?: number };
 }
 
 /** The string field `field` of an ErrorBody, or undefined when the body is not one. */

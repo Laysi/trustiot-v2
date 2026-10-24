@@ -72,11 +72,16 @@ pub struct Bridge {
 impl Bridge {
     /// Starts the bridge in front of `broker` with the SaaS source and `settings` on top, and
     /// waits until it listens.
+    ///
+    /// The broker stand-ins speak plain bytes or MQTT, not the inner TLS whose turns the progress
+    /// deadline expects, so the deadline is the longest the bridge accepts unless `settings` sets
+    /// it (`tests/exposure.rs` tests it).
     pub async fn start(broker: SocketAddr, settings: &[(&str, &str)]) -> Self {
         let broker = broker.to_string();
         let mut vars = vec![
             ("TRUSTIOT_CLIENT_IP_SOURCE", CF),
             ("TRUSTIOT__BROKER__ADDRESS", broker.as_str()),
+            ("TRUSTIOT__BROKER__HANDSHAKE_TIMEOUT", "60s"),
         ];
         vars.extend_from_slice(settings);
         let mut bridge = Self::spawn(&vars);
@@ -96,6 +101,8 @@ impl Bridge {
             .env_clear()
             .env("TRUSTIOT__HTTP__LISTEN_ADDR", "127.0.0.1:0")
             .env("TRUSTIOT__HTTP__HEALTH_LISTEN_ADDR", "127.0.0.1:0");
+        // A later value of the same variable replaces an earlier one, so `settings` override
+        // the defaults of [`Bridge::start`].
         for (name, value) in vars {
             command.env(name, value);
         }
@@ -221,6 +228,9 @@ impl Bridge {
 pub enum Behaviour {
     /// Records what it receives and sends it back.
     Echo,
+    /// Records what it receives and never sends anything: a broker still waiting for a
+    /// ClientHello.
+    Silent,
     /// Answers MQTT 5 CONNECT with CONNACK and PINGREQ with PINGRESP; records what it receives.
     Mqtt,
     /// A TLS server that requires a client certificate, then echoes the plaintext it receives.
@@ -305,6 +315,16 @@ async fn serve_broker(
     };
     match behaviour {
         Behaviour::Echo => echo(stream, received).await,
+        Behaviour::Silent => {
+            let mut stream = stream;
+            let mut buffer = vec![0; 64 * 1024];
+            loop {
+                match stream.read(&mut buffer).await {
+                    Ok(0) | Err(_) => return,
+                    Ok(length) => received(&buffer[..length]),
+                }
+            }
+        }
         Behaviour::Tls(config) => {
             let Ok(tls) = tokio_rustls::TlsAcceptor::from(config).accept(stream).await else {
                 return;

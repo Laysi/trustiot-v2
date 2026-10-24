@@ -15,9 +15,12 @@
 //!   injection (rebuild checklist M7), for the gateway's acquisition tests.
 //! - [`clock`]: time control for tests on real sockets: a paused tokio clock that moves only
 //!   when the test advances it, and waits bounded by wall-clock time.
+//! - [`chart`]: what the deployment chart assumes about a service, such as its Postgres
+//!   connection budget, so the service's tests hold its code to the same numbers.
 //!
 //! How a service hooks in is in the crate's README.
 
+pub mod chart;
 pub mod clock;
 pub mod container;
 pub mod identity;

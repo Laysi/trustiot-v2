@@ -83,7 +83,7 @@ schema `telemetry_query`，DDL 在 `migrations/postgres/`，由 migration Job �
 | `TRUSTIOT_CLICKHOUSE_CA_FILE` | 平台設定：`https` 時必填，唯一信任的 CA |
 | `TRUSTIOT__DATABASE__USERNAME`、`_PASSWORD`、`_PLATFORM_USERNAME`、`_PLATFORM_PASSWORD` | `telemetry_query_app` 與 `telemetry_query_platform` 的帳密，來自 Secret `<release>-telemetry-query-password` |
 | `TRUSTIOT__CLICKHOUSE__USERNAME`、`TRUSTIOT__CLICKHOUSE__PASSWORD` | 服務帳號 `trustiot_telemetry_query` 與它的密碼（同一個 Secret 的 `trustiot_telemetry_query` key，至少 32 字元；它也是每個租戶密碼的推導 key）。chart 設定，`services.telemetry-query.env` 不能覆寫 |
-| `TRUSTIOT__DATABASE__MAX_CONNECTIONS` | 服務角色連線池每個副本的上限，2–100 |
+| `TRUSTIOT__DATABASE__MAX_CONNECTIONS` | 服務角色連線池每個副本的上限，2–100；chart 以 `services.telemetry-query.database.maxConnections` 設定。連線池的大小或數量改變時，chart 的連線預算（`deploy/chart/templates/_postgres.tpl`，見 chart README 的「連線預算」）要一起改，`tests/chart_connections.rs` 比對兩者 |
 
 ClickHouse 不是 readiness 檢查：它停機時 API 回 503、消費端重試。單一請求最多等 45 秒（`REQUEST_TIMEOUT`，大於租戶帳號的 30 秒上限，讓 ClickHouse 自己的逾時先發生）。
 

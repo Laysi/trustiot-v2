@@ -201,7 +201,7 @@ schema `assets`，DDL 在 `migrations/postgres/`，由 migration Job（登記在
 | `TRUSTIOT_POSTGRES_HOST`、`_PORT`、`_DATABASE`、`_SSLMODE`、`_CA_FILE` | 平台設定：Postgres 位置；只接受 `verify-full`，`_CA_FILE` 必填 |
 | `TRUSTIOT__DATABASE__USERNAME`、`TRUSTIOT__DATABASE__PASSWORD` | 服務角色 `assets_app` 的帳密：密碼來自 Secret `<release>-assets-password` 的 `assets_app` key |
 | `TRUSTIOT__DATABASE__PLATFORM_USERNAME`、`TRUSTIOT__DATABASE__PLATFORM_PASSWORD` | 平台角色 `assets_platform` 的帳密：密碼來自同一個 Secret 的 `assets_platform` key。chart 只對 outbox 消費端綁平台角色的密碼（`_migrate.tpl` 的 `trustiot.migrate.platformLogins`），migration Job 產生這兩個密碼並設定角色 |
-| `TRUSTIOT__DATABASE__MAX_CONNECTIONS` | 服務角色連線池每個副本的上限，2–100，預設 10；平台角色另有 4 條 |
+| `TRUSTIOT__DATABASE__MAX_CONNECTIONS` | 服務角色連線池每個副本的上限，2–100，預設 10；平台角色另有 4 條；chart 以 `services.assets.database.maxConnections` 設定。連線池的大小或數量改變時，chart 的連線預算（`deploy/chart/templates/_postgres.tpl`，見 chart README 的「連線預算」）要一起改，`tests/chart_connections.rs` 比對兩者 |
 
 健康埠（預設 8081）只有 `/healthz` 與 `/readyz`，API 在 8080。設定不能用時以 exit code 1 結束。
 
