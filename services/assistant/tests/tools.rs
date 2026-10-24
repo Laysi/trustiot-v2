@@ -200,7 +200,8 @@ async fn calls_run_concurrently_and_results_keep_the_call_order() {
         ),
     )
     .await
-    .expect("both calls finished");
+    .expect("both calls finished")
+    .expect("no access revoked");
 
     assert_eq!(results.len(), 2);
     assert_eq!(results[0].call_id, "a");
@@ -254,7 +255,8 @@ async fn failures_stay_in_their_call_and_tell_the_model_what_to_do() {
         ),
     )
     .await
-    .expect("every call ended");
+    .expect("every call ended")
+    .expect("no access revoked");
 
     let outputs: Vec<(bool, String)> = results
         .iter()
@@ -305,7 +307,8 @@ async fn calls_past_the_per_step_limit_are_not_run() {
         .collect();
     let results = tokio::time::timeout(WAIT, registry.run(&context(), &calls))
         .await
-        .expect("every call ended");
+        .expect("every call ended")
+        .expect("no access revoked");
 
     assert_eq!(
         runs.load(Ordering::SeqCst),
@@ -379,7 +382,8 @@ async fn results_over_the_limits_become_a_request_to_narrow() {
                 call("5", "one_image", json!({})),
             ],
         )
-        .await;
+        .await
+        .expect("no access revoked");
 
     let big = &results[0].output;
     assert!(big.is_error);
@@ -430,7 +434,8 @@ async fn tools_get_the_principal_and_the_delegation_not_the_input() {
             &context,
             &[call("1", "who_am_i", json!({"tenant_id": "someone-else"}))],
         )
-        .await;
+        .await
+        .expect("no access revoked");
 
     let seen = recording
         .0

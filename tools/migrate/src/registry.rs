@@ -180,8 +180,11 @@ pub const PRODUCT: Registry = Registry {
         },
         // Reads identity's events as its platform role, so the chart binds a password to
         // `assets_platform` as well ("trustiot.migrate.platformLogins" in
-        // deploy/chart/templates/_migrate.tpl). Writes `assets.device_model_*`
-        // (Laysi/trustiot-v2#99) with its service role. A producer needs a reader for the outbox
+        // deploy/chart/templates/_migrate.tpl), and certs' (Laysi/trustiot-v2#101): every
+        // `certs.gateway_registered` puts the gateway in the device pool. Writes
+        // `assets.device_model_*` (Laysi/trustiot-v2#99), `assets.gateway_bound`
+        // (Laysi/trustiot-v2#101) and `assets.device_*` (Laysi/trustiot-v2#100) with its service
+        // role. A producer needs a reader for the outbox
         // policy, and the gateway configuration that will consume these events
         // (Laysi/trustiot-v2#93) does not exist yet, so assets reads its own events for now: no
         // subscription does. When the real consumer is listed here, drop "assets" and the Job
@@ -191,7 +194,7 @@ pub const PRODUCT: Registry = Registry {
             platform_role: true,
             outbox: Outbox {
                 producer: assets_schema::SCHEMA.outbox_producer,
-                consumes: &["identity", "assets"],
+                consumes: &["identity", "certs", "assets"],
             },
             migrations: assets_schema::SCHEMA.migrations,
         },
@@ -223,8 +226,8 @@ pub const PRODUCT: Registry = Registry {
         },
         // The AI assistant's conversations and their append-only history
         // (Laysi/trustiot-v2#553): tenant data under row-level security, no events, and nothing
-        // read across tenants, so no platform role. Its `assistant_app` stays NOLOGIN in a
-        // cluster until the chart gives the assistant Postgres (Laysi/trustiot-v2#552).
+        // read across tenants, so no platform role. The chart lists `postgres` for the assistant
+        // (Laysi/trustiot-v2#592), so the Job lets its `assistant_app` log in like every client's.
         Service {
             name: assistant_schema::SCHEMA.service,
             platform_role: false,

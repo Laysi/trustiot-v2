@@ -9,7 +9,8 @@
 //! - The current session shows the user, the tenant the session acts in with the user's role
 //!   there, and the user's tenants, never another user's or another tenant's.
 //! - A switch to one of the user's tenants applies to the session's next request, with the
-//!   user's role in that tenant; a switch to any other tenant, existing or not, is refused the
+//!   user's role in that tenant as it is then, also right after a platform administrator set it
+//!   (Laysi/trustiot-v2#583); a switch to any other tenant, existing or not, is refused the
 //!   same way and leaves the session where it was. Only the session the request came with
 //!   changes: not the user's other sessions, not another user's.
 //! - Preferences are the user's own and stay within their allow lists; a change never reaches
@@ -422,6 +423,27 @@ async fn a_session_switches_only_to_the_users_own_tenants() {
     run(&mut admin, UPDATE_ROLE, &[&b.id, &alice.id, "admin"]).await;
     assert_eq!(grant(&service, &first), tenant_grant(&b, "admin"));
     run(&mut admin, UPDATE_ROLE, &[&b.id, &alice.id, "viewer"]).await;
+    // The same when a platform administrator sets the role with the member API
+    // (Laysi/trustiot-v2#583): the switched session's next request, and what it shows, carry it.
+    let operator = person(&mut admin, true).await;
+    let operator_session = session(&mut admin, &operator, None).await;
+    let members = format!("/api/identity/v1/platform/tenants/{}/members", b.id);
+    for (role, previous) in [("admin", "viewer"), ("viewer", "admin")] {
+        let response = write(
+            &service,
+            "PUT",
+            &members,
+            &operator_session.cookie,
+            &json!({"email": alice.email, "role": role}),
+        );
+        assert_eq!(response.status, 200, "{}", response.raw());
+        assert_eq!(response.json()["previous_role"], previous);
+        assert_eq!(grant(&service, &first), tenant_grant(&b, role));
+        assert_eq!(
+            get(&service, SESSION, &first.cookie).json()["active_tenant"],
+            membership(&b, role)
+        );
+    }
     // Alice's other session and Bob's keep their tenants.
     assert_eq!(grant(&service, &second), tenant_grant(&a, "editor"));
     assert_eq!(grant(&service, &bobs), tenant_grant(&c, "admin"));
@@ -1088,7 +1110,7 @@ async fn users_change_only_their_own_preferences_within_the_allow_lists() {
     }
 }
 
-/// The database rights 0005_preferences_and_tenant_switch.sql adds, and nothing more: the
+/// The database rights 0007_preferences_and_tenant_switch.sql adds, and nothing more: the
 /// service role points a session at a tenant and keeps preferences within the checks; the
 /// platform role reads memberships and tenant names across tenants and writes nothing.
 #[tokio::test(flavor = "multi_thread")]

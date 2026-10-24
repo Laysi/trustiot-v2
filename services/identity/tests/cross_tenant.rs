@@ -223,6 +223,15 @@ async fn tenants_are_isolated() {
              to no tenant (tests/event_log.rs covers it)",
         )
         .exempt_endpoint(
+            "PUT /api/identity/v1/platform/tenants/{tenant_id}/members",
+            "platform administrators' own requests only (A2, Laysi/trustiot-v2#583): it sets a \
+             membership in the tenant the path names, by design; every tenant user, the tenant's \
+             own administrator and another tenant's included, and every exchanged token get 403 \
+             before anything is read, and nothing of either tenant changes (tests/members.rs \
+             covers it, with the service role's new grants on memberships kept to the \
+             transaction's tenant; the probes above attack those grants too)",
+        )
+        .exempt_endpoint(
             "POST /api/identity/v1/tenants",
             "platform administrators only, and it creates a new tenant whose ID the service makes: \
              it takes no tenant from the request and serves no existing tenant's data \

@@ -170,6 +170,19 @@ Laysi/trustiot-v2#500（commit `26b454d`）起，入口的跨站請求檢查要 
 
 7. **確認**：`flux.ts status` 的根 Kustomization 停在合併的 commit、HelmRelease 與 Kustomization 都沒有暫停、每個 Deployment available；`kubectl -n trustiot get helmreleases.helm.toolkit.fluxcd.io trustiot` 的 READY 為 True，訊息是這次的升級；`kubectl -n trustiot get cluster trustiot-postgres` 的 STATUS 是 `Cluster in healthy state`，`kubectl -n trustiot get database trustiot-postgres-trustiot` 的 APPLIED 是 `true`；`kubectl -n trustiot get jobs` 有完成的 `trustiot-migrate-<新的 hash>`；`kubectl -n trustiot get pvc` 有新的兩個 PVC。最後跑 `tunnel.ts check --stage 2`。升級失敗時看 `describe helmrelease` 與 Job 的日誌（deploy/chart/README.md「migration Job」的「失敗時」）。
 8. **重建帳號與租戶**：repo 沒有展示環境的種子資料（`bun scripts/dev.ts seed` 只給本機的開發環境），使用者、租戶與成員資格照它們第一次建立的方式重建。所有 session 都已失效，受邀的人要重新登入 app（Access 的 session 不受影響）。
+   - 第一位平台管理員照[第一位平台管理員 runbook](platform-admin.md) 的「步驟」建立（資料重設後標記也不在了，所以指令以 0 結束），再以 email 驗證碼登入 app。其他使用者照它們第一次建立的方式重建（身分服務還沒有管理使用者的 API，見 [services/identity](../../services/identity/README.md)）。
+   - 租戶：平台管理者以 `POST /api/identity/v1/tenants` 建立（services/identity 的「租戶」）。
+   - 成員資格與角色：平台管理者以 `PUT /api/identity/v1/platform/tenants/<租戶 ID>/members` 設定，每個成員一次，使用者要先存在（services/identity 的「成員」，Laysi/trustiot-v2#583）。在 app 的頁面以平台管理者登入，在瀏覽器開發者工具的 Console 執行（同源請求，瀏覽器帶上 session cookie 與 `Sec-Fetch-Site: same-origin`，ext_authz 的跨站檢查才放行）：
+
+     ```js
+     await fetch("/api/identity/v1/platform/tenants/<租戶 ID>/members", {
+       method: "PUT",
+       headers: { "Content-Type": "application/json" },
+       body: JSON.stringify({ email: "<成員的 email>", role: "admin" }),
+     }).then(async (r) => [r.status, await r.json()]);
+     ```
+
+     新成員回 201、改角色回 200，`previous_role` 是原本的角色；404 是沒有這個租戶，422 `member.email_unknown` 是這個 email 還沒有使用者。`role` 是 `viewer`、`editor` 或 `admin`；展示者自己要進入展示租戶時，也以這個方式把自己設為成員。每次變更都記在那個租戶的操作紀錄（`identity.member_role_changed`），成員下一個請求就帶新角色；已經在用的 app 頁面要切到這個租戶（或重新登入）才會以它為目前的租戶。
 9. **釋放 lab 鎖**，在重建完成之後：
 
    ```sh
@@ -271,8 +284,55 @@ token 一年到期，在到期前 14 天輪替（建立的人在團隊行事曆�
 3. tunnel 的路由（先回 418；入口部署後，照「架構」的「路由」的步驟，改成 `route-origin` 通過時印出的 origin，也就是展示叢集 values 固定的入口 ClusterIP；切換後讀回路由設定，再馬上執行 `check --stage 2`）：兩條略過路徑的錨定規則在前、不要求 JWT，其餘每條都設 `originRequest.access`（team 名稱與三個主機名稱那個 application 的 AUD），最後 catch-all 回 404。
 4. gateway 主機名稱的 configuration rule（Browser Integrity Check 關閉）。
 5. 三筆 proxied CNAME 指向 `<tunnel ID>.cfargotunnel.com`。DNS 紀錄一定在 Access application 之後建立，主機名稱不會有一段沒有保護的時間。
+6. `/mqtt` 升級的速率限制（下方「`/mqtt` 的速率限制」）。展示環境部署 mqtt-bridge 之前就要套用。
 
 token 由同一個人在 Cloudflare 的 API 執行環境裡取得並加密（見下方「安裝 connector」第 2 步），不經過其他地方。在那個執行環境裡依序：以 `GET /accounts/<帳號>/cfd_tunnel/<tunnel>` 確認名稱是 `trustiot-demo`、`config_src` 是 `cloudflare`；以 `GET …/cfd_tunnel/<tunnel>/token` 取得 token，確認它是以 `eyJhIjoi` 開頭的字串、解開後的 `t` 等於 tunnel ID；以 `crypto.subtle.exportKey("spki")` 算公鑰的 SHA-256，與 `handoff-key` 印出的相同才加密；只回傳 tunnel ID、指紋、密文與它的位元組數。
+
+### `/mqtt` 的速率限制
+
+2026-10-23 決定設（Laysi/trustiot-v2#600）：gateway 主機名稱的 `/mqtt` 不經 Access，任何人都能升級。mqtt-bridge 自己限制每個來源 IP 同時的連線數，並結束內層 TLS 沒有進展的連線（[services/mqtt-bridge/README.md](../../services/mqtt-bridge/README.md)「連線上限」），但擋不住同一個 IP 不斷重連：每次升級都讓 broker 做一次 TLS 交握。Cloudflare 在最前面把每個 IP 的升級次數壓住。
+
+規則（zone 是 Free 方案，[rate limiting rules 的方案差異](https://developers.cloudflare.com/waf/rate-limiting-rules/#availability)：Free 只有一條規則、運算式只能用 Path、只能以 IP 計數、計數期間與封鎖時間都只有 10 秒）：
+
+| 欄位 | 值 |
+| --- | --- |
+| 運算式 | `http.request.uri.path eq "/mqtt"`（Free 不能用主機名稱；app 與 ota 主機名稱沒有這個路徑，而且在 Access 後面） |
+| 計數 | 每個 IP（API 的 `characteristics` 是 `["cf.colo.id", "ip.src"]`，`cf.colo.id` 是 API 規定必帶的，[參數說明](https://developers.cloudflare.com/waf/rate-limiting-rules/parameters/)） |
+| 門檻 | 每 10 秒 40 次（`period` 10、`requests_per_period` 40） |
+| 動作 | 封鎖 10 秒（`action` 為 `block`、`mitigation_timeout` 10），回 429（預設） |
+
+門檻為什麼是 40：同一個場域的閘道器可能共用一個對外 IP，mqtt-bridge 每個副本讓一個 IP 同時有 32 條連線；滾動更新時這些閘道器一起收到 close、一起重連，40 讓它們一次連上。攻擊者每個 IP 每秒最多 4 次升級，每條連線最多佔約 11 秒（mqtt-bridge 的進展期限加上送 close 的 1 秒），要一直佔滿一個副本的 1,536 個名額每秒要約 140 次升級，約 35 個 IPv4 位址。這不是高門檻：IPv6 換位址就換了計數，擁有很多位址（例如幾個 IPv6 /48）的攻擊者做得到，那時靠 mqtt-bridge 每個桶的上限（IPv6 每個 /48 最多 128 條）與擴充副本。被封鎖的閘道器收到 429，照自己的重連間隔再試。
+
+這條規則依賴兩個前提，改 Cloudflare 或 tunnel 的設定時要確認仍成立：
+
+- zone 的「Normalize incoming URLs」（URL normalization）保持開啟：`/%6Dqtt` 這類編碼過的路徑先正規化成 `/mqtt` 再比對，才會被計數。
+- tunnel 的錨定路由 `^/mqtt$` 比對的是解碼後的路徑：`/%2Fmqtt`、`//mqtt` 這類不等於 `/mqtt` 的路徑比對不到，走同一主機名稱其他路徑的 `originRequest.access`（沒有 JWT 回 403），到不了 mqtt-bridge，所以不會繞過計數連上它。
+
+這條規則用掉 Free 方案唯一的一條；`/certs/renew` 也要限制時，把運算式改成 `http.request.uri.path in {"/mqtt" "/certs/renew"}`，共用同一個門檻。
+
+套用（有 Cloudflare 權限的維運人員，在 Cloudflare 的 API 執行環境裡，照本節開頭的規則先寫進變更清單、經使用者同意）：
+
+1. 以「Get a zone entry point ruleset」讀 `http_ratelimit` phase 的 entry point ruleset（[以 API 建立規則](https://developers.cloudflare.com/waf/rate-limiting-rules/create-api/)）。回 404 時以「Create a zone ruleset」建立它（`kind` 為 `zone`、`phase` 為 `http_ratelimit`），規則一起放進去；已經有規則時，先確認它是不是這一條，不是就停下來問。
+2. 以「Create a zone ruleset rule」把規則加進那個 ruleset，內容：
+
+   ```json
+   {
+     "description": "mqtt-bridge: /mqtt upgrades per IP (Laysi/trustiot-v2#600)",
+     "expression": "(http.request.uri.path eq \"/mqtt\")",
+     "action": "block",
+     "ratelimit": {
+       "characteristics": ["cf.colo.id", "ip.src"],
+       "period": 10,
+       "requests_per_period": 40,
+       "mitigation_timeout": 10
+     }
+   }
+   ```
+
+3. 讀回 ruleset，確認只有這一條規則、`enabled` 為 true、四個值與上表相同。記下規則的 `id`（還原用），只把 `id`、`version` 與四個值寫進紀錄，不寫 zone ID。
+4. 確認規則有效、閘道器仍連得上：從工作站在 10 秒內連續送 41 次與「檢查對外的請求」相同的 `/mqtt` 升級請求，第 41 次起得到 Cloudflare 的 429（`server: cloudflare`；mqtt-bridge 自己的 429 body 是 `over_source_limit`，那是另一回事），等 10 秒後再送一次，不再是 Cloudflare 的 429。mqtt-bridge 部署之後，展示用閘道器的連線出現在 mqtt-bridge 的 `relaying a gateway connection` 日誌。
+
+還原：以「Delete a zone ruleset rule」刪除記下的規則 `id`，再讀回 ruleset 確認它不在了。
 
 ## 安裝 connector
 

@@ -1,0 +1,16 @@
+{
+  "id": "01928f6e-7a3c-7d4e-8f00-000000000501",
+  "type": "assets.gateway_bound",
+  "version": 1,
+  "tenant_id": "01928f6e-7a3c-7d4e-8f00-00000000000b",
+  "occurred_at": "2026-10-23T09:00:00.456Z",
+  "producer": "assets",
+  "payload": {
+    "binding_id": "01928f6e-7a3c-7d4e-8f00-000000000b01",
+    "hardware_id": "tg-0001"
+  },
+  "actor": {
+    "kind": "user",
+    "user_id": "01928f6e-7a3c-7d4e-8f00-0000000000ad"
+  }
+}

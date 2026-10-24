@@ -43,6 +43,15 @@ Argument: the service name.
 {{- ternary "AI_GATEWAY" "TRUSTIOT" (eq . "ai-gateway") -}}
 {{- end -}}
 
+{{/*
+Pods a rolling update starts above a service's replicas before it stops old ones (the Deployment's
+maxSurge; maxUnavailable is 0, so a single replica rolls without downtime). The Postgres connection
+check counts them ("trustiot.postgres.connectionPlan"), so both read it here.
+*/}}
+{{- define "trustiot.service.maxSurge" -}}
+1
+{{- end -}}
+
 {{- define "trustiot.service.serviceAccount" -}}
 apiVersion: v1
 kind: ServiceAccount
@@ -85,8 +94,10 @@ spec:
 
 {{/*
 Container env: the chart's variables first (OTEL_SERVICE_NAME, the collector endpoint, SENTRY_DSN,
-the Postgres CA file, login role and password for a service that uses Postgres, the credentials
-the service lists, for identity, its routes and signing key settings, and for certs, its CA files),
+the Postgres CA file, login role, password and pool size for a service that uses Postgres, the
+credentials the service lists, for identity, its routes and signing key settings, for certs, its CA
+files, for mqtt-bridge, the broker's address, and for assistant, the addresses of the services it
+calls),
 then serviceDefaults.env and services.<name>.env.
 Custom env cannot take over what the chart controls:
 - names starting with TRUSTIOT_ plus a letter or digit, SENTRY_ or OTEL_ are reserved, so the
@@ -102,7 +113,15 @@ Custom env cannot take over what the chart controls:
   through the chart;
 - for a service that uses Postgres, TRUSTIOT__DATABASE__USERNAME and TRUSTIOT__DATABASE__PASSWORD
   are the chart's, and so are TRUSTIOT__DATABASE__PLATFORM_USERNAME and
-  TRUSTIOT__DATABASE__PLATFORM_PASSWORD (set for a service whose platform role logs in);
+  TRUSTIOT__DATABASE__PLATFORM_PASSWORD (set for a service whose platform role logs in) and
+  TRUSTIOT__DATABASE__MAX_CONNECTIONS (services.<name>.database.maxConnections, which the
+  Postgres connection check counts);
+- for mqtt-bridge, TRUSTIOT__BROKER__ADDRESS is the chart's ("trustiot.mqttBridge.env"): the bridge
+  relays the gateways' connections to the in-cluster broker only, even while it is off;
+- for assistant, the addresses of the AI gateway, the identity service's token exchange,
+  telemetry-query and assets are the chart's ("trustiot.assistant.env"), derived from
+  mesh.calls.assistant, even while unset: an address in env would point it at a service the mesh
+  does not let it call;
 - for telemetry-query, TRUSTIOT__CLICKHOUSE__USERNAME and TRUSTIOT__CLICKHOUSE__PASSWORD are the
   chart's: its ClickHouse account and the password the migration Job generates for it;
 - for ai-gateway, whose settings carry the prefix AI_GATEWAY ("trustiot.service.envPrefix"), the
@@ -117,6 +136,10 @@ Returns a YAML list; use with fromYamlArray.
 {{- $config := .config -}}
 {{- $values := .root.Values -}}
 {{- $prefix := include "trustiot.service.envPrefix" .name -}}
+{{- $assistantNames := list -}}
+{{- if eq $name "assistant" -}}
+{{- $assistantNames = include "trustiot.assistant.reserved" .root | fromYamlArray -}}
+{{- end -}}
 {{- $aiGatewayNames := list -}}
 {{- if eq $name "ai-gateway" -}}
 {{- $aiGatewayNames = keys (include "trustiot.aiGateway.config" .root | fromYaml).data -}}
@@ -128,6 +151,10 @@ into the service's own Secret and sets. */ -}}
 {{- $secret := include "trustiot.migrate.passwordSecret" (dict "root" .root "component" $name) | fromYaml -}}
 {{- $dbEnv = append $dbEnv (dict "name" "TRUSTIOT__DATABASE__USERNAME" "value" $secret.key) -}}
 {{- $dbEnv = append $dbEnv (dict "name" "TRUSTIOT__DATABASE__PASSWORD" "valueFrom" (dict "secretKeyRef" (dict "name" $secret.name "key" $secret.key))) -}}
+{{- /* The size of its main pool, which the connection check counts with its other pools
+("trustiot.postgres.connectionPlan", Laysi/trustiot-v2#575). */ -}}
+{{- $poolSize := include "trustiot.postgres.poolSize" (dict "root" .root "name" $name "config" $config) -}}
+{{- $dbEnv = append $dbEnv (dict "name" "TRUSTIOT__DATABASE__MAX_CONNECTIONS" "value" $poolSize) -}}
 {{- /* Its platform role too, when it logs in ("trustiot.migrate.platformLogins"): the role an
 outbox consumer reads its producers' events with. */ -}}
 {{- if include "trustiot.migrate.platformLogin" (dict "root" .root "name" $name) -}}
@@ -159,6 +186,12 @@ generates its password into the service's Secret and sets it
 {{- if and $values.observability.collector.enabled (eq (upper .name) (printf "%s__TELEMETRY__OTLP_ENDPOINT" $prefix)) -}}
 {{- fail (printf "services.%s: env %s is set by the chart: it points at the OpenTelemetry collector (observability.collector)" $name .name) -}}
 {{- end -}}
+{{- if and (eq $name "mqtt-bridge") (regexMatch "(?i)^TRUSTIOT__BROKER__ADDRESS$" .name) -}}
+{{- fail (printf "services.mqtt-bridge: env %s is set by the chart: the bridge relays only to the in-cluster broker's gateway port (mqttBroker.enabled)" .name) -}}
+{{- end -}}
+{{- if and (eq $name "assistant") (has (upper .name) $assistantNames) -}}
+{{- fail (printf "services.assistant: env %s is set by the chart from mesh.calls.assistant: the assistant calls only the services the mesh lets it call" .name) -}}
+{{- end -}}
 {{- if eq $name "ai-gateway" -}}
 {{- $reserved := or (regexMatch "(?i)^AI_GATEWAY_[A-Z0-9]" .name) (regexMatch "(?i)^AI_GATEWAY__(PROVIDERS|ROLES)__" .name) (has (upper .name) $aiGatewayNames) -}}
 {{- if $reserved -}}
@@ -167,6 +200,9 @@ generates its password into the service's Secret and sets it
 {{- end -}}
 {{- if and $dbEnv (regexMatch "(?i)^TRUSTIOT__DATABASE__(PLATFORM_)?(USERNAME|PASSWORD)$" .name) -}}
 {{- fail (printf "services.%s: env %s is set by the chart: the service's login roles and the passwords the migration Job generates for them" $name .name) -}}
+{{- end -}}
+{{- if and $dbEnv (regexMatch "(?i)^TRUSTIOT__DATABASE__MAX_CONNECTIONS$" .name) -}}
+{{- fail (printf "services.%s: env %s is set by the chart from services.%s.database.maxConnections, which the Postgres connection check counts" $name .name $name) -}}
 {{- end -}}
 {{- if and $clickhouseEnv (regexMatch "(?i)^TRUSTIOT__CLICKHOUSE__(USERNAME|PASSWORD)$" .name) -}}
 {{- fail (printf "services.%s: env %s is set by the chart: the service's ClickHouse account and the password the migration Job generates for it" $name .name) -}}
@@ -212,7 +248,15 @@ under the service's own prefix. */ -}}
 {{- if eq $name "certs" -}}
 {{- $certsEnv = include "trustiot.certs.env" .root | fromYamlArray -}}
 {{- end -}}
-{{- $env = concat $env $dbEnv $clickhouseEnv $credentialEnv $identityEnv $certsEnv ($config.env | default list) -}}
+{{- $mqttBridgeEnv := list -}}
+{{- if eq $name "mqtt-bridge" -}}
+{{- $mqttBridgeEnv = include "trustiot.mqttBridge.env" .root | fromYamlArray -}}
+{{- end -}}
+{{- $assistantEnv := list -}}
+{{- if eq $name "assistant" -}}
+{{- $assistantEnv = include "trustiot.assistant.env" .root | fromYamlArray -}}
+{{- end -}}
+{{- $env = concat $env $dbEnv $clickhouseEnv $credentialEnv $identityEnv $certsEnv $mqttBridgeEnv $assistantEnv ($config.env | default list) -}}
 {{- $names := list -}}
 {{- range $env -}}
 {{- $names = append $names .name -}}
@@ -284,7 +328,7 @@ spec:
     rollingUpdate:
       # Start the new pod before stopping the old one, so a single replica rolls without downtime.
       maxUnavailable: 0
-      maxSurge: 1
+      maxSurge: {{ include "trustiot.service.maxSurge" .root }}
   selector:
     matchLabels:
       {{- include "trustiot.selectorLabels" . | nindent 6 }}

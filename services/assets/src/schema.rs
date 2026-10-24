@@ -25,5 +25,17 @@ pub const SCHEMA: Schema = Schema {
             name: "0002_device_models.sql",
             sql: include_str!("../migrations/postgres/0002_device_models.sql"),
         },
+        Migration {
+            name: "0003_gateway_pool.sql",
+            sql: include_str!("../migrations/postgres/0003_gateway_pool.sql"),
+        },
+        Migration {
+            name: "0004_devices.sql",
+            sql: include_str!("../migrations/postgres/0004_devices.sql"),
+        },
+        Migration {
+            name: "0005_device_update_columns.sql",
+            sql: include_str!("../migrations/postgres/0005_device_update_columns.sql"),
+        },
     ],
 };

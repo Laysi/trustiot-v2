@@ -201,7 +201,7 @@ pub struct Preferences {
 impl Default for Preferences {
     /// What a user who never changed a preference has: everything follows the browser or the
     /// operating system, and AI answers in the language of the question. The migration's
-    /// column defaults are the same (`0005_preferences_and_tenant_switch.sql`).
+    /// column defaults are the same (`0007_preferences_and_tenant_switch.sql`).
     fn default() -> Self {
         Self {
             language: Language::Auto,
@@ -588,7 +588,7 @@ mod tests {
 
     /// The migration that creates the table, whose defaults and checks must match this file.
     const MIGRATION: &str =
-        include_str!("../migrations/postgres/0005_preferences_and_tenant_switch.sql");
+        include_str!("../migrations/postgres/0007_preferences_and_tenant_switch.sql");
 
     /// The pattern the migration's check holds every stored time zone to.
     const STORED_PATTERN: &str = "time_zone ~ '^[A-Za-z0-9_+-]+(/[A-Za-z0-9_+-]+)*$'";

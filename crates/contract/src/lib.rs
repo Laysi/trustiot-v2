@@ -42,7 +42,9 @@ pub use error::{ErrorBody, ErrorCode, FieldError, MessageKey};
 // `contract::Actor` is the internal token's `act` claim (identity); the event envelope's
 // actor, who made a change, stays `contract::event::Actor`.
 pub use event::{DecodeError, EncodeError, Event, EventEnvelope};
-pub use id::{DeviceModelId, EventId, RunId, SessionId, TenantId, UserId};
+pub use id::{
+    DeviceId, DeviceModelId, EventId, GatewayBindingId, RunId, SessionId, TenantId, UserId,
+};
 pub use identity::{
     Actor, INTERNAL_IDENTITY_HEADER, InternalClaims, InternalToken, TenantGrant, TenantRole,
 };

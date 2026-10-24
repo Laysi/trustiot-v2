@@ -1,0 +1,47 @@
+PostgreSQL's own computation of its shared memory (the runtime-computed GUC shared_memory_size,
+in MB) for the chart's parameters and CloudNativePG 1.30.1's defaults (max_worker_processes 32,
+max_replication_slots 32, shared_memory_type mmap, dynamic_shared_memory_type posix,
+wal_keep_size 512MB), at several max_connections. Run as the postgres user in a throwaway
+container of docker.io/library/postgres:18.6-alpine (the digest crates/service-kit/tests/support/
+start.rs pins), on a data directory initdb had just created; no server was started.
+
+Script (/shmem.sh in the container):
+
+  set -eu
+  initdb -D /tmp/d >/dev/null 2>&1
+  postgres --version
+  for n in 100 150 160 180 200; do
+    printf 'max_connections=%s shared_memory_size=' "$n"
+    postgres -D /tmp/d -C shared_memory_size \
+      -c max_connections=$n -c shared_buffers=128MB -c work_mem=4MB -c maintenance_work_mem=64MB \
+      -c max_worker_processes=32 -c max_replication_slots=32 -c shared_memory_type=mmap \
+      -c dynamic_shared_memory_type=posix -c wal_keep_size=512MB
+  done
+  for g in autovacuum_max_workers autovacuum_work_mem superuser_reserved_connections \
+           reserved_connections max_wal_senders autovacuum_worker_slots \
+           max_locks_per_transaction max_prepared_transactions; do
+    printf '%s=' "$g"; postgres -D /tmp/d -C "$g"
+  done
+
+Command:
+
+  docker run --rm --user postgres -v <script>:/shmem.sh:ro \
+    docker.io/library/postgres:18.6-alpine@sha256:77f585114c32fbca283dc835b0596f4e52b51b4c6662d7810b2f4084f60a1873 \
+    sh /shmem.sh
+
+Output (2026-10-23):
+
+postgres (PostgreSQL) 18.6
+max_connections=100 shared_memory_size=152
+max_connections=150 shared_memory_size=156
+max_connections=160 shared_memory_size=157
+max_connections=180 shared_memory_size=157
+max_connections=200 shared_memory_size=159
+autovacuum_max_workers=3
+autovacuum_work_mem=-1
+superuser_reserved_connections=3
+reserved_connections=0
+max_wal_senders=10
+autovacuum_worker_slots=16
+max_locks_per_transaction=64
+max_prepared_transactions=0

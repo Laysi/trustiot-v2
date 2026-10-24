@@ -558,16 +558,25 @@ describe("secrets reach only the services that need them", () => {
     expect(JSON.stringify(smoke)).not.toContain("TRUSTIOT_POSTGRES_CA_FILE");
     for (const pod of [identity, smoke]) expect(pod.containers[0]?.volumeMounts).toContainEqual(clickhouseMount);
     expect(platformConfig(manifests).TRUSTIOT_CLICKHOUSE_CA_FILE).toBe("/etc/trustiot/clickhouse-ca/ca.crt");
-    // Listing postgres is what gives a service the CA. The migration Job is off here: the smoke
-    // service's image is not a TrustIoT release, which the Job's tag rule refuses for a service
-    // that uses Postgres (see "a service that uses Postgres must have the migration Job's tag").
-    const listed = render(
+    // Listing postgres is what gives a service the CA: assets without it has none.
+    const assets = (calls: string) =>
+      podSpec(find(render([...SHAPES.saas, SMOKE], [...external, "--set", "services.assets.enabled=true", "--set-json", `mesh.calls.assets=${calls}`]), "Deployment", `${RELEASE}-assets`));
+    const unlisted = assets("[]");
+    expect(JSON.stringify(unlisted)).not.toContain("postgres-ca");
+    expect(JSON.stringify(unlisted)).not.toContain("TRUSTIOT_POSTGRES_CA_FILE");
+    const listed = assets('["postgres"]');
+    expect(listed.volumes).toContainEqual(postgresVolume);
+    expect(listed.containers[0]?.volumeMounts).toContainEqual(postgresMount);
+    // A service the chart has no connection budget for, such as the smoke stand-in, cannot list
+    // postgres in either mode: its pools would go uncounted (README.md, 「叢集內的 Postgres」).
+    // The migration Job is off: the smoke service's image is not a TrustIoT release, which the
+    // Job's tag rule refuses for a service that uses Postgres.
+    const smokeListed = helmTemplate(
       [...SHAPES.saas, SMOKE],
       [...external, "--set-json", 'mesh.calls.smoke-echo=["postgres"]', "--set", "migrate.enabled=false"],
     );
-    const listedSmoke = podSpec(find(listed, "Deployment", `${RELEASE}-smoke-echo`));
-    expect(listedSmoke.volumes).toContainEqual(postgresVolume);
-    expect(listedSmoke.containers[0]?.volumeMounts).toContainEqual(postgresMount);
+    expect(smokeListed.code).not.toBe(0);
+    expect(smokeListed.stderr).toContain("services.smoke-echo lists postgres under mesh.calls, but the chart has no connection budget for it");
   });
 });
 
@@ -589,6 +598,9 @@ describe("internal identity (decision 27, Laysi/trustiot-v2#61; keys generated i
     env(manifests, service).find((e) => e.name === name)?.value;
   const initsOf = (pod: PodSpec) => (pod.initContainers ?? []) as Container[];
   const ROTATION = `${RELEASE}-identity-key-rotation`;
+  // The suspended CronJob an operator starts the first platform administrator's bootstrap from
+  // (Laysi/trustiot-v2#582); its own tests are in the describe block below.
+  const BOOTSTRAP = `${RELEASE}-platform-admin-bootstrap`;
   const cronPod = (cronJob: Manifest) =>
     (cronJob.spec as { jobTemplate: { spec: { template: { spec: PodSpec } } } }).jobTemplate.spec.template.spec;
   // Every pod template the chart renders: Deployments, StatefulSets, Jobs, the rotation CronJob;
@@ -843,13 +855,13 @@ describe("internal identity (decision 27, Laysi/trustiot-v2#61; keys generated i
       const off = render([...SHAPES[shape], SMOKE], [...everything, "--set", "internalIdentity.maxKeyAgeSeconds=0"]);
       expect(rbac(manifests)).toEqual(rbac(off));
       // Acceptance: maxKeyAgeSeconds 0 renders no CronJob, and the identity service checks nothing.
-      expect(off.filter((m) => m.kind === "CronJob")).toEqual([]);
+      expect(off.filter((m) => m.kind === "CronJob" && m.metadata.name !== BOOTSTRAP)).toEqual([]);
       expect(JSON.stringify(off)).not.toContain("identity-key-rotation");
       expect(envValue(off, "identity", "TRUSTIOT_IDENTITY_MAX_KEY_AGE_SECONDS")).toBe("0");
     }
     // Nothing rotates while a person's key is moved over, or without the identity service.
     const moving = render([...SHAPES.saas, SMOKE], [...everything, ...legacy]);
-    expect(moving.filter((m) => m.kind === "CronJob")).toEqual([]);
+    expect(moving.filter((m) => m.kind === "CronJob" && m.metadata.name !== BOOTSTRAP)).toEqual([]);
     expect(envValue(moving, "identity", "TRUSTIOT_IDENTITY_MAX_KEY_AGE_SECONDS")).toBe("0");
     const without = render([...SHAPES.saas, SMOKE], ["--set", "services.assets.enabled=true"]);
     expect(without.filter((m) => m.kind === "CronJob")).toEqual([]);
@@ -879,7 +891,7 @@ describe("internal identity (decision 27, Laysi/trustiot-v2#61; keys generated i
     // name (Helm caps it at 53); its policies carry the same name.
     for (const release of ["r", `trustiot-${"x".repeat(44)}`]) {
       const long = render(SHAPES.saas, base, release);
-      const cronJobs = long.filter((m) => m.kind === "CronJob");
+      const cronJobs = long.filter((m) => m.kind === "CronJob" && m.metadata.name.endsWith("-identity-key-rotation"));
       expect(cronJobs).toHaveLength(1);
       const name = cronJobs[0]?.metadata.name ?? "";
       expect(name.length, release).toBeLessThanOrEqual(52);
@@ -2074,6 +2086,51 @@ describe("MQTT broker (decision 6, Laysi/trustiot-v2#84)", () => {
     expect(withoutCerts.some((m) => m.metadata.name === `${RELEASE}-certs`)).toBe(false);
   });
 
+  // Laysi/trustiot-v2#85: mqtt-bridge relays each gateway's WebSocket to the broker's gateway port,
+  // the one port the mesh admits it on, and reads the source-IP mode from the platform settings.
+  test.each(SHAPE_NAMES)("%s: mqtt-bridge gets the broker's gateway port, and no address without the broker", (shape) => {
+    const BRIDGE = `${RELEASE}-mqtt-bridge`;
+    const bridge = (rendered: Manifest[]) => {
+      const container = (podSpec(find(rendered, "Deployment", BRIDGE)).containers as Container[])[0];
+      if (!container) throw new Error(`no container in ${BRIDGE}`);
+      return container;
+    };
+    const withBroker = bridge(render(SHAPES[shape], [...brokerOn, ...callers]));
+    expect((withBroker.env ?? []).filter((e) => e.name.startsWith("TRUSTIOT__BROKER__"))).toEqual([
+      { name: "TRUSTIOT__BROKER__ADDRESS", value: `${NAME}.${NAMESPACE}.svc:${GATEWAY_PORT}` },
+    ]);
+    expect(withBroker.envFrom).toEqual([{ configMapRef: { name: `${RELEASE}-platform` } }]);
+    // Without the broker the bridge has nowhere to relay to and refuses to start
+    // (services/mqtt-bridge/README.md, 「設定」).
+    const withoutBroker = bridge(render(SHAPES[shape], ["--set", "services.mqtt-bridge.enabled=true"]));
+    expect((withoutBroker.env ?? []).some((e) => e.name.startsWith("TRUSTIOT__BROKER__"))).toBe(false);
+    // The address is the chart's: custom env cannot point the bridge elsewhere, with the broker or
+    // without it, through the service's env or serviceDefaults.env.
+    for (const broker of [[...brokerOn, ...callers], ["--set", "services.mqtt-bridge.enabled=true"]]) {
+      for (const field of ["services.mqtt-bridge.env", "serviceDefaults.env"]) {
+        const result = helmTemplate(SHAPES[shape], [...broker, "--set-json", `${field}=[{"name":"trustiot__broker__address","value":"elsewhere:8883"}]`]);
+        expect(result.code).not.toBe(0);
+        expect(result.stderr).toContain("services.mqtt-bridge: env trustiot__broker__address is set by the chart");
+      }
+    }
+  });
+
+  // Security review of Laysi/trustiot-v2#85: a service allowed to call mqtt-bridge could set
+  // CF-Connecting-IP itself and reach the broker's gateway port through the bridge, so the ingress
+  // gateway stays its only caller.
+  test("no service may list mqtt-bridge in mesh.calls", () => {
+    const result = helmTemplate(SHAPES.saas, [
+      ...brokerOn,
+      ...callers,
+      "--set",
+      "services.assets.enabled=true",
+      "--set-json",
+      'mesh.calls.assets=["postgres","mqtt-bridge"]',
+    ]);
+    expect(result.code).not.toBe(0);
+    expect(result.stderr).toContain("mesh.calls.assets: no service may call mqtt-bridge");
+  });
+
   // Laysi/trustiot-v2#557: a certificate for the broker's name lets its holder pose as the broker
   // to every gateway, so only the broker's pod reaches the port that issues it.
   test.each(SHAPE_NAMES)("%s: the broker alone reaches the certs service's broker-certs port, which the certs Service leaves out", (shape) => {
@@ -2147,9 +2204,11 @@ describe("MQTT broker (decision 6, Laysi/trustiot-v2#84)", () => {
     const env = Object.fromEntries((container?.env ?? []).map((e) => [e.name, e.value]));
     expect(env.TRUSTIOT__BROKER__LISTEN_ADDR).toBe(`0.0.0.0:${BROKER_CERTS_PORT}`);
     expect(env.TRUSTIOT__BROKER__SERVICE_NAME).toBe(`${NAME}.${NAMESPACE}.svc`);
-    // No other workload gets the broker's settings.
+    // No other workload gets the broker's settings; mqtt-bridge gets only the broker's address
+    // (Laysi/trustiot-v2#85).
     for (const other of rendered.filter((m) => m.kind === "Deployment" && m.metadata.name !== CERTS)) {
-      expect(podSpec(other).containers.flatMap((c) => (c.env ?? []).map((e) => e.name)).filter((name) => name.startsWith("TRUSTIOT__BROKER__"))).toEqual([]);
+      const expected = other.metadata.name === `${RELEASE}-mqtt-bridge` ? ["TRUSTIOT__BROKER__ADDRESS"] : [];
+      expect(podSpec(other).containers.flatMap((c) => (c.env ?? []).map((e) => e.name)).filter((name) => name.startsWith("TRUSTIOT__BROKER__"))).toEqual(expected);
     }
 
     // Without the broker the port's policies admit nobody, and the certificate names no Service.
@@ -2460,7 +2519,7 @@ describe("bundled Postgres (CloudNativePG, Laysi/trustiot-v2#58)", () => {
       effective_cache_size: "384MB",
       work_mem: "4MB",
       maintenance_work_mem: "64MB",
-      max_connections: "100",
+      max_connections: "160",
     });
     // The string form takes the same 10–1000 as the number (values.schema.json).
     const most = clusterSpec(render(SHAPES.saas, ["--set-string", "postgres.bundled.parameters.max_connections=1000"]));
@@ -2538,17 +2597,24 @@ describe("bundled Postgres (CloudNativePG, Laysi/trustiot-v2#58)", () => {
       expect(pod).not.toContain("TRUSTIOT_POSTGRES_CA_FILE");
     }
     // The CA's private key and the server key stay with the operator; the owner's password
-    // reaches the migration Job only.
+    // reaches the migration Job only, and the first platform administrator's bootstrap CronJob,
+    // which runs as the migration role (Laysi/trustiot-v2#582).
     const rendered = JSON.stringify(manifests);
     expect(rendered).not.toContain("ca.key");
     for (const suffix of ["server", "replication", "superuser"]) expect(rendered).not.toContain(`${cluster}-${suffix}`);
     const readers = manifests.filter((m) => JSON.stringify(m).includes(`${cluster}-app`));
-    expect(readers.map((m) => m.kind)).toEqual(["Job"]);
-    const job = (readers[0]?.spec as { template: { spec: PodSpec } }).template.spec.containers[0];
-    expect(job?.env?.filter((e) => e.valueFrom?.secretKeyRef?.name === `${cluster}-app`)).toEqual([
-      { name: "TRUSTIOT__POSTGRES__USERNAME", valueFrom: { secretKeyRef: { name: `${cluster}-app`, key: "username" } } },
-      { name: "TRUSTIOT__POSTGRES__PASSWORD", valueFrom: { secretKeyRef: { name: `${cluster}-app`, key: "password" } } },
+    expect(readers.map((m) => `${m.kind}/${m.metadata.name}`).sort()).toEqual([
+      `CronJob/${RELEASE}-platform-admin-bootstrap`,
+      expect.stringMatching(new RegExp(`^Job/${RELEASE}-migrate-[0-9a-f]{8}$`)),
     ]);
+    for (const reader of readers) {
+      const spec = reader.spec as { template?: { spec: PodSpec }; jobTemplate?: { spec: { template: { spec: PodSpec } } } };
+      const container = (spec.template ?? spec.jobTemplate?.spec.template)?.spec.containers[0];
+      expect(container?.env?.filter((e) => e.valueFrom?.secretKeyRef?.name === `${cluster}-app`)).toEqual([
+        { name: "TRUSTIOT__POSTGRES__USERNAME", valueFrom: { secretKeyRef: { name: `${cluster}-app`, key: "username" } } },
+        { name: "TRUSTIOT__POSTGRES__PASSWORD", valueFrom: { secretKeyRef: { name: `${cluster}-app`, key: "password" } } },
+      ]);
+    }
   });
 
   test("the Cluster name stays within CloudNativePG's 50 characters for the longest release name", () => {
@@ -2699,6 +2765,150 @@ const EXPORTER_COLUMNS = {
     "Events", "Links",
   ],
 };
+
+describe("Postgres connection budget (Laysi/trustiot-v2#575)", () => {
+  // The chart's budgets and reserved connections, read from the template the way the services'
+  // Rust tests read them (crates/testkit, `chart`): the JSON body of each helper.
+  const template = readFileSync(join(CHART_DIR, "templates/_postgres.tpl"), "utf8");
+  function helperJson(name: string): Record<string, unknown> {
+    const body = template.split(`{{- define "${name}" -}}`)[1]?.split("{{- end -}}")[0];
+    if (body === undefined) throw new Error(`no helper ${name} in templates/_postgres.tpl`);
+    return JSON.parse(body) as Record<string, unknown>;
+  }
+  type Budget = { maxConnections: { min: number; max: number }; otherPools: number };
+  const budgets = helperJson("trustiot.postgres.connectionBudgets") as Record<string, Budget>;
+  const reserved = Object.values(helperJson("trustiot.postgres.reservedConnections") as Record<string, number>).reduce((a, b) => a + b, 0);
+  const services = defaults.services as Record<string, { database?: { maxConnections?: number } }>;
+  const calls = (defaults.mesh as { calls: Record<string, string[]> }).calls;
+  const postgresServices = Object.keys(calls).filter((name) => calls[name]?.includes("postgres")).sort();
+  const enable = (names: readonly string[]) => names.flatMap((name) => ["--set", `services.${name}.enabled=true`]);
+  // What the defaults need with every Postgres service on at one replica, computed here from the
+  // budgets and values.yaml, independently of the template's arithmetic.
+  const perReplica = (name: string) => (services[name]?.database?.maxConnections ?? NaN) + (budgets[name]?.otherPools ?? NaN);
+  const needed = postgresServices.reduce((sum, name) => sum + perReplica(name) * 2, 0) + reserved;
+  const limit = Number((defaults.postgres as { bundled: { parameters: { max_connections: number } } }).bundled.parameters.max_connections);
+
+  test("every service that uses Postgres by default has a budget and a pool size, and the numbers are the ones README.md states", () => {
+    expect(postgresServices).toEqual(["assets", "assistant", "certs", "identity", "telemetry-query"]);
+    expect(Object.keys(budgets).sort()).toEqual(postgresServices);
+    expect(Object.fromEntries(postgresServices.map((name) => [name, perReplica(name)]))).toEqual({
+      assets: 14,
+      assistant: 4,
+      certs: 9,
+      identity: 31,
+      "telemetry-query": 12,
+    });
+    expect(reserved).toBe(18);
+    // 2 to spare: the next service that uses Postgres raises max_connections (README.md, 「連線預算」).
+    expect(needed).toBe(158);
+    expect(limit).toBe(160);
+    const readme = readFileSync(join(CHART_DIR, "README.md"), "utf8");
+    for (const name of postgresServices) {
+      expect(readme).toContain(`| \`${name}\` | \`${services[name]?.database?.maxConnections}\` | ${budgets[name]?.otherPools} | ${perReplica(name)} |`);
+    }
+    expect(readme).toContain(`| 合計 | | | 70 | 140 |`);
+  });
+
+  test.each(SHAPE_NAMES)("%s: the defaults, every Postgres service and every planned service pass the check", (shape) => {
+    for (const args of [[], enable(postgresServices), enableAllServices]) {
+      const result = helmTemplate([...SHAPES[shape], SMOKE], args);
+      expect(result.stderr).toBe("");
+      expect(result.code).toBe(0);
+    }
+  });
+
+  test("the check passes at exactly what the services and the reserved connections need, and fails one below with the breakdown", () => {
+    const at = (n: number) => helmTemplate(SHAPES.saas, [...enable(postgresServices), "--set", `postgres.bundled.parameters.max_connections=${n}`]);
+    const exact = at(needed);
+    expect(exact.stderr).toBe("");
+    expect(exact.code).toBe(0);
+    const below = at(needed - 1);
+    expect(below.code).not.toBe(0);
+    expect(below.stderr).toContain(
+      `postgres.bundled.parameters.max_connections is ${needed - 1}, but ${needed} connections are needed: the services can open ${needed - reserved} while all of them roll at once ` +
+        "(per replica x pods: assets 14 x 2, assistant 4 x 2, certs 9 x 2, identity 31 x 2, telemetry-query 12 x 2), " +
+        `and ${reserved} stay reserved for superusers, CloudNativePG, the migration Job and the platform administrator bootstrap.`,
+    );
+    // The string form of max_connections counts the same.
+    const asString = helmTemplate(SHAPES.saas, [...enable(postgresServices), "--set-string", `postgres.bundled.parameters.max_connections=${needed - 1}`]);
+    expect(asString.code).not.toBe(0);
+    expect(asString.stderr).toContain(`but ${needed} connections are needed`);
+  });
+
+  test.each([
+    ["a second identity replica", ["--set", "services.identity.replicas=2"], 31, 3],
+    ["a larger assets pool", ["--set", "services.assets.database.maxConnections=30"], 34, 2],
+  ] as const)("the defaults with %s fail: every replica plus the one a rolling update adds counts", (_what, args, perReplicaAfter, pods) => {
+    const result = helmTemplate(SHAPES.saas, [...enable(postgresServices), ...args]);
+    expect(result.code).not.toBe(0);
+    expect(result.stderr).toContain("postgres.bundled.parameters.max_connections is 160, but");
+    expect(result.stderr).toMatch(new RegExp(`(identity|assets) ${perReplicaAfter} x ${pods}`));
+    // The same values fit once max_connections is raised by what they add.
+    const raised = helmTemplate(SHAPES.saas, [...enable(postgresServices), ...args, "--set", "postgres.bundled.parameters.max_connections=1000"]);
+    expect(raised.stderr).toBe("");
+    expect(raised.code).toBe(0);
+  });
+
+  test("the Deployments roll with the surge the check counts", () => {
+    const manifests = render(SHAPES.saas, enable(postgresServices));
+    for (const name of postgresServices) {
+      const strategy = (find(manifests, "Deployment", `${RELEASE}-${name}`).spec as { strategy: { rollingUpdate: { maxSurge: number; maxUnavailable: number } } }).strategy;
+      expect(strategy.rollingUpdate).toEqual({ maxSurge: 1, maxUnavailable: 0 });
+    }
+  });
+
+  test("each service gets its pool size from database.maxConnections, within the range it accepts, and custom env cannot change it", () => {
+    const env = (args: string[], name: string) =>
+      (podSpec(find(render(SHAPES.saas, [...enable(postgresServices), ...args]), "Deployment", `${RELEASE}-${name}`)).containers[0]?.env ?? []).filter(
+        (e) => e.name === "TRUSTIOT__DATABASE__MAX_CONNECTIONS",
+      );
+    expect(env([], "certs")).toEqual([{ name: "TRUSTIOT__DATABASE__MAX_CONNECTIONS", value: "5" }]);
+    expect(env(["--set", "services.certs.database.maxConnections=2"], "certs")).toEqual([{ name: "TRUSTIOT__DATABASE__MAX_CONNECTIONS", value: "2" }]);
+    // identity keeps 3 connections open, so it refuses fewer (services/identity/src/config.rs);
+    // the schema's floor is 2 for every service, so the template refuses it, with and without
+    // schema validation.
+    for (const schema of [[], ["--skip-schema-validation"]]) {
+      const result = helmTemplate(SHAPES.saas, [...enable(postgresServices), "--set", "services.identity.database.maxConnections=2", ...schema]);
+      expect(result.code).not.toBe(0);
+      expect(result.stderr).toContain("services.identity.database.maxConnections must be a whole number from 3 to 100");
+    }
+    const unchecked = helmTemplate(SHAPES.saas, [...enable(postgresServices), "--set", "services.assets.database.maxConnections=101", "--skip-schema-validation"]);
+    expect(unchecked.stderr).toContain("services.assets.database.maxConnections must be a whole number from 2 to 100");
+    const missing = helmTemplate(SHAPES.saas, [...enable(postgresServices), "--set", "services.assets.database=null"]);
+    expect(missing.code).not.toBe(0);
+    expect(missing.stderr).toContain("services.assets.database.maxConnections is required");
+    const custom = helmTemplate(SHAPES.saas, [
+      ...enable(postgresServices),
+      "--set-json",
+      'services.assets.env=[{"name":"trustiot__database__max_connections","value":"90"}]',
+    ]);
+    expect(custom.code).not.toBe(0);
+    expect(custom.stderr).toContain("services.assets: env trustiot__database__max_connections is set by the chart from services.assets.database.maxConnections");
+    // Nor can serviceDefaults set a pool size for every service (values.schema.json).
+    const everyService = helmTemplate(SHAPES.saas, ["--set", "serviceDefaults.database.maxConnections=10"]);
+    expect(everyService.code).not.toBe(0);
+    expect(everyService.stderr).toMatch(/serviceDefaults/);
+  });
+
+  test("external mode checks no total, since the customer sizes that server, but still the range of each pool", () => {
+    const external = [
+      "--set",
+      "postgres.mode=external",
+      "--set",
+      "postgres.external.host=pg.saas.trustiot.test",
+      "--set",
+      "postgres.external.caSecret.name=trustiot-pg-ca",
+      ...EXTERNAL_MIGRATION,
+      ...enable(postgresServices),
+    ];
+    const many = helmTemplate(SHAPES.saas, [...external, "--set", "services.identity.replicas=10", "--set", "postgres.bundled.parameters.max_connections=10"]);
+    expect(many.stderr).toBe("");
+    expect(many.code).toBe(0);
+    const tooSmall = helmTemplate(SHAPES.saas, [...external, "--set", "services.identity.database.maxConnections=2"]);
+    expect(tooSmall.code).not.toBe(0);
+    expect(tooSmall.stderr).toContain("services.identity.database.maxConnections must be a whole number from 3 to 100");
+  });
+});
 
 describe("migration Job (Laysi/trustiot-v2#60)", () => {
   type JobSpec = YamlMap & {
@@ -3074,6 +3284,8 @@ describe("migration Job (Laysi/trustiot-v2#60)", () => {
     expect(identity.env?.filter((e) => e.name.startsWith("TRUSTIOT__DATABASE__"))).toEqual([
       { name: "TRUSTIOT__DATABASE__USERNAME", value: "identity_app" },
       { name: "TRUSTIOT__DATABASE__PASSWORD", valueFrom: { secretKeyRef: { name: IDENTITY_SECRET, key: "identity_app" } } },
+      // Its main pool, from services.identity.database.maxConnections (Laysi/trustiot-v2#575).
+      { name: "TRUSTIOT__DATABASE__MAX_CONNECTIONS", value: "10" },
       // identity keeps the event log, which reads events as its platform role (Laysi/trustiot-v2#130).
       { name: "TRUSTIOT__DATABASE__PLATFORM_USERNAME", value: "identity_platform" },
       { name: "TRUSTIOT__DATABASE__PLATFORM_PASSWORD", valueFrom: { secretKeyRef: { name: IDENTITY_SECRET, key: "identity_platform" } } },
@@ -3091,6 +3303,7 @@ describe("migration Job (Laysi/trustiot-v2#60)", () => {
         name: "TRUSTIOT__DATABASE__PASSWORD",
         valueFrom: { secretKeyRef: { name: `${RELEASE}-telemetry-query-password`, key: "telemetry_query_app" } },
       },
+      { name: "TRUSTIOT__DATABASE__MAX_CONNECTIONS", value: "10" },
       { name: "TRUSTIOT__DATABASE__PLATFORM_USERNAME", value: "telemetry_query_platform" },
       {
         name: "TRUSTIOT__DATABASE__PLATFORM_PASSWORD",
@@ -3141,6 +3354,7 @@ describe("migration Job (Laysi/trustiot-v2#60)", () => {
     expect(assets.env?.filter((e) => e.name.startsWith("TRUSTIOT__DATABASE__"))).toEqual([
       { name: "TRUSTIOT__DATABASE__USERNAME", value: "assets_app" },
       { name: "TRUSTIOT__DATABASE__PASSWORD", valueFrom: { secretKeyRef: { name: ASSETS_SECRET, key: "assets_app" } } },
+      { name: "TRUSTIOT__DATABASE__MAX_CONNECTIONS", value: "10" },
       { name: "TRUSTIOT__DATABASE__PLATFORM_USERNAME", value: "assets_platform" },
       { name: "TRUSTIOT__DATABASE__PLATFORM_PASSWORD", valueFrom: { secretKeyRef: { name: ASSETS_SECRET, key: "assets_platform" } } },
     ]);
@@ -3416,6 +3630,161 @@ describe("migration Job (Laysi/trustiot-v2#60)", () => {
     const result = helmTemplate(SHAPES.saas, args);
     expect(result.code).not.toBe(0);
     expect(result.stderr).toMatch(expected);
+  });
+});
+
+describe("first platform administrator (Laysi/trustiot-v2#582)", () => {
+  const BOOTSTRAP = `${RELEASE}-platform-admin-bootstrap`;
+  const withIdentity = ["--set", "services.identity.enabled=true"];
+  type CronJobSpec = {
+    schedule: string;
+    timeZone: string;
+    suspend: boolean;
+    concurrencyPolicy: string;
+    successfulJobsHistoryLimit: number;
+    failedJobsHistoryLimit: number;
+    jobTemplate: {
+      metadata: { labels: Record<string, string> };
+      spec: {
+        parallelism: number;
+        completions: number;
+        podReplacementPolicy: string;
+        backoffLimit: number;
+        activeDeadlineSeconds: number;
+        ttlSecondsAfterFinished: number;
+        template: { metadata: { labels: Record<string, string> }; spec: PodSpec & { restartPolicy: string; initContainers?: unknown } };
+      };
+    };
+  };
+  type BootstrapContainer = Container & { args: string[]; stdin: boolean; stdinOnce: boolean; tty: boolean };
+  type Peer = { podSelector?: { matchLabels: Record<string, string> } };
+  const cronJobSpec = (manifests: Manifest[]) => find(manifests, "CronJob", BOOTSTRAP).spec as CronJobSpec;
+  const migrationJob = (manifests: Manifest[]) => {
+    const jobs = manifests.filter((m) => m.kind === "Job");
+    expect(jobs).toHaveLength(1);
+    return jobs[0]?.spec as { template: { metadata: { labels: Record<string, string> }; spec: PodSpec } };
+  };
+  const selects = (selector: Record<string, string>, labels: Record<string, string>) =>
+    Object.entries(selector).every(([key, value]) => labels[key] === value);
+
+  test.each(SHAPE_NAMES)("%s: a suspended CronJob that never runs on its own, one attempt, reading the address on stdin", (shape) => {
+    const manifests = render([...SHAPES[shape], SMOKE], withIdentity);
+    const spec = cronJobSpec(manifests);
+    // Only `kubectl create job --from=cronjob/...` starts it: suspended, and February 31st never comes.
+    expect(spec.suspend).toBe(true);
+    expect(spec.schedule).toBe("0 0 31 2 *");
+    expect(spec.timeZone).toBe("Etc/UTC");
+    expect(spec.concurrencyPolicy).toBe("Forbid");
+    // The Job an operator creates from it is the CronJob's; the controller prunes finished ones
+    // beyond these limits even while suspended, so 0 would delete a successful run before its exit
+    // code is read. At 1 only ttlSecondsAfterFinished removes it.
+    expect(spec.successfulJobsHistoryLimit).toBe(1);
+    expect(spec.failedJobsHistoryLimit).toBe(1);
+    const job = spec.jobTemplate.spec;
+    // A second pod would wait for an address nobody writes again.
+    expect({ parallelism: job.parallelism, completions: job.completions, backoffLimit: job.backoffLimit, podReplacementPolicy: job.podReplacementPolicy }).toEqual({
+      parallelism: 1,
+      completions: 1,
+      backoffLimit: 0,
+      podReplacementPolicy: "Failed",
+    });
+    expect(job.activeDeadlineSeconds).toBe(900);
+    expect(job.ttlSecondsAfterFinished).toBe(86400);
+    const pod = job.template.spec;
+    expect(pod.restartPolicy).toBe("Never");
+    expect(pod.initContainers).toBeUndefined();
+    expect(pod.containers).toHaveLength(1);
+    const container = pod.containers[0] as BootstrapContainer;
+    expect(container.name).toBe("bootstrap-platform-admin");
+    expect(container.args).toEqual(["bootstrap-platform-admin"]);
+    // The address arrives on stdin, from the first `kubectl attach -i`, and nowhere else.
+    expect({ stdin: container.stdin, stdinOnce: container.stdinOnce, tty: container.tty }).toEqual({ stdin: true, stdinOnce: true, tty: false });
+    expect(JSON.stringify(spec)).not.toContain("@");
+    // The migration Job's image, ServiceAccount (no token), security settings and Postgres CA.
+    const migration = migrationJob(manifests);
+    const migrate = migration.template.spec.containers[0] as Container;
+    expect(container.image).toBe(migrate.image);
+    expect(pod.serviceAccountName).toBe(`${RELEASE}-migrate`);
+    expect(pod.serviceAccountName).toBe(migration.template.spec.serviceAccountName);
+    expect(pod.automountServiceAccountToken).toBe(false);
+    expect(pod.securityContext).toEqual(migration.template.spec.securityContext);
+    expect(container.securityContext).toEqual(migrate.securityContext);
+    expect(container.envFrom).toEqual(migrate.envFrom);
+    expect(pod.volumes).toEqual(migration.template.spec.volumes?.filter((v) => v.name === "postgres-ca"));
+    expect(container.volumeMounts).toEqual(migrate.volumeMounts?.filter((v) => v.name === "postgres-ca"));
+  });
+
+  test.each(SHAPE_NAMES)("%s: the pod holds the migration role and nothing else of the migration Job: no Kubernetes API token, no password Secret to fill, no ClickHouse", (shape) => {
+    const manifests = render([...SHAPES[shape], SMOKE], withIdentity);
+    const container = cronJobSpec(manifests).jobTemplate.spec.template.spec.containers[0] as BootstrapContainer;
+    const migrate = migrationJob(manifests).template.spec.containers[0] as Container;
+    const env = container.env ?? [];
+    // Exactly the migration Job's Postgres settings (CA file and the migration role's Secret), in
+    // its order, plus the wait for the database.
+    const postgres = (migrate.env ?? []).filter((e) => e.name.startsWith("TRUSTIOT__POSTGRES__") || e.name === "TRUSTIOT_POSTGRES_CA_FILE");
+    expect(postgres.length).toBeGreaterThan(0);
+    expect(env).toEqual([...postgres, { name: "TRUSTIOT__WAIT__DATABASES", value: "10m" }]);
+    const text = JSON.stringify(cronJobSpec(manifests));
+    for (const absent of ["TRUSTIOT__PASSWORDS__", "TRUSTIOT__CLICKHOUSE__", "migrate-kube-api", "serviceAccountToken"]) {
+      expect(text, absent).not.toContain(absent);
+    }
+    // The wait follows the migration Job's.
+    const slower = render([...SHAPES[shape], SMOKE], [...withIdentity, "--set", "migrate.wait.databases=20m"]);
+    expect((cronJobSpec(slower).jobTemplate.spec.template.spec.containers[0]?.env ?? []).at(-1)).toEqual({ name: "TRUSTIOT__WAIT__DATABASES", value: "20m" });
+  });
+
+  test.each(SHAPE_NAMES)("%s: every NetworkPolicy and AuthorizationPolicy treats its pod as it treats the migration Job's", (shape) => {
+    const manifests = render([...SHAPES[shape], SMOKE], [...enableAllServices, "--set", "observability.collector.enabled=true"]);
+    const job = migrationJob(manifests).template.metadata.labels;
+    const pod = cronJobSpec(manifests).jobTemplate.spec.template.metadata.labels;
+    expect(pod["app.kubernetes.io/component"]).toBe("migrate");
+    expect(pod["trustiot.io/task"]).toBe("platform-admin-bootstrap");
+    expect(pod["istio.io/dataplane-mode"]).toBe("ambient");
+    // Every selector in the policies: the ones that pick the pods a policy applies to and the
+    // peers a NetworkPolicy admits.
+    const selectors: Record<string, string>[] = [];
+    for (const m of manifests.filter((m) => m.kind === "NetworkPolicy" || m.kind === "AuthorizationPolicy")) {
+      const s = m.spec as {
+        selector?: { matchLabels?: Record<string, string> };
+        podSelector?: { matchLabels?: Record<string, string> };
+        ingress?: { from?: Peer[] }[];
+        egress?: { to?: Peer[] }[];
+      };
+      for (const selector of [s.selector?.matchLabels, s.podSelector?.matchLabels]) if (selector) selectors.push(selector);
+      for (const peer of [...(s.ingress ?? []).flatMap((r) => r.from ?? []), ...(s.egress ?? []).flatMap((r) => r.to ?? [])]) {
+        if (peer.podSelector) selectors.push(peer.podSelector.matchLabels);
+      }
+    }
+    // Some policy names the migration Job's pods (the Postgres NetworkPolicy admits them), so the
+    // comparison below is not vacuous.
+    expect(selectors.some((selector) => selects(selector, job) && "app.kubernetes.io/component" in selector)).toBe(true);
+    for (const selector of selectors) {
+      expect({ selector, bootstrap: selects(selector, pod) }).toEqual({ selector, bootstrap: selects(selector, job) });
+    }
+  }, SLOW_TEST_MS);
+
+  test("rendered only while the migration Job and the identity service are, with a name the Job controller can extend", () => {
+    for (const shape of SHAPE_NAMES) {
+      // The identity service is off in both shapes' defaults.
+      expect(render(SHAPES[shape]).some((m) => m.metadata.name === BOOTSTRAP), shape).toBe(false);
+      expect(render(SHAPES[shape], withIdentity).filter((m) => m.metadata.name === BOOTSTRAP).map((m) => m.kind), shape).toEqual(["CronJob"]);
+    }
+    const withoutMigrate = render(SHAPES.saas, [...withIdentity, "--set", "migrate.enabled=false"]);
+    expect(withoutMigrate.some((m) => m.metadata.name.endsWith("-platform-admin-bootstrap"))).toBe(false);
+    // The CronJob controller appends 11 characters to name each Job; Helm caps a release name at 53.
+    for (const release of ["r", `trustiot-${"x".repeat(44)}`]) {
+      const names = render(SHAPES.saas, withIdentity, release)
+        .filter((m) => m.kind === "CronJob" && m.metadata.name.endsWith("-platform-admin-bootstrap"))
+        .map((m) => m.metadata.name);
+      expect(names).toHaveLength(1);
+      expect((names[0] ?? "").length, release).toBeLessThanOrEqual(52);
+    }
+  }, SLOW_TEST_MS);
+
+  test("the chart refuses a service named after the CronJob", () => {
+    const result = helmTemplate(SHAPES.saas, ["--skip-schema-validation", "--set", "services.platform-admin-bootstrap.enabled=false"]);
+    expect(result.code).not.toBe(0);
+    expect(result.stderr).toMatch(/services\.platform-admin-bootstrap: the name belongs to the CronJob that creates the first platform administrator/);
   });
 });
 
@@ -4081,9 +4450,11 @@ describe("ingress gateway (decision 27)", () => {
   const SMOKE_API = [
     "--set", "services.identity.enabled=true",
     "--set", "services.assets.enabled=true",
+    "--set", "services.certs.enabled=true",
     "--set-json", `ingress.routes=${JSON.stringify([
       { host: "app", path: "/api/identity", match: "PathPrefix", service: "identity" },
       { host: "app", path: "/api/assets", match: "PathPrefix", service: "assets" },
+      { host: "app", path: "/api/certs", match: "PathPrefix", service: "certs" },
     ])}`,
   ];
   const ROUTE_LIST_CASES = SHAPE_NAMES.flatMap((shape) => [
@@ -4504,7 +4875,8 @@ describe("service-to-service authorization (decision 27)", () => {
     });
 
     test.each(SHAPE_NAMES)("%s: without calls on behalf of users the token exchange's policies admit nobody", (shape) => {
-      const manifests = render(SHAPES[shape], enableAllServices);
+      // The assistant's tool calls are the default values' only ones; lists replace, maps merge.
+      const manifests = render(SHAPES[shape], [...enableAllServices, "--set-json", "mesh.calls.assistant=[]"]);
       expect(meshPolicy(manifests, "identity-exchange").rules).toBeUndefined();
       expect(networkPolicy(manifests, "identity-exchange").ingress).toEqual([]);
       // The identity service's own policy keeps the gateway on its API port.
@@ -4516,8 +4888,14 @@ describe("service-to-service authorization (decision 27)", () => {
       expect(manifests.some((m) => m.metadata.name === `${RELEASE}-identity-exchange`)).toBe(false);
     });
 
-    test.each(SHAPE_NAMES)("%s: the default values list no call on behalf of users", (shape) => {
-      expect(onBehalfCalls(render(SHAPES[shape], enableAllServices))).toEqual({});
+    // The assistant's tools call telemetry-query and assets as the asking user
+    // (Laysi/trustiot-v2#592); ai-gateway takes no internal identity, so it is not on the list.
+    test.each(SHAPE_NAMES)("%s: the default values list only the assistant's tool calls on behalf of users", (shape) => {
+      expect(onBehalfCalls(render(SHAPES[shape], enableAllServices))).toEqual({ assistant: ["assets", "telemetry-query"] });
+      // Without the assistant, or without the services it calls, nothing is left.
+      expect(onBehalfCalls(render(SHAPES[shape], ["--set", "services.identity.enabled=true"]))).toEqual({});
+      const withoutTools = ["telemetry-query", "assets"].flatMap((s) => ["--set", `services.${s}.enabled=false`]);
+      expect(onBehalfCalls(render(SHAPES[shape], [...enableAllServices, ...withoutTools]))).toEqual({});
     });
 
     // README.md, "呼叫矩陣": the callers of every workload with the default values and every
@@ -4557,12 +4935,17 @@ describe("service-to-service authorization (decision 27)", () => {
     });
   });
 
-  test("with the default empty call list only the ingress gateway reaches its backends and the identity service", () => {
+  test("with the default call list only the ingress gateway and the assistant reach other services", () => {
     const manifests = render(SHAPES.saas, enableAllServices);
     for (const service of plannedServices) {
       // Public paths keep identity, certs and mqtt-bridge reachable from the gateway, and the
-      // SPA's static files keep web.
-      const expected = ["identity", "certs", "mqtt-bridge", "web"].includes(service) ? [principal(GATEWAY_SA)] : [];
+      // SPA's static files keep web. The assistant calls the AI gateway and its tools' services
+      // (Laysi/trustiot-v2#592).
+      const expected = ["identity", "certs", "mqtt-bridge", "web"].includes(service)
+        ? [principal(GATEWAY_SA)]
+        : ["ai-gateway", "assets", "telemetry-query"].includes(service)
+          ? [principal(`${RELEASE}-assistant`)]
+          : [];
       expect(principalsOf(meshPolicy(manifests, service))).toEqual(expected);
       expect(networkPolicy(manifests, service).ingress?.length).toBe(expected.length > 0 ? 2 : 1);
     }
@@ -4693,7 +5076,8 @@ describe("service-to-service authorization (decision 27)", () => {
       expect(principalsOf(meshPolicy(one, "ai-gateway"))).toEqual([principal(`${RELEASE}-assistant`)]);
       expect(hboneSources(one, networkPolicy(one, "ai-gateway"))).toEqual({ services: ["assistant"], gateway: false });
       // None listed: no service, and never the ingress gateway (no cookie route may lead to it).
-      const none = render([...SHAPES[shape], E2E_VALUES], [...enable, "--set-json", "mesh.calls={}"]);
+      // Maps merge, so the default values' assistant entry goes with an empty list.
+      const none = render([...SHAPES[shape], E2E_VALUES], [...enable, "--set-json", 'mesh.calls={"assistant":[]}']);
       expect(principalsOf(meshPolicy(none, "ai-gateway"))).toEqual([]);
       expect(hboneSources(none, networkPolicy(none, "ai-gateway"))).toEqual({ services: [], gateway: false });
     });
@@ -4720,6 +5104,194 @@ describe("service-to-service authorization (decision 27)", () => {
         expect(result.code).not.toBe(0);
         expect(result.stderr).toMatch(`mesh.calls.${caller}: only alerts, assistant, knowledge may call ai-gateway (decision 28)`);
       }
+    });
+  });
+
+  // The AI assistant (decision 31, Laysi/trustiot-v2#592): the mesh lets it reach the AI gateway,
+  // its tools' services and the identity service's token exchange, and the chart points it only at
+  // services the mesh lets it call (README.md, 「AI 助理」).
+  describe("the assistant (decision 31, Laysi/trustiot-v2#592)", () => {
+    const ASSISTANT = principal(`${RELEASE}-assistant`);
+    const ADDRESS_VARIABLES = ["TRUSTIOT__AI_GATEWAY__URL", "TRUSTIOT__ASSETS__URL", "TRUSTIOT__IDENTITY__EXCHANGE_URL", "TRUSTIOT__TELEMETRY_QUERY__URL"];
+    type ServiceSpec = { selector: Record<string, string>; ports: { name: string; port: number; targetPort: string | number }[] };
+    const assistantEnv = (manifests: Manifest[]) => podSpec(find(manifests, "Deployment", `${RELEASE}-assistant`)).containers[0]?.env ?? [];
+    const onBehalfOf = (manifests: Manifest[]) =>
+      JSON.parse((podSpec(find(manifests, "Deployment", `${RELEASE}-identity`)).containers[0]?.env ?? []).find((e) => e.name === "TRUSTIOT_ON_BEHALF_CALLS")?.value ?? "null") as Record<string, string[]>;
+    // Every URL in the assistant's env, followed through the Service it names to the one workload
+    // and container port behind it, with the AuthorizationPolicies that admit the assistant on
+    // that port. Read from the rendered objects only, so a new address is checked without a list.
+    function addressesOf(manifests: Manifest[]) {
+      return assistantEnv(manifests)
+        .filter((e) => /^[a-z][a-z0-9+.-]*:\/\//.test(e.value ?? ""))
+        .map((e) => {
+          const url = new URL(e.value ?? "");
+          expect(url.protocol, e.name).toBe("http:");
+          // A Service of this release and namespace: its short name or <name>.<namespace>.svc.
+          const [name = "", ...domain] = url.hostname.split(".");
+          if (domain.length > 0) expect(domain.join("."), e.name).toBe(`${NAMESPACE}.svc`);
+          const service = find(manifests, "Service", name).spec as ServiceSpec;
+          const servicePort = service.ports.find((p) => p.port === Number(url.port));
+          if (servicePort === undefined) throw new Error(`${e.name}: Service ${name} has no port ${url.port}`);
+          const workloads = manifests.filter((m) => ["Deployment", "StatefulSet", "DaemonSet"].includes(m.kind) && selects(service.selector, podLabels(m)));
+          expect(workloads.map((w) => w.metadata.name), e.name).toHaveLength(1);
+          const workload = workloads[0] as Manifest;
+          const containerPort =
+            typeof servicePort.targetPort === "number"
+              ? servicePort.targetPort
+              : podSpec(workload)
+                  .containers.flatMap((c) => c.ports ?? [])
+                  .find((p) => p.name === servicePort.targetPort)?.containerPort;
+          if (containerPort === undefined) throw new Error(`${e.name}: ${workload.metadata.name} has no port ${servicePort.targetPort}`);
+          const admittedBy = manifests
+            .filter((m) => m.kind === "AuthorizationPolicy")
+            .filter((m) => {
+              const spec = m.spec as MeshPolicy;
+              const selector = spec.selector?.matchLabels ?? {};
+              return (
+                Object.keys(selector).length > 0 &&
+                selects(selector, podLabels(workload)) &&
+                (spec.rules ?? []).some(
+                  (rule) =>
+                    (rule.from ?? []).some((f) => (f.source?.principals ?? []).includes(ASSISTANT)) &&
+                    (rule.to === undefined || rule.to.some((t) => t.operation.ports.includes(String(containerPort)))),
+                )
+              );
+            })
+            .map((m) => serviceOf(m.metadata.name))
+            .sort();
+          return { variable: e.name, service: serviceOf(name), workload: serviceOf(workload.metadata.name), admittedBy };
+        });
+    }
+
+    // Acceptance criterion 3: every service the chart gives the assistant an address of is in
+    // mesh.calls.assistant, the mesh admits the assistant on the very port of that address, and the
+    // token exchange grants every tool's service. [case, extra args, mesh.calls.assistant, the
+    // addresses the case leads to].
+    const CASES: [string, string[], string[], Record<string, string>][] = [
+      [
+        "the default values",
+        [],
+        ["ai-gateway", "telemetry-query", "assets", "postgres"],
+        {
+          TRUSTIOT__AI_GATEWAY__URL: "ai-gateway",
+          TRUSTIOT__ASSETS__URL: "assets",
+          TRUSTIOT__IDENTITY__EXCHANGE_URL: "identity-exchange",
+          TRUSTIOT__TELEMETRY_QUERY__URL: "telemetry-query",
+        },
+      ],
+      [
+        "a list without assets",
+        ["--set-json", 'mesh.calls.assistant=["ai-gateway","telemetry-query","postgres"]'],
+        ["ai-gateway", "telemetry-query", "postgres"],
+        { TRUSTIOT__AI_GATEWAY__URL: "ai-gateway", TRUSTIOT__IDENTITY__EXCHANGE_URL: "identity-exchange", TRUSTIOT__TELEMETRY_QUERY__URL: "telemetry-query" },
+      ],
+      [
+        "telemetry-query disabled",
+        ["--set", "services.telemetry-query.enabled=false"],
+        ["ai-gateway", "telemetry-query", "assets", "postgres"],
+        { TRUSTIOT__AI_GATEWAY__URL: "ai-gateway", TRUSTIOT__ASSETS__URL: "assets", TRUSTIOT__IDENTITY__EXCHANGE_URL: "identity-exchange" },
+      ],
+      // No call on behalf of users, so no token exchange either.
+      ["the AI gateway alone", ["--set-json", 'mesh.calls.assistant=["ai-gateway"]'], ["ai-gateway"], { TRUSTIOT__AI_GATEWAY__URL: "ai-gateway" }],
+      ["the AI gateway disabled", ["--set", "services.ai-gateway.enabled=false"], ["ai-gateway", "telemetry-query", "assets", "postgres"], {
+        TRUSTIOT__ASSETS__URL: "assets",
+        TRUSTIOT__IDENTITY__EXCHANGE_URL: "identity-exchange",
+        TRUSTIOT__TELEMETRY_QUERY__URL: "telemetry-query",
+      }],
+      ["an empty list", ["--set-json", "mesh.calls.assistant=[]"], [], {}],
+    ];
+    test.each(SHAPE_NAMES)("%s: every address the chart gives the assistant leads to a service in mesh.calls.assistant that admits it there", (shape) => {
+      for (const [name, args, listed, expected] of CASES) {
+        const manifests = render(SHAPES[shape], [...enableAllServices, ...args]);
+        const addresses = addressesOf(manifests);
+        expect(Object.fromEntries(addresses.filter((a) => ADDRESS_VARIABLES.includes(a.variable)).map((a) => [a.variable, a.service])), name).toEqual(expected);
+        const exchanges = onBehalfOf(manifests).assistant ?? [];
+        for (const address of addresses) {
+          const where = `${name}: ${address.variable}`;
+          if (address.service === "identity-exchange") {
+            // The token exchange's port only, never the identity service's API port; and only
+            // while the assistant calls a service on behalf of users.
+            expect(address.workload, where).toBe("identity");
+            expect(address.admittedBy, where).toEqual(["identity-exchange"]);
+            expect(exchanges.length, where).toBeGreaterThan(0);
+          } else if (plannedServices.includes(address.workload)) {
+            expect(listed, where).toContain(address.workload);
+            expect(address.admittedBy, where).toEqual([address.workload]);
+            // A tool's service is an audience the token exchange grants the assistant.
+            if (address.workload !== "ai-gateway") expect(exchanges, where).toContain(address.workload);
+          } else {
+            // A component the chart lets every service reach (the OpenTelemetry collector).
+            expect(address.service, where).toBe("otel-collector");
+            expect(address.admittedBy, where).toEqual(["otel-collector"]);
+          }
+        }
+        // The other way: every service on the token exchange's list for the assistant has its
+        // address, so the list and the addresses never drift apart.
+        for (const callee of exchanges) expect(addresses.map((a) => a.workload), `${name}: ${callee}`).toContain(callee);
+      }
+    }, SLOW_TEST_MS);
+
+    // Acceptance criterion 1: with the default values the assistant reaches the AI gateway,
+    // telemetry-query, assets and the identity service's token exchange port, plus the collector
+    // every service sends its telemetry to, and Postgres; nothing else, in either layer.
+    test.each(SHAPE_NAMES)("%s: the default values let the assistant reach only ai-gateway, telemetry-query, assets and the token exchange", (shape) => {
+      const manifests = render(SHAPES[shape], enableAllServices);
+      // The mesh's ALLOW policies; the ingress gateway's own policies admit no service account.
+      const admitting = manifests
+        .filter((m) => m.kind === "AuthorizationPolicy" && !m.metadata.name.startsWith(`${RELEASE}-ingress-`))
+        .filter((m) => (m.spec as MeshPolicy).action === "ALLOW" && principalsOf(m.spec as MeshPolicy).includes(ASSISTANT))
+        .map((m) => serviceOf(m.metadata.name))
+        .sort();
+      expect(admitting).toEqual(["ai-gateway", "assets", "identity-exchange", "otel-collector", "telemetry-query"]);
+      // The token exchange's port only; the identity service's own policy keeps the assistant out.
+      expect(meshPolicy(manifests, "identity-exchange").rules).toEqual([identityRule(EXCHANGE_PORT, [ASSISTANT])]);
+      expect(principalsOf(meshPolicy(manifests, "identity"))).not.toContain(ASSISTANT);
+      // NetworkPolicies admit the assistant's pods to the same workloads, on HBONE, and to the
+      // bundled Postgres (not in the mesh) on its own port.
+      const assistantPods = podLabels(find(manifests, "Deployment", `${RELEASE}-assistant`));
+      const reached = manifests
+        .filter((m) => m.kind === "NetworkPolicy")
+        .flatMap((m) =>
+          ((m.spec as NetworkPolicySpec).ingress ?? [])
+            .filter((rule) => (rule.from ?? []).some((peer) => peer.podSelector !== undefined && selects(peer.podSelector.matchLabels, assistantPods)))
+            .map((rule) => `${serviceOf(m.metadata.name)}:${(rule.ports ?? []).map((p) => p.port).join(",")}`),
+        )
+        .sort();
+      const postgres = manifests.some((m) => m.kind === "NetworkPolicy" && m.metadata.name === `${RELEASE}-postgres`) ? ["postgres:5432"] : [];
+      expect(reached).toEqual([...["ai-gateway", "assets", "identity-exchange", "otel-collector", "telemetry-query"].map((s) => `${s}:15008`), ...postgres].sort());
+      // Its database login is assistant_app, with the password from its own Secret, and its pool is
+      // the size the connection budget counts (Laysi/trustiot-v2#575).
+      expect(assistantEnv(manifests).filter((e) => e.name.startsWith("TRUSTIOT__DATABASE__"))).toEqual([
+        { name: "TRUSTIOT__DATABASE__USERNAME", value: "assistant_app" },
+        { name: "TRUSTIOT__DATABASE__PASSWORD", valueFrom: { secretKeyRef: { name: `${RELEASE}-assistant-password`, key: "assistant_app" } } },
+        { name: "TRUSTIOT__DATABASE__MAX_CONNECTIONS", value: "4" },
+      ]);
+    });
+
+    // The addresses are the chart's: custom env could otherwise point the assistant at a service
+    // mesh.calls does not list, whether the chart sets that address this time or not.
+    test.each(ADDRESS_VARIABLES)("services.assistant.env and serviceDefaults.env cannot set %s, with or without schema validation", (variable) => {
+      for (const lists of [[], ["--set-json", "mesh.calls.assistant=[]"]]) {
+        for (const field of ["services.assistant.env", "serviceDefaults.env"]) {
+          for (const skip of [[], ["--skip-schema-validation"]]) {
+            const result = helmTemplate(SHAPES.saas, [...skip, ...enableAllServices, ...lists, "--set-json", `${field}=[{"name":"${variable.toLowerCase()}","value":"http://elsewhere:8080"}]`]);
+            expect(result.code, `${field} ${lists.join(" ")}`).not.toBe(0);
+            expect(result.stderr).toContain(`services.assistant: env ${variable.toLowerCase()} is set by the chart from mesh.calls.assistant`);
+          }
+        }
+      }
+    }, SLOW_TEST_MS);
+
+    test("other services do not get the assistant's addresses, and a callee without an http port fails the render", () => {
+      const manifests = render(SHAPES.saas, enableAllServices);
+      for (const deployment of manifests.filter(isServiceDeployment)) {
+        if (deployment.metadata.name === `${RELEASE}-assistant`) continue;
+        const names = podSpec(deployment).containers.flatMap((c) => (c.env ?? []).map((e) => e.name));
+        expect(names.filter((n) => ADDRESS_VARIABLES.includes(n)), deployment.metadata.name).toEqual([]);
+      }
+      const result = helmTemplate(SHAPES.saas, [...enableAllServices, "--set-json", 'services.assets.ports=[{"name":"api","containerPort":8080}]']);
+      expect(result.code).not.toBe(0);
+      expect(result.stderr).toContain("services.assets.ports: the assistant calls it on the port named http (mesh.calls.assistant), and there is none");
     });
   });
 

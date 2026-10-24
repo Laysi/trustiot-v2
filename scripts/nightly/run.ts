@@ -22,7 +22,8 @@
 // .prototools: bun, helm, k3d and kubectl. Building the Rust images from source (NIGHTLY_IMAGES:
 // the migration Job's and the services', scripts/nightly/service-image.ts), which happens only
 // when no cached image matches their inputs, also needs rustup and its cargo, zig, cargo-zigbuild
-// and cargo-auditable.
+// and cargo-auditable. The certs check (certs.ts) runs certs-ca, which the certs image's build
+// makes too (NIGHTLY_PROGRAMS) and the cache keeps beside the tarballs.
 // Exit status: 0 when every shape passed, 1 when a check failed, 2 on a usage error.
 import { appendFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -31,7 +32,8 @@ import { join, resolve } from "node:path";
 import { exec, pinnedTool, retry, run, RunLog } from "./exec.ts";
 import { isOk, renderMarkdown, type Report, type ShapeResult } from "./report.ts";
 import { installPlatform } from "./platform.ts";
-import { NIGHTLY_IMAGES } from "./image-cache.ts";
+import { CERTS_CA } from "./certs.ts";
+import { NIGHTLY_IMAGES, programsOf } from "./image-cache.ts";
 import { loadServiceImage } from "./service-image.ts";
 import { discoverShapes, smokeShape } from "./smoke.ts";
 
@@ -91,6 +93,9 @@ async function main(): Promise<number> {
   // output directory, which is uploaded as an artifact.
   const secretDir = mkdtempSync(join(tmpdir(), "nightly-kube-"));
   const kubeconfig = join(secretDir, "kubeconfig");
+  // The programs built with the images (image-cache.ts, NIGHTLY_PROGRAMS): certs-ca, which makes
+  // and uses the test root CA of each shape (certs.ts). Also outside the output directory.
+  const programsDir = mkdtempSync(join(tmpdir(), "nightly-programs-"));
 
   const startedAt = new Date().toISOString();
   const shapeResults: ShapeResult[] = [];
@@ -146,17 +151,20 @@ async function main(): Promise<number> {
     );
     // The Rust images the smoke deploys (NIGHTLY_IMAGES): the migration Job's (tools/migrate,
     // named by deploy/chart/tests/values/smoke.yaml) and the services the API check's values turn
-    // on (api.ts): identity, assets and telemetry-query, which it calls through the ingress, and
-    // ai-gateway.
+    // on (api.ts): identity, assets and telemetry-query, which it calls through the ingress,
+    // ai-gateway, certs, whose build also makes certs-ca (NIGHTLY_PROGRAMS), and assistant.
     const cacheDir = process.env.NIGHTLY_IMAGE_CACHE_DIR;
     const cache = cacheDir ? { cache: { dir: cacheDir, save: process.env.NIGHTLY_IMAGE_CACHE_SAVE === "true" } } : {};
     for (const name of NIGHTLY_IMAGES) {
       log.line(`== platform: ${name} image`);
-      await loadServiceImage({ repoRoot: REPO_ROOT, log, k3d, cluster: CLUSTER }, name, cache);
+      const names = programsOf(name);
+      const programs = names.length === 0 ? {} : { programs: { names, dir: programsDir } };
+      await loadServiceImage({ repoRoot: REPO_ROOT, log, k3d, cluster: CLUSTER }, name, { ...cache, ...programs });
     }
+    const certsCa = join(programsDir, CERTS_CA);
 
     for (const shape of shapes) {
-      shapeResults.push(await smokeShape({ repoRoot: REPO_ROOT, chartDir: CHART_DIR, outDir, kubeconfig, helm, kubectl, log, simulateFailure }, shape));
+      shapeResults.push(await smokeShape({ repoRoot: REPO_ROOT, chartDir: CHART_DIR, outDir, kubeconfig, helm, kubectl, log, simulateFailure, certsCa }, shape));
     }
   } catch (error) {
     infraError = error instanceof Error ? error.message : String(error);
@@ -170,6 +178,7 @@ async function main(): Promise<number> {
       infraError = infraError === undefined ? reason : `${infraError}\n${reason}`;
     }
     rmSync(secretDir, { recursive: true, force: true });
+    rmSync(programsDir, { recursive: true, force: true });
   }
 
   const partial = { infraError, shapes: shapeResults };

@@ -14,16 +14,20 @@ import {
   API_ROUTES,
   apiValues,
   ASSETS_TENANT_PATH,
+  ASSISTANT_ROLE,
+  checkAssistantLogin,
   checkIngressEdges,
   checkTelemetryApi,
   checkTenantAccount,
   checkTenantApi,
   errorCode,
   EXT_AUTHZ_PREFIX,
+  grantsLoggedSql,
   IDENTITY_HEADER,
   memberSessionSql,
   newSession,
   NORMALIZED_TENANT_PATHS,
+  roleSessionsSql,
   routesOfValues,
   SESSION_COOKIE,
   stealIdentityToken,
@@ -48,6 +52,7 @@ import {
   platformSettingsOf,
 } from "./manifests.ts";
 import type { K8sObject } from "./manifests.ts";
+import { serviceImageRef } from "./service-image.ts";
 import { discoverShapes, valuesArgs } from "./smoke.ts";
 
 const REPO_ROOT = join(import.meta.dir, "..", "..");
@@ -69,10 +74,14 @@ describe("the check's sessions", () => {
     }
   });
 
-  test("an administrator without a tenant, and a viewer acting in the new tenant", () => {
+  test("a session for the administrator the bootstrap made, without a tenant, and a viewer acting in the new tenant", () => {
     const session = newSession();
     const admin = adminSessionSql(session);
-    expect(admin).toContain(`INSERT INTO identity.users (id, platform_admin) VALUES ('${session.userId}', true);`);
+    // The user is the bootstrap's (Laysi/trustiot-v2#582): the check never makes a platform
+    // administrator with SQL.
+    expect(admin).not.toContain("identity.users");
+    expect(admin).not.toContain("platform_admin");
+    expect(admin).toContain(`'${session.userId}', now() + interval '1 hour');`);
     expect(admin).not.toContain("memberships");
     expect(admin).not.toContain("active_tenant_id");
     const member = memberSessionSql(session, TENANT);
@@ -84,11 +93,31 @@ describe("the check's sessions", () => {
     }
   });
 
+  test("a member with another tenant role, which only a known role may be (the certs check's tenant administrator)", () => {
+    const session = newSession();
+    expect(memberSessionSql(session, TENANT, "admin")).toContain(`VALUES ('${TENANT}', '${session.userId}', 'admin');`);
+    expect(memberSessionSql(session, TENANT, "admin")).not.toContain("platform_admin");
+    expect(() => memberSessionSql(session, TENANT, "owner'); --" as "admin")).toThrow("not a tenant role");
+  });
+
   test("only UUIDs and hashes reach the SQL", () => {
     const session = newSession();
     expect(() => memberSessionSql(session, "x'); DROP TABLE identity.users; --")).toThrow("not a UUID");
     expect(() => adminSessionSql({ ...session, userId: "1" })).toThrow("not a UUID");
     expect(() => adminSessionSql({ ...session, tokenHash: "'" })).toThrow("not a SHA-256");
+    expect(() => grantsLoggedSql("x' OR true --")).toThrow("not a UUID");
+  });
+
+  test("the operation log query counts the user's bootstrap grants without an address, then all grants", () => {
+    const session = newSession();
+    const sql = grantsLoggedSql(session.userId);
+    expect(sql).toContain(`payload->>'user_id' = '${session.userId}'`);
+    expect(sql).toContain("payload->>'via' = 'bootstrap'");
+    expect(sql).toContain("position('@' in payload::text) = 0");
+    expect(sql).toContain("FROM identity.platform_event_log WHERE event_type = 'identity.platform_admin_granted';");
+    // The table and its columns are the identity service's.
+    const schema = readFileSync(join(REPO_ROOT, "services", "identity", "migrations", "postgres", "0003_event_log.sql"), "utf8");
+    expect(schema).toMatch(/CREATE TABLE identity\.platform_event_log \([\s\S]*?\n    event_type text NOT NULL,[\s\S]*?\n    payload jsonb NOT NULL/);
   });
 
   test("the tables and columns exist in the identity service's schema", () => {
@@ -129,16 +158,37 @@ const problem = (status: number, code: string, messageKey = `error.${code}`) => 
 /** What the telemetry-query service answers until the tenant's account is ready. */
 const notReady = () => problem(404, "not_found", ACCOUNT_NOT_READY);
 
-/** A gateway that answers from a script per request kind, and records what it was sent. */
-function fakeGateway(script: { admin: RawResponse[]; anonymous: RawResponse[]; create: RawResponse[]; member: RawResponse[] }) {
+/** The bootstrap's user in the fakes below. */
+const ADMIN_USER = "2c1d0e4f-5a6b-4c7d-8e9f-0a1b2c3d4e5f";
+
+/**
+ * A gateway that answers from a script per request kind, and records what it was sent; a
+ * bootstrap that answers from `bootstraps` (default: created, then already created) and records
+ * the addresses; psql that answers the operation log query from `grants` (default `1|1`).
+ */
+function fakeGateway(
+  script: { admin: RawResponse[]; anonymous: RawResponse[]; create: RawResponse[]; member: RawResponse[] },
+  options: { bootstraps?: { exitCode: number; userId: string }[]; grants?: string[] } = {},
+) {
   const sent: RawRequest[] = [];
   const sql: string[] = [];
+  const addresses: string[] = [];
+  const bootstraps = [...(options.bootstraps ?? [{ exitCode: 0, userId: ADMIN_USER }, { exitCode: 3, userId: ADMIN_USER }])];
+  const grants = [...(options.grants ?? ["1|1"])];
   let clock = 0;
   // The administrator's GETs come before the POST, the member's after it.
   let posted = false;
   const deps = {
     psql: async (statement: string) => {
       sql.push(statement);
+      if (!statement.includes("platform_event_log")) return "";
+      return grants.length > 1 ? grants.shift()! : (grants[0] ?? "");
+    },
+    bootstrapAdmin: async (address: string) => {
+      addresses.push(address);
+      const next = bootstraps.shift();
+      if (next === undefined) throw new Error("no bootstrap scripted");
+      return { job: `platform-admin-bootstrap-${addresses.length}`, ...next };
     },
     send: async (request: RawRequest) => {
       sent.push(request);
@@ -161,7 +211,7 @@ function fakeGateway(script: { admin: RawResponse[]; anonymous: RawResponse[]; c
     now: () => clock,
     limits: { routeMs: 20_000, eventMs: 20_000, pollMs: 1_000 },
   };
-  return { deps, sent, sql };
+  return { deps, sent, sql, addresses };
 }
 
 const created = json(201, { tenant_id: TENANT, name: "nightly smoke saas", created_at: "2026-10-14T00:00:00Z" });
@@ -179,9 +229,22 @@ describe("checkTenantApi", () => {
     expect(made.detail).toContain(`tenant ${TENANT}`);
     expect(made.detail).toContain("200 with that tenant after 2 s");
     expect(made.tenantId).toBe(TENANT);
-    // The sessions it made are the ones the following checks use.
+    // The administrator is the bootstrap's: two runs, each with its own example.com address, and
+    // no SQL makes a platform administrator.
+    expect(made.admin.userId).toBe(ADMIN_USER);
+    expect(gateway.addresses).toHaveLength(2);
+    for (const address of gateway.addresses) expect(address).toMatch(/^nightly-admin-[0-9a-f]{8}@example\.com$/);
+    expect(gateway.addresses[0]).not.toBe(gateway.addresses[1]);
+    for (const statement of gateway.sql) {
+      expect(statement).not.toContain("platform_admin)");
+      for (const address of gateway.addresses) expect(statement).not.toContain(address);
+    }
+    expect(made.detail).toContain(`platform administrator ${ADMIN_USER} from the chart's bootstrap CronJob`);
+    // The sessions it made are the ones the following checks use; between them, the operation log.
     expect(gateway.sql[0]).toContain(made.admin.tokenHash);
-    expect(gateway.sql[1]).toContain(made.member.tokenHash);
+    expect(gateway.sql[0]).toContain(`'${ADMIN_USER}'`);
+    expect(gateway.sql[1]).toBe(grantsLoggedSql(ADMIN_USER));
+    expect(gateway.sql[2]).toContain(made.member.tokenHash);
     // One POST, with the administrator's cookie and the name as JSON.
     const posts = gateway.sent.filter((r) => r.method === "POST");
     expect(posts).toHaveLength(1);
@@ -193,8 +256,37 @@ describe("checkTenantApi", () => {
       for (const [name, value] of request.headers ?? []) if (name === "cookie") expect(value).toMatch(new RegExp(`^${SESSION_COOKIE}=[A-Za-z0-9_-]{43}$`));
     }
     // The member is made only after the tenant exists, in that tenant.
-    expect(gateway.sql).toHaveLength(2);
-    expect(gateway.sql[1]).toContain(`'${TENANT}'`);
+    expect(gateway.sql).toHaveLength(3);
+    expect(gateway.sql[2]).toContain(`'${TENANT}'`);
+  });
+
+  test("the bootstrap must make the administrator once, and the operation log must record it once", async () => {
+    const script = () => ({
+      admin: [problem(403, "permission_denied")],
+      anonymous: [problem(401, "unauthenticated")],
+      create: [created],
+      member: [json(200, { tenant_id: TENANT })],
+    });
+    const OTHER = "3d2e1f50-6b7c-4d8e-9fa0-1b2c3d4e5f60";
+    const failedFirst = fakeGateway(script(), { bootstraps: [{ exitCode: 1, userId: ADMIN_USER }] });
+    await expect(checkTenantApi(failedFirst.deps, APP, "nightly smoke saas")).rejects.toThrow("exited with 1, expected 0");
+    expect(failedFirst.sql).toEqual([]);
+    const twice = fakeGateway(script(), { bootstraps: [{ exitCode: 0, userId: ADMIN_USER }, { exitCode: 0, userId: OTHER }] });
+    await expect(checkTenantApi(twice.deps, APP, "nightly smoke saas")).rejects.toThrow(`exited with 0 naming user ${OTHER}, expected 3 naming ${ADMIN_USER}`);
+    const otherUser = fakeGateway(script(), { bootstraps: [{ exitCode: 0, userId: ADMIN_USER }, { exitCode: 3, userId: OTHER }] });
+    await expect(checkTenantApi(otherUser.deps, APP, "nightly smoke saas")).rejects.toThrow(`naming user ${OTHER}`);
+    // The grant reaches the operation log a little later: the check waits for it.
+    const late = fakeGateway(script(), { grants: ["0|0", "0|0", "1|1"] });
+    await checkTenantApi(late.deps, APP, "nightly smoke saas");
+    expect(late.sql.filter((statement) => statement.includes("platform_event_log"))).toHaveLength(3);
+    // Two grants: fails at once.
+    const doubled = fakeGateway(script(), { grants: ["1|2"] });
+    await expect(checkTenantApi(doubled.deps, APP, "nightly smoke saas")).rejects.toThrow("has 2 identity.platform_admin_granted events, expected one");
+    // Never recorded: fails at the bound, naming what it waited for.
+    const never = fakeGateway(script(), { grants: ["0|0"] });
+    await expect(checkTenantApi(never.deps, APP, "nightly smoke saas")).rejects.toThrow(
+      `timed out after 20 s waiting for the identity service to record identity.platform_admin_granted of user ${ADMIN_USER}`,
+    );
   });
 
   test("an answer that is neither the expected one nor pending fails at once", async () => {
@@ -399,6 +491,54 @@ describe("the tenant's ClickHouse account", () => {
   });
 });
 
+// Laysi/trustiot-v2#592: a ready assistant holds a Postgres session of its own role.
+describe("the assistant's login", () => {
+  const fixed = { sleep: async () => {}, limits: { loginMs: 10_000, pollMs: 1_000 } };
+  // A clock that moves one poll interval per reading, so the limit is reached without waiting.
+  const ticking = () => {
+    let now = 0;
+    return () => (now += 1_000);
+  };
+
+  test("reads only the role's login flag and its session count, never a password", () => {
+    const sql = roleSessionsSql(ASSISTANT_ROLE);
+    expect(sql).toContain("FROM pg_roles r WHERE r.rolname = 'assistant_app'");
+    expect(sql).toContain("pg_stat_activity a WHERE a.usename = 'assistant_app' AND a.datname = current_database()");
+    expect(sql).not.toMatch(/passw|pg_authid|select \*/i);
+    expect(() => roleSessionsSql("x' OR '1' = '1")).toThrow("not a role name");
+  });
+
+  test("passes once the role may log in and has a session, after waiting for it", async () => {
+    const answers = ["f|0\n", "t|0\n", "t|2\n"];
+    const asked: string[] = [];
+    const detail = await checkAssistantLogin(
+      {
+        ...fixed,
+        now: ticking(),
+        psql: async (sql) => {
+          asked.push(sql);
+          return answers.shift() ?? "t|2\n";
+        },
+      },
+      "deployment/trustiot-assistant",
+      1,
+    );
+    expect(detail).toStartWith("deployment/trustiot-assistant: 1 ready replica(s); assistant_app may log in and has 2 session(s) open");
+    expect(asked).toEqual(Array(3).fill(roleSessionsSql(ASSISTANT_ROLE)));
+  });
+
+  test("fails without a ready replica, a role, a login or a session", async () => {
+    const psql = (out: string) => async () => out;
+    await expect(checkAssistantLogin({ ...fixed, now: ticking(), psql: psql("t|1\n") }, "deployment/a", 0)).rejects.toThrow("deployment/a has no ready replica");
+    await expect(checkAssistantLogin({ ...fixed, now: ticking(), psql: psql("") }, "deployment/a", 1)).rejects.toThrow("the role assistant_app does not exist");
+    await expect(checkAssistantLogin({ ...fixed, now: ticking(), psql: psql("f|0\n") }, "deployment/a", 1)).rejects.toThrow(
+      'timed out after 10 s waiting for a session of assistant_app; psql printed "f|0"',
+    );
+    await expect(checkAssistantLogin({ ...fixed, now: ticking(), psql: psql("t|0\n") }, "deployment/a", 1)).rejects.toThrow("waiting for a session of assistant_app");
+    await expect(checkAssistantLogin({ ...fixed, now: ticking(), psql: psql("error\n") }, "deployment/a", 1)).rejects.toThrow('unexpected psql output "error"');
+  });
+});
+
 describe("the API check's routes", () => {
   const existing = { host: "gateway", path: "/certs", match: "PathPrefix", service: "certs" };
 
@@ -477,10 +617,37 @@ describe("the API check's values on each deployment shape", () => {
       // The three APIs are cookie routes on the app host.
       const settings = platformSettingsOf(objects);
       const routes = objects.filter((o) => o.kind === "HTTPRoute").map((o) => JSON.stringify(o.spec));
-      for (const path of ["/api/identity", "/api/assets", "/api/telemetry"]) {
+      for (const path of ["/api/identity", "/api/assets", "/api/telemetry", "/api/certs"]) {
         expect(routes.some((r) => r.includes(`"value":"${path}"`) && r.includes(settings.TRUSTIOT_APP_HOST!)), path).toBe(true);
       }
       expect(routes.some((r) => r.includes('"value":"/api/telemetry"') && r.includes('"name":"trustiot-telemetry-query"'))).toBe(true);
+      // The certs service from its image, its CRL job every 10 s (Laysi/trustiot-v2#517).
+      const certs = named("Deployment", "trustiot-certs");
+      expect(certs).toBeDefined();
+      const certsContainer = (certs?.spec?.template as { spec: { containers: { name: string; image: string; env: { name: string; value?: string }[] }[] } }).spec.containers.find(
+        (c) => c.name === "certs",
+      );
+      expect(certsContainer?.image).toBe(serviceImageRef("certs"));
+      expect(certsContainer?.env.find((e) => e.name === "TRUSTIOT__CRL__CHECK_INTERVAL")?.value).toBe("10s");
+      // The assistant from its image (Laysi/trustiot-v2#592): the smoke's model role, the
+      // addresses the chart derives from mesh.calls.assistant, and its own database login, whose
+      // password the migration Job generates into the Secret the chart declares.
+      const assistant = named("Deployment", "trustiot-assistant");
+      const assistantContainer = (assistant?.spec?.template as { spec: { containers: { name: string; image: string; env: { name: string; value?: string }[] }[] } } | undefined)?.spec.containers.find(
+        (c) => c.name === "assistant",
+      );
+      expect(assistantContainer?.image).toBe(serviceImageRef("assistant"));
+      const assistantEnv = Object.fromEntries((assistantContainer?.env ?? []).map((e) => [e.name, e.value]));
+      expect(assistantEnv).toMatchObject({
+        TRUSTIOT__AI_GATEWAY__ROLE: "smoke",
+        TRUSTIOT__AI_GATEWAY__URL: "http://trustiot-ai-gateway:8080",
+        TRUSTIOT__TELEMETRY_QUERY__URL: "http://trustiot-telemetry-query:8080",
+        TRUSTIOT__ASSETS__URL: "http://trustiot-assets:8080",
+        TRUSTIOT__IDENTITY__EXCHANGE_URL: "http://trustiot-identity-exchange:8082",
+        TRUSTIOT__DATABASE__USERNAME: ASSISTANT_ROLE,
+      });
+      expect(passwordSecretsOf(objects).get("trustiot-assistant-password")).toEqual(expect.arrayContaining([ASSISTANT_ROLE]));
+      expect([...missingSecrets(objects).keys()].filter((name) => name.includes("assistant"))).toEqual([]);
       // Nothing makes a key for the identity service: the chart declares the Secret its init
       // container fills, so no dummy is made for it, and nothing names another one.
       expect(named("Secret", "trustiot-identity-signing-keys")).toBeDefined();

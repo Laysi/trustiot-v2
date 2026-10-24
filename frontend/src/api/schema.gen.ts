@@ -79,6 +79,100 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/assets/v1/devices": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The tenant's devices. */
+        get: operations["listDevices"];
+        put?: never;
+        /**
+         * Creates a device on a gateway bound to the caller's tenant; `assets.device_created` is
+         *     written in the same transaction.
+         */
+        post: operations["createDevice"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/assets/v1/devices/{device_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** One device. */
+        get: operations["getDevice"];
+        /**
+         * Replaces a device's connection settings and poll interval; `assets.device_updated` is
+         *     written in the same transaction.
+         */
+        put: operations["updateDevice"];
+        post?: never;
+        /** Deletes a device; `assets.device_deleted` is written in the same transaction. */
+        delete: operations["deleteDevice"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/assets/v1/platform/gateways": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The device pool with each gateway's current binding. Platform administrators only. */
+        get: operations["listPoolGateways"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/assets/v1/platform/gateways/{hardware_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** One gateway of the device pool with its current binding. Platform administrators only. */
+        get: operations["getPoolGateway"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/assets/v1/platform/gateways/{hardware_id}/binding": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Binds a gateway of the device pool to a tenant; idempotent. Platform administrators only. */
+        put: operations["bindGateway"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/assets/v1/tenant": {
         parameters: {
             query?: never;
@@ -198,6 +292,26 @@ export interface paths {
         /** One tenant's operation log, for the back office. Platform administrators only. */
         get: operations["getPlatformTenantEventLog"];
         put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/identity/v1/platform/tenants/{tenant_id}/members": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Sets a user's role in a tenant, creating the membership when the user has none there.
+         *     Platform administrators only, in their own request.
+         */
+        put: operations["setPlatformTenantMemberRole"];
         post?: never;
         delete?: never;
         options?: never;
@@ -366,6 +480,11 @@ export interface components {
             /** @description The tenant's ID. */
             tenant_id: components["schemas"]["TenantId"];
         };
+        /** @description The body of a binding. */
+        BindGateway: {
+            /** @description The tenant to bind the gateway to. */
+            tenant_id: components["schemas"]["TenantId"];
+        };
         /** @description The answer to `send_code`, the same whether or not a user has the address. */
         CodeSent: {
             /**
@@ -383,6 +502,37 @@ export interface components {
              * @description How long to wait before asking for another code, in seconds.
              */
             resend_after_secs: number;
+        };
+        /** @description The body of `POST /api/assets/v1/devices`. Unknown fields are refused. */
+        CreateDevice: {
+            /** @description The gateway that polls it: one currently bound to the caller's tenant. */
+            hardware_id: string;
+            /** @description See [`Device::host`]. */
+            host: string;
+            /** @description One of the caller's tenant's device models. */
+            model_id: components["schemas"]["DeviceModelId"];
+            /** @description The new device's name, unique in the tenant (see [`Device::name`]). */
+            name: string;
+            /**
+             * Format: int32
+             * @description See [`Device::poll_interval_ms`]; 60000 when absent.
+             */
+            poll_interval_ms?: number | null;
+            /**
+             * Format: int32
+             * @description See [`Device::port`].
+             */
+            port: number;
+            /**
+             * @description `modbus_tcp`: Modbus TCP to the device. `rtu_over_tcp`: RTU frames over TCP to an RS485 converter; the devices behind one converter (the same host and port on one gateway) share its connection, so they all use this transport and each has its own unit ID.
+             * @enum {string}
+             */
+            transport: "modbus_tcp" | "rtu_over_tcp";
+            /**
+             * Format: int32
+             * @description See [`Device::unit_id`]; 1 when absent.
+             */
+            unit_id?: number | null;
         };
         /** @description The body of `POST /api/assets/v1/device-models`. Unknown fields are refused. */
         CreateDeviceModel: {
@@ -413,6 +563,87 @@ export interface components {
             tenants: components["schemas"]["TenantMembership"][];
             /** @description The signed-in user. */
             user_id: components["schemas"]["UserId"];
+        };
+        /** @description A device: a Modbus endpoint one of the tenant's gateways polls with one of its models. */
+        Device: {
+            /**
+             * Format: date-time
+             * @description When the device was created, by the database clock.
+             */
+            created_at: string;
+            /** @description The device's ID; telemetry names the device by it. */
+            device_id: components["schemas"]["DeviceId"];
+            /**
+             * @description The hardware ID of the gateway that polls the device, bound to the tenant; never
+             *     changed after creation.
+             * @example tg-0001
+             */
+            hardware_id: string;
+            /**
+             * @description The IP address or DNS name of the device, or of the converter it is behind; never the
+             *     gateway itself (a loopback address or `localhost`).
+             * @example 192.0.2.10
+             */
+            host: string;
+            /** @description The device model the gateway reads the device with; never changed after creation. */
+            model_id: components["schemas"]["DeviceModelId"];
+            /**
+             * @description The name, unique in the tenant, never changed after creation: 1-40 lowercase letters or
+             *     digits in groups joined by single hyphens, starting with a letter (the naming rule of
+             *     models).
+             * @example line-1-meter
+             */
+            name: string;
+            /**
+             * Format: int32
+             * @description How often the gateway polls the device, in milliseconds: 1000 (1 s) to 86400000
+             *     (1 day); 60000 (1 minute) when a request leaves it out. A plan may set a longer minimum.
+             * @example 60000
+             */
+            poll_interval_ms: number;
+            /**
+             * Format: int32
+             * @description The TCP port. Converters use many ports (502, 4196, 8886, 8899, ...); no default.
+             * @example 502
+             */
+            port: number;
+            /**
+             * Format: int64
+             * @description 1 at creation, one more with every update; send it back with an update to refuse
+             *     overwriting someone else's change.
+             */
+            revision: number;
+            /**
+             * @description `modbus_tcp`: Modbus TCP to the device. `rtu_over_tcp`: RTU frames over TCP to an RS485 converter; the devices behind one converter (the same host and port on one gateway) share its connection, so they all use this transport and each has its own unit ID.
+             * @enum {string}
+             */
+            transport: "modbus_tcp" | "rtu_over_tcp";
+            /**
+             * Format: int32
+             * @description The Modbus unit ID (station number): 0-255 for Modbus TCP, 1-247 for RTU over TCP; 1
+             *     when a request leaves it out.
+             * @example 1
+             */
+            unit_id: number;
+            /**
+             * Format: date-time
+             * @description When the device was last changed.
+             */
+            updated_at: string;
+        };
+        /**
+         * Format: uuid
+         * @description A device of a tenant (rebuild checklist C2, Laysi/trustiot-v2#100): one Modbus endpoint
+         *     a gateway polls, made by the assets service. Unique across tenants; telemetry and the
+         *     gateway configuration name the device by it (as text, `protocol::DeviceId`).
+         *
+         *     Serialized as a lowercase hyphenated UUID string.
+         */
+        DeviceId: string;
+        /** @description The tenant's devices, by name. */
+        DeviceList: {
+            /** @description Every device of the tenant. */
+            devices: components["schemas"]["Device"][];
         };
         /** @description A device model. */
         DeviceModel: {
@@ -606,6 +837,32 @@ export interface components {
             /** @description The message the client shows next to the field. */
             message_key: components["schemas"]["MessageKey"];
         };
+        /** @description A gateway's binding to a tenant. */
+        GatewayBinding: {
+            /** @description The binding: a new one every time the gateway is bound. */
+            binding_id: components["schemas"]["GatewayBindingId"];
+            /**
+             * Format: date-time
+             * @description When it was bound, by the database clock.
+             */
+            bound_at: string;
+            /**
+             * @description The gateway's hardware ID.
+             * @example tg-0001
+             */
+            hardware_id: string;
+            /** @description The tenant the gateway is bound to. */
+            tenant_id: components["schemas"]["TenantId"];
+        };
+        /**
+         * Format: uuid
+         * @description One binding of a gateway to a tenant (rebuild checklist D3, Laysi/trustiot-v2#101), made
+         *     by the assets service. A gateway gets a new one every time it is bound, so a binding and
+         *     its events always belong to one tenant.
+         *
+         *     Serialized as a lowercase hyphenated UUID string.
+         */
+        GatewayBindingId: string;
         /** @description A gateway's factory registration, as the service records it. */
         GatewayRegistration: {
             /** @description The issuing CA that signed the initial certificate: the SHA-256 of its public key. */
@@ -615,6 +872,14 @@ export interface components {
              *     `CN=<hardware_id>`, extended key usage client authentication only.
              */
             certificate: string;
+            /**
+             * @description The initial certificate, then the issuing CA certificate that signed it (the loaded
+             *     issuing CA whose key id is `ca_key_id`), PEM: the chain the gateway presents as its MQTT
+             *     client certificate. The root is not in it. When that issuing CA is no longer loaded (a
+             *     repeat after rotation removed it, services/certs/README.md, "輪替" step 3), the chain is
+             *     the initial certificate alone.
+             */
+            certificate_chain: string;
             /**
              * @description The SHA-256 of the endorsement key (its DER SubjectPublicKeyInfo), 64 lower-case hex
              *     digits.
@@ -781,15 +1046,54 @@ export interface components {
             step: "verify_code";
         };
         /**
-         * @description A user's role in a tenant, as this API shows it.
+         * @description A role in a tenant, as the API takes and returns it: setting a member's role, and the tenants
+         *     of the current session.
          * @enum {string}
          */
         MemberRole: "viewer" | "editor" | "admin";
+        /** @description A user's membership of a tenant. */
+        Membership: {
+            previous_role?: components["schemas"]["MemberRole"] | null;
+            /** @description The role now. */
+            role: components["schemas"]["MemberRole"];
+            /** @description The tenant. */
+            tenant_id: components["schemas"]["TenantId"];
+            /** @description The member. */
+            user_id: components["schemas"]["UserId"];
+        };
         /**
          * @description Key of the translated message the client shows; never the message itself.
          * @example error.not_found
          */
         MessageKey: string;
+        /** @description A gateway of the device pool. */
+        PoolGateway: {
+            binding?: components["schemas"]["GatewayBinding"] | null;
+            /**
+             * @description The hardware ID: the common name of its certificates and its MQTT identity.
+             * @example tg-0001
+             */
+            hardware_id: string;
+            /**
+             * Format: date-time
+             * @description When the assets service put it in the pool.
+             */
+            pooled_at: string;
+            /**
+             * Format: date-time
+             * @description When the certs service registered it at the factory.
+             */
+            registered_at: string;
+            /** @description The production workstation that registered it. */
+            workstation: string;
+        };
+        /** @description A page of the device pool, by hardware ID (byte order). */
+        PoolGatewayList: {
+            /** @description The gateways. */
+            gateways: components["schemas"]["PoolGateway"][];
+            /** @description The `after` of the next page; `null` on the last one. */
+            next_after?: string | null;
+        };
         /** @description A user's preferences. */
         Preferences: {
             /** @description The language AI answers are written in; `auto` answers in the language of the question. */
@@ -938,6 +1242,19 @@ export interface components {
              */
             time: string;
         };
+        /**
+         * @description The body of `PUT /api/identity/v1/platform/tenants/{tenant_id}/members`. Unknown fields are
+         *     ignored. Its `Debug` leaves the address out: it is personal data.
+         */
+        SetMemberRole: {
+            /**
+             * @description The email address of an existing user, compared after trimming and in ASCII lower case,
+             *     as logging in compares it.
+             */
+            email: string;
+            /** @description The role to give the user in the tenant. */
+            role: components["schemas"]["MemberRole"];
+        };
         /** @description The body of `PUT /api/identity/v1/sessions/current/tenant`. */
         SwitchTenant: {
             /** @description One of the user's tenants. */
@@ -979,6 +1296,45 @@ export interface components {
          * @enum {string}
          */
         Theme: "system" | "light" | "dark";
+        /**
+         * @description The body of `PUT /api/assets/v1/devices/{device_id}`: the device's settings, which replace
+         *     all of the current ones (a field left out takes its default). Unknown fields are refused.
+         */
+        UpdateDevice: {
+            /** @description If sent, the device's current gateway: a device stays on its gateway. */
+            hardware_id?: string | null;
+            /** @description See [`Device::host`]. */
+            host: string;
+            model_id?: components["schemas"]["DeviceModelId"] | null;
+            /** @description If sent, the device's current name: names never change. */
+            name?: string | null;
+            /**
+             * Format: int32
+             * @description See [`Device::poll_interval_ms`]; 60000 when absent.
+             */
+            poll_interval_ms?: number | null;
+            /**
+             * Format: int32
+             * @description See [`Device::port`].
+             */
+            port: number;
+            /**
+             * Format: int64
+             * @description The revision the client last read (`revision` of the device it read): the update is
+             *     refused with 409 when the device changed since. Required.
+             */
+            revision: number;
+            /**
+             * @description `modbus_tcp`: Modbus TCP to the device. `rtu_over_tcp`: RTU frames over TCP to an RS485 converter; the devices behind one converter (the same host and port on one gateway) share its connection, so they all use this transport and each has its own unit ID.
+             * @enum {string}
+             */
+            transport: "modbus_tcp" | "rtu_over_tcp";
+            /**
+             * Format: int32
+             * @description See [`Device::unit_id`]; 1 when absent.
+             */
+            unit_id?: number | null;
+        };
         /**
          * @description The body of `PUT /api/assets/v1/device-models/{model_id}`: the new data points, which replace
          *     all of the model's. Unknown fields are refused.
@@ -1539,6 +1895,558 @@ export interface operations {
             };
         };
     };
+    listDevices: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The caller's tenant's devices, by name. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeviceList"];
+                };
+            };
+            /** @description No valid session (`unauthenticated`). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No tenant or no role in it (`permission_denied`). */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The database failed (`unavailable`). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    createDevice: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateDevice"];
+            };
+        };
+        responses: {
+            /** @description The device was created; `Location` is its URL. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Device"];
+                };
+            };
+            /** @description The `Content-Type` is not `application/json`, the body is larger than 16 KiB (`device.body_too_large`), or it is not a JSON object (`device.body_invalid`) (`invalid_request`). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No valid session (`unauthenticated`). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No tenant, or a role below editor (`permission_denied`). */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The tenant has a device of this name (`device.name_taken`), or another device of the gateway at the same host and port uses the other transport (`device.transport_mismatch`) or the same unit ID (`device.unit_taken`) (`conflict`). Nothing was written. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description A field rule is broken, the gateway is not bound to the caller's tenant (`device.gateway_not_bound`), or the tenant has no such model (`device.model_not_found`) (`validation_failed`); `field_errors` names each problem with a JSON Pointer and a `device.*` key. Nothing was written. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The database failed (`unavailable`). Nothing was written. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    getDevice: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The device's ID. */
+                device_id: components["schemas"]["DeviceId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The device. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Device"];
+                };
+            };
+            /** @description No valid session (`unauthenticated`). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No tenant or no role in it (`permission_denied`). */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No such device in the caller's tenant (`not_found`). */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The database failed (`unavailable`). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    updateDevice: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The device's ID. */
+                device_id: components["schemas"]["DeviceId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateDevice"];
+            };
+        };
+        responses: {
+            /** @description The device after the update, at its next revision. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Device"];
+                };
+            };
+            /** @description The `Content-Type` is not `application/json`, the body is larger than 16 KiB (`device.body_too_large`), or it is not a JSON object (`device.body_invalid`) (`invalid_request`). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No valid session (`unauthenticated`). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No tenant, or a role below editor (`permission_denied`). */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No such device in the caller's tenant (`not_found`). */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The device's gateway binding has ended, so it can only be deleted (`device.binding_ended`), the device is no longer at the `revision` sent (`device.revision_mismatch`, `details.current`), or another device of the gateway at the same host and port uses the other transport (`device.transport_mismatch`) or the same unit ID (`device.unit_taken`) (`conflict`). Nothing was written. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description A field rule is broken, `revision` is missing or not a positive integer, or `name`, `hardware_id` or `model_id` is not the device's (`device.name_immutable`, `device.gateway_immutable`, `device.model_immutable`) (`validation_failed`). Nothing was written. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The database failed (`unavailable`). Nothing was written. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    deleteDevice: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The device's ID. */
+                device_id: components["schemas"]["DeviceId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The device was deleted. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No valid session (`unauthenticated`). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No tenant, or a role below editor (`permission_denied`). */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No such device in the caller's tenant (`not_found`). */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The database failed (`unavailable`). Nothing was deleted. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    listPoolGateways: {
+        parameters: {
+            query?: {
+                /** @description `unbound` for the gateways bound to no tenant (the ones to bind), `bound` for the bound ones; absent for every gateway. */
+                state?: string;
+                /** @description The previous page's `next_after`, for the next page. */
+                after?: string;
+                /** @description Gateways per page, 1 to 500; default 100. */
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description A page of the pool, by hardware ID. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PoolGatewayList"];
+                };
+            };
+            /** @description An unknown or malformed parameter (`invalid_request`). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No valid session (`unauthenticated`). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Not a platform administrator, or not the administrator's own request (`permission_denied`). */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The database failed (`unavailable`). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    getPoolGateway: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The gateway's hardware ID. */
+                hardware_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The gateway. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PoolGateway"];
+                };
+            };
+            /** @description No valid session (`unauthenticated`). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Not a platform administrator, or not the administrator's own request (`permission_denied`). */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The pool has no such gateway (`not_found`). */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The database failed (`unavailable`). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    bindGateway: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The gateway's hardware ID. */
+                hardware_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BindGateway"];
+            };
+        };
+        responses: {
+            /** @description The gateway was bound to this tenant already: the existing binding. Nothing was written, so retrying after a lost response is safe. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GatewayBinding"];
+                };
+            };
+            /** @description The gateway is now bound to the tenant; `assets.gateway_bound` was written in the same transaction. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GatewayBinding"];
+                };
+            };
+            /** @description The `Content-Type` is not `application/json`, the body is larger than 4 KiB (`gateway_binding.body_too_large`), or it is not a JSON object (`gateway_binding.body_invalid`) (`invalid_request`). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No valid session (`unauthenticated`). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Not a platform administrator, or not the administrator's own request (`permission_denied`). */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The device pool has no such gateway (`not_found`). */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Another tenant holds the gateway (`conflict`, `gateway_binding.bound_to_another_tenant`). Nothing was written. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description An unknown field, `tenant_id` missing or not a UUID, or a tenant the assets service does not know (`gateway_binding.tenant_unknown`) (`validation_failed`). Nothing was written. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The database failed (`unavailable`). Nothing was written; retrying is safe. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
     getAssetsTenant: {
         parameters: {
             query?: never;
@@ -2038,6 +2946,96 @@ export interface operations {
                 };
             };
             /** @description The database failed, or the event log is off (`unavailable`). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    setPlatformTenantMemberRole: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The tenant's ID. */
+                tenant_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SetMemberRole"];
+            };
+        };
+        responses: {
+            /** @description The user was a member: the role is set, and `identity.member_role_changed` written in the same transaction unless the role was already this one (then nothing was written). */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Membership"];
+                };
+            };
+            /** @description The user was not a member: the membership was created, and `identity.member_role_changed` written in the same transaction. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Membership"];
+                };
+            };
+            /** @description The tenant ID is not a UUID, the `Content-Type` is not `application/json`, or the body is over 4096 bytes or not a JSON object with a string `email` and a string `role` (`invalid_request`). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No valid session (`unauthenticated`). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Not a platform administrator, or not the administrator's own request: another service exchanged the token (`permission_denied`). */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No tenant has the ID; nothing was written (`not_found`). */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The email is not an address (`/email`, `member.email_invalid`), no user has it (`/email`, `member.email_unknown`; no user is created), or the role is not `viewer`, `editor` or `admin` (`/role`, `member.role_invalid`) (`validation_failed`). Nothing was written. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The database failed; nothing was written (`unavailable`). */
             503: {
                 headers: {
                     [name: string]: unknown;

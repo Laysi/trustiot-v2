@@ -287,6 +287,20 @@ and the sidecar alike. Returns a YAML list; use with fromYamlArray.
   value: {{ .Values.mqttBroker.trustInterval | quote }}
 {{- end -}}
 
+{{/*
+mqtt-bridge's own settings: the broker's gateway port, where it relays each gateway's WebSocket as
+TCP (services/mqtt-bridge/README.md). The mesh admits mqtt-bridge on that port only
+("trustiot.mqtt-broker.callers"). Empty while the broker is off: the bridge then refuses to start,
+because it has nowhere to relay to. Returns a YAML list; use with fromYamlArray.
+*/}}
+{{- define "trustiot.mqttBridge.env" -}}
+{{- if include "trustiot.mqttBroker.enabled" . -}}
+{{- $gateway := (include "trustiot.mqtt-broker.callers" . | fromYaml).gateway -}}
+- name: TRUSTIOT__BROKER__ADDRESS
+  value: {{ printf "%s.%s.svc:%d" (include "trustiot.componentName" (dict "root" . "name" "mqtt-broker")) .Release.Namespace (int $gateway.port) | quote }}
+{{- end -}}
+{{- end -}}
+
 {{/* The security context of every container of the broker pod. */}}
 {{- define "trustiot.mqttBroker.securityContext" -}}
 allowPrivilegeEscalation: false

@@ -36,10 +36,26 @@ pub const SCHEMA: Schema = Schema {
             name: "0004_login.sql",
             sql: include_str!("../migrations/postgres/0004_login.sql"),
         },
-        // Preferences and switching a session's tenant (Laysi/trustiot-v2#497).
+        // Platform administrators set members' roles (Laysi/trustiot-v2#583).
         Migration {
-            name: "0005_preferences_and_tenant_switch.sql",
-            sql: include_str!("../migrations/postgres/0005_preferences_and_tenant_switch.sql"),
+            name: "0005_member_roles.sql",
+            sql: include_str!("../migrations/postgres/0005_member_roles.sql"),
+        },
+        // The first platform administrator's once-only marker (Laysi/trustiot-v2#582). It was
+        // 0005_platform_admin_bootstrap.sql only on its unmerged pull request branch; main's
+        // 0005_member_roles.sql merged first, so this file took the next number. No release or
+        // deployed database ever had the old name: only main's files ship.
+        Migration {
+            name: "0006_platform_admin_bootstrap.sql",
+            sql: include_str!("../migrations/postgres/0006_platform_admin_bootstrap.sql"),
+        },
+        // Preferences and switching a session's tenant (Laysi/trustiot-v2#497). It was
+        // 0005_preferences_and_tenant_switch.sql only on its unmerged pull request branch; main's
+        // 0005 and 0006 merged first, so this file took the next number. No release or deployed
+        // database ever had the old name: only main's files ship.
+        Migration {
+            name: "0007_preferences_and_tenant_switch.sql",
+            sql: include_str!("../migrations/postgres/0007_preferences_and_tenant_switch.sql"),
         },
     ],
 };

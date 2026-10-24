@@ -1,0 +1,20 @@
+# Mutation check of acceptance criterion 3 (2026-10-24, developer workstation, helm 4.3.0).
+# deploy/chart/templates/_assistant.tpl changed for the run only, then restored:
+#   - {{- if and $entry $entry.enabled (has $callee $callees) -}}
+#   + {{- if and $entry $entry.enabled -}}
+# so the chart sets the address of every enabled callee, listed in mesh.calls.assistant or not.
+
+$ bun test deploy/chart/tests/chart.test.ts -t "every address the chart gives the assistant"
+error: a list without assets
+- Expected  - 0
++ Received  + 1
+(fail) ... > saas: every address the chart gives the assistant leads to a service in mesh.calls.assistant that admits it there
+error: a list without assets
+- Expected  - 0
++ Received  + 1
+(fail) ... > onprem: every address the chart gives the assistant leads to a service in mesh.calls.assistant that admits it there
+ 0 pass
+ 2 fail
+
+# With the template restored, the same filter passes on both shapes (and the whole
+# "the assistant (decision 31, Laysi/trustiot-v2#592)" block: 9 pass, 0 fail).

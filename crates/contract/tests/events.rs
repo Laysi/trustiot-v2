@@ -13,14 +13,21 @@ use std::path::PathBuf;
 
 use chrono::{DateTime, Timelike, Utc};
 use contract::event::{Actor, parse_payload};
-use contract::events::assets::{DeviceModelCreated, DeviceModelDeleted, DeviceModelUpdated};
-use contract::events::certs::GatewayRegistered;
-use contract::events::identity::TenantCreated;
-use contract::{
-    DecodeError, DeviceModelId, EncodeError, Event, EventEnvelope, ServiceName, TenantId, UserId,
+use contract::events::assets::{
+    DeviceCreated, DeviceDeleted, DeviceModelCreated, DeviceModelDeleted, DeviceModelUpdated,
+    DeviceUpdated, GatewayBound,
 };
-use protocol::config::{ByteOrder, DataType};
-use protocol::{GatewayId, ModelName};
+use contract::events::certs::GatewayRegistered;
+use contract::events::identity::{
+    MEMBERSHIP_AGGREGATE, MemberRoleChanged, PlatformAdminGrant, PlatformAdminGranted,
+    TenantCreated, membership_aggregate_id,
+};
+use contract::{
+    DecodeError, DeviceId, DeviceModelId, EncodeError, Event, EventEnvelope, GatewayBindingId,
+    ServiceName, TenantId, TenantRole, UserId,
+};
+use protocol::config::{ByteOrder, DataType, DesiredConfig, Device, DeviceModel, Host, Transport};
+use protocol::{ConfigVersion, GatewayId, Message, ModelName, V1};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use uuid::Version;
@@ -171,6 +178,65 @@ fn tenant_created_decodes_every_version() {
     assert_eq!(envelope.tenant_id, Some(tenant));
 }
 
+/// `identity.member_role_changed` (Laysi/trustiot-v2#583): the member by ID only (no email),
+/// the role before (none for a new member) and after, the tenant the envelope's, the actor who
+/// set it. `v1-new-member` is a new membership.
+#[test]
+fn member_role_changed_decodes_every_version() {
+    let decoded = decode_fixtures::<MemberRoleChanged>();
+    let names: Vec<&str> = decoded.iter().map(|(name, _)| name.as_str()).collect();
+    // Sorted by path: `-` sorts before `.`.
+    assert_eq!(names, ["v1-new-member", "v1"]);
+    let user = |id: &str| -> UserId { id.parse().expect("user id") };
+    assert_eq!(
+        decoded[0].1,
+        MemberRoleChanged {
+            user_id: user("01928f6e-7a3c-7d4e-8f00-0000000000b2"),
+            previous_role: None,
+            role: TenantRole::Admin,
+        }
+    );
+    assert_eq!(
+        decoded[1].1,
+        MemberRoleChanged {
+            user_id: user("01928f6e-7a3c-7d4e-8f00-0000000000b1"),
+            previous_role: Some(TenantRole::Viewer),
+            role: TenantRole::Editor,
+        }
+    );
+
+    let tenant: TenantId = "01928f6e-7a3c-7d4e-8f00-00000000000c"
+        .parse()
+        .expect("tenant id");
+    let event = decoded[1].1.clone();
+    let envelope = EventEnvelope::new(&event, Some(tenant)).expect("encode");
+    assert_eq!(envelope.producer, ServiceName::Identity);
+    assert_eq!(envelope.tenant_id, Some(tenant));
+    assert_eq!(
+        envelope.payload,
+        json!({
+            "user_id": "01928f6e-7a3c-7d4e-8f00-0000000000b1",
+            "previous_role": "viewer",
+            "role": "editor"
+        }),
+        "the user by ID, never an email address"
+    );
+    // A new member's previous role is written as null, and a payload without it still decodes.
+    let new_member = EventEnvelope::new(&decoded[0].1, Some(tenant)).expect("encode");
+    assert_eq!(new_member.payload["previous_role"], Value::Null);
+    let without: MemberRoleChanged = serde_json::from_value(json!({
+        "user_id": "01928f6e-7a3c-7d4e-8f00-0000000000b2",
+        "role": "viewer"
+    }))
+    .expect("decode without previous_role");
+    assert_eq!(without.previous_role, None);
+    assert_eq!(
+        membership_aggregate_id(tenant, event.user_id),
+        "01928f6e-7a3c-7d4e-8f00-00000000000c:01928f6e-7a3c-7d4e-8f00-0000000000b1"
+    );
+    assert_eq!(MEMBERSHIP_AGGREGATE, "membership");
+}
+
 /// `certs.gateway_registered` (Laysi/trustiot-v2#79): platform-wide, so no tenant, written by
 /// the certs service, with the platform administrator as the actor.
 #[test]
@@ -211,6 +277,58 @@ fn gateway_registered_decodes_every_version() {
             "certificate_serial": "4c2a19e0f3b85d7a6e01c2d3b4a59687",
             "workstation": "line-1",
         })
+    );
+}
+
+/// `identity.platform_admin_granted` (Laysi/trustiot-v2#582): a platform-wide event that names
+/// the user by ID only. `v1-unknown-via` is a grant a later build may write: it decodes as
+/// `Unrecognized`, which never encodes.
+#[test]
+fn platform_admin_granted_decodes_every_version() {
+    let decoded = decode_fixtures::<PlatformAdminGranted>();
+    let user: UserId = "01928f6e-7a3c-7d4e-8f00-0000000000ae"
+        .parse()
+        .expect("user id");
+    let later: UserId = "01928f6e-7a3c-7d4e-8f00-0000000000af"
+        .parse()
+        .expect("user id");
+    assert_eq!(
+        decoded,
+        [
+            (
+                "v1-unknown-via".to_owned(),
+                PlatformAdminGranted {
+                    user_id: later,
+                    via: PlatformAdminGrant::Unrecognized,
+                }
+            ),
+            (
+                "v1".to_owned(),
+                PlatformAdminGranted {
+                    user_id: user,
+                    via: PlatformAdminGrant::Bootstrap,
+                }
+            ),
+        ]
+    );
+    let event = PlatformAdminGranted {
+        user_id: user,
+        via: PlatformAdminGrant::Bootstrap,
+    };
+    let envelope = EventEnvelope::new(&event, None).expect("encode");
+    assert_eq!(envelope.producer, ServiceName::Identity);
+    assert_eq!(envelope.tenant_id, None);
+    assert_eq!(
+        envelope.payload,
+        json!({"user_id": user.to_string(), "via": "bootstrap"})
+    );
+    let unknown = PlatformAdminGranted {
+        user_id: user,
+        via: PlatformAdminGrant::Unrecognized,
+    };
+    assert!(
+        EventEnvelope::new(&unknown, None).is_err(),
+        "Unrecognized is decode only"
     );
 }
 
@@ -268,6 +386,164 @@ fn device_model_events_decode_every_version() {
     assert_eq!(
         envelope.decode::<DeviceModelCreated>().expect("round trip"),
         *created
+    );
+}
+
+/// `assets.gateway_bound` (Laysi/trustiot-v2#101): a tenant event of the tenant the gateway is
+/// bound to, written by the assets service with the platform administrator as the actor; the
+/// payload has the binding and the hardware ID, nothing secret.
+#[test]
+fn gateway_bound_decodes_every_version() {
+    let decoded = decode_fixtures::<GatewayBound>();
+    let names: Vec<&str> = decoded.iter().map(|(name, _)| name.as_str()).collect();
+    assert_eq!(names, ["v1"]);
+    let binding: GatewayBindingId = "01928f6e-7a3c-7d4e-8f00-000000000b01"
+        .parse()
+        .expect("binding id");
+    let bound = GatewayBound {
+        binding_id: binding,
+        hardware_id: GatewayId::new("tg-0001").expect("hardware id"),
+    };
+    assert_eq!(decoded[0].1, bound);
+
+    let path = common::fixture_path("events/assets.gateway_bound/v1.json");
+    let fixture: EventEnvelope =
+        serde_json::from_str(&fs::read_to_string(path).expect("read fixture")).expect("envelope");
+    let bound_to: TenantId = "01928f6e-7a3c-7d4e-8f00-00000000000b"
+        .parse()
+        .expect("tenant id");
+    assert_eq!(fixture.tenant_id, Some(bound_to));
+    let user: UserId = "01928f6e-7a3c-7d4e-8f00-0000000000ad"
+        .parse()
+        .expect("user id");
+    assert_eq!(fixture.actor, Some(Actor::User { user_id: user }));
+
+    let envelope = EventEnvelope::new(&bound, Some(tenant())).expect("encode");
+    assert_eq!(envelope.producer, ServiceName::Assets);
+    assert_eq!(envelope.event_type, "assets.gateway_bound");
+    assert_eq!(envelope.tenant_id, Some(tenant()));
+    assert_eq!(
+        envelope.payload,
+        json!({
+            "binding_id": "01928f6e-7a3c-7d4e-8f00-000000000b01",
+            "hardware_id": "tg-0001",
+        })
+    );
+}
+
+/// The device events (Laysi/trustiot-v2#100): tenant events of the device's tenant, written by
+/// the assets service; created and updated carry the device in the gateway's own format, which
+/// the configuration accepts, and the delete names what a consumer needs to let go of it.
+#[test]
+fn device_events_decode_every_version() {
+    let device_id: DeviceId = "01928f6e-7a3c-7d4e-8f00-000000000d01"
+        .parse()
+        .expect("device id");
+    let model_id: DeviceModelId = "01928f6e-7a3c-7d4e-8f00-000000000a01"
+        .parse()
+        .expect("model id");
+    let name = ModelName::new("line-1-meter").expect("device name");
+    let hardware_id = GatewayId::new("tg-0001").expect("hardware id");
+    let model_name = ModelName::new("power-meter").expect("model name");
+
+    let created = decode_fixtures::<DeviceCreated>();
+    let names: Vec<&str> = created.iter().map(|(name, _)| name.as_str()).collect();
+    assert_eq!(names, ["v1"]);
+    let created = created[0].1.clone();
+    assert_eq!(
+        created,
+        DeviceCreated {
+            device_id,
+            revision: 1,
+            name: name.clone(),
+            hardware_id: hardware_id.clone(),
+            model_id,
+            device: Device {
+                id: protocol::DeviceId::new(device_id.to_string()).expect("protocol id"),
+                model: model_name.clone(),
+                transport: Transport::RtuOverTcp,
+                host: Host::new("192.0.2.10").expect("host"),
+                port: 8899,
+                unit_id: 3,
+                poll_interval_ms: 60_000,
+            },
+        }
+    );
+
+    let updated = decode_fixtures::<DeviceUpdated>();
+    assert_eq!(updated.len(), 1);
+    let updated = &updated[0].1;
+    assert_eq!(updated.device_id, device_id);
+    assert_eq!(updated.revision, 2);
+    assert_eq!(updated.device.transport, Transport::ModbusTcp);
+    assert_eq!(updated.device.host.as_str(), "meter-1.plant.example");
+    assert_eq!(updated.device.poll_interval_ms, 10_000);
+    assert_eq!(updated.device.model, model_name);
+
+    // The gateway's configuration accepts both devices with their model.
+    let model = DeviceModel {
+        name: model_name,
+        points: Vec::new(),
+    };
+    for device in [&created.device, &updated.device] {
+        DesiredConfig {
+            v: V1,
+            rev: protocol::PROTOCOL_REVISION,
+            version: ConfigVersion::new(1).expect("version"),
+            models: vec![model.clone()],
+            devices: vec![device.clone()],
+        }
+        .validate()
+        .expect("a valid configuration");
+    }
+
+    let deleted = decode_fixtures::<DeviceDeleted>();
+    assert_eq!(deleted.len(), 1);
+    let deleted = &deleted[0].1;
+    assert_eq!(
+        *deleted,
+        DeviceDeleted {
+            device_id,
+            name,
+            hardware_id,
+            model_id,
+            revision: 2,
+        }
+    );
+
+    let path = common::fixture_path("events/assets.device_deleted/v1.json");
+    let fixture: EventEnvelope =
+        serde_json::from_str(&fs::read_to_string(path).expect("read fixture")).expect("envelope");
+    let device_tenant: TenantId = "01928f6e-7a3c-7d4e-8f00-00000000000b"
+        .parse()
+        .expect("tenant id");
+    assert_eq!(fixture.tenant_id, Some(device_tenant));
+
+    let envelope = EventEnvelope::new(deleted, Some(tenant())).expect("encode");
+    assert_eq!(envelope.producer, ServiceName::Assets);
+    assert_eq!(envelope.event_type, "assets.device_deleted");
+    assert_eq!(envelope.tenant_id, Some(tenant()));
+    assert_eq!(
+        envelope.payload,
+        json!({
+            "device_id": "01928f6e-7a3c-7d4e-8f00-000000000d01",
+            "name": "line-1-meter",
+            "hardware_id": "tg-0001",
+            "model_id": "01928f6e-7a3c-7d4e-8f00-000000000a01",
+            "revision": 2,
+        })
+    );
+    let envelope = EventEnvelope::new(&created, Some(tenant())).expect("encode");
+    assert_eq!(envelope.event_type, "assets.device_created");
+    assert_eq!(
+        envelope.decode::<DeviceCreated>().expect("round trip"),
+        created
+    );
+    assert_eq!(
+        EventEnvelope::new(updated, Some(tenant()))
+            .expect("encode")
+            .event_type,
+        "assets.device_updated"
     );
 }
 

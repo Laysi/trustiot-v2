@@ -1,0 +1,39 @@
+check queue: queued on the build host at 22:18:57 as 610-c426da67; running now: 600-5ca4c2f3 since 22:17:47
+    Checking certs v0.1.0 (<host copy>/src/services/certs)
+    Checking testkit v0.1.0 (<host copy>/src/crates/testkit)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 7.42s
+     Running unittests src/lib.rs (<host copy>/target/debug/deps/certs-e86a3adc6431d02a)
+test result: ok. 18 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/broker.rs (<host copy>/target/debug/deps/broker-7e1f767d8d7cd4a9)
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.53s
+     Running tests/ceremony.rs (<host copy>/target/debug/deps/ceremony-4830d7e5916c2e2a)
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.49s
+     Running tests/crl.rs (<host copy>/target/debug/deps/crl-25e0a98164dde8af)
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 21.67s
+     Running tests/cross_tenant.rs (<host copy>/target/debug/deps/cross_tenant-a5eab79ab0adffc4)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.12s
+     Running tests/issuance.rs (<host copy>/target/debug/deps/issuance-e9465dcff3ac038d)
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.46s
+     Running tests/key_custody.rs (<host copy>/target/debug/deps/key_custody-9acda0f7ea2b8fd9)
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.77s
+     Running tests/registration.rs (<host copy>/target/debug/deps/registration-384d164244874d06)
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.86s
+     Running tests/workstation.rs (<host copy>/target/debug/deps/workstation-7618f8762203f767)
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 15.40s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test endorsement_keys_are_the_ones_a_tpm_makes ... ok
+test a_workstation_certificate_needs_digital_signature_and_no_ca ... ok
+test only_a_workstation_certificate_signs_for_a_workstation ... ok
+two issuing CAs loaded: the new registration's chain carries generation 2 (55ab01bf04cefe91b82c087c64b77fffb7641b2f932677214a6b5d4449330e7c)
+two issuing CAs loaded: the repeat's chain carries generation 1 (4c283b7e63a7fe7a91cf25f24c769f48cfaf7046c9a4c55b05f6f4d2437738b5), its ca_key_id
+registered: (the 201 body with its PEM certificates is left out of this file; gitleaks reads the base64 as a generic key)
+201 certificate_chain: the certificate, then the issuing CA 4009fee99d2c56d0b2c1801740b78777eb94223399026649d6c4727a7f55ab62; signatures verify up to the root
+repeated: 200, the same record and certificate; totals (1, 1, 1)
+generation 1 removed: the repeat answers 200, chain = the certificate; {"fields":{"ca_key_id":"4c283b7e63a7fe7a91cf25f24c769f48cfaf7046c9a4c55b05f6f4d2437738b5"},"level":"WARN","message":"the issuing CA of a repeated gateway registration is no longer loaded, so its certificate chain is the gateway certificate alone","service":"certs","span_id":"e08ffadc7678beee","target":"certs::registrations","timestamp":"2026-10-23T14:32:34.631477Z","trace_id":"d64d8af44ef58e11fb699e8eb11103a2"}
+test the_chain_carries_the_issuing_ca_that_signed_the_certificate ... ok
+test registration_is_idempotent_and_needs_a_workstation_and_an_administrator ... ok
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.06s
+check queue: removed 0 dangling test volumes
+check queue: removed 0 dangling podman test volumes
+check queue: exit 0 at 22:32:41 (build host, 610-c426da67)
+

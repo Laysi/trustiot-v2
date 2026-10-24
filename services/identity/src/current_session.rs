@@ -22,7 +22,7 @@
 //!   tenant's name is read in a transaction of that tenant (row-level security).
 //! - The user's tenants: every membership of the token's user, read with the platform role
 //!   (memberships are tenant data, and the service role sees one tenant at a time;
-//!   `0005_preferences_and_tenant_switch.sql` lets the platform role read them, nothing more),
+//!   `0007_preferences_and_tenant_switch.sql` lets the platform role read them, nothing more),
 //!   in a `READ ONLY` transaction, for the token's user only: the query's only condition comes
 //!   from the verified token, never from the request's body, path or query (decision 29).
 //! - Switching: the target must be one of those memberships; then the session the request
@@ -41,7 +41,7 @@ use axum::http::header::CACHE_CONTROL;
 use axum::http::request::Parts;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, put};
-use contract::{ErrorBody, ErrorCode, MessageKey, SessionId, TenantId, TenantRole, UserId};
+use contract::{ErrorBody, ErrorCode, MessageKey, SessionId, TenantId, UserId};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use service_kit::identity::{IdentityVerifier, UserIdentity};
@@ -51,6 +51,7 @@ use utoipa::ToSchema;
 
 use crate::csrf::{CROSS_SITE_REQUEST, cross_site};
 use crate::logout::CURRENT_SESSION_PATH;
+use crate::members::MemberRole;
 use crate::session::{SessionHash, error_kind, parse_role, session_secret};
 use crate::tenants::{error, is_json};
 
@@ -97,32 +98,6 @@ const USER_EMAIL: &str = "SELECT email FROM identity.users WHERE id = $1::uuid";
 const SWITCH_TENANT: &str = "UPDATE identity.sessions SET active_tenant_id = $4::uuid
 WHERE id = $1::uuid AND token_hash = $2 AND user_id = $3::uuid
     AND revoked_at IS NULL AND expires_at > now()";
-
-/// A user's role in a tenant, as this API shows it.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, ToSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum MemberRole {
-    /// Reads the tenant's data.
-    Viewer,
-    /// Also changes devices, models, alert rules and other configuration.
-    Editor,
-    /// Also manages members, the plan, and tenant settings.
-    Admin,
-}
-
-impl MemberRole {
-    /// The role as shown; `None` for a role this build does not know, which the identity
-    /// service never issues.
-    #[must_use]
-    pub const fn of(role: TenantRole) -> Option<Self> {
-        match role {
-            TenantRole::Viewer => Some(Self::Viewer),
-            TenantRole::Editor => Some(Self::Editor),
-            TenantRole::Admin => Some(Self::Admin),
-            TenantRole::Unrecognized => None,
-        }
-    }
-}
 
 /// A tenant the user belongs to, with their role there.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
@@ -577,6 +552,7 @@ async fn switch_tenant(
 
 #[cfg(test)]
 mod tests {
+    use contract::TenantRole;
     use serde_json::json;
 
     use super::*;

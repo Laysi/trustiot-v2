@@ -13,6 +13,12 @@
 //!   the workstation's signature or without a platform administrator registers nothing
 //!   (acceptance 4); a gateway certificate cannot act as a workstation (acceptance 6); a
 //!   replayed request and a revoked workstation certificate are refused.
+//! - The certificate chain (Laysi/trustiot-v2#610, the real binary): the 201 and the 200 carry
+//!   the certificate, then the issuing CA certificate whose key verifies it, whose key id is
+//!   `ca_key_id` and which the root verifies; with two issuing CAs loaded, a repeat carries the
+//!   one that signed it, not the one that signs now; after rotation step 3 removed it, a repeat
+//!   still answers 200 with the first certificate and a chain of the certificate alone, and
+//!   logs a WARN with the key id only.
 //!
 //! The API test is skipped without podman or docker unless `CI` is set. Run with `--nocapture`
 //! to see the evidence lines the test report quotes.
@@ -23,6 +29,7 @@ use std::time::Duration;
 
 use base64::Engine as _;
 use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
+use ca_keys::{CaKey, Request};
 use certs::authority::Authority;
 use certs::issue::{self, WORKSTATION_PURPOSE_DER, WORKSTATION_SUBJECT_PREFIX, WorkstationName};
 use certs::pem;
@@ -455,6 +462,70 @@ fn new_gateway(hardware_id: &str) -> (KeyPair, Value) {
     (key, body)
 }
 
+/// A production workstation named `name`: a new key and its certificate from the platform
+/// administrators' API, signed by the issuing CA that signs now.
+async fn new_workstation<'a>(service: &'a Service, name: &str) -> (Workstation<'a>, String) {
+    let (key, csr) = request();
+    let issued = service
+        .post_json(
+            CERTIFICATES_PATH,
+            Some(&service.admin_token()),
+            &json!({
+                "workstation": name,
+                "certificate_request": pem::encode(pem::CERTIFICATE_REQUEST, &csr),
+            }),
+        )
+        .await;
+    assert_eq!(issued.status, 201, "{}", issued.body);
+    let issued: WorkstationCertificate = serde_json::from_str(&issued.body).expect("issued");
+    let workstation = Workstation {
+        service,
+        key,
+        certificate: pem::decode_all(&issued.certificate, pem::CERTIFICATE)
+            .expect("PEM")
+            .remove(0),
+        serial: issued.serial,
+    };
+    (workstation, issued.ca_key_id)
+}
+
+/// The two certificates of `registration.certificate_chain`, DER, once checked: the first is the
+/// response's `certificate`; the second's public key verifies the first's signature, its key id
+/// is the response's `ca_key_id`, and `root` (DER) verifies its signature.
+fn checked_chain(registration: &GatewayRegistration, root: &[u8]) -> [Vec<u8>; 2] {
+    let chain = pem::decode_all(&registration.certificate_chain, pem::CERTIFICATE)
+        .expect("a PEM certificate chain");
+    let [leaf_der, issuing_der]: [Vec<u8>; 2] = chain
+        .try_into()
+        .unwrap_or_else(|chain: Vec<Vec<u8>>| panic!("{} certificates, not 2", chain.len()));
+    let certificate = pem::decode_all(&registration.certificate, pem::CERTIFICATE)
+        .expect("PEM")
+        .remove(0);
+    assert_eq!(
+        leaf_der, certificate,
+        "the chain starts with the certificate"
+    );
+    let (_, leaf) = X509Certificate::from_der(&leaf_der).expect("the gateway certificate");
+    let (_, issuing) = X509Certificate::from_der(&issuing_der).expect("the issuing CA");
+    let (_, root) = X509Certificate::from_der(root).expect("the root");
+    leaf.verify_signature(Some(issuing.public_key()))
+        .expect("the issuing CA's public key verifies the gateway certificate");
+    issuing
+        .verify_signature(Some(root.public_key()))
+        .expect("the root verifies the issuing CA certificate");
+    // Negative control: the check tells keys apart.
+    assert!(
+        leaf.verify_signature(Some(root.public_key())).is_err(),
+        "the root did not sign the gateway certificate itself"
+    );
+    assert_eq!(
+        ca_keys::key_id(issuing.public_key().raw),
+        registration.ca_key_id,
+        "the chain's issuing CA is the one that signed the certificate"
+    );
+    [leaf_der, issuing_der]
+}
+
 /// The rows of a table count, as the superuser sees them.
 async fn count(product: &ProductPostgres, query: &'static str) -> i64 {
     sqlx::query_scalar(query)
@@ -463,13 +534,18 @@ async fn count(product: &ProductPostgres, query: &'static str) -> i64 {
         .expect("count")
 }
 
-const REGISTRATIONS: &str = "SELECT count(*) FROM certs.gateway_registrations";
-const GATEWAY_CERTIFICATES: &str =
-    "SELECT count(*) FROM certs.issued_certificates WHERE profile = 'gateway'";
-const EVENTS: &str =
-    "SELECT count(*) FROM certs.outbox_event WHERE event_type = 'certs.gateway_registered'";
+// The tests of this binary share one database (`testkit::product`) and may run at once, so the
+// counts cover the hardware IDs of the first scenario (`gw-*`) only; the rotation scenario
+// registers `rot-*`.
+const REGISTRATIONS: &str =
+    "SELECT count(*) FROM certs.gateway_registrations WHERE hardware_id LIKE 'gw-%'";
+const GATEWAY_CERTIFICATES: &str = "SELECT count(*) FROM certs.issued_certificates
+    WHERE profile = 'gateway' AND subject LIKE 'gw-%'";
+const EVENTS: &str = "SELECT count(*) FROM certs.outbox_event
+    WHERE event_type = 'certs.gateway_registered' AND aggregate_id LIKE 'gw-%'";
 
-/// What the database holds: registrations, gateway certificates, registration events.
+/// What the database holds for the `gw-*` hardware IDs: registrations, gateway certificates,
+/// registration events.
 async fn totals(product: &ProductPostgres) -> (i64, i64, i64) {
     (
         count(product, REGISTRATIONS).await,
@@ -576,13 +652,23 @@ async fn registration_is_idempotent_and_needs_a_workstation_and_an_administrator
         now(),
     )
     .expect("the initial certificate is a client certificate under the root");
+    // Laysi/trustiot-v2#610: the chain the gateway presents, the certificate and then the issuing
+    // CA that signed it.
+    let [_, issuing] = checked_chain(&registered, &ca.root_der());
+    assert_eq!(issuing, ca.issuing_ders()[0]);
+    println!(
+        "201 certificate_chain: the certificate, then the issuing CA {}; signatures verify up to \
+         the root",
+        registered.ca_key_id
+    );
     assert_eq!(totals(&product).await, (1, 1, 1));
 
     // The event: platform-wide, the administrator as the actor, the registration's facts.
     let row = sqlx::query(
         "SELECT tenant_id IS NULL AS platform, aggregate_type, aggregate_id,
                 envelope::text AS envelope
-         FROM certs.outbox_event WHERE event_type = 'certs.gateway_registered'",
+         FROM certs.outbox_event
+         WHERE event_type = 'certs.gateway_registered' AND aggregate_id LIKE 'gw-%'",
     )
     .fetch_one(&mut product.superuser().await)
     .await
@@ -616,6 +702,7 @@ async fn registration_is_idempotent_and_needs_a_workstation_and_an_administrator
     assert_eq!(again.status, 200, "{}", again.body);
     let repeated: GatewayRegistration = serde_json::from_str(&again.body).expect("repeated");
     assert_eq!(repeated, registered);
+    checked_chain(&repeated, &ca.root_der());
     assert_eq!(totals(&product).await, (1, 1, 1));
     println!("repeated: 200, the same record and certificate; totals (1, 1, 1)");
 
@@ -912,7 +999,13 @@ async fn registration_is_idempotent_and_needs_a_workstation_and_an_administrator
     assert_eq!(totals(&product).await, (2, 2, 2));
     println!("a revoked workstation: 403 revoked; totals (2, 2, 2)");
 
-    let lines = service.stdout.messages("registered a gateway");
+    // The service's stdout reaches the test through a reader thread, so a line can arrive after
+    // its response does.
+    let lines = wait_for("both registration log lines", || async {
+        let lines = service.stdout.messages("registered a gateway");
+        (lines.len() >= 2).then_some(lines)
+    })
+    .await;
     assert_eq!(lines.len(), 2);
     for line in &lines {
         for secret in ["certificate_request", "BEGIN"] {
@@ -1019,4 +1112,147 @@ fn endorsement_keys_are_the_ones_a_tpm_makes() {
             "gateway_registration.endorsement_key_invalid"
         );
     }
+}
+
+/// Laysi/trustiot-v2#610 across an issuing CA rotation (services/certs/README.md, "輪替"): the
+/// chain carries the issuing CA that signed the certificate, by its key id, not the one that
+/// signs now; once rotation step 3 removed that CA, a repeat still answers 200 with the first
+/// certificate, and its chain is the certificate alone with a WARN naming the key id.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_chain_carries_the_issuing_ca_that_signed_the_certificate() {
+    let Some(product) = product_postgres(&["certs_app", "certs_platform"]).await else {
+        return;
+    };
+    // Generation 1 has its certificate; generation 2's key waits for its ceremony.
+    let mut ca = TestCa::new(&[1, 2]);
+    let both = ca.issuing_pems.clone();
+    let ders = ca.issuing_ders();
+    let ids: Vec<String> = ca.keys().key_ids().map(str::to_owned).collect();
+    ca.issuing_pems.truncate(1);
+    ca.write_all();
+    let mut env = FAST_CRLS.to_vec();
+    env.push(("TRUSTIOT__CA__RELOAD_INTERVAL", "1s"));
+    let service = Service::start(&product, &ca, &env).await;
+    wait_for("the published CRL of generation 1", || async {
+        let (status, body) = service.get(certs::http::CRL_PATH).await;
+        (status == 200 && !body.is_empty()).then_some(body)
+    })
+    .await;
+
+    // A gateway registered while generation 1 signs.
+    let (first_station, signer) = new_workstation(&service, "line-c-ws-01").await;
+    assert_eq!(signer, ids[0]);
+    let (_, old_body) = new_gateway("rot-0101");
+    let reply = first_station.register(&old_body).await;
+    assert_eq!(reply.status, 201, "{}", reply.body);
+    let old: GatewayRegistration = serde_json::from_str(&reply.body).expect("registered");
+    assert_eq!(old.ca_key_id, ids[0]);
+    let [_, issuing] = checked_chain(&old, &ca.root_der());
+    assert_eq!(issuing, ders[0]);
+
+    // Rotation step 2: generation 2's certificate joins generation 1's, and once it has its
+    // first CRL it signs. Two issuing CAs are loaded.
+    ca.issuing_pems = both;
+    ca.write_all();
+    wait_for("the published CRLs of both generations", || async {
+        let (status, body) = service.get(certs::http::CRL_PATH).await;
+        (status == 200)
+            .then(|| pem::decode_all(&body, pem::CRL).ok())
+            .flatten()
+            .filter(|crls| crls.len() == 2)
+    })
+    .await;
+    let (second_station, signer) = new_workstation(&service, "line-c-ws-02").await;
+    assert_eq!(signer, ids[1], "generation 2 signs now");
+    let (_, new_body) = new_gateway("rot-0102");
+    let reply = second_station.register(&new_body).await;
+    assert_eq!(reply.status, 201, "{}", reply.body);
+    let new: GatewayRegistration = serde_json::from_str(&reply.body).expect("registered");
+    assert_eq!(new.ca_key_id, ids[1]);
+    let [_, issuing] = checked_chain(&new, &ca.root_der());
+    assert_eq!(issuing, ders[1]);
+    println!(
+        "two issuing CAs loaded: the new registration's chain carries generation 2 ({})",
+        ids[1]
+    );
+    // The repeat of the first registration: its chain carries generation 1, which signed it,
+    // although generation 2 signs now.
+    let reply = second_station.register(&old_body).await;
+    assert_eq!(reply.status, 200, "{}", reply.body);
+    let repeated: GatewayRegistration = serde_json::from_str(&reply.body).expect("repeated");
+    assert_eq!(repeated, old);
+    let [_, issuing] = checked_chain(&repeated, &ca.root_der());
+    assert_eq!(issuing, ders[0]);
+    println!(
+        "two issuing CAs loaded: the repeat's chain carries generation 1 ({}), its ca_key_id",
+        ids[0]
+    );
+
+    // Rotation step 3: generation 1's key and certificate are removed.
+    let plan = ca
+        .keys()
+        .plan(
+            Request {
+                generation: 2,
+                remove_before: 2,
+            },
+            now(),
+            CaKey::generate,
+        )
+        .expect("plan");
+    assert_eq!(plan.keys.key_ids().collect::<Vec<_>>(), [ids[1].as_str()]);
+    ca.keys_json = plan.keys.to_json().to_string();
+    ca.issuing_pems.remove(0);
+    ca.write_all();
+    wait_for("generation 2 loaded alone", || async {
+        service
+            .stdout
+            .messages("loaded the issuing CA")
+            .into_iter()
+            .find(|line| {
+                let issuing = line["fields"]["issuing"].to_string();
+                issuing.contains(&ids[1]) && !issuing.contains(&ids[0])
+            })
+    })
+    .await;
+    let reply = second_station.register(&old_body).await;
+    assert_eq!(reply.status, 200, "{}", reply.body);
+    let repeated: GatewayRegistration = serde_json::from_str(&reply.body).expect("repeated");
+    assert_eq!(
+        repeated,
+        GatewayRegistration {
+            certificate_chain: old.certificate.clone(),
+            ..old.clone()
+        },
+        "the first registration and certificate; the chain is the certificate alone"
+    );
+    assert_eq!(
+        pem::decode_all(&repeated.certificate_chain, pem::CERTIFICATE).expect("PEM"),
+        pem::decode_all(&old.certificate, pem::CERTIFICATE).expect("PEM")
+    );
+    let warning = wait_for("the WARN for the unloaded issuing CA", || async {
+        service
+            .stdout
+            .messages("the issuing CA of a repeated gateway registration is no longer loaded")
+            .into_iter()
+            .next()
+    })
+    .await;
+    assert_eq!(warning["level"], "WARN", "{warning}");
+    assert_eq!(warning["fields"]["ca_key_id"], ids[0].as_str(), "{warning}");
+    let fields: Vec<&String> = warning["fields"]
+        .as_object()
+        .map(|fields| fields.keys().filter(|key| *key != "message").collect())
+        .unwrap_or_default();
+    assert_eq!(
+        fields,
+        ["ca_key_id"],
+        "the WARN names the key id only: {warning}"
+    );
+    println!("generation 1 removed: the repeat answers 200, chain = the certificate; {warning}");
+    // The other registration keeps its two-certificate chain.
+    let reply = second_station.register(&new_body).await;
+    assert_eq!(reply.status, 200, "{}", reply.body);
+    let repeated: GatewayRegistration = serde_json::from_str(&reply.body).expect("repeated");
+    assert_eq!(repeated, new);
 }
