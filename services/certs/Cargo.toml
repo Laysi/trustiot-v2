@@ -73,9 +73,13 @@ reqwest.workspace = true
 rustls = { workspace = true, features = ["ring", "std"] }
 # The product's schema (the migration Job) and the cross-tenant suite.
 testkit = { path = "../../crates/testkit" }
-tokio = { workspace = true, features = ["macros", "process", "rt-multi-thread", "time"] }
+# The stand-in for the ingress in front of the service (tests/workstation_tool.rs).
+tokio = { workspace = true, features = ["io-util", "macros", "net", "process", "rt-multi-thread", "time"] }
 # Captures the audit log lines of the platform role's reads in tests/bindings.rs.
 tracing-subscriber = { workspace = true, features = ["registry", "std"] }
+# The production workstation tool, which enrolls and registers gateways against the real service
+# (tests/workstation_tool.rs).
+workstation = { path = "../../factory/workstation" }
 
 [lints]
 workspace = true

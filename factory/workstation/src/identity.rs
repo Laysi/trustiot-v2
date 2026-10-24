@@ -211,7 +211,7 @@ const CERTIFICATE_END: &str = "-----END CERTIFICATE-----";
 /// `CERTIFICATE`. Any other block (a private key, a second certificate, a chain) refuses the
 /// whole input; text outside the block is ignored, because only the certificate re-encoded from
 /// its DER is ever stored ([`certificate_pem`]).
-fn certificate_der(pem: &[u8]) -> Result<Vec<u8>, CertificateProblem> {
+pub(crate) fn certificate_der(pem: &[u8]) -> Result<Vec<u8>, CertificateProblem> {
     let text = std::str::from_utf8(pem).map_err(|_| CertificateProblem::NotOneCertificate)?;
     if text.matches("-----BEGIN").count() != 1 || text.matches("-----END").count() != 1 {
         return Err(CertificateProblem::NotOneCertificate);
@@ -249,7 +249,7 @@ pub fn certificate_pem(der: &[u8]) -> String {
 
 /// Whether `serial` is how the certs service writes a serial number: 2 to 40 lower-case hex
 /// digits.
-fn is_serial(serial: &str) -> bool {
+pub(crate) fn is_serial(serial: &str) -> bool {
     (2..=40).contains(&serial.len())
         && serial
             .bytes()
@@ -365,6 +365,9 @@ pub struct CheckedCertificate {
     pub not_after: DateTime<Utc>,
     /// The certificate as stored: one PEM block re-encoded from the DER that was checked.
     pub pem: String,
+    /// The DER that was checked: what a registration request carries
+    /// ([`contract::certs::WORKSTATION_CERTIFICATE_HEADER`]).
+    pub der: Vec<u8>,
 }
 
 fn time_text(timestamp: i64) -> String {
@@ -417,22 +420,25 @@ pub fn check_certificate(
     if usage.any || usage.client_auth || usage.server_auth {
         return Err(CertificateProblem::TlsPurpose);
     }
-    let mut attributes = certificate.subject().iter_attributes();
-    let (Some(attribute), None) = (attributes.next(), attributes.next()) else {
-        return Err(CertificateProblem::Subject);
+    let subject = {
+        let mut attributes = certificate.subject().iter_attributes();
+        let (Some(attribute), None) = (attributes.next(), attributes.next()) else {
+            return Err(CertificateProblem::Subject);
+        };
+        if attribute.attr_type() != &OID_X509_COMMON_NAME {
+            return Err(CertificateProblem::Subject);
+        }
+        let subject = attribute
+            .as_str()
+            .map_err(|_| CertificateProblem::Subject)?;
+        if !subject
+            .strip_prefix(WORKSTATION_SUBJECT_PREFIX)
+            .is_some_and(is_workstation_name)
+        {
+            return Err(CertificateProblem::Subject);
+        }
+        subject.to_owned()
     };
-    if attribute.attr_type() != &OID_X509_COMMON_NAME {
-        return Err(CertificateProblem::Subject);
-    }
-    let subject = attribute
-        .as_str()
-        .map_err(|_| CertificateProblem::Subject)?;
-    if !subject
-        .strip_prefix(WORKSTATION_SUBJECT_PREFIX)
-        .is_some_and(is_workstation_name)
-    {
-        return Err(CertificateProblem::Subject);
-    }
     let validity = certificate.validity();
     let not_before = validity.not_before.timestamp();
     let not_after = validity.not_after.timestamp();
@@ -454,12 +460,16 @@ pub fn check_certificate(
     let time = |timestamp: i64| {
         DateTime::<Utc>::from_timestamp(timestamp, 0).ok_or(CertificateProblem::Malformed)
     };
+    let (not_before, not_after) = (time(not_before)?, time(not_after)?);
+    let pem = certificate_pem(&der);
+    drop(certificate);
     Ok(CheckedCertificate {
-        subject: subject.to_owned(),
+        subject,
         serial,
-        not_before: time(not_before)?,
-        not_after: time(not_after)?,
-        pem: certificate_pem(&der),
+        not_before,
+        not_after,
+        pem,
+        der,
     })
 }
 
@@ -562,6 +572,7 @@ pub async fn enroll(
             method: Method::POST,
             path: ISSUE_PATH,
             cookie: Some(cookie),
+            headers: Vec::new(),
             json: Some(Zeroizing::new(body)),
         })
         .await?;

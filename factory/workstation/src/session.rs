@@ -250,6 +250,7 @@ pub async fn send_code(client: &Client, email: &str) -> Result<Accepted, SendCod
             method: Method::POST,
             path: LOGIN_PATH,
             cookie: None,
+            headers: Vec::new(),
             json: Some(body),
         })
         .await
@@ -312,6 +313,7 @@ pub async fn verify_code(
             method: Method::POST,
             path: LOGIN_PATH,
             cookie: previous,
+            headers: Vec::new(),
             json: Some(body),
         })
         .await
@@ -354,6 +356,7 @@ pub async fn logout(client: &Client, session: &Session) -> Result<LoggedOut, Err
             method: Method::DELETE,
             path: LOGOUT_PATH,
             cookie: Some(&session.cookie),
+            headers: Vec::new(),
             json: None,
         })
         .await?;

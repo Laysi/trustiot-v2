@@ -355,23 +355,14 @@ Cloudflare 與 mesh 在服務之前終止 TLS，用戶端憑證到不了服務�
 
 簽的內容是下面六行，以 `\n` 分隔、最後沒有換行（`contract::certs::workstation_signing_input`）：`trustiot-workstation-request-v1`、方法（`POST`）、路徑與查詢字串（`/api/certs/v1/gateway-registrations`）、時間、nonce、本文 bytes 的 SHA-256（小寫十六進位）。簽章因此綁定這一個請求：換本文、路徑或時間都驗不過；完全相同的請求再送一次，nonce 已經記在資料庫（`certs.workstation_request_nonces`，過了時間的接受範圍就刪除），回 `replayed`。工作站的時鐘要校時。
 
-在 Laysi/trustiot-v2#80 的工作站工具之前，可以這樣簽（`registration.json` 是要送的本文，送出時要是同一份 bytes）：
+工作站上以產線工作站工具登錄（[factory/workstation](../../factory/workstation/README.md) 的 `register`，Laysi/trustiot-v2#615）。工作站有了工作站憑證（`enroll`），平台管理員在工作站上 `login` 之後：
 
 ```sh
-ts=$(date +%s)
-nonce=$(openssl rand 16 | openssl base64 -A | tr '+/' '-_' | tr -d '=')
-digest=$(openssl dgst -sha256 -r registration.json | cut -d' ' -f1)
-printf 'trustiot-workstation-request-v1\nPOST\n/api/certs/v1/gateway-registrations\n%s\n%s\n%s' \
-  "$ts" "$nonce" "$digest" \
-  | openssl dgst -sha256 -sign workstation-key.pem | openssl base64 -A > signature.b64
-openssl x509 -in workstation.pem -outform DER | openssl base64 -A > certificate.b64
-curl -sS --fail-with-body -X POST "https://<app 主機>/api/certs/v1/gateway-registrations" \
-  -H 'content-type: application/json' --cookie "__Host-trustiot-session=$SESSION" \
-  -H "trustiot-workstation-certificate: $(cat certificate.b64)" \
-  -H "trustiot-workstation-timestamp: $ts" -H "trustiot-workstation-nonce: $nonce" \
-  -H "trustiot-workstation-signature: $(cat signature.b64)" \
-  --data-binary @registration.json
+trustiot-workstation register --hardware-id <硬體 ID> --csr gateway.csr --ek ek.pem \
+  --root-sha256 <根憑證的 SHA-256>
 ```
+
+工具每次嘗試都以新的時間與 nonce 重新簽章；只在連線失敗、逾時與 502、503、504、Cloudflare 的 520 到 524 時重試（靠下一節的冪等保證：服務已提交、回應遺失時，重送得到 200 與同一筆登錄）；409、401、403、422 各自以固定的結束碼停止、不重試；200 或 201 先核對硬體 ID、兩個雜湊、憑證的 CN 與公鑰、`certificate_chain` 經簽發 CA 到 `root_certificate` 的簽章，以及 `--root-sha256` 釘住的根憑證（必填：`root_certificate` 是閘道器的唯一信任錨，指紋由平台管理員從儀式建立的根憑證算出交給產線），才記為登錄完成，結果記在工作站的 `registrations/<硬體 ID>.json` 與 `registrations.jsonl`。結束碼與紀錄的格式見工具的 README。閘道器的 CSR 與 EK 目前以檔案給；經 ssh 從閘道器的 TPM 取得是 Laysi/trustiot-v2#616。
 
 ### 請求與回應
 
@@ -638,6 +629,7 @@ CARGO_BUILD_JOBS=2 cargo test -p certs
 | `tests/cross_tenant.rs` | [crates/testkit](../../crates/testkit/README.md) 的覆蓋檢查：服務角色碰得到的每張表、規格裡的每個端點都要宣告；CA 的表都不是租戶資料而豁免（broker 伺服器憑證也屬於平台），outbox 的兩張表照租戶表探測（服務角色寫不了別的租戶的事件），所以不再以 `without_tenant_data` 宣告；Laysi/trustiot-v2#632 的 `gateway_bindings` 與 `tenant_statuses` 照租戶表探測（每個租戶一列的 `one_per_tenant`），消費端的四張表豁免；登錄的表服務角色碰不到；工作站憑證的兩個端點與出廠登錄只給平台管理員，豁免並說明理由；broker 的簽發端點在自己的埠上，不在規格裡（容器） |
 | `tests/bindings.rs` | Laysi/trustiot-v2#632：真的服務建立訂閱 `certs.assets-events`（讀 `assets`）；以 `assets_app` 照綁定的寫法在租戶交易寫 `assets.gateway_bound` 後，表裡有這台閘道器、正確的租戶、綁定 ID、`occurred_at` 與事件位置，`gateway_tenant` 與 `bound_gateways` 讀得到；同一個事件再送一次、整個訂閱重播（`Replay::Reprocess`）後仍是同一列、內容不變。自己的訂閱的消費端：同一台閘道器較舊的綁定（log 位置較前、別的租戶）在較新的之後才到時存下但不是目前的綁定；不合規則的硬體 ID 與沒有租戶的綁定進 dead letter，之後的綁定照常處理。租戶狀態：沒有紀錄是正常、只接受較大的版本號、寫入停權後 `tenant_suspended` 為真；租戶交易寫不了別的租戶的狀態（42501）、只看得到自己的。平台角色讀得到兩個租戶的綁定、取 log 最後的綁定、略過已結束的，每次讀取都有一行 `platform database access`（actor `service`、`certs`、呼叫端的 purpose）（容器） |
 | `tests/registration.rs` | Laysi/trustiot-v2#79：工作站簽章只接受工作站憑證，閘道器憑證、別的 CA、別的金鑰、別的本文或路徑、超過 300 秒的時間、過期的憑證、缺少、重複或格式錯的標頭都拒絕並說明原因；簽發 CA 簽的、其餘都符合工作站 profile 的憑證，只要 keyUsage 沒有 digitalSignature（或沒有 keyUsage）或是 CA:TRUE，也以 `not_workstation` 拒絕；EK 只接受 RSA 2048/3072/4096 與 P-256、P-384。真的服務：新的硬體 ID 201、憑證 CN 是硬體 ID 且在根之下驗證為用戶端憑證、寫一筆全平台事件；重送 200 同一張憑證、什麼都不寫；完全相同的請求重送回 `replayed`；換公鑰或 EK 409，別台的公鑰或 EK 409，不支援的 EK 422；少了工作站簽章、沒有 token、別的簽發者、租戶管理員、交換來的 token、別的金鑰或本文、以閘道器憑證冒充工作站，都不登錄；兩個相同的登錄同時到達只簽一張；除役的硬體 ID 409，superuser 也刪不掉、清不掉、改不了；`certs_app` 讀不到登錄；撤銷的工作站憑證 403 `revoked`。Laysi/trustiot-v2#610：201 與 200 的 `certificate_chain` 是 `certificate` 再接簽發 CA，簽發 CA 的公鑰驗得過 leaf 的簽章、金鑰 id 等於 `ca_key_id`、根驗得過它；載入兩把簽發 CA 時重送放的是簽出它的第 1 代，不是現在簽章的第 2 代；第 1 代的金鑰與憑證移除後重送仍 200、同一張憑證，鏈只有 leaf，WARN 只帶 `ca_key_id`（容器） |
+| `tests/workstation_tool.rs` | Laysi/trustiot-v2#615：產線工作站工具（`factory/workstation`）對真的服務：前面放一個檢查 session cookie、換成平台管理員內部 token 的 ingress 替身，工具 `enroll` 取得工作站憑證後登錄一台閘道器、重跑、再讓 ingress 在服務提交後丟掉回應（工具重送得到 200）；另一個新的硬體 ID 第一個 201 就被丟掉、重送得到 200。每個硬體 ID 都剛好一筆登錄、一張閘道器憑證、一筆 `certs.gateway_registered` 事件，工具的紀錄是 `registered`、序號等於資料庫的（容器） |
 | `tests/broker.rs` | Laysi/trustiot-v2#557：CSR 要求別的 CN、O、DNS 與 IP 名稱、CA、keyCertSign 與 clientAuth、anyExtendedKeyUsage 時，簽出的仍是 CA 決定的 broker profile（主體、DNS 名稱依設定、EKU 只有 serverAuth）；rustls 以根為信任錨時，憑證對兩個名稱都驗得過，對別的名稱、IP 拒絕，信任別的根時拒絕，同名但別的 CA 簽的憑證也拒絕，當用戶端憑證時以用途拒絕；閘道器憑證不能當伺服器憑證，閘道器 id 不能是 broker 的名稱；簽章驗不過、P-384 或不是 CSR 時拒絕。真的服務在 broker 埠簽出、記為 `broker`、回整條鏈並記 INFO，日誌沒有憑證；錯的 `Content-Type`、PEM、壞的或過大的 CSR、別的曲線都不簽也不記；API 埠沒有這個端點，broker 埠沒有其他路徑。簽發 CA 還沒有第一張 CRL 時回 503、不記錄，有了才簽。Mosquitto（OpenSSL）以簽出的憑證與測試產生的私鑰當伺服器：信任根、連 `mqtt-broker.trustiot.internal` 的閘道器憑證連得上，別的名稱或信任別的 CA 時用戶端拒絕，broker 的憑證當用戶端憑證時 broker 以用途拒絕（容器） |
 | `tests/workstation.rs` | Laysi/trustiot-v2#534：CSR 要求別的 CN、O、SAN、CA、keyUsage 與 clientAuth、serverAuth、anyExtendedKeyUsage 時，簽出的仍是 CA 決定的工作站 profile（EKU 只有工作站用途），rustls 驗用戶端憑證時接受閘道器憑證、拒絕工作站憑證；簽章驗不過、主體改過或 P-384 的 CSR 拒絕；沒有 token、不是 token、別的金鑰簽的、別的 audience、過期的 token 回 401，租戶管理員、沒有租戶的使用者與代使用者交換來的平台管理員 token 回 403，簽發與撤銷都一樣，而且簽發紀錄不變；壞的 CSR、不認得的欄位與錯的 Content-Type 不簽發；閘道器憑證、不存在或格式錯的序號撤銷回 404，撤銷寫入原因並記 INFO，重複撤銷回 409，下一張排程 CRL 列出它與原因；Mosquitto（OpenSSL）以 `ca.pem` 與 `crl.pem` 驗用戶端憑證時接受閘道器憑證，拒絕撤銷的閘道器憑證與 API 簽出的工作站憑證（容器） |
 
