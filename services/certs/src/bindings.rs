@@ -19,6 +19,8 @@
 //!   line for every read: the renewal has no tenant identity, and the broker sync compares every
 //!   gateway.
 
+use std::time::Duration;
+
 use chrono::{DateTime, Utc};
 use contract::events::assets::{GATEWAY_BINDING_AGGREGATE, GatewayBound};
 use contract::{GatewayBindingId, ServiceName, TenantId};
@@ -86,8 +88,23 @@ const TENANT_STATUS: &str = "SELECT status FROM certs.tenant_statuses WHERE tena
 /// accepts it at any point of a transaction.
 const READ_ONLY: &str = "SET TRANSACTION READ ONLY";
 
-/// Stores every `assets.gateway_bound` in `certs.gateway_bindings`; ignores the assets service's
-/// other events.
+/// The longest a statement of a [`Projection`] read may run (`SET LOCAL statement_timeout`). The
+/// reads share the platform role's pool (`crate::PLATFORM_CONNECTIONS`) with the factory
+/// registration and the consumer, so a slow scan must not hold a pooled connection for long: past
+/// this bound Postgres cancels it and the read fails.
+pub const READ_STATEMENT_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// The longest a [`Projection`] read waits for a table lock (`SET LOCAL lock_timeout`), for
+/// example behind a migration's `ALTER TABLE`.
+pub const READ_LOCK_TIMEOUT: Duration = Duration::from_secs(2);
+
+/// Bounds the rest of the read transaction on the server, like `SET LOCAL`: `$1` and `$2` are
+/// the statement and lock timeouts in milliseconds.
+const SET_READ_TIMEOUTS: &str = "SELECT set_config('statement_timeout', $1, true), \
+     set_config('lock_timeout', $2, true)";
+
+/// Stores every `assets.gateway_bound` in `certs.gateway_bindings`; retries any other event of a
+/// gateway binding (one this build does not know) and ignores the assets service's other events.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct GatewayBoundHandler;
 
@@ -98,6 +115,17 @@ impl Handler for GatewayBoundHandler {
         delivery: &Delivery,
     ) -> Result<(), HandlerError> {
         if !delivery.envelope.is::<GatewayBound>() {
+            // A binding event this build does not know (the unbinding of Laysi/trustiot-v2#115,
+            // when assets ships before certs) changes which binding holds: acknowledging it would
+            // lose it for good and leave the gateway with its old tenant. Retrying holds the
+            // subscription on it, where the lag alert shows, until a build that knows it runs.
+            // The assets service's other aggregates (device models, devices) are not for this
+            // service.
+            if delivery.aggregate.kind() == GATEWAY_BINDING_AGGREGATE {
+                return Err(HandlerError::retry(
+                    "an assets gateway_binding event this build does not know",
+                ));
+            }
             return Ok(());
         }
         // An invalid hardware ID or binding ID fails here (`GatewayId` checks the rule when it is
@@ -336,11 +364,17 @@ impl Projection {
         }
     }
 
-    /// A read-only transaction of the platform role for the certs service, logged with `purpose`.
+    /// A read-only transaction of the platform role for the certs service, logged with `purpose`
+    /// and bounded by [`READ_STATEMENT_TIMEOUT`] and [`READ_LOCK_TIMEOUT`].
     async fn begin(&self, purpose: &'static str) -> Result<PlatformTransaction, ReadError> {
         let actor = PlatformActor::service(ServiceIdentity::new(ServiceName::Certs));
         let mut tx = self.db.begin(actor, purpose).await?;
         sqlx::query(READ_ONLY).execute(&mut *tx).await?;
+        sqlx::query(SET_READ_TIMEOUTS)
+            .bind(format!("{}ms", READ_STATEMENT_TIMEOUT.as_millis()))
+            .bind(format!("{}ms", READ_LOCK_TIMEOUT.as_millis()))
+            .execute(&mut *tx)
+            .await?;
         Ok(tx)
     }
 }

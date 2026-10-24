@@ -420,21 +420,23 @@ curl -sS --fail-with-body -X POST "https://<app 主機>/api/certs/v1/gateway-reg
 ### 消費的事件
 
 - 訂閱 `certs.assets-events`（`SUBSCRIPTION`，永遠不改名），讀資產服務的 outbox。`tools/migrate/src/registry.rs` 把 certs 列為 `assets` 的消費端，migration Job 因此讓 `certs_platform` 讀 `assets.outbox_event`，並在 `certs` 建立消費端的四張表。訂閱從頭讀，所以這個版本之前的綁定也會補上。
-- `assets.gateway_bound`（`contract::events::assets::GatewayBound`）：消費端在事件的租戶交易裡以 `certs_app` 寫 `gateway_bindings` 一列（租戶、綁定 ID、硬體 ID、事件的 `occurred_at`、事件在資產服務 log 的位置）。主鍵（租戶、綁定 ID）已經有這一列時什麼都不寫，所以同一個事件送兩次、整個訂閱重播都只有一列、內容不變。資產服務的其他事件略過。每次處理記一行 INFO `applied assets.gateway_bound`（硬體 ID、綁定 ID、租戶、事件 ID、`created`）。
+- `assets.gateway_bound`（`contract::events::assets::GatewayBound`）：消費端在事件的租戶交易裡以 `certs_app` 寫 `gateway_bindings` 一列（租戶、綁定 ID、硬體 ID、事件的 `occurred_at`、事件在資產服務 log 的位置）。主鍵（租戶、綁定 ID）已經有這一列時什麼都不寫，所以同一個事件送兩次、整個訂閱重播都只有一列、內容不變。每次處理記一行 INFO `applied assets.gateway_bound`（硬體 ID、綁定 ID、租戶、事件 ID、`created`）。
 - 錯誤分類比照資產服務的設備池消費端：
 
 | 情況 | 處理 |
 | --- | --- |
 | 硬體 ID 或綁定 ID 不合規則（解碼失敗）、沒有租戶（全平台事件）、aggregate 不是該綁定的 `gateway_binding`、表以 SQLSTATE 22xxx 或 23514 拒絕的值 | 每次重試都會失敗：進 dead letter，訂閱繼續處理之後的事件 |
 | 其他資料庫錯誤（連線、逾時、序列化衝突等） | 暫時的：退避後重試同一個事件 |
+| aggregate 是 `gateway_binding`、但這個版本不認得的事件（例如 Laysi/trustiot-v2#115 的解綁事件，在資產服務先部署時） | 重試，不略過：綁定的事件會改變目前的綁定，略過就永遠遺失，閘道器會一直留在舊的租戶。訂閱停在這個事件，lag 告警會顯示，直到認得它的 certs 版本上線 |
+| 資產服務其他 aggregate 的事件（設備型號、設備） | 略過：與綁定無關 |
 
 ### 目前的綁定：以事件在 log 的順序判斷新舊
 
-一台閘道器目前的綁定，是它在資產服務 log 裡位置最後（`position_tx`、`position_id`，即 `crates/outbox` 的 `Position`）的那個綁定，而且沒有 `unbound_at`。不用時間判斷：資產服務要等前一個綁定結束（解綁，Laysi/trustiot-v2#115）才建立新的綁定，新綁定的交易在前一個綁定 commit 之後才寫入，它的事件在 log 裡一定排在後面；`occurred_at` 來自各副本的時鐘，不保證這個順序。較舊的綁定晚到時（例如修好後重播的 dead letter）照樣存下，但不會變成目前的綁定。`bound_at` 只供讀取。
+一台閘道器目前的綁定，是它在資產服務 log 裡位置最後（`position_tx`、`position_id`，即 `crates/outbox` 的 `Position`）的那個綁定，而且沒有 `unbound_at`。不用時間判斷：資產服務要等前一個綁定結束（解綁，Laysi/trustiot-v2#115）才建立新的綁定，新綁定的交易在前一個綁定 commit 之後才寫入，它的事件在 log 裡一定排在後面；`occurred_at` 來自各副本的時鐘，不保證這個順序。這依賴資產服務的一個不變式：綁定交易的第一個寫入必須是 `gateway_bindings` 的 `INSERT ... ON CONFLICT`，交易在它等完前一個綁定之後才取得交易 ID，事件的位置（`tx_order`）就是這個 ID（`services/assets/src/gateways/binding.rs` 的註解）。較舊的綁定晚到時（例如修好後重播的 dead letter）照樣存下，但不會變成目前的綁定。`bound_at` 只供讀取。
 
 表沒有「每台閘道器一列」的唯一限制，也不在處理時更新別的列：消費端在事件的租戶交易裡，RLS 看不到、也改不了別的租戶的列，閘道器換租戶時新舊綁定在不同租戶。所以一個綁定一列，誰是目前的綁定在讀取時由平台角色決定。
 
-解綁（Laysi/trustiot-v2#115）之後會以自己的事件，在同一個租戶（綁定的 aggregate）設定該列的 `unbound_at`；欄位已經在表上，讀取也已經把結束的綁定當作沒有綁定，不必遷移資料。那時再給 `certs_app` 更新這一欄的權限。
+解綁（Laysi/trustiot-v2#115）之後會以自己的事件，在同一個租戶（綁定的 aggregate）設定該列的 `unbound_at`；欄位已經在表上，讀取也已經把結束的綁定當作沒有綁定，不必遷移資料。那時再給 `certs_app` 更新這一欄的權限。`unbound_at` 不與 `bound_at` 比較（表上沒有這個 CHECK）：兩個時間來自不同副本的時鐘，順序以 log 為準，時鐘偏差不能讓解綁被拒、進 dead letter。
 
 ### 租戶狀態
 
@@ -458,6 +460,7 @@ curl -sS --fail-with-body -X POST "https://<app 主機>/api/certs/v1/gateway-reg
 - 每次讀取是一筆自己的 `PlatformDb::begin` 交易，第一個語句就是 `SET TRANSACTION READ ONLY`，資料庫拒絕其中的任何寫入。`PlatformDb::begin` 每筆交易記一行 INFO `platform database access`，帶 actor（`service`、`certs`）與呼叫端給的 `purpose`（例如 `renew-gateway-certificate`），所以每次讀取都在稽核日誌裡。不用 `PlatformDb::reader`：它只在建立時記一次 INFO、之後每筆交易只記 DEBUG，適合每秒輪詢的消費端；這三個讀取頻率低（一台閘道器幾十天換發一次、同步定期一次），每次都要留下紀錄。
 - 租戶交易讀不到別的租戶：`certs_app` 對 `gateway_bindings` 只有 `INSERT`（`ON CONFLICT DO NOTHING` 不指定衝突目標就不需要 `SELECT`），讀不到任何綁定；`tenant_statuses` 的 `tenant_isolation` 只讓它讀寫交易的租戶那一列。
 - 平台角色的連線池（`PLATFORM_CONNECTIONS`，每個副本 4 條）由出廠登錄、這個消費端的輪詢與 lag 量測、以及這三個讀取共用，都是短交易；沒有新增連線池，chart 的連線預算不變。
+- 每個讀取交易在伺服器端設上限（`SET LOCAL`）：`statement_timeout` 5 秒（`READ_STATEMENT_TIMEOUT`）、`lock_timeout` 2 秒（`READ_LOCK_TIMEOUT`，例如等 migration 的 `ALTER TABLE`）。慢的查詢不會長時間佔住共用池的連線，超過時 Postgres 取消它，讀取回錯誤。
 
 ## broker 伺服器憑證
 

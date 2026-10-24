@@ -44,8 +44,10 @@ CREATE TABLE certs.gateway_bindings (
     -- The event's position in `assets.outbox_event` (`tx_order`, `id`).
     position_tx bigint NOT NULL CHECK (position_tx >= 0),
     position_id bigint NOT NULL CHECK (position_id >= 0),
-    -- Set when the binding ends (Laysi/trustiot-v2#115); NULL while it holds.
-    unbound_at timestamptz CHECK (unbound_at >= bound_at),
+    -- Set when the binding ends (Laysi/trustiot-v2#115); NULL while it holds. Not compared with
+    -- `bound_at`: the two come from different replicas' clocks, and the order is the log's, so a
+    -- skewed clock must not refuse (and dead-letter) an unbinding.
+    unbound_at timestamptz,
     -- When this service stored it, by the database clock.
     recorded_at timestamptz NOT NULL DEFAULT now(),
     PRIMARY KEY (tenant_id, binding_id)
