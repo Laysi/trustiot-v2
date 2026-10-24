@@ -121,6 +121,26 @@
     font-family: var(--font-sans);
     -webkit-font-smoothing: antialiased;
   }
+
+  /*
+   * Whatever can be clicked shows the hand; Tailwind 4 keeps the browser's default, where only
+   * links do. Components set no cursor-* of their own, and a disabled control keeps the arrow,
+   * whichever way it says so: the disabled attribute, aria-disabled, or Radix's data-disabled.
+   */
+  :is(
+    button,
+    select,
+    summary,
+    input:where([type="checkbox"], [type="radio"]),
+    [role="button"],
+    [role="tab"],
+    [role="option"],
+    [role="menuitem"],
+    [role="menuitemcheckbox"],
+    [role="menuitemradio"]
+  ):not(:disabled, [aria-disabled="true"], [data-disabled]) {
+    cursor: pointer;
+  }
 }
 
 /*
