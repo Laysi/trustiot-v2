@@ -4,9 +4,9 @@
 
 ## 環境
 
-- 開發工作站（arm64），Rust 1.99.0（`rust-toolchain.toml`），Bun 1.4.2（`.prototools`）。容器測試以 Docker 起暫時的 TLS Postgres（`testkit::product`：migration Job 套用整個產品的 schema，含 `0005_preferences_and_tenant_switch.sql`）。
+- 開發者工作站，Rust 1.99.0（`rust-toolchain.toml`），Bun 1.4.2（`.prototools`）。容器測試以 Docker 起暫時的 TLS Postgres（`testkit::product`：migration Job 套用整個產品的 schema，含本變更的 migration；2026-10-24 合併 main 之後它的檔名是 `0007_preferences_and_tenant_switch.sql`，見[合併 main 之後](#合併-main-之後2026-10-24)）。
 - 每個容器測試都在 `CI=1` 下執行：沒有容器執行環境時失敗而不是略過，所以下面的「通過」都是真的跑了 Postgres。
-- 分支 `feat/497-preferences-tenant-switch`，基於 `c4d045a`，之後合併了 `origin/main` 的 `34f777e`；測試的是本報告所在 commit 的內容。整個 workspace 的測試（`workspace-summary.txt`）是第一個 commit（安全審查之前）跑的，審查後的修正只動身分服務與 `crates/service-kit` 的文件註解，重跑的是下面「安全審查後的修正」列的檢查。
+- 分支 `feat/497-preferences-tenant-switch`，基於 `c4d045a`，之後合併了 `origin/main` 的 `34f777e`、`994ffae` 與 2026-10-24 的 `1ad0ffc`；測試的是本報告所在 commit 的內容。整個 workspace 的測試（`workspace-summary.txt`）是第一個 commit（安全審查之前）跑的，審查後的修正只動身分服務與 `crates/service-kit` 的文件註解，重跑的是下面「安全審查後的修正」列的檢查。
 
 ## 指令
 
@@ -27,6 +27,14 @@ bun run --cwd frontend lint
 bun run --cwd frontend test
 bun run --cwd frontend build
 bun run --cwd frontend check:dist
+# After merging main on 2026-10-24
+cargo clippy -p service-kit --no-default-features --all-targets -- -D warnings
+CI=1 cargo test --no-fail-fast -p identity -p testkit -p repo-check -p sql-check -p openapi -p contract
+CI=1 cargo test -p migrate --test registry --test fresh_database
+cargo test -p identity --test chart_connections
+bun test deploy/chart
+bun install --cwd scripts --frozen-lockfile
+bun test scripts/ci/changes.test.ts
 ```
 
 ## 結果
@@ -62,7 +70,7 @@ bun run --cwd frontend check:dist
 | --- | --- | --- | --- |
 | F1 大小上限沒有被證明 | 測試改用補了空白的合法 body | `account_writes_need_the_users_own_same_origin_json_request`：剛好 1024 bytes 200，1025 bytes 與多 1100 bytes 400，session 與偏好不變 | 兩個 `MAX_BODY_BYTES` 改成 `1 << 20`：失敗（1025 bytes 回 200） |
 | F2 PATCH 漏掉使用者條件抓不到 | 測試裡 Bob 先存一列，Alice 每次修改後比對；程式另確認 `UPDATE` 剛好改到一列，否則不提交、回 503 | `users_change_only_their_own_preferences_within_the_allow_lists` | `WHERE` 換成 `$1::uuid IS NOT NULL`：失敗（503，一列的檢查擋下）；同時拿掉一列的檢查：失敗（Bob 讀到 Alice 的值） |
-| F3 每個副本 34 條連線 | 使用者自己的帳號不另開連線池：服務角色用租戶 API 的，讀成員資格用事件紀錄的平台角色連線池、同時最多 2 個；每個副本回到 30 條（26 + 4） | `tests::the_readme_states_the_connections_per_replica`（從常數算出的數字與 README 的句子、連線池表每一列相同，不超過 30）；`membership_reads_leave_every_consumer_a_connection` | 共用的服務角色連線池改成 3 條：失敗；共用的平台角色連線池改成 `CONSUMES` 加 3：失敗 |
+| F3 每個副本 34 條連線 | 使用者自己的帳號不另開連線池：服務角色用租戶 API 的，讀成員資格用事件紀錄的平台角色連線池、同時最多 2 個；每個副本回到 30 條（26 + 4；Laysi/trustiot-v2#79 之後是 31 條，見[合併 main 之後](#合併-main-之後2026-10-24)） | `tests::the_readme_states_the_connections_per_replica`（從常數算出的數字與 README 的句子、連線池表每一列相同；當時另有「不超過 30」，2026-10-24 改由 chart 的連線預算綁定）；`membership_reads_leave_every_consumer_a_connection` | 共用的服務角色連線池改成 3 條：失敗；共用的平台角色連線池改成 `CONSUMES` 加 3：失敗 |
 | F5 平台角色進了使用者請求的路徑 | 決策 29 與 service-kit 的 README、`PlatformReader` 的說明寫明條件（查詢條件只來自已驗證的 token）；讀成員資格的交易另記 DEBUG，帶 `user_id` | 文件 | 不適用 |
 | F6 換來的 token 讀得到 session 與 email | `GET` 兩個端點也拒絕帶 `act` 的 token（403） | `account_writes_need_the_users_own_same_origin_json_request` 第 7 步 | 拿掉 session 的判斷：失敗；拿掉偏好的判斷：失敗 |
 | F7 一定出現的欄位不在 `required` | `email`、`active_tenant`、租戶的 `name` 標成 `required`；`GET` 的 503 說明補上平台角色沒有帳密與讀成員資格等太久；重新產生 `api/openapi.json` 與 `frontend/src/api/schema.gen.ts` | `every_field_of_the_session_is_required_in_the_api_document` | 拿掉三個標註：失敗 |
@@ -70,11 +78,41 @@ bun run --cwd frontend check:dist
 
 F4（已登入的使用者大量請求時，同一副本的這組 API 排隊後回 503）屬於限流（Laysi/trustiot-v2#113），不在這裡修。F3 的作法讓它的影響多了兩處：大量讀取目前 session 或偏好的請求可能讓平台管理者建立租戶等連線、逾時回 503，後台讀事件紀錄也和讀成員資格共用平台角色連線池的那 2 條；事件紀錄的消費端不受影響（讀成員資格同時最多 2 個）。
 
+## 合併 main 之後（2026-10-24）
+
+2026-10-24 把 `origin/main` 的 `1ad0ffc` 合併進分支。main 在這之間合併了平台管理者設定成員角色（Laysi/trustiot-v2#583）、第一位平台管理員的 bootstrap（Laysi/trustiot-v2#582）與 chart 的 Postgres 連線預算（Laysi/trustiot-v2#575）。
+
+- **migration 改號**：main 加了身分服務的 `0005_member_roles.sql` 與 `0006_platform_admin_bootstrap.sql`，本變更的 `0005_preferences_and_tenant_switch.sql` 改名為 `0007_preferences_and_tenant_switch.sql`、排在 `src/schema.rs` 的最後，內容不變；這個檔名從沒進過 main 或任何版本。引用它的 `src/current_session.rs`、`src/preferences.rs`、`tests/account.rs`、`tests/ext_authz.rs`、身分服務與 migration Job 的 README 一起改；`tools/migrate/tests/fresh_database.rs` 的身分服務資料表由 15 張改成 16 張（`platform_admin_bootstrap` 與 `preferences`）。`0007` 在 `0005_member_roles.sql` 之後套用沒有衝突：後者只給服務角色 `memberships` 的 `INSERT` 與 `tenant_role` 的 `UPDATE`，本變更給平台角色的是另一個 policy 與 `SELECT`；`the_roles_get_only_the_rights_these_apis_use` 確認平台角色仍不能寫成員資格。
+- **角色**：目前的 session 裡的角色改用 main 的 `members::MemberRole`（`viewer`、`editor`、`admin`），不再有第二個同名的列舉；原本兩個型別在 OpenAPI 的 schema 名稱相同（`MemberRole`），文件只會留一個。切換後的角色仍是每個請求在那個租戶的 RLS 交易裡重讀：`a_session_switches_only_to_the_users_own_tenants` 第 2 步多了一段，由平台管理者經 `PUT /api/identity/v1/platform/tenants/{tenant_id}/members` 把 Alice 在 B 的角色改成 `admin` 再改回 `viewer`，每次回 200、`previous_role` 正確，切換過的 session 下一個請求的 token 與 `GET /api/identity/v1/sessions/current` 都是新角色。
+- **連線池**：租戶的連線池（2 條）由建立租戶、設定成員角色與使用者自己的帳號 API 共用（`TenantStore::connect_lazy_shared`、`TenantStore::members`），本變更沒有增加連線。每個副本 31 條（26 條 `identity_app`、5 條 `identity_platform`）：Laysi/trustiot-v2#79 讓事件紀錄多消費 `certs`，平台角色多一條。
+- **與 chart 連線預算的綁定**：`identity::connections_per_replica` 是唯一的加總。`tests/chart_connections.rs` 對 chart 接受的每個 `database.maxConnections`（3–100）確認 chart 的每副本連線數（`maxConnections` 加 `otherPools` 21）等於它；保留 `pool_size_calls` 的完整清單；另外列出 `start` 開連線池的每個呼叫（`connect_lazy*` 與 `start_event_log`），補上 Laysi/trustiot-v2#575 報告裡記下的缺口：在 `lib.rs` 多呼叫一次既有的建構函式，原本的測試抓不到。同一行有多個這樣的呼叫時逐一計入（Codex 的 commit 前審查指出最初的版本每行只記第一個，已修正；單元測試 `the_opener_list_reads_every_call_form` 涵蓋）。`src/lib.rs` 的 README 測試拿掉固定的「不超過 30」，整版的加總由 chart 的渲染檢查負責。chart 的預算數字沒有改。
+
+綁定的突變測試：每個突變套用後跑 `cargo test -p identity --test chart_connections`，跑完還原檔案（還原前後的 SHA-1 相同），[輸出](data/2026-10-23-497-preferences-tenant-switch/budget-mutations.txt)。
+
+| 突變 | 結果 |
+| --- | --- |
+| m1 `tenants::POOL_CONNECTIONS` 2 → 3 | 失敗：`database.maxConnections` 3 時 chart 24、程式 25 |
+| m2 chart 的 identity `otherPools` 21 → 22 | 失敗：chart 25、程式 24 |
+| m3 `start` 多呼叫一次 `LoginStore::connect_lazy` | 失敗：開連線池的呼叫多了一個 `LoginStore::connect_lazy`（`.max_connections(...)` 的清單與加總都沒變，只有新的清單抓得到） |
+
+合併後重跑，[摘要](data/2026-10-23-497-preferences-tenant-switch/after-merge-1ad0ffc.txt)。之後 `tests/chart_connections.rs` 依 Codex 的審查修正同一行多個呼叫的計數（見上），修正後重跑 `cargo fmt --all --check`、`cargo clippy -p identity --all-targets -- -D warnings` 與 `cargo test -p identity --test chart_connections`（2 個測試），都通過：
+
+| 指令 | 結果 |
+| --- | --- |
+| `cargo fmt --all --check`、`cargo clippy --workspace --all-targets -- -D warnings`、`cargo clippy -p service-kit --no-default-features --all-targets -- -D warnings` | 通過 |
+| `cargo run -p openapi -- --check` | 通過（`api/openapi.json` 與 `frontend/src/api/schema.gen.ts` 合併後重新產生） |
+| `CI=1 cargo test --no-fail-fast -p identity -p testkit -p repo-check -p sql-check -p openapi -p contract` | 全部通過：38 組（各 crate 的單元、整合與 doc-test）共 398 個測試、0 個失敗。身分服務：單元 113、`account` 4（含平台管理者經成員 API 改角色的新步驟）、`adversarial` 11、`chart_connections` 2、`cross_tenant` 1、`event_log` 1、`ext_authz` 14、`login` 12、`members` 1、`migrations` 1、`platform_admin` 1、`tenants` 1、`token_claims` 8；`testkit` 的 TLS Postgres 測試（`postgres_isolation` 6、`postgres_start` 2）真的起了容器 |
+| `CI=1 cargo test -p migrate --test registry --test fresh_database` | 7 個通過（`fresh_database` 1、`registry` 6） |
+| `cargo deny --locked check` | `advisories ok, bans ok, licenses ok, sources ok` |
+| 前端的 7 個指令 | 全部通過；`test` 131 pass、0 fail |
+| `bun test deploy/chart` | 648 pass、0 fail |
+| `bun test scripts/ci/changes.test.ts` | 282 pass、0 fail |
+
 ## 結論
 
 | 驗收條件 | 結果 |
 | --- | --- |
 | 已登入的使用者可讀取目前的 session（使用者、目前的租戶與角色）；切換租戶後，下一次讀到的是新租戶與該租戶的角色 | 通過：`a_session_switches_only_to_the_users_own_tenants` 第 1、2 步 |
 | 使用者可讀取與修改自己的偏好；不在允許清單內的語言、時區與主題被拒 | 通過：`users_change_only_their_own_preferences_within_the_allow_lists`，資料庫的 CHECK 另由 `the_roles_get_only_the_rights_these_apis_use` 與單元測試涵蓋 |
-| 切換到自己所屬的租戶後，同一 session 的下一個請求以新租戶與使用者在該租戶的角色執行；切到不屬於自己的租戶被拒，session 維持原本的租戶 | 通過：`a_session_switches_only_to_the_users_own_tenants` 第 2 到 7 步（下一個請求的 token、別的 session 不變、非所屬與不存在的租戶同樣被拒、成員資格移除後不在任何租戶） |
+| 切換到自己所屬的租戶後，同一 session 的下一個請求以新租戶與使用者在該租戶的角色執行；切到不屬於自己的租戶被拒，session 維持原本的租戶 | 通過：`a_session_switches_only_to_the_users_own_tenants` 第 2 到 7 步（下一個請求的 token、平台管理者經成員 API 改角色後的下一個請求、別的 session 不變、非所屬與不存在的租戶同樣被拒、成員資格移除後不在任何租戶） |
 | 跨租戶負向測試涵蓋新端點（crates/testkit） | 通過：`tests/cross_tenant.rs` 宣告 `GET /api/identity/v1/sessions/current`（`Endpoint::list`，對 `identity.tenants`，正向對照與兩個租戶互相探測都通過），切換與偏好的三個端點以理由豁免（偏好不是租戶資料；切換只回呼叫者自己所屬的租戶，與 `GET` 相同，只動呼叫者自己的 session，探測的 token 指不到它，由 `tests/account.rs` 涵蓋），`identity.preferences` 以理由豁免 |
