@@ -220,6 +220,8 @@ CI 以 `.github/actions/setup-proto` 安裝 proto：版本與兩種架構（x64�
 
 `deny.toml` 只允許寬鬆授權：0BSD、Apache-2.0（含 Apache-2.0 WITH LLVM-exception）、BSD-2-Clause、BSD-3-Clause、CC0-1.0、CDLA-Permissive-2.0、ISC、MIT、MIT-0、Unicode-3.0、Zlib。其他授權一律失敗，包括 Business Source License（SPDX `BUSL-1.1`）、SSPL、Elastic License、Commons Clause 與 GPL、LGPL、AGPL。MPL-2.0 等檔案層級的 copyleft 授權還沒決定，遇到時再評估。要加入新授權，先確認它允許商業轉售，再把授權與理由寫進本節與 `deny.toml`。SPDX 的 `BSL-1.0` 是 Boost 授權，不是 Business Source License。
 
+Bun 專案的相依（例如 `frontend/bun.lock`）沒有自動的授權檢查：新增相依的 PR 列出直接與間接相依的授權，照上一段的白名單判斷。例外（2026-10-25 專案擁有者決定，Laysi/trustiot-v2#124）：只在建置時執行、不進產物（`frontend/dist/` 與映像）的工具可以是 MPL-2.0，例如 Vite 與 Tailwind 處理 CSS 用的 `lightningcss`。MPL-2.0 的義務只在散布它的檔案時發生，而建置出的 CSS 是它的輸出，不含它的原始碼。會進產物的套件與 Rust 的相依不適用這個例外，遇到 MPL-2.0 時仍要個別評估。
+
 ### fork 來的 PR
 
 ci.yml 不使用任何 secret，每個 job 的 GITHUB_TOKEN 只有 `contents: read`，checkout 也不把 token 留在 `.git/config`（`persist-credentials: false`）。fork 來的 PR 以 `pull_request` 事件執行，GitHub 不給 secret、token 唯讀；`workflow-policy` 擋下 `pull_request_target` 與 `workflow_run`。repo 層級的 Actions 設定另外保證這幾點，見下一節。
