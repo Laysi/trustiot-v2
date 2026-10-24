@@ -86,6 +86,23 @@ at the primary. CloudNativePG's server certificate lists it, so verify-full matc
 {{- end -}}
 
 {{/*
+Where services find Postgres, as the platform settings name it: TRUSTIOT_POSTGRES_HOST, _PORT,
+_DATABASE and _SSLMODE in templates/platform-config.yaml, and <prefix>_POSTGRES_* for a service
+whose settings carry another prefix ("trustiot.service.env"). One place, so the two cannot
+disagree. bundled: CloudNativePG's read-write Service, whose server certificate names the host.
+Returns YAML {host, port, database, sslMode}, every value a string; use with fromYaml.
+*/}}
+{{- define "trustiot.postgres.connection" -}}
+{{- if eq .Values.postgres.mode "external" -}}
+{{- with .Values.postgres.external -}}
+{{- dict "host" (include "trustiot.postgres.host" $) "port" (toString .port) "database" (toString .database) "sslMode" (toString .sslMode) | toYaml -}}
+{{- end -}}
+{{- else -}}
+{{- dict "host" (include "trustiot.postgres.host" .) "port" (include "trustiot.postgres.port" .) "database" (include "trustiot.postgres.database" .) "sslMode" "verify-full" | toYaml -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
 Secrets that CloudNativePG creates for the bundled Cluster. The server CA (<cluster>-ca) holds the
 CA's private key next to its certificate, and <cluster>-app holds the database owner's password,
 so no service's custom env may read any of them; services get only the CA certificate, as a file
@@ -119,8 +136,8 @@ Returns YAML; use with fromYaml.
 
 {{/*
 Enabled services that use Postgres: the ones that list `postgres` in mesh.calls. Only they get the
-server CA file (TRUSTIOT_POSTGRES_CA_FILE) and, in bundled mode, reach the Postgres pods through
-the NetworkPolicy. Declaring the dependency once keeps the two in step.
+server CA file (<prefix>_POSTGRES_CA_FILE, "trustiot.service.env"), a login role with a generated
+password, and, in bundled mode, reach the Postgres pods through the NetworkPolicy. Declaring the dependency once keeps the two in step.
 Returns YAML {services: [<name>, ...]} in name order; use with fromYaml.
 */}}
 {{- define "trustiot.postgres.clients" -}}
@@ -167,9 +184,11 @@ where it does not (README.md, 「叢集內的 Postgres」).
 
 Per service that may use Postgres, what one replica opens at most:
   maxConnections  {min, max}: the range of services.<name>.database.maxConnections, which the chart
-                  passes as TRUSTIOT__DATABASE__MAX_CONNECTIONS, the size of the service's main
-                  pool; the service refuses to start outside this range.
+                  passes as <prefix>__DATABASE__MAX_CONNECTIONS (TRUSTIOT, or AI_GATEWAY for
+                  ai-gateway), the size of the service's main pool; the service refuses to start
+                  outside this range.
   otherPools      every other pool the replica opens, at its largest, whatever role it logs in as:
+                  ai-gateway       none: the settings pool is its only one
                   assets           PLATFORM_CONNECTIONS (its platform role)
                   assistant        none: only the service role's pool (Laysi/trustiot-v2#592)
                   certs           REGISTRATION_CONNECTIONS (its platform role)
@@ -184,6 +203,7 @@ these numbers differ.
 */}}
 {{- define "trustiot.postgres.connectionBudgets" -}}
 {
+  "ai-gateway": { "maxConnections": { "min": 2, "max": 32 }, "otherPools": 0 },
   "assets": { "maxConnections": { "min": 2, "max": 100 }, "otherPools": 4 },
   "assistant": { "maxConnections": { "min": 2, "max": 100 }, "otherPools": 0 },
   "certs": { "maxConnections": { "min": 2, "max": 100 }, "otherPools": 4 },

@@ -28,18 +28,14 @@ data:
   {{- if include "trustiot.identity.enabled" . }}
   TRUSTIOT_INTERNAL_IDENTITY_KEYS_FILE: {{ printf "%s/%s" (include "trustiot.identity.publicKeysDir" .) $keys.configMapKey | quote }}
   {{- end }}
-  {{- /* Where Postgres is; its CA file reaches only the services that use it ("trustiot.caMounts"). */}}
-  TRUSTIOT_POSTGRES_HOST: {{ include "trustiot.postgres.host" . | quote }}
-  {{- if eq $v.postgres.mode "external" }}
-  TRUSTIOT_POSTGRES_PORT: {{ $v.postgres.external.port | quote }}
-  TRUSTIOT_POSTGRES_DATABASE: {{ $v.postgres.external.database | quote }}
-  TRUSTIOT_POSTGRES_SSLMODE: {{ $v.postgres.external.sslMode | quote }}
-  {{- else }}
-  {{- /* CloudNativePG's read-write Service; its server certificate names this host. */}}
-  TRUSTIOT_POSTGRES_PORT: {{ include "trustiot.postgres.port" . | quote }}
-  TRUSTIOT_POSTGRES_DATABASE: {{ include "trustiot.postgres.database" . | quote }}
-  TRUSTIOT_POSTGRES_SSLMODE: "verify-full"
-  {{- end }}
+  {{- /* Where Postgres is ("trustiot.postgres.connection"); its CA file reaches only the services
+  that use it ("trustiot.caMounts"). The AI gateway reads the same under its own prefix, which the
+  service template sets ("trustiot.service.env"). */}}
+  {{- $postgres := include "trustiot.postgres.connection" . | fromYaml }}
+  TRUSTIOT_POSTGRES_HOST: {{ $postgres.host | quote }}
+  TRUSTIOT_POSTGRES_PORT: {{ $postgres.port | quote }}
+  TRUSTIOT_POSTGRES_DATABASE: {{ $postgres.database | quote }}
+  TRUSTIOT_POSTGRES_SSLMODE: {{ $postgres.sslMode | quote }}
   {{- if eq $v.clickhouse.mode "external" }}
   TRUSTIOT_CLICKHOUSE_URL: {{ $v.clickhouse.external.url | quote }}
   {{- with $v.clickhouse.external.caSecret.name }}

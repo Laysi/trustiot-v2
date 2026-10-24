@@ -90,7 +90,7 @@ data of its ConfigMap. Only names and limits: never a key (the chart tests check
   2 s to spare.
 Fails the render, whether or not schema validation runs, wherever the gateway would refuse to start
 with the result (services/ai-gateway/src/config.rs and gateway.rs): services.ai-gateway.credentials
-without ai, no role, a role, model or limit out of the gateway's range, a model of a provider
+without ai, mesh.calls.ai-gateway without postgres (no database settings), no role, a role, model or limit out of the gateway's range, a model of a provider
 without a key, a role whose queueWait plus the longer of timeouts.response and timeouts.firstToken
 does not fit in requestTimeout less the gateway's margin (a tenth of it, at most 2 s), or
 drainSeconds outside 11 to 3605. Rendered while the gateway is enabled only.
@@ -102,6 +102,11 @@ Argument: the root context. Returns YAML {data: {<variable>: <value>}}; use with
 {{- $config := include "trustiot.serviceConfig" (dict "root" . "name" "ai-gateway" "values" (get .Values.services "ai-gateway")) | fromYaml -}}
 {{- if not (has "ai" ($config.credentials | default list)) -}}
 {{- fail "services.ai-gateway.credentials must list ai: the gateway does not start without its provider keys (services/ai-gateway/README.md, 「金鑰與 TLS」)" -}}
+{{- end -}}
+{{- /* The model roles' settings live in Postgres (Laysi/trustiot-v2#605): without postgres under
+mesh.calls the gateway gets no database settings and does not start. */ -}}
+{{- if not (has "ai-gateway" (include "trustiot.postgres.clients" . | fromYaml).services) -}}
+{{- fail "mesh.calls.ai-gateway must list postgres: the gateway keeps the model roles' settings there and does not start without its database settings (services/ai-gateway/README.md, 「資料庫」)" -}}
 {{- end -}}
 {{- $data := dict -}}
 {{- $configured := list -}}
