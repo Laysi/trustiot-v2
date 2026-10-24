@@ -124,6 +124,11 @@
   "login.email_invalid": "請輸入有效的 email 地址。",
   "login.code_invalid": "請輸入 email 裡完整的驗證碼。",
   "login.redirect_invalid": "登入後要回到的頁面不在這個網站上。",
+  "session.tenant_not_member": "你不是這個組織的成員，無法切換過去。",
+  "preferences.language_invalid": "請選擇列出的語言之一。",
+  "preferences.ai_language_invalid": "請選擇列出的 AI 回答語言之一。",
+  "preferences.time_zone_invalid": "請選擇有效的時區。",
+  "preferences.theme_invalid": "請選擇列出的主題之一。",
 
   "member.email_invalid": "請輸入有效的 email 地址。",
   "member.email_unknown": "沒有使用者使用這個 email 地址。成員要先有帳號才能加入。",

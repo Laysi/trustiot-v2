@@ -19,7 +19,9 @@
 //!   transaction names a [`PlatformActor`] and a purpose and is logged.
 //! - [`PlatformReader`]: read-only transactions of the platform role for routine reads that run
 //!   every few seconds, such as an outbox consumer polling a producer's events. The actor and
-//!   purpose are logged once, when the reader is made.
+//!   purpose are logged once, when the reader is made. A request handler may use one too, when
+//!   every condition of its queries comes from the request's verified identity, never from the
+//!   request's body, path or query (decision 29), and it logs whose data it reads itself.
 //!
 //! Every pool verifies the server (`verify-full`) and checks every session before use
 //! ([`UnsafeSession`], see [`postgres::connect_lazy`](crate::postgres::connect_lazy)).
@@ -475,7 +477,8 @@ impl PlatformDb {
     /// seconds, such as an outbox consumer polling a producer's events, where an INFO line per
     /// transaction would bury the log. The actor and `purpose` are logged at INFO here, once
     /// (`platform database reader`); each transaction is logged at DEBUG. Its transactions are
-    /// `READ ONLY`, so the database refuses every write through them.
+    /// `READ ONLY`, so the database refuses every write through them. On a user's request, only
+    /// with query conditions from the request's verified identity (see the module's docs).
     #[must_use]
     pub fn reader(&self, actor: PlatformActor, purpose: &'static str) -> PlatformReader {
         match actor.0 {
