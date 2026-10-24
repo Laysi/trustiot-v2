@@ -169,7 +169,7 @@ async fn bindings_are_projected_once_and_newest_first() {
     let mut admin = product.superuser().await;
     let (tenant_a, tenant_b) = (TenantId::generate(), TenantId::generate());
     let gateway =
-        GatewayId::new(&format!("gw-{}", uuid::Uuid::new_v4().simple())).expect("a hardware ID");
+        GatewayId::new(format!("gw-{}", uuid::Uuid::new_v4().simple())).expect("a hardware ID");
     let unknown = GatewayId::new("gw-never-bound").expect("a hardware ID");
     for tenant in [tenant_a, tenant_b] {
         sqlx::query(INSERT_TENANT)
@@ -352,7 +352,7 @@ async fn bindings_are_projected_once_and_newest_first() {
     assert!(rows_of(&mut admin, other.as_str()).await.is_empty());
     let after_broken = GatewayBindingId::generate();
     let unaffected =
-        GatewayId::new(&format!("gw-{}", uuid::Uuid::new_v4().simple())).expect("a hardware ID");
+        GatewayId::new(format!("gw-{}", uuid::Uuid::new_v4().simple())).expect("a hardware ID");
     let moved_on = write_bound(&assets, tenant_a, after_broken, &unaffected, bound.bound_at).await;
     wait_processed(&product, &moved_on).await;
     assert_eq!(
