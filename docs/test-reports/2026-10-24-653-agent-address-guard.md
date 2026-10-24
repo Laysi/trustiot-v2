@@ -4,7 +4,7 @@ Laysi/trustiot-v2#653
 
 ## 環境
 
-- 建置主機（x86_64 Linux，20 核），經檢查佇列執行；工具版本依 `.prototools` 與 `rust-toolchain.toml`。
+- 建置主機（x86_64 Linux）；工具版本依 `.prototools` 與 `rust-toolchain.toml`。
 - 分支 `feat/653-agent-resolved-address-guard`。下表的檢查與突變測試在實作 commit `5868db29`（以 main 的 `0dc8fd96` 為基底）上執行；rebase 到 main 的 `1ad0ffc5` 之後（實作 commit 變成 `2fd10473`，另加 `services/assets` 的文件與註解更新）重跑 workspace clippy、aarch64 建置、agent、repo-check 與 assets 的單元測試，全部通過（[after-rebase.txt](data/2026-10-24-653-agent-address-guard/after-rebase.txt)）。
 - 全部是單元與整合測試：假 Modbus 端點（`crates/testkit` 的 `FakeModbus`）與測試自己的 listener 都在執行測試的機器上；沒有用到任何閘道器。
 - 位址限制的單元測試以替身解析器與撥號紀錄（`src/modbus/address.rs` 的 `hooks`，只在 `#[cfg(test)]`）驗證查了幾次、撥了哪些位址；替身只真的撥 loopback，所以 169.254/16 與私有位址的測試不會對建置主機所在的網路送封包。

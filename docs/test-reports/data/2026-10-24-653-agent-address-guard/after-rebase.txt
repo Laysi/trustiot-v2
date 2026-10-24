@@ -1,4 +1,3 @@
-rcheck: queued on the build host at 15:10:54 as 653-e136ec88; running now: 632-13428305 since 15:08:11
 == workspace clippy
     Finished `dev` profile [unoptimized + debuginfo] target(s) in 9.42s
 == aarch64 build
@@ -27,7 +26,5 @@ test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fin
 test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
 == assets lib tests
 test result: ok. 36 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
-rcheck: removed 0 dangling test volumes
-rcheck: removed 0 dangling podman test volumes
-rcheck: exit 0 at 15:40:30 (build host, 653-e136ec88)
+exit 0 at 15:40:30 (build host)
 

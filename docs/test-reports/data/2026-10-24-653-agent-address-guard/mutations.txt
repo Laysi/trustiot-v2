@@ -2,8 +2,7 @@ Mutation 1: the guard allows every address
 edge/agent/src/modbus/address.rs, AddressGuard::connect:
   self.exempts(address.ip()) || (refusal(address.ip(), &interfaces).is_none() || true)
 
-$ bash rcheck.sh 653 'cargo test --locked -p agent --lib modbus::tcp::tests 2>&1 | grep -E "^test |test result" ; cargo test --locked -p agent --test modbus_address_guard 2>&1 | grep -E "^test |test result|panicked"'
-rcheck: queued on the build host at 14:14:04 as 653-e136ec88; running now: 639-f2400ba9 since 14:13:42
+$ cargo test --locked -p agent --lib modbus::tcp::tests 2>&1 | grep -E "^test |test result" ; cargo test --locked -p agent --test modbus_address_guard 2>&1 | grep -E "^test |test result|panicked"
 test modbus::tcp::tests::the_framing_follows_the_transport ... ok
 test modbus::tcp::tests::refused_hosts_are_never_dialed ... FAILED
 test modbus::tcp::tests::a_name_is_resolved_once_and_its_checked_address_dialed ... FAILED
@@ -20,15 +19,14 @@ test result: FAILED. 7 passed; 4 failed; 0 ignored; 0 measured; 63 filtered out;
 test hosts_on_the_gateway_itself_reach_nothing ... FAILED
 thread 'hosts_on_the_gateway_itself_reach_nothing' (1234918) panicked at edge/agent/tests/modbus_address_guard.rs:92:9:
 test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
-rcheck: exit 101 at 14:16:04 (build host, 653-e136ec88)
+exit 101 at 14:16:04 (build host)
 
 Mutation 2: the checked addresses are thrown away and the name is resolved again for dialing
 edge/agent/src/modbus/address.rs, AddressGuard::connect:
   let _ = allowed;
   for address in self.resolve(host, port).await.unwrap_or_default() {
 
-$ bash rcheck.sh 653 'cargo test --locked -p agent --lib modbus::tcp::tests 2>&1 | grep -E "^test |test result"'
-rcheck: queued on the build host at 14:16:22 as 653-e136ec88; running now: 639-f2400ba9 since 14:16:06
+$ cargo test --locked -p agent --lib modbus::tcp::tests 2>&1 | grep -E "^test |test result"
 test modbus::tcp::tests::link_local_and_private_addresses_are_dialed ... FAILED
 test modbus::tcp::tests::the_framing_follows_the_transport ... ok
 test modbus::tcp::tests::rtu_frames_between_requests_are_dropped_and_a_cut_one_too ... ok
@@ -42,6 +40,6 @@ test modbus::tcp::tests::refused_hosts_reach_nothing ... ok
 test modbus::tcp::tests::a_name_is_resolved_once_and_its_checked_address_dialed has been running for over 60 seconds
 test modbus::tcp::tests::a_name_is_resolved_once_and_its_checked_address_dialed ... FAILED
 test result: FAILED. 8 passed; 3 failed; 0 ignored; 0 measured; 63 filtered out; finished in 60.00s
-rcheck: exit 101 at 14:21:18 (build host, 653-e136ec88)
+exit 101 at 14:21:18 (build host)
 
 Both mutations were reverted; checks.txt is the run on the unmutated code.
