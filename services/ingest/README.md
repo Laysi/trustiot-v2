@@ -33,8 +33,13 @@ DDL 是 `migrations/clickhouse/` 的 SQL 檔，部署時由 migration Job（Lays
 
 - 檔名 `NNNN_小寫底線.sql`，從 `0001` 連號，依檔名順序套用。
 - 一個檔案可以有多條陳述式；以行首 `--` 開頭的行是註解；陳述式以行尾的 `;` 結束，其他地方（包含字串與註解欄位）不能出現 `;`。這樣不必解析 SQL 就能逐條以 HTTP 送出。
-- 每條陳述式都要能重複執行：`CREATE` 一律 `IF NOT EXISTS`；不用 `OR REPLACE`（重建角色或 profile 會讓既有的授權失效）、`DROP`、`TRUNCATE`、`DETACH`、`EXCHANGE`。之後的變更寫成新的檔案，例如 `ALTER TABLE ... MODIFY TTL`。
-- 唯一的例外：一般 view（不是 materialized view）的欄位改變用 `CREATE OR REPLACE VIEW`，寫明同樣的 `DEFINER`、`SQL SECURITY` 與 comment（`tests/migrations.rs` 只對這種語句放行）。`CREATE VIEW IF NOT EXISTS` 不會改動已存在的 view，而 ClickHouse 26.8 拒絕對一般 view 執行 `ALTER TABLE ... MODIFY QUERY`（`NOT_IMPLEMENTED`，2026-10-24 實測；`0005_tenant_view.sql` 註解寫的做法不成立，已套用的檔案不能改）。一般 view 不存資料，授權與 row policy 依名稱掛在 view 上，重建後照樣生效；Atomic 資料庫裡重建是一次交換，查詢只會看到舊的或新的 view。
+- 每條陳述式都要能重複執行，而且不毀損資料。`tests/migrations.rs` 以允許清單檢查，只接受下列寫法，其他一律拒絕，訊息寫出檔名與陳述式；之後的變更寫成新的檔案：
+  - `CREATE DATABASE`、`TABLE`、`VIEW`、`ROLE`、`USER`、`QUOTA`、`SETTINGS PROFILE`、`ROW POLICY`，一律 `IF NOT EXISTS`。不用 `OR REPLACE`：重建角色或 profile 會讓既有的授權失效。
+  - `ALTER TABLE <表>` 只帶一個命令：`ADD COLUMN IF NOT EXISTS`、`ADD CONSTRAINT IF NOT EXISTS`、`MODIFY COLUMN`、`COMMENT COLUMN`、`MODIFY COMMENT` 或 `MODIFY TTL`；命令之後不能再出現另一個命令（例如 `DELETE`、`UPDATE`、`CLEAR`、`MOVE`、`REPLACE`、`PARTITION`、`MATERIALIZE`）、欄位 `TTL` 或 `REMOVE`。改型別的 `MODIFY COLUMN` 可能改寫或截斷已存的值，所以只接受 `tests/migrations.rs` 的 `LOSSLESS_TYPE_CHANGES` 列出的轉換（表、欄位、新型別與不會遺失資料的理由；目前是 `0010` 把 `telemetry` 的 `gateway_id`、`stream_id` 從 UUID 改成 String）；新的轉換要在那裡寫明理由，並加上讀回舊值的測試。不改型別、只改 comment、codec 或 default 的 `MODIFY COLUMN` 不受限。
+  - `GRANT`、`REVOKE`、`ALTER USER`、`SET DEFAULT ROLE`。
+  - 下一條所說的 `CREATE OR REPLACE VIEW`。
+  - 任何陳述式在字串以外都不能有 `DROP`、`TRUNCATE`、`DETACH`、`EXCHANGE`、`RENAME`。所以 `REPLACE TABLE`、`RENAME TABLE`、`ALTER TABLE ... DELETE WHERE`、`CLEAR COLUMN`、搬移或取代 partition 都會被擋下。
+- 唯一的例外：一般 view（不是 materialized view）的欄位改變用 `CREATE OR REPLACE VIEW`。只有在較早的檔案以 `CREATE VIEW IF NOT EXISTS` 建立過同名的 view，而且 `AS SELECT` 之前的文字（名稱、`DEFINER = <帳號>`、`SQL SECURITY DEFINER`）與原本的陳述式逐字相同時才放行，所以重建不能換 DEFINER，也不能「取代」一張表；comment 也照原本的寫。`CREATE VIEW IF NOT EXISTS` 不會改動已存在的 view，而 ClickHouse 26.8 拒絕對一般 view 執行 `ALTER TABLE ... MODIFY QUERY`（`NOT_IMPLEMENTED`，2026-10-24 實測；`0005_tenant_view.sql` 註解寫的做法不成立，已套用的檔案不能改）。一般 view 不存資料，授權與 row policy 依名稱掛在 view 上，重建後照樣生效；Atomic 資料庫裡重建是一次交換，查詢只會看到舊的或新的 view。這個做法假設 view 所在的資料庫是 Atomic 或 Replicated 引擎：`0001_databases.sql` 以伺服器的預設引擎建立 `trustiot`（26.8 的預設是 Atomic），舊的 Ordinary 資料庫裡重建不是原子的。
 - 表只用 MergeTree 系列引擎，保留搬到 ClickHouse Cloud（SharedMergeTree）的選項。view 一律寫明 `DEFINER = <帳號> SQL SECURITY DEFINER`（`tests/migrations.rs` 檢查）：伺服器對一般 view 的預設是 `SQL SECURITY INVOKER`，讀 view 的帳號就得有底表的權限。
 
 ### 遙測窄表 `trustiot.telemetry`
@@ -191,4 +196,4 @@ CARGO_BUILD_JOBS=2 cargo test -p ingest --test clickhouse -- --nocapture
 
 `tests/disk_watermark.rs`：磁碟水位告警（[`alerts/clickhouse_disk_watermark.sql`](alerts/clickhouse_disk_watermark.sql)，門檻與處理方式見[資料保存期限與磁碟水位](../../docs/architecture/data-retention.md#磁碟水位告警)）。一律以 podman 或 docker 起一個資料目錄是 256 MiB tmpfs 的暫時容器（不用 `TEST_CLICKHOUSE_URL`：共用伺服器的磁碟不是測試能填滿的），在容器裡填到 85 % 與 95 %，以監控角色的帳號評估規則，依序得到 `ok`、`warning`、`critical`，釋放後回到 `ok`；監控角色只有 `system.disks` 的 `SELECT`，讀寫遙測表、租戶 view、日誌表，改 TTL、建帳號一律被拒，沒有這個角色的帳號讀不到 `system.disks`。`cargo test -p ingest --test disk_watermark -- --nocapture` 印出每一步的磁碟用量。
 
-`tests/migrations.rs` 的靜態檢查不需要伺服器：檢查檔名連號、陳述式切分、可重複執行、沒有破壞資料的語句、表只用 MergeTree 系列引擎，以及 view 一律是 `SQL SECURITY DEFINER`。另一個測試對 `0010_gateway_stream_ids.sql` 做升級比對，一律以 podman 或 docker 依序起兩個暫時的容器（不用 `TEST_CLICKHOUSE_URL`：要比對的是什麼都還沒套用過的伺服器）：一台全新套用全部檔案，另一台先套用 `0001`–`0009` 並以舊的形狀寫入一筆 UUID 閘道器與串流 ID 的遙測和一筆舊完成紀錄，再套用 `0010`；兩台各再套用 `0010` 一次，表、欄位、授權、角色授與與 row policy 都不變，而且兩台相同。升級的那台在背景改寫完舊的 part 之後，舊的遙測以 UUID 的文字形式讀回（也經租戶 view），ingest 角色讀不到舊完成表。
+`tests/migrations.rs` 的靜態檢查不需要伺服器：檢查檔名連號、陳述式切分、陳述式只用允許清單上的寫法（可重複執行、不毀損資料）、表只用 MergeTree 系列引擎，以及 view 一律是 `SQL SECURITY DEFINER`。另一個測試對 `0010_gateway_stream_ids.sql` 做升級比對，一律以 podman 或 docker 依序起兩個暫時的容器（不用 `TEST_CLICKHOUSE_URL`：要比對的是什麼都還沒套用過的伺服器）：一台全新套用全部檔案，另一台先套用 `0001`–`0009` 並以舊的形狀寫入一筆 UUID 閘道器與串流 ID 的遙測和一筆舊完成紀錄，再套用 `0010`；兩台各再套用 `0010` 一次，表、欄位、授權、角色授與與 row policy 都不變，而且兩台相同。升級的那台在背景改寫完舊的 part 之後，舊的遙測以 UUID 的文字形式讀回（也經租戶 view），ingest 角色讀不到舊完成表。

@@ -3,6 +3,7 @@
 
 mod common;
 
+use std::collections::BTreeMap;
 use std::time::{Duration, Instant};
 
 use common::{Account, ClickHouse, Migration, migrations, migrations_dir, split_statements};
@@ -49,49 +50,262 @@ fn every_file_has_statements() {
     }
 }
 
-/// `CREATE OR REPLACE VIEW` of a plain view: the one replacement the files may use. A plain view
-/// holds no data, ClickHouse keeps grants and row policies by the relation's name, and 26.8 has
-/// no other way to change a plain view's columns (`MODIFY QUERY` is refused for storage View,
-/// see 0010_gateway_stream_ids.sql). A materialized view is not covered: it holds data.
-fn replaces_a_plain_view(text: &str) -> bool {
-    text.starts_with("CREATE OR REPLACE VIEW ")
+/// The statement with every string literal replaced by `''`, so the words of a comment or a
+/// constraint pattern are never read as SQL keywords.
+fn without_literals(statement: &str) -> String {
+    let mut out = String::with_capacity(statement.len());
+    let mut chars = statement.chars();
+    while let Some(c) = chars.next() {
+        if c != '\'' {
+            out.push(c);
+            continue;
+        }
+        out.push_str("''");
+        while let Some(inner) = chars.next() {
+            match inner {
+                '\\' => {
+                    chars.next();
+                }
+                '\'' => {
+                    // '' inside a literal is an escaped quote, not its end.
+                    if chars.clone().next() == Some('\'') {
+                        chars.next();
+                    } else {
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    out
+}
+
+/// The statement's tokens outside string literals: names (dotted names stay one token), keywords
+/// and operators, split at white space, parentheses and commas, with `=` a token of its own.
+fn tokens(statement: &str) -> Vec<String> {
+    without_literals(statement)
+        .replace(['(', ')', ','], " ")
+        .replace('=', " = ")
+        .split_whitespace()
+        .map(str::to_owned)
+        .collect()
+}
+
+fn upper(tokens: &[String]) -> Vec<String> {
+    tokens
+        .iter()
+        .map(|token| token.to_ascii_uppercase())
+        .collect()
+}
+
+fn starts_with(tokens: &[String], prefix: &[&str]) -> bool {
+    tokens.len() >= prefix.len() && tokens.iter().zip(prefix).all(|(token, word)| token == word)
+}
+
+/// Words that end, rename or detach a relation or an access entity. Refused in every statement,
+/// outside string literals.
+const NEVER: [&str; 5] = ["DROP", "TRUNCATE", "DETACH", "EXCHANGE", "RENAME"];
+
+/// The `CREATE ... IF NOT EXISTS` forms the files use.
+const CREATE_FORMS: [&[&str]; 8] = [
+    &["CREATE", "DATABASE", "IF", "NOT", "EXISTS"],
+    &["CREATE", "TABLE", "IF", "NOT", "EXISTS"],
+    &["CREATE", "VIEW", "IF", "NOT", "EXISTS"],
+    &["CREATE", "ROLE", "IF", "NOT", "EXISTS"],
+    &["CREATE", "USER", "IF", "NOT", "EXISTS"],
+    &["CREATE", "QUOTA", "IF", "NOT", "EXISTS"],
+    &["CREATE", "SETTINGS", "PROFILE", "IF", "NOT", "EXISTS"],
+    &["CREATE", "ROW", "POLICY", "IF", "NOT", "EXISTS"],
+];
+
+/// Access statements: they change who may do what, never the data.
+const ACCESS_FORMS: [&[&str]; 4] = [
+    &["GRANT"],
+    &["REVOKE"],
+    &["ALTER", "USER"],
+    &["SET", "DEFAULT", "ROLE"],
+];
+
+/// The one command an `ALTER TABLE <table>` statement may carry. Each is safe to repeat and keeps
+/// every row.
+const ALTER_TABLE_COMMANDS: [&[&str]; 6] = [
+    &["ADD", "COLUMN", "IF", "NOT", "EXISTS"],
+    &["ADD", "CONSTRAINT", "IF", "NOT", "EXISTS"],
+    &["MODIFY", "COLUMN"],
+    &["COMMENT", "COLUMN"],
+    &["MODIFY", "COMMENT"],
+    &["MODIFY", "TTL"],
+];
+
+/// Words that would start another `ALTER TABLE` command (a second command after a comma) or give
+/// a column a TTL or remove one of its properties. Refused after the allowed command.
+const ALTER_TABLE_AFTER_COMMAND: [&str; 17] = [
+    "ADD",
+    "MODIFY",
+    "DELETE",
+    "UPDATE",
+    "CLEAR",
+    "MOVE",
+    "REPLACE",
+    "PARTITION",
+    "FREEZE",
+    "UNFREEZE",
+    "ATTACH",
+    "FETCH",
+    "MATERIALIZE",
+    "APPLY",
+    "REMOVE",
+    "TTL",
+    "FINAL",
+];
+
+/// Column type changes that keep every stored value, each reviewed: (table, column, new type,
+/// why nothing is lost). `MODIFY COLUMN` with a type is allowed only for these; without a type
+/// (only a comment, codec or default) it never rewrites a value.
+const LOSSLESS_TYPE_CHANGES: [(&str, &str, &str, &str); 2] = [
+    (
+        "trustiot.telemetry",
+        "gateway_id",
+        "String",
+        "UUID to String writes each UUID as its text form (0010_gateway_stream_ids.sql, checked \
+         by id_migration_gives_one_schema_on_fresh_and_upgraded_servers)",
+    ),
+    (
+        "trustiot.telemetry",
+        "stream_id",
+        "String",
+        "UUID to String writes each UUID as its text form (0010_gateway_stream_ids.sql, checked \
+         by id_migration_gives_one_schema_on_fresh_and_upgraded_servers)",
+    ),
+];
+
+/// Words that may follow the column name of a `MODIFY COLUMN` that changes no type.
+const COLUMN_PROPERTIES: [&str; 3] = ["COMMENT", "CODEC", "DEFAULT"];
+
+/// A `MODIFY COLUMN` of `table` either changes no type or makes a change listed in
+/// `LOSSLESS_TYPE_CHANGES`. `rest` is the statement's tokens after `MODIFY COLUMN`.
+fn check_column_change(file: &str, statement: &str, table: &str, rest: &[String]) {
+    let column = rest.first().map_or("", String::as_str);
+    let Some(next) = rest.get(1) else {
+        return;
+    };
+    if COLUMN_PROPERTIES.contains(&next.to_ascii_uppercase().as_str()) {
+        return;
+    }
+    assert!(
+        LOSSLESS_TYPE_CHANGES
+            .iter()
+            .any(|(t, c, ty, _)| *t == table && *c == column && *ty == next.as_str()),
+        "{file}: MODIFY COLUMN changes the type of {table}.{column} to {next}, which is not in \
+         LOSSLESS_TYPE_CHANGES. A type change can rewrite or cut stored values; add it there only \
+         with the reason no value is lost, and a test that reads an old value back:\n{statement}"
+    );
+}
+
+/// A view as the first file that created it wrote it: the tokens between `CREATE VIEW IF NOT
+/// EXISTS` and `AS SELECT`, which hold the name, `DEFINER = <user>` and `SQL SECURITY DEFINER`.
+fn view_header(tokens: &[String], skip: usize) -> Option<Vec<String>> {
+    let upper = upper(tokens);
+    let end = upper
+        .windows(2)
+        .position(|pair| pair[0] == "AS" && pair[1] == "SELECT")?;
+    (end > skip).then(|| tokens[skip..end].to_vec())
+}
+
+/// Accepts the statement forms the migration files may use and refuses everything else, naming
+/// the file and the statement. `views` maps each plain view created with `CREATE VIEW IF NOT
+/// EXISTS` in an earlier file to its header (`view_header`).
+fn check_statement_form(file: &str, statement: &str, views: &BTreeMap<String, Vec<String>>) {
+    let tokens = tokens(statement);
+    let words = upper(&tokens);
+    for never in NEVER {
+        assert!(
+            !words.iter().any(|word| word == never),
+            "{file}: {never} is not allowed in migrations (it destroys data, or drops or renames \
+             what grants point at):\n{statement}"
+        );
+    }
+
+    // The one replacement: a plain view an earlier file created with CREATE VIEW IF NOT EXISTS,
+    // replaced with the same name, DEFINER and SQL SECURITY, so only its columns can change. A
+    // plain view holds no data and ClickHouse keeps grants and row policies by its name; 26.8 has
+    // no other way to change a plain view's columns (MODIFY QUERY is refused for storage View,
+    // see 0010_gateway_stream_ids.sql).
+    if starts_with(&words, &["CREATE", "OR", "REPLACE", "VIEW"]) {
+        let header = view_header(&tokens, 4).unwrap_or_else(|| {
+            panic!("{file}: CREATE OR REPLACE VIEW without AS SELECT:\n{statement}")
+        });
+        let original = header.first().and_then(|name| views.get(name));
+        assert_eq!(
+            Some(&header),
+            original,
+            "{file}: CREATE OR REPLACE VIEW may only replace a plain view that an earlier file \
+             created with CREATE VIEW IF NOT EXISTS, with the same name, DEFINER and SQL SECURITY \
+             word for word before AS SELECT:\n{statement}"
+        );
+        return;
+    }
+    if CREATE_FORMS.iter().any(|form| starts_with(&words, form)) {
+        return;
+    }
+    if ACCESS_FORMS.iter().any(|form| starts_with(&words, form)) {
+        return;
+    }
+    if starts_with(&words, &["ALTER", "TABLE"]) && words.len() > 3 {
+        let command = &words[3..];
+        if let Some(form) = ALTER_TABLE_COMMANDS
+            .iter()
+            .find(|form| starts_with(command, form))
+        {
+            let rest = &command[form.len()..];
+            let extra = rest
+                .iter()
+                .find(|word| ALTER_TABLE_AFTER_COMMAND.contains(&word.as_str()));
+            assert!(
+                extra.is_none(),
+                "{file}: ALTER TABLE may carry only one command, {}, without {} after it:\n\
+                 {statement}",
+                form.join(" "),
+                extra.map_or("", String::as_str)
+            );
+            if *form == ["MODIFY", "COLUMN"] {
+                check_column_change(file, statement, &tokens[2], &tokens[3 + form.len()..]);
+            }
+            return;
+        }
+    }
+    panic!(
+        "{file}: statement form not allowed in migrations. Allowed: CREATE DATABASE, TABLE, VIEW, \
+         ROLE, USER, QUOTA, SETTINGS PROFILE or ROW POLICY with IF NOT EXISTS; ALTER TABLE with one \
+         of ADD COLUMN IF NOT EXISTS, ADD CONSTRAINT IF NOT EXISTS, MODIFY COLUMN, COMMENT COLUMN, \
+         MODIFY COMMENT, MODIFY TTL; GRANT, REVOKE, ALTER USER, SET DEFAULT ROLE; and CREATE OR \
+         REPLACE VIEW of a plain view an earlier file created (services/ingest/README.md, file \
+         format):\n{statement}"
+    );
 }
 
 /// The migration Job may apply a file again (for example after a failed deploy), so every
-/// statement must be safe to repeat, and none may destroy data.
+/// statement must be safe to repeat, and none may destroy data: only the statement forms that
+/// `check_statement_form` lists are allowed.
 #[test]
 fn statements_are_idempotent_and_never_destroy_data() {
+    let mut views = BTreeMap::new();
     for migration in migrations() {
         for statement in &migration.statements {
-            let words = words(statement);
-            let text = words.join(" ");
-            if replaces_a_plain_view(&text) {
-                // Idempotent by itself: repeating it gives the same view. No IF NOT EXISTS, and
-                // the rest of the statement may still not hold a destructive word.
-                let rest = text.replacen("CREATE OR REPLACE VIEW ", "CREATE VIEW ", 1);
-                for forbidden in ["OR REPLACE", "DROP", "TRUNCATE", "DETACH", "EXCHANGE"] {
-                    assert!(
-                        !format!(" {rest} ").contains(&format!(" {forbidden} ")),
-                        "{}: {forbidden} is not allowed in migrations:\n{statement}",
-                        migration.name
-                    );
+            check_statement_form(&migration.name, statement, &views);
+        }
+        // Views count as created only once their file is done: a replacement must come from a
+        // later file than the CREATE VIEW IF NOT EXISTS it replaces.
+        for statement in &migration.statements {
+            let tokens = tokens(statement);
+            if starts_with(&upper(&tokens), &["CREATE", "VIEW", "IF", "NOT", "EXISTS"]) {
+                let header = view_header(&tokens, 5).unwrap_or_else(|| {
+                    panic!("{}: a view without AS SELECT:\n{statement}", migration.name)
+                });
+                if let Some(name) = header.first().cloned() {
+                    views.entry(name).or_insert(header);
                 }
-                continue;
-            }
-            if words.first().map(String::as_str) == Some("CREATE") {
-                assert!(
-                    text.contains(" IF NOT EXISTS "),
-                    "{}: CREATE without IF NOT EXISTS:\n{statement}",
-                    migration.name
-                );
-            }
-            for forbidden in ["OR REPLACE", "DROP", "TRUNCATE", "DETACH", "EXCHANGE"] {
-                assert!(
-                    !format!(" {text} ").contains(&format!(" {forbidden} ")),
-                    "{}: {forbidden} is not allowed in migrations (it replaces or destroys data, \
-                     or drops the grants that point at an access entity):\n{statement}",
-                    migration.name
-                );
             }
         }
     }
@@ -140,7 +354,7 @@ fn views_run_as_their_definer() {
             let text = words(statement).join(" ");
             if !(text.starts_with("CREATE VIEW ")
                 || text.starts_with("CREATE MATERIALIZED VIEW ")
-                || replaces_a_plain_view(&text))
+                || text.starts_with("CREATE OR REPLACE VIEW "))
             {
                 continue;
             }
