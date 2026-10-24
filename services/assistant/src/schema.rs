@@ -15,8 +15,16 @@ use service_kit::migrations::{Migration, Schema};
 pub const SCHEMA: Schema = Schema {
     service: "assistant",
     outbox_producer: false,
-    migrations: &[Migration {
-        name: "0001_assistant.sql",
-        sql: include_str!("../migrations/postgres/0001_assistant.sql"),
-    }],
+    migrations: &[
+        Migration {
+            name: "0001_assistant.sql",
+            sql: include_str!("../migrations/postgres/0001_assistant.sql"),
+        },
+        // Conversation threads: titles, archiving, soft deletion and the purge's platform role,
+        // discarded rounds, the record of questions (Laysi/trustiot-v2#644).
+        Migration {
+            name: "0002_conversation_threads.sql",
+            sql: include_str!("../migrations/postgres/0002_conversation_threads.sql"),
+        },
+    ],
 };

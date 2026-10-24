@@ -224,12 +224,16 @@ pub const PRODUCT: Registry = Registry {
             migrations: certs_schema::SCHEMA.migrations,
         },
         // The AI assistant's conversations and their append-only history
-        // (Laysi/trustiot-v2#553): tenant data under row-level security, no events, and nothing
-        // read across tenants, so no platform role. The chart lists `postgres` for the assistant
-        // (Laysi/trustiot-v2#592), so the Job lets its `assistant_app` log in like every client's.
+        // (Laysi/trustiot-v2#553): tenant data under row-level security, no events. The chart
+        // lists `postgres` for the assistant (Laysi/trustiot-v2#592), so the Job lets its
+        // `assistant_app` log in like every client's. Its platform role `assistant_platform`
+        // (Laysi/trustiot-v2#644) only purges conversations deleted more than 30 days ago (its
+        // policies in 0002_conversation_threads.sql); no code connects as it until the purge job
+        // (Laysi/trustiot-v2#645), so the chart binds no Secret to it yet
+        // (`UNBOUND_PLATFORM_ROLES` in tests/registry.rs).
         Service {
             name: assistant_schema::SCHEMA.service,
-            platform_role: false,
+            platform_role: true,
             outbox: Outbox {
                 producer: assistant_schema::SCHEMA.outbox_producer,
                 consumes: &[],
