@@ -54,6 +54,9 @@ proc-macro2 = { version = "1.0.107", default-features = false }
 prost = { version = "0.14.4", default-features = false }
 rcgen = { version = "0.14.10", default-features = false }
 reqwest = { version = "0.13.5", default-features = false }
+# The MQTT 5 packet codec under crates/mqtt-client. No default features: no TLS (the mesh
+# encrypts the service port) and no TLS backend such as aws-lc.
+rumqttc = { version = "0.25.1", default-features = false }
 rustls = { version = "0.23.45", default-features = false }
 # The system's root certificates, trusted by the AI provider clients (crates/ai-clients).
 rustls-native-certs = "0.8.4"

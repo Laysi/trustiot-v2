@@ -18,6 +18,7 @@ trustiot-v2/
 ├── crates/
 │   ├── contract/              # 服務間契約：內部 API 型別、事件格式、錯誤代碼（M1）
 │   ├── protocol/              # 閘道器↔雲端的 MQTT 訊息格式（M4）
+│   ├── mqtt-client/           # 雲端服務連 broker 服務埠的 MQTT 5 用戶端（rumqttc 的 codec 為底，Laysi/trustiot-v2#631）
 │   ├── service-kit/           # 服務共用骨架：設定、health、SIGTERM、tracing、驗內部身分、SET LOCAL 租戶
 │   ├── identity-keys/         # 內部身分簽章金鑰的格式與輪替規則（叢集內產生，Laysi/trustiot-v2#404）
 │   ├── ca-keys/               # 簽發 CA 金鑰的格式與規則（叢集內產生，離線根 CA 簽發，Laysi/trustiot-v2#78）

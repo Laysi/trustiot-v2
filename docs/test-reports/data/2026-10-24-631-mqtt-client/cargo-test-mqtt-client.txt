@@ -1,0 +1,71 @@
+$ CI=1 cargo test --locked -p mqtt-client -- --nocapture
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.61s
+     Running unittests src/lib.rs (<host copy>/target/debug/deps/mqtt_client-c2decdef0c49b9d5)
+
+running 10 tests
+test codes::tests::refusals_have_the_numbers_of_the_specification ... ok
+test config::tests::settings_are_checked_by_name ... ok
+test config::tests::a_service_account_on_a_cluster_host_is_valid ... ok
+test backoff::tests::the_delay_doubles_up_to_the_maximum_and_stays_within_the_jitter_band ... ok
+test driver::tests::packet_ids_skip_the_subscription_and_ids_in_flight ... ok
+test config::tests::the_configuration_deserializes_with_a_default_port_and_rejects_unknown_keys ... ok
+test driver::tests::expiry_is_rounded_up_to_whole_seconds ... ok
+test tests::client_ids_have_a_colon_and_differ_between_instances ... ok
+test tests::the_packet_limit_is_the_protocol_minimum ... ok
+test tests::topics_and_filters_are_checked ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/broker.rs (<host copy>/target/debug/deps/broker-785d3afcbedd4204)
+
+running 2 tests
+evidence: connected as service:test with client id service:test:69893f00373d508e; SUBACK codes [01, 01, 87]
+evidence: published 1048576 bytes to test/echo and received the same 1048576 bytes
+evidence: received test/shared through $share/workers/test/shared
+evidence: publish to forbidden/topic: Err(Refused { code: 135, reason: None })
+evidence: publish of 1056768 payload bytes: Err(TooLarge { size: 1056786, max: 1056768 })
+evidence: two instances connected at once: service:test:69893f00373d508e and service:test:b53883cb721ba366
+evidence: wrong password: Disconnected { error: Refused { code: 135, reason: None }, retry_in: 305.375467ms }
+evidence: broker restarted: Disconnected { error: Closed, retry_in: 452.246776ms }
+evidence: reconnected after the restart; SUBACK codes [01]
+test logs_in_publishes_receives_and_reports_refusals ... ok
+evidence: old password after the change: Disconnected { error: Refused { code: 135, reason: None }, retry_in: 1.880836531s }
+evidence: connected with the rotated password; SUBACK codes [01]
+test reconnects_after_a_restart_and_reads_the_rotated_password ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.37s
+
+     Running tests/logging.rs (<host copy>/target/debug/deps/logging-f7a0d4653b87e558)
+
+running 1 test
+evidence: captured 14 log lines, 2217 bytes, at TRACE
+evidence: no 5-character piece of either password in the log
+test no_log_line_holds_a_piece_of_a_password ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.72s
+
+     Running tests/password.rs (<host copy>/target/debug/deps/password-15c69260fb366189)
+
+running 3 tests
+test a_final_line_break_is_not_part_of_the_password ... ok
+test start_refuses_an_unusable_password_file_and_bad_subscriptions ... ok
+test unusable_files_are_refused_without_their_content ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/stand_in.rs (<host copy>/target/debug/deps/stand_in-2d59433c94a0c258)
+
+running 2 tests
+evidence: publish while connecting: Err(NotConnected); first PUBLISH after the CONNACK: test/later
+evidence: shutdown with a full in-flight window: the client sent [e0, 00] (DISCONNECT 0x00) and closed; the publish in flight: Err(Closed); the waiting one: Err(Closed)
+test shutdown_is_served_while_the_inflight_window_is_full ... ok
+test a_publish_while_connecting_fails_at_once_and_is_never_sent ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests mqtt_client
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+exit 0 at 16:06:16 (build host)
