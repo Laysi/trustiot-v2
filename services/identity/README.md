@@ -277,7 +277,7 @@ ext_authz 每個請求都查資料庫，所以被撤銷的 session 下一個請�
 - **CSRF**：除了 cookie 檢查已經擋下跨站請求，處理常式在讀 body 之前以同一套規則（`csrf::cross_site`）再判斷一次，免得入口哪天沒把標頭交給檢查；寫入一律要求 JSON 的 `Content-Type`（見[租戶](#租戶)的 CSRF 說明）。
 - **只給使用者自己的請求**：別的服務換來的 token（`act`）讀不到也改不了使用者的 session、所屬的租戶、email 與偏好（2026-10-23，安全審查的 F6：原本允許讀，代表使用者呼叫身分服務的服務就能拿到使用者所有租戶的名稱與 email）。以後有服務需要使用者的偏好（例如 AI 回答的語言），另開以它為對象的內部 API，不放寬這裡。
 - **日誌**：成功記 INFO `switched the session's tenant`（`user_id`、原本的租戶 `from`、`tenant_id`），拒絕記 INFO `refused to switch tenants`（`reason`：`cross_site_request`、`exchanged_token`、`no_session_claim`、`no_session_cookie` 等、`not_a_member`、`no_active_session`）；換來的 token 讀 session 記 INFO `refused to read the current session`（`reason` 是 `exchanged_token`，帶呼叫的服務）；不記租戶名稱、email 與 cookie。
-- **第一次登入**：新 session 沿用最近一個有租戶的 session 的租戶，第一次登入的使用者沒有，所以 `active_tenant` 是 `null`，要由畫面讓使用者選一次（只屬於一個租戶時可以自動切換，畫面在 Laysi/trustiot-v2#124）。
+- **第一次登入**：新 session 沿用最近一個有租戶的 session 的租戶，第一次登入的使用者沒有，所以 `active_tenant` 是 `null`，要由畫面讓使用者選一次：SPA 在使用者只屬於一個租戶時自動切換，屬於多個時讓他選，一個都沒有時說明原因（Laysi/trustiot-v2#124，`frontend/src/session/TenantGate.tsx`）。
 
 ## 偏好設定
 
@@ -305,7 +305,7 @@ ext_authz 每個請求都查資料庫，所以被撤銷的 session 下一個請�
 - 時區的名稱清單編進服務（`jiff-tzdb` crate 的資料，2026-10-23 是 tzdata 2026e），所以每個副本接受的名稱都一樣，不依映像裡的 `/usr/share/zoneinfo`；升級這個 crate 才會有新的時區名稱。資料庫的 CHECK 重複一次允許清單（語言、主題的清單，時區只檢查 `auto` 或 1–64 bytes、以 `/` 分段的 ASCII 名稱），服務的程式錯了也存不進別的值；單元測試確認服務接受的每個時區名稱都通過資料庫的 CHECK，預設值與清單和 migration 相同。
 - 服務角色對 `preferences` 有 `SELECT`、只限 `user_id` 的 `INSERT`（一律先以預設值建立那一列）與四個偏好欄位的 `UPDATE`；不能改一列屬於誰、不能刪除，使用者被刪除時一起刪除（外鍵 `ON DELETE CASCADE`）。同一個使用者同時的兩個修改依序取得那一列的鎖，各自只改自己給的欄位。修改的 `UPDATE` 以使用者為條件，服務另外確認它剛好改到一列（使用者自己的那一列），否則整個交易不提交、回 503（縱深防禦，2026-10-23，安全審查的 F2）。
 - 寫入的 CSRF 規則與上一節相同，別的服務換來的 token 讀寫都不行（見上一節的「只給使用者自己的請求」）。成功記 INFO `changed preferences`，只寫哪幾個欄位改了（布林值），不寫值。
-- SPA 目前把偏好存在瀏覽器（`frontend/src/preferences`）；改成讀寫這個 API 是 Laysi/trustiot-v2#124 的範圍。
+- SPA 登入後讀寫這個 API，以伺服器的值為準；瀏覽器只留一份副本，給登入前與伺服器回應前的畫面使用（Laysi/trustiot-v2#124，[frontend/README.md](../../frontend/README.md)「偏好設定、租戶與工作階段」）。
 
 ## 事件層與操作紀錄
 

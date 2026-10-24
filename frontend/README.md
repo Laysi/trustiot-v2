@@ -1,13 +1,14 @@
 # frontend
 
-Vite + React 的單頁應用程式（SPA，決策 2），頁面全在登入後，與 API 走同一個網域：入口把 `/api`、`/auth` 送到服務，其餘路徑由 `services/web` 提供這裡建置出來的檔案。以 Bun 安裝相依套件、執行腳本與測試，Bun 版本鎖在根目錄的 `.prototools`。不是 Cargo workspace 成員。2026-10-21 建立骨架（Laysi/trustiot-v2#123）：路由與深層連結、zh-TW 與 en、API client、錯誤頁、偏好設定、租戶切換、SSE 的連線處理；登入頁是 Laysi/trustiot-v2#124 的範圍，這裡只有預留的頁面。
+Vite + React 的單頁應用程式（SPA，決策 2），頁面全在登入後，與 API 走同一個網域：入口把 `/api`、`/auth` 送到服務，其餘路徑由 `services/web` 提供這裡建置出來的檔案。以 Bun 安裝相依套件、執行腳本與測試，Bun 版本鎖在根目錄的 `.prototools`。不是 Cargo workspace 成員。2026-10-21 建立骨架（Laysi/trustiot-v2#123）：路由與深層連結、zh-TW 與 en、API client、錯誤頁、偏好設定、租戶切換、SSE 的連線處理。2026-10-25 加上第一批真正的畫面與 UI 基礎（Laysi/trustiot-v2#124）：email 驗證碼登入、登出與登出所有裝置、從身分服務讀取的工作階段與租戶切換、沒有目前租戶時的選擇、存在帳號裡的個人設定、組織停權頁。
 
 ## 技術組合
 
 | 用途 | 套件 |
 | --- | --- |
 | 建置與開發伺服器 | Vite 8（Rolldown）、`@vitejs/plugin-react` |
-| UI | React 19 |
+| UI | React 19；Radix UI 的 primitives 加上複製進 repo 的 shadcn 風格元件（`src/components/ui/`），圖示用 `lucide-react`；見「UI 元件與樣式」 |
+| 樣式 | Tailwind CSS 4（`@tailwindcss/vite`，建置時編譯成靜態 CSS）與 `tw-animate-css`；`class-variance-authority`、`clsx`、`tailwind-merge` 組合 class |
 | 路由 | React Router 8（data mode：`createBrowserRouter`，測試用 `createMemoryRouter`） |
 | 伺服器狀態 | TanStack Query 5 |
 | API client | `openapi-fetch`，型別由 `openapi-typescript` 從 `api/openapi.json` 產生 |
@@ -37,6 +38,18 @@ Vite + React 的單頁應用程式（SPA，決策 2），頁面全在登入後�
 CI 的 `frontend` job 依序跑 install、`api:check`、`typecheck`、`lint`、`test`、`build`、`check:dist`（`docs/architecture/ci-release.md` 的「ci.yml 的 job」）。
 
 產生 API client 與檢查建置結果的 Bun 腳本放在 `tools/`，不叫 `scripts/`：在 repo 根目錄執行的 `bun test scripts` 以路徑子字串篩選測試檔，目錄叫 `scripts/` 會連前端的測試一起跑，而那時前端的相依不一定已安裝。
+
+## UI 元件與樣式
+
+決策 2（2026-10-25，Laysi/trustiot-v2#124）：shadcn 風格的元件加 Radix 的 primitives 與 Tailwind CSS 4，取代骨架時「只用一般 CSS 或 CSS Modules」的做法。
+
+- **Tailwind 在建置時編譯成靜態 CSS**：`vite.config.ts` 的 `@tailwindcss/vite` 掃描原始碼用到的 class，和 `src/styles/global.css` 一起輸出成 `static/<hash>.css`。樣式只有這一個 stylesheet；不用 CSS-in-JS、不用 `style` 屬性，執行時不產生也不注入任何樣式（見「CSP 的限制」）。動畫用 `tw-animate-css`（純 CSS），`prefers-reduced-motion` 時全部縮成一瞬間。
+- **主題是 CSS 變數**：顏色以用途命名（`--background`、`--primary`、`--destructive`……，shadcn 的名稱，複製來的元件直接可用），定義在 `:root` 與 `:root[data-theme="dark"]`，經 `@theme inline` 變成 Tailwind 的顏色；`dark:` 變體跟著 `<html data-theme>`，不跟作業系統。主題由 `PreferencesProvider` 設定，`main.tsx` 在第一次繪製前先套用瀏覽器裡的副本，所以不會閃一下淺色。每組文字與背景、輸入框框線與焦點框都符合 WCAG 2.2 AA（文字 4.5:1，框線 3:1）；改顏色時要重新確認。
+- **元件在 `src/components/ui/`**：從 shadcn 複製進來再依需要修改（原始碼是我們的，不是套件），只放畫面用到的；新畫面需要新元件時才加。Radix 的 primitives 是相依套件（`@radix-ui/react-*`，各自鎖定版本）。`src/lib/utils.ts` 的 `cn()` 合併 class，變體用 `class-variance-authority`。和 shadcn 原版不同的地方：焦點以 `outline` 顯示（`button.tsx` 的 `focusRing`，強制色彩模式下仍看得到）、`Button` 預設 `type="button"`、`Label` 一定要有 `htmlFor`、表單欄位以 `FormField` 串起標籤、說明與錯誤（`aria-describedby`、`aria-invalid`）。
+- **不用 Radix 的 Select**：它的 `SelectViewport` 以 `dangerouslySetInnerHTML` 寫入 inline `<style>` 隱藏捲軸，CSP 擋下，Trusted Types 也會回報。下拉選單一律用 `NativeSelect`（樣式化的原生 `<select>`），鍵盤、螢幕報讀與手機的選擇器都由瀏覽器處理。
+- **Radix 的 modal 元件鎖捲動不注入 `<style>`**：`DropdownMenu`、`AlertDialog` 經 `react-remove-scroll` 鎖住背景捲動，它原本以 `react-style-singleton` 注入 `<style>`。`vite.config.ts` 把 `react-style-singleton` alias 到 `src/lib/no-style-singleton.ts`（同樣的 export、不碰 DOM），鎖捲動的規則改寫在 `global.css` 的 `body[data-scroll-locked]`（屬性仍由 `react-remove-scroll-bar` 設定），`html` 的 `scrollbar-gutter: stable` 讓鎖住時版面不跳動。`src/test/setup.ts` 以 `mock.module` 做同樣的替換，所以測試跑的與建置相同；`no-style-singleton.test.tsx` 確認打開選單與對話框時文件裡沒有 `<style>`。
+- Radix 以 CSSOM（`element.style`）設定彈出位置與 focus guard，CSP 的 `style-src` 不管這種寫法，不必處理。
+- **AI 對話畫面**（Laysi/trustiot-v2#149）用 assistant-ui 的官方元件，它們建在同一套 shadcn + Radix + Tailwind 上；由 Laysi/trustiot-v2#149 安裝，也由它處理下面「CSP 的限制」提到的 micromark `decode-named-character-reference` alias。這裡還沒有安裝 assistant-ui。
 
 ## 建置結果的約定（與 `services/web`）
 
@@ -68,7 +81,7 @@ CI 的 `frontend` job 依序跑 install、`api:check`、`typecheck`、`lint`、`
 
 2026-10-21 以 assistant-ui 實測時碰到的情況：
 
-- Radix 的 modal 元件（`Dialog`、`DropdownMenu` 等）經 `react-remove-scroll` 注入 `<style>` 來鎖住背景捲動。CSP 會擋下，元件本身照常運作，只是背景沒有鎖住。要鎖捲動，就把規則寫進靜態 CSS（例如針對 `body[data-scroll-locked]`），不要放寬 `style-src`。
+- Radix 的 modal 元件（`Dialog`、`DropdownMenu` 等）經 `react-remove-scroll` 注入 `<style>` 來鎖住背景捲動。CSP 會擋下，元件本身照常運作，只是背景沒有鎖住。2026-10-25 起以 alias 與靜態 CSS 處理（見「UI 元件與樣式」），沒有放寬 `style-src`。
 - micromark（`react-markdown` 用的解析器）依賴的 `decode-named-character-reference`，瀏覽器版以 `innerHTML` 解碼 HTML 實體。在 `vite.config.ts` 把它 alias 到不碰 DOM 的 `index.js`。
 - Radix 的 tooltip 與 popper 以 CSSOM 設定定位樣式，CSP 允許，不必處理。
 
@@ -76,18 +89,18 @@ CI 的 `frontend` job 依序跑 install、`api:check`、`typecheck`、`lint`、`
 
 ## 路由與錯誤頁
 
-路由定義在 `src/app/routes.tsx`：`/login` 不套版面，其餘套 `Layout`（頁首、主選單、租戶切換、偏好設定）。每一層都有 `errorElement`，所以任何畫面出錯都留在版面內顯示錯誤頁，不會整頁空白。錯誤頁依錯誤分類（`src/api/errors.ts` 的 `classifyError`）：
+路由定義在 `src/app/routes.tsx`：`/login` 不套版面，其餘套 `Layout`（頁首、主選單、租戶切換、帳號選單）。沒有工作階段的訪客由 `Layout` 導向 `/login?next=<目前路徑>`。`/settings` 與「找不到頁面」不需要目前租戶；處理租戶資料的頁面都放在 `TenantGate` 底下，它先讓工作階段進入一個租戶（見「偏好設定、租戶與工作階段」），租戶停權時以停權頁取代這些頁面。每一層都有 `errorElement`，所以任何畫面出錯都留在版面內顯示錯誤頁，不會整頁空白。錯誤頁依錯誤分類（`src/api/errors.ts` 的 `classifyError`）：
 
 | 情況 | 畫面 |
 | --- | --- |
 | 401 或 `unauthenticated` | 「工作階段已結束」，連到 `/login?next=<目前路徑>` |
 | 403 或 `forbidden` | 沒有權限 |
-| `tenant_suspended` | 組織已停用 |
+| `tenant_suspended` | 組織已停權 |
 | 404 或 `not_found` | 找不到頁面 |
 | 503、504、網路錯誤、`unavailable`、`timeout` | 服務暫時無法使用，附重新整理按鈕 |
 | 其他 | 一般錯誤；只有 API 的錯誤會顯示翻譯後的訊息，程式錯誤的內容不顯示給使用者 |
 
-查詢或寫入收到 401 時直接導向登入頁（`src/app/query-client.ts`）。登入後要回到的 `next` 來自網址列，只接受本 SPA 的路徑（同源、不在保留路徑、不是 `/login`；`//`、`/\`、控制字元與其他網域一律回首頁），避免成為開放重新導向（`safeNextPath`）。
+查詢或寫入收到 401 時直接導向登入頁（`src/app/query-client.ts`），`SessionProvider` 同時忘掉這個使用者快取的資料，把工作階段標成已登出：工作階段在別的裝置被登出或過期時，畫面不會留著前一個工作階段的資料。自己處理 401 的請求（登入表單：驗證碼錯誤就是 401）在 TanStack Query 的 `meta` 標上 `handlesUnauthenticated`，不觸發這兩件事。登入後要回到的 `next` 來自網址列，只接受本 SPA 的路徑（同源、不在保留路徑、不是 `/login`；`//`、`/\`、控制字元與其他網域一律回首頁），避免成為開放重新導向（`safeNextPath`）。
 
 ## 多語系
 
@@ -117,7 +130,7 @@ zh-TW 與 en 兩種語言，字串在 `src/i18n/locales/zh-TW.json` 與 `en.json
 API 回應、錯誤本文、SSE 事件資料與瀏覽器儲存（`localStorage`）的內容都是外部資料：型別只在編譯期成立，執行時什麼都可能進來（滾動更新時前後端版本不一致、舊頁面還開著、入口回了不是 M1 格式的內容）。所以它們一律以 zod schema 解析後才使用，不用 `as` 轉型（`JSON.parse(...) as X` 也不行）。
 
 - **schema 與 `schema.gen.ts` 雙向綁定**：手寫的 schema 旁邊用 `src/lib/type-binding.ts` 的 `Assert<Equal<z.output<typeof S>, components["schemas"]["S"]>>` 綁定產生的型別，規格一變 `typecheck` 就失敗。只用 `satisfies z.ZodType<T>` 抓不到規格刪掉的欄位。`src/api/errors.ts` 是範例；`ErrorBody` 的 `details` 刻意比規格窄（只留字串與有限數字），所以該欄位只檢查可指派，其餘欄位仍用 `Equal`。`tools/api-client.ts` 傳 `emptyObjectsUnknown: true`：沒有 properties 的 object（`details`）產生成 `Record<string, unknown>`，不是「不能有任何鍵」的 `Record<string, never>`，再由 schema 收窄。
-- **邊界的寬鬆行為**：錯誤本文與儲存的偏好都不用 `z.strictObject`，未知欄位忽略（M1 規定新欄位只以選填的方式加入）；不合格的 `details` 項目與 `field_errors` 項目丟掉，不讓整個本文失敗；偏好的每個欄位以 `.catch()` 退回自己的預設值，版本欄位 `v` 不是 1 時回傳預設值。
+- **邊界的寬鬆行為**：錯誤本文與儲存的偏好都不用 `z.strictObject`，未知欄位忽略（M1 規定新欄位只以選填的方式加入）；不合格的 `details` 項目與 `field_errors` 項目丟掉，不讓整個本文失敗；儲存的偏好每個欄位以 `.catch()` 退回自己的預設值，版本欄位 `v` 不是 2 時回傳預設值。身分服務的回應（工作階段、偏好、登入）則嚴格解析：例如不認得的角色是契約的改變，以 `ResponseShapeError` 呈現，不默默當成別的角色。
 - **SSE**：`sse.ts` 目前只交出 `data` 字串；串流畫面（Laysi/trustiot-v2#149 決定是否在 `sse.ts` 提供共用介面）自己以 schema 解析，解析失敗的事件丟掉並以 `console.warn` 記下事件類型與 issue 路徑（不記值），串流照常繼續。
 
 ## SSE
@@ -131,11 +144,27 @@ API 回應、錯誤本文、SSE 事件資料與瀏覽器儲存（`localStorage`�
 
 計時器經由可注入的 `Clock`，測試以手動時鐘推進，不等待真實時間。
 
+## 登入與登出
+
+登入只有 email 驗證碼一種（決策 13，[身分服務](../services/identity/README.md#登入)「登入」），在 `src/pages/LoginPage.tsx`：
+
+1. 輸入 email，`POST /auth/login` 的 `send_code`。不論地址有沒有帳號，伺服器的回應都一樣，畫面也只說「如果這個地址有帳號，已寄出驗證碼」。空白的地址在送出前就擋下；伺服器的 422 欄位錯誤顯示在 email 欄位，其他錯誤（503 寄不出信等）顯示在表單上方。
+2. 輸入 8 位數驗證碼（長度取自回應的 `code_length`；貼上時只留數字），`verify_code` 帶 `redirect_to`（網址列的 `next`，經 `safeNextPath` 檢查）。401（驗證碼錯誤或失效）與 `/code` 的 422 顯示在驗證碼欄位，`/redirect_to` 的 422 與其他錯誤顯示在表單上方。可以在回應的 `resend_after_secs` 之後重新寄送，或改用其他地址。
+3. 成功後重新讀取工作階段，等畫面讀到新的工作階段再以前端路由前往伺服器檢查過、這裡又檢查一次的 `redirect_to`；不交給瀏覽器轉址。讀不到工作階段（瀏覽器沒有保留 cookie）時說明要允許 cookie。
+
+登入頁的語言選單只改瀏覽器裡的副本，登入後以帳號的設定為準。
+
+登出在帳號選單（`DELETE /api/identity/v1/sessions/current`；工作階段已經結束時也算成功）；登出所有裝置在個人設定頁「已登入的裝置」，先以對話框確認（`DELETE /api/identity/v1/sessions`，失敗時在對話框內說明原因；這個工作階段已經結束時導向登入頁，讓使用者登入後再試）。兩者成功後都先換到登入頁、顯示已登出的提示，再清除快取，所以版面不會以「沒有工作階段」再導向一次登入頁。
+
 ## 偏好設定、租戶與工作階段
 
-- 偏好設定（語言、時區、主題）存在 `localStorage` 的 `trustiot.preferences`，讀寫失敗（隱私模式、配額）時用預設值而不出錯。預設語言取瀏覽器語言清單中第一個 zh 或 en，都沒有時用 en；時區預設跟隨瀏覽器；主題預設跟隨系統。改了立刻套用，不需重新整理。
-- 工作階段（使用者、目前租戶、可切換的租戶）由 `SessionSource` 提供（`src/session/session.ts`）。身分服務的端點在 Laysi/trustiot-v2#497 加入：`GET /api/identity/v1/sessions/current`（使用者、`active_tenant`、`tenants`，見[身分服務](../services/identity/README.md#目前的-session-與切換租戶)）與 `PUT /api/identity/v1/sessions/current/tenant`（`{"tenant_id"}`，回應同前者）；偏好的端點是 `GET`／`PATCH /api/identity/v1/preferences`。`main.tsx` 目前仍接 `noSessionSource`（沒有工作階段，不顯示租戶切換），把它換成呼叫這些端點的實作、偏好改存到伺服器是 Laysi/trustiot-v2#124 的範圍，元件與測試不用改。
-- 切換租戶時先取消進行中的請求，再把其他查詢全部重設：還開著的頁面會為新租戶重新查詢，不會短暫顯示前一個租戶的資料。不用 `queryClient.clear()`：它移除查詢後，還在畫面上的元件仍拿著被移除的查詢，畫面停在舊租戶（測試抓到的問題）。分頁標題是「<租戶名稱> · TrustIoT」。
+- **工作階段**：`SessionProvider` 以 `identityApi`（`src/api/identity.ts`）讀 `GET /api/identity/v1/sessions/current`，401 表示沒有登入（不是錯誤）。身分服務的端點經 `useIdentityApi()` 取得，測試以 `src/test/fake-identity.ts` 的假服務注入。
+- **切換租戶**：`PUT /api/identity/v1/sessions/current/tenant`，回應同前者。切換時先取消租戶的進行中請求與工作階段的讀取，再把租戶的查詢全部重設：還開著的頁面會為新租戶重新查詢，不會短暫顯示前一個租戶的資料。工作階段與偏好屬於使用者、不屬於租戶，所以保留；偏好的讀取也不取消，否則第一次讀取被取消後會一直停在載入中（它永不過期，沒有東西會再查詢它；`src/session/TenantSwitcher.test.tsx` 測這個情況）。不用 `queryClient.clear()`：它移除查詢後，還在畫面上的元件仍拿著被移除的查詢，畫面停在舊租戶（測試抓到的問題）。分頁標題是「<租戶名稱> · TrustIoT」。
+- **沒有目前租戶**（第一次登入，或已不是原本租戶的成員）：`TenantGate` 在使用者只屬於一個租戶時自動切換過去（失敗時說明並可重試），屬於多個時列出讓他選，一個都沒有時說明為什麼沒有內容，可以重新檢查或登出。
+- **停權**：任何請求收到 `tenant_suspended`（403）時，`SessionProvider` 把目前的租戶記為停權，`TenantGate` 以停權頁取代它的頁面，列出使用者其他的租戶可以切換，或登出；切換租戶本身被拒絕時是那次切換的錯誤，不算停權。取代舊系統每 60 秒檢查一次的做法。
+- **偏好設定**（介面語言、AI 回答的語言、時區、主題）存在帳號裡，`GET`／`PATCH /api/identity/v1/preferences`，以伺服器的值為準，每個登入的瀏覽器都一樣。前端的欄位與 API 的值一對一（`auto`、`zh-TW`、`en`；`auto` 或 IANA 名稱；`system`、`light`、`dark`），只在套用時解析 `auto` 與 `system`（`src/preferences/preferences.ts`），所以顯示的與儲存的不會不一致。
+  - 個人設定頁每改一個欄位就送出只含那個欄位的 `PATCH`，立刻套用；伺服器的回應就是之後的值。一次只送一個，依修改的順序；還在儲存的修改顯示在較早的回應之上。伺服器拒絕時退回儲存的值，422 的欄位錯誤顯示在對應的欄位，其他錯誤也顯示在那個欄位；錯誤保留的是錯誤本身，換語言時重新翻譯。讀不到伺服器的偏好時不能修改，可以重試。
+  - 瀏覽器的 `localStorage`（`trustiot.preferences`，格式版本 2）只是暫時的副本：登入前與伺服器回應前的畫面用它，伺服器每次回應都寫回去，登出後的登入頁也從它開始。讀寫失敗（隱私模式、配額）時用預設值而不出錯。預設值與伺服器相同（語言、AI 語言、時區都是 `auto`，主題 `system`）；`auto` 語言取瀏覽器語言清單中第一個 zh 或 en，都沒有時用 en。
 
 ## 開發伺服器
 
@@ -143,9 +172,10 @@ API 回應、錯誤本文、SSE 事件資料與瀏覽器儲存（`localStorage`�
 
 ## 測試的寫法
 
-- `src/test/setup.ts` 註冊 happy-dom，網址是 `https://app.example.test/`；畫面測試用 `src/test/render.tsx` 的 `renderAt(路徑, …)`，偏好設定與工作階段以記憶體版本注入。
+- `src/test/setup.ts` 註冊 happy-dom，網址是 `https://app.example.test/`，並把 `react-style-singleton` 換成與建置相同的替代（見「UI 元件與樣式」）。
+- 畫面測試用 `src/test/render.tsx` 的 `renderAt(路徑, …)`：app 的 query client（401 導向登入頁，不重試）、記憶體版本的偏好副本，以及 `src/test/fake-identity.ts` 的假身分服務。假服務有使用者、租戶、伺服器端的工作階段、偏好與驗證碼信箱，回應照身分服務的 README（401、403 `session.tenant_not_member`、422 的欄位錯誤）；`browser()` 各有自己的 cookie，可以測兩個瀏覽器（登出所有裝置、在另一個瀏覽器讀到同樣的偏好）。`failNext` 讓下一個請求失敗，`holdNext` 讓它等到測試放行。沒有指定時，`renderAt` 用一個已登入、屬於一個租戶的使用者。
 - 不依賴固定的短時間等待：SSE 用手動時鐘，畫面用 Testing Library 的 `findBy*` 與 `waitFor`。
-- fixture 裡的網域一律用 `*.example.test`。
+- fixture 裡的網址一律用 `*.example.test`，email 用 `@example.com`（例如 `alice@example.com`）。
 
 ## TypeScript 停在 6
 
