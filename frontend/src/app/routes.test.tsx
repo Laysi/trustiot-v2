@@ -4,7 +4,8 @@ import type { RouteObject } from "react-router";
 
 import { ApiError } from "../api/errors.ts";
 import { ErrorPage } from "../pages/ErrorPage.tsx";
-import { renderAt } from "../test/render.tsx";
+import { FakeIdentity } from "../test/fake-identity.ts";
+import { memoryPreferences, renderAt, signedInBrowser } from "../test/render.tsx";
 import { Layout } from "./Layout.tsx";
 import { isReservedPath } from "./paths.ts";
 import { ROUTES } from "./routes.tsx";
@@ -31,6 +32,7 @@ describe("routes", () => {
     const paths = routePaths(ROUTES);
     expect(paths).toContain("/");
     expect(paths).toContain("/login");
+    expect(paths).toContain("/settings");
     expect(paths.filter((path) => path !== "/*" && isReservedPath(path.replace(/\/\*$/, "")))).toEqual([]);
   });
 
@@ -54,17 +56,38 @@ describe("routes", () => {
   });
 
   test("the sign-in page renders without the layout", async () => {
-    renderAt("/login?next=%2Fdevices", { routes: ROUTES });
-    expect(await screen.findByRole("heading", { name: "Sign in" })).toBeDefined();
+    renderAt("/login?next=%2Fdevices", { routes: ROUTES, identity: new FakeIdentity().browser() });
+    expect(await screen.findByRole("heading", { name: "Sign in to TrustIoT" })).toBeDefined();
     expect(screen.queryByRole("navigation", { name: "Main navigation" })).toBeNull();
   });
 
-  test("the language preference applies to the pages and the document", async () => {
+  test("a visitor without a session is sent to sign in, and back to the page afterwards", async () => {
+    const { router } = renderAt("/settings?tab=account", { routes: ROUTES, identity: new FakeIdentity().browser() });
+    expect(await screen.findByRole("heading", { name: "Sign in to TrustIoT" })).toBeDefined();
+    expect(`${router.state.location.pathname}${router.state.location.search}`).toBe(
+      "/login?next=%2Fsettings%3Ftab%3Daccount",
+    );
+  });
+
+  test("the account's language and theme apply to the pages and the document", async () => {
+    // The browser's copy says English and light; the server's values win once they arrive.
     renderAt("/", {
       routes: ROUTES,
-      preferences: { load: () => ({ locale: "zh-TW", timeZone: "auto", theme: "dark" }), save: () => {} },
+      identity: signedInBrowser({ preferences: { language: "zh-TW", theme: "dark" } }).browser,
+      preferences: memoryPreferences({ language: "en", theme: "light" }),
     });
     expect(await screen.findByRole("heading", { name: "首頁" })).toBeDefined();
+    expect(document.documentElement.lang).toBe("zh-TW");
+    expect(document.documentElement.dataset.theme).toBe("dark");
+  });
+
+  test("signed out, the browser's copy of the preferences applies", async () => {
+    renderAt("/login", {
+      routes: ROUTES,
+      identity: new FakeIdentity().browser(),
+      preferences: memoryPreferences({ language: "zh-TW", theme: "dark" }),
+    });
+    expect(await screen.findByRole("heading", { name: "登入 TrustIoT" })).toBeDefined();
     expect(document.documentElement.lang).toBe("zh-TW");
     expect(document.documentElement.dataset.theme).toBe("dark");
   });
