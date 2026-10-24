@@ -1,0 +1,22 @@
+     Running tests/clickhouse.rs (<host copy>/target/debug/deps/clickhouse-6e797b4cbbf65661)
+
+running 1 test
+first run on a fresh ClickHouse: ["generated the password of trustiot_collector in Secret trustiot-otel-collector-password (it had none)", "applied migrate/0001_helpers.sql", "applied database/database.sql", "applied clickhouse/0001_databases.sql", "applied clickhouse/0002_telemetry.sql", "applied clickhouse/0003_batch_commits.sql", "applied clickhouse/0004_access.sql", "applied clickhouse/0005_tenant_view.sql", "applied clickhouse/0006_logs.sql", "applied clickhouse/0007_monitoring.sql", "applied clickhouse/0008_telemetry_query.sql", "applied clickhouse/0009_telemetry_query_grantees.sql", "applied clickhouse/0010_gateway_stream_ids.sql", "set the retention of ClickHouse table trustiot.telemetry to 180 days (was 400)", "set the retention of ClickHouse table trustiot.stream_commits to 180 days (was 3650)", "created ClickHouse account trustiot_collector"]
+retention 180 days; telemetry rows kept after the TTL merge:
+old_timestamp_received_now
+received_within_retention
+
+completion records kept after the TTL merge (seq):
+1
+2
+
+retention changes, step by step:
+365 days: ["set the retention of ClickHouse table trustiot.stream_commits to 365 days (was 180)", "set the retention of ClickHouse table trustiot.telemetry to 365 days (was 180)"]
+back to 180 days: ["set the retention of ClickHouse table trustiot.telemetry to 180 days (was 365)", "set the retention of ClickHouse table trustiot.stream_commits to 180 days (was 365)"]
+30 days refused: ClickHouse: clickhouse.raw_retention_days: 30 days is not longer than the gateway buffer's maximum age of 30 days: completion records (the high-water marks) would expire before a gateway stops resending, and resent batches would be written twice; use at least 31 days
+7 days refused: ClickHouse: clickhouse.raw_retention_days: 7 days is not longer than the gateway buffer's maximum age of 30 days: completion records (the high-water marks) would expire before a gateway stops resending, and resent batches would be written twice; use at least 31 days
+TTL changed by hand: ClickHouse: trustiot.telemetry: its TTL `toDateTime(ts) + toIntervalDay(180)` is not one the migration Job manages; an administrator must set it back to `TTL toDateTime(received_at) + toIntervalDay(<days>)` (docs/runbooks/migrations.md)
+after the repair: ["set the retention of ClickHouse table trustiot.telemetry to 180 days (was 200)"]
+test clickhouse_ddl_and_the_collector_account ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 14.12s

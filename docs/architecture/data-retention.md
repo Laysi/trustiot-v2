@@ -8,7 +8,7 @@
 |---|---|---|
 | 閘道器緩衝的最長保存時間 | 30 天 | `crates/protocol` 的 `telemetry::BUFFER_MAX_AGE_DAYS` |
 | 原始資料的保存期限（全平台統一，`trustiot.telemetry`） | 180 天 | `services/ingest/src/retention.rs` 的 `RAW_RETENTION_DAYS` |
-| 批次完成表的保存期限（`trustiot.batch_commits`） | 與原始資料相同（180 天） | 同上；migration Job 讓兩張表一致 |
+| 批次完成表的保存期限（`trustiot.stream_commits`，以閘道器 + 串流為鍵，Laysi/trustiot-v2#639） | 與原始資料相同（180 天） | 同上；migration Job 讓兩張表一致 |
 | 保存期限可設定的範圍 | 31 到 3650 天 | `RawRetention::from_days` |
 
 保存期限一律以伺服器收到資料的時間計算：`telemetry` 用 `received_at`，完成表用 `committed_at`，不用資料本身的時間戳。時鐘未校正的閘道器送來的舊時間戳，不會讓剛收到的資料或高水位提早被清掉（[Laysi/trustiot#180](https://github.com/Laysi/trustiot/issues/180)）；`tools/migrate/tests/clickhouse.rs` 以帶三年前時間戳、剛收到的資料驗證。
@@ -26,7 +26,7 @@
 ## 設定與變更
 
 - 設定：migration Job 的 `TRUSTIOT__CLICKHOUSE__RAW_RETENTION_DAYS`，不設就是 180 天。chart 目前不設它（SaaS 與展示環境都用平台的值）；地端的 values key 由 Laysi/trustiot-v2#446 加入，同樣經過上面的檢查。
-- Job 每次執行都把兩張表的 TTL 對齊設定（先比對、不同才改），不另寫 migration 檔：天數是設定值，不同部署可以不同。`0002_telemetry.sql`、`0003_batch_commits.sql` 建表時的 400 天不改（已套用的檔案不能改），新安裝建表後同一次執行就改成設定的天數。
+- Job 每次執行都把兩張表的 TTL 對齊設定（先比對、不同才改），不另寫 migration 檔：天數是設定值，不同部署可以不同。`0002_telemetry.sql` 建表時的 400 天不改（已套用的檔案不能改），新安裝建表後同一次執行就改成設定的天數。完成表 `stream_commits` 由 `0010_gateway_stream_ids.sql` 以 3650 天（可設定的上限）建立，在 Job 對齊之前也不短於 `telemetry`，同一次執行就改成設定的天數。`0003_batch_commits.sql` 建的舊完成表從 `0010` 起停用（ingest 沒有它的權限，見 [services/ingest](../../services/ingest/README.md#批次完成表-trustiotstream_commits)），Job 不再管它的 TTL，維持停用當時的天數。
 - 變更順序讓完成表任何時刻都不短於原始資料：延長時先改完成表、縮短時先改 `telemetry`。中途失敗時下一次執行接著完成。
 - 表的 TTL 不是 Job 管理的形式（例如有人手動加了條件或改了欄位）時，Job 停止並寫出表名，不覆蓋；處理方式在 [migration Job runbook](../runbooks/migrations.md) 的「原始資料的保存期限」。
 - 改 TTL 時 ClickHouse 在背景執行 `MATERIALIZE TTL`，重寫每個 part 的 TTL 資訊並刪掉過期的列，會占用 I/O 與暫時的磁碟空間；縮短保存期限不會立刻釋放空間。大的表改值前先看磁碟水位。

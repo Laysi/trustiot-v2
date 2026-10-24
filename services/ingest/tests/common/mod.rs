@@ -237,6 +237,20 @@ impl ClickHouse {
         Some(Self::start_container(runtime, client, &[]).await)
     }
 
+    /// A throwaway container of the test's own, whatever `TEST_CLICKHOUSE_URL` says: for a test
+    /// that needs a server on which no migration was applied yet.
+    pub async fn start_fresh() -> Option<Self> {
+        let Some(runtime) = container_runtime() else {
+            unavailable("podman or docker");
+            return None;
+        };
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(60))
+            .build()
+            .expect("build the HTTP client");
+        Some(Self::start_container(runtime, client, &[]).await)
+    }
+
     /// A throwaway container whose data directory is a tmpfs of `size` (for example `256m`), so a
     /// test can fill the server's disk with [`ClickHouse::exec`]. Always a container, whatever
     /// `TEST_CLICKHOUSE_URL` says: a shared server's disk is not the test's to fill.
@@ -419,13 +433,18 @@ impl ClickHouse {
     /// Applies every migration file, statement by statement, as the admin.
     pub async fn apply_migrations(&self) {
         for migration in migrations() {
-            for statement in &migration.statements {
-                if let Err(error) = self.admin(statement).await {
-                    panic!(
-                        "{}: statement failed:\n{statement}\n{}",
-                        migration.name, error.body
-                    );
-                }
+            self.apply(&migration).await;
+        }
+    }
+
+    /// Applies one migration file, statement by statement, as the admin.
+    pub async fn apply(&self, migration: &Migration) {
+        for statement in &migration.statements {
+            if let Err(error) = self.admin(statement).await {
+                panic!(
+                    "{}: statement failed:\n{statement}\n{}",
+                    migration.name, error.body
+                );
             }
         }
     }

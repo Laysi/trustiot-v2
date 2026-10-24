@@ -112,6 +112,7 @@ const ATTACKS: &[Attack] = &[
     // Direct reads of the base tables, and filters on the view.
     attack("base table", "SELECT value_string FROM trustiot.telemetry"),
     attack("batch commits", "SELECT * FROM trustiot.batch_commits"),
+    attack("stream commits", "SELECT * FROM trustiot.stream_commits"),
     attack(
         "view filtered to another tenant",
         "SELECT value_string FROM trustiot.tenant_telemetry WHERE tenant_id = '0199a0b0-c0d0-7e0f-8a1b-2c3d4e5f6a7b'",

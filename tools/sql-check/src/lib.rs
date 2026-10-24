@@ -180,6 +180,13 @@ pub const EXCEPTIONS: &[Exception] = &[
                  SET ROLE NONE as an attack that must fail",
     },
     Exception {
+        path: "services/ingest/tests/migrations.rs",
+        rules: &[Rule::SqlBuiltFromStrings],
+        reason: "ClickHouse, not Postgres, and no sqlx: the upgrade test creates per-run users \
+                 with a password generated at run time (CREATE USER cannot bind it) and writes \
+                 rows in the pre-0010 shape (Laysi/trustiot-v2#639)",
+    },
+    Exception {
         path: "tools/migrate/tests/registry.rs",
         rules: &[Rule::SessionSetting],
         reason: "lists SET ROLE, set_config and pg_settings as text that no service's Postgres \
