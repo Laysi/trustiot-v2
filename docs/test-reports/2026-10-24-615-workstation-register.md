@@ -44,7 +44,7 @@ evidence: forwarded registrations [(201, true), (200, true), (200, false), (200,
 | --- | --- | --- |
 | `tests/register.rs` `a_lost_answer_is_sent_again_and_the_repeat_counts_as_success` | 替身登錄後不回任何 byte 就關連線；工具重送得到 200，以結束碼 0 完成；替身收到 2 個請求，都驗得過簽章、nonce 與簽章都不同、本文相同；紀錄 `registered`、0600；日誌 `started`、`attempt_failed`、`registered` | 通過 |
 | `a_503_is_tried_again_and_the_next_answer_registers` | 503 後重試得到 201；日誌的 `attempt_failed` 是 `status 503` | 通過 |
-| `each_refusal_stops_at_once_with_its_own_exit_code` | 409 的四種金鑰衝突與除役、401、403 `stale`、403 `revoked`、403 `permission_denied`、422：結束碼 10、10、11、11、12、13、14、15、16、17，各只送 1 次，紀錄維持 `pending`，日誌最後是 `stopped`；401 先撤銷 session 再刪檔；`stale` 的訊息帶平台的 `Date` | 通過 |
+| `each_refusal_stops_at_once_with_its_own_exit_code` | 每種拒絕與它的結束碼：409 `public_key_mismatch` → 10、409 `endorsement_key_mismatch` → 10、409 `public_key_in_use` → 11、409 `endorsement_key_in_use` → 11、409 `decommissioned` → 12、401 → 13、403 `stale` → 14、403 `revoked` → 15、403 `signature_invalid` → 19、403 `permission_denied` → 16、422 → 17；各只送 1 次，紀錄維持 `pending`，日誌最後是 `stopped`；401 先撤銷 session 再刪檔；`stale` 的訊息帶平台的 `Date` | 通過 |
 | `an_answer_that_is_not_this_gateways_registration_is_not_recorded` | 回應的硬體 ID、兩個雜湊、CN、憑證公鑰不符，鏈換成根沒簽過的 CA、鏈的第一張不是憑證、鏈只有憑證：結束碼 18、只送 1 次、紀錄維持 `pending` | 通過 |
 | `a_root_certificate_other_than_the_given_fingerprint_is_not_recorded` | `--root-sha256` 不符時 18；整套換成另一個根（本身一致）時，只有釘住的根擋得下，18；以 openssl 格式（大寫、`:` 分隔）的正確指紋重跑完成 | 通過 |
 | `a_rerun_keeps_the_record_and_gets_the_same_registration` | 201 之後重跑 200、同一個序號；第二次的 `started` 記 `recorded_before: true` | 通過 |
@@ -55,6 +55,22 @@ evidence: forwarded registrations [(201, true), (200, true), (200, false), (200,
 | 上面每個測試的 `assert_nothing_secret_shows` | TRACE 下的 stdout 與 stderr、紀錄、暫存檔與日誌，都找不到 cookie、回應 `Set-Cookie` 的值、私鑰的任何一行、任何請求的簽章或 nonce | 通過 |
 | `services/certs/tests/workstation_tool.rs` | 見上方證據行：每個硬體 ID 都是 1 筆登錄、1 張閘道器憑證、1 個 `certs.gateway_registered` 事件；工具的紀錄是 `registered`，序號等於資料庫的 `certificate_serial`；`--root-sha256` 釘的是測試 CA 的根，真的鏈驗得過 | 通過 |
 | 單元測試（`sign`、`retry`、`journal`、`register`） | 簽章以 ring 驗得過、改一個 byte 就驗不過；nonce 22 字元、不重複；退避的步驟 1、2、4、8、16、30 秒與抖動範圍；紀錄 0600 的往返、壞的紀錄被拒絕、權限 0640 的日誌被拒絕；硬體 ID 規則、輸入檢查、指紋格式、`Date` 的提示、鏈只接受 `CERTIFICATE` 區塊 | 通過 |
+
+## 安全審查的修正
+
+獨立的安全審查（對 e60ffb24）沒有 Critical 或 High；Medium 與 Low 都已在後續的 commit 修正。依專案規則，這些修正不另加邊界測試，只更新既有的測試讓它們通過。
+
+| 項目 | 修正 | 既有測試的更新 |
+| --- | --- | --- |
+| M1：根憑證指紋原本是選用，沒有它時能改寫回應的人可以換掉閘道器唯一的信任錨 | `--root-sha256` 必填（沒有替代方式），`Registrar::root_sha256` 不再是 `Option`；紀錄與 `started` 日誌記下釘住的 `root_sha256`。紀錄的格式升為版本 2（必有 `root_sha256`）；先前寫下的版本 1 紀錄照樣讀得了，下次登錄同一個硬體 ID 時改寫成版本 2 | 每個 `tests/register.rs` 的指令都帶替身根憑證的指紋（`a_root_certificate_*` 照舊給自己的）；`a_lost_answer_*` 檢查紀錄的 `root_sha256`；函式庫測試與 `services/certs/tests/workstation_tool.rs` 傳入已知的指紋；`journal` 的單元測試多讀一筆版本 1 的紀錄，並拒絕沒有 `root_sha256` 的版本 2 |
+| L1：403 `workstation_refused` 除了 `stale` 都叫操作員重新 `enroll` | 15 只留給 `revoked`、`expired`、`untrusted`、`not_workstation`；`missing`、`malformed`、`signature_invalid`、`replayed` 與不認得的原因改為結束碼 19，訊息指向改寫標頭的 proxy（或工具的 bug）、請操作員回報 | `each_refusal_*` 的表多一列 `signature_invalid` → 19，結束碼的數量改成 9 |
+| L2：一筆讀不了或過大的紀錄擋住所有登錄 | 記錄前拒絕欄位過大的回應（結束碼 18），`Journal::write` 拒絕超過 256 KiB 的紀錄；重複公鑰掃描讀不了某筆紀錄時，訊息寫出檔案路徑與處理方式 | 無 |
+| L3：寫日誌失敗會取代停止原因 | 停止結果保留原本的種類與結束碼，日誌錯誤附加在訊息後面 | 無 |
+| L4：520–524 與非 M1 的回應沒有指引 | 520–524 和 502–504 一樣重試；500、其他 5xx 與沒有 M1 本文的回應，訊息說平台可能已經登錄、重跑是安全的 | 無 |
+
+I1（簽章不綁定主機名稱，屬於契約的設計）與 I2（不檢查 leaf 與簽發 CA 的效期與 EKU，指紋必填後就不重要了）只是資訊，沒有修改。
+
+修正後在建置主機上（`CI=1`）重跑 `cargo fmt --all --check`、`cargo clippy --locked --workspace --all-targets -- -D warnings` 與 `cargo test --locked -p workstation -p certs -p repo-check --no-fail-fast`，全部通過（workstation 單元測試 44 個、`tests/identity.rs` 4 個、`tests/login.rs` 17 個、`tests/register.rs` 10 個；certs 全部，含 `tests/workstation_tool.rs`；repo-check 全部；clippy 沒有警告），輸出摘錄在 [review-fixes.txt](data/2026-10-24-615-workstation-register/review-fixes.txt)。
 
 ## 結論
 
