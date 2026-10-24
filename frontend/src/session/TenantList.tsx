@@ -12,15 +12,17 @@ import { ROLE_LABELS, tenantName } from "./tenant-name.ts";
 
 /**
  * The user's tenants as a list of buttons, each with the user's role there; choosing one makes it
- * the session's tenant. Used where the session has to land in a tenant before anything else.
+ * the session's tenant. Used where the session has to land in a tenant before anything else. The
+ * buttons are disabled while any switch is in progress, including one from the top bar.
  */
 export function TenantList({ tenants, label }: { tenants: readonly TenantMembership[]; label: string }) {
   const { t, errorMessage } = useI18n();
-  const { switchTenant } = useSession();
+  const { switchTenant, switching } = useSession();
   const [opening, setOpening] = useState<string | null>(null);
   const [error, setError] = useState<unknown>(null);
 
   const choose = async (tenantId: string) => {
+    if (switching) return;
     setOpening(tenantId);
     setError(null);
     try {
@@ -39,7 +41,7 @@ export function TenantList({ tenants, label }: { tenants: readonly TenantMembers
           <li key={tenant.id}>
             <button
               type="button"
-              disabled={opening !== null}
+              disabled={switching}
               onClick={() => void choose(tenant.id)}
               className={cn(
                 "flex w-full items-center gap-3 rounded-lg border bg-card px-4 py-3 text-left text-card-foreground transition-colors hover:bg-accent disabled:opacity-60",

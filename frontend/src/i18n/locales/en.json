@@ -197,6 +197,7 @@
   "settings.sessions.confirm_body": "You'll be signed out here and on every other device and browser. To sign in again on any of them, you'll need a new code from your email.",
   "settings.sessions.cancel": "Cancel",
   "settings.sessions.signing_out": "Signing out…",
+  "settings.sessions.unfinished": "Your other devices aren't signed out yet. Choose Sign out of all devices again.",
 
   "page.home.title": "Home",
   "page.home.body": "Welcome to TrustIoT.",
@@ -219,6 +220,7 @@
   "page.login.resent": "We sent a new code to {email}.",
   "page.login.signed_out": "You signed out.",
   "page.login.signed_out_everywhere": "You signed out on all your devices.",
+  "page.login.sign_out_everywhere_unfinished": "Your other devices aren't signed out yet: this session had already ended, so signing out of all devices didn't go through. Sign in, then choose Sign out of all devices again.",
   "page.login.language": "Language",
   "page.login.cookie_missing": "You signed in, but this browser didn't keep the sign-in. Allow cookies for this site and try again.",
   "page.not_found.title": "Page not found",

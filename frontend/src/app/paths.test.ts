@@ -28,6 +28,38 @@ describe("safeNextPath", () => {
     expect(safeNextPath(raw)).toBe("/");
   });
 
+  // Each passes the check on the raw text, and parsing it (dot segments, `%2e`, `\` read as `/`)
+  // yields a path that starts with `//`, a reserved path or the sign-in page.
+  test.each([
+    "/.//evil.example.test",
+    "/..//evil.example.test",
+    "/%2e%2e//evil.example.test",
+    "/%2E%2E//evil.example.test",
+    "/%2e.//evil.example.test",
+    "/.%2E//evil.example.test",
+    "/%2e//evil.example.test",
+    "/./../..//evil.example.test",
+    "/a/..//evil.example.test?x=1#y",
+    "/./\\evil.example.test",
+    "/.\\/evil.example.test",
+    "/x/../\\evil",
+    "/X/../\\EVIL.EXAMPLE.TEST",
+    "/x/%2E%2E/\\evil.example.test",
+    "/x/../login",
+    "/x/%2e%2e/api/identity/v1/tenants",
+    "/LOGIN",
+    "/Login?next=%2F",
+    "/login/",
+  ])("rejects %p, which parses into another host or a path it may not return to", (raw) => {
+    expect(safeNextPath(raw)).toBe("/");
+  });
+
+  test("normalizes dot segments that stay inside the SPA", () => {
+    expect(safeNextPath("/devices/./42/../43")).toBe("/devices/43");
+    // An encoded backslash is not decoded by the parser, so it stays one path segment.
+    expect(safeNextPath("/./%5Cevil.example.test")).toBe("/%5Cevil.example.test");
+  });
+
   test("loginPath carries the page to return to", () => {
     expect(loginPath("/devices/42?tab=1")).toBe("/login?next=%2Fdevices%2F42%3Ftab%3D1");
     expect(loginPath("/")).toBe("/login");

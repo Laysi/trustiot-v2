@@ -68,6 +68,47 @@ describe("LoginPage", () => {
     expect(browser.cookie).not.toBeNull();
   });
 
+  test.each([
+    "/.//evil.example.test",
+    "/%2e%2e//evil.example.test",
+    "/%2E%2E//EVIL.EXAMPLE.TEST",
+    "/./\\evil.example.test",
+    "/x/../\\evil",
+    "/x/../LOGIN",
+  ])(
+    "a `next` of %p that parses into another host or the sign-in page asks for and goes to the home page",
+    async (raw) => {
+      const { server, browser } = signedOut();
+      const { router } = renderAt(`/login?next=${encodeURIComponent(raw)}`, { identity: browser });
+      await requestCode();
+      await type("Sign-in code", server.outbox.at(-1)?.code ?? "");
+      await press("Sign in");
+      expect(await screen.findByRole("heading", { name: "Home" })).toBeDefined();
+      expect(router.state.location.pathname).toBe("/");
+      const verify = server.requests.find((request) => request.operation === "verifyCode")?.input as {
+        redirectTo?: string;
+      };
+      expect(verify.redirectTo).toBe("/");
+    },
+  );
+
+  test("a `redirect_to` from the server that parses into another host goes to the home page", async () => {
+    const { server, browser } = signedOut();
+    const answering = {
+      ...browser,
+      verifyCode: async (input: Parameters<typeof browser.verifyCode>[0]) => {
+        await browser.verifyCode(input);
+        return { redirectTo: "/.//evil.example.test" };
+      },
+    };
+    const { router } = renderAt("/login", { identity: answering });
+    await requestCode();
+    await type("Sign-in code", server.outbox.at(-1)?.code ?? "");
+    await press("Sign in");
+    expect(await screen.findByRole("heading", { name: "Home" })).toBeDefined();
+    expect(router.state.location.pathname).toBe("/");
+  });
+
   test("signing in again while signed in moves on too, even when the session reads the same", async () => {
     const { server, browser } = signedInBrowser();
     const before = browser.cookie;

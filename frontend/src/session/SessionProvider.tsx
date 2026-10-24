@@ -31,6 +31,11 @@ export interface SessionContextValue {
    * shows the previous tenant's data while the new tenant's loads.
    */
   switchTenant(tenantId: string): Promise<void>;
+  /**
+   * Whether a tenant switch is in progress, from any of the places that offer one. They all stay
+   * disabled meanwhile, so the user cannot start a second switch while the first is open.
+   */
+  switching: boolean;
   /** Whether a request of the active tenant was refused because the tenant is suspended. */
   suspended: boolean;
   /** Ends this browser's session, or every session of the user. */
@@ -70,14 +75,18 @@ export function SessionProvider({ source, children }: { source: SessionSource; c
   const [suspendedTenant, setSuspendedTenant] = useState<string | null>(null);
   const activeTenant = session?.activeTenant?.id ?? null;
 
+  const [pendingSwitches, setPendingSwitches] = useState(0);
+
+  // One switch at a time, in the order asked: the scope holds a later switch until the earlier one
+  // has finished, onSuccess included, so the server handles them in that order and each answer is
+  // cached before the next request leaves. The cached session is then the server's last answer;
+  // without the scope, the answer to an earlier switch could arrive last and be cached over the
+  // tenant the server ended up in.
   const { mutateAsync: switchOnServer } = useMutation({
     mutationFn: (tenantId: string) => source.switchTenant(tenantId),
+    scope: { id: "session.switch_tenant" },
     meta: { switchesTenant: true },
-  });
-
-  const switchTenant = useCallback(
-    async (tenantId: string) => {
-      const next = await switchOnServer(tenantId);
+    onSuccess: async (next) => {
       // The preferences are the user's and stay valid; cancelling their first read would leave it
       // pending for good (nothing refetches a query that never goes stale). The session is
       // cancelled too: a read that started before the switch must not replace its answer.
@@ -88,7 +97,18 @@ export function SessionProvider({ source, children }: { source: SessionSource; c
       // new tenant. Refetch errors reach the query cache's handler like any other.
       void queryClient.resetQueries({ predicate: (cached) => !isUserQuery(cached.queryKey) });
     },
-    [queryClient, switchOnServer],
+  });
+
+  const switchTenant = useCallback(
+    async (tenantId: string) => {
+      setPendingSwitches((count) => count + 1);
+      try {
+        await switchOnServer(tenantId);
+      } finally {
+        setPendingSwitches((count) => count - 1);
+      }
+    },
+    [switchOnServer],
   );
 
   const forgetCached = useCallback(async () => {
@@ -122,8 +142,8 @@ export function SessionProvider({ source, children }: { source: SessionSource; c
   // What a refused request says about the session, whichever request the page made. A 401 means
   // the session ended (signed out on another device, expired): the user's cached data goes, and
   // the signed-in layout sends them to sign in. A request that answers its own 401s (the sign-in
-  // form) says so in its meta. tenant_suspended (403) means the active tenant is suspended; a
-  // tenant switch's own refusal is the switch's error, not that.
+  // form, signing out everywhere) says so in its meta. tenant_suspended (403) means the active
+  // tenant is suspended; a tenant switch's own refusal is the switch's error, not that.
   useEffect(() => {
     const onError = (error: unknown, meta: RequestMeta | undefined) => {
       const kind = classifyError(error);
@@ -153,6 +173,7 @@ export function SessionProvider({ source, children }: { source: SessionSource; c
   }, [query.refetch]);
 
   const suspended = suspendedTenant !== null && suspendedTenant === activeTenant;
+  const switching = pendingSwitches > 0;
   const value = useMemo<SessionContextValue>(
     () => ({
       status,
@@ -160,12 +181,13 @@ export function SessionProvider({ source, children }: { source: SessionSource; c
       error: query.error,
       reload,
       switchTenant,
+      switching,
       suspended,
       endSession,
       forget,
       signedIn,
     }),
-    [status, session, query.error, reload, switchTenant, suspended, endSession, forget, signedIn],
+    [status, session, query.error, reload, switchTenant, switching, suspended, endSession, forget, signedIn],
   );
   return <SessionContext.Provider value={value}>{children}</SessionContext.Provider>;
 }

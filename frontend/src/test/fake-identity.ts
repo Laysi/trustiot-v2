@@ -74,6 +74,7 @@ export class FakeIdentity {
   private readonly codes = new Map<string, string>();
   private readonly failures = new Map<Operation, unknown[]>();
   private readonly holds = new Map<Operation, Promise<void>[]>();
+  private readonly answerHolds = new Map<Operation, Promise<void>[]>();
   private ids = 0;
 
   private nextId(prefix: string): string {
@@ -120,6 +121,16 @@ export class FakeIdentity {
     this.holds.set(operation, queue);
   }
 
+  /**
+   * The next `operation` is carried out at once, but its answer waits for `until`: the server has
+   * already changed its state when the answer is still on its way.
+   */
+  holdNextAnswer(operation: Operation, until: Promise<void>): void {
+    const queue = this.answerHolds.get(operation) ?? [];
+    queue.push(until);
+    this.answerHolds.set(operation, queue);
+  }
+
   /** A session made directly, as `bun scripts/dev.ts seed` does; returns its cookie. */
   createSession(email: string, activeTenant: FakeTenant | null = null): string {
     const user = this.users.get(email);
@@ -139,7 +150,12 @@ export class FakeIdentity {
       if (hold) await hold;
       const failure = this.failures.get(operation)?.shift();
       if (failure !== undefined) throw failure;
-      return respond();
+      const answerHold = this.answerHolds.get(operation)?.shift();
+      try {
+        return respond();
+      } finally {
+        if (answerHold) await answerHold;
+      }
     };
 
     const current = (): { session: FakeSession; user: FakeUser } => {

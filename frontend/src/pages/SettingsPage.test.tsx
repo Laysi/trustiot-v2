@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
-
-import { unauthenticated, unavailable, validationFailed } from "../test/fake-identity.ts";
+import { signOutEverywhereUnfinished } from "../session/useSignOut.ts";
+import { unavailable, validationFailed } from "../test/fake-identity.ts";
 import { memoryPreferences, renderAt, signedInBrowser } from "../test/render.tsx";
 
 afterEach(() => {
@@ -227,9 +227,20 @@ describe("signing out", () => {
     expect(router.state.location.pathname).toBe("/settings");
   });
 
-  test("of all devices when this session had already ended sends the user to sign in", async () => {
-    const { server, router } = await openSettings();
-    server.failNext("logOutEverywhere", unauthenticated());
+  test("of all devices when this session had already ended says the others are still signed in, before and after signing in again", async () => {
+    const { server, user, browser, router } = await openSettings();
+    const tenant = server.tenants.values().next().value ?? null;
+    const other = server.browser(server.createSession(user.email, tenant));
+    // This browser's session expires while the page is open; the other device's does not.
+    const own = server.sessions.get(browser.cookie ?? "");
+    if (own) own.ended = true;
+    // Every visit to the sign-in page, with its history state: the shared 401 handling must not
+    // send the user there too, without the notice (two navigations race, and either may win).
+    const loginVisits: unknown[] = [];
+    router.subscribe((state) => {
+      if (state.location.pathname === "/login") loginVisits.push(state.location.state);
+    });
+
     await act(async () => {
       fireEvent.click(screen.getByRole("button", { name: "Sign out of all devices" }));
     });
@@ -237,8 +248,39 @@ describe("signing out", () => {
     await act(async () => {
       fireEvent.click(within(dialog).getByRole("button", { name: "Sign out of all devices" }));
     });
-    await waitFor(() => expect(router.state.location.pathname).toBe("/login"));
-    expect(router.state.location.search).toBe("?next=%2Fsettings");
+
+    const unfinished =
+      "Your other devices aren't signed out yet: this session had already ended, so signing out of all devices didn't go through. Sign in, then choose Sign out of all devices again.";
+    expect(await screen.findByText(unfinished)).toBeDefined();
+    expect(`${router.state.location.pathname}${router.state.location.search}`).toBe("/login?next=%2Fsettings");
+    expect(screen.queryByText("You signed out on all your devices.")).toBeNull();
+    expect(loginVisits.length).toBeGreaterThan(0);
+    expect(loginVisits.every((state) => signOutEverywhereUnfinished(state))).toBe(true);
+    expect(await other.loadSession()).not.toBeNull();
+
+    // Signing in again: the notice stays through the code step, and the settings page repeats it.
+    await act(async () => {
+      fireEvent.change(screen.getByLabelText("Email"), { target: { value: user.email } });
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Send code" }));
+    });
+    const code = await screen.findByLabelText("Sign-in code");
+    expect(screen.getByText(unfinished)).toBeDefined();
+    await act(async () => {
+      fireEvent.change(code, { target: { value: server.outbox.at(-1)?.code ?? "" } });
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
+    });
+    expect(await screen.findByRole("heading", { name: "Settings" })).toBeDefined();
+    expect(router.state.location.pathname).toBe("/settings");
+    const sessions = screen.getByRole("region", { name: "Signed-in devices" });
+    expect(
+      within(sessions).getByText("Your other devices aren't signed out yet. Choose Sign out of all devices again."),
+    ).toBeDefined();
+    expect(screen.queryByText("You signed out on all your devices.")).toBeNull();
+    expect(await other.loadSession()).not.toBeNull();
   });
 
   test("of this browser from the account menu leaves the other sessions alone", async () => {

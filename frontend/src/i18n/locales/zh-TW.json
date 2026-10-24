@@ -197,6 +197,7 @@
   "settings.sessions.confirm_body": "這裡以及其他所有裝置與瀏覽器都會登出。之後在任何一台重新登入，都需要 email 收到的新驗證碼。",
   "settings.sessions.cancel": "取消",
   "settings.sessions.signing_out": "登出中…",
+  "settings.sessions.unfinished": "其他裝置還沒登出，請再按一次「登出所有裝置」。",
 
   "page.home.title": "首頁",
   "page.home.body": "歡迎使用 TrustIoT。",
@@ -219,6 +220,7 @@
   "page.login.resent": "已重新寄送驗證碼到 {email}。",
   "page.login.signed_out": "你已登出。",
   "page.login.signed_out_everywhere": "你已登出所有裝置。",
+  "page.login.sign_out_everywhere_unfinished": "其他裝置還沒登出：這個工作階段已經結束，所以登出所有裝置沒有完成。登入後請再按一次「登出所有裝置」。",
   "page.login.language": "語言",
   "page.login.cookie_missing": "已登入，但這個瀏覽器沒有保留登入狀態。請允許這個網站使用 cookie 後再試一次。",
   "page.not_found.title": "找不到頁面",

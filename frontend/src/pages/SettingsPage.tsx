@@ -1,5 +1,6 @@
-import { CircleCheckIcon, LogOutIcon, MonitorSmartphoneIcon } from "lucide-react";
+import { CircleCheckIcon, LogOutIcon, MonitorSmartphoneIcon, TriangleAlertIcon } from "lucide-react";
 import { useMemo, useState } from "react";
+import { useLocation } from "react-router";
 
 import { Alert, AlertDescription } from "../components/ui/alert.tsx";
 import {
@@ -28,7 +29,7 @@ import {
   THEMES,
 } from "../preferences/preferences.ts";
 import { useSession } from "../session/SessionProvider.tsx";
-import { useSignOut } from "../session/useSignOut.ts";
+import { signOutEverywhereUnfinished, useSignOut } from "../session/useSignOut.ts";
 
 /** The personal settings: preferences (saved to the account), the account, and every session. */
 export function SettingsPage() {
@@ -226,17 +227,28 @@ function AccountCard() {
   );
 }
 
-/** Signing out of every device, behind a confirmation: it cannot be undone from here. */
+/**
+ * Signing out of every device, behind a confirmation: it cannot be undone from here. After an
+ * attempt that found this session already ended, the sign-in page returns here saying the other
+ * devices are still signed in.
+ */
 function SessionsCard() {
   const { t, errorMessage } = useI18n();
   const signOut = useSignOut();
+  const unfinished = signOutEverywhereUnfinished(useLocation().state);
   return (
     <Card aria-labelledby="settings-sessions">
       <CardHeader>
         <CardTitle id="settings-sessions">{t("settings.sessions.title")}</CardTitle>
         <CardDescription>{t("settings.sessions.description")}</CardDescription>
       </CardHeader>
-      <CardContent>
+      <CardContent className="grid justify-items-start gap-4">
+        {unfinished ? (
+          <Alert variant="destructive">
+            <TriangleAlertIcon />
+            <AlertDescription>{t("settings.sessions.unfinished")}</AlertDescription>
+          </Alert>
+        ) : null}
         <AlertDialog onOpenChange={(open) => open && signOut.reset()}>
           <AlertDialogTrigger asChild>
             <Button variant="outline" className="text-destructive hover:text-destructive">

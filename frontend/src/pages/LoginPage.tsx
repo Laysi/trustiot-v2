@@ -1,5 +1,5 @@
 import { useMutation } from "@tanstack/react-query";
-import { ArrowLeftIcon, CircleCheckIcon, GlobeIcon, MailIcon } from "lucide-react";
+import { ArrowLeftIcon, CircleCheckIcon, GlobeIcon, MailIcon, TriangleAlertIcon } from "lucide-react";
 import { type FormEvent, useEffect, useId, useRef, useState } from "react";
 import { useLocation, useNavigate, useSearchParams } from "react-router";
 
@@ -23,7 +23,7 @@ import { usePreferences } from "../preferences/PreferencesProvider.tsx";
 import { LANGUAGES } from "../preferences/preferences.ts";
 import { useSession } from "../session/SessionProvider.tsx";
 import type { SessionInfo } from "../session/session.ts";
-import { signedOutScope } from "../session/useSignOut.ts";
+import { SIGN_OUT_EVERYWHERE_UNFINISHED, signedOutScope, signOutEverywhereUnfinished } from "../session/useSignOut.ts";
 
 /** The code arrived by email: where it went, and what the server said about it. */
 interface CodeStep {
@@ -45,6 +45,7 @@ export function LoginPage() {
   const [params] = useSearchParams();
   const next = safeNextPath(params.get("next"));
   const signedOut = signedOutScope(location.state);
+  const unfinished = signOutEverywhereUnfinished(location.state);
   const [step, setStep] = useState<CodeStep | null>(null);
 
   return (
@@ -59,11 +60,25 @@ export function LoginPage() {
             </AlertDescription>
           </Alert>
         ) : null}
+        {unfinished ? (
+          // Through both steps: it is what the user has to do once signed in.
+          <Alert variant="destructive">
+            <TriangleAlertIcon />
+            <AlertDescription>{t("page.login.sign_out_everywhere_unfinished")}</AlertDescription>
+          </Alert>
+        ) : null}
         {step === null ? (
           <EmailStep onSent={setStep} />
         ) : (
           // Keyed by the send time: a new code starts the step afresh, without the old code or error.
-          <CodeStepForm key={step.sentAt} step={step} next={next} onResent={setStep} onBack={() => setStep(null)} />
+          <CodeStepForm
+            key={step.sentAt}
+            step={step}
+            next={next}
+            arrivalState={unfinished ? SIGN_OUT_EVERYWHERE_UNFINISHED : undefined}
+            onResent={setStep}
+            onBack={() => setStep(null)}
+          />
         )}
       </main>
       <LanguagePicker />
@@ -162,11 +177,14 @@ function useSecondsUntil(deadline: number): number {
 function CodeStepForm({
   step,
   next,
+  arrivalState,
   onResent,
   onBack,
 }: {
   step: CodeStep;
   next: string;
+  /** The history state of the page reached after sign-in, which reads it (SettingsPage). */
+  arrivalState: unknown;
   onResent: (step: CodeStep) => void;
   onBack: () => void;
 }) {
@@ -203,9 +221,9 @@ function CodeStepForm({
   // send the user back here.
   useEffect(() => {
     if (arrival !== null && session === arrival.session) {
-      void navigate(arrival.path, { replace: true });
+      void navigate(arrival.path, { replace: true, state: arrivalState });
     }
-  }, [arrival, session, navigate]);
+  }, [arrival, session, navigate, arrivalState]);
 
   // The code field takes focus when this step opens (a new code opens it afresh: see LoginPage).
   useEffect(() => {

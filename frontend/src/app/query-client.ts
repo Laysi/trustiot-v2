@@ -9,7 +9,8 @@ export const MAX_RETRIES = 3;
 export interface RequestMeta extends Record<string, unknown> {
   /**
    * The caller answers a 401 itself instead of being sent to sign in: the sign-in form, where a
-   * wrong code is a 401.
+   * wrong code is a 401, and signing out everywhere, which says the other devices are still
+   * signed in.
    */
   handlesUnauthenticated?: boolean;
   /** A tenant switch: its refusal is the switch's error, not a sign that the active tenant is suspended. */

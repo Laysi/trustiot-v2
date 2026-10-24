@@ -120,8 +120,8 @@ export function identityApi(client: ApiClient): IdentityApi {
     },
 
     async logOutEverywhere() {
-      // A 401 is not swallowed here: this session has ended, but the others may not have, so the
-      // user is sent to sign in and can try again (app/query-client.ts).
+      // A 401 is not swallowed here: this session has ended, but the others have not, so the
+      // caller tells the user to sign in and try again (session/useSignOut.ts).
       await unwrap(z.undefined(), client.DELETE("/api/identity/v1/sessions"));
     },
 

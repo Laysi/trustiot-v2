@@ -18,13 +18,13 @@ import { ROLE_LABELS, tenantName } from "./tenant-name.ts";
 
 /**
  * The active tenant in the top bar. With more than one tenant it opens a menu of them; the
- * active one is checked, and choosing another switches the session (SessionProvider).
+ * active one is checked, and choosing another switches the session (SessionProvider). It is
+ * disabled while any switch is in progress, this one's or a tenant list's on the page.
  */
 export function TenantSwitcher() {
   const { t } = useI18n();
-  const { session, switchTenant } = useSession();
+  const { session, switchTenant, switching } = useSession();
   const [failed, setFailed] = useState(false);
-  const [switching, setSwitching] = useState(false);
 
   if (session === null || session.tenants.length === 0) {
     return null;
@@ -42,15 +42,12 @@ export function TenantSwitcher() {
   }
 
   const choose = async (tenantId: string) => {
-    if (tenantId === active?.id) return;
+    if (tenantId === active?.id || switching) return;
     setFailed(false);
-    setSwitching(true);
     try {
       await switchTenant(tenantId);
     } catch {
       setFailed(true);
-    } finally {
-      setSwitching(false);
     }
   };
 
