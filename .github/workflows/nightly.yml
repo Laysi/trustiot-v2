@@ -70,6 +70,8 @@ on:
       - crates/service-kit/**
       - crates/testkit/**
       - crates/webpki-roots-empty/**
+      # A dev-dependency of services/certs (tests/workstation_tool.rs).
+      - factory/workstation/**
       - services/ingest/src/retention.rs
       - deploy/chart/**
       - deploy/cloudnative-pg/**
