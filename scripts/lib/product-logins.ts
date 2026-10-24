@@ -12,7 +12,7 @@
  * The services of `PRODUCT`, in the registry's order: each has a `<schema>_app` login role.
  * Add a service here in the same change that adds it to `PRODUCT`.
  */
-export const PRODUCT_SERVICES: readonly string[] = ["identity", "assets", "telemetry-query", "certs", "assistant"];
+export const PRODUCT_SERVICES: readonly string[] = ["identity", "assets", "telemetry-query", "certs", "assistant", "ingest"];
 
 /**
  * The services whose platform role logs in, as the chart binds them
@@ -21,7 +21,7 @@ export const PRODUCT_SERVICES: readonly string[] = ["identity", "assets", "telem
  * and certs, which writes the platform-wide factory registration event (Laysi/trustiot-v2#79).
  * A platform role not listed here stays NOLOGIN on purpose.
  */
-export const PLATFORM_LOGIN_SERVICES: readonly string[] = ["assets", "certs", "identity", "telemetry-query"];
+export const PLATFORM_LOGIN_SERVICES: readonly string[] = ["assets", "certs", "identity", "ingest", "telemetry-query"];
 
 export interface ProductLogin {
   /** The service's chart key, for example `telemetry-query`. */

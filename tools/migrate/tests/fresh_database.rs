@@ -145,8 +145,8 @@ async fn a_fresh_database_gets_every_migration_once() {
     }
     // Only identity_app is bound here: this deployment gives identity's platform role no Secret
     // (the chart binds one for the event log's consumer, Laysi/trustiot-v2#130), and the assets,
-    // telemetry-query, certs and assistant services are not part of it, so their roles stay
-    // NOLOGIN.
+    // telemetry-query, certs, assistant and ingest services are not part of it, so their roles
+    // stay NOLOGIN.
     assert_eq!(
         report.roles_without_password,
         [
@@ -157,7 +157,9 @@ async fn a_fresh_database_gets_every_migration_once() {
             "telemetry_query_platform",
             "certs_app",
             "certs_platform",
-            "assistant_app"
+            "assistant_app",
+            "ingest_app",
+            "ingest_platform"
         ]
     );
     let first = db.password("identity_app");

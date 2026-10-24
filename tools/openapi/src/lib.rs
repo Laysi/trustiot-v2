@@ -76,8 +76,8 @@ pub const SERVICES: &[Source] = &[
 /// example). Listing one here is a decision to review.
 pub const SERVICES_WITHOUT_API: &[&str] = &[
     // Takes gateway telemetry from MQTT and writes it to ClickHouse; no HTTP API besides the
-    // health endpoints (docs/architecture/deployment.md). Until Laysi/trustiot-v2#91 builds the
-    // service, the crate only holds the ClickHouse schema.
+    // health endpoints (docs/architecture/deployment.md). It talks to gateways over MQTT and to
+    // the assets service through its events (Laysi/trustiot-v2#640).
     "ingest",
     // Serves the SPA's static files (frontend/) on the app host; no API besides the health
     // endpoints (Laysi/trustiot-v2#123, services/web/README.md).

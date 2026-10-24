@@ -1,6 +1,6 @@
 # ingest（資料接收）
 
-閘道器的遙測資料經 MQTT 寫進 ClickHouse，整批落盤後才回確認（決策 8、清單 I1）。服務本身在 Laysi/trustiot-v2#91 實作；目前這個 crate 只放 ClickHouse 的 schema 與它的測試（Laysi/trustiot-v2#59）。
+閘道器的遙測資料經 MQTT 寫進 ClickHouse，整批落盤後才回確認（決策 8、清單 I1）。服務在 Laysi/trustiot-v2#91 底下分段實作：2026-10-24 起有服務骨架、Postgres schema 與閘道器綁定對照表（Laysi/trustiot-v2#640，見[服務與設定](#服務與設定)、[閘道器綁定對照表](#閘道器綁定對照表)）；MQTT 的訂閱、寫入與確認是 Laysi/trustiot-v2#641，映像與 chart 的部署是 Laysi/trustiot-v2#642。這個 crate 也放 ClickHouse 的 schema 與它的測試（Laysi/trustiot-v2#59）。
 
 ## 閘道器的租戶歸屬
 
@@ -11,6 +11,93 @@
 - 不認得的閘道器（還沒綁定，或對照表還沒收到事件）回 `retry`、不寫入。
 - 串流以「topic 的閘道器 + 串流 ID」為鍵（遙測規則 3）；完成紀錄記下寫入當時的租戶與 `binding_id`，供追查用（Laysi/trustiot-v2#639）。
 - 改綁時閘道器一定換新的 SD 卡，新卡使用新的串流 ID，所以 ingest 不另外拒收舊綁定下採集的批次；這個前提與它的限制見決策 12。
+
+## 服務與設定
+
+`cargo run -p ingest`（`src/main.rs`）以 `crates/service-kit` 啟動：設定、JSON 日誌、`/healthz`、`/readyz`、指標與優雅關閉都照 service-kit。服務沒有 HTTP API，只有健康檢查的端點（`tools/openapi` 的 `SERVICES_WITHOUT_API`）。啟動時建立兩個 Postgres 連線池（都是 lazy 連線，連線前做 service-kit 的 session 檢查）與 ClickHouse 的用戶端，並啟動 `assets.gateway_bound` 的消費端。
+
+readiness 在下列全部成立時才是 200：
+
+- `postgres`：服務角色與平台角色都能開出通過檢查的 session；
+- migration 檢查：資料庫有這個版本預期的每個 Postgres migration 檔（`src/schema.rs`）；
+- `clickhouse`：ClickHouse 以服務帳號回答 `SELECT 1`。這個檢查涵蓋位址、TLS 與帳密，不涵蓋帳號的權限：寫入路徑（Laysi/trustiot-v2#641）會把缺少的權限當成那條語句的錯誤回報。不用碰表的語句，readiness 就不依賴 ClickHouse 的表名（Laysi/trustiot-v2#639 正在改表）。
+
+每個檢查最多 800 毫秒（service-kit），失敗時日誌 WARN `readiness check failed` 帶檢查名稱與原因；原因只有連線錯誤的種類或 ClickHouse 的錯誤代碼，不含回應內文與密碼。
+
+設定（`src/config.rs`，`TRUSTIOT__*` 段落都是 `deny_unknown_fields`；MQTT 的設定由 Laysi/trustiot-v2#641 加上，chart 的變數由 Laysi/trustiot-v2#642 渲染）：
+
+| 變數 | 說明 |
+| --- | --- |
+| `TRUSTIOT_POSTGRES_HOST`、`_PORT`、`_DATABASE`、`_SSLMODE`、`_CA_FILE` | 平台設定：Postgres 位置；只接受 `verify-full`，只信任這個 CA。本機開發由 `bun scripts/dev.ts env` 印出 |
+| `TRUSTIOT__DATABASE__USERNAME`、`_PASSWORD` | 服務角色 `ingest_app` 的帳密（本機開發是 `TRUSTIOT_DEV_INGEST_DATABASE_*`） |
+| `TRUSTIOT__DATABASE__PLATFORM_USERNAME`、`_PLATFORM_PASSWORD` | 平台角色 `ingest_platform` 的帳密，必須是另一個角色（本機開發是 `TRUSTIOT_DEV_INGEST_PLATFORM_DATABASE_*`） |
+| `TRUSTIOT__DATABASE__MAX_CONNECTIONS` | 服務角色連線池每個副本的上限，2–100，預設 10。平台角色的連線池固定 4 條（`PLATFORM_CONNECTIONS`：消費端讀事件、readiness、寫入路徑的查詢）。chart 的連線預算（`deploy/chart/templates/_postgres.tpl`）在 Laysi/trustiot-v2#642 加入 |
+| `TRUSTIOT_CLICKHOUSE_URL` | 平台設定：ClickHouse 的 HTTP 介面，`http://host:port`（chart 內建的 ClickHouse，走 mesh 的 mTLS）或 `https://host:port`（外部），不能帶帳密、路徑、查詢字串 |
+| `TRUSTIOT_CLICKHOUSE_CA_FILE` | 平台設定：`https` 時必填，是唯一信任的 CA，並檢查伺服器憑證的名稱（相當於 `verify-full`）；不信任系統或公開的根憑證 |
+| `TRUSTIOT__CLICKHOUSE__USERNAME`、`_PASSWORD` | 服務的 ClickHouse 寫入帳號，持有角色 `trustiot_ingest`（見下方的角色表）；帳號與密碼的交付是 Laysi/trustiot-v2#642 |
+
+ClickHouse 的用戶端（`src/clickhouse.rs`、`src/transport.rs`）複製自 telemetry-query：HTTP/1.1 走 hyper，`https` 以 rustls 與 ring、只信任設定的 CA；每個請求一條連線，單一請求最多 30 秒。三個複本（migration Job、telemetry-query、ingest）合成一個 crate 是之後的工作。
+
+## Postgres schema 與角色
+
+schema `ingest`，DDL 在 `migrations/postgres/`，由 migration Job 套用（`tools/migrate/src/registry.rs` 的 `PRODUCT`：有平台角色、消費 `assets` 的事件）；檔案清單在 `src/schema.rs`，readiness 檢查同一份。消費端的表在 ingest 自己的 schema（決策 4）。寫入路徑之後以 Postgres 的 advisory lock 讓一個串流同時只由一個副本處理（Laysi/trustiot-v2#641）。
+
+| 角色 | 權限 |
+| --- | --- |
+| `ingest_owner` | migration 角色，擁有 schema 與表；服務不用它登入 |
+| `ingest_app` | 服務角色：`gateway_bindings` 的 `SELECT`、`INSERT`（RLS 只開放交易的租戶），消費端的記錄表，`trustiot_migrate_applied` 的讀取 |
+| `ingest_platform` | 平台角色：`assets.outbox_event` 的讀取（Job 依 registry 設定），`gateway_bindings` 的 `SELECT`（`platform_access` policy，只有 `FOR SELECT`）；沒有任何寫入權限 |
+
+| 表 | 內容 | RLS |
+| --- | --- | --- |
+| `gateway_bindings` | 閘道器綁定對照表，見下一節 | `tenant_isolation`，加上給 `ingest_platform` 的 `platform_access`（`FOR SELECT`） |
+| `outbox_subscription`、`outbox_inbox`、`outbox_dead_letter`、`outbox_version` | 消費端的記錄（Job 建立） | 無：不是租戶資料 |
+| `trustiot_migrate_applied` | Job 套用過的檔案，服務角色只讀 | 無：不是租戶資料 |
+
+## 閘道器綁定對照表
+
+`ingest.gateway_bindings`（`migrations/postgres/0001_ingest.sql`、`src/bindings.rs`）是遙測資料唯一的租戶來源（決策 8、12）。來源是資產服務的 `assets.gateway_bound`（`crates/contract/src/events/assets.rs`，Laysi/trustiot-v2#101）；訂閱名稱 `ingest.assets-events`，不改名（改名會從頭重讀事件）。新的訂閱從事件紀錄的開頭讀起（`crates/outbox` 的預設），所以 ingest 部署之前就有的綁定也會進對照表。
+
+| 欄位 | 說明 |
+| --- | --- |
+| `tenant_id`、`binding_id` | 主鍵。租戶取自事件信封的 `tenant_id`（資產服務寫入時 RLS 檢查過的租戶，消費端也以它開交易），不取自 payload |
+| `hardware_id` | 閘道器的硬體 ID，與 `crates/protocol` 的 `GatewayId` 同一個格式（CHECK） |
+| `bound_at` | 事件的 `occurred_at`：資產服務綁定的時間 |
+| `unbound_at` | 綁定結束的時間，留給 Laysi/trustiot-v2#115 的解綁事件；目前沒有程式寫入 |
+| `recorded_at` | ingest 記下這筆的時間（資料庫時鐘） |
+
+一筆綁定一列，不是一台閘道器一列：綁定是租戶的資料，在事件的租戶交易裡寫入；閘道器解綁後綁到另一個租戶時（Laysi/trustiot-v2#115），新的綁定是另一個租戶的新一列，舊的留在原租戶。以硬體 ID 為鍵的單列表做不到這件事，因為新租戶的交易看不到也改不了舊租戶的列。
+
+消費端（`GatewayBoundHandler`）：
+
+- 只處理 `assets.gateway_bound`，資產服務的其他事件略過。
+- `INSERT ... ON CONFLICT (tenant_id, binding_id) DO NOTHING`：同一個事件再送一次、整個訂閱重播（`Replay::Reprocess`），都只有一列，原本那列不被改寫。
+- 已有同一個綁定、卻是另一台閘道器的事件（不可能是同一個事件的重送），以及沒有租戶、解不開（版本比這個 build 新的除外：那種照 `crates/outbox` 的規則重試到服務升級）或表拒收其值（SQLSTATE 22 類、CHECK）的事件，每次重試都會失敗，所以記進 dead letter，後面的事件照常處理。其他資料庫錯誤（斷線、切換）照 `crates/outbox` 的規則重試。
+- 每次處理以 INFO 記錄 `applied assets.gateway_bound`，帶硬體 ID、`binding_id`、租戶、事件 ID 與是否新增。
+
+查詢（`GatewayBindings::gateway_tenant(hardware_id) -> Option<GatewayTenant>`，`GatewayTenant` 是租戶與 `binding_id`）：取該硬體 ID 最新的一筆綁定（依 `bound_at`，同時間再依 UUIDv7 的 `binding_id`），那筆還沒結束才回答，否則是 `None`。所以較舊的綁定事件晚到（重播、dead letter 重送）只會在它自己的租戶多一列，不會蓋過較新的綁定；舊綁定也不會在新綁定結束之後重新生效。`None` 與查詢失敗時，寫入路徑回 `retry`、不寫入（決策 8）。
+
+### 跨租戶的查詢為什麼用平台角色（決策 29）
+
+「硬體 ID → 租戶」本質上是跨租戶的查詢：topic 只有閘道器，還不知道租戶。issue 允許兩種做法，這裡比照資產服務自己的 `assets.gateway_bindings`，採用「租戶資料表 + 平台角色唯讀查詢」，不採用「不含租戶資料的表」：
+
+- 綁定是租戶的資料，由租戶的事件寫入；放在沒有 RLS 的表，服務角色的每一筆租戶交易都讀得到每台閘道器屬於哪個租戶，等於把跨租戶的讀取權給了所有程式路徑。現在只有平台角色讀得到，而且只能讀。
+- 平台角色的查詢經 `PlatformReader`：每筆都是 `READ ONLY` 交易，資料庫拒絕任何寫入；`ingest_platform` 本來就沒有這張表的 `INSERT`、`UPDATE`、`DELETE`。reader 建立時以 INFO 記一次（actor 是 ingest 服務、purpose `gateway-tenant`），每次查詢只記 DEBUG，因為寫入路徑每一批都會查。
+- `platform_access` 只有 `FOR SELECT`、條件是 `true`（只用表自己的欄位），符合 service-kit 連線檢查對平台角色的要求。
+- 依硬體 ID 查詢的索引 `gateway_bindings_by_gateway` 不以 `tenant_id` 開頭，這是刻意的例外：它回答的問題本身就跨租戶。
+- certs 的同一份投影（Laysi/trustiot-v2#632）在本 issue 實作時還沒進 main，所以依資產服務與決策 29 決定；兩邊的做法若之後不同，以決策 29 為準統一。
+
+### 測試
+
+需要 podman 或 docker（沒有時略過，設了 `CI` 時改為失敗）：
+
+- `tests/startup.rs`：真的 binary 以 `testkit::product` 的 Postgres（平台設定與 `bun scripts/dev.ts env` 給的變數相同）與 `tests/common` 的 ClickHouse（套用全部 ClickHouse migration，建立持有 `trustiot_ingest` 的帳號）啟動。兩者都連得上時 `/readyz` 是 200；ClickHouse 連不上、ClickHouse 拒絕密碼、Postgres 連不上時都不是 200，日誌點名失敗的檢查，也不含密碼。
+- `tests/gateway_bindings.rs`：以資產服務自己的 `GatewayBinder` 綁定閘道器，ingest 的表有該租戶與 `binding_id`，查詢回答它們；整個訂閱重播與同一個綁定的重複事件都只有一列；較舊的綁定事件晚到不蓋過較新的，較新的會取代；無法記錄的事件進 dead letter、後面的事件照常處理；平台角色寫不進這張表。
+- `tests/cross_tenant.rs`：`crates/testkit` 的跨租戶負向測試宣告 `ingest.gateway_bindings`，服務角色讀不到也改不了別的租戶的綁定。
+
+```sh
+CARGO_BUILD_JOBS=2 cargo test -p ingest --test startup --test gateway_bindings --test cross_tenant -- --nocapture
+```
 
 ## ClickHouse schema
 

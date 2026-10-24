@@ -1268,10 +1268,31 @@ dependencies = [
 name = "ingest"
 version = "0.1.0"
 dependencies = [
+ "assets",
+ "axum",
+ "base64 0.22.1",
+ "bytes",
+ "chrono",
+ "contract",
+ "http",
+ "http-body-util",
+ "hyper",
+ "hyper-util",
+ "outbox",
+ "percent-encoding",
  "protocol",
  "reqwest",
+ "rustls",
+ "rustls-pki-types",
+ "serde",
  "serde_json",
+ "service-kit",
+ "sqlx",
+ "testkit",
+ "thiserror",
  "tokio",
+ "tokio-rustls",
+ "tracing",
  "uuid",
 ]
 
