@@ -102,6 +102,8 @@ kubectl -n <namespace> logs deployment/<release>-certs -c certs | grep 'keys wai
 
 把 `waiting` 裡這一代的金鑰 id 抄下來（輪替時同一行也列出其他等待中的代，以 `generation` 區分）。CSR 以可移除媒體帶到離線的機器。
 
+還沒設定根憑證就啟用服務時（展示環境的做法，根在同一次離線作業建立，見 [docs/runbooks/demo-environment.md](../../docs/runbooks/demo-environment.md)「簽發 CA 的儀式」），服務載入不了 CA，只記 ERROR `cannot load the issuing CA` 與每輪的 WARN `no issuing CA is loaded, ...`，沒有 `waiting`。這時金鑰 id 改從 init container 的日誌讀：`kubectl -n <namespace> logs deployment/<release>-certs -c ca-keys | grep 'the issuing CA keys are in place'`，欄位 `keys` 是金鑰 id，`generations` 是對應的代。
+
 ### 4. 以根 CA 簽發
 
 在離線的機器上，由保管媒體的維運人員解密：
