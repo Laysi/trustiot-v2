@@ -75,7 +75,7 @@ async fn start(context: Context<Config>) -> Result<Router, BoxError> {
 - 環境變數的值都是字串，kit 依欄位型別轉成數字或布林；清單用逗號分隔，例如 `TRUSTIOT__CORS__ORIGINS=https://a.example,https://b.example`。元素本身含逗號的清單寫在設定檔。
 - 時間長度欄位加 `#[serde(deserialize_with = "service_kit::config::duration")]`，值寫成 `5s`、`500ms`、`1m 30s`。`duration` 不設上限（humantime 接受 `500000000000y` 這類值）：服務自己的時間欄位要在 `Validate` 設合理上限，免得 `Instant + Duration` 溢位 panic。
 - 缺少必要的鍵、型別錯誤、未知的鍵，以及 `Validate::validate` 回傳的 `Invalid`，都會讓服務在接流量之前以 exit code 1 停止。錯誤訊息只寫鍵、環境變數名稱與來源，不寫設定值；服務自己的 `Invalid` 訊息也不能含設定值。
-- 不帶產品名稱前綴的服務（AI 閘道，[決策 28](../../docs/architecture/decisions.md)）用 `ServiceInfo::with_env_prefix` 換掉 `TRUSTIOT`；平台設定的前綴也跟著換，部署時要對應。
+- 不帶產品名稱前綴的服務（AI 閘道，[決策 28](../../docs/architecture/decisions.md)）用 `ServiceInfo::with_env_prefix` 換掉 `TRUSTIOT`；平台設定的前綴也跟著換，部署時要對應。chart 依服務的前綴產生 Postgres 的接線（`deploy/chart/templates/_service.tpl`）：AI 閘道得到 `AI_GATEWAY_POSTGRES_*` 與 `AI_GATEWAY__DATABASE__USERNAME`、`AI_GATEWAY__DATABASE__PASSWORD`（Laysi/trustiot-v2#605）。
 - 不要用 `Debug` 印出整個設定：連線字串等設定可能含密碼。
 
 平台設定：Helm chart 以單一底線的 `TRUSTIOT_<NAME>` 變數把平台設定交給每個服務（例如 `TRUSTIOT_POSTGRES_HOST`，清單見 [chart 的 README](../../deploy/chart/README.md)「chart 與服務的約定」）。kit 把它們放進設定的 `platform` 表，鍵是去掉前綴後轉小寫的名稱：
@@ -549,7 +549,7 @@ async fn device_names(db: &TenantDb, user: &UserIdentity) -> Result<Vec<String>,
 
 - RLS 擋的是程式漏寫租戶條件。SQL 注入可以用服務角色改掉 `trustiot.tenant_id`，所以只用參數化查詢；`tools/sql-check` 隨 `cargo test --workspace` 擋下由字串組成的 SQL、`AssertSqlSafe`、SQL 裡的 `set_config` 與 `SET ROLE` 等（規則見[它的 README](../../tools/sql-check/README.md)）。
 - 本機開發環境（`scripts/`）的 Postgres 只接受 TLS，憑證由 `up` 當場產生的開發 CA 簽發，給服務的 `TRUSTIOT_POSTGRES_SSLMODE` 是 `verify-full`、`TRUSTIOT_POSTGRES_CA_FILE` 指向那個 CA（Laysi/trustiot-v2#273，見 [scripts/README.md](../../scripts/README.md)「Postgres 的 TLS」）。開發環境給範例服務一個一般的資料庫角色，它以 `verify-full` 連上本機 Postgres，`/readyz` 的 `postgres` 檢查通過才就緒。
-- AI 閘道（不依賴 contract）沒有 `tenant`；它若有租戶資料表，需要不經 contract 的租戶交易介面。
+- AI 閘道（不依賴 contract）沒有 `tenant`。它的 schema `ai_gateway`（模型角色的設定，Laysi/trustiot-v2#605）不是租戶資料，只用 `postgres::connect_lazy` 與 `migrations::MigrationCheck`，兩者都不需要 `contract`；它若有租戶資料表（帳本與額度，Laysi/trustiot-v2#140），需要不經 contract 的租戶交易介面。
 
 ## contract feature
 
