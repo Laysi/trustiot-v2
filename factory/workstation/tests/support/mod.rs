@@ -27,6 +27,8 @@ use time::{Duration, OffsetDateTime};
 use tokio::io::AsyncWriteExt as _;
 use tokio::net::TcpListener;
 
+pub mod registry;
+
 /// The binary under test.
 pub const BINARY: &str = env!("CARGO_BIN_EXE_trustiot-workstation");
 
@@ -579,6 +581,34 @@ impl Environment {
 
 /// Runs the binary with `arguments`, `stdin` on its standard input.
 pub async fn run(environment: &Environment, arguments: &[&str], stdin: &str) -> Run {
+    run_program(environment, BINARY, &[], arguments, stdin).await
+}
+
+/// Runs the binary with `arguments` under `ulimit -f <blocks>` (the shell's 512- or 1024-byte
+/// blocks): a write past the limit kills it with SIGXFSZ, as a crash in the middle of a write.
+pub async fn run_with_file_size_limit(
+    environment: &Environment,
+    blocks: u32,
+    arguments: &[&str],
+) -> Run {
+    let script = format!("ulimit -f {blocks} && exec \"$0\" \"$@\"");
+    run_program(
+        environment,
+        "/bin/sh",
+        &["-c", script.as_str(), BINARY],
+        arguments,
+        "",
+    )
+    .await
+}
+
+async fn run_program(
+    environment: &Environment,
+    program: &str,
+    prefix: &[&str],
+    arguments: &[&str],
+    stdin: &str,
+) -> Run {
     let mut variables: HashMap<&str, &std::ffi::OsStr> = HashMap::new();
     variables.insert("HOME", environment.home.as_os_str());
     variables.insert(
@@ -588,7 +618,8 @@ pub async fn run(environment: &Environment, arguments: &[&str], stdin: &str) -> 
     if let Some(runtime) = &environment.runtime {
         variables.insert("XDG_RUNTIME_DIR", runtime.as_os_str());
     }
-    let mut child = tokio::process::Command::new(BINARY)
+    let mut child = tokio::process::Command::new(program)
+        .args(prefix)
         .args(arguments)
         .env_clear()
         .envs(variables)
