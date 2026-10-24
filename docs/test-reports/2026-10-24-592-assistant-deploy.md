@@ -2,7 +2,7 @@
 
 對應 Laysi/trustiot-v2#592。
 
-這份報告記錄 2026-10-24 在開發者工作站與建置主機上的檢查。驗收條件 2 的證據是帶 `smoke` label 的 PR 觸發的 nightly run，它在 Kubernetes（k3d）上執行，工作站與建置主機都不跑 Kubernetes；那次 run 的結果在下方「nightly（待補）」補上。
+這份報告記錄 2026-10-24 在開發者工作站與建置主機上的檢查。驗收條件 2 的證據是帶 `smoke` label 的 PR 觸發的 nightly run，它在 Kubernetes（k3d）上執行，工作站與建置主機都不跑 Kubernetes；那次 run 的結果在下方「nightly」，2026-10-24 補上。
 
 ## 環境
 
@@ -91,10 +91,21 @@ Laysi/trustiot-v2#575 讓 chart 加總每個用 Postgres 的服務在整版滾�
 | 驗收條件 | 結果 |
 | --- | --- |
 | chart 只允許 assistant 呼叫 `ai-gateway`、`telemetry-query`、`assets` 與身分服務的 `token-exchange` 埠；授權矩陣文件與 chart 測試一致（`bun test deploy/chart`） | 通過（上方 chart 測試；`bun test deploy/chart` 639 pass，合併連線預算之後 648 pass） |
-| 帶 `smoke` label 的 PR 的 nightly 以兩份 values 部署 assistant，pod 就緒，`assistant_app` 能登入（nightly run 為證據） | 待測：要等 PR 帶上 `smoke` label 後的 nightly run，見下方「nightly（待補）」 |
+| 帶 `smoke` label 的 PR 的 nightly 以兩份 values 部署 assistant，pod 就緒，`assistant_app` 能登入（nightly run 為證據） | 通過：PR Laysi/trustiot-v2#628 的 head `d48c444c` 帶 `smoke` label 的 nightly run，兩個形態的 assistant 都就緒、`assistant_app` 能登入，見下方「nightly」 |
 | chart 測試確認 assistant 設了位址的每個被呼叫端都在 `mesh.calls.assistant`；叢集內真正的工具呼叫是 Laysi/trustiot-v2#146 的前提條件 | 通過（chart 測試與突變測試）；叢集內的工具呼叫留給 Laysi/trustiot-v2#146 |
 | `bun test scripts`、`bun test deploy/chart`、`bun run --cwd scripts typecheck` 通過 | 通過 |
 
-## nightly（待補）
+## nightly
 
-PR 帶上 `smoke` label 後的 nightly run：run 連結、commit、兩個形態的「every workload of the release is ready」與「the AI assistant is ready: it logged in to Postgres as assistant_app on its current schema (Laysi/trustiot-v2#592)」兩項的結果與 detail（就緒副本數與 `assistant_app` 的連線數）、job 的總時間與 `timeout-minutes` 85 的比較。
+PR Laysi/trustiot-v2#628 的 head `d48c444c` 帶上 `smoke` label 之後的 nightly run：https://github.com/Laysi/trustiot-v2/actions/runs/39990763607/job/120541605757 ，結論 success。
+
+| 形態 | 檢查 | 結果與 detail |
+| --- | --- | --- |
+| onprem（`values-onprem.yaml`，namespace `nightly-onprem`） | every workload of the release is ready | ok：`Deployment/trustiot-assistant` 與其他 Deployment、StatefulSet 及 migrate Job 都就緒 |
+| onprem | the AI assistant is ready: it logged in to Postgres as assistant_app on its current schema (Laysi/trustiot-v2#592) | ok：`deployment/trustiot-assistant: 1 ready replica(s); assistant_app may log in and has 2 session(s) open (after 0 s)` |
+| saas（`values-saas.yaml`，namespace `nightly-saas`） | every workload of the release is ready | ok：同 onprem，`Deployment/trustiot-assistant` 就緒 |
+| saas | the AI assistant is ready: it logged in to Postgres as assistant_app on its current schema (Laysi/trustiot-v2#592) | ok：`deployment/trustiot-assistant: 1 ready replica(s); assistant_app may log in and has 2 session(s) open (after 0 s)` |
+
+- 同一個 run 的其他測試也通過：每個形態的 ingress e2e 69 passed、0 failed；service-to-service authorization e2e（`deploy/chart/tests/e2e/mesh.e2e.ts`）5 passed、0 failed；最後一行是 `nightly smoke test passed`。
+- job 的總時間：2026-10-23T16:55:17Z 到 2026-10-23T17:14:31Z，19 分 14 秒，在 `timeout-minutes` 85 之內。
+- 合併之後，main 的排程 nightly（commit `0dc8fd96`，2026-10-23T21:26:30Z 開始）也通過：https://github.com/Laysi/trustiot-v2/actions/runs/40026783369 。

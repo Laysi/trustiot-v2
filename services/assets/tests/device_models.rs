@@ -38,8 +38,9 @@ const EVENTS: &str = "SELECT event_type, aggregate_type, aggregate_id, aggregate
     tenant_id::text, envelope::text
 FROM assets.outbox_event WHERE tenant_id = $1::uuid ORDER BY tx_order, id";
 
-/// A stand-in for the device table of Laysi/trustiot-v2#100, which will reference models the
-/// same way: a device keeps its model from being deleted.
+/// A stand-in referencing models the way `assets.devices` (Laysi/trustiot-v2#100) does, so this
+/// file needs no gateway or binding: a device keeps its model from being deleted.
+/// `tests/devices.rs` checks the same refusal with a real device.
 const CREATE_DEVICES: &str = "CREATE TABLE IF NOT EXISTS public.device_model_users (
     tenant_id uuid NOT NULL,
     device_id uuid NOT NULL,

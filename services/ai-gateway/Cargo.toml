@@ -29,6 +29,8 @@ serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true, features = ["raw_value"] }
 # Default features off: the `contract` feature pulls in crates/contract.
 service-kit = { path = "../../crates/service-kit", default-features = false }
+# The model role settings in Postgres (src/store.rs), through service-kit's checked pool.
+sqlx = { workspace = true, features = ["postgres", "runtime-tokio", "tls-rustls-ring-webpki"] }
 thiserror.workspace = true
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time"] }
 tracing.workspace = true
