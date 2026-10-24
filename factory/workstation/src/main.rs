@@ -1,6 +1,6 @@
 //! `trustiot-workstation`: the production workstation tool (factory/workstation/README.md).
 //!
-//! Exit codes: 0 done, 1 failed, 2 usage, and `register`'s own (10 to 18 and 75,
+//! Exit codes: 0 done, 1 failed, 2 usage, and `register`'s own (10 to 19 and 75,
 //! [`workstation::register::StopKind`]). Results go to stdout, prompts and log lines to stderr
 //! (`TRUSTIOT_WORKSTATION_LOG`: off, error, warn, info (default), debug or trace). Neither ever
 //! shows the login code, the session cookie, the private key or a `--headers-file` value.
@@ -34,8 +34,8 @@ const USAGE: &str = "usage:
 [network options]
   trustiot-workstation install-certificate --certificate <file> [--dir <dir>]
   trustiot-workstation logout [--url <platform URL>] [network options]
-  trustiot-workstation register --hardware-id <id> --csr <file> --ek <file> [--url <platform URL>] \
-[--dir <dir>] [--root-sha256 <hex>] [--attempts <n>] [--retry-for <seconds>] [network options]
+  trustiot-workstation register --hardware-id <id> --csr <file> --ek <file> --root-sha256 <hex> \
+[--url <platform URL>] [--dir <dir>] [--attempts <n>] [--retry-for <seconds>] [network options]
 network options: [--ca-file <file>] [--headers-file <file>] [--timeout <seconds>]
 login reads the code from the email on stdin. The guide, with register's exit codes, is
 factory/workstation/README.md.";
@@ -456,10 +456,9 @@ async fn register(options: &Options) -> Result<(), Error> {
             },
             other @ InputError::HardwareId(_) => other.into(),
         })?;
-    let root_sha256 = options
-        .optional("root-sha256")
-        .map(register::parse_root_sha256)
-        .transpose()?;
+    // Required, with no alternative: the root certificate of the answer becomes the gateway's
+    // only trust anchor, so it is checked against the fingerprint the operator was given.
+    let root_sha256 = register::parse_root_sha256(options.required("root-sha256")?)?;
     let backoff = backoff(options)?;
     let directory = directory(options)?;
     let workstation = Workstation::load(&directory, now())?;

@@ -11,16 +11,20 @@
 //!    must not hold this public key as registered under another hardware ID. A `pending` record
 //!    is written, unless the hardware ID is already recorded as `registered`.
 //! 3. Each attempt is signed anew (time, nonce, signature) and sent once on a new connection.
-//! 4. A connection error, a timeout, 502, 503 or 504 is retried ([`Backoff`]). The platform's API
-//!    is idempotent: when it committed but the answer was lost, the next attempt gets 200 and the
-//!    same registration. When the limits are used up, [`StopKind::GaveUp`] says it is safe to run
-//!    again.
-//! 5. Every other answer stops with its own [`StopKind`] (and exit code), or as a plain error.
-//! 6. A 200 or 201 is checked before it counts: the hardware ID, both hashes against the ones
-//!    computed here, the certificate's common name and public key, the chain (the certificate,
-//!    then an issuing CA that signed it and that the root certificate signed), and, when given,
-//!    the root certificate's SHA-256, which is what makes the chain authentic.
-//! 7. The record becomes `registered`, and a log line says so.
+//! 4. A connection error, a timeout, 502, 503, 504 or Cloudflare's 520 to 524 is retried
+//!    ([`Backoff`]). The platform's API is idempotent: when it committed but the answer was lost,
+//!    the next attempt gets 200 and the same registration. When the limits are used up,
+//!    [`StopKind::GaveUp`] says it is safe to run again.
+//! 5. Every other answer stops with its own [`StopKind`] (and exit code), or as a plain error
+//!    that says whether running again is safe. A log line that cannot be written is added to the
+//!    message; it never replaces the stop.
+//! 6. A 200 or 201 is checked before it counts: the size of its fields, the hardware ID, both
+//!    hashes against the ones computed here, the certificate's common name and public key, the
+//!    chain (the certificate, then an issuing CA that signed it and that the root certificate
+//!    signed), and the root certificate's SHA-256 against the pinned one
+//!    ([`Registrar::root_sha256`], required), which is what makes the chain authentic: the root
+//!    certificate becomes the gateway's only trust anchor (Laysi/trustiot-v2#617).
+//! 7. The record becomes `registered` with the pinned fingerprint, and a log line says so.
 
 use std::fmt;
 use std::time::Instant;
@@ -63,6 +67,15 @@ pub const MAX_ENDORSEMENT_KEY_BYTES: usize = 2048;
 
 /// Largest workstation certificate file read.
 const MAX_CERTIFICATE_FILE_BYTES: usize = 64 * 1024;
+
+/// Largest `certificate` and `root_certificate` of an answer: one PEM certificate is 1 to 2 KiB.
+const MAX_ANSWER_CERTIFICATE_BYTES: usize = 8 * 1024;
+
+/// Largest `certificate_chain` of an answer: two certificates.
+const MAX_ANSWER_CHAIN_BYTES: usize = 2 * MAX_ANSWER_CERTIFICATE_BYTES;
+
+/// Largest `workstation` (name) of an answer.
+const MAX_ANSWER_NAME_BYTES: usize = 256;
 
 /// The certs service's message keys this client tells apart.
 mod keys {
@@ -340,9 +353,14 @@ pub enum StopKind {
     LoginRequired,
     /// 403 `workstation_refused` with reason `stale`: the clocks differ by more than 300 s.
     ClockSkew,
-    /// 403 `workstation_refused` for any other reason (`revoked`, `expired`, `untrusted`, ...):
-    /// the workstation certificate.
+    /// 403 `workstation_refused` with reason `revoked`, `expired`, `untrusted` or
+    /// `not_workstation`: the workstation certificate itself.
     WorkstationRefused,
+    /// 403 `workstation_refused` with reason `missing`, `malformed`, `signature_invalid` or
+    /// `replayed`, or a reason this tool does not know: the signature headers did not arrive as
+    /// sent (a proxy in front of the platform drops or rewrites them, or changes the body), or a
+    /// bug of this tool (`replayed`: it never sends a nonce twice). Not the certificate.
+    SignatureRejected,
     /// 403 `permission_denied` without `workstation_refused`: not a platform administrator.
     NotPlatformAdministrator,
     /// 422: a field of the request breaks a rule.
@@ -369,6 +387,7 @@ impl StopKind {
             Self::NotPlatformAdministrator => 16,
             Self::Invalid => 17,
             Self::ResponseMismatch => 18,
+            Self::SignatureRejected => 19,
             // EX_TEMPFAIL of sysexits.h: a temporary failure, try again.
             Self::GaveUp => 75,
         }
@@ -387,6 +406,7 @@ impl StopKind {
             Self::NotPlatformAdministrator => "not_platform_administrator",
             Self::Invalid => "invalid",
             Self::ResponseMismatch => "response_mismatch",
+            Self::SignatureRejected => "signature_rejected",
             Self::GaveUp => "gave_up",
         }
     }
@@ -407,6 +427,12 @@ pub struct Stopped {
 pub enum ResponseProblem {
     #[error("the body is not a gateway registration")]
     NotARegistration,
+    #[error(
+        "a field is too large to be a registration (workstation over 256 bytes, certificate or \
+         root_certificate over 8 KiB, certificate_chain over 16 KiB) or its ca_key_id is not 64 \
+         lower-case hex digits"
+    )]
+    Size,
     #[error("its hardware_id is not the one sent")]
     HardwareId,
     #[error("its public_key_sha256 is not the SHA-256 of the CSR's public key")]
@@ -432,7 +458,10 @@ pub enum ResponseProblem {
     RootFingerprint,
 }
 
-/// Checks that `registration` is `gateway`'s: see the module documentation, step 6.
+/// Checks that `registration` is `gateway`'s and that its root certificate is the one pinned by
+/// `root_sha256` (the SHA-256 of its DER): see the module documentation, step 6. The size check
+/// keeps a recorded registration well under the journal's read limit, so one answer cannot make
+/// the records unreadable.
 ///
 /// # Errors
 ///
@@ -440,8 +469,16 @@ pub enum ResponseProblem {
 pub fn check_registration(
     gateway: &Gateway,
     registration: &GatewayRegistration,
-    root_sha256: Option<&[u8; 32]>,
+    root_sha256: &[u8; 32],
 ) -> Result<(), ResponseProblem> {
+    if registration.workstation.len() > MAX_ANSWER_NAME_BYTES
+        || registration.certificate.len() > MAX_ANSWER_CERTIFICATE_BYTES
+        || registration.root_certificate.len() > MAX_ANSWER_CERTIFICATE_BYTES
+        || registration.certificate_chain.len() > MAX_ANSWER_CHAIN_BYTES
+        || !is_sha256_hex(&registration.ca_key_id)
+    {
+        return Err(ResponseProblem::Size);
+    }
     if registration.hardware_id != gateway.hardware_id {
         return Err(ResponseProblem::HardwareId);
     }
@@ -479,8 +516,7 @@ pub fn check_registration(
         return Err(ResponseProblem::CertificateKey);
     }
     // The chain: the certificate, then an issuing CA whose key signed it and which the root
-    // certificate's key signed. Only a pinned root (below) makes that chain authentic; without
-    // one it shows the answer is at least consistent.
+    // certificate's key signed. The pinned root (below) makes that chain authentic.
     let chain = pem_certificates(&registration.certificate_chain).ok_or(ResponseProblem::Chain)?;
     let [leaf, issuing] = chain.as_slice() else {
         return Err(ResponseProblem::Chain);
@@ -500,13 +536,19 @@ pub fn check_registration(
     {
         return Err(ResponseProblem::Chain);
     }
-    if let Some(expected) = root_sha256 {
-        let actual: [u8; 32] = Sha256::digest(&root_der).into();
-        if &actual != expected {
-            return Err(ResponseProblem::RootFingerprint);
-        }
+    let actual: [u8; 32] = Sha256::digest(&root_der).into();
+    if &actual != root_sha256 {
+        return Err(ResponseProblem::RootFingerprint);
     }
     Ok(())
+}
+
+/// Whether `text` is 64 lower-case hex digits.
+fn is_sha256_hex(text: &str) -> bool {
+    text.len() == 64
+        && text
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
 
 /// The certificate `der` is, with nothing after it.
@@ -587,8 +629,9 @@ pub struct Registrar<'a> {
     pub journal: &'a Journal,
     /// The retry limits.
     pub backoff: Backoff,
-    /// When given, the SHA-256 the answer's root certificate must have.
-    pub root_sha256: Option<[u8; 32]>,
+    /// The SHA-256 the answer's root certificate (DER) must have: the platform's root CA, pinned
+    /// by the operator. Required: the root certificate becomes the gateway's only trust anchor.
+    pub root_sha256: [u8; 32],
 }
 
 /// A registration that passed its checks and is recorded.
@@ -633,13 +676,15 @@ pub async fn register(
             ),
             api: None,
         };
-        journal.append(
+        return Err(logged(
+            journal,
             &Event::new(time(now()), id, "stopped")
                 .with("stop", stopped.kind.as_str())
                 .with("recorded_under", other),
-        )?;
-        return Err(Error::Registration(Box::new(stopped)));
+            Error::Registration(Box::new(stopped)),
+        ));
     }
+    let root_sha256 = hex(&registrar.root_sha256);
     let previous = journal.load(id)?;
     let already = previous
         .as_ref()
@@ -650,6 +695,7 @@ pub async fn register(
             hardware_id: id.to_owned(),
             state: State::Pending,
             platform: registrar.client.origin().to_string(),
+            root_sha256: Some(root_sha256.clone()),
             public_key_sha256: gateway.public_key_sha256.clone(),
             endorsement_key_sha256: gateway.endorsement_key_sha256.clone(),
             workstation_serial: registrar.workstation.serial().to_owned(),
@@ -660,6 +706,7 @@ pub async fn register(
     journal.append(
         &Event::new(time(now()), id, "started")
             .with("platform", registrar.client.origin().to_string())
+            .with("root_sha256", root_sha256)
             .with("public_key_sha256", gateway.public_key_sha256.clone())
             .with(
                 "endorsement_key_sha256",
@@ -682,12 +729,10 @@ pub async fn register(
             }
             Err(error) if error.is_transient() => error.problem_kind().to_owned(),
             Err(error) => {
-                journal.append(
-                    &Event::new(time(now()), id, "stopped")
-                        .with("attempt", attempt)
-                        .with("problem", error.problem_kind()),
-                )?;
-                return Err(error.into());
+                let event = Event::new(time(now()), id, "stopped")
+                    .with("attempt", attempt)
+                    .with("problem", error.problem_kind());
+                return Err(logged(journal, &event, error.into()));
             }
         };
         journal.append(
@@ -696,20 +741,22 @@ pub async fn register(
                 .with("problem", problem.clone()),
         )?;
         let Some(delay) = registrar.backoff.delay(attempt + 1, started.elapsed())? else {
-            journal.append(
-                &Event::new(time(now()), id, "gave_up")
-                    .with("attempts", attempt)
-                    .with("problem", problem.clone()),
-            )?;
-            return Err(Error::Registration(Box::new(Stopped {
-                kind: StopKind::GaveUp,
-                message: format!(
-                    "no settled answer after {attempt} attempt(s) (last: {problem}). Nothing is \
-                     lost: run the same register command again; the platform answers a \
-                     registration it already has with that registration"
-                ),
-                api: None,
-            })));
+            let event = Event::new(time(now()), id, "gave_up")
+                .with("attempts", attempt)
+                .with("problem", problem.clone());
+            return Err(logged(
+                journal,
+                &event,
+                Error::Registration(Box::new(Stopped {
+                    kind: StopKind::GaveUp,
+                    message: format!(
+                        "no settled answer after {attempt} attempt(s) (last: {problem}). Nothing \
+                         is lost: run the same register command again; the platform answers a \
+                         registration it already has with that registration"
+                    ),
+                    api: None,
+                })),
+            ));
         };
         warn!(
             hardware_id = id,
@@ -723,11 +770,26 @@ pub async fn register(
     }
 }
 
+/// 502, 503, 504, and Cloudflare's 520 to 524 (the origin's answer was unusable, refused, timed
+/// out or unreachable; after 524 the platform may have committed, which a retry settles).
 fn is_retryable(status: StatusCode) -> bool {
-    matches!(
-        status,
-        StatusCode::BAD_GATEWAY | StatusCode::SERVICE_UNAVAILABLE | StatusCode::GATEWAY_TIMEOUT
-    )
+    matches!(status.as_u16(), 502..=504 | 520..=524)
+}
+
+/// Logs `event`, then gives back `error`. A log that cannot be written never replaces the error
+/// (a stop keeps its kind and exit code): it is added to the message.
+fn logged(journal: &Journal, event: &Event, error: Error) -> Error {
+    let Err(log) = journal.append(event) else {
+        return error;
+    };
+    let also = format!("also, the log line could not be written: {log}");
+    match error {
+        Error::Registration(mut stopped) => {
+            stopped.message = format!("{}; {also}", stopped.message);
+            Error::Registration(stopped)
+        }
+        other => Error::Failed(format!("{other}; {also}")),
+    }
 }
 
 /// The hardware ID another `registered` record of this public key belongs to.
@@ -817,57 +879,62 @@ fn conclude(
         let checked = serde_json::from_slice::<GatewayRegistration>(&response.body)
             .map_err(|_| ResponseProblem::NotARegistration)
             .and_then(|registration| {
-                check_registration(gateway, &registration, registrar.root_sha256.as_ref())
+                check_registration(gateway, &registration, &registrar.root_sha256)
                     .map(|()| registration)
             });
         let registration = match checked {
             Ok(registration) => registration,
             Err(problem) => {
-                journal.append(
-                    &Event::new(time(now()), id, "stopped")
-                        .with("attempt", attempts)
-                        .with("status", status.as_u16())
-                        .with("stop", StopKind::ResponseMismatch.as_str())
-                        .with("problem", problem.to_string()),
-                )?;
-                return Err(Error::Registration(Box::new(Stopped {
-                    kind: StopKind::ResponseMismatch,
-                    message: format!(
-                        "POST {REGISTRATIONS_PATH} answered {} but {problem}: it is not the \
-                         registration of hardware ID {id}. Nothing was recorded as registered; \
-                         install nothing on the gateway and report this to a platform \
-                         administrator",
-                        status.as_u16()
-                    ),
-                    api: None,
-                })));
+                let event = Event::new(time(now()), id, "stopped")
+                    .with("attempt", attempts)
+                    .with("status", status.as_u16())
+                    .with("stop", StopKind::ResponseMismatch.as_str())
+                    .with("problem", problem.to_string());
+                return Err(logged(
+                    journal,
+                    &event,
+                    Error::Registration(Box::new(Stopped {
+                        kind: StopKind::ResponseMismatch,
+                        message: format!(
+                            "POST {REGISTRATIONS_PATH} answered {} but {problem}: it is not the \
+                             registration of hardware ID {id}. Nothing was recorded as \
+                             registered; install nothing on the gateway and report this to a \
+                             platform administrator",
+                            status.as_u16()
+                        ),
+                        api: None,
+                    })),
+                ));
             }
         };
         // Checked again right before recording: another run may have recorded the key since.
         if let Some(other) = recorded_elsewhere(journal, gateway)? {
-            journal.append(
-                &Event::new(time(now()), id, "stopped")
-                    .with("attempt", attempts)
-                    .with("status", status.as_u16())
-                    .with("stop", StopKind::KeyInUse.as_str())
-                    .with("recorded_under", other.clone()),
-            )?;
-            return Err(Error::Registration(Box::new(Stopped {
-                kind: StopKind::KeyInUse,
-                message: format!(
-                    "the platform registered hardware ID {id} (serial {}), but this workstation \
-                     recorded the same public key as registered under hardware ID {other}; it is \
-                     not recorded. Report this to a platform administrator",
-                    registration.serial
-                ),
-                api: None,
-            })));
+            let event = Event::new(time(now()), id, "stopped")
+                .with("attempt", attempts)
+                .with("status", status.as_u16())
+                .with("stop", StopKind::KeyInUse.as_str())
+                .with("recorded_under", other.clone());
+            return Err(logged(
+                journal,
+                &event,
+                Error::Registration(Box::new(Stopped {
+                    kind: StopKind::KeyInUse,
+                    message: format!(
+                        "the platform registered hardware ID {id} (serial {}), but this \
+                         workstation recorded the same public key as registered under hardware \
+                         ID {other}; it is not recorded. Report this to a platform administrator",
+                        registration.serial
+                    ),
+                    api: None,
+                })),
+            ));
         }
         let record = Record {
             version: RECORD_VERSION,
             hardware_id: id.to_owned(),
             state: State::Registered,
             platform: registrar.client.origin().to_string(),
+            root_sha256: Some(hex(&registrar.root_sha256)),
             public_key_sha256: gateway.public_key_sha256.clone(),
             endorsement_key_sha256: gateway.endorsement_key_sha256.clone(),
             workstation_serial: registrar.workstation.serial().to_owned(),
@@ -918,11 +985,18 @@ fn conclude(
     if let Some(stopped) = &stopped {
         event = event.with("stop", stopped.kind.as_str());
     }
-    journal.append(&event)?;
-    Err(match stopped {
+    let error = match stopped {
         Some(stopped) => Error::Registration(Box::new(stopped)),
+        // A server error, or an answer that is not the platform's own (no M1 body: a proxy or a
+        // load balancer in between): the platform may have committed before it.
+        None if status.is_server_error() || api.code.is_none() => Error::Failed(format!(
+            "{api}: the platform may or may not have registered hardware ID {id}. Running the \
+             same register command again is safe: the platform answers a registration it already \
+             has with that registration"
+        )),
         None => api.into(),
-    })
+    };
+    Err(logged(journal, &event, error))
 }
 
 /// The stop for an error answer; `None` for one this client has no particular advice for.
@@ -958,26 +1032,42 @@ fn stop_for(id: &str, api: &ApiError, response: &Response, now: i64) -> Option<S
             "log in again (trustiot-workstation login), then run the same register command"
                 .to_owned(),
         )),
-        StatusCode::FORBIDDEN if key == keys::WORKSTATION_REFUSED => {
-            if api.reason.as_deref() == Some("stale") {
-                Some(stop(
-                    StopKind::ClockSkew,
-                    format!(
-                        "this workstation's clock is more than 300 seconds from the platform's. \
+        StatusCode::FORBIDDEN if key == keys::WORKSTATION_REFUSED => match api.reason.as_deref() {
+            Some("stale") => Some(stop(
+                StopKind::ClockSkew,
+                format!(
+                    "this workstation's clock is more than 300 seconds from the platform's. \
                          {} Set the clock (NTP), then run the same register command",
-                        clock_hint(response.date.as_deref(), now)
-                    ),
-                ))
-            } else {
-                Some(stop(
-                    StopKind::WorkstationRefused,
-                    "the platform refuses the workstation certificate (revoked, expired, or not \
-                     issued by this platform's CA, as the reason says): have a platform \
-                     administrator issue a new one (trustiot-workstation enroll)"
-                        .to_owned(),
-                ))
-            }
-        }
+                    clock_hint(response.date.as_deref(), now)
+                ),
+            )),
+            Some("revoked" | "expired" | "untrusted" | "not_workstation") => Some(stop(
+                StopKind::WorkstationRefused,
+                "the platform refuses the workstation certificate (revoked, expired, not \
+                     issued by this platform's CA, or not a workstation certificate, as the \
+                     reason says): have a platform administrator issue a new one \
+                     (trustiot-workstation enroll)"
+                    .to_owned(),
+            )),
+            Some("replayed") => Some(stop(
+                StopKind::SignatureRejected,
+                "the platform saw this request's nonce before. This tool sends a new nonce \
+                     on every attempt, so something in between sent the request again, or this \
+                     is a bug of the tool. Do not enroll again; report it to a platform \
+                     administrator with the log (registrations.jsonl)"
+                    .to_owned(),
+            )),
+            _ => Some(stop(
+                StopKind::SignatureRejected,
+                "the workstation signature did not reach the platform as it was sent (a \
+                     header missing or malformed, or a signature that does not verify): a proxy \
+                     or gateway in front of the platform drops or rewrites the \
+                     trustiot-workstation-* headers or the body. The workstation certificate is \
+                     not the problem; do not enroll again. Report it to a platform \
+                     administrator with the log (registrations.jsonl)"
+                    .to_owned(),
+            )),
+        },
         StatusCode::FORBIDDEN if api.code.as_deref() == Some("permission_denied") => Some(stop(
             StopKind::NotPlatformAdministrator,
             "the session is not a platform administrator's; log in as one".to_owned(),

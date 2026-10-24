@@ -35,11 +35,17 @@ pub const RECORDS_DIRECTORY: &str = "registrations";
 /// The log, in the workstation directory.
 pub const LOG_FILE: &str = "registrations.jsonl";
 
-/// The version of [`Record`]'s format.
-pub const RECORD_VERSION: u32 = 1;
+/// The version of [`Record`]'s format that is written. Version 2 added
+/// [`Record::root_sha256`]; a version 1 record (written before the root pin was required) is
+/// still read, and the next `register` of its hardware ID rewrites it as version 2.
+pub const RECORD_VERSION: u32 = 2;
 
-/// Largest record read: a registration with its PEM certificates is a few KiB.
-const MAX_RECORD_BYTES: usize = 256 * 1024;
+/// The oldest version of [`Record`]'s format that is read.
+const OLDEST_RECORD_VERSION: u32 = 1;
+
+/// Largest record read or written: a registration with its PEM certificates is a few KiB, and
+/// `register` refuses an answer whose fields could make it more than a fraction of this.
+pub const MAX_RECORD_BYTES: usize = 256 * 1024;
 
 /// Where a gateway's registration stands.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -55,12 +61,18 @@ pub enum State {
 /// A gateway's latest state.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Record {
-    /// [`RECORD_VERSION`].
+    /// [`RECORD_VERSION`] when written; 1 or 2 when read.
     pub version: u32,
     pub hardware_id: String,
     pub state: State,
     /// The platform's origin the request went to.
     pub platform: String,
+    /// The SHA-256 of the platform's root certificate (DER) the operator pinned with
+    /// `--root-sha256`, 64 lower-case hex digits. A `registered` record's `root_certificate` has
+    /// it. Always there from version 2 on; `None` only in a version 1 record, whose root was not
+    /// pinned (Laysi/trustiot-v2#617 must not install that root before a rerun pins it).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub root_sha256: Option<String>,
     /// The SHA-256 of the gateway's public key (its DER SubjectPublicKeyInfo), lower-case hex.
     pub public_key_sha256: String,
     /// The SHA-256 of the endorsement key (its DER SubjectPublicKeyInfo), lower-case hex.
@@ -192,7 +204,8 @@ impl Journal {
     ///
     /// # Errors
     ///
-    /// When the directory cannot be listed, or a record file is refused or unreadable.
+    /// When the directory cannot be listed, or a record file is refused or unreadable: the
+    /// message names that file and what to do about it.
     pub fn records(&self) -> Result<Vec<Record>, Error> {
         let entries = match fs::read_dir(&self.records) {
             Ok(entries) => entries,
@@ -223,8 +236,22 @@ impl Journal {
                 continue;
             };
             let path = entry.path();
-            let bytes = files::read_secret(&path, MAX_RECORD_BYTES)?;
-            records.push(parse(&path, &bytes, hardware_id)?);
+            let record = files::read_secret(&path, MAX_RECORD_BYTES)
+                .and_then(|bytes| parse(&path, &bytes, hardware_id))
+                .map_err(|error| {
+                    Error::Failed(format!(
+                        "the registration record {} cannot be used: {error}. register reads every \
+                         record in {} to make sure a gateway key is not registered under two \
+                         hardware IDs, so it stops until this one is fixed: give it back mode \
+                         0600 and this user as owner if that is the problem, or move it out of \
+                         that directory (keep it, and compare it with {}) and run the same \
+                         command again",
+                        path.display(),
+                        self.records.display(),
+                        self.log.display()
+                    ))
+                })?;
+            records.push(record);
         }
         Ok(records)
     }
@@ -238,6 +265,13 @@ impl Journal {
         let mut text = serde_json::to_vec_pretty(record)
             .map_err(|_| Error::Failed("cannot encode the registration record".to_owned()))?;
         text.push(b'\n');
+        if text.len() > MAX_RECORD_BYTES {
+            return Err(Error::Failed(format!(
+                "the registration record of {} would be larger than {} KiB; it is not written",
+                record.hardware_id,
+                MAX_RECORD_BYTES / 1024
+            )));
+        }
         files::replace_secret(&self.record_path(&record.hardware_id), &text)
     }
 
@@ -298,10 +332,22 @@ fn parse(path: &Path, bytes: &[u8], hardware_id: &str) -> Result<Record, Error> 
             reason: "holds the record of another hardware ID",
         });
     }
-    if record.version != RECORD_VERSION {
+    if !(OLDEST_RECORD_VERSION..=RECORD_VERSION).contains(&record.version) {
         return Err(Error::BadFile {
             path: path.to_owned(),
             reason: "is a registration record of another version of the tool",
+        });
+    }
+    let pinned = record.root_sha256.as_deref().map(|digest| {
+        digest.len() == 64
+            && digest
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    });
+    if pinned == Some(false) || (record.version >= 2 && pinned.is_none()) {
+        return Err(Error::BadFile {
+            path: path.to_owned(),
+            reason: "is a registration record without a valid root_sha256",
         });
     }
     if record.state == State::Registered && record.registration.is_none() {
@@ -338,6 +384,7 @@ mod tests {
             hardware_id: hardware_id.to_owned(),
             state,
             platform: "https://app.example".to_owned(),
+            root_sha256: Some("c".repeat(64)),
             public_key_sha256: "a".repeat(64),
             endorsement_key_sha256: "b".repeat(64),
             workstation_serial: "4f3a".to_owned(),
@@ -400,6 +447,23 @@ mod tests {
         )
         .expect("written");
         assert!(matches!(journal.load("gw-4"), Err(Error::BadFile { .. })));
+        // A version 1 record, from before the root pin was required, is still read.
+        let mut legacy = record("gw-5", State::Pending);
+        legacy.version = 1;
+        legacy.root_sha256 = None;
+        files::replace_secret(
+            &journal.record_path("gw-5"),
+            &serde_json::to_vec(&legacy).expect("encoded"),
+        )
+        .expect("written");
+        assert_eq!(journal.load("gw-5").expect("read"), Some(legacy.clone()));
+        legacy.version = RECORD_VERSION;
+        files::replace_secret(
+            &journal.record_path("gw-5"),
+            &serde_json::to_vec(&legacy).expect("encoded"),
+        )
+        .expect("written");
+        assert!(matches!(journal.load("gw-5"), Err(Error::BadFile { .. })));
         fs::set_permissions(
             journal.record_path("gw-2"),
             fs::Permissions::from_mode(0o644),

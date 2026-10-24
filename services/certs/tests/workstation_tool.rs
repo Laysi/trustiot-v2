@@ -332,7 +332,7 @@ async fn the_tool_registers_each_gateway_once_through_reruns_and_lost_answers() 
             max_attempts: 5,
             max_total: Duration::from_secs(600),
         },
-        root_sha256: Some(Sha256::digest(ca.root_der()).into()),
+        root_sha256: Sha256::digest(ca.root_der()).into(),
     };
     let path = register::REGISTRATIONS_PATH;
 

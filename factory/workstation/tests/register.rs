@@ -84,6 +84,8 @@ struct Fixture {
     planted: String,
     directory: WorkstationDirectory,
     registry: Registry,
+    /// The SHA-256 of the stand-in's root certificate, as `--root-sha256` takes it.
+    root_sha256: [u8; 32],
 }
 
 impl Fixture {
@@ -119,6 +121,7 @@ impl Fixture {
                 cookie: SessionCookie::parse(&secrets.cookie).expect("a cookie"),
             })
             .expect("the session saved");
+        let root_sha256 = Sha256::digest(registry::pem_der(registry.root_pem())).into();
         Self {
             scratch,
             environment,
@@ -126,6 +129,7 @@ impl Fixture {
             planted,
             directory,
             registry,
+            root_sha256,
         }
     }
 
@@ -139,6 +143,8 @@ impl Fixture {
         run(&self.environment, &arguments, "").await
     }
 
+    /// The `register` command line; `--root-sha256` is the stand-in's root unless `extra` gives
+    /// one.
     fn arguments(&self, hardware_id: &str, gateway: &GatewayFiles, extra: &[&str]) -> Vec<String> {
         let path = |path: &Path| path.to_str().expect("a UTF-8 path").to_owned();
         let mut arguments = vec![
@@ -152,6 +158,14 @@ impl Fixture {
             "--dir".to_owned(),
             path(self.directory.path()),
         ];
+        if !extra.contains(&"--root-sha256") {
+            let pin: String = self
+                .root_sha256
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect();
+            arguments.extend(["--root-sha256".to_owned(), pin]);
+        }
         arguments.extend(extra.iter().map(|argument| (*argument).to_owned()));
         arguments
     }
@@ -308,6 +322,16 @@ async fn a_lost_answer_is_sent_again_and_the_repeat_counts_as_success() {
         .expect("readable")
         .expect("a record");
     assert_eq!(record.state, State::Registered);
+    let pinned: String = fixture
+        .root_sha256
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    assert_eq!(
+        record.root_sha256,
+        Some(pinned),
+        "the pinned root is recorded"
+    );
     let registration = record.registration.expect("the registration");
     assert_eq!(registration.hardware_id, "gw-lost-0001");
     assert!(
@@ -412,6 +436,12 @@ async fn each_refusal_stops_at_once_with_its_own_exit_code() {
             "workstation certificate",
         ),
         (
+            "rewritten signature header",
+            Action::refused("signature_invalid"),
+            StopKind::SignatureRejected,
+            "do not enroll again",
+        ),
+        (
             "not a platform administrator",
             Action::error(403, "permission_denied", "error.permission_denied"),
             StopKind::NotPlatformAdministrator,
@@ -431,7 +461,7 @@ async fn each_refusal_stops_at_once_with_its_own_exit_code() {
         ),
     ];
     let codes: HashSet<u8> = cases.iter().map(|case| case.2.exit_code()).collect();
-    assert_eq!(codes.len(), 8, "each kind its own exit code");
+    assert_eq!(codes.len(), 9, "each kind its own exit code");
     for (name, action, kind, advice) in cases {
         let fixture = Fixture::start("refused", vec![action]).await;
         let gateway = GatewayFiles::new(&fixture.scratch, "gw");
@@ -788,7 +818,7 @@ async fn the_library_function_retries_until_settled_and_reports_the_attempts() {
             max_attempts: 5,
             max_total: Duration::from_secs(600),
         },
-        root_sha256: None,
+        root_sha256: fixture.root_sha256,
     };
     let registered = registration::register(&registrar, &gateway, now)
         .await
