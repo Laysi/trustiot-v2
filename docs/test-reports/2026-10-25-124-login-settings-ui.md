@@ -9,6 +9,7 @@ Laysi/trustiot-v2#124（rebuild checklist A1、L2）：SPA 的第一批正式畫
   - `b1e07af` 畫面（登入、工作階段與租戶、個人設定、登出、停權）
   - `915edc2` 文件（決策 2、`frontend/README.md`、`services/identity/README.md`）
   - 這份報告在下一個 commit 加入。
+  - `cdfb842` 安全審查後的修正（見「安全審查後的修正」），那一節在下一個 commit 加入。
 - **檢查環境**：開發者工作站。工具版本是 `.prototools` 釘選的版本，前端相依以 `frontend/bun.lock` 鎖定。
 - **實際流程**：同一台開發者工作站上的本機開發環境（`scripts/dev.ts`），真的身分服務與 `services/web`，桌面版 Chrome 與 headless Chrome；細節在「實際流程」。
 - **日期**：2026-10-25。
@@ -120,7 +121,7 @@ TRUSTIOT__HTTP__HEALTH_LISTEN_ADDR=127.0.0.1:28281 cargo run -p web
 | 驗收條件 | 測試 |
 | --- | --- |
 | 驗證碼登入 | `src/pages/LoginPage.test.tsx`：成功登入並回到 `next`、已登入時再登入、空白地址、email 的 422、寄信 503、驗證碼錯誤 401、短的驗證碼與 `/code` 的 422、`/redirect_to` 的 422 與驗證時 503、重新寄送後舊碼失效、改用其他地址、沒有帳號的地址回應相同、瀏覽器沒有保留 cookie；`src/api/identity.test.ts` 的兩個步驟與回應形狀 |
-| 登出所有裝置 | `src/pages/SettingsPage.test.tsx` 的 `signing out`：先確認、結束每個工作階段（另一個瀏覽器隨即 401）並在登入頁說明、取消後焦點回到按鈕、失敗時在對話框說明、這個工作階段已結束時導向登入；帳號選單只登出這個瀏覽器 |
+| 登出所有裝置 | `src/pages/SettingsPage.test.tsx` 的 `signing out`：先確認、結束每個工作階段（另一個瀏覽器隨即 401）並在登入頁說明、取消後焦點回到按鈕、失敗時在對話框說明、這個工作階段已結束時在登入頁與登入後的設定頁說明其他裝置還沒登出（見「安全審查後的修正」）；帳號選單只登出這個瀏覽器 |
 | 切換語言後介面與錯誤訊息改變 | `LoginPage.test.tsx` 的 `switching the language changes the page and the error already shown…`；`SettingsPage.test.tsx` 的 422 錯誤換語言後重新翻譯、`changing the interface language…`；`TenantGate.test.tsx` 的 `the no-tenant page is translated like every other` |
 | 不在任何租戶時 | `src/session/TenantGate.test.tsx`：多個租戶時選擇、一個租戶時自動切換、自動切換失敗可重試、沒有租戶時說明並可重新檢查、個人設定不需要租戶 |
 | 偏好經 API 讀寫 | `SettingsPage.test.tsx`：顯示帳號的值而不是瀏覽器副本、伺服器回應前不能修改、逐欄位 `PATCH`、422 退回並顯示在該欄位、其他錯誤顯示在該欄位、兩個瀏覽器讀到同樣的值、讀不到時可重試；`src/app/routes.test.tsx` 的帳號語言與主題套用、登出後用瀏覽器副本 |
@@ -199,6 +200,64 @@ commit 前的程式審查又修正兩處，瀏覽器流程沒有重跑，以下�
 - `--font-sans` 原本宣告在 `@theme inline` 裡。建置出的 CSS 原本就有這個變數，改成一般的 `@theme` 區塊後意圖更明確；建置結果的 `@layer theme` 有 `--font-sans`，preflight 的 `--default-font-family` 是 `var(--font-sans)`。
 - 切換租戶原本取消所有進行中的請求，包括偏好的第一次讀取，讀取被取消後會一直停在載入中。改成不取消偏好；`TenantSwitcher.test.tsx` 的 `a switch while the preferences are still loading lets them finish loading` 修正前失敗、修正後通過。
 
+### 安全審查後的修正
+
+2026-10-25 對這個分支做了獨立的安全審查，沒有 Critical、High、Medium，找到三項 Low，都在前端，在 `cdfb842` 修正。另一項 Info（伺服器端的 `redirect_to` 接受 `.`、`..` 這類點段）在 Laysi/trustiot-v2#677 處理，這裡不改。
+
+每項的回歸測試都以突變確認抓得到：拿掉修正後測試失敗，還原後通過。
+
+#### Low-1：`safeNextPath` 經路徑正規化後會回傳 `//host`
+
+- **問題**：前置檢查只看原始字串的開頭，解析後的路徑可能是 `//host`（`/.//evil`、`/..//evil`、`/%2e%2e//evil`、`/./\evil`、`/x/../\evil`）。目前靠伺服器的 422 與 React Router 拒絕外部導向擋下，但路由拒絕時登入頁會一直停在「驗證中」。
+- **修正**：解析後的路徑再做一次同樣的檢查（`//`、`/\`、控制字元、保留路徑、登入頁），不通過就回 `/`。登入頁的比對與路由一樣不分大小寫、不管結尾的 `/`。
+- **回歸測試**：
+  - `src/app/paths.test.ts` 的 `rejects %p, which parses into another host or a path it may not return to`（19 個寫法，含 `%2E`、大寫、帶 `?` 與 `#`、`/LOGIN`、`/login/`）與 `normalizes dot segments that stay inside the SPA`。
+  - `src/pages/LoginPage.test.tsx` 的 ``a `next` of %p that parses into another host or the sign-in page asks for and goes to the home page``（6 個寫法：送出的 `redirect_to` 是 `/`，登入後到首頁）與 ``a `redirect_to` from the server that parses into another host goes to the home page``。
+- **突變與結果**：
+  - 拿掉解析後的 `//`、`/\` 檢查：20 個失敗（paths 14 個、LoginPage 6 個，後者停在登入頁）。
+  - 登入頁改回只比對 `/login`：4 個失敗（`/LOGIN`、`/Login?next=%2F`、`/login/`，以及 LoginPage 的 `/x/../LOGIN`；後者停在登入頁，證實路由不分大小寫）。
+  - 還原後兩個檔案 63 個測試全部通過。
+
+#### Low-2：同一個工作階段可以同時送出兩個切換租戶的請求
+
+- **問題**：頁首的租戶選單與租戶清單各自管停用狀態，切換的 mutation 沒有 scope。先點清單的 T1、馬上從頁首選 T2，伺服器最後在 T2，但 T1 的回應晚到時快取被寫成 T1。
+- **修正**：
+  - `SessionProvider` 提供共用的 `switching`，切換中每個入口都停用，handler 裡也再檢查一次。
+  - 切換的 mutation 加上 `scope`，一次只送一個、依發出的順序。
+  - 回應改在 mutation 的 `onSuccess` 寫進快取。TanStack Query 等 `onSuccess` 完成才放行同一個 scope 的下一個切換，所以快取的寫入順序就是伺服器的處理順序。
+  - 沒有另外加世代編號，理由見下。
+- **回歸測試**：`src/session/TenantSwitcher.test.tsx` 的 `switching from more than one place`。假身分服務加了 `holdNextAnswer`：請求立刻生效，回應等到測試放行。
+  - `a switch from the tenant list disables the top bar and the rest of the list until it lands`
+  - `a switch from the top bar disables the tenant list until it lands`
+  - `two switches started together run one after the other, and the cache ends where the server does`：清單與頁首在同一輪各觸發一次，第一個回應晚到。
+  - `the next switch waits until the earlier answer is cached, however long caching it takes`
+- **突變與結果**：
+  - 拿掉 `scope`：`two switches…` 失敗，第二個請求在第一個回應前就送出。只留最後狀態的斷言時，快取是 T1、伺服器是 T2，重現審查描述的情況。
+  - 頁首改回自己的停用狀態（修正前的 `TenantSwitcher.tsx`）：`a switch from the tenant list…` 失敗。
+  - 清單改回自己的停用狀態（修正前的 `TenantList.tsx`）：`a switch from the top bar…` 失敗。
+  - 保留 `scope`，但把快取的寫入移回 `mutateAsync` 之後：`the next switch waits…` 失敗。
+  - 還原後全部通過。
+
+沒有加世代編號的理由：切換在同一個 scope 裡依序執行，而 TanStack Query（`@tanstack/query-core` 5.104.5 的 `Mutation.execute`）在 mutation 自己的 `onSuccess` 完成、狀態變成 success 之後，才在 `finally` 繼續同一個 scope 的下一個 mutation。回應在 `onSuccess` 裡寫進快取，所以下一個請求送出前，前一個回應已經寫好；伺服器也依送出的順序處理，因為下一個請求在前一個回應之後才送出。快取最後寫入的就是伺服器最後處理的那一個，世代編號在這個順序下不會擋下任何回應，只會是測不到的程式碼。後送的切換失敗時，先前成功的回應照樣寫入，與伺服器一致；若改成「只套用最後發出的切換」，反而會在這個情況丟掉正確的回應。仍然留下的情況：請求在伺服器處理後才因網路中斷而失敗時，快取停在前一個租戶，直到工作階段的查詢過期（60 秒）重新讀取。這與並行無關，世代編號也處理不了。
+
+#### Low-3：「登出所有裝置」遇到 401 時，畫面沒有說其他裝置還沒登出
+
+- **問題**：登出所有裝置遇到 401（自己的工作階段剛好過期）時走通用的導向，登入頁沒有任何提示。重新登入回到設定頁後，使用者以為已經成功，其他裝置的工作階段仍然有效。
+- **修正**：
+  - 這個 mutation 標上 `HANDLES_UNAUTHENTICATED`，自己處理 401：導向 `/login?next=%2Fsettings`，history state 帶 `signOutEverywhereUnfinished`，經 zod 解析，做法與 `signedOut` 相同。
+  - 登入頁在兩個步驟都提示其他裝置還沒登出、登入後請再按一次。登入後把同樣的 state 帶到 `/settings`，「已登入的裝置」再提示一次。
+  - 文字有 zh-TW 與 en。
+- **回歸測試**：`src/pages/SettingsPage.test.tsx` 的 `of all devices when this session had already ended says the others are still signed in, before and after signing in again`。工作階段在伺服器端結束後按登出所有裝置：登入頁顯示提示、不顯示「你已登出所有裝置」、每一次到登入頁都帶著提示的 state、另一個裝置仍登入著；登入後回到 `/settings`，「已登入的裝置」顯示提示。
+- **突變與結果**：
+  - 拿掉 `onError` 與 meta（修正前的行為）：失敗，登入頁沒有提示。
+  - 拿掉 meta、保留 `onError`：失敗，通用的處理先導向一次沒有提示的登入頁（正式環境是兩個導向互相競爭）。
+  - 登入頁不把 state 帶到下一頁：失敗，設定頁沒有提示。
+  - 還原後通過。
+
+#### 修正後的檢查
+
+`cdfb842`，指令同「每個 commit 前的檢查」：`install`（lockfile 不變）、`api:check`、`typecheck`、`lint`（80 個檔案）、`test`（218 通過、0 失敗，17 個檔案）、`build`、`check:dist` 全部通過。瀏覽器的實際流程沒有重跑。
+
 ## 結論
 
 | 驗收條件 | 結果 |
@@ -209,6 +268,8 @@ commit 前的程式審查又修正兩處，瀏覽器流程沒有重跑，以下�
 | 偏好經 API 讀寫，另一個 session 讀到相同設定，422 顯示在對應欄位（測試） | **通過**：`SettingsPage.test.tsx` 與實際流程（另一個裝置的修改、時區的 422） |
 | 決策 2 與 `frontend/README.md` 寫明 UI 元件與樣式的規則與 assistant-ui | **通過**：`915edc2` |
 | 瀏覽器實際操作登入與個人設定，開關 Radix 彈出元件，沒有 CSP violation | **通過**：見「CSP」 |
+
+2026-10-25 的獨立安全審查沒有 Critical、High、Medium；三項 Low 已在 `cdfb842` 修正，各有回歸測試（見「安全審查後的修正」），Info 由 Laysi/trustiot-v2#677 處理。
 
 範圍內但沒有在實際流程測的：
 
