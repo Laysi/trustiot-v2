@@ -1,0 +1,30 @@
+$ bash rcheck.sh 653 'cargo clippy --locked -p agent -p repo-check --all-targets -- -D warnings 2>&1 | grep -vE "^ +(Checking|Compiling)" | tail -80 && cargo clippy --locked -p agent --lib -- -D warnings 2>&1 | grep -vE "^ +(Checking|Compiling)" | tail -30 && cargo test --locked -p agent 2>&1 | grep -E "Running|test result|panicked|error|FAILED|failures|^test .*FAILED" | tail -80 && cargo test --locked -p repo-check 2>&1 | grep -E "test result|FAILED|panicked" | tail -20'
+rcheck: queued on the build host at 14:12:56 as 653-e136ec88; running now: 631-7b99a24a since 14:12:43
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 12.44s
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 4.45s
+   Compiling thiserror v2.0.21
+   Compiling serde_path_to_error v0.1.20
+     Running unittests src/lib.rs (<host copy>/target/debug/deps/agent-e5b38041b34b6f1e)
+test modbus::tests::failures_carry_bounded_details ... ok
+test modbus::tests::failures_of_one_request_leave_the_others_alone ... ok
+test result: ok. 74 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+     Running tests/modbus_address_guard.rs (<host copy>/target/debug/deps/modbus_address_guard-6b626fa436b8f899)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/modbus_fake_endpoint.rs (<host copy>/target/debug/deps/modbus_fake_endpoint-d8f7c3f84454cb41)
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+     Running tests/modbus_rtu_converter.rs (<host copy>/target/debug/deps/modbus_rtu_converter-62d91213c0b5ca07)
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+     Running tests/modbus_rtu_framing.rs (<host copy>/target/debug/deps/modbus_rtu_framing-cfb373ff0cd2924f)
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/modbus_tcp_framing.rs (<host copy>/target/debug/deps/modbus_tcp_framing-a2c0d35483fcfd28)
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/polling_recovery.rs (<host copy>/target/debug/deps/polling_recovery-f6230adc8732e98b)
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 18 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.08s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+rcheck: exit 0 at 14:13:45 (build host, 653-e136ec88)
+
+(The two "test modbus::tests::failures_..." lines match the filter's "failures" by name; both passed. The
+last four results are agent's doctests, then repo-check's unit tests, repository tests and doctests.)
