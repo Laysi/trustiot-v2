@@ -23,7 +23,7 @@ use tokio::time::Instant;
 
 use crate::body::ModelSlot;
 use crate::config::Protocol;
-use crate::gateway::{Client, Gateway, Keys, RoleRoute, Target};
+use crate::gateway::{Client, Gateway, Keys, RoleRoute, SettingsError, Target};
 use crate::reject::{Kind, Rejection};
 
 /// Anthropic Messages for the role in the path; `"stream": true` streams.
@@ -96,7 +96,24 @@ async fn handle(
             return Rejection::new(Kind::InvalidRequest, error.to_string()).render(protocol);
         }
     };
-    call.run(&slot, &gateway).await
+    // The settings as of now, kept for the whole call: every model it falls back to and the
+    // stream it relays (README.md, 「多副本」). Without them nothing is sent to a provider.
+    let snapshot = match gateway.snapshot(deadline).await {
+        Ok(snapshot) => snapshot,
+        Err(error) => {
+            call.log_unavailable(&error);
+            return Rejection::new(
+                Kind::Unavailable,
+                "the model role settings could not be read; try again later",
+            )
+            .render(protocol);
+        }
+    };
+    let Some(route) = snapshot.route(&role) else {
+        // Every configured role is in every snapshot.
+        return Rejection::new(Kind::NotFound, "no such model role").render(protocol);
+    };
+    call.run(route, &slot, &gateway).await
 }
 
 async fn read_body(body: Body, limit: usize) -> Result<Bytes, Rejection> {
@@ -117,7 +134,6 @@ async fn read_body(body: Body, limit: usize) -> Result<Bytes, Rejection> {
 struct Call<'a> {
     role: &'a str,
     protocol: Protocol,
-    route: &'a RoleRoute,
     tenant: String,
     options: RequestOptions,
     started: Instant,
@@ -164,7 +180,7 @@ impl<'a> Call<'a> {
         started: Instant,
         deadline: Instant,
     ) -> Result<Self, Rejection> {
-        let route = gateway.route(role, protocol)?;
+        gateway.check_role(role, protocol)?;
         let tenant = tenant(headers)?;
         let options = match protocol {
             Protocol::AnthropicMessages => RequestOptions {
@@ -175,7 +191,6 @@ impl<'a> Call<'a> {
         Ok(Self {
             role,
             protocol,
-            route,
             tenant,
             options,
             started,
@@ -185,8 +200,13 @@ impl<'a> Call<'a> {
 
     /// Tries the role's models in order until one answers, a failure is not one to fall back
     /// on (README.md, 「備援」), or the time budget runs out.
-    async fn run(&self, slot: &ModelSlot<'_>, gateway: &Arc<Gateway>) -> Response {
-        let targets = &self.route.targets;
+    async fn run(
+        &self,
+        route: &RoleRoute,
+        slot: &ModelSlot<'_>,
+        gateway: &Arc<Gateway>,
+    ) -> Response {
+        let targets = &route.targets;
         for (index, target) in targets.iter().enumerate() {
             let attempts = index + 1;
             let body = slot.with_model(&target.model);
@@ -226,7 +246,7 @@ impl<'a> Call<'a> {
     fn answer(
         &self,
         success: Success,
-        target: &Target,
+        target: &Arc<Target>,
         attempts: usize,
         gateway: &Arc<Gateway>,
     ) -> Response {
@@ -274,7 +294,7 @@ impl<'a> Call<'a> {
     fn fail(
         &self,
         failed: Failed,
-        target: &Target,
+        target: &Arc<Target>,
         attempts: usize,
         gateway: &Arc<Gateway>,
     ) -> Response {
@@ -291,12 +311,13 @@ impl<'a> Call<'a> {
                 let relay = Relay {
                     pending: events.into(),
                     stream: None,
+                    target: Arc::clone(target),
                     gateway: Arc::clone(gateway),
                     fields,
                     request_id,
                     done: true,
                 };
-                stream_response(relay, target)
+                stream_response(relay)
             }
             None => Rejection::from_error(&failed.error, gateway.keys()).render(self.protocol),
         }
@@ -306,7 +327,7 @@ impl<'a> Call<'a> {
         &self,
         events: Vec<Bytes>,
         stream: MessageStream,
-        target: &Target,
+        target: &Arc<Target>,
         attempts: usize,
         gateway: &Arc<Gateway>,
     ) -> Response {
@@ -314,12 +335,13 @@ impl<'a> Call<'a> {
         let relay = Relay {
             pending: events.into(),
             stream: Some(stream),
+            target: Arc::clone(target),
             gateway: Arc::clone(gateway),
             fields: self.log_fields(target, attempts),
             request_id,
             done: false,
         };
-        stream_response(relay, target)
+        stream_response(relay)
     }
 
     fn log_completed(
@@ -377,6 +399,17 @@ impl<'a> Call<'a> {
             attempts,
             started: self.started,
         }
+    }
+
+    fn log_unavailable(&self, error: &SettingsError) {
+        tracing::warn!(
+            role = self.role,
+            protocol = self.protocol.name(),
+            tenant = %self.tenant,
+            error = %error,
+            duration_ms = self.duration_ms(),
+            "refused a model call: the model role settings could not be checked"
+        );
     }
 
     fn duration_ms(&self) -> u64 {
@@ -471,6 +504,9 @@ struct LogFields {
 struct Relay {
     pending: VecDeque<Bytes>,
     stream: Option<MessageStream>,
+    /// The model's client, held until the stream ends so that a reload of the settings reuses
+    /// it, and its concurrency count, while the stream still holds a slot.
+    target: Arc<Target>,
     /// For the keys to scrub from an error event.
     gateway: Arc<Gateway>,
     fields: LogFields,
@@ -547,8 +583,9 @@ impl Drop for Relay {
     }
 }
 
-fn stream_response(relay: Relay, target: &Target) -> Response {
+fn stream_response(relay: Relay) -> Response {
     let request_id = relay.request_id.clone();
+    let target = Arc::clone(&relay.target);
     let body = Body::from_stream(futures_util::stream::unfold(relay, Relay::step));
     let mut response = Response::new(body);
     let headers = response.headers_mut();
@@ -559,7 +596,7 @@ fn stream_response(relay: Relay, target: &Target) -> Response {
     headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-cache"));
     with_headers(
         response,
-        target,
+        &target,
         ANTHROPIC_REQUEST_ID,
         request_id.as_deref(),
         None,

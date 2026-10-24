@@ -15,7 +15,7 @@ use std::time::Duration;
 use futures_util::{SinkExt as _, StreamExt as _};
 use support::{
     Behaviour, Bridge, FakeBroker, connect_ws, mqtt_session, read_bytes, refused_status,
-    send_binary, via_cloudflare, within,
+    send_binary, via_cloudflare, wait_until, within,
 };
 use tokio::net::TcpStream;
 use tokio::sync::oneshot;
@@ -411,8 +411,14 @@ async fn one_source_cannot_take_more_than_its_share() {
             ("2001:db8:1:300::1", "2001:db8:1::/48"),
         ]
     );
-    // The forged addresses never reach the log, and refused upgrades never reach the broker.
+    // The forged addresses never reach the log, and refused upgrades never reach the broker. The
+    // stand-in records a connection when its accept loop takes it, which can be after the upgrade
+    // was answered: wait for every held one, then check that there is no other.
     assert!(!bridge.dump().contains("198.51.100."), "{}", bridge.dump());
+    wait_until("a broker connection for every held WebSocket", || {
+        (broker.connections().len() >= held.len()).then_some(())
+    })
+    .await;
     assert_eq!(broker.connections().len(), held.len());
 
     // A freed slot of the source can be taken again.

@@ -179,14 +179,14 @@ function platformConfig(manifests: Manifest[]): Record<string, string> {
 
 /**
  * The password Secrets of the migration Job a render must declare: one per enabled service that
- * lists postgres under mesh.calls (its Deployment carries TRUSTIOT__DATABASE__USERNAME) and one
- * for the collector, when it is rendered.
+ * lists postgres under mesh.calls (its Deployment carries <prefix>__DATABASE__USERNAME, the prefix
+ * being TRUSTIOT or, for the AI gateway, AI_GATEWAY) and one for the collector, when it is rendered.
  */
 function jobPasswordSecretNames(manifests: Manifest[]): string[] {
   const names: string[] = [];
   for (const deployment of manifests.filter((m) => m.kind === "Deployment")) {
     const env = podSpec(deployment).containers[0]?.env ?? [];
-    if (env.some((e) => e.name === "TRUSTIOT__DATABASE__USERNAME")) names.push(`${deployment.metadata.name}-password`);
+    if (env.some((e) => /^(TRUSTIOT|AI_GATEWAY)__DATABASE__USERNAME$/.test(e.name))) names.push(`${deployment.metadata.name}-password`);
     if (deployment.metadata.name.endsWith("-otel-collector")) names.push(`${deployment.metadata.name}-password`);
   }
   return names.sort();
@@ -497,8 +497,11 @@ describe("secrets reach only the services that need them", () => {
     });
     // values.yaml lists `ai` for the AI gateway: one key per configured provider, each from the
     // Secret the overlay names.
+    // It lists postgres under mesh.calls too (values.yaml): its own role's password, under its
+    // own prefix.
     expect(secretRefs(manifests, "ai-gateway")).toEqual({
       SENTRY_DSN: "trustiot-sentry/dsn",
+      AI_GATEWAY__DATABASE__PASSWORD: "trustiot-ai-gateway-password/ai_gateway_app",
       TRUSTIOT_AI_ANTHROPIC_API_KEY: "trustiot-anthropic/api-key",
       TRUSTIOT_AI_OPENAI_API_KEY: "trustiot-openai/api-key",
     });
@@ -2519,7 +2522,7 @@ describe("bundled Postgres (CloudNativePG, Laysi/trustiot-v2#58)", () => {
       effective_cache_size: "384MB",
       work_mem: "4MB",
       maintenance_work_mem: "64MB",
-      max_connections: "160",
+      max_connections: "200",
     });
     // The string form takes the same 10–1000 as the number (values.schema.json).
     const most = clusterSpec(render(SHAPES.saas, ["--set-string", "postgres.bundled.parameters.max_connections=1000"]));
@@ -2781,7 +2784,11 @@ describe("Postgres connection budget (Laysi/trustiot-v2#575)", () => {
   const services = defaults.services as Record<string, { database?: { maxConnections?: number } }>;
   const calls = (defaults.mesh as { calls: Record<string, string[]> }).calls;
   const postgresServices = Object.keys(calls).filter((name) => calls[name]?.includes("postgres")).sort();
-  const enable = (names: readonly string[]) => names.flatMap((name) => ["--set", `services.${name}.enabled=true`]);
+  // The gateway does not render without its providers and roles (AI_GATEWAY_SETTINGS).
+  const enable = (names: readonly string[]) => [
+    ...names.flatMap((name) => ["--set", `services.${name}.enabled=true`]),
+    ...(names.includes("ai-gateway") ? AI_GATEWAY_SETTINGS : []),
+  ];
   // What the defaults need with every Postgres service on at one replica, computed here from the
   // budgets and values.yaml, independently of the template's arithmetic.
   const perReplica = (name: string) => (services[name]?.database?.maxConnections ?? NaN) + (budgets[name]?.otherPools ?? NaN);
@@ -2789,9 +2796,10 @@ describe("Postgres connection budget (Laysi/trustiot-v2#575)", () => {
   const limit = Number((defaults.postgres as { bundled: { parameters: { max_connections: number } } }).bundled.parameters.max_connections);
 
   test("every service that uses Postgres by default has a budget and a pool size, and the numbers are the ones README.md states", () => {
-    expect(postgresServices).toEqual(["assets", "assistant", "certs", "identity", "telemetry-query"]);
+    expect(postgresServices).toEqual(["ai-gateway", "assets", "assistant", "certs", "identity", "telemetry-query"]);
     expect(Object.keys(budgets).sort()).toEqual(postgresServices);
     expect(Object.fromEntries(postgresServices.map((name) => [name, perReplica(name)]))).toEqual({
+      "ai-gateway": 4,
       assets: 14,
       assistant: 4,
       certs: 9,
@@ -2799,14 +2807,14 @@ describe("Postgres connection budget (Laysi/trustiot-v2#575)", () => {
       "telemetry-query": 12,
     });
     expect(reserved).toBe(18);
-    // 2 to spare: the next service that uses Postgres raises max_connections (README.md, 「連線預算」).
-    expect(needed).toBe(158);
-    expect(limit).toBe(160);
+    // 34 to spare for the next service that uses Postgres (README.md, 「連線預算」).
+    expect(needed).toBe(166);
+    expect(limit).toBe(200);
     const readme = readFileSync(join(CHART_DIR, "README.md"), "utf8");
     for (const name of postgresServices) {
       expect(readme).toContain(`| \`${name}\` | \`${services[name]?.database?.maxConnections}\` | ${budgets[name]?.otherPools} | ${perReplica(name)} |`);
     }
-    expect(readme).toContain(`| 合計 | | | 70 | 140 |`);
+    expect(readme).toContain(`| 合計 | | | 74 | 148 |`);
   });
 
   test.each(SHAPE_NAMES)("%s: the defaults, every Postgres service and every planned service pass the check", (shape) => {
@@ -2826,7 +2834,7 @@ describe("Postgres connection budget (Laysi/trustiot-v2#575)", () => {
     expect(below.code).not.toBe(0);
     expect(below.stderr).toContain(
       `postgres.bundled.parameters.max_connections is ${needed - 1}, but ${needed} connections are needed: the services can open ${needed - reserved} while all of them roll at once ` +
-        "(per replica x pods: assets 14 x 2, assistant 4 x 2, certs 9 x 2, identity 31 x 2, telemetry-query 12 x 2), " +
+        "(per replica x pods: ai-gateway 4 x 2, assets 14 x 2, assistant 4 x 2, certs 9 x 2, identity 31 x 2, telemetry-query 12 x 2), " +
         `and ${reserved} stay reserved for superusers, CloudNativePG, the migration Job and the platform administrator bootstrap.`,
     );
     // The string form of max_connections counts the same.
@@ -2836,12 +2844,12 @@ describe("Postgres connection budget (Laysi/trustiot-v2#575)", () => {
   });
 
   test.each([
-    ["a second identity replica", ["--set", "services.identity.replicas=2"], 31, 3],
+    ["two more identity replicas", ["--set", "services.identity.replicas=3"], 31, 4],
     ["a larger assets pool", ["--set", "services.assets.database.maxConnections=30"], 34, 2],
   ] as const)("the defaults with %s fail: every replica plus the one a rolling update adds counts", (_what, args, perReplicaAfter, pods) => {
     const result = helmTemplate(SHAPES.saas, [...enable(postgresServices), ...args]);
     expect(result.code).not.toBe(0);
-    expect(result.stderr).toContain("postgres.bundled.parameters.max_connections is 160, but");
+    expect(result.stderr).toContain("postgres.bundled.parameters.max_connections is 200, but");
     expect(result.stderr).toMatch(new RegExp(`(identity|assets) ${perReplicaAfter} x ${pods}`));
     // The same values fit once max_connections is raised by what they add.
     const raised = helmTemplate(SHAPES.saas, [...enable(postgresServices), ...args, "--set", "postgres.bundled.parameters.max_connections=1000"]);
@@ -2884,6 +2892,23 @@ describe("Postgres connection budget (Laysi/trustiot-v2#575)", () => {
     ]);
     expect(custom.code).not.toBe(0);
     expect(custom.stderr).toContain("services.assets: env trustiot__database__max_connections is set by the chart from services.assets.database.maxConnections");
+    // The gateway's settings carry its own prefix, and the name is the chart's there too.
+    const gatewayEnv = (args: string[]) =>
+      (podSpec(find(render(SHAPES.saas, [...enable(["ai-gateway"]), ...args]), "Deployment", `${RELEASE}-ai-gateway`)).containers[0]?.env ?? []).filter(
+        (e) => /DATABASE__MAX_CONNECTIONS$/.test(e.name),
+      );
+    expect(gatewayEnv([])).toEqual([{ name: "AI_GATEWAY__DATABASE__MAX_CONNECTIONS", value: "4" }]);
+    expect(gatewayEnv(["--set", "services.ai-gateway.database.maxConnections=32"])).toEqual([{ name: "AI_GATEWAY__DATABASE__MAX_CONNECTIONS", value: "32" }]);
+    const gatewayAbove = helmTemplate(SHAPES.saas, [...enable(["ai-gateway"]), "--set", "services.ai-gateway.database.maxConnections=33", "--skip-schema-validation"]);
+    expect(gatewayAbove.code).not.toBe(0);
+    expect(gatewayAbove.stderr).toContain("services.ai-gateway.database.maxConnections must be a whole number from 2 to 32");
+    const gatewayCustom = helmTemplate(SHAPES.saas, [
+      ...enable(postgresServices),
+      "--set-json",
+      'services.ai-gateway.env=[{"name":"ai_gateway__database__max_connections","value":"30"}]',
+    ]);
+    expect(gatewayCustom.code).not.toBe(0);
+    expect(gatewayCustom.stderr).toContain("services.ai-gateway: env ai_gateway__database__max_connections is set by the chart from services.ai-gateway.database.maxConnections");
     // Nor can serviceDefaults set a pool size for every service (values.schema.json).
     const everyService = helmTemplate(SHAPES.saas, ["--set", "serviceDefaults.database.maxConnections=10"]);
     expect(everyService.code).not.toBe(0);
@@ -4807,9 +4832,10 @@ describe("service-to-service authorization (decision 27)", () => {
         // Two services and Postgres: only the services are calls on behalf of users.
         assets: ["certs", "alerts", "postgres"],
         // ai-gateway verifies no internal identity (decision 28): the mesh alone authorizes calls
-        // to it, and it holds no user's token to exchange.
+        // to it, and it holds no user's token to exchange. It keeps `postgres`, without which the
+        // render fails.
         assistant: ["ai-gateway", "knowledge"],
-        "ai-gateway": ["knowledge"],
+        "ai-gateway": ["knowledge", "postgres"],
         // In-cluster components are no service APIs.
         ingest: ["clickhouse"],
         // Disabled services on either side are skipped, as in the mesh plan.
@@ -5707,10 +5733,41 @@ describe("AI gateway settings (decisions 15 and 28, Laysi/trustiot-v2#536)", () 
       /services\.ai-gateway: env TRUSTIOT_AI_OPENAI_API_KEY: names starting with TRUSTIOT_, SENTRY_ or OTEL_ are set by the chart/,
     ],
     [
+      "custom env that moves the gateway's database",
+      SHAPES.saas,
+      ["--set-json", 'services.ai-gateway.env=[{"name":"AI_GATEWAY_POSTGRES_HOST","value":"elsewhere.test"}]'],
+      /services\.ai-gateway: env AI_GATEWAY_POSTGRES_HOST is set by the chart/,
+    ],
+    [
+      "custom env that replaces the gateway's database login",
+      SHAPES.saas,
+      ["--set-json", 'services.ai-gateway.env=[{"name":"AI_GATEWAY__DATABASE__USERNAME","value":"postgres"}]'],
+      /services\.ai-gateway: env AI_GATEWAY__DATABASE__USERNAME is set by the chart: where Postgres is, the service's login roles/,
+    ],
+    [
+      "custom env that replaces the gateway's database password",
+      SHAPES.saas,
+      ["--set-json", 'services.ai-gateway.env=[{"name":"ai_gateway__database__password","valueFrom":{"secretKeyRef":{"name":"elsewhere","key":"k"}}}]'],
+      /services\.ai-gateway: env ai_gateway__database__password is set by the chart/,
+    ],
+    [
       "custom env that redirects the gateway's telemetry",
       SHAPES.saas,
       ["--set-json", 'services.ai-gateway.env=[{"name":"AI_GATEWAY__TELEMETRY__OTLP_ENDPOINT","value":"http://elsewhere:4318"}]'],
       /services\.ai-gateway: env AI_GATEWAY__TELEMETRY__OTLP_ENDPOINT is set by the chart/,
+    ],
+    // Without its database the gateway refuses to start (services/ai-gateway/README.md, 「資料庫」).
+    [
+      "a gateway without postgres under mesh.calls",
+      SHAPES.saas,
+      ["--set-json", "mesh.calls.ai-gateway=[]"],
+      /mesh\.calls\.ai-gateway must list postgres: the gateway keeps the model roles' settings there/,
+    ],
+    [
+      "an on-premises gateway without postgres under mesh.calls",
+      SHAPES.onprem,
+      [...AI_GATEWAY_SETTINGS, "--set-json", "mesh.calls.ai-gateway=[]"],
+      /mesh\.calls\.ai-gateway must list postgres/,
     ],
   ];
 
@@ -5728,6 +5785,62 @@ describe("AI gateway settings (decisions 15 and 28, Laysi/trustiot-v2#536)", () 
     ]);
     expect(gatewayContainer(manifests).env).toContainEqual({ name: "AI_GATEWAY__MAX_REQUEST_BYTES", value: "1048576" });
   });
+
+  // values.yaml lists postgres for the gateway under mesh.calls (Laysi/trustiot-v2#605): it reads
+  // the platform's Postgres settings under its own prefix, logs in as its own role with the
+  // password the migration Job generates, and gets the server's CA like every Postgres client.
+  test.each([
+    ["bundled", [] as string[], "trustiot-postgres-rw.trustiot.svc", "5432", "trustiot"],
+    [
+      "external",
+      [
+        "--set",
+        "postgres.mode=external",
+        "--set",
+        "postgres.external.host=pg.saas.trustiot.test",
+        "--set",
+        "postgres.external.port=6432",
+        "--set",
+        "postgres.external.database=gateway_db",
+        "--set",
+        "postgres.external.caSecret.name=trustiot-pg-ca",
+        ...EXTERNAL_MIGRATION,
+      ],
+      "pg.saas.trustiot.test",
+      "6432",
+      "gateway_db",
+    ],
+  ])("%s Postgres: the gateway gets its settings, role and password under its own prefix", (_mode, args, host, port, database) => {
+    const manifests = render([...SHAPES.saas, SMOKE], [...ON, ...args]);
+    const env = gatewayContainer(manifests).env ?? [];
+    const named = (name: string) => env.find((e) => e.name === name);
+    const platform = find(manifests, "ConfigMap", `${RELEASE}-platform`).data as Record<string, string>;
+    expect(platform.TRUSTIOT_POSTGRES_HOST).toBe(host);
+    for (const [setting, value] of [
+      ["HOST", host],
+      ["PORT", port],
+      ["DATABASE", database],
+      ["SSLMODE", "verify-full"],
+    ]) {
+      expect(named(`AI_GATEWAY_POSTGRES_${setting}`), setting).toEqual({ name: `AI_GATEWAY_POSTGRES_${setting}`, value });
+      // The same place the platform ConfigMap names for every other service.
+      expect(platform[`TRUSTIOT_POSTGRES_${setting}`], setting).toBe(value);
+    }
+    expect(named("AI_GATEWAY_POSTGRES_CA_FILE")).toEqual({ name: "AI_GATEWAY_POSTGRES_CA_FILE", value: "/etc/trustiot/postgres-ca/ca.crt" });
+    expect(gatewayContainer(manifests).volumeMounts).toContainEqual({ name: "postgres-ca", mountPath: "/etc/trustiot/postgres-ca", readOnly: true });
+    expect(named("AI_GATEWAY__DATABASE__USERNAME")).toEqual({ name: "AI_GATEWAY__DATABASE__USERNAME", value: "ai_gateway_app" });
+    expect(named("AI_GATEWAY__DATABASE__PASSWORD")).toEqual({
+      name: "AI_GATEWAY__DATABASE__PASSWORD",
+      valueFrom: { secretKeyRef: { name: `${RELEASE}-ai-gateway-password`, key: "ai_gateway_app" } },
+    });
+    // No platform role, and nothing under the names the gateway does not read.
+    expect(env.filter((e) => /^(TRUSTIOT__DATABASE__|TRUSTIOT_POSTGRES_|AI_GATEWAY__DATABASE__PLATFORM_)/.test(e.name))).toEqual([]);
+    // The migration Job generates the password into the gateway's own Secret.
+    expect(find(manifests, "Secret", `${RELEASE}-ai-gateway-password`)).toBeDefined();
+    const jobs = JSON.stringify(manifests.filter((m) => m.kind === "Job"));
+    expect(jobs).toContain(`ai_gateway_app=${RELEASE}-ai-gateway-password`);
+  });
+
 });
 
 // Values of ingress.tunnel.clusterIP that are not one plain IPv4 address (Laysi/trustiot-v2#478):
