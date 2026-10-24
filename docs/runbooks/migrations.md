@@ -268,4 +268,5 @@ Job 每次執行都把 ClickHouse 的 `trustiot.telemetry` 與完成表 `trustio
   `telemetry` 用 `received_at`、`stream_commits` 用 `committed_at`；不要改用資料本身的時間戳 `ts`，時鐘錯的閘道器會讓資料與高水位提早被清掉。
 - **ClickHouse 升級之後出現上面的訊息**：Job 認得的形式是 `toIntervalDay(<天數>)`，以及 ClickHouse 26.8 存它自己帶參數寫入的 `toIntervalDay(_CAST(<天數>, 'UInt32'))`。新版 ClickHouse 若換了存法，Job 會認不出自己寫的 TTL 而停止，沒有資料被刪。照上面的指令以整數天數重寫一次，再回報 issue 讓 Job 認得新的存法。
 - **改天數的代價**：改 TTL 後 ClickHouse 在背景執行 `MATERIALIZE TTL`，重寫每個 part，占用 I/O 與暫時的磁碟空間；縮短時要等它跑完才釋放空間。在 `system.mutations` 看進度（`WHERE database = 'trustiot' AND NOT is_done`）。
+- **改欄位型別之前先看卡住的 mutation**：在有資料的表上執行改型別的 `MODIFY COLUMN`（例如 `0010_gateway_stream_ids.sql`）之前，先查 `SELECT database, table, mutation_id, command, latest_fail_reason FROM system.mutations WHERE database = 'trustiot' AND NOT is_done`。改型別本身是一個重寫整張表的 mutation，同一張表的 mutation 依序執行；前面有一個卡住（`latest_fail_reason` 不是空的）時，改型別、Job 之後的 `MODIFY TTL` 與 ingest 刪除不完整批次的 lightweight delete 都會排在它後面等。先找出原因並處理（必要時 `KILL MUTATION`），再部署。
 - **縮短是產品決定**：縮短會永久刪掉超過新天數的資料，不是解決磁碟壓力的手段；磁碟快滿時擴充磁碟（[資料保存期限與磁碟水位](../architecture/data-retention.md)「磁碟水位告警」）。手動改的天數在下一次部署會被 Job 改回設定值。
