@@ -161,6 +161,15 @@ age --decrypt -i <自己的 identity> root-key.age \
 
 **遺失**：Secret 被刪除、清空，或從備份還原（還原的物件 uid 不同）時，init container 把它當作遺失，以目前的 `keyGeneration` 產生新的一組。服務不能簽章（`certs.ca.signing` 是 0），每次檢查記 WARN 與 `waiting`；舊的憑證因為對不上任何金鑰而被略過，舊的簽發 CA 不再發 CRL。照「發簽發 CA 憑證」簽新的金鑰（CN 要和舊的不同，或先把舊的憑證從清單拿掉），閘道器同樣經換發端點更新憑證。不沿用還原的金鑰（2026-10-22 決定），因為無法確定沒有別人拿過那份副本；代價是還原後到儀式完成、閘道器換發之前，閘道器連不上 broker。
 
+## 閘道器的租戶歸屬與換發條件
+
+規則在[架構決策](../../docs/architecture/decisions.md)的決策 6、12 與清單 B1、D2–D4（2026-10-24 決定，Laysi/trustiot-v2#638），這裡只摘要 certs 要做的事：
+
+- 閘道器憑證只帶硬體 ID（`CN`），不帶租戶；綁定改變時憑證內容不變，簽發紀錄也不存租戶（見[資料庫](#資料庫)）。租戶一律是該硬體 ID 在資產服務目前的綁定：certs 消費 `assets.gateway_bound`（之後加上 Laysi/trustiot-v2#115 的解綁事件）維護自己的對照表，並以事件收斂的本地狀態表記租戶狀態（清單 B1 的通知模式，Laysi/trustiot-v2#632）；換發與 broker 權限都不同步呼叫資產服務或身分服務。
+- **換發**（Laysi/trustiot-v2#81）：登錄有效（未除役）、閘道器目前有綁定、該租戶未停權才簽發。簽不簽由簽發當下的綁定與租戶狀態決定，不是把租戶寫進憑證。還沒綁定（在設備池裡）的閘道器不換發，出廠憑證到期後要等綁定才能換發。停權的事件與狀態由 Laysi/trustiot-v2#107 建立，在那之前表裡的租戶都是「正常」，測試直接寫入「停權」作為測試替身；Laysi/trustiot-v2#108 接上真實來源，不改換發的拒絕邏輯。
+- **broker 權限**（Laysi/trustiot-v2#633）：閘道器在 dynsec 有角色的條件是已出廠登錄、沒有除役、目前有綁定，而且至少有一張沒撤銷、沒過期的閘道器憑證；還沒綁定的閘道器連得上 broker，但不能發布或訂閱任何東西；解綁就拿掉角色。
+- **解綁與改綁**：解綁時撤銷這台閘道器目前的憑證（Laysi/trustiot-v2#115，以 Laysi/trustiot-v2#636 的撤銷函式）。閘道器交給下一個租戶時一定換新的 SD 卡；新卡在閘道器綁到新租戶之後，以同一顆 TPM 經換發取得憑證。把舊卡裝回同一台硬體不在支援的流程內（見決策 12）。
+
 ## 閘道器憑證
 
 `src/issue.rs`（驗收條件 1）：CA 只從 CSR 取公鑰，並確認 CSR 由對應的私鑰簽名（持有證明）、金鑰是 P-256（閘道器 TPM 的曲線）、簽章是 ecdsa-with-SHA256、CSR 不超過 4096 bytes 且沒有多餘的位元組。CSR 裡的主體、SAN、keyUsage、extendedKeyUsage、basicConstraints 與其他延伸欄位一律忽略。
@@ -542,7 +551,7 @@ schema `certs`，DDL 在 `migrations/postgres/`，由 migration Job（登記在 
 
 | 表 | 內容 | RLS |
 | --- | --- | --- |
-| `issued_certificates` | 每張簽出的憑證：序號（主鍵）、簽發 CA 的金鑰 id、profile（`gateway`、`workstation` 或 `broker`；`broker` 由 `0003_broker_certificates.sql` 加入）、CN、效期、簽發時間、DER，撤銷時間與原因 | 無：不是租戶資料。閘道器憑證屬於閘道器，閘道器屬於哪個租戶是登錄（Laysi/trustiot-v2#79）與資產服務的紀錄；產線工作站與 MQTT broker 屬於平台，不屬於租戶；之後在這裡存租戶 id 時要改成租戶表 |
+| `issued_certificates` | 每張簽出的憑證：序號（主鍵）、簽發 CA 的金鑰 id、profile（`gateway`、`workstation` 或 `broker`；`broker` 由 `0003_broker_certificates.sql` 加入）、CN、效期、簽發時間、DER，撤銷時間與原因 | 無：不是租戶資料。閘道器憑證屬於閘道器，閘道器屬於哪個租戶是資產服務的綁定（見[閘道器的租戶歸屬與換發條件](#閘道器的租戶歸屬與換發條件)）；產線工作站與 MQTT broker 屬於平台，不屬於租戶；之後在這裡存租戶 id 時要改成租戶表 |
 | `crls` | 每個簽發 CA 目前的 CRL：金鑰 id（主鍵）、CRL 編號、thisUpdate、nextUpdate、DER | 無：公開資料 |
 | `gateway_registrations` | 每台登錄的閘道器：硬體 ID（主鍵）、TPM 金鑰的公鑰（唯一）、EK 與它的 SHA-256（使用中的列之間唯一）、第一張憑證的序號、登錄的工作站與它的憑證序號、平台管理員、登錄時間、除役時間。trigger 讓所有角色（含擁有者與 superuser）都不能刪除、清空或改寫，只能把 `decommissioned_at` 從 NULL 設定一次，違反時 SQLSTATE 42501 | 無：閘道器出廠時不屬於任何租戶，之後由資產服務指派 |
 | `workstation_request_nonces` | 工作站請求用過的 nonce：憑證序號、nonce、過期時間；過了時間的接受範圍才刪除 | 無 |

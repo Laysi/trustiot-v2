@@ -2,6 +2,16 @@
 
 閘道器的遙測資料經 MQTT 寫進 ClickHouse，整批落盤後才回確認（決策 8、清單 I1）。服務本身在 Laysi/trustiot-v2#91 實作；目前這個 crate 只放 ClickHouse 的 schema 與它的測試（Laysi/trustiot-v2#59）。
 
+## 閘道器的租戶歸屬
+
+規則在[架構決策](../../docs/architecture/decisions.md)的決策 8、12 與清單 I1（2026-10-24 決定，Laysi/trustiot-v2#638），這裡只摘要 ingest 要做的事：
+
+- 閘道器取自 topic（`trustiot/v1/gw/{gateway}/up/telemetry`）：broker 的 ACL 讓閘道器只能發布到以自己憑證 CN（硬體 ID）為名的 topic（[crates/protocol](../../crates/protocol/README.md) 的「Topic」「ACL」）。ingest 在叢集內連 broker，看不到閘道器的憑證，憑證裡也沒有租戶。
+- 租戶取自 ingest 自己的綁定對照表：消費資產服務的 `assets.gateway_bound`（之後加上 Laysi/trustiot-v2#115 的解綁事件），對照表是該硬體 ID 目前的綁定（Laysi/trustiot-v2#640）。不在資料路徑上同步呼叫資產服務；訊息內容裡的任何租戶或綁定資訊都不採信。
+- 不認得的閘道器（還沒綁定，或對照表還沒收到事件）回 `retry`、不寫入。
+- 串流以「topic 的閘道器 + 串流 ID」為鍵（遙測規則 3）；完成紀錄記下寫入當時的租戶與 `binding_id`，供追查用（Laysi/trustiot-v2#639）。
+- 改綁時閘道器一定換新的 SD 卡，新卡使用新的串流 ID，所以 ingest 不另外拒收舊綁定下採集的批次；這個前提與它的限制見決策 12。
+
 ## ClickHouse schema
 
 DDL 是 `migrations/clickhouse/` 的 SQL 檔，部署時由 migration Job（Laysi/trustiot-v2#60）以 bootstrap 管理帳號依檔名順序套用。執行期程式碼不建表、不改表（決策 14、[Laysi/trustiot#103](https://github.com/Laysi/trustiot/issues/103)）。真正的防線是資料庫權限：服務帳號只有讀寫與刪列的權限，改 schema 的語句一律被拒。`tools/repo-check` 另外掃描 `services/*/src`，出現 `CREATE`／`ALTER`／`DROP`／`RENAME`／`TRUNCATE`／`ATTACH`／`DETACH`／`EXCHANGE` 加 `TABLE`／`DATABASE`／`VIEW`／`DICTIONARY` 的陳述式就失敗。這個掃描只是文字比對的輔助檢查，拆開字串或在執行期組出來的語句它看不到（2026-10-11 驗證報告的發現 7），不能取代資料庫權限。刪除一批不完整的資料用 `DELETE FROM`（lightweight delete），不用 `ALTER TABLE ... DELETE`。
@@ -33,7 +43,7 @@ DDL 是 `migrations/clickhouse/` 的 SQL 檔，部署時由 migration Job（Lays
 
 | 欄位 | 型別 | 說明 |
 | --- | --- | --- |
-| `tenant_id` | UUID | 租戶，取自閘道器的連線憑證，不採信資料內容；不能是全零 UUID（constraint） |
+| `tenant_id` | UUID | 租戶，取自 ingest 的綁定對照表（見[閘道器的租戶歸屬](#閘道器的租戶歸屬)），不採信資料內容；不能是全零 UUID（constraint） |
 | `gateway_id` | String | 送出這批的閘道器：協定的 `GatewayId`，取自 MQTT topic 的閘道器段（即憑證的 CN、硬體 ID），不採信資料內容 |
 | `stream_id`、`batch_seq` | String、UInt64 | 這列來自哪個串流的哪一批。串流 ID 是協定的 `StreamId`，由閘道器自己產生，只在同一台閘道器內唯一，所以一批是（`gateway_id`、`stream_id`、`batch_seq`）；沒有完成紀錄的批次以這三欄刪掉已寫入的列後重寫（I1） |
 | `device_id` | UUID | 設備 |

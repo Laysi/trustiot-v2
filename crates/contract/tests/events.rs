@@ -14,7 +14,8 @@ use std::path::PathBuf;
 use chrono::{DateTime, Timelike, Utc};
 use contract::event::{Actor, parse_payload};
 use contract::events::assets::{
-    DeviceModelCreated, DeviceModelDeleted, DeviceModelUpdated, GatewayBound,
+    DeviceCreated, DeviceDeleted, DeviceModelCreated, DeviceModelDeleted, DeviceModelUpdated,
+    DeviceUpdated, GatewayBound,
 };
 use contract::events::certs::GatewayRegistered;
 use contract::events::identity::{
@@ -22,11 +23,11 @@ use contract::events::identity::{
     TenantCreated, membership_aggregate_id,
 };
 use contract::{
-    DecodeError, DeviceModelId, EncodeError, Event, EventEnvelope, GatewayBindingId, ServiceName,
-    TenantId, TenantRole, UserId,
+    DecodeError, DeviceId, DeviceModelId, EncodeError, Event, EventEnvelope, GatewayBindingId,
+    ServiceName, TenantId, TenantRole, UserId,
 };
-use protocol::config::{ByteOrder, DataType};
-use protocol::{GatewayId, ModelName};
+use protocol::config::{ByteOrder, DataType, DesiredConfig, Device, DeviceModel, Host, Transport};
+use protocol::{ConfigVersion, GatewayId, Message, ModelName, V1};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use uuid::Version;
@@ -427,6 +428,122 @@ fn gateway_bound_decodes_every_version() {
             "binding_id": "01928f6e-7a3c-7d4e-8f00-000000000b01",
             "hardware_id": "tg-0001",
         })
+    );
+}
+
+/// The device events (Laysi/trustiot-v2#100): tenant events of the device's tenant, written by
+/// the assets service; created and updated carry the device in the gateway's own format, which
+/// the configuration accepts, and the delete names what a consumer needs to let go of it.
+#[test]
+fn device_events_decode_every_version() {
+    let device_id: DeviceId = "01928f6e-7a3c-7d4e-8f00-000000000d01"
+        .parse()
+        .expect("device id");
+    let model_id: DeviceModelId = "01928f6e-7a3c-7d4e-8f00-000000000a01"
+        .parse()
+        .expect("model id");
+    let name = ModelName::new("line-1-meter").expect("device name");
+    let hardware_id = GatewayId::new("tg-0001").expect("hardware id");
+    let model_name = ModelName::new("power-meter").expect("model name");
+
+    let created = decode_fixtures::<DeviceCreated>();
+    let names: Vec<&str> = created.iter().map(|(name, _)| name.as_str()).collect();
+    assert_eq!(names, ["v1"]);
+    let created = created[0].1.clone();
+    assert_eq!(
+        created,
+        DeviceCreated {
+            device_id,
+            revision: 1,
+            name: name.clone(),
+            hardware_id: hardware_id.clone(),
+            model_id,
+            device: Device {
+                id: protocol::DeviceId::new(device_id.to_string()).expect("protocol id"),
+                model: model_name.clone(),
+                transport: Transport::RtuOverTcp,
+                host: Host::new("192.0.2.10").expect("host"),
+                port: 8899,
+                unit_id: 3,
+                poll_interval_ms: 60_000,
+            },
+        }
+    );
+
+    let updated = decode_fixtures::<DeviceUpdated>();
+    assert_eq!(updated.len(), 1);
+    let updated = &updated[0].1;
+    assert_eq!(updated.device_id, device_id);
+    assert_eq!(updated.revision, 2);
+    assert_eq!(updated.device.transport, Transport::ModbusTcp);
+    assert_eq!(updated.device.host.as_str(), "meter-1.plant.example");
+    assert_eq!(updated.device.poll_interval_ms, 10_000);
+    assert_eq!(updated.device.model, model_name);
+
+    // The gateway's configuration accepts both devices with their model.
+    let model = DeviceModel {
+        name: model_name,
+        points: Vec::new(),
+    };
+    for device in [&created.device, &updated.device] {
+        DesiredConfig {
+            v: V1,
+            rev: protocol::PROTOCOL_REVISION,
+            version: ConfigVersion::new(1).expect("version"),
+            models: vec![model.clone()],
+            devices: vec![device.clone()],
+        }
+        .validate()
+        .expect("a valid configuration");
+    }
+
+    let deleted = decode_fixtures::<DeviceDeleted>();
+    assert_eq!(deleted.len(), 1);
+    let deleted = &deleted[0].1;
+    assert_eq!(
+        *deleted,
+        DeviceDeleted {
+            device_id,
+            name,
+            hardware_id,
+            model_id,
+            revision: 2,
+        }
+    );
+
+    let path = common::fixture_path("events/assets.device_deleted/v1.json");
+    let fixture: EventEnvelope =
+        serde_json::from_str(&fs::read_to_string(path).expect("read fixture")).expect("envelope");
+    let device_tenant: TenantId = "01928f6e-7a3c-7d4e-8f00-00000000000b"
+        .parse()
+        .expect("tenant id");
+    assert_eq!(fixture.tenant_id, Some(device_tenant));
+
+    let envelope = EventEnvelope::new(deleted, Some(tenant())).expect("encode");
+    assert_eq!(envelope.producer, ServiceName::Assets);
+    assert_eq!(envelope.event_type, "assets.device_deleted");
+    assert_eq!(envelope.tenant_id, Some(tenant()));
+    assert_eq!(
+        envelope.payload,
+        json!({
+            "device_id": "01928f6e-7a3c-7d4e-8f00-000000000d01",
+            "name": "line-1-meter",
+            "hardware_id": "tg-0001",
+            "model_id": "01928f6e-7a3c-7d4e-8f00-000000000a01",
+            "revision": 2,
+        })
+    );
+    let envelope = EventEnvelope::new(&created, Some(tenant())).expect("encode");
+    assert_eq!(envelope.event_type, "assets.device_created");
+    assert_eq!(
+        envelope.decode::<DeviceCreated>().expect("round trip"),
+        created
+    );
+    assert_eq!(
+        EventEnvelope::new(updated, Some(tenant()))
+            .expect("encode")
+            .event_type,
+        "assets.device_updated"
     );
 }
 

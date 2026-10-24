@@ -1,8 +1,9 @@
 //! Cross-tenant negative tests (decision 29, crates/testkit; Laysi/trustiot-v2#65 acceptance 3,
-//! Laysi/trustiot-v2#99 acceptance 3, Laysi/trustiot-v2#101 acceptance 4): the assets service's
-//! role cannot read or change another tenant's rows (tenants, device models and their points,
-//! gateway bindings, events and their aggregates' sequences), its API never shows one tenant another tenant's data or writes into another
-//! tenant, and every relation the role can reach and every API operation is declared. The schema
+//! Laysi/trustiot-v2#99 acceptance 3, Laysi/trustiot-v2#101 acceptance 4, Laysi/trustiot-v2#100
+//! acceptance 3): the assets service's role cannot read or change another tenant's rows
+//! (tenants, device models and their points, gateway bindings, devices, events and their
+//! aggregates' sequences), its API never shows one tenant another tenant's data or writes into
+//! another tenant, and every relation the role can reach and every API operation is declared. The schema
 //! is the product's, applied by the migration Job (`testkit::product`), and the service is the
 //! real binary.
 //!
@@ -72,6 +73,42 @@ const SEED_BINDING: &str = "WITH tenant AS (
 INSERT INTO assets.gateway_bindings (tenant_id, binding_id, hardware_id)
 SELECT $1::uuid, $2::uuid, hardware_id FROM gateway";
 
+/// One device on a gateway of its own: `$2` is the device id, the canary its host (`canary-a-<32
+/// hex>` is a DNS name). The tenant's row, the gateway in the pool, its binding to the tenant and
+/// the device's model are added in the same statement (the foreign keys); the gateway's hardware
+/// ID and the model's name repeat `$2`, so every seeded device has its own.
+const SEED_DEVICE: &str = "WITH tenant AS (
+    INSERT INTO assets.tenants (tenant_id) VALUES ($1::uuid) ON CONFLICT (tenant_id) DO NOTHING
+), gateway AS (
+    INSERT INTO assets.gateway_pool (hardware_id, registered_at, workstation)
+    VALUES ('tg-' || replace($2::text, '-', ''), now(), 'testkit')
+    RETURNING hardware_id
+), binding AS (
+    INSERT INTO assets.gateway_bindings (tenant_id, binding_id, hardware_id)
+    SELECT $1::uuid, gen_random_uuid(), hardware_id FROM gateway
+    RETURNING tenant_id, binding_id, hardware_id
+), model AS (
+    INSERT INTO assets.device_models (tenant_id, model_id, name)
+    VALUES ($1::uuid, gen_random_uuid(), 'd' || replace($2::text, '-', ''))
+    RETURNING model_id
+)
+INSERT INTO assets.devices
+    (tenant_id, device_id, name, binding_id, hardware_id, model_id, transport, host, host_key,
+     port, unit_id, poll_interval_ms)
+SELECT binding.tenant_id, $2::uuid, 'd' || replace($2::text, '-', ''), binding.binding_id,
+    binding.hardware_id, model.model_id, 'modbus_tcp', $3, lower($3), 502, 1, 60000
+FROM binding, model";
+
+/// Why creating a device is not probed here.
+const DEVICE_CREATE: &str = "a device names a bound gateway and a model of the caller's tenant, \
+     which the suite's body cannot (it substitutes only {id}, {tenant} and {canary}); the body \
+     has no tenant field, the service writes into the caller's tenant only, and \
+     tests/devices.rs checks that another tenant's gateway or model is refused and that nothing \
+     is written in either tenant";
+
+const DEVICES: &str = "/api/assets/v1/devices";
+const DEVICE: &str = "/api/assets/v1/devices/{device_id}";
+
 /// Why the platform routes of the device pool are not probed here.
 const PLATFORM_ROUTE: &str = "platform administrators only (Laysi/trustiot-v2#101): every tenant \
      user, the tenant admins this suite probes with included, gets 403 before anything is read, \
@@ -108,6 +145,8 @@ async fn tenants_are_isolated() {
     // The service role reads its tenant's bindings and inserts new ones; it has no UPDATE or
     // DELETE, and the unique index across tenants tells it only that a gateway is taken.
     .table(pg_table!("assets.gateway_bindings", seed = SEED_BINDING))
+    // The service role reads, creates, updates and deletes its tenant's devices.
+    .table(pg_table!("assets.devices", seed = SEED_DEVICE))
     // The service role only inserts events (no SELECT or UPDATE): the probes check that it
     // cannot write one for another tenant.
     .table(pg_table!("assets.outbox_event", seed = SEED_EVENT))
@@ -174,6 +213,18 @@ async fn tenants_are_isolated() {
                          "name": "i{id}", "points": points}),
             ),
         )
+        .endpoint(Endpoint::list(DEVICES, "assets.devices"))
+        .endpoint(Endpoint::get(DEVICE, "assets.devices"))
+        .endpoint(
+            // New settings for the probe's own device, still at revision 1; the seeded device is
+            // alone on its gateway, so the new endpoint conflicts with nothing.
+            Endpoint::item(Method::PUT, DEVICE, "assets.devices").body(
+                json!({"revision": 1, "transport": "rtu_over_tcp", "host": "192.0.2.10",
+                       "port": 8899, "unit_id": 3, "poll_interval_ms": 10000}),
+            ),
+        )
+        .endpoint(Endpoint::item(Method::DELETE, DEVICE, "assets.devices"))
+        .exempt_endpoint("POST /api/assets/v1/devices", DEVICE_CREATE)
         .exempt_endpoint("GET /api/assets/v1/platform/gateways", PLATFORM_ROUTE)
         .exempt_endpoint(
             "GET /api/assets/v1/platform/gateways/{hardware_id}",
