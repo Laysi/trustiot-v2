@@ -60,6 +60,7 @@ broker 與每個用戶端接受的 maximum packet size 至少要是 `MIN_MAX_PAC
   - 閘道器（Laysi/trustiot-v2#117）在同一個時間點讀取所有計數器，每個請求先計入 `requests` 再計入失敗類型，讓正常運作下不會出現不一致。
 - **`peek_header` 有大小上限（協定層）。** `TelemetryBatch::peek_header` 與 `DesiredConfig::peek_header` 只讀不超過 `MAX_PEEK_BYTES`（等於 `MIN_MAX_PACKET_BYTES`，1 MiB + 8 KiB）的 payload，超過時回 `DecodeError::TooLarge`。上限不能用 channel 上限：peek 正是給 `decode` 拒絕的 payload 用的，超過 256 KiB 的遙測批次也要能回 `rejected`，否則閘道器會永遠重送。比這更大的 payload 不可能經符合規定的 MQTT 連線送達；broker 的 maximum packet size 設為 `MIN_MAX_PACKET_BYTES` 時，任何送得到雲端的 payload 都 peek 得到。
 - **IPv4-mapped 位址等同 IPv4（協定層）。** 設備的 `host` 寫成 `::ffff:a.b.c.d` 時，先換成它對應的 IPv4 位址再套用同一套規則：`::ffff:0.0.0.0`、`::ffff:224.0.0.1`、`::ffff:255.255.255.255` 與 IPv4 寫法一樣被拒絕。`Host::canonical` 把兩種寫法正規化成同一個 IPv4 位址，同一個轉換器不能因寫法不同而混用兩種傳輸方式（`mixed_transport`）。`Host::as_str` 仍是寫入時的原樣。
+- **結尾是數字的名稱不是名稱（協定層）。** 設備的 `host` 不是 IP 位址時，最後一段不能全是十進位數字，也不能是 `0x`／`0X` 加上十六進位數字（或什麼都沒有），也就是 WHATWG URL 標準 host parser 的「ends in a number」。這樣的名稱不會被查詢：getaddrinfo（glibc 與 musl，經 inet_aton）把它讀成 IPv4 位址，`0x7f000001`、`0x7f.0.0.0x1` 是 127.0.0.1，`0x0` 是 0.0.0.0，`0xe0000001` 是多播，`0xffffffff` 是廣播，會繞過上面的位址規則。中間的段落像十六進位（`0x7f.plc`）不受影響。loopback 位址在協定層仍然合法；設備能不能指向閘道器本身，是呼叫端的規則（資產服務拒絕字面上的 loopback 寫法，閘道器在連線時把關）。
 
 ## Topic
 
@@ -262,7 +263,7 @@ Mosquitto 以 `use_identity_as_username` 把憑證 CN 當成 username，dynsec �
 
 ### v1 接收範圍的變更紀錄
 
-收緊接收範圍也是相容性變更：舊的送出端照舊送出的內容，新的接收端可能拒絕。下列變更都在任何閘道器出貨之前（MS0）完成，所以沿用 `PROTOCOL_REVISION` 1、不開新的 `rev`；`tests/golden/current/` 與 `tests/golden/v1-frozen/` 的位元組都沒有改變，固定樣本照舊解碼成相同內容（`frozen_v1_payloads_still_decode`）。出貨之後的收緊必須提高 `rev` 或主版本。
+收緊接收範圍也是相容性變更：舊的送出端照舊送出的內容，新的接收端可能拒絕。下列變更都在任何閘道器出貨之前完成（2026-10-11 的在 MS0；2026-10-24 的那一項時，下發設定給閘道器的 gateway-ops（Laysi/trustiot-v2#93）還不存在，沒有閘道器收過設定），所以沿用 `PROTOCOL_REVISION` 1、不開新的 `rev`；`tests/golden/current/` 與 `tests/golden/v1-frozen/` 的位元組都沒有改變，固定樣本照舊解碼成相同內容（`frozen_v1_payloads_still_decode`）。出貨之後的收緊必須提高 `rev` 或主版本。
 
 | 日期 | 變更 | 之前 | 之後 |
 | --- | --- | --- | --- |
@@ -270,6 +271,7 @@ Mosquitto 以 `use_identity_as_username` 把憑證 CN 當成 username，dynsec �
 | 2026-10-11 | 文字中的 U+0000（Laysi/trustiot-v2#269） | 接受 | `encode` 與 `decode` 都拒絕；遙測文字值是 `ValueError::NulInText`，其他欄位是 `invalid_value` |
 | 2026-10-11 | IPv4-mapped 的設備 `host`（Laysi/trustiot-v2#269） | `::ffff:0.0.0.0` 等繞過未指定、多播、廣播位址的檢查；`::ffff:1.2.3.4` 與 `1.2.3.4` 視為不同端點 | 依 IPv4 規則判斷；兩種寫法是同一個端點 |
 | 2026-10-11 | `peek_header` 的大小（Laysi/trustiot-v2#269） | 不限 | 超過 `MAX_PEEK_BYTES` 回 `TooLarge` |
+| 2026-10-24 | 結尾是 `0x` 十六進位數字的設備 `host`（Laysi/trustiot-v2#100 的安全審查） | 當成 DNS 名稱接受，閘道器的 getaddrinfo 卻把它讀成 IPv4 位址（例如 127.0.0.1、0.0.0.0） | `Host::new` 拒絕，設定解碼與驗證也就拒絕 |
 | 2026-10-11 | `Status`、`TelemetryAck.outcome`、`LiveControl.action` 的非標準編碼（Laysi/trustiot-v2#290） | 非文字的鍵、byte string 文字、陣列形式、過寬的整數照 serde 中間值的規則接受；略過的項目含 CBOR tag、不合法的 UTF-8 等值時拒絕 | 與其他 map 相同：前者 `decode_failed`，後者略過（見「解碼規則與下游責任」） |
 
 解碼配置的改變（`SEQ_PREALLOC_BYTES`、兩段解碼）只影響配置量；兩段解碼對接收範圍的影響只有上表列出的非標準編碼。
