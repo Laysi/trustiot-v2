@@ -246,8 +246,10 @@ pub async fn start(context: Context<Config>) -> Result<Router, BoxError> {
 /// Most connections one replica opens to Postgres, per role, when the ext_authz check's pool has
 /// `max_connections` (`TRUSTIOT__DATABASE__MAX_CONNECTIONS`): every pool [`start`] opens, at its
 /// largest. The roles have no connection limits of their own, so all services' sums, old and new
-/// replicas during a rollout included, must stay under Postgres' `max_connections`
-/// (services/identity/README.md, "連線池", which a test holds to these numbers).
+/// replicas during a rollout included, must stay under Postgres' `max_connections`: the chart
+/// adds them up from its connection budget (deploy/chart/templates/_postgres.tpl,
+/// Laysi/trustiot-v2#575), which tests/chart_connections.rs holds to this sum, as a unit test
+/// holds services/identity/README.md, "連線池".
 #[must_use]
 pub fn connections_per_replica(max_connections: u32) -> ReplicaConnections {
     ReplicaConnections {
@@ -384,11 +386,9 @@ mod tests {
             connections.platform
         );
         assert!(README.contains(&stated), "the README should say: {stated}");
-        // The chart's Postgres connections (`postgres.bundled.parameters.max_connections`) were
-        // sized for 30 per replica of this service, a rollout's extra replica included; the user's
-        // own account API (Laysi/trustiot-v2#497) shares the tenant API's and the event log's
-        // pools so as not to add to it. More needs that budget checked again first.
-        assert!(connections.total() <= 30, "{connections:?}");
+        // No fixed ceiling here: tests/chart_connections.rs holds the chart's connection budget
+        // to these numbers, and the chart refuses values whose whole-release sum exceeds
+        // Postgres' `max_connections` (deploy/chart/README.md, "連線預算").
 
         let rows = pool_rows();
         let pools = [

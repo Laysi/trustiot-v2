@@ -405,13 +405,13 @@ schema `identity`，DDL 在 `migrations/postgres/`，由 migration Job（Laysi/t
 | 寄信（`login::SEND_POOL_CONNECTIONS`） | 發驗證碼的 worker（發碼、作廢沒寄出的驗證碼）、每小時刪除舊的驗證碼 | 2 |
 | run 委派（`delegation::POOL_CONNECTIONS`） | 建立 run 委派與每次換 token 時查 session 與成員資格（見[agent 執行期間的委派](#agent-執行期間的委派)） | 4 |
 | 事件紀錄的服務角色（`event_log::SERVICE_CONNECTIONS`） | 事件紀錄的消費端寫入、租戶的事件紀錄 API | 4 |
-| 事件紀錄的平台角色（`event_log::platform_connections()`） | 消費端讀各產生端的 outbox、後台的事件紀錄 API、列出使用者所屬的租戶（以 `identity_platform` 連線，見[事件層與操作紀錄](#事件層與操作紀錄)與[目前的 session 與切換租戶](#目前的-session-與切換租戶)） | `CONSUMES` 數加 2，目前 4 |
+| 事件紀錄的平台角色（`event_log::platform_connections()`） | 消費端讀各產生端（目前三個：`identity`、`assets`、`certs`）的 outbox、後台的事件紀錄 API、列出使用者所屬的租戶（以 `identity_platform` 連線，見[事件層與操作紀錄](#事件層與操作紀錄)與[目前的 session 與切換租戶](#目前的-session-與切換租戶)） | `CONSUMES` 數加 2，目前 5 |
 
 寄信的連線池與登入請求的分開，所以大量的 `send_code` 不會讓 `verify_code` 與登出等連線、逾時回 503。worker 同時寄 4 封，但每封只在發碼的短交易裡用一條連線，寄信的期間不佔連線，所以 2 條就夠；等連線超過 5 秒（`ACQUIRE_TIMEOUT`）的那一封記 ERROR、不寄，使用者再要一次。
 
 使用者自己的帳號（Laysi/trustiot-v2#497）不另開連線池（2026-10-23，安全審查的 F3：原本另開的 4 條讓只有身分服務換版時，所有連線池加總剛好等於 Postgres 可用的連線數）：服務角色的查詢用租戶 API 的連線池，平台角色讀成員資格用事件紀錄的平台角色連線池。後者有每個消費端各一條、另外 2 條，讀成員資格同時最多 2 個（`current_session::MEMBERSHIP_READS`，等超過 5 秒回 503），所以大量的登入使用者不會讓消費端等連線。代價是大量讀取目前 session 或偏好的請求可能讓平台管理者建立租戶或設定成員角色的請求等連線、逾時回 503，後台讀事件紀錄也和讀成員資格共用那 2 條；平台管理者重試即可，限流在 Laysi/trustiot-v2#113。
 
-預設設定下每個副本最多 30 條：26 條以 `identity_app`、4 條以 `identity_platform` 連線（這兩個角色沒有個別的連線數上限；`connections_per_replica` 從各連線池的常數算出這兩個數字，測試確認這裡寫的相同）；所有服務、所有副本的連線池加總要低於 Postgres 的 `max_connections`（chart 的 `postgres.bundled.parameters.max_connections`，預設 100，見 [chart 的 README](../../deploy/chart/README.md)），換版時新舊副本會同時存在。
+預設設定下每個副本最多 31 條：26 條以 `identity_app`、5 條以 `identity_platform` 連線（這兩個角色沒有個別的連線數上限）。`connections_per_replica` 從各連線池的常數算出這兩個數字，是唯一的加總：單元測試確認這裡寫的相同；`tests/chart_connections.rs` 確認 chart 的連線預算（`trustiot.postgres.connectionBudgets` 的 `identity`：`database.maxConnections` 3–100、其他連線池 21 條）在每個 `database.maxConnections` 都等於它，並列出 `start` 開連線池的每個呼叫，所以連線池變大、多一個連線池或多呼叫一次既有的建構函式，而預算沒跟著改時，測試失敗。`CONSUMES` 每多一個產生端，平台角色就多一條：2026-10-23 加入 `certs`（Laysi/trustiot-v2#79）後由 30 條變成 31 條。所有服務、所有副本的連線池加總要放得進 Postgres 的 `max_connections`（chart 的 `postgres.bundled.parameters.max_connections`，預設 160），換版時新舊副本會同時存在：chart 以所有服務一起滾動計算加總，超過就渲染失敗（Laysi/trustiot-v2#575，見 [chart 的 README](../../deploy/chart/README.md)「連線預算」）。
 
 ## 簽章金鑰
 
@@ -533,7 +533,8 @@ CARGO_BUILD_JOBS=2 cargo test -p identity
 | `tests/token_claims.rs` | 驗證者另寫：竄改、改簽、改受眾、改時間的 token 都過不了 service-kit 的驗證器，輪替期間舊 token 在效期內仍有效（不需要資料庫） |
 | `src/preferences.rs` | 偏好的允許清單（語言與主題大小寫要相同、時區是 `auto` 或 tzdb 的名稱、`Factory` 與路徑形狀的值被拒）、服務接受的每個時區名稱都通過 migration 的 CHECK、預設值與清單和 migration 相同、`PATCH` 的 body（`null`、未知欄位、陣列、重複的欄位被拒）、每個不合的欄位各一個錯誤 |
 | `src/current_session.rs` | 角色的顯示、回應的欄位、切換的 body 只能是一個帶 `tenant_id` 的 JSON 物件；API 文件把 session 與租戶的每個欄位都列為 `required`（`email`、`active_tenant`、`name` 可能是 `null` 但一定出現）；讀成員資格的上限加上消費端的連線不超過事件紀錄的平台角色連線池 |
-| `src/lib.rs` | 從各連線池的常數算出每個副本以兩個角色最多開幾條連線（不超過 30 條），和[連線池](#連線池)寫的數字與表格的每一列相同 |
+| `src/lib.rs` | 從各連線池的常數算出每個副本以兩個角色最多開幾條連線，和[連線池](#連線池)寫的數字與表格的每一列相同 |
+| `tests/chart_connections.rs` | chart 的連線預算（`deploy/chart/templates/_postgres.tpl`，Laysi/trustiot-v2#575）：`database.maxConnections` 的範圍就是服務接受的 3–100，範圍內的每個值，chart 算的每副本連線數都等於 `connections_per_replica`；程式裡每個 `.max_connections(...)`（`testkit::chart::pool_size_calls`）與 `start` 開連線池的每個呼叫（`connect_lazy*`、`start_event_log`）都是列出的那些（不需要資料庫） |
 | `src/tenants.rs` | 租戶名稱的規則（去空白、長度以字元計、控制字元、格式字元與行／段落分隔符）；只接受 JSON 的 `Content-Type`（可帶參數，表單、`text/plain`、相近的型別與兩個 `Content-Type` 都拒絕） |
 | `tests/tenants.rs` | 真的服務與 migration Job 套用的產品 schema：平台管理者的 session 經這個服務的 ext_authz 換成 token 後建立租戶得到 201，列與 `identity.tenant_created` 在同一個交易（同一個 `xmin`）；撤銷寫 outbox 的權限時回 503 且沒有留下列；不是平台管理者 403（租戶的 `admin` 也是）、沒有 token 401、平台管理者給資產服務的 token 401、沒有 `Content-Type` 或是表單與 `text/plain` 400、壞的 body 400、壞的名稱 422，都不建立租戶；`application/json; charset=utf-8` 201；日誌不含租戶名稱 |
 | `tests/platform_admin.rs` | Laysi/trustiot-v2#582，真的服務、migration Job 套用的產品 schema 與假 SMTP relay：`migrate::platform_admin::bootstrap`（`migrate bootstrap-platform-admin` 的程式）以大小寫混雜、帶空白的地址建立第一位平台管理員，`platform_event_log` 收到剛好一筆 `identity.platform_admin_granted`（payload 只有 `user_id` 與 `via`、沒有 `actor`、沒有地址），沒有任何成員資格；這個使用者以驗證碼登入、經 ext_authz 換到 token，`POST /api/identity/v1/tenants` 201；再執行一次回報同一個使用者、什麼都不改；服務的日誌沒有地址。指令本身（結束碼、同時執行、復原）在 `tools/migrate/tests/platform_admin.rs` |
