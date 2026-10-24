@@ -5,7 +5,7 @@
 #   cargo run --locked -q -p openapi -- --check
 #   cargo test --locked -p workstation -p certs -p repo-check --no-fail-fast
 #   cargo deny --locked check
-rcheck: queued on the build host at 05:08:45
+started on the build host at 05:08:45
 2176ee8
 == clippy workspace
     Checking testkit v0.1.0 (<host copy>/src/crates/testkit)
@@ -61,8 +61,6 @@ test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
           └── web v0.1.0
 
 advisories ok, bans ok, licenses ok, sources ok
-rcheck: removed 0 dangling test volumes
-rcheck: removed 0 dangling podman test volumes
-rcheck: exit 0 at 05:11:02 (build host, 615-62196d05)
+exit 0 at 05:11:02 (build host)
 
 [exited with code 0]
