@@ -153,6 +153,30 @@ impl RequestError {
             Problem::Connect(_) | Problem::Tls(_) | Problem::Build(_)
         )
     }
+
+    /// Whether another attempt may succeed: the connection could not be made, broke, or no
+    /// complete response came within the timeout. A request that cannot be built and a TLS
+    /// failure (an untrusted or wrong server certificate, most often) are not: trying again
+    /// changes nothing.
+    #[must_use]
+    pub fn is_transient(&self) -> bool {
+        matches!(
+            self.problem,
+            Problem::Connect(_) | Problem::Exchange(_) | Problem::Timeout(_)
+        )
+    }
+
+    /// What went wrong, without the request: for log lines and records.
+    #[must_use]
+    pub fn problem_kind(&self) -> &'static str {
+        match self.problem {
+            Problem::Build(_) => "build",
+            Problem::Connect(_) => "connect",
+            Problem::Tls(_) => "tls",
+            Problem::Exchange(_) => "exchange",
+            Problem::Timeout(_) => "timeout",
+        }
+    }
 }
 
 /// What went wrong with a request.
@@ -203,9 +227,10 @@ pub fn printable(text: &str) -> String {
     shown
 }
 
-/// An error status from the platform, with the M1 error body's code, message key and the
-/// fields it names (each through [`printable`]); the body's other content is never shown.
-#[derive(Debug, thiserror::Error)]
+/// An error status from the platform, with the M1 error body's code, message key,
+/// `details.reason` and the fields it names (each through [`printable`]); the body's other content
+/// is never shown.
+#[derive(Clone, Debug, thiserror::Error)]
 pub struct ApiError {
     /// The request, as `METHOD /path`.
     pub request: String,
@@ -214,6 +239,9 @@ pub struct ApiError {
     pub code: Option<String>,
     /// The M1 `message_key`, when the body is an M1 error body.
     pub message_key: Option<String>,
+    /// The M1 body's `details.reason`, when it is a string (the certs service names why it
+    /// refused a workstation with it).
+    pub reason: Option<String>,
     /// `(field, message key)` of each field error.
     pub field_errors: Vec<(String, String)>,
 }
@@ -232,6 +260,11 @@ impl ApiError {
             message_key: parsed
                 .as_ref()
                 .map(|body| printable(&body.message_key().to_string())),
+            reason: parsed
+                .as_ref()
+                .and_then(|body| body.details().get("reason"))
+                .and_then(serde_json::Value::as_str)
+                .map(printable),
             field_errors: parsed
                 .as_ref()
                 .map(|body| {
@@ -265,6 +298,9 @@ impl fmt::Display for ApiError {
             (Some(code), Some(key)) => write!(f, " {code} ({key})")?,
             _ => f.write_str(" without an M1 error body")?,
         }
+        if let Some(reason) = &self.reason {
+            write!(f, ", reason {reason}")?;
+        }
         for (field, key) in &self.field_errors {
             write!(f, "; {field}: {key}")?;
         }
@@ -272,12 +308,15 @@ impl fmt::Display for ApiError {
     }
 }
 
-/// One request: the method, the path, the session cookie and a JSON body, all optional but the
-/// first two.
+/// One request: the method, the path, the session cookie, extra headers and a JSON body, all
+/// optional but the first two.
 pub struct Call<'a> {
     pub method: Method,
     pub path: &'static str,
     pub cookie: Option<&'a SessionCookie>,
+    /// Headers of this request alone (a registration's workstation signature). Their values are
+    /// marked sensitive and never logged.
+    pub headers: Vec<(HeaderName, HeaderValue)>,
     /// A JSON body; it may hold a secret (the login code), so it is wiped once sent.
     pub json: Option<Zeroizing<Vec<u8>>>,
 }
@@ -398,6 +437,10 @@ impl Client {
         }
         for (name, value) in &self.headers.0 {
             builder = builder.header(name, sensitive(value.expose())?);
+        }
+        for (name, mut value) in call.headers {
+            value.set_sensitive(true);
+            builder = builder.header(name, value);
         }
         let body = match call.json {
             Some(json) => {
@@ -692,6 +735,7 @@ mod tests {
                 method: Method::DELETE,
                 path: "/api/identity/v1/sessions/current",
                 cookie: None,
+                headers: Vec::new(),
                 json: None,
             })
             .await
@@ -733,6 +777,7 @@ mod tests {
                 method: Method::GET,
                 path: "/",
                 cookie: None,
+                headers: Vec::new(),
                 json: None,
             })
             .await

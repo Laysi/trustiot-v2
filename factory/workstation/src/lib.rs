@@ -12,6 +12,9 @@
 //! - [`http`]: the HTTP client every command uses: one connection per request, never a retry,
 //!   the extra headers of `--headers-file`.
 //! - [`secret`]: wrappers whose `Debug` and `Display` never show a secret.
+//! - [`register`]: the factory registration of a gateway (`register`), signed by the workstation
+//!   ([`sign`]), retried with backoff ([`retry`]), its answer checked and recorded
+//!   ([`journal`]).
 //!
 //! The operator's guide is factory/workstation/README.md.
 
@@ -19,8 +22,12 @@ pub mod config;
 pub mod files;
 pub mod http;
 pub mod identity;
+pub mod journal;
+pub mod register;
+pub mod retry;
 pub mod secret;
 pub mod session;
+pub mod sign;
 
 use std::io;
 use std::path::PathBuf;
@@ -76,20 +83,32 @@ pub enum Error {
     /// No response, or an unusable one (see [`http::RequestError`]).
     #[error(transparent)]
     Request(#[from] http::RequestError),
-    /// The platform answered with an error status.
+    /// The platform answered with an error status (boxed: it is the largest variant).
     #[error(transparent)]
-    Api(#[from] http::ApiError),
+    Api(Box<http::ApiError>),
     /// Anything else, as fixed text.
     #[error("{0}")]
     Failed(String),
+    /// A registration stopped with a known refusal, a failed check or used-up retries; each has
+    /// its own exit code ([`register::StopKind`]).
+    #[error(transparent)]
+    Registration(Box<register::Stopped>),
+}
+
+impl From<http::ApiError> for Error {
+    fn from(error: http::ApiError) -> Self {
+        Self::Api(Box::new(error))
+    }
 }
 
 impl Error {
-    /// The process exit code for this failure: 2 for usage mistakes, 1 otherwise.
+    /// The process exit code for this failure: 2 for usage mistakes, a registration's own code
+    /// ([`register::StopKind::exit_code`]), 1 otherwise.
     #[must_use]
     pub fn exit_code(&self) -> u8 {
         match self {
             Self::Usage(_) => 2,
+            Self::Registration(stopped) => stopped.kind.exit_code(),
             _ => 1,
         }
     }
