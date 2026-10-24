@@ -45,13 +45,18 @@
   - 多播：224.0.0.0/4、`ff00::/8`
   - 廣播：`255.255.255.255`，以及閘道器每個 IPv4 網段的廣播位址（由位址與 netmask 算出；/31 與 /32 沒有廣播位址，/31 的另一個位址是對端）
   - 雲端 metadata：`169.254.169.254`、`fd00:ec2::254`
-- 其他位址都允許：169.254.0.0/16 的其他位址（沒有 DHCP 的 RS485 轉換器常用 APIPA 位址）、私有位址（10/8、172.16/12、192.168/16、IPv6 ULA）、IPv6 link-local，以及閘道器自己網段裡的其他位址，現場設備就在這些網段。
+  - IPv4-compatible 的 `::/96`（`::a.b.c.d`，RFC 4291 2.5.5.1 已廢止；`::` 與 `::1` 照上面的規則）：整段拒絕
+  - 帶著 IPv4 位址、轉譯器或中繼可能轉送過去的 IPv6 寫法：內嵌的 IPv4 位址被上面任何一條 IPv4 規則（loopback、0.0.0.0/8、多播、廣播、metadata、閘道器自己的 IPv4 位址）拒絕時就拒絕，說明裡寫的是原本的 IPv6 位址。
+    - NAT64 `64:ff9b::/96`：最後 32 位元
+    - 本地用 NAT64 `64:ff9b:1::/48`（RFC 8215）：最後 32 位元，也就是業者在其中通常使用的 /96 配置；其中其他前綴長度的配置不解讀
+    - 6to4 `2002::/16`：第 16–47 位元
+- 其他位址都允許：169.254.0.0/16 的其他位址（沒有 DHCP 的 RS485 轉換器常用 APIPA 位址）、私有位址（10/8、172.16/12、192.168/16、IPv6 ULA），以及閘道器自己網段裡的其他位址，現場設備就在這些網段。IPv6 link-local（`fe80::/10`）不在拒絕之列，但這種設備實際上連不上：Linux 不接受沒有 scope ID 的 link-local 連線，而 `Host` 不收 zone ID，DNS 回答的 scope 也是 0。
 - 名稱解析成多個位址時，被拒絕的跳過，依解析的順序連允許的位址，第一個接受的就用；都連不上時回報最後一個錯誤。
 - 所有位址都被拒絕時，不開 socket、不送任何封包，讀取以 `ReadError::Connect`（`connect`）失敗，說明是「refused: every address the host resolved to points at the gateway itself or is not allowed (<解析出的位址>)」，最多列 8 個位址，不帶解析結果以外的資料。讀不到介面位址時也不連線（fail closed），一樣是 `connect` 失敗。這和連不上一樣算連線失敗：其餘請求不送，下一次輪詢在退避之後重試，所以名稱之後解析成允許的位址時會自己恢復。
 
 正式的路徑（`Endpoints::new`、`TcpConnection::new`）一律檢查，沒有任何設定能關掉它。測試的假 Modbus 端點（`crates/testkit` 的 `FakeModbus`）聽在 127.0.0.1，所以測試要用 `exempt_for_tests([127.0.0.1])` 放行那個位址。這個方法只存在於本 crate 的單元測試，以及 `test-exempt-addresses` feature 打開時；只有 `Cargo.toml` 裡本 crate 對自己的 dev-dependency 打開它，所以只有測試建置才有，agent 的建置（`cargo build -p agent`）沒有。設定檔、環境變數或經 MQTT 下發的設定都碰不到它。`cargo test -p repo-check` 會在任何正式依賴、其他 feature 或 `default` 打開這個 feature 時失敗。在閘道器上以 systemd 執行 agent 的端到端測試（Laysi/trustiot-v2#102）用的是正式路徑，所以假 Modbus 要放在閘道器以外的位址（另一個網路命名空間或另一台主機），不能放在閘道器本機。
 
-這個檢查擋不到的：經路由器或 NAT 轉回閘道器的位址、以 `ip route add local` 加入本機路由表但不在任何介面上的網段。這些屬於閘道器的防火牆與網路設定，不在這裡處理。
+這個檢查擋不到的：經路由器或 NAT 轉回閘道器的位址（含 hairpin NAT 與 port forward）、`64:ff9b:1::/48` 裡 /96 以外的 NAT64 配置、以 `ip route add local` 加入本機路由表但不在任何介面上的網段。這些由下一層的閘道器防火牆處理（Laysi/trustiot-v2#96），不在這裡處理。
 
 ### 合併讀取
 

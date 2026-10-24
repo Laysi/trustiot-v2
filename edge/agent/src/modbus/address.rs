@@ -39,32 +39,81 @@ pub(crate) enum Refusal {
     Broadcast,
     /// A cloud metadata service: `169.254.169.254` or `fd00:ec2::254`.
     Metadata,
+    /// `::/96` other than `::` and `::1`: IPv4-compatible IPv6 addresses, deprecated (RFC 4291
+    /// section 2.5.5.1), which no field device uses.
+    Ipv4Compatible,
 }
 
-/// Why `address` must not be connected to, or `None` when it may be. An IPv4-mapped IPv6
-/// address is checked as the IPv4 address it maps.
+/// Why `address` must not be connected to, or `None` when it may be.
+///
+/// An IPv4-mapped IPv6 address (`::ffff:0:0/96`) is checked as the IPv4 address it maps. The
+/// IPv6 forms that carry an IPv4 address a translator or relay may forward to are refused
+/// whenever that IPv4 address is: NAT64 `64:ff9b::/96` and local-use NAT64 `64:ff9b:1::/48`
+/// (RFC 8215) by their last 32 bits, the /96 layout inside the /48 (other prefix lengths in it
+/// are not decoded), and 6to4 `2002::/16` by bits 16–47. `::/96` (IPv4-compatible) is refused
+/// whole.
 ///
 /// Everything else is allowed: the private ranges (10/8, 172.16/12, 192.168/16, IPv6 ULA) are
 /// where field devices are, and 169.254/16 (link-local) other than the metadata address is
 /// what an RS485 converter without DHCP often takes.
 pub(crate) fn refusal(address: IpAddr, interfaces: &Interfaces) -> Option<Refusal> {
-    let address = address.to_canonical();
-    let refusal = match address {
-        IpAddr::V4(v4) if v4.is_loopback() => Refusal::Loopback,
-        IpAddr::V4(v4) if v4.octets()[0] == 0 => Refusal::Unspecified,
-        IpAddr::V4(v4) if v4.is_multicast() => Refusal::Multicast,
-        IpAddr::V4(v4) if v4.is_broadcast() || interfaces.broadcasts.contains(&v4) => {
-            Refusal::Broadcast
-        }
-        IpAddr::V4(v4) if v4 == METADATA_V4 => Refusal::Metadata,
-        IpAddr::V6(v6) if v6 == METADATA_V6 => Refusal::Metadata,
-        IpAddr::V6(v6) if v6.is_loopback() => Refusal::Loopback,
-        IpAddr::V6(v6) if v6.is_unspecified() => Refusal::Unspecified,
-        IpAddr::V6(v6) if v6.is_multicast() => Refusal::Multicast,
-        _ if interfaces.addresses.contains(&address) => Refusal::Gateway,
-        _ => return None,
+    let v6 = match address.to_canonical() {
+        IpAddr::V4(v4) => return refusal_v4(v4, interfaces),
+        IpAddr::V6(v6) => v6,
+    };
+    let segments = v6.segments();
+    let refusal = if v6 == METADATA_V6 {
+        Refusal::Metadata
+    } else if v6.is_loopback() {
+        Refusal::Loopback
+    } else if v6.is_unspecified() {
+        Refusal::Unspecified
+    } else if segments[..6] == [0; 6] {
+        Refusal::Ipv4Compatible
+    } else if v6.is_multicast() {
+        Refusal::Multicast
+    } else if let Some(refusal) = embedded_v4(&segments).and_then(|v4| refusal_v4(v4, interfaces)) {
+        refusal
+    } else if interfaces.addresses.contains(&IpAddr::V6(v6)) {
+        Refusal::Gateway
+    } else {
+        return None;
     };
     Some(refusal)
+}
+
+/// Why the IPv4 address `v4` must not be connected to, or `None` when it may be.
+fn refusal_v4(v4: Ipv4Addr, interfaces: &Interfaces) -> Option<Refusal> {
+    let refusal = if v4.is_loopback() {
+        Refusal::Loopback
+    } else if v4.octets()[0] == 0 {
+        Refusal::Unspecified
+    } else if v4.is_multicast() {
+        Refusal::Multicast
+    } else if v4.is_broadcast() || interfaces.broadcasts.contains(&v4) {
+        Refusal::Broadcast
+    } else if v4 == METADATA_V4 {
+        Refusal::Metadata
+    } else if interfaces.addresses.contains(&IpAddr::V4(v4)) {
+        Refusal::Gateway
+    } else {
+        return None;
+    };
+    Some(refusal)
+}
+
+/// The IPv4 address an IPv6 address of a translation or relay prefix carries: NAT64
+/// `64:ff9b::/96` and the /96 layout in local-use NAT64 `64:ff9b:1::/48` in their last 32
+/// bits, 6to4 `2002::/16` in bits 16–47.
+fn embedded_v4(segments: &[u16; 8]) -> Option<Ipv4Addr> {
+    let from = |high: u16, low: u16| Ipv4Addr::from((u32::from(high) << 16) | u32::from(low));
+    match segments {
+        [0x0064, 0xff9b, 0, 0, 0, 0, high, low] | [0x0064, 0xff9b, 0x0001, _, _, _, high, low] => {
+            Some(from(*high, *low))
+        }
+        [0x2002, high, low, ..] => Some(from(*high, *low)),
+        _ => None,
+    }
 }
 
 /// The gateway's own addresses, read when a connection is opened: DHCP may change them.
@@ -473,6 +522,18 @@ mod tests {
             ("172.20.0.9", Refusal::Gateway),
             ("fd12:3456::5", Refusal::Gateway),
             ("fe80::5", Refusal::Gateway),
+            // IPv6 forms that carry an IPv4 address.
+            ("::127.0.0.1", Refusal::Ipv4Compatible),
+            ("::192.168.10.6", Refusal::Ipv4Compatible),
+            ("64:ff9b::127.0.0.1", Refusal::Loopback),
+            ("64:ff9b::169.254.169.254", Refusal::Metadata),
+            ("64:ff9b::192.168.10.5", Refusal::Gateway),
+            ("64:ff9b::192.168.10.255", Refusal::Broadcast),
+            ("64:ff9b:1:abcd::127.0.0.1", Refusal::Loopback),
+            ("2002:7f00:1::", Refusal::Loopback),
+            ("2002:a9fe:a9fe::1", Refusal::Metadata),
+            ("2002:e000:1::", Refusal::Multicast),
+            ("2002::1", Refusal::Unspecified),
         ];
         for (address, expected) in cases {
             assert_eq!(
@@ -507,6 +568,10 @@ mod tests {
             // Public addresses (a device behind a router or VPN).
             "192.0.2.10",
             "2001:db8::10",
+            // IPv6 forms that carry an allowed IPv4 address.
+            "64:ff9b::192.168.10.6",
+            "64:ff9b:1::10.1.2.3",
+            "2002:c000:20a::1",
         ] {
             assert_eq!(refusal(ip(address), &interfaces), None, "{address}");
         }
