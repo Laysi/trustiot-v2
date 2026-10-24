@@ -3,19 +3,21 @@ The MQTT broker's server certificate (Laysi/trustiot-v2#557; services/certs/READ
 伺服器憑證"): the certs service issues it on a port of its own, the container port named
 broker-certs (the service's broker.listen_addr, default 8082), which serves POST
 /internal/certs/v1/broker-certificate and nothing else. A certificate for the broker's name lets
-whoever holds its key pose as the broker to every gateway, so only the broker's pod may ask for
-one. Its own objects, all named <release>-certs-broker:
-- a Service with that port only, which the broker addresses
+whoever holds its key pose as the broker to every gateway, so only the broker's certificate
+CronJob (templates/mqtt-broker-certificate.yaml, Laysi/trustiot-v2#535), which writes the key
+into the broker's Secret, may ask for one; not even the broker's pod reaches this port. Its own
+objects, all named <release>-certs-broker:
+- a Service with that port only, which the CronJob addresses
   (http://<release>-certs-broker.<namespace>.svc:8082): its port is always 8082
   ("trustiot.certs.brokerServicePort") and forwards to the container port by name, so overriding
   the container port does not move the address; the certs service's own Service leaves the port
   out ("trustiot.service.service");
-- an AuthorizationPolicy (ztunnel, L4) that admits the MQTT broker's ServiceAccount (the plan's
+- an AuthorizationPolicy (ztunnel, L4) that admits the CronJob's ServiceAccount (the plan's
   brokerCallers) on that port only. The certs service's own policy (templates/mesh.yaml) admits
   the ingress gateway, the services that list certs in mesh.calls and the broker's trust sidecar
   on its API ports only (the plan's apiPorts). ALLOW policies add up: a connection passes when
   one of them matches;
-- a NetworkPolicy that admits HBONE from the broker's pods. It cannot see the application port
+- a NetworkPolicy that admits HBONE from the CronJob's pods. It cannot see the application port
   inside the tunnel, so the port split is the AuthorizationPolicy's alone.
 Without the MQTT broker the AuthorizationPolicy has no rules and the NetworkPolicy no ingress:
 they admit nothing. Rendered while the certs service is enabled and has the broker-certs port; the
@@ -68,7 +70,7 @@ spec:
   action: ALLOW
   {{- if $principals }}
   rules:
-    # The MQTT broker's pod: the broker-certs port only.
+    # The broker's certificate CronJob: the broker-certs port only.
     - from:
         - source:
             principals:
@@ -98,7 +100,7 @@ spec:
     - Ingress
   {{- if $service.brokerCallers }}
   ingress:
-    # Mesh traffic arrives only on ztunnel's HBONE port, from the broker's own pod IP.
+    # Mesh traffic arrives only on ztunnel's HBONE port, from the CronJob's pod IP.
     - from:
         {{- range $service.brokerCallers }}
         - podSelector:
