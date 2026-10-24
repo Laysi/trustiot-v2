@@ -1,4 +1,5 @@
-     Running tests/clickhouse.rs (<host copy>/target/debug/deps/clickhouse-6e797b4cbbf65661)
+$ CI=1 cargo test --locked -p migrate --test clickhouse -- --nocapture
+     Running tests/clickhouse.rs (<host copy>/target/debug/deps/clickhouse-e80212efa3a6e348)
 
 running 1 test
 first run on a fresh ClickHouse: ["generated the password of trustiot_collector in Secret trustiot-otel-collector-password (it had none)", "applied migrate/0001_helpers.sql", "applied database/database.sql", "applied clickhouse/0001_databases.sql", "applied clickhouse/0002_telemetry.sql", "applied clickhouse/0003_batch_commits.sql", "applied clickhouse/0004_access.sql", "applied clickhouse/0005_tenant_view.sql", "applied clickhouse/0006_logs.sql", "applied clickhouse/0007_monitoring.sql", "applied clickhouse/0008_telemetry_query.sql", "applied clickhouse/0009_telemetry_query_grantees.sql", "applied clickhouse/0010_gateway_stream_ids.sql", "set the retention of ClickHouse table trustiot.telemetry to 180 days (was 400)", "set the retention of ClickHouse table trustiot.stream_commits to 180 days (was 3650)", "created ClickHouse account trustiot_collector"]
@@ -19,4 +20,6 @@ TTL changed by hand: ClickHouse: trustiot.telemetry: its TTL `toDateTime(ts) + t
 after the repair: ["set the retention of ClickHouse table trustiot.telemetry to 180 days (was 200)"]
 test clickhouse_ddl_and_the_collector_account ... ok
 
-test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 14.12s
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 15.17s
+
+exit 0 at 16:06:04 (build host)

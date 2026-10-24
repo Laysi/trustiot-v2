@@ -50,8 +50,9 @@ ADD CONSTRAINT IF NOT EXISTS stream_id_valid CHECK match(stream_id, '^[A-Za-z0-9
 -- part of a batch that never completed. The answer to a duplicate batch reports row_count of the
 -- first commit.
 --
--- tenant_id and binding_id record whose gateway binding the batch was written under, for tracing
--- (decided on 2026-10-24, rules in Laysi/trustiot-v2#638). They are not part of the key: the
+-- tenant_id and binding_id record whose gateway binding the batch was written under, for tracing;
+-- ingest takes both from its own binding table, looked up by the topic's gateway (decisions 8 and
+-- 12 of docs/architecture/decisions.md, Laysi/trustiot-v2#638). They are not part of the key: the
 -- high-water mark belongs to the gateway and its stream, whoever the gateway is bound to.
 --
 -- ReplacingMergeTree collapses a record written twice for the same (gateway_id, stream_id, seq),
@@ -66,8 +67,8 @@ ADD CONSTRAINT IF NOT EXISTS stream_id_valid CHECK match(stream_id, '^[A-Za-z0-9
 
 CREATE TABLE IF NOT EXISTS trustiot.stream_commits
 (
-    tenant_id UUID COMMENT 'Tenant the gateway was bound to when the batch was written, from the gateway connection certificate',
-    binding_id UUID COMMENT 'Gateway binding in force when the batch was written, for tracing',
+    tenant_id UUID COMMENT 'Tenant the gateway was bound to when the batch was written, from the ingest service''s binding table',
+    binding_id UUID COMMENT 'Gateway binding in force when the batch was written, from the same binding table, for tracing',
     gateway_id String COMMENT 'Gateway that sent the batch: protocol GatewayId, the gateway segment of the MQTT topic',
     stream_id String COMMENT 'Gateway batch stream: protocol StreamId, unique only within its gateway',
     seq UInt64 COMMENT 'Batch sequence number within the stream, from 1',

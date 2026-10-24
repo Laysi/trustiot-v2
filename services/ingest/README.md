@@ -65,8 +65,8 @@ DDL 是 `migrations/clickhouse/` 的 SQL 檔，部署時由 migration Job（Lays
 
 | 欄位 | 型別 | 說明 |
 | --- | --- | --- |
-| `tenant_id` | UUID | 寫入當時閘道器所屬的租戶，取自連線憑證；不能是全零 UUID（constraint `tenant_id_set`） |
-| `binding_id` | UUID | 寫入當時生效的閘道器綁定，供追查；不能是全零 UUID（`binding_id_set`）。規則由 Laysi/trustiot-v2#638 寫進 docs |
+| `tenant_id` | UUID | 寫入當時閘道器所屬的租戶，取自 ingest 的綁定對照表（見[閘道器的租戶歸屬](#閘道器的租戶歸屬)）；不能是全零 UUID（constraint `tenant_id_set`） |
+| `binding_id` | UUID | 寫入當時生效的閘道器綁定，同樣取自綁定對照表，供追查；不能是全零 UUID（`binding_id_set`） |
 | `gateway_id` | String | 協定的 `GatewayId`，取自 topic（`gateway_id_valid`） |
 | `stream_id` | String | 協定的 `StreamId`，由閘道器產生（`stream_id_valid`） |
 | `seq` | UInt64 | 批次序號，從 1 開始（`seq_positive`） |
