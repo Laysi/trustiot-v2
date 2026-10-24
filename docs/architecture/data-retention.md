@@ -58,7 +58,7 @@ AI 助理的對話存在 Postgres（assistant 的 schema），不在 ClickHouse�
 | 使用者刪除的對話可以還原的期間；期滿後連同訊息、捨棄的回合與提問紀錄清除 | 30 天（2026-10-24 產品負責人決定，Laysi/trustiot-v2#644） | `services/assistant/src/store.rs` 的 `DELETED_RETENTION_DAYS`；資料庫的同一個值寫在 `services/assistant/migrations/postgres/0002_conversation_threads.sql` 的 policy，單元測試比對兩者 |
 
 - 30 天從刪除的時間起算，用資料庫時鐘的 `deleted_at`；服務角色不能指定或往前改這個時間。
-- 刪除後只有擁有者的「已刪除」清單看得到它，其他地方（含擁有者）都當它不存在。期滿後服務角色碰不到它，只有清除用的平台角色 `assistant_platform` 看得到、刪得掉。
-- 清除由排程執行（Laysi/trustiot-v2#645），所以實際刪除可能晚於滿 30 天的時間點；在清除之前，資料仍在資料庫與備份裡。
+- 刪除後只有擁有者的「已刪除」清單看得到它，其他地方（含擁有者）都當它不存在。期滿後服務角色不能更改或還原它（`expired_stay_deleted`），只有清除用的平台角色 `assistant_platform` 刪得掉它；平台角色不論交易設了什麼租戶，都只看得到、刪得掉刪除滿 30 天的對話（restrictive policy `platform_expired_only`）。
+- 清除由排程執行（Laysi/trustiot-v2#645），所以實際刪除可能晚於滿 30 天的時間點；在清除之前，資料仍在資料庫與備份裡；清除之後，資料仍留在清除前做的備份裡，直到那些備份的保存期限屆滿。
 - 沒有刪除的對話（含它捨棄的回合）保存多久由 Laysi/trustiot-v2#652 決定；在那之前一直保存。
 - 細節見 [services/assistant](../../services/assistant/README.md) 的「對話的儲存」。

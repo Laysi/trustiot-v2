@@ -860,10 +860,10 @@ mod tests {
     fn the_migration_enforces_the_stores_limits() {
         let migration = include_str!("../migrations/postgres/0002_conversation_threads.sql");
         let retention = format!("interval '{DELETED_RETENTION_DAYS} days'");
-        // The two platform policies and the service role's restrictive policy.
+        // The three platform policies and the service role's restrictive policy.
         assert_eq!(
             migration.matches(&format!("now() - {retention}")).count(),
-            3,
+            4,
             "every 30-day bound of the migration is {retention}"
         );
         assert!(

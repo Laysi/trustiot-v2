@@ -17,7 +17,7 @@
 -- access`). Chosen over deleting in a transaction of each tenant as `assistant_app`: that role
 -- cannot see which tenants have expired conversations, so the job would need a tenant list from
 -- elsewhere, and the service role would hold DELETE on conversations. The platform role sees and
--- deletes only conversations deleted more than 30 days ago (its two policies below), reads only
+-- deletes only conversations deleted more than 30 days ago (its policies below), reads only
 -- their keys and deletion time, and has nothing else: no INSERT or UPDATE, no other table, no
 -- TRUNCATE, no SECURITY DEFINER function. A bug or a compromised service can therefore never
 -- remove a conversation that is live or still restorable, and the service role cannot remove
@@ -182,11 +182,23 @@ CREATE POLICY platform_purge ON assistant.conversations
     TO assistant_platform
     USING (deleted_at <= now() - interval '30 days');
 
--- Times only from the database's clock. Invoker's trigger functions: they read only the row
--- being written and run with the rights of whoever writes it. ERRCODE 42501
--- (insufficient_privilege), like a missing grant.
+-- 0001's tenant_isolation names no role, so it applies to the platform role too, and permissive
+-- policies are OR'ed: a platform transaction that chose a tenant for itself would see and
+-- delete every conversation of that tenant. This restrictive policy holds the platform role to
+-- expired conversations whatever else applies (crates/service-kit/README.md: a platform policy
+-- that is not USING (true) needs a restrictive one for the platform role).
+CREATE POLICY platform_expired_only ON assistant.conversations
+    AS RESTRICTIVE
+    FOR ALL
+    TO assistant_platform
+    USING (deleted_at <= now() - interval '30 days');
+
+-- Times only from the database's clock. Invoker's trigger functions with a pinned search_path,
+-- like certs.gateway_registrations_guard: they read only the row being written and run with the
+-- rights of whoever writes it. ERRCODE 42501 (insufficient_privilege), like a missing grant.
 CREATE FUNCTION assistant.conversations_clock() RETURNS trigger
     LANGUAGE plpgsql
+    SET search_path = pg_catalog, pg_temp
     AS $$
 BEGIN
     IF NEW.archived_at IS DISTINCT FROM OLD.archived_at AND NEW.archived_at <> now() THEN
@@ -222,6 +234,7 @@ CREATE TRIGGER conversations_clock
 -- A run ends once, at the database's now(), and its stop request is set once, likewise.
 CREATE FUNCTION assistant.runs_clock() RETURNS trigger
     LANGUAGE plpgsql
+    SET search_path = pg_catalog, pg_temp
     AS $$
 BEGIN
     IF OLD.status <> 'running' THEN

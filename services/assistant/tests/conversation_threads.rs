@@ -27,6 +27,7 @@
 //! is set. The expired conversations are all made by one test, so no other test's purge removes
 //! them.
 
+mod platform_tenant;
 mod support;
 
 use std::sync::Arc;
@@ -613,7 +614,8 @@ async fn expired_conversations_are_purged_and_nothing_else() {
     let Some(db) = db().await else {
         return;
     };
-    let owner = db.user(TenantId::generate());
+    let owner_tenant = TenantId::generate();
+    let owner = db.user(owner_tenant);
     let other_tenant = db.user(TenantId::generate());
     let (expired, _) = db.with_every_kind_of_row(&owner).await;
     let (expired_elsewhere, _) = db.with_every_kind_of_row(&other_tenant).await;
@@ -707,6 +709,50 @@ async fn expired_conversations_are_purged_and_nothing_else() {
         "the purge role cannot delete a live or recent one"
     );
     tx.rollback().await.expect("roll back");
+
+    // Nor when it sets the owner's tenant itself: 0001's tenant policy applies to every role,
+    // and only the restrictive platform_expired_only keeps it from opening the tenant's live
+    // and restorable conversations to the platform role.
+    let kept = [recent, live].map(|id| id.to_string());
+    let mut tx = db.platform_tx().await;
+    platform_tenant::set_tenant(&mut tx, owner_tenant).await;
+    let seen: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM assistant.conversations WHERE conversation_id::text = ANY ($1)",
+    )
+    .bind(&kept[..])
+    .fetch_one(&mut *tx)
+    .await
+    .expect("the purge role counts");
+    assert_eq!(
+        seen, 0,
+        "a tenant setting shows the purge role no live or recent one"
+    );
+    let removed =
+        sqlx::query("DELETE FROM assistant.conversations WHERE conversation_id::text = ANY ($1)")
+            .bind(&kept[..])
+            .execute(&mut *tx)
+            .await
+            .expect("the delete runs")
+            .rows_affected();
+    assert_eq!(
+        removed, 0,
+        "a tenant setting lets the purge role delete no live or recent one"
+    );
+    let unfiltered = sqlx::query("DELETE FROM assistant.conversations")
+        .execute(&mut *tx)
+        .await
+        .expect("the delete runs")
+        .rows_affected();
+    assert_eq!(
+        unfiltered, 2,
+        "only the two expired conversations, whatever the tenant setting"
+    );
+    tx.rollback().await.expect("roll back");
+    println!(
+        "purge role with the owner's tenant set: saw 0 and deleted 0 of the recent and the live \
+         conversation; an unfiltered DELETE reached only the 2 expired ones (rolled back)"
+    );
+
     for statement in [
         "DELETE FROM assistant.messages",
         "UPDATE assistant.messages SET body = body",
