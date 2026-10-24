@@ -8,9 +8,10 @@
 //!   `mqttBroker.certificateGeneration` goes up, and then write a new certificate with a new key;
 //! - a Secret someone else made, restored or spoilt gets a new certificate and key, and loses
 //!   what neither the chart nor the issuer sets;
-//! - a certs service that cannot sign (503), fails (500) or does not answer leaves an empty
-//!   Secret alone and the run succeeds; with a certificate due for renewal the run fails, as it
-//!   does on a refusal or an answer it cannot use, and the Secret keeps what the broker serves;
+//! - a certs service that cannot sign (503), fails (500) or does not answer leaves the never-filled
+//!   Secret alone and the run succeeds; with a certificate due for renewal, an expired one, or a
+//!   Secret emptied after a fill the run fails, as it does on a refusal or an answer it cannot
+//!   use, and the Secret keeps what it holds;
 //! - a writer in between makes the run read the Secret again and write the certificate it
 //!   already has;
 //! - the command prints neither the key nor the certificate.
@@ -530,8 +531,9 @@ async fn a_certs_service_that_cannot_sign_or_answers_wrong_changes_nothing() {
     }
 
     // Only the chart's never-filled Secret may wait for the certs service. An expired
-    // certificate, or a Secret emptied after it was filled, is an outage the broker cannot ride
-    // out: the run fails, so the failed Job shows it, and leaves the Secret as it is.
+    // certificate, or a Secret emptied after it was filled (its annotations record the fill), is
+    // an outage the broker cannot ride out: the run fails, so the failed Job shows it, and leaves
+    // the Secret as it is.
     certs.set(Mode::Status(503));
     let (outcome, report) = run_at(&settings, first.not_after).await;
     let error = outcome.expect_err("an expired certificate the certs service cannot replace");
@@ -548,10 +550,28 @@ async fn a_certs_service_that_cannot_sign_or_answers_wrong_changes_nothing() {
     let emptied = secrets.get(SECRET).expect("the Secret");
     let (outcome, _) = run_at(&settings, unix_now()).await;
     let error = outcome.expect_err("an emptied Secret the certs service cannot fill again");
-    assert!(error.contains("lacks tls.crt or tls.key"), "{error}");
+    assert!(
+        error.contains("record that this CronJob filled it"),
+        "{error}"
+    );
     assert_eq!(
         secrets.get(SECRET).expect("the Secret").resource_version,
         emptied.resource_version
+    );
+    // Created again from a copy of the emptied one: another uid, the same annotations.
+    secrets.recreate(SECRET);
+    let copied = secrets.get(SECRET).expect("the Secret");
+    let error = run_at(&settings, unix_now())
+        .await
+        .0
+        .expect_err("a copy of an emptied Secret");
+    assert!(
+        error.contains("record that this CronJob filled it"),
+        "{error}"
+    );
+    assert_eq!(
+        secrets.get(SECRET).expect("the Secret").resource_version,
+        copied.resource_version
     );
     assert_eq!(patches(&secrets), 1);
 }

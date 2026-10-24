@@ -232,7 +232,9 @@ max_connections 8
 
 # The gateways' listener (gateway-listener.conf), TLS on 8883: Mosquitto reads every *.conf file
 # of this directory at start, and the directory stays empty until the server certificate Secret
-# holds a certificate and key that belong together (Laysi/trustiot-v2#535). After every listener
+# holds a certificate and key that belong together (Laysi/trustiot-v2#535); the trust containers
+# empty it again while the Secret is unusable, so a broker that restarts then serves this file's
+# other listeners instead of stopping on a certificate it cannot load. After every listener
 # of this file, so none of the included listener's options lands on them; only the chart's
 # memory_limit, a broker-wide option, follows.
 include_dir /mosquitto/listeners

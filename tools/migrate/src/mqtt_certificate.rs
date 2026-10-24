@@ -25,12 +25,13 @@
 //!
 //! When the certs service cannot sign for the whole `wait` (HTTP 503: no usable issuing CA before
 //! the CA ceremony, or its database is down; 429 or another 5xx; or no answer, as while it starts
-//! after an install), a run on the chart's empty Secret, which was never filled, ends with a
-//! warning and exit code 0: the broker keeps its gateway port closed, and the next run tries
-//! again. Every other run that cannot renew fails, so a failed Job shows that the broker's
-//! certificate is ageing (a usable one due for renewal) or already of no use (expired, for other
-//! names, an unusable pair, or data this CronJob did not write). A refusal (another 4xx) or an
-//! answer it cannot use always fails the run.
+//! after an install), a run on the chart's empty Secret, which carries none of the annotations a
+//! fill writes ([`filled_before`]), ends with a warning and exit code 0: the broker keeps its
+//! gateway port closed, and the next run tries again. Every other run that cannot renew fails, so
+//! a failed Job shows that the broker's certificate is ageing (a usable one due for renewal) or
+//! already of no use (expired, for other names, an unusable pair, data this CronJob did not
+//! write, or emptied after a fill). A refusal (another 4xx) or an answer it cannot use always
+//! fails the run.
 //!
 //! Only this CronJob's ServiceAccount may `get` and `patch` the Secret (the chart's Role names it),
 //! and only its pod mounts that ServiceAccount's token. Nothing here logs the private key, the
@@ -120,12 +121,14 @@ impl Current {
 /// means.
 #[derive(Debug, PartialEq, Eq)]
 pub enum Holding {
-    /// Nothing yet: the Secret the chart declared, without data and never filled (before the CA
-    /// ceremony, or declared again after it was deleted). Waiting for the certs service is normal.
+    /// Nothing yet: the Secret the chart declared, without data and without the annotations a
+    /// fill writes (before the CA ceremony; or declared again by Helm after it was deleted, which
+    /// it cannot tell apart). Waiting for the certs service is normal.
     Nothing,
     /// Data the broker cannot keep serving: an expired certificate, one for other names, an
-    /// unusable pair, or data in an object this CronJob did not fill. Gateways cannot connect, or
-    /// will not once the broker restarts, so a run that cannot replace it fails.
+    /// unusable pair, data in an object this CronJob did not fill, or no data in a Secret whose
+    /// annotations record a fill. Gateways cannot connect, or will not once the broker restarts,
+    /// so a run that cannot replace it fails.
     Unusable,
     /// A usable certificate that is due for renewal; the broker keeps serving it meanwhile.
     Usable(Current),
@@ -151,7 +154,7 @@ pub enum Outcome {
         certificate: Current,
         reason: String,
     },
-    /// The Secret holds nothing yet ([`Holding::Nothing`]) and the certs service cannot sign yet
+    /// The Secret was never filled ([`Holding::Nothing`]) and the certs service cannot sign yet
     /// (the CA ceremony is pending, it is still starting, or its database is down): nothing
     /// changed, and the broker keeps its gateway port closed.
     Waiting { reason: String },
@@ -229,6 +232,17 @@ fn recorded_generation(found: &Secret) -> u64 {
         .unwrap_or(0)
 }
 
+/// Whether `found` carries an annotation that only a fill writes: the uid binding or the
+/// generation. The patch that fills the Secret sets both, and neither the chart nor Helm sets
+/// either, so a Secret without data that has one was filled before (and emptied, or created again
+/// from a copy of it). A Secret that was deleted and declared again by Helm has neither: it reads
+/// as never filled (deploy/chart/README.md, "伺服器憑證").
+fn filled_before(found: &Secret) -> bool {
+    let annotations = &found.metadata.annotations;
+    annotations.contains_key(passwords::UID_ANNOTATION)
+        || annotations.contains_key(GENERATION_ANNOTATION)
+}
+
 /// What to do with `found` when the run wants a certificate for `names` (sorted) of
 /// `requested` generation at `now` (seconds since the Unix epoch). The reasons name the problem,
 /// never the data.
@@ -237,16 +251,23 @@ pub(crate) fn decide(found: &Secret, names: &[String], requested: u64, now: i64)
         reason: reason.to_owned(),
         holding,
     };
-    if !passwords::is_bound(&found.metadata) {
-        return if found.data.is_empty() {
-            renew("the Secret holds no certificate yet", Holding::Nothing)
-        } else {
+    if found.data.is_empty() {
+        return if filled_before(found) {
             renew(
-                "the Secret is not the object this CronJob filled (another uid, or none \
-                 recorded), so its data is not trusted",
+                "the Secret holds no certificate, but its annotations record that this CronJob \
+                 filled it: it was emptied, or deleted and created again from a copy",
                 Holding::Unusable,
             )
+        } else {
+            renew("the Secret holds no certificate yet", Holding::Nothing)
         };
+    }
+    if !passwords::is_bound(&found.metadata) {
+        return renew(
+            "the Secret is not the object this CronJob filled (another uid, or none recorded), \
+             so its data is not trusted",
+            Holding::Unusable,
+        );
     }
     let decoded = |key: &str| {
         found
@@ -267,9 +288,10 @@ pub(crate) fn decide(found: &Secret, names: &[String], requested: u64, now: i64)
             holding: Holding::Unusable,
         };
     }
-    // The same checks as an answer from the certs service gets: a Secret this CronJob filled
-    // passed them when it was written, so a failure means it expired or was changed since.
-    let current = match check_chain(&chain, names, now) {
+    // The checks an answer from the certs service gets, but the issuing CA's id, which the
+    // Secret does not record: a Secret this CronJob filled passed them all when it was written,
+    // so a failure means it expired or was changed since.
+    let current = match check_chain(&chain, names, now, None) {
         Ok((current, _)) => current,
         Err(problem) => {
             return Decision::Renew {
@@ -360,16 +382,31 @@ enum IssueFailure {
     Failed(String),
 }
 
+/// How far ahead of this clock a certificate's notBefore may be: the certs service backdates
+/// notBefore by as much for clocks that are behind (services/certs/src/issue.rs,
+/// `CLOCK_SKEW_SECS`).
+const CLOCK_SKEW_SECS: i64 = 300;
+
 /// Checks a chain as the broker serves it (`tls.crt`, PEM) for `names` (sorted) at `now`: it
-/// parses, its first certificate is for these names only, is a server certificate (serverAuth,
-/// not clientAuth), is signed by the second, and has not expired. Both the certs service's answer
-/// ([`check_issued`]) and what the Secret holds ([`decide`]) must pass it. Returns the first
-/// certificate and its public key (the SPKI, DER).
+/// parses, its first certificate is for these names only, is not a CA, is a server certificate
+/// (serverAuth, not clientAuth), is signed by the second, is valid by now (notBefore at most
+/// [`CLOCK_SKEW_SECS`] ahead) and has not expired. With `issuer_key_id`, the second certificate
+/// must also be that issuing CA's: the certs service names the CA that signed in its answer
+/// (`ca_key_id`, the SHA-256 of the CA's SubjectPublicKeyInfo, as `crates/ca-keys` defines it).
+/// Both the certs service's answer ([`check_issued`], with its `ca_key_id`) and what the Secret
+/// holds ([`decide`], without: the Secret records no issuing CA, and its data is trusted only in
+/// the object this CronJob filled, after the chain passed this check with the CA the answer
+/// named) must pass it. Returns the first certificate and its public key (the SPKI, DER).
 ///
 /// # Errors
 ///
 /// What is wrong, without echoing the chain.
-fn check_chain(chain_pem: &[u8], names: &[String], now: i64) -> Result<(Current, Vec<u8>), String> {
+fn check_chain(
+    chain_pem: &[u8],
+    names: &[String],
+    now: i64,
+    issuer_key_id: Option<&str>,
+) -> Result<(Current, Vec<u8>), String> {
     let (current, chain) = leaf_of(chain_pem)?;
     let [leaf, issuer, ..] = chain.as_slice() else {
         return Err(
@@ -389,6 +426,12 @@ fn check_chain(chain_pem: &[u8], names: &[String], now: i64) -> Result<(Current,
             names.join(", ")
         ));
     }
+    match leaf.basic_constraints() {
+        Ok(None) => {}
+        Ok(Some(constraints)) if !constraints.value.ca => {}
+        Ok(Some(_)) => return Err("the certificate is a CA certificate".to_owned()),
+        Err(_) => return Err("the certificate's basic constraints do not parse".to_owned()),
+    }
     match leaf.extended_key_usage() {
         Ok(Some(usage)) if usage.value.server_auth && !usage.value.client_auth => {}
         _ => {
@@ -400,6 +443,21 @@ fn check_chain(chain_pem: &[u8], names: &[String], now: i64) -> Result<(Current,
     if leaf.verify_signature(Some(issuer.public_key())).is_err() {
         return Err("the issuing CA certificate in the chain did not sign it".to_owned());
     }
+    if let Some(expected) = issuer_key_id
+        && ::ca_keys::key_id(issuer.public_key().raw) != expected
+    {
+        return Err(format!(
+            "the issuing CA certificate in the chain is not the CA the certs service named \
+             (ca_key_id {expected})"
+        ));
+    }
+    if current.not_before > now.saturating_add(CLOCK_SKEW_SECS) {
+        return Err(format!(
+            "the certificate is not valid yet: its notBefore {} is more than {CLOCK_SKEW_SECS} \
+             seconds after {now}",
+            current.not_before
+        ));
+    }
     if current.not_after <= now {
         return Err("the certificate has expired".to_owned());
     }
@@ -407,7 +465,8 @@ fn check_chain(chain_pem: &[u8], names: &[String], now: i64) -> Result<(Current,
 }
 
 /// Checks the certs service's answer for `public_key` (the SPKI, DER) and `names` (sorted) at
-/// `now`: [`check_chain`], and the certificate is for this key. Returns the certificate.
+/// `now`: [`check_chain`] with the issuing CA the answer names, and the certificate is for this
+/// key. Returns the certificate.
 ///
 /// # Errors
 ///
@@ -418,7 +477,12 @@ pub fn check_issued(
     names: &[String],
     now: i64,
 ) -> Result<Current, String> {
-    let (current, key) = check_chain(issued.certificate_chain.as_bytes(), names, now)?;
+    let (current, key) = check_chain(
+        issued.certificate_chain.as_bytes(),
+        names,
+        now,
+        Some(&issued.ca_key_id),
+    )?;
     if key != public_key {
         return Err("the certificate is for another public key".to_owned());
     }
@@ -513,8 +577,8 @@ pub async fn converge(
 ///
 /// When the Secret is missing or being deleted, the API refuses access or does not answer within
 /// `settings.wait`, another writer keeps changing it, the certs service refuses the request or
-/// answers something unusable, or the certs service cannot sign while the Secret holds anything
-/// but the chart's never-filled declaration ([`Holding`]). The Secret is left as it was.
+/// answers something unusable, or the certs service cannot sign while the Secret is anything but
+/// the chart's never-filled declaration ([`Holding`]). The Secret is left as it was.
 pub async fn converge_at(
     settings: &MqttCertificateSettings,
     report: &mut Report,
@@ -579,14 +643,17 @@ pub async fn converge_at(
                                  yet (no usable issuing CA before the CA ceremony, it is still \
                                  starting, or its database is down); the broker serves no gateway \
                                  port until a run gets one (services/certs/README.md, \
-                                 \"發簽發 CA 憑證\")"
+                                 \"發簽發 CA 憑證\"). A Secret that was deleted and declared \
+                                 again by Helm reads the same: if gateways connected before, the \
+                                 broker's certificate is lost (deploy/chart/README.md, \
+                                 \"伺服器憑證\")"
                             );
                             Ok(Outcome::Waiting { reason: why })
                         }
                         Holding::Unusable => Err(Error::BrokerCertificate(format!(
                             "{reason}, but {why}; the Secret holds no certificate the broker can \
                              keep serving: gateways refuse an expired one, and a broker that \
-                             restarts cannot load an unusable one (deploy/chart/README.md, \
+                             restarts comes up without its gateway port (deploy/chart/README.md, \
                              \"伺服器憑證\")"
                         ))),
                         Holding::Usable(usable) => Err(Error::BrokerCertificate(format!(
@@ -963,6 +1030,24 @@ mod tests {
             reason_of(&decide(&empty, &names(), 1, NOW)),
             ("the Secret holds no certificate yet".to_owned(), "nothing")
         );
+        // No data, but an annotation only a fill writes: emptied in place, or created again from
+        // a copy (another uid). Not the never-filled declaration, so a run that cannot fill it
+        // fails.
+        let mut copied = secret(true, Some("1"), &[]);
+        copied.metadata.uid = "another-uid".to_owned();
+        for emptied in [
+            secret(true, Some("1"), &[]),
+            secret(true, None, &[]),
+            secret(false, Some("1"), &[]),
+            copied,
+        ] {
+            let (reason, held) = reason_of(&decide(&emptied, &names(), 1, NOW));
+            assert!(
+                reason.contains("record that this CronJob filled it"),
+                "{reason}"
+            );
+            assert_eq!(held, "unusable");
+        }
         let planted = secret(
             false,
             Some("1"),
@@ -1065,6 +1150,27 @@ mod tests {
         ]);
         let (none, none_key) = with(Vec::new());
         let (good, good_key) = with(vec![ExtendedKeyUsagePurpose::ServerAuth]);
+        let (early, early_key, _) = server(
+            &issuing,
+            &names(),
+            NOW + CLOCK_SKEW_SECS + 1,
+            30,
+            vec![ExtendedKeyUsagePurpose::ServerAuth],
+        );
+        let ca_leaf_key = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256).expect("a key");
+        let mut params = CertificateParams::new(names()).expect("DNS names");
+        params.is_ca = IsCa::Ca(BasicConstraints::Constrained(0));
+        params.extended_key_usages = vec![ExtendedKeyUsagePurpose::ServerAuth];
+        params.not_before = date_time_ymd(1970, 1, 1) + since_epoch(NOW);
+        params.not_after = date_time_ymd(1970, 1, 1) + since_epoch(NOW + 30 * DAY);
+        let ca_leaf = format!(
+            "{}{}",
+            params
+                .signed_by(&ca_leaf_key, &issuing.issuer)
+                .expect("signed")
+                .pem(),
+            issuing.pem
+        );
         let cases = [
             (
                 holding(&client_only, &client_key, "1"),
@@ -1072,6 +1178,11 @@ mod tests {
             ),
             (holding(&both, &both_key, "1"), "extended key usage"),
             (holding(&none, &none_key, "1"), "extended key usage"),
+            (holding(&early, &early_key, "1"), "not valid yet"),
+            (
+                holding(&ca_leaf, &ca_leaf_key.serialize_pem(), "1"),
+                "is a CA certificate",
+            ),
             (
                 holding(&leaf_only(&good), &good_key, "1"),
                 "no issuing CA certificate",
@@ -1096,10 +1207,18 @@ mod tests {
         ));
     }
 
-    fn answer(chain: &str) -> BrokerCertificate {
+    /// The certs service's key id of `ca`: the SHA-256 of its SubjectPublicKeyInfo.
+    fn key_id(ca: &Ca) -> String {
+        let (_, certificate) =
+            x509_parser::parse_x509_certificate(ca.issuer.der()).expect("the CA parses");
+        ::ca_keys::key_id(certificate.public_key().raw)
+    }
+
+    /// An answer with `chain` from the issuing CA whose key id is `ca_key_id`.
+    fn answer(chain: &str, ca_key_id: &str) -> BrokerCertificate {
         serde_json::from_value(json!({
             "serial": "00",
-            "ca_key_id": "ab".repeat(32),
+            "ca_key_id": ca_key_id,
             "names": names(),
             "not_before": "2027-01-15T08:00:00Z",
             "not_after": "2027-02-14T08:00:00Z",
@@ -1114,13 +1233,15 @@ mod tests {
         let server_auth = vec![ExtendedKeyUsagePurpose::ServerAuth];
         let (chain, _, key) = server(&issuing, &names(), NOW, 30, server_auth.clone());
         let spki = key.subject_public_key_info();
-        let current = check_issued(&answer(&chain), &spki, &names(), NOW).expect("a good answer");
+        let issuing_id = key_id(&issuing);
+        let current = check_issued(&answer(&chain, &issuing_id), &spki, &names(), NOW)
+            .expect("a good answer");
         assert_eq!(current.names, names());
 
         let (other, _, _) = server(&issuing, &names(), NOW, 30, server_auth.clone());
         let refused = |chain: &str, why: &str| {
-            let error =
-                check_issued(&answer(chain), &spki, &names(), NOW).expect_err("a bad answer");
+            let error = check_issued(&answer(chain, &issuing_id), &spki, &names(), NOW)
+                .expect_err("a bad answer");
             assert!(error.contains(why), "{error}");
         };
         refused(&other, "another public key");
@@ -1132,6 +1253,13 @@ mod tests {
         let foreign = ca("Another CA");
         refused(&format!("{leaf_only}{}", foreign.pem), "did not sign");
         refused("garbage", "holds no certificate");
+        // A chain that holds together, from another CA than the one the answer names.
+        let error = check_issued(&answer(&chain, &key_id(&foreign)), &spki, &names(), NOW)
+            .expect_err("another issuing CA");
+        assert!(
+            error.contains("not the CA the certs service named"),
+            "{error}"
+        );
 
         // Same key, wrong names or purpose.
         let mut params =
@@ -1161,8 +1289,13 @@ mod tests {
         );
         refused(&both, "extended key usage");
 
-        let error = check_issued(&answer(&chain), &spki, &names(), NOW + 31 * DAY)
-            .expect_err("an expired answer");
+        let error = check_issued(
+            &answer(&chain, &issuing_id),
+            &spki,
+            &names(),
+            NOW + 31 * DAY,
+        )
+        .expect_err("an expired answer");
         assert!(error.contains("expired"), "{error}");
     }
 

@@ -6,7 +6,7 @@ Laysi/trustiot-v2#535：broker 的伺服器憑證改由 chart 的 CronJob `<rele
 
 ## 環境
 
-- **程式碼**：分支 `feat/535-broker-server-certificate`：功能的 commit 9dc4cae7、合併 main（0dc8fd96）的 b86e34aa、修正兩個測試的 b3233160，以及改寫私鑰 PEM 邊界寫法的 commit（這份報告與它在同一個 commit）。下面「指令」的完整一輪在前三個 commit 的樹上執行；第四個 commit 只改 `tools/migrate/src/mqtt_certificate.rs` 組 PEM 邊界的方式與 `.gitleaksignore`，在它的樹上重跑的檢查列在「推送前的 secret 掃描」。
+- **程式碼**：分支 `feat/535-broker-server-certificate`：功能的 commit 9dc4cae7、合併 main（0dc8fd96）的 b86e34aa、修正兩個測試的 b3233160、改寫私鑰 PEM 邊界寫法的 5cdbc138，以及依安全審查修正的 commit（這份報告與它在同一個 commit）。下面「指令」的完整一輪在前三個 commit 的樹上執行；之後兩個 commit 在各自的樹上重跑的檢查列在「推送前的 secret 掃描」與「安全審查的修正」。
 - **建置主機**（經檢查佇列）：x86_64 Linux，`CI=1`；需要容器的測試以 rootless podman 起拋棄式的 TLS Postgres（`crates/testkit`）與 Mosquitto（`docker.io/library/eclipse-mosquitto:2.1.2-alpine`，以 digest 釘選）。Rust 1.99.0（`rust-toolchain.toml`），bun 1.4.2、helm 4.3.0、kubeconform 0.8.0（`.prototools` 釘選的版本）。
 - **工作站**：gitleaks（`.prototools` 釘選的版本）。
 
@@ -52,7 +52,7 @@ bun scripts/ci/lint-workflows.ts
 | broker 改提供別的 CA 為同一個名稱簽的憑證並重載 | 信任根的用戶端拒絕：`InvalidCertificate(UnknownIssuer)` |
 | certs 服務與 Mosquitto 的日誌 | 沒有 `PRIVATE KEY`，也沒有兩把私鑰 PEM 的任何一行 |
 
-換發程式的其他規則（別人建立或弄壞的 Secret、寫入時被改過、certs 服務還不能簽：只有 chart 宣告、從沒填過的空 Secret 以 exit code 0 等待，該換發、已過期或被清空的憑證都讓執行失敗、回應不能用、輸出沒有私鑰）在 `tools/migrate/tests/mqtt_certificate.rs`；trust 容器在 Secret 填好後才放進閘道器 listener、只重啟 broker 一次、不對沒在聽 8883 的 broker 送 SIGHUP 在 `tools/migrate/tests/mqtt_trust.rs`；chart 的整份 Mosquitto 設定沒有伺服器憑證時照常服務 1883、不開 8883 在 `tools/migrate/tests/mqtt_broker.rs`。
+換發程式的其他規則（別人建立或弄壞的 Secret、寫入時被改過、certs 服務還不能簽：只有 chart 宣告、從沒填過（沒有資料，也沒有填入時寫的 annotation）的空 Secret 以 exit code 0 等待，該換發、已過期的憑證與填過之後被清空的 Secret 都讓執行失敗、回應不能用、輸出沒有私鑰）在 `tools/migrate/tests/mqtt_certificate.rs`；trust 容器在 Secret 填好後才放進閘道器 listener、只重啟 broker 一次、不對沒在聽 8883 的 broker 送 SIGHUP、Secret 不能用時拿掉 listener 並在修好後放回，在 `tools/migrate/tests/mqtt_trust.rs`；chart 的整份 Mosquitto 設定沒有伺服器憑證時照常服務 1883、不開 8883 在 `tools/migrate/tests/mqtt_broker.rs`。
 
 ### 驗收條件 2：私鑰只在 broker 掛載的 Secret
 
@@ -91,7 +91,7 @@ chart 層的放行規則由上面的 chart 測試證明；在 ambient mesh 裡�
 
 這一輪之前，完整的測試抓到兩個這個分支自己的問題，已在同一個 PR 修正：`services/certs/tests/key_custody.rs` 掃描 `tools/migrate/src` 裡把私鑰變成位元組的程式碼，CronJob 寫 `tls.key` 的那一處需要審查後列入清單；`tools/migrate/tests/mqtt_broker.rs` 原本比對閘道器埠關閉時用戶端的錯誤文字，libmosquitto 依非阻塞 connect 失敗的時機回 `Connection refused` 或 `Bad file descriptor`，改成以 trust sidecar 的 `listens_on` 讀容器的 socket 表（1883 在聽、8883 沒有）；同一個測試在故意被拒的 TLS 握手之後檢查日誌沒有問題行，順序改成先檢查日誌再做被拒的連線。
 
-證據檔是最後的程式碼在建置主機上重跑 `broker_certificate.rs` 的輸出。
+證據檔是 b3233160 的程式碼在建置主機上重跑 `broker_certificate.rs` 的輸出；之後的 commit 沒有改這個測試走的流程（安全審查的修正讓換發程式多檢查 certs 回應的簽發 CA，真的 certs 服務的回應照樣通過），`broker_certificate.rs` 在下面兩輪的 `cargo test -p certs` 都通過。
 
 ### 推送前的 secret 掃描
 
@@ -101,6 +101,32 @@ chart 層的放行規則由上面的 chart 測試證明；在 ambient mesh 裡�
 - CI 會掃 PR 的每個 commit，後面的 commit 清不掉前面 commit 的發現，所以 9dc4cae7 的那一筆依 `.gitleaksignore` 對其他只在分支上的 commit 的慣例，附理由列入。
 
 改完之後在建置主機重跑，全部 exit 0：`cargo fmt --all --check` 沒有差異；`cargo clippy --locked --workspace --all-targets -- -D warnings` 沒有警告；`CI=1 cargo test --locked -p migrate -p repo-check --no-fail-fast` 26 個測試目標，181 通過，0 失敗，0 略過；`cargo test --locked -p certs --test key_custody` 3 通過。兩處掃描的結果在 PR 描述（掃描的對象包含這份報告所在的 commit）。
+
+### 安全審查的修正
+
+2026-10-24 對 5cdbc138 的獨立安全審查沒有 Critical 或 High；私鑰保管、RBAC 與兩種形態的網路政策的說法都成立。依驗證分級，Medium 與 Low 的修正不另加邊界測試組，只更新既有的測試：
+
+| 項目 | 修正 | 測試 |
+| --- | --- | --- |
+| M1（Medium）：Secret 在能用之後變得不能用時，閘道器 listener 留在 emptyDir（容器重啟時還在，init container 也不再跑），broker 容器一重啟就讀不到憑證而反覆停止，1883 跟著中斷 | init container 與 sidecar 在 Secret 不能用時拿掉 `listeners/gateway.conf`，執行中的 broker 不受影響。修好後放回：broker 還在聽 8883 就送 SIGHUP，重啟過、沒有 8883 的再送一次 SIGTERM | `tests/mqtt_trust.rs`：init container 拿掉之前留下的 listener；sidecar 在私鑰不是一對時拿掉、修好後放回並只送 SIGHUP；Secret 被清空時拿掉、不送訊號，broker 重啟後 Secret 再填好時送一次 SIGTERM |
+| M2（Medium）：填過的 Secret 被清空或重建成空的，certs 又不能簽時 Job 以 0 結束 | 只有沒有資料、也沒有填入時寫的 uid 或代 annotation 的 Secret 能等待，其他空的 Secret 讓 Job 失敗。Helm 重新宣告的 Secret 沒有 annotation，CronJob 分不出來，README 寫明這時看 sidecar 的錯誤日誌，並新增「監看」段落 | `src/mqtt_certificate.rs` 的單元測試：清空的、只有其中一個 annotation 的、uid 不同的空 Secret 都是 unusable；`tests/mqtt_certificate.rs`：清空之後，以及從清空的複本重建之後，certs 回 503 時執行失敗、Secret 不變 |
+| L3（Low）：Secret 不能用的期間，CRL 的變更也不重新載入 | 每一輪擋下信任檔的變更時記錯誤；README 的失敗情況寫明撤銷的閘道器憑證在這段期間仍被接受 | 只有日誌，沒有新測試 |
+| L4（Low）：`check_chain` 只檢查鏈本身是否一致 | 也檢查葉憑證不是 CA、notBefore 最多比現在晚 300 秒（certs 往前的量）；certs 的回應還要求鏈的第二張是回應的 `ca_key_id` 指的簽發 CA。`ca_key_id` 依 `crates/ca-keys` 的定義是 SubjectPublicKeyInfo 的 SHA-256，不是憑證的 subject key identifier 擴充欄位，所以比對簽發 CA 的 SPKI 雜湊 | 單元測試加上 CA 葉憑證、尚未生效、別的簽發 CA 的 `ca_key_id` 三種情況；真的 certs 服務的回應照樣通過（`services/certs/tests/broker_certificate.rs`） |
+| Info 7：升級說明 | README 寫明刪掉舊 Secret 到 CronJob 填入之間閘道器連不上，以及 M1 的行為 | 文件 |
+
+只記錄、不修改：L5（`include_dir` 讓 trust sidecar 能放進 Mosquitto 的設定；與既有的共用 process namespace、同一個 uid 是同一個信任範圍，接受現狀）；L6（main 上的 `internalIdentity.keyRotationSchedule` 接受 `60 * * * *` 這類排程，延到 Laysi/trustiot-v2#660）。
+
+修正之後在建置主機重跑（2026-10-24，`CI=1`）。除了第一次的 fmt，全部 exit 0：
+
+| 檢查 | 結果 |
+| --- | --- |
+| `cargo fmt --all --check` | 第一次：新增的測試行有排版差異（exit 1）；照 rustfmt 的輸出改好後沒有差異 |
+| `cargo clippy --locked --workspace --all-targets -- -D warnings` | 沒有警告 |
+| `CI=1 cargo test --locked -p migrate -p certs -p repo-check --no-fail-fast` | 37 個測試目標，226 通過，0 失敗，0 略過 |
+| `bun test deploy/chart` | 652 通過，0 失敗 |
+| `bun test scripts` | 1697 通過，9 略過（與上面相同的那 9 個），0 失敗 |
+
+排版改好後在最後的樹上重跑：`cargo fmt --all --check` 沒有差異；`cargo clippy --locked -p migrate --all-targets -- -D warnings` 沒有警告；`CI=1 cargo test --locked -p migrate --no-fail-fast` 22 個測試目標，152 通過，0 失敗，0 略過。排版只動測試的換行，其他檢查沿用上表。
 
 ## nightly（待補）
 

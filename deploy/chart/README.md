@@ -874,9 +874,9 @@ broker 在閘道器埠（8883）出示的 TLS 伺服器憑證，私鑰在叢集�
 
 - ServiceAccount `<release>-mqtt-broker-certificate`。Role 只讓它對這一個 Secret `get` 與 `patch`，沒有 `create`、`list`、`watch`、`delete`，也沒有別的物件；只有這個 CronJob 的 pod 掛它的 projected token（1 小時效期），pod 不掛任何 Secret，私鑰只在它的記憶體與 Secret 裡。broker 自己的 Role 只有帳號的 Secret，所以 broker 的 pod 改不了自己的憑證。
 - 只有這個 ServiceAccount 連得到 certs 的簽發埠（`<release>-certs-broker`，見上方「誰連得到」）；拿到這個名稱的憑證就能對每台閘道器冒充 broker。pod 在 ambient mesh 裡，自己的 AuthorizationPolicy 沒有規則、NetworkPolicy 沒有 ingress，沒有人連得到它。
-- 每次執行（`mqttBroker.certificateSchedule`，預設每 15 分鐘）讀 Secret。Secret 記的 uid 是它自己、`tls.crt` 與 `tls.key` 是一對、`tls.crt` 通過與 certs 回應相同的檢查（名稱正好是上面兩個、EKU 只有 serverAuth、鏈的第二張簽了第一張、沒過期）、還沒過效期一半、記的代不小於 `mqttBroker.certificateGeneration` 時保留，什麼都不改。否則以作業系統的 CSPRNG 產生新的私鑰，把 CSR 送到 `POST http://<release>-certs-broker.<namespace>.svc:8082/internal/certs/v1/broker-certificate`（DER 的 PKCS #10，`Content-Type: application/pkcs10`），檢查回來的憑證（公鑰是這把私鑰的、名稱、serverAuth、鏈的第二張簽了第一張），再以一個帶 `resourceVersion` 的 merge patch 寫入兩個 key 與兩個 annotation；衝突時重讀，以同一組私鑰與憑證再寫。每次換發都是新的私鑰。
+- 每次執行（`mqttBroker.certificateSchedule`，預設每 15 分鐘）讀 Secret。Secret 記的 uid 是它自己、`tls.crt` 與 `tls.key` 是一對、`tls.crt` 通過與 certs 回應相同的檢查（名稱正好是上面兩個、不是 CA、EKU 只有 serverAuth、鏈的第二張簽了第一張、已生效（notBefore 最多比現在晚 5 分鐘）、沒過期；只少了簽發 CA 的 key id，Secret 沒有記）、還沒過效期一半、記的代不小於 `mqttBroker.certificateGeneration` 時保留，什麼都不改。否則以作業系統的 CSPRNG 產生新的私鑰，把 CSR 送到 `POST http://<release>-certs-broker.<namespace>.svc:8082/internal/certs/v1/broker-certificate`（DER 的 PKCS #10，`Content-Type: application/pkcs10`），檢查回來的憑證（公鑰是這把私鑰的、上面那些檢查，而且鏈的第二張是回應的 `ca_key_id` 指的簽發 CA：它的 SubjectPublicKeyInfo 的 SHA-256），再以一個帶 `resourceVersion` 的 merge patch 寫入兩個 key 與兩個 annotation；衝突時重讀，以同一組私鑰與憑證再寫。每次換發都是新的私鑰。
 - Secret 不是它填過的物件（被刪掉重建、從備份還原、別人改過）時不信任裡面的資料，換一組新的，並移除 chart 與它都沒有設的 label 與 annotation（規則同 migration Job）。
-- certs 不能簽時（503：儀式之前沒有可用的簽發 CA，或它的資料庫中斷；429 或其他 5xx；沒有回應，例如安裝後它還在啟動）每 5 秒重試，最多 2 分鐘。Secret 還是 chart 宣告、從沒填過的空 Secret 時記警告、以 exit code 0 結束，下一次再試（儀式之前的正常狀態）；其他情況都讓 Job 失敗：已有能用、只是該換發的憑證（broker 繼續用它），或 Secret 裡的憑證已經不能用（過期、名稱不對、不是一對、被清空，或不是 CronJob 填的物件）。其他 4xx 或用不了的回應一律失敗。失敗的 Job 留著（最多 3 個，`kubectl get jobs`），表示 broker 的憑證在變老或設定有錯。
+- certs 不能簽時（503：儀式之前沒有可用的簽發 CA，或它的資料庫中斷；429 或其他 5xx；沒有回應，例如安裝後它還在啟動）每 5 秒重試，最多 2 分鐘。Secret 還是 chart 宣告、從沒填過的空 Secret（沒有資料，也沒有填入時寫的兩個 annotation）時記警告、以 exit code 0 結束，下一次再試（儀式之前的正常狀態）；其他情況都讓 Job 失敗：已有能用、只是該換發的憑證（broker 繼續用它），或 Secret 裡的憑證已經不能用（過期、名稱不對、不是一對、不是 CronJob 填的物件，或填過之後被清空：沒有資料但 annotation 還在，包括從這樣的複本重建的物件）。被刪掉、由 Helm 重新宣告的 Secret 沒有那兩個 annotation，CronJob 分不出它和新安裝的 Secret：certs 能簽時照常填入，不能簽時同樣以 exit code 0 結束，這時要看下方「監看」的 sidecar 錯誤日誌。其他 4xx 或用不了的回應一律失敗。失敗的 Job 留著（最多 3 個，`kubectl get jobs`），表示 broker 的憑證在變老或設定有錯。
 - 日誌只寫序號、簽發 CA 的金鑰 id、名稱、效期與原因，不寫私鑰、Secret 的內容或 CSR。
 
 broker 讀它：
@@ -893,14 +893,22 @@ broker 讀它：
 效期與換發：
 
 - 預設 30 天，過了一半（15 天）換發，certs 或簽發 CA 中斷兩週內都還換得到（理由見 [services/certs/README.md](../../services/certs/README.md) 的「效期與換發」）。強制換發（例如懷疑私鑰外洩）就調大 `mqttBroker.certificateGeneration`：只改 CronJob，下一次執行換發，broker 不重啟。
-- 換發不中斷連線：kubelet 更新掛載的檔案，sidecar 在下一次檢查確認新的憑證與私鑰是一對，再送 SIGHUP，Mosquitto 重新讀伺服器憑證，已連線的閘道器不斷線（Rust 測試驗證）。不是一對時不送，broker 繼續用舊的，sidecar 記錯誤。
+- 換發不中斷連線：kubelet 更新掛載的檔案，sidecar 在下一次檢查確認新的憑證與私鑰是一對，再送 SIGHUP，Mosquitto 重新讀伺服器憑證，已連線的閘道器不斷線（Rust 測試驗證）。不是一對時不送，broker 繼續用舊的，sidecar 記錯誤並拿掉閘道器埠的設定（見下方失敗情況）。
 - SIGHUP 之後，之前發出的 TLS session ticket 都失效（決策 6 的實測，docs/feasibility/2026-10-13-double-tls-gateway.md）：每台閘道器換發後的第一次重連要做完整握手，之後的重連又可以 resume。換發每 15 天一次，重連本來就少，所以只多一次完整握手的成本。
 
 已知的失敗情況與升級：
 
-- Secret 在能用之後被改壞（刪掉 key、換成別的物件、從備份還原）：broker 繼續用記憶體裡的舊憑證，sidecar 不送 SIGHUP，也不拿掉閘道器埠的設定；CronJob 的下一次執行看出 uid 或內容不對，換一組新的（certs 這時不能簽的話，Job 失敗，不會當成儀式之前的等待）。在那之前 broker 的容器如果重啟，Mosquitto 讀不到能用的憑證檔就停止，容器反覆重啟到 CronJob 修好 Secret 為止（最多一個排程間隔，可以照上面立刻跑一次）。
-- Secret 被刪除時 CronJob 失敗（它沒有 `create`）；`helm upgrade` 重新宣告空的 Secret，下一次執行就填入。這段期間重建的 broker pod 停在 `ContainerCreating`。
-- 從之前的版本升級：Laysi/trustiot-v2#84 要求事先建立 `kubernetes.io/tls` 的 Secret。Helm 不接管沒有它的標記的既有物件，型別也不能改，所以升級前先刪掉那個 Secret（`kubectl -n <namespace> delete secret <release>-mqtt-broker-tls`），再照上面在儀式之後跑一次 CronJob。目前只有 nightly 這樣建過，而它每次都是新的叢集。
+- Secret 在能用之後變得不能用（被清空、刪掉 key、換成別的物件、從備份還原、內容被改壞）：sidecar 不送 SIGHUP，從 `/mosquitto/listeners` 拿掉閘道器埠的設定並記錯誤。執行中的 broker 不受影響，繼續以記憶體裡的舊憑證服務閘道器（Mosquitto 只在啟動與 SIGHUP 時讀設定）。這段期間 broker 的容器如果重啟（記憶體不足、當掉），emptyDir 裡已經沒有閘道器埠的設定，broker 只在 1883 服務雲端服務，不會因為讀不到憑證而反覆停止，閘道器則在 Secret 修好之前連不上（pod 整個重建時 init container 做同樣的檢查）。CronJob 的下一次執行看出 uid、annotation 或內容不對，換一組新的（certs 這時不能簽的話 Job 失敗，不會當成儀式之前的等待；可以照上面立刻跑一次）。填好之後 sidecar 放回設定，對還在聽 8883 的 broker 送 SIGHUP，對重啟後沒有 8883 的 broker 送一次 SIGTERM（同上面的第一次填入）。
+- Secret 不能用的期間，sidecar 也不送 CRL 變更的 SIGHUP：還在服務閘道器的 broker 繼續用舊的 CRL，這段期間撤銷的閘道器憑證仍被接受，直到 Secret 修好、sidecar 送出 SIGHUP。sidecar 每一輪擋下信任檔的變更都記一次錯誤（`does not reload the trust files`）。所以 Secret 不能用要當成事故處理：立刻跑一次 CronJob，certs 也不能簽時先修 certs。
+- Secret 被刪除時 CronJob 失敗（它沒有 `create`）；`helm upgrade` 重新宣告空的 Secret，下一次執行就填入。這段期間重建的 broker pod 停在 `ContainerCreating`。重新宣告的 Secret 沒有填入時寫的 annotation，certs 這時不能簽的話 CronJob 以 exit code 0 結束、只記警告；訊號是 sidecar 拿掉閘道器埠設定時的錯誤日誌與 broker 沒有在聽 8883（下方「監看」）。
+- 從之前的版本升級：Laysi/trustiot-v2#84 要求事先建立 `kubernetes.io/tls` 的 Secret。Helm 不接管沒有它的標記的既有物件，型別也不能改，所以升級前先刪掉那個 Secret（`kubectl -n <namespace> delete secret <release>-mqtt-broker-tls`），再照上面在儀式之後跑一次 CronJob。從刪掉舊的 Secret 到 CronJob 的下一次執行（或照上面以 `kubectl create job --from` 立刻跑一次）填入新的 Secret 之前，閘道器連不上：升級後的 broker 讀到空的 Secret，不開 8883，雲端服務照常；填入後 sidecar 讓 broker 重啟一次，帶上閘道器埠（上面的第一次填入）。這段期間 broker 重啟也只是沒有閘道器埠，不會停止（上面第一條）。目前只有 nightly 這樣建過，而它每次都是新的叢集。
+
+監看（指標與告警規則不在這個變更，另外規劃）：
+
+- 失敗的 Job：`kubectl -n <namespace> get jobs` 裡 `<release>-mqtt-broker-certificate-*` 有失敗的（最多留 3 個），表示 broker 的憑證在變老、已經不能用或設定有錯，Job 的日誌寫出原因。儀式之後的執行若仍以 exit code 0 結束並記 `cannot sign the broker's server certificate yet` 警告，表示 Secret 是空的而 certs 不能簽，同樣要處理。
+- 效期：每次執行的日誌記 `not_after` 與 `renew_from`（`the broker's server certificate is current`），換發時記新的序號與 `not_after`（`wrote a new server certificate and key for the broker`）。預設設定下 `not_after` 不會在 15 天內。
+- sidecar（容器 `trust`）：伺服器憑證 7 天內到期時每小時記一次警告，預設設定下表示換發已經失敗超過 8 天；過期時記錯誤；Secret 不能用時記錯誤（拿掉閘道器埠的設定、擋下重新載入與 CRL 的變更）。
+- broker 沒有在聽 8883：儀式之前是正常的，之後表示 Secret 是空的或不能用。
 
 ### 持久化與限制
 

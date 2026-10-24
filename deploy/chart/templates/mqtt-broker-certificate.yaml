@@ -85,7 +85,8 @@ subjects:
 # Forbid: one run at a time; a missed run starts within an hour, and the deadline keeps the
 # controller from giving up after 100 missed schedules. Failed Jobs stay for the operator
 # (kubectl get jobs); a run fails when the Secret holds a certificate (due, expired or unusable)
-# and it cannot write a new one.
+# or its annotations record an earlier fill (emptied since), and it cannot write a new one. Only
+# the never-filled Secret makes a run that cannot get a certificate succeed (README.md, "伺服器憑證").
 # `kubectl create job --from=cronjob/<name> <job>` runs it at once, for example right after the
 # root ceremony (README.md, "MQTT broker").
 apiVersion: batch/v1

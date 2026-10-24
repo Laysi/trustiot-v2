@@ -10,9 +10,11 @@
 //!   and key that belong together, and otherwise lets the broker start without it;
 //! - the sidecar has the broker reload once at its start and after every change of the trust
 //!   files or the server certificate, and never while the server certificate would not load;
+//!   meanwhile it removes the gateway listener, and writes it back once the Secret is usable;
 //! - once the Secret is filled, the sidecar enables the gateway listener and stops the broker
 //!   once (SIGTERM) so that it starts again with it, never sends SIGHUP to a broker that does not
-//!   listen on the gateway port, and never stops a broker a second time.
+//!   listen on the gateway port, and never stops a broker a second time, unless the listener was
+//!   removed in between (the Secret became unusable) and the broker restarted without it.
 //!
 //! That Mosquitto loads these files, applies a reload and starts without the gateway listener is
 //! tested in mqtt_broker.rs.
@@ -292,6 +294,12 @@ async fn the_init_container_enables_the_gateway_listener_only_with_a_usable_pair
     let mut mismatched = pki::server(&server_ca);
     mismatched.key = pki::server(&server_ca).key;
     pki::mount_secret(&mismatched_pod.tls_dir, 1, &mismatched);
+    // A listener left in the emptyDir by a start when the Secret was usable goes too.
+    std::fs::write(
+        mismatched_pod.listeners_dir.join(GATEWAY_LISTENER_FILE),
+        GATEWAY_LISTENER,
+    )
+    .expect("a listener from an earlier start");
     init(&mismatched_pod.settings(""))
         .await
         .expect("a start with a key of another certificate");
@@ -487,11 +495,23 @@ async fn the_sidecar_reloads_the_broker_after_every_change_it_can_load() {
         3,
         "no reload with a key that does not load"
     );
+    assert_eq!(
+        pod.listener(),
+        None,
+        "no gateway listener while the Secret is unusable, so a broker that restarts serves the \
+         service port"
+    );
     pki::mount_secret(&pod.tls_dir, 4, &pki::server(&server_ca));
     wait_for("the reload after the key was fixed", || {
         broker.sighups() == 4
     })
     .await;
+    assert_eq!(pod.listener().as_deref(), Some(GATEWAY_LISTENER));
+    assert_eq!(
+        broker.sigterms(),
+        0,
+        "the broker that kept its port is only reloaded"
+    );
 
     sidecar.abort();
     let _ = sidecar.await;
@@ -604,6 +624,30 @@ async fn the_sidecar_opens_the_gateway_port_once_the_secret_is_filled() {
     wait_for("two more fetches", || certs.requests() >= requests + 4).await;
     assert_eq!((second.sighups(), second.sigterms()), (1, 0));
     assert_eq!(first.sigterms(), 1);
+
+    // The Secret is emptied later: the listener goes, and the running broker keeps its port and
+    // is not signalled.
+    for name in ["tls.crt", "tls.key"] {
+        std::fs::remove_file(pod.tls_dir.join(name)).expect("the Secret loses a key");
+    }
+    wait_for("the gateway listener removed", || pod.listener().is_none()).await;
+    let requests = certs.requests();
+    wait_for("two more fetches", || certs.requests() >= requests + 4).await;
+    assert_eq!((second.sighups(), second.sigterms()), (1, 0));
+
+    // It restarts meanwhile and comes up without the gateway port. Once the Secret is filled
+    // again the listener is back, and this broker is asked to stop once too.
+    remove_broker(&proc_root, &second);
+    set_listening(&proc_root, false);
+    let third = FakeBroker::start(&scratch_dir("mqtt-trust-broker"));
+    add_broker(&proc_root, &third);
+    pki::mount_secret(&pod.tls_dir, 2, &pki::server(&server_ca));
+    wait_for("the gateway listener again", || pod.listener().is_some()).await;
+    wait_for("the restarted broker asked to stop", || {
+        third.sigterms() == 1
+    })
+    .await;
+    assert_eq!(third.sighups(), 0);
 
     sidecar.abort();
     let _ = sidecar.await;

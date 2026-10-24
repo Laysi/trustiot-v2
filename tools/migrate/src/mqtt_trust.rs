@@ -13,7 +13,9 @@
 //! names the server certificate, so the broker serves the gateway port only once the Secret holds
 //! a usable certificate and key. Before the broker certificate CronJob (src/mqtt_certificate.rs)
 //! first fills the Secret, for example before the CA ceremony, the broker serves the cloud
-//! services on the service port and no gateway, and both containers log why.
+//! services on the service port and no gateway, and both containers log why. When the Secret
+//! stops being usable later, both remove the file again, so a broker that restarts meanwhile
+//! serves the service port instead of stopping on a certificate it cannot load.
 //!
 //! `migrate mqtt-broker-trust` runs twice in the broker pod:
 //!
@@ -23,9 +25,10 @@
 //! - as a sidecar ([`run`]): every `interval` fetches both files again and installs them when they
 //!   changed, watches the server certificate Secret, writes the gateway listener's file once it is
 //!   usable and restarts the broker once so that it opens the port (Mosquitto adds no listener on
-//!   SIGHUP), and sends the broker SIGHUP after the trust files or the server certificate
-//!   changed. The pod shares its process namespace, and the sidecar runs as the broker's user, so
-//!   it can signal it and nothing else.
+//!   SIGHUP), removes it while the Secret is not, and sends the broker SIGHUP after the trust
+//!   files or the server certificate changed, never while the Secret is unusable. The pod shares
+//!   its process namespace, and the sidecar runs as the broker's user, so it can signal it and
+//!   nothing else.
 //!
 //! Trust files are installed into a new directory under `dir`, and then the symlink
 //! `dir/current` is replaced in one rename, so the broker always reads a CA file and a CRL file
@@ -832,12 +835,28 @@ fn enable_gateway_listener(settings: &MqttTrustSettings, text: &str) -> Result<(
         .map_err(|error| Error::MqttBroker(format!("cannot write {}: {error}", path.display())))
 }
 
+/// Removes the gateway listener from `settings.listeners_dir`, so the broker starts without the
+/// gateway port the next time it starts. The broker that runs keeps its listeners: Mosquitto
+/// reads its configuration only at start and on SIGHUP.
+fn disable_gateway_listener(settings: &MqttTrustSettings) -> Result<(), Error> {
+    let path = settings.listeners_dir.join(GATEWAY_LISTENER_FILE);
+    if std::fs::symlink_metadata(&path)
+        .is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound)
+    {
+        return Ok(());
+    }
+    remove_any(&path)
+        .and_then(|()| sync_dir(&settings.listeners_dir))
+        .map_err(|error| Error::MqttBroker(format!("cannot remove {}: {error}", path.display())))
+}
+
 /// Why the broker serves no gateway port, for the logs: an empty Secret (before the first
-/// certificate) reads better than a missing file.
+/// certificate, or emptied since) reads better than a missing file.
 fn no_gateway_port(tls_dir: &Path, problem: &str) -> String {
     if !tls_dir.join(SERVER_CERTIFICATE).exists() && !tls_dir.join(SERVER_KEY).exists() {
-        "the server certificate Secret holds no certificate yet; the broker certificate CronJob \
-         fills it once the certs service can sign (deploy/chart/README.md, \"MQTT broker\")"
+        "the server certificate Secret holds no certificate (none yet, or it was emptied or \
+         declared again since); the broker certificate CronJob fills it once the certs service \
+         can sign (deploy/chart/README.md, \"伺服器憑證\")"
             .to_owned()
     } else {
         format!("the server certificate Secret is unusable: {problem}")
@@ -848,7 +867,8 @@ fn no_gateway_port(tls_dir: &Path, problem: &str) -> String {
 /// starts without it), checks the server certificate and key, and enables the gateway listener
 /// when they are usable. Without a usable pair the broker starts without its gateway port, so it
 /// never serves gateways a certificate they cannot verify, and still serves the cloud services on
-/// the service port; the sidecar opens the gateway port once the Secret is filled.
+/// the service port; a listener left in the emptyDir by an earlier start is removed. The sidecar
+/// opens the gateway port once the Secret is filled.
 ///
 /// # Errors
 ///
@@ -870,6 +890,9 @@ pub async fn once(settings: &MqttTrustSettings, report: &mut Report) -> Result<(
             );
         }
         Err(problem) => {
+            // The emptyDir outlives the pod's containers: a listener from a start when the
+            // Secret was usable would stop the broker on the certificate it cannot load.
+            disable_gateway_listener(settings)?;
             tracing::warn!(
                 placeholder = set.placeholder,
                 gateway_port = port,
@@ -933,7 +956,8 @@ struct Loaded {
     /// What it last had the broker load.
     trust: Option<[u8; 32]>,
     server: Option<[u8; 32]>,
-    /// The broker it asked to stop so that it starts again with the gateway listener.
+    /// The broker it asked to stop so that it starts again with the gateway listener; cleared
+    /// when it removes the listener ([`hold_back`]).
     restarted: Option<i32>,
     /// When it last logged that the broker serves no gateway port.
     no_gateway_logged: Option<Instant>,
@@ -988,7 +1012,8 @@ pub async fn run(settings: &MqttTrustSettings, proc_root: &Path) -> Result<(), E
 
 /// One round of the sidecar after the trust files are current: the gateway listener (written
 /// once the server certificate is usable, and the broker restarted once when it started without
-/// it), then a reload when the trust files or the server certificate changed.
+/// it; removed again while it is not, [`hold_back`]), then a reload when the trust files or the
+/// server certificate changed.
 ///
 /// Mosquitto opens its listeners at start only (2.1 refuses to add one on SIGHUP), and it opens
 /// them before it handles SIGHUP; so a broker that handles SIGHUP but does not listen on the
@@ -1003,34 +1028,22 @@ fn reload_if_changed(
     loaded: &mut Loaded,
     last_expiry_log: &mut Option<Instant>,
 ) {
-    let server = check_server(&settings.tls_dir);
+    let server = match check_server(&settings.tls_dir) {
+        Ok(server) => server,
+        Err(problem) => {
+            hold_back(settings, broker, set, loaded, &problem);
+            return;
+        }
+    };
     if !settings.listeners_dir.join(GATEWAY_LISTENER_FILE).exists() {
-        match &server {
-            Ok(_) => match enable_gateway_listener(settings, broker.listener) {
-                Ok(()) => tracing::info!(
-                    gateway_port = broker.port,
-                    "the server certificate Secret holds a usable certificate and key: enabled \
-                     the gateway listener"
-                ),
-                Err(error) => {
-                    tracing::error!(error = %error, "cannot enable the gateway listener");
-                    return;
-                }
-            },
-            Err(problem) => {
-                if loaded
-                    .no_gateway_logged
-                    .is_none_or(|at| at.elapsed() >= EXPIRY_LOG_EVERY)
-                {
-                    tracing::warn!(
-                        gateway_port = broker.port,
-                        problem = %no_gateway_port(&settings.tls_dir, problem),
-                        "the broker serves no gateway port; it opens once the server certificate \
-                         Secret holds a usable certificate and key"
-                    );
-                    loaded.no_gateway_logged = Some(Instant::now());
-                }
-                // Nothing the broker loaded names the trust files or the Secret yet.
+        match enable_gateway_listener(settings, broker.listener) {
+            Ok(()) => tracing::info!(
+                gateway_port = broker.port,
+                "the server certificate Secret holds a usable certificate and key: enabled the \
+                 gateway listener"
+            ),
+            Err(error) => {
+                tracing::error!(error = %error, "cannot enable the gateway listener");
                 return;
             }
         }
@@ -1056,18 +1069,6 @@ fn reload_if_changed(
             return;
         }
     }
-    let server = match server {
-        Ok(server) => server,
-        Err(problem) => {
-            // Reloading now would stop the broker; it keeps what it loaded before.
-            tracing::error!(
-                problem = %problem,
-                "the server certificate Secret is unusable: not reloading the broker until it is \
-                 fixed"
-            );
-            return;
-        }
-    };
     if last_expiry_log.is_none_or(|at| at.elapsed() >= EXPIRY_LOG_EVERY) {
         log_expiry(set, &server, unix_now());
         *last_expiry_log = Some(Instant::now());
@@ -1089,6 +1090,84 @@ fn reload_if_changed(
             loaded.server = Some(server.digest);
         }
         Err(error) => tracing::error!(pid, error = %error, "cannot signal the broker"),
+    }
+}
+
+/// One round while the server certificate Secret is unusable: empty before the first certificate,
+/// or emptied, spoilt or declared again since. Nothing is reloaded, since a SIGHUP would have the
+/// broker load files it cannot use and stop.
+///
+/// The gateway listener's file goes: the emptyDir keeps it across container restarts and the init
+/// container does not run again, so a broker that restarted now (out of memory, a crash) would
+/// stop on the certificate it cannot load, again and again, and take the service port down with
+/// it. Without the file it starts with the service port only. The broker that runs keeps its
+/// gateway port and the certificate it loaded. Once the Secret is usable again, the next round
+/// writes the file back and reloads that broker, or has a broker that started without the port
+/// start again once ([`restart_for_listener`]; removing the file makes such a broker possible
+/// again, so the one restart is allowed again).
+///
+/// While the broker serves the gateway port it keeps the CRL it loaded too: every round whose
+/// trust files differ from what it loaded logs an error, since gateway certificates revoked since
+/// stay accepted until the Secret is fixed.
+fn hold_back(
+    settings: &MqttTrustSettings,
+    broker: &Broker<'_>,
+    set: &TrustSet,
+    loaded: &mut Loaded,
+    problem: &str,
+) {
+    let had_listener =
+        std::fs::symlink_metadata(settings.listeners_dir.join(GATEWAY_LISTENER_FILE)).is_ok();
+    if had_listener {
+        match disable_gateway_listener(settings) {
+            Ok(()) => {
+                tracing::error!(
+                    gateway_port = broker.port,
+                    problem = %no_gateway_port(&settings.tls_dir, problem),
+                    "the server certificate Secret is no longer usable: removed the gateway \
+                     listener, so a broker that restarts serves the service port without it \
+                     instead of stopping; the running broker keeps the certificate it loaded. \
+                     The broker certificate CronJob fills the Secret again once the certs \
+                     service can sign; check its Jobs (deploy/chart/README.md, \"伺服器憑證\")"
+                );
+                loaded.restarted = None;
+            }
+            Err(error) => tracing::error!(
+                error = %error,
+                "the server certificate Secret is unusable and the gateway listener cannot be \
+                 removed: a broker that restarts stops on it"
+            ),
+        }
+    }
+    if listens_on(broker.proc_root, broker.port) == Ok(true) {
+        if loaded.trust == Some(set.digest()) {
+            tracing::error!(
+                problem = %problem,
+                "the server certificate Secret is unusable: not reloading the broker until it is \
+                 fixed; it keeps serving the certificate it loaded"
+            );
+        } else {
+            tracing::error!(
+                problem = %problem,
+                placeholder = set.placeholder,
+                "the server certificate Secret is unusable, so the broker does not reload the \
+                 trust files, which changed since it last loaded them (or since this sidecar \
+                 started): it keeps its old CRL, and gateway certificates revoked since stay \
+                 accepted until the Secret is fixed (deploy/chart/README.md, \"伺服器憑證\")"
+            );
+        }
+    } else if !had_listener
+        && loaded
+            .no_gateway_logged
+            .is_none_or(|at| at.elapsed() >= EXPIRY_LOG_EVERY)
+    {
+        tracing::warn!(
+            gateway_port = broker.port,
+            problem = %no_gateway_port(&settings.tls_dir, problem),
+            "the broker serves no gateway port; it opens once the server certificate Secret \
+             holds a usable certificate and key"
+        );
+        loaded.no_gateway_logged = Some(Instant::now());
     }
 }
 
