@@ -5,14 +5,14 @@ Laysi/trustiot-v2#632：certs 消費資產服務的 `assets.gateway_bound`，在
 ## 環境
 
 - **程式碼**：分支 `feat/632-certs-binding-projection`，rebase 到 main `1ad0ffc5`（含 Laysi/trustiot-v2#624 的設備 API 與 Laysi/trustiot-v2#659 的決策 12）之後的實作 commit `5b2fd1da`。下面的數字都來自這棵樹；rebase 前在基底 `0dc8fd96` 上跑過同一組檢查，結果相同（全部通過）。
-- **建置主機**：x86_64 Linux，經共用的檢查佇列一次一個工作，限制記憶體，`CARGO_BUILD_JOBS=10`。
-  - 設了 `CI=1`：需要容器的測試以拋棄式的 TLS Postgres（podman）執行，不略過。
+- **機器**：建置主機（x86_64 Linux）。
+  - 設了 `CI=1`：需要容器的測試以拋棄式的 TLS Postgres 執行，不略過。
   - 工具版本是 `.prototools` 與 `rust-toolchain.toml` 釘選的：Rust 1.99.0、bun 1.4.2、helm 4.3.0、kubeconform 0.8.0。
 - **日期**：2026-10-24。
 
 ## 指令
 
-在 repo 根目錄，經檢查佇列在同一個工作依序執行：
+在 repo 根目錄依序執行：
 
 ```sh
 cargo fmt --all --check
@@ -81,6 +81,41 @@ pass | certs.tenant_statuses | insert into tenant B | refused (42501)
 ```
 
 `certs_app` 對 `gateway_bindings` 只有 `INSERT`，所以讀與改都被拒（42501），連自己租戶的列也讀不到。
+
+### 與 main 合併後的重跑
+
+分支合併 main `757f52df`（Laysi/trustiot-v2#655，ai-gateway 的模型角色設定與它的連線預算）之後，合併 commit `9dea8175` 的樹在建置主機（x86_64 Linux）上依序執行：
+
+```sh
+cargo clippy --locked --workspace --all-targets -- -D warnings
+CI=1 cargo test --locked -p certs -p migrate -p ai-gateway
+cargo test --locked -p certs -p assets -p ai-gateway -p assistant -p identity -p telemetry-query --test chart_connections
+bun test deploy/chart
+cargo run --locked -q -p openapi -- --check
+```
+
+| 指令 | 結果 |
+| --- | --- |
+| `cargo clippy ... -D warnings` | 通過 |
+| `CI=1 cargo test -p certs -p migrate -p ai-gateway` | 42 個測試執行檔，245 通過、0 失敗、0 略過 |
+| `cargo test ... --test chart_connections`（六個服務） | 6 通過 |
+| `bun test deploy/chart` | 655 通過、0 失敗 |
+| `cargo run -p openapi -- --check` | `api/openapi.json is up to date` |
+
+`exit 0 at 16:28:22 (build host)`
+
+### 安全審查的修正之後
+
+commit `6fcb98b1` 依安全審查改了四處（README 與 PR 說明有細節）：
+
+- 這個版本不認得的 `gateway_binding` 事件改為重試，不略過。
+- 拿掉 `unbound_at >= bound_at` 的 CHECK。
+- 平台讀取交易設 `statement_timeout` 5 秒、`lock_timeout` 2 秒。
+- 資產服務的綁定 `INSERT` 加上不變式註解。
+
+依專案的驗證規則，這幾項（Medium、Low）不加新測試，既有的測試要照樣通過。
+
+這個 commit 的重跑（`cargo clippy --workspace`、`CI=1 cargo test -p certs -p migrate`）是待測：2026-10-24 排進建置主機時，主機剩餘磁碟不到一個工作需要的量，工作沒有執行。
 
 ## 結論
 
