@@ -96,7 +96,7 @@ schema `ingest`，DDL 在 `migrations/postgres/`，由 migration Job 套用（`t
 - `tests/cross_tenant.rs`：`crates/testkit` 的跨租戶負向測試宣告 `ingest.gateway_bindings`，服務角色讀不到也改不了別的租戶的綁定。
 
 ```sh
-CARGO_BUILD_JOBS=2 cargo test -p ingest --test startup --test gateway_bindings --test cross_tenant -- --nocapture
+cargo test -p ingest --test startup --test gateway_bindings --test cross_tenant -- --nocapture
 ```
 
 ## ClickHouse schema
