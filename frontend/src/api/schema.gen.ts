@@ -319,6 +319,24 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/identity/v1/preferences": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Reads the user's own preferences. */
+        get: operations["getPreferences"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Changes the user's own preferences: the fields given, each from its allow list. */
+        patch: operations["updatePreferences"];
+        trace?: never;
+    };
     "/api/identity/v1/sessions": {
         parameters: {
             query?: never;
@@ -343,11 +361,35 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get?: never;
+        /**
+         * Reads the current session: the user, the tenant it acts in with the user's role there, and
+         *     the user's tenants.
+         */
+        get: operations["getCurrentSession"];
         put?: never;
         post?: never;
         /** Logs out: revokes the session of the request's cookie. */
         delete: operations["logOut"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/identity/v1/sessions/current/tenant": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Switches the session to another of the user's tenants; its next request acts there with the
+         *     user's role in it.
+         */
+        put: operations["switchTenant"];
+        post?: never;
+        delete?: never;
         options?: never;
         head?: never;
         patch?: never;
@@ -506,6 +548,21 @@ export interface components {
              *     format characters or line and paragraph separators.
              */
             name: string;
+        };
+        /** @description The session of the request. */
+        CurrentSession: {
+            active_tenant: components["schemas"]["TenantMembership"] | null;
+            /** @description The address the user logs in with; `null` for a user who cannot log in by email. */
+            email: string | null;
+            /** @description Whether the user is a platform administrator (A2), independent of any tenant. */
+            platform_admin: boolean;
+            /**
+             * @description Every tenant the user belongs to, by name; switch with
+             *     `PUT /api/identity/v1/sessions/current/tenant`.
+             */
+            tenants: components["schemas"]["TenantMembership"][];
+            /** @description The signed-in user. */
+            user_id: components["schemas"]["UserId"];
         };
         /** @description A device: a Modbus endpoint one of the tenant's gateways polls with one of its models. */
         Device: {
@@ -884,6 +941,11 @@ export interface components {
              */
             workstation: string;
         };
+        /**
+         * @description A language the interface or AI answers may use.
+         * @enum {string}
+         */
+        Language: "auto" | "zh-TW" | "en";
         /** @description The latest value of each data point of a device that has a reading in the raw period. */
         Latest: {
             /**
@@ -984,7 +1046,8 @@ export interface components {
             step: "verify_code";
         };
         /**
-         * @description A role in a tenant, as this API takes and returns it.
+         * @description A role in a tenant, as the API takes and returns it: setting a member's role, and the tenants
+         *     of the current session.
          * @enum {string}
          */
         MemberRole: "viewer" | "editor" | "admin";
@@ -1030,6 +1093,20 @@ export interface components {
             gateways: components["schemas"]["PoolGateway"][];
             /** @description The `after` of the next page; `null` on the last one. */
             next_after?: string | null;
+        };
+        /** @description A user's preferences. */
+        Preferences: {
+            /** @description The language AI answers are written in; `auto` answers in the language of the question. */
+            ai_language: components["schemas"]["Language"];
+            /** @description The interface's language; `auto` follows the browser. */
+            language: components["schemas"]["Language"];
+            /** @description The interface's colors. */
+            theme: components["schemas"]["Theme"];
+            /**
+             * @description An IANA time zone name such as `Asia/Taipei`, or `auto` to follow the browser.
+             * @example Asia/Taipei
+             */
+            time_zone: string;
         };
         /** @description One reading's value, as its type stored it. */
         Reading: {
@@ -1178,6 +1255,11 @@ export interface components {
             /** @description The role to give the user in the tenant. */
             role: components["schemas"]["MemberRole"];
         };
+        /** @description The body of `PUT /api/identity/v1/sessions/current/tenant`. */
+        SwitchTenant: {
+            /** @description One of the user's tenants. */
+            tenant_id: components["schemas"]["TenantId"];
+        };
         /** @description A tenant. */
         Tenant: {
             /**
@@ -1197,6 +1279,23 @@ export interface components {
          *     Serialized as a lowercase hyphenated UUID string.
          */
         TenantId: string;
+        /** @description A tenant the user belongs to, with their role there. */
+        TenantMembership: {
+            /**
+             * @description The tenant's name; `null` only for a tenant that has no record, which only data written
+             *     outside the API has.
+             */
+            name: string | null;
+            /** @description The user's role in the tenant. */
+            role: components["schemas"]["MemberRole"];
+            /** @description The tenant. */
+            tenant_id: components["schemas"]["TenantId"];
+        };
+        /**
+         * @description The interface's colors.
+         * @enum {string}
+         */
+        Theme: "system" | "light" | "dark";
         /**
          * @description The body of `PUT /api/assets/v1/devices/{device_id}`: the device's settings, which replace
          *     all of the current ones (a field left out takes its default). Unknown fields are refused.
@@ -1252,6 +1351,23 @@ export interface components {
              *     other's points unseen. Required.
              */
             revision: number;
+        };
+        /**
+         * @description The body of `PATCH /api/identity/v1/preferences`: the settings to change. A field left out
+         *     keeps its value; `null` and unknown fields are refused.
+         */
+        UpdatePreferences: {
+            /** @description The language AI answers are written in. */
+            ai_language?: components["schemas"]["Language"];
+            /** @description The interface's language. */
+            language?: components["schemas"]["Language"];
+            /** @description The interface's colors. */
+            theme?: components["schemas"]["Theme"];
+            /**
+             * @description `auto` or an IANA time zone name, spelled as the tzdb spells it.
+             * @example Asia/Taipei
+             */
+            time_zone?: string;
         };
         /**
          * Format: uuid
@@ -2930,6 +3046,122 @@ export interface operations {
             };
         };
     };
+    getPreferences: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The user's preferences; the defaults (`auto`, `auto`, `auto`, `system`) for a user who never changed one. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Preferences"];
+                };
+            };
+            /** @description No valid session (`unauthenticated`). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description A token another service exchanged for a call on the user's behalf (`permission_denied`): only the user's own requests read their preferences. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The database failed (`unavailable`). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    updatePreferences: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdatePreferences"];
+            };
+        };
+        responses: {
+            /** @description The preferences after the change; fields left out kept their value. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Preferences"];
+                };
+            };
+            /** @description The `Content-Type` is not `application/json`, the body is over 1024 bytes, or it is not a JSON object of the four fields with string values; unknown fields and `null` are refused (`invalid_request`). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No valid session, or the user no longer exists (`unauthenticated`). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description A cross-site request (`permission_denied`, message key `security.cross_site_request`), or a token another service exchanged for a call on the user's behalf (`permission_denied`); nothing changed. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description A value outside its allow list (`validation_failed`; `/language` `preferences.language_invalid`, `/ai_language` `preferences.ai_language_invalid`, `/time_zone` `preferences.time_zone_invalid`, `/theme` `preferences.theme_invalid`); nothing changed. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The database failed; nothing changed (`unavailable`). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
     logOutEverywhere: {
         parameters: {
             query?: never;
@@ -2966,6 +3198,53 @@ export interface operations {
             };
         };
     };
+    getCurrentSession: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The session: the user, the tenant it acts in with the user's role there (as of this request), and every tenant the user belongs to. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CurrentSession"];
+                };
+            };
+            /** @description No valid session (`unauthenticated`). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description A token another service exchanged for a call on the user's behalf (`permission_denied`): only the user's own requests read the session. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The database failed, too many reads of users' tenants were waiting, or the platform role has no credentials (`unavailable`). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
     logOut: {
         parameters: {
             query?: never;
@@ -2992,6 +3271,66 @@ export interface operations {
                 };
             };
             /** @description The database failed; nothing was revoked (`unavailable`). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    switchTenant: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SwitchTenant"];
+            };
+        };
+        responses: {
+            /** @description The session acts in the tenant from its next request on; the body is the session as it is now. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CurrentSession"];
+                };
+            };
+            /** @description The `Content-Type` is not `application/json`, the body is over 1024 bytes, or it is not the JSON object `{"tenant_id": "<uuid>"}` (`invalid_request`). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No valid session, a token that names no session, or a session cookie that is missing, is not the session the token was signed from, or whose session has ended (`unauthenticated`); nothing changed. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The user is not a member of the tenant, or there is no such tenant (`permission_denied`, message key `session.tenant_not_member`); a cross-site request (message key `security.cross_site_request`); or a token another service exchanged (`permission_denied`). The session keeps its tenant. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The database failed, too many reads of users' tenants were waiting, or the platform role has no credentials; nothing changed (`unavailable`). */
             503: {
                 headers: {
                     [name: string]: unknown;

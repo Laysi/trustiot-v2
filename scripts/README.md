@@ -147,7 +147,7 @@ service-kit 連 Postgres 一律用 `sslmode=verify-full`（Laysi/trustiot-v2#53�
 | `TRUSTIOT_IDENTITY_SIGNING_KEYS_FILE` | 只有身分服務 | 簽章金鑰檔 `signing-keys.json` 的**路徑**，不是內容 |
 | `TRUSTIOT_INGRESS_ROUTES` | 只有身分服務 | 本機的 cookie 路由：`localhost` 的每個路徑（`PathPrefix /`）給 `assets`（kit 的範例服務 `GET /v1/whoami` 接受的受眾）；沒有入口 gateway，所以呼叫 ext_authz 的人自己帶 `Host: localhost` |
 | `TRUSTIOT_DEV_IDENTITY_DATABASE_USERNAME`、`..._PASSWORD` | 只有身分服務 | `identity_app` 與 Job 產生的密碼，見上一節「`env` 印出的服務登入」 |
-| `TRUSTIOT_DEV_IDENTITY_PLATFORM_DATABASE_USERNAME`、`..._PASSWORD` | 只有身分服務 | `identity_platform` 與 Job 產生的密碼：事件紀錄以平台角色讀事件（Laysi/trustiot-v2#130）；沒有它時服務照常啟動，只是事件紀錄關閉 |
+| `TRUSTIOT_DEV_IDENTITY_PLATFORM_DATABASE_USERNAME`、`..._PASSWORD` | 只有身分服務 | `identity_platform` 與 Job 產生的密碼：事件紀錄以平台角色讀事件（Laysi/trustiot-v2#130），目前的 session 以它列出使用者所屬的租戶（Laysi/trustiot-v2#497）；沒有它時服務照常啟動，只是事件紀錄關閉、讀取目前的 session 與切換租戶回 503 |
 | `TRUSTIOT_POSTGRES_*` | 所有服務 | 與原本相同（`verify-full`、開發 CA 的路徑） |
 
 #### 在主機上啟動身分服務

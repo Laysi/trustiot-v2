@@ -13,9 +13,10 @@ export interface SessionInfo {
 }
 
 /**
- * Where the SPA learns about the session and switches tenants. The identity service has no
- * session or tenant-switch endpoint yet (api/openapi.json); the pages are written against this
- * interface and the real source plugs in when the endpoint exists.
+ * Where the SPA learns about the session and switches tenants. The identity service serves both
+ * (`getCurrentSession` and `switchTenant` in api/openapi.json, Laysi/trustiot-v2#497); the pages
+ * are written against this interface, and a source calling those endpoints replaces
+ * `noSessionSource` in main.tsx with Laysi/trustiot-v2#124.
  */
 export interface SessionSource {
   /** The current session, or null when there is none to show. */
@@ -24,7 +25,7 @@ export interface SessionSource {
   switchTenant(tenantId: string): Promise<SessionInfo>;
 }
 
-/** Until the identity service has a session endpoint: no session to show, no switching. */
+/** Until main.tsx wires the identity service's session endpoints: no session, no switching. */
 export const noSessionSource: SessionSource = {
   load: async () => null,
   switchTenant: async () => {
