@@ -7,7 +7,7 @@ Laysi/trustiot-v2#535：broker 的伺服器憑證改由 chart 的 CronJob `<rele
 ## 環境
 
 - **程式碼**：分支 `feat/535-broker-server-certificate`：功能的 commit 9dc4cae7、合併 main（0dc8fd96）的 b86e34aa、修正兩個測試的 b3233160、改寫私鑰 PEM 邊界寫法的 5cdbc138，以及依安全審查修正的 commit（這份報告與它在同一個 commit）。下面「指令」的完整一輪在前三個 commit 的樹上執行；之後兩個 commit 在各自的樹上重跑的檢查列在「推送前的 secret 掃描」與「安全審查的修正」。
-- **建置主機**（經檢查佇列）：x86_64 Linux，`CI=1`；需要容器的測試以 rootless podman 起拋棄式的 TLS Postgres（`crates/testkit`）與 Mosquitto（`docker.io/library/eclipse-mosquitto:2.1.2-alpine`，以 digest 釘選）。Rust 1.99.0（`rust-toolchain.toml`），bun 1.4.2、helm 4.3.0、kubeconform 0.8.0（`.prototools` 釘選的版本）。
+- **建置主機**（經檢查佇列）：x86_64 Linux，`CI=1`；需要容器的測試以 podman 起拋棄式的 TLS Postgres（`crates/testkit`）與 Mosquitto（`docker.io/library/eclipse-mosquitto:2.1.2-alpine`，以 digest 釘選）。Rust 1.99.0（`rust-toolchain.toml`），bun 1.4.2、helm 4.3.0、kubeconform 0.8.0（`.prototools` 釘選的版本）。
 - **工作站**：gitleaks（`.prototools` 釘選的版本）。
 
 ## 指令

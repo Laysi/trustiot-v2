@@ -1,5 +1,5 @@
 # cargo test --locked -p certs --test broker_certificate -- --nocapture
-# Build host (x86_64 Linux, CI=1, rootless podman), 2026-10-24. Container network addresses replaced with <client>.
+# Build host (x86_64 Linux, CI=1, podman), 2026-10-24. Container network addresses replaced with <client>.
 
 running 1 test
 evidence: first run at 1792791168: the Secret holds no certificate yet; serial 787fe60b71fc5f3237013f36e596f42b for mqtt-broker.trustiot.internal, trustiot-mqtt-broker.trustiot.svc, notBefore 1792790868, notAfter 1792794768, renewed from 1792792818
