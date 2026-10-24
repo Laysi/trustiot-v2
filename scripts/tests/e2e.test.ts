@@ -533,6 +533,7 @@ describe.skipIf(!ENABLED)("the dev environment with podman", () => {
           "certs_app",
           "certs_platform",
           "assistant_app",
+          "ai_gateway_app",
           "ingest_app",
           "ingest_platform",
         ]);

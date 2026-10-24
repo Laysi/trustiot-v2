@@ -1,7 +1,8 @@
 //! Test support: the scripted provider servers and test CA of crates/ai-clients (included by
-//! path), its recorded fixtures, configuration from variables as service-kit reads them, and
-//! requests to the gateway's routes without a socket. No real provider and no real key: the
-//! key is made at run time (`upstream::key_text`).
+//! path), its recorded fixtures, configuration from variables as service-kit reads them,
+//! requests to the gateway's routes without a socket, and a throwaway TLS Postgres with the
+//! gateway's schema (`database`, on service-kit's test support, included by path). No real
+//! provider and no real key: the key is made at run time (`upstream::key_text`).
 
 #![allow(
     dead_code,
@@ -10,12 +11,15 @@
 )]
 
 use std::ffi::OsString;
+use std::net::SocketAddr;
 use std::path::PathBuf;
+use std::process::{Command, Stdio};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
 
 use ai_clients::Tls;
-use ai_gateway::{Config, ENV_PREFIX, Gateway, TENANT_HEADER, routes};
+use ai_gateway::{Config, ENV_PREFIX, Gateway, Store, TENANT_HEADER, routes};
 use axum::Router;
 use axum::body::Body;
 use axum::http::{HeaderMap, Request, StatusCode};
@@ -26,6 +30,25 @@ use tower::ServiceExt;
 pub mod upstream;
 
 pub use upstream::{Server, Step, http_response, key_text, sse_head, sse_without_comments};
+
+#[path = "../../../../crates/service-kit/tests/support/postgres.rs"]
+pub mod postgres;
+#[path = "../../../../crates/service-kit/tests/support/start.rs"]
+pub mod start;
+
+pub mod database;
+
+/// The database settings of a gateway whose tests never reach the database: a closed loopback
+/// port. Routers built by [`Vars::router`] have no store, so these are only read, never used.
+const NO_DATABASE: [(&str, &str); 7] = [
+    ("AI_GATEWAY_POSTGRES_HOST", "127.0.0.1"),
+    ("AI_GATEWAY_POSTGRES_PORT", "9"),
+    ("AI_GATEWAY_POSTGRES_DATABASE", "none"),
+    ("AI_GATEWAY_POSTGRES_SSLMODE", "verify-full"),
+    ("AI_GATEWAY_POSTGRES_CA_FILE", "/nonexistent/ca.pem"),
+    ("AI_GATEWAY__DATABASE__USERNAME", "ai_gateway_app"),
+    ("AI_GATEWAY__DATABASE__PASSWORD", "unused"),
+];
 
 /// `http.request_timeout` for routers built here: long enough that no role's limits hit it.
 pub const REQUEST_TIMEOUT: Duration = Duration::from_secs(3600);
@@ -93,18 +116,38 @@ pub fn stream_reply(text: &str) -> Vec<u8> {
     out
 }
 
-/// Configuration variables, built up by the helpers below.
-#[derive(Debug, Clone, Default)]
+/// Configuration variables, built up by the helpers below; a later value of a variable
+/// replaces the earlier one.
+#[derive(Debug, Clone)]
 pub struct Vars(Vec<(String, String)>);
 
 impl Vars {
+    /// Database settings that point nowhere ([`NO_DATABASE`]) and nothing else.
     pub fn new() -> Self {
-        Self::default()
+        NO_DATABASE
+            .iter()
+            .fold(Self(Vec::new()), |vars, (name, value)| {
+                vars.set(name, *value)
+            })
     }
 
     pub fn set(mut self, name: &str, value: impl Into<String>) -> Self {
+        self.0.retain(|(existing, _)| existing != name);
         self.0.push((name.to_owned(), value.into()));
         self
+    }
+
+    /// The settings of `database`.
+    pub fn database(self, database: &database::Database) -> Self {
+        database
+            .vars()
+            .into_iter()
+            .fold(self, |vars, (name, value)| vars.set(name, value))
+    }
+
+    /// The variables, for a process.
+    pub fn pairs(&self) -> &[(String, String)] {
+        &self.0
     }
 
     /// A provider `name` speaking `protocol` at `server`, its key in `<NAME>_TEST_KEY`.
@@ -157,6 +200,24 @@ impl Vars {
         )
         .expect("build the gateway");
         routes(Arc::new(gateway))
+    }
+
+    /// A gateway that takes its roles' models from its database, as the binary does
+    /// (`ai_gateway::start`), every provider key being [`key_text`]; and its routes.
+    pub fn live(&self) -> (Arc<Gateway>, Router) {
+        let config = self.config();
+        let key = key_text();
+        let store = Store::connect_lazy(&config).expect("a verify-full pool");
+        let gateway = Gateway::build(
+            &config,
+            &|_| Some(key.clone()),
+            &Tls::none(),
+            REQUEST_TIMEOUT,
+        )
+        .expect("build the gateway")
+        .with_store(store, config.database.timeout);
+        let gateway = Arc::new(gateway);
+        (Arc::clone(&gateway), routes(gateway))
     }
 }
 
@@ -224,4 +285,81 @@ pub async fn send(router: &Router, request: Request<Body>) -> Reply {
 pub fn with_caller_model(text: &str, from: &str, to: &str) -> String {
     assert!(text.contains(from), "the text has no {from}");
     text.replacen(from, to, 1)
+}
+
+/// Fails the test in CI, where every prerequisite must be present; skips it elsewhere.
+#[allow(
+    clippy::print_stderr,
+    reason = "tells the developer why a test did not run"
+)]
+pub fn unavailable(what: &str) {
+    assert!(
+        std::env::var_os("CI").is_none(),
+        "{what} is required when CI is set"
+    );
+    eprintln!("skipped: {what} is not available (set CI to make this a failure)");
+}
+
+/// `podman` or `docker`, whichever works.
+pub fn container_runtime() -> Option<&'static str> {
+    ["podman", "docker"].into_iter().find(|runtime| {
+        Command::new(runtime)
+            .arg("--version")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .is_ok_and(|status| status.success())
+    })
+}
+
+/// Runs a container runtime command and returns its trimmed stdout.
+pub fn runtime_output(runtime: &str, args: &[&str]) -> String {
+    let output = Command::new(runtime)
+        .args(args)
+        .output()
+        .unwrap_or_else(|error| panic!("{runtime} {args:?}: {error}"));
+    assert!(
+        output.status.success(),
+        "{runtime} {args:?} failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8_lossy(&output.stdout).trim().to_owned()
+}
+
+/// A unique name for a container created by this test process.
+pub fn unique_name(kind: &str) -> String {
+    static NEXT: AtomicU32 = AtomicU32::new(0);
+    format!(
+        "ai-gateway-test-{kind}-{}-{}",
+        std::process::id(),
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    )
+}
+
+/// A container that is removed when dropped.
+pub struct Container {
+    pub runtime: &'static str,
+    pub name: String,
+}
+
+impl Container {
+    /// The host address mapped to `port` inside the container.
+    pub fn host_address(&self, port: &str) -> SocketAddr {
+        let mapping = runtime_output(self.runtime, &["port", &self.name, port]);
+        mapping
+            .lines()
+            .find_map(|line| line.trim().parse().ok())
+            .unwrap_or_else(|| panic!("no host address for {port}: {mapping}"))
+    }
+}
+
+impl Drop for Container {
+    fn drop(&mut self) {
+        let _ = Command::new(self.runtime)
+            // `--volumes`: the image's anonymous volumes go with the container (Laysi/trustiot-v2#334).
+            .args(["rm", "--force", "--volumes", &self.name])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+    }
 }

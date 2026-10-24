@@ -267,6 +267,7 @@ describe("the logins", () => {
       { service: "certs", kind: "app", role: "certs_app", secret: "dev-certs-password", stateKey: "certs" },
       { service: "certs", kind: "platform", role: "certs_platform", secret: "dev-certs-password", stateKey: "certs-platform" },
       { service: "assistant", kind: "app", role: "assistant_app", secret: "dev-assistant-password", stateKey: "assistant" },
+      { service: "ai-gateway", kind: "app", role: "ai_gateway_app", secret: "dev-ai-gateway-password", stateKey: "ai-gateway" },
       { service: "ingest", kind: "app", role: "ingest_app", secret: "dev-ingest-password", stateKey: "ingest" },
       { service: "ingest", kind: "platform", role: "ingest_platform", secret: "dev-ingest-password", stateKey: "ingest-platform" },
     ]);
