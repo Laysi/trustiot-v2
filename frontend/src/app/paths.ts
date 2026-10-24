@@ -54,3 +54,6 @@ export function loginPath(current: string): string {
   const next = safeNextPath(current);
   return next === "/" ? LOGIN_PATH : `${LOGIN_PATH}?next=${encodeURIComponent(next)}`;
 }
+
+/** The personal settings page (preferences, signing out of every device). */
+export const SETTINGS_PATH = "/settings";
