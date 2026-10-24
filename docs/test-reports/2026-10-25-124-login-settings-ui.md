@@ -10,6 +10,7 @@ Laysi/trustiot-v2#124（rebuild checklist A1、L2）：SPA 的第一批正式畫
   - `915edc2` 文件（決策 2、`frontend/README.md`、`services/identity/README.md`）
   - 這份報告在下一個 commit 加入。
   - `cdfb842` 安全審查後的修正（見「安全審查後的修正」），那一節在下一個 commit 加入。
+  - `8b31c35` 可以點的元素顯示手形（見「游標」），那一節在下一個 commit 加入。
 - **檢查環境**：開發者工作站。工具版本是 `.prototools` 釘選的版本，前端相依以 `frontend/bun.lock` 鎖定。
 - **實際流程**：同一台開發者工作站上的本機開發環境（`scripts/dev.ts`），真的身分服務與 `services/web`，桌面版 Chrome 與 headless Chrome；細節在「實際流程」。
 - **日期**：2026-10-25。
@@ -258,6 +259,17 @@ commit 前的程式審查又修正兩處，瀏覽器流程沒有重跑，以下�
 
 `cdfb842`，指令同「每個 commit 前的檢查」：`install`（lockfile 不變）、`api:check`、`typecheck`、`lint`（80 個檔案）、`test`（218 通過、0 失敗，17 個檔案）、`build`、`check:dist` 全部通過。瀏覽器的實際流程沒有重跑。
 
+### 游標
+
+2026-10-25 專案擁有者看過畫面後決定：可以點的元素顯示手形，停用時維持箭頭。Tailwind 4 的 preflight 不再把按鈕設成手形（v3 會），原本只有連結顯示手形。`8b31c35` 把這條規則加在 `global.css` 的 base layer，停用指的是 `disabled` 屬性、`aria-disabled="true"` 或 Radix 的 `data-disabled`。元件不再自己設游標，所以拿掉了選單項目的箭頭，以及輸入框與下拉選單停用時的禁止符號。規則寫在 `frontend/README.md` 的「UI 元件與樣式」。
+
+- **檢查**：`8b31c35`，指令同「每個 commit 前的檢查」：`install`（lockfile 不變）、`api:check`、`typecheck`、`lint`（80 個檔案）、`test`（218 通過、0 失敗，17 個檔案）、`build`、`check:dist` 全部通過。
+- **建置結果**：CSS 只剩一個游標宣告，就是這條規則的 `pointer`，選擇器原樣保留。`frontend/README.md` 的說明沒有讓 Tailwind 多產生 utility。
+- **桌面版 Chrome**：本機開發環境的 `services/web` 提供這次的建置，頁面載入的就是這份 stylesheet。以 `getComputedStyle` 讀游標：
+  - 登入頁的「寄送驗證碼」按鈕是 `pointer`；email 輸入框是 `text`，暫時停用後是 `default`。
+  - 暫時加進頁面、量完即移除的元素：`button`、`select`、`summary`、checkbox、radio，以及 `role` 是 `button`、`tab`、`option`、`menuitem`、`menuitemradio` 的元素都是 `pointer`。以三種方式停用的同類元素，以及停用的 `fieldset` 裡的按鈕，都是 `default` 或 `auto`。一般的 `div` 是 `auto`，文字輸入框是 `text`，連結是 `pointer`。
+- **headless Chrome**：帶著另一個裝置以 alice 登入的 cookie，滑鼠事件經 DevTools Protocol 送出。`/` 與 `/settings` 上這些元素都是 `pointer`：租戶選單與帳號選單的觸發按鈕；打開後的選單項目，即租戶選單的兩個 `menuitemradio`，以及帳號選單的「個人設定」「登出」兩個 `menuitem`；個人設定的四個下拉選單；「登出所有裝置」按鈕。畫面上沒有停用的選單項目，停用時的游標以上一項的元素為證。
+
 ## 結論
 
 | 驗收條件 | 結果 |
@@ -270,6 +282,8 @@ commit 前的程式審查又修正兩處，瀏覽器流程沒有重跑，以下�
 | 瀏覽器實際操作登入與個人設定，開關 Radix 彈出元件，沒有 CSP violation | **通過**：見「CSP」 |
 
 2026-10-25 的獨立安全審查沒有 Critical、High、Medium；三項 Low 已在 `cdfb842` 修正，各有回歸測試（見「安全審查後的修正」），Info 由 Laysi/trustiot-v2#677 處理。
+
+專案擁有者 2026-10-25 決定的游標規則在 `8b31c35`：在真的瀏覽器裡，可以點的元素都顯示手形，停用的維持箭頭（見「游標」）。
 
 範圍內但沒有在實際流程測的：
 
