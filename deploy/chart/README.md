@@ -723,7 +723,7 @@ operator 依 Cluster 再產生：pod 與 PVC `<cluster>-1`；Service `<cluster>-
 | `telemetry-query` | `10` | 2 | 12 | 24 |
 | 合計 | | | 70 | 140 |
 
-- `assets`：平台角色的連線池（`PLATFORM_CONNECTIONS`）：讀身分服務與 certs 事件的兩個消費端各一條、就緒檢查一條、平台管理員讀設備池一條。`telemetry-query`：平台角色讀身分服務事件的連線池（`EVENT_READER_CONNECTIONS`）。`certs`：平台角色的出廠登錄連線池（`REGISTRATION_CONNECTIONS`）。
+- `assets`：平台角色的連線池（`PLATFORM_CONNECTIONS`）：讀身分服務與 certs 事件的兩個消費端各一條、就緒檢查一條、平台管理員讀設備池一條。`telemetry-query`：平台角色讀身分服務事件的連線池（`EVENT_READER_CONNECTIONS`）。`certs`：平台角色的連線池（`PLATFORM_CONNECTIONS`）：出廠登錄、讀資產服務事件的消費端、綁定與租戶狀態的跨租戶讀取共用（Laysi/trustiot-v2#632 起）。
 - `identity`：以 `identity_app` 連線的租戶、登入、寄信、run 委派與事件紀錄連線池共 16 條，以 `identity_platform` 連線的事件紀錄連線池 5 條（消費的產生端數加 2；certs 在 2026-10-23 加入後是 3 個產生端），見 [services/identity/README.md](../../services/identity/README.md) 的「連線池」。
 - `assistant`：只有服務角色 `assistant_app` 的連線池，沒有其他連線池（Laysi/trustiot-v2#592）；聊天 API（Laysi/trustiot-v2#146）之前只有 readiness 使用。
 - 之後開始用 Postgres 的服務要在預算加上它的連線池、在 values 給它 `database.maxConnections`，檢查自動算進去；`max_connections` 不夠時，依下方的記憶體估算調整。

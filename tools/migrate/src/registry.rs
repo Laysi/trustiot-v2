@@ -184,17 +184,16 @@ pub const PRODUCT: Registry = Registry {
         // `certs.gateway_registered` puts the gateway in the device pool. Writes
         // `assets.device_model_*` (Laysi/trustiot-v2#99), `assets.gateway_bound`
         // (Laysi/trustiot-v2#101) and `assets.device_*` (Laysi/trustiot-v2#100) with its service
-        // role. A producer needs a reader for the outbox
-        // policy, and the gateway configuration that will consume these events
-        // (Laysi/trustiot-v2#93) does not exist yet, so assets reads its own events for now: no
-        // subscription does. When the real consumer is listed here, drop "assets" and the Job
-        // revokes the read (it syncs the readers on every run).
+        // role; identity's event log and the certs service (Laysi/trustiot-v2#632,
+        // `assets.gateway_bound`) read them. Until Laysi/trustiot-v2#632 assets also read its own
+        // events, as the outbox policy's reader until a real consumer was listed; the Job revokes
+        // that read on its next run (it syncs the readers on every run).
         Service {
             name: assets_schema::SCHEMA.service,
             platform_role: true,
             outbox: Outbox {
                 producer: assets_schema::SCHEMA.outbox_producer,
-                consumes: &["identity", "certs", "assets"],
+                consumes: &["identity", "certs"],
             },
             migrations: assets_schema::SCHEMA.migrations,
         },
@@ -214,13 +213,16 @@ pub const PRODUCT: Registry = Registry {
         // `certs.gateway_registered` (a gateway belongs to no tenant at the factory), which only
         // a producer's platform role may write, so the chart binds a password to
         // `certs_platform` as well ("trustiot.migrate.platformLogins" in
-        // deploy/chart/templates/_migrate.tpl). identity's event log reads these events.
+        // deploy/chart/templates/_migrate.tpl). identity's event log and assets' device pool read
+        // these events. Reads assets' events as the same platform role (Laysi/trustiot-v2#632):
+        // every `assets.gateway_bound` gives the service a gateway's tenant, for the renewal and
+        // the broker's permissions.
         Service {
             name: certs_schema::SCHEMA.service,
             platform_role: true,
             outbox: Outbox {
                 producer: certs_schema::SCHEMA.outbox_producer,
-                consumes: &[],
+                consumes: &["assets"],
             },
             migrations: certs_schema::SCHEMA.migrations,
         },

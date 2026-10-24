@@ -35,7 +35,7 @@
 
 錯誤（M1，依序檢查）：沒有有效的內部身分 token 401；不是平台管理員、或 token 帶 `act` 403（在讀任何資料之前）；路徑的硬體 ID 不合規則 404；列表參數未知或格式不對 400 `invalid_request`；綁定的 `Content-Type` 不是 `application/json` 400，body 超過 4 KiB 400 `gateway_binding.body_too_large`，不是 JSON 物件 400 `gateway_binding.body_invalid`；未知欄位 422 `gateway_binding.unknown_field`，`tenant_id` 缺漏或 `null` 422 `gateway_binding.field_required`，不是 UUID 422 `gateway_binding.tenant_id_invalid`；租戶不認得 422；不在設備池 404；別的租戶握有 409；資料庫出錯 503（什麼都沒寫，可以重試）。每個回應都帶 `cache-control: no-store`。每次綁定記一行 INFO `bound a gateway`，帶 `user_id`、`tenant_id`、`hardware_id`、`binding_id`、`created`；拒絕記 INFO，失敗記 ERROR，只帶錯誤種類；不記 token。
 
-**事件**：`assets.gateway_bound`（`contract::events::assets::GatewayBound`），payload 是 `binding_id` 與 `hardware_id`，租戶在信封上，actor 是做綁定的平台管理員（使用者 ID），沒有任何密鑰。aggregate 是 `gateway_binding`、ID 是綁定 ID：aggregate 屬於它第一個事件的租戶，閘道器之後可能換租戶，所以每次綁定一個新的 aggregate。certs（換發與 broker 權限，Laysi/trustiot-v2#632）、ingest（Laysi/trustiot-v2#640）與閘道器設定（gateway-ops，Laysi/trustiot-v2#93）之後各自消費它，維護自己的「硬體 ID → 租戶」對照表；閘道器的租戶一律是它目前的綁定（[架構決策](../../docs/architecture/decisions.md)的決策 12，2026-10-24）。
+**事件**：`assets.gateway_bound`（`contract::events::assets::GatewayBound`），payload 是 `binding_id` 與 `hardware_id`，租戶在信封上，actor 是做綁定的平台管理員（使用者 ID），沒有任何密鑰。aggregate 是 `gateway_binding`、ID 是綁定 ID：aggregate 屬於它第一個事件的租戶，閘道器之後可能換租戶，所以每次綁定一個新的 aggregate。certs（換發與 broker 權限，Laysi/trustiot-v2#632，`services/certs/README.md` 的「閘道器的綁定與租戶狀態」）、ingest（Laysi/trustiot-v2#640）與閘道器設定（gateway-ops，Laysi/trustiot-v2#93）之後各自消費它，維護自己的「硬體 ID → 租戶」對照表；閘道器的租戶一律是它目前的綁定（[架構決策](../../docs/architecture/decisions.md)的決策 12，2026-10-24）。
 
 **為 Laysi/trustiot-v2#115 留的設計**：綁定從不刪除也不改寫。解綁將設定 `unbound_at`（欄位已在，現在一律是 `NULL`），重新綁定則在目標租戶新增一列、新的 `binding_id`；`gateway_bindings_one_current` 只限 `unbound_at IS NULL` 的列，所以歷史不必遷移。
 
@@ -175,7 +175,7 @@ schema `assets`，DDL 在 `migrations/postgres/`，由 migration Job（登記在
 | --- | --- |
 | `assets_owner`（migration 角色） | 擁有 schema 與所有表 |
 | `assets_app`（服務角色） | `assets.tenants` 的 `SELECT`、`INSERT`；`device_models` 的 `SELECT`、`INSERT`、`UPDATE`、`DELETE`；`device_model_points` 的 `SELECT`、`INSERT`、`DELETE`；`gateway_pool` 只有 `INSERT`（讀不到設備池，綁定靠外鍵找到閘道器）；`gateway_bindings` 的 `SELECT`、`INSERT`；`devices` 的 `SELECT`、`INSERT`、`DELETE`，`UPDATE` 只限更新可以改的欄（`transport`、`host`、`host_key`、`port`、`unit_id`、`poll_interval_ms`、`revision`、`updated_at`，`0005_device_update_columns.sql`；名稱、閘道器、綁定、型號改不了，這也是 `SELECT ... FOR UPDATE` 需要的權限）；`outbox_event` 的 `INSERT`、`outbox_aggregate` 的 `SELECT`、`INSERT`、`UPDATE`（Job 照 outbox 範本授權，只限自己租戶的列）；消費端自己的表（Job 授權） |
-| `assets_platform`（平台角色） | 讀 `identity.outbox_event` 與 `certs.outbox_event`（Job 授權）；照 outbox 範本能寫平台層級（沒有租戶）的事件。在閘道器設定（Laysi/trustiot-v2#93）登記為消費端之前，`assets` 暫時是自己事件的讀者，所以它也讀得到 `assets.outbox_event`（每個租戶的型號與綁定事件），沒有任何訂閱讀它。為平台管理員的設備池列表讀 `gateway_pool` 與每個租戶的 `gateway_bindings`（`platform_access` 只限 `SELECT`）；讀不到 `assets` 的其他租戶資料 |
+| `assets_platform`（平台角色） | 讀 `identity.outbox_event` 與 `certs.outbox_event`（Job 授權）；照 outbox 範本能寫平台層級（沒有租戶）的事件。讀不到 `assets.outbox_event`：Laysi/trustiot-v2#632 之前它暫時是自己事件的讀者（outbox 的讀取政策至少要有一個讀者），certs 登記為消費端之後，migration Job 下一次執行就撤銷這個讀取。為平台管理員的設備池列表讀 `gateway_pool` 與每個租戶的 `gateway_bindings`（`platform_access` 只限 `SELECT`）；讀不到 `assets` 的其他租戶資料 |
 
 | 表 | 內容 | RLS |
 | --- | --- | --- |

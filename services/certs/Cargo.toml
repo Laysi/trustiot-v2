@@ -74,6 +74,8 @@ rustls = { workspace = true, features = ["ring", "std"] }
 # The product's schema (the migration Job) and the cross-tenant suite.
 testkit = { path = "../../crates/testkit" }
 tokio = { workspace = true, features = ["macros", "process", "rt-multi-thread", "time"] }
+# Captures the audit log lines of the platform role's reads in tests/bindings.rs.
+tracing-subscriber = { workspace = true, features = ["registry", "std"] }
 
 [lints]
 workspace = true

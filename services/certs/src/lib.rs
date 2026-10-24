@@ -29,6 +29,10 @@
 //!   as the platform role with the platform-wide `certs.gateway_registered` event.
 //! - [`api`]: what the client API's handlers share.
 //! - [`broker`]: the MQTT broker's server certificate, on its own port.
+//! - [`bindings`]: which tenant each gateway is bound to and each tenant's status
+//!   (Laysi/trustiot-v2#632), kept from the assets service's `assets.gateway_bound` by an outbox
+//!   consumer and read across tenants as the platform role, for the renewal
+//!   (Laysi/trustiot-v2#81) and the broker's permissions (Laysi/trustiot-v2#633).
 //! - [`ceremony`]: the offline root's certificates, for the `certs-ca` tool.
 //! - [`schema`]: the migration files this release expects; [`config`]: the settings.
 //!
@@ -38,6 +42,7 @@
 
 mod api;
 pub mod authority;
+pub mod bindings;
 pub mod broker;
 pub mod ceremony;
 pub mod config;
@@ -54,6 +59,7 @@ use std::time::Duration;
 
 use axum::Router;
 use contract::ServiceName;
+use outbox::{Consumer, ConsumerConfig};
 use service_kit::identity::{IdentityVerifier, PublishedKeys, ServiceIdentity};
 use service_kit::migrations::MigrationCheck;
 use service_kit::tenant::{PlatformDb, TenantDb};
@@ -62,14 +68,19 @@ use sqlx::postgres::PgPoolOptions;
 use utoipa::OpenApi;
 
 use crate::authority::CaState;
+use crate::bindings::GatewayBoundHandler;
 use crate::config::Config;
 
 /// How long getting a database connection may take, opening a new one included.
 pub const ACQUIRE_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// Connections of the platform role's pool per replica: factory registrations, one
-/// transaction each, at the pace of a production line.
-pub const REGISTRATION_CONNECTIONS: u32 = 4;
+/// Connections of the platform role's pool per replica, shared by short transactions: factory
+/// registrations, one transaction each at the pace of a production line; the polls of the
+/// consumer of the assets service's events and its lag measurement, one read-only transaction at
+/// a time each; and the reads of [`bindings::Projection`]. A transaction that cannot get a
+/// connection within [`ACQUIRE_TIMEOUT`] fails: a registration answers 503, and the consumer
+/// retries.
+pub const PLATFORM_CONNECTIONS: u32 = 4;
 
 /// The client API's OpenAPI document (merged into `api/openapi.json` by `tools/openapi`).
 #[derive(OpenApi)]
@@ -93,7 +104,8 @@ pub fn openapi() -> utoipa::openapi::OpenApi {
 /// The service's startup for `service_kit::run`: opens the service role's pool lazily (with the
 /// session check of `crates/service-kit`), loads the CA files and follows them, starts the CRL
 /// job and the monitor, follows the identity service's public keys file, opens the platform
-/// role's pool lazily for [`registrations`], serves the endpoints of [`http`],
+/// role's pool lazily for [`registrations`] and the consumer of the assets service's events
+/// ([`bindings`]), starts that consumer, serves the endpoints of [`http`],
 /// [`workstations`] and [`registrations`], and serves [`broker`] on its own port
 /// (`broker.listen_addr`). Readiness passes while the role can open a checked
 /// session, the service has a usable set of public keys, and the database has every migration
@@ -102,8 +114,8 @@ pub fn openapi() -> utoipa::openapi::OpenApi {
 ///
 /// # Errors
 ///
-/// When the database settings would not verify the server, or the broker port is taken. Nothing
-/// is served then: the service exits with code 1.
+/// When the database settings would not verify the server, the consumer's settings are invalid,
+/// or the broker port is taken. Nothing is served then: the service exits with code 1.
 pub async fn start(context: Context<Config>) -> Result<Router, BoxError> {
     let config = context.config();
     let (db, background) = TenantDb::connect_lazy_with_background(
@@ -114,11 +126,12 @@ pub async fn start(context: Context<Config>) -> Result<Router, BoxError> {
         ServiceIdentity::new(ServiceName::Certs),
     )?;
     // Not part of readiness: the CRLs and the CA chain the MQTT broker reads must keep being
-    // served while the platform role cannot log in; a registration answers 503 then.
+    // served while the platform role cannot log in; a registration answers 503 then, and the
+    // consumer of the assets service's events retries (its lag shows it).
     let platform = PlatformDb::connect_lazy(
         config.platform_role().connect_options(),
         PgPoolOptions::new()
-            .max_connections(REGISTRATION_CONNECTIONS)
+            .max_connections(PLATFORM_CONNECTIONS)
             .min_connections(0)
             .acquire_timeout(ACQUIRE_TIMEOUT),
     )?;
@@ -128,6 +141,19 @@ pub async fn start(context: Context<Config>) -> Result<Router, BoxError> {
         async move { db.ping().await }
     });
     MigrationCheck::new(&schema::SCHEMA, db.pool().clone()).register(context.health());
+
+    // `run` retries everything but a configuration mistake, which it logs; the service keeps
+    // serving then and the consumer's lag shows the problem.
+    let bindings_consumer = Consumer::new(
+        &platform,
+        background.clone(),
+        ConsumerConfig::new(bindings::SUBSCRIPTION, bindings::SOURCE_SCHEMA)?,
+        GatewayBoundHandler,
+    );
+    let stop = context.shutdown().stopping_token();
+    context.spawn(async move {
+        let _ = bindings_consumer.run(stop).await;
+    });
 
     let ca = CaState::watch(&context, config.ca.clone());
     crl::start(

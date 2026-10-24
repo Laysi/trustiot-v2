@@ -112,7 +112,7 @@ pub struct Database {
     pub platform_password: String,
     /// `TRUSTIOT__DATABASE__MAX_CONNECTIONS`: most connections of the service role's pool per
     /// replica, from [`MIN_DATABASE_CONNECTIONS`] to [`MAX_DATABASE_CONNECTIONS`]. Default 5.
-    /// The platform role's pool has [`crate::REGISTRATION_CONNECTIONS`].
+    /// The platform role's pool has [`crate::PLATFORM_CONNECTIONS`].
     #[serde(default = "default_max_connections")]
     pub max_connections: u32,
 }
