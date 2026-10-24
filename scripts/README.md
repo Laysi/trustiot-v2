@@ -123,6 +123,8 @@ service-kit 連 Postgres 一律用 `sslmode=verify-full`（Laysi/trustiot-v2#53�
 | `TRUSTIOT_DEV_CERTS_DATABASE_USERNAME`、`..._PASSWORD` | `certs_app`（Laysi/trustiot-v2#78） |
 | `TRUSTIOT_DEV_CERTS_PLATFORM_DATABASE_USERNAME`、`..._PASSWORD` | `certs_platform`（出廠登錄寫全平台事件，Laysi/trustiot-v2#79） |
 | `TRUSTIOT_DEV_ASSISTANT_DATABASE_USERNAME`、`..._PASSWORD` | `assistant_app`（Laysi/trustiot-v2#553） |
+| `TRUSTIOT_DEV_INGEST_DATABASE_USERNAME`、`..._PASSWORD` | `ingest_app`（Laysi/trustiot-v2#640） |
+| `TRUSTIOT_DEV_INGEST_PLATFORM_DATABASE_USERNAME`、`..._PASSWORD` | `ingest_platform`（查閘道器目前的租戶，Laysi/trustiot-v2#640） |
 
 使用者把它們設成服務讀的 `TRUSTIOT__DATABASE__USERNAME` 與 `TRUSTIOT__DATABASE__PASSWORD`（平台角色是 chart 給服務的 `TRUSTIOT__DATABASE__PLATFORM_USERNAME` 與 `TRUSTIOT__DATABASE__PLATFORM_PASSWORD`）。端對端測試以這些帳密逐一以 `verify-full` 登入本機 Postgres。
 
