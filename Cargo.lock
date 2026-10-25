@@ -1271,6 +1271,7 @@ dependencies = [
 name = "ingest"
 version = "0.1.0"
 dependencies = [
+ "chrono",
  "protocol",
  "reqwest",
  "serde_json",
@@ -1322,6 +1323,7 @@ version = "0.1.0"
 dependencies = [
  "agent",
  "chrono",
+ "ingest",
  "migrate",
  "protocol",
  "reqwest",

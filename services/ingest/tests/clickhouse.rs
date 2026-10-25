@@ -3,7 +3,8 @@
 //! accept inserts only from its account, and tenant isolation holds against the attack types of
 //! the 2026-10-09 feasibility test (docs/feasibility/2026-10-09-cloud-poc.md), the independent
 //! verification of Laysi/trustiot-v2#59, and the table functions and system tables that reach a
-//! table without applying row policies (Laysi/trustiot-v2#260).
+//! table without applying row policies (Laysi/trustiot-v2#260), on the raw readings and on the
+//! one-minute and one-hour aggregates (Laysi/trustiot-v2#141).
 //!
 //! Uses `TEST_CLICKHOUSE_URL` (with `TEST_CLICKHOUSE_USER` and `TEST_CLICKHOUSE_PASSWORD`) when
 //! set; otherwise starts a throwaway ClickHouse container with podman or docker; skipped
@@ -20,19 +21,59 @@ use std::collections::BTreeSet;
 use common::{Account, Answer, ClickHouse, QueryError};
 use uuid::Uuid;
 
-/// The only relation tenant accounts may read: a DEFINER view over the telemetry table
+/// The tenant view of the raw readings: a DEFINER view over the telemetry table
 /// (0005_tenant_view.sql).
 const TENANT_VIEW: &str = "trustiot.tenant_telemetry";
+/// The tenant views of the aggregates, DEFINER views over the aggregate tables
+/// (0010_telemetry_rollups.sql).
+const TENANT_VIEW_1M: &str = "trustiot.tenant_telemetry_1m";
+const TENANT_VIEW_1H: &str = "trustiot.tenant_telemetry_1h";
+/// The only relations tenant accounts may read.
+const TENANT_VIEWS: [&str; 3] = [TENANT_VIEW, TENANT_VIEW_1H, TENANT_VIEW_1M];
 /// The telemetry table behind the view; tenant accounts must not reach it at all.
 const TELEMETRY: &str = "trustiot.telemetry";
+/// The aggregate tables behind the aggregate views.
+const TELEMETRY_1M: &str = "trustiot.telemetry_1m";
+const TELEMETRY_1H: &str = "trustiot.telemetry_1h";
 /// The tables of the trustiot database, none of which tenant accounts may reach.
-const TABLES: [&str; 2] = [TELEMETRY, "trustiot.batch_commits"];
-/// The user the tenant view runs as.
+const TABLES: [&str; 4] = [
+    TELEMETRY,
+    "trustiot.batch_commits",
+    TELEMETRY_1M,
+    TELEMETRY_1H,
+];
+/// The other relations of the trustiot database, none of which tenant accounts may reach: the
+/// materialized views that fill the aggregates, and the backfill views, which read every
+/// tenant's raw rows as the rollup definer and whose `migration_account` policy names no
+/// account, except while the migration Job or an administrator backfills or checks the
+/// aggregates (0010_telemetry_rollups.sql).
+const OTHER_RELATIONS: [&str; 4] = [
+    "trustiot.telemetry_1m_mv",
+    "trustiot.telemetry_1h_mv",
+    "trustiot.telemetry_1m_backfill",
+    "trustiot.telemetry_1h_backfill",
+];
+/// The backfill views' parameters: every receive day a Date holds, and the longest raw
+/// retention the views take.
+const BACKFILL_DAYS: &str =
+    "(first_day = '1970-01-01', last_day = '2149-06-06', raw_retention_days = 3650)";
+/// The user the tenant views run as.
 const VIEW_DEFINER: &str = "trustiot_tenant_view_definer";
+/// The user the materialized views and the backfill views run as.
+const ROLLUP_DEFINER: &str = "trustiot_rollup_definer";
+
+/// A query that reads `relation`: the backfill views take parameters.
+fn select_from(relation: &str, what: &str) -> String {
+    if relation.ends_with("_backfill") {
+        format!("SELECT {what} FROM {relation}{BACKFILL_DAYS}")
+    } else {
+        format!("SELECT {what} FROM {relation}")
+    }
+}
 
 /// Accounts of tenant A that the long checks rotate through: the quota allows 60 errors and 120
 /// queries per account and minute, and an exhausted quota would hide an attack's outcome.
-const POOL_ACCOUNTS: usize = 16;
+const POOL_ACCOUNTS: usize = 48;
 const QUERIES_PER_POOL_ACCOUNT: usize = 40;
 
 /// The accounts and data of one run.
@@ -238,7 +279,7 @@ impl World {
     /// behind. Every row the test writes belongs to tenant A or B.
     async fn cleanup(&self) {
         let (a, b) = (self.tenant_a, self.tenant_b);
-        for table in ["telemetry", "batch_commits"] {
+        for table in ["telemetry", "batch_commits", "telemetry_1m", "telemetry_1h"] {
             // A mutation as the admin: row policies hide these rows from the admin's SELECT and
             // lightweight DELETE, but not from ALTER TABLE ... DELETE.
             self.ch
@@ -474,10 +515,13 @@ fn attacks(world: &World) -> Vec<Attack> {
             "SELECT count() FROM merge('trustiot', '^tenant_telemetry$')",
             answer(&a_count),
         ),
+        // Matches the three tenant views, whose columns differ: ClickHouse 26.8 refuses to
+        // convert one view's columns into the other's. Restricted to the raw view, merge() is
+        // the attack above.
         attack(
             "merge(): every table in the database",
             "SELECT count() FROM merge('trustiot', '.*')",
-            answer(&a_count),
+            Expect::Denied,
         ),
         attack(
             "merge(): the telemetry table",
@@ -655,6 +699,187 @@ fn attacks(world: &World) -> Vec<Attack> {
         attack(
             "GRANT to self",
             "GRANT SELECT ON *.* TO CURRENT_USER",
+            Expect::Denied,
+        ),
+    ]
+}
+
+/// The attack types of [`attacks`] on an aggregate view (Laysi/trustiot-v2#141), as tenant A
+/// against tenant B. Tenant A's three readings and tenant B's four share the device, the point
+/// and the minute. Each reading came in its own stream, so the aggregate tables hold one row per
+/// reading (a table row is per gateway and stream); a view merges the rows of a bucket across
+/// gateways and streams (it groups by tenant, device, point and bucket only), so each tenant
+/// sees one row per view, counting all its readings. B's row carries B's text as its first and
+/// last reading.
+fn aggregate_attacks(world: &World, v: &'static str) -> Vec<Attack> {
+    let b = world.tenant_b;
+    let a = world.tenant_a;
+    let b_secret = &world.b_secret;
+    let a_count = A_ROWS.to_string();
+    let table = v.replace("tenant_", "");
+    let name = v.trim_start_matches("trustiot.");
+    vec![
+        attack(
+            "aggregate: count the cells",
+            format!("SELECT count() FROM {v}"),
+            answer("1"),
+        ),
+        attack(
+            "aggregate: sum the readings",
+            format!("SELECT sum(readings) FROM {v}"),
+            answer(&a_count),
+        ),
+        attack(
+            "aggregate: the first and last values",
+            format!("SELECT first.value_string, last.value_string FROM {v}"),
+            answer(format!("a-row-0\ta-row-{}", A_ROWS - 1)),
+        ),
+        attack(
+            "aggregate: filter on tenant B",
+            format!("SELECT count() FROM {v} WHERE tenant_id = '{b}'"),
+            answer("0"),
+        ),
+        attack(
+            "aggregate: tenant B OR true",
+            format!("SELECT sum(readings) FROM {v} WHERE tenant_id = '{b}' OR 1 = 1"),
+            answer(&a_count),
+        ),
+        attack(
+            "aggregate: group by tenant",
+            format!("SELECT tenant_id, sum(readings) FROM {v} GROUP BY tenant_id"),
+            answer(format!("{a}\t{a_count}")),
+        ),
+        // The caller's conditions must never run on another tenant's cells, before or after the
+        // view merges them.
+        attack(
+            "aggregate: throwIf on any cell of another tenant",
+            format!("SELECT count() FROM {v} WHERE throwIf(tenant_id != '{a}', 'oracle') = 0"),
+            answer("1"),
+        ),
+        attack(
+            "aggregate: throwIf on another tenant's last value",
+            format!(
+                "SELECT count() FROM {v} WHERE throwIf(last.value_string = '{b_secret}', 'oracle') = 0"
+            ),
+            answer("1"),
+        ),
+        attack(
+            "aggregate: throwIf on another tenant's count",
+            format!("SELECT count() FROM {v} WHERE throwIf(readings = {B_ROWS}, 'oracle') = 0"),
+            answer("1"),
+        ),
+        attack(
+            "aggregate: PREWHERE tenant B",
+            format!("SELECT count() FROM {v} PREWHERE tenant_id = '{b}'"),
+            Expect::Denied,
+        ),
+        attack(
+            "aggregate: JOIN with the raw view on the shared device",
+            format!(
+                "SELECT count() FROM {v} AS x INNER JOIN {TENANT_VIEW} AS y ON x.device_id = y.device_id WHERE y.tenant_id = '{b}'"
+            ),
+            answer("0"),
+        ),
+        attack(
+            "aggregate: subquery IN",
+            format!(
+                "SELECT count() FROM {v} WHERE tenant_id IN (SELECT tenant_id FROM {v} WHERE tenant_id = '{b}')"
+            ),
+            answer("0"),
+        ),
+        attack(
+            "aggregate: UNION ALL with tenant B filter",
+            format!(
+                "SELECT sum(readings) FROM (SELECT readings FROM {v} UNION ALL SELECT readings FROM {v} WHERE tenant_id = '{b}')"
+            ),
+            answer(&a_count),
+        ),
+        attack(
+            "aggregate: FINAL",
+            format!("SELECT sum(readings) FROM {v} FINAL"),
+            answer(&a_count),
+        ),
+        attack(
+            "aggregate: merge() of the view",
+            format!("SELECT sum(readings) FROM merge('trustiot', '^{name}$')"),
+            answer(&a_count),
+        ),
+        attack(
+            "aggregate: merge() of the table",
+            format!(
+                "SELECT count() FROM merge('trustiot', '^{}$')",
+                table.trim_start_matches("trustiot.")
+            ),
+            Expect::Denied,
+        ),
+        attack(
+            "aggregate: view() filtered on tenant B",
+            format!("SELECT count() FROM view(SELECT * FROM {v} WHERE tenant_id = '{b}')"),
+            answer("0"),
+        ),
+        attack(
+            "aggregate: query SETTINGS SQL_tenant_id = B",
+            format!("SELECT count() FROM {v} SETTINGS SQL_tenant_id = '{b}'"),
+            Expect::Denied,
+        ),
+        attack(
+            "aggregate: nested SETTINGS SQL_tenant_id = B",
+            format!("SELECT sum(readings) FROM (SELECT * FROM {v} SETTINGS SQL_tenant_id = '{b}')"),
+            answer(&a_count),
+        ),
+        attack(
+            "aggregate: additional_table_filters on the table",
+            format!(
+                "SELECT count() FROM {v} SETTINGS additional_table_filters = {{'{table}': '1'}}"
+            ),
+            Expect::Denied,
+        ),
+        attack(
+            "aggregate: EXECUTE AS the rollup definer",
+            format!("EXECUTE AS {ROLLUP_DEFINER} SELECT count() FROM {table}"),
+            Expect::Denied,
+        ),
+        attack(
+            "aggregate: the table behind the view",
+            format!("SELECT count() FROM {table}"),
+            Expect::Denied,
+        ),
+        attack(
+            "aggregate: the materialized view",
+            format!("SELECT count() FROM {table}_mv"),
+            Expect::Denied,
+        ),
+        attack(
+            "aggregate: the backfill view",
+            format!("SELECT count() FROM {table}_backfill{BACKFILL_DAYS}"),
+            Expect::Denied,
+        ),
+        attack(
+            "aggregate: INSERT into the view",
+            format!("INSERT INTO {v} (tenant_id, point) VALUES ('{b}', 'x')"),
+            Expect::Denied,
+        ),
+        attack(
+            "aggregate: INSERT into the table",
+            format!("INSERT INTO {table} (tenant_id, point, readings) VALUES ('{b}', 'x', 1)"),
+            Expect::Denied,
+        ),
+        attack(
+            "aggregate: ALTER the view's definer",
+            format!("ALTER TABLE {v} MODIFY SQL SECURITY INVOKER"),
+            Expect::Denied,
+        ),
+        attack(
+            "aggregate: SHOW CREATE TABLE of the table",
+            format!("SHOW CREATE TABLE {table}"),
+            Expect::Denied,
+        ),
+        attack(
+            "aggregate: mergeTreeIndex() of the table",
+            format!(
+                "SELECT * FROM mergeTreeIndex('trustiot', '{}', with_marks = true)",
+                table.trim_start_matches("trustiot.")
+            ),
             Expect::Denied,
         ),
     ]
@@ -858,11 +1083,17 @@ fn extra_attacks(world: &World) -> Vec<Attack> {
 /// The attacks that read the tenant view, run on the telemetry table instead: a tenant account
 /// has no grant on the table, so each one must be refused.
 fn on_telemetry_table(attacks: Vec<Attack>) -> Vec<Attack> {
+    on_table(attacks, TENANT_VIEW, TELEMETRY)
+}
+
+/// The attacks that read `view`, run on `table` instead, each of which must be refused. The raw
+/// view's attacks never name an aggregate view, so replacing the name cannot hit a longer one.
+fn on_table(attacks: Vec<Attack>, view: &str, table: &str) -> Vec<Attack> {
     attacks
         .into_iter()
-        .filter(|attack| attack.sql.contains(TENANT_VIEW))
+        .filter(|attack| attack.sql.contains(view))
         .map(|attack| Attack {
-            sql: attack.sql.replace(TENANT_VIEW, TELEMETRY),
+            sql: attack.sql.replace(view, table),
             expect: Expect::Denied,
             ..attack
         })
@@ -922,51 +1153,66 @@ async fn deny_by_default_covers_new_accounts(world: &World) {
     .await;
     ch.admin_ok(&format!("GRANT SELECT ON trustiot.* TO {}", direct.user))
         .await;
-    ch.admin_ok(&format!(
-        "GRANT SELECT ON {TENANT_VIEW} TO {}",
-        direct_tenant.user
-    ))
-    .await;
-    for relation in TABLES.into_iter().chain([TENANT_VIEW]) {
-        let sql = format!("SELECT count() FROM {relation}");
+    for view in TENANT_VIEWS {
+        ch.admin_ok(&format!("GRANT SELECT ON {view} TO {}", direct_tenant.user))
+            .await;
+    }
+    for relation in TABLES
+        .into_iter()
+        .chain(OTHER_RELATIONS)
+        .chain(TENANT_VIEWS)
+    {
+        let sql = select_from(relation, "count()");
         let error = ch
             .query(&bare, &sql)
             .await
             .expect_err("an account without a role must not read the table");
         assert_eq!(error.code(), "ACCESS_DENIED", "{relation}: {}", error.body);
-        // On the tables: 0 rows. On the view: 0 rows, or the error of the definer's policy,
-        // which needs the SQL_tenant_id setting these accounts do not have.
+        // On the tables: 0 rows. On the views: 0 rows, or the error of the definer's policy,
+        // which needs the SQL_tenant_id setting these accounts do not have. The materialized
+        // views and the backfill views read every tenant's rows as their definer; their own
+        // deny_by_default policies hide them from every account, and the backfill views'
+        // migration_account policy names nobody after the files are applied.
         let result = ch.query(&direct, &sql).await;
         assert!(
             reads_no_rows(&result),
             "an account granted SELECT directly must read no rows of {relation}: {result:?}"
         );
-        // The bootstrap admin is an account too: the policies hide the rows from it as well.
+        // The bootstrap admin is an account too: the policies hide the rows from it as well,
+        // the backfill views' included, although it applied them (0010_telemetry_rollups.sql):
+        // it reads them without an error, and no rows.
         let result = ch.admin(&sql).await;
         assert!(
             reads_no_rows(&result),
             "the admin reads no rows of {relation}: {result:?}"
         );
+        if relation.ends_with("_backfill") {
+            assert_eq!(
+                result.as_ref().map(|body| body.trim()).ok(),
+                Some("0"),
+                "the admin reads no rows of {relation}: {result:?}"
+            );
+        }
     }
-    assert_eq!(
-        ch.query(
-            &direct_tenant,
-            &format!("SELECT count() FROM {TENANT_VIEW}")
-        )
-        .await
-        .unwrap_or_else(failed)
-        .trim(),
-        "0",
-        "the view's deny_by_default policy must hide every row from an account outside the tenant role"
-    );
-    // Tenant accounts have no grant on either table.
+    for view in TENANT_VIEWS {
+        assert_eq!(
+            ch.query(&direct_tenant, &format!("SELECT count() FROM {view}"))
+                .await
+                .unwrap_or_else(failed)
+                .trim(),
+            "0",
+            "the deny_by_default policy of {view} must hide every row from an account outside the \
+             tenant role"
+        );
+    }
+    // Tenant accounts have no grant on the tables or the other relations.
     for account in [&world.a, &world.b] {
-        for table in TABLES {
+        for relation in TABLES.into_iter().chain(OTHER_RELATIONS) {
             let error = ch
-                .query(account, &format!("SELECT count() FROM {table}"))
+                .query(account, &select_from(relation, "count()"))
                 .await
                 .expect_err("a tenant account must not read the tables");
-            assert_eq!(error.code(), "ACCESS_DENIED", "{table}: {}", error.body);
+            assert_eq!(error.code(), "ACCESS_DENIED", "{relation}: {}", error.body);
         }
     }
     for account in [&bare, &direct, &direct_tenant] {
@@ -980,6 +1226,18 @@ async fn tenant_attacks_read_nothing_of_another_tenant(world: &World) {
     run_attacks(world, Some(&world.a_extra), extra_attacks(world)).await;
     run_attacks(world, None, on_telemetry_table(attacks(world))).await;
     run_attacks(world, None, on_telemetry_table(extra_attacks(world))).await;
+    for (view, table) in [
+        (TENANT_VIEW_1M, TELEMETRY_1M),
+        (TENANT_VIEW_1H, TELEMETRY_1H),
+    ] {
+        run_attacks(world, None, aggregate_attacks(world, view)).await;
+        run_attacks(
+            world,
+            None,
+            on_table(aggregate_attacks(world, view), view, table),
+        )
+        .await;
+    }
 }
 
 /// Runs every attack as `account`, or as accounts of the pool when `None`, and fails when one
@@ -1312,7 +1570,11 @@ async fn introspection_tells_nothing_of_other_tenants(world: &World) {
     // range and look like an existing key.
     let other = Uuid::from_u128(1);
     let mut relations = Vec::new();
-    for relation in TABLES.into_iter().chain([TENANT_VIEW]) {
+    for relation in TABLES
+        .into_iter()
+        .chain(OTHER_RELATIONS)
+        .chain(TENANT_VIEWS)
+    {
         let (db, table) = relation.split_once('.').expect("db.table");
         let uuid = ch
             .admin_ok(&format!(
@@ -1374,7 +1636,7 @@ async fn introspection_tells_nothing_of_other_tenants(world: &World) {
                 if b_text.contains(&world.b_secret) {
                     failures.push(format!("{name} on {relation} shows tenant B's data"));
                 }
-                if relation != TENANT_VIEW && !reads_no_rows(&with_b.result) {
+                if !TENANT_VIEWS.contains(&relation) && !reads_no_rows(&with_b.result) {
                     failures.push(format!(
                         "{name} on {relation} answers a tenant account: {b_outcome}"
                     ));
@@ -1480,7 +1742,7 @@ async fn system_tables_tell_tenants_nothing(world: &World) {
             Err(error) => failures.push(format!("{table}: {}", error.body)),
         }
     }
-    // Only the view is visible in the trustiot databases.
+    // Only the tenant views are visible in the trustiot databases.
     let visible = ch
         .query(
             world.pool_account(),
@@ -1489,9 +1751,9 @@ async fn system_tables_tell_tenants_nothing(world: &World) {
         )
         .await
         .unwrap_or_else(failed);
-    if visible.trim() != TENANT_VIEW {
+    if visible.lines().collect::<Vec<_>>() != TENANT_VIEWS {
         failures.push(format!(
-            "system.tables shows a tenant account more than the view: {visible}"
+            "system.tables shows a tenant account other relations than the views: {visible}"
         ));
     }
     #[allow(clippy::print_stdout, reason = "test evidence")]
@@ -1509,49 +1771,108 @@ async fn system_tables_tell_tenants_nothing(world: &World) {
     );
 }
 
-/// The tenant role reads only the view, and the view runs as a definer that cannot log in.
+/// The grants `SHOW GRANTS FOR <grantee>` lists, sorted.
+async fn grants_of(ch: &ClickHouse, grantee: &str) -> Vec<String> {
+    let mut grants: Vec<String> = ch
+        .admin_ok(&format!("SHOW GRANTS FOR {grantee}"))
+        .await
+        .lines()
+        .map(str::to_owned)
+        .collect();
+    grants.sort();
+    grants
+}
+
+/// The engine and query of a relation of the trustiot database.
+async fn definition(ch: &ClickHouse, relation: &str) -> String {
+    let name = relation.trim_start_matches("trustiot.");
+    ch.admin_ok(&format!(
+        "SELECT engine, create_table_query FROM system.tables \
+         WHERE database = 'trustiot' AND name = '{name}' FORMAT TSV"
+    ))
+    .await
+}
+
+/// The tenant role reads only the tenant views, the views run as a definer that cannot log in,
+/// and the materialized and backfill views run as the rollup definer, which cannot log in
+/// either (Laysi/trustiot-v2#141).
 async fn tenant_read_path_is_a_definer_view(world: &World) {
     let ch = &world.ch;
+    let sorted = |mut lines: Vec<String>| {
+        lines.sort();
+        lines
+    };
     assert_eq!(
-        ch.admin_ok("SHOW GRANTS FOR trustiot_tenant_reader")
-            .await
-            .trim(),
-        format!("GRANT SELECT ON {TENANT_VIEW} TO trustiot_tenant_reader")
-    );
-    assert_eq!(
-        ch.admin_ok(&format!("SHOW GRANTS FOR {VIEW_DEFINER}"))
-            .await
-            .trim(),
-        format!("GRANT SELECT ON {TELEMETRY} TO {VIEW_DEFINER}")
-    );
-    let view = ch
-        .admin_ok(
-            "SELECT engine, create_table_query FROM system.tables \
-             WHERE database = 'trustiot' AND name = 'tenant_telemetry' FORMAT TSV",
+        grants_of(ch, "trustiot_tenant_reader").await,
+        sorted(
+            TENANT_VIEWS
+                .iter()
+                .map(|view| format!("GRANT SELECT ON {view} TO trustiot_tenant_reader"))
+                .collect()
         )
-        .await;
-    assert!(
-        view.starts_with("View\t")
-            && view.contains(&format!("DEFINER = {VIEW_DEFINER} SQL SECURITY DEFINER")),
-        "the tenant view must run as {VIEW_DEFINER}: {view}"
     );
-    // No ingest-internal columns.
-    assert!(
-        !view.contains("stream_id") && !view.contains("batch_seq"),
-        "{view}"
+    assert_eq!(
+        grants_of(ch, VIEW_DEFINER).await,
+        sorted(
+            [TELEMETRY, TELEMETRY_1M, TELEMETRY_1H]
+                .iter()
+                .map(|table| format!("GRANT SELECT ON {table} TO {VIEW_DEFINER}"))
+                .collect()
+        )
     );
-    for password in ["", "x"] {
-        let error = ch
-            .query(
-                &Account {
-                    user: VIEW_DEFINER.to_owned(),
-                    password: password.to_owned(),
-                },
-                "SELECT 1",
-            )
-            .await
-            .expect_err("the view's definer must not log in");
-        assert_eq!(error.code(), "AUTHENTICATION_FAILED", "{}", error.body);
+    assert_eq!(
+        grants_of(ch, ROLLUP_DEFINER).await,
+        sorted(vec![
+            format!("GRANT SELECT ON {TELEMETRY} TO {ROLLUP_DEFINER}"),
+            format!("GRANT SELECT, INSERT ON {TELEMETRY_1M} TO {ROLLUP_DEFINER}"),
+            format!("GRANT SELECT, INSERT ON {TELEMETRY_1H} TO {ROLLUP_DEFINER}"),
+        ])
+    );
+    for view in TENANT_VIEWS {
+        let definition = definition(ch, view).await;
+        assert!(
+            definition.starts_with("View\t")
+                && definition.contains(&format!("DEFINER = {VIEW_DEFINER} SQL SECURITY DEFINER")),
+            "{view} must run as {VIEW_DEFINER}: {definition}"
+        );
+        // No ingest-internal columns.
+        assert!(
+            !definition.contains("stream_id") && !definition.contains("batch_seq"),
+            "{definition}"
+        );
+    }
+    for relation in OTHER_RELATIONS {
+        let definition = definition(ch, relation).await;
+        let engine = if relation.ends_with("_mv") {
+            "MaterializedView\t"
+        } else {
+            "View\t"
+        };
+        assert!(
+            definition.starts_with(engine)
+                && definition.contains(&format!("DEFINER = {ROLLUP_DEFINER} SQL SECURITY DEFINER")),
+            "{relation} must run as {ROLLUP_DEFINER}: {definition}"
+        );
+    }
+    for definer in [VIEW_DEFINER, ROLLUP_DEFINER] {
+        for password in ["", "x"] {
+            let error = ch
+                .query(
+                    &Account {
+                        user: definer.to_owned(),
+                        password: password.to_owned(),
+                    },
+                    "SELECT 1",
+                )
+                .await
+                .expect_err("a definer must not log in");
+            assert_eq!(
+                error.code(),
+                "AUTHENTICATION_FAILED",
+                "{definer}: {}",
+                error.body
+            );
+        }
     }
 }
 
@@ -1585,6 +1906,25 @@ async fn set_role_none_loses_access(world: &World) {
 
 async fn each_account_sees_its_own_rows(world: &World) {
     let (a, b) = (world.tenant_a, world.tenant_b);
+    // Each tenant's readings share a device, a point and a minute, so each tenant sees one row
+    // per aggregate view, which counts all its readings: the view merges the table's rows of the
+    // bucket, one per stream here, across gateways and streams.
+    for view in [TENANT_VIEW_1M, TENANT_VIEW_1H] {
+        let cells = format!("SELECT tenant_id, readings FROM {view} FORMAT TSV");
+        for (account, tenant, readings) in [(&world.a, a, A_ROWS), (&world.b, b, B_ROWS)] {
+            assert_eq!(
+                world
+                    .ch
+                    .query(account, &cells)
+                    .await
+                    .unwrap_or_else(failed)
+                    .trim(),
+                format!("{tenant}\t{readings}"),
+                "{view} as {}",
+                account.user
+            );
+        }
+    }
     let count = format!("SELECT count() FROM {TENANT_VIEW}");
     assert_eq!(
         world
@@ -1633,6 +1973,8 @@ async fn account_without_tenant_setting_gets_an_error(world: &World) {
         format!("SELECT count() FROM {TENANT_VIEW}"),
         format!("SELECT * FROM {TENANT_VIEW} LIMIT 1"),
         "SELECT count() FROM merge('trustiot', '^tenant_telemetry$')".to_owned(),
+        format!("SELECT count() FROM {TENANT_VIEW_1M}"),
+        format!("SELECT * FROM {TENANT_VIEW_1H} LIMIT 1"),
     ] {
         let error: QueryError = world
             .ch
@@ -1656,6 +1998,15 @@ async fn limits_apply_through_the_view(world: &World) {
         .await
         .expect_err("max_rows_to_read = 1 must stop a read of tenant A's rows");
     assert_eq!(error.code(), "TOO_MANY_ROWS", "{}", error.body);
+    // Tenant A's three readings came from three streams: three rows of each aggregate table.
+    for view in [TENANT_VIEW_1M, TENANT_VIEW_1H] {
+        let error = world
+            .ch
+            .query(&world.rows_limited, &format!("SELECT count() FROM {view}"))
+            .await
+            .expect_err("max_rows_to_read = 1 must stop a read of tenant A's cells");
+        assert_eq!(error.code(), "TOO_MANY_ROWS", "{view}: {}", error.body);
+    }
     assert_eq!(
         world
             .ch
@@ -1898,6 +2249,24 @@ async fn ingest_account_cannot_change_schema(world: &World) {
         "GRANT trustiot_tenant_reader TO CURRENT_USER",
         "ALTER TABLE trustiot.tenant_telemetry MODIFY QUERY SELECT * FROM trustiot.telemetry",
         "ALTER TABLE trustiot.tenant_telemetry MODIFY SQL SECURITY INVOKER",
+        // The aggregates (Laysi/trustiot-v2#141): the ingest account inserts the reconcile's
+        // differences and reads them, nothing more.
+        "ALTER TABLE trustiot.telemetry_1m MODIFY TTL received_day + toIntervalDay(1)",
+        "ALTER TABLE trustiot.telemetry_1h DELETE WHERE 1",
+        "DELETE FROM trustiot.telemetry_1m WHERE 1",
+        "TRUNCATE TABLE trustiot.telemetry_1h",
+        "OPTIMIZE TABLE trustiot.telemetry_1m FINAL",
+        "DROP TABLE trustiot.telemetry_1m_mv",
+        "DETACH TABLE trustiot.telemetry_1h_mv",
+        "ALTER TABLE trustiot.telemetry_1m_mv MODIFY QUERY SELECT * FROM trustiot.telemetry",
+        "ALTER TABLE trustiot.telemetry_1h_mv MODIFY SQL SECURITY INVOKER",
+        "ALTER TABLE trustiot.tenant_telemetry_1m MODIFY SQL SECURITY INVOKER",
+        "ALTER TABLE trustiot.telemetry_1m_backfill MODIFY SQL SECURITY INVOKER",
+        "CREATE ROW POLICY injected ON trustiot.telemetry_1m USING 1 TO CURRENT_USER",
+        "ALTER ROW POLICY migration_account ON trustiot.telemetry_1m_backfill TO CURRENT_USER",
+        "SELECT count() FROM trustiot.telemetry_1m_backfill(first_day = '1970-01-01', last_day = '2149-06-06', raw_retention_days = 3650)",
+        "EXECUTE AS trustiot_rollup_definer SELECT count() FROM trustiot.telemetry",
+        "ALTER USER trustiot_rollup_definer HOST ANY",
     ] {
         let error = world
             .ch
@@ -1957,6 +2326,27 @@ async fn table(ch: &ClickHouse, name: &str) -> TableInfo {
     }
 }
 
+/// The months of an aggregate table's TTL, `TTL (received_day + toIntervalMonth(<months>)) +
+/// toIntervalDay(1)`, as ClickHouse prints the migration file's.
+fn ttl_months(info: &TableInfo) -> u64 {
+    let prefix = "TTL (received_day + toIntervalMonth(";
+    let (_, rest) = info
+        .engine_full
+        .split_once(prefix)
+        .unwrap_or_else(|| panic!("no TTL on received_day: {}", info.engine_full));
+    let (months, rest) = rest
+        .split_once(')')
+        .unwrap_or_else(|| panic!("unreadable TTL: {}", info.engine_full));
+    assert!(
+        rest.starts_with(") + toIntervalDay(1)"),
+        "the TTL must add the day: {}",
+        info.engine_full
+    );
+    months
+        .parse()
+        .unwrap_or_else(|_| panic!("unreadable TTL: {}", info.engine_full))
+}
+
 /// The TTL interval in days of `TTL toDateTime(<column>) + toIntervalDay(<days>)`.
 fn ttl_days(info: &TableInfo, column: &str) -> u64 {
     let prefix = format!("TTL toDateTime({column}) + toIntervalDay(");
@@ -2007,16 +2397,44 @@ async fn table_settings_are_in_place(ch: &ClickHouse) {
         println!("telemetry: {}", telemetry.engine_full);
         println!("batch_commits: {}", commits.engine_full);
     }
-    // Only MergeTree-family tables in the TrustIoT databases, plus the tenant view
-    // (tenant_read_path_is_a_definer_view checks it).
+    // The aggregates (Laysi/trustiot-v2#141): fsync on, the raw table's deduplication window
+    // (a retried INSERT the raw table drops is dropped here too), partitions and retention by
+    // the receive day, in months, the one-hour table at least as long as the one-minute one.
+    let mut months = Vec::new();
+    for name in ["telemetry_1m", "telemetry_1h"] {
+        let info = table(ch, name).await;
+        assert_eq!(info.engine, "AggregatingMergeTree", "{info:?}");
+        for setting in [
+            "fsync_after_insert = 1",
+            "fsync_part_directory = 1",
+            "non_replicated_deduplication_window = 1000",
+            "PARTITION BY toYYYYMM(received_day)",
+            "ORDER BY (tenant_id, device_id, point, bucket, gateway_id, stream_id, received_day)",
+        ] {
+            assert!(
+                info.engine_full.contains(setting),
+                "{setting} missing: {info:?}"
+            );
+        }
+        months.push(ttl_months(&info));
+        #[allow(clippy::print_stdout, reason = "test evidence")]
+        {
+            println!("{name}: {}", info.engine_full);
+        }
+    }
+    assert_eq!(months, [13, 48], "the platform values of src/retention.rs");
+    // Only MergeTree-family tables in the TrustIoT databases, plus the tenant views and the
+    // materialized and backfill views (tenant_read_path_is_a_definer_view checks them).
     let others = ch
         .admin_ok(
             "SELECT database || '.' || name FROM system.tables \
              WHERE database IN ('trustiot', 'trustiot_logs') AND NOT endsWith(engine, 'MergeTree') \
-             FORMAT TSV",
+             ORDER BY 1 FORMAT TSV",
         )
         .await;
-    assert_eq!(others.trim(), TENANT_VIEW);
+    let mut expected: Vec<&str> = TENANT_VIEWS.into_iter().chain(OTHER_RELATIONS).collect();
+    expected.sort_unstable();
+    assert_eq!(others.lines().collect::<Vec<_>>(), expected);
     assert_eq!(
         ch.admin_ok("SELECT count() FROM system.databases WHERE name = 'trustiot_logs'")
             .await
@@ -2038,7 +2456,7 @@ async fn access_entities_come_from_sql(ch: &ClickHouse) {
              UNION ALL SELECT 'quota', name, storage FROM system.quotas \
                  WHERE startsWith(name, 'trustiot_') \
              UNION ALL SELECT 'user', name, storage FROM system.users \
-                 WHERE name = 'trustiot_tenant_view_definer' \
+                 WHERE name IN ('trustiot_tenant_view_definer', 'trustiot_rollup_definer') \
              ORDER BY 1, 2",
         )
         .await;
@@ -2047,10 +2465,12 @@ async fn access_entities_come_from_sql(ch: &ClickHouse) {
         println!("access entities:\n{}", rows.trim());
     }
     let lines: Vec<&str> = rows.lines().collect();
-    // 4 roles (the collector's and the monitoring role included), 8 row policies (5 on the tables
-    // for the roles, 1 for the view's definer, 2 on the view), 1 settings profile, 1 quota, 1 user
-    // (the view's definer).
-    assert_eq!(lines.len(), 15, "{rows}");
+    // 4 roles (the collector's and the monitoring role included); 29 row policies: 8 of
+    // 0004/0005 (5 on the tables for the roles, 1 for the view's definer, 2 on the view) and 21
+    // of 0010 (1 for the rollup definer on the telemetry table, 1 on each materialized view, 5 on
+    // each aggregate table, 2 on each aggregate view, 2 on each backfill view); 1 settings
+    // profile; 1 quota; 2 users (the tenant views' definer and the rollup definer).
+    assert_eq!(lines.len(), 37, "{rows}");
     for line in lines {
         assert!(
             line.ends_with("\tlocal_directory"),
@@ -2196,7 +2616,7 @@ async fn logs_and_telemetry_access_stay_apart(world: &World) {
                     ifNull(database, '*'), ifNull(table, '*') \
              FROM system.grants \
              WHERE grantee IN ('trustiot_tenant_reader', 'trustiot_ingest', \
-                               'trustiot_otel_collector', '{VIEW_DEFINER}') \
+                               'trustiot_otel_collector', '{VIEW_DEFINER}', '{ROLLUP_DEFINER}') \
                AND (database IS NULL OR database = 'trustiot_logs' \
                     OR grantee = 'trustiot_otel_collector') \
              ORDER BY 1, toString(access_type), 3, 4 FORMAT TSV"
@@ -2241,6 +2661,12 @@ async fn logs_and_telemetry_access_stay_apart(world: &World) {
         "SELECT count() FROM trustiot.batch_commits".to_owned(),
         format!("DESC TABLE {TENANT_VIEW}"),
         format!("DESC TABLE {TELEMETRY}"),
+        format!("SELECT count() FROM {TENANT_VIEW_1M}"),
+        format!("SELECT count() FROM {TELEMETRY_1H}"),
+        format!("DESC TABLE {TELEMETRY_1M}"),
+        format!(
+            "INSERT INTO {TELEMETRY_1M} (tenant_id, point, readings) VALUES (generateUUIDv4(), 'p', 1)"
+        ),
     ];
     let cases = to_logs
         .iter()

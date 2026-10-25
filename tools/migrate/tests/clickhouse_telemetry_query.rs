@@ -174,6 +174,8 @@ async fn telemetry_query_account() {
         "CREATE ROLE migrate_test_role",
         "SELECT count() FROM trustiot.tenant_telemetry",
         "SELECT count() FROM trustiot.telemetry",
+        "SELECT count() FROM trustiot.tenant_telemetry_1m",
+        "SELECT count() FROM trustiot.telemetry_1h",
     ] {
         refused_to_telemetry_query(&clickhouse, &first, statement).await;
     }
@@ -319,17 +321,36 @@ async fn telemetry_query_account() {
         (
             "GRANT SELECT ON trustiot.telemetry TO trustiot_tenant_reader",
             &["REVOKE SELECT ON trustiot.telemetry FROM trustiot_tenant_reader"][..],
-            "beyond SELECT on trustiot.tenant_telemetry",
+            "beyond SELECT on the tenant views",
         ),
         (
             "GRANT trustiot_ingest TO trustiot_tenant_reader",
             &["REVOKE trustiot_ingest FROM trustiot_tenant_reader"][..],
-            "beyond SELECT on trustiot.tenant_telemetry",
+            "beyond SELECT on the tenant views",
         ),
         (
             "REVOKE SELECT ON trustiot.tenant_telemetry FROM trustiot_tenant_reader",
             &["GRANT SELECT ON trustiot.tenant_telemetry TO trustiot_tenant_reader"][..],
-            "lacks SELECT on trustiot.tenant_telemetry",
+            "lacks SELECT on trustiot.tenant_telemetry ",
+        ),
+        // The aggregate views of 0010_telemetry_rollups.sql (Laysi/trustiot-v2#141): the role
+        // must have each of them, and only SELECT, as on the raw view.
+        (
+            "REVOKE SELECT ON trustiot.tenant_telemetry_1h FROM trustiot_tenant_reader",
+            &["GRANT SELECT ON trustiot.tenant_telemetry_1h TO trustiot_tenant_reader"][..],
+            "lacks SELECT on trustiot.tenant_telemetry_1h ",
+        ),
+        (
+            "GRANT SELECT ON trustiot.telemetry_1m TO trustiot_tenant_reader",
+            &["REVOKE SELECT ON trustiot.telemetry_1m FROM trustiot_tenant_reader"][..],
+            "beyond SELECT on the tenant views",
+        ),
+        (
+            "GRANT SELECT ON trustiot.tenant_telemetry_1m TO trustiot_tenant_reader WITH GRANT OPTION",
+            &[
+                "REVOKE GRANT OPTION FOR SELECT ON trustiot.tenant_telemetry_1m FROM trustiot_tenant_reader",
+            ][..],
+            "beyond SELECT on the tenant views",
         ),
         (
             "GRANT trustiot_tenant_reader TO trustiot_ingest",
