@@ -81,7 +81,7 @@ datasets/lab/
 | `ts` | `ts`：閘道器的讀值時間 |
 | `value_type`、`value` | `value_type` 與對應的值欄位，其他值欄位寫預設值 |
 
-選 JSON lines 的理由：一行一筆，在 git 裡的差異就是增刪的讀值；ClickHouse 以 `JSONEachRow` 原生讀得到；型別由 JSON 本身區分（字串有引號、布林是 `true`/`false`），不必另外跳脫。lab 資料集在物件儲存可以再壓縮，格式在第二階段決定存放方式時一起定。
+選 JSON lines 的理由：一行一筆，在 git 裡的差異就是增刪的讀值；ClickHouse 以 `JSONEachRow` 原生讀得到；型別由 JSON 本身區分（字串有引號、布林是 `true`/`false`），不必另外跳脫。lab 資料集在物件儲存可以再壓縮，格式在第一次上傳 lab 資料集時決定（Laysi/trustiot-v2#680）。
 
 每一行的規則：
 
@@ -202,7 +202,7 @@ expect = [
 
 - **S3 相容的物件儲存**。索引的 `location` 寫可搬移的 `s3://<bucket>/<key>`，不寫某一家供應商的網址，換供應商只改 bucket 的設定，不改索引格式。
 - **bucket 在 Laysi/trustiot-v2#133 選定**（供應商、區域與 bucket 名稱一起決定），現在不建立任何 bucket 或帳號。在那之前不上傳任何 lab 資料集，repo 裡只有合成 fixture（它的分段檔進版控，不放物件儲存）。
-- **鍵的配置依版本**，見「版本化規則」：`lab/<name>/v<version>/<segment>.jsonl`（壓縮格式與上傳一起在 Laysi/trustiot-v2#133 決定；壓縮後的檔名與 `sha256` 指的是儲存的樣子）。發布後的物件不覆寫、不刪除，舊的 commit 才能重跑當時的測試。
+- **鍵的配置依版本**，見「版本化規則」：`lab/<name>/v<version>/<segment>.jsonl`（壓縮格式在第一次上傳 lab 資料集時決定，見 Laysi/trustiot-v2#680；壓縮後的檔名與 `sha256` 指的是儲存的樣子）。發布後的物件不覆寫、不刪除，舊的 commit 才能重跑當時的測試。
 - **公開讀取**：下載不需要任何憑證，任何人拿到 repo 就能重跑用到 lab 資料集的測試（例如 Laysi/trustiot-v2#681）。
 - **上傳只給維護者**：寫入物件儲存的憑證照 [docs/architecture/secrets.md](../../docs/architecture/secrets.md) 處理（不進 repo、不經指令參數、不寫進日誌），只發給維護者；CI 與測試只讀、不需要它。
 - **資料本身也公開**：上傳的分段檔任何人都下載得到，與索引一樣受「公開 repo 的資訊規則」約束：不能有客戶的資料、客戶的設備名稱、位址或主機名稱。lab 資料集只錄 lab 的設備，設備與資料點用通用名稱（`meter-1`、`power_kw`），轉換器只以邏輯代號出現（錄製工具寫出的索引本來就是這樣，見「錄製」）。上傳前先檢查分段檔的文字值（`string` 資料點）沒有這類內容。
