@@ -266,13 +266,32 @@ WHERE tenant_id = {tenant:UUID} ORDER BY 1 FORMAT TSV",
 const DETACH_HOUR_VIEW: &str = "DETACH TABLE trustiot.telemetry_1h_mv";
 const ATTACH_HOUR_VIEW: &str = "ATTACH TABLE trustiot.telemetry_1h_mv";
 
-/// A statement that runs until it is stopped (ten minutes at most), and how to see it run.
-const SLOW_STATEMENT: &str = "SELECT sleepEachRow(1) FROM system.numbers LIMIT 600
-SETTINGS max_block_size = 1 FORMAT Null";
+/// An attempt's INSERT that runs until it is stopped (ten minutes at most): one row a second
+/// from system.numbers, each written as a block of its own with [`SLOW_INSERT_BLOCKS`], so its
+/// rows and their view parts land while it runs, as the blocks of a large batch would.
+const SLOW_INSERT: &str = "INSERT INTO trustiot.telemetry (tenant_id, gateway_id, stream_id,
+    batch_seq, device_id, point, ts, received_at, value_type, value_float)
+SELECT {tenant:UUID}, {gateway:UUID}, {stream:UUID}, {seq:UInt64}, {device:UUID}, 'slow',
+    now64(3, 'UTC') - toIntervalSecond(number), now64(3, 'UTC'), 'float', toFloat64(number)
+FROM system.numbers WHERE sleepEachRow(1) = 0 LIMIT 600";
+const SLOW_INSERT_BLOCKS: [(&str, &str); 3] = [
+    ("max_block_size", "1"),
+    ("min_insert_block_size_rows", "1"),
+    ("min_insert_block_size_bytes", "1"),
+];
+/// The point the slow INSERT writes, and the reading times its rows can have.
+const SLOW_POINT: &str = "slow";
+/// How many rows the slow INSERT lands before the test replaces it.
+const SLOW_ROWS_FIRST: u64 = 3;
+const SLOW_SPAN: TimeDelta = TimeDelta::minutes(11);
 const RUNNING: &str =
     "SELECT count() FROM system.processes WHERE query_id = {id:String} FORMAT TSV";
 const PROBE: &str = "SELECT 1 FORMAT TSV";
-/// How long the query ID step waits for the slow statement to show in system.processes.
+/// Makes every buffered asynchronous insert land now: rows of the stopped INSERT, had it been
+/// asynchronous, would show after this.
+const FLUSH_ASYNC_INSERTS: &str = "SYSTEM FLUSH ASYNC INSERT QUEUE";
+/// How long the query ID step waits for the slow INSERT to show in system.processes and land
+/// its first rows.
 const START_WAIT: Duration = Duration::from_secs(120);
 /// How close to midnight (UTC) the backfill step may start: it names receive days by their
 /// distance from today, on the server and here, so it waits for the next day instead.
@@ -307,7 +326,7 @@ impl Stream {
     }
 
     /// The contract's settings for every statement that writes this stream.
-    fn settings(self) -> [(&'static str, String); 4] {
+    fn settings(self) -> [(&'static str, String); 5] {
         stream_settings(&self.gateway.to_string(), &self.stream.to_string())
     }
 }
@@ -1374,10 +1393,12 @@ async fn crash_between_the_raw_and_a_view_part(test: &Test) {
         .await;
 }
 
-/// Step 1 of the contract on ClickHouse 26.8: while a statement with the stream's query ID still
-/// runs (an earlier attempt whose client gave up on it), another statement with that ID is
-/// refused, unless it has `replace_running_query = 1` as `stream_settings` gives it: then the
-/// running statement is cancelled and the new one runs.
+/// Step 1 of the contract on ClickHouse 26.8: while an INSERT of an earlier attempt still runs
+/// with the stream's settings (its client gave up on it), another statement with the stream's
+/// query ID is refused, unless it has `replace_running_query = 1` as `stream_settings` gives it:
+/// then the running INSERT is cancelled and the new statement runs. The rows the INSERT landed
+/// before it stopped stay, and none land after the replacing statement has run: it is
+/// synchronous (`async_insert = 0`), so nothing of it waits in the asynchronous insert queue.
 async fn an_earlier_statement_of_the_stream_is_stopped(test: &Test) {
     let now = Utc::now();
     let on = Stream::new(tenant_id(&QUERY_ID_TENANT), Uuid::new_v4());
@@ -1385,15 +1406,40 @@ async fn an_earlier_statement_of_the_stream_is_stopped(test: &Test) {
     let batch = readings(on, 1, floor(now, HOUR_MS) - TimeDelta::minutes(4), now, 12);
     test.insert_ok(&batch, &[]).await;
     let id = stream_query_id(&on.gateway.to_string(), &on.stream.to_string());
-    let slow_settings = [
-        ("query_id", id.as_str()),
-        ("replace_running_query", "1"),
+
+    // Attempt 2's INSERT, with the stream's settings. Its time limit is lengthened so that the
+    // replacement ends it, not the limit, however long a loaded machine takes to get there.
+    let stream = on.settings();
+    let (tenant, gateway, stream_id, device) = (
+        on.tenant.to_string(),
+        on.gateway.to_string(),
+        on.stream.to_string(),
+        on.device.to_string(),
+    );
+    let mut slow_settings: Vec<(&str, &str)> = stream
+        .iter()
+        .map(|(name, value)| {
+            if *name == "max_execution_time" {
+                (*name, "600")
+            } else {
+                (*name, value.as_str())
+            }
+        })
+        .collect();
+    assert!(slow_settings.contains(&("async_insert", "0")));
+    slow_settings.extend(SLOW_INSERT_BLOCKS);
+    slow_settings.extend([
+        ("param_tenant", tenant.as_str()),
+        ("param_gateway", gateway.as_str()),
+        ("param_stream", stream_id.as_str()),
+        ("param_seq", "2"),
+        ("param_device", device.as_str()),
         // The answer waits for the end, so the cancellation comes back as an error status.
         ("wait_end_of_query", "1"),
-    ];
+    ]);
     let slow = test
         .ch
-        .query_with(&test.ingest, SLOW_STATEMENT, &slow_settings);
+        .query_with(&test.ingest, SLOW_INSERT, &slow_settings);
     let next = async {
         let started = Instant::now();
         loop {
@@ -1402,13 +1448,13 @@ async fn an_earlier_statement_of_the_stream_is_stopped(test: &Test) {
                 .query_with(&test.ch.admin, RUNNING, &[("param_id", id.as_str())])
                 .await
                 .unwrap_or_else(|error| panic!("system.processes: {}", error.body));
-            if running.trim() == "1" {
+            if running.trim() == "1" && test.raw_rows(on, 2).await >= SLOW_ROWS_FIRST {
                 break;
             }
             assert!(
                 started.elapsed() < START_WAIT,
-                "the slow statement with the stream's query ID did not show in \
-                 system.processes within {START_WAIT:?}"
+                "the slow INSERT with the stream's query ID did not show in system.processes \
+                 and land {SLOW_ROWS_FIRST} rows within {START_WAIT:?}"
             );
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
@@ -1418,26 +1464,70 @@ async fn an_earlier_statement_of_the_stream_is_stopped(test: &Test) {
             .await
             .expect_err("a second statement with a running query ID must be refused");
         let written = test.reconcile_both(&batch).await;
-        (refused, written)
+        // The replacing statement has run: what the INSERT landed until now.
+        let landed = (test.raw_rows(on, 2).await, test.stream_cells(on).await);
+        (refused, written, landed)
     };
-    let (slow, (refused, written)) = tokio::join!(slow, next);
+    let (slow, (refused, written, landed)) = tokio::join!(slow, next);
     assert_eq!(
         refused.code(),
         "QUERY_WITH_SAME_ID_IS_ALREADY_RUNNING",
         "{}",
         refused.body
     );
-    let slow = slow.expect_err("the slow statement must have been stopped");
+    let slow = slow.expect_err("the slow INSERT must have been stopped");
     assert_eq!(slow.code(), "QUERY_WAS_CANCELLED", "{}", slow.body);
     assert_eq!(written, (0, 0), "the views already counted the batch");
-    test.assert_equal(&account, "reconcile after stopping an earlier statement")
+
+    // Nothing of the stopped INSERT lands later: it no longer runs, and nothing of it waits in
+    // the asynchronous insert queue.
+    let running = test
+        .ch
+        .query_with(&test.ch.admin, RUNNING, &[("param_id", id.as_str())])
+        .await
+        .unwrap_or_else(|error| panic!("system.processes: {}", error.body));
+    assert_eq!(running.trim(), "0", "the stopped INSERT still runs");
+    test.ch.admin_ok(FLUSH_ASYNC_INSERTS).await;
+    let later = (test.raw_rows(on, 2).await, test.stream_cells(on).await);
+    assert_eq!(
+        later, landed,
+        "rows of the stopped INSERT landed after the replacing statement had run"
+    );
+
+    // The next attempt's reconcile of the rows it landed, then the aggregates equal the raw
+    // rows.
+    let span = [
+        slow_row(on, Utc::now() - SLOW_SPAN),
+        slow_row(on, Utc::now() + TimeDelta::minutes(1)),
+    ];
+    let repaired = test.reconcile_both(&span).await;
+    test.assert_equal(&account, "reconcile after stopping an earlier INSERT")
         .await;
     println!(
-        "query ID: while a statement of the stream ran, another with its ID was refused ({}); \
-         the reconcile with the stream's settings stopped it ({}) and ran",
+        "query ID: while an INSERT of the stream ran with the stream's settings, another \
+         statement with its ID was refused ({}); the reconcile with the stream's settings \
+         stopped it ({}) after it had landed {} rows, and ran; once it had run no row landed \
+         (still {} raw rows and the same cells after the asynchronous insert queue was \
+         flushed); the reconcile of those rows wrote {} one-minute and {} one-hour rows",
         refused.code(),
-        slow.code()
+        slow.code(),
+        landed.0,
+        later.0,
+        repaired.0,
+        repaired.1
     );
+}
+
+/// A row of the slow INSERT's point at `ts`, to name its cells to the reconcile.
+fn slow_row(on: Stream, ts: DateTime<Utc>) -> Row {
+    Row {
+        on,
+        seq: 2,
+        point: SLOW_POINT,
+        ts,
+        received_at: ts,
+        value: Value::Float(0.0),
+    }
 }
 
 /// A whole-number reading of the test's counters as an int.

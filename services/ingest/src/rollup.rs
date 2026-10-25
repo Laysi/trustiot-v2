@@ -6,10 +6,11 @@
 //!
 //! # The I1 rewrite (contract for Laysi/trustiot-v2#641)
 //!
-//! Nothing in this repository deletes or rewrites telemetry rows yet: the ingest service's write
-//! path is built in Laysi/trustiot-v2#91 and its I1 rewrite in Laysi/trustiot-v2#641, which must
-//! follow the steps below and merges after this file. Until then every batch reaches ClickHouse
-//! as INSERTs only (the lab dataset loader included), and the views aggregate each in full.
+//! Nothing in this repository writes, deletes or rewrites telemetry rows yet: the ingest
+//! service's write path and its I1 rewrite are built in Laysi/trustiot-v2#641 (part of
+//! Laysi/trustiot-v2#91), which must follow the steps below and merges after this file. Until
+//! then every batch reaches ClickHouse as INSERTs only (the lab dataset loader included), and
+//! the views aggregate each in full.
 //!
 //! The materialized views add every block inserted into `trustiot.telemetry` to the aggregates,
 //! but a `DELETE FROM` does not reach them. When the ingest service rewrites a batch that has no
@@ -20,18 +21,38 @@
 //!
 //! 1. Run every statement that writes the stream with [`stream_settings`]: the INSERTs of every
 //!    attempt (the first included) and steps 2 to 4 below. They carry the stream's own query ID
-//!    ([`stream_query_id`]) with `replace_running_query = 1`, and a `max_execution_time` of
-//!    [`STATEMENT_MAX_SECONDS`]. A statement of an earlier attempt of the same stream that still
-//!    runs on the server (its client gave up on it, or crashed) is then stopped before the new
-//!    statement starts: ClickHouse 26.8 cancels the running query that has the same query ID
-//!    and the same account, and waits up to `replace_running_query_max_wait_ms`
-//!    ([`REPLACE_WAIT_MS`]) for it to end. If it has not ended by then, the new statement fails
-//!    with `QUERY_WITH_SAME_ID_IS_ALREADY_RUNNING` (the old one stays cancelled), as it does when
-//!    another account runs a query with that ID: the attempt stops there, without a completion
-//!    record, and starts over later. The client's request timeout must be at least
-//!    [`CLIENT_TIMEOUT_SECONDS`], longer than that wait and the run together, so the server has
-//!    ended a statement before the client gives up on it. One ingest replica per stream at a
-//!    time still holds; this makes sure no statement of an earlier attempt overlaps the next.
+//!    ([`stream_query_id`]) with `replace_running_query = 1`, a `max_execution_time` of
+//!    [`STATEMENT_MAX_SECONDS`], and `async_insert = 0`. A statement of an earlier attempt of the
+//!    same stream that still runs on the server (its client gave up on it, or crashed) is then
+//!    stopped before the new statement starts: ClickHouse 26.8 cancels the running query that
+//!    has the same query ID and the same account, and waits up to
+//!    `replace_running_query_max_wait_ms` ([`REPLACE_WAIT_MS`]) for it to end. The blocks it
+//!    committed before it stopped stay and count like any other rows of the batch; nothing of it
+//!    lands once it has ended. If it has not ended by then, the new statement fails with
+//!    `QUERY_WITH_SAME_ID_IS_ALREADY_RUNNING`, as it does when another account runs a query with
+//!    that ID: the old statement has been told to stop but keeps running, and keeps the query
+//!    ID, until its next cancellation check, so the attempt stops there, without a completion
+//!    record, and the next attempt waits for it again. The client's request timeout must be at
+//!    least [`CLIENT_TIMEOUT_SECONDS`], longer than that wait and the run together, so the server
+//!    has ended a statement before the client gives up on it. One ingest replica per stream at
+//!    a time still holds; this makes sure no statement of an earlier attempt overlaps the next.
+//!
+//!    The INSERTs must be synchronous (`async_insert = 0`; the server's default is 1), because
+//!    on ClickHouse 26.8 an asynchronous insert escapes this step. One that waits for its flush
+//!    (`wait_for_async_insert = 1`) cannot be interrupted: a cancel or `max_execution_time` ends
+//!    the statement only after its buffered rows have landed. One that does not wait gives up
+//!    the query ID at once, so its rows and their view parts can land after the rewrite's
+//!    DELETE, and the raw rows and the aggregates then both count them twice, consistently,
+//!    where no reconcile can see it. Switching the write path to asynchronous inserts, for
+//!    example for throughput, requires verifying this contract again first. With synchronous
+//!    inserts each batch INSERT makes its own raw, one-minute and one-hour parts; what that
+//!    costs in throughput is measured in the deferred verification of Laysi/trustiot-v2#641.
+//!
+//!    No service forwards a query ID that a caller supplies to ClickHouse. A statement held
+//!    under a stream's query ID stalls that stream's writes until it ends; that fails safe (no
+//!    completion record is written, and the batch is sent again). The gateway ID in the query
+//!    ID comes from the topic the message arrived on (the gateway's certificate), never from the
+//!    payload, so a gateway can name only its own streams.
 //! 2. `DELETE FROM trustiot.telemetry` the batch's rows, synchronously
 //!    (`lightweight_deletes_sync = 2`).
 //! 3. Insert the whole batch with [`REWRITE_SETTINGS`] (`deduplicate_insert = 'disable'`). With
@@ -126,6 +147,11 @@ pub const CLIENT_TIMEOUT_SECONDS: u32 = 30;
 /// The query ID every statement that writes one stream runs under (step 1 of the module
 /// documentation). Gateway and stream IDs never contain `/` (the protocol's identifier rule), so
 /// two streams never share one.
+///
+/// `gateway` is the gateway the message's topic names (its certificate), never an ID from the
+/// payload. No service forwards a caller-supplied query ID to ClickHouse: a statement held under
+/// a stream's ID stalls the stream's writes until it ends, which fails safe (no completion
+/// record, and the batch is sent again).
 #[must_use]
 pub fn stream_query_id(gateway: &str, stream: &str) -> String {
     format!("trustiot-rewrite/{gateway}/{stream}")
@@ -133,16 +159,19 @@ pub fn stream_query_id(gateway: &str, stream: &str) -> String {
 
 /// The settings of every statement that writes one stream: each attempt's INSERT, the rewrite's
 /// DELETE and INSERT and the reconcile (step 1 of the module documentation), as ClickHouse's HTTP
-/// interface takes them in the URL: the stream's query ID, `replace_running_query = 1` with a
-/// wait of [`REPLACE_WAIT_MS`], and a `max_execution_time` of [`STATEMENT_MAX_SECONDS`].
+/// interface takes them in the URL: the stream's query ID ([`stream_query_id`], with the same
+/// rules), `replace_running_query = 1` with a wait of [`REPLACE_WAIT_MS`], a
+/// `max_execution_time` of [`STATEMENT_MAX_SECONDS`], and `async_insert = 0`. An asynchronous
+/// insert is neither stopped by the replacement nor bounded by `max_execution_time` while it
+/// waits for its flush, and one that does not wait lands after the statements that follow it;
+/// switching to asynchronous inserts requires verifying step 1 again first.
 ///
 /// Only the tests call it so far: no code writes telemetry yet. It is the contract for the
-/// ingest service's write path (Laysi/trustiot-v2#91), which must send every INSERT of a stream
-/// with these settings over a client whose request timeout is at least
-/// [`CLIENT_TIMEOUT_SECONDS`], and for the I1 rewrite (Laysi/trustiot-v2#641), which must do the
-/// same for its DELETE, INSERT and reconcile.
+/// ingest service's write path and its I1 rewrite (Laysi/trustiot-v2#641), which must send every
+/// statement of a stream with these settings, every INSERT and the rewrite's DELETE, INSERT and
+/// reconcile, over a client whose request timeout is at least [`CLIENT_TIMEOUT_SECONDS`].
 #[must_use]
-pub fn stream_settings(gateway: &str, stream: &str) -> [(&'static str, String); 4] {
+pub fn stream_settings(gateway: &str, stream: &str) -> [(&'static str, String); 5] {
     [
         ("query_id", stream_query_id(gateway, stream)),
         ("replace_running_query", "1".to_owned()),
@@ -151,6 +180,7 @@ pub fn stream_settings(gateway: &str, stream: &str) -> [(&'static str, String); 
             REPLACE_WAIT_MS.to_string(),
         ),
         ("max_execution_time", STATEMENT_MAX_SECONDS.to_string()),
+        ("async_insert", "0".to_owned()),
     ]
 }
 
@@ -456,13 +486,16 @@ mod tests {
                 "query_id",
                 "replace_running_query",
                 "replace_running_query_max_wait_ms",
-                "max_execution_time"
+                "max_execution_time",
+                "async_insert"
             ]
         );
         assert_eq!(settings[0].1, "trustiot-rewrite/gw-1/s.2");
         assert_eq!(settings[1].1, "1");
         assert_eq!(settings[2].1.parse::<u32>().unwrap(), REPLACE_WAIT_MS);
         assert_eq!(settings[3].1.parse::<u32>().unwrap(), STATEMENT_MAX_SECONDS);
+        // Synchronous: an asynchronous insert escapes the replacement and the time limit.
+        assert_eq!(settings[4].1, "0");
         assert!(
             u64::from(REPLACE_WAIT_MS) + 1_000 * u64::from(STATEMENT_MAX_SECONDS)
                 < 1_000 * u64::from(CLIENT_TIMEOUT_SECONDS),
