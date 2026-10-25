@@ -1,0 +1,42 @@
+
+running 1 test
+tenant b34b1108-2445-4981-acfc-a493f3900b2f: 316 rows in ClickHouse, index states 316
+  meter-1/energy_kwh: 48 rows, index states 48
+  meter-1/power_kw: 48 rows, index states 48
+  meter-2/power_kw: 47 rows, index states 47
+  meter-2/pulses: 47 rows, index states 47
+  press-1/cycle_count: 42 rows, index states 42
+  press-1/mode: 42 rows, index states 42
+  press-1/running: 42 rows, index states 42
+  16 batches inserted in arrival order, one part each; 15 completion records (1 uncommitted); every row equal to the dataset shifted by 25228800000 ms
+tenant d1f2b86e-1238-494a-b3c3-5cf1939b0ce5: 316 rows in ClickHouse, index states 316
+  meter-1/energy_kwh: 48 rows, index states 48
+  meter-1/power_kw: 48 rows, index states 48
+  meter-2/power_kw: 47 rows, index states 47
+  meter-2/pulses: 47 rows, index states 47
+  press-1/cycle_count: 42 rows, index states 42
+  press-1/mode: 42 rows, index states 42
+  press-1/running: 42 rows, index states 42
+  16 batches inserted in arrival order, one part each; 15 completion records (1 uncommitted); every row equal to the dataset shifted by 25225199999 ms
+tenant b34b1108-2445-4981-acfc-a493f3900b2f: 316 rows in ClickHouse, index states 316
+  meter-1/energy_kwh: 48 rows, index states 48
+  meter-1/power_kw: 48 rows, index states 48
+  meter-2/power_kw: 47 rows, index states 47
+  meter-2/pulses: 47 rows, index states 47
+  press-1/cycle_count: 42 rows, index states 42
+  press-1/mode: 42 rows, index states 42
+  press-1/running: 42 rows, index states 42
+  16 batches inserted in arrival order, one part each; 15 completion records (1 uncommitted); every row equal to the dataset shifted by 25228800000 ms
+tenant 5fc45777-5feb-41fe-adea-5485251604e9: 316 rows in ClickHouse, index states 316
+  press-1/cycle_count: 42 rows, index states 42
+  press-1/mode: 42 rows, index states 42
+  press-1/running: 42 rows, index states 42
+  meter-2/power_kw: 47 rows, index states 47
+  meter-2/pulses: 47 rows, index states 47
+  meter-1/energy_kwh: 48 rows, index states 48
+  meter-1/power_kw: 48 rows, index states 48
+  16 batches inserted in arrival order, one part each; 15 completion records (1 uncommitted); every row equal to the dataset shifted by 25228800000 ms
+tenant 5fc45777-5feb-41fe-adea-5485251604e9: anomaly `power-spike` from 2026-10-24T22:20:00.000Z to 2026-10-24T22:30:00.999Z (shifted); 3 meter-1/power_kw rows read 480.5 in ClickHouse, the readings inside the window; expects [Expectation { trigger: "power-high", fires: true }]
+.
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.86s
+
