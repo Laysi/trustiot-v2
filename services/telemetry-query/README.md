@@ -17,7 +17,7 @@
 | --- | --- | --- |
 | 角色 `trustiot_tenant_reader` | `0004_access.sql`、`0005_tenant_view.sql`、`0010_telemetry_rollups.sql` | 只能 `SELECT` 三個 DEFINER view：原始資料的 `trustiot.tenant_telemetry` 與 1 分鐘、1 小時彙總的 `tenant_telemetry_1m`、`tenant_telemetry_1h`（Laysi/trustiot-v2#141，[services/ingest](../ingest/README.md)「彙總表」）；row policy 以帳號的 `SQL_tenant_id` 過濾，讀不到基底表 |
 | settings profile `trustiot_tenant_reader` | `0004_access.sql` | `readonly = 1`、`max_execution_time = 30`、`max_memory_usage = 512 MiB`、`max_threads = 2`、`max_concurrent_queries_for_user = 4`、`max_rows_to_read = 1e9`、`max_result_rows = 1e6`，全部 `CONST` |
-| quota `trustiot_tenant_reader` | `0004_access.sql` | `KEYED BY user_name`：每個租戶帳號每分鐘 120 個查詢、60 個錯誤，每小時 3000 個查詢、1800 秒執行時間、200 億列 |
+| quota `trustiot_tenant_reader` | `0004_access.sql` | `KEYED BY user_name`：每個租戶帳號每分鐘 120 個查詢、60 個錯誤，每小時 3000 個查詢、1800 秒執行時間、200 億列。AI 的唯讀 SQL 與歷史 API、語意查詢（Laysi/trustiot-v2#142）共用這個 quota（2026-10-26 決定維持現狀）；分開計算與依方案的值由 Laysi/trustiot-v2#694 追蹤 |
 | 服務帳號 `trustiot_telemetry_query` | `0008_telemetry_query.sql`、`0009_telemetry_query_grantees.sql` | 只能 `CREATE USER`、`ALTER USER` 名稱以 `trustiot_tenant_account_` 開頭的帳號，並以 `ADMIN OPTION` 持有租戶角色（才能把它設成新帳號的 default role）；`GRANTEES NONE`，所以不能把租戶角色授與或收回任何既有的使用者或角色；沒有其他權限、沒有 default role，讀不到任何表 |
 
 服務帳號的密碼是內部密鑰，由 migration Job 產生在 Secret `<release>-telemetry-query-password` 的 `trustiot_telemetry_query` key 並設定（`TRUSTIOT__PASSWORDS__CLICKHOUSE_TELEMETRY_QUERY`，[tools/migrate](../../tools/migrate/README.md)）；沒有部署這個服務時，Job 讓這個帳號不能登入。Job 每次執行都檢查這個帳號只有 `0008_telemetry_query.sql` 給的權限，租戶角色只有三個租戶 view 的 `SELECT`，而且只有這個帳號（有 `ADMIN OPTION`）與租戶帳號（沒有）持有租戶角色，這個帳號的 `GRANTEES` 仍是 `NONE`，多出任何東西或 `GRANTEES` 被改就讓服務帳號不能登入（`HOST NONE`）並停止，修好之後的下一次執行再恢復登入。`GRANTEES NONE` 是因為 ClickHouse 26.8 不限制有 `ADMIN OPTION` 的帳號把角色給誰：少了它，服務帳號在啟用租戶角色的請求裡能把角色給任何使用者或角色（例如給 `trustiot_ingest` 會讓 ingest 變成唯讀、每個租戶都寫不進去），也能從租戶帳號收回；有了它，ClickHouse 拒絕這兩種語句，`CREATE USER ... DEFAULT ROLE trustiot_tenant_reader` 仍可用，服務帳號也改不了自己的 `GRANTEES`（`tools/migrate/tests/clickhouse_telemetry_query.rs`）。服務帳號仍能 `ALTER USER` 每個名稱在前綴下的帳號，包括 `RENAME` 與 `ADD IDENTIFIED`；Job 還不稽核租戶帳號本身（Laysi/trustiot-v2#528），懷疑服務帳號外洩時的處理在 [docs/runbooks/migrations.md](../../docs/runbooks/migrations.md)「懷疑時序查詢的服務帳號外洩」。
@@ -124,6 +124,7 @@
 
 - **寫入**：建帳號時把 `Windows::PLATFORM`（原始資料 7 天、1 分鐘與 1 小時彙總各 3 個月）一起寫進 `CREATE USER`。
 - **讀回與修正**：每個查詢前的帳號檢查（`Accounts::verify`）也讀回三個時間窗、帳號改不改得了它們，與 ClickHouse 的時鐘。缺少（`0011` 之前建立的帳號）、與服務的值不同，或帳號改得了（不是 `CONST`）時，以服務帳號 `ALTER USER ... MODIFY SETTINGS` 寫回（只改這三個設定）、再檢查一次，記一行 INFO `set the tenant account's queryable period`；寫回後仍不同時視為帳號被改過，回 503、記 ERROR、不執行查詢。所以方案變更（Laysi/trustiot-v2#453）只要改服務寫入的值，從帳號的下一個查詢起生效。
+- **多個副本**：每個副本在帳號檢查時都把時間窗寫成它自己的值，所以滾動部署改變時間窗的期間，新舊副本會互相改寫：寫回後再檢查時讀到另一個副本剛寫的值的請求回 503，檢查之後、查詢之前被另一個副本改寫的查詢套用那個副本的時間窗。所有副本的值相同之後就不再發生。依方案的期間（Laysi/trustiot-v2#453）在此之前必須先為時間窗加上版本，只讓較新的值寫入。
 - **裁切**：API 自己裁切範圍時，起點是 `Windows::earliest`：資料庫的時鐘比服務快 5 分鐘（`PERIOD_MARGIN`）以內時，時間窗最晚的起點，再進位到整毫秒、整分鐘或整小時。原始資料就是 5 分鐘後的時間窗；日曆月份的減法遇到較短的月份時取該月的最後一天（2027-05-30T23:59Z − 3 個月是 2027-02-28T23:59Z，2027-05-31T00:00Z − 3 個月是 2027-02-28T00:00Z），所以時間窗的起點在這種午夜會往回跳，這 5 分鐘跨過這種午夜時取午夜前的起點（2026-10-26 的安全審查；單元測試逐分鐘走過兩年每個月底）。服務的時鐘與 ClickHouse 相差不到 5 分鐘時，裁切起點之後的每一列與每一格都在資料庫的時間窗內，所以回應的 `earliest` 之後不會因為時間窗而缺資料；相差超過 60 秒時記 WARN（`CLOCK_SKEW_WARNING`）。資料庫的時間窗才是邊界，裁切只讓回應說得出從哪裡開始是完整的。
 
 ## 資料庫
