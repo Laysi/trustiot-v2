@@ -13,8 +13,9 @@
 //! limits an administrator weakened, or which was changed to another tenant, serves no query
 //! (503, nothing of the other tenant) and the latter is refused when its event comes again (dead
 //! letter); an account without its queryable period reads nothing, and the next query sets the
-//! period again, as it does for one with another period (Laysi/trustiot-v2#143); and nothing
-//! logs a password.
+//! period again, as it does for one with another period (Laysi/trustiot-v2#143); an account
+//! whose default role was taken away serves no query, is logged on each call and is not
+//! repaired (Laysi/trustiot-v2#143); and nothing logs a password.
 //!
 //! Needs podman or docker (a TLS Postgres and a ClickHouse); skipped without one unless `CI` is
 //! set. One test: the binary shares one product database. `--nocapture` prints every attack.
@@ -74,6 +75,16 @@ SETTINGS PROFILE 'trustiot_tenant_reader', SQL_tenant_id = '0199a0b0-c0d0-7e0f-8
 /// Admin change of the raw window alone, as an older plan or a change by hand would leave it.
 const CHANGE_WINDOW: &str =
     "ALTER USER {user:Identifier} MODIFY SETTINGS SQL_queryable_raw_days = 30 CONST";
+
+/// Admin change that leaves the tenant role granted but no longer the account's default role,
+/// so a login has no active role; and the change back.
+const DROP_DEFAULT_ROLE: &str = "ALTER USER {user:Identifier} DEFAULT ROLE NONE";
+const RESTORE_DEFAULT_ROLE: &str =
+    "ALTER USER {user:Identifier} DEFAULT ROLE trustiot_tenant_reader";
+
+/// The service's error log when it refuses an account.
+const REFUSED_LOG: &str = "the tenant's ClickHouse account is not as the service creates it, \
+or refused its password and could not be repaired; no query runs as it";
 
 /// Admin change that weakens one of the account's limits on the account itself, after the
 /// profile, and leaves `readonly` as it is: `TENANT` is replaced with the account's own tenant.
@@ -410,6 +421,51 @@ async fn each_tenant_account_sees_its_own_readings_only() {
             .unwrap_or_else(|error| panic!("read the windows: {}", error.body)),
         EXPECTED_WINDOWS,
         "the service's period, from the query after the change"
+    );
+
+    // 5c. The tenant role is no longer the account's default role (the owner's decision of
+    //     2026-10-26 on Laysi/trustiot-v2#143): every call answers 503 with nothing of the
+    //     tenant and logs why, and the service does not set the role again; an administrator
+    //     does, and the next call is served.
+    admin_query(&stack, DROP_DEFAULT_ROLE, &[("param_user", &user_a)]).await;
+    let other_roles = || {
+        service
+            .stdout
+            .messages(REFUSED_LOG)
+            .into_iter()
+            .filter(|line| {
+                line["fields"]["error"]
+                    .as_str()
+                    .is_some_and(|error| error.contains("(other roles)"))
+            })
+            .count()
+    };
+    for call in 1..=2 {
+        let (status, body) = service.get(&path, Some(&token_a)).await;
+        assert_eq!(status, 503, "call {call}: {body}");
+        assert!(!body.contains(A_MARKER), "call {call}: {body}");
+        wait_for(
+            &format!("call {call}'s refusal of the account without its role in the log"),
+            EVENT_LIMIT,
+            || async { (other_roles() == call).then_some(()) },
+        )
+        .await;
+        assert_eq!(
+            admin_query(&stack, ACCOUNT_AS_ADMIN, &[("param_user", &user_a)]).await,
+            "[]\t['::/0']\t['sha256_password']\n",
+            "call {call}: the service did not set the default role again"
+        );
+    }
+    admin_query(&stack, RESTORE_DEFAULT_ROLE, &[("param_user", &user_a)]).await;
+    let latest = service.get_ok(&path, &token_a).await;
+    assert!(
+        latest.to_string().contains(A_MARKER),
+        "served again once an administrator set the role: {latest}"
+    );
+    assert_eq!(
+        service.stdout.messages(period_set).len(),
+        2,
+        "the role change left the queryable period as it was"
     );
 
     // 6. An account changed to another tenant: the API refuses it and shows nothing of the other
