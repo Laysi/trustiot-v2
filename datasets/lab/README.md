@@ -31,7 +31,7 @@ datasets/lab/
 | `[[streams]]` | 閘道器的批次串流：`key`、`description` |
 | `[[devices]]` | 設備，見下表 |
 | `[[segments]]` | 分段檔，依抵達順序排列，見下表 |
-| `[[anomalies]]` | 人工異常片段（保留，見下方） |
+| `[[anomalies]]` | 人工異常片段與預期的觸發標註，見「人工異常片段」 |
 
 `[[devices]]`：
 
@@ -57,13 +57,11 @@ datasets/lab/
 | `uncommitted` | 已寫入、但沒有完成紀錄的批次：`{ stream, batch_seq }`（I1：資料寫完、確認前斷線） |
 | `series` | 每個資料點的筆數：`{ device, point, rows }`，加總等於 `rows` |
 
-`[[anomalies]]` 是人工異常片段與預期的觸發結果，欄位先保留：`key`、`kind`（`spike` 突波、`outage` 停機、`changeover` 換料）、`device`、`points`、`start`、`end`（資料集的時間基準，載入時與資料一起位移）、`expect`（`{ trigger, fires }` 的陣列）。插入片段的 API 在 Laysi/trustiot-v2#679 的第二階段完成；在那之前，列有異常片段的索引可以檢查，但載入工具拒絕載入它。
-
 ### 規則
 
 載入工具（`Dataset::open`）在寫入任何資料之前檢查全部規則，任何一項不符就拒絕整個資料集：
 
-- 索引本身：上表的格式；代號不重複；轉換器加站號不重複；分段依接收時間排列（下一段的 `receive_time.start` 不早於上一段的 `end`）；串流的批次跨段連續；`uncommitted` 在該段的批次範圍內；`series` 指向宣告過的資料點。
+- 索引本身：上表的格式；代號不重複；轉換器加站號不重複；分段依接收時間排列（下一段的 `receive_time.start` 不早於上一段的 `end`）；串流的批次跨段連續；`uncommitted` 在該段的批次範圍內；`series` 指向宣告過的資料點；`[[anomalies]]` 的規則見「人工異常片段」。
 - 分段檔對索引：大小與 SHA-256 相同；筆數、兩個時間範圍、每個資料點的筆數、每個串流的最後一批都與索引相同。
 - 每一行：見下節。
 
@@ -104,6 +102,91 @@ datasets/lab/
 ## 批次與完成紀錄
 
 每一批（`stream` + `batch_seq`）一次 INSERT 進 `trustiot.telemetry`，然後在 `trustiot.batch_commits` 寫一筆完成紀錄（`row_count` 是該批筆數，`committed_at` 是該批的 `received_at`），就像 ingest 寫完並落盤後才記錄完成（I1）。索引 `uncommitted` 列出的批次只寫資料、不寫完成紀錄，用來測試只計入已完成批次的處理（例如 Laysi/trustiot-v2#141 的彙總）與批次重寫。寫完成紀錄的程式只有 `tools/lab-dataset/src/clickhouse.rs` 的 `commit_batch` 一處；Laysi/trustiot-v2#639 改變 `batch_commits` 的鍵時在那裡一起改。
+
+## 人工異常片段
+
+警報回測與分析回歸要知道「什麼時候發生了什麼、應該觸發什麼」，所以在錄下的資料上插入人工異常片段（清單 M7）：突波（`spike`）、停機（`outage`）、換料（`changeover`）。事件時間由參數決定，每段都標好預期的觸發結果。兩種來源，效果相同：
+
+- **索引的 `[[anomalies]]`**：資料集本身帶的標註，隨資料集版本化（加、改、刪都是內容改變，`version` 加 1）。
+- **測試程式插入**：`Dataset::with_anomalies([...])` 回傳帶著這些片段的資料集，之後的 `readings()` 與 `load()` 都套用它們。測試自己決定事件時間，資料集不用改版。
+
+```rust
+use lab_dataset::{Anomaly, Dataset, time};
+
+let at = |text| time::parse(text).unwrap();
+let dataset = Dataset::open(lab_dataset::index_for_tests())?.with_anomalies([
+    Anomaly::spike("power-spike", "meter-1", &["power_kw"],
+                   at("2026-01-05T22:20:00.000Z"), at("2026-01-05T22:30:00.999Z"), 480.5)
+        .expecting("power-high", true),
+    Anomaly::outage("meter-stop", "meter-1", &["energy_kwh", "power_kw"],
+                    at("2026-01-06T00:50:00.000Z"), at("2026-01-06T01:00:00.999Z"))
+        .expecting("machine-stopped", true),
+])?;
+let loaded = dataset.load(&writer, &target, shift).await?;
+// loaded.anomalies：同樣的片段，start、end 已加上位移，就是它們在 ClickHouse 裡的時間
+```
+
+`expect` 裡的 `trigger` 只是標籤（例如 `power-high`、`machine-stopped`），給之後的警報規則與分析工作比對；這裡不實作、也不執行任何警報規則。
+
+### 欄位
+
+| 欄位 | 說明 |
+| --- | --- |
+| `key` | 片段代號，在資料集內不重複（索引的與測試插入的合在一起算） |
+| `kind` | `spike`、`outage` 或 `changeover` |
+| `device`、`points` | 改變哪一台設備的哪些資料點；每個資料點在時間窗內至少要有一筆讀值 |
+| `start`、`end` | 時間窗，資料集的時間基準、兩端都包含，比的是讀值時間 `ts`；載入時與資料一起位移（`Loaded::anomalies`） |
+| `value` | 只用於 `spike`：時間窗內的值（整數或浮點數） |
+| `state` | 只用於 `changeover`，而且列了文字狀態的資料點時必填：時間窗內的文字，例如 `setup` |
+| `expect` | 預期的觸發，至少一項：`{ trigger, fires }`，`trigger` 是代號格式、同一段內不重複，`fires` 是預期觸發（`true`）或預期不觸發（`false`） |
+
+索引裡的寫法：
+
+```toml
+[[anomalies]]
+key = "press-changeover"
+kind = "changeover"
+device = "press-1"
+points = ["running", "mode", "cycle_count"]
+start = "2026-01-06T01:30:00.000Z"
+end = "2026-01-06T01:40:00.999Z"
+state = "changeover"
+expect = [
+  { trigger = "changeover-detected", fires = true },
+  { trigger = "machine-stopped", fires = false },
+]
+```
+
+### 每一種片段做什麼
+
+片段只改變讀值的**值**：時間窗內（`start <= ts <= end`）的讀值，以及累計資料點在時間窗之後的讀值。**沒有讀值會增加或消失**，所以索引的筆數、批次、每點筆數與分段檔的雜湊都不變，`ts`、`received_at` 與批次也不變。資料缺漏與補送已經是錄下的資料本身有的狀況；停機是設備還在、讀得到、但讀值顯示它停了。
+
+| 資料點（`kind`、`type`） | `spike` 突波 | `outage` 停機 | `changeover` 換料 |
+| --- | --- | --- | --- |
+| `gauge`，`float` 或 `int` | 讀成 `value`（`int` 資料點的 `value` 要是整數；`float` 資料點的整數 `value` 不能超過 2^53） | 讀成 0 | 讀成 0 |
+| `cumulative`，`float` 或 `int` | 拒絕 | 停在時間窗之前的值，之後接著累計（見下方） | 同停機 |
+| `state`，`bool` | 拒絕 | 讀成 `false` | 讀成 `false` |
+| `state`，`string` | 拒絕 | 拒絕（停機沒有定義的文字） | 讀成 `state` |
+| 其他組合 | 拒絕 | 拒絕 | 拒絕 |
+
+換料在遙測裡就是一段停機加上文字狀態（例如 `mode`）顯示換料中：換成哪個料號記在生產紀錄（C5，[現場脈絡](../../docs/architecture/field-context.md)），不在遙測裡。
+
+累計資料點在停機時不會倒退，也不會在恢復時跳一大段：
+
+- 時間窗內的讀值都等於「停住的值」：時間窗之前最後一筆讀值的值；時間窗之前沒有讀值時，用時間窗內第一筆的值。
+- 這個資料點在時間窗內累計的量（停住的值到時間窗內最後一筆）從之後的每一筆讀值扣掉，所以恢復後從停住的值接著累計，每一步的增量與原本的資料相同。
+- 有 `wraps_at` 的計數器以 `wraps_at` 取模計算，跨越溢位也正確，值一直在 `0` 到 `wraps_at - 1`。
+- 沒有 `wraps_at` 的資料點，數值變小就是歸零：時間窗之後的第一次歸零起，讀值保持原樣（歸零後本來就從 0 重新累計）；時間窗內有歸零的片段被拒絕，因為停住的值會有歧義，換一個時間窗。
+- 浮點數相減的捨入可能讓結果比前一筆小最後一位，這時取前一筆的值，所以永遠不會倒退。
+
+### 規則
+
+開啟索引（`Dataset::open`）與插入（`with_anomalies`）時檢查，任何一項不符就拒絕：
+
+- 上面兩張表：欄位、參數與資料點的組合。
+- 代號不重複；同一台設備的同一個資料點，兩個片段的時間窗不能重疊（不重疊的片段依 `start` 先後套用）。
+- `points` 裡每個資料點在時間窗內至少有一筆讀值（例如 fixture 的 `press-1` 在 00:00–00:25 連不上，那段放不了 `press-1` 的片段）。
+- 累計資料點的時間窗內沒有歸零。
 
 ## 版本化規則
 

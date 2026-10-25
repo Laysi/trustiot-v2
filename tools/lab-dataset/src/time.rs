@@ -51,6 +51,14 @@ pub(crate) fn deserialize<'de, D: Deserializer<'de>>(
     parse(&text).map_err(serde::de::Error::custom)
 }
 
+/// Serde `serialize_with` for dataset times: the canonical spelling.
+pub(crate) fn serialize<S: serde::Serializer>(
+    time: &DateTime<Utc>,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    serializer.serialize_str(&format(*time))
+}
+
 /// The earliest and latest instant a `DateTime64(3)` column holds (ClickHouse documents the range
 /// as 1900-01-01 to 2299-12-31).
 fn clickhouse_range() -> (DateTime<Utc>, DateTime<Utc>) {

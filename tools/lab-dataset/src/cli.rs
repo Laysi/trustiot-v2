@@ -181,6 +181,7 @@ struct Summary<'a> {
     rows: u64,
     start: String,
     end: String,
+    anomalies: usize,
 }
 
 /// Runs a command; `env` reads an environment variable. Returns the JSON the command prints.
@@ -201,6 +202,7 @@ pub async fn run(command: Command, env: impl Fn(&str) -> Option<String>) -> Resu
                 rows: dataset.index().segments.iter().map(|s| s.rows).sum(),
                 start: time::format(start),
                 end: time::format(end),
+                anomalies: dataset.anomalies().len(),
             };
             serde_json::to_string_pretty(&summary).map_err(|error| error.to_string())
         }

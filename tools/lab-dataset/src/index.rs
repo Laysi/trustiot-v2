@@ -10,6 +10,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use chrono::{DateTime, Utc};
 use serde::Deserialize;
 
+use crate::anomaly::{self, Anomaly};
+
 /// The index format this crate reads. An index with another value is refused: the loader and
 /// the indexes live in the same repository and change together.
 pub const FORMAT: u32 = 1;
@@ -40,9 +42,8 @@ pub struct Index {
     pub devices: Vec<Device>,
     /// The segment files in arrival order.
     pub segments: Vec<Segment>,
-    /// Artificial anomaly segments and the triggers they are expected to cause. Reserved: the
-    /// insertion API arrives with the second part of Laysi/trustiot-v2#679, and until then the
-    /// loader refuses an index that lists any.
+    /// Artificial anomaly segments and the triggers they are expected to cause
+    /// ([`crate::anomaly`]); the loader applies them to the readings.
     #[serde(default)]
     pub anomalies: Vec<Anomaly>,
 }
@@ -190,46 +191,6 @@ pub struct SeriesCount {
     pub rows: u64,
 }
 
-/// An artificial anomaly segment (reserved, see [`Index::anomalies`]).
-#[derive(Clone, Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct Anomaly {
-    pub key: String,
-    pub kind: AnomalyKind,
-    pub device: String,
-    pub points: Vec<String>,
-    /// When the anomaly starts and ends, on the dataset's time base (shifted with the data).
-    #[serde(deserialize_with = "crate::time::deserialize")]
-    pub start: DateTime<Utc>,
-    #[serde(deserialize_with = "crate::time::deserialize")]
-    pub end: DateTime<Utc>,
-    /// What the anomaly is expected to cause.
-    #[serde(default)]
-    pub expect: Vec<Expectation>,
-}
-
-/// The kinds of artificial anomaly (checklist M7).
-#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "lowercase")]
-pub enum AnomalyKind {
-    /// A short excursion of a value.
-    Spike,
-    /// The device stops.
-    Outage,
-    /// A product changeover.
-    Changeover,
-}
-
-/// One expected trigger of an anomaly.
-#[derive(Clone, Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct Expectation {
-    /// The rule or detector, by key.
-    pub trigger: String,
-    /// Whether it is expected to fire.
-    pub fires: bool,
-}
-
 /// Where a segment file is.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Location {
@@ -331,7 +292,7 @@ fn unique<'a>(what: &str, keys: impl IntoIterator<Item = &'a str>) -> Result<(),
     Ok(())
 }
 
-fn check_key(what: &str, key: &str) -> Result<(), String> {
+pub(crate) fn check_key(what: &str, key: &str) -> Result<(), String> {
     if is_key(key) {
         Ok(())
     } else {
@@ -577,36 +538,7 @@ impl Index {
     }
 
     fn validate_anomalies(&self) -> Result<(), String> {
-        for anomaly in &self.anomalies {
-            check_key("anomaly", &anomaly.key)?;
-            let device = self.device(&anomaly.device).ok_or_else(|| {
-                format!(
-                    "anomaly `{}`: device `{}` is not listed",
-                    anomaly.key, anomaly.device
-                )
-            })?;
-            if anomaly.points.is_empty() {
-                return Err(format!("anomaly `{}` names no points", anomaly.key));
-            }
-            for point in &anomaly.points {
-                if !device.points.iter().any(|p| &p.key == point) {
-                    return Err(format!(
-                        "anomaly `{}`: device `{}` has no point `{point}`",
-                        anomaly.key, anomaly.device
-                    ));
-                }
-            }
-            if anomaly.start > anomaly.end {
-                return Err(format!("anomaly `{}` starts after it ends", anomaly.key));
-            }
-            for expectation in &anomaly.expect {
-                check_key(
-                    &format!("anomaly `{}`: trigger", anomaly.key),
-                    &expectation.trigger,
-                )?;
-            }
-        }
-        unique("anomaly", self.anomalies.iter().map(|a| a.key.as_str()))
+        anomaly::validate_all(self, &self.anomalies)
     }
 }
 
@@ -854,13 +786,13 @@ series = [{ device = "meter-2", point = "running", rows = 1 }]
     fn anomalies_reference_declared_points() {
         let anomaly = r#"
 [[anomalies]]
-key = "spike-1"
-kind = "spike"
+key = "stop-1"
+kind = "outage"
 device = "meter-1"
 points = ["POINT"]
 start = "2026-01-05T00:00:30.000Z"
 end = "2026-01-05T00:00:40.000Z"
-expect = [{ trigger = "power-spike", fires = true }]
+expect = [{ trigger = "machine-stopped", fires = true }]
 "#;
         let index =
             |point: &str| Index::parse(&format!("{VALID}{}", anomaly.replace("POINT", point)));

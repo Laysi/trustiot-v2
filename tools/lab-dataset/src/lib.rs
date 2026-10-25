@@ -19,6 +19,7 @@
 //! # }
 //! ```
 
+pub mod anomaly;
 pub mod cli;
 pub mod clickhouse;
 pub mod index;
@@ -33,6 +34,7 @@ use serde::Serialize;
 use sha2::{Digest as _, Sha256};
 use uuid::Uuid;
 
+pub use crate::anomaly::{Anomaly, AnomalyKind, Expectation, Number};
 pub use crate::clickhouse::{BatchCommit, ClickHouse};
 pub use crate::index::{Index, Location};
 pub use crate::segment::{Reading, Value};
@@ -82,6 +84,8 @@ pub enum Error {
         line: Option<usize>,
         message: String,
     },
+    #[error("anomaly: {0}")]
+    Anomaly(String),
     #[error("target: {0}")]
     Target(String),
     #[error("time: {0}")]
@@ -92,11 +96,16 @@ pub enum Error {
     Unsupported(String),
 }
 
-/// A dataset whose index and segment files passed every check.
+/// The batches of a segment that get no completion record: (stream, sequence number).
+type Uncommitted<'a> = BTreeSet<(&'a str, u64)>;
+
+/// A dataset whose index and segment files passed every check, with its anomaly segments: the
+/// index's, and any a test inserted ([`Dataset::with_anomalies`]).
 #[derive(Clone, Debug)]
 pub struct Dataset {
     dir: PathBuf,
     index: Index,
+    anomalies: Vec<Anomaly>,
 }
 
 /// Where a dataset is written: the tenant and gateway the caller chose, and optionally the
@@ -139,7 +148,7 @@ pub struct Ids {
 }
 
 /// What [`Dataset::load`] wrote.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct Loaded {
     pub dataset: String,
     pub version: u32,
@@ -157,6 +166,9 @@ pub struct Loaded {
     pub batches: u64,
     /// Completion records written: `batches` minus the uncommitted ones.
     pub committed_batches: u64,
+    /// The anomaly segments applied, with their windows moved by the shift: where they lie in
+    /// ClickHouse, with the triggers each is expected to cause.
+    pub anomalies: Vec<Anomaly>,
 }
 
 impl Loaded {
@@ -236,9 +248,15 @@ impl Dataset {
                 ),
             });
         }
-        let dataset = Self { dir, index };
+        let anomalies = index.anomalies.clone();
+        let dataset = Self {
+            dir,
+            index,
+            anomalies,
+        };
         // Every segment, and no reading twice across segments.
         let mut seen = HashSet::new();
+        let mut readings = Vec::new();
         for segment in &dataset.index.segments {
             for reading in dataset.read_segment(segment)? {
                 if !seen.insert((reading.device.clone(), reading.point.clone(), reading.ts)) {
@@ -253,9 +271,42 @@ impl Dataset {
                         ),
                     });
                 }
+                if !dataset.anomalies.is_empty() {
+                    readings.push(reading);
+                }
             }
         }
+        // The anomalies' rules that need the readings (a reading in each window, no reset
+        // inside an outage).
+        anomaly::apply(&dataset.index, &dataset.anomalies, &mut readings)
+            .map_err(Error::Anomaly)?;
         Ok(dataset)
+    }
+
+    /// The dataset with `anomalies` inserted besides the index's own: the readings
+    /// ([`Dataset::readings`]) and a load ([`Dataset::load`]) carry them. Their times are on the
+    /// dataset's time base, like the index's (`datasets/lab/README.md`, 「人工異常片段」).
+    ///
+    /// # Errors
+    ///
+    /// When an anomaly breaks a rule: an unknown device or point, a kind that does not apply to
+    /// a point, a missing parameter or label, a key used twice, a window that overlaps another
+    /// on the same point or holds no reading of a point, or a reset inside a stop.
+    pub fn with_anomalies(
+        mut self,
+        anomalies: impl IntoIterator<Item = Anomaly>,
+    ) -> Result<Self, Error> {
+        self.anomalies.extend(anomalies);
+        anomaly::validate_all(&self.index, &self.anomalies).map_err(Error::Anomaly)?;
+        let mut readings = self.recorded_readings()?;
+        anomaly::apply(&self.index, &self.anomalies, &mut readings).map_err(Error::Anomaly)?;
+        Ok(self)
+    }
+
+    /// The anomaly segments the readings carry: the index's first, then the inserted ones.
+    #[must_use]
+    pub fn anomalies(&self) -> &[Anomaly] {
+        &self.anomalies
     }
 
     #[must_use]
@@ -306,13 +357,24 @@ impl Dataset {
     }
 
     /// Every reading of the dataset in arrival order (the order the loader inserts them), read
-    /// and checked again from the segment files. Times are the dataset's own: add
-    /// [`Loaded::shift`] to compare them with what was loaded.
+    /// and checked again from the segment files, with the anomalies applied: what a load writes.
+    /// Times are the dataset's own: add [`Loaded::shift`] to compare them with what was loaded.
     ///
     /// # Errors
     ///
     /// When a segment file can no longer be read or no longer matches its index entry.
     pub fn readings(&self) -> Result<Vec<Reading>, Error> {
+        let mut readings = self.recorded_readings()?;
+        anomaly::apply(&self.index, &self.anomalies, &mut readings).map_err(Error::Anomaly)?;
+        Ok(readings)
+    }
+
+    /// The readings as the segment files hold them, without the anomalies.
+    ///
+    /// # Errors
+    ///
+    /// When a segment file can no longer be read or no longer matches its index entry.
+    pub fn recorded_readings(&self) -> Result<Vec<Reading>, Error> {
         let mut readings = Vec::new();
         for segment in &self.index.segments {
             readings.extend(self.read_segment(segment)?);
@@ -325,8 +387,9 @@ impl Dataset {
             Ok(Location::Relative(relative)) => self.dir.join(relative),
             Ok(Location::S3 { .. }) => {
                 return Err(Error::Unsupported(format!(
-                    "segment `{}` is in object storage; reading it arrives with the storage \
-                     location work of Laysi/trustiot-v2#679",
+                    "segment `{}` is in object storage: download it next to the index and use a \
+                     relative location (the s3:// URL form depends on the provider chosen in \
+                     Laysi/trustiot-v2#133)",
                     segment.key
                 )));
             }
@@ -426,7 +489,8 @@ impl Dataset {
     /// with every time moved by `shift`, as the ingest service would have written it: one INSERT
     /// per batch in arrival order, the batch's rows with their `ts`, `received_at`, stream and
     /// sequence number, then its completion record (committed at the batch's receive time),
-    /// except for the batches the index lists as uncommitted.
+    /// except for the batches the index lists as uncommitted. The rows carry the anomalies'
+    /// values ([`Dataset::readings`]), and [`Loaded::anomalies`] their shifted windows.
     ///
     /// Everything is checked before the first write. A failure part-way through (a ClickHouse
     /// error) leaves the batches written so far; load into a new tenant or gateway after one.
@@ -442,26 +506,40 @@ impl Dataset {
         target: &Target,
         shift: TimeShift,
     ) -> Result<Loaded, Error> {
-        if !self.index.anomalies.is_empty() {
-            return Err(Error::Unsupported(
-                "anomaly segments arrive with their insertion API (Laysi/trustiot-v2#679)"
-                    .to_owned(),
-            ));
-        }
         let Ids { devices, streams } = self.ids(target)?;
         let (start, end) = self.span();
         shift.apply(start).map_err(Error::Time)?;
         shift.apply(end).map_err(Error::Time)?;
-        // Read and check every segment before the first write.
+        let anomalies = self
+            .anomalies
+            .iter()
+            .map(|anomaly| anomaly.shifted(shift))
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(Error::Time)?;
+        // Read and check every segment, and apply the anomalies across them, before the first
+        // write.
+        let mut all = Vec::new();
         let mut segments = Vec::with_capacity(self.index.segments.len());
         for segment in &self.index.segments {
-            let uncommitted: BTreeSet<(&str, u64)> = segment
+            let uncommitted: Uncommitted<'_> = segment
                 .uncommitted
                 .iter()
                 .map(|batch| (batch.stream.as_str(), batch.batch_seq))
                 .collect();
-            segments.push((self.read_segment(segment)?, uncommitted));
+            let readings = self.read_segment(segment)?;
+            segments.push((readings.len(), uncommitted));
+            all.extend(readings);
         }
+        anomaly::apply(&self.index, &self.anomalies, &mut all).map_err(Error::Anomaly)?;
+        let mut rest = all.as_slice();
+        let segments: Vec<(&[Reading], Uncommitted<'_>)> = segments
+            .into_iter()
+            .map(|(length, uncommitted)| {
+                let (readings, after) = rest.split_at(length);
+                rest = after;
+                (readings, uncommitted)
+            })
+            .collect();
         let mut loaded = Loaded {
             dataset: self.index.name.clone(),
             version: self.index.version,
@@ -473,6 +551,7 @@ impl Dataset {
             rows: 0,
             batches: 0,
             committed_batches: 0,
+            anomalies,
         };
         for (readings, uncommitted) in &segments {
             for batch in

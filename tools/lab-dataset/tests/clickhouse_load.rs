@@ -1,8 +1,9 @@
 //! Loads the synthetic fixture into a throwaway ClickHouse with the product's ClickHouse schema
-//! (the migration Job's `PRODUCT`), once through the library and once through the
-//! `lab-dataset` command for a second tenant, and checks that what ClickHouse holds is the
-//! dataset: the row counts of the index, every row with its shifted times, one insert per batch
-//! in arrival order, and a completion record for every batch except the uncommitted one.
+//! (the migration Job's `PRODUCT`), once through the library, once through the `lab-dataset`
+//! command for a second tenant, and once with artificial anomalies inserted for a third, and
+//! checks that what ClickHouse holds is the dataset: the row counts of the index, every row with
+//! its shifted times (and the anomalies' values), one insert per batch in arrival order, and a
+//! completion record for every batch except the uncommitted one.
 //!
 //! Always a throwaway container, never `TEST_CLICKHOUSE_URL`: the test stops merges and creates
 //! an account that reads every row, server-wide state a shared server must not keep.
@@ -17,6 +18,8 @@
 /// The ClickHouse container and its HTTP client, shared with the ingest service's schema tests.
 #[path = "../../../services/ingest/tests/common/mod.rs"]
 mod common;
+/// The anomalies `anomalies.rs` checks in the readings.
+mod support;
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -331,7 +334,9 @@ async fn the_fixture_loads_as_the_ingest_service_writes_it() {
         rows: printed["rows"].as_u64().unwrap(),
         batches: printed["batches"].as_u64().unwrap(),
         committed_batches: printed["committed_batches"].as_u64().unwrap(),
+        anomalies: serde_json::from_value(printed["anomalies"].clone()).unwrap(),
     };
+    assert!(b.anomalies.is_empty());
     assert_eq!(
         (b.tenant, b.gateway, b.shift()),
         (tenant_b, gateway_b, shift_b)
@@ -350,4 +355,52 @@ async fn the_fixture_loads_as_the_ingest_service_writes_it() {
     };
     assert!(ids(&a).is_disjoint(&ids(&b)));
     check_tenant(&server, &reader, &dataset, &a).await;
+
+    // Tenant C with the anomalies inserted: every row equals the readings with the anomalies
+    // applied, and the loaded windows are the parameters moved by the shift.
+    let inserted = support::anomalies();
+    let with = dataset.clone().with_anomalies(inserted.clone()).unwrap();
+    let c = with
+        .load(&writer, &Target::new(Uuid::new_v4(), Uuid::new_v4()), shift)
+        .await
+        .unwrap();
+    check_tenant(&server, &reader, &with, &c).await;
+    assert_eq!(c.anomalies.len(), inserted.len());
+    for (loaded, given) in c.anomalies.iter().zip(&inserted) {
+        assert_eq!(loaded.start, shift.apply(given.start).unwrap());
+        assert_eq!(loaded.end, shift.apply(given.end).unwrap());
+        assert_eq!((&loaded.key, &loaded.expect), (&given.key, &given.expect));
+    }
+    // The spike, read back from ClickHouse: exactly the meter's readings inside the shifted
+    // window carry its value.
+    let spike = &c.anomalies[0];
+    let meter = c.device("meter-1").unwrap().to_string();
+    let rows = query(&server, &reader, ROWS, c.tenant).await;
+    let mut spiked: Vec<i64> = rows
+        .iter()
+        .filter(|row| row[2] == meter && row[3] == "power_kw" && row[7] == "480.5")
+        .map(|row| row[4].parse().unwrap())
+        .collect();
+    spiked.sort_unstable();
+    let window: Vec<i64> = with
+        .readings()
+        .unwrap()
+        .iter()
+        .filter(|r| r.device == "meter-1" && r.point == "power_kw")
+        .map(|r| shift.apply(r.ts).unwrap())
+        .filter(|ts| *ts >= spike.start && *ts <= spike.end)
+        .map(|ts| ts.timestamp_millis())
+        .collect();
+    assert_eq!(spiked, window);
+    assert_eq!(spiked.len(), 3);
+    println!(
+        "tenant {}: anomaly `{}` from {} to {} (shifted); {} meter-1/power_kw rows read 480.5 \
+         in ClickHouse, the readings inside the window; expects {:?}",
+        c.tenant,
+        spike.key,
+        lab_dataset::time::format(spike.start),
+        lab_dataset::time::format(spike.end),
+        spiked.len(),
+        spike.expect
+    );
 }
