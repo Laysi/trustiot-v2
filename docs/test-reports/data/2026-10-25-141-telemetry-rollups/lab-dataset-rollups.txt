@@ -1,0 +1,12 @@
+
+running 1 test
+trustiot.tenant_telemetry_1m: 316 cells equal the dataset's, counting 316 of its 316 readings (the uncommitted batch and the backlog included)
+trustiot.tenant_telemetry_1h: 28 cells equal the dataset's, counting 316 of its 316 readings (the uncommitted batch and the backlog included)
+energy meter-1/energy_kwh over 48 readings: consecutive differences 164.04600000000045, one-minute view 164.04600000000048, one-hour view 164.04600000000048
+energy meter-2/pulses over 47 readings: consecutive differences 3099, one-minute view 3099, one-hour view 3099
+energy press-1/cycle_count over 42 readings: consecutive differences 172, one-minute view 172, one-hour view 172
+reconcile: 16 batches checked, both statements wrote 0 rows for each
+test the_aggregates_of_the_fixture_equal_its_readings ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.68s
+

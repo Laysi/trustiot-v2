@@ -119,7 +119,7 @@ Job 只信任它自己填過的 Secret 物件：寫入時在 annotation `trustio
    ```
 
    只挑服務會用的名稱（前綴加 32 個十六進位數字），所以產生的 SQL 裡只有這種名稱；其他名稱在下一步處理。服務在每個租戶下一次查詢時以新的推導密碼重建它的帳號，不用重啟服務；在那之前該租戶的帳號不存在，沒有人能以它登入。
-3. 找出 Job 與服務都不認得的帳號（服務帳號能以 `RENAME` 把租戶帳號改成別的名稱）：在同一個 pod 內執行 `c --query "SELECT name, storage FROM system.users WHERE NOT match(name, '^trustiot_tenant_account_[0-9a-f]{32}\$') ORDER BY name"`。認得的只有管理帳號（`users_xml`）、`trustiot_collector`（或 values 設定的 collector 帳號）、`trustiot_telemetry_query`、`trustiot_tenant_view_definer`，以及外部 ClickHouse 上客戶自己的帳號。其他帳號稽核後以 `DROP USER` 刪掉。
+3. 找出 Job 與服務都不認得的帳號（服務帳號能以 `RENAME` 把租戶帳號改成別的名稱）：在同一個 pod 內執行 `c --query "SELECT name, storage FROM system.users WHERE NOT match(name, '^trustiot_tenant_account_[0-9a-f]{32}\$') ORDER BY name"`。認得的只有管理帳號（`users_xml`）、`trustiot_collector`（或 values 設定的 collector 帳號）、`trustiot_telemetry_query`、`trustiot_tenant_view_definer`、`trustiot_rollup_definer`（彙總表的 DEFINER，Laysi/trustiot-v2#141），以及外部 ClickHouse 上客戶自己的帳號。其他帳號稽核後以 `DROP USER` 刪掉。
 4. 確認下一次 Job 沒有下方表格裡 `trustiot_telemetry_query` 或 `trustiot_tenant_reader` 的停止訊息。
 
 Job 還不稽核租戶帳號本身（多出的驗證方式、設定或角色、改名）；這些記在 Laysi/trustiot-v2#528。
@@ -215,8 +215,8 @@ Job 遇到下列情況會停止，不自動修改；修好之後，Job 依 `migr
 | ClickHouse：`the ClickHouse account trustiot_telemetry_query may grant the role trustiot_tenant_reader to other users or roles` | 服務帳號的 `GRANTEES` 不再是 `NONE`（`0009_telemetry_query_grantees.sql` 設定的）；它以 `ADMIN OPTION` 持有租戶角色，於是能把角色給任何使用者或角色、或從租戶帳號收回 | 以管理帳號 `ALTER USER trustiot_telemetry_query GRANTEES NONE`，再查 `system.role_grants` 裡誰拿到 `trustiot_tenant_reader`；懷疑服務帳號外洩時照「懷疑時序查詢的服務帳號外洩」處理 |
 | ClickHouse：`the ClickHouse account trustiot_telemetry_query has other roles, grants or settings than 0008_telemetry_query.sql` | 時序查詢的服務帳號被人改過；它能建立與修改租戶帳號，多出的權限會落到每個租戶 | 稽核後以管理帳號 `REVOKE` 多出的權限、角色或 `ALTER USER trustiot_telemetry_query SETTINGS NONE` |
 | ClickHouse：`the role trustiot_tenant_reader is held by ... grantee(s) besides trustiot_telemetry_query` | 租戶角色被給了服務帳號與 `trustiot_tenant_account_*` 帳號以外的使用者或角色，或某個租戶帳號拿到 `ADMIN OPTION`；持有者都讀得到租戶 view。服務帳號有 `GRANTEES NONE`，給不了別人，所以是有權授與的管理帳號做的 | 稽核後以管理帳號 `REVOKE trustiot_tenant_reader FROM <使用者或角色>`，租戶帳號是 `REVOKE ADMIN OPTION FOR trustiot_tenant_reader FROM <帳號>`；若同時出現上一列的 `GRANTEES` 訊息，照「懷疑時序查詢的服務帳號外洩」處理 |
-| ClickHouse：`the role trustiot_tenant_reader lacks SELECT on trustiot.tenant_telemetry` | 租戶角色的 `SELECT ON trustiot.tenant_telemetry`（`0005_tenant_view.sql`）被收回，所有租戶帳號都讀不到資料 | 稽核後以管理帳號 `GRANT SELECT ON trustiot.tenant_telemetry TO trustiot_tenant_reader` |
-| ClickHouse：`the role trustiot_tenant_reader has grants or roles beyond SELECT on trustiot.tenant_telemetry` | 租戶角色被加了權限或角色，每個租戶帳號都會得到它們 | 稽核後以管理帳號 `REVOKE <權限> ON <對象> FROM trustiot_tenant_reader` 或 `REVOKE <角色> FROM trustiot_tenant_reader` |
+| ClickHouse：`the role trustiot_tenant_reader lacks SELECT on trustiot.<view>` | 租戶角色對某個租戶 view（`tenant_telemetry` 由 `0005_tenant_view.sql` 給，`tenant_telemetry_1m`、`tenant_telemetry_1h` 由 `0010_telemetry_rollups.sql` 給）的 `SELECT` 被收回，所有租戶帳號都讀不到那個 view | 稽核後以管理帳號 `GRANT SELECT ON trustiot.<view> TO trustiot_tenant_reader` |
+| ClickHouse：`the role trustiot_tenant_reader has grants or roles beyond SELECT on the tenant views` | 租戶角色被加了三個租戶 view 的 `SELECT` 以外的權限（包括表的權限與 `GRANT OPTION`）或角色，每個租戶帳號都會得到它們 | 稽核後以管理帳號 `REVOKE <權限> ON <對象> FROM trustiot_tenant_reader` 或 `REVOKE <角色> FROM trustiot_tenant_reader`；`GRANT OPTION` 是 `REVOKE GRANT OPTION FOR SELECT ON trustiot.<view> FROM trustiot_tenant_reader` |
 | `did not accept the migration role within`、`not reachable within`、`held the lock for longer than` | 資料庫還沒起來，或另一個 Job 持有鎖太久 | 看資料庫的狀態；另一個 Job 卡住時先看它的日誌 |
 
 上面五個關於 `trustiot_telemetry_query` 與 `trustiot_tenant_reader` 的停止訊息出現時，Job 在停止之前先讓服務帳號不能登入（`HOST NONE`），訊息後面接著 `the run revoked the login of trustiot_telemetry_query (HOST NONE)`：修好之前服務建立不了新的租戶帳號，也重設不了租戶帳號的密碼，已建立的租戶帳號照常查詢。修好之後，服務啟用時的下一次 Job 設定密碼並恢復登入，日誌有 `let ClickHouse account trustiot_telemetry_query log in`。
@@ -269,3 +269,54 @@ Job 每次執行都把 ClickHouse 的 `trustiot.telemetry` 與 `trustiot.batch_c
 - **ClickHouse 升級之後出現上面的訊息**：Job 認得的形式是 `toIntervalDay(<天數>)`，以及 ClickHouse 26.8 存它自己帶參數寫入的 `toIntervalDay(_CAST(<天數>, 'UInt32'))`。新版 ClickHouse 若換了存法，Job 會認不出自己寫的 TTL 而停止，沒有資料被刪。照上面的指令以整數天數重寫一次，再回報 issue 讓 Job 認得新的存法。
 - **改天數的代價**：改 TTL 後 ClickHouse 在背景執行 `MATERIALIZE TTL`，重寫每個 part，占用 I/O 與暫時的磁碟空間；縮短時要等它跑完才釋放空間。在 `system.mutations` 看進度（`WHERE database = 'trustiot' AND NOT is_done`）。
 - **縮短是產品決定**：縮短會永久刪掉超過新天數的資料，不是解決磁碟壓力的手段；磁碟快滿時擴充磁碟（[資料保存期限與磁碟水位](../architecture/data-retention.md)「磁碟水位告警」）。手動改的天數在下一次部署會被 Job 改回設定值。
+
+## 彙總資料的保存期限
+
+Job 每次執行也把 `trustiot.telemetry_1m`、`trustiot.telemetry_1h` 的 TTL 對齊 `TRUSTIOT__CLICKHOUSE__AGGREGATE_1M_RETENTION_MONTHS`、`_1H_RETENTION_MONTHS`（不設是 13 與 48 個月，Laysi/trustiot-v2#141；值與理由見[資料保存期限與磁碟水位](../architecture/data-retention.md)「彙總資料的保存期限」）。它先讀完四張表的 TTL 再改，所以一張表的 TTL 認不出來時，四張表都沒有改。
+
+- **設定被拒（結束碼 2）**：訊息寫出 `clickhouse.aggregate_1m_retention_months` 或 `clickhouse.aggregate_1h_retention_months` 與違反的規則：1 分鐘 13 到 120 個月且至少涵蓋原始資料的天數，1 小時不短於 1 分鐘、不超過 120 個月。超過 120 多半是把天數當成月數。Job 在連任何資料庫之前就停止，什麼都沒改。
+- **「its TTL ... is not one the migration Job manages」**（彙總表）：以管理帳號查 `engine_full`（同上一節），確認改動的原因後改回 Job 管理的形式，下一次執行就把月數對齊設定：
+
+  ```sql
+  ALTER TABLE trustiot.<telemetry_1m 或 telemetry_1h> MODIFY TTL received_day + toIntervalMonth(<月數>) + toIntervalDay(1)
+  ```
+
+  一律用 `received_day`（收到日），不要改用 `bucket`（讀值時間），時鐘錯的閘道器會讓彙總提早被清掉。ClickHouse 26.8 存成 `(received_day + toIntervalMonth(<月數>)) + toIntervalDay(1)`，Job 自己寫入時月數是 `_CAST(<月數>, 'UInt32')`，兩種 Job 都認得；升級 ClickHouse 後認不出時，處理同上一節。
+- 改 TTL 的代價與「縮短是產品決定」同上一節。縮短彙總的保存期限刪掉的年份，原始資料早已過期，無法重算。
+
+## 彙總表的 backfill 與一致性檢查
+
+Job 第一次套用 `0010_telemetry_rollups.sql` 時，把 `telemetry` 裡已有的列補進兩張彙總表（[services/ingest](../../services/ingest/README.md)「既有資料的 backfill」）。補的是重算值與現有彙總的差，重跑不會重複計算。
+
+- **Job 停在 `0010_telemetry_rollups.sql`，原因是 `TIMEOUT_EXCEEDED`**：backfill 的一句在 25 秒（`max_execution_time`，低於 Job 30 秒的請求逾時）內沒有做完，在伺服器上也已停止。已寫入的部分保留，下一次執行只補剩下的差。Laysi/trustiot-v2#91 之前沒有程式持續寫入 `telemetry`（只有 `tools/lab-dataset` 載入的測試資料），所以預期不會發生；大表上的 backfill 時間還沒有實測。重試仍停在這裡時，不要改 `trustiot_migrate.applied`，也不要拿掉時間上限（Job 放棄等待之後，一句還在跑的 backfill 會和下一次執行的同一句同時寫，重複計算）；開 issue，附上原始資料的列數（`SELECT total_rows FROM system.tables WHERE database = 'trustiot' AND name = 'telemetry'`）。
+- **檢查彙總是否與原始資料一致**：以套用 `0010` 的帳號（叢集內 ClickHouse 是管理帳號，外部 ClickHouse 是給 Job 的帳號）讀 backfill view，列出一段收到日裡與原始資料不一致的格。叢集內 ClickHouse 在 pod 內執行（`c` 的定義同上方「懷疑時序查詢的服務帳號外洩」）：
+
+  ```bash
+  kubectl -n <namespace> exec -i <release>-clickhouse-0 -c clickhouse -- bash -s <<'EOF'
+  c() { clickhouse-client --user "$CLICKHOUSE_USER" --password "$(cat "$CLICKHOUSE_PASSWORD_FILE")" "$@"; }
+  for table in telemetry_1m telemetry_1h; do
+    c --query "SELECT '$table', received_day, count() FROM trustiot.${table}_backfill(first_day = '<YYYY-MM-DD>', last_day = '<YYYY-MM-DD>') GROUP BY received_day ORDER BY received_day"
+  done
+  EOF
+  ```
+
+  沒有任何列表示這段收到日的每一格都一致。今天（UTC）的格與 ingest 正在重寫的批次可能暫時不一致。其他帳號讀 backfill view 一律是 0 列（`deny_by_default`），不代表一致。
+- **補回不一致的收到日**：只在沒有任何程式寫入 `telemetry` 時做（Laysi/trustiot-v2#91 之前；之後先把 ingest 縮到 0 個 replica），否則一個寫到一半的區塊會被算兩次。同一個 pod 內，對兩張表各執行一次（`<table>` 換成 `telemetry_1m` 或 `telemetry_1h`）：
+
+  ```sql
+  INSERT INTO trustiot.<table> (tenant_id, device_id, point, bucket, gateway_id, stream_id, received_day, readings, numeric_readings, value_sum, value_min, value_max, first, last)
+  SETTINGS deduplicate_insert_select = 'disable'
+  SELECT tenant_id, device_id, point, bucket, gateway_id, stream_id, received_day, readings, numeric_readings, value_sum, value_min, value_max, first, last
+  FROM trustiot.<table>_backfill(first_day = '<YYYY-MM-DD>', last_day = '<YYYY-MM-DD>')
+  ```
+
+  寫入的是差，重跑無害；再做一次上面的檢查應該沒有任何列。`deduplicate_insert_select = 'disable'` 不能省：與之前某次相同的差值會被當成重複丟掉。
+
+## 回到 Laysi/trustiot-v2#141 之前的版本
+
+`0010_telemetry_rollups.sql` 給了租戶角色 `trustiot_tenant_reader` 兩個彙總 view 的 `SELECT`。這之前的版本的 Job 只認得 `tenant_telemetry`，會把這兩個權限當成多出的權限，停在 `the role trustiot_tenant_reader has grants or roles beyond SELECT on trustiot.tenant_telemetry`，並讓 `trustiot_telemetry_query` 不能登入（上方「Job 停止時」）；服務的 pod 也會等不到 Job。所以 `helm rollback`（或 Flux 失敗後的 rollback）回到這之前的版本時：
+
+1. 以管理帳號收回兩個權限：`REVOKE SELECT ON trustiot.tenant_telemetry_1m FROM trustiot_tenant_reader`、`REVOKE SELECT ON trustiot.tenant_telemetry_1h FROM trustiot_tenant_reader`。舊版不讀彙總表，租戶照常讀原始資料。
+2. 讓舊版的 Job 再跑一次（刪掉失敗的 Job 或改 `migrate.revision`）。
+
+表、view 與 DEFINER 帳號都留著（舊版不管它們），materialized view 照常填入彙總表。之後再升級回這一版時，Job 停在 `lacks SELECT on trustiot.tenant_telemetry_1m`：照「Job 停止時」的表把兩個權限加回去。

@@ -92,8 +92,8 @@ Job 依序套用 `services/ingest/migrations/clickhouse/`，記在 `trustiot_mig
 | 種類 | 名稱 |
 | --- | --- |
 | 資料庫 | `trustiot`、`trustiot_logs`、`trustiot_migrate`（Job 自己的紀錄） |
-| 表與 view | `trustiot.telemetry`、`trustiot.batch_commits`、`trustiot.tenant_telemetry`（租戶讀的 view）、`trustiot_logs.otel_logs`、`trustiot_logs.otel_traces`；兩張遙測表的 TTL 對齊 180 天的原始資料保存期限 |
-| 角色 | `trustiot_ingest`、`trustiot_tenant_reader`、`trustiot_otel_collector`、`trustiot_monitoring`，以及帳號 `trustiot_tenant_view_definer`（view 的 DEFINER，不能登入）與 `trustiot_telemetry_query`（`HOST NONE`，不能登入） |
+| 表與 view | `trustiot.telemetry`、`trustiot.batch_commits`、`trustiot.tenant_telemetry`（租戶讀的 view）、1 分鐘與 1 小時彙總表 `trustiot.telemetry_1m`、`telemetry_1h` 與租戶讀它們的 `tenant_telemetry_1m`、`tenant_telemetry_1h`（填入彙總表的 materialized view 與 backfill view 也在）、`trustiot_logs.otel_logs`、`trustiot_logs.otel_traces`；兩張遙測表的 TTL 對齊 180 天的原始資料保存期限，彙總表 13 與 48 個月 |
+| 角色 | `trustiot_ingest`、`trustiot_tenant_reader`、`trustiot_otel_collector`、`trustiot_monitoring`，以及帳號 `trustiot_tenant_view_definer`（租戶 view 的 DEFINER，不能登入）、`trustiot_rollup_definer`（彙總表的 DEFINER，不能登入）與 `trustiot_telemetry_query`（`HOST NONE`，不能登入） |
 | row policy、profile、quota | `deny_by_default`、`tenant_isolation`、`service_all_rows` 等，細節見 [services/ingest](../services/ingest/README.md) 「租戶隔離」 |
 
 本機沒有設定 collector 與 telemetry-query 的帳號（不設 `TRUSTIOT__PASSWORDS__CLICKHOUSE_COLLECTOR` 與 `_TELEMETRY_QUERY`，同一個沒有這兩項的 chart）：Job 不管 collector 的帳號，`trustiot_telemetry_query` 維持 `HOST NONE`。`SERVICES` 目前只有 `example-service`，沒有服務需要這兩個帳號；要在開發環境跑 telemetry-query 時，再為它加 `TRUSTIOT__PASSWORDS__CLICKHOUSE_TELEMETRY_QUERY` 與放它密碼的 Secret。

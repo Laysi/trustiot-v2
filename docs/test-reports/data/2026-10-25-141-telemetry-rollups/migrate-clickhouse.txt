@@ -1,0 +1,31 @@
+
+running 1 test
+first run on a fresh ClickHouse: ["generated the password of trustiot_collector in Secret trustiot-otel-collector-password (it had none)", "applied migrate/0001_helpers.sql", "applied database/database.sql", "applied clickhouse/0001_databases.sql", "applied clickhouse/0002_telemetry.sql", "applied clickhouse/0003_batch_commits.sql", "applied clickhouse/0004_access.sql", "applied clickhouse/0005_tenant_view.sql", "applied clickhouse/0006_logs.sql", "applied clickhouse/0007_monitoring.sql", "applied clickhouse/0008_telemetry_query.sql", "applied clickhouse/0009_telemetry_query_grantees.sql", "applied clickhouse/0010_telemetry_rollups.sql", "set the retention of ClickHouse table trustiot.telemetry to 180 days (was 400)", "set the retention of ClickHouse table trustiot.batch_commits to 180 days (was 400)", "created ClickHouse account trustiot_collector"]
+retention 180 days; telemetry rows kept after the TTL merge:
+old_timestamp_received_now
+received_within_retention
+
+completion records kept after the TTL merge (seq):
+1
+2
+
+retention changes, step by step:
+365 days: ["set the retention of ClickHouse table trustiot.batch_commits to 365 days (was 180)", "set the retention of ClickHouse table trustiot.telemetry to 365 days (was 180)"]
+back to 180 days: ["set the retention of ClickHouse table trustiot.telemetry to 180 days (was 365)", "set the retention of ClickHouse table trustiot.batch_commits to 180 days (was 365)"]
+30 days refused: ClickHouse: clickhouse.raw_retention_days: 30 days is not longer than the gateway buffer's maximum age of 30 days: completion records (the high-water marks) would expire before a gateway stops resending, and resent batches would be written twice; use at least 31 days
+7 days refused: ClickHouse: clickhouse.raw_retention_days: 7 days is not longer than the gateway buffer's maximum age of 30 days: completion records (the high-water marks) would expire before a gateway stops resending, and resent batches would be written twice; use at least 31 days
+TTL changed by hand: ClickHouse: trustiot.telemetry: its TTL `toDateTime(ts) + toIntervalDay(180)` is not one the migration Job manages; an administrator must set it back to `TTL toDateTime(received_at) + toIntervalDay(<days>)` (docs/runbooks/migrations.md)
+after the repair: ["set the retention of ClickHouse table trustiot.telemetry to 180 days (was 200)"]
+aggregate retention changes, step by step:
+400 days, 14 and 60 months: ["set the retention of ClickHouse table trustiot.telemetry_1h to 60 months (was 48)", "set the retention of ClickHouse table trustiot.telemetry_1m to 14 months (was 13)", "set the retention of ClickHouse table trustiot.batch_commits to 400 days (was 180)", "set the retention of ClickHouse table trustiot.telemetry to 400 days (was 180)"]
+back to the platform values: ["set the retention of ClickHouse table trustiot.telemetry to 180 days (was 400)", "set the retention of ClickHouse table trustiot.batch_commits to 180 days (was 400)", "set the retention of ClickHouse table trustiot.telemetry_1m to 13 months (was 14)", "set the retention of ClickHouse table trustiot.telemetry_1h to 48 months (was 60)"]
+None days, Some(12) and None months refused: ClickHouse: clickhouse.aggregate_1m_retention_months: 12 months for the one-minute aggregates is shorter than 13 months: the aggregates must reach the same month a year earlier for year-on-year comparisons (rebuild checklist I2), and time zones with a half- or quarter-hour offset get whole local days only from the one-minute table; use at least 13 months
+None days, None and Some(12) months refused: ClickHouse: clickhouse.aggregate_1h_retention_months: 12 months for the one-hour aggregates is shorter than the 13 months of the one-minute aggregates: the one-hour table carries the long-term trends and reports, so it keeps a period at least as long as the finer table does; use at least 13 months
+None days, Some(121) and Some(121) months refused: ClickHouse: clickhouse.aggregate_1m_retention_months: 121 months for the one-minute aggregates is longer than the 120 months (ten years) accepted (is it in another unit?)
+Some(400) days, None and None months refused: ClickHouse: clickhouse.aggregate_1m_retention_months: 13 months for the one-minute aggregates can be as short as 393 days, shorter than the raw data retention of 400 days: the aggregates of readings still kept raw would expire first; use at least 14 months
+aggregate TTL changed by hand: ClickHouse: trustiot.telemetry_1m: its TTL `bucket + toIntervalMonth(13)` is not one the migration Job manages; an administrator must set it back to `TTL received_day + toIntervalMonth(<months>) + toIntervalDay(1)` (docs/runbooks/migrations.md)
+after the repair: ["set the retention of ClickHouse table trustiot.telemetry_1m to 13 months (was 14)"]
+test clickhouse_ddl_and_the_collector_account ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 20.67s
+
