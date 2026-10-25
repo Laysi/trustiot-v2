@@ -111,10 +111,63 @@ fn the_tree_is_rewritten_into_the_form_clickhouse_runs() {
         // Printed as `--1`, the rest of the line would be a comment to ClickHouse.
         (
             "SELECT - -1, - - - value_int, 1 - -1 FROM tenant_telemetry",
-            "SELECT -(-1), -(-(-value_int)), 1 - -1 FROM trustiot.tenant_telemetry",
+            "SELECT -(-1), -(-(-value_int)), 1 - (-1) FROM trustiot.tenant_telemetry",
         ),
     ] {
         assert_eq!(passes(sql).canonical, canonical, "{sql}");
+    }
+}
+
+/// sqlparser and ClickHouse 26.8 rank some operators differently, so the printed text carries
+/// sqlparser's grouping in parentheses (`tests/sql_api.rs` shows ClickHouse reading it so).
+#[test]
+fn every_operand_that_is_an_operation_is_printed_in_parentheses() {
+    for (sql, canonical) in [
+        // `||` above `+` in sqlparser, below it in ClickHouse.
+        (
+            "SELECT 1 + 2 || 3 FROM tenant_telemetry",
+            "SELECT 1 + (2 || 3) FROM trustiot.tenant_telemetry",
+        ),
+        (
+            "SELECT point FROM tenant_telemetry WHERE point = 'a' || 'b' + 1",
+            "SELECT point FROM trustiot.tenant_telemetry WHERE point = (('a' || 'b') + 1)",
+        ),
+        // `LIKE` below `=` in sqlparser, at its rank in ClickHouse; `BETWEEN … AND` takes `2 = 0`
+        // as its upper bound in ClickHouse only.
+        (
+            "SELECT 'a' LIKE 'a' = 0 FROM tenant_telemetry",
+            "SELECT 'a' LIKE ('a' = 0) FROM trustiot.tenant_telemetry",
+        ),
+        (
+            "SELECT 1 BETWEEN 0 AND 2 = 0 FROM tenant_telemetry",
+            "SELECT (1 BETWEEN 0 AND 2) = 0 FROM trustiot.tenant_telemetry",
+        ),
+        (
+            "SELECT point FROM tenant_telemetry WHERE value_int + 1 IS NULL OR NOT value_bool = true",
+            "SELECT point FROM trustiot.tenant_telemetry WHERE ((value_int + 1) IS NULL) OR (NOT (value_bool = true))",
+        ),
+        (
+            "SELECT point FROM tenant_telemetry WHERE value_int * 2 IN (2, 4) AND point || 'x' NOT IN (SELECT point FROM tenant_telemetry_1m)",
+            "SELECT point FROM trustiot.tenant_telemetry WHERE ((value_int * 2) IN (2, 4)) AND ((point || 'x') NOT IN (SELECT point FROM trustiot.tenant_telemetry_1m))",
+        ),
+        (
+            "SELECT [1, 2][1] + 1, now() - INTERVAL 1 DAY, sum(value_int) OVER () * 2 FROM tenant_telemetry",
+            "SELECT ([1, 2][1]) + 1, now() - (INTERVAL 1 DAY), (sum(value_int) OVER ()) * 2 FROM trustiot.tenant_telemetry",
+        ),
+        // A chain of one rank stays flat: both parsers group it from the left.
+        (
+            "SELECT 1 + 2 - 3 + 4, 2 * 3 / 4 % 5, 'a' || 'b' || 'c' FROM tenant_telemetry WHERE 1 AND 2 AND 3 OR 4 OR 5",
+            "SELECT 1 + 2 - 3 + 4, 2 * 3 / 4 % 5, 'a' || 'b' || 'c' FROM trustiot.tenant_telemetry WHERE (1 AND 2 AND 3) OR 4 OR 5",
+        ),
+        // Of different ranks, each operand in parentheses.
+        (
+            "SELECT 1 + 2 * 3, 1 * 2 + 3, 1 - (2 - 3), 2 * 3 || 'x' FROM tenant_telemetry",
+            "SELECT 1 + (2 * 3), (1 * 2) + 3, 1 - (2 - 3), (2 * 3) || 'x' FROM trustiot.tenant_telemetry",
+        ),
+    ] {
+        let checked = passes(sql);
+        assert_eq!(checked.canonical, canonical, "{sql}");
+        assert_eq!(passes(canonical).canonical, canonical, "{sql}: idempotent");
     }
 }
 
@@ -412,6 +465,29 @@ fn functions_outside_the_allowlist_are_refused() {
     ] {
         assert_eq!(refusal(sql), function(name), "{sql}");
     }
+}
+
+/// A word sqlparser reads as the start of an expression becomes a plain name when that reading
+/// fails: a misread, refused where it stands.
+#[test]
+fn a_keyword_the_parser_fell_back_to_a_name_for_is_refused() {
+    for (sql, column) in [
+        ("SELECT case FROM tenant_telemetry", 8),
+        ("SELECT extract, point FROM tenant_telemetry", 8),
+        ("SELECT arrayMap(not -> 1, [1]) FROM tenant_telemetry", 17),
+    ] {
+        assert_eq!(
+            refusal(sql),
+            SqlRefusal::Syntax {
+                line: Some(1),
+                column: Some(column)
+            },
+            "{sql}"
+        );
+    }
+    passes(
+        "SELECT point FROM tenant_telemetry WHERE NOT value_bool AND NOT EXISTS (SELECT 1 FROM tenant_telemetry_1m)",
+    );
 }
 
 #[test]

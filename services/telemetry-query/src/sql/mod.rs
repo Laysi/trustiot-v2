@@ -10,12 +10,20 @@
 //! 4. Parse with sqlparser's ClickHouse dialect and a recursion limit: one query statement.
 //! 5. to 7. The walk ([`check`]): an allowlist of clauses, relations (the three tenant views and
 //!    common table expressions) and expressions, the function allowlist ([`functions`]), the
-//!    time zone rule, and at least one view read.
+//!    time zone rule, and at least one view read. The walk puts every operand that is itself an
+//!    operation in parentheses (but a left operand of the same rank, such as `a - b` in
+//!    `a - b + c`).
 //! 8. Print the checked tree (no comments), parse and check the printed text again and require
 //!    the same tree and the same text, then apply the service's row limit and output format.
 //!
-//! The service sends ClickHouse only the printed text, so what ClickHouse runs is the tree that
-//! was checked; lexer differences between the two parsers never reach it.
+//! The service sends ClickHouse only the printed text, never what was written. sqlparser and
+//! ClickHouse do not read every text alike, and the steps close the two known gaps: the lexer
+//! rules leave only token forms both read the same way (step 3), and the parentheses of step 7
+//! leave the printed text a single grouping where the two rank operators differently (`||`
+//! against `+`, `LIKE` and `BETWEEN` against `=`). `tests/sql_api.rs` checks both against the
+//! pinned ClickHouse with `EXPLAIN AST`: a corpus of queries parses alike as written and as
+//! printed, and the queries the two rank differently parse as sqlparser grouped them. That is
+//! evidence for those queries, not a proof that the two parsers agree on every text.
 
 pub mod check;
 pub mod functions;
@@ -32,7 +40,7 @@ use sqlparser::dialect::ClickHouseDialect;
 use sqlparser::parser::{Parser, ParserError};
 use tokio::sync::Semaphore;
 
-use self::check::Checker;
+use self::check::{Checker, READ_BACK_RECURSION_LIMIT};
 
 /// How deep the parser may recurse.
 pub const RECURSION_LIMIT: usize = 50;
@@ -80,7 +88,7 @@ impl From<SqlRefusal> for CheckError {
 /// [`CheckError::Refused`] for SQL that breaks a rule, [`CheckError::Internal`] when the
 /// printed text does not read back as the tree that was checked.
 pub fn check(sql: &str, max_rows: u32) -> Result<Checked, CheckError> {
-    let tree = checked_tree(sql)?;
+    let tree = checked_tree(sql, RECURSION_LIMIT)?;
     let canonical = tree.to_string();
     read_back(&canonical, &tree)?;
     let limited = limit(tree, u64::from(max_rows) + 1)?;
@@ -146,11 +154,11 @@ async fn on_bounded_thread<T: Send + 'static>(
         .map_err(|_| CheckError::Internal("the check's thread stopped without an answer"))
 }
 
-/// Steps 1 to 7: the tokens, the parse and the walk.
-fn checked_tree(sql: &str) -> Result<Query, SqlRefusal> {
+/// Steps 1 to 7: the tokens, the parse with `recursion_limit` and the walk.
+fn checked_tree(sql: &str, recursion_limit: usize) -> Result<Query, SqlRefusal> {
     let tokens = lexer::tokens(sql)?;
     let mut statements = Parser::new(&ClickHouseDialect {})
-        .with_recursion_limit(RECURSION_LIMIT)
+        .with_recursion_limit(recursion_limit)
         .with_tokens_with_locations(tokens)
         .parse_statements()
         .map_err(|error| parse_error(&error))?;
@@ -168,9 +176,19 @@ fn checked_tree(sql: &str) -> Result<Query, SqlRefusal> {
 
 /// Step 8's read-back: `text` must pass the whole check again and give `tree`, and print as
 /// `text` again.
+///
+/// The printed text is longer, has more tokens and nests deeper than what was written
+/// (`trustiot.` before each view, `AS`, the parentheses of step 7). The deeper nesting is
+/// bounded by [`check::MAX_ADDED_NESTING`] and allowed for by the read-back's own recursion
+/// limit, but the size and the token count are not: a query close to them can pass them as
+/// written and not as printed. That read-back refusal (too long, too complex) is the caller's
+/// query being too long or too complex, and is returned as such. Any other is a failure of the
+/// check.
 fn read_back(text: &str, tree: &Query) -> Result<(), CheckError> {
-    let again = checked_tree(text)
-        .map_err(|_| CheckError::Internal("the printed query does not pass the check again"))?;
+    let again = checked_tree(text, READ_BACK_RECURSION_LIMIT).map_err(|refusal| match refusal {
+        SqlRefusal::TooLong { .. } | SqlRefusal::TooComplex => CheckError::Refused(refusal),
+        _ => CheckError::Internal("the printed query does not pass the check again"),
+    })?;
     if &again != tree || again.to_string() != text {
         return Err(CheckError::Internal(
             "the printed query reads back as a different tree",

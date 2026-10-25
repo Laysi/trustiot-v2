@@ -16,7 +16,8 @@
 //! 6. Statements other than a `SELECT` never reach ClickHouse: `system.query_log` holds none of
 //!    them and only `SELECT`s of the tenant accounts (acceptance 4).
 //! 7. ClickHouse parses each printed query as it parses the query as written (`EXPLAIN AST`),
-//!    and every allowed function is ClickHouse's, with its case rule.
+//!    groups the operators of a printed query as sqlparser did where the two rank them
+//!    differently, and every allowed function is ClickHouse's, with its case rule.
 //!
 //! Needs podman or docker; skipped without one unless `CI` is set. One test: the binary shares
 //! one product database. `--nocapture` prints every outcome for the test report.
@@ -102,6 +103,48 @@ const AS_WRITTEN: &[&str] = &[
     "SELECT ((value_float)) + (1) FROM trustiot.tenant_telemetry WHERE (((point = 'a')))",
     "SELECT point FROM trustiot.tenant_telemetry WHERE value_string IS NULL AND point != 'a' AND point <> 'b' AND value_int >= 1 AND value_int <= 9",
     "SELECT argMax(last.value_float, last.ts), avgIfOrNull(value_sum, readings > 0) FROM trustiot.tenant_telemetry_1m",
+];
+
+/// Queries whose operators sqlparser and ClickHouse 26.8 rank differently, and controls they
+/// rank alike, each with sqlparser's grouping written out in parentheses: ClickHouse must read
+/// the printed query as that grouping. The flag: ClickHouse reads the text as written another
+/// way (the security review of 2026-10-26 on Laysi/trustiot-v2#143).
+const PRECEDENCE: &[(&str, &str, bool)] = &[
+    (
+        "SELECT 1 + 2 || 3 FROM trustiot.tenant_telemetry",
+        "SELECT 1 + (2 || 3) FROM trustiot.tenant_telemetry",
+        true,
+    ),
+    (
+        "SELECT 1 FROM trustiot.tenant_telemetry WHERE point = 'a' || 'b' + 1",
+        "SELECT 1 FROM trustiot.tenant_telemetry WHERE point = (('a' || 'b') + 1)",
+        true,
+    ),
+    (
+        "SELECT 'a' LIKE 'a' = 0 FROM trustiot.tenant_telemetry",
+        "SELECT 'a' LIKE ('a' = 0) FROM trustiot.tenant_telemetry",
+        true,
+    ),
+    (
+        "SELECT 1 BETWEEN 0 AND 2 = 0 FROM trustiot.tenant_telemetry",
+        "SELECT (1 BETWEEN 0 AND 2) = 0 FROM trustiot.tenant_telemetry",
+        true,
+    ),
+    (
+        "SELECT 2 * 3 || 4, -1 || 2 FROM trustiot.tenant_telemetry",
+        "SELECT (2 * 3) || 4, (-1) || 2 FROM trustiot.tenant_telemetry",
+        false,
+    ),
+    (
+        "SELECT 0 = NULL IS NULL, NOT 0 IS NULL, 1 = 1 IN (0), 1 IN (1) = 0, 1 < 2 = 1 FROM trustiot.tenant_telemetry",
+        "SELECT (0 = NULL) IS NULL, NOT (0 IS NULL), (1 = 1) IN (0), (1 IN (1)) = 0, (1 < 2) = 1 FROM trustiot.tenant_telemetry",
+        false,
+    ),
+    (
+        "SELECT 'a' || 'b' LIKE 'ab', -2 * -3, - -2 FROM trustiot.tenant_telemetry",
+        "SELECT ('a' || 'b') LIKE 'ab', (-2) * (-3), -(-2) FROM trustiot.tenant_telemetry",
+        false,
+    ),
 ];
 
 /// A token as the assistant's token exchange makes it: `act` is the assistant.
@@ -361,6 +404,19 @@ async fn functions_are_clickhouses(stack: &Stack) {
             "{combinator} is not one or two of ClickHouse's combinators"
         );
     }
+}
+
+/// The check's canonical text of `sql`, which must pass.
+fn canonical(sql: &str) -> String {
+    let sql = sql.to_owned();
+    std::thread::Builder::new()
+        .stack_size(telemetry_query::sql::STACK_BYTES)
+        .spawn(move || check(&sql, 200))
+        .expect("a thread")
+        .join()
+        .expect("the check does not panic")
+        .unwrap_or_else(|error| panic!("{error:?}"))
+        .canonical
 }
 
 /// `EXPLAIN AST` of `sql` as the admin.
@@ -786,20 +842,10 @@ async fn the_endpoint_runs_only_checked_selects_as_the_callers_tenant() {
     assert_eq!(probes.trim(), "0", "a refused statement reached ClickHouse");
     eprintln!("endpoint query_log: tenant accounts ran {kinds:?}; refused statements in it: 0");
 
-    // 7. ClickHouse parses what the check prints as it parses what was written, and knows every
-    //    allowed function.
+    // 7. ClickHouse parses what the check prints as it parses what was written, groups the
+    //    operators as sqlparser did, and knows every allowed function.
     for sql in AS_WRITTEN {
-        let canonical = {
-            let sql = (*sql).to_owned();
-            std::thread::Builder::new()
-                .stack_size(telemetry_query::sql::STACK_BYTES)
-                .spawn(move || check(&sql, 200))
-                .expect("a thread")
-                .join()
-                .expect("the check does not panic")
-                .unwrap_or_else(|error| panic!("{error:?}"))
-                .canonical
-        };
+        let canonical = canonical(sql);
         assert_eq!(
             ast(&stack, sql).await,
             ast(&stack, &canonical).await,
@@ -810,6 +856,28 @@ async fn the_endpoint_runs_only_checked_selects_as_the_callers_tenant() {
         "endpoint: {} queries parse alike as written and as printed",
         AS_WRITTEN.len()
     );
+    for (written, grouped, differs) in PRECEDENCE {
+        let canonical = canonical(written);
+        let printed = ast(&stack, &canonical).await;
+        assert_eq!(
+            printed,
+            ast(&stack, grouped).await,
+            "ClickHouse groups the printed query as sqlparser did: {written}\n{canonical}"
+        );
+        assert_eq!(
+            ast(&stack, written).await != printed,
+            *differs,
+            "{written}: whether ClickHouse groups the text as written otherwise"
+        );
+        eprintln!(
+            "endpoint grouping {written:>58} -> {canonical}{}",
+            if *differs {
+                " (ClickHouse groups the text as written otherwise)"
+            } else {
+                ""
+            }
+        );
+    }
     functions_are_clickhouses(&stack).await;
     eprintln!(
         "endpoint: {} allowed functions and {} combinators are the pinned ClickHouse's",

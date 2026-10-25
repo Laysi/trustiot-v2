@@ -26,6 +26,7 @@ use service_kit::tenant::TenantDb;
 use sqlx::postgres::{PgConnectOptions, PgPoolOptions, PgSslMode};
 use telemetry_query::accounts::Accounts;
 use telemetry_query::clickhouse::ClickHouse;
+use telemetry_query::sql::check::MAX_ADDED_NESTING;
 use telemetry_query::sql::lexer::{MAX_IDENTIFIER_BYTES, MAX_TOKENS, tokens};
 use telemetry_query::sql::{CheckError, check_on_thread};
 use testkit::identity::TestIssuer;
@@ -265,6 +266,165 @@ async fn deep_and_long_queries_are_too_complex_and_never_overflow_the_stack() {
         vec!["value_int + 1"; 500].join(", ")
     );
     passes(&wide).await;
+}
+
+/// A query of the given size, built from one repeated shape.
+type Shape = fn(usize) -> String;
+
+/// A query that puts the given select list inside the given number of levels.
+type Around = fn(usize, &str) -> String;
+
+/// The printed text is longer and nests deeper than what was written: `trustiot.` before each
+/// view and the parentheses around operands. A query within the limits as written and over them
+/// as printed is the caller's too long or too complex query, never a failure of the check (the
+/// security review of 2026-10-26 on Laysi/trustiot-v2#143 found the first three as a 500).
+#[tokio::test]
+async fn a_query_over_the_limits_only_as_printed_is_refused_as_such() {
+    let minus = format!("SELECT {}1 FROM tenant_telemetry", "- ".repeat(24));
+    let deeper = format!(
+        "SELECT {}1 FROM tenant_telemetry",
+        "- ".repeat(MAX_ADDED_NESTING + 2)
+    );
+    let mut long = String::from("SELECT tenant_telemetry.x");
+    while long.len() + ", tenant_telemetry.x FROM tenant_telemetry".len() <= MAX_SQL_BYTES as usize
+    {
+        long.push_str(", tenant_telemetry.x");
+    }
+    long.push_str(" FROM tenant_telemetry");
+    let joins = format!(
+        "SELECT point FROM tenant_telemetry AS t0 {}",
+        (1..=350)
+            .map(|n| format!("JOIN tenant_telemetry AS t{n} USING (point) "))
+            .collect::<String>()
+    );
+    let comparisons = format!(
+        "SELECT point FROM tenant_telemetry WHERE {}",
+        vec!["point = 'a'"; 60].join(" = ")
+    );
+    for (name, sql, passes) in [
+        ("24 unary minus signs", minus, true),
+        ("a column list up to the size limit", long, false),
+        ("350 joins", joins, false),
+        (
+            "more unary minus signs than the rewrite may nest",
+            deeper,
+            false,
+        ),
+        ("60 chained comparisons", comparisons, false),
+    ] {
+        assert!(sql.len() <= MAX_SQL_BYTES as usize, "{name}: {}", sql.len());
+        assert!(tokens(&sql).is_ok(), "{name}: within the lexer's limits");
+        match check_on_thread(sql, 200).await {
+            Ok(_) if passes => {}
+            Err(CheckError::Refused(SqlRefusal::TooLong { .. } | SqlRefusal::TooComplex))
+                if !passes => {}
+            other => panic!("{name}: passes {passes}, got {other:?}"),
+        }
+    }
+    // At the parser's recursion limit, sqlparser reads `NOT value_bool` as a column named `NOT`
+    // with an alias, a tree that depends on the limit: refused, never run as that column.
+    let misread = format!(
+        "{}SELECT NOT value_bool FROM tenant_telemetry{}",
+        "SELECT * FROM (".repeat(23),
+        ")".repeat(23)
+    );
+    match check_on_thread(misread.clone(), 200).await {
+        Err(CheckError::Refused(SqlRefusal::Syntax { .. } | SqlRefusal::TooComplex)) => {}
+        other => panic!("{misread}: expected a refusal, got {other:?}"),
+    }
+    // Each shape the printing nests, at every size up to well past the parser's recursion
+    // limit: it passes or is refused, never a failure of the check.
+    let shapes: [(&str, Shape); 8] = [
+        ("unary minus", |n| {
+            format!("SELECT {}value_int FROM tenant_telemetry", "-".repeat(n))
+        }),
+        ("NOT", |n| {
+            format!(
+                "SELECT {}value_bool FROM tenant_telemetry",
+                "NOT ".repeat(n)
+            )
+        }),
+        ("IS NULL", |n| {
+            format!(
+                "SELECT value_int{} FROM tenant_telemetry",
+                " IS NULL".repeat(n)
+            )
+        }),
+        ("comparisons in a call", |n| {
+            format!(
+                "SELECT if({}, 1, 0) FROM tenant_telemetry",
+                vec!["1"; n + 1].join(" = ")
+            )
+        }),
+        ("BETWEEN", |n| {
+            format!(
+                "SELECT 1{} FROM tenant_telemetry",
+                " BETWEEN 0 AND 2".repeat(n)
+            )
+        }),
+        ("mixed ranks", |n| {
+            format!(
+                "SELECT 1{} FROM tenant_telemetry",
+                " * 2 + 3 || 'x'".repeat(n)
+            )
+        }),
+        ("casts with ::", |n| {
+            format!(
+                "SELECT value_int{} FROM tenant_telemetry",
+                "::Float64".repeat(n)
+            )
+        }),
+        ("LIKE", |n| {
+            format!("SELECT 'a'{} FROM tenant_telemetry", " LIKE 'a'".repeat(n))
+        }),
+    ];
+    // Inside written parentheses, or subqueries, that use up the parser's limit as written.
+    let around: [(&str, Around); 2] = [
+        ("parentheses", |p, inner| {
+            format!(
+                "SELECT {}{inner}{} FROM tenant_telemetry",
+                "(".repeat(p),
+                ")".repeat(p)
+            )
+        }),
+        ("subqueries", |p, inner| {
+            format!(
+                "{}SELECT {inner} FROM tenant_telemetry{}",
+                "SELECT * FROM (".repeat(p),
+                ")".repeat(p)
+            )
+        }),
+    ];
+    for (name, shape) in shapes {
+        for n in 1..=120 {
+            let sql = shape(n);
+            if let Err(CheckError::Internal(reason)) = check_on_thread(sql.clone(), 200).await {
+                panic!("{name} × {n}: {reason}\n{sql}");
+            }
+        }
+        for (outer, wrap) in around {
+            for p in 0..=50 {
+                for n in [
+                    1,
+                    MAX_ADDED_NESTING - 1,
+                    MAX_ADDED_NESTING,
+                    MAX_ADDED_NESTING + 1,
+                ] {
+                    let inner = shape(n);
+                    let inner = inner
+                        .strip_prefix("SELECT ")
+                        .and_then(|rest| rest.split_once(" FROM tenant_telemetry"))
+                        .map_or_else(|| "1".to_owned(), |(columns, _)| columns.to_owned());
+                    let sql = wrap(p, &inner);
+                    if let Err(CheckError::Internal(reason)) =
+                        check_on_thread(sql.clone(), 200).await
+                    {
+                        panic!("{name} × {n} in {p} {outer}: {reason}\n{sql}");
+                    }
+                }
+            }
+        }
+    }
 }
 
 #[tokio::test]

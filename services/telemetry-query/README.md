@@ -74,9 +74,9 @@
 - **檢查**是純函式、不做 I/O，被拒絕的語句不會到 Postgres 或 ClickHouse：
   1. 字元：反斜線、控制字元、非 ASCII 的空白與不可見的格式字元一律拒絕。
   2. token：只接受一般識別字（`[A-Za-z_][A-Za-z0-9_]*`，最多 128 bytes）、十進位數字、`'…'` 字串、`--` 與 `/* */` 註解和固定的運算子，最多 4096 個 token；第一個字是 `SELECT`、`WITH` 或 `(`，`;` 之後不能再有東西。
-  3. 以 sqlparser 的 ClickHouse 方言解析（遞迴上限 50），只能是一個查詢。
+  3. 以 sqlparser 的 ClickHouse 方言解析（遞迴上限 50），只能是一個查詢。sqlparser 讀不成運算式的關鍵字（例如沒有 `WHEN` 的 `case`、沒有括號的 `cast`）會退回當成名稱，ClickHouse 不會這樣讀，所以名稱是這些關鍵字時當作解析不了（`syntax`）。
   4. 走訪語法樹，沒有列出的一律拒絕：只能讀三個租戶 view（`tenant_telemetry`、`tenant_telemetry_1m`、`tenant_telemetry_1h`，可省略 `trustiot.`）與查詢自己的 CTE，而且至少讀一個 view；不能有 `SETTINGS`、`FORMAT`、`INTO`、`FINAL`、`SAMPLE`、`PREWHERE`、`WITH TOTALS`、`WITH FILL`、table function 等；函式只能用白名單（`src/sql/functions.rs`，聚合函式可加 `If`、`OrNull`、`OrDefault`、`Distinct` 這幾種組合子）；分桶、格式化或讀取時間的函式要寫明時區字串，例如 `toStartOfDay(bucket, 'Asia/Taipei')`。
-  5. 把檢查過的樹印回文字：去掉註解、view 補上 `trustiot.`、別名一律帶 `AS`、`CAST` 改成轉換函式、函式名稱改成 ClickHouse 定義的拼法。印出的文字再完整檢查一次，必須得到同一棵樹與同一段文字，然後加上 `LIMIT max_rows + 1` 與 `FORMAT JSONCompactEachRowWithNamesAndTypes`。送給 ClickHouse 的只有這段文字。
+  5. 把檢查過的樹印回文字：去掉註解、view 補上 `trustiot.`、別名一律帶 `AS`、`CAST` 改成轉換函式、函式名稱改成 ClickHouse 定義的拼法，而且每個本身是運算的運算元都加上括號（`1 + 2 || 3` 印成 `1 + (2 || 3)`）：sqlparser 與 ClickHouse 的運算子優先順序不同，括號讓 ClickHouse 照檢查過的分組讀（`tests/sql_api.rs` 以 ClickHouse 的 `EXPLAIN AST` 比對）。同一串 `+`/`-`、`*`/`/`/`%`、`||`、`AND`、`OR` 不加括號，因為兩邊都由左往右讀。印出的文字再完整檢查一次，必須得到同一棵樹與同一段文字，然後加上 `LIMIT max_rows + 1` 與 `FORMAT JSONCompactEachRowWithNamesAndTypes`。送給 ClickHouse 的只有這段文字。加上的括號讓巢狀變深，所以印出的文字以較高的遞迴上限讀回，一條路徑上加上的括號最多 24 層（`MAX_ADDED_NESTING`）；超過時，或印出的文字超過 16 KiB 或 4096 個 token，都是查詢的問題，回 `too_complex` 或 `too_long`，不是 500。
 
   檢查在自己的執行緒上跑（16 MiB 的 stack），每個副本最多同時 4 個（`MAX_CONCURRENT_CHECKS`），其餘等待；呼叫端不再等待時，執行緒照樣佔著名額直到結束。
 - **執行**：與歷史 API 相同，先確認租戶帳號已建立、仍是服務建立的樣子並帶著可查期間（`Accounts::verify`），再以租戶帳號執行；ClickHouse 的回答最多讀 8 MiB（`MAX_RESULT_BYTES`）。列數超過 `max_rows` 時整個拒絕（`too_many_rows`），不截斷，模型不會拿到不完整的答案還不知道。
@@ -99,8 +99,8 @@
 
 | `class` | 欄位 | 何時 |
 | --- | --- | --- |
-| `too_long` | `max_bytes` | SQL 超過 16 KiB |
-| `too_complex` | | token 太多或巢狀太深 |
+| `too_long` | `max_bytes` | SQL 超過 16 KiB，或印回的文字（補上 `trustiot.`、加上括號）超過 |
+| `too_complex` | | token 太多或巢狀太深，包括印回時加上的 token 與括號 |
 | `syntax` | `line`、`column`（知道時） | 解析不了 |
 | `character_not_allowed` | `line`、`column` | 檢查第 1 步的字元 |
 | `literal_not_allowed` | `line`、`column` | 第 2 步以外的 token：引號識別字、其他形式的字串或數字、參數等 |

@@ -1,7 +1,8 @@
 //! Steps 1 to 3 of the check: the size, the characters, and every token, before anything is
-//! parsed. The rules close the places where sqlparser and ClickHouse read the same text
+//! parsed. The rules close the places where sqlparser and ClickHouse tokenize the same text
 //! differently (backslash escapes, hex and binary numbers, quoted identifiers, Unicode spaces),
-//! so the tree the checker sees is the tree ClickHouse runs.
+//! so both read the same tokens. How they group operators is the walk's part
+//! ([`super::check`]).
 
 use contract::api::telemetry_query::{MAX_SQL_BYTES, SqlRefusal};
 use sqlparser::dialect::ClickHouseDialect;

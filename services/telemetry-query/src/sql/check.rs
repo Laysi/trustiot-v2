@@ -5,8 +5,9 @@
 //!
 //! The walk also rewrites the tree into the form the service sends: views named with their
 //! database, every table alias with `AS`, `CAST` and `::` as conversion functions, `FLOOR`,
-//! `CEIL` and `SUBSTRING` as the functions they are, and every function in the spelling
-//! ClickHouse defines.
+//! `CEIL` and `SUBSTRING` as the functions they are, every function in the spelling ClickHouse
+//! defines, and every operand that is itself an operation in parentheses ([`enclose`]), so
+//! ClickHouse groups the printed text as sqlparser grouped it.
 
 use contract::api::telemetry_query::{SqlClause, SqlRefusal};
 use sqlparser::ast::{
@@ -41,6 +42,18 @@ pub const VIEWS: [&str; 3] = [
 /// which it builds in a loop.
 pub const MAX_DEPTH: usize = 256;
 
+/// How many levels of parentheses the rewrite may add on one path of the tree: around operands
+/// ([`enclose`]), and the call of `x::T` written as `toT(x)`. Each costs sqlparser one level of
+/// recursion when the printed text is read back, which [`READ_BACK_RECURSION_LIMIT`] allows for,
+/// so a printed query never fails its read-back on the parser's limit.
+pub const MAX_ADDED_NESTING: usize = 24;
+
+/// The parser's recursion limit for the read-back of a printed query: what the query as written
+/// was parsed with ([`super::RECURSION_LIMIT`]), [`MAX_ADDED_NESTING`], and room for the
+/// service's row-limit wrapper, `SELECT * FROM (…)` (two levels; eight allowed). The printed
+/// tree must still be the one checked, so the read-back accepts nothing deeper than that tree.
+pub const READ_BACK_RECURSION_LIMIT: usize = super::RECURSION_LIMIT + MAX_ADDED_NESTING + 8;
+
 type Checked<T = ()> = Result<T, SqlRefusal>;
 
 fn clause(clause: SqlClause) -> SqlRefusal {
@@ -53,6 +66,8 @@ pub struct Checker {
     /// The common table expressions in scope, innermost last.
     scopes: Vec<Vec<String>>,
     depth: usize,
+    /// Levels of parentheses the rewrite added on the current path ([`MAX_ADDED_NESTING`]).
+    added: usize,
     reads_view: bool,
 }
 
@@ -615,6 +630,33 @@ impl Checker {
         Ok(())
     }
 
+    /// Walks `operand` after [`enclose`].
+    fn operand(&mut self, operand: &mut Expr) -> Checked {
+        let added = enclose(operand);
+        self.added_nesting(added, |checker| checker.expr(operand))
+    }
+
+    /// Walks the left operand of `op` after [`enclose_left`].
+    fn left_operand(&mut self, operand: &mut Expr, op: &BinaryOperator) -> Checked {
+        let added = enclose_left(operand, op);
+        self.added_nesting(added, |checker| checker.expr(operand))
+    }
+
+    /// Runs `step` one level of [`MAX_ADDED_NESTING`] deeper when the rewrite `added` a level
+    /// of parentheses around what `step` walks.
+    fn added_nesting(&mut self, added: bool, step: impl FnOnce(&mut Self) -> Checked) -> Checked {
+        if !added {
+            return step(self);
+        }
+        if self.added >= MAX_ADDED_NESTING {
+            return Err(SqlRefusal::TooComplex);
+        }
+        self.added += 1;
+        let result = step(self);
+        self.added -= 1;
+        result
+    }
+
     fn expr(&mut self, expr: &mut Expr) -> Checked {
         self.descend(|checker| {
             if let Some(rewritten) = checker.expr_kind(expr)? {
@@ -627,32 +669,20 @@ impl Checker {
     /// Checks one expression node; `Some` is the node to put in its place.
     fn expr_kind(&mut self, expr: &mut Expr) -> Checked<Option<Expr>> {
         match expr {
-            Expr::Identifier(_) | Expr::CompoundIdentifier(_) => {}
+            Expr::Identifier(ident) => name(ident)?,
+            Expr::CompoundIdentifier(parts) => parts.iter().try_for_each(name)?,
             Expr::Value(value) => literal(value)?,
-            // sqlparser prints `- -1` as `--1`, a comment to ClickHouse: the inner minus gets
-            // parentheses.
-            Expr::UnaryOp {
-                op: UnaryOperator::Minus,
-                expr: inner,
-            } if matches!(
-                **inner,
-                Expr::UnaryOp {
-                    op: UnaryOperator::Minus,
-                    ..
-                }
-            ) =>
-            {
-                let operand = take(inner);
-                **inner = Expr::Nested(Box::new(operand));
-                self.expr(inner)?;
-            }
-            Expr::Nested(inner)
-            | Expr::IsNull(inner)
+            Expr::Nested(inner) => self.expr(inner)?,
+            // The operand in parentheses also keeps sqlparser from printing `- -1` as `--1`, a
+            // comment to ClickHouse.
+            Expr::IsNull(inner)
             | Expr::IsNotNull(inner)
             | Expr::UnaryOp {
                 op: UnaryOperator::Plus | UnaryOperator::Minus | UnaryOperator::Not,
                 expr: inner,
-            } => self.expr(inner)?,
+            } => {
+                self.operand(inner)?;
+            }
             Expr::Tuple(items)
             | Expr::Array(Array {
                 elem: items,
@@ -664,8 +694,8 @@ impl Checker {
             }
             Expr::BinaryOp { left, op, right } => {
                 operator(op)?;
-                self.expr(left)?;
-                self.expr(right)?;
+                self.left_operand(left, op)?;
+                self.operand(right)?;
             }
             Expr::Between {
                 expr,
@@ -673,9 +703,9 @@ impl Checker {
                 low,
                 high,
             } => {
-                self.expr(expr)?;
-                self.expr(low)?;
-                self.expr(high)?;
+                for operand in [expr, low, high] {
+                    self.operand(operand)?;
+                }
             }
             Expr::Like {
                 negated: _,
@@ -697,15 +727,16 @@ impl Checker {
                 if escape_char.is_some() {
                     return Err(clause(SqlClause::Escape));
                 }
-                self.expr(expr)?;
-                self.expr(pattern)?;
+                for operand in [expr, pattern] {
+                    self.operand(operand)?;
+                }
             }
             Expr::InList {
                 expr,
                 list,
                 negated: _,
             } => {
-                self.expr(expr)?;
+                self.operand(expr)?;
                 // ClickHouse reads a name in an IN list as a table (`x IN (system.one)`).
                 for item in list {
                     in_list_literal(item)?;
@@ -716,7 +747,7 @@ impl Checker {
                 subquery,
                 negated: _,
             } => {
-                self.expr(expr)?;
+                self.operand(expr)?;
                 self.query(subquery)?;
             }
             Expr::Exists {
@@ -743,11 +774,11 @@ impl Checker {
                 }
             }
             Expr::CompoundFieldAccess { root, access_chain } => {
-                self.expr(root)?;
+                self.operand(root)?;
                 for access in access_chain {
                     match access {
                         AccessExpr::Subscript(Subscript::Index { index }) => self.expr(index)?,
-                        AccessExpr::Dot(Expr::Identifier(_)) => {}
+                        AccessExpr::Dot(Expr::Identifier(ident)) => name(ident)?,
                         AccessExpr::Subscript(Subscript::Slice { .. }) | AccessExpr::Dot(_) => {
                             return Err(clause(SqlClause::Expression));
                         }
@@ -766,7 +797,9 @@ impl Checker {
                     return Err(clause(SqlClause::CastType));
                 }
                 let function = conversion(data_type).ok_or(clause(SqlClause::CastType))?;
-                self.expr(expr)?;
+                // `x::T` prints as `toT(x)`: a level of parentheses the text did not have.
+                let added = matches!(kind, CastKind::DoubleColon);
+                self.added_nesting(added, |checker| checker.expr(expr))?;
                 return Ok(Some(call(function, vec![take(expr)])));
             }
             Expr::Floor { expr, field } => return self.rounding("floor", expr, field).map(Some),
@@ -945,13 +978,74 @@ impl Checker {
             OneOrManyWithParens::One(param) => std::slice::from_ref(param),
             OneOrManyWithParens::Many(params) => params.as_slice(),
         };
-        for LambdaFunctionParameter { name: _, data_type } in params {
+        for LambdaFunctionParameter {
+            name: parameter,
+            data_type,
+        } in params
+        {
             if data_type.is_some() {
                 return Err(clause(SqlClause::Lambda));
             }
+            name(parameter)?;
         }
         self.expr(body)
     }
+}
+
+/// The words sqlparser 0.63 reads as the start of an expression (`NOT x`, `CASE …`,
+/// `INTERVAL …`; its `parse_expr_prefix_by_reserved_word`) and, when that fails, as a plain
+/// name instead. It fails on malformed syntax, and at the parser's recursion limit even on
+/// valid syntax: deep enough, `SELECT NOT value_bool` reads as a column named `NOT` with the
+/// alias `value_bool`, a tree that depends on the limit and that ClickHouse reads otherwise.
+/// Such a name in the tree is a misread, refused where it stands ([`name`]).
+const FALLBACK_WORDS: [&str; 31] = [
+    "TRUE",
+    "FALSE",
+    "NULL",
+    "CURRENT_TIMESTAMP",
+    "CURRENT_TIME",
+    "CURRENT_DATE",
+    "LOCALTIME",
+    "LOCALTIMESTAMP",
+    "CASE",
+    "CONVERT",
+    "TRY_CONVERT",
+    "CAST",
+    "TRY_CAST",
+    "SAFE_CAST",
+    "EXISTS",
+    "EXTRACT",
+    "CEIL",
+    "FLOOR",
+    "POSITION",
+    "SUBSTR",
+    "SUBSTRING",
+    "OVERLAY",
+    "TRIM",
+    "INTERVAL",
+    "ARRAY",
+    "NOT",
+    "MATCH",
+    "STRUCT",
+    "PRIOR",
+    "MAP",
+    "LAMBDA",
+];
+
+/// A name in an expression: a column, a part of one, or a lambda parameter. One of
+/// [`FALLBACK_WORDS`] is a misread the parser left in the tree, refused as a syntax error at
+/// its position.
+fn name(ident: &Ident) -> Checked {
+    if FALLBACK_WORDS
+        .iter()
+        .any(|word| word.eq_ignore_ascii_case(&ident.value))
+    {
+        return Err(SqlRefusal::Syntax {
+            line: u32::try_from(ident.span.start.line).ok(),
+            column: u32::try_from(ident.span.start.column).ok(),
+        });
+    }
+    Ok(())
 }
 
 /// The parts of `name` when each is a plain identifier.
@@ -1261,4 +1355,78 @@ fn call(name: &str, args: Vec<Expr>) -> Expr {
 
 fn take(expr: &mut Expr) -> Expr {
     std::mem::replace(expr, Expr::Value(Value::Null.into()))
+}
+
+/// Puts `operand` in parentheses unless it delimits itself. sqlparser and ClickHouse rank some
+/// operators differently (`||` above `+` in sqlparser and below it in ClickHouse; `LIKE`,
+/// `BETWEEN` and `=` against each other), and sqlparser prints a tree without the parentheses
+/// its own grouping needs: with each operand that is itself an operation in parentheses, the
+/// printed text has one grouping, which both read as the checked tree. Called before the walk
+/// goes into the operand, so the read-back's walk meets the same tree at the same depths.
+/// Whether it added the parentheses.
+fn enclose(operand: &mut Expr) -> bool {
+    if delimits_itself(operand) {
+        return false;
+    }
+    let inner = take(operand);
+    *operand = Expr::Nested(Box::new(inner));
+    true
+}
+
+/// [`enclose`] for the left operand of `op`, but for an operation of the same [`Chain`]: both
+/// parsers read `a - b + c`, `a * b / c`, `a || b || c`, `a AND b AND c` and `a OR b OR c` from
+/// the left, and a long chain stays flat for the parser's recursion limit.
+fn enclose_left(operand: &mut Expr, op: &BinaryOperator) -> bool {
+    if let Expr::BinaryOp { op: inner, .. } = operand
+        && chain(inner).is_some_and(|inner| chain(op) == Some(inner))
+    {
+        return false;
+    }
+    enclose(operand)
+}
+
+/// Binary operators of one rank in both parsers, which both group from the left.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Chain {
+    Additive,
+    Multiplicative,
+    Concat,
+    And,
+    Or,
+}
+
+fn chain(op: &BinaryOperator) -> Option<Chain> {
+    match op {
+        BinaryOperator::Plus | BinaryOperator::Minus => Some(Chain::Additive),
+        BinaryOperator::Multiply | BinaryOperator::Divide | BinaryOperator::Modulo => {
+            Some(Chain::Multiplicative)
+        }
+        BinaryOperator::StringConcat => Some(Chain::Concat),
+        BinaryOperator::And => Some(Chain::And),
+        BinaryOperator::Or => Some(Chain::Or),
+        _ => None,
+    }
+}
+
+/// Whether `expr` reads as one operand wherever it stands, in both parsers: a name, a literal,
+/// something in brackets or parentheses of its own, `CASE … END`, `EXISTS (…)`, or a call
+/// without `OVER` (`CAST`, `FLOOR`, `CEIL` and `SUBSTRING` print as calls).
+fn delimits_itself(expr: &Expr) -> bool {
+    match expr {
+        Expr::Identifier(_)
+        | Expr::CompoundIdentifier(_)
+        | Expr::Value(_)
+        | Expr::Nested(_)
+        | Expr::Tuple(_)
+        | Expr::Array(_)
+        | Expr::Subquery(_)
+        | Expr::Case { .. }
+        | Expr::Cast { .. }
+        | Expr::Floor { .. }
+        | Expr::Ceil { .. }
+        | Expr::Substring { .. }
+        | Expr::Exists { negated: false, .. } => true,
+        Expr::Function(function) => function.over.is_none(),
+        _ => false,
+    }
 }
