@@ -1,8 +1,8 @@
 # lab-dataset
 
-lab 資料集的工具（功能重建清單 M7，Laysi/trustiot-v2#679）：讀 `datasets/lab/<名稱>/index.toml`、檢查索引與分段檔，並把資料集照 ingest 服務的寫法寫進 ClickHouse 的遙測窄表與批次完成表。索引與分段檔的格式、版本化規則、合成 fixture 與下游測試的用法寫在 [datasets/lab/README.md](../../datasets/lab/README.md)，本頁只寫程式本身。
+lab 資料集的工具（功能重建清單 M7，Laysi/trustiot-v2#679）：讀 `datasets/lab/<名稱>/index.toml`、檢查索引與分段檔、插入人工異常片段，並把資料集照 ingest 服務的寫法寫進 ClickHouse 的遙測窄表與批次完成表；以及從實際設備錄製資料集。索引與分段檔的格式、人工異常片段、版本化規則、存放位置、錄製、合成 fixture 與下游測試的用法寫在 [datasets/lab/README.md](../../datasets/lab/README.md)，本頁只寫程式本身。
 
-同時是 library（給 ingest、telemetry-query、assistant 的 Rust 整合測試當 `[dev-dependencies]`）與指令（`lab-dataset check|load`，手動載入用）。
+同時是 library（給 ingest、telemetry-query、assistant 的 Rust 整合測試當 `[dev-dependencies]`）與指令（`lab-dataset check|load|record`，手動載入與錄製用）。
 
 | 模組 | 內容 |
 | --- | --- |
@@ -11,6 +11,7 @@ lab 資料集的工具（功能重建清單 M7，Laysi/trustiot-v2#679）：讀 
 | `time` | 唯一接受的時間寫法與 `TimeShift`（固定毫秒位移，`ending_before` 取整段位移） |
 | `anomaly` | 人工異常片段：`Anomaly`（`spike`、`outage`、`changeover` 與 `expecting`）、規則與套用到讀值的方式 |
 | `clickhouse` | 寫入 `trustiot.telemetry` 與 `trustiot.batch_commits`；`commit_batch` 是唯一寫完成紀錄的地方 |
+| `record` | 錄製工具：設定檔（`Config`）的檢查、以 agent 的 `polling::run` 與 `Endpoints` 輪詢、組批、寫分段檔與索引（`Recorder`、`Recorded`） |
 | `cli` | `lab-dataset` 指令的參數與執行 |
 | 根模組 | `Dataset`（`open`、`with_anomalies`、`readings`、`recorded_readings`、`ids`、`load`）、`Target`、`Loaded`、`derived_id`、`synthetic_index`、`index_for_tests` |
 
@@ -21,6 +22,8 @@ lab 資料集的工具（功能重建清單 M7，Laysi/trustiot-v2#679）：讀 
 - **ID**：設備與串流的 UUID 由 `derived_id`（SHA-256 前 16 bytes 的 UUID v8）從資料集名稱、租戶、閘道器與代號推導，可重現、各租戶不同；設備也可以由呼叫端指定（`Target::with_device`），重複或全零的 ID 被拒絕。
 - **HTTP**：用 migration Job 的 client（`migrate::http`）：`http://`，或只信任指定 CA 的 `https://`（`ClickHouse::new` 的 `ca_file`），URL 不能帶帳密；不用 reqwest 的理由見 `tools/migrate/src/http.rs`。`ClickHouse` 的 `Debug` 不印密碼，錯誤訊息只有 ClickHouse 的錯誤文字。
 - **人工異常片段只改值**：`anomaly::apply` 在讀值上改值（依讀值時間排序每個資料點，所以補送造成的亂序不影響），不增刪讀值，所以分段檔的雜湊、索引的筆數與批次都照舊成立；`open` 與 `with_anomalies` 套用一次來檢查需要讀值的規則，`readings` 與 `load` 每次重新套用。
+- **錄製工具放在這個 crate**：`lab-dataset record` 以 library 依賴 `edge/agent`（`modbus`、`polling`）與 `crates/protocol`（設定與 `BatchBuilder`），寫出的格式與檢查它的 `Dataset::open` 在同一個 crate，改格式時一起改。考慮過的另外兩個位置：放在 `edge/agent` 當第二個執行檔，會讓閘道器的 crate 依賴資料集格式、`chrono` 與 migration Job 的 HTTP client（`ring`），而 `edge/` 要能不靠 C 工具鏈建置成 aarch64；另開一個 `tools/lab-recorder` crate，則多一個成員、還是要依賴本 crate 的索引型別與檢查，只為了把兩個指令分開。代價是本 crate（以及只為了載入而依賴它的服務測試）多了 agent 與 protocol 兩個 path 依賴，都是 workspace 內的 crate，沒有新的第三方依賴。
+- **錄製的時鐘**：讀值時間與接收時間都是開始時的系統時間加上 tokio 的單調時間，不在途中重讀系統時鐘，所以時鐘校正不會讓同一個資料點的時間倒退（那會違反「同一個時間只有一筆」與接收時間不倒退的規則）；測試以暫停的 tokio 時鐘（`testkit::clock::manual()`）讓讀值時間精確可比。
 - **SQL**：只有兩個靜態的 `INSERT ... FORMAT JSONEachRow`，資料放在 request body，不組 SQL 字串（`tools/sql-check`）。
 
 ## 指令
@@ -43,5 +46,6 @@ cargo test -p lab-dataset
 
 - 單元測試（`src/`）：索引與分段檔的每條規則各有違反的例子、時間的寫法與位移、ID 推導、寫入的 JSON 列、指令參數。
 - `tests/anomalies.rs`：在合成 fixture 上插入四種片段（突波、兩種停機，其中一段跨過 32 位元計數器的溢位、一段在補送的資料上，以及換料）：時間窗內的讀值照種類改變、窗外不變，累計資料點在窗內不動、窗外每一步的增量與原本相同；標註原樣保留；寫在索引的 `[[anomalies]]` 與以 API 插入的結果相同，`check` 指令數得到它們，README 的索引範例可以解析；時間窗內沒有讀值、停機跨過歸零、代號重複、沒有標註的片段被拒絕。
+- `tests/record.rs`：以 testkit 的假 RS485 轉換器（`FakeModbus`，`Transport::RtuOverTcp`）在同一個端點放站號 1、2 兩台設備（五個資料點，四種值型別，兩個會溢位的計數器），在暫停的時鐘上每秒推進、等每次輪詢結束才再推進，錄 10 秒：兩台設備共用一條連線、只送功能碼 1–4；錄出的資料集通過 `Dataset::open`，每筆讀值的時間與值等於端點當時提供的；索引沒有位址或 port、轉換器只有邏輯代號；批次每 4 秒一批、分段在批次之間切開；寫進已存在的目錄被拒絕；最後載入套用產品 schema 的暫時 ClickHouse（與 `clickhouse_load.rs` 相同的容器規則），每個資料點的筆數與完成紀錄數等於索引。單元測試（`src/record.rs`）涵蓋設定檔的每條規則、`type` 的推導、超出 `wraps_at` 的讀值被略過、README 的設定範例可以使用。
 - `tests/synthetic_fixture.rs`：合成 fixture 通過檢查，並從檔案內容確認它涵蓋累計電表歸零、計數器溢位、資料缺漏、亂序與補送、同一台轉換器下兩台設備與未完成的批次；改過一個數字、目錄名稱不符、symlink 指到目錄外的副本都被拒絕。
 - `tests/clickhouse_load.rs`：以 podman 或 docker 起暫時的 ClickHouse 容器（`services/ingest/tests/common/mod.rs` 的 `start_throwaway`，以 `#[path]` 引用；沒有容器執行環境時略過，設了 `CI` 時失敗）。一律用容器、不用 `TEST_CLICKHOUSE_URL`：測試會停掉 merge、建一個讀得到所有列的帳號，這些不能留在共用的伺服器上，套用 migration Job 的 `PRODUCT` ClickHouse schema，以 library 載入租戶 A、以 `lab-dataset load` 指令載入租戶 B，逐項比對：總筆數與每個資料點的筆數等於索引；每一列的 ID、位移後的時間與值；每批一個 part、依抵達順序寫入（停掉 merge 後比對 `_part` 的 block 編號）；未完成以外的每批都有正確的完成紀錄；兩個租戶的設備與串流 ID 不重疊。第三個租戶載入插入了 `tests/support` 的片段的資料集：每一列等於套用片段後的讀值，`Loaded::anomalies` 的時間窗等於參數加上位移，ClickHouse 裡讀成突波值的列剛好是時間窗內的那幾筆。

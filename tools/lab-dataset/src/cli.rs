@@ -1,19 +1,22 @@
-//! The `lab-dataset` command: checks a dataset, or loads it into a ClickHouse given by the
-//! environment. Credentials come only from the environment, never from arguments
-//! (docs/architecture/secrets.md, rule 3).
+//! The `lab-dataset` command: checks a dataset, loads it into a ClickHouse given by the
+//! environment, or records one from Modbus devices. Credentials come only from the environment,
+//! never from arguments (docs/architecture/secrets.md, rule 3).
 
 use std::path::PathBuf;
+use std::time::Duration;
 
 use chrono::{DateTime, TimeDelta, Utc};
 use serde::Serialize;
 use uuid::Uuid;
 
+use crate::record::{Config, Recorder};
 use crate::{ClickHouse, Dataset, Target, TimeShift, time};
 
 pub const USAGE: &str = "usage:
   lab-dataset check <index.toml>
   lab-dataset load <index.toml> --tenant <uuid> --gateway <uuid> [--device <key>=<uuid>]...
                    [--shift-ms <ms> | --end-before <now|time> [--align-s <seconds>]]
+  lab-dataset record <config.toml> --out <dir> [--duration-s <seconds>]
 
 load writes into the ClickHouse named by the environment:
   CLICKHOUSE_URL       http://host:port or https://host:port (no credentials in it)
@@ -23,7 +26,12 @@ load writes into the ClickHouse named by the environment:
 
 --end-before moves the dataset by whole multiples of --align-s (default 86400, one day) so that
 its last time falls at or just before the given time; --shift-ms moves it by exactly that much.
-Without either, the dataset's own times are written.";
+Without either, the dataset's own times are written.
+
+record polls the devices of the configuration (it names converter addresses: keep it outside
+the repository) and writes the dataset to <dir>/<name>/, which must not exist yet, until
+--duration-s has passed or Ctrl-C. Stop the gateway agent's polling of the same converters
+first: a converter serves one master at a time.";
 
 /// The environment variables of `load`.
 pub const URL_ENV: &str = "CLICKHOUSE_URL";
@@ -56,6 +64,12 @@ pub enum Command {
         devices: Vec<(String, Uuid)>,
         shift: Shift,
     },
+    Record {
+        config: PathBuf,
+        out: PathBuf,
+        /// `None`: until Ctrl-C.
+        duration: Option<Duration>,
+    },
 }
 
 fn uuid(flag: &str, text: &str) -> Result<Uuid, String> {
@@ -81,7 +95,55 @@ pub fn parse(args: &[String]) -> Result<Command, String> {
         "check" if rest.is_empty() => Ok(Command::Check { index }),
         "check" => Err("check takes only the index file".to_owned()),
         "load" => parse_load(index, rest),
+        "record" => parse_record(index, rest),
         other => Err(format!("unknown command `{other}`")),
+    }
+}
+
+fn parse_record(config: PathBuf, rest: &[String]) -> Result<Command, String> {
+    let (mut out, mut duration) = (None, None);
+    let mut options = rest.iter();
+    while let Some(flag) = options.next() {
+        let value = options
+            .next()
+            .ok_or_else(|| format!("{flag} needs a value"))?;
+        match flag.as_str() {
+            "--out" if out.is_none() => out = Some(PathBuf::from(value)),
+            "--duration-s" if duration.is_none() => {
+                let seconds = value
+                    .parse::<u64>()
+                    .ok()
+                    .filter(|seconds| *seconds > 0)
+                    .ok_or_else(|| format!("--duration-s: `{value}` is not a positive number"))?;
+                duration = Some(Duration::from_secs(seconds));
+            }
+            "--out" | "--duration-s" => return Err(format!("{flag} is given twice")),
+            other => return Err(format!("unknown option `{other}`")),
+        }
+    }
+    Ok(Command::Record {
+        config,
+        out: out.ok_or("--out is required")?,
+        duration,
+    })
+}
+
+/// Completes at Ctrl-C, or after `duration` when one is given.
+async fn stop_after(duration: Option<Duration>) {
+    let interrupted = async {
+        if tokio::signal::ctrl_c().await.is_err() {
+            // Without signal handling, only the duration ends the recording.
+            std::future::pending::<()>().await;
+        }
+    };
+    match duration {
+        Some(duration) => {
+            tokio::select! {
+                () = tokio::time::sleep(duration) => {}
+                () = interrupted => {}
+            }
+        }
+        None => interrupted.await,
     }
 }
 
@@ -244,6 +306,19 @@ pub async fn run(command: Command, env: impl Fn(&str) -> Option<String>) -> Resu
                 .map_err(|error| error.to_string())?;
             serde_json::to_string_pretty(&loaded).map_err(|error| error.to_string())
         }
+        Command::Record {
+            config,
+            out,
+            duration,
+        } => {
+            let config = Config::read(&config).map_err(|error| error.to_string())?;
+            let recorder = Recorder::new(config).map_err(|error| error.to_string())?;
+            let recorded = recorder
+                .run(&out, Utc::now(), stop_after(duration))
+                .await
+                .map_err(|error| error.to_string())?;
+            serde_json::to_string_pretty(&recorded).map_err(|error| error.to_string())
+        }
     }
 }
 
@@ -308,6 +383,26 @@ mod tests {
     }
 
     #[test]
+    fn record_options() {
+        assert_eq!(
+            parse(&args("record lab.toml --out recordings --duration-s 60")).unwrap(),
+            Command::Record {
+                config: PathBuf::from("lab.toml"),
+                out: PathBuf::from("recordings"),
+                duration: Some(Duration::from_secs(60)),
+            }
+        );
+        assert_eq!(
+            parse(&args("record lab.toml --out recordings")).unwrap(),
+            Command::Record {
+                config: PathBuf::from("lab.toml"),
+                out: PathBuf::from("recordings"),
+                duration: None,
+            }
+        );
+    }
+
+    #[test]
     fn help() {
         assert_eq!(parse(&args("--help")).unwrap(), Command::Help);
         assert_eq!(parse(&args("help")).unwrap(), Command::Help);
@@ -350,6 +445,10 @@ mod tests {
                 "unknown option",
             ),
             (&format!("load i --tenant {T} --gateway"), "needs a value"),
+            ("record c.toml", "--out is required"),
+            ("record c.toml --out a --out b", "twice"),
+            ("record c.toml --out a --duration-s 0", "positive"),
+            ("record c.toml --out a --host x", "unknown option"),
         ] {
             let error = parse(&args(text)).expect_err(text);
             assert!(

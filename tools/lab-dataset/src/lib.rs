@@ -23,6 +23,7 @@ pub mod anomaly;
 pub mod cli;
 pub mod clickhouse;
 pub mod index;
+pub mod record;
 pub mod segment;
 pub mod time;
 
@@ -86,6 +87,8 @@ pub enum Error {
     },
     #[error("anomaly: {0}")]
     Anomaly(String),
+    #[error("record: {0}")]
+    Record(String),
     #[error("target: {0}")]
     Target(String),
     #[error("time: {0}")]

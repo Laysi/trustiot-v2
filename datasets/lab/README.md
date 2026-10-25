@@ -2,7 +2,7 @@
 
 lab 實機錄下的資料集的索引與標註（功能重建清單 M7）：供 AI 開發、警報回測、補送與分析回歸使用。資料集本身放物件儲存，這裡只放索引與標註，例如每段資料的來源、時間範圍、物件儲存位置，以及插入的人工異常片段與預期的觸發結果。唯一的例外是合成 fixture（[`synthetic/`](synthetic/)）：它很小、內容固定，資料檔直接進版控。
 
-讀索引、檢查資料與載入 ClickHouse 的程式是 [`tools/lab-dataset`](../../tools/lab-dataset/README.md)（Laysi/trustiot-v2#679）。
+讀索引、檢查資料、載入 ClickHouse 與錄製的程式是 [`tools/lab-dataset`](../../tools/lab-dataset/README.md)（Laysi/trustiot-v2#679）。
 
 ## 目錄結構
 
@@ -49,7 +49,7 @@ datasets/lab/
 | 欄位 | 說明 |
 | --- | --- |
 | `key` | 分段代號 |
-| `location` | 分段檔的位置：相對於索引所在目錄的路徑（合成 fixture，例如 `segments/part-1.jsonl`），或 `s3://<bucket>/<key>`（S3 相容的物件儲存，供應商到 Laysi/trustiot-v2#133 才選定）。相對路徑不能有 `.`、`..`、絕對路徑，指向的檔案（含 symlink 解析後）必須在資料集目錄內；目前只接受 `.jsonl` |
+| `location` | 分段檔的位置：相對於索引所在目錄的路徑（合成 fixture，例如 `segments/part-1.jsonl`），或 `s3://<bucket>/<key>`（S3 相容的物件儲存，見「存放位置與存取權限」；載入工具目前讀不了，要先下載）。相對路徑不能有 `.`、`..`、絕對路徑，指向的檔案（含 symlink 解析後）必須在資料集目錄內；目前只接受 `.jsonl` |
 | `bytes`、`sha256` | 檔案（以儲存的樣子）的大小與 SHA-256（小寫 16 進位）；分段檔最大 64 MiB，錄製工具依此切段 |
 | `rows` | 讀值筆數（行數） |
 | `reading_time`、`receive_time` | 讀值時間（`ts`）與接收時間（`received_at`）的最早與最晚值：`{ start = "…", end = "…" }` |
@@ -198,7 +198,16 @@ expect = [
 
 ## 存放位置與存取權限
 
-待定：在 Laysi/trustiot-v2#679 的第二階段決定並寫進本節。已確定的部分：`location` 用可搬移的 S3 相容 URI（`s3://<bucket>/<key>`），供應商到 Laysi/trustiot-v2#133 才選定；存取物件儲存的金鑰照 [docs/architecture/secrets.md](../../docs/architecture/secrets.md) 處理，不進 repo、不經指令參數。目前載入工具只讀相對路徑的分段檔，遇到 `s3://` 位置會回報尚未支援。
+2026-10-25 決定（Laysi/trustiot-v2#679）：
+
+- **S3 相容的物件儲存**。索引的 `location` 寫可搬移的 `s3://<bucket>/<key>`，不寫某一家供應商的網址，換供應商只改 bucket 的設定，不改索引格式。
+- **bucket 在 Laysi/trustiot-v2#133 選定**（供應商、區域與 bucket 名稱一起決定），現在不建立任何 bucket 或帳號。在那之前不上傳任何 lab 資料集，repo 裡只有合成 fixture（它的分段檔進版控，不放物件儲存）。
+- **鍵的配置依版本**，見「版本化規則」：`lab/<name>/v<version>/<segment>.jsonl`（壓縮格式與上傳一起在 Laysi/trustiot-v2#133 決定；壓縮後的檔名與 `sha256` 指的是儲存的樣子）。發布後的物件不覆寫、不刪除，舊的 commit 才能重跑當時的測試。
+- **公開讀取**：下載不需要任何憑證，任何人拿到 repo 就能重跑用到 lab 資料集的測試（例如 Laysi/trustiot-v2#681）。
+- **上傳只給維護者**：寫入物件儲存的憑證照 [docs/architecture/secrets.md](../../docs/architecture/secrets.md) 處理（不進 repo、不經指令參數、不寫進日誌），只發給維護者；CI 與測試只讀、不需要它。
+- **資料本身也公開**：上傳的分段檔任何人都下載得到，與索引一樣受「公開 repo 的資訊規則」約束：不能有客戶的資料、客戶的設備名稱、位址或主機名稱。lab 資料集只錄 lab 的設備，設備與資料點用通用名稱（`meter-1`、`power_kw`），轉換器只以邏輯代號出現（錄製工具寫出的索引本來就是這樣，見「錄製」）。上傳前先檢查分段檔的文字值（`string` 資料點）沒有這類內容。
+
+載入工具不讀 `s3://` 的位置：下載用的網址形式（路徑式或虛擬主機式、端點的網域）要等 Laysi/trustiot-v2#133 選定供應商才知道，現在寫死一種就可能要改。遇到 `s3://` 的分段時 `Dataset::open` 回報「not supported yet」，並說明要先把分段檔下載到索引旁邊、改用相對路徑。供應商選定後再加上直接下載（屆時一起決定快取的位置），索引格式不變。
 
 ## 下游測試怎麼載入資料集
 
@@ -234,7 +243,7 @@ let expected = dataset.readings()?;            // 預期值從資料集本身算
 
 ## 指令
 
-手動載入用 `lab-dataset` 指令（例如載入本地開發環境，步驟在第二階段補上）：
+手動載入用 `lab-dataset` 指令（載入本地開發環境的步驟見 [scripts/README.md](../../scripts/README.md)「載入 lab 資料集」）：
 
 ```sh
 # 只檢查索引與分段檔，印出摘要
@@ -246,7 +255,66 @@ CLICKHOUSE_URL=http://127.0.0.1:18123 CLICKHOUSE_USER=<帳號> CLICKHOUSE_PASSWO
   --tenant <租戶 UUID> --gateway <閘道器 UUID> --end-before now
 ```
 
-`https://` 的 ClickHouse 另外設 `CLICKHOUSE_CA_FILE`（只信任這個 CA）。選項見 `cargo run -p lab-dataset -- --help`：`--device <key>=<uuid>` 指定設備 ID，`--shift-ms` 指定確切的位移，`--end-before <now|時間>` 加 `--align-s`（預設 86400）取整段的位移。載入結果（與 `Loaded` 相同）以 JSON 印到標準輸出。
+`https://` 的 ClickHouse 另外設 `CLICKHOUSE_CA_FILE`（只信任這個 CA）。選項見 `cargo run -p lab-dataset -- --help`：`--device <key>=<uuid>` 指定設備 ID，`--shift-ms` 指定確切的位移，`--end-before <now|時間>` 加 `--align-s`（預設 86400）取整段的位移。載入結果（與 `Loaded` 相同，含位移後的人工異常片段）以 JSON 印到標準輸出。
+
+錄製見下一節：
+
+```sh
+cargo run --release -p lab-dataset -- record <repo 外的設定檔> --out <repo 外的目錄> [--duration-s <秒>]
+```
+
+## 錄製
+
+`lab-dataset record` 讀實際的設備，寫出本頁格式的資料集（索引加分段檔）；它就是 Laysi/trustiot-v2#680 到 lab 錄第一版時用的工具。
+
+- **用閘道器 agent 的程式讀設備**：設備與型號是 `crates/protocol` 的設定（`DeviceModel`、`Device`），先經過與閘道器相同的設定驗證；每台設備由 agent 的 `polling::run` 依固定節拍輪詢（逾時、重連退避、watchdog 都相同），連線由 `Endpoints` 分配，所以同一台 RS485 轉換器下的設備共用一條連線、一次一個請求，RTU 框架丟掉其他站號的回應（[edge/agent](../../edge/agent/README.md)，Laysi/trustiot-v2#87、Laysi/trustiot-v2#88）。讀取失敗的資料點沒有讀值，就是資料缺漏，與閘道器看到的一樣。
+- **錄製工具也是一個主站**：轉換器把每台設備的回應送給所有 TCP 連線（[現場硬限制](../../docs/requirements/field-constraints.md)），所以錄製期間不能有其他程式連同一台轉換器，包括 agent。[milestones](../../docs/roadmap/milestones.md)「展示切片」規定 agent 開始輪詢 lab 的 RS485 轉換器後，其他程式不再連它：Laysi/trustiot-v2#680 要在那之前錄。
+- **寫出的目錄**是 `--out` 之下以資料集名稱命名的目錄，必須還不存在（寫好的資料集不會被改寫）；`--out` 放在 repo 外，分段檔不進版控。錄到 `--duration-s` 秒或按 Ctrl-C 為止，最後一批寫完後以 `Dataset::open` 檢查整份資料集。每關閉一個分段檔就重寫一次索引，所以中途被強制結束時，索引仍然是已完成分段的有效資料集（寫到一半的分段檔不在索引裡）。
+- **結果**以 JSON 印到標準輸出：筆數、批次數、分段數、時間範圍，以及被略過的讀值數（`dropped_readings`：例如計數器讀到不小於 `wraps_at` 的值，這種讀值不符合索引的規則）。
+
+### 設定檔留在 repo 外
+
+設定檔寫轉換器與 Modbus TCP 設備的位址或主機名稱，所以放在 repo 外（以路徑傳給指令），不提交。寫出的索引只有轉換器的邏輯代號與站號，沒有位址、主機名稱或 port，這是「索引格式」開頭的公開 repo 規則；上傳到物件儲存前另外檢查分段檔的文字值（見「存放位置與存取權限」）。
+
+```toml
+name = "lab"                       # 資料集名稱：輸出目錄與索引的 name
+description = "一句話說明"
+batch_s = 10                       # 每幾秒關一批（1–3600，預設 10）
+segment_bytes = 67108864           # 分段檔的上限（1024 到 64 MiB，預設 64 MiB）
+
+[[converters]]                     # RS485 轉換器（RTU over TCP）
+key = "rs485-a"                    # 索引裡的邏輯代號
+host = "<轉換器的位址>"            # 只在設定檔裡
+port = 502
+
+[[models]]                         # 型號：與 desired 設定的 DeviceModel 相同的讀法，加上索引的 kind、unit、wraps_at
+name = "three-phase-meter"         # 通用的型號名稱，寫進索引的 model
+points = [
+  { key = "energy_kwh", function_code = 3, address = 0, data_type = "f32", kind = "cumulative", unit = "kWh" },
+  { key = "pulses", function_code = 3, address = 2, data_type = "u32", kind = "cumulative", wraps_at = 4294967296 },
+  { key = "power_kw", function_code = 4, address = 0, data_type = "u16", scale = 0.01, kind = "gauge", unit = "kW" },
+]
+
+[[devices]]
+key = "meter-1"
+model = "three-phase-meter"
+converter = "rs485-a"              # 轉換器下的設備；Modbus TCP 設備改寫 host 與 port
+unit = 1
+interval_s = 60
+```
+
+資料點的欄位與 [protocol](../../crates/protocol/README.md) 的 `DataPoint` 相同（`function_code` 1–4、`address`、`data_type`、`byte_order`、`length`、`scale`、`offset`），寫進索引的 `type` 由它推出：`bool` 是 `bool`、整數型別是 `int`、`f32`/`f64` 是 `float`、`string` 是 `string`，設了 `scale` 或 `offset` 的一律是 `float`（agent 送出的值就是這樣）。`wraps_at` 只用於沒有 scale、offset 的 `u16`、`u32`、`u64` 累計值，介於 2 與 2 的位元數次方之間。
+
+### 批次與接收時間
+
+錄製沒有經過 ingest，所以批次與 `received_at` 由錄製工具決定：
+
+- 每 `batch_s` 秒，把這段期間結束的輪詢讀到的值關成一批（超過協定的批次大小上限 256 KiB 時以 `BatchBuilder` 切成多批），全部在 `live` 一個串流，序號從 1 連續編號（與 [protocol](../../crates/protocol/README.md)「遙測與確認」規則 1 相同）。預設 10 秒，與閘道器雛形每 10 秒結束開啟中的批次相同（[閘道器記憶體可行性測試](../../docs/feasibility/2026-10-13-gateway-memory.md)），載入後 ingest 看到的到達節奏與閘道器上線後相近。
+- `received_at` 是錄製工具關閉這批的時間，也就是「上行沒有延遲、沒有中斷」時 ingest 會蓋的時間；`ts` 是 agent 收到回應時的時間。兩者都來自同一個時鐘：開始時的系統時間加上之後經過的單調時間，錄製途中系統時鐘被校正也不會讓時間倒退或亂序。
+- 錄製裡沒有補送、亂序或沒有完成紀錄的批次，這些狀況由合成 fixture 涵蓋。
+- 分段檔在批次之間切開：下一批會讓檔案超過 `segment_bytes` 時先關檔（單一批次比上限大時自成一個分段）。
+
+**限制：載入時每批一次 INSERT。** 載入工具照 ingest 的方式一批一次 INSERT，ClickHouse 每次 INSERT 產生一個 part。10 秒一批時，30 天的錄製約 259,200 批，載入工具不間斷地送出這麼多 INSERT，背景 merge 跟不上時，同一個 partition（遙測窄表依 `received_at` 的月份分）的 part 數超過 `parts_to_delay_insert` 會被延遲，超過 `parts_to_throw_insert` 會被拒絕（`TOO_MANY_PARTS`），載入在中途失敗（已寫入的批次留著，見「只載一次」）。目前不做緩解；錄長期資料時可以把 `batch_s` 拉長（60 秒時 30 天約 43,200 批）。若仍不夠，之後的選項是載入工具控制送出速度，或把連續幾批合成一次 INSERT（後者會讓「一批一個 part」不再成立，materialized view 看到的 INSERT 節奏也跟著改變）。
 
 ## 合成 fixture
 

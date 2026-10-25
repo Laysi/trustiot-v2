@@ -17,6 +17,9 @@ test = false
 doc = false
 
 [dependencies]
+# The recorder reads devices with the gateway agent's Modbus module and polling loop
+# (Laysi/trustiot-v2#87, Laysi/trustiot-v2#88), not with a client of its own.
+agent = { path = "../../edge/agent" }
 # Dataset times; `now` for `--end-before now`.
 chrono = { workspace = true, features = ["now"] }
 # The migration Job's HTTP client (`migrate::http`): http://, or https:// trusting only a named
@@ -24,10 +27,13 @@ chrono = { workspace = true, features = ["now"] }
 migrate = { path = "../migrate" }
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
+# The recorder's device and model configuration, and the protocol's batch size limit.
+protocol = { path = "../../crates/protocol" }
 # Segment file hashes and the derived device and stream IDs.
 sha2.workspace = true
 thiserror.workspace = true
-tokio = { workspace = true, features = ["macros", "rt"] }
+# `signal`: `record` stops at Ctrl-C; `sync` and `time`: the recorder's batch former.
+tokio = { workspace = true, features = ["macros", "rt", "signal", "sync", "time"] }
 toml.workspace = true
 # `v8`: device and stream IDs derived from a hash; `serde`: the load summary.
 uuid = { workspace = true, features = ["serde", "v8"] }
@@ -35,7 +41,9 @@ uuid = { workspace = true, features = ["serde", "v8"] }
 [dev-dependencies]
 # The ClickHouse test harness of services/ingest/tests/common (included with #[path]).
 reqwest.workspace = true
-tokio = { workspace = true, features = ["macros", "process", "rt", "time"] }
+# The recorder's test: the fake RS485 converter and the manual clock.
+testkit = { path = "../../crates/testkit" }
+tokio = { workspace = true, features = ["macros", "process", "rt", "rt-multi-thread", "test-util", "time"] }
 uuid = { workspace = true, features = ["v4"] }
 
 [lints]

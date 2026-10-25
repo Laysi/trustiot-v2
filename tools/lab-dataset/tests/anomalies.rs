@@ -261,7 +261,9 @@ fn anomalies_in_the_index_are_applied() {
 
 #[test]
 fn the_readme_example_is_a_valid_index_table() {
-    let readme = fs::read_to_string(lab_dataset::datasets_dir().join("README.md")).unwrap();
+    let readme =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../datasets/lab/README.md");
+    let readme = fs::read_to_string(readme).unwrap();
     let example = readme
         .split("```toml\n")
         .filter_map(|block| block.split("```").next())

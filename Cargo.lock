@@ -1320,12 +1320,15 @@ dependencies = [
 name = "lab-dataset"
 version = "0.1.0"
 dependencies = [
+ "agent",
  "chrono",
  "migrate",
+ "protocol",
  "reqwest",
  "serde",
  "serde_json",
  "sha2 0.11.0",
+ "testkit",
  "thiserror",
  "tokio",
  "toml",

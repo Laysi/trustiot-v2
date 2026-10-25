@@ -194,4 +194,6 @@ cargo test -p agent --test modbus_rtu_framing           # 以 raw socket 驗證 
 cargo test -p agent --test polling_recovery             # 對 testkit 假端點跑輪詢迴圈：watchdog 救回不回答與半開的連線、只有讀到值才重置退避
 ```
 
+`tools/lab-dataset` 的錄製工具（`lab-dataset record`）以 library 使用 `modbus::endpoint::Endpoints`、`DeviceReader` 與 `polling::run`；改它們的介面時一併跑 `cargo test -p lab-dataset --test record`。
+
 整合測試都用 `#[tokio::test(start_paused = true)]` 加 `testkit::clock::manual()`：逾時只在測試推進時鐘時觸發，機器再忙也不會誤判逾時。假端點的用法見 [`crates/testkit/README.md`](../../crates/testkit/README.md)「假 Modbus 端點」。
