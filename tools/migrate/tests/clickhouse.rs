@@ -13,7 +13,8 @@ use migrate::clickhouse::{managed_ttl_days, managed_ttl_months};
 use migrate::config::RunConfig;
 use migrate::registry::{Migration, PRODUCT, Registry};
 use migrate::retention::{
-    AGGREGATE_1H_RETENTION_MONTHS, AGGREGATE_1M_RETENTION_MONTHS, RAW_RETENTION_DAYS,
+    AGGREGATE_1H_RETENTION_MONTHS, AGGREGATE_1M_RETENTION_MONTHS, MIN_RAW_RETENTION_DAYS,
+    RAW_RETENTION_DAYS,
 };
 use protocol::telemetry::BUFFER_MAX_AGE_DAYS;
 use support::postgres::tls_postgres;
@@ -512,8 +513,8 @@ const KEPT_COMMITS: &str = "SELECT seq FROM trustiot.batch_commits WHERE tenant_
 /// The run sets the platform retention as the TTL of the telemetry and completion tables; rows
 /// expire by the server's receive time, so readings with an old gateway timestamp that just
 /// arrived stay; a changed setting changes both TTLs in an order that never lets completion
-/// records expire before their rows; a setting not longer than the gateway buffer's maximum age
-/// stops the run before it changes anything; a TTL the run does not recognise stops it too.
+/// records expire before their rows; a setting below the minimum (33 days) stops the run before
+/// it changes anything; a TTL the run does not recognise stops it too.
 async fn raw_retention(db: &Database, clickhouse: &ClickHouse) {
     let platform = RAW_RETENTION_DAYS;
     assert_eq!(
@@ -610,16 +611,16 @@ async fn raw_retention(db: &Database, clickhouse: &ClickHouse) {
         .expect("a repeated run");
     assert!(report.changes.is_empty(), "{:?}", report.changes);
 
-    // d. A retention not longer than the gateway buffer's maximum age stops the run before it
-    //    touches Postgres, a Secret or ClickHouse.
+    // d. A retention below the minimum (the gateway buffer's maximum age, the reconcile window
+    //    and two days) stops the run before it touches Postgres, a Secret or ClickHouse.
     let before = snapshot(clickhouse).await;
-    for days in [BUFFER_MAX_AGE_DAYS, 7] {
+    for days in [MIN_RAW_RETENTION_DAYS - 1, BUFFER_MAX_AGE_DAYS, 7] {
         let error = migrate::run(
             &with_retention(db, clickhouse, Some(days)),
             &CLICKHOUSE_ONLY,
         )
         .await
-        .expect_err("a retention shorter than the gateway buffer must be refused");
+        .expect_err("a retention below the minimum must be refused");
         let text = error.to_string();
         assert!(
             text.contains("clickhouse.raw_retention_days")

@@ -80,13 +80,16 @@
 //! batch unchanged, so the rows of an earlier attempt are rows of the rewritten batch and leave
 //! those values as they are.
 //!
-//! The reconcile reaches back [`RECONCILE_WINDOW_DAYS`] receive days: a gateway keeps an
-//! unacknowledged batch at most that long, so every earlier attempt of a batch was received
-//! within it, and the raw data retention is longer (`retention::RawRetention`, at least a day
-//! longer), so every raw row received within it is still there: the oldest day of the window
-//! loses its earliest rows at the next midnight at the soonest, and a statement reads the parts
-//! the tables had when it started. Older cells are never compared with raw rows that may have
-//! expired.
+//! The reconcile reaches back [`RECONCILE_WINDOW_DAYS`] (31) receive days, one more than a
+//! gateway keeps an unacknowledged batch (owner decision of 2026-10-26): a batch first received
+//! at 23:59 can be rewritten after the midnight that ends the buffer's last day for it (the time
+//! a resend and the rewrite take, or a gateway clock that drifts), and a window of the buffer's
+//! age alone would leave out the first attempt's receive day, whose cells would stay counted
+//! twice. The raw data retention is at least two days longer than the window
+//! (`retention::MIN_RAW_RETENTION_DAYS`, 33 days), so every raw row received within it is still
+//! there: the two days keep a reconcile clear of raw rows that expire around midnight and of TTL
+//! merges on a replica whose clock runs ahead, and a statement reads the parts the tables had
+//! when it started. Older cells are never compared with raw rows that may have expired.
 //!
 //! # Backfill and checks
 //!
@@ -123,7 +126,9 @@
 //! bucket holds at most one reset or wrap, and after it the bucket's last reading stays below
 //! the peak before it.
 
-use protocol::telemetry::BUFFER_MAX_AGE_DAYS;
+/// How many receive days before today (UTC) the reconcile compares: defined with the raw data
+/// retention it bounds (`retention::MIN_RAW_RETENTION_DAYS` is two days longer).
+pub use crate::retention::RECONCILE_WINDOW_DAYS;
 
 /// The settings of the rewrite's INSERT (step 3 of the module documentation), as name and value:
 /// the batch's rows must land even when the table saw the same block before the DELETE.
@@ -183,10 +188,6 @@ pub fn stream_settings(gateway: &str, stream: &str) -> [(&'static str, String); 
         ("async_insert", "0".to_owned()),
     ]
 }
-
-/// How many receive days before today (UTC) the reconcile compares: the gateway buffer's maximum
-/// age.
-pub const RECONCILE_WINDOW_DAYS: u32 = BUFFER_MAX_AGE_DAYS;
 
 /// The reconcile statement of one aggregate table: `$table` is the table, `$bucket` the function
 /// that truncates `ts` to its bucket, as in the table's materialized view. The query parameters
@@ -473,7 +474,8 @@ mod tests {
             "param_series",
             "[('d1', 'energy'), ('d2', 'it\\'s \\\\ odd')]".to_owned()
         )));
-        assert!(pairs.contains(&("param_window_days", "30".to_owned())));
+        // One more receive day than the gateway buffer's 30 (owner decision of 2026-10-26).
+        assert!(pairs.contains(&("param_window_days", "31".to_owned())));
         assert_eq!(pairs.len(), 7);
     }
 

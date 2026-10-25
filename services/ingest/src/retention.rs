@@ -8,10 +8,13 @@
 //! [`RAW_RETENTION_DAYS`], and checks the setting with [`RawRetention::from_days`] before it
 //! touches anything.
 //!
-//! The retention must be longer than the gateway buffer's maximum age
+//! The retention must be at least [`MIN_RAW_RETENTION_DAYS`] (owner decision of 2026-10-26),
+//! for two reasons. It must be longer than the gateway buffer's maximum age
 //! ([`protocol::telemetry::BUFFER_MAX_AGE_DAYS`]): a stream's high-water mark lives in the
 //! completion records, so a committed batch whose acknowledgement was lost must come back before
-//! its record expires, or it would be written twice.
+//! its record expires, or it would be written twice. And it must be two days longer than the
+//! I1 reconcile's window ([`RECONCILE_WINDOW_DAYS`], services/ingest/src/rollup.rs), so the raw
+//! rows the reconcile compares are still there.
 //!
 //! The aggregate tables (`trustiot.telemetry_1m`, `trustiot.telemetry_1h`) expire by the receive
 //! day, in months: [`AGGREGATE_1M_RETENTION_MONTHS`] and [`AGGREGATE_1H_RETENTION_MONTHS`] unless
@@ -32,12 +35,29 @@ pub const RAW_RETENTION_DAYS: u32 = 180;
 /// unit mistake (hours or seconds written as days).
 pub const MAX_RAW_RETENTION_DAYS: u32 = 3650;
 
-// The platform value itself must pass the check.
+/// How many receive days before today (UTC) the I1 reconcile compares
+/// (services/ingest/src/rollup.rs, which uses it from here): one more than the gateway buffer's
+/// maximum age (owner decision of 2026-10-26). A gateway resends a batch for at most
+/// [`BUFFER_MAX_AGE_DAYS`] days, but a batch first received at 23:59 on a day can be rewritten
+/// after the midnight that ends the 30th day after it (the time a resend and the rewrite take,
+/// or a gateway clock that drifts): a window of the buffer's age alone would then leave out the
+/// first attempt's receive day, and its cells would stay counted twice.
+pub const RECONCILE_WINDOW_DAYS: u32 = BUFFER_MAX_AGE_DAYS + 1;
+
+/// The shortest raw data retention a setting may ask for: the reconcile window and two days
+/// (33 days; owner decision of 2026-10-26). The completion records expire with the raw rows,
+/// and both must outlive the gateway buffer; the two days between the window and the retention
+/// keep a reconcile clear of raw rows that expire around midnight, and of TTL merges on a
+/// replica whose clock runs ahead.
+pub const MIN_RAW_RETENTION_DAYS: u32 = RECONCILE_WINDOW_DAYS + 2;
+
+// The minimum covers the gateway buffer, and the platform value itself must pass the check.
+const _: () = assert!(MIN_RAW_RETENTION_DAYS > BUFFER_MAX_AGE_DAYS);
 const _: () = assert!(
-    RAW_RETENTION_DAYS > BUFFER_MAX_AGE_DAYS && RAW_RETENTION_DAYS <= MAX_RAW_RETENTION_DAYS
+    RAW_RETENTION_DAYS >= MIN_RAW_RETENTION_DAYS && RAW_RETENTION_DAYS <= MAX_RAW_RETENTION_DAYS
 );
 
-/// A raw data retention that is longer than the gateway buffer's maximum age.
+/// A raw data retention of [`MIN_RAW_RETENTION_DAYS`] to [`MAX_RAW_RETENTION_DAYS`] days.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct RawRetention {
     days: u32,
@@ -53,11 +73,11 @@ impl RawRetention {
     ///
     /// # Errors
     ///
-    /// When `days` is not longer than the gateway buffer's maximum age, or longer than
+    /// When `days` is shorter than [`MIN_RAW_RETENTION_DAYS`], or longer than
     /// [`MAX_RAW_RETENTION_DAYS`].
     pub const fn from_days(days: u32) -> Result<Self, RetentionError> {
-        if days <= BUFFER_MAX_AGE_DAYS {
-            return Err(RetentionError::NotLongerThanBuffer { days });
+        if days < MIN_RAW_RETENTION_DAYS {
+            return Err(RetentionError::TooShort { days });
         }
         if days > MAX_RAW_RETENTION_DAYS {
             return Err(RetentionError::TooLong { days });
@@ -80,8 +100,8 @@ impl Default for RawRetention {
 /// Why a raw data retention setting is refused.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RetentionError {
-    /// Not longer than the gateway buffer's maximum age.
-    NotLongerThanBuffer { days: u32 },
+    /// Shorter than [`MIN_RAW_RETENTION_DAYS`].
+    TooShort { days: u32 },
     /// Longer than [`MAX_RAW_RETENTION_DAYS`].
     TooLong { days: u32 },
 }
@@ -89,13 +109,14 @@ pub enum RetentionError {
 impl fmt::Display for RetentionError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::NotLongerThanBuffer { days } => write!(
+            Self::TooShort { days } => write!(
                 f,
-                "{days} days is not longer than the gateway buffer's maximum age of \
-                 {BUFFER_MAX_AGE_DAYS} days: completion records (the high-water marks) would \
-                 expire before a gateway stops resending, and resent batches would be written \
-                 twice; use at least {} days",
-                BUFFER_MAX_AGE_DAYS + 1
+                "{days} days is shorter than the {MIN_RAW_RETENTION_DAYS} days required: \
+                 completion records (the high-water marks) must outlive the gateway buffer's \
+                 maximum age of {BUFFER_MAX_AGE_DAYS} days, or batches a gateway resends would \
+                 be written twice, and the raw rows must outlive the I1 reconcile's window of \
+                 {RECONCILE_WINDOW_DAYS} receive days by two days, or a reconcile could compare \
+                 cells with raw rows that are expiring; use at least {MIN_RAW_RETENTION_DAYS} days"
             ),
             Self::TooLong { days } => write!(
                 f,
@@ -350,21 +371,39 @@ mod tests {
         );
     }
 
+    /// The owner decision of 2026-10-26: a reconcile window of 31 receive days, one more than
+    /// the 30-day gateway buffer, and a raw retention of at least 33 days.
     #[test]
-    fn a_retention_up_to_the_buffer_age_is_refused() {
-        for days in [0, 1, BUFFER_MAX_AGE_DAYS - 1, BUFFER_MAX_AGE_DAYS] {
-            let error = RawRetention::from_days(days).expect_err("not longer than the buffer");
-            assert_eq!(error, RetentionError::NotLongerThanBuffer { days });
-            assert!(
-                error
-                    .to_string()
-                    .contains(&format!("maximum age of {BUFFER_MAX_AGE_DAYS} days")),
-                "{error}"
-            );
+    fn the_minimum_is_the_reconcile_window_and_two_days() {
+        assert_eq!(BUFFER_MAX_AGE_DAYS, 30);
+        assert_eq!(RECONCILE_WINDOW_DAYS, 31);
+        assert_eq!(MIN_RAW_RETENTION_DAYS, 33);
+    }
+
+    #[test]
+    fn a_retention_below_the_minimum_is_refused() {
+        for days in [
+            0,
+            1,
+            BUFFER_MAX_AGE_DAYS,
+            BUFFER_MAX_AGE_DAYS + 1,
+            MIN_RAW_RETENTION_DAYS - 1,
+        ] {
+            let error = RawRetention::from_days(days).expect_err("below the minimum");
+            assert_eq!(error, RetentionError::TooShort { days });
+            let text = error.to_string();
+            for reason in [
+                format!("maximum age of {BUFFER_MAX_AGE_DAYS} days"),
+                format!("reconcile's window of {RECONCILE_WINDOW_DAYS} receive days"),
+                format!("use at least {MIN_RAW_RETENTION_DAYS} days"),
+            ] {
+                assert!(text.contains(&reason), "{days}: {text}");
+            }
         }
+        assert!(RawRetention::from_days(32).is_err());
         assert_eq!(
-            RawRetention::from_days(BUFFER_MAX_AGE_DAYS + 1).map(RawRetention::days),
-            Ok(BUFFER_MAX_AGE_DAYS + 1)
+            RawRetention::from_days(33).map(RawRetention::days),
+            Ok(MIN_RAW_RETENTION_DAYS)
         );
     }
 

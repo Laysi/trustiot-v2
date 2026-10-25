@@ -17,13 +17,16 @@
 //! - an exact retry of an INSERT, which the raw table and the aggregates both drop;
 //! - the I1 rewrite of a batch after a partial attempt, with the reconcile of src/rollup.rs,
 //!   interrupted after its first statement and run again, leaving another stream's cells alone;
+//! - the reconcile window: a rewrite after the midnight that ended the gateway buffer's 30th day
+//!   for a batch first received at 23:59, which a 30-day window misses and the contract's 31
+//!   receive days (`rollup::RECONCILE_WINDOW_DAYS`) reach;
 //! - the deduplication hazard of the rewrite (a DELETE followed by an INSERT that ClickHouse
 //!   drops as a duplicate, `insert_deduplicate = 0` included) and the contract's
 //!   `deduplicate_insert = 'disable'` (`rollup::REWRITE_SETTINGS`);
 //! - a crash between the raw part and a view's part of an INSERT;
-//! - the stream's query ID of the contract (`rollup::stream_settings`): a statement of the
-//!   stream that still runs is refused another statement with its ID, and is stopped by the
-//!   reconcile, which then runs;
+//! - the stream's query ID of the contract (`rollup::stream_settings`): a synchronous INSERT of
+//!   the stream that still runs is refused another statement with its ID, and is stopped by the
+//!   reconcile, which then runs; the rows it landed before stay, and none land afterwards;
 //! - the energy of cumulative points across resets and wraps, from both views;
 //! - retention by the receive day in calendar months, checked against chrono.
 //!
@@ -50,9 +53,11 @@ use std::time::{Duration, Instant};
 use chrono::{DateTime, Days, Months, TimeDelta, TimeZone, Utc};
 use common::{Account, Answer, ClickHouse, Migration, migrations};
 use ingest::rollup::{
-    BACKFILL_1H, BACKFILL_1M, ENERGY_1H, ENERGY_1M, RECONCILE_1H, RECONCILE_1M, REPAIR_1H,
-    REPAIR_1M, REWRITE_SETTINGS, ReconcileParams, stream_query_id, stream_settings,
+    BACKFILL_1H, BACKFILL_1M, ENERGY_1H, ENERGY_1M, RECONCILE_1H, RECONCILE_1M,
+    RECONCILE_WINDOW_DAYS, REPAIR_1H, REPAIR_1M, REWRITE_SETTINGS, ReconcileParams,
+    stream_query_id, stream_settings,
 };
+use protocol::telemetry::BUFFER_MAX_AGE_DAYS;
 use uuid::Uuid;
 
 /// The file that adds the aggregates; the files before it are the schema they are added to.
@@ -119,6 +124,8 @@ const ENERGY_TENANT: TenantAccount =
     tenant_account!("rollup_test_energy", "00000000-0000-4000-8000-000000014107");
 /// Read through the ingest account only.
 const RETENTION_TENANT: &str = "00000000-0000-4000-8000-000000014108";
+const WINDOW_TENANT: TenantAccount =
+    tenant_account!("rollup_test_window", "00000000-0000-4000-8000-000000014109");
 
 /// Rows as the ingest service sends them: the data of the request, not part of the SQL.
 const INSERT_ROWS: &str = "INSERT INTO trustiot.telemetry (tenant_id, gateway_id, stream_id,
@@ -661,6 +668,13 @@ impl Test {
     /// Runs one reconcile statement for the batch `rows`, as the ingest service, with the
     /// contract's settings for the stream; the rows it wrote.
     async fn reconcile(&self, statement: &str, rows: &[Row]) -> u64 {
+        self.reconcile_within(statement, rows, RECONCILE_WINDOW_DAYS)
+            .await
+    }
+
+    /// [`Test::reconcile`] reaching back `window_days` receive days instead of the contract's
+    /// window.
+    async fn reconcile_within(&self, statement: &str, rows: &[Row], window_days: u32) -> u64 {
         let first = rows.first().expect("a batch");
         let series: BTreeSet<(String, String)> = rows
             .iter()
@@ -674,7 +688,12 @@ impl Test {
             first_ts: time(rows.iter().map(|row| row.ts).min().expect("a batch")),
             last_ts: time(rows.iter().map(|row| row.ts).max().expect("a batch")),
         };
-        let pairs = params.to_query_pairs();
+        let mut pairs = params.to_query_pairs();
+        for (name, value) in &mut pairs {
+            if *name == "param_window_days" {
+                *value = window_days.to_string();
+            }
+        }
         let settings = first.on.settings();
         let pairs: Vec<(&str, &str)> = pairs
             .iter()
@@ -1361,6 +1380,89 @@ async fn rewrite_must_not_deduplicate(test: &Test) {
     .await;
 }
 
+/// The reconcile window (owner decision of 2026-10-26): a batch whose first, partial attempt was
+/// received at 23:59 on the day [`RECONCILE_WINDOW_DAYS`] days ago is rewritten today, after the
+/// midnight that ended the 30th day after it. A window of the gateway buffer's 30 days does not
+/// reach the first attempt's receive day, and its cells stay counted twice; the contract's
+/// window of 31 days does.
+async fn a_rewrite_after_the_buffer_age_reaches_the_first_attempt(test: &Test) {
+    let today = Utc::now().date_naive();
+    // 23:59 on the receive day of the first attempt.
+    let first_received = day_start(u64::from(RECONCILE_WINDOW_DAYS), 86_340_000);
+    let on = Stream::new(tenant_id(&WINDOW_TENANT), Uuid::new_v4());
+    let account = test.tenant(&WINDOW_TENANT).await;
+    let batch = readings(
+        on,
+        9,
+        first_received - TimeDelta::minutes(10),
+        first_received,
+        12,
+    );
+
+    // Attempt 1: the first half of the batch reached ClickHouse, then the connection failed.
+    test.insert_ok(&batch[..6], &[]).await;
+    // The rewrite today: the batch's rows go, and the whole batch comes again, received now.
+    test.delete_batch(on, 9).await;
+    let now = Utc::now();
+    let resent: Vec<Row> = batch
+        .iter()
+        .cloned()
+        .map(|row| Row {
+            received_at: now,
+            ..row
+        })
+        .collect();
+    test.insert_ok(&resent, &REWRITE_SETTINGS).await;
+    let (problems, _) = test.differences(&account).await;
+    assert!(
+        !problems.is_empty(),
+        "the aggregates should still count the first attempt before the reconcile"
+    );
+
+    // A window of the buffer's age leaves the first attempt's cells as they are.
+    let short = (
+        test.reconcile_within(RECONCILE_1M, &resent, BUFFER_MAX_AGE_DAYS)
+            .await,
+        test.reconcile_within(RECONCILE_1H, &resent, BUFFER_MAX_AGE_DAYS)
+            .await,
+    );
+    let (still, _) = test.differences(&account).await;
+    // The contract's window reaches them.
+    let written = test.reconcile_both(&resent).await;
+    assert_eq!(
+        Utc::now().date_naive(),
+        today,
+        "the UTC date changed during the step, which names the first attempt's receive day by \
+         its distance from today: run the test again"
+    );
+    assert_eq!(
+        short,
+        (0, 0),
+        "a 30-day window should not reach the first attempt"
+    );
+    assert_eq!(
+        still, problems,
+        "a 30-day window should leave the first attempt's cells counted twice"
+    );
+    assert!(
+        written.0 > 0 && written.1 > 0,
+        "the contract's window wrote {written:?}"
+    );
+    test.assert_equal(&account, "rewrite a day after the buffer's age")
+        .await;
+    println!(
+        "reconcile window: a batch first received at {} and rewritten at {}: with a window of \
+         {BUFFER_MAX_AGE_DAYS} receive days the reconcile wrote {short:?} rows and {} cells \
+         still differed; with the contract's {RECONCILE_WINDOW_DAYS} days it wrote {} \
+         one-minute and {} one-hour rows and the aggregates equal the raw rows",
+        time(first_received),
+        time(now),
+        still.len(),
+        written.0,
+        written.1
+    );
+}
+
 /// A crash between the raw part of an INSERT and a view's part (here the one-hour view is
 /// detached during attempt 1): after the rewrite the one-minute cells count attempt 1 twice
 /// and the one-hour cells once; the reconcile corrects the first and writes nothing for the
@@ -1772,6 +1874,7 @@ async fn the_aggregates_follow_the_raw_rows() {
     }
     exact_retry_counts_once(&test).await;
     rewrite_after_a_partial_attempt(&test).await;
+    a_rewrite_after_the_buffer_age_reaches_the_first_attempt(&test).await;
     rewrite_must_not_deduplicate(&test).await;
     crash_between_the_raw_and_a_view_part(&test).await;
     an_earlier_statement_of_the_stream_is_stopped(&test).await;

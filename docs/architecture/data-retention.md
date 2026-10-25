@@ -9,7 +9,8 @@
 | 閘道器緩衝的最長保存時間 | 30 天 | `crates/protocol` 的 `telemetry::BUFFER_MAX_AGE_DAYS` |
 | 原始資料的保存期限（全平台統一，`trustiot.telemetry`） | 180 天 | `services/ingest/src/retention.rs` 的 `RAW_RETENTION_DAYS` |
 | 批次完成表的保存期限（`trustiot.batch_commits`） | 與原始資料相同（180 天） | 同上；migration Job 讓兩張表一致 |
-| 保存期限可設定的範圍 | 31 到 3650 天 | `RawRetention::from_days` |
+| 保存期限可設定的範圍 | 33 到 3650 天（2026-10-26 負責人決定，原本是 31 天起） | `RawRetention::from_days`，下限是 `MIN_RAW_RETENTION_DAYS` |
+| I1 對帳往回看的收到日 | 31 天（緩衝加一天，2026-10-26 負責人決定） | `services/ingest/src/retention.rs` 的 `RECONCILE_WINDOW_DAYS` |
 | 1 分鐘彙總（`trustiot.telemetry_1m`） | 13 個月 | `services/ingest/src/retention.rs` 的 `AGGREGATE_1M_RETENTION_MONTHS` |
 | 1 小時彙總（`trustiot.telemetry_1h`） | 48 個月（4 年） | 同上，`AGGREGATE_1H_RETENTION_MONTHS` |
 | 彙總可設定的範圍 | 1 分鐘 13 到 120 個月；1 小時不短於 1 分鐘、不超過 120 個月；1 分鐘的月數至少涵蓋原始資料的天數 | `AggregateRetention::new` |
@@ -18,11 +19,12 @@
 
 ## 限制與理由
 
-1. **保存期限必須長於緩衝的最長保存時間。** 閘道器送出一批、還沒收到確認就斷線時，這一批留在緩衝裡，恢復後重送。ingest 靠完成表的高水位判斷這批是否已經寫過（清單 I1）；完成紀錄若在重送之前就過期，重送的批次會被當成新資料再寫一次，資料重複。緩衝裡的批次最多 30 天，所以完成紀錄至少要留超過 30 天。設定值不大於 30 天時，migration Job 在連任何資料庫之前就拒絕（結束碼 2，訊息寫出設定的 key 與 30 天的限制）。
-2. **完成表不短於原始資料。** `committed_at` 不早於同一批的 `received_at`，兩張表天數相同時，完成紀錄一定比它的資料晚過期。
-3. **最高方案看得到全部保存期限，其他方案較短。** [方案與權益](../product/plans.md)：原始資料的可查期間 Starter 例 7 天、Business 例 90 天、Enterprise 平台保存期全開。資料都在，方案只限制可查期間，升級後立即看得到更早的資料（清單 B3）。保存期限因此要比 Business 長，Enterprise 才有看得到的差別。
-4. **取滿足限制的最小值。** 原始資料只拿來看近期細節與重算；長期趨勢與年增率看彙總資料（至少 13 個月，Laysi/trustiot-v2#141），不需要原始資料存一年以上。180 天是 Business 範例的兩倍、涵蓋半年的比較，也遠大於 30 天的緩衝。之前 schema 裡的 400 天是暫定值，換成 180 天後儲存量約少 55 %。
-5. **緩衝 30 天。** 現場斷網多半是幾小時到幾天，長假（例如農曆年）約 9 到 10 天；30 天涵蓋整整一個月的停機，又遠短於保存期限。超過的批次丟棄並在 heartbeat 的 `buffer` 計數（[`crates/protocol` README](../../crates/protocol/README.md)），緩衝的時間由 Laysi/trustiot-v2#90 實作，校時造成的時間跳動不能讓批次留得更久。
+1. **保存期限必須長於緩衝的最長保存時間。** 閘道器送出一批、還沒收到確認就斷線時，這一批留在緩衝裡，恢復後重送。ingest 靠完成表的高水位判斷這批是否已經寫過（清單 I1）；完成紀錄若在重送之前就過期，重送的批次會被當成新資料再寫一次，資料重複。緩衝裡的批次最多 30 天，所以完成紀錄至少要留超過 30 天。
+2. **保存期限至少比 I1 對帳的窗口長兩天（最小 33 天，2026-10-26 負責人決定）。** I1 重寫一批之後，ingest 以原始列對帳彙總表，只往回看 31 個收到日（[services/ingest](../../services/ingest/README.md)「I1 重寫與對帳」）。窗口比緩衝多一天：第一次在某天 23:59 收到的一批，可能在它第 30 天結束的午夜之後才重寫（重送與重寫要花時間，或閘道器的時鐘有偏差），只看 30 天會漏掉第一次嘗試的那個收到日，那些格就一直多算。原始資料再比窗口多留兩天，對帳比較的原始列才一定還在，碰不到在午夜前後過期的列，也碰不到時鐘走得比較快的 replica 上的 TTL merge。設定值小於 33 天時，migration Job 在連任何資料庫之前就拒絕（結束碼 2，訊息寫出設定的 key、30 天的緩衝、31 天的窗口與 33 天的下限）。
+3. **完成表不短於原始資料。** `committed_at` 不早於同一批的 `received_at`，兩張表天數相同時，完成紀錄一定比它的資料晚過期。
+4. **最高方案看得到全部保存期限，其他方案較短。** [方案與權益](../product/plans.md)：原始資料的可查期間 Starter 例 7 天、Business 例 90 天、Enterprise 平台保存期全開。資料都在，方案只限制可查期間，升級後立即看得到更早的資料（清單 B3）。保存期限因此要比 Business 長，Enterprise 才有看得到的差別。
+5. **取滿足限制的最小值。** 原始資料只拿來看近期細節與重算；長期趨勢與年增率看彙總資料（至少 13 個月，Laysi/trustiot-v2#141），不需要原始資料存一年以上。180 天是 Business 範例的兩倍、涵蓋半年的比較，也遠大於 30 天的緩衝。之前 schema 裡的 400 天是暫定值，換成 180 天後儲存量約少 55 %。
+6. **緩衝 30 天。** 現場斷網多半是幾小時到幾天，長假（例如農曆年）約 9 到 10 天；30 天涵蓋整整一個月的停機，又遠短於保存期限。超過的批次丟棄並在 heartbeat 的 `buffer` 計數（[`crates/protocol` README](../../crates/protocol/README.md)），緩衝的時間由 Laysi/trustiot-v2#90 實作，校時造成的時間跳動不能讓批次留得更久。
 
 儲存量估算：2026-10-09 的實測每筆約 3.1 bytes（[可行性測試結果](../feasibility/2026-10-09-cloud-poc.md)，30 天 52 億筆 15.2 GiB）。同樣的負載存 180 天約 91 GiB，加上 merge 與系統表的 1.5 倍約 137 GiB；叢集內 ClickHouse 的磁碟大小照 `deploy/chart/values.yaml` 的 `clickhouse.bundled.storage.size` 說明估算。
 

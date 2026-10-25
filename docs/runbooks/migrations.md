@@ -259,7 +259,7 @@ Job 以 Postgres 的 advisory lock 互斥，第二個等第一個結束（最多
 
 Job 每次執行都把 ClickHouse 的 `trustiot.telemetry` 與 `trustiot.batch_commits` 的 TTL 對齊 `TRUSTIOT__CLICKHOUSE__RAW_RETENTION_DAYS`（不設是 180 天；值與理由見[資料保存期限與磁碟水位](../architecture/data-retention.md)）。
 
-- **設定被拒（結束碼 2）**：訊息寫出 `clickhouse.raw_retention_days` 與閘道器緩衝的最長保存時間 30 天。設定必須是 31 到 3650 的整數；不長於緩衝時，閘道器斷線後重送的批次找不到已過期的完成紀錄，資料會重複。Job 在連任何資料庫之前就停止，什麼都沒改。
+- **設定被拒（結束碼 2）**：訊息寫出 `clickhouse.raw_retention_days`、閘道器緩衝的最長保存時間 30 天、I1 對帳的窗口 31 個收到日與下限 33 天。設定必須是 33 到 3650 的整數（2026-10-26 負責人決定）：不長於緩衝時，閘道器斷線後重送的批次找不到已過期的完成紀錄，資料會重複；比對帳的窗口多不到兩天時，對帳可能比到正在過期的原始列。Job 在連任何資料庫之前就停止，什麼都沒改。
 - **「its TTL ... is not one the migration Job manages」**：有人手動改了表的 TTL（多了條件、換了欄位或運算式）。Job 不覆蓋，因為改法可能是刻意的。以管理帳號查目前的設定：`SELECT engine_full FROM system.tables WHERE database = 'trustiot' AND name = '<表名>'`，確認改動的原因後改回 Job 管理的形式，下一次執行就把天數對齊設定：
 
   ```sql
