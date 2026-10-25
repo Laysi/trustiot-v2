@@ -9,6 +9,8 @@
 //! - [`accounts`]: the tenant accounts and the consumer.
 //! - [`history`]: the API.
 //! - [`clickhouse`] and [`transport`]: the ClickHouse client.
+//! - [`period`]: the queryable period of each tenant view.
+//! - [`sql`]: the check of the read-only SQL an AI writes (Laysi/trustiot-v2#143).
 //! - [`schema`]: the migration files this release expects, which readiness checks
 //!   (Laysi/trustiot-v2#402) and the migration Job applies.
 //! - [`config`]: the settings.
@@ -21,6 +23,7 @@ pub mod config;
 pub mod history;
 pub mod period;
 pub mod schema;
+pub mod sql;
 pub mod transport;
 
 use std::time::Duration;

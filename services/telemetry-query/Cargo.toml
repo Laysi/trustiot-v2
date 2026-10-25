@@ -25,11 +25,13 @@ service-kit = { path = "../../crates/service-kit" }
 # Same TLS stack as service-kit: every connection verifies the server (checklist M3).
 sqlx = { workspace = true, features = ["chrono", "postgres", "runtime-tokio", "tls-rustls-ring-webpki"] }
 thiserror.workspace = true
-tokio = { workspace = true, features = ["macros", "net", "rt-multi-thread", "time"] }
+tokio = { workspace = true, features = ["macros", "net", "rt-multi-thread", "sync", "time"] }
 tracing.workspace = true
 # The client API's OpenAPI document (tools/openapi merges it into api/openapi.json).
 utoipa = { workspace = true, features = ["chrono", "uuid"] }
 uuid = { workspace = true, features = ["serde"] }
+# The AI's SQL: parsed, checked against an allowlist and printed again (src/sql).
+sqlparser.workspace = true
 # Each tenant account's password, derived from the service's own ClickHouse password (HMAC), and
 # the salted SHA-256 hash ClickHouse stores, so a plaintext password never appears in SQL.
 getrandom.workspace = true
