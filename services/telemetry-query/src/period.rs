@@ -15,7 +15,7 @@
 //! The windows are the strictest plan's (docs/product/plans.md) until per-plan periods come with
 //! Laysi/trustiot-v2#453: [`Windows::PLATFORM`].
 
-use chrono::{DateTime, Months, TimeDelta, Timelike as _, Utc};
+use chrono::{DateTime, Months, NaiveTime, TimeDelta, Timelike as _, Utc};
 
 use crate::history::{AGGREGATED_MONTHS, RAW_DAYS};
 
@@ -133,24 +133,39 @@ impl Windows {
         }
     }
 
-    /// Where a service's clamp of `view` starts at `now` (the service's clock): the window's
-    /// start plus [`PERIOD_MARGIN`], rounded up to a whole millisecond (raw) or to the view's
-    /// cell, a UTC minute or hour. Every row and cell at or after it is in the database's window
-    /// as long as ClickHouse's clock is less than the margin ahead of `now`.
+    /// Where a service's clamp of `view` starts at `now` (the service's clock): the latest
+    /// start the database's window takes while its clock is up to [`PERIOD_MARGIN`] ahead of
+    /// `now`, rounded up to a whole millisecond (raw) or to the view's cell, a UTC minute or
+    /// hour. Every row and cell at or after it is in the database's window as long as
+    /// ClickHouse's clock is less than the margin ahead of `now`.
+    ///
+    /// For raw readings that is the window at `now + PERIOD_MARGIN`. Subtracting calendar months
+    /// is not monotonic: a day the shorter month lacks becomes its last day, so the start jumps
+    /// back at such a midnight (2027-05-30T23:59Z − 3 months is 2027-02-28T23:59Z, and
+    /// 2027-05-31T00:00Z − 3 months is 2027-02-28T00:00Z). Within one UTC day it rises with the
+    /// time, so the latest start is the window at `now + PERIOD_MARGIN` or, when the margin
+    /// crosses a UTC midnight, the window just before that midnight.
     ///
     /// The arithmetic is checked: a window reaching before chrono's first time starts at that
     /// time (the database's filter then keeps every row too), and a start past chrono's last
     /// time stays at the last time (later, never wider).
     #[must_use]
     pub fn earliest(self, view: View, now: DateTime<Utc>) -> DateTime<Utc> {
-        let start = match view {
-            View::Raw => now.checked_sub_signed(TimeDelta::days(i64::from(self.raw_days))),
-            View::Minute | View::Hour => now.checked_sub_months(Months::new(self.get(view))),
-        }
-        .unwrap_or(DateTime::<Utc>::MIN_UTC);
-        let start = start
+        let later = now
             .checked_add_signed(PERIOD_MARGIN)
             .unwrap_or(DateTime::<Utc>::MAX_UTC);
+        let start = match view {
+            View::Raw => later.checked_sub_signed(TimeDelta::days(i64::from(self.raw_days))),
+            View::Minute | View::Hour => {
+                let months = Months::new(self.get(view));
+                let before_midnight = (later.date_naive() != now.date_naive())
+                    .then(|| later.date_naive().and_time(NaiveTime::MIN).and_utc())
+                    .and_then(|midnight| midnight.checked_sub_signed(TimeDelta::nanoseconds(1)))
+                    .and_then(|time| time.checked_sub_months(months));
+                later.checked_sub_months(months).max(before_midnight)
+            }
+        }
+        .unwrap_or(DateTime::<Utc>::MIN_UTC);
         match view {
             View::Raw => ceil(start, TimeDelta::milliseconds(1)),
             View::Minute => ceil(start, TimeDelta::minutes(1)),
@@ -225,26 +240,90 @@ mod tests {
         );
     }
 
+    /// ClickHouse's window at `at`, as 0011_queryable_period.sql computes it: `now64(3, 'UTC')`
+    /// minus whole days or calendar months (chrono subtracts months as ClickHouse does, taking
+    /// the last day of a shorter month).
+    fn database(windows: Windows, view: View, at: DateTime<Utc>) -> DateTime<Utc> {
+        match view {
+            View::Raw => at - TimeDelta::days(i64::from(windows.raw_days)),
+            View::Minute | View::Hour => at
+                .checked_sub_months(Months::new(windows.get(view)))
+                .expect("in range"),
+        }
+    }
+
+    /// ClickHouse evaluates the window when the query starts, after the service took `now`: up
+    /// to the margin later, its window must still start no later than the clamp. Every minute
+    /// around every month end of a common and a leap year, with windows of 1, 3 and 12 months,
+    /// at the clock offsets that matter: the ends of the margin, its middle, and the last
+    /// millisecond before a UTC midnight inside it (the security review of 2026-10-26 found the
+    /// clamp earlier than the window there).
     #[test]
     fn the_clamp_is_never_earlier_than_the_window_a_little_later() {
-        // ClickHouse evaluates the window when the query starts, after the service took `now`:
-        // up to the margin later, its window still starts no later than the clamp.
-        let windows = Windows::new(7, 3, 3);
-        let mut now = at("2026-01-28T23:50:00Z");
-        while now < at("2026-04-02T00:00:00Z") {
-            for view in [View::Raw, View::Minute, View::Hour] {
-                let clamp = windows.earliest(view, now);
-                let later = now + PERIOD_MARGIN;
-                let database = match view {
-                    View::Raw => later - TimeDelta::days(7),
-                    View::Minute | View::Hour => {
-                        later.checked_sub_months(Months::new(3)).expect("in range")
+        let margin = PERIOD_MARGIN;
+        let offsets = [
+            TimeDelta::zero(),
+            TimeDelta::milliseconds(1),
+            margin / 2,
+            margin - TimeDelta::milliseconds(1),
+            margin,
+        ];
+        let mut checked = 0_u64;
+        for months in [1, 3, 12] {
+            let windows = Windows::new(7, months, months);
+            for year in [2027, 2028] {
+                for month in 1..=12 {
+                    let first = at(&format!("{year}-{month:02}-01T00:00:00Z"));
+                    let mut now = first - TimeDelta::days(5);
+                    while now < first + TimeDelta::days(3) {
+                        let midnight = (now + margin)
+                            .date_naive()
+                            .and_time(NaiveTime::MIN)
+                            .and_utc();
+                        let before_midnight =
+                            (midnight > now).then(|| midnight - TimeDelta::milliseconds(1) - now);
+                        for view in [View::Raw, View::Minute, View::Hour] {
+                            let clamp = windows.earliest(view, now);
+                            for offset in offsets.iter().copied().chain(before_midnight) {
+                                let window = database(windows, view, now + offset);
+                                assert!(
+                                    window <= clamp,
+                                    "{view:?}, {months} months, at {now} + {offset}: the window \
+                                     starts at {window}, after the clamp {clamp}"
+                                );
+                                checked += 1;
+                            }
+                        }
+                        now += TimeDelta::minutes(1);
                     }
-                };
-                assert!(database <= clamp, "{view:?} at {now}: {database} > {clamp}");
+                }
             }
-            now += TimeDelta::minutes(37);
         }
+        assert!(checked > 3_000_000, "{checked}");
+    }
+
+    /// The case the review found: the window at the margin's end (after midnight, clamped to
+    /// February's last day at 00:01) starts earlier than the window a minute before midnight.
+    #[test]
+    fn a_margin_across_a_clamped_midnight_takes_the_window_before_it() {
+        let windows = Windows::new(7, 3, 3);
+        let now = at("2027-05-30T23:56:00Z");
+        assert_eq!(
+            database(windows, View::Minute, now + PERIOD_MARGIN),
+            at("2027-02-28T00:01:00Z")
+        );
+        assert_eq!(
+            database(windows, View::Minute, at("2027-05-30T23:59:59.999Z")),
+            at("2027-02-28T23:59:59.999Z")
+        );
+        assert_eq!(
+            windows.earliest(View::Minute, now),
+            at("2027-03-01T00:00:00Z")
+        );
+        assert_eq!(
+            windows.earliest(View::Hour, now),
+            at("2027-03-01T00:00:00Z")
+        );
     }
 
     #[test]
@@ -253,14 +332,7 @@ mod tests {
         for view in [View::Raw, View::Minute, View::Hour] {
             assert_eq!(
                 windows.earliest(view, DateTime::<Utc>::MIN_UTC),
-                ceil(
-                    DateTime::<Utc>::MIN_UTC + PERIOD_MARGIN,
-                    match view {
-                        View::Raw => TimeDelta::milliseconds(1),
-                        View::Minute => TimeDelta::minutes(1),
-                        View::Hour => TimeDelta::hours(1),
-                    }
-                ),
+                DateTime::<Utc>::MIN_UTC,
                 "{view:?}: a window before chrono's first time starts there"
             );
             assert!(
