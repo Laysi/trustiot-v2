@@ -12,7 +12,9 @@
 //! limits. Afterwards: a changed password is repaired on the next query; an account whose query
 //! limits an administrator weakened, or which was changed to another tenant, serves no query
 //! (503, nothing of the other tenant) and the latter is refused when its event comes again (dead
-//! letter); and nothing logs a password.
+//! letter); an account without its queryable period reads nothing, and the next query sets the
+//! period again, as it does for one with another period (Laysi/trustiot-v2#143); and nothing
+//! logs a password.
 //!
 //! Needs podman or docker (a TLS Postgres and a ClickHouse); skipped without one unless `CI` is
 //! set. One test: the binary shares one product database. `--nocapture` prints every attack.
@@ -60,6 +62,12 @@ const WHO_AM_I: &str = "SELECT getSetting('SQL_tenant_id'), getSetting('readonly
   getSetting('max_execution_time'), getSetting('max_memory_usage'), getSetting('max_rows_to_read'),
   currentRoles()
 FORMAT TSV";
+/// The account's queryable period: raw days, one-minute months, one-hour months.
+const WINDOWS: &str = "SELECT getSetting('SQL_queryable_raw_days'),
+  getSetting('SQL_queryable_1m_months'), getSetting('SQL_queryable_1h_months')
+FORMAT TSV";
+/// The period every account gets until per-plan periods (Laysi/trustiot-v2#453).
+const EXPECTED_WINDOWS: &str = "7\t3\t3\n";
 /// The account's own rows: all rows it can see, and those of its tenant.
 const OWN_ROWS: &str = "SELECT count(), countIf(tenant_id = {me:UUID})
 FROM trustiot.tenant_telemetry FORMAT TSV";
@@ -69,6 +77,10 @@ const CHANGE_PASSWORD: &str =
     "ALTER USER {user:Identifier} IDENTIFIED WITH sha256_password BY {password:String}";
 const CHANGE_TENANT: &str = "ALTER USER {user:Identifier}
 SETTINGS PROFILE 'trustiot_tenant_reader', SQL_tenant_id = '0199a0b0-c0d0-7e0f-8a1b-2c3d4e5f6a7b' CONST";
+
+/// Admin change of the raw window alone, as an older plan or a change by hand would leave it.
+const CHANGE_WINDOW: &str =
+    "ALTER USER {user:Identifier} MODIFY SETTINGS SQL_queryable_raw_days = 30 CONST";
 
 /// Admin change that weakens one of the account's limits on the account itself, after the
 /// profile, and leaves `readonly` as it is: `TENANT` is replaced with the account's own tenant.
@@ -397,6 +409,15 @@ async fn each_tenant_account_sees_its_own_readings_only() {
         format!("{a}\t1\t30\t536870912\t1000000000\t['trustiot_tenant_reader']\n"),
         "tenant, readonly, limits and role of the account"
     );
+    assert_eq!(
+        stack
+            .clickhouse
+            .query(&account_a, WINDOWS)
+            .await
+            .unwrap_or_else(|error| panic!("read the windows: {}", error.body)),
+        EXPECTED_WINDOWS,
+        "the queryable period, set when the account was created"
+    );
 
     // 2. Readings of A, B and the victim.
     let device = uuid::Uuid::new_v4();
@@ -520,6 +541,16 @@ async fn each_tenant_account_sees_its_own_readings_only() {
         format!("{a}\t1\t3600\t536870912\t1000000000\t['trustiot_tenant_reader']\n"),
         "the weakened limit is in force for the account, readonly is not changed"
     );
+    // ALTER USER ... SETTINGS replaces all of the account's settings, so the windows are gone
+    // too: the account reads nothing (the row policies need them) until they are set again.
+    for sql in [WINDOWS, OWN_ROWS] {
+        let error = stack
+            .clickhouse
+            .query_with(&account_a, sql, &[("param_me", &a_text)])
+            .await
+            .expect_err("an account without its queryable period reads nothing");
+        assert_eq!(error.code(), "UNKNOWN_SETTING", "{sql}: {}", error.body);
+    }
     let (status, body) = service.get(&path, Some(&token_a)).await;
     assert_eq!(status, 503, "{body}");
     assert!(!body.contains(A_MARKER), "{body}");
@@ -539,6 +570,40 @@ async fn each_tenant_account_sees_its_own_readings_only() {
     assert!(
         latest.to_string().contains(A_MARKER),
         "served again: {latest}"
+    );
+    let period_set = "set the tenant account's queryable period";
+    assert_eq!(service.stdout.messages(period_set).len(), 1);
+    assert_eq!(
+        stack
+            .clickhouse
+            .query(&account_a, WINDOWS)
+            .await
+            .unwrap_or_else(|error| panic!("read the windows: {}", error.body)),
+        EXPECTED_WINDOWS,
+        "the API set the queryable period again before it served the account"
+    );
+
+    // 5b. Another period on the account (a plan change, or a change by hand): the next query
+    //     sets the service's period again before it runs.
+    admin_query(&stack, CHANGE_WINDOW, &[("param_user", &user_a)]).await;
+    assert_eq!(
+        stack
+            .clickhouse
+            .query(&account_a, WINDOWS)
+            .await
+            .unwrap_or_else(|error| panic!("read the windows: {}", error.body)),
+        "30\t3\t3\n"
+    );
+    service.get_ok(&path, &token_a).await;
+    assert_eq!(service.stdout.messages(period_set).len(), 2);
+    assert_eq!(
+        stack
+            .clickhouse
+            .query(&account_a, WINDOWS)
+            .await
+            .unwrap_or_else(|error| panic!("read the windows: {}", error.body)),
+        EXPECTED_WINDOWS,
+        "the service's period, from the query after the change"
     );
 
     // 6. An account changed to another tenant: the API refuses it and shows nothing of the other

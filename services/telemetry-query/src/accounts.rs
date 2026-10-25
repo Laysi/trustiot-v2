@@ -16,12 +16,19 @@
 //!   tenant in `telemetry_query.tenant_accounts`, which the API reads before it queries
 //!   ClickHouse. The API checks the account the same way ([`Accounts::verify`]) before every
 //!   query it runs as it, and refuses to serve one that differs.
+//! - The account also carries the queryable period, one window per table as a `CONST` setting
+//!   (`SQL_queryable_raw_days`, `SQL_queryable_1m_months`, `SQL_queryable_1h_months`;
+//!   0011_queryable_period.sql), which the row policies enforce on every read. Unlike the
+//!   tenant, the role and the limits, the windows are the service's to change: an account
+//!   without them (created before 0011) or with other values (a plan change) gets the expected
+//!   ones from [`Accounts::ensure`] and [`Accounts::verify`], so they apply from its next query.
 //!
 //! The service's own account (`0008_telemetry_query.sql`) may create and change accounts with
 //! that name prefix and hand out the tenant role, and nothing else.
 
 use std::sync::Arc;
 
+use chrono::{DateTime, Utc};
 use contract::TenantId;
 use contract::events::identity::TenantCreated;
 use hmac::{Hmac, KeyInit, Mac};
@@ -31,6 +38,7 @@ use sqlx::{Postgres, Transaction};
 use zeroize::Zeroizing;
 
 use crate::clickhouse::{ClickHouse, Credentials, QueryError};
+use crate::period::{CLOCK_SKEW_WARNING, Windows};
 
 /// The prefix of every tenant account's name; `0008_telemetry_query.sql` lets the service's
 /// account create and change exactly the accounts named so.
@@ -44,18 +52,32 @@ pub const TENANT_ROLE: &str = "trustiot_tenant_reader";
 const PASSWORD_CONTEXT: &[u8] = b"trustiot-v2 telemetry-query tenant account password v1\0";
 
 /// Creates the account with everything a tenant account has; nothing when it exists. The
-/// tenant ID cannot be a query parameter here (ClickHouse 26.8 takes none in a `SETTINGS`
-/// value), so [`create_statement`] puts it in place of `TENANT_ID_LITERAL`, from a [`TenantId`]
-/// only, whose text is 36 characters of hex digits and hyphens.
+/// tenant ID and the windows cannot be query parameters here (ClickHouse 26.8 takes none in a
+/// `SETTINGS` value), so [`create_statement`] puts them in place of `TENANT_ID_LITERAL` and the
+/// `*_LITERAL` window names, from a [`TenantId`], whose text is 36 characters of hex digits and
+/// hyphens, and from [`Windows`], whose values are integers.
 const CREATE_ACCOUNT: &str = "CREATE USER IF NOT EXISTS {user:Identifier}
 IDENTIFIED WITH sha256_hash BY {hash:String} SALT {salt:String}
 HOST ANY
 DEFAULT ROLE trustiot_tenant_reader
-SETTINGS PROFILE 'trustiot_tenant_reader', SQL_tenant_id = 'TENANT_ID_LITERAL' CONST";
+SETTINGS PROFILE 'trustiot_tenant_reader', SQL_tenant_id = 'TENANT_ID_LITERAL' CONST,
+  SQL_queryable_raw_days = RAW_DAYS_LITERAL CONST,
+  SQL_queryable_1m_months = MINUTE_MONTHS_LITERAL CONST,
+  SQL_queryable_1h_months = HOUR_MONTHS_LITERAL CONST";
+
+/// Sets the account's windows and leaves its other settings (the profile, `SQL_tenant_id`) as
+/// they are; the values go in as in [`CREATE_ACCOUNT`] ([`windows_statement`]).
+const SET_WINDOWS: &str = "ALTER USER {user:Identifier} MODIFY SETTINGS
+  SQL_queryable_raw_days = RAW_DAYS_LITERAL CONST,
+  SQL_queryable_1m_months = MINUTE_MONTHS_LITERAL CONST,
+  SQL_queryable_1h_months = HOUR_MONTHS_LITERAL CONST";
 
 /// Sets the account's password, nothing else.
 const SET_PASSWORD: &str =
     "ALTER USER {user:Identifier} IDENTIFIED WITH sha256_hash BY {hash:String} SALT {salt:String}";
+
+/// The windows every tenant account gets until per-plan periods (Laysi/trustiot-v2#453).
+pub const EXPECTED_WINDOWS: Windows = Windows::PLATFORM;
 
 /// The query limits of the settings profile `trustiot_tenant_reader`
 /// (services/ingest/migrations/clickhouse/0004_access.sql) that a tenant account must have in
@@ -74,16 +96,24 @@ pub const LIMITS: [(&str, &str); 7] = [
 ];
 
 /// What a tenant account sees of itself when it logs in: its tenant, whether its only active
-/// role is the tenant role, `readonly`, then each of [`LIMITS`] in order. Reads no table, so
-/// the quota does not count it: ClickHouse 26.8 counts only queries that read a table
+/// role is the tenant role, `readonly`, then each of [`LIMITS`] in order, then its three
+/// windows (empty when it lacks one) and the server's clock in Unix milliseconds. Reads no
+/// table, so the quota does not count it: ClickHouse 26.8 counts only queries that read a table
 /// (docs/test-reports/2026-10-11-59-verify.md, finding F3), and tests/tenant_accounts.rs checks
 /// that each API call counts once against the account's quota.
 const WHO_AM_I: &str = "SELECT getSetting('SQL_tenant_id'),
   currentRoles() = ['trustiot_tenant_reader'], getSetting('readonly'),
   getSetting('max_execution_time'), getSetting('max_memory_usage'), getSetting('max_threads'),
   getSetting('max_concurrent_queries_for_user'), getSetting('max_rows_to_read'),
-  getSetting('max_result_rows'), getSetting('result_overflow_mode')
+  getSetting('max_result_rows'), getSetting('result_overflow_mode'),
+  toString(getSettingOrDefault('SQL_queryable_raw_days', '')),
+  toString(getSettingOrDefault('SQL_queryable_1m_months', '')),
+  toString(getSettingOrDefault('SQL_queryable_1h_months', '')),
+  toUnixTimestamp64Milli(now64(3))
 FORMAT TSV";
+
+/// The fields of [`WHO_AM_I`] after the limits: three windows and the clock.
+const AFTER_LIMITS: usize = 4;
 
 /// A tenant's account and its password.
 pub struct TenantAccount {
@@ -114,10 +144,10 @@ pub fn account_name(tenant: TenantId) -> String {
     format!("{ACCOUNT_PREFIX}{}", tenant.as_uuid().simple())
 }
 
-/// `CREATE_ACCOUNT` for `tenant`.
-fn create_statement(tenant: TenantId) -> String {
+/// `CREATE_ACCOUNT` for `tenant` with `windows`.
+fn create_statement(tenant: TenantId, windows: Windows) -> String {
     let literal = tenant.as_uuid().hyphenated().to_string();
-    // A UUID's text: the only thing that ever goes into the statement's text.
+    // A UUID's text and the windows' digits: the only things that ever go into the text.
     assert!(
         literal.len() == 36
             && literal
@@ -125,7 +155,40 @@ fn create_statement(tenant: TenantId) -> String {
                 .all(|byte| byte.is_ascii_hexdigit() || byte == b'-'),
         "a tenant ID renders as hex digits and hyphens"
     );
-    CREATE_ACCOUNT.replace("TENANT_ID_LITERAL", &literal)
+    with_windows(
+        &CREATE_ACCOUNT.replace("TENANT_ID_LITERAL", &literal),
+        windows,
+    )
+}
+
+/// `SET_WINDOWS` with `windows`.
+fn windows_statement(windows: Windows) -> String {
+    with_windows(SET_WINDOWS, windows)
+}
+
+/// `statement` with the window literals replaced by `windows`' values, which are integers.
+fn with_windows(statement: &str, windows: Windows) -> String {
+    statement
+        .replace("RAW_DAYS_LITERAL", &windows.raw_days.to_string())
+        .replace("MINUTE_MONTHS_LITERAL", &windows.minute_months.to_string())
+        .replace("HOUR_MONTHS_LITERAL", &windows.hour_months.to_string())
+}
+
+/// What [`WHO_AM_I`] showed besides the checks that make an account [`AccountError::Tampered`].
+#[derive(Clone, Copy, Debug)]
+struct Checked {
+    /// The account's windows; `None` when one is missing or out of range.
+    windows: Option<Windows>,
+    /// The ClickHouse server's clock when it answered.
+    server_now: Option<DateTime<Utc>>,
+}
+
+/// The windows of [`WHO_AM_I`]'s last fields, as text.
+fn parse_windows(fields: &[&str]) -> Option<Windows> {
+    let [raw, minute, hour] = fields else {
+        return None;
+    };
+    Windows::checked(raw.parse().ok()?, minute.parse().ok()?, hour.parse().ok()?)
 }
 
 fn hex(bytes: &[u8]) -> String {
@@ -143,6 +206,18 @@ pub enum Ensured {
     Ready,
     /// Its password had to be set first (a new password generation, or someone changed it).
     PasswordSet,
+}
+
+/// The outcome of [`Accounts::verify`]: how the account was made usable, and its windows as it
+/// reported them itself, which the row policies apply to every query it runs. A service that
+/// cuts a range to the period starts from these ([`Windows::earliest`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Verified {
+    pub ensured: Ensured,
+    pub windows: Windows,
+    /// Whether the windows had to be set first (an account from before
+    /// 0011_queryable_period.sql, or a plan change).
+    pub windows_set: bool,
 }
 
 /// Why a tenant account is not usable.
@@ -230,14 +305,21 @@ impl Accounts {
     /// Makes `tenant`'s account exist and log in with its derived password: creates it when it
     /// does not exist, sets the password when the account refuses it, and checks, logged in as
     /// the account, that it has the tenant's `SQL_tenant_id`, the tenant role as its only role,
-    /// `readonly = 1` and the query limits of [`LIMITS`]. Idempotent; replicas may run it at the
-    /// same time.
+    /// `readonly = 1` and the query limits of [`LIMITS`]. Sets the windows to
+    /// [`EXPECTED_WINDOWS`] when the account lacks them or has others. Idempotent; replicas may
+    /// run it at the same time.
     ///
     /// # Errors
     ///
     /// [`AccountError::Tampered`] for an account that is not as created here,
     /// [`AccountError::ClickHouse`] when ClickHouse fails.
     pub async fn ensure(&self, tenant: TenantId) -> Result<Ensured, AccountError> {
+        self.ensure_windows(tenant)
+            .await
+            .map(|verified| verified.ensured)
+    }
+
+    async fn ensure_windows(&self, tenant: TenantId) -> Result<Verified, AccountError> {
         let account = self.account(tenant);
         let (hash, salt) = Self::hash(&account)?;
         let auth = [
@@ -250,7 +332,7 @@ impl Accounts {
         self.clickhouse
             .query(
                 self.own(),
-                &create_statement(tenant),
+                &create_statement(tenant, EXPECTED_WINDOWS),
                 &auth,
                 Some(TENANT_ROLE),
             )
@@ -261,7 +343,8 @@ impl Accounts {
             })?;
         match self.check(tenant, &account).await {
             Err(AccountError::ClickHouse { source, .. }) if source.is_authentication() => {}
-            other => return other.map(|()| Ensured::Ready),
+            Err(other) => return Err(other),
+            Ok(checked) => return self.settle(tenant, &account, checked, Ensured::Ready).await,
         }
         self.clickhouse
             .query(self.own(), SET_PASSWORD, &auth, None)
@@ -270,33 +353,99 @@ impl Accounts {
                 doing: "setting the tenant account's password",
                 source,
             })?;
-        self.check(tenant, &account).await?;
-        Ok(Ensured::PasswordSet)
+        let checked = self.check(tenant, &account).await?;
+        self.settle(tenant, &account, checked, Ensured::PasswordSet)
+            .await
     }
 
     /// Checks `tenant`'s account before the API runs a query as it: logs in as it and checks
-    /// what [`Accounts::ensure`] checks, without creating it. When ClickHouse refuses the
-    /// derived password (a new password generation of the service's account, or someone changed
-    /// it), runs [`Accounts::ensure`], which sets it again. Reads no table, so the account's quota
-    /// does not count it.
+    /// what [`Accounts::ensure`] checks, without creating it, and sets the windows when they are
+    /// missing or differ. When ClickHouse refuses the derived password (a new password
+    /// generation of the service's account, or someone changed it), runs [`Accounts::ensure`],
+    /// which sets it again. Reads no table, so the account's quota does not count it.
     ///
     /// # Errors
     ///
-    /// [`AccountError::Tampered`] for an account that is not as created here: the API must not
-    /// run the query, because the account's limits or tenant may not hold.
-    /// [`AccountError::ClickHouse`] when ClickHouse fails, including its concurrency limit.
-    pub async fn verify(&self, tenant: TenantId) -> Result<Ensured, AccountError> {
+    /// [`AccountError::Tampered`] for an account that is not as created here, or whose windows
+    /// cannot be set: the API must not run the query, because the account's limits or tenant
+    /// may not hold. [`AccountError::ClickHouse`] when ClickHouse fails, including its
+    /// concurrency limit.
+    pub async fn verify(&self, tenant: TenantId) -> Result<Verified, AccountError> {
         let account = self.account(tenant);
         match self.check(tenant, &account).await {
             Err(AccountError::ClickHouse { source, .. }) if source.is_authentication() => {
-                self.ensure(tenant).await
+                self.ensure_windows(tenant).await
             }
-            other => other.map(|()| Ensured::Ready),
+            Err(other) => Err(other),
+            Ok(checked) => {
+                if let Some(server_now) = checked.server_now {
+                    let skew = server_now - Utc::now();
+                    if skew.abs() > CLOCK_SKEW_WARNING {
+                        tracing::warn!(
+                            tenant_id = %tenant,
+                            skew_ms = skew.num_milliseconds(),
+                            "ClickHouse's clock differs from the service's; the queryable \
+                             period's margin covers up to five minutes"
+                        );
+                    }
+                }
+                self.settle(tenant, &account, checked, Ensured::Ready).await
+            }
         }
     }
 
+    /// Sets `account`'s windows to [`EXPECTED_WINDOWS`] when `checked` shows others or none,
+    /// and checks the account again afterwards.
+    async fn settle(
+        &self,
+        tenant: TenantId,
+        account: &TenantAccount,
+        checked: Checked,
+        ensured: Ensured,
+    ) -> Result<Verified, AccountError> {
+        if checked.windows == Some(EXPECTED_WINDOWS) {
+            return Ok(Verified {
+                ensured,
+                windows: EXPECTED_WINDOWS,
+                windows_set: false,
+            });
+        }
+        self.clickhouse
+            .query(
+                self.own(),
+                &windows_statement(EXPECTED_WINDOWS),
+                &[("user", account.user())],
+                None,
+            )
+            .await
+            .map_err(|source| AccountError::ClickHouse {
+                doing: "setting the tenant account's queryable period",
+                source,
+            })?;
+        let again = self.check(tenant, account).await?;
+        if again.windows != Some(EXPECTED_WINDOWS) {
+            return Err(AccountError::Tampered {
+                user: account.user().to_owned(),
+                what: "queryable period settings that do not take the service's values",
+            });
+        }
+        tracing::info!(
+            tenant_id = %tenant,
+            "set the tenant account's queryable period"
+        );
+        Ok(Verified {
+            ensured,
+            windows: EXPECTED_WINDOWS,
+            windows_set: true,
+        })
+    }
+
     /// Logs in as `account` and checks what it is.
-    async fn check(&self, tenant: TenantId, account: &TenantAccount) -> Result<(), AccountError> {
+    async fn check(
+        &self,
+        tenant: TenantId,
+        account: &TenantAccount,
+    ) -> Result<Checked, AccountError> {
         let answer = self
             .clickhouse
             .query(account.credentials(), WHO_AM_I, &[], None)
@@ -322,12 +471,14 @@ impl Accounts {
             }
         };
         let fields: Vec<&str> = answer.trim_end_matches('\n').split('\t').collect();
-        let [setting, roles, readonly, limits @ ..] = fields.as_slice() else {
+        let [setting, roles, readonly, rest @ ..] = fields.as_slice() else {
             return Err(tampered("an unexpected answer"));
         };
-        if limits.len() != LIMITS.len() {
+        if rest.len() != LIMITS.len() + AFTER_LIMITS {
             return Err(tampered("an unexpected answer"));
         }
+        let (limits, rest) = rest.split_at(LIMITS.len());
+        let (windows, clock) = rest.split_at(AFTER_LIMITS - 1);
         let expected_tenant = tenant.to_string();
         if *setting != expected_tenant {
             return Err(tampered("another tenant"));
@@ -345,7 +496,13 @@ impl Accounts {
         {
             return Err(tampered("other query limits"));
         }
-        Ok(())
+        Ok(Checked {
+            windows: parse_windows(windows),
+            server_now: clock
+                .first()
+                .and_then(|millis| millis.parse().ok())
+                .and_then(DateTime::from_timestamp_millis),
+        })
     }
 }
 
@@ -517,13 +674,50 @@ mod tests {
     }
 
     #[test]
-    fn only_the_tenant_id_goes_into_the_create_statement() {
+    fn only_the_tenant_id_and_the_windows_go_into_the_statements() {
         let tenant = TenantId::generate();
-        let statement = create_statement(tenant);
+        let windows = Windows::new(91, 13, 48);
+        let statement = create_statement(tenant, windows);
         assert!(statement.contains(&format!("SQL_tenant_id = '{tenant}' CONST")));
-        assert_eq!(
-            statement.replace(&tenant.to_string(), "TENANT_ID_LITERAL"),
-            CREATE_ACCOUNT
+        for setting in [
+            "SQL_queryable_raw_days = 91 CONST",
+            "SQL_queryable_1m_months = 13 CONST",
+            "SQL_queryable_1h_months = 48 CONST",
+        ] {
+            assert!(statement.contains(setting), "{statement}");
+            assert!(windows_statement(windows).contains(setting));
+        }
+        let restored = statement
+            .replace(&tenant.to_string(), "TENANT_ID_LITERAL")
+            .replace("= 91 ", "= RAW_DAYS_LITERAL ")
+            .replace("= 13 ", "= MINUTE_MONTHS_LITERAL ")
+            .replace("= 48 ", "= HOUR_MONTHS_LITERAL ");
+        assert_eq!(restored, CREATE_ACCOUNT);
+        assert!(!windows_statement(windows).contains("LITERAL"));
+        assert!(windows_statement(windows).starts_with("ALTER USER {user:Identifier} MODIFY"));
+    }
+
+    #[test]
+    fn the_windows_are_read_back_in_the_order_of_the_settings() {
+        assert_eq!(parse_windows(&["7", "3", "3"]), Some(Windows::PLATFORM));
+        assert_eq!(parse_windows(&["", "3", "3"]), None, "a missing window");
+        assert_eq!(parse_windows(&["7", "3"]), None);
+        assert_eq!(parse_windows(&["0", "3", "3"]), None);
+        assert_eq!(parse_windows(&["-1", "3", "3"]), None);
+        let order: Vec<usize> = [
+            "SQL_queryable_raw_days",
+            "SQL_queryable_1m_months",
+            "SQL_queryable_1h_months",
+        ]
+        .iter()
+        .map(|name| WHO_AM_I.find(name).expect("read"))
+        .collect();
+        assert!(order.is_sorted());
+        assert!(
+            WHO_AM_I
+                .find("result_overflow_mode")
+                .is_some_and(|limits| limits < order[0]),
+            "the windows come after the limits"
         );
     }
 }

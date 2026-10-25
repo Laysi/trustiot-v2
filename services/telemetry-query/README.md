@@ -4,7 +4,7 @@
 
 - 消費身分服務的 `identity.tenant_created`，為每個新租戶建一個 ClickHouse 唯讀帳號（見[租戶帳號](#租戶帳號)）。
 - 歷史查詢 API：一個資料點在一段時間內依時區降採樣的序列，與設備每個資料點最新的值（見 [API](#api)）。每個查詢都以呼叫者租戶的帳號執行，所以 ClickHouse 的 row policy、settings profile 與 quota 管住每一個查詢。
-- 可查期間先固定為最嚴格方案的例子（[方案](../../docs/product/plans.md) 的 Starter）：原始資料 7 天、聚合資料 3 個月，所有租戶相同；依方案區分的期間是 Laysi/trustiot-v2#453。
+- 可查期間先固定為最嚴格方案的例子（[方案](../../docs/product/plans.md) 的 Starter）：原始資料 7 天、聚合資料 3 個月，所有租戶相同，由 ClickHouse 依租戶帳號的設定強制（Laysi/trustiot-v2#143，見[可查期間](#可查期間)）；依方案區分的期間是 Laysi/trustiot-v2#453。
 
 不包含：健康狀態歷史、首頁卡片、依方案的期間（Laysi/trustiot-v2#453）；AI 的語意工具與 SQL 解析（Laysi/trustiot-v2#142、Laysi/trustiot-v2#143）。
 
@@ -40,10 +40,10 @@
 
 `src/history.rs`，路徑前綴 `/api/telemetry/v1`（入口不去除前綴），規格在 [api/openapi.json](../../api/openapi.json)。
 
-- `GET /api/telemetry/v1/devices/{device_id}/series?point=&from=&to=&tz=[&interval=]`：資料點 `point` 在 `[from, to)` 的序列。`from`、`to` 是 RFC 3339（`+08:00` 的 `+` 要編碼成 `%2B`，或用 `Z`）。`tz` 是 IANA 時區名稱（必填），小時與日的區間從該時區的整點與午夜開始；分鐘區間從 Unix epoch 起算（每個時區的偏移都是 15 分鐘的倍數，所以 15 分鐘區間也落在當地的刻鐘）。`interval` 是 `raw`、`1m`、`5m`、`15m`、`1h`、`3h`、`6h`、`12h`、`1d`；不給時取最多 1500 個區間（`MAX_BUCKETS`）的最細區間。每個區間回 `time`（區間開始，UTC）、`count`、`min`、`max`、`avg`（bool 當 0 或 1，文字讀數不算，全是文字時為 `null`）與 `last`（區間內最新的讀數，`{"type": "float|int|bool|string", "value": ...}`；`NaN` 與無限大是 `null`）。沒有讀數的區間不回。`raw` 最多 10000 筆（`MAX_RAW_READINGS`），每筆的 `count` 是 1。大於 2^53 的整數在 `min`、`max`、`avg` 會失去精度（`last` 不會）。
+- `GET /api/telemetry/v1/devices/{device_id}/series?point=&from=&to=&tz=[&interval=]`：資料點 `point` 在 `[from, to)` 的序列。`from`、`to` 是 RFC 3339（`+08:00` 的 `+` 要編碼成 `%2B`，或用 `Z`）。`tz` 是 IANA 時區名稱（必填），小時與日的區間從該時區的整點與午夜開始；分鐘區間從 Unix epoch 起算（每個時區的偏移都是 15 分鐘的倍數，所以 15 分鐘區間也落在當地的刻鐘）。`interval` 是 `raw`、`1m`、`5m`、`15m`、`1h`、`3h`、`6h`、`12h`、`1d`；不給時取最多 1500 個區間（`MAX_BUCKETS`）的最細區間。每個區間回 `time`（區間開始，UTC）、`count`、`min`、`max`、`avg`（bool 當 0 或 1，文字讀數不算，全是文字時為 `null`）與 `last`（區間內最新的讀數，`{"type": "float|int|bool|string", "value": ...}`；`NaN` 與無限大是 `null`）。沒有讀數的區間不回。`raw` 最多 10000 筆（`MAX_RAW_READINGS`），每筆的 `count` 是 1。大於 2^53 的整數在 `min`、`max`、`avg` 會失去精度（`last` 不會）。聚合區間讀彙總 view（[services/ingest](../ingest/README.md)「彙總表」）：分鐘區間讀 1 分鐘格，小時與日區間讀 1 小時格；1 小時格從 UTC 整點開始，所以偏移不是整小時的時區（Asia/Kolkata、Australia/Adelaide）改讀 1 分鐘格，範圍改依 1 分鐘格的時間窗裁切（由 ClickHouse 判斷：格的開始在該時區取整點後是否不變）。每個區間是開始時間落在 `[from, to)` 的整格加總：`from` 或 `to` 不在格的邊界時，第一個區間從下一格開始，最後一個區間可能含到 `to` 之後一格內的讀數。`avg` 是各格總和相加後除以數值讀數數，與直接平均原始讀數相比，浮點數的最後幾位可能不同。這些差異是 2026-10-26 決定接受的（Laysi/trustiot-v2#143）。
 - `GET /api/telemetry/v1/devices/{device_id}/latest`：設備在原始資料期間內每個資料點最新的讀數，依資料點排序，最多 1000 個。
 
-可查期間（`RAW_DAYS`、`AGGREGATED_MONTHS`）：`raw` 與 `latest` 是請求時往前 7 天，聚合序列是往前 3 個日曆月。`from` 早於期間開始時改成期間開始，回應的 `truncated` 為 `true`、`earliest` 是期間開始；`to` 也不晚於期間開始時整個拒絕。
+可查期間（`RAW_DAYS`、`AGGREGATED_MONTHS`；見[可查期間](#可查期間)）：`raw` 與 `latest` 是請求時往前 7 天，聚合序列是往前 3 個日曆月。`from` 早於服務的裁切起點時改成裁切起點，回應的 `truncated` 為 `true`、`earliest` 是裁切起點；`to` 也不晚於裁切起點時整個拒絕。每個區間依它讀的 view 套用該 view 的時間窗，裁切起點比資料庫的時間窗晚 5 分鐘，再進位到整毫秒（原始資料）、整分鐘（分鐘區間）或整小時（小時與日區間），所以小時與日區間的 `earliest` 最多比 3 個月前晚約 1 小時 5 分。自動選擇區間時，先把範圍裁切到兩個彙總 view 中較早的起點，再取能涵蓋整個範圍的 view 裡、區間數不超過上限的最細區間；都放不下時改從較晚的起點再選一次。
 
 | 請求 | 回應 |
 | --- | --- |
@@ -57,11 +57,19 @@
 | 查詢超過帳號的列數或記憶體上限 | 422 `validation_failed`、`telemetry.query_too_heavy` |
 | 帳號的 quota 或同時查詢數用完 | 429 `rate_limited` |
 | ClickHouse 在時間上限中止查詢 | 504 `timeout` |
-| 租戶帳號與服務建立的不同（租戶、角色、`readonly` 或查詢上限） | 503 `unavailable`，不執行查詢；日誌 ERROR 說明 |
+| 租戶帳號與服務建立的不同（租戶、角色、`readonly` 或查詢上限），或可查期間的設定改不回服務的值 | 503 `unavailable`，不執行查詢；日誌 ERROR 說明 |
 | Postgres 或 ClickHouse 出錯 | 503 `unavailable` |
 | 其他 | 200，`cache-control: no-store` |
 
 每個查詢之前，服務先以租戶帳號登入確認帳號仍是它建立的樣子（`Accounts::verify`：與消費端第 2 步相同的檢查；不讀表，所以不計入 quota），不同就不執行查詢，所以帳號的查詢上限被改寬時不會被用到。查詢一律帶參數（`{name:Type}`，HTTP 介面的 `param_<name>`），除了 `wait_end_of_query` 不送任何 setting（唯讀帳號會拒絕），不用明確的 `PREWHERE`。每個查詢除了 row policy 外也自己加上 `tenant_id = 呼叫者租戶`，所以即使帳號被改成別的租戶，也回不出別的租戶的資料。ClickHouse 的錯誤內文從不回給用戶端，也不寫進日誌，日誌只記錯誤代碼。
+
+## 可查期間
+
+方案的可查期間由 ClickHouse 強制（Laysi/trustiot-v2#143，2026-10-26 決定；`services/ingest/migrations/clickhouse/0011_queryable_period.sql`，規則與部署、回復步驟見 [services/ingest](../ingest/README.md)「可查期間」）：租戶帳號帶三個 `CONST` 設定，一張表一個時間窗，三個租戶 view 背後的 row policy 濾掉窗外的列，不論查詢寫了什麼條件。這個服務只負責寫入與讀回時間窗（`src/period.rs`、`src/accounts.rs`）：
+
+- **寫入**：建帳號時把 `Windows::PLATFORM`（原始資料 7 天、1 分鐘與 1 小時彙總各 3 個月）一起寫進 `CREATE USER`。
+- **讀回與修正**：每個查詢前的帳號檢查（`Accounts::verify`）也讀回三個時間窗與 ClickHouse 的時鐘。缺少（`0011` 之前建立的帳號）或與服務的值不同時，以服務帳號 `ALTER USER ... MODIFY SETTINGS` 寫回（只改這三個設定）、再檢查一次，記一行 INFO `set the tenant account's queryable period`；寫回後仍不同時視為帳號被改過，回 503、記 ERROR、不執行查詢。所以方案變更（Laysi/trustiot-v2#453）只要改服務寫入的值，從帳號的下一個查詢起生效。
+- **裁切**：API 自己裁切範圍時，起點是 `Windows::earliest`：時間窗起點加 5 分鐘（`PERIOD_MARGIN`），再進位到整毫秒、整分鐘或整小時。服務的時鐘與 ClickHouse 相差不到 5 分鐘時，裁切起點之後的每一列與每一格都在資料庫的時間窗內，所以回應的 `earliest` 之後不會因為時間窗而缺資料；相差超過 60 秒時記 WARN（`CLOCK_SKEW_WARNING`）。資料庫的時間窗才是邊界，裁切只讓回應說得出從哪裡開始是完整的。
 
 ## 資料庫
 
@@ -103,7 +111,8 @@ CARGO_BUILD_JOBS=2 cargo test -p telemetry-query
 
 | 測試 | 驗證 |
 | --- | --- |
-| `tests/tenant_accounts.rs` | 驗收 1、2：建立兩個租戶後兩個帳號都存在，屬性（default role、hosts、沒有自己的 grant、`SQL_tenant_id`、`readonly`、上限）正確，各自只看得到自己的讀數；以租戶 A 的帳號跑 2026-10-09 PoC 的攻擊類型（基底表、JOIN、子查詢、UNION、CTE、FINAL、PREWHERE、table function、系統表、改 `SQL_tenant_id` 與限制的 setting、EXECUTE AS、URL 的 role、寫入、建帳號、改服務帳號、grant、刪 row policy），都被拒或回不出 B 與第三個租戶的讀數，資料沒被改；超過列數、記憶體、時間上限的查詢分別以 `TOO_MANY_ROWS`、`MEMORY_LIMIT_EXCEEDED`、`TIMEOUT_EXCEEDED` 中止；密碼被改時下一個 API 呼叫自動修好；每個 API 呼叫只算帳號 quota 的一個查詢（查詢前的帳號檢查不讀表、不計入，以 `system.quotas_usage` 確認）；帳號的查詢上限在帳號上被改寬（`readonly` 不變）時 API 回 503、不執行查詢，改回後恢復；帳號被改成別的租戶時 API 回 503、回不出別的租戶，重播事件時進 dead letter；日誌沒有任何密碼 |
-| `tests/history.rs` | 驗收 3、4：序列與以另一組 ClickHouse 函式（`toStartOfHour`、`toStartOfDay`、`toStartOfFifteenMinutes`）直接查表的結果逐區間相同（Asia/Taipei、Asia/Kolkata、UTC；`15m`、`1h`、`3h`、`1d` 與自動選擇），區間開始落在當地邊界；整數、bool、文字資料點；`raw` 與 `latest` 等於儲存的讀數；同一個設備 ID 的另一個租戶的讀數不會出現；原始資料與聚合資料的期間截斷與拒絕；401、403、404、400、422 的各種拒絕不帶 ClickHouse 錯誤內文；quota 用完時 429 |
+| `tests/tenant_accounts.rs` | 驗收 1、2：建立兩個租戶後兩個帳號都存在，屬性（default role、hosts、沒有自己的 grant、`SQL_tenant_id`、`readonly`、上限）正確，各自只看得到自己的讀數；以租戶 A 的帳號跑 2026-10-09 PoC 的攻擊類型（基底表、JOIN、子查詢、UNION、CTE、FINAL、PREWHERE、table function、系統表、改 `SQL_tenant_id` 與限制的 setting、EXECUTE AS、URL 的 role、寫入、建帳號、改服務帳號、grant、刪 row policy），都被拒或回不出 B 與第三個租戶的讀數，資料沒被改；超過列數、記憶體、時間上限的查詢分別以 `TOO_MANY_ROWS`、`MEMORY_LIMIT_EXCEEDED`、`TIMEOUT_EXCEEDED` 中止；密碼被改時下一個 API 呼叫自動修好；每個 API 呼叫只算帳號 quota 的一個查詢（查詢前的帳號檢查不讀表、不計入，以 `system.quotas_usage` 確認）；帳號的查詢上限在帳號上被改寬（`readonly` 不變）時 API 回 503、不執行查詢，改回後恢復；帳號被改成別的租戶時 API 回 503、回不出別的租戶，重播事件時進 dead letter；帳號沒有時間窗設定時讀不到資料，時間窗被改成別的值時，下一個 API 呼叫都把它改回服務的值；日誌沒有任何密碼 |
+| `tests/queryable_period.rs` | Laysi/trustiot-v2#143 驗收 2：服務建好帳號後停掉，直接以租戶帳號登入（前面沒有服務、也沒有 SQL 檢查），只驗資料庫本身：9 條租戶 row policy 都帶各自表的時間窗；三個租戶 view 各自只顯示窗內的讀數與格；59 種通往窗外的查詢（條件、遮蔽 `ts`／`bucket`／`tenant_id` 的別名、JOIN、子查詢、CTE、集合運算、window function、table function、基底表）都回不出窗外或別的租戶的讀數，被拒的理由與記錄的相同；以 `SETTINGS`、URL、session 的 `SET` 放寬時間窗或換身分都被拒或無效；呼叫者的運算式不會作用在窗外的列（`throwIf`、轉型失敗）；時間窗起點隨伺服器時鐘移動；服務帳號改時間窗（全部放寬、只縮短 1 小時彙總、改回）從下一個查詢起生效；沒有時間窗或時間窗的值錯誤的帳號讀不到任何列 |
+| `tests/history.rs` | 驗收 3、4：序列與以另一組 ClickHouse 函式（`toStartOfHour`、`toStartOfDay`、`toStartOfFifteenMinutes`）直接查原始表的結果逐區間相同（Asia/Taipei、Asia/Kolkata、UTC；`15m`、`1h`、`3h`、`1d` 與自動選擇），區間開始落在當地邊界；`from`、`to` 不在格邊界時，結果等於整格範圍的參考結果（UTC 與 Asia/Taipei 讀 1 小時格，Asia/Kolkata 改讀 1 分鐘格）；整數、bool、文字資料點；`raw` 與 `latest` 等於儲存的讀數；同一個設備 ID 的另一個租戶的讀數不會出現；原始資料與聚合資料的期間截斷與拒絕；401、403、404、400、422 的各種拒絕不帶 ClickHouse 錯誤內文；quota 用完時 429 |
 | `tests/cross_tenant.rs` | [crates/testkit](../../crates/testkit/README.md) 的跨租戶負向測試：服務角色讀不到也改不了其他租戶的 `tenant_accounts`；兩個 API 讀的是 ClickHouse，由上面兩個測試手動涵蓋，所以在套件中豁免 |
 | `src/` 的單元測試 | 區間選擇、期間截斷、參數規則、讀數的 JSON 形狀、帳號名稱與密碼推導、建帳號的 SQL 只放進租戶 ID |

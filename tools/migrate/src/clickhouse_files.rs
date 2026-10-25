@@ -56,4 +56,10 @@ pub const FILES: &[Migration] = &[
             "../../../services/ingest/migrations/clickhouse/0010_telemetry_rollups.sql"
         ),
     },
+    Migration {
+        name: "0011_queryable_period.sql",
+        sql: include_str!(
+            "../../../services/ingest/migrations/clickhouse/0011_queryable_period.sql"
+        ),
+    },
 ];

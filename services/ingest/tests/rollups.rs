@@ -83,7 +83,9 @@ struct TenantAccount {
 }
 
 /// A [`TenantAccount`] whose `CREATE USER` is one static statement: ClickHouse 26.8 takes no
-/// query parameter in a `SETTINGS` value, so the tenant ID is a literal of the statement.
+/// query parameter in a `SETTINGS` value, so the tenant ID is a literal of the statement. The
+/// queryable period (0011_queryable_period.sql) is the longest the settings accept, so readings
+/// at fixed past times stay visible.
 macro_rules! tenant_account {
     ($user:literal, $tenant:literal) => {
         TenantAccount {
@@ -96,7 +98,8 @@ macro_rules! tenant_account {
 DEFAULT ROLE trustiot_tenant_reader
 SETTINGS PROFILE 'trustiot_tenant_reader', SQL_tenant_id = '",
                 $tenant,
-                "' CONST"
+                "' CONST, SQL_queryable_raw_days = 36500 CONST,
+  SQL_queryable_1m_months = 1200 CONST, SQL_queryable_1h_months = 1200 CONST"
             ),
         }
     };

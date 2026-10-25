@@ -19,6 +19,7 @@ pub mod accounts;
 pub mod clickhouse;
 pub mod config;
 pub mod history;
+pub mod period;
 pub mod schema;
 pub mod transport;
 

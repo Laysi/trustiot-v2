@@ -1,6 +1,6 @@
 # 資料保存期限與磁碟水位
 
-原始遙測資料在 ClickHouse 存多久、閘道器的緩衝最多存多久、兩者的關係，以及 ClickHouse 磁碟快滿時的告警（清單 I2、G1、B3；Laysi/trustiot-v2#92，2026-10-21 訂定）；1 分鐘與 1 小時彙總表存多久（Laysi/trustiot-v2#141，2026-10-25 訂定，見下方「彙總資料的保存期限」）。地端以 values 自訂保存期限由 Laysi/trustiot-v2#446 接上。
+原始遙測資料在 ClickHouse 存多久、閘道器的緩衝最多存多久、兩者的關係，以及 ClickHouse 磁碟快滿時的告警（清單 I2、G1、B3；Laysi/trustiot-v2#92，2026-10-21 訂定）；1 分鐘與 1 小時彙總表存多久（Laysi/trustiot-v2#141，2026-10-25 訂定，見下方「彙總資料的保存期限」）；租戶看得到多久以前的資料，以及由誰強制（Laysi/trustiot-v2#143，2026-10-26 訂定，見下方「可查期間」）。地端以 values 自訂保存期限由 Laysi/trustiot-v2#446 接上。
 
 ## 訂定的值
 
@@ -63,6 +63,15 @@
 - 改 TTL 的代價、縮短是產品決定、手動改的月數會被改回設定值：與原始資料相同（上方「設定與變更」）。縮短彙總的保存期限會永久刪掉原始資料早已不在的年份，無法重算。
 
 既有部署升級到這一版時，migration Job 建立兩張彙總表與它們的 view，之後（TTL 對齊設定之後）把 `telemetry` 現有的列補進彙總表，只補彙總缺的格（[services/ingest](../../services/ingest/README.md)「既有資料的 backfill」）。原始資料只有 180 天，backfill 又只補原始列一定都還在的收到日（平台值下是最近 178 個收到日，含今天），所以補出的彙總只從那時開始；之前已過期的資料補不回來。
+
+## 可查期間
+
+保存期限是資料在 ClickHouse 留多久；可查期間是租戶看得到多久以前的資料，依方案而定（[方案與權益](../product/plans.md)，清單 B3、J3），不能長於保存期限。2026-10-26 負責人決定由資料庫強制（Laysi/trustiot-v2#143）：
+
+- **由 ClickHouse 強制。** 每個租戶帳號帶三個 `CONST` 設定，一張表一個時間窗：`SQL_queryable_raw_days`（原始資料，天）、`SQL_queryable_1m_months` 與 `SQL_queryable_1h_months`（彙總，日曆月）。`0011_queryable_period.sql` 在租戶過濾的同一批 row policy 加上 `ts >= now64() - <天數>`、`bucket >= now64() - <月數>`，所以歷史 API、語意工具與 AI 的 SQL 讀到的都是同一個範圍，不論查詢寫了什麼條件；帳號是 `readonly`、設定是 `CONST`，帳號自己改不了。規則、部署與回復見 [services/ingest](../../services/ingest/README.md)「可查期間」；以租戶帳號直接驗證的繞過清單在 `services/telemetry-query/tests/queryable_period.rs`。
+- **方案變更從下一個查詢起生效。** telemetry-query 建帳號時寫入時間窗，每個查詢前讀回，不同就以 `ALTER USER ... MODIFY SETTINGS` 改成方案的值（[services/telemetry-query](../../services/telemetry-query/README.md)「可查期間」）。升級後下一個查詢就看得到更早的資料，降級後立即看不到；資料本身不動。目前所有租戶固定為 Starter 例（原始資料 7 天、彙總 3 個月），依方案的值由 Laysi/trustiot-v2#453 接上，每張表的值不能超過該表的保存期限。
+- **以讀值時間計算，與保存期限不同。** 保存期限用收到時間，可查期間用讀值時間（`ts`，彙總格的 `bucket`）：客戶問的是「哪一段時間的資料」。所以閘道器斷線後補送的舊讀值照樣保存，但讀值時間早於原始資料的可查期間時，只看得到它的彙總（在彙總的可查期間內時）。
+- **缺設定或值錯誤時讀不到。** 帳號沒有時間窗設定時每次讀取都報錯，值是負數、太大或不是數字時也一樣，不會變成看得到全部；telemetry-query 在下一個查詢前把值補回方案的值。
 
 ## 磁碟水位告警
 

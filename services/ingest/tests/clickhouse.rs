@@ -110,6 +110,12 @@ fn password() -> String {
     Uuid::new_v4().simple().to_string()
 }
 
+/// The queryable period of every tenant account here (0011_queryable_period.sql): the longest
+/// the settings accept, so the readings at fixed past times stay visible. The period itself is
+/// tested in services/telemetry-query/tests/queryable_period.rs.
+const WIDE_PERIOD: &str = ", SQL_queryable_raw_days = 36500 CONST, \
+     SQL_queryable_1m_months = 1200 CONST, SQL_queryable_1h_months = 1200 CONST";
+
 /// Creates a tenant account with the two statements documented in 0004_access.sql.
 async fn create_tenant_account(ch: &ClickHouse, user: &str, tenant: Option<Uuid>) -> Account {
     create_tenant_account_with(ch, user, tenant, "").await
@@ -131,7 +137,7 @@ async fn create_tenant_account_with(
         .unwrap_or_default();
     ch.admin_ok(&format!(
         "CREATE USER {user} IDENTIFIED WITH sha256_password BY '{}' \
-         SETTINGS PROFILE 'trustiot_tenant_reader'{tenant_setting}{extra}",
+         SETTINGS PROFILE 'trustiot_tenant_reader'{tenant_setting}{WIDE_PERIOD}{extra}",
         account.password
     ))
     .await;
@@ -515,13 +521,16 @@ fn attacks(world: &World) -> Vec<Attack> {
             "SELECT count() FROM merge('trustiot', '^tenant_telemetry$')",
             answer(&a_count),
         ),
-        // Matches the three tenant views, whose columns differ: ClickHouse 26.8 refuses to
-        // convert one view's columns into the other's. Restricted to the raw view, merge() is
-        // the attack above.
+        // Matches the three tenant views: the tenant's own raw rows and its one cell in each
+        // aggregate (its readings lie within one minute), and nothing of tenant B. Before
+        // 0011_queryable_period.sql this bare count() failed converting one view's columns into
+        // another's (CANNOT_CONVERT_TYPE), an accident of the column it read rather than a
+        // refusal: other shapes of the same query answered with the tenant's own rows, as this
+        // one does now that the policies also read ts and bucket (Laysi/trustiot-v2#143).
         attack(
             "merge(): every table in the database",
             "SELECT count() FROM merge('trustiot', '.*')",
-            Expect::Denied,
+            answer((A_ROWS + 2).to_string()),
         ),
         attack(
             "merge(): the telemetry table",
@@ -1147,7 +1156,7 @@ async fn deny_by_default_covers_new_accounts(world: &World) {
     }
     ch.admin_ok(&format!(
         "CREATE USER {} IDENTIFIED WITH sha256_password BY '{}' \
-         SETTINGS readonly = 1 CONST, SQL_tenant_id = '{tenant}' CONST",
+         SETTINGS readonly = 1 CONST, SQL_tenant_id = '{tenant}' CONST{WIDE_PERIOD}",
         direct_tenant.user, direct_tenant.password
     ))
     .await;
@@ -1521,10 +1530,114 @@ const OTHER_PROBES: &[(&str, &str)] = &[
 fn normalized(answer: &Answer, key: Uuid) -> String {
     let key = key.to_string();
     let outcome = match &answer.result {
-        Ok(body) => format!("answer {}", body.trim().replace(&key, "<key>")),
+        Ok(body) => format!(
+            "answer {}",
+            without_window_start(&body.trim().replace(&key, "<key>"))
+        ),
         Err(error) => format!("refused {}", error.code()),
     };
     format!("{outcome} (read_rows {:?})", answer.read_rows)
+}
+
+/// Whether a quoted value has the shape of a window start.
+type Shape = fn(&str) -> bool;
+
+/// `text` with the start of the queryable period replaced (0011_queryable_period.sql): EXPLAIN
+/// shows the row policies' `ts >= <now − window>` and `bucket >= <now − window>` with the time
+/// the query started, as a date and time in the filters and as Unix seconds in the primary key's
+/// condition (`ts in ['<seconds>', +Inf)`), which differ from one probe to the next. Only a
+/// quoted value of that shape right after those conditions is replaced.
+fn without_window_start(text: &str) -> String {
+    const CONDITIONS: [(&str, Shape); 4] = [
+        ("ts >= ", is_date_time),
+        ("bucket >= ", is_date_time),
+        ("ts in [", is_seconds),
+        ("bucket in [", is_seconds),
+    ];
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some((index, length, shaped)) = CONDITIONS
+        .iter()
+        .filter_map(|(condition, shaped)| {
+            rest.find(condition)
+                .map(|index| (index, condition.len(), *shaped))
+        })
+        .min_by_key(|(index, _, _)| *index)
+    {
+        let Some((head, tail)) = rest.split_at_checked(index + length) else {
+            break;
+        };
+        out.push_str(head);
+        rest = tail;
+        if let Some((quote, after)) = quoted(rest, shaped) {
+            out.push_str(quote);
+            out.push_str("<window start>");
+            out.push_str(quote);
+            rest = after;
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
+/// The quote of a quoted value of `shaped` form at the start of `text` (`'` or, in TSV, `\'`),
+/// and the text after it.
+fn quoted(text: &str, shaped: Shape) -> Option<(&'static str, &str)> {
+    let quote = if text.starts_with("\\'") {
+        "\\'"
+    } else if text.starts_with('\'') {
+        "'"
+    } else {
+        return None;
+    };
+    let (value, after) = text.strip_prefix(quote)?.split_once(quote)?;
+    shaped(value).then_some((quote, after))
+}
+
+/// `YYYY-MM-DD hh:mm:ss`, with or without a fraction of a second.
+fn is_date_time(stamp: &str) -> bool {
+    const SHAPE: &str = "0000-00-00 00:00:00";
+    let (whole, fraction) = stamp.split_once('.').unwrap_or((stamp, "0"));
+    whole.len() == SHAPE.len()
+        && whole.bytes().zip(SHAPE.bytes()).all(|(actual, shape)| {
+            if shape == b'0' {
+                actual.is_ascii_digit()
+            } else {
+                actual == shape
+            }
+        })
+        && is_digits(fraction)
+}
+
+/// Unix seconds, possibly negative, with or without a fraction.
+fn is_seconds(value: &str) -> bool {
+    let unsigned = value.strip_prefix('-').unwrap_or(value);
+    let (whole, fraction) = unsigned.split_once('.').unwrap_or((unsigned, "0"));
+    is_digits(whole) && is_digits(fraction)
+}
+
+fn is_digits(text: &str) -> bool {
+    !text.is_empty() && text.bytes().all(|byte| byte.is_ascii_digit())
+}
+
+#[test]
+fn only_the_window_start_is_replaced() {
+    assert_eq!(
+        without_window_start(
+            "ts >= \\'1926-11-19 18:49:56.687\\' AND tenant_id = \\'x\\' AND bucket >= '1926-11-19 18:49:56' AND ts >= now()"
+        ),
+        "ts >= \\'<window start>\\' AND tenant_id = \\'x\\' AND bucket >= '<window start>' AND ts >= now()"
+    );
+    assert_eq!(
+        without_window_start(
+            "and((ts in [\\'-1360645452.739\\', +Inf)), (tenant_id in [\\'k\\', \\'k\\'])), (bucket in ['-1360645452', +Inf))"
+        ),
+        "and((ts in [\\'<window start>\\', +Inf)), (tenant_id in [\\'k\\', \\'k\\'])), (bucket in ['<window start>', +Inf))"
+    );
+    assert_eq!(
+        without_window_start("ts >= '2026-10-10' AND value >= '1926-11-19 18:49:56'"),
+        "ts >= '2026-10-10' AND value >= '1926-11-19 18:49:56'"
+    );
 }
 
 /// Laysi/trustiot-v2#260: no table function, statement or system table that names a table gives

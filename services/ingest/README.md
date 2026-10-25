@@ -28,6 +28,7 @@ DDL 是 `migrations/clickhouse/` 的 SQL 檔，部署時由 migration Job（Lays
 | `0008_telemetry_query.sql` | telemetry-query 的服務帳號 `trustiot_telemetry_query`：只能建立與修改名稱以 `trustiot_tenant_account_` 開頭的帳號，並把租戶角色 `trustiot_tenant_reader` 給它們（Laysi/trustiot-v2#119；[services/telemetry-query](../telemetry-query/README.md#租戶帳號)） |
 | `0009_telemetry_query_grantees.sql` | 服務帳號 `GRANTEES NONE`：它以 `ADMIN OPTION` 持有租戶角色，只能在 `CREATE USER ... DEFAULT ROLE` 時把角色給新建的帳號，不能把角色授與或收回任何既有的使用者或角色（Laysi/trustiot-v2#119 的安全審查） |
 | `0010_telemetry_rollups.sql` | 1 分鐘與 1 小時彙總表 `trustiot.telemetry_1m`、`telemetry_1h`，填入它們的 materialized view 與這些 view 的 DEFINER 帳號 `trustiot_rollup_definer`，租戶讀的 view `tenant_telemetry_1m`、`tenant_telemetry_1h`，以及補進既有資料與檢查一致性用的 backfill view（補資料由 migration Job 在套用之後執行；Laysi/trustiot-v2#141；見下方「彙總表」） |
+| `0011_queryable_period.sql` | 可查期間由 ClickHouse 強制：租戶 view 的 DEFINER 與租戶角色在三張表、三個 view 上的 row policy 加上時間窗條件，窗長取自每個租戶帳號的 `CONST` 設定（Laysi/trustiot-v2#143；見下方「可查期間」） |
 
 檔案格式（migration Job 與測試都依賴）：
 
@@ -152,8 +153,8 @@ materialized view 只處理 INSERT。重寫一批（沒有完成紀錄的批次�
 | 帳號 `trustiot_tenant_view_definer` | 三個租戶 view 的 DEFINER。`IDENTIFIED WITH no_password HOST NONE`：不能登入，沒有密碼要輪替；只有 `telemetry` 與兩張彙總表的 `SELECT` |
 | 帳號 `trustiot_rollup_definer` | 填彙總表的 materialized view 與 backfill view 的 DEFINER。同樣 `no_password HOST NONE`；只有 `telemetry` 的 `SELECT` 與兩張彙總表的 `SELECT, INSERT`，以及它在這三張表上看得到全部列的 row policy `rollup_definer`。沒有這條 policy 時 `deny_by_default` 會讓 view 讀到 0 列：寫入照樣成功，彙總表卻什麼都沒加 |
 | row policy `deny_by_default`（每張表與每個 view） | `USING 0 TO ALL`。ClickHouse 的伺服器預設 `users_without_row_policies_can_read_rows = true`：表上有 policy、但沒有 policy 適用於某帳號時，那個帳號看得到全部的列。這條讓每個帳號都至少有一條 policy，沒有被其他 policy 點名的角色或帳號一列也讀不到，不必改伺服器設定 |
-| row policy `tenant_view_definer`（`telemetry` 與兩張彙總表） | `USING tenant_id = toUUID(getSetting('SQL_tenant_id')) TO trustiot_tenant_view_definer`。租戶過濾真正生效的地方：DEFINER view 裡的查詢沿用呼叫者的設定，`SQL_tenant_id` 就是呼叫帳號的常數租戶 |
-| row policy `tenant_isolation`（三個租戶 view、`telemetry` 與兩張彙總表） | `USING tenant_id = toUUID(getSetting('SQL_tenant_id')) TO trustiot_tenant_reader`；沒有這個設定的帳號查詢時報錯（`UNKNOWN_SETTING`），不會拿到資料。view 上這條是第二層；表上這條在租戶角色沒有表權限時不起作用，只在萬一誤加了表權限時仍然過濾列 |
+| row policy `tenant_view_definer`（`telemetry` 與兩張彙總表） | `USING tenant_id = toUUID(getSetting('SQL_tenant_id')) AND <時間窗> TO trustiot_tenant_view_definer`。租戶過濾與可查期間真正生效的地方：DEFINER view 裡的查詢沿用呼叫者的設定，`SQL_tenant_id` 與時間窗設定就是呼叫帳號的常數（時間窗見下方「可查期間」） |
+| row policy `tenant_isolation`（三個租戶 view、`telemetry` 與兩張彙總表） | `USING tenant_id = toUUID(getSetting('SQL_tenant_id')) AND <時間窗> TO trustiot_tenant_reader`；沒有這些設定的帳號查詢時報錯（`UNKNOWN_SETTING`），不會拿到資料。view 上這條是第二層；表上這條在租戶角色沒有表權限時不起作用，只在萬一誤加了表權限時仍然過濾列 |
 | row policy `service_all_rows`（`telemetry`、`batch_commits` 與兩張彙總表） | `USING 1 TO trustiot_ingest`；服務帳號另建的 policy |
 | row policy `deny_by_default`（materialized view `telemetry_1m_mv`、`telemetry_1h_mv`） | 從 materialized view `SELECT` 時，ClickHouse 以 view 的 DEFINER 讀目標表，讀者在彙總表上的 policy 不適用：沒有這條，任何拿到整個資料庫 `SELECT` 的帳號（管理帳號也是）都能經 view 讀到每個租戶的彙總（2026-10-25 測試發現）。有了它所有帳號經 materialized view 都讀到 0 列，寫入不受影響 |
 | row policy `migration_account`（backfill view） | `USING 1 TO NONE`：平常不點名任何帳號，管理帳號經 `deny_by_default` 也讀到 0 列。migration Job 補資料時、管理者依 runbook 檢查或修正時，暫時改成 `TO CURRENT_USER`，做完改回 `TO NONE`（上方「既有資料的 backfill」） |
@@ -162,11 +163,13 @@ materialized view 只處理 INSERT。重寫一批（沒有完成紀錄的批次�
 
 profile 與 quota 的數字是例子，建立租戶時依方案訂實際值（Laysi/trustiot-v2#119）。
 
-新增租戶只要兩句（Laysi/trustiot-v2#119 在建立租戶時執行；測試以同樣的語句建立租戶帳號），租戶帳號查詢三個租戶 view：
+新增租戶只要兩句（Laysi/trustiot-v2#119 在建立租戶時執行；測試以同樣的語句建立租戶帳號），租戶帳號查詢三個租戶 view。三個時間窗設定是可查期間（下方「可查期間」），值由 telemetry-query 依方案寫入：
 
 ```sql
 CREATE USER <name> IDENTIFIED WITH sha256_password BY '<password>'
-    SETTINGS PROFILE 'trustiot_tenant_reader', SQL_tenant_id = '<tenant UUID>' CONST;
+    SETTINGS PROFILE 'trustiot_tenant_reader', SQL_tenant_id = '<tenant UUID>' CONST,
+    SQL_queryable_raw_days = <天> CONST, SQL_queryable_1m_months = <月> CONST,
+    SQL_queryable_1h_months = <月> CONST;
 GRANT trustiot_tenant_reader TO <name>;
 ```
 
@@ -203,6 +206,36 @@ profile 同時掛在帳號與角色上：帳號在 session 裡 `SET ROLE NONE` �
 - 讀取統計（`X-ClickHouse-Summary` 的 `read_rows`）以 granule 為單位：自己的資料落在 granule 邊界時，數字會包含同一個 granule 裡其他租戶的列數。對其他租戶下的條件不會改變這個數字（測試比對過）。
 - ClickHouse 26.8 的 quota 不計算沒有讀表的常數查詢（例如 `SELECT 1`）。
 
+### 可查期間（Laysi/trustiot-v2#143）
+
+方案的可查期間（清單 B3、J3；[方案](../../docs/product/plans.md)）由 ClickHouse 強制，不靠服務的程式碼：歷史 API、語意工具與 AI 的 SQL 讀到的都是同一個範圍，不論查詢寫了什麼條件。`0011_queryable_period.sql` 在租戶過濾的同一批 row policy 加上時間窗條件，窗長是租戶帳號自己的 `CONST` 設定，一張表一個：
+
+| 設定 | 表 | 單位 | 條件（列看得到的時候） |
+| --- | --- | --- | --- |
+| `SQL_queryable_raw_days` | `telemetry`（`tenant_telemetry`） | 天 | `ts >= now64(3, 'UTC') - toIntervalDay(<天>)` |
+| `SQL_queryable_1m_months` | `telemetry_1m`（`tenant_telemetry_1m`） | 月 | `bucket >= now64(3, 'UTC') - toIntervalMonth(<月>)` |
+| `SQL_queryable_1h_months` | `telemetry_1h`（`tenant_telemetry_1h`） | 月 | `bucket >= now64(3, 'UTC') - toIntervalMonth(<月>)` |
+
+- **邊界**：含起點，不取整；沒有上限（時間在未來的讀值看得到）。依讀值時間（`ts`、格的 `bucket`），不是收到時間。`now64` 是 ClickHouse 伺服器在查詢開始時的時鐘。減月份時保留日期，該月沒有那一天時取月底（2026-05-31 減 3 個月是 2026-02-28）。
+- **生效的位置**：與租戶過濾相同。DEFINER 帳號在三張表上的 policy 先於 PREWHERE 與使用者的 WHERE 執行，使用者的任何條件都碰不到窗外的列；租戶角色在三個 view 與三張表上的 policy 是第二層。服務、彙總的 DEFINER 與 migration 帳號的 policy 不變，仍讀全部的列，所以寫入、彙總、backfill 與對帳不受影響。
+- **值與失敗時**：`accurateCast(..., 'UInt16')` 拒絕負數、過大與非數字的值（`CANNOT_CONVERT_TYPE`、`CANNOT_PARSE_TEXT`），帳號沒有這些設定時每次讀取都報 `UNKNOWN_SETTING`：設定缺漏或錯誤時讀不到任何列。`least(..., 36500)` 與 `least(..., 1200)` 只防止日期運算溢位，服務寫入的值都在保存期限內。租戶帳號是 `readonly = 1`，設定又是 `CONST`，帳號自己以 `SETTINGS`、URL 參數或 `SET` 都改不了（`READONLY`）。
+- **誰寫入**：telemetry-query 建帳號時寫入，每次以帳號查詢之前讀回；缺少或與方案不同時，以 `ALTER USER ... MODIFY SETTINGS` 重設（只改這三個設定，profile 與 `SQL_tenant_id` 不變），所以方案變更從帳號的下一個查詢起生效。服務自己裁切範圍時從讀回的窗長算，起點比資料庫晚 5 分鐘並進位到格（[telemetry-query](../telemetry-query/README.md#可查期間)）。
+
+**部署**：migration Job 先套用 `0011`，新版 telemetry-query 才啟動。這之間，舊版 pod 以還沒有時間窗設定的既有帳號查詢會得到 `UNKNOWN_SETTING`，回應 503；新版 pod 在每個帳號的第一個查詢補上設定。也就是部署 `0011` 時，每個租戶的遙測查詢會有一段短暫的 503，直到舊 pod 換掉為止（2026-10-26 決定接受，v2 尚未上線）。
+
+**回復**：只回復程式碼時，已有時間窗設定的帳號照常運作（舊版不讀這些設定）；舊版新建的帳號沒有設定，查詢會得到 503，直到 policy 也回復。回復 policy 要寫成新的 migration 檔（套用過的檔案不能改），把 9 條 policy 的條件改回只有租戶過濾；帳號上留下的設定無害，不必刪：
+
+```sql
+ALTER ROW POLICY tenant_view_definer ON trustiot.telemetry AS PERMISSIVE FOR SELECT
+USING tenant_id = toUUID(getSetting('SQL_tenant_id')) TO trustiot_tenant_view_definer;
+ALTER ROW POLICY tenant_isolation ON trustiot.telemetry AS PERMISSIVE FOR SELECT
+USING tenant_id = toUUID(getSetting('SQL_tenant_id')) TO trustiot_tenant_reader;
+ALTER ROW POLICY tenant_isolation ON trustiot.tenant_telemetry AS PERMISSIVE FOR SELECT
+USING tenant_id = toUUID(getSetting('SQL_tenant_id')) TO trustiot_tenant_reader;
+-- telemetry_1m、tenant_telemetry_1m、telemetry_1h、tenant_telemetry_1h 同上，
+-- 表上兩條（tenant_view_definer、tenant_isolation），view 上一條（tenant_isolation）。
+```
+
 ## 測試
 
 在 repo 根目錄執行：
@@ -226,8 +259,8 @@ CARGO_BUILD_JOBS=2 cargo test -p ingest --test clickhouse -- --nocapture
 5. 角色、row policy、profile、quota 與兩個 DEFINER 帳號全部存在 `local_directory`（以 SQL 建立）；租戶角色只有三個租戶 view 的 `SELECT`；租戶 view 的 DEFINER 只有 `telemetry` 與兩張彙總表的 `SELECT`，彙總的 DEFINER 只有 `telemetry` 的 `SELECT` 與彙總表的 `SELECT, INSERT`，兩者都不能登入；materialized view 與 backfill view 以彙總的 DEFINER 執行。
 6. 租戶 A、B 經 view 各自讀到應有的列，服務帳號讀到全部；只有 `SELECT` 權限、沒有 policy 點名的角色讀到 0 列。
 7. 以租戶 A 的帳號經 view 跑 2026-10-09 可行性測試的攻擊類型（兩個彙總 view 各跑一次同類的攻擊，A、B 的讀值在同一個設備、資料點與分鐘）（直接查、JOIN、子查詢、UNION、FINAL、merge()、view()、系統表）、改設定、表函式、冒用身分與寫入，以及 Laysi/trustiot-v2#59 驗證新增的攻擊；WHERE 裡的 `throwIf()` 不會碰到其他租戶的列。每一項都得到預期的答案或被拒絕，回應中從未出現 B 的租戶 ID 或 B 的資料。同一批攻擊改查 `telemetry` 時一律被拒。
-8. 新帳號預設讀不到：沒有角色的帳號被拒，直接被授與 `SELECT` 的帳號、bootstrap 管理帳號、有租戶設定但不在租戶角色的帳號讀每張表、每個租戶 view 與 materialized view 都讀到 0 列或報錯（backfill view 只有套用檔案的管理帳號讀得到）；租戶帳號讀任何表、materialized view 或 backfill view 一律被拒；`merge('trustiot', '.*')` 被拒。
-9. `SET ROLE NONE` 之後讀不到資料、查詢上限仍有效；沒有 `SQL_tenant_id` 設定的租戶帳號查詢時報錯。
+8. 新帳號預設讀不到：沒有角色的帳號被拒，直接被授與 `SELECT` 的帳號、bootstrap 管理帳號、有租戶設定但不在租戶角色的帳號讀每張表、每個租戶 view 與 materialized view 都讀到 0 列或報錯（backfill view 只有套用檔案的管理帳號讀得到）；租戶帳號讀任何表、materialized view 或 backfill view 一律被拒；`merge('trustiot', '.*')` 只算到自己在三個租戶 view 的列（`0011` 之前這句因欄位轉換失敗而報錯，不是權限拒絕）。
+9. `SET ROLE NONE` 之後讀不到資料、查詢上限仍有效；沒有 `SQL_tenant_id` 設定的租戶帳號查詢時報錯。測試的租戶帳號都帶設定允許的最長時間窗（讀值在固定的過去時間）；可查期間本身由 `services/telemetry-query/tests/queryable_period.rs` 測試。
 10. 呼叫帳號的讀取列數與記憶體上限涵蓋 view 內讀的列；quota 把 view 讀的列算在呼叫帳號上。
 11. ingest 帳號能寫入、以 `DELETE FROM` 刪除一批（租戶經 view 也看不到了）、寫完成紀錄並讀回高水位、讀寫彙總表；建表、改表、改 TTL、改表設定、刪表、清表、改 view、建帳號、改 policy、刪除彙總表的列一律被拒；constraint 擋下全零租戶與放錯欄位的值。
 12. quota 以帳號分開計算：一個租戶帳號用完 quota 被擋下時，另一個照常查詢。

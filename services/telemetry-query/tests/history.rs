@@ -1,7 +1,8 @@
 //! The history API of device charts (Laysi/trustiot-v2#119, acceptance 3 and 4): a device's
 //! series, downsampled over the requested range in the requested time zone, equals what a
 //! direct query of the telemetry table computes, with buckets that start at the time zone's
-//! local hours and midnights; raw readings and latest values equal the stored ones; a range that
+//! local hours and midnights, from the aggregates' whole cells (Laysi/trustiot-v2#143: a range
+//! that is not on cell boundaries reads the cells that start in it); raw readings and latest values equal the stored ones; a range that
 //! starts before the queryable period is cut to it and one wholly before it is refused; and the
 //! API's refusals (no token, no tenant, malformed and invalid parameters, too many points, the
 //! tenant's query quota).
@@ -77,8 +78,17 @@ WHERE tenant_id = {tenant:UUID} AND device_id = {device:UUID} AND point = {point
   AND ts >= fromUnixTimestamp64Milli({from:Int64}) AND ts < fromUnixTimestamp64Milli({to:Int64})
 FORMAT TSV";
 
-const HOUR_MS: i64 = 3_600_000;
+const MINUTE_MS: i64 = 60_000;
+const HOUR_MS: i64 = 60 * MINUTE_MS;
 const DAY_MS: i64 = 24 * HOUR_MS;
+
+/// The service's clamp starts this much after the database's window (`period::PERIOD_MARGIN`).
+const MARGIN_MS: i64 = 5 * MINUTE_MS;
+
+/// `ms` rounded up to a multiple of `unit`.
+fn ceil(ms: i64, unit: i64) -> i64 {
+    ms + (unit - ms.rem_euclid(unit)) % unit
+}
 
 fn rfc3339(ms: i64) -> String {
     DateTime::<Utc>::from_timestamp_millis(ms)
@@ -155,7 +165,9 @@ impl Fixture {
 /// error code, and the message key (none: not checked).
 type RefusalCase<'a> = (Option<&'a str>, String, u16, &'a str, Option<&'a str>);
 
-/// Compares an aggregated float series with the reference, bucket by bucket.
+/// Compares an aggregated float series over the requested range with the reference over `cells`,
+/// bucket by bucket: `cells` is the requested range with both ends rounded up to the start of
+/// the aggregate's next cell, as the series sums the cells that start in the requested range.
 #[allow(
     clippy::print_stderr,
     reason = "prints each compared series for the test report"
@@ -166,6 +178,7 @@ async fn assert_float_series(
     tz: &str,
     interval: Option<&str>,
     (from, to): (i64, i64),
+    cells: (i64, i64),
     alignment: Option<(i64, i64)>,
 ) {
     let query = match interval {
@@ -186,12 +199,12 @@ async fn assert_float_series(
     assert_eq!(ms(&series["to"]), to);
     assert_eq!(series["tz"], tz);
     let (tenant, device) = (fixture.tenant.to_string(), fixture.device.to_string());
-    let (from_text, to_text) = (from.to_string(), to.to_string());
+    let (from_text, to_text) = (cells.0.to_string(), cells.1.to_string());
     let mut params = fixture.params("temp", &tenant, &device).to_vec();
     params.extend([("tz", tz), ("from", &from_text), ("to", &to_text)]);
     let expected = lines(&fixture.stack.reference(reference, &params).await);
     let points = series["points"].as_array().expect("points");
-    let what = format!("{tz} {interval:?}");
+    let what = format!("{tz} {interval:?} {}..{}", rfc3339(from), rfc3339(to));
     assert!(!expected.is_empty(), "{what}: the reference has buckets");
     assert_eq!(points.len(), expected.len(), "{what}: buckets\n{series}");
     for (point, row) in points.iter().zip(&expected) {
@@ -213,9 +226,12 @@ async fn assert_float_series(
     }
     let readings: u64 = points.iter().filter_map(|p| p["count"].as_u64()).sum();
     eprintln!(
-        "series {what:>28}: interval {}, {} buckets, {readings} readings, equal to the reference",
+        "series {what}: interval {}, {} buckets, {readings} readings, equal to the reference \
+         over [{}, {})",
         series["interval"],
-        points.len()
+        points.len(),
+        rfc3339(cells.0),
+        rfc3339(cells.1)
     );
 }
 
@@ -280,8 +296,11 @@ async fn history_matches_clickhouse_within_the_queryable_period() {
     }
 
     // 1. Acceptance 4: downsampled series equal the reference, in several time zones and
-    //    intervals, with buckets on local boundaries.
-    let range = (now - 49 * HOUR_MS, now - HOUR_MS);
+    //    intervals, with buckets on local boundaries. The range lies on UTC hours, so on the
+    //    cells of both aggregates; Asia/Kolkata's hours are not UTC hours, so its hour-based
+    //    intervals read the one-minute cells.
+    let hour = now - now.rem_euclid(HOUR_MS);
+    let range = (hour - 49 * HOUR_MS, hour - HOUR_MS);
     let taipei = 8 * HOUR_MS;
     let kolkata = 5 * HOUR_MS + 30 * 60_000;
     for (reference, tz, interval, alignment) in [
@@ -303,7 +322,31 @@ async fn history_matches_clickhouse_within_the_queryable_period() {
         // No interval: the finest with at most 1500 buckets over 48 hours is 5 minutes.
         (REF_5_MINUTES, "Asia/Taipei", None, None),
     ] {
-        assert_float_series(&fixture, reference, tz, interval, range, alignment).await;
+        assert_float_series(&fixture, reference, tz, interval, range, range, alignment).await;
+    }
+    // Off the cell boundaries: the cells that start in the range, so both ends move up to the
+    // next minute (one-minute cells: minute intervals, and Asia/Kolkata's hours) or the next UTC
+    // hour (one-hour cells).
+    let odd = (range.0 + 61_234, range.1 - 1_500);
+    let minutes = (ceil(odd.0, MINUTE_MS), ceil(odd.1, MINUTE_MS));
+    let hours = (ceil(odd.0, HOUR_MS), ceil(odd.1, HOUR_MS));
+    assert_eq!(hours, (range.0 + HOUR_MS, range.1));
+    for (reference, tz, interval, cells, alignment) in [
+        (REF_HOUR, "UTC", "1h", hours, (0, HOUR_MS)),
+        (REF_HOUR, "Asia/Taipei", "1h", hours, (taipei, HOUR_MS)),
+        (REF_HOUR, "Asia/Kolkata", "1h", minutes, (kolkata, HOUR_MS)),
+        (REF_15_MINUTES, "UTC", "15m", minutes, (0, 15 * 60_000)),
+    ] {
+        assert_float_series(
+            &fixture,
+            reference,
+            tz,
+            Some(interval),
+            odd,
+            cells,
+            Some(alignment),
+        )
+        .await;
     }
     let auto = fixture
         .series(
@@ -473,10 +516,11 @@ async fn history_matches_clickhouse_within_the_queryable_period() {
     assert_eq!(series["truncated"], true, "{series}");
     let earliest = ms(&series["earliest"]);
     assert_eq!(ms(&series["from"]), earliest);
+    // Seven days back plus the margin, rounded up to a whole millisecond.
     assert!(
-        (before - TimeDelta::days(7)).timestamp_millis() <= earliest
-            && earliest <= (after - TimeDelta::days(7)).timestamp_millis(),
-        "raw period starts seven days back: {series}"
+        (before - TimeDelta::days(7)).timestamp_millis() + MARGIN_MS <= earliest
+            && earliest <= (after - TimeDelta::days(7)).timestamp_millis() + MARGIN_MS + 1,
+        "raw period starts seven days and five minutes back: {series}"
     );
     assert_eq!(series["points"], serde_json::json!([]), "{series}");
     eprintln!(
@@ -538,6 +582,11 @@ async fn history_matches_clickhouse_within_the_queryable_period() {
     assert!(
         earliest > now - 93 * DAY_MS && earliest < now - 88 * DAY_MS,
         "three calendar months back: {series}"
+    );
+    assert_eq!(
+        earliest.rem_euclid(HOUR_MS),
+        0,
+        "a day interval reads the one-hour cells, whose clamp starts on a whole UTC hour: {series}"
     );
     eprintln!(
         "period 1d 200 days back..now: truncated to {}, {} readings (120-day-old readings left out)",
