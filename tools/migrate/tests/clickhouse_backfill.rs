@@ -143,9 +143,20 @@ SETTINGS mutations_sync = 2",
 SETTINGS mutations_sync = 2",
 ];
 
-const POLICIES: &str = "SELECT table, apply_to_list FROM system.row_policies
+const POLICIES: &str = "SELECT table, apply_to_all, apply_to_list FROM system.row_policies
 WHERE short_name = 'migration_account' ORDER BY table FORMAT TSV";
-const POLICIES_UNBOUND: &str = "telemetry_1h_backfill\t[]\ntelemetry_1m_backfill\t[]\n";
+const POLICIES_UNBOUND: &str = "telemetry_1h_backfill\t0\t[]\ntelemetry_1m_backfill\t0\t[]\n";
+/// What a Job stopped between showing and hiding the backfill views, or an administrator's hand,
+/// leaves behind: one policy names the admin, the other everyone.
+const LEFT_BOUND: [&str; 2] = [
+    "ALTER ROW POLICY migration_account ON trustiot.telemetry_1m_backfill TO CURRENT_USER",
+    "ALTER ROW POLICY migration_account ON trustiot.telemetry_1h_backfill TO ALL",
+];
+/// The runbook's read of the policies (docs/runbooks/migrations.md, `policies`): whether each
+/// still names the account that checks.
+const RUNBOOK_POLICIES: &str = "SELECT table, apply_to_all, apply_to_list,
+    has(apply_to_list, currentUser()) AS mine FROM system.row_policies
+WHERE database = 'trustiot' AND short_name = 'migration_account' ORDER BY table FORMAT TSV";
 /// The runbook's check of one receive day (docs/runbooks/migrations.md).
 const CHECK_DAY: &str = "SELECT count() FROM trustiot.telemetry_1m_backfill(first_day = {day:Date},
     last_day = {day:Date}, raw_retention_days = {raw:UInt32}) FORMAT TSV";
@@ -450,14 +461,24 @@ async fn the_run_backfills_the_aggregates_within_the_raw_retention() {
     assert_eq!(admin(&clickhouse, CHECK_DAY, &check).await, "0\n");
     admin(&clickhouse, SHOW_BACKFILL_VIEWS, &[]).await;
     let shown = admin(&clickhouse, CHECK_DAY, &check).await;
+    // The runbook trusts the check only while both policies still name the account.
+    let during = rows(&admin(&clickhouse, RUNBOOK_POLICIES, &[]).await);
     admin(&clickhouse, HIDE_BACKFILL_VIEWS, &[]).await;
     assert_ne!(
         shown, "0\n",
         "named in the policy, the admin sees the difference"
     );
+    assert_eq!(during.len(), 2, "{during:?}");
+    assert!(during.iter().all(|row| row[3] == "1"), "{during:?}");
+    assert_eq!(
+        admin(&clickhouse, RUNBOOK_POLICIES, &[]).await,
+        "telemetry_1h_backfill\t0\t[]\t0\ntelemetry_1m_backfill\t0\t[]\t0\n",
+        "the runbook's last read after TO NONE"
+    );
     println!(
         "backfill views: the admin read 0 difference rows for {} while the policy named nobody, \
-         {} while it named the admin",
+         {} while it named the admin; the runbook's read of the policies showed mine = 1 on both \
+         during the check and `0 [] 0` on both after TO NONE",
         days.yesterday,
         shown.trim()
     );
@@ -515,6 +536,43 @@ async fn the_run_backfills_the_aggregates_within_the_raw_retention() {
         outside_before,
         "the cells of days whose raw rows may have expired changed"
     );
+    // 3. A policy left naming accounts: the next run, which has the backfill record, names
+    //    nobody again and says so; the run after it changes nothing.
+    for statement in LEFT_BOUND {
+        admin(&clickhouse, statement, &[]).await;
+    }
+    let left = admin(&clickhouse, POLICIES, &[]).await;
+    let left_rows = rows(&left);
+    assert_eq!(left_rows.len(), 2, "{left}");
+    assert_eq!(left_rows[0][..2], ["telemetry_1h_backfill", "1"], "{left}");
+    assert_eq!(left_rows[1][..2], ["telemetry_1m_backfill", "0"], "{left}");
+    assert_ne!(left_rows[1][2], "[]", "{left}");
+    assert_eq!(
+        admin(&clickhouse, RECORDS, &[("name", BACKFILL_RECORD)]).await,
+        format!("{BACKFILL_RECORD}\n"),
+        "the backfill is recorded"
+    );
+    let report = migrate::run(&config(&db, &clickhouse, 200), &CLICKHOUSE_ONLY)
+        .await
+        .expect("the run after a policy was left naming accounts");
+    let reset = format!(
+        "set the migration_account row policies of trustiot.telemetry_1h_backfill (all), \
+         trustiot.telemetry_1m_backfill ({}) back to name nobody",
+        left_rows[1][2]
+    );
+    assert_eq!(report.changes, std::slice::from_ref(&reset));
+    assert_eq!(admin(&clickhouse, POLICIES, &[]).await, POLICIES_UNBOUND);
+    let report = migrate::run(&config(&db, &clickhouse, 200), &CLICKHOUSE_ONLY)
+        .await
+        .expect("the run after that");
+    assert!(report.changes.is_empty(), "{:?}", report.changes);
+    assert_eq!(admin(&clickhouse, POLICIES, &[]).await, POLICIES_UNBOUND);
+    println!(
+        "policies left naming accounts ({}): the next run with the backfill recorded reported \
+         \"{reset}\" and left both naming nobody; the run after it reported no change",
+        left.trim().replace('\n', "; ").replace('\t', " ")
+    );
+
     let today_now = rows(&admin(&clickhouse, DAYS, &[]).await)
         .pop()
         .expect("the days")

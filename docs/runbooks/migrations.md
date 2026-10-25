@@ -217,6 +217,7 @@ Job 遇到下列情況會停止，不自動修改；修好之後，Job 依 `migr
 | ClickHouse：`the role trustiot_tenant_reader is held by ... grantee(s) besides trustiot_telemetry_query` | 租戶角色被給了服務帳號與 `trustiot_tenant_account_*` 帳號以外的使用者或角色，或某個租戶帳號拿到 `ADMIN OPTION`；持有者都讀得到租戶 view。服務帳號有 `GRANTEES NONE`，給不了別人，所以是有權授與的管理帳號做的 | 稽核後以管理帳號 `REVOKE trustiot_tenant_reader FROM <使用者或角色>`，租戶帳號是 `REVOKE ADMIN OPTION FOR trustiot_tenant_reader FROM <帳號>`；若同時出現上一列的 `GRANTEES` 訊息，照「懷疑時序查詢的服務帳號外洩」處理 |
 | ClickHouse：`the role trustiot_tenant_reader lacks SELECT on trustiot.<view>` | 租戶角色對某個租戶 view（`tenant_telemetry` 由 `0005_tenant_view.sql` 給，`tenant_telemetry_1m`、`tenant_telemetry_1h` 由 `0010_telemetry_rollups.sql` 給）的 `SELECT` 被收回，所有租戶帳號都讀不到那個 view | 稽核後以管理帳號 `GRANT SELECT ON trustiot.<view> TO trustiot_tenant_reader` |
 | ClickHouse：`the role trustiot_tenant_reader has grants or roles beyond SELECT on the tenant views` | 租戶角色被加了三個租戶 view 的 `SELECT` 以外的權限（包括表的權限與 `GRANT OPTION`）或角色，每個租戶帳號都會得到它們 | 稽核後以管理帳號 `REVOKE <權限> ON <對象> FROM trustiot_tenant_reader` 或 `REVOKE <角色> FROM trustiot_tenant_reader`；`GRANT OPTION` 是 `REVOKE GRANT OPTION FOR SELECT ON trustiot.<view> FROM trustiot_tenant_reader` |
+| ClickHouse：`the migration_account row policies of the backfill views still name ... after the run set them TO NONE` | Job 把彙總表 backfill view 的 policy 改回 `TO NONE` 之後，再讀時又點名了帳號：有別的程式同時在改它，例如有人在做「彙總表的 backfill 與一致性檢查」 | 等那件事做完（它最後也會改回 `TO NONE`），讓 Job 重試；不要在 Job 可能執行時做那個檢查 |
 | `did not accept the migration role within`、`not reachable within`、`held the lock for longer than` | 資料庫還沒起來，或另一個 Job 持有鎖太久 | 看資料庫的狀態；另一個 Job 卡住時先看它的日誌 |
 
 上面五個關於 `trustiot_telemetry_query` 與 `trustiot_tenant_reader` 的停止訊息出現時，Job 在停止之前先讓服務帳號不能登入（`HOST NONE`），訊息後面接著 `the run revoked the login of trustiot_telemetry_query (HOST NONE)`：修好之前服務建立不了新的租戶帳號，也重設不了租戶帳號的密碼，已建立的租戶帳號照常查詢。修好之後，服務啟用時的下一次 Job 設定密碼並恢復登入，日誌有 `let ClickHouse account trustiot_telemetry_query log in`。
@@ -290,24 +291,27 @@ Job 第一次套用 `0010_telemetry_rollups.sql` 的那次執行，在套用完�
 
 **界限**：backfill view 只比對 `today − raw_retention_days + 2`（UTC）以後的收到日。`raw_retention_days` 一律傳原始資料實際保存的天數，也就是 `telemetry` 現在的 TTL（上方「原始資料的保存期限」的 `engine_full` 裡 `toIntervalDay(<天數>)` 的天數）；最近延長過原始資料的保存期限時，在延長之後的「新天數 − 舊天數」天內改傳舊的天數，因為舊的較短期限已經刪掉的列不會回來。界限以前（原始保存期限的最後兩天與更早）的收到日，彙總與原始資料不一致是預期的：原始列已經過期，只剩彙總。**絕不能「修正」這些日子**：修正會抹掉只剩彙總的歷史，無法復原。
 
-- **Job 停在 backfill，原因是 `TIMEOUT_EXCEEDED`**：訊息寫出表與收到日（`backfill trustiot.telemetry_1m for the receive day <日期>`）。那一天的一句在 25 秒（`max_execution_time`，低於 Job 30 秒的請求逾時）內沒有做完，在伺服器上也已停止；已補的格保留，下一次執行只補還缺的格。Laysi/trustiot-v2#91 之前沒有程式持續寫入 `telemetry`（只有 `tools/lab-dataset` 載入的測試資料），所以預期不會發生；大表上的 backfill 時間還沒有實測。重試仍停在同一天時，不要拿掉時間上限（Job 放棄等待之後，一句還在跑的 backfill 會和下一次執行同時寫，重複計算）；開 issue，附上原始資料的列數（`SELECT total_rows FROM system.tables WHERE database = 'trustiot' AND name = 'telemetry'`）。Job 在 backfill 途中被 Kubernetes 停掉（超過 `activeDeadlineSeconds`）時沒有機會把 policy 改回 `TO NONE`，Job 的帳號仍讀得到每個租戶的彙總：做一次下方檢查步驟的最後兩句（改回 `TO NONE` 並確認）。
+- **Job 停在 backfill，原因是 `TIMEOUT_EXCEEDED`**：訊息寫出表與收到日（`backfill trustiot.telemetry_1m for the receive day <日期>`）。那一天的一句在 25 秒（`max_execution_time`，低於 Job 30 秒的請求逾時）內沒有做完，在伺服器上也已停止；已補的格保留，下一次執行只補還缺的格。Laysi/trustiot-v2#641 之前沒有程式持續寫入 `telemetry`（只有 `tools/lab-dataset` 載入的測試資料），所以預期不會發生；大表上的 backfill 時間還沒有實測。重試仍停在同一天時，不要拿掉時間上限（Job 放棄等待之後，一句還在跑的 backfill 會和下一次執行同時寫，重複計算）；開 issue，附上原始資料的列數（`SELECT total_rows FROM system.tables WHERE database = 'trustiot' AND name = 'telemetry'`）。Job 在 backfill 途中被 Kubernetes 停掉（超過 `activeDeadlineSeconds`）時沒有機會把 policy 改回 `TO NONE`，Job 的帳號仍讀得到每個租戶的彙總，直到下一次執行：每一次執行（不論有沒有 backfill 紀錄）都在 backfill 那一步之後讀兩個 policy，點名了任何帳號就改回 `TO NONE`，日誌有 `set the migration_account row policies of ... back to name nobody`。不等下一次執行時，以管理帳號執行下方檢查步驟裡改回 `TO NONE` 的那一句，再讀一次 policy 確認。
 - **讓 Job 再補一次**（例如彙總表少了一段收到日的格）：刪掉紀錄 `ALTER TABLE trustiot_migrate.applied DELETE WHERE name = 'backfill/telemetry_rollups' SETTINGS mutations_sync = 2`，下一次執行以那時的保存期限補回界限以內缺的格，已有的格不變。同樣只在沒有程式寫入 `telemetry` 時做（見下方「修正」）。
+- **不要在 migration Job 可能執行時檢查或修正**（部署、`helm upgrade` 或 Flux 調和期間）：每一次 Job 執行都會把 policy 改回 `TO NONE`，檢查途中被改回時 view 讀到 0 列，看起來就像一致；修正則什麼都沒寫。先確認沒有還在執行的 Job（`kubectl -n <namespace> get jobs -l app.kubernetes.io/component=migrate`）；Flux 管理的叢集先暫停根 Kustomization 與 HelmRelease（做法同 [展示環境 runbook](demo-environment.md)「重設展示資料」的「暫停 Flux」），做完再恢復。
 - **檢查彙總是否與原始資料一致**：backfill view 平常不給任何帳號看（row policy `migration_account` 是 `TO NONE`）。檢查的帳號（叢集內 ClickHouse 是管理帳號，外部 ClickHouse 是給 Job 的帳號）先點名自己，做完一定改回 `TO NONE`。叢集內 ClickHouse 在 pod 內執行（`c` 的定義同上方「懷疑時序查詢的服務帳號外洩」，`<天數>` 依上面的界限）：
 
   ```bash
   kubectl -n <namespace> exec -i <release>-clickhouse-0 -c clickhouse -- bash -s <<'EOF'
   c() { clickhouse-client --user "$CLICKHOUSE_USER" --password "$(cat "$CLICKHOUSE_PASSWORD_FILE")" "$@"; }
+  policies() { c --query "SELECT table, apply_to_all, apply_to_list, has(apply_to_list, currentUser()) AS mine FROM system.row_policies WHERE database = 'trustiot' AND short_name = 'migration_account' ORDER BY table"; }
   c --query "ALTER ROW POLICY migration_account ON trustiot.telemetry_1m_backfill, trustiot.telemetry_1h_backfill TO CURRENT_USER"
   for table in telemetry_1m telemetry_1h; do
     c --query "SELECT '$table', received_day, aggregated, count(), sum(readings) FROM trustiot.${table}_backfill(first_day = '<YYYY-MM-DD>', last_day = '<YYYY-MM-DD>', raw_retention_days = <天數>) GROUP BY received_day, aggregated ORDER BY received_day, aggregated"
   done
+  echo '-- policies after the check'; policies
   c --query "ALTER ROW POLICY migration_account ON trustiot.telemetry_1m_backfill, trustiot.telemetry_1h_backfill TO NONE"
-  c --query "SELECT table, apply_to_list FROM system.row_policies WHERE short_name = 'migration_account'"
+  echo '-- policies at the end'; policies
   EOF
   ```
 
-  沒有任何列表示這段收到日裡、界限以內的每一格都一致；`first_day` 早於界限時，界限以前的日子不會列出，不代表一致。`aggregated = 0` 是彙總缺的格；`1` 是彙總有、但筆數或和不同的格，`sum(readings)` 是負的表示彙總多算（例如一批被刪掉而沒有對帳）。今天（UTC）的格與 ingest 正在重寫的批次可能暫時不一致。最後一句應該印出兩列 `[]`：還點名某個帳號時，那個帳號讀得到每個租戶的彙總，要改回 `TO NONE`。
-- **修正不一致的收到日**：只在沒有任何程式寫入 `telemetry` 時做（Laysi/trustiot-v2#91 之前；之後先把 ingest 縮到 0 個 replica），否則一個寫到一半的區塊會被算兩次。`raw_retention_days` 與檢查時相同，絕不能比上面的界限長。同一個 pod 內，像檢查一樣先點名自己，對兩張表各執行一次下面的語句（`<table>` 換成 `telemetry_1m` 或 `telemetry_1h`；就是 `services/ingest/src/rollup.rs` 的 `REPAIR_1M`、`REPAIR_1H`），最後改回 `TO NONE` 並確認：
+  先看 `policies after the check`：兩列的 `mine` 都是 `1`（檢查做完時 policy 仍點名你的帳號）時，結果才可信；是 `0` 表示途中有人（通常是 migration Job）改了 policy，view 可能讀到 0 列，丟掉結果，等 Job 結束後重做。可信時，沒有任何列表示這段收到日裡、界限以內的每一格都一致；`first_day` 早於界限時，界限以前的日子不會列出，不代表一致。`aggregated = 0` 是彙總缺的格；`1` 是彙總有、但筆數或和不同的格，`sum(readings)` 是負的表示彙總多算（例如一批被刪掉而沒有對帳）。今天（UTC）的格與 ingest 正在重寫的批次可能暫時不一致。`policies at the end` 應該是兩列 `0 [] 0`：還點名某個帳號（或 `apply_to_all` 是 `1`）時，那些帳號讀得到每個租戶的彙總，要改回 `TO NONE`。
+- **修正不一致的收到日**：只在沒有任何程式寫入 `telemetry` 時做（Laysi/trustiot-v2#641 之前；之後先把 ingest 縮到 0 個 replica），否則一個寫到一半的區塊會被算兩次；也不在 Job 可能執行時做（上面）。`raw_retention_days` 與檢查時相同，絕不能比上面的界限長。同一個 pod 內，像檢查一樣先點名自己，對兩張表各執行一次下面的語句（`<table>` 換成 `telemetry_1m` 或 `telemetry_1h`；就是 `services/ingest/src/rollup.rs` 的 `REPAIR_1M`、`REPAIR_1H`），再執行 `policies`：兩列的 `mine` 都是 `1` 時修正才完整，是 `0` 時等 Job 結束後從檢查重做。最後改回 `TO NONE` 並確認：
 
   ```sql
   INSERT INTO trustiot.<table> (tenant_id, device_id, point, bucket, gateway_id, stream_id, received_day, readings, numeric_readings, value_sum, value_min, value_max, first, last)

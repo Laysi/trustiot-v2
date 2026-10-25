@@ -11,7 +11,8 @@
 //!
 //! After the files and the data retention, a run without a record of it fills the one-minute
 //! and one-hour aggregates from the raw rows the telemetry table already held
-//! (`ClickHouse::backfill_aggregates`).
+//! (`ClickHouse::backfill_aggregates`), and every run then makes sure the backfill views show
+//! their rows to nobody (`ClickHouse::hide_backfill_views`).
 //!
 //! Values (names, hashes) travel as query parameters (`{name:Type}`), never inside the SQL text.
 //! ClickHouse 26.8 takes parameters in `CREATE USER` and `ALTER USER` but not in `GRANT` or
@@ -75,6 +76,15 @@ const SHOW_BACKFILL_VIEWS: &str = "ALTER ROW POLICY migration_account
 ON trustiot.telemetry_1m_backfill, trustiot.telemetry_1h_backfill TO CURRENT_USER";
 const HIDE_BACKFILL_VIEWS: &str = "ALTER ROW POLICY migration_account
 ON trustiot.telemetry_1m_backfill, trustiot.telemetry_1h_backfill TO NONE";
+/// The backfill views' `migration_account` policies that name an account, a role or everyone
+/// (`TO ALL`, with or without `EXCEPT`): the table, whether the policy applies to all, and the
+/// accounts and roles it lists. Outside a backfill there is none.
+const BOUND_BACKFILL_POLICIES: &str = "SELECT table, apply_to_all, apply_to_list
+FROM system.row_policies
+WHERE database = 'trustiot' AND short_name = 'migration_account'
+    AND table IN ('telemetry_1m_backfill', 'telemetry_1h_backfill')
+    AND (apply_to_all OR notEmpty(apply_to_list))
+ORDER BY table FORMAT TSV";
 /// The newest `count` receive days up to today (UTC), oldest first, by the server's clock, as
 /// the backfill views count them ([`backfill_day_count`]).
 const BACKFILL_DAYS: &str = "SELECT toString(toDate(now('UTC')) - offset)
@@ -88,6 +98,27 @@ const LAST_DAY: &str = "2149-06-06";
 /// what is still missing, never runs alongside it.
 const BACKFILL_MAX_SECONDS: u64 = 25;
 const _: () = assert!(BACKFILL_MAX_SECONDS < http::REQUEST_TIMEOUT.as_secs());
+
+/// The policies [`BOUND_BACKFILL_POLICIES`] read, for a message: each view with whom its policy
+/// names (`all`, or the list as ClickHouse prints it).
+fn bound_policies(rows: &str) -> String {
+    let described: Vec<String> = rows
+        .lines()
+        .filter(|line| !line.is_empty())
+        .map(|line| {
+            let mut fields = line.splitn(3, '\t');
+            let table = fields.next().unwrap_or_default();
+            let all = fields.next().unwrap_or_default() == "1";
+            let list = fields.next().unwrap_or_default();
+            if all {
+                format!("trustiot.{table} (all)")
+            } else {
+                format!("trustiot.{table} ({list})")
+            }
+        })
+        .collect();
+    cut(&described.join(", "))
+}
 
 /// How many receive days the run backfills with a raw data retention of `raw_days`: from today -
 /// `raw_days` + 3 to today, one day inside the backfill views' bound (today - `raw_days` + 2,
@@ -686,14 +717,16 @@ impl ClickHouse {
         }
     }
 
-    /// The DDL files, the raw and aggregate data retention and the backfill of the aggregates
-    /// (when the registry has ClickHouse files, which create the tables they apply to), then the
-    /// accounts of the collector and of telemetry-query.
+    /// The DDL files, the raw and aggregate data retention, the backfill of the aggregates and
+    /// the check that the backfill views show nothing (when the registry has ClickHouse files,
+    /// which create the tables they apply to), then the accounts of the collector and of
+    /// telemetry-query.
     ///
     /// # Errors
     ///
     /// The first statement that fails, a file that changed after it was applied, a TTL the run
-    /// does not recognise, or an account that holds more than the Job gives it.
+    /// does not recognise, an account that holds more than the Job gives it, or a backfill
+    /// view's policy that still names an account after the run set it to name nobody.
     pub async fn migrate(
         &self,
         registry: &Registry,
@@ -719,6 +752,7 @@ impl ClickHouse {
             // deleted: the backfill compares only the days both kept.
             self.backfill_aggregates(raw_before.min(retention.raw.days()), report)
                 .await?;
+            self.hide_backfill_views(report).await?;
         }
         if let Some((user, password)) = collector {
             self.ensure_collector(user, password, report).await?;
@@ -888,6 +922,55 @@ impl ClickHouse {
         report.change(format!(
             "backfilled the one-minute and one-hour aggregates from the raw rows received from \
              {first} to {last} (raw data retention {raw_days} days, less the three oldest days)"
+        ));
+        Ok(())
+    }
+
+    /// Makes the backfill views show their rows to nobody, on every run, whether or not the
+    /// aggregates were backfilled before: a run stopped between showing and hiding them (a Job
+    /// killed at its `activeDeadlineSeconds`, a lost connection) or an administrator's
+    /// `ALTER ROW POLICY` leaves a `migration_account` policy naming an account, and nothing
+    /// else names nobody again once the backfill is recorded. A policy that names an account, a
+    /// role or everyone is set to `TO NONE`, reported as a change, and read again.
+    ///
+    /// # Errors
+    ///
+    /// When a policy still names an account after that.
+    async fn hide_backfill_views(&self, report: &mut Report) -> Result<(), Error> {
+        let bound = self
+            .query(
+                "read the backfill views' row policies",
+                BOUND_BACKFILL_POLICIES,
+                &[],
+            )
+            .await?;
+        if bound.trim().is_empty() {
+            return Ok(());
+        }
+        self.query(
+            "set the backfill views' row policies to name nobody",
+            HIDE_BACKFILL_VIEWS,
+            &[],
+        )
+        .await?;
+        let still = self
+            .query(
+                "read the backfill views' row policies again",
+                BOUND_BACKFILL_POLICIES,
+                &[],
+            )
+            .await?;
+        if !still.trim().is_empty() {
+            return Err(Error::ClickHouse(format!(
+                "the migration_account row policies of the backfill views still name {} after \
+                 the run set them TO NONE; an administrator must set them TO NONE \
+                 (docs/runbooks/migrations.md)",
+                bound_policies(&still)
+            )));
+        }
+        report.change(format!(
+            "set the migration_account row policies of {} back to name nobody",
+            bound_policies(&bound)
         ));
         Ok(())
     }
@@ -1309,6 +1392,17 @@ impl ClickHouse {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_bound_backfill_policy_is_named_with_whom_it_names() {
+        assert_eq!(
+            bound_policies(
+                "telemetry_1h_backfill\t1\t[]\ntelemetry_1m_backfill\t0\t['admin','reader']\n"
+            ),
+            "trustiot.telemetry_1h_backfill (all), \
+             trustiot.telemetry_1m_backfill (['admin','reader'])"
+        );
+    }
 
     #[test]
     fn the_backfill_stays_a_day_inside_the_views_bound() {
