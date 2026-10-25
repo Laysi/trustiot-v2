@@ -44,15 +44,19 @@ const TABLES: [&str; 4] = [
 ];
 /// The other relations of the trustiot database, none of which tenant accounts may reach: the
 /// materialized views that fill the aggregates, and the backfill views, which read every
-/// tenant's raw rows as the rollup definer and which only the migration account may read.
+/// tenant's raw rows as the rollup definer and whose `migration_account` policy names no
+/// account, except while the migration Job or an administrator backfills or checks the
+/// aggregates (0010_telemetry_rollups.sql).
 const OTHER_RELATIONS: [&str; 4] = [
     "trustiot.telemetry_1m_mv",
     "trustiot.telemetry_1h_mv",
     "trustiot.telemetry_1m_backfill",
     "trustiot.telemetry_1h_backfill",
 ];
-/// The backfill views' parameters: every receive day a Date holds.
-const BACKFILL_DAYS: &str = "(first_day = '1970-01-01', last_day = '2149-06-06')";
+/// The backfill views' parameters: every receive day a Date holds, and the longest raw
+/// retention the views take.
+const BACKFILL_DAYS: &str =
+    "(first_day = '1970-01-01', last_day = '2149-06-06', raw_retention_days = 3650)";
 /// The user the tenant views run as.
 const VIEW_DEFINER: &str = "trustiot_tenant_view_definer";
 /// The user the materialized views and the backfill views run as.
@@ -1167,20 +1171,25 @@ async fn deny_by_default_covers_new_accounts(world: &World) {
         // On the tables: 0 rows. On the views: 0 rows, or the error of the definer's policy,
         // which needs the SQL_tenant_id setting these accounts do not have. The materialized
         // views and the backfill views read every tenant's rows as their definer; their own
-        // deny_by_default policies hide them from every account (the backfill views' from every
-        // account but the migration account).
+        // deny_by_default policies hide them from every account, and the backfill views'
+        // migration_account policy names nobody after the files are applied.
         let result = ch.query(&direct, &sql).await;
         assert!(
             reads_no_rows(&result),
             "an account granted SELECT directly must read no rows of {relation}: {result:?}"
         );
         // The bootstrap admin is an account too: the policies hide the rows from it as well,
-        // except the backfill views', which it applied and which are its to read (the
-        // migration account, 0010_telemetry_rollups.sql).
-        if !relation.ends_with("_backfill") {
-            let result = ch.admin(&sql).await;
-            assert!(
-                reads_no_rows(&result),
+        // the backfill views' included, although it applied them (0010_telemetry_rollups.sql):
+        // it reads them without an error, and no rows.
+        let result = ch.admin(&sql).await;
+        assert!(
+            reads_no_rows(&result),
+            "the admin reads no rows of {relation}: {result:?}"
+        );
+        if relation.ends_with("_backfill") {
+            assert_eq!(
+                result.as_ref().map(|body| body.trim()).ok(),
+                Some("0"),
                 "the admin reads no rows of {relation}: {result:?}"
             );
         }
@@ -2255,7 +2264,7 @@ async fn ingest_account_cannot_change_schema(world: &World) {
         "ALTER TABLE trustiot.telemetry_1m_backfill MODIFY SQL SECURITY INVOKER",
         "CREATE ROW POLICY injected ON trustiot.telemetry_1m USING 1 TO CURRENT_USER",
         "ALTER ROW POLICY migration_account ON trustiot.telemetry_1m_backfill TO CURRENT_USER",
-        "SELECT count() FROM trustiot.telemetry_1m_backfill(first_day = '1970-01-01', last_day = '2149-06-06')",
+        "SELECT count() FROM trustiot.telemetry_1m_backfill(first_day = '1970-01-01', last_day = '2149-06-06', raw_retention_days = 3650)",
         "EXECUTE AS trustiot_rollup_definer SELECT count() FROM trustiot.telemetry",
         "ALTER USER trustiot_rollup_definer HOST ANY",
     ] {

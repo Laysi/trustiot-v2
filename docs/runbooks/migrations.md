@@ -286,31 +286,37 @@ Job 每次執行也把 `trustiot.telemetry_1m`、`trustiot.telemetry_1h` 的 TTL
 
 ## 彙總表的 backfill 與一致性檢查
 
-Job 第一次套用 `0010_telemetry_rollups.sql` 時，把 `telemetry` 裡已有的列補進兩張彙總表（[services/ingest](../../services/ingest/README.md)「既有資料的 backfill」）。補的是重算值與現有彙總的差，重跑不會重複計算。
+Job 第一次套用 `0010_telemetry_rollups.sql` 的那次執行，在套用完檔案、對齊 TTL 之後，把 `telemetry` 裡已有的列補進兩張彙總表，記在 `trustiot_migrate.applied` 的 `backfill/telemetry_rollups`，日誌有 `backfilled the one-minute and one-hour aggregates from the raw rows received from <日期> to <日期> ...`（[services/ingest](../../services/ingest/README.md)「既有資料的 backfill」）。它只補彙總缺的格、不改已有的格，所以重跑不會重複計算，也不會拿掉任何一格。
 
-- **Job 停在 `0010_telemetry_rollups.sql`，原因是 `TIMEOUT_EXCEEDED`**：backfill 的一句在 25 秒（`max_execution_time`，低於 Job 30 秒的請求逾時）內沒有做完，在伺服器上也已停止。已寫入的部分保留，下一次執行只補剩下的差。Laysi/trustiot-v2#91 之前沒有程式持續寫入 `telemetry`（只有 `tools/lab-dataset` 載入的測試資料），所以預期不會發生；大表上的 backfill 時間還沒有實測。重試仍停在這裡時，不要改 `trustiot_migrate.applied`，也不要拿掉時間上限（Job 放棄等待之後，一句還在跑的 backfill 會和下一次執行的同一句同時寫，重複計算）；開 issue，附上原始資料的列數（`SELECT total_rows FROM system.tables WHERE database = 'trustiot' AND name = 'telemetry'`）。
-- **檢查彙總是否與原始資料一致**：以套用 `0010` 的帳號（叢集內 ClickHouse 是管理帳號，外部 ClickHouse 是給 Job 的帳號）讀 backfill view，列出一段收到日裡與原始資料不一致的格。叢集內 ClickHouse 在 pod 內執行（`c` 的定義同上方「懷疑時序查詢的服務帳號外洩」）：
+**界限**：backfill view 只比對 `today − raw_retention_days + 2`（UTC）以後的收到日。`raw_retention_days` 一律傳原始資料實際保存的天數，也就是 `telemetry` 現在的 TTL（上方「原始資料的保存期限」的 `engine_full` 裡 `toIntervalDay(<天數>)` 的天數）；最近延長過原始資料的保存期限時，在延長之後的「新天數 − 舊天數」天內改傳舊的天數，因為舊的較短期限已經刪掉的列不會回來。界限以前（原始保存期限的最後兩天與更早）的收到日，彙總與原始資料不一致是預期的：原始列已經過期，只剩彙總。**絕不能「修正」這些日子**：修正會抹掉只剩彙總的歷史，無法復原。
+
+- **Job 停在 backfill，原因是 `TIMEOUT_EXCEEDED`**：訊息寫出表與收到日（`backfill trustiot.telemetry_1m for the receive day <日期>`）。那一天的一句在 25 秒（`max_execution_time`，低於 Job 30 秒的請求逾時）內沒有做完，在伺服器上也已停止；已補的格保留，下一次執行只補還缺的格。Laysi/trustiot-v2#91 之前沒有程式持續寫入 `telemetry`（只有 `tools/lab-dataset` 載入的測試資料），所以預期不會發生；大表上的 backfill 時間還沒有實測。重試仍停在同一天時，不要拿掉時間上限（Job 放棄等待之後，一句還在跑的 backfill 會和下一次執行同時寫，重複計算）；開 issue，附上原始資料的列數（`SELECT total_rows FROM system.tables WHERE database = 'trustiot' AND name = 'telemetry'`）。Job 在 backfill 途中被 Kubernetes 停掉（超過 `activeDeadlineSeconds`）時沒有機會把 policy 改回 `TO NONE`，Job 的帳號仍讀得到每個租戶的彙總：做一次下方檢查步驟的最後兩句（改回 `TO NONE` 並確認）。
+- **讓 Job 再補一次**（例如彙總表少了一段收到日的格）：刪掉紀錄 `ALTER TABLE trustiot_migrate.applied DELETE WHERE name = 'backfill/telemetry_rollups' SETTINGS mutations_sync = 2`，下一次執行以那時的保存期限補回界限以內缺的格，已有的格不變。同樣只在沒有程式寫入 `telemetry` 時做（見下方「修正」）。
+- **檢查彙總是否與原始資料一致**：backfill view 平常不給任何帳號看（row policy `migration_account` 是 `TO NONE`）。檢查的帳號（叢集內 ClickHouse 是管理帳號，外部 ClickHouse 是給 Job 的帳號）先點名自己，做完一定改回 `TO NONE`。叢集內 ClickHouse 在 pod 內執行（`c` 的定義同上方「懷疑時序查詢的服務帳號外洩」，`<天數>` 依上面的界限）：
 
   ```bash
   kubectl -n <namespace> exec -i <release>-clickhouse-0 -c clickhouse -- bash -s <<'EOF'
   c() { clickhouse-client --user "$CLICKHOUSE_USER" --password "$(cat "$CLICKHOUSE_PASSWORD_FILE")" "$@"; }
+  c --query "ALTER ROW POLICY migration_account ON trustiot.telemetry_1m_backfill, trustiot.telemetry_1h_backfill TO CURRENT_USER"
   for table in telemetry_1m telemetry_1h; do
-    c --query "SELECT '$table', received_day, count() FROM trustiot.${table}_backfill(first_day = '<YYYY-MM-DD>', last_day = '<YYYY-MM-DD>') GROUP BY received_day ORDER BY received_day"
+    c --query "SELECT '$table', received_day, aggregated, count(), sum(readings) FROM trustiot.${table}_backfill(first_day = '<YYYY-MM-DD>', last_day = '<YYYY-MM-DD>', raw_retention_days = <天數>) GROUP BY received_day, aggregated ORDER BY received_day, aggregated"
   done
+  c --query "ALTER ROW POLICY migration_account ON trustiot.telemetry_1m_backfill, trustiot.telemetry_1h_backfill TO NONE"
+  c --query "SELECT table, apply_to_list FROM system.row_policies WHERE short_name = 'migration_account'"
   EOF
   ```
 
-  沒有任何列表示這段收到日的每一格都一致。今天（UTC）的格與 ingest 正在重寫的批次可能暫時不一致。其他帳號讀 backfill view 一律是 0 列（`deny_by_default`），不代表一致。
-- **補回不一致的收到日**：只在沒有任何程式寫入 `telemetry` 時做（Laysi/trustiot-v2#91 之前；之後先把 ingest 縮到 0 個 replica），否則一個寫到一半的區塊會被算兩次。同一個 pod 內，對兩張表各執行一次（`<table>` 換成 `telemetry_1m` 或 `telemetry_1h`）：
+  沒有任何列表示這段收到日裡、界限以內的每一格都一致；`first_day` 早於界限時，界限以前的日子不會列出，不代表一致。`aggregated = 0` 是彙總缺的格；`1` 是彙總有、但筆數或和不同的格，`sum(readings)` 是負的表示彙總多算（例如一批被刪掉而沒有對帳）。今天（UTC）的格與 ingest 正在重寫的批次可能暫時不一致。最後一句應該印出兩列 `[]`：還點名某個帳號時，那個帳號讀得到每個租戶的彙總，要改回 `TO NONE`。
+- **修正不一致的收到日**：只在沒有任何程式寫入 `telemetry` 時做（Laysi/trustiot-v2#91 之前；之後先把 ingest 縮到 0 個 replica），否則一個寫到一半的區塊會被算兩次。`raw_retention_days` 與檢查時相同，絕不能比上面的界限長。同一個 pod 內，像檢查一樣先點名自己，對兩張表各執行一次下面的語句（`<table>` 換成 `telemetry_1m` 或 `telemetry_1h`；就是 `services/ingest/src/rollup.rs` 的 `REPAIR_1M`、`REPAIR_1H`），最後改回 `TO NONE` 並確認：
 
   ```sql
   INSERT INTO trustiot.<table> (tenant_id, device_id, point, bucket, gateway_id, stream_id, received_day, readings, numeric_readings, value_sum, value_min, value_max, first, last)
   SETTINGS deduplicate_insert_select = 'disable'
   SELECT tenant_id, device_id, point, bucket, gateway_id, stream_id, received_day, readings, numeric_readings, value_sum, value_min, value_max, first, last
-  FROM trustiot.<table>_backfill(first_day = '<YYYY-MM-DD>', last_day = '<YYYY-MM-DD>')
+  FROM trustiot.<table>_backfill(first_day = '<YYYY-MM-DD>', last_day = '<YYYY-MM-DD>', raw_retention_days = <天數>)
   ```
 
-  寫入的是差，重跑無害；再做一次上面的檢查應該沒有任何列。`deduplicate_insert_select = 'disable'` 不能省：與之前某次相同的差值會被當成重複丟掉。
+  寫入的是差，重跑無害；再做一次上面的檢查應該沒有任何列。`deduplicate_insert_select = 'disable'` 不能省：與之前某次相同的差值會被當成重複丟掉。只補缺的格、不改已有的格時（Job 的做法，`BACKFILL_1M`、`BACKFILL_1H`），在最後加上 `WHERE aggregated = 0`。
 
 ## 回到 Laysi/trustiot-v2#141 之前的版本
 

@@ -1,7 +1,8 @@
 //! The one-minute and one-hour aggregate tables (`trustiot.telemetry_1m`, `trustiot.telemetry_1h`,
 //! migrations/clickhouse/0010_telemetry_rollups.sql; Laysi/trustiot-v2#141): the statements the
-//! ingest service and the consumers of the aggregates run against them. The reasoning is in
-//! README.md, section 「彙總表」.
+//! ingest service and the consumers of the aggregates run against them, and the backfill the
+//! migration Job runs (tools/migrate compiles this file in as its `rollup` module). The
+//! reasoning is in README.md, section 「彙總表」.
 //!
 //! # The I1 rewrite (contract for Laysi/trustiot-v2#641)
 //!
@@ -17,7 +18,20 @@
 //! but whose aggregate part was not (a crash between the two) is missing from them. So the
 //! rewrite is, for a batch of one stream:
 //!
-//! 1. Make sure no earlier INSERT of this stream is still running (one ingest replica per stream).
+//! 1. Run every statement that writes the stream with [`stream_settings`]: the INSERTs of every
+//!    attempt (the first included) and steps 2 to 4 below. They carry the stream's own query ID
+//!    ([`stream_query_id`]) with `replace_running_query = 1`, and a `max_execution_time` of
+//!    [`STATEMENT_MAX_SECONDS`]. A statement of an earlier attempt of the same stream that still
+//!    runs on the server (its client gave up on it, or crashed) is then stopped before the new
+//!    statement starts: ClickHouse 26.8 cancels the running query that has the same query ID
+//!    and the same account, and waits up to `replace_running_query_max_wait_ms`
+//!    ([`REPLACE_WAIT_MS`]) for it to end. If it has not ended by then, the new statement fails
+//!    with `QUERY_WITH_SAME_ID_IS_ALREADY_RUNNING` (the old one stays cancelled), as it does when
+//!    another account runs a query with that ID: the attempt stops there, without a completion
+//!    record, and starts over later. The client's request timeout must be at least
+//!    [`CLIENT_TIMEOUT_SECONDS`], longer than that wait and the run together, so the server has
+//!    ended a statement before the client gives up on it. One ingest replica per stream at a
+//!    time still holds; this makes sure no statement of an earlier attempt overlaps the next.
 //! 2. `DELETE FROM trustiot.telemetry` the batch's rows, synchronously
 //!    (`lightweight_deletes_sync = 2`).
 //! 3. Insert the whole batch with [`REWRITE_SETTINGS`] (`deduplicate_insert = 'disable'`). With
@@ -37,8 +51,8 @@
 //! tables, not from what happened before, so running it again is harmless. A batch written once,
 //! whose INSERT succeeded, needs no reconcile (the views run inside the INSERT); running it then
 //! inserts nothing. Only the raw side of a cell is trusted, so the reconcile must not run while
-//! another write to the same stream is in flight, which one replica per stream and one batch in
-//! flight per stream (telemetry rule 2) already guarantee.
+//! another write to the same stream is in flight, which one replica per stream, one batch in
+//! flight per stream (telemetry rule 2) and step 1 guarantee.
 //!
 //! The counts and the sum of a cell are corrected exactly. The minimum, maximum, first and last
 //! of a cell are merged from the raw side and are not taken back: telemetry rule 2 resends a
@@ -47,9 +61,34 @@
 //!
 //! The reconcile reaches back [`RECONCILE_WINDOW_DAYS`] receive days: a gateway keeps an
 //! unacknowledged batch at most that long, so every earlier attempt of a batch was received
-//! within it, and the raw data retention is longer (`retention::RawRetention`), so every raw row
-//! received within it is still there. Older cells are never compared with raw rows that may have
+//! within it, and the raw data retention is longer (`retention::RawRetention`, at least a day
+//! longer), so every raw row received within it is still there: the oldest day of the window
+//! loses its earliest rows at the next midnight at the soonest, and a statement reads the parts
+//! the tables had when it started. Older cells are never compared with raw rows that may have
 //! expired.
+//!
+//! # Backfill and checks
+//!
+//! The backfill views of 0010_telemetry_rollups.sql give, for a range of receive days, the
+//! difference between the cells recomputed from the raw rows and the cells as they are, and
+//! whether the aggregates hold the cell at all. They leave out every receive day before today -
+//! `raw_retention_days` + 2 (UTC), on both sides, so a cell whose raw rows may have expired is
+//! never compared.
+//!
+//! - [`BACKFILL_1M`] and [`BACKFILL_1H`] insert the cells the aggregates lack. The migration
+//!   Job runs them day by day after it has applied the files and set the TTLs, to fill the
+//!   aggregates from the rows the telemetry table held before the views existed. They add
+//!   cells and never change one, so running them again, or after `trustiot_migrate.applied` was
+//!   lost, takes nothing away, whatever the raw retention was.
+//! - [`REPAIR_1M`] and [`REPAIR_1H`] insert every difference, a correction of a cell whose raw
+//!   rows were deleted without a reconcile included: an administrator's repair of a range of
+//!   days after a check (docs/runbooks/migrations.md). With a `raw_retention_days` longer than
+//!   the raw rows were kept they erase cells whose raw rows expired, so the runbook says which
+//!   value to pass.
+//!
+//! Both count a block whose raw part landed but whose view part had not yet as missing, so
+//! nobody may write telemetry while they run: true when the Job first applies the file, since
+//! no release before it has an ingest writer.
 //!
 //! # Energy from cumulative points
 //!
@@ -60,14 +99,60 @@
 //! bucket's first. A drop is a reset or, for a counter with a wrap value (`wraps_at` in the
 //! device model), a wrap; within a bucket a drop shows as a last reading below the bucket's
 //! maximum or a minimum below its first reading. The increase within a bucket is exact when the
-//! bucket holds at most one reset or wrap, and after a reset its last reading stays below the
-//! peak before it.
+//! bucket holds at most one reset or wrap, and after it the bucket's last reading stays below
+//! the peak before it.
 
 use protocol::telemetry::BUFFER_MAX_AGE_DAYS;
 
 /// The settings of the rewrite's INSERT (step 3 of the module documentation), as name and value:
 /// the batch's rows must land even when the table saw the same block before the DELETE.
 pub const REWRITE_SETTINGS: [(&str, &str); 1] = [("deduplicate_insert", "disable")];
+
+/// How long one statement that writes a stream may run on the server, in seconds:
+/// `max_execution_time` in [`stream_settings`].
+pub const STATEMENT_MAX_SECONDS: u32 = 20;
+
+/// How long a statement that writes a stream waits for a still-running statement of the same
+/// stream to stop, in milliseconds: `replace_running_query_max_wait_ms` in [`stream_settings`]
+/// (ClickHouse's default, set so the contract does not depend on it).
+pub const REPLACE_WAIT_MS: u32 = 5_000;
+
+/// The shortest request timeout, in seconds, the ingest service's ClickHouse client may use for
+/// the statements that write a stream: longer than [`REPLACE_WAIT_MS`] and
+/// [`STATEMENT_MAX_SECONDS`] together, so the server has ended a statement before the client
+/// gives up on it.
+pub const CLIENT_TIMEOUT_SECONDS: u32 = 30;
+
+/// The query ID every statement that writes one stream runs under (step 1 of the module
+/// documentation). Gateway and stream IDs never contain `/` (the protocol's identifier rule), so
+/// two streams never share one.
+#[must_use]
+pub fn stream_query_id(gateway: &str, stream: &str) -> String {
+    format!("trustiot-rewrite/{gateway}/{stream}")
+}
+
+/// The settings of every statement that writes one stream: each attempt's INSERT, the rewrite's
+/// DELETE and INSERT and the reconcile (step 1 of the module documentation), as ClickHouse's HTTP
+/// interface takes them in the URL: the stream's query ID, `replace_running_query = 1` with a
+/// wait of [`REPLACE_WAIT_MS`], and a `max_execution_time` of [`STATEMENT_MAX_SECONDS`].
+///
+/// Only the tests call it so far: no code writes telemetry yet. It is the contract for the
+/// ingest service's write path (Laysi/trustiot-v2#91), which must send every INSERT of a stream
+/// with these settings over a client whose request timeout is at least
+/// [`CLIENT_TIMEOUT_SECONDS`], and for the I1 rewrite (Laysi/trustiot-v2#641), which must do the
+/// same for its DELETE, INSERT and reconcile.
+#[must_use]
+pub fn stream_settings(gateway: &str, stream: &str) -> [(&'static str, String); 4] {
+    [
+        ("query_id", stream_query_id(gateway, stream)),
+        ("replace_running_query", "1".to_owned()),
+        (
+            "replace_running_query_max_wait_ms",
+            REPLACE_WAIT_MS.to_string(),
+        ),
+        ("max_execution_time", STATEMENT_MAX_SECONDS.to_string()),
+    ]
+}
 
 /// How many receive days before today (UTC) the reconcile compares: the gateway buffer's maximum
 /// age.
@@ -273,6 +358,49 @@ pub const ENERGY_1M: &str = energy!("tenant_telemetry_1m");
 /// A cumulative point's increase from the one-hour aggregates.
 pub const ENERGY_1H: &str = energy!("tenant_telemetry_1h");
 
+/// An INSERT into one aggregate table from its backfill view: `$table` is the table, `$filter`
+/// what it takes of the view's rows.
+macro_rules! from_backfill_view {
+    ($table:literal, $filter:literal) => {
+        concat!(
+            "INSERT INTO trustiot.",
+            $table,
+            " (tenant_id, device_id, point, bucket, gateway_id, stream_id, received_day,
+    readings, numeric_readings, value_sum, value_min, value_max, first, last)
+SETTINGS deduplicate_insert_select = 'disable'
+SELECT tenant_id, device_id, point, bucket, gateway_id, stream_id, received_day, readings,
+    numeric_readings, value_sum, value_min, value_max, first, last
+FROM trustiot.",
+            $table,
+            "_backfill(first_day = {first_day:Date}, last_day = {last_day:Date},
+    raw_retention_days = {raw_retention_days:UInt32})",
+            $filter
+        )
+    };
+}
+
+/// Inserts into the one-minute table the cells it lacks, recomputed from the raw rows, for the
+/// receive days from `first_day` to `last_day` (Date) that are not before today -
+/// `raw_retention_days` + 2 (UTC); `raw_retention_days` (UInt32) is the raw data retention,
+/// never more than the telemetry table's TTL has been since the cells were written. It leaves
+/// every cell the table holds as it is. The account that runs it must be the one the backfill
+/// view's `migration_account` policy names, or it reads no rows and inserts nothing.
+pub const BACKFILL_1M: &str = from_backfill_view!("telemetry_1m", "\nWHERE aggregated = 0");
+
+/// The same for the one-hour table.
+pub const BACKFILL_1H: &str = from_backfill_view!("telemetry_1h", "\nWHERE aggregated = 0");
+
+/// Inserts into the one-minute table every difference between the cells recomputed from the raw
+/// rows and the cells as they are, for the same receive days as [`BACKFILL_1M`] and with the
+/// same parameters: the cells the table lacks, and the corrections of the cells it holds, down
+/// to taking out a cell whose raw rows were deleted. A difference may equal an earlier one, so
+/// ClickHouse must not drop it as a duplicate (`deduplicate_insert_select = 'disable'`; on 26.8
+/// `insert_deduplicate` does not turn that off).
+pub const REPAIR_1M: &str = from_backfill_view!("telemetry_1m", "");
+
+/// The same for the one-hour table.
+pub const REPAIR_1H: &str = from_backfill_view!("telemetry_1h", "");
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -317,6 +445,61 @@ mod tests {
         )));
         assert!(pairs.contains(&("param_window_days", "30".to_owned())));
         assert_eq!(pairs.len(), 7);
+    }
+
+    #[test]
+    fn a_rewrite_statement_ends_on_the_server_before_its_client_gives_up() {
+        let settings = stream_settings("gw-1", "s.2");
+        assert_eq!(
+            settings.each_ref().map(|(name, _)| *name),
+            [
+                "query_id",
+                "replace_running_query",
+                "replace_running_query_max_wait_ms",
+                "max_execution_time"
+            ]
+        );
+        assert_eq!(settings[0].1, "trustiot-rewrite/gw-1/s.2");
+        assert_eq!(settings[1].1, "1");
+        assert_eq!(settings[2].1.parse::<u32>().unwrap(), REPLACE_WAIT_MS);
+        assert_eq!(settings[3].1.parse::<u32>().unwrap(), STATEMENT_MAX_SECONDS);
+        assert!(
+            u64::from(REPLACE_WAIT_MS) + 1_000 * u64::from(STATEMENT_MAX_SECONDS)
+                < 1_000 * u64::from(CLIENT_TIMEOUT_SECONDS),
+            "the wait and the run together must end before the client's timeout"
+        );
+    }
+
+    #[test]
+    fn every_stream_has_its_own_query_id() {
+        // The identifier rule allows '.', '_' and '-' but not '/', so moving a separator between
+        // the gateway and the stream ID never gives another stream's ID.
+        let ids = [
+            stream_query_id("a-b", "c"),
+            stream_query_id("a", "b-c"),
+            stream_query_id("a", "b"),
+            stream_query_id("b", "a"),
+        ];
+        let distinct: std::collections::BTreeSet<_> = ids.iter().collect();
+        assert_eq!(distinct.len(), ids.len(), "{ids:?}");
+    }
+
+    #[test]
+    fn the_backfills_and_repairs_differ_only_in_table_and_filter() {
+        assert_eq!(
+            BACKFILL_1M.replace("telemetry_1m", "telemetry_1h"),
+            BACKFILL_1H
+        );
+        assert_eq!(REPAIR_1M.replace("telemetry_1m", "telemetry_1h"), REPAIR_1H);
+        assert!(BACKFILL_1M.starts_with("INSERT INTO trustiot.telemetry_1m "));
+        assert!(BACKFILL_1H.contains("FROM trustiot.telemetry_1h_backfill(first_day = "));
+        for (backfill, repair) in [(BACKFILL_1M, REPAIR_1M), (BACKFILL_1H, REPAIR_1H)] {
+            // The backfill only adds the cells the table lacks.
+            assert_eq!(backfill, format!("{repair}\nWHERE aggregated = 0"));
+            assert!(repair.contains("SETTINGS deduplicate_insert_select = 'disable'\n"));
+            assert!(repair.ends_with("raw_retention_days = {raw_retention_days:UInt32})"));
+            assert!(!backfill.contains(';'));
+        }
     }
 
     #[test]

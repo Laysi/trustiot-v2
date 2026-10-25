@@ -27,7 +27,7 @@ DDL 是 `migrations/clickhouse/` 的 SQL 檔，部署時由 migration Job（Lays
 | `0007_monitoring.sql` | 監控角色 `trustiot_monitoring`：只有 `system.disks` 的 `SELECT`，給磁碟水位告警（Laysi/trustiot-v2#92） |
 | `0008_telemetry_query.sql` | telemetry-query 的服務帳號 `trustiot_telemetry_query`：只能建立與修改名稱以 `trustiot_tenant_account_` 開頭的帳號，並把租戶角色 `trustiot_tenant_reader` 給它們（Laysi/trustiot-v2#119；[services/telemetry-query](../telemetry-query/README.md#租戶帳號)） |
 | `0009_telemetry_query_grantees.sql` | 服務帳號 `GRANTEES NONE`：它以 `ADMIN OPTION` 持有租戶角色，只能在 `CREATE USER ... DEFAULT ROLE` 時把角色給新建的帳號，不能把角色授與或收回任何既有的使用者或角色（Laysi/trustiot-v2#119 的安全審查） |
-| `0010_telemetry_rollups.sql` | 1 分鐘與 1 小時彙總表 `trustiot.telemetry_1m`、`telemetry_1h`，填入它們的 materialized view 與這些 view 的 DEFINER 帳號 `trustiot_rollup_definer`，租戶讀的 view `tenant_telemetry_1m`、`tenant_telemetry_1h`，以及補進既有資料的 backfill（Laysi/trustiot-v2#141；見下方「彙總表」） |
+| `0010_telemetry_rollups.sql` | 1 分鐘與 1 小時彙總表 `trustiot.telemetry_1m`、`telemetry_1h`，填入它們的 materialized view 與這些 view 的 DEFINER 帳號 `trustiot_rollup_definer`，租戶讀的 view `tenant_telemetry_1m`、`tenant_telemetry_1h`，以及補進既有資料與檢查一致性用的 backfill view（補資料由 migration Job 在套用之後執行；Laysi/trustiot-v2#141；見下方「彙總表」） |
 
 檔案格式（migration Job 與測試都依賴）：
 
@@ -100,17 +100,17 @@ OpenTelemetry collector（決策 22，`deploy/chart` 的 `observability.collecto
 `src/rollup.rs` 的 `ENERGY_1M`、`ENERGY_1H` 從租戶 view 算累計型資料點（電表讀數、脈衝計數）在一段 bucket 內的增量，一律以區間差計算，不加總讀值：每個 bucket 內是最後一筆減第一筆，相鄰兩個 bucket 之間是後一格的第一筆減前一格的最後一筆。
 
 - 讀值下降是歸零（reset），設備型號有溢位值 `wraps_at`（W）時是溢位（wrap）。bucket 內的下降以「最後一筆小於這格的最大值，或最小值小於第一筆」偵測，這時 bucket 內的增量：有 W 是 `(W − first) + last`，沒有是 `(max − first) + last`。兩格之間後一格的第一筆小於前一格的最後一筆時：有 W 是 `first + W − 前一格的 last`，沒有是 `first`（從 0 重新累計）。
-- 精確的條件：每個 bucket 內至多一次歸零或溢位，而且歸零之後這格的最後一筆低於歸零前的峰值。超出條件時是近似值，例如一格內 5、7、0、9：1 分鐘表分得開，得到正確的 11；同一小時合成一格時得到 13。
+- 精確的條件：每個 bucket 內至多一次歸零或溢位，而且之後這格的最後一筆低於下降前的峰值。超出條件時是近似值，例如一格內 5、7、0、9：1 分鐘表分得開，得到正確的 11；同一小時合成一格時得到 13。
 - 只用「最小值小於第一筆」偵測會漏掉第一筆就是 0 的歸零（0、5、0、3 的增量是 8，會算成 3），所以另外比對最後一筆與最大值。
 - 參數：`device`、`point`、`from`、`to`（UTC，含 `from` 不含 `to`）、`wraps_at`（不會溢位的填 0）。結果是 `from` 之後第一筆到 `to` 之前最後一筆的增量，沒有讀值時是 0。
 
 #### I1 重寫與對帳（Laysi/trustiot-v2#641 的前提）
 
-目前還沒有程式刪除或重寫遙測列：ingest 的寫入路徑在 Laysi/trustiot-v2#91，I1 的重寫在 Laysi/trustiot-v2#641。Laysi/trustiot-v2#641 必須照下面的步驟做，並且在彙總表（Laysi/trustiot-v2#141）合併之後才合併；同樣的步驟寫在 `src/rollup.rs` 的模組說明。
+目前還沒有程式寫入、刪除或重寫遙測列：ingest 的寫入路徑在 Laysi/trustiot-v2#91，I1 的重寫在 Laysi/trustiot-v2#641。Laysi/trustiot-v2#91 寫入串流的每一句 INSERT 都要照下面第 1 步帶 `stream_settings`，Laysi/trustiot-v2#641 必須照下面的步驟做，並且在彙總表（Laysi/trustiot-v2#141）合併之後才合併；同樣的步驟寫在 `src/rollup.rs` 的模組說明。
 
 materialized view 只處理 INSERT。重寫一批（沒有完成紀錄的批次）時，前一次嘗試已寫進 ClickHouse 的列，刪掉之後仍算在彙總表裡；前一次的原始列寫入了、彙總那一份沒寫（兩者之間當機）時，彙總表又少算。一個串流的一批這樣重寫：
 
-1. 確定這個串流沒有還在進行的 INSERT（一個串流只由一個 ingest replica 處理）。
+1. 這個串流的每一句寫入都帶 `stream_settings`：每次嘗試的 INSERT（包括第一次），以及下面第 2 到 4 步。它們用這個串流自己的 query ID（`stream_query_id`，`trustiot-rewrite/<閘道器>/<串流>`），設 `replace_running_query = 1`，`max_execution_time` 是 `STATEMENT_MAX_SECONDS`（20 秒）。前一次嘗試的某一句還在伺服器上執行時（client 已經放棄或當機），ClickHouse 26.8 在新的一句開始之前取消同一個帳號、同一個 query ID 的那一句，最多等 `replace_running_query_max_wait_ms`（`REPLACE_WAIT_MS`，5 秒）讓它結束；到時還沒結束，新的一句以 `QUERY_WITH_SAME_ID_IS_ALREADY_RUNNING` 失敗（舊的那句仍是取消狀態），別的帳號用同一個 query ID 時也一樣：這次嘗試停在這裡、不寫完成紀錄，之後重來。ingest 的 ClickHouse client 對這些語句的請求逾時至少要 `CLIENT_TIMEOUT_SECONDS`（30 秒），比等待加上執行的上限長，所以 client 放棄之前伺服器已經停下那一句。一個串流仍只由一個 ingest replica 處理；這一步確保前一次嘗試的語句不會和下一次重疊。
 2. 同步刪除這批的列：`DELETE FROM trustiot.telemetry`，`lightweight_deletes_sync = 2`。
 3. 以 `REWRITE_SETTINGS`（`deduplicate_insert = 'disable'`）寫入整批。開著去重時，內容與刪除之前寫過的區塊相同（同樣的列，或同樣的 `insert_deduplication_token`）的區塊會被直接丟掉、不報錯，這批的列就不見了。ClickHouse 26.8 的 `insert_deduplicate = 0` 關不掉它：設定 `deduplicate_insert`（預設 `enable`）取代了它，同步與非同步 INSERT 都一樣，只有設成 `backward_compatible_choice` 時才看 `insert_deduplicate`。
 4. 以這批的參數（`ReconcileParams`）執行 `RECONCILE_1M` 與 `RECONCILE_1H`：對這批碰到的、這個串流的每一格，寫入從原始列重算的值與彙總表現在的值的差，一致時什麼都不寫。這兩句帶 `deduplicate_insert_select = 'disable'`，與之前某次相同的差值不會被當成重複丟掉。
@@ -119,16 +119,20 @@ materialized view 只處理 INSERT。重寫一批（沒有完成紀錄的批次�
 - 第 5 步之前任何時候當機都沒有完成紀錄，閘道器會重送，下一次從第 1 步重來；對帳只看兩張表的現狀，重跑無害。只寫一次就成功的批次不需要對帳（view 在同一個 INSERT 裡執行），跑了也什麼都不寫。
 - 對帳只信任原始那一側，同一個串流有其他寫入正在進行時不能對帳；一個串流一個 replica、一次只有一批在途（遙測規則 2）保證這點。
 - 筆數與和精確修正；最小、最大、第一筆、最後一筆是從原始那一側合併進去，不會撤回。遙測規則 2 規定重送的批次內容不變，前一次嘗試的列就是重寫那批的列，不會改變這些值。
-- 對帳只往回看 30 個收到日（`RECONCILE_WINDOW_DAYS`，等於閘道器緩衝的最長保存時間）：一批的每一次嘗試都在這段時間內收到，原始資料的保存期限又比它長，所以比較的原始列一定還在。
+- 對帳只往回看 30 個收到日（`RECONCILE_WINDOW_DAYS`，等於閘道器緩衝的最長保存時間）：一批的每一次嘗試都在這段時間內收到，原始資料的保存期限又比它長（至少多一天，`RawRetention`），所以比較的原始列一定還在：窗口最舊的一天最早在下一個午夜才開始失去最早的列，而一句讀的是它開始時的 part。保存期限設成最小的 31 天時，餘裕只有這一天。
 - ingest 角色在兩張彙總表只有 `SELECT, INSERT`，不能刪除或改表。
 
 #### 既有資料的 backfill
 
-`0010` 最後兩句把套用之前就在 `telemetry` 裡的列補進彙總表。寫入的是重算值與現有彙總的差，view 已經算過的列不會再算一次，重複套用也什麼都不寫。管理帳號讀不到任何遙測列（`deny_by_default`），差值因此來自以 `trustiot_rollup_definer` 執行、帶 `first_day`、`last_day` 參數的 backfill view `telemetry_1m_backfill`、`telemetry_1h_backfill`，只有套用這個檔案的帳號讀得到。
+`0010` 本身不寫入任何列。migration Job 套用完所有檔案、把各表的 TTL 對齊設定之後，才把套用之前就在 `telemetry` 裡的列補進彙總表（`tools/migrate` 的 `backfill_aggregates`，語句是 `src/rollup.rs` 的 `BACKFILL_1M`、`BACKFILL_1H`），完成後在 `trustiot_migrate.applied` 記一筆 `backfill/telemetry_rollups`，之後的執行不再補。先對齊 TTL 的理由：檔案以平台值（1 分鐘 13 個月）建表，設定比較長時，補進去的舊格會在對齊之前被 merge 依 13 個月刪掉。
 
-- backfill 假設執行時沒有其他寫入 `telemetry` 的程式（一個區塊的原始部分與 view 部分之間會被算兩次）。第一次套用時成立：之前的版本沒有 ingest 的寫入路徑；不要在 Job 執行時用 `tools/lab-dataset` 載入資料。
-- 每句以 `max_execution_time = 25` 限制在 Job 30 秒的請求逾時之內，逾時的一句在伺服器上也停下，不會和下一次執行的同一句同時寫。沒做完時 Job 停在這個檔案，已寫入的部分保留、下一次只補剩下的差；大表上的時間還沒有實測，Laysi/trustiot-v2#91 之前也沒有持續寫入的資料。
-- backfill view 也用來檢查一段收到日的彙總是否與原始資料一致，必要時以同樣的 INSERT 補回：步驟見 [migration Job runbook](../../docs/runbooks/migrations.md)「彙總表的 backfill 與一致性檢查」。
+- **只補彙總缺的格，不改任何已有的格**：backfill view `telemetry_1m_backfill`、`telemetry_1h_backfill`（以 `trustiot_rollup_definer` 執行，參數 `first_day`、`last_day`、`raw_retention_days`）列出從原始列重算的值與現有彙總不一致的格，`aggregated` 欄標出彙總裡有沒有這一格；Job 只寫入 `aggregated = 0` 的格。所以再補一次什麼都不寫，前一次失敗後再執行只補還缺的格；`trustiot_migrate.applied` 遺失（例如 ClickHouse 從沒有 `trustiot_migrate` 的備份還原）後重新套用檔案、再補一次，也不會拿掉或改動任何一格，即使原始資料已經過期。
+- **只比對原始資料一定還在的收到日**：view 一律排除 `today − raw_retention_days + 2`（UTC）之前的收到日，原始與彙總兩邊都排除。原始 TTL 在收到後 `raw_retention_days` 天刪掉一列，所以 `today − raw_retention_days + 1` 是列還完整的最舊一天，它最早的列在下一個午夜過期；多留的一天讓在午夜前開始或跨過午夜的一句也碰不到執行中過期的列。更舊的格比原始列活得久（彙總保存得比較久），這種差異是預期的，view 不會把它列成要修正的差（寫進去會抹掉只剩彙總的歷史）。`raw_retention_days` 大於 3650 時以 3650 計，避免日期運算溢位，只會多排除一些日子。
+- Job 傳的 `raw_retention_days` 是這次執行之前 `telemetry` 的 TTL 與設定值中較短的一個：這次縮短保存期限時，較舊的列正在過期；這次延長時，舊的較短期限已經刪掉的列不會回來。Job 只補 `today − raw_retention_days + 3` 到今天（`backfill_day_count`），比 view 的界限少一天：每一句依它開始時伺服器的日期算界限，執行途中過了午夜（UTC）界限就往後一天，多留的這一天讓列出的每一天仍在界限以內，同一天的 1 分鐘與 1 小時兩句補的是同樣的格。界限一個午夜只動一天，Job 至少每兩個請求逾時就往後補一天，之後的午夜追不上它。
+- **平常沒有帳號讀得到 backfill view**：row policy `migration_account` 不點名任何帳號（`TO NONE`），管理帳號也讀到 0 列（`deny_by_default`）。Job 補之前把它改成點名自己（`TO CURRENT_USER`），補完改回 `TO NONE`（補失敗時也先改回再停止），所以換了管理帳號也照樣補得到。Job 在補的途中被停掉（例如超過 Job 的 `activeDeadlineSeconds`，或 pod 被刪）時來不及改回，policy 留在點名 Job 的帳號，直到下一次執行補完再改回；runbook 檢查步驟的最後一句看得出來。
+- 一個收到日一句，每句 `max_execution_time = 25`，在 Job 30 秒的請求逾時之內：逾時的一句在伺服器上也停下，不會和下一次執行同時寫。原始保存期限 3650 天時最多 7,300 句；大表上一天要多久還沒有實測，Laysi/trustiot-v2#91 之前也沒有持續寫入的資料。
+- backfill 假設執行時沒有其他寫入 `telemetry` 的程式：一個區塊的原始部分已寫入、view 部分還沒寫入時，那一格在彙總裡還不存在，backfill 補一次、view 再加一次。第一次執行時成立：之前的版本沒有 ingest 的寫入路徑；不要在 Job 執行時用 `tools/lab-dataset` 載入資料。`applied` 遺失後在有寫入的部署上再補時，正在寫入的格可能多算，以 runbook 的檢查找出並修正。
+- 檢查一段收到日的彙總是否與原始資料一致、並修正（包括拿掉原始列已刪除、沒有對帳的格：`src/rollup.rs` 的 `REPAIR_1M`、`REPAIR_1H`）：步驟見 [migration Job runbook](../../docs/runbooks/migrations.md)「彙總表的 backfill 與一致性檢查」。修正會改動已有的格，`raw_retention_days` 傳得比原始列實際保存的天數長，就會抹掉只剩彙總的歷史，所以 runbook 寫明要傳哪個值。
 
 ## 租戶隔離（row policy 與租戶 view）
 
@@ -150,7 +154,7 @@ materialized view 只處理 INSERT。重寫一批（沒有完成紀錄的批次�
 | row policy `tenant_isolation`（三個租戶 view、`telemetry` 與兩張彙總表） | `USING tenant_id = toUUID(getSetting('SQL_tenant_id')) TO trustiot_tenant_reader`；沒有這個設定的帳號查詢時報錯（`UNKNOWN_SETTING`），不會拿到資料。view 上這條是第二層；表上這條在租戶角色沒有表權限時不起作用，只在萬一誤加了表權限時仍然過濾列 |
 | row policy `service_all_rows`（`telemetry`、`batch_commits` 與兩張彙總表） | `USING 1 TO trustiot_ingest`；服務帳號另建的 policy |
 | row policy `deny_by_default`（materialized view `telemetry_1m_mv`、`telemetry_1h_mv`） | 從 materialized view `SELECT` 時，ClickHouse 以 view 的 DEFINER 讀目標表，讀者在彙總表上的 policy 不適用：沒有這條，任何拿到整個資料庫 `SELECT` 的帳號（管理帳號也是）都能經 view 讀到每個租戶的彙總（2026-10-25 測試發現）。有了它所有帳號經 materialized view 都讀到 0 列，寫入不受影響 |
-| row policy `migration_account`（backfill view） | `USING 1 TO CURRENT_USER`：只有套用 `0010` 的帳號讀得到 backfill view，其他帳號經 `deny_by_default` 讀到 0 列 |
+| row policy `migration_account`（backfill view） | `USING 1 TO NONE`：平常不點名任何帳號，管理帳號經 `deny_by_default` 也讀到 0 列。migration Job 補資料時、管理者依 runbook 檢查或修正時，暫時改成 `TO CURRENT_USER`，做完改回 `TO NONE`（上方「既有資料的 backfill」） |
 | settings profile `trustiot_tenant_reader` | `readonly = 1` 與查詢上限（逾時 30 秒、記憶體 512 MiB、2 個 thread、同時 4 個查詢、讀取 10 億列、結果 100 萬列），全部 `CONST` |
 | quota `trustiot_tenant_reader` | `KEYED BY user_name`：每分鐘 120 個查詢、60 個錯誤；每小時 3,000 個查詢、執行 1,800 秒、讀取 200 億列。沒有 `KEYED BY` 時所有租戶共用一個計數，A 用完會擋到 B |
 
@@ -232,14 +236,17 @@ CARGO_BUILD_JOBS=2 cargo test -p ingest --test clickhouse -- --nocapture
 
 `tests/rollups.rs`（Laysi/trustiot-v2#141）：一律起拋棄式容器（測試要分兩段套用檔案、卸下 materialized view、強制 merge，不能在共用的伺服器上做）。每一步之後，租戶經彙總 view 讀到的值都要等於測試以 Rust 從原始列（同一個租戶經 `tenant_telemetry` 讀）算出的值：
 
-1. 套用 `0010` 之前已有的列由 backfill 補進彙總表；再套用一次什麼都不寫。
+1. 套用 `0010` 之前已有的列由 Job 的 backfill 語句補進彙總表，再補一次什麼都不寫；管理帳號在 policy 點名自己之前，從 backfill view 一列也讀不到。原始 TTL 縮短到 10 天並強制 merge，讓 12 天前與 10 天前（只過期一部分：收到時間是當天第一毫秒的列過期、最後一毫秒的留下）的原始列過期之後：重新套用 `0010`、以 10 天或 400 天再補一次都不寫任何列；以 10 天檢查沒有任何差異、修正不寫任何列，兩天的格都不變；以 400 天檢查則會把這兩天列成負的差（view 要有界限的原因）。範圍內，刪掉一批（沒有對帳）後 backfill 不動它的格、修正把它們拿掉；彙總遺失的一天由 backfill 補回。
 2. 同一個區塊重送（同樣的 `insert_deduplication_token`）只算一次。
 3. I1 重寫：前一次嘗試只寫進部分的列，同步刪除後以 `REWRITE_SETTINGS` 重寫；只跑完 1 分鐘的對帳時 1 小時仍不一致，兩句都跑完後一致，再跑一次什麼都不寫；其他串流的格不變。
 4. 去重的風險（E7a）：同步刪除之後，以同樣的 token、以同樣的內容、以同樣的內容加 `insert_deduplicate = 0` 重寫，三種情況的列都被靜默丟掉；改用 `REWRITE_SETTINGS` 後全部寫入，對帳後彙總一致。
 5. 原始列寫入、1 小時的 view 那一份沒寫（卸下 `telemetry_1h_mv` 模擬兩者之間當機）：對帳補回 1 小時表，1 分鐘表不必修。
-6. 電能：測試自己寫的列涵蓋 bucket 內先到峰值再歸零、第一筆是 0 的歸零、bucket 內的溢位、兩格之間的歸零與平穩遞增，兩個 view 的答案都等於逐筆相鄰差的和；超出條件的一格（5、7、0、9）1 分鐘表正確，1 小時表得到上面說明的近似值。
-7. 保存期限：收到日在 380 到 410 天前的列，強制 merge 後 1 分鐘表依 chrono 算出的「13 個月加一天」保留或刪除，沒有提早刪的，1 小時表全部保留。
+6. 串流的 query ID（第 1 步）：同一個串流還有一句在執行時，同一個 query ID 而不帶 `replace_running_query` 的語句被拒（`QUERY_WITH_SAME_ID_IS_ALREADY_RUNNING`）；帶 `stream_settings` 的對帳取消那一句（`QUERY_WAS_CANCELLED`）並照常執行。
+7. 電能：測試自己寫的列涵蓋 bucket 內先到峰值再歸零、第一筆是 0 的歸零、bucket 內的溢位、兩格之間的歸零與平穩遞增，兩個 view 的答案都等於逐筆相鄰差的和；超出條件的一格（5、7、0、9）1 分鐘表正確，1 小時表得到上面說明的近似值。
+8. 保存期限：收到日在 380 到 410 天前的列，強制 merge 後 1 分鐘表依 chrono 算出的「13 個月加一天」保留或刪除，沒有提早刪的，1 小時表全部保留。
 
-`tools/lab-dataset/tests/rollups.rs` 以合成資料集（[datasets/lab](../../datasets/lab/README.md)，含沒有完成紀錄的批次與補傳）比對兩個彙總 view 與資料集的每一筆讀值，算資料集裡電表（不會溢位與會溢位的）與沖壓次數的電能，並確認對每一批對帳都不寫任何列。
+測試裡每一句寫入串流的語句都帶 `stream_settings`。
+
+`tools/lab-dataset/tests/rollups.rs` 載入 `lab_dataset::index_for_tests()` 的資料集（預設是合成 fixture，含沒有完成紀錄的批次與補傳；設 `TRUSTIOT_LAB_DATASET_INDEX` 改用別的索引，例如 lab 的錄製資料 Laysi/trustiot-v2#681，見 [datasets/lab](../../datasets/lab/README.md)），比對兩個彙總 view 與資料集的每一筆讀值；對索引裡每個累計型資料點（`kind = "cumulative"`，含 `wraps_at`）算電能：兩個 view 的答案要等於以同一個公式從資料集算出的值，每個 bucket 都符合精確條件時也要等於逐筆相鄰差的和，不符合時印出差多少；並確認以 `stream_settings` 對每一批對帳都不寫任何列。比對的預期值全部從資料集與它的索引算，沒有合成 fixture 專屬的數字。
 
 `tests/migrations.rs` 不需要伺服器：檢查檔名連號、陳述式切分、可重複執行、沒有破壞資料的語句、表只用 MergeTree 系列引擎，以及 view 一律是 `SQL SECURITY DEFINER`。

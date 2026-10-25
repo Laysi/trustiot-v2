@@ -9,6 +9,10 @@
 //! is not recorded, and the next run repeats it from the start, which its idempotent statements
 //! allow.
 //!
+//! After the files and the data retention, a run without a record of it fills the one-minute
+//! and one-hour aggregates from the raw rows the telemetry table already held
+//! (`ClickHouse::backfill_aggregates`).
+//!
 //! Values (names, hashes) travel as query parameters (`{name:Type}`), never inside the SQL text.
 //! ClickHouse 26.8 takes parameters in `CREATE USER` and `ALTER USER` but not in `GRANT` or
 //! `DROP USER`, so the collector's role comes with `CREATE USER ... DEFAULT ROLE`, which grants
@@ -21,7 +25,8 @@ use crate::config::{
 };
 use crate::passwords::Api;
 use crate::registry::{Migration, Registry};
-use crate::retention::Retention;
+use crate::retention::{MAX_RAW_RETENTION_DAYS, Retention};
+use crate::rollup::{BACKFILL_1H, BACKFILL_1M};
 use crate::secret::Password;
 use crate::{Error, Report, clickhouse_admin, http, sha256_hex};
 
@@ -57,6 +62,45 @@ const APPLIED: &str =
     "SELECT DISTINCT sha256 FROM trustiot_migrate.applied WHERE name = {name:String} FORMAT TSV";
 const RECORD: &str =
     "INSERT INTO trustiot_migrate.applied (name, sha256) SELECT {name:String}, {sha256:String}";
+/// The row of `trustiot_migrate.applied` that records the backfill of the aggregates
+/// (`ClickHouse::backfill_aggregates`), with the SHA-256 of its two statements. Not a file
+/// name, so the record stays the same when the file that creates the aggregates is renumbered.
+pub const BACKFILL_RECORD: &str = "backfill/telemetry_rollups";
+const RECORDED: &str =
+    "SELECT count() FROM trustiot_migrate.applied WHERE name = {name:String} FORMAT TSV";
+/// The backfill views show their rows to the account their `migration_account` policy names,
+/// nobody outside a backfill (0010_telemetry_rollups.sql): the run names its own account while
+/// it backfills, then nobody again.
+const SHOW_BACKFILL_VIEWS: &str = "ALTER ROW POLICY migration_account
+ON trustiot.telemetry_1m_backfill, trustiot.telemetry_1h_backfill TO CURRENT_USER";
+const HIDE_BACKFILL_VIEWS: &str = "ALTER ROW POLICY migration_account
+ON trustiot.telemetry_1m_backfill, trustiot.telemetry_1h_backfill TO NONE";
+/// The newest `count` receive days up to today (UTC), oldest first, by the server's clock, as
+/// the backfill views count them ([`backfill_day_count`]).
+const BACKFILL_DAYS: &str = "SELECT toString(toDate(now('UTC')) - offset)
+FROM (SELECT arrayJoin(range({count:UInt32})) AS offset)
+ORDER BY offset DESC FORMAT TSV";
+/// The last day of the newest backfill step: the last a Date holds, so a row whose receive time
+/// is ahead of the server's clock is not left out.
+const LAST_DAY: &str = "2149-06-06";
+/// `max_execution_time` of each backfill statement, in seconds: below [`http::REQUEST_TIMEOUT`],
+/// so a statement that runs too long stops on the server too, and the next run, which inserts
+/// what is still missing, never runs alongside it.
+const BACKFILL_MAX_SECONDS: u64 = 25;
+const _: () = assert!(BACKFILL_MAX_SECONDS < http::REQUEST_TIMEOUT.as_secs());
+
+/// How many receive days the run backfills with a raw data retention of `raw_days`: from today -
+/// `raw_days` + 3 to today, one day inside the backfill views' bound (today - `raw_days` + 2,
+/// with the retention capped at [`MAX_RAW_RETENTION_DAYS`] as the views cap it). Each statement
+/// takes the bound from the server's clock when it starts, so a midnight (UTC) during the run
+/// moves the bound a day; the spare day keeps every listed day inside it, and the one-minute and
+/// one-hour statements of a day always cover the same cells. The bound moves one day per
+/// midnight, and the run moves on by a day at least every two request timeouts, so no later
+/// midnight catches up with it.
+#[must_use]
+pub fn backfill_day_count(raw_days: u32) -> u32 {
+    raw_days.min(MAX_RAW_RETENTION_DAYS).saturating_sub(2)
+}
 const USER_EXISTS: &str = "SELECT count() FROM system.users WHERE name = {user:String} FORMAT TSV";
 /// The roles granted to the user, whether each is a default role (active at login) and whether it
 /// came with ADMIN OPTION, then its direct grants: the account must have the collector role, as a
@@ -516,17 +560,25 @@ impl ClickHouse {
         }
     }
 
+    /// Sends `query` with `params` as query parameters (`{name:Type}`) and `settings` as
+    /// ClickHouse settings, both in the URL.
     async fn send(
         &self,
         username: &str,
         password: &str,
         query: &str,
         params: &[(&str, &str)],
+        settings: &[(&str, &str)],
     ) -> Result<String, Failure> {
         let mut pairs: Vec<(String, &str)> = params
             .iter()
             .map(|(name, value)| (format!("param_{name}"), *value))
             .collect();
+        pairs.extend(
+            settings
+                .iter()
+                .map(|(name, value)| ((*name).to_owned(), *value)),
+        );
         pairs.push(("wait_end_of_query".to_owned(), "1"));
         let pairs: Vec<(&str, &str)> = pairs
             .iter()
@@ -562,7 +614,18 @@ impl ClickHouse {
         query: &str,
         params: &[(&str, &str)],
     ) -> Result<String, Error> {
-        self.send(&self.username, &self.password, query, params)
+        self.query_with_settings(what, query, params, &[]).await
+    }
+
+    /// Runs `query` as the access-management account with ClickHouse `settings`.
+    async fn query_with_settings(
+        &self,
+        what: &str,
+        query: &str,
+        params: &[(&str, &str)],
+        settings: &[(&str, &str)],
+    ) -> Result<String, Error> {
+        self.send(&self.username, &self.password, query, params, settings)
             .await
             .map_err(|failure| {
                 Error::ClickHouse(format!(
@@ -591,7 +654,10 @@ impl ClickHouse {
         let started = Instant::now();
         let mut reported = None::<Instant>;
         loop {
-            let failure = match self.send(&self.username, &self.password, PROBE, &[]).await {
+            let failure = match self
+                .send(&self.username, &self.password, PROBE, &[], &[])
+                .await
+            {
                 Ok(_) => return Ok(Answer::Accepted),
                 Err(failure) => failure,
             };
@@ -620,9 +686,9 @@ impl ClickHouse {
         }
     }
 
-    /// The DDL files, the raw and aggregate data retention (when the registry has ClickHouse
-    /// files, which create the tables it applies to), then the accounts of the collector and of
-    /// telemetry-query.
+    /// The DDL files, the raw and aggregate data retention and the backfill of the aggregates
+    /// (when the registry has ClickHouse files, which create the tables they apply to), then the
+    /// accounts of the collector and of telemetry-query.
     ///
     /// # Errors
     ///
@@ -648,7 +714,11 @@ impl ClickHouse {
             self.apply(migration, report).await?;
         }
         if !registry.clickhouse.is_empty() {
-            self.apply_retention(retention, report).await?;
+            let raw_before = self.apply_retention(retention, report).await?;
+            // A raw retention this run lengthened has not kept the rows the shorter one already
+            // deleted: the backfill compares only the days both kept.
+            self.backfill_aggregates(raw_before.min(retention.raw.days()), report)
+                .await?;
         }
         if let Some((user, password)) = collector {
             self.ensure_collector(user, password, report).await?;
@@ -752,11 +822,13 @@ impl ClickHouse {
     /// new TTL to the existing parts with a `MATERIALIZE TTL` mutation that runs in the
     /// background (`materialize_ttl_after_modify`, on by default): without it, parts written
     /// under the old TTL would still expire by the old one.
+    ///
+    /// Returns the raw data retention, in days, that the telemetry table had before the run.
     async fn apply_retention(
         &self,
         retention: Retention,
         report: &mut Report,
-    ) -> Result<(), Error> {
+    ) -> Result<u32, Error> {
         let mut current = [0; RETENTION_TABLES.len()];
         for (now, table) in current.iter_mut().zip(RETENTION_TABLES) {
             *now = self.ttl(table).await?;
@@ -765,7 +837,105 @@ impl ClickHouse {
             self.set_ttl(RETENTION_TABLES[index], from, to, report)
                 .await?;
         }
+        Ok(current[RETENTION_TABLES.len() - 1])
+    }
+
+    /// Fills the one-minute and one-hour aggregates from the raw rows the telemetry table held
+    /// before their materialized views existed, once: when `trustiot_migrate.applied` has no
+    /// [`BACKFILL_RECORD`]. It runs after the TTLs are set, so a backfilled cell expires by the
+    /// aggregate retention of the deployment and not by the files' default (a cell the
+    /// one-minute table's 13 months would drop is kept when the setting is longer).
+    ///
+    /// The statements insert the cells the aggregates lack, recomputed from the raw rows, one
+    /// receive day at a time ([`BACKFILL_1M`], [`BACKFILL_1H`]), over the days
+    /// [`backfill_day_count`] gives: none before today - `raw_days` + 3, inside the views' bound,
+    /// so no cell is recomputed from raw rows of which some may have expired. They never change a cell the aggregates hold, so
+    /// a run after a failed one fills what is still missing, and a run after a lost record (a
+    /// ClickHouse restored without `trustiot_migrate`) takes nothing away, even where the raw
+    /// rows are gone. The views show their rows to the run's account only while it backfills,
+    /// whichever account the run uses.
+    async fn backfill_aggregates(&self, raw_days: u32, report: &mut Report) -> Result<(), Error> {
+        let recorded = self
+            .query(
+                "read whether the aggregates were backfilled",
+                RECORDED,
+                &[("name", BACKFILL_RECORD)],
+            )
+            .await?;
+        if recorded.trim() != "0" {
+            return Ok(());
+        }
+        self.query(
+            "show the backfill views to the run's account",
+            SHOW_BACKFILL_VIEWS,
+            &[],
+        )
+        .await?;
+        let filled = self.fill_aggregates(raw_days).await;
+        // Hidden again whether or not the backfill went through: a failed run is repeated.
+        let hidden = self
+            .query("hide the backfill views again", HIDE_BACKFILL_VIEWS, &[])
+            .await;
+        let (first, last) = filled?;
+        hidden?;
+        let sha256 = sha256_hex(&format!("{BACKFILL_1M}\n{BACKFILL_1H}"));
+        self.query(
+            "record the backfill of the aggregates",
+            RECORD,
+            &[("name", BACKFILL_RECORD), ("sha256", &sha256)],
+        )
+        .await?;
+        report.change(format!(
+            "backfilled the one-minute and one-hour aggregates from the raw rows received from \
+             {first} to {last} (raw data retention {raw_days} days, less the three oldest days)"
+        ));
         Ok(())
+    }
+
+    /// Runs the two backfill statements for each receive day [`backfill_day_count`] gives,
+    /// oldest first; the last step reaches to [`LAST_DAY`]. The first and the last day.
+    async fn fill_aggregates(&self, raw_days: u32) -> Result<(String, String), Error> {
+        let raw = raw_days.to_string();
+        let count = backfill_day_count(raw_days).to_string();
+        let listed = self
+            .query(
+                "list the receive days to backfill",
+                BACKFILL_DAYS,
+                &[("count", &count)],
+            )
+            .await?;
+        let days: Vec<&str> = listed.lines().filter(|line| !line.is_empty()).collect();
+        let (Some(first), Some(last)) = (days.first(), days.last()) else {
+            return Err(Error::ClickHouse(format!(
+                "list the receive days to backfill: no day for a raw data retention of \
+                 {raw_days} days"
+            )));
+        };
+        let max_seconds = BACKFILL_MAX_SECONDS.to_string();
+        let settings = [("max_execution_time", max_seconds.as_str())];
+        for (index, day) in days.iter().enumerate() {
+            let until = if index + 1 == days.len() {
+                LAST_DAY
+            } else {
+                day
+            };
+            let params = [
+                ("first_day", *day),
+                ("last_day", until),
+                ("raw_retention_days", raw.as_str()),
+            ];
+            for (table, statement) in [("telemetry_1m", BACKFILL_1M), ("telemetry_1h", BACKFILL_1H)]
+            {
+                self.query_with_settings(
+                    &format!("backfill trustiot.{table} for the receive day {day}"),
+                    statement,
+                    &params,
+                    &settings,
+                )
+                .await?;
+            }
+        }
+        Ok(((*first).to_owned(), (*last).to_owned()))
     }
 
     /// The retention that `table` has now, in its unit.
@@ -901,7 +1071,7 @@ impl ClickHouse {
             report.change(format!("let ClickHouse account {user} log in again"));
             return Ok(());
         }
-        match self.send(user, password.expose(), PROBE, &[]).await {
+        match self.send(user, password.expose(), PROBE, &[], &[]).await {
             Ok(_) => Ok(()),
             Err(failure) if failure.is_authentication() => {
                 self.query("set the collector account's password", SET_PASSWORD, &auth)
@@ -995,7 +1165,7 @@ impl ClickHouse {
             report.change(format!("let ClickHouse account {user} log in"));
             return Ok(());
         }
-        match self.send(user, password.expose(), PROBE, &[]).await {
+        match self.send(user, password.expose(), PROBE, &[], &[]).await {
             Ok(_) => Ok(()),
             Err(failure) if failure.is_authentication() => {
                 self.query(
@@ -1139,6 +1309,29 @@ impl ClickHouse {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_backfill_stays_a_day_inside_the_views_bound() {
+        // From today - days + 3 to today: one day fewer than the views compare.
+        assert_eq!(backfill_day_count(180), 178);
+        assert_eq!(backfill_day_count(31), 29);
+        assert_eq!(backfill_day_count(MAX_RAW_RETENTION_DAYS), 3648);
+        // Capped as the views cap it, and never below zero.
+        assert_eq!(backfill_day_count(u32::MAX), 3648);
+        assert_eq!(backfill_day_count(2), 0);
+        assert_eq!(backfill_day_count(0), 0);
+        // The bound of the views that count holds, in both views and on both sides of each.
+        let views = crate::clickhouse_files::FILES
+            .iter()
+            .find(|file| file.name == "0010_telemetry_rollups.sql")
+            .expect("the file of the aggregates")
+            .sql;
+        let bound = format!(
+            "toDate(now('UTC')) - least({{raw_retention_days:UInt32}}, {MAX_RAW_RETENTION_DAYS}) \
+             + 2) AND {{last_day:Date}}"
+        );
+        assert_eq!(views.matches(&bound).count(), 4, "{bound}");
+    }
 
     #[test]
     fn splits_like_the_ingest_tests() {

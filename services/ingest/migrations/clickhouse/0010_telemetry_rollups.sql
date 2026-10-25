@@ -2,6 +2,10 @@
 -- Laysi/trustiot-v2#141). The reasoning, the I1 contract for the ingest service and the queries
 -- the consumers run are in services/ingest/README.md, section 「彙總表」.
 --
+-- Laysi/trustiot-v2#141 adds this file, and its review changed it before any release or
+-- deployment had it; from the first release that includes it, it never changes
+-- (tools/migrate/src/registry.rs).
+--
 -- Tables. trustiot.telemetry_1m and trustiot.telemetry_1h hold one row per cell: tenant,
 -- device, point, bucket (the reading time ts truncated to the UTC minute or hour), gateway,
 -- stream and receive day. Each cell carries the count of readings, the count of numeric ones
@@ -38,22 +42,34 @@
 -- on the aggregate tables carries the tenant filter, and the tenant role has no grant on the
 -- tables.
 --
--- Backfill. The last statements fill the aggregates from the rows the telemetry table held
--- before the views existed. They insert the difference between the recomputation and the
--- current aggregates, so rows the views already counted are not counted again, and applying
--- the file again inserts nothing. The admin account reads no telemetry rows (deny_by_default),
--- so the difference comes from the views trustiot.telemetry_1m_backfill and
--- trustiot.telemetry_1h_backfill, which run as trustiot_rollup_definer and which only the
--- account that applied this file may read. The backfill assumes that no ingest service writes
--- while it runs (a block between its raw part and its view part would be counted twice): true
--- when this file is first applied, since no release before it has an ingest writer.
--- max_execution_time stays below the migration Job's 30-second request timeout, so a statement
--- that runs too long stops on the server too and is not repeated alongside a running one by the
--- next run, which inserts what is still missing. The backfill views also check and repair a
--- range of receive days by hand (docs/runbooks/migrations.md).
--- deduplicate_insert_select = 'disable': ClickHouse 26.8 drops an INSERT SELECT whose block it
--- saw before when the SELECT is stable, and a difference may equal an earlier one; its
--- insert_deduplicate setting no longer turns deduplication off.
+-- Backfill. trustiot.telemetry_1m_backfill and trustiot.telemetry_1h_backfill give, for a range
+-- of receive days, the difference between the cells recomputed from the raw rows and the cells
+-- as they are, only where the two differ, and whether the aggregates hold the cell at all
+-- (aggregated). This file inserts nothing. The migration Job, after it has applied the files
+-- and set the TTLs, inserts the cells the aggregates lack (aggregated = 0), to fill them from
+-- the rows the telemetry table held before the views existed (tools/migrate/src/clickhouse.rs,
+-- src/rollup.rs BACKFILL_1M and BACKFILL_1H): it adds cells and never changes one, so neither
+-- a second run nor a run after trustiot_migrate.applied was lost can take anything away. An
+-- administrator checks a range of receive days with the views and repairs it with every
+-- difference, aggregate-only cells included (src/rollup.rs REPAIR_1M and REPAIR_1H;
+-- docs/runbooks/migrations.md).
+--
+-- A receive day is compared only while none of its raw rows can have expired. The views take
+-- the raw data retention (raw_retention_days, the migration Job's setting) and leave out every
+-- receive day before today - raw_retention_days + 2 (UTC), on both sides. The raw TTL deletes a
+-- row raw_retention_days after it was received, so the oldest day whose rows are all still
+-- there is today - raw_retention_days + 1, whose earliest rows expire at the next midnight; the
+-- second day keeps a statement that starts just before midnight, or runs past it, clear of rows
+-- that expire meanwhile. Older cells outlive their raw rows (the aggregate retention is longer):
+-- that difference is expected, and the views never offer it as a correction, which would erase
+-- the cells. least(..., 3650) keeps the date arithmetic from wrapping: a value above the
+-- longest raw retention the Job accepts (src/retention.rs) only leaves out more days.
+--
+-- The views run as trustiot_rollup_definer and see every tenant's rows, so their
+-- deny_by_default policies hide every row from every account, and their migration_account
+-- policies show the rows to nobody: the migration Job, or an administrator who checks a range,
+-- names itself with ALTER ROW POLICY ... TO CURRENT_USER for as long as it reads them and sets
+-- it back to NONE afterwards.
 
 CREATE TABLE IF NOT EXISTS trustiot.telemetry_1m
 (
@@ -304,12 +320,18 @@ GRANT SELECT ON trustiot.tenant_telemetry_1m TO trustiot_tenant_reader;
 
 GRANT SELECT ON trustiot.tenant_telemetry_1h TO trustiot_tenant_reader;
 
--- The backfill views: for the cells received from first_day to last_day, the recomputation
--- from the raw rows minus the aggregates as they are, only where the two differ. The
--- differences of the counts and the sum are added, and the raw side's minimum, maximum, first
--- and last are merged in (they are empty states for a cell that has no raw rows left). Only
--- the account that applied this file reads them: deny_by_default hides every row from anyone
--- else, including an account that was granted SELECT on the whole database.
+-- The backfill views: for the cells received from first_day to last_day, and no earlier than
+-- today - raw_retention_days + 2 (see the top of the file), the recomputation from the raw rows
+-- minus the aggregates as they are, only where the two differ in the count, the numeric count
+-- or the sum (the WHERE at the end of each view). The differences of the counts and the sum
+-- are added, and the raw side's minimum, maximum, first and last are merged in (they are
+-- empty states for a cell that has no raw rows left: within those days, a cell whose
+-- rows were deleted and not reconciled, I1). aggregated is 1 where the aggregates hold rows of
+-- the cell and 0 where only the raw rows do: join_use_nulls = 0 fills the missing side with
+-- defaults, so a constant 1 from the aggregate side tells the two apart. Nobody reads them but
+-- the account their migration_account policy names, which is nobody outside a backfill or a
+-- check: deny_by_default hides every row from anyone else, including an account that was
+-- granted SELECT on the whole database.
 CREATE VIEW IF NOT EXISTS trustiot.telemetry_1m_backfill
 DEFINER = trustiot_rollup_definer SQL SECURITY DEFINER
 AS SELECT
@@ -326,7 +348,8 @@ AS SELECT
     r.raw_value_min AS value_min,
     r.raw_value_max AS value_max,
     r.raw_first AS first,
-    r.raw_last AS last
+    r.raw_last AS last,
+    a.agg_present AS aggregated
 FROM
 (
     SELECT
@@ -358,7 +381,7 @@ FROM
             multiIf(value_type = 'float', value_float, value_type = 'int', toFloat64(value_int), value_type = 'bool', toFloat64(value_bool), NULL) AS value_number,
             CAST((ts, value_type, value_float, value_int, value_bool, value_string) AS Tuple(ts DateTime64(3, 'UTC'), value_type Enum8('float' = 1, 'int' = 2, 'bool' = 3, 'string' = 4), value_float Float64, value_int Int64, value_bool Bool, value_string String)) AS reading
         FROM trustiot.telemetry
-        WHERE toDate(received_at) BETWEEN {first_day:Date} AND {last_day:Date}
+        WHERE toDate(received_at) BETWEEN greatest({first_day:Date}, toDate(now('UTC')) - least({raw_retention_days:UInt32}, 3650) + 2) AND {last_day:Date}
     )
     GROUP BY tenant_id, device_id, point, bucket, gateway_id, stream_id, received_day
 ) AS r
@@ -374,9 +397,10 @@ FULL OUTER JOIN
         received_day,
         sum(readings) AS agg_readings,
         sum(numeric_readings) AS agg_numeric_readings,
-        sum(value_sum) AS agg_value_sum
+        sum(value_sum) AS agg_value_sum,
+        toUInt8(1) AS agg_present
     FROM trustiot.telemetry_1m
-    WHERE received_day BETWEEN {first_day:Date} AND {last_day:Date}
+    WHERE received_day BETWEEN greatest({first_day:Date}, toDate(now('UTC')) - least({raw_retention_days:UInt32}, 3650) + 2) AND {last_day:Date}
     GROUP BY tenant_id, device_id, point, bucket, gateway_id, stream_id, received_day
 ) AS a USING (tenant_id, device_id, point, bucket, gateway_id, stream_id, received_day)
 WHERE r.raw_readings != a.agg_readings
@@ -400,7 +424,8 @@ AS SELECT
     r.raw_value_min AS value_min,
     r.raw_value_max AS value_max,
     r.raw_first AS first,
-    r.raw_last AS last
+    r.raw_last AS last,
+    a.agg_present AS aggregated
 FROM
 (
     SELECT
@@ -432,7 +457,7 @@ FROM
             multiIf(value_type = 'float', value_float, value_type = 'int', toFloat64(value_int), value_type = 'bool', toFloat64(value_bool), NULL) AS value_number,
             CAST((ts, value_type, value_float, value_int, value_bool, value_string) AS Tuple(ts DateTime64(3, 'UTC'), value_type Enum8('float' = 1, 'int' = 2, 'bool' = 3, 'string' = 4), value_float Float64, value_int Int64, value_bool Bool, value_string String)) AS reading
         FROM trustiot.telemetry
-        WHERE toDate(received_at) BETWEEN {first_day:Date} AND {last_day:Date}
+        WHERE toDate(received_at) BETWEEN greatest({first_day:Date}, toDate(now('UTC')) - least({raw_retention_days:UInt32}, 3650) + 2) AND {last_day:Date}
     )
     GROUP BY tenant_id, device_id, point, bucket, gateway_id, stream_id, received_day
 ) AS r
@@ -448,9 +473,10 @@ FULL OUTER JOIN
         received_day,
         sum(readings) AS agg_readings,
         sum(numeric_readings) AS agg_numeric_readings,
-        sum(value_sum) AS agg_value_sum
+        sum(value_sum) AS agg_value_sum,
+        toUInt8(1) AS agg_present
     FROM trustiot.telemetry_1h
-    WHERE received_day BETWEEN {first_day:Date} AND {last_day:Date}
+    WHERE received_day BETWEEN greatest({first_day:Date}, toDate(now('UTC')) - least({raw_retention_days:UInt32}, 3650) + 2) AND {last_day:Date}
     GROUP BY tenant_id, device_id, point, bucket, gateway_id, stream_id, received_day
 ) AS a USING (tenant_id, device_id, point, bucket, gateway_id, stream_id, received_day)
 WHERE r.raw_readings != a.agg_readings
@@ -464,23 +490,9 @@ AS PERMISSIVE FOR SELECT USING 0 TO ALL;
 CREATE ROW POLICY IF NOT EXISTS deny_by_default ON trustiot.telemetry_1h_backfill
 AS PERMISSIVE FOR SELECT USING 0 TO ALL;
 
+-- Shows the rows to nobody until an account names itself (see the top of the file).
 CREATE ROW POLICY IF NOT EXISTS migration_account ON trustiot.telemetry_1m_backfill
-AS PERMISSIVE FOR SELECT USING 1 TO CURRENT_USER;
+AS PERMISSIVE FOR SELECT USING 1 TO NONE;
 
 CREATE ROW POLICY IF NOT EXISTS migration_account ON trustiot.telemetry_1h_backfill
-AS PERMISSIVE FOR SELECT USING 1 TO CURRENT_USER;
-
--- The backfill itself, over every receive day a Date can hold.
-INSERT INTO trustiot.telemetry_1m (tenant_id, device_id, point, bucket, gateway_id, stream_id,
-    received_day, readings, numeric_readings, value_sum, value_min, value_max, first, last)
-SETTINGS deduplicate_insert_select = 'disable', max_execution_time = 25
-SELECT tenant_id, device_id, point, bucket, gateway_id, stream_id, received_day, readings,
-    numeric_readings, value_sum, value_min, value_max, first, last
-FROM trustiot.telemetry_1m_backfill(first_day = '1970-01-01', last_day = '2149-06-06');
-
-INSERT INTO trustiot.telemetry_1h (tenant_id, device_id, point, bucket, gateway_id, stream_id,
-    received_day, readings, numeric_readings, value_sum, value_min, value_max, first, last)
-SETTINGS deduplicate_insert_select = 'disable', max_execution_time = 25
-SELECT tenant_id, device_id, point, bucket, gateway_id, stream_id, received_day, readings,
-    numeric_readings, value_sum, value_min, value_max, first, last
-FROM trustiot.telemetry_1h_backfill(first_day = '1970-01-01', last_day = '2149-06-06');
+AS PERMISSIVE FOR SELECT USING 1 TO NONE;

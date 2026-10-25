@@ -1,13 +1,20 @@
-//! The one-minute and one-hour aggregates of the synthetic fixture (Laysi/trustiot-v2#141):
-//! loaded into a throwaway ClickHouse with the product's ClickHouse schema, every cell a tenant
-//! reads through its aggregate views equals the cell this test computes from the dataset's
-//! readings (count, numeric count, sum, minimum, maximum, first and last reading with its typed
-//! value), the uncommitted batch and the backlog included; the energy queries of
-//! services/ingest/src/rollup.rs give the increase of the three cumulative points (the meter
-//! cleared to zero, the 32-bit pulse counter that wraps, the press counter) from both views; and
-//! the reconcile of every loaded batch writes nothing, since the views counted each batch once.
+//! The one-minute and one-hour aggregates of a lab dataset (Laysi/trustiot-v2#141): loaded into
+//! a throwaway ClickHouse with the product's ClickHouse schema, every cell a tenant reads through
+//! its aggregate views equals the cell this test computes from the dataset's readings (count,
+//! numeric count, sum, minimum, maximum, first and last reading with its typed value), the
+//! uncommitted batches and the backlog included; for every cumulative point of the index (with
+//! its `wraps_at`), the energy queries of services/ingest/src/rollup.rs give, from both views,
+//! the answer this test computes with the same formula from the dataset, which equals the sum of
+//! consecutive differences wherever every bucket meets the formula's condition (otherwise the
+//! difference is printed); and the reconcile of every loaded batch writes nothing, since the
+//! views counted each batch once.
 //!
-//! Always a throwaway container, never `TEST_CLICKHOUSE_URL`, like `clickhouse_load.rs`.
+//! The dataset is `lab_dataset::index_for_tests()`: the synthetic fixture, or the index that
+//! `TRUSTIOT_LAB_DATASET_INDEX` names (for example the lab recording, Laysi/trustiot-v2#681).
+//! Every expected value comes from the dataset and its index, none from the fixture.
+//!
+//! Always a throwaway container, never `TEST_CLICKHOUSE_URL`, like `clickhouse_load.rs`. All SQL
+//! is static: values and passwords travel as query parameters (tools/sql-check).
 
 #![allow(
     clippy::print_stdout,
@@ -23,14 +30,62 @@ mod common;
 use std::collections::{BTreeMap, BTreeSet};
 
 use chrono::{DateTime, TimeDelta, TimeZone, Utc};
-use ingest::rollup::{ENERGY_1H, ENERGY_1M, RECONCILE_1H, RECONCILE_1M, ReconcileParams};
-use lab_dataset::{Dataset, Loaded, Reading, Target, Value, synthetic_index};
+use ingest::rollup::{
+    ENERGY_1H, ENERGY_1M, RECONCILE_1H, RECONCILE_1M, ReconcileParams, stream_settings,
+};
+use lab_dataset::index::PointKind;
+use lab_dataset::{Dataset, Loaded, Reading, Target, Value, index_for_tests};
 use uuid::Uuid;
 
 use self::common::{Account, ClickHouse};
 
 const MINUTE_MS: i64 = 60_000;
 const HOUR_MS: i64 = 3_600_000;
+
+/// The tenant the dataset is loaded for.
+const TENANT: &str = "00000000-0000-4000-8000-000000014109";
+/// A tenant account as telemetry-query creates one (0004_access.sql), for [`TENANT`]: ClickHouse
+/// 26.8 takes no query parameter in a `SETTINGS` value, so the tenant ID is a literal.
+const READER: &str = "rollup_fixture_tenant";
+const CREATE_READER: &str = "CREATE USER rollup_fixture_tenant
+IDENTIFIED WITH sha256_password BY {password:String}
+DEFAULT ROLE trustiot_tenant_reader
+SETTINGS PROFILE 'trustiot_tenant_reader', SQL_tenant_id = '00000000-0000-4000-8000-000000014109' CONST";
+/// The ingest service's account: the ingest role, nothing else.
+const INGEST: &str = "rollup_fixture_ingest";
+const CREATE_INGEST: &str = "CREATE USER rollup_fixture_ingest
+IDENTIFIED WITH sha256_password BY {password:String} DEFAULT ROLE trustiot_ingest";
+
+/// The cells of a tenant view as this test compares them.
+macro_rules! aggregates {
+    ($view:literal) => {
+        concat!(
+            "SELECT toString(device_id), point, toUnixTimestamp(bucket), readings,
+  numeric_readings, value_sum, value_min, value_max,
+  toUnixTimestamp64Milli(first.ts), first.value_type, first.value_float, first.value_int,
+  first.value_bool, first.value_string,
+  toUnixTimestamp64Milli(last.ts), last.value_type, last.value_float, last.value_int,
+  last.value_bool, last.value_string
+FROM trustiot.",
+            $view,
+            " FORMAT TSV"
+        )
+    };
+}
+
+/// The two aggregate views, their query and their bucket length.
+const VIEWS: [(&str, &str, i64); 2] = [
+    (
+        "trustiot.tenant_telemetry_1m",
+        aggregates!("tenant_telemetry_1m"),
+        MINUTE_MS,
+    ),
+    (
+        "trustiot.tenant_telemetry_1h",
+        aggregates!("tenant_telemetry_1h"),
+        HOUR_MS,
+    ),
+];
 
 /// A reading as a cell's first or last: time in ms, type, float, int, bool, string.
 type Typed = (i64, String, f64, i64, bool, String);
@@ -132,22 +187,11 @@ fn optional(field: &str) -> Option<f64> {
 async fn compare(
     server: &ClickHouse,
     tenant: &Account,
-    view: &str,
+    (view, query): (&str, &str),
     expected: &BTreeMap<(String, String, i64), Expected>,
 ) -> (Vec<String>, usize) {
     let answer = server
-        .query(
-            tenant,
-            &format!(
-                "SELECT toString(device_id), point, toUnixTimestamp(bucket), readings,
-  numeric_readings, value_sum, value_min, value_max,
-  toUnixTimestamp64Milli(first.ts), first.value_type, first.value_float, first.value_int,
-  first.value_bool, first.value_string,
-  toUnixTimestamp64Milli(last.ts), last.value_type, last.value_float, last.value_int,
-  last.value_bool, last.value_string
-FROM {view} FORMAT TSV"
-            ),
-        )
+        .query(tenant, query)
         .await
         .unwrap_or_else(|error| panic!("{view}: {}", error.body));
     let mut problems = Vec::new();
@@ -199,6 +243,70 @@ fn increase(values: &[f64], wraps_at: f64) -> f64 {
         .sum()
 }
 
+/// What the energy queries compute for one series of readings in time order: the formula of
+/// services/ingest/src/rollup.rs on the buckets of `bucket_ms`, and whether every bucket meets
+/// its condition (at most one reset or wrap, after which the bucket's last reading stays below
+/// the peak before it), under which the answer is exact. `None` when a bucket's first or last reading
+/// is a tie between different values (any of them may be the view's), so the formula's answer
+/// is not determined.
+fn formula(series: &[(i64, f64)], bucket_ms: i64, wraps_at: f64) -> Option<(f64, bool)> {
+    let mut buckets: BTreeMap<i64, Vec<(i64, f64)>> = BTreeMap::new();
+    for (ms, value) in series {
+        buckets
+            .entry(ms.div_euclid(bucket_ms))
+            .or_default()
+            .push((*ms, *value));
+    }
+    let mut total = 0.0;
+    let mut exact = true;
+    let mut previous_last: Option<f64> = None;
+    for readings in buckets.values() {
+        let (first_ms, first) = readings[0];
+        let (last_ms, last) = readings[readings.len() - 1];
+        let ties = |ms: i64, value: f64| {
+            readings
+                .iter()
+                .any(|(other_ms, other)| *other_ms == ms && *other != value)
+        };
+        if ties(first_ms, first) || ties(last_ms, last) {
+            return None;
+        }
+        let min = readings
+            .iter()
+            .map(|(_, v)| *v)
+            .fold(f64::INFINITY, f64::min);
+        let max = readings
+            .iter()
+            .map(|(_, v)| *v)
+            .fold(f64::NEG_INFINITY, f64::max);
+        total += if last < max || min < first {
+            if wraps_at > 0.0 {
+                wraps_at - first + last
+            } else {
+                max - first + last
+            }
+        } else {
+            last - first
+        };
+        total += match previous_last {
+            None => 0.0,
+            Some(previous) if first >= previous => first - previous,
+            Some(previous) if wraps_at > 0.0 => first + wraps_at - previous,
+            Some(_) => first,
+        };
+        previous_last = Some(last);
+        let drops: Vec<usize> = (1..readings.len())
+            .filter(|&i| readings[i].1 < readings[i - 1].1)
+            .collect();
+        exact &= match drops.as_slice() {
+            [] => true,
+            [i] => last < readings[*i - 1].1,
+            _ => false,
+        };
+    }
+    Some((total, exact))
+}
+
 fn floor(at: DateTime<Utc>, ms: i64) -> DateTime<Utc> {
     Utc.timestamp_millis_opt(at.timestamp_millis().div_euclid(ms) * ms)
         .single()
@@ -209,12 +317,27 @@ fn time(at: DateTime<Utc>) -> String {
     at.format("%Y-%m-%d %H:%M:%S%.3f").to_string()
 }
 
-fn password() -> String {
-    Uuid::new_v4().simple().to_string()
+/// Creates the account `user` with `create` (a static `CREATE USER` with a password parameter).
+/// Creates `user` with `create`, which grants it `role` as its default role.
+async fn account(server: &ClickHouse, user: &str, create: &str, role: &str) -> Account {
+    let account = Account {
+        user: user.to_owned(),
+        password: Uuid::new_v4().simple().to_string(),
+    };
+    server
+        .query_with(
+            &server.admin,
+            create,
+            &[("param_password", account.password.as_str())],
+        )
+        .await
+        .unwrap_or_else(|error| panic!("create {user}: {}", error.body));
+    server.assert_default_role(user, role).await;
+    account
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn the_aggregates_of_the_fixture_equal_its_readings() {
+async fn the_aggregates_of_the_dataset_equal_its_readings() {
     let Some(server) = ClickHouse::start_throwaway().await else {
         return;
     };
@@ -229,7 +352,8 @@ async fn the_aggregates_of_the_fixture_equal_its_readings() {
         }
     }
 
-    let dataset = Dataset::open(synthetic_index()).unwrap();
+    let index = index_for_tests();
+    let dataset = Dataset::open(&index).unwrap();
     let writer = lab_dataset::ClickHouse::new(
         &server.url,
         &server.admin.user,
@@ -240,53 +364,34 @@ async fn the_aggregates_of_the_fixture_equal_its_readings() {
     let shift = dataset
         .shift_ending_before(Utc::now(), TimeDelta::days(1))
         .unwrap();
-    let tenant = Uuid::new_v4();
+    let tenant = Uuid::parse_str(TENANT).unwrap();
     let loaded = dataset
         .load(&writer, &Target::new(tenant, Uuid::new_v4()), shift)
         .await
         .unwrap();
-    assert_eq!(
-        (loaded.rows, loaded.batches, loaded.committed_batches),
-        (316, 16, 15)
+    let readings = dataset.readings().unwrap();
+    assert_eq!(loaded.rows, u64::try_from(readings.len()).unwrap());
+    println!(
+        "dataset {} version {} ({}): {} readings in {} batches, {} of them committed",
+        loaded.dataset,
+        loaded.version,
+        if std::env::var_os(lab_dataset::INDEX_ENV).is_some() {
+            "from TRUSTIOT_LAB_DATASET_INDEX"
+        } else {
+            "the synthetic fixture"
+        },
+        loaded.rows,
+        loaded.batches,
+        loaded.committed_batches
     );
 
-    // A tenant account as telemetry-query creates one, and the ingest service's role.
-    let reader = Account {
-        user: "rollup_fixture_tenant".to_owned(),
-        password: password(),
-    };
-    server
-        .admin_ok(&format!(
-            "CREATE USER {} IDENTIFIED WITH sha256_password BY '{}' \
-             SETTINGS PROFILE 'trustiot_tenant_reader', SQL_tenant_id = '{tenant}' CONST",
-            reader.user, reader.password
-        ))
-        .await;
-    server
-        .admin_ok(&format!("GRANT trustiot_tenant_reader TO {}", reader.user))
-        .await;
-    let ingest = Account {
-        user: "rollup_fixture_ingest".to_owned(),
-        password: password(),
-    };
-    server
-        .admin_ok(&format!(
-            "CREATE USER {} IDENTIFIED WITH sha256_password BY '{}'",
-            ingest.user, ingest.password
-        ))
-        .await;
-    server
-        .admin_ok(&format!("GRANT trustiot_ingest TO {}", ingest.user))
-        .await;
+    let reader = account(&server, READER, CREATE_READER, "trustiot_tenant_reader").await;
+    let ingest = account(&server, INGEST, CREATE_INGEST, "trustiot_ingest").await;
 
     // Every cell of both views equals the dataset's.
-    let readings = dataset.readings().unwrap();
-    for (view, bucket_ms) in [
-        ("trustiot.tenant_telemetry_1m", MINUTE_MS),
-        ("trustiot.tenant_telemetry_1h", HOUR_MS),
-    ] {
+    for (view, query, bucket_ms) in VIEWS {
         let expected = expected_cells(&loaded, &readings, bucket_ms);
-        let (problems, cells) = compare(&server, &reader, view, &expected).await;
+        let (problems, cells) = compare(&server, &reader, (view, query), &expected).await;
         assert!(
             problems.is_empty(),
             "{view} differs from the dataset:\n{}",
@@ -295,25 +400,51 @@ async fn the_aggregates_of_the_fixture_equal_its_readings() {
         let counted: u64 = expected.values().map(|cell| cell.readings).sum();
         println!(
             "{view}: {cells} cells equal the dataset's, counting {counted} of its {} readings \
-             (the uncommitted batch and the backlog included)",
+             (the uncommitted batches and the backlog included)",
             readings.len()
         );
         assert_eq!(counted, loaded.rows);
     }
 
-    // The energy of the cumulative points, from both views, equals the consecutive differences.
-    for (device, point, wraps_at) in [
-        ("meter-1", "energy_kwh", 0.0),
-        ("meter-2", "pulses", 4_294_967_296.0),
-        ("press-1", "cycle_count", 0.0),
-    ] {
+    // The energy of every cumulative point of the index, from both views.
+    let cumulative: Vec<(&str, &str, f64)> = dataset
+        .index()
+        .devices
+        .iter()
+        .flat_map(|device| {
+            device
+                .points
+                .iter()
+                .filter(|point| point.kind == PointKind::Cumulative)
+                .map(|point| {
+                    (
+                        device.key.as_str(),
+                        point.key.as_str(),
+                        point.wraps_at.map_or(0.0, |wraps_at| wraps_at as f64),
+                    )
+                })
+        })
+        .collect();
+    assert!(
+        !cumulative.is_empty(),
+        "the dataset has no cumulative point to compute energy from"
+    );
+    for (device, point, wraps_at) in cumulative {
         let mut series: Vec<(DateTime<Utc>, f64)> = readings
             .iter()
             .filter(|reading| reading.device == device && reading.point == point)
-            .map(|reading| (at(&loaded, reading), number(&reading.value).unwrap()))
+            .filter_map(|reading| Some((at(&loaded, reading), number(&reading.value)?)))
             .collect();
+        if series.is_empty() {
+            println!("energy {device}/{point}: no readings");
+            continue;
+        }
         series.sort_by_key(|(ts, _)| *ts);
         let values: Vec<f64> = series.iter().map(|(_, value)| *value).collect();
+        let by_ms: Vec<(i64, f64)> = series
+            .iter()
+            .map(|(ts, value)| (ts.timestamp_millis(), *value))
+            .collect();
         let truth = increase(&values, wraps_at);
         let from = floor(series[0].0, HOUR_MS);
         let to = floor(series[series.len() - 1].0, HOUR_MS) + TimeDelta::hours(1);
@@ -321,8 +452,10 @@ async fn the_aggregates_of_the_fixture_equal_its_readings() {
         let from_text = from.format("%Y-%m-%d %H:%M:%S").to_string();
         let to_text = to.format("%Y-%m-%d %H:%M:%S").to_string();
         let wraps_text = wraps_at.to_string();
-        let mut answers = Vec::new();
-        for statement in [ENERGY_1M, ENERGY_1H] {
+        for (name, statement, bucket_ms) in [
+            ("one-minute", ENERGY_1M, MINUTE_MS),
+            ("one-hour", ENERGY_1H, HOUR_MS),
+        ] {
             let answer: f64 = server
                 .query_with(
                     &reader,
@@ -340,23 +473,43 @@ async fn the_aggregates_of_the_fixture_equal_its_readings() {
                 .trim()
                 .parse()
                 .unwrap();
+            let Some((expected, exact)) = formula(&by_ms, bucket_ms, wraps_at) else {
+                println!(
+                    "energy {device}/{point}, {name} view: {answer}; a bucket's first or last \
+                     reading is a tie between different values, so it is not compared \
+                     (consecutive differences {truth})"
+                );
+                continue;
+            };
             assert!(
-                close(answer, truth),
-                "{device}/{point}: {answer}, expected {truth}"
+                close(answer, expected),
+                "{device}/{point}, {name} view: {answer}, the formula gives {expected}"
             );
-            answers.push(answer);
+            if exact {
+                assert!(
+                    close(answer, truth),
+                    "{device}/{point}, {name} view: {answer}, consecutive differences {truth}"
+                );
+            }
+            println!(
+                "energy {device}/{point} over {} readings (wraps at {wraps_at}), {name} view: \
+                 {answer}, consecutive differences {truth}{}",
+                values.len(),
+                if exact {
+                    String::new()
+                } else {
+                    format!(
+                        "; a bucket is outside the formula's condition, difference {}",
+                        answer - truth
+                    )
+                }
+            );
         }
-        println!(
-            "energy {device}/{point} over {} readings: consecutive differences {truth}, \
-             one-minute view {}, one-hour view {}",
-            values.len(),
-            answers[0],
-            answers[1]
-        );
     }
 
-    // The reconcile of every loaded batch, as the ingest service would run it after a rewrite,
-    // finds nothing to correct.
+    // The reconcile of every loaded batch, as the ingest service would run it after a rewrite
+    // (with the stream's settings), finds nothing to correct.
+    let gateway = loaded.gateway.to_string();
     let mut batches: BTreeMap<(String, u64), Vec<&Reading>> = BTreeMap::new();
     for reading in &readings {
         batches
@@ -374,10 +527,11 @@ async fn the_aggregates_of_the_fixture_equal_its_readings() {
                 )
             })
             .collect();
+        let stream_id = loaded.stream(stream).unwrap().to_string();
         let params = ReconcileParams {
             tenant: tenant.to_string(),
-            gateway: loaded.gateway.to_string(),
-            stream: loaded.stream(stream).unwrap().to_string(),
+            gateway: gateway.clone(),
+            stream: stream_id.clone(),
             series: series.into_iter().collect(),
             first_ts: time(
                 rows.iter()
@@ -393,8 +547,10 @@ async fn the_aggregates_of_the_fixture_equal_its_readings() {
             ),
         };
         let pairs = params.to_query_pairs();
+        let settings = stream_settings(&gateway, &stream_id);
         let pairs: Vec<(&str, &str)> = pairs
             .iter()
+            .chain(settings.iter())
             .map(|(name, value)| (*name, value.as_str()))
             .collect();
         for statement in [RECONCILE_1M, RECONCILE_1H] {

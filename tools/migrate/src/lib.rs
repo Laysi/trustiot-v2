@@ -49,6 +49,11 @@ pub mod registry;
 /// (Laysi/trustiot-v2#92, Laysi/trustiot-v2#141).
 #[path = "../../../services/ingest/src/retention.rs"]
 pub mod retention;
+/// The statements on the one-minute and one-hour aggregates, the ingest service's file (compiled
+/// into the service as well): the run backfills the aggregates with them once
+/// (Laysi/trustiot-v2#141).
+#[path = "../../../services/ingest/src/rollup.rs"]
+pub mod rollup;
 pub mod secret;
 pub mod signing_keys;
 

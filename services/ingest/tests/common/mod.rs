@@ -20,6 +20,13 @@ pub const CLICKHOUSE_IMAGE: &str = "docker.io/clickhouse/clickhouse-server:26.8@
 /// The bootstrap admin account, as the chart and the dev environment name it.
 pub const ADMIN_USER: &str = "trustiot_admin";
 
+/// The roles a user holds as default roles. `CREATE USER ... DEFAULT ROLE <role>` grants the role
+/// as well as making it a default role (ClickHouse 26.8; tools/migrate creates the collector's
+/// account the same way), which [`ClickHouse::assert_default_role`] checks.
+const DEFAULT_ROLES: &str = "SELECT granted_role_name FROM system.role_grants
+WHERE user_name = {user:String} AND granted_role_is_default
+ORDER BY granted_role_name FORMAT TSV";
+
 /// One migration file.
 pub struct Migration {
     /// File name, for example `0002_telemetry.sql`.
@@ -385,7 +392,26 @@ impl ClickHouse {
         self.send(account, sql, params).await
     }
 
+    /// Runs an INSERT whose rows are the request body, as a client sends data: `insert` is static
+    /// SQL that ends in `FORMAT <format>` and goes in the URL's `query` parameter, `data` the rows
+    /// in that format, and `params` (settings, query parameters) go in the URL as well.
+    pub async fn insert_data(
+        &self,
+        account: &Account,
+        insert: &str,
+        data: String,
+        params: &[(&str, &str)],
+    ) -> Answer {
+        let mut pairs = vec![("query", insert)];
+        pairs.extend_from_slice(params);
+        self.post(account, &pairs, data).await
+    }
+
     async fn send(&self, account: &Account, sql: &str, params: &[(&str, &str)]) -> Answer {
+        self.post(account, params, sql.to_owned()).await
+    }
+
+    async fn post(&self, account: &Account, params: &[(&str, &str)], body: String) -> Answer {
         let mut url = reqwest::Url::parse(&self.url).expect("valid ClickHouse URL");
         if !params.is_empty() {
             url.query_pairs_mut().extend_pairs(params);
@@ -395,7 +421,7 @@ impl ClickHouse {
             .post(url)
             .header("X-ClickHouse-User", &account.user)
             .header("X-ClickHouse-Key", &account.password)
-            .body(sql.to_owned())
+            .body(body)
             .send()
             .await
         {
@@ -453,6 +479,19 @@ impl ClickHouse {
         self.admin(sql)
             .await
             .unwrap_or_else(|error| panic!("admin query failed: {sql}\n{}", error.body))
+    }
+
+    /// Asserts that `user` holds `role`, granted, as its only default role.
+    pub async fn assert_default_role(&self, user: &str, role: &str) {
+        let roles = self
+            .query_with(&self.admin, DEFAULT_ROLES, &[("param_user", user)])
+            .await
+            .unwrap_or_else(|error| panic!("read the roles of {user}: {}", error.body));
+        assert_eq!(
+            roles.trim(),
+            role,
+            "{user} must hold {role} as its only default role"
+        );
     }
 
     /// Applies every migration file, statement by statement, as the admin.
