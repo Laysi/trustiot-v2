@@ -125,7 +125,7 @@ fixture 的結果（1 分鐘表）：`energy_kwh` 下降 1 次、上升 46 次�
 
 - 鋸齒形的瞬時值（例如慢慢注滿、很快放空的水位）下降次數少、上升次數多，可能被當成計數器。
 - 閒置的計數器在視窗裡重置 3 次以上、上升又很少時會被拒絕。
-- 判斷依整個視窗，不知道設備型號；型號上標明累計值的做法是後續工作。
+- 判斷依整個視窗，不知道設備型號；設備型號標記累計值是 Laysi/trustiot-v2#691，標記上線時 API 與工具的參數不變。
 
 ### 可疑跳增
 
@@ -186,6 +186,6 @@ CARGO_BUILD_JOBS=2 cargo test -p telemetry-query
 | --- | --- |
 | `tests/tenant_accounts.rs` | 驗收 1、2：建立兩個租戶後兩個帳號都存在，屬性（default role、hosts、沒有自己的 grant、`SQL_tenant_id`、`readonly`、上限）正確，各自只看得到自己的讀數；以租戶 A 的帳號跑 2026-10-09 PoC 的攻擊類型（基底表、JOIN、子查詢、UNION、CTE、FINAL、PREWHERE、table function、系統表、改 `SQL_tenant_id` 與限制的 setting、EXECUTE AS、URL 的 role、寫入、建帳號、改服務帳號、grant、刪 row policy），都被拒或回不出 B 與第三個租戶的讀數，資料沒被改；超過列數、記憶體、時間上限的查詢分別以 `TOO_MANY_ROWS`、`MEMORY_LIMIT_EXCEEDED`、`TIMEOUT_EXCEEDED` 中止；密碼被改時下一個 API 呼叫自動修好；每個 API 呼叫只算帳號 quota 的一個查詢（查詢前的帳號檢查不讀表、不計入，以 `system.quotas_usage` 確認）；帳號的查詢上限在帳號上被改寬（`readonly` 不變）時 API 回 503、不執行查詢，改回後恢復；帳號被改成別的租戶時 API 回 503、回不出別的租戶，重播事件時進 dead letter；日誌沒有任何密碼 |
 | `tests/history.rs` | 驗收 3、4：序列與以另一組 ClickHouse 函式（`toStartOfHour`、`toStartOfDay`、`toStartOfFifteenMinutes`）直接查表的結果逐區間相同（Asia/Taipei、Asia/Kolkata、UTC；`15m`、`1h`、`3h`、`1d` 與自動選擇），區間開始落在當地邊界；整數、bool、文字資料點；`raw` 與 `latest` 等於儲存的讀數；同一個設備 ID 的另一個租戶的讀數不會出現；原始資料與聚合資料的期間截斷與拒絕；401、403、404、400、422 的各種拒絕不帶 ClickHouse 錯誤內文；quota 用完時 429 |
-| `tests/semantic.rs` | Laysi/trustiot-v2#142 的驗收：以 [datasets/lab](../../datasets/lab/README.md) 的資料集（預設是合成 fixture，`TRUSTIOT_LAB_DATASET_INDEX` 可換成 lab 錄的資料集）照 ingest 的寫法載入兩個租戶，統計（UTC、Asia/Taipei 讀 1 小時表，Asia/Kolkata 讀 1 分鐘表；`15m`、`1h`、`1d`、`1w`、`1mo`、`total`）與用量（另有從第二個小時開始、有 `baseline` 的範圍）逐區間等於測試自己從讀數算出的結果（不經服務的 SQL，依上面的規則逐格計算）；fixture 的重置與 32 位元回捲各一次、不可疑，瞬時值是 `not_cumulative`、開關與文字是 `not_numeric`，漏讀的 35 分鐘是斷訊；最新值等於最後的讀數；租戶 A 問租戶 B 的設備是 `no_data`，本文帶租戶欄位回 400；惡意的資料點、時區、期間在 API 被拒，直接以租戶帳號執行服務的語句時被當成值、比對不到任何列；跨過可查期間開始的資料集被截斷（`truncated`、沒有 `baseline`、檢查視窗從期間開始），整段在之前時 403；為規則寫的序列：讀到 0、讀到半個 32 位元的值、換錶各被標成可疑跳增而總量照算，長時間斷訊後以平常速率累積的增量不可疑，閒置在 0、跳三次的瞬時值是 `not_cumulative` |
+| `tests/semantic.rs` | Laysi/trustiot-v2#142 的驗收：以 [datasets/lab](../../datasets/lab/README.md) 的資料集（預設是合成 fixture，`TRUSTIOT_LAB_DATASET_INDEX` 可換成 lab 錄的資料集）照 ingest 的寫法載入兩個租戶，統計（UTC、Asia/Taipei 讀 1 小時表，Asia/Kolkata 讀 1 分鐘表；`15m`、`1h`、`1d`、`1w`、`1mo`、`total`）與用量（另有從第二個小時開始、有 `baseline` 的範圍）逐區間等於測試自己從讀數算出的結果（不經服務的 SQL，依上面的規則逐格計算；最小與最大的時間、平均最高與最低的區間也比對）；fixture 的重置與 32 位元回捲各一次、不可疑，瞬時值是 `not_cumulative`、開關與文字是 `not_numeric`，漏讀的 35 分鐘是斷訊；最新值等於最後的讀數；租戶 A 問租戶 B 的設備是 `no_data`，本文帶租戶欄位回 400；惡意的資料點、時區、期間在 API 被拒，直接以租戶帳號執行服務的語句時被當成值、比對不到任何列；跨過可查期間開始的資料集被截斷（`truncated`、沒有 `baseline`、檢查視窗從期間開始），整段在之前時 403；只在 8 天前有讀數的資料點不在最新值裡（原始資料 7 天），統計仍讀得到；為規則寫的序列：讀到 0、讀到半個 32 位元的值、換錶各被標成可疑跳增而總量照算，長時間斷訊後以平常速率累積的增量不可疑，閒置在 0、跳三次的瞬時值是 `not_cumulative` |
 | `tests/cross_tenant.rs` | [crates/testkit](../../crates/testkit/README.md) 的跨租戶負向測試：服務角色讀不到也改不了其他租戶的 `tenant_accounts`；四個 API 讀的是 ClickHouse，由上面的測試手動涵蓋，所以在套件中豁免 |
 | `src/` 的單元測試 | 區間選擇、期間截斷、參數規則、讀數的 JSON 形狀、帳號名稱與密碼推導、建帳號的 SQL 只放進租戶 ID；語意查詢：時區名稱、每種期間的寫法與在 Asia/Taipei、Asia/Tokyo、America/New_York（日光節約）的解析、可查期間的邊界與取整、表的選擇、截斷與拒絕、列數與 1 分鐘格數上限、累計檢查在邊界上的判定、語句只用參數、回應的組合、規格裡兩組區間的名稱不相撞 |

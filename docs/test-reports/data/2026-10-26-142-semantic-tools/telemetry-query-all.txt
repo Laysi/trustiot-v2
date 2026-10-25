@@ -1,0 +1,55 @@
+     Running unittests
+test config::tests::clickhouse_urls ... ok
+test history::tests::statements_use_parameters_only ... ok
+test clickhouse::tests::error_codes_come_from_the_body ... ok
+test history::tests::readings_keep_their_type ... ok
+test accounts::tests::only_the_tenant_id_goes_into_the_create_statement ... ok
+test history::tests::the_automatic_interval_is_the_finest_within_the_bucket_limit ... ok
+test accounts::tests::the_checked_limits_are_the_tenant_profile ... ok
+test semantic::range::tests::periods_parse_only_their_spellings ... ok
+test semantic::range::tests::the_queryable_period_starts_later_than_the_databases_rounded_up_to_the_cell ... ok
+test accounts::tests::names_and_passwords_are_per_tenant_and_per_key ... ok
+test history::tests::ranges_are_cut_to_the_queryable_period ... ok
+test history::tests::rules_of_the_parameters ... ok
+test semantic::statements::tests::the_hour_table_and_the_minute_table_differ_only_in_the_view ... ok
+test semantic::tests::a_body_with_another_field_is_not_a_request ... ok
+test semantic::statements::tests::statements_read_a_tenant_view_with_parameters_only ... ok
+test semantic::tests::a_bucket_of_text_leaves_the_average_of_the_numbers ... ok
+test semantic::range::tests::the_range_and_the_limits_are_checked ... ok
+test semantic::range::tests::whole_hour_ranges_in_whole_hour_zones_read_the_hour_table ... ok
+test semantic::tests::every_statement_unit_pair_is_planned ... ok
+test semantic::range::tests::ranges_are_cut_to_the_queryable_period_or_refused ... ok
+test semantic::tests::point_keys_are_letters_digits_dots_underscores_and_hyphens ... ok
+test semantic::tests::series_are_answered_in_the_requested_order_and_others_are_ignored ... ok
+test semantic::tests::a_series_that_is_not_a_counter_or_not_numeric_or_empty_gets_no_usage ... ok
+test semantic::tests::the_cumulative_check_counts_drops_against_rises ... ok
+test semantic::tests::statistics_of_text_have_counts_and_readings_only ... ok
+test semantic::tests::the_series_parameter_is_an_escaped_array_of_tuples ... ok
+test semantic::range::tests::calendar_periods_follow_the_local_calendar_with_monday_weeks ... ok
+test semantic::tests::statistics_combine_the_buckets ... ok
+test semantic::range::tests::local_days_across_a_daylight_saving_change_have_their_own_length ... ok
+test transport::tests::credentials_are_sensitive_headers ... ok
+test semantic::tests::usage_rows_add_up_and_carry_the_series_figures ... ok
+test semantic::tests::requests_are_checked_before_anything_is_queried ... ok
+test semantic::range::tests::time_zones_are_the_compiled_in_names_exactly ... ok
+test semantic::tests::times_are_written_with_the_offset_of_the_time_zone ... ok
+test transport::tests::a_client_never_switches_scheme_or_leaks_credentials ... ok
+test semantic::tests::a_usage_over_too_many_minute_cells_is_too_heavy ... ok
+test semantic::tests::the_spec_keeps_both_interval_sets_apart ... ok
+test result: ok. 37 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+     Running tests/chart_connections.rs
+test the_chart_budgets_every_pool_the_service_opens ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/cross_tenant.rs
+test tenants_are_isolated ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.09s
+     Running tests/history.rs
+test history_matches_clickhouse_within_the_queryable_period ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 8.04s
+     Running tests/semantic.rs
+test the_semantic_api_answers_the_dataset_within_the_period_and_the_tenant ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 10.45s
+     Running tests/tenant_accounts.rs
+test each_tenant_account_sees_its_own_readings_only ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 36.87s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s

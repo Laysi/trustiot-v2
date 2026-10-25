@@ -578,6 +578,46 @@ fn assert_statistics(answer: &Value, series: &[&Series], tz: &TimeZone, interval
                 .fold(f64::NEG_INFINITY, f64::max);
             close(&entry["min"], min, &format!("{name} min"));
             close(&entry["max"], max, &format!("{name} max"));
+            // The time of a minimum or maximum is the start of its cell in the table read:
+            // compared where only one reading has that value.
+            let cell_ms = if answer["range"]["resolution"] == "1h" {
+                HOUR_MS
+            } else {
+                MINUTE_MS
+            };
+            for (field, value) in [("min_time", min), ("max_time", max)] {
+                let at: Vec<i64> = series
+                    .points
+                    .iter()
+                    .filter(|p| p.ms >= from && p.ms < to)
+                    .filter(|p| number(&p.value) == Some(value))
+                    .map(|p| p.ms.div_euclid(cell_ms) * cell_ms)
+                    .collect();
+                if let [only] = at.as_slice() {
+                    assert_eq!(ms(&entry[field]), *only, "{name} {field}");
+                }
+            }
+            // The buckets with the highest and lowest mean, where one bucket has it.
+            if interval != "total" {
+                let means: Vec<(i64, f64)> = expected
+                    .iter()
+                    .filter(|(_, b)| b.numeric > 0)
+                    .map(|(start, b)| (*start, b.sum / b.numeric as f64))
+                    .collect();
+                let top = means.iter().map(|m| m.1).fold(f64::NEG_INFINITY, f64::max);
+                let bottom = means.iter().map(|m| m.1).fold(f64::INFINITY, f64::min);
+                for (field, extreme) in [("highest", top), ("lowest", bottom)] {
+                    let at: Vec<i64> = means
+                        .iter()
+                        .filter(|m| (m.1 - extreme).abs() <= 1e-9 * extreme.abs().max(1.0))
+                        .map(|m| m.0)
+                        .collect();
+                    if let [only] = at.as_slice() {
+                        assert_eq!(ms(&entry[field]["time"]), *only, "{name} {field}");
+                        close(&entry[field]["value"], extreme, &format!("{name} {field}"));
+                    }
+                }
+            }
         }
         let inside: Vec<&Point> = series
             .points
@@ -1357,6 +1397,53 @@ async fn the_semantic_api_answers_the_dataset_within_the_period_and_the_tenant()
         });
     }
     let written: Vec<&Series> = written.iter().collect();
+    // The raw period of the latest values: a data point whose only reading is 8 days old is
+    // left out, while the aggregates still hold it.
+    let stale_at = Utc::now().timestamp_millis() - 8 * DAY_MS;
+    let stale = vec![Point {
+        ms: stale_at,
+        value: Recorded::Float(42.0),
+    }];
+    insert(&fixture.stack, tenant_d, device, "stale", &stale).await;
+    let latest = fixture
+        .service
+        .get_ok(
+            &format!("/api/telemetry/v1/devices/{device}/latest"),
+            &token_d,
+        )
+        .await;
+    let listed: Vec<&str> = latest["points"]
+        .as_array()
+        .expect("points")
+        .iter()
+        .filter_map(|point| point["point"].as_str())
+        .collect();
+    assert!(!listed.contains(&"stale"), "{latest}");
+    assert_eq!(listed.len(), cases.len(), "{latest}");
+    let stale_series = Series {
+        device: "rules".into(),
+        id: device,
+        point: "stale".into(),
+        kind: PointKind::Gauge,
+        points: stale,
+    };
+    let answer = fixture
+        .post(
+            STATISTICS,
+            &token_d,
+            &body(
+                &[&stale_series],
+                "UTC",
+                (stale_at - DAY_MS, stale_at + DAY_MS),
+                "total",
+            ),
+        )
+        .await;
+    assert_eq!(answer["series"][0]["count"], 1, "{answer}");
+    eprintln!(
+        "period: the latest values leave out a data point last read 8 days ago (raw period, 7 \
+         days); its statistics from the aggregates still hold it"
+    );
     let range = (start, start + 16 * HOUR_MS);
     for tz_name in ["Asia/Kolkata", "UTC"] {
         let tz = TimeZone::get(tz_name).expect("a time zone");
