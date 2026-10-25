@@ -62,14 +62,14 @@ pub const MAX_POINT_LEN: usize = 128;
 /// Longest time zone name accepted.
 const MAX_TIME_ZONE_LEN: usize = 64;
 
-const QUERY_INVALID: MessageKey = MessageKey::new("telemetry.query_invalid");
+pub(crate) const QUERY_INVALID: MessageKey = MessageKey::new("telemetry.query_invalid");
 const DEVICE_ID_INVALID: MessageKey = MessageKey::new("telemetry.device_id_invalid");
-const TIME_ZONE_INVALID: MessageKey = MessageKey::new("telemetry.time_zone_invalid");
-const RANGE_INVALID: MessageKey = MessageKey::new("telemetry.range_invalid");
-const POINT_INVALID: MessageKey = MessageKey::new("telemetry.point_invalid");
-const TOO_MANY_POINTS: MessageKey = MessageKey::new("telemetry.too_many_points");
-const OUTSIDE_PERIOD: MessageKey = MessageKey::new("telemetry.outside_queryable_period");
-const QUERY_TOO_HEAVY: MessageKey = MessageKey::new("telemetry.query_too_heavy");
+pub(crate) const TIME_ZONE_INVALID: MessageKey = MessageKey::new("telemetry.time_zone_invalid");
+pub(crate) const RANGE_INVALID: MessageKey = MessageKey::new("telemetry.range_invalid");
+pub(crate) const POINT_INVALID: MessageKey = MessageKey::new("telemetry.point_invalid");
+pub(crate) const TOO_MANY_POINTS: MessageKey = MessageKey::new("telemetry.too_many_points");
+pub(crate) const OUTSIDE_PERIOD: MessageKey = MessageKey::new("telemetry.outside_queryable_period");
+pub(crate) const QUERY_TOO_HEAVY: MessageKey = MessageKey::new("telemetry.query_too_heavy");
 const ACCOUNT_NOT_READY: MessageKey = MessageKey::new("telemetry.account_not_ready");
 
 /// The row of the caller's tenant, if its account exists. Row-level security limits the table to
@@ -316,6 +316,17 @@ impl FromRef<Routes> for IdentityVerifier {
     }
 }
 
+impl Routes {
+    /// The state the routes share: the semantic API (`crate::semantic`) uses it too.
+    pub fn new(verifier: IdentityVerifier, db: TenantDb, accounts: Accounts) -> Self {
+        Self {
+            verifier,
+            db,
+            accounts,
+        }
+    }
+}
+
 /// The service's API: [`SERIES_PATH`] and [`LATEST_PATH`].
 pub fn routes(verifier: IdentityVerifier, db: TenantDb, accounts: Accounts) -> Router {
     Router::new()
@@ -329,7 +340,7 @@ pub fn routes(verifier: IdentityVerifier, db: TenantDb, accounts: Accounts) -> R
 }
 
 /// An error response.
-fn error(body: ErrorBody) -> Response {
+pub(crate) fn error(body: ErrorBody) -> Response {
     (
         body.http_status(),
         [(CACHE_CONTROL, "no-store")],
@@ -339,7 +350,7 @@ fn error(body: ErrorBody) -> Response {
 }
 
 /// A rejected query parameter.
-fn invalid(parameter: &'static str, key: MessageKey) -> Response {
+pub(crate) fn invalid(parameter: &'static str, key: MessageKey) -> Response {
     error(
         ErrorBody::new(ErrorCode::ValidationFailed)
             .with_message_key(key)
@@ -347,7 +358,7 @@ fn invalid(parameter: &'static str, key: MessageKey) -> Response {
     )
 }
 
-fn ok<T: Serialize>(value: &T) -> Response {
+pub(crate) fn ok<T: Serialize>(value: &T) -> Response {
     ([(CACHE_CONTROL, "no-store")], axum::Json(value)).into_response()
 }
 
@@ -445,7 +456,7 @@ fn plan(params: &SeriesParams, now: DateTime<Utc>) -> Result<Plan, Box<Response>
 }
 
 /// Maps a ClickHouse failure of a tenant query to the response, and logs it without its text.
-fn clickhouse_error(tenant: TenantId, failure: &QueryError) -> Response {
+pub(crate) fn clickhouse_error(tenant: TenantId, failure: &QueryError) -> Response {
     let (code, key) = match failure.code() {
         Some(code::TIMEOUT_EXCEEDED) => (ErrorCode::Timeout, None),
         Some(code::QUOTA_EXCEEDED | code::TOO_MANY_SIMULTANEOUS_QUERIES) => {
@@ -469,20 +480,20 @@ fn clickhouse_error(tenant: TenantId, failure: &QueryError) -> Response {
 }
 
 /// Whether ClickHouse refused the time zone.
-fn is_unknown_time_zone(failure: &QueryError) -> bool {
+pub(crate) fn is_unknown_time_zone(failure: &QueryError) -> bool {
     matches!(failure, QueryError::Failed { code: Some(code::BAD_ARGUMENTS), body, .. }
         if body.contains("Cannot load time zone"))
 }
 
 /// Why a request could not be served; each becomes a response.
-enum Failure {
+pub(crate) enum Failure {
     Response(Box<Response>),
     ClickHouse(QueryError),
 }
 
 impl Routes {
     /// The caller's tenant, once its account exists.
-    async fn tenant(&self, user: &UserIdentity) -> Result<TenantId, Failure> {
+    pub(crate) async fn tenant(&self, user: &UserIdentity) -> Result<TenantId, Failure> {
         let Some(tenant) = user.tenant_id() else {
             return Err(Failure::Response(Box::new(error(ErrorBody::new(
                 ErrorCode::PermissionDenied,
@@ -523,7 +534,7 @@ impl Routes {
     /// account, or a changed account), the check sets it again first. An account that differs
     /// in anything else is refused with 503, without running the statement: its limits or its
     /// tenant may not hold.
-    async fn query(
+    pub(crate) async fn query(
         &self,
         tenant: TenantId,
         statement: &str,
@@ -559,9 +570,9 @@ impl Routes {
 
 /// One `JSONCompactEachRow` line of a series bucket or a latest value: the reading's type and
 /// its value columns.
-type ReadingColumns = (String, Option<f64>, i64, bool, String);
+pub(crate) type ReadingColumns = (String, Option<f64>, i64, bool, String);
 
-fn reading((kind, float, int, boolean, text): ReadingColumns) -> Option<Reading> {
+pub(crate) fn reading((kind, float, int, boolean, text): ReadingColumns) -> Option<Reading> {
     match kind.as_str() {
         "float" => Some(Reading::Float(float)),
         "int" => Some(Reading::Int(int)),
@@ -599,7 +610,7 @@ fn error_kind(error: &TenantDbError) -> String {
 }
 
 /// Parses each line with `row`; `None` for a line ClickHouse should not have written.
-fn rows<T, R: serde::de::DeserializeOwned>(
+pub(crate) fn rows<T, R: serde::de::DeserializeOwned>(
     body: &str,
     row: impl Fn(R) -> Option<T>,
 ) -> Option<Vec<T>> {
@@ -609,7 +620,7 @@ fn rows<T, R: serde::de::DeserializeOwned>(
         .collect()
 }
 
-fn unexpected_answer(tenant: TenantId) -> Response {
+pub(crate) fn unexpected_answer(tenant: TenantId) -> Response {
     tracing::error!(tenant_id = %tenant, "ClickHouse answered in an unexpected form");
     error(ErrorBody::new(ErrorCode::Internal))
 }

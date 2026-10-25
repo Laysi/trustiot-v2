@@ -449,6 +449,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/telemetry/v1/statistics": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * The statistics of each series over a range, in buckets of the requested time zone, from the
+         *     one-minute or one-hour aggregates.
+         */
+        post: operations["queryTelemetryStatistics"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/telemetry/v1/usage": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * The usage of each cumulative series over a range, in buckets of the requested time zone, from
+         *     the one-minute or one-hour aggregates, after a check that the series behaves like a counter.
+         */
+        post: operations["queryTelemetryUsage"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/auth/login": {
         parameters: {
             query?: never;
@@ -485,6 +525,12 @@ export interface components {
             /** @description The tenant to bind the gateway to. */
             tenant_id: components["schemas"]["TenantId"];
         };
+        /**
+         * @description A bucket length of the semantic API: whole local minutes, hours, days, Monday weeks and
+         *     months of the requested time zone, or the whole range.
+         * @enum {string}
+         */
+        BucketInterval: "1m" | "5m" | "15m" | "1h" | "1d" | "1w" | "1mo" | "total";
         /** @description The answer to `send_code`, the same whether or not a user has the address. */
         CodeSent: {
             /**
@@ -549,6 +595,26 @@ export interface components {
              */
             name: string;
         };
+        /** @description The cumulative check over the window read around the range. */
+        CumulativeCheck: {
+            /** Format: int64 */
+            comparisons: number;
+            /**
+             * Format: int64
+             * @description How often the value fell, rose, and was compared with the one before.
+             */
+            drops: number;
+            /**
+             * Format: date-time
+             * @description The window the check read.
+             */
+            from: string;
+            /** Format: int64 */
+            rises: number;
+            /** Format: date-time */
+            to: string;
+            verdict: components["schemas"]["Verdict"];
+        };
         /** @description The session of the request. */
         CurrentSession: {
             active_tenant: components["schemas"]["TenantMembership"] | null;
@@ -564,6 +630,11 @@ export interface components {
             /** @description The signed-in user. */
             user_id: components["schemas"]["UserId"];
         };
+        /**
+         * @description Whether a series had readings in the range.
+         * @enum {string}
+         */
+        DataStatus: "ok" | "no_data";
         /** @description A device: a Modbus endpoint one of the tenant's gateways polls with one of its models. */
         Device: {
             /**
@@ -837,6 +908,16 @@ export interface components {
             /** @description The message the client shows next to the field. */
             message_key: components["schemas"]["MessageKey"];
         };
+        /** @description A spacing between two readings of at least [`GAP_FACTOR`] times the usual one. */
+        Gap: {
+            /**
+             * Format: date-time
+             * @description The reading before the gap and the one after it.
+             */
+            from: string;
+            /** Format: date-time */
+            to: string;
+        };
         /** @description A gateway's binding to a tenant. */
         GatewayBinding: {
             /** @description The binding: a new one every time the gateway is bound. */
@@ -1108,6 +1189,42 @@ export interface components {
              */
             time_zone: string;
         };
+        /** @description The range an answer covers. */
+        QueryRange: {
+            /**
+             * Format: date-time
+             * @description The start of the queryable period of the table read, at the time of the request.
+             */
+            earliest: string;
+            /**
+             * @description Whether the range ends after the request's time (a period still running, such as
+             *     `today`): its last bucket is not complete.
+             */
+            ends_after_now: boolean;
+            /**
+             * Format: date-time
+             * @description The range read: `from` inclusive, `to` exclusive. `from` is later than requested when the
+             *     request started before the queryable period (`truncated`).
+             */
+            from: string;
+            interval: components["schemas"]["BucketInterval"];
+            /**
+             * Format: date-time
+             * @description When the request was answered.
+             */
+            queried_at: string;
+            /**
+             * @description The aggregate table read: one-minute or one-hour cells. A minimum's or maximum's time is
+             *     the start of its cell.
+             */
+            resolution: components["schemas"]["Resolution"];
+            /** Format: date-time */
+            to: string;
+            /** @description Whether `from` was moved to the start of the queryable period. */
+            truncated: boolean;
+            /** @description The time zone the buckets follow; every time in the answer has its offset. */
+            tz: string;
+        };
         /** @description One reading's value, as its type stored it. */
         Reading: {
             /** @enum {string} */
@@ -1168,6 +1285,11 @@ export interface components {
             hardware_id: string;
         };
         /**
+         * @description The aggregate table a request reads.
+         * @enum {string}
+         */
+        Resolution: "1m" | "1h";
+        /**
          * @description A reason a workstation certificate can be revoked for: the RFC 5280 CRLReason codes that
          *     apply to an end entity, without `certificateHold` (a revocation here is final).
          * @enum {string}
@@ -1211,6 +1333,19 @@ export interface components {
             /** @description The time zone the buckets follow. */
             tz: string;
         };
+        /** @description One data point of one device. */
+        SeriesKey: {
+            /**
+             * Format: uuid
+             * @description The device.
+             */
+            device_id: string;
+            /**
+             * @description The data point key: 1 to 128 letters, digits, `.`, `_` or `-`, starting with a letter or
+             *     digit.
+             */
+            point: string;
+        };
         /** @description One bucket of a series (for `raw`, one reading). */
         SeriesPoint: {
             /**
@@ -1243,6 +1378,134 @@ export interface components {
             time: string;
         };
         /**
+         * @description A semantic request: which series, which range in which time zone, and the bucket length. The
+         *     tenant is the caller's; nothing else can name one.
+         */
+        SeriesQuery: {
+            /**
+             * Format: date-time
+             * @description The range's start, RFC 3339 with an offset (inclusive), rounded down to the minute.
+             */
+            from?: string | null;
+            /** @description The bucket length; `total` (the default) gives one bucket for the whole range. */
+            interval?: components["schemas"]["BucketInterval"];
+            /**
+             * @description A period relative to the request's time: `today`, `yesterday`, `this_week`, `last_week`,
+             *     `this_month`, `last_month`, `this_year`, `last_year` (whole local periods, weeks from
+             *     Monday), `last_<N>_days` (N local days with today, 1 to 366) or `last_<N>_hours` (up to
+             *     now, 1 to 72). Either this or `from` and `to`.
+             */
+            period?: string | null;
+            /** @description 1 to 20 distinct series. */
+            series: components["schemas"]["SeriesKey"][];
+            /**
+             * Format: date-time
+             * @description The range's end, RFC 3339 with an offset (exclusive), rounded down to the minute.
+             */
+            to?: string | null;
+            /**
+             * @description An IANA time zone name, such as `Asia/Taipei`: the local hours, days, Monday weeks and
+             *     months the buckets and the period follow, and the offset of every time in the answer.
+             * @example Asia/Taipei
+             */
+            tz: string;
+        };
+        /** @description A series' statistics over the range. */
+        SeriesStatistics: {
+            /**
+             * Format: double
+             * @description The mean of the numeric readings; for an on/off point, the share of readings that were on.
+             */
+            avg?: number | null;
+            /**
+             * Format: int64
+             * @description Readings in the range, and how many of them are numeric (float, int, bool).
+             */
+            count: number;
+            /** Format: uuid */
+            device_id: string;
+            first?: components["schemas"]["TimedReading"] | null;
+            highest?: components["schemas"]["TimedValue"] | null;
+            last?: components["schemas"]["TimedReading"] | null;
+            lowest?: components["schemas"]["TimedValue"] | null;
+            /**
+             * Format: double
+             * @description The largest value and the start of the cell it was in.
+             */
+            max?: number | null;
+            /** Format: date-time */
+            max_time?: string | null;
+            /**
+             * Format: double
+             * @description The smallest value and the start of the cell it was in.
+             */
+            min?: number | null;
+            /** Format: date-time */
+            min_time?: string | null;
+            /** Format: int64 */
+            numeric_count: number;
+            point: string;
+            /** @description The buckets with readings, in time order; buckets without readings are left out. */
+            rows: components["schemas"]["StatisticsRow"][];
+            status: components["schemas"]["DataStatus"];
+        };
+        /** @description A series' usage over the range. */
+        SeriesUsage: {
+            /**
+             * @description Whether a reading before the range was found, so the usage up to the first reading in the
+             *     range is counted.
+             */
+            baseline: boolean;
+            check?: components["schemas"]["CumulativeCheck"] | null;
+            /** Format: uuid */
+            device_id: string;
+            /**
+             * Format: int64
+             * @description Drops in the range, each counted as a reset or wrap that started again from 0: each loses
+             *     at most the usage of one sampling interval.
+             */
+            drops: number;
+            first_reading?: components["schemas"]["TimedValue"] | null;
+            /**
+             * Format: int64
+             * @description Gaps in the range, and the longest.
+             */
+            gaps: number;
+            highest?: components["schemas"]["TimedValue"] | null;
+            largest_suspicious_step?: components["schemas"]["TimedValue"] | null;
+            last_reading?: components["schemas"]["TimedValue"] | null;
+            longest_gap?: components["schemas"]["Gap"] | null;
+            lowest?: components["schemas"]["TimedValue"] | null;
+            point: string;
+            /**
+             * Format: int64
+             * @description Readings in the range.
+             */
+            readings: number;
+            /**
+             * @description The buckets with readings, in time order; a bucket without readings is left out (unknown,
+             *     not zero), and the usage across a gap is in the first bucket after it.
+             */
+            rows: components["schemas"]["UsageRow"][];
+            /**
+             * Format: int64
+             * @description Cells left out because their first or last value was not a finite number.
+             */
+            skipped_cells: number;
+            status: components["schemas"]["UsageStatus"];
+            /**
+             * Format: int64
+             * @description Steps much faster than the series usually rises, and the largest: the total includes them,
+             *     and they may be a meter misread.
+             */
+            suspicious_steps: number;
+            /**
+             * Format: double
+             * @description The usage over the range; absent unless `status` is `ok`.
+             */
+            total?: number | null;
+        };
+        /**
          * @description The body of `PUT /api/identity/v1/platform/tenants/{tenant_id}/members`. Unknown fields are
          *     ignored. Its `Debug` leaves the address out: it is personal data.
          */
@@ -1254,6 +1517,37 @@ export interface components {
             email: string;
             /** @description The role to give the user in the tenant. */
             role: components["schemas"]["MemberRole"];
+        };
+        /** @description Statistics of each series. */
+        Statistics: {
+            range: components["schemas"]["QueryRange"];
+            /** @description One entry per requested series, in the request's order. */
+            series: components["schemas"]["SeriesStatistics"][];
+        };
+        /** @description One bucket of a series' statistics. */
+        StatisticsRow: {
+            /** Format: double */
+            avg?: number | null;
+            /**
+             * Format: int64
+             * @description Readings in the bucket.
+             */
+            count: number;
+            /** @description The bucket's latest reading. */
+            last: components["schemas"]["Reading"];
+            /** Format: double */
+            max?: number | null;
+            /**
+             * Format: double
+             * @description The smallest, largest and mean numeric value (a bool counts as 0 or 1); `null` when the
+             *     bucket holds only text readings.
+             */
+            min?: number | null;
+            /**
+             * Format: date-time
+             * @description The bucket's start.
+             */
+            time: string;
         };
         /** @description The body of `PUT /api/identity/v1/sessions/current/tenant`. */
         SwitchTenant: {
@@ -1296,6 +1590,19 @@ export interface components {
          * @enum {string}
          */
         Theme: "system" | "light" | "dark";
+        /** @description A reading and when it was taken. */
+        TimedReading: {
+            /** Format: date-time */
+            time: string;
+            value: components["schemas"]["Reading"];
+        };
+        /** @description A number and the time it belongs to (a bucket's start, or a reading's time). */
+        TimedValue: {
+            /** Format: date-time */
+            time: string;
+            /** Format: double */
+            value: number;
+        };
         /**
          * @description The body of `PUT /api/assets/v1/devices/{device_id}`: the device's settings, which replace
          *     all of the current ones (a field left out takes its default). Unknown fields are refused.
@@ -1369,6 +1676,48 @@ export interface components {
              */
             time_zone?: string;
         };
+        /** @description Usage of each series. */
+        Usage: {
+            range: components["schemas"]["QueryRange"];
+            /** @description One entry per requested series, in the request's order. */
+            series: components["schemas"]["SeriesUsage"][];
+        };
+        /** @description One bucket of a series' usage. */
+        UsageRow: {
+            /** @description The bucket starts after a gap: its usage includes the usage of the gap. */
+            after_gap: boolean;
+            /**
+             * Format: int64
+             * @description Drops counted as a reset or wrap in the bucket.
+             */
+            drops: number;
+            /**
+             * Format: int64
+             * @description Readings in the bucket.
+             */
+            readings: number;
+            /**
+             * Format: int64
+             * @description Steps in the bucket much faster than the series usually rises (a misread or a replaced
+             *     meter): the usage includes them.
+             */
+            suspicious_steps: number;
+            /**
+             * Format: date-time
+             * @description The bucket's start.
+             */
+            time: string;
+            /**
+             * Format: double
+             * @description The increase of the counter in the bucket.
+             */
+            usage: number;
+        };
+        /**
+         * @description Whether a series' usage could be computed.
+         * @enum {string}
+         */
+        UsageStatus: "ok" | "no_data" | "not_numeric" | "not_cumulative";
         /**
          * Format: uuid
          * @description A user account; one user can be a member of several tenants.
@@ -1376,6 +1725,11 @@ export interface components {
          *     Serialized as a lowercase hyphenated UUID string.
          */
         UserId: string;
+        /**
+         * @description What the cumulative check concluded.
+         * @enum {string}
+         */
+        Verdict: "cumulative" | "too_few_readings" | "not_cumulative";
         /** @description A workstation certificate as the ledger records it. */
         WorkstationCertificate: {
             /** @description The issuing CA that signed it: the SHA-256 of its public key, 64 lower-case hex digits. */
@@ -3574,6 +3928,198 @@ export interface operations {
                 };
             };
             /** @description A parameter breaks a rule (`validation_failed`, detail `parameter`), the series would have too many points (`telemetry.too_many_points`), or the query reads or holds too much (`telemetry.query_too_heavy`). */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The tenant's query quota or concurrency limit is used up (`rate_limited`). */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Postgres or ClickHouse failed, or the tenant's ClickHouse account is not as the service creates it (`unavailable`). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The query ran into its time limit (`timeout`). */
+            504: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    queryTelemetryStatistics: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SeriesQuery"];
+            };
+        };
+        responses: {
+            /** @description The statistics of each series, in the request's order. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Statistics"];
+                };
+            };
+            /** @description The body is not the JSON object described, or has a field it does not describe (`invalid_request`, `telemetry.query_invalid`). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No valid session (`unauthenticated`). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No tenant (`permission_denied`), or the range lies wholly before the queryable period (`quota_exceeded`, `telemetry.outside_queryable_period`, detail `earliest`). */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The tenant's account has not been created yet (`not_found`, `telemetry.account_not_ready`). */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description A field breaks a rule (`validation_failed`, detail `parameter`: `series`, `tz`, `period` or `from`), the answer would have too many rows (`telemetry.too_many_points`), or the query reads or holds too much (`telemetry.query_too_heavy`). */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The tenant's query quota or concurrency limit is used up (`rate_limited`). */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Postgres or ClickHouse failed, or the tenant's ClickHouse account is not as the service creates it (`unavailable`). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The query ran into its time limit (`timeout`). */
+            504: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    queryTelemetryUsage: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SeriesQuery"];
+            };
+        };
+        responses: {
+            /** @description The usage of each series, in the request's order; a series that is not a counter or not numeric has a `status` that says so and no usage. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Usage"];
+                };
+            };
+            /** @description The body is not the JSON object described, or has a field it does not describe (`invalid_request`, `telemetry.query_invalid`). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No valid session (`unauthenticated`). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No tenant (`permission_denied`), or the range lies wholly before the queryable period (`quota_exceeded`, `telemetry.outside_queryable_period`, detail `earliest`). */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The tenant's account has not been created yet (`not_found`, `telemetry.account_not_ready`). */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description A field breaks a rule (`validation_failed`, detail `parameter`: `series`, `tz`, `period` or `from`), the answer would have too many rows (`telemetry.too_many_points`), or the request would read too many one-minute cells (detail `parameter`: `series`) or the query reads or holds too much (`telemetry.query_too_heavy`). */
             422: {
                 headers: {
                     [name: string]: unknown;

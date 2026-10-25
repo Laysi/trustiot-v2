@@ -17,6 +17,10 @@ doc = false
 axum = { workspace = true, features = ["http1", "json", "query", "tokio"] }
 chrono = { workspace = true, features = ["now", "serde"] }
 contract = { path = "../../crates/contract" }
+# The semantic API's relative periods and table choice (src/semantic): local days, weeks and
+# months over the IANA Time Zone Database compiled in, and its names, the time zones accepted.
+jiff = { workspace = true, features = ["std", "tzdb-bundle-always"] }
+jiff-tzdb.workspace = true
 # Consumes identity.tenant_created (decision 4).
 outbox = { path = "../../crates/outbox" }
 serde = { workspace = true, features = ["derive"] }
@@ -54,6 +58,8 @@ tokio-rustls = { workspace = true, features = ["ring"] }
 identity = { path = "../identity" }
 # The migration Job's ClickHouse part (the DDL and this service's account), run as the Job runs it.
 migrate = { path = "../../tools/migrate" }
+# The synthetic fixture (or TRUSTIOT_LAB_DATASET_INDEX), loaded for the semantic API's tests.
+lab-dataset = { path = "../../tools/lab-dataset" }
 reqwest.workspace = true
 # The product's schema (the migration Job), test identity tokens, and the cross-tenant suite.
 testkit = { path = "../../crates/testkit" }

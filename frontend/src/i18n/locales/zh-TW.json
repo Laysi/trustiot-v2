@@ -26,6 +26,8 @@
   "telemetry.time_zone_invalid": "請選擇有效的時區。",
   "telemetry.range_invalid": "請檢查時間範圍：開始時間要早於結束時間，且範圍不能這麼長。",
   "telemetry.point_invalid": "資料點名稱的格式不正確。",
+  "telemetry.series_invalid": "請選擇 1 到 20 個不同的資料點。",
+  "telemetry.period_invalid": "請選擇有效的期間，例如今天、本週或最近 7 天。",
   "telemetry.too_many_points": "資料太多，無法一次顯示；一次最多顯示 {max} 筆。請縮小查詢範圍後再試一次。",
   "telemetry.outside_queryable_period": "這段期間的資料已無法查詢，請選擇較近的時間範圍。",
   "telemetry.query_too_heavy": "這個查詢需要的資源太多，請縮短時間範圍或選擇較長的時間間隔。",
