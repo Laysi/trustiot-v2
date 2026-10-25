@@ -1,21 +1,15 @@
-//! The endpoint without ClickHouse: who may call it, how answers and failures map, and that a
-//! refused statement reaches neither Postgres nor ClickHouse (Laysi/trustiot-v2#143, acceptance
-//! 4). `tests/sql_api.rs` runs it against the real servers.
-
-use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::time::Duration;
+//! The endpoint without ClickHouse: who may call it, and how answers and failures map
+//! (Laysi/trustiot-v2#143). That a refused statement reaches neither Postgres nor ClickHouse
+//! (acceptance 4) is tested in `tests/sql_check.rs` through the service's router, because its
+//! inputs include `SET ROLE`, which sql-check keeps out of `src`; `tests/sql_api.rs` runs the
+//! endpoint against the real servers.
 
 use axum::body::to_bytes;
 use contract::identity::Actor;
 use contract::{InternalClaims, TenantGrant};
-use service_kit::tenant::TenantDb;
-use sqlx::postgres::{PgConnectOptions, PgPoolOptions, PgSslMode};
 use testkit::identity::TestIssuer;
 
 use super::*;
-use crate::accounts::Accounts;
-use crate::clickhouse::ClickHouse;
 
 fn claims(act: Option<ServiceName>, role: Option<TenantRole>) -> InternalClaims {
     let grant = role.map(|role| TenantGrant {
@@ -235,159 +229,4 @@ fn logs_name_the_sql_by_length_and_a_short_hash() {
     assert_eq!(logged.hash.len(), 16);
     assert!(logged.hash.bytes().all(|byte| byte.is_ascii_hexdigit()));
     assert_ne!(logged.hash, LoggedSql::new("SELECT 1").hash);
-}
-
-/// A loopback port that accepts connections, counts them and closes them at once: a Postgres or
-/// ClickHouse that is never reached unless the count says so.
-async fn counting_port() -> (u16, Arc<AtomicUsize>) {
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-        .await
-        .expect("a loopback port");
-    let port = listener.local_addr().expect("its address").port();
-    let count = Arc::new(AtomicUsize::new(0));
-    let counted = Arc::clone(&count);
-    tokio::spawn(async move {
-        while let Ok((stream, _)) = listener.accept().await {
-            counted.fetch_add(1, Ordering::SeqCst);
-            drop(stream);
-        }
-    });
-    (port, count)
-}
-
-/// Routes whose Postgres and ClickHouse are counting ports.
-async fn counted_routes(issuer: &TestIssuer) -> (Routes, Arc<AtomicUsize>, Arc<AtomicUsize>) {
-    let (postgres_port, postgres) = counting_port().await;
-    let (clickhouse_port, clickhouse) = counting_port().await;
-    let options = PgConnectOptions::new()
-        .host("127.0.0.1")
-        .port(postgres_port)
-        .username("telemetry_query_app")
-        .database("trustiot")
-        .ssl_mode(PgSslMode::VerifyFull);
-    // Short: the positive control below waits for the pool to give up on the closed port.
-    let pool = PgPoolOptions::new().acquire_timeout(Duration::from_secs(2));
-    let db = TenantDb::connect_lazy(options, pool).expect("verify-full options");
-    let client = ClickHouse::new(&format!("http://127.0.0.1:{clickhouse_port}"), None)
-        .expect("a ClickHouse client");
-    let accounts = Accounts::new(client, "trustiot_telemetry_query", &"p".repeat(32));
-    let routes = Routes::new(issuer.verifier(ServiceName::TelemetryQuery), db, accounts);
-    (routes, postgres, clickhouse)
-}
-
-async fn call(routes: &Routes, user: UserIdentity, body: &str) -> Response {
-    run_sql(
-        State(routes.clone()),
-        user,
-        Ok(Bytes::from(body.to_owned())),
-    )
-    .await
-}
-
-#[tokio::test]
-async fn a_refused_statement_reaches_neither_postgres_nor_clickhouse() {
-    let issuer = TestIssuer::new();
-    let (routes, postgres, clickhouse) = counted_routes(&issuer).await;
-    let assistant = claims(Some(ServiceName::Assistant), Some(TenantRole::Viewer));
-    for sql in [
-        "SET ROLE NONE",
-        "SET DEFAULT ROLE NONE TO tenant",
-        "SET max_threads = 1",
-        "INSERT INTO trustiot.telemetry SELECT * FROM trustiot.telemetry",
-        "GRANT SELECT ON trustiot.telemetry TO x",
-        "SYSTEM RELOAD CONFIG",
-        "KILL QUERY WHERE 1",
-        "SELECT 1 FROM tenant_telemetry; SET DEFAULT ROLE NONE TO x",
-        "SELECT point FROM tenant_telemetry SETTINGS readonly = 0",
-        "SELECT * FROM system.users",
-        "SELECT getSetting('SQL_tenant_id') FROM tenant_telemetry",
-    ] {
-        let body = serde_json::json!({ "sql": sql }).to_string();
-        let response = call(
-            &routes,
-            issuer.user(ServiceName::TelemetryQuery, &assistant),
-            &body,
-        )
-        .await;
-        assert_eq!(response.status().as_u16(), 422, "{sql}");
-    }
-    // Callers that may not run SQL, and bodies that are not a request.
-    for (claims, body, status) in [
-        (
-            claims(None, Some(TenantRole::Admin)),
-            "{\"sql\":\"SELECT 1\"}",
-            403,
-        ),
-        (
-            claims(Some(ServiceName::Assets), Some(TenantRole::Admin)),
-            "{\"sql\":\"SELECT 1\"}",
-            403,
-        ),
-        (
-            claims(Some(ServiceName::Assistant), None),
-            "{\"sql\":\"SELECT 1\"}",
-            403,
-        ),
-        (assistant.clone(), "not json", 400),
-        (
-            assistant.clone(),
-            "{\"sql\":\"SELECT 1\",\"max_rows\":0}",
-            400,
-        ),
-        (
-            assistant.clone(),
-            "{\"sql\":\"SELECT 1\",\"max_rows\":10001}",
-            400,
-        ),
-        (assistant.clone(), "{\"max_rows\":5}", 400),
-    ] {
-        let response = call(
-            &routes,
-            issuer.user(ServiceName::TelemetryQuery, &claims),
-            body,
-        )
-        .await;
-        assert_eq!(response.status().as_u16(), status, "{body}");
-    }
-    assert_eq!(postgres.load(Ordering::SeqCst), 0, "Postgres was reached");
-    assert_eq!(
-        clickhouse.load(Ordering::SeqCst),
-        0,
-        "ClickHouse was reached"
-    );
-
-    // The control: a statement that passes goes on to Postgres, which the counter sees.
-    let body = serde_json::json!({ "sql": "SELECT point FROM tenant_telemetry" }).to_string();
-    let response = call(
-        &routes,
-        issuer.user(ServiceName::TelemetryQuery, &assistant),
-        &body,
-    )
-    .await;
-    assert_eq!(response.status().as_u16(), 503);
-    assert!(
-        postgres.load(Ordering::SeqCst) > 0,
-        "the control reached Postgres"
-    );
-}
-
-#[tokio::test]
-async fn sql_over_its_limit_is_too_long_and_never_sent() {
-    let issuer = TestIssuer::new();
-    let (routes, _, clickhouse) = counted_routes(&issuer).await;
-    let assistant = claims(Some(ServiceName::Assistant), Some(TenantRole::Viewer));
-    let sql = format!("SELECT '{}' FROM tenant_telemetry", "x".repeat(17 * 1024));
-    let body = serde_json::json!({ "sql": sql }).to_string();
-    let response = call(
-        &routes,
-        issuer.user(ServiceName::TelemetryQuery, &assistant),
-        &body,
-    )
-    .await;
-    assert_eq!(response.status().as_u16(), 422);
-    assert_eq!(
-        body_json(response).await["details"],
-        serde_json::json!({"class": "too_long", "max_bytes": MAX_SQL_BYTES})
-    );
-    assert_eq!(clickhouse.load(Ordering::SeqCst), 0);
 }

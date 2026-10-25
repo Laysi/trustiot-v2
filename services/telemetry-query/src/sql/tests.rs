@@ -1,4 +1,6 @@
-//! The check end to end: what passes and how it prints, what is refused and why.
+//! The check end to end: what passes and how it prints, what is refused and why. Statements
+//! other than one SELECT, schema changes, and long or deep queries the test builds are tested in
+//! `tests/sql_check.rs`: repo-check and sql-check keep such text out of `src`.
 
 use contract::api::telemetry_query::{SqlClause, SqlRefusal};
 
@@ -123,14 +125,13 @@ fn the_row_limit_is_one_more_than_allowed_and_never_raises_the_queries_own() {
             .unwrap_or_else(|error| panic!("{sql}: {error:?}"))
             .statement
     };
-    let format = " FORMAT JSONCompactEachRowWithNamesAndTypes";
     assert_eq!(
         limit("SELECT point FROM tenant_telemetry", 200),
-        format!("SELECT point FROM trustiot.tenant_telemetry LIMIT 201{format}")
+        "SELECT point FROM trustiot.tenant_telemetry LIMIT 201 FORMAT JSONCompactEachRowWithNamesAndTypes"
     );
     assert_eq!(
         limit("SELECT point FROM tenant_telemetry LIMIT 10", 200),
-        format!("SELECT point FROM trustiot.tenant_telemetry LIMIT 10{format}")
+        "SELECT point FROM trustiot.tenant_telemetry LIMIT 10 FORMAT JSONCompactEachRowWithNamesAndTypes"
     );
     let checked = run(
         "SELECT point FROM tenant_telemetry LIMIT 5000 OFFSET 7",
@@ -146,18 +147,18 @@ fn the_row_limit_is_one_more_than_allowed_and_never_raises_the_queries_own() {
             "SELECT point FROM tenant_telemetry LIMIT 50000 OFFSET 7",
             10_000
         ),
-        format!("SELECT point FROM trustiot.tenant_telemetry LIMIT 10001 OFFSET 7{format}")
+        "SELECT point FROM trustiot.tenant_telemetry LIMIT 10001 OFFSET 7 FORMAT JSONCompactEachRowWithNamesAndTypes"
     );
     assert_eq!(
         limit("SELECT point FROM tenant_telemetry LIMIT 5, 1000", 200),
-        format!("SELECT point FROM trustiot.tenant_telemetry LIMIT 201 OFFSET 5{format}")
+        "SELECT point FROM trustiot.tenant_telemetry LIMIT 201 OFFSET 5 FORMAT JSONCompactEachRowWithNamesAndTypes"
     );
     assert_eq!(
         limit(
             "SELECT point FROM tenant_telemetry LIMIT 99999999999999999999999",
             200
         ),
-        format!("SELECT point FROM trustiot.tenant_telemetry LIMIT 201{format}")
+        "SELECT point FROM trustiot.tenant_telemetry LIMIT 201 FORMAT JSONCompactEachRowWithNamesAndTypes"
     );
     // A set operation and LIMIT BY are wrapped: their own LIMIT means something else.
     assert_eq!(
@@ -165,53 +166,14 @@ fn the_row_limit_is_one_more_than_allowed_and_never_raises_the_queries_own() {
             "SELECT point FROM tenant_telemetry_1m UNION ALL SELECT point FROM tenant_telemetry_1h",
             200
         ),
-        format!(
-            "SELECT * FROM (SELECT point FROM trustiot.tenant_telemetry_1m UNION ALL SELECT point FROM trustiot.tenant_telemetry_1h) LIMIT 201{format}"
-        )
+        "SELECT * FROM (SELECT point FROM trustiot.tenant_telemetry_1m UNION ALL SELECT point FROM trustiot.tenant_telemetry_1h) LIMIT 201 FORMAT JSONCompactEachRowWithNamesAndTypes"
     );
     assert_eq!(
         limit(
             "SELECT point FROM tenant_telemetry ORDER BY ts LIMIT 1 BY point",
             1
         ),
-        format!(
-            "SELECT * FROM (SELECT point FROM trustiot.tenant_telemetry ORDER BY ts LIMIT 1 BY point) LIMIT 2{format}"
-        )
-    );
-}
-
-#[test]
-fn statements_other_than_one_select_are_refused_before_parsing() {
-    for sql in [
-        "SET ROLE NONE",
-        "SET DEFAULT ROLE NONE TO tenant",
-        "SET max_threads = 1",
-        "INSERT INTO trustiot.telemetry SELECT * FROM trustiot.telemetry",
-        "ALTER USER x MODIFY SETTINGS SQL_queryable_raw_days = 36500",
-        "DROP ROW POLICY p ON trustiot.telemetry",
-        "CREATE USER x",
-        "GRANT SELECT ON trustiot.telemetry TO x",
-        "SYSTEM RELOAD CONFIG",
-        "KILL QUERY WHERE 1",
-        "OPTIMIZE TABLE trustiot.telemetry FINAL",
-        "EXPLAIN SELECT 1",
-        "SHOW GRANTS",
-        "DESCRIBE TABLE trustiot.telemetry",
-        "USE system",
-        "EXECUTE AS x SELECT 1",
-    ] {
-        assert_eq!(refusal(sql), SqlRefusal::NotASelect, "{sql}");
-    }
-    for sql in [
-        "SELECT 1 FROM tenant_telemetry; SET DEFAULT ROLE NONE TO x",
-        "SELECT 1 FROM tenant_telemetry; SELECT 2 FROM tenant_telemetry",
-    ] {
-        assert_eq!(refusal(sql), SqlRefusal::MultipleStatements, "{sql}");
-    }
-    // Inside a query the parser still finds only queries.
-    assert_eq!(
-        refusal("WITH x AS (SELECT 1) INSERT INTO t SELECT * FROM x"),
-        SqlRefusal::NotASelect
+        "SELECT * FROM (SELECT point FROM trustiot.tenant_telemetry ORDER BY ts LIMIT 1 BY point) LIMIT 2 FORMAT JSONCompactEachRowWithNamesAndTypes"
     );
 }
 
@@ -756,72 +718,6 @@ fn syntax_errors_give_a_position_and_never_the_text() {
     );
     assert_eq!(position("x at Line: 3, Column: 14 extra"), (None, None));
     assert_eq!(position("no position"), (None, None));
-}
-
-#[test]
-fn deep_and_long_queries_are_too_complex_and_never_overflow_the_stack() {
-    let nested = format!(
-        "SELECT {}1{} FROM tenant_telemetry",
-        "(".repeat(200),
-        ")".repeat(200)
-    );
-    // The parser's recursion limit stops it; inside a speculative parse the limit shows as a
-    // syntax error.
-    assert!(
-        matches!(
-            refusal(&nested),
-            SqlRefusal::TooComplex | SqlRefusal::Syntax { .. }
-        ),
-        "{nested}"
-    );
-    let subqueries = format!(
-        "SELECT * FROM {}tenant_telemetry{}",
-        "(SELECT * FROM ".repeat(100),
-        ")".repeat(100)
-    );
-    assert!(
-        matches!(
-            refusal(&subqueries),
-            SqlRefusal::TooComplex | SqlRefusal::Syntax { .. }
-        ),
-        "{subqueries}"
-    );
-    // A left-deep chain the parser builds in a loop: the walk's depth limit stops it.
-    let chain = format!(
-        "SELECT {} FROM tenant_telemetry",
-        vec!["x"; 2_000].join("+")
-    );
-    assert_eq!(refusal(&chain), SqlRefusal::TooComplex);
-    let not = format!("SELECT {}1 FROM tenant_telemetry", "NOT ".repeat(1_000));
-    assert!(
-        matches!(
-            refusal(&not),
-            SqlRefusal::TooComplex | SqlRefusal::Syntax { .. }
-        ),
-        "{not}"
-    );
-    // Within the limits, a long query passes.
-    let wide = format!(
-        "SELECT {} FROM tenant_telemetry",
-        vec!["value_int + 1"; 500].join(", ")
-    );
-    passes(&wide);
-}
-
-#[tokio::test]
-async fn the_check_runs_on_its_own_thread() {
-    let checked = check_on_thread("SELECT point FROM tenant_telemetry".to_owned(), 5)
-        .await
-        .expect("passes");
-    assert_eq!(
-        checked.statement,
-        "SELECT point FROM trustiot.tenant_telemetry LIMIT 6 FORMAT JSONCompactEachRowWithNamesAndTypes"
-    );
-    let deep = format!("SELECT {}1{}", "(".repeat(5_000), ")".repeat(5_000));
-    assert!(matches!(
-        check_on_thread(deep, 5).await,
-        Err(CheckError::Refused(SqlRefusal::TooComplex))
-    ));
 }
 
 /// Threads that wait at a gate until the test opens it, and count themselves.

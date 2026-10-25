@@ -235,21 +235,9 @@ mod tests {
         }
     }
 
-    #[test]
-    fn the_size_is_limited() {
-        let long = format!("SELECT '{}'", "x".repeat(MAX_SQL_BYTES as usize));
-        assert_eq!(
-            refusal(&long),
-            SqlRefusal::TooLong {
-                max_bytes: MAX_SQL_BYTES
-            }
-        );
-        let many = format!("SELECT {}", vec!["1"; MAX_TOKENS].join(","));
-        assert_eq!(refusal(&many), SqlRefusal::TooComplex);
-        // Spaces and comments do not count as tokens.
-        let spaced = format!("SELECT 1{}", " ".repeat(10_000));
-        assert!(tokens(&spaced).is_ok());
-    }
+    // The size limits, the identifier length limit and the statements other than one SELECT are
+    // tested in tests/sql_check.rs: their inputs are SQL built in the test or statements that
+    // sql-check keeps out of `src` (tools/sql-check, decision 29).
 
     #[test]
     fn characters_are_refused_where_they_are() {
@@ -313,44 +301,6 @@ mod tests {
                 "{sql}"
             );
         }
-        let long = format!("SELECT {}", "x".repeat(MAX_IDENTIFIER_BYTES + 1));
-        assert_eq!(
-            refusal(&long),
-            SqlRefusal::LiteralNotAllowed { line: 1, column: 8 }
-        );
-        assert!(tokens(&format!("SELECT {}", "x".repeat(MAX_IDENTIFIER_BYTES))).is_ok());
-    }
-
-    #[test]
-    fn only_a_select_may_start_and_only_one() {
-        for sql in [
-            "SET ROLE NONE",
-            "SET DEFAULT ROLE NONE TO tenant",
-            "SET max_threads = 1",
-            "INSERT INTO t VALUES (1)",
-            "ALTER USER x MODIFY SETTINGS y = 1",
-            "GRANT SELECT ON *.* TO x",
-            "SYSTEM DROP DNS CACHE",
-            "KILL QUERY WHERE 1",
-            "EXPLAIN SELECT 1",
-            "SHOW TABLES",
-            "DESCRIBE trustiot.telemetry",
-            "VALUES (1)",
-            "",
-            "  -- only a comment",
-            ";",
-        ] {
-            assert_eq!(refusal(sql), SqlRefusal::NotASelect, "{sql}");
-        }
-        for sql in [
-            "SELECT 1; SELECT 2",
-            "SELECT 1; SET DEFAULT ROLE NONE TO tenant",
-            "SELECT 1;;",
-            "(SELECT 1); SELECT 2",
-        ] {
-            assert_eq!(refusal(sql), SqlRefusal::MultipleStatements, "{sql}");
-        }
-        assert!(tokens("SELECT 1 ; -- done").is_ok());
     }
 
     #[test]
