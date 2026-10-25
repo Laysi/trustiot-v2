@@ -1,6 +1,6 @@
 
 running 1 test
-first run on a fresh ClickHouse: ["generated the password of trustiot_collector in Secret trustiot-otel-collector-password (it had none)", "applied migrate/0001_helpers.sql", "applied database/database.sql", "applied clickhouse/0001_databases.sql", "applied clickhouse/0002_telemetry.sql", "applied clickhouse/0003_batch_commits.sql", "applied clickhouse/0004_access.sql", "applied clickhouse/0005_tenant_view.sql", "applied clickhouse/0006_logs.sql", "applied clickhouse/0007_monitoring.sql", "applied clickhouse/0008_telemetry_query.sql", "applied clickhouse/0009_telemetry_query_grantees.sql", "applied clickhouse/0010_telemetry_rollups.sql", "set the retention of ClickHouse table trustiot.telemetry to 180 days (was 400)", "set the retention of ClickHouse table trustiot.batch_commits to 180 days (was 400)", "created ClickHouse account trustiot_collector"]
+first run on a fresh ClickHouse: ["generated the password of trustiot_collector in Secret trustiot-otel-collector-password (it had none)", "applied migrate/0001_helpers.sql", "applied database/database.sql", "applied clickhouse/0001_databases.sql", "applied clickhouse/0002_telemetry.sql", "applied clickhouse/0003_batch_commits.sql", "applied clickhouse/0004_access.sql", "applied clickhouse/0005_tenant_view.sql", "applied clickhouse/0006_logs.sql", "applied clickhouse/0007_monitoring.sql", "applied clickhouse/0008_telemetry_query.sql", "applied clickhouse/0009_telemetry_query_grantees.sql", "applied clickhouse/0010_telemetry_rollups.sql", "set the retention of ClickHouse table trustiot.telemetry to 180 days (was 400)", "set the retention of ClickHouse table trustiot.batch_commits to 180 days (was 400)", "backfilled the one-minute and one-hour aggregates from the raw rows received from 2026-05-01 to 2026-10-25 (raw data retention 180 days, less the three oldest days)", "created ClickHouse account trustiot_collector"]
 retention 180 days; telemetry rows kept after the TTL merge:
 old_timestamp_received_now
 received_within_retention
@@ -27,5 +27,5 @@ aggregate TTL changed by hand: ClickHouse: trustiot.telemetry_1m: its TTL `bucke
 after the repair: ["set the retention of ClickHouse table trustiot.telemetry_1m to 13 months (was 14)"]
 test clickhouse_ddl_and_the_collector_account ... ok
 
-test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 20.67s
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 23.23s
 

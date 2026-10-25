@@ -1,9 +1,10 @@
 
 running 1 test
-backfill of rows written before 0010: the aggregates equal the raw rows (60 one-minute and 16 one-hour cells)
-second apply: the aggregates equal the raw rows (60 one-minute and 16 one-hour cells)
-backfill: the first apply wrote 80 aggregate rows, the second 0
-rows written after 0010: the aggregates equal the raw rows (76 one-minute and 17 one-hour cells)
+backfill of rows written before 0010: the aggregates equal the raw rows (84 one-minute and 36 one-hour cells)
+backfill: the backfill views showed the admin nothing until it named itself, then 7 receive days to fill; the backfill wrote 84 one-minute and 40 one-hour rows, a second one 0 and 0
+rows written after 0010: the aggregates equal the raw rows (100 one-minute and 37 one-hour cells)
+bound: after the raw rows of days 12 and 10 (part of it) expired, a second apply and a backfill with a 10-day or a 400-day raw retention wrote nothing, the check with 10 days reported nothing and the repair with 10 days wrote nothing; the same check with 400 days would have erased [["telemetry_1m_backfill", "2026-10-13", "8", "-8"], ["telemetry_1m_backfill", "2026-10-15", "4", "-4"], ["telemetry_1h_backfill", "2026-10-13", "4", "-8"], ["telemetry_1h_backfill", "2026-10-15", "4", "-4"]]; the cells per receive day stayed {"2026-10-13": 8, "2026-10-15": 8, "2026-10-16": 8, "2026-10-17": 8, "2026-10-22": 8, "2026-10-24": 8, "2026-10-25": 52}
+bound: within it, the cells of a batch deleted without its reconcile were offered as [["telemetry_1m_backfill", "2026-10-22", "8", "-8"], ["telemetry_1h_backfill", "2026-10-22", "4", "-8"]], left alone by the backfill and corrected by the repair; the lost cells of 2026-10-17 were offered as [["telemetry_1m_backfill", "2026-10-17", "8", "8"], ["telemetry_1h_backfill", "2026-10-17", "4", "8"]] and filled by the backfill; the expired days kept their cells
 exact retry: the aggregates equal the raw rows (20 one-minute and 8 one-hour cells)
 partial attempt, no completion record: the aggregates equal the raw rows (24 one-minute and 8 one-hour cells)
 rewrite: before the reconcile, 14 cells differ from the raw rows
@@ -14,6 +15,8 @@ deduplication hazard: a rewrite with identical content answered OK and wrote 0 o
 deduplication hazard: a rewrite with identical content and insert_deduplicate = 0 answered OK and wrote 0 of 12 rows
 rewrite with deduplicate_insert = 'disable' and reconcile: the aggregates equal the raw rows (12 one-minute and 7 one-hour cells)
 crash between the raw and a view part: the aggregates equal the raw rows (16 one-minute and 8 one-hour cells)
+reconcile after stopping an earlier statement: the aggregates equal the raw rows (12 one-minute and 4 one-hour cells)
+query ID: while a statement of the stream ran, another with its ID was refused (QUERY_WITH_SAME_ID_IS_ALREADY_RUNNING); the reconcile with the stream's settings stopped it (QUERY_WAS_CANCELLED) and ran
 cumulative points: the aggregates equal the raw rows (25 one-minute and 8 one-hour cells)
 energy reset_in_hour [5.0, 7.0, 0.0, 6.0] (wraps at 0): consecutive differences 8, one-minute view 8, one-hour view 8
 energy first_zero [0.0, 5.0, 0.0, 3.0] (wraps at 0): consecutive differences 8, one-minute view 8, one-hour view 8
@@ -25,5 +28,5 @@ retention: of 31 receive days 380 to 410 days ago, the one-minute table kept 16 
 server: 26.8.22.13
 test the_aggregates_follow_the_raw_rows ... ok
 
-test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 12.20s
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 16.74s
 
