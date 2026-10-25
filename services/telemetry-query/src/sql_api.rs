@@ -13,8 +13,10 @@
 //!    account, reading at most [`MAX_RESULT_BYTES`] of the answer; more rows than `max_rows` is a
 //!    refusal, never a cut-off answer.
 //!
-//! The SQL is tenant content: the logs carry its length and a short hash, never its text, and no
-//! answer carries ClickHouse's error text.
+//! The SQL is tenant content: the logs carry its length and a short keyed hash, never its text,
+//! and no answer carries ClickHouse's error text.
+
+use std::sync::LazyLock;
 
 use axum::body::Bytes;
 use axum::extract::State;
@@ -26,9 +28,10 @@ use contract::api::telemetry_query::{
     RunSql, SqlColumn, SqlRefusal, SqlResult,
 };
 use contract::{ErrorBody, ErrorCode, ServiceName, TenantId, TenantRole};
+use hmac::{Hmac, KeyInit, Mac as _};
 use serde_json::Value;
 use service_kit::identity::UserIdentity;
-use sha2::{Digest as _, Sha256};
+use sha2::Sha256;
 
 use crate::clickhouse::{QueryError, code};
 use crate::history::{Failure, Routes, clickhouse_error, error, ok};
@@ -46,8 +49,20 @@ pub const MAX_REQUEST_BYTES: usize = 64 * 1024;
 /// [`MAX_RESULT_BYTES`] as the transport counts it; a unit test checks that they agree.
 const MAX_ANSWER_BYTES: usize = 8 * 1024 * 1024;
 
-/// The SQL as the logs may name it: its length and the first 8 bytes of its SHA-256, enough to
-/// tell repeats apart.
+/// The key of the SQL's fingerprint in the logs, random and made once per process: the
+/// fingerprint tells repeats apart within a process, and someone who reads the logs cannot test
+/// a guessed SQL text against it, as against a plain hash. `None` when the system has no
+/// randomness; the fingerprint is then left out.
+static FINGERPRINT_KEY: LazyLock<Option<[u8; 32]>> = LazyLock::new(|| {
+    let mut key = [0_u8; 32];
+    getrandom::fill(&mut key).ok().map(|()| key)
+});
+
+/// What the logs carry for a fingerprint without a key.
+const NO_FINGERPRINT: &str = "none";
+
+/// The SQL as the logs may name it: its length and the first 8 bytes of its HMAC-SHA-256 under
+/// [`FINGERPRINT_KEY`], enough to tell repeats apart.
 struct LoggedSql {
     bytes: usize,
     hash: String,
@@ -55,13 +70,23 @@ struct LoggedSql {
 
 impl LoggedSql {
     fn new(sql: &str) -> Self {
-        let digest = Sha256::digest(sql.as_bytes());
+        let hash = FINGERPRINT_KEY
+            .as_ref()
+            .and_then(|key| {
+                let mut mac = <Hmac<Sha256> as KeyInit>::new_from_slice(key).ok()?;
+                mac.update(sql.as_bytes());
+                let digest = mac.finalize().into_bytes();
+                Some(
+                    digest[..8]
+                        .iter()
+                        .map(|byte| format!("{byte:02x}"))
+                        .collect(),
+                )
+            })
+            .unwrap_or_else(|| NO_FINGERPRINT.to_owned());
         Self {
             bytes: sql.len(),
-            hash: digest[..8]
-                .iter()
-                .map(|byte| format!("{byte:02x}"))
-                .collect(),
+            hash,
         }
     }
 }

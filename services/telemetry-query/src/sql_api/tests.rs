@@ -21,6 +21,31 @@ fn claims(act: Option<ServiceName>, role: Option<TenantRole>) -> InternalClaims 
     claims
 }
 
+/// The logs' fingerprint of a SQL text: as long as before, the same for the same text in a
+/// process, and keyed, so it is not the plain SHA-256 someone could compute for a guessed text
+/// (the security review of 2026-10-26).
+#[test]
+fn the_logged_fingerprint_is_keyed_per_process() {
+    use sha2::Digest as _;
+    let sql = "SELECT point FROM tenant_telemetry WHERE value_string = 'a guess'";
+    let logged = LoggedSql::new(sql);
+    assert_eq!(logged.bytes, sql.len());
+    if FINGERPRINT_KEY.is_none() {
+        // A system without randomness: no fingerprint rather than a guessable one.
+        assert_eq!(logged.hash, NO_FINGERPRINT);
+        return;
+    }
+    assert_eq!(logged.hash.len(), 16, "{}", logged.hash);
+    assert!(logged.hash.bytes().all(|byte| byte.is_ascii_hexdigit()));
+    assert_eq!(LoggedSql::new(sql).hash, logged.hash, "repeats tell apart");
+    assert_ne!(LoggedSql::new("SELECT 1").hash, logged.hash);
+    let plain: String = Sha256::digest(sql.as_bytes())[..8]
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    assert_ne!(logged.hash, plain, "not the plain hash");
+}
+
 #[test]
 fn only_an_ai_service_in_a_tenant_may_run_sql() {
     let issuer = TestIssuer::new();

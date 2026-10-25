@@ -81,7 +81,7 @@
   檢查在自己的執行緒上跑（16 MiB 的 stack），每個副本最多同時 4 個（`MAX_CONCURRENT_CHECKS`），其餘等待；呼叫端不再等待時，執行緒照樣佔著名額直到結束。
 - **執行**：與歷史 API 相同，先確認租戶帳號已建立、仍是服務建立的樣子並帶著可查期間（`Accounts::verify`），再以租戶帳號執行；ClickHouse 的回答最多讀 8 MiB（`MAX_RESULT_BYTES`）。列數超過 `max_rows` 時整個拒絕（`too_many_rows`），不截斷，模型不會拿到不完整的答案還不知道。
 - **回應**：200 `{"sql", "columns": [{"name", "type"}], "rows", "queryable_from": {"tenant_telemetry", "tenant_telemetry_1m", "tenant_telemetry_1h"}, "queried_at"}`。`sql` 是實際執行的文字（不含服務加上的 `LIMIT` 與 `FORMAT`）；`rows` 是 ClickHouse JSON 格式的值（pin 住的 ClickHouse 版本把 64 位元整數寫成 JSON 數字，時間寫成文字）；`queryable_from` 是每個 view 的 `Windows::earliest`：之前的列不在租戶的可查期間，之後 5 分鐘內的列可能有也可能沒有。
-- **日誌**：SQL 是租戶的內容，日誌只記長度（`sql_bytes`）、SHA-256 的前 8 bytes（`sql_hash`，用來認出重複的 SQL）、拒絕類別與 ClickHouse 的錯誤代碼，不記 SQL 本身；回應也從不帶 SQL 或 ClickHouse 的錯誤內文。
+- **日誌**：SQL 是租戶的內容，日誌只記長度（`sql_bytes`）、HMAC-SHA-256 的前 8 bytes（`sql_hash`，key 是每個行程第一次用到時產生的隨機值：同一個行程內用來認出重複的 SQL，讀得到日誌的人也無法拿猜測的 SQL 比對；沒有亂數來源時記 `none`）、拒絕類別與 ClickHouse 的錯誤代碼，不記 SQL 本身；回應也從不帶 SQL 或 ClickHouse 的錯誤內文。
 
 | 請求 | 回應 |
 | --- | --- |
