@@ -93,7 +93,7 @@
 | 帳號的 quota 或同時查詢數用完 | 429 `rate_limited` |
 | ClickHouse 在時間上限中止查詢 | 504 `timeout` |
 | 帳號與服務建立的不同、Postgres 或 ClickHouse 出錯，或 ClickHouse 的錯誤代碼不在下表 | 503 `unavailable` |
-| 檢查本身出錯，或帳號拒絕了通過檢查的查詢（`ACCESS_DENIED`、`READONLY`：檢查與帳號的權限不一致，要調查） | 500 `internal`，日誌 ERROR |
+| 檢查本身出錯，或帳號拒絕了通過檢查的查詢（`ACCESS_DENIED`、`READONLY`：檢查與帳號的權限不一致，要調查；只算查詢本身，查詢前的帳號檢查遇到 ClickHouse 錯誤時與歷史 API 相同，例如 503） | 500 `internal`，日誌 ERROR |
 
 拒絕的 `details` 是 `{"class": ...}` 加上該類別的固定欄位（`SqlRefusal`）：
 

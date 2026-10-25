@@ -18,6 +18,10 @@
 //! 7. ClickHouse parses each printed query as it parses the query as written (`EXPLAIN AST`),
 //!    groups the operators of a printed query as sqlparser did where the two rank them
 //!    differently, and every allowed function is ClickHouse's, with its case rule.
+//! 8. A ClickHouse failure of the account check before the query answers as the history API
+//!    answers it (503 for `ACCESS_DENIED` and `READONLY`), never as the account refusing a
+//!    checked query (500 and its error log): a second service process against a stand-in
+//!    ClickHouse on loopback that refuses everything.
 //!
 //! Needs podman or docker; skipped without one unless `CI` is set. One test: the binary shares
 //! one product database. `--nocapture` prints every outcome for the test report.
@@ -25,7 +29,10 @@
 mod support;
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU32, Ordering};
 
+use axum::http::StatusCode;
 use chrono::{DateTime, Utc};
 use contract::api::telemetry_query::{MAX_RESULT_BYTES, MAX_SQL_BYTES, RunSql};
 use contract::client::Endpoint as _;
@@ -38,7 +45,10 @@ use support::period::{
     Tenant,
 };
 use support::poc::{A_MARKER, ATTACKS, B_MARKER, HEAVY, SYSTEM_TABLES, VICTIM, VICTIM_MARKER};
-use support::{ClickHouseTarget, Readings, Service, Stack, wait_account_ready};
+use support::{
+    ClickHouseTarget, EVENT_LIMIT, Readings, Service, Stack, random_password, wait_account_ready,
+    wait_for,
+};
 use telemetry_query::accounts::EXPECTED_WINDOWS;
 use telemetry_query::period::View;
 use telemetry_query::sql::functions::{COMBINATORS, FUNCTIONS, Kind};
@@ -944,4 +954,73 @@ async fn the_endpoint_runs_only_checked_selects_as_the_callers_tenant() {
         FUNCTIONS.len(),
         COMBINATORS.len()
     );
+
+    // 8. A ClickHouse failure of the account check (the security review of 2026-10-26).
+    let refusing = Arc::new(AtomicU32::new(0));
+    let stand_in_url = refusing_clickhouse(Arc::clone(&refusing)).await;
+    let stand_in_password = random_password();
+    let stand_in = Service::start(
+        &stack.product,
+        &ClickHouseTarget {
+            url: &stand_in_url,
+            password: &stand_in_password,
+        },
+        &issuer.jwks(),
+    )
+    .await;
+    for (call, code) in [(1, 497), (2, 164)] {
+        refusing.store(code, Ordering::SeqCst);
+        let (status, body) = run(
+            &stand_in,
+            Some(&token_a),
+            "SELECT point FROM tenant_telemetry",
+            None,
+        )
+        .await;
+        assert_eq!(status, 503, "{code}: {body}");
+        assert_eq!(json(&body)["code"], "unavailable", "{code}: {body}");
+        wait_for(
+            &format!("the warning of the check's ClickHouse error {code}"),
+            EVENT_LIMIT,
+            || async {
+                (stand_in.stdout.messages("a telemetry query failed").len() == call).then_some(())
+            },
+        )
+        .await;
+        eprintln!("endpoint account check refused by ClickHouse ({code}): 503");
+    }
+    let log = format!("{}\n{}", stand_in.stdout.text(), stand_in.stderr.text());
+    assert!(
+        !log.contains("the tenant account refused a checked query"),
+        "a failed account check is not a refused query"
+    );
+}
+
+/// A stand-in ClickHouse on loopback that refuses every request with the ClickHouse error
+/// `code` holds, as ClickHouse words one; its base URL.
+async fn refusing_clickhouse(code: Arc<AtomicU32>) -> String {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind the stand-in ClickHouse");
+    let address = listener.local_addr().expect("its address");
+    let app = axum::Router::new().fallback(move || {
+        let code = code.load(Ordering::SeqCst);
+        async move {
+            let name = match code {
+                497 => "ACCESS_DENIED",
+                164 => "READONLY",
+                _ => "UNKNOWN",
+            };
+            (
+                StatusCode::FORBIDDEN,
+                format!("Code: {code}. DB::Exception: refused by the stand-in. ({name})"),
+            )
+        }
+    });
+    tokio::spawn(async move {
+        axum::serve(listener, app)
+            .await
+            .expect("serve the stand-in ClickHouse");
+    });
+    format!("http://{address}")
 }

@@ -585,8 +585,9 @@ fn plan_automatic(
     Err(Box::new(invalid("to", RANGE_INVALID)))
 }
 
-/// Maps a ClickHouse failure of a tenant query to the response, and logs it without its text.
-fn clickhouse_error(tenant: TenantId, failure: &QueryError) -> Response {
+/// Maps a ClickHouse failure of a tenant query, or of the account check before one, to the
+/// response, and logs it without its text.
+pub(crate) fn clickhouse_error(tenant: TenantId, failure: &QueryError) -> Response {
     let (code, key) = match failure.code() {
         Some(code::TIMEOUT_EXCEEDED) => (ErrorCode::Timeout, None),
         Some(code::QUOTA_EXCEEDED | code::TOO_MANY_SIMULTANEOUS_QUERIES) => {

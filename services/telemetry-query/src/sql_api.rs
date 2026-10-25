@@ -31,7 +31,7 @@ use service_kit::identity::UserIdentity;
 use sha2::{Digest as _, Sha256};
 
 use crate::clickhouse::{QueryError, code};
-use crate::history::{Failure, Routes, error, ok};
+use crate::history::{Failure, Routes, clickhouse_error, error, ok};
 use crate::period::View;
 use crate::sql::{self, CheckError, Checked};
 
@@ -154,7 +154,9 @@ fn query_refusal(failure: &QueryError) -> Option<SqlRefusal> {
     Some(SqlRefusal::QueryError { kind })
 }
 
-/// The answer to a ClickHouse failure that is not the query's fault.
+/// The answer to a ClickHouse failure of the checked query that is not the query's fault. A
+/// failure of the account check before it is the history API's ([`clickhouse_error`]): only the
+/// query itself can be a checked query the account refused.
 fn failure_response(tenant: TenantId, logged: &LoggedSql, failure: &QueryError) -> Response {
     let code = match failure.code() {
         Some(code::TIMEOUT_EXCEEDED) => ErrorCode::Timeout,
@@ -276,7 +278,7 @@ pub(crate) async fn run_sql(
     let windows = match state.verified(tenant).await {
         Ok(windows) => windows,
         Err(Failure::Response(response)) => return *response,
-        Err(Failure::ClickHouse(failure)) => return failure_response(tenant, &logged, &failure),
+        Err(Failure::ClickHouse(failure)) => return clickhouse_error(tenant, &failure),
     };
     let queried_at = Utc::now();
     let queryable_from = QueryableFrom {
