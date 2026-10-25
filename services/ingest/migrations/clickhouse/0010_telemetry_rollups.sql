@@ -188,6 +188,16 @@ FROM
 )
 GROUP BY tenant_id, device_id, point, bucket, gateway_id, stream_id, received_day;
 
+-- A SELECT from a materialized view reads its target table as the view's definer, whose policy
+-- shows every row: without a policy of their own, any account granted SELECT on the database
+-- (the admin included) would read every tenant's aggregates through the views. Nothing reads
+-- them; the aggregates are read from the tables and the tenant views.
+CREATE ROW POLICY IF NOT EXISTS deny_by_default ON trustiot.telemetry_1m_mv
+AS PERMISSIVE FOR SELECT USING 0 TO ALL;
+
+CREATE ROW POLICY IF NOT EXISTS deny_by_default ON trustiot.telemetry_1h_mv
+AS PERMISSIVE FOR SELECT USING 0 TO ALL;
+
 -- Row policies and grants on the aggregate tables, as 0004_access.sql and 0005_tenant_view.sql
 -- set them on the telemetry table: nothing for an account no policy names, the tenant filter
 -- for the tenant views' definer, every row for the ingest service (which runs the reconcile)
