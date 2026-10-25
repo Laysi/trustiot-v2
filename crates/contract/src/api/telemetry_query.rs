@@ -248,8 +248,9 @@ pub enum SqlClause {
     JoinKind,
     /// A join other than `CROSS` or a comma without `ON` or `USING`.
     JoinWithoutCondition,
-    /// `ORDER BY` or `LIMIT` after `UNION`, `INTERSECT` or `EXCEPT`: ClickHouse applies it to
-    /// the last `SELECT` only; wrap the set operation in a subquery.
+    /// `ORDER BY` or `LIMIT` after `UNION`, `INTERSECT` or `EXCEPT`, which ClickHouse applies to
+    /// the last `SELECT` only, or after a query in parentheses, which ClickHouse refuses: select
+    /// from the query as a subquery, `SELECT * FROM (…) ORDER BY …`.
     SetOperationOrder,
     /// `UNION`, `INTERSECT` or `EXCEPT` without `ALL` or `DISTINCT`, or with `BY NAME`.
     SetQuantifier,

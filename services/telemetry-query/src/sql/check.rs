@@ -134,8 +134,10 @@ impl Checker {
                 return Err(clause(SqlClause::Expression));
             }
             // ClickHouse binds an ORDER BY or LIMIT after a set operation to its last SELECT,
-            // unlike the SQL standard and sqlparser.
-            if matches!(**body, SetExpr::SetOperation { .. })
+            // unlike the SQL standard and sqlparser, and refuses one after a query in
+            // parentheses, `(…) ORDER BY x`, wherever it stands (the service's row-limit wrapper
+            // included).
+            if matches!(**body, SetExpr::SetOperation { .. } | SetExpr::Query(_))
                 && (order_by.is_some() || limit_clause.is_some())
             {
                 return Err(clause(SqlClause::SetOperationOrder));
@@ -198,6 +200,7 @@ impl Checker {
             if !columns.is_empty() || from.is_some() || materialized.is_some() || at.is_some() {
                 return Err(clause(SqlClause::CteForm));
             }
+            unquoted(name)?;
             let shadows = VIEWS
                 .iter()
                 .chain([&DATABASE])
@@ -334,9 +337,10 @@ impl Checker {
         if let Some(having) = having {
             self.expr(having)?;
         }
-        for NamedWindowDefinition(_, window) in named_window {
+        for NamedWindowDefinition(window_name, window) in named_window {
+            unquoted(window_name)?;
             match window {
-                NamedWindowExpr::NamedWindow(_) => {}
+                NamedWindowExpr::NamedWindow(other) => unquoted(other)?,
                 NamedWindowExpr::WindowSpec(spec) => self.window_spec(spec)?,
             }
         }
@@ -345,8 +349,10 @@ impl Checker {
 
     fn select_item(&mut self, item: &mut SelectItem) -> Checked {
         match item {
-            SelectItem::UnnamedExpr(expr) | SelectItem::ExprWithAlias { expr, alias: _ } => {
-                self.expr(expr)
+            SelectItem::UnnamedExpr(expr) => self.expr(expr),
+            SelectItem::ExprWithAlias { expr, alias } => {
+                self.expr(expr)?;
+                unquoted(alias)
             }
             SelectItem::QualifiedWildcard(kind, options) => {
                 match kind {
@@ -889,6 +895,7 @@ impl Checker {
         let [ObjectNamePart::Identifier(ident)] = name.0.as_mut_slice() else {
             return Err(refused);
         };
+        unquoted(ident)?;
         let resolved = functions::resolve(&ident.value).ok_or(refused)?;
         ident.value.clone_from(&resolved.canonical);
         let kind = if resolved.combined {
@@ -959,7 +966,7 @@ impl Checker {
             }
             match over {
                 WindowType::WindowSpec(spec) => self.window_spec(spec)?,
-                WindowType::NamedWindow(_) => {}
+                WindowType::NamedWindow(window_name) => unquoted(window_name)?,
             }
         }
         Ok(())
@@ -1032,18 +1039,42 @@ const FALLBACK_WORDS: [&str; 31] = [
     "LAMBDA",
 ];
 
-/// A name in an expression: a column, a part of one, or a lambda parameter. One of
-/// [`FALLBACK_WORDS`] is a misread the parser left in the tree, refused as a syntax error at
-/// its position.
+/// A name in an expression: a column, a part of one, or a lambda parameter. It is
+/// [`unquoted`], and one of [`FALLBACK_WORDS`] is a misread the parser left in the tree,
+/// refused as a syntax error at its position.
 fn name(ident: &Ident) -> Checked {
+    unquoted(ident)?;
     if FALLBACK_WORDS
         .iter()
         .any(|word| word.eq_ignore_ascii_case(&ident.value))
     {
-        return Err(SqlRefusal::Syntax {
-            line: u32::try_from(ident.span.start.line).ok(),
-            column: u32::try_from(ident.span.start.column).ok(),
-        });
+        return Err(syntax_at(ident));
+    }
+    Ok(())
+}
+
+/// A syntax error at `ident`, with its position when the parser recorded one (it records none
+/// for a name it read from a `'…'` string).
+fn syntax_at(ident: &Ident) -> SqlRefusal {
+    let known = ident.span.start.line > 0;
+    SqlRefusal::Syntax {
+        line: known
+            .then(|| u32::try_from(ident.span.start.line).ok())
+            .flatten(),
+        column: known
+            .then(|| u32::try_from(ident.span.start.column).ok())
+            .flatten(),
+    }
+}
+
+/// Every name the walk meets that is not a table's (those are [`plain_name`]s): a column, an
+/// alias, a common table expression, a window, a lambda parameter, a function. The lexer refuses
+/// quoted identifiers, but sqlparser also reads a `'…'` string as a name in some of these places
+/// (`WITH 'x' AS (…)`, `AS 'x'`, `WINDOW 'w' AS (…)`, `OVER 'w'`), where ClickHouse expects an
+/// identifier and refuses the string as a syntax error: refused the same way.
+fn unquoted(ident: &Ident) -> Checked {
+    if ident.quote_style.is_some() {
+        return Err(syntax_at(ident));
     }
     Ok(())
 }
@@ -1114,6 +1145,7 @@ fn table_alias(alias: Option<&mut TableAlias>) -> Checked {
     if !columns.is_empty() || at.is_some() {
         return Err(clause(SqlClause::Expression));
     }
+    unquoted(name)?;
     if !*explicit && is_keyword(&name.value) {
         return Err(clause(SqlClause::KeywordAlias));
     }

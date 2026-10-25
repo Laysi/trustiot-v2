@@ -703,6 +703,24 @@ async fn the_endpoint_runs_only_checked_selects_as_the_callers_tenant() {
         assert_refusal_body(sql, &body, &details);
         eprintln!("endpoint class {class:>32}: {details}");
     }
+    // ClickHouse refuses ORDER BY or LIMIT after a query in parentheses: the check refuses it
+    // with the class that names the way the model can write it, which runs.
+    let views =
+        "SELECT point FROM tenant_telemetry_1m UNION ALL SELECT point FROM tenant_telemetry_1h";
+    let parenthesized = format!("({views}) ORDER BY point LIMIT 3");
+    let (status, body) = run(&service, Some(&token_c), &parenthesized, None).await;
+    assert_eq!(status, 422, "{parenthesized}: {body}");
+    assert_refusal_body(
+        &parenthesized,
+        &body,
+        &json!({"class": "clause_not_allowed", "clause": "set_operation_order"}),
+    );
+    let subquery = format!("SELECT * FROM ({views}) ORDER BY point LIMIT 3");
+    let (status, body) = run(&service, Some(&token_c), &subquery, None).await;
+    assert_eq!(status, 200, "{subquery}: {body}");
+    eprintln!(
+        "endpoint parenthesized query with ORDER BY: 422 set_operation_order; as a subquery: 200"
+    );
     let temperatures = "SELECT value_float FROM tenant_telemetry WHERE point = 'temperature'";
     let execution_stage: &[(&str, Option<u32>, Value)] = &[
         (

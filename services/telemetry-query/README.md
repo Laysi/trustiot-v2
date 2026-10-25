@@ -101,7 +101,7 @@
 | --- | --- | --- |
 | `too_long` | `max_bytes` | SQL 超過 16 KiB，或印回的文字（補上 `trustiot.`、加上括號）超過 |
 | `too_complex` | | token 太多或巢狀太深，包括印回時加上的 token 與括號 |
-| `syntax` | `line`、`column`（知道時） | 解析不了 |
+| `syntax` | `line`、`column`（知道時） | 解析不了；sqlparser 誤把關鍵字讀成名稱（第 3 步）；該寫名稱的地方寫了字串（`AS 'x'`、`WITH 'x' AS (…)`、`WINDOW 'w' AS (…)`，ClickHouse 不接受） |
 | `character_not_allowed` | `line`、`column` | 檢查第 1 步的字元 |
 | `literal_not_allowed` | `line`、`column` | 第 2 步以外的 token：引號識別字、其他形式的字串或數字、參數等 |
 | `not_a_select` | | 不是 `SELECT` |

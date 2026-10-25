@@ -390,6 +390,24 @@ fn clauses_that_change_what_is_read_or_how_are_refused() {
             "SELECT point FROM tenant_telemetry_1m UNION ALL SELECT point FROM tenant_telemetry_1h LIMIT 1",
             clause(SqlClause::SetOperationOrder),
         ),
+        // ClickHouse refuses ORDER BY or LIMIT after a query in parentheses (the security
+        // review of 2026-10-26 found the first one passing the check).
+        (
+            "(SELECT point FROM tenant_telemetry_1m UNION ALL SELECT point FROM tenant_telemetry_1h) ORDER BY point LIMIT 3",
+            clause(SqlClause::SetOperationOrder),
+        ),
+        (
+            "((SELECT point FROM tenant_telemetry_1m UNION ALL SELECT point FROM tenant_telemetry_1h)) LIMIT 3",
+            clause(SqlClause::SetOperationOrder),
+        ),
+        (
+            "(SELECT point FROM tenant_telemetry) ORDER BY point",
+            clause(SqlClause::SetOperationOrder),
+        ),
+        (
+            "SELECT point FROM tenant_telemetry WHERE point IN ((SELECT point FROM tenant_telemetry_1m) LIMIT 1)",
+            clause(SqlClause::SetOperationOrder),
+        ),
         (
             "SELECT point FROM tenant_telemetry_1m UNION SELECT point FROM tenant_telemetry_1h",
             clause(SqlClause::SetQuantifier),
@@ -487,6 +505,39 @@ fn a_keyword_the_parser_fell_back_to_a_name_for_is_refused() {
     }
     passes(
         "SELECT point FROM tenant_telemetry WHERE NOT value_bool AND NOT EXISTS (SELECT 1 FROM tenant_telemetry_1m)",
+    );
+}
+
+/// sqlparser reads a `'…'` string as a name after `AS` and in `WITH`, `WINDOW` and `OVER`, where
+/// ClickHouse expects an identifier and refuses the string (the security review of 2026-10-26
+/// found these passing the check). sqlparser keeps no position for such a name.
+#[test]
+fn a_string_where_a_name_belongs_is_refused() {
+    let nowhere = SqlRefusal::Syntax {
+        line: None,
+        column: None,
+    };
+    for sql in [
+        "WITH 'telemetry' AS (SELECT point FROM tenant_telemetry) SELECT point FROM telemetry",
+        "WITH 'a' AS (SELECT point FROM tenant_telemetry) SELECT * FROM a",
+        "SELECT point AS 'x' FROM tenant_telemetry",
+        "SELECT point AS 'x'' FROM system.users --' FROM tenant_telemetry",
+        "SELECT * FROM tenant_telemetry AS 'x'",
+        "SELECT * FROM (SELECT point FROM tenant_telemetry) AS 'x'",
+        "SELECT sum(value_float) OVER w FROM tenant_telemetry WINDOW 'w' AS (ORDER BY ts)",
+        "SELECT sum(value_float) OVER 'w' FROM tenant_telemetry WINDOW w AS (ORDER BY ts)",
+    ] {
+        assert_eq!(refusal(sql), nowhere, "{sql}");
+    }
+    assert_eq!(
+        refusal("SELECT point FROM tenant_telemetry AS t WHERE t.'point' = ''"),
+        SqlRefusal::Syntax {
+            line: Some(1),
+            column: Some(49)
+        }
+    );
+    passes(
+        "WITH a AS (SELECT point FROM tenant_telemetry) SELECT sum(1) OVER w AS n FROM a AS b WINDOW w AS (ORDER BY point)",
     );
 }
 

@@ -330,7 +330,9 @@ fn clause_hint(clause: SqlClause) -> Result<String, ToolError> {
              AT TIME ZONE."
         }
         SqlClause::SetOperationOrder => {
-            "Wrap the UNION, INTERSECT or EXCEPT in a subquery, and order or limit outside it."
+            "Select from the UNION, INTERSECT, EXCEPT or parenthesized query as a subquery, \
+             SELECT * FROM (...) ORDER BY ... LIMIT ...; ClickHouse refuses ORDER BY or LIMIT \
+             right after a query in parentheses."
         }
         SqlClause::SetQuantifier => "Write UNION ALL or UNION DISTINCT.",
         SqlClause::JoinWithoutCondition => "Give the join an ON or USING condition.",
