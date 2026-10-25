@@ -149,6 +149,14 @@ fn text_of(output: &ToolOutput) -> String {
         .collect()
 }
 
+/// At most 120 characters of `text`, for the printed evidence.
+fn shortened(text: &str) -> String {
+    match text.char_indices().nth(120) {
+        Some((end, _)) => format!("{}…", text.get(..end).unwrap_or(text)),
+        None => text.to_owned(),
+    }
+}
+
 /// Every log event as one line of text.
 fn logged(capture: &Capture) -> Vec<String> {
     capture
@@ -158,6 +166,10 @@ fn logged(capture: &Capture) -> Vec<String> {
         .collect()
 }
 
+#[allow(
+    clippy::print_stderr,
+    reason = "prints what the model got, for the test report"
+)]
 #[tokio::test]
 async fn refused_sql_reaches_the_model_as_its_class_and_never_the_databases() {
     let (capture, _guard) = Capture::install();
@@ -246,8 +258,8 @@ async fn refused_sql_reaches_the_model_as_its_class_and_never_the_databases() {
         (deep, "too many tokens or nests too deeply"),
     ];
     let sent = cases.len();
-    for (sql, expected) in cases {
-        let sql = format!("{sql} -- {MARKER}");
+    for (written, expected) in cases {
+        let sql = format!("{written} -- {MARKER}");
         let output = ask(&registry, &context, json!({ "sql": sql })).await;
         let text = text_of(&output);
         assert!(output.is_error, "{sql}: {text}");
@@ -256,6 +268,7 @@ async fn refused_sql_reaches_the_model_as_its_class_and_never_the_databases() {
         for service_text in ["validation_failed", "message_key", "details", "class"] {
             assert!(!text.contains(service_text), "{sql}: {text}");
         }
+        eprintln!("refused {:?}\n  the model got: {text}", shortened(&written));
     }
 
     // Too long for the endpoint: refused by the tool, nothing sent.
@@ -410,6 +423,10 @@ fn refusal(details: &Value) -> String {
     .to_string()
 }
 
+#[allow(
+    clippy::print_stderr,
+    reason = "prints what the model got, for the test report"
+)]
 #[tokio::test]
 async fn answers_limits_and_failures_reach_the_model_as_fixed_text() {
     let (capture, _guard) = Capture::install();
@@ -589,6 +606,7 @@ async fn answers_limits_and_failures_reach_the_model_as_fixed_text() {
         assert!(text.contains(expected), "{name}: {text}");
         assert!(!text.contains(SECRET), "{name}: {text}");
         assert!(!text.contains(MARKER), "{name}: {text}");
+        eprintln!("{name} ({status})\n  the model got: {}", shortened(&text));
     }
 
     // The answer, as the model got it: the columns, the rows with long text cut, the period.
