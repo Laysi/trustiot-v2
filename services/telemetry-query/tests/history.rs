@@ -741,6 +741,28 @@ async fn history_matches_clickhouse_within_the_queryable_period() {
             "validation_failed",
             Some("telemetry.range_invalid"),
         ),
+        // chrono reads years up to +262142, and the cells' DateTime ends in 2106: a range may
+        // end at most a year ahead.
+        (
+            Some(fixture.token.as_str()),
+            format!(
+                "{base}?point=temp&from={}&to=%2B262142-12-31T23:59:00Z&tz=UTC",
+                rfc3339(now - HOUR_MS)
+            ),
+            422,
+            "validation_failed",
+            Some("telemetry.range_invalid"),
+        ),
+        (
+            Some(fixture.token.as_str()),
+            format!(
+                "{base}?point=temp&from={}&to=2106-02-08T00:00:00Z&tz=UTC&interval=1h",
+                rfc3339(now - HOUR_MS)
+            ),
+            422,
+            "validation_failed",
+            Some("telemetry.range_invalid"),
+        ),
         (
             Some(fixture.token.as_str()),
             format!(

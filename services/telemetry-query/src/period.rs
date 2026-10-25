@@ -137,15 +137,20 @@ impl Windows {
     /// start plus [`PERIOD_MARGIN`], rounded up to a whole millisecond (raw) or to the view's
     /// cell, a UTC minute or hour. Every row and cell at or after it is in the database's window
     /// as long as ClickHouse's clock is less than the margin ahead of `now`.
+    ///
+    /// The arithmetic is checked: a window reaching before chrono's first time starts at that
+    /// time (the database's filter then keeps every row too), and a start past chrono's last
+    /// time stays at the last time (later, never wider).
     #[must_use]
     pub fn earliest(self, view: View, now: DateTime<Utc>) -> DateTime<Utc> {
         let start = match view {
-            View::Raw => now - TimeDelta::days(i64::from(self.raw_days)),
-            View::Minute | View::Hour => now
-                .checked_sub_months(Months::new(self.get(view)))
-                .unwrap_or(DateTime::<Utc>::MIN_UTC),
-        };
-        let start = start + PERIOD_MARGIN;
+            View::Raw => now.checked_sub_signed(TimeDelta::days(i64::from(self.raw_days))),
+            View::Minute | View::Hour => now.checked_sub_months(Months::new(self.get(view))),
+        }
+        .unwrap_or(DateTime::<Utc>::MIN_UTC);
+        let start = start
+            .checked_add_signed(PERIOD_MARGIN)
+            .unwrap_or(DateTime::<Utc>::MAX_UTC);
         match view {
             View::Raw => ceil(start, TimeDelta::milliseconds(1)),
             View::Minute => ceil(start, TimeDelta::minutes(1)),
@@ -154,7 +159,8 @@ impl Windows {
     }
 }
 
-/// `time` rounded up to a multiple of `unit` since the Unix epoch (`unit` divides a day).
+/// `time` rounded up to a multiple of `unit` since the Unix epoch (`unit` divides a day);
+/// chrono's last time when that is past it.
 fn ceil(time: DateTime<Utc>, unit: TimeDelta) -> DateTime<Utc> {
     let unit_nanos = unit.num_nanoseconds().unwrap_or(i64::MAX);
     let since_midnight = time.num_seconds_from_midnight();
@@ -163,7 +169,8 @@ fn ceil(time: DateTime<Utc>, unit: TimeDelta) -> DateTime<Utc> {
     if into == 0 {
         time
     } else {
-        time + TimeDelta::nanoseconds(unit_nanos - into)
+        time.checked_add_signed(TimeDelta::nanoseconds(unit_nanos - into))
+            .unwrap_or(DateTime::<Utc>::MAX_UTC)
     }
 }
 
@@ -238,6 +245,34 @@ mod tests {
             }
             now += TimeDelta::minutes(37);
         }
+    }
+
+    #[test]
+    fn the_clamp_never_overflows() {
+        let windows = Windows::new(MAX_RAW_DAYS, MAX_MONTHS, MAX_MONTHS);
+        for view in [View::Raw, View::Minute, View::Hour] {
+            assert_eq!(
+                windows.earliest(view, DateTime::<Utc>::MIN_UTC),
+                ceil(
+                    DateTime::<Utc>::MIN_UTC + PERIOD_MARGIN,
+                    match view {
+                        View::Raw => TimeDelta::milliseconds(1),
+                        View::Minute => TimeDelta::minutes(1),
+                        View::Hour => TimeDelta::hours(1),
+                    }
+                ),
+                "{view:?}: a window before chrono's first time starts there"
+            );
+            assert!(
+                Windows::new(1, 1, 1).earliest(view, DateTime::<Utc>::MAX_UTC)
+                    < DateTime::<Utc>::MAX_UTC
+            );
+        }
+        assert_eq!(
+            ceil(DateTime::<Utc>::MAX_UTC, TimeDelta::hours(1)),
+            DateTime::<Utc>::MAX_UTC,
+            "a start past chrono's last time stays at it"
+        );
     }
 
     #[test]

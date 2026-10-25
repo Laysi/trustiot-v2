@@ -45,7 +45,7 @@ use axum::extract::{FromRef, Path, Query, State};
 use axum::http::header::CACHE_CONTROL;
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, TimeDelta, Utc};
 use contract::{ErrorBody, ErrorCode, MessageKey, TenantId};
 use serde::{Deserialize, Serialize};
 use service_kit::identity::{IdentityVerifier, UserIdentity};
@@ -76,6 +76,11 @@ pub const MAX_LATEST_POINTS: usize = 1_000;
 pub const MAX_POINT_LEN: usize = 128;
 /// Longest time zone name accepted.
 const MAX_TIME_ZONE_LEN: usize = 64;
+/// How far after the request a range may end. The one-minute and one-hour cells' `bucket` is a
+/// ClickHouse `DateTime`, which ends in 2106 and wraps silently past it (an empty answer
+/// although data exists), and chrono reads years up to +262142; one year ahead is longer than any
+/// period a request is measured against.
+pub const MAX_RANGE_END_AHEAD: TimeDelta = TimeDelta::days(366);
 
 const QUERY_INVALID: MessageKey = MessageKey::new("telemetry.query_invalid");
 const DEVICE_ID_INVALID: MessageKey = MessageKey::new("telemetry.device_id_invalid");
@@ -487,10 +492,20 @@ fn plan(
     now: DateTime<Utc>,
 ) -> Result<Plan, Box<Response>> {
     validate(params)?;
+    // Before any arithmetic on the request's times.
+    if !ends_in_time(params.to, now) {
+        return Err(Box::new(invalid("to", RANGE_INVALID)));
+    }
     match params.interval {
         Some(interval) => plan_interval(params, interval, interval.view(), windows, now),
         None => plan_automatic(params, windows, now),
     }
+}
+
+/// Whether a range ending at `to` ends at most [`MAX_RANGE_END_AHEAD`] after `now`.
+fn ends_in_time(to: DateTime<Utc>, now: DateTime<Utc>) -> bool {
+    now.checked_add_signed(MAX_RANGE_END_AHEAD)
+        .is_some_and(|limit| to <= limit)
 }
 
 /// The plan of `interval` read from `view`: the range cut to that view's period. Also the plan
@@ -1405,14 +1420,63 @@ mod tests {
             422,
             "a month of minutes has too many buckets"
         );
+        // A century of cells, in both aggregates, has more days than buckets.
         assert_eq!(
-            status(plan_at(
-                &params("2026-10-21T00:00:00Z", "3000-01-01T00:00:00Z", None),
+            status(plan(
+                &params("1950-01-01T00:00:00Z", NOW, None),
+                Windows::new(7, 1_200, 1_200),
                 now
             )),
             422,
             "no interval fits"
         );
+    }
+
+    async fn body_json(response: Response) -> serde_json::Value {
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("the body");
+        serde_json::from_slice(&bytes).expect("a JSON body")
+    }
+
+    #[tokio::test]
+    async fn a_range_ends_at_most_a_year_ahead() {
+        let now = at(NOW);
+        // chrono's RFC 3339 reads a signed year of any length, up to +262142: such a `to` is
+        // refused before any arithmetic on it, so nothing overflows.
+        for to in [
+            "+262142-12-31T23:59:00Z",
+            "2106-02-08T00:00:00Z",
+            "2027-10-23T12:00:00.001Z",
+        ] {
+            let request: SeriesParams = serde_json::from_value(serde_json::json!({
+                "point": "temp",
+                "from": "2026-10-21T00:00:00Z",
+                "to": to,
+                "tz": "UTC",
+            }))
+            .expect("the query string parses");
+            for interval in [None, Some(Interval::Raw), Some(Interval::Day1)] {
+                let request = SeriesParams {
+                    interval,
+                    ..request.clone()
+                };
+                let refused = plan_at(&request, now).expect_err(to);
+                assert_eq!(refused.status().as_u16(), 422, "{to}");
+            }
+        }
+        let refused = plan_at(
+            &params("2026-10-21T00:00:00Z", "2106-02-08T00:00:00Z", None),
+            now,
+        )
+        .expect_err("past the cells' DateTime");
+        let body = body_json(*refused).await;
+        assert_eq!(body["message_key"], "telemetry.range_invalid");
+        assert_eq!(body["details"]["parameter"], "to");
+        // A year ahead to the day still plans.
+        assert!(plan_at(&params(NOW, "2027-10-22T12:00:00Z", None), now).is_ok());
+        assert!(ends_in_time(at("2027-10-22T12:00:00Z"), now));
+        assert!(!ends_in_time(DateTime::<Utc>::MAX_UTC, now));
     }
 
     #[test]
