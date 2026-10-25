@@ -1,0 +1,42 @@
+[package]
+name = "lab-dataset"
+description = "TrustIoT v2 lab dataset tools (checklist M7): the datasets/lab index format and its checks, and the loader that writes a dataset into ClickHouse's telemetry table as the ingest service writes it."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+repository.workspace = true
+
+# A library for the Rust integration tests that load a dataset (ingest, telemetry-query,
+# assistant), and the `lab-dataset` command (src/main.rs) for loading one by hand.
+
+[[bin]]
+name = "lab-dataset"
+path = "src/main.rs"
+test = false
+doc = false
+
+[dependencies]
+# Dataset times; `now` for `--end-before now`.
+chrono = { workspace = true, features = ["now"] }
+# The migration Job's HTTP client (`migrate::http`): http://, or https:// trusting only a named
+# CA, with ring; not reqwest (see tools/migrate/src/http.rs).
+migrate = { path = "../migrate" }
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+# Segment file hashes and the derived device and stream IDs.
+sha2.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["macros", "rt"] }
+toml.workspace = true
+# `v8`: device and stream IDs derived from a hash; `serde`: the load summary.
+uuid = { workspace = true, features = ["serde", "v8"] }
+
+[dev-dependencies]
+# The ClickHouse test harness of services/ingest/tests/common (included with #[path]).
+reqwest.workspace = true
+tokio = { workspace = true, features = ["macros", "process", "rt", "time"] }
+uuid = { workspace = true, features = ["v4"] }
+
+[lints]
+workspace = true

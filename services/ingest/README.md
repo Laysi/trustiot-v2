@@ -58,7 +58,7 @@ DDL 是 `migrations/clickhouse/` 的 SQL 檔，部署時由 migration Job（Lays
 
 ### 批次完成表 `trustiot.batch_commits`
 
-`tenant_id`、`gateway_id`、`stream_id`、`seq`、`row_count`（筆數）、`committed_at`（完成時間）。一批資料全部寫進 `telemetry` 並落盤後，ingest 才寫一筆完成紀錄，紀錄也落盤後才回確認；串流的高水位只取 `max(seq)`，不取自 `telemetry`（跨 partition 的 INSERT 不是原子的）。`ReplacingMergeTree`、`ORDER BY (stream_id, seq)`；同樣開 fsync；`TTL toDateTime(committed_at) + toIntervalDay(<天數>)`，天數與 `telemetry` 相同（由 migration Job 設定，見上一節），`committed_at` 不早於該批的 `received_at`，所以完成紀錄的保存期限不短於原始資料，測試會比對兩張表的 TTL 天數。
+`tenant_id`、`gateway_id`、`stream_id`、`seq`、`row_count`（筆數）、`committed_at`（完成時間）。一批資料全部寫進 `telemetry` 並落盤後，ingest 才寫一筆完成紀錄，紀錄也落盤後才回確認；串流的高水位只取 `max(seq)`，不取自 `telemetry`（跨 partition 的 INSERT 不是原子的）。`ReplacingMergeTree`、`ORDER BY (stream_id, seq)`；同樣開 fsync；`TTL toDateTime(committed_at) + toIntervalDay(<天數>)`，天數與 `telemetry` 相同（由 migration Job 設定，見上一節），`committed_at` 不早於該批的 `received_at`，所以完成紀錄的保存期限不短於原始資料，測試會比對兩張表的 TTL 天數。測試資料的載入工具 `tools/lab-dataset` 也寫完成紀錄（只在 `src/clickhouse.rs` 的 `commit_batch` 一處，見 [datasets/lab/README.md](../../datasets/lab/README.md)「批次與完成紀錄」）：改這張表的鍵或欄位時（例如 Laysi/trustiot-v2#639）一併修改。
 
 ### 日誌表 `trustiot_logs.otel_logs`、`otel_traces`
 
@@ -144,7 +144,7 @@ CARGO_BUILD_JOBS=2 cargo test -p ingest
 CARGO_BUILD_JOBS=2 cargo test -p ingest --test clickhouse -- --nocapture
 ```
 
-`tests/clickhouse.rs` 需要 ClickHouse：設了 `TEST_CLICKHOUSE_URL`（加上有 access management 權限的 `TEST_CLICKHOUSE_USER`、`TEST_CLICKHOUSE_PASSWORD`）就用它；否則以 podman 或 docker 起一個暫時的容器（記憶體上限 1500 MB，測完移除）；兩者都沒有時略過，但設了 `CI` 時改為失敗。映像與 `scripts/lib/stack.ts`、`deploy/chart/values.yaml` 固定同一個 digest，`bun test deploy/chart` 檢查三處一致。
+`tests/clickhouse.rs` 需要 ClickHouse：設了 `TEST_CLICKHOUSE_URL`（加上有 access management 權限的 `TEST_CLICKHOUSE_USER`、`TEST_CLICKHOUSE_PASSWORD`）就用它；否則以 podman 或 docker 起一個暫時的容器（記憶體上限 1500 MB，測完移除）；兩者都沒有時略過，但設了 `CI` 時改為失敗。映像與 `scripts/lib/stack.ts`、`deploy/chart/values.yaml` 固定同一個 digest，`bun test deploy/chart` 檢查三處一致。這個容器與 HTTP client 在 `tests/common/mod.rs`，`services/telemetry-query` 與 `tools/lab-dataset` 的測試也以 `#[path]` 引用它，改它時一併跑這兩個 crate 的測試。
 
 測試內容：
 

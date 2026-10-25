@@ -1,0 +1,96 @@
+# Synthetic fixture in the lab dataset format (Laysi/trustiot-v2#679). Fixed files, written once
+# and checked in: there is no generator (checklist M7). What each part shows is described in
+# datasets/lab/README.md, section 「合成 fixture」; tools/lab-dataset/tests/synthetic_fixture.rs
+# checks those properties in the content.
+
+format = 1
+name = "synthetic"
+version = 1
+description = "Four hours of one gateway: two meters on one RS485 converter and a press on another; a meter cleared to zero, a 32-bit pulse counter that wraps, a missed poll, a converter outage, and an uplink outage whose buffered batches arrive after newer ones"
+
+[[streams]]
+key = "live"
+description = "Batches sent as they form; the last one has no completion record (its acknowledgement was lost)"
+
+[[streams]]
+key = "backlog"
+description = "Batches buffered during the uplink outage of 00:45 to 01:25, sent after the uplink returned at 01:41"
+
+[[devices]]
+key = "meter-1"
+model = "three-phase-meter"
+converter = "rs485-a"
+unit = 1
+interval_s = 300
+points = [
+  { key = "energy_kwh", type = "float", kind = "cumulative", unit = "kWh" },
+  { key = "power_kw", type = "float", kind = "gauge", unit = "kW" },
+]
+
+[[devices]]
+key = "meter-2"
+model = "pulse-meter"
+converter = "rs485-a"
+unit = 2
+interval_s = 300
+points = [
+  { key = "pulses", type = "int", kind = "cumulative", wraps_at = 4294967296 },
+  { key = "power_kw", type = "float", kind = "gauge", unit = "kW" },
+]
+
+[[devices]]
+key = "press-1"
+model = "press-controller"
+converter = "rs485-b"
+unit = 1
+interval_s = 300
+points = [
+  { key = "running", type = "bool", kind = "state" },
+  { key = "mode", type = "string", kind = "state" },
+  { key = "cycle_count", type = "int", kind = "cumulative" },
+]
+
+[[segments]]
+key = "part-1"
+location = "segments/part-1.jsonl"
+bytes = 37669
+sha256 = "587cd184bb5c4836b06e0210624676e79fc9b311c519658b678e1e5870def518"
+rows = 211
+reading_time = { start = "2026-01-05T22:00:00.120Z", end = "2026-01-06T00:40:00.930Z" }
+receive_time = { start = "2026-01-05T22:10:02.500Z", end = "2026-01-06T00:40:02.500Z" }
+batches = [
+  { stream = "live", first = 1, last = 11 },
+]
+series = [
+  { device = "meter-1", point = "energy_kwh", rows = 33 },
+  { device = "meter-1", point = "power_kw", rows = 33 },
+  { device = "meter-2", point = "pulses", rows = 32 },
+  { device = "meter-2", point = "power_kw", rows = 32 },
+  { device = "press-1", point = "running", rows = 27 },
+  { device = "press-1", point = "mode", rows = 27 },
+  { device = "press-1", point = "cycle_count", rows = 27 },
+]
+
+[[segments]]
+key = "part-2"
+location = "segments/part-2.jsonl"
+bytes = 18867
+sha256 = "e16e8429a524b54f096077fec05d7704c058bf6dc43fece9058ca2c5ae75699e"
+rows = 105
+reading_time = { start = "2026-01-06T00:45:00.120Z", end = "2026-01-06T01:55:00.930Z" }
+receive_time = { start = "2026-01-06T01:41:00.000Z", end = "2026-01-06T01:55:02.500Z" }
+batches = [
+  { stream = "live", first = 12, last = 13 },
+  { stream = "backlog", first = 1, last = 3 },
+]
+# Rows written, completion record missing: the acknowledgement of the last batch was lost.
+uncommitted = [{ stream = "live", batch_seq = 13 }]
+series = [
+  { device = "meter-1", point = "energy_kwh", rows = 15 },
+  { device = "meter-1", point = "power_kw", rows = 15 },
+  { device = "meter-2", point = "pulses", rows = 15 },
+  { device = "meter-2", point = "power_kw", rows = 15 },
+  { device = "press-1", point = "running", rows = 15 },
+  { device = "press-1", point = "mode", rows = 15 },
+  { device = "press-1", point = "cycle_count", rows = 15 },
+]

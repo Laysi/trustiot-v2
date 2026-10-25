@@ -237,6 +237,21 @@ impl ClickHouse {
         Some(Self::start_container(runtime, client, &[]).await)
     }
 
+    /// Always a throwaway container, whatever `TEST_CLICKHOUSE_URL` says: for a test that changes
+    /// server-wide state a shared server must not keep, such as stopped merges or an account that
+    /// reads every row (tools/lab-dataset/tests/clickhouse_load.rs).
+    pub async fn start_throwaway() -> Option<Self> {
+        let Some(runtime) = container_runtime() else {
+            unavailable("podman or docker");
+            return None;
+        };
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(60))
+            .build()
+            .expect("build the HTTP client");
+        Some(Self::start_container(runtime, client, &[]).await)
+    }
+
     /// A throwaway container whose data directory is a tmpfs of `size` (for example `256m`), so a
     /// test can fill the server's disk with [`ClickHouse::exec`]. Always a container, whatever
     /// `TEST_CLICKHOUSE_URL` says: a shared server's disk is not the test's to fill.
