@@ -21,7 +21,7 @@ use crate::config::{
 };
 use crate::passwords::Api;
 use crate::registry::{Migration, Registry};
-use crate::retention::RawRetention;
+use crate::retention::Retention;
 use crate::secret::Password;
 use crate::{Error, Report, clickhouse_admin, http, sha256_hex};
 
@@ -29,8 +29,16 @@ use crate::{Error, Report, clickhouse_admin, http, sha256_hex};
 /// tables, nothing else.
 pub const COLLECTOR_ROLE: &str = "trustiot_otel_collector";
 
-/// The tenant role of decision 14 (`0004_access.sql`): SELECT on the tenant view, nothing else.
+/// The tenant role of decision 14 (`0004_access.sql`): SELECT on the tenant views, nothing else.
 pub const TENANT_READER_ROLE: &str = "trustiot_tenant_reader";
+
+/// The views the tenant role reads, and nothing else: the raw readings (`0005_tenant_view.sql`)
+/// and the one-minute and one-hour aggregates (`0010_telemetry_rollups.sql`).
+pub const TENANT_VIEWS: [&str; 3] = [
+    "tenant_telemetry",
+    "tenant_telemetry_1m",
+    "tenant_telemetry_1h",
+];
 
 const RETRY_EVERY: Duration = Duration::from_secs(2);
 const REPORT_EVERY: Duration = Duration::from_secs(30);
@@ -89,18 +97,22 @@ const COLLECTOR_ACCOUNTS: &str = "SELECT DISTINCT user_name FROM system.role_gra
 WHERE granted_role_name = {role:String} AND user_name IS NOT NULL AND user_name != currentUser()
   AND user_name IN (SELECT name FROM system.users WHERE storage != 'users_xml')
 ORDER BY user_name FORMAT TSV";
-/// The tenant role's grants beyond SELECT on the tenant view plus roles granted to it, which must
-/// be 0, and its SELECT on the tenant view, which must be 1. telemetry-query grants this role to
-/// every tenant account it creates, so anything added to the role would reach every tenant
-/// (services/ingest/README.md, "租戶隔離"), and without the SELECT no tenant can read.
+/// The tenant role's grants beyond SELECT on the tenant views plus roles granted to it, which
+/// must be 0, and the tenant views it may SELECT, comma-separated, which must be all of
+/// [`TENANT_VIEWS`]. telemetry-query grants this role to every tenant account it creates, so
+/// anything added to the role would reach every tenant (services/ingest/README.md, "租戶隔離"),
+/// and without a SELECT no tenant can read that view.
 const READER_GRANTS: &str = "SELECT
   (SELECT count() FROM system.grants WHERE role_name = {role:String} AND NOT (
-     database = 'trustiot' AND table = 'tenant_telemetry' AND access_type = 'SELECT'
-     AND column IS NULL AND grant_option = 0 AND is_partial_revoke = 0))
+     database = 'trustiot' AND has({views:Array(String)}, ifNull(table, ''))
+     AND access_type = 'SELECT' AND column IS NULL AND grant_option = 0
+     AND is_partial_revoke = 0))
   + (SELECT count() FROM system.role_grants WHERE role_name = {role:String}),
-  (SELECT count() FROM system.grants WHERE role_name = {role:String}
-     AND database = 'trustiot' AND table = 'tenant_telemetry' AND access_type = 'SELECT'
-     AND column IS NULL AND grant_option = 0 AND is_partial_revoke = 0)
+  (SELECT arrayStringConcat(arraySort(groupUniqArray(ifNull(table, ''))), ',')
+   FROM system.grants WHERE role_name = {role:String}
+     AND database = 'trustiot' AND has({views:Array(String)}, ifNull(table, ''))
+     AND access_type = 'SELECT' AND column IS NULL AND grant_option = 0
+     AND is_partial_revoke = 0)
 FORMAT TSV";
 /// Who holds the tenant role besides those allowed to: telemetry-query's account WITH ADMIN
 /// OPTION, and accounts named trustiot_tenant_account_* without it. Anyone who may grant the
@@ -133,12 +145,46 @@ const TELEMETRY_QUERY_EXPECTED_ROLES: [&str; 1] = ["trustiot_tenant_reader\t0\t1
 /// How many host rules let the account log in; `HOST NONE` leaves none.
 const USER_HOSTS: &str = "SELECT length(host_ip) + length(host_names) + length(host_names_regexp)
   + length(host_names_like) FROM system.users WHERE name = {user:String} FORMAT TSV";
-/// A table whose TTL is the raw data retention (Laysi/trustiot-v2#92): the server-time column it
-/// counts from and the statement that sets it.
+/// The unit a managed TTL counts in.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TtlUnit {
+    /// The raw data and the completion records (Laysi/trustiot-v2#92).
+    Days,
+    /// The aggregates (Laysi/trustiot-v2#141).
+    Months,
+}
+
+impl TtlUnit {
+    /// The unit's name in the run's messages, and the name of the `MODIFY TTL` parameter.
+    const fn name(self) -> &'static str {
+        match self {
+            Self::Days => "days",
+            Self::Months => "months",
+        }
+    }
+}
+
+/// A table whose TTL is a retention the run sets: the server-time column it counts from, its
+/// unit, and the statement that sets it.
 struct RetentionTable {
     table: &'static str,
     column: &'static str,
+    unit: TtlUnit,
     modify: &'static str,
+}
+
+impl RetentionTable {
+    /// The TTL as the migration files create it, for the message that asks an administrator to
+    /// set it back.
+    fn form(&self) -> String {
+        match self.unit {
+            TtlUnit::Days => format!("TTL toDateTime({}) + toIntervalDay(<days>)", self.column),
+            TtlUnit::Months => format!(
+                "TTL {} + toIntervalMonth(<months>) + toIntervalDay(1)",
+                self.column
+            ),
+        }
+    }
 }
 
 /// Raw telemetry expires by the server's receive time, never the gateway's timestamp
@@ -146,6 +192,7 @@ struct RetentionTable {
 const TELEMETRY_RETENTION: RetentionTable = RetentionTable {
     table: "telemetry",
     column: "received_at",
+    unit: TtlUnit::Days,
     modify: "ALTER TABLE trustiot.telemetry
 MODIFY TTL toDateTime(received_at) + toIntervalDay({days:UInt32})",
 };
@@ -155,12 +202,94 @@ MODIFY TTL toDateTime(received_at) + toIntervalDay({days:UInt32})",
 const COMMITS_RETENTION: RetentionTable = RetentionTable {
     table: "batch_commits",
     column: "committed_at",
+    unit: TtlUnit::Days,
     modify: "ALTER TABLE trustiot.batch_commits
 MODIFY TTL toDateTime(committed_at) + toIntervalDay({days:UInt32})",
 };
 
+/// The aggregates expire by the day the server received their readings, a whole number of
+/// calendar months after it; the day added keeps a cell until its last reading of that day is
+/// at least the months old (0010_telemetry_rollups.sql).
+const MINUTE_RETENTION: RetentionTable = RetentionTable {
+    table: "telemetry_1m",
+    column: "received_day",
+    unit: TtlUnit::Months,
+    modify: "ALTER TABLE trustiot.telemetry_1m
+MODIFY TTL received_day + toIntervalMonth({months:UInt32}) + toIntervalDay(1)",
+};
+
+const HOUR_RETENTION: RetentionTable = RetentionTable {
+    table: "telemetry_1h",
+    column: "received_day",
+    unit: TtlUnit::Months,
+    modify: "ALTER TABLE trustiot.telemetry_1h
+MODIFY TTL received_day + toIntervalMonth({months:UInt32}) + toIntervalDay(1)",
+};
+
+/// The tables whose TTL the run sets, from the one that must keep its rows longest to the one
+/// that may keep them shortest: each keeps them at least as long as the next
+/// (`retention::AggregateRetention::new` checks the settings; the run keeps it true while it
+/// changes the tables one after the other).
+const RETENTION_TABLES: [&RetentionTable; 4] = [
+    &HOUR_RETENTION,
+    &MINUTE_RETENTION,
+    &COMMITS_RETENTION,
+    &TELEMETRY_RETENTION,
+];
+
+/// The settings in the order of [`RETENTION_TABLES`].
+const fn retention_targets(retention: Retention) -> [u32; 4] {
+    [
+        retention.aggregates.hour_months(),
+        retention.aggregates.minute_months(),
+        retention.raw.days(),
+        retention.raw.days(),
+    ]
+}
+
+/// The TTL changes that take the tables of [`RETENTION_TABLES`] from `current` to `targets`, in
+/// the order the run makes them, as (index, from, to): first every table that gets longer, from
+/// the longest-lived one down, then every table that gets shorter, from the shortest-lived one
+/// up. When `current` and `targets` both keep each table at least as long as the next, so does
+/// every state in between: a table grows only once the tables before it reached their target
+/// (at least its own) or already kept their rows longer, and shrinks only once the tables after
+/// it reached theirs (at most its own).
+fn retention_steps(
+    current: [u32; RETENTION_TABLES.len()],
+    targets: [u32; RETENTION_TABLES.len()],
+) -> Vec<(usize, u32, u32)> {
+    let changes = || current.into_iter().zip(targets).enumerate();
+    let longer = changes().filter(|(_, (from, to))| from < to);
+    let shorter = changes().rev().filter(|(_, (from, to))| from > to);
+    longer
+        .chain(shorter)
+        .map(|(index, (from, to))| (index, from, to))
+        .collect()
+}
+
 const TABLE_ENGINE: &str = "SELECT engine_full FROM system.tables
 WHERE database = 'trustiot' AND name = {table:String} FORMAT JSONEachRow";
+
+/// The TTL clause of a table's `engine_full`, between ` TTL ` and ` SETTINGS `.
+fn ttl_clause(engine_full: &str) -> Result<&str, String> {
+    let (_, after) = engine_full
+        .split_once(" TTL ")
+        .ok_or_else(|| "it has no TTL".to_owned())?;
+    Ok(after.split_once(" SETTINGS ").map_or(after, |(ttl, _)| ttl))
+}
+
+/// A whole number of the TTL: digits, or `_CAST(<digits>, 'UInt32')`, which is how ClickHouse
+/// 26.8 stores the query parameter of the run's own `MODIFY TTL`.
+fn ttl_number(text: &str) -> Option<u32> {
+    let digits = text
+        .strip_prefix("_CAST(")
+        .and_then(|rest| rest.strip_suffix(", 'UInt32')"))
+        .unwrap_or(text);
+    if digits.is_empty() || !digits.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+    digits.parse().ok()
+}
 
 /// The days of a TTL the run manages, read from a table's `engine_full`: exactly
 /// `TTL toDateTime(<column>) + toIntervalDay(<days>)`, as the migration files create it, or with
@@ -172,25 +301,31 @@ WHERE database = 'trustiot' AND name = {table:String} FORMAT JSONEachRow";
 /// When the table has no TTL or another one (an administrator changed it, for example to move
 /// old parts to another volume): the run does not overwrite what it does not recognise.
 pub fn managed_ttl_days(engine_full: &str, column: &str) -> Result<u32, String> {
-    let (_, after) = engine_full
-        .split_once(" TTL ")
-        .ok_or_else(|| "it has no TTL".to_owned())?;
-    let ttl = after.split_once(" SETTINGS ").map_or(after, |(ttl, _)| ttl);
-    let unrecognised = || format!("its TTL `{ttl}` is not one the migration Job manages");
-    let days = ttl
-        .strip_prefix("toDateTime(")
+    let ttl = ttl_clause(engine_full)?;
+    ttl.strip_prefix("toDateTime(")
         .and_then(|rest| rest.strip_prefix(column))
         .and_then(|rest| rest.strip_prefix(") + toIntervalDay("))
         .and_then(|rest| rest.strip_suffix(')'))
-        .ok_or_else(unrecognised)?;
-    let days = days
-        .strip_prefix("_CAST(")
-        .and_then(|rest| rest.strip_suffix(", 'UInt32')"))
-        .unwrap_or(days);
-    if days.is_empty() || !days.bytes().all(|byte| byte.is_ascii_digit()) {
-        return Err(unrecognised());
-    }
-    days.parse().map_err(|_| unrecognised())
+        .and_then(ttl_number)
+        .ok_or_else(|| format!("its TTL `{ttl}` is not one the migration Job manages"))
+}
+
+/// The months of an aggregate table's TTL the run manages, read from its `engine_full`: exactly
+/// `TTL <column> + toIntervalMonth(<months>) + toIntervalDay(1)`, which ClickHouse 26.8 stores as
+/// `(<column> + toIntervalMonth(<months>)) + toIntervalDay(1)`, with the months as digits (the
+/// migration file) or `_CAST(<months>, 'UInt32')` (the run's own `MODIFY TTL`).
+///
+/// # Errors
+///
+/// As [`managed_ttl_days`].
+pub fn managed_ttl_months(engine_full: &str, column: &str) -> Result<u32, String> {
+    let ttl = ttl_clause(engine_full)?;
+    ttl.strip_prefix('(')
+        .and_then(|rest| rest.strip_prefix(column))
+        .and_then(|rest| rest.strip_prefix(" + toIntervalMonth("))
+        .and_then(|rest| rest.strip_suffix(")) + toIntervalDay(1)"))
+        .and_then(ttl_number)
+        .ok_or_else(|| format!("its TTL `{ttl}` is not one the migration Job manages"))
 }
 
 /// Revokes an account's login without dropping it: reversible with `HOST ANY`, which is what
@@ -485,8 +620,8 @@ impl ClickHouse {
         }
     }
 
-    /// The DDL files, the raw data retention (when the registry has ClickHouse files, which
-    /// create the tables it applies to), then the accounts of the collector and of
+    /// The DDL files, the raw and aggregate data retention (when the registry has ClickHouse
+    /// files, which create the tables it applies to), then the accounts of the collector and of
     /// telemetry-query.
     ///
     /// # Errors
@@ -496,7 +631,7 @@ impl ClickHouse {
     pub async fn migrate(
         &self,
         registry: &Registry,
-        retention: RawRetention,
+        retention: Retention,
         collector: Option<&(String, Password)>,
         telemetry_query: Option<&Password>,
         report: &mut Report,
@@ -604,38 +739,37 @@ impl ClickHouse {
         Ok(())
     }
 
-    /// Sets the TTL of the telemetry and completion tables to `retention`, when it differs.
+    /// Sets the TTL of the telemetry, completion and aggregate tables to `retention`, where it
+    /// differs.
     ///
-    /// The completion records must never expire before the rows they describe, also while the
-    /// run changes the two tables one after the other: a longer completion TTL goes first, a
-    /// shorter one last. ClickHouse applies a new TTL to the existing parts with a `MATERIALIZE
-    /// TTL` mutation that runs in the background (`materialize_ttl_after_modify`, on by default):
-    /// without it, parts written under the old TTL would still expire by the old one.
+    /// Each table of [`RETENTION_TABLES`] must keep its rows at least as long as the next: the
+    /// completion records never expire before the rows they describe, the one-hour aggregates
+    /// never before the one-minute ones, and those never before the raw rows they summarise.
+    /// That stays true while the run changes the tables one after the other: it first lengthens
+    /// the tables that get longer, from the longest-lived one down, then shortens the ones that
+    /// get shorter, from the shortest-lived one up. It reads every TTL before it changes any, so
+    /// a TTL it does not recognise stops the run before anything changed. ClickHouse applies a
+    /// new TTL to the existing parts with a `MATERIALIZE TTL` mutation that runs in the
+    /// background (`materialize_ttl_after_modify`, on by default): without it, parts written
+    /// under the old TTL would still expire by the old one.
     async fn apply_retention(
         &self,
-        retention: RawRetention,
+        retention: Retention,
         report: &mut Report,
     ) -> Result<(), Error> {
-        let target = retention.days();
-        let commits = self.ttl_days(&COMMITS_RETENTION).await?;
-        let telemetry = self.ttl_days(&TELEMETRY_RETENTION).await?;
-        if commits < target {
-            self.set_ttl(&COMMITS_RETENTION, commits, target, report)
-                .await?;
+        let mut current = [0; RETENTION_TABLES.len()];
+        for (now, table) in current.iter_mut().zip(RETENTION_TABLES) {
+            *now = self.ttl(table).await?;
         }
-        if telemetry != target {
-            self.set_ttl(&TELEMETRY_RETENTION, telemetry, target, report)
-                .await?;
-        }
-        if commits > target {
-            self.set_ttl(&COMMITS_RETENTION, commits, target, report)
+        for (index, from, to) in retention_steps(current, retention_targets(retention)) {
+            self.set_ttl(RETENTION_TABLES[index], from, to, report)
                 .await?;
         }
         Ok(())
     }
 
-    /// The retention in days that `table` has now.
-    async fn ttl_days(&self, table: &RetentionTable) -> Result<u32, Error> {
+    /// The retention that `table` has now, in its unit.
+    async fn ttl(&self, table: &RetentionTable) -> Result<u32, Error> {
         let what = format!("read the TTL of trustiot.{}", table.table);
         let row = self
             .query(&what, TABLE_ENGINE, &[("table", table.table)])
@@ -649,11 +783,16 @@ impl ClickHouse {
                     cut(&row)
                 ))
             })?;
-        managed_ttl_days(&engine_full, table.column).map_err(|problem| {
+        let managed = match table.unit {
+            TtlUnit::Days => managed_ttl_days(&engine_full, table.column),
+            TtlUnit::Months => managed_ttl_months(&engine_full, table.column),
+        };
+        managed.map_err(|problem| {
             Error::ClickHouse(format!(
-                "trustiot.{}: {problem}; an administrator must set it back to \
-                 `TTL toDateTime({}) + toIntervalDay(<days>)` (docs/runbooks/migrations.md)",
-                table.table, table.column
+                "trustiot.{}: {problem}; an administrator must set it back to `{}` \
+                 (docs/runbooks/migrations.md)",
+                table.table,
+                table.form()
             ))
         })
     }
@@ -665,15 +804,16 @@ impl ClickHouse {
         to: u32,
         report: &mut Report,
     ) -> Result<(), Error> {
-        let days = to.to_string();
+        let unit = table.unit.name();
+        let value = to.to_string();
         self.query(
-            &format!("set the TTL of trustiot.{} to {to} days", table.table),
+            &format!("set the TTL of trustiot.{} to {to} {unit}", table.table),
             table.modify,
-            &[("days", &days)],
+            &[(unit, &value)],
         )
         .await?;
         report.change(format!(
-            "set the retention of ClickHouse table trustiot.{} to {to} days (was {from})",
+            "set the retention of ClickHouse table trustiot.{} to {to} {unit} (was {from})",
             table.table
         ));
         Ok(())
@@ -894,29 +1034,42 @@ impl ClickHouse {
                  (docs/runbooks/migrations.md)"
             )));
         }
+        let views = format!("['{}']", TENANT_VIEWS.join("','"));
         let reader = self
             .query(
                 "read the tenant role's grants",
                 READER_GRANTS,
-                &[("role", TENANT_READER_ROLE)],
+                &[("role", TENANT_READER_ROLE), ("views", &views)],
             )
             .await?;
-        let (extras, required) = reader
+        let (extras, granted) = reader
             .trim()
             .split_once('\t')
             .unwrap_or((reader.trim(), ""));
-        if required != "1" {
-            return Ok(Some(format!(
-                "the role {TENANT_READER_ROLE} lacks SELECT on trustiot.tenant_telemetry \
-                 (0005_tenant_view.sql gives it); no tenant account can read until an \
-                 administrator grants it again (docs/runbooks/migrations.md)"
-            )));
-        }
+        // Extras first: a SELECT with GRANT OPTION is an extra, not a missing grant.
         if extras != "0" {
             return Ok(Some(format!(
-                "the role {TENANT_READER_ROLE} has grants or roles beyond SELECT on \
-                 trustiot.tenant_telemetry; every tenant account gets this role, so an \
-                 administrator must revoke them (docs/runbooks/migrations.md)"
+                "the role {TENANT_READER_ROLE} has grants or roles beyond SELECT on the tenant \
+                 views ({}); every tenant account gets this role, so an administrator must \
+                 revoke them (docs/runbooks/migrations.md)",
+                TENANT_VIEWS
+                    .iter()
+                    .map(|view| format!("trustiot.{view}"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )));
+        }
+        let missing: Vec<String> = TENANT_VIEWS
+            .iter()
+            .filter(|view| !granted.split(',').any(|table| table == **view))
+            .map(|view| format!("trustiot.{view}"))
+            .collect();
+        if !missing.is_empty() {
+            return Ok(Some(format!(
+                "the role {TENANT_READER_ROLE} lacks SELECT on {} (0005_tenant_view.sql and \
+                 0010_telemetry_rollups.sql give it); no tenant account can read there until an \
+                 administrator grants it again (docs/runbooks/migrations.md)",
+                missing.join(", ")
             )));
         }
         let grantees = self
@@ -1036,6 +1189,98 @@ mod tests {
                 "accepted: {other}"
             );
         }
+    }
+
+    #[test]
+    fn reads_only_the_aggregate_ttl_it_manages() {
+        // As 0010_telemetry_rollups.sql creates it and as the run's MODIFY TTL stores it.
+        let file = "AggregatingMergeTree PARTITION BY toYYYYMM(received_day) ORDER BY (tenant_id, \
+                    device_id, point, bucket, gateway_id, stream_id, received_day) TTL \
+                    (received_day + toIntervalMonth(13)) + toIntervalDay(1) SETTINGS \
+                    fsync_after_insert = 1, index_granularity = 8192";
+        assert_eq!(managed_ttl_months(file, "received_day"), Ok(13));
+        let run = "AggregatingMergeTree ORDER BY a TTL (received_day + \
+                   toIntervalMonth(_CAST(48, 'UInt32'))) + toIntervalDay(1) SETTINGS x = 1";
+        assert_eq!(managed_ttl_months(run, "received_day"), Ok(48));
+        for other in [
+            "AggregatingMergeTree ORDER BY a SETTINGS index_granularity = 8192",
+            // Another column: the bucket is the gateway's time and must never drive retention.
+            "AggregatingMergeTree ORDER BY a TTL (bucket + toIntervalMonth(13)) + \
+             toIntervalDay(1) SETTINGS x = 1",
+            // Without the day, a cell would expire up to a day before its last reading is the
+            // months old; in days, the unit the settings are not in.
+            "AggregatingMergeTree ORDER BY a TTL received_day + toIntervalMonth(13) SETTINGS x = 1",
+            "AggregatingMergeTree ORDER BY a TTL (received_day + toIntervalDay(400)) + \
+             toIntervalDay(1) SETTINGS x = 1",
+            "AggregatingMergeTree ORDER BY a TTL (received_day + toIntervalMonth(13)) + \
+             toIntervalDay(2) SETTINGS x = 1",
+            "AggregatingMergeTree ORDER BY a TTL (received_day + toIntervalMonth(13)) + \
+             toIntervalDay(1), received_day + toIntervalMonth(1) TO VOLUME 'cold' SETTINGS x = 1",
+            "AggregatingMergeTree ORDER BY a TTL (received_day + toIntervalMonth(-1)) + \
+             toIntervalDay(1) SETTINGS x = 1",
+            "AggregatingMergeTree ORDER BY a TTL (received_day + toIntervalMonth(_CAST(13, \
+             'UInt64'))) + toIntervalDay(1) SETTINGS x = 1",
+        ] {
+            assert!(
+                managed_ttl_months(other, "received_day").is_err(),
+                "accepted: {other}"
+            );
+        }
+        // The day parser does not take the month form, nor the other way round.
+        assert!(managed_ttl_days(file, "received_day").is_err());
+        assert!(
+            managed_ttl_months(
+                "MergeTree ORDER BY a TTL toDateTime(received_at) + toIntervalDay(180)",
+                "received_at"
+            )
+            .is_err()
+        );
+    }
+
+    /// Whether each table keeps its rows at least as long as the next, the months of the
+    /// aggregates counted as their shortest span in days.
+    fn ordered(state: [u32; 4]) -> bool {
+        let [hour, minute, commits, telemetry] = state;
+        hour >= minute
+            && crate::retention::min_days_in_months(minute) >= commits
+            && commits >= telemetry
+    }
+
+    #[test]
+    fn retention_changes_keep_every_table_at_least_as_long_as_the_next() {
+        let values = [
+            [48, 13, 180, 180],
+            [13, 13, 31, 31],
+            [120, 120, 3650, 3650],
+            [60, 24, 400, 400],
+            [48, 14, 365, 365],
+            [24, 13, 393, 393],
+        ];
+        for current in values {
+            for targets in values {
+                let mut state = current;
+                for (index, from, to) in retention_steps(current, targets) {
+                    assert_eq!(state[index], from, "{current:?} -> {targets:?}");
+                    state[index] = to;
+                    assert!(
+                        ordered(state),
+                        "{current:?} -> {targets:?} passes through {state:?}"
+                    );
+                }
+                assert_eq!(state, targets, "{current:?} -> {targets:?}");
+            }
+        }
+        // The order the run's report shows: longer from the longest-lived table down, shorter
+        // from the shortest-lived one up; unchanged tables are left alone.
+        assert_eq!(
+            retention_steps([48, 13, 180, 180], [60, 24, 400, 400]),
+            [(0, 48, 60), (1, 13, 24), (2, 180, 400), (3, 180, 400)]
+        );
+        assert_eq!(
+            retention_steps([60, 24, 400, 400], [48, 13, 180, 180]),
+            [(3, 400, 180), (2, 400, 180), (1, 24, 13), (0, 60, 48)]
+        );
+        assert_eq!(retention_steps([48, 13, 180, 180], [48, 13, 180, 180]), []);
     }
 
     #[test]
