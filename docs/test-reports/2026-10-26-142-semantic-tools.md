@@ -39,9 +39,14 @@ bun run --cwd frontend typecheck
 bun run --cwd frontend lint
 bun run --cwd frontend test
 
-# CI 的變更判斷
+# CI 的變更判斷與 scripts 的全部測試（nightly 的 PR 路徑、workflow 規則）
 bun install --cwd scripts --frozen-lockfile
 bun test scripts/ci/changes.test.ts
+bun run --cwd scripts test
+bun test scripts/nightly
+bun test scripts/ci/workflow-conditions.test.ts
+bun scripts/ci/check-workflows.ts
+bun scripts/ci/lint-workflows.ts
 ```
 
 ## 結果
@@ -57,7 +62,10 @@ bun test scripts/ci/changes.test.ts
 | `cargo deny --locked check`（`7e44c04` 時跑；之後沒有改相依） | `advisories ok, bans ok, licenses ok, sources ok`；重複版本的警告與 main 相同（13 項），新加的 jiff 0.2.35、jiff-tzdb 0.1.9 是 Unlicense OR MIT |
 | `cargo fmt --all --check`、`cargo clippy --workspace --all-targets -- -D warnings` | 沒有輸出、沒有警告 |
 | 前端 `api:check`、`typecheck`、`lint`、`test` | 218 個測試通過，其餘沒有錯誤；最後一個 commit 只改了規格裡兩段 422 的說明，重新產生後 `api:check` 通過 |
-| `bun test scripts/ci/changes.test.ts`（`7e44c04` 時跑；之後沒有新的路徑） | 282 個測試通過；`datasets/` 與 `tools/` 本來就觸發 rust job，不必加規則 |
+| `bun test scripts/ci/changes.test.ts` | 282 個測試通過；`datasets/` 與 `tools/` 本來就觸發 rust job，不必加規則 |
+| `bun run --cwd scripts test` | 1641 個通過、26 個失敗；失敗的 26 個與 `origin/main`（`8c74384`）在同一個工作站上的結果逐項相同（工作站環境造成的既有失敗，例如 age 與 PKI 的測試），沒有新的失敗。合併前的重跑發現 telemetry-query 的測試相依 `lab-dataset` 讓 nightly 映像經 path 相依多用到 `tools/lab-dataset`、`edge/agent`、`services/ingest`，`scripts/nightly/image-cache.test.ts` 因 `nightly.yml` 的 PR 路徑缺了它們而失敗；加上之後通過 |
+| `bun test scripts/nightly`、`bun test scripts/ci/workflow-conditions.test.ts` | 338 個通過、8 個失敗（都在上面 main 也失敗的 26 個裡）；58 個通過 |
+| `bun scripts/ci/check-workflows.ts`、`bun scripts/ci/lint-workflows.ts`（actionlint 1.7.12） | 沒有違規、沒有錯誤 |
 
 `tests/semantic.rs` 的比對（預期值都由測試從資料集的讀數逐格算出，不用服務的 SQL）：
 
