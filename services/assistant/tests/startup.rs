@@ -216,13 +216,13 @@ async fn ready_once_the_service_role_logs_in_on_the_current_schema() {
     };
     let mut admin = product.superuser().await;
 
-    // 1. The role logs in and every file is there: ready, with its three tools and the run
+    // 1. The role logs in and every file is there: ready, with its four tools and the run
     //    delegation, while neither the AI gateway nor any service the tools call listens.
     let ready = Service::spawn(&product, TEST_PASSWORD).await;
     ready.wait_readiness(200).await;
     ready.wait_logged(COMPLETE).await;
     let built = ready.wait_logged("assistant ready").await;
-    assert_eq!(built["fields"]["tools"], 3, "{built}");
+    assert_eq!(built["fields"]["tools"], 4, "{built}");
     assert_eq!(built["fields"]["delegation"], true, "{built}");
     // No line carries the password.
     assert!(!ready.stdout.text().contains(TEST_PASSWORD));

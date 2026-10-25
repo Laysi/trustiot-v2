@@ -103,6 +103,7 @@ OpenTelemetry collector（決策 22，`deploy/chart` 的 `observability.collecto
 - 精確的條件：每個 bucket 內至多一次歸零或溢位，而且之後這格的最後一筆低於下降前的峰值。超出條件時是近似值，例如一格內 5、7、0、9：1 分鐘表分得開，得到正確的 11；同一小時合成一格時得到 13。
 - 只用「最小值小於第一筆」偵測會漏掉第一筆就是 0 的歸零（0、5、0、3 的增量是 8，會算成 3），所以另外比對最後一筆與最大值。
 - 參數：`device`、`point`、`from`、`to`（UTC，含 `from` 不含 `to`）、`wraps_at`（不會溢位的填 0）。結果是 `from` 之後第一筆到 `to` 之前最後一筆的增量，沒有讀值時是 0。
+- 使用者與 AI 查用量走 telemetry-query 的語意查詢 API（Laysi/trustiot-v2#142）：格內與跨格的規則相同，另有累計檢查與可疑跳增；它還不知道設備型號的 `wraps_at`，溢位一律當成歸零，少算最多一個讀數間隔（[services/telemetry-query](../telemetry-query/README.md)「語意查詢」）。
 
 #### I1 重寫與對帳（Laysi/trustiot-v2#641 的前提）
 

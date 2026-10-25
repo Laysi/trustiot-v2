@@ -1,5 +1,5 @@
-//! The first real tools, calling other services as the user through the question's run
-//! delegation (Laysi/trustiot-v2#591). Everything runs on loopback: the stand-in AI gateway of
+//! The tools that call other services as the user through the question's run delegation
+//! (Laysi/trustiot-v2#591; the semantic telemetry tools of Laysi/trustiot-v2#142). Everything runs on loopback: the stand-in AI gateway of
 //! `support`, and one stand-in server that is both the identity service's token exchange (it
 //! issues real internal identity tokens, signed by a test key) and the telemetry query and assets
 //! services (they verify those tokens as the services do, for their own audience, and answer
@@ -22,7 +22,8 @@ use assistant::delegation::{QuestionRun, QuestionRuns, RUN_END_MARGIN, StartErro
 use assistant::history::{EntryKind, Principal};
 use assistant::model::ToolCall;
 use assistant::tools::device_models::{self, DeviceModels};
-use assistant::tools::telemetry::{self, TelemetryLatest, TelemetrySeries};
+use assistant::tools::semantic::{self, TelemetryStatistics, TelemetryUsage};
+use assistant::tools::telemetry::{self, TelemetryLatest};
 use assistant::tools::{
     CUT_MARKER, Delegation, MAX_RESULT_TEXT_CHARS, Tool, ToolContext, ToolRegistry,
 };
@@ -41,7 +42,12 @@ use contract::{
 use serde_json::{Value, json};
 use service_kit::identity::UserIdentity;
 use support::{Capture, Recorded, Reply, StandIn, WAIT, agent, fixture, limits, ok};
-use telemetry_query::history::{Interval, Latest, LatestPoint, Reading, Series, SeriesPoint};
+use telemetry_query::history::{Latest, LatestPoint, Reading};
+use telemetry_query::semantic::range::Resolution;
+use telemetry_query::semantic::{
+    CumulativeCheck, DataStatus, QueryRange, SeriesQuery, SeriesStatistics, SeriesUsage,
+    Statistics, StatisticsRow, TimedValue, Usage, UsageRow, UsageStatus, Verdict,
+};
 use testkit::identity::TestIssuer;
 use tokio::net::TcpListener;
 use tokio::time::Instant;
@@ -62,6 +68,8 @@ fn unix_now() -> i64 {
 struct Received {
     path: String,
     query: Option<String>,
+    /// The JSON body of a POST.
+    body: Option<Value>,
     token: String,
     /// The token's claims, when it verified for the service's audience.
     claims: Option<InternalClaims>,
@@ -99,7 +107,7 @@ struct World {
     exchange_refusals: Vec<Option<ErrorCode>>,
     /// The statuses the services answer with, one per call in order; 200 when used up.
     statuses: Mutex<Vec<u16>>,
-    /// Readings in each series answered.
+    /// Bucket rows in each series answered.
     series_len: usize,
     /// Device-written text the services add to their answers: a data point with this key and
     /// this text reading, and a device model with this name.
@@ -230,6 +238,7 @@ fn admit(
     audience: ServiceName,
     path: String,
     query: Option<String>,
+    body: Option<Value>,
     headers: &HeaderMap,
 ) -> Option<Response> {
     let token = token_of(headers);
@@ -261,6 +270,7 @@ fn admit(
     log.received.push(Received {
         path,
         query,
+        body,
         token,
         claims,
         minute,
@@ -285,37 +295,163 @@ fn device_of(device_id: &str) -> Uuid {
     Uuid::try_parse(device_id).expect("the tool sends a UUID")
 }
 
-async fn series(
-    State(world): State<Arc<World>>,
-    Path(device_id): Path<String>,
-    RawQuery(query): RawQuery,
-    headers: HeaderMap,
-) -> Response {
-    let path = format!("/api/telemetry/v1/devices/{device_id}/series");
-    if let Some(refused) = admit(&world, ServiceName::TelemetryQuery, path, query, &headers) {
-        return refused;
-    }
-    let now = Utc::now();
-    let points = (0..world.series_len)
-        .map(|index| SeriesPoint {
-            time: now - TimeDelta::hours(i64::try_from(index).expect("small") + 1),
-            count: 60,
-            min: Some(228.0),
-            max: Some(231.0),
-            avg: Some(229.5),
-            last: Reading::Float(Some(230.25)),
-        })
-        .collect();
-    axum::Json(Series {
-        device_id: device_of(&device_id),
-        point: "voltage".into(),
-        tz: "Asia/Taipei".into(),
-        interval: Interval::Hour1,
-        from: now - TimeDelta::days(1),
+/// The range of a semantic answer: the stand-in does not resolve periods.
+fn answer_range(query: &SeriesQuery) -> QueryRange {
+    let now = Utc::now().fixed_offset();
+    QueryRange {
+        tz: query.tz.clone(),
+        interval: query.interval,
+        from: now - TimeDelta::days(7),
         to: now,
         truncated: false,
         earliest: now - TimeDelta::days(90),
-        points,
+        ends_after_now: false,
+        resolution: Resolution::Hour,
+        queried_at: now,
+    }
+}
+
+/// The body of a semantic call, which must be the API's request (unknown fields refused), or
+/// the refusal the service would send.
+fn semantic_query(
+    world: &World,
+    path: &str,
+    body: &Value,
+    headers: &HeaderMap,
+) -> Result<SeriesQuery, Box<Response>> {
+    if let Some(refused) = admit(
+        world,
+        ServiceName::TelemetryQuery,
+        path.to_owned(),
+        None,
+        Some(body.clone()),
+        headers,
+    ) {
+        return Err(Box::new(refused));
+    }
+    serde_json::from_value(body.clone())
+        .map_err(|_| Box::new(refuse(ErrorCode::InvalidRequest, &world.secret)))
+}
+
+async fn statistics(
+    State(world): State<Arc<World>>,
+    headers: HeaderMap,
+    axum::Json(body): axum::Json<Value>,
+) -> Response {
+    let query = match semantic_query(&world, semantic::STATISTICS_PATH, &body, &headers) {
+        Ok(query) => query,
+        Err(refused) => return *refused,
+    };
+    let now = Utc::now().fixed_offset();
+    let series = query
+        .series
+        .iter()
+        .map(|key| SeriesStatistics {
+            device_id: key.device_id,
+            point: key.point.clone(),
+            status: DataStatus::Ok,
+            count: 60,
+            numeric_count: 60,
+            min: Some(228.0),
+            min_time: Some(now - TimeDelta::hours(2)),
+            max: Some(231.0),
+            max_time: Some(now - TimeDelta::hours(1)),
+            avg: Some(229.5),
+            first: None,
+            last: None,
+            highest: None,
+            lowest: None,
+            rows: (0..world.series_len)
+                .map(|index| StatisticsRow {
+                    time: now - TimeDelta::hours(i64::try_from(index).expect("small") + 1),
+                    count: 60,
+                    min: Some(228.0),
+                    max: Some(231.0),
+                    avg: Some(229.5),
+                    last: Reading::Float(Some(230.25)),
+                })
+                .collect(),
+        })
+        .collect();
+    axum::Json(Statistics {
+        range: answer_range(&query),
+        series,
+    })
+    .into_response()
+}
+
+/// A usage answer: `power_kw` is a gauge, any other data point a counter.
+async fn usage(
+    State(world): State<Arc<World>>,
+    headers: HeaderMap,
+    axum::Json(body): axum::Json<Value>,
+) -> Response {
+    let query = match semantic_query(&world, semantic::USAGE_PATH, &body, &headers) {
+        Ok(query) => query,
+        Err(refused) => return *refused,
+    };
+    let now = Utc::now().fixed_offset();
+    let series = query
+        .series
+        .iter()
+        .map(|key| {
+            let counter = key.point != "power_kw";
+            SeriesUsage {
+                device_id: key.device_id,
+                point: key.point.clone(),
+                status: if counter {
+                    UsageStatus::Ok
+                } else {
+                    UsageStatus::NotCumulative
+                },
+                check: Some(CumulativeCheck {
+                    verdict: if counter {
+                        Verdict::Cumulative
+                    } else {
+                        Verdict::NotCumulative
+                    },
+                    drops: if counter { 1 } else { 26 },
+                    rises: if counter { 46 } else { 21 },
+                    comparisons: 47,
+                    from: now - TimeDelta::days(8),
+                    to: now,
+                }),
+                total: counter.then_some(164.046),
+                drops: 1,
+                readings: 48,
+                first_reading: None,
+                last_reading: None,
+                baseline: true,
+                gaps: 0,
+                longest_gap: None,
+                suspicious_steps: 0,
+                largest_suspicious_step: None,
+                skipped_cells: 0,
+                highest: counter.then(|| TimedValue {
+                    time: now - TimeDelta::days(1),
+                    value: 30.5,
+                }),
+                lowest: None,
+                rows: if counter {
+                    (0..world.series_len)
+                        .map(|index| UsageRow {
+                            time: now - TimeDelta::days(i64::try_from(index).expect("small") + 1),
+                            usage: 30.5,
+                            readings: 288,
+                            drops: 0,
+                            after_gap: false,
+                            suspicious_steps: 0,
+                        })
+                        .collect()
+                } else {
+                    Vec::new()
+                },
+            }
+        })
+        .collect();
+    axum::Json(Usage {
+        range: answer_range(&query),
+        series,
     })
     .into_response()
 }
@@ -327,7 +463,14 @@ async fn latest(
     headers: HeaderMap,
 ) -> Response {
     let path = format!("/api/telemetry/v1/devices/{device_id}/latest");
-    if let Some(refused) = admit(&world, ServiceName::TelemetryQuery, path, query, &headers) {
+    if let Some(refused) = admit(
+        &world,
+        ServiceName::TelemetryQuery,
+        path,
+        query,
+        None,
+        &headers,
+    ) {
         return refused;
     }
     let now = Utc::now();
@@ -364,7 +507,7 @@ async fn models(
     headers: HeaderMap,
 ) -> Response {
     let path = device_models::MODELS_PATH.to_owned();
-    if let Some(refused) = admit(&world, ServiceName::Assets, path, query, &headers) {
+    if let Some(refused) = admit(&world, ServiceName::Assets, path, query, None, &headers) {
         return refused;
     }
     let now = Utc::now();
@@ -388,7 +531,8 @@ async fn serve(world: Arc<World>) -> String {
     let router = Router::new()
         .route(CreateRunDelegation::ROUTE, post(create))
         .route(ExchangeRunDelegation::ROUTE, post(exchange))
-        .route(telemetry_query::history::SERIES_PATH, get(series))
+        .route(telemetry_query::semantic::STATISTICS_PATH, post(statistics))
+        .route(telemetry_query::semantic::USAGE_PATH, post(usage))
         .route(telemetry_query::history::LATEST_PATH, get(latest))
         .route(assets::device_models::MODELS_PATH, get(models))
         .with_state(world);
@@ -404,14 +548,15 @@ async fn serve(world: Arc<World>) -> String {
     format!("http://{address}")
 }
 
-/// The three tools, calling the stand-in services.
+/// The four tools that call services, calling the stand-ins.
 fn tools(origin: &str) -> Vec<Arc<dyn Tool>> {
     let telemetry =
         Callee::new(ServiceName::TelemetryQuery, origin, WAIT).expect("a telemetry client");
     let assets = Callee::new(ServiceName::Assets, origin, WAIT).expect("an assets client");
     vec![
-        TelemetrySeries::new(telemetry.clone()),
-        TelemetryLatest::new(telemetry),
+        TelemetryLatest::new(telemetry.clone()),
+        TelemetryStatistics::new(telemetry.clone()),
+        TelemetryUsage::new(telemetry),
         DeviceModels::new(assets),
     ]
 }
@@ -493,21 +638,24 @@ fn results(request: &Recorded) -> Vec<Result_> {
         .collect()
 }
 
-fn day_range() -> (String, String) {
-    let to = Utc::now();
-    let from = to - TimeDelta::days(1);
-    let format = |time: chrono::DateTime<Utc>| time.format("%Y-%m-%dT%H:%M:%SZ").to_string();
-    (format(from), format(to))
+fn statistics_input() -> Value {
+    json!({
+        "series": [{"device_id": DEVICE, "point": "voltage"}],
+        "tz": "Asia/Taipei",
+        "period": "yesterday",
+        "interval": "1h",
+    })
 }
 
-fn series_input() -> Value {
-    let (from, to) = day_range();
+fn usage_input() -> Value {
     json!({
-        "device_id": DEVICE,
-        "point": "voltage",
-        "from": from,
-        "to": to,
+        "series": [
+            {"device_id": DEVICE, "point": "energy_kwh"},
+            {"device_id": DEVICE, "point": "power_kw"},
+        ],
         "tz": "Asia/Taipei",
+        "period": "last_7_days",
+        "interval": "1d",
     })
 }
 
@@ -523,8 +671,9 @@ async fn each_tool_call_runs_as_the_user_with_a_fresh_token_for_its_service_and_
                 0,
                 &[("telemetry_latest", json!({"device_id": DEVICE}))],
             )),
-            ok(step(1, &[("telemetry_series", series_input())])),
-            ok(step(2, &[("device_models", json!({}))])),
+            ok(step(1, &[("telemetry_statistics", statistics_input())])),
+            ok(step(2, &[("telemetry_usage", usage_input())])),
+            ok(step(3, &[("device_models", json!({}))])),
         ],
     ))
     .await;
@@ -556,20 +705,22 @@ async fn each_tool_call_runs_as_the_user_with_a_fresh_token_for_its_service_and_
             [
                 ServiceName::TelemetryQuery,
                 ServiceName::TelemetryQuery,
+                ServiceName::TelemetryQuery,
                 ServiceName::Assets
             ]
         );
         let received = log.received.clone();
-        assert_eq!(received.len(), 3, "{received:?}");
+        assert_eq!(received.len(), 4, "{received:?}");
         let expected = [
             (
                 format!("/api/telemetry/v1/devices/{DEVICE}/latest"),
                 ServiceName::TelemetryQuery,
             ),
             (
-                format!("/api/telemetry/v1/devices/{DEVICE}/series"),
+                semantic::STATISTICS_PATH.to_owned(),
                 ServiceName::TelemetryQuery,
             ),
+            (semantic::USAGE_PATH.to_owned(), ServiceName::TelemetryQuery),
             (device_models::MODELS_PATH.to_owned(), ServiceName::Assets),
         ];
         let principal = world.principal();
@@ -600,27 +751,31 @@ async fn each_tool_call_runs_as_the_user_with_a_fresh_token_for_its_service_and_
             );
             // No tenant or user anywhere in the request.
             let query = call.query.clone().unwrap_or_default();
+            let body = call.body.as_ref().map(Value::to_string).unwrap_or_default();
             for id in [
                 principal.tenant_id.to_string(),
                 principal.user_id.to_string(),
             ] {
-                assert!(!query.contains(&id) && !call.path.contains(&id), "{call:?}");
+                assert!(
+                    !query.contains(&id) && !call.path.contains(&id) && !body.contains(&id),
+                    "{call:?}"
+                );
             }
             assert!(!query.to_ascii_lowercase().contains("tenant"), "{query}");
+            assert!(!body.to_ascii_lowercase().contains("tenant"), "{body}");
         }
-        // One exchange per call, each in the minute of its call: the series call, more than 60
-        // seconds after the first, did not reuse the first call's token.
+        // One exchange per call, each in the minute of its call: the statistics call, more
+        // than 60 seconds after the first, did not reuse the first call's token.
         let minutes: Vec<u64> = log.issued.iter().map(|(_, at)| *at).collect();
-        assert_eq!(minutes, [1, 2, 3]);
-        assert_eq!(received[0].query, None);
-        assert_eq!(received[2].query, None);
-        let keys: BTreeSet<String> = url_keys(received[1].query.as_deref().expect("a query"));
-        assert_eq!(
-            keys,
-            ["from", "interval", "point", "to", "tz"]
-                .map(str::to_owned)
-                .into()
-        );
+        assert_eq!(minutes, [1, 2, 3, 4]);
+        for call in &received {
+            assert_eq!(call.query, None);
+        }
+        // The semantic tools post the model's checked input as the API's body (the stand-in
+        // parsed it as `SeriesQuery`, which refuses unknown fields), with the default interval.
+        assert_eq!(received[1].body, Some(statistics_input()));
+        assert_eq!(received[2].body, Some(usage_input()));
+        assert_eq!(received[0].body, None);
         received
     };
 
@@ -635,7 +790,7 @@ async fn each_tool_call_runs_as_the_user_with_a_fresh_token_for_its_service_and_
 
     // The model got what the services answered for this user.
     let requests = stand_in.requests();
-    assert_eq!(requests.len(), 4);
+    assert_eq!(requests.len(), 5);
     let latest = &results(&requests[1])[0];
     assert!(!latest.is_error, "{latest:?}");
     let latest: Value = serde_json::from_str(&latest.text).expect("JSON");
@@ -644,15 +799,33 @@ async fn each_tool_call_runs_as_the_user_with_a_fresh_token_for_its_service_and_
     assert_eq!(latest["rows"][1][0], json!("voltage"));
     assert_eq!(latest["rows"][1][2], json!(229.75));
     assert_eq!(latest["rows"][0][2], json!("running"));
-    let series = &results(&requests[2])[0];
-    assert!(!series.is_error, "{series:?}");
-    let series: Value = serde_json::from_str(&series.text).expect("JSON");
-    assert_eq!(series["interval"], json!("1h"));
-    assert_eq!(series["rows"].as_array().map(Vec::len), Some(3));
-    assert_eq!(series["rows"][0][1], json!(60));
-    assert_eq!(series["rows"][0][4], json!(229.5));
-    assert_eq!(series["rows"][0][5], json!(230.25));
-    let models = &results(&requests[3])[0];
+    let statistics = &results(&requests[2])[0];
+    assert!(!statistics.is_error, "{statistics:?}");
+    let statistics: Value = serde_json::from_str(&statistics.text).expect("JSON");
+    assert_eq!(statistics["range"]["interval"], json!("1h"));
+    let voltage = &statistics["series"][0];
+    assert_eq!(voltage["device_id"], json!(DEVICE));
+    assert_eq!(voltage["avg"], json!(229.5));
+    assert_eq!(voltage["rows"].as_array().map(Vec::len), Some(3));
+    assert_eq!(voltage["rows"][0][1], json!(60));
+    assert_eq!(voltage["rows"][0][4], json!(229.5));
+    assert_eq!(voltage["rows"][0][5], json!(230.25));
+    // The usage: the counter's total and daily rows; the gauge refused with a note that names
+    // the statistics tool. One series answered, so the call is not an error.
+    let usage = &results(&requests[3])[0];
+    assert!(!usage.is_error, "{usage:?}");
+    let usage: Value = serde_json::from_str(&usage.text).expect("JSON");
+    assert_eq!(usage["series"][0]["total"], json!(164.046));
+    assert_eq!(usage["series"][0]["rows"].as_array().map(Vec::len), Some(3));
+    assert_eq!(usage["series"][0]["rows"][0][1], json!(30.5));
+    assert_eq!(usage["series"][1]["status"], json!("not_cumulative"));
+    assert!(usage["series"][1].get("total").is_none());
+    let notes = usage["notes"].to_string();
+    assert!(
+        notes.contains("`power_kw` of device") && notes.contains("telemetry_statistics"),
+        "{notes}"
+    );
+    let models = &results(&requests[4])[0];
     assert!(!models.is_error, "{models:?}");
     let models: Value = serde_json::from_str(&models.text).expect("JSON");
     assert_eq!(models["total"], json!(2));
@@ -662,25 +835,20 @@ async fn each_tool_call_runs_as_the_user_with_a_fresh_token_for_its_service_and_
     assert_eq!(models["rows"][1][3], json!(12));
 }
 
-fn url_keys(query: &str) -> BTreeSet<String> {
-    query
-        .split('&')
-        .filter_map(|pair| pair.split('=').next())
-        .map(str::to_owned)
-        .collect()
-}
-
 #[tokio::test]
 async fn a_service_refusal_reaches_neither_the_model_nor_the_logs() {
     let mut world = World::new();
-    // latest 403 (another tenant's device), series 404, models 422, latest 503, then a raw series
-    // over the row limit.
+    // latest 403 (another tenant's device), statistics 404, models 422, latest 503, then
+    // statistics of 20 series by the minute over a month, refused before any call.
     world.statuses = Mutex::new(vec![403, 404, 422, 503]);
-    world.series_len = telemetry::MAX_SERIES_ROWS + 1;
     let world = Arc::new(world);
     let origin = serve(Arc::clone(&world)).await;
-    let mut raw = series_input();
-    raw["interval"] = json!("raw");
+    let mut heavy = statistics_input();
+    heavy["series"] = (0..semantic::MAX_SERIES)
+        .map(|index| json!({"device_id": DEVICE, "point": format!("p{index}")}))
+        .collect();
+    heavy["period"] = json!("this_month");
+    heavy["interval"] = json!("1m");
     let stand_in = StandIn::start(model(
         &world,
         vec![
@@ -688,13 +856,13 @@ async fn a_service_refusal_reaches_neither_the_model_nor_the_logs() {
                 0,
                 &[("telemetry_latest", json!({"device_id": DEVICE}))],
             )),
-            ok(step(1, &[("telemetry_series", series_input())])),
+            ok(step(1, &[("telemetry_statistics", statistics_input())])),
             ok(step(2, &[("device_models", json!({}))])),
             ok(step(
                 3,
                 &[("telemetry_latest", json!({"device_id": DEVICE}))],
             )),
-            ok(step(4, &[("telemetry_series", raw)])),
+            ok(step(4, &[("telemetry_statistics", heavy)])),
         ],
     ))
     .await;
@@ -742,10 +910,11 @@ async fn a_service_refusal_reaches_neither_the_model_nor_the_logs() {
             .starts_with("The tool failed for a reason outside your control")
     );
     assert!(
-        texts[4].text.contains("501 readings") && texts[4].text.contains("interval"),
+        texts[4].text.contains("more than the 10000") && texts[4].text.contains("interval"),
         "{:?}",
         texts[4]
     );
+    assert_eq!(world.log().received.len(), 4, "the last call was not sent");
     for request in &requests {
         assert!(!request.body.contains(&world.secret));
     }
@@ -1231,8 +1400,10 @@ async fn the_tools_take_no_tenant_or_user_and_refuse_extra_input() {
         name: name.into(),
         input,
     };
-    let mut series = series_input();
-    series["tenant_id"] = json!(other_tenant);
+    let mut statistics = statistics_input();
+    statistics["tenant_id"] = json!(other_tenant);
+    let mut usage = usage_input();
+    usage["series"][0]["tenant_id"] = json!(other_tenant);
     let results = registry
         .run(
             &context,
@@ -1242,8 +1413,9 @@ async fn the_tools_take_no_tenant_or_user_and_refuse_extra_input() {
                     "telemetry_latest",
                     json!({"device_id": DEVICE, "tenant_id": other_tenant}),
                 ),
-                call("2", "telemetry_series", series),
-                call("3", "device_models", json!({"tenant": other_tenant})),
+                call("2", "telemetry_statistics", statistics),
+                call("3", "telemetry_usage", usage),
+                call("4", "device_models", json!({"tenant": other_tenant})),
             ],
         )
         .await
@@ -1257,10 +1429,24 @@ async fn the_tools_take_no_tenant_or_user_and_refuse_extra_input() {
 
 #[test]
 fn the_tools_follow_the_services_routes_and_limits() {
+    use telemetry_query::semantic::range;
     assert_eq!(
-        telemetry::SERIES_PATH,
-        telemetry_query::history::SERIES_PATH
+        semantic::STATISTICS_PATH,
+        telemetry_query::semantic::STATISTICS_PATH
     );
+    assert_eq!(semantic::USAGE_PATH, telemetry_query::semantic::USAGE_PATH);
+    assert_eq!(semantic::MAX_SERIES, range::MAX_SERIES);
+    assert_eq!(
+        usize::try_from(semantic::MAX_ROWS).expect("positive"),
+        range::MAX_ROWS
+    );
+    const { assert!(semantic::MAX_RESULT_ROWS <= range::MAX_ROWS) };
+    assert_eq!(
+        semantic::PERIOD_MARGIN_MINUTES,
+        range::PERIOD_MARGIN.num_minutes()
+    );
+    assert_eq!(semantic::MAX_LAST_DAYS, range::MAX_LAST_DAYS);
+    assert_eq!(semantic::MAX_LAST_HOURS, range::MAX_LAST_HOURS);
     assert_eq!(
         telemetry::LATEST_PATH,
         telemetry_query::history::LATEST_PATH
@@ -1274,9 +1460,98 @@ fn the_tools_follow_the_services_routes_and_limits() {
         telemetry::MAX_POINT_LEN,
         telemetry_query::history::MAX_POINT_LEN
     );
-    assert!(telemetry::MAX_SERIES_ROWS <= usize::from(telemetry_query::history::MAX_BUCKETS));
     assert_eq!(
         device_models::MODELS_PATH,
         assets::device_models::MODELS_PATH
     );
+}
+
+/// The semantic tools' input is the API's request body: the same properties, required fields,
+/// limits, patterns and enums as the `SeriesQuery` schema of `api/openapi.json`.
+#[test]
+fn the_semantic_tools_take_the_api_body() {
+    let spec = serde_json::to_value(telemetry_query::openapi()).expect("the spec as JSON");
+    let schemas = &spec["components"]["schemas"];
+    let resolve = |schema: &Value| -> Value {
+        match schema["$ref"].as_str() {
+            Some(reference) => {
+                let name = reference.rsplit('/').next().expect("a name");
+                schemas[name].clone()
+            }
+            None => schema.clone(),
+        }
+    };
+    let keys = |schema: &Value| -> BTreeSet<String> {
+        schema["properties"]
+            .as_object()
+            .expect("properties")
+            .keys()
+            .cloned()
+            .collect()
+    };
+    let required = |schema: &Value| -> BTreeSet<String> {
+        schema["required"]
+            .as_array()
+            .map(|names| {
+                names
+                    .iter()
+                    .map(|name| name.as_str().expect("a name").to_owned())
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+    let query = resolve(&schemas["SeriesQuery"]);
+    let key = resolve(&query["properties"]["series"]["items"]);
+    let interval = resolve(&query["properties"]["interval"]);
+    let world_tools = [
+        TelemetryStatistics::new(
+            Callee::new(ServiceName::TelemetryQuery, "http://telemetry:8080", WAIT)
+                .expect("a client"),
+        ) as Arc<dyn Tool>,
+        TelemetryUsage::new(
+            Callee::new(ServiceName::TelemetryQuery, "http://telemetry:8080", WAIT)
+                .expect("a client"),
+        ),
+    ];
+    for tool in &world_tools {
+        let input = tool.spec().input_schema;
+        let name = tool.spec().name;
+        assert_eq!(keys(&input), keys(&query), "{name}");
+        assert_eq!(required(&input), required(&query), "{name}");
+        assert_eq!(query["additionalProperties"], json!(false));
+        let series = &input["properties"]["series"];
+        assert_eq!(
+            series["maxItems"], query["properties"]["series"]["maxItems"],
+            "{name}"
+        );
+        assert_eq!(
+            series["minItems"], query["properties"]["series"]["minItems"],
+            "{name}"
+        );
+        assert_eq!(keys(&series["items"]), keys(&key), "{name}");
+        assert_eq!(required(&series["items"]), required(&key), "{name}");
+        assert_eq!(
+            series["items"]["additionalProperties"],
+            key["additionalProperties"]
+        );
+        for limit in ["pattern", "maxLength", "minLength"] {
+            assert_eq!(
+                series["items"]["properties"]["point"][limit], key["properties"]["point"][limit],
+                "{name} point {limit}"
+            );
+        }
+        assert_eq!(
+            input["properties"]["period"]["pattern"], query["properties"]["period"]["pattern"],
+            "{name}"
+        );
+        assert_eq!(
+            input["properties"]["interval"]["enum"], interval["enum"],
+            "{name}"
+        );
+        assert_eq!(
+            input["properties"]["interval"]["enum"],
+            json!(semantic::INTERVALS),
+            "{name}"
+        );
+    }
 }

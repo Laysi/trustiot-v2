@@ -117,8 +117,9 @@ pub fn build(config: &Config) -> Result<Assistant, BoxError> {
     match &config.telemetry_query.url {
         Some(url) => {
             let telemetry = callee::Callee::new(ServiceName::TelemetryQuery, url, timeout)?;
-            tools.push(tools::telemetry::TelemetrySeries::new(telemetry.clone()));
-            tools.push(tools::telemetry::TelemetryLatest::new(telemetry));
+            tools.push(tools::telemetry::TelemetryLatest::new(telemetry.clone()));
+            tools.push(tools::semantic::TelemetryStatistics::new(telemetry.clone()));
+            tools.push(tools::semantic::TelemetryUsage::new(telemetry));
         }
         None => tracing::info!("no telemetry tools: telemetry_query.url is not set"),
     }

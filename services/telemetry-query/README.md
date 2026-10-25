@@ -6,7 +6,9 @@
 - 歷史查詢 API：一個資料點在一段時間內依時區降採樣的序列，與設備每個資料點最新的值（見 [API](#api)）。每個查詢都以呼叫者租戶的帳號執行，所以 ClickHouse 的 row policy、settings profile 與 quota 管住每一個查詢。
 - 可查期間先固定為最嚴格方案的例子（[方案](../../docs/product/plans.md) 的 Starter）：原始資料 7 天、聚合資料 3 個月，所有租戶相同；依方案區分的期間是 Laysi/trustiot-v2#453。
 
-不包含：健康狀態歷史、首頁卡片、依方案的期間（Laysi/trustiot-v2#453）；AI 的語意工具與 SQL 解析（Laysi/trustiot-v2#142、Laysi/trustiot-v2#143）。
+Laysi/trustiot-v2#142（2026-10-26）加上語意查詢 API：多個資料點在使用者時區的相對期間內的統計與用量（用電量等累計值），給 AI 的語意工具與儀表板用（見[語意查詢](#語意查詢)）。
+
+不包含：健康狀態歷史、首頁卡片、依方案的期間（Laysi/trustiot-v2#453）；AI 的 SQL 解析（Laysi/trustiot-v2#143）；異常區段、斷訊、停機與比較（Laysi/trustiot-v2#455）。
 
 ## 租戶帳號
 
@@ -63,6 +65,85 @@
 
 每個查詢之前，服務先以租戶帳號登入確認帳號仍是它建立的樣子（`Accounts::verify`：與消費端第 2 步相同的檢查；不讀表，所以不計入 quota），不同就不執行查詢，所以帳號的查詢上限被改寬時不會被用到。查詢一律帶參數（`{name:Type}`，HTTP 介面的 `param_<name>`），除了 `wait_end_of_query` 不送任何 setting（唯讀帳號會拒絕），不用明確的 `PREWHERE`。每個查詢除了 row policy 外也自己加上 `tenant_id = 呼叫者租戶`，所以即使帳號被改成別的租戶，也回不出別的租戶的資料。ClickHouse 的錯誤內文從不回給用戶端，也不寫進日誌，日誌只記錯誤代碼。
 
+## 語意查詢
+
+`src/semantic/`，Laysi/trustiot-v2#142（J3）。AI 的 `telemetry_statistics`、`telemetry_usage` 工具（[services/assistant](../assistant/README.md)「工具」）與儀表板的資料集用它：工具的輸入就是請求本文，存下來的呼叫之後以檢視者的身分重送，租戶、角色與可查期間照檢視者套用。
+
+- `POST /api/telemetry/v1/statistics`：每個資料點的筆數、數值讀數筆數、最小與最大（附所在格的開始時間）、平均（bool 當 0 或 1，所以開關的平均是開著的比例）、第一與最後讀數；有 `interval` 時另有每個區間一列與平均最高、最低的區間。
+- `POST /api/telemetry/v1/usage`：累計值（電能、水、瓦斯、脈衝、生產計數）的用量，見下方「用量」。
+
+請求本文（`SeriesQuery`，未知欄位一律拒絕，沒有租戶或使用者欄位）：
+
+| 欄位 | 規則 |
+| --- | --- |
+| `series` | 1 到 20 個不重複的 `{device_id, point}`；`point` 是 1 到 128 個英數字、`.`、`_`、`-`，以英數字開頭。回應依請求的順序 |
+| `tz` | 必填，服務編入的 IANA 時區資料庫（jiff-tzdb）裡的名稱，大小寫要完全相同 |
+| `period` | 相對期間，在 `tz` 裡依請求的時間解析：`today`、`yesterday`、`this_week`、`last_week`（週從星期一開始，ISO 8601）、`this_month`、`last_month`、`this_year`、`last_year`、`last_<N>_days`（含今天的 N 個當地日，N 是 1 到 366，從 N−1 天前的當地午夜到明天的當地午夜）、`last_<N>_hours`（到現在的 N 小時，N 是 1 到 72，現在取整到下一分鐘）。日曆期間涵蓋整段，還在進行的期間回應的 `ends_after_now` 為 `true` |
+| `from`、`to` | 不給 `period` 時兩個都要給：RFC 3339，`[from, to)`，取整到分鐘 |
+| `interval` | `1m`、`5m`、`15m`、`1h`、`1d`、`1w`（星期一開始）、`1mo`，預設 `total`（整段一個數字）；小時、日、週、月依 `tz` 的當地時間，分鐘區間從 Unix epoch 起算 |
+
+回應的 `range` 是實際查詢的 `from`、`to`、`truncated`、`earliest`、`ends_after_now`、`resolution`（讀的表：`1m` 或 `1h`，也是最小與最大的時間精度）與 `queried_at`。回應裡每個時間都帶 `tz` 在那個時間的時差（例如 `+08:00`），模型不必換算時區。
+
+### 讀哪一張表
+
+`interval` 不是分鐘區間、而且從（截斷後的）`from` 到 `to` 在 `tz` 裡的每個區間邊界都落在 UTC 的整點時（`from`、`to` 是整點，範圍內 `tz` 用到的每個時差都是整小時），讀 1 小時表；否則讀 1 分鐘表，例如 Asia/Kolkata（+05:30）或 `last_24_hours`。兩張表的結果相同，只有最小與最大的時間精度不同。
+
+這個選擇在查詢前以 jiff 與編入的時區資料庫決定，一次查詢。Laysi/trustiot-v2#143 的 SQL 歷史查詢則在 ClickHouse 裡決定（`toStartOfHour(bucket, tz) != bucket` 時改讀 1 分鐘表），兩者不同是因為語意查詢一個請求只送一個語句、而且要先知道讀哪張表才能算可查期間的開始與 1 分鐘格數上限。代價是 jiff 與 ClickHouse 的時區資料庫版本不同時，某個時區剛改過的時差可能讓兩邊判斷不一致；兩邊對照的測試列在後續工作。
+
+### 可查期間的邊界
+
+每張表的可查期間從 `S = 取整到該表的格（現在 − 3 個日曆月 + 5 分鐘）` 開始（`range::queryable_start`），只讀 `bucket >= S` 的格。多加的 5 分鐘與向上取整讓這個邊界永遠不早於 Laysi/trustiot-v2#143 在資料庫裡的過濾（`bucket >= now − 3 個日曆月`），請求在路上多花的時間也不會讀到期間之外。`from` 早於 `S` 時改成 `S`，`truncated` 為 `true`、`earliest` 是 `S`；`to` 不晚於 1 分鐘表的 `S` 時整個拒絕（403 `telemetry.outside_queryable_period`，`details.earliest` 是 `S`，帶 `tz` 的時差）。用量往前找基準讀數時也不超過 `S`，所以被截斷的範圍沒有 `baseline`。
+
+### 用量
+
+用量是相鄰兩筆讀數的增量加總。彙總表每格保留第一與最後讀數、最小與最大，服務在 ClickHouse 裡逐格計算（`statements.rs` 的 `usage!`）：
+
+- 格內（兩筆以上讀數）：`最後 − 第一`；格內下降過（`最後 < 最大` 或 `最小 < 第一`）時是 `(最大 − 第一) + 最後`：先漲到峰值，再從 0 起算。
+- 跨格：`這格第一 − 上一格最後`；下降時是 `這格第一`：下降當成重置或回捲、從 0 重新開始。
+- 每個增量算在後一筆讀數所在的格，所以各區間加起來等於總量。
+- 只用第一與最後讀數是 int 或 float、四個值都是有限數字的格（`skipped_cells` 是其他的格數）。
+- 範圍前 24 小時內（不早於可查期間）最後一筆讀數是基準（`baseline`），第一個區間的用量從它算起；沒有基準時，範圍內第一筆讀數之前的用量不算。
+- 沒有讀數的區間不回（未知，不是 0）；斷訊（讀數間隔不小於該序列中位數間隔的 1.5 倍）後的用量算在斷訊後第一個區間，該列 `after_gap` 為 `true`，序列有 `gaps` 與最長的 `longest_gap`。
+
+精度的限制：
+
+- 每次下降最多少算一個讀數間隔的用量（重置前最後一筆到重置之間的增量）。32 位元計數器回捲時也是如此：例如 fixture 的 `pulses` 算出 3048，考慮回捲是 3099。
+- 1 小時表一格裡有下降時，`(最大 − 第一) + 最後` 只有在下降後的值都低於峰值時才等於逐筆的結果。一小時內的誤讀（例如讀到 0 或讀到半個 32 位元的值）在 1 小時表與 1 分鐘表可能算出不同的總量，兩者都會被標成可疑跳增（見下方）。
+- 大於 2^53 的整數換成浮點數，會失去精度。
+
+### 累計檢查
+
+只有像計數器的資料點才算用量。檢查讀的是用量往前後各找 24 小時的整個視窗（`check.from`、`check.to`），在比較（格內一次、跨格一次）中數下降（`drops`）、上升（`rises`）與比較次數（`comparisons`）：
+
+- 下降不超過 2 次，或不超過上升次數的 2%（`COUNTER_MAX_DROPS`、`COUNTER_MAX_DROP_PERCENT`），是計數器；
+- 是計數器但比較少於 10 次（`MIN_COMPARISONS`）：`verdict` 是 `too_few_readings`，用量照算，工具請模型說明數字未經確認；
+- 否則 `not_cumulative`：不回用量，工具請模型改用統計，不要把讀數相加。
+
+fixture 的結果（1 分鐘表）：`energy_kwh` 下降 1 次、上升 46 次、比較 47 次，`pulses` 1、45、46，`cycle_count` 0、37、41，都是計數器；兩個 `power_kw` 是 26、21、47 與 26、20、46，`not_cumulative`。1 小時表上 fixture 只有 4 小時、7 次比較：三個計數器是 `too_few_readings`，兩個 `power_kw`（6、1 與 5、2）仍是 `not_cumulative`。
+
+已知的限制：
+
+- 鋸齒形的瞬時值（例如慢慢注滿、很快放空的水位）下降次數少、上升次數多，可能被當成計數器。
+- 閒置的計數器在視窗裡重置 3 次以上、上升又很少時會被拒絕。
+- 判斷依整個視窗，不知道設備型號；型號上標明累計值的做法是後續工作。
+
+### 可疑跳增
+
+比平常快很多的增量被標成可疑跳增，總量不變（照上面的規則照算），工具請模型一併說明總量可能含錶的誤讀：
+
+- 速率是增量除以時間（跨格是兩筆讀數的間隔，格內是格內第一到最後讀數的時間），時間至少取該序列的中位數間隔；
+- 速率超過視窗內跨格上升速率中位數的 20 倍（`SUSPICIOUS_FACTOR`）就可疑；視窗內至少要有 10 次跨格上升（`MIN_RISES_FOR_SUSPICION`）才判斷。所以最小的可疑增量約是一個正常讀數間隔用量的 20 倍；
+- 下降後當成從 0 起算的增量也照樣判斷，所以讀到 0 之後回到原值、讀到半個 32 位元的值、換上一顆從 5000 開始的新錶，都會被標出；重置或回捲後的值很小，不會被標出；長時間斷訊後以平常速率累積的大增量，因為除以斷訊的時間，也不會被標出。
+
+每個序列回可疑跳增的次數（`suspicious_steps`）與最大的一次（`largest_suspicious_step`，時間與增量），每列也有該區間的次數。
+
+### 上限與錯誤
+
+- 每次最多 20 個資料點、10,000 列（資料點數乘區間數，以名目長度計算，每個資料點加 2；超過時 422 `telemetry.too_many_points`，`details.parameter` 是 `interval`）。
+- 讀 1 分鐘表的用量最多讀 1,000,000 格（資料點數乘視窗的分鐘數；超過時 422 `telemetry.query_too_heavy`，`details.parameter` 是 `series`）：改用整點的範圍與整小時的時區就會讀 1 小時表，或減少資料點、縮短範圍。
+- 本文不是描述的 JSON 物件或有多的欄位：400 `invalid_request`、`telemetry.query_invalid`。欄位不合規則：422 `validation_failed`，`details.parameter` 是 `series`（`telemetry.series_invalid`、`telemetry.point_invalid`）、`tz`、`period`（`telemetry.period_invalid`）或 `from`。其他錯誤與歷史 API 相同（上表）。
+- 每個請求一個語句，帶參數、以租戶帳號執行，與歷史 API 相同；語句另加 `tenant_id = 呼叫者租戶`，資料點以 `Array(Tuple(UUID, String))` 參數比對。
+
 ## 資料庫
 
 schema `telemetry_query`，DDL 在 `migrations/postgres/`，由 migration Job 套用（`tools/migrate/src/registry.rs` 的 `PRODUCT`：有平台角色、消費 `identity` 的事件）；檔案清單在 `src/schema.rs`，readiness 檢查同一份。
@@ -105,5 +186,6 @@ CARGO_BUILD_JOBS=2 cargo test -p telemetry-query
 | --- | --- |
 | `tests/tenant_accounts.rs` | 驗收 1、2：建立兩個租戶後兩個帳號都存在，屬性（default role、hosts、沒有自己的 grant、`SQL_tenant_id`、`readonly`、上限）正確，各自只看得到自己的讀數；以租戶 A 的帳號跑 2026-10-09 PoC 的攻擊類型（基底表、JOIN、子查詢、UNION、CTE、FINAL、PREWHERE、table function、系統表、改 `SQL_tenant_id` 與限制的 setting、EXECUTE AS、URL 的 role、寫入、建帳號、改服務帳號、grant、刪 row policy），都被拒或回不出 B 與第三個租戶的讀數，資料沒被改；超過列數、記憶體、時間上限的查詢分別以 `TOO_MANY_ROWS`、`MEMORY_LIMIT_EXCEEDED`、`TIMEOUT_EXCEEDED` 中止；密碼被改時下一個 API 呼叫自動修好；每個 API 呼叫只算帳號 quota 的一個查詢（查詢前的帳號檢查不讀表、不計入，以 `system.quotas_usage` 確認）；帳號的查詢上限在帳號上被改寬（`readonly` 不變）時 API 回 503、不執行查詢，改回後恢復；帳號被改成別的租戶時 API 回 503、回不出別的租戶，重播事件時進 dead letter；日誌沒有任何密碼 |
 | `tests/history.rs` | 驗收 3、4：序列與以另一組 ClickHouse 函式（`toStartOfHour`、`toStartOfDay`、`toStartOfFifteenMinutes`）直接查表的結果逐區間相同（Asia/Taipei、Asia/Kolkata、UTC；`15m`、`1h`、`3h`、`1d` 與自動選擇），區間開始落在當地邊界；整數、bool、文字資料點；`raw` 與 `latest` 等於儲存的讀數；同一個設備 ID 的另一個租戶的讀數不會出現；原始資料與聚合資料的期間截斷與拒絕；401、403、404、400、422 的各種拒絕不帶 ClickHouse 錯誤內文；quota 用完時 429 |
-| `tests/cross_tenant.rs` | [crates/testkit](../../crates/testkit/README.md) 的跨租戶負向測試：服務角色讀不到也改不了其他租戶的 `tenant_accounts`；兩個 API 讀的是 ClickHouse，由上面兩個測試手動涵蓋，所以在套件中豁免 |
-| `src/` 的單元測試 | 區間選擇、期間截斷、參數規則、讀數的 JSON 形狀、帳號名稱與密碼推導、建帳號的 SQL 只放進租戶 ID |
+| `tests/semantic.rs` | Laysi/trustiot-v2#142 的驗收：以 [datasets/lab](../../datasets/lab/README.md) 的資料集（預設是合成 fixture，`TRUSTIOT_LAB_DATASET_INDEX` 可換成 lab 錄的資料集）照 ingest 的寫法載入兩個租戶，統計（UTC、Asia/Taipei 讀 1 小時表，Asia/Kolkata 讀 1 分鐘表；`15m`、`1h`、`1d`、`1w`、`1mo`、`total`）與用量（另有從第二個小時開始、有 `baseline` 的範圍）逐區間等於測試自己從讀數算出的結果（不經服務的 SQL，依上面的規則逐格計算）；fixture 的重置與 32 位元回捲各一次、不可疑，瞬時值是 `not_cumulative`、開關與文字是 `not_numeric`，漏讀的 35 分鐘是斷訊；最新值等於最後的讀數；租戶 A 問租戶 B 的設備是 `no_data`，本文帶租戶欄位回 400；惡意的資料點、時區、期間在 API 被拒，直接以租戶帳號執行服務的語句時被當成值、比對不到任何列；跨過可查期間開始的資料集被截斷（`truncated`、沒有 `baseline`、檢查視窗從期間開始），整段在之前時 403；為規則寫的序列：讀到 0、讀到半個 32 位元的值、換錶各被標成可疑跳增而總量照算，長時間斷訊後以平常速率累積的增量不可疑，閒置在 0、跳三次的瞬時值是 `not_cumulative` |
+| `tests/cross_tenant.rs` | [crates/testkit](../../crates/testkit/README.md) 的跨租戶負向測試：服務角色讀不到也改不了其他租戶的 `tenant_accounts`；四個 API 讀的是 ClickHouse，由上面的測試手動涵蓋，所以在套件中豁免 |
+| `src/` 的單元測試 | 區間選擇、期間截斷、參數規則、讀數的 JSON 形狀、帳號名稱與密碼推導、建帳號的 SQL 只放進租戶 ID；語意查詢：時區名稱、每種期間的寫法與在 Asia/Taipei、Asia/Tokyo、America/New_York（日光節約）的解析、可查期間的邊界與取整、表的選擇、截斷與拒絕、列數與 1 分鐘格數上限、累計檢查在邊界上的判定、語句只用參數、回應的組合、規格裡兩組區間的名稱不相撞 |
