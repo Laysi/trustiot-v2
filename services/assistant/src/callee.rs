@@ -7,6 +7,7 @@
 //! - The token's audience is the client's service, fixed when the client is built: a tool
 //!   cannot address a token elsewhere.
 //! - No tenant or user parameter is sent; the callee takes both from the token.
+//! - A request is a GET with a query string or a POST with a JSON body the tool built.
 //! - Only a success body is read. An error answer is reduced to a [`ToolError`] by its status;
 //!   its body is never read, so nothing of it reaches the model or the logs. A failure is logged
 //!   with the tool, the service and the status class or kind of failure only, never the URL (it
@@ -17,7 +18,8 @@
 use std::time::Duration;
 
 use contract::{INTERNAL_IDENTITY_HEADER, ServiceName};
-use reqwest::header::{ACCEPT, HeaderValue};
+use reqwest::header::{ACCEPT, CONTENT_TYPE, HeaderValue};
+use serde::Serialize;
 use serde::de::DeserializeOwned;
 
 use crate::tools::{ToolContext, ToolError};
@@ -67,6 +69,19 @@ pub struct Get<'a> {
     pub rejected_input: &'static str,
 }
 
+/// One POST request with a JSON body (Laysi/trustiot-v2#142): the path, fixed by the tool, and
+/// the body the tool built from the model's checked input. The same rules as [`Get`].
+#[derive(Debug)]
+pub struct Post<'a, B> {
+    /// The tool that calls, for the logs.
+    pub tool: &'static str,
+    /// The request path, such as `/api/telemetry/v1/usage`.
+    pub path: &'static str,
+    pub body: &'a B,
+    /// What the model is told when the service rejects the body (400 or 422).
+    pub rejected_input: &'static str,
+}
+
 impl Callee {
     /// A client for `service` at `base_url`, a plain `http` origin (checked by the configuration
     /// too). `timeout` bounds a whole call; the tool's own time limit is the real bound.
@@ -113,6 +128,51 @@ impl Callee {
         context: &ToolContext,
         request: Get<'_>,
     ) -> Result<T, ToolError> {
+        let mut url = self.base_url.clone();
+        url.set_path(request.path);
+        if !request.query.is_empty() {
+            url.query_pairs_mut().extend_pairs(request.query.iter());
+        }
+        let call = self.http.get(url);
+        self.send(context, request.tool, request.rejected_input, call)
+            .await
+    }
+
+    /// Posts `request`'s body as JSON as the question's user and parses the success body as
+    /// `T`, with the same rules and errors as [`Callee::get`].
+    ///
+    /// # Errors
+    ///
+    /// As [`Callee::get`], with [`Post::rejected_input`] for 400 and 422.
+    pub async fn post<B: Serialize, T: DeserializeOwned>(
+        &self,
+        context: &ToolContext,
+        request: Post<'_, B>,
+    ) -> Result<T, ToolError> {
+        let mut url = self.base_url.clone();
+        url.set_path(request.path);
+        let body = serde_json::to_vec(request.body).map_err(|_| {
+            self.log_failure(context, request.tool, "invalid_request", None);
+            ToolError::Failed
+        })?;
+        let call = self
+            .http
+            .post(url)
+            .header(CONTENT_TYPE, "application/json")
+            .body(body);
+        self.send(context, request.tool, request.rejected_input, call)
+            .await
+    }
+
+    /// Sends `call` with a fresh token of the question's user, reads only a success body and
+    /// parses it as `T`.
+    async fn send<T: DeserializeOwned>(
+        &self,
+        context: &ToolContext,
+        tool: &'static str,
+        rejected_input: &'static str,
+        call: reqwest::RequestBuilder,
+    ) -> Result<T, ToolError> {
         // A fresh token for every call: it lives 60 seconds, and the identity service checks the
         // user's session and membership again on each exchange.
         let token = context
@@ -120,19 +180,12 @@ impl Callee {
             .token_for(self.service)
             .await
             .map_err(ToolError::from)?;
-        let mut url = self.base_url.clone();
-        url.set_path(request.path);
-        if !request.query.is_empty() {
-            url.query_pairs_mut().extend_pairs(request.query.iter());
-        }
         let mut header = HeaderValue::from_str(token.expose()).map_err(|_| {
-            self.log_failure(context, &request, "invalid_token", None);
+            self.log_failure(context, tool, "invalid_token", None);
             ToolError::Failed
         })?;
         header.set_sensitive(true);
-        let response = self
-            .http
-            .get(url)
+        let response = call
             .header(INTERNAL_IDENTITY_HEADER, header)
             .header(ACCEPT, "application/json")
             .send()
@@ -145,16 +198,16 @@ impl Callee {
                 } else {
                     "transport"
                 };
-                self.log_failure(context, &request, kind, None);
+                self.log_failure(context, tool, kind, None);
                 ToolError::Failed
             })?;
         let status = response.status().as_u16();
         if !response.status().is_success() {
             // The body is dropped unread.
             drop(response);
-            self.log_failure(context, &request, "error_status", Some(status));
+            self.log_failure(context, tool, "error_status", Some(status));
             return Err(match status {
-                400 | 422 => ToolError::Input(request.rejected_input.to_owned()),
+                400 | 422 => ToolError::Input(rejected_input.to_owned()),
                 403 | 404 => ToolError::Denied,
                 _ => ToolError::Failed,
             });
@@ -162,11 +215,11 @@ impl Callee {
         let body = read_limited(response, MAX_RESPONSE_BYTES)
             .await
             .map_err(|kind| {
-                self.log_failure(context, &request, kind, Some(status));
+                self.log_failure(context, tool, kind, Some(status));
                 ToolError::Failed
             })?;
         serde_json::from_slice(&body).map_err(|_| {
-            self.log_failure(context, &request, "invalid_response", Some(status));
+            self.log_failure(context, tool, "invalid_response", Some(status));
             ToolError::Failed
         })
     }
@@ -176,7 +229,7 @@ impl Callee {
     fn log_failure(
         &self,
         context: &ToolContext,
-        request: &Get<'_>,
+        tool: &'static str,
         kind: &'static str,
         status: Option<u16>,
     ) {
@@ -187,7 +240,7 @@ impl Callee {
                 run_id = %context.run_id,
                 conversation_id = %context.conversation_id,
                 tenant_id = %context.principal.tenant_id,
-                tool = request.tool,
+                tool,
                 peer = self.service.as_str(),
                 kind,
                 status_class,
@@ -198,7 +251,7 @@ impl Callee {
                 run_id = %context.run_id,
                 conversation_id = %context.conversation_id,
                 tenant_id = %context.principal.tenant_id,
-                tool = request.tool,
+                tool,
                 peer = self.service.as_str(),
                 kind,
                 status_class,

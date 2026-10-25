@@ -399,6 +399,26 @@ impl Service {
         (status, response.text().await.expect("read the body"))
     }
 
+    /// `POST path` with the JSON body `body` and an `x-internal-identity` token (none: without
+    /// the header); the status and the body.
+    pub async fn post(&self, path: &str, token: Option<&str>, body: &Value) -> (u16, String) {
+        let mut request = reqwest::Client::new()
+            .post(format!("{}{path}", self.base_url))
+            .header("content-type", "application/json")
+            .body(body.to_string())
+            // Above the 45 s the service waits for ClickHouse.
+            .timeout(Duration::from_secs(90));
+        if let Some(token) = token {
+            request = request.header("x-internal-identity", token);
+        }
+        let response = request
+            .send()
+            .await
+            .expect("call the telemetry-query service");
+        let status = response.status().as_u16();
+        (status, response.text().await.expect("read the body"))
+    }
+
     /// `GET path` that must answer 200; the body as JSON.
     pub async fn get_ok(&self, path: &str, token: &str) -> Value {
         let (status, body) = self.get(path, Some(token)).await;

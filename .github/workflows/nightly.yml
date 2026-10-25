@@ -72,8 +72,12 @@ on:
       - crates/webpki-roots-empty/**
       # A dev-dependency of services/certs (tests/workstation_tool.rs).
       - factory/workstation/**
-      - services/ingest/src/retention.rs
-      - services/ingest/src/rollup.rs
+      # A dev-dependency of services/telemetry-query (tests/semantic.rs loads the lab dataset),
+      # and what it depends on. services/ingest also holds the files tools/migrate compiles in
+      # with #[path] (src/retention.rs, src/rollup.rs).
+      - tools/lab-dataset/**
+      - edge/agent/**
+      - services/ingest/**
       - deploy/chart/**
       - deploy/cloudnative-pg/**
       - deploy/images/postgres/**
