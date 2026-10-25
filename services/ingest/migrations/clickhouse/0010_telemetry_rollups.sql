@@ -49,7 +49,11 @@
 -- when this file is first applied, since no release before it has an ingest writer.
 -- max_execution_time stays below the migration Job's 30-second request timeout, so a statement
 -- that runs too long stops on the server too and is not repeated alongside a running one by the
--- next run. A larger table is filled month by month (docs/runbooks/migrations.md).
+-- next run, which inserts what is still missing. The backfill views also check and repair a
+-- range of receive days by hand (docs/runbooks/migrations.md).
+-- deduplicate_insert_select = 'disable': ClickHouse 26.8 drops an INSERT SELECT whose block it
+-- saw before when the SELECT is stable, and a difference may equal an earlier one; its
+-- insert_deduplicate setting no longer turns deduplication off.
 
 CREATE TABLE IF NOT EXISTS trustiot.telemetry_1m
 (
@@ -469,14 +473,14 @@ AS PERMISSIVE FOR SELECT USING 1 TO CURRENT_USER;
 -- The backfill itself, over every receive day a Date can hold.
 INSERT INTO trustiot.telemetry_1m (tenant_id, device_id, point, bucket, gateway_id, stream_id,
     received_day, readings, numeric_readings, value_sum, value_min, value_max, first, last)
-SETTINGS insert_deduplicate = 0, max_execution_time = 25
+SETTINGS deduplicate_insert_select = 'disable', max_execution_time = 25
 SELECT tenant_id, device_id, point, bucket, gateway_id, stream_id, received_day, readings,
     numeric_readings, value_sum, value_min, value_max, first, last
 FROM trustiot.telemetry_1m_backfill(first_day = '1970-01-01', last_day = '2149-06-06');
 
 INSERT INTO trustiot.telemetry_1h (tenant_id, device_id, point, bucket, gateway_id, stream_id,
     received_day, readings, numeric_readings, value_sum, value_min, value_max, first, last)
-SETTINGS insert_deduplicate = 0, max_execution_time = 25
+SETTINGS deduplicate_insert_select = 'disable', max_execution_time = 25
 SELECT tenant_id, device_id, point, bucket, gateway_id, stream_id, received_day, readings,
     numeric_readings, value_sum, value_min, value_max, first, last
 FROM trustiot.telemetry_1h_backfill(first_day = '1970-01-01', last_day = '2149-06-06');

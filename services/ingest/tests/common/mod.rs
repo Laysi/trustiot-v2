@@ -179,12 +179,15 @@ impl QueryError {
     }
 }
 
-/// ClickHouse's answer to one statement, with the rows it read.
+/// ClickHouse's answer to one statement, with the rows it read and wrote.
 #[derive(Debug)]
 pub struct Answer {
     pub result: Result<String, QueryError>,
     /// `read_rows` of the `X-ClickHouse-Summary` header, when ClickHouse sent one.
     pub read_rows: Option<u64>,
+    /// `written_rows` of the same header: the rows an INSERT wrote, its materialized views'
+    /// rows included.
+    pub written_rows: Option<u64>,
 }
 
 /// An account to run queries as.
@@ -371,6 +374,17 @@ impl ClickHouse {
         self.send(account, sql, &[]).await
     }
 
+    /// Runs one statement as `account` with `params` and also returns how many rows it read and
+    /// wrote.
+    pub async fn query_with_summary(
+        &self,
+        account: &Account,
+        sql: &str,
+        params: &[(&str, &str)],
+    ) -> Answer {
+        self.send(account, sql, params).await
+    }
+
     async fn send(&self, account: &Account, sql: &str, params: &[(&str, &str)]) -> Answer {
         let mut url = reqwest::Url::parse(&self.url).expect("valid ClickHouse URL");
         if !params.is_empty() {
@@ -393,18 +407,24 @@ impl ClickHouse {
                         body: error.to_string(),
                     }),
                     read_rows: None,
+                    written_rows: None,
                 };
             }
         };
         let status = response.status().as_u16();
         // X-ClickHouse-Summary is JSON with every counter as a string, for example
         // {"read_rows":"7",...}.
-        let read_rows = response
+        let summary = response
             .headers()
             .get("X-ClickHouse-Summary")
             .and_then(|value| value.to_str().ok())
-            .and_then(|summary| serde_json::from_str::<serde_json::Value>(summary).ok())
-            .and_then(|summary| summary["read_rows"].as_str()?.parse().ok());
+            .and_then(|summary| serde_json::from_str::<serde_json::Value>(summary).ok());
+        let counter = |name: &str| {
+            summary
+                .as_ref()
+                .and_then(|summary| summary[name].as_str()?.parse().ok())
+        };
+        let (read_rows, written_rows) = (counter("read_rows"), counter("written_rows"));
         let result = match response.text().await {
             Ok(body) if (200..300).contains(&status) => Ok(body),
             Ok(body) => Err(QueryError { status, body }),
@@ -413,7 +433,11 @@ impl ClickHouse {
                 body: error.to_string(),
             }),
         };
-        Answer { result, read_rows }
+        Answer {
+            result,
+            read_rows,
+            written_rows,
+        }
     }
 
     pub async fn query(&self, account: &Account, sql: &str) -> Result<String, QueryError> {

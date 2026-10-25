@@ -20,9 +20,12 @@
 //! 1. Make sure no earlier INSERT of this stream is still running (one ingest replica per stream).
 //! 2. `DELETE FROM trustiot.telemetry` the batch's rows, synchronously
 //!    (`lightweight_deletes_sync = 2`).
-//! 3. Insert the whole batch with `insert_deduplicate = 0`. With deduplication on, a block whose
-//!    content the table saw before the DELETE (the same rows, or the same
-//!    `insert_deduplication_token`) is dropped without an error, and the batch's rows are lost.
+//! 3. Insert the whole batch with [`REWRITE_SETTINGS`] (`deduplicate_insert = 'disable'`). With
+//!    deduplication on, a block whose content the table saw before the DELETE (the same rows, or
+//!    the same `insert_deduplication_token`) is dropped without an error, and the batch's rows
+//!    are lost. On ClickHouse 26.8 `insert_deduplicate = 0` does not turn it off:
+//!    `deduplicate_insert` (default `enable`) supersedes it, for synchronous and asynchronous
+//!    inserts alike, and consults it only when set to `backward_compatible_choice`.
 //! 4. Run [`RECONCILE_1M`] and [`RECONCILE_1H`] with the batch's parameters ([`ReconcileParams`]).
 //!    Each inserts, for the cells of this stream that the batch touches, the difference between
 //!    the cells recomputed from the raw rows and the cells as they are; when they agree it
@@ -62,6 +65,10 @@
 
 use protocol::telemetry::BUFFER_MAX_AGE_DAYS;
 
+/// The settings of the rewrite's INSERT (step 3 of the module documentation), as name and value:
+/// the batch's rows must land even when the table saw the same block before the DELETE.
+pub const REWRITE_SETTINGS: [(&str, &str); 1] = [("deduplicate_insert", "disable")];
+
 /// How many receive days before today (UTC) the reconcile compares: the gateway buffer's maximum
 /// age.
 pub const RECONCILE_WINDOW_DAYS: u32 = BUFFER_MAX_AGE_DAYS;
@@ -76,7 +83,7 @@ macro_rules! reconcile {
             $table,
             " (tenant_id, device_id, point, bucket, gateway_id, stream_id, received_day,
     readings, numeric_readings, value_sum, value_min, value_max, first, last)
-SETTINGS insert_deduplicate = 0, join_use_nulls = 0
+SETTINGS deduplicate_insert_select = 'disable', join_use_nulls = 0
 SELECT
     tenant_id,
     device_id,
@@ -281,7 +288,11 @@ mod tests {
         assert!(RECONCILE_1M.starts_with("INSERT INTO trustiot.telemetry_1m "));
         assert!(RECONCILE_1H.contains("FROM trustiot.telemetry_1h\n"));
         for statement in [RECONCILE_1M, RECONCILE_1H] {
-            assert!(statement.contains("SETTINGS insert_deduplicate = 0, join_use_nulls = 0"));
+            // A correction equal to an earlier one must not be dropped as a duplicate.
+            assert!(
+                statement
+                    .contains("SETTINGS deduplicate_insert_select = 'disable', join_use_nulls = 0")
+            );
             assert!(!statement.contains(';'));
         }
     }

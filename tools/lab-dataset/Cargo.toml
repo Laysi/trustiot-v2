@@ -39,6 +39,9 @@ toml.workspace = true
 uuid = { workspace = true, features = ["serde", "v8"] }
 
 [dev-dependencies]
+# The reconcile and energy statements on the aggregate tables (services/ingest/src/rollup.rs),
+# run on the loaded fixture by tests/rollups.rs.
+ingest = { path = "../../services/ingest" }
 # The ClickHouse test harness of services/ingest/tests/common (included with #[path]).
 reqwest.workspace = true
 # The recorder's test: the fake RS485 converter and the manual clock.
