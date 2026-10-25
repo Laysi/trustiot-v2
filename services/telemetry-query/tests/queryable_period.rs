@@ -31,8 +31,8 @@ use std::time::{Duration, Instant};
 use contract::{ServiceName, TenantRole};
 use support::clickhouse::{Account, QueryError};
 use support::period::{
-    AGES, Aged, CELLS_VISIBLE, DAY, EVALUATION_ROUTES, Outcome, RAW, RAW_VISIBLE, ROUTES, Route,
-    SETTINGS_ROUTES, Tenant, VICTIM, forbidden, insert, marker,
+    AGES, Aged, CELLS_VISIBLE, DAY, EVALUATION_ROUTES, ORACLE_ROUTES, Outcome, RAW, RAW_VISIBLE,
+    ROUTES, Route, SETTINGS_ROUTES, Tenant, VICTIM, forbidden, insert, marker,
 };
 use support::{
     ClickHouseTarget, SERVICE_ACCOUNT, Service, Stack, random_password, wait_account_ready,
@@ -374,6 +374,7 @@ async fn the_database_keeps_tenant_queries_inside_the_queryable_period() {
         "a SETTINGS clause in a subquery leaves the window as it is"
     );
     run_routes(&stack, &tenant_b, &account_b, EVALUATION_ROUTES).await;
+    run_routes(&stack, &tenant_b, &account_b, ORACLE_ROUTES).await;
     let session = uuid::Uuid::new_v4().simple().to_string();
     let in_session = [("session_id", session.as_str())];
     let set = stack

@@ -684,6 +684,136 @@ pub const EVALUATION_ROUTES: &[Route] = &[
     ),
 ];
 
+/// The error oracles of the security review of 2026-10-26 on Laysi/trustiot-v2#143: an
+/// expression that fails exactly on the rows a predicate picks, `intDiv(1, if(<p>, 0, 1))`
+/// (`ILLEGAL_DIVISION`) and `toInt64(if(<p>, 'x', '1'))` (`CANNOT_PARSE_TEXT`). Run as B with a
+/// predicate on another tenant's rows or on rows outside the window, none may fail: an error would
+/// tell the caller that such a row exists. The same oracles on the caller's own rows in the
+/// window fail, so they would tell if those rows were evaluated.
+pub const ORACLE_ROUTES: &[Route] = &[
+    answers(
+        "division by zero on another tenant's raw rows",
+        "SELECT count() FROM trustiot.tenant_telemetry WHERE intDiv(1, if(tenant_id = 'VICTIM_ID', 0, 1)) = 1",
+        RAW,
+        NOTHING,
+    ),
+    answers(
+        "division by zero in SELECT on another tenant's raw rows",
+        "SELECT intDiv(1, if(tenant_id = 'VICTIM_ID', 0, 1)) FROM trustiot.tenant_telemetry",
+        RAW,
+        NOTHING,
+    ),
+    answers(
+        "division by zero on raw rows outside the window",
+        "SELECT count() FROM trustiot.tenant_telemetry WHERE intDiv(1, if(ts < now64(3, 'UTC') - INTERVAL 7 DAY - INTERVAL 1 HOUR, 0, 1)) = 1",
+        RAW,
+        NOTHING,
+    ),
+    answers(
+        "division by zero in SELECT on raw rows outside the window",
+        "SELECT intDiv(1, if(ts < now64(3, 'UTC') - INTERVAL 7 DAY - INTERVAL 1 HOUR, 0, 1)) FROM trustiot.tenant_telemetry",
+        RAW,
+        NOTHING,
+    ),
+    answers(
+        "division by zero on another tenant's one-minute cells",
+        "SELECT count() FROM trustiot.tenant_telemetry_1m WHERE intDiv(1, if(tenant_id = 'VICTIM_ID', 0, 1)) = 1",
+        MINUTE,
+        NOTHING,
+    ),
+    answers(
+        "division by zero on one-minute cells outside the window",
+        "SELECT count() FROM trustiot.tenant_telemetry_1m WHERE intDiv(1, if(bucket < now('UTC') - INTERVAL 3 MONTH - INTERVAL 1 DAY, 0, 1)) = 1",
+        MINUTE,
+        NOTHING,
+    ),
+    answers(
+        "division by zero on another tenant's one-hour cells",
+        "SELECT count() FROM trustiot.tenant_telemetry_1h WHERE intDiv(1, if(tenant_id = 'VICTIM_ID', 0, 1)) = 1",
+        HOUR,
+        NOTHING,
+    ),
+    answers(
+        "division by zero on one-hour cells outside the window",
+        "SELECT count() FROM trustiot.tenant_telemetry_1h WHERE intDiv(1, if(bucket < now('UTC') - INTERVAL 3 MONTH - INTERVAL 1 DAY, 0, 1)) = 1",
+        HOUR,
+        NOTHING,
+    ),
+    answers(
+        "failing parse on another tenant's raw rows",
+        "SELECT count() FROM trustiot.tenant_telemetry WHERE toInt64(if(tenant_id = 'VICTIM_ID', 'x', '1')) = 1",
+        RAW,
+        NOTHING,
+    ),
+    answers(
+        "failing parse in SELECT on another tenant's raw rows",
+        "SELECT toInt64(if(tenant_id = 'VICTIM_ID', 'x', '1')) FROM trustiot.tenant_telemetry",
+        RAW,
+        NOTHING,
+    ),
+    answers(
+        "failing parse on raw rows outside the window",
+        "SELECT count() FROM trustiot.tenant_telemetry WHERE toInt64(if(ts < now64(3, 'UTC') - INTERVAL 7 DAY - INTERVAL 1 HOUR, 'x', '1')) = 1",
+        RAW,
+        NOTHING,
+    ),
+    answers(
+        "failing parse in SELECT on raw rows outside the window",
+        "SELECT toInt64(if(ts < now64(3, 'UTC') - INTERVAL 7 DAY - INTERVAL 1 HOUR, 'x', '1')) FROM trustiot.tenant_telemetry",
+        RAW,
+        NOTHING,
+    ),
+    answers(
+        "failing parse on another tenant's one-minute cells",
+        "SELECT count() FROM trustiot.tenant_telemetry_1m WHERE toInt64(if(tenant_id = 'VICTIM_ID', 'x', '1')) = 1",
+        MINUTE,
+        NOTHING,
+    ),
+    answers(
+        "failing parse on one-minute cells outside the window",
+        "SELECT count() FROM trustiot.tenant_telemetry_1m WHERE toInt64(if(bucket < now('UTC') - INTERVAL 3 MONTH - INTERVAL 1 DAY, 'x', '1')) = 1",
+        MINUTE,
+        NOTHING,
+    ),
+    answers(
+        "failing parse on another tenant's one-hour cells",
+        "SELECT count() FROM trustiot.tenant_telemetry_1h WHERE toInt64(if(tenant_id = 'VICTIM_ID', 'x', '1')) = 1",
+        HOUR,
+        NOTHING,
+    ),
+    answers(
+        "failing parse on one-hour cells outside the window",
+        "SELECT count() FROM trustiot.tenant_telemetry_1h WHERE toInt64(if(bucket < now('UTC') - INTERVAL 3 MONTH - INTERVAL 1 DAY, 'x', '1')) = 1",
+        HOUR,
+        NOTHING,
+    ),
+    // The controls: the same oracles on the caller's own rows in the window fail.
+    refused(
+        "division by zero on the caller's own raw rows",
+        "SELECT count() FROM trustiot.tenant_telemetry WHERE intDiv(1, if(tenant_id = 'TENANT_SELF', 0, 1)) = 1",
+        RAW,
+        "ILLEGAL_DIVISION",
+    ),
+    refused(
+        "division by zero on the caller's own one-hour cells",
+        "SELECT count() FROM trustiot.tenant_telemetry_1h WHERE intDiv(1, if(tenant_id = 'TENANT_SELF', 0, 1)) = 1",
+        HOUR,
+        "ILLEGAL_DIVISION",
+    ),
+    refused(
+        "failing parse on the caller's own raw rows",
+        "SELECT count() FROM trustiot.tenant_telemetry WHERE toInt64(if(tenant_id = 'TENANT_SELF', 'x', '1')) = 1",
+        RAW,
+        "CANNOT_PARSE_TEXT",
+    ),
+    refused(
+        "failing parse on the caller's own one-hour cells",
+        "SELECT count() FROM trustiot.tenant_telemetry_1h WHERE toInt64(if(tenant_id = 'TENANT_SELF', 'x', '1')) = 1",
+        HOUR,
+        "CANNOT_PARSE_TEXT",
+    ),
+];
+
 /// A tenant, the letter in its markers, and its ID.
 pub struct Tenant {
     pub letter: char,

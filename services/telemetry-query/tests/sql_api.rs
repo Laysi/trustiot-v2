@@ -34,7 +34,8 @@ use contract::{ServiceName, TenantGrant, TenantId, TenantRole};
 use serde_json::{Value, json};
 use support::clickhouse::Account;
 use support::period::{
-    self, AGES, Aged, EVALUATION_ROUTES, Outcome, ROUTES, Route, SETTINGS_ROUTES, Tenant,
+    self, AGES, Aged, EVALUATION_ROUTES, ORACLE_ROUTES, Outcome, ROUTES, Route, SETTINGS_ROUTES,
+    Tenant,
 };
 use support::poc::{A_MARKER, ATTACKS, B_MARKER, HEAVY, SYSTEM_TABLES, VICTIM, VICTIM_MARKER};
 use support::{ClickHouseTarget, Readings, Service, Stack, wait_account_ready};
@@ -295,6 +296,46 @@ async fn run_period_routes(
         };
         eprintln!(
             "endpoint period {:>42}: {}{url}",
+            route.name,
+            outcome(status, &body)
+        );
+    }
+}
+
+/// Runs the error oracles as `me` through the endpoint, strictly: an oracle on rows the caller
+/// may not see answers 200 (no signal), and on the caller's own rows it fails with the kind of
+/// its ClickHouse error, so the check passes every one of them to ClickHouse.
+#[allow(
+    clippy::print_stderr,
+    reason = "prints each oracle's outcome for the test report"
+)]
+async fn run_oracle_routes(service: &Service, token: &str, me: &Tenant) {
+    for route in ORACLE_ROUTES {
+        let sql = route
+            .sql
+            .replace("TENANT_SELF", &me.id)
+            .replace("VICTIM_ID", period::VICTIM);
+        let (status, body) = run(service, Some(token), &sql, Some(10_000)).await;
+        match route.outcome {
+            Outcome::Answers(_) => assert_eq!(status, 200, "{}: {body}", route.name),
+            Outcome::Refused(code) => {
+                let kind = match code {
+                    "ILLEGAL_DIVISION" => "division_by_zero",
+                    "CANNOT_PARSE_TEXT" => "cannot_parse_value",
+                    other => panic!("{}: no kind for {other}", route.name),
+                };
+                assert_eq!(status, 422, "{}: {body}", route.name);
+                assert_refusal_body(&sql, &body, &json!({"class": "query_error", "kind": kind}));
+            }
+        }
+        let text = shown(status, &body);
+        let leaked: Vec<String> = period::forbidden(me.letter, route.views)
+            .into_iter()
+            .filter(|marker| text.contains(marker.as_str()))
+            .collect();
+        assert!(leaked.is_empty(), "{}: {leaked:?}\n{body}", route.name);
+        eprintln!(
+            "endpoint oracle {:>58}: {}",
             route.name,
             outcome(status, &body)
         );
@@ -801,6 +842,7 @@ async fn the_endpoint_runs_only_checked_selects_as_the_callers_tenant() {
         EVALUATION_ROUTES,
     )
     .await;
+    run_oracle_routes(&service, &token_b, &tenant_b).await;
 
     // 5. The same SQL as A and as B: each its own readings.
     let same = "SELECT DISTINCT value_string FROM tenant_telemetry WHERE point = 'poc' ORDER BY value_string";
