@@ -1191,6 +1191,16 @@ async fn the_semantic_api_answers_the_dataset_within_the_period_and_the_tenant()
             );
         }
     }
+    // An end too far after now, including a year serde reads but chrono cannot add to, is a 422
+    // on `to`, not a panic turned into a 500.
+    for to in ["+262142-12-31T23:59:00Z", "2106-02-08T00:00:00Z"] {
+        let request = json!({"series": [all[0].key()], "tz": "UTC", "from": "2026-01-01T00:00:00Z", "to": to});
+        for path in [STATISTICS, USAGE] {
+            let (status, error) = fixture.status(path, Some(&token_a), &request).await;
+            assert_eq!(status, 422, "{path} {to}: {error}");
+            assert_eq!(error["details"]["parameter"], "to", "{path} {to}");
+        }
+    }
     // ...and below the API, the statements bind them as values: run as tenant A's account, a
     // hostile key matches no row, a hostile time zone is an error, and naming tenant B in the
     // statement's own filter reads nothing: the account's views hold tenant A's rows only.
@@ -1241,7 +1251,7 @@ async fn the_semantic_api_answers_the_dataset_within_the_period_and_the_tenant()
         assert!(body.is_err(), "a hostile time zone is an unknown time zone");
     }
     eprintln!(
-        "injection: hostile values refused by the API (400/422); bound as values below it, they \
+        "injection: hostile values refused by the API (400/422), an end after 2106 or in year +262142 a 422 on `to`; bound as values below it, they \
          match no row or fail; tenant B's rows are not in tenant A's account"
     );
 

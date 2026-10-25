@@ -88,11 +88,11 @@ Laysi/trustiot-v2#142（2026-10-26）加上語意查詢 API：多個資料點在
 
 `interval` 不是分鐘區間、而且從（截斷後的）`from` 到 `to` 在 `tz` 裡的每個區間邊界都落在 UTC 的整點時（`from`、`to` 是整點，範圍內 `tz` 用到的每個時差都是整小時），讀 1 小時表；否則讀 1 分鐘表，例如 Asia/Kolkata（+05:30）或 `last_24_hours`。兩張表的結果相同，只有最小與最大的時間精度不同。
 
-這個選擇在查詢前以 jiff 與編入的時區資料庫決定，一次查詢。Laysi/trustiot-v2#143 的 SQL 歷史查詢則在 ClickHouse 裡決定（`toStartOfHour(bucket, tz) != bucket` 時改讀 1 分鐘表），兩者不同是因為語意查詢一個請求只送一個語句、而且要先知道讀哪張表才能算可查期間的開始與 1 分鐘格數上限。代價是 jiff 與 ClickHouse 的時區資料庫版本不同時，某個時區剛改過的時差可能讓兩邊判斷不一致；兩邊對照的測試列在後續工作。
+這個選擇在查詢前以 jiff 與編入的時區資料庫決定，一次查詢。Laysi/trustiot-v2#143 合併後，它的 SQL 歷史查詢改在 ClickHouse 裡決定（`toStartOfHour(bucket, tz) != bucket` 時改讀 1 分鐘表）；這裡不那樣做是因為語意查詢一個請求只送一個語句、而且要先知道讀哪張表才能算可查期間的開始與 1 分鐘格數上限。代價是 jiff 與 ClickHouse 的時區資料庫版本不同時，某個時區剛改過的時差可能讓兩邊判斷不一致；兩邊對照的測試列在後續工作。
 
 ### 可查期間的邊界
 
-每張表的可查期間從 `S = 取整到該表的格（現在 − 3 個日曆月 + 5 分鐘）` 開始（`range::queryable_start`），只讀 `bucket >= S` 的格。多加的 5 分鐘與向上取整讓這個邊界永遠不早於 Laysi/trustiot-v2#143 在資料庫裡的過濾（`bucket >= now − 3 個日曆月`），請求在路上多花的時間也不會讀到期間之外。`from` 早於 `S` 時改成 `S`，`truncated` 為 `true`、`earliest` 是 `S`；`to` 不晚於 1 分鐘表的 `S` 時整個拒絕（403 `telemetry.outside_queryable_period`，`details.earliest` 是 `S`，帶 `tz` 的時差）。用量往前找基準讀數時也不超過 `S`，所以被截斷的範圍沒有 `baseline`。
+每張表的可查期間從 `S = 取整到該表的格（現在 − 3 個日曆月 + 5 分鐘）` 開始（`range::queryable_start`），只讀 `bucket >= S` 的格。多加的 5 分鐘與向上取整讓這個邊界永遠不早於資料庫在查詢時算出的「現在 − 3 個日曆月」：請求在路上多花的時間也不會讀到期間之外，Laysi/trustiot-v2#143 合併後在資料庫裡加上的過濾（`bucket >= now − 3 個日曆月`）也不會比它晚。`from` 早於 `S` 時改成 `S`，`truncated` 為 `true`、`earliest` 是 `S`；`to` 不晚於 1 分鐘表的 `S` 時整個拒絕（403 `telemetry.outside_queryable_period`，`details.earliest` 是 `S`，帶 `tz` 的時差）。用量往前找基準讀數時也不超過 `S`，所以被截斷的範圍沒有 `baseline`。
 
 ### 用量
 
@@ -139,9 +139,10 @@ fixture 的結果（1 分鐘表）：`energy_kwh` 下降 1 次、上升 46 次�
 
 ### 上限與錯誤
 
+- `to` 最晚是現在之後 367 天（`range::MAX_AHEAD`），而且不晚於 ClickHouse `DateTime`（UInt32 秒）的最後一秒 2106-02-07T06:28:15Z；更晚時在任何日期計算之前拒絕：422 `telemetry.range_invalid`，`details.parameter` 是 `to`，`details.latest` 是最晚可用的時間（帶 `tz` 的時差）。最長的相對期間是在閏年第一刻問的 `this_year`，到 366 個當地日之後結束；多的一天容納年內的時差變動，所以相對期間永遠不會被拒（單元測試以編入的每個時區確認）。
 - 每次最多 20 個資料點、10,000 列（資料點數乘區間數，以名目長度計算，每個資料點加 2；超過時 422 `telemetry.too_many_points`，`details.parameter` 是 `interval`）。
 - 讀 1 分鐘表的用量最多讀 1,000,000 格（資料點數乘視窗的分鐘數；超過時 422 `telemetry.query_too_heavy`，`details.parameter` 是 `series`）：改用整點的範圍與整小時的時區就會讀 1 小時表，或減少資料點、縮短範圍。
-- 本文不是描述的 JSON 物件或有多的欄位：400 `invalid_request`、`telemetry.query_invalid`。欄位不合規則：422 `validation_failed`，`details.parameter` 是 `series`（`telemetry.series_invalid`、`telemetry.point_invalid`）、`tz`、`period`（`telemetry.period_invalid`）或 `from`。其他錯誤與歷史 API 相同（上表）。
+- 本文不是描述的 JSON 物件或有多的欄位：400 `invalid_request`、`telemetry.query_invalid`。欄位不合規則：422 `validation_failed`，`details.parameter` 是 `series`（`telemetry.series_invalid`、`telemetry.point_invalid`）、`tz`、`period`（`telemetry.period_invalid`）、`from` 或 `to`（`telemetry.range_invalid`）。其他錯誤與歷史 API 相同（上表）。
 - 每個請求一個語句，帶參數、以租戶帳號執行，與歷史 API 相同；語句另加 `tenant_id = 呼叫者租戶`，資料點以 `Array(Tuple(UUID, String))` 參數比對。
 
 ## 資料庫
@@ -188,4 +189,4 @@ CARGO_BUILD_JOBS=2 cargo test -p telemetry-query
 | `tests/history.rs` | 驗收 3、4：序列與以另一組 ClickHouse 函式（`toStartOfHour`、`toStartOfDay`、`toStartOfFifteenMinutes`）直接查表的結果逐區間相同（Asia/Taipei、Asia/Kolkata、UTC；`15m`、`1h`、`3h`、`1d` 與自動選擇），區間開始落在當地邊界；整數、bool、文字資料點；`raw` 與 `latest` 等於儲存的讀數；同一個設備 ID 的另一個租戶的讀數不會出現；原始資料與聚合資料的期間截斷與拒絕；401、403、404、400、422 的各種拒絕不帶 ClickHouse 錯誤內文；quota 用完時 429 |
 | `tests/semantic.rs` | Laysi/trustiot-v2#142 的驗收：以 [datasets/lab](../../datasets/lab/README.md) 的資料集（預設是合成 fixture，`TRUSTIOT_LAB_DATASET_INDEX` 可換成 lab 錄的資料集）照 ingest 的寫法載入兩個租戶，統計（UTC、Asia/Taipei 讀 1 小時表，Asia/Kolkata 讀 1 分鐘表；`15m`、`1h`、`1d`、`1w`、`1mo`、`total`）與用量（另有從第二個小時開始、有 `baseline` 的範圍）逐區間等於測試自己從讀數算出的結果（不經服務的 SQL，依上面的規則逐格計算；最小與最大的時間、平均最高與最低的區間也比對）；fixture 的重置與 32 位元回捲各一次、不可疑，瞬時值是 `not_cumulative`、開關與文字是 `not_numeric`，漏讀的 35 分鐘是斷訊；最新值等於最後的讀數；租戶 A 問租戶 B 的設備是 `no_data`，本文帶租戶欄位回 400；惡意的資料點、時區、期間在 API 被拒，直接以租戶帳號執行服務的語句時被當成值、比對不到任何列；跨過可查期間開始的資料集被截斷（`truncated`、沒有 `baseline`、檢查視窗從期間開始），整段在之前時 403；只在 8 天前有讀數的資料點不在最新值裡（原始資料 7 天），統計仍讀得到；為規則寫的序列：讀到 0、讀到半個 32 位元的值、換錶各被標成可疑跳增而總量照算，長時間斷訊後以平常速率累積的增量不可疑，閒置在 0、跳三次的瞬時值是 `not_cumulative` |
 | `tests/cross_tenant.rs` | [crates/testkit](../../crates/testkit/README.md) 的跨租戶負向測試：服務角色讀不到也改不了其他租戶的 `tenant_accounts`；四個 API 讀的是 ClickHouse，由上面的測試手動涵蓋，所以在套件中豁免 |
-| `src/` 的單元測試 | 區間選擇、期間截斷、參數規則、讀數的 JSON 形狀、帳號名稱與密碼推導、建帳號的 SQL 只放進租戶 ID；語意查詢：時區名稱、每種期間的寫法與在 Asia/Taipei、Asia/Tokyo、America/New_York（日光節約）的解析、可查期間的邊界與取整、表的選擇、截斷與拒絕、列數與 1 分鐘格數上限、累計檢查在邊界上的判定、語句只用參數、回應的組合、規格裡兩組區間的名稱不相撞 |
+| `src/` 的單元測試 | 區間選擇、期間截斷、參數規則、讀數的 JSON 形狀、帳號名稱與密碼推導、建帳號的 SQL 只放進租戶 ID；語意查詢：時區名稱、每種期間的寫法與在 Asia/Taipei、Asia/Tokyo、America/New_York（日光節約）的解析、可查期間的邊界與取整、表的選擇、截斷與拒絕、`to` 的上限（擴充年份與 2106 年之後在計算前被拒、上限的邊界、每個時區的每種相對期間在最壞的時刻都不會被拒）、列數與 1 分鐘格數上限、累計檢查在邊界上的判定、語句只用參數、回應的組合、規格裡兩組區間的名稱不相撞 |

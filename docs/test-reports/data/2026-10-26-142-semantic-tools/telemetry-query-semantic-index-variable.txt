@@ -279,7 +279,7 @@ usage "Asia/Kolkata" 15m "1m" press-1/running: not_numeric (check: 0 drops, 0 ri
 usage "Asia/Kolkata" 15m "1m" press-1/mode: not_numeric (check: 0 drops, 0 rises, 0 comparisons)
 usage "Asia/Kolkata" 15m "1m" press-1/cycle_count: 172 over 14 buckets, 0 drops, 1 gaps, 0 suspicious steps, check 0 drops / 37 rises / 41 comparisons (Cumulative), baseline false; equal to the reference
 tenant: A gets no data for B's devices, a tenant field is refused (400)
-injection: hostile values refused by the API (400/422); bound as values below it, they match no row or fail; tenant B's rows are not in tenant A's account
+injection: hostile values refused by the API (400/422), an end after 2106 or in year +262142 a 422 on `to`; bound as values below it, they match no row or fail; tenant B's rows are not in tenant A's account
 usage "UTC" 1h "1h" meter-1/energy_kwh: 81.987 over 2 buckets, 0 drops, 0 gaps, 0 suspicious steps, check 0 drops / 3 rises / 3 comparisons (TooFewReadings), baseline false; equal to the reference
 usage "UTC" 1h "1h" meter-1/power_kw: not_cumulative (check: 3 drops, 0 rises, 3 comparisons)
 usage "UTC" 1h "1h" meter-2/pulses: 1509 over 2 buckets, 0 drops, 0 gaps, 0 suspicious steps, check 0 drops / 3 rises / 3 comparisons (TooFewReadings), baseline false; equal to the reference
@@ -294,22 +294,22 @@ statistics "UTC" 1h meter-2/power_kw: 2 buckets, 24 readings, equal to the datas
 statistics "UTC" 1h press-1/running: 2 buckets, 18 readings, equal to the dataset
 statistics "UTC" 1h press-1/mode: 2 buckets, 18 readings, equal to the dataset
 statistics "UTC" 1h press-1/cycle_count: 2 buckets, 18 readings, equal to the dataset
-period UTC: cut at "2026-07-25T20:00:00Z" ("1h" table), earlier readings left out
-usage "Asia/Kolkata" 1h "1m" meter-1/energy_kwh: 94.733 over 3 buckets, 0 drops, 0 gaps, 0 suspicious steps, check 0 drops / 27 rises / 27 comparisons (Cumulative), baseline false; equal to the reference
-usage "Asia/Kolkata" 1h "1m" meter-1/power_kw: not_cumulative (check: 13 drops, 14 rises, 27 comparisons)
-usage "Asia/Kolkata" 1h "1m" meter-2/pulses: 1728 over 3 buckets, 1 drops, 0 gaps, 0 suspicious steps, check 1 drops / 26 rises / 27 comparisons (Cumulative), baseline false; equal to the reference
-usage "Asia/Kolkata" 1h "1m" meter-2/power_kw: not_cumulative (check: 17 drops, 10 rises, 27 comparisons)
+period UTC: cut at "2026-07-25T21:00:00Z" ("1h" table), earlier readings left out
+usage "Asia/Kolkata" 1h "1m" meter-1/energy_kwh: 113.24400000000078 over 4 buckets, 1 drops, 0 gaps, 0 suspicious steps, check 1 drops / 33 rises / 34 comparisons (Cumulative), baseline false; equal to the reference
+usage "Asia/Kolkata" 1h "1m" meter-1/power_kw: not_cumulative (check: 19 drops, 15 rises, 34 comparisons)
+usage "Asia/Kolkata" 1h "1m" meter-2/pulses: 2190 over 4 buckets, 1 drops, 0 gaps, 0 suspicious steps, check 1 drops / 33 rises / 34 comparisons (Cumulative), baseline false; equal to the reference
+usage "Asia/Kolkata" 1h "1m" meter-2/power_kw: not_cumulative (check: 18 drops, 16 rises, 34 comparisons)
 usage "Asia/Kolkata" 1h "1m" press-1/running: not_numeric (check: 0 drops, 0 rises, 0 comparisons)
 usage "Asia/Kolkata" 1h "1m" press-1/mode: not_numeric (check: 0 drops, 0 rises, 0 comparisons)
-usage "Asia/Kolkata" 1h "1m" press-1/cycle_count: 108 over 3 buckets, 0 drops, 1 gaps, 0 suspicious steps, check 0 drops / 21 rises / 21 comparisons (Cumulative), baseline false; equal to the reference
-statistics "Asia/Kolkata" 1h meter-1/energy_kwh: 3 buckets, 28 readings, equal to the dataset
-statistics "Asia/Kolkata" 1h meter-1/power_kw: 3 buckets, 28 readings, equal to the dataset
-statistics "Asia/Kolkata" 1h meter-2/pulses: 3 buckets, 28 readings, equal to the dataset
-statistics "Asia/Kolkata" 1h meter-2/power_kw: 3 buckets, 28 readings, equal to the dataset
-statistics "Asia/Kolkata" 1h press-1/running: 3 buckets, 22 readings, equal to the dataset
-statistics "Asia/Kolkata" 1h press-1/mode: 3 buckets, 22 readings, equal to the dataset
-statistics "Asia/Kolkata" 1h press-1/cycle_count: 3 buckets, 22 readings, equal to the dataset
-period Asia/Kolkata: cut at "2026-07-26T01:09:00+05:30" ("1m" table), earlier readings left out
+usage "Asia/Kolkata" 1h "1m" press-1/cycle_count: 120 over 4 buckets, 0 drops, 1 gaps, 0 suspicious steps, check 0 drops / 24 rises / 28 comparisons (Cumulative), baseline false; equal to the reference
+statistics "Asia/Kolkata" 1h meter-1/energy_kwh: 4 buckets, 35 readings, equal to the dataset
+statistics "Asia/Kolkata" 1h meter-1/power_kw: 4 buckets, 35 readings, equal to the dataset
+statistics "Asia/Kolkata" 1h meter-2/pulses: 4 buckets, 35 readings, equal to the dataset
+statistics "Asia/Kolkata" 1h meter-2/power_kw: 4 buckets, 35 readings, equal to the dataset
+statistics "Asia/Kolkata" 1h press-1/running: 4 buckets, 29 readings, equal to the dataset
+statistics "Asia/Kolkata" 1h press-1/mode: 4 buckets, 29 readings, equal to the dataset
+statistics "Asia/Kolkata" 1h press-1/cycle_count: 4 buckets, 29 readings, equal to the dataset
+period Asia/Kolkata: cut at "2026-07-26T01:33:00+05:30" ("1m" table), earlier readings left out
 period: the latest values leave out a data point last read 8 days ago (raw period, 7 days); its statistics from the aggregates still hold it
 usage "Asia/Kolkata" total "1m" rules/misread_zero: 1536 over 1 buckets, 1 drops, 0 gaps, 1 suspicious steps, check 1 drops / 178 rises / 179 comparisons (Cumulative), baseline false; equal to the reference
 usage "Asia/Kolkata" total "1m" rules/torn_read: 70358 over 1 buckets, 1 drops, 0 gaps, 2 suspicious steps, check 1 drops / 178 rises / 179 comparisons (Cumulative), baseline false; equal to the reference
@@ -325,5 +325,4 @@ usage "UTC" total "1h" rules/idle_bursts: not_cumulative (check: 3 drops, 0 rise
 rules, UTC ("1h" table): misread_zero 1, torn_read 1, replaced_meter 1 suspicious steps; long_gap 0 with 1 gap; idle_bursts not_cumulative
 test the_semantic_api_answers_the_dataset_within_the_period_and_the_tenant ... ok
 
-test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 14.62s
-
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 11.47s

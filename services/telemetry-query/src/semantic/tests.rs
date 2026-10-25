@@ -591,3 +591,37 @@ async fn a_usage_over_too_many_minute_cells_is_too_heavy() {
     heavy.series.truncate(10);
     assert!(check(&heavy, Kind::Usage, at(NOW)).is_ok());
 }
+
+#[tokio::test]
+async fn a_range_ending_too_far_after_now_is_refused_not_a_panic() {
+    // serde reads extended years, which chrono cannot add a day to; ClickHouse's DateTime ends
+    // in 2106. Both are refused on `to` before any date arithmetic.
+    for to in ["+262142-12-31T23:59:00Z", "2106-02-08T00:00:00Z"] {
+        for kind in [Kind::Statistics, Kind::Usage] {
+            let body = json!({
+                "series": [{"device_id": DEVICE, "point": "energy_kwh"}],
+                "tz": "Asia/Taipei",
+                "from": "2026-10-25T00:00:00Z",
+                "to": to,
+            });
+            let asked: SeriesQuery = serde_json::from_value(body).expect("a request");
+            let refused = check(&asked, kind, at(NOW)).err().expect("refused");
+            assert_eq!(refused.status().as_u16(), 422, "{to}");
+            let body = http_body_util::BodyExt::collect(refused.into_body())
+                .await
+                .expect("the body")
+                .to_bytes();
+            let body: serde_json::Value = serde_json::from_slice(&body).expect("JSON");
+            assert_eq!(body["code"], "validation_failed");
+            assert_eq!(body["message_key"], "telemetry.range_invalid");
+            assert_eq!(body["details"]["parameter"], "to");
+            assert_eq!(body["details"]["latest"], "2027-10-28T18:17:42+08:00");
+        }
+    }
+    // The latest end itself is accepted.
+    let mut edge = query(&["energy_kwh"], Interval::Total);
+    edge.period = None;
+    edge.from = Some(at("2026-10-25T00:00:00Z"));
+    edge.to = Some(range::latest_end(at(NOW)));
+    assert!(check(&edge, Kind::Usage, at(NOW)).is_ok());
+}

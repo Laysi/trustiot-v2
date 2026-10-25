@@ -1,46 +1,47 @@
      Running unittests
-test budget::tests::large_budgets_do_not_overflow ... ok
 test budget::tests::every_processed_token_counts_and_the_thresholds_are_inclusive ... ok
+test budget::tests::large_budgets_do_not_overflow ... ok
 test callee::tests::statuses_are_logged_by_class ... ok
 test config::tests::role_names_follow_the_gateway ... ok
 test config::tests::gateway_urls_are_plain_http_origins ... ok
-test delegation::tests::the_question_ends_a_margin_before_the_delegation_expires ... ok
-test config::tests::the_run_lifetime_is_two_to_fifteen_whole_minutes_of_seconds ... ok
 test config::tests::the_database_login_and_pool_are_checked ... ok
-test delegation::tests::start_errors_answer_with_m1_codes_and_no_detail ... ok
+test config::tests::the_run_lifetime_is_two_to_fifteen_whole_minutes_of_seconds ... ok
+test delegation::tests::the_question_ends_a_margin_before_the_delegation_expires ... ok
 test config::tests::the_defaults_are_valid_and_limits_are_enforced ... ok
-test model::anthropic::tests::statuses_map_to_kinds ... ok
+test model::anthropic::tests::only_identifier_error_types_are_kept ... ok
 test config::tests::the_services_the_tools_call_are_plain_http_origins_and_need_the_exchange ... ok
+test model::anthropic::tests::statuses_map_to_kinds ... ok
 test prompt::tests::an_empty_tenant_context_stays_empty ... ok
 test prompt::tests::the_tenant_context_cannot_close_its_tags ... ok
-test model::anthropic::tests::only_identifier_error_types_are_kept ... ok
-test callee::tests::only_plain_http_origins_are_accepted ... ok
+test delegation::tests::start_errors_answer_with_m1_codes_and_no_detail ... ok
+test model::anthropic::tests::an_empty_refusal_has_no_message_to_keep ... ok
+test model::anthropic::tests::a_missing_usage_is_estimated_not_zero ... ok
+test model::anthropic::tests::the_context_is_what_the_answering_attempt_counted ... ok
+test prompt::tests::the_tenant_context_is_wrapped_as_data ... ok
 test store::tests::a_message_reads_back_only_as_its_exact_bytes ... ok
 test store::tests::text_with_u0000_is_refused_up_front ... ok
-test prompt::tests::the_tenant_context_is_wrapped_as_data ... ok
-test model::anthropic::tests::a_missing_usage_is_estimated_not_zero ... ok
-test model::anthropic::tests::an_empty_refusal_has_no_message_to_keep ... ok
-test model::anthropic::tests::the_context_is_what_the_answering_attempt_counted ... ok
 test store::tests::tool_definitions_read_back_as_the_same_json ... ok
+test callee::tests::only_plain_http_origins_are_accepted ... ok
 test tools::semantic::tests::an_answer_for_other_series_is_a_failure ... ok
+test tools::semantic::tests::a_range_ending_too_far_after_now_is_refused ... ok
+test tools::semantic::tests::a_checked_input_is_the_api_body ... ok
+test config::tests::the_settings_read_from_the_environment ... ok
 test tools::semantic::tests::a_usage_without_any_counter_is_an_error_that_points_to_the_statistics ... ok
 test tools::semantic::tests::a_range_wholly_before_the_queryable_period_is_refused_with_its_start ... ok
-test tools::semantic::tests::malformed_input_gets_a_message_that_says_how_to_fix_it ... ok
-test tools::semantic::tests::the_rows_must_fit_the_service_limit ... ok
-test tools::semantic::tests::a_checked_input_is_the_api_body ... ok
 test tools::telemetry::tests::the_device_id_is_put_in_the_path_in_canonical_form ... ok
-test tools::semantic::tests::statistics_keep_the_figures_and_leave_out_rows_over_the_limit ... ok
+test tools::semantic::tests::the_rows_must_fit_the_service_limit ... ok
+test tools::semantic::tests::malformed_input_gets_a_message_that_says_how_to_fix_it ... ok
 test tools::tests::long_text_is_cut_with_a_visible_marker_and_short_text_is_kept ... ok
 test tools::semantic::tests::usage_answers_carry_rows_and_the_notes_the_model_must_follow ... ok
-test config::tests::the_settings_read_from_the_environment ... ok
+test tools::semantic::tests::statistics_keep_the_figures_and_leave_out_rows_over_the_limit ... ok
 test model::anthropic::tests::messages_are_estimated_high_and_images_by_count ... ok
 test store::tests::append_refuses_a_conversation_of_another_owner_or_preamble ... ok
-test result: ok. 36 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.29s
+test result: ok. 37 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.95s
      Running tests/agent.rs
 test a_question_whose_first_call_does_not_fit_is_not_sent ... ok
 test an_unreachable_gateway_is_unavailable ... ok
-test a_refusal_is_not_kept_and_the_conversation_goes_on ... ok
 test tool_calls_past_the_budget_are_not_run ... ok
+test a_refusal_is_not_kept_and_the_conversation_goes_on ... ok
 test a_call_that_would_cross_the_budget_is_not_sent ... ok
 test two_users_asking_at_once_do_not_wait_for_each_other ... ok
 test later_requests_resend_the_history_byte_for_byte ... ok
@@ -57,40 +58,41 @@ test the_chart_budgets_every_pool_the_service_opens ... ok
 test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
      Running tests/cross_tenant.rs
 test tenants_are_isolated ... ok
-test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.53s
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.20s
      Running tests/delegated_tools.rs
 test a_question_whose_delegation_has_no_time_left_does_not_start ... ok
 test a_run_is_refused_for_another_conversations_principal ... ok
 test a_question_starts_only_for_the_conversations_user_while_the_session_is_valid ... ok
 test a_refused_first_exchange_is_logged_as_a_warning ... ok
 test the_tools_follow_the_services_routes_and_limits ... ok
-test the_semantic_tools_take_the_api_body ... ok
 test an_unavailable_identity_service_fails_only_the_call ... ok
+test the_semantic_tools_take_the_api_body ... ok
 test the_tools_take_no_tenant_or_user_and_refuse_extra_input ... ok
 test device_text_reaches_the_model_cut_to_the_cap ... ok
 test a_revoked_delegation_ends_the_question_without_a_retry ... ok
 test a_service_refusal_reaches_neither_the_model_nor_the_logs ... ok
 test each_tool_call_runs_as_the_user_with_a_fresh_token_for_its_service_and_no_tenant ... ok
 test the_question_ends_before_its_delegation_expires ... ok
-test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.03s
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.02s
      Running tests/history_store.rs
 test a_stored_conversation_reads_back_byte_for_byte_and_continues ... ok
 test a_corrupt_history_fails_the_load ... ok
-test other_tenants_and_other_users_get_nothing ... ok
 test appending_is_idempotent_and_never_overwrites ... ok
+test other_tenants_and_other_users_get_nothing ... ok
 test the_service_role_cannot_change_or_remove_stored_history ... ok
-test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.30s
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.39s
      Running tests/startup.rs
 test ready_once_the_service_role_logs_in_on_the_current_schema ... ok
-test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.77s
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.43s
      Running tests/tools.rs
 test the_tool_set_follows_the_rules ... ok
-test tools_get_the_principal_and_the_delegation_not_the_input ... ok
-test results_over_the_limits_become_a_request_to_narrow ... ok
 test calls_past_the_per_step_limit_are_not_run ... ok
+test results_over_the_limits_become_a_request_to_narrow ... ok
+test tools_get_the_principal_and_the_delegation_not_the_input ... ok
 test calls_run_concurrently_and_results_keep_the_call_order ... ok
 test tool_result_images_reach_the_model ... ok
 test failures_stay_in_their_call_and_tell_the_model_what_to_do ... ok
 test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.01s
+   Doc-tests assistant
 test services/assistant/src/delegation.rs - delegation (line 8) ... ignored
 test result: ok. 0 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s

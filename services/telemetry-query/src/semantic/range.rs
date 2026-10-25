@@ -28,6 +28,16 @@ pub const PERIOD_MARGIN: TimeDelta = TimeDelta::minutes(5);
 /// and for the cumulative check, which judges the data point rather than the range.
 pub const LOOKAROUND: TimeDelta = TimeDelta::hours(24);
 
+/// How far after the request's "now" a range may end. The longest relative period, `this_year`
+/// asked at the first instant of a leap year, ends 366 local days later; the one more day covers
+/// a change of the zone's UTC offset within the year. A later `to` is refused before any date
+/// arithmetic: chrono panics when an addition overflows (serde accepts years such as +262142),
+/// and ClickHouse's `DateTime` wraps after [`LAST_DATETIME_SECONDS`].
+pub const MAX_AHEAD: TimeDelta = TimeDelta::days(367);
+/// The last second ClickHouse's `DateTime` (seconds in a `UInt32`) holds:
+/// 2106-02-07T06:28:15Z. The statements compare buckets with `toDateTime({to:Int64}, 'UTC')`.
+pub const LAST_DATETIME_SECONDS: i64 = 4_294_967_295;
+
 /// The most series one request names.
 pub const MAX_SERIES: usize = 20;
 /// The most rows (series × buckets) one answer holds.
@@ -212,7 +222,7 @@ impl Period {
             Self::LastDays(n) => range(days(today, 1 - i64::from(n))?, days(today, 1)?),
             Self::LastHours(n) => {
                 let to = ceil(now, MINUTE_MS)?;
-                Some((to - TimeDelta::hours(i64::from(n)), to))
+                Some((to.checked_sub_signed(TimeDelta::hours(i64::from(n)))?, to))
             }
         }
     }
@@ -233,6 +243,15 @@ pub fn ceil(time: DateTime<Utc>, ms: i64) -> Option<DateTime<Utc>> {
         floored.checked_add(ms)?
     };
     DateTime::from_timestamp_millis(rounded)
+}
+
+/// The latest `to` a request at `now` may name: [`MAX_AHEAD`] after `now`, and never past
+/// [`LAST_DATETIME_SECONDS`].
+pub fn latest_end(now: DateTime<Utc>) -> DateTime<Utc> {
+    let last =
+        DateTime::from_timestamp(LAST_DATETIME_SECONDS, 0).unwrap_or(DateTime::<Utc>::MAX_UTC);
+    now.checked_add_signed(MAX_AHEAD)
+        .map_or(last, |ahead| ahead.min(last))
 }
 
 /// The aggregate table a request reads.
@@ -304,6 +323,8 @@ pub enum Refusal {
     Period,
     /// `from` is not before `to`, or only one of them was given.
     Range,
+    /// `to` is later than [`latest_end`], which is this time.
+    TooLate(DateTime<Utc>),
     /// The range lies wholly before the queryable period, which starts at this time.
     OutsidePeriod(DateTime<Utc>),
     /// The answer would hold more than [`MAX_ROWS`] rows.
@@ -350,17 +371,27 @@ pub fn plan(
     now: DateTime<Utc>,
     tz: &TimeZone,
 ) -> Result<Plan, Refusal> {
+    let latest = latest_end(now);
     let (from, to) = match (asked.period, asked.from, asked.to) {
         (Some(period), None, None) => Period::parse(period)
             .and_then(|period| period.resolve(now, tz))
             .ok_or(Refusal::Period)?,
-        (None, Some(from), Some(to)) => (
-            floor(from, MINUTE_MS).ok_or(Refusal::Range)?,
-            floor(to, MINUTE_MS).ok_or(Refusal::Range)?,
-        ),
+        (None, Some(from), Some(to)) => {
+            if to > latest {
+                return Err(Refusal::TooLate(latest));
+            }
+            (
+                floor(from, MINUTE_MS).ok_or(Refusal::Range)?,
+                floor(to, MINUTE_MS).ok_or(Refusal::Range)?,
+            )
+        }
         (Some(_), _, _) | (None, None, None) => return Err(Refusal::Period),
         (None, _, _) => return Err(Refusal::Range),
     };
+    // A relative period never ends this late (tested); the check keeps the arithmetic below safe.
+    if to > latest {
+        return Err(Refusal::TooLate(latest));
+    }
     if from >= to {
         return Err(Refusal::Range);
     }
@@ -384,8 +415,15 @@ pub fn plan(
     if rows > i64::try_from(MAX_ROWS).unwrap_or(i64::MAX) {
         return Err(Refusal::TooManyRows);
     }
-    let window_from = (start - LOOKAROUND).max(earliest);
-    let window_to = to.max((to + LOOKAROUND).min(now));
+    let window_from = start
+        .checked_sub_signed(LOOKAROUND)
+        .ok_or(Refusal::Range)?
+        .max(earliest);
+    let window_to = to.max(
+        to.checked_add_signed(LOOKAROUND)
+            .ok_or(Refusal::TooLate(latest))?
+            .min(now),
+    );
     if kind == Kind::Usage && resolution == Resolution::Minute {
         let minutes = (window_to - window_from).num_minutes() + 1;
         if series.saturating_mul(minutes) > MAX_MINUTE_CELLS {
@@ -739,5 +777,111 @@ mod tests {
             planned(&cells, Kind::Usage, "Asia/Taipei").is_ok(),
             "the hour table"
         );
+    }
+
+    fn ending(to: DateTime<Utc>) -> Asked<'static> {
+        Asked {
+            period: None,
+            from: Some(at("2026-10-26T00:00:00Z")),
+            to: Some(to),
+            interval: Interval::Total,
+            series: 1,
+        }
+    }
+
+    #[test]
+    fn a_range_ends_at_most_max_ahead_after_now() {
+        let now = at(NOW);
+        let latest = latest_end(now);
+        assert_eq!(latest, at("2027-10-28T10:17:42Z"), "367 days after now");
+        let utc = tz("UTC");
+        for kind in [Kind::Statistics, Kind::Usage] {
+            let edge = plan(&ending(latest), kind, now, &utc).expect("the latest end");
+            assert_eq!(edge.to, at("2027-10-28T10:17:00Z"));
+            assert!(edge.ends_after_now);
+            assert_eq!(
+                plan(&ending(latest + TimeDelta::seconds(1)), kind, now, &utc),
+                Err(Refusal::TooLate(latest))
+            );
+            // Past ClickHouse's DateTime, and years serde accepts but chrono cannot add to: refused
+            // before any arithmetic, without a panic.
+            for to in [
+                at("2106-02-08T00:00:00Z"),
+                at("+262142-12-31T23:59:00Z"),
+                DateTime::<Utc>::MAX_UTC,
+            ] {
+                assert_eq!(
+                    plan(&ending(to), kind, now, &utc),
+                    Err(Refusal::TooLate(latest)),
+                    "{to}"
+                );
+            }
+        }
+        // Never past the last second ClickHouse's DateTime holds, whatever the clock says.
+        let last = DateTime::from_timestamp(LAST_DATETIME_SECONDS, 0).expect("a time");
+        assert_eq!(last, at("2106-02-07T06:28:15Z"));
+        assert_eq!(latest_end(at("2106-01-01T00:00:00Z")), last);
+        assert_eq!(latest_end(DateTime::<Utc>::MAX_UTC), last);
+        assert_eq!(latest_end(last - MAX_AHEAD), last);
+    }
+
+    #[test]
+    fn no_relative_period_ends_after_the_latest_end() {
+        // Each period asked at the instant that makes it end furthest after now: the first
+        // instant of a leap year (this_year, this_month, today), of a Monday (this_week), and the
+        // last minute of a day (last_<N>_hours rounds up), in every time zone compiled in.
+        let periods = [
+            "today",
+            "yesterday",
+            "this_week",
+            "last_week",
+            "this_month",
+            "last_month",
+            "this_year",
+            "last_year",
+            "last_1_days",
+            "last_366_days",
+            "last_1_hours",
+            "last_72_hours",
+        ];
+        let mut furthest = TimeDelta::zero();
+        let mut zones = 0;
+        for name in jiff_tzdb::available() {
+            let Some(zone) = time_zone(name) else {
+                continue;
+            };
+            zones += 1;
+            let starts = ["2028-01-01", "2028-01-03"].map(|date| {
+                let date: Date = date.parse().expect("a date");
+                let zoned = date.to_zoned(zone.clone()).expect("a local midnight");
+                DateTime::from_timestamp_millis(zoned.timestamp().as_millisecond()).expect("a time")
+            });
+            for now in starts.into_iter().chain([at("2028-02-29T23:59:01Z")]) {
+                let latest = latest_end(now);
+                for period in periods {
+                    let (_, to) = Period::parse(period)
+                        .and_then(|parsed| parsed.resolve(now, &zone))
+                        .expect("a period");
+                    assert!(to <= latest, "{period} in {name} at {now} ends at {to}");
+                    furthest = furthest.max(to - now);
+                    let asked = Asked {
+                        period: Some(period),
+                        from: None,
+                        to: None,
+                        interval: Interval::Total,
+                        series: 1,
+                    };
+                    let planned = plan(&asked, Kind::Statistics, now, &zone);
+                    assert!(
+                        !matches!(planned, Err(Refusal::TooLate(_))),
+                        "{period} in {name} at {now}"
+                    );
+                }
+            }
+        }
+        assert!(zones > 300, "the time zones compiled in: {zones}");
+        // The worst case was reached: this_year from the first instant of 2028.
+        assert!(furthest >= TimeDelta::days(366), "{furthest}");
+        assert!(furthest < MAX_AHEAD, "{furthest}");
     }
 }

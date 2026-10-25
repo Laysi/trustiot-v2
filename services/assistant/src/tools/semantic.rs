@@ -38,6 +38,9 @@ pub const MAX_RESULT_ROWS: usize = 500;
 /// The queryable period starts this much after "3 months ago" (the service's
 /// `range::PERIOD_MARGIN`), so a request sent at the edge is not refused in transit.
 pub const PERIOD_MARGIN_MINUTES: i64 = 5;
+/// A range ends at most this many days after now (the service's `range::MAX_AHEAD`): no
+/// relative period ends later, and the service refuses a later `to`.
+pub const MAX_AHEAD_DAYS: i64 = 367;
 /// The bucket lengths (the service's `BucketInterval`).
 pub const INTERVALS: [&str; 8] = ["1m", "5m", "15m", "1h", "1d", "1w", "1mo", "total"];
 /// The relative periods (the service's `range::Period`), with `last_<N>_days` up to this N...
@@ -384,7 +387,18 @@ fn check(input: Value, now: DateTime<Utc>) -> Result<Body, ToolError> {
         }
         (None, Some(from), Some(to)) => {
             let from = floor_minute(parse_time("from", from)?);
-            let to = floor_minute(parse_time("to", to)?);
+            let to = parse_time("to", to)?;
+            let latest = now
+                .checked_add_signed(TimeDelta::days(MAX_AHEAD_DAYS))
+                .unwrap_or(DateTime::<Utc>::MAX_UTC);
+            if to > latest {
+                return Err(ToolError::Input(format!(
+                    "`to` must be at most {MAX_AHEAD_DAYS} days after now (by {}); there are no \
+                     readings in the future.",
+                    latest.to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
+                )));
+            }
+            let to = floor_minute(to);
             if from >= to {
                 return Err(ToolError::Input(
                     "`from` must be at least a minute before `to`.".into(),

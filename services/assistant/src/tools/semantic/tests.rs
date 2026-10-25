@@ -524,3 +524,42 @@ fn statistics_keep_the_figures_and_leave_out_rows_over_the_limit() {
             .contains("501 bucket rows")
     );
 }
+
+#[test]
+fn a_range_ending_too_far_after_now_is_refused() {
+    // 367 days after now is the latest end; one second later is refused, and so is a time
+    // ClickHouse's DateTime cannot hold.
+    assert!(
+        check(
+            input(
+                &["a"],
+                json!({"from": "2026-10-25T00:00:00Z", "to": "2027-10-28T10:17:42Z"})
+            ),
+            at(NOW),
+        )
+        .is_ok()
+    );
+    for to in ["2027-10-28T10:17:43Z", "2106-02-08T00:00:00Z"] {
+        let message = refused(input(
+            &["a"],
+            json!({"from": "2026-10-25T00:00:00Z", "to": to}),
+        ));
+        assert!(message.contains("367 days"), "{message}");
+        assert!(message.contains("2027-10-28T10:17:42Z"), "{message}");
+    }
+    // An extended year is not an RFC 3339 time here, and is refused as such.
+    let message = refused(input(
+        &["a"],
+        json!({"from": "2026-10-25T00:00:00Z", "to": "+262142-12-31T23:59:00Z"}),
+    ));
+    assert!(message.contains("`to`"), "{message}");
+    // Every relative period is within the bound: this_year asked at the first instant of a leap
+    // year ends 366 days later.
+    assert!(
+        check(
+            input(&["a"], json!({"period": "this_year", "interval": "1mo"})),
+            at("2027-12-31T16:00:00Z"),
+        )
+        .is_ok()
+    );
+}

@@ -14,7 +14,7 @@
 //! | No valid internal identity token | 401 `unauthenticated` |
 //! | A user who has not picked or joined a tenant | 403 `permission_denied` |
 //! | A body that is not the JSON object described (an unknown field included) | 400 `invalid_request` (`telemetry.query_invalid`) |
-//! | A field that breaks a rule (series, time zone, period, range) | 422 `validation_failed` |
+//! | A field that breaks a rule (series, time zone, period, range; a `to` later than [`range::latest_end`]) | 422 `validation_failed` |
 //! | The answer would hold more than [`range::MAX_ROWS`] rows | 422 `validation_failed` (`telemetry.too_many_points`) |
 //! | The usage would read more than [`range::MAX_MINUTE_CELLS`] one-minute cells | 422 `validation_failed` (`telemetry.query_too_heavy`, detail `parameter`: `series`) |
 //! | The range lies wholly before the queryable period | 403 `quota_exceeded` (`telemetry.outside_queryable_period`) |
@@ -420,6 +420,12 @@ fn check(query: &SeriesQuery, kind: Kind, now: DateTime<Utc>) -> Result<Checked,
         Box::new(match refusal {
             Refusal::Period => invalid("period", PERIOD_INVALID),
             Refusal::Range => invalid("from", RANGE_INVALID),
+            Refusal::TooLate(latest) => error(
+                ErrorBody::new(ErrorCode::ValidationFailed)
+                    .with_message_key(RANGE_INVALID)
+                    .with_detail("parameter", "to")
+                    .with_detail("latest", local(latest, &tz).to_rfc3339()),
+            ),
             Refusal::OutsidePeriod(earliest) => error(
                 ErrorBody::new(ErrorCode::QuotaExceeded)
                     .with_message_key(OUTSIDE_PERIOD)
@@ -597,7 +603,7 @@ fn parsed(
         (status = 401, description = "No valid session (`unauthenticated`).", body = ErrorBody),
         (status = 403, description = "No tenant (`permission_denied`), or the range lies wholly before the queryable period (`quota_exceeded`, `telemetry.outside_queryable_period`, detail `earliest`).", body = ErrorBody),
         (status = 404, description = "The tenant's account has not been created yet (`not_found`, `telemetry.account_not_ready`).", body = ErrorBody),
-        (status = 422, description = "A field breaks a rule (`validation_failed`, detail `parameter`: `series`, `tz`, `period` or `from`), the answer would have too many rows (`telemetry.too_many_points`), or the query reads or holds too much (`telemetry.query_too_heavy`).", body = ErrorBody),
+        (status = 422, description = "A field breaks a rule (`validation_failed`, detail `parameter`: `series`, `tz`, `period`, `from`, or `to` with detail `latest` when it ends too far after now), the answer would have too many rows (`telemetry.too_many_points`), or the query reads or holds too much (`telemetry.query_too_heavy`).", body = ErrorBody),
         (status = 429, description = "The tenant's query quota or concurrency limit is used up (`rate_limited`).", body = ErrorBody),
         (status = 503, description = "Postgres or ClickHouse failed, or the tenant's ClickHouse account is not as the service creates it (`unavailable`).", body = ErrorBody),
         (status = 504, description = "The query ran into its time limit (`timeout`).", body = ErrorBody),
@@ -643,7 +649,7 @@ pub(crate) async fn post_statistics(
         (status = 401, description = "No valid session (`unauthenticated`).", body = ErrorBody),
         (status = 403, description = "No tenant (`permission_denied`), or the range lies wholly before the queryable period (`quota_exceeded`, `telemetry.outside_queryable_period`, detail `earliest`).", body = ErrorBody),
         (status = 404, description = "The tenant's account has not been created yet (`not_found`, `telemetry.account_not_ready`).", body = ErrorBody),
-        (status = 422, description = "A field breaks a rule (`validation_failed`, detail `parameter`: `series`, `tz`, `period` or `from`), the answer would have too many rows (`telemetry.too_many_points`), or the request would read too many one-minute cells (detail `parameter`: `series`) or the query reads or holds too much (`telemetry.query_too_heavy`).", body = ErrorBody),
+        (status = 422, description = "A field breaks a rule (`validation_failed`, detail `parameter`: `series`, `tz`, `period`, `from`, or `to` with detail `latest` when it ends too far after now), the answer would have too many rows (`telemetry.too_many_points`), or the request would read too many one-minute cells (detail `parameter`: `series`) or the query reads or holds too much (`telemetry.query_too_heavy`).", body = ErrorBody),
         (status = 429, description = "The tenant's query quota or concurrency limit is used up (`rate_limited`).", body = ErrorBody),
         (status = 503, description = "Postgres or ClickHouse failed, or the tenant's ClickHouse account is not as the service creates it (`unavailable`).", body = ErrorBody),
         (status = 504, description = "The query ran into its time limit (`timeout`).", body = ErrorBody),

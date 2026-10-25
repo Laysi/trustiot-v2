@@ -1446,6 +1446,12 @@ fn the_tools_follow_the_services_routes_and_limits() {
         range::PERIOD_MARGIN.num_minutes()
     );
     assert_eq!(semantic::MAX_LAST_DAYS, range::MAX_LAST_DAYS);
+    assert_eq!(semantic::MAX_AHEAD_DAYS, range::MAX_AHEAD.num_days());
+    assert_eq!(
+        range::MAX_AHEAD,
+        TimeDelta::days(semantic::MAX_AHEAD_DAYS),
+        "whole days"
+    );
     assert_eq!(semantic::MAX_LAST_HOURS, range::MAX_LAST_HOURS);
     assert_eq!(
         telemetry::LATEST_PATH,
