@@ -44,14 +44,15 @@ pub mod passwords;
 pub mod platform_admin;
 pub mod postgres;
 pub mod registry;
-/// The raw and aggregate data retention, the ingest service's file (compiled into the service as
-/// well): the run sets it as the TTL of the telemetry, completion and aggregate tables
-/// (Laysi/trustiot-v2#92, Laysi/trustiot-v2#141).
+// The raw and aggregate data retention, the ingest service's file (compiled into the service as
+// well): the run sets it as the TTL of the telemetry, completion and aggregate tables
+// (Laysi/trustiot-v2#92, Laysi/trustiot-v2#141). A plain comment, not `///`: with an outer doc
+// comment rustdoc resolves the links of the file's own module documentation from here.
 #[path = "../../../services/ingest/src/retention.rs"]
 pub mod retention;
-/// The statements on the one-minute and one-hour aggregates, the ingest service's file (compiled
-/// into the service as well): the run backfills the aggregates with them once
-/// (Laysi/trustiot-v2#141).
+// The statements on the one-minute and one-hour aggregates, the ingest service's file (compiled
+// into the service as well): the run backfills the aggregates with them once
+// (Laysi/trustiot-v2#141).
 #[path = "../../../services/ingest/src/rollup.rs"]
 pub mod rollup;
 pub mod secret;
