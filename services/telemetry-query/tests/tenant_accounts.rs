@@ -15,7 +15,9 @@
 //! letter); an account without its queryable period reads nothing, and the next query sets the
 //! period again, as it does for one with another period (Laysi/trustiot-v2#143); an account
 //! whose default role was taken away serves no query, is logged on each call and is not
-//! repaired (Laysi/trustiot-v2#143); and nothing logs a password.
+//! repaired (Laysi/trustiot-v2#143), as is one whose `SQL_tenant_id` it could change in a
+//! query's `SETTINGS`, while a window it could change is made `CONST` again (the security
+//! review of 2026-10-26); and nothing logs a password.
 //!
 //! Needs podman or docker (a TLS Postgres and a ClickHouse); skipped without one unless `CI` is
 //! set. One test: the binary shares one product database. `--nocapture` prints every attack.
@@ -81,6 +83,22 @@ const CHANGE_WINDOW: &str =
 const DROP_DEFAULT_ROLE: &str = "ALTER USER {user:Identifier} DEFAULT ROLE NONE";
 const RESTORE_DEFAULT_ROLE: &str =
     "ALTER USER {user:Identifier} DEFAULT ROLE trustiot_tenant_reader";
+
+/// Admin changes that keep a checked setting's value but let the account change it in a
+/// query's `SETTINGS`; `TENANT` is replaced with the account's own tenant. And the change back.
+const LOOSEN_WINDOW: &str = "ALTER USER {user:Identifier}
+MODIFY SETTINGS SQL_queryable_raw_days = 7 CHANGEABLE_IN_READONLY";
+const LOOSEN_TENANT: &str = "ALTER USER {user:Identifier}
+MODIFY SETTINGS SQL_tenant_id = 'TENANT' CHANGEABLE_IN_READONLY";
+const FIX_TENANT: &str = "ALTER USER {user:Identifier}
+MODIFY SETTINGS SQL_tenant_id = 'TENANT' CONST";
+/// The raw window as a query that sets it wider sees it.
+const WIDER_WINDOW: &str = "SELECT getSetting('SQL_queryable_raw_days')
+SETTINGS SQL_queryable_raw_days = 36500 FORMAT TSV";
+/// The victim's rows as a query that sets the victim's tenant sees them; `VICTIM` is replaced
+/// with the victim's ID.
+const ROWS_OF_SETTING: &str = "SELECT count() FROM trustiot.tenant_telemetry
+SETTINGS SQL_tenant_id = 'VICTIM' FORMAT TSV";
 
 /// The service's error log when it refuses an account.
 const REFUSED_LOG: &str = "the tenant's ClickHouse account is not as the service creates it, \
@@ -467,6 +485,96 @@ async fn each_tenant_account_sees_its_own_readings_only() {
         2,
         "the role change left the queryable period as it was"
     );
+
+    // 5d. A window left at the service's value but made CHANGEABLE_IN_READONLY: the account
+    //     could widen it in a query's SETTINGS, so the next call makes it CONST again before it
+    //     runs, as it sets another value again (the security review of 2026-10-26).
+    admin_query(&stack, LOOSEN_WINDOW, &[("param_user", &user_a)]).await;
+    assert_eq!(
+        stack
+            .clickhouse
+            .query(&account_a, WIDER_WINDOW)
+            .await
+            .unwrap_or_else(|error| panic!("widen the loosened window: {}", error.body)),
+        "36500\n",
+        "the account can widen a window it may change"
+    );
+    let latest = service.get_ok(&path, &token_a).await;
+    assert!(latest.to_string().contains(A_MARKER), "{latest}");
+    assert_eq!(
+        service.stdout.messages(period_set).len(),
+        3,
+        "the window was set again"
+    );
+    let error = stack
+        .clickhouse
+        .query(&account_a, WIDER_WINDOW)
+        .await
+        .expect_err("the window is CONST again");
+    assert_eq!(error.code(), "READONLY", "{}", error.body);
+
+    // 5e. SQL_tenant_id left at the tenant but made CHANGEABLE_IN_READONLY: the account could
+    //     read another tenant's rows with a query's SETTINGS. Every call answers 503 with
+    //     nothing of either tenant and logs why, and the service does not repair it (as for the
+    //     role); an administrator does, and the next call is served.
+    admin_query(
+        &stack,
+        &LOOSEN_TENANT.replace("TENANT", &a_text),
+        &[("param_user", &user_a)],
+    )
+    .await;
+    let victim_rows = || async {
+        stack
+            .clickhouse
+            .query(&account_a, &ROWS_OF_SETTING.replace("VICTIM", VICTIM))
+            .await
+    };
+    let rows = victim_rows()
+        .await
+        .unwrap_or_else(|error| panic!("switch the loosened tenant: {}", error.body));
+    assert_ne!(rows, "0\n", "the loosened account reads the victim's rows");
+    let changeable = || {
+        service
+            .stdout
+            .messages(REFUSED_LOG)
+            .into_iter()
+            .filter(|line| {
+                line["fields"]["error"]
+                    .as_str()
+                    .is_some_and(|error| error.contains("(settings the account may change)"))
+            })
+            .count()
+    };
+    for call in 1..=2 {
+        let (status, body) = service.get(&path, Some(&token_a)).await;
+        assert_eq!(status, 503, "call {call}: {body}");
+        for marker in [A_MARKER, VICTIM_MARKER] {
+            assert!(!body.contains(marker), "call {call}: {body}");
+        }
+        wait_for(
+            &format!("call {call}'s refusal of the changeable tenant in the log"),
+            EVENT_LIMIT,
+            || async { (changeable() == call).then_some(()) },
+        )
+        .await;
+        assert!(
+            victim_rows().await.is_ok(),
+            "call {call}: the service did not make the tenant CONST again"
+        );
+    }
+    admin_query(
+        &stack,
+        &FIX_TENANT.replace("TENANT", &a_text),
+        &[("param_user", &user_a)],
+    )
+    .await;
+    let latest = service.get_ok(&path, &token_a).await;
+    assert!(
+        latest.to_string().contains(A_MARKER),
+        "served again once an administrator made the tenant CONST: {latest}"
+    );
+    let error = victim_rows().await.expect_err("the tenant is CONST again");
+    assert_eq!(error.code(), "READONLY", "{}", error.body);
 
     // 6. An account changed to another tenant: the API refuses it and shows nothing of the other
     //    tenant (every statement also filters on the caller's tenant, a second layer), and the

@@ -12,10 +12,11 @@
 //!   password generation of the service's account changes every tenant password; the first
 //!   query of each tenant then fails to log in and [`Accounts::ensure`] sets the new one.
 //! - [`TenantCreatedHandler`] creates the account when `identity.tenant_created` arrives, logs
-//!   in as it to check its tenant, role, `readonly` and query limits, and only then records the
-//!   tenant in `telemetry_query.tenant_accounts`, which the API reads before it queries
-//!   ClickHouse. The API checks the account the same way ([`Accounts::verify`]) before every
-//!   query it runs as it, and refuses to serve one that differs.
+//!   in as it to check its tenant, role, `readonly` and query limits (and that it cannot change
+//!   them), and only then records the tenant in `telemetry_query.tenant_accounts`, which the
+//!   API reads before it queries ClickHouse. The API checks the account the same way
+//!   ([`Accounts::verify`]) before every query it runs as it, and refuses to serve one that
+//!   differs.
 //! - The account also carries the queryable period, one window per table as a `CONST` setting
 //!   (`SQL_queryable_raw_days`, `SQL_queryable_1m_months`, `SQL_queryable_1h_months`;
 //!   0011_queryable_period.sql), which the row policies enforce on every read. Unlike the
@@ -96,24 +97,45 @@ pub const LIMITS: [(&str, &str); 7] = [
 ];
 
 /// What a tenant account sees of itself when it logs in: its tenant, whether its only active
-/// role is the tenant role, `readonly`, then each of [`LIMITS`] in order, then its three
-/// windows (empty when it lacks one) and the server's clock in Unix milliseconds. Reads no
-/// table, so the quota does not count it: ClickHouse 26.8 counts only queries that read a table
-/// (docs/test-reports/2026-10-11-59-verify.md, finding F3), and tests/tenant_accounts.rs checks
-/// that each API call counts once against the account's quota.
+/// role is the tenant role, `readonly`, then each of [`LIMITS`] in order, then how many of
+/// those settings (`SQL_tenant_id`, `readonly` and the limits; [`FIXED_SETTINGS`]) the account
+/// cannot change, then its three windows (empty when it lacks one), how many of them it cannot
+/// change, and the server's clock in Unix milliseconds.
+///
+/// The values alone do not show that a setting is `CONST`: one an administrator made
+/// `CHANGEABLE_IN_READONLY` keeps its value, and the account can then change it in a query's
+/// `SETTINGS` (another tenant's `SQL_tenant_id`, a wider window). `system.settings` shows
+/// `readonly = 1` for a setting the account cannot change and `0` for one it can (the security
+/// review of 2026-10-26 on Laysi/trustiot-v2#143).
+///
+/// Reads no table, so the quota does not count it: ClickHouse 26.8 counts only queries that read
+/// a table (docs/test-reports/2026-10-11-59-verify.md, finding F3), and neither do its scalar
+/// subqueries on `system.settings` count; tests/tenant_accounts.rs checks that each API call
+/// counts once against the account's quota.
 const WHO_AM_I: &str = "SELECT getSetting('SQL_tenant_id'),
   currentRoles() = ['trustiot_tenant_reader'], getSetting('readonly'),
   getSetting('max_execution_time'), getSetting('max_memory_usage'), getSetting('max_threads'),
   getSetting('max_concurrent_queries_for_user'), getSetting('max_rows_to_read'),
   getSetting('max_result_rows'), getSetting('result_overflow_mode'),
+  (SELECT count() FROM system.settings WHERE readonly = 1 AND name IN ('SQL_tenant_id',
+    'readonly', 'max_execution_time', 'max_memory_usage', 'max_threads',
+    'max_concurrent_queries_for_user', 'max_rows_to_read', 'max_result_rows',
+    'result_overflow_mode')),
   toString(getSettingOrDefault('SQL_queryable_raw_days', '')),
   toString(getSettingOrDefault('SQL_queryable_1m_months', '')),
   toString(getSettingOrDefault('SQL_queryable_1h_months', '')),
+  (SELECT count() FROM system.settings WHERE readonly = 1 AND name IN ('SQL_queryable_raw_days',
+    'SQL_queryable_1m_months', 'SQL_queryable_1h_months')),
   toUnixTimestamp64Milli(now64(3))
 FORMAT TSV";
 
-/// The fields of [`WHO_AM_I`] after the limits: three windows and the clock.
-const AFTER_LIMITS: usize = 4;
+/// The settings [`WHO_AM_I`] requires the account to be unable to change besides its windows:
+/// `SQL_tenant_id`, `readonly` and [`LIMITS`].
+const FIXED_SETTINGS: usize = 2 + LIMITS.len();
+
+/// The fields of [`WHO_AM_I`] after the limits: the fixed settings' count, three windows, the
+/// windows' count and the clock.
+const AFTER_LIMITS: usize = 6;
 
 /// A tenant's account and its password.
 pub struct TenantAccount {
@@ -177,7 +199,8 @@ fn with_windows(statement: &str, windows: Windows) -> String {
 /// What [`WHO_AM_I`] showed besides the checks that make an account [`AccountError::Tampered`].
 #[derive(Clone, Copy, Debug)]
 struct Checked {
-    /// The account's windows; `None` when one is missing or out of range.
+    /// The account's windows; `None` when one is missing, out of range or one the account can
+    /// change.
     windows: Option<Windows>,
     /// The ClickHouse server's clock when it answered.
     server_now: Option<DateTime<Utc>>,
@@ -478,7 +501,9 @@ impl Accounts {
             return Err(tampered("an unexpected answer"));
         }
         let (limits, rest) = rest.split_at(LIMITS.len());
-        let (windows, clock) = rest.split_at(AFTER_LIMITS - 1);
+        let [fixed, raw, minute, hour, windows_fixed, clock] = rest else {
+            return Err(tampered("an unexpected answer"));
+        };
         let expected_tenant = tenant.to_string();
         if *setting != expected_tenant {
             return Err(tampered("another tenant"));
@@ -496,12 +521,16 @@ impl Accounts {
         {
             return Err(tampered("other query limits"));
         }
+        // The service cannot make the profile's settings CONST again, and does not change an
+        // account's tenant: an administrator does (as for the role).
+        if *fixed != FIXED_SETTINGS.to_string() {
+            return Err(tampered("settings the account may change"));
+        }
+        // Windows the account may change are repaired as other windows are.
+        let windows = parse_windows(&[*raw, *minute, *hour]).filter(|_| *windows_fixed == "3");
         Ok(Checked {
-            windows: parse_windows(windows),
-            server_now: clock
-                .first()
-                .and_then(|millis| millis.parse().ok())
-                .and_then(DateTime::from_timestamp_millis),
+            windows,
+            server_now: clock.parse().ok().and_then(DateTime::from_timestamp_millis),
         })
     }
 }
@@ -671,6 +700,44 @@ mod tests {
             })
             .collect();
         assert!(order.is_sorted(), "read in the order of LIMITS");
+    }
+
+    /// The names in each `name IN (…)` list of [`WHO_AM_I`], in order.
+    fn unchangeable_lists() -> Vec<Vec<String>> {
+        WHO_AM_I
+            .split("name IN (")
+            .skip(1)
+            .map(|list| {
+                let (list, _) = list.split_once(')').expect("the end of the list");
+                list.split(',')
+                    .map(|name| name.trim().trim_matches('\'').to_owned())
+                    .collect()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn the_account_must_be_unable_to_change_its_checked_settings() {
+        let lists = unchangeable_lists();
+        let mut fixed = vec!["SQL_tenant_id".to_owned(), "readonly".to_owned()];
+        fixed.extend(LIMITS.iter().map(|(name, _)| (*name).to_owned()));
+        assert_eq!(lists.first(), Some(&fixed));
+        assert_eq!(fixed.len(), FIXED_SETTINGS);
+        assert_eq!(
+            lists.get(1),
+            Some(&vec![
+                "SQL_queryable_raw_days".to_owned(),
+                "SQL_queryable_1m_months".to_owned(),
+                "SQL_queryable_1h_months".to_owned(),
+            ])
+        );
+        assert_eq!(lists.len(), 2);
+        assert_eq!(
+            WHO_AM_I
+                .matches("system.settings WHERE readonly = 1 AND")
+                .count(),
+            2
+        );
     }
 
     #[test]

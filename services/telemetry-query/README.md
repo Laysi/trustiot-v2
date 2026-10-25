@@ -32,10 +32,10 @@
 消費端（`TenantCreatedHandler`）：訂閱名稱 `telemetry-query.identity-events`（`SUBSCRIPTION`，改名等於從頭重讀事件），收到 `identity.tenant_created` 時：
 
 1. `CREATE USER IF NOT EXISTS`（以服務帳號，單一查詢啟用租戶角色）。
-2. 以租戶帳號登入，確認 `SQL_tenant_id` 是這個租戶、唯一啟用的角色是租戶角色、`readonly = 1`，而且 settings profile 的每個查詢上限都在生效（`accounts.rs` 的 `LIMITS`，單元測試確認它與 `0004_access.sql` 的 profile 相同）；密碼不對時重設密碼再確認一次。
+2. 以租戶帳號登入，確認 `SQL_tenant_id` 是這個租戶、唯一啟用的角色是租戶角色、`readonly = 1`，而且 settings profile 的每個查詢上限都在生效（`accounts.rs` 的 `LIMITS`，單元測試確認它與 `0004_access.sql` 的 profile 相同）；這些設定與三個時間窗也必須是帳號自己改不了的（`system.settings` 的 `readonly` 欄是 1，即 `CONST`）：只比對值的話，被改成 `CHANGEABLE_IN_READONLY` 而值不變的設定，帳號可以在查詢的 `SETTINGS` 裡改掉，例如換成別的租戶或放寬時間窗（2026-10-26 的安全審查）。密碼不對時重設密碼再確認一次。
 3. 都對了才在事件的租戶交易裡寫 `telemetry_query.tenant_accounts`（`ON CONFLICT DO NOTHING`）。API 看到這一列才查 ClickHouse，否則回 404。
 
-帳號存在但內容不同（別的租戶、別的角色、不是唯讀、查詢上限被改，例如管理者在帳號上把 `max_execution_time` 設在 profile 之後）表示有人改過它：服務帳號（`GRANTEES NONE`）不能授與或收回角色，所以不修，事件進 dead letter，日誌說明要由管理者刪掉這個帳號後重播事件。ClickHouse 連不上或出錯時重試。每處理一個事件記一行 INFO `applied identity.tenant_created`，帶 `tenant_id`、`event_id`、`recorded`、`password_set`；不記密碼與 ClickHouse 的錯誤內文（錯誤內文會引用查詢與參數）。
+帳號存在但內容不同（別的租戶、別的角色、不是唯讀、查詢上限被改，例如管理者在帳號上把 `max_execution_time` 設在 profile 之後，或這些設定被改成帳號自己改得了）表示有人改過它：服務帳號（`GRANTEES NONE`）不能授與或收回角色，所以不修，事件進 dead letter，日誌說明要由管理者刪掉這個帳號後重播事件。ClickHouse 連不上或出錯時重試。每處理一個事件記一行 INFO `applied identity.tenant_created`，帶 `tenant_id`、`event_id`、`recorded`、`password_set`；不記密碼與 ClickHouse 的錯誤內文（錯誤內文會引用查詢與參數）。
 
 ## API
 
@@ -58,7 +58,7 @@
 | 查詢超過帳號的列數或記憶體上限 | 422 `validation_failed`、`telemetry.query_too_heavy` |
 | 帳號的 quota 或同時查詢數用完 | 429 `rate_limited` |
 | ClickHouse 在時間上限中止查詢 | 504 `timeout` |
-| 租戶帳號與服務建立的不同（租戶、角色、`readonly` 或查詢上限），或可查期間的設定改不回服務的值 | 503 `unavailable`，不執行查詢；日誌 ERROR 說明 |
+| 租戶帳號與服務建立的不同（租戶、角色、`readonly` 或查詢上限，或帳號改得了其中的設定），或可查期間的設定改不回服務的值 | 503 `unavailable`，不執行查詢；日誌 ERROR 說明 |
 | Postgres 或 ClickHouse 出錯 | 503 `unavailable` |
 | 其他 | 200，`cache-control: no-store` |
 
@@ -123,7 +123,7 @@
 方案的可查期間由 ClickHouse 強制（Laysi/trustiot-v2#143，2026-10-26 決定；`services/ingest/migrations/clickhouse/0011_queryable_period.sql`，規則與部署、回復步驟見 [services/ingest](../ingest/README.md)「可查期間」）：租戶帳號帶三個 `CONST` 設定，一張表一個時間窗，三個租戶 view 背後的 row policy 濾掉窗外的列，不論查詢寫了什麼條件。這個服務只負責寫入與讀回時間窗（`src/period.rs`、`src/accounts.rs`）：
 
 - **寫入**：建帳號時把 `Windows::PLATFORM`（原始資料 7 天、1 分鐘與 1 小時彙總各 3 個月）一起寫進 `CREATE USER`。
-- **讀回與修正**：每個查詢前的帳號檢查（`Accounts::verify`）也讀回三個時間窗與 ClickHouse 的時鐘。缺少（`0011` 之前建立的帳號）或與服務的值不同時，以服務帳號 `ALTER USER ... MODIFY SETTINGS` 寫回（只改這三個設定）、再檢查一次，記一行 INFO `set the tenant account's queryable period`；寫回後仍不同時視為帳號被改過，回 503、記 ERROR、不執行查詢。所以方案變更（Laysi/trustiot-v2#453）只要改服務寫入的值，從帳號的下一個查詢起生效。
+- **讀回與修正**：每個查詢前的帳號檢查（`Accounts::verify`）也讀回三個時間窗、帳號改不改得了它們，與 ClickHouse 的時鐘。缺少（`0011` 之前建立的帳號）、與服務的值不同，或帳號改得了（不是 `CONST`）時，以服務帳號 `ALTER USER ... MODIFY SETTINGS` 寫回（只改這三個設定）、再檢查一次，記一行 INFO `set the tenant account's queryable period`；寫回後仍不同時視為帳號被改過，回 503、記 ERROR、不執行查詢。所以方案變更（Laysi/trustiot-v2#453）只要改服務寫入的值，從帳號的下一個查詢起生效。
 - **裁切**：API 自己裁切範圍時，起點是 `Windows::earliest`：時間窗起點加 5 分鐘（`PERIOD_MARGIN`），再進位到整毫秒、整分鐘或整小時。服務的時鐘與 ClickHouse 相差不到 5 分鐘時，裁切起點之後的每一列與每一格都在資料庫的時間窗內，所以回應的 `earliest` 之後不會因為時間窗而缺資料；相差超過 60 秒時記 WARN（`CLOCK_SKEW_WARNING`）。資料庫的時間窗才是邊界，裁切只讓回應說得出從哪裡開始是完整的。
 
 ## 資料庫
