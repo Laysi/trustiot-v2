@@ -1,12 +1,12 @@
 # 1 分鐘與 1 小時彙總表
 
-對應 issue：Laysi/trustiot-v2#141（1 分鐘與 1 小時彙總表、彙總的保存期限、租戶讀取路徑、I1 重寫後的對帳、既有資料的 backfill）。測試日期 2026-10-25（Asia/Taipei）。本報告是審查修正後重跑的結果：backfill 改由 migration Job 在對齊 TTL 之後執行、只補彙總缺的格、只比對原始資料一定還在的收到日，backfill view 平常不給任何帳號看，寫入串流的語句帶 `stream_settings`，測試只用靜態 SQL。原始輸出在 [data/2026-10-25-141-telemetry-rollups/](data/2026-10-25-141-telemetry-rollups/)。
+對應 issue：Laysi/trustiot-v2#141（1 分鐘與 1 小時彙總表、彙總的保存期限、租戶讀取路徑、I1 重寫後的對帳、既有資料的 backfill）。測試日期 2026-10-25（Asia/Taipei），2026-10-26 重跑。第一輪審查之後：backfill 改由 migration Job 在對齊 TTL 之後執行、只補彙總缺的格、只比對原始資料一定還在的收到日，backfill view 平常不給任何帳號看，寫入串流的語句帶 `stream_settings`，測試只用靜態 SQL。第二輪審查之後（2026-10-26 重跑）：寫入串流的語句改成同步 INSERT（`async_insert = 0`），Job 每次執行都確認 backfill view 的 policy 不點名任何帳號，runbook 的檢查讀過 policy 才採信，對帳窗口改成 31 個收到日、原始資料的保存期限至少 33 天（2026-10-26 負責人決定），nightly 的 PR 路徑加上 `services/ingest/src/rollup.rs`。原始輸出在 [data/2026-10-25-141-telemetry-rollups/](data/2026-10-25-141-telemetry-rollups/)。
 
 ## 環境
 
-- **受測程式碼**：分支 `feat/telemetry-rollups`（由 `origin/main` 的 `dab8822` 開出），程式與測試的 commit `6521348`；本報告的 commit 只加文件與測試輸出。
+- **受測程式碼**：分支 `feat/telemetry-rollups`（由 `origin/main` 的 `dab8822` 開出），程式與測試的 commit `cd4a062`；本報告的 commit 只加文件與測試輸出。
 - **執行的地方**：開發工作站，容器由測試的 podman 或 docker 偵測啟動，一次只跑一個起容器的測試程式；沒有設 `CI`、沒有設 `TEST_CLICKHOUSE_URL`。
-- **工具版本**：`.prototools` 與 `rust-toolchain.toml` 釘選的 Rust 1.99.0、Bun 1.4.2、cargo-deny 0.20.2、gitleaks 8.30.1。
+- **工具版本**：`.prototools` 與 `rust-toolchain.toml` 釘選的 Rust 1.99.0、Bun 1.4.2、cargo-deny 0.20.2、gitleaks 8.30.1、actionlint 1.7.12、Helm 4.3.0。
 - **測試用的伺服器**：拋棄式容器 `docker.io/clickhouse/clickhouse-server:26.8@sha256:110d3d1f8e1ed7e451a6b5d85a16761e948ad43bc2d9ddf10b155964a8b2b40c`（與 chart、本地開發環境相同的 digest），回報版本 26.8.22.13。`tools/migrate` 的測試另外起 `crates/service-kit` 共用的 TLS Postgres。
 
 ## 指令
@@ -26,6 +26,7 @@ cargo test -p ingest --test clickhouse -- --nocapture
 cargo test -p migrate --test clickhouse -- --nocapture
 cargo test -p migrate --test clickhouse_backfill -- --nocapture
 cargo test -p migrate --test clickhouse_telemetry_query -- --nocapture
+cargo test -p migrate --test settings -- --nocapture
 
 # 受影響的 crate 全部測試（一次一個起容器的程式）
 cargo test -p ingest --no-fail-fast
@@ -40,11 +41,14 @@ cargo test -p sql-check
 cargo test -p repo-check
 cargo deny --locked check
 cargo run -p openapi -- --check
-bun test scripts/ci/changes.test.ts
+bun test scripts/ci
+bun test scripts/nightly
+bun scripts/ci/check-workflows.ts
+bun scripts/ci/lint-workflows.ts
 bun test deploy/chart
 ```
 
-另外以 `clickhouse-client --multiquery` 把 `services/ingest/migrations/clickhouse/` 的全部檔案依序串起來套用到同一個映像的拋棄式容器（`deploy/chart/tests/e2e/otel.e2e.ts` 的做法），結束碼 0：`trustiot` 資料庫有兩張彙總表、兩個 materialized view、兩個 backfill view 與三個租戶 view，兩個 backfill view 的 `migration_account` policy 的 `apply_to_list` 都是 `[]`（不點名任何帳號）。`0010` 本身不再寫入任何列。
+另外以 `clickhouse-client --multiquery` 把 `services/ingest/migrations/clickhouse/` 的全部檔案依序串起來套用到同一個映像的拋棄式容器（`deploy/chart/tests/e2e/otel.e2e.ts` 的做法），結束碼 0：`trustiot` 資料庫有兩張彙總表、兩個 materialized view、兩個 backfill view 與三個租戶 view，兩個 backfill view 的 `migration_account` policy 的 `apply_to_list` 都是 `[]`（不點名任何帳號）。`0010` 本身不再寫入任何列。2026-10-26 在 `cd4a062` 重跑，結果相同。
 
 ## 結果
 
@@ -62,10 +66,11 @@ bun test deploy/chart
 | 同一個區塊重送 | 原始表與彙總都只算一次（20 與 8 格一致） |
 | I1：前一次嘗試只寫進一部分，沒有完成紀錄 | 彙總與原始資料同樣算進這些列（24 與 8 格一致） |
 | 同步刪除後以 `deduplicate_insert = 'disable'` 重寫整批 | 對帳之前 14 格不一致；1 分鐘的對帳寫入 10 列後中斷，重跑時 1 分鐘寫 0 列、1 小時寫 4 列；32 與 12 格一致；再對帳一次寫 0 與 0 列；同租戶另一個串流的格不變 |
+| 對帳窗口：一批的第一次嘗試在 31 天前（2026-09-24）23:59 收到、只寫進一半，今天重寫 | 以閘道器緩衝的 30 天為窗口對帳寫入 0 與 0 列，10 格仍不一致（第一次嘗試的收到日在窗口外，那些格一直多算）；以契約的 31 天對帳寫入 6 與 4 列，12 與 4 格一致 |
 | 去重的風險（E7a）：同步刪除後以同樣的 `insert_deduplication_token`、同樣的內容、同樣的內容加 `insert_deduplicate = 0` 重寫 | 三種都回 OK，12 列中寫入 0 列 |
 | 同一批改用 `deduplicate_insert = 'disable'` 重寫並對帳 | 12 與 7 格一致 |
 | 原始列寫入、`telemetry_1h_mv` 卸下（模擬兩者之間當機） | 對帳補回 1 小時表，16 與 8 格一致 |
-| 串流的 query ID：同一個串流還有一句在伺服器上執行 | 同一個 query ID、不帶 `replace_running_query` 的語句被拒（`QUERY_WITH_SAME_ID_IS_ALREADY_RUNNING`）；帶 `stream_settings` 的對帳取消那一句（`QUERY_WAS_CANCELLED`）並照常執行，12 與 4 格一致 |
+| 串流的 query ID：前一次嘗試的 INSERT 帶 `stream_settings`（`async_insert = 0`）還在伺服器上執行，每秒寫入一列、各自成一個區塊 | 同一個 query ID、不帶 `replace_running_query` 的語句被拒（`QUERY_WITH_SAME_ID_IS_ALREADY_RUNNING`）；帶 `stream_settings` 的對帳在它寫入 3 列之後取消它（`QUERY_WAS_CANCELLED`）並照常執行；之後它不在 `system.processes`，執行 `SYSTEM FLUSH ASYNC INSERT QUEUE` 之後原始列仍是 3 列、格不變；對帳這 3 列寫入 1 與 1 列，13 與 5 格一致 |
 | 累計型資料點 | 25 與 8 格一致，電能見下表 |
 | 保存期限：收到日在 380 到 410 天前的 31 天，強制 merge | 1 分鐘表依 chrono 算出的「13 個月加一天」保留 16 天、刪掉 15 天，沒有提早刪的；1 小時表 31 天全部保留 |
 
@@ -88,7 +93,7 @@ bun test deploy/chart
 
 - 預設的合成 fixture `datasets/lab/synthetic`（316 筆、16 批，其中 1 批沒有完成紀錄，含補送與歸零、32 位元計數溢位）：1 分鐘 view 316 格、1 小時 view 28 格，全部與資料集算出的值一致，合計 316 筆，沒有完成紀錄的那一批與補送的讀值都算進去。
 - 電能：要算的資料點是索引裡 `kind = "cumulative"` 的每一個（溢位值取它的 `wraps_at`）。兩個 view 的答案等於以同一個公式從資料集算出的值；三個資料點的每個 bucket 都符合精確條件，所以也等於逐筆相鄰差的和：`meter-1/energy_kwh`（48 筆，含歸零）164.046（只差在浮點數的最後一位）、`meter-2/pulses`（47 筆，`wraps_at` 4294967296，含溢位）3099、`press-1/cycle_count`（42 筆）172。
-- 以 `stream_settings` 對 16 批各跑一次對帳，兩句都寫入 0 列：只寫一次的批次不需要修正。
+- 以 `stream_settings` 對 16 批各跑一次對帳（窗口 31 個收到日），兩句都寫入 0 列：只寫一次的批次不需要修正。
 - 設 `TRUSTIOT_LAB_DATASET_INDEX` 指向 fixture 索引的複本（Laysi/trustiot-v2#681 換成 lab 錄製資料時的用法），輸出標明資料集來自這個變數，結果相同（[lab-dataset-rollups-index-variable.txt](data/2026-10-25-141-telemetry-rollups/lab-dataset-rollups-index-variable.txt)）。
 
 ### 租戶隔離（`services/ingest/tests/clickhouse.rs`）
@@ -107,6 +112,7 @@ bun test deploy/chart
 - 全新的 ClickHouse 套用到 `0010`；建表時的 13 與 48 個月就是平台值，第一次執行不改彙總表；同一次執行在對齊 TTL 之後 backfill（原始 180 天：補 2026-05-01 到 2026-10-25），第二次執行不再補。
 - 設成原始 400 天、1 分鐘 14 個月、1 小時 60 個月：依序改 1 小時、1 分鐘、完成表、原始資料；改回平台值時順序相反；從伺服器讀回的 TTL 等於設定。
 - 1 分鐘 12 個月、1 小時短於 1 分鐘、121 個月、原始 400 天配 13 個月（最短 393 天）都在碰任何資料庫之前被拒，訊息寫出 key 與理由。
+- 原始資料保存 32、30、7 天的設定在碰任何資料庫之前被拒，ClickHouse 不變，訊息寫出 key、30 天的緩衝、31 天的對帳窗口與 33 天的下限。`tests/settings.rs` 以真的 binary 執行 `migrate run`，32、31、30 天都以結束碼 2 結束、訊息相同（[migrate-settings.txt](data/2026-10-25-141-telemetry-rollups/migrate-settings.txt)）。
 - 手動改成 `bucket + toIntervalMonth(13)` 的 TTL 讓 Job 停止並寫出要改回的形式，改回後 Job 接著對齊。
 - 租戶角色少了 `tenant_telemetry_1h` 的 `SELECT`、多了 `telemetry_1m` 的 `SELECT`、多了 `tenant_telemetry_1m` 的 `GRANT OPTION`，Job 都讓服務帳號不能登入並停止，修好後恢復；租戶帳號讀彙總表被拒。
 - backfill（`clickhouse_backfill.rs`，在套用 `0010` 之前已有原始列、原始資料保存 401 天的 ClickHouse 上）：
@@ -116,20 +122,24 @@ bun test deploy/chart
 | 第一次執行，1 分鐘彙總 14 個月 | 報告裡 1 分鐘表 TTL 從 13 改成 14 個月的那一行在 backfill 那一行之前；backfill 從 2025-09-22（`today − 398`）補到今天；13 個月又一天前（2025-09-24）收到的格在強制 merge 後仍在；界限之前（2025-09-21，`today − 399`）的原始列不補；記錄 `backfill/telemetry_rollups`；兩個 policy 回到不點名任何帳號 |
 | 再執行一次 | 沒有任何變更，每一天的格不變 |
 | 原始資料改成 200 天、強制 merge、刪掉昨天的格 | 截止日 2026-04-08 的原始列只剩最後一毫秒收到的 4 筆，彙總仍是 8 筆 |
-| policy 不點名任何帳號時 | 管理帳號對昨天的檢查讀到 0 列；點名自己之後讀到 2 列 |
+| policy 不點名任何帳號時 | 管理帳號對昨天的檢查讀到 0 列；點名自己之後讀到 2 列，runbook 讀 policy 的那一句（`has(apply_to_list, currentUser())`）兩列都是 1；改回 `TO NONE` 後是兩列 `0 [] 0` |
 | `trustiot_migrate.applied` 遺失（TRUNCATE），以第二個管理帳號執行 | 重新套用全部檔案，backfill 從 2026-04-11（`today − 197`）補到今天，補回昨天的格；2026-04-11 以前各天的列（原始與彙總共 5 列，含只過期一部分的 2026-04-08）完全不變；policy 回到不點名任何帳號 |
+| 手動讓 1 分鐘的 policy 點名管理帳號（`TO CURRENT_USER`）、1 小時的 `TO ALL`，再執行（已有 backfill 紀錄） | 只有一項變更：`set the migration_account row policies of trustiot.telemetry_1h_backfill (all), trustiot.telemetry_1m_backfill (['trustiot_admin']) back to name nobody`；兩個 policy 回到不點名任何帳號；再執行一次沒有變更 |
 
 ### 其他檢查
 
 | 指令 | 結果 |
 | --- | --- |
 | `cargo test -p ingest`、`-p lab-dataset`、`-p telemetry-query` | 全過 |
-| `cargo test -p migrate --no-fail-fast` | 除 `tests/mqtt_broker.rs` 的 `gateways_need_a_current_certificate_of_our_ca` 外全過；這一項在 `main`（`dab8822`）的樹上同樣失敗（broker 重新載入信任檔時讀不到 CRL 後停止），與本變更無關 |
+| `cargo test -p migrate --no-fail-fast` | 除 `tests/mqtt_broker.rs` 的 `gateways_need_a_current_certificate_of_our_ca` 外全過（`tests/settings.rs` 在內）；這一項在 `main`（`dab8822`）的樹上同樣失敗（broker 重新載入信任檔時讀不到 CRL 後停止），與本變更無關 |
 | `cargo fmt --all --check`、`cargo clippy --workspace --all-targets -- -D warnings` | 通過 |
 | `cargo test -p sql-check`、`cargo test -p repo-check` | 通過 |
 | `cargo deny --locked check` | advisories、bans、licenses、sources 都 ok |
 | `cargo run -p openapi -- --check` | `api/openapi.json` 與程式一致 |
-| `bun test scripts/ci/changes.test.ts` | 282 項通過 |
+| `bun test scripts/ci` | 488 項通過 |
+| `bun test scripts/nightly` | 338 項通過、8 項失敗。`image-cache.test.ts` 的「a pull request that changes what goes into a nightly image can run the smoke test」讀 `tools/migrate/src` 的每個 `#[path]`（以及那些檔案再引入的檔案，共 9 個 Rust 檔與 29 個 SQL 檔），在 `nightly.yml` 加上 `services/ingest/src/rollup.rs` 之前失敗在這個檔案、之後通過。8 項失敗都是本機 OpenSSL 解不開憑證（`PUBLIC_KEY_DECODE_ERROR`）的 PKI 測試（工作站憑證與 CRL），在 `main`（`dab8822`）的樹上同樣失敗，與本變更無關 |
+| `bun scripts/ci/check-workflows.ts` | 4 個檔案，沒有違規 |
+| `bun scripts/ci/lint-workflows.ts` | actionlint：3 個 workflow，沒有錯誤 |
 | `bun test deploy/chart` | 655 項通過 |
 
 ## 結論
@@ -141,5 +151,6 @@ bun test deploy/chart
 | 租戶 A 讀不到 B 的彙總資料 | 通過：兩個彙總 view 各 29 項攻擊與內省探測，底表、materialized view 與 backfill view 對租戶一律被拒；backfill view 平常連管理帳號也讀不到 |
 | 模擬 I1 的批次重寫與離線補送的亂序資料，彙總值仍與原始資料一致 | 通過：部分寫入後重寫並對帳、對帳中斷後重跑、原始與彙總之間當機、補送的舊讀值、前一句仍在執行時的對帳，每一步都一致 |
 | 既有資料的 backfill 不改動原始列已過期的收到日 | 通過：重新套用、`applied` 遺失後再補、以實際保存天數檢查與修正，都不動界限以前（含只過期一部分的那天）的格 |
+| （第二輪審查與 2026-10-26 負責人決定）寫入同步、backfill view 不留點名、對帳窗口 31 天、原始資料至少 33 天 | 通過：被取消的同步 INSERT 在替換它的語句執行之後沒有再落地任何列；policy 被留下點名時下一次執行改回並記為變更；30 天的窗口漏掉 31 天前 23:59 收到的第一次嘗試、31 天的窗口補正；32 天的設定以結束碼 2 被拒 |
 
-沒有實測的項目（依驗證分級延後）：彙總表與原始資料的列數與大小比例、每次 INSERT 多寫兩個 part 的寫入延遲、負載下對帳的延遲、大表上 backfill 每一天要多久、views 在大區塊 INSERT 時的記憶體用量（審查時在 1.5 GB 的容器以 100 萬列一個區塊寫入出現 `MEMORY_LIMIT_EXCEEDED`）。
+沒有實測的項目（依驗證分級延後）：彙總表與原始資料的列數與大小比例、每次 INSERT 多寫兩個 part 的寫入延遲、同步 INSERT（`async_insert = 0`）下每批各自產生三個 part 的吞吐量（Laysi/trustiot-v2#641 延後的驗證）、負載下對帳的延遲、大表上 backfill 每一天要多久、views 在大區塊 INSERT 時的記憶體用量（審查時在 1.5 GB 的容器以 100 萬列一個區塊寫入出現 `MEMORY_LIMIT_EXCEEDED`）。

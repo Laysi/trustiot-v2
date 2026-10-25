@@ -10,13 +10,15 @@ partial attempt, no completion record: the aggregates equal the raw rows (24 one
 rewrite: before the reconcile, 14 cells differ from the raw rows
 rewrite and reconcile: the aggregates equal the raw rows (32 one-minute and 12 one-hour cells)
 rewrite: the reconcile wrote 10 one-minute rows, then 0 and 4 one-hour rows after the interruption, then 0 and 0; the other stream's cells are unchanged
+rewrite a day after the buffer's age: the aggregates equal the raw rows (12 one-minute and 4 one-hour cells)
+reconcile window: a batch first received at 2026-09-24 23:59:00.000 and rewritten at 2026-10-25 16:32:48.194: with a window of 30 receive days the reconcile wrote (0, 0) rows and 10 cells still differed; with the contract's 31 days it wrote 6 one-minute and 4 one-hour rows and the aggregates equal the raw rows
 deduplication hazard: a rewrite with the same insert_deduplication_token answered OK and wrote 0 of 12 rows
 deduplication hazard: a rewrite with identical content answered OK and wrote 0 of 12 rows
 deduplication hazard: a rewrite with identical content and insert_deduplicate = 0 answered OK and wrote 0 of 12 rows
 rewrite with deduplicate_insert = 'disable' and reconcile: the aggregates equal the raw rows (12 one-minute and 7 one-hour cells)
 crash between the raw and a view part: the aggregates equal the raw rows (16 one-minute and 8 one-hour cells)
-reconcile after stopping an earlier statement: the aggregates equal the raw rows (12 one-minute and 4 one-hour cells)
-query ID: while a statement of the stream ran, another with its ID was refused (QUERY_WITH_SAME_ID_IS_ALREADY_RUNNING); the reconcile with the stream's settings stopped it (QUERY_WAS_CANCELLED) and ran
+reconcile after stopping an earlier INSERT: the aggregates equal the raw rows (13 one-minute and 5 one-hour cells)
+query ID: while an INSERT of the stream ran with the stream's settings, another statement with its ID was refused (QUERY_WITH_SAME_ID_IS_ALREADY_RUNNING); the reconcile with the stream's settings stopped it (QUERY_WAS_CANCELLED) after it had landed 3 rows, and ran; once it had run no row landed (still 3 raw rows and the same cells after the asynchronous insert queue was flushed); the reconcile of those rows wrote 1 one-minute and 1 one-hour rows
 cumulative points: the aggregates equal the raw rows (25 one-minute and 8 one-hour cells)
 energy reset_in_hour [5.0, 7.0, 0.0, 6.0] (wraps at 0): consecutive differences 8, one-minute view 8, one-hour view 8
 energy first_zero [0.0, 5.0, 0.0, 3.0] (wraps at 0): consecutive differences 8, one-minute view 8, one-hour view 8
@@ -28,5 +30,5 @@ retention: of 31 receive days 380 to 410 days ago, the one-minute table kept 16 
 server: 26.8.22.13
 test the_aggregates_follow_the_raw_rows ... ok
 
-test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 16.74s
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 26.64s
 
