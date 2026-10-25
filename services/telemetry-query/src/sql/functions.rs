@@ -169,7 +169,9 @@ pub const FUNCTIONS: &[Function] = &[
     window("row_number").any_case(),
     window("rank").any_case(),
     window("dense_rank").any_case(),
+    window("denseRank"),
     window("percent_rank").any_case(),
+    window("percentRank"),
     window("nth_value").any_case(),
     window("lagInFrame"),
     window("leadInFrame"),
@@ -221,6 +223,7 @@ pub const FUNCTIONS: &[Function] = &[
     scalar("toUnixTimestamp64Milli"),
     scalar("fromUnixTimestamp64Milli"),
     scalar("toTimeZone"),
+    scalar("toTimezone"),
     // Conversion. `CAST` and `::` become these (check.rs).
     scalar("toFloat64"),
     scalar("toFloat32"),
@@ -370,9 +373,16 @@ mod tests {
     fn names_are_unique_and_never_a_refused_function() {
         let mut seen = HashSet::new();
         for function in FUNCTIONS {
+            assert!(seen.insert(function.name), "{} twice", function.name);
+            // Names that differ only in case (`toTimeZone`, `toTimezone`) are both
+            // ClickHouse's; one that matches in any case would make the lookup ambiguous.
+            let same_but_case = FUNCTIONS
+                .iter()
+                .filter(|other| other.name.eq_ignore_ascii_case(function.name))
+                .count();
             assert!(
-                seen.insert(function.name.to_ascii_lowercase()),
-                "{} twice",
+                !function.case_insensitive || same_but_case == 1,
+                "{} matches another name in any case",
                 function.name
             );
             assert!(
@@ -441,6 +451,10 @@ mod tests {
             ("argMaxIf", "argMaxIf", true),
             ("quantileIf", "quantileIf", true),
             ("toStartOfHour", "toStartOfHour", false),
+            ("toTimeZone", "toTimeZone", false),
+            ("toTimezone", "toTimezone", false),
+            ("DENSE_RANK", "dense_rank", false),
+            ("denseRank", "denseRank", false),
             ("IF", "if", false),
             ("nullIf", "nullIf", false),
         ] {
@@ -449,7 +463,14 @@ mod tests {
             assert_eq!(resolved.combined, combined, "{name}");
         }
         // Case-sensitive names match only as ClickHouse spells them.
-        for name in ["TOSTARTOFHOUR", "tostartofhour", "Any", "multiif"] {
+        for name in [
+            "TOSTARTOFHOUR",
+            "tostartofhour",
+            "Any",
+            "multiif",
+            "totimezone",
+            "DenseRank",
+        ] {
             assert!(resolve(name).is_none(), "{name}");
         }
     }

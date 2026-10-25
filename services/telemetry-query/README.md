@@ -4,9 +4,10 @@
 
 - 消費身分服務的 `identity.tenant_created`，為每個新租戶建一個 ClickHouse 唯讀帳號（見[租戶帳號](#租戶帳號)）。
 - 歷史查詢 API：一個資料點在一段時間內依時區降採樣的序列，與設備每個資料點最新的值（見 [API](#api)）。每個查詢都以呼叫者租戶的帳號執行，所以 ClickHouse 的 row policy、settings profile 與 quota 管住每一個查詢。
+- AI 的唯讀 SQL：內部 endpoint `POST /internal/telemetry/v1/sql`，AI 助理以使用者的身分送來一個 `SELECT`，服務自己檢查後以呼叫者租戶的帳號執行（Laysi/trustiot-v2#143，見 [AI 的唯讀 SQL](#ai-的唯讀-sql)）。
 - 可查期間先固定為最嚴格方案的例子（[方案](../../docs/product/plans.md) 的 Starter）：原始資料 7 天、聚合資料 3 個月，所有租戶相同，由 ClickHouse 依租戶帳號的設定強制（Laysi/trustiot-v2#143，見[可查期間](#可查期間)）；依方案區分的期間是 Laysi/trustiot-v2#453。
 
-不包含：健康狀態歷史、首頁卡片、依方案的期間（Laysi/trustiot-v2#453）；AI 的語意工具與 SQL 解析（Laysi/trustiot-v2#142、Laysi/trustiot-v2#143）。
+不包含：健康狀態歷史、首頁卡片、依方案的期間（Laysi/trustiot-v2#453）；AI 的語意工具（Laysi/trustiot-v2#142）；儀表板重跑 SQL 的呼叫端（Laysi/trustiot-v2#150）。
 
 ## 租戶帳號
 
@@ -63,6 +64,60 @@
 
 每個查詢之前，服務先以租戶帳號登入確認帳號仍是它建立的樣子（`Accounts::verify`：與消費端第 2 步相同的檢查；不讀表，所以不計入 quota），不同就不執行查詢，所以帳號的查詢上限被改寬時不會被用到。查詢一律帶參數（`{name:Type}`，HTTP 介面的 `param_<name>`），除了 `wait_end_of_query` 不送任何 setting（唯讀帳號會拒絕），不用明確的 `PREWHERE`。每個查詢除了 row policy 外也自己加上 `tenant_id = 呼叫者租戶`，所以即使帳號被改成別的租戶，也回不出別的租戶的資料。ClickHouse 的錯誤內文從不回給用戶端，也不寫進日誌，日誌只記錯誤代碼。
 
+## AI 的唯讀 SQL
+
+`src/sql/`、`src/sql_api.rs`（Laysi/trustiot-v2#143）：AI 助理（之後還有 Laysi/trustiot-v2#150 的儀表板）以使用者的身分送來一個 `SELECT`，服務自己檢查，再以呼叫者租戶的帳號執行，所以 row policy、可查期間、settings profile 與 quota 照樣管住它。請求與回應的型別在 [crates/contract](../../crates/contract/README.md) 的 `api::telemetry_query`。
+
+- **路由**：`POST /internal/telemetry/v1/sql`，不在 `api/openapi.json`。入口 gateway 拒絕所有 `/internal*`（chart 的 `<release>-ingress-deny-internal`），mesh 只開放 assistant 呼叫這個服務（`mesh.calls`）。
+- **呼叫者**：內部身分 token 必須是 token 交換換出的（有 `act`），`act` 在 `SQL_CALLERS` 裡（目前只有 `assistant`），而且帶租戶與這個版本認得的角色；viewer、editor、admin 都可以（2026-10-26 決定）。使用者自己經入口的請求沒有 `act`，回 403。
+- **請求**：`{"sql": "...", "max_rows": 200}`。`sql` 最多 16 KiB（`MAX_SQL_BYTES`），整個 body 最多 64 KiB（`MAX_REQUEST_BYTES`，超過也當作 SQL 太長）；`max_rows` 是 1–10000（`MAX_ROWS`），不給時是 200（`DEFAULT_MAX_ROWS`，助理的工具固定送 200）。
+- **檢查**是純函式、不做 I/O，被拒絕的語句不會到 Postgres 或 ClickHouse：
+  1. 字元：反斜線、控制字元、非 ASCII 的空白與不可見的格式字元一律拒絕。
+  2. token：只接受一般識別字（`[A-Za-z_][A-Za-z0-9_]*`，最多 128 bytes）、十進位數字、`'…'` 字串、`--` 與 `/* */` 註解和固定的運算子，最多 4096 個 token；第一個字是 `SELECT`、`WITH` 或 `(`，`;` 之後不能再有東西。
+  3. 以 sqlparser 的 ClickHouse 方言解析（遞迴上限 50），只能是一個查詢。
+  4. 走訪語法樹，沒有列出的一律拒絕：只能讀三個租戶 view（`tenant_telemetry`、`tenant_telemetry_1m`、`tenant_telemetry_1h`，可省略 `trustiot.`）與查詢自己的 CTE，而且至少讀一個 view；不能有 `SETTINGS`、`FORMAT`、`INTO`、`FINAL`、`SAMPLE`、`PREWHERE`、`WITH TOTALS`、`WITH FILL`、table function 等；函式只能用白名單（`src/sql/functions.rs`，聚合函式可加 `If`、`OrNull`、`OrDefault`、`Distinct` 這幾種組合子）；分桶、格式化或讀取時間的函式要寫明時區字串，例如 `toStartOfDay(bucket, 'Asia/Taipei')`。
+  5. 把檢查過的樹印回文字：去掉註解、view 補上 `trustiot.`、別名一律帶 `AS`、`CAST` 改成轉換函式、函式名稱改成 ClickHouse 定義的拼法。印出的文字再完整檢查一次，必須得到同一棵樹與同一段文字，然後加上 `LIMIT max_rows + 1` 與 `FORMAT JSONCompactEachRowWithNamesAndTypes`。送給 ClickHouse 的只有這段文字。
+
+  檢查在自己的執行緒上跑（16 MiB 的 stack），每個副本最多同時 4 個（`MAX_CONCURRENT_CHECKS`），其餘等待；呼叫端不再等待時，執行緒照樣佔著名額直到結束。
+- **執行**：與歷史 API 相同，先確認租戶帳號已建立、仍是服務建立的樣子並帶著可查期間（`Accounts::verify`），再以租戶帳號執行；ClickHouse 的回答最多讀 8 MiB（`MAX_RESULT_BYTES`）。列數超過 `max_rows` 時整個拒絕（`too_many_rows`），不截斷，模型不會拿到不完整的答案還不知道。
+- **回應**：200 `{"sql", "columns": [{"name", "type"}], "rows", "queryable_from": {"tenant_telemetry", "tenant_telemetry_1m", "tenant_telemetry_1h"}, "queried_at"}`。`sql` 是實際執行的文字（不含服務加上的 `LIMIT` 與 `FORMAT`）；`rows` 是 ClickHouse JSON 格式的值（pin 住的 ClickHouse 版本把 64 位元整數寫成 JSON 數字，時間寫成文字）；`queryable_from` 是每個 view 的 `Windows::earliest`：之前的列不在租戶的可查期間，之後 5 分鐘內的列可能有也可能沒有。
+- **日誌**：SQL 是租戶的內容，日誌只記長度（`sql_bytes`）、SHA-256 的前 8 bytes（`sql_hash`，用來認出重複的 SQL）、拒絕類別與 ClickHouse 的錯誤代碼，不記 SQL 本身；回應也從不帶 SQL 或 ClickHouse 的錯誤內文。
+
+| 請求 | 回應 |
+| --- | --- |
+| 沒有有效的內部身分 token | 401 `unauthenticated` |
+| 沒有 `act`、`act` 不在 `SQL_CALLERS`、沒有租戶，或角色這個版本不認得 | 403 `permission_denied` |
+| body 不是請求、`max_rows` 不在 1–10000 | 400 `invalid_request`，`details.parameter` |
+| SQL 被檢查拒絕，或 ClickHouse 因查詢本身的問題拒絕 | 422 `validation_failed`，`details` 是拒絕（下表） |
+| 租戶帳號還沒建立 | 404 `not_found`、`telemetry.account_not_ready` |
+| 帳號的 quota 或同時查詢數用完 | 429 `rate_limited` |
+| ClickHouse 在時間上限中止查詢 | 504 `timeout` |
+| 帳號與服務建立的不同、Postgres 或 ClickHouse 出錯，或 ClickHouse 的錯誤代碼不在下表 | 503 `unavailable` |
+| 檢查本身出錯，或帳號拒絕了通過檢查的查詢（`ACCESS_DENIED`、`READONLY`：檢查與帳號的權限不一致，要調查） | 500 `internal`，日誌 ERROR |
+
+拒絕的 `details` 是 `{"class": ...}` 加上該類別的固定欄位（`SqlRefusal`）：
+
+| `class` | 欄位 | 何時 |
+| --- | --- | --- |
+| `too_long` | `max_bytes` | SQL 超過 16 KiB |
+| `too_complex` | | token 太多或巢狀太深 |
+| `syntax` | `line`、`column`（知道時） | 解析不了 |
+| `character_not_allowed` | `line`、`column` | 檢查第 1 步的字元 |
+| `literal_not_allowed` | `line`、`column` | 第 2 步以外的 token：引號識別字、其他形式的字串或數字、參數等 |
+| `not_a_select` | | 不是 `SELECT` |
+| `multiple_statements` | | 不只一個語句 |
+| `table_not_allowed` | `table` | 三個 view 以外的表、table function、與 view 同名的 CTE |
+| `function_not_allowed` | `function` | 白名單以外的函式 |
+| `clause_not_allowed` | `clause` | 不允許的子句或語法，名稱是固定清單（`settings`、`format`、`final`、`prewhere`、`sample`、`with_totals`、`cast_type` 等） |
+| `no_tenant_view` | | 沒有讀任何 view |
+| `time_zone_required` | `function` | 時間函式沒有寫時區 |
+| `too_many_rows` | `max` | 回答超過 `max_rows` 列 |
+| `result_too_large` | `max_bytes` | 回答超過 8 MiB |
+| `query_too_heavy` | | 超過帳號讀取列數、記憶體等上限 |
+| `query_error` | `kind` | ClickHouse 執行時的錯誤，依錯誤代碼分成 `unknown_column`、`ambiguous_column`、`unknown_table`、`type_mismatch`、`bad_arguments`、`cannot_parse_value`、`aggregate_misuse`、`division_by_zero`、`syntax`、`other` |
+
+`table` 與 `function` 是 SQL 裡通過識別字規則的名稱，其他欄位都是固定值，所以拒絕不會把任意文字帶回模型。新版本增加的類別、子句或 `kind`，舊的呼叫端解碼成 `unrecognized`。
+
 ## 可查期間
 
 方案的可查期間由 ClickHouse 強制（Laysi/trustiot-v2#143，2026-10-26 決定；`services/ingest/migrations/clickhouse/0011_queryable_period.sql`，規則與部署、回復步驟見 [services/ingest](../ingest/README.md)「可查期間」）：租戶帳號帶三個 `CONST` 設定，一張表一個時間窗，三個租戶 view 背後的 row policy 濾掉窗外的列，不論查詢寫了什麼條件。這個服務只負責寫入與讀回時間窗（`src/period.rs`、`src/accounts.rs`）：
@@ -114,6 +169,7 @@ CARGO_BUILD_JOBS=2 cargo test -p telemetry-query
 | `tests/tenant_accounts.rs` | 驗收 1、2：建立兩個租戶後兩個帳號都存在，屬性（default role、hosts、沒有自己的 grant、`SQL_tenant_id`、`readonly`、上限）正確，各自只看得到自己的讀數；以租戶 A 的帳號跑 2026-10-09 PoC 的攻擊類型（基底表、JOIN、子查詢、UNION、CTE、FINAL、PREWHERE、table function、系統表、改 `SQL_tenant_id` 與限制的 setting、EXECUTE AS、URL 的 role、寫入、建帳號、改服務帳號、grant、刪 row policy），都被拒或回不出 B 與第三個租戶的讀數，資料沒被改；超過列數、記憶體、時間上限的查詢分別以 `TOO_MANY_ROWS`、`MEMORY_LIMIT_EXCEEDED`、`TIMEOUT_EXCEEDED` 中止；密碼被改時下一個 API 呼叫自動修好；每個 API 呼叫只算帳號 quota 的一個查詢（查詢前的帳號檢查不讀表、不計入，以 `system.quotas_usage` 確認）；帳號的查詢上限在帳號上被改寬（`readonly` 不變）時 API 回 503、不執行查詢，改回後恢復；帳號被改成別的租戶時 API 回 503、回不出別的租戶，重播事件時進 dead letter；帳號沒有時間窗設定時讀不到資料，時間窗被改成別的值時，下一個 API 呼叫都把它改回服務的值；日誌沒有任何密碼 |
 | `tests/queryable_period.rs` | Laysi/trustiot-v2#143 驗收 2：服務建好帳號後停掉，直接以租戶帳號登入（前面沒有服務、也沒有 SQL 檢查），只驗資料庫本身：9 條租戶 row policy 都帶各自表的時間窗；三個租戶 view 各自只顯示窗內的讀數與格；59 種通往窗外的查詢（條件、遮蔽 `ts`／`bucket`／`tenant_id` 的別名、JOIN、子查詢、CTE、集合運算、window function、table function、基底表）都回不出窗外或別的租戶的讀數，被拒的理由與記錄的相同；以 `SETTINGS`、URL、session 的 `SET` 放寬時間窗或換身分都被拒或無效；呼叫者的運算式不會作用在窗外的列（`throwIf`、轉型失敗）；時間窗起點隨伺服器時鐘移動；服務帳號改時間窗（全部放寬、只縮短 1 小時彙總、改回）從下一個查詢起生效；沒有時間窗或時間窗的值錯誤的帳號讀不到任何列 |
 | `tests/history.rs` | 驗收 3、4：序列與以另一組 ClickHouse 函式（`toStartOfHour`、`toStartOfDay`、`toStartOfFifteenMinutes`）直接查原始表的結果逐區間相同（Asia/Taipei、Asia/Kolkata、UTC；`15m`、`1h`、`3h`、`1d` 與自動選擇），區間開始落在當地邊界；`from`、`to` 不在格邊界時，結果等於整格範圍的參考結果（UTC 與 Asia/Taipei 讀 1 小時格，Asia/Kolkata 改讀 1 分鐘格）；整數、bool、文字資料點；`raw` 與 `latest` 等於儲存的讀數；同一個設備 ID 的另一個租戶的讀數不會出現；原始資料與聚合資料的期間截斷與拒絕；`to` 超過一年後（+262142 年、2106-02-08）的 422；401、403、404、400、422 的各種拒絕不帶 ClickHouse 錯誤內文；quota 用完時 429 |
-| `tests/cross_tenant.rs` | [crates/testkit](../../crates/testkit/README.md) 的跨租戶負向測試：服務角色讀不到也改不了其他租戶的 `tenant_accounts`；兩個 API 讀的是 ClickHouse，由上面兩個測試手動涵蓋，所以在套件中豁免 |
+| `tests/sql_api.rs` | Laysi/trustiot-v2#143 驗收 1、3、4、5，與驗收 2 經過 endpoint 的部分，token 與 assistant 的 token 交換換出的相同（`act`）：模型會寫的查詢（`tests/data/model-queries.sql`）都回 200，回應的 `sql`、欄位型別與 `queryable_from` 正確；viewer、editor、admin 都可以，使用者自己的 token、別的服務、沒有租戶回 403，沒有 token 回 401，壞的 body 回 400，超過 64 KiB 的 body 回 `too_long`；每種拒絕類別只回固定的 `details`，沒有 SQL 或 ClickHouse 的錯誤內文；PoC 的攻擊類型（`tests/support/poc.rs`）與可查期間的路線（`tests/support/period.rs`）都被拒絕，或回不出期間外與別的租戶的讀數；同一段 SQL 以兩個租戶執行，各自只看到自己的讀數；不是 `SELECT` 的語句都沒有到 ClickHouse（`system.query_log` 裡沒有，租戶帳號只執行過 `SELECT`）；印出的文字與原文在 ClickHouse 的 `EXPLAIN AST` 相同；白名單的函式都在 pinned ClickHouse 的 `system.functions`，大小寫規則與種類相同 |
+| `tests/cross_tenant.rs` | [crates/testkit](../../crates/testkit/README.md) 的跨租戶負向測試：服務角色讀不到也改不了其他租戶的 `tenant_accounts`；兩個公開 API 讀的是 ClickHouse，由 `tenant_accounts.rs` 與 `history.rs` 手動涵蓋，所以在套件中豁免；內部的 SQL endpoint 不在 OpenAPI 文件裡（套件只認得公開的操作），由 `sql_api.rs` 手動涵蓋（同一段 SQL 以兩個租戶執行） |
 | `tests/sql_check.rs` | Laysi/trustiot-v2#143 的 SQL 檢查（不需要容器）：改 schema 的語句（`ALTER`、`DROP`、`TRUNCATE`、`CREATE`、`RENAME`、`EXCHANGE`、`ATTACH`、`DETACH`、`UNDROP`）不是查詢，接在查詢後面時是多個語句，寫在註解裡時不會出現在送出的文字；這些輸入放在 `tests/` 而不是 `src/sql/`，因為 repo-check 拒絕 `services/*/src` 裡任何改 schema 的文字 |
-| `src/` 的單元測試 | 區間選擇、期間截斷、參數規則、讀數的 JSON 形狀、帳號名稱與密碼推導、建帳號的 SQL 只放進租戶 ID；SQL 檢查（`src/sql/`）：模型會寫的查詢通過且印出的文字固定，字元、token、語句、資料表、子句、函式、運算式與時區規則的拒絕與位置，列數上限的改寫，過深的查詢；同時執行的檢查最多 `MAX_CONCURRENT_CHECKS`（4）個執行緒，呼叫者不再等待時執行緒仍佔著名額直到結束 |
+| `src/` 的單元測試 | 區間選擇、期間截斷、參數規則、讀數的 JSON 形狀、帳號名稱與密碼推導、建帳號的 SQL 只放進租戶 ID；SQL 檢查（`src/sql/`）：模型會寫的查詢通過且印出的文字固定，字元、token、語句、資料表、子句、函式、運算式與時區規則的拒絕與位置，列數上限的改寫，過深的查詢；同時執行的檢查最多 `MAX_CONCURRENT_CHECKS`（4）個執行緒，呼叫者不再等待時執行緒仍佔著名額直到結束；SQL endpoint（`src/sql_api/tests.rs`）：只有在租戶內的 AI 服務能呼叫，ClickHouse 錯誤代碼對應的類別與狀態，拒絕的 body，回答的解析，日誌只有長度與雜湊，被拒絕的語句連 Postgres 與 ClickHouse 都不會連（計數連線的本機埠）；ClickHouse client 每次呼叫最多讀到它的上限 |

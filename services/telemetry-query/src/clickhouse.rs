@@ -58,6 +58,10 @@ pub enum QueryError {
         code: Option<u32>,
         body: String,
     },
+    /// ClickHouse's answer is longer than the call allowed ([`ClickHouse::query_limited`]);
+    /// the rest was not read.
+    #[error("ClickHouse's answer is longer than {max_bytes} bytes")]
+    TooLarge { max_bytes: usize },
 }
 
 impl QueryError {
@@ -66,7 +70,7 @@ impl QueryError {
     pub fn code(&self) -> Option<u32> {
         match self {
             Self::Failed { code, .. } => *code,
-            Self::Unreachable(_) => None,
+            Self::Unreachable(_) | Self::TooLarge { .. } => None,
         }
     }
 
@@ -81,6 +85,7 @@ impl QueryError {
     pub fn kind(&self) -> String {
         match self {
             Self::Unreachable(_) => "unreachable".to_owned(),
+            Self::TooLarge { max_bytes } => format!("answer longer than {max_bytes} bytes"),
             Self::Failed { status, code, .. } => match code {
                 Some(code) => format!("ClickHouse error {code} (HTTP {status})"),
                 None => format!("HTTP {status}"),
@@ -128,7 +133,7 @@ impl ClickHouse {
 
     /// Runs `statement` as `account` with `params` as its query parameters, and with the role
     /// `role` enabled for this statement only, when given (the HTTP interface's `role`
-    /// parameter). Returns the response body.
+    /// parameter). Returns the response body, of at most [`transport::MAX_BODY_BYTES`].
     ///
     /// # Errors
     ///
@@ -140,6 +145,23 @@ impl ClickHouse {
         statement: &str,
         params: &[(&str, &str)],
         role: Option<&str>,
+    ) -> Result<String, QueryError> {
+        self.query_limited(account, statement, params, role, transport::MAX_BODY_BYTES)
+            .await
+    }
+
+    /// [`ClickHouse::query`] reading at most `max_body` bytes of the answer.
+    ///
+    /// # Errors
+    ///
+    /// As [`ClickHouse::query`], and [`QueryError::TooLarge`] for a longer answer.
+    pub async fn query_limited(
+        &self,
+        account: Credentials<'_>,
+        statement: &str,
+        params: &[(&str, &str)],
+        role: Option<&str>,
+        max_body: usize,
     ) -> Result<String, QueryError> {
         let names: Vec<String> = params
             .iter()
@@ -156,14 +178,20 @@ impl ClickHouse {
         }
         let response = self
             .client
-            .post(
+            .post_limited(
                 &self.url,
                 &query,
                 (account.user, account.password),
                 statement.to_owned(),
+                max_body,
             )
             .await
-            .map_err(|error| QueryError::Unreachable(error.to_string()))?;
+            .map_err(|error| match error {
+                transport::RequestError::TooLarge { max_bytes } => {
+                    QueryError::TooLarge { max_bytes }
+                }
+                transport::RequestError::Failed(reason) => QueryError::Unreachable(reason),
+            })?;
         if response.status == http::StatusCode::OK {
             return Ok(response.body);
         }

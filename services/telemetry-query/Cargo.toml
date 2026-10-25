@@ -1,6 +1,6 @@
 [package]
 name = "telemetry-query"
-description = "TrustIoT v2 telemetry-query service: each tenant's read-only ClickHouse account, created when the tenant is created, and the history API of device charts, within the queryable period."
+description = "TrustIoT v2 telemetry-query service: each tenant's read-only ClickHouse account, created when the tenant is created, and the history API of device charts, within the queryable period, and the internal endpoint that runs an AI's read-only SQL."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

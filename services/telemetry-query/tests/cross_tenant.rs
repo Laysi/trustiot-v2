@@ -6,7 +6,9 @@
 //! The two API operations serve ClickHouse data, which the suite's Postgres store cannot seed;
 //! `tests/tenant_accounts.rs` (each tenant's account against the PoC's attack types) and
 //! `tests/history.rs` (tenant B's readings under the same device ID never reach tenant A, and
-//! the reverse) cover them by hand.
+//! the reverse) cover them by hand. The internal SQL endpoint (Laysi/trustiot-v2#143) is not in
+//! the OpenAPI document, which is all the suite reads; `tests/sql_api.rs` covers it by hand (the
+//! same SQL as two tenants, and the PoC's attack types through it).
 //!
 //! Starts a throwaway Postgres with TLS (podman or docker); skipped without either unless `CI`
 //! is set. Run with `--nocapture` to see every probe.

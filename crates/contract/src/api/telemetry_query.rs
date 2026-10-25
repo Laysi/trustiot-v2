@@ -37,12 +37,14 @@ pub const MAX_RESULT_BYTES: u64 = 8 * 1024 * 1024;
 /// | Outcome | Status | Body |
 /// | --- | --- | --- |
 /// | Answered | 200 | [`SqlResult`] |
-/// | The SQL is refused, or its answer is | 422 | `validation_failed`, `details` = a [`SqlRefusal`] |
+/// | The SQL is refused (a body over the service's limit too), or its answer is | 422 | `validation_failed`, `details` = a [`SqlRefusal`] |
 /// | No token, or an invalid or expired one | 401 | `unauthenticated` |
 /// | No tenant, or a caller that may not run SQL (no `act`, or another service) | 403 | `permission_denied` |
+/// | The tenant's account has not been created yet | 404 | `not_found` |
 /// | The tenant's queries are used up for now | 429 | `rate_limited` |
 /// | The body is not this request, or `max_rows` is out of range | 400 | `invalid_request` |
-/// | The tenant's account is not ready, or ClickHouse failed | 503 | `unavailable` |
+/// | The check failed, or the tenant's account refused a checked query | 500 | `internal` |
+/// | The account is not as the service creates it, or Postgres or ClickHouse failed | 503 | `unavailable` |
 /// | The query ran longer than the account's limit | 504 | `timeout` |
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RunSql {
@@ -76,7 +78,8 @@ pub struct SqlResult {
     /// The result's columns, in order.
     pub columns: Vec<SqlColumn>,
     /// The rows, each a JSON array in column order, as ClickHouse's JSON formats write values
-    /// (64-bit integers as strings, times as `YYYY-MM-DD hh:mm:ss[.fff]` text).
+    /// (with the pinned ClickHouse, 64-bit integers as JSON numbers and times as
+    /// `YYYY-MM-DD hh:mm:ss[.fff]` text).
     pub rows: Vec<Vec<Value>>,
     /// Per view, the time from which the answer holds every row: the tenant's queryable period
     /// cuts earlier rows, in the database.

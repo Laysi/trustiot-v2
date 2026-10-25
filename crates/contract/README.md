@@ -141,6 +141,24 @@ client 每次失敗都記一筆日誌，欄位有 `peer`、`route`（路由樣�
 
 回應一律 `cache-control: no-store`。委派對呼叫端是不透明的字串，`RunDelegationCreated` 只能反序列化，委派照樣是遮蔽內容的 `InternalToken`，只放在 `x-internal-identity` 送到換 token 的路徑。和 `OnBehalf` 不同，`RunDelegations` 把身分服務回的 `unauthenticated`、`permission_denied` 照傳給使用者：被拒絕的是使用者的 session 或成員資格，不是部署的問題。
 
+### AI 的唯讀 SQL（`api::telemetry_query::RunSql`）
+
+`POST /internal/telemetry/v1/sql`，telemetry-query 檢查 AI 寫的一個 `SELECT` 後，以呼叫者租戶的 ClickHouse 唯讀帳號執行（Laysi/trustiot-v2#143；檢查的規則、限制與日誌在 [services/telemetry-query/README.md](../../services/telemetry-query/README.md) 的「AI 的唯讀 SQL」）。`x-internal-identity` 帶 `assistant` 以使用者身分換來的 token（`act` 是 `assistant`）；本文 `{"sql", "max_rows"}`，`sql` 最多 `MAX_SQL_BYTES`（16 KiB），`max_rows` 選填，1 到 `MAX_ROWS`（10000），預設 `DEFAULT_MAX_ROWS`（200）。這是不改變任何狀態的 `Post`：SQL 放在本文。
+
+| 結果 | 狀態 | 本文 |
+| --- | --- | --- |
+| 回答 | 200 | `SqlResult` `{"sql", "columns", "rows", "queryable_from", "queried_at"}` |
+| SQL 被拒絕，或它的回答被拒絕（超過 `max_rows` 列或 `MAX_RESULT_BYTES`、太重、ClickHouse 的執行錯誤） | 422 | `validation_failed`，`details` 是 `SqlRefusal`：`{"class": ...}` 加上該類別的固定欄位 |
+| 沒有 token、token 無效或過期 | 401 | `unauthenticated` |
+| 沒有 `act`、`act` 不是可以執行 SQL 的服務、沒有租戶 | 403 | `permission_denied` |
+| 租戶的帳號還沒建立 | 404 | `not_found` |
+| 本文不是這個請求、`max_rows` 超出範圍 | 400 | `invalid_request` |
+| 租戶的查詢額度暫時用完 | 429 | `rate_limited` |
+| 帳號不是服務建立的樣子、資料庫失敗 | 503 | `unavailable` |
+| 查詢超過帳號的時間上限 | 504 | `timeout` |
+
+拒絕的 `details` 是這個 API 的一部分，不只是錯誤訊息：呼叫端（助理）把它解碼成 `SqlRefusal`，再變成給模型的固定提示。所以 `class`、`SqlClause` 與 `QueryErrorKind` 都是封閉的清單，新版本增加的值在舊的呼叫端解碼成 `Unrecognized`；欄位只有數字、這個模組的固定名稱，或 SQL 裡通過識別字規則的名稱，從不帶 ClickHouse 的錯誤內文或 SQL 的其他部分。
+
 ## 事件
 
 跨服務的寫入一律走事件（決策 4）：產生端與業務資料同一筆交易寫進 outbox，消費端冪等處理。outbox 的寫入、投遞與重播在 `crates/outbox`（Laysi/trustiot-v2#54）。

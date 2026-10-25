@@ -41,11 +41,13 @@
 
 use axum::Router;
 use axum::extract::rejection::{PathRejection, QueryRejection};
-use axum::extract::{FromRef, Path, Query, State};
+use axum::extract::{DefaultBodyLimit, FromRef, Path, Query, State};
 use axum::http::header::CACHE_CONTROL;
 use axum::response::{IntoResponse, Response};
-use axum::routing::get;
+use axum::routing::{get, post};
 use chrono::{DateTime, TimeDelta, Utc};
+use contract::api::telemetry_query::RunSql;
+use contract::client::Endpoint as _;
 use contract::{ErrorBody, ErrorCode, MessageKey, TenantId};
 use serde::{Deserialize, Serialize};
 use service_kit::identity::{IdentityVerifier, UserIdentity};
@@ -388,20 +390,22 @@ impl FromRef<Routes> for IdentityVerifier {
     }
 }
 
-/// The service's API: [`SERIES_PATH`] and [`LATEST_PATH`].
+/// The service's API: [`SERIES_PATH`] and [`LATEST_PATH`], and the internal SQL endpoint
+/// ([`crate::sql_api`]).
 pub fn routes(verifier: IdentityVerifier, db: TenantDb, accounts: Accounts) -> Router {
     Router::new()
         .route(SERIES_PATH, get(get_series))
         .route(LATEST_PATH, get(get_latest))
-        .with_state(Routes {
-            verifier,
-            db,
-            accounts,
-        })
+        .route(
+            RunSql::ROUTE,
+            post(crate::sql_api::run_sql)
+                .layer(DefaultBodyLimit::max(crate::sql_api::MAX_REQUEST_BYTES)),
+        )
+        .with_state(Routes::new(verifier, db, accounts))
 }
 
 /// An error response.
-fn error(body: ErrorBody) -> Response {
+pub(crate) fn error(body: ErrorBody) -> Response {
     (
         body.http_status(),
         [(CACHE_CONTROL, "no-store")],
@@ -419,7 +423,7 @@ fn invalid(parameter: &'static str, key: MessageKey) -> Response {
     )
 }
 
-fn ok<T: Serialize>(value: &T) -> Response {
+pub(crate) fn ok<T: Serialize>(value: &T) -> Response {
     ([(CACHE_CONTROL, "no-store")], axum::Json(value)).into_response()
 }
 
@@ -612,14 +616,28 @@ fn is_unknown_time_zone(failure: &QueryError) -> bool {
 }
 
 /// Why a request could not be served; each becomes a response.
-enum Failure {
+pub(crate) enum Failure {
     Response(Box<Response>),
     ClickHouse(QueryError),
 }
 
 impl Routes {
+    /// The routes' state: the identity checks, Postgres and the tenant accounts.
+    pub(crate) fn new(verifier: IdentityVerifier, db: TenantDb, accounts: Accounts) -> Self {
+        Self {
+            verifier,
+            db,
+            accounts,
+        }
+    }
+
+    /// The tenant accounts and the ClickHouse client.
+    pub(crate) fn accounts(&self) -> &Accounts {
+        &self.accounts
+    }
+
     /// The caller's tenant, once its account exists.
-    async fn tenant(&self, user: &UserIdentity) -> Result<TenantId, Failure> {
+    pub(crate) async fn tenant(&self, user: &UserIdentity) -> Result<TenantId, Failure> {
         let Some(tenant) = user.tenant_id() else {
             return Err(Failure::Response(Box::new(error(ErrorBody::new(
                 ErrorCode::PermissionDenied,
@@ -677,7 +695,7 @@ impl Routes {
     /// the service's account, or a changed account), the check sets it again first; missing or
     /// other windows are set too. An account that differs in anything else is refused with 503,
     /// and nothing may run as it: its limits or its tenant may not hold.
-    async fn verified(&self, tenant: TenantId) -> Result<Windows, Failure> {
+    pub(crate) async fn verified(&self, tenant: TenantId) -> Result<Windows, Failure> {
         match self.accounts.verify(tenant).await {
             Ok(Verified {
                 ensured,
