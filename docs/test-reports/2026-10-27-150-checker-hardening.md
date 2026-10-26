@@ -132,3 +132,33 @@ docker run --rm --platform linux/arm64 --user 65532:65532 --read-only \
 
 - 一次檢查寫下的東西，下一次檢查的瀏覽器讀不到：通過。瀏覽器寫得了的地方只有工作目錄、`/dev/shm`、`/dev/mqueue` 與 termination log，全部由清理清空（第 1 節與既有的清理測試），沒有需要補的缺口。
 - 在真的叢集（containerd 的 RuntimeDefault seccomp、kubelet 掛進來的檔案）裡重做同一個掃描：待測。這是同一件事的第二個來源，依驗證分級延後。
+
+## 5. 顯示時的比對對抗惡意頁面
+
+檢查服務在頁面碰不到的 isolated world 比對，本來就不受頁面替換內建物件影響（審查 B 的「Checked and sound」）。有風險的是檢視時（Laysi/trustiot-v2#462）在頁面 realm 執行的比對：比對與它呼叫的格式化（內建的 d3-format）、時間、幾何都在呼叫時才查內建（`Intl`、`Math`、`Number`、`String`、`RegExp`、`Array`、`Set`、`Map`），頁面換掉它們就能讓自己的 `tq.text` 與比對算出同一個錯的數字。內建有兩條存取路徑都要擋：物件上的方法（`Math.round`）與裸名字背後的全域繫結（`Math`）。修正：runtime 載入後、頁面 script 執行前，在 sandbox frame 的 realm 凍結這些內建物件與它們原型上的方法，並把指向它們的全域繫結設為不可寫、不可設定（`frontend/sandbox/src/harden.ts`），同時去掉頁面可見的檢查／檢視模式（`tq.mode`）。另外把持續改動的比對加上時間上限與 fail-closed（見下）。
+
+### 指令
+
+```sh
+# realm 凍結的機制與免疫性，在 node:vm 的獨立 realm（像瀏覽器 frame 一樣有自己的內建物件）
+bun test sandbox/test/harden.test.ts
+# 檢視模式：一直改回錯值會被隱藏、一直以正確值更新會繼續顯示
+bun test sandbox/test/runtime.test.ts -t "view mode"
+# 全部沙箱單元測試（既有固定樣本的判定不變）
+bun test sandbox
+# 真實瀏覽器：映像測試跑每個固定樣本（含 builtin-tampering），並確認既有 d3 頁面在凍結下仍正常
+DASHBOARD_CHECK_IMAGE=localhost/trustiot-e2e/dashboard-check:hardening-y bun test deploy/images/dashboard-check
+```
+
+### 結果
+
+- 凍結前後對照（[harden-before-after.txt](data/2026-10-27-150-checker-hardening/harden-before-after.txt)）：沒有凍結時，頁面換掉 `Intl.NumberFormat`、`Math.round`、`RegExp.prototype.exec` 與全域繫結 `globalThis.Math`、`globalThis.Array`，會讓在呼叫時查內建的比對算出錯的值（`literal` 變成 `null`，數字沒被抓到；`formatted`、`rounded` 都錯），也就能騙過比對；凍結後同樣的替換完全無效（`immune: true`）。
+- `harden.test.ts`：7 個全過。在獨立 realm 裡確認：換掉靜態方法或被鎖住的全域繫結在 strict mode 丟例外、換掉原型方法被凍結的 setter 擋下，兩種都到不了比對；指向內建的全域繫結（`Math`、`Array`、`Intl`、`Number`、`parseInt`、`JSON`）設成不可寫不可設定，其他全域與頁面自己新增的全域不受影響；覆寫繼承屬性的合法寫法（`obj.toString`、`err.name`、子類別方法、`for...of`、`Map.set`、在陣列上加自訂屬性）仍可用；全域物件仍可擴充；重複呼叫安全；凍結後 d3 仍能畫比例尺、`nice`、扇形與格式化。
+- `runtime.test.ts` 的檢視模式：一直把 runtime 改正的值又改回錯的頁面，在 `MAX_CORRECTION_ROUNDS`（10）輪內整份文件被隱藏，之後不再顯示；一直以正確值重畫（比隱藏門檻更多次）的頁面不會被隱藏、標記也沒有 `data-tq-flag`。全部沙箱單元測試 371 個全過（既有固定樣本的判定不變）。
+- 映像測試（manifest list `sha256:75287daeb69eb00429cadf706ef56f6e8dac181e8bef10f41d47e9e55d560078`）：45 個全過，0 失敗；34 次檢查，每次 142–5177 ms（中位數 430 ms），容器記憶體最高讀數 100.5 MiB（上限 512Mi）。新的 `builtin-tampering`（替換上述每個內建物件後畫出錯的標記值與打字的數字）在真實 Chromium 裡被判 `mismatch` 與 `literal_number`；`correct`、`pie` 等既有 d3 頁面在凍結的 realm 下判定不變，表示凍結沒有擋到合法頁面。
+
+### 結論
+
+- runtime 載入之後，頁面除了改 DOM（比對下一次會看到）以外改不了顯示時的比對結果：通過（`harden` 單元測試在真實 realm、`builtin-tampering` 在真實瀏覽器）。
+- 持續改動有上限、一直改回錯值會 fail closed 隱藏、一直以正確值更新會繼續顯示：通過（檢視模式單元測試）。
+- 判定的可信度以 renderer 為限（攻破 renderer 能讓自己這次的檢查通過，但到不了別次、出不了 pod）：寫入 `services/dashboard-check/README.md`「威脅模型」第 5 點與 `docs/architecture/ai-assistant.md`「儀表板」第 4 點。

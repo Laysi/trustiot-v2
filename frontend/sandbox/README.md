@@ -14,6 +14,7 @@
 | `src/format.ts`、`src/locales.ts`、`src/time.ts` | `tq.format` 與時間的讀法 |
 | `src/values.ts` | 參照解析成值（Rust `CheckRequest::resolves`、`value_of`、`declares` 的對應） |
 | `src/compare.ts`、`src/geometry.ts`、`src/dom.ts` | 比對程式：檢查規則、幾何計算、事先保存的 DOM 函式 |
+| `src/harden.ts` | 在頁面 script 執行前凍結這個 realm 的 ECMAScript 內建物件 |
 | `src/runtime.ts` | 沙箱裡的 runtime：`window.tq`、載入頁面、畫完的判斷、檢視時的比對 |
 | `src/host.ts` | host adapter：postMessage 的外層（SPA 與檢查的 host 頁共用） |
 | `src/check-host.ts`、`src/checker.ts` | 檢查服務的 host 頁與 `compare.js` 的入口 |
@@ -66,12 +67,12 @@
 | `tq.axis(g, axis, {dataset, column, format?})` | 在 SVG `<g>` 上畫 d3 軸（`axis` 是 `d3.axisBottom(scale)` 等），以 `tq.format` 格式化刻度，並標記每個刻度的文字（見「參照」的 `t` 與 band 軸）。整個 `<g>` 加上 `data-tq-axis`（`資料集|欄`）。資料集沒有這一欄時丟 `Error`。回傳 `g` |
 | `tq.decor(el)` | 宣告不代表資料的圖形（格線、圖示、折線），加上 `data-tq-decor`。回傳 `el` |
 | `tq.format(value, format?)` | 格式化（見「格式化」）；拒絕的格式丟 `FormatError` |
-| `tq.locale`、`tq.tz`、`tq.theme`、`tq.mode` | `init` 給的語言、時區、主題與模式（`view` 或 `check`），唯讀 |
+| `tq.locale`、`tq.tz`、`tq.theme` | `init` 給的語言、時區與主題，唯讀。不提供檢查或檢視模式：頁面在兩種模式下的 realm 相同，比對只看畫出來的 DOM |
 
 - `tq.text`、`tq.mark`、`tq.decor`、`tq.axis` 的 `el` 也可以是 d3 selection；`tq.text` 與 `tq.mark` 這時的 `ref` 是 `(datum, index) => 參照` 的函式，對每個元素各做一次。
 - `tq` 物件是凍結的；`window.tq` 不能指派，頁面重新定義它也不影響 runtime 交給 script 與 `render` 的那一個。
 - `data-tq*` 屬性只由 runtime 寫入；頁面自己寫的 `data-tq*` 屬性，比對時與 runtime 寫的同等看待，所以寫錯也會被抓到。
-- runtime 在任何頁面 script 執行前就保存它要用的函式（計時器、`MutationObserver`、DOM 原型上的 getter 與方法），頁面之後改原型或全域物件，影響不了 runtime 讀到什麼、什麼時候回報。
+- runtime 在任何頁面 script 執行前就保存它要用的函式（計時器、`MutationObserver`、DOM 原型上的 getter 與方法），並凍結這個 realm 的 ECMAScript 內建物件（`src/harden.ts`：`Object`、`Array`、`String`、`Number`、`RegExp`、`Math`、`Set`、`Map`、`Date`、`Intl` 等的原型與這些命名空間，連同它們的方法），頁面之後改原型或全域物件，影響不了 runtime 讀到什麼、什麼時候回報，也影響不了檢視時的比對（「比對程式」）。凍結保留了合法頁面覆寫繼承屬性的寫法（`obj.toString = …`、`err.name = …`、子類別的方法、d3 畫圖）：覆寫只在頁面自己的物件上生效，改不了原型本身。頁面不能再做的事：換掉內建物件原型上的方法給整個 realm 用、在 `Math`、`JSON`、`Intl` 或建構子上新增或替換屬性、整批替換內建函式。
 
 ## 參照
 
@@ -215,7 +216,10 @@ runtime 收到 `data` 後呼叫 `render(tq)`：
 同一份實作（`src/compare.ts`）有兩個入口：
 
 - **檢查（`compare.js`）**：定義 `globalThis.tqCompare(input)`，同步回傳判定。輸入是 `CompareInput`（`protocol.ts`）：`runtime`、`spec`（公開部分）、`datasets`（結果）、`locale`、`tz`，以 zod 解析（解析失敗丟出例外）。輸入一律由呼叫端提供，從不讀頁面或 runtime 的狀態；比對程式自己解析參照、計算公式、格式化。輸出是判定（`CheckVerdict`）：通過時 `{verdict: "passed", report: {marks}}`，否則 `{verdict: "failed", problems}`。CDP 才看得到的問題（`not_rendered`、`script_error`、`navigated`、`requested`、封閉的 shadow root、`timeout` 的時限）由檢查服務補上。檢查服務以 CDP 在沙箱 frame 建立 isolated world 後注入並呼叫它：isolated world 的全域物件與原型是自己的，頁面改寫 DOM 原型或全域物件騙不到它。
-- **檢視（runtime 內建）**：runtime 在頁面的 script 執行**之前**保存原始的 DOM 函式，每次畫完後在頁面的 realm 比對：對不到資料或不相符的文字標記換成「—」並加上 `data-tq-flag`，不相符的圖形標記加上 `data-tq-flag`，標記以外的數字換成「—」，`::before`、`::after`、`::marker` 有問題的元素加上 `data-tq-flag-pseudo`（關掉產生的內容），不支援的內容加上 `data-tq-flag-hide`（隱藏），超過上限時整份文件隱藏；樣式在 `sandbox.css`。每次比對先清掉上一次的標示（之後畫對了就不再標示），畫完後的 DOM 變動（tooltip、計時器）靜止 200 ms 後再比對一次。比對本身丟出例外時（頁面改寫了它用到的內建函式），整份文件從此隱藏，也不再比對。這個結果只用來顯示，從不當作判定：頁面在同一個 realm 裡還是能干擾它。
+- **檢視（runtime 內建）**：runtime 在頁面的 script 執行**之前**保存原始的 DOM 函式並凍結這個 realm 的內建物件（`harden`，見「頁面 API」），每次畫完後在頁面的 realm 比對：對不到資料或不相符的文字標記換成「—」並加上 `data-tq-flag`，不相符的圖形標記加上 `data-tq-flag`，標記以外的數字換成「—」，`::before`、`::after`、`::marker` 有問題的元素加上 `data-tq-flag-pseudo`（關掉產生的內容），不支援的內容加上 `data-tq-flag-hide`（隱藏），超過上限時整份文件隱藏；樣式在 `sandbox.css`。每次比對先清掉上一次的標示（之後畫對了就不再標示）。
+  - **保證**：runtime 載入之後，頁面的 script 不論做什麼，都改不了這次比對的結果，唯一的例外是改 DOM，而改了的 DOM 比對下一次就看得到。比對與它呼叫的每一段（文字、格式化、時間、幾何、內建的 d3-format）都只讀凍結後的內建物件，所以頁面換掉 `Intl`、`Math`、`Number`、`String`、`RegExp`、`Array`、`Set`、`Map` 或它們原型上的方法都沒有用（`harden` 擋下），頁面自己的 `tq.text` 與比對因此一定算出同一個、正確的字串。
+  - **持續改動有上限**：畫完後的 DOM 變動（tooltip、計時器）靜止後再比對一次；頁面若一直改個不停，從第一次改動起最多 `MAX_RECHECK_DELAY_MS`（1000 ms）內一定再比對一次，不會被無限延後。一直把 runtime 改正的值又改回錯的，連續 `MAX_CORRECTION_ROUNDS`（10）次之後整份文件隱藏，不再比對（fail closed）；一直以正確的值更新的頁面則沒有東西要改正，會一直正常顯示。
+  - 比對本身丟出例外時（理論上頁面讓它用到的東西壞掉），整份文件從此隱藏，也不再比對。這個結果只用來顯示，從不當作判定：判定一律以檢查服務在 isolated world 的比對為準（「威脅模型」第 5 點）。
 
 ## 檢查服務的流程
 
@@ -240,14 +244,15 @@ runtime 收到 `data` 後呼叫 `render(tq)`：
 - `expect` 是 `{verdict: "passed", marks}` 或 `{verdict: "failed", problems, may_also?}`。比對方式在 `fixtures/expect.ts` 的 `matchesExpectation`：通過的案例要有完全相同的 `marks`（順序也相同）；失敗的案例要有每個預期的問題（列出的欄位與值都相同，沒列出的欄位，例如 `script_error` 的 `message`，不比），而且沒有預期與 `may_also` 以外類別的問題。
 - 案例涵蓋 design B 第 3.4 節（正確的頁面、寫死的數字、錯列、錯的長條高度、對不到資料的標記、同步與非同步的 script 錯誤、導向、改寫原型），以及每條規則各一頁。送出表單與開新視窗的頁面預期**通過**：沙箱沒有 `allow-forms`、`allow-popups`，什麼都不會發生；瀏覽器裡判成 `navigated` 代表 frame 少了 `sandbox` 屬性。
 
-只有瀏覽器測試涵蓋的部分：真實的版面（`getBoundingClientRect`、`getScreenCTM`；單元測試從 SVG 屬性推算位置）、`::before`、`::after`、`::marker` 的 `content`、清單的預設樣式、CSS 動畫、封閉的 shadow root、非同步的 script 錯誤、導向、請求、isolated world 本身，以及 SVG 裡的 `<script>`（happy-dom 解析不出來）。
+只有瀏覽器測試涵蓋的部分：真實的版面（`getBoundingClientRect`、`getScreenCTM`；單元測試從 SVG 屬性推算位置）、`::before`、`::after`、`::marker` 的 `content`、清單的預設樣式、CSS 動畫、封閉的 shadow root、非同步的 script 錯誤、導向、請求、isolated world 本身、頁面替換 realm 的內建物件（`builtin-tampering`；`harden` 在真實的 realm 凍結它們，共用的測試 realm 不能被替換），以及 SVG 裡的 `<script>`（happy-dom 解析不出來）。
 
 ## 測試
 
 - `bun run --cwd frontend test` 跑：
   - `src/protocol.test.ts`：讀 `crates/contract/tests/fixtures/dashboard/` 的固定樣本（由 Rust 型別寫出），確認每個都能解析且不遺失欄位、`publicSpec` 與 Rust 的 `Spec::public` 相同、參照的測試向量答案一致、判定與沙箱訊息拒絕封閉集合以外的內容。
   - `src/formula.test.ts`：共用的計算語言測試向量，以及位置、長度與求值的細節。
-  - `test/runtime.test.ts`：頁面的載入、畫完的訊息、頁面 API、檢視模式的比對與標示。
+  - `test/runtime.test.ts`：頁面的載入、畫完的訊息、頁面 API、檢視模式的比對與標示，包括一直改回錯值的頁面會在上限內被隱藏、一直以正確值更新的頁面會繼續顯示。
+  - `test/harden.test.ts`：在 `node:vm` 的獨立 realm 裡凍結內建物件（像瀏覽器的 frame 一樣有自己的內建物件），確認在呼叫時才查內建的比對不受頁面替換影響、覆寫繼承屬性的合法寫法仍可用、全域物件仍可擴充、重複呼叫安全，以及凍結後 d3 仍能畫比例尺、nice、扇形與格式化。
   - `test/format.test.ts`：數字、時間、布林與 `null` 的格式化，以及被拒絕的格式。
   - `test/time.test.ts`：結果裡的時間、時間點換成檢視者時區、刻度參照的時間文字。
   - `test/values.test.ts`：參照的值與頁面看到的值；Rust 寫出的 `verdict-passed.json` 每個標記的值都等於從 `check-request.json` 解析出的值。
