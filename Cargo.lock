@@ -376,6 +376,7 @@ dependencies = [
  "contract",
  "getrandom 0.4.3",
  "humantime",
+ "migrate",
  "opentelemetry",
  "opentelemetry-proto",
  "outbox",

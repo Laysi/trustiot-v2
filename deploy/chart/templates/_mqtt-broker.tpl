@@ -61,13 +61,53 @@ templates/mqtt-broker.yaml); each service will read its own key (README.md, "MQT
 {{- end -}}
 
 {{/*
-The broker's server certificate: a kubernetes.io/tls Secret (tls.crt, the certificate and its
-chain; tls.key) that the chart does not create (Laysi/trustiot-v2#535 issues it, README.md, "MQTT
-broker"). Only the broker pod mounts it, whole, so a renewed certificate reaches the pod without
-a restart.
+The broker's server certificate (Laysi/trustiot-v2#535; README.md, "MQTT broker", "伺服器憑證"):
+a Secret the chart declares empty while the broker is enabled ("trustiot.filledSecretObjects"),
+which the CronJob of templates/mqtt-broker-certificate.yaml fills with tls.crt (the certificate
+and the issuing CA's) and tls.key, both PEM. Only the broker pod mounts it, whole, so a renewed
+certificate reaches the pod without a restart; only the CronJob's ServiceAccount may read or
+write it.
 */}}
 {{- define "trustiot.mqttBroker.tlsSecret" -}}
 {{- include "trustiot.componentName" (dict "root" . "name" "mqtt-broker-tls") -}}
+{{- end -}}
+
+{{/*
+The broker Service's DNS name, <release>-mqtt-broker.<namespace>.svc: the certs service puts it
+in the server certificate after mqtt-broker.trustiot.internal (its TRUSTIOT__BROKER__SERVICE_NAME,
+"trustiot.certs.env"), and the certificate CronJob accepts a certificate only with these names.
+*/}}
+{{- define "trustiot.mqttBroker.serviceHost" -}}
+{{- printf "%s.%s.svc" (include "trustiot.componentName" (dict "root" . "name" "mqtt-broker")) .Release.Namespace -}}
+{{- end -}}
+
+{{/*
+mqttBroker.certificateGeneration as the certificate CronJob reads it: 1 to 9 decimal digits, at
+least 1 (tools/migrate compares generations as numbers). Fails the render otherwise.
+*/}}
+{{- define "trustiot.mqttBroker.certificateGeneration" -}}
+{{- $text := include "trustiot.decimal" (dict "value" .Values.mqttBroker.certificateGeneration "key" "mqttBroker.certificateGeneration") -}}
+{{- if not (regexMatch "^[1-9][0-9]{0,8}$" $text) -}}
+{{- fail (printf "mqttBroker.certificateGeneration: %q must render as 1 to 9 decimal digits, at least 1" $text) -}}
+{{- end -}}
+{{- $text -}}
+{{- end -}}
+
+{{/*
+mqttBroker.certificateSchedule as the certificate CronJob's schedule, in Etc/UTC: @hourly, or five
+cron fields whose minute is a comma-separated list of the wildcard, the wildcard with a step of 1
+to 59, or minutes from 0 to 59, and whose other four fields are the wildcard, so it runs at least
+every hour and the API server accepts it. No ranges, whose order a pattern cannot check.
+values.schema.json has the same pattern; this check also holds under --skip-schema-validation.
+Fails the render otherwise.
+*/}}
+{{- define "trustiot.mqttBroker.certificateSchedule" -}}
+{{- $schedule := toString .Values.mqttBroker.certificateSchedule -}}
+{{- $item := `(\*(/([1-9]|[1-5][0-9]))?|[0-5]?[0-9])` -}}
+{{- if not (regexMatch (printf `^(@hourly|%s(,%s)* \* \* \* \*)$` $item $item) $schedule) -}}
+{{- fail (printf "mqttBroker.certificateSchedule: %q must be @hourly, or five cron fields whose minute is a comma-separated list of *, */<step> (1 to 59) or minutes from 0 to 59 and whose other four fields are *" $schedule) -}}
+{{- end -}}
+{{- $schedule -}}
 {{- end -}}
 
 {{/* Where the pod mounts the server certificate Secret. */}}
@@ -119,6 +159,9 @@ differ. Templates never read chart files (scripts/ci/check-secret-handling.ts), 
 #                                    messages, and the CA and CRL files
 #   /mosquitto/data/trust/current    the CA and CRL files, written by the trust sidecar
 #                                    (`migrate mqtt-broker-trust`)
+#   /mosquitto/listeners             the gateway listener (gateway-listener.conf), written by the
+#                                    trust init container or sidecar once the server certificate
+#                                    is usable; empty until then
 #   /etc/trustiot/mqtt-broker-tls    the Secret with the server certificate (tls.crt, tls.key)
 #   /run/mosquitto                   the probes' Unix socket
 
@@ -169,28 +212,6 @@ persistent_client_expiration 30d
 # (docs/feasibility/2026-10-12-tpm-poc.md).
 set_tcp_nodelay true
 
-# Gateways, through mqtt-bridge only (the mesh admits no other caller on this port): TLS 1.3 with
-# a client certificate from our CA, checked against the CRL. The certificate's CN is the
-# username and the client id, so a gateway cannot act as, or take over the session of, another
-# gateway. The CA and CRL files are read at start and on SIGHUP, which the trust sidecar sends;
-# a reload does not end connections made before it.
-listener 8883
-protocol mqtt
-accept_protocol_versions 5
-certfile /etc/trustiot/mqtt-broker-tls/tls.crt
-keyfile /etc/trustiot/mqtt-broker-tls/tls.key
-cafile /mosquitto/data/trust/current/ca.pem
-crlfile /mosquitto/data/trust/current/crl.pem
-require_certificate true
-use_identity_as_username true
-use_username_as_clientid true
-tls_version tlsv1.3
-# Decision 6: ChaCha20-Poly1305 first. The gateway's CPU has no AES instructions, so ChaCha20
-# costs it 21-34% less CPU (Laysi/trustiot-v2#75). Mosquitto picks the suite in this order, not
-# in the client's: without this line it negotiates AES-256-GCM although the gateway lists
-# ChaCha20 first (Mosquitto 2.1.2, Laysi/trustiot-v2#86).
-ciphers_tls1.3 TLS_CHACHA20_POLY1305_SHA256:TLS_AES_256_GCM_SHA384:TLS_AES_128_GCM_SHA256
-
 # Cloud services (ingest, gateway-ops, and certs as dynamic security's administrator), inside the
 # mesh only: ztunnel's mTLS carries the connection, the mesh admits only those services on this
 # port, and each logs in with its dynamic security account and password.
@@ -208,7 +229,69 @@ protocol mqtt
 accept_protocol_versions 5
 listener_allow_anonymous true
 max_connections 8
+
+# The gateways' listener (gateway-listener.conf), TLS on 8883: Mosquitto reads every *.conf file
+# of this directory at start, and the directory stays empty until the server certificate Secret
+# holds a certificate and key that belong together (Laysi/trustiot-v2#535); the trust containers
+# empty it again while the Secret is unusable, so a broker that restarts then serves this file's
+# other listeners instead of stopping on a certificate it cannot load. After every listener
+# of this file, so none of the included listener's options lands on them; only the chart's
+# memory_limit, a broker-wide option, follows.
+include_dir /mosquitto/listeners
 memory_limit {{ include "trustiot.mqttBroker.memoryLimit" . }}
+{{- end -}}
+
+{{/*
+The gateway listener, mounted read-only into the trust init container and sidecar as
+gateway-listener.conf ("trustiot.mqttBroker.gatewayListenerFile"), which copy it into the
+broker's listeners directory once the server certificate Secret is usable
+(tools/migrate/src/mqtt_trust.rs). files/mosquitto/gateway-listener.conf word for word, which
+tools/migrate/tests/mqtt_broker.rs runs; the chart tests fail when the two differ.
+*/}}
+{{- define "trustiot.mqttBroker.gatewayListener" -}}
+# The gateway listener of the chart's MQTT broker (Laysi/trustiot-v2#84, Laysi/trustiot-v2#535;
+# README.md, "MQTT broker"). templates/_mqtt-broker.tpl carries the same text; the chart test
+# fails when the two differ. The broker's trust init container and sidecar (`migrate
+# mqtt-broker-trust`) copy it into /mosquitto/listeners, which mosquitto.conf includes, only once
+# the server certificate Secret holds a certificate and key that belong together: Mosquitto exits
+# when a listener's certificate file is missing or does not load, and it adds no listener on
+# SIGHUP, so until then the broker runs without this port.
+#
+# Gateways, through mqtt-bridge only (the mesh admits no other caller on this port): TLS 1.3 with
+# a client certificate from our CA, checked against the CRL. The certificate's CN is the
+# username and the client id, so a gateway cannot act as, or take over the session of, another
+# gateway. The server certificate, and the CA and CRL files, are read at start and on SIGHUP,
+# which the trust sidecar sends; a reload does not end connections made before it.
+listener 8883
+protocol mqtt
+accept_protocol_versions 5
+certfile /etc/trustiot/mqtt-broker-tls/tls.crt
+keyfile /etc/trustiot/mqtt-broker-tls/tls.key
+cafile /mosquitto/data/trust/current/ca.pem
+crlfile /mosquitto/data/trust/current/crl.pem
+require_certificate true
+use_identity_as_username true
+use_username_as_clientid true
+tls_version tlsv1.3
+# Decision 6: ChaCha20-Poly1305 first. The gateway's CPU has no AES instructions, so ChaCha20
+# costs it 21-34% less CPU (Laysi/trustiot-v2#75). Mosquitto picks the suite in this order, not
+# in the client's: without this line it negotiates AES-256-GCM although the gateway lists
+# ChaCha20 first (Mosquitto 2.1.2, Laysi/trustiot-v2#86).
+ciphers_tls1.3 TLS_CHACHA20_POLY1305_SHA256:TLS_AES_256_GCM_SHA384:TLS_AES_128_GCM_SHA256
+{{- end -}}
+
+{{/* Where the trust containers mount the broker's ConfigMap, and the gateway listener in it. */}}
+{{- define "trustiot.mqttBroker.configDir" -}}
+/etc/trustiot/mqtt-broker-config
+{{- end -}}
+
+{{- define "trustiot.mqttBroker.gatewayListenerFile" -}}
+{{- printf "%s/gateway-listener.conf" (include "trustiot.mqttBroker.configDir" .) -}}
+{{- end -}}
+
+{{/* The broker's listeners directory, an emptyDir that mosquitto.conf includes. */}}
+{{- define "trustiot.mqttBroker.listenersDir" -}}
+/mosquitto/listeners
 {{- end -}}
 
 {{/*
@@ -283,6 +366,10 @@ and the sidecar alike. Returns a YAML list; use with fromYamlArray.
   value: /mosquitto/data/trust
 - name: TRUSTIOT__TRUST__TLS_DIR
   value: {{ include "trustiot.mqttBroker.tlsDir" . }}
+- name: TRUSTIOT__TRUST__LISTENERS_DIR
+  value: {{ include "trustiot.mqttBroker.listenersDir" . }}
+- name: TRUSTIOT__TRUST__GATEWAY_LISTENER
+  value: {{ include "trustiot.mqttBroker.gatewayListenerFile" . }}
 - name: TRUSTIOT__TRUST__INTERVAL
   value: {{ .Values.mqttBroker.trustInterval | quote }}
 {{- end -}}
@@ -361,10 +448,12 @@ volumeMounts:
 {{/*
 `migrate mqtt-broker-trust` (tools/migrate/src/mqtt_trust.rs) as the init container `trust-files`
 (with --once: installs the CA certificates and CRLs from the certs service, or a placeholder that
-trusts no gateway, and checks that the server certificate and key belong together) and as the
-sidecar `trust` (fetches them again every mqttBroker.trustInterval, watches the server
-certificate Secret, and sends the broker SIGHUP after either changed). Argument: dict "root" $
-"name" <container name> "once" <bool>.
+trusts no gateway, and copies the gateway listener into the listeners directory once the server
+certificate and key belong together) and as the sidecar `trust` (fetches them again every
+mqttBroker.trustInterval, watches the server certificate Secret, and sends the broker SIGHUP after
+either changed; when the Secret becomes usable while the broker runs without the gateway port, it
+copies the listener and stops the broker once with SIGTERM, so the kubelet starts it again with
+the port). Argument: dict "root" $ "name" <container name> "once" <bool>.
 */}}
 {{- define "trustiot.mqttBroker.trustContainer" -}}
 {{- $root := .root -}}
@@ -388,4 +477,11 @@ volumeMounts:
   - name: server-tls
     mountPath: {{ include "trustiot.mqttBroker.tlsDir" $root }}
     readOnly: true
+  # The broker's ConfigMap, whole (it holds gateway-listener.conf), and the listeners directory
+  # the broker includes, which only these containers write.
+  - name: config
+    mountPath: {{ include "trustiot.mqttBroker.configDir" $root }}
+    readOnly: true
+  - name: listeners
+    mountPath: {{ include "trustiot.mqttBroker.listenersDir" $root }}
 {{- end -}}

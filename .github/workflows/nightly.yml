@@ -183,7 +183,12 @@ jobs:
     # Laysi/trustiot-v2#592 adds the assistant image (one more cold build on the AI gateway's and
     # the services' dependencies) and per shape its rollout and one query of pg_stat_activity, with
     # no request to it.
-    timeout-minutes: 85
+    # Laysi/trustiot-v2#535 adds per shape, one shape after the other, one run of the broker
+    # certificate CronJob (bounded at 300 seconds), deleting its Job (120 seconds) and the wait for
+    # the broker to open its gateway port after one restart (300 seconds), a few kubectl auth
+    # can-i questions, and no image: at most 12 minutes per shape, 24 for both, usually one to
+    # three minutes per shape (not measured).
+    timeout-minutes: 110
     permissions:
       contents: read
     env:
