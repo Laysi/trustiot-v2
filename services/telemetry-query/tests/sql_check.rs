@@ -14,6 +14,7 @@
 
 use std::any::TypeId;
 use std::cell::Cell;
+use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
@@ -923,6 +924,49 @@ fn nest(templates: &[&&str], levels: usize, base: &str) -> String {
         text = templates[level % templates.len()].replace('@', &text);
     }
     text
+}
+
+/// The sqlparser version whose speculative parses were surveyed for the nesting rules and the
+/// templates above (docs/test-reports/data/2026-10-26-143-ai-sql/parser-survey.txt). The
+/// counting test sees only the constructs it lists, so a release that adds a speculative parse
+/// none of them reaches would pass it.
+const SURVEYED_SQLPARSER: &str = "0.63.0";
+
+/// The guard on sqlparser upgrades. Renovate proposes them in a pull request of their own
+/// (renovate.json5), which fails here until someone has redone the survey for the new version
+/// (this service's README, section 「升級 sqlparser」) and moved [`SURVEYED_SQLPARSER`]. Every
+/// sqlparser in `Cargo.lock` counts, so a second copy that another crate pulls in fails too.
+#[test]
+fn sqlparser_is_the_version_whose_speculative_parses_were_surveyed() {
+    let lock =
+        std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../Cargo.lock"))
+            .expect("read Cargo.lock");
+    let versions: Vec<&str> = lock
+        .split("[[package]]")
+        .filter(|package| package.lines().any(|line| line == "name = \"sqlparser\""))
+        .map(|package| {
+            package
+                .lines()
+                .find_map(|line| line.strip_prefix("version = \"")?.strip_suffix('"'))
+                .expect("a locked package has a version")
+        })
+        .collect();
+    assert!(!versions.is_empty(), "no sqlparser in Cargo.lock");
+    assert!(
+        versions
+            .iter()
+            .all(|version| *version == SURVEYED_SQLPARSER),
+        "Cargo.lock resolves sqlparser {versions:?}, but its speculative parses were surveyed for \
+         {SURVEYED_SQLPARSER} only. Before this upgrade merges, follow \
+         services/telemetry-query/README.md, section 「升級 sqlparser」: (1) list the new \
+         version's maybe_parse, try_parse and index-reset sites and compare them with \
+         docs/test-reports/data/2026-10-26-143-ai-sql/parser-survey.txt; (2) add the construct \
+         of each new or changed site the check can reach to NESTED_EXPRESSIONS or NESTED_QUERIES \
+         in this file and run the_parse_reads_each_token_a_bounded_number_of_times; (3) a \
+         speculative parse that does not remember its failure and reads again after its inner \
+         parse succeeded needs a lexer rule or a work bound first; (4) then set \
+         SURVEYED_SQLPARSER to the new version."
+    );
 }
 
 // The endpoint, through the service's router.
