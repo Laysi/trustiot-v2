@@ -18,7 +18,7 @@ use contract::client::Endpoint as _;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use crate::callee::{Callee, Post, Posted};
+use crate::callee::{Callee, Post, Posted, Unprocessable};
 use crate::model::BoxFuture;
 use crate::tools::{
     CUT_MARKER, MAX_RESULT_TEXT_CHARS, Tool, ToolContext, ToolError, ToolOutput, ToolSpec, cap_text,
@@ -84,9 +84,11 @@ impl Tool for TelemetrySql {
             description: format!(
                 "Runs one read-only ClickHouse SELECT over the organisation's telemetry, as the \
                  asking user, and returns JSON with `columns` (name and ClickHouse type), \
-                 `rows` (arrays in column order) and `queryable_from`. Prefer the other \
-                 telemetry tools when one of them answers the question; use SQL for what they \
-                 cannot, such as comparing devices or data points, or custom aggregates.\n\
+                 `rows` (arrays in column order) and `queryable_from`. Prefer telemetry_latest, \
+                 telemetry_statistics and telemetry_usage (the usage of energy and other \
+                 counters) when one of them answers the question; use SQL for what they cannot, \
+                 such as ranking or filtering devices by their values, combining data points, \
+                 or custom aggregates.\n\
                  \n\
                  Tables (`trustiot.` may be left out), each holding only the organisation's \
                  data:\n\
@@ -178,6 +180,7 @@ impl Tool for TelemetrySql {
                         path: RunSql::ROUTE,
                         body: &request,
                         rejected_input: REJECTED,
+                        unprocessable: Unprocessable::Refusal,
                         status_messages: STATUS_MESSAGES,
                     },
                 )

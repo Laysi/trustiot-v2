@@ -7,12 +7,14 @@
 //! - The token's audience is the client's service, fixed when the client is built: a tool
 //!   cannot address a token elsewhere.
 //! - No tenant or user parameter is sent; the callee takes both from the token.
-//! - Only a success body is read, and the 422 answer of a [`Post`]: that one is parsed into a
-//!   closed type and kept only when it is exactly that type ([`Posted::Refused`]), so no free
-//!   text of the service's reaches the model. Any other error answer is reduced to a
-//!   [`ToolError`] by its status; its body is never read, so nothing of it reaches the model or
-//!   the logs. A failure is logged with the tool, the service and the status class or kind of
-//!   failure only, never the URL (it carries the model's input), the body or the token.
+//! - A request is a GET with a query string or a POST with a JSON body the tool built.
+//! - Only a success body is read, and the 422 answer of a [`Post`] that reads refusals
+//!   ([`Unprocessable::Refusal`]): that one is parsed into a closed type and kept only when it
+//!   is exactly that type ([`Posted::Refused`]), so no free text of the service's reaches the
+//!   model. Any other error answer is reduced to a [`ToolError`] by its status; its body is
+//!   never read, so nothing of it reaches the model or the logs. A failure is logged with the
+//!   tool, the service and the status class or kind of failure only, never the URL (it carries
+//!   the model's input), the body or the token.
 //! - Plain HTTP inside the mesh, where ztunnel adds mutual TLS; no proxy from the environment,
 //!   no redirects (the token header would follow one).
 
@@ -20,8 +22,8 @@ use std::time::Duration;
 
 use contract::{INTERNAL_IDENTITY_HEADER, ServiceName};
 use reqwest::header::{ACCEPT, CONTENT_TYPE, HeaderValue};
-use serde::Serialize;
 use serde::de::DeserializeOwned;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::tools::{ToolContext, ToolError};
@@ -75,20 +77,35 @@ pub struct Get<'a> {
     pub rejected_input: &'static str,
 }
 
-/// One POST request with a JSON body, whose 422 answer the tool reads as a closed refusal type.
+/// One POST request with a JSON body: the path, fixed by the tool, and the body the tool built
+/// from the model's checked input. The same rules as [`Get`], except for a 422 answer the tool
+/// reads as a closed refusal type ([`Post::unprocessable`]).
 #[derive(Debug)]
 pub struct Post<'a, B> {
     /// The tool that calls, for the logs.
     pub tool: &'static str,
-    /// The request path, such as `/internal/telemetry/v1/sql`.
+    /// The request path, such as `/api/telemetry/v1/usage` or `/internal/telemetry/v1/sql`.
     pub path: &'a str,
     pub body: &'a B,
-    /// What the model is told when the service rejects the request as malformed (400). Fixed
-    /// text; the service's answer is not read.
+    /// What the model is told when the service rejects the body: for 400, and for 422 with
+    /// [`Unprocessable::Rejected`]. Fixed text; the service's answer is not read.
     pub rejected_input: &'static str,
+    /// How a 422 answer is read.
+    pub unprocessable: Unprocessable,
     /// What the model is told for other statuses the tool expects, such as 429 or 504, instead
     /// of the generic failure: fixed text that says what to do. The service's answer is not read.
     pub status_messages: &'a [(u16, &'static str)],
+}
+
+/// What a 422 answer to a [`Post`] means to the tool.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Unprocessable {
+    /// The body broke a rule: the model is told [`Post::rejected_input`], as for 400, and the
+    /// answer is not read. The call's refusal type is then [`NoRefusal`].
+    Rejected,
+    /// A refusal the tool turns into its own text: the answer's `details` must be exactly the
+    /// call's refusal type ([`refusal_of`], [`Posted::Refused`]); any other 422 is a failure.
+    Refusal,
 }
 
 /// How a [`Post`] was answered.
@@ -98,6 +115,21 @@ pub enum Posted<T, R> {
     Answered(T),
     /// A 422 `validation_failed` whose `details` are exactly an `R`.
     Refused(R),
+}
+
+/// The refusal type of a [`Post`] that does not read refusals ([`Unprocessable::Rejected`]): it
+/// has no value, so no answer is ever taken as one.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum NoRefusal {}
+
+impl<T> Posted<T, NoRefusal> {
+    /// The success body: a call without a refusal type is answered or fails.
+    pub fn answered(self) -> T {
+        match self {
+            Self::Answered(answer) => answer,
+            Self::Refused(never) => match never {},
+        }
+    }
 }
 
 impl Callee {
@@ -167,14 +199,16 @@ impl Callee {
     }
 
     /// Sends `request` as the question's user: its body as JSON, the success body parsed as `T`,
-    /// a 422 `validation_failed` whose `details` are exactly an `R` as [`Posted::Refused`].
+    /// and with [`Unprocessable::Refusal`] a 422 `validation_failed` whose `details` are exactly
+    /// an `R` as [`Posted::Refused`].
     ///
     /// # Errors
     ///
     /// [`ToolError::Revoked`] when the delegation was revoked (the question ends);
     /// [`ToolError::Input`] with the message of [`Post::status_messages`] for those statuses,
-    /// and with [`Post::rejected_input`] for 400; [`ToolError::Denied`] for 403 and 404;
-    /// [`ToolError::Failed`] for a 422 that is not exactly an `R`, and for anything else.
+    /// and with [`Post::rejected_input`] for 400 and, with [`Unprocessable::Rejected`], for 422;
+    /// [`ToolError::Denied`] for 403 and 404; [`ToolError::Failed`] for a 422 that is not exactly
+    /// an `R` with [`Unprocessable::Refusal`], and for anything else.
     pub async fn post<B, T, R>(
         &self,
         context: &ToolContext,
@@ -188,7 +222,7 @@ impl Callee {
         let mut url = self.base_url.clone();
         url.set_path(request.path);
         let body = serde_json::to_vec(request.body).map_err(|_| {
-            self.log_failure(context, request.tool, "invalid_body", None);
+            self.log_failure(context, request.tool, "invalid_request", None);
             ToolError::Failed
         })?;
         let response = self
@@ -208,7 +242,7 @@ impl Callee {
                 .await
                 .map(Posted::Answered);
         }
-        if status == 422 {
+        if status == 422 && request.unprocessable == Unprocessable::Refusal {
             let refusal = read_limited(response, MAX_REFUSAL_BYTES)
                 .await
                 .ok()
@@ -227,18 +261,7 @@ impl Callee {
         // The body is dropped unread.
         drop(response);
         self.log_failure(context, request.tool, "error_status", Some(status));
-        if let Some((_, message)) = request
-            .status_messages
-            .iter()
-            .find(|(expected, _)| *expected == status)
-        {
-            return Err(ToolError::Input((*message).to_owned()));
-        }
-        Err(match status {
-            400 => ToolError::Input(request.rejected_input.to_owned()),
-            403 | 404 => ToolError::Denied,
-            _ => ToolError::Failed,
-        })
+        Err(post_error(&request, status))
     }
 
     /// Sends `request` with a fresh token of the question's user for this service.
@@ -359,6 +382,27 @@ pub fn refusal_of<R: DeserializeOwned + Serialize>(body: &[u8]) -> Option<R> {
     (serde_json::to_value(&refusal).ok()? == *details).then_some(refusal)
 }
 
+/// What the model is told when a [`Post`] is answered with the error `status`, whose body is not
+/// read: the tool's message for that status, [`Post::rejected_input`] for 400 and, only with
+/// [`Unprocessable::Rejected`], for 422. A 422 of a call that reads refusals is never input to
+/// correct here: one that is not exactly the refusal type is a failure.
+fn post_error<B>(request: &Post<'_, B>, status: u16) -> ToolError {
+    if let Some((_, message)) = request
+        .status_messages
+        .iter()
+        .find(|(expected, _)| *expected == status)
+    {
+        return ToolError::Input((*message).to_owned());
+    }
+    match (status, request.unprocessable) {
+        (400, _) | (422, Unprocessable::Rejected) => {
+            ToolError::Input(request.rejected_input.to_owned())
+        }
+        (403 | 404, _) => ToolError::Denied,
+        _ => ToolError::Failed,
+    }
+}
+
 /// `2xx` to `5xx`: what the logs say of a service's status.
 fn status_class(status: u16) -> &'static str {
     match status {
@@ -399,7 +443,6 @@ async fn read_limited(
 
 #[cfg(test)]
 mod tests {
-    use serde::Deserialize;
     use serde_json::json;
 
     use super::*;
@@ -428,6 +471,32 @@ mod tests {
                 Callee::new(ServiceName::Assets, bad, timeout).is_err(),
                 "{bad} was accepted"
             );
+        }
+    }
+
+    #[test]
+    fn an_error_status_of_a_post_is_input_only_where_the_tool_says_so() {
+        let post = |unprocessable| Post {
+            tool: "tool",
+            path: "/api/x",
+            body: &(),
+            rejected_input: "rejected",
+            unprocessable,
+            status_messages: &[(429, "quota")],
+        };
+        let input = |text: &str| ToolError::Input(text.to_owned());
+        let (rejected, refusal) = (post(Unprocessable::Rejected), post(Unprocessable::Refusal));
+        assert_eq!(post_error(&rejected, 422), input("rejected"));
+        // A 422 that reached here was not exactly the refusal type: a failure, not input.
+        assert_eq!(post_error(&refusal, 422), ToolError::Failed);
+        for request in [&rejected, &refusal] {
+            assert_eq!(post_error(request, 400), input("rejected"));
+            assert_eq!(post_error(request, 429), input("quota"));
+            assert_eq!(post_error(request, 403), ToolError::Denied);
+            assert_eq!(post_error(request, 404), ToolError::Denied);
+            for status in [401, 409, 500, 503, 504] {
+                assert_eq!(post_error(request, status), ToolError::Failed, "{status}");
+            }
         }
     }
 

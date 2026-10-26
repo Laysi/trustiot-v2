@@ -45,7 +45,7 @@ use axum::extract::{DefaultBodyLimit, FromRef, Path, Query, State};
 use axum::http::header::CACHE_CONTROL;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
-use chrono::{DateTime, TimeDelta, Utc};
+use chrono::{DateTime, Utc};
 use contract::api::telemetry_query::RunSql;
 use contract::client::Endpoint as _;
 use contract::{ErrorBody, ErrorCode, MessageKey, TenantId};
@@ -58,6 +58,7 @@ use uuid::Uuid;
 use crate::accounts::{AccountError, Accounts, Ensured, Verified};
 use crate::clickhouse::{QueryError, code};
 use crate::period::{View, Windows};
+use crate::semantic::range::latest_end;
 
 /// The routes, as the ingress gateway forwards them (no prefix is stripped).
 pub const SERIES_PATH: &str = "/api/telemetry/v1/devices/{device_id}/series";
@@ -78,20 +79,15 @@ pub const MAX_LATEST_POINTS: usize = 1_000;
 pub const MAX_POINT_LEN: usize = 128;
 /// Longest time zone name accepted.
 const MAX_TIME_ZONE_LEN: usize = 64;
-/// How far after the request a range may end. The one-minute and one-hour cells' `bucket` is a
-/// ClickHouse `DateTime`, which ends in 2106 and wraps silently past it (an empty answer
-/// although data exists), and chrono reads years up to +262142; one year ahead is longer than any
-/// period a request is measured against.
-pub const MAX_RANGE_END_AHEAD: TimeDelta = TimeDelta::days(366);
 
-const QUERY_INVALID: MessageKey = MessageKey::new("telemetry.query_invalid");
+pub(crate) const QUERY_INVALID: MessageKey = MessageKey::new("telemetry.query_invalid");
 const DEVICE_ID_INVALID: MessageKey = MessageKey::new("telemetry.device_id_invalid");
-const TIME_ZONE_INVALID: MessageKey = MessageKey::new("telemetry.time_zone_invalid");
-const RANGE_INVALID: MessageKey = MessageKey::new("telemetry.range_invalid");
-const POINT_INVALID: MessageKey = MessageKey::new("telemetry.point_invalid");
-const TOO_MANY_POINTS: MessageKey = MessageKey::new("telemetry.too_many_points");
-const OUTSIDE_PERIOD: MessageKey = MessageKey::new("telemetry.outside_queryable_period");
-const QUERY_TOO_HEAVY: MessageKey = MessageKey::new("telemetry.query_too_heavy");
+pub(crate) const TIME_ZONE_INVALID: MessageKey = MessageKey::new("telemetry.time_zone_invalid");
+pub(crate) const RANGE_INVALID: MessageKey = MessageKey::new("telemetry.range_invalid");
+pub(crate) const POINT_INVALID: MessageKey = MessageKey::new("telemetry.point_invalid");
+pub(crate) const TOO_MANY_POINTS: MessageKey = MessageKey::new("telemetry.too_many_points");
+pub(crate) const OUTSIDE_PERIOD: MessageKey = MessageKey::new("telemetry.outside_queryable_period");
+pub(crate) const QUERY_TOO_HEAVY: MessageKey = MessageKey::new("telemetry.query_too_heavy");
 const ACCOUNT_NOT_READY: MessageKey = MessageKey::new("telemetry.account_not_ready");
 
 /// The row of the caller's tenant, if its account exists. Row-level security limits the table to
@@ -390,6 +386,18 @@ impl FromRef<Routes> for IdentityVerifier {
     }
 }
 
+impl Routes {
+    /// The state the routes share: the semantic API (`crate::semantic`) and the internal SQL
+    /// endpoint (`crate::sql_api`) use it too.
+    pub fn new(verifier: IdentityVerifier, db: TenantDb, accounts: Accounts) -> Self {
+        Self {
+            verifier,
+            db,
+            accounts,
+        }
+    }
+}
+
 /// The service's API: [`SERIES_PATH`] and [`LATEST_PATH`], and the internal SQL endpoint
 /// ([`crate::sql_api`]).
 pub fn routes(verifier: IdentityVerifier, db: TenantDb, accounts: Accounts) -> Router {
@@ -415,7 +423,7 @@ pub(crate) fn error(body: ErrorBody) -> Response {
 }
 
 /// A rejected query parameter.
-fn invalid(parameter: &'static str, key: MessageKey) -> Response {
+pub(crate) fn invalid(parameter: &'static str, key: MessageKey) -> Response {
     error(
         ErrorBody::new(ErrorCode::ValidationFailed)
             .with_message_key(key)
@@ -506,10 +514,14 @@ fn plan(
     }
 }
 
-/// Whether a range ending at `to` ends at most [`MAX_RANGE_END_AHEAD`] after `now`.
+/// Whether a range ending at `to` ends no later than the semantic API's ranges may
+/// ([`latest_end`]): [`MAX_AHEAD`] after `now`, and never past the last second of the cells'
+/// `bucket`, a ClickHouse `DateTime` that wraps silently after 2106 (an empty answer although
+/// data exists). chrono reads years up to +262142, so this comes before any arithmetic on `to`.
+///
+/// [`MAX_AHEAD`]: crate::semantic::range::MAX_AHEAD
 fn ends_in_time(to: DateTime<Utc>, now: DateTime<Utc>) -> bool {
-    now.checked_add_signed(MAX_RANGE_END_AHEAD)
-        .is_some_and(|limit| to <= limit)
+    to <= latest_end(now)
 }
 
 /// The plan of `interval` read from `view`: the range cut to that view's period. Also the plan
@@ -611,7 +623,7 @@ pub(crate) fn clickhouse_error(tenant: TenantId, failure: &QueryError) -> Respon
 }
 
 /// Whether ClickHouse refused the time zone.
-fn is_unknown_time_zone(failure: &QueryError) -> bool {
+pub(crate) fn is_unknown_time_zone(failure: &QueryError) -> bool {
     matches!(failure, QueryError::Failed { code: Some(code::BAD_ARGUMENTS), body, .. }
         if body.contains("Cannot load time zone"))
 }
@@ -623,15 +635,6 @@ pub(crate) enum Failure {
 }
 
 impl Routes {
-    /// The routes' state: the identity checks, Postgres and the tenant accounts.
-    pub(crate) fn new(verifier: IdentityVerifier, db: TenantDb, accounts: Accounts) -> Self {
-        Self {
-            verifier,
-            db,
-            accounts,
-        }
-    }
-
     /// The tenant accounts and the ClickHouse client.
     pub(crate) fn accounts(&self) -> &Accounts {
         &self.accounts
@@ -673,23 +676,6 @@ impl Routes {
         }
     }
 
-    /// Runs `statement` as `tenant`'s account, after checking the account is as the service
-    /// creates it ([`Routes::verified`]).
-    #[allow(
-        dead_code,
-        reason = "the entry point for statements that do not clamp to the period themselves; \
-                  Laysi/trustiot-v2#142's semantic tools run through it"
-    )]
-    async fn query(
-        &self,
-        tenant: TenantId,
-        statement: &str,
-        params: &[(&str, &str)],
-    ) -> Result<String, Failure> {
-        self.verified(tenant).await?;
-        self.run_verified(tenant, statement, params).await
-    }
-
     /// Checks `tenant`'s account before a query runs as it ([`Accounts::verify`]: its tenant,
     /// role, `readonly` and query limits), and returns the windows the database applies to its
     /// queries. When ClickHouse refuses the account's password (a new password generation of
@@ -727,7 +713,7 @@ impl Routes {
 
     /// Runs `statement` as `tenant`'s account, which [`Routes::verified`] checked for this
     /// request.
-    async fn run_verified(
+    pub(crate) async fn run_verified(
         &self,
         tenant: TenantId,
         statement: &str,
@@ -785,9 +771,9 @@ impl PlanTexts {
 
 /// One `JSONCompactEachRow` line of a series bucket or a latest value: the reading's type and
 /// its value columns.
-type ReadingColumns = (String, Option<f64>, i64, bool, String);
+pub(crate) type ReadingColumns = (String, Option<f64>, i64, bool, String);
 
-fn reading((kind, float, int, boolean, text): ReadingColumns) -> Option<Reading> {
+pub(crate) fn reading((kind, float, int, boolean, text): ReadingColumns) -> Option<Reading> {
     match kind.as_str() {
         "float" => Some(Reading::Float(float)),
         "int" => Some(Reading::Int(int)),
@@ -825,7 +811,7 @@ fn error_kind(error: &TenantDbError) -> String {
 }
 
 /// Parses each line with `row`; `None` for a line ClickHouse should not have written.
-fn rows<T, R: serde::de::DeserializeOwned>(
+pub(crate) fn rows<T, R: serde::de::DeserializeOwned>(
     body: &str,
     row: impl Fn(R) -> Option<T>,
 ) -> Option<Vec<T>> {
@@ -835,7 +821,7 @@ fn rows<T, R: serde::de::DeserializeOwned>(
         .collect()
 }
 
-fn unexpected_answer(tenant: TenantId) -> Response {
+pub(crate) fn unexpected_answer(tenant: TenantId) -> Response {
     tracing::error!(tenant_id = %tenant, "ClickHouse answered in an unexpected form");
     error(ErrorBody::new(ErrorCode::Internal))
 }
@@ -1459,7 +1445,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_range_ends_at_most_a_year_ahead() {
+    async fn a_range_ends_at_most_max_ahead_after_now() {
         let now = at(NOW);
         // chrono's RFC 3339 reads a signed year of any length, up to +262142: such a `to` is
         // refused before any arithmetic on it, so nothing overflows.
@@ -1492,10 +1478,15 @@ mod tests {
         let body = body_json(*refused).await;
         assert_eq!(body["message_key"], "telemetry.range_invalid");
         assert_eq!(body["details"]["parameter"], "to");
-        // A year ahead to the day still plans.
-        assert!(plan_at(&params(NOW, "2027-10-22T12:00:00Z", None), now).is_ok());
-        assert!(ends_in_time(at("2027-10-22T12:00:00Z"), now));
+        // 367 days ahead (the semantic API's `MAX_AHEAD`) still plans.
+        assert!(plan_at(&params(NOW, "2027-10-23T12:00:00Z", None), now).is_ok());
+        assert!(ends_in_time(at("2027-10-23T12:00:00Z"), now));
+        assert!(!ends_in_time(at("2027-10-23T12:00:00.001Z"), now));
         assert!(!ends_in_time(DateTime::<Utc>::MAX_UTC, now));
+        // Never past the cells' last second, 2106-02-07T06:28:15Z, whatever the clock says.
+        let late = at("2106-01-01T00:00:00Z");
+        assert!(ends_in_time(at("2106-02-07T06:28:15Z"), late));
+        assert!(!ends_in_time(at("2106-02-07T06:28:16Z"), late));
     }
 
     #[test]

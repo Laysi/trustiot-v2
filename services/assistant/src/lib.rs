@@ -117,8 +117,9 @@ pub fn build(config: &Config) -> Result<Assistant, BoxError> {
     match &config.telemetry_query.url {
         Some(url) => {
             let telemetry = callee::Callee::new(ServiceName::TelemetryQuery, url, timeout)?;
-            tools.push(tools::telemetry::TelemetrySeries::new(telemetry.clone()));
             tools.push(tools::telemetry::TelemetryLatest::new(telemetry.clone()));
+            tools.push(tools::semantic::TelemetryStatistics::new(telemetry.clone()));
+            tools.push(tools::semantic::TelemetryUsage::new(telemetry.clone()));
             // The read-only SQL of a cloud model (Laysi/trustiot-v2#143). On-prem models get the
             // semantic tools only (decision 16): leave this out for them when they come.
             tools.push(tools::telemetry_sql::TelemetrySql::new(telemetry));

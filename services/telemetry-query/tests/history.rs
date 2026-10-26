@@ -742,7 +742,7 @@ async fn history_matches_clickhouse_within_the_queryable_period() {
             Some("telemetry.range_invalid"),
         ),
         // chrono reads years up to +262142, and the cells' DateTime ends in 2106: a range may
-        // end at most a year ahead.
+        // end at most 367 days after now (`semantic::range::MAX_AHEAD`).
         (
             Some(fixture.token.as_str()),
             format!(

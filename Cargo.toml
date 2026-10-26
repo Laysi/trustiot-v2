@@ -42,6 +42,10 @@ hyper-util = { version = "0.1.21", default-features = false }
 # TLS for the AI provider clients (crates/ai-clients) with ring, not reqwest's TLS features: those
 # need aws-lc-rs or a process-wide crypto provider (see crates/ai-clients/README.md).
 hyper-rustls = { version = "0.27.10", default-features = false }
+# Local calendar arithmetic over the IANA Time Zone Database compiled in (jiff-tzdb), never the
+# host's: the relative periods and the table choice of telemetry-query's semantic API
+# (Laysi/trustiot-v2#142). Features are chosen per member.
+jiff = { version = "0.2.35", default-features = false }
 # The names of the IANA Time Zone Database, which a user's time zone preference must be one of
 # (services/identity, Laysi/trustiot-v2#497). Data only: no dependencies, no_std.
 jiff-tzdb = "0.1.9"

@@ -63,8 +63,8 @@ flowchart TB
 
 | 工具 | 內容 | 執行的服務 | 里程碑 |
 | --- | --- | --- | --- |
-| 語意層查詢 | 用電量、異常區段、斷訊、停機、比較，回傳精簡的表格（J3） | telemetry-query | MS3 |
-| 唯讀 SQL | 經語法解析、以租戶唯讀帳號執行的 SELECT；語意層工具不夠時用來回答，也是儀表板資料集的主要來源（J3、決策 33）。工具 `telemetry_sql` 呼叫內部入口 `POST /internal/telemetry/v1/sql`：只接受 AI 助理換出的 token（之後加上 Laysi/trustiot-v2#150 的儀表板後端），入口 gateway 不轉送，瀏覽器送不了 SQL；viewer、editor、admin 都可以（2026-10-26 決定，Laysi/trustiot-v2#143） | telemetry-query | MS3 |
+| 語意層查詢 | 最新值（`telemetry_latest`）、統計（`telemetry_statistics`：筆數、最小、最大、平均、第一與最後讀數）與用量（`telemetry_usage`：用電量等累計值的增量，附累計檢查與可疑跳增），依使用者時區的相對期間（`period`，週從星期一開始）或時間範圍、以區間回傳精簡的表格（J3，Laysi/trustiot-v2#142；計算方式見 [services/telemetry-query](../../services/telemetry-query/README.md)「語意查詢」）。異常區段、斷訊、停機與比較在 Laysi/trustiot-v2#455 | telemetry-query | MS3 |
+| 唯讀 SQL | 經語法解析、以租戶唯讀帳號執行的 SELECT；語意層工具不夠時用來回答，也是儀表板資料集的主要來源（J3、決策 33）。工具 `telemetry_sql` 呼叫內部入口 `POST /internal/telemetry/v1/sql`：只接受 AI 助理換出的 token（之後加上 Laysi/trustiot-v2#150 的儀表板後端），入口 gateway 不轉送，瀏覽器送不了 SQL；viewer、editor、admin 都可以（2026-10-26 決定，Laysi/trustiot-v2#143）。只給雲端模型（下方「地端」第 6 點） | telemetry-query | MS3 |
 | 設備與知識 | 設備、型號、資料點、knowledge、assetNotes（J6） | assets | MS3 |
 | 儀表板 | 建立與修改儀表板：資料集與頁面程式，寫入後由平台檢查（J4，見下方「儀表板」） | assistant | MS3 |
 | 寫入 | AI 設備上架、修改型號；先暫停，確認畫面由服務依參數產生（J4） | assets | MS3 |
@@ -79,7 +79,7 @@ flowchart TB
 3. 工具結果可以帶圖片：文件檢索直接回傳頁面圖，由主 agent 自己讀（決策 26）。
 4. 租戶範圍、可查期間（B3）與權限由服務依內部身分注入，模型看不到也改不了（決策 27、29）。
 5. 工具數上限管的是工具組，不是呼叫次數：一次模型回應可以要求任意多個呼叫，所以每一步只同時執行前幾個（預設 8 個），之後的呼叫回錯誤、請模型下一步再叫，一次回應造成的後端負載有上限（Laysi/trustiot-v2#145）。
-6. 工具以使用者的身分呼叫服務：每個問題開始時以請求的身分建立 run 委派（Laysi/trustiot-v2#551），每次呼叫前換一張受眾是被呼叫服務的 token；問題在委派到期前 30 秒結束，委派被撤銷（登出、被移出租戶）時當下這一步取消、問題結束、不重試。被呼叫服務的錯誤只看狀態碼，回應本文不進模型也不進日誌；唯一的例外是唯讀 SQL 的拒絕（422），本文嚴格解析成封閉的拒絕類別，模型只拿到每個類別固定的說明（Laysi/trustiot-v2#143）。設備與成員寫的文字（文字讀數、資料點 key、型號名稱）是不可信的輸入，每個字串截到 256 個字元；這限制長度，不讓文字變得可信。第一批工具是遙測的時間序列與最新值、設備型號列表（Laysi/trustiot-v2#591，[services/assistant](../../services/assistant/README.md)「工具」與「代表使用者呼叫」）。
+6. 工具以使用者的身分呼叫服務：每個問題開始時以請求的身分建立 run 委派（Laysi/trustiot-v2#551），每次呼叫前換一張受眾是被呼叫服務的 token；問題在委派到期前 30 秒結束，委派被撤銷（登出、被移出租戶）時當下這一步取消、問題結束、不重試。被呼叫服務的錯誤只看狀態碼，回應本文不進模型也不進日誌；唯一的例外是唯讀 SQL 的拒絕（422），本文嚴格解析成封閉的拒絕類別，模型只拿到每個類別固定的說明（Laysi/trustiot-v2#143）。設備與成員寫的文字（文字讀數、資料點 key、型號名稱）是不可信的輸入，每個字串截到 256 個字元；這限制長度，不讓文字變得可信。目前的工具共 5 個：遙測的最新值與設備型號列表（Laysi/trustiot-v2#591）、遙測的統計與用量（Laysi/trustiot-v2#142；統計取代 Laysi/trustiot-v2#591 的時間序列工具，兩者是同一種功能，依規則 1 合併）、唯讀 SQL（`telemetry_sql`，Laysi/trustiot-v2#143）。唯讀 SQL 只給雲端模型，地端模型只有前 4 個（「地端」第 6 點；[services/assistant](../../services/assistant/README.md)「工具」與「代表使用者呼叫」）。語意工具的輸入就是 telemetry-query 語意查詢 API 的請求本文，儀表板的資料集可以原樣存下、以檢視者身分重送。
 
 ### 儀表板
 

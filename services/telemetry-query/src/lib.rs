@@ -8,6 +8,8 @@
 //!
 //! - [`accounts`]: the tenant accounts and the consumer.
 //! - [`history`]: the API.
+//! - [`semantic`]: the semantic API (statistics and usage of several data points,
+//!   Laysi/trustiot-v2#142), which the assistant's telemetry tools call.
 //! - [`clickhouse`] and [`transport`]: the ClickHouse client.
 //! - [`period`]: the queryable period of each tenant view.
 //! - [`sql`]: the check of the read-only SQL an AI writes (Laysi/trustiot-v2#143), and
@@ -24,6 +26,7 @@ pub mod config;
 pub mod history;
 pub mod period;
 pub mod schema;
+pub mod semantic;
 pub mod sql;
 pub mod sql_api;
 pub mod transport;
@@ -60,7 +63,12 @@ pub const SOURCE_SCHEMA: &str = "identity";
 /// The client API's OpenAPI document (merged into `api/openapi.json` by `tools/openapi`).
 #[derive(OpenApi)]
 #[openapi(
-    paths(history::get_series, history::get_latest),
+    paths(
+        history::get_series,
+        history::get_latest,
+        semantic::post_statistics,
+        semantic::post_usage
+    ),
     tags((name = "telemetry", description = "Device telemetry history (services/telemetry-query)."))
 )]
 struct ApiDoc;
@@ -139,5 +147,10 @@ pub async fn start(context: Context<Config>) -> Result<Router, BoxError> {
     )
     .await;
     let verifier = IdentityVerifier::new(ServiceName::TelemetryQuery, keys);
-    Ok(history::routes(verifier, db, accounts))
+    let semantic = semantic::routes(history::Routes::new(
+        verifier.clone(),
+        db.clone(),
+        accounts.clone(),
+    ));
+    Ok(history::routes(verifier, db, accounts).merge(semantic))
 }

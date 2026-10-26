@@ -1,11 +1,13 @@
 //! The tools the main agent calls (docs/architecture/ai-assistant.md, 「Tools」): the [`Tool`]
 //! trait, the [`ToolRegistry`] that runs a turn's calls concurrently under the limits, and the
 //! [`ToolContext`] each call gets. The tools that read telemetry and device models as the user
-//! are in [`telemetry`] and [`device_models`] (Laysi/trustiot-v2#591), the read-only SQL over
-//! telemetry in [`telemetry_sql`] (Laysi/trustiot-v2#143); they call the other
-//! services through [`crate::callee`] with a token from the question's [`Delegation`].
+//! are in [`telemetry`], [`semantic`] (Laysi/trustiot-v2#142) and [`device_models`]
+//! (Laysi/trustiot-v2#591), the read-only SQL over telemetry in [`telemetry_sql`]
+//! (Laysi/trustiot-v2#143); they call the other services through [`crate::callee`] with a token
+//! from the question's [`Delegation`].
 
 pub mod device_models;
+pub mod semantic;
 pub mod telemetry;
 pub mod telemetry_sql;
 
