@@ -10,7 +10,7 @@
 | `events` | 事件本身，每個產生端服務一個子模組；目前有 `events::identity::TenantCreated`（`identity.tenant_created`，Laysi/trustiot-v2#65）、`MemberRoleChanged`（`identity.member_role_changed`，Laysi/trustiot-v2#583）、`events::identity::PlatformAdminGranted`（`identity.platform_admin_granted`，全平台事件，payload 只有使用者 ID 與 `via`，Laysi/trustiot-v2#582），以及設備型號的 `events::assets::DeviceModelCreated`、`DeviceModelUpdated`、`DeviceModelDeleted`（`assets.device_model_{created,updated,deleted}`，Laysi/trustiot-v2#99；型號本身是 `protocol::config::DeviceModel`，閘道器設定用的同一個格式），以及出廠登錄的 `events::certs::GatewayRegistered`（`certs.gateway_registered`，Laysi/trustiot-v2#79；全平台事件，沒有租戶），以及閘道器綁定的 `events::assets::GatewayBound`（`assets.gateway_bound`，Laysi/trustiot-v2#101；綁定 ID 與硬體 ID，租戶在信封上，actor 是做綁定的平台管理員），以及設備的 `events::assets::DeviceCreated`、`DeviceUpdated`、`DeviceDeleted`（`assets.device_{created,updated,deleted}`，Laysi/trustiot-v2#100；建立與更新帶 `protocol::config::Device`，閘道器設定的格式；刪除只帶設備 ID、名稱、硬體 ID、型號 ID 與最後的版本） |
 | `identity` | 內部身分標頭 `x-internal-identity`、claims `InternalClaims`、遮蔽內容的 `InternalToken` |
 | `client` | 內部 API 的 `Endpoint` 與有型別的 client `InternalClient<S>` |
-| `api` | 內部 API 本身，每個提供 API 的服務一個子模組；目前有 `api::identity::ExchangeToken`（身分服務的 token 交換，Laysi/trustiot-v2#106）與 `CreateRunDelegation`、`ExchangeRunDelegation`（agent run 的委派，Laysi/trustiot-v2#551） |
+| `api` | 內部 API 本身，每個提供 API 的服務一個子模組；目前有 `api::identity::ExchangeToken`（身分服務的 token 交換，Laysi/trustiot-v2#106）與 `CreateRunDelegation`、`ExchangeRunDelegation`（agent run 的委派，Laysi/trustiot-v2#551），以及 telemetry-query 的 `api::telemetry_query::RunSql`（AI 寫的唯讀 SQL，Laysi/trustiot-v2#143：回應 `SqlResult`，拒絕是封閉的 `SqlRefusal` 類別，新版本的類別解碼成 `Unrecognized`） |
 | `certs` | certs 服務的用戶端 API：平台管理員簽發與撤銷工作站憑證的請求與回應（`IssueWorkstationCertificate`、`RevokeWorkstationCertificate`、`RevocationReason`、`WorkstationCertificate`，Laysi/trustiot-v2#534），以及生產工作站的出廠登錄（`RegisterGateway`、`GatewayRegistration`、工作站請求簽章的標頭名稱與 `workstation_signing_input`，Laysi/trustiot-v2#79）。經入口以 cookie 呼叫，不是內部 API；請求拒絕不認得的欄位，讓送出主體、延伸欄位或效期的用戶端立刻知道這些由 CA 決定。profile 與步驟見 [certs README](../../services/certs/README.md) 的「工作站憑證」與「出廠登錄」 |
 | `service` | `ServiceName` 與型別層級的服務標記（`service::Identity` 等） |
 | `openapi` | `SharedSchemas`：每個服務規格共用的 OpenAPI schema（M1 錯誤格式） |
@@ -140,6 +140,24 @@ client 每次失敗都記一筆日誌，欄位有 `peer`、`route`（路由樣�
 | 還沒有簽章金鑰、資料庫失敗 | 503 | `unavailable` |
 
 回應一律 `cache-control: no-store`。委派對呼叫端是不透明的字串，`RunDelegationCreated` 只能反序列化，委派照樣是遮蔽內容的 `InternalToken`，只放在 `x-internal-identity` 送到換 token 的路徑。和 `OnBehalf` 不同，`RunDelegations` 把身分服務回的 `unauthenticated`、`permission_denied` 照傳給使用者：被拒絕的是使用者的 session 或成員資格，不是部署的問題。
+
+### AI 的唯讀 SQL（`api::telemetry_query::RunSql`）
+
+`POST /internal/telemetry/v1/sql`，telemetry-query 檢查 AI 寫的一個 `SELECT` 後，以呼叫者租戶的 ClickHouse 唯讀帳號執行（Laysi/trustiot-v2#143；檢查的規則、限制與日誌在 [services/telemetry-query/README.md](../../services/telemetry-query/README.md) 的「AI 的唯讀 SQL」）。`x-internal-identity` 帶 `assistant` 以使用者身分換來的 token（`act` 是 `assistant`）；本文 `{"sql", "max_rows"}`，`sql` 最多 `MAX_SQL_BYTES`（16 KiB），`max_rows` 選填，1 到 `MAX_ROWS`（10000），預設 `DEFAULT_MAX_ROWS`（200）。這是不改變任何狀態的 `Post`：SQL 放在本文。
+
+| 結果 | 狀態 | 本文 |
+| --- | --- | --- |
+| 回答 | 200 | `SqlResult` `{"sql", "columns", "rows", "queryable_from", "queried_at"}` |
+| SQL 被拒絕，或它的回答被拒絕（超過 `max_rows` 列或 `MAX_RESULT_BYTES`、太重、ClickHouse 的執行錯誤） | 422 | `validation_failed`，`details` 是 `SqlRefusal`：`{"class": ...}` 加上該類別的固定欄位 |
+| 沒有 token、token 無效或過期 | 401 | `unauthenticated` |
+| 沒有 `act`、`act` 不是可以執行 SQL 的服務、沒有租戶 | 403 | `permission_denied` |
+| 租戶的帳號還沒建立 | 404 | `not_found` |
+| 本文不是這個請求、`max_rows` 超出範圍 | 400 | `invalid_request` |
+| 租戶的查詢額度暫時用完 | 429 | `rate_limited` |
+| 帳號不是服務建立的樣子、資料庫失敗 | 503 | `unavailable` |
+| 查詢超過帳號的時間上限 | 504 | `timeout` |
+
+拒絕的 `details` 是這個 API 的一部分，不只是錯誤訊息：呼叫端（助理）把它解碼成 `SqlRefusal`，再變成給模型的固定提示。所以 `class`、`SqlClause` 與 `QueryErrorKind` 都是封閉的清單，新版本增加的值在舊的呼叫端解碼成 `Unrecognized`；欄位只有數字、這個模組的固定名稱，或 SQL 裡通過識別字規則的名稱，從不帶 ClickHouse 的錯誤內文或 SQL 的其他部分。
 
 ## 事件
 

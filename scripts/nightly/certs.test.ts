@@ -390,6 +390,14 @@ describe("inside the mesh", () => {
     expect(fetched).toEqual([CHAIN_PATH, CHAIN_PATH, CHAIN_PATH, CRL_PATH, CRL_PATH]);
   });
 
+  test("once signing: no answer while the broker's container restarts is awaited, another status fails (Laysi/trustiot-v2#535)", async () => {
+    const noAnswer: MeshAnswer = { ok: false, body: "", detail: "error: unable to upgrade connection: container not found" };
+    const waited = fakeMesh({ [CHAIN_PATH]: [body(`${fx.root}${fx.issuing}`)], [CRL_PATH]: [noAnswer, body(fx.issuingCrl)] });
+    expect(await checkMeshSigning(waited.deps, fx.root, fx.issuing)).toContain("after 1 s more");
+    const refused = fakeMesh({ [CHAIN_PATH]: [body(`${fx.root}${fx.issuing}`)], [CRL_PATH]: [status(404)] });
+    await expect(checkMeshSigning(refused.deps, fx.root, fx.issuing)).rejects.toThrow("the first CRL of the issuing CA in crl.pem inside the mesh: 404");
+  });
+
   test.each([
     ["a CRL the root signed", () => ({ [CHAIN_PATH]: [body(`${fx.root}${fx.issuing}`)], [CRL_PATH]: [body(fx.rootCrl)] }), "does not verify with the issuing CA's key"],
     ["two CRLs", () => ({ [CHAIN_PATH]: [body(`${fx.root}${fx.issuing}`)], [CRL_PATH]: [body(`${fx.issuingCrl}${fx.issuingCrl}`)] }), "crl.pem holds 2 CRLs, expected one"],

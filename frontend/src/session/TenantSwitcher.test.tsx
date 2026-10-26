@@ -1,115 +1,252 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { QueryClient } from "@tanstack/react-query";
-import { act, cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 
-import { ROUTES } from "../app/routes.tsx";
-import { memoryPreferences, renderAt } from "../test/render.tsx";
-import type { SessionInfo, SessionSource } from "./session.ts";
+import { unavailable } from "../test/fake-identity.ts";
+import { fakeWithUser, renderAt, signedInBrowser } from "../test/render.tsx";
+import type { SessionInfo } from "./session.ts";
 
 afterEach(() => {
   cleanup();
 });
 
-const USER = { id: "01928f6e-7a3c-7d4e-8f00-0123456789ab", displayName: "Dev User" };
-const TENANTS = [
-  { id: "t-1", name: "Acme Factory", role: "admin" },
-  { id: "t-2", name: "Beta Plant", role: "viewer" },
-];
-
-function fakeSource(initial: SessionInfo) {
-  const switched: string[] = [];
-  let current = initial;
-  const source: SessionSource = {
-    load: async () => current,
-    switchTenant: async (tenantId) => {
-      switched.push(tenantId);
-      const tenant = current.tenants.find((item) => item.id === tenantId);
-      if (!tenant) throw new Error("not a member");
-      current = { ...current, activeTenant: { id: tenant.id, name: tenant.name } };
-      return current;
-    },
-  };
-  return { source, switched };
+/** Opens the tenant menu from the keyboard, as Radix's trigger expects. */
+async function openTenantMenu() {
+  const trigger = await screen.findByRole("button", { name: /^Organization:/ });
+  await act(async () => {
+    fireEvent.keyDown(trigger, { key: "Enter" });
+  });
+  return screen.findByRole("menu");
 }
 
 describe("TenantSwitcher", () => {
-  test("shows the active tenant's name and puts it in the tab title", async () => {
-    const { source } = fakeSource({
-      user: USER,
-      activeTenant: { id: "t-1", name: "Acme Factory" },
-      tenants: [TENANTS[0] as (typeof TENANTS)[0]],
-    });
-    renderAt("/", { routes: ROUTES, session: source });
+  test("with one tenant it names the tenant, offers no menu, and puts it in the tab title", async () => {
+    renderAt("/");
     expect(await screen.findByText("Acme Factory")).toBeDefined();
+    expect(screen.queryByRole("button", { name: /^Organization:/ })).toBeNull();
     await waitFor(() => expect(document.title).toBe("Acme Factory · TrustIoT"));
   });
 
-  test("switching tenants drops every cached query and shows the new tenant", async () => {
-    const { source, switched } = fakeSource({
-      user: USER,
-      activeTenant: { id: "t-1", name: "Acme Factory" },
-      tenants: TENANTS,
-    });
-    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-    queryClient.setQueryData(["devices", "t-1"], ["a device of Acme"]);
-    renderAt("/", { routes: ROUTES, session: source, queryClient });
-    const select = (await screen.findByLabelText("Organization")) as HTMLSelectElement;
-    expect(select.value).toBe("t-1");
+  test("switching tenants cancels and drops the old tenant's data, keeps the user's, and retitles the tab", async () => {
+    const { browser, server, tenants } = signedInBrowser({ tenants: ["Acme Factory", "Beta Plant"] });
+    const [acme, beta] = tenants;
+    const { queryClient } = renderAt("/", { identity: browser });
+    queryClient.setQueryData(["devices", acme?.id], ["a device of Acme"]);
+    // A request of the old tenant still running when the switch lands must not deliver its answer.
+    let delivered = false;
+    void queryClient
+      .fetchQuery({
+        queryKey: ["slow", acme?.id],
+        queryFn: ({ signal }) =>
+          new Promise((_, reject) => signal.addEventListener("abort", () => reject(signal.reason))),
+      })
+      .then(() => {
+        delivered = true;
+      })
+      .catch(() => {});
+    await waitFor(() => expect(document.title).toBe("Acme Factory · TrustIoT"));
 
+    const menu = await openTenantMenu();
+    const items = within(menu).getAllByRole("menuitemradio");
+    expect(items.map((item) => item.getAttribute("aria-checked"))).toEqual(["true", "false"]);
     await act(async () => {
-      fireEvent.change(select, { target: { value: "t-2" } });
+      fireEvent.click(within(menu).getByRole("menuitemradio", { name: /Beta Plant/ }));
+    });
+
+    await waitFor(() => expect(document.title).toBe("Beta Plant · TrustIoT"));
+    expect(server.requests.filter((request) => request.operation === "switchTenant")).toEqual([
+      { operation: "switchTenant", input: beta?.id },
+    ]);
+    expect(queryClient.getQueryData(["devices", acme?.id])).toBeUndefined();
+    expect(queryClient.getQueryState(["slow", acme?.id])?.fetchStatus).not.toBe("fetching");
+    expect(delivered).toBe(false);
+    // The session and the preferences are the user's, not the tenant's: they stay cached.
+    expect(queryClient.getQueryData(["preferences"])).toBeDefined();
+    expect(screen.getByRole("button", { name: /^Organization:/ }).textContent).toContain("Beta Plant");
+  });
+
+  test("a switch while the preferences are still loading lets them finish loading", async () => {
+    const { browser, server } = signedInBrowser({ tenants: ["Acme Factory", "Beta Plant"] });
+    let release = () => {};
+    server.holdNext(
+      "loadPreferences",
+      new Promise<void>((resolve) => {
+        release = resolve;
+      }),
+    );
+    renderAt("/settings", { identity: browser });
+    const theme = () => screen.getByLabelText("Theme") as HTMLSelectElement;
+    const menu = await openTenantMenu();
+    await act(async () => {
+      fireEvent.click(within(menu).getByRole("menuitemradio", { name: /Beta Plant/ }));
     });
     await waitFor(() => expect(document.title).toBe("Beta Plant · TrustIoT"));
-    expect(switched).toEqual(["t-2"]);
-    expect(queryClient.getQueryData(["devices", "t-1"])).toBeUndefined();
-    expect((screen.getByLabelText("Organization") as HTMLSelectElement).value).toBe("t-2");
+    expect(theme().disabled).toBe(true);
+    await act(async () => {
+      release();
+    });
+    await waitFor(() => expect(theme().disabled).toBe(false));
   });
 
   test("a failed switch says so and keeps the current tenant", async () => {
-    const { source } = fakeSource({ user: USER, activeTenant: { id: "t-1", name: "Acme Factory" }, tenants: TENANTS });
-    const failing: SessionSource = {
-      load: source.load,
-      switchTenant: async () => {
-        throw new Error("503");
-      },
-    };
-    renderAt("/", { routes: ROUTES, session: failing });
-    const select = (await screen.findByLabelText("Organization")) as HTMLSelectElement;
+    const { browser, server } = signedInBrowser({ tenants: ["Acme Factory", "Beta Plant"] });
+    server.failNext("switchTenant", unavailable());
+    renderAt("/", { identity: browser });
+    const menu = await openTenantMenu();
     await act(async () => {
-      fireEvent.change(select, { target: { value: "t-2" } });
+      fireEvent.click(within(menu).getByRole("menuitemradio", { name: /Beta Plant/ }));
     });
-    expect(await screen.findByRole("alert")).toBeDefined();
-    expect(screen.getByRole("alert").textContent).toBe("Could not switch organization. Try again.");
-    expect((screen.getByLabelText("Organization") as HTMLSelectElement).value).toBe("t-1");
+    expect((await screen.findByRole("alert")).textContent).toBe("Could not switch organization. Try again.");
+    expect(screen.getByRole("button", { name: /^Organization:/ }).textContent).toContain("Acme Factory");
+    expect(document.title).toBe("Acme Factory · TrustIoT");
   });
 
-  test("without a session nothing is shown and the title is the app's", async () => {
-    renderAt("/", { routes: ROUTES });
-    await screen.findByRole("heading", { name: "Home" });
-    expect(screen.queryByLabelText("Organization")).toBeNull();
-    await waitFor(() => expect(document.title).toBe("TrustIoT"));
+  test("the menu closes with Escape and gives focus back to its trigger", async () => {
+    renderAt("/", { identity: signedInBrowser({ tenants: ["Acme Factory", "Beta Plant"] }).browser });
+    const menu = await openTenantMenu();
+    await act(async () => {
+      fireEvent.keyDown(menu, { key: "Escape" });
+    });
+    await waitFor(() => expect(screen.queryByRole("menu")).toBeNull());
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: /^Organization:/ }));
   });
 });
 
-describe("PreferencesMenu", () => {
-  test("changing the language, time zone and theme applies at once and is saved", async () => {
-    const preferences = memoryPreferences({ locale: "en", timeZone: "auto", theme: "system" });
-    renderAt("/", { routes: ROUTES, preferences });
-    await screen.findByRole("heading", { name: "Home" });
+/** A session in no tenant yet, with three to choose from: the list and the top bar both offer them. */
+function choosingAmongThree() {
+  const fake = fakeWithUser({ tenants: ["Acme Factory", "Beta Plant", "Gamma Works"] });
+  const browser = fake.server.browser(fake.server.createSession(fake.user.email, null));
+  /** The tenant the server has for this browser's session now. */
+  const serverTenant = () => fake.server.sessions.get(browser.cookie ?? "")?.activeTenant ?? null;
+  return { ...fake, browser, serverTenant };
+}
+
+function held() {
+  let release = () => {};
+  const until = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  return { until, release };
+}
+
+describe("switching from more than one place", () => {
+  test("a switch from the tenant list disables the top bar and the rest of the list until it lands", async () => {
+    const { server, browser } = choosingAmongThree();
+    const answer = held();
+    server.holdNextAnswer("switchTenant", answer.until);
+    renderAt("/", { identity: browser });
+    const list = await screen.findByRole("list", { name: "Your organizations" });
+    await act(async () => {
+      fireEvent.click(within(list).getByRole("button", { name: /Beta Plant/ }));
+    });
+
+    const trigger = screen.getByRole("button", { name: /^Organization:/ }) as HTMLButtonElement;
+    await waitFor(() => expect(trigger.disabled).toBe(true));
+    for (const button of within(list).getAllByRole("button") as HTMLButtonElement[]) {
+      expect(button.disabled).toBe(true);
+    }
 
     await act(async () => {
-      fireEvent.change(screen.getByLabelText("Theme"), { target: { value: "dark" } });
+      answer.release();
     });
-    expect(document.documentElement.dataset.theme).toBe("dark");
+    expect(await screen.findByRole("heading", { name: "Home" })).toBeDefined();
+    await waitFor(() => expect(trigger.disabled).toBe(false));
+    expect(trigger.textContent).toContain("Beta Plant");
+  });
+
+  test("a switch from the top bar disables the tenant list until it lands", async () => {
+    const { server, browser } = choosingAmongThree();
+    const answer = held();
+    server.holdNextAnswer("switchTenant", answer.until);
+    renderAt("/", { identity: browser });
+    const list = await screen.findByRole("list", { name: "Your organizations" });
+    const buttons = within(list).getAllByRole("button") as HTMLButtonElement[];
+    const menu = await openTenantMenu();
+    await act(async () => {
+      fireEvent.click(within(menu).getByRole("menuitemradio", { name: /Gamma Works/ }));
+    });
+
+    await waitFor(() => expect(buttons.map((button) => button.disabled)).toEqual([true, true, true]));
+    expect((screen.getByRole("button", { name: /^Organization:/ }) as HTMLButtonElement).disabled).toBe(true);
 
     await act(async () => {
-      fireEvent.change(screen.getByLabelText("Time zone"), { target: { value: "Asia/Taipei" } });
+      answer.release();
     });
+    expect(await screen.findByRole("heading", { name: "Home" })).toBeDefined();
+    expect(screen.getByRole("button", { name: /^Organization:/ }).textContent).toContain("Gamma Works");
+  });
+
+  test("two switches started together run one after the other, and the cache ends where the server does", async () => {
+    const { server, browser, tenants, serverTenant } = choosingAmongThree();
+    const [acme, beta] = tenants;
+    // The server carries out the first switch at once, but its answer is late.
+    const answer = held();
+    server.holdNextAnswer("switchTenant", answer.until);
+    const { queryClient } = renderAt("/", { identity: browser });
+    const list = await screen.findByRole("list", { name: "Your organizations" });
+    // Found before the menu opens: the open menu hides the rest of the page from the accessibility tree.
+    const acmeInList = within(list).getByRole("button", { name: /Acme Factory/ });
+    const menu = await openTenantMenu();
+
+    // Both in one turn, before either entry can see the other's switch and disable itself.
     await act(async () => {
-      fireEvent.change(screen.getByLabelText("Language"), { target: { value: "zh-TW" } });
+      fireEvent.click(acmeInList);
+      fireEvent.click(within(menu).getByRole("menuitemradio", { name: /Beta Plant/ }));
     });
-    expect(await screen.findByRole("heading", { name: "首頁" })).toBeDefined();
-    expect(document.documentElement.lang).toBe("zh-TW");
-    expect(preferences.saved.at(-1)).toEqual({ locale: "zh-TW", timeZone: "Asia/Taipei", theme: "dark" });
+
+    // The second switch waits for the first one's answer before it is sent.
+    await waitFor(() => expect(serverTenant()).toBe(acme?.id ?? null));
+    expect(server.requests.filter((request) => request.operation === "switchTenant")).toEqual([
+      { operation: "switchTenant", input: acme?.id },
+    ]);
+
+    await act(async () => {
+      answer.release();
+    });
+    await waitFor(() => expect(document.title).toBe("Beta Plant · TrustIoT"));
+    expect(server.requests.filter((request) => request.operation === "switchTenant")).toEqual([
+      { operation: "switchTenant", input: acme?.id },
+      { operation: "switchTenant", input: beta?.id },
+    ]);
+    expect(serverTenant()).toBe(beta?.id ?? null);
+    expect(queryClient.getQueryData<SessionInfo>(["session"])?.activeTenant?.id).toBe(beta?.id);
+    await waitFor(() =>
+      expect((screen.getByRole("button", { name: /^Organization:/ }) as HTMLButtonElement).disabled).toBe(false),
+    );
+    expect(screen.getByRole("button", { name: /^Organization:/ }).textContent).toContain("Beta Plant");
+  });
+
+  test("the next switch waits until the earlier answer is cached, however long caching it takes", async () => {
+    const { server, browser, tenants, serverTenant } = choosingAmongThree();
+    const [acme, beta] = tenants;
+    const { queryClient } = renderAt("/", { identity: browser });
+    // Caching an answer first cancels the queries in flight; the first time, that takes until released.
+    const cancelled = held();
+    const cancelQueries = queryClient.cancelQueries.bind(queryClient);
+    let calls = 0;
+    queryClient.cancelQueries = (async (...args: Parameters<typeof cancelQueries>) => {
+      calls += 1;
+      if (calls === 1) await cancelled.until;
+      return cancelQueries(...args);
+    }) as typeof queryClient.cancelQueries;
+    const list = await screen.findByRole("list", { name: "Your organizations" });
+    const acmeInList = within(list).getByRole("button", { name: /Acme Factory/ });
+    const menu = await openTenantMenu();
+
+    await act(async () => {
+      fireEvent.click(acmeInList);
+      fireEvent.click(within(menu).getByRole("menuitemradio", { name: /Beta Plant/ }));
+    });
+
+    // The first answer has arrived but is not cached yet: the second switch is not sent.
+    await waitFor(() => expect(calls).toBe(1));
+    expect(serverTenant()).toBe(acme?.id ?? null);
+    expect(server.operations().filter((operation) => operation === "switchTenant")).toHaveLength(1);
+
+    await act(async () => {
+      cancelled.release();
+    });
+    await waitFor(() => expect(document.title).toBe("Beta Plant · TrustIoT"));
+    expect(serverTenant()).toBe(beta?.id ?? null);
+    expect(queryClient.getQueryData<SessionInfo>(["session"])?.activeTenant?.id).toBe(beta?.id);
   });
 });

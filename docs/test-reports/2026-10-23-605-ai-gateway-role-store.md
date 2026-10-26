@@ -61,7 +61,7 @@ bun run --cwd scripts typecheck
 | 服務角色對 `role_model_changes` 只能 SELECT、INSERT；每次更換一筆紀錄、被拒的沒有 | 通過 | `roles_store::the_service_role_cannot_rewrite_or_remove_the_change_log`：`ai_gateway_app` 的 UPDATE、DELETE、TRUNCATE 都回 `42501`（`role_models` 的 DELETE、TRUNCATE 也是），紀錄不變；`refused_changes_write_nothing_and_each_change_writes_one_record` 逐筆核對紀錄（版本、角色、`set`/`reset`、模型、操作者） |
 | `cargo tree -p ai-gateway` 不含 `contract` | 通過 | `no_contract` 2 通過，`cargo tree` 計數 0 |
 | `cargo test -p ai-gateway`、`-p migrate`、`-p sql-check`、`bun test deploy/chart`、workspace clippy 通過 | 通過 | 上表 |
-| 帶 `smoke` label 的 PR 的 nightly 部署啟用資料庫的 ai-gateway，pod 就緒 | 待測 | PR 推上去並加上 `smoke` label 之後由 nightly 執行；結果補在下一節 |
+| 帶 `smoke` label 的 PR 的 nightly 部署啟用資料庫的 ai-gateway，pod 就緒 | 通過 | nightly run 40069043602（PR Laysi/trustiot-v2#655 的 head `5b41af84`），見「nightly」 |
 
 chart 的接線另由 `deploy/chart/tests/chart.test.ts` 檢查（`AI gateway settings`）：bundled 與 external 兩種 Postgres，閘道的 `AI_GATEWAY_POSTGRES_{HOST,PORT,DATABASE,SSLMODE}` 與平台 ConfigMap 的 `TRUSTIOT_POSTGRES_*` 相同、`AI_GATEWAY_POSTGRES_CA_FILE` 與 CA 掛載、`AI_GATEWAY__DATABASE__USERNAME=ai_gateway_app`、密碼來自 `<release>-ai-gateway-password`、沒有 `TRUSTIOT__DATABASE__*`、migration Job 綁定 `ai_gateway_app`；自訂 `env` 設 `AI_GATEWAY_POSTGRES_HOST`、`AI_GATEWAY__DATABASE__USERNAME` 或（小寫、經 `valueFrom`）`AI_GATEWAY__DATABASE__PASSWORD` 時渲染失敗；`mesh.calls.ai-gateway` 拿掉 `postgres` 時渲染失敗（saas 與 onprem 兩種形狀，訊息 `mesh.calls.ai-gateway must list postgres`）。
 
@@ -86,6 +86,6 @@ merge main `0dc8fd96`（Laysi/trustiot-v2#628）帶進 assistant 的預算（每
 - `chart_connections::the_chart_budgets_every_pool_the_service_opens`：程式裡唯一的 `.max_connections(...)` 是 `store.rs` 的 `config.database.max_connections`，chart 的範圍等於 `MIN_DATABASE_CONNECTIONS`、`MAX_DATABASE_CONNECTIONS`，`otherPools` 是 0。testkit 依賴 `contract`，不能進閘道的依賴樹（`no_contract`），所以這個測試自己讀同一段 JSON。
 - `chart.test.ts` 的 `Postgres connection budget`：預設的六個服務、閘道每副本 4、加總 166、預設 200；剛好 166 時通過、165 時失敗並列出 `ai-gateway 4 x 2` 與 `assistant 4 x 2`；預設值下 identity 多兩個副本（31 × 4）時失敗；閘道拿到 `AI_GATEWAY__DATABASE__MAX_CONNECTIONS=4`（設 32 時是 32），33 與自訂 `env` 都渲染失敗。
 
-### nightly（待補）
+### nightly
 
-待 PR 帶 `smoke` label 的 nightly run 完成後補上：run 的連結、ai-gateway pod 就緒、readiness 的 `migrations` 與 `postgres` 檢查。
+PR Laysi/trustiot-v2#655 的 head `5b41af84`，nightly run [40069043602](https://github.com/Laysi/trustiot-v2/actions/runs/40069043602) 的 `smoke` job（2026-10-24，k3d、Istio ambient）：兩種形態的 `deployment/trustiot-ai-gateway` 都 rollout 完成（`kubectl rollout status` 回 `successfully rolled out`），列在部署就緒的 `ok:` 行裡。pod 就緒代表 readiness 通過，而閘道的 readiness 包含 `migrations`（`MigrationCheck`）與 `postgres`（設定查詢）兩項檢查（`services/ai-gateway/src/lib.rs` 的 `start`）。smoke job 的結論是 success。

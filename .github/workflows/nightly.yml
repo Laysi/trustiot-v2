@@ -54,8 +54,8 @@ on:
       # What goes into the nightly's Rust images (scripts/nightly/image-cache.ts, NIGHTLY_IMAGES):
       # the workspace, the toolchain, the build scripts and every local crate tools/migrate,
       # services/identity, services/assets, services/ai-gateway, services/telemetry-query,
-      # services/certs and services/assistant build from (scripts/nightly/image-cache.test.ts
-      # keeps this list complete), plus the files tools/migrate compiles in with #[path].
+      # services/certs and services/assistant build from, plus the files tools/migrate compiles
+      # in with #[path] (scripts/nightly/image-cache.test.ts keeps this list complete).
       - Cargo.toml
       - Cargo.lock
       - rust-toolchain.toml
@@ -71,7 +71,14 @@ on:
       - crates/service-kit/**
       - crates/testkit/**
       - crates/webpki-roots-empty/**
-      - services/ingest/src/retention.rs
+      # A dev-dependency of services/certs (tests/workstation_tool.rs).
+      - factory/workstation/**
+      # A dev-dependency of services/telemetry-query (tests/semantic.rs loads the lab dataset),
+      # and what it depends on. services/ingest also holds the files tools/migrate compiles in
+      # with #[path] (src/retention.rs, src/rollup.rs).
+      - tools/lab-dataset/**
+      - edge/agent/**
+      - services/ingest/**
       - deploy/chart/**
       - deploy/cloudnative-pg/**
       - deploy/images/postgres/**
@@ -177,7 +184,12 @@ jobs:
     # Laysi/trustiot-v2#592 adds the assistant image (one more cold build on the AI gateway's and
     # the services' dependencies) and per shape its rollout and one query of pg_stat_activity, with
     # no request to it.
-    timeout-minutes: 85
+    # Laysi/trustiot-v2#535 adds per shape, one shape after the other, one run of the broker
+    # certificate CronJob (bounded at 300 seconds), deleting its Job (120 seconds) and the wait for
+    # the broker to open its gateway port after one restart (300 seconds), a few kubectl auth
+    # can-i questions, and no image: at most 12 minutes per shape, 24 for both, usually one to
+    # three minutes per shape (not measured).
+    timeout-minutes: 110
     permissions:
       contents: read
     env:

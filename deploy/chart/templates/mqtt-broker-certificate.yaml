@@ -1,0 +1,205 @@
+{{- /*
+The MQTT broker's server certificate (Laysi/trustiot-v2#535; README.md, "MQTT broker", "伺服器憑證";
+docs/architecture/secrets.md, 「broker 伺服器憑證私鑰」): a CronJob that runs `migrate
+mqtt-broker-certificate` (tools/migrate/src/mqtt_certificate.rs) on mqttBroker.certificateSchedule.
+Each run reads the Secret "trustiot.mqttBroker.tlsSecret", which templates/passwords.yaml declares
+empty, and keeps a certificate it filled that is for the broker's names, belongs to the key next to
+it and is less than half way through its validity, unless mqttBroker.certificateGeneration is
+higher than the one it recorded. Otherwise it generates an ECDSA P-256 key in memory, sends its
+certificate signing request to the certs service's broker-certs port
+(http://<release>-certs-broker.<namespace>.svc:8082, templates/certs-broker.yaml), checks the
+answer and writes tls.crt and tls.key with one merge patch bound to the Secret's uid. The broker
+pod's trust sidecar sees the new files and has the broker load them (README.md, "MQTT broker").
+Its own objects, all named <release>-mqtt-broker-certificate (the CronJob at most 52 characters):
+- a ServiceAccount whose token only this CronJob's pod mounts (projected, one hour);
+- a Role that lets it get and patch that one Secret: no create (which cannot be limited by name),
+  no list, watch or delete, and no other object. The broker's own Role covers its accounts Secret
+  only, so the broker pod cannot write its certificate; and only this pod reaches the broker-certs
+  port (the certs entry's brokerCallers, "trustiot.mesh.plan"), so no other workload can get a
+  certificate for the broker's name;
+- the CronJob. Its pod mounts no Secret: the key exists in its memory and in the Secret only;
+- an AuthorizationPolicy without rules and a NetworkPolicy without ingress: nobody connects to its
+  pod.
+Rendered while the broker and the certs service are enabled; without the certs service the Secret
+stays empty and the broker serves the cloud services without its gateway port.
+*/ -}}
+{{- if hasKey .Values.services "mqtt-broker-certificate" }}
+{{- fail "services.mqtt-broker-certificate: the name belongs to the CronJob that issues the MQTT broker's server certificate" }}
+{{- end }}
+{{- if and (include "trustiot.mqttBroker.enabled" .) (include "trustiot.certs.enabled" .) }}
+{{- $v := .Values }}
+{{- $broker := $v.mqttBroker }}
+{{- $ctx := dict "root" . "name" "mqtt-broker-certificate" }}
+{{- $account := include "trustiot.componentName" $ctx }}
+{{- /* At most 52 characters, not 63: the CronJob controller appends 11 to name each Job. */}}
+{{- $suffix := printf "-%s" $ctx.name }}
+{{- $name := printf "%s%s" (include "trustiot.fullname" . | trunc (int (sub 52 (len $suffix))) | trimSuffix "-") $suffix }}
+{{- $dir := include "trustiot.migrate.kubeDir" . }}
+{{- /* The migration image is built for arm64 only (decision 5); templates/mqtt-broker.yaml fails
+the render when mqttBroker.nodeSelector names another architecture. */}}
+{{- $nodeSelector := merge (dict "kubernetes.io/arch" "arm64") ($broker.nodeSelector | default dict) }}
+{{- $labels := include "trustiot.componentLabels" $ctx | fromYaml }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ $account }}
+  labels:
+    {{- toYaml $labels | nindent 4 }}
+automountServiceAccountToken: false
+---
+# The server certificate Secret, by name; nothing else. get and patch only: no create (which
+# cannot be limited by name), no list or watch. Only the CronJob's pod mounts this
+# ServiceAccount's token.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ $account }}
+  labels:
+    {{- toYaml $labels | nindent 4 }}
+rules:
+  - apiGroups:
+      - ""
+    resources:
+      - secrets
+    resourceNames:
+      - {{ include "trustiot.mqttBroker.tlsSecret" . }}
+    verbs:
+      - get
+      - patch
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $account }}
+  labels:
+    {{- toYaml $labels | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ $account }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ $account }}
+    namespace: {{ .Release.Namespace }}
+---
+# Forbid: one run at a time; a missed run starts within an hour, and the deadline keeps the
+# controller from giving up after 100 missed schedules. Failed Jobs stay for the operator
+# (kubectl get jobs); a run fails when the Secret holds a certificate (due, expired or unusable)
+# or its annotations record an earlier fill (emptied since), and it cannot write a new one. Only
+# the never-filled Secret makes a run that cannot get a certificate succeed (README.md, "伺服器憑證").
+# `kubectl create job --from=cronjob/<name> <job>` runs it at once, for example right after the
+# root ceremony (README.md, "MQTT broker").
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- toYaml $labels | nindent 4 }}
+spec:
+  schedule: {{ include "trustiot.mqttBroker.certificateSchedule" . | quote }}
+  timeZone: Etc/UTC
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 3600
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    metadata:
+      labels:
+        {{- toYaml $labels | nindent 8 }}
+    spec:
+      parallelism: 1
+      completions: 1
+      podReplacementPolicy: Failed
+      backoffLimit: 2
+      activeDeadlineSeconds: 900
+      template:
+        metadata:
+          labels:
+            {{- $podLabels := deepCopy $labels }}
+            {{- /* Ambient: ztunnel carries the call to the broker-certs port over mTLS with this
+            ServiceAccount's identity, which the port's AuthorizationPolicy admits. */}}
+            {{- $_ := set $podLabels "istio.io/dataplane-mode" "ambient" }}
+            {{- toYaml $podLabels | nindent 12 }}
+        spec:
+          serviceAccountName: {{ $account }}
+          automountServiceAccountToken: false
+          enableServiceLinks: false
+          restartPolicy: Never
+          securityContext:
+            {{- toYaml $v.serviceDefaults.podSecurityContext | nindent 12 }}
+          {{- with $v.global.imagePullSecrets }}
+          imagePullSecrets:
+            {{- range . }}
+            - name: {{ . }}
+            {{- end }}
+          {{- end }}
+          nodeSelector:
+            {{- toYaml $nodeSelector | nindent 12 }}
+          {{- with $broker.tolerations }}
+          tolerations:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          containers:
+            - name: certificate
+              image: {{ include "trustiot.migrate.image" . }}
+              imagePullPolicy: {{ $v.migrate.image.pullPolicy }}
+              args:
+                - mqtt-broker-certificate
+              env:
+                - name: TRUSTIOT__CERTIFICATE__API_URL
+                  value: https://kubernetes.default.svc
+                - name: TRUSTIOT__CERTIFICATE__NAMESPACE
+                  valueFrom:
+                    fieldRef:
+                      fieldPath: metadata.namespace
+                - name: TRUSTIOT__CERTIFICATE__TOKEN_FILE
+                  value: {{ printf "%s/token" $dir }}
+                - name: TRUSTIOT__CERTIFICATE__CA_FILE
+                  value: {{ printf "%s/ca.crt" $dir }}
+                - name: TRUSTIOT__CERTIFICATE__SECRET
+                  value: {{ include "trustiot.mqttBroker.tlsSecret" . }}
+                - name: TRUSTIOT__CERTIFICATE__CERTS_URL
+                  value: {{ printf "http://%s.%s.svc:%s" (include "trustiot.componentName" (dict "root" . "name" "certs-broker")) .Release.Namespace (include "trustiot.certs.brokerServicePort" .) | quote }}
+                - name: TRUSTIOT__CERTIFICATE__SERVICE_NAME
+                  value: {{ include "trustiot.mqttBroker.serviceHost" . | quote }}
+                - name: TRUSTIOT__CERTIFICATE__GENERATION
+                  value: {{ include "trustiot.mqttBroker.certificateGeneration" . | quote }}
+              resources:
+                {{- toYaml $v.migrate.resources | nindent 16 }}
+              securityContext:
+                {{- toYaml $v.serviceDefaults.securityContext | nindent 16 }}
+              volumeMounts:
+                - name: migrate-kube-api
+                  mountPath: {{ $dir }}
+                  readOnly: true
+          volumes:
+            - {{ include "trustiot.migrate.kubeApiVolume" . | indent 14 | trim }}
+---
+# Nothing connects to the certificate pod: no caller in the mesh (an ALLOW policy without rules
+# refuses every connection) and no port in the NetworkPolicy.
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: {{ $account }}
+  labels:
+    {{- toYaml $labels | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "trustiot.selectorLabels" $ctx | nindent 6 }}
+  action: ALLOW
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ $account }}
+  labels:
+    {{- toYaml $labels | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "trustiot.selectorLabels" $ctx | nindent 6 }}
+  policyTypes:
+    - Ingress
+  ingress: []
+{{- end }}
