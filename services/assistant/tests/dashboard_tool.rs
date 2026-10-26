@@ -10,7 +10,8 @@
 //!   check service's text;
 //! - the tool's refusals: another conversation's or user's draft, another tenant's dashboard, a
 //!   stale or missing `base_version`, the 7th write of a question, oversized or malformed input;
-//! - a saved dashboard becomes this conversation's draft, once; an archived one is refused;
+//! - a saved dashboard becomes this conversation's draft, once; an archived one is refused; a
+//!   rebase onto a newer saved version needs this question to have read that version;
 //! - failed datasets are problems (SQL refusals with `telemetry_sql`'s hints), a revoked session
 //!   ends the call, and a question with too little time left does not start a write;
 //! - a question runs each dataset (source and `max_rows`) once.
@@ -1006,6 +1007,114 @@ async fn a_saved_dashboard_becomes_this_conversations_draft_once() {
         .await,
     );
     assert!(archived.contains("archived"), "{archived}");
+}
+
+#[tokio::test]
+async fn a_rebase_names_a_saved_version_this_question_read() {
+    let Some(setup) = setup().await else {
+        return;
+    };
+    let editor = setup.world.person(setup.owner.tenant(), TenantRole::Editor);
+    let (editor_conversation, editor_draft, saved) =
+        setup.world.saved(&editor, &Content::new("Plant")).await;
+
+    // The owner's question takes a draft of the saved dashboard's version 1.
+    let output = call(
+        &setup.tool,
+        &setup.own_question(),
+        json!({"action": "write", "dashboard_id": saved, "base_version": 1,
+            "title": "Plant, by line"}),
+    )
+    .await
+    .expect("the write");
+    let result = json_of(&output);
+    assert!(!output.is_error, "{result}");
+    let draft: DashboardId = serde_json::from_value(result["dashboard_id"].clone()).expect("ID");
+    // The editor publishes versions 2 and 3 meanwhile.
+    for (base, title) in [(1, "Plant 2"), (2, "Plant 3")] {
+        setup
+            .world
+            .write_draft(
+                &editor,
+                editor_conversation,
+                editor_draft,
+                base,
+                None,
+                &Content::new(title),
+            )
+            .await
+            .expect("the editor's next version");
+        setup
+            .world
+            .publish(&editor, editor_draft, base + 1)
+            .await
+            .expect("the editor publishes it");
+    }
+
+    // A question that has not read version 3 cannot say it merged it: refused before anything
+    // runs, and nothing is written.
+    let question = setup.own_question();
+    let rebase = json!({"action": "write", "dashboard_id": draft, "base_version": 1,
+        "rebase_saved_version": 3, "title": "Plant, by line, merged"});
+    let message = refused(call(&setup.tool, &question, rebase.clone()).await);
+    assert!(
+        message.contains(&saved.to_string()) && message.contains("read"),
+        "{message}"
+    );
+    // Neither does reading version 2, nor reading version 3 in another question.
+    let read = |version: Option<u32>| {
+        let mut input = json!({"action": "read", "dashboard_id": saved});
+        if let Some(version) = version {
+            input["version"] = json!(version);
+        }
+        input
+    };
+    call(&setup.tool, &question, read(Some(2)))
+        .await
+        .expect("read version 2");
+    call(&setup.tool, &setup.own_question(), read(None))
+        .await
+        .expect("another question reads version 3");
+    refused(call(&setup.tool, &question, rebase.clone()).await);
+    // Reading a draft names no saved version either.
+    call(
+        &setup.tool,
+        &question,
+        json!({"action": "read", "dashboard_id": draft}),
+    )
+    .await
+    .expect("read the draft");
+    refused(call(&setup.tool, &question, rebase.clone()).await);
+    assert_eq!(setup.latest(&setup.owner, draft).await.0, 1);
+    assert_eq!(
+        setup.check.requests().len(),
+        1,
+        "only the first write was checked"
+    );
+
+    // Once this question read version 3, the merged write is saved and the draft is based on it.
+    call(&setup.tool, &question, read(None))
+        .await
+        .expect("read the latest version");
+    let output = call(&setup.tool, &question, rebase)
+        .await
+        .expect("the merged write");
+    let result = json_of(&output);
+    assert!(!output.is_error, "{result}");
+    assert_eq!(result["version"], 2);
+    let read = json_of(
+        &call(
+            &setup.tool,
+            &question,
+            json!({"action": "read", "dashboard_id": draft}),
+        )
+        .await
+        .expect("read the draft"),
+    );
+    assert_eq!(
+        read["taken_from"],
+        json!({"dashboard_id": saved, "version": 3})
+    );
 }
 
 #[tokio::test]

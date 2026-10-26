@@ -28,6 +28,8 @@ use uuid::Uuid;
 const INSUFFICIENT_PRIVILEGE: &str = "42501";
 /// SQLSTATE `foreign_key_violation`.
 const FOREIGN_KEY_VIOLATION: &str = "23503";
+/// SQLSTATE `check_violation`.
+const CHECK_VIOLATION: &str = "23514";
 
 /// The SQLSTATE `sql` fails with when the service role runs it in a transaction of the
 /// person's tenant with `binds` as `$1`, `$2`, ..., or `None` when it succeeds. The
@@ -146,7 +148,7 @@ async fn publishing_adds_versions_to_the_saved_dashboard_and_refuses_when_it_cha
         draft.dashboard.saved,
         Some(SavedBase {
             dashboard_id: saved,
-            version: 1
+            version: Some(1)
         })
     );
 
@@ -284,7 +286,7 @@ async fn publishing_adds_versions_to_the_saved_dashboard_and_refuses_when_it_cha
         "{restored:?}"
     );
 
-    // Unarchived, it takes versions again; Alice's draft is still based on version 3.
+    // Unarchived, it takes versions again; Alice's version 3 is still based on version 2.
     let mut tx = world.tx(&alice).await;
     let unarchived = store::set_archived(&mut tx, alice.requester(), saved, false).await;
     let unarchived = finish(tx, unarchived).await.expect("unarchive");
@@ -754,10 +756,14 @@ async fn the_service_role_cannot_change_what_was_written() {
     let (_, _, other_saved) = world.saved(&editor, &Content::new("Other")).await;
 
     let refusals: [(&'static str, Vec<DashboardId>); 9] = [
-        // No UPDATE of a version, no DELETE or TRUNCATE of either table.
+        // No UPDATE of a version (its base included), no DELETE or TRUNCATE of either table.
         (
             "UPDATE assistant.dashboard_versions SET title = 'x' WHERE dashboard_id = $1::uuid",
             vec![saved],
+        ),
+        (
+            "UPDATE assistant.dashboard_versions SET base_saved_version = 2 WHERE dashboard_id = $1::uuid",
+            vec![draft],
         ),
         (
             "DELETE FROM assistant.dashboard_versions WHERE dashboard_id = $1::uuid",
@@ -780,12 +786,8 @@ async fn the_service_role_cannot_change_what_was_written() {
             "UPDATE assistant.dashboards SET created_by = tenant_id WHERE dashboard_id = $1::uuid",
             vec![draft],
         ),
-        // The triggers: a draft's base only rises, its saved dashboard is set once, and a
-        // saved dashboard's archive time is not set on a draft.
-        (
-            "UPDATE assistant.dashboards SET base_saved_version = 1 WHERE dashboard_id = $1::uuid",
-            vec![draft],
-        ),
+        // The trigger: a draft's saved dashboard is set once, and with it its base is never
+        // cleared.
         (
             "UPDATE assistant.dashboards SET saved_dashboard_id = $2::uuid WHERE dashboard_id = $1::uuid",
             vec![draft, other_saved],
@@ -804,6 +806,46 @@ async fn the_service_role_cannot_change_what_was_written() {
             "{sql}"
         );
     }
+    // A draft's base may go down or become none (a restore brings back an older version's
+    // base): publishing compares the base of the version it publishes, which never changes. A
+    // draft without a saved dashboard has no base.
+    for sql in [
+        "UPDATE assistant.dashboards SET base_saved_version = 1 WHERE dashboard_id = $1::uuid",
+        "UPDATE assistant.dashboards SET base_saved_version = NULL WHERE dashboard_id = $1::uuid",
+    ] {
+        assert_eq!(
+            as_service_role(&world, &editor, sql, &[draft]).await,
+            None,
+            "{sql}"
+        );
+    }
+    let unsaved = world
+        .create_draft(&editor, conversation, &Content::new("Unsaved"))
+        .await
+        .dashboard_id;
+    assert_eq!(
+        as_service_role(
+            &world,
+            &editor,
+            "UPDATE assistant.dashboards SET base_saved_version = 1 WHERE dashboard_id = $1::uuid",
+            &[unsaved],
+        )
+        .await
+        .as_deref(),
+        Some(CHECK_VIOLATION)
+    );
+    // A published version is a saved dashboard's and has no base of its own.
+    let published_with_a_base = "INSERT INTO assistant.dashboard_versions
+        (tenant_id, dashboard_id, version, origin, runtime, title, spec, page, created_by,
+         base_saved_version)
+    SELECT tenant_id, dashboard_id, 3, 'publish', 1, 'Three', '{}', '<p></p>', created_by, 2
+    FROM assistant.dashboards WHERE dashboard_id = $1::uuid";
+    assert_eq!(
+        as_service_role(&world, &editor, published_with_a_base, &[saved])
+            .await
+            .as_deref(),
+        Some(CHECK_VIOLATION)
+    );
     // The archive time is the database's clock: a time the role writes is replaced.
     let archived = "UPDATE assistant.dashboards SET archived_at = '2000-01-01T00:00:00Z'
         WHERE dashboard_id = $1::uuid RETURNING archived_at";

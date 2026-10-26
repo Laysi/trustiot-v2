@@ -10,18 +10,26 @@
 --   the tenant sees it, and it has no conversation, so purging one never touches it. It is only
 --   archived and unarchived, never deleted (MS3).
 --
--- A draft remembers the saved dashboard it was taken from or published to, and that dashboard's
--- version it is based on: publishing is refused when the saved dashboard has a newer version
--- (services/assistant/src/dashboards/store.rs).
+-- A draft remembers the saved dashboard it was taken from or published to. Each version of the
+-- draft remembers the version of that dashboard its content is based on (or none), and
+-- publishing a version is refused unless the saved dashboard's latest version is that one
+-- (services/assistant/src/dashboards/store.rs). The draft's row keeps the base its next version
+-- starts from.
 --
 -- Who may see a row is the service's decision (store.rs, `conversation_access`): row-level
 -- security below only keeps tenants apart, like every tenant table
 -- (crates/service-kit/sql/tenant-table.sql).
 --
 -- The service role reads both tables, inserts the columns a write names, and updates only a
--- draft's saved dashboard and base version and a saved dashboard's archive time; it has no
--- DELETE. The triggers hold every role, the owner included, to what those updates may do, and
--- keep versions unchanged once written.
+-- draft's saved dashboard and the base its next version starts from, and a saved dashboard's
+-- archive time; it has no DELETE. The triggers hold every role, the owner included, to what
+-- those updates may do, and keep versions unchanged once written, their bases included.
+--
+-- This file was changed in place only before Laysi/trustiot-v2#150 merged, when no release had
+-- applied it. A released file never changes (src/schema.rs): the migration Job records each
+-- file's SHA-256 and refuses a file that changed after it was applied, and the service is not
+-- ready until every file is applied unchanged, so a database that applied an earlier draft of
+-- this file stops at the migration instead of serving with it.
 
 -- One row per dashboard.
 CREATE TABLE assistant.dashboards (
@@ -32,7 +40,9 @@ CREATE TABLE assistant.dashboards (
     -- A draft's conversation; NULL for a saved dashboard.
     conversation_id uuid,
     -- A draft's saved dashboard (the one it was taken from or published to) and the version of
-    -- it the draft is based on; NULL until it has one, and always NULL for a saved dashboard.
+    -- it the draft's next version starts from (NULL when that is none of its versions); both
+    -- NULL until it has one, and always NULL for a saved dashboard. Publishing compares the base
+    -- of the version published (dashboard_versions.base_saved_version), not this one.
     saved_dashboard_id uuid,
     base_saved_version integer CHECK (base_saved_version BETWEEN 1 AND 10000),
     -- Always 'saved': with the foreign key below it makes `saved_dashboard_id` name a saved
@@ -50,7 +60,7 @@ CREATE TABLE assistant.dashboards (
     CHECK ((kind = 'draft') = (conversation_id IS NOT NULL)),
     CHECK (kind = 'draft' OR (saved_dashboard_id IS NULL AND base_saved_version IS NULL)),
     CHECK (kind = 'saved' OR archived_at IS NULL),
-    CHECK ((saved_dashboard_id IS NULL) = (base_saved_version IS NULL)),
+    CHECK (saved_dashboard_id IS NOT NULL OR base_saved_version IS NULL),
     FOREIGN KEY (tenant_id, conversation_id)
         REFERENCES assistant.conversations (tenant_id, conversation_id) ON DELETE CASCADE,
     -- NO ACTION: saved dashboards are never deleted (MS3), and deleting a draft never touches
@@ -88,6 +98,12 @@ CREATE TABLE assistant.dashboard_versions (
     origin text NOT NULL CHECK (origin IN ('agent', 'publish', 'restore')),
     -- For a restore, the version restored.
     restored_from integer,
+    -- For a version of a draft: the version of the draft's saved dashboard this version's
+    -- content is based on, which publishing it compares with the saved dashboard's latest. NULL
+    -- when it is based on none: a draft's versions written before its first publish gave it a
+    -- saved dashboard (and copies restored from them), which are then never published over
+    -- that dashboard; and a saved dashboard's versions.
+    base_saved_version integer CHECK (base_saved_version BETWEEN 1 AND 10000),
     -- The sandbox runtime the page was checked with and runs with
     -- (contract::api::dashboard::RuntimeVersion).
     runtime smallint NOT NULL CHECK (runtime >= 1),
@@ -110,6 +126,8 @@ CREATE TABLE assistant.dashboard_versions (
     CHECK ((origin = 'restore') = (restored_from IS NOT NULL)),
     CHECK (restored_from IS NULL OR restored_from BETWEEN 1 AND version - 1),
     CHECK ((origin = 'agent') = (run_id IS NOT NULL)),
+    -- A published version is a saved dashboard's: it has no base of its own.
+    CHECK (origin <> 'publish' OR base_saved_version IS NULL),
     -- The spec and the page together: at most 56 KiB, so a whole version fits one tool result.
     CHECK (octet_length(spec) + octet_length(page) <= 57344),
     FOREIGN KEY (tenant_id, dashboard_id)
@@ -123,8 +141,11 @@ CREATE TABLE assistant.dashboard_versions (
 );
 
 -- What an update of a dashboard may change, for every role: a draft's saved dashboard is set
--- once, its base version only rises, and a saved dashboard's archive time is the database's
--- clock when it was archived (archiving it again keeps that time) or NULL. Nothing else changes.
+-- once, and a saved dashboard's archive time is the database's clock when it was archived
+-- (archiving it again keeps that time) or NULL. Nothing else changes. A draft's base version
+-- may go down or become NULL: restoring an older version of the draft brings back that
+-- version's base. Publishing reads the base of the version it publishes, which no update
+-- changes.
 -- An invoker's function with a pinned search_path, like certs.gateway_registrations_guard;
 -- ERRCODE 42501 (insufficient_privilege). The generated column is left out of the comparison:
 -- a BEFORE trigger sees it before it is computed.
@@ -145,11 +166,6 @@ BEGIN
         RAISE EXCEPTION 'dashboard %: a draft''s saved dashboard is set once', OLD.dashboard_id
             USING ERRCODE = 'insufficient_privilege';
     END IF;
-    IF OLD.base_saved_version IS NOT NULL
-        AND (NEW.base_saved_version IS NULL OR NEW.base_saved_version < OLD.base_saved_version) THEN
-        RAISE EXCEPTION 'dashboard %: a draft''s base version only rises', OLD.dashboard_id
-            USING ERRCODE = 'insufficient_privilege';
-    END IF;
     IF NEW.archived_at IS NOT NULL THEN
         NEW.archived_at := coalesce(OLD.archived_at, now());
     END IF;
@@ -163,8 +179,8 @@ CREATE TRIGGER dashboards_guard
     BEFORE UPDATE ON assistant.dashboards
     FOR EACH ROW EXECUTE FUNCTION assistant.dashboards_guard();
 
--- A version is never changed, by any role. Removing a draft with its conversation still
--- removes its versions (a DELETE, not an UPDATE).
+-- A version is never changed, by any role, its base included. Removing a draft with its
+-- conversation still removes its versions (a DELETE, not an UPDATE).
 CREATE FUNCTION assistant.dashboard_versions_guard() RETURNS trigger
     LANGUAGE plpgsql
     SET search_path = pg_catalog, pg_temp
@@ -201,5 +217,6 @@ GRANT INSERT (tenant_id, dashboard_id, kind, conversation_id, saved_dashboard_id
 GRANT UPDATE (saved_dashboard_id, base_saved_version, archived_at)
     ON assistant.dashboards TO assistant_app;
 GRANT SELECT ON assistant.dashboard_versions TO assistant_app;
-GRANT INSERT (tenant_id, dashboard_id, version, origin, restored_from, runtime, title,
-    description, spec, page, created_by, run_id) ON assistant.dashboard_versions TO assistant_app;
+GRANT INSERT (tenant_id, dashboard_id, version, origin, restored_from, base_saved_version,
+    runtime, title, description, spec, page, created_by, run_id)
+    ON assistant.dashboard_versions TO assistant_app;

@@ -17,7 +17,19 @@
 //!
 //! Writes lock the dashboard's row (`FOR UPDATE`) before they read its latest version, so the
 //! writes of one dashboard queue up and a write based on an older version is refused
-//! ([`StoreError::VersionConflict`], [`StoreError::SavedChanged`]). Publishing locks the draft
+//! ([`StoreError::VersionConflict`], [`StoreError::SavedChanged`]).
+//!
+//! Each version of a draft records the version of the draft's saved dashboard its content is
+//! based on, and never changes; a version written before the draft's first publish is based on
+//! none. Publishing a version requires the saved dashboard's latest version to be that base, so
+//! no older version of the draft, no restored copy of one, and no version written before the
+//! first publish is published over a version of the saved dashboard it does not include. The
+//! draft's row keeps the base its next version starts from: the tool's write carries it on (or
+//! moves it to the version its question merged in), a restore sets it to the restored version's
+//! base, and publishing the draft's latest version sets it to the version published (the first
+//! publish of an older version sets none).
+//!
+//! Publishing locks the draft
 //! first and then its saved dashboard; nothing locks in the other order. Versions are only ever
 //! added, numbered from 1 without gaps; restoring and publishing copy a version in the database,
 //! so a copy is byte for byte its source. Who may publish, restore and archive is checked here,
@@ -149,6 +161,12 @@ FROM assistant.dashboard_versions a
 JOIN assistant.dashboard_versions b ON b.tenant_id = a.tenant_id AND b.dashboard_id = a.dashboard_id
 WHERE a.tenant_id = $1::uuid AND a.dashboard_id = $2::uuid AND a.version = $3 AND b.version = $4";
 
+/// `$1` tenant, `$2` dashboard, `$3` version: the saved dashboard's version it is based on
+/// (NULL when it has none). No row when the version does not exist.
+const VERSION_BASE: &str = "SELECT base_saved_version
+FROM assistant.dashboard_versions
+WHERE tenant_id = $1::uuid AND dashboard_id = $2::uuid AND version = $3";
+
 /// `$1` tenant, `$2` dashboard, `$3` version: its spec.
 const SELECT_SPEC: &str = "SELECT spec
 FROM assistant.dashboard_versions
@@ -178,23 +196,26 @@ const INSERT_DASHBOARD: &str = "INSERT INTO assistant.dashboards
 VALUES ($1::uuid, $2::uuid, $3, $4::uuid, $5::uuid, $6, $7::uuid)";
 
 /// `$1` tenant, `$2` dashboard, `$3` version, `$4` runtime, `$5` title, `$6` description, `$7`
-/// spec, `$8` page, `$9` the user, `$10` the question's run: a version the tool wrote.
+/// spec, `$8` page, `$9` the user, `$10` the question's run, `$11` the saved dashboard's
+/// version it is based on (or NULL): a version the tool wrote.
 const INSERT_AGENT_VERSION: &str = "INSERT INTO assistant.dashboard_versions
     (tenant_id, dashboard_id, version, origin, runtime, title, description, spec, page,
-     created_by, run_id)
-VALUES ($1::uuid, $2::uuid, $3, 'agent', $4, $5, $6, $7, $8, $9::uuid, $10::uuid)";
+     created_by, run_id, base_saved_version)
+VALUES ($1::uuid, $2::uuid, $3, 'agent', $4, $5, $6, $7, $8, $9::uuid, $10::uuid, $11)";
 
 /// `$1` tenant, `$2` source dashboard, `$3` source version, `$4` target dashboard, `$5` target
-/// version, `$6` origin, `$7` the version restored (or NULL), `$8` the user: a copy of a
-/// version, its runtime, title, description, spec and page byte for byte.
+/// version, `$6` origin, `$7` the version restored (or NULL), `$8` the user, `$9` the saved
+/// dashboard's version the copy is based on (or NULL): a copy of a version, its runtime, title,
+/// description, spec and page byte for byte.
 const COPY_VERSION: &str = "INSERT INTO assistant.dashboard_versions
     (tenant_id, dashboard_id, version, origin, restored_from, runtime, title, description, spec,
-     page, created_by)
-SELECT tenant_id, $4::uuid, $5, $6, $7, runtime, title, description, spec, page, $8::uuid
+     page, created_by, base_saved_version)
+SELECT tenant_id, $4::uuid, $5, $6, $7, runtime, title, description, spec, page, $8::uuid, $9
 FROM assistant.dashboard_versions
 WHERE tenant_id = $1::uuid AND dashboard_id = $2::uuid AND version = $3";
 
-/// `$1` tenant, `$2` draft, `$3` saved dashboard, `$4` its version.
+/// `$1` tenant, `$2` draft, `$3` saved dashboard, `$4` its version the draft's next version
+/// starts from (or NULL).
 const SET_SAVED_BASE: &str = "UPDATE assistant.dashboards
 SET saved_dashboard_id = $3::uuid, base_saved_version = $4
 WHERE tenant_id = $1::uuid AND dashboard_id = $2::uuid";
@@ -223,8 +244,9 @@ pub enum StoreError {
     /// The write was based on a version that is no longer the latest.
     #[error("the dashboard has a newer version: {latest}")]
     VersionConflict { latest: u32 },
-    /// Publishing a draft whose saved dashboard has a version newer than the draft's base.
-    #[error("the saved dashboard changed since the draft's base: {latest}")]
+    /// Publishing a draft's version when the saved dashboard's latest version is not the one
+    /// that version is based on (a newer one, or the version is based on none).
+    #[error("the saved dashboard changed since the published version's base: {latest}")]
     SavedChanged { latest: u32 },
     /// The saved dashboard is archived: no version is added to it, and no draft is taken from it.
     #[error("the dashboard is archived")]
@@ -244,7 +266,8 @@ pub enum StoreError {
     /// The conversation already has a draft of this saved dashboard: write into that one.
     #[error("the conversation already has a draft of this saved dashboard")]
     DraftExists { draft_id: DashboardId },
-    /// A draft's new base is not a version of its saved dashboard at or after its current base.
+    /// A draft's new base is not a version of its saved dashboard at or after the base its next
+    /// version starts from.
     #[error("the new base is not a version of the draft's saved dashboard after its base")]
     InvalidRebase,
     /// The dashboard has [`MAX_VERSIONS`] versions.
@@ -478,7 +501,7 @@ pub async fn create_draft(
         author.principal.user_id,
     )
     .await?;
-    insert_agent_version(tx, tenant, id, 1, author, content, &spec).await?;
+    insert_agent_version(tx, tenant, (id, 1), None, author, content, &spec).await?;
     Ok(VersionCreated {
         dashboard_id: id,
         version: 1,
@@ -486,9 +509,11 @@ pub async fn create_draft(
 }
 
 /// Adds `content` as a new version of the draft `draft_id` of the author's conversation
-/// `conversation_id`, when its latest version is `base_version`. With `rebase`, the draft is
-/// based on that version of its saved dashboard from now on: the author's question merged the
-/// saved dashboard's newer versions into this content, so publishing it no longer conflicts.
+/// `conversation_id`, when its latest version is `base_version`. The new version is based on the
+/// saved dashboard's version the draft's next version starts from (or none), or with `rebase` on
+/// that version of the saved dashboard, which the draft's next versions then start from: the
+/// author's question read it and merged its changes into this content, so publishing it no
+/// longer conflicts.
 ///
 /// # Errors
 ///
@@ -525,15 +550,31 @@ pub async fn write_draft(
         return Err(StoreError::VersionConflict { latest });
     }
     let next = next_version(latest)?;
-    if let Some(new_base) = rebase {
-        let saved = row.saved.ok_or(StoreError::InvalidRebase)?;
-        let saved_latest = latest_version(tx, tenant, saved.dashboard_id).await?;
-        if new_base < saved.version || new_base > saved_latest {
-            return Err(StoreError::InvalidRebase);
+    let based_on = match (row.saved, rebase) {
+        (saved, None) => saved.and_then(|saved| saved.version),
+        (None, Some(_)) => return Err(StoreError::InvalidRebase),
+        (Some(saved), Some(new_base)) => {
+            let saved_latest = latest_version(tx, tenant, saved.dashboard_id).await?;
+            if new_base == 0
+                || saved.version.is_some_and(|base| new_base < base)
+                || new_base > saved_latest
+            {
+                return Err(StoreError::InvalidRebase);
+            }
+            set_saved_base(tx, tenant, draft_id, saved.dashboard_id, Some(new_base)).await?;
+            Some(new_base)
         }
-        set_saved_base(tx, tenant, draft_id, saved.dashboard_id, new_base).await?;
-    }
-    insert_agent_version(tx, tenant, draft_id, next, author, content, &spec).await?;
+    };
+    insert_agent_version(
+        tx,
+        tenant,
+        (draft_id, next),
+        based_on,
+        author,
+        content,
+        &spec,
+    )
+    .await?;
     Ok(VersionCreated {
         dashboard_id: draft_id,
         version: next,
@@ -542,7 +583,7 @@ pub async fn write_draft(
 
 /// Takes a draft of the saved dashboard `saved_id` into the author's conversation, based on its
 /// version `base_saved_version` (the one the question read), with `content` as the draft's
-/// version 1.
+/// version 1, which is based on it.
 ///
 /// # Errors
 ///
@@ -598,12 +639,21 @@ pub async fn fork(
         Some(conversation_id),
         Some(SavedBase {
             dashboard_id: saved_id,
-            version: base_saved_version,
+            version: Some(base_saved_version),
         }),
         author.principal.user_id,
     )
     .await?;
-    insert_agent_version(tx, tenant, id, 1, author, content, &spec).await?;
+    insert_agent_version(
+        tx,
+        tenant,
+        (id, 1),
+        Some(base_saved_version),
+        author,
+        content,
+        &spec,
+    )
+    .await?;
     Ok(VersionCreated {
         dashboard_id: id,
         version: 1,
@@ -611,15 +661,16 @@ pub async fn fork(
 }
 
 /// Publishes the draft's `version`: the first time as version 1 of a new saved dashboard, which
-/// the requester then made, later as the next version of the saved dashboard the draft is based
-/// on. The draft is then based on the version written.
+/// the requester then made, later as the next version of the draft's saved dashboard. The
+/// draft's next version then starts from the version written when `version` is the draft's
+/// latest; after the first publish of an older version it starts from none.
 ///
 /// Checked in this order: the draft can be seen ([`StoreError::NotFound`]); the requester is an
 /// editor or admin ([`StoreError::EditorRequired`]); it is a draft
 /// ([`StoreError::DraftRequired`]); the requester owns its conversation
 /// ([`StoreError::OwnerRequired`]); the version exists ([`StoreError::VersionNotFound`]); the
-/// saved dashboard is not archived ([`StoreError::Archived`]) and has no version newer than the
-/// draft's base ([`StoreError::SavedChanged`]); it has room for one more
+/// saved dashboard is not archived ([`StoreError::Archived`]) and its latest version is the one
+/// `version` is based on ([`StoreError::SavedChanged`]); it has room for one more
 /// ([`StoreError::TooManyVersions`]). Then `admit` is asked, with the kind of dashboard the
 /// version goes to, whether the version may be added ([`StoreError::Limited`]), and it is
 /// written.
@@ -664,7 +715,7 @@ pub async fn publish(
                 return Err(StoreError::Archived);
             }
             let saved_latest = latest_version(tx, tenant, base.dashboard_id).await?;
-            if saved_latest != base.version {
+            if version_base(tx, tenant, draft_id, version).await? != Some(saved_latest) {
                 return Err(StoreError::SavedChanged {
                     latest: saved_latest,
                 });
@@ -673,6 +724,7 @@ pub async fn publish(
         }
     };
     admit(DashboardKind::Saved).map_err(limited)?;
+    let first_publish = saved_id.is_none();
     let saved_id = match saved_id {
         Some(saved_id) => saved_id,
         None => {
@@ -686,11 +738,18 @@ pub async fn publish(
         tenant,
         (draft_id, version),
         (saved_id, next),
-        VersionOrigin::Publish,
+        (VersionOrigin::Publish, None),
         user,
     )
     .await?;
-    set_saved_base(tx, tenant, draft_id, saved_id, next).await?;
+    // The draft's latest version is now the saved dashboard's latest: its next version starts
+    // from there. After publishing an older version it keeps the base it had; the first publish
+    // of an older version gives it none, since its latest version was written before.
+    let latest_published = version == draft_latest;
+    if first_publish || latest_published {
+        let next_base = latest_published.then_some(next);
+        set_saved_base(tx, tenant, draft_id, saved_id, next_base).await?;
+    }
     Ok(VersionCreated {
         dashboard_id: saved_id,
         version: next,
@@ -698,7 +757,8 @@ pub async fn publish(
 }
 
 /// Adds a copy of `from_version` as the dashboard's next version, when its latest version is
-/// `base_version`.
+/// `base_version`. A copy in a draft is based on the version `from_version` is based on (or
+/// none), and the draft's next version starts from it too.
 ///
 /// Checked in this order: the dashboard can be seen ([`StoreError::NotFound`]); for a saved
 /// dashboard the requester is an editor or admin ([`StoreError::EditorRequired`]), for a draft
@@ -746,16 +806,23 @@ pub async fn restore(
         return Err(StoreError::Unchanged);
     }
     let next = next_version(latest)?;
+    let based_on = match row.saved {
+        Some(_) => version_base(tx, tenant, dashboard_id, from_version).await?,
+        None => None,
+    };
     admit(row.kind).map_err(limited)?;
     copy_version(
         tx,
         tenant,
         (dashboard_id, from_version),
         (dashboard_id, next),
-        VersionOrigin::Restore,
+        (VersionOrigin::Restore, based_on),
         requester.principal.user_id,
     )
     .await?;
+    if let Some(saved) = row.saved {
+        set_saved_base(tx, tenant, dashboard_id, saved.dashboard_id, based_on).await?;
+    }
     Ok(VersionCreated {
         dashboard_id,
         version: next,
@@ -1091,6 +1158,25 @@ async fn latest_version(
     u32::try_from(latest).map_err(|_| StoreError::Corrupt("a negative version"))
 }
 
+/// The saved dashboard's version a version of a draft is based on ([`VERSION_BASE`]), or none;
+/// [`StoreError::VersionNotFound`] when the version does not exist.
+async fn version_base(
+    tx: &mut TenantTransaction,
+    tenant: TenantId,
+    dashboard_id: DashboardId,
+    version: u32,
+) -> Result<Option<u32>, StoreError> {
+    let base: Option<i32> = sqlx::query(VERSION_BASE)
+        .bind(tenant.to_string())
+        .bind(dashboard_id.to_string())
+        .bind(version_column(version)?)
+        .fetch_optional(&mut **tx)
+        .await?
+        .ok_or(StoreError::VersionNotFound)?
+        .try_get("base_saved_version")?;
+    base.map(version_number).transpose()
+}
+
 /// Whether two versions of the dashboard hold the same content; [`StoreError::VersionNotFound`]
 /// when either does not exist.
 async fn same_content(
@@ -1129,7 +1215,8 @@ async fn insert_dashboard(
         .bind(saved.map(|saved| saved.dashboard_id.to_string()))
         .bind(
             saved
-                .map(|saved| version_column(saved.version))
+                .and_then(|saved| saved.version)
+                .map(version_column)
                 .transpose()?,
         )
         .bind(created_by.to_string())
@@ -1144,11 +1231,12 @@ async fn insert_dashboard(
     Ok(())
 }
 
+/// The tool's version `version` of `id`, based on `based_on` of the draft's saved dashboard.
 async fn insert_agent_version(
     tx: &mut TenantTransaction,
     tenant: TenantId,
-    id: DashboardId,
-    version: u32,
+    (id, version): (DashboardId, u32),
+    based_on: Option<u32>,
     author: Author,
     content: &NewVersion<'_>,
     spec: &str,
@@ -1167,18 +1255,21 @@ async fn insert_agent_version(
         .bind(content.page)
         .bind(author.principal.user_id.to_string())
         .bind(author.run_id.to_string())
+        .bind(based_on.map(version_column).transpose()?)
         .execute(&mut **tx)
         .await
         .map_err(version_insert_error)?;
     Ok(())
 }
 
+/// Copies `source_version` of `source` as `target_version` of `target`, made by `origin` and
+/// based on `based_on` of a draft's saved dashboard.
 async fn copy_version(
     tx: &mut TenantTransaction,
     tenant: TenantId,
     (source, source_version): (DashboardId, u32),
     (target, target_version): (DashboardId, u32),
-    origin: VersionOrigin,
+    (origin, based_on): (VersionOrigin, Option<u32>),
     created_by: UserId,
 ) -> Result<(), StoreError> {
     let restored_from = (origin == VersionOrigin::Restore)
@@ -1193,6 +1284,7 @@ async fn copy_version(
         .bind(origin_name(origin))
         .bind(restored_from)
         .bind(created_by.to_string())
+        .bind(based_on.map(version_column).transpose()?)
         .execute(&mut **tx)
         .await
         .map_err(version_insert_error)?;
@@ -1208,13 +1300,13 @@ async fn set_saved_base(
     tenant: TenantId,
     draft_id: DashboardId,
     saved_id: DashboardId,
-    version: u32,
+    version: Option<u32>,
 ) -> Result<(), StoreError> {
     sqlx::query(SET_SAVED_BASE)
         .bind(tenant.to_string())
         .bind(draft_id.to_string())
         .bind(saved_id.to_string())
-        .bind(version_column(version)?)
+        .bind(version.map(version_column).transpose()?)
         .execute(&mut **tx)
         .await
         .map_err(|error| match sqlstate(&error).as_deref() {
@@ -1319,13 +1411,13 @@ fn saved_base(row: &PgRow) -> Result<Option<SavedBase>, StoreError> {
     let id = optional_uuid(row, "saved_dashboard_id")?;
     let version: Option<i32> = row.try_get("base_saved_version")?;
     match (id, version) {
-        (Some(id), Some(version)) => Ok(Some(SavedBase {
+        (Some(id), version) => Ok(Some(SavedBase {
             dashboard_id: DashboardId::from_uuid(id),
-            version: version_number(version)?,
+            version: version.map(version_number).transpose()?,
         })),
         (None, None) => Ok(None),
-        _ => Err(StoreError::Corrupt(
-            "a draft's saved dashboard without its version",
+        (None, Some(_)) => Err(StoreError::Corrupt(
+            "a draft's base version without its saved dashboard",
         )),
     }
 }

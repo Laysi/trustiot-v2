@@ -8,7 +8,8 @@
 //!   dashboard or archive; a draft is its conversation's owner's, and anyone else in the tenant
 //!   or outside it gets the same 404 as for a dashboard that does not exist.
 //! - Versions: each write adds one, old ones stay readable, a restore adds a copy, and publishing
-//!   over a saved dashboard that changed is a 409.
+//!   over a saved dashboard that changed is a 409, judged by the base of the version published,
+//!   which a restored copy keeps.
 //! - Dataset runs act as the viewer: the token telemetry-query gets is the viewer's, with the
 //!   viewer's tenant and role. More rows than the dataset allows is refused with the limit; the
 //!   caps refuse the 61st run in a minute and a third at a time per tenant while other tenants
@@ -693,19 +694,44 @@ async fn versions_are_added_kept_restored_and_publishing_over_a_change_conflicts
     assert_eq!(copy.json()["version"]["title"], "First");
     assert_eq!(copy.json()["version"]["origin"], "publish");
 
-    // Bob takes a draft of version 1; Alice publishes version 2 meanwhile.
+    // Alice's version 2 was written before her first publish: it is based on no saved version
+    // and is not published over version 1.
+    let stale_draft = call(
+        base,
+        Method::POST,
+        &action(draft, "publish"),
+        Some(&as_alice),
+        Some(&json!({"version": 2})),
+    )
+    .await;
+    assert_error(&stale_draft, 409, "conflict", "dashboard.saved_changed");
+    assert_eq!(stale_draft.json()["details"]["latest"], 1);
+
+    // Bob takes a draft of version 1; Alice's tool merges version 1 into her draft and she
+    // publishes that as version 2 meanwhile.
     let bob_conversation = world.conversation(&bob).await;
     let bob_draft = world
         .fork(&bob, bob_conversation, saved, 1, &Content::new("Bob's"))
         .await
         .expect("Bob's draft")
         .dashboard_id;
+    world
+        .write_draft(
+            &alice,
+            conversation,
+            draft,
+            2,
+            Some(1),
+            &Content::new("Merged"),
+        )
+        .await
+        .expect("version 3");
     let second = call(
         base,
         Method::POST,
         &action(draft, "publish"),
         Some(&as_alice),
-        Some(&json!({"version": 2})),
+        Some(&json!({"version": 3})),
     )
     .await;
     assert_eq!(second.json(), json!({"dashboard_id": saved, "version": 2}));
@@ -797,15 +823,22 @@ async fn versions_are_added_kept_restored_and_publishing_over_a_change_conflicts
     .await;
     assert_eq!(listed(&list), [json!(saved)]);
     world
-        .write_draft(&alice, conversation, draft, 2, None, &Content::new("Third"))
+        .write_draft(
+            &alice,
+            conversation,
+            draft,
+            3,
+            None,
+            &Content::new("Fourth"),
+        )
         .await
-        .expect("version 3");
+        .expect("version 4");
     let refused = call(
         base,
         Method::POST,
         &action(draft, "publish"),
         Some(&as_alice),
-        Some(&json!({"version": 3})),
+        Some(&json!({"version": 4})),
     )
     .await;
     assert_error(&refused, 409, "conflict", "dashboard.archived");
@@ -1071,6 +1104,295 @@ async fn a_dashboard_with_the_most_versions_takes_no_more_and_says_why() {
     .await;
     assert_error(&refused, 409, "conflict", "dashboard.too_many_versions");
     assert_eq!(version_count(&world, saved).await, 10_000);
+}
+
+/// A saved dashboard at version 3 and Bob's draft of it: his version 1 was taken from the
+/// saved dashboard's version 1, before Alice published versions 2 and 3, and his version 2
+/// merged version 3 in (the tool's rebase). Bob, his conversation, his draft and the saved
+/// dashboard.
+async fn draft_merged_with_newer_versions(
+    world: &World,
+) -> (Person, Uuid, DashboardId, DashboardId) {
+    let tenant = TenantId::generate();
+    let alice = world.person(tenant, TenantRole::Editor);
+    let bob = world.person(tenant, TenantRole::Editor);
+    let (alice_conversation, alice_draft, saved) =
+        world.saved(&alice, &Content::new("Plant")).await;
+    let bob_conversation = world.conversation(&bob).await;
+    let bob_draft = world
+        .fork(
+            &bob,
+            bob_conversation,
+            saved,
+            1,
+            &Content::new("Bob's plant"),
+        )
+        .await
+        .expect("Bob's draft")
+        .dashboard_id;
+    for (base, title) in [(1, "Plant 2"), (2, "Plant 3")] {
+        world
+            .write_draft(
+                &alice,
+                alice_conversation,
+                alice_draft,
+                base,
+                None,
+                &Content::new(title),
+            )
+            .await
+            .expect("Alice's next version");
+        world
+            .publish(&alice, alice_draft, base + 1)
+            .await
+            .expect("Alice publishes it");
+    }
+    world
+        .write_draft(
+            &bob,
+            bob_conversation,
+            bob_draft,
+            1,
+            Some(3),
+            &Content::new("Bob's plant with Alice's 3"),
+        )
+        .await
+        .expect("Bob's merged version");
+    (bob, bob_conversation, bob_draft, saved)
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn publishing_an_older_draft_version_compares_the_base_it_was_written_on() {
+    let Some(Setup { world, api, .. }) = setup(RunCaps::default()).await else {
+        return;
+    };
+    let base = api.url.as_str();
+    let (bob, _, draft, saved) = draft_merged_with_newer_versions(&world).await;
+    let as_bob = world.token(&bob);
+    let publish = |version: u32| {
+        let token = as_bob.clone();
+        async move {
+            call(
+                base,
+                Method::POST,
+                &action(draft, "publish"),
+                Some(&token),
+                Some(&json!({"version": version})),
+            )
+            .await
+        }
+    };
+
+    // Version 1 was written on the saved dashboard's version 1: publishing it would drop
+    // Alice's versions 2 and 3, though the draft's later version merged them.
+    let refused = publish(1).await;
+    assert_error(&refused, 409, "conflict", "dashboard.saved_changed");
+    assert_eq!(refused.json()["details"]["latest"], 3);
+    assert_eq!(version_count(&world, saved).await, 3);
+
+    // Version 2, merged with version 3, publishes; then neither version is published again
+    // over the version 4 it made.
+    let published = publish(2).await;
+    assert_eq!(
+        published.json(),
+        json!({"dashboard_id": saved, "version": 4}),
+        "{published:?}"
+    );
+    for version in [1, 2] {
+        let refused = publish(version).await;
+        assert_error(&refused, 409, "conflict", "dashboard.saved_changed");
+        assert_eq!(refused.json()["details"]["latest"], 4);
+    }
+    assert_eq!(version_count(&world, saved).await, 4);
+    // The draft's next version starts from the saved dashboard's version 4.
+    let seen = call(base, Method::GET, &dashboard(draft), Some(&as_bob), None).await;
+    assert_eq!(
+        seen.json()["dashboard"]["saved"],
+        json!({"dashboard_id": saved, "version": 4}),
+        "{seen:?}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn restoring_a_draft_version_carries_the_base_it_was_written_on() {
+    let Some(Setup { world, api, .. }) = setup(RunCaps::default()).await else {
+        return;
+    };
+    let base = api.url.as_str();
+    let (bob, conversation, draft, saved) = draft_merged_with_newer_versions(&world).await;
+    let as_bob = world.token(&bob);
+    let publish = |version: u32| {
+        let token = as_bob.clone();
+        async move {
+            call(
+                base,
+                Method::POST,
+                &action(draft, "publish"),
+                Some(&token),
+                Some(&json!({"version": version})),
+            )
+            .await
+        }
+    };
+    let based_on = || {
+        let token = as_bob.clone();
+        async move {
+            call(base, Method::GET, &dashboard(draft), Some(&token), None)
+                .await
+                .json()["dashboard"]["saved"]["version"]
+                .clone()
+        }
+    };
+
+    // Restoring version 1 brings back content written on the saved dashboard's version 1:
+    // publishing the copy is refused, and so is the tool's next version written on it.
+    let restored = restore(base, &as_bob, draft, 1, 2).await;
+    assert_eq!(
+        restored.json(),
+        json!({"dashboard_id": draft, "version": 3}),
+        "{restored:?}"
+    );
+    let refused = publish(3).await;
+    assert_error(&refused, 409, "conflict", "dashboard.saved_changed");
+    assert_eq!(refused.json()["details"]["latest"], 3);
+    assert_eq!(based_on().await, 1);
+    world
+        .write_draft(
+            &bob,
+            conversation,
+            draft,
+            3,
+            None,
+            &Content::new("Bob's plant, again"),
+        )
+        .await
+        .expect("the tool's version 4");
+    let refused = publish(4).await;
+    assert_error(&refused, 409, "conflict", "dashboard.saved_changed");
+    assert_eq!(version_count(&world, saved).await, 3);
+
+    // Restoring the merged version 2 brings its base back with it: the copy publishes.
+    let restored = restore(base, &as_bob, draft, 2, 4).await;
+    assert_eq!(
+        restored.json(),
+        json!({"dashboard_id": draft, "version": 5}),
+        "{restored:?}"
+    );
+    assert_eq!(based_on().await, 3);
+    let published = publish(5).await;
+    assert_eq!(
+        published.json(),
+        json!({"dashboard_id": saved, "version": 4}),
+        "{published:?}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn versions_written_before_the_first_publish_are_based_on_no_saved_version() {
+    let Some(Setup { world, api, .. }) = setup(RunCaps::default()).await else {
+        return;
+    };
+    let base = api.url.as_str();
+    let editor = world.person(TenantId::generate(), TenantRole::Editor);
+    let as_editor = world.token(&editor);
+    let conversation = world.conversation(&editor).await;
+    let draft = world
+        .create_draft(&editor, conversation, &Content::new("First"))
+        .await
+        .dashboard_id;
+    world
+        .write_draft(
+            &editor,
+            conversation,
+            draft,
+            1,
+            None,
+            &Content::new("Second"),
+        )
+        .await
+        .expect("version 2");
+    let publish = |version: u32| {
+        let token = as_editor.clone();
+        async move {
+            call(
+                base,
+                Method::POST,
+                &action(draft, "publish"),
+                Some(&token),
+                Some(&json!({"version": version})),
+            )
+            .await
+        }
+    };
+    let saved_base = || {
+        let token = as_editor.clone();
+        async move {
+            call(base, Method::GET, &dashboard(draft), Some(&token), None)
+                .await
+                .json()["dashboard"]["saved"]
+                .clone()
+        }
+    };
+
+    // Version 2 becomes the saved dashboard; the draft's next version starts from it.
+    let first = publish(2).await;
+    assert_eq!(first.status, 201, "{first:?}");
+    let saved = DashboardId::from_uuid(
+        Uuid::try_parse(first.json()["dashboard_id"].as_str().expect("an ID")).expect("a UUID"),
+    );
+    assert_eq!(
+        saved_base().await,
+        json!({"dashboard_id": saved, "version": 1})
+    );
+    // Neither version 1, written before it, nor version 2 again is published over it.
+    for version in [1, 2] {
+        let refused = publish(version).await;
+        assert_error(&refused, 409, "conflict", "dashboard.saved_changed");
+        assert_eq!(refused.json()["details"]["latest"], 1);
+    }
+    // Restoring version 1 brings back content based on no saved version: the draft says so,
+    // and neither the copy nor the tool's next version written on it publishes.
+    let restored = restore(base, &as_editor, draft, 1, 2).await;
+    assert_eq!(
+        restored.json(),
+        json!({"dashboard_id": draft, "version": 3}),
+        "{restored:?}"
+    );
+    assert_eq!(saved_base().await, json!({"dashboard_id": saved}));
+    world
+        .write_draft(
+            &editor,
+            conversation,
+            draft,
+            3,
+            None,
+            &Content::new("Fourth"),
+        )
+        .await
+        .expect("version 4");
+    for version in [3, 4] {
+        let refused = publish(version).await;
+        assert_error(&refused, 409, "conflict", "dashboard.saved_changed");
+    }
+    assert_eq!(version_count(&world, saved).await, 1);
+    // Once the tool merged the saved dashboard's version 1 in, the draft publishes again.
+    world
+        .write_draft(
+            &editor,
+            conversation,
+            draft,
+            4,
+            Some(1),
+            &Content::new("Fifth"),
+        )
+        .await
+        .expect("version 5");
+    let published = publish(5).await;
+    assert_eq!(
+        published.json(),
+        json!({"dashboard_id": saved, "version": 2}),
+        "{published:?}"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]

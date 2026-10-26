@@ -37,7 +37,7 @@
 
   "dashboard.version_not_found": "This version of the dashboard doesn't exist.",
   "dashboard.version_conflict": "The dashboard changed while you were looking at it (it is now at version {latest}). Reload it and try again.",
-  "dashboard.saved_changed": "Someone published a newer version of this dashboard (version {latest}) after this draft was made. Ask the assistant to update the draft, then publish again.",
+  "dashboard.saved_changed": "This draft version is not based on the saved dashboard's latest version (version {latest}). Ask the assistant to merge that version into the draft, then publish the updated draft.",
   "dashboard.archived": "This dashboard is archived. Unarchive it first.",
   "dashboard.editor_required": "Only editors and admins can publish, restore or archive dashboards.",
   "dashboard.owner_required": "Only the person who owns this conversation can change its drafts.",

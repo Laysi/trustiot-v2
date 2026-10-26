@@ -605,7 +605,7 @@
       },
       "DashboardPublishRequest": {
         "additionalProperties": false,
-        "description": "Publishes a draft's version: the first time as a new saved dashboard, then as a new version\nof the saved dashboard the draft is based on (refused with 409 `dashboard.saved_changed`\nwhen that one has a newer version than the draft's base).",
+        "description": "Publishes a draft's version: the first time as a new saved dashboard, then as a new version\nof the draft's saved dashboard (refused with 409 `dashboard.saved_changed` unless that one's\nlatest version is the one the published version is based on: an older version of the\ndraft, or a restored copy of one, keeps the base it was written on, and a version written\nbefore the draft was first published is based on none).",
         "properties": {
           "version": {
             "description": "The draft's version the user looked at; a newer one the tool wrote since is not\npublished by this request.",
@@ -718,20 +718,23 @@
         "type": "integer"
       },
       "DashboardSavedBase": {
-        "description": "The saved dashboard a draft is based on.",
+        "description": "The saved dashboard a draft was taken from or published to, and its version the draft's\nlatest version is based on.",
         "properties": {
           "dashboard_id": {
             "$ref": "#/components/schemas/DashboardId"
           },
           "version": {
+            "description": "Absent when the draft's latest version is based on none of the saved dashboard's\nversions: it was written before the draft was first published (other than the version\npublished), or restored from such a version. Publishing it is refused until the\nassistant merges the saved dashboard's latest version into the draft.",
             "format": "int32",
             "minimum": 0,
-            "type": "integer"
+            "type": [
+              "integer",
+              "null"
+            ]
           }
         },
         "required": [
-          "dashboard_id",
-          "version"
+          "dashboard_id"
         ],
         "type": "object"
       },
@@ -1013,7 +1016,7 @@
             "oneOf": [
               {
                 "$ref": "#/components/schemas/DashboardSavedBase",
-                "description": "A draft's saved dashboard: the one it was taken from or published to, and that\ndashboard's version it is based on. Publishing is refused when the saved dashboard has a\nnewer version than this."
+                "description": "A draft's saved dashboard: the one it was taken from or published to, and that\ndashboard's version the draft's latest version is based on (the version the draft's\nnext version starts from). Publishing a version of the draft is refused unless the saved\ndashboard's latest version is the one that version is based on."
               },
               {
                 "type": "null"
@@ -5357,7 +5360,7 @@
                 }
               }
             },
-            "description": "The saved dashboard has a version newer than the draft's base (`dashboard.saved_changed`, `details.latest`), is archived (`dashboard.archived`), or has 10,000 versions (`dashboard.too_many_versions`) (`conflict`)."
+            "description": "The saved dashboard's latest version is not the one the draft's version is based on (`dashboard.saved_changed`, `details.latest`), is archived (`dashboard.archived`), or has 10,000 versions (`dashboard.too_many_versions`) (`conflict`)."
           },
           "422": {
             "content": {
@@ -5390,7 +5393,7 @@
             "description": "The database failed (`unavailable`). Nothing was written."
           }
         },
-        "summary": "Publishes a version of a draft into the tenant's saved dashboards: the first time as a new\nsaved dashboard, later as the next version of the one the draft is based on.",
+        "summary": "Publishes a version of a draft into the tenant's saved dashboards: the first time as a new\nsaved dashboard, later as the next version of the draft's saved dashboard, when that one's\nlatest version is the one the published version is based on.",
         "tags": [
           "assistant"
         ]

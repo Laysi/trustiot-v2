@@ -59,18 +59,25 @@ pub struct DashboardSummary {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub conversation_id: Option<Uuid>,
     /// A draft's saved dashboard: the one it was taken from or published to, and that
-    /// dashboard's version it is based on. Publishing is refused when the saved dashboard has a
-    /// newer version than this.
+    /// dashboard's version the draft's latest version is based on (the version the draft's
+    /// next version starts from). Publishing a version of the draft is refused unless the saved
+    /// dashboard's latest version is the one that version is based on.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub saved: Option<SavedBase>,
 }
 
-/// The saved dashboard a draft is based on.
+/// The saved dashboard a draft was taken from or published to, and its version the draft's
+/// latest version is based on.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[schema(as = DashboardSavedBase)]
 pub struct SavedBase {
     pub dashboard_id: DashboardId,
-    pub version: u32,
+    /// Absent when the draft's latest version is based on none of the saved dashboard's
+    /// versions: it was written before the draft was first published (other than the version
+    /// published), or restored from such a version. Publishing it is refused until the
+    /// assistant merges the saved dashboard's latest version into the draft.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<u32>,
 }
 
 /// A page of dashboards, the most recently updated first.
@@ -166,8 +173,10 @@ pub struct DashboardView {
 }
 
 /// Publishes a draft's version: the first time as a new saved dashboard, then as a new version
-/// of the saved dashboard the draft is based on (refused with 409 `dashboard.saved_changed`
-/// when that one has a newer version than the draft's base).
+/// of the draft's saved dashboard (refused with 409 `dashboard.saved_changed` unless that one's
+/// latest version is the one the published version is based on: an older version of the
+/// draft, or a restored copy of one, keeps the base it was written on, and a version written
+/// before the draft was first published is based on none).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 #[schema(as = DashboardPublishRequest)]
@@ -223,8 +232,8 @@ pub struct DatasetRunRequest {
 pub const VERSION_NOT_FOUND: MessageKey = MessageKey::new("dashboard.version_not_found");
 /// 409 `conflict`: a restore's `base_version` is not the latest; details: `latest`.
 pub const VERSION_CONFLICT: MessageKey = MessageKey::new("dashboard.version_conflict");
-/// 409 `conflict`: publishing a draft whose saved dashboard has a newer version than the
-/// draft's base; details: `latest`.
+/// 409 `conflict`: publishing a draft's version when the saved dashboard's latest version is
+/// not the one that version is based on; details: `latest`.
 pub const SAVED_CHANGED: MessageKey = MessageKey::new("dashboard.saved_changed");
 /// 409 `conflict`: publishing into, or restoring, an archived dashboard.
 pub const ARCHIVED: MessageKey = MessageKey::new("dashboard.archived");

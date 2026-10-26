@@ -517,7 +517,7 @@ fn dashboard_view() -> DashboardView {
                 dashboard_id: DashboardId::from_uuid(
                     Uuid::parse_str("0190a5b2-0000-7000-8000-0000000000d0").expect("uuid"),
                 ),
-                version: 7,
+                version: Some(7),
             }),
         },
         version: VersionContent {

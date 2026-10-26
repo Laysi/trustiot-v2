@@ -296,7 +296,8 @@ export interface paths {
         put?: never;
         /**
          * Publishes a version of a draft into the tenant's saved dashboards: the first time as a new
-         *     saved dashboard, later as the next version of the one the draft is based on.
+         *     saved dashboard, later as the next version of the draft's saved dashboard, when that one's
+         *     latest version is the one the published version is based on.
          */
         post: operations["publishDashboard"];
         delete?: never;
@@ -908,8 +909,10 @@ export interface components {
         };
         /**
          * @description Publishes a draft's version: the first time as a new saved dashboard, then as a new version
-         *     of the saved dashboard the draft is based on (refused with 409 `dashboard.saved_changed`
-         *     when that one has a newer version than the draft's base).
+         *     of the draft's saved dashboard (refused with 409 `dashboard.saved_changed` unless that one's
+         *     latest version is the one the published version is based on: an older version of the
+         *     draft, or a restored copy of one, keeps the base it was written on, and a version written
+         *     before the draft was first published is based on none).
          */
         DashboardPublishRequest: {
             /**
@@ -986,11 +989,20 @@ export interface components {
          *     working when a newer runtime ships. Serialized as a number, `1` for the first.
          */
         DashboardRuntime: number;
-        /** @description The saved dashboard a draft is based on. */
+        /**
+         * @description The saved dashboard a draft was taken from or published to, and its version the draft's
+         *     latest version is based on.
+         */
         DashboardSavedBase: {
             dashboard_id: components["schemas"]["DashboardId"];
-            /** Format: int32 */
-            version: number;
+            /**
+             * Format: int32
+             * @description Absent when the draft's latest version is based on none of the saved dashboard's
+             *     versions: it was written before the draft was first published (other than the version
+             *     published), or restored from such a version. Publishing it is refused until the
+             *     assistant merges the saved dashboard's latest version into the draft.
+             */
+            version?: number | null;
         };
         /**
          * @description The bucket length of a semantic request: telemetry-query's `BucketInterval`.
@@ -3920,7 +3932,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description The saved dashboard has a version newer than the draft's base (`dashboard.saved_changed`, `details.latest`), is archived (`dashboard.archived`), or has 10,000 versions (`dashboard.too_many_versions`) (`conflict`). */
+            /** @description The saved dashboard's latest version is not the one the draft's version is based on (`dashboard.saved_changed`, `details.latest`), is archived (`dashboard.archived`), or has 10,000 versions (`dashboard.too_many_versions`) (`conflict`). */
             409: {
                 headers: {
                     [name: string]: unknown;

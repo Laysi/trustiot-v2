@@ -31,14 +31,20 @@
 //! writing questions' results give way, and a dataset whose result gave way runs again. The
 //! tool never publishes, restores or archives: those are the user's, through the public API.
 //!
+//! A write to a draft taken from a saved dashboard may say it merged a newer version of that
+//! dashboard (`rebase_saved_version`): the version written is then based on it, which is what
+//! publishing compares. The tool accepts it only for a version of that saved dashboard the same
+//! question read: each question remembers the saved versions it read (the last
+//! [`MAX_SAVED_READS`]) until its deadline.
+//!
 //! Nothing a service or the database said reaches the model or the logs except closed values:
 //! the run errors' classes and numbers, `telemetry_sql`'s hints for SQL refusals, and of the
 //! check's verdict (after [`contract::api::dashboard::check::CheckVerdict::validate`]) only what
-//! [`check_problem`] and [`own_marks`] take from it: closed values, what passes a check against
+//! `check_problem` and `own_marks` take from it: closed values, what passes a check against
 //! the request the tool sent, and values from the tool's own data. The logs carry no title, SQL
 //! or page.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
@@ -119,6 +125,10 @@ const MAX_SUCCESS_BYTES: usize = 32 << 10;
 
 /// The dataset results kept for all questions together, for reuse by a later write.
 pub const MAX_CACHED_BYTES: usize = 64 << 20;
+
+/// The most saved dashboard versions a question remembers having read; a rebase onto one it
+/// forgot is refused until it reads it again.
+pub const MAX_SAVED_READS: usize = 64;
 
 /// How long a question's state is kept when its delegation names no deadline: the longest a
 /// question may run (`identity.run_lifetime`).
@@ -718,10 +728,29 @@ struct Questions {
 
 struct Question {
     writes: u32,
+    /// The saved dashboards' versions the question read, the latest last.
+    saved_reads: VecDeque<(DashboardId, u32)>,
     expires: Instant,
     /// The results of the question's datasets, by [`result_key`], and their sizes.
     results: HashMap<String, (Arc<DatasetResult>, usize)>,
     used: u64,
+}
+
+impl Question {
+    /// Remembers a read of the saved dashboard's `version`, as the latest; the oldest read is
+    /// forgotten past [`MAX_SAVED_READS`].
+    fn remember_read(&mut self, saved_id: DashboardId, version: u32) {
+        let read = (saved_id, version);
+        self.saved_reads.retain(|earlier| *earlier != read);
+        if self.saved_reads.len() >= MAX_SAVED_READS {
+            self.saved_reads.pop_front();
+        }
+        self.saved_reads.push_back(read);
+    }
+
+    fn has_read(&self, saved_id: DashboardId, version: u32) -> bool {
+        self.saved_reads.contains(&(saved_id, version))
+    }
 }
 
 impl Questions {
@@ -747,6 +776,7 @@ impl Questions {
         let used = self.clock;
         let question = self.by_run.entry(run_id).or_insert_with(|| Question {
             writes: 0,
+            saved_reads: VecDeque::new(),
             expires,
             results: HashMap::new(),
             used,
@@ -955,6 +985,9 @@ impl DashboardTool {
         if let Some(saved) = dashboard.saved {
             about["taken_from"] = json!(saved);
         }
+        if dashboard.kind == DashboardKind::Saved {
+            self.remember_saved_read(context, dashboard.dashboard_id, version.version);
+        }
         cap_text(&mut about);
         // Whole, not capped: the model edits them. A saved dashboard may have been written in
         // another member's conversation: the description says it is data.
@@ -1162,8 +1195,20 @@ impl DashboardTool {
                 if base != latest {
                     return Err(ToolError::Input(stale(base, latest)));
                 }
-                if input.rebase_saved_version.is_some() && opened.dashboard.saved.is_none() {
-                    return Err(ToolError::Input(REBASE_ONLY_FOR_DRAFTS.to_owned()));
+                if let Some(rebase) = input.rebase_saved_version {
+                    let Some(saved) = opened.dashboard.saved else {
+                        return Err(ToolError::Input(REBASE_ONLY_FOR_DRAFTS.to_owned()));
+                    };
+                    if !self.read_saved(context, saved.dashboard_id, rebase) {
+                        tracing::info!(
+                            run_id = %context.run_id,
+                            conversation_id = %context.conversation_id,
+                            tenant_id = %context.principal.tenant_id,
+                            "the dashboard tool refused a rebase onto a saved version the \
+                             question did not read"
+                        );
+                        return Err(ToolError::Input(unread_rebase(saved.dashboard_id, rebase)));
+                    }
                 }
                 Target::Draft {
                     id,
@@ -1193,8 +1238,12 @@ impl DashboardTool {
         ))
     }
 
-    /// Counts a write of the question; refuses the one past [`MAX_WRITES_PER_QUESTION`].
-    fn count_write(&self, context: &ToolContext) -> Result<(), ToolError> {
+    /// Runs `use_it` on the question's state, kept until its deadline.
+    fn with_question<T>(
+        &self,
+        context: &ToolContext,
+        use_it: impl FnOnce(&mut Question) -> T,
+    ) -> T {
         let now = Instant::now();
         let expires = context
             .delegation
@@ -1205,19 +1254,37 @@ impl DashboardTool {
             .lock()
             .unwrap_or_else(PoisonError::into_inner);
         questions.prune(now);
-        let question = questions.question(context.run_id, expires);
-        if question.writes >= MAX_WRITES_PER_QUESTION {
-            tracing::info!(
-                run_id = %context.run_id,
-                conversation_id = %context.conversation_id,
-                tenant_id = %context.principal.tenant_id,
-                writes = question.writes,
-                "the dashboard tool refused a write: the question wrote the most it may"
-            );
-            return Err(ToolError::Input(TOO_MANY_WRITES.to_owned()));
-        }
-        question.writes += 1;
-        Ok(())
+        use_it(questions.question(context.run_id, expires))
+    }
+
+    /// Remembers that the question read `version` of the saved dashboard `saved_id`.
+    fn remember_saved_read(&self, context: &ToolContext, saved_id: DashboardId, version: u32) {
+        self.with_question(context, |question| {
+            question.remember_read(saved_id, version)
+        });
+    }
+
+    /// Whether the question read `version` of the saved dashboard `saved_id`.
+    fn read_saved(&self, context: &ToolContext, saved_id: DashboardId, version: u32) -> bool {
+        self.with_question(context, |question| question.has_read(saved_id, version))
+    }
+
+    /// Counts a write of the question; refuses the one past [`MAX_WRITES_PER_QUESTION`].
+    fn count_write(&self, context: &ToolContext) -> Result<(), ToolError> {
+        self.with_question(context, |question| {
+            if question.writes >= MAX_WRITES_PER_QUESTION {
+                tracing::info!(
+                    run_id = %context.run_id,
+                    conversation_id = %context.conversation_id,
+                    tenant_id = %context.principal.tenant_id,
+                    writes = question.writes,
+                    "the dashboard tool refused a write: the question wrote the most it may"
+                );
+                return Err(ToolError::Input(TOO_MANY_WRITES.to_owned()));
+            }
+            question.writes += 1;
+            Ok(())
+        })
     }
 
     /// Runs every dataset of `spec` as the asking user, two at a time (the tenant's concurrent
@@ -1397,6 +1464,15 @@ fn self_visible(context: &ToolContext, dashboard: &DashboardSummary) -> bool {
     }
 }
 
+fn unread_rebase(saved_id: DashboardId, rebase: u32) -> String {
+    format!(
+        "Nothing was written: this question has not read version {rebase} of the saved \
+         dashboard {saved_id} (the draft's taken_from), so it cannot have merged it. Read that \
+         version (action read, dashboard_id {saved_id}, version {rebase}), merge its changes \
+         into your write, then write again with rebase_saved_version {rebase}."
+    )
+}
+
 fn stale(base: u32, latest: u32) -> String {
     format!(
         "The dashboard's latest version is {latest}, not base_version {base}. Read it again and \
@@ -1421,8 +1497,8 @@ fn refusal(context: &ToolContext, action: &'static str, error: &StoreError) -> T
              that draft and write to it with its base_version."
         )),
         StoreError::InvalidRebase => ToolError::Input(
-            "rebase_saved_version must be a version of the saved dashboard at or after the \
-             draft's taken_from version, and at most its latest."
+            "rebase_saved_version must be a version of the saved dashboard, not older than the \
+             draft's taken_from version, and at most its latest. Nothing was written."
                 .to_owned(),
         ),
         StoreError::TooManyVersions => ToolError::Input(TOO_MANY_VERSIONS.to_owned()),
@@ -1843,7 +1919,7 @@ fn input_schema() -> Value {
             "rebase_saved_version": {
                 "type": "integer",
                 "minimum": 1,
-                "description": "write, a draft taken from a saved dashboard: the saved dashboard's version you merged into this version, so publishing it no longer conflicts."
+                "description": "write, to this conversation's draft of a saved dashboard (read shows it as taken_from, with the saved version the draft's latest version is based on, or without a version when it is based on none): a version of that saved dashboard, not older than taken_from's, that you read in this question and merged into this write, so publishing it no longer conflicts with that version."
             },
             "title": title,
             "description": {"type": ["string", "null"], "maxLength": MAX_DESCRIPTION_CHARS},
@@ -2001,6 +2077,34 @@ mod tests {
         for bad in ["", "Asia/", "/UTC", "Asia Taipei", "1/2", &"A".repeat(65)] {
             assert!(!is_time_zone(bad), "{bad}");
         }
+    }
+
+    #[test]
+    fn a_question_remembers_its_latest_saved_reads() {
+        let mut questions = Questions::default();
+        let run = Uuid::now_v7();
+        let question = questions.question(run, Instant::now() + Duration::from_secs(60));
+        let saved = DashboardId::generate();
+        let other = DashboardId::generate();
+        question.remember_read(saved, 3);
+        assert!(question.has_read(saved, 3));
+        assert!(!question.has_read(saved, 2), "another version");
+        assert!(!question.has_read(other, 3), "another dashboard");
+        // Reading it again makes it the latest read: the oldest others are forgotten first.
+        for version in 4..=u32::try_from(MAX_SAVED_READS).expect("fits") + 4 {
+            question.remember_read(other, version);
+            if version == 10 {
+                question.remember_read(saved, 3);
+            }
+        }
+        assert_eq!(question.saved_reads.len(), MAX_SAVED_READS);
+        assert!(question.has_read(saved, 3));
+        assert!(!question.has_read(other, 4) && !question.has_read(other, 5));
+        assert!(question.has_read(other, 6));
+        // Another question read nothing.
+        let other_run =
+            questions.question(Uuid::now_v7(), Instant::now() + Duration::from_secs(60));
+        assert!(!other_run.has_read(saved, 3));
     }
 
     #[test]

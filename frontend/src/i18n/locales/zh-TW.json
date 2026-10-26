@@ -37,7 +37,7 @@
 
   "dashboard.version_not_found": "儀表板沒有這個版本。",
   "dashboard.version_conflict": "儀表板在你檢視時已更新（目前是第 {latest} 版），請重新載入後再試一次。",
-  "dashboard.saved_changed": "這份草稿建立後，有人發布了較新的版本（第 {latest} 版）。請先請 AI 助理更新草稿，再重新發布。",
+  "dashboard.saved_changed": "這個草稿版本不是根據已儲存儀表板的最新版（第 {latest} 版）做的。請先請 AI 助理把最新版併入草稿，再發布更新後的草稿。",
   "dashboard.archived": "這個儀表板已封存，請先取消封存。",
   "dashboard.editor_required": "只有編輯者與管理員可以發布、回到舊版或封存儀表板。",
   "dashboard.owner_required": "只有這個對話的擁有者可以變更它的草稿。",

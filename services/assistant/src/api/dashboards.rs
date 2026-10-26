@@ -276,7 +276,8 @@ async fn list_versions(
 }
 
 /// Publishes a version of a draft into the tenant's saved dashboards: the first time as a new
-/// saved dashboard, later as the next version of the one the draft is based on.
+/// saved dashboard, later as the next version of the draft's saved dashboard, when that one's
+/// latest version is the one the published version is based on.
 #[utoipa::path(
     post,
     path = "/api/assistant/v1/dashboards/{dashboard_id}/publish",
@@ -290,7 +291,7 @@ async fn list_versions(
         (status = 401, description = "No valid session (`unauthenticated`).", body = ErrorBody),
         (status = 403, description = "No tenant, a viewer (`dashboard.editor_required`), or not the conversation's owner (`dashboard.owner_required`) (`permission_denied`).", body = ErrorBody),
         (status = 404, description = "No such dashboard the caller can see (`not_found`), or no such version (`dashboard.version_not_found`).", body = ErrorBody),
-        (status = 409, description = "The saved dashboard has a version newer than the draft's base (`dashboard.saved_changed`, `details.latest`), is archived (`dashboard.archived`), or has 10,000 versions (`dashboard.too_many_versions`) (`conflict`).", body = ErrorBody),
+        (status = 409, description = "The saved dashboard's latest version is not the one the draft's version is based on (`dashboard.saved_changed`, `details.latest`), is archived (`dashboard.archived`), or has 10,000 versions (`dashboard.too_many_versions`) (`conflict`).", body = ErrorBody),
         (status = 422, description = "Not a draft (`validation_failed`, `dashboard.draft_required`).", body = ErrorBody),
         (status = 429, description = "The user added 10 versions by publishing and restoring in the last minute, or the tenant's users 30 to its saved dashboards (30 more to its drafts), in this replica (`rate_limited`, `dashboard.versions_limited`, `details.retry_after`, with `Retry-After`). Only a request that passed every other check counts. Nothing was written.", body = ErrorBody),
         (status = 503, description = "The database failed (`unavailable`). Nothing was written.", body = ErrorBody),
