@@ -43,6 +43,7 @@ name = "ai-gateway"
 version = "0.1.0"
 dependencies = [
  "ai-clients",
+ "ai-gateway-api",
  "axum",
  "bytes",
  "futures-util",
@@ -61,6 +62,14 @@ dependencies = [
  "tracing",
  "url",
  "zeroize",
+]
+
+[[package]]
+name = "ai-gateway-api"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

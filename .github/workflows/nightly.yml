@@ -62,6 +62,7 @@ on:
       - deploy/images/rust-binary.Containerfile
       - scripts/**
       - crates/ai-clients/**
+      - crates/ai-gateway-api/**
       - crates/ca-keys/**
       - crates/contract/**
       - crates/identity-keys/**

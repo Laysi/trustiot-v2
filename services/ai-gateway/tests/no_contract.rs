@@ -1,6 +1,8 @@
 //! The gateway stays free of the product contracts so it can be split out (decision 28):
 //! `cargo tree -p ai-gateway` must not list `contract`, through any kind of dependency. Like
 //! crates/ai-clients/tests/no_contract.rs; service-kit's `contract` feature is the usual way in.
+//! The admin API's wire types (crates/ai-gateway-api) are in this tree, and have the same check
+//! of their own.
 
 use std::path::Path;
 use std::process::Command;
@@ -40,7 +42,7 @@ fn tree(package: &str) -> Vec<String> {
 #[test]
 fn ai_gateway_does_not_depend_on_contract() {
     let names = tree("ai-gateway");
-    for expected in ["ai-clients", "service-kit"] {
+    for expected in ["ai-clients", "ai-gateway-api", "service-kit"] {
         assert!(
             names.iter().any(|name| name == expected),
             "the tree looks wrong, {expected} is missing: {names:?}"
