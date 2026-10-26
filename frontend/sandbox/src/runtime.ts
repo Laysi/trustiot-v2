@@ -8,6 +8,7 @@
 import { compareDocument, type Fix, withoutNumbers } from "./compare.ts";
 import { captureDom, type DomAccess, type DomWindow } from "./dom.ts";
 import { type DisplayValue, formatValue } from "./format.ts";
+import { harden } from "./harden.ts";
 import {
   COLUMN_NAME_PATTERN,
   DataMessageSchema,
@@ -64,6 +65,20 @@ export function timeOf(value: unknown): number | undefined {
 
 /** The attributes the display-time comparison sets (sandbox.css styles them). */
 const FLAGS = ["data-tq-flag", "data-tq-flag-pseudo", "data-tq-flag-hide"] as const;
+
+/**
+ * The longest a page can postpone a display-time recheck by changing the DOM: however fast it keeps
+ * mutating, the comparison runs again within this long of the first change of a burst, so a value
+ * the page wrote after the last comparison is corrected within it (frontend/sandbox/README.md).
+ */
+export const MAX_RECHECK_DELAY_MS = 1000;
+
+/**
+ * After this many rechecks in a row that each had to rewrite a value the page put back wrong, the
+ * page is hidden for good: a page fighting the comparison cannot keep flashing wrong numbers. A
+ * page that settles, or keeps updating with correct values, never reaches it.
+ */
+export const MAX_CORRECTION_ROUNDS = 10;
 
 /** A thrown value as an `error` message carries it: at most 200 visible characters, or nothing. */
 export function describeError(error: unknown): string | undefined {
@@ -157,9 +172,13 @@ export function startRuntime(env: RuntimeEnvironment): Runtime {
   let lastHeight = -1;
   let watcher: MutationObserver | null = null;
   let recheck: number | undefined;
+  /** When a burst of page changes began; the forced recheck runs within MAX_RECHECK_DELAY_MS of it. */
+  let recheckBy = 0;
+  /** Consecutive rechecks that each had to rewrite a value the page put back wrong. */
+  let correctionStreak = 0;
   /** The elements the last display-time comparison flagged. */
   let flagged: Element[] = [];
-  /** The display-time comparison threw once: the page stays hidden. */
+  /** The display-time comparison can no longer show the page safely: it stays hidden for good. */
   let comparisonFailed = false;
 
   // --- the page API ------------------------------------------------------------------------
@@ -444,7 +463,6 @@ export function startRuntime(env: RuntimeEnvironment): Runtime {
       locale: message.locale,
       tz: message.tz,
       theme: message.theme,
-      mode: message.mode,
     });
 
   // --- loading the page --------------------------------------------------------------------
@@ -552,8 +570,11 @@ export function startRuntime(env: RuntimeEnvironment): Runtime {
   };
 
   /**
-   * Two frames, then QUIET_PERIOD_MS without a change; in check mode within the time limit. Only
-   * the latest render waits: a newer one stops this wait (stopSettling) before it starts its own.
+   * Two frames, then QUIET_PERIOD_MS without a change; in check mode within the time limit. View
+   * mode has no deadline to finish, but the first comparison still runs within MAX_RECHECK_DELAY_MS
+   * even if the page never goes quiet, so a page that keeps mutating cannot put off being compared;
+   * the recheck watcher takes over from there. Only the latest render waits: a newer one stops this
+   * wait (stopSettling) before it starts its own.
    */
   const settle = (current: number, mine: number, started: number) => {
     const checking = init?.mode === "check";
@@ -589,6 +610,11 @@ export function startRuntime(env: RuntimeEnvironment): Runtime {
             },
             Math.max(0, RENDER_TIME_LIMIT_MS - (now() - started)) + 1,
           );
+        } else {
+          // The page never settling must not keep it from being compared: force the comparison.
+          wait.limit = later(() => {
+            if (settling === wait) quiet();
+          }, MAX_RECHECK_DELAY_MS);
         }
       }),
     );
@@ -601,52 +627,85 @@ export function startRuntime(env: RuntimeEnvironment): Runtime {
     flagged.push(element);
   };
 
-  const applyFix = (fix: Fix) => {
+  /** Applies a fix; returns whether it rewrote a value the page had shown (text, a number, not a flag). */
+  const applyFix = (fix: Fix): boolean => {
     switch (fix.kind) {
-      case "text":
-        if (dom.textContent(fix.element) !== "\u2014") dom.setTextContent(fix.element, "\u2014");
+      case "text": {
+        const rewrote = dom.textContent(fix.element) !== "\u2014";
+        if (rewrote) dom.setTextContent(fix.element, "\u2014");
         flag(fix.element, "data-tq-flag");
-        break;
+        return rewrote;
+      }
       case "graphic":
         flag(fix.element, "data-tq-flag");
-        break;
+        return false;
       case "data": {
         const text = dom.data(fix.node);
         const replaced = withoutNumbers(text);
-        if (replaced !== text) dom.setData(fix.node, replaced);
+        const rewrote = replaced !== text;
+        if (rewrote) dom.setData(fix.node, replaced);
         if (fix.element !== null) flag(fix.element, "data-tq-flag");
-        break;
+        return rewrote;
       }
       case "attribute": {
         const value = dom.getAttribute(fix.element, fix.name);
-        if (value !== null) dom.setAttribute(fix.element, fix.name, withoutNumbers(value));
-        break;
+        const replaced = value === null ? null : withoutNumbers(value);
+        if (value !== null && replaced !== value) {
+          dom.setAttribute(fix.element, fix.name, replaced as string);
+          return true;
+        }
+        return false;
       }
       case "pseudo":
         flag(fix.element, "data-tq-flag-pseudo");
-        break;
+        return false;
       case "hide":
         flag(fix.element, "data-tq-flag-hide");
-        break;
+        return false;
     }
   };
 
+  /** Hides the whole page for good and stops comparing: the fail-closed outcome. */
+  const hideForGood = () => {
+    comparisonFailed = true;
+    cancel(recheck);
+    if (watcher !== null) apply(disconnect, watcher, []);
+    const root = dom.documentElement();
+    if (root !== null) dom.setAttribute(root, "data-tq-flag-hide", "");
+  };
+
   /**
-   * The display-time comparison. It runs in the page's realm, so a page can make it throw (by
-   * replacing built-ins it uses); then nothing of the page is shown, for good, and the
-   * comparison stops.
+   * The display-time comparison. It runs in the page's realm; the realm's built-ins are frozen
+   * (harden.ts), so the only way a page changes the result is by changing the DOM, which this
+   * re-reads. If it still throws, nothing of the page is shown, for good.
    */
   const showChecked = () => {
     if (comparisonFailed) return;
     try {
       compareAndShow();
     } catch {
-      comparisonFailed = true;
-      cancel(recheck);
-      if (watcher !== null) apply(disconnect, watcher, []);
-      const root = dom.documentElement();
-      if (root !== null) dom.setAttribute(root, "data-tq-flag-hide", "");
+      hideForGood();
     }
+  };
+
+  /**
+   * Schedules the next recheck after a page change: normally once the DOM is quiet (QUIET_PERIOD_MS
+   * after the last change), but never later than MAX_RECHECK_DELAY_MS after the first change of the
+   * burst, so a page that keeps mutating cannot postpone the comparison indefinitely.
+   */
+  const scheduleRecheck = () => {
+    if (comparisonFailed) return;
+    const nowMs = now();
+    if (recheck === undefined) recheckBy = nowMs + MAX_RECHECK_DELAY_MS;
+    cancel(recheck);
+    recheck = later(
+      () => {
+        recheck = undefined;
+        if (watcher !== null) apply(takeRecords, watcher, []);
+        showChecked();
+      },
+      Math.max(0, Math.min(QUIET_PERIOD_MS, recheckBy - nowMs)),
+    );
   };
 
   const compareAndShow = () => {
@@ -658,23 +717,29 @@ export function startRuntime(env: RuntimeEnvironment): Runtime {
     }
     flagged = [];
     const { findings } = compareDocument(dom, delivered.model, init.locale);
+    let rewritten = 0;
     for (const finding of findings) {
-      if (finding.fix !== null) applyFix(finding.fix);
-      else if (finding.problem.kind === "too_large") {
+      if (finding.fix !== null) {
+        if (applyFix(finding.fix)) rewritten++;
+      } else if (finding.problem.kind === "too_large") {
         const root = dom.documentElement();
         if (root !== null) flag(root, "data-tq-flag-hide");
       }
     }
-    // Changes after the render (a tooltip, a timer) are compared again once they settle; the
-    // runtime's own changes above are not a reason to.
+    // A page that keeps putting back values the runtime corrected is hidden for good; one that
+    // settles, or keeps updating with correct values (nothing to rewrite), is not.
+    if (rewritten > 0) {
+      if (++correctionStreak > MAX_CORRECTION_ROUNDS) {
+        hideForGood();
+        return;
+      }
+    } else {
+      correctionStreak = 0;
+    }
+    // Changes after the render (a tooltip, a timer) are compared again once they settle, within
+    // the bound; the runtime's own changes above are taken out so they are not a reason to.
     if (watcher === null) {
-      watcher = new MutationObserverConstructor(() => {
-        cancel(recheck);
-        recheck = later(() => {
-          if (watcher !== null) apply(takeRecords, watcher, []);
-          showChecked();
-        }, QUIET_PERIOD_MS);
-      });
+      watcher = new MutationObserverConstructor(() => scheduleRecheck());
       apply(observe, watcher, [doc, { subtree: true, childList: true, attributes: true, characterData: true }]);
     }
     apply(takeRecords, watcher, []);
@@ -817,6 +882,11 @@ export function installSandbox(win: DomWindow): Runtime | null {
   const source = Object.getOwnPropertyDescriptor(win.MessageEvent.prototype, "source")?.get;
   const data = Object.getOwnPropertyDescriptor(win.MessageEvent.prototype, "data")?.get;
   if (source === undefined || data === undefined) return null;
+  // Freeze the realm's built-ins before the first page script runs (on `init`, which arrives after
+  // this returns): the display-time comparison and the formatters it calls then read genuine
+  // intrinsics whatever the page does. The checker compares from a separate isolated world and does
+  // not rely on this; it hardens here too so a page runs under the same realm in both modes.
+  harden();
   const runtime = startRuntime({
     window: win,
     post: (message) => apply(postMessage, parent, [message, "*"]),

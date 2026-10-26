@@ -196,11 +196,18 @@ describe("Containerfile", () => {
     }
   });
 
-  test("takes every package from the pinned Debian snapshot, checked against Debian's archive keys", () => {
+  test("takes every package from the pinned Debian snapshot over https, checked against Debian's archive keys", () => {
     expect(containerfileArg("DEBIAN_SNAPSHOT")).toMatch(/^\d{8}T\d{6}Z$/);
     expect(CONTAINERFILE).toContain("Signed-By: /usr/share/keyrings/debian-archive-keyring.pgp");
-    expect(CONTAINERFILE).toContain("URIs: http://snapshot.debian.org/archive/debian/${DEBIAN_SNAPSHOT}");
-    expect(CONTAINERFILE).toContain("URIs: http://snapshot.debian.org/archive/debian-security/${DEBIAN_SNAPSHOT}");
+    expect(CONTAINERFILE).toContain("URIs: https://snapshot.debian.org/archive/debian/${DEBIAN_SNAPSHOT}");
+    expect(CONTAINERFILE).toContain("URIs: https://snapshot.debian.org/archive/debian-security/${DEBIAN_SNAPSHOT}");
+    // The signatures prove the files are Debian's, https that they come from the snapshot
+    // server itself: apt checks the server's certificate against the CA bundle of the pinned
+    // base image, and nothing turns that check off or falls back to plain http.
+    expect(CONTAINERFILE).not.toContain("http://");
+    expect(CONTAINERFILE).toMatch(/^COPY --from=base \/etc\/ssl\/certs\/ca-certificates\.crt \/apt\/ca-certificates\.crt$/m);
+    expect(CONTAINERFILE).toContain(`'Acquire::https::CaInfo "/apt/ca-certificates.crt";'`);
+    expect(CONTAINERFILE).not.toMatch(/Verify-Peer|Verify-Host|Acquire::http::/i);
     // apt must never be told to accept what it cannot verify.
     expect(CONTAINERFILE).not.toMatch(/AllowUnauthenticated|allow-unauthenticated|trusted=yes|AllowInsecureRepositories|AllowDowngradeToInsecureRepositories/i);
   });

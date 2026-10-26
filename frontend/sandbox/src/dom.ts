@@ -34,6 +34,13 @@ export interface DomAccess {
   shadowRoot(element: Element): ShadowRoot | null;
   /** The element's border box in the viewport. */
   box(element: Element): Box;
+  /** The element's scrollable content size and its visible (client) size, for clipping. */
+  scrollSize(element: Element): {
+    scrollWidth: number;
+    clientWidth: number;
+    scrollHeight: number;
+    clientHeight: number;
+  };
   /** Where an SVG element's own coordinate system starts in the viewport; `null` when unknown. */
   origin(element: Element): Point | null;
   /** A computed style property of the element or one of its pseudo-elements (`"::before"`). */
@@ -127,6 +134,11 @@ export function captureDom(win: DomWindow): DomAccess {
   const setAttribute = method(element, "setAttribute");
   const removeAttribute = method(element, "removeAttribute");
   const getBoundingClientRect = method(element, "getBoundingClientRect");
+  const scrollWidth = getter<number>(element, "scrollWidth");
+  const scrollHeight = getter<number>(element, "scrollHeight");
+  const clientWidth = getter<number>(element, "clientWidth");
+  const clientHeight = getter<number>(element, "clientHeight");
+  const size = (value: number) => (typeof value === "number" && Number.isFinite(value) ? value : 0);
   const getComputedStyle = win.getComputedStyle;
   const getPropertyValue = method(win.CSSStyleDeclaration.prototype, "getPropertyValue");
   const getAnimations = method(getPrototypeOf(doc) as object, "getAnimations");
@@ -154,6 +166,12 @@ export function captureDom(win: DomWindow): DomAccess {
   };
 
   return {
+    scrollSize: (target) => ({
+      scrollWidth: size(scrollWidth(target)),
+      clientWidth: size(clientWidth(target)),
+      scrollHeight: size(scrollHeight(target)),
+      clientHeight: size(clientHeight(target)),
+    }),
     documentElement: () => documentElement(doc),
     firstChild: (target) => firstChild(target),
     nextSibling: (target) => nextSibling(target),

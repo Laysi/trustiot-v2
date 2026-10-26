@@ -1,0 +1,29 @@
+BEFORE the fix (no freeze): a page replacing built-ins subverts a call-time-lookup comparison
+{
+  "before": {
+    "literal": "1,234",
+    "formatted": "1,234.5",
+    "rounded": 4
+  },
+  "after": {
+    "literal": null,
+    "formatted": "0",
+    "rounded": 0
+  },
+  "immune": false
+}
+
+AFTER the fix (harden freezes the realm): the same tampering has no effect
+{
+  "before": {
+    "literal": "1,234",
+    "formatted": "1,234.5",
+    "rounded": 4
+  },
+  "after": {
+    "literal": "1,234",
+    "formatted": "1,234.5",
+    "rounded": 4
+  },
+  "immune": true
+}

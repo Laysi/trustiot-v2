@@ -384,15 +384,16 @@ mod tests {
         assert!(Path::new(profile).starts_with(&work), "{profile}");
         assert_eq!(args.last(), Some(&"about:blank"));
         let env = std::fs::read_to_string(dir.join("record.env")).expect("env");
-        let names: Vec<&str> = env
+        // The shell that stands in for the browser sets these itself.
+        let variables: Vec<(&str, &str)> = env
             .lines()
-            .filter_map(|line| line.split('=').next())
-            .filter(|name| !["PWD", "SHLVL", "_", "OLDPWD"].contains(name))
+            .filter_map(|line| line.split_once('='))
+            .filter(|(name, _)| !["PWD", "SHLVL", "_", "OLDPWD"].contains(name))
             .collect();
-        let mut sorted = names.clone();
-        sorted.sort_unstable();
+        let mut names: Vec<&str> = variables.iter().map(|(name, _)| *name).collect();
+        names.sort_unstable();
         assert_eq!(
-            sorted,
+            names,
             ["HOME", "TMPDIR", "XDG_CACHE_HOME", "XDG_CONFIG_HOME"],
             "the browser gets no variable of the service"
         );
@@ -407,6 +408,14 @@ mod tests {
             .map(|entry| entry.expect("entry").path())
             .collect();
         assert_eq!(check_dirs.len(), 1);
+        // Everything the browser writes on its own (its profile, temporary files, and what
+        // HOME and the XDG directories lead to, such as the fontconfig cache) is in this
+        // check's directory, which the cleanup removes.
+        let check_dir = check_dirs.first().expect("one directory");
+        assert!(Path::new(profile).starts_with(check_dir), "{profile}");
+        for (name, value) in &variables {
+            assert!(Path::new(value).starts_with(check_dir), "{name}={value}");
+        }
 
         browser.close().await.expect("cleans up");
 

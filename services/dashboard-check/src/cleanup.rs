@@ -6,8 +6,9 @@
 //! checks nothing of the browser may remain:
 //!
 //! - processes: the browser's process group is killed, and when the service is the container's
-//!   PID 1 every other process of the service's user is killed and reaped too, so a process that
-//!   left the group (`setsid`) does not survive;
+//!   PID 1 every other process in its PID namespace is killed and reaped too, whatever its state,
+//!   so a process that left the group (`setsid`) does not survive, nor does one whose main thread
+//!   has exited while its other threads still run (it shows as a zombie);
 //! - files and IPC objects: when the service is PID 1, everything in the work directory,
 //!   `/dev/shm` and `/dev/mqueue` is removed, `/dev/termination-log` is emptied, and the System V
 //!   shared memory segments, message queues and semaphores of the IPC namespace are removed.
@@ -17,12 +18,14 @@
 //! next to something it could not remove.
 //!
 //! Outside a container (the service is not PID 1) only the browser's own process group and its
-//! own directory are removed: there the other processes and files are not the service's.
+//! own directory are removed: there the other processes and files are not the service's. The
+//! signal to every process needs an `Init`, which exists only in PID 1 on Linux, so no other
+//! path can reach it.
 
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-/// How long the processes may take to go away after `SIGKILL`.
+/// How long the other processes in the PID namespace may take to go away after `SIGKILL`.
 pub const PROCESS_DEADLINE: Duration = Duration::from_secs(3);
 
 /// Directories whose whole content goes between checks, besides the work directory.
@@ -35,8 +38,10 @@ pub const SHARED_FILES: [&str; 1] = ["/dev/termination-log"];
 /// Why the cleanup did not leave a clean pod.
 #[derive(Debug, thiserror::Error)]
 pub enum CleanupError {
-    #[error("processes of the service's user survived SIGKILL")]
+    #[error("processes survived SIGKILL")]
     Processes,
+    #[error("the whole-container cleanup ran in a process that is not PID 1")]
+    NotInit,
     #[error("the process table could not be read")]
     ProcessTable,
     #[error("{0} could not be emptied")]
@@ -49,7 +54,24 @@ pub enum CleanupError {
 #[derive(Clone, Debug)]
 pub struct Cleanup {
     work_dir: PathBuf,
-    whole_container: bool,
+    /// Present only when this process is PID 1 on Linux.
+    init: Option<Init>,
+}
+
+/// Proof that this process is PID 1 of its PID namespace on Linux, that is the container's
+/// init: the only process allowed to signal every other process. Only [`Init::here`] makes
+/// one (the field is private to this module), and the signal checks again before it is sent.
+#[derive(Clone, Copy, Debug)]
+struct Init(());
+
+impl Init {
+    fn here() -> Option<Self> {
+        (cfg!(target_os = "linux") && is_init()).then_some(Self(()))
+    }
+}
+
+fn is_init() -> bool {
+    std::process::id() == 1
 }
 
 impl Cleanup {
@@ -58,14 +80,14 @@ impl Cleanup {
     pub fn for_this_process(work_dir: &Path) -> Self {
         Self {
             work_dir: work_dir.to_owned(),
-            whole_container: cfg!(target_os = "linux") && std::process::id() == 1,
+            init: Init::here(),
         }
     }
 
     /// Whether the cleanup covers the whole container (the service is PID 1).
     #[must_use]
     pub fn whole_container(&self) -> bool {
-        self.whole_container
+        self.init.is_some()
     }
 
     /// The work directory the browser's directories go in.
@@ -74,7 +96,7 @@ impl Cleanup {
         &self.work_dir
     }
 
-    /// Kills and reaps every other process of the service's user, removes every file the
+    /// Kills and reaps every other process in the PID namespace, removes every file the
     /// service's user can write, and every System V IPC object. Does nothing unless
     /// [`Self::whole_container`].
     ///
@@ -82,10 +104,10 @@ impl Cleanup {
     ///
     /// When anything survives.
     pub fn container(&self) -> Result<(), CleanupError> {
-        if !self.whole_container {
+        let Some(init) = self.init else {
             return Ok(());
-        }
-        sweep_processes(Instant::now() + PROCESS_DEADLINE)?;
+        };
+        sweep_processes(init, Instant::now() + PROCESS_DEADLINE)?;
         empty_dir(&self.work_dir)?;
         for dir in SHARED_DIRS {
             let dir = Path::new(dir);
@@ -191,29 +213,68 @@ fn empty_file(path: &Path) -> Result<(), CleanupError> {
     }
 }
 
+/// Kills every other process in the PID namespace and reaps them until only this one is left.
+/// A process still listed in `/proc` at the deadline, in any state, is a survivor: a zombie is
+/// listed until it is reaped, and a process whose main thread has exited stays a zombie while
+/// any of its threads runs. Every round signals again, so a process forked while the previous
+/// signal went out is caught by the next.
 #[cfg(target_os = "linux")]
-fn sweep_processes(deadline: Instant) -> Result<(), CleanupError> {
+fn sweep_processes(init: Init, deadline: Instant) -> Result<(), CleanupError> {
     let me = std::process::id();
-    let uid = linux::uid();
     loop {
+        kill_every_other_process(init)?;
         reap_children();
-        let survivors = linux::live_processes(uid, me).map_err(|_| CleanupError::ProcessTable)?;
-        if survivors.is_empty() {
+        let left = linux::other_processes(me).map_err(|_| CleanupError::ProcessTable)?;
+        if left.is_empty() {
             return Ok(());
         }
         if Instant::now() > deadline {
             return Err(CleanupError::Processes);
-        }
-        for pid in survivors {
-            linux::kill(pid);
         }
         std::thread::sleep(Duration::from_millis(5));
     }
 }
 
 #[cfg(not(target_os = "linux"))]
-fn sweep_processes(_deadline: Instant) -> Result<(), CleanupError> {
+fn sweep_processes(_init: Init, _deadline: Instant) -> Result<(), CleanupError> {
     Ok(())
+}
+
+/// Sends `SIGKILL` to every process in the PID namespace but this one. Only PID 1 may: the
+/// [`Init`] it takes exists only there, and a copy of it in a forked child is no proof, so the
+/// process id is checked again right before the signal.
+#[cfg(any(target_os = "linux", test))]
+fn kill_every_other_process(_init: Init) -> Result<(), CleanupError> {
+    if !is_init() {
+        return Err(CleanupError::NotInit);
+    }
+    signal::kill_all_but_init();
+    Ok(())
+}
+
+#[cfg(any(target_os = "linux", test))]
+mod signal {
+    /// `kill(-1, SIGKILL)`: as PID 1 it reaches every process in the PID namespace the
+    /// service's user may signal; the kernel leaves out the caller, which is also init.
+    #[cfg(all(target_os = "linux", not(test)))]
+    #[allow(unsafe_code, reason = "kill(2) has no safe binding in std")]
+    pub(super) fn kill_all_but_init() {
+        // SAFETY: kill(2) takes two integers and touches no memory of this process. Only
+        // `kill_every_other_process` calls it, after checking that this process is PID 1.
+        let _ = unsafe { libc::kill(-1, libc::SIGKILL) };
+    }
+
+    /// How often the unit tests reached the signal. They never run as PID 1, and on a developer's
+    /// machine the real signal would reach every process of the developer, so the unit test
+    /// build only counts.
+    #[cfg(test)]
+    pub(super) static CALLS: std::sync::atomic::AtomicUsize =
+        std::sync::atomic::AtomicUsize::new(0);
+
+    #[cfg(test)]
+    pub(super) fn kill_all_but_init() {
+        CALLS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    }
 }
 
 /// Reaps every child that has exited. As PID 1 the service inherits every orphan.
@@ -261,8 +322,8 @@ pub fn protect_this_process() -> std::io::Result<()> {
 mod linux {
     use std::io;
 
-    /// Processes other than `me` that belong to `uid` and are not zombies.
-    pub(super) fn live_processes(uid: u32, me: u32) -> io::Result<Vec<i32>> {
+    /// Every process listed in `/proc` other than `me`, whatever its state or owner.
+    pub(super) fn other_processes(me: u32) -> io::Result<Vec<u32>> {
         let mut pids = Vec::new();
         for entry in std::fs::read_dir("/proc")? {
             let entry = entry?;
@@ -273,42 +334,11 @@ mod linux {
             else {
                 continue;
             };
-            if pid == me {
-                continue;
-            }
-            let Ok(status) = std::fs::read_to_string(entry.path().join("status")) else {
-                // Gone since the directory was read.
-                continue;
-            };
-            if belongs_and_lives(&status, uid) {
-                pids.push(i32::try_from(pid).map_err(|_| io::Error::other("pid"))?);
+            if pid != me {
+                pids.push(pid);
             }
         }
         Ok(pids)
-    }
-
-    /// Whether `/proc/<pid>/status` names a live process whose real user is `uid`.
-    pub(super) fn belongs_and_lives(status: &str, uid: u32) -> bool {
-        let mut zombie = false;
-        let mut owned = false;
-        for line in status.lines() {
-            if let Some(state) = line.strip_prefix("State:") {
-                zombie = state.trim_start().starts_with(['Z', 'X']);
-            } else if let Some(uids) = line.strip_prefix("Uid:") {
-                owned = uids
-                    .split_whitespace()
-                    .next()
-                    .and_then(|real| real.parse::<u32>().ok())
-                    == Some(uid);
-            }
-        }
-        owned && !zombie
-    }
-
-    #[allow(unsafe_code, reason = "getuid(2) has no safe binding in std")]
-    pub(super) fn uid() -> u32 {
-        // SAFETY: getuid(2) takes no arguments, touches no memory and cannot fail.
-        unsafe { libc::getuid() }
     }
 
     /// Reaps one exited child; false when there is none.
@@ -321,16 +351,6 @@ mod linux {
         // SAFETY: waitpid(2) writes only to `status`, a valid local integer.
         let reaped = unsafe { libc::waitpid(-1, &raw mut status, libc::WNOHANG) };
         reaped > 0
-    }
-
-    #[allow(unsafe_code, reason = "kill(2) has no safe binding in std")]
-    pub(super) fn kill(pid: i32) {
-        if pid <= 1 {
-            return;
-        }
-        // SAFETY: kill(2) takes two integers and touches no memory of this process; `pid` is a
-        // single process above 1, never a group or every process.
-        let _ = unsafe { libc::kill(pid, libc::SIGKILL) };
     }
 
     /// The ids in `/proc/sysvipc/{shm,msg,sem}`, in that order.
@@ -391,15 +411,13 @@ mod linux {
         use super::*;
 
         #[test]
-        fn reads_the_owner_and_state_from_status() {
-            let status =
-                "Name:\tchromium\nState:\tS (sleeping)\nUid:\t65532\t65532\t65532\t65532\n";
-            assert!(belongs_and_lives(status, 65532));
-            assert!(!belongs_and_lives(status, 0));
-            let zombie = "Name:\tchromium\nState:\tZ (zombie)\nUid:\t65532\t65532\t65532\t65532\n";
-            assert!(!belongs_and_lives(zombie, 65532));
-            let other = "State:\tR (running)\nUid:\t0\t65532\t65532\t65532\n";
-            assert!(!belongs_and_lives(other, 65532));
+        fn lists_every_other_process() {
+            let me = std::process::id();
+            let others = other_processes(me).expect("reads /proc");
+            assert!(!others.contains(&me));
+            // The parent (the test runner's caller) is another process and is listed.
+            let parent = std::os::unix::process::parent_id();
+            assert!(others.contains(&parent), "{parent} not in {others:?}");
         }
 
         #[test]
@@ -484,6 +502,22 @@ mod tests {
         assert!(!cleanup.whole_container());
         cleanup.container().expect("nothing to do");
         assert!(dir.join("other").exists());
+        assert_eq!(signal::CALLS.load(std::sync::atomic::Ordering::SeqCst), 0);
         std::fs::remove_dir_all(&dir).expect("cleanup");
+    }
+
+    #[test]
+    fn only_pid_1_may_signal_every_process() {
+        // No proof outside PID 1, so the cleanup above never had one.
+        assert!(!is_init());
+        assert!(Init::here().is_none());
+        // A proof that does not hold (as a copy in a forked child would be) is refused before
+        // the signal. The unit test build only counts the signal; it never sends it.
+        let forged = Init(());
+        assert!(matches!(
+            kill_every_other_process(forged),
+            Err(CleanupError::NotInit)
+        ));
+        assert_eq!(signal::CALLS.load(std::sync::atomic::Ordering::SeqCst), 0);
     }
 }

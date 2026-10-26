@@ -1,0 +1,10 @@
+<style>
+  #week::first-letter { color: transparent; }
+</style>
+<p>本週 <b id="week" style="display: inline-block"></b> kWh</p>
+<script>
+  // ::first-letter paints the first digit transparent, so 690.0 is seen as 90.0; textContent is unchanged.
+  tq.on("data", (tq) => {
+    tq.text(document.getElementById("week"), "f|week_kwh", ",.1f");
+  });
+</script>

@@ -7,7 +7,7 @@ import { Window } from "happy-dom";
 
 import type { DomWindow } from "../src/dom.ts";
 import type { CheckRequest, DatasetResult, SandboxMessage } from "../src/protocol.ts";
-import { describeError, installSandbox, timeOf, trustedEvents } from "../src/runtime.ts";
+import { describeError, installSandbox, MAX_CORRECTION_ROUNDS, timeOf, trustedEvents } from "../src/runtime.ts";
 import { dataMessage, type Frame, initMessage, openFrame } from "./harness.ts";
 
 const BASE = JSON.parse(readFileSync(new URL("../fixtures/request.json", import.meta.url), "utf8")) as Omit<
@@ -338,7 +338,7 @@ tq.on("data", (tq) => {
     usageRange: tq.dataset("meter_usage").meta.range_from.toISOString(),
     values: [tq.value("f|week_kwh"), tq.value("c|daily_energy|kwh|99"), tq.value("k|line_name"), tq.value("f|first_day_share")],
     formats: [tq.format(1234.5), tq.format(1234.5, ",.0f"), tq.format(null), tq.format(true), tq.format(new Date(Date.UTC(2026, 9, 20))), tq.format(0.25, ".0%")],
-    settings: [tq.locale, tq.tz, tq.theme, tq.mode],
+    settings: [tq.locale, tq.tz, tq.theme, tq.mode === undefined],
     frozen: Object.isFrozen(tq),
     errors,
   };
@@ -373,7 +373,7 @@ tq.on("data", (tq) => {
             usageRange: "2026-10-19T00:00:00.000Z",
             values: [690, null, "Line 2", 120.5 / 690],
             formats: ["1,234.5", "1,235", "—", "是", "2026-10-20", "25%"],
-            settings: ["zh-TW", "Asia/Taipei", "light", "check"],
+            settings: ["zh-TW", "Asia/Taipei", "light", true],
             frozen: true,
             errors: {
               reference: "TypeError",
@@ -635,6 +635,79 @@ tq.on("data", (tq) => {
         expect(win.document.getElementById("week")?.textContent).toBe("1.0");
         expect(win.document.querySelector("[data-tq-flag]")).toBeNull();
       });
+    },
+    TEST_MS,
+  );
+
+  // A page that keeps writing a wrong value back after the runtime corrects it: every recheck has
+  // to rewrite the same value, so after MAX_CORRECTION_ROUNDS rounds the whole page is hidden for
+  // good. The interval is longer than the quiet period, so each round is driven by one rewrite.
+  const fightingPage = `<p><b id="week"></b></p>
+<script>
+tq.on("data", (tq) => {
+  const week = document.getElementById("week");
+  tq.text(week, "f|week_kwh", ",.1f");
+  week.textContent = "999,999.0";
+  if (!window.started) {
+    window.started = true;
+    setInterval(() => { week.textContent = "999,999.0"; }, 300);
+  }
+});
+</script>`;
+
+  test(
+    "hides the page for good when it keeps rewriting a value the runtime corrected",
+    async () => {
+      await withPage(
+        request(fightingPage),
+        async (frame, win) => {
+          await expectMessage(frame, "rendered", rendered(1));
+          // The wrong value is corrected, not yet hidden.
+          expect(win.document.getElementById("week")?.textContent).toBe("—");
+          expect(win.document.documentElement.hasAttribute("data-tq-flag-hide")).toBe(false);
+          // It keeps coming back; within the correction-round bound the page is hidden for good.
+          await waitFor("the page hidden", () => win.document.documentElement.hasAttribute("data-tq-flag-hide"));
+          // Once hidden it stays hidden, whatever the page does next.
+          win.document.getElementById("week")?.setAttribute("data-x", "1");
+          await new Promise((resolve) => setTimeout(resolve, 3 * 300));
+          expect(win.document.documentElement.hasAttribute("data-tq-flag-hide")).toBe(true);
+        },
+        "view",
+      );
+    },
+    TEST_MS,
+  );
+
+  // A page that keeps redrawing the correct value: every recheck finds nothing to rewrite, so the
+  // correction streak never grows and the page keeps showing, past the hide threshold.
+  const correctLoop = `<p><b id="week"></b></p>
+<script>
+tq.on("data", (tq) => {
+  const week = document.getElementById("week");
+  const draw = () => { tq.text(week, "f|week_kwh", ",.1f"); window.renders = (window.renders || 0) + 1; };
+  draw();
+  if (!window.started) { window.started = true; setInterval(draw, 120); }
+});
+</script>`;
+
+  test(
+    "keeps showing a page that keeps updating with correct values",
+    async () => {
+      await withPage(
+        request(correctLoop),
+        async (frame, win) => {
+          await expectMessage(frame, "rendered", rendered(1));
+          // Redraws correctly more often than the hide threshold, and is never hidden.
+          await waitFor(
+            "enough correct redraws",
+            () => ((win.renders as number | undefined) ?? 0) > MAX_CORRECTION_ROUNDS + 3,
+          );
+          expect(win.document.documentElement.hasAttribute("data-tq-flag-hide")).toBe(false);
+          expect(win.document.getElementById("week")?.textContent).toBe("690.0");
+          expect(win.document.getElementById("week")?.hasAttribute("data-tq-flag")).toBe(false);
+        },
+        "view",
+      );
     },
     TEST_MS,
   );

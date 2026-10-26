@@ -491,6 +491,119 @@
       }
     },
     {
+      "name": "builtin-tampering",
+      "page": "pages/builtin-tampering.html",
+      "unit": false,
+      "about": "The page replaces the built-ins the comparison's formatter (bundled d3-format), reference parsing and literal scan call at call time (Intl, Math, Number, String, RegExp, Array, Set, Map), both the methods on them and the whole binding behind a bare reference (globalThis.Math, ...), then shows a wrong marked value and a typed number. The checker compares from a separate isolated world; at display time harden has frozen the page's realm before the page ran. Either way the comparison reads genuine built-ins and flags both. Browser-only: the page replaces realm globals, which the shared test realm cannot allow.",
+      "expect": {
+        "verdict": "failed",
+        "problems": [
+          {
+            "kind": "mismatch",
+            "reference": "f|week_kwh",
+            "value": 690,
+            "tag": "b"
+          },
+          {
+            "kind": "literal_number",
+            "place": "text",
+            "literal": "4,321",
+            "tag": "p"
+          }
+        ]
+      }
+    },
+    {
+      "name": "text-mark-child",
+      "page": "pages/text-mark-child.html",
+      "unit": true,
+      "about": "A text mark whose textContent equals the value but which holds an element child; a child can carry ::before content or be positioned or hidden, so a text mark must be a single text node.",
+      "expect": {
+        "verdict": "failed",
+        "problems": [{ "kind": "mismatch", "reference": "f|week_kwh", "value": 690, "tag": "b" }]
+      }
+    },
+    {
+      "name": "text-mark-bidi",
+      "page": "pages/text-mark-bidi.html",
+      "unit": true,
+      "about": "A bidi override reverses the digits: textContent is 690.0, the number is seen as 0.096.",
+      "expect": {
+        "verdict": "failed",
+        "problems": [{ "kind": "mismatch", "reference": "f|week_kwh", "value": 690, "tag": "b" }]
+      }
+    },
+    {
+      "name": "text-mark-ellipsis",
+      "page": "pages/text-mark-ellipsis.html",
+      "unit": false,
+      "about": "The value overflows a narrow box that clips to an ellipsis, so only its first part is seen; textContent still reads the whole number. Browser-only: it needs real layout to know the content overflows.",
+      "expect": {
+        "verdict": "failed",
+        "problems": [{ "kind": "mismatch", "reference": "f|week_kwh", "value": 690, "tag": "b" }]
+      }
+    },
+    {
+      "name": "text-mark-hidden",
+      "page": "pages/text-mark-hidden.html",
+      "unit": true,
+      "about": "The mark is visibility:hidden, so the value is not shown though textContent carries it.",
+      "expect": {
+        "verdict": "failed",
+        "problems": [{ "kind": "mismatch", "reference": "f|week_kwh", "value": 690, "tag": "b" }]
+      }
+    },
+    {
+      "name": "text-mark-first-letter",
+      "page": "pages/text-mark-first-letter.html",
+      "unit": false,
+      "about": "::first-letter hides the first digit (font-size 0), so 690.0 is seen as 90.0; textContent is unchanged. Browser-only: a unit DOM does not apply ::first-letter.",
+      "expect": {
+        "verdict": "failed",
+        "problems": [{ "kind": "mismatch", "reference": "f|week_kwh", "value": 690, "tag": "b" }]
+      }
+    },
+    {
+      "name": "text-mark-first-letter-color",
+      "page": "pages/text-mark-first-letter-color.html",
+      "unit": false,
+      "about": "::first-letter paints the first digit transparent, so 690.0 is seen as 90.0; textContent is unchanged. Browser-only: a unit DOM does not apply ::first-letter.",
+      "expect": {
+        "verdict": "failed",
+        "problems": [{ "kind": "mismatch", "reference": "f|week_kwh", "value": 690, "tag": "b" }]
+      }
+    },
+    {
+      "name": "text-mark-transparent",
+      "page": "pages/text-mark-transparent.html",
+      "unit": true,
+      "about": "The number is painted in a transparent colour, so it is not seen though textContent carries it.",
+      "expect": {
+        "verdict": "failed",
+        "problems": [{ "kind": "mismatch", "reference": "f|week_kwh", "value": 690, "tag": "b" }]
+      }
+    },
+    {
+      "name": "text-mark-font-size-zero",
+      "page": "pages/text-mark-font-size-zero.html",
+      "unit": false,
+      "about": "font-size:0 gives the mark a zero-size box, so the value is not drawn; textContent carries it. Browser-only: it needs real layout to see the box has no area.",
+      "expect": {
+        "verdict": "failed",
+        "problems": [{ "kind": "mismatch", "reference": "f|week_kwh", "value": 690, "tag": "b" }]
+      }
+    },
+    {
+      "name": "text-mark-clipped",
+      "page": "pages/text-mark-clipped.html",
+      "unit": false,
+      "about": "The value overflows a narrow clipping box, so only its first part is seen; textContent is the whole number. Browser-only: it needs real layout to know the content overflows.",
+      "expect": {
+        "verdict": "failed",
+        "problems": [{ "kind": "mismatch", "reference": "f|week_kwh", "value": 690, "tag": "b" }]
+      }
+    },
+    {
       "name": "unsupported-canvas",
       "page": "pages/unsupported-canvas.html",
       "unit": true,
