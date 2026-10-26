@@ -50,7 +50,7 @@ Debian 的 `trixie-security` 每出一個新的 Chromium 都是安全更新，Re
    ```
 
    沒改時建置在版本檢查停止（snapshot 裡還是舊版本）。改成更晚的時間也可以，但其他套件會一起換成那個時間的版本。
-2. 在本機跑映像測試（`bun test deploy/images/dashboard-check`，見下方「測試」）。
+2. 確認映像測試通過：ci.yml 的 `dashboard-check-image` job 會在 PR 上執行，也可以在本機跑（`bun test deploy/images/dashboard-check`，見下方「測試」）。
 3. 合併前加上 `smoke` label，讓 nightly 從原始碼建出新映像並在叢集裡檢查（[CI 與發佈](../../../docs/architecture/ci-release.md)「nightly.yml」）。
 
 ## 怎麼知道映像落後
@@ -68,6 +68,7 @@ bun test deploy/images/dashboard-check
 DASHBOARD_CHECK_IMAGE=<本機映像> bun test deploy/images/dashboard-check
 ```
 
+- ci.yml 的 `dashboard-check-image` job 在 arm64 runner 上執行這個測試，在映像、服務、它依賴的 crate、沙箱或前端的建置工具有變更時執行（規則在 `scripts/ci/changes.ts`，見 [CI 與發佈](../../../docs/architecture/ci-release.md)「依變更路徑決定 job」）。
 - 沒給 `DASHBOARD_CHECK_IMAGE` 時，以 nightly 的方式建置映像（`scripts/nightly/service-image.ts` 的 `buildServiceImage`，與 release.yml 同一份 build context），需要 rustup 與 `proto install` 裝好的 zig、cargo-zigbuild、cargo-auditable，並會重建 `frontend/dist`。`DASHBOARD_CHECK_SITE=<目錄>` 改用該目錄的前端建置結果，不重建。
 - 容器引擎用 docker，沒有 docker 時用 podman（記憶體上限需要 rootful 的引擎或 cgroup 委派）；引擎要能執行 linux/arm64 容器（arm64 主機，或以 binfmt_misc 註冊的 arm64 模擬器），否則映像相關的測試在本機略過、設了 `CI` 時失敗。`Containerfile` 的檢查在哪裡都會執行。
 - 服務以 chart 的設定執行：根目錄唯讀、`/tmp` 是 chart `tmpSizeLimit` 大小的記憶體檔案系統、拿掉所有 capability、`no-new-privileges`、引擎預設的 seccomp profile、chart 的記憶體上限、UID 65532。
