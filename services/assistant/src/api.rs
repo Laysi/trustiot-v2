@@ -152,7 +152,8 @@ async fn commit(tx: TenantTransaction, user: &UserIdentity) -> Result<(), ApiErr
     })
 }
 
-fn db_error_kind(failure: &TenantDbError) -> String {
+/// What to log of a failure to open a tenant transaction; never the database's text.
+pub(crate) fn db_error_kind(failure: &TenantDbError) -> String {
     match failure {
         TenantDbError::NoTenant => "no tenant".to_owned(),
         TenantDbError::UnsafeSession(_) => "unsafe session".to_owned(),
@@ -162,7 +163,7 @@ fn db_error_kind(failure: &TenantDbError) -> String {
 }
 
 /// The SQLSTATE of a database error, or the kind of a client error; never the database's text.
-fn sqlx_error_kind(failure: &sqlx::Error) -> String {
+pub(crate) fn sqlx_error_kind(failure: &sqlx::Error) -> String {
     match failure {
         sqlx::Error::Database(database) => database
             .code()

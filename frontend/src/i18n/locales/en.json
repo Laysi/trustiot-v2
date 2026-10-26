@@ -33,6 +33,8 @@
   "telemetry.query_too_heavy": "This query needs too many resources. Choose a shorter time range or a longer interval.",
   "telemetry.account_not_ready": "Telemetry history for this organization isn't ready yet. Try again in a few minutes.",
 
+  "assistant.answer_content_removed": "Code, HTML or SQL in this answer was removed.",
+
   "dashboard.version_not_found": "This version of the dashboard doesn't exist.",
   "dashboard.version_conflict": "The dashboard changed while you were looking at it (it is now at version {latest}). Reload it and try again.",
   "dashboard.saved_changed": "Someone published a newer version of this dashboard (version {latest}) after this draft was made. Ask the assistant to update the draft, then publish again.",
@@ -47,7 +49,7 @@
   "dashboard.dataset_refused": "This data can no longer be queried as written. Ask the assistant to update the dashboard.",
   "dashboard.dataset_timeout": "The query took too long. Try again later.",
   "dashboard.dataset_failed": "The data couldn't be loaded. Try again later.",
-  "dashboard.runs_limited": "Dashboards in your organization are loading too much data right now. Try again in a minute.",
+  "dashboard.runs_limited": "Dashboards in your organization are loading too much data right now. Try again shortly.",
   "dashboard.query_quota_exhausted": "Your organization has used up its query allowance for now. Try again later.",
 
   "device_model.body_too_large": "The device model is too large. The limit is {max_bytes} bytes.",

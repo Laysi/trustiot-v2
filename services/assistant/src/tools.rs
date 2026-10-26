@@ -4,8 +4,10 @@
 //! are in [`telemetry`], [`semantic`] (Laysi/trustiot-v2#142) and [`device_models`]
 //! (Laysi/trustiot-v2#591), the read-only SQL over telemetry in [`telemetry_sql`]
 //! (Laysi/trustiot-v2#143); they call the other services through [`crate::callee`] with a token
-//! from the question's [`Delegation`].
+//! from the question's [`Delegation`]. The [`dashboard`] tool (Laysi/trustiot-v2#150) lists,
+//! reads and writes dashboards.
 
+pub mod dashboard;
 pub mod device_models;
 pub mod semantic;
 pub mod telemetry;
@@ -254,6 +256,18 @@ pub trait Tool: Send + Sync + 'static {
         "Ask for fewer rows, fewer fields or a shorter time range, or aggregate."
     }
 
+    /// The time limit of one call when the tool needs another than
+    /// [`ToolLimits::call_timeout`] (the `dashboard` tool runs datasets and a check in one
+    /// call). The question's deadline still ends the call.
+    fn call_timeout(&self) -> Option<Duration> {
+        None
+    }
+
+    /// Told to the model when a call passed its time limit: what to change.
+    fn timeout_hint(&self) -> &str {
+        "Ask for less data or a shorter time range."
+    }
+
     /// One call. `input` is the JSON object the model wrote; the tool checks it and answers
     /// [`ToolError::Input`] when it does not fit.
     fn call(
@@ -266,6 +280,7 @@ pub trait Tool: Send + Sync + 'static {
 /// The limits on every tool call.
 #[derive(Clone, Copy, Debug)]
 pub struct ToolLimits {
+    /// The time limit of a call, unless the tool sets its own ([`Tool::call_timeout`]).
     pub call_timeout: Duration,
     /// How many calls of one model response run (at the same time). The 10-tool cap limits
     /// the tool set, not the calls: one response may ask for any number, so the calls after
@@ -404,6 +419,7 @@ impl ToolRegistry {
         let mut results: Vec<Option<ToolOutput>> = vec![None; calls.len()];
         let mut started = Vec::with_capacity(calls.len());
         let mut tasks = JoinSet::new();
+        // Each running call's index, time limit and tool.
         let mut index_of = HashMap::new();
         for (index, call) in calls.iter().enumerate() {
             started.push(Instant::now());
@@ -443,10 +459,10 @@ impl ToolRegistry {
                 continue;
             }
             let call_future = Arc::clone(tool).call(context.clone(), call.input.clone());
-            let timeout = self.limits.call_timeout;
+            let timeout = tool.call_timeout().unwrap_or(self.limits.call_timeout);
             let handle =
                 tasks.spawn(async move { tokio::time::timeout(timeout, call_future).await });
-            index_of.insert(handle.id(), index);
+            index_of.insert(handle.id(), (index, timeout, Arc::clone(tool)));
         }
         while let Some(joined) = tasks.join_next_with_id().await {
             let (id, outcome) = match joined {
@@ -463,7 +479,7 @@ impl ToolRegistry {
                     Err((Outcome::Denied, ToolOutput::error(DENIED_MESSAGE))),
                 ),
                 Ok((id, Ok(Err(ToolError::Revoked)))) => {
-                    if let Some(&index) = index_of.get(&id) {
+                    if let Some(&(index, _, _)) = index_of.get(&id) {
                         log_call(
                             context,
                             &calls[index],
@@ -476,24 +492,26 @@ impl ToolRegistry {
                     tasks.abort_all();
                     return Err(AccessRevoked);
                 }
-                Ok((id, Err(_elapsed))) => (
-                    id,
-                    Err((
-                        Outcome::Timeout,
-                        ToolOutput::error(format!(
-                            "The tool did not finish within {} seconds. Ask for less data or a \
-                             shorter time range.",
-                            self.limits.call_timeout.as_secs()
-                        )),
-                    )),
-                ),
+                Ok((id, Err(_elapsed))) => {
+                    let message =
+                        index_of
+                            .get(&id)
+                            .map_or_else(String::new, |(_, timeout, tool)| {
+                                format!(
+                                    "The tool did not finish within {} seconds. {}",
+                                    timeout.as_secs(),
+                                    tool.timeout_hint()
+                                )
+                            });
+                    (id, Err((Outcome::Timeout, ToolOutput::error(message))))
+                }
                 // A panic: the task's error carries the panic message, which is not logged.
                 Err(error) => (
                     error.id(),
                     Err((Outcome::Failed, ToolOutput::error(FAILED_MESSAGE))),
                 ),
             };
-            let Some(&index) = index_of.get(&id) else {
+            let Some(&(index, _, _)) = index_of.get(&id) else {
                 continue;
             };
             let (outcome, output) = match outcome {

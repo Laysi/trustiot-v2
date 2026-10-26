@@ -246,7 +246,7 @@ fn checked(name: &str) -> Result<&str, ToolError> {
 
 /// What the model is told about `refusal`: fixed text, with numbers and the names it wrote.
 /// A class, clause or kind this version does not know is [`ToolError::Failed`].
-fn hint(refusal: &SqlRefusal) -> Result<String, ToolError> {
+pub(crate) fn hint(refusal: &SqlRefusal) -> Result<String, ToolError> {
     Ok(match refusal {
         SqlRefusal::TooLong { max_bytes } => {
             format!("The SQL is longer than {max_bytes} bytes. Write a shorter query.")

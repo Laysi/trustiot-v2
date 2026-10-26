@@ -568,7 +568,7 @@ fn tool_error(failure: CallFailure) -> ToolError {
 }
 
 /// `2xx` to `5xx`: what the logs say of a service's status.
-fn status_class(status: u16) -> &'static str {
+pub(crate) fn status_class(status: u16) -> &'static str {
     match status {
         100..=199 => "1xx",
         200..=299 => "2xx",
@@ -578,7 +578,9 @@ fn status_class(status: u16) -> &'static str {
     }
 }
 
-async fn read_limited(
+/// The body of `response`, at most `limit` bytes; otherwise the kind of failure, for the logs:
+/// `too_large`, `timeout` or `transport`.
+pub(crate) async fn read_limited(
     mut response: reqwest::Response,
     limit: usize,
 ) -> Result<Vec<u8>, &'static str> {

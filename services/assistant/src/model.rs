@@ -313,6 +313,19 @@ pub trait ModelClient: Send + Sync {
     /// The results of one turn's tool calls, in one message, in the order of the calls.
     fn tool_results(&self, results: &[ToolResult]) -> Result<NativeMessage, EncodeError>;
 
+    /// `message`, a model turn in this format, with the text of each text block replaced by
+    /// `rewrite(text)` where that returns `Some` (the answer guard, [`crate::answer_guard`]). A
+    /// block whose new text is blank is dropped, and when no text block with more than blanks is
+    /// left, one with `fallback` ends the message, since the history needs text. Every other block (thinking
+    /// with its signature, tool calls) stays byte for byte. `Ok(None)` when no block changed:
+    /// the caller keeps `message` as it is.
+    fn rewrite_text(
+        &self,
+        message: &NativeMessage,
+        rewrite: &mut dyn FnMut(&str) -> Option<String>,
+        fallback: &str,
+    ) -> Result<Option<NativeMessage>, EncodeError>;
+
     /// A high estimate of the input tokens `message` adds to a request, for the budget check
     /// before a call. It errs high: a low estimate lets a call cross the budget.
     fn estimate_tokens(&self, message: &NativeMessage) -> u64;

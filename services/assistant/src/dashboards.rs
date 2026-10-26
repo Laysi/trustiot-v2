@@ -7,13 +7,16 @@
 //!   what.
 //! - [`runner`]: dataset runs at telemetry-query as the caller, within the caps of [`caps`],
 //!   flattened by [`flatten`] for semantic sources.
+//! - [`checker`]: the dashboard check, which passes a page before the tool writes it.
 //! - The public API over both: [`crate::api`].
 //!
-//! The `dashboard` tool (Laysi/trustiot-v2#150, S5) writes drafts through [`store`] in a
-//! transaction of the question's tenant and runs datasets through the same
-//! [`runner::DatasetRunner`] as the API, so the caps hold for both.
+//! The `dashboard` tool ([`crate::tools::dashboard`]) writes drafts through [`store`] in a
+//! transaction of the question's tenant, after it ran the datasets through the same
+//! [`runner::DatasetRunner`] as the API (so the caps hold for both) and [`checker`] passed the
+//! page.
 
 pub mod caps;
+pub mod checker;
 pub mod flatten;
 pub mod runner;
 pub mod store;

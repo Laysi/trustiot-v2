@@ -17,6 +17,8 @@ AI 助理（決策 31）的主 agent 迴圈：使用者對自己租戶的資料�
 | `src/tools/semantic.rs` | 工具 `telemetry_statistics`、`telemetry_usage`（telemetry-query 的語意查詢 API，Laysi/trustiot-v2#142） |
 | `src/tools/device_models.rs` | 工具 `device_models`（assets 的設備型號列表） |
 | `src/tools/telemetry_sql.rs` | 工具 `telemetry_sql`（telemetry-query 的內部 SQL 入口），拒絕類別對應的固定說明 |
+| `src/tools/dashboard.rs` | 工具 `dashboard`（Laysi/trustiot-v2#150）：列出、讀取、寫入儀表板；寫入前執行資料集與檢查頁面，問題是封閉的類別與固定說明 |
+| `src/answer_guard.rs` | 回答的過濾：移除回答裡的 fenced code、含程式碼的 inline code、HTML 與 SQL，回報移除的類別；`find` 與 `pending` 給串流（Laysi/trustiot-v2#147）用 |
 | `src/callee.rs` | 工具與儀表板的資料集執行以使用者身分呼叫其他服務的 HTTP client（GET 與 JSON 本文的 POST）：每次呼叫換 token、錯誤只看狀態碼（`telemetry_sql` 的 422 例外，嚴格解析成封閉的拒絕型別）；`Caller` 是呼叫代表誰、日誌記成哪個工具或資料集執行 |
 | `src/delegation.rs` | 一次提問的 run 委派：`QuestionRuns::start`（聊天 API 的入口）、`QuestionRun`（截止時間、撤銷）；`OnBehalfOf` 以公開 API 請求的身分換 token（資料集執行） |
 | `src/api.rs` | 公開 API（`/api/assistant/v1`）的共用部分：每個請求驗證內部身分、`cache-control: no-store`、M1 錯誤、嚴格的請求本文；`openapi()` 的文件 |
@@ -25,6 +27,7 @@ AI 助理（決策 31）的主 agent 迴圈：使用者對自己租戶的資料�
 | `src/dashboards/runner.rs` | 資料集的執行：以呼叫者的身分呼叫 telemetry-query，回答與錯誤對應成封閉的結果 |
 | `src/dashboards/caps.rs` | 資料集執行的上限：每個租戶、每個副本每分鐘 60 次、同時 2 個 |
 | `src/dashboards/flatten.rs` | 語意資料集（統計、用量）的回答攤平成表格 |
+| `src/dashboards/checker.rs` | 檢查服務（services/dashboard-check）的 client：送出檢查、收不到可用判定的每種情況對應成封閉的原因 |
 | `src/budget.rs` | 每個問題的 token 預算 |
 | `src/prompt.rs` | 平台 system prompt（有版本）與對話中的固定指示 |
 | `src/config.rs` | 設定與啟動檢查 |
@@ -36,7 +39,7 @@ AI 助理（決策 31）的主 agent 迴圈：使用者對自己租戶的資料�
 1. 問題以使用者訊息加到歷史最後。
 2. 呼叫模型。請求本文依序是：`tools`（依名稱排序）、`system` 的兩個區塊（平台 system prompt、租戶脈絡，各有一個快取斷點；租戶脈絡是成員輸入的文字，跳脫 `&`、`<`、`>` 後包在 `<tenant_context>` 標籤裡，system prompt 說明它是資料）、`messages`（整段歷史，加上頂層 `cache_control` 的自動快取）。另有 `thinking: {"type": "adaptive"}`、`output_config.effort` 與 `max_tokens`；不帶 `model`，由閘道依角色填入。
 3. 模型要求工具時，同一回合的工具並行執行，各有時間上限；結果依呼叫順序放在一則使用者訊息交回。模型的這一回合連同工具結果一起加到歷史，然後回到第 2 步。
-4. 模型回答時，回答加到歷史，問答結束。
+4. 模型回答時，回答先經過「回答的過濾」（下方）再加到歷史，問答結束；歷史與呼叫端拿到的是同一份過濾後的文字。
 
 一次提問最長到它的截止時間（見下方「代表使用者呼叫」）：時間到就以「提問超時」結束，不論正在呼叫模型或執行工具。歷史只在一個模型回合與它的工具結果都完成時才一起加入，所以在任何時點中斷都不會留下半個步驟。
 
@@ -50,6 +53,16 @@ AI 助理（決策 31）的主 agent 迴圈：使用者對自己租戶的資料�
 - 工具步驟與結果在聊天畫面隱藏（`EntryKind::shown`），但留在歷史裡。
 - 拒答或內容不完整的回合不加入歷史；之後的問題照常接在後面。
 
+### 回答的過濾
+
+驗收條件「回答文字不出現 SQL 或 HTML」（Laysi/trustiot-v2#150）：使用者讀回答、儀表板顯示資料，回答不帶儀表板的 SQL 或頁面，也不帶其他程式碼。system prompt 這樣要求，`answer_guard` 讓它不論模型寫了什麼都成立。
+
+- **移除什麼**（封閉的三類，`answer_guard::Removed`）：`code` 是 fenced code（```` ``` ```` 或 `~~~`，列表與引用裡也算，沒關閉的到結尾）與含程式碼的 inline code（有 `=`、`;`、`{`、`}`、`->` 或 `f(x)` 這種呼叫；資料集名稱、單位、時區這類反引號裡的名稱保留）；`html` 是 HTML 的 tokenizer 會當成標籤的任何開始或結束標籤：`<` 或 `</` 加英文字母開頭，一直到結束它的 `>`（引號內屬性值裡的 `>` 不算），不論長度與名稱：`<widget>`、`<svg:path>`、含其他文字的名稱與 `<device>` 這種佔位字都算，因為解析器一樣當成元素；`<` 加字母到下一個 `>` 之間的文字對解析器就是標籤，所以「電壓<V1時跳脫，電流>5A」會少掉「<V1時跳脫，電流>」（寧可多移除）；後面沒有 `>` 的 `<` 加字母（`x<y`）保留，解析器也不會產生標籤，但已經有引號屬性值的（`<img src="x"` 到結尾）是被截斷的標籤，移除到結尾；CommonMark 的自動連結只有 `http`、`https`、`mailto` 與 e-mail（`<https://…>`、`<ops@example.com>`）保留成連結，其他 scheme 對解析器是標籤；還有註解（到 `-->`）、`<![CDATA[…]]>`、`<!DOCTYPE>`、`<?xml …?>`、`<!ENTITY …>`、`</ …>` 這類宣告（到引號外的 `>`），沒結束的都到結尾；以字元參照寫的標籤（`&lt;div&gt;`、`&#60;b&#62;`），`<script>`、`<style>` 連內容一起；`sql` 是以敘述關鍵字開頭、帶有對應子句（`SELECT … FROM`、`INSERT INTO`、`UPDATE … SET` …）的敘述，以及單獨一行或在程式碼裡、後面只有運算式的 `SELECT`（`SELECT 1`、`select now()`；在句子中間時運算式要有呼叫、運算子或字串，例如「請執行 select max(kwh) 看尖峰」），inline code 裡不分大小寫，文字裡要有更多 SQL 的特徵（句子中間的大寫 `SELECT 欄位 FROM 表`、小寫但欄位名稱帶 `_` 或逗號的 `select device_id, ts from t`、`SELECT` 或 `FROM` 其中之一大寫的 `SELECT kwh from devices` 也算；首字大寫的 `Select device_id From devices` 要有 SQL 的結構且沒有英文冠詞；行首、冒號後或表格儲存格裡只有關鍵字與單純名稱的敘述不分大小寫、不論怎麼結尾都算，例如 `Query: select value from devices.`、`delete from devices`），表格的儲存格開頭與行首一樣、`|` 結束敘述；ClickHouse 與 MySQL 以反引號括住的名稱（`` SELECT `device_id` FROM `devices` ``）算在敘述裡，兩個以上反引號開頭的 inline code 到同樣長度的反引號才結束（CommonMark 的規則），所以「Select the meter from the list」、「超過 <5% 的電表」、中文裡的 select 這類文字保留（單元測試列出這些邊界）。
+- **怎麼套用**：模型的回答回合在加入歷史前，每個文字區塊各自過濾（`ModelClient::rewrite_text`），thinking 區塊與 signature 等其他區塊逐位元組不變；整段都被移除時，文字是「…」。日誌記一行 INFO `removed content from an answer`（只有移除的類別）。
+- **給聊天 API**：`Answer::removed` 是移除的類別（序列化成 `["code", "html", "sql"]` 的子集），聊天畫面據此顯示 `assistant.answer_content_removed`（zh-TW 與 en 的翻譯在 `frontend/src/i18n/locales/`）。本服務還沒有聊天 API：回應帶出這個欄位、存進對話歷史讓重新載入時也顯示，由 Laysi/trustiot-v2#645、#646 接上（見「之後接上的地方」）。
+- **串流**：`answer_guard::find` 是同一個偵測器，回傳每段要移除的位置；`answer_guard::pending` 回傳目前為止的文字從哪裡開始還不確定，Laysi/trustiot-v2#147 送出它之前、去掉 `find` 找到的部分，其餘暫緩。它是下列最早一處所在段落（最後一個空行 `\n\n` 之後；除了標籤，每種掃描都在空行結束）的開頭：文字結尾（最後一段裡的敘述、inline code、以字元參照寫的標籤可能還會變長）、第一個延伸到文字結尾的發現處（沒關閉的 fence、註解、宣告，或停在引號屬性值裡的標籤）、最後一個 fence 之後第一個還沒被 `>` 結束的 `<` 加字母（標籤可能幾段之後才結束）。單元測試對幾段回答的每個前綴檢查：`pending` 之前的發現處與整段回答的相同。
+- **長度**：每種掃描都是線性的（所有候選標籤一起掃一遍：tokenizer 的下一個狀態只看目前狀態與位元組，同一位置、同一狀態的候選合併成一組，同時最多 20 組；宣告的結尾以引號與 `>` 的索引找到；一個敘述最多讀 32 KiB），一長串重複的 `select`、未關閉的標籤、宣告、註解、字元參照或反引號不會讓過濾變慢（單元測試）。
+
 ## 工具
 
 工具在每次呼叫其他服務前，以這次提問的委派換一張受眾是該服務的 token（`Delegation::token_for`），帶在 `x-internal-identity`，呼叫的是 web 前端經入口 gateway 呼叫的同一組 API（`/api/...`）；`telemetry_sql` 是例外，呼叫只給 AI 用的內部入口 `POST /internal/telemetry/v1/sql`（入口 gateway 不轉送 `/internal`，瀏覽器送不了 SQL）。被呼叫端照一般請求檢查 token 的受眾、使用者的租戶與角色，所以工具讀得到的正是使用者自己讀得到的（決策 27、29）。
@@ -61,6 +74,7 @@ AI 助理（決策 31）的主 agent 迴圈：使用者對自己租戶的資料�
 | `telemetry_usage` | telemetry-query `POST /api/telemetry/v1/usage` | 同 `telemetry_statistics` | 每個資料點的 `status`（`ok`、`no_data`、`not_numeric`、`not_cumulative`），`ok` 的有 `total`、讀數、重置、斷訊、可疑跳增與累計檢查；有 `interval` 時另有每個有讀數的區間一列 `[起點, 用量, 讀數, 重置, 斷訊後, 可疑跳增]` 與用量最高、最低的區間；`notes` 是每種狀況給模型的固定說明（改用 `telemetry_statistics`、資料不足、無法確認是累計值、總量可能含錶的誤讀）；沒有任何資料點算得出用量時是錯誤結果；最多 500 列 |
 | `device_models` | assets `GET /api/assets/v1/device-models` | 選填 `name_contains` | 每個型號一列 `[型號 ID, 名稱, 版本, 資料點數, 更新時間]`，依名稱排序，與總數 `total`；最多 200 列 |
 | `telemetry_sql` | telemetry-query `POST /internal/telemetry/v1/sql`（[services/telemetry-query](../telemetry-query/README.md)「AI 的唯讀 SQL」） | `sql`（一個 `SELECT`，最多 16 KiB）；列數上限固定送 200，模型改不了 | `columns`（名稱與 ClickHouse 型別）、`rows`、`row_count`、各 view 的 `queryable_from` 與 `queried_at`；服務印回的 SQL 不回給模型。超過 200 列時服務整個拒絕、不截斷 |
+| `dashboard` | 本服務的儀表板儲存；寫入時 telemetry-query（資料集）與檢查服務 | `action`：`list`、`read`（`dashboard_id`、選填 `version`）、`write`（見下方「`dashboard` 工具」） | `list`：這個對話的草稿與租戶未封存的已儲存儀表板，最多 50 個；`read`：那一版的 metadata 與完整的 spec（第一個文字區塊）、完整的頁面（第二個）；`write`：存下的版本、各資料集的列數與前 3 列、檢查看到的標記與值，或最多 20 個問題 |
 
 - **租戶與使用者只來自 `ToolContext.principal` 與 token**：輸入的 schema 沒有租戶或使用者欄位（`additionalProperties: false`），多出任何欄位（例如 `tenant_id`）時工具不呼叫、回錯誤說明可用的欄位；被呼叫端收不到租戶參數。
 - **呼叫前先檢查**：`device_id` 要是 UUID，資料點 key 要符合服務的規則，時間要是 RFC 3339。語意工具另檢查：1 到 20 個不重複的資料點、`period` 與 `from`/`to` 只給一種、`period` 的寫法、`from` 至少早於 `to` 一分鐘、列數（資料點數乘區間數，以名目長度估計）不超過服務的 10,000 列、範圍要碰得到可查期間（與 telemetry-query 以帳號時間窗算的 1 分鐘表起點相同：3 個月的時間窗在 5 分鐘後的起點，這 5 分鐘跨過月底往回跳的午夜時取午夜前的起點，單元測試逐分鐘比對兩年的每個月底；相對期間裡只有 `last_year` 可能整段在可查期間之前）、`to` 不晚於現在之後 367 天（telemetry-query 的 `range::MAX_AHEAD`；相對期間最長到 366 天後，所以不會碰到）。不符合時不呼叫，回錯誤說明怎麼改。這些常數與 telemetry-query 的相同，`tests/delegated_tools.rs` 比對兩邊；語意工具的輸入 schema 也與 `api/openapi.json` 的 `SeriesQuery` 比對欄位、必填、上限、pattern 與 enum，所以工具的輸入就是 API 的本文，儀表板可以原樣存下再送。
@@ -77,6 +91,34 @@ AI 助理（決策 31）的主 agent 迴圈：使用者對自己租戶的資料�
 | 403、404（例如設備屬於別的租戶、不存在） | 固定訊息：服務拒絕了這個使用者的請求，不要以同樣的輸入再試 | `denied` |
 | 401、其他 4xx、5xx、逾時、連線失敗、回應無法解析或超過 8 MiB | 固定訊息：工具失敗，可以再試一次 | `failed` |
 | 身分服務拒絕換 token（委派被撤銷） | 提問結束，見下方 | `revoked` |
+
+### `dashboard` 工具
+
+主 agent 以一個工具、三個動作做儀表板（`src/tools/dashboard.rs`，設計紀錄「主 agent 的 `dashboard` 工具」），不發布、不還原、不封存：那些是使用者在公開 API 做的。
+
+**寫入**（`write`）只改輸入寫到的部分：`datasets`、`computations`、`constants` 各是 `{upsert: [...], remove: [名稱]}`（先移除、再依名稱取代或加在最後），`page` 換掉整個頁面，`page_edits` 是 `[{old, new}]`，每個 `old` 在套用前面的修改後的頁面裡要正好出現一次；`title`、`description`（`null` 移除）、`locale`（`zh-TW` 預設或 `en`）、`tz`（預設 `UTC`）是檢查呈現頁面的方式。依序：
+
+1. **驗證**：輸入嚴格解析（多一個欄位就整個拒絕，例如 `tenant_id`）；合併後的版本以 contract 的 `validate_version` 檢查（上限、名稱、計算語言的語法與參照，spec 加頁面最多 56 KiB、頁面最多 40 KiB、最多 8 個資料集），`tz` 依檢查服務的形式，標題、說明、頁面不能有 U+0000。
+2. **授權**：沒有 `dashboard_id` 是這個對話的新草稿；這個對話的草稿要給 `base_version`，而且要是最新版；已儲存的儀表板（未封存）以讀到的版本成為這個對話的新草稿，一個對話對同一個已儲存的儀表板只有一份草稿（再寫時告訴模型那份草稿的 ID）；`rebase_saved_version` 只用於取自已儲存儀表板的草稿（合併了它的新版本，之後發布不再衝突）。store 讓使用者看得到自己所有對話的草稿，工具只認這個對話的：別的對話、別的使用者與別的租戶的草稿都是「不存在」。
+3. **執行資料集**：以提問者的身分、這次提問的委派（`ToolContext::caller("dashboard")`）經與公開 API 共用的 `DatasetRunner` 執行（同一組每租戶上限），一次兩個，一個跑完就接下一個。從呼叫開始算 120 秒（含讀取要改的儀表板）還沒跑完的資料集各是一個 `dataset_timeout` 問題，跑完的結果留給同一個問題的下一次寫入，那次只執行沒跑完的。同一個問題裡同一個資料集（來源加 `max_rows`）只執行一次，之後的寫入重用結果；結果保留到問題的截止時間，所有問題合計最多 64 MiB，滿了時最久沒寫的問題的結果先讓出。委派被撤銷時提問結束（`ToolError::Revoked`）。
+4. **計算**：公式以資料集實際回來的欄位再檢查一次（`Spec::check_formulas`）。
+5. **檢查**：送 `CheckRequest`（runtime 版本、頁面、公開的 spec（沒有 SQL 與語意請求）、資料集結果、locale、tz）到檢查服務（`dashboards::checker`），判定經 `CheckVerdict::validate` 確認每個參照、值與標籤都來自送出的資料。
+6. **寫入**：只有判定通過才在問題租戶的交易裡寫一版（`create_draft`、`write_draft` 或 `fork`），寫入者是對話的擁有者與這次的 run ID。
+
+**問題**：沒有存下時，工具結果是錯誤結果 `{saved: false, problems, note}`，最多 20 個問題（多的只給數量），每個是封閉的 `kind`、固定的英文 `hint` 與該類的欄位；沒有服務或資料庫的文字。使用者看到的仍是上一版。
+
+| `kind` | 什麼時候 |
+| --- | --- |
+| `invalid_spec`（帶 `path` 與 contract 的 `problem`）、`unknown_name`、`page_edit_not_found`、`page_edit_ambiguous`、`incomplete`、`unstorable_text` | 驗證不過；什麼都不執行 |
+| `dataset_refused`（SQL 的拒絕類別用 `telemetry_sql` 的說明）、`dataset_too_many_rows`、`dataset_result_too_large`、`dataset_timeout`、`query_too_heavy`、`too_many_points`、`outside_queryable_period`、`account_not_ready`、`runs_limited`、`query_quota_exhausted`、`dataset_failed` | 資料集執行失敗（帶 `dataset`）；不送檢查 |
+| contract 的檢查問題（`not_rendered`、`navigated`、`requested`、`script_error`、`unmapped`、`mismatch`、`literal_number`、`mark_geometry`、`timeout`、`too_large`、`unsupported_content`、`unrecognized`） | 判定不通過；欄位照 contract，字串最多 256 個字元 |
+| `check_busy`、`check_unreachable`、`check_timeout`、`check_refused`、`check_failed`、`check_invalid_verdict` | 沒有可用的判定：503、連不上、85 秒內沒有判定、400（或請求本身不合 contract）、其他狀態、不是判定或判定不符送出的資料 |
+
+**上限**：一個問題最多 6 次到達資料集執行的寫入（驗證不過的不算），第 7 次在執行任何東西前拒絕。每一段有自己的時限，到了就以模型能處理的結果結束：資料集 120 秒（含讀取）、檢查 85 秒、存檔 30 秒（逾時時交易回滾、回固定的失敗）；一次呼叫的時限是這三段加 10 秒，245 秒（`Tool::call_timeout`，其他工具仍是 `tools.call_timeout`），只在各段沒依時限結束時才用到。仍在提問的截止時間內，問題剩不到 30 秒時不開始寫入。`read` 的 spec 與頁面完整給模型，所以設定了 `dashboard_check.url` 時 `tools.max_text_bytes` 至少要 64 KiB。工具的拒絕（`ToolError::Input`）是固定說明：不存在的儀表板、舊的 `base_version`（說最新是第幾版）、沒給 `base_version`、封存了、已有草稿、第 7 次寫入、時間不夠。
+
+**哪些對話有它**：工具組在對話開始時固定（`Preamble`），所以只有新對話有 `dashboard` 工具，已開始的對話照原本的五個工具繼續。system prompt 的版本 `2026-10-26` 加上做儀表板的方式（相對期間、每個數字都經標記、選定的參考值與帶數字的名稱放常數、跨資料集的值放計算）與回答不放 SQL、HTML 或程式碼；進行中的對話保留開始時的版本。
+
+**沒有設定時**：需要 `identity.exchange_url`、`telemetry_query.url`、`dashboard_check.url` 與資料庫；少一個就沒有這個工具，啟動時記一行 INFO（例如 `no dashboard tool: dashboard_check.url is not set`）。
 
 ## 代表使用者呼叫
 
@@ -220,15 +262,16 @@ service-kit 把這兩種拒絕都記成 INFO（`the identity service refused the
 | `model.cache_ttl` | `TRUSTIOT__MODEL__CACHE_TTL` | `5m` | 快取斷點的時效：`5m` 或 `1h` |
 | `budget.tokens` | `TRUSTIOT__BUDGET__TOKENS` | `2000000` | 一個問題能處理的 token；1 到 100,000,000 |
 | `budget.wind_down_percent` | `TRUSTIOT__BUDGET__WIND_DOWN_PERCENT` | `80` | 到這個百分比時請模型收尾；1 到 99 |
-| `tools.call_timeout` | `TRUSTIOT__TOOLS__CALL_TIMEOUT` | `60s` | 一次工具呼叫的上限 |
+| `tools.call_timeout` | `TRUSTIOT__TOOLS__CALL_TIMEOUT` | `60s` | 一次工具呼叫的上限，也是一次資料集呼叫 telemetry-query 的上限；`dashboard` 工具自己的上限是 245 秒（見「`dashboard` 工具」） |
 | `tools.max_calls_per_step` | `TRUSTIOT__TOOLS__MAX_CALLS_PER_STEP` | `8` | 一次模型回應裡同時執行的工具呼叫數；之後的呼叫回錯誤、不執行；1 到 32 |
-| `tools.max_text_bytes` | `TRUSTIOT__TOOLS__MAX_TEXT_BYTES` | 64 KiB | 一個工具結果的文字上限；超過時改回錯誤，告訴模型怎麼縮小範圍 |
+| `tools.max_text_bytes` | `TRUSTIOT__TOOLS__MAX_TEXT_BYTES` | 64 KiB | 一個工具結果的文字上限；超過時改回錯誤，告訴模型怎麼縮小範圍。設了 `dashboard_check.url` 時至少 64 KiB（`read` 給完整的儀表板） |
 | `tools.max_images` | `TRUSTIOT__TOOLS__MAX_IMAGES` | `4` | 一個工具結果的圖片數上限；不超過 20 |
 | `tools.max_image_bytes` | `TRUSTIOT__TOOLS__MAX_IMAGE_BYTES` | 5 MiB | 一張圖（base64 文字）的上限；不超過 5 MiB |
 | `identity.exchange_url` | `TRUSTIOT__IDENTITY__EXCHANGE_URL` | 無 | 身分服務 token 交換埠的 `http://<host>[:<port>]`（`http://<release>-identity-exchange:8082`），不能有路徑、帳密或 query；沒有就沒有工具，儀表板的資料集執行也都回 503。呼叫身分服務的時間上限是 15 秒（`IDENTITY_TIMEOUT`） |
 | `identity.run_lifetime` | `TRUSTIOT__IDENTITY__RUN_LIFETIME` | `15m` | 一次提問的委派效期；整數秒，2 到 15 分鐘（身分服務的上限 900 秒）。提問在到期前 30 秒結束 |
 | `telemetry_query.url` | `TRUSTIOT__TELEMETRY_QUERY__URL` | 無 | telemetry-query 的 `http://<host>[:<port>]`；沒有就沒有 `telemetry_latest`、`telemetry_statistics`、`telemetry_usage`、`telemetry_sql`，儀表板的資料集執行也都回 503。設了就要有 `identity.exchange_url` |
 | `assets.url` | `TRUSTIOT__ASSETS__URL` | 無 | assets 的 `http://<host>[:<port>]`；沒有就沒有 `device_models`。設了就要有 `identity.exchange_url` |
+| `dashboard_check.url` | `TRUSTIOT__DASHBOARD_CHECK__URL` | 無 | 檢查服務的 `http://<host>[:<port>]`（chart 設成 `http://<release>-dashboard-check:8080`）；沒有就沒有 `dashboard` 工具。以 assistant 自己的身分呼叫（不帶使用者的 token），一次檢查最多 85 秒（服務的佇列最多 60 秒、檢查 15 秒、清理 5 秒，加上餘裕），判定最多 4 MiB |
 
 工具呼叫其他服務的時間上限與 `tools.call_timeout` 相同（`ToolRegistry` 的上限才是真正的界線），連線最多 10 秒，成功回應的本文最多 8 MiB，`telemetry_sql` 讀的 422 本文最多 32 KiB（`MAX_REFUSAL_BYTES`）。儀表板的資料集執行用同一個 client 與時間上限，成功回應的本文最多 4 MiB（`runner::MAX_READ_BYTES`，結果本身最多 2 MiB）。mesh 內是純 HTTP，由 ztunnel 加上 mTLS；不用環境變數的 proxy，不跟隨轉址（token 的 header 會跟著轉過去）。chart 從 `mesh.calls.assistant` 填 `ai_gateway.url`、`identity.exchange_url`、`telemetry_query.url` 與 `assets.url`，`services.assistant.env` 不能設定這四個（[chart README](../../deploy/chart/README.md)「AI 助理」）；授權矩陣在同一份 README 的「呼叫矩陣」。
 
@@ -252,22 +295,30 @@ service-kit 把這兩種拒絕都記成 INFO（`the identity service refused the
 | `a service refused a dataset run` | INFO | `tenant_id`、`operation`（`dataset_run`）、`peer`、`kind`、`status_class`；儀表板 API 的資料集執行收到 400、403、404、422（`dashboard` 工具的執行記成上面的工具呼叫，`tool` 是 `dashboard`） |
 | `a dataset run's call to a service failed` | WARN | 同上；`kind` 與工具呼叫的相同 |
 | `a dataset run cannot call telemetry-query: identity.exchange_url is not set` | WARN | `tenant_id` |
+| `the dashboard tool wrote a version` | INFO | `run_id`、`conversation_id`、`tenant_id`、`dashboard_id`、`version`、`target`（`new`、`draft`、`fork`） |
+| `the dashboard tool saved nothing` | INFO | `run_id`、`conversation_id`、`tenant_id`、`target`、`problems`（個數）、`kinds`（問題的類別，逗號分隔） |
+| `the dashboard tool refused a write: the question wrote the most it may` | INFO | `run_id`、`conversation_id`、`tenant_id`、`writes` |
+| `the dashboard tool could not use the database` | ERROR | `run_id`、`conversation_id`、`tenant_id`、`action`、`error_kind`（SQLSTATE 或 `StoreError::log_kind`） |
+| `dashboard check finished` | INFO | `run_id`、`conversation_id`、`tenant_id`、`outcome`（`passed`、`failed`）、`problems`、`duration_ms` |
+| `a dashboard check gave no verdict` | WARN | `run_id`、`conversation_id`、`tenant_id`、`outcome`（`check_busy` … `check_invalid_verdict`）、`status_class`、`duration_ms` |
+| `removed content from an answer` | INFO | `run_id`、`conversation_id`、`tenant_id`、`removed`（`code`、`html`、`sql`，逗號分隔） |
 | `published a dashboard`、`restored a dashboard version` | INFO | `user_id`、`tenant_id`、`from`（發布的草稿或還原的儀表板）、`dashboard_id`、`version`（新的版本） |
 | `changed whether a dashboard is archived` | INFO | `user_id`、`tenant_id`、`dashboard_id`、`archived` |
 | `refused: no tenant or no known role in it` | INFO | `user_id`、`action`；公開 API 的 403 |
 | `could not …`（例如 `could not publish a dashboard`、`could not open a transaction for an API request`） | ERROR | `user_id`、`dashboard_id`（有的時候）、`error_kind`（SQLSTATE 或錯誤的種類，沒有資料庫的文字）；公開 API 的 503 與 500 |
 
-不記問題、回答、工具輸入與結果、錯誤訊息，也不記被呼叫服務的 URL、查詢參數、回應本文與 token（只記狀態碼的類別）。欄位名稱都不會被 service-kit 的遮蔽規則擋掉（不用 `token`、`tokens`、`prompt`、`content` 這些字）。指標 `assistant.model_calls` 依 `outcome` 與 `cache`（`hit` 或 `miss`）計數；`cache_read` 長期為 0（只有 `miss`）表示快取失效，要接到監控（Laysi/trustiot-v2#554 以真實 API 驗證快取）。
+不記問題、回答、工具輸入與結果、錯誤訊息、儀表板的標題、SQL 或頁面，也不記被呼叫服務的 URL、查詢參數、回應本文與 token（只記狀態碼的類別）。欄位名稱都不會被 service-kit 的遮蔽規則擋掉（不用 `token`、`tokens`、`prompt`、`content` 這些字）。指標 `assistant.model_calls` 依 `outcome` 與 `cache`（`hit` 或 `miss`）計數；`cache_read` 長期為 0（只有 `miss`）表示快取失效，要接到監控（Laysi/trustiot-v2#554 以真實 API 驗證快取）。
 
 ## 之後接上的地方
 
 | 項目 | 介接點 |
 | --- | --- |
 | 聊天 API 與串流（Laysi/trustiot-v2#146） | `Agent::start_conversation`、`Agent::ask` |
+| 回答被過濾的標示（Laysi/trustiot-v2#645、#646） | `Answer::removed`（移除的類別，空集合時沒有移除）隨回答回給前端，畫面顯示 `answer_guard::CONTENT_REMOVED`（`assistant.answer_content_removed`）。歷史存的是過濾後的文字，所以重新載入對話時要再顯示標示，就要把 `removed` 也存下來（例如回答訊息旁的欄位）：由這兩個 issue 決定欄位與 migration |
+| 串流的過濾（Laysi/trustiot-v2#147） | `answer_guard::find`：對目前為止的文字執行，暫緩送出從第一個延伸到結尾的發現處開始的文字；回答結束時以 `guard` 的結果為準 |
 | 聊天 API 開始一個問題（Laysi/trustiot-v2#146） | 處理請求時以 `delegation::QuestionRuns::start(&UserIdentity, conversation.principal())` 取得 `QuestionRun`，交給 `Agent::ask`；`Assistant::runs` 為 `None`（沒有設定 `identity.exchange_url`）時改用 `tools::NoDelegation`。`StartError` 已實作 `IntoResponse`（見「代表使用者呼叫」） |
-| 更多工具（語意層、唯讀 SQL、儀表板） | 實作 `tools::Tool`，放進 `ToolRegistry`（最多 10 個），以 `callee::Callee` 呼叫服務；工具從 `ToolContext.principal` 取租戶與使用者，不從輸入取 |
+| 更多工具 | 實作 `tools::Tool`，放進 `ToolRegistry`（最多 10 個），以 `callee::Callee` 呼叫服務；工具從 `ToolContext.principal` 取租戶與使用者，不從輸入取 |
 | 對話存進 Postgres（Laysi/trustiot-v2#553 已完成儲存，連線池由 Laysi/trustiot-v2#592 接上） | `store::create`、`store::append`、`store::load`，在對話租戶的 `TenantTransaction` 裡呼叫，交易取自 `start` 建立的 `TenantDb`（現在給 readiness 與儀表板 API 用），見[對話的儲存](#對話的儲存postgres) |
-| `dashboard` 工具（Laysi/trustiot-v2#150） | 在問題租戶的交易裡呼叫 `dashboards::store::create_draft`、`write_draft`、`fork`（`Author` 是對話的擁有者與 run ID，`NewVersion` 是檢查過的內容）與讀取用的 `open`、`versions`、`list_saved`、`list_drafts`、`dataset`；資料集以 `Assistant::runner`（與 API 共用上限的 `DatasetRunner`）和 `ToolContext::caller("dashboard")` 執行，`RunError::Revoked` 時結束提問。見[儀表板](#儀表板) |
 | 對話的軟刪除（Laysi/trustiot-v2#644） | `dashboards::store` 的 `CONVERSATION_OWNER` 加上 `AND deleted_at IS NULL`，寫入時以 `FOR SHARE` 鎖對話；拿掉 `tests/dashboards_store.rs` 那個測試的 `#[ignore]` |
 | 對話共享的讀者（Laysi/trustiot-v2#650） | `dashboards::store::conversation_access` 回讀者的存取（新的 `Access`），`store::permissions` 決定讀者能做什麼 |
 | 每次呼叫預扣額度（Laysi/trustiot-v2#140） | 每次呼叫的 `ModelRequest::call_id`（帳本的 `llm_call_id`，現在只記在日誌）；閘道拒絕時以 `ModelError` 回到迴圈 |
@@ -282,11 +333,14 @@ service-kit 把這兩種拒絕都記成 INFO（`the identity service refused the
 | `tests/tools.rs` | 工具組規則（最多 10 個、名稱、schema）；並行執行、結果依呼叫順序；一步超過呼叫數上限的呼叫不執行；輸入錯誤、失敗、panic、逾時、不存在的工具各自回錯誤給模型；結果超過大小與圖片上限時請模型縮小範圍；工具拿到的身分來自對話；圖片照 Anthropic 格式送給模型 |
 | `tests/delegated_tools.rs` | 四個呼叫服務的工具各以使用者身分、受眾正確且在呼叫當下交換的 token 呼叫服務，請求裡沒有租戶或使用者，超過 60 秒後的呼叫仍成功、舊 token 會被拒（替身以「每次模型呼叫過 61 秒」的虛擬時鐘模擬，不真的等）；服務回 403、404、422、503 與非 JSON 時模型與日誌都看不到回應本文；身分服務拒絕交換（撤銷）時該步停止、問題結束、不再重試；身分服務暫時無法使用只讓該次呼叫失敗；問題在委派到期前結束、沒有剩餘時間的問題不開始；只有對話的使用者能開始問題，為別人的對話建立的 run 在送出任何東西前被拒；裝置寫的長文字截到 256 個字元、加上截斷標記才給模型；工具輸入不收租戶、使用者與多餘欄位；工具的路徑與上限跟 telemetry-query、assets 的程式一致；語意工具以 POST 送出的本文是 API 的 `SeriesQuery`（替身照服務的型別解析、拒絕未知欄位），輸入 schema 與 `telemetry_query::openapi()` 的 `SeriesQuery` 一致；列數超過服務上限時不呼叫 |
 | `tests/history_store.rs` | 主 agent 跑完的對話（thinking 與 signature、工具呼叫與結果）存進去、讀回來逐位元組相同，載入的對話接著問時請求的前段與歷史和原本的逐位元組相同；服務角色的 UPDATE、DELETE、TRUNCATE 在租戶交易內外都被資料庫拒絕（`42501`）；重複寫入不改變什麼，兩個寫入者分岔時後者被拒、不覆寫，空洞與沒建立的對話被拒；其他租戶與同租戶的其他使用者載入不到；損壞的列讓載入失敗 |
-| `tests/startup.rs` | 執行檔本身：以 `assistant_app` 登入、讀到身分服務的公鑰檔、資料庫有這一版的 migration 時 `/readyz` 回 200，日誌記下工具數與可以執行資料集且不含密碼；密碼錯誤時 readiness 記下失敗、回 503；少了一個 migration 檔案時日誌寫出缺的檔案、回 503，補回後恢復 |
+| `tests/startup.rs` | 執行檔本身：以 `assistant_app` 登入、讀到身分服務的公鑰檔、資料庫有這一版的 migration 時 `/readyz` 回 200，日誌記下工具數（設了 `dashboard_check.url` 時六個）與可以執行資料集且不含密碼；密碼錯誤時 readiness 記下失敗、回 503；少了一個 migration 檔案時日誌寫出缺的檔案、回 503，補回後恢復 |
 | `tests/chart_connections.rs` | chart 的 Postgres 連線預算（`trustiot.postgres.connectionBudgets`）與程式開的連線池一致：沒有其他連線池，`database.maxConnections` 的範圍與服務接受的相同；程式多了一個連線池時失敗 |
 | `tests/cross_tenant.rs` | 跨租戶負向測試（決策 29，`crates/testkit`）：對話、訊息、儀表板與版本四張表的讀、寫、搬移、插入探測與覆蓋檢查；對執行檔的每個儀表板端點（發布與對話的草稿列表除外，原因寫在豁免裡，由 `tests/dashboards_api.rs` 手寫測試），資料集執行的正向對照經替身的 token 交換與 telemetry-query 真的跑完，沒有呼叫其他服務 |
 | `tests/dashboards_store.rs` | `dashboards::store` 對真的 schema：版本只往後加、舊版本讀得回來；發布第一次建立已儲存的儀表板、之後加版本，已儲存的儀表板在草稿的基礎版本之後有新版本或已封存時拒絕；誰可以發布、還原、封存；工具只寫自己對話的草稿（別的對話與別的使用者都是不存在）；列表分頁與只列看得到的；服務角色改不了寫過的東西（觸發器與權限，`42501`）、留不下空洞；清除對話時刪掉草稿、留下已發布的；同一個草稿同時寫入時排隊、後者衝突；軟刪除的對話（等 Laysi/trustiot-v2#644，`#[ignore]`） |
 | `tests/dashboards_api.rs` | 公開 API 對真的 schema 與替身的 token 交換、telemetry-query：沒有 token、偽造的 token、沒有租戶時每個路由都拒絕；本文、query string 與 content type 不對時 400 而且什麼都沒寫（含 SQL、頁面等欄位、陣列寫法）；回應都是 `no-store`；請求的角色決定誰能發布、還原、封存（同一個使用者升降級後立即生效）；同租戶的其他使用者與其他租戶的 admin 對別人的草稿每個路由都是 404，與不存在的相同；版本、還原、發布衝突與封存；資料集以打開的 viewer 身分執行（token 的使用者、租戶、角色、受眾與 `act`），請求本文原樣、SQL 的列數上限 2,000；超過列數時拒絕並附上限；第 61 次執行與第三個同時執行回 429 而其他租戶照常、`dashboard` 工具的執行算進同一個上限；telemetry-query 的錯誤只以封閉的 key 回給使用者；沒有 token 交換時 503；打開儀表板並執行全部資料集不呼叫模型、日誌沒有標題、SQL 或頁面 |
+| `tests/dashboard_tool.rs` | `dashboard` 工具對真的 schema、替身的 token 交換、telemetry-query 與檢查服務：寫入以提問的使用者身分（委派、受眾、`act`）執行每個資料集，把頁面、公開的 spec（沒有 SQL 與語意請求）與結果送去檢查，通過後才存成這個對話的草稿，`list` 與 `read` 看得到（頁面整份）；檢查不通過（數值對不上、沒對應的圖形、較新的問題種類）與每種拿不到判定的情況（503、400、500、不是判定、引用了頁面沒有的資料集、值不在資料裡、連不上、逾時）都什麼都不存、草稿的最新版本不變，模型與日誌都看不到檢查服務的本文；別的對話、別的使用者、別的租戶的草稿都是不存在，`base_version` 舊了或沒給、輸入格式不對、`page` 與 `page_edits` 同時給、頁面過大、資料集太多各自回固定的問題，第 7 次寫入被拒、下一個問題重新計算；已儲存的儀表板只變成這個對話的一個草稿（第二次指出既有的草稿）、封存的不能改；telemetry-query 拒絕 SQL 時回 `telemetry_sql` 的類別說明，拒絕本文多了欄位時只回通用說明；撤銷的工作階段結束整個呼叫；剩下的時間不夠時不開始；同一個問題的同一個資料集只執行一次；資料集在寫入的時限內（測試設 3 秒）沒跑完時各回 `dataset_timeout`、不送檢查，跑完的留給同一個問題的下一次寫入、那次只執行沒跑完的；工具自己的呼叫時限大於資料集、檢查與存檔時限的總和 |
+| `tests/check_stand_in/` | 檢查服務的替身：記下每個請求，預設回報告每個資料集列數的通過判定，測試可以改成任何狀態與本文 |
+| `tests/answer_guard.rs` | 經 `ask` 與替身 AI 閘道：回答裡的 SQL 程式碼區塊、句子中的 SQL 敘述、HTML 與含程式碼的行內程式碼，到呼叫端與歷史時都已移除，回報移除了哪幾類、日誌只記類別不記內容，thinking 區塊逐位元組不變，下一個問題送回的歷史就是過濾後存下的那一則；改變 schema 的敘述（`CREATE OR REPLACE VIEW`、`CREATE TABLE`、`DROP TABLE`、`ALTER TABLE`、`TRUNCATE TABLE`）從回答中移除；放在 `tests/`，因為 `cargo test -p repo-check` 不允許 `src/` 出現這些文字 |
 | `tests/dashboard_world/` | 儀表板測試共用的世界：產品的 Postgres、測試用的身分簽發者、替身的身分服務 token 交換與 telemetry-query（記下每個呼叫、其他路徑都算意外）、啟動執行檔 |
 | `tests/telemetry_sql.rs` | `telemetry_sql` 經工具組呼叫：對 telemetry-query 真正的路由（Postgres 與 ClickHouse 是計數的 loopback 埠），系統表、table function、白名單外的函式、`SET ROLE`、`SET DEFAULT ROLE`、多個敘述、`SETTINGS`、CAST、沒寫時區、沒讀 view、引號識別字、反斜線、語法錯誤與太深的巢狀各自回固定的類別說明，兩個資料庫都沒有連線，日誌沒有 SQL；對替身，答案（長文字截斷）、執行後的拒絕、多欄位或不認得的類別與名稱、404、429、504、403、400、5xx 與非 JSON 各自回固定訊息，模型與日誌都看不到服務的本文；每次呼叫換新 token、請求正好是 SQL 加 200 列 |
-| `src/` 的單元測試 | 設定檢查（含被呼叫服務的位址、委派時長與資料庫帳密、連線池上限）、截止時間的計算、`StartError` 的錯誤碼、字串上限、時間區間的粒度選擇與查詢範圍、狀態碼類別、422 拒絕本文的嚴格解析、`telemetry_sql` 每個拒絕類別的說明與名稱的再檢查、預算門檻、租戶脈絡的跳脫、狀態碼對應、錯誤 `type` 過濾、沒有用量時的估計、送出前的訊息估計（圖片按張數）、工具定義與訊息讀回的位元組檢查；儀表板：執行上限（第 61 次、第三個同時執行、等到空位、`Retry-After` 的秒數）、語意回答的攤平、telemetry-query 每種回答對應的錯誤、權限表、分頁 cursor |
+| `src/` 的單元測試 | 設定檢查（含被呼叫服務的位址、委派時長與資料庫帳密、連線池上限）、截止時間的計算、`StartError` 的錯誤碼、字串上限、時間區間的粒度選擇與查詢範圍、狀態碼類別、422 拒絕本文的嚴格解析、`telemetry_sql` 每個拒絕類別的說明與名稱的再檢查、預算門檻、租戶脈絡的跳脫、狀態碼對應、錯誤 `type` 過濾、沒有用量時的估計、送出前的訊息估計（圖片按張數）、工具定義與訊息讀回的位元組檢查；儀表板：執行上限（第 61 次、第三個同時執行、等到空位、`Retry-After` 的秒數）、語意回答的攤平、telemetry-query 每種回答對應的錯誤、權限表、分頁 cursor；`dashboard` 工具的輸入解析、問題的寫入上限與資料集快取的預算；回答過濾（程式碼區塊、含程式碼的行內程式碼、HTML 標籤與 script/style、各種 SQL 敘述，以及要留下的文字：不是標籤的 `<`、提到 SQL 字詞的句子、反引號裡的名稱、中文與數字、撇號）、移除後留下的標記與整理、`find` 給串流用的範圍；`rewrite_text` 只改文字區塊、其他區塊逐位元組不變；提示詞要求回答不含程式碼並說明儀表板 |

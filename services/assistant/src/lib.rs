@@ -23,7 +23,11 @@
 //!   refusal reaching the agent as a [`model::ModelError`];
 //! - dashboards (Laysi/trustiot-v2#150): [`dashboards::store`] keeps them, the public API
 //!   ([`api`]) lists, opens, publishes, restores and archives them and runs their datasets as
-//!   the viewer through [`Assistant::runner`], which the `dashboard` tool shares.
+//!   the viewer through [`Assistant::runner`], which the `dashboard` tool
+//!   ([`tools::dashboard`]) shares; the tool checks pages with [`dashboards::checker`];
+//! - the conversation API (Laysi/trustiot-v2#645, #646): [`Answer::removed`] says what
+//!   [`answer_guard`] took out of an answer, for the chat to show
+//!   [`answer_guard::CONTENT_REMOVED`].
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -31,17 +35,20 @@ use std::time::Duration;
 use axum::Router;
 use contract::client::InternalClient;
 use contract::{ServiceName, service};
+use service_kit::identity::ServiceIdentity;
 use service_kit::identity::{IdentityVerifier, OnBehalf, PublishedKeys};
 use service_kit::migrations::MigrationCheck;
-use service_kit::tenant::TenantDb;
+use service_kit::tenant::{BackgroundTenantDb, TenantDb};
 use service_kit::{BoxError, Context};
 use sqlx::postgres::PgPoolOptions;
 use utoipa::OpenApi as _;
 
 use crate::dashboards::caps::RunCaps;
+use crate::dashboards::checker::{CHECK_CALL_TIMEOUT, Checker};
 use crate::dashboards::runner::DatasetRunner;
 
 pub mod agent;
+pub mod answer_guard;
 pub mod api;
 pub mod budget;
 pub mod callee;
@@ -83,13 +90,16 @@ pub fn openapi() -> utoipa::openapi::OpenApi {
 /// is served then: the service exits with code 1.
 pub async fn start(context: Context<Config>) -> Result<Router, BoxError> {
     let config = context.config();
-    let assistant = build(config)?;
-    let db = TenantDb::connect_lazy(
+    // One pool: the public API's transactions and the `dashboard` tool's, which act for the
+    // question's tenant without a request.
+    let (db, tool_db) = TenantDb::connect_lazy_with_background(
         config.service_role().connect_options(),
         PgPoolOptions::new()
             .max_connections(config.database.max_connections)
             .acquire_timeout(ACQUIRE_TIMEOUT),
+        ServiceIdentity::new(ServiceName::Assistant),
     )?;
+    let assistant = build(config, Some(tool_db))?;
     let ping = db.clone();
     context.health().add_check("postgres", move || {
         let db = ping.clone();
@@ -138,8 +148,13 @@ pub struct Assistant {
 
 /// The assistant the configuration describes. The tools of a service are left out when its
 /// address is not set; without the identity service's token exchange there are none, since a
-/// tool only calls as the user. Each case is logged.
-pub fn build(config: &Config) -> Result<Assistant, BoxError> {
+/// tool only calls as the user. The `dashboard` tool needs `telemetry_query.url` (its datasets),
+/// `dashboard_check.url` (its check) and `db` (where it writes). Each case is logged.
+///
+/// # Errors
+///
+/// When a client cannot be built from its address.
+pub fn build(config: &Config, db: Option<BackgroundTenantDb>) -> Result<Assistant, BoxError> {
     let Some(exchange_url) = &config.identity.exchange_url else {
         tracing::info!(
             "no tools: identity.exchange_url is not set, so the assistant cannot call other \
@@ -157,6 +172,10 @@ pub fn build(config: &Config) -> Result<Assistant, BoxError> {
     let timeout = config.tools.call_timeout;
     let mut tools: Vec<Arc<dyn tools::Tool>> = Vec::new();
     let mut dataset_telemetry = None;
+    let checker = match &config.dashboard_check.url {
+        Some(url) => Some(Checker::new(url, CHECK_CALL_TIMEOUT)?),
+        None => None,
+    };
     match &config.telemetry_query.url {
         Some(url) => {
             let telemetry = callee::Callee::new(ServiceName::TelemetryQuery, url, timeout)?;
@@ -177,10 +196,23 @@ pub fn build(config: &Config) -> Result<Assistant, BoxError> {
         }
         None => tracing::info!("no device model tool: assets.url is not set"),
     }
+    let runner = Arc::new(DatasetRunner::new(dataset_telemetry, RunCaps::default()));
+    match (checker, db, runner.is_configured()) {
+        (Some(checker), Some(db), true) => tools.push(tools::dashboard::DashboardTool::new(
+            db,
+            Arc::clone(&runner),
+            checker,
+        )),
+        (None, ..) => tracing::info!("no dashboard tool: dashboard_check.url is not set"),
+        (_, None, _) => tracing::info!("no dashboard tool: no database"),
+        (_, _, false) => {
+            tracing::info!("no dashboard tool: telemetry_query.url is not set");
+        }
+    }
     Ok(Assistant {
         agent: build_agent(config, tools)?,
         runs: Some(runs),
-        runner: Arc::new(DatasetRunner::new(dataset_telemetry, RunCaps::default())),
+        runner,
     })
 }
 

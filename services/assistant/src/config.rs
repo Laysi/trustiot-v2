@@ -63,6 +63,11 @@ pub struct Config {
     /// The assets service: the device model tool.
     #[serde(default)]
     pub assets: Peer,
+    /// The dashboard check (services/dashboard-check): the `dashboard` tool has every page
+    /// checked there before it writes a version. Without it (or without `telemetry_query.url`)
+    /// there is no `dashboard` tool.
+    #[serde(default)]
+    pub dashboard_check: DashboardCheck,
 }
 
 /// The platform settings the service reads. No `deny_unknown_fields`: every service gets every
@@ -174,6 +179,17 @@ fn default_run_lifetime() -> Duration {
 pub struct Peer {
     /// `http://<host>[:<port>]`, the service's Kubernetes Service; ztunnel encrypts the hop.
     /// Without it the service's tools are left out.
+    #[serde(default)]
+    pub url: Option<String>,
+}
+
+/// `dashboard_check.*`: the dashboard check service. It is called as the assistant, not as the
+/// user: the request carries no identity, and the mesh lets only the assistant call it.
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DashboardCheck {
+    /// `TRUSTIOT__DASHBOARD_CHECK__URL`: `http://<host>[:<port>]`, the service's Kubernetes
+    /// Service (the chart sets it from `mesh.calls`).
     #[serde(default)]
     pub url: Option<String>,
 }
@@ -424,6 +440,17 @@ impl Validate for Config {
                 "must be whole seconds between 2 and 15 minutes",
             ));
         }
+        if let Some(url) = &self.dashboard_check.url {
+            check_service_url(url)
+                .map_err(|message| Invalid::new("dashboard_check.url", message))?;
+            if self.tools.max_text_bytes < crate::tools::dashboard::MIN_TEXT_BYTES {
+                return Err(Invalid::new(
+                    "tools.max_text_bytes",
+                    "must be at least 64 KiB when dashboard_check.url is set: the dashboard \
+                     tool hands the model a whole dashboard",
+                ));
+            }
+        }
         for (key, peer) in [
             ("telemetry_query.url", &self.telemetry_query),
             ("assets.url", &self.assets),
@@ -549,6 +576,7 @@ mod tests {
             identity: Identity::default(),
             telemetry_query: Peer::default(),
             assets: Peer::default(),
+            dashboard_check: DashboardCheck::default(),
         }
     }
 
@@ -588,6 +616,29 @@ mod tests {
         bad_telemetry.identity.exchange_url = Some("http://identity:8082".into());
         bad_telemetry.telemetry_query.url = Some("telemetry-query:8080".into());
         assert_eq!(key_of(&bad_telemetry), Err("telemetry_query.url".into()));
+    }
+
+    /// The check is called as the assistant, so it needs no exchange; its address follows the
+    /// same rules, and the tool's results need room for a whole dashboard.
+    #[test]
+    fn the_dashboard_check_is_a_plain_http_origin_and_needs_room_for_a_dashboard() {
+        let mut check = config();
+        check.dashboard_check.url = Some("http://trustiot-dashboard-check:8080".into());
+        assert_eq!(key_of(&check), Ok(()));
+        for bad in [
+            "https://trustiot-dashboard-check:8080",
+            "http://trustiot-dashboard-check:8080/internal/dashboard-check/v1/check",
+            "http://user:secret@trustiot-dashboard-check:8080",
+            "trustiot-dashboard-check:8080",
+        ] {
+            let mut invalid = config();
+            invalid.dashboard_check.url = Some(bad.into());
+            assert_eq!(key_of(&invalid), Err("dashboard_check.url".into()), "{bad}");
+        }
+        check.tools.max_text_bytes = crate::tools::dashboard::MIN_TEXT_BYTES - 1;
+        assert_eq!(key_of(&check), Err("tools.max_text_bytes".into()));
+        check.dashboard_check.url = None;
+        assert_eq!(key_of(&check), Ok(()));
     }
 
     fn all_but_assets(all: &Config) -> Config {
@@ -651,6 +702,10 @@ mod tests {
                 "http://telemetry-query:8080",
             ),
             ("TRUSTIOT__ASSETS__URL", "http://assets:8080"),
+            (
+                "TRUSTIOT__DASHBOARD_CHECK__URL",
+                "http://dashboard-check:8080",
+            ),
         ]
         .map(|(name, value)| {
             (
@@ -671,6 +726,10 @@ mod tests {
             Some("http://telemetry-query:8080")
         );
         assert_eq!(config.assets.url.as_deref(), Some("http://assets:8080"));
+        assert_eq!(
+            config.dashboard_check.url.as_deref(),
+            Some("http://dashboard-check:8080")
+        );
         assert_eq!(config.database.max_connections, 6);
         assert_eq!(
             config.platform.internal_identity_keys_file,
