@@ -19,7 +19,7 @@
 //!
 //! Outside a container (the service is not PID 1) only the browser's own process group and its
 //! own directory are removed: there the other processes and files are not the service's. The
-//! signal to every process needs an [`Init`], which exists only in PID 1 on Linux, so no other
+//! signal to every process needs an `Init`, which exists only in PID 1 on Linux, so no other
 //! path can reach it.
 
 use std::path::{Path, PathBuf};

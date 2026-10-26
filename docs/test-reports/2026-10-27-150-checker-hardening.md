@@ -99,3 +99,36 @@ DASHBOARD_CHECK_IMAGE=localhost/trustiot-e2e/dashboard-check:hardening-y bun tes
 
 - 套件只經 https 從 snapshot 伺服器取得、映像測試全部通過：通過。
 - 沒有另外釘選每個 `.deb` 的 SHA-256：Renovate 更新 Chromium 的 pull request 會需要手動補上每個套件的雜湊，所以不做（`deploy/images/dashboard-check/README.md`）。
+
+## 4. 檢查之間經檔案留下的東西
+
+確認一次檢查寫下的東西，下一次檢查的瀏覽器讀不到：瀏覽器的 `HOME`、XDG 目錄與 fontconfig 快取在哪裡，以及 pod 裡除了工作目錄、`/dev/shm`、`/dev/mqueue` 與 termination log 之外還有沒有寫得了的地方。
+
+### 指令
+
+```sh
+# 瀏覽器的 profile 與每個環境變數都在這次檢查自己的目錄裡（清理會刪掉它）
+cargo test --locked -p dashboard-check --lib a_browser_gets_the_pipes
+
+# 以服務的使用者列出容器裡寫得了的地方：掛載點、/proc 與 /sys 以外每個寫得了的路徑、keyring 收不收 key。
+# 掃描程式是 data 目錄的 writable-scan.c，以 .prototools 釘選的 zig 編成靜態執行檔：
+zig cc -target aarch64-linux-musl -static -O2 -o scan/scan writable-scan.c
+# 以 chart 的設定（唯讀根檔案系統、/tmp 是唯一的 volume、UID 65532、drop ALL、no-new-privileges、
+# 記憶體 512Mi、沒有網路）跑在檢查服務的映像裡：
+docker run --rm --platform linux/arm64 --user 65532:65532 --read-only \
+  --tmpfs /tmp:rw,mode=1777,size=128m --cap-drop ALL --security-opt no-new-privileges \
+  --memory 512m --network none -v "$PWD/scan:/scan:ro" --entrypoint /scan/scan \
+  localhost/trustiot-e2e/dashboard-check:hardening-y
+```
+
+### 結果
+
+- 瀏覽器的環境變數只有 `HOME`、`TMPDIR`、`XDG_CONFIG_HOME`、`XDG_CACHE_HOME`，值與 `--user-data-dir` 都在這次檢查的目錄裡；沒有設的 `XDG_DATA_HOME` 等預設在 `HOME` 底下。映像的 `/etc/fonts/fonts.conf` 的字型目錄是 `/usr/share/fonts`、`/usr/local/share/fonts`（唯讀）、XDG 資料目錄的 `fonts` 與 `~/.fonts`，快取是 `/var/cache/fontconfig`（映像裡沒有，根檔案系統唯讀所以也建不出來）、`$XDG_CACHE_HOME/fontconfig` 與 `~/.fontconfig`：會寫的都在這次檢查的目錄裡。
+- 測試在修正前後的程式上都通過（這一項沒有找到缺口）；把 `XDG_CACHE_HOME` 改指到檢查目錄外面時，測試失敗，指出 `XDG_CACHE_HOME=<工作目錄>/.cache`。
+- 掃描（[writable-scan.txt](data/2026-10-27-150-checker-hardening/writable-scan.txt)，程式在 [writable-scan.c](data/2026-10-27-150-checker-hardening/writable-scan.c)）：寫得了的只有 `/tmp`（工作目錄）、`/dev/shm`、`/dev/mqueue`，以及 `/dev` 的裝置檔（`null`、`zero`、`full`、`random`、`urandom`、`tty`、`pts/ptmx`，不存資料）。根檔案系統、`/etc/hosts`、`/etc/hostname`、`/etc/resolv.conf`、`/sys` 與 `/sys/fs/cgroup` 都唯讀。`add_key` 與 `keyctl` 都被拒絕（`Operation not permitted`，容器引擎預設的 seccomp）。
+- Kubernetes 另外有 `/dev/termination-log`，清理已經清空它；kubelet 與容器引擎建的 `/etc/hosts`、`/etc/hostname`、`/etc/resolv.conf` 屬於 root、權限 0644，UID 65532 又沒有任何 capability，寫不了（依它們的行為，未在叢集實測，見結論）。
+
+### 結論
+
+- 一次檢查寫下的東西，下一次檢查的瀏覽器讀不到：通過。瀏覽器寫得了的地方只有工作目錄、`/dev/shm`、`/dev/mqueue` 與 termination log，全部由清理清空（第 1 節與既有的清理測試），沒有需要補的缺口。
+- 在真的叢集（containerd 的 RuntimeDefault seccomp、kubelet 掛進來的檔案）裡重做同一個掃描：待測。這是同一件事的第二個來源，依驗證分級延後。
