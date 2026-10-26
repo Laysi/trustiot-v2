@@ -1,0 +1,11 @@
+<ol>
+  <li>甲</li>
+  <li>乙</li>
+</ol>
+<ul>
+  <li>丙</li>
+</ul>
+<p>本週 <b id="week"></b> kWh</p>
+<script>
+  tq.on("data", (tq) => tq.text(document.getElementById("week"), "f|week_kwh", ",.1f"));
+</script>

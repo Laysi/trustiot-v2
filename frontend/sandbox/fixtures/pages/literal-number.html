@@ -1,0 +1,7 @@
+<p>本週 <b id="week"></b> kWh</p>
+<p>上週 <b>1,234.5</b> kWh</p>
+<script>
+  tq.on("data", (tq) => {
+    tq.text(document.getElementById("week"), "f|week_kwh", ",.1f");
+  });
+</script>

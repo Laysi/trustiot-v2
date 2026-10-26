@@ -1,0 +1,10 @@
+<svg width="200" height="60">
+  <rect id="pulse" width="20" height="20"><animate attributeName="width" from="20" to="180" dur="2s" repeatCount="indefinite" /></rect>
+</svg>
+<p>本週 <b id="week"></b> kWh</p>
+<script>
+  tq.on("data", (tq) => {
+    tq.decor(document.getElementById("pulse"));
+    tq.text(document.getElementById("week"), "f|week_kwh", ",.1f");
+  });
+</script>

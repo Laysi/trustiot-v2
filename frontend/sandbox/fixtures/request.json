@@ -1,0 +1,201 @@
+{
+  "runtime": 1,
+  "spec": {
+    "datasets": [
+      {
+        "name": "daily_energy",
+        "title": "每日用電",
+        "description": "Energy per local day of the last seven days.",
+        "source": "sql",
+        "max_rows": 8
+      },
+      {
+        "name": "hourly_power",
+        "title": "今日每小時功率",
+        "description": "Average power per hour of today, from the minute cells.",
+        "source": "sql",
+        "max_rows": 24
+      },
+      {
+        "name": "meter_usage",
+        "title": "Usage per day this week",
+        "description": "The main meter energy usage per local day of this week.",
+        "source": "telemetry_usage",
+        "max_rows": 7
+      }
+    ],
+    "computations": [
+      {
+        "name": "week_kwh",
+        "title": "本週用電",
+        "formula": "sum(daily_energy.kwh)",
+        "unit": "kWh"
+      },
+      {
+        "name": "peak_kw",
+        "title": "今日尖峰",
+        "formula": "max(hourly_power.kw)",
+        "unit": "kW"
+      },
+      {
+        "name": "first_day_share",
+        "title": "第一天占比",
+        "formula": "daily_energy.kwh[0] / sum(daily_energy.kwh)"
+      }
+    ],
+    "constants": [
+      {
+        "name": "target_kwh",
+        "title": "每週目標",
+        "value": 1200,
+        "unit": "kWh",
+        "note": "The target the user gave."
+      },
+      {
+        "name": "line_name",
+        "title": "產線",
+        "value": "Line 2"
+      }
+    ]
+  },
+  "datasets": [
+    {
+      "dataset": "daily_energy",
+      "columns": [
+        {
+          "name": "day",
+          "type": "time"
+        },
+        {
+          "name": "kwh",
+          "type": "number"
+        }
+      ],
+      "rows": [
+        ["2026-10-20", 120.5],
+        ["2026-10-21", 98.25],
+        ["2026-10-22", 131],
+        ["2026-10-23", null],
+        ["2026-10-24", 87.5],
+        ["2026-10-25", 142.75],
+        ["2026-10-26", 110]
+      ],
+      "row_count": 7,
+      "meta": {
+        "queried_at": "2026-10-26T01:02:03.456Z",
+        "duration_ms": 84,
+        "source": {
+          "kind": "sql",
+          "queryable_from": {
+            "tenant_telemetry": "2026-07-28T00:00:00Z",
+            "tenant_telemetry_1m": "2026-07-28T00:00:00Z",
+            "tenant_telemetry_1h": "2025-10-26T00:00:00Z"
+          }
+        }
+      }
+    },
+    {
+      "dataset": "hourly_power",
+      "columns": [
+        {
+          "name": "hour",
+          "type": "time"
+        },
+        {
+          "name": "kw",
+          "type": "number"
+        }
+      ],
+      "rows": [
+        ["2026-10-26 00:00:00", 12.5],
+        ["2026-10-26 01:00:00", 11.75],
+        ["2026-10-26 02:00:00", 11],
+        ["2026-10-26 03:00:00", 10.5],
+        ["2026-10-26 04:00:00", 10.25],
+        ["2026-10-26 05:00:00", 11.5],
+        ["2026-10-26 06:00:00", 15.75],
+        ["2026-10-26 07:00:00", 22.5],
+        ["2026-10-26 08:00:00", 30.25],
+        ["2026-10-26 09:00:00", 34],
+        ["2026-10-26 10:00:00", 35.5],
+        ["2026-10-26 11:00:00", 33.75]
+      ],
+      "row_count": 12,
+      "meta": {
+        "queried_at": "2026-10-26T04:05:06.789Z",
+        "duration_ms": 61,
+        "source": {
+          "kind": "sql",
+          "queryable_from": {
+            "tenant_telemetry": "2026-07-28T00:00:00Z",
+            "tenant_telemetry_1m": "2026-07-28T00:00:00Z",
+            "tenant_telemetry_1h": "2025-10-26T00:00:00Z"
+          }
+        }
+      }
+    },
+    {
+      "columns": [
+        {
+          "name": "device_id",
+          "type": "text"
+        },
+        {
+          "name": "point",
+          "type": "text"
+        },
+        {
+          "name": "time",
+          "type": "time"
+        },
+        {
+          "name": "usage",
+          "type": "number"
+        },
+        {
+          "name": "readings",
+          "type": "number"
+        },
+        {
+          "name": "drops",
+          "type": "number"
+        },
+        {
+          "name": "after_gap",
+          "type": "bool"
+        },
+        {
+          "name": "suspicious_steps",
+          "type": "number"
+        }
+      ],
+      "dataset": "meter_usage",
+      "meta": {
+        "duration_ms": 132,
+        "queried_at": "2026-10-26T09:02:03.456+08:00",
+        "source": {
+          "kind": "telemetry_usage",
+          "range": {
+            "earliest": "2025-10-26T08:00:00+08:00",
+            "ends_after_now": false,
+            "from": "2026-10-19T00:00:00+08:00",
+            "interval": "1d",
+            "queried_at": "2026-10-26T09:02:03.456+08:00",
+            "resolution": "1h",
+            "to": "2026-10-26T00:00:00+08:00",
+            "truncated": false,
+            "tz": "Asia/Taipei"
+          }
+        }
+      },
+      "row_count": 3,
+      "rows": [
+        ["0190a5b2-7c3d-7e4f-8a1b-2c3d4e5f6a7b", "energy", "2026-10-19T00:00:00+08:00", 310.5, 1440, 0, false, 0],
+        ["0190a5b2-7c3d-7e4f-8a1b-2c3d4e5f6a7b", "energy", "2026-10-20T00:00:00+08:00", 298.25, 1438, 0, false, 0],
+        ["0190a5b2-7c3d-7e4f-8a1b-2c3d4e5f6a7b", "energy", "2026-10-22T00:00:00+08:00", 615, 1200, 0, true, 0]
+      ]
+    }
+  ],
+  "locale": "zh-TW",
+  "tz": "Asia/Taipei"
+}

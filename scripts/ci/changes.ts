@@ -266,7 +266,8 @@ const FRONTEND_MESSAGE_KEY_SOURCES = /^(?:crates\/contract|services\/[^/]+)\/src
 
 /**
  * The dashboard contract's JSON fixtures and shared vectors, written by the Rust types and read by
- * the sandbox protocol test (frontend/sandbox/src/protocol.test.ts).
+ * the sandbox's tests (frontend/sandbox/src/protocol.test.ts, formula.test.ts and
+ * frontend/sandbox/test/values.test.ts).
  */
 const DASHBOARD_FIXTURES = "crates/contract/tests/fixtures/dashboard/";
 
