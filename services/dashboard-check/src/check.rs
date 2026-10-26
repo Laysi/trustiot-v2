@@ -3,7 +3,7 @@
 //!
 //! The browser loads the checker's host page; the host page gets the request through
 //! `tqCheckHost.start(request)`, frames the sandbox, sends it `init` and `data`, and reports
-//! `ready`, `rendered` and `error` through the [`REPORT_BINDING`]. The checker trusts none of
+//! `ready`, `returned`, `rendered` and `error` through the [`REPORT_BINDING`]. The checker trusts none of
 //! the page: it confirms the quiet period itself from an isolated world of the sandbox frame,
 //! and runs the comparison there, where the page's scripts cannot reach, with the request's data
 //! as the argument. The page never sees the values it is compared with.
@@ -43,7 +43,6 @@ pub const WATCH_SCRIPT: &str = r"(() => {
   new MutationObserver(() => { last = performance.now(); }).observe(document, {
     subtree: true, childList: true, attributes: true, characterData: true,
   });
-  globalThis.tqCheckSinceChange = () => performance.now() - last;
   globalThis.tqCheckQuiet = (quiet, limit) => new Promise((resolve) => {
     const start = performance.now();
     const tick = () => {
@@ -355,23 +354,25 @@ async fn run(
         Err(CdpError::TooLarge) => return Ok(too_large()),
         _ => return Err(CheckError::HostPage),
     }
-    let data_sent = Instant::now();
+    let start_called = Instant::now();
     let ready = observer
-        .wait_until(data_sent + RENDER_TIME_LIMIT, |state| {
+        .wait_until(start_called + RENDER_TIME_LIMIT, |state| {
             if state.page_error.is_some() {
-                Some(false)
+                Some(None)
             } else {
-                state.ready.map(|_| true)
+                state.ready.map(Some)
             }
         })
         .await;
     if let Some(stopped) = stopped_by_page(observer) {
         return Ok(stopped);
     }
-    if ready != Some(true) {
+    let Some(Some(data_sent)) = ready else {
         return Ok(FlowEnd::Stopped(vec![Problem::NotRendered]));
-    }
+    };
     timings.ready = Some(started.elapsed());
+    // The host page sends `init` and the data as soon as the sandbox is ready; the runtime's
+    // own limit runs from there (README 「畫完」).
     let render_deadline = data_sent + RENDER_TIME_LIMIT;
     let Some(sandbox) = observer.state().sandbox_frame.clone() else {
         return Err(CheckError::HostPage);
@@ -430,27 +431,11 @@ async fn run(
             }]));
         }
     } else {
-        // Not finished in time: still changing means `render` returned and the page kept
-        // drawing; quiet, or too busy to answer, means it never finished.
-        let since = tokio::time::timeout(
-            PROBE_LIMIT,
-            evaluate(
-                cdp,
-                session,
-                world,
-                "globalThis.tqCheckSinceChange()",
-                false,
-            ),
-        )
-        .await;
-        let changing = matches!(since, Ok(Ok(Value::Number(ref ms))) if ms.as_f64().is_some_and(|ms| ms < millis(QUIET_PERIOD)));
-        return Ok(FlowEnd::Stopped(vec![if changing {
-            Problem::Timeout {
-                phase: TimeoutPhase::Render,
-            }
-        } else {
-            Problem::NotRendered
-        }]));
+        // Not finished in time (README 「檢查服務的流程」 step 6): `render` returned and the page
+        // never came to rest, or `render` never returned at all.
+        return Ok(FlowEnd::Stopped(vec![unfinished(
+            observer.state().returned,
+        )]));
     }
     timings.rendered = Some(started.elapsed());
 
@@ -596,8 +581,16 @@ fn too_large() -> FlowEnd {
     FlowEnd::Stopped(vec![too_large_problem()])
 }
 
-fn millis(duration: Duration) -> f64 {
-    duration.as_secs_f64() * 1000.0
+/// The problem of a page that did not finish within the render limit: a page whose `render`
+/// returned kept changing (`timeout`); one whose `render` never returned did not render.
+fn unfinished(returned: bool) -> Problem {
+    if returned {
+        Problem::Timeout {
+            phase: TimeoutPhase::Render,
+        }
+    } else {
+        Problem::NotRendered
+    }
 }
 
 /// Whether a node of the snapshot is inside an open or closed shadow root (a user-agent shadow
@@ -805,6 +798,17 @@ mod tests {
                 .count(),
             1
         );
+    }
+
+    #[test]
+    fn an_unfinished_page_times_out_only_when_render_returned() {
+        assert_eq!(
+            unfinished(true),
+            Problem::Timeout {
+                phase: TimeoutPhase::Render
+            }
+        );
+        assert_eq!(unfinished(false), Problem::NotRendered);
     }
 
     #[test]

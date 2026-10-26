@@ -45,7 +45,7 @@
 3. 等輪到自己，最多 `queue.max_wait`，逾時回 503。
 4. 啟動瀏覽器，接管它開的 `about:blank` 頁，開啟 `Fetch` 攔截（所有請求）、`Page`、`Runtime`、自動附加子 target（`waitForDebuggerOnStart`，附加上來的一律不放行），加上 binding `tqCheckReport`，導向 `https://check.invalid/sandbox/check.html`。
 5. 等 host 頁載入後呼叫 `tqCheckHost.start(request)`。host 頁建立沙箱 iframe、送 `init` 與 `data`，再以 `tqCheckReport(JSON.stringify(report))` 回報（見下面「host 頁的介面」）。
-6. 等 `ready`（5 秒內），在沙箱 frame 建立 isolated world 並開始記錄 DOM 變動；再等 `rendered` 或 `error`，最晚到送出資料後 5 秒（`RENDER_TIME_LIMIT`）。收到 `rendered` 後在 isolated world 確認 200 ms（`QUIET_PERIOD`）沒有變動，否則判 `timeout`（`phase: render`）；時限到了還沒有 `rendered`：最近 200 ms 內還在變動判 `timeout`，否則（含忙到不回應）判 `not_rendered`。
+6. 等 `ready`（5 秒內；host 頁收到 `ready` 就送出資料），在沙箱 frame 建立 isolated world 並開始記錄 DOM 變動；再等 `rendered` 或 `error`，最晚到 `ready` 後 5 秒（`RENDER_TIME_LIMIT`）。收到 `rendered` 後在 isolated world 確認 200 ms（`QUIET_PERIOD`）沒有變動，否則判 `timeout`（`phase: render`）；時限到了還沒有 `rendered`：有 `returned`（`render` 回傳了，頁面卻一直在變）判 `timeout`（`phase: render`），沒有（`render` 沒有回傳，含忙到不回應）判 `not_rendered`。`returned` 與 `rendered` 頁面偽造得出來，只用來分類失敗；畫完一律以 isolated world 的確認為準。
 7. 在 isolated world 載入該版本的 `compare.js`，以請求去掉 `page` 的內容（`runtime`、`spec`、`datasets`、`locale`、`tz`）呼叫 `tqCompare`；判定以 Rust 型別解析，含不認得的問題類別就當成服務的失敗。之後以 `DOMSnapshot.captureSnapshot` 找頁面的 shadow root（open 或 closed）。
 8. 合併問題：先是瀏覽器看到的 `navigated`、`requested`、`script_error`（最多 5 個），再來是流程與比對的問題，去掉重複，最多 20 個；沒有任何問題才是通過。以 `CheckVerdict::validate` 確認後回 200。
 9. 不論結果如何都關掉瀏覽器並清理（見「威脅模型」第 3 點），然後才放出位置給下一個檢查。
@@ -65,7 +65,7 @@
 
 每個檔案另加 `Content-Type` 與 `Cache-Control: no-store`。頁面的請求超過 1,000 個之後不再回應（已經判 `requested`）。
 
-導向的判定：沙箱 frame 除了第一次載入之外的任何導向請求、導向、同文件導向（`navigatedWithinDocument`），沙箱裡任何子 frame 的導向，主 frame 在 host 頁之後的導向，`Page.windowOpen`，以及新的 page target，都是 `navigated`；看到就停下檢查。附加上來的其他子 target（worker、另一個行程的 frame）判 `requested`。
+導向的判定：沙箱 frame 除了第一次載入之外的任何導向請求、導向、同文件導向（`navigatedWithinDocument`），沙箱裡任何子 frame 的導向，主 frame 在 host 頁之後的導向，以及新的 page target（開出的視窗），都是 `navigated`；看到就停下檢查。沙箱沒有 `allow-popups` 與 `allow-forms`，`window.open()` 與送出表單什麼都不會發生，所以不算失敗；Chromium 對每次 `window.open()` 都送 `Page.windowOpen`（包括被沙箱擋下的），服務不以它判定。附加上來的其他子 target（worker、另一個行程的 frame）判 `requested`。
 
 例外：沙箱 frame 與它的子 frame 的 `Runtime.exceptionThrown`（含未處理的 rejection；之後被 `exceptionRevoked` 撤銷的不算）判 `script_error`；runtime 自己接住的錯誤由 host 頁的 `error` 回報。host 頁自己的例外、或 host 頁送了不合格的回報，是服務的失敗（500）。
 
@@ -74,7 +74,7 @@
 `check.html` 與 `check.js` 由 `frontend/sandbox` 建置（Laysi/trustiot-v2#150 的 runtime）。服務呼叫與接收的介面：
 
 - `globalThis.tqCheckHost.start(request)`：`request` 是整個 `CheckRequest`（含 `page`），只呼叫一次，不回傳值。host 頁以 `<iframe sandbox="allow-scripts" src="/sandbox/v<runtime>/sandbox.html">` 建立沙箱，收到 `ready` 後送 `init`（`mode: "check"`）與 `generation` 為 1 的 `data`（每個結果都是 `{status: "ok", result}`）。
-- 回報：`globalThis.tqCheckReport(JSON.stringify(report))`，`report` 是下面其中之一，每一種最多一次，最多 4 KiB：`{"type": "ready"}`（收到沙箱的 `ready` 之後）、`{"type": "rendered"}`（收到 `generation` 1 的 `rendered`）、`{"type": "error", "message": "…"}`（收到 `error`，`message` 最多 200 字元，可省略）。其他欄位忽略。binding 在沙箱的 world 也看得到，服務只採信 host 頁主 world 的呼叫。
+- 回報：`globalThis.tqCheckReport(JSON.stringify(report))`，`report` 是下面其中之一，每一種最多一次，最多 4 KiB：`{"type": "ready"}`（收到沙箱的 `ready` 之後）、`{"type": "returned"}`（收到 `generation` 1 的 `returned`，`render` 回傳）、`{"type": "rendered"}`（收到 `generation` 1 的 `rendered`）、`{"type": "error", "message": "…"}`（收到 `error`，`message` 最多 200 字元，可省略）。其他欄位忽略。`returned`、`rendered` 在 `ready` 之前，或同一種回報第二次，是 host 頁的失敗（500）。binding 在沙箱的 world 也看得到，服務只採信 host 頁主 world 的呼叫。
 
 ## 瀏覽器旗標
 

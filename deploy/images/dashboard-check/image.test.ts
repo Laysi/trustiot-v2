@@ -12,6 +12,10 @@
  * frontend/dist. DASHBOARD_CHECK_SITE=<dir> packs that build output of frontend/ instead of
  * building it.
  *
+ * The pages are the sandbox's fixtures (frontend/sandbox/fixtures, frontend/sandbox/README.md
+ * 「固定樣本」), all of them, judged by their own matchesExpectation; the fixtures' module needs
+ * the frontend's packages (`bun install --cwd frontend --frozen-lockfile`, which the build runs).
+ *
  * The container engine is docker, or podman when docker is not installed (the memory limit needs
  * a rootful engine or cgroup delegation, which GitHub's runners give docker); it must run linux/arm64
  * containers (an arm64 host, or an arm64 emulator registered with binfmt_misc). Without one the
@@ -31,7 +35,6 @@ import { RunLog } from "../../../scripts/nightly/exec.ts";
 import { buildServiceImage, findServiceImageTools } from "../../../scripts/nightly/service-image.ts";
 import { targetStageRunProblems } from "../../../scripts/release/containerfile.ts";
 import { baseImageProblems } from "../../../scripts/release/lib.ts";
-import { CASES, checkRequest } from "./cases.ts";
 
 const DIR = import.meta.dir;
 const ROOT = resolve(DIR, "..", "..", "..");
@@ -43,6 +46,26 @@ const CHART = CHART_VALUES.services["dashboard-check"];
 if (CHART === undefined) {
   throw new Error("deploy/chart/values.yaml has no services.dashboard-check");
 }
+const FIXTURES = join(ROOT, "frontend", "sandbox", "fixtures");
+/** A case of frontend/sandbox/fixtures/cases.json. */
+interface FixtureCase {
+  name: string;
+  /** The page's file, relative to the fixtures. */
+  page: string;
+  /** Whether the frontend's unit test runs it too; the others only a browser can judge. */
+  unit: boolean;
+  about: string;
+  expect: unknown;
+}
+const FIXTURE_FILE = JSON.parse(readFileSync(join(FIXTURES, "cases.json"), "utf8")) as { request: string; cases: FixtureCase[] };
+/** The shared CheckRequest without its page. */
+const FIXTURE_REQUEST = JSON.parse(readFileSync(join(FIXTURES, FIXTURE_FILE.request), "utf8")) as Record<string, unknown>;
+/**
+ * frontend/sandbox/fixtures/expect.ts, loaded when the image tests start: the module imports the
+ * frontend's packages, which the scripts' type check does not have.
+ */
+const EXPECT_MODULE = join(FIXTURES, "expect.ts");
+type MatchesExpectation = (verdict: unknown, expectation: unknown) => boolean;
 const USER = "65532:65532";
 const CHROMIUM = "/usr/lib/chromium/chromium-headless-shell";
 const CHECK_ROUTE = "/internal/dashboard-check/v1/check";
@@ -214,6 +237,7 @@ describe("image", () => {
   const timings: number[] = [];
   let sampler: ReturnType<typeof Bun.spawn> | undefined;
   let samples = "";
+  let matchesExpectation: MatchesExpectation = () => false;
 
   beforeAll(async () => {
     if (!runnable) {
@@ -228,6 +252,7 @@ describe("image", () => {
         ...(site === undefined || site === "" ? {} : { site: resolve(site) }),
       });
     }
+    matchesExpectation = ((await import(EXPECT_MODULE)) as { matchesExpectation: MatchesExpectation }).matchesExpectation;
     // The package database the release SBOM is made from, copied out without running the image.
     files = mkdtempSync(join(tmpdir(), "trustiot-dashboard-check-image-"));
     const created = (await run([ENGINE, "create", "--platform", "linux/arm64", image])).trim();
@@ -280,7 +305,11 @@ describe("image", () => {
       );
     }
     for (const name of containers) {
-      await exec([ENGINE, "rm", "--force", "--volumes", "--time", "0", name]);
+      // podman waits for its stop timeout unless told otherwise; docker has no such option.
+      const removed = await exec([ENGINE, "rm", "--force", "--volumes", ...(ENGINE === "podman" ? ["--time", "0"] : []), name]);
+      if (removed.exitCode !== 0 && !/no such container/i.test(removed.stderr)) {
+        console.error(`could not remove the container ${name}: ${removed.stderr.trim()}`);
+      }
     }
     if (files !== "") {
       rmSync(files, { recursive: true, force: true });
@@ -309,29 +338,32 @@ describe("image", () => {
     }
   });
 
-  for (const testCase of CASES) {
+  test("the fixtures hold the pages only a browser can judge", () => {
+    expect(FIXTURE_FILE.cases.length).toBeGreaterThan(0);
+    expect(FIXTURE_FILE.cases.filter((fixture) => !fixture.unit).length).toBeGreaterThan(0);
+    expect(new Set(FIXTURE_FILE.cases.map((fixture) => fixture.name)).size).toBe(FIXTURE_FILE.cases.length);
+  });
+
+  for (const fixture of FIXTURE_FILE.cases) {
     runningTest(
-      `${testCase.name}: ${testCase.expect.length === 0 ? "passes" : `fails with ${testCase.expect.join(", ")}`}`,
+      `${fixture.name}${fixture.unit ? "" : " (browser only)"}: ${JSON.stringify(fixture.expect).slice(0, 120)}`,
       async () => {
         const started = performance.now();
         const response = await fetch(`${api}${CHECK_ROUTE}`, {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify(checkRequest(testCase.page)),
+          body: JSON.stringify({ ...FIXTURE_REQUEST, page: readFileSync(join(FIXTURES, fixture.page), "utf8") }),
         });
         const text = await response.text();
         timings.push(Math.round(performance.now() - started));
-        expect({ status: response.status, body: text.slice(0, 200) }).toMatchObject({ status: 200 });
-        const verdict = JSON.parse(text) as { verdict: string; problems?: { kind: string }[] };
-        if (testCase.expect.length === 0) {
-          expect(verdict).toMatchObject({ verdict: "passed" });
-        } else {
-          expect(verdict.verdict).toBe("failed");
-          expect([...new Set((verdict.problems ?? []).map((problem) => problem.kind))].sort()).toEqual([...new Set(testCase.expect)].sort());
+        expect({ status: response.status, body: text.slice(0, 500) }).toMatchObject({ status: 200 });
+        const verdict = JSON.parse(text) as unknown;
+        if (!matchesExpectation(verdict, fixture.expect)) {
+          throw new Error(`${fixture.name}: the verdict ${text.slice(0, 2000)} does not meet ${JSON.stringify(fixture.expect)} (${fixture.about})`);
         }
-        // A request's address never reaches the verdict (a page could spell data into it).
-        expect(text).not.toContain("check.js");
-        expect(text).not.toContain("sandbox.html?again");
+        // An address never reaches the verdict (a page could spell data into one).
+        expect(text).not.toContain("check.invalid");
+        expect(text).not.toContain("/sandbox/");
       },
       CHECK_TIMEOUT_MS,
     );

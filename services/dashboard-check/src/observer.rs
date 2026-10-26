@@ -41,6 +41,8 @@ pub const MAX_REPORT_BYTES: usize = 4096;
 pub enum Report {
     /// The sandbox's runtime loaded; the host sent `init` and `data`.
     Ready,
+    /// The page's `render` returned for the data (or its promise fulfilled).
+    Returned,
     /// The runtime's render-finished rule held.
     Rendered,
     /// A page script or `render` threw.
@@ -69,6 +71,9 @@ pub struct State {
     own_worlds: HashSet<i64>,
     pub loaded: bool,
     pub ready: Option<Instant>,
+    /// The host page reported that `render` returned: a page that then never finishes keeps
+    /// changing (`timeout`), one without it never drew (`not_rendered`).
+    pub returned: bool,
     pub rendered: bool,
     /// The runtime's error report, with its message.
     pub page_error: Option<Option<String>>,
@@ -325,7 +330,16 @@ impl Observer {
             .flatten();
         match report {
             Some(Report::Ready) if state.ready.is_none() => state.ready = Some(Instant::now()),
-            Some(Report::Rendered) if state.ready.is_some() => state.rendered = true,
+            // The host page reports each kind at most once, `returned` and `rendered` only after
+            // `ready`. Which of the two arrive, and in which order, the page can influence (it
+            // can post sandbox messages itself), so they only classify a failure; a repeat is the
+            // host page's.
+            Some(Report::Returned) if state.ready.is_some() && !state.returned => {
+                state.returned = true;
+            }
+            Some(Report::Rendered) if state.ready.is_some() && !state.rendered => {
+                state.rendered = true;
+            }
             Some(Report::Error { message }) => {
                 if state.page_error.is_none() {
                     state.page_error = Some(message);
@@ -379,7 +393,9 @@ impl EventSink for Observer {
                         state.navigated = true;
                     }
                 }
-                "Page.windowOpen" => state.navigated = true,
+                // `Page.windowOpen` is not a window: Chromium reports every window.open() call,
+                // also the ones the sandbox blocks (no allow-popups); a window that does open is a
+                // new page target, below.
                 "Page.loadEventFired" if own_session => state.loaded = true,
                 "Page.javascriptDialogOpening" if own_session => {
                     cdp.notify(
@@ -825,9 +841,10 @@ mod tests {
 
     #[tokio::test]
     async fn windows_and_other_targets_fail_the_page() {
+        // An attempt the sandbox blocked opens nothing: only a new page target is a window.
         let harness = Harness::new();
         harness.event("Page.windowOpen", json!({"url": "https://example.com/"}));
-        assert!(harness.observer.state().navigated);
+        assert!(!harness.observer.state().navigated);
 
         let harness = Harness::new();
         harness.event(
@@ -878,12 +895,30 @@ mod tests {
         );
         assert!(state.host_failed);
         state.host_failed = false;
+        // So is returned before ready.
+        Observer::on_binding(&mut state, &report(7, r#"{"type":"returned"}"#));
+        assert!(state.host_failed && !state.returned);
+        state.host_failed = false;
         Observer::on_binding(&mut state, &report(7, r#"{"type":"ready","runtime":1}"#));
+        // Rendered may come without returned: the page can post the sandbox's messages itself.
         Observer::on_binding(
             &mut state,
             &report(7, r#"{"type":"rendered","generation":1}"#),
         );
-        assert!(state.ready.is_some() && state.rendered);
+        assert!(state.ready.is_some() && state.rendered && !state.returned);
+        Observer::on_binding(&mut state, &report(7, r#"{"type":"returned"}"#));
+        assert!(state.returned && !state.host_failed);
+        // Each kind at most once.
+        for repeated in [
+            r#"{"type":"ready"}"#,
+            r#"{"type":"returned"}"#,
+            r#"{"type":"rendered"}"#,
+        ] {
+            state.host_failed = false;
+            Observer::on_binding(&mut state, &report(7, repeated));
+            assert!(state.host_failed, "{repeated}");
+        }
+        state.host_failed = false;
         Observer::on_binding(
             &mut state,
             &report(7, r#"{"type":"error","phase":"render","message":"boom"}"#),
