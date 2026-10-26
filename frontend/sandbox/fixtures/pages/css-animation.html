@@ -1,0 +1,15 @@
+<style>
+  @keyframes pulse {
+    from { opacity: 1; }
+    to { opacity: 0.4; }
+  }
+  .pulse { animation: pulse 1s infinite alternate; }
+</style>
+<svg width="200" height="60"><rect id="pulse" class="pulse" width="20" height="20"></rect></svg>
+<p>本週 <b id="week"></b> kWh</p>
+<script>
+  tq.on("data", (tq) => {
+    tq.decor(document.getElementById("pulse"));
+    tq.text(document.getElementById("week"), "f|week_kwh", ",.1f");
+  });
+</script>

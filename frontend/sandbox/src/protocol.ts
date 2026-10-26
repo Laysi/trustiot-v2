@@ -15,6 +15,9 @@ export const PROTOCOL = 1;
 /** Runtime versions this build ships (`RuntimeVersion::SHIPPED`). */
 export const RUNTIMES = [1] as const;
 
+/** Most bytes of a page (`spec::MAX_PAGE_BYTES`), as UTF-8. */
+export const MAX_PAGE_BYTES = 40 * 1024;
+
 /** Most rows of a dataset (`result::MAX_DATASET_ROWS`). */
 export const MAX_DATASET_ROWS = 2000;
 
@@ -289,6 +292,9 @@ export const LITERAL_PLACES = [
   "list-marker",
 ] as const;
 export const GEOMETRY_CHANNELS = ["width", "height", "x", "y", "radius", "angle", "axis"] as const;
+/** The channels `tq.mark` takes: every geometry channel but the axis's. */
+export const MARK_CHANNELS = ["width", "height", "x", "y", "radius", "angle"] as const;
+export type MarkChannel = (typeof MARK_CHANNELS)[number];
 export const CONTENT_KINDS = [
   "canvas",
   "image",
@@ -300,7 +306,94 @@ export const CONTENT_KINDS = [
   "generated_content",
 ] as const;
 
-const tag = z.string().optional();
+/**
+ * The element tags a problem may name (`check::ELEMENT_TAGS`): HTML and SVG elements a page
+ * draws with. Any other element is named by no tag.
+ */
+export const ELEMENT_TAGS = [
+  "a",
+  "abbr",
+  "article",
+  "aside",
+  "b",
+  "bdi",
+  "bdo",
+  "blockquote",
+  "br",
+  "caption",
+  "cite",
+  "code",
+  "col",
+  "colgroup",
+  "data",
+  "dd",
+  "del",
+  "details",
+  "dfn",
+  "div",
+  "dl",
+  "dt",
+  "em",
+  "figcaption",
+  "figure",
+  "footer",
+  "h1",
+  "h2",
+  "h3",
+  "h4",
+  "h5",
+  "h6",
+  "header",
+  "hr",
+  "i",
+  "ins",
+  "kbd",
+  "li",
+  "main",
+  "mark",
+  "meter",
+  "nav",
+  "ol",
+  "output",
+  "p",
+  "pre",
+  "progress",
+  "q",
+  "s",
+  "section",
+  "small",
+  "span",
+  "strong",
+  "sub",
+  "summary",
+  "sup",
+  "table",
+  "tbody",
+  "td",
+  "tfoot",
+  "th",
+  "thead",
+  "time",
+  "tr",
+  "u",
+  "ul",
+  "circle",
+  "ellipse",
+  "g",
+  "line",
+  "path",
+  "polygon",
+  "polyline",
+  "rect",
+  "svg",
+  "text",
+  "textPath",
+  "title",
+  "tspan",
+  "use",
+] as const;
+
+const tag = z.enum(ELEMENT_TAGS).optional();
 
 /** One failed rule (`check::Problem`); `kind` is a closed set. */
 export const ProblemSchema = z.discriminatedUnion("kind", [
@@ -325,6 +418,9 @@ export const ProblemSchema = z.discriminatedUnion("kind", [
   z.strictObject({ kind: z.literal("unsupported_content"), content: z.enum(CONTENT_KINDS) }),
 ]);
 export type Problem = z.infer<typeof ProblemSchema>;
+
+/** Every problem kind, in the order of `ProblemSchema`. */
+export const PROBLEM_KINDS = ProblemSchema.options.map((option) => option.shape.kind.value);
 
 /** The check's answer (`check::CheckVerdict`), and what `tqCompare` returns. */
 export const CheckVerdictSchema = z.discriminatedUnion("verdict", [
@@ -377,6 +473,8 @@ export type HostMessage = z.infer<typeof HostMessageSchema>;
 export const SandboxMessageSchema = z.discriminatedUnion("type", [
   /** The runtime loaded and waits for `init`. */
   z.strictObject({ tq: z.literal(PROTOCOL), type: z.literal("ready"), runtime: z.literal(1) }),
+  /** `render` returned for this generation (its promise settled); the check tells `not_rendered` from `timeout` by it. */
+  z.strictObject({ tq: z.literal(PROTOCOL), type: z.literal("returned"), generation: z.number().int().min(1) }),
   /** `render` finished for this generation and the document stayed quiet. */
   z.strictObject({ tq: z.literal(PROTOCOL), type: z.literal("rendered"), generation: z.number().int().min(1) }),
   /** A page script threw or `render` failed; the message is the page's and only ever shown as such. */

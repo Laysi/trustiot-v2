@@ -1,0 +1,18 @@
+<table>
+  <thead><tr><th>日期</th><th>用電</th></tr></thead>
+  <tbody id="rows"></tbody>
+</table>
+<script>
+  tq.on("data", (tq) => {
+    const body = document.getElementById("rows");
+    body.replaceChildren();
+    for (const row of tq.dataset("daily_energy").rows) {
+      const tr = body.appendChild(document.createElement("tr"));
+      tq.text(tr.appendChild(document.createElement("td")), `c|daily_energy|day|${row.$row}`, "%m/%d");
+      const cell = tr.appendChild(document.createElement("td"));
+      tq.text(cell, `c|daily_energy|kwh|${row.$row}`, ",.2f");
+      // An off-by-one: the first cell is marked as row 0 but shows row 1.
+      if (row.$row === 0) cell.textContent = tq.format(tq.value("c|daily_energy|kwh|1"), ",.2f");
+    }
+  });
+</script>

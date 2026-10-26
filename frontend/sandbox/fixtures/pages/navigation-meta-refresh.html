@@ -1,0 +1,5 @@
+<meta http-equiv="refresh" content="0; url=https://dashboard.invalid/">
+<p>本週 <b id="week"></b> kWh</p>
+<script>
+  tq.on("data", (tq) => tq.text(document.getElementById("week"), "f|week_kwh", ",.1f"));
+</script>

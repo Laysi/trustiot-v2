@@ -12,10 +12,11 @@ Vite + React 的單頁應用程式（SPA，決策 2），頁面全在登入後�
 | 路由 | React Router 8（data mode：`createBrowserRouter`，測試用 `createMemoryRouter`） |
 | 伺服器狀態 | TanStack Query 5 |
 | API client | `openapi-fetch`，型別由 `openapi-typescript` 從 `api/openapi.json` 產生 |
+| 儀表板沙箱 | d3 的八個模組（`d3-array`、`d3-axis`、`d3-format`、`d3-scale`、`d3-selection`、`d3-shape`、`d3-time`、`d3-time-format`），只打包進沙箱自己的建置，不進 SPA 的 bundle；見「儀表板沙箱」 |
 | 外部資料的執行時檢查 | zod 4，一律經 `src/lib/zod.ts`（`jitless`，見「CSP 的限制」與「外部資料一律經 zod 解析」） |
 | 型別檢查 | TypeScript 6（原因見下方「TypeScript 停在 6」） |
 | lint 與格式 | Biome |
-| 測試 | `bun test`，DOM 由 happy-dom 提供，元件以 Testing Library 操作 |
+| 測試 | `bun test`，DOM 由 happy-dom 提供，元件以 Testing Library 操作；沙箱的測試另外自己開 happy-dom 視窗 |
 
 相依一律是精確版本（`bunfig.toml` 的 `exact = true`），`bun.lock` 進版控，`trustedDependencies` 是空的：任何相依的安裝腳本都不執行。新增相依只用 `bun add --cwd frontend <套件>@<版本>`，不用 npm、pnpm。
 
@@ -29,10 +30,10 @@ Vite + React 的單頁應用程式（SPA，決策 2），頁面全在登入後�
 | `bun run --cwd frontend dev` | 開發伺服器（熱更新）；後端見下方「開發伺服器」 |
 | `bun run --cwd frontend api:generate` | 由 `api/openapi.json` 重新產生 `src/api/schema.gen.ts` |
 | `bun run --cwd frontend api:check` | 進版控的 `schema.gen.ts` 與規格產生的結果不同就失敗 |
-| `bun run --cwd frontend typecheck` | `tsc --noEmit`，含 `src/`、`tools/` 與 `vite.config.ts` |
+| `bun run --cwd frontend typecheck` | `tsc --noEmit`，含 `src/`、`sandbox/`、`tools/` 與 `vite.config.ts` |
 | `bun run --cwd frontend lint` | `biome ci .`；`bun run --cwd frontend format` 修正格式與 import 順序 |
 | `bun run --cwd frontend test` | 全部單元測試；單一測試：`bun run --cwd frontend test -t "<測試名稱的一部分>"` |
-| `bun run --cwd frontend build` | 建置到 `frontend/dist/`（不進版控） |
+| `bun run --cwd frontend build` | Vite 建置 SPA 到 `frontend/dist/`，再以 `tools/build-sandbox.ts` 建置儀表板沙箱到 `dist/sandbox/`（都不進版控） |
 | `bun run --cwd frontend check:dist` | 檢查 `dist/` 符合下方的版面與 CSP 規則 |
 
 CI 的 `frontend` job 依序跑 install、`api:check`、`typecheck`、`lint`、`test`、`build`、`check:dist`（`docs/architecture/ci-release.md` 的「ci.yml 的 job」）。
@@ -58,12 +59,13 @@ CI 的 `frontend` job 依序跑 install、`api:check`、`typecheck`、`lint`、`
 
 - 根目錄只有 `index.html` 與 `public/` 的檔案（`robots.txt`、`favicon.svg`）。
 - 其餘都在 `static/` 下，檔名只有內容的 hash（`static/<hash>.js`、`static/<hash>.css`），原始碼的模組名稱與路徑不會出現在映像裡；內容改變時檔名一定改變，所以這些檔案可以長期快取。
-- 沒有 source map、沒有 `index.html` 以外的 HTML，副檔名只限 html、js、css、svg、png、ico、woff2、txt、webmanifest。
+- 儀表板沙箱的檔案在 `sandbox/` 下，正好是 `tools/build-sandbox.ts` 寫出的那些（`sandbox/check.html`、`sandbox/check.js`，以及每個 runtime 版本的 `sandbox/v<版本>/` 下的 `sandbox.html`、`runtime.js`、`d3.js`、`sandbox.css`、`compare.js`）；兩份 HTML 沒有 inline script 或樣式，只引用同一目錄的檔案。
+- 沒有 source map、沒有 `index.html` 與沙箱文件以外的 HTML，副檔名只限 html、js、css、svg、png、ico、woff2、txt、webmanifest。
 - 資源以絕對路徑引用（`base: "/"`），所以 `/devices/42` 這種深層連結載入的資源與 `/` 相同。
 
 保留給其他用途的路徑，前端路由不能使用（`src/app/paths.ts`，`routes.test.tsx` 檢查每個路由）：
 
-- 前綴：`/api`、`/auth`（入口送到服務）、`/internal`（入口永遠不轉送）、`/static`（建置的資源）。
+- 前綴：`/api`、`/auth`（入口送到服務）、`/internal`（入口永遠不轉送）、`/static`（建置的資源）、`/sandbox`（儀表板沙箱）。
 - 路徑：`/healthz`、`/readyz`、`/index.html`、`/robots.txt`、`/favicon.svg`。
 
 其他路徑都由 `services/web` 回 `index.html`，再由前端路由決定畫面；不存在的路徑顯示前端的「找不到頁面」。
@@ -172,6 +174,15 @@ API 回應、錯誤本文、SSE 事件資料與瀏覽器儲存（`localStorage`�
 ## 開發伺服器
 
 `bun run --cwd frontend dev` 只提供前端。要接後端時，先依 `scripts/README.md` 在本機啟動服務，再以 `TRUSTIOT_DEV_API_ORIGIN=<服務的 origin> bun run --cwd frontend dev` 啟動：`/api` 與 `/auth` 轉送到該 origin，保留原本的 Host，與正式環境一樣同源。
+
+## 儀表板沙箱
+
+`sandbox/` 是 AI 儀表板頁面的沙箱（Laysi/trustiot-v2#150）：沙箱文件、runtime（`window.tq`）、比對程式、host adapter 與檢查服務的 host 頁。它不是 SPA 的一部分，有自己的建置（`tools/build-sandbox.ts`，由 `bun run --cwd frontend build` 在 Vite 之後執行）與自己的 header；契約、檢查規則與固定樣本都在 [sandbox/README.md](sandbox/README.md)。
+
+- `services/web` 隨 SPA 提供 `dist/sandbox/`，檢查服務（`services/dashboard-check`）的映像取同一個目錄。
+- SPA 的儀表板畫面（Laysi/trustiot-v2#462）以 `sandbox/src/host.ts` 的 `SandboxHost`（`base: "/sandbox"`）建立沙箱 frame、送出頁面與資料、接收沙箱的訊息；沙箱送來的一切都當成頁面寫的內容，用法見 sandbox/README.md 的「host adapter」。`services/web` 給沙箱檔案的 header 與 SPA CSP 的 `frame-src` 也由 Laysi/trustiot-v2#462 處理。
+- d3 的模組只給沙箱用，版本隨 runtime 凍結：升級 d3 會改變已檢查過的頁面的畫法，要開新的 runtime 版本（sandbox/README.md「建置結果」）。
+- 沙箱的測試在 `sandbox/test/` 與 `sandbox/src/*.test.ts`，由 `bun run --cwd frontend test` 一起執行。
 
 ## 測試的寫法
 
