@@ -10,8 +10,8 @@ still refuses a call that is not on the list.
    the services that call on behalf of users (templates/token-exchange.yaml,
    Laysi/trustiot-v2#106). The certs service's policy likewise admits its callers on its API
    ports only ("trustiot.mesh.certsPorts"): its broker-certs port, which issues the MQTT broker's
-   server certificate, has its own Service and policies, for the broker's pod alone
-   (templates/certs-broker.yaml, Laysi/trustiot-v2#557). The MQTT broker's policy admits each
+   server certificate, has its own Service and policies, for the broker's certificate CronJob
+   alone (templates/certs-broker.yaml, Laysi/trustiot-v2#557, Laysi/trustiot-v2#535). The MQTT broker's policy admits each
    caller on its own port only
    (portRules: mqtt-bridge on the gateway port, the services with a broker account on the
    service port; Laysi/trustiot-v2#84).
