@@ -6,7 +6,10 @@
 //!    ingress gateway has no `act`; the gateway does not route `/internal` anyway.
 //! 2. The body: [`RunSql`], at most [`MAX_REQUEST_BYTES`]; `max_rows` 1 to [`MAX_ROWS`].
 //! 3. The check ([`crate::sql`]): pure, on a thread of its own; a refusal answers 422 with the
-//!    [`SqlRefusal`] as `details`, before anything reaches Postgres or ClickHouse.
+//!    [`SqlRefusal`] as `details`, before anything reaches Postgres or ClickHouse. A tenant runs
+//!    at most [`sql::MAX_CHECKS_PER_TENANT`] checks at once; with
+//!    [`sql::MAX_WAITING_CHECKS_PER_TENANT`] more waiting, a further call answers 429
+//!    `rate_limited` unchecked.
 //! 4. The tenant's account: it exists (Postgres) and is as the service creates it, with its
 //!    queryable period set ([`crate::accounts::Accounts::verify`]).
 //! 5. The query: only the statement printed from the checked tree, as the tenant's read-only
@@ -117,6 +120,19 @@ fn refused(refusal: &SqlRefusal) -> Response {
 
 fn denied() -> Response {
     error(ErrorBody::new(ErrorCode::PermissionDenied))
+}
+
+/// The answer when the tenant already has as many SQL checks running and waiting as it may
+/// ([`sql::MAX_CHECKS_PER_TENANT`], [`sql::MAX_WAITING_CHECKS_PER_TENANT`]): 429, as when its
+/// query quota is used up, so the caller treats it as the tenant's own load and tries later.
+fn busy(tenant: TenantId, logged: &LoggedSql) -> Response {
+    tracing::info!(
+        tenant_id = %tenant,
+        sql_bytes = logged.bytes,
+        sql_hash = %logged.hash,
+        "refused an AI's SQL: the tenant has as many checks running and waiting as it may"
+    );
+    error(ErrorBody::new(ErrorCode::RateLimited))
 }
 
 fn invalid_request(parameter: &'static str) -> Response {
@@ -293,6 +309,10 @@ pub(crate) async fn run_sql(
         );
         return denied();
     }
+    // `may_run_sql` requires a tenant; the check's permits are counted per tenant.
+    let Some(caller_tenant) = user.tenant_id() else {
+        return denied();
+    };
     let body = match body {
         Ok(body) => body,
         Err(BytesRejection::FailedToBufferBody(FailedToBufferBody::LengthLimitError(_))) => {
@@ -310,7 +330,7 @@ pub(crate) async fn run_sql(
         return invalid_request("max_rows");
     }
     let logged = LoggedSql::new(&request.sql);
-    let checked = match sql::check_on_thread(request.sql, max_rows).await {
+    let checked = match sql::check_on_thread(caller_tenant, request.sql, max_rows).await {
         Ok(checked) => checked,
         Err(CheckError::Refused(refusal)) => {
             tracing::info!(
@@ -332,6 +352,7 @@ pub(crate) async fn run_sql(
             );
             return error(ErrorBody::new(ErrorCode::Internal));
         }
+        Err(CheckError::Busy) => return busy(caller_tenant, &logged),
     };
     let tenant = match state.tenant(&user).await {
         Ok(tenant) => tenant,

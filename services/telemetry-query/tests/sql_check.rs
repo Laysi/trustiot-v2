@@ -44,14 +44,14 @@ use testkit::identity::TestIssuer;
 use tokio::net::TcpListener;
 
 async fn refusal(sql: &str) -> SqlRefusal {
-    match check_on_thread(sql.to_owned(), 200).await {
+    match check_on_thread(TenantId::generate(), sql.to_owned(), 200).await {
         Err(CheckError::Refused(refusal)) => refusal,
         other => panic!("{sql}: expected a refusal, got {other:?}"),
     }
 }
 
 async fn passes(sql: &str) {
-    if let Err(error) = check_on_thread(sql.to_owned(), 200).await {
+    if let Err(error) = check_on_thread(TenantId::generate(), sql.to_owned(), 200).await {
         panic!("{sql}: {error:?}");
     }
 }
@@ -104,7 +104,7 @@ async fn a_schema_change_in_a_comment_is_dropped_from_what_runs() {
         "SELECT 1 FROM tenant_telemetry -- ; DROP TABLE trustiot.telemetry",
         "SELECT 1 /* ; TRUNCATE TABLE trustiot.telemetry */ FROM tenant_telemetry",
     ] {
-        let checked = check_on_thread(sql.to_owned(), 200)
+        let checked = check_on_thread(TenantId::generate(), sql.to_owned(), 200)
             .await
             .unwrap_or_else(|error| panic!("{sql}: {error:?}"));
         assert_eq!(
@@ -123,7 +123,7 @@ async fn a_schema_change_in_a_comment_is_dropped_from_what_runs() {
 #[tokio::test]
 async fn a_schema_change_as_a_string_stays_a_string() {
     let sql = "SELECT 'DROP TABLE trustiot.telemetry' AS text FROM tenant_telemetry";
-    let checked = check_on_thread(sql.to_owned(), 200)
+    let checked = check_on_thread(TenantId::generate(), sql.to_owned(), 200)
         .await
         .unwrap_or_else(|error| panic!("{sql}: {error:?}"));
     assert_eq!(
@@ -337,7 +337,7 @@ async fn a_query_over_the_limits_only_as_printed_is_refused_as_such() {
     ] {
         assert!(sql.len() <= MAX_SQL_BYTES as usize, "{name}: {}", sql.len());
         assert!(tokens(&sql).is_ok(), "{name}: within the lexer's limits");
-        match check_on_thread(sql, 200).await {
+        match check_on_thread(TenantId::generate(), sql, 200).await {
             Ok(_) if passes => {}
             Err(CheckError::Refused(SqlRefusal::TooLong { .. } | SqlRefusal::TooComplex))
                 if !passes => {}
@@ -360,7 +360,7 @@ async fn a_query_over_the_limits_only_as_printed_is_refused_as_such() {
             if misreads_not(sql.clone()) {
                 misread += 1;
             }
-            match check_on_thread(sql.clone(), 200).await {
+            match check_on_thread(TenantId::generate(), sql.clone(), 200).await {
                 Ok(checked) => assert!(!checked.canonical.contains("NOT AS"), "{sql}"),
                 Err(CheckError::Refused(_)) => {}
                 Err(other) => panic!("{sql}: {other:?}"),
@@ -434,7 +434,9 @@ async fn a_query_over_the_limits_only_as_printed_is_refused_as_such() {
     for (name, shape) in shapes {
         for n in 1..=120 {
             let sql = shape(n);
-            if let Err(CheckError::Internal(reason)) = check_on_thread(sql.clone(), 200).await {
+            if let Err(CheckError::Internal(reason)) =
+                check_on_thread(TenantId::generate(), sql.clone(), 200).await
+            {
                 panic!("{name} × {n}: {reason}\n{sql}");
             }
         }
@@ -453,7 +455,7 @@ async fn a_query_over_the_limits_only_as_printed_is_refused_as_such() {
                         .map_or_else(|| "1".to_owned(), |(columns, _)| columns.to_owned());
                     let sql = wrap(p, &inner);
                     if let Err(CheckError::Internal(reason)) =
-                        check_on_thread(sql.clone(), 200).await
+                        check_on_thread(TenantId::generate(), sql.clone(), 200).await
                     {
                         panic!("{name} × {n} in {p} {outer}: {reason}\n{sql}");
                     }
@@ -465,16 +467,20 @@ async fn a_query_over_the_limits_only_as_printed_is_refused_as_such() {
 
 #[tokio::test]
 async fn the_check_runs_on_its_own_thread() {
-    let checked = check_on_thread("SELECT point FROM tenant_telemetry".to_owned(), 5)
-        .await
-        .expect("passes");
+    let checked = check_on_thread(
+        TenantId::generate(),
+        "SELECT point FROM tenant_telemetry".to_owned(),
+        5,
+    )
+    .await
+    .expect("passes");
     assert_eq!(
         checked.statement,
         "SELECT point FROM trustiot.tenant_telemetry LIMIT 6 FORMAT JSONCompactEachRowWithNamesAndTypes"
     );
     let deep = format!("SELECT {}1{}", "(".repeat(5_000), ")".repeat(5_000));
     assert!(matches!(
-        check_on_thread(deep, 5).await,
+        check_on_thread(TenantId::generate(), deep, 5).await,
         Err(CheckError::Refused(SqlRefusal::TooComplex))
     ));
 }
@@ -613,7 +619,9 @@ async fn parentheses_and_brackets_nest_at_most_the_limit() {
         "(".repeat(MAX_NESTING),
         ")".repeat(MAX_NESTING)
     );
-    let checked = check_on_thread(sql, 200).await.expect("passes");
+    let checked = check_on_thread(TenantId::generate(), sql, 200)
+        .await
+        .expect("passes");
     assert!(
         (MAX_NESTING + 1..=READ_BACK_MAX_NESTING).contains(&nesting_of(&checked.canonical)),
         "{}",

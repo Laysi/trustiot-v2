@@ -153,7 +153,7 @@ client 每次失敗都記一筆日誌，欄位有 `peer`、`route`（路由樣�
 | 沒有 `act`、`act` 不是可以執行 SQL 的服務、沒有租戶 | 403 | `permission_denied` |
 | 租戶的帳號還沒建立 | 404 | `not_found` |
 | 本文不是這個請求、`max_rows` 超出範圍 | 400 | `invalid_request` |
-| 租戶的查詢額度暫時用完 | 429 | `rate_limited` |
+| 租戶的查詢額度暫時用完，或租戶在跑與在等的 SQL 檢查已達上限 | 429 | `rate_limited` |
 | 帳號不是服務建立的樣子、資料庫失敗 | 503 | `unavailable` |
 | 查詢超過帳號的時間上限 | 504 | `timeout` |
 

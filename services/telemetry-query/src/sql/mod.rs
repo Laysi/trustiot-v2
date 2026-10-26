@@ -30,9 +30,11 @@
 pub mod check;
 pub mod functions;
 pub mod lexer;
+mod permits;
 
 use std::thread;
 
+use contract::TenantId;
 use contract::api::telemetry_query::SqlRefusal;
 use sqlparser::ast::{
     Expr, FormatClause, Ident, LimitClause, Offset, OffsetRows, Query, SetExpr, Statement,
@@ -40,9 +42,9 @@ use sqlparser::ast::{
 };
 use sqlparser::dialect::ClickHouseDialect;
 use sqlparser::parser::{Parser, ParserError};
-use tokio::sync::Semaphore;
 
 use self::check::{Checker, READ_BACK_MAX_NESTING, READ_BACK_RECURSION_LIMIT};
+use self::permits::Permits;
 
 /// How deep the parser may recurse.
 pub const RECURSION_LIMIT: usize = 50;
@@ -73,6 +75,10 @@ pub enum CheckError {
     /// The check itself failed, for example the printed text did not read back as the checked
     /// tree. Never the caller's mistake; logged, and nothing is sent.
     Internal(&'static str),
+    /// The tenant already has [`MAX_CHECKS_PER_TENANT`] checks running and
+    /// [`MAX_WAITING_CHECKS_PER_TENANT`] waiting: the SQL was not checked. The tenant's own load,
+    /// answered like its used-up query quota.
+    Busy,
 }
 
 impl From<SqlRefusal> for CheckError {
@@ -114,39 +120,58 @@ pub fn check(sql: &str, max_rows: u32) -> Result<Checked, CheckError> {
 /// [`STACK_BYTES`] stack; further requests wait for one to finish.
 pub const MAX_CONCURRENT_CHECKS: usize = 4;
 
-/// The threads [`check_on_thread`] may run at once.
-static CHECKS: Semaphore = Semaphore::const_new(MAX_CONCURRENT_CHECKS);
+/// How many of [`MAX_CONCURRENT_CHECKS`] one tenant's checks may take at once (decided
+/// 2026-10-26 for the dashboards of Laysi/trustiot-v2#150): a tenant's further checks wait
+/// without taking one, so another tenant's check still gets a thread.
+pub const MAX_CHECKS_PER_TENANT: usize = 2;
 
-/// [`check`] on a thread of its own with a [`STACK_BYTES`] stack, at most
-/// [`MAX_CONCURRENT_CHECKS`] at a time. The tree is built, checked and dropped there, never on
-/// the caller's thread.
+/// How many more of one tenant's checks may wait while it has [`MAX_CHECKS_PER_TENANT`]
+/// running; a further one is [`CheckError::Busy`] at once. With the handler's
+/// `http.request_timeout`, which drops a waiting request, it bounds how much one tenant's
+/// waiting requests hold.
+pub const MAX_WAITING_CHECKS_PER_TENANT: usize = 16;
+
+/// The threads [`check_on_thread`] may run at once, in all and per tenant.
+static CHECKS: Permits = Permits::new(
+    MAX_CONCURRENT_CHECKS,
+    MAX_CHECKS_PER_TENANT,
+    MAX_WAITING_CHECKS_PER_TENANT,
+);
+
+/// [`check`] for `tenant` on a thread of its own with a [`STACK_BYTES`] stack, at most
+/// [`MAX_CONCURRENT_CHECKS`] at a time and at most [`MAX_CHECKS_PER_TENANT`] of them for one
+/// tenant. The tree is built, checked and dropped there, never on the caller's thread.
+/// `tenant` is the caller's, from its verified identity.
 ///
 /// # Errors
 ///
-/// As [`check`], and [`CheckError::Internal`] when the thread cannot start or stops without an
-/// answer.
-pub async fn check_on_thread(sql: String, max_rows: u32) -> Result<Checked, CheckError> {
-    on_bounded_thread(&CHECKS, move || check(&sql, max_rows)).await?
+/// As [`check`]; [`CheckError::Busy`] when the tenant has [`MAX_WAITING_CHECKS_PER_TENANT`]
+/// checks waiting already; [`CheckError::Internal`] when the thread cannot start or stops
+/// without an answer.
+pub async fn check_on_thread(
+    tenant: TenantId,
+    sql: String,
+    max_rows: u32,
+) -> Result<Checked, CheckError> {
+    on_bounded_thread(&CHECKS, tenant, move || check(&sql, max_rows)).await?
 }
 
-/// Runs `work` on a new thread with a [`STACK_BYTES`] stack once `permits` has one free. The
-/// thread holds the permit until `work` returns, also when the caller stops waiting, so no more
-/// threads run than `permits` allows.
+/// Runs `work` on a new thread with a [`STACK_BYTES`] stack once `permits` has one free for
+/// `tenant` ([`Permits`]). The thread holds the permits until `work` returns, also when the
+/// caller stops waiting, so no more threads run than `permits` allows, in all and per tenant.
 async fn on_bounded_thread<T: Send + 'static>(
-    permits: &'static Semaphore,
+    permits: &'static Permits,
+    tenant: TenantId,
     work: impl FnOnce() -> T + Send + 'static,
 ) -> Result<T, CheckError> {
-    let permit = permits
-        .acquire()
-        .await
-        .map_err(|_| CheckError::Internal("the check's permits are closed"))?;
+    let held = permits.acquire(tenant).await?;
     let (answer, answered) = tokio::sync::oneshot::channel();
     thread::Builder::new()
         .name("sql-check".to_owned())
         .stack_size(STACK_BYTES)
         .spawn(move || {
             let result = work();
-            drop(permit);
+            drop(held);
             // The receiver is gone only when the caller stopped waiting.
             let _ = answer.send(result);
         })
