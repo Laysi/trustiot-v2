@@ -33,6 +33,20 @@
         ],
         "type": "object"
       },
+      "BucketInterval": {
+        "description": "A bucket length of the semantic API: whole local minutes, hours, days, Monday weeks and\nmonths of the requested time zone, or the whole range.",
+        "enum": [
+          "1m",
+          "5m",
+          "15m",
+          "1h",
+          "1d",
+          "1w",
+          "1mo",
+          "total"
+        ],
+        "type": "string"
+      },
       "CodeSent": {
         "description": "The answer to `send_code`, the same whether or not a user has the address.",
         "properties": {
@@ -169,6 +183,102 @@
           "name"
         ],
         "type": "object"
+      },
+      "CumulativeCheck": {
+        "description": "The cumulative check over the window read around the range.",
+        "properties": {
+          "comparisons": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "drops": {
+            "description": "How often the value fell, rose, and was compared with the one before.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "from": {
+            "description": "The window the check read.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "rises": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "to": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "verdict": {
+            "$ref": "#/components/schemas/Verdict"
+          }
+        },
+        "required": [
+          "verdict",
+          "drops",
+          "rises",
+          "comparisons",
+          "from",
+          "to"
+        ],
+        "type": "object"
+      },
+      "CurrentSession": {
+        "description": "The session of the request.",
+        "properties": {
+          "active_tenant": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/TenantMembership",
+                "description": "The tenant the session acts in, with the user's role there; `null` when it acts in none:\nnone was picked yet, or the user is no longer a member of it."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "email": {
+            "description": "The address the user logs in with; `null` for a user who cannot log in by email.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "platform_admin": {
+            "description": "Whether the user is a platform administrator (A2), independent of any tenant.",
+            "type": "boolean"
+          },
+          "tenants": {
+            "description": "Every tenant the user belongs to, by name; switch with\n`PUT /api/identity/v1/sessions/current/tenant`.",
+            "items": {
+              "$ref": "#/components/schemas/TenantMembership"
+            },
+            "type": "array"
+          },
+          "user_id": {
+            "$ref": "#/components/schemas/UserId",
+            "description": "The signed-in user."
+          }
+        },
+        "required": [
+          "user_id",
+          "email",
+          "platform_admin",
+          "active_tenant",
+          "tenants"
+        ],
+        "type": "object"
+      },
+      "DataStatus": {
+        "description": "Whether a series had readings in the range.",
+        "enum": [
+          "ok",
+          "no_data"
+        ],
+        "type": "string"
       },
       "Device": {
         "description": "A device: a Modbus endpoint one of the tenant's gateways polls with one of its models.",
@@ -627,6 +737,25 @@
         ],
         "type": "object"
       },
+      "Gap": {
+        "description": "A spacing between two readings of at least [`GAP_FACTOR`] times the usual one.",
+        "properties": {
+          "from": {
+            "description": "The reading before the gap and the one after it.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "to": {
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "from",
+          "to"
+        ],
+        "type": "object"
+      },
       "GatewayBinding": {
         "description": "A gateway's binding to a tenant.",
         "properties": {
@@ -775,6 +904,15 @@
           "certificate_request"
         ],
         "type": "object"
+      },
+      "Language": {
+        "description": "A language the interface or AI answers may use.",
+        "enum": [
+          "auto",
+          "zh-TW",
+          "en"
+        ],
+        "type": "string"
       },
       "Latest": {
         "description": "The latest value of each data point of a device that has a reading in the raw period.",
@@ -1037,7 +1175,7 @@
         ]
       },
       "MemberRole": {
-        "description": "A role in a tenant, as this API takes and returns it.",
+        "description": "A role in a tenant, as the API takes and returns it: setting a member's role, and the tenants\nof the current session.",
         "enum": [
           "viewer",
           "editor",
@@ -1152,6 +1290,90 @@
         },
         "required": [
           "gateways"
+        ],
+        "type": "object"
+      },
+      "Preferences": {
+        "description": "A user's preferences.",
+        "properties": {
+          "ai_language": {
+            "$ref": "#/components/schemas/Language",
+            "description": "The language AI answers are written in; `auto` answers in the language of the question."
+          },
+          "language": {
+            "$ref": "#/components/schemas/Language",
+            "description": "The interface's language; `auto` follows the browser."
+          },
+          "theme": {
+            "$ref": "#/components/schemas/Theme",
+            "description": "The interface's colors."
+          },
+          "time_zone": {
+            "description": "An IANA time zone name such as `Asia/Taipei`, or `auto` to follow the browser.",
+            "example": "Asia/Taipei",
+            "type": "string"
+          }
+        },
+        "required": [
+          "language",
+          "ai_language",
+          "time_zone",
+          "theme"
+        ],
+        "type": "object"
+      },
+      "QueryRange": {
+        "description": "The range an answer covers.",
+        "properties": {
+          "earliest": {
+            "description": "The start of the queryable period of the table read, at the time of the request.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "ends_after_now": {
+            "description": "Whether the range ends after the request's time (a period still running, such as\n`today`): its last bucket is not complete.",
+            "type": "boolean"
+          },
+          "from": {
+            "description": "The range read: `from` inclusive, `to` exclusive. `from` is later than requested when the\nrequest started before the queryable period (`truncated`).",
+            "format": "date-time",
+            "type": "string"
+          },
+          "interval": {
+            "$ref": "#/components/schemas/BucketInterval"
+          },
+          "queried_at": {
+            "description": "When the request was answered.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "resolution": {
+            "$ref": "#/components/schemas/Resolution",
+            "description": "The aggregate table read: one-minute or one-hour cells. A minimum's or maximum's time is\nthe start of its cell."
+          },
+          "to": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "truncated": {
+            "description": "Whether `from` was moved to the start of the queryable period.",
+            "type": "boolean"
+          },
+          "tz": {
+            "description": "The time zone the buckets follow; every time in the answer has its offset.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "tz",
+          "interval",
+          "from",
+          "to",
+          "truncated",
+          "earliest",
+          "ends_after_now",
+          "resolution",
+          "queried_at"
         ],
         "type": "object"
       },
@@ -1272,6 +1494,14 @@
         ],
         "type": "object"
       },
+      "Resolution": {
+        "description": "The aggregate table a request reads.",
+        "enum": [
+          "1m",
+          "1h"
+        ],
+        "type": "string"
+      },
       "RevocationReason": {
         "description": "A reason a workstation certificate can be revoked for: the RFC 5280 CRLReason codes that\napply to an end entity, without `certificateHold` (a revocation here is final).",
         "enum": [
@@ -1361,6 +1591,29 @@
         ],
         "type": "object"
       },
+      "SeriesKey": {
+        "additionalProperties": false,
+        "description": "One data point of one device.",
+        "properties": {
+          "device_id": {
+            "description": "The device.",
+            "format": "uuid",
+            "type": "string"
+          },
+          "point": {
+            "description": "The data point key: 1 to 128 letters, digits, `.`, `_` or `-`, starting with a letter or\ndigit.",
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "device_id",
+          "point"
+        ],
+        "type": "object"
+      },
       "SeriesPoint": {
         "description": "One bucket of a series (for `raw`, one reading).",
         "properties": {
@@ -1411,6 +1664,331 @@
         ],
         "type": "object"
       },
+      "SeriesQuery": {
+        "additionalProperties": false,
+        "description": "A semantic request: which series, which range in which time zone, and the bucket length. The\ntenant is the caller's; nothing else can name one.",
+        "properties": {
+          "from": {
+            "description": "The range's start, RFC 3339 with an offset (inclusive), rounded down to the minute.",
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "interval": {
+            "$ref": "#/components/schemas/BucketInterval",
+            "description": "The bucket length; `total` (the default) gives one bucket for the whole range."
+          },
+          "period": {
+            "description": "A period relative to the request's time: `today`, `yesterday`, `this_week`, `last_week`,\n`this_month`, `last_month`, `this_year`, `last_year` (whole local periods, weeks from\nMonday), `last_<N>_days` (N local days with today, 1 to 366) or `last_<N>_hours` (up to\nnow, 1 to 72). Either this or `from` and `to`.",
+            "pattern": "^(today|yesterday|this_week|last_week|this_month|last_month|this_year|last_year|last_[1-9][0-9]{0,2}_days|last_[1-9][0-9]?_hours)$",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "series": {
+            "description": "1 to 20 distinct series.",
+            "items": {
+              "$ref": "#/components/schemas/SeriesKey"
+            },
+            "maxItems": 20,
+            "minItems": 1,
+            "type": "array"
+          },
+          "to": {
+            "description": "The range's end, RFC 3339 with an offset (exclusive), rounded down to the minute.",
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "tz": {
+            "description": "An IANA time zone name, such as `Asia/Taipei`: the local hours, days, Monday weeks and\nmonths the buckets and the period follow, and the offset of every time in the answer.",
+            "example": "Asia/Taipei",
+            "type": "string"
+          }
+        },
+        "required": [
+          "series",
+          "tz"
+        ],
+        "type": "object"
+      },
+      "SeriesStatistics": {
+        "description": "A series' statistics over the range.",
+        "properties": {
+          "avg": {
+            "description": "The mean of the numeric readings; for an on/off point, the share of readings that were on.",
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "count": {
+            "description": "Readings in the range, and how many of them are numeric (float, int, bool).",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "device_id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "first": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/TimedReading",
+                "description": "The first and last reading of the range."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "highest": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/TimedValue",
+                "description": "The buckets with the highest and lowest mean (not for `total`)."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "last": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/TimedReading"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "lowest": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/TimedValue"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "max": {
+            "description": "The largest value and the start of the cell it was in.",
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "max_time": {
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "min": {
+            "description": "The smallest value and the start of the cell it was in.",
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "min_time": {
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "numeric_count": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "point": {
+            "type": "string"
+          },
+          "rows": {
+            "description": "The buckets with readings, in time order; buckets without readings are left out.",
+            "items": {
+              "$ref": "#/components/schemas/StatisticsRow"
+            },
+            "type": "array"
+          },
+          "status": {
+            "$ref": "#/components/schemas/DataStatus"
+          }
+        },
+        "required": [
+          "device_id",
+          "point",
+          "status",
+          "count",
+          "numeric_count",
+          "rows"
+        ],
+        "type": "object"
+      },
+      "SeriesUsage": {
+        "description": "A series' usage over the range.",
+        "properties": {
+          "baseline": {
+            "description": "Whether a reading before the range was found, so the usage up to the first reading in the\nrange is counted.",
+            "type": "boolean"
+          },
+          "check": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/CumulativeCheck",
+                "description": "The cumulative check; absent without data."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "device_id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "drops": {
+            "description": "Drops in the range, each counted as a reset or wrap that started again from 0: each loses\nat most the usage of one sampling interval.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "first_reading": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/TimedValue",
+                "description": "The first and last numeric reading in the range."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "gaps": {
+            "description": "Gaps in the range, and the longest.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "highest": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/TimedValue",
+                "description": "The buckets with the highest and lowest usage (not for `total`)."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "largest_suspicious_step": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/TimedValue"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "last_reading": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/TimedValue"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "longest_gap": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Gap"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "lowest": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/TimedValue"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "point": {
+            "type": "string"
+          },
+          "readings": {
+            "description": "Readings in the range.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "rows": {
+            "description": "The buckets with readings, in time order; a bucket without readings is left out (unknown,\nnot zero), and the usage across a gap is in the first bucket after it.",
+            "items": {
+              "$ref": "#/components/schemas/UsageRow"
+            },
+            "type": "array"
+          },
+          "skipped_cells": {
+            "description": "Cells left out because their first or last value was not a finite number.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "status": {
+            "$ref": "#/components/schemas/UsageStatus"
+          },
+          "suspicious_steps": {
+            "description": "Steps much faster than the series usually rises, and the largest: the total includes them,\nand they may be a meter misread.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "total": {
+            "description": "The usage over the range; absent unless `status` is `ok`.",
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "device_id",
+          "point",
+          "status",
+          "drops",
+          "readings",
+          "baseline",
+          "gaps",
+          "suspicious_steps",
+          "skipped_cells",
+          "rows"
+        ],
+        "type": "object"
+      },
       "SetMemberRole": {
         "description": "The body of `PUT /api/identity/v1/platform/tenants/{tenant_id}/members`. Unknown fields are\nignored. Its `Debug` leaves the address out: it is personal data.",
         "properties": {
@@ -1426,6 +2004,88 @@
         "required": [
           "email",
           "role"
+        ],
+        "type": "object"
+      },
+      "Statistics": {
+        "description": "Statistics of each series.",
+        "properties": {
+          "range": {
+            "$ref": "#/components/schemas/QueryRange"
+          },
+          "series": {
+            "description": "One entry per requested series, in the request's order.",
+            "items": {
+              "$ref": "#/components/schemas/SeriesStatistics"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "range",
+          "series"
+        ],
+        "type": "object"
+      },
+      "StatisticsRow": {
+        "description": "One bucket of a series' statistics.",
+        "properties": {
+          "avg": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "count": {
+            "description": "Readings in the bucket.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "last": {
+            "$ref": "#/components/schemas/Reading",
+            "description": "The bucket's latest reading."
+          },
+          "max": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "min": {
+            "description": "The smallest, largest and mean numeric value (a bool counts as 0 or 1); `null` when the\nbucket holds only text readings.",
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "time": {
+            "description": "The bucket's start.",
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "time",
+          "count",
+          "last"
+        ],
+        "type": "object"
+      },
+      "SwitchTenant": {
+        "additionalProperties": false,
+        "description": "The body of `PUT /api/identity/v1/sessions/current/tenant`.",
+        "properties": {
+          "tenant_id": {
+            "$ref": "#/components/schemas/TenantId",
+            "description": "One of the user's tenants."
+          }
+        },
+        "required": [
+          "tenant_id"
         ],
         "type": "object"
       },
@@ -1457,6 +2117,76 @@
         "description": "A tenant: one customer organisation; every tenant-scoped row and event carries it.\n\nSerialized as a lowercase hyphenated UUID string.",
         "format": "uuid",
         "type": "string"
+      },
+      "TenantMembership": {
+        "description": "A tenant the user belongs to, with their role there.",
+        "properties": {
+          "name": {
+            "description": "The tenant's name; `null` only for a tenant that has no record, which only data written\noutside the API has.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "role": {
+            "$ref": "#/components/schemas/MemberRole",
+            "description": "The user's role in the tenant."
+          },
+          "tenant_id": {
+            "$ref": "#/components/schemas/TenantId",
+            "description": "The tenant."
+          }
+        },
+        "required": [
+          "tenant_id",
+          "name",
+          "role"
+        ],
+        "type": "object"
+      },
+      "Theme": {
+        "description": "The interface's colors.",
+        "enum": [
+          "system",
+          "light",
+          "dark"
+        ],
+        "type": "string"
+      },
+      "TimedReading": {
+        "description": "A reading and when it was taken.",
+        "properties": {
+          "time": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "value": {
+            "$ref": "#/components/schemas/Reading"
+          }
+        },
+        "required": [
+          "time",
+          "value"
+        ],
+        "type": "object"
+      },
+      "TimedValue": {
+        "description": "A number and the time it belongs to (a bucket's start, or a reading's time).",
+        "properties": {
+          "time": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "value": {
+            "format": "double",
+            "type": "number"
+          }
+        },
+        "required": [
+          "time",
+          "value"
+        ],
+        "type": "object"
       },
       "UpdateDevice": {
         "additionalProperties": false,
@@ -1573,9 +2303,118 @@
         ],
         "type": "object"
       },
+      "UpdatePreferences": {
+        "additionalProperties": false,
+        "description": "The body of `PATCH /api/identity/v1/preferences`: the settings to change. A field left out\nkeeps its value; `null` and unknown fields are refused.",
+        "properties": {
+          "ai_language": {
+            "$ref": "#/components/schemas/Language",
+            "description": "The language AI answers are written in."
+          },
+          "language": {
+            "$ref": "#/components/schemas/Language",
+            "description": "The interface's language."
+          },
+          "theme": {
+            "$ref": "#/components/schemas/Theme",
+            "description": "The interface's colors."
+          },
+          "time_zone": {
+            "description": "`auto` or an IANA time zone name, spelled as the tzdb spells it.",
+            "example": "Asia/Taipei",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "Usage": {
+        "description": "Usage of each series.",
+        "properties": {
+          "range": {
+            "$ref": "#/components/schemas/QueryRange"
+          },
+          "series": {
+            "description": "One entry per requested series, in the request's order.",
+            "items": {
+              "$ref": "#/components/schemas/SeriesUsage"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "range",
+          "series"
+        ],
+        "type": "object"
+      },
+      "UsageRow": {
+        "description": "One bucket of a series' usage.",
+        "properties": {
+          "after_gap": {
+            "description": "The bucket starts after a gap: its usage includes the usage of the gap.",
+            "type": "boolean"
+          },
+          "drops": {
+            "description": "Drops counted as a reset or wrap in the bucket.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "readings": {
+            "description": "Readings in the bucket.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "suspicious_steps": {
+            "description": "Steps in the bucket much faster than the series usually rises (a misread or a replaced\nmeter): the usage includes them.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "time": {
+            "description": "The bucket's start.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "usage": {
+            "description": "The increase of the counter in the bucket.",
+            "format": "double",
+            "type": "number"
+          }
+        },
+        "required": [
+          "time",
+          "usage",
+          "readings",
+          "drops",
+          "after_gap",
+          "suspicious_steps"
+        ],
+        "type": "object"
+      },
+      "UsageStatus": {
+        "description": "Whether a series' usage could be computed.",
+        "enum": [
+          "ok",
+          "no_data",
+          "not_numeric",
+          "not_cumulative"
+        ],
+        "type": "string"
+      },
       "UserId": {
         "description": "A user account; one user can be a member of several tenants.\n\nSerialized as a lowercase hyphenated UUID string.",
         "format": "uuid",
+        "type": "string"
+      },
+      "Verdict": {
+        "description": "What the cumulative check concluded.",
+        "enum": [
+          "cumulative",
+          "too_few_readings",
+          "not_cumulative"
+        ],
         "type": "string"
       },
       "WorkstationCertificate": {
@@ -3703,6 +4542,136 @@
         ]
       }
     },
+    "/api/identity/v1/preferences": {
+      "get": {
+        "operationId": "getPreferences",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Preferences"
+                }
+              }
+            },
+            "description": "The user's preferences; the defaults (`auto`, `auto`, `auto`, `system`) for a user who never changed one."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No valid session (`unauthenticated`)."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "A token another service exchanged for a call on the user's behalf (`permission_denied`): only the user's own requests read their preferences."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The database failed (`unavailable`)."
+          }
+        },
+        "summary": "Reads the user's own preferences.",
+        "tags": [
+          "identity"
+        ]
+      },
+      "patch": {
+        "operationId": "updatePreferences",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdatePreferences"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Preferences"
+                }
+              }
+            },
+            "description": "The preferences after the change; fields left out kept their value."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The `Content-Type` is not `application/json`, the body is over 1024 bytes, or it is not a JSON object of the four fields with string values; unknown fields and `null` are refused (`invalid_request`)."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No valid session, or the user no longer exists (`unauthenticated`)."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "A cross-site request (`permission_denied`, message key `security.cross_site_request`), or a token another service exchanged for a call on the user's behalf (`permission_denied`); nothing changed."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "A value outside its allow list (`validation_failed`; `/language` `preferences.language_invalid`, `/ai_language` `preferences.ai_language_invalid`, `/time_zone` `preferences.time_zone_invalid`, `/theme` `preferences.theme_invalid`); nothing changed."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The database failed; nothing changed (`unavailable`)."
+          }
+        },
+        "summary": "Changes the user's own preferences: the fields given, each from its allow list.",
+        "tags": [
+          "identity"
+        ]
+      }
+    },
     "/api/identity/v1/sessions": {
       "delete": {
         "operationId": "logOutEverywhere",
@@ -3766,6 +4735,126 @@
           }
         },
         "summary": "Logs out: revokes the session of the request's cookie.",
+        "tags": [
+          "identity"
+        ]
+      },
+      "get": {
+        "operationId": "getCurrentSession",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CurrentSession"
+                }
+              }
+            },
+            "description": "The session: the user, the tenant it acts in with the user's role there (as of this request), and every tenant the user belongs to."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No valid session (`unauthenticated`)."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "A token another service exchanged for a call on the user's behalf (`permission_denied`): only the user's own requests read the session."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The database failed, too many reads of users' tenants were waiting, or the platform role has no credentials (`unavailable`)."
+          }
+        },
+        "summary": "Reads the current session: the user, the tenant it acts in with the user's role there, and\nthe user's tenants.",
+        "tags": [
+          "identity"
+        ]
+      }
+    },
+    "/api/identity/v1/sessions/current/tenant": {
+      "put": {
+        "operationId": "switchTenant",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SwitchTenant"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CurrentSession"
+                }
+              }
+            },
+            "description": "The session acts in the tenant from its next request on; the body is the session as it is now."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The `Content-Type` is not `application/json`, the body is over 1024 bytes, or it is not the JSON object `{\"tenant_id\": \"<uuid>\"}` (`invalid_request`)."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No valid session, a token that names no session, or a session cookie that is missing, is not the session the token was signed from, or whose session has ended (`unauthenticated`); nothing changed."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The user is not a member of the tenant, or there is no such tenant (`permission_denied`, message key `session.tenant_not_member`); a cross-site request (message key `security.cross_site_request`); or a token another service exchanged (`permission_denied`). The session keeps its tenant."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The database failed, too many reads of users' tenants were waiting, or the platform role has no credentials; nothing changed (`unavailable`)."
+          }
+        },
+        "summary": "Switches the session to another of the user's tenants; its next request acts there with the\nuser's role in it.",
         "tags": [
           "identity"
         ]
@@ -4120,6 +5209,228 @@
           }
         },
         "summary": "A data point's series over a time range: raw readings, or buckets of an interval that\nfollow the time zone `tz`, within the queryable period.",
+        "tags": [
+          "telemetry"
+        ]
+      }
+    },
+    "/api/telemetry/v1/statistics": {
+      "post": {
+        "operationId": "queryTelemetryStatistics",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SeriesQuery"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Statistics"
+                }
+              }
+            },
+            "description": "The statistics of each series, in the request's order."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The body is not the JSON object described, or has a field it does not describe (`invalid_request`, `telemetry.query_invalid`)."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No valid session (`unauthenticated`)."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No tenant (`permission_denied`), or the range lies wholly before the queryable period (`quota_exceeded`, `telemetry.outside_queryable_period`, detail `earliest`)."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The tenant's account has not been created yet (`not_found`, `telemetry.account_not_ready`)."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "A field breaks a rule (`validation_failed`, detail `parameter`: `series`, `tz`, `period`, `from`, or `to` with detail `latest` when it ends too far after now), the answer would have too many rows (`telemetry.too_many_points`), or the query reads or holds too much (`telemetry.query_too_heavy`)."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The tenant's query quota or concurrency limit is used up (`rate_limited`)."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Postgres or ClickHouse failed, or the tenant's ClickHouse account is not as the service creates it (`unavailable`)."
+          },
+          "504": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The query ran into its time limit (`timeout`)."
+          }
+        },
+        "summary": "The statistics of each series over a range, in buckets of the requested time zone, from the\none-minute or one-hour aggregates.",
+        "tags": [
+          "telemetry"
+        ]
+      }
+    },
+    "/api/telemetry/v1/usage": {
+      "post": {
+        "operationId": "queryTelemetryUsage",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SeriesQuery"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Usage"
+                }
+              }
+            },
+            "description": "The usage of each series, in the request's order; a series that is not a counter or not numeric has a `status` that says so and no usage."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The body is not the JSON object described, or has a field it does not describe (`invalid_request`, `telemetry.query_invalid`)."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No valid session (`unauthenticated`)."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No tenant (`permission_denied`), or the range lies wholly before the queryable period (`quota_exceeded`, `telemetry.outside_queryable_period`, detail `earliest`)."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The tenant's account has not been created yet (`not_found`, `telemetry.account_not_ready`)."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "A field breaks a rule (`validation_failed`, detail `parameter`: `series`, `tz`, `period`, `from`, or `to` with detail `latest` when it ends too far after now), the answer would have too many rows (`telemetry.too_many_points`), or the request would read too many one-minute cells (detail `parameter`: `series`) or the query reads or holds too much (`telemetry.query_too_heavy`)."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The tenant's query quota or concurrency limit is used up (`rate_limited`)."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Postgres or ClickHouse failed, or the tenant's ClickHouse account is not as the service creates it (`unavailable`)."
+          },
+          "504": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The query ran into its time limit (`timeout`)."
+          }
+        },
+        "summary": "The usage of each cumulative series over a range, in buckets of the requested time zone, from\nthe one-minute or one-hour aggregates, after a check that the series behaves like a counter.",
         "tags": [
           "telemetry"
         ]

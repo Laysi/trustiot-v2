@@ -1,0 +1,30 @@
+running 1 test
+tenant 6708de8e-1b2e-43f2-a769-96f9d4bb5fa1: 316 rows in ClickHouse, index states 316
+  meter-1/energy_kwh: 48 rows, index states 48
+  meter-1/power_kw: 48 rows, index states 48
+  meter-2/power_kw: 47 rows, index states 47
+  meter-2/pulses: 47 rows, index states 47
+  press-1/cycle_count: 42 rows, index states 42
+  press-1/mode: 42 rows, index states 42
+  press-1/running: 42 rows, index states 42
+  16 batches inserted in arrival order, one part each; 15 completion records (1 uncommitted); every row equal to the dataset shifted by 25142400000 ms
+tenant 32cd01fc-4943-4a6f-9c80-e693d39d688d: 316 rows in ClickHouse, index states 316
+  meter-2/power_kw: 47 rows, index states 47
+  meter-2/pulses: 47 rows, index states 47
+  press-1/cycle_count: 42 rows, index states 42
+  press-1/mode: 42 rows, index states 42
+  press-1/running: 42 rows, index states 42
+  meter-1/energy_kwh: 48 rows, index states 48
+  meter-1/power_kw: 48 rows, index states 48
+  16 batches inserted in arrival order, one part each; 15 completion records (1 uncommitted); every row equal to the dataset shifted by 25138799999 ms
+tenant 6708de8e-1b2e-43f2-a769-96f9d4bb5fa1: 316 rows in ClickHouse, index states 316
+  meter-1/energy_kwh: 48 rows, index states 48
+  meter-1/power_kw: 48 rows, index states 48
+  meter-2/power_kw: 47 rows, index states 47
+  meter-2/pulses: 47 rows, index states 47
+  press-1/cycle_count: 42 rows, index states 42
+  press-1/mode: 42 rows, index states 42
+  press-1/running: 42 rows, index states 42
+  16 batches inserted in arrival order, one part each; 15 completion records (1 uncommitted); every row equal to the dataset shifted by 25142400000 ms
+test the_fixture_loads_as_the_ingest_service_writes_it ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.86s

@@ -4,13 +4,20 @@ import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { createBrowserRouter } from "react-router";
 
+import { createApiClient } from "./api/client.ts";
+import { identityApi } from "./api/identity.ts";
 import { App } from "./app/App.tsx";
-import { loginPath } from "./app/paths.ts";
+import { LOGIN_PATH, loginPath } from "./app/paths.ts";
 import { reloadOnPreloadError } from "./app/preload-error.ts";
 import { createQueryClient } from "./app/query-client.ts";
 import { ROUTES } from "./app/routes.tsx";
-import { browserPreferencesStore } from "./preferences/preferences.ts";
-import { noSessionSource } from "./session/session.ts";
+import {
+  applyToDocument,
+  browserPreferencesStore,
+  DARK_QUERY,
+  resolveLocale,
+  resolveTheme,
+} from "./preferences/preferences.ts";
 
 function sessionStorageOrUndefined(): Storage | undefined {
   try {
@@ -35,10 +42,22 @@ reloadOnPreloadError({
   now: () => Date.now(),
 });
 
+// The browser's copy of the preferences is applied before the first render, so the page does not
+// flash the wrong theme or language while the server's values load.
+const preferences = browserPreferencesStore(localStorageOrUndefined());
+const cached = preferences.load();
+applyToDocument(
+  document.documentElement,
+  resolveLocale(cached.language, navigator.languages),
+  resolveTheme(cached.theme, window.matchMedia?.(DARK_QUERY).matches ?? false),
+);
+
 const router = createBrowserRouter(ROUTES);
 const queryClient = createQueryClient({
   onUnauthenticated: () => {
     const { pathname, search, hash } = window.location;
+    // The sign-in page answers its own 401s (a wrong code); it never sends itself to sign in.
+    if (pathname === LOGIN_PATH) return;
     void router.navigate(loginPath(`${pathname}${search}${hash}`), { replace: true });
   },
 });
@@ -49,13 +68,6 @@ if (root === null) {
 }
 createRoot(root).render(
   <StrictMode>
-    <App
-      router={router}
-      deps={{
-        queryClient,
-        preferences: browserPreferencesStore(localStorageOrUndefined(), navigator.languages),
-        session: noSessionSource,
-      }}
-    />
+    <App router={router} deps={{ queryClient, preferences, identity: identityApi(createApiClient()) }} />
   </StrictMode>,
 );

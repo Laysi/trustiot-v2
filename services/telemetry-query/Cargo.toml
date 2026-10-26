@@ -1,6 +1,6 @@
 [package]
 name = "telemetry-query"
-description = "TrustIoT v2 telemetry-query service: each tenant's read-only ClickHouse account, created when the tenant is created, and the history API of device charts, within the queryable period."
+description = "TrustIoT v2 telemetry-query service: each tenant's read-only ClickHouse account, created when the tenant is created, and the history API of device charts, within the queryable period, and the internal endpoint that runs an AI's read-only SQL."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -17,6 +17,10 @@ doc = false
 axum = { workspace = true, features = ["http1", "json", "query", "tokio"] }
 chrono = { workspace = true, features = ["now", "serde"] }
 contract = { path = "../../crates/contract" }
+# The semantic API's relative periods and table choice (src/semantic): local days, weeks and
+# months over the IANA Time Zone Database compiled in, and its names, the time zones accepted.
+jiff = { workspace = true, features = ["std", "tzdb-bundle-always"] }
+jiff-tzdb.workspace = true
 # Consumes identity.tenant_created (decision 4).
 outbox = { path = "../../crates/outbox" }
 serde = { workspace = true, features = ["derive"] }
@@ -25,11 +29,13 @@ service-kit = { path = "../../crates/service-kit" }
 # Same TLS stack as service-kit: every connection verifies the server (checklist M3).
 sqlx = { workspace = true, features = ["chrono", "postgres", "runtime-tokio", "tls-rustls-ring-webpki"] }
 thiserror.workspace = true
-tokio = { workspace = true, features = ["macros", "net", "rt-multi-thread", "time"] }
+tokio = { workspace = true, features = ["macros", "net", "rt-multi-thread", "sync", "time"] }
 tracing.workspace = true
 # The client API's OpenAPI document (tools/openapi merges it into api/openapi.json).
 utoipa = { workspace = true, features = ["chrono", "uuid"] }
 uuid = { workspace = true, features = ["serde"] }
+# The AI's SQL: parsed, checked against an allowlist and printed again (src/sql).
+sqlparser.workspace = true
 # Each tenant account's password, derived from the service's own ClickHouse password (HMAC), and
 # the salted SHA-256 hash ClickHouse stores, so a plaintext password never appears in SQL.
 getrandom.workspace = true
@@ -54,10 +60,14 @@ tokio-rustls = { workspace = true, features = ["ring"] }
 identity = { path = "../identity" }
 # The migration Job's ClickHouse part (the DDL and this service's account), run as the Job runs it.
 migrate = { path = "../../tools/migrate" }
+# The synthetic fixture (or TRUSTIOT_LAB_DATASET_INDEX), loaded for the semantic API's tests.
+lab-dataset = { path = "../../tools/lab-dataset" }
 reqwest.workspace = true
 # The product's schema (the migration Job), test identity tokens, and the cross-tenant suite.
 testkit = { path = "../../crates/testkit" }
 tokio = { workspace = true, features = ["macros", "process", "rt-multi-thread", "time"] }
+# Captures the SQL endpoint's log events in its unit tests.
+tracing-subscriber = { workspace = true, features = ["registry", "std"] }
 # Random test passwords and container names (tests/support, services/ingest/tests/common).
 uuid = { workspace = true, features = ["serde", "v4"] }
 

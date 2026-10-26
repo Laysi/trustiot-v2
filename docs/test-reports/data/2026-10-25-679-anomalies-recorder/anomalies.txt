@@ -1,0 +1,12 @@
+
+running 4 tests
+..meter-1/energy_kwh: 3 readings inside the windows
+meter-1/power_kw: 6 readings inside the windows
+meter-2/power_kw: 3 readings inside the windows
+meter-2/pulses: 3 readings inside the windows
+press-1/cycle_count: 3 readings inside the windows
+press-1/mode: 3 readings inside the windows
+press-1/running: 3 readings inside the windows
+..
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.08s
+

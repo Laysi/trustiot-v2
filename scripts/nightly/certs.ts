@@ -520,10 +520,13 @@ export async function checkMeshSigning(deps: MeshDeps, root: string, issuing: st
     },
   );
   deps.log(`ca.pem inside the mesh is the root and the issuing CA after ${Math.round(reloaded.waitedMs / 1000)} s`);
-  // 503 while the new CA has no CRL yet (services/certs/src/http.rs).
+  // 503 while the new CA has no CRL yet (services/certs/src/http.rs). No answer at all is awaited
+  // too: once the CA signs, a scheduled run of the broker's certificate CronJob may fill the
+  // broker's Secret, and the broker's trust sidecar then restarts the container the fetch runs in
+  // once (Laysi/trustiot-v2#535).
   const crl = await pollUntil<string>(`the first CRL of the issuing CA in crl.pem inside the mesh`, deps.limits?.crlMs ?? CRL_LIMIT_MS, pollMs, deps, async () => {
     const answer = await deps.fetch(CRL_PATH);
-    if (!answer.ok) return answer.status === 503 ? { pending: answerSummary(answer) } : { fail: answerSummary(answer) };
+    if (!answer.ok) return answer.status === 503 || answer.status === undefined ? { pending: answerSummary(answer) } : { fail: answerSummary(answer) };
     let blocks: Buffer[];
     try {
       blocks = pemBlocks(answer.body, "X509 CRL");

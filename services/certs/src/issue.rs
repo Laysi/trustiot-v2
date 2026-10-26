@@ -94,14 +94,10 @@ pub const LOCK_WORKSTATION_SHARED: &str =
 pub const LOCK_WORKSTATION: &str =
     "SELECT pg_advisory_xact_lock(1953983347, hashtext(encode($1, 'hex')))";
 
-/// The name every MQTT client verifies the broker's server certificate against, in every
-/// deployment, SaaS and on premises alike (services/certs/README.md, "broker 伺服器憑證"). It
-/// depends on no host name of a deployment, so a gateway's trust settings never change with one.
-/// It is under `.internal`, the top-level domain ICANN reserved for private use on 2024-07-29,
-/// which no public CA can certify; nothing resolves it: a client connects to the address it is
-/// given and checks this name. It is also the certificate's common name and its subject in the
-/// ledger.
-pub const BROKER_SERVER_NAME: &str = "mqtt-broker.trustiot.internal";
+/// The name every MQTT client verifies the broker's server certificate against
+/// ([`contract::certs::BROKER_SERVER_NAME`], shared with the broker's certificate issuer in
+/// tools/migrate). It is also the certificate's common name and its subject in the ledger.
+pub use contract::certs::BROKER_SERVER_NAME;
 
 /// Longest DNS name a broker certificate carries: 253 characters as text (RFC 1035).
 pub const MAX_DNS_NAME_LEN: usize = 253;

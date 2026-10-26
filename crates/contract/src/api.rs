@@ -3,3 +3,4 @@
 //! adding one are in this crate's `README.md`, 「內部 API」.
 
 pub mod identity;
+pub mod telemetry_query;

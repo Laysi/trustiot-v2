@@ -3,10 +3,14 @@
 //! reach is declared. The schema is the product's, applied by the migration Job
 //! (`testkit::product`).
 //!
-//! The two API operations serve ClickHouse data, which the suite's Postgres store cannot seed;
-//! `tests/tenant_accounts.rs` (each tenant's account against the PoC's attack types) and
+//! The API operations serve ClickHouse data, which the suite's Postgres store cannot seed;
+//! `tests/tenant_accounts.rs` (each tenant's account against the PoC's attack types),
 //! `tests/history.rs` (tenant B's readings under the same device ID never reach tenant A, and
-//! the reverse) cover them by hand.
+//! the reverse) and `tests/semantic.rs` (tenant A asking for tenant B's devices gets no data,
+//! the statements run as tenant A's account read none of tenant B's rows) cover them by hand.
+//! The internal SQL endpoint (Laysi/trustiot-v2#143) is not in the OpenAPI document, which is
+//! all the suite reads; `tests/sql_api.rs` covers it by hand (the same SQL as two tenants, and
+//! the PoC's attack types through it).
 //!
 //! Starts a throwaway Postgres with TLS (podman or docker); skipped without either unless `CI`
 //! is set. Run with `--nocapture` to see every probe.
@@ -32,6 +36,10 @@ const CONSUMER_TABLE: &str = "the outbox consumer's bookkeeping (crates/outbox):
 
 const CLICKHOUSE_API: &str = "serves ClickHouse readings as the caller's tenant account, which \
      the Postgres store cannot seed; tests/tenant_accounts.rs and tests/history.rs cover it";
+
+const SEMANTIC_API: &str = "serves ClickHouse aggregates as the caller's tenant account, which \
+     the Postgres store cannot seed; tests/tenant_accounts.rs and tests/semantic.rs cover it \
+     (Laysi/trustiot-v2#142)";
 
 #[tokio::test(flavor = "multi_thread")]
 async fn tenants_are_isolated() {
@@ -74,6 +82,8 @@ async fn tenants_are_isolated() {
             "GET /api/telemetry/v1/devices/{device_id}/latest",
             CLICKHOUSE_API,
         )
+        .exempt_endpoint("POST /api/telemetry/v1/statistics", SEMANTIC_API)
+        .exempt_endpoint("POST /api/telemetry/v1/usage", SEMANTIC_API)
         .run(None)
         .await
         .assert_isolated();
