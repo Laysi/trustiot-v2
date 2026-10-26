@@ -21,7 +21,7 @@
  *
  * Path rules: `rust` is the safe direction. It runs unless every changed file is in a short
  * list of paths that nothing in the rust job reads; a new top-level directory or file runs it
- * by default. `cargo-deny`, `helm`, `host`, `postgres-image` and `frontend` read a known, small set of files
+ * by default. `cargo-deny`, `helm`, `host`, `postgres-image`, `dashboard-check-image` and `frontend` read a known, small set of files
  * and run when one of them changes. Changes to this script or any repository file it imports (transitively;
  * DECISION_CODE), ci.yml, the local actions or the tool pins run every job. `gitleaks` and `workflow-policy` do not depend on this script and always run.
  *
@@ -59,7 +59,7 @@ import {
 } from "./tested-tree.ts";
 
 /** The ci.yml jobs whose run depends on the changed paths, by job id. */
-export const PATH_JOBS = ["rust", "cargo-deny", "helm", "host", "postgres-image", "frontend"] as const;
+export const PATH_JOBS = ["rust", "cargo-deny", "helm", "host", "postgres-image", "dashboard-check-image", "frontend"] as const;
 export type PathJob = (typeof PATH_JOBS)[number];
 
 /**
@@ -258,6 +258,63 @@ export function affectsPostgresImage(path: string): boolean {
 }
 
 /**
+ * The dashboard check image's test (deploy/images/dashboard-check, Laysi/trustiot-v2#150) builds
+ * the image as release.yml does: the service, compiled with the crates it depends on (its path
+ * dependencies, checked by changes.test.ts), the sandbox build of frontend/, and the Debian
+ * packages its Containerfile pins; then it runs the sandbox's fixtures in it.
+ */
+const DASHBOARD_CHECK_IMAGE_DIRS = [
+  "deploy/images/dashboard-check/",
+  "services/dashboard-check/",
+  "crates/contract/",
+  "crates/protocol/",
+  "crates/service-kit/",
+  "crates/webpki-roots-empty/",
+  // The sandbox runtime, the check host page and the fixtures.
+  "frontend/sandbox/",
+  // Cargo's configuration of the repository, which the release build reads.
+  ".cargo/",
+] as const;
+
+/** Single files the dashboard check image's build and test read (checked by changes.test.ts). */
+const DASHBOARD_CHECK_IMAGE_FILES: ReadonlySet<string> = new Set([
+  "Cargo.toml",
+  "Cargo.lock",
+  "rust-toolchain.toml",
+  "rust-toolchain",
+  // The sandbox build and the frontend's check of the build output (static-build.ts), with the
+  // packages they lock; the fixtures' module imports the frontend's zod.
+  "frontend/tools/build-sandbox.ts",
+  "frontend/tools/check-dist.ts",
+  "frontend/package.json",
+  "frontend/bun.lock",
+  "frontend/src/lib/zod.ts",
+  // The service runs with the chart's memory limit and /tmp size.
+  "deploy/chart/values.yaml",
+  // The build: scripts/nightly/service-image.ts and what it imports.
+  "scripts/ci/check-secret-handling.ts",
+  "scripts/lib/build-context.ts",
+  "scripts/lib/cleanup.ts",
+  "scripts/lib/secrets.ts",
+  "scripts/lib/stack.ts",
+  "scripts/lib/state.ts",
+  "scripts/nightly/exec.ts",
+  "scripts/nightly/image-cache.ts",
+  "scripts/nightly/platform.ts",
+  "scripts/nightly/service-image.ts",
+  "scripts/release/containerfile.ts",
+  "scripts/release/exec.ts",
+  "scripts/release/rust-build.ts",
+  "scripts/release/rust-context.ts",
+  "scripts/release/static-build.ts",
+]);
+
+/** The dashboard check image: see DASHBOARD_CHECK_IMAGE_DIRS. */
+export function affectsDashboardCheckImage(path: string): boolean {
+  return affectsEveryJob(path) || DASHBOARD_CHECK_IMAGE_DIRS.some((dir) => path.startsWith(dir)) || DASHBOARD_CHECK_IMAGE_FILES.has(path);
+}
+
+/**
  * The Rust sources whose message keys reach the browser: frontend/src/i18n/server-keys.test.ts
  * scans `crates/contract/src` and every `services/<name>/src` and fails on a key without a
  * translation, so a Rust change that adds one runs the frontend job (checked by changes.test.ts).
@@ -292,6 +349,7 @@ const RULES: Record<PathJob, (path: string) => boolean> = {
   helm: affectsHelm,
   host: affectsHost,
   "postgres-image": affectsPostgresImage,
+  "dashboard-check-image": affectsDashboardCheckImage,
   frontend: affectsFrontend,
 };
 

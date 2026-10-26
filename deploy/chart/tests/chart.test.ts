@@ -34,6 +34,9 @@ const HELM = pinnedTool("helm");
 const KUBECONFORM = pinnedTool("kubeconform");
 const RELEASE = "trustiot";
 const NAMESPACE = "trustiot";
+// The dashboard check (Laysi/trustiot-v2#150) runs pages a model wrote: its pod gets none of what
+// the other services share (its own describe block below), so the shared rules leave it out.
+const DASHBOARD_CHECK = `${RELEASE}-dashboard-check`;
 // Oldest version allowed by Chart.yaml kubeVersion, and the k3s version of the lab and SaaS hosts.
 const KUBERNETES_VERSIONS = ["1.30.0", "1.36.0"];
 // Pods carry these Kubernetes-native objects as-is; the README documents them as one field each.
@@ -626,7 +629,8 @@ describe("internal identity (decision 27, Laysi/trustiot-v2#61; keys generated i
         const configMap = find(manifests, "ConfigMap", PUBLIC_KEYS);
         expect(Object.keys(configMap).sort()).toEqual(["apiVersion", "kind", "metadata"]);
         expect(configMap.metadata.annotations?.["helm.sh/resource-policy"]).toBe("keep");
-        const services = manifests.filter(isServiceDeployment);
+        // The dashboard check verifies no internal identity and mounts nothing but /tmp.
+        const services = manifests.filter(isServiceDeployment).filter((d) => d.metadata.name !== DASHBOARD_CHECK);
         expect(services.length).toBeGreaterThan(0);
         for (const deployment of services) {
           const pod = podSpec(deployment);
@@ -1555,8 +1559,10 @@ describe("exposure and hardening", () => {
           expect(container.livenessProbe).toBeDefined();
           expect(container.readinessProbe).toBeDefined();
           expect(container.lifecycle?.preStop?.sleep?.seconds).toBe(5);
-          expect(container.resources?.limits?.memory).toBe("256Mi");
-          expect(container.envFrom?.[0]?.configMapRef?.name).toBe(`${RELEASE}-platform`);
+          // The dashboard check runs a browser, and reads no platform settings (its own tests).
+          const isolated = deployment.metadata.name === DASHBOARD_CHECK;
+          expect(container.resources?.limits?.memory).toBe(isolated ? "512Mi" : "256Mi");
+          expect(container.envFrom?.[0]?.configMapRef?.name).toBe(isolated ? undefined : `${RELEASE}-platform`);
         }
       }
     }
@@ -3492,7 +3498,7 @@ describe("migration Job (Laysi/trustiot-v2#60)", () => {
     ).toEqual([]);
   });
 
-  test("nobody connects to the Job's pod, and no NetworkPolicy of the chart restricts egress (the init container reaches the API server)", () => {
+  test("nobody connects to the Job's pod, and no NetworkPolicy of the chart but the dashboard check's restricts egress (the init container reaches the API server)", () => {
     const labels = jobSpec(manifests).template.metadata.labels;
     const policy = find(manifests, "AuthorizationPolicy", `${RELEASE}-migrate`).spec as YamlMap & { rules?: unknown };
     expect(policy.action).toBe("ALLOW");
@@ -3502,7 +3508,9 @@ describe("migration Job (Laysi/trustiot-v2#60)", () => {
     expect(network.ingress).toEqual([]);
     for (const shape of SHAPE_NAMES) {
       for (const m of render([...SHAPES[shape], SMOKE], enableAllServices).filter((o) => o.kind === "NetworkPolicy")) {
-        expect({ name: m.metadata.name, types: (m.spec as { policyTypes: string[] }).policyTypes }).toEqual({ name: m.metadata.name, types: ["Ingress"] });
+        // The dashboard check's pod opens no connection at all (its own describe block).
+        const types = m.metadata.name === DASHBOARD_CHECK ? ["Ingress", "Egress"] : ["Ingress"];
+        expect({ name: m.metadata.name, types: (m.spec as { policyTypes: string[] }).policyTypes }).toEqual({ name: m.metadata.name, types });
       }
     }
   });
@@ -4099,14 +4107,15 @@ describe("OpenTelemetry collector (decision 22)", () => {
     });
   });
 
-  test("in the mesh, every enabled service and nothing else reaches the collector", () => {
+  test("in the mesh, every enabled service but the dashboard check, and nothing else, reaches the collector", () => {
     const rendered = render([...SHAPES.saas, SMOKE], enableAllServices);
     const policy = find(rendered, "AuthorizationPolicy", name).spec as {
       selector: { matchLabels: Record<string, string> };
       rules: { from: { source: { principals: string[] } }[] }[];
     };
     expect(policy.selector.matchLabels["app.kubernetes.io/component"]).toBe("otel-collector");
-    const services = [...plannedServices, "smoke-echo"].sort();
+    // The dashboard check sends no telemetry: its pod has no egress.
+    const services = [...plannedServices.filter((s) => s !== "dashboard-check"), "smoke-echo"].sort();
     expect(policy.rules[0]?.from[0]?.source.principals).toEqual(
       services.map((s) => `cluster.local/ns/${NAMESPACE}/sa/${RELEASE}-${s}`),
     );
@@ -4930,13 +4939,13 @@ describe("service-to-service authorization (decision 27)", () => {
     test.each(SHAPE_NAMES)("%s: README.md's call matrix is what the default values render", (shape) => {
       const readme = readFileSync(join(CHART_DIR, "README.md"), "utf8");
       const section = readme.split("#### 呼叫矩陣")[1]?.split(/\n#{2,4} /)[0] ?? "";
-      const EVERY_SERVICE = "每個啟用的服務";
+      const EVERY_SERVICE = "`dashboard-check` 以外每個啟用的服務";
       const NOT_A_SERVICE = "—";
       const names = (cell: string) =>
         cell === "（無）" || cell === NOT_A_SERVICE
           ? []
           : cell === EVERY_SERVICE
-            ? [...plannedServices]
+            ? plannedServices.filter((s) => s !== "dashboard-check")
             : cell.split("、").map((name) => /^`([a-z-]+)`$/.exec(name)?.[1] ?? `unparsed ${name}`);
       const rows = section
         .split("\n")
@@ -4966,10 +4975,10 @@ describe("service-to-service authorization (decision 27)", () => {
     for (const service of plannedServices) {
       // Public paths keep identity, certs and mqtt-bridge reachable from the gateway, and the
       // SPA's static files keep web. The assistant calls the AI gateway and its tools' services
-      // (Laysi/trustiot-v2#592).
+      // (Laysi/trustiot-v2#592), and the dashboard check (Laysi/trustiot-v2#150).
       const expected = ["identity", "certs", "mqtt-bridge", "web"].includes(service)
         ? [principal(GATEWAY_SA)]
-        : ["ai-gateway", "assets", "telemetry-query"].includes(service)
+        : ["ai-gateway", "assets", "dashboard-check", "telemetry-query"].includes(service)
           ? [principal(`${RELEASE}-assistant`)]
           : [];
       expect(principalsOf(meshPolicy(manifests, service))).toEqual(expected);
@@ -5128,7 +5137,12 @@ describe("service-to-service authorization (decision 27)", () => {
       for (const args of [withGateway([]), withGateway([caller]), ["--skip-schema-validation", ...withGateway([caller])]]) {
         const result = helmTemplate([...SHAPES.saas, E2E_VALUES], [...args, "--set-json", `mesh.calls={"${caller}":["ai-gateway"]}`]);
         expect(result.code).not.toBe(0);
-        expect(result.stderr).toMatch(`mesh.calls.${caller}: only alerts, assistant, knowledge may call ai-gateway (decision 28)`);
+        // The dashboard check may call nothing at all (its own describe block).
+        expect(result.stderr).toMatch(
+          caller === "dashboard-check"
+            ? "mesh.calls.dashboard-check: dashboard-check calls nothing"
+            : `mesh.calls.${caller}: only alerts, assistant, knowledge may call ai-gateway (decision 28)`,
+        );
       }
     });
   });
@@ -5138,7 +5152,13 @@ describe("service-to-service authorization (decision 27)", () => {
   // services the mesh lets it call (README.md, 「AI 助理」).
   describe("the assistant (decision 31, Laysi/trustiot-v2#592)", () => {
     const ASSISTANT = principal(`${RELEASE}-assistant`);
-    const ADDRESS_VARIABLES = ["TRUSTIOT__AI_GATEWAY__URL", "TRUSTIOT__ASSETS__URL", "TRUSTIOT__IDENTITY__EXCHANGE_URL", "TRUSTIOT__TELEMETRY_QUERY__URL"];
+    const ADDRESS_VARIABLES = [
+      "TRUSTIOT__AI_GATEWAY__URL",
+      "TRUSTIOT__ASSETS__URL",
+      "TRUSTIOT__DASHBOARD_CHECK__URL",
+      "TRUSTIOT__IDENTITY__EXCHANGE_URL",
+      "TRUSTIOT__TELEMETRY_QUERY__URL",
+    ];
     type ServiceSpec = { selector: Record<string, string>; ports: { name: string; port: number; targetPort: string | number }[] };
     const assistantEnv = (manifests: Manifest[]) => podSpec(find(manifests, "Deployment", `${RELEASE}-assistant`)).containers[0]?.env ?? [];
     const onBehalfOf = (manifests: Manifest[]) =>
@@ -5197,10 +5217,11 @@ describe("service-to-service authorization (decision 27)", () => {
       [
         "the default values",
         [],
-        ["ai-gateway", "telemetry-query", "assets", "postgres"],
+        ["ai-gateway", "telemetry-query", "assets", "postgres", "dashboard-check"],
         {
           TRUSTIOT__AI_GATEWAY__URL: "ai-gateway",
           TRUSTIOT__ASSETS__URL: "assets",
+          TRUSTIOT__DASHBOARD_CHECK__URL: "dashboard-check",
           TRUSTIOT__IDENTITY__EXCHANGE_URL: "identity-exchange",
           TRUSTIOT__TELEMETRY_QUERY__URL: "telemetry-query",
         },
@@ -5214,13 +5235,37 @@ describe("service-to-service authorization (decision 27)", () => {
       [
         "telemetry-query disabled",
         ["--set", "services.telemetry-query.enabled=false"],
-        ["ai-gateway", "telemetry-query", "assets", "postgres"],
-        { TRUSTIOT__AI_GATEWAY__URL: "ai-gateway", TRUSTIOT__ASSETS__URL: "assets", TRUSTIOT__IDENTITY__EXCHANGE_URL: "identity-exchange" },
+        ["ai-gateway", "telemetry-query", "assets", "postgres", "dashboard-check"],
+        {
+          TRUSTIOT__AI_GATEWAY__URL: "ai-gateway",
+          TRUSTIOT__ASSETS__URL: "assets",
+          TRUSTIOT__DASHBOARD_CHECK__URL: "dashboard-check",
+          TRUSTIOT__IDENTITY__EXCHANGE_URL: "identity-exchange",
+        },
+      ],
+      // The dashboard check gets no user's token: no call on behalf of users, so no token exchange.
+      [
+        "the AI gateway and the dashboard check",
+        ["--set-json", 'mesh.calls.assistant=["ai-gateway","dashboard-check"]'],
+        ["ai-gateway", "dashboard-check"],
+        { TRUSTIOT__AI_GATEWAY__URL: "ai-gateway", TRUSTIOT__DASHBOARD_CHECK__URL: "dashboard-check" },
+      ],
+      [
+        "the dashboard check disabled",
+        ["--set", "services.dashboard-check.enabled=false"],
+        ["ai-gateway", "telemetry-query", "assets", "postgres", "dashboard-check"],
+        {
+          TRUSTIOT__AI_GATEWAY__URL: "ai-gateway",
+          TRUSTIOT__ASSETS__URL: "assets",
+          TRUSTIOT__IDENTITY__EXCHANGE_URL: "identity-exchange",
+          TRUSTIOT__TELEMETRY_QUERY__URL: "telemetry-query",
+        },
       ],
       // No call on behalf of users, so no token exchange either.
       ["the AI gateway alone", ["--set-json", 'mesh.calls.assistant=["ai-gateway"]'], ["ai-gateway"], { TRUSTIOT__AI_GATEWAY__URL: "ai-gateway" }],
-      ["the AI gateway disabled", ["--set", "services.ai-gateway.enabled=false"], ["ai-gateway", "telemetry-query", "assets", "postgres"], {
+      ["the AI gateway disabled", ["--set", "services.ai-gateway.enabled=false"], ["ai-gateway", "telemetry-query", "assets", "postgres", "dashboard-check"], {
         TRUSTIOT__ASSETS__URL: "assets",
+        TRUSTIOT__DASHBOARD_CHECK__URL: "dashboard-check",
         TRUSTIOT__IDENTITY__EXCHANGE_URL: "identity-exchange",
         TRUSTIOT__TELEMETRY_QUERY__URL: "telemetry-query",
       }],
@@ -5243,8 +5288,10 @@ describe("service-to-service authorization (decision 27)", () => {
           } else if (plannedServices.includes(address.workload)) {
             expect(listed, where).toContain(address.workload);
             expect(address.admittedBy, where).toEqual([address.workload]);
-            // A tool's service is an audience the token exchange grants the assistant.
-            if (address.workload !== "ai-gateway") expect(exchanges, where).toContain(address.workload);
+            // A tool's service is an audience the token exchange grants the assistant; the AI
+            // gateway and the dashboard check take no user's token, so they never are.
+            if (["ai-gateway", "dashboard-check"].includes(address.workload)) expect(exchanges, where).not.toContain(address.workload);
+            else expect(exchanges, where).toContain(address.workload);
           } else {
             // A component the chart lets every service reach (the OpenTelemetry collector).
             expect(address.service, where).toBe("otel-collector");
@@ -5259,8 +5306,9 @@ describe("service-to-service authorization (decision 27)", () => {
 
     // Acceptance criterion 1: with the default values the assistant reaches the AI gateway,
     // telemetry-query, assets and the identity service's token exchange port, plus the collector
-    // every service sends its telemetry to, and Postgres; nothing else, in either layer.
-    test.each(SHAPE_NAMES)("%s: the default values let the assistant reach only ai-gateway, telemetry-query, assets and the token exchange", (shape) => {
+    // every service sends its telemetry to, and Postgres; nothing else, in either layer. The
+    // dashboard check joined the list with Laysi/trustiot-v2#150.
+    test.each(SHAPE_NAMES)("%s: the default values let the assistant reach only ai-gateway, telemetry-query, assets, the dashboard check and the token exchange", (shape) => {
       const manifests = render(SHAPES[shape], enableAllServices);
       // The mesh's ALLOW policies; the ingress gateway's own policies admit no service account.
       const admitting = manifests
@@ -5268,7 +5316,7 @@ describe("service-to-service authorization (decision 27)", () => {
         .filter((m) => (m.spec as MeshPolicy).action === "ALLOW" && principalsOf(m.spec as MeshPolicy).includes(ASSISTANT))
         .map((m) => serviceOf(m.metadata.name))
         .sort();
-      expect(admitting).toEqual(["ai-gateway", "assets", "identity-exchange", "otel-collector", "telemetry-query"]);
+      expect(admitting).toEqual(["ai-gateway", "assets", "dashboard-check", "identity-exchange", "otel-collector", "telemetry-query"]);
       // The token exchange's port only; the identity service's own policy keeps the assistant out.
       expect(meshPolicy(manifests, "identity-exchange").rules).toEqual([identityRule(EXCHANGE_PORT, [ASSISTANT])]);
       expect(principalsOf(meshPolicy(manifests, "identity"))).not.toContain(ASSISTANT);
@@ -5284,7 +5332,7 @@ describe("service-to-service authorization (decision 27)", () => {
         )
         .sort();
       const postgres = manifests.some((m) => m.kind === "NetworkPolicy" && m.metadata.name === `${RELEASE}-postgres`) ? ["postgres:5432"] : [];
-      expect(reached).toEqual([...["ai-gateway", "assets", "identity-exchange", "otel-collector", "telemetry-query"].map((s) => `${s}:15008`), ...postgres].sort());
+      expect(reached).toEqual([...["ai-gateway", "assets", "dashboard-check", "identity-exchange", "otel-collector", "telemetry-query"].map((s) => `${s}:15008`), ...postgres].sort());
       // Its database login is assistant_app, with the password from its own Secret, and its pool is
       // the size the connection budget counts (Laysi/trustiot-v2#575).
       expect(assistantEnv(manifests).filter((e) => e.name.startsWith("TRUSTIOT__DATABASE__"))).toEqual([
@@ -5497,6 +5545,194 @@ describe("service-to-service authorization (decision 27)", () => {
     );
     expect(result.code).not.toBe(0);
     expect(result.stderr).toMatch(/services\.smoke-echo: probes\.readiness uses port "metrics", which is not in ports/);
+  });
+});
+
+// The dashboard check (services/dashboard-check, Laysi/trustiot-v2#150) runs pages a model wrote in
+// a headless Chromium without Chromium's own sandbox, so code on such a page may run as the service
+// in its pod. The pod gets nothing that leads out of it or to another service
+// (templates/_dashboard-check.tpl; README.md, 「儀表板檢查」).
+describe("dashboard check (Laysi/trustiot-v2#150)", () => {
+  const COMPONENT = "dashboard-check";
+  const SA_PRINCIPAL = `cluster.local/ns/${NAMESPACE}/sa/${DASHBOARD_CHECK}`;
+  const HOST_SOURCE = "169.254.7.127/32";
+  // The assistant calls it; identity (public keys), the AI gateway (the assistant needs it) and the
+  // collector and migration Job of the shape are on too, so the pod could get every shared thing.
+  const ON = [
+    "--set",
+    "services.dashboard-check.enabled=true",
+    "--set",
+    "services.assistant.enabled=true",
+    "--set",
+    "services.identity.enabled=true",
+    "--set",
+    "services.ai-gateway.enabled=true",
+    ...AI_GATEWAY_SETTINGS,
+  ];
+  const selectorOf = (component: string) => ({
+    "app.kubernetes.io/name": "trustiot",
+    "app.kubernetes.io/instance": RELEASE,
+    "app.kubernetes.io/component": component,
+  });
+  type Spec = { podSelector?: unknown; policyTypes: string[]; egress?: unknown[]; ingress?: unknown[] };
+
+  test.each(SHAPE_NAMES)("%s: off by default", (shape) => {
+    expect(render(SHAPES[shape]).filter((m) => m.metadata.name === DASHBOARD_CHECK)).toEqual([]);
+    expect((defaults.services as YamlMap)[COMPONENT]).toMatchObject({ enabled: false });
+  });
+
+  test.each(SHAPE_NAMES)("%s: the pod gets no token, Secret, platform setting, key, CA or init container, and writes only to a memory-backed /tmp", (shape) => {
+    // An external ClickHouse's CA goes to every other service; the collector is off for it.
+    const external = [
+      "--set",
+      "observability.collector.enabled=false",
+      "--set",
+      "clickhouse.mode=external",
+      "--set",
+      "clickhouse.external.url=https://clickhouse.example.com:8443",
+      "--set",
+      "clickhouse.external.caSecret.name=clickhouse-ca",
+      "--set",
+      "clickhouse.external.migrationSecret.name=clickhouse-migration",
+    ];
+    for (const args of [ON, [...ON, ...external]]) {
+      const manifests = render(SHAPES[shape], args);
+      const deployment = find(manifests, "Deployment", DASHBOARD_CHECK);
+      const pod = podSpec(deployment);
+      const container = pod.containers[0] as Container;
+      expect(pod.containers).toHaveLength(1);
+      expect(pod.automountServiceAccountToken).toBe(false);
+      expect((find(manifests, "ServiceAccount", DASHBOARD_CHECK) as YamlMap).automountServiceAccountToken).toBe(false);
+      // The migration wait reads the Job through the API server, which the pod cannot reach.
+      expect(pod.initContainers).toBeUndefined();
+      expect(pod.volumes).toEqual([{ name: "tmp", emptyDir: { medium: "Memory", sizeLimit: "128Mi" } }]);
+      expect(container.volumeMounts).toEqual([{ name: "tmp", mountPath: "/tmp" }]);
+      // No platform ConfigMap, no collector endpoint, no Sentry DSN (SaaS turns Sentry on).
+      expect(container.envFrom).toBeUndefined();
+      expect(container.env).toEqual([{ name: "OTEL_SERVICE_NAME", value: COMPONENT }]);
+      expect(JSON.stringify(pod)).not.toMatch(/secretKeyRef|configMapRef|serviceAccountToken|projected/);
+      expect(container.image).toBe(`ghcr.io/laysi/trustiot-v2/${COMPONENT}:${chart.appVersion}`);
+      expect(container.resources).toEqual({ requests: { cpu: "100m", memory: "128Mi" }, limits: { cpu: "1", memory: "512Mi" } });
+      expect(container.securityContext).toEqual({ allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: { drop: ["ALL"] } });
+      expect(pod.securityContext).toEqual({ runAsNonRoot: true, seccompProfile: { type: "RuntimeDefault" } });
+      const template = (deployment.spec as { template: { metadata: { labels: Record<string, string>; annotations: Record<string, string> } } }).template;
+      expect(template.metadata.labels["istio.io/dataplane-mode"]).toBe("ambient");
+      // Ambient DNS capture off: a lookup goes to the cluster DNS, which the NetworkPolicy refuses.
+      expect(template.metadata.annotations).toEqual({ "ambient.istio.io/dns-capture": "false" });
+      // The other services keep what they share.
+      const assistant = podSpec(find(manifests, "Deployment", `${RELEASE}-assistant`));
+      expect(assistant.containers[0]?.envFrom).toEqual([{ configMapRef: { name: `${RELEASE}-platform` } }]);
+      if (args !== ON) expect(JSON.stringify(assistant.volumes)).toContain("clickhouse-ca");
+      // No Role binds its ServiceAccount (the migration Job's status Role binds every other service).
+      for (const binding of manifests.filter((m) => m.kind === "RoleBinding" || m.kind === "ClusterRoleBinding")) {
+        expect(JSON.stringify(binding), binding.metadata.name).not.toContain(DASHBOARD_CHECK);
+      }
+    }
+  });
+
+  test.each(SHAPE_NAMES)("%s: its NetworkPolicy denies every connection out of the pod and admits only the assistant and the node's probes", (shape) => {
+    const manifests = render(SHAPES[shape], ON);
+    const network = find(manifests, "NetworkPolicy", DASHBOARD_CHECK).spec as Spec;
+    expect(network).toEqual({
+      podSelector: { matchLabels: selectorOf(COMPONENT) },
+      policyTypes: ["Ingress", "Egress"],
+      egress: [],
+      ingress: [
+        { from: [{ podSelector: { matchLabels: selectorOf("assistant") } }], ports: [{ port: 15008, protocol: "TCP" }] },
+        { from: [{ ipBlock: { cidr: HOST_SOURCE } }], ports: [{ port: 8081, protocol: "TCP" }] },
+      ],
+    });
+    const policy = find(manifests, "AuthorizationPolicy", DASHBOARD_CHECK).spec as MeshPolicy;
+    expect(policy.rules).toEqual([{ from: [{ source: { principals: [`cluster.local/ns/${NAMESPACE}/sa/${RELEASE}-assistant`] } }] }]);
+    // Without the assistant nobody may call it, and its pod still opens nothing.
+    const alone = render(SHAPES[shape], ["--set", "services.dashboard-check.enabled=true"]);
+    expect((find(alone, "AuthorizationPolicy", DASHBOARD_CHECK).spec as MeshPolicy).rules).toBeUndefined();
+    const aloneNetwork = find(alone, "NetworkPolicy", DASHBOARD_CHECK).spec as Spec;
+    expect(aloneNetwork.policyTypes).toEqual(["Ingress", "Egress"]);
+    expect(aloneNetwork.egress).toEqual([]);
+    expect(aloneNetwork.ingress).toEqual([{ from: [{ ipBlock: { cidr: HOST_SOURCE } }], ports: [{ port: 8081, protocol: "TCP" }] }]);
+  });
+
+  test.each(SHAPE_NAMES)("%s: it reaches nobody, the collector included, and nobody exchanges a user's token for it", (shape) => {
+    const manifests = render([...SHAPES[shape], SMOKE], enableAllServices);
+    for (const m of manifests.filter((o) => o.kind === "AuthorizationPolicy")) {
+      expect(JSON.stringify(m.spec), m.metadata.name).not.toContain(SA_PRINCIPAL);
+    }
+    for (const m of manifests.filter((o) => o.kind === "NetworkPolicy" && o.metadata.name !== DASHBOARD_CHECK)) {
+      expect(JSON.stringify(m.spec), m.metadata.name).not.toContain(`"app.kubernetes.io/component":"${COMPONENT}"`);
+    }
+    // The identity service exchanges the assistant's tokens for its tools' services only.
+    const identityEnv = podSpec(find(manifests, "Deployment", `${RELEASE}-identity`)).containers[0]?.env ?? [];
+    expect(JSON.parse(identityEnv.find((e) => e.name === "TRUSTIOT_ON_BEHALF_CALLS")?.value ?? "null")).toEqual({ assistant: ["assets", "telemetry-query"] });
+    // The assistant gets its address, which env cannot set (the assistant's tests).
+    const assistantEnv = podSpec(find(manifests, "Deployment", `${RELEASE}-assistant`)).containers[0]?.env ?? [];
+    expect(assistantEnv.find((e) => e.name === "TRUSTIOT__DASHBOARD_CHECK__URL")?.value).toBe(`http://${DASHBOARD_CHECK}:8080`);
+  });
+
+  // [case, extra args, the render's error]. Each fails with and without schema validation; the
+  // message is checked where the template decides, without schema validation.
+  const refusals: [string, string[], RegExp][] = [
+    ["a callee of its own", ["--set-json", 'mesh.calls.dashboard-check=["assets"]'], /mesh\.calls\.dashboard-check: dashboard-check calls nothing/],
+    ["the collector as its callee", ["--set-json", 'mesh.calls.dashboard-check=["otel-collector"]'], /mesh\.calls\.dashboard-check: dashboard-check calls nothing/],
+    // The connection budget may refuse it first: the chart has none for the dashboard check.
+    [
+      "Postgres as its callee",
+      ["--set-json", 'mesh.calls.dashboard-check=["postgres"]'],
+      /mesh\.calls\.dashboard-check: dashboard-check calls nothing|services\.dashboard-check lists postgres under mesh\.calls, but the chart has no connection budget/,
+    ],
+    ["another caller than the assistant", ["--set", "services.assets.enabled=true", "--set-json", 'mesh.calls.assets=["dashboard-check"]'], /mesh\.calls\.assets: only assistant may call dashboard-check/],
+    [
+      "an ingress route to it",
+      ["--set-json", 'ingress.routes=[{"host":"app","path":"/api/dashboard-check","match":"PathPrefix","service":"dashboard-check"}]'],
+      /ingress\.routes\[0\]: dashboard-check serves only the AI assistant, inside the mesh, so it gets no route/,
+    ],
+    ["a token in its container", ["--set", "services.dashboard-check.automountServiceAccountToken=true"], /services\.dashboard-check\.automountServiceAccountToken must be false/],
+    ["a token in every service's container", ["--set", "serviceDefaults.automountServiceAccountToken=true"], /services\.dashboard-check\.automountServiceAccountToken must be false/],
+    ["a dependency credential", ["--set-json", 'services.dashboard-check.credentials=["object-storage"]'], /services\.dashboard-check\.credentials must be empty/],
+    [
+      "env that reads a Secret",
+      ["--set-json", 'services.dashboard-check.env=[{"name":"PAGE_SETTING","valueFrom":{"secretKeyRef":{"name":"other","key":"value"}}}]'],
+      /services\.dashboard-check: env PAGE_SETTING must not read a Secret/,
+    ],
+    [
+      "the OpenTelemetry endpoint in env, with the collector off",
+      ["--set", "observability.collector.enabled=false", "--set-json", 'services.dashboard-check.env=[{"name":"TRUSTIOT__TELEMETRY__OTLP_ENDPOINT","value":"http://collector.example.com:4318"}]'],
+      /services\.dashboard-check: env TRUSTIOT__TELEMETRY__OTLP_ENDPOINT: the service sends no telemetry/,
+    ],
+    ["a writable root filesystem", ["--set", "services.dashboard-check.securityContext.readOnlyRootFilesystem=false"], /services\.dashboard-check\.securityContext must keep/],
+    ["privilege escalation", ["--set", "services.dashboard-check.securityContext.allowPrivilegeEscalation=true"], /services\.dashboard-check\.securityContext must keep/],
+    ["a privileged container", ["--set", "services.dashboard-check.securityContext.privileged=true"], /services\.dashboard-check\.securityContext must keep/],
+    ["an added capability", ["--set-json", 'services.dashboard-check.securityContext.capabilities.add=["NET_RAW"]'], /capabilities must drop ALL and add none/],
+    ["capabilities not all dropped", ["--set-json", 'services.dashboard-check.securityContext.capabilities.drop=["NET_RAW"]'], /capabilities must drop ALL and add none/],
+    ["root", ["--set", "services.dashboard-check.podSecurityContext.runAsNonRoot=false"], /services\.dashboard-check\.podSecurityContext\.runAsNonRoot must be true/],
+    [
+      "root through the container's runAsNonRoot",
+      ["--set", "services.dashboard-check.securityContext.runAsNonRoot=false", "--set", "services.dashboard-check.securityContext.runAsUser=0"],
+      /services\.dashboard-check\.securityContext\.runAsNonRoot must not be false/,
+    ],
+    ["UID 0 for the container", ["--set", "services.dashboard-check.securityContext.runAsUser=0"], /services\.dashboard-check\.securityContext\.runAsUser must not be 0/],
+    ["UID 0 for the pod", ["--set", "services.dashboard-check.podSecurityContext.runAsUser=0"], /services\.dashboard-check\.podSecurityContext\.runAsUser must not be 0/],
+    [
+      "no seccomp profile for the pod",
+      ["--set", "services.dashboard-check.podSecurityContext.seccompProfile=null"],
+      /services\.dashboard-check\.podSecurityContext\.seccompProfile\.type must be set/,
+    ],
+    [
+      "an unconfined pod",
+      ["--set", "services.dashboard-check.podSecurityContext.seccompProfile.type=Unconfined"],
+      /services\.dashboard-check\.podSecurityContext\.seccompProfile\.type must be RuntimeDefault or Localhost/,
+    ],
+    [
+      "an unconfined container",
+      ["--set", "services.dashboard-check.securityContext.seccompProfile.type=Unconfined"],
+      /services\.dashboard-check\.securityContext\.seccompProfile\.type must be RuntimeDefault or Localhost/,
+    ],
+  ];
+  test.each(refusals)("refuses %s", (_name, args, expected) => {
+    const unchecked = helmTemplate(SHAPES.saas, ["--skip-schema-validation", ...ON, ...args]);
+    expect(unchecked.code).not.toBe(0);
+    expect(unchecked.stderr).toMatch(expected);
+    expect(helmTemplate(SHAPES.saas, [...ON, ...args]).code).not.toBe(0);
   });
 });
 
@@ -6999,11 +7235,11 @@ describe("documentation and packaging", () => {
   const readme = readFileSync(join(CHART_DIR, "README.md"), "utf8");
 
   // Leaf paths of values.yaml; services.<entry> collapses to services.<name>, and
-  // Kubernetes-native objects under serviceDefaults count as one field.
+  // Kubernetes-native objects under serviceDefaults or a service count as one field.
   function documentedPaths(value: unknown, path: string): string[] {
-    const prefix = ["serviceDefaults.", "clickhouse.bundled.", "postgres.bundled.", "observability.collector.", "migrate.", "mqttBroker."].find((p) =>
-      path.startsWith(p),
-    );
+    const prefix =
+      ["serviceDefaults.", "clickhouse.bundled.", "postgres.bundled.", "observability.collector.", "migrate.", "mqttBroker."].find((p) => path.startsWith(p)) ??
+      /^services\.[^.]+\./.exec(path)?.[0];
     const relative = prefix ? path.slice(prefix.length) : "";
     if (!isMap(value) || Object.keys(value).length === 0 || KUBERNETES_OBJECT_FIELDS.has(relative)) {
       return [path.replace(/^services\.[^.]+/, "services.<name>")];

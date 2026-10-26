@@ -6,9 +6,10 @@ AI assistant helpers (services/assistant, decision 31; Laysi/trustiot-v2#592).
 The settings that tell the assistant where the services it calls are. The chart derives every
 address from mesh.calls.assistant, so the assistant is never pointed at a service the mesh keeps
 it from (deploy/chart/README.md, 「AI 助理」):
-- TRUSTIOT__AI_GATEWAY__URL, TRUSTIOT__TELEMETRY_QUERY__URL and TRUSTIOT__ASSETS__URL: the
-  Service of ai-gateway, telemetry-query or assets on its port named http, while that service is
-  enabled and listed in mesh.calls.assistant;
+- TRUSTIOT__AI_GATEWAY__URL, TRUSTIOT__TELEMETRY_QUERY__URL, TRUSTIOT__ASSETS__URL and
+  TRUSTIOT__DASHBOARD_CHECK__URL: the Service of ai-gateway, telemetry-query, assets or
+  dashboard-check on its port named http, while that service is enabled and listed in
+  mesh.calls.assistant;
 - TRUSTIOT__IDENTITY__EXCHANGE_URL: the identity service's token exchange
   (<release>-identity-exchange, templates/token-exchange.yaml), while the mesh plan lets the
   assistant reach it, that is while it calls another enabled service on behalf of users
@@ -60,7 +61,7 @@ The services the assistant calls and the setting that holds each one's address
 (services/assistant/README.md, 「設定」). Returns YAML {<service>: <variable>}; use with fromYaml.
 */}}
 {{- define "trustiot.assistant.calleeSettings" -}}
-{{- dict "ai-gateway" "TRUSTIOT__AI_GATEWAY__URL" "telemetry-query" "TRUSTIOT__TELEMETRY_QUERY__URL" "assets" "TRUSTIOT__ASSETS__URL" | toYaml -}}
+{{- dict "ai-gateway" "TRUSTIOT__AI_GATEWAY__URL" "telemetry-query" "TRUSTIOT__TELEMETRY_QUERY__URL" "assets" "TRUSTIOT__ASSETS__URL" "dashboard-check" "TRUSTIOT__DASHBOARD_CHECK__URL" | toYaml -}}
 {{- end -}}
 
 {{/*

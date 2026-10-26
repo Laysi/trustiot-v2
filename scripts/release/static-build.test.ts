@@ -238,6 +238,27 @@ describe("buildStaticSites", () => {
     SLOW_TEST_MS,
   );
 
+  test("builds a project once and gives every image that names it the same build", async () => {
+    const plan = planFor("site");
+    plan.images.push(
+      planImage({ kind: "rust", name: "dashboard-check", package: "dashboard-check", staticSite: "site" }, "1.2.0-rc.1"),
+      planImage({ kind: "rust", name: "docs", package: "docs", staticSite: "other" }, "1.2.0-rc.1"),
+    );
+    const builds: string[] = [];
+    const sites = await buildStaticSites(plan, "/repo", "bun", async (root, project) => {
+      builds.push(project);
+      return `${root}/${project}/dist`;
+    });
+    expect(builds).toEqual(["site", "other"]);
+    expect(sites).toEqual(
+      new Map([
+        ["web", "/repo/site/dist"],
+        ["dashboard-check", "/repo/site/dist"],
+        ["docs", "/repo/other/dist"],
+      ]),
+    );
+  });
+
   test(
     "stops on a failed check, an output services/web would refuse, or a dotenv file",
     async () => {

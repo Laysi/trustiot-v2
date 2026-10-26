@@ -54,8 +54,10 @@ on:
       # What goes into the nightly's Rust images (scripts/nightly/image-cache.ts, NIGHTLY_IMAGES):
       # the workspace, the toolchain, the build scripts and every local crate tools/migrate,
       # services/identity, services/assets, services/ai-gateway, services/telemetry-query,
-      # services/certs and services/assistant build from, plus the files tools/migrate compiles
-      # in with #[path] (scripts/nightly/image-cache.test.ts keeps this list complete).
+      # services/certs, services/assistant and services/dashboard-check build from, plus the files
+      # tools/migrate compiles in with #[path], and the frontend files the dashboard check's image
+      # packs the sandbox build of (STATIC_SITE_INPUTS; scripts/nightly/image-cache.test.ts keeps
+      # this list complete).
       - Cargo.toml
       - Cargo.lock
       - rust-toolchain.toml
@@ -88,6 +90,7 @@ on:
       - deploy/images/telemetry-query/**
       - deploy/images/certs/**
       - deploy/images/assistant/**
+      - deploy/images/dashboard-check/**
       - deploy/istio/**
       - tools/migrate/**
       - services/identity/**
@@ -96,7 +99,15 @@ on:
       - services/telemetry-query/**
       - services/certs/**
       - services/assistant/**
+      - services/dashboard-check/**
       - services/*/migrations/**
+      - frontend/sandbox/**
+      - frontend/tools/build-sandbox.ts
+      - frontend/src/lib/zod.ts
+      - frontend/package.json
+      - frontend/bun.lock
+      - frontend/bunfig.toml
+      - frontend/tsconfig.json
 
 # No token scopes by default; each job asks for what it needs.
 permissions: {}
@@ -183,7 +194,11 @@ jobs:
     # Laysi/trustiot-v2#592 adds the assistant image (one more cold build on the AI gateway's and
     # the services' dependencies) and per shape its rollout and one query of pg_stat_activity, with
     # no request to it.
-    timeout-minutes: 85
+    # Laysi/trustiot-v2#150 adds the dashboard check's image (one more cold build on the same
+    # dependencies, a frontend build, and Chromium with its libraries from snapshot.debian.org) and,
+    # on the SaaS shape, its isolation check (three probe containers of at most a few minutes each)
+    # and two requests to the assistant's dashboard API per shape.
+    timeout-minutes: 95
     permissions:
       contents: read
     env:
@@ -217,7 +232,7 @@ jobs:
         with:
           tools: bun helm k3d kubectl
       # The Rust images (NIGHTLY_IMAGES in scripts/nightly/image-cache.ts: deploy/images/migrate,
-      # identity, assets, ai-gateway, telemetry-query, certs and assistant) are reused while nothing that goes
+      # identity, assets, ai-gateway, telemetry-query, certs, assistant and dashboard-check) are reused while nothing that goes
       # into them changed: the key is a digest of the git object hashes of every input of their
       # builds. One entry holds every tarball and the programs built with them (certs-ca,
       # NIGHTLY_PROGRAMS), and it is saved only with all of them. Exact key only, no restore-keys:

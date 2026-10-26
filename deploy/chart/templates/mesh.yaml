@@ -22,7 +22,9 @@ still refuses a call that is not on the list.
    connections, and a NetworkPolicy never cuts one that is already open, so the
    AuthorizationPolicy is the primary layer. It sees HBONE only, never the application port
    inside the tunnel, so the port splits of the identity and certs services are the
-   AuthorizationPolicy's alone.
+   AuthorizationPolicy's alone. The dashboard check's policy also denies every connection its
+   pod would open, DNS included (policyTypes Egress, egress []): its pod runs pages a model
+   wrote (_dashboard-check.tpl). No other policy restricts egress.
 No waypoint is deployed: L4 identity is all these rules need. Add one only for L7 rules between
 services, and move the affected policies to it (README.md).
 */ -}}
@@ -118,6 +120,14 @@ spec:
       {{- include "trustiot.selectorLabels" $ctx | nindent 6 }}
   policyTypes:
     - Ingress
+    {{- if $service.isolated }}
+    - Egress
+    {{- end }}
+  {{- if $service.isolated }}
+  # The pod opens no connection at all, DNS included: it runs pages a model wrote, and nothing it
+  # holds may leave it (services/dashboard-check/README.md, 「威脅模型」).
+  egress: []
+  {{- end }}
   {{- $probePorts := (include "trustiot.mesh.probePorts" $ctx | fromYaml).ports }}
   {{- if not (or $principals $probePorts) }}
   # Nobody may call it and no probe connects: deny every connection.

@@ -1,0 +1,161 @@
+# The dashboard check service (services/dashboard-check, Laysi/trustiot-v2#150): the service's
+# static aarch64 binary, Debian's chromium-headless-shell with the libraries it needs, and the
+# checked sandbox build of the frontend. README.md in this directory explains the pins below and
+# how to move them.
+#
+# scripts/release/build.ts builds it with a context that holds the cross-compiled binary as
+# `dashboard-check` and the frontend's checked build output as `www/` (image.toml), like the
+# shared rust-binary.Containerfile; the nightly and the image test (image.test.ts) build the same
+# context.
+# No instruction runs in the arm64 image, so it builds on an x86 machine without an emulator
+# (release.yml's plan refuses a RUN there): the `chromium` stage runs on the build machine's own
+# platform, downloads the arm64 packages with apt and only unpacks them, and the final stage
+# copies the result.
+
+# The final image's base: glibc and libstdc++ for Chromium, no shell, no package manager. The
+# same pin as every other distroless/cc copy in the repository (Renovate moves them together).
+FROM gcr.io/distroless/cc-debian13:nonroot@sha256:e792ab3d241a468a4fd7519ddbbebe66b49b5f365771716ea688ad40b6c6f1c2 AS base
+
+FROM --platform=$BUILDPLATFORM docker.io/library/debian:trixie-slim@sha256:62bd423aeee912639ca8ee681c2b762cb3e25137e0a92b20be455898a9f034ad AS chromium
+
+# The Debian snapshot that every package comes from, so a rebuild of the same commit gets the
+# same files; CHROMIUM_VERSION must be published in it (trixie-security). Renovate proposes a new
+# CHROMIUM_VERSION; the same pull request moves DEBIAN_SNAPSHOT to a time after that version was
+# published (README.md, 「升級 Chromium」), or the build stops at the version check below.
+ARG DEBIAN_SNAPSHOT=20261022T170820Z
+# renovate: datasource=deb depName=chromium-headless-shell registryUrl=https://deb.debian.org/debian-security?suite=trixie-security&components=main&binaryArch=arm64
+ARG CHROMIUM_VERSION=156.0.8078.47-1~deb13u1
+# The target is always arm64: release.yml only publishes linux/arm64 (decision 5).
+ARG TARGETARCH
+
+# Every RUN starts with `set -eu` and is plain POSIX sh: podman ignores SHELL when it builds an
+# OCI image, and release.yml builds with --format oci.
+USER root
+
+# The packages of the final image's base, so apt downloads only what it lacks.
+COPY --from=base /var/lib/dpkg/status.d/ /target/status.d/
+
+# apt runs with a configuration of its own under /apt: the target's architecture, the snapshot as
+# the only source, signed by Debian's archive keys (debian-archive-keyring of this stage), and a
+# package database made of the base image's packages. apt checks the Release signatures and every
+# downloaded file's SHA-256 against the signed index; nothing is installed in this stage.
+# Some packages are listed as installed although they are not, so apt does not download them;
+# they are not in the image's package database either:
+# - awk, debconf, openssl, openssl-provider-legacy: dependencies of the base's own packages
+#   (base-files, tzdata, ca-certificates, libssl3t64) that distroless leaves out, and debconf is
+#   only used by maintainer scripts, which never run here;
+# - x11-utils, xdg-utils: chromium-common depends on them for the desktop browser's helper
+#   scripts, which the headless shell never runs.
+# Their version, 99:0, satisfies the base's versioned dependencies on them (openssl (>= 1.1.1)).
+RUN set -eu; \
+    if [ "${TARGETARCH}" != arm64 ]; then \
+      echo "this image is built for linux/arm64 only, not ${TARGETARCH}" >&2; exit 1; \
+    fi; \
+    mkdir -p /apt/etc/sources.list.d /apt/etc/preferences.d /apt/etc/apt.conf.d /apt/etc/trusted.gpg.d \
+      /apt/state/lists/partial /apt/cache/archives/partial /apt/dpkg; \
+    chown _apt:root /apt/state/lists/partial /apt/cache/archives/partial; \
+    printf '%s\n' \
+      'Types: deb' \
+      "URIs: http://snapshot.debian.org/archive/debian/${DEBIAN_SNAPSHOT}" \
+      'Suites: trixie trixie-updates' \
+      'Components: main' \
+      'Signed-By: /usr/share/keyrings/debian-archive-keyring.pgp' \
+      '' \
+      'Types: deb' \
+      "URIs: http://snapshot.debian.org/archive/debian-security/${DEBIAN_SNAPSHOT}" \
+      'Suites: trixie-security' \
+      'Components: main' \
+      'Signed-By: /usr/share/keyrings/debian-archive-keyring.pgp' \
+      > /apt/etc/sources.list.d/snapshot.sources; \
+    for control in /target/status.d/*; do \
+      case "${control}" in *.md5sums) continue ;; esac; \
+      awk 'NR == 1 { print; print "Status: install ok installed"; next } { print }' "${control}" >> /apt/dpkg/status; \
+      echo >> /apt/dpkg/status; \
+    done; \
+    for absent in awk debconf openssl openssl-provider-legacy x11-utils xdg-utils; do \
+      printf 'Package: %s\nStatus: install ok installed\nVersion: 99:0\nArchitecture: all\nDescription: not in the image\n\n' "${absent}" >> /apt/dpkg/status; \
+    done; \
+    printf '%s\n' \
+      'Dir::Etc "/apt/etc";' \
+      'Dir::Etc::SourceList "/dev/null";' \
+      'Dir::Etc::SourceParts "/apt/etc/sources.list.d";' \
+      'Dir::Etc::Parts "/apt/etc/apt.conf.d";' \
+      'Dir::Etc::Preferences "/dev/null";' \
+      'Dir::Etc::PreferencesParts "/apt/etc/preferences.d";' \
+      'Dir::Etc::Trusted "/dev/null";' \
+      'Dir::Etc::TrustedParts "/apt/etc/trusted.gpg.d";' \
+      'Dir::State "/apt/state";' \
+      'Dir::State::status "/apt/dpkg/status";' \
+      'Dir::Cache "/apt/cache";' \
+      'APT::Architecture "arm64";' \
+      'APT::Architectures "arm64";' \
+      'APT::Install-Recommends "false";' \
+      'APT::Install-Suggests "false";' \
+      'Acquire::Check-Valid-Until "false";' \
+      'Acquire::Retries "5";' \
+      'Acquire::Languages "none";' \
+      > /apt/apt.conf; \
+    export APT_CONFIG=/apt/apt.conf; \
+    apt-get update; \
+    apt-get install --download-only --yes "chromium-headless-shell=${CHROMIUM_VERSION}"; \
+    ls /apt/cache/archives/*.deb > /dev/null
+
+# Unpacks every downloaded package into /rootfs without running a maintainer script, and writes
+# its control fields and file checksums to /rootfs/var/lib/dpkg/status.d/<package>[.md5sums],
+# where distroless keeps its own packages and where syft finds them for the release SBOM. A
+# package of the base that a new one needs in a later version (a Debian point release, such as
+# libstdc++6) is upgraded the same way: its files and its entry replace the base's. The build
+# stops when a package would go back to an older version than the base's, when the Chromium
+# version is not the pinned one, or when a file is set-user-ID or set-group-ID.
+RUN set -eu; \
+    mkdir -p /rootfs/var/lib/dpkg/status.d /control; \
+    for deb in /apt/cache/archives/*.deb; do \
+      package="$(dpkg-deb --field "${deb}" Package)"; \
+      version="$(dpkg-deb --field "${deb}" Version)"; \
+      if [ -e "/target/status.d/${package}" ]; then \
+        base_version="$(awk '/^Version: / { print $2; exit }' "/target/status.d/${package}")"; \
+        if ! dpkg --compare-versions "${version}" gt "${base_version}"; then \
+          echo "${package} ${version} would replace the base image's ${base_version}" >&2; exit 1; \
+        fi; \
+        echo "upgrading the base image's ${package} ${base_version} to ${version}"; \
+      fi; \
+      dpkg-deb --extract "${deb}" /rootfs; \
+      dpkg-deb --field "${deb}" > "/rootfs/var/lib/dpkg/status.d/${package}"; \
+      dpkg-deb --control "${deb}" "/control/${package}"; \
+      if [ -f "/control/${package}/md5sums" ]; then \
+        cp "/control/${package}/md5sums" "/rootfs/var/lib/dpkg/status.d/${package}.md5sums"; \
+      fi; \
+    done; \
+    version="$(dpkg-deb --field /apt/cache/archives/chromium-headless-shell_*.deb Version)"; \
+    if [ "${version}" != "${CHROMIUM_VERSION}" ]; then \
+      echo "downloaded chromium-headless-shell ${version}, expected ${CHROMIUM_VERSION}" >&2; exit 1; \
+    fi; \
+    for top in bin sbin lib; do \
+      if [ -d "/rootfs/${top}" ] && [ ! -L "/rootfs/${top}" ]; then \
+        mkdir -p "/rootfs/usr/${top}"; \
+        cp -a "/rootfs/${top}/." "/rootfs/usr/${top}/"; \
+        rm -rf "/rootfs/${top}"; \
+      fi; \
+    done; \
+    rm -rf /rootfs/usr/share/man /rootfs/usr/share/info /rootfs/usr/share/lintian /rootfs/usr/share/bug \
+      /rootfs/usr/share/locale /rootfs/usr/share/menu; \
+    find /rootfs/usr/share/doc -mindepth 2 ! -name copyright ! -type d -exec rm -f {} +; \
+    find /rootfs/usr/share/doc -depth -mindepth 1 -type d -empty -exec rmdir {} +; \
+    privileged="$(find /rootfs -perm /6000 -type f)"; \
+    if [ -n "${privileged}" ]; then \
+      echo "set-user-ID or set-group-ID files: ${privileged}" >&2; exit 1; \
+    fi; \
+    test -x /rootfs/usr/lib/chromium/chromium-headless-shell
+
+FROM base
+
+COPY --from=chromium /rootfs/ /
+COPY --chmod=0555 dashboard-check /usr/local/bin/dashboard-check
+# Only the sandbox part of the frontend's build output: the checker serves nothing else.
+COPY www/sandbox/ /srv/www/sandbox/
+
+# A numeric UID lets Kubernetes enforce runAsNonRoot. The root filesystem is read-only in the
+# chart; Chromium writes only under /tmp (a memory-backed volume there), in a directory of each
+# check that the service removes.
+USER 65532:65532
+ENTRYPOINT ["/usr/local/bin/dashboard-check"]

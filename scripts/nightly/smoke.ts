@@ -6,7 +6,10 @@
 // commit answer through the ingress with a session cookie (api.ts, Laysi/trustiot-v2#65), so does
 // the telemetry-query service once it made the new tenant's ClickHouse account, which the smoke
 // then finds in ClickHouse (api.ts, Laysi/trustiot-v2#539), the AI assistant is ready with a
-// Postgres session of its own role (api.ts, Laysi/trustiot-v2#592), and an
+// Postgres session of its own role (api.ts, Laysi/trustiot-v2#592) and lists the new tenant's
+// dashboards through the ingress (api.ts, Laysi/trustiot-v2#150), the dashboard check, on the shapes
+// that run it, reaches nothing from its pod, not even DNS, and only the assistant reaches it
+// (dashboard-check.ts, Laysi/trustiot-v2#150), and an
 // uninstall leaves nothing behind but the objects the chart keeps on purpose (the database and the
 // password Secrets), which are then deleted. The same request through the ingress also proves the
 // MS0 edges with the real services (api.ts, Laysi/trustiot-v2#77): a stolen identity header never
@@ -35,7 +38,7 @@ import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSy
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 
-import { apiValues, checkAssistantLogin, ingressAccess, routesOfValues, runApiCheck } from "./api.ts";
+import { apiValues, checkAssistantLogin, DASHBOARD_CHECK_SHAPES, ingressAccess, routesOfValues, runApiCheck } from "./api.ts";
 import {
   CERTS_CA,
   checkCertsSigning,
@@ -47,6 +50,7 @@ import {
   signIssuingCa,
   TestRoot,
 } from "./certs.ts";
+import { DASHBOARD_CHECK, runIsolationCheck } from "./dashboard-check.ts";
 import { gatherDiagnostics } from "./diagnostics.ts";
 import { E2E_SUITES, installEvidenceSection, runClusterE2e, suitesOf } from "./e2e.ts";
 import { exec, retry, run, RunLog, waitUntilGone } from "./exec.ts";
@@ -227,13 +231,15 @@ export async function smokeShape(ctx: SmokeContext, shape: Shape): Promise<Shape
         // Laysi/trustiot-v2#65: the release runs the identity and assets services built from this
         // commit, behind the smoke namespace's ext_authz provider (platform.ts). No key is made
         // here: the identity pod's init container generates it (Laysi/trustiot-v2#404). Also the
-        // AI gateway (Laysi/trustiot-v2#536), telemetry-query (Laysi/trustiot-v2#539) and the AI
-        // assistant (Laysi/trustiot-v2#592).
+        // AI gateway (Laysi/trustiot-v2#536), telemetry-query (Laysi/trustiot-v2#539), the AI
+        // assistant (Laysi/trustiot-v2#592) and, on the shapes that run it, the dashboard check
+        // (Laysi/trustiot-v2#150).
         const file = join(ctx.outDir, `values-api-${shape.name}.yaml`);
         const routes = routesOfValues(ctx.chartDir, shape.valuesFiles);
         writeFileSync(file, Bun.YAML.stringify(apiValues(shape.name, routes), null, 2));
         values.push("-f", file);
-        return `${basename(file)}: identity, assets, ai-gateway, telemetry-query, certs and assistant, provider ${smokeProviderNameOf(shape.name)}`;
+        const dashboardCheck = DASHBOARD_CHECK_SHAPES.has(shape.name) ? ", dashboard-check" : "";
+        return `${basename(file)}: identity, assets, ai-gateway, telemetry-query, certs, assistant${dashboardCheck}, provider ${smokeProviderNameOf(shape.name)}`;
       })) &&
       (await check("a test root CA for the certs service, made for this run, sets certificateAuthority.rootCertificate (Laysi/trustiot-v2#517)", async () => {
         // The README's ceremony, step 1 and 2 (services/certs/README.md, 「發簽發 CA 憑證」): the
@@ -460,6 +466,16 @@ export async function smokeShape(ctx: SmokeContext, shape: Shape): Promise<Shape
         const ready = (JSON.parse(status.stdout) as { status?: { readyReplicas?: number } }).status?.readyReplicas ?? 0;
         const { psql } = await ingressAccess(ctx, namespace, objects, ingressCa);
         return checkAssistantLogin({ psql }, `deployment/${name}`, ready);
+      })) &&
+      (await check("the dashboard check runs isolated: from its pod nothing answers, not even DNS, no other service reaches it, and the assistant's check passes (Laysi/trustiot-v2#150)", async () => {
+        // The pod runs pages a model wrote without Chromium's own sandbox (dashboard-check.ts).
+        const objects = parseManifests(manifest);
+        const deployed = objects.some((o) => o.kind === "Deployment" && o.metadata?.labels?.["app.kubernetes.io/component"] === DASHBOARD_CHECK);
+        if (!deployed) {
+          if (DASHBOARD_CHECK_SHAPES.has(shape.name)) throw new Error("the API check's values enable the dashboard check, but the release has no Deployment of it");
+          return "this shape leaves the dashboard check off";
+        }
+        return runIsolationCheck({ kubeconfig: ctx.kubeconfig, kubectl: ctx.kubectl, log: ctx.log, repoRoot: ctx.repoRoot }, namespace, objects);
       })) &&
       (await check(
         "through the ingress, a new tenant reaches the assets service and, with its ClickHouse account, the telemetry API; a stolen identity header never does, and Host ports and normalized paths reach it (Laysi/trustiot-v2#65, #77, #539)",
