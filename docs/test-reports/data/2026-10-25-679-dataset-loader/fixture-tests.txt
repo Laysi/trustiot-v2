@@ -1,0 +1,35 @@
+running 23 tests
+test cli::tests::help ... ok
+test cli::tests::load_options ... ok
+test clickhouse::tests::urls_and_ca_files_must_agree ... ok
+test index::tests::locations ... ok
+test cli::tests::bad_arguments_are_refused ... ok
+test clickhouse::tests::rows_fill_only_their_value_column ... ok
+test cli::tests::load_needs_its_environment ... ok
+test segment::tests::a_changed_file_fails_its_hash ... ok
+test index::tests::the_base_index_is_valid ... ok
+test segment::tests::the_base_segment_parses ... ok
+test index::tests::anomalies_reference_declared_points ... ok
+test index::tests::segments_continue_their_streams_and_arrive_in_order ... ok
+test segment::tests::values_follow_their_type ... ok
+test time::tests::a_shift_keeps_every_difference ... ok
+test tests::derived_ids_depend_on_every_input ... ok
+test segment::tests::wrapping_counters_stay_below_wraps_at ... ok
+test time::tests::a_shift_outside_clickhouse_range_is_refused ... ok
+test segment::tests::totals_must_match_the_index ... ok
+test time::tests::canonical_times_round_trip ... ok
+test time::tests::ending_before_aligns_to_whole_steps ... ok
+test time::tests::other_spellings_are_refused ... ok
+test segment::tests::every_rule_refuses_its_violation ... ok
+test index::tests::every_rule_refuses_its_violation ... ok
+test result: ok. 23 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+running 8 tests
+test a_cumulative_meter_is_reset_to_zero ... ok
+test two_devices_share_a_converter ... ok
+test the_index_matches_its_files ... ok
+test a_changed_copy_is_refused ... ok
+test a_counter_overflows_at_its_register_size ... ok
+test backfilled_readings_arrive_after_newer_ones ... ok
+test readings_are_missing ... ok
+test one_batch_is_uncommitted ... ok
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s

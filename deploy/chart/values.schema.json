@@ -612,6 +612,8 @@
         "image",
         "passwordGeneration",
         "trustInterval",
+        "certificateGeneration",
+        "certificateSchedule",
         "storage",
         "resources",
         "podSecurityContext",
@@ -645,6 +647,18 @@
         "trustInterval": {
           "description": "How often the trust sidecar fetches the CA certificates and CRLs and checks the server certificate.",
           "$ref": "#/definitions/waitDuration"
+        },
+        "certificateGeneration": {
+          "description": "Increase it to renew the broker's server certificate, with a new key, at the certificate CronJob's next run; at least 1. Only goes up.",
+          "oneOf": [
+            { "type": "string", "pattern": "^[1-9][0-9]{0,8}$" },
+            { "type": "integer", "minimum": 1, "maximum": 999999999 }
+          ]
+        },
+        "certificateSchedule": {
+          "description": "When the certificate CronJob runs, in Etc/UTC (no TZ= prefix): @hourly, or five cron fields whose minute is a comma-separated list of *, */<step> (1 to 59) or minutes from 0 to 59, and whose hour, day of month, month and day of week are *, so it runs at least every hour and the API server accepts it. No ranges. templates/_mqtt-broker.tpl checks the same.",
+          "type": "string",
+          "pattern": "^(@hourly|(\\*(/([1-9]|[1-5][0-9]))?|[0-5]?[0-9])(,(\\*(/([1-9]|[1-5][0-9]))?|[0-5]?[0-9]))* \\* \\* \\* \\*)$"
         },
         "storage": {
           "type": "object",
