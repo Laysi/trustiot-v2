@@ -18,6 +18,9 @@ pub const REQUEST_TIMEOUT: Duration = Duration::from_secs(45);
 pub mod code {
     /// `BAD_ARGUMENTS`, for example an unknown time zone.
     pub const BAD_ARGUMENTS: u32 = 36;
+    /// `SYNTAX_ERROR`: for a checked AI query, ClickHouse reads the printed text otherwise than
+    /// sqlparser.
+    pub const SYNTAX_ERROR: u32 = 62;
     /// `UNKNOWN_SETTING`, for example `getSetting` of a setting the account does not have.
     pub const UNKNOWN_SETTING: u32 = 115;
     /// `TOO_MANY_ROWS`: `max_rows_to_read` or `max_result_rows`.

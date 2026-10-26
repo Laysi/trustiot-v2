@@ -4,6 +4,9 @@
 //! inputs include `SET ROLE`, which sql-check keeps out of `src`; `tests/sql_api.rs` runs the
 //! endpoint against the real servers.
 
+use std::collections::BTreeMap;
+use std::sync::{Arc, Mutex, OnceLock};
+
 use axum::body::to_bytes;
 use contract::identity::Actor;
 use contract::{InternalClaims, TenantGrant};
@@ -280,4 +283,83 @@ fn logs_name_the_sql_by_length_and_a_short_hash() {
     assert_eq!(logged.hash.len(), 16);
     assert!(logged.hash.bytes().all(|byte| byte.is_ascii_hexdigit()));
     assert_ne!(logged.hash, LoggedSql::new("SELECT 1").hash);
+}
+
+/// A logged event's level and fields (the message under `message`).
+type Logged = (tracing::Level, BTreeMap<String, String>);
+
+/// The events logged on this thread.
+#[derive(Clone, Default)]
+struct Capture(Arc<Mutex<Vec<Logged>>>);
+
+struct Fields<'a>(&'a mut BTreeMap<String, String>);
+
+impl tracing::field::Visit for Fields<'_> {
+    fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+        self.0.insert(field.name().to_owned(), format!("{value:?}"));
+    }
+
+    fn record_str(&mut self, field: &tracing::field::Field, value: &str) {
+        self.0.insert(field.name().to_owned(), value.to_owned());
+    }
+}
+
+impl<S: tracing::Subscriber> tracing_subscriber::Layer<S> for Capture {
+    fn on_event(
+        &self,
+        event: &tracing::Event<'_>,
+        _context: tracing_subscriber::layer::Context<'_, S>,
+    ) {
+        let mut fields = BTreeMap::new();
+        event.record(&mut Fields(&mut fields));
+        self.0
+            .lock()
+            .expect("the lock")
+            .push((*event.metadata().level(), fields));
+    }
+}
+
+/// The events `work` logs on this thread. tracing caches per callsite whether any subscriber
+/// wants its events, from the first thread to reach it while only one dispatcher exists; a
+/// second one kept alive for the test binary makes it ask every time, so tests running in
+/// parallel do not hide events from each other (as in the assistant's tests).
+fn logged_events(work: impl FnOnce()) -> Vec<Logged> {
+    use tracing_subscriber::layer::SubscriberExt as _;
+    static KEEPER: OnceLock<tracing::Dispatch> = OnceLock::new();
+    KEEPER.get_or_init(|| tracing::Dispatch::new(tracing::subscriber::NoSubscriber::new()));
+    let capture = Capture::default();
+    tracing::subscriber::with_default(tracing_subscriber::registry().with(capture.clone()), work);
+    capture.0.lock().expect("the lock").clone()
+}
+
+/// ClickHouse's syntax error on a checked query means it read the printed text otherwise than
+/// the check: a WARN, by the SQL's length and hash and never its text. The query's own errors
+/// stay INFO (the second security review of 2026-10-26, L2).
+#[test]
+fn a_syntax_error_from_clickhouse_is_a_warning_without_the_sql() {
+    let sql = "SELECT 'logged-marker' FROM tenant_telemetry";
+    let logged = LoggedSql::new(sql);
+    let tenant = TenantId::generate();
+    for (error_code, level) in [
+        (code::SYNTAX_ERROR, tracing::Level::WARN),
+        (47, tracing::Level::INFO),
+        (code::MEMORY_LIMIT_EXCEEDED, tracing::Level::INFO),
+    ] {
+        let failure = failed(error_code);
+        let refusal = query_refusal(&failure).expect("a refusal");
+        let events = logged_events(|| log_query_refusal(tenant, &logged, &refusal, &failure));
+        let [(logged_level, fields)] = events.as_slice() else {
+            panic!("{error_code}: one event, got {events:?}");
+        };
+        assert_eq!(*logged_level, level, "{error_code}: {fields:?}");
+        assert_eq!(fields.get("sql_hash"), Some(&logged.hash), "{fields:?}");
+        assert_eq!(
+            fields.get("sql_bytes"),
+            Some(&sql.len().to_string()),
+            "{fields:?}"
+        );
+        let text = format!("{fields:?}");
+        assert!(!text.contains("logged-marker"), "{text}");
+        assert!(!text.contains("DB::Exception"), "{text}");
+    }
 }

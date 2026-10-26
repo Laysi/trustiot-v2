@@ -66,6 +66,8 @@ reqwest.workspace = true
 # The product's schema (the migration Job), test identity tokens, and the cross-tenant suite.
 testkit = { path = "../../crates/testkit" }
 tokio = { workspace = true, features = ["macros", "process", "rt-multi-thread", "time"] }
+# Captures the SQL endpoint's log events in its unit tests.
+tracing-subscriber = { workspace = true, features = ["registry", "std"] }
 # Random test passwords and container names (tests/support, services/ingest/tests/common).
 uuid = { workspace = true, features = ["serde", "v4"] }
 

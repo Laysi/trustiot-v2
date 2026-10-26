@@ -160,8 +160,9 @@ fn query_refusal(failure: &QueryError) -> Option<SqlRefusal> {
         215 | 184 => QueryErrorKind::AggregateMisuse,
         // ILLEGAL_DIVISION.
         153 => QueryErrorKind::DivisionByZero,
-        // SYNTAX_ERROR: ClickHouse reads the printed text differently from sqlparser.
-        62 => QueryErrorKind::Syntax,
+        // ClickHouse reads the printed text differently from sqlparser: logged as a warning
+        // ([`log_query_refusal`]).
+        code::SYNTAX_ERROR => QueryErrorKind::Syntax,
         // UNKNOWN_FUNCTION, NOT_IMPLEMENTED, MULTIPLE_EXPRESSIONS_FOR_ALIAS.
         46 | 48 | 179 => QueryErrorKind::Other,
         // TOO_MANY_ROWS, TOO_SLOW, MEMORY_LIMIT_EXCEEDED, LIMIT_EXCEEDED, TOO_MANY_BYTES,
@@ -177,6 +178,37 @@ fn query_refusal(failure: &QueryError) -> Option<SqlRefusal> {
         _ => return None,
     };
     Some(SqlRefusal::QueryError { kind })
+}
+
+/// Logs a refusal ClickHouse gave a checked query, by the SQL's length and hash. A syntax error
+/// is a WARN: ClickHouse could not parse the text the check printed, so the check and ClickHouse
+/// read it differently, a gap in the check to look into (the second security review of
+/// 2026-10-26). The other refusals are the query's own errors, at INFO.
+fn log_query_refusal(
+    tenant: TenantId,
+    logged: &LoggedSql,
+    refusal: &SqlRefusal,
+    failure: &QueryError,
+) {
+    if failure.code() == Some(code::SYNTAX_ERROR) {
+        tracing::warn!(
+            tenant_id = %tenant,
+            class = class(refusal),
+            error_kind = failure.kind(),
+            sql_bytes = logged.bytes,
+            sql_hash = %logged.hash,
+            "ClickHouse could not parse a checked query: the check and ClickHouse read it differently"
+        );
+    } else {
+        tracing::info!(
+            tenant_id = %tenant,
+            class = class(refusal),
+            error_kind = failure.kind(),
+            sql_bytes = logged.bytes,
+            sql_hash = %logged.hash,
+            "an AI's query did not run"
+        );
+    }
 }
 
 /// The answer when the account check before an AI's query fails in ClickHouse: 503 with the
@@ -345,14 +377,7 @@ pub(crate) async fn run_sql(
         Err(failure) => {
             return match query_refusal(&failure) {
                 Some(refusal) => {
-                    tracing::info!(
-                        tenant_id = %tenant,
-                        class = class(&refusal),
-                        error_kind = failure.kind(),
-                        sql_bytes = logged.bytes,
-                        sql_hash = %logged.hash,
-                        "an AI's query did not run"
-                    );
+                    log_query_refusal(tenant, &logged, &refusal, &failure);
                     refused(&refusal)
                 }
                 None => failure_response(tenant, &logged, &failure),
