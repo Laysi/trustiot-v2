@@ -20,6 +20,7 @@ import {
   OUTSIDE,
   OUTSIDE_NAME,
   PAYLOAD_LIMIT_BYTES,
+  POD_PIDS_LIMIT,
   parseHttpAnswer,
   parseProbeOutput,
   type PlannedProbe,
@@ -452,6 +453,15 @@ group("what the check reads from the release", () => {
     expect(body.page).toBe(readFileSync(join(fixtures, "pages", "correct.html"), "utf8"));
     const { page: _page, ...request } = body;
     expect(request).toEqual(JSON.parse(readFileSync(join(fixtures, "request.json"), "utf8")));
+  });
+
+  test("the nightly cluster runs every pod under the process limit the chart asks of the nodes", () => {
+    const readme = readFileSync(join(REPO_ROOT, "deploy", "chart", "README.md"), "utf8");
+    expect(readme).toContain(`kubelet-arg: ["pod-max-pids=${POD_PIDS_LIMIT}"]`);
+    expect(readme).toContain(`\`podPidsLimit\`，值是 ${POD_PIDS_LIMIT}`);
+    const run = readFileSync(join(REPO_ROOT, "scripts", "nightly", "run.ts"), "utf8");
+    expect(run).toContain('"--k3s-arg", `--kubelet-arg=pod-max-pids=${POD_PIDS_LIMIT}@server:0`,');
+    expect(run).toContain('import { POD_PIDS_LIMIT } from "./dashboard-check.ts";');
   });
 
   test("the route, ports and paths are the service's own", () => {
