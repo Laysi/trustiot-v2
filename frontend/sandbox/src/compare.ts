@@ -222,6 +222,66 @@ export function parseCssContent(value: string): CssContent {
   return parsed;
 }
 
+/** `overflow` values that clip or scroll away the part of the content past the box. */
+const CLIPPING: ReadonlySet<string> = new Set(["hidden", "clip", "scroll", "auto"]);
+
+/** Whether a computed colour paints nothing: `transparent`, or an `rgba(...)` with zero alpha. */
+export function isTransparent(color: string): boolean {
+  const value = color.trim().toLowerCase();
+  if (value === "transparent") return true;
+  const rgba = /^rgba?\(\s*[\d.]+\s*,\s*[\d.]+\s*,\s*[\d.]+\s*,\s*([\d.]+)\s*\)$/.exec(value);
+  return rgba !== null && Number(rgba[1]) === 0;
+}
+
+/**
+ * Whether a text mark's rendered text may differ from its `textContent`, so comparing the two is
+ * not enough (frontend/sandbox/README.md, 「檢查規則」). A text mark is one text node, no element
+ * children, shown whole and in order. Flags: an element child (its own text or styling changes the
+ * number), a hidden mark (`display: none`, `visibility: hidden`, a transparent colour), a bidi
+ * override (the digits read in another order), a restyled `::first-letter`/`::first-line` (a digit
+ * hidden, resized or made transparent), a zero-size box (`font-size: 0`), and a clipping box the
+ * content overflows, so part is cut off (an ellipsis is this with `text-overflow` set). The
+ * box-size and clipping checks need layout, so they run only where there is layout (the checker's
+ * browser and the view, not a unit test's DOM), gated by `layoutAvailable`. A mark with no box but
+ * visible text (`display: contents`) is not hidden and is not flagged.
+ */
+export function concealsText(dom: DomAccess, element: Element, layoutAvailable: boolean): boolean {
+  for (let child = dom.firstChild(element); child !== null; child = dom.nextSibling(child)) {
+    if (dom.nodeType(child) === 1) return true;
+  }
+  const display = dom.style(element, null, "display");
+  if (display === "none") return true;
+  const visibility = dom.style(element, null, "visibility");
+  if (visibility === "hidden" || visibility === "collapse") return true;
+  if (isTransparent(dom.style(element, null, "color"))) return true;
+  const bidi = dom.style(element, null, "unicode-bidi");
+  if (bidi.includes("override") || bidi === "plaintext") return true;
+  const own = dom.style(element, null, "font-size");
+  for (const pseudo of ["::first-letter", "::first-line"] as const) {
+    const size = dom.style(element, pseudo, "font-size");
+    if (size !== "" && own !== "" && size !== own) return true;
+    const pseudoVisibility = dom.style(element, pseudo, "visibility");
+    if (pseudoVisibility === "hidden" || pseudoVisibility === "collapse") return true;
+    if (isTransparent(dom.style(element, pseudo, "color"))) return true;
+  }
+  if (layoutAvailable) {
+    // A box with no area shows nothing (font-size: 0); display: contents has no box of its own but
+    // still shows its text through its parent, so it is not hidden.
+    if (display !== "contents") {
+      const box = dom.box(element);
+      if (box.width <= 0 || box.height <= 0) return true;
+    }
+    const scroll = dom.scrollSize(element);
+    if (CLIPPING.has(dom.style(element, null, "overflow-x")) && scroll.scrollWidth - scroll.clientWidth > 1) {
+      return true;
+    }
+    if (CLIPPING.has(dom.style(element, null, "overflow-y")) && scroll.scrollHeight - scroll.clientHeight > 1) {
+      return true;
+    }
+  }
+  return false;
+}
+
 interface State {
   /** Inside a graphic mark, an axis or decor: shapes are accounted for. */
   covered: boolean;
@@ -266,6 +326,10 @@ export function compareDocument(dom: DomAccess, model: Model, locale: Locale): C
   // (computed styles, layout) run over it.
   const limit = sizeLimit(dom, root);
   if (limit !== null) return { findings: [{ problem: limit, fix: null }], marks };
+  // Layout-dependent checks (a mark's box, clipping) run only where there is layout: the checker's
+  // browser and the view, not a unit test's DOM, which reports every box as empty.
+  const rootBox = dom.box(root);
+  const layoutAvailable = rootBox.width > 0 || rootBox.height > 0;
 
   const add = (problem: Problem, fix: Fix | null) => {
     findings.push({ problem, fix });
@@ -347,7 +411,7 @@ export function compareDocument(dom: DomAccess, model: Model, locale: Locale): C
         if (!(error instanceof FormatError)) throw error;
         expected = null;
       }
-      if (expected === null || dom.textContent(element) !== expected) {
+      if (expected === null || dom.textContent(element) !== expected || concealsText(dom, element, layoutAvailable)) {
         add(withTag({ kind: "mismatch", reference: canonical, value: resolved.value }, tag), fix);
       } else if (reference.form === "t" && state.axis !== null) {
         tick(element, reference, canonical, state.axis);

@@ -5,7 +5,14 @@ import { readFileSync } from "node:fs";
 
 import { Window } from "happy-dom";
 
-import { compareDocument, literalOf, parseCssContent, verdictOf, withoutNumbers } from "../src/compare.ts";
+import {
+  compareDocument,
+  concealsText,
+  literalOf,
+  parseCssContent,
+  verdictOf,
+  withoutNumbers,
+} from "../src/compare.ts";
 import { captureDom, type DomAccess, type DomWindow } from "../src/dom.ts";
 import { type CheckRequest, CheckRequestSchema, type CheckVerdict, MAX_PROBLEMS } from "../src/protocol.ts";
 import { layoutDom } from "./harness.ts";
@@ -79,6 +86,72 @@ describe("text marks", () => {
     expect(problems(judge('<p data-tq="f|week_kwh">690<b>0</b></p>'))).toEqual([
       { kind: "mismatch", reference: "f|week_kwh", value: 690, tag: "p" },
     ]);
+  });
+
+  test("a mark whose rendered text may differ from its textContent is a mismatch", () => {
+    // Right textContent, but a bidi override, a hidden or transparent mark, or a restyled first letter.
+    const style =
+      (property: string, value: string, pseudo: string | null = null): Style =>
+      (_e, p, prop) =>
+        p === pseudo && prop === property ? value : undefined;
+    const bidi = style("unicode-bidi", "bidi-override");
+    const hidden = style("visibility", "hidden");
+    const gone = style("display", "none");
+    const transparent = style("color", "transparent");
+    const firstLetterSize: Style = (_e, pseudo, property) =>
+      property !== "font-size" ? undefined : pseudo === "::first-letter" ? "0px" : "16px";
+    const firstLetterColor = style("color", "rgba(0, 0, 0, 0)", "::first-letter");
+    expect(problems(judge('<b data-tq="f|week_kwh">690</b>690', { style: bidi }))[0]).toEqual({
+      kind: "mismatch",
+      reference: "f|week_kwh",
+      value: 690,
+      tag: "b",
+    });
+    for (const s of [hidden, gone, transparent, firstLetterSize, firstLetterColor]) {
+      expect(problems(judge('<b data-tq="f|week_kwh">690</b>', { style: s }))).toEqual([
+        { kind: "mismatch", reference: "f|week_kwh", value: 690, tag: "b" },
+      ]);
+    }
+    // An element child alone, with matching text, is flagged by structure (no computed style needed).
+    expect(problems(judge('<b data-tq="f|week_kwh">690<i></i></b>'))).toEqual([
+      { kind: "mismatch", reference: "f|week_kwh", value: 690, tag: "b" },
+    ]);
+  });
+
+  test("concealsText flags clipping and a zero box only with layout, never a boxless but visible mark", () => {
+    const element = { nodeType: 1 } as unknown as Element;
+    const stub = (over: {
+      style?: Record<string, string>;
+      box?: { width: number; height: number };
+      scroll?: { scrollWidth: number; clientWidth: number; scrollHeight: number; clientHeight: number };
+    }): DomAccess =>
+      ({
+        firstChild: () => null,
+        nextSibling: () => null,
+        nodeType: () => 1,
+        style: (_e: Element, _p: string | null, property: string) => over.style?.[property] ?? "",
+        box: () => ({ left: 0, top: 0, width: over.box?.width ?? 20, height: over.box?.height ?? 16 }),
+        scrollSize: () => over.scroll ?? { scrollWidth: 20, clientWidth: 20, scrollHeight: 16, clientHeight: 16 },
+      }) as unknown as DomAccess;
+    const clipped = stub({
+      style: { "overflow-x": "hidden" },
+      scroll: { scrollWidth: 80, clientWidth: 20, scrollHeight: 16, clientHeight: 16 },
+    });
+    // With layout, an overflowing clipping box and a zero-size box (font-size: 0) are flagged;
+    // without layout (a unit DOM reports every box empty), neither is, so plain marks pass.
+    expect(concealsText(clipped, element, true)).toBe(true);
+    expect(concealsText(clipped, element, false)).toBe(false);
+    expect(concealsText(stub({ box: { width: 0, height: 16 } }), element, true)).toBe(true);
+    expect(concealsText(stub({ box: { width: 0, height: 16 } }), element, false)).toBe(false);
+    // display: none is hidden; display: contents has no box but shows its text, so it is not flagged
+    // even when the box reads empty.
+    expect(concealsText(stub({ style: { display: "none" } }), element, true)).toBe(true);
+    expect(concealsText(stub({ style: { display: "contents" }, box: { width: 0, height: 0 } }), element, true)).toBe(
+      false,
+    );
+    // An overflow box whose content fits (no overflow) is not clipped, so it passes.
+    expect(concealsText(stub({ style: { "overflow-x": "hidden" } }), element, true)).toBe(false);
+    expect(concealsText(stub({}), element, true)).toBe(false);
   });
 });
 

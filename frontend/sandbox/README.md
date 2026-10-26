@@ -189,7 +189,7 @@ runtime 收到 `data` 後呼叫 `render(tq)`：
 | 沙箱 frame 沒有導向、沒有開新視窗、沒有送出表單 | `navigated` |
 | 沙箱除了自己 runtime 版本的檔案之外，沒有請求任何檔案（CSP 的 `'self'` 允許同一主機的 script 與樣式表；檢視時這種請求會從使用者的瀏覽器送到平台的主機） | `requested` |
 | 每個 `data-tq` 都是合法參照，而且對得到資料：資料集、欄、列、計算、常數都存在；`t` 參照只在 `tq.axis` 軸裡的文字標記上；圖形標記有合法的 `data-tq-chart` 與 `data-tq-channel` | `unmapped`（參照的名稱都是宣告過的才回傳參照，否則只回元素的標籤） |
-| 文字標記（有 `data-tq`、沒有 `data-tq-chart` 與 `data-tq-channel` 的元素）的 `textContent` 等於 `tq.format(值, data-tq-format)`；格式被拒絕時一律不相等 | `mismatch`（回傳參照與資料裡的值） |
+| 文字標記（有 `data-tq`、沒有 `data-tq-chart` 與 `data-tq-channel` 的元素）的 `textContent` 等於 `tq.format(值, data-tq-format)`；格式被拒絕時一律不相等。而且畫出來的文字要等於 `textContent`：標記是單一文字節點（沒有子元素，`tq.text` 寫的就是這樣），整段照順序顯示——沒有被藏起來（`display: none`、`visibility: hidden`、透明色 `transparent` 或 alpha 0）、沒有 bidi 重排（`unicode-bidi` 的 override 或 `plaintext`）、`::first-letter` 與 `::first-line` 沒有被改樣式（字級、顯示、透明色）、方框有面積（不是 `font-size: 0` 的零大小）、沒有被有裁切的 `overflow` 方框裁掉（內容超出方框，刪節號也算）。方框大小與裁切的判斷需要版面，只在有版面的地方做（檢查服務的瀏覽器與檢視，不在沒有版面的單元測試 DOM）；`display: contents` 這種沒有方框但文字照樣顯示的標記不算被藏 | `mismatch`（回傳參照與資料裡的值） |
 | 所有 SVG 圖形（`rect`、`circle`、`ellipse`、`line`、`path`、`polygon`、`polyline`、`use`）都在圖形標記、`tq.axis` 或 `tq.decor` 之下 | `unmapped`（沒有參照，回傳標籤） |
 | 標記以外沒有數字：不在文字標記裡的文字節點（圖形標記裡的文字也算）、每個元素上會顯示或朗讀的屬性（`title`、`alt`、`aria-label`、`aria-description`、`aria-valuetext`、`aria-valuenow`、`aria-valuemin`、`aria-valuemax`、`aria-roledescription`、`aria-placeholder`、`placeholder`、`value`、`label`）、`::before`、`::after`、`::marker` 的 `content`（`open-quote`、`close-quote` 看 `quotes`），以及有編號的清單項目（`display: list-item` 而 `list-style-type` 不是 `none`、`disc`、`circle`、`square`、`disclosure-*`；文字的 `list-style-type` 看文字），都沒有十進位數字（`\p{Nd}`，含全形） | `literal_number`（回傳位置與第一段數字，只含數字、`.` 與 `,`，最多 32 字元；清單項目回傳它在兄弟元素裡的序號） |
 | 同一張圖（`data-tq-chart`）同一個 `channel` 的標記：`width`、`height`、`radius`（寬的一半）依 `getBoundingClientRect` 與值的絕對值成正比（比例是各標記「大小 / 值」的中位數，誤差 1% 或 1 px 內；值為 0 或 `null` 時不超過 1 px；最大的標記不到 1 px 時，所有有值的標記都不符）；`x`、`y` 是值的一次函數（以方框中心為位置，Theil–Sen 直線，誤差為位置範圍的 1% 或 1 px；三個以上的標記才判定；時間以毫秒計）；`angle` 只用於 `d3.arc` 畫的 `path`（沒有 `padAngle`、`cornerRadius`），以弧的角度與值成正比（誤差 1% 或外緣 1 px 的弧長）；值不是數字（或時間）的標記一律不符 | `mark_geometry`（回傳參照與 `channel`） |
@@ -207,7 +207,7 @@ runtime 收到 `data` 後呼叫 `render(tq)`：
 - 折線與面積的路徑（`path`）只能標成 `tq.decor`，形狀不檢查；要檢查的值另外以點（`tq.mark` 的 `x`、`y`）標記。`tq.decor` 本身也不檢查：畫成數字形狀的裝飾、被宣告成裝飾的長條都看不出來。
 - 以 HTML 元素的寬高畫的長條沒有標記時看不出來；圖形一律用 SVG 並以 `tq.mark` 標記。
 - 用文字寫數字（「一百二十」）、`\p{Nd}` 以外的數字字元（上標、圈號數字、羅馬數字），以及依時間或環境改變內容的頁面，檢查擋不住；所以檢視時前端再比對一次（Laysi/trustiot-v2#462）。
-- 只影響畫面不影響 DOM 的手法：雙向文字重排、`clip-path`、`mask`、透明度、只在 `:hover` 出現的樣式、清單以外的屬性（例如其他 ARIA 屬性）。
+- 只影響畫面不影響 DOM 的手法：文字標記的 bidi 重排、裁切、`::first-letter`/`::first-line` 樣式與隱藏已經會判 `mismatch`（見上），但祖先元素造成的裁切或 bidi 重排、`clip-path`、`mask`、透明度、只在 `:hover` 出現的樣式、清單以外的屬性（例如其他 ARIA 屬性）仍檢查不到。
 - 只在檢視時才發出的同主機請求（`requested` 那一列）檢查看不到。這種請求只到平台自己的主機，也不帶 cookie，理由與 2026-10-26 的實測見 `crates/contract/src/api/dashboard/sandbox.rs` 的模組說明。
 - 沙箱還沒處理的外送缺口在 Laysi/trustiot-v2#699。
 
@@ -244,7 +244,7 @@ runtime 收到 `data` 後呼叫 `render(tq)`：
 - `expect` 是 `{verdict: "passed", marks}` 或 `{verdict: "failed", problems, may_also?}`。比對方式在 `fixtures/expect.ts` 的 `matchesExpectation`：通過的案例要有完全相同的 `marks`（順序也相同）；失敗的案例要有每個預期的問題（列出的欄位與值都相同，沒列出的欄位，例如 `script_error` 的 `message`，不比），而且沒有預期與 `may_also` 以外類別的問題。
 - 案例涵蓋 design B 第 3.4 節（正確的頁面、寫死的數字、錯列、錯的長條高度、對不到資料的標記、同步與非同步的 script 錯誤、導向、改寫原型），以及每條規則各一頁。送出表單與開新視窗的頁面預期**通過**：沙箱沒有 `allow-forms`、`allow-popups`，什麼都不會發生；瀏覽器裡判成 `navigated` 代表 frame 少了 `sandbox` 屬性。
 
-只有瀏覽器測試涵蓋的部分：真實的版面（`getBoundingClientRect`、`getScreenCTM`；單元測試從 SVG 屬性推算位置）、`::before`、`::after`、`::marker` 的 `content`、清單的預設樣式、CSS 動畫、封閉的 shadow root、非同步的 script 錯誤、導向、請求、isolated world 本身、頁面替換 realm 的內建物件（`builtin-tampering`；`harden` 在真實的 realm 凍結它們，共用的測試 realm 不能被替換），以及 SVG 裡的 `<script>`（happy-dom 解析不出來）。
+只有瀏覽器測試涵蓋的部分：真實的版面（`getBoundingClientRect`、`getScreenCTM`；單元測試從 SVG 屬性推算位置）、`::before`、`::after`、`::marker` 的 `content`、清單的預設樣式、CSS 動畫、封閉的 shadow root、非同步的 script 錯誤、導向、請求、isolated world 本身、頁面替換 realm 的內建物件（`builtin-tampering`；`harden` 在真實的 realm 凍結它們，共用的測試 realm 不能被替換）、文字標記需要版面才看得出的遮蔽（`text-mark-first-letter`、`text-mark-first-letter-color` 的 `::first-letter`、`text-mark-clipped` 與 `text-mark-ellipsis` 的裁切、`text-mark-font-size-zero` 的零大小方框；結構、`display`、`visibility`、透明色、`unicode-bidi` 的樣本在單元測試就能判），以及 SVG 裡的 `<script>`（happy-dom 解析不出來）。
 
 ## 測試
 

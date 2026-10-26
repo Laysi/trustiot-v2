@@ -162,3 +162,26 @@ DASHBOARD_CHECK_IMAGE=localhost/trustiot-e2e/dashboard-check:hardening-y bun tes
 - runtime 載入之後，頁面除了改 DOM（比對下一次會看到）以外改不了顯示時的比對結果：通過（`harden` 單元測試在真實 realm、`builtin-tampering` 在真實瀏覽器）。
 - 持續改動有上限、一直改回錯值會 fail closed 隱藏、一直以正確值更新會繼續顯示：通過（檢視模式單元測試）。
 - 判定的可信度以 renderer 為限（攻破 renderer 能讓自己這次的檢查通過，但到不了別次、出不了 pod）：寫入 `services/dashboard-check/README.md`「威脅模型」第 5 點與 `docs/architecture/ai-assistant.md`「儀表板」第 4 點。
+
+## 6. 文字標記：畫出來的文字要等於 textContent
+
+文字標記原本只比 `textContent` 等於 `tq.format(值)`。但 `textContent` 相同、畫出來不同的手法有：標記有子元素、被藏起來（`display: none`、`visibility: hidden`、透明色）、`unicode-bidi` 重排數字、有裁切的 `overflow` 把數字切掉（刪節號也是）、`::first-letter`/`::first-line` 把第一個字改小、藏起來或變透明、整個標記 `font-size: 0` 零大小。修正：文字標記除了 `textContent` 相符，還要是單一文字節點、沒有上述遮蔽，否則判 `mismatch`（`frontend/sandbox/src/compare.ts` 的 `concealsText`；需要版面的方框大小與裁切只在有版面的地方檢查，`display: contents` 這種沒有方框但文字照顯示的不算被藏）。
+
+### 指令
+
+```sh
+bun test sandbox/test/compare.test.ts   # concealsText 的每條規則，含有/無版面
+bun test sandbox/test/fixtures.test.ts  # 單元可判的文字標記樣本
+DASHBOARD_CHECK_IMAGE=localhost/trustiot-e2e/dashboard-check:hardening-y bun test deploy/images/dashboard-check
+```
+
+### 結果
+
+- `compare.test.ts`：新增的規則測試通過——子元素、bidi override、`display: none`、`visibility: hidden`、透明色、`::first-letter` 改字級或變透明都判 `mismatch`；`concealsText` 在有版面時判出裁切（內容超出有 `overflow` 的方框）與零大小方框（`font-size: 0`），沒有版面時這兩項不判（所以單元測試裡正常的標記仍通過），`display: contents` 即使方框讀為 0 也不判。沙箱單元測試全部通過。
+- 九個新固定樣本：`text-mark-child`、`text-mark-bidi`、`text-mark-hidden`、`text-mark-transparent` 在 happy-dom（單元）與瀏覽器都判 `mismatch`；`text-mark-first-letter`、`text-mark-first-letter-color`、`text-mark-clipped`、`text-mark-ellipsis`、`text-mark-font-size-zero` 需要真實版面或 `::first-letter`，只在瀏覽器判。
+- 映像測試（manifest list `sha256:1c09563da6e717d9da9cacd589333b82e8bba81ba67a704c325c1218eb3696fb`）：54 個全過，0 失敗；43 次檢查，每次 140–5171 ms（中位數 425 ms），容器記憶體最高讀數 96.4 MiB（上限 512Mi）。九個文字標記樣本在真實 Chromium 都判 `mismatch`，既有樣本判定不變。
+
+### 結論
+
+- 文字標記畫出來的文字要等於它的值、是單一文字節點、不被重排／裁切／藏起來：通過（單元 + 瀏覽器固定樣本）。
+- 殘留：祖先元素造成的裁切或 bidi 重排、`clip-path`／`mask`／透明度等只影響畫面的手法仍檢查不到（`frontend/sandbox/README.md`「檢查不到的部分」）。
