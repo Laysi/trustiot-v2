@@ -10,6 +10,9 @@
 // - k3s and kubectl get final releases only, within their minor; the runner of a job (runs-on) is
 //   never changed by Renovate.
 // - Each image is read by exactly one manager (the chart values by the custom manager below).
+// - Debian packages that an image's own Containerfile takes from a pinned Debian snapshot are
+//   tracked by their `# renovate: datasource=deb` annotation (Chromium in
+//   deploy/images/dashboard-check); the pull request names the snapshot it also has to move.
 {
   $schema: "https://docs.renovatebot.com/renovate-schema.json",
   extends: [
@@ -129,6 +132,15 @@
       ],
     },
     {
+      description: "Chromium of the dashboard check image (deploy/images/dashboard-check, Laysi/trustiot-v2#150), from Debian's security suite, where every new version is a security update: proposed at once, like a vulnerability alert. The image takes its packages from one Debian snapshot (DEBIAN_SNAPSHOT), which the same pull request has to move to a time the new version is in, or the image build stops at its version check",
+      matchDatasources: ["deb"],
+      matchPackageNames: ["chromium-headless-shell"],
+      schedule: ["at any time"],
+      prBodyNotes: [
+        "Move `DEBIAN_SNAPSHOT` in `deploy/images/dashboard-check/Containerfile` to the `first_seen` time of the new version's arm64 package in this pull request, or the image build stops at its version check: `https://snapshot.debian.org/mr/package/chromium/<version>/binfiles/chromium-headless-shell/<version>?fileinfo=1` (the README there, section 「升級 Chromium」). Then run `bun test deploy/images/dashboard-check` and put the label `smoke` on this pull request before it is merged, so the nightly builds and checks the new image.",
+      ],
+    },
+    {
       description: "Rust crates: one weekly pull request for the semver-compatible updates",
       matchManagers: ["cargo"],
       matchUpdateTypes: ["minor", "patch"],
@@ -188,6 +200,15 @@
         "(?<depName>[a-z0-9][a-z0-9./_-]*[a-z0-9]):(?<currentValue>[A-Za-z0-9_][A-Za-z0-9._-]*)@(?<currentDigest>sha256:[a-f0-9]{64})",
       ],
       datasourceTemplate: "docker",
+    },
+    {
+      description: "Debian packages an image's own Containerfile takes from a pinned Debian snapshot, annotated with a `# renovate: datasource=deb` comment right above their ARG (deploy/images/dashboard-check). Debian's version order decides what is newer",
+      customType: "regex",
+      managerFilePatterns: ["/(^|/)Containerfile$/"],
+      matchStrings: [
+        "# renovate: datasource=(?<datasource>deb) depName=(?<depName>\\S+) registryUrl=(?<registryUrl>\\S+)\\nARG [A-Z0-9_]+=(?<currentValue>\\S+)",
+      ],
+      versioningTemplate: "deb",
     },
     {
       description: "Chart values that give an image as repository, tag and digest on separate lines",

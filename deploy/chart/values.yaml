@@ -312,6 +312,27 @@ services:
     enabled: false
   knowledge:
     enabled: false
+  # The dashboard check (services/dashboard-check, Laysi/trustiot-v2#150): runs each dashboard page
+  # the AI assistant is about to publish in a fresh headless Chromium and compares it with the
+  # data. The pages are a model's, so only the assistant may call it (mesh.calls.assistant below)
+  # and its pod opens no connection at all, DNS included, and gets no ServiceAccount token, no
+  # Secret, no platform settings and no init container; the render fails on values that would undo
+  # that (README.md, 「儀表板檢查」). A SaaS cluster turns it on together with the assistant (its
+  # own values, like every service); on-prem leaves it off, because the AI dashboards come there
+  # after SaaS (decision 33).
+  dashboard-check:
+    enabled: false
+    # One check at a time, each in a new Chromium (about 100 MiB at its peak in the image test,
+    # deploy/images/dashboard-check/README.md); /tmp is in memory and counts against the limit.
+    resources:
+      requests:
+        cpu: 100m
+        memory: 128Mi
+      limits:
+        cpu: "1"
+        memory: 512Mi
+    # Chromium's profile and shared memory files of the check in progress (a memory-backed volume).
+    tmpSizeLimit: 128Mi
 
 # Service-to-service authorization (decision 27). ztunnel adds mTLS to every connection and each
 # service has its own ServiceAccount; a service accepts connections only from the callers listed
@@ -326,7 +347,8 @@ mesh:
   # keys under `services`, the in-cluster components `clickhouse` (bundled mode), `otel-collector`
   # and `mqtt-broker` (mqttBroker.enabled), or `postgres`. Each service's issue adds the internal APIs it calls. Calls
   # involving a disabled service or a component that is not deployed are skipped. The chart adds
-  # the telemetry calls itself: every service to the collector, the collector to ClickHouse.
+  # the telemetry calls itself: every service but dashboard-check to the collector, the
+  # collector to ClickHouse.
   # `postgres` (bundled or external) is how a service declares that it uses Postgres: only those
   # services get the server's CA file and, bundled, reach the Postgres pods (README.md).
   # A call from one service to another (ai-gateway aside) is also a call on behalf of users: the
@@ -374,12 +396,14 @@ mesh:
     # The AI assistant (Laysi/trustiot-v2#592): the AI gateway for the models; telemetry-query and
     # assets for its tools, which call them as the asking user, so it also reaches the identity
     # service's token exchange and the exchange grants exactly these audiences (README.md,
-    # 「代表使用者呼叫」); Postgres for its conversations (services/assistant/README.md).
+    # 「代表使用者呼叫」); Postgres for its conversations (services/assistant/README.md); the
+    # dashboard check for the pages it publishes, without a user's token (Laysi/trustiot-v2#150).
     assistant:
       - ai-gateway
       - telemetry-query
       - assets
       - postgres
+      - dashboard-check
 
 # Internal identity (decision 27): for every request that passes the cookie check, the identity
 # service signs a short-lived token for the backend, and every service verifies it with the

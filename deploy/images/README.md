@@ -12,6 +12,7 @@ release.yml 發佈的容器映像。每個子目錄是一個映像，目錄名�
 | `assets` | 資產服務（`services/assets`），chart 的 `services.assets`；2026-10-14 加入（Laysi/trustiot-v2#65），nightly 從原始碼建置它並經入口呼叫它的 API |
 | `assistant` | AI 助理（`services/assistant`），chart 的 `services.assistant`；2026-10-24 加入（Laysi/trustiot-v2#592），nightly 從原始碼建置並以兩份 values 部署它，等它以 `assistant_app` 登入 Postgres、就緒（chart README「AI 助理」）。它只經 mesh 內的純 HTTP 呼叫 AI 閘道與其他服務，不需要供應商的 CA bundle |
 | `certs` | 憑證服務（`services/certs`），chart 的 `services.certs`；只放服務本身的執行檔 `certs`（`bin = "certs"`），離線根 CA 儀式工具 `certs-ca` 不進映像。2026-10-21 加入（Laysi/trustiot-v2#78）；2026-10-23（Laysi/trustiot-v2#517）起 nightly 從原始碼建置並以兩份 values 部署它，同一次建置編出的 `certs-ca` 留在 runner 上，為每次執行建立測試根 CA |
+| `dashboard-check` | 儀表板檢查（`services/dashboard-check`），chart 的 `services.dashboard-check`；服務加上 Debian 的 `chromium-headless-shell` 與 SPA（`frontend/`）建置結果的沙箱檔案，以自己的 Containerfile 打包（見下方「自帶 Containerfile 的 Rust 服務」與[它的 README](dashboard-check/README.md)）。2026-10-26 加入（Laysi/trustiot-v2#150） |
 | `identity` | 身分服務（`services/identity`），chart 的 `services.identity`；2026-10-11 加入（Laysi/trustiot-v2#308），arm64 啟動驗證見[測試報告](../../docs/test-reports/2026-10-11-308-identity-image.md)；nightly 從 Laysi/trustiot-v2#65 起從原始碼建置並部署它 |
 | `migrate` | migration Job（`tools/migrate`），chart 的 `migrate.image`；Job 執行 `migrate run`，每個服務 pod 的 init container 執行 `migrate wait-for-job`，叢集內 ClickHouse 的 init container 執行 `migrate clickhouse-admin-password`（Laysi/trustiot-v2#403），身分服務 pod 的 init container 執行 `migrate identity-signing-keys`（Laysi/trustiot-v2#404），憑證服務 pod 的 init container 執行 `migrate certs-ca-keys`（Laysi/trustiot-v2#78），MQTT broker pod 的 init container 與 sidecar 執行 `migrate mqtt-broker-accounts`、`migrate mqtt-broker-trust`（Laysi/trustiot-v2#84）。2026-10-13 加入（Laysi/trustiot-v2#60），nightly 從原始碼建置它 |
 | `mqtt-bridge` | MQTT 轉接（`services/mqtt-bridge`），chart 的 `services.mqtt-bridge`；2026-10-23 加入（Laysi/trustiot-v2#85），nightly 還沒有建置或部署它 |
@@ -49,11 +50,33 @@ project = "frontend"        # 相對於 repo 根目錄的 Bun 專案
 - 再以 web 服務啟動時的規則檢查 `dist/`（`scripts/release/static-build.ts` 的 `staticSiteProblems`，與 `services/web/src/site.rs` 相同，`bun test scripts/release` 比對兩邊的副檔名清單與大小上限）：根目錄要有 `index.html`；只能有一般檔案與目錄，不能有符號連結；檔名與目錄名只用英數字與 `_`、`-`、`.`（`.` 不能開頭）；副檔名只能是 `css`、`html`、`ico`、`js`、`png`、`svg`、`txt`、`webmanifest`、`woff2`；總共不超過 32 MiB。不符就停止，不會發佈一個服務自己拒絕啟動的映像。
 - `dist/` 放進 build context 的 `www/`，檔案 0644、目錄 0755、時間都是 commit 時間；[rust-binary.Containerfile](rust-binary.Containerfile) 的 `# @STATIC@` 那一行換成 `COPY www/ /srv/www/`，擁有者是 root。沒有 `[static]` 的映像只是少了那一行註解，內容不變。
 - SBOM 只列出 Rust crate 與基底映像的套件；打包進 SPA 的 npm 套件不在其中，因為 `dist/` 裡沒有套件資料庫。
-- nightly 的 `loadServiceImage` 不建 `[static]` 專案，所以不能用它建帶 `[static]` 的映像（建出的映像沒有網站，web 服務會拒絕啟動）。
+- nightly 的 `buildServiceImage` 以同樣的指令與檢查建 `[static]` 專案（`scripts/release/static-build.ts` 的 `buildStaticSite`），所以 nightly 建出的映像與發佈的有同樣的網站。
+- 同一次發佈裡，指定同一個專案的映像共用同一份建置（`buildStaticSites`）：`web` 與 `dashboard-check` 拿到同一份前端建置結果。
+
+### 自帶 Containerfile 的 Rust 服務
+
+映像除了 Rust 執行檔還需要其他套件時（例如 `dashboard-check` 的 Chromium），`image.toml` 的 `[rust]` 加上 `containerfile = "Containerfile"`，以同目錄的 `Containerfile` 取代 [rust-binary.Containerfile](rust-binary.Containerfile)（2026-10-26，Laysi/trustiot-v2#150）：
+
+```toml
+[rust]
+package = "dashboard-check"
+containerfile = "Containerfile"   # 只能是這個值：image.toml 旁邊的 Containerfile
+
+[static]
+project = "frontend"
+
+[sbom]
+packages = ["chromium-headless-shell", "chromium-common"]
+```
+
+- build context 與其他 Rust 映像相同（`scripts/release/rust-context.ts`）：執行檔以自己的名字放在根目錄、`[static]` 的建置結果在 `www/`、`Containerfile` 是這個檔案原樣。它的 `COPY` 只能讀這些檔案。
+- 規則與「自帶 Containerfile 的映像」相同：基底映像以 tag 加 digest 釘選，arm64 那一層不能有 `RUN`，要加的套件在 `FROM --platform=$BUILDPLATFORM` 的階段下載、解開後 `COPY` 進來。plan 與建立 build context 時各檢查一次，違反就停止。
+- `[sbom] packages` 是 SBOM 一定要列出的套件名稱（至少一個、不能重複）：syft 只列得出套件資料庫裡的套件，Containerfile 要自己寫出套件資料庫（`dashboard-check` 寫 `/var/lib/dpkg/status.d/`），少了任何一個就停止發佈。
+- 發佈時這類映像與其他 Rust 映像一樣在 vfs storage 打包，連同 `RUN` 的階段。
 
 ### 在 nightly 的 k3d 使用
 
-`scripts/nightly/service-image.ts` 的 `loadServiceImage(platform, "<目錄名>")` 以發佈相同的 Cargo 指令（`scripts/release/rust-build.ts` 的 `rustCrossCompileCommand`）與同一份 Containerfile 建出映像，標為 `localhost/trustiot-e2e/<目錄名>:nightly`（不推送），再以 `importImageIntoCluster` 匯入每個 k3d 節點並逐一確認。chart 以 `serviceImageValues("<目錄名>")` 的 `repository`、`tag` 與 `pullPolicy: IfNotPresent` 使用它。`scripts/nightly/run.ts` 以它建置 `NIGHTLY_IMAGES` 列出的映像：`migrate`（Laysi/trustiot-v2#60）、`identity` 與 `assets`（Laysi/trustiot-v2#65，smoke 部署它們並經入口呼叫資產服務的 API）。輸入沒變時三個映像一起從同一筆 Actions 快取載入（`scripts/nightly/image-cache.ts`），要建置時 nightly.yml 才提供 rustup 與 `.prototools` 的 zig、cargo-zigbuild、cargo-auditable。成本見 [CI 與發佈](../../docs/architecture/ci-release.md) 的「nightly.yml」。
+`scripts/nightly/service-image.ts` 的 `loadServiceImage(platform, "<目錄名>")` 以發佈相同的 Cargo 指令（`scripts/release/rust-build.ts` 的 `rustCrossCompileCommand`）、同一份 build context（`scripts/release/rust-context.ts`）與同一份 Containerfile 建出映像，標為 `localhost/trustiot-e2e/<目錄名>:nightly`（不推送），再以 `importImageIntoCluster` 匯入每個 k3d 節點並逐一確認。chart 以 `serviceImageValues("<目錄名>")` 的 `repository`、`tag` 與 `pullPolicy: IfNotPresent` 使用它。`scripts/nightly/run.ts` 以它建置 `NIGHTLY_IMAGES` 列出的映像：`migrate`（Laysi/trustiot-v2#60）、`identity` 與 `assets`（Laysi/trustiot-v2#65，smoke 部署它們並經入口呼叫資產服務的 API）。輸入沒變時三個映像一起從同一筆 Actions 快取載入（`scripts/nightly/image-cache.ts`），要建置時 nightly.yml 才提供 rustup 與 `.prototools` 的 zig、cargo-zigbuild、cargo-auditable。成本見 [CI 與發佈](../../docs/architecture/ci-release.md) 的「nightly.yml」。
 
 ## 自帶 Containerfile 的映像
 

@@ -20,11 +20,13 @@ interface Rule {
   matchUpdateTypes?: string[];
   groupName?: string;
   prBodyNotes?: string[];
+  schedule?: string[];
 }
 interface Manager {
   customType: string;
   managerFilePatterns: string[];
   matchStrings: string[];
+  versioningTemplate?: string;
 }
 interface Config {
   extends: string[];
@@ -314,7 +316,8 @@ describe("every copy of a pin is updated by the same pull request", () => {
     // The chart, the dev environment, crates/protocol/tests, tools/migrate/tests and
     // services/certs/tests (workstation.rs and broker.rs).
     expect(copies("docker.io/library/eclipse-mosquitto")).toBe(6);
-    expect(copies("gcr.io/distroless/cc-debian13")).toBe(4);
+    // The dashboard check image's own Containerfile is the fifth (Laysi/trustiot-v2#150).
+    expect(copies("gcr.io/distroless/cc-debian13")).toBe(5);
   });
 
   test("ClickHouse gets LTS minors only, and its floating tag is one", () => {
@@ -361,5 +364,46 @@ describe("every copy of a pin is updated by the same pull request", () => {
     const installed = [...readme.matchAll(/--version (\S+)/g)].map((m) => m[1]);
     expect(installed).toHaveLength(4);
     expect(new Set(installed)).toEqual(new Set([istio]));
+  });
+});
+
+// Debian packages that an image's own Containerfile takes from a pinned Debian snapshot
+// (Chromium in deploy/images/dashboard-check, Laysi/trustiot-v2#150).
+describe("Debian packages pinned in a Containerfile", () => {
+  const manager = config.customManagers.find((m) => m.matchStrings.some((s) => s.includes("datasource=(?<datasource>deb)")))!;
+  const containerfile = readFileSync(join(REPO_ROOT, "deploy", "images", "dashboard-check", "Containerfile"), "utf8");
+
+  test("the deb manager reads the Chromium pin with its registry, under Debian's version order", () => {
+    expect(manager.versioningTemplate).toBe("deb");
+    expect(manager.managerFilePatterns.some((p) => new RegExp(p.replace(/^\/|\/$/g, "")).test("deploy/images/dashboard-check/Containerfile"))).toBe(true);
+    const matches = [...containerfile.matchAll(new RegExp(manager.matchStrings[0]!, "g"))];
+    expect(matches.map((m) => m.groups)).toEqual([
+      {
+        datasource: "deb",
+        depName: "chromium-headless-shell",
+        registryUrl: "https://deb.debian.org/debian-security?suite=trixie-security&components=main&binaryArch=arm64",
+        currentValue: /^ARG CHROMIUM_VERSION=(\S+)$/m.exec(containerfile)![1]!,
+      },
+    ]);
+  });
+
+  test("every `# renovate:` annotation in a Containerfile is read by the deb manager", () => {
+    const files = Bun.spawnSync(["git", "ls-files", "--cached", "--others", "--exclude-standard"], { cwd: REPO_ROOT })
+      .stdout.toString()
+      .split("\n")
+      .filter((file) => /(^|\/)Containerfile$/.test(file));
+    expect(files).toContain("deploy/images/dashboard-check/Containerfile");
+    for (const file of files) {
+      const text = readFileSync(join(REPO_ROOT, file), "utf8");
+      const annotations = [...text.matchAll(/^# renovate:.*$/gm)].length;
+      expect({ file, read: [...text.matchAll(new RegExp(manager.matchStrings[0]!, "g"))].length }).toEqual({ file, read: annotations });
+    }
+  });
+
+  test("a Chromium update is proposed at once and names the snapshot it has to move", () => {
+    const rule = rulesFor((r) => (r.matchDatasources?.includes("deb") ?? false) && (r.matchPackageNames?.includes("chromium-headless-shell") ?? false));
+    expect(rule.schedule).toEqual(["at any time"]);
+    expect(rule.prBodyNotes?.join(" ")).toContain("DEBIAN_SNAPSHOT");
+    expect(containerfile).toMatch(/^ARG DEBIAN_SNAPSHOT=\d{8}T\d{6}Z$/m);
   });
 });

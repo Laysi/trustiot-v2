@@ -316,15 +316,18 @@ migration Job (through the API) may use it. */ -}}
 
 {{/*
 CA certificates of the databases that one service connects to, mounted read-only (they are public
-certificates, kept in Secrets): an external ClickHouse's CA into every service, and the Postgres
-server's CA into the services that use Postgres ("trustiot.postgres.clients"), from
-postgres.external.caSecret or, bundled, the certificate in CloudNativePG's <cluster>-ca.
+certificates, kept in Secrets): an external ClickHouse's CA into every service but the dashboard
+check, and the Postgres server's CA into the services that use Postgres
+("trustiot.postgres.clients"), from postgres.external.caSecret or, bundled, the certificate in
+CloudNativePG's <cluster>-ca.
 Argument: dict "root" $ "name" <service>.
 Returns a YAML list of {volume, secret, key, dir}; use with fromYamlArray.
 */}}
 {{- define "trustiot.caMounts" -}}
 {{- $root := .root -}}
 {{- $mounts := list -}}
+{{- /* The dashboard check reaches no dependency (_dashboard-check.tpl). */ -}}
+{{- if not (include "trustiot.dashboardCheck.is" .name) -}}
 {{- $postgresCa := include "trustiot.postgres.caSecret" $root | fromYaml -}}
 {{- if and $postgresCa.name (has .name (include "trustiot.postgres.clients" $root | fromYaml).services) -}}
 {{- $mounts = append $mounts (dict "volume" "postgres-ca" "secret" $postgresCa.name "key" $postgresCa.key "dir" "/etc/trustiot/postgres-ca") -}}
@@ -332,6 +335,7 @@ Returns a YAML list of {volume, secret, key, dir}; use with fromYamlArray.
 {{- with $root.Values.clickhouse -}}
 {{- if and (eq .mode "external") .external.caSecret.name -}}
 {{- $mounts = append $mounts (dict "volume" "clickhouse-ca" "secret" .external.caSecret.name "key" .external.caSecret.key "dir" "/etc/trustiot/clickhouse-ca") -}}
+{{- end -}}
 {{- end -}}
 {{- end -}}
 {{- toYaml $mounts -}}

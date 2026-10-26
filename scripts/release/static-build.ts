@@ -153,8 +153,19 @@ export function copyStaticSite(dist: string, dest: string, epoch: number): void 
   copy(dist, dest);
 }
 
-/** Builds and checks one project; returns its build output. */
-async function buildStaticSite(root: string, project: string, bun: string): Promise<string> {
+/** Runs one of staticBuildCommands from the repository root; throws when it fails. */
+export type StaticBuildRunner = (cmd: string[]) => Promise<unknown>;
+
+/**
+ * Builds and checks one project; returns its build output. `runCommand` runs each command from
+ * the repository root (the release streams their output; the nightly logs it in its run log).
+ */
+export async function buildStaticSite(
+  root: string,
+  project: string,
+  bun: string,
+  runCommand: StaticBuildRunner = (cmd) => run(cmd, { cwd: root, stream: true }),
+): Promise<string> {
   const dir = join(root, project);
   const dotenv = dotenvFiles(dir);
   if (dotenv.length > 0) {
@@ -167,7 +178,7 @@ async function buildStaticSite(root: string, project: string, bun: string): Prom
   rmSync(dist, { recursive: true, force: true });
   for (const cmd of staticBuildCommands(bun, project)) {
     log("build", `${project}: bun ${cmd.slice(1).join(" ")}`);
-    await run(cmd, { cwd: root, stream: true });
+    await runCommand(cmd);
   }
   const problems = staticSiteProblems(dist);
   if (problems.length > 0) {
@@ -178,13 +189,26 @@ async function buildStaticSite(root: string, project: string, bun: string): Prom
 
 /**
  * Builds the `[static]` project of every planned image that has one, with `bun` (this process's
- * own Bun, the one .prototools pins, by default); returns image → its checked build output.
+ * own Bun, the one .prototools pins, by default); returns image → its checked build output. A
+ * project is built once, and every image that names it gets that one build: the web image and
+ * the dashboard check image hold the same frontend build of the release.
  */
-export async function buildStaticSites(plan: ReleasePlan, root: string, bun: string = process.execPath): Promise<Map<string, string>> {
+export async function buildStaticSites(
+  plan: ReleasePlan,
+  root: string,
+  bun: string = process.execPath,
+  build: (root: string, project: string, bun: string) => Promise<string> = buildStaticSite,
+): Promise<Map<string, string>> {
   const sites = new Map<string, string>();
+  const built = new Map<string, string>();
   for (const image of plan.images) {
     if (image.staticSite !== undefined) {
-      sites.set(image.name, await buildStaticSite(root, image.staticSite, bun));
+      let dist = built.get(image.staticSite);
+      if (dist === undefined) {
+        dist = await build(root, image.staticSite, bun);
+        built.set(image.staticSite, dist);
+      }
+      sites.set(image.name, dist);
     }
   }
   return sites;

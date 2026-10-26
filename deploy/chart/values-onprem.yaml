@@ -35,3 +35,6 @@ observability:
   collector:
     forward:
       enabled: false
+
+# services.dashboard-check stays off: the AI dashboards come to on-prem after SaaS (decision 33;
+# README.md, 「儀表板檢查」).
