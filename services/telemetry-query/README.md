@@ -9,7 +9,9 @@
 
 Laysi/trustiot-v2#142（2026-10-26）加上語意查詢 API：多個資料點在使用者時區的相對期間內的統計與用量（用電量等累計值），給 AI 的語意工具與儀表板用（見[語意查詢](#語意查詢)）。
 
-不包含：健康狀態歷史、首頁卡片、依方案的期間（Laysi/trustiot-v2#453）；異常區段、斷訊、停機與比較（Laysi/trustiot-v2#455）；儀表板重跑 SQL 的呼叫端（Laysi/trustiot-v2#150）。
+Laysi/trustiot-v2#150 的儀表板以打開它的使用者身分重跑資料集：SQL 資料集送到 AI 的 SQL 入口，語意資料集把存下的請求本文重送到語意查詢 API；呼叫端是 AI 助理（[services/assistant](../assistant/README.md)「儀表板」）。
+
+不包含：健康狀態歷史、首頁卡片、依方案的期間（Laysi/trustiot-v2#453）；異常區段、斷訊、停機與比較（Laysi/trustiot-v2#455）。
 
 ## 租戶帳號
 
@@ -68,7 +70,7 @@ Laysi/trustiot-v2#142（2026-10-26）加上語意查詢 API：多個資料點在
 
 ## AI 的唯讀 SQL
 
-`src/sql/`、`src/sql_api.rs`（Laysi/trustiot-v2#143）：AI 助理（之後還有 Laysi/trustiot-v2#150 的儀表板）以使用者的身分送來一個 `SELECT`，服務自己檢查，再以呼叫者租戶的帳號執行，所以 row policy、可查期間、settings profile 與 quota 照樣管住它。請求與回應的型別在 [crates/contract](../../crates/contract/README.md) 的 `api::telemetry_query`。
+`src/sql/`、`src/sql_api.rs`（Laysi/trustiot-v2#143）：AI 助理（SQL 工具，以及 Laysi/trustiot-v2#150 的儀表板資料集）以使用者的身分送來一個 `SELECT`，服務自己檢查，再以呼叫者租戶的帳號執行，所以 row policy、可查期間、settings profile 與 quota 照樣管住它。請求與回應的型別在 [crates/contract](../../crates/contract/README.md) 的 `api::telemetry_query`。
 
 - **路由**：`POST /internal/telemetry/v1/sql`，不在 `api/openapi.json`。入口 gateway 拒絕所有 `/internal*`（chart 的 `<release>-ingress-deny-internal`），mesh 只開放 assistant 呼叫這個服務（`mesh.calls`）。
 - **呼叫者**：內部身分 token 必須是 token 交換換出的（有 `act`），`act` 在 `SQL_CALLERS` 裡（目前只有 `assistant`），而且帶租戶與這個版本認得的角色；viewer、editor、admin 都可以（2026-10-26 決定）。使用者自己經入口的請求沒有 `act`，回 403。

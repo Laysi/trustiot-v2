@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -153,15 +153,9 @@ describe("the check's sessions", () => {
     const history = readFileSync(join(REPO_ROOT, "services", "telemetry-query", "src", "history.rs"), "utf8");
     expect(history).toContain(`pub const LATEST_PATH: &str = "${TELEMETRY_LATEST_PATH}";`);
     expect(history).toContain(`MessageKey::new("${ACCOUNT_NOT_READY}")`);
-    // The assistant's public API (services/assistant/src/api/) comes with Laysi/trustiot-v2#150's
-    // backend; until that is in the tree, the path is the contract's prefix plus the list.
-    const dashboards = join(REPO_ROOT, "services", "assistant", "src", "api", "dashboards.rs");
-    if (existsSync(join(REPO_ROOT, "services", "assistant", "src", "api"))) {
-      expect(readFileSync(dashboards, "utf8")).toContain(`pub const DASHBOARDS_PATH: &str = "${ASSISTANT_DASHBOARDS_PATH}";`);
-    } else {
-      expect(readFileSync(join(REPO_ROOT, "crates", "contract", "src", "api", "dashboard", "public.rs"), "utf8")).toContain("(`/api/assistant/v1`");
-      expect(ASSISTANT_DASHBOARDS_PATH).toBe("/api/assistant/v1/dashboards");
-    }
+    // The assistant's list of saved dashboards (Laysi/trustiot-v2#150).
+    const dashboards = readFileSync(join(REPO_ROOT, "services", "assistant", "src", "api", "dashboards.rs"), "utf8");
+    expect(dashboards).toContain(`pub const DASHBOARDS_PATH: &str = "${ASSISTANT_DASHBOARDS_PATH}";`);
   });
 });
 
