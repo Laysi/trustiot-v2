@@ -20,7 +20,7 @@ mod dashboard_world;
 use assistant::dashboards::store::{self, Access, ListCursor, StoreError, VersionCursor};
 use contract::api::dashboard::public::{DashboardKind, SavedBase, VersionOrigin};
 use contract::{DashboardId, TenantId, TenantRole};
-use dashboard_world::{Content, Person, World, finish, world};
+use dashboard_world::{Content, Person, World, finish, unlimited, world};
 use sqlx::Row;
 use uuid::Uuid;
 
@@ -277,7 +277,7 @@ async fn publishing_adds_versions_to_the_saved_dashboard_and_refuses_when_it_cha
         .await;
     assert!(matches!(forked, Err(StoreError::Archived)), "{forked:?}");
     let mut tx = world.tx(&alice).await;
-    let restored = store::restore(&mut tx, alice.requester(), saved, 1, 4).await;
+    let restored = store::restore(&mut tx, alice.requester(), saved, 1, 4, unlimited).await;
     tx.rollback().await.expect("roll back");
     assert!(
         matches!(restored, Err(StoreError::Archived)),
@@ -303,7 +303,8 @@ async fn who_may_publish_restore_and_archive() {
     let editor = world.person(tenant, TenantRole::Editor);
     let viewer = world.person(tenant, TenantRole::Viewer);
     let admin = world.person(tenant, TenantRole::Admin);
-    let (_, _, saved) = world.saved(&editor, &Content::new("Saved")).await;
+    let (saved_conversation, saved_draft, saved) =
+        world.saved(&editor, &Content::new("Saved")).await;
     let viewer_conversation = world.conversation(&viewer).await;
     let viewer_draft = world
         .create_draft(
@@ -321,7 +322,7 @@ async fn who_may_publish_restore_and_archive() {
         "{published:?}"
     );
     let mut tx = world.tx(&viewer).await;
-    let restored = store::restore(&mut tx, viewer.requester(), saved, 1, 1).await;
+    let restored = store::restore(&mut tx, viewer.requester(), saved, 1, 1, unlimited).await;
     let archived = store::set_archived(&mut tx, viewer.requester(), saved, true).await;
     let unarchived = store::set_archived(&mut tx, viewer.requester(), saved, false).await;
     tx.rollback().await.expect("roll back");
@@ -351,7 +352,7 @@ async fn who_may_publish_restore_and_archive() {
         .await
         .expect("version 2");
     let mut tx = world.tx(&viewer).await;
-    let stale = store::restore(&mut tx, viewer.requester(), viewer_draft, 1, 1).await;
+    let stale = store::restore(&mut tx, viewer.requester(), viewer_draft, 1, 1, unlimited).await;
     tx.rollback().await.expect("roll back");
     assert!(
         matches!(stale, Err(StoreError::VersionConflict { latest: 2 })),
@@ -359,7 +360,15 @@ async fn who_may_publish_restore_and_archive() {
     );
     for missing in [0, 3] {
         let mut tx = world.tx(&viewer).await;
-        let restored = store::restore(&mut tx, viewer.requester(), viewer_draft, missing, 2).await;
+        let restored = store::restore(
+            &mut tx,
+            viewer.requester(),
+            viewer_draft,
+            missing,
+            2,
+            unlimited,
+        )
+        .await;
         tx.rollback().await.expect("roll back");
         assert!(
             matches!(restored, Err(StoreError::VersionNotFound)),
@@ -367,7 +376,7 @@ async fn who_may_publish_restore_and_archive() {
         );
     }
     let mut tx = world.tx(&viewer).await;
-    let restored = store::restore(&mut tx, viewer.requester(), viewer_draft, 1, 2).await;
+    let restored = store::restore(&mut tx, viewer.requester(), viewer_draft, 1, 2, unlimited).await;
     let restored = finish(tx, restored).await.expect("restore version 1");
     assert_eq!(restored.version, 3);
     let mut tx = world.tx(&viewer).await;
@@ -412,10 +421,10 @@ async fn who_may_publish_restore_and_archive() {
             store::list_drafts(&mut tx, other.principal(), viewer_conversation, None)
                 .await
                 .err(),
-            store::restore(&mut tx, other.requester(), viewer_draft, 1, 3)
+            store::restore(&mut tx, other.requester(), viewer_draft, 1, 3, unlimited)
                 .await
                 .err(),
-            store::publish(&mut tx, other.requester(), viewer_draft, 1)
+            store::publish(&mut tx, other.requester(), viewer_draft, 1, unlimited)
                 .await
                 .err(),
             store::set_archived(&mut tx, other.requester(), viewer_draft, true)
@@ -434,7 +443,7 @@ async fn who_may_publish_restore_and_archive() {
 
     // The kinds: a saved dashboard is not published, a draft is not archived.
     let mut tx = world.tx(&admin).await;
-    let published = store::publish(&mut tx, admin.requester(), saved, 1).await;
+    let published = store::publish(&mut tx, admin.requester(), saved, 1, unlimited).await;
     tx.rollback().await.expect("roll back");
     assert!(
         matches!(published, Err(StoreError::DraftRequired)),
@@ -458,12 +467,27 @@ async fn who_may_publish_restore_and_archive() {
     );
 
     // An editor restores a saved dashboard; an admin archives it.
+    world
+        .write_draft(
+            &editor,
+            saved_conversation,
+            saved_draft,
+            1,
+            None,
+            &Content::new("Saved 2"),
+        )
+        .await
+        .expect("version 2 of the editor's draft");
+    world
+        .publish(&editor, saved_draft, 2)
+        .await
+        .expect("publish version 2");
     let mut tx = world.tx(&editor).await;
-    let restored = store::restore(&mut tx, editor.requester(), saved, 1, 1).await;
+    let restored = store::restore(&mut tx, editor.requester(), saved, 1, 2, unlimited).await;
     let restored = finish(tx, restored)
         .await
         .expect("restore the saved dashboard");
-    assert_eq!((restored.dashboard_id, restored.version), (saved, 2));
+    assert_eq!((restored.dashboard_id, restored.version), (saved, 3));
     let mut tx = world.tx(&admin).await;
     let archived = store::set_archived(&mut tx, admin.requester(), saved, true).await;
     finish(tx, archived).await.expect("archive");

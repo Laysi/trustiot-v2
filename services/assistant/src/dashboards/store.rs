@@ -22,7 +22,9 @@
 //! added, numbered from 1 without gaps; restoring and publishing copy a version in the database,
 //! so a copy is byte for byte its source. Who may publish, restore and archive is checked here,
 //! from the [`Requester`]'s role and [`Access`], with the same rule the API shows as
-//! [`Permissions`] ([`permissions`]).
+//! [`Permissions`] ([`permissions`]). Publishing and restoring ask the caller's budget
+//! (`admit`, [`super::limits::VersionBudget`] in the API) only after every check passed, just
+//! before they write, so a refused request counts nothing.
 //!
 //! A draft's conversation is read without a row lock: the service role cannot lock
 //! conversations (it has no UPDATE on them). A conversation purged while a version is written
@@ -30,6 +32,8 @@
 //! new draft's foreign key check waits for the purge. Laysi/trustiot-v2#644, which adds soft
 //! delete and gives the role a column UPDATE on conversations, locks the conversation
 //! (`FOR SHARE`) in [`conversation_access`] for writes.
+
+use std::time::Duration;
 
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
@@ -46,6 +50,7 @@ use sqlx::Row;
 use sqlx::postgres::PgRow;
 use uuid::Uuid;
 
+use super::caps::Limited;
 use crate::history::Principal;
 
 /// The most versions a dashboard may have (the table's limit).
@@ -134,6 +139,15 @@ const SELECT_VERSION: &str = "SELECT version, runtime, title, description, spec,
     restored_from, created_by::text AS created_by, created_at
 FROM assistant.dashboard_versions
 WHERE tenant_id = $1::uuid AND dashboard_id = $2::uuid AND version = $3";
+
+/// `$1` tenant, `$2` dashboard, `$3` and `$4` two of its versions: whether their content (the
+/// runtime, title, description, spec and page) is the same, byte for byte. No row when either
+/// does not exist.
+const SAME_CONTENT: &str = "SELECT (a.runtime, a.title, a.description, a.spec, a.page)
+    IS NOT DISTINCT FROM (b.runtime, b.title, b.description, b.spec, b.page) AS same
+FROM assistant.dashboard_versions a
+JOIN assistant.dashboard_versions b ON b.tenant_id = a.tenant_id AND b.dashboard_id = a.dashboard_id
+WHERE a.tenant_id = $1::uuid AND a.dashboard_id = $2::uuid AND a.version = $3 AND b.version = $4";
 
 /// `$1` tenant, `$2` dashboard, `$3` version: its spec.
 const SELECT_SPEC: &str = "SELECT spec
@@ -236,6 +250,13 @@ pub enum StoreError {
     /// The dashboard has [`MAX_VERSIONS`] versions.
     #[error("the dashboard has the most versions it may have")]
     TooManyVersions,
+    /// A restore of a version whose content is the latest version's: it would change nothing.
+    #[error("the restored version's content is the latest version's")]
+    Unchanged,
+    /// The requester, or the tenant for this kind of dashboard, added as many versions as the
+    /// minute allows ([`super::limits::VersionBudget`]); nothing was written.
+    #[error("the budget of versions for the minute is used: retry after {retry_after:?}")]
+    Limited { retry_after: Duration },
     /// Another transaction wrote the same row first; the caller may try again.
     #[error("a concurrent write")]
     Concurrent,
@@ -598,16 +619,20 @@ pub async fn fork(
 /// ([`StoreError::DraftRequired`]); the requester owns its conversation
 /// ([`StoreError::OwnerRequired`]); the version exists ([`StoreError::VersionNotFound`]); the
 /// saved dashboard is not archived ([`StoreError::Archived`]) and has no version newer than the
-/// draft's base ([`StoreError::SavedChanged`]).
+/// draft's base ([`StoreError::SavedChanged`]); it has room for one more
+/// ([`StoreError::TooManyVersions`]). Then `admit` is asked, with the kind of dashboard the
+/// version goes to, whether the version may be added ([`StoreError::Limited`]), and it is
+/// written.
 ///
 /// # Errors
 ///
-/// As above; [`StoreError::TooManyVersions`]; a database failure.
+/// As above; a database failure.
 pub async fn publish(
     tx: &mut TenantTransaction,
     requester: Requester,
     draft_id: DashboardId,
     version: u32,
+    admit: impl FnOnce(DashboardKind) -> Result<(), Limited>,
 ) -> Result<VersionCreated, StoreError> {
     let tenant = requester.principal.tenant_id;
     check_tenant(tx, tenant)?;
@@ -630,11 +655,7 @@ pub async fn publish(
     }
     let user = requester.principal.user_id;
     let (saved_id, next) = match draft.saved {
-        None => {
-            let saved_id = DashboardId::generate();
-            insert_dashboard(tx, tenant, saved_id, DashboardKind::Saved, None, None, user).await?;
-            (saved_id, 1)
-        }
+        None => (None, 1),
         Some(base) => {
             let saved = lock(tx, tenant, base.dashboard_id)
                 .await?
@@ -648,7 +669,16 @@ pub async fn publish(
                     latest: saved_latest,
                 });
             }
-            (base.dashboard_id, next_version(saved_latest)?)
+            (Some(base.dashboard_id), next_version(saved_latest)?)
+        }
+    };
+    admit(DashboardKind::Saved).map_err(limited)?;
+    let saved_id = match saved_id {
+        Some(saved_id) => saved_id,
+        None => {
+            let saved_id = DashboardId::generate();
+            insert_dashboard(tx, tenant, saved_id, DashboardKind::Saved, None, None, user).await?;
+            saved_id
         }
     };
     copy_version(
@@ -674,17 +704,21 @@ pub async fn publish(
 /// dashboard the requester is an editor or admin ([`StoreError::EditorRequired`]), for a draft
 /// the requester owns its conversation ([`StoreError::OwnerRequired`]); `from_version` exists
 /// ([`StoreError::VersionNotFound`]); the dashboard is not archived ([`StoreError::Archived`]);
-/// `base_version` is the latest ([`StoreError::VersionConflict`]).
+/// `base_version` is the latest ([`StoreError::VersionConflict`]); `from_version`'s content is
+/// not the latest version's ([`StoreError::Unchanged`]); it has room for one more
+/// ([`StoreError::TooManyVersions`]). Then `admit` is asked, with the dashboard's kind, whether
+/// the version may be added ([`StoreError::Limited`]), and it is written.
 ///
 /// # Errors
 ///
-/// As above; [`StoreError::TooManyVersions`]; a database failure.
+/// As above; a database failure.
 pub async fn restore(
     tx: &mut TenantTransaction,
     requester: Requester,
     dashboard_id: DashboardId,
     from_version: u32,
     base_version: u32,
+    admit: impl FnOnce(DashboardKind) -> Result<(), Limited>,
 ) -> Result<VersionCreated, StoreError> {
     let tenant = requester.principal.tenant_id;
     check_tenant(tx, tenant)?;
@@ -708,7 +742,11 @@ pub async fn restore(
     if base_version != latest {
         return Err(StoreError::VersionConflict { latest });
     }
+    if same_content(tx, tenant, dashboard_id, from_version, latest).await? {
+        return Err(StoreError::Unchanged);
+    }
     let next = next_version(latest)?;
+    admit(row.kind).map_err(limited)?;
     copy_version(
         tx,
         tenant,
@@ -1010,6 +1048,13 @@ fn check_tenant(tx: &TenantTransaction, tenant: TenantId) -> Result<(), StoreErr
     }
 }
 
+/// The [`StoreError::Limited`] of the minute's budget's refusal.
+const fn limited(refused: Limited) -> StoreError {
+    StoreError::Limited {
+        retry_after: refused.retry_after,
+    }
+}
+
 /// The version after `latest`, within [`MAX_VERSIONS`].
 fn next_version(latest: u32) -> Result<u32, StoreError> {
     if latest >= MAX_VERSIONS {
@@ -1044,6 +1089,27 @@ async fn latest_version(
         .await?
         .try_get("latest")?;
     u32::try_from(latest).map_err(|_| StoreError::Corrupt("a negative version"))
+}
+
+/// Whether two versions of the dashboard hold the same content; [`StoreError::VersionNotFound`]
+/// when either does not exist.
+async fn same_content(
+    tx: &mut TenantTransaction,
+    tenant: TenantId,
+    dashboard_id: DashboardId,
+    one: u32,
+    other: u32,
+) -> Result<bool, StoreError> {
+    let same: bool = sqlx::query(SAME_CONTENT)
+        .bind(tenant.to_string())
+        .bind(dashboard_id.to_string())
+        .bind(version_column(one)?)
+        .bind(version_column(other)?)
+        .fetch_optional(&mut **tx)
+        .await?
+        .ok_or(StoreError::VersionNotFound)?
+        .try_get("same")?;
+    Ok(same)
 }
 
 async fn insert_dashboard(

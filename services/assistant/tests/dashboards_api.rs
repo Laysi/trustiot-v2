@@ -407,18 +407,29 @@ async fn the_requests_role_decides_who_publishes_restores_and_archives() {
     assert_eq!(version_count(&world, draft).await, 1);
 
     // A viewer restores their own draft.
+    world
+        .write_draft(
+            &viewer,
+            conversation,
+            draft,
+            1,
+            None,
+            &Content::new("Viewer's second"),
+        )
+        .await
+        .expect("version 2");
     let restored = call(
         base,
         Method::POST,
         &action(draft, "restore"),
         Some(&as_viewer),
-        Some(&json!({"from_version": 1, "base_version": 1})),
+        Some(&json!({"from_version": 1, "base_version": 2})),
     )
     .await;
     assert_eq!(restored.status, 201, "{restored:?}");
     assert_eq!(
         restored.json(),
-        json!({"dashboard_id": draft, "version": 2})
+        json!({"dashboard_id": draft, "version": 3})
     );
 
     // The role is the token's, on every request: the same user made an editor publishes.
@@ -440,7 +451,7 @@ async fn the_requests_role_decides_who_publishes_restores_and_archives() {
         Method::POST,
         &action(draft, "publish"),
         Some(&world.token(&promoted)),
-        Some(&json!({"version": 2})),
+        Some(&json!({"version": 3})),
     )
     .await;
     assert_eq!(published.status, 201, "{published:?}");
@@ -451,7 +462,7 @@ async fn the_requests_role_decides_who_publishes_restores_and_archives() {
         Method::POST,
         &action(draft, "publish"),
         Some(&as_viewer),
-        Some(&json!({"version": 2})),
+        Some(&json!({"version": 3})),
     )
     .await;
     assert_error(
@@ -809,6 +820,257 @@ async fn versions_are_added_kept_restored_and_publishing_over_a_change_conflicts
     assert_eq!(unarchived.json(), json!({"dashboard_id": saved}));
     let list = call(base, Method::GET, DASHBOARDS, Some(&as_alice), None).await;
     assert_eq!(listed(&list), [json!(saved)]);
+}
+
+/// A restore through the API of `from_version` on `base_version`.
+async fn restore(
+    base: &str,
+    token: &str,
+    dashboard: DashboardId,
+    from_version: u32,
+    base_version: u32,
+) -> Answer {
+    call(
+        base,
+        Method::POST,
+        &action(dashboard, "restore"),
+        Some(token),
+        Some(&json!({"from_version": from_version, "base_version": base_version})),
+    )
+    .await
+}
+
+/// A draft of `owner` in a new conversation with two versions of different content.
+async fn draft_with_two_versions(world: &World, owner: &Person) -> DashboardId {
+    let conversation = world.conversation(owner).await;
+    let draft = world
+        .create_draft(owner, conversation, &Content::new("First"))
+        .await
+        .dashboard_id;
+    world
+        .write_draft(owner, conversation, draft, 1, None, &Content::new("Second"))
+        .await
+        .expect("version 2");
+    draft
+}
+
+/// A 429 `dashboard.versions_limited` whose `Retry-After` and `details.retry_after` agree and
+/// lie within the minute the budget counts in.
+fn assert_versions_limited(answer: &Answer) {
+    assert_error(answer, 429, "rate_limited", "dashboard.versions_limited");
+    let header: u64 = answer
+        .header("retry-after")
+        .and_then(|value| value.parse().ok())
+        .unwrap_or_else(|| panic!("a Retry-After in seconds: {answer:?}"));
+    assert!((1..=60).contains(&header), "{answer:?}");
+    assert_eq!(
+        answer.json()["details"]["retry_after"],
+        json!(header),
+        "{answer:?}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn versions_added_by_publishing_and_restoring_are_limited_per_user_and_tenant_in_a_minute() {
+    let Some(Setup { world, api, .. }) = setup(RunCaps::default()).await else {
+        return;
+    };
+    let base = api.url.as_str();
+    let tenant = TenantId::generate();
+    let [alice, bob, carol, dave, erin] =
+        std::array::from_fn(|_| world.person(tenant, TenantRole::Editor));
+    let viewer = world.person(tenant, TenantRole::Viewer);
+    let alice_draft = draft_with_two_versions(&world, &alice).await;
+    let as_alice = world.token(&alice);
+    let publish = |token: &str, draft: DashboardId, version: u32| {
+        let token = token.to_owned();
+        async move {
+            call(
+                base,
+                Method::POST,
+                &action(draft, "publish"),
+                Some(&token),
+                Some(&json!({"version": version})),
+            )
+            .await
+        }
+    };
+
+    // Alice adds 10 versions in the minute: restores of version 1 and 2 in turn.
+    for added in 0..10 {
+        let restored = restore(base, &as_alice, alice_draft, 1 + added % 2, 2 + added).await;
+        assert_eq!(restored.status, 201, "restore {added}: {restored:?}");
+    }
+    // An 11th version of hers, by restoring or publishing, is refused with when to try again,
+    // and nothing is written.
+    assert_versions_limited(&restore(base, &as_alice, alice_draft, 1, 12).await);
+    assert_versions_limited(&publish(&as_alice, alice_draft, 12).await);
+    assert_eq!(version_count(&world, alice_draft).await, 12);
+
+    // A request the store refuses adds no version and counts nothing: Bob's stale restore,
+    // then 10 versions of his.
+    let bob_draft = draft_with_two_versions(&world, &bob).await;
+    let as_bob = world.token(&bob);
+    let stale = restore(base, &as_bob, bob_draft, 1, 1).await;
+    assert_error(&stale, 409, "conflict", "dashboard.version_conflict");
+    for added in 0..10 {
+        let restored = restore(base, &as_bob, bob_draft, 1 + added % 2, 2 + added).await;
+        assert_eq!(restored.status, 201, "restore {added}: {restored:?}");
+    }
+    assert_versions_limited(&restore(base, &as_bob, bob_draft, 1, 12).await);
+
+    // Carol's 10 bring the tenant's drafts to 30 versions in the minute: Dave, who has added
+    // none, restores no draft now.
+    let carol_draft = draft_with_two_versions(&world, &carol).await;
+    let as_carol = world.token(&carol);
+    for added in 0..10 {
+        let restored = restore(base, &as_carol, carol_draft, 1 + added % 2, 2 + added).await;
+        assert_eq!(restored.status, 201, "restore {added}: {restored:?}");
+    }
+    let dave_draft = draft_with_two_versions(&world, &dave).await;
+    let as_dave = world.token(&dave);
+    assert_versions_limited(&restore(base, &as_dave, dave_draft, 1, 2).await);
+    assert_eq!(version_count(&world, dave_draft).await, 2);
+    // The tenant's saved dashboards have a budget of their own: Dave publishes.
+    let published = publish(&as_dave, dave_draft, 2).await;
+    assert_eq!(published.status, 201, "{published:?}");
+
+    // Requests refused for who sent them count nothing, so they cannot use up what others
+    // share: a viewer's 40 publishes (more than the tenant's 30) and Erin's 15 publishes of a
+    // version that does not exist (more than her 10). Erin then publishes.
+    let viewer_draft = draft_with_two_versions(&world, &viewer).await;
+    let as_viewer = world.token(&viewer);
+    for _ in 0..40 {
+        let refused = publish(&as_viewer, viewer_draft, 2).await;
+        assert_error(
+            &refused,
+            403,
+            "permission_denied",
+            "dashboard.editor_required",
+        );
+    }
+    let erin_draft = draft_with_two_versions(&world, &erin).await;
+    let as_erin = world.token(&erin);
+    for _ in 0..15 {
+        let refused = publish(&as_erin, erin_draft, 99).await;
+        assert_error(&refused, 404, "not_found", "dashboard.version_not_found");
+    }
+    let published = publish(&as_erin, erin_draft, 2).await;
+    assert_eq!(published.status, 201, "{published:?}");
+
+    // Another tenant's user is not held back.
+    let stranger = world.person(TenantId::generate(), TenantRole::Editor);
+    let stranger_draft = draft_with_two_versions(&world, &stranger).await;
+    let restored = restore(base, &world.token(&stranger), stranger_draft, 1, 2).await;
+    assert_eq!(restored.status, 201, "{restored:?}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_restore_that_changes_nothing_is_refused_and_a_draft_numbers_its_own_versions() {
+    let Some(Setup { world, api, .. }) = setup(RunCaps::default()).await else {
+        return;
+    };
+    let base = api.url.as_str();
+    let tenant = TenantId::generate();
+    let editor = world.person(tenant, TenantRole::Editor);
+    let viewer = world.person(tenant, TenantRole::Viewer);
+    let (_, _, saved) = world.saved(&editor, &Content::new("Saved")).await;
+    let as_editor = world.token(&editor);
+    let as_viewer = world.token(&viewer);
+
+    // Restoring the version that is the latest adds nothing: refused, nothing written.
+    let unchanged = restore(base, &as_editor, saved, 1, 1).await;
+    assert_error(&unchanged, 409, "conflict", "dashboard.restore_unchanged");
+    assert_eq!(version_count(&world, saved).await, 1);
+
+    // A viewer's draft of the saved dashboard has versions of its own: restoring it never adds
+    // a version to the saved dashboard.
+    let conversation = world.conversation(&viewer).await;
+    let draft = world
+        .fork(&viewer, conversation, saved, 1, &Content::new("Viewer's"))
+        .await
+        .expect("the viewer's draft")
+        .dashboard_id;
+    let unchanged = restore(base, &as_viewer, draft, 1, 1).await;
+    assert_error(&unchanged, 409, "conflict", "dashboard.restore_unchanged");
+    world
+        .write_draft(
+            &viewer,
+            conversation,
+            draft,
+            1,
+            None,
+            &Content::new("Viewer's second"),
+        )
+        .await
+        .expect("version 2");
+    for (from, latest) in [(1, 2), (2, 3), (1, 4)] {
+        let restored = restore(base, &as_viewer, draft, from, latest).await;
+        assert_eq!(
+            restored.json(),
+            json!({"dashboard_id": draft, "version": latest + 1}),
+            "{restored:?}"
+        );
+    }
+    // Version 5 is a copy of version 1: restoring version 1 or 3 again changes nothing either.
+    for from in [1, 3, 5] {
+        let unchanged = restore(base, &as_viewer, draft, from, 5).await;
+        assert_error(&unchanged, 409, "conflict", "dashboard.restore_unchanged");
+    }
+    assert_eq!(version_count(&world, draft).await, 5);
+    assert_eq!(version_count(&world, saved).await, 1);
+    let seen = call(base, Method::GET, &dashboard(saved), Some(&as_viewer), None).await;
+    assert_eq!(seen.json()["dashboard"]["latest_version"], 1, "{seen:?}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_dashboard_with_the_most_versions_takes_no_more_and_says_why() {
+    let Some(Setup { world, api, .. }) = setup(RunCaps::default()).await else {
+        return;
+    };
+    let base = api.url.as_str();
+    let tenant = TenantId::generate();
+    let editor = world.person(tenant, TenantRole::Editor);
+    let (_, _, saved) = world.saved(&editor, &Content::new("Saved")).await;
+    // Versions 2 to 10,000, each a copy of version 1 with its own title.
+    let mut admin = world.superuser().await;
+    sqlx::query(
+        "INSERT INTO assistant.dashboard_versions
+            (tenant_id, dashboard_id, version, origin, runtime, title, description, spec, page,
+             created_by)
+        SELECT v.tenant_id, v.dashboard_id, n, 'publish', v.runtime, 'Saved ' || n,
+            v.description, v.spec, v.page, v.created_by
+        FROM assistant.dashboard_versions v, generate_series(2, 10000) AS n
+        WHERE v.dashboard_id = $1::uuid AND v.version = 1",
+    )
+    .bind(saved.to_string())
+    .execute(&mut admin)
+    .await
+    .expect("fill the saved dashboard's versions");
+    drop(admin);
+    assert_eq!(version_count(&world, saved).await, 10_000);
+
+    // An editor's restore and the publish of a draft based on the latest are refused with the
+    // reason; nothing is written.
+    let as_editor = world.token(&editor);
+    let refused = restore(base, &as_editor, saved, 1, 10_000).await;
+    assert_error(&refused, 409, "conflict", "dashboard.too_many_versions");
+    let conversation = world.conversation(&editor).await;
+    let draft = world
+        .fork(&editor, conversation, saved, 10_000, &Content::new("Next"))
+        .await
+        .expect("a draft of the latest version")
+        .dashboard_id;
+    let refused = call(
+        base,
+        Method::POST,
+        &action(draft, "publish"),
+        Some(&as_editor),
+        Some(&json!({"version": 1})),
+    )
+    .await;
+    assert_error(&refused, 409, "conflict", "dashboard.too_many_versions");
+    assert_eq!(version_count(&world, saved).await, 10_000);
 }
 
 #[tokio::test(flavor = "multi_thread")]

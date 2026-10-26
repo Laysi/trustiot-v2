@@ -50,9 +50,10 @@ SELECT tenant_id, conversation_id, 0, 'question', 'anthropic_messages',
     convert_to('{\"role\":\"user\",\"content\":\"' || $3 || '\"}', 'UTF8')
 FROM conversation";
 
-/// One saved dashboard with its version 1, published: `$2` is the dashboard's ID, the canary
-/// the version's title. The spec has one SQL dataset, `testkit`, which the dataset run's
-/// positive control runs. Only the columns the service role may insert, so the insert probe
+/// One saved dashboard with its versions 1 and 2, published: `$2` is the dashboard's ID, the
+/// canary in both versions' titles, which differ, so the restore's positive control (version 1
+/// on version 2) adds a version. The spec has one SQL dataset, `testkit`, which the dataset
+/// run's positive control runs. Only the columns the service role may insert, so the insert probe
 /// meets row-level security, not a missing grant.
 const SEED_DASHBOARD: &str = "WITH dashboard AS (
     INSERT INTO assistant.dashboards (tenant_id, dashboard_id, kind, created_by)
@@ -61,10 +62,10 @@ const SEED_DASHBOARD: &str = "WITH dashboard AS (
 )
 INSERT INTO assistant.dashboard_versions
     (tenant_id, dashboard_id, version, origin, runtime, title, spec, page, created_by)
-SELECT tenant_id, dashboard_id, 1, 'publish', 1, $3,
+SELECT tenant_id, dashboard_id, n, 'publish', 1, CASE n WHEN 1 THEN $3 ELSE $3 || ' 2' END,
     '{\"datasets\":[{\"name\":\"testkit\",\"title\":\"Testkit\",\"description\":\"The dataset the cross-tenant suite runs.\",\"max_rows\":10,\"source\":{\"kind\":\"sql\",\"sql\":\"SELECT 1 AS one\"}}]}',
     '<main><h1>testkit</h1></main>', created_by
-FROM dashboard";
+FROM dashboard, generate_series(1, 2) AS n";
 
 #[tokio::test(flavor = "multi_thread")]
 async fn tenants_are_isolated() {
@@ -109,7 +110,7 @@ async fn tenants_are_isolated() {
                 "/api/assistant/v1/dashboards/{dashboard_id}/restore",
                 "assistant.dashboards",
             )
-            .body(json!({"from_version": 1, "base_version": 1})),
+            .body(json!({"from_version": 1, "base_version": 2})),
         )
         .endpoint(Endpoint::item(
             Method::PUT,

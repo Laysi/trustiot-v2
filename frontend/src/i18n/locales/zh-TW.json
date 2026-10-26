@@ -51,6 +51,9 @@
   "dashboard.dataset_failed": "無法載入資料，請稍後再試。",
   "dashboard.runs_limited": "組織內的儀表板目前查詢太多資料，請稍後再試。",
   "dashboard.query_quota_exhausted": "組織目前的查詢額度已用完，請稍後再試。",
+  "dashboard.restore_unchanged": "這個版本與儀表板目前的最新版本相同，回到這一版不會有任何改變。",
+  "dashboard.too_many_versions": "這個儀表板已有 10,000 個版本，達到上限，無法再加入新版本。請 AI 助理依它的最新版本建立新的儀表板並發布；舊的已發布儀表板可以封存。",
+  "dashboard.versions_limited": "你或你的組織在最近一分鐘內發布或回到舊版太多次，請稍後再試。",
 
   "device_model.body_too_large": "設備型號的內容太大，上限是 {max_bytes} 位元組。",
   "device_model.name_taken": "組織內已有同名的設備型號。",

@@ -940,7 +940,10 @@ export interface components {
              */
             tenant_telemetry_1m: string;
         };
-        /** @description Restores an older version as a new one. */
+        /**
+         * @description Restores an older version as a new one (refused with 409 `dashboard.restore_unchanged` when
+         *     its content is the latest version's).
+         */
         DashboardRestoreRequest: {
             /**
              * Format: int32
@@ -3917,7 +3920,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description The saved dashboard has a version newer than the draft's base (`dashboard.saved_changed`, `details.latest`), or is archived (`dashboard.archived`) (`conflict`). */
+            /** @description The saved dashboard has a version newer than the draft's base (`dashboard.saved_changed`, `details.latest`), is archived (`dashboard.archived`), or has 10,000 versions (`dashboard.too_many_versions`) (`conflict`). */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -3928,6 +3931,15 @@ export interface operations {
             };
             /** @description Not a draft (`validation_failed`, `dashboard.draft_required`). */
             422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The user added 10 versions by publishing and restoring in the last minute, or the tenant's users 30 to its saved dashboards (30 more to its drafts), in this replica (`rate_limited`, `dashboard.versions_limited`, `details.retry_after`, with `Retry-After`). Only a request that passed every other check counts. Nothing was written. */
+            429: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -4007,8 +4019,17 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description `base_version` is not the latest (`dashboard.version_conflict`, `details.latest`), or the dashboard is archived (`dashboard.archived`) (`conflict`). */
+            /** @description `base_version` is not the latest (`dashboard.version_conflict`, `details.latest`), the content of `from_version` is the latest version's (`dashboard.restore_unchanged`), the dashboard is archived (`dashboard.archived`), or it has 10,000 versions (`dashboard.too_many_versions`) (`conflict`). */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The user added 10 versions by publishing and restoring in the last minute, or the tenant's users 30 to its saved dashboards (30 more to its drafts), in this replica (`rate_limited`, `dashboard.versions_limited`, `details.retry_after`, with `Retry-After`). Only a request that passed every other check counts. Nothing was written. */
+            429: {
                 headers: {
                     [name: string]: unknown;
                 };

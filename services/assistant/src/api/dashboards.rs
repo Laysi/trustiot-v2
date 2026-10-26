@@ -25,11 +25,14 @@
 //! | A query string with an unknown parameter or a bad value, a bad `cursor` | 400 `invalid_request` |
 //! | A body that is not `application/json`, over 4 KiB, or not exactly the request (unknown fields refused) | 400 `invalid_request` |
 //! | Errors of the stored dashboard | as `contract::api::dashboard::public`'s keys |
+//! | A publish or restore that would add a version past the user's or the tenant's budget for the minute ([`crate::dashboards::limits::VersionBudget`]) | 429 `rate_limited`, `dashboard.versions_limited`, `Retry-After`; nothing was written |
 //! | Errors of a dataset run | [`RunError::to_error_body`]; `Retry-After` with `dashboard.runs_limited` |
 //! | The database failed | 503 `unavailable`; nothing was written |
 //!
 //! A write logs one INFO line with the user, tenant, dashboard and version; never a title,
 //! a spec or a page.
+
+use std::time::Duration;
 
 use axum::Router;
 use axum::body::Body;
@@ -42,8 +45,8 @@ use axum::routing::{get, post, put};
 use contract::api::dashboard::public::{
     ARCHIVED, ArchiveState, DATASET_FAILED, DATASET_UNKNOWN, DRAFT_REQUIRED, DashboardList,
     DashboardView, DatasetRunRequest, EDITOR_REQUIRED, OWNER_REQUIRED, PublishRequest,
-    RestoreRequest, SAVED_CHANGED, SAVED_REQUIRED, VERSION_CONFLICT, VERSION_NOT_FOUND,
-    VersionCreated, VersionList,
+    RESTORE_UNCHANGED, RestoreRequest, SAVED_CHANGED, SAVED_REQUIRED, TOO_MANY_VERSIONS,
+    VERSION_CONFLICT, VERSION_NOT_FOUND, VERSIONS_LIMITED, VersionCreated, VersionList,
 };
 use contract::api::dashboard::result::DatasetResult;
 use contract::{DashboardId, ErrorBody, ErrorCode};
@@ -287,8 +290,9 @@ async fn list_versions(
         (status = 401, description = "No valid session (`unauthenticated`).", body = ErrorBody),
         (status = 403, description = "No tenant, a viewer (`dashboard.editor_required`), or not the conversation's owner (`dashboard.owner_required`) (`permission_denied`).", body = ErrorBody),
         (status = 404, description = "No such dashboard the caller can see (`not_found`), or no such version (`dashboard.version_not_found`).", body = ErrorBody),
-        (status = 409, description = "The saved dashboard has a version newer than the draft's base (`dashboard.saved_changed`, `details.latest`), or is archived (`dashboard.archived`) (`conflict`).", body = ErrorBody),
+        (status = 409, description = "The saved dashboard has a version newer than the draft's base (`dashboard.saved_changed`, `details.latest`), is archived (`dashboard.archived`), or has 10,000 versions (`dashboard.too_many_versions`) (`conflict`).", body = ErrorBody),
         (status = 422, description = "Not a draft (`validation_failed`, `dashboard.draft_required`).", body = ErrorBody),
+        (status = 429, description = "The user added 10 versions by publishing and restoring in the last minute, or the tenant's users 30 to its saved dashboards (30 more to its drafts), in this replica (`rate_limited`, `dashboard.versions_limited`, `details.retry_after`, with `Retry-After`). Only a request that passed every other check counts. Nothing was written.", body = ErrorBody),
         (status = 503, description = "The database failed (`unavailable`). Nothing was written.", body = ErrorBody),
     )
 )]
@@ -303,7 +307,13 @@ async fn publish(
     let dashboard_id: DashboardId = parse_id(dashboard_id)?;
     let request: PublishRequest = read_body(&headers, body).await?;
     let mut tx = begin(&api.db, &user).await?;
-    let published = store::publish(&mut tx, requester, dashboard_id, request.version).await;
+    let admit = |kind| api.versions.admit(requester.principal, kind);
+    let published = store::publish(&mut tx, requester, dashboard_id, request.version, admit).await;
+    if let Err(StoreError::Limited { retry_after }) = published {
+        // Rolled back: the store wrote nothing before it asked.
+        drop(tx);
+        return Ok(versions_limited(&requester, retry_after, "publish"));
+    }
     let message = "could not publish a dashboard";
     let written = finish(tx, &user, published, Some(dashboard_id), message).await?;
     Ok(created(
@@ -328,7 +338,8 @@ async fn publish(
         (status = 401, description = "No valid session (`unauthenticated`).", body = ErrorBody),
         (status = 403, description = "No tenant, a viewer restoring a saved dashboard (`dashboard.editor_required`), or someone other than a draft's conversation owner (`dashboard.owner_required`) (`permission_denied`).", body = ErrorBody),
         (status = 404, description = "No such dashboard the caller can see (`not_found`), or no such version (`dashboard.version_not_found`).", body = ErrorBody),
-        (status = 409, description = "`base_version` is not the latest (`dashboard.version_conflict`, `details.latest`), or the dashboard is archived (`dashboard.archived`) (`conflict`).", body = ErrorBody),
+        (status = 409, description = "`base_version` is not the latest (`dashboard.version_conflict`, `details.latest`), the content of `from_version` is the latest version's (`dashboard.restore_unchanged`), the dashboard is archived (`dashboard.archived`), or it has 10,000 versions (`dashboard.too_many_versions`) (`conflict`).", body = ErrorBody),
+        (status = 429, description = "The user added 10 versions by publishing and restoring in the last minute, or the tenant's users 30 to its saved dashboards (30 more to its drafts), in this replica (`rate_limited`, `dashboard.versions_limited`, `details.retry_after`, with `Retry-After`). Only a request that passed every other check counts. Nothing was written.", body = ErrorBody),
         (status = 503, description = "The database failed (`unavailable`). Nothing was written.", body = ErrorBody),
     )
 )]
@@ -349,8 +360,14 @@ async fn restore(
         dashboard_id,
         request.from_version,
         request.base_version,
+        |kind| api.versions.admit(requester.principal, kind),
     )
     .await;
+    if let Err(StoreError::Limited { retry_after }) = restored {
+        // Rolled back: the store wrote nothing before it asked.
+        drop(tx);
+        return Ok(versions_limited(&requester, retry_after, "restore"));
+    }
     let message = "could not restore a dashboard";
     let written = finish(tx, &user, restored, Some(dashboard_id), message).await?;
     Ok(created(
@@ -510,6 +527,34 @@ async fn run_dataset(
     }
 }
 
+/// The 429 of a publish or restore that would add a version past the user's or the tenant's
+/// budget for the minute, with `Retry-After`. Nothing was written.
+fn versions_limited(
+    requester: &Requester,
+    retry_after: Duration,
+    action: &'static str,
+) -> Response {
+    let mut response = error(versions_limited_body(retry_after));
+    let seconds = retry_after.as_secs().max(1);
+    tracing::info!(
+        user_id = %requester.principal.user_id,
+        tenant_id = %requester.principal.tenant_id,
+        action,
+        retry_after = seconds,
+        "refused a dashboard version: the user or tenant used the minute's budget"
+    );
+    response
+        .headers_mut()
+        .insert(RETRY_AFTER, HeaderValue::from(seconds));
+    response
+}
+
+fn versions_limited_body(retry_after: Duration) -> ErrorBody {
+    ErrorBody::new(ErrorCode::RateLimited)
+        .with_message_key(VERSIONS_LIMITED)
+        .with_detail("retry_after", retry_after.as_secs().max(1))
+}
+
 /// The answer to a failed run, with `Retry-After` when the caps refused it.
 fn run_error(failure: &RunError) -> Response {
     let mut response = error(failure.to_error_body());
@@ -586,12 +631,16 @@ fn store_error(
             keyed(ErrorCode::Conflict, SAVED_CHANGED).with_detail("latest", *latest)
         }
         StoreError::Archived => keyed(ErrorCode::Conflict, ARCHIVED),
+        StoreError::Unchanged => keyed(ErrorCode::Conflict, RESTORE_UNCHANGED),
+        // The publish and restore handlers answer it with `Retry-After` before this.
+        StoreError::Limited { retry_after } => versions_limited_body(*retry_after),
+        StoreError::TooManyVersions => keyed(ErrorCode::Conflict, TOO_MANY_VERSIONS),
         StoreError::EditorRequired => keyed(ErrorCode::PermissionDenied, EDITOR_REQUIRED),
         StoreError::OwnerRequired => keyed(ErrorCode::PermissionDenied, OWNER_REQUIRED),
         StoreError::DraftRequired => keyed(ErrorCode::ValidationFailed, DRAFT_REQUIRED),
         StoreError::SavedRequired => keyed(ErrorCode::ValidationFailed, SAVED_REQUIRED),
         // Another write of the same dashboard came first: trying again reads the new state.
-        StoreError::Concurrent | StoreError::TooManyVersions => ErrorBody::new(ErrorCode::Conflict),
+        StoreError::Concurrent => ErrorBody::new(ErrorCode::Conflict),
         StoreError::DraftExists { .. }
         | StoreError::InvalidRebase
         | StoreError::Invalid(_)

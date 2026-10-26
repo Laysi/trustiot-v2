@@ -181,7 +181,7 @@ impl RunCaps {
 }
 
 /// `duration` rounded up to whole seconds, at least one: what `Retry-After` says.
-fn whole_seconds(duration: Duration) -> Duration {
+pub(crate) fn whole_seconds(duration: Duration) -> Duration {
     // The standard library has `impl From<bool> for u64` (stable since Rust 1.28): `true` is 1,
     // `false` is 0. The unit test `retry_after_is_whole_seconds_and_at_least_one` covers it.
     let seconds = duration.as_secs() + u64::from(duration.subsec_nanos() > 0);

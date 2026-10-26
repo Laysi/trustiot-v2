@@ -647,7 +647,7 @@
       },
       "DashboardRestoreRequest": {
         "additionalProperties": false,
-        "description": "Restores an older version as a new one.",
+        "description": "Restores an older version as a new one (refused with 409 `dashboard.restore_unchanged` when\nits content is the latest version's).",
         "properties": {
           "base_version": {
             "description": "The latest version the user saw; refused with 409 `dashboard.version_conflict` when the\ndashboard has a newer one.",
@@ -5357,7 +5357,7 @@
                 }
               }
             },
-            "description": "The saved dashboard has a version newer than the draft's base (`dashboard.saved_changed`, `details.latest`), or is archived (`dashboard.archived`) (`conflict`)."
+            "description": "The saved dashboard has a version newer than the draft's base (`dashboard.saved_changed`, `details.latest`), is archived (`dashboard.archived`), or has 10,000 versions (`dashboard.too_many_versions`) (`conflict`)."
           },
           "422": {
             "content": {
@@ -5368,6 +5368,16 @@
               }
             },
             "description": "Not a draft (`validation_failed`, `dashboard.draft_required`)."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The user added 10 versions by publishing and restoring in the last minute, or the tenant's users 30 to its saved dashboards (30 more to its drafts), in this replica (`rate_limited`, `dashboard.versions_limited`, `details.retry_after`, with `Retry-After`). Only a request that passed every other check counts. Nothing was written."
           },
           "503": {
             "content": {
@@ -5469,7 +5479,17 @@
                 }
               }
             },
-            "description": "`base_version` is not the latest (`dashboard.version_conflict`, `details.latest`), or the dashboard is archived (`dashboard.archived`) (`conflict`)."
+            "description": "`base_version` is not the latest (`dashboard.version_conflict`, `details.latest`), the content of `from_version` is the latest version's (`dashboard.restore_unchanged`), the dashboard is archived (`dashboard.archived`), or it has 10,000 versions (`dashboard.too_many_versions`) (`conflict`)."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The user added 10 versions by publishing and restoring in the last minute, or the tenant's users 30 to its saved dashboards (30 more to its drafts), in this replica (`rate_limited`, `dashboard.versions_limited`, `details.retry_after`, with `Retry-After`). Only a request that passed every other check counts. Nothing was written."
           },
           "503": {
             "content": {

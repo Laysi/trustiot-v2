@@ -28,7 +28,7 @@ AI 助理（決策 31）的主 agent 迴圈：使用者對自己租戶的資料�
 | `src/dashboards/caps.rs` | 資料集執行的上限：每個租戶、每個副本每分鐘 60 次、同時 2 個 |
 | `src/dashboards/flatten.rs` | 語意資料集（統計、用量）的回答攤平成表格 |
 | `src/dashboards/checker.rs` | 檢查服務（services/dashboard-check）的 client：每個副本同時最多 2 次檢查、送出檢查、收不到可用判定的每種情況對應成封閉的原因 |
-| `src/dashboards/limits.rs` | 每個鍵（租戶）的名額與有上限的等待：`dashboard` 工具每個租戶同時一次寫入 |
+| `src/dashboards/limits.rs` | 每個鍵（租戶）的名額與有上限的等待：`dashboard` 工具每個租戶同時一次寫入；公開 API 的發布與還原每個使用者、每個租戶每分鐘的次數（`VersionBudget`） |
 | `src/budget.rs` | 每個問題的 token 預算 |
 | `src/prompt.rs` | 平台 system prompt（有版本）與對話中的固定指示 |
 | `src/config.rs` | 設定與啟動檢查 |
@@ -192,6 +192,10 @@ service-kit 把這兩種拒絕都記成 INFO（`the identity service refused the
 - **嚴格的請求**：本文要是 `application/json`（只有一個 `Content-Type`，大小寫不拘，可以有參數；其他網域的頁面不經 CORS preflight 送不出這個型別，而沒有東西回應 preflight）、最多 4 KiB、正好是請求的 JSON 物件，未知欄位、重複的欄位、陣列寫法與多餘的值都回 400 `invalid_request`。query string 有未知參數、值不對或 `cursor` 不是本服務寫的，也是 400。
 - **不快取**：每個回應都有 `cache-control: no-store`，包括驗證失敗的 401。
 - 寫入（發布、還原、封存）各記一行 INFO（`published a dashboard`、`restored a dashboard version`、`changed whether a dashboard is archived`），只有使用者、租戶、儀表板與版本，不記標題、spec 或頁面。
+- **發布與還原的次數**（`dashboards::limits::VersionBudget`）：版本只往後加、不會刪除，所以每個使用者在任何一分鐘最多以發布與還原加 10 個版本；同一個租戶的使用者合計最多加 30 個到已儲存的儀表板，另外最多 30 個到草稿。超過時回 429 `rate_limited`、`dashboard.versions_limited`，帶 `Retry-After`（整數秒，至少 1，等到使用者與租戶都有空位）與 `details.retry_after`，記一行 INFO（`refused a dashboard version: ...`，只有使用者、租戶、動作與秒數），什麼都不寫。store 在交易裡做完其他每一項檢查、正要寫入時才計數（`admit`），所以因為身分被拒（viewer 發布、別人的草稿）或因為儀表板的狀態被拒（衝突、封存、沒有改變、版本數到上限）的請求都不算，用不掉別人共用的上限；被這個上限拒絕的也不算。已計數而交易之後失敗的仍算。草稿與已儲存的儀表板分開計，所以只能改自己草稿的 viewer 用不掉 editor 發布與還原的上限。上限以**每個副本**計：N 個副本時一個使用者每分鐘最多 N × 10 個版本。
+- **回到相同的內容**：還原的版本與最新版的內容（runtime、標題、說明、spec、頁面）逐位元組相同時回 409 `conflict`、`dashboard.restore_unchanged`，不加版本；與其他「和目前狀態衝突」的情況一樣是 409。
+- **版本數各自計算**：版本號與版本數以儀表板計（主鍵是租戶、儀表板、版本號）。草稿是自己的一個儀表板，草稿的還原只加草稿的版本；已儲存的儀表板只由 editor 以上的發布與還原加版本，viewer 對自己草稿做的事用不掉它的版本。
+- **10,000 個版本的上限**：一個儀表板最多 10,000 個版本（資料表的 CHECK 與 `store::MAX_VERSIONS`），到了之後發布與還原都回 409 `conflict`、`dashboard.too_many_versions`，什麼都不寫；已有的版本照常讀、照常執行資料集。editor 可以請 AI 助理以它的最新版本在對話裡做一個新的儀表板（新草稿），發布成新的已儲存儀表板，再封存舊的。以每個使用者每分鐘 10 次計，一個副本時一個人要連續 16 小時以上才到得了上限。
 
 錯誤都是 M1 本文；儀表板自己的 `message_key` 在 `contract::api::dashboard::public`（zh-TW 與 en 的翻譯在 `frontend/src/i18n/locales/`）：
 
@@ -206,7 +210,10 @@ service-kit 把這兩種拒絕都記成 INFO（`the identity service refused the
 | 還原時 `base_version` 不是最新版 | 409 `conflict`、`dashboard.version_conflict`，`details.latest` |
 | 發布時已儲存的儀表板在草稿的基礎版本之後有新版本 | 409 `conflict`、`dashboard.saved_changed`，`details.latest` |
 | 已封存的儀表板加版本（發布、還原） | 409 `conflict`、`dashboard.archived` |
-| 同一個儀表板的兩個寫入同時進行、或版本數到上限（10,000） | 409 `conflict` |
+| 還原的版本與最新版的內容相同 | 409 `conflict`、`dashboard.restore_unchanged` |
+| 儀表板已有 10,000 個版本（發布、還原） | 409 `conflict`、`dashboard.too_many_versions` |
+| 同一個儀表板的兩個寫入同時進行 | 409 `conflict` |
+| 使用者在一分鐘內已以發布與還原加了 10 個版本，或租戶合計已加 30 個到已儲存的儀表板（草稿另計 30 個）（每個副本） | 429 `rate_limited`、`dashboard.versions_limited`，`Retry-After` 與 `details.retry_after`；只在其他檢查都通過時才計數 |
 | 發布已儲存的儀表板、封存草稿 | 422 `validation_failed`、`dashboard.draft_required`、`dashboard.saved_required` |
 | 資料集執行的錯誤 | 見「資料集的執行」 |
 | 資料庫失敗 | 503 `unavailable`，什麼都沒寫；日誌只有 SQLSTATE 或錯誤的種類 |
@@ -271,7 +278,7 @@ service-kit 把這兩種拒絕都記成 INFO（`the identity service refused the
 | `model.cache_ttl` | `TRUSTIOT__MODEL__CACHE_TTL` | `5m` | 快取斷點的時效：`5m` 或 `1h` |
 | `budget.tokens` | `TRUSTIOT__BUDGET__TOKENS` | `2000000` | 一個問題能處理的 token；1 到 100,000,000 |
 | `budget.wind_down_percent` | `TRUSTIOT__BUDGET__WIND_DOWN_PERCENT` | `80` | 到這個百分比時請模型收尾；1 到 99 |
-| `tools.call_timeout` | `TRUSTIOT__TOOLS__CALL_TIMEOUT` | `60s` | 一次工具呼叫的上限，也是一次資料集呼叫 telemetry-query 的上限；`dashboard` 工具自己的上限是 245 秒（見「`dashboard` 工具」） |
+| `tools.call_timeout` | `TRUSTIOT__TOOLS__CALL_TIMEOUT` | `60s` | 一次工具呼叫的上限，也是一次資料集呼叫 telemetry-query 的上限；`dashboard` 工具自己的上限是 305 秒（見「`dashboard` 工具」） |
 | `tools.max_calls_per_step` | `TRUSTIOT__TOOLS__MAX_CALLS_PER_STEP` | `8` | 一次模型回應裡同時執行的工具呼叫數；之後的呼叫回錯誤、不執行；1 到 32 |
 | `tools.max_text_bytes` | `TRUSTIOT__TOOLS__MAX_TEXT_BYTES` | 64 KiB | 一個工具結果的文字上限；超過時改回錯誤，告訴模型怎麼縮小範圍。設了 `dashboard_check.url` 時至少 64 KiB（`read` 給完整的儀表板） |
 | `tools.max_images` | `TRUSTIOT__TOOLS__MAX_IMAGES` | `4` | 一個工具結果的圖片數上限；不超過 20 |
@@ -314,6 +321,7 @@ service-kit 把這兩種拒絕都記成 INFO（`the identity service refused the
 | `removed content from an answer` | INFO | `run_id`、`conversation_id`、`tenant_id`、`removed`（`code`、`html`、`sql`，逗號分隔） |
 | `published a dashboard`、`restored a dashboard version` | INFO | `user_id`、`tenant_id`、`from`（發布的草稿或還原的儀表板）、`dashboard_id`、`version`（新的版本） |
 | `changed whether a dashboard is archived` | INFO | `user_id`、`tenant_id`、`dashboard_id`、`archived` |
+| `refused a dashboard version: the user or tenant used the minute's budget` | INFO | `user_id`、`tenant_id`、`action`（`publish`、`restore`）、`retry_after`（秒）；公開 API 的 429 `dashboard.versions_limited` |
 | `refused: no tenant or no known role in it` | INFO | `user_id`、`action`；公開 API 的 403 |
 | `could not …`（例如 `could not publish a dashboard`、`could not open a transaction for an API request`） | ERROR | `user_id`、`dashboard_id`（有的時候）、`error_kind`（SQLSTATE 或錯誤的種類，沒有資料庫的文字）；公開 API 的 503 與 500 |
 
@@ -347,11 +355,11 @@ service-kit 把這兩種拒絕都記成 INFO（`the identity service refused the
 | `tests/chart_connections.rs` | chart 的 Postgres 連線預算（`trustiot.postgres.connectionBudgets`）與程式開的連線池一致：沒有其他連線池，`database.maxConnections` 的範圍與服務接受的相同；程式多了一個連線池時失敗 |
 | `tests/cross_tenant.rs` | 跨租戶負向測試（決策 29，`crates/testkit`）：對話、訊息、儀表板與版本四張表的讀、寫、搬移、插入探測與覆蓋檢查；對執行檔的每個儀表板端點（發布與對話的草稿列表除外，原因寫在豁免裡，由 `tests/dashboards_api.rs` 手寫測試），資料集執行的正向對照經替身的 token 交換與 telemetry-query 真的跑完，沒有呼叫其他服務 |
 | `tests/dashboards_store.rs` | `dashboards::store` 對真的 schema：版本只往後加、舊版本讀得回來；發布第一次建立已儲存的儀表板、之後加版本，已儲存的儀表板在草稿的基礎版本之後有新版本或已封存時拒絕；誰可以發布、還原、封存；工具只寫自己對話的草稿（別的對話與別的使用者都是不存在）；列表分頁與只列看得到的；服務角色改不了寫過的東西（觸發器與權限，`42501`）、留不下空洞；清除對話時刪掉草稿、留下已發布的；同一個草稿同時寫入時排隊、後者衝突；軟刪除的對話（等 Laysi/trustiot-v2#644，`#[ignore]`） |
-| `tests/dashboards_api.rs` | 公開 API 對真的 schema 與替身的 token 交換、telemetry-query：沒有 token、偽造的 token、沒有租戶時每個路由都拒絕；本文、query string 與 content type 不對時 400 而且什麼都沒寫（含 SQL、頁面等欄位、陣列寫法）；回應都是 `no-store`；請求的角色決定誰能發布、還原、封存（同一個使用者升降級後立即生效）；同租戶的其他使用者與其他租戶的 admin 對別人的草稿每個路由都是 404，與不存在的相同；版本、還原、發布衝突與封存；資料集以打開的 viewer 身分執行（token 的使用者、租戶、角色、受眾與 `act`），請求本文原樣、SQL 的列數上限 2,000；超過列數時拒絕並附上限；第 61 次執行與第三個同時執行回 429 而其他租戶照常、`dashboard` 工具的執行算進同一個上限；telemetry-query 的錯誤只以封閉的 key 回給使用者；沒有 token 交換時 503；打開儀表板並執行全部資料集不呼叫模型、日誌沒有標題、SQL 或頁面 |
+| `tests/dashboards_api.rs` | 公開 API 對真的 schema 與替身的 token 交換、telemetry-query：沒有 token、偽造的 token、沒有租戶時每個路由都拒絕；本文、query string 與 content type 不對時 400 而且什麼都沒寫（含 SQL、頁面等欄位、陣列寫法）；回應都是 `no-store`；請求的角色決定誰能發布、還原、封存（同一個使用者升降級後立即生效）；同租戶的其他使用者與其他租戶的 admin 對別人的草稿每個路由都是 404，與不存在的相同；版本、還原、發布衝突與封存；發布與還原每個使用者每分鐘第 11 個版本、每個租戶的草稿第 31 個版本回 429 與 `Retry-After`、什麼都沒寫，已儲存的儀表板另計（草稿用完時仍能發布）；被 store 拒絕的請求（舊的基礎版本、viewer 的 40 次發布、不存在的版本）不算，其他租戶照常；回到與最新版內容相同的版本回 409、不加版本，草稿的還原不加已儲存儀表板的版本；10,000 個版本的儀表板不能再還原或發布、回 409 與原因；資料集以打開的 viewer 身分執行（token 的使用者、租戶、角色、受眾與 `act`），請求本文原樣、SQL 的列數上限 2,000；超過列數時拒絕並附上限；第 61 次執行與第三個同時執行回 429 而其他租戶照常、`dashboard` 工具的執行算進同一個上限；telemetry-query 的錯誤只以封閉的 key 回給使用者；沒有 token 交換時 503；打開儀表板並執行全部資料集不呼叫模型、日誌沒有標題、SQL 或頁面 |
 | `tests/dashboard_tool.rs` | `dashboard` 工具對真的 schema、替身的 token 交換、telemetry-query 與檢查服務：寫入以提問的使用者身分（委派、受眾、`act`）執行每個資料集，把頁面、公開的 spec（沒有 SQL 與語意請求）與結果送去檢查，通過後才存成這個對話的草稿，`list` 與 `read` 看得到（頁面整份）；檢查不通過（數值對不上、沒對應的圖形、較新的問題種類）與每種拿不到判定的情況（503、400、500、不是判定、引用了頁面沒有的資料集、值不在資料裡（不通過與通過的判定都是）、連不上、逾時）都什麼都不存、草稿的最新版本不變，模型與日誌都看不到檢查服務的本文；模型從判定只拿到封閉的值與工具自己的資料：script 錯誤的類別而不是訊息、刻度只給軸、超出結果的列只給自己的列數、頁面文字沒有的數字不給、`too_large` 的上限是 contract 的，通過時標記的值取自自己的資料、不含刻度；別的對話、別的使用者、別的租戶的草稿都是不存在，`base_version` 舊了或沒給、輸入格式不對、`page` 與 `page_edits` 同時給、頁面過大、資料集太多各自回固定的問題，第 7 次寫入被拒、下一個問題重新計算；已儲存的儀表板只變成這個對話的一個草稿（第二次指出既有的草稿）、封存的不能改；telemetry-query 拒絕 SQL 時回 `telemetry_sql` 的類別說明，拒絕本文多了欄位時只回通用說明；撤銷的工作階段結束整個呼叫；剩下的時間不夠時不開始；同一個問題的同一個資料集只執行一次；資料集在寫入的時限內（測試設 3 秒）沒跑完時各回 `dataset_timeout`、不送檢查，跑完的留給同一個問題的下一次寫入、那次只執行沒跑完的；工具自己的呼叫時限大於資料集、檢查與存檔時限的總和；一個租戶的第二次寫入在第一次檢查時等到測試設的時限後回 `check_busy`，沒執行資料集、沒送檢查、不算進寫入次數，同時別的租戶的寫入照常存下；檢查名額設成 1 時別的租戶的檢查也等到時限後回 `check_busy` |
 | `tests/dashboard_acceptance.rs` | 跨服務的驗收（Laysi/trustiot-v2#150），經 `ask` 與照腳本回答的替身 AI 閘道，`dashboard` 工具呼叫以映像檔跑的真正檢查服務（chart 的限制：唯讀根目錄、chart 大小的記憶體 /tmp、拿掉所有 capability、no-new-privileges、預設 seccomp、chart 的記憶體上限、UID 65532），中間的 loopback 代理記下服務送出的每個判定。驗收 2：沙箱 runtime 的固定樣本（`frontend/sandbox/fixtures`）與照樣本回答的 telemetry-query 替身，模型先寫好的頁面（第 1 版），再寫一根長條只畫一半高的頁面（`mark_geometry`）與標記了不存在的列、資料集和沒對應圖形的頁面（`unmapped`），三個判定都符合 cases.json 的案例，模型收到問題，公開 API 看到的仍是第 1 版與好的頁面，資料集在問題裡只執行一次。驗收 1：合成 lab 資料集（`datasets/lab/synthetic`）載入拋棄式 ClickHouse，telemetry-query 的路由在測試程序裡以產品的 schema 執行資料集，檢查報告裡的每個值都等於以讀全部列的測試帳號直接查 `trustiot.telemetry` 算出的同一個量：原始讀數 view 的每部電表筆數、最低、最高與總和，1 小時格 view 的每小時最高與平均，統計 API 的筆數、最小、最大、平均與最後讀數，用量 API 的總量（清零一次的電能、32 位元回捲的脈衝）與讀數數，以及 `max`、`sum`、跨欄 `max − min`、索引與算術、`last` 的計算 |
 | `tests/check_stand_in/` | 檢查服務的替身：記下每個請求，預設回報告每個資料集列數的通過判定，測試可以改成任何狀態與本文 |
 | `tests/answer_guard.rs` | 經 `ask` 與替身 AI 閘道：回答裡的 SQL 程式碼區塊、句子中的 SQL 敘述、HTML 與含程式碼的行內程式碼，到呼叫端與歷史時都已移除，回報移除了哪幾類、日誌只記類別不記內容，thinking 區塊逐位元組不變，下一個問題送回的歷史就是過濾後存下的那一則；改變 schema 的敘述（`CREATE OR REPLACE VIEW`、`CREATE TABLE`、`DROP TABLE`、`ALTER TABLE`、`TRUNCATE TABLE`）從回答中移除；放在 `tests/`，因為 `cargo test -p repo-check` 不允許 `src/` 出現這些文字 |
 | `tests/dashboard_world/` | 儀表板測試共用的世界：產品的 Postgres、測試用的身分簽發者、替身的身分服務 token 交換與 telemetry-query（記下每個呼叫、其他路徑都算意外）、啟動執行檔、問題的委派（每次呼叫簽發 `act` 是 assistant 的 token）與照服務組起來的 `dashboard` 工具 |
 | `tests/telemetry_sql.rs` | `telemetry_sql` 經工具組呼叫：對 telemetry-query 真正的路由（Postgres 與 ClickHouse 是計數的 loopback 埠），系統表、table function、白名單外的函式、`SET ROLE`、`SET DEFAULT ROLE`、多個敘述、`SETTINGS`、CAST、沒寫時區、沒讀 view、引號識別字、反斜線、語法錯誤與太深的巢狀各自回固定的類別說明，兩個資料庫都沒有連線，日誌沒有 SQL；對替身，答案（長文字截斷）、執行後的拒絕、多欄位或不認得的類別與名稱、404、429、504、403、400、5xx 與非 JSON 各自回固定訊息，模型與日誌都看不到服務的本文；每次呼叫換新 token、請求正好是 SQL 加 200 列 |
-| `src/` 的單元測試 | 設定檢查（含被呼叫服務的位址、委派時長與資料庫帳密、連線池上限）、截止時間的計算、`StartError` 的錯誤碼、字串上限、時間區間的粒度選擇與查詢範圍、狀態碼類別、422 拒絕本文的嚴格解析、`telemetry_sql` 每個拒絕類別的說明與名稱的再檢查、預算門檻、租戶脈絡的跳脫、狀態碼對應、錯誤 `type` 過濾、沒有用量時的估計、送出前的訊息估計（圖片按張數）、工具定義與訊息讀回的位元組檢查；儀表板：執行上限（第 61 次、第三個同時執行、等到空位、`Retry-After` 的秒數）、語意回答的攤平、telemetry-query 每種回答對應的錯誤、權限表、分頁 cursor；`dashboard` 工具的輸入解析、問題的寫入上限與資料集快取的預算、判定的問題與標記怎麼對應（錯誤類別、每個種類名稱與 contract 相同、標記只取解得出的參照）；回答過濾（程式碼區塊、含程式碼的行內程式碼、HTML 標籤與 script/style、各種 SQL 敘述，以及要留下的文字：不是標籤的 `<`、提到 SQL 字詞的句子、反引號裡的名稱、中文與數字、撇號）、移除後留下的標記與整理、`find` 給串流用的範圍；`rewrite_text` 只改文字區塊、其他區塊逐位元組不變；提示詞要求回答不含程式碼並說明儀表板 |
+| `src/` 的單元測試 | 設定檢查（含被呼叫服務的位址、委派時長與資料庫帳密、連線池上限）、截止時間的計算、`StartError` 的錯誤碼、字串上限、時間區間的粒度選擇與查詢範圍、狀態碼類別、422 拒絕本文的嚴格解析、`telemetry_sql` 每個拒絕類別的說明與名稱的再檢查、預算門檻、租戶脈絡的跳脫、狀態碼對應、錯誤 `type` 過濾、沒有用量時的估計、送出前的訊息估計（圖片按張數）、工具定義與訊息讀回的位元組檢查；儀表板：執行上限（第 61 次、第三個同時執行、等到空位、`Retry-After` 的秒數）、每個鍵的名額與等待、發布與還原每分鐘的版本數（每個使用者、每個租戶的已儲存儀表板與草稿各自計、等到兩者都有空位的秒數、清掉閒置的使用者與租戶）、語意回答的攤平、telemetry-query 每種回答對應的錯誤、權限表、分頁 cursor；`dashboard` 工具的輸入解析、問題的寫入上限與資料集快取的預算、判定的問題與標記怎麼對應（錯誤類別、每個種類名稱與 contract 相同、標記只取解得出的參照）；回答過濾（程式碼區塊、含程式碼的行內程式碼、HTML 標籤與 script/style、各種 SQL 敘述，以及要留下的文字：不是標籤的 `<`、提到 SQL 字詞的句子、反引號裡的名稱、中文與數字、撇號）、移除後留下的標記與整理、`find` 給串流用的範圍；`rewrite_text` 只改文字區塊、其他區塊逐位元組不變；提示詞要求回答不含程式碼並說明儀表板 |

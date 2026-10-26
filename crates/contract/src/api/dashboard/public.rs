@@ -177,7 +177,8 @@ pub struct PublishRequest {
     pub version: u32,
 }
 
-/// Restores an older version as a new one.
+/// Restores an older version as a new one (refused with 409 `dashboard.restore_unchanged` when
+/// its content is the latest version's).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 #[schema(as = DashboardRestoreRequest)]
@@ -258,9 +259,20 @@ pub const DATASET_FAILED: MessageKey = MessageKey::new("dashboard.dataset_failed
 pub const RUNS_LIMITED: MessageKey = MessageKey::new("dashboard.runs_limited");
 /// 429 `rate_limited`: the tenant's ClickHouse quota or concurrent queries are used up.
 pub const QUERY_QUOTA_EXHAUSTED: MessageKey = MessageKey::new("dashboard.query_quota_exhausted");
+/// 409 `conflict`: a restore of a version whose content is the latest version's, which would
+/// add a version that changes nothing.
+pub const RESTORE_UNCHANGED: MessageKey = MessageKey::new("dashboard.restore_unchanged");
+/// 409 `conflict`: the dashboard has 10,000 versions, the most it may have; nothing more is
+/// published into it or restored. The message says what to do instead (a new dashboard from
+/// its latest version).
+pub const TOO_MANY_VERSIONS: MessageKey = MessageKey::new("dashboard.too_many_versions");
+/// 429 `rate_limited`: the user, or the tenant's users together, published or restored as many
+/// versions as they may in a minute; the response carries `Retry-After`, details:
+/// `retry_after`.
+pub const VERSIONS_LIMITED: MessageKey = MessageKey::new("dashboard.versions_limited");
 
 /// Every key of this API.
-pub const MESSAGE_KEYS: [MessageKey; 16] = [
+pub const MESSAGE_KEYS: [MessageKey; 19] = [
     VERSION_NOT_FOUND,
     VERSION_CONFLICT,
     SAVED_CHANGED,
@@ -277,6 +289,9 @@ pub const MESSAGE_KEYS: [MessageKey; 16] = [
     DATASET_FAILED,
     RUNS_LIMITED,
     QUERY_QUOTA_EXHAUSTED,
+    RESTORE_UNCHANGED,
+    TOO_MANY_VERSIONS,
+    VERSIONS_LIMITED,
 ];
 
 /// The telemetry-query keys a dataset run passes on as they are, with their status and

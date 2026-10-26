@@ -26,6 +26,7 @@ use service_kit::identity::{IdentityVerifier, OnBehalf, UserIdentity};
 use service_kit::tenant::{TenantDb, TenantDbError, TenantTransaction};
 use utoipa::OpenApi;
 
+use crate::dashboards::limits::VersionBudget;
 use crate::dashboards::runner::DatasetRunner;
 use crate::dashboards::store::Requester;
 use crate::history::Principal;
@@ -45,6 +46,8 @@ pub struct ApiState {
     pub on_behalf: Option<OnBehalf>,
     /// The dataset runs, shared with the `dashboard` tool so the caps hold for both.
     pub runner: Arc<DatasetRunner>,
+    /// The publishes and restores each user and tenant may start in a minute, in this replica.
+    pub versions: Arc<VersionBudget>,
 }
 
 impl FromRef<ApiState> for IdentityVerifier {

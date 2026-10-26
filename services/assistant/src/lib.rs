@@ -132,6 +132,7 @@ pub async fn start(context: Context<Config>) -> Result<Router, BoxError> {
         db,
         on_behalf,
         runner: assistant.runner,
+        versions: Arc::new(dashboards::limits::VersionBudget::default()),
     }))
 }
 

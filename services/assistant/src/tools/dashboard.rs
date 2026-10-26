@@ -160,8 +160,9 @@ draft of a saved dashboard, together with its `base_version`.";
 const TOO_LITTLE_TIME: &str = "Too little time is left in this question to write a dashboard. \
 Do not call write again; answer, and tell the user the dashboard was not changed.";
 
-const TOO_MANY_VERSIONS: &str = "The dashboard has the most versions it may have. Tell the \
-user; nothing was written.";
+const TOO_MANY_VERSIONS: &str = "The dashboard has 10000 versions, the most it may have; \
+nothing was written. Tell the user. If they still want the change, write it as a new dashboard \
+(leave out dashboard_id) from this dashboard's latest version.";
 
 const CONCURRENT: &str = "Another write changed this dashboard at the same time. Read it again \
 and write your change on its latest version.";

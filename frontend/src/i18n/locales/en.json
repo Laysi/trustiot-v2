@@ -51,6 +51,9 @@
   "dashboard.dataset_failed": "The data couldn't be loaded. Try again later.",
   "dashboard.runs_limited": "Dashboards in your organization are loading too much data right now. Try again shortly.",
   "dashboard.query_quota_exhausted": "Your organization has used up its query allowance for now. Try again later.",
+  "dashboard.restore_unchanged": "This version is the same as the dashboard's latest version, so restoring it would change nothing.",
+  "dashboard.too_many_versions": "This dashboard has 10,000 versions, the most it can have, so no version can be added. Ask the assistant to make a new dashboard from its latest version and publish that one; you can archive the old saved dashboard.",
+  "dashboard.versions_limited": "You or your organization published or restored many dashboard versions in the last minute. Try again shortly.",
 
   "device_model.body_too_large": "The device model is too large. The limit is {max_bytes} bytes.",
   "device_model.name_taken": "Your organization already has a device model with this name.",

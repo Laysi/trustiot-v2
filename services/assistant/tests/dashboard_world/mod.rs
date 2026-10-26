@@ -37,8 +37,9 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use assistant::api::{self, ApiState};
 use assistant::callee::Callee;
-use assistant::dashboards::caps::RunCaps;
+use assistant::dashboards::caps::{Limited, RunCaps};
 use assistant::dashboards::checker::Checker;
+use assistant::dashboards::limits::VersionBudget;
 use assistant::dashboards::runner::DatasetRunner;
 use assistant::dashboards::store::{self, Author, NewVersion, Requester, StoreError};
 use assistant::delegation::IDENTITY_TIMEOUT;
@@ -54,7 +55,7 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::post;
 use chrono::{TimeDelta, Utc};
 use contract::api::dashboard::RuntimeVersion;
-use contract::api::dashboard::public::VersionCreated;
+use contract::api::dashboard::public::{DashboardKind, VersionCreated};
 use contract::api::dashboard::spec::Spec;
 use contract::api::identity::ExchangeToken;
 use contract::api::telemetry_query::{QueryableFrom, RunSql, SqlColumn, SqlResult};
@@ -348,6 +349,11 @@ pub async fn world() -> Option<World> {
     })
 }
 
+/// The budget a store test gives publish and restore: every version may be added.
+pub fn unlimited(_: DashboardKind) -> Result<(), Limited> {
+    Ok(())
+}
+
 /// Ends `tx`: commits it when `result` is `Ok`, rolls it back otherwise.
 pub async fn finish<T>(
     tx: TenantTransaction,
@@ -499,7 +505,8 @@ impl World {
         version: u32,
     ) -> Result<VersionCreated, StoreError> {
         let mut tx = self.tx(person).await;
-        let published = store::publish(&mut tx, person.requester(), draft, version).await;
+        let published =
+            store::publish(&mut tx, person.requester(), draft, version, unlimited).await;
         finish(tx, published).await
     }
 
@@ -542,6 +549,7 @@ impl World {
             db: self.db.clone(),
             on_behalf: exchange.then(|| OnBehalf::new(identity)),
             runner: Arc::clone(&runner),
+            versions: Arc::new(VersionBudget::default()),
         };
         let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
         let address = listener.local_addr().expect("local address");
