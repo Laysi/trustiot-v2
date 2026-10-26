@@ -8,7 +8,7 @@
 //! | `GET /dashboards/{dashboard_id}` (`?version=`, the latest without it) | | [`DashboardView`] | whoever can see it |
 //! | `GET /dashboards/{dashboard_id}/versions` (`?cursor=`) | | [`VersionList`], newest first | whoever can see it |
 //! | `POST /dashboards/{dashboard_id}/publish` (a draft) | [`PublishRequest`] | [`VersionCreated`] in the saved dashboard | editor and up who own the conversation |
-//! | `POST /dashboards/{dashboard_id}/restore` | [`RestoreRequest`] | [`VersionCreated`] | editor and up; for a draft its conversation's owner |
+//! | `POST /dashboards/{dashboard_id}/restore` | [`RestoreRequest`] | [`VersionCreated`] | a saved dashboard: editor and up; a draft: its conversation's owner, any role |
 //! | `PUT` and `DELETE /dashboards/{dashboard_id}/archive` (a saved one) | | [`ArchiveState`] | editor and up |
 //! | `POST /dashboards/{dashboard_id}/dataset-runs` | [`DatasetRunRequest`] | [`DatasetResult`](super::result::DatasetResult) | whoever can see it, run as the caller |
 //!

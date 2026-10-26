@@ -17,16 +17,25 @@
 //!   the model's input), the body or the token.
 //! - Plain HTTP inside the mesh, where ztunnel adds mutual TLS; no proxy from the environment,
 //!   no redirects (the token header would follow one).
+//!
+//! A call acts for a [`Caller`]: the token source and what the log lines name. A tool calls with
+//! its question's delegation ([`ToolContext::caller`]); a dashboard's dataset run
+//! ([`crate::dashboards::runner`]) calls with the request's identity when a user opens the
+//! dashboard, or with the question's delegation when the `dashboard` tool runs it. Dataset runs
+//! read the answer themselves through [`Callee::post_answer`], with the same transport, token
+//! handling, body limits and logs, and [`refusal_of`] for a 422.
 
+use std::fmt;
 use std::time::Duration;
 
-use contract::{INTERNAL_IDENTITY_HEADER, ServiceName};
+use contract::{INTERNAL_IDENTITY_HEADER, ServiceName, TenantId};
 use reqwest::header::{ACCEPT, CONTENT_TYPE, HeaderValue};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use uuid::Uuid;
 
-use crate::tools::{ToolContext, ToolError};
+use crate::tools::{Delegation, DelegationError, ToolContext, ToolError};
 
 /// The longest a connection to a service may take to open.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
@@ -53,6 +62,89 @@ pub enum CalleeConfigError {
         #[source]
         source: reqwest::Error,
     },
+}
+
+/// Who a call acts for: where its token comes from, and what its log lines name.
+#[derive(Clone, Copy)]
+pub struct Caller<'a> {
+    /// Gives a fresh token for the callee before every call.
+    pub delegation: &'a dyn Delegation,
+    /// The tenant the call acts in, for the logs; the callee takes it from the token.
+    pub tenant_id: TenantId,
+    pub operation: Operation,
+    /// The question's run and conversation, when a tool calls.
+    pub run_id: Option<Uuid>,
+    pub conversation_id: Option<Uuid>,
+}
+
+/// What makes a call, for the logs.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Operation {
+    /// A tool, by name.
+    Tool(&'static str),
+    /// A dashboard's dataset run for a user who opened the dashboard
+    /// (`POST /api/assistant/v1/dashboards/{dashboard_id}/dataset-runs`).
+    DatasetRun,
+}
+
+impl Operation {
+    fn name(self) -> &'static str {
+        match self {
+            Self::Tool(name) => name,
+            Self::DatasetRun => "dataset_run",
+        }
+    }
+}
+
+impl fmt::Debug for Caller<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Caller")
+            .field("tenant_id", &self.tenant_id)
+            .field("operation", &self.operation)
+            .field("run_id", &self.run_id)
+            .field("conversation_id", &self.conversation_id)
+            .finish_non_exhaustive()
+    }
+}
+
+impl ToolContext {
+    /// The caller of `tool`'s calls: the question's delegation, tenant, run and conversation.
+    pub fn caller(&self, tool: &'static str) -> Caller<'_> {
+        Caller {
+            delegation: self.delegation.as_ref(),
+            tenant_id: self.principal.tenant_id,
+            operation: Operation::Tool(tool),
+            run_id: Some(self.run_id),
+            conversation_id: Some(self.conversation_id),
+        }
+    }
+}
+
+/// How a service answered a [`Callee::post_answer`].
+#[derive(Debug, PartialEq, Eq)]
+pub enum Answer {
+    /// A 2xx status and its body, at most the call's limit.
+    Success(Vec<u8>),
+    /// Any other status, and its body when it is at most [`MAX_REFUSAL_BYTES`] (`None` when it
+    /// is larger or could not be read). The caller decides what of it to read.
+    Status { status: u16, body: Option<Vec<u8>> },
+}
+
+/// Why a [`Callee::post_answer`] got no answer. Logged by the callee with its kind only.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum CallFailure {
+    /// The delegation gave no token: [`DelegationError`].
+    #[error("no token for the call")]
+    Token(DelegationError),
+    /// The call or reading the body took longer than the client's time limit.
+    #[error("the call timed out")]
+    Timeout,
+    /// The success body is larger than the call's limit.
+    #[error("the answer is too large")]
+    TooLarge,
+    /// The request could not be built or sent, or the connection failed.
+    #[error("the call failed")]
+    Transport,
 }
 
 /// One service the tools call as the user.
@@ -178,24 +270,28 @@ impl Callee {
         context: &ToolContext,
         request: Get<'_>,
     ) -> Result<T, ToolError> {
+        let caller = context.caller(request.tool);
         let mut url = self.base_url.clone();
         url.set_path(request.path);
         if !request.query.is_empty() {
             url.query_pairs_mut().extend_pairs(request.query.iter());
         }
-        let response = self.send(context, request.tool, self.http.get(url)).await?;
+        let response = self
+            .send(&caller, self.http.get(url))
+            .await
+            .map_err(tool_error)?;
         let status = response.status().as_u16();
         if !response.status().is_success() {
             // The body is dropped unread.
             drop(response);
-            self.log_failure(context, request.tool, "error_status", Some(status));
+            self.log_failure(&caller, "error_status", Some(status));
             return Err(match status {
                 400 | 422 => ToolError::Input(request.rejected_input.to_owned()),
                 403 | 404 => ToolError::Denied,
                 _ => ToolError::Failed,
             });
         }
-        self.read_json(context, request.tool, response).await
+        self.read_json(&caller, response).await
     }
 
     /// Sends `request` as the question's user: its body as JSON, the success body parsed as `T`,
@@ -219,26 +315,15 @@ impl Callee {
         T: DeserializeOwned,
         R: DeserializeOwned + Serialize,
     {
-        let mut url = self.base_url.clone();
-        url.set_path(request.path);
-        let body = serde_json::to_vec(request.body).map_err(|_| {
-            self.log_failure(context, request.tool, "invalid_request", None);
-            ToolError::Failed
-        })?;
+        let caller = context.caller(request.tool);
         let response = self
-            .send(
-                context,
-                request.tool,
-                self.http
-                    .post(url)
-                    .header(CONTENT_TYPE, "application/json")
-                    .body(body),
-            )
-            .await?;
+            .send_json(&caller, request.path, request.body)
+            .await
+            .map_err(tool_error)?;
         let status = response.status().as_u16();
         if response.status().is_success() {
             return self
-                .read_json(context, request.tool, response)
+                .read_json(&caller, response)
                 .await
                 .map(Posted::Answered);
         }
@@ -249,38 +334,97 @@ impl Callee {
                 .and_then(|body| refusal_of(&body));
             return match refusal {
                 Some(refusal) => {
-                    self.log_failure(context, request.tool, "error_status", Some(status));
+                    self.log_failure(&caller, "error_status", Some(status));
                     Ok(Posted::Refused(refusal))
                 }
                 None => {
-                    self.log_failure(context, request.tool, "invalid_refusal", Some(status));
+                    self.log_failure(&caller, "invalid_refusal", Some(status));
                     Err(ToolError::Failed)
                 }
             };
         }
         // The body is dropped unread.
         drop(response);
-        self.log_failure(context, request.tool, "error_status", Some(status));
+        self.log_failure(&caller, "error_status", Some(status));
         Err(post_error(&request, status))
     }
 
-    /// Sends `request` with a fresh token of the question's user for this service.
+    /// Sends `body` as JSON to `path` for `caller` and returns how the service answered: the
+    /// success body, at most `max_success_bytes`, or the error status with its body when that is
+    /// at most [`MAX_REFUSAL_BYTES`]. Nothing of the answer is interpreted or logged; a failed
+    /// call and an error status are logged with the kind and the status class only, as for the
+    /// tools' calls. For callers that read the error answers themselves (dataset runs): they
+    /// read only what they expect, with [`refusal_of`] for a 422 refusal.
+    ///
+    /// # Errors
+    ///
+    /// [`CallFailure`]: no token, a timeout, a success body over the limit, a failed transport.
+    pub async fn post_answer<B: Serialize>(
+        &self,
+        caller: &Caller<'_>,
+        path: &str,
+        body: &B,
+        max_success_bytes: usize,
+    ) -> Result<Answer, CallFailure> {
+        let response = self.send_json(caller, path, body).await?;
+        let status = response.status().as_u16();
+        if response.status().is_success() {
+            return read_limited(response, max_success_bytes)
+                .await
+                .map(Answer::Success)
+                .map_err(|kind| {
+                    self.log_failure(caller, kind, Some(status));
+                    match kind {
+                        "too_large" => CallFailure::TooLarge,
+                        "timeout" => CallFailure::Timeout,
+                        _ => CallFailure::Transport,
+                    }
+                });
+        }
+        self.log_failure(caller, "error_status", Some(status));
+        let body = read_limited(response, MAX_REFUSAL_BYTES).await.ok();
+        Ok(Answer::Status { status, body })
+    }
+
+    /// Sends `body` as JSON to `path` with a fresh token of `caller` for this service.
+    async fn send_json<B: Serialize>(
+        &self,
+        caller: &Caller<'_>,
+        path: &str,
+        body: &B,
+    ) -> Result<reqwest::Response, CallFailure> {
+        let mut url = self.base_url.clone();
+        url.set_path(path);
+        let body = serde_json::to_vec(body).map_err(|_| {
+            self.log_failure(caller, "invalid_request", None);
+            CallFailure::Transport
+        })?;
+        self.send(
+            caller,
+            self.http
+                .post(url)
+                .header(CONTENT_TYPE, "application/json")
+                .body(body),
+        )
+        .await
+    }
+
+    /// Sends `request` with a fresh token of `caller`'s user for this service.
     async fn send(
         &self,
-        context: &ToolContext,
-        tool: &'static str,
+        caller: &Caller<'_>,
         request: reqwest::RequestBuilder,
-    ) -> Result<reqwest::Response, ToolError> {
+    ) -> Result<reqwest::Response, CallFailure> {
         // A fresh token for every call: it lives 60 seconds, and the identity service checks the
         // user's session and membership again on each exchange.
-        let token = context
+        let token = caller
             .delegation
             .token_for(self.service)
             .await
-            .map_err(ToolError::from)?;
+            .map_err(CallFailure::Token)?;
         let mut header = HeaderValue::from_str(token.expose()).map_err(|_| {
-            self.log_failure(context, tool, "invalid_token", None);
-            ToolError::Failed
+            self.log_failure(caller, "invalid_token", None);
+            CallFailure::Transport
         })?;
         header.set_sensitive(true);
         request
@@ -289,71 +433,82 @@ impl Callee {
             .send()
             .await
             .map_err(|error| {
-                let kind = if error.is_timeout() {
-                    "timeout"
+                let (kind, failure) = if error.is_timeout() {
+                    ("timeout", CallFailure::Timeout)
                 } else if error.is_connect() {
-                    "connect"
+                    ("connect", CallFailure::Transport)
                 } else {
-                    "transport"
+                    ("transport", CallFailure::Transport)
                 };
-                self.log_failure(context, tool, kind, None);
-                ToolError::Failed
+                self.log_failure(caller, kind, None);
+                failure
             })
     }
 
     /// The success body of `response`, parsed as `T`.
     async fn read_json<T: DeserializeOwned>(
         &self,
-        context: &ToolContext,
-        tool: &'static str,
+        caller: &Caller<'_>,
         response: reqwest::Response,
     ) -> Result<T, ToolError> {
         let status = response.status().as_u16();
         let body = read_limited(response, MAX_RESPONSE_BYTES)
             .await
             .map_err(|kind| {
-                self.log_failure(context, tool, kind, Some(status));
+                self.log_failure(caller, kind, Some(status));
                 ToolError::Failed
             })?;
         serde_json::from_slice(&body).map_err(|_| {
-            self.log_failure(context, tool, "invalid_response", Some(status));
+            self.log_failure(caller, "invalid_response", Some(status));
             ToolError::Failed
         })
     }
 
-    /// One line per failed call: which tool and service, the kind of failure and the status
-    /// class. Never the URL, the token or anything of the answer.
-    fn log_failure(
-        &self,
-        context: &ToolContext,
-        tool: &'static str,
-        kind: &'static str,
-        status: Option<u16>,
-    ) {
+    /// One line per failed call: which tool (or dataset run) and service, the kind of failure
+    /// and the status class. Never the URL, the token or anything of the answer.
+    pub(crate) fn log_failure(&self, caller: &Caller<'_>, kind: &'static str, status: Option<u16>) {
         let status_class = status.map(status_class);
         let refused = kind == "error_status" && matches!(status, Some(400 | 403 | 404 | 422));
-        if refused {
-            tracing::info!(
-                run_id = %context.run_id,
-                conversation_id = %context.conversation_id,
-                tenant_id = %context.principal.tenant_id,
+        let run_id = caller.run_id.map(tracing::field::display);
+        let conversation_id = caller.conversation_id.map(tracing::field::display);
+        let peer = self.service.as_str();
+        match (caller.operation, refused) {
+            (Operation::Tool(tool), true) => tracing::info!(
+                run_id,
+                conversation_id,
+                tenant_id = %caller.tenant_id,
                 tool,
-                peer = self.service.as_str(),
+                peer,
                 kind,
                 status_class,
                 "a service refused a tool call"
-            );
-        } else {
-            tracing::warn!(
-                run_id = %context.run_id,
-                conversation_id = %context.conversation_id,
-                tenant_id = %context.principal.tenant_id,
+            ),
+            (Operation::Tool(tool), false) => tracing::warn!(
+                run_id,
+                conversation_id,
+                tenant_id = %caller.tenant_id,
                 tool,
-                peer = self.service.as_str(),
+                peer,
                 kind,
                 status_class,
                 "a tool call to a service failed"
-            );
+            ),
+            (Operation::DatasetRun, true) => tracing::info!(
+                tenant_id = %caller.tenant_id,
+                operation = caller.operation.name(),
+                peer,
+                kind,
+                status_class,
+                "a service refused a dataset run"
+            ),
+            (Operation::DatasetRun, false) => tracing::warn!(
+                tenant_id = %caller.tenant_id,
+                operation = caller.operation.name(),
+                peer,
+                kind,
+                status_class,
+                "a dataset run's call to a service failed"
+            ),
         }
     }
 }
@@ -400,6 +555,15 @@ fn post_error<B>(request: &Post<'_, B>, status: u16) -> ToolError {
         }
         (403 | 404, _) => ToolError::Denied,
         _ => ToolError::Failed,
+    }
+}
+
+/// What a tool is told when its call got no answer: a revoked delegation ends the question,
+/// anything else fails the call.
+fn tool_error(failure: CallFailure) -> ToolError {
+    match failure {
+        CallFailure::Token(error) => ToolError::from(error),
+        CallFailure::Timeout | CallFailure::TooLarge | CallFailure::Transport => ToolError::Failed,
     }
 }
 

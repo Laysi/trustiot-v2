@@ -35,6 +35,7 @@ use chrono::{DateTime, FixedOffset, NaiveDate, NaiveDateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use utoipa::ToSchema;
+use utoipa::openapi::schema::{Array, ArrayBuilder, ObjectBuilder, SchemaType, Type};
 
 use super::names::{is_column_name, is_name};
 use super::spec::{SemanticInterval, SourceKind};
@@ -51,6 +52,25 @@ pub const MAX_COLUMNS: usize = 64;
 /// JSON. A larger one is refused ([`crate::api::dashboard::public`]'s
 /// `dashboard.dataset_result_too_large`).
 pub const MAX_RESULT_BYTES: usize = 2 * 1024 * 1024;
+
+/// The OpenAPI schema of [`DatasetResult::rows`]: arrays of cells, each `null` or a number, a
+/// string or a boolean (the module documentation, 「Cells」).
+fn rows_schema() -> Array {
+    let cell = ObjectBuilder::new()
+        .schema_type(
+            [Type::Number, Type::String, Type::Boolean, Type::Null]
+                .into_iter()
+                .collect::<SchemaType>(),
+        )
+        .description(Some(
+            "A cell: `null`, or a value of its column's type: a number, a string (text or a \
+             time) or a boolean.",
+        ));
+    ArrayBuilder::new()
+        .description(Some("The rows, each an array of cells in column order."))
+        .items(ArrayBuilder::new().items(cell))
+        .build()
+}
 
 /// What a column holds.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, ToSchema)]
@@ -131,7 +151,7 @@ pub struct DatasetResult {
     /// The columns, in order.
     pub columns: Vec<ResultColumn>,
     /// The rows, each an array of cells in column order (see the module documentation).
-    #[schema(value_type = Vec<Vec<Object>>)]
+    #[schema(schema_with = rows_schema)]
     pub rows: Vec<Vec<Value>>,
     /// `rows.len()`.
     pub row_count: u32,

@@ -1,0 +1,1018 @@
+//! The world of the dashboard tests (Laysi/trustiot-v2#150): the product's schema with the
+//! service role `assistant_app` (`testkit::product`), users with a chosen tenant and role,
+//! conversations, drafts written as the `dashboard` tool writes them (through the store), one
+//! stand-in server for every peer a dataset run calls, the public API served in the test
+//! process, and the assistant binary as the chart starts it.
+//!
+//! The stand-in peers share one loopback socket:
+//!
+//! - the identity service's token exchange (`/internal/token-exchange`): it verifies the
+//!   request's token for the assistant and exchanges it as the identity service does, for the
+//!   same user, tenant and role, addressed to the asked audience, with `act` naming the
+//!   assistant and no later expiry than the request's token;
+//! - telemetry-query's SQL, statistics and usage routes: they verify the token for
+//!   telemetry-query, record the call with the token's claims, and answer with
+//!   telemetry-query's own response types, or as the test scripts it;
+//! - anything else, which only the AI gateway or a service no dashboard calls would get, is
+//!   recorded as unexpected and refused.
+//!
+//! Every token is signed when it is sent, valid for 60 seconds as the ingress signs them, so a
+//! slow test never sends an expired one.
+
+#![allow(
+    dead_code,
+    reason = "each test binary uses a different part of the world"
+)]
+
+use std::future::Future;
+use std::io::{BufRead, BufReader, Read};
+use std::net::SocketAddr;
+use std::pin::Pin;
+use std::process::{Child, Command, Stdio};
+use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex, PoisonError};
+use std::thread;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+
+use assistant::api::{self, ApiState};
+use assistant::callee::Callee;
+use assistant::dashboards::caps::RunCaps;
+use assistant::dashboards::runner::DatasetRunner;
+use assistant::dashboards::store::{self, Author, NewVersion, Requester, StoreError};
+use assistant::delegation::IDENTITY_TIMEOUT;
+use assistant::history::Principal;
+use axum::Router;
+use axum::body::Bytes;
+use axum::extract::State;
+use axum::http::header::CONTENT_TYPE;
+use axum::http::{HeaderMap, Method, StatusCode, Uri};
+use axum::response::{IntoResponse, Response};
+use axum::routing::post;
+use chrono::{TimeDelta, Utc};
+use contract::api::dashboard::RuntimeVersion;
+use contract::api::dashboard::public::VersionCreated;
+use contract::api::dashboard::spec::Spec;
+use contract::api::identity::ExchangeToken;
+use contract::api::telemetry_query::{QueryableFrom, RunSql, SqlColumn, SqlResult};
+use contract::client::{Endpoint as _, InternalClient};
+use contract::{
+    Actor, DashboardId, ErrorBody, ErrorCode, INTERNAL_IDENTITY_HEADER, InternalClaims,
+    ServiceName, TenantGrant, TenantId, TenantRole, service,
+};
+use serde_json::{Value, json};
+use service_kit::identity::{OnBehalf, UserIdentity};
+use service_kit::tenant::{TenantDb, TenantTransaction};
+use sqlx::PgConnection;
+use sqlx::postgres::PgPoolOptions;
+use telemetry_query::history::Reading;
+use telemetry_query::semantic::range::Resolution;
+use telemetry_query::semantic::{
+    CumulativeCheck, DataStatus, QueryRange, SeriesQuery, SeriesStatistics, SeriesUsage,
+    Statistics, StatisticsRow, Usage, UsageRow, UsageStatus, Verdict,
+};
+use testkit::identity::TestIssuer;
+use testkit::postgres::TEST_PASSWORD;
+use testkit::product::{DATABASE, ProductPostgres, product_postgres};
+use tokio::net::TcpListener;
+use tokio::task::JoinHandle;
+use uuid::Uuid;
+
+/// The longest a test waits for something it caused: a bound only, far above what any of it
+/// takes, so a loaded machine does not fail the test (CLAUDE.md, 「Test time limits」).
+pub const WAIT: Duration = Duration::from_secs(120);
+
+/// The device of the semantic datasets.
+pub const DEVICE: &str = "0192f6e0-7a3c-7d4e-8f00-0123456789ab";
+
+/// The paths telemetry-query's stand-in answers.
+pub const SQL_PATH: &str = RunSql::ROUTE;
+pub const STATISTICS_PATH: &str = "/api/telemetry/v1/statistics";
+pub const USAGE_PATH: &str = "/api/telemetry/v1/usage";
+
+/// The datasets of [`spec`]: a SQL one, a statistics one and a usage one.
+pub const DATASETS: [&str; 3] = ["daily", "stats", "usage"];
+
+pub type BoxFuture<T> = Pin<Box<dyn Future<Output = T> + Send>>;
+
+fn unix_now() -> i64 {
+    let elapsed = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("after the epoch");
+    i64::try_from(elapsed.as_secs()).expect("seconds fit")
+}
+
+/// A spec with the three [`DATASETS`], each with `max_rows` 2000, 100 and 100.
+pub fn spec() -> Spec {
+    serde_json::from_value(json!({
+        "datasets": [
+            {
+                "name": "daily",
+                "title": "Daily energy",
+                "description": "Energy per day, summed from the meters' readings.",
+                "max_rows": 2000,
+                "source": {
+                    "kind": "sql",
+                    "sql": "SELECT toDate(time) AS day, sum(value) AS kwh FROM trustiot.tenant_telemetry GROUP BY day ORDER BY day"
+                }
+            },
+            {
+                "name": "stats",
+                "title": "Voltage",
+                "description": "The voltage's statistics over the last seven days.",
+                "max_rows": 100,
+                "source": {
+                    "kind": "telemetry_statistics",
+                    "request": {
+                        "series": [{"device_id": DEVICE, "point": "voltage"}],
+                        "tz": "Asia/Taipei",
+                        "period": "last_7_days",
+                        "interval": "total"
+                    }
+                }
+            },
+            {
+                "name": "usage",
+                "title": "Usage",
+                "description": "Energy used per day over the last seven days.",
+                "max_rows": 100,
+                "source": {
+                    "kind": "telemetry_usage",
+                    "request": {
+                        "series": [{"device_id": DEVICE, "point": "energy_kwh"}],
+                        "tz": "Asia/Taipei",
+                        "period": "last_7_days",
+                        "interval": "1d"
+                    }
+                }
+            }
+        ]
+    }))
+    .expect("the test spec parses")
+}
+
+/// A version's content as the `dashboard` tool writes it.
+#[derive(Clone, Debug)]
+pub struct Content {
+    pub title: String,
+    pub description: Option<String>,
+    pub spec: Spec,
+    pub page: String,
+}
+
+impl Content {
+    /// [`spec`] with a page that names `title`.
+    pub fn new(title: &str) -> Self {
+        Self {
+            title: title.to_owned(),
+            description: Some(format!("{title}, as the test wrote it.")),
+            spec: spec(),
+            page: format!("<main><h1>{title}</h1><div id=\"chart\"></div></main>"),
+        }
+    }
+
+    pub fn version(&self) -> NewVersion<'_> {
+        NewVersion {
+            runtime: RuntimeVersion::CURRENT,
+            title: &self.title,
+            description: self.description.as_deref(),
+            spec: &self.spec,
+            page: &self.page,
+        }
+    }
+}
+
+/// A user of one tenant with one role: the claims the ingress signs for the assistant.
+#[derive(Clone, Debug)]
+pub struct Person {
+    pub claims: InternalClaims,
+}
+
+impl Person {
+    pub fn tenant(&self) -> TenantId {
+        self.claims.tenant.expect("a person has a tenant").id
+    }
+
+    pub fn role(&self) -> TenantRole {
+        self.claims.tenant.expect("a person has a tenant").role
+    }
+
+    pub fn principal(&self) -> Principal {
+        Principal {
+            tenant_id: self.tenant(),
+            user_id: self.claims.sub,
+        }
+    }
+
+    pub fn requester(&self) -> Requester {
+        Requester {
+            principal: self.principal(),
+            role: self.role(),
+        }
+    }
+
+    /// The author of a tool's write: this user's question.
+    pub fn author(&self) -> Author {
+        Author {
+            principal: self.principal(),
+            run_id: Uuid::now_v7(),
+        }
+    }
+
+    /// The same user with another role in the same tenant.
+    pub fn with_role(&self, role: TenantRole) -> Self {
+        let mut claims = self.claims.clone();
+        claims.tenant = Some(TenantGrant {
+            id: self.tenant(),
+            role,
+        });
+        Self { claims }
+    }
+}
+
+/// The database, the role and the token issuer.
+pub struct World {
+    pub product: Arc<ProductPostgres>,
+    pub db: TenantDb,
+    pub issuer: Arc<TestIssuer>,
+}
+
+/// The world, or `None` without a container runtime (testkit skips locally, fails in CI).
+pub async fn world() -> Option<World> {
+    let product = product_postgres(&["assistant_app"]).await?;
+    let db = TenantDb::connect_lazy(
+        product.postgres.options("assistant_app", DATABASE),
+        PgPoolOptions::new().max_connections(8),
+    )
+    .expect("the service role's pool verifies the server");
+    Some(World {
+        product,
+        db,
+        issuer: Arc::new(TestIssuer::new()),
+    })
+}
+
+/// Ends `tx`: commits it when `result` is `Ok`, rolls it back otherwise.
+pub async fn finish<T>(
+    tx: TenantTransaction,
+    result: Result<T, StoreError>,
+) -> Result<T, StoreError> {
+    if result.is_ok() {
+        tx.commit().await.expect("commit");
+    } else {
+        tx.rollback().await.expect("roll back");
+    }
+    result
+}
+
+impl World {
+    /// A new user of `tenant` with `role`.
+    pub fn person(&self, tenant: TenantId, role: TenantRole) -> Person {
+        Person {
+            claims: TestIssuer::claims(
+                ServiceName::Assistant,
+                Some(TenantGrant { id: tenant, role }),
+            ),
+        }
+    }
+
+    /// A new user without a tenant.
+    pub fn tenantless(&self) -> Person {
+        Person {
+            claims: TestIssuer::claims(ServiceName::Assistant, None),
+        }
+    }
+
+    /// The person's token for the assistant, issued now.
+    pub fn token(&self, person: &Person) -> String {
+        let mut claims = person.claims.clone();
+        claims.iat = unix_now();
+        claims.exp = claims.iat + testkit::identity::TOKEN_LIFETIME_SECS;
+        self.issuer.token(&claims)
+    }
+
+    /// The person as a handler of the assistant receives them.
+    pub fn user(&self, person: &Person) -> UserIdentity {
+        self.issuer
+            .verifier(ServiceName::Assistant)
+            .verify(&self.token(person))
+            .expect("the test token verifies")
+    }
+
+    pub async fn superuser(&self) -> PgConnection {
+        self.product.superuser().await
+    }
+
+    /// A transaction of the person's tenant, as the API opens one.
+    pub async fn tx(&self, person: &Person) -> TenantTransaction {
+        self.db
+            .begin(&self.user(person))
+            .await
+            .expect("a tenant transaction")
+    }
+
+    /// A new conversation of `owner`'s, written as the agent stores one.
+    pub async fn conversation(&self, owner: &Person) -> Uuid {
+        let id = Uuid::now_v7();
+        let mut admin = self.superuser().await;
+        sqlx::query(
+            "INSERT INTO assistant.conversations
+                (tenant_id, conversation_id, user_id, prompt_version, system_prompt,
+                 tenant_context, tools, effort, cache_ttl)
+            VALUES ($1::uuid, $2::uuid, $3::uuid, 'test', 'You are a test.', '', '[]',
+                'medium', '5m')",
+        )
+        .bind(owner.tenant().to_string())
+        .bind(id.to_string())
+        .bind(owner.claims.sub.to_string())
+        .execute(&mut admin)
+        .await
+        .expect("insert a conversation");
+        id
+    }
+
+    /// A new draft in `owner`'s `conversation` with `content` as its version 1.
+    pub async fn create_draft(
+        &self,
+        owner: &Person,
+        conversation: Uuid,
+        content: &Content,
+    ) -> VersionCreated {
+        let mut tx = self.tx(owner).await;
+        let created =
+            store::create_draft(&mut tx, owner.author(), conversation, &content.version()).await;
+        finish(tx, created).await.expect("create a draft")
+    }
+
+    /// The tool's next version of a draft.
+    pub async fn write_draft(
+        &self,
+        owner: &Person,
+        conversation: Uuid,
+        draft: DashboardId,
+        base_version: u32,
+        rebase: Option<u32>,
+        content: &Content,
+    ) -> Result<VersionCreated, StoreError> {
+        let mut tx = self.tx(owner).await;
+        let written = store::write_draft(
+            &mut tx,
+            owner.author(),
+            conversation,
+            draft,
+            base_version,
+            rebase,
+            &content.version(),
+        )
+        .await;
+        finish(tx, written).await
+    }
+
+    /// The tool's draft of a saved dashboard.
+    pub async fn fork(
+        &self,
+        owner: &Person,
+        conversation: Uuid,
+        saved: DashboardId,
+        base_saved_version: u32,
+        content: &Content,
+    ) -> Result<VersionCreated, StoreError> {
+        let mut tx = self.tx(owner).await;
+        let forked = store::fork(
+            &mut tx,
+            owner.author(),
+            conversation,
+            saved,
+            base_saved_version,
+            &content.version(),
+        )
+        .await;
+        finish(tx, forked).await
+    }
+
+    pub async fn publish(
+        &self,
+        person: &Person,
+        draft: DashboardId,
+        version: u32,
+    ) -> Result<VersionCreated, StoreError> {
+        let mut tx = self.tx(person).await;
+        let published = store::publish(&mut tx, person.requester(), draft, version).await;
+        finish(tx, published).await
+    }
+
+    /// A saved dashboard published by `editor` from a draft in a new conversation of theirs:
+    /// the conversation, the draft and the saved dashboard (at version 1).
+    pub async fn saved(
+        &self,
+        editor: &Person,
+        content: &Content,
+    ) -> (Uuid, DashboardId, DashboardId) {
+        let conversation = self.conversation(editor).await;
+        let draft = self.create_draft(editor, conversation, content).await;
+        let saved = self
+            .publish(editor, draft.dashboard_id, draft.version)
+            .await
+            .expect("publish the draft");
+        assert_eq!(saved.version, 1);
+        (conversation, draft.dashboard_id, saved.dashboard_id)
+    }
+
+    /// The public API in this process with `caps`, calling the stand-in `peers`.
+    pub async fn api(&self, peers: &Peers, caps: RunCaps) -> Api {
+        let telemetry = Callee::new(
+            ServiceName::TelemetryQuery,
+            &peers.url,
+            Duration::from_secs(60),
+        )
+        .expect("a client for telemetry-query's stand-in");
+        let runner = Arc::new(DatasetRunner::new(Some(telemetry), caps));
+        let identity = InternalClient::<service::Identity>::new(&peers.url, IDENTITY_TIMEOUT)
+            .expect("a client for the exchange's stand-in");
+        let state = ApiState {
+            verifier: self.issuer.verifier(ServiceName::Assistant),
+            db: self.db.clone(),
+            on_behalf: Some(OnBehalf::new(identity)),
+            runner: Arc::clone(&runner),
+        };
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+        let address = listener.local_addr().expect("local address");
+        let task = tokio::spawn(async move {
+            axum::serve(listener, api::routes(state))
+                .await
+                .expect("serve the API");
+        });
+        Api {
+            url: format!("http://{address}"),
+            runner,
+            task,
+        }
+    }
+}
+
+/// The public API served in the test process.
+pub struct Api {
+    pub url: String,
+    /// The runner the API uses, for runs as the `dashboard` tool makes them.
+    pub runner: Arc<DatasetRunner>,
+    task: JoinHandle<()>,
+}
+
+impl Drop for Api {
+    fn drop(&mut self) {
+        self.task.abort();
+    }
+}
+
+/// An answer of the API.
+#[derive(Debug)]
+pub struct Answer {
+    pub status: u16,
+    pub headers: HeaderMap,
+    pub text: String,
+}
+
+impl Answer {
+    pub fn json(&self) -> Value {
+        serde_json::from_str(&self.text)
+            .unwrap_or_else(|_| panic!("the answer is JSON: {}", self.text))
+    }
+
+    pub fn header(&self, name: &str) -> Option<&str> {
+        self.headers.get(name).and_then(|value| value.to_str().ok())
+    }
+
+    /// The M1 error's code and message key.
+    pub fn error(&self) -> (String, String) {
+        let body = self.json();
+        (
+            body["code"].as_str().unwrap_or_default().to_owned(),
+            body["message_key"].as_str().unwrap_or_default().to_owned(),
+        )
+    }
+}
+
+/// A request to the API at `base`: `token` in `x-internal-identity` (none: without it), `body`
+/// as JSON.
+pub async fn call(
+    base: &str,
+    method: Method,
+    path: &str,
+    token: Option<&str>,
+    body: Option<&Value>,
+) -> Answer {
+    let mut request = reqwest::Client::new()
+        .request(method, format!("{base}{path}"))
+        .timeout(WAIT);
+    if let Some(token) = token {
+        request = request.header(INTERNAL_IDENTITY_HEADER, token);
+    }
+    if let Some(body) = body {
+        request = request
+            .header(CONTENT_TYPE, "application/json")
+            .body(serde_json::to_vec(body).expect("JSON"));
+    }
+    let response = request.send().await.expect("call the API");
+    let status = response.status().as_u16();
+    let headers = response.headers().clone();
+    let text = response.text().await.expect("read the answer");
+    Answer {
+        status,
+        headers,
+        text,
+    }
+}
+
+/// A call telemetry-query's stand-in received, with the claims of its token.
+#[derive(Clone, Debug)]
+pub struct TelemetryCall {
+    pub path: String,
+    pub body: Value,
+    pub claims: InternalClaims,
+}
+
+impl TelemetryCall {
+    pub fn tenant(&self) -> Option<TenantId> {
+        self.claims.tenant.map(|grant| grant.id)
+    }
+}
+
+/// How the stand-in answers a call: `None` for its usual answer, or a status and JSON body.
+pub type Script = Arc<dyn Fn(TelemetryCall) -> BoxFuture<Option<(u16, Value)>> + Send + Sync>;
+
+struct PeerState {
+    issuer: Arc<TestIssuer>,
+    /// The claims of every request token exchanged.
+    exchanged: Mutex<Vec<InternalClaims>>,
+    calls: Mutex<Vec<TelemetryCall>>,
+    /// Every request to any other path: method and path.
+    unexpected: Mutex<Vec<String>>,
+    script: Mutex<Option<Script>>,
+    /// The rows of a SQL answer.
+    sql_rows: AtomicUsize,
+}
+
+/// The stand-in identity service and telemetry-query.
+pub struct Peers {
+    pub url: String,
+    state: Arc<PeerState>,
+    task: JoinHandle<()>,
+}
+
+impl Drop for Peers {
+    fn drop(&mut self) {
+        self.task.abort();
+    }
+}
+
+fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    mutex.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+impl Peers {
+    /// Starts the stand-ins; they trust tokens of `issuer` and issue with it.
+    pub async fn start(issuer: Arc<TestIssuer>) -> Self {
+        let state = Arc::new(PeerState {
+            issuer,
+            exchanged: Mutex::new(Vec::new()),
+            calls: Mutex::new(Vec::new()),
+            unexpected: Mutex::new(Vec::new()),
+            script: Mutex::new(None),
+            sql_rows: AtomicUsize::new(3),
+        });
+        let router = Router::new()
+            .route(ExchangeToken::ROUTE, post(exchange))
+            .route(SQL_PATH, post(telemetry))
+            .route(STATISTICS_PATH, post(telemetry))
+            .route(USAGE_PATH, post(telemetry))
+            .fallback(unexpected)
+            .with_state(Arc::clone(&state));
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+        let address = listener.local_addr().expect("local address");
+        let task = tokio::spawn(async move {
+            axum::serve(listener, router)
+                .await
+                .expect("serve the peers");
+        });
+        Self {
+            url: format!("http://{address}"),
+            state,
+            task,
+        }
+    }
+
+    /// Answers telemetry calls with `script` from now on.
+    pub fn script(&self, script: Script) {
+        *lock(&self.state.script) = Some(script);
+    }
+
+    /// The rows a SQL answer has from now on.
+    pub fn sql_rows(&self, rows: usize) {
+        self.state.sql_rows.store(rows, Ordering::SeqCst);
+    }
+
+    pub fn calls(&self) -> Vec<TelemetryCall> {
+        lock(&self.state.calls).clone()
+    }
+
+    pub fn exchanged(&self) -> Vec<InternalClaims> {
+        lock(&self.state.exchanged).clone()
+    }
+
+    pub fn unexpected(&self) -> Vec<String> {
+        lock(&self.state.unexpected).clone()
+    }
+
+    /// Waits until telemetry-query's stand-in received `count` calls.
+    pub async fn wait_calls(&self, count: usize) {
+        let deadline = Instant::now() + WAIT;
+        while self.calls().len() < count {
+            assert!(
+                Instant::now() < deadline,
+                "telemetry-query's stand-in did not receive {count} calls within {WAIT:?}"
+            );
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    }
+}
+
+fn refuse(code: ErrorCode) -> Response {
+    let body = ErrorBody::new(code);
+    (body.http_status(), axum::Json(body)).into_response()
+}
+
+fn token_of(headers: &HeaderMap) -> String {
+    headers
+        .get(INTERNAL_IDENTITY_HEADER)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default()
+        .to_owned()
+}
+
+/// The token exchange, as the identity service answers a service calling on behalf of the
+/// request's user.
+async fn exchange(
+    State(state): State<Arc<PeerState>>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    let Ok(user) = state
+        .issuer
+        .verifier(ServiceName::Assistant)
+        .verify(&token_of(&headers))
+    else {
+        return refuse(ErrorCode::Unauthenticated);
+    };
+    let Ok(request) = serde_json::from_slice::<ExchangeToken>(&body) else {
+        return refuse(ErrorCode::InvalidRequest);
+    };
+    let caller = user.claims().clone();
+    lock(&state.exchanged).push(caller.clone());
+    let iat = unix_now();
+    let claims = InternalClaims {
+        iss: ServiceName::Identity,
+        sub: caller.sub,
+        aud: request.audience,
+        iat,
+        exp: caller.exp.min(iat + 60),
+        tenant: caller.tenant,
+        platform_admin: caller.platform_admin,
+        act: Some(Actor { sub: caller.aud }),
+        sid: None,
+    };
+    axum::Json(json!({"token": state.issuer.token(&claims)})).into_response()
+}
+
+/// telemetry-query's SQL, statistics and usage routes.
+async fn telemetry(
+    State(state): State<Arc<PeerState>>,
+    uri: Uri,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    let Ok(user) = state
+        .issuer
+        .verifier(ServiceName::TelemetryQuery)
+        .verify(&token_of(&headers))
+    else {
+        return refuse(ErrorCode::Unauthenticated);
+    };
+    let Ok(body) = serde_json::from_slice::<Value>(&body) else {
+        return refuse(ErrorCode::InvalidRequest);
+    };
+    let call = TelemetryCall {
+        path: uri.path().to_owned(),
+        body,
+        claims: user.claims().clone(),
+    };
+    lock(&state.calls).push(call.clone());
+    let script = lock(&state.script).clone();
+    if let Some(script) = script
+        && let Some((status, body)) = script(call.clone()).await
+    {
+        let status = StatusCode::from_u16(status).expect("a status");
+        return (status, axum::Json(body)).into_response();
+    }
+    match call.path.as_str() {
+        SQL_PATH => sql_answer(&call.body, state.sql_rows.load(Ordering::SeqCst)),
+        STATISTICS_PATH => statistics_answer(&call.body),
+        _ => usage_answer(&call.body),
+    }
+}
+
+async fn unexpected(State(state): State<Arc<PeerState>>, method: Method, uri: Uri) -> Response {
+    lock(&state.unexpected).push(format!("{method} {}", uri.path()));
+    refuse(ErrorCode::Unavailable)
+}
+
+/// A SQL answer with `rows` days, as telemetry-query writes ClickHouse's values.
+pub fn sql_answer(body: &Value, rows: usize) -> Response {
+    let Ok(request) = serde_json::from_value::<RunSql>(body.clone()) else {
+        return refuse(ErrorCode::InvalidRequest);
+    };
+    let now = Utc::now();
+    let start = now.date_naive() - TimeDelta::days(i64::try_from(rows).expect("small"));
+    let result = SqlResult {
+        sql: request.sql,
+        columns: vec![
+            SqlColumn {
+                name: "day".into(),
+                data_type: "Date".into(),
+            },
+            SqlColumn {
+                name: "kwh".into(),
+                data_type: "Float64".into(),
+            },
+        ],
+        rows: (0..rows)
+            .map(|index| {
+                let day = start + TimeDelta::days(i64::try_from(index).expect("small"));
+                vec![json!(day.format("%Y-%m-%d").to_string()), json!(12.5)]
+            })
+            .collect(),
+        queryable_from: QueryableFrom {
+            tenant_telemetry: now - TimeDelta::days(7),
+            tenant_telemetry_1m: now - TimeDelta::days(90),
+            tenant_telemetry_1h: now - TimeDelta::days(90),
+        },
+        queried_at: now,
+    };
+    axum::Json(result).into_response()
+}
+
+/// The range of a semantic answer: the stand-in does not resolve periods.
+fn answer_range(query: &SeriesQuery) -> QueryRange {
+    let now = Utc::now().fixed_offset();
+    QueryRange {
+        tz: query.tz.clone(),
+        interval: query.interval,
+        from: now - TimeDelta::days(7),
+        to: now,
+        truncated: false,
+        earliest: now - TimeDelta::days(90),
+        ends_after_now: false,
+        resolution: Resolution::Hour,
+        queried_at: now,
+    }
+}
+
+fn statistics_answer(body: &Value) -> Response {
+    let Ok(query) = serde_json::from_value::<SeriesQuery>(body.clone()) else {
+        return refuse(ErrorCode::InvalidRequest);
+    };
+    let now = Utc::now().fixed_offset();
+    let series = query
+        .series
+        .iter()
+        .map(|key| SeriesStatistics {
+            device_id: key.device_id,
+            point: key.point.clone(),
+            status: DataStatus::Ok,
+            count: 60,
+            numeric_count: 60,
+            min: Some(228.0),
+            min_time: Some(now - TimeDelta::hours(2)),
+            max: Some(231.0),
+            max_time: Some(now - TimeDelta::hours(1)),
+            avg: Some(229.5),
+            first: None,
+            last: None,
+            highest: None,
+            lowest: None,
+            rows: vec![StatisticsRow {
+                time: now - TimeDelta::days(7),
+                count: 60,
+                min: Some(228.0),
+                max: Some(231.0),
+                avg: Some(229.5),
+                last: Reading::Float(Some(230.25)),
+            }],
+        })
+        .collect();
+    axum::Json(Statistics {
+        range: answer_range(&query),
+        series,
+    })
+    .into_response()
+}
+
+fn usage_answer(body: &Value) -> Response {
+    let Ok(query) = serde_json::from_value::<SeriesQuery>(body.clone()) else {
+        return refuse(ErrorCode::InvalidRequest);
+    };
+    let now = Utc::now().fixed_offset();
+    let series = query
+        .series
+        .iter()
+        .map(|key| SeriesUsage {
+            device_id: key.device_id,
+            point: key.point.clone(),
+            status: UsageStatus::Ok,
+            check: Some(CumulativeCheck {
+                verdict: Verdict::Cumulative,
+                drops: 0,
+                rises: 47,
+                comparisons: 47,
+                from: now - TimeDelta::days(8),
+                to: now,
+            }),
+            total: Some(91.5),
+            drops: 0,
+            readings: 864,
+            first_reading: None,
+            last_reading: None,
+            baseline: true,
+            gaps: 0,
+            longest_gap: None,
+            suspicious_steps: 0,
+            largest_suspicious_step: None,
+            skipped_cells: 0,
+            highest: None,
+            lowest: None,
+            rows: (1..=3)
+                .map(|day| UsageRow {
+                    time: now - TimeDelta::days(day),
+                    usage: 30.5,
+                    readings: 288,
+                    drops: 0,
+                    after_gap: false,
+                    suspicious_steps: 0,
+                })
+                .rev()
+                .collect(),
+        })
+        .collect();
+    axum::Json(Usage {
+        range: answer_range(&query),
+        series,
+    })
+    .into_response()
+}
+
+/// The lines a child process printed, shared with the thread that reads them.
+#[derive(Clone, Default)]
+pub struct Output(Arc<Mutex<Vec<String>>>);
+
+impl Output {
+    fn collect(&self, stream: impl Read + Send + 'static) {
+        let lines = Arc::clone(&self.0);
+        thread::spawn(move || {
+            for line in BufReader::new(stream).lines() {
+                let Ok(line) = line else { break };
+                lock(&lines).push(line);
+            }
+        });
+    }
+
+    /// Every line so far.
+    pub fn text(&self) -> String {
+        lock(&self.0).join("\n")
+    }
+
+    /// The JSON lines whose `message` is `message`.
+    pub fn messages(&self, message: &str) -> Vec<Value> {
+        lock(&self.0)
+            .iter()
+            .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+            .filter(|value| value["message"] == message)
+            .collect()
+    }
+}
+
+/// Writes `jwks` to a file of its own under Cargo's temporary directory for these tests and
+/// returns its path.
+pub fn keys_file(jwks: &str) -> std::path::PathBuf {
+    static NEXT: AtomicU32 = AtomicU32::new(0);
+    let name = format!(
+        "assistant-jwks-{}-{}.json",
+        std::process::id(),
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    );
+    let path = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(name);
+    std::fs::write(&path, jwks).expect("write the keys file");
+    path
+}
+
+/// The assistant binary running as a child process.
+pub struct Binary {
+    child: Child,
+    pub stdout: Output,
+    pub stderr: Output,
+    /// Where the public API listens, as a base URL.
+    pub url: String,
+    health: SocketAddr,
+}
+
+impl Binary {
+    /// Starts the assistant on free local ports against `product` as `assistant_app`, trusting
+    /// `issuer`'s keys, with every peer it calls (the identity service's exchange,
+    /// telemetry-query, assets and the AI gateway) at `peers_url`, and waits until it is ready.
+    /// The environment is otherwise empty, so the developer's own variables cannot leak in.
+    pub async fn start(product: &ProductPostgres, issuer: &TestIssuer, peers_url: &str) -> Self {
+        let keys_file = keys_file(&issuer.jwks());
+        let mut command = Command::new(env!("CARGO_BIN_EXE_assistant"));
+        command
+            .env_clear()
+            .env("TRUSTIOT__HTTP__LISTEN_ADDR", "127.0.0.1:0")
+            .env("TRUSTIOT__HTTP__HEALTH_LISTEN_ADDR", "127.0.0.1:0")
+            .env("TRUSTIOT__SHUTDOWN__DRAIN_DELAY", "100ms")
+            .env("TRUSTIOT__SHUTDOWN__DRAIN_TIMEOUT", "5s")
+            .env("TRUSTIOT_INTERNAL_IDENTITY_KEYS_FILE", &keys_file)
+            .env("TRUSTIOT__DATABASE__USERNAME", "assistant_app")
+            .env("TRUSTIOT__DATABASE__PASSWORD", TEST_PASSWORD)
+            .env("TRUSTIOT__AI_GATEWAY__URL", peers_url)
+            .env("TRUSTIOT__IDENTITY__EXCHANGE_URL", peers_url)
+            .env("TRUSTIOT__TELEMETRY_QUERY__URL", peers_url)
+            .env("TRUSTIOT__ASSETS__URL", peers_url)
+            .envs(product.platform_env())
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        let mut child = command.spawn().expect("start the assistant");
+        let (stdout, stderr) = (Output::default(), Output::default());
+        stdout.collect(child.stdout.take().expect("piped stdout"));
+        stderr.collect(child.stderr.take().expect("piped stderr"));
+        let deadline = Instant::now() + WAIT;
+        let listening = loop {
+            if let Some(listening) = stdout.messages("listening").into_iter().next() {
+                break listening;
+            }
+            if let Ok(Some(status)) = child.try_wait() {
+                panic!(
+                    "the assistant exited with {status}\nstdout:\n{}\nstderr:\n{}",
+                    stdout.text(),
+                    stderr.text()
+                );
+            }
+            assert!(
+                Instant::now() < deadline,
+                "the assistant did not log `listening` within {WAIT:?}\nstdout:\n{}\nstderr:\n{}",
+                stdout.text(),
+                stderr.text()
+            );
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        };
+        let address = |field: &str| -> SocketAddr {
+            listening["fields"][field]
+                .as_str()
+                .and_then(|address| address.parse().ok())
+                .unwrap_or_else(|| panic!("no {field} in {listening}"))
+        };
+        let binary = Self {
+            child,
+            url: format!("http://{}", address("address")),
+            health: address("health_address"),
+            stdout,
+            stderr,
+        };
+        binary.wait_ready().await;
+        binary
+    }
+
+    /// Waits until `/readyz` answers 200.
+    async fn wait_ready(&self) {
+        let url = format!("http://{}/readyz", self.health);
+        let deadline = Instant::now() + WAIT;
+        loop {
+            if let Ok(response) = reqwest::get(&url).await
+                && response.status() == StatusCode::OK
+            {
+                return;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "/readyz of the assistant did not answer 200 within {WAIT:?}\nstdout:\n{}",
+                self.stdout.text()
+            );
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    }
+}
+
+impl Drop for Binary {
+    fn drop(&mut self) {
+        if matches!(self.child.try_wait(), Ok(None)) {
+            let _ = self.child.kill();
+            let _ = self.child.wait();
+        }
+    }
+}

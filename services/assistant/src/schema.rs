@@ -15,8 +15,15 @@ use service_kit::migrations::{Migration, Schema};
 pub const SCHEMA: Schema = Schema {
     service: "assistant",
     outbox_producer: false,
-    migrations: &[Migration {
-        name: "0001_assistant.sql",
-        sql: include_str!("../migrations/postgres/0001_assistant.sql"),
-    }],
+    migrations: &[
+        Migration {
+            name: "0001_assistant.sql",
+            sql: include_str!("../migrations/postgres/0001_assistant.sql"),
+        },
+        // The dashboards and their versions (Laysi/trustiot-v2#150).
+        Migration {
+            name: "0002_dashboards.sql",
+            sql: include_str!("../migrations/postgres/0002_dashboards.sql"),
+        },
+    ],
 };

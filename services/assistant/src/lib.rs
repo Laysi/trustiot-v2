@@ -20,7 +20,10 @@
 //!   chat API (Laysi/trustiot-v2#146) opens on that pool;
 //! - the per-call quota pre-deduction of the AI gateway's ledger (Laysi/trustiot-v2#140): each
 //!   call's [`model::ModelRequest::call_id`] (the ledger's `llm_call_id`), and the gateway's
-//!   refusal reaching the agent as a [`model::ModelError`].
+//!   refusal reaching the agent as a [`model::ModelError`];
+//! - dashboards (Laysi/trustiot-v2#150): [`dashboards::store`] keeps them, the public API
+//!   ([`api`]) lists, opens, publishes, restores and archives them and runs their datasets as
+//!   the viewer through [`Assistant::runner`], which the `dashboard` tool shares.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -28,15 +31,22 @@ use std::time::Duration;
 use axum::Router;
 use contract::client::InternalClient;
 use contract::{ServiceName, service};
+use service_kit::identity::{IdentityVerifier, OnBehalf, PublishedKeys};
 use service_kit::migrations::MigrationCheck;
 use service_kit::tenant::TenantDb;
 use service_kit::{BoxError, Context};
 use sqlx::postgres::PgPoolOptions;
+use utoipa::OpenApi as _;
+
+use crate::dashboards::caps::RunCaps;
+use crate::dashboards::runner::DatasetRunner;
 
 pub mod agent;
+pub mod api;
 pub mod budget;
 pub mod callee;
 pub mod config;
+pub mod dashboards;
 pub mod delegation;
 pub mod history;
 pub mod model;
@@ -51,14 +61,21 @@ pub use config::Config;
 /// How long getting a database connection may take, opening a new one included.
 pub const ACQUIRE_TIMEOUT: Duration = Duration::from_secs(5);
 
+/// The public API's OpenAPI document (merged into `api/openapi.json` by `tools/openapi`).
+#[must_use]
+pub fn openapi() -> utoipa::openapi::OpenApi {
+    api::ApiDoc::openapi()
+}
+
 /// The service's startup for `service_kit::run`: builds the agent and its tools from the
-/// configuration, which fails startup when they cannot be built, and opens the service role's
-/// pool lazily (with the session check of `crates/service-kit`). Readiness passes while the role
-/// (`assistant_app`) can open a checked session and the database has every migration file this
-/// release expects ([`schema::SCHEMA`]). It calls neither the AI gateway nor the services the
-/// tools call, so the service is ready without a model. The service has no API of its own yet
-/// (the chat API is Laysi/trustiot-v2#146), so it serves only service-kit's health endpoints,
-/// and the assistant is not kept.
+/// configuration, which fails startup when they cannot be built, opens the service role's pool
+/// lazily (with the session check of `crates/service-kit`), follows the identity service's
+/// public keys file, and serves the public API ([`api`]: the dashboards). Readiness passes while
+/// the role (`assistant_app`) can open a checked session, the service has a usable set of public
+/// keys, and the database has every migration file this release expects ([`schema::SCHEMA`]).
+/// It calls neither the AI gateway nor the services the tools call, so the service is ready
+/// without a model. The chat API (Laysi/trustiot-v2#146) keeps the agent; until then it is
+/// dropped after it is built.
 ///
 /// # Errors
 ///
@@ -79,20 +96,44 @@ pub async fn start(context: Context<Config>) -> Result<Router, BoxError> {
         async move { db.ping().await }
     });
     MigrationCheck::new(&schema::SCHEMA, db.pool().clone()).register(context.health());
+    let keys = PublishedKeys::watch(
+        &context,
+        config.platform.internal_identity_keys_file.clone(),
+    )
+    .await;
+    let verifier = IdentityVerifier::new(ServiceName::Assistant, keys);
+    // A dataset run exchanges the request's token for telemetry-query's; without the exchange
+    // every run answers 503 `dashboard.dataset_failed`.
+    let on_behalf = match &config.identity.exchange_url {
+        Some(url) => Some(OnBehalf::new(InternalClient::<service::Identity>::new(
+            url,
+            delegation::IDENTITY_TIMEOUT,
+        )?)),
+        None => None,
+    };
     tracing::info!(
         tools = assistant.agent.tool_count(),
         delegation = assistant.runs.is_some(),
+        dataset_runs = on_behalf.is_some() && assistant.runner.is_configured(),
         "assistant ready"
     );
-    Ok(Router::new())
+    Ok(api::routes(api::ApiState {
+        verifier,
+        db,
+        on_behalf,
+        runner: assistant.runner,
+    }))
 }
 
-/// The agent with its tools, and how a question starts its delegation.
+/// The agent with its tools, how a question starts its delegation, and the dataset runs.
 pub struct Assistant {
     pub agent: Agent,
     /// `None` without `identity.exchange_url`: the agent has no tools, and a question is asked
     /// with [`tools::NoDelegation`].
     pub runs: Option<delegation::QuestionRuns>,
+    /// The dashboards' dataset runs, one per process with one set of caps: the public API and
+    /// the `dashboard` tool share it. Without `telemetry_query.url` every run fails.
+    pub runner: Arc<DatasetRunner>,
 }
 
 /// The assistant the configuration describes. The tools of a service are left out when its
@@ -107,6 +148,7 @@ pub fn build(config: &Config) -> Result<Assistant, BoxError> {
         return Ok(Assistant {
             agent: build_agent(config, Vec::new())?,
             runs: None,
+            runner: Arc::new(DatasetRunner::new(None, RunCaps::default())),
         });
     };
     let identity =
@@ -114,9 +156,11 @@ pub fn build(config: &Config) -> Result<Assistant, BoxError> {
     let runs = delegation::QuestionRuns::new(identity, config.identity.run_lifetime);
     let timeout = config.tools.call_timeout;
     let mut tools: Vec<Arc<dyn tools::Tool>> = Vec::new();
+    let mut dataset_telemetry = None;
     match &config.telemetry_query.url {
         Some(url) => {
             let telemetry = callee::Callee::new(ServiceName::TelemetryQuery, url, timeout)?;
+            dataset_telemetry = Some(telemetry.clone());
             tools.push(tools::telemetry::TelemetryLatest::new(telemetry.clone()));
             tools.push(tools::semantic::TelemetryStatistics::new(telemetry.clone()));
             tools.push(tools::semantic::TelemetryUsage::new(telemetry.clone()));
@@ -136,6 +180,7 @@ pub fn build(config: &Config) -> Result<Assistant, BoxError> {
     Ok(Assistant {
         agent: build_agent(config, tools)?,
         runs: Some(runs),
+        runner: Arc::new(DatasetRunner::new(dataset_telemetry, RunCaps::default())),
     })
 }
 

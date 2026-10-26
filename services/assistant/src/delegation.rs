@@ -29,7 +29,9 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use axum::response::{IntoResponse, Response};
 use contract::client::InternalClient;
 use contract::{ErrorBody, ErrorCode, InternalToken, RunId, ServiceName, service};
-use service_kit::identity::{RunDelegation, RunDelegationError, RunDelegations, UserIdentity};
+use service_kit::identity::{
+    OnBehalf, RunDelegation, RunDelegationError, RunDelegations, UserIdentity,
+};
 use tokio::time::Instant;
 use uuid::Uuid;
 
@@ -281,6 +283,50 @@ impl IntoResponse for StartError {
     fn into_response(self) -> Response {
         let body = ErrorBody::new(self.code());
         (body.http_status(), axum::Json(body)).into_response()
+    }
+}
+
+/// The request's own identity as a [`Delegation`], for a call the API makes while it handles
+/// the request: a dashboard's dataset run when a user opens the dashboard
+/// (`crate::dashboards::runner`). Each call exchanges the request's token at the identity
+/// service for one addressed to the callee (service-kit's [`OnBehalf`]), so the callee sees the
+/// request's user, tenant and role, never anyone else's. The exchanged token expires with the
+/// request's.
+///
+/// Every failed exchange is [`DelegationError::Unavailable`]: the request's token was verified
+/// moments ago, so a refusal is a fault of the deployment (service-kit logs it at ERROR), not a
+/// revoked user.
+#[derive(Clone, Copy)]
+pub struct OnBehalfOf<'a> {
+    pub on_behalf: &'a OnBehalf,
+    pub user: &'a UserIdentity,
+}
+
+impl fmt::Debug for OnBehalfOf<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("OnBehalfOf").finish_non_exhaustive()
+    }
+}
+
+impl Delegation for OnBehalfOf<'_> {
+    fn token_for(
+        &self,
+        audience: ServiceName,
+    ) -> BoxFuture<'_, Result<InternalToken, DelegationError>> {
+        Box::pin(async move {
+            self.on_behalf
+                .token_for(self.user, audience)
+                .await
+                .map_err(|_| DelegationError::Unavailable)
+        })
+    }
+
+    fn principal(&self) -> Option<Principal> {
+        let tenant_id = self.user.tenant_id()?;
+        Some(Principal {
+            tenant_id,
+            user_id: self.user.user_id(),
+        })
     }
 }
 

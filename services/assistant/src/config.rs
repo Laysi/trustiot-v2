@@ -69,6 +69,10 @@ pub struct Config {
 /// platform setting.
 #[derive(Debug, Deserialize)]
 pub struct Platform {
+    /// `TRUSTIOT_INTERNAL_IDENTITY_KEYS_FILE`: the file with the public keys internal identity
+    /// tokens are verified with (the chart's ConfigMap volume), read again while the service
+    /// runs. The public API (`crate::api`) verifies every request's token with them.
+    pub internal_identity_keys_file: PathBuf,
     /// `TRUSTIOT_POSTGRES_HOST`.
     pub postgres_host: String,
     /// `TRUSTIOT_POSTGRES_PORT`.
@@ -92,8 +96,9 @@ pub struct Database {
     pub password: String,
     /// `TRUSTIOT__DATABASE__MAX_CONNECTIONS`: most connections of the service role's pool per
     /// replica, from [`MIN_DATABASE_CONNECTIONS`] to [`MAX_DATABASE_CONNECTIONS`]. Default 4:
-    /// only readiness uses the pool until the chat API (Laysi/trustiot-v2#146) stores
-    /// conversations.
+    /// readiness and the dashboard API's short transactions share it (a dataset run holds no
+    /// connection while it calls telemetry-query); the chat API (Laysi/trustiot-v2#146) sizes it
+    /// again when it stores conversations.
     #[serde(default = "default_max_connections")]
     pub max_connections: u32,
 }
@@ -521,6 +526,7 @@ mod tests {
     fn config() -> Config {
         Config {
             platform: Platform {
+                internal_identity_keys_file: "/etc/trustiot/identity-keys/jwks.json".into(),
                 postgres_host: "trustiot-postgres-rw".into(),
                 postgres_port: 5432,
                 postgres_database: "trustiot".into(),
@@ -625,6 +631,10 @@ mod tests {
                 "TRUSTIOT_POSTGRES_CA_FILE",
                 "/etc/trustiot/postgres-ca/ca.crt",
             ),
+            (
+                "TRUSTIOT_INTERNAL_IDENTITY_KEYS_FILE",
+                "/etc/trustiot/identity-keys/jwks.json",
+            ),
             // Another platform setting the chart gives every service: ignored, not refused.
             ("TRUSTIOT_DEPLOYMENT_MODE", "saas"),
             ("TRUSTIOT__DATABASE__USERNAME", "assistant_app"),
@@ -662,6 +672,10 @@ mod tests {
         );
         assert_eq!(config.assets.url.as_deref(), Some("http://assets:8080"));
         assert_eq!(config.database.max_connections, 6);
+        assert_eq!(
+            config.platform.internal_identity_keys_file,
+            PathBuf::from("/etc/trustiot/identity-keys/jwks.json")
+        );
         let role = config.service_role();
         assert_eq!(
             (role.host.as_str(), role.port, role.username.as_str()),

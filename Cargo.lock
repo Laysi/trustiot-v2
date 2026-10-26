@@ -168,6 +168,7 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "utoipa",
  "uuid",
 ]
 
@@ -1629,6 +1630,7 @@ name = "openapi"
 version = "0.1.0"
 dependencies = [
  "assets",
+ "assistant",
  "certs",
  "contract",
  "identity",
