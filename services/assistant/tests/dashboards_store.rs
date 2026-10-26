@@ -10,7 +10,8 @@
 //!   same `NotFound` as one that does not exist.
 //! - The tool writes only into its own conversation's drafts.
 //! - The service role cannot change or remove a version, nor change a dashboard beyond what the
-//!   store does; purging a conversation removes its drafts and keeps what was published.
+//!   store does, nor write a draft whose creator is not its conversation's owner; purging a
+//!   conversation removes its drafts and keeps what was published.
 //!
 //! Starts a throwaway Postgres with TLS (podman or docker); skipped without either unless `CI`
 //! is set.
@@ -882,6 +883,26 @@ async fn the_service_role_cannot_change_what_was_written() {
             .await
             .as_deref(),
         Some(FOREIGN_KEY_VIOLATION)
+    );
+    // A draft's creator is its conversation's owner: a draft of the conversation by anyone else
+    // is refused, the owner's is not.
+    let someone_elses = "INSERT INTO assistant.dashboards
+        (tenant_id, dashboard_id, kind, conversation_id, created_by)
+    SELECT tenant_id, gen_random_uuid(), 'draft', conversation_id, gen_random_uuid()
+    FROM assistant.dashboards WHERE dashboard_id = $1::uuid";
+    assert_eq!(
+        as_service_role(&world, &editor, someone_elses, &[draft])
+            .await
+            .as_deref(),
+        Some(FOREIGN_KEY_VIOLATION)
+    );
+    let the_owners = "INSERT INTO assistant.dashboards
+        (tenant_id, dashboard_id, kind, conversation_id, created_by)
+    SELECT tenant_id, gen_random_uuid(), 'draft', conversation_id, created_by
+    FROM assistant.dashboards WHERE dashboard_id = $1::uuid";
+    assert_eq!(
+        as_service_role(&world, &editor, the_owners, &[draft]).await,
+        None
     );
 }
 

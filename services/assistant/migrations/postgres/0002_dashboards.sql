@@ -5,7 +5,8 @@
 --
 -- Two kinds share one table:
 -- - a draft belongs to one conversation: the `dashboard` tool writes it, its conversation's owner
---   sees it, and it goes when the conversation is purged (ON DELETE CASCADE below);
+--   sees it and is its creator (the foreign key to the conversation includes the owner), and it
+--   goes when the conversation is purged (ON DELETE CASCADE below);
 -- - a saved dashboard belongs to the tenant: a user publishes a draft into it, every member of
 --   the tenant sees it, and it has no conversation, so purging one never touches it. It is only
 --   archived and unarchived, never deleted (MS3).
@@ -31,6 +32,12 @@
 -- ready until every file is applied unchanged, so a database that applied an earlier draft of
 -- this file stops at the migration instead of serving with it.
 
+-- A conversation and its owner, for the drafts' foreign key below: the primary key already makes
+-- each conversation unique, and this adds only its owner, so a draft names its conversation and
+-- that conversation's owner together.
+ALTER TABLE assistant.conversations
+    ADD CONSTRAINT conversations_owner UNIQUE (tenant_id, conversation_id, user_id);
+
 -- One row per dashboard.
 CREATE TABLE assistant.dashboards (
     tenant_id uuid NOT NULL,
@@ -48,7 +55,8 @@ CREATE TABLE assistant.dashboards (
     -- Always 'saved': with the foreign key below it makes `saved_dashboard_id` name a saved
     -- dashboard, never a draft.
     saved_kind text NOT NULL GENERATED ALWAYS AS ('saved') STORED,
-    -- A draft's conversation owner, or the user who first published a saved dashboard.
+    -- A draft's conversation owner (the foreign key below holds it), or the user who first
+    -- published a saved dashboard.
     created_by uuid NOT NULL,
     -- By the database clock.
     created_at timestamptz NOT NULL DEFAULT now(),
@@ -61,8 +69,11 @@ CREATE TABLE assistant.dashboards (
     CHECK (kind = 'draft' OR (saved_dashboard_id IS NULL AND base_saved_version IS NULL)),
     CHECK (kind = 'saved' OR archived_at IS NULL),
     CHECK (saved_dashboard_id IS NOT NULL OR base_saved_version IS NULL),
-    FOREIGN KEY (tenant_id, conversation_id)
-        REFERENCES assistant.conversations (tenant_id, conversation_id) ON DELETE CASCADE,
+    -- A draft's conversation, and its owner as the draft's creator. A saved dashboard has no
+    -- conversation, so the key does not apply to it (MATCH SIMPLE).
+    FOREIGN KEY (tenant_id, conversation_id, created_by)
+        REFERENCES assistant.conversations (tenant_id, conversation_id, user_id)
+        ON DELETE CASCADE,
     -- NO ACTION: saved dashboards are never deleted (MS3), and deleting a draft never touches
     -- the saved dashboard it points at.
     FOREIGN KEY (tenant_id, saved_dashboard_id, saved_kind)
