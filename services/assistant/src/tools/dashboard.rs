@@ -18,18 +18,25 @@
 //!   a pass the version is written ([`store`]). Anything else is up to [`MAX_PROBLEMS`]
 //!   structured problems of closed kinds, each with fixed English, and nothing is written.
 //!
-//! Per tenant and replica, one write at a time runs its datasets, its check and its save: a
-//! write that finds its tenant's slot taken waits up to [`WRITE_WAIT`] and is then `check_busy`,
+//! Per tenant and replica, one write at a time runs its datasets, its check and its save, and
+//! of all tenants' writes at most [`MAX_WRITES_IN_FLIGHT`] at a time: a write waits for its
+//! tenant's slot and then for a place, both within [`WRITE_WAIT`], and is then `check_busy`,
 //! not counted against the question. So one tenant has one check in flight at a time and holds
-//! the results of one write; the checker client adds a limit for all tenants
+//! the results of one write, and the replica holds the results of at most
+//! [`MAX_WRITES_IN_FLIGHT`] writes; the checker client adds a limit on the checks of all tenants
 //! ([`crate::dashboards::checker::MAX_CHECKS_IN_FLIGHT`]).
 //!
 //! Per question (keyed by the run): at most [`MAX_WRITES_PER_QUESTION`] writes reach the dataset
 //! runs, and a dataset (its source and `max_rows`) runs once: a later write of the same question
-//! reuses its result. The results are kept until the question's deadline, within
-//! [`MAX_CACHED_BYTES`] for all questions together; when that is full, the least recently
-//! writing questions' results give way, and a dataset whose result gave way runs again. The
-//! tool never publishes, restores or archives: those are the user's, through the public API.
+//! reuses its result. The results are kept as their JSON until the question's deadline, counted
+//! as the bytes they hold (key and JSON), within [`MAX_CACHED_BYTES`] for all questions together
+//! and [`MAX_CACHED_BYTES_PER_TENANT`] for one tenant's: a tenant's least recently writing
+//! questions give way to its newer ones, and when the whole cache is full, the least recently
+//! writing questions of any tenant give way. So one tenant can make room for at most its share,
+//! never take the whole cache from the others. A dataset whose result gave way runs again. A
+//! write holds its results as JSON while its datasets run, and as values only for its formulas
+//! and check. The tool never publishes, restores or archives: those are the user's, through the
+//! public API.
 //!
 //! A write to a draft taken from a saved dashboard may say it merged a newer version of that
 //! dashboard (`rebase_saved_version`): the version written is then based on it, which is what
@@ -66,11 +73,12 @@ use contract::{DashboardId, TenantId};
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
 use service_kit::tenant::{BackgroundTenantDb, TenantTransaction};
+use tokio::sync::Semaphore;
 use tokio::time::Instant;
 use uuid::Uuid;
 
 use crate::dashboards::checker::{CheckOutcome, Checker, Unavailable};
-use crate::dashboards::limits::KeyedSlots;
+use crate::dashboards::limits::{self, KeyedSlots};
 use crate::dashboards::runner::{DatasetRunner, RunError, TelemetryError};
 use crate::dashboards::store::{self, Author, NewVersion, StoreError};
 use crate::model::BoxFuture;
@@ -123,8 +131,18 @@ const REPORT_MARKS: usize = 40;
 /// result always fits the tool result limit and the model always learns that it saved.
 const MAX_SUCCESS_BYTES: usize = 32 << 10;
 
-/// The dataset results kept for all questions together, for reuse by a later write.
+/// The dataset results kept for all questions together, for reuse by a later write: their keys
+/// and JSON, counted as the bytes they hold.
 pub const MAX_CACHED_BYTES: usize = 64 << 20;
+
+/// The share of [`MAX_CACHED_BYTES`] one tenant's questions may hold together: a quarter, room
+/// for 7 of a write's 8 results at their largest (2 MiB each).
+pub const MAX_CACHED_BYTES_PER_TENANT: usize = MAX_CACHED_BYTES / 4;
+
+/// The most writes of all tenants past their tenant's slot at a time, per replica: each holds its
+/// datasets' results until it ends, so this bounds what the writes hold. As many as the checks in
+/// flight, so a write that reaches its check never waits there for a place.
+pub const MAX_WRITES_IN_FLIGHT: usize = crate::dashboards::checker::MAX_CHECKS_IN_FLIGHT;
 
 /// The most saved dashboard versions a question remembers having read; a rebase onto one it
 /// forgot is refused until it reads it again.
@@ -195,8 +213,8 @@ period; never paste its SQL, HTML or code.";
 const NOT_SAVED_NOTE: &str = "Nothing was saved. Fix the problems and call write again with \
 the same base_version; the user still sees the previous version.";
 
-/// A dataset's run: its result, shared with the question's cache, or why it failed.
-type RunOutcome = Result<Arc<DatasetResult>, RunError>;
+/// A dataset's run: its result's JSON, shared with the question's cache, or why it failed.
+type RunOutcome = Result<Arc<[u8]>, RunError>;
 
 /// The tool.
 pub struct DashboardTool {
@@ -206,6 +224,8 @@ pub struct DashboardTool {
     bounds: WriteBounds,
     /// One write per tenant past validation.
     writes: KeyedSlots<TenantId>,
+    /// The places of all tenants' writes past their tenant's slot.
+    places: Arc<Semaphore>,
     questions: Mutex<Questions>,
 }
 
@@ -214,8 +234,11 @@ pub struct DashboardTool {
 pub struct WriteBounds {
     /// Until the write's datasets have run: [`DATASETS_TIMEOUT`].
     pub datasets_timeout: Duration,
-    /// For the tenant's write in progress: [`WRITE_WAIT`].
+    /// For the tenant's write in progress and then a place: [`WRITE_WAIT`].
     pub write_wait: Duration,
+    /// The writes of all tenants past their tenant's slot at a time (at least one):
+    /// [`MAX_WRITES_IN_FLIGHT`].
+    pub writes_in_flight: usize,
 }
 
 impl Default for WriteBounds {
@@ -223,6 +246,7 @@ impl Default for WriteBounds {
         Self {
             datasets_timeout: DATASETS_TIMEOUT,
             write_wait: WRITE_WAIT,
+            writes_in_flight: MAX_WRITES_IN_FLIGHT,
         }
     }
 }
@@ -249,12 +273,13 @@ impl DashboardTool {
             checker,
             bounds,
             writes: KeyedSlots::new(1),
+            places: Arc::new(Semaphore::new(bounds.writes_in_flight.max(1))),
             questions: Mutex::new(Questions::default()),
         })
     }
 
-    /// The time limit of one call: the wait for the tenant's write in progress, the bound until
-    /// the datasets have run, the check's ([`Checker::timeout`]) and the save's
+    /// The time limit of one call: the wait for the tenant's write in progress and a place, the
+    /// bound until the datasets have run, the check's ([`Checker::timeout`]) and the save's
     /// ([`SAVE_TIMEOUT`]), and a margin. Each phase ends on its own bound with a result the model
     /// can act on, so this limit is a backstop; the question's deadline still ends a call first.
     #[must_use]
@@ -718,22 +743,41 @@ fn not_saved(problems: Vec<WriteProblem>) -> ToolOutput {
     ToolOutput::error(result.to_string())
 }
 
-/// The state of the questions that wrote: their write count and the latest results.
-#[derive(Default)]
+/// The state of the questions that wrote: their write count, the saved versions they read and
+/// their latest results.
 struct Questions {
     by_run: HashMap<Uuid, Question>,
+    /// The bytes all questions' results hold.
     cached_bytes: usize,
+    /// The bytes each tenant's questions' results hold; tenants that hold none are left out.
+    by_tenant: HashMap<TenantId, usize>,
     clock: u64,
+    /// [`MAX_CACHED_BYTES`] in the service.
+    total: usize,
+    /// [`MAX_CACHED_BYTES_PER_TENANT`] in the service.
+    per_tenant: usize,
+}
+
+impl Default for Questions {
+    fn default() -> Self {
+        Self::with_budget(MAX_CACHED_BYTES, MAX_CACHED_BYTES_PER_TENANT)
+    }
 }
 
 struct Question {
+    tenant: TenantId,
     writes: u32,
     /// The saved dashboards' versions the question read, the latest last.
     saved_reads: VecDeque<(DashboardId, u32)>,
     expires: Instant,
-    /// The results of the question's datasets, by [`result_key`], and their sizes.
-    results: HashMap<String, (Arc<DatasetResult>, usize)>,
+    /// The JSON of the question's dataset results, by [`result_key`].
+    results: HashMap<String, Arc<[u8]>>,
     used: u64,
+}
+
+/// The bytes a kept result holds: its key and its JSON.
+fn entry_size(key: &str, json: &[u8]) -> usize {
+    key.len().saturating_add(json.len())
 }
 
 impl Question {
@@ -751,30 +795,49 @@ impl Question {
     fn has_read(&self, saved_id: DashboardId, version: u32) -> bool {
         self.saved_reads.contains(&(saved_id, version))
     }
+
+    /// The bytes the question's results hold.
+    fn cached(&self) -> usize {
+        self.results
+            .iter()
+            .map(|(key, json)| entry_size(key, json))
+            .sum()
+    }
 }
 
 impl Questions {
-    /// Forgets the questions past their deadline.
-    fn prune(&mut self, now: Instant) {
-        let mut freed = 0;
-        self.by_run.retain(|_, question| {
-            let keep = question.expires > now;
-            if !keep {
-                freed += question
-                    .results
-                    .values()
-                    .map(|(_, size)| size)
-                    .sum::<usize>();
-            }
-            keep
-        });
-        self.cached_bytes = self.cached_bytes.saturating_sub(freed);
+    /// A cache of `total` bytes in all and `per_tenant` (at most `total`) for one tenant.
+    fn with_budget(total: usize, per_tenant: usize) -> Self {
+        Self {
+            by_run: HashMap::new(),
+            cached_bytes: 0,
+            by_tenant: HashMap::new(),
+            clock: 0,
+            total,
+            per_tenant: per_tenant.min(total),
+        }
     }
 
-    fn question(&mut self, run_id: Uuid, expires: Instant) -> &mut Question {
+    /// Forgets the questions past their deadline.
+    fn prune(&mut self, now: Instant) {
+        let expired: Vec<Uuid> = self
+            .by_run
+            .iter()
+            .filter(|(_, question)| question.expires <= now)
+            .map(|(run_id, _)| *run_id)
+            .collect();
+        for run_id in expired {
+            if let Some(question) = self.by_run.remove(&run_id) {
+                self.uncount(question.tenant, question.cached());
+            }
+        }
+    }
+
+    fn question(&mut self, run_id: Uuid, tenant: TenantId, expires: Instant) -> &mut Question {
         self.clock += 1;
         let used = self.clock;
         let question = self.by_run.entry(run_id).or_insert_with(|| Question {
+            tenant,
             writes: 0,
             saved_reads: VecDeque::new(),
             expires,
@@ -785,52 +848,94 @@ impl Questions {
         question
     }
 
-    /// Adds `latest` (the results of a write) to the question's results, within
-    /// [`MAX_CACHED_BYTES`] for all questions: the least recently used other questions' results
-    /// go first, then the question's own earlier ones; results larger than the whole budget are
-    /// not kept.
-    fn keep(&mut self, run_id: Uuid, latest: HashMap<String, (Arc<DatasetResult>, usize)>) {
-        let sum = |results: &HashMap<String, (Arc<DatasetResult>, usize)>| -> usize {
-            results.values().map(|(_, size)| size).sum()
-        };
+    /// Keeps `latest` (the results a write used, in the order of its datasets) as the
+    /// question's results, then its earlier ones as they fit, all within the tenant's share; a
+    /// result larger than the share is not kept. To make room, the tenant's least recently
+    /// writing other questions give way first, then, for the whole cache, those of any tenant.
+    fn keep(&mut self, run_id: Uuid, latest: Vec<(String, Arc<[u8]>)>) {
         let Some(question) = self.by_run.get_mut(&run_id) else {
             return;
         };
+        let tenant = question.tenant;
         let earlier = std::mem::take(&mut question.results);
-        self.cached_bytes = self.cached_bytes.saturating_sub(sum(&earlier));
-        let mut merged = earlier;
-        merged.extend(
-            latest
-                .iter()
-                .map(|(key, entry)| (key.clone(), entry.clone())),
-        );
-        let (results, size) = if sum(&merged) <= MAX_CACHED_BYTES {
-            let size = sum(&merged);
-            (merged, size)
-        } else if sum(&latest) <= MAX_CACHED_BYTES {
-            let size = sum(&latest);
-            (latest, size)
-        } else {
-            return;
-        };
-        while self.cached_bytes + size > MAX_CACHED_BYTES {
-            let oldest = self
-                .by_run
-                .iter()
-                .filter(|(id, question)| **id != run_id && !question.results.is_empty())
-                .min_by_key(|(_, question)| question.used)
-                .map(|(id, _)| *id);
-            let Some(oldest) = oldest else {
+        let earlier_size = earlier
+            .iter()
+            .map(|(key, json)| entry_size(key, json))
+            .sum();
+        self.uncount(tenant, earlier_size);
+        let mut results: HashMap<String, Arc<[u8]>> = HashMap::new();
+        let mut size = 0_usize;
+        for (key, json) in latest.into_iter().chain(earlier) {
+            let entry = entry_size(&key, &json);
+            if results.contains_key(&key) || size.saturating_add(entry) > self.per_tenant {
+                continue;
+            }
+            size += entry;
+            results.insert(key, json);
+        }
+        while self.tenant_bytes(tenant).saturating_add(size) > self.per_tenant {
+            let Some(oldest) = self.least_recent(run_id, Some(tenant)) else {
                 break;
             };
-            if let Some(question) = self.by_run.get_mut(&oldest) {
-                let freed = sum(&std::mem::take(&mut question.results));
-                self.cached_bytes = self.cached_bytes.saturating_sub(freed);
-            }
+            self.evict(oldest);
+        }
+        while self.cached_bytes.saturating_add(size) > self.total {
+            let Some(oldest) = self.least_recent(run_id, None) else {
+                break;
+            };
+            self.evict(oldest);
         }
         if let Some(question) = self.by_run.get_mut(&run_id) {
             question.results = results;
-            self.cached_bytes += size;
+            self.count(tenant, size);
+        }
+    }
+
+    /// The bytes `tenant`'s questions' results hold.
+    fn tenant_bytes(&self, tenant: TenantId) -> usize {
+        self.by_tenant.get(&tenant).copied().unwrap_or(0)
+    }
+
+    /// The least recently writing question other than `run_id` that holds results, of
+    /// `tenant` when one is given.
+    fn least_recent(&self, run_id: Uuid, tenant: Option<TenantId>) -> Option<Uuid> {
+        self.by_run
+            .iter()
+            .filter(|(id, question)| {
+                **id != run_id
+                    && !question.results.is_empty()
+                    && tenant.is_none_or(|tenant| question.tenant == tenant)
+            })
+            .min_by_key(|(_, question)| question.used)
+            .map(|(id, _)| *id)
+    }
+
+    /// Drops the results of the question `run_id`.
+    fn evict(&mut self, run_id: Uuid) {
+        if let Some(question) = self.by_run.get_mut(&run_id) {
+            let freed = question.cached();
+            let tenant = question.tenant;
+            question.results = HashMap::new();
+            self.uncount(tenant, freed);
+        }
+    }
+
+    fn count(&mut self, tenant: TenantId, bytes: usize) {
+        if bytes == 0 {
+            return;
+        }
+        self.cached_bytes = self.cached_bytes.saturating_add(bytes);
+        let held = self.by_tenant.entry(tenant).or_default();
+        *held = held.saturating_add(bytes);
+    }
+
+    fn uncount(&mut self, tenant: TenantId, bytes: usize) {
+        self.cached_bytes = self.cached_bytes.saturating_sub(bytes);
+        if let Some(held) = self.by_tenant.get_mut(&tenant) {
+            *held = held.saturating_sub(bytes);
+            if *held == 0 {
+                self.by_tenant.remove(&tenant);
+            }
         }
     }
 }
@@ -1073,7 +1178,18 @@ impl DashboardTool {
             );
             return Ok(not_saved(vec![unavailable_problem(Unavailable::Busy)]));
         };
-        // The wait does not count against the bound for the datasets.
+        let left = self.bounds.write_wait.saturating_sub(waiting.elapsed());
+        let Some(_place) = limits::take(Arc::clone(&self.places), left).await else {
+            tracing::info!(
+                run_id = %context.run_id,
+                conversation_id = %context.conversation_id,
+                tenant_id = %context.principal.tenant_id,
+                "the dashboard tool's write waited too long for a place among the writes in \
+                 progress"
+            );
+            return Ok(not_saved(vec![unavailable_problem(Unavailable::Busy)]));
+        };
+        // The waits do not count against the bound for the datasets.
         let datasets_by = datasets_by + waiting.elapsed();
         self.count_write(context)?;
         let results = match self.run_datasets(context, &spec, datasets_by).await? {
@@ -1254,7 +1370,7 @@ impl DashboardTool {
             .lock()
             .unwrap_or_else(PoisonError::into_inner);
         questions.prune(now);
-        use_it(questions.question(context.run_id, expires))
+        use_it(questions.question(context.run_id, context.principal.tenant_id, expires))
     }
 
     /// Remembers that the question read `version` of the saved dashboard `saved_id`.
@@ -1290,8 +1406,9 @@ impl DashboardTool {
     /// Runs every dataset of `spec` as the asking user, two at a time (the tenant's concurrent
     /// runs): each source (with its `max_rows`) once, reusing the results of this question's
     /// earlier writes. Runs still going at `deadline` are dropped and are `dataset_timeout`
-    /// problems; the results that came back are kept for the question's next write.
-    /// `Ok(Err(problems))` when one or more failed.
+    /// problems; the results that came back are kept for the question's next write. Each result
+    /// is held as its JSON from when its run ends, and read back as values for the write once
+    /// all have run. `Ok(Err(problems))` when one or more failed.
     async fn run_datasets(
         &self,
         context: &ToolContext,
@@ -1310,7 +1427,7 @@ impl DashboardTool {
                     question
                         .results
                         .iter()
-                        .map(|(key, (result, _))| (key.clone(), Ok(Arc::clone(result))))
+                        .map(|(key, json)| (key.clone(), Ok(Arc::clone(json))))
                         .collect()
                 })
                 .unwrap_or_default()
@@ -1336,7 +1453,11 @@ impl DashboardTool {
                         .runner
                         .run(caller, &spec.datasets[index])
                         .await
-                        .map(Arc::new);
+                        .and_then(|result| {
+                            serde_json::to_vec(&result)
+                                .map(Arc::from)
+                                .map_err(|_| RunError::Failed)
+                        });
                     if matches!(outcome, Err(RunError::Revoked)) {
                         return Err(ToolError::Revoked);
                     }
@@ -1369,28 +1490,34 @@ impl DashboardTool {
             RunError::Failed
         };
         let mut results = Vec::with_capacity(spec.datasets.len());
-        let mut kept = HashMap::new();
+        let mut latest: Vec<(String, Arc<[u8]>)> = Vec::new();
         let mut problems = Vec::new();
         for (dataset, key) in spec.datasets.iter().zip(&keys) {
             match outcomes.get(key) {
-                Some(Ok(result)) => {
-                    // A result run for (or under) another name answers for this dataset.
-                    let mut result = DatasetResult::clone(result);
-                    result.dataset.clone_from(&dataset.name);
-                    let size = serde_json::to_vec(&result).map_or(usize::MAX, |json| json.len());
-                    kept.insert(key.clone(), (Arc::new(result.clone()), size));
-                    results.push(result);
+                Some(Ok(json)) => {
+                    if !latest.iter().any(|(kept, _)| kept == key) {
+                        latest.push((key.clone(), Arc::clone(json)));
+                    }
+                    match serde_json::from_slice::<DatasetResult>(json) {
+                        Ok(mut result) => {
+                            // A result run for (or under) another name answers for this dataset.
+                            result.dataset.clone_from(&dataset.name);
+                            results.push(result);
+                        }
+                        Err(_) => problems.push(run_problem(&dataset.name, &RunError::Failed)),
+                    }
                 }
                 Some(Err(error)) => problems.push(run_problem(&dataset.name, error)),
                 None => problems.push(run_problem(&dataset.name, &unfinished)),
             }
         }
+        drop(outcomes);
         {
             let mut questions = self
                 .questions
                 .lock()
                 .unwrap_or_else(PoisonError::into_inner);
-            questions.keep(context.run_id, kept);
+            questions.keep(context.run_id, latest);
         }
         if problems.is_empty() {
             Ok(Ok(results))
@@ -2083,7 +2210,8 @@ mod tests {
     fn a_question_remembers_its_latest_saved_reads() {
         let mut questions = Questions::default();
         let run = Uuid::now_v7();
-        let question = questions.question(run, Instant::now() + Duration::from_secs(60));
+        let tenant = TenantId::generate();
+        let question = questions.question(run, tenant, Instant::now() + Duration::from_secs(60));
         let saved = DashboardId::generate();
         let other = DashboardId::generate();
         question.remember_read(saved, 3);
@@ -2102,74 +2230,112 @@ mod tests {
         assert!(!question.has_read(other, 4) && !question.has_read(other, 5));
         assert!(question.has_read(other, 6));
         // Another question read nothing.
-        let other_run =
-            questions.question(Uuid::now_v7(), Instant::now() + Duration::from_secs(60));
+        let other_run = questions.question(
+            Uuid::now_v7(),
+            tenant,
+            Instant::now() + Duration::from_secs(60),
+        );
         assert!(!other_run.has_read(saved, 3));
+    }
+
+    /// Results of the given keys, each with `len` bytes of JSON (the cache does not read it).
+    fn results(items: &[(&str, usize)]) -> Vec<(String, Arc<[u8]>)> {
+        items
+            .iter()
+            .map(|(key, len)| ((*key).to_owned(), Arc::from(vec![b' '; *len])))
+            .collect()
+    }
+
+    /// The cache counts exactly what it holds, in all and per tenant.
+    fn assert_counted(questions: &Questions) {
+        assert_eq!(
+            questions.cached_bytes,
+            questions
+                .by_run
+                .values()
+                .map(Question::cached)
+                .sum::<usize>()
+        );
+        let mut by_tenant: HashMap<TenantId, usize> = HashMap::new();
+        for question in questions.by_run.values() {
+            let cached = question.cached();
+            if cached > 0 {
+                *by_tenant.entry(question.tenant).or_default() += cached;
+            }
+        }
+        assert_eq!(questions.by_tenant, by_tenant);
     }
 
     #[test]
     fn the_result_cache_keeps_a_questions_results_within_its_budget() {
-        let mut questions = Questions::default();
+        // 400 bytes in all, 200 for one tenant; a result counts its key (1 byte) and its JSON.
+        let mut questions = Questions::with_budget(400, 200);
         let now = Instant::now();
-        let first = Uuid::now_v7();
-        let second = Uuid::now_v7();
-        let result = |name: &str| {
-            Arc::new(DatasetResult {
-                dataset: name.to_owned(),
-                columns: Vec::new(),
-                rows: Vec::new(),
-                row_count: 0,
-                meta: serde_json::from_value(json!({
-                    "queried_at": "2026-10-26T00:00:00Z",
-                    "duration_ms": 1,
-                    "source": {"kind": "sql", "queryable_from": {
-                        "tenant_telemetry": "2026-10-01T00:00:00Z",
-                        "tenant_telemetry_1m": "2026-10-01T00:00:00Z",
-                        "tenant_telemetry_1h": "2026-10-01T00:00:00Z",
-                    }},
-                }))
-                .expect("meta"),
-            })
-        };
-        questions.question(first, now + Duration::from_secs(60));
-        questions.keep(
-            first,
-            HashMap::from([("a".to_owned(), (result("a"), MAX_CACHED_BYTES / 2 + 1))]),
-        );
-        questions.question(second, now + Duration::from_secs(120));
-        questions.keep(
-            second,
-            HashMap::from([("b".to_owned(), (result("b"), MAX_CACHED_BYTES / 2 + 1))]),
-        );
-        // The first question's results gave way to the second's.
+        let tenant = TenantId::generate();
+        let (first, second) = (Uuid::now_v7(), Uuid::now_v7());
+        questions.question(first, tenant, now + Duration::from_secs(60));
+        questions.keep(first, results(&[("a", 99)]));
+        questions.question(second, tenant, now + Duration::from_secs(120));
+        questions.keep(second, results(&[("b", 150)]));
+        // The tenant's share: its first question's results gave way to the second's.
         assert!(questions.by_run[&first].results.is_empty());
-        assert_eq!(questions.cached_bytes, MAX_CACHED_BYTES / 2 + 1);
+        assert_eq!(questions.cached_bytes, 151);
+        assert_counted(&questions);
         // A newer write of the same question adds to its results.
-        questions.keep(second, HashMap::from([("c".to_owned(), (result("c"), 10))]));
-        assert_eq!(questions.cached_bytes, MAX_CACHED_BYTES / 2 + 11);
+        questions.keep(second, results(&[("c", 9)]));
+        assert_eq!(questions.cached_bytes, 161);
         assert_eq!(questions.by_run[&second].results.len(), 2);
-        // When they no longer fit together, the latest write's are kept.
-        questions.keep(
-            second,
-            HashMap::from([("d".to_owned(), (result("d"), MAX_CACHED_BYTES / 2))]),
-        );
-        assert_eq!(questions.cached_bytes, MAX_CACHED_BYTES / 2);
-        assert!(questions.by_run[&second].results.contains_key("d"));
-        assert_eq!(questions.by_run[&second].results.len(), 1);
-        // Results larger than the whole budget are not kept.
-        questions.keep(
-            second,
-            HashMap::from([("e".to_owned(), (result("e"), MAX_CACHED_BYTES + 1))]),
-        );
-        assert_eq!(questions.cached_bytes, 0);
-        assert!(questions.by_run[&second].results.is_empty());
-        questions.keep(second, HashMap::from([("c".to_owned(), (result("c"), 10))]));
-        assert_eq!(questions.cached_bytes, 10);
+        // When they no longer fit together, the latest write's go first, then earlier ones that
+        // still fit.
+        questions.keep(second, results(&[("d", 99)]));
+        let kept = &questions.by_run[&second].results;
+        assert!(kept.contains_key("d") && kept.contains_key("c") && !kept.contains_key("b"));
+        assert_eq!(questions.cached_bytes, 110);
+        // A result larger than the share is not kept; the write's others are.
+        questions.keep(second, results(&[("e", 250), ("f", 9)]));
+        let kept = &questions.by_run[&second].results;
+        assert!(!kept.contains_key("e") && kept.contains_key("f"));
+        assert_eq!(questions.cached_bytes, 120);
+        assert_counted(&questions);
         questions.prune(now + Duration::from_secs(90));
         assert!(!questions.by_run.contains_key(&first));
         questions.prune(now + Duration::from_secs(121));
         assert!(questions.by_run.is_empty());
         assert_eq!(questions.cached_bytes, 0);
+        assert!(questions.by_tenant.is_empty());
+    }
+
+    #[test]
+    fn one_tenant_cannot_take_the_cache_from_the_others() {
+        // 300 bytes in all, 100 for one tenant.
+        let mut questions = Questions::with_budget(300, 100);
+        let expires = Instant::now() + Duration::from_secs(60);
+        let (busy, other) = (TenantId::generate(), TenantId::generate());
+        let kept = Uuid::now_v7();
+        questions.question(kept, other, expires);
+        questions.keep(kept, results(&[("o", 49)]));
+        // One tenant's many questions, each writing its whole share (a 2-byte key and 98 bytes):
+        // they give way to each other, and the other tenant's results stay.
+        for index in 0..10 {
+            let run = Uuid::now_v7();
+            questions.question(run, busy, expires);
+            let key = format!("b{index}");
+            questions.keep(run, results(&[(key.as_str(), 98)]));
+            assert_counted(&questions);
+        }
+        assert_eq!(questions.by_tenant[&busy], 100);
+        assert_eq!(questions.by_run[&kept].results.len(), 1);
+        assert_eq!(questions.cached_bytes, 150);
+        // When the whole cache is full, the least recently writing question of any tenant
+        // gives way.
+        for _ in 0..2 {
+            let run = Uuid::now_v7();
+            questions.question(run, TenantId::generate(), expires);
+            questions.keep(run, results(&[("x", 99)]));
+        }
+        assert!(questions.by_run[&kept].results.is_empty());
+        assert_eq!(questions.cached_bytes, 300);
+        assert_counted(&questions);
     }
 
     #[test]

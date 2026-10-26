@@ -10,29 +10,40 @@
 //!   `POST /api/telemetry/v1/statistics` or `/usage` and is flattened ([`super::flatten`]).
 //! - Caps per tenant and replica ([`super::caps`]): every run, the tool's included, is counted
 //!   before it calls. No result is kept or reused: every run reads again.
+//! - Memory: a run reads at most [`MAX_READ_BYTES`] of telemetry-query's answer, and a SQL
+//!   answer's rows only within what a result may hold ([`MAX_COLUMNS`] columns, `max_rows`
+//!   rows, one scalar per cell), so what a run holds follows from the result's bounds rather
+//!   than from how small the answer's cells are. The caps' places bound how many runs hold it.
 //! - Nothing telemetry-query writes reaches the caller or the logs except the closed values of
 //!   [`RunError`]: the keys of `public::FORWARDED_TELEMETRY_KEYS` with their typed details.
 //!   Calls are logged by [`Callee`] with the kind and status class only.
 
+use std::cell::Cell;
+use std::fmt;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use chrono::{DateTime, FixedOffset};
+use chrono::{DateTime, FixedOffset, Utc};
 use contract::api::dashboard::public::{
     DATASET_FAILED, DATASET_REFUSED, DATASET_RESULT_TOO_LARGE, DATASET_TIMEOUT,
     DATASET_TOO_MANY_ROWS, QUERY_QUOTA_EXHAUSTED, RUNS_LIMITED,
 };
 use contract::api::dashboard::result::{
-    ColumnKind, DatasetResult, MAX_DATASET_ROWS, MAX_RESULT_BYTES, ResultColumn, ResultError,
-    ResultMeta, SourceMeta,
+    ColumnKind, DatasetResult, MAX_COLUMNS, MAX_DATASET_ROWS, MAX_RESULT_BYTES, ResultColumn,
+    ResultError, ResultMeta, SourceMeta,
 };
 use contract::api::dashboard::spec::{Dataset, DatasetSource, SemanticRequest, SourceKind};
-use contract::api::telemetry_query::{RunSql, SqlRefusal, SqlResult};
+use contract::api::telemetry_query::{QueryableFrom, RunSql, SqlColumn, SqlRefusal};
 use contract::client::Endpoint as _;
 use contract::{ErrorBody, ErrorCode, MessageKey};
+use serde::Deserialize;
+use serde::de::{self, DeserializeSeed, Deserializer, IgnoredAny, SeqAccess, Visitor};
+use serde_json::value::RawValue;
+use serde_json::{Number, Value};
 
 use super::caps::RunCaps;
 use super::flatten::{self, Table};
+use super::limits::json_len;
 use crate::callee::{Answer, CallFailure, Callee, Caller, refusal_of};
 use crate::tools::DelegationError;
 use crate::tools::semantic::{STATISTICS_PATH, USAGE_PATH};
@@ -134,7 +145,7 @@ pub enum Parameter {
 }
 
 impl Parameter {
-    fn parse(value: Option<&serde_json::Value>) -> Option<Self> {
+    fn parse(value: Option<&Value>) -> Option<Self> {
         match value?.as_str()? {
             "interval" => Some(Self::Interval),
             "series" => Some(Self::Series),
@@ -250,29 +261,18 @@ impl DatasetRunner {
                     .await
                     .map_err(call_failure)?;
                 let body = answered(SourceKind::Sql, max_rows, answer)?;
-                let result: SqlResult = serde_json::from_slice(&body).map_err(|_| {
-                    telemetry.log_failure(caller, "invalid_response", Some(200));
-                    RunError::Failed
+                let answer = sql_answer(&body, max_rows).inspect_err(|error| {
+                    if *error == RunError::Failed {
+                        telemetry.log_failure(caller, "invalid_response", Some(200));
+                    }
                 })?;
-                let columns = result
-                    .columns
-                    .iter()
-                    .map(|column| {
-                        ColumnKind::from_clickhouse_type(&column.data_type).map(|kind| {
-                            ResultColumn {
-                                name: column.name.clone(),
-                                kind,
-                            }
-                        })
-                    })
-                    .collect::<Option<Vec<_>>>()
-                    .ok_or(RunError::Refused)?;
+                drop(body);
                 (
-                    columns,
-                    result.rows,
-                    result.queried_at.fixed_offset(),
+                    answer.columns,
+                    answer.rows,
+                    answer.queried_at.fixed_offset(),
                     SourceMeta::Sql {
-                        queryable_from: result.queryable_from.into(),
+                        queryable_from: answer.queryable_from.into(),
                     },
                 )
             }
@@ -375,11 +375,271 @@ fn checked(result: DatasetResult, max_rows: u32) -> Result<DatasetResult, RunErr
             | ResultError::FixedColumns,
         ) => return Err(RunError::Failed),
     }
-    let size = serde_json::to_vec(&result).map_or(usize::MAX, |json| json.len());
-    if size > MAX_RESULT_BYTES {
+    if json_len(&result) > MAX_RESULT_BYTES {
         return Err(RunError::TooLarge);
     }
     Ok(result)
+}
+
+/// A SQL answer as a run reads it: the fields of telemetry-query's
+/// `contract::api::telemetry_query::SqlResult` but its SQL, which a run does not use, with the
+/// columns as a dashboard's.
+#[derive(Debug, PartialEq)]
+struct SqlAnswer {
+    columns: Vec<ResultColumn>,
+    rows: Vec<Vec<Value>>,
+    queryable_from: QueryableFrom,
+    queried_at: DateTime<Utc>,
+}
+
+/// A SQL answer with its columns and rows not parsed yet.
+#[derive(Deserialize)]
+struct RawSqlAnswer<'a> {
+    #[serde(rename = "sql")]
+    _sql: IgnoredAny,
+    #[serde(borrow)]
+    columns: &'a RawValue,
+    #[serde(borrow)]
+    rows: &'a RawValue,
+    queryable_from: QueryableFrom,
+    queried_at: DateTime<Utc>,
+}
+
+/// What a SQL answer holds more of than a dataset's result may.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Excess {
+    /// More than [`MAX_COLUMNS`] columns.
+    Columns,
+    /// More rows than the run's `max_rows`.
+    Rows,
+    /// A row with more cells than the answer has columns.
+    Cells,
+    /// A cell that is an array or an object.
+    Nested,
+}
+
+/// Reads telemetry-query's answer to a SQL run within what a dataset's result may hold, and
+/// stops at the first excess: at most [`MAX_COLUMNS`] columns, then at most `max_rows` rows of
+/// at most one cell per column, each cell a JSON null, boolean, number or string. The answers
+/// are those [`checked`] gives for the same excess: more columns, a column type a dashboard
+/// cannot use, or an array or object cell is [`RunError::Refused`]; more rows is
+/// [`RunError::TooManyRows`]; a wider row, or anything else that is not a SQL answer, is
+/// [`RunError::Failed`].
+fn sql_answer(body: &[u8], max_rows: u32) -> Result<SqlAnswer, RunError> {
+    let raw: RawSqlAnswer<'_> = serde_json::from_slice(body).map_err(|_| RunError::Failed)?;
+    let excess = Cell::new(None);
+    let refusal = |excess: Option<Excess>| match excess {
+        Some(Excess::Columns | Excess::Nested) => RunError::Refused,
+        Some(Excess::Rows) => RunError::TooManyRows { max: max_rows },
+        Some(Excess::Cells) | None => RunError::Failed,
+    };
+    let columns =
+        parse(raw.columns, Columns { excess: &excess }).ok_or_else(|| refusal(excess.get()))?;
+    let columns = columns
+        .iter()
+        .map(|column| {
+            ColumnKind::from_clickhouse_type(&column.data_type).map(|kind| ResultColumn {
+                name: column.name.clone(),
+                kind,
+            })
+        })
+        .collect::<Option<Vec<_>>>()
+        .ok_or(RunError::Refused)?;
+    let rows = Rows {
+        max: usize::try_from(max_rows).unwrap_or(usize::MAX),
+        width: columns.len(),
+        excess: &excess,
+    };
+    let rows = parse(raw.rows, rows).ok_or_else(|| refusal(excess.get()))?;
+    Ok(SqlAnswer {
+        columns,
+        rows,
+        queryable_from: raw.queryable_from,
+        queried_at: raw.queried_at,
+    })
+}
+
+/// `raw` read with `seed`; `None` when it does not fit.
+fn parse<'de, S: DeserializeSeed<'de>>(raw: &'de RawValue, seed: S) -> Option<S::Value> {
+    let mut deserializer = serde_json::Deserializer::from_str(raw.get());
+    let value = seed.deserialize(&mut deserializer).ok()?;
+    deserializer.end().ok()?;
+    Some(value)
+}
+
+/// Notes `what` and stops the parse.
+fn exceeded<E: de::Error>(excess: &Cell<Option<Excess>>, what: Excess) -> E {
+    excess.set(Some(what));
+    E::custom("the answer holds more than a dataset's result may")
+}
+
+/// A SQL answer's columns: at most [`MAX_COLUMNS`].
+struct Columns<'a> {
+    excess: &'a Cell<Option<Excess>>,
+}
+
+impl<'de> DeserializeSeed<'de> for Columns<'_> {
+    type Value = Vec<SqlColumn>;
+
+    fn deserialize<D: Deserializer<'de>>(self, deserializer: D) -> Result<Self::Value, D::Error> {
+        deserializer.deserialize_seq(self)
+    }
+}
+
+impl<'de> Visitor<'de> for Columns<'_> {
+    type Value = Vec<SqlColumn>;
+
+    fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("an array of columns")
+    }
+
+    fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<Self::Value, A::Error> {
+        let mut columns = Vec::new();
+        while let Some(column) = seq.next_element::<SqlColumn>()? {
+            if columns.len() == MAX_COLUMNS {
+                return Err(exceeded(self.excess, Excess::Columns));
+            }
+            columns.push(column);
+        }
+        Ok(columns)
+    }
+}
+
+/// A SQL answer's rows: at most `max`, each of at most `width` scalar cells.
+struct Rows<'a> {
+    max: usize,
+    width: usize,
+    excess: &'a Cell<Option<Excess>>,
+}
+
+impl<'de> DeserializeSeed<'de> for Rows<'_> {
+    type Value = Vec<Vec<Value>>;
+
+    fn deserialize<D: Deserializer<'de>>(self, deserializer: D) -> Result<Self::Value, D::Error> {
+        deserializer.deserialize_seq(self)
+    }
+}
+
+impl<'de> Visitor<'de> for Rows<'_> {
+    type Value = Vec<Vec<Value>>;
+
+    fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("an array of rows")
+    }
+
+    fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<Self::Value, A::Error> {
+        let row = Row {
+            width: self.width,
+            excess: self.excess,
+        };
+        let mut rows = Vec::new();
+        while let Some(cells) = seq.next_element_seed(row)? {
+            if rows.len() == self.max {
+                return Err(exceeded(self.excess, Excess::Rows));
+            }
+            rows.push(cells);
+        }
+        Ok(rows)
+    }
+}
+
+/// One row: at most `width` scalar cells.
+#[derive(Clone, Copy)]
+struct Row<'a> {
+    width: usize,
+    excess: &'a Cell<Option<Excess>>,
+}
+
+impl<'de> DeserializeSeed<'de> for Row<'_> {
+    type Value = Vec<Value>;
+
+    fn deserialize<D: Deserializer<'de>>(self, deserializer: D) -> Result<Self::Value, D::Error> {
+        deserializer.deserialize_seq(self)
+    }
+}
+
+impl<'de> Visitor<'de> for Row<'_> {
+    type Value = Vec<Value>;
+
+    fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("a row of cells")
+    }
+
+    fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<Self::Value, A::Error> {
+        let cell = Scalar {
+            excess: self.excess,
+        };
+        let mut cells = Vec::with_capacity(self.width);
+        while let Some(value) = seq.next_element_seed(cell)? {
+            if cells.len() == self.width {
+                return Err(exceeded(self.excess, Excess::Cells));
+            }
+            cells.push(value);
+        }
+        Ok(cells)
+    }
+}
+
+/// One cell: a JSON null, boolean, number or string, read as [`Value`] reads it.
+#[derive(Clone, Copy)]
+struct Scalar<'a> {
+    excess: &'a Cell<Option<Excess>>,
+}
+
+impl<'de> DeserializeSeed<'de> for Scalar<'_> {
+    type Value = Value;
+
+    fn deserialize<D: Deserializer<'de>>(self, deserializer: D) -> Result<Self::Value, D::Error> {
+        deserializer.deserialize_any(self)
+    }
+}
+
+impl<'de> Visitor<'de> for Scalar<'_> {
+    type Value = Value;
+
+    fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("a null, boolean, number or string")
+    }
+
+    fn visit_unit<E: de::Error>(self) -> Result<Value, E> {
+        Ok(Value::Null)
+    }
+
+    fn visit_none<E: de::Error>(self) -> Result<Value, E> {
+        Ok(Value::Null)
+    }
+
+    fn visit_bool<E: de::Error>(self, value: bool) -> Result<Value, E> {
+        Ok(Value::Bool(value))
+    }
+
+    fn visit_i64<E: de::Error>(self, value: i64) -> Result<Value, E> {
+        Ok(Value::from(value))
+    }
+
+    fn visit_u64<E: de::Error>(self, value: u64) -> Result<Value, E> {
+        Ok(Value::from(value))
+    }
+
+    fn visit_f64<E: de::Error>(self, value: f64) -> Result<Value, E> {
+        Ok(Number::from_f64(value).map_or(Value::Null, Value::Number))
+    }
+
+    fn visit_str<E: de::Error>(self, value: &str) -> Result<Value, E> {
+        Ok(Value::String(value.to_owned()))
+    }
+
+    fn visit_string<E: de::Error>(self, value: String) -> Result<Value, E> {
+        Ok(Value::String(value))
+    }
+
+    fn visit_seq<A: SeqAccess<'de>>(self, _seq: A) -> Result<Value, A::Error> {
+        Err(exceeded(self.excess, Excess::Nested))
+    }
+
+    fn visit_map<A: de::MapAccess<'de>>(self, _map: A) -> Result<Value, A::Error> {
+        Err(exceeded(self.excess, Excess::Nested))
+    }
 }
 
 /// The success body, or the run's error for how telemetry-query answered `kind`'s call.
@@ -412,11 +672,7 @@ fn status_error(kind: SourceKind, max_rows: u32, status: u16, body: Option<&[u8]
                 return RunError::Refused;
             };
             match error.message_key().as_str() {
-                TOO_MANY_POINTS => match error
-                    .details()
-                    .get("max")
-                    .and_then(serde_json::Value::as_u64)
-                {
+                TOO_MANY_POINTS => match error.details().get("max").and_then(Value::as_u64) {
                     Some(max) => RunError::Telemetry(TelemetryError::TooManyPoints {
                         parameter: Parameter::parse(error.details().get("parameter")),
                         max,
@@ -484,12 +740,141 @@ mod tests {
 
     use super::*;
 
-    fn body(value: &serde_json::Value) -> Vec<u8> {
+    fn body(value: &Value) -> Vec<u8> {
         serde_json::to_vec(value).expect("JSON")
     }
 
-    fn status(kind: SourceKind, status: u16, answer: &serde_json::Value) -> RunError {
+    fn status(kind: SourceKind, status: u16, answer: &Value) -> RunError {
         status_error(kind, 500, status, Some(&body(answer)))
+    }
+
+    /// telemetry-query's answer to a SQL run with `columns` (name and ClickHouse type) and
+    /// `rows`.
+    fn sql_body(columns: &[(&str, &str)], rows: &Value) -> Vec<u8> {
+        let columns: Vec<Value> = columns
+            .iter()
+            .map(|(name, kind)| json!({"name": name, "type": kind}))
+            .collect();
+        body(&json!({
+            "sql": "SELECT 1",
+            "columns": columns,
+            "rows": rows,
+            "queryable_from": {
+                "tenant_telemetry": "2026-10-01T00:00:00Z",
+                "tenant_telemetry_1m": "2026-10-01T00:00:00Z",
+                "tenant_telemetry_1h": "2026-10-01T00:00:00Z",
+            },
+            "queried_at": "2026-10-26T00:00:00Z",
+        }))
+    }
+
+    #[test]
+    fn a_sql_answer_reads_like_the_contracts_type() {
+        let rows = json!([
+            [
+                "2026-10-25 00:00:00",
+                1.5,
+                -3,
+                18_446_744_073_709_551_615_u64,
+                "中文\n",
+                true,
+                null
+            ],
+            ["2026-10-26 00:00:00", 0, 0.1, 1e300, "", false, null],
+        ]);
+        let columns = [
+            ("day", "DateTime('UTC')"),
+            ("kwh", "Float64"),
+            ("delta", "Int64"),
+            ("count", "UInt64"),
+            ("note", "String"),
+            ("ok", "Bool"),
+            ("missing", "Nullable(Float64)"),
+        ];
+        let body = sql_body(&columns, &rows);
+        let answer = sql_answer(&body, 2).expect("an answer");
+        let contract: contract::api::telemetry_query::SqlResult =
+            serde_json::from_slice(&body).expect("the contract's type");
+        assert_eq!(answer.rows, contract.rows);
+        assert_eq!(answer.queryable_from, contract.queryable_from);
+        assert_eq!(answer.queried_at, contract.queried_at);
+        assert_eq!(
+            answer
+                .columns
+                .iter()
+                .map(|column| column.name.as_str())
+                .collect::<Vec<_>>(),
+            ["day", "kwh", "delta", "count", "note", "ok", "missing"]
+        );
+        // A narrower row is read as it is: the result's check refuses it.
+        let narrow = sql_answer(
+            &sql_body(&columns[..2], &json!([["2026-10-25 00:00:00"]])),
+            1,
+        )
+        .expect("an answer");
+        assert_eq!(narrow.rows, vec![vec![json!("2026-10-25 00:00:00")]]);
+    }
+
+    #[test]
+    fn a_sql_answer_is_read_only_within_what_a_result_may_hold() {
+        let column = [("n", "Float64")];
+        let wide: Vec<(String, String)> = (0..=MAX_COLUMNS)
+            .map(|index| (format!("c{index}"), "Float64".to_owned()))
+            .collect();
+        let wide: Vec<(&str, &str)> = wide
+            .iter()
+            .map(|(name, kind)| (name.as_str(), kind.as_str()))
+            .collect();
+        assert_eq!(
+            sql_answer(&sql_body(&wide, &json!([])), 10),
+            Err(RunError::Refused),
+            "more columns than a result may have"
+        );
+        assert_eq!(
+            sql_answer(&sql_body(&wide[..MAX_COLUMNS], &json!([])), 10)
+                .map(|answer| answer.columns.len()),
+            Ok(MAX_COLUMNS)
+        );
+        assert_eq!(
+            sql_answer(&sql_body(&[("n", "Array(UInt8)")], &json!([])), 10),
+            Err(RunError::Refused),
+            "a column type a dashboard cannot use"
+        );
+        assert_eq!(
+            sql_answer(&sql_body(&column, &json!([[1], [2], [3]])), 2),
+            Err(RunError::TooManyRows { max: 2 })
+        );
+        assert_eq!(
+            sql_answer(&sql_body(&column, &json!([[1], [2]])), 2).map(|answer| answer.rows.len()),
+            Ok(2)
+        );
+        assert_eq!(
+            sql_answer(&sql_body(&column, &json!([[1, 2]])), 2),
+            Err(RunError::Failed),
+            "a row wider than the columns"
+        );
+        for cell in [json!([1, 2]), json!({"a": 1}), json!([])] {
+            assert_eq!(
+                sql_answer(&sql_body(&column, &json!([[cell]])), 2),
+                Err(RunError::Refused),
+                "{cell}"
+            );
+        }
+        let mut no_sql: Value =
+            serde_json::from_slice(&sql_body(&column, &json!([]))).expect("JSON");
+        no_sql.as_object_mut().expect("an object").remove("sql");
+        for broken in [
+            body(&no_sql),
+            b"not JSON".to_vec(),
+            body(&json!({"sql": "SELECT 1", "columns": {}, "rows": []})),
+        ] {
+            assert_eq!(sql_answer(&broken, 2), Err(RunError::Failed));
+        }
+        assert_eq!(
+            sql_answer(&sql_body(&column, &json!([["x"]])), 2).map(|answer| answer.rows),
+            Ok(vec![vec![json!("x")]]),
+            "the cell's kind is the result check's to judge"
+        );
     }
 
     #[test]
@@ -742,11 +1127,7 @@ mod tests {
             let body = error.to_error_body();
             assert_eq!(body.code(), code, "{error:?}");
             assert_eq!(body.message_key().as_str(), key, "{error:?}");
-            assert_eq!(
-                serde_json::Value::Object(body.details().clone()),
-                details,
-                "{error:?}"
-            );
+            assert_eq!(Value::Object(body.details().clone()), details, "{error:?}");
         }
         // Every forwarded key is one the contract lists.
         for key in [

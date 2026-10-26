@@ -757,6 +757,72 @@ async fn the_checks_of_all_tenants_share_the_places() {
     assert_eq!(json_of(&first)["saved"], true, "{}", text(&first, 0));
 }
 
+/// The writes of all tenants share the replica's places for writes in progress: with one, a
+/// write of another tenant waits up to the bound this test sets and is then `check_busy`
+/// without running a dataset or reaching the check, and is not counted against its question.
+#[tokio::test]
+async fn the_writes_of_all_tenants_share_the_places_in_flight() {
+    let Some(setup) = setup().await else {
+        return;
+    };
+    let wait = Duration::from_secs(1);
+    let tool = dashboard_tool_with(
+        &setup.world,
+        &setup.peers.url,
+        Checker::new(&setup.check.url, CHECK_CALL_TIMEOUT).expect("a checker"),
+        WriteBounds {
+            write_wait: wait,
+            writes_in_flight: 1,
+            ..WriteBounds::default()
+        },
+    );
+    let held = setup.check.hold("Held");
+    let first = tokio::spawn({
+        let tool = Arc::clone(&tool);
+        let question = setup.own_question();
+        async move { call(&tool, &question, new_dashboard("Held")).await }
+    });
+    setup.check.wait_requests(1).await;
+    let runs = setup.peers.calls().len();
+    let other = setup.world.person(TenantId::generate(), TenantRole::Editor);
+    let conversation = setup.world.conversation(&other).await;
+    let question = setup.question(&other, conversation);
+    let started = Instant::now();
+    let output = call(&tool, &question, new_dashboard("Other"))
+        .await
+        .expect("the write");
+    let result = json_of(&output);
+    assert_eq!(result["saved"], false, "{result}");
+    assert_eq!(result["problems"][0]["kind"], "check_busy", "{result}");
+    assert!(started.elapsed() >= wait, "it waited for a place");
+    assert_eq!(
+        setup.check.requests().len(),
+        1,
+        "it never reached the check"
+    );
+    assert_eq!(setup.peers.calls().len(), runs, "it ran no dataset");
+    held.release();
+    let first = first.await.expect("the first write").expect("the write");
+    assert_eq!(json_of(&first)["saved"], true, "{}", text(&first, 0));
+
+    // The busy write was not counted: the question still has all its writes.
+    let output = call(&tool, &question, new_dashboard("Other"))
+        .await
+        .expect("the write");
+    assert_eq!(json_of(&output)["saved"], true, "{}", text(&output, 0));
+    let id: DashboardId =
+        serde_json::from_value(json_of(&output)["dashboard_id"].clone()).expect("an ID");
+    let mut heading = "Other".to_owned();
+    for base in 1..MAX_WRITES_PER_QUESTION {
+        let next = format!("Other {}", base + 1);
+        let output = call(&tool, &question, edit(id, base, &heading, &next))
+            .await
+            .expect("the write");
+        assert_eq!(json_of(&output)["saved"], true, "{}", text(&output, 0));
+        heading = next;
+    }
+}
+
 #[tokio::test]
 async fn the_tool_refuses_what_this_question_may_not_write() {
     let Some(setup) = setup().await else {

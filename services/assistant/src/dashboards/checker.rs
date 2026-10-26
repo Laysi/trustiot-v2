@@ -29,7 +29,7 @@ use reqwest::header::{ACCEPT, CONTENT_TYPE};
 use tokio::sync::Semaphore;
 use tokio::time::Instant;
 
-use super::limits;
+use super::limits::{self, json_len};
 use crate::callee::{read_limited, status_class};
 use crate::tools::{ToolContext, millis};
 
@@ -45,8 +45,8 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 pub const MAX_VERDICT_BYTES: usize = 4 << 20;
 
 /// The most checks of this replica at a time: the one the service runs and one waiting in its
-/// queue. Each holds its request body (at most `MAX_CHECK_REQUEST_BYTES`) and its verdict (at
-/// most [`MAX_VERDICT_BYTES`]).
+/// queue. Each holds its request body (at most `MAX_CHECK_REQUEST_BYTES`, measured before it is
+/// built and allocated at that size) and its verdict (at most [`MAX_VERDICT_BYTES`]).
 pub const MAX_CHECKS_IN_FLIGHT: usize = 2;
 
 /// How long a check waits for one of the [`MAX_CHECKS_IN_FLIGHT`] places before it is
@@ -208,10 +208,14 @@ impl Checker {
         if request.validate().is_err() {
             return unavailable(Unavailable::Refused, None);
         }
-        let Ok(body) = serde_json::to_vec(request) else {
+        // Measured first, so a body too large is never built and the one sent takes no more
+        // than its size.
+        let size = json_len(request);
+        if size > MAX_CHECK_REQUEST_BYTES {
             return unavailable(Unavailable::Refused, None);
-        };
-        if body.len() > MAX_CHECK_REQUEST_BYTES {
+        }
+        let mut body = Vec::with_capacity(size);
+        if serde_json::to_writer(&mut body, request).is_err() {
             return unavailable(Unavailable::Refused, None);
         }
         let response = match self

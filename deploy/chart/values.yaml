@@ -291,6 +291,13 @@ services:
     # the chat API (Laysi/trustiot-v2#146) sizes it again.
     database:
       maxConnections: 4
+    # Sized from the dashboards' memory bounds per replica (services/assistant/README.md,
+    # 「記憶體」): about 550 MiB with every bound reached at once, and the rest for the allocator.
+    resources:
+      requests:
+        memory: 128Mi
+      limits:
+        memory: 768Mi
   # The AI gateway (services/ai-gateway, decisions 15 and 28): the providers, model roles and limits
   # come from `ai` below. Only the AI assistant, the knowledge base and alerts may call it
   # (mesh.calls; README.md, "服務間授權（mesh）").

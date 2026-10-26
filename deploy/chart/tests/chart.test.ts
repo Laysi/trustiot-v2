@@ -1578,7 +1578,9 @@ describe("exposure and hardening", () => {
           expect(container.lifecycle?.preStop?.sleep?.seconds).toBe(5);
           // The dashboard check runs a browser, and reads no platform settings (its own tests).
           const isolated = deployment.metadata.name === DASHBOARD_CHECK;
-          expect(container.resources?.limits?.memory).toBe(isolated ? "512Mi" : "256Mi");
+          // The assistant is sized from its dashboards' memory bounds (README.md, 「AI 助理」).
+          const assistant = deployment.metadata.name === `${RELEASE}-assistant`;
+          expect(container.resources?.limits?.memory).toBe(isolated ? "512Mi" : assistant ? "768Mi" : "256Mi");
           expect(container.envFrom?.[0]?.configMapRef?.name).toBe(isolated ? undefined : `${RELEASE}-platform`);
         }
       }

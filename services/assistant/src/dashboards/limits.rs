@@ -9,6 +9,9 @@
 //!   [`VERSIONS_PER_TENANT`] per tenant for its saved dashboards and as many for its drafts.
 //!
 //! Each counts in this replica only: N replicas allow N times as much.
+//!
+//! [`json_len`] measures a value's JSON without building it, for the sizes the memory bounds
+//! count.
 
 use std::collections::{HashMap, VecDeque};
 use std::hash::Hash;
@@ -85,6 +88,27 @@ pub async fn take(slots: Arc<Semaphore>, wait: Duration) -> Option<Slot> {
     match tokio::time::timeout(wait, slots.acquire_owned()).await {
         Ok(Ok(permit)) => Some(Slot { _permit: permit }),
         Ok(Err(_)) | Err(_) => None,
+    }
+}
+
+/// The length of `value` as JSON, counted without building it; `usize::MAX` when it does not
+/// serialize.
+pub fn json_len<T: serde::Serialize + ?Sized>(value: &T) -> usize {
+    struct Counter(usize);
+    impl std::io::Write for Counter {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0 = self.0.saturating_add(bytes.len());
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let mut counter = Counter(0);
+    match serde_json::to_writer(&mut counter, value) {
+        Ok(()) => counter.0,
+        Err(_) => usize::MAX,
     }
 }
 
@@ -215,6 +239,16 @@ mod tests {
     use std::sync::atomic::{AtomicU64, Ordering};
 
     use super::*;
+
+    #[test]
+    fn json_len_is_the_length_of_the_json() {
+        let value = serde_json::json!({"a": [1, 2.5, "x\u{0}y", null, true], "b": "中文"});
+        assert_eq!(
+            json_len(&value),
+            serde_json::to_vec(&value).expect("JSON").len()
+        );
+        assert_eq!(json_len(&()), 4, "null");
+    }
 
     #[tokio::test]
     async fn each_key_has_its_own_slots_and_a_waiter_gets_the_one_that_comes_free() {

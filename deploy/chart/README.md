@@ -636,6 +636,7 @@ curl -sS -D - -X POST "http://127.0.0.1:18080/internal/roles/main/v1/messages" \
 - 少了時序查詢或資產服務的位址時 AI 助理少掉那些工具；少了 `TRUSTIOT__IDENTITY__EXCHANGE_URL` 時沒有任何工具；少了 `TRUSTIOT__AI_GATEWAY__URL`（AI 閘道沒有開啟或清單沒列）時它拒絕啟動。渲染不因此失敗，與 `mqtt-bridge` 相同：只開部分服務的測試與 values 要能渲染。
 - 它以 `TRUSTIOT__AI_GATEWAY__ROLE` 選模型角色（預設 `main`），角色要在 `ai.roles`；其他設定（模型、預算、工具上限、資料庫連線池）見 [services/assistant/README.md](../../services/assistant/README.md)「設定」，以 `services.assistant.env` 設定。
 - readiness 只檢查 `assistant_app` 登得進 Postgres、資料庫有這一版的 migration、讀到身分服務的公鑰，不呼叫 AI 閘道或其他服務，所以 nightly 沒有供應商金鑰也能等它就緒；工具在叢集內真的呼叫成功要等聊天 API（Laysi/trustiot-v2#146）。
+- 記憶體：`services.assistant.resources` 的預設是 requests `memory: 128Mi`、limits `memory: 768Mi`（CPU 沿用 `serviceDefaults.resources`）。上限依儀表板每個副本的記憶體上界算出：資料集執行、AI 寫入、結果快取與其他部分都到上界時合計約 550 MiB，其餘留給配置器；算法見 [services/assistant/README.md](../../services/assistant/README.md)「記憶體」。調整那些上界時一起調這個值。
 
 ## 儀表板檢查
 
