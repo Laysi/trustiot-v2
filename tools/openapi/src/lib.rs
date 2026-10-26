@@ -97,6 +97,10 @@ pub const SERVICES_WITHOUT_API: &[&str] = &[
     // decision 6); its only endpoint is the WebSocket upgrade on the public path, described in
     // services/mqtt-bridge/README.md, and no HTTP API besides the health endpoints.
     "mqtt-bridge",
+    // Checks an AI-written dashboard page in a headless browser (Laysi/trustiot-v2#150). Its only
+    // endpoint is internal and called by the assistant alone; its types are in
+    // crates/contract (`api::dashboard::check`), and the client API never reaches it.
+    "dashboard-check",
 ];
 
 fn shared_schemas() -> OpenApi {

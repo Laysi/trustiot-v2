@@ -265,13 +265,23 @@ export function affectsPostgresImage(path: string): boolean {
 const FRONTEND_MESSAGE_KEY_SOURCES = /^(?:crates\/contract|services\/[^/]+)\/src\/.+\.rs$/;
 
 /**
+ * The dashboard contract's JSON fixtures and shared vectors, written by the Rust types and read by
+ * the sandbox protocol test (frontend/sandbox/src/protocol.test.ts).
+ */
+const DASHBOARD_FIXTURES = "crates/contract/tests/fixtures/dashboard/";
+
+/**
  * The single-page app: its sources, tests, lock file and build live in `frontend`; the API client
- * is generated from api/openapi.json, and the translations are checked against the message keys
- * the services send.
+ * is generated from api/openapi.json, the translations are checked against the message keys the
+ * services send, and the sandbox protocol against the dashboard fixtures.
  */
 export function affectsFrontend(path: string): boolean {
   return (
-    affectsEveryJob(path) || path.startsWith("frontend/") || path === "api/openapi.json" || FRONTEND_MESSAGE_KEY_SOURCES.test(path)
+    affectsEveryJob(path) ||
+    path.startsWith("frontend/") ||
+    path === "api/openapi.json" ||
+    FRONTEND_MESSAGE_KEY_SOURCES.test(path) ||
+    path.startsWith(DASHBOARD_FIXTURES)
   );
 }
 

@@ -270,6 +270,8 @@ describe("path rules", () => {
     "crates/contract/src/error.rs",
     "services/identity/src/tenants.rs",
     "services/new-service/src/routes/devices.rs",
+    "crates/contract/tests/fixtures/dashboard/check-request.json",
+    "crates/contract/tests/fixtures/dashboard/formula-vectors.json",
     ".prototools",
     ".github/workflows/ci.yml",
     ".github/actions/setup-proto/action.yml",
@@ -281,6 +283,7 @@ describe("path rules", () => {
   test.each([
     "crates/contract/Cargo.toml",
     "crates/contract/tests/fixtures/openapi/m1-error-schemas.json",
+    "crates/contract/tests/dashboard.rs",
     "crates/service-kit/src/lib.rs",
     "services/identity/Cargo.toml",
     "services/identity/tests/sessions.rs",

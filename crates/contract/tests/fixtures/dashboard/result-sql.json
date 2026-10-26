@@ -1,0 +1,40 @@
+{
+  "columns": [
+    {
+      "name": "day",
+      "type": "time"
+    },
+    {
+      "name": "kwh",
+      "type": "number"
+    }
+  ],
+  "dataset": "daily_energy",
+  "meta": {
+    "duration_ms": 84,
+    "queried_at": "2026-10-26T01:02:03.456Z",
+    "source": {
+      "kind": "sql",
+      "queryable_from": {
+        "tenant_telemetry": "2026-07-28T00:00:00Z",
+        "tenant_telemetry_1h": "2025-10-26T00:00:00Z",
+        "tenant_telemetry_1m": "2026-07-28T00:00:00Z"
+      }
+    }
+  },
+  "row_count": 3,
+  "rows": [
+    [
+      "2026-10-20",
+      120.5
+    ],
+    [
+      "2026-10-21",
+      98.25
+    ],
+    [
+      "2026-10-22",
+      null
+    ]
+  ]
+}

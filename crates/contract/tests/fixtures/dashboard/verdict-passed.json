@@ -1,0 +1,47 @@
+{
+  "report": {
+    "marks": [
+      {
+        "reference": "k|line_name",
+        "value": "Line 2"
+      },
+      {
+        "reference": "f|week_kwh",
+        "value": 1223.75
+      },
+      {
+        "reference": "k|target_kwh",
+        "value": 1200.0
+      },
+      {
+        "reference": "c|daily_energy|day|0",
+        "value": "2026-10-20"
+      },
+      {
+        "reference": "c|daily_energy|day|1",
+        "value": "2026-10-21"
+      },
+      {
+        "reference": "c|daily_energy|day|2",
+        "value": "2026-10-22"
+      },
+      {
+        "reference": "t|daily_energy|kwh|0",
+        "value": 0
+      },
+      {
+        "reference": "t|daily_energy|kwh|20",
+        "value": 20
+      },
+      {
+        "reference": "c|daily_energy|kwh|0",
+        "value": 120.5
+      },
+      {
+        "reference": "c|daily_energy|kwh|1",
+        "value": 98.25
+      }
+    ]
+  },
+  "verdict": "passed"
+}

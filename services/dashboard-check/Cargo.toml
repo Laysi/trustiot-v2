@@ -1,0 +1,24 @@
+[package]
+name = "dashboard-check"
+description = "TrustIoT v2 dashboard check service (Laysi/trustiot-v2#150): runs an AI-written dashboard page in a fresh headless Chromium and compares every value it shows with the data, for the assistant only."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+repository.workspace = true
+
+# A skeleton: the service, its image and its chart entry arrive with the rest of
+# Laysi/trustiot-v2#150. Its API types and the sandbox's headers are in crates/contract
+# (`api::dashboard::check`, `api::dashboard::sandbox`); the runtime it drives is in
+# frontend/sandbox.
+
+[[bin]]
+name = "dashboard-check"
+path = "src/main.rs"
+test = false
+doc = false
+
+[dependencies]
+
+[lints]
+workspace = true
