@@ -80,7 +80,8 @@ export const PROBE_START_LIMIT_S = 180;
 export const PROBE_CONTAINER_LIMIT_MS = (PROBE_START_LIMIT_S + 2 * PROBE_LIMIT_S + 60) * 1000;
 /**
  * The kubelet's process limit per pod (`podPidsLimit`) that nodes running the dashboard check
- * need (deploy/chart/README.md, 「儀表板檢查」); the nightly's k3d cluster runs with it (run.ts).
+ * need (deploy/chart/README.md, 「儀表板檢查」); the nightly's k3d cluster runs with it (run.ts),
+ * and the SaaS host installer writes it into k3s's config (deploy/host/src/desired.ts).
  */
 export const POD_PIDS_LIMIT = 16_384;
 /** How much of an answer a probe keeps. */

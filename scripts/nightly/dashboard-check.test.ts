@@ -464,6 +464,16 @@ group("what the check reads from the release", () => {
     expect(run).toContain('import { POD_PIDS_LIMIT } from "./dashboard-check.ts";');
   });
 
+  test("the SaaS host installer writes the process limit the chart asks of the nodes into k3s's config", async () => {
+    // Loaded by path at run time: deploy/host is its own project (it builds standalone
+    // executables), and its key file is a text import that only its own type declarations cover.
+    const desired = (await import(join(REPO_ROOT, "deploy", "host", "src", "desired.ts"))) as { K3S_CONFIG?: unknown };
+    if (typeof desired.K3S_CONFIG !== "string") throw new Error("deploy/host/src/desired.ts exports no K3S_CONFIG string");
+    const config = Bun.YAML.parse(desired.K3S_CONFIG) as Record<string, unknown>;
+    expect(config["kubelet-arg"]).toEqual([`pod-max-pids=${POD_PIDS_LIMIT}`]);
+    expect(readFileSync(join(REPO_ROOT, "deploy", "host", "README.md"), "utf8")).toContain(`\`pod-max-pids=${POD_PIDS_LIMIT}\``);
+  });
+
   test("the route, ports and paths are the service's own", () => {
     expect(readFileSync(join(REPO_ROOT, "crates", "contract", "src", "api", "dashboard", "check.rs"), "utf8")).toContain(`pub const CHECK_ROUTE: &str = "${CHECK_ROUTE}";`);
     const values = Bun.YAML.parse(readFileSync(join(REPO_ROOT, "deploy", "chart", "values.yaml"), "utf8")) as { mesh: { calls: Record<string, string[]> } };

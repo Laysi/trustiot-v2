@@ -219,7 +219,7 @@ async function checkUnitFileOwned(ctx: Context): Promise<void> {
 function checkK3sConfig(ctx: Context, current: string | null): void {
   if (current !== null && current !== K3S_CONFIG && !ctx.options.reconfigureK3s) {
     throw new InstallError(
-      `${K3S_CONFIG_PATH} differs from the config this installer writes (Traefik and servicelb off). ` +
+      `${K3S_CONFIG_PATH} differs from the config this installer writes (Traefik and servicelb off, a process limit per pod). ` +
         "Run again with --reconfigure-k3s to replace it (the old file is kept as a backup and k3s restarts), " +
         "or with --skip-k3s to leave k3s alone",
     );
@@ -527,7 +527,7 @@ async function k3s(ctx: Context): Promise<Action[]> {
   const actions: Action[] = [];
   if (!configMatches) {
     actions.push({
-      description: `write ${K3S_CONFIG_PATH} (Traefik and servicelb off)`,
+      description: `write ${K3S_CONFIG_PATH} (Traefik and servicelb off, a process limit per pod)`,
       apply: async () => {
         await sys.makeDirectory("/etc/rancher/k3s", 0o755);
         if (current !== null) {
