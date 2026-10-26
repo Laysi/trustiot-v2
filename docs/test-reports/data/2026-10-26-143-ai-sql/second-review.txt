@@ -72,3 +72,18 @@ e2a328b's renovate.json5:
  INFO: Config validated successfully against 1 file(s)
 54d3a6c's renovate.json5 with groupName misspelled groupNme in the new rule (exit 1):
 "message": "Invalid configuration option: packageRules[14].groupNme"
+
+== L4 Renovate rule test (a2ff890): the new test in scripts/nightly/renovate.test.ts with a
+== temporary change each time (both restored, neither committed)
+bun test scripts/nightly/renovate.test.ts -t "sqlparser"
+renovate.json5, the sqlparser rule's groupName set to "rust crates":
+error: expect(received).toBe(expected)
+Expected: "sqlparser"
+Received: "rust crates"
+(fail) every copy of a pin is updated by the same pull request > an sqlparser version change carries a note about the guard in the telemetry-query tests
+sql_check.rs, the constant renamed to SURVEYED_VERSION:
+error: expect(received).toMatch(expected)
+Expected substring or pattern: /^const SURVEYED_SQLPARSER: &str = "[^"]+";$/m
+(fail) every copy of a pin is updated by the same pull request > an sqlparser version change carries a note about the guard in the telemetry-query tests
+Received: the whole of services/telemetry-query/tests/sql_check.rs (not repeated here)
+After (both restored): 25 pass, 0 fail.
