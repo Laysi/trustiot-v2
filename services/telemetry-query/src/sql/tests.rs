@@ -581,6 +581,30 @@ fn expressions_outside_the_allowlist_are_refused() {
             "SELECT POSITION('a' IN point) FROM tenant_telemetry",
             clause(SqlClause::SpecialSyntax),
         ),
+        // `IN` after an operation sqlparser's `POSITION(a IN b)` does not take: a call with one
+        // argument `… IN 'a'`. Until 2026-10-26 the first two were an internal error (printed,
+        // they read back as `POSITION(a IN b)`) and the `NOT` and `LIKE` ones passed as that
+        // call.
+        (
+            "SELECT position(value_float BETWEEN 1 AND 2 IN 'a') FROM tenant_telemetry",
+            clause(SqlClause::SpecialSyntax),
+        ),
+        (
+            "SELECT position((value_int) IS NULL IN 'a') FROM tenant_telemetry",
+            clause(SqlClause::SpecialSyntax),
+        ),
+        (
+            "SELECT position(NOT value_bool IN 'a') FROM tenant_telemetry",
+            clause(SqlClause::SpecialSyntax),
+        ),
+        (
+            "SELECT position(point LIKE 'a' IN 'b') FROM tenant_telemetry",
+            clause(SqlClause::SpecialSyntax),
+        ),
+        (
+            "SELECT position(point) FROM tenant_telemetry",
+            clause(SqlClause::SpecialSyntax),
+        ),
         (
             "SELECT SUBSTRING(point FROM 1 FOR 2) FROM tenant_telemetry",
             clause(SqlClause::SpecialSyntax),

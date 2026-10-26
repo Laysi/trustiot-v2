@@ -943,6 +943,14 @@ impl Checker {
         if !clauses.is_empty() {
             return Err(clause(SqlClause::AggregateClause));
         }
+        // `position(a BETWEEN 1 AND 2 IN 'x')` is not sqlparser's `POSITION(a IN b)` (its `a`
+        // cannot be an operation of that rank), so sqlparser reads it as a call with the one
+        // argument `… IN 'x'`; printed with the operand in parentheses, the call reads back as
+        // `POSITION(a IN b)`, a different tree. ClickHouse's `position` takes two or three
+        // arguments: one is the SQL-standard form, refused as such.
+        if resolved.canonical == "position" && args.len() == 1 {
+            return Err(clause(SqlClause::SpecialSyntax));
+        }
         let count = args.len();
         for (index, arg) in args.iter_mut().enumerate() {
             match arg {
