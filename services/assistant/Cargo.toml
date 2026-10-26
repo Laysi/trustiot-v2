@@ -53,6 +53,11 @@ assets = { path = "../assets" }
 # The stand-in AI gateway of tests/gateway.rs.
 axum = { workspace = true, features = ["http1", "tokio"] }
 chrono = { workspace = true, features = ["now"] }
+# The dashboard acceptance tests (tests/dashboard_acceptance.rs) load the synthetic lab dataset
+# into a throwaway ClickHouse as the ingest service writes it, and apply the product's ClickHouse
+# schema as the migration Job does.
+lab-dataset = { path = "../../tools/lab-dataset" }
+migrate = { path = "../../tools/migrate" }
 telemetry-query = { path = "../telemetry-query" }
 # The product's schema (the migration Job), test identity tokens (and the request's verified
 # identity a question's delegation starts from), and the cross-tenant suite.
@@ -60,6 +65,9 @@ testkit = { path = "../../crates/testkit" }
 tokio = { workspace = true, features = ["macros", "net", "rt-multi-thread", "sync", "time"] }
 # Captures the log events the tests check.
 tracing-subscriber = { workspace = true, features = ["registry", "std"] }
+# Random test passwords and container names (tests/dashboard_acceptance.rs and the ClickHouse
+# helper of services/ingest/tests/common it includes).
+uuid = { workspace = true, features = ["v4"] }
 
 [lints]
 workspace = true

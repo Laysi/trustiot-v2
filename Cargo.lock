@@ -156,6 +156,8 @@ dependencies = [
  "base64 0.22.1",
  "chrono",
  "contract",
+ "lab-dataset",
+ "migrate",
  "opentelemetry",
  "reqwest",
  "serde",

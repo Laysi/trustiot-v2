@@ -23,83 +23,31 @@ mod dashboard_world;
 mod support;
 
 use std::net::TcpListener as StdListener;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 
-use assistant::callee::Callee;
-use assistant::dashboards::caps::RunCaps;
-use assistant::dashboards::checker::{CHECK_CALL_TIMEOUT, Checker};
-use assistant::dashboards::runner::DatasetRunner;
+use assistant::dashboards::checker::CHECK_CALL_TIMEOUT;
 use assistant::dashboards::store;
-use assistant::model::BoxFuture;
 use assistant::tools::dashboard::{
     DATASETS_TIMEOUT, DashboardTool, MAX_WRITES_PER_QUESTION, SAVE_TIMEOUT,
 };
-use assistant::tools::{
-    Delegation, DelegationError, Tool, ToolContent, ToolContext, ToolError, ToolOutput,
-};
+use assistant::tools::{Tool, ToolContent, ToolContext, ToolError, ToolOutput};
 use check_stand_in::CheckStandIn;
 use contract::api::dashboard::check::Problem;
 use contract::api::dashboard::public::DashboardKind;
 use contract::api::dashboard::spec::MAX_PAGE_BYTES;
-use contract::{
-    Actor, DashboardId, InternalClaims, InternalToken, ServiceName, TenantId, TenantRole,
+use contract::{DashboardId, ServiceName, TenantId, TenantRole};
+use dashboard_world::{
+    Content, Peers, Person, Question, SQL_PATH, STATISTICS_PATH, World, dashboard_tool, spec, world,
 };
-use dashboard_world::{Content, Peers, Person, SQL_PATH, STATISTICS_PATH, World, spec, world};
 use serde_json::{Value, json};
-use service_kit::identity::ServiceIdentity;
-use service_kit::tenant::TenantDb;
-use sqlx::postgres::PgPoolOptions;
 use support::Capture;
-use testkit::identity::TestIssuer;
-use testkit::product::DATABASE;
 use tokio::time::Instant;
 use uuid::Uuid;
 
 /// In every error body the stand-ins send: it must reach neither the model nor the logs.
 const SECRET: &str = "t150-service-secret";
-
-/// The question's delegation: tokens of `claims`' user and tenant for whichever service the tool
-/// calls, exchanged by the assistant (`act`), until it is revoked.
-struct Question {
-    issuer: Arc<TestIssuer>,
-    claims: InternalClaims,
-    deadline: Option<Instant>,
-    revoked: AtomicBool,
-}
-
-impl Delegation for Question {
-    fn token_for(
-        &self,
-        audience: ServiceName,
-    ) -> BoxFuture<'_, Result<InternalToken, DelegationError>> {
-        if self.revoked.load(Ordering::SeqCst) {
-            return Box::pin(async { Err(DelegationError::Revoked) });
-        }
-        let mut claims = self.claims.clone();
-        let now = i64::try_from(
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .expect("after the epoch")
-                .as_secs(),
-        )
-        .expect("seconds fit");
-        claims.aud = audience;
-        claims.iat = now;
-        claims.exp = now + testkit::identity::TOKEN_LIFETIME_SECS;
-        claims.act = Some(Actor {
-            sub: ServiceName::Assistant,
-        });
-        let token = InternalToken::new(self.issuer.token(&claims))
-            .map_err(|_| DelegationError::Unavailable);
-        Box::pin(async move { token })
-    }
-
-    fn deadline(&self) -> Option<Instant> {
-        self.deadline
-    }
-}
 
 /// The world, the stand-ins, the tool, and a user of a new tenant with a conversation.
 struct Setup {
@@ -134,9 +82,7 @@ async fn setup() -> Option<Setup> {
     })
 }
 
-/// The tool as `assistant::build` makes it, with the stand-ins' addresses, `check_timeout` per
-/// check (`CHECK_CALL_TIMEOUT` in the service) and `datasets_timeout` until a write's datasets have
-/// run (`DATASETS_TIMEOUT`).
+/// The tool with telemetry-query's stand-in ([`dashboard_tool`]).
 fn tool(
     world: &World,
     peers: &Peers,
@@ -144,21 +90,13 @@ fn tool(
     check_timeout: Duration,
     datasets_timeout: Duration,
 ) -> Arc<DashboardTool> {
-    let (_, background) = TenantDb::connect_lazy_with_background(
-        world.product.postgres.options("assistant_app", DATABASE),
-        PgPoolOptions::new().max_connections(4),
-        ServiceIdentity::new(ServiceName::Assistant),
-    )
-    .expect("the service role's pool verifies the server");
-    let telemetry = Callee::new(
-        ServiceName::TelemetryQuery,
+    dashboard_tool(
+        world,
         &peers.url,
-        Duration::from_secs(60),
+        check_url,
+        check_timeout,
+        datasets_timeout,
     )
-    .expect("a client for telemetry-query's stand-in");
-    let runner = Arc::new(DatasetRunner::new(Some(telemetry), RunCaps::default()));
-    let checker = Checker::new(check_url, check_timeout).expect("a checker");
-    DashboardTool::with_datasets_timeout(background, runner, checker, datasets_timeout)
 }
 
 impl Setup {

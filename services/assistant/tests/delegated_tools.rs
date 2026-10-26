@@ -41,7 +41,10 @@ use contract::{
 };
 use serde_json::{Value, json};
 use service_kit::identity::UserIdentity;
-use support::{Capture, Recorded, Reply, StandIn, WAIT, agent, fixture, limits, ok};
+use support::{
+    Capture, Recorded, Reply, StandIn, ToolResult, WAIT, agent, fixture, limits, ok, step,
+    tool_results,
+};
 use telemetry_query::history::{Latest, LatestPoint, Reading};
 use telemetry_query::semantic::range::Resolution;
 use telemetry_query::semantic::{
@@ -567,24 +570,6 @@ fn runs(origin: &str) -> QuestionRuns {
     QuestionRuns::new(identity, Duration::from_secs(900))
 }
 
-/// A model step that calls `calls`, made from the recorded step: its thinking, then these tool
-/// calls.
-fn step(index: usize, calls: &[(&str, Value)]) -> String {
-    let mut message: Value =
-        serde_json::from_str(&support::tool_step(index)).expect("the fixture is JSON");
-    let content = message["content"].as_array_mut().expect("content");
-    content.retain(|block| block["type"] != "tool_use");
-    for (call, (name, input)) in calls.iter().enumerate() {
-        content.push(json!({
-            "type": "tool_use",
-            "id": format!("toolu_{index:04}_{call}"),
-            "name": name,
-            "input": input,
-        }));
-    }
-    message.to_string()
-}
-
 /// The AI gateway stand-in: answers `steps` in order, then the recorded answer. Each call is a
 /// minute later for the stand-in services.
 fn model(world: &Arc<World>, steps: Vec<Reply>) -> support::Responder {
@@ -604,38 +589,6 @@ fn model(world: &Arc<World>, steps: Vec<Reply>) -> support::Responder {
             Box::pin(async move { next.unwrap_or_else(|| ok(fixture("answer_end_turn.json"))) })
         },
     )
-}
-
-/// One tool result: its call, whether it is an error, its text.
-#[derive(Debug)]
-struct Result_ {
-    is_error: bool,
-    text: String,
-}
-
-/// The tool results of the last message of `request`.
-fn results(request: &Recorded) -> Vec<Result_> {
-    let body = request.json();
-    let last = body["messages"]
-        .as_array()
-        .and_then(|messages| messages.last())
-        .cloned()
-        .expect("a message");
-    last["content"]
-        .as_array()
-        .expect("blocks")
-        .iter()
-        .filter(|block| block["type"] == "tool_result")
-        .map(|block| Result_ {
-            is_error: block["is_error"].as_bool().unwrap_or(false),
-            text: block["content"]
-                .as_array()
-                .into_iter()
-                .flatten()
-                .filter_map(|part| part["text"].as_str())
-                .collect(),
-        })
-        .collect()
 }
 
 fn statistics_input() -> Value {
@@ -791,7 +744,7 @@ async fn each_tool_call_runs_as_the_user_with_a_fresh_token_for_its_service_and_
     // The model got what the services answered for this user.
     let requests = stand_in.requests();
     assert_eq!(requests.len(), 5);
-    let latest = &results(&requests[1])[0];
+    let latest = &tool_results(&requests[1])[0];
     assert!(!latest.is_error, "{latest:?}");
     let latest: Value = serde_json::from_str(&latest.text).expect("JSON");
     assert_eq!(latest["device_id"], json!(DEVICE));
@@ -799,7 +752,7 @@ async fn each_tool_call_runs_as_the_user_with_a_fresh_token_for_its_service_and_
     assert_eq!(latest["rows"][1][0], json!("voltage"));
     assert_eq!(latest["rows"][1][2], json!(229.75));
     assert_eq!(latest["rows"][0][2], json!("running"));
-    let statistics = &results(&requests[2])[0];
+    let statistics = &tool_results(&requests[2])[0];
     assert!(!statistics.is_error, "{statistics:?}");
     let statistics: Value = serde_json::from_str(&statistics.text).expect("JSON");
     assert_eq!(statistics["range"]["interval"], json!("1h"));
@@ -812,7 +765,7 @@ async fn each_tool_call_runs_as_the_user_with_a_fresh_token_for_its_service_and_
     assert_eq!(voltage["rows"][0][5], json!(230.25));
     // The usage: the counter's total and daily rows; the gauge refused with a note that names
     // the statistics tool. One series answered, so the call is not an error.
-    let usage = &results(&requests[3])[0];
+    let usage = &tool_results(&requests[3])[0];
     assert!(!usage.is_error, "{usage:?}");
     let usage: Value = serde_json::from_str(&usage.text).expect("JSON");
     assert_eq!(usage["series"][0]["total"], json!(164.046));
@@ -825,7 +778,7 @@ async fn each_tool_call_runs_as_the_user_with_a_fresh_token_for_its_service_and_
         notes.contains("`power_kw` of device") && notes.contains("telemetry_statistics"),
         "{notes}"
     );
-    let models = &results(&requests[4])[0];
+    let models = &tool_results(&requests[4])[0];
     assert!(!models.is_error, "{models:?}");
     let models: Value = serde_json::from_str(&models.text).expect("JSON");
     assert_eq!(models["total"], json!(2));
@@ -881,9 +834,9 @@ async fn a_service_refusal_reaches_neither_the_model_nor_the_logs() {
 
     let requests = stand_in.requests();
     assert_eq!(requests.len(), 6);
-    let texts: Vec<Result_> = requests[1..]
+    let texts: Vec<ToolResult> = requests[1..]
         .iter()
-        .map(|request| results(request).remove(0))
+        .map(|request| tool_results(request).remove(0))
         .collect();
     for result in &texts {
         assert!(result.is_error, "{result:?}");
@@ -1063,7 +1016,7 @@ async fn an_unavailable_identity_service_fails_only_the_call() {
 
     let requests = stand_in.requests();
     assert_eq!(requests.len(), 2);
-    let result = &results(&requests[1])[0];
+    let result = &tool_results(&requests[1])[0];
     assert!(result.is_error);
     assert!(
         result
@@ -1327,7 +1280,7 @@ async fn device_text_reaches_the_model_cut_to_the_cap() {
         .chain(CUT_MARKER.chars())
         .collect();
     // telemetry_latest: the data point key and its text reading.
-    let latest = &results(&requests[1])[0];
+    let latest = &tool_results(&requests[1])[0];
     assert!(!latest.is_error, "{latest:?}");
     let latest: Value = serde_json::from_str(&latest.text).expect("JSON");
     let row = latest["rows"]
@@ -1339,7 +1292,7 @@ async fn device_text_reaches_the_model_cut_to_the_cap() {
     assert_eq!(row[0], json!(cut));
     assert_eq!(row[2], json!(cut));
     // device_models: the model's name.
-    let models = &results(&requests[2])[0];
+    let models = &tool_results(&requests[2])[0];
     assert!(!models.is_error, "{models:?}");
     let models: Value = serde_json::from_str(&models.text).expect("JSON");
     assert!(

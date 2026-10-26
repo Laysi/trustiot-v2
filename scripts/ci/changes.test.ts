@@ -103,6 +103,8 @@ describe("path rules", () => {
     ["SQL outside the crates (a Rust file may include it)", "deploy/sql/seed.sql"],
     ["the chart values a service-kit test reads", "deploy/chart/values.yaml"],
     ["the MQTT broker configuration a migrate test runs", "deploy/chart/files/mosquitto/mosquitto.conf"],
+    ["a sandbox fixture page the assistant's acceptance tests check", "frontend/sandbox/fixtures/pages/correct.html"],
+    ["the sandbox fixture cases", "frontend/sandbox/fixtures/cases.json"],
     ["the git ignore rules (the OpenAPI diff uses git status)", ".gitignore"],
     ["ci.yml", ".github/workflows/ci.yml"],
     ["a local action", ".github/actions/setup-proto/action.yml"],
@@ -354,8 +356,10 @@ describe("path rules", () => {
     // A new message key in a service must come with its translations (frontend/README.md).
     expect(running(["services/identity/src/tenants.rs"])).toEqual(["frontend", "rust"]);
     expect(running(["services/identity/tests/tenants.rs", "services/identity/Cargo.toml"])).toEqual(["cargo-deny", "rust"]);
-    // The sandbox runtime ships in the web image and in the dashboard check's.
-    expect(running(["frontend/sandbox/src/compare.ts", "frontend/sandbox/fixtures/cases.json"])).toEqual(["dashboard-check-image", "frontend"]);
+    // The sandbox runtime ships in the web image and in the dashboard check's; the assistant's
+    // acceptance tests read the fixtures.
+    expect(running(["frontend/sandbox/src/compare.ts"])).toEqual(["dashboard-check-image", "frontend"]);
+    expect(running(["frontend/sandbox/fixtures/cases.json"])).toEqual(["dashboard-check-image", "frontend", "rust"]);
     expect(running(["services/dashboard-check/src/check.rs", "services/dashboard-check/README.md"])).toEqual(["dashboard-check-image", "frontend", "rust"]);
     expect(running(["deploy/images/dashboard-check/Containerfile"])).toEqual(["dashboard-check-image"]);
   });

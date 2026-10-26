@@ -2,7 +2,8 @@
 //! service role `assistant_app` (`testkit::product`), users with a chosen tenant and role,
 //! conversations, drafts written as the `dashboard` tool writes them (through the store), one
 //! stand-in server for every peer a dataset run calls, the public API served in the test
-//! process, and the assistant binary as the chart starts it.
+//! process, the assistant binary as the chart starts it, a question's delegation, and the
+//! `dashboard` tool as the service builds it.
 //!
 //! The stand-in peers share one loopback socket:
 //!
@@ -29,7 +30,7 @@ use std::io::{BufRead, BufReader, Read};
 use std::net::SocketAddr;
 use std::pin::Pin;
 use std::process::{Child, Command, Stdio};
-use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -37,10 +38,13 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use assistant::api::{self, ApiState};
 use assistant::callee::Callee;
 use assistant::dashboards::caps::RunCaps;
+use assistant::dashboards::checker::Checker;
 use assistant::dashboards::runner::DatasetRunner;
 use assistant::dashboards::store::{self, Author, NewVersion, Requester, StoreError};
 use assistant::delegation::IDENTITY_TIMEOUT;
 use assistant::history::Principal;
+use assistant::tools::dashboard::DashboardTool;
+use assistant::tools::{Delegation, DelegationError};
 use axum::Router;
 use axum::body::Bytes;
 use axum::extract::State;
@@ -57,10 +61,10 @@ use contract::api::telemetry_query::{QueryableFrom, RunSql, SqlColumn, SqlResult
 use contract::client::{Endpoint as _, InternalClient};
 use contract::{
     Actor, DashboardId, ErrorBody, ErrorCode, INTERNAL_IDENTITY_HEADER, InternalClaims,
-    ServiceName, TenantGrant, TenantId, TenantRole, service,
+    InternalToken, ServiceName, TenantGrant, TenantId, TenantRole, service,
 };
 use serde_json::{Value, json};
-use service_kit::identity::{OnBehalf, UserIdentity};
+use service_kit::identity::{OnBehalf, ServiceIdentity, UserIdentity};
 use service_kit::tenant::{TenantDb, TenantTransaction};
 use sqlx::PgConnection;
 use sqlx::postgres::PgPoolOptions;
@@ -229,6 +233,81 @@ impl Person {
     }
 }
 
+/// A question's delegation: tokens of `claims`' user and tenant for whichever service a tool
+/// calls, exchanged by the assistant (`act`), until it is revoked.
+pub struct Question {
+    pub issuer: Arc<TestIssuer>,
+    pub claims: InternalClaims,
+    pub deadline: Option<tokio::time::Instant>,
+    pub revoked: AtomicBool,
+}
+
+impl Question {
+    /// A question of `person` without a deadline.
+    pub fn of(world: &World, person: &Person) -> Self {
+        Self {
+            issuer: Arc::clone(&world.issuer),
+            claims: person.claims.clone(),
+            deadline: None,
+            revoked: AtomicBool::new(false),
+        }
+    }
+}
+
+impl Delegation for Question {
+    fn token_for(
+        &self,
+        audience: ServiceName,
+    ) -> assistant::model::BoxFuture<'_, Result<InternalToken, DelegationError>> {
+        if self.revoked.load(Ordering::SeqCst) {
+            return Box::pin(async { Err(DelegationError::Revoked) });
+        }
+        let mut claims = self.claims.clone();
+        let now = unix_now();
+        claims.aud = audience;
+        claims.iat = now;
+        claims.exp = now + testkit::identity::TOKEN_LIFETIME_SECS;
+        claims.act = Some(Actor {
+            sub: ServiceName::Assistant,
+        });
+        let token = InternalToken::new(self.issuer.token(&claims))
+            .map_err(|_| DelegationError::Unavailable);
+        Box::pin(async move { token })
+    }
+
+    fn deadline(&self) -> Option<tokio::time::Instant> {
+        self.deadline
+    }
+}
+
+/// The `dashboard` tool as `assistant::build` makes it, running datasets against telemetry-query
+/// at `telemetry_url` and checking with the service at `check_url`, with `check_timeout` per
+/// check (`CHECK_CALL_TIMEOUT` in the service) and `datasets_timeout` until a write's datasets
+/// have run (`DATASETS_TIMEOUT`).
+pub fn dashboard_tool(
+    world: &World,
+    telemetry_url: &str,
+    check_url: &str,
+    check_timeout: Duration,
+    datasets_timeout: Duration,
+) -> Arc<DashboardTool> {
+    let (_, background) = TenantDb::connect_lazy_with_background(
+        world.product.postgres.options("assistant_app", DATABASE),
+        PgPoolOptions::new().max_connections(4),
+        ServiceIdentity::new(ServiceName::Assistant),
+    )
+    .expect("the service role's pool verifies the server");
+    let telemetry = Callee::new(
+        ServiceName::TelemetryQuery,
+        telemetry_url,
+        Duration::from_secs(60),
+    )
+    .expect("a client for telemetry-query");
+    let runner = Arc::new(DatasetRunner::new(Some(telemetry), RunCaps::default()));
+    let checker = Checker::new(check_url, check_timeout).expect("a checker");
+    DashboardTool::with_datasets_timeout(background, runner, checker, datasets_timeout)
+}
+
 /// The database, the role and the token issuer.
 pub struct World {
     pub product: Arc<ProductPostgres>,
@@ -313,6 +392,13 @@ impl World {
     /// A new conversation of `owner`'s, written as the agent stores one.
     pub async fn conversation(&self, owner: &Person) -> Uuid {
         let id = Uuid::now_v7();
+        self.store_conversation(owner, id).await;
+        id
+    }
+
+    /// The row of `owner`'s conversation `id` (one the agent started), written as the agent
+    /// stores one.
+    pub async fn store_conversation(&self, owner: &Person, id: Uuid) {
         let mut admin = self.superuser().await;
         sqlx::query(
             "INSERT INTO assistant.conversations
@@ -327,7 +413,6 @@ impl World {
         .execute(&mut admin)
         .await
         .expect("insert a conversation");
-        id
     }
 
     /// A new draft in `owner`'s `conversation` with `content` as its version 1.

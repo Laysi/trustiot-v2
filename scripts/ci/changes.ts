@@ -137,6 +137,12 @@ const RUST_READ_FILES: ReadonlySet<string> = new Set([
   // tools/migrate/tests/mqtt_broker.rs runs the MQTT broker's configuration (include_str!)
   "deploy/chart/files/mosquitto/mosquitto.conf",
 ]);
+/** Directories under an ignored prefix whose files a Rust test reads. */
+const RUST_READ_DIRECTORIES = [
+  // services/assistant/tests/dashboard_acceptance.rs: the sandbox runtime's fixture pages and
+  // cases, checked by the dashboard check service
+  "frontend/sandbox/fixtures",
+] as const;
 
 /**
  * Files the rust job reads wherever they are: `tools/repo-check` fails on any file named
@@ -149,7 +155,12 @@ function isReadAnywhere(path: string): boolean {
 }
 
 export function affectsRust(path: string): boolean {
-  if (affectsEveryJob(path) || isReadAnywhere(path) || RUST_READ_FILES.has(path)) {
+  if (
+    affectsEveryJob(path) ||
+    isReadAnywhere(path) ||
+    RUST_READ_FILES.has(path) ||
+    RUST_READ_DIRECTORIES.some((dir) => path === dir || path.startsWith(`${dir}/`))
+  ) {
     return true;
   }
   if (RUST_IGNORED_FILES.has(path)) {
