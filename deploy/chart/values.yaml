@@ -279,12 +279,16 @@ services:
   # assistant_app, calls the models through the AI gateway, and runs its tools as the asking user
   # against telemetry-query and assets (mesh.calls.assistant below). The chart sets the address of
   # each of those services from mesh.calls.assistant, and env cannot (README.md, 「AI 助理」); it
-  # does not start without the AI gateway's (services.ai-gateway.enabled and ai-gateway listed).
-  # It has no API yet (the chat API is Laysi/trustiot-v2#146).
+  # does not start without the AI gateway's (services.ai-gateway.enabled and ai-gateway listed),
+  # nor without services.identity.enabled (it verifies internal identity). Its public API is the
+  # dashboards under /api/assistant (Laysi/trustiot-v2#150; the chat API is Laysi/trustiot-v2#146):
+  # a deployment that serves them adds the cookie route
+  # {host: app, path: /api/assistant, match: PathPrefix, service: assistant} to ingress.routes.
   assistant:
     enabled: false
-    # 2 to 100. It opens no other pool: 4 in all. Until the chat API (Laysi/trustiot-v2#146) only
-    # the readiness check uses it.
+    # 2 to 100. It opens no other pool: 4 in all. The readiness check and the dashboard API's
+    # short transactions use it (a dataset run holds no connection while it calls telemetry-query);
+    # the chat API (Laysi/trustiot-v2#146) sizes it again.
     database:
       maxConnections: 4
   # The AI gateway (services/ai-gateway, decisions 15 and 28): the providers, model roles and limits

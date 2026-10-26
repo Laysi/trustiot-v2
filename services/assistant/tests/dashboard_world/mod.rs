@@ -419,6 +419,12 @@ impl World {
 
     /// The public API in this process with `caps`, calling the stand-in `peers`.
     pub async fn api(&self, peers: &Peers, caps: RunCaps) -> Api {
+        self.api_with(peers, caps, true).await
+    }
+
+    /// [`World::api`], without the token exchange when `exchange` is false (a deployment
+    /// without `identity.exchange_url`).
+    pub async fn api_with(&self, peers: &Peers, caps: RunCaps, exchange: bool) -> Api {
         let telemetry = Callee::new(
             ServiceName::TelemetryQuery,
             &peers.url,
@@ -431,7 +437,7 @@ impl World {
         let state = ApiState {
             verifier: self.issuer.verifier(ServiceName::Assistant),
             db: self.db.clone(),
-            on_behalf: Some(OnBehalf::new(identity)),
+            on_behalf: exchange.then(|| OnBehalf::new(identity)),
             runner: Arc::clone(&runner),
         };
         let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
@@ -500,16 +506,36 @@ pub async fn call(
     token: Option<&str>,
     body: Option<&Value>,
 ) -> Answer {
+    let body = body.map(|body| serde_json::to_vec(body).expect("JSON"));
+    call_raw(
+        base,
+        method,
+        path,
+        token,
+        body.as_ref()
+            .map(|body| ("application/json", body.as_slice())),
+    )
+    .await
+}
+
+/// A request to the API at `base` with `body` as it is, under its content type.
+pub async fn call_raw(
+    base: &str,
+    method: Method,
+    path: &str,
+    token: Option<&str>,
+    body: Option<(&str, &[u8])>,
+) -> Answer {
     let mut request = reqwest::Client::new()
         .request(method, format!("{base}{path}"))
         .timeout(WAIT);
     if let Some(token) = token {
         request = request.header(INTERNAL_IDENTITY_HEADER, token);
     }
-    if let Some(body) = body {
+    if let Some((content_type, body)) = body {
         request = request
-            .header(CONTENT_TYPE, "application/json")
-            .body(serde_json::to_vec(body).expect("JSON"));
+            .header(CONTENT_TYPE, content_type)
+            .body(body.to_vec());
     }
     let response = request.send().await.expect("call the API");
     let status = response.status().as_u16();

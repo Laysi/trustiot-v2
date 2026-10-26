@@ -610,7 +610,7 @@ curl -sS -D - -X POST "http://127.0.0.1:18080/internal/roles/main/v1/messages" \
 
 ## AI 助理
 
-`services.assistant`（`services/assistant`，決策 31，Laysi/trustiot-v2#592）是 AI 助理的主 agent：經 AI 閘道呼叫模型，工具以提問的使用者身分呼叫時序查詢與資產服務的 API（決策 27 的代表使用者呼叫），對話以服務角色 `assistant_app` 存在 Postgres。它還沒有自己的 API（聊天 API 是 Laysi/trustiot-v2#146），開啟後只有健康檢查。
+`services.assistant`（`services/assistant`，決策 31，Laysi/trustiot-v2#592）是 AI 助理的主 agent：經 AI 閘道呼叫模型，工具以提問的使用者身分呼叫時序查詢與資產服務的 API（決策 27 的代表使用者呼叫），對話以服務角色 `assistant_app` 存在 Postgres。它的公開 API 目前是 `/api/assistant/v1` 的儀表板（Laysi/trustiot-v2#150；聊天 API 是 Laysi/trustiot-v2#146），每個請求都驗證內部身分，所以它和其他驗證內部身分的服務一樣，身分服務沒有開啟時拒絕啟動（沒有 `TRUSTIOT_INTERNAL_IDENTITY_KEYS_FILE`）。預設 values 沒有它的路由：要讓瀏覽器用儀表板的部署在 `ingress.routes` 加上 `{host: app, path: /api/assistant, match: PathPrefix, service: assistant}`（需要 cookie 的路由，見「入口 gateway」）。
 
 預設的 `mesh.calls.assistant` 是 `[ai-gateway, telemetry-query, assets, postgres]`。chart 從這份清單產生它要呼叫的每個位址，所以它只會被指向 mesh 放行的服務（`templates/_assistant.tpl` 的 `trustiot.assistant.env`）：
 
@@ -627,7 +627,7 @@ curl -sS -D - -X POST "http://127.0.0.1:18080/internal/roles/main/v1/messages" \
 - 前四個變數由 chart 決定：`services.assistant.env` 與 `serviceDefaults.env` 設定其中任何一個（不分大小寫）都讓渲染失敗，即使 chart 這次沒有設它。否則 env 能把 AI 助理指向清單以外的服務，而那個呼叫只會被 mesh 拒絕。
 - 少了時序查詢或資產服務的位址時 AI 助理少掉那些工具；少了 `TRUSTIOT__IDENTITY__EXCHANGE_URL` 時沒有任何工具；少了 `TRUSTIOT__AI_GATEWAY__URL`（AI 閘道沒有開啟或清單沒列）時它拒絕啟動。渲染不因此失敗，與 `mqtt-bridge` 相同：只開部分服務的測試與 values 要能渲染。
 - 它以 `TRUSTIOT__AI_GATEWAY__ROLE` 選模型角色（預設 `main`），角色要在 `ai.roles`；其他設定（模型、預算、工具上限、資料庫連線池）見 [services/assistant/README.md](../../services/assistant/README.md)「設定」，以 `services.assistant.env` 設定。
-- readiness 只檢查 `assistant_app` 登得進 Postgres、資料庫有這一版的 migration，不呼叫 AI 閘道或其他服務，所以 nightly 沒有供應商金鑰也能等它就緒；工具在叢集內真的呼叫成功要等聊天 API（Laysi/trustiot-v2#146）。
+- readiness 只檢查 `assistant_app` 登得進 Postgres、資料庫有這一版的 migration、讀到身分服務的公鑰，不呼叫 AI 閘道或其他服務，所以 nightly 沒有供應商金鑰也能等它就緒；工具在叢集內真的呼叫成功要等聊天 API（Laysi/trustiot-v2#146）。
 
 ## migration Job
 

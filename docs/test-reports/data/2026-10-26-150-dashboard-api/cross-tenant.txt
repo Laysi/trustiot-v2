@@ -1,0 +1,96 @@
+Running tests/cross_tenant.rs
+running 1 test
+pass | assistant.conversations | coverage | declared table
+pass | assistant.dashboard_versions | coverage | declared table
+pass | assistant.dashboards | coverage | declared table
+pass | assistant.messages | coverage | declared table
+pass | assistant.trustiot_migrate_applied | coverage | exempt table: the migration Job's record of the files applied in this schema (crates/service-kit/sql/migration-records.sql): file names and SHA-256 hashes, no tenant data; the service role only reads it, for its readiness check
+pass | GET /api/assistant/v1/conversations/{conversation_id}/dashboards | coverage | exempt: a conversation's drafts: a list with a path parameter, which the suite cannot address; tests/dashboards_api.rs tests that another tenant's admin and another member of the same tenant get 404 for it
+pass | POST /api/assistant/v1/dashboards/{dashboard_id}/publish | coverage | exempt: publishes a draft, which only its conversation's owner sees, so an admin's positive control cannot pass; tests/dashboards_api.rs tests that another tenant's admin and another member of the same tenant get 404 and nothing is written
+pass | assistant.conversations | seed | 9 rows per tenant
+pass | assistant.messages | seed | 9 rows per tenant
+pass | assistant.dashboards | seed | 9 rows per tenant
+pass | assistant.dashboard_versions | seed | 9 rows per tenant
+pass | postgres | session as tenant A | the kit accepts the service role's session
+pass | assistant.conversations | read as tenant A | 18 rows visible, all own, none of tenant B
+pass | assistant.conversations | read without a tenant | no row visible
+pass | assistant.conversations | update own rows as tenant A | refused (42501)
+pass | assistant.conversations | move own rows into tenant B | refused (42501)
+pass | assistant.conversations | insert into tenant B | refused (42501)
+pass | assistant.messages | read as tenant A | 9 rows visible, all own, none of tenant B
+pass | assistant.messages | read without a tenant | no row visible
+pass | assistant.messages | update own rows as tenant A | refused (42501)
+pass | assistant.messages | move own rows into tenant B | refused (42501)
+pass | assistant.messages | insert into tenant B | refused (42501)
+pass | assistant.dashboards | read as tenant A | 18 rows visible, all own, none of tenant B
+pass | assistant.dashboards | read without a tenant | no row visible
+pass | assistant.dashboards | update own rows as tenant A | refused (42501)
+pass | assistant.dashboards | move own rows into tenant B | refused (42501)
+pass | assistant.dashboards | insert into tenant B | refused (42501)
+pass | assistant.dashboard_versions | read as tenant A | 18 rows visible, all own, none of tenant B
+pass | assistant.dashboard_versions | read without a tenant | no row visible
+pass | assistant.dashboard_versions | update own rows as tenant A | refused (42501)
+pass | assistant.dashboard_versions | move own rows into tenant B | refused (42501)
+pass | assistant.dashboard_versions | insert into tenant B | refused (42501)
+pass | postgres | session as tenant B | the kit accepts the service role's session
+pass | assistant.conversations | read as tenant B | 18 rows visible, all own, none of tenant A
+pass | assistant.conversations | update own rows as tenant B | refused (42501)
+pass | assistant.conversations | move own rows into tenant A | refused (42501)
+pass | assistant.conversations | insert into tenant A | refused (42501)
+pass | assistant.messages | read as tenant B | 9 rows visible, all own, none of tenant A
+pass | assistant.messages | update own rows as tenant B | refused (42501)
+pass | assistant.messages | move own rows into tenant A | refused (42501)
+pass | assistant.messages | insert into tenant A | refused (42501)
+pass | assistant.dashboards | read as tenant B | 18 rows visible, all own, none of tenant A
+pass | assistant.dashboards | update own rows as tenant B | refused (42501)
+pass | assistant.dashboards | move own rows into tenant A | refused (42501)
+pass | assistant.dashboards | insert into tenant A | refused (42501)
+pass | assistant.dashboard_versions | read as tenant B | 18 rows visible, all own, none of tenant A
+pass | assistant.dashboard_versions | update own rows as tenant B | refused (42501)
+pass | assistant.dashboard_versions | move own rows into tenant A | refused (42501)
+pass | assistant.dashboard_versions | insert into tenant A | refused (42501)
+pass | GET /api/assistant/v1/dashboards | list as tenant A | 200: all 9 own rows, nothing of tenant B
+pass | GET /api/assistant/v1/dashboards | without a tenant | 403, nothing shown
+pass | GET /api/assistant/v1/dashboards/{dashboard_id} | tenant B's row as tenant A | 404, nothing shown
+pass | GET /api/assistant/v1/dashboards/{dashboard_id} | without a tenant | 403, nothing shown
+pass | GET /api/assistant/v1/dashboards/{dashboard_id} | positive control: own row as tenant A | 200
+pass | GET /api/assistant/v1/dashboards/{dashboard_id}/versions | tenant B's row as tenant A | 404, nothing shown
+pass | GET /api/assistant/v1/dashboards/{dashboard_id}/versions | without a tenant | 403, nothing shown
+pass | GET /api/assistant/v1/dashboards/{dashboard_id}/versions | positive control: own row as tenant A | 200
+pass | POST /api/assistant/v1/dashboards/{dashboard_id}/restore | tenant B's row as tenant A | 404, nothing shown
+pass | POST /api/assistant/v1/dashboards/{dashboard_id}/restore | without a tenant | 403, nothing shown
+pass | POST /api/assistant/v1/dashboards/{dashboard_id}/restore | positive control: own row as tenant A | 201
+pass | PUT /api/assistant/v1/dashboards/{dashboard_id}/archive | tenant B's row as tenant A | 404, nothing shown
+pass | PUT /api/assistant/v1/dashboards/{dashboard_id}/archive | without a tenant | 403, nothing shown
+pass | PUT /api/assistant/v1/dashboards/{dashboard_id}/archive | positive control: own row as tenant A | 200
+pass | DELETE /api/assistant/v1/dashboards/{dashboard_id}/archive | tenant B's row as tenant A | 404, nothing shown
+pass | DELETE /api/assistant/v1/dashboards/{dashboard_id}/archive | without a tenant | 403, nothing shown
+pass | DELETE /api/assistant/v1/dashboards/{dashboard_id}/archive | positive control: own row as tenant A | 200
+pass | POST /api/assistant/v1/dashboards/{dashboard_id}/dataset-runs | tenant B's row as tenant A | 404, nothing shown
+pass | POST /api/assistant/v1/dashboards/{dashboard_id}/dataset-runs | without a tenant | 403, nothing shown
+pass | POST /api/assistant/v1/dashboards/{dashboard_id}/dataset-runs | positive control: own row as tenant A | 200
+pass | api | tenant B rows after tenant A's endpoint probes | 63 rows, all unchanged
+pass | GET /api/assistant/v1/dashboards | list as tenant B | 200: all 9 own rows, nothing of tenant A
+pass | GET /api/assistant/v1/dashboards | without a tenant | 403, nothing shown
+pass | GET /api/assistant/v1/dashboards/{dashboard_id} | tenant A's row as tenant B | 404, nothing shown
+pass | GET /api/assistant/v1/dashboards/{dashboard_id} | without a tenant | 403, nothing shown
+pass | GET /api/assistant/v1/dashboards/{dashboard_id} | positive control: own row as tenant B | 200
+pass | GET /api/assistant/v1/dashboards/{dashboard_id}/versions | tenant A's row as tenant B | 404, nothing shown
+pass | GET /api/assistant/v1/dashboards/{dashboard_id}/versions | without a tenant | 403, nothing shown
+pass | GET /api/assistant/v1/dashboards/{dashboard_id}/versions | positive control: own row as tenant B | 200
+pass | POST /api/assistant/v1/dashboards/{dashboard_id}/restore | tenant A's row as tenant B | 404, nothing shown
+pass | POST /api/assistant/v1/dashboards/{dashboard_id}/restore | without a tenant | 403, nothing shown
+pass | POST /api/assistant/v1/dashboards/{dashboard_id}/restore | positive control: own row as tenant B | 201
+pass | PUT /api/assistant/v1/dashboards/{dashboard_id}/archive | tenant A's row as tenant B | 404, nothing shown
+pass | PUT /api/assistant/v1/dashboards/{dashboard_id}/archive | without a tenant | 403, nothing shown
+pass | PUT /api/assistant/v1/dashboards/{dashboard_id}/archive | positive control: own row as tenant B | 200
+pass | DELETE /api/assistant/v1/dashboards/{dashboard_id}/archive | tenant A's row as tenant B | 404, nothing shown
+pass | DELETE /api/assistant/v1/dashboards/{dashboard_id}/archive | without a tenant | 403, nothing shown
+pass | DELETE /api/assistant/v1/dashboards/{dashboard_id}/archive | positive control: own row as tenant B | 200
+pass | POST /api/assistant/v1/dashboards/{dashboard_id}/dataset-runs | tenant A's row as tenant B | 404, nothing shown
+pass | POST /api/assistant/v1/dashboards/{dashboard_id}/dataset-runs | without a tenant | 403, nothing shown
+pass | POST /api/assistant/v1/dashboards/{dashboard_id}/dataset-runs | positive control: own row as tenant B | 200
+pass | api | tenant A rows after tenant B's endpoint probes | 64 rows, all unchanged
+91 probes, 0 failed
+test tenants_are_isolated ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.55s

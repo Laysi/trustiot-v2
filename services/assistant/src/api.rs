@@ -197,7 +197,13 @@ fn is_json(headers: &HeaderMap) -> bool {
 
 /// The JSON body of a request as `T`, which refuses fields it does not know: 400
 /// `invalid_request` when the content type is not JSON, the body is over [`MAX_BODY_BYTES`],
-/// or it is not exactly a `T`.
+/// or it is not exactly a `T` written as a JSON object.
+///
+/// serde would also read a struct from an array of its fields in order (`[1, "daily"]`), so the
+/// body must start with `{` (after JSON's whitespace); only the object form is the request. The
+/// bytes are then read as `T` directly, not through a `serde_json::Map`, which would keep only
+/// the last of two equal keys: the derived `Deserialize` refuses a duplicate field
+/// (`{"version": 1, "version": 2}`).
 async fn read_body<T: serde::de::DeserializeOwned>(
     headers: &HeaderMap,
     body: Body,
@@ -209,6 +215,12 @@ async fn read_body<T: serde::de::DeserializeOwned>(
     let bytes: Bytes = axum::body::to_bytes(body, MAX_BODY_BYTES)
         .await
         .map_err(|_| invalid())?;
+    let first = bytes
+        .iter()
+        .find(|byte| !matches!(byte, b' ' | b'\t' | b'\n' | b'\r'));
+    if first != Some(&b'{') {
+        return Err(invalid());
+    }
     serde_json::from_slice(&bytes).map_err(|_| invalid())
 }
 
