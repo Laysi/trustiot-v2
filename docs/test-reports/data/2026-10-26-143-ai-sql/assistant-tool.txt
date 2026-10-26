@@ -1,0 +1,76 @@
+
+test answers_limits_and_failures_reach_the_model_as_fixed_text ... an answer (200)
+  the model got: {"columns":[{"name":"point","type":"LowCardinality(String)"},{"name":"readings","type":"UInt64"}],"queried_at":"2026-10-…
+too many rows (422)
+  the model got: The answer has more than 200 rows, so it was not returned. Aggregate (GROUP BY a time bucket such as toStartOfHour(bucke…
+an unknown column (422)
+  the model got: A column or alias does not exist. The tables' columns are in the tool's description.
+a heavy query (422)
+  the model got: The query read too many rows or needed too much memory. Read tenant_telemetry_1h or tenant_telemetry_1m instead of the r…
+a large answer (422)
+  the model got: The answer is larger than 8388608 bytes. Select fewer or shorter columns, or aggregate.
+a refusal with a member the contract does not have (422)
+  the model got: The tool failed for a reason outside your control. You may call it once more; if it fails again, answer without it and s…
+a class this version does not know (422)
+  the model got: The tool failed for a reason outside your control. You may call it once more; if it fails again, answer without it and s…
+a clause this version does not know (422)
+  the model got: The tool failed for a reason outside your control. You may call it once more; if it fails again, answer without it and s…
+a kind this version does not know (422)
+  the model got: The tool failed for a reason outside your control. You may call it once more; if it fails again, answer without it and s…
+a name that is not an identifier (422)
+  the model got: The tool failed for a reason outside your control. You may call it once more; if it fails again, answer without it and s…
+a 422 that is not a refusal (422)
+  the model got: The tool failed for a reason outside your control. You may call it once more; if it fails again, answer without it and s…
+a 422 that is not JSON (422)
+  the model got: The tool failed for a reason outside your control. You may call it once more; if it fails again, answer without it and s…
+the organisation's queries are used up (429)
+  the model got: The organisation's query limit is used up for now. Do not call telemetry_sql again in this question; answer with what yo…
+the query ran too long (504)
+  the model got: The query ran longer than the time limit. Read tenant_telemetry_1h or tenant_telemetry_1m instead of the raw readings, o…
+the organisation's account is not ready (404)
+  the model got: The organisation's telemetry cannot be queried yet. Tell the user; do not call telemetry_sql again in this question.
+the user may not (403)
+  the model got: The service refused this request for the user: the user may not read this data, or it does not exist in the user's organ…
+a malformed request (400)
+  the model got: The telemetry service rejected the request. Send `sql` as one SELECT in a JSON string.
+an internal error (500)
+  the model got: The tool failed for a reason outside your control. You may call it once more; if it fails again, answer without it and s…
+an unavailable service (503)
+  the model got: The tool failed for a reason outside your control. You may call it once more; if it fails again, answer without it and s…
+more rows than the tool asked for (200)
+  the model got: The tool failed for a reason outside your control. You may call it once more; if it fails again, answer without it and s…
+an answer that is not JSON (200)
+  the model got: The tool failed for a reason outside your control. You may call it once more; if it fails again, answer without it and s…
+ok
+test refused_sql_reaches_the_model_as_its_class_and_never_the_databases ... refused "SELECT * FROM system.tables"
+  the model got: `system.tables` is not a table you may read. Read only tenant_telemetry, tenant_telemetry_1m and tenant_telemetry_1h, and give WITH names that differ from them.
+refused "SELECT dictGet('d', 'a', toUInt64(1)) FROM tenant_telemetry"
+  the model got: The function `dictGet` is not allowed. Use another common ClickHouse function; table functions, dictionaries and functions that read settings or the server never are.
+refused "SELECT * FROM url('http://example.com/x', 'CSV')"
+  the model got: `url` is not a table you may read. Read only tenant_telemetry, tenant_telemetry_1m and tenant_telemetry_1h, and give WITH names that differ from them.
+refused "SET DEFAULT ROLE NONE TO CURRENT_USER"
+  the model got: Only a SELECT (or WITH … SELECT) may run: write the question as one.
+refused "SET ROLE NONE"
+  the model got: Only a SELECT (or WITH … SELECT) may run: write the question as one.
+refused "SELECT 1 FROM tenant_telemetry; SELECT 2"
+  the model got: Send exactly one statement, with nothing after a `;`.
+refused "SELECT point FROM tenant_telemetry SETTINGS readonly = 0"
+  the model got: `settings` is not allowed here. The service sets the output and the limits itself; leave it out.
+refused "SELECT CAST(point AS Array(String)) FROM tenant_telemetry"
+  the model got: `cast_type` is not allowed here. CAST and :: convert only to Float64, Float32, Int64, Int32, UInt64, UInt32 or String; for times use toDateTime(…, 'UTC') or toDate(…, 'UTC').
+refused "SELECT toStartOfDay(ts) FROM tenant_telemetry"
+  the model got: `toStartOfDay` needs the time zone as its last argument, a string such as 'Asia/Taipei' or 'UTC': for example toStartOfDay(bucket, 'Asia/Taipei').
+refused "SELECT 1"
+  the model got: The query reads none of tenant_telemetry, tenant_telemetry_1m and tenant_telemetry_1h: read at least one.
+refused "SELECT `point` FROM tenant_telemetry"
+  the model got: Line 1, column 8 has a token form that is not allowed. Use identifiers without quotes, plain decimal numbers and strings in single quotes; no placeholders.
+refused "SELECT 'a\\b' FROM tenant_telemetry"
+  the model got: Line 1, column 10 has a character that is not allowed: a backslash, a control character, a non-ASCII space or an invisible formatting character. Remove it; strings take no escapes.
+refused "SELECT point FROM tenant_telemetry WHERE"
+  the model got: The SQL does not parse. Write one ClickHouse SELECT.
+refused "SELECT (((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((…"
+  the model got: The SQL has too many tokens or nests too deeply. Write a simpler query: fewer nested subqueries, conditions or expressions.
+ok
+
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s

@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, relative } from "node:path";
+import { dirname, join, relative } from "node:path";
 
 import { exec, RunLog } from "./exec.ts";
 import type { ExecOptions, ExecResult } from "./exec.ts";
@@ -54,6 +54,28 @@ function migrateCrates(): string[] {
     if (existsSync(join(REPO_ROOT, match[1]!, "Cargo.toml"))) visit(match[1]!);
   }
   return [...seen].sort();
+}
+/**
+ * The files the migration Job compiles in from outside its own package: every `#[path]` module
+ * under tools/migrate/src, and what those files take in turn (`#[path]`, `include_str!`,
+ * `include_bytes!`), as paths from the repository root. A `#[path]` outside an inline module is
+ * relative to the directory of the file that declares it, as `include_str!` is; tools/migrate
+ * has no `#[path]` inside an inline module.
+ */
+function migrateIncludes(): string[] {
+  const found = new Set<string>();
+  const scan = (file: string) => {
+    const text = readFileSync(join(REPO_ROOT, file), "utf8");
+    for (const match of text.matchAll(/#\[path\s*=\s*"([^"]+)"\]|include_(?:str|bytes)!\(\s*"([^"]+)"\s*\)/g)) {
+      const target = relative(REPO_ROOT, join(REPO_ROOT, dirname(file), (match[1] ?? match[2])!));
+      if (found.has(target) || target.startsWith("tools/migrate/")) continue;
+      found.add(target);
+      if (target.endsWith(".rs")) scan(target);
+    }
+  };
+  const sources = readdirSync(join(REPO_ROOT, "tools", "migrate", "src"), { recursive: true, encoding: "utf8" });
+  for (const source of sources.filter((path) => path.endsWith(".rs")).sort()) scan(join("tools", "migrate", "src", source));
+  return [...found].sort();
 }
 const IMAGE = "localhost/trustiot-e2e/migrate:nightly";
 const ok = (stdout = ""): ExecResult => ({ code: 0, stdout, stderr: "", timedOut: false });
@@ -142,6 +164,20 @@ describe("the cache key of a nightly Rust image", () => {
     }
     // The SQL the Job embeds.
     expect(paths).toContain("services/*/migrations/**");
+    // Every file the Job compiles in from another package (`#[path]`, and what those files
+    // include) matches a path of the list, as GitHub matches them: a change to the backfill
+    // statements in services/ingest/src/rollup.rs changes the Job.
+    const includes = migrateIncludes();
+    expect(includes).toContain("services/ingest/src/retention.rs");
+    expect(includes).toContain("services/ingest/src/rollup.rs");
+    const globs = paths.map((path) => new Bun.Glob(path));
+    for (const file of includes) {
+      expect(existsSync(join(REPO_ROOT, file)), file).toBe(true);
+      expect(
+        globs.some((glob) => glob.match(file)),
+        `${file} (compiled into the migration Job) is not in nightly.yml's pull_request paths`,
+      ).toBe(true);
+    }
   });
 
   test("every input exists in this repository, so the key step cannot fail on a renamed path unnoticed", () => {

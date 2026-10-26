@@ -28,13 +28,26 @@ function hasControlCharacter(text: string): boolean {
   return false;
 }
 
+/** Starts with one slash: not `//host` or `/\\host`, which a browser reads as another host. */
+function isRootRelative(path: string): boolean {
+  return path.startsWith("/") && !path.startsWith("//") && !path.startsWith("/\\") && !hasControlCharacter(path);
+}
+
+/** The sign-in page, as the router matches it: in any case, with or without a trailing slash. */
+function isLoginPath(pathname: string): boolean {
+  return pathname.replace(/\/+$/, "").toLowerCase() === LOGIN_PATH;
+}
+
 /**
  * Where to go after signing in: `raw` when it is a path of this SPA (same origin, not reserved),
  * otherwise the home page. `next` comes from the address bar, so anything else, such as
- * `//other.example`, `/\other.example` or `https://...`, would be an open redirect.
+ * `//other.example`, `/\\other.example` or `https://...`, would be an open redirect. The answer is
+ * the parsed path, which is checked again: parsing resolves `.`, `..` and `%2e` segments and turns
+ * `\\` into `/`, so `/.//other.example` or `/x/../\\other.example` passes the first check but
+ * comes out as `//other.example`.
  */
 export function safeNextPath(raw: string | null | undefined): string {
-  if (!raw?.startsWith("/") || raw.startsWith("//") || raw.startsWith("/\\") || hasControlCharacter(raw)) {
+  if (!raw || !isRootRelative(raw)) {
     return "/";
   }
   let url: URL;
@@ -43,10 +56,11 @@ export function safeNextPath(raw: string | null | undefined): string {
   } catch {
     return "/";
   }
-  if (url.origin !== BASE || isReservedPath(url.pathname) || url.pathname === LOGIN_PATH) {
+  const path = `${url.pathname}${url.search}${url.hash}`;
+  if (url.origin !== BASE || !isRootRelative(path) || isReservedPath(url.pathname) || isLoginPath(url.pathname)) {
     return "/";
   }
-  return `${url.pathname}${url.search}${url.hash}`;
+  return path;
 }
 
 /** The sign-in page, returning to `current` afterwards. */
@@ -54,3 +68,6 @@ export function loginPath(current: string): string {
   const next = safeNextPath(current);
   return next === "/" ? LOGIN_PATH : `${LOGIN_PATH}?next=${encodeURIComponent(next)}`;
 }
+
+/** The personal settings page (preferences, signing out of every device). */
+export const SETTINGS_PATH = "/settings";

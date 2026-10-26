@@ -106,7 +106,8 @@ ON CONFLICT (tenant_id, user_id) DO NOTHING";
 const UPDATE_ROLE: &str = "UPDATE identity.memberships SET tenant_role = $3
 WHERE tenant_id = $1::uuid AND user_id = $2::uuid";
 
-/// A role in a tenant, as this API takes and returns it.
+/// A role in a tenant, as the API takes and returns it: setting a member's role, and the tenants
+/// of the current session.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum MemberRole {
@@ -147,6 +148,18 @@ impl MemberRole {
             Self::Viewer => TenantRole::Viewer,
             Self::Editor => TenantRole::Editor,
             Self::Admin => TenantRole::Admin,
+        }
+    }
+
+    /// The role of the internal identity's `role`; `None` for a role this build does not know,
+    /// which the identity service never issues.
+    #[must_use]
+    pub const fn of(role: TenantRole) -> Option<Self> {
+        match role {
+            TenantRole::Viewer => Some(Self::Viewer),
+            TenantRole::Editor => Some(Self::Editor),
+            TenantRole::Admin => Some(Self::Admin),
+            TenantRole::Unrecognized => None,
         }
     }
 }

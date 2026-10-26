@@ -1,0 +1,8 @@
+{
+  "dataset": "synthetic",
+  "version": 1,
+  "segments": 2,
+  "rows": 316,
+  "start": "2026-01-05T22:00:00.120Z",
+  "end": "2026-01-06T01:55:02.500Z"
+}

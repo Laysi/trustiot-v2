@@ -1,0 +1,99 @@
+
+running 1 test
+index.toml as recorded:
+# Recorded by `lab-dataset record` (Laysi/trustiot-v2#679); the format is in
+# datasets/lab/README.md. Converters appear only by their logical keys.
+
+format = 1
+name = "bench"
+version = 1
+description = "Two devices behind one RS485 converter, recorded from testkit's fake converter"
+
+[[streams]]
+key = "live"
+description = "Batches as the recorder formed them, every 4 s"
+
+[[devices]]
+key = "meter-1"
+model = "three-phase-meter"
+converter = "rs485-a"
+unit = 1
+interval_s = 1
+points = [
+  { key = "energy_wh", type = "int", kind = "cumulative", unit = "Wh", wraps_at = 4294967296 },
+  { key = "power_kw", type = "float", kind = "gauge", unit = "kW" },
+]
+
+[[devices]]
+key = "press-1"
+model = "press-controller"
+converter = "rs485-a"
+unit = 2
+interval_s = 2
+points = [
+  { key = "strokes", type = "int", kind = "cumulative", wraps_at = 65536 },
+  { key = "running", type = "bool", kind = "state" },
+  { key = "mode", type = "string", kind = "state" },
+]
+
+[[segments]]
+key = "part-0001"
+location = "segments/part-0001.jsonl"
+bytes = 2487
+sha256 = "26771a625590a2493ca98d6cdcfebe73b8f75866a88139e53e7e2c3b6368dcfa"
+rows = 14
+reading_time = { start = "2026-03-02T08:00:00.000Z", end = "2026-03-02T08:00:03.000Z" }
+receive_time = { start = "2026-03-02T08:00:04.000Z", end = "2026-03-02T08:00:04.000Z" }
+batches = [{ stream = "live", first = 1, last = 1 }]
+series = [
+  { device = "meter-1", point = "energy_wh", rows = 4 },
+  { device = "meter-1", point = "power_kw", rows = 4 },
+  { device = "press-1", point = "mode", rows = 2 },
+  { device = "press-1", point = "running", rows = 2 },
+  { device = "press-1", point = "strokes", rows = 2 },
+]
+
+[[segments]]
+key = "part-0002"
+location = "segments/part-0002.jsonl"
+bytes = 2467
+sha256 = "f49af55ce77707451a6015e95cefd644f21677b494114692ef21428fa9bafc2c"
+rows = 14
+reading_time = { start = "2026-03-02T08:00:04.000Z", end = "2026-03-02T08:00:07.000Z" }
+receive_time = { start = "2026-03-02T08:00:08.000Z", end = "2026-03-02T08:00:08.000Z" }
+batches = [{ stream = "live", first = 2, last = 2 }]
+series = [
+  { device = "meter-1", point = "energy_wh", rows = 4 },
+  { device = "meter-1", point = "power_kw", rows = 4 },
+  { device = "press-1", point = "mode", rows = 2 },
+  { device = "press-1", point = "running", rows = 2 },
+  { device = "press-1", point = "strokes", rows = 2 },
+]
+
+[[segments]]
+key = "part-0003"
+location = "segments/part-0003.jsonl"
+bytes = 2104
+sha256 = "73a91e97b7e0f8141574536490ede6bac2d218600f4805e798d84de771c93f23"
+rows = 12
+reading_time = { start = "2026-03-02T08:00:08.000Z", end = "2026-03-02T08:00:10.000Z" }
+receive_time = { start = "2026-03-02T08:00:10.000Z", end = "2026-03-02T08:00:10.000Z" }
+batches = [{ stream = "live", first = 3, last = 3 }]
+series = [
+  { device = "meter-1", point = "energy_wh", rows = 3 },
+  { device = "meter-1", point = "power_kw", rows = 3 },
+  { device = "press-1", point = "mode", rows = 2 },
+  { device = "press-1", point = "running", rows = 2 },
+  { device = "press-1", point = "strokes", rows = 2 },
+]
+
+recorded 40 rows in 3 segments and 3 batches from units {1, 2} on 1 connection; Dataset::open accepts it
+recording `bench` loaded for tenant 0cb02269-3d06-4a71-b3dc-ef1d404bf35e: 40 rows in ClickHouse, index states 40; 3 batches with completion records
+  meter-1/energy_wh: 11 rows, index states 11
+  meter-1/power_kw: 11 rows, index states 11
+  press-1/mode: 6 rows, index states 6
+  press-1/running: 6 rows, index states 6
+  press-1/strokes: 6 rows, index states 6
+.
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.60s
+
