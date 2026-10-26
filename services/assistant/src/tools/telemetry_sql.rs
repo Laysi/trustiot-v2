@@ -251,8 +251,12 @@ fn hint(refusal: &SqlRefusal) -> Result<String, ToolError> {
         SqlRefusal::TooLong { max_bytes } => {
             format!("The SQL is longer than {max_bytes} bytes. Write a shorter query.")
         }
+        // The limits are telemetry-query's (`sql::lexer`); `tests/telemetry_sql.rs` checks the
+        // number against it.
         SqlRefusal::TooComplex => "The SQL has too many tokens or nests too deeply. Write a \
-             simpler query: fewer nested subqueries, conditions or expressions."
+             simpler query: at most 16 levels of parentheses and brackets, no position() \
+             inside another position(), and fewer nested subqueries, conditions or \
+             expressions; WITH can name the parts."
             .to_owned(),
         SqlRefusal::Syntax { line, column } => {
             let at = match (line, column) {

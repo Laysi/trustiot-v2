@@ -12,6 +12,8 @@
 //! endpoint's tests run the service's real router with Postgres and ClickHouse as loopback ports
 //! that count connections.
 
+use std::any::TypeId;
+use std::cell::Cell;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
@@ -23,12 +25,20 @@ use contract::identity::{Actor, INTERNAL_IDENTITY_HEADER};
 use contract::{InternalClaims, ServiceName, TenantGrant, TenantId, TenantRole};
 use serde_json::{Value, json};
 use service_kit::tenant::TenantDb;
+use sqlparser::ast::{Expr, Statement};
+use sqlparser::dialect::{ClickHouseDialect, Dialect};
+use sqlparser::parser::{Parser, ParserError};
+use sqlparser::tokenizer::{Token, TokenWithSpan, Tokenizer};
 use sqlx::postgres::{PgConnectOptions, PgPoolOptions, PgSslMode};
 use telemetry_query::accounts::Accounts;
 use telemetry_query::clickhouse::ClickHouse;
-use telemetry_query::sql::check::MAX_ADDED_NESTING;
-use telemetry_query::sql::lexer::{MAX_IDENTIFIER_BYTES, MAX_TOKENS, tokens};
-use telemetry_query::sql::{CheckError, check_on_thread};
+use telemetry_query::sql::check::{
+    MAX_ADDED_NESTING, READ_BACK_MAX_NESTING, READ_BACK_RECURSION_LIMIT,
+};
+use telemetry_query::sql::lexer::{
+    MAX_IDENTIFIER_BYTES, MAX_NESTING, MAX_TOKENS, tokens, tokens_nested,
+};
+use telemetry_query::sql::{CheckError, RECURSION_LIMIT, STACK_BYTES, check, check_on_thread};
 use testkit::identity::TestIssuer;
 use tokio::net::TcpListener;
 
@@ -225,33 +235,24 @@ async fn deep_and_long_queries_are_too_complex_and_never_overflow_the_stack() {
         "(".repeat(200),
         ")".repeat(200)
     );
-    // The parser's recursion limit stops it; inside a speculative parse the limit shows as a
-    // syntax error.
-    assert!(
-        matches!(
-            refusal(&nested).await,
-            SqlRefusal::TooComplex | SqlRefusal::Syntax { .. }
-        ),
-        "{nested}"
-    );
+    // The lexer's nesting limit stops both before the parser.
     let subqueries = format!(
         "SELECT * FROM {}tenant_telemetry{}",
         "(SELECT * FROM ".repeat(100),
         ")".repeat(100)
     );
-    assert!(
-        matches!(
-            refusal(&subqueries).await,
-            SqlRefusal::TooComplex | SqlRefusal::Syntax { .. }
-        ),
-        "{subqueries}"
-    );
+    for sql in [&nested, &subqueries] {
+        assert_eq!(lexer_refusal(sql), SqlRefusal::TooComplex, "{sql}");
+        assert_eq!(refusal(sql).await, SqlRefusal::TooComplex, "{sql}");
+    }
     // A left-deep chain the parser builds in a loop: the walk's depth limit stops it.
     let chain = format!(
         "SELECT {} FROM tenant_telemetry",
         vec!["x"; 2_000].join("+")
     );
     assert_eq!(refusal(&chain).await, SqlRefusal::TooComplex);
+    // A long chain of `NOT` nests without parentheses: the parser's recursion limit stops it;
+    // inside a speculative parse the limit shows as a syntax error.
     let not = format!("SELECT {}1 FROM tenant_telemetry", "NOT ".repeat(1_000));
     assert!(
         matches!(
@@ -273,6 +274,27 @@ type Shape = fn(usize) -> String;
 
 /// A query that puts the given select list inside the given number of levels.
 type Around = fn(usize, &str) -> String;
+
+/// Whether sqlparser alone, with the check's recursion limit, reads `sql` with a column named
+/// `NOT` whose alias is `value_bool`. On a thread with the check's stack, as the check parses.
+fn misreads_not(sql: String) -> bool {
+    std::thread::Builder::new()
+        .stack_size(STACK_BYTES)
+        .spawn(move || {
+            Parser::new(&ClickHouseDialect {})
+                .with_recursion_limit(RECURSION_LIMIT)
+                .try_with_sql(&sql)
+                .and_then(|mut parser| parser.parse_statements())
+                .is_ok_and(|statements| {
+                    statements
+                        .iter()
+                        .any(|statement| statement.to_string().contains("NOT AS value_bool"))
+                })
+        })
+        .expect("a thread")
+        .join()
+        .expect("the parse returns")
+}
 
 /// The printed text is longer and nests deeper than what was written: `trustiot.` before each
 /// view and the parentheses around operands. A query within the limits as written and over them
@@ -321,17 +343,30 @@ async fn a_query_over_the_limits_only_as_printed_is_refused_as_such() {
             other => panic!("{name}: passes {passes}, got {other:?}"),
         }
     }
-    // At the parser's recursion limit, sqlparser reads `NOT value_bool` as a column named `NOT`
-    // with an alias, a tree that depends on the limit: refused, never run as that column.
-    let misread = format!(
-        "{}SELECT NOT value_bool FROM tenant_telemetry{}",
-        "SELECT * FROM (".repeat(23),
-        ")".repeat(23)
-    );
-    match check_on_thread(misread.clone(), 200).await {
-        Err(CheckError::Refused(SqlRefusal::Syntax { .. } | SqlRefusal::TooComplex)) => {}
-        other => panic!("{misread}: expected a refusal, got {other:?}"),
+    // At the parser's recursion limit, sqlparser reads the last `NOT` of a chain as a column
+    // named `NOT` with the operand as its alias, a tree that depends on the limit: refused,
+    // never run as that column. Within the nesting limit, subqueries and a chain of `NOT`s
+    // still reach it.
+    let mut misread = 0;
+    for subqueries in [0, MAX_NESTING] {
+        for nots in 1..=60 {
+            let sql = format!(
+                "{}SELECT {}value_bool FROM tenant_telemetry{}",
+                "SELECT * FROM (".repeat(subqueries),
+                "NOT ".repeat(nots),
+                ")".repeat(subqueries)
+            );
+            if misreads_not(sql.clone()) {
+                misread += 1;
+            }
+            match check_on_thread(sql.clone(), 200).await {
+                Ok(checked) => assert!(!checked.canonical.contains("NOT AS"), "{sql}"),
+                Err(CheckError::Refused(_)) => {}
+                Err(other) => panic!("{sql}: {other:?}"),
+            }
+        }
     }
+    assert!(misread >= 2, "the chains reach sqlparser's misreading");
     // Each shape the printing nests, at every size up to well past the parser's recursion
     // limit: it passes or is refused, never a failure of the check.
     let shapes: [(&str, Shape); 8] = [
@@ -378,7 +413,7 @@ async fn a_query_over_the_limits_only_as_printed_is_refused_as_such() {
             format!("SELECT 'a'{} FROM tenant_telemetry", " LIKE 'a'".repeat(n))
         }),
     ];
-    // Inside written parentheses, or subqueries, that use up the parser's limit as written.
+    // Inside written parentheses or subqueries, as deep as the lexer allows and one more.
     let around: [(&str, Around); 2] = [
         ("parentheses", |p, inner| {
             format!(
@@ -403,7 +438,7 @@ async fn a_query_over_the_limits_only_as_printed_is_refused_as_such() {
             }
         }
         for (outer, wrap) in around {
-            for p in 0..=50 {
+            for p in 0..=MAX_NESTING + 1 {
                 for n in [
                     1,
                     MAX_ADDED_NESTING - 1,
@@ -441,6 +476,453 @@ async fn the_check_runs_on_its_own_thread() {
         check_on_thread(deep, 5).await,
         Err(CheckError::Refused(SqlRefusal::TooComplex))
     ));
+}
+
+// The nesting rules and sqlparser's speculative parses (finding H1 of the second security
+// review of Laysi/trustiot-v2#143, 2026-10-26).
+
+/// The reviewer's query: `levels` calls of `position(…, 'a')`, each inside the one before.
+fn nested_positions(levels: usize) -> String {
+    format!(
+        "SELECT {}value_string{} AS p FROM tenant_telemetry",
+        "position(".repeat(levels),
+        ", 'a')".repeat(levels)
+    )
+}
+
+/// How deep the parentheses and brackets of `text` nest (the texts here have none in strings).
+fn nesting_of(text: &str) -> usize {
+    let (mut depth, mut deepest) = (0_usize, 0_usize);
+    for character in text.chars() {
+        match character {
+            '(' | '[' => {
+                depth += 1;
+                deepest = deepest.max(depth);
+            }
+            ')' | ']' => depth = depth.saturating_sub(1),
+            _ => {}
+        }
+    }
+    deepest
+}
+
+/// sqlparser 0.63 parsed `position(` as `POSITION(a IN b)` first and again as a call after that
+/// failed, so each call inside another doubled the parse: 40 levels would not have finished.
+/// The lexer refuses a `position(` inside another before the parser starts, however it is
+/// written.
+#[tokio::test]
+async fn a_position_inside_another_is_refused_by_the_lexer_before_the_parser() {
+    let reviewer = nested_positions(40);
+    assert!(reviewer.len() < 1_000, "{}", reviewer.len());
+    assert_eq!(lexer_refusal(&reviewer), SqlRefusal::TooComplex);
+    assert_eq!(refusal(&reviewer).await, SqlRefusal::TooComplex);
+    for sql in [
+        nested_positions(2),
+        "SELECT position(lower(position(value_string, 'a')), 'b') FROM tenant_telemetry".to_owned(),
+        "SELECT position(value_string, toString(position(value_string, 'a'))) FROM tenant_telemetry"
+            .to_owned(),
+        "SELECT POSITION(Position(value_string, 'a'), 'b') FROM tenant_telemetry".to_owned(),
+        "SELECT position /* c */ (position\n(value_string, 'a'), 'b') FROM tenant_telemetry"
+            .to_owned(),
+        "SELECT position([position(value_string, 'a')], 'b') FROM tenant_telemetry".to_owned(),
+        "SELECT t.position(t.position(value_string, 'a'), 'b') FROM tenant_telemetry AS t"
+            .to_owned(),
+        "SELECT position((SELECT position(value_string, 'a') FROM tenant_telemetry), 'b') \
+         FROM tenant_telemetry"
+            .to_owned(),
+        "SELECT position(position('a' IN value_string) IN 'b') FROM tenant_telemetry".to_owned(),
+    ] {
+        assert_eq!(lexer_refusal(&sql), SqlRefusal::TooComplex, "{sql}");
+    }
+    // One at a time, beside one another and in any clause, passes.
+    for sql in [
+        "SELECT position(value_string, 'a') AS p FROM tenant_telemetry",
+        "SELECT position(value_string, 'a', 2) AS p FROM tenant_telemetry",
+        "SELECT position(value_string, 'a') + position(point, 'b') AS p FROM tenant_telemetry",
+        "SELECT point FROM tenant_telemetry WHERE position(value_string, 'a') > 0",
+        "SELECT position(value_string, 'a') AS p FROM tenant_telemetry \
+         WHERE position(point, 'b') > 0",
+    ] {
+        passes(sql).await;
+    }
+    // Only a call counts: the name alone opens nothing.
+    assert!(tokens("SELECT point AS position, (position) FROM tenant_telemetry").is_ok());
+}
+
+#[tokio::test]
+async fn parentheses_and_brackets_nest_at_most_the_limit() {
+    let shapes: [(&str, Shape); 5] = [
+        ("parentheses", |levels| {
+            format!(
+                "SELECT {}value_int{} AS v FROM tenant_telemetry",
+                "(".repeat(levels),
+                ")".repeat(levels)
+            )
+        }),
+        ("calls", |levels| {
+            format!(
+                "SELECT {}value_int{} AS v FROM tenant_telemetry",
+                "abs(".repeat(levels),
+                ")".repeat(levels)
+            )
+        }),
+        ("subqueries", |levels| {
+            format!(
+                "{}SELECT value_int FROM tenant_telemetry{}",
+                "SELECT * FROM (".repeat(levels),
+                ")".repeat(levels)
+            )
+        }),
+        ("brackets", |levels| {
+            format!(
+                "SELECT {}1{} AS v FROM tenant_telemetry",
+                "[".repeat(levels),
+                "]".repeat(levels)
+            )
+        }),
+        ("brackets in parentheses", |levels| {
+            let open: String = (0..levels)
+                .map(|level| if level % 2 == 0 { '(' } else { '[' })
+                .collect();
+            let close: String = open
+                .chars()
+                .rev()
+                .map(|open| if open == '(' { ')' } else { ']' })
+                .collect();
+            format!("SELECT {open}1{close} AS v FROM tenant_telemetry")
+        }),
+    ];
+    for (name, shape) in shapes {
+        let deepest = shape(MAX_NESTING);
+        assert_eq!(nesting_of(&deepest), MAX_NESTING, "{name}");
+        assert!(tokens(&deepest).is_ok(), "{name}: {MAX_NESTING} levels");
+        let deeper = shape(MAX_NESTING + 1);
+        assert_eq!(lexer_refusal(&deeper), SqlRefusal::TooComplex, "{name}");
+        assert_eq!(refusal(&deeper).await, SqlRefusal::TooComplex, "{name}");
+    }
+    // Queries nest so: at the limit they pass.
+    for (_, shape) in &shapes[..3] {
+        passes(&shape(MAX_NESTING)).await;
+    }
+    // The printed text may nest deeper than the written one, by the parentheses the check adds
+    // around operands: its read-back allows for them.
+    let inner = "value_int + 1 = 2 AND value_float BETWEEN 0 AND 1";
+    let sql = format!(
+        "SELECT {}{inner}{} AS v FROM tenant_telemetry",
+        "(".repeat(MAX_NESTING),
+        ")".repeat(MAX_NESTING)
+    );
+    let checked = check_on_thread(sql, 200).await.expect("passes");
+    assert!(
+        (MAX_NESTING + 1..=READ_BACK_MAX_NESTING).contains(&nesting_of(&checked.canonical)),
+        "{}",
+        checked.canonical
+    );
+    // An unmatched parenthesis is the parser's syntax error, not the lexer's.
+    for sql in [
+        "SELECT 1) FROM tenant_telemetry",
+        "SELECT (1 FROM tenant_telemetry",
+        "SELECT 1] FROM tenant_telemetry",
+    ] {
+        assert!(tokens(sql).is_ok(), "{sql}");
+        assert!(
+            matches!(refusal(sql).await, SqlRefusal::Syntax { .. }),
+            "{sql}"
+        );
+    }
+}
+
+/// sqlparser's ClickHouse dialect, counting the expressions the parser starts to read: it asks
+/// the dialect's `parse_prefix` first at the start of each one. Every other answer is
+/// [`ClickHouseDialect`]'s (the parse is compared with that dialect's below).
+#[derive(Debug, Default)]
+struct Counting {
+    prefixes: Cell<usize>,
+}
+
+/// The methods [`ClickHouseDialect`] answers itself, answered as it does.
+macro_rules! as_clickhouse {
+    ($($method:ident),* $(,)?) => {
+        $(fn $method(&self) -> bool {
+            ClickHouseDialect {}.$method()
+        })*
+    };
+}
+
+impl Dialect for Counting {
+    fn dialect(&self) -> TypeId {
+        TypeId::of::<ClickHouseDialect>()
+    }
+
+    fn parse_prefix(&self, _parser: &mut Parser) -> Option<Result<Expr, ParserError>> {
+        self.prefixes.set(self.prefixes.get() + 1);
+        None
+    }
+
+    fn is_identifier_start(&self, ch: char) -> bool {
+        ClickHouseDialect {}.is_identifier_start(ch)
+    }
+
+    fn is_identifier_part(&self, ch: char) -> bool {
+        ClickHouseDialect {}.is_identifier_part(ch)
+    }
+
+    fn identifier_quote_style(&self, identifier: &str) -> Option<char> {
+        ClickHouseDialect {}.identifier_quote_style(identifier)
+    }
+
+    as_clickhouse!(
+        supports_string_literal_backslash_escape,
+        supports_select_wildcard_except,
+        describe_requires_table_keyword,
+        require_interval_qualifier,
+        supports_limit_comma,
+        supports_insert_table_function,
+        supports_insert_format,
+        supports_numeric_literal_underscores,
+        supports_partition_by_after_order_by,
+        supports_array_join_syntax,
+        supports_dictionary_syntax,
+        supports_in_unparenthesized_expr,
+        supports_lambda_functions,
+        supports_from_first_select,
+        supports_order_by_all,
+        supports_group_by_expr,
+        supports_group_by_with_modifier,
+        supports_nested_comments,
+        supports_optimize_table,
+        supports_prewhere,
+        supports_with_fill,
+        supports_limit_by,
+        supports_interpolate,
+        supports_settings,
+        supports_select_format,
+        supports_select_wildcard_replace,
+        supports_comma_separated_trim,
+    );
+}
+
+/// The expressions sqlparser starts to read while parsing `tokens` (as the check does, with
+/// `recursion_limit`), and the tokens other than spaces and comments. The parse must be the
+/// one [`ClickHouseDialect`] gives.
+fn parse_work(tokens: Vec<TokenWithSpan>, recursion_limit: usize, sql: &str) -> (usize, usize) {
+    let significant = tokens
+        .iter()
+        .filter(|token| !matches!(token.token, Token::Whitespace(_) | Token::EOF))
+        .count();
+    let counting = Counting::default();
+    let counted: Result<Vec<Statement>, ParserError> = Parser::new(&counting)
+        .with_recursion_limit(recursion_limit)
+        .with_tokens_with_locations(tokens.clone())
+        .parse_statements();
+    let plain = Parser::new(&ClickHouseDialect {})
+        .with_recursion_limit(recursion_limit)
+        .with_tokens_with_locations(tokens)
+        .parse_statements();
+    assert_eq!(counted, plain, "{sql}");
+    (counting.prefixes.get(), significant)
+}
+
+/// Expressions that reach sqlparser's speculative parses or nest in other ways; `@` is where
+/// the nested expression goes.
+const NESTED_EXPRESSIONS: &[&str] = &[
+    "position(@, 'a')",
+    "position(@ IN 'a')",
+    "position('a' IN @)",
+    "t.position(@, 'a')",
+    "CAST(@ AS Float64)",
+    "CAST(@, 'Float64')",
+    "(@)::Float64",
+    "toFloat64(@)",
+    "extract(@, 'a')",
+    "extract(DAY FROM @)",
+    "substring(@, 1, 2)",
+    "substring(@ FROM 1 FOR 2)",
+    "trim(@, 'a')",
+    "trim(BOTH 'a' FROM @)",
+    "overlay(@, 'a', 1)",
+    "overlay(@ PLACING 'a' FROM 1)",
+    "ceil(@)",
+    "ceil(@ TO DAY)",
+    "floor(@, 1)",
+    "case(@)",
+    "CASE WHEN @ THEN 1 END",
+    "CASE @ WHEN 1 THEN 2 END",
+    "not(@)",
+    "NOT (@)",
+    "@ IN (1)",
+    "1 IN (@)",
+    "1 IN ((@))",
+    "EXISTS (SELECT @)",
+    "(SELECT @)",
+    "[@]",
+    "array(@)",
+    "(@, 1)",
+    "(@)",
+    "abs(@)",
+    "t.f(@)",
+    "t.cast(@ AS Int32)",
+    "quantile(0.5)(@)",
+    "quantile(@)(1)",
+    "Nullable(Float64)(@)",
+    "Array(@)",
+    "DateTime64(@)",
+    "interval(@)",
+    "INTERVAL @ DAY",
+    "f(INTERVAL @)",
+    "f(x VALUE @)",
+    "arrayMap(x -> @, [1])",
+    "arrayMap((x, y) -> @, [1], [2])",
+    "(@)[1]",
+    "@ BETWEEN 1 AND 2",
+    "1 BETWEEN @ AND 2",
+    "(@) IS NULL",
+    "(@) AT TIME ZONE 'UTC'",
+    "CONVERT(@, Int32)",
+    "count(DISTINCT @)",
+    "sum(1) OVER (PARTITION BY @)",
+    "if(@, 1, 2)",
+    "- @",
+    "1 + @",
+];
+
+/// Queries and table expressions that nest; `@` is where the nested query or table goes.
+const NESTED_QUERIES: &[&str] = &[
+    "SELECT * FROM (@)",
+    "SELECT * FROM (@) AS a",
+    "SELECT 1 IN (@)",
+    "WITH a AS (@) SELECT * FROM a",
+    "(@)",
+    "SELECT (@)",
+    "SELECT EXISTS (@)",
+    "SELECT * FROM t JOIN (@) ON 1",
+    "SELECT 1 UNION ALL (@)",
+    "SELECT * FROM ((@) AS a JOIN t ON 1)",
+];
+
+/// The query `build` gives for the most levels (at most [`MAX_NESTING`]) that the lexer accepts.
+fn deepest(build: &dyn Fn(usize) -> String) -> Option<String> {
+    (1..=MAX_NESTING)
+        .rev()
+        .map(build)
+        .find(|sql| tokens(sql).is_ok())
+}
+
+/// How many expressions sqlparser may start to read per token. The parser remembers where its
+/// speculative parses other than `position(`'s failed, so a level reads what is inside it at
+/// most once more: at most the nesting plus one readings of each token, with one more for
+/// good measure, and twice that under the one `position(` the lexer allows.
+const WORK_PER_TOKEN: usize = 2 * (MAX_NESTING + 2);
+
+/// The parse of each query the lexer accepts costs at most [`WORK_PER_TOKEN`] expressions read
+/// per token: every construct above nested as deep as the lexer allows, alone and alternating
+/// with each other, inside a `position(…, 'a')` or not, around an expression that parses, one
+/// that fails and a long array (most tokens at the deepest level, where the re-readings add
+/// up). Counted, not timed. The same bound holds for the read-back of what passes: the
+/// printed text adds only plain parentheses, which the parser reads once.
+#[test]
+fn the_parse_reads_each_token_a_bounded_number_of_times() {
+    std::thread::Builder::new()
+        .stack_size(STACK_BYTES)
+        .spawn(parse_work_is_bounded)
+        .expect("a thread")
+        .join()
+        .expect("the bound holds");
+}
+
+#[allow(
+    clippy::print_stderr,
+    reason = "prints the most work per token and the doubling it catches for the test report"
+)]
+fn parse_work_is_bounded() {
+    let long_array = format!("[{}]", vec!["1"; 200].join(", "));
+    let mut shapes: Vec<String> = Vec::new();
+    for base in ["value_float", "1 +", long_array.as_str()] {
+        for outer in ["@", "position(@, 'a')"] {
+            for (index, first) in NESTED_EXPRESSIONS.iter().enumerate() {
+                let alone = |levels| nest(&[first], levels, base);
+                let wrap = |levels| {
+                    format!(
+                        "SELECT {} AS v FROM tenant_telemetry",
+                        outer.replace('@', &alone(levels))
+                    )
+                };
+                shapes.extend(deepest(&wrap));
+                // Each ordered pair once per base and outer call.
+                for second in &NESTED_EXPRESSIONS[index..] {
+                    for pair in [[first, second], [second, first]] {
+                        let wrap = |levels| {
+                            format!(
+                                "SELECT {} AS v FROM tenant_telemetry",
+                                outer.replace('@', &nest(&pair, levels, base))
+                            )
+                        };
+                        shapes.extend(deepest(&wrap));
+                    }
+                }
+            }
+        }
+        for template in NESTED_QUERIES {
+            let query = format!("SELECT {base} AS v FROM tenant_telemetry");
+            shapes.extend(deepest(&|levels| nest(&[template], levels, &query)));
+        }
+    }
+    let mut worst = (0_usize, 1_usize, String::new());
+    let mut read_back = 0_usize;
+    for sql in &shapes {
+        let written = tokens(sql).expect("the lexer accepts it");
+        let (work, significant) = parse_work(written, RECURSION_LIMIT, sql);
+        assert!(
+            work <= WORK_PER_TOKEN * significant,
+            "{work} for {significant} tokens: {sql}"
+        );
+        if work * worst.1 > worst.0 * significant {
+            worst = (work, significant, sql.clone());
+        }
+        if let Ok(checked) = check(sql, 200) {
+            let printed = tokens_nested(&checked.canonical, READ_BACK_MAX_NESTING)
+                .expect("the printed text passed its read-back");
+            let (work, significant) =
+                parse_work(printed, READ_BACK_RECURSION_LIMIT, &checked.canonical);
+            assert!(
+                work <= WORK_PER_TOKEN * significant,
+                "{work} for {significant} tokens: {}",
+                checked.canonical
+            );
+            read_back += 1;
+        }
+    }
+    assert!(shapes.len() > 10_000, "{} shapes", shapes.len());
+    assert!(read_back > 1_000, "{read_back} read back");
+    eprintln!(
+        "{} shapes, {read_back} read back; the most work per token: {} for {} tokens: {}",
+        shapes.len(),
+        worst.0,
+        worst.1,
+        worst.2
+    );
+
+    // The counting sees the doubling the rule keeps out: nested `position(` calls, parsed
+    // without the lexer, read far more than the bound allows at 12 levels.
+    let sql = nested_positions(12);
+    let unchecked = Tokenizer::new(&ClickHouseDialect {}, &sql)
+        .tokenize_with_location()
+        .expect("tokens");
+    let (work, significant) = parse_work(unchecked, RECURSION_LIMIT, &sql);
+    eprintln!("12 nested position calls without the lexer: {work} for {significant} tokens");
+    assert!(
+        work > 4 * WORK_PER_TOKEN * significant,
+        "{work} for {significant} tokens"
+    );
+}
+
+/// `templates` applied in turn, `levels` times, around `base`.
+fn nest(templates: &[&&str], levels: usize, base: &str) -> String {
+    let mut text = base.to_owned();
+    for level in 0..levels {
+        text = templates[level % templates.len()].replace('@', &text);
+    }
+    text
 }
 
 // The endpoint, through the service's router.

@@ -54,6 +54,12 @@ pub const MAX_ADDED_NESTING: usize = 24;
 /// tree must still be the one checked, so the read-back accepts nothing deeper than that tree.
 pub const READ_BACK_RECURSION_LIMIT: usize = super::RECURSION_LIMIT + MAX_ADDED_NESTING + 8;
 
+/// The lexer's nesting limit for the read-back of a printed query, by the same reasoning:
+/// [`super::lexer::MAX_NESTING`], [`MAX_ADDED_NESTING`], and room for the row-limit wrapper and
+/// the parentheses sqlparser prints itself (`x IN y` as `x IN (y)`). A printed query deeper than
+/// that is refused as too complex, as one too deep as written is.
+pub const READ_BACK_MAX_NESTING: usize = super::lexer::MAX_NESTING + MAX_ADDED_NESTING + 8;
+
 type Checked<T = ()> = Result<T, SqlRefusal>;
 
 fn clause(clause: SqlClause) -> SqlRefusal {

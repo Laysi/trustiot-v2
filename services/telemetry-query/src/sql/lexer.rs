@@ -15,12 +15,45 @@ pub const MAX_TOKENS: usize = 4_096;
 /// The longest identifier, in bytes.
 pub const MAX_IDENTIFIER_BYTES: usize = 128;
 
-/// The tokens of `sql`, after the size, character and token rules.
+/// How deep the parentheses and brackets of a query may nest, as written.
+///
+/// The queries the tests accept as real queries (`tests/data/model-queries.sql`, the unit tests
+/// and the queries `tests/sql_api.rs` runs) nest at most 3 deep, the model queries at most 2.
+/// 16 leaves room for longer queries of the same kind and for the dashboard SQL of
+/// Laysi/trustiot-v2#150, which reads the same views; a deeper query can name its parts with
+/// `WITH`. The limit bounds the parse together with [`MAX_POSITION_NESTING`]: sqlparser 0.63
+/// remembers where its other speculative parses failed, so those cost at most about the
+/// nesting times the length of the query (the survey and its measurements are in
+/// `docs/test-reports/2026-10-26-143-ai-sql.md`).
+pub const MAX_NESTING: usize = 16;
+
+/// How many `position(` calls may be open around one another: one, so none inside another.
+///
+/// sqlparser 0.63 parses `position(` first as `POSITION(a IN b)` and, when that fails, again as
+/// a function call, without remembering the first attempt. The comma form ClickHouse uses fails
+/// the first attempt only after reading the whole first argument, so every `position(` inside
+/// another doubles the work: the time quadrupled every two levels, 417 ms at 16 levels, and
+/// about 30 levels (under 500 bytes) would take hours. No other speculative parse of the
+/// dialect re-reads an argument it read successfully without remembering the failure.
+pub const MAX_POSITION_NESTING: usize = 1;
+
+/// The tokens of `sql`, after the size, character, token and nesting rules, with nesting up to
+/// [`MAX_NESTING`].
 ///
 /// # Errors
 ///
 /// The refusal for the first rule `sql` breaks.
 pub fn tokens(sql: &str) -> Result<Vec<TokenWithSpan>, SqlRefusal> {
+    tokens_nested(sql, MAX_NESTING)
+}
+
+/// [`tokens`] with nesting up to `max_nesting`: the read-back of a printed query allows for the
+/// parentheses the check adds.
+///
+/// # Errors
+///
+/// The refusal for the first rule `sql` breaks.
+pub fn tokens_nested(sql: &str, max_nesting: usize) -> Result<Vec<TokenWithSpan>, SqlRefusal> {
     if sql.len() > MAX_SQL_BYTES as usize {
         return Err(SqlRefusal::TooLong {
             max_bytes: MAX_SQL_BYTES,
@@ -59,7 +92,45 @@ pub fn tokens(sql: &str) -> Result<Vec<TokenWithSpan>, SqlRefusal> {
     {
         return Err(SqlRefusal::MultipleStatements);
     }
+    nesting(&significant, max_nesting)?;
     Ok(tokens)
+}
+
+/// Step 3's last rule, over the tokens other than spaces and comments (which sqlparser's
+/// lookahead skips too): parentheses and brackets nest at most `max_nesting` deep, and at most
+/// [`MAX_POSITION_NESTING`] `position(` calls are open at once. A `position` followed by `(` is
+/// what sends sqlparser to its `POSITION` parse, anywhere in an expression and after a `.`.
+fn nesting(significant: &[&TokenWithSpan], max_nesting: usize) -> Result<(), SqlRefusal> {
+    // Each open parenthesis or bracket, and whether it opened a `position(` call.
+    let mut open: Vec<bool> = Vec::new();
+    let mut positions = 0_usize;
+    let mut previous: Option<&Token> = None;
+    for token in significant.iter().map(|token| &token.token) {
+        match token {
+            Token::LParen | Token::LBracket => {
+                let opens_position = *token == Token::LParen
+                    && matches!(previous, Some(Token::Word(word)) if word.keyword == Keyword::POSITION);
+                if opens_position {
+                    if positions >= MAX_POSITION_NESTING {
+                        return Err(SqlRefusal::TooComplex);
+                    }
+                    positions += 1;
+                }
+                open.push(opens_position);
+                if open.len() > max_nesting {
+                    return Err(SqlRefusal::TooComplex);
+                }
+            }
+            Token::RParen | Token::RBracket => {
+                // An unmatched closing one is left to the parser, as a syntax error.
+                let closes_position = open.pop() == Some(true);
+                positions -= usize::from(closes_position);
+            }
+            _ => {}
+        }
+        previous = Some(token);
+    }
+    Ok(())
 }
 
 /// Step 2: no backslash, no control character but tab, line feed and carriage return, no

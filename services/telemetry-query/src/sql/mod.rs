@@ -6,7 +6,9 @@
 //!    character anywhere ([`lexer`]).
 //! 3. Tokens: plain identifiers, plain decimal numbers, `'…'` strings, `--` and `/* */`
 //!    comments and a fixed set of operators; the first word is `SELECT` or `WITH` (or `(`),
-//!    and nothing follows a `;` ([`lexer`]).
+//!    nothing follows a `;`, parentheses and brackets nest at most
+//!    [`lexer::MAX_NESTING`] deep, and no `position(` is inside another ([`lexer`]). The last
+//!    two keep sqlparser's speculative parses from growing faster than the text.
 //! 4. Parse with sqlparser's ClickHouse dialect and a recursion limit: one query statement.
 //! 5. to 7. The walk ([`check`]): an allowlist of clauses, relations (the three tenant views and
 //!    common table expressions) and expressions, the function allowlist ([`functions`]), the
@@ -40,7 +42,7 @@ use sqlparser::dialect::ClickHouseDialect;
 use sqlparser::parser::{Parser, ParserError};
 use tokio::sync::Semaphore;
 
-use self::check::{Checker, READ_BACK_RECURSION_LIMIT};
+use self::check::{Checker, READ_BACK_MAX_NESTING, READ_BACK_RECURSION_LIMIT};
 
 /// How deep the parser may recurse.
 pub const RECURSION_LIMIT: usize = 50;
@@ -88,7 +90,7 @@ impl From<SqlRefusal> for CheckError {
 /// [`CheckError::Refused`] for SQL that breaks a rule, [`CheckError::Internal`] when the
 /// printed text does not read back as the tree that was checked.
 pub fn check(sql: &str, max_rows: u32) -> Result<Checked, CheckError> {
-    let tree = checked_tree(sql, RECURSION_LIMIT)?;
+    let tree = checked_tree(sql, RECURSION_LIMIT, lexer::MAX_NESTING)?;
     let canonical = tree.to_string();
     read_back(&canonical, &tree)?;
     let limited = limit(tree, u64::from(max_rows) + 1)?;
@@ -154,9 +156,14 @@ async fn on_bounded_thread<T: Send + 'static>(
         .map_err(|_| CheckError::Internal("the check's thread stopped without an answer"))
 }
 
-/// Steps 1 to 7: the tokens, the parse with `recursion_limit` and the walk.
-fn checked_tree(sql: &str, recursion_limit: usize) -> Result<Query, SqlRefusal> {
-    let tokens = lexer::tokens(sql)?;
+/// Steps 1 to 7: the tokens with nesting up to `max_nesting`, the parse with `recursion_limit`
+/// and the walk.
+fn checked_tree(
+    sql: &str,
+    recursion_limit: usize,
+    max_nesting: usize,
+) -> Result<Query, SqlRefusal> {
+    let tokens = lexer::tokens_nested(sql, max_nesting)?;
     let mut statements = Parser::new(&ClickHouseDialect {})
         .with_recursion_limit(recursion_limit)
         .with_tokens_with_locations(tokens)
@@ -185,10 +192,12 @@ fn checked_tree(sql: &str, recursion_limit: usize) -> Result<Query, SqlRefusal> 
 /// query being too long or too complex, and is returned as such. Any other is a failure of the
 /// check.
 fn read_back(text: &str, tree: &Query) -> Result<(), CheckError> {
-    let again = checked_tree(text, READ_BACK_RECURSION_LIMIT).map_err(|refusal| match refusal {
-        SqlRefusal::TooLong { .. } | SqlRefusal::TooComplex => CheckError::Refused(refusal),
-        _ => CheckError::Internal("the printed query does not pass the check again"),
-    })?;
+    let again = checked_tree(text, READ_BACK_RECURSION_LIMIT, READ_BACK_MAX_NESTING).map_err(
+        |refusal| match refusal {
+            SqlRefusal::TooLong { .. } | SqlRefusal::TooComplex => CheckError::Refused(refusal),
+            _ => CheckError::Internal("the printed query does not pass the check again"),
+        },
+    )?;
     if &again != tree || again.to_string() != text {
         return Err(CheckError::Internal(
             "the printed query reads back as a different tree",

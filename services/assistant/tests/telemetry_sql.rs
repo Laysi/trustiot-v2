@@ -39,6 +39,7 @@ use sqlx::postgres::{PgConnectOptions, PgPoolOptions, PgSslMode};
 use support::{Capture, WAIT, limits, principal};
 use telemetry_query::accounts::Accounts;
 use telemetry_query::clickhouse::ClickHouse;
+use telemetry_query::sql::lexer::MAX_NESTING;
 use testkit::identity::TestIssuer;
 use tokio::net::TcpListener;
 
@@ -208,6 +209,8 @@ async fn refused_sql_reaches_the_model_as_its_class_and_never_the_databases() {
         "(".repeat(300),
         ")".repeat(300)
     );
+    // The model is told the limits the check applies.
+    let levels = format!("at most {MAX_NESTING} levels of parentheses and brackets");
     let cases: Vec<(String, &str)> = vec![
         (
             "SELECT * FROM system.tables".to_owned(),
@@ -255,7 +258,12 @@ async fn refused_sql_reaches_the_model_as_its_class_and_never_the_databases() {
             "SELECT point FROM tenant_telemetry WHERE".to_owned(),
             "does not parse",
         ),
-        (deep, "too many tokens or nests too deeply"),
+        (deep.clone(), "too many tokens or nests too deeply"),
+        (deep, levels.as_str()),
+        (
+            "SELECT position(position(value_string, 'a'), 'b') FROM tenant_telemetry".to_owned(),
+            "no position() inside another position()",
+        ),
     ];
     let sent = cases.len();
     for (written, expected) in cases {
