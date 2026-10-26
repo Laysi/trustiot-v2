@@ -1,10 +1,11 @@
 /**
  * Paths on the app host that are not the SPA's. The ingress sends /api and /auth to the services
- * (the cookie routes, decision 27) and never forwards /internal; /static holds the build's assets
- * and the root files come from public/ or the web service (services/web). A client route there
- * would never load from a deep link, so routes.test.ts keeps every route out of them.
+ * (the cookie routes, decision 27) and never forwards /internal; /static holds the build's assets,
+ * /sandbox the dashboard sandbox's files (frontend/sandbox/README.md), and the root files come
+ * from public/ or the web service (services/web). A client route there would never load from a
+ * deep link, so routes.test.ts keeps every route out of them.
  */
-export const RESERVED_PREFIXES: readonly string[] = ["/api", "/auth", "/internal", "/static"];
+export const RESERVED_PREFIXES: readonly string[] = ["/api", "/auth", "/internal", "/static", "/sandbox"];
 export const RESERVED_PATHS: readonly string[] = ["/healthz", "/readyz", "/index.html", "/robots.txt", "/favicon.svg"];
 
 export function isReservedPath(path: string): boolean {

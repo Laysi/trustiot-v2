@@ -1,0 +1,91 @@
+/*
+ * The sandbox document's own styles (frontend/sandbox/README.md): a plain layout, the theme's
+ * colours as custom properties a page can use, and how the display-time comparison shows a value
+ * it could not match (data-tq-flag*). The page's own <style> comes after this sheet.
+ */
+:root {
+  color-scheme: light;
+  --tq-bg: #ffffff;
+  --tq-fg: #1f2933;
+  --tq-muted: #616e7c;
+  --tq-grid: #e4e7eb;
+  --tq-accent: #2563eb;
+  --tq-warn: #b45309;
+  --tq-series-1: #2563eb;
+  --tq-series-2: #16a34a;
+  --tq-series-3: #d97706;
+  --tq-series-4: #9333ea;
+  --tq-series-5: #dc2626;
+  --tq-series-6: #0891b2;
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --tq-bg: #111827;
+  --tq-fg: #e5e7eb;
+  --tq-muted: #9ca3af;
+  --tq-grid: #374151;
+  --tq-accent: #60a5fa;
+  --tq-warn: #f59e0b;
+  --tq-series-1: #60a5fa;
+  --tq-series-2: #4ade80;
+  --tq-series-3: #fbbf24;
+  --tq-series-4: #c084fc;
+  --tq-series-5: #f87171;
+  --tq-series-6: #22d3ee;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  background: var(--tq-bg);
+  color: var(--tq-fg);
+  font:
+    14px / 1.5 system-ui,
+    sans-serif;
+}
+
+#tq-root {
+  padding: 12px;
+}
+
+svg {
+  overflow: visible;
+}
+
+/* A value the display-time comparison could not match: shown as 「—」 or faded, never as data. */
+[data-tq-flag] {
+  outline: 1px dashed var(--tq-warn);
+  outline-offset: 1px;
+  color: var(--tq-warn);
+}
+
+svg [data-tq-flag] {
+  opacity: 0.25;
+}
+
+[data-tq-flag-pseudo]::before,
+[data-tq-flag-pseudo]::after,
+[data-tq-flag-pseudo]::marker {
+  /* biome-ignore lint/complexity/noImportantStyles: must override the page's own generated content */
+  content: none !important;
+}
+
+[data-tq-flag-pseudo] {
+  /* biome-ignore lint/complexity/noImportantStyles: must override the page's own list markers */
+  list-style-type: none !important;
+  /* biome-ignore lint/complexity/noImportantStyles: must override the page's own quotes */
+  quotes: none !important;
+}
+
+[data-tq-flag-hide] {
+  /* biome-ignore lint/complexity/noImportantStyles: must override the page's own display */
+  display: none !important;
+}

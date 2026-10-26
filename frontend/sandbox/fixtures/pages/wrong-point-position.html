@@ -1,0 +1,21 @@
+<svg id="hourly" width="480" height="240"></svg>
+<script>
+  tq.on("data", (tq) => {
+    const hourly = tq.dataset("hourly_power");
+    const svg = d3.select("#hourly");
+    svg.selectAll("*").remove();
+    const x = d3.scaleUtc(d3.extent(hourly.rows, (row) => row.hour), [40, 470]);
+    const y = d3.scaleLinear([0, d3.max(hourly.rows, (row) => row.kw) ?? 0], [210, 10]).nice();
+    // The sixth hour's point is drawn at twice its value.
+    const value = (row) => row.kw * (row.$row === 5 ? 2 : 1);
+    const dots = svg
+      .append("g")
+      .selectAll("circle")
+      .data(hourly.rows)
+      .join("circle")
+      .attr("r", 3)
+      .attr("cx", (row) => x(row.hour))
+      .attr("cy", (row) => y(value(row)));
+    tq.mark(dots, (row) => `c|hourly_power|kw|${row.$row}`, { chart: "hourly", channel: "y" });
+  });
+</script>
