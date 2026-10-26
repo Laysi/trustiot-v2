@@ -39,7 +39,8 @@ use crate::period::View;
 use crate::sql::{self, CheckError, Checked};
 
 /// The services that may run SQL for a user: those an AI acts through. The dashboards of
-/// Laysi/trustiot-v2#150 add theirs.
+/// Laysi/trustiot-v2#150 add no caller: the assistant runs their SQL datasets too, as the user
+/// who views the dashboard or asked the AI for it.
 pub const SQL_CALLERS: [ServiceName; 1] = [ServiceName::Assistant];
 
 /// The largest request body: the SQL's [`MAX_SQL_BYTES`] with room for JSON escapes. A larger

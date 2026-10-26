@@ -34,6 +34,7 @@ trustiot-v2/
 │   ├── gateway-ops/           # 閘道器營運
 │   ├── mqtt-bridge/           # WebSocket ↔ TCP 轉接
 │   ├── assistant/             # AI 助理
+│   ├── dashboard-check/       # 儀表板發布前的檢查：無頭 Chromium 執行頁面並比對（Laysi/trustiot-v2#150）
 │   ├── ai-gateway/            # AI 閘道（不依賴 contract）
 │   ├── alerts/                # 警報與通知
 │   ├── field-context/         # 現場脈絡（AGE）
