@@ -1,6 +1,8 @@
+import { CircleAlertIcon, CloudOffIcon, CompassIcon, LockIcon } from "lucide-react";
 import { Link, useLocation } from "react-router";
 
 import { loginPath } from "../app/paths.ts";
+import { Button } from "../components/ui/button.tsx";
 import { useI18n } from "../i18n/useI18n.ts";
 import { StatusPage } from "./StatusPage.tsx";
 
@@ -8,42 +10,32 @@ import { StatusPage } from "./StatusPage.tsx";
 export function HomePage() {
   const { t } = useI18n();
   return (
-    <section>
-      <h1>{t("page.home.title")}</h1>
-      <p>{t("page.home.body")}</p>
+    <section className="grid gap-2">
+      <h1 className="text-2xl font-semibold tracking-tight">{t("page.home.title")}</h1>
+      <p className="text-muted-foreground">{t("page.home.body")}</p>
     </section>
-  );
-}
-
-/** The sign-in page; the form comes with Laysi/trustiot-v2#124. */
-export function LoginPage() {
-  const { t } = useI18n();
-  return (
-    <StatusPage title={t("page.login.title")}>
-      <p>{t("page.login.body")}</p>
-    </StatusPage>
   );
 }
 
 function HomeLink() {
   const { t } = useI18n();
-  return <Link to="/">{t("page.action.home")}</Link>;
+  return (
+    <Button asChild variant="outline">
+      <Link to="/">{t("page.action.home")}</Link>
+    </Button>
+  );
 }
 
 function ReloadButton() {
   const { t } = useI18n();
-  return (
-    <button type="button" onClick={() => window.location.reload()}>
-      {t("page.action.reload")}
-    </button>
-  );
+  return <Button onClick={() => window.location.reload()}>{t("page.action.reload")}</Button>;
 }
 
 export function NotFoundPage() {
   const { t } = useI18n();
   const { pathname } = useLocation();
   return (
-    <StatusPage title={t("page.not_found.title")} actions={<HomeLink />}>
+    <StatusPage title={t("page.not_found.title")} icon={<CompassIcon />} actions={<HomeLink />}>
       <p>{t("page.not_found.body", { path: pathname })}</p>
     </StatusPage>
   );
@@ -52,17 +44,8 @@ export function NotFoundPage() {
 export function ForbiddenPage() {
   const { t } = useI18n();
   return (
-    <StatusPage title={t("page.forbidden.title")} actions={<HomeLink />}>
+    <StatusPage title={t("page.forbidden.title")} icon={<LockIcon />} actions={<HomeLink />}>
       <p>{t("page.forbidden.body")}</p>
-    </StatusPage>
-  );
-}
-
-export function TenantSuspendedPage() {
-  const { t } = useI18n();
-  return (
-    <StatusPage title={t("page.tenant_suspended.title")}>
-      <p>{t("page.tenant_suspended.body")}</p>
     </StatusPage>
   );
 }
@@ -71,7 +54,7 @@ export function TenantSuspendedPage() {
 export function UnavailablePage() {
   const { t } = useI18n();
   return (
-    <StatusPage title={t("page.unavailable.title")} actions={<ReloadButton />}>
+    <StatusPage title={t("page.unavailable.title")} icon={<CloudOffIcon />} actions={<ReloadButton />}>
       <p>{t("page.unavailable.body")}</p>
     </StatusPage>
   );
@@ -83,7 +66,15 @@ export function SignedOutPage() {
   const location = useLocation();
   const target = loginPath(`${location.pathname}${location.search}${location.hash}`);
   return (
-    <StatusPage title={t("error.unauthenticated")} actions={<Link to={target}>{t("page.action.sign_in")}</Link>}>
+    <StatusPage
+      title={t("error.unauthenticated")}
+      icon={<LockIcon />}
+      actions={
+        <Button asChild>
+          <Link to={target}>{t("page.action.sign_in")}</Link>
+        </Button>
+      }
+    >
       <p>{t("page.login.body")}</p>
     </StatusPage>
   );
@@ -92,7 +83,7 @@ export function SignedOutPage() {
 export function GenericErrorPage({ message }: { message?: string }) {
   const { t } = useI18n();
   return (
-    <StatusPage title={t("page.error.title")} actions={<ReloadButton />}>
+    <StatusPage title={t("page.error.title")} icon={<CircleAlertIcon />} actions={<ReloadButton />}>
       <p>{message ?? t("page.error.body")}</p>
     </StatusPage>
   );

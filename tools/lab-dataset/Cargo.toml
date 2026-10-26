@@ -1,0 +1,50 @@
+[package]
+name = "lab-dataset"
+description = "TrustIoT v2 lab dataset tools (checklist M7): the datasets/lab index format and its checks, and the loader that writes a dataset into ClickHouse's telemetry table as the ingest service writes it."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+repository.workspace = true
+
+# A library for the Rust integration tests that load a dataset (ingest, telemetry-query,
+# assistant), and the `lab-dataset` command (src/main.rs) for loading one by hand.
+
+[[bin]]
+name = "lab-dataset"
+path = "src/main.rs"
+test = false
+doc = false
+
+[dependencies]
+# The recorder reads devices with the gateway agent's Modbus module and polling loop
+# (Laysi/trustiot-v2#87, Laysi/trustiot-v2#88), not with a client of its own.
+agent = { path = "../../edge/agent" }
+# Dataset times; `now` for `--end-before now`.
+chrono = { workspace = true, features = ["now"] }
+# The migration Job's HTTP client (`migrate::http`): http://, or https:// trusting only a named
+# CA, with ring; not reqwest (see tools/migrate/src/http.rs).
+migrate = { path = "../migrate" }
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+# The recorder's device and model configuration, and the protocol's batch size limit.
+protocol = { path = "../../crates/protocol" }
+# Segment file hashes and the derived device and stream IDs.
+sha2.workspace = true
+thiserror.workspace = true
+# `signal`: `record` stops at Ctrl-C; `sync` and `time`: the recorder's batch former.
+tokio = { workspace = true, features = ["macros", "rt", "signal", "sync", "time"] }
+toml.workspace = true
+# `v8`: device and stream IDs derived from a hash; `serde`: the load summary.
+uuid = { workspace = true, features = ["serde", "v8"] }
+
+[dev-dependencies]
+# The ClickHouse test harness of services/ingest/tests/common (included with #[path]).
+reqwest.workspace = true
+# The recorder's test: the fake RS485 converter and the manual clock.
+testkit = { path = "../../crates/testkit" }
+tokio = { workspace = true, features = ["macros", "process", "rt", "rt-multi-thread", "test-util", "time"] }
+uuid = { workspace = true, features = ["v4"] }
+
+[lints]
+workspace = true
