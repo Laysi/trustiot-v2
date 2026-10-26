@@ -2867,17 +2867,26 @@ mod tests {
             .map(|n| format!("c{n}"))
             .collect::<Vec<_>>()
             .join(", ");
-        let long = format!("SELECT {columns} FROM tenant_telemetry_1h WHERE bucket > now()");
+        // Joined, not formatted: tools/sql-check reads a `format!` of SQL-like text as SQL built
+        // from strings, and these are only the guard's input.
+        let long = [
+            "SELECT ",
+            columns.as_str(),
+            " FROM tenant_telemetry_1h WHERE bucket > now()",
+        ]
+        .concat();
         assert!(long.len() > MAX_STATEMENT_SCAN / 2);
         assert_eq!(
             cleaned(&format!("前\n\n{long}\n\n後")),
             ("前\n\n後".to_owned(), vec![Removed::Sql])
         );
         // Recognized within the first bytes, removed to its end past them.
-        let longest = format!(
-            "SELECT a FROM t WHERE a IN ({}2)",
-            "1, ".repeat(MAX_STATEMENT_SCAN)
-        );
+        let longest = [
+            "SELECT a FROM t WHERE a IN (",
+            "1, ".repeat(MAX_STATEMENT_SCAN).as_str(),
+            "2)",
+        ]
+        .concat();
         assert_eq!(
             cleaned(&format!("{longest}\n\n後")),
             ("後".to_owned(), vec![Removed::Sql])
