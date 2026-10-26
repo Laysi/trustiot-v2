@@ -5,7 +5,7 @@
 - API 的型別、上限與判定格式：`crates/contract/src/api/dashboard/check.rs`。
 - 沙箱檔案的路徑與 response header：`crates/contract/src/api/dashboard/sandbox.rs`。
 - runtime、比對程式、檢查規則與流程的契約：[frontend/sandbox](../../frontend/sandbox/README.md)。
-- 映像、chart 與 nightly 的隔離證明隨 Laysi/trustiot-v2#150 的其餘部分加入；下面「威脅模型」第 1、2 點是部署必須做到的事。
+- 映像：[deploy/images/dashboard-check](../../deploy/images/dashboard-check/README.md)（Chromium 的版本、升級與真實瀏覽器的映像測試）。部署：chart 的 `services.dashboard-check`（[deploy/chart/README.md](../../deploy/chart/README.md)「儀表板檢查」），做到下面「威脅模型」第 1、2 點；nightly 在叢集裡證明這些隔離（`scripts/nightly/dashboard-check.ts`）。
 
 | 檔案 | 內容 |
 | --- | --- |

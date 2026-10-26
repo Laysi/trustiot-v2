@@ -654,7 +654,7 @@ curl -sS -D - -X POST "http://127.0.0.1:18080/internal/roles/main/v1/messages" \
 - 預設關閉。SaaS 叢集在叢集自己的 values 與 `assistant` 一起開啟（[deploy/flux/README.md](../flux/README.md)）；地端維持關閉，AI 儀表板在 SaaS 之後才到地端（決策 33）。
 - 開啟後 `assistant` 拿到 `TRUSTIOT__DASHBOARD_CHECK__URL`（見「AI 助理」）；沒有開啟時 AI 助理不能發布儀表板。
 - 映像是 [deploy/images/dashboard-check](../images/dashboard-check/README.md)：服務、Debian 的 `chromium-headless-shell` 與前端建置的沙盒頁面。
-- nightly 以 SaaS 的 values 部署它，並在叢集裡證明這些隔離：從它的 pod 連不到 DNS、API server、collector 與外部位址，`assistant` 以外的 pod 連不到它，`assistant` 呼叫得到（[docs/architecture/ci-release.md](../../docs/architecture/ci-release.md)「nightly.yml」）。
+- nightly 以 SaaS 的 values 部署它，並在叢集裡證明這些隔離：從它的 pod 查不到 DNS 名稱，API server、collector 與叢集外的位址都沒有回應，身分服務的 pod 對同樣的目標都有回應（對照），也連不到它；`assistant` 送沙箱的 `correct` 樣本頁面，判定是 `passed`（`scripts/nightly/dashboard-check.ts`，[docs/architecture/ci-release.md](../../docs/architecture/ci-release.md)「nightly.yml」第 10 項）。
 
 ## migration Job
 

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -14,8 +14,11 @@ import {
   API_ROUTES,
   apiValues,
   ASSETS_TENANT_PATH,
+  ASSISTANT_DASHBOARDS_PATH,
   ASSISTANT_ROLE,
+  checkAssistantDashboards,
   checkAssistantLogin,
+  DASHBOARD_CHECK_SHAPES,
   checkIngressEdges,
   checkTelemetryApi,
   checkTenantAccount,
@@ -150,6 +153,15 @@ describe("the check's sessions", () => {
     const history = readFileSync(join(REPO_ROOT, "services", "telemetry-query", "src", "history.rs"), "utf8");
     expect(history).toContain(`pub const LATEST_PATH: &str = "${TELEMETRY_LATEST_PATH}";`);
     expect(history).toContain(`MessageKey::new("${ACCOUNT_NOT_READY}")`);
+    // The assistant's public API (services/assistant/src/api/) comes with Laysi/trustiot-v2#150's
+    // backend; until that is in the tree, the path is the contract's prefix plus the list.
+    const dashboards = join(REPO_ROOT, "services", "assistant", "src", "api", "dashboards.rs");
+    if (existsSync(join(REPO_ROOT, "services", "assistant", "src", "api"))) {
+      expect(readFileSync(dashboards, "utf8")).toContain(`pub const DASHBOARDS_PATH: &str = "${ASSISTANT_DASHBOARDS_PATH}";`);
+    } else {
+      expect(readFileSync(join(REPO_ROOT, "crates", "contract", "src", "api", "dashboard", "public.rs"), "utf8")).toContain("(`/api/assistant/v1`");
+      expect(ASSISTANT_DASHBOARDS_PATH).toBe("/api/assistant/v1/dashboards");
+    }
   });
 });
 
@@ -444,6 +456,94 @@ describe("checkTelemetryApi", () => {
   });
 });
 
+describe("checkAssistantDashboards", () => {
+  const made = (): TenantApiResult => ({ detail: "", tenantId: TENANT, admin: newSession(), member: newSession() });
+  const noStore = { "cache-control": ["no-store"] };
+  const list = (body: unknown, headers: Record<string, string[]> = noStore): RawResponse => ({ status: 200, headers, body: JSON.stringify(body), ms: 1 });
+  const unauthenticated = (): RawResponse => ({ ...problem(401, "unauthenticated"), headers: noStore });
+
+  /** A gateway answering the member from `member` (the last answer repeats) and a request without a cookie from `anonymous`. */
+  function dashboardsGateway(member: (() => RawResponse)[], anonymous: () => RawResponse = unauthenticated) {
+    const sent: RawRequest[] = [];
+    let clock = 0;
+    const deps = {
+      send: async (request: RawRequest) => {
+        sent.push(request);
+        const cookie = request.headers?.find(([name]) => name === "cookie")?.[1];
+        const next = cookie === undefined ? anonymous : member.length > 1 ? member.shift()! : member[0]!;
+        const response = next();
+        if (response.status === 0) throw new ConnectionError("connection refused");
+        return response;
+      },
+      log: () => {},
+      sleep: async (ms: number) => {
+        clock += ms;
+      },
+      now: () => clock,
+      limits: { routeMs: 20_000, eventMs: 20_000, pollMs: 1_000 },
+    };
+    return { deps, sent };
+  }
+
+  test("waits for the route, then lists the new tenant's dashboards as its member: none, and not to be cached", async () => {
+    const result = made();
+    const gateway = dashboardsGateway([
+      () => ({ status: 0, headers: {}, body: "", ms: 0 }),
+      () => json(404, ""),
+      () => ({ status: 403, headers: {}, body: "RBAC: access denied", ms: 1 }),
+      () => ({ status: 503, headers: {}, body: "no healthy upstream", ms: 1 }),
+      () => ({ ...problem(503, "unavailable"), headers: noStore }),
+      () => list({ dashboards: [] }),
+    ]);
+    const detail = await checkAssistantDashboards(gateway.deps, APP, result);
+    expect(detail).toBe(
+      `GET ${ASSISTANT_DASHBOARDS_PATH} as the tenant's member: 200 {"dashboards":[]} with cache-control: no-store after 5 s; without a cookie: 401 unauthenticated`,
+    );
+    for (const request of gateway.sent) {
+      expect(request.target).toBe(ASSISTANT_DASHBOARDS_PATH);
+      expect(request.hostHeader).toBe(APP);
+      expect(request.method ?? "GET").toBe("GET");
+    }
+    const who = gateway.sent.map((request) => request.headers?.find(([name]) => name === "cookie")?.[1]);
+    expect(who).toEqual([...Array(6).fill(`${SESSION_COOKIE}=${result.member.cookie}`), undefined]);
+  });
+
+  test("an answer of the assistant's own that is not the list fails at once", async () => {
+    for (const [status, code] of [[403, "permission_denied"], [401, "unauthenticated"], [400, "invalid_request"], [404, "not_found"]] as const) {
+      const gateway = dashboardsGateway([() => ({ ...problem(status, code), headers: noStore }), () => list({ dashboards: [] })]);
+      await expect(checkAssistantDashboards(gateway.deps, APP, made())).rejects.toThrow(`unexpected answer ${status}`);
+      expect(gateway.sent).toHaveLength(1);
+    }
+  });
+
+  test("a list that may be cached, is not JSON or is not the new tenant's empty list fails", async () => {
+    const run = (answer: RawResponse) => checkAssistantDashboards(dashboardsGateway([() => answer]).deps, APP, made());
+    const cacheable: Record<string, string[]>[] = [{}, { "cache-control": ["private"] }, { "cache-control": ["no-store", "max-age=60"] }];
+    for (const headers of cacheable) {
+      await expect(run(list({ dashboards: [] }, headers))).rejects.toThrow("expected exactly no-store");
+    }
+    await expect(run({ status: 200, headers: noStore, body: "<html>", ms: 1 })).rejects.toThrow("which is not JSON");
+    for (const body of [[], { dashboards: [{ dashboard_id: TENANT }] }, { dashboards: [], next_cursor: "x" }, { dashboards: null }, {}]) {
+      await expect(run(list(body))).rejects.toThrow('expected {"dashboards":[]} for a new tenant');
+    }
+  });
+
+  test("a request without a cookie must get 401 unauthenticated", async () => {
+    for (const anonymous of [() => list({ dashboards: [] }), () => ({ ...problem(403, "permission_denied"), headers: noStore }), () => json(401, "")]) {
+      await expect(checkAssistantDashboards(dashboardsGateway([() => list({ dashboards: [] })], anonymous).deps, APP, made())).rejects.toThrow(
+        "without a cookie answered",
+      );
+    }
+  });
+
+  test("gives up after the bound and names what it waited for", async () => {
+    const gateway = dashboardsGateway([() => json(404, "")]);
+    await expect(checkAssistantDashboards(gateway.deps, APP, made())).rejects.toThrow(
+      `timed out after 20 s waiting for the ingress to pass tenant ${TENANT}'s member to the assistant's dashboard list (200); last answer: 404`,
+    );
+  });
+});
+
 describe("the tenant's ClickHouse account", () => {
   const account = tenantAccountName(TENANT);
   const user = `${account}\t${TENANT_READER_ROLE}\n`;
@@ -545,6 +645,7 @@ describe("the API check's routes", () => {
   test("come after the routes the shape's values set, which helm would otherwise drop", () => {
     const values = apiValues("saas", [existing]) as { ingress: { routes: unknown[]; authzProvider: string } };
     expect(values.ingress.routes).toEqual([existing, ...API_ROUTES]);
+    expect(API_ROUTES).toContainEqual({ host: "app", path: "/api/assistant", match: "PathPrefix", service: "assistant" });
     expect(values.ingress.authzProvider).toBe("trustiot-smoke-saas");
     expect(() => apiValues("saas", [{ ...existing, host: "app", path: "/api/assets" }])).toThrow("already route app /api/assets to certs");
     // No key and no key setting: the identity pod's init container generates it (Laysi/trustiot-v2#404).
@@ -614,10 +715,10 @@ describe("the API check's values on each deployment shape", () => {
       const custom = objects.filter((o) => o.kind === "AuthorizationPolicy" && o.spec?.action === "CUSTOM");
       expect(custom.length).toBeGreaterThan(0);
       for (const policy of custom) expect((policy.spec?.provider as { name?: string }).name).toBe(`trustiot-smoke-${shape.name}`);
-      // The three APIs are cookie routes on the app host.
+      // The APIs are cookie routes on the app host.
       const settings = platformSettingsOf(objects);
       const routes = objects.filter((o) => o.kind === "HTTPRoute").map((o) => JSON.stringify(o.spec));
-      for (const path of ["/api/identity", "/api/assets", "/api/telemetry", "/api/certs"]) {
+      for (const path of ["/api/identity", "/api/assets", "/api/telemetry", "/api/certs", "/api/assistant"]) {
         expect(routes.some((r) => r.includes(`"value":"${path}"`) && r.includes(settings.TRUSTIOT_APP_HOST!)), path).toBe(true);
       }
       expect(routes.some((r) => r.includes('"value":"/api/telemetry"') && r.includes('"name":"trustiot-telemetry-query"'))).toBe(true);
@@ -647,6 +748,19 @@ describe("the API check's values on each deployment shape", () => {
         TRUSTIOT__DATABASE__USERNAME: ASSISTANT_ROLE,
       });
       expect(passwordSecretsOf(objects).get("trustiot-assistant-password")).toEqual(expect.arrayContaining([ASSISTANT_ROLE]));
+      // The dashboard check from its image where the smoke runs it (Laysi/trustiot-v2#150), and the
+      // assistant's address of it; elsewhere neither.
+      const checker = named("Deployment", "trustiot-dashboard-check");
+      if (DASHBOARD_CHECK_SHAPES.has(shape.name)) {
+        const checkerContainer = (checker?.spec?.template as { spec: { containers: { name: string; image: string }[] } } | undefined)?.spec.containers.find(
+          (c) => c.name === "dashboard-check",
+        );
+        expect(checkerContainer?.image).toBe(serviceImageRef("dashboard-check"));
+        expect(assistantEnv.TRUSTIOT__DASHBOARD_CHECK__URL).toBe("http://trustiot-dashboard-check:8080");
+      } else {
+        expect(checker).toBeUndefined();
+        expect(assistantEnv).not.toHaveProperty("TRUSTIOT__DASHBOARD_CHECK__URL");
+      }
       expect([...missingSecrets(objects).keys()].filter((name) => name.includes("assistant"))).toEqual([]);
       // Nothing makes a key for the identity service: the chart declares the Secret its init
       // container fills, so no dummy is made for it, and nothing names another one.

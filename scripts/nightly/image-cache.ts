@@ -25,10 +25,12 @@ import type { ExecOptions, ExecResult, RunLog } from "./exec.ts";
  * script (the build runs service-image.ts, which imports scripts/release, scripts/lib and the
  * nightly's helpers, and those import more), and how CI sets up the build: nightly.yml and the
  * setup-proto action that installs the tools. The whole workflow file, since the steps that build
- * cannot be told apart from the rest by path; a change to it costs one build.
+ * cannot be told apart from the rest by path; a change to it costs one build. An image that packs
+ * a [static] project's build also has the inputs of the part it packs (STATIC_SITE_INPUTS).
  */
 export function imageCacheInputs(name: string): string[] {
   return [
+    ...(STATIC_SITE_INPUTS[name] ?? []),
     "Cargo.toml",
     "Cargo.lock",
     "rust-toolchain.toml",
@@ -48,6 +50,26 @@ export function imageCacheInputs(name: string): string[] {
   ];
 }
 
+/**
+ * What decides the part of a [static] project's build that an image packs, by image. The dashboard
+ * check's image holds only frontend/dist/sandbox/ (its Containerfile), which frontend/tools/
+ * build-sandbox.ts bundles from frontend/sandbox/ and the one module it imports from frontend/src,
+ * with the packages of the project's lock file; the rest of the single-page app's build does not
+ * reach the image. scripts/nightly/image-cache.test.ts checks that these cover what the sandbox build
+ * imports.
+ */
+export const STATIC_SITE_INPUTS: Readonly<Record<string, readonly string[]>> = {
+  "dashboard-check": [
+    "frontend/sandbox",
+    "frontend/tools/build-sandbox.ts",
+    "frontend/src/lib/zod.ts",
+    "frontend/package.json",
+    "frontend/bun.lock",
+    "frontend/bunfig.toml",
+    "frontend/tsconfig.json",
+  ],
+};
+
 /** Bump to drop every cached image at once, for example when the tarball's format changes. */
 export const IMAGE_CACHE_VERSION = "v1";
 
@@ -59,10 +81,12 @@ export const IMAGE_CACHE_VERSION = "v1";
  * calls through the ingress and whose tenant account it looks up in ClickHouse
  * (Laysi/trustiot-v2#539), the certs service, whose CA the smoke sets up with a test root
  * (Laysi/trustiot-v2#517), and the AI assistant, which the smoke waits for until it is ready, that
- * is logged in to Postgres as assistant_app (Laysi/trustiot-v2#592). They share one cache entry,
- * since every Rust change reaches all of them anyway (each key covers the whole workspace).
+ * is logged in to Postgres as assistant_app (Laysi/trustiot-v2#592), and the dashboard check, whose
+ * isolation the smoke proves and which checks a page for the assistant (Laysi/trustiot-v2#150).
+ * They share one cache entry, since every Rust change reaches all of them anyway (each key covers
+ * the whole workspace).
  */
-export const NIGHTLY_IMAGES = ["migrate", "identity", "assets", "ai-gateway", "telemetry-query", "certs", "assistant"] as const;
+export const NIGHTLY_IMAGES = ["migrate", "identity", "assets", "ai-gateway", "telemetry-query", "certs", "assistant", "dashboard-check"] as const;
 
 /**
  * Programs the nightly runs on the runner itself, by the image whose package builds them. An
