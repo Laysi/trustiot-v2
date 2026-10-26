@@ -1,5 +1,14 @@
-//! The dashboard check service's executable (Laysi/trustiot-v2#150): a skeleton until the
-//! service is built. The contract it serves is `contract::api::dashboard::check`, and the
-//! sequence it runs is in `frontend/sandbox/README.md`, 「檢查服務的流程」.
+//! The dashboard check service's executable; see the library and `README.md`.
 
-fn main() {}
+use std::process::ExitCode;
+
+use service_kit::ServiceInfo;
+
+#[tokio::main]
+async fn main() -> ExitCode {
+    service_kit::run(
+        ServiceInfo::new("dashboard-check", env!("CARGO_PKG_VERSION")),
+        dashboard_check::start,
+    )
+    .await
+}

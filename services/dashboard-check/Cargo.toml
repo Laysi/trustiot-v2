@@ -7,10 +7,9 @@ rust-version.workspace = true
 publish.workspace = true
 repository.workspace = true
 
-# A skeleton: the service, its image and its chart entry arrive with the rest of
-# Laysi/trustiot-v2#150. Its API types and the sandbox's headers are in crates/contract
-# (`api::dashboard::check`, `api::dashboard::sandbox`); the runtime it drives is in
-# frontend/sandbox.
+# Its API types and the sandbox's headers are in crates/contract (`api::dashboard::check`,
+# `api::dashboard::sandbox`); the runtime it drives is in frontend/sandbox; README.md describes
+# the threat model, the browser flags and the limits.
 
 [[bin]]
 name = "dashboard-check"
@@ -19,6 +18,26 @@ test = false
 doc = false
 
 [dependencies]
+axum = { workspace = true, features = ["http1", "json", "tokio"] }
+# The sandbox's files travel to the browser base64-encoded (Fetch.fulfillRequest).
+base64.workspace = true
+contract = { path = "../../crates/contract" }
+http.workspace = true
+# The browser's process group, the pipe descriptors it reads and writes, and the cleanup that
+# runs as the container's PID 1 (src/browser.rs, src/cleanup.rs).
+libc.workspace = true
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+service-kit = { path = "../../crates/service-kit" }
+thiserror.workspace = true
+tokio = { workspace = true, features = ["io-util", "macros", "net", "rt-multi-thread", "sync", "time"] }
+tracing.workspace = true
+
+[dev-dependencies]
+http-body-util.workspace = true
+tokio = { workspace = true, features = ["io-util", "macros", "net", "rt-multi-thread", "sync", "time", "test-util"] }
+# Requests to the router without a socket.
+tower = { workspace = true, features = ["util"] }
 
 [lints]
 workspace = true
