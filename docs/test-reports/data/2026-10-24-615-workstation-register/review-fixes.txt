@@ -1,0 +1,83 @@
+# Security review fixes of Laysi/trustiot-v2#615, build host, CI=1
+# cargo fmt --all --check && cargo clippy --locked --workspace --all-targets -- -D warnings && CI=1 cargo test --locked -p workstation -p certs -p repo-check --no-fail-fast
+# exit 0; lines that name a test binary, a result, or a clippy or compiler message:
+    Checking workstation v0.1.0 (<host copy>/src/factory/workstation)
+    Checking certs v0.1.0 (<host copy>/src/services/certs)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.90s
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 6.44s
+     Running unittests src/lib.rs (<host copy>/target/debug/deps/certs-3025d58895534f60)
+test result: ok. 18 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/broker.rs (<host copy>/target/debug/deps/broker-0c940913c59dea96)
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.56s
+     Running tests/ceremony.rs (<host copy>/target/debug/deps/ceremony-70877e182cff0365)
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.87s
+     Running tests/chart_connections.rs (<host copy>/target/debug/deps/chart_connections-73510bb1dcb98ba3)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/crl.rs (<host copy>/target/debug/deps/crl-e92a207fcec19d1f)
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 21.98s
+     Running tests/cross_tenant.rs (<host copy>/target/debug/deps/cross_tenant-9c41b4bd5526153d)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.87s
+     Running tests/issuance.rs (<host copy>/target/debug/deps/issuance-2b4a119f55b4cf01)
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.48s
+     Running tests/key_custody.rs (<host copy>/target/debug/deps/key_custody-ac5a9d5d611112fb)
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.82s
+     Running tests/registration.rs (<host copy>/target/debug/deps/registration-d3b804d48c1c8378)
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.62s
+     Running tests/workstation.rs (<host copy>/target/debug/deps/workstation-4afd18b1b381788b)
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 16.37s
+     Running tests/workstation_tool.rs (<host copy>/target/debug/deps/workstation_tool-fcce958c44a54706)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.79s
+     Running unittests src/lib.rs (<host copy>/target/debug/deps/repo_check-bcdd8915540fedcd)
+test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/repository.rs (<host copy>/target/debug/deps/repository-4bf5f5e43d5bc66f)
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.08s
+     Running unittests src/lib.rs (<host copy>/target/debug/deps/workstation-08bd0c0968f76359)
+test result: ok. 44 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+     Running unittests src/main.rs (<host copy>/target/debug/deps/trustiot_workstation-3229947f4de4fa69)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/identity.rs (<host copy>/target/debug/deps/identity-b3ed5745bebdc639)
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+     Running tests/login.rs (<host copy>/target/debug/deps/login-cec8e10b5077c667)
+test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.06s
+     Running tests/register.rs (<host copy>/target/debug/deps/register-8d5a8678e8180985)
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.74s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+# the register tests and the journal and register unit tests:
+test a_broker_request_without_proof_of_possession_or_with_another_key_is_refused ... ok
+test an_issuing_ca_that_outlives_the_root_is_refused ... ok
+test a_fresh_install_is_ready_and_waits_for_the_ceremony ... ok
+test a_crl_revokes_what_it_lists_and_lapses_at_next_update ... ok
+test a_gateway_certificate_cannot_sign_or_serve ... ok
+test a_workstation_certificate_needs_digital_signature_and_no_ca ... ok
+test a_request_without_proof_of_possession_is_refused ... ok
+test journal::tests::the_log_is_appended_one_line_per_event_and_refused_when_wider_than_0600 ... ok
+test register::tests::a_chain_is_certificate_blocks_only ... ok
+test register::tests::hardware_ids_follow_the_gateway_id_rule ... ok
+test register::tests::root_fingerprints_take_openssls_form ... ok
+test register::tests::the_clock_hint_reads_the_date_header ... ok
+test register::tests::the_body_is_built_once_from_the_checked_input ... ok
+test register::tests::inputs_that_do_not_hold_are_refused_before_anything_is_sent ... ok
+test journal::tests::records_round_trip_with_mode_0600_and_temporary_files_are_ignored ... ok
+test journal::tests::a_record_under_another_name_or_unreadable_is_refused ... ok
+test a_key_file_wider_than_0600_is_refused_by_name_without_its_contents ... ok
+test a_session_that_cannot_be_stored_is_revoked ... ok
+test an_accepted_send_code_with_an_unreadable_answer_still_asks_for_the_code ... ok
+test a_wrong_code_can_be_entered_again_without_a_new_email ... ok
+test a_rejected_session_is_revoked_before_its_file_is_removed ... ok
+test a_rejected_session_that_cannot_be_revoked_keeps_its_file ... ok
+test a_proxys_401_keeps_the_session_file ... ok
+test a_session_file_wider_than_0600_is_refused ... ok
+test an_answer_whose_serial_is_not_the_certificates_is_refused ... ok
+test a_gateway_key_recorded_under_another_hardware_id_is_not_sent ... ok
+test a_rerun_keeps_the_record_and_gets_the_same_registration ... ok
+test a_write_cut_off_by_a_crash_leaves_the_previous_record_whole ... ok
+test the_library_function_retries_until_settled_and_reports_the_attempts ... ok
+test a_root_certificate_other_than_the_given_fingerprint_is_not_recorded ... ok
+test an_answer_that_is_not_this_gateways_registration_is_not_recorded ... ok
+test each_refusal_stops_at_once_with_its_own_exit_code ... ok
+test a_lost_answer_is_sent_again_and_the_repeat_counts_as_success ... ok
+test a_503_is_tried_again_and_the_next_answer_registers ... ok
+test retries_stop_at_the_attempt_limit_and_a_rerun_completes ... ok

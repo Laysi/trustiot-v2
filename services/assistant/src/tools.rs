@@ -1,11 +1,15 @@
 //! The tools the main agent calls (docs/architecture/ai-assistant.md, 「Tools」): the [`Tool`]
 //! trait, the [`ToolRegistry`] that runs a turn's calls concurrently under the limits, and the
 //! [`ToolContext`] each call gets. The tools that read telemetry and device models as the user
-//! are in [`telemetry`] and [`device_models`] (Laysi/trustiot-v2#591); they call the other
-//! services through [`crate::callee`] with a token from the question's [`Delegation`].
+//! are in [`telemetry`], [`semantic`] (Laysi/trustiot-v2#142) and [`device_models`]
+//! (Laysi/trustiot-v2#591), the read-only SQL over telemetry in [`telemetry_sql`]
+//! (Laysi/trustiot-v2#143); they call the other services through [`crate::callee`] with a token
+//! from the question's [`Delegation`].
 
 pub mod device_models;
+pub mod semantic;
 pub mod telemetry;
+pub mod telemetry_sql;
 
 use std::collections::{BTreeMap, HashMap};
 use std::fmt;
@@ -611,20 +615,39 @@ pub const MAX_RESULT_TEXT_CHARS: usize = 256;
 /// Ends a text value that [`cap_text`] cut.
 pub const CUT_MARKER: &str = "…[cut]";
 
-/// Cuts every string in `value` (array elements and object values, recursively; object keys
-/// are the tool's own) to [`MAX_RESULT_TEXT_CHARS`] characters, ending a cut one with
-/// [`CUT_MARKER`]. Tools call it on what they built from a service's answer.
+/// Cuts every string in `value` (array elements, object values and object keys, recursively)
+/// to [`MAX_RESULT_TEXT_CHARS`] characters, ending a cut one with [`CUT_MARKER`]. Tools call it
+/// on what they built from a service's answer. Keys count too: an answer's object can have keys
+/// from the data, such as a ClickHouse `Map` value in a SQL result. A cut key that equals a key
+/// already kept gets `#2`, `#3`, … appended, so no value is lost.
 pub fn cap_text(value: &mut Value) {
     match value {
-        Value::String(text) => {
-            if let Some((end, _)) = text.char_indices().nth(MAX_RESULT_TEXT_CHARS) {
-                text.truncate(end);
-                text.push_str(CUT_MARKER);
-            }
-        }
+        Value::String(text) => cap_string(text),
         Value::Array(items) => items.iter_mut().for_each(cap_text),
-        Value::Object(fields) => fields.values_mut().for_each(cap_text),
+        Value::Object(fields) => {
+            let mut capped = serde_json::Map::new();
+            for (mut key, mut field) in std::mem::take(fields) {
+                cap_text(&mut field);
+                cap_string(&mut key);
+                if capped.contains_key(&key) {
+                    key = (2_u64..)
+                        .map(|number| format!("{key}#{number}"))
+                        .find(|candidate| !capped.contains_key(candidate))
+                        .unwrap_or(key);
+                }
+                capped.insert(key, field);
+            }
+            *fields = capped;
+        }
         Value::Null | Value::Bool(_) | Value::Number(_) => {}
+    }
+}
+
+/// `text` cut to [`MAX_RESULT_TEXT_CHARS`] characters and [`CUT_MARKER`] when it is longer.
+fn cap_string(text: &mut String) {
+    if let Some((end, _)) = text.char_indices().nth(MAX_RESULT_TEXT_CHARS) {
+        text.truncate(end);
+        text.push_str(CUT_MARKER);
     }
 }
 
@@ -687,5 +710,32 @@ mod tests {
                 "short": "ok",
             })
         );
+    }
+
+    /// Keys come from the data too (the security review of 2026-10-26 on Laysi/trustiot-v2#143):
+    /// cut like values, and two keys that are the same once cut both stay.
+    #[test]
+    fn long_keys_are_cut_and_keys_cut_alike_are_kept_apart() {
+        let base = "k".repeat(MAX_RESULT_TEXT_CHARS);
+        let cut = format!("{base}{CUT_MARKER}");
+        let mut value = json!({
+            "map": {
+                format!("{base}a"): 1,
+                format!("{base}b"): {format!("{base}c"): "x"},
+                format!("{base}d"): 3,
+                "short": 4,
+            },
+        });
+        cap_text(&mut value);
+        let map = value["map"].as_object().expect("an object");
+        assert_eq!(map.len(), 4, "{map:?}");
+        assert!(
+            map.keys()
+                .all(|key| key.chars().count() <= MAX_RESULT_TEXT_CHARS + 10)
+        );
+        assert_eq!(map[&cut], 1);
+        assert_eq!(map[&format!("{cut}#2")], json!({cut.clone(): "x"}));
+        assert_eq!(map[&format!("{cut}#3")], 3);
+        assert_eq!(map["short"], 4);
     }
 }

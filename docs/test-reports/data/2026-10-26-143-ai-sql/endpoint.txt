@@ -1,0 +1,184 @@
+
+endpoint model query: {"sql":"SELECT point, count() AS readings, round(avg(value_float), 3) AS mean FROM trustiot.tenant_telemetry WHERE point = 'temperature' GROUP BY point","columns":[{"name":"point","type":"LowCardinality(String)"},{"name":"readings","type":"UInt64"},{"name":"mean","type":"Float64"}],"rows":[["temperature",48,3.928]],"queryable_from":{"tenant_telemetry":"2026-10-18T21:20:07.285Z","tenant_telemetry_1m":"2026-07-25T21:21:00Z","tenant_telemetry_1h":"2026-07-25T22:00:00Z"},"queried_at":"2026-10-25T21:15:07.284743Z"}
+endpoint caller                         a user's own token: status 403
+endpoint caller                 another service's exchange: status 403
+endpoint caller             the assistant without a tenant: status 403
+endpoint caller                                   no token: status 401
+endpoint body                                   not JSON: status 400
+endpoint body                                     no sql: status 400
+endpoint body                                 max_rows 0: status 400
+endpoint body                             max_rows 10001: status 400
+endpoint body                         a body over 64 KiB: status 422
+endpoint: 45 model queries answered
+endpoint class                         too_long: {"class":"too_long","max_bytes":16384}
+endpoint class                      too_complex: {"class":"too_complex"}
+endpoint class                           syntax: {"class":"syntax","column":33,"line":2}
+endpoint class            character_not_allowed: {"class":"character_not_allowed","column":52,"line":1}
+endpoint class              literal_not_allowed: {"class":"literal_not_allowed","column":8,"line":1}
+endpoint class                     not_a_select: {"class":"not_a_select"}
+endpoint class              multiple_statements: {"class":"multiple_statements"}
+endpoint class                table_not_allowed: {"class":"table_not_allowed","table":"system.users"}
+endpoint class             function_not_allowed: {"class":"function_not_allowed","function":"dictGet"}
+endpoint class               clause_not_allowed: {"class":"clause_not_allowed","clause":"settings"}
+endpoint class                   no_tenant_view: {"class":"no_tenant_view"}
+endpoint class               time_zone_required: {"class":"time_zone_required","function":"toStartOfHour"}
+endpoint class                    too_many_rows: {"class":"too_many_rows","max":5}
+endpoint class                 result_too_large: {"class":"result_too_large","max_bytes":8388608}
+endpoint class                  query_too_heavy: {"class":"query_too_heavy"}
+endpoint class                      query_error: {"class":"query_error","kind":"unknown_column"}
+endpoint class                      query_error: {"class":"query_error","kind":"type_mismatch"}
+endpoint class                      query_error: {"class":"query_error","kind":"bad_arguments"}
+endpoint class                      query_error: {"class":"query_error","kind":"cannot_parse_value"}
+endpoint class                      query_error: {"class":"query_error","kind":"aggregate_misuse"}
+endpoint class                      query_error: {"class":"query_error","kind":"division_by_zero"}
+endpoint attack                                 base table: refused: table_not_allowed
+endpoint attack                              batch commits: refused: table_not_allowed
+endpoint attack            view filtered to another tenant: answered, 0 rows
+endpoint attack            view with an always-true filter: answered, 22 rows
+endpoint attack                          explicit PREWHERE: refused: clause_not_allowed
+endpoint attack                                      FINAL: refused: clause_not_allowed
+endpoint attack                   join with the base table: refused: table_not_allowed
+endpoint attack                            scalar subquery: refused: table_not_allowed
+endpoint attack                                IN subquery: refused: table_not_allowed
+endpoint attack                                  UNION ALL: refused: table_not_allowed
+endpoint attack                    common table expression: refused: table_not_allowed
+endpoint attack                                    merge(): refused: table_not_allowed
+endpoint attack                                     view(): refused: syntax
+endpoint attack                remote() to the same server: refused: table_not_allowed
+endpoint attack                       clusterAllReplicas(): refused: table_not_allowed
+endpoint attack           url() back to the HTTP interface: refused: table_not_allowed
+endpoint attack                                     file(): refused: table_not_allowed
+endpoint attack        SETTINGS clause with another tenant: refused: clause_not_allowed
+endpoint attack            URL setting with another tenant: answered, 22 rows (its URL settings cannot be sent)
+endpoint attack                         SET another tenant: refused: not_a_select
+endpoint attack                      SETTINGS readonly = 0: refused: clause_not_allowed
+endpoint attack             SETTINGS without the row limit: refused: clause_not_allowed
+endpoint attack         URL setting without the time limit: refused: no_tenant_view (its URL settings cannot be sent)
+endpoint attack              EXECUTE AS the view's definer: refused: not_a_select
+endpoint attack             URL role of the ingest service: refused: table_not_allowed (its URL settings cannot be sent)
+endpoint attack                 insert into the base table: refused: not_a_select
+endpoint attack                 delete from the base table: refused: not_a_select
+endpoint attack                    truncate the base table: refused: not_a_select
+endpoint attack                             create a table: refused: not_a_select
+endpoint attack                    create a tenant account: refused: not_a_select
+endpoint attack               change the service's account: refused: not_a_select
+endpoint attack                       grant the base table: refused: not_a_select
+endpoint attack                        drop the row policy: refused: not_a_select
+endpoint attack       SELECT count() FROM system.query_log: refused: table_not_allowed
+endpoint attack        SELECT count() FROM system.text_log: refused: table_not_allowed
+endpoint attack       SELECT count() FROM system.processes: refused: table_not_allowed
+endpoint attack           SELECT count() FROM system.parts: refused: table_not_allowed
+endpoint attack           SELECT count() FROM system.users: refused: table_not_allowed
+endpoint attack     SELECT count() FROM system.role_grants: refused: table_not_allowed
+endpoint attack SELECT count() FROM system.settings_profile_elements: refused: table_not_allowed
+endpoint attack           reads more than max_rows_to_read: refused: table_not_allowed
+endpoint attack           holds more than max_memory_usage: refused: table_not_allowed
+endpoint attack        runs longer than max_execution_time: refused: table_not_allowed
+endpoint period                                  plain raw: answered, 22 rows
+endpoint period                  raw older than the window: answered, 0 rows
+endpoint period                             raw since 1970: answered, 22 rows
+endpoint period                                raw OR true: answered, 22 rows
+endpoint period                         raw PREWHERE older: refused: clause_not_allowed
+endpoint period                            raw FINAL older: refused: clause_not_allowed
+endpoint period                                 raw toDate: refused: time_zone_required
+endpoint period                               raw dateDiff: refused: time_zone_required
+endpoint period                        raw toUnixTimestamp: answered, 0 rows
+endpoint period                                raw BETWEEN: answered, 0 rows
+endpoint period                            raw table alias: answered, 0 rows
+endpoint period                     raw alias shadowing ts: answered, 22 rows
+endpoint period              raw alias shadowing tenant_id: refused: function_not_allowed
+endpoint period                          raw WITH constant: refused: syntax
+endpoint period                      raw WITH shadowing ts: refused: syntax
+endpoint period                                   subquery: answered, 0 rows
+endpoint period                          nested subqueries: answered, 0 rows
+endpoint period                    common table expression: answered, 0 rows
+endpoint period           chained common table expressions: answered, 0 rows
+endpoint period                                  self JOIN: answered, 0 rows
+endpoint period                                 CROSS JOIN: answered, 484 rows
+endpoint period                          LEFT JOIN ON true: answered, 484 rows
+endpoint period                                  FULL JOIN: answered, 22 rows
+endpoint period                                  ASOF JOIN: refused: syntax
+endpoint period                                 PASTE JOIN: refused: syntax
+endpoint period                    raw JOIN one-hour cells: answered, 94 rows
+endpoint period                                IN subquery: answered, 0 rows
+endpoint period                          IN tuple subquery: answered, 22 rows
+endpoint period                                  GLOBAL IN: refused: syntax
+endpoint period                            scalar subquery: answered, 1 rows
+endpoint period                      scalar subquery older: answered, 1 rows
+endpoint period             arrayJoin of a scalar subquery: refused: function_not_allowed
+endpoint period                        arrayJoin of tuples: refused: function_not_allowed
+endpoint period                                  UNION ALL: answered, 22 rows
+endpoint period                             UNION DISTINCT: answered, 14 rows
+endpoint period                                  INTERSECT: refused: clause_not_allowed
+endpoint period                                     EXCEPT: refused: clause_not_allowed
+endpoint period            window function over neighbours: answered, 22 rows
+endpoint period                                 lagInFrame: answered, 22 rows
+endpoint period                                   neighbor: refused: function_not_allowed
+endpoint period                                WITH TOTALS: refused: clause_not_allowed
+endpoint period                                     ROLLUP: answered, 17 rows
+endpoint period                                   LIMIT BY: answered, 14 rows
+endpoint period                               argMin by ts: answered, 1 rows
+endpoint period                   groupArray of everything: answered, 1 rows
+endpoint period                           one-minute cells: answered, 17 rows
+endpoint period     one-minute cells older than the window: answered, 0 rows
+endpoint period                  one-minute tuple elements: refused: literal_not_allowed
+endpoint period                             one-hour cells: answered, 8 rows
+endpoint period       one-hour cells older than the window: answered, 0 rows
+endpoint period            one-hour alias shadowing bucket: answered, 8 rows
+endpoint period             one-minute JOIN one-hour cells: answered, 59 rows
+endpoint period               UNION ALL of the three views: refused: literal_not_allowed
+endpoint period                      view() table function: refused: syntax
+endpoint period                     merge() table function: refused: table_not_allowed
+endpoint period                                     SAMPLE: refused: clause_not_allowed
+endpoint period                             raw base table: refused: table_not_allowed
+endpoint period                      one-minute base table: refused: table_not_allowed
+endpoint period                        one-hour base table: refused: table_not_allowed
+endpoint period                SETTINGS a wider raw window: refused: clause_not_allowed
+endpoint period     SETTINGS readonly 0 and a wider window: refused: clause_not_allowed
+endpoint period                     SETTINGS in a subquery: refused: clause_not_allowed
+endpoint period      SETTINGS another tenant in a subquery: refused: clause_not_allowed
+endpoint period                       URL wider raw window: answered, 22 rows (its URL settings cannot be sent)
+endpoint period                  URL wider one-hour window: answered, 8 rows (its URL settings cannot be sent)
+endpoint period          URL readonly 0 and a wider window: answered, 22 rows (its URL settings cannot be sent)
+endpoint period                     SET a wider raw window: refused: not_a_select
+endpoint period                  SETTINGS session_timezone: refused: clause_not_allowed
+endpoint period                       URL session_timezone: answered, 22 rows (its URL settings cannot be sent)
+endpoint period                   SETTINGS use_query_cache: refused: clause_not_allowed
+endpoint period                    ALTER USER CURRENT_USER: refused: not_a_select
+endpoint period                 ALTER USER by its own name: refused: not_a_select
+endpoint period                    CREATE SETTINGS PROFILE: refused: not_a_select
+endpoint period                     ALTER SETTINGS PROFILE: refused: not_a_select
+endpoint period                           ALTER ROW POLICY: refused: not_a_select
+endpoint period              EXECUTE AS the views' definer: refused: not_a_select
+endpoint period             URL role of the ingest service: refused: table_not_allowed (its URL settings cannot be sent)
+endpoint period        throwIf on hidden raw rows in WHERE: refused: function_not_allowed
+endpoint period     throwIf on hidden raw rows in PREWHERE: refused: clause_not_allowed
+endpoint period       throwIf on hidden raw rows in SELECT: refused: function_not_allowed
+endpoint period         throwIf on hidden one-minute cells: refused: function_not_allowed
+endpoint period           throwIf on hidden one-hour cells: refused: function_not_allowed
+endpoint period          failing cast of hidden raw values: answered, 1 rows
+endpoint period            failing cast of one-hour values: refused: literal_not_allowed
+endpoint same SQL: 10 rows, all tenant-a-marker
+endpoint same SQL: 10 rows, all tenant-b-marker
+endpoint not sent                                SET ROLE NONE /* t143probe */: refused: not_a_select
+endpoint not sent SET DEFAULT ROLE NONE TO trustiot_tenant_reader /* t143probe */: refused: not_a_select
+endpoint not sent                          SET max_threads = 1 /* t143probe */: refused: not_a_select
+endpoint not sent           SET SQL_queryable_raw_days = 10000 /* t143probe */: refused: not_a_select
+endpoint not sent INSERT INTO trustiot.telemetry SELECT * FROM trustiot.telemetry /* t143probe */: refused: not_a_select
+endpoint not sent ALTER TABLE trustiot.telemetry DELETE WHERE 1 /* t143probe */: refused: not_a_select
+endpoint not sent ALTER USER CURRENT_USER SETTINGS SQL_queryable_raw_days = 10000 /* t143probe */: refused: not_a_select
+endpoint not sent GRANT SELECT ON trustiot.telemetry TO trustiot_tenant_reader /* t143probe */: refused: not_a_select
+endpoint not sent DROP ROW POLICY tenant_isolation ON trustiot.tenant_telemetry /* t143probe */: refused: not_a_select
+endpoint not sent                         SYSTEM RELOAD CONFIG /* t143probe */: refused: not_a_select
+endpoint not sent                           KILL QUERY WHERE 1 /* t143probe */: refused: not_a_select
+endpoint not sent                             EXPLAIN SELECT 1 /* t143probe */: refused: not_a_select
+endpoint not sent SELECT 1 FROM tenant_telemetry; SET DEFAULT ROLE NONE TO x /* t143probe */: refused: multiple_statements
+endpoint not sent         SELECT 'x' FROM tenant_telemetry; SELECT 't143probe': refused: multiple_statements
+endpoint not sent SELECT point FROM tenant_telemetry SETTINGS readonly = 0 /* t143probe */: refused: clause_not_allowed
+endpoint query_log: tenant accounts ran ["Select\t208"]; refused statements in it: 0
+endpoint: 30 queries parse alike as written and as printed
+endpoint: 176 allowed functions and 7 combinators are the pinned ClickHouse's
+test the_endpoint_runs_only_checked_selects_as_the_callers_tenant ... ok
+
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 9.92s

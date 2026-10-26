@@ -1,0 +1,102 @@
+mutation: budget-m1-tenant-pool-grows
+file: services/identity/src/tenants.rs
+  @@ -58,5 +58,5 @@
+   /// administrator writes never takes a connection the ext_authz check is waiting for. The
+   /// signed-in user's own account API shares it too ([`TenantStore::connect_lazy_shared`]).
+  -pub const POOL_CONNECTIONS: u32 = 2;
+  +pub const POOL_CONNECTIONS: u32 = 3;
+   
+   /// How long creating a tenant may wait for a connection (opening one included).
+command: cargo test -p identity --test chart_connections
+
+running 2 tests
+. 1/2
+the_chart_budgets_every_pool_the_service_opens --- FAILED
+
+failures:
+
+---- the_chart_budgets_every_pool_the_service_opens stdout ----
+
+thread 'the_chart_budgets_every_pool_the_service_opens' (14177988) panicked at services/identity/tests/chart_connections.rs:114:9:
+assertion `left == right` failed: the chart's budget for identity (otherPools 21) and identity::connections_per_replica, with database.maxConnections 3
+  left: 24
+ right: 25
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    the_chart_budgets_every_pool_the_service_opens
+
+test result: FAILED. 1 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p identity --test chart_connections`
+exit status: 101
+
+mutation: budget-m2-chart-other-pools-grows
+file: deploy/chart/templates/_postgres.tpl
+  @@ -188,5 +188,5 @@
+     "assistant": { "maxConnections": { "min": 2, "max": 100 }, "otherPools": 0 },
+     "certs": { "maxConnections": { "min": 2, "max": 100 }, "otherPools": 4 },
+  -  "identity": { "maxConnections": { "min": 3, "max": 100 }, "otherPools": 21 },
+  +  "identity": { "maxConnections": { "min": 3, "max": 100 }, "otherPools": 22 },
+     "telemetry-query": { "maxConnections": { "min": 2, "max": 100 }, "otherPools": 2 }
+   }
+command: cargo test -p identity --test chart_connections
+
+running 2 tests
+. 1/2
+the_chart_budgets_every_pool_the_service_opens --- FAILED
+
+failures:
+
+---- the_chart_budgets_every_pool_the_service_opens stdout ----
+
+thread 'the_chart_budgets_every_pool_the_service_opens' (14178663) panicked at services/identity/tests/chart_connections.rs:114:9:
+assertion `left == right` failed: the chart's budget for identity (otherPools 22) and identity::connections_per_replica, with database.maxConnections 3
+  left: 25
+ right: 24
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    the_chart_budgets_every_pool_the_service_opens
+
+test result: FAILED. 1 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p identity --test chart_connections`
+exit status: 101
+
+mutation: budget-m3-start-opens-another-login-pool
+file: services/identity/src/lib.rs
+  @@ -209,4 +209,6 @@
+       // logouts need (README, "連線池").
+       let logins =
+  +        LoginStore::connect_lazy(config.postgres().connect_options(), login::POOL_CONNECTIONS)?;
+  +    let _extra =
+           LoginStore::connect_lazy(config.postgres().connect_options(), login::POOL_CONNECTIONS)?;
+       let sends = LoginStore::connect_lazy(
+command: cargo test -p identity --test chart_connections
+
+running 2 tests
+. 1/2
+the_chart_budgets_every_pool_the_service_opens --- FAILED
+
+failures:
+
+---- the_chart_budgets_every_pool_the_service_opens stdout ----
+
+thread 'the_chart_budgets_every_pool_the_service_opens' (14177143) panicked at services/identity/tests/chart_connections.rs:82:5:
+assertion `left == right` failed: `start` opens other pools than `identity::connections_per_replica` counts: update it, trustiot.postgres.connectionBudgets in deploy/chart/templates/_postgres.tpl and this list
+  left: ["PgSessionStore::connect_lazy", "TenantStore::connect_lazy_shared", "start_event_log", "PgDelegationStore::connect_lazy", "LoginStore::connect_lazy", "LoginStore::connect_lazy", "LoginStore::connect_lazy", "TenantDb::connect_lazy_with_background", "PlatformDb::connect_lazy"]
+ right: ["PgSessionStore::connect_lazy", "TenantStore::connect_lazy_shared", "start_event_log", "PgDelegationStore::connect_lazy", "LoginStore::connect_lazy", "LoginStore::connect_lazy", "TenantDb::connect_lazy_with_background", "PlatformDb::connect_lazy"]
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    the_chart_budgets_every_pool_the_service_opens
+
+test result: FAILED. 1 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p identity --test chart_connections`
+exit status: 101
+

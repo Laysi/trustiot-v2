@@ -22,3 +22,9 @@
 # The generic-api-key rule matched its old variable name hexKey; the variable is hexRun now. The
 # commit exists only on the branch of PR Laysi/trustiot-v2#276.
 6e00e42f42ec6d6373e5dce41f30f6d4af93cf67:deploy/chart/tests/chart.test.ts:generic-api-key:467
+
+# Not a key: the code in the broker certificate CronJob that writes the PEM boundaries around the
+# PKCS #8 key it generates at run time, which the private-key rule matched across the lines between
+# them. The label is a constant now (PKCS8_KEY_LABEL), so the tree no longer matches. The commit
+# exists only on the branch of the pull request for Laysi/trustiot-v2#535.
+9dc4cae74e099b5d0c064f91e4d5b69cad0ac123:tools/migrate/src/mqtt_certificate.rs:private-key:333

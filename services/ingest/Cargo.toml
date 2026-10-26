@@ -8,14 +8,18 @@ publish.workspace = true
 repository.workspace = true
 
 # The service itself arrives with Laysi/trustiot-v2#91. Until then the crate carries the ClickHouse
-# DDL in migrations/clickhouse, the raw data retention (src/retention.rs), the disk watermark alert
-# (alerts/), and the tests that run them against a real ClickHouse.
+# DDL in migrations/clickhouse, the raw and aggregate data retention (src/retention.rs), the
+# statements on the aggregate tables (src/rollup.rs), the disk watermark alert (alerts/), and the
+# tests that run them against a real ClickHouse.
 
 [dependencies]
 # The gateway buffer's maximum age, which the raw data retention must exceed (src/retention.rs).
 protocol = { path = "../../crates/protocol" }
 
 [dev-dependencies]
+# Reading times and receive times the aggregate tests write, and the calendar months the
+# retention test counts independently of ClickHouse (tests/rollups.rs).
+chrono = { workspace = true, features = ["now"] }
 # Talks to ClickHouse over its HTTP interface, plain HTTP to a local test container.
 reqwest.workspace = true
 serde_json.workspace = true
