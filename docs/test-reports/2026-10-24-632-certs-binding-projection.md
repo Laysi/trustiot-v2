@@ -115,7 +115,33 @@ commit `6fcb98b1` 依安全審查改了四處（README 與 PR 說明有細節）
 
 依專案的驗證規則，這幾項（Medium、Low）不加新測試，既有的測試要照樣通過。
 
-這個 commit 的重跑（`cargo clippy --workspace`、`CI=1 cargo test -p certs -p migrate`）是待測：2026-10-24 排進建置主機時，主機剩餘磁碟不到一個工作需要的量，工作沒有執行。
+2026-10-24 第一次排進建置主機時，主機剩餘磁碟不夠，工作沒有執行。2026-10-27 再合併 main `304de010` 之後，在合併 commit `1512d197` 的樹上重跑（建置主機，x86_64 Linux）：
+
+```sh
+cargo fmt --all --check
+cargo clippy --locked --workspace --all-targets -- -D warnings
+CI=1 cargo test --locked -p certs
+CI=1 cargo test --locked -p assets
+CI=1 cargo test --locked -p migrate
+CI=1 cargo test --locked -p certs --test bindings -- --nocapture --test-threads=1
+CI=1 cargo test --locked -p certs --test cross_tenant -- --nocapture
+cargo run --locked -q -p openapi -- --check
+bun test deploy/chart
+```
+
+| 指令 | 結果 |
+| --- | --- |
+| `cargo fmt --all --check` | 通過 |
+| `cargo clippy ... -D warnings` | 通過 |
+| `CI=1 cargo test -p certs` | 14 個測試執行檔，54 通過、0 失敗、0 略過 |
+| `CI=1 cargo test -p assets` | 10 個測試執行檔，60 通過、0 失敗、0 略過 |
+| `CI=1 cargo test -p migrate` | 24 個測試執行檔，170 通過、0 失敗、0 略過 |
+| `cargo test -p certs --test bindings` | 3 通過，證據行與前面相同（3 次處理只寫入 1 列、晚到的舊綁定不成為目前的綁定、兩筆 dead letter、11 行稽核日誌） |
+| `cargo test -p certs --test cross_tenant` | 56 個探測、0 失敗 |
+| `cargo run -p openapi -- --check` | `api/openapi.json is up to date` |
+| `bun test deploy/chart` | 659 通過、0 失敗 |
+
+`exit 0 at 00:36:43 (build host)`
 
 ## 結論
 
