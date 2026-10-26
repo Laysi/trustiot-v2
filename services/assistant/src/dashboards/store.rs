@@ -31,8 +31,11 @@
 //!
 //! Publishing locks the draft
 //! first and then its saved dashboard; nothing locks in the other order. Versions are only ever
-//! added, numbered from 1 without gaps; restoring and publishing copy a version in the database,
-//! so a copy is byte for byte its source. Who may publish, restore and archive is checked here,
+//! added, numbered from 1 without gaps. Publishing copies a version's content in the database, so
+//! a copy is byte for byte its source. Restoring copies nothing: the new version's row points at
+//! the row holding the content restored (`content_version`; a restore of a restore points at the
+//! same row, so a reference is one step), and every read takes a version's content from that row.
+//! So only the tool's writes and publishing store content. Who may publish, restore and archive is checked here,
 //! from the [`Requester`]'s role and [`Access`], with the same rule the API shows as
 //! [`Permissions`] ([`permissions`]). Publishing and restoring ask the caller's budget
 //! (`admit`, [`super::limits::VersionBudget`] in the API) only after every check passed, just
@@ -86,17 +89,21 @@ FROM assistant.dashboards
 WHERE tenant_id = $1::uuid AND dashboard_id = $2::uuid
 FOR UPDATE";
 
-/// `$1` tenant, `$2` dashboard: the row with its latest version's number, title and time.
+/// `$1` tenant, `$2` dashboard: the row with its latest version's number, title and time. A
+/// version's content (its title among it) is read from the row holding it (`content_at`): its
+/// own, or for a restore the row it points at.
 const SELECT_DASHBOARD: &str = "SELECT d.dashboard_id::text AS dashboard_id, d.kind,
     d.conversation_id::text AS conversation_id, d.saved_dashboard_id::text AS saved_dashboard_id,
     d.base_saved_version, d.created_by::text AS created_by, d.created_at, d.archived_at,
     v.version AS latest_version, v.title, v.created_at AS updated_at
 FROM assistant.dashboards d
 JOIN LATERAL (
-    SELECT version, title, created_at
-    FROM assistant.dashboard_versions
-    WHERE tenant_id = d.tenant_id AND dashboard_id = d.dashboard_id
-    ORDER BY version DESC
+    SELECT l.version, c.title, l.created_at
+    FROM assistant.dashboard_versions l
+    JOIN assistant.dashboard_versions c
+        ON c.tenant_id = l.tenant_id AND c.dashboard_id = l.dashboard_id AND c.version = l.content_at
+    WHERE l.tenant_id = d.tenant_id AND l.dashboard_id = d.dashboard_id
+    ORDER BY l.version DESC
     LIMIT 1
 ) v ON true
 WHERE d.tenant_id = $1::uuid AND d.dashboard_id = $2::uuid";
@@ -110,10 +117,12 @@ const LIST_SAVED: &str = "SELECT d.dashboard_id::text AS dashboard_id, d.kind,
     v.version AS latest_version, v.title, v.created_at AS updated_at
 FROM assistant.dashboards d
 JOIN LATERAL (
-    SELECT version, title, created_at
-    FROM assistant.dashboard_versions
-    WHERE tenant_id = d.tenant_id AND dashboard_id = d.dashboard_id
-    ORDER BY version DESC
+    SELECT l.version, c.title, l.created_at
+    FROM assistant.dashboard_versions l
+    JOIN assistant.dashboard_versions c
+        ON c.tenant_id = l.tenant_id AND c.dashboard_id = l.dashboard_id AND c.version = l.content_at
+    WHERE l.tenant_id = d.tenant_id AND l.dashboard_id = d.dashboard_id
+    ORDER BY l.version DESC
     LIMIT 1
 ) v ON true
 WHERE d.tenant_id = $1::uuid AND d.kind = 'saved'
@@ -130,10 +139,12 @@ const LIST_DRAFTS: &str = "SELECT d.dashboard_id::text AS dashboard_id, d.kind,
     v.version AS latest_version, v.title, v.created_at AS updated_at
 FROM assistant.dashboards d
 JOIN LATERAL (
-    SELECT version, title, created_at
-    FROM assistant.dashboard_versions
-    WHERE tenant_id = d.tenant_id AND dashboard_id = d.dashboard_id
-    ORDER BY version DESC
+    SELECT l.version, c.title, l.created_at
+    FROM assistant.dashboard_versions l
+    JOIN assistant.dashboard_versions c
+        ON c.tenant_id = l.tenant_id AND c.dashboard_id = l.dashboard_id AND c.version = l.content_at
+    WHERE l.tenant_id = d.tenant_id AND l.dashboard_id = d.dashboard_id
+    ORDER BY l.version DESC
     LIMIT 1
 ) v ON true
 WHERE d.tenant_id = $1::uuid AND d.kind = 'draft' AND d.conversation_id = $2::uuid
@@ -146,19 +157,26 @@ const LATEST_VERSION: &str = "SELECT coalesce(max(version), 0) AS latest
 FROM assistant.dashboard_versions
 WHERE tenant_id = $1::uuid AND dashboard_id = $2::uuid";
 
-/// `$1` tenant, `$2` dashboard, `$3` version: the whole version.
-const SELECT_VERSION: &str = "SELECT version, runtime, title, description, spec, page, origin,
-    restored_from, created_by::text AS created_by, created_at
-FROM assistant.dashboard_versions
-WHERE tenant_id = $1::uuid AND dashboard_id = $2::uuid AND version = $3";
+/// `$1` tenant, `$2` dashboard, `$3` version: the whole version, its content from the row
+/// holding it.
+const SELECT_VERSION: &str = "SELECT v.version, c.runtime, c.title, c.description, c.spec, c.page,
+    v.origin, v.restored_from, v.created_by::text AS created_by, v.created_at
+FROM assistant.dashboard_versions v
+JOIN assistant.dashboard_versions c
+    ON c.tenant_id = v.tenant_id AND c.dashboard_id = v.dashboard_id AND c.version = v.content_at
+WHERE v.tenant_id = $1::uuid AND v.dashboard_id = $2::uuid AND v.version = $3";
 
 /// `$1` tenant, `$2` dashboard, `$3` and `$4` two of its versions: whether their content (the
-/// runtime, title, description, spec and page) is the same, byte for byte. No row when either
-/// does not exist.
-const SAME_CONTENT: &str = "SELECT (a.runtime, a.title, a.description, a.spec, a.page)
-    IS NOT DISTINCT FROM (b.runtime, b.title, b.description, b.spec, b.page) AS same
+/// runtime, title, description, spec and page, from the rows holding it) is the same, byte for
+/// byte. No row when either does not exist.
+const SAME_CONTENT: &str = "SELECT (ac.runtime, ac.title, ac.description, ac.spec, ac.page)
+    IS NOT DISTINCT FROM (bc.runtime, bc.title, bc.description, bc.spec, bc.page) AS same
 FROM assistant.dashboard_versions a
 JOIN assistant.dashboard_versions b ON b.tenant_id = a.tenant_id AND b.dashboard_id = a.dashboard_id
+JOIN assistant.dashboard_versions ac
+    ON ac.tenant_id = a.tenant_id AND ac.dashboard_id = a.dashboard_id AND ac.version = a.content_at
+JOIN assistant.dashboard_versions bc
+    ON bc.tenant_id = b.tenant_id AND bc.dashboard_id = b.dashboard_id AND bc.version = b.content_at
 WHERE a.tenant_id = $1::uuid AND a.dashboard_id = $2::uuid AND a.version = $3 AND b.version = $4";
 
 /// `$1` tenant, `$2` dashboard, `$3` version: the saved dashboard's version it is based on
@@ -167,19 +185,24 @@ const VERSION_BASE: &str = "SELECT base_saved_version
 FROM assistant.dashboard_versions
 WHERE tenant_id = $1::uuid AND dashboard_id = $2::uuid AND version = $3";
 
-/// `$1` tenant, `$2` dashboard, `$3` version: its spec.
-const SELECT_SPEC: &str = "SELECT spec
-FROM assistant.dashboard_versions
-WHERE tenant_id = $1::uuid AND dashboard_id = $2::uuid AND version = $3";
+/// `$1` tenant, `$2` dashboard, `$3` version: its spec, from the row holding it.
+const SELECT_SPEC: &str = "SELECT c.spec
+FROM assistant.dashboard_versions v
+JOIN assistant.dashboard_versions c
+    ON c.tenant_id = v.tenant_id AND c.dashboard_id = v.dashboard_id AND c.version = v.content_at
+WHERE v.tenant_id = $1::uuid AND v.dashboard_id = $2::uuid AND v.version = $3";
 
 /// `$1` tenant, `$2` dashboard, `$3` the cursor (the last version listed, or NULL), `$4` the
-/// page size: versions without their spec and page, the newest first.
-const LIST_VERSIONS: &str = "SELECT version, runtime, title, origin, restored_from,
-    created_by::text AS created_by, created_at
-FROM assistant.dashboard_versions
-WHERE tenant_id = $1::uuid AND dashboard_id = $2::uuid
-    AND ($3::integer IS NULL OR version < $3::integer)
-ORDER BY version DESC
+/// page size: versions without their spec and page, the newest first; the runtime and title
+/// from the row holding the content.
+const LIST_VERSIONS: &str = "SELECT v.version, c.runtime, c.title, v.origin, v.restored_from,
+    v.created_by::text AS created_by, v.created_at
+FROM assistant.dashboard_versions v
+JOIN assistant.dashboard_versions c
+    ON c.tenant_id = v.tenant_id AND c.dashboard_id = v.dashboard_id AND c.version = v.content_at
+WHERE v.tenant_id = $1::uuid AND v.dashboard_id = $2::uuid
+    AND ($3::integer IS NULL OR v.version < $3::integer)
+ORDER BY v.version DESC
 LIMIT $4";
 
 /// `$1` tenant, `$2` conversation, `$3` saved dashboard: the conversation's draft of it.
@@ -203,14 +226,27 @@ const INSERT_AGENT_VERSION: &str = "INSERT INTO assistant.dashboard_versions
      created_by, run_id, base_saved_version)
 VALUES ($1::uuid, $2::uuid, $3, 'agent', $4, $5, $6, $7, $8, $9::uuid, $10::uuid, $11)";
 
-/// `$1` tenant, `$2` source dashboard, `$3` source version, `$4` target dashboard, `$5` target
-/// version, `$6` origin, `$7` the version restored (or NULL), `$8` the user, `$9` the saved
-/// dashboard's version the copy is based on (or NULL): a copy of a version, its runtime, title,
-/// description, spec and page byte for byte.
-const COPY_VERSION: &str = "INSERT INTO assistant.dashboard_versions
-    (tenant_id, dashboard_id, version, origin, restored_from, runtime, title, description, spec,
-     page, created_by, base_saved_version)
-SELECT tenant_id, $4::uuid, $5, $6, $7, runtime, title, description, spec, page, $8::uuid, $9
+/// `$1` tenant, `$2` draft, `$3` its version, `$4` saved dashboard, `$5` its new version, `$6`
+/// the user: the draft's version published, a copy of its content (from the row holding it), the
+/// runtime, title, description, spec and page byte for byte.
+const PUBLISH_VERSION: &str = "INSERT INTO assistant.dashboard_versions
+    (tenant_id, dashboard_id, version, origin, runtime, title, description, spec, page,
+     created_by)
+SELECT c.tenant_id, $4::uuid, $5, 'publish', c.runtime, c.title, c.description, c.spec, c.page,
+    $6::uuid
+FROM assistant.dashboard_versions v
+JOIN assistant.dashboard_versions c
+    ON c.tenant_id = v.tenant_id AND c.dashboard_id = v.dashboard_id AND c.version = v.content_at
+WHERE v.tenant_id = $1::uuid AND v.dashboard_id = $2::uuid AND v.version = $3";
+
+/// `$1` tenant, `$2` dashboard, `$3` the version restored, `$4` the new version, `$5` the
+/// user, `$6` the saved dashboard's version it is based on (or NULL): a restore, which points at
+/// the row holding the restored version's content (that version's, or the one a restore points
+/// at) and copies none of it.
+const RESTORE_VERSION: &str = "INSERT INTO assistant.dashboard_versions
+    (tenant_id, dashboard_id, version, origin, restored_from, content_version, created_by,
+     base_saved_version)
+SELECT tenant_id, dashboard_id, $4, 'restore', version, content_at, $5::uuid, $6
 FROM assistant.dashboard_versions
 WHERE tenant_id = $1::uuid AND dashboard_id = $2::uuid AND version = $3";
 
@@ -733,15 +769,7 @@ pub async fn publish(
             saved_id
         }
     };
-    copy_version(
-        tx,
-        tenant,
-        (draft_id, version),
-        (saved_id, next),
-        (VersionOrigin::Publish, None),
-        user,
-    )
-    .await?;
+    publish_version(tx, tenant, (draft_id, version), (saved_id, next), user).await?;
     // The draft's latest version is now the saved dashboard's latest: its next version starts
     // from there. After publishing an older version it keeps the base it had; the first publish
     // of an older version gives it none, since its latest version was written before.
@@ -756,9 +784,10 @@ pub async fn publish(
     })
 }
 
-/// Adds a copy of `from_version` as the dashboard's next version, when its latest version is
-/// `base_version`. A copy in a draft is based on the version `from_version` is based on (or
-/// none), and the draft's next version starts from it too.
+/// Adds `from_version`'s content as the dashboard's next version, when its latest version is
+/// `base_version`: a row that points at the row holding the content, not a copy of it. A restore
+/// in a draft is based on the version `from_version` is based on (or none), and the draft's next
+/// version starts from it too.
 ///
 /// Checked in this order: the dashboard can be seen ([`StoreError::NotFound`]); for a saved
 /// dashboard the requester is an editor or admin ([`StoreError::EditorRequired`]), for a draft
@@ -811,12 +840,12 @@ pub async fn restore(
         None => None,
     };
     admit(row.kind).map_err(limited)?;
-    copy_version(
+    restore_version(
         tx,
         tenant,
-        (dashboard_id, from_version),
-        (dashboard_id, next),
-        (VersionOrigin::Restore, based_on),
+        dashboard_id,
+        (from_version, next),
+        based_on,
         requester.principal.user_id,
     )
     .await?;
@@ -1262,33 +1291,53 @@ async fn insert_agent_version(
     Ok(())
 }
 
-/// Copies `source_version` of `source` as `target_version` of `target`, made by `origin` and
-/// based on `based_on` of a draft's saved dashboard.
-async fn copy_version(
+/// Publishes `draft_version` of `draft` as `saved_version` of `saved`: a copy of its content.
+async fn publish_version(
     tx: &mut TenantTransaction,
     tenant: TenantId,
-    (source, source_version): (DashboardId, u32),
-    (target, target_version): (DashboardId, u32),
-    (origin, based_on): (VersionOrigin, Option<u32>),
+    (draft, draft_version): (DashboardId, u32),
+    (saved, saved_version): (DashboardId, u32),
     created_by: UserId,
 ) -> Result<(), StoreError> {
-    let restored_from = (origin == VersionOrigin::Restore)
-        .then(|| version_column(source_version))
-        .transpose()?;
-    let copied = sqlx::query(COPY_VERSION)
+    let copied = sqlx::query(PUBLISH_VERSION)
         .bind(tenant.to_string())
-        .bind(source.to_string())
-        .bind(version_column(source_version)?)
-        .bind(target.to_string())
-        .bind(version_column(target_version)?)
-        .bind(origin_name(origin))
-        .bind(restored_from)
+        .bind(draft.to_string())
+        .bind(version_column(draft_version)?)
+        .bind(saved.to_string())
+        .bind(version_column(saved_version)?)
+        .bind(created_by.to_string())
+        .execute(&mut **tx)
+        .await
+        .map_err(version_insert_error)?;
+    one_row(copied.rows_affected())
+}
+
+/// Restores `restored` of `dashboard` as its version `next`, based on `based_on` of a draft's
+/// saved dashboard: a row that points at the content, not a copy of it.
+async fn restore_version(
+    tx: &mut TenantTransaction,
+    tenant: TenantId,
+    dashboard: DashboardId,
+    (restored, next): (u32, u32),
+    based_on: Option<u32>,
+    created_by: UserId,
+) -> Result<(), StoreError> {
+    let added = sqlx::query(RESTORE_VERSION)
+        .bind(tenant.to_string())
+        .bind(dashboard.to_string())
+        .bind(version_column(restored)?)
+        .bind(version_column(next)?)
         .bind(created_by.to_string())
         .bind(based_on.map(version_column).transpose()?)
         .execute(&mut **tx)
         .await
         .map_err(version_insert_error)?;
-    if copied.rows_affected() == 1 {
+    one_row(added.rows_affected())
+}
+
+/// One row added: the version read exists.
+fn one_row(added: u64) -> Result<(), StoreError> {
+    if added == 1 {
         Ok(())
     } else {
         Err(StoreError::VersionNotFound)
@@ -1496,14 +1545,6 @@ fn kind_of(name: &str) -> Result<DashboardKind, StoreError> {
         "draft" => Ok(DashboardKind::Draft),
         "saved" => Ok(DashboardKind::Saved),
         _ => Err(StoreError::Corrupt("a dashboard's kind")),
-    }
-}
-
-const fn origin_name(origin: VersionOrigin) -> &'static str {
-    match origin {
-        VersionOrigin::Agent => "agent",
-        VersionOrigin::Publish => "publish",
-        VersionOrigin::Restore => "restore",
     }
 }
 

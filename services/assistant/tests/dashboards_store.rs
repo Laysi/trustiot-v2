@@ -917,6 +917,21 @@ async fn purging_a_conversation_removes_its_drafts_and_keeps_what_was_published(
         .create_draft(&editor, conversation, &Content::new("Another draft"))
         .await
         .dashboard_id;
+    // A restore in the draft too: its row points at version 1 and goes with it.
+    world
+        .write_draft(
+            &editor,
+            conversation,
+            other_draft,
+            1,
+            None,
+            &Content::new("Two"),
+        )
+        .await
+        .expect("version 2");
+    let mut tx = world.tx(&editor).await;
+    let restored = store::restore(&mut tx, editor.requester(), other_draft, 1, 2, unlimited).await;
+    finish(tx, restored).await.expect("restore version 1");
 
     let mut admin = world.superuser().await;
     sqlx::query("DELETE FROM assistant.conversations WHERE conversation_id = $1::uuid")
@@ -942,6 +957,298 @@ async fn purging_a_conversation_removes_its_drafts_and_keeps_what_was_published(
     let opened = opened.expect("the saved dashboard stays");
     assert_eq!(opened.version.title, "Saved");
     assert!(matches!(gone, Err(StoreError::NotFound)), "{gone:?}");
+}
+
+/// The versions of `dashboard` whose rows hold content (a title, a description, a spec or a
+/// page), in order, and the bytes of spec and page they hold together.
+async fn rows_holding_content(world: &World, dashboard: DashboardId) -> (Vec<i32>, i64) {
+    let mut admin = world.superuser().await;
+    let rows = sqlx::query(
+        "SELECT version,
+            coalesce(octet_length(spec), 0) + coalesce(octet_length(page), 0) AS bytes
+        FROM assistant.dashboard_versions
+        WHERE dashboard_id = $1::uuid
+            AND (title IS NOT NULL OR description IS NOT NULL OR spec IS NOT NULL
+                OR page IS NOT NULL)
+        ORDER BY version",
+    )
+    .bind(dashboard.to_string())
+    .fetch_all(&mut admin)
+    .await
+    .expect("the rows holding content");
+    let versions = rows.iter().map(|row| row.get("version")).collect();
+    let bytes = rows
+        .iter()
+        .map(|row| i64::from(row.get::<i32, _>("bytes")))
+        .sum();
+    (versions, bytes)
+}
+
+/// Each restored version of `dashboard` with the version whose content it points at, in order.
+async fn content_references(world: &World, dashboard: DashboardId) -> Vec<(i32, i32)> {
+    let mut admin = world.superuser().await;
+    sqlx::query(
+        "SELECT version, content_version FROM assistant.dashboard_versions
+        WHERE dashboard_id = $1::uuid AND content_version IS NOT NULL
+        ORDER BY version",
+    )
+    .bind(dashboard.to_string())
+    .fetch_all(&mut admin)
+    .await
+    .expect("the content references")
+    .iter()
+    .map(|row| (row.get("version"), row.get("content_version")))
+    .collect()
+}
+
+/// Asserts that `version` of `dashboard` reads back `content` in the reads the API and the
+/// tool use: the whole version, and a dataset of its spec.
+async fn assert_reads_back(
+    world: &World,
+    reader: &Person,
+    dashboard: DashboardId,
+    version: u32,
+    content: &Content,
+) {
+    let mut tx = world.tx(reader).await;
+    let opened = store::open(&mut tx, reader.principal(), dashboard, Some(version)).await;
+    let dataset = store::dataset(&mut tx, reader.principal(), dashboard, version, "daily").await;
+    tx.rollback().await.expect("roll back");
+    let opened = opened.unwrap_or_else(|error| panic!("version {version}: {error:?}"));
+    assert_eq!(
+        (
+            opened.version.title.as_str(),
+            opened.version.description.as_deref(),
+            &opened.version.spec,
+            opened.version.page.as_str(),
+            opened.version.runtime,
+        ),
+        (
+            content.title.as_str(),
+            content.description.as_deref(),
+            &content.spec,
+            content.page.as_str(),
+            content.version().runtime,
+        ),
+        "version {version}"
+    );
+    assert_eq!(
+        dataset.unwrap_or_else(|error| panic!("version {version}'s dataset: {error:?}")),
+        content.spec.dataset("daily").cloned(),
+        "version {version}'s dataset"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn restores_add_rows_that_point_at_the_content_and_every_version_reads_it_back() {
+    let Some(world) = world().await else { return };
+    let editor = world.person(TenantId::generate(), TenantRole::Editor);
+    let conversation = world.conversation(&editor).await;
+    let one = Content::new("One");
+    let two = Content::new("Two");
+    let draft = world
+        .create_draft(&editor, conversation, &one)
+        .await
+        .dashboard_id;
+    world
+        .write_draft(&editor, conversation, draft, 1, None, &two)
+        .await
+        .expect("version 2");
+    let (_, written_bytes) = rows_holding_content(&world, draft).await;
+
+    // Alternating restores, each of the version before the latest: versions 3 to 8, whose
+    // content is version 1's (odd) or version 2's (even). From version 5 on, the version
+    // restored is itself a restore.
+    for latest in 2..8 {
+        let mut tx = world.tx(&editor).await;
+        let restored = store::restore(
+            &mut tx,
+            editor.requester(),
+            draft,
+            latest - 1,
+            latest,
+            unlimited,
+        )
+        .await;
+        let restored = finish(tx, restored)
+            .await
+            .unwrap_or_else(|error| panic!("restore on version {latest}: {error:?}"));
+        assert_eq!(restored.version, latest + 1);
+    }
+
+    // Only the versions the tool wrote hold content; the restores added rows only.
+    assert_eq!(
+        rows_holding_content(&world, draft).await,
+        (vec![1, 2], written_bytes),
+        "restores copy no content"
+    );
+    // Each restore points at the version holding the content, never at another restore.
+    assert_eq!(
+        content_references(&world, draft).await,
+        [(3, 1), (4, 2), (5, 1), (6, 2), (7, 1), (8, 2)]
+    );
+
+    // Every version reads back its content, and keeps the version the user chose.
+    for version in 1..=8 {
+        let content = if version % 2 == 1 { &one } else { &two };
+        assert_reads_back(&world, &editor, draft, version, content).await;
+    }
+    let mut tx = world.tx(&editor).await;
+    let latest = store::open(&mut tx, editor.principal(), draft, None).await;
+    let versions = store::versions(&mut tx, editor.principal(), draft, None).await;
+    let drafts = store::list_drafts(&mut tx, editor.principal(), conversation, None).await;
+    tx.rollback().await.expect("roll back");
+    let latest = latest.expect("the latest version");
+    assert_eq!(latest.dashboard.title, "Two");
+    assert_eq!(latest.version.origin, VersionOrigin::Restore);
+    assert_eq!(latest.version.restored_from, Some(6));
+    let versions = versions.expect("the versions");
+    let listed: Vec<(u32, &str, Option<u32>)> = versions
+        .versions
+        .iter()
+        .map(|v| (v.version, v.title.as_str(), v.restored_from))
+        .collect();
+    assert_eq!(
+        listed,
+        [
+            (8, "Two", Some(6)),
+            (7, "One", Some(5)),
+            (6, "Two", Some(4)),
+            (5, "One", Some(3)),
+            (4, "Two", Some(2)),
+            (3, "One", Some(1)),
+            (2, "Two", None),
+            (1, "One", None),
+        ]
+    );
+    let drafts = drafts.expect("the conversation's drafts");
+    assert_eq!(drafts.dashboards.len(), 1);
+    assert_eq!(drafts.dashboards[0].title, "Two");
+
+    // Restoring a version whose content is the latest's is still no change.
+    let mut tx = world.tx(&editor).await;
+    let unchanged = store::restore(&mut tx, editor.requester(), draft, 6, 8, unlimited).await;
+    tx.rollback().await.expect("roll back");
+    assert!(
+        matches!(unchanged, Err(StoreError::Unchanged)),
+        "{unchanged:?}"
+    );
+
+    // Publishing a restored version copies its content into the saved dashboard, whose row
+    // holds it; a restore there points at it in turn.
+    let saved = world
+        .publish(&editor, draft, 7)
+        .await
+        .expect("publish version 7")
+        .dashboard_id;
+    assert_eq!(rows_holding_content(&world, saved).await.0, [1]);
+    assert_reads_back(&world, &editor, saved, 1, &one).await;
+    let fork = world
+        .fork(
+            &editor,
+            world.conversation(&editor).await,
+            saved,
+            1,
+            &Content::new("Three"),
+        )
+        .await
+        .expect("a draft of the saved dashboard")
+        .dashboard_id;
+    world
+        .publish(&editor, fork, 1)
+        .await
+        .expect("publish the draft as version 2");
+    let mut tx = world.tx(&editor).await;
+    let restored = store::restore(&mut tx, editor.requester(), saved, 1, 2, unlimited).await;
+    finish(tx, restored)
+        .await
+        .expect("restore the saved dashboard's version 1");
+    assert_eq!(rows_holding_content(&world, saved).await.0, [1, 2]);
+    assert_eq!(content_references(&world, saved).await, [(3, 1)]);
+    assert_reads_back(&world, &editor, saved, 3, &one).await;
+
+    // The database holds every role to it: a restore names the version holding the content of
+    // the version restored (one step, never another restore), holds no content itself, and only
+    // a restore points at content.
+    let refusals: [(&'static str, &str); 6] = [
+        // Version 5 is a restore: its content is version 1's.
+        (
+            "INSERT INTO assistant.dashboard_versions
+                (tenant_id, dashboard_id, version, origin, restored_from, content_version,
+                 created_by)
+            SELECT tenant_id, dashboard_id, 9, 'restore', 5, 5, created_by
+            FROM assistant.dashboards WHERE dashboard_id = $1::uuid",
+            FOREIGN_KEY_VIOLATION,
+        ),
+        (
+            "INSERT INTO assistant.dashboard_versions
+                (tenant_id, dashboard_id, version, origin, restored_from, content_version,
+                 created_by)
+            SELECT tenant_id, dashboard_id, 9, 'restore', 5, 2, created_by
+            FROM assistant.dashboards WHERE dashboard_id = $1::uuid",
+            FOREIGN_KEY_VIOLATION,
+        ),
+        (
+            "INSERT INTO assistant.dashboard_versions
+                (tenant_id, dashboard_id, version, origin, restored_from, content_version,
+                 runtime, title, spec, page, created_by)
+            SELECT tenant_id, dashboard_id, 9, 'restore', 1, 1, 1, 'x', '{}', '<p></p>',
+                created_by
+            FROM assistant.dashboards WHERE dashboard_id = $1::uuid",
+            CHECK_VIOLATION,
+        ),
+        (
+            "INSERT INTO assistant.dashboard_versions
+                (tenant_id, dashboard_id, version, origin, restored_from, content_version,
+                 description, created_by)
+            SELECT tenant_id, dashboard_id, 9, 'restore', 1, 1, 'x', created_by
+            FROM assistant.dashboards WHERE dashboard_id = $1::uuid",
+            CHECK_VIOLATION,
+        ),
+        (
+            "INSERT INTO assistant.dashboard_versions
+                (tenant_id, dashboard_id, version, origin, restored_from, created_by)
+            SELECT tenant_id, dashboard_id, 9, 'restore', 1, created_by
+            FROM assistant.dashboards WHERE dashboard_id = $1::uuid",
+            CHECK_VIOLATION,
+        ),
+        (
+            "INSERT INTO assistant.dashboard_versions
+                (tenant_id, dashboard_id, version, origin, content_version, created_by, run_id)
+            SELECT tenant_id, dashboard_id, 9, 'agent', 1, created_by, gen_random_uuid()
+            FROM assistant.dashboards WHERE dashboard_id = $1::uuid",
+            CHECK_VIOLATION,
+        ),
+    ];
+    for (sql, code) in refusals {
+        assert_eq!(
+            as_service_role(&world, &editor, sql, &[draft])
+                .await
+                .as_deref(),
+            Some(code),
+            "{sql}"
+        );
+    }
+    let one_step = "INSERT INTO assistant.dashboard_versions
+            (tenant_id, dashboard_id, version, origin, restored_from, content_version, created_by)
+        SELECT tenant_id, dashboard_id, 9, 'restore', 5, 1, created_by
+        FROM assistant.dashboards WHERE dashboard_id = $1::uuid";
+    assert_eq!(
+        as_service_role(&world, &editor, one_step, &[draft]).await,
+        None
+    );
+    assert_eq!(
+        as_service_role(
+            &world,
+            &editor,
+            "UPDATE assistant.dashboard_versions SET content_version = 2
+            WHERE dashboard_id = $1::uuid AND version = 3",
+            &[draft],
+        )
+        .await
+        .as_deref(),
+        Some(INSUFFICIENT_PRIVILEGE)
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]

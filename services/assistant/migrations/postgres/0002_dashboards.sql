@@ -96,9 +96,12 @@ CREATE INDEX dashboards_saved
     ON assistant.dashboards (tenant_id)
     WHERE kind = 'saved';
 
--- One row per version of a dashboard, numbered from 1 without gaps. A version is never changed:
--- restoring an older one adds a copy that names its source, and publishing adds a copy of the
--- draft's version to the saved dashboard.
+-- One row per version of a dashboard, numbered from 1 without gaps. A version is never changed.
+-- Restoring an older one adds a row that names the version restored and points at the row
+-- holding that content, which it does not copy: the version restored itself, or the row it
+-- points at when it is a restore too, so a reference is one step. Publishing adds a copy of the
+-- draft's version's content to the saved dashboard. Only the tool's versions and publishing add
+-- content.
 CREATE TABLE assistant.dashboard_versions (
     tenant_id uuid NOT NULL,
     dashboard_id uuid NOT NULL,
@@ -107,25 +110,33 @@ CREATE TABLE assistant.dashboard_versions (
     previous_version integer GENERATED ALWAYS AS (NULLIF(version - 1, 0)) STORED,
     -- How it came to be (contract::api::dashboard::public::VersionOrigin).
     origin text NOT NULL CHECK (origin IN ('agent', 'publish', 'restore')),
-    -- For a restore, the version restored.
+    -- For a restore, the version restored (the one the user chose).
     restored_from integer,
+    -- For a restore, the version whose row holds the content restored: `restored_from`, or the
+    -- version that one points at (the foreign key below). NULL for every other version, which
+    -- holds its content in the columns below.
+    content_version integer,
+    -- The version whose row holds this version's content: its own, or `content_version`.
+    content_at integer NOT NULL GENERATED ALWAYS AS (coalesce(content_version, version)) STORED,
     -- For a version of a draft: the version of the draft's saved dashboard this version's
     -- content is based on, which publishing it compares with the saved dashboard's latest. NULL
     -- when it is based on none: a draft's versions written before its first publish gave it a
-    -- saved dashboard (and copies restored from them), which are then never published over
+    -- saved dashboard (and restores of them), which are then never published over
     -- that dashboard; and a saved dashboard's versions.
     base_saved_version integer CHECK (base_saved_version BETWEEN 1 AND 10000),
+    -- The content, from here to `page`: NULL in a restore's row, which points at the row
+    -- holding it (`content_version`).
     -- The sandbox runtime the page was checked with and runs with
     -- (contract::api::dashboard::RuntimeVersion).
-    runtime smallint NOT NULL CHECK (runtime >= 1),
-    title text NOT NULL CHECK (char_length(title) BETWEEN 1 AND 120),
+    runtime smallint CHECK (runtime >= 1),
+    title text CHECK (char_length(title) BETWEEN 1 AND 120),
     description text CHECK (char_length(description) BETWEEN 1 AND 500),
     -- The datasets, computations and constants (contract::api::dashboard::spec::Spec) as the
     -- compact JSON text the service wrote: text rather than jsonb, so the size below counts the
     -- same bytes as the service's limit and the spec reads back exactly as written.
-    spec text NOT NULL CHECK (jsonb_typeof(spec::jsonb) = 'object'),
+    spec text CHECK (jsonb_typeof(spec::jsonb) = 'object'),
     -- The page: an HTML fragment with its scripts, at most 40 KiB.
-    page text NOT NULL CHECK (octet_length(page) BETWEEN 1 AND 40960),
+    page text CHECK (octet_length(page) BETWEEN 1 AND 40960),
     -- Who asked for it: the conversation's owner for the tool's versions, the user who
     -- published or restored otherwise.
     created_by uuid NOT NULL,
@@ -134,7 +145,14 @@ CREATE TABLE assistant.dashboard_versions (
     -- By the database clock.
     created_at timestamptz NOT NULL DEFAULT now(),
     PRIMARY KEY (tenant_id, dashboard_id, version),
+    -- Where each version's content is, for the restores' foreign key below.
+    UNIQUE (tenant_id, dashboard_id, version, content_at),
     CHECK ((origin = 'restore') = (restored_from IS NOT NULL)),
+    CHECK ((origin = 'restore') = (content_version IS NOT NULL)),
+    -- A row holds all of its content (the description is optional), or it is a restore's row,
+    -- which points at the row holding the content and holds none of it.
+    CHECK (content_version IS NOT NULL OR num_nulls(runtime, title, spec, page) = 0),
+    CHECK (content_version IS NULL OR num_nonnulls(runtime, title, description, spec, page) = 0),
     CHECK (restored_from IS NULL OR restored_from BETWEEN 1 AND version - 1),
     CHECK ((origin = 'agent') = (run_id IS NOT NULL)),
     -- A published version is a saved dashboard's: it has no base of its own.
@@ -147,8 +165,11 @@ CREATE TABLE assistant.dashboard_versions (
     -- versions removes all of them in one statement and passes.
     FOREIGN KEY (tenant_id, dashboard_id, previous_version)
         REFERENCES assistant.dashboard_versions (tenant_id, dashboard_id, version),
-    FOREIGN KEY (tenant_id, dashboard_id, restored_from)
-        REFERENCES assistant.dashboard_versions (tenant_id, dashboard_id, version)
+    -- A restore's version restored, an earlier one, and the row holding its content: the row
+    -- it points at is where the version restored has its content, which is a row holding
+    -- content, since every row was held to this when it was added and none changes.
+    FOREIGN KEY (tenant_id, dashboard_id, restored_from, content_version)
+        REFERENCES assistant.dashboard_versions (tenant_id, dashboard_id, version, content_at)
 );
 
 -- What an update of a dashboard may change, for every role: a draft's saved dashboard is set
@@ -228,6 +249,6 @@ GRANT INSERT (tenant_id, dashboard_id, kind, conversation_id, saved_dashboard_id
 GRANT UPDATE (saved_dashboard_id, base_saved_version, archived_at)
     ON assistant.dashboards TO assistant_app;
 GRANT SELECT ON assistant.dashboard_versions TO assistant_app;
-GRANT INSERT (tenant_id, dashboard_id, version, origin, restored_from, base_saved_version,
-    runtime, title, description, spec, page, created_by, run_id)
+GRANT INSERT (tenant_id, dashboard_id, version, origin, restored_from, content_version,
+    base_saved_version, runtime, title, description, spec, page, created_by, run_id)
     ON assistant.dashboard_versions TO assistant_app;
