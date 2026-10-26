@@ -34,7 +34,7 @@ use service_kit::identity::UserIdentity;
 use sha2::Sha256;
 
 use crate::clickhouse::{QueryError, code};
-use crate::history::{Failure, Routes, clickhouse_error, error, ok};
+use crate::history::{Failure, Routes, error, ok};
 use crate::period::View;
 use crate::sql::{self, CheckError, Checked};
 
@@ -179,9 +179,22 @@ fn query_refusal(failure: &QueryError) -> Option<SqlRefusal> {
     Some(SqlRefusal::QueryError { kind })
 }
 
+/// The answer when the account check before an AI's query fails in ClickHouse: 503 with the
+/// fixed body, whatever the code. The check is the service's query, not the AI's, so a code
+/// that would describe a query (too heavy, too slow, over the quota, refused) would tell the
+/// model something false about the SQL it wrote; only the query itself can be a checked query
+/// the account refused ([`failure_response`]).
+fn account_check_failed(tenant: TenantId, failure: &QueryError) -> Response {
+    tracing::warn!(
+        tenant_id = %tenant,
+        error_kind = failure.kind(),
+        "the account check before an AI's query failed in ClickHouse"
+    );
+    error(ErrorBody::new(ErrorCode::Unavailable))
+}
+
 /// The answer to a ClickHouse failure of the checked query that is not the query's fault. A
-/// failure of the account check before it is the history API's ([`clickhouse_error`]): only the
-/// query itself can be a checked query the account refused.
+/// failure of the account check before it is [`account_check_failed`]'s.
 fn failure_response(tenant: TenantId, logged: &LoggedSql, failure: &QueryError) -> Response {
     let code = match failure.code() {
         Some(code::TIMEOUT_EXCEEDED) => ErrorCode::Timeout,
@@ -303,7 +316,7 @@ pub(crate) async fn run_sql(
     let windows = match state.verified(tenant).await {
         Ok(windows) => windows,
         Err(Failure::Response(response)) => return *response,
-        Err(Failure::ClickHouse(failure)) => return clickhouse_error(tenant, &failure),
+        Err(Failure::ClickHouse(failure)) => return account_check_failed(tenant, &failure),
     };
     let queried_at = Utc::now();
     let queryable_from = QueryableFrom {

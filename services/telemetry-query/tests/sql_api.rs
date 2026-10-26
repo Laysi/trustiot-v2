@@ -955,7 +955,8 @@ async fn the_endpoint_runs_only_checked_selects_as_the_callers_tenant() {
         COMBINATORS.len()
     );
 
-    // 8. A ClickHouse failure of the account check (the security review of 2026-10-26).
+    // 8. A ClickHouse failure of the account check (the security reviews of 2026-10-26): 503
+    //    with the fixed body whatever the code, never an answer about the AI's query.
     let refusing = Arc::new(AtomicU32::new(0));
     let stand_in_url = refusing_clickhouse(Arc::clone(&refusing)).await;
     let stand_in_password = random_password();
@@ -968,7 +969,11 @@ async fn the_endpoint_runs_only_checked_selects_as_the_callers_tenant() {
         &issuer.jwks(),
     )
     .await;
-    for (call, code) in [(1, 497), (2, 164)] {
+    let unavailable = json!({"code": "unavailable", "message_key": "error.unavailable"});
+    for (call, code) in [497, 164, 241, 158, 396, 159, 201, 202]
+        .into_iter()
+        .enumerate()
+    {
         refusing.store(code, Ordering::SeqCst);
         let (status, body) = run(
             &stand_in,
@@ -978,16 +983,21 @@ async fn the_endpoint_runs_only_checked_selects_as_the_callers_tenant() {
         )
         .await;
         assert_eq!(status, 503, "{code}: {body}");
-        assert_eq!(json(&body)["code"], "unavailable", "{code}: {body}");
+        assert_eq!(json(&body), unavailable, "{code}: {body}");
         wait_for(
             &format!("the warning of the check's ClickHouse error {code}"),
             EVENT_LIMIT,
             || async {
-                (stand_in.stdout.messages("a telemetry query failed").len() == call).then_some(())
+                (stand_in
+                    .stdout
+                    .messages("the account check before an AI's query failed in ClickHouse")
+                    .len()
+                    == call + 1)
+                    .then_some(())
             },
         )
         .await;
-        eprintln!("endpoint account check refused by ClickHouse ({code}): 503");
+        eprintln!("endpoint account check refused by ClickHouse ({code}): 503 unavailable");
     }
     let log = format!("{}\n{}", stand_in.stdout.text(), stand_in.stderr.text());
     assert!(
@@ -1009,6 +1019,12 @@ async fn refusing_clickhouse(code: Arc<AtomicU32>) -> String {
             let name = match code {
                 497 => "ACCESS_DENIED",
                 164 => "READONLY",
+                241 => "MEMORY_LIMIT_EXCEEDED",
+                158 => "TOO_MANY_ROWS",
+                396 => "TOO_MANY_ROWS_OR_BYTES",
+                159 => "TIMEOUT_EXCEEDED",
+                201 => "QUOTA_EXCEEDED",
+                202 => "TOO_MANY_SIMULTANEOUS_QUERIES",
                 _ => "UNKNOWN",
             };
             (

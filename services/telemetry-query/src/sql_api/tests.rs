@@ -177,6 +177,32 @@ async fn failures_answer_with_their_status_and_no_clickhouse_text() {
     }
 }
 
+/// A failure of the account check is the service's, never the AI's query's: the same 503 with
+/// the fixed body for every code, where the history API's mapping would answer some as a query
+/// too heavy, too slow or over its quota (the second security review of 2026-10-26, L3).
+#[tokio::test]
+async fn a_failed_account_check_is_unavailable_whatever_the_code() {
+    let tenant = TenantId::generate();
+    let fixed = serde_json::to_value(ErrorBody::new(ErrorCode::Unavailable)).expect("JSON");
+    for failure in [
+        failed(497),
+        failed(164),
+        failed(code::MEMORY_LIMIT_EXCEEDED),
+        failed(code::TOO_MANY_ROWS),
+        failed(code::TOO_MANY_ROWS_OR_BYTES),
+        failed(code::TIMEOUT_EXCEEDED),
+        failed(code::QUOTA_EXCEEDED),
+        failed(code::TOO_MANY_SIMULTANEOUS_QUERIES),
+        failed(62),
+        failed(999_999),
+        QueryError::Unreachable("refused".to_owned()),
+    ] {
+        let response = account_check_failed(tenant, &failure);
+        assert_eq!(response.status().as_u16(), 503, "{failure:?}");
+        assert_eq!(body_json(response).await, fixed, "{failure:?}");
+    }
+}
+
 #[tokio::test]
 async fn a_refusal_is_its_class_and_fixed_details() {
     for (refusal, expected) in [
