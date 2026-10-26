@@ -220,6 +220,8 @@ CI 以 `.github/actions/setup-proto` 安裝 proto：版本與兩種架構（x64�
 
 `deny.toml` 只允許寬鬆授權：0BSD、Apache-2.0（含 Apache-2.0 WITH LLVM-exception）、BSD-2-Clause、BSD-3-Clause、CC0-1.0、CDLA-Permissive-2.0、ISC、MIT、MIT-0、Unicode-3.0、Zlib。其他授權一律失敗，包括 Business Source License（SPDX `BUSL-1.1`）、SSPL、Elastic License、Commons Clause 與 GPL、LGPL、AGPL。MPL-2.0 等檔案層級的 copyleft 授權還沒決定，遇到時再評估。要加入新授權，先確認它允許商業轉售，再把授權與理由寫進本節與 `deny.toml`。SPDX 的 `BSL-1.0` 是 Boost 授權，不是 Business Source License。
 
+Bun 專案的相依（例如 `frontend/bun.lock`）沒有自動的授權檢查：新增相依的 PR 列出直接與間接相依的授權，照上一段的白名單判斷。例外（2026-10-25 專案擁有者決定，Laysi/trustiot-v2#124）：只在建置時執行、不進產物（`frontend/dist/` 與映像）的工具可以是 MPL-2.0，例如 Vite 與 Tailwind 處理 CSS 用的 `lightningcss`。MPL-2.0 的義務只在散布它的檔案時發生，而建置出的 CSS 是它的輸出，不含它的原始碼。會進產物的套件與 Rust 的相依不適用這個例外，遇到 MPL-2.0 時仍要個別評估。
+
 ### fork 來的 PR
 
 ci.yml 不使用任何 secret，每個 job 的 GITHUB_TOKEN 只有 `contents: read`，checkout 也不把 token 留在 `.git/config`（`persist-credentials: false`）。fork 來的 PR 以 `pull_request` 事件執行，GitHub 不給 secret、token 唯讀；`workflow-policy` 擋下 `pull_request_target` 與 `workflow_run`。repo 層級的 Actions 設定另外保證這幾點，見下一節。
@@ -419,7 +421,7 @@ repo 改為公開，**不會**讓 GHCR 套件變成公開。依 GitHub 文件（
 
 ## nightly.yml
 
-每晚 18:17 UTC（台北 02:17）執行，也可在 main 上手動執行（`workflow_dispatch`，選項 `simulate_failure` 會讓每份 values 在安裝後故意失敗，用來驗證通知）。動到 `deploy/chart/`、`deploy/istio/`、`deploy/cloudnative-pg/`、`deploy/images/postgres/`、`tools/migrate/`、`services/*/migrations/`（migration Job 與它套用的 SQL，Laysi/trustiot-v2#60）、smoke 部署的身分與資產服務（`services/identity/`、`services/assets/`，Laysi/trustiot-v2#65）與憑證服務（`services/certs/`，Laysi/trustiot-v2#517）、這些 Rust 映像的其他輸入（`deploy/images/` 的 `migrate/`、`identity/`、`assets/`、`certs/`，`Cargo.toml`、`Cargo.lock`、`rust-toolchain.toml`、`deploy/images/rust-binary.Containerfile`、`.dockerignore`、整個 `scripts/`，以及它們經 path 相依用到的 `crates/ca-keys/`、`crates/contract/`、`crates/identity-keys/`、`crates/outbox/`、`crates/protocol/`、`crates/service-kit/`、`crates/testkit/`、`crates/webpki-roots-empty/`，與 `tools/migrate` 以 `#[path]` 編進來的 `services/ingest/src/retention.rs`；`scripts/nightly/image-cache.test.ts` 檢查這份清單完整）、`.prototools`、`.proto/plugins/`、`setup-proto` 或 `nightly.yml` 本身的 PR，帶有 `smoke` label 時也會跑，chart 的改動在合併前就先真的部署一次；這些 PR 的執行不寫任何留言（PR 的 workflow 檔由 PR 自己決定，不給它寫入權限），結果看 check 狀態、job summary 與 `nightly-report` artifact。
+每晚 18:17 UTC（台北 02:17）執行，也可在 main 上手動執行（`workflow_dispatch`，選項 `simulate_failure` 會讓每份 values 在安裝後故意失敗，用來驗證通知）。動到 `deploy/chart/`、`deploy/istio/`、`deploy/cloudnative-pg/`、`deploy/images/postgres/`、`tools/migrate/`、`services/*/migrations/`（migration Job 與它套用的 SQL，Laysi/trustiot-v2#60）、smoke 部署的身分與資產服務（`services/identity/`、`services/assets/`，Laysi/trustiot-v2#65）與憑證服務（`services/certs/`，Laysi/trustiot-v2#517）、這些 Rust 映像的其他輸入（`deploy/images/` 的 `migrate/`、`identity/`、`assets/`、`certs/`，`Cargo.toml`、`Cargo.lock`、`rust-toolchain.toml`、`deploy/images/rust-binary.Containerfile`、`.dockerignore`、整個 `scripts/`，以及它們經 path 相依用到的 `crates/ca-keys/`、`crates/contract/`、`crates/identity-keys/`、`crates/outbox/`、`crates/protocol/`、`crates/service-kit/`、`crates/testkit/`、`crates/webpki-roots-empty/`，與 telemetry-query 的測試相依 `tools/lab-dataset/` 和它用到的 `edge/agent/`、整個 `services/ingest/`（也涵蓋 `tools/migrate` 以 `#[path]` 編進來的 `services/ingest/src/retention.rs`、`services/ingest/src/rollup.rs`）；`scripts/nightly/image-cache.test.ts` 檢查這份清單完整，包括 `tools/migrate/src` 每個 `#[path]` 指到的檔案）、`.prototools`、`.proto/plugins/`、`setup-proto` 或 `nightly.yml` 本身的 PR，帶有 `smoke` label 時也會跑，chart 的改動在合併前就先真的部署一次；這些 PR 的執行不寫任何留言（PR 的 workflow 檔由 PR 自己決定，不給它寫入權限），結果看 check 狀態、job summary 與 `nightly-report` artifact。
 
 ### main 沒有變更時，排程不部署
 
@@ -621,7 +623,7 @@ NIGHTLY_OUT=/tmp/nightly-out bun scripts/nightly/run.ts
 
 | 範圍 | 做法 |
 | --- | --- |
-| Rust crate | Renovate 的 cargo manager 更新 `Cargo.toml` 與 `Cargo.lock`；版本固定為精確值（`rangeStrategy: pin`），minor 與 patch 每週合成一個 PR。第一次的「pin dependencies」PR 把 `[workspace.dependencies]` 的每個需求改成 `Cargo.lock` 裡的版本（`=x.y.z`，例如 `cc` 的 `1.5.1` 改成 `=1.7.0`），不改 `Cargo.lock`；2026-10-13 先在本機套用同樣的釘選，`cargo check --workspace --all-targets --locked` 通過（Laysi/trustiot-v2#69，見 [測試報告](../test-reports/2026-10-13-69-renovate-config.md)）。釘選之後，每月的 lock file maintenance 不再移動這些直接相依，它們只由每週的 `rust crates` PR 更新 |
+| Rust crate | Renovate 的 cargo manager 更新 `Cargo.toml` 與 `Cargo.lock`；版本固定為精確值（`rangeStrategy: pin`），minor 與 patch 每週合成一個 PR；sqlparser 例外，它的更新自成一個 PR（見下方「同一個 pin 的多份副本」）。第一次的「pin dependencies」PR 把 `[workspace.dependencies]` 的每個需求改成 `Cargo.lock` 裡的版本（`=x.y.z`，例如 `cc` 的 `1.5.1` 改成 `=1.7.0`），不改 `Cargo.lock`；2026-10-13 先在本機套用同樣的釘選，`cargo check --workspace --all-targets --locked` 通過（Laysi/trustiot-v2#69，見 [測試報告](../test-reports/2026-10-13-69-renovate-config.md)）。釘選之後，每月的 lock file maintenance 不再移動這些直接相依，它們只由每週的 `rust crates` PR 更新 |
 | Bun 套件 | `scripts/` 的 `package.json` 與 `bun.lock`，每週一個 PR；`frontend/` 的套件另成一組（`frontend packages`），每週一個 PR，由 ci.yml 的 `frontend` job 檢查。`frontend/` 的 TypeScript 停在 6.x：openapi-typescript 經 TypeScript 的 JS API 產生 API client，TypeScript 7 的套件沒有這套 API（實測 7.0.2，見 `frontend/README.md`），等產生器支援後再刻意升級 |
 | GitHub Actions | `helpers:pinGitHubActionDigestsToSemver`：每個 `uses:` 維持 40 字元 commit SHA，行尾註解維持版本。job 的 runner（`runs-on`，目前都是 `ubuntu-24.04-arm`）不由 Renovate 更新：用哪種 runner 是刻意的選擇（見上方「省 Actions 分鐘數」的 Runner），所以 `github-runners` 資料來源關閉，不會開「update dependency ubuntu」的 PR |
 | Istio 與其他寫在 workflow env 的版本 | env 上方寫 `# renovate:` 註解（資料來源與套件名稱）即由自訂規則更新；Istio 停在 1.30 minor。Gateway API 的版本與雜湊要一起改，不由 Renovate 更新 |
@@ -648,6 +650,7 @@ PR 標題是 Angular 格式（`chore(deps): …`），標籤 `area:ci` 與 `depe
 - 刻意擋下的更新（PR 會開，但 CI 失敗，要有人完成另一半）：
   - ClickHouse 換 LTS minor：chart 測試的 `CLICKHOUSE_MINOR`（`deploy/chart/tests/chart.test.ts`）只接受 26.8。決策 14 的租戶隔離分析與 `services/ingest` 的內省測試是在 26.8 上做的，換 minor 要先重做，再改這個常數。同一個 minor 的新 digest 不受影響，三份（values、`stack.ts`、`mod.rs`）在同一個 PR 更新。
   - OpenTelemetry collector 換版本：`services/ingest/migrations/clickhouse/0006_logs.sql` 照 v0.161.0 exporter 的表結構寫。chart 測試的 `EXPORTER_VERSION` 只接受那個版本，並檢查 exporter 的欄位都在 migration 裡；換版本要先對照新版 exporter 的欄位（有變就加 migration），再改常數。Renovate 的這類 PR 帶一段說明（`prBodyNotes`）。同一版本的新 digest 只在 values 一處，單獨的 PR 就完整。
+  - sqlparser 換版本：AI SQL 檢查的巢狀規則建立在 sqlparser 0.63.0 會在哪裡試讀的調查上（Laysi/trustiot-v2#143）。`services/telemetry-query/tests/sql_check.rs` 的 `SURVEYED_SQLPARSER` 只接受那個版本；換版本要先照 `services/telemetry-query/README.md` 的「升級 sqlparser」重做調查，再改常數。Renovate 的 sqlparser 更新自成一組，帶一段說明（`prBodyNotes`），所以刻意的失敗不會擋住每週的 `rust crates` PR。
   - k3s：nightly 的 `K3S_IMAGE` 必須是 SaaS 主機安裝程式（`deploy/host/src/desired.ts`）的 `K3S_VERSION`。主機的 pin 還有官方安裝程式的 SHA-256，Renovate 算不出來，所以 k3s 的 PR 在 `bun test scripts/nightly` 失敗，要有人更新主機的版本、安裝程式網址與 SHA-256。
   - Istio：nightly 的 `ISTIO_VERSION` 必須與 `deploy/istio/README.md` 安裝指令的版本相同。Istio 的 PR 在 `bun test scripts/nightly` 失敗，要有人更新 README，並升級 lab 與 SaaS 主機。
 - 其他已在上面列出的組合：Rust 工具鏈（同一個群組）、Flux（`components.ts`）、CloudNativePG 的 Postgres（`postgres-image` job 檢查伺服器標頭）。

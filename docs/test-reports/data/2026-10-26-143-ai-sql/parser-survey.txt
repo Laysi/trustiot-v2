@@ -1,0 +1,169 @@
+sqlparser 0.63.0 speculative-parse survey for the AI SQL check
+(Laysi/trustiot-v2#143, second security review of 2026-10-26, finding H1).
+
+Release build on the development workstation: sqlparser's ClickHouse dialect behind the
+check's own lexer (services/telemetry-query/src/sql/lexer.rs) and recursion limit 50.
+Each time is the best of the runs; times move with the machine's load and show growth,
+not limits. The regression test counts work instead of timing it (section 5).
+
+== Speculative parses in sqlparser 0.63.0 src/parser/mod.rs (maybe_parse, try_parse and
+== index resets), and whether the check can reach them
+line   function                         reach and cost
+468    with_tokens_with_locations       setup, not a backtrack
+913    parse_raise_stmt                 statement: unreachable (the lexer lets only SELECT, WITH or ( start)
+1094   parse_msck                       statement: unreachable
+1263   parse_analyze                    statement: unreachable
+1295   parse_analyze                    statement: unreachable
+1384   parse_wildcard_expr              lookahead over names and dots for `*`: linear
+1788   parse_prefix_inner               typed literal (`Type 'text'`): reads a data type only and fails before any
+                                        expression; nested types are re-read once per level (nesting squared, types only)
+1866   parse_prefix_inner               reserved-word forms (CAST, EXTRACT, SUBSTRING, OVERLAY, TRIM, CEIL, CASE,
+                                        EXISTS, INTERVAL, NOT, ...): a failure is remembered by token index
+                                        (failed_reserved_word_prefix_positions), so each level is re-read at most once
+1885   parse_prefix_inner               unreserved word as an expression: a failure is remembered (failed_prefix_positions)
+2119   parse_compound_expr              `a.f(`: a call after a dot; `.position(` reaches line 2999; otherwise, when the
+                                        attempt fails, the whole parse fails
+2390   try_parse_lambda                 `(a, b) ->`: names only, fails before an expression
+2452   parse_lambda_function_parameter  a data type only
+2484   maybe_parse_odbc_body_datetime   `{d '...'}`: unreachable, the lexer refuses `{`
+2511   maybe_parse_odbc_fn_body         `{fn ...}`: unreachable, the lexer refuses `{`
+2999   parse_position_expr              POSITION(a IN b), then a call: NOT remembered, and the comma form reads the whole
+                                        first argument before it fails, so every position( inside another doubles the
+                                        parse. Refused by the lexer: no position( inside another (MAX_POSITION_NESTING 1)
+4421   parse_in                         `IN (query)`, then the list: the attempt fails at the first token that cannot
+                                        start a query; measured linear (in_right, in_double_paren, in_subquery)
+4614   peek_keywords                    bounded keyword lookahead
+4800   parse_keywords_indexed           bounded keyword lookahead
+4910   consume_tokens                   bounded token lookahead
+5177   maybe_parse                      the mechanism (a RecursionLimitExceeded is never swallowed)
+5194   try_parse                        the mechanism
+6113   parse_mssql_create_function      statement: unreachable
+6261   parse_data_type_no_default       nested data types: types only
+6325   parse_data_type_for_aggregate_arg  nested data types: types only
+6399   parse_create_trigger             statement: unreachable
+9333   parse_plain_option               DDL: unreachable
+9491   parse_column_def_inner           DDL: unreachable
+10461  parse_optional_ident             one identifier
+12018  parse_copy                       statement: unreachable
+12181  parse_copy_legacy_option         statement: unreachable
+12729  parse_unicode_is_normalized      keywords only
+13228  parse_data_type_helper           one integer literal
+13238  parse_data_type_helper           one integer literal
+13327  parse_identifier_optional_alias  one identifier
+14070  parse_table_alias_column_defs    data types after an alias's column names
+14480  parse_explain                    statement: unreachable
+15007  parse_cte                        only with supports_cte_without_as, false for ClickHouse
+15746  parse_set                        statement: unreachable
+15841  parse_set                        statement: unreachable
+16178  parse_show_statement_filter      statement: unreachable
+16522  parse_table_factor               derived table `(...)`: a failure is remembered
+                                        (failed_derived_table_factor_positions)
+16768  parse_table_factor               index hints: keywords only
+16904  parse_table_sample               SAMPLE's value (the walk refuses SAMPLE): one expression; measured linear
+18477  parse_insert                     statement: unreachable
+18652  parse_input_format_clause        INSERT: unreachable
+18845  parse_function_args              only with supports_named_fn_args_with_expr_name, false for ClickHouse
+18861  parse_function_args              `name => value`: a name and an operator come before the value, so a failure
+                                        after the value fails the call
+19428  parse_order_by_expr_inner        an object name only
+19821  parse_begin_exception_end        statement: unreachable
+20006  parse_throw                      statement: unreachable
+20131  parse_unload                     statement: unreachable
+20901  parse_return                     statement: unreachable
+20941  parse_vacuum                     statement: unreachable
+21036  maybe_parse_show_stmt_in         statement: unreachable
+21190  parse_key_value_option           DDL options: unreachable
+
+== 1. Before the limits: each construct nested alone, depths 1 to 22, around an expression
+== that parses ([ok]) and one that fails ([fail]): 85 expression, 10 query and 3 table-factor
+== templates, 196 series. growth = the largest time(d+2) / time(d) among times above 1 ms.
+Series with growth above 2.5 (the last depth reached within a 300 ms budget):
+expr position_comma [ok]                     growth(d+2/d)=   10.89 deepest d= 18 bytes=  310 time=  551.736ms parsed
+expr compound_position [ok]                  growth(d+2/d)=    4.14 deepest d= 17 bytes=  329 time=  362.649ms parsed
+query join_subquery [fail]                   growth(d+2/d)=    8.97 deepest d= 22 bytes=  626 time=  130.916µs parse error sql parser error:
+(join_subquery [fail]: one noisy sample above 1 ms; 131 us at depth 22.)
+Every other series stayed under 1 ms at depth 22; the slowest: overlay_comma 740 us,
+cast_comma 565 us, case_function 391 us (the parser re-reads each level once: nesting times
+length), the rest 20 to 260 us.
+
+== 2. Before the limits: every ordered pair of the 85 expression templates alternating,
+== depths 1 to 20, [ok] and [fail] (14,450 series). Series with growth above 2.5, all with
+== a position call:
+pair position_comma+position_comma [ok]      growth(d+2/d)=    3.97 deepest d= 17 bytes=  295 time=  273.877ms parsed
+pair position_comma+extract_comma [ok]       growth(d+2/d)=    2.79 deepest d= 20 bytes=  330 time=    6.292ms parsed
+pair position_comma+extract_from [ok]        growth(d+2/d)=    4.17 deepest d= 20 bytes=  370 time=    3.334ms parsed
+pair position_comma+compound_position [ok]   growth(d+2/d)=    3.90 deepest d= 17 bytes=  311 time=  299.999ms parsed
+pair position_comma+respect_nulls [ok]       growth(d+2/d)=    2.85 deepest d= 20 bytes=  360 time=    4.311ms parsed
+pair compound_position+position_comma [ok]   growth(d+2/d)=    4.13 deepest d= 17 bytes=  313 time=  340.241ms parsed
+pair compound_position+compound_position [ok] growth(d+2/d)=    3.91 deepest d= 17 bytes=  329 time=  364.490ms parsed
+pair at_time_zone+compound_position [ok]     growth(d+2/d)=    2.90 deepest d= 20 bytes=  420 time=    8.194ms parsed
+pair at_time_zone+compound_position [fail]   growth(d+2/d)=   64.79 deepest d= 20 bytes=  412 time=   74.834µs parse error sql parser error:
+
+== 3. With the limits (MAX_NESTING 16, no position( inside another): each construct as deep
+== as the lexer allows, around an array literal that fills the token limit less 80 tokens
+== (4015 or 4016 tokens, about 6 KB), so the printed text still fits the read-back's limits.
+== parse = the lexer and sqlparser; check = the whole check (3 parses, the walk, the printing).
+84 constructs; the 12 slowest checks:
+overlay_comma d=15                                   bytes= 6145 tokens=4015 parse=  10.252ms (parsed) check=  10.331ms (Refused(FunctionNotAllowed { function: "overlay" }))
+cast_comma d=15                                      bytes= 6190 tokens=4015 parse=  10.278ms (parsed) check=  10.293ms (Refused(FunctionNotAllowed { function: "CAST" }))
+case_function d=15                                   bytes= 6070 tokens=4015 parse=  10.242ms (parsed) check=  10.284ms (Refused(FunctionNotAllowed { function: "case" }))
+position_comma d=1                                   bytes= 6055 tokens=4015 parse=   1.764ms (parsed) check=   8.065ms (passes)
+cast_as d=15                                         bytes= 6190 tokens=4015 parse= 978.333µs (parsed) check=   3.418ms (passes)
+lambda_one d=15                                      bytes= 6145 tokens=4015 parse= 894.791µs (parsed) check=   3.226ms (passes)
+substring_comma d=15                                 bytes= 6145 tokens=4015 parse= 866.708µs (parsed) check=   3.216ms (passes)
+exists d=15                                          bytes= 6199 tokens=4016 parse= 909.833µs (parsed) check=   3.209ms (passes)
+case_paren d=15                                      bytes= 6235 tokens=4015 parse= 892.042µs (parsed) check=   3.206ms (passes)
+to_datetime d=15                                     bytes= 6220 tokens=4015 parse= 888.666µs (parsed) check=   3.202ms (passes)
+if d=15                                              bytes= 6040 tokens=4015 parse= 893.208µs (parsed) check=   3.202ms (passes)
+cast_colons d=15                                     bytes= 6124 tokens=4016 parse= 860.375µs (parsed) check=   3.195ms (passes)
+
+== 4. With the limits: every ordered pair (7,056) alternating as deep as the lexer allows
+== around the same array, alone and inside one position(..., 'a').
+Alone: the 5 slowest checks, and the slowest that passes:
+overlay_comma+overlay_comma d=15                     bytes= 6145 tokens=4015 parse=  10.314ms (parsed) check=  10.387ms (Refused(FunctionNotAllowed { function: "overlay" }))
+case_function+overlay_comma d=15                     bytes= 6105 tokens=4015 parse=  10.338ms (parsed) check=  10.374ms (Refused(FunctionNotAllowed { function: "case" }))
+overlay_comma+cast_comma d=15                        bytes= 6166 tokens=4015 parse=  10.326ms (parsed) check=  10.361ms (Refused(FunctionNotAllowed { function: "overlay" }))
+cast_comma+overlay_comma d=15                        bytes= 6169 tokens=4015 parse=  10.352ms (parsed) check=  10.343ms (Refused(FunctionNotAllowed { function: "CAST" }))
+case_function+cast_comma d=15                        bytes= 6126 tokens=4015 parse=  10.296ms (parsed) check=  10.340ms (Refused(FunctionNotAllowed { function: "case" }))
+if+position_comma d=3                                bytes= 6054 tokens=4015 parse=   1.609ms (parsed) check=   5.382ms (passes)
+checks that pass: 1290 of 7056
+Inside one position(..., 'a'): the 5 slowest checks, and the slowest that passes:
+cast_comma+cast_comma d=14                           bytes= 6188 tokens=4015 parse=  10.253ms (parsed) check=  10.293ms (Refused(FunctionNotAllowed { function: "CAST" }))
+cast_comma+case_function d=14                        bytes= 6132 tokens=4015 parse=  10.417ms (parsed) check=  10.284ms (Refused(FunctionNotAllowed { function: "case" }))
+overlay_comma+case_function d=14                     bytes= 6111 tokens=4015 parse=  10.215ms (parsed) check=  10.282ms (Refused(FunctionNotAllowed { function: "case" }))
+overlay_comma+overlay_comma d=14                     bytes= 6146 tokens=4015 parse=  10.280ms (parsed) check=  10.278ms (Refused(FunctionNotAllowed { function: "overlay" }))
+case_function+cast_comma d=14                        bytes= 6132 tokens=4015 parse=  10.320ms (parsed) check=  10.256ms (Refused(FunctionNotAllowed { function: "CAST" }))
+substring_comma+distinct_arg d=14                    bytes= 6172 tokens=4016 parse=   1.538ms (parsed) check=   6.380ms (passes)
+checks that pass: 1352 of 7056; pairs the lexer refuses at every depth (a second position): 336
+
+== 5. The regression test that counts instead of timing
+== (services/telemetry-query/tests/sql_check.rs, the_parse_reads_each_token_a_bounded_number_of_times):
+== a dialect that answers as ClickHouseDialect and counts every expression the parser starts
+== (its parse_prefix hook); the parse must equal ClickHouseDialect's. Bound: 2 * (MAX_NESTING + 2)
+== = 36 expressions per token, for the written text and for the read-back of what passes.
+cargo test -p telemetry-query --test sql_check -- the_parse_reads --nocapture
+20190 shapes, 3948 read back; the most work per token: 3351 for 451 tokens:
+  SELECT case(case(... 15 levels ...([1, 1, ... 200 elements ...]) ...)) AS v FROM tenant_telemetry
+12 nested position calls without the lexer: 12286 for 66 tokens
+(186 per token: the doubling the lexer rule keeps out is far over the bound; the test asserts
+ more than 4 times the bound.)
+
+== 6. Internal errors: every expression template and ordered pair, depths 1 to 4, around 9
+== bases (value_float, value_string, 1, 'a', [1], value_float BETWEEN 1 AND 2,
+== value_float IN (1), (value_float) IS NULL, 1 +), through the whole check.
+Before 955d030 (one-argument position refused):
+checked 193536: {"Internal": 132, "Refused": 162008, "passes": 31396}
+every internal error was "the printed query does not pass the check again", a one-argument
+position call; the shortest:
+  SELECT position((1) IS NULL IN 'a') AS v FROM tenant_telemetry
+  SELECT position(('a') IS NULL IN 'a') AS v FROM tenant_telemetry
+  SELECT position(([1]) IS NULL IN 'a') AS v FROM tenant_telemetry
+  SELECT position(1 BETWEEN 1 AND 2 IN 'a') AS v FROM tenant_telemetry
+62 more one-argument position calls passed as that call, for example:
+  SELECT position(NOT 1 IN 'a') AS v FROM tenant_telemetry
+  SELECT position(not(1) IN 'a') AS v FROM tenant_telemetry
+  SELECT position(NOT 'a' IN 'a') AS v FROM tenant_telemetry
+After 955d030:
+checked 193536: {"Refused": 162202, "passes": 31334}
+depths 1 to 6:
+checked 322056: {"Refused": 270816, "passes": 51240}

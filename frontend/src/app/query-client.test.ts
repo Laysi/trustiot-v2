@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 
 import { ApiError } from "../api/errors.ts";
-import { createQueryClient, MAX_RETRIES } from "./query-client.ts";
+import { createQueryClient, HANDLES_UNAUTHENTICATED, MAX_RETRIES } from "./query-client.ts";
 
 describe("createQueryClient", () => {
   test("an unauthenticated response sends the user to sign in; others do not", async () => {
@@ -16,6 +16,35 @@ describe("createQueryClient", () => {
       .catch(() => {});
     await client
       .fetchQuery({ queryKey: ["c"], queryFn: () => Promise.reject(new ApiError(503, null)), retry: false })
+      .catch(() => {});
+    expect(signIns).toBe(1);
+  });
+
+  test("a request that handles 401 itself (the sign-in form) does not send the user to sign in", async () => {
+    let signIns = 0;
+    const client = createQueryClient({ onUnauthenticated: () => (signIns += 1) });
+    await client
+      .getMutationCache()
+      .build(client, {
+        mutationFn: () =>
+          Promise.reject(new ApiError(401, { code: "unauthenticated", message_key: "error.unauthenticated" })),
+        meta: HANDLES_UNAUTHENTICATED,
+      })
+      .execute(undefined)
+      .catch(() => {});
+    await client
+      .fetchQuery({
+        queryKey: ["d"],
+        queryFn: () => Promise.reject(new ApiError(401, null)),
+        retry: false,
+        meta: HANDLES_UNAUTHENTICATED,
+      })
+      .catch(() => {});
+    expect(signIns).toBe(0);
+    await client
+      .getMutationCache()
+      .build(client, { mutationFn: () => Promise.reject(new ApiError(401, null)) })
+      .execute(undefined)
       .catch(() => {});
     expect(signIns).toBe(1);
   });

@@ -222,7 +222,10 @@ const REVOKE_PREVIOUS: &str = "UPDATE identity.sessions SET revoked_at = now()
 WHERE token_hash = $1 AND revoked_at IS NULL";
 
 /// A new session for `$2`, expiring [`SESSION_IDLE_LIFETIME`] (`$3` seconds) from now, in the
-/// tenant of the user's latest session (switching tenants is Laysi/trustiot-v2#497).
+/// tenant of the user's latest session that is in one, which the user picked with
+/// `PUT /api/identity/v1/sessions/current/tenant` ([`crate::current_session`]); none for a
+/// user's first session. The cookie check still reads the membership on every request, so a
+/// tenant the user has left since grants nothing.
 const INSERT_SESSION: &str = "INSERT INTO identity.sessions
     (id, token_hash, user_id, active_tenant_id, expires_at)
 VALUES (gen_random_uuid(), $1, $2::uuid,

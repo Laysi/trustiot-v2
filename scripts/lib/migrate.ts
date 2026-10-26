@@ -4,8 +4,11 @@
 //
 // The Job connects as the migration role over `verify-full` to the published loopback port, and
 // reaches the password Secrets through the stand-in Kubernetes API (lib/secret-api.ts), which
-// `up` starts for the length of the run. Passwords reach the Job only through its environment
-// and a token file (mode 0600, removed afterwards), never through the argument list.
+// `up` starts for the length of the run. It also applies the product's ClickHouse DDL
+// (services/ingest/migrations/clickhouse) to the local ClickHouse as the bootstrap account that
+// has access management, the way the chart's Job does it (Laysi/trustiot-v2#679). Passwords
+// reach the Job only through its environment and a token file (mode 0600, removed afterwards),
+// never through the argument list.
 import type { ProductLogin } from "./product-logins.ts";
 import { startSecretApi } from "./secret-api.ts";
 import { BIND_ADDRESS } from "./stack.ts";
@@ -40,6 +43,12 @@ export interface MigrationRun {
   postgres: { port: number; database: string; caFile: string };
   /** The migration role's login. */
   login: { user: string; password: string };
+  /**
+   * The ClickHouse published on loopback and its bootstrap account, which has access management
+   * (the container is started with `CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT=1`): the Job creates
+   * the product's databases, tables, roles and row policies with it.
+   */
+  clickhouse: { port: number; user: string; password: string };
   /** Directory for the token file (the instance's state directory). */
   stateDir: string;
   /** The login roles the Job gives a password to, and the Secret of each (lib/product-logins.ts). */
@@ -70,8 +79,14 @@ export function jobEnvironment(
     TRUSTIOT_POSTGRES_DATABASE: run.postgres.database,
     TRUSTIOT_POSTGRES_SSLMODE: "verify-full",
     TRUSTIOT_POSTGRES_CA_FILE: run.postgres.caFile,
+    // Plain HTTP on the loopback port, as the migrate tests reach their throwaway ClickHouse. The
+    // collector and telemetry-query accounts (TRUSTIOT__PASSWORDS__CLICKHOUSE_*) stay unset: the
+    // Job then leaves the collector alone and keeps `trustiot_telemetry_query` at HOST NONE.
+    TRUSTIOT_CLICKHOUSE_URL: `http://${BIND_ADDRESS}:${run.clickhouse.port}`,
     TRUSTIOT__POSTGRES__USERNAME: run.login.user,
     TRUSTIOT__POSTGRES__PASSWORD: run.login.password,
+    TRUSTIOT__CLICKHOUSE__USERNAME: run.clickhouse.user,
+    TRUSTIOT__CLICKHOUSE__PASSWORD: run.clickhouse.password,
     TRUSTIOT__PASSWORDS__API_URL: api.url,
     TRUSTIOT__PASSWORDS__NAMESPACE: STORE_NAMESPACE,
     TRUSTIOT__PASSWORDS__TOKEN_FILE: tokenFile,
@@ -158,7 +173,7 @@ export async function runMigrationJob(run: MigrationRun): Promise<MigrationResul
         const value = api.value(secret, role);
         if (value) passwords[role] = value;
       }
-      const hidden = [run.login.password, api.token, ...Object.values(passwords)];
+      const hidden = [run.login.password, run.clickhouse.password, api.token, ...Object.values(passwords)];
       if (code !== 0) {
         throw new Error(
           `the migration Job (tools/migrate) failed with exit code ${code}:\n` +

@@ -1,0 +1,37 @@
+
+series Asia/Taipei Some("1h") 2026-10-23T20:00:00.000Z..2026-10-25T20:00:00.000Z: interval "1h", 48 buckets, 399 readings, equal to the reference over [2026-10-23T20:00:00.000Z, 2026-10-25T20:00:00.000Z)
+series Asia/Kolkata Some("3h") 2026-10-23T20:00:00.000Z..2026-10-25T20:00:00.000Z: interval "3h", 17 buckets, 399 readings, equal to the reference over [2026-10-23T20:00:00.000Z, 2026-10-25T20:00:00.000Z)
+series Asia/Taipei Some("1d") 2026-10-23T20:00:00.000Z..2026-10-25T20:00:00.000Z: interval "1d", 3 buckets, 399 readings, equal to the reference over [2026-10-23T20:00:00.000Z, 2026-10-25T20:00:00.000Z)
+series UTC Some("1d") 2026-10-23T20:00:00.000Z..2026-10-25T20:00:00.000Z: interval "1d", 3 buckets, 399 readings, equal to the reference over [2026-10-23T20:00:00.000Z, 2026-10-25T20:00:00.000Z)
+series Asia/Kolkata Some("15m") 2026-10-23T20:00:00.000Z..2026-10-25T20:00:00.000Z: interval "15m", 192 buckets, 399 readings, equal to the reference over [2026-10-23T20:00:00.000Z, 2026-10-25T20:00:00.000Z)
+series Asia/Taipei None 2026-10-23T20:00:00.000Z..2026-10-25T20:00:00.000Z: interval "5m", 399 buckets, 399 readings, equal to the reference over [2026-10-23T20:00:00.000Z, 2026-10-25T20:00:00.000Z)
+series UTC Some("1h") 2026-10-23T20:01:01.234Z..2026-10-25T19:59:58.500Z: interval "1h", 47 buckets, 391 readings, equal to the reference over [2026-10-23T21:00:00.000Z, 2026-10-25T20:00:00.000Z)
+series Asia/Taipei Some("1h") 2026-10-23T20:01:01.234Z..2026-10-25T19:59:58.500Z: interval "1h", 47 buckets, 391 readings, equal to the reference over [2026-10-23T21:00:00.000Z, 2026-10-25T20:00:00.000Z)
+series Asia/Kolkata Some("1h") 2026-10-23T20:01:01.234Z..2026-10-25T19:59:58.500Z: interval "1h", 49 buckets, 399 readings, equal to the reference over [2026-10-23T20:02:00.000Z, 2026-10-25T20:00:00.000Z)
+series UTC Some("15m") 2026-10-23T20:01:01.234Z..2026-10-25T19:59:58.500Z: interval "15m", 192 buckets, 399 readings, equal to the reference over [2026-10-23T20:02:00.000Z, 2026-10-25T20:00:00.000Z)
+period raw 10..6 days back: truncated to "2026-10-18T21:21:23.490Z", 0 points
+period 1d 200 days back..now: truncated to "2026-07-25T22:00:00Z", 427 readings (120-day-old readings left out)
+refusal 401 unauthenticated "error.unauthenticated": /api/telemetry/v1/devices/<device>/series?point=temp&from=2026-10-25T19:16:22.673Z&to=2026-10-25T20:16:22.673Z&tz=UTC
+refusal 401 unauthenticated "error.unauthenticated": /api/telemetry/v1/devices/<device>/series?point=temp&from=2026-10-25T19:16:22.673Z&to=2026-10-25T20:16:22.673Z&tz=UTC
+refusal 403 permission_denied "error.permission_denied": /api/telemetry/v1/devices/<device>/series?point=temp&from=2026-10-25T19:16:22.673Z&to=2026-10-25T20:16:22.673Z&tz=UTC
+refusal 404 not_found "telemetry.account_not_ready": /api/telemetry/v1/devices/<device>/series?point=temp&from=2026-10-25T19:16:22.673Z&to=2026-10-25T20:16:22.673Z&tz=UTC
+refusal 400 invalid_request "telemetry.device_id_invalid": /api/telemetry/v1/devices/not-a-device/series?point=temp&from=2026-10-25T19:16:22.673Z&to=2026-10-25T20:16:22.673Z&tz=UTC
+refusal 400 invalid_request "telemetry.query_invalid": /api/telemetry/v1/devices/<device>/series?point=temp&from=2026-10-25T19:16:22.673Z&to=2026-10-25T20:16:22.673Z
+refusal 400 invalid_request "telemetry.query_invalid": /api/telemetry/v1/devices/<device>/series?point=temp&from=2026-10-25T19:16:22.673Z&to=2026-10-25T20:16:22.673Z&tz=UTC&interval=2h
+refusal 400 invalid_request "telemetry.query_invalid": /api/telemetry/v1/devices/<device>/series?point=temp&from=yesterday&to=today&tz=UTC
+refusal 422 validation_failed "telemetry.time_zone_invalid": /api/telemetry/v1/devices/<device>/series?point=temp&from=2026-10-25T19:16:22.673Z&to=2026-10-25T20:16:22.673Z&tz=..%2Fetc
+refusal 422 validation_failed "telemetry.time_zone_invalid": /api/telemetry/v1/devices/<device>/series?point=temp&from=2026-10-25T19:16:22.673Z&to=2026-10-25T20:16:22.673Z&tz=Nowhere%2FZone
+refusal 422 validation_failed "telemetry.time_zone_invalid": /api/telemetry/v1/devices/<device>/series?point=temp&from=2026-10-25T19:16:22.673Z&to=2026-10-25T20:16:22.673Z&tz=Nowhere%2FZone&interval=raw
+refusal 422 validation_failed "telemetry.point_invalid": /api/telemetry/v1/devices/<device>/series?point=&from=2026-10-25T19:16:22.673Z&to=2026-10-25T20:16:22.673Z&tz=UTC
+refusal 422 validation_failed "telemetry.range_invalid": /api/telemetry/v1/devices/<device>/series?point=temp&from=2026-10-25T20:16:22.673Z&to=2026-10-25T19:16:22.673Z&tz=UTC
+refusal 422 validation_failed "telemetry.range_invalid": /api/telemetry/v1/devices/<device>/series?point=temp&from=2026-10-25T20:16:22.673Z&to=%2B262142-12-31T23:59:00Z&tz=UTC
+refusal 422 validation_failed "telemetry.range_invalid": /api/telemetry/v1/devices/<device>/series?point=temp&from=2026-10-25T20:16:22.673Z&to=2106-02-08T00:00:00Z&tz=UTC&interval=1h
+refusal 422 validation_failed "telemetry.too_many_points": /api/telemetry/v1/devices/<device>/series?point=temp&from=2026-09-25T21:16:22.673Z&to=2026-10-25T21:16:22.673Z&tz=UTC&interval=1m
+refusal 422 validation_failed "telemetry.too_many_points": /api/telemetry/v1/devices/<device>/series?point=dense&from=2026-10-25T17:16:22.673Z&to=2026-10-25T21:16:22.673Z&tz=UTC&interval=raw
+refusal 400 invalid_request "telemetry.device_id_invalid": /api/telemetry/v1/devices/not-a-device/latest
+refusal 403 permission_denied "error.permission_denied": /api/telemetry/v1/devices/<device>/latest
+quota: call 118 answered 429 rate_limited
+test history_matches_clickhouse_within_the_queryable_period ... ok
+
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 9.33s

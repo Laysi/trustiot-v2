@@ -50,10 +50,17 @@ pub mod passwords;
 pub mod platform_admin;
 pub mod postgres;
 pub mod registry;
-/// The raw data retention, the ingest service's file (compiled into the service as well): the
-/// run sets it as the TTL of the telemetry and completion tables (Laysi/trustiot-v2#92).
+// The raw and aggregate data retention, the ingest service's file (compiled into the service as
+// well): the run sets it as the TTL of the telemetry, completion and aggregate tables
+// (Laysi/trustiot-v2#92, Laysi/trustiot-v2#141). A plain comment, not `///`: with an outer doc
+// comment rustdoc resolves the links of the file's own module documentation from here.
 #[path = "../../../services/ingest/src/retention.rs"]
 pub mod retention;
+// The statements on the one-minute and one-hour aggregates, the ingest service's file (compiled
+// into the service as well): the run backfills the aggregates with them once
+// (Laysi/trustiot-v2#141).
+#[path = "../../../services/ingest/src/rollup.rs"]
+pub mod rollup;
 pub mod secret;
 pub mod signing_keys;
 
@@ -168,12 +175,12 @@ pub fn sha256_hex(text: &str) -> String {
 /// fails. A failed Postgres file leaves nothing behind (one transaction per file); ClickHouse
 /// statements are idempotent, so the next run repeats a half-applied ClickHouse file.
 pub async fn run(config: &RunConfig, registry: &Registry) -> Result<Report, Error> {
-    // The setting was validated when it was loaded; checked again before anything changes, so a
-    // RunConfig built in code cannot skip it (Laysi/trustiot-v2#92).
+    // The settings were validated when they were loaded; checked again before anything changes,
+    // so a RunConfig built in code cannot skip them (Laysi/trustiot-v2#92, Laysi/trustiot-v2#141).
     let retention = config
         .clickhouse
         .as_ref()
-        .map(config::ClickHouseSettings::raw_retention)
+        .map(config::ClickHouseSettings::retention)
         .transpose()
         .map_err(|invalid| Error::ClickHouse(format!("{}: {}", invalid.key, invalid.message)))?;
     postgres::check_registry(registry)?;
