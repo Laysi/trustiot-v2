@@ -26,9 +26,11 @@
 //! tool never publishes, restores or archives: those are the user's, through the public API.
 //!
 //! Nothing a service or the database said reaches the model or the logs except closed values:
-//! the run errors' classes and numbers, `telemetry_sql`'s hints for SQL refusals, and the
-//! check's verdict after [`contract::api::dashboard::check::CheckVerdict::validate`]. The logs
-//! carry no title, SQL or page.
+//! the run errors' classes and numbers, `telemetry_sql`'s hints for SQL refusals, and of the
+//! check's verdict (after [`contract::api::dashboard::check::CheckVerdict::validate`]) only what
+//! [`check_problem`] and [`own_marks`] take from it: closed values, what passes a check against
+//! the request the tool sent, and values from the tool's own data. The logs carry no title, SQL
+//! or page.
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -37,7 +39,10 @@ use std::time::Duration;
 
 use contract::DashboardId;
 use contract::api::dashboard::RuntimeVersion;
-use contract::api::dashboard::check::{CheckRequest, Locale, MAX_PROBLEMS, Problem};
+use contract::api::dashboard::check::{
+    self, CheckReport, CheckRequest, Locale, MAX_PROBLEMS, MarkReport, Problem, SizeLimit,
+};
+use contract::api::dashboard::names::Ref;
 use contract::api::dashboard::public::{
     DashboardKind, DashboardList, DashboardSummary, VersionCreated,
 };
@@ -447,26 +452,208 @@ fn unavailable_problem(reason: Unavailable) -> WriteProblem {
     WriteProblem::new(reason.as_str(), hint)
 }
 
-/// A problem of the check's verdict: its kind and fields as the contract writes them (already
-/// validated), with the kind's fixed hint and strings capped.
-fn check_problem(problem: &Problem) -> WriteProblem {
-    let mut fields = match serde_json::to_value(problem) {
-        Ok(Value::Object(fields)) => fields,
-        _ => Map::new(),
+/// The JavaScript error classes a script error is named by; any other is `other`.
+const ERROR_CLASSES: [&str; 8] = [
+    "Error",
+    "AggregateError",
+    "EvalError",
+    "RangeError",
+    "ReferenceError",
+    "SyntaxError",
+    "TypeError",
+    "URIError",
+];
+
+/// The hint of a script error: the contract's speaks of the browser's message, which the model
+/// never gets.
+const SCRIPT_ERROR_HINT: &str = "A page script threw an exception of the JavaScript class in \
+`error_class` (other: any other class or thrown value); the browser's message is not passed \
+on. Look in the scripts for names that are not defined, calls on undefined values, and wrong \
+use of d3 or tq.";
+
+/// A problem of the check's verdict, as the model gets it. Every value comes from a closed set,
+/// from a check against what the tool sent (the page text, the names the request declares), or
+/// from the tool's own copy of the data, and anything else of the verdict is dropped:
+///
+/// - a script error: only its class ([`error_class`]), never the message;
+/// - a reference ([`problem_place`]): one that resolves in the request, the axis (dataset and
+///   column) of a tick without its value, or a cell past its result's end as the result's own
+///   row count;
+/// - a mismatch's value: the reference's value in the request's data
+///   ([`CheckRequest::value_of`]), none for a tick;
+/// - a literal number only when the page text holds it; a tag only from
+///   [`check::ELEMENT_TAGS`]; a size limit's maximum from the contract.
+///
+/// Every kind and field is named here without a wildcard, so a kind or a field the contract
+/// adds does not build until it is handled.
+fn check_problem(problem: &Problem, request: &CheckRequest) -> WriteProblem {
+    let hint = problem.kind().hint();
+    match problem {
+        Problem::NotRendered => WriteProblem::new("not_rendered", hint),
+        Problem::Navigated => WriteProblem::new("navigated", hint),
+        Problem::Requested => WriteProblem::new("requested", hint),
+        Problem::ScriptError { message } => WriteProblem::new("script_error", SCRIPT_ERROR_HINT)
+            .with("error_class", error_class(message.as_deref())),
+        Problem::Unmapped { reference, tag } => {
+            let mut shown = WriteProblem::new("unmapped", hint);
+            if let Some(reference) = reference {
+                shown = problem_place(shown, request, reference, false);
+            }
+            with_tag(shown, tag.as_deref())
+        }
+        Problem::Mismatch {
+            reference,
+            value: _,
+            tag,
+        } => with_tag(
+            problem_place(
+                WriteProblem::new("mismatch", hint),
+                request,
+                reference,
+                true,
+            ),
+            tag.as_deref(),
+        ),
+        Problem::LiteralNumber {
+            place,
+            literal,
+            tag,
+        } => {
+            let mut shown = WriteProblem::new("literal_number", hint).with("place", closed(place));
+            if request.page.contains(literal.as_str()) {
+                shown = shown.with("literal", literal.as_str());
+            }
+            with_tag(shown, tag.as_deref())
+        }
+        Problem::MarkGeometry { reference, channel } => problem_place(
+            WriteProblem::new("mark_geometry", hint),
+            request,
+            reference,
+            false,
+        )
+        .with("channel", closed(channel)),
+        Problem::Timeout { phase } => {
+            WriteProblem::new("timeout", hint).with("phase", closed(phase))
+        }
+        Problem::TooLarge { limit, max: _ } => {
+            let max = match limit {
+                SizeLimit::Elements => check::MAX_ELEMENTS,
+                SizeLimit::Marks => check::MAX_MARKS,
+            };
+            WriteProblem::new("too_large", hint)
+                .with("limit", closed(limit))
+                .with("max", max)
+        }
+        Problem::UnsupportedContent { content } => {
+            WriteProblem::new("unsupported_content", hint).with("content", closed(content))
+        }
+        Problem::Unrecognized => WriteProblem::new("unrecognized", hint),
+    }
+}
+
+/// The class of a script error: the name of the error constructor its message starts with, from
+/// [`ERROR_CLASSES`]; `other` for anything else and for no message.
+fn error_class(message: Option<&str>) -> &'static str {
+    let Some(message) = message else {
+        return "other";
     };
-    if !fields.contains_key("kind") {
-        fields.insert("kind".to_owned(), Value::String("unrecognized".to_owned()));
+    let message = message.strip_prefix("Uncaught ").unwrap_or(message);
+    let name = message.split_once(':').map_or(message, |(name, _)| name);
+    ERROR_CLASSES
+        .into_iter()
+        .find(|class| *class == name.trim())
+        .unwrap_or("other")
+}
+
+/// A value of one of the contract's closed enums, as it writes it.
+fn closed(value: &impl serde::Serialize) -> Value {
+    serde_json::to_value(value).unwrap_or(Value::Null)
+}
+
+/// `shown` with the element tag of a problem, when it is one of [`check::ELEMENT_TAGS`].
+fn with_tag(shown: WriteProblem, tag: Option<&str>) -> WriteProblem {
+    match check::ELEMENT_TAGS
+        .into_iter()
+        .find(|known| Some(*known) == tag)
+    {
+        Some(tag) => shown.with("tag", tag),
+        None => shown,
     }
-    fields.insert(
-        "hint".to_owned(),
-        Value::String(problem.kind().hint().to_owned()),
-    );
-    let mut value = Value::Object(fields);
-    cap_text(&mut value);
-    match value {
-        Value::Object(fields) => WriteProblem(fields),
-        _ => WriteProblem::new("unrecognized", problem.kind().hint()),
+}
+
+/// `shown` with where its problem is, from the reference `text`, when the request declares
+/// every name in it: a reference that resolves in the request's data as `reference` (with its
+/// value in that data, strings capped, as `value` when `with_value`); a tick as the `axis` it belongs to, without
+/// the tick's value; a cell past its result's end as `row_past_end` with the result's own row
+/// count, without the row. Nothing for any other text.
+fn problem_place(
+    shown: WriteProblem,
+    request: &CheckRequest,
+    text: &str,
+    with_value: bool,
+) -> WriteProblem {
+    let Ok(reference) = text.parse::<Ref>() else {
+        return shown;
+    };
+    if reference.to_string() != text || !request.declares(&reference) {
+        return shown;
     }
+    match &reference {
+        Ref::Tick {
+            dataset,
+            column,
+            value: _,
+        } => shown.with("axis", json!({"dataset": dataset, "column": column})),
+        Ref::Cell {
+            dataset,
+            column,
+            row: _,
+        } if !request.resolves(&reference) => {
+            let row_count = request
+                .datasets
+                .iter()
+                .find(|result| result.dataset == *dataset)
+                .map(|result| result.row_count);
+            shown.with(
+                "row_past_end",
+                json!({"dataset": dataset, "column": column, "row_count": row_count}),
+            )
+        }
+        Ref::Cell { .. } | Ref::Computation { .. } | Ref::Constant { .. } | Ref::Meta { .. } => {
+            let mut shown = shown.with("reference", reference.to_string());
+            if with_value && let Some(mut value) = request.value_of(&reference) {
+                // A text cell is capped like every string of a tool result.
+                cap_text(&mut value);
+                shown = shown.with("value", value);
+            }
+            shown
+        }
+    }
+}
+
+/// The marks of a passed check as the model gets them: each mark's reference with its value
+/// from the request's own data ([`CheckRequest::value_of`]), the axis ticks left out (their
+/// value is the page's, not the data's). [`Checker::check`] has already refused a report whose
+/// values differ from that data ([`check::CheckVerdict::validate`]); `None` when a mark still
+/// does not resolve, which makes the verdict unusable.
+fn own_marks(request: &CheckRequest, report: &CheckReport) -> Option<Vec<(String, Value)>> {
+    let mut shown = Vec::with_capacity(report.marks.len());
+    for MarkReport {
+        reference: text,
+        value: _,
+    } in &report.marks
+    {
+        let reference: Ref = text.parse().ok()?;
+        if reference.to_string() != *text {
+            return None;
+        }
+        if matches!(reference, Ref::Tick { .. }) {
+            continue;
+        }
+        let value = request.value_of(&reference)?;
+        shown.push((reference.to_string(), value));
+    }
+    Some(shown)
 }
 
 /// What the model gets for a write that saved nothing.
@@ -827,10 +1014,16 @@ impl DashboardTool {
             locale,
             tz,
         };
-        let report = match self.checker.check(context, &request).await {
-            CheckOutcome::Passed(report) => report,
+        let marks = match self.checker.check(context, &request).await {
+            CheckOutcome::Passed(report) => own_marks(&request, &report),
             CheckOutcome::Failed(verdict) => {
-                let problems: Vec<WriteProblem> = verdict.iter().map(check_problem).collect();
+                let mut problems: Vec<WriteProblem> = Vec::with_capacity(verdict.len());
+                for problem in &verdict {
+                    let shown = check_problem(problem, &request);
+                    if !problems.contains(&shown) {
+                        problems.push(shown);
+                    }
+                }
                 log_refused(context, &target, &problems);
                 return Ok(not_saved(problems));
             }
@@ -839,6 +1032,11 @@ impl DashboardTool {
                 log_refused(context, &target, &problems);
                 return Ok(not_saved(problems));
             }
+        };
+        let Some(marks) = marks else {
+            let problems = vec![unavailable_problem(Unavailable::InvalidVerdict)];
+            log_refused(context, &target, &problems);
+            return Ok(not_saved(problems));
         };
         let content = NewVersion {
             runtime: request.runtime,
@@ -869,7 +1067,7 @@ impl DashboardTool {
         Ok(ToolOutput::text(saved_output(
             &created,
             &request.datasets,
-            &report.marks,
+            &marks,
         )))
     }
 
@@ -1386,12 +1584,13 @@ fn list_entry(dashboard: &DashboardSummary) -> Value {
     entry
 }
 
-/// What the model gets for a saved version: where it is, a sample of each dataset and the marks
-/// the check saw, within [`MAX_SUCCESS_BYTES`] (samples and marks give way first).
+/// What the model gets for a saved version: where it is, a sample of each dataset and the
+/// values the check saw marked ([`own_marks`]), within [`MAX_SUCCESS_BYTES`] (samples and
+/// marks give way first).
 fn saved_output(
     created: &VersionCreated,
     datasets: &[DatasetResult],
-    marks: &[contract::api::dashboard::check::MarkReport],
+    marks: &[(String, Value)],
 ) -> String {
     let datasets_json = |rows: usize, columns: bool| -> Vec<Value> {
         datasets
@@ -1416,7 +1615,7 @@ fn saved_output(
         marks
             .iter()
             .take(count)
-            .map(|mark| json!({"reference": mark.reference, "value": mark.value}))
+            .map(|(reference, value)| json!({"reference": reference, "value": value}))
             .collect()
     };
     for (rows, columns, shown_marks) in [
@@ -1839,8 +2038,42 @@ mod tests {
         assert_eq!(value["saved"], false);
     }
 
+    /// A check request of one dataset, `daily`, with one row: `kwh` 1.5.
+    fn check_request() -> CheckRequest {
+        let spec = Spec {
+            datasets: vec![dataset("daily", "SELECT 1")],
+            computations: Vec::new(),
+            constants: Vec::new(),
+        };
+        let result: DatasetResult = serde_json::from_value(json!({
+            "dataset": "daily",
+            "columns": [{"name": "kwh", "type": "number"}],
+            "rows": [[1.5]],
+            "row_count": 1,
+            "meta": {
+                "queried_at": "2026-10-26T00:00:00Z",
+                "duration_ms": 1,
+                "source": {"kind": "sql", "queryable_from": {
+                    "tenant_telemetry": "2026-10-01T00:00:00Z",
+                    "tenant_telemetry_1m": "2026-10-01T00:00:00Z",
+                    "tenant_telemetry_1h": "2026-10-01T00:00:00Z",
+                }},
+            },
+        }))
+        .expect("a result");
+        CheckRequest {
+            runtime: RuntimeVersion::CURRENT,
+            page: "<h1>Energy</h1>".to_owned(),
+            spec: spec.public(),
+            datasets: vec![result],
+            locale: Locale::En,
+            tz: DEFAULT_TZ.to_owned(),
+        }
+    }
+
     #[test]
     fn every_contract_problem_gets_its_kind_and_fixed_hint() {
+        let request = check_request();
         let problem: Problem = serde_json::from_value(json!({
             "kind": "mismatch",
             "reference": "c|daily|kwh|0",
@@ -1848,12 +2081,99 @@ mod tests {
             "tag": "span",
         }))
         .expect("a problem");
-        let shown = check_problem(&problem);
+        let shown = check_problem(&problem, &request);
         assert_eq!(shown.kind(), "mismatch");
         assert_eq!(shown.0["hint"], problem.kind().hint());
         assert_eq!(shown.0["reference"], "c|daily|kwh|0");
+        assert_eq!(shown.0["value"], 1.5);
         let newer: Problem =
             serde_json::from_value(json!({"kind": "a_newer_kind"})).expect("a problem");
-        assert_eq!(check_problem(&newer).kind(), "unrecognized");
+        assert_eq!(check_problem(&newer, &request).kind(), "unrecognized");
+        // The tool's kind names are the contract's.
+        for problem in [
+            json!({"kind": "not_rendered"}),
+            json!({"kind": "navigated"}),
+            json!({"kind": "requested"}),
+            json!({"kind": "script_error"}),
+            json!({"kind": "unmapped"}),
+            json!({"kind": "mismatch", "reference": "c|daily|kwh|0", "value": 1.5}),
+            json!({"kind": "literal_number", "place": "title", "literal": "1"}),
+            json!({"kind": "mark_geometry", "reference": "c|daily|kwh|0", "channel": "x"}),
+            json!({"kind": "timeout", "phase": "check"}),
+            json!({"kind": "too_large", "limit": "marks", "max": 1}),
+            json!({"kind": "unsupported_content", "content": "canvas"}),
+        ] {
+            let parsed: Problem = serde_json::from_value(problem.clone()).expect("a problem");
+            assert_eq!(
+                check_problem(&parsed, &request).kind(),
+                problem["kind"],
+                "{problem}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_script_error_is_only_its_class() {
+        for (message, class) in [
+            (Some("TypeError: x is not a function"), "TypeError"),
+            (
+                Some("Uncaught ReferenceError: d4 is not defined"),
+                "ReferenceError",
+            ),
+            (Some("RangeError"), "RangeError"),
+            (Some("Error: the page failed"), "Error"),
+            (Some("SecurityError: blocked"), "other"),
+            (Some("typeerror: lower case"), "other"),
+            (Some("42"), "other"),
+            (Some("a thrown string"), "other"),
+            (None, "other"),
+        ] {
+            assert_eq!(error_class(message), class, "{message:?}");
+        }
+        let shown = check_problem(
+            &Problem::ScriptError {
+                message: Some("TypeError: the meter reads 1234".to_owned()),
+            },
+            &check_request(),
+        );
+        assert_eq!(
+            Value::Object(shown.0),
+            json!({"kind": "script_error", "hint": SCRIPT_ERROR_HINT, "error_class": "TypeError"})
+        );
+    }
+
+    #[test]
+    fn a_passed_reports_marks_are_its_own_values_without_ticks() {
+        let request = check_request();
+        let report = |marks: Value| -> CheckReport {
+            serde_json::from_value(json!({"marks": marks})).expect("a report")
+        };
+        let marks = own_marks(
+            &request,
+            &report(json!([
+                {"reference": "t|daily|kwh|31415.9", "value": 31415.9},
+                {"reference": "c|daily|kwh|0", "value": 1.5},
+                {"reference": "m|daily|row_count", "value": 1},
+            ])),
+        );
+        assert_eq!(
+            marks,
+            Some(vec![
+                ("c|daily|kwh|0".to_owned(), json!(1.5)),
+                ("m|daily|row_count".to_owned(), json!(1)),
+            ])
+        );
+        // A mark that does not resolve makes the verdict unusable.
+        for unusable in [
+            json!([{"reference": "c|daily|kwh|1", "value": 1.5}]),
+            json!([{"reference": "c|other|kwh|0", "value": 1.5}]),
+            json!([{"reference": "not a reference", "value": 1.5}]),
+        ] {
+            assert_eq!(
+                own_marks(&request, &report(unusable.clone())),
+                None,
+                "{unusable}"
+            );
+        }
     }
 }

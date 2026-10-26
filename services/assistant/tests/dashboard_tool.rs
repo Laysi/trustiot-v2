@@ -326,7 +326,7 @@ async fn a_failed_or_missing_verdict_saves_nothing_and_the_draft_keeps_its_versi
         "kind": "mismatch", "reference": "c|daily|kwh|0", "value": 12.5, "tag": "span",
     }))
     .expect("a problem");
-    let cases: [(&str, u16, String, &str); 9] = [
+    let cases: [(&str, u16, String, &str); 10] = [
         (
             "a mismatching mark",
             200,
@@ -376,6 +376,15 @@ async fn a_failed_or_missing_verdict_saves_nothing_and_the_draft_keeps_its_versi
             200,
             json!({"verdict": "passed", "report": {"marks": [
                 {"reference": "m|other|row_count", "value": 3},
+            ]}})
+            .to_string(),
+            "check_invalid_verdict",
+        ),
+        (
+            "a passed report with a value the data does not hold",
+            200,
+            json!({"verdict": "passed", "report": {"marks": [
+                {"reference": "c|daily|kwh|0", "value": 13.5},
             ]}})
             .to_string(),
             "check_invalid_verdict",
@@ -487,6 +496,130 @@ async fn a_failed_or_missing_verdict_saves_nothing_and_the_draft_keeps_its_versi
     for event in capture.events() {
         let line = format!("{} {:?}", event.message, event.fields);
         assert!(!line.contains(SECRET), "{line}");
+    }
+}
+
+/// What the model learns from a verdict comes from closed sets, from checks against what the
+/// tool sent (the page text, the declared names), or from the tool's own copy of the data:
+/// never a script's message, an axis tick's value, a literal the page text does not hold, a row
+/// past the result's end, or a limit the service names.
+#[tokio::test]
+async fn the_model_learns_only_closed_values_and_its_own_data_from_a_verdict() {
+    let Some(setup) = setup().await else {
+        return;
+    };
+    let id = first_version(&setup, "Good").await;
+    // Values a check service chose, none of them in the page or the data the tool sent.
+    let chosen = [
+        "31415.9265",
+        "27182.818",
+        "16180.339",
+        "8675309",
+        "1999",
+        "31415",
+    ];
+    let failed = json!({"verdict": "failed", "problems": [
+        {"kind": "script_error", "message": format!("TypeError: {SECRET}")},
+        {"kind": "script_error", "message": format!("{SECRET}: thrown")},
+        {"kind": "script_error"},
+        {"kind": "unmapped", "reference": "t|daily|kwh|31415.9265", "tag": "text"},
+        {"kind": "unmapped", "reference": "c|daily|kwh|1999", "tag": "span"},
+        {"kind": "mismatch", "reference": "t|daily|kwh|27182.818", "value": 27182.818},
+        {"kind": "mark_geometry", "reference": "t|daily|kwh|16180.339", "channel": "axis"},
+        {"kind": "literal_number", "place": "text", "literal": "8675309", "tag": "p"},
+        {"kind": "literal_number", "place": "text", "literal": "1", "tag": "h1"},
+        {"kind": "too_large", "limit": "elements", "max": 31415},
+        {"kind": "mismatch", "reference": "c|daily|kwh|0", "value": 12.5, "tag": "span"},
+    ]});
+    setup.check.answer(200, &failed.to_string());
+    let output = call(
+        &setup.tool,
+        &setup.own_question(),
+        edit(id, 1, "Good", "Bad"),
+    )
+    .await
+    .expect("the write");
+    let result = json_of(&output);
+    eprintln!("a failed verdict: {result}");
+    assert_eq!(result["saved"], false);
+    let without_hints: Vec<Value> = result["problems"]
+        .as_array()
+        .expect("problems")
+        .iter()
+        .map(|problem| {
+            assert!(
+                problem["hint"]
+                    .as_str()
+                    .is_some_and(|hint| !hint.is_empty()),
+                "{problem}"
+            );
+            let mut problem = problem.clone();
+            problem.as_object_mut().expect("an object").remove("hint");
+            problem
+        })
+        .collect();
+    let axis = json!({"dataset": "daily", "column": "kwh"});
+    assert_eq!(
+        without_hints,
+        [
+            json!({"kind": "script_error", "error_class": "TypeError"}),
+            // The two errors without a known class are one problem.
+            json!({"kind": "script_error", "error_class": "other"}),
+            json!({"kind": "unmapped", "axis": axis, "tag": "text"}),
+            json!({
+                "kind": "unmapped",
+                "row_past_end": {"dataset": "daily", "column": "kwh", "row_count": 3},
+                "tag": "span",
+            }),
+            json!({"kind": "mismatch", "axis": axis}),
+            json!({"kind": "mark_geometry", "axis": axis, "channel": "axis"}),
+            json!({"kind": "literal_number", "place": "text", "tag": "p"}),
+            json!({"kind": "literal_number", "place": "text", "literal": "1", "tag": "h1"}),
+            json!({"kind": "too_large", "limit": "elements", "max": 20_000}),
+            json!({
+                "kind": "mismatch",
+                "reference": "c|daily|kwh|0",
+                "value": 12.5,
+                "tag": "span",
+            }),
+        ]
+    );
+    let shown = text(&output, 0);
+    assert!(!shown.contains(SECRET), "{shown}");
+    for value in chosen {
+        assert!(!shown.contains(value), "{value}: {shown}");
+    }
+    assert_eq!(setup.latest(&setup.owner, id).await, (1, page("Good")));
+
+    // A passed write shows its marked values from the tool's own data, without the axis ticks.
+    setup.check.answer(
+        200,
+        &json!({"verdict": "passed", "report": {"marks": [
+            {"reference": "t|daily|kwh|16180.339", "value": 16180.339},
+            {"reference": "c|daily|kwh|0", "value": 12.5},
+            {"reference": "m|daily|row_count", "value": 3},
+        ]}})
+        .to_string(),
+    );
+    let output = call(
+        &setup.tool,
+        &setup.own_question(),
+        edit(id, 1, "Good", "Better"),
+    )
+    .await
+    .expect("the write");
+    let result = json_of(&output);
+    assert_eq!(result["saved"], true, "{result}");
+    assert_eq!(
+        result["check"],
+        json!({"marks": 2, "values": [
+            {"reference": "c|daily|kwh|0", "value": 12.5},
+            {"reference": "m|daily|row_count", "value": 3},
+        ]})
+    );
+    let shown = text(&output, 0);
+    for value in chosen {
+        assert!(!shown.contains(value), "{value}: {shown}");
     }
 }
 

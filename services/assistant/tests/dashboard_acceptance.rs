@@ -834,13 +834,38 @@ async fn a_page_that_does_not_match_its_data_is_refused_and_the_user_keeps_the_p
         }
         eprintln!("{case}: {verdict}");
     }
-    let marks = verdicts[0].1["report"]["marks"]
+    // The tool shows the marked values from its own data, without the axis ticks.
+    let marked: Vec<Value> = verdicts[0].1["report"]["marks"]
         .as_array()
-        .map_or(0, Vec::len);
+        .expect("the report's marks")
+        .iter()
+        .filter(|mark| {
+            !mark["reference"]
+                .as_str()
+                .is_some_and(|reference| reference.starts_with("t|"))
+        })
+        .cloned()
+        .collect();
+    assert!(!marked.is_empty(), "the page marks values");
     assert_eq!(
-        saved["check"]["marks"], marks,
-        "the tool reports the check's marks"
+        saved["check"]["marks"],
+        marked.len(),
+        "the tool reports the check's marks without the ticks"
     );
+    let values = saved["check"]["values"].as_array().expect("the values");
+    assert!(!values.is_empty() && values.len() <= marked.len());
+    for (shown, mark) in values.iter().zip(&marked) {
+        assert_eq!(shown["reference"], mark["reference"]);
+        // The same value: the tool's from its data, the check's as the runtime resolved it
+        // (numbers may differ in the last binary places).
+        match (shown["value"].as_f64(), mark["value"].as_f64()) {
+            (Some(own), Some(checked)) => assert!(
+                (own - checked).abs() <= 1e-9 * own.abs().max(1.0),
+                "{shown} {mark}"
+            ),
+            _ => assert_eq!(shown["value"], mark["value"]),
+        }
+    }
 
     // The datasets ran once in the question: the edits reused their results.
     assert_eq!(peers.calls().len(), 3, "{:?}", peers.calls());
