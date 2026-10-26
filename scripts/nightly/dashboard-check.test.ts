@@ -11,10 +11,15 @@ import {
   containerPortOf,
   DASHBOARD_CHECK,
   describe,
+  DNS_QUERY_ID,
+  dnsQuery,
   httpRequest,
+  isTlsAlert,
   isolationPlan,
   type IsolationTargets,
   OUTSIDE,
+  OUTSIDE_NAME,
+  PAYLOAD_LIMIT_BYTES,
   parseHttpAnswer,
   parseProbeOutput,
   type PlannedProbe,
@@ -30,6 +35,7 @@ import {
   type ProbeResult,
   readyPodOf,
   validateProbes,
+  ZTUNNEL_PORTS,
 } from "./dashboard-check.ts";
 import type { ExecOptions } from "./exec.ts";
 import { RunLog } from "./exec.ts";
@@ -46,8 +52,11 @@ const TARGETS: IsolationTargets = {
   checker: { service: "trustiot-dashboard-check", clusterIp: "10.43.20.5", port: 8080, podIp: "10.42.0.31", healthPort: 8081 },
   collector: { clusterIp: "10.43.20.9", port: 4318 },
   apiServer: { clusterIp: "10.43.0.1", port: 443, endpoints: [{ host: "172.18.0.2", port: 6443 }] },
+  clusterDns: { clusterIp: "10.43.0.10", udpPort: 53, tcpPort: 53 },
   checkBody: '{"page":"<p>x</p>"}',
 };
+/** A TLS fatal alert record (decode_error), as a TLS server refuses bytes that are not TLS. */
+const TLS_ALERT = "\u0015\u0003\u0003\u0000\u0002\u0002\u0032";
 
 group("probes", () => {
   test("refuses what could not travel as an argument or be read back", () => {
@@ -62,6 +71,10 @@ group("probes", () => {
     expect(() => validateProbes([tcp({ port: 65_536 })])).toThrow("is not a port");
     expect(() => validateProbes([tcp({ send: "a\0b" })])).toThrow("NUL");
     expect(() => validateProbes([{ kind: "dns", id: "d", name: "kubernetes.default" }])).toThrow("final dot");
+    const bytes = (payload: Uint8Array): Probe => ({ kind: "bytes", id: "b", transport: "udp", host: "127.0.0.1", port: 15_053, payload });
+    expect(() => validateProbes([bytes(new Uint8Array())])).toThrow("sends 0 bytes");
+    expect(() => validateProbes([bytes(new Uint8Array(PAYLOAD_LIMIT_BYTES + 1))])).toThrow(`not 1 to ${PAYLOAD_LIMIT_BYTES}`);
+    expect(() => validateProbes([bytes(Uint8Array.of(0, 1, 0))])).not.toThrow();
     expect(() => validateProbes([tcp({ host: "trustiot-dashboard-check.trustiot-saas.svc.cluster.local" }), { kind: "dns", id: "d", name: CLUSTER_NAME }])).not.toThrow();
   });
 
@@ -73,10 +86,40 @@ group("probes", () => {
       "t", "tcp", "10.0.0.1", "8080", send,
     ]);
     expect(probeArguments([{ kind: "dns", id: "d", name: CLUSTER_NAME }])[0]).toBe(String(PROBE_LIMIT_S));
+    // Bytes travel base64-encoded, NUL included, and name their transport.
+    expect(probeArguments([
+      { kind: "bytes", id: "u", transport: "udp", host: "10.42.0.31", port: 15_053, payload: Uint8Array.of(0, 0xff, 0x41) },
+      { kind: "bytes", id: "t", transport: "tcp", host: "127.0.0.1", port: 15_053, payload: Uint8Array.of(0x41) },
+    ], 7)).toEqual(["7", "u", "udp-bytes", "10.42.0.31", "15053", "AP9B", "t", "tcp-bytes", "127.0.0.1", "15053", "QQ=="]);
     // The script never holds a probe's data, and it starts only on the line kubectl sends.
     expect(PROBE_SCRIPT.startsWith("set -u\nIFS= read -r -t ")).toBe(true);
     expect(PROBE_SCRIPT).toContain('[ "$start" = go ] || exit 5');
     expect(PROBE_SCRIPT).not.toContain(CLUSTER_NAME);
+  });
+
+  test("a DNS query asks for the A record of the name, with the length in front over TCP", () => {
+    const udp = dnsQuery(OUTSIDE_NAME, "udp");
+    expect([...udp]).toEqual([
+      DNS_QUERY_ID >> 8, DNS_QUERY_ID & 0xff, 0x01, 0x00, 0, 1, 0, 0, 0, 0, 0, 0,
+      7, ...Buffer.from("example"), 3, ...Buffer.from("com"), 0,
+      0, 1, 0, 1,
+    ]);
+    expect([...dnsQuery(OUTSIDE_NAME, "tcp")]).toEqual([0, udp.length, ...udp]);
+    expect(dnsQuery(CLUSTER_NAME, "udp").length).toBe(12 + CLUSTER_NAME.length + 1 + 4);
+    expect(() => dnsQuery("example.com", "udp")).toThrow("final dot");
+    expect(() => dnsQuery("1.1.1.1.", "udp")).toThrow("final dot");
+    expect(() => dnsQuery(`${"a".repeat(64)}.com.`, "udp")).toThrow("longer than 63");
+  });
+
+  test("only complete TLS alert records are a TLS refusal", () => {
+    expect(isTlsAlert(TLS_ALERT)).toBe(true);
+    expect(isTlsAlert(TLS_ALERT + TLS_ALERT)).toBe(true);
+    expect(isTlsAlert("")).toBe(false);
+    expect(isTlsAlert(TLS_ALERT.slice(0, 6))).toBe(false);
+    expect(isTlsAlert(TLS_ALERT + "H")).toBe(false);
+    // A handshake record, or an HTTP answer, is not a refusal.
+    expect(isTlsAlert("\u0016\u0003\u0003\u0000\u0002\u0002\u0032")).toBe(false);
+    expect(isTlsAlert("HTTP/1.1 200 OK\r\n\r\n")).toBe(false);
   });
 
   test("an HTTP request asks the server to close and counts its body in bytes", () => {
@@ -139,7 +182,11 @@ group("the isolation plan", () => {
 
   test("probes every way out from the dashboard check's pod, and expects no answer", () => {
     const checker = of("checker");
-    expect(checker.map((entry) => entry.probe.id)).toEqual(["loopback", "dns", "api-service", "api-endpoint-0", "collector", "outside"]);
+    expect(checker.map((entry) => entry.probe.id)).toEqual([
+      "loopback", "dns", "api-service", "api-endpoint-0", "collector", "outside",
+      "ztunnel-dns-udp-loopback", "ztunnel-dns-tcp-loopback", "ztunnel-dns-udp-pod", "ztunnel-dns-tcp-pod",
+      "ztunnel-outbound", "ztunnel-inbound", "ztunnel-hbone",
+    ]);
     expect(checker.filter((entry) => entry.probe.id !== "loopback").every((entry) => !entry.expect.open)).toBe(true);
     const target = (id: string) => checker.find((entry) => entry.probe.id === id)!.probe;
     expect(target("dns")).toEqual({ kind: "dns", id: "dns", name: CLUSTER_NAME });
@@ -147,19 +194,39 @@ group("the isolation plan", () => {
     expect(target("api-endpoint-0")).toMatchObject({ host: "172.18.0.2", port: 6443 });
     expect(target("collector")).toMatchObject({ host: "10.43.20.9", port: 4318 });
     expect(target("outside")).toMatchObject({ host: OUTSIDE.host, port: OUTSIDE.port });
+    // ztunnel's DNS proxy port, on loopback and on the pod's address, over UDP and TCP, asked for
+    // a name outside the cluster.
+    expect(target("ztunnel-dns-udp-loopback")).toEqual({ kind: "bytes", id: "ztunnel-dns-udp-loopback", transport: "udp", host: "127.0.0.1", port: 15_053, payload: dnsQuery(OUTSIDE_NAME, "udp") });
+    expect(target("ztunnel-dns-tcp-loopback")).toEqual({ kind: "bytes", id: "ztunnel-dns-tcp-loopback", transport: "tcp", host: "127.0.0.1", port: 15_053, payload: dnsQuery(OUTSIDE_NAME, "tcp") });
+    expect(target("ztunnel-dns-udp-pod")).toMatchObject({ transport: "udp", host: "10.42.0.31", port: 15_053 });
+    expect(target("ztunnel-dns-tcp-pod")).toMatchObject({ transport: "tcp", host: "10.42.0.31", port: 15_053 });
+    // Its outbound, inbound and HBONE ports on loopback, each asked for the outside address.
+    expect(target("ztunnel-outbound")).toEqual({ kind: "tcp", id: "ztunnel-outbound", host: "127.0.0.1", port: 15_001, send: httpRequest("GET", OUTSIDE.host, "/") });
+    expect(target("ztunnel-inbound")).toEqual({ kind: "tcp", id: "ztunnel-inbound", host: "127.0.0.1", port: 15_006, send: httpRequest("GET", OUTSIDE.host, "/") });
+    expect(target("ztunnel-hbone")).toEqual({ kind: "tcp", id: "ztunnel-hbone", host: "127.0.0.1", port: 15_008, send: "CONNECT 1.1.1.1:80 HTTP/1.1\r\nHost: 1.1.1.1:80\r\n\r\n" });
+    expect(ZTUNNEL_PORTS).toEqual({ outbound: 15_001, inbound: 15_006, hbone: 15_008, dns: 15_053 });
+    // Only the HBONE port may refuse with a TLS alert.
+    expect(checker.filter((entry) => !entry.expect.open && "tlsRefusal" in entry.expect).map((entry) => entry.probe.id)).toEqual(["ztunnel-hbone"]);
     // By address: a name would fail at the lookup, which the DNS probe covers, and prove nothing more.
-    for (const entry of checker) if (entry.probe.kind === "tcp") expect(entry.probe.host).toMatch(/^\d+\.\d+\.\d+\.\d+$/);
+    for (const entry of checker) if (entry.probe.kind !== "dns") expect(entry.probe.host).toMatch(/^\d+\.\d+\.\d+\.\d+$/);
     // The probe works in that pod: its own health port on loopback answers 200.
     expect(checker[0]).toMatchObject({ probe: { host: "127.0.0.1", port: 8081 }, expect: { open: true, status: 200 } });
   });
 
   test("runs the same probes from the identity pod as controls that must answer, and expects silence from the dashboard check there", () => {
     const control = of("control");
-    const egress = of("checker").filter((entry) => entry.probe.id !== "loopback");
+    // ztunnel's ports are the pod's own; the bytes probes have their own control below.
+    const egress = of("checker").filter((entry) => entry.probe.id !== "loopback" && !entry.probe.id.startsWith("ztunnel-"));
     for (const entry of egress) {
       expect(control.find((candidate) => candidate.probe.id === entry.probe.id)).toMatchObject({ probe: entry.probe, expect: { open: true } });
     }
     expect(control.find((entry) => entry.probe.id === "dns")?.expect).toEqual({ open: true, resolved: true });
+    // A DNS query sent as bytes to the cluster DNS answers there, over UDP and TCP: the probes that
+    // send bytes work, so their silence in the dashboard check's pod means something.
+    expect(control.filter((entry) => entry.probe.kind === "bytes")).toMatchObject([
+      { probe: { id: "dns-udp", transport: "udp", host: "10.43.0.10", port: 53, payload: dnsQuery(CLUSTER_NAME, "udp") }, expect: { open: true } },
+      { probe: { id: "dns-tcp", transport: "tcp", host: "10.43.0.10", port: 53, payload: dnsQuery(CLUSTER_NAME, "tcp") }, expect: { open: true } },
+    ]);
     expect(control.filter((entry) => !entry.expect.open).map((entry) => entry.probe)).toMatchObject([
       { id: "checker-service", host: "10.43.20.5", port: 8080 },
       { id: "checker-pod", host: "10.42.0.31", port: 8080 },
@@ -197,6 +264,17 @@ group("the isolation plan", () => {
     bad(find("checker", "collector"), answered(http(404)), "answered HTTP 404, expected no answer");
     bad(find("checker", "api-service"), answered("\u0015\u0003"), "answered 2 byte(s), expected no answer");
     ok(find("checker", "loopback"), answered(http(200)));
+    // ztunnel's ports: silence passes; an answer to the DNS query or from outside fails; the HBONE
+    // port alone may refuse with nothing but a TLS alert.
+    ok(find("checker", "ztunnel-dns-udp-pod"), { kind: "silent", exit: 0 });
+    bad(find("checker", "ztunnel-dns-udp-loopback"), answered("\u0074\u0071\u0081\u0083"), "DNS example.com. over UDP to ztunnel's DNS proxy port 127.0.0.1:15053: answered 4 byte(s), expected no answer");
+    bad(find("checker", "ztunnel-dns-tcp-pod"), answered(TLS_ALERT), "expected no answer");
+    bad(find("checker", "ztunnel-outbound"), answered(http(301)), "1.1.1.1:80 through ztunnel's outbound port 127.0.0.1:15001: answered HTTP 301, expected no answer");
+    ok(find("checker", "ztunnel-inbound"), { kind: "silent", exit: 124 });
+    ok(find("checker", "ztunnel-hbone"), answered(TLS_ALERT));
+    ok(find("checker", "ztunnel-hbone"), { kind: "silent", exit: 0 });
+    bad(find("checker", "ztunnel-hbone"), answered("HTTP/1.1 200 Connection established\r\n\r\n"), "expected no answer");
+    bad(find("checker", "ztunnel-hbone"), answered(`${TLS_ALERT}HTTP/1.1 200 OK\r\n\r\n`), "expected no answer");
     bad(find("checker", "loopback"), answered(http(503)), "expected HTTP 200");
     bad(find("checker", "loopback"), { kind: "silent", exit: 3 }, "no answer (not connected), expected an answer");
     // The controls must answer, with any status, and the name must resolve.
@@ -204,6 +282,8 @@ group("the isolation plan", () => {
     ok(find("control", "outside"), answered(http(301)));
     bad(find("control", "outside"), { kind: "silent", exit: 124 }, "from the identity service's pod, 1.1.1.1:80 outside the cluster: no answer (out of time), expected an answer");
     bad(find("control", "dns"), { kind: "unresolved" }, "expected the name to resolve");
+    ok(find("control", "dns-udp"), answered("\u0074\u0071\u0081\u0080"));
+    bad(find("control", "dns-tcp"), { kind: "silent", exit: 124 }, "DNS kubernetes.default.svc.cluster.local. over TCP to the cluster DNS 10.43.0.10:53: no answer (out of time), expected an answer");
     ok(find("control", "checker-service"), { kind: "silent", exit: 0 });
     bad(find("control", "checker-pod"), answered(http(400)), "expected no answer");
     // The assistant: 200 and the verdict passed, nothing less.
@@ -220,6 +300,7 @@ group("the isolation plan", () => {
     expect(describe(answered(http(200, "secret-looking body")))).toBe("answered HTTP 200");
     expect(describe({ kind: "silent", exit: 7 })).toBe("no answer (exit 7)");
     expect(describe({ kind: "silent", exit: 0 })).toBe("no answer (closed without a byte)");
+    expect(describe(answered(TLS_ALERT))).toBe("answered only a TLS alert (7 bytes)");
   });
 });
 
@@ -227,9 +308,13 @@ group("checkIsolation", () => {
   const pods = { checker: "trustiot-dashboard-check-a", control: "trustiot-identity-b", assistant: "trustiot-assistant-c" };
   /** What a cluster that keeps the chart's promises answers. */
   function isolated(pod: string, probe: Probe): ProbeResult {
-    if (pod === pods.checker) return probe.id === "loopback" ? answered(http(200)) : probe.kind === "dns" ? { kind: "unresolved" } : { kind: "silent", exit: 0 };
+    if (pod === pods.checker) {
+      if (probe.id === "ztunnel-hbone") return answered(TLS_ALERT);
+      return probe.id === "loopback" ? answered(http(200)) : probe.kind === "dns" ? { kind: "unresolved" } : { kind: "silent", exit: 0 };
+    }
     if (pod === pods.control) {
       if (probe.kind === "dns") return { kind: "resolved", address: "10.43.0.1" };
+      if (probe.kind === "bytes") return answered("\u0074\u0071\u0081\u0080");
       return probe.id.startsWith("checker") ? { kind: "silent", exit: 124 } : answered(http(404));
     }
     return answered(http(200, '{"verdict":"passed","report":{"marks":[{"reference":"k|a","value":1}]}}'));
@@ -249,13 +334,14 @@ group("checkIsolation", () => {
       TARGETS,
     );
     expect(ran).toEqual([
-      "trustiot-dashboard-check-a: loopback dns api-service api-endpoint-0 collector outside",
-      "trustiot-identity-b: dns api-service api-endpoint-0 collector outside checker-service checker-pod",
+      "trustiot-dashboard-check-a: loopback dns api-service api-endpoint-0 collector outside ztunnel-dns-udp-loopback ztunnel-dns-tcp-loopback ztunnel-dns-udp-pod ztunnel-dns-tcp-pod ztunnel-outbound ztunnel-inbound ztunnel-hbone",
+      "trustiot-identity-b: dns api-service api-endpoint-0 collector outside dns-udp dns-tcp checker-service checker-pod",
       "trustiot-assistant-c: check",
     ]);
     expect(detail).toContain("from the dashboard check's pod trustiot-dashboard-check-a: its own /readyz on 127.0.0.1:8081: answered HTTP 200, DNS kubernetes.default.svc.cluster.local.: did not resolve");
     expect(detail).toContain("from the identity service's pod trustiot-identity-b: DNS kubernetes.default.svc.cluster.local.: resolved to 10.43.0.1");
     expect(detail).toContain("the dashboard check's pod 10.42.0.31:8080: no answer (out of time)");
+    expect(detail).toContain("1.1.1.1:80 through ztunnel's HBONE port 127.0.0.1:15008: answered only a TLS alert (7 bytes)");
     expect(detail).toContain("with the verdict passed");
   });
 
@@ -264,6 +350,10 @@ group("checkIsolation", () => {
       pod === pods.checker && probe.kind === "dns" ? { kind: "resolved", address: "10.43.0.1" } : undefined, "resolved to 10.43.0.1, expected no answer"],
     ["the collector answers the dashboard check's pod", (pod: string, probe: Probe) =>
       pod === pods.checker && probe.id === "collector" ? answered(http(404)) : undefined, "the OpenTelemetry collector 10.43.20.9:4318: answered HTTP 404, expected no answer"],
+    ["ztunnel's DNS proxy answers a name outside the cluster in the dashboard check's pod", (pod: string, probe: Probe) =>
+      pod === pods.checker && probe.id === "ztunnel-dns-tcp-pod" ? answered("\u0000\u0004tq\u0081\u0080") : undefined, "ztunnel's DNS proxy port 10.42.0.31:15053: answered 6 byte(s), expected no answer"],
+    ["the cluster DNS does not answer the bytes control, so silence proves nothing", (pod: string, probe: Probe): ProbeResult | undefined =>
+      pod === pods.control && probe.id === "dns-udp" ? { kind: "silent", exit: 124 } : undefined, "over UDP to the cluster DNS 10.43.0.10:53: no answer (out of time), expected an answer"],
     ["another service reaches the dashboard check", (pod: string, probe: Probe) =>
       pod === pods.control && probe.id === "checker-service" ? answered(http(400)) : undefined, "the dashboard check's Service 10.43.20.5:8080: answered HTTP 400, expected no answer"],
     ["the runner has no way out, so silence proves nothing", (pod: string, probe: Probe): ProbeResult | undefined =>
@@ -379,9 +469,9 @@ group("what the check reads from the release", () => {
   });
 });
 
-// The script itself, with the runner's bash, getent, timeout, head and base64 (GNU coreutils), as in
-// the probe image. Skipped where they are missing (a macOS workstation); with CI set it must run.
-const tools = ["bash", "getent", "timeout", "base64", "head"].every((tool) => Bun.which(tool) !== null);
+// The script itself, with the runner's bash, getent, timeout, head, dd and base64 (GNU coreutils), as
+// in the probe image. Skipped where they are missing (a macOS workstation); with CI set it must run.
+const tools = ["bash", "getent", "timeout", "base64", "head", "dd"].every((tool) => Bun.which(tool) !== null);
 group.skipIf(!tools && process.env.CI === undefined)("the probe script", () => {
   test("answers, silence and names, run at once and read back", async () => {
     const answering = Bun.listen({ hostname: "127.0.0.1", port: 0, socket: { data(socket) { socket.end("HTTP/1.1 204 No Content\r\n\r\n"); } } });
@@ -390,8 +480,16 @@ group.skipIf(!tools && process.env.CI === undefined)("the probe script", () => {
     const unused = Bun.listen({ hostname: "127.0.0.1", port: 0, socket: { data() {} } });
     const refusedPort = unused.port;
     unused.stop(true);
+    // Echo the bytes back, as a DNS server answers with the query's id first: over UDP one
+    // datagram; over TCP without closing, as a DNS server keeps the connection open.
+    const datagrams = await Bun.udpSocket({ hostname: "127.0.0.1", socket: { data(socket, data, port, address) { socket.send(data, port, address); } } });
+    const stream = Bun.listen({ hostname: "127.0.0.1", port: 0, socket: { data(socket, data) { socket.write(data); } } });
+    const query = Uint8Array.of(0x74, 0x71, 0, 0x01, 0xff);
     try {
       const probes: Probe[] = [
+        { kind: "bytes", id: "udp", transport: "udp", host: "127.0.0.1", port: datagrams.port, payload: query },
+        { kind: "bytes", id: "tcp-open", transport: "tcp", host: "127.0.0.1", port: stream.port, payload: query },
+        { kind: "bytes", id: "tcp-refused", transport: "tcp", host: "127.0.0.1", port: refusedPort, payload: query },
         { kind: "tcp", id: "answering", host: "127.0.0.1", port: answering.port, send: httpRequest("POST", "h", "/", { contentType: "text/plain", text: 'a "$(id)" `id` 中' }) },
         { kind: "tcp", id: "closing", host: "127.0.0.1", port: closing.port, send: "x" },
         { kind: "tcp", id: "refused", host: "127.0.0.1", port: refusedPort, send: "x" },
@@ -405,6 +503,10 @@ group.skipIf(!tools && process.env.CI === undefined)("the probe script", () => {
       expect(results.get("closing")).toEqual({ kind: "silent", exit: 0 });
       expect(results.get("refused")).toEqual({ kind: "silent", exit: 3 });
       expect(results.get("invalid")).toEqual({ kind: "unresolved" });
+      // The bytes arrive whole, NUL included, and the first read comes back.
+      expect(results.get("udp")).toEqual({ kind: "answered", bytes: Buffer.from(query).toString("latin1") });
+      expect(results.get("tcp-open")).toEqual({ kind: "answered", bytes: Buffer.from(query).toString("latin1") });
+      expect(results.get("tcp-refused")).toEqual({ kind: "silent", exit: 3 });
       // Without the start line it probes nothing.
       const idle = Bun.spawn(["bash", "-c", PROBE_SCRIPT, "tq-probe", ...probeArguments(probes, 10)], { stdin: new Blob(["stop\n"]), stdout: "pipe", stderr: "pipe" });
       expect(await new Response(idle.stdout).text()).toBe("");
@@ -412,6 +514,8 @@ group.skipIf(!tools && process.env.CI === undefined)("the probe script", () => {
     } finally {
       answering.stop(true);
       closing.stop(true);
+      datagrams.close();
+      stream.stop(true);
     }
   });
 });

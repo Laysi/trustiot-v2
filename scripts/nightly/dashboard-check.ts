@@ -7,11 +7,16 @@
 // - from inside the dashboard check's pod nothing answers: a cluster DNS name does not resolve
 //   (the NetworkPolicy refuses the cluster DNS, and ambient DNS capture is off for the pod), and
 //   the Kubernetes API server (its Service and its endpoints), the OpenTelemetry collector and an
-//   address outside the cluster send back no byte; its own health port on the pod's loopback does
-//   answer, so the probe itself works there;
+//   address outside the cluster send back no byte; neither do the ports ztunnel may listen on in
+//   the pod's network namespace: a DNS query for a name outside the cluster, over UDP and TCP, to
+//   its DNS proxy port on the pod's loopback and on the pod's address, and a connection towards
+//   the outside address through its outbound, inbound and HBONE ports on loopback (the HBONE port
+//   may refuse with a TLS alert, which is no way out either). Its own health port on the pod's
+//   loopback does answer, so the probe itself works there;
 // - from the identity service's pod, which may open any connection, the same probes resolve and
-//   answer (the controls that show each target is up and that the probe reaches it), while the
-//   dashboard check's Service and its pod address send back nothing;
+//   answer (the controls that show each target is up and that the probe reaches it), and a DNS
+//   query sent as bytes over UDP and TCP to the cluster DNS answers (the control for the probes
+//   that send bytes), while the dashboard check's Service and its pod address send back nothing;
 // - from the assistant's pod, the one caller, a check of the sandbox's `correct` fixture page
 //   answers 200 with the verdict `passed`.
 //
@@ -20,8 +25,8 @@
 // as the service's own would. kubectl stays attached to the container and hands back what it
 // printed; the container starts probing only once kubectl has attached and sent it a line, so no
 // output is lost, and the run never reads a container's log. The container's image is the nightly's Postgres image, which is on
-// the node already (platform.ts) and has bash with its /dev/tcp connections, getent, timeout, head
-// and base64. A connection counts as answered when any byte comes back: with Istio ambient the
+// the node already (platform.ts) and has bash with its /dev/tcp and /dev/udp connections, getent,
+// timeout, head, dd and base64. A connection counts as answered when any byte comes back: with Istio ambient the
 // pod's ztunnel accepts every connection first and closes it when it cannot reach the destination,
 // so a successful connect proves nothing.
 import { readFileSync } from "node:fs";
@@ -48,6 +53,19 @@ export const READY_PATH = "/readyz";
 export const OUTSIDE = { host: "1.1.1.1", port: 80 } as const;
 /** A name every pod with DNS resolves; with a final dot, so no search domain is tried first. */
 export const CLUSTER_NAME = "kubernetes.default.svc.cluster.local.";
+/** A name outside the cluster, for the queries sent to ztunnel's DNS proxy port. */
+export const OUTSIDE_NAME = "example.com.";
+/**
+ * The ports Istio ambient's ztunnel listens on inside each pod's network namespace: outbound
+ * (15001), inbound plaintext (15006), inbound HBONE (15008) and the DNS proxy (15053).
+ */
+export const ZTUNNEL_PORTS = { outbound: 15_001, inbound: 15_006, hbone: 15_008, dns: 15_053 } as const;
+/** The cluster DNS: k3s's CoreDNS behind the `kube-dns` Service of `kube-system`. */
+export const CLUSTER_DNS_SERVICE = { name: "kube-dns", namespace: "kube-system" } as const;
+/** The DNS message id of every query the probes send. */
+export const DNS_QUERY_ID = 0x7471;
+/** The most bytes a probe that sends bytes may send. */
+export const PAYLOAD_LIMIT_BYTES = 512;
 /** The image of the probe containers (see the top of this file). */
 export const PROBE_IMAGE = POSTGRES_IMAGE;
 /**
@@ -63,10 +81,14 @@ export const PROBE_CONTAINER_LIMIT_MS = (PROBE_START_LIMIT_S + 2 * PROBE_LIMIT_S
 /** How much of an answer a probe keeps. */
 export const ANSWER_LIMIT_BYTES = 65_536;
 
-/** One probe: a name lookup, or a connection that sends `send` and keeps what comes back. */
+/**
+ * One probe: a name lookup; a connection that sends `send` and keeps what comes back; or a UDP
+ * or TCP socket that sends `payload` (any bytes, NUL included) and keeps the first read.
+ */
 export type Probe =
   | { kind: "dns"; id: string; name: string }
-  | { kind: "tcp"; id: string; host: string; port: number; send: string };
+  | { kind: "tcp"; id: string; host: string; port: number; send: string }
+  | { kind: "bytes"; id: string; transport: "udp" | "tcp"; host: string; port: number; payload: Uint8Array };
 
 /** What a probe saw. `answered.bytes` is the answer as Latin-1 text, one character per byte. */
 export type ProbeResult = { kind: "resolved"; address: string } | { kind: "unresolved" } | { kind: "answered"; bytes: string } | { kind: "silent"; exit: number };
@@ -86,7 +108,10 @@ export function validateProbes(probes: readonly Probe[]): void {
     } else {
       if (!HOST.test(probe.host)) throw new Error(`${probe.id}: ${JSON.stringify(probe.host)} is not a host`);
       if (!Number.isInteger(probe.port) || probe.port < 1 || probe.port > 65_535) throw new Error(`${probe.id}: ${probe.port} is not a port`);
-      if (probe.send.includes("\0")) throw new Error(`${probe.id}: what it sends holds a NUL byte, which no argument can carry`);
+      if (probe.kind === "tcp" && probe.send.includes("\0")) throw new Error(`${probe.id}: what it sends holds a NUL byte, which no argument can carry`);
+      if (probe.kind === "bytes" && (probe.payload.length === 0 || probe.payload.length > PAYLOAD_LIMIT_BYTES)) {
+        throw new Error(`${probe.id}: sends ${probe.payload.length} bytes, not 1 to ${PAYLOAD_LIMIT_BYTES}`);
+      }
     }
   }
   if (probes.length === 0) throw new Error("no probe to run");
@@ -99,8 +124,11 @@ export function validateProbes(probes: readonly Probe[]): void {
  * run at once; each prints one line, then the script prints `tq-probe done`:
  *   tq-probe <id> resolved <first IPv4 address> | tq-probe <id> unresolved
  *   tq-probe <id> answered <base64 of the first ANSWER_LIMIT_BYTES bytes> | tq-probe <id> silent <exit status>
- * The exit status of a silent connection: 3 not connected, 4 not sent, 124 out of time, 0 closed
- * without a byte. Everything a probe sends or names is an argument, never part of the script.
+ * The kinds `udp-bytes` and `tcp-bytes` take their bytes base64-encoded (an argument cannot hold
+ * a NUL) and keep a single read of at most ANSWER_LIMIT_BYTES: one datagram, or what a stream that
+ * may stay open has sent first. The exit status of a silent probe: 3 not connected, 4 not sent,
+ * 124 out of time, 0 closed without a byte (or, over UDP, refused). Everything a probe sends or
+ * names is an argument, never part of the script.
  */
 export const PROBE_SCRIPT = `set -u
 IFS= read -r -t ${PROBE_START_LIMIT_S + 60} start || exit 5
@@ -116,14 +144,19 @@ probe() {
     else
       printf 'tq-probe %s unresolved\\n' "$id"
     fi
-  else
+    return
+  fi
+  if [ "$kind" = tcp ]; then
     out=$(timeout "$limit" bash -c 'exec 3<>"/dev/tcp/$1/$2" || exit 3; printf "%s" "$3" >&3 || exit 4; head -c ${ANSWER_LIMIT_BYTES} <&3 | base64 -w 0' tq-probe "$target" "$port" "$send" 2>/dev/null)
     status=$?
-    if [ -n "$out" ]; then
-      printf 'tq-probe %s answered %s\\n' "$id" "$out"
-    else
-      printf 'tq-probe %s silent %s\\n' "$id" "$status"
-    fi
+  else
+    out=$(timeout "$limit" bash -c 'exec 3<>"/dev/$1/$2/$3" || exit 3; printf "%s" "$4" | base64 -d >&3 || exit 4; dd bs=${ANSWER_LIMIT_BYTES} count=1 status=none <&3 | base64 -w 0' tq-probe "\${kind%-bytes}" "$target" "$port" "$send" 2>/dev/null)
+    status=$?
+  fi
+  if [ -n "$out" ]; then
+    printf 'tq-probe %s answered %s\\n' "$id" "$out"
+  else
+    printf 'tq-probe %s silent %s\\n' "$id" "$status"
   fi
 }
 while [ $# -ge 5 ]; do
@@ -139,8 +172,44 @@ export function probeArguments(probes: readonly Probe[], limitSeconds = PROBE_LI
   validateProbes(probes);
   return [
     String(limitSeconds),
-    ...probes.flatMap((probe) => (probe.kind === "dns" ? [probe.id, "dns", probe.name, "0", ""] : [probe.id, "tcp", probe.host, String(probe.port), probe.send])),
+    ...probes.flatMap((probe) => {
+      switch (probe.kind) {
+        case "dns":
+          return [probe.id, "dns", probe.name, "0", ""];
+        case "tcp":
+          return [probe.id, "tcp", probe.host, String(probe.port), probe.send];
+        case "bytes":
+          return [probe.id, `${probe.transport}-bytes`, probe.host, String(probe.port), Buffer.from(probe.payload).toString("base64")];
+      }
+    }),
   ];
+}
+
+/**
+ * A DNS query for the A record of `name` (with its final dot), recursion desired, id
+ * DNS_QUERY_ID; over TCP with the two-byte length in front (RFC 1035, 4.2.2).
+ */
+export function dnsQuery(name: string, transport: "udp" | "tcp"): Uint8Array {
+  if (!HOST.test(name) || !name.endsWith(".") || /^\d{1,3}(?:\.\d{1,3}){3}\.?$/.test(name)) throw new Error(`${JSON.stringify(name)} is not a fully qualified name with its final dot`);
+  const labels = name.slice(0, -1).split(".");
+  if (labels.some((label) => label.length > 63)) throw new Error(`${name} has a label longer than 63 bytes`);
+  const header = [DNS_QUERY_ID >> 8, DNS_QUERY_ID & 0xff, 0x01, 0x00, 0, 1, 0, 0, 0, 0, 0, 0];
+  const question = [...labels.flatMap((label) => [label.length, ...Buffer.from(label, "ascii")]), 0, 0, 1, 0, 1];
+  const message = [...header, ...question];
+  return Uint8Array.from(transport === "tcp" ? [message.length >> 8, message.length & 0xff, ...message] : message);
+}
+
+/** Whether `bytes` (Latin-1, one character per byte) is nothing but complete TLS alert records. */
+export function isTlsAlert(bytes: string): boolean {
+  if (bytes.length === 0) return false;
+  let at = 0;
+  while (at < bytes.length) {
+    const record = bytes.slice(at, at + 7);
+    // Content type 21 (alert), protocol version 3.x, length 2: a level and a description.
+    if (record.length < 7 || record.charCodeAt(0) !== 0x15 || record.charCodeAt(1) !== 0x03 || record.charCodeAt(3) !== 0 || record.charCodeAt(4) !== 2) return false;
+    at += 7;
+  }
+  return true;
 }
 
 /**
@@ -209,9 +278,12 @@ export function parseHttpAnswer(bytes: string): { status: number; body: string }
   return { status: Number(status[1]), body: Buffer.from(raw, "latin1").toString("utf8") };
 }
 
-/** What a probe is expected to see. */
+/**
+ * What a probe is expected to see. `tlsRefusal`: an answer made only of TLS alerts counts as no
+ * answer (a TLS port refusing what was sent).
+ */
 export type Expectation =
-  | { open: false }
+  | { open: false; tlsRefusal?: true }
   | { open: true; status?: number; verdict?: "passed" }
   | { open: true; resolved: true };
 
@@ -233,6 +305,8 @@ export interface IsolationTargets {
   collector?: { clusterIp: string; port: number };
   /** The `kubernetes` Service's ClusterIP and port, and the API server's endpoints. */
   apiServer: { clusterIp: string; port: number; endpoints: { host: string; port: number }[] };
+  /** The cluster DNS Service's ClusterIP and its UDP and TCP ports. */
+  clusterDns: { clusterIp: string; udpPort: number; tcpPort: number };
   /** The body of the assistant's check: the sandbox's shared request with its `correct` fixture page. */
   checkBody: string;
 }
@@ -271,7 +345,45 @@ export function isolationPlan(targets: IsolationTargets): PlannedProbe[] {
       probe: (id) => ({ kind: "tcp", id, host: OUTSIDE.host, port: OUTSIDE.port, send: get(OUTSIDE.host) }),
     },
   ];
-  const { checker } = targets;
+  const { checker, clusterDns } = targets;
+  const ztunnelDns = (["127.0.0.1", checker.podIp] as const).flatMap((host) =>
+    (["udp", "tcp"] as const).map(
+      (transport): PlannedProbe => ({
+        from: "checker",
+        probe: { kind: "bytes", id: `ztunnel-dns-${transport}-${host === "127.0.0.1" ? "loopback" : "pod"}`, transport, host, port: ZTUNNEL_PORTS.dns, payload: dnsQuery(OUTSIDE_NAME, transport) },
+        expect: { open: false },
+        label: `DNS ${OUTSIDE_NAME} over ${transport.toUpperCase()} to ztunnel's DNS proxy port ${host}:${ZTUNNEL_PORTS.dns}`,
+      }),
+    ),
+  );
+  const outside = `${OUTSIDE.host}:${OUTSIDE.port}`;
+  const ztunnelPorts: PlannedProbe[] = [
+    ...(["outbound", "inbound"] as const).map(
+      (name): PlannedProbe => ({
+        from: "checker",
+        probe: { kind: "tcp", id: `ztunnel-${name}`, host: "127.0.0.1", port: ZTUNNEL_PORTS[name], send: get(OUTSIDE.host) },
+        expect: { open: false },
+        label: `${outside} through ztunnel's ${name} port 127.0.0.1:${ZTUNNEL_PORTS[name]}`,
+      }),
+    ),
+    {
+      from: "checker",
+      probe: { kind: "tcp", id: "ztunnel-hbone", host: "127.0.0.1", port: ZTUNNEL_PORTS.hbone, send: `CONNECT ${outside} HTTP/1.1\r\nHost: ${outside}\r\n\r\n` },
+      expect: { open: false, tlsRefusal: true },
+      label: `${outside} through ztunnel's HBONE port 127.0.0.1:${ZTUNNEL_PORTS.hbone}`,
+    },
+  ];
+  const dnsControls = (["udp", "tcp"] as const).map(
+    (transport): PlannedProbe => {
+      const port = transport === "udp" ? clusterDns.udpPort : clusterDns.tcpPort;
+      return {
+        from: "control",
+        probe: { kind: "bytes", id: `dns-${transport}`, transport, host: clusterDns.clusterIp, port, payload: dnsQuery(CLUSTER_NAME, transport) },
+        expect: { open: true },
+        label: `DNS ${CLUSTER_NAME} over ${transport.toUpperCase()} to the cluster DNS ${clusterDns.clusterIp}:${port}`,
+      };
+    },
+  );
   const checkHost = `${checker.service}.${targets.namespace}.svc.cluster.local`;
   const checkRequest = httpRequest("POST", checkHost, CHECK_ROUTE, { contentType: "application/json", text: targets.checkBody });
   return [
@@ -282,12 +394,15 @@ export function isolationPlan(targets: IsolationTargets): PlannedProbe[] {
       label: `its own ${READY_PATH} on 127.0.0.1:${checker.healthPort}`,
     },
     ...egress.map((target) => ({ from: "checker" as const, probe: target.probe(target.id), expect: { open: false } as const, label: target.label })),
+    ...ztunnelDns,
+    ...ztunnelPorts,
     ...egress.map((target) => ({
       from: "control" as const,
       probe: target.probe(target.id),
       expect: target.id === "dns" ? ({ open: true, resolved: true } as const) : ({ open: true } as const),
       label: target.label,
     })),
+    ...dnsControls,
     {
       from: "control",
       probe: { kind: "tcp", id: "checker-service", host: checker.clusterIp, port: checker.port, send: httpRequest("POST", checkHost, CHECK_ROUTE, { contentType: "application/json", text: "{}" }) },
@@ -316,7 +431,9 @@ export function probeProblem(planned: PlannedProbe, result: ProbeResult | undefi
   const seen = describe(result);
   const { expect } = planned;
   if (!expect.open) {
-    return result.kind === "unresolved" || result.kind === "silent" ? undefined : `${where}: ${seen}, expected no answer`;
+    if (result.kind === "unresolved" || result.kind === "silent") return undefined;
+    if (expect.tlsRefusal === true && result.kind === "answered" && isTlsAlert(result.bytes)) return undefined;
+    return `${where}: ${seen}, expected no answer`;
   }
   if ("resolved" in expect) return result.kind === "resolved" ? undefined : `${where}: ${seen}, expected the name to resolve`;
   if (result.kind !== "answered") return `${where}: ${seen}, expected an answer`;
@@ -346,7 +463,8 @@ export function describe(result: ProbeResult): string {
       return `no answer (${result.exit === 3 ? "not connected" : result.exit === 124 ? "out of time" : result.exit === 0 ? "closed without a byte" : `exit ${result.exit}`})`;
     case "answered": {
       const answer = parseHttpAnswer(result.bytes);
-      return answer === undefined ? `answered ${result.bytes.length} byte(s)` : `answered HTTP ${answer.status}`;
+      if (answer !== undefined) return `answered HTTP ${answer.status}`;
+      return isTlsAlert(result.bytes) ? `answered only a TLS alert (${result.bytes.length} bytes)` : `answered ${result.bytes.length} byte(s)`;
     }
   }
 }
@@ -502,8 +620,8 @@ export async function runIsolationCheck(ctx: IsolationContext, namespace: string
   const env = { KUBECONFIG: ctx.kubeconfig };
   const json = async (args: string[]) => JSON.parse((await run(ctx.log, [ctx.kubectl, ...args, "--output", "json"], { env, timeoutMs: 60_000, quiet: true })).stdout) as unknown;
   // Pods and Services: their JSON holds environment values, so it stays out of the log (quiet).
-  const clusterIp = async (service: string) => {
-    const ip = ((await json(["get", "service", service, "--namespace", namespace])) as { spec?: { clusterIP?: string } }).spec?.clusterIP ?? "";
+  const clusterIp = async (service: string, inNamespace = namespace) => {
+    const ip = ((await json(["get", "service", service, "--namespace", inNamespace])) as { spec?: { clusterIP?: string } }).spec?.clusterIP ?? "";
     if (!/^\d{1,3}(?:\.\d{1,3}){3}$/.test(ip)) throw new Error(`Service ${service} has no IPv4 ClusterIP (${JSON.stringify(ip)})`);
     return ip;
   };
@@ -530,12 +648,21 @@ export async function runIsolationCheck(ctx: IsolationContext, namespace: string
   if (kubernetes.spec?.clusterIP === undefined || apiPort === undefined || endpoints.length === 0) {
     throw new Error("cannot find the API server's Service address and endpoints in the default namespace");
   }
+  const dns = (await json(["get", "service", CLUSTER_DNS_SERVICE.name, "--namespace", CLUSTER_DNS_SERVICE.namespace])) as {
+    spec?: { ports?: { port?: number; protocol?: string }[] };
+  };
+  const dnsPort = (protocol: string) => {
+    const port = dns.spec?.ports?.find((candidate) => (candidate.protocol ?? "TCP") === protocol)?.port;
+    if (port === undefined) throw new Error(`the Service ${CLUSTER_DNS_SERVICE.namespace}/${CLUSTER_DNS_SERVICE.name} has no ${protocol} port`);
+    return port;
+  };
 
   const targets: IsolationTargets = {
     namespace,
     checker: { service: checker.service, clusterIp: await clusterIp(checker.service), port: checker.port, podIp: checkerPod.ip, healthPort },
     ...(collector === undefined ? {} : { collector: { clusterIp: await clusterIp(collector.service), port: collector.port } }),
     apiServer: { clusterIp: kubernetes.spec.clusterIP, port: apiPort, endpoints },
+    clusterDns: { clusterIp: await clusterIp(CLUSTER_DNS_SERVICE.name, CLUSTER_DNS_SERVICE.namespace), udpPort: dnsPort("UDP"), tcpPort: dnsPort("TCP") },
     checkBody: checkBodyOf(ctx.repoRoot),
   };
   let containers = 0;

@@ -50,3 +50,27 @@ docker run --rm --init --platform linux/arm64 --read-only --tmpfs /tmp:rw,mode=1
 - 服務是 PID 1 時，清理後 PID namespace 裡只剩服務自己，主執行緒已結束的行程也一樣：通過（Linux 容器，交叉編譯的同一個測試）。
 - 不是 PID 1 時走不到對所有行程的訊號：通過（單元測試，開發工作站與 Linux 容器）。
 - 測試主機端在 Linux 上建映像、起容器的部分：待測，由 CI 的 `cargo test --workspace`（設了 `CI`，沒有容器引擎時失敗）跑。
+
+## 2. nightly 隔離證明：ztunnel 在 pod 裡的埠
+
+`scripts/nightly/dashboard-check.ts` 從儀表板檢查的 pod 多探測 ztunnel 在 pod 網路命名空間裡可能聽的埠：以 UDP 與 TCP 向 DNS 代理埠 15053（loopback 與 pod 位址）查叢集外的名稱，以及經 15001、15006、15008（loopback）連叢集外的位址，全部要沒有回應（15008 只回 TLS alert 也算拒絕）；身分服務的 pod 以同樣送 bytes 的方式向叢集 DNS 查詢，要有回應，作為對照。
+
+### 指令
+
+```sh
+bun test scripts/nightly/dashboard-check.test.ts
+
+# 探測 script 本身（需要 GNU coreutils 與 getent，在 Debian 容器裡跑）
+docker run --rm --network none -v "$PWD:/w:ro" --tmpfs /tmp:rw,mode=1777 -e HOME=/tmp -w /w \
+  oven/bun:1.3-debian bun test scripts/nightly/dashboard-check.test.ts -t "probe script"
+```
+
+### 結果
+
+- 修正前：新的測試在舊的 `dashboard-check.ts` 上無法載入（沒有 `dnsQuery`、`ZTUNNEL_PORTS` 等），計畫裡沒有任何 ztunnel 埠的探測。
+- 修正後：39 個測試 38 個通過，1 個略過（探測 script 本身需要 GNU 工具，開發工作站上略過，設了 `CI` 時必須執行）。同一個 script 測試在 Debian 容器（Bun 1.3.14）裡通過：UDP 與 TCP 送出的 bytes 完整到達（含 NUL），讀回第一個回應；連不上的 TCP 埠回報 `silent 3`。
+
+### 結論
+
+- 探測計畫、判定（含 TLS alert 的拒絕）與 script：通過（單元測試）。
+- 在真的叢集（Istio ambient、k3s）裡全部沒有回應：待測，由 coordinator 加上 `smoke` 標籤的 nightly 執行。
