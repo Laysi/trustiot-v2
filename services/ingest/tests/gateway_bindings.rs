@@ -1,9 +1,10 @@
 //! The gateway binding projection (Laysi/trustiot-v2#640, acceptance 2; services/ingest/README.md,
 //! "閘道器綁定對照表"): after a platform administrator binds a gateway, ingest's table has the
 //! gateway's tenant and binding ID and the lookup answers them; the same event delivered again
-//! and a replay of the whole subscription leave one row; an older binding's event that arrives
-//! late does not replace the newer binding, and a newer one does; an event that can never be
-//! recorded is dead-lettered; the platform role only reads.
+//! and a replay of the whole subscription leave one row; the binding whose event comes later in
+//! the assets service's log is current whatever the producer's clock says, and an earlier one
+//! recorded late does not replace it; an event that can never be recorded is dead-lettered; the
+//! platform role only reads.
 //!
 //! The ingest binary runs as a real process (its consumer) on the product's schema, applied by the
 //! migration Job (`testkit::product`). The binding is made by the assets service's own code
@@ -43,9 +44,9 @@ const INSERT_POOL: &str =
     "INSERT INTO assets.gateway_pool (hardware_id, registered_at, workstation)
 VALUES ($1, now(), 'ingest-test')";
 
-/// ingest's rows of a gateway, oldest binding first: tenant, binding, unbound.
+/// ingest's rows of a gateway, earliest event in the log first: tenant, binding, unbound.
 const ROWS_OF: &str = "SELECT tenant_id::text, binding_id::text, unbound_at IS NOT NULL
-FROM ingest.gateway_bindings WHERE hardware_id = $1 ORDER BY bound_at, binding_id";
+FROM ingest.gateway_bindings WHERE hardware_id = $1 ORDER BY position_tx, position_id";
 
 /// Whether the subscription processed the event: its ID is in the inbox.
 const PROCESSED: &str = "SELECT count(*) FROM ingest.outbox_inbox
@@ -60,9 +61,9 @@ const EVENTS_OF: &str = "SELECT event_id::text FROM assets.outbox_event
 WHERE event_type = 'assets.gateway_bound' AND aggregate_id = $1 ORDER BY id";
 
 /// A write the platform role must not be able to make.
-const PLATFORM_INSERT: &str =
-    "INSERT INTO ingest.gateway_bindings (tenant_id, binding_id, hardware_id, bound_at)
-VALUES ($1::uuid, $2::uuid, 'platform-write', now())";
+const PLATFORM_INSERT: &str = "INSERT INTO ingest.gateway_bindings
+    (tenant_id, binding_id, hardware_id, bound_at, position_tx, position_id)
+VALUES ($1::uuid, $2::uuid, 'platform-write', now(), 1, 1)";
 
 type Row = (String, String, bool);
 
@@ -280,50 +281,61 @@ async fn bindings_are_projected_once_and_newest_first() {
         current_a
     );
 
-    // 4. An older binding's event arrives late (written after, bound an hour before): it is
-    //    recorded in its own tenant, but the newer binding stays the gateway's tenant.
-    let older = GatewayBindingId::generate();
-    let late = write_bound(
+    // 4. A later binding (as after an unbinding, Laysi/trustiot-v2#115) from an assets replica
+    //    whose clock is an hour behind: its event comes later in the log, so it becomes the
+    //    gateway's tenant whatever its `occurred_at` says.
+    let later = GatewayBindingId::generate();
+    let current_b = Some(GatewayTenant {
+        tenant_id: tenant_b,
+        binding_id: later,
+    });
+    let next = write_bound(
         &assets,
         tenant_b,
-        older,
+        later,
         &gateway,
         bound.bound_at - TimeDelta::hours(1),
     )
     .await;
-    wait_processed(&product, &late).await;
+    wait_processed(&product, &next).await;
     assert_eq!(rows_of(&mut admin, gateway.as_str()).await.len(), 2);
     assert_eq!(
         lookup.gateway_tenant(&gateway).await.expect("look up"),
-        current_a,
-        "an older binding that arrived late replaced the newer one"
+        current_b,
+        "a later binding with an earlier clock did not become current"
     );
     println!(
-        "after a late older binding: {:?}",
+        "after a later binding with a skewed clock: {:?}",
         rows_of(&mut admin, gateway.as_str()).await
     );
 
-    // 5. A newer binding (as after an unbinding, Laysi/trustiot-v2#115): it becomes the
-    //    gateway's tenant.
-    let newer = GatewayBindingId::generate();
-    let next = write_bound(
-        &assets,
-        tenant_b,
-        newer,
-        &gateway,
-        bound.bound_at + TimeDelta::minutes(1),
-    )
-    .await;
-    wait_processed(&product, &next).await;
+    // 5. The earlier binding's event arrives late, after the later one is recorded (as a dead
+    //    letter retried would): tenant A's row is removed as if its event had never been
+    //    recorded, and the whole subscription is replayed. The row comes back, but the later
+    //    binding stays the gateway's tenant.
+    sqlx::query("DELETE FROM ingest.gateway_bindings WHERE binding_id = $1::uuid")
+        .bind(first.to_string())
+        .execute(&mut admin)
+        .await
+        .expect("remove tenant A's row");
+    let mut tx = as_app.begin().await.expect("begin");
+    outbox::replay_from(&mut tx, SUBSCRIPTION, Position::START, Replay::Reprocess)
+        .await
+        .expect("replay the subscription");
+    tx.commit().await.expect("commit the replay");
+    // Applied so far: the binding, its replay and the repeated event; the replay delivers the
+    // binding and the repeated event again.
+    let applied = wait_applied(&service, first, 5).await;
+    assert_eq!(applied[3]["fields"]["created"], true, "{applied:?}");
+    wait_applied(&service, later, 2).await;
+    assert_eq!(rows_of(&mut admin, gateway.as_str()).await.len(), 2);
     assert_eq!(
         lookup.gateway_tenant(&gateway).await.expect("look up"),
-        Some(GatewayTenant {
-            tenant_id: tenant_b,
-            binding_id: newer,
-        })
+        current_b,
+        "an earlier binding recorded late replaced the later one"
     );
     println!(
-        "after a newer binding: {:?}",
+        "after the earlier binding arrived late: {:?}",
         rows_of(&mut admin, gateway.as_str()).await
     );
 

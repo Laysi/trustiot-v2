@@ -19,10 +19,10 @@ use testkit::pg_table;
 use testkit::product::{DATABASE, product_postgres};
 
 /// One binding: `$2` is the binding id, the canary the gateway's hardware ID (`canary-a-<32
-/// hex>` fits the hardware ID rule).
-const SEED_BINDING: &str =
-    "INSERT INTO ingest.gateway_bindings (tenant_id, binding_id, hardware_id, bound_at)
-VALUES ($1::uuid, $2::uuid, $3, now())";
+/// hex>` fits the hardware ID rule). The log position is a placeholder: no lookup runs here.
+const SEED_BINDING: &str = "INSERT INTO ingest.gateway_bindings
+    (tenant_id, binding_id, hardware_id, bound_at, position_tx, position_id)
+VALUES ($1::uuid, $2::uuid, $3, now(), 1, 1)";
 
 const CONSUMER_TABLE: &str = "the outbox consumer's bookkeeping (crates/outbox): subscription \
      positions and processed or failed event IDs, no tenant data; the consumer reads and writes \

@@ -62,8 +62,9 @@ schema `ingest`，DDL 在 `migrations/postgres/`，由 migration Job 套用（`t
 | --- | --- |
 | `tenant_id`、`binding_id` | 主鍵。租戶取自事件信封的 `tenant_id`（資產服務寫入時 RLS 檢查過的租戶，消費端也以它開交易），不取自 payload |
 | `hardware_id` | 閘道器的硬體 ID，與 `crates/protocol` 的 `GatewayId` 同一個格式（CHECK） |
-| `bound_at` | 事件的 `occurred_at`：資產服務綁定的時間 |
-| `unbound_at` | 綁定結束的時間，留給 Laysi/trustiot-v2#115 的解綁事件；目前沒有程式寫入 |
+| `bound_at` | 事件的 `occurred_at`：資產服務綁定的時間。只供閱讀，不用來排序：它來自某一個資產服務副本的時鐘 |
+| `position_tx`、`position_id` | 事件在 `assets.outbox_event` 的位置（`crates/outbox` 的 `Position`），綁定的先後以它為準 |
+| `unbound_at` | 綁定結束的時間，留給 Laysi/trustiot-v2#115 的解綁事件；目前沒有程式寫入。不與 `bound_at` 比較（兩者可能來自不同副本的時鐘），所以時鐘偏差不會讓解綁事件被拒收、進 dead letter |
 | `recorded_at` | ingest 記下這筆的時間（資料庫時鐘） |
 
 一筆綁定一列，不是一台閘道器一列：綁定是租戶的資料，在事件的租戶交易裡寫入；閘道器解綁後綁到另一個租戶時（Laysi/trustiot-v2#115），新的綁定是另一個租戶的新一列，舊的留在原租戶。以硬體 ID 為鍵的單列表做不到這件事，因為新租戶的交易看不到也改不了舊租戶的列。
@@ -75,7 +76,7 @@ schema `ingest`，DDL 在 `migrations/postgres/`，由 migration Job 套用（`t
 - 已有同一個綁定、卻是另一台閘道器的事件（不可能是同一個事件的重送），以及沒有租戶、解不開（版本比這個 build 新的除外：那種照 `crates/outbox` 的規則重試到服務升級）或表拒收其值（SQLSTATE 22 類、CHECK）的事件，每次重試都會失敗，所以記進 dead letter，後面的事件照常處理。其他資料庫錯誤（斷線、切換）照 `crates/outbox` 的規則重試。
 - 每次處理以 INFO 記錄 `applied assets.gateway_bound`，帶硬體 ID、`binding_id`、租戶、事件 ID 與是否新增。
 
-查詢（`GatewayBindings::gateway_tenant(hardware_id) -> Option<GatewayTenant>`，`GatewayTenant` 是租戶與 `binding_id`）：取該硬體 ID 最新的一筆綁定（依 `bound_at`，同時間再依 UUIDv7 的 `binding_id`），那筆還沒結束才回答，否則是 `None`。所以較舊的綁定事件晚到（重播、dead letter 重送）只會在它自己的租戶多一列，不會蓋過較新的綁定；舊綁定也不會在新綁定結束之後重新生效。`None` 與查詢失敗時，寫入路徑回 `retry`、不寫入（決策 8）。
+查詢（`GatewayBindings::gateway_tenant(hardware_id) -> Option<GatewayTenant>`，`GatewayTenant` 是租戶與 `binding_id`）：取該硬體 ID 的事件在資產服務事件紀錄裡最後的那筆綁定（`position_tx DESC, position_id DESC`），那筆還沒結束才回答，否則是 `None`。不依 `bound_at` 或 UUIDv7 的 `binding_id` 排序：兩者都來自寫入事件的那個資產服務副本的時鐘（`EventEnvelope::new` 的 `Utc::now()`），一個時鐘偏差的副本就能讓較舊的綁定排在最新。事件紀錄的順序不受時鐘影響：閘道器的前一筆綁定結束之後才能綁定，新綁定在較晚的交易寫入，它的事件在紀錄裡一定比較後面。所以較早的綁定事件晚到（重播、dead letter 重送）只會在它自己的租戶多一列，不會蓋過較晚的綁定；舊綁定也不會在新綁定結束之後重新生效。certs 的同一份投影（Laysi/trustiot-v2#632）用同一條規則。`None` 與查詢失敗時，寫入路徑回 `retry`、不寫入（決策 8）。
 
 ### 跨租戶的查詢為什麼用平台角色（決策 29）
 
@@ -85,14 +86,14 @@ schema `ingest`，DDL 在 `migrations/postgres/`，由 migration Job 套用（`t
 - 平台角色的查詢經 `PlatformReader`：每筆都是 `READ ONLY` 交易，資料庫拒絕任何寫入；`ingest_platform` 本來就沒有這張表的 `INSERT`、`UPDATE`、`DELETE`。reader 建立時以 INFO 記一次（actor 是 ingest 服務、purpose `gateway-tenant`），每次查詢只記 DEBUG，因為寫入路徑每一批都會查。
 - `platform_access` 只有 `FOR SELECT`、條件是 `true`（只用表自己的欄位），符合 service-kit 連線檢查對平台角色的要求。
 - 依硬體 ID 查詢的索引 `gateway_bindings_by_gateway` 不以 `tenant_id` 開頭，這是刻意的例外：它回答的問題本身就跨租戶。
-- certs 的同一份投影（Laysi/trustiot-v2#632）在本 issue 實作時還沒進 main，所以依資產服務與決策 29 決定；兩邊的做法若之後不同，以決策 29 為準統一。
+- certs 的同一份投影（Laysi/trustiot-v2#632，`certs.gateway_bindings`）也是租戶資料表加上平台角色的唯讀查詢，兩個服務都以事件在資產服務紀錄裡的位置決定目前的綁定；之後任一邊改變做法時，另一邊一起改。
 
 ### 測試
 
 需要 podman 或 docker（沒有時略過，設了 `CI` 時改為失敗）：
 
 - `tests/startup.rs`：真的 binary 以 `testkit::product` 的 Postgres（平台設定與 `bun scripts/dev.ts env` 給的變數相同）與 `tests/common` 的 ClickHouse（套用全部 ClickHouse migration，建立持有 `trustiot_ingest` 的帳號）啟動。兩者都連得上時 `/readyz` 是 200；ClickHouse 連不上、ClickHouse 拒絕密碼、Postgres 連不上時都不是 200，日誌點名失敗的檢查，也不含密碼。
-- `tests/gateway_bindings.rs`：以資產服務自己的 `GatewayBinder` 綁定閘道器，ingest 的表有該租戶與 `binding_id`，查詢回答它們；整個訂閱重播與同一個綁定的重複事件都只有一列；較舊的綁定事件晚到不蓋過較新的，較新的會取代；無法記錄的事件進 dead letter、後面的事件照常處理；平台角色寫不進這張表。
+- `tests/gateway_bindings.rs`：以資產服務自己的 `GatewayBinder` 綁定閘道器，ingest 的表有該租戶與 `binding_id`，查詢回答它們；整個訂閱重播與同一個綁定的重複事件都只有一列；事件紀錄裡較晚的綁定成為目前的綁定，即使它的 `occurred_at` 較早（時鐘偏差的副本）；較早的綁定晚到才記錄時不蓋過它；無法記錄的事件進 dead letter、後面的事件照常處理；平台角色寫不進這張表。
 - `tests/cross_tenant.rs`：`crates/testkit` 的跨租戶負向測試宣告 `ingest.gateway_bindings`，服務角色讀不到也改不了別的租戶的綁定。
 
 ```sh

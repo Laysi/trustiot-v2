@@ -48,15 +48,15 @@ ingest 測試的輸出見 [ingest-tests.txt](data/2026-10-24-640-ingest-skeleton
 
 ### 綁定對照表（`tests/gateway_bindings.rs`）
 
-ingest 執行檔以真的 Postgres 執行（ClickHouse 指向關閉的埠，消費端不需要它）。資產服務自己的 `GatewayBinder` 以平台管理員身分把閘道器綁給租戶 A，之後依序：
+ingest 執行檔以真的 Postgres 執行（ClickHouse 指向關閉的埠，消費端不需要它）。資產服務自己的 `GatewayBinder` 以平台管理員身分把閘道器綁給租戶 A，之後依序。第 4、5 步是安全審查之後（2026-10-27）以事件位置排序的版本，結果見「安全審查之後」；原本的版本以 `bound_at` 排序，2026-10-24 的輸出在 data 檔：
 
 | 步驟 | 結果 |
 | --- | --- |
 | 1. 綁定 | 對照表一列：租戶 A、該 `binding_id`、`unbound_at` 空；`gateway_tenant` 回租戶 A 與 `binding_id`；沒綁過的閘道器回 `None` |
 | 2. 整個訂閱以 `Replay::Reprocess` 重播 | 仍是一列，`recorded_at` 不變，日誌記 `created=false` |
 | 3. 同一個綁定以新的事件 ID 再送一次 | 仍是一列 |
-| 4. 較舊的綁定（租戶 B，`bound_at` 早一小時）晚到 | 兩列，`gateway_tenant` 仍回租戶 A |
-| 5. 較新的綁定（租戶 B，晚一分鐘） | 三列，`gateway_tenant` 回租戶 B 與新的 `binding_id` |
+| 4. 事件紀錄裡較晚的綁定（租戶 B），`occurred_at` 卻早一小時（時鐘偏差的資產服務副本） | 兩列，`gateway_tenant` 回租戶 B 與它的 `binding_id`：先後依事件位置，不依時鐘 |
+| 5. 較早的綁定晚到：刪掉租戶 A 那一列（當作它的事件還沒記錄，例如進了 dead letter），再整個訂閱以 `Replay::Reprocess` 重播 | 租戶 A 那一列重新寫入（日誌 `created=true`），仍是兩列，`gateway_tenant` 仍回租戶 B |
 | 6. 已記錄的 `binding_id` 配上另一個閘道器 | 進 dead letter，原因 `assets.gateway_bound names a recorded binding with another gateway`；另一個閘道器沒有任何列；之後的事件照常套用 |
 | 7. 平台角色 `ingest_platform` 寫入綁定 | `42501`（只有 SELECT） |
 
@@ -80,10 +80,16 @@ $ bun test scripts
  1662 pass
  9 skip
  0 fail
+$ cargo test --locked --workspace
+test a_fresh_database_gets_every_migration_once ... FAILED
+$ bun test deploy/chart
+(fail) saas shape > rendered manifests pass kubeconform -strict for Kubernetes 1.36.0 [61379.77ms]
+ 647 pass
+ 1 fail
 exit 1 at 15:50:40 (build host)
 ```
 
-這一輪的 `cargo test --locked --workspace` 在 `migrate` 的 `fresh_database` 失敗：`assets.outbox_event` 的 `consumer_read` 現在也列 `ingest_platform`（ingest 消費 assets 的事件），測試的預期清單還沒加，`169b1592` 補上。`bun test deploy/chart` 有一個 kubeconform 的 case 在 61 秒時失敗，是單一指令到了 60 秒的上限（`deploy/chart/tests/timing.ts` 的 `COMMAND_TIMEOUT_MS`），與這個變更無關，下一輪重跑通過。加上 `fresh_database` 的修正（`169b1592`，之後只改了註解）重跑：
+exit 1 來自後兩個指令，`bun test scripts` 本身全部通過。`cargo test --locked --workspace` 在 `migrate` 的 `fresh_database` 失敗：`assets.outbox_event` 的 `consumer_read` 現在也列 `ingest_platform`（ingest 消費 assets 的事件），測試的預期清單還沒加，`169b1592` 補上。`bun test deploy/chart`（不是 `bun test scripts`）有一個 kubeconform 的 case 在 61 秒時失敗，是單一指令到了 60 秒的上限（`deploy/chart/tests/timing.ts` 的 `COMMAND_TIMEOUT_MS`），與這個變更無關，下一輪重跑通過。加上 `fresh_database` 的修正（`169b1592`，之後只改了註解）重跑：
 
 ```
 $ cargo test --locked --workspace --no-fail-fast

@@ -43,29 +43,31 @@ pub const LOOKUP_PURPOSE: &str = "gateway-tenant";
 const CHECK_VIOLATION: &str = "23514";
 
 /// A binding of the transaction's tenant; nothing when the tenant has it already. `$1` tenant,
-/// `$2` binding, `$3` hardware ID, `$4` when it was bound (the event's `occurred_at`).
-const INSERT_BINDING: &str =
-    "INSERT INTO ingest.gateway_bindings (tenant_id, binding_id, hardware_id, bound_at)
-VALUES ($1::uuid, $2::uuid, $3, $4)
+/// `$2` binding, `$3` hardware ID, `$4` when it was bound (the event's `occurred_at`), `$5` and
+/// `$6` the event's position in the assets service's log.
+const INSERT_BINDING: &str = "INSERT INTO ingest.gateway_bindings
+    (tenant_id, binding_id, hardware_id, bound_at, position_tx, position_id)
+VALUES ($1::uuid, $2::uuid, $3, $4, $5, $6)
 ON CONFLICT (tenant_id, binding_id) DO NOTHING";
 
 /// The gateway of a binding the transaction's tenant has. `$1` tenant, `$2` binding.
 const RECORDED_GATEWAY: &str = "SELECT hardware_id FROM ingest.gateway_bindings
 WHERE tenant_id = $1::uuid AND binding_id = $2::uuid";
 
-/// A gateway's current binding across tenants: its newest binding by `bound_at` (the binding ID,
-/// a UUIDv7, breaks a tie), and only while that binding has not ended. An older binding never
-/// answers once a newer one is recorded, ended or not. `$1`: the hardware ID.
-const CURRENT_BINDING: &str = "SELECT newest.tenant_id::text AS tenant_id,
-    newest.binding_id::text AS binding_id
+/// A gateway's current binding across tenants: its binding whose event comes last in the assets
+/// service's log (`position_tx`, `position_id`; never the producer's clock, which one skewed
+/// replica could turn around), and only while that binding has not ended. An older binding never
+/// answers once a later one is recorded, ended or not. `$1`: the hardware ID.
+const CURRENT_BINDING: &str = "SELECT latest.tenant_id::text AS tenant_id,
+    latest.binding_id::text AS binding_id
 FROM (
     SELECT tenant_id, binding_id, unbound_at
     FROM ingest.gateway_bindings
     WHERE hardware_id = $1
-    ORDER BY bound_at DESC, binding_id DESC
+    ORDER BY position_tx DESC, position_id DESC
     LIMIT 1
-) AS newest
-WHERE newest.unbound_at IS NULL";
+) AS latest
+WHERE latest.unbound_at IS NULL";
 
 /// Records every `assets.gateway_bound`; ignores the assets service's other events.
 #[derive(Clone, Copy, Debug, Default)]
@@ -95,6 +97,8 @@ impl Handler for GatewayBoundHandler {
             .bind(&binding_text)
             .bind(bound.hardware_id.as_str())
             .bind(delivery.envelope.occurred_at)
+            .bind(delivery.position.tx())
+            .bind(delivery.position.id())
             .execute(&mut **tx)
             .await
             .map_err(insert_error)?;
