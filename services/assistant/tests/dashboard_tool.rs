@@ -27,10 +27,10 @@ use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use assistant::dashboards::checker::CHECK_CALL_TIMEOUT;
+use assistant::dashboards::checker::{CHECK_CALL_TIMEOUT, Checker};
 use assistant::dashboards::store;
 use assistant::tools::dashboard::{
-    DATASETS_TIMEOUT, DashboardTool, MAX_WRITES_PER_QUESTION, SAVE_TIMEOUT,
+    DATASETS_TIMEOUT, DashboardTool, MAX_WRITES_PER_QUESTION, SAVE_TIMEOUT, WriteBounds,
 };
 use assistant::tools::{Tool, ToolContent, ToolContext, ToolError, ToolOutput};
 use check_stand_in::CheckStandIn;
@@ -39,7 +39,8 @@ use contract::api::dashboard::public::DashboardKind;
 use contract::api::dashboard::spec::MAX_PAGE_BYTES;
 use contract::{DashboardId, ServiceName, TenantId, TenantRole};
 use dashboard_world::{
-    Content, Peers, Person, Question, SQL_PATH, STATISTICS_PATH, World, dashboard_tool, spec, world,
+    Content, Peers, Person, Question, SQL_PATH, STATISTICS_PATH, World, dashboard_tool,
+    dashboard_tool_with, spec, world,
 };
 use serde_json::{Value, json};
 use support::Capture;
@@ -621,6 +622,138 @@ async fn the_model_learns_only_closed_values_and_its_own_data_from_a_verdict() {
     for value in chosen {
         assert!(!shown.contains(value), "{value}: {shown}");
     }
+}
+
+/// One tenant has one write in its datasets and check at a time (per replica): another write of
+/// the tenant waits up to the bound this test sets and is then `check_busy` without running
+/// anything or reaching the check, and is not counted against its question; other tenants'
+/// writes go on meanwhile.
+#[tokio::test]
+async fn a_tenant_checks_one_write_at_a_time_and_other_tenants_go_on() {
+    let Some(setup) = setup().await else {
+        return;
+    };
+    let wait = Duration::from_secs(1);
+    let tool = dashboard_tool_with(
+        &setup.world,
+        &setup.peers.url,
+        Checker::new(&setup.check.url, CHECK_CALL_TIMEOUT).expect("a checker"),
+        WriteBounds {
+            write_wait: wait,
+            ..WriteBounds::default()
+        },
+    );
+    let held = setup.check.hold("Held");
+    let first = tokio::spawn({
+        let tool = Arc::clone(&tool);
+        let question = setup.own_question();
+        async move { call(&tool, &question, new_dashboard("Held")).await }
+    });
+    setup.check.wait_requests(1).await;
+    let runs = setup.peers.calls().len();
+
+    // Another member of the tenant, in another conversation.
+    let colleague = setup.world.person(setup.owner.tenant(), TenantRole::Viewer);
+    let conversation = setup.world.conversation(&colleague).await;
+    let question = setup.question(&colleague, conversation);
+    let started = Instant::now();
+    let output = call(&tool, &question, new_dashboard("Second"))
+        .await
+        .expect("the write");
+    let result = json_of(&output);
+    assert_eq!(result["saved"], false, "{result}");
+    assert_eq!(result["problems"][0]["kind"], "check_busy", "{result}");
+    assert!(
+        started.elapsed() >= wait,
+        "it waited for the write in progress"
+    );
+    assert_eq!(
+        setup.check.requests().len(),
+        1,
+        "it never reached the check"
+    );
+    assert_eq!(setup.peers.calls().len(), runs, "it ran no dataset");
+
+    // Another tenant's write is checked and saved meanwhile.
+    let other = setup.world.person(TenantId::generate(), TenantRole::Editor);
+    let other_conversation = setup.world.conversation(&other).await;
+    let output = call(
+        &tool,
+        &setup.question(&other, other_conversation),
+        new_dashboard("Other"),
+    )
+    .await
+    .expect("the write");
+    assert_eq!(json_of(&output)["saved"], true, "{}", text(&output, 0));
+
+    // Released, the first write saves, and the tenant's next write goes through.
+    held.release();
+    let first = first.await.expect("the first write").expect("the write");
+    assert_eq!(json_of(&first)["saved"], true, "{}", text(&first, 0));
+    let output = call(&tool, &question, new_dashboard("Second"))
+        .await
+        .expect("the write");
+    assert_eq!(json_of(&output)["saved"], true, "{}", text(&output, 0));
+
+    // The busy write was not counted: the question still has its other writes.
+    let id: DashboardId =
+        serde_json::from_value(json_of(&output)["dashboard_id"].clone()).expect("an ID");
+    let mut heading = "Second".to_owned();
+    for base in 1..MAX_WRITES_PER_QUESTION {
+        let next = format!("Second {}", base + 1);
+        let output = call(&tool, &question, edit(id, base, &heading, &next))
+            .await
+            .expect("the write");
+        assert_eq!(json_of(&output)["saved"], true, "{}", text(&output, 0));
+        heading = next;
+    }
+}
+
+/// The checker client's places hold for all tenants: with one place, a write of another
+/// tenant waits up to the bound this test sets and is then `check_busy` without reaching the
+/// check.
+#[tokio::test]
+async fn the_checks_of_all_tenants_share_the_places() {
+    let Some(setup) = setup().await else {
+        return;
+    };
+    let wait = Duration::from_secs(1);
+    let tool = dashboard_tool_with(
+        &setup.world,
+        &setup.peers.url,
+        Checker::new(&setup.check.url, CHECK_CALL_TIMEOUT)
+            .expect("a checker")
+            .with_places(1, wait),
+        WriteBounds::default(),
+    );
+    let held = setup.check.hold("Held");
+    let first = tokio::spawn({
+        let tool = Arc::clone(&tool);
+        let question = setup.own_question();
+        async move { call(&tool, &question, new_dashboard("Held")).await }
+    });
+    setup.check.wait_requests(1).await;
+    let other = setup.world.person(TenantId::generate(), TenantRole::Editor);
+    let conversation = setup.world.conversation(&other).await;
+    let started = Instant::now();
+    let output = call(
+        &tool,
+        &setup.question(&other, conversation),
+        new_dashboard("Other"),
+    )
+    .await
+    .expect("the write");
+    let result = json_of(&output);
+    assert_eq!(result["problems"][0]["kind"], "check_busy", "{result}");
+    assert!(started.elapsed() >= wait, "it waited for a place");
+    assert_eq!(
+        setup.check.requests().len(),
+        1,
+        "it never reached the check"
+    );
+    held.release();
+    let first = first.await.expect("the first write").expect("the write");
+    assert_eq!(json_of(&first)["saved"], true, "{}", text(&first, 0));
 }
 
 #[tokio::test]

@@ -18,6 +18,12 @@
 //!   a pass the version is written ([`store`]). Anything else is up to [`MAX_PROBLEMS`]
 //!   structured problems of closed kinds, each with fixed English, and nothing is written.
 //!
+//! Per tenant and replica, one write at a time runs its datasets, its check and its save: a
+//! write that finds its tenant's slot taken waits up to [`WRITE_WAIT`] and is then `check_busy`,
+//! not counted against the question. So one tenant has one check in flight at a time and holds
+//! the results of one write; the checker client adds a limit for all tenants
+//! ([`crate::dashboards::checker::MAX_CHECKS_IN_FLIGHT`]).
+//!
 //! Per question (keyed by the run): at most [`MAX_WRITES_PER_QUESTION`] writes reach the dataset
 //! runs, and a dataset (its source and `max_rows`) runs once: a later write of the same question
 //! reuses its result. The results are kept until the question's deadline, within
@@ -37,7 +43,6 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
-use contract::DashboardId;
 use contract::api::dashboard::RuntimeVersion;
 use contract::api::dashboard::check::{
     self, CheckReport, CheckRequest, Locale, MAX_PROBLEMS, MarkReport, Problem, SizeLimit,
@@ -51,6 +56,7 @@ use contract::api::dashboard::spec::{
     Computation, Constant, Dataset, MAX_CONTENT_BYTES, MAX_DESCRIPTION_CHARS, MAX_PAGE_BYTES,
     MAX_TIME_ZONE_LEN, MAX_TITLE_CHARS, Spec, SpecError, SpecProblem, validate_version,
 };
+use contract::{DashboardId, TenantId};
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
 use service_kit::tenant::{BackgroundTenantDb, TenantTransaction};
@@ -58,6 +64,7 @@ use tokio::time::Instant;
 use uuid::Uuid;
 
 use crate::dashboards::checker::{CheckOutcome, Checker, Unavailable};
+use crate::dashboards::limits::KeyedSlots;
 use crate::dashboards::runner::{DatasetRunner, RunError, TelemetryError};
 use crate::dashboards::store::{self, Author, NewVersion, StoreError};
 use crate::model::BoxFuture;
@@ -77,6 +84,10 @@ pub const DATASETS_TIMEOUT: Duration = Duration::from_secs(120);
 
 /// How long saving a checked version may take: one transaction of the tenant.
 pub const SAVE_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// How long a write waits for its tenant's write in progress (per replica) before it is
+/// `check_busy`: most writes take a few seconds (cached datasets and the check).
+pub const WRITE_WAIT: Duration = Duration::from_secs(30);
 
 /// Added to the phases' bounds in a call's time limit, for the work between them (merging, the
 /// formula check, building the check request).
@@ -181,9 +192,28 @@ pub struct DashboardTool {
     db: BackgroundTenantDb,
     runner: Arc<DatasetRunner>,
     checker: Checker,
-    /// [`DATASETS_TIMEOUT`] in the service.
-    datasets_timeout: Duration,
+    bounds: WriteBounds,
+    /// One write per tenant past validation.
+    writes: KeyedSlots<TenantId>,
     questions: Mutex<Questions>,
+}
+
+/// The bounds of a write that tests shorten.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct WriteBounds {
+    /// Until the write's datasets have run: [`DATASETS_TIMEOUT`].
+    pub datasets_timeout: Duration,
+    /// For the tenant's write in progress: [`WRITE_WAIT`].
+    pub write_wait: Duration,
+}
+
+impl Default for WriteBounds {
+    fn default() -> Self {
+        Self {
+            datasets_timeout: DATASETS_TIMEOUT,
+            write_wait: WRITE_WAIT,
+        }
+    }
 }
 
 impl DashboardTool {
@@ -192,33 +222,35 @@ impl DashboardTool {
     /// The tool, writing through `db` (the service role's pool), running datasets with `runner`
     /// (shared with the public API) and checking pages with `checker`.
     pub fn new(db: BackgroundTenantDb, runner: Arc<DatasetRunner>, checker: Checker) -> Arc<Self> {
-        Self::with_datasets_timeout(db, runner, checker, DATASETS_TIMEOUT)
+        Self::with_bounds(db, runner, checker, WriteBounds::default())
     }
 
-    /// [`DashboardTool::new`] with another bound than [`DATASETS_TIMEOUT`] for the time until a
-    /// write's datasets have run: tests use a short one.
-    pub fn with_datasets_timeout(
+    /// [`DashboardTool::new`] with other [`WriteBounds`]: tests use short ones.
+    pub fn with_bounds(
         db: BackgroundTenantDb,
         runner: Arc<DatasetRunner>,
         checker: Checker,
-        datasets_timeout: Duration,
+        bounds: WriteBounds,
     ) -> Arc<Self> {
         Arc::new(Self {
             db,
             runner,
             checker,
-            datasets_timeout,
+            bounds,
+            writes: KeyedSlots::new(1),
             questions: Mutex::new(Questions::default()),
         })
     }
 
-    /// The time limit of one call: the bound until the datasets have run, the check's
-    /// ([`Checker::timeout`]) and the save's ([`SAVE_TIMEOUT`]), and a margin. Each phase ends on
-    /// its own bound with a result the model can act on, so this limit is a backstop; the
-    /// question's deadline still ends a call first.
+    /// The time limit of one call: the wait for the tenant's write in progress, the bound until
+    /// the datasets have run, the check's ([`Checker::timeout`]) and the save's
+    /// ([`SAVE_TIMEOUT`]), and a margin. Each phase ends on its own bound with a result the model
+    /// can act on, so this limit is a backstop; the question's deadline still ends a call first.
     #[must_use]
     pub fn call_limit(&self) -> Duration {
-        self.datasets_timeout
+        self.bounds
+            .write_wait
+            .saturating_add(self.bounds.datasets_timeout)
             .saturating_add(self.checker.timeout())
             .saturating_add(SAVE_TIMEOUT)
             .saturating_add(CALL_MARGIN)
@@ -940,7 +972,7 @@ impl DashboardTool {
         context: &ToolContext,
         input: WriteInput,
     ) -> Result<ToolOutput, ToolError> {
-        let datasets_by = Instant::now() + self.datasets_timeout;
+        let datasets_by = Instant::now() + self.bounds.datasets_timeout;
         if let Some(deadline) = context.delegation.deadline()
             && deadline.saturating_duration_since(Instant::now()) < MIN_TIME_FOR_A_WRITE
         {
@@ -993,6 +1025,22 @@ impl DashboardTool {
             log_refused(context, &target, &problems);
             return Ok(not_saved(problems));
         }
+        let waiting = Instant::now();
+        let Some(_slot) = self
+            .writes
+            .take(context.principal.tenant_id, self.bounds.write_wait)
+            .await
+        else {
+            tracing::info!(
+                run_id = %context.run_id,
+                conversation_id = %context.conversation_id,
+                tenant_id = %context.principal.tenant_id,
+                "the dashboard tool's write waited too long for its tenant's write in progress"
+            );
+            return Ok(not_saved(vec![unavailable_problem(Unavailable::Busy)]));
+        };
+        // The wait does not count against the bound for the datasets.
+        let datasets_by = datasets_by + waiting.elapsed();
         self.count_write(context)?;
         let results = match self.run_datasets(context, &spec, datasets_by).await? {
             Ok(results) => results,

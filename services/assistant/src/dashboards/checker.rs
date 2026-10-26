@@ -13,15 +13,23 @@
 //!   any of them.
 //! - Plain HTTP inside the mesh, where ztunnel adds mutual TLS; no proxy from the environment, no
 //!   redirects, like [`crate::callee`].
+//! - At most [`MAX_CHECKS_IN_FLIGHT`] checks of this replica at a time, from building the request
+//!   body to the validated verdict, taken in the order asked for: a check waits up to
+//!   [`CHECK_QUEUE_WAIT`] for a place and is [`Unavailable::Busy`] after it, without calling the
+//!   service. One tenant has at most one check among them: the `dashboard` tool takes the
+//!   tenant's write slot first ([`crate::tools::dashboard`]).
 
+use std::sync::Arc;
 use std::time::Duration;
 
 use contract::api::dashboard::check::{
     CHECK_ROUTE, CheckReport, CheckRequest, CheckVerdict, MAX_CHECK_REQUEST_BYTES, Problem,
 };
 use reqwest::header::{ACCEPT, CONTENT_TYPE};
+use tokio::sync::Semaphore;
 use tokio::time::Instant;
 
+use super::limits;
 use crate::callee::{read_limited, status_class};
 use crate::tools::{ToolContext, millis};
 
@@ -36,12 +44,24 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 /// The largest verdict read: `MAX_MARKS` marks, each a reference and its value.
 pub const MAX_VERDICT_BYTES: usize = 4 << 20;
 
-/// The check service's client. Cheap to clone.
+/// The most checks of this replica at a time: the one the service runs and one waiting in its
+/// queue. Each holds its request body (at most `MAX_CHECK_REQUEST_BYTES`) and its verdict (at
+/// most [`MAX_VERDICT_BYTES`]).
+pub const MAX_CHECKS_IN_FLIGHT: usize = 2;
+
+/// How long a check waits for one of the [`MAX_CHECKS_IN_FLIGHT`] places before it is
+/// [`Unavailable::Busy`]: a check takes a few seconds, at most the service's 15-second limit and
+/// its clean-up.
+pub const CHECK_QUEUE_WAIT: Duration = Duration::from_secs(30);
+
+/// The check service's client. Cheap to clone; the clones share the places.
 #[derive(Clone, Debug)]
 pub struct Checker {
     http: reqwest::Client,
     url: reqwest::Url,
     timeout: Duration,
+    places: Arc<Semaphore>,
+    queue_wait: Duration,
 }
 
 /// The client could not be built.
@@ -68,7 +88,8 @@ pub enum CheckOutcome {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Unavailable {
     /// The service is running another check and its queue is full, or the wait was too long
-    /// (503).
+    /// (503); or no place came free in this replica within [`CHECK_QUEUE_WAIT`], or the
+    /// question's tenant has another write in its check (`dashboard` tool).
     Busy,
     /// The service could not be reached.
     Unreachable,
@@ -99,8 +120,9 @@ impl Unavailable {
 }
 
 impl Checker {
-    /// A client of the service at `base_url` (`dashboard_check.url`), with `timeout` per check
-    /// ([`CHECK_CALL_TIMEOUT`] in the service).
+    /// A client of the service at `base_url` (`dashboard_check.url`), with `timeout` per call
+    /// ([`CHECK_CALL_TIMEOUT`] in the service), [`MAX_CHECKS_IN_FLIGHT`] places and
+    /// [`CHECK_QUEUE_WAIT`].
     ///
     /// # Errors
     ///
@@ -118,19 +140,40 @@ impl Checker {
             .redirect(reqwest::redirect::Policy::none())
             .build()
             .map_err(CheckerConfigError::Client)?;
-        Ok(Self { http, url, timeout })
+        Ok(Self {
+            http,
+            url,
+            timeout,
+            places: Arc::new(Semaphore::new(MAX_CHECKS_IN_FLIGHT)),
+            queue_wait: CHECK_QUEUE_WAIT,
+        })
     }
 
-    /// The longest one check takes: the `timeout` it was built with.
+    /// This client with `places` checks at a time (at least one) and `queue_wait` for a place:
+    /// tests use fewer and shorter.
+    #[must_use]
+    pub fn with_places(mut self, places: usize, queue_wait: Duration) -> Self {
+        self.places = Arc::new(Semaphore::new(places.max(1)));
+        self.queue_wait = queue_wait;
+        self
+    }
+
+    /// The longest one check takes: the wait for a place, then the call's `timeout`.
     #[must_use]
     pub const fn timeout(&self) -> Duration {
-        self.timeout
+        self.queue_wait.saturating_add(self.timeout)
     }
 
     /// Checks `request` for the question of `context`, and logs one line with the outcome.
     pub async fn check(&self, context: &ToolContext, request: &CheckRequest) -> CheckOutcome {
         let started = Instant::now();
-        let (outcome, status) = self.send(request).await;
+        let (outcome, status) = match limits::take(Arc::clone(&self.places), self.queue_wait).await
+        {
+            // The place is held until the verdict is validated: the body and the verdict are
+            // both in memory until then.
+            Some(_place) => self.send(request).await,
+            None => (CheckOutcome::Unavailable(Unavailable::Busy), None),
+        };
         let (name, problems) = match &outcome {
             CheckOutcome::Passed(_) => ("passed", 0),
             CheckOutcome::Failed(problems) => ("failed", problems.len()),

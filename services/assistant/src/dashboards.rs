@@ -8,6 +8,7 @@
 //! - [`runner`]: dataset runs at telemetry-query as the caller, within the caps of [`caps`],
 //!   flattened by [`flatten`] for semantic sources.
 //! - [`checker`]: the dashboard check, which passes a page before the tool writes it.
+//! - [`limits`]: the other limits of one replica (the tool's writes per tenant).
 //! - The public API over both: [`crate::api`].
 //!
 //! The `dashboard` tool ([`crate::tools::dashboard`]) writes drafts through [`store`] in a
@@ -18,5 +19,6 @@
 pub mod caps;
 pub mod checker;
 pub mod flatten;
+pub mod limits;
 pub mod runner;
 pub mod store;

@@ -8,6 +8,7 @@
 )]
 
 use std::sync::{Arc, Mutex, PoisonError};
+use std::time::{Duration, Instant};
 
 use axum::Router;
 use axum::body::Bytes;
@@ -18,7 +19,12 @@ use axum::routing::post;
 use contract::api::dashboard::check::{CHECK_ROUTE, CheckRequest};
 use serde_json::{Value, json};
 use tokio::net::TcpListener;
+use tokio::sync::Semaphore;
 use tokio::task::JoinHandle;
+
+/// The longest a test waits for the stand-in to receive a request: generous, for a loaded
+/// machine.
+const WAIT: Duration = Duration::from_secs(60);
 
 /// How the stand-in answers a request: a status and a body, sent as JSON.
 pub type CheckScript = Arc<dyn Fn(&CheckRequest) -> (u16, String) + Send + Sync>;
@@ -27,6 +33,24 @@ struct CheckState {
     /// Every request, as sent.
     requests: Mutex<Vec<Value>>,
     script: Mutex<Option<CheckScript>>,
+    /// Requests whose page contains the text wait for the gate before they are answered.
+    hold: Mutex<Option<(String, Arc<Semaphore>)>>,
+}
+
+/// Holds the requests [`CheckStandIn::hold`] names until it is released or dropped.
+pub struct Held(Arc<Semaphore>);
+
+impl Held {
+    /// Answers the held requests and every later one.
+    pub fn release(&self) {
+        self.0.close();
+    }
+}
+
+impl Drop for Held {
+    fn drop(&mut self) {
+        self.release();
+    }
 }
 
 /// The stand-in check service.
@@ -52,6 +76,7 @@ impl CheckStandIn {
         let state = Arc::new(CheckState {
             requests: Mutex::new(Vec::new()),
             script: Mutex::new(None),
+            hold: Mutex::new(None),
         });
         let router = Router::new()
             .route(CHECK_ROUTE, post(check))
@@ -84,6 +109,26 @@ impl CheckStandIn {
     pub fn requests(&self) -> Vec<Value> {
         lock(&self.state.requests).clone()
     }
+
+    /// Waits until the stand-in received `count` requests.
+    pub async fn wait_requests(&self, count: usize) {
+        let deadline = Instant::now() + WAIT;
+        while self.requests().len() < count {
+            assert!(
+                Instant::now() < deadline,
+                "the check stand-in did not receive {count} requests within {WAIT:?}"
+            );
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    }
+
+    /// From now on, a request whose page contains `marker` is recorded and then waits until the
+    /// returned [`Held`] is released or dropped.
+    pub fn hold(&self, marker: &str) -> Held {
+        let gate = Arc::new(Semaphore::new(0));
+        *lock(&self.state.hold) = Some((marker.to_owned(), Arc::clone(&gate)));
+        Held(gate)
+    }
 }
 
 /// A passing verdict that reports every dataset's row count.
@@ -112,6 +157,13 @@ async fn check(State(state): State<Arc<CheckState>>, body: Bytes) -> Response {
     let Ok(request) = serde_json::from_value::<CheckRequest>(value) else {
         return (StatusCode::BAD_REQUEST, "not a check request").into_response();
     };
+    let hold = lock(&state.hold).clone();
+    if let Some((marker, gate)) = hold
+        && request.page.contains(&marker)
+    {
+        // Closed when released: every waiter goes on.
+        let _ = gate.acquire().await;
+    }
     let script = lock(&state.script).clone();
     let (status, body) = match script {
         Some(script) => script(&request),

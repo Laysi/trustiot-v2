@@ -43,7 +43,7 @@ use assistant::dashboards::runner::DatasetRunner;
 use assistant::dashboards::store::{self, Author, NewVersion, Requester, StoreError};
 use assistant::delegation::IDENTITY_TIMEOUT;
 use assistant::history::Principal;
-use assistant::tools::dashboard::DashboardTool;
+use assistant::tools::dashboard::{DashboardTool, WriteBounds};
 use assistant::tools::{Delegation, DelegationError};
 use axum::Router;
 use axum::body::Bytes;
@@ -291,6 +291,25 @@ pub fn dashboard_tool(
     check_timeout: Duration,
     datasets_timeout: Duration,
 ) -> Arc<DashboardTool> {
+    let checker = Checker::new(check_url, check_timeout).expect("a checker");
+    dashboard_tool_with(
+        world,
+        telemetry_url,
+        checker,
+        WriteBounds {
+            datasets_timeout,
+            ..WriteBounds::default()
+        },
+    )
+}
+
+/// [`dashboard_tool`] with `checker` and `bounds` as the test makes them.
+pub fn dashboard_tool_with(
+    world: &World,
+    telemetry_url: &str,
+    checker: Checker,
+    bounds: WriteBounds,
+) -> Arc<DashboardTool> {
     let (_, background) = TenantDb::connect_lazy_with_background(
         world.product.postgres.options("assistant_app", DATABASE),
         PgPoolOptions::new().max_connections(4),
@@ -304,8 +323,7 @@ pub fn dashboard_tool(
     )
     .expect("a client for telemetry-query");
     let runner = Arc::new(DatasetRunner::new(Some(telemetry), RunCaps::default()));
-    let checker = Checker::new(check_url, check_timeout).expect("a checker");
-    DashboardTool::with_datasets_timeout(background, runner, checker, datasets_timeout)
+    DashboardTool::with_bounds(background, runner, checker, bounds)
 }
 
 /// The database, the role and the token issuer.
