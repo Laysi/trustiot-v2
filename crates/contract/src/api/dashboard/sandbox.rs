@@ -18,10 +18,26 @@
 //! Evaluating the page's text gives it no capability it lacks: the page is already arbitrary
 //! script, and the document may load and connect to nothing (`default-src 'none'`, every fetch
 //! directive `'none'`), has an opaque origin (`sandbox allow-scripts` without
-//! `allow-same-origin`), and cannot navigate, open windows or submit forms.
+//! `allow-same-origin`), and cannot open windows, submit forms or navigate the top-level page.
+//! Where the sandbox's own frame may navigate is decided by the embedding page's CSP
+//! (`frame-src`), not by these headers: [`CHECK_HOST_CSP`] for the checker, and the SPA's CSP
+//! at display time (Laysi/trustiot-v2#462), which must allow no frame source but the sandbox.
 //!
-//! WebAssembly stays blocked (no `'wasm-unsafe-eval'`). What these headers do not cover is
-//! tracked in Laysi/trustiot-v2#699.
+//! `'unsafe-eval'` also allows `eval` and compiling WebAssembly; neither adds a capability, as
+//! both only compute inside the same document.
+//!
+//! `script-src 'self'` and `style-src 'self'` let the document load the runtime's files from
+//! the host that serves them, and so they also let a page script request any path of that
+//! host as a script or stylesheet. Such a request reaches only the platform's own host and
+//! carries no cookie: the document's origin is opaque, so the browser treats it as a request
+//! from another site and leaves out the `SameSite=Lax` session cookie (both checked in
+//! Chromium on 2026-10-26). The checker's contract is to refuse every such request and fail
+//! the page with `check::Problem::Requested` (`frontend/sandbox/README.md`, 「檢查規則」 and
+//! 「檢查服務的流程」; `services/dashboard-check` is still a skeleton and implements it with the
+//! rest of Laysi/trustiot-v2#150). A page could still make such a request only when it is
+//! displayed, which is why what the request can reach matters.
+//!
+//! What these headers do not cover is tracked in Laysi/trustiot-v2#699.
 
 use http::HeaderName;
 use http::header::{CONTENT_SECURITY_POLICY, REFERRER_POLICY, X_CONTENT_TYPE_OPTIONS};
@@ -76,6 +92,8 @@ pub const SANDBOX_CORP: &str = "cross-origin";
 
 /// The headers of the sandbox document, besides `Content-Type: text/html; charset=utf-8` and
 /// the server's cache policy. No `X-Frame-Options`: `frame-ancestors` decides who embeds it.
+/// They replace the SPA's document headers rather than add to them: a browser enforces every
+/// CSP header it gets, and the SPA's `frame-ancestors 'none'` would forbid the frame.
 pub static SANDBOX_DOCUMENT_HEADERS: [(HeaderName, &str); 5] = [
     (CONTENT_SECURITY_POLICY, SANDBOX_CSP),
     (X_CONTENT_TYPE_OPTIONS, "nosniff"),

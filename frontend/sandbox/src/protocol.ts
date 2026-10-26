@@ -306,6 +306,7 @@ const tag = z.string().optional();
 export const ProblemSchema = z.discriminatedUnion("kind", [
   z.strictObject({ kind: z.literal("not_rendered") }),
   z.strictObject({ kind: z.literal("navigated") }),
+  z.strictObject({ kind: z.literal("requested") }),
   z.strictObject({ kind: z.literal("script_error"), message: z.string().max(MAX_SCRIPT_MESSAGE_CHARS).optional() }),
   z.strictObject({ kind: z.literal("unmapped"), reference: reference.optional(), tag }),
   z.strictObject({ kind: z.literal("mismatch"), reference, value: cell, tag }),

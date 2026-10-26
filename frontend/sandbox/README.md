@@ -20,7 +20,8 @@
 | `/sandbox/v1/compare.js` | 比對程式：定義 `globalThis.tqCompare`，自帶 d3-format 與 d3-time-format 及計算語言，不依賴頁面的 `window` | 是 |
 | `/sandbox/check.html`、`/sandbox/check.js` | 檢查服務的 host 頁：建立沙箱 iframe、送資料、回報狀態給驅動程式 | 否 |
 
-- 路徑與每個檔案的 header 由 `contract::api::dashboard::sandbox::SandboxFile` 定義（`path`、`content_type`、`headers`），檢查服務與 `services/web` 照它送出，不各自定義。
+- 路徑與每個檔案的 header 由 `contract::api::dashboard::sandbox::SandboxFile` 定義（`path`、`content_type`、`headers`），檢查服務與 `services/web` 照它送出，不各自定義。`services/web` 給這些檔案的 header 要取代 SPA 的 header，不能疊加：瀏覽器會同時套用每個 CSP header，SPA 的 `frame-ancestors 'none'` 會讓沙箱框不進來。
+- 沙箱 frame 自己能導向到哪裡，由外層頁面的 CSP `frame-src` 決定，不由沙箱文件的 header 決定：檢查服務的 host 頁是 `CHECK_HOST_CSP`；檢視時 SPA 的 CSP（Laysi/trustiot-v2#462）除了沙箱之外不能允許其他 frame 來源。
 - host adapter（postMessage 的外層）是 TypeScript 模組，SPA 與 `check.js` 各自打包進去，不是獨立檔案。
 - 每個 runtime 版本的檔案一旦發布就不再改變行為：已檢查過的儀表板版本永遠以它的 runtime 執行。改 `window.tq`、計算語言、格式化或檢查規則的行為要開新的版本目錄（`/sandbox/v2/`），並在 `RuntimeVersion::SHIPPED` 與 `protocol.ts` 的 `RUNTIMES` 加上它；只有安全修正可以改舊版本的檔案。
 - 沙箱文件的 CSP 不允許 inline script，所以 `sandbox.html` 只以 `<script src>` 載入檔案。
@@ -143,7 +144,7 @@ runtime 收到 `data` 後呼叫 `render(tq)`。這一代算畫完的條件：
 
 ## 檢查規則
 
-比對程式依下列規則判定，每條規則對應判定的一個問題類別（`contract::api::dashboard::check::Problem`；每個類別有固定的英文提示，`ProblemKind::hint`）。「根」是 `#tq-root`。
+這一節是契約，實作隨 Laysi/trustiot-v2#150 的其餘部分加入：比對程式與檢查服務依下列規則判定，每條規則對應判定的一個問題類別（`contract::api::dashboard::check::Problem`；每個類別有固定的英文提示，`ProblemKind::hint`）。「根」是 `#tq-root`。
 
 | 規則 | 不符時的類別 |
 | --- | --- |
@@ -151,6 +152,7 @@ runtime 收到 `data` 後呼叫 `render(tq)`。這一代算畫完的條件：
 | 回傳後在時限內畫完（靜止 200 ms）；整個檢查在 15 秒內 | `timeout`（`phase`：`render` 或 `check`） |
 | 沒有任何 script 例外或未處理的 rejection（含非同步的） | `script_error`（訊息由檢查服務以 CDP 取得，最多 200 字元，移除控制與不可見字元） |
 | 沙箱 frame 沒有導向、沒有開新視窗、沒有送出表單 | `navigated` |
+| 沙箱除了自己 runtime 版本的檔案之外，沒有請求任何檔案（CSP 的 `'self'` 允許同一主機的 script 與樣式表；檢視時這種請求會從使用者的瀏覽器送到平台的主機） | `requested` |
 | 每個 `data-tq` 都是合法參照，而且對得到資料：資料集、欄、列、計算、常數都存在 | `unmapped`（參照的名稱都是宣告過的才回傳參照，否則只回元素的標籤） |
 | `tq.text` 標記的元素，`textContent` 等於 `tq.format(值, data-tq-format)` | `mismatch`（回傳參照與資料裡的值） |
 | 根之下所有 SVG 圖形（`rect`、`circle`、`ellipse`、`line`、`path`、`polygon`、`polyline`）都在 `tq.mark`、`tq.axis` 或 `tq.decor` 之下 | `unmapped`（沒有參照，回傳標籤） |
@@ -169,6 +171,7 @@ runtime 收到 `data` 後呼叫 `render(tq)`。這一代算畫完的條件：
 - 折線與面積的路徑（`path`）只能標成 `tq.decor`，形狀不檢查；要檢查的值另外以點（`tq.mark` 的 `x`、`y`）標記。
 - 以 HTML 元素的寬高畫的長條沒有標記時看不出來；圖形一律用 SVG 並以 `tq.mark` 標記。
 - 用文字寫數字（「一百二十」），以及依時間或環境改變內容的頁面，檢查擋不住；所以檢視時前端再比對一次（Laysi/trustiot-v2#462）。
+- 只在檢視時才發出的同主機請求（`requested` 那一列）檢查看不到。這種請求只到平台自己的主機，也不帶 cookie，理由與 2026-10-26 的實測見 `crates/contract/src/api/dashboard/sandbox.rs` 的模組說明。
 - 沙箱還沒處理的外送缺口在 Laysi/trustiot-v2#699。
 
 ## 比對程式（`compare.js`）
@@ -176,17 +179,17 @@ runtime 收到 `data` 後呼叫 `render(tq)`。這一代算畫完的條件：
 `compare.js` 定義 `globalThis.tqCompare(input)`：
 
 - 輸入是 `CompareInput`（`protocol.ts`）：`runtime`、`spec`（公開部分）、`datasets`（結果）、`locale`、`tz`。輸入一律由呼叫端提供，從不讀頁面或 runtime 的狀態；比對程式自己解析參照、計算公式、格式化。
-- 輸出是判定（`CheckVerdict`）：通過時 `{verdict: "passed", report: {marks}}`，否則 `{verdict: "failed", problems}`。CDP 才看得到的問題（`script_error`、`navigated`、shadow root、`timeout`）由檢查服務補上。
+- 輸出是判定（`CheckVerdict`）：通過時 `{verdict: "passed", report: {marks}}`，否則 `{verdict: "failed", problems}`。CDP 才看得到的問題（`script_error`、`navigated`、`requested`、shadow root、`timeout`）由檢查服務補上。
 - 檢查時，檢查服務以 CDP 在沙箱 frame 建立 isolated world 後注入並呼叫它：頁面改寫 DOM 原型或全域物件騙不到它。
 - 檢視時（Laysi/trustiot-v2#462），runtime 在頁面的 script 執行**之前**載入它，先保存原始的 DOM 函式（`Node.prototype.textContent` 的 getter、`Element.prototype.getAttribute`、`querySelectorAll`、`getBoundingClientRect` 等）與 `postMessage`，畫完後在頁面的 realm 比對，把對不到資料或不相符的值換成「—」並標示。這個結果只用來顯示，從不當作判定：頁面在同一個 realm 裡還是能干擾它。
 
 ## 檢查服務的流程
 
-`services/dashboard-check` 收到 `CheckRequest`（`contract::api::dashboard::check`）後，細節由該服務決定，順序如下：
+`services/dashboard-check`（目前只是骨架）收到 `CheckRequest`（`contract::api::dashboard::check`）後要依下列順序處理，細節由該服務決定：
 
 1. 驗證請求（`CheckRequest::validate`），runtime 版本要是建置裡有的。
 2. 啟動新的 `chromium-headless-shell` 行程（`--remote-debugging-pipe`、`--no-sandbox`、全新的 profile），一次只做一個檢查。
-3. 以 CDP `Fetch` 攔截所有請求，從映像裡的前端建置結果供給 `SandboxFile` 的檔案與 `/sandbox/check.html`、`/sandbox/check.js`，header 用 `SANDBOX_DOCUMENT_HEADERS`、`SANDBOX_ASSET_HEADERS`、`CHECK_HOST_HEADERS`；來源用不會解析的固定 origin（例如 `https://check.invalid`）。其他請求一律拒絕；沙箱 frame 的文件請求只要不是預期的那一個，就判 `navigated`。
+3. 以 CDP `Fetch` 攔截所有請求，從映像裡的前端建置結果供給 `SandboxFile` 的檔案與 `/sandbox/check.html`、`/sandbox/check.js`，header 用 `SANDBOX_DOCUMENT_HEADERS`、`SANDBOX_ASSET_HEADERS`、`CHECK_HOST_HEADERS`；來源用不會解析的固定 origin（例如 `https://check.invalid`）。其他請求一律拒絕；沙箱 frame 的文件請求只要不是預期的那一個，就判 `navigated`，沙箱 frame 的其他請求只要不是該 runtime 版本的檔案，就判 `requested`（判定裡不放網址）。
 4. 打開 host 頁，以 `Runtime.evaluate` 交給它 `init` 與 `data` 的內容（host 頁在可信的那一層，頁面碰不到）；host 頁透過 `Runtime.addBinding` 回報 `ready`、`rendered`、`error` 與時間。
 5. 收集沙箱 frame 的 `Runtime.exceptionThrown`（`script_error`）、`Page.frameNavigated` 與視窗開啟（`navigated`），以 `DOM.getDocument`（`pierce: true`）找 shadow root。
 6. 等 `rendered` 或時限；之後在沙箱 frame 以 `Page.createIsolatedWorld` 建立 isolated world，先確認 200 ms 靜止，再注入 `compare.js` 並以請求的內容呼叫 `tqCompare`。

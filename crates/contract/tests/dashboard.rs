@@ -479,6 +479,7 @@ fn verdict_failed() -> CheckVerdict {
             },
             Problem::NotRendered,
             Problem::Navigated,
+            Problem::Requested,
             Problem::Timeout {
                 phase: TimeoutPhase::Render,
             },

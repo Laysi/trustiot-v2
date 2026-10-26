@@ -323,6 +323,11 @@ pub enum Problem {
     /// The page tried to leave: a navigation of the sandbox frame, a form submission or a
     /// window.
     Navigated,
+    /// The sandbox requested a file other than its runtime version's own, such as a script or
+    /// stylesheet of the same host, which the sandbox's CSP lets through (`'self'`). Added beside
+    /// the decided kinds: at display time such a request would leave the viewer's browser for
+    /// the platform's host, so a page that makes one is not published.
+    Requested,
     /// A script threw, synchronously or later.
     ScriptError {
         /// The exception's message, at most [`MAX_SCRIPT_MESSAGE_CHARS`] characters; absent when
@@ -458,6 +463,7 @@ pub enum ContentKind {
 pub enum ProblemKind {
     NotRendered,
     Navigated,
+    Requested,
     ScriptError,
     Unmapped,
     Mismatch,
@@ -481,6 +487,10 @@ impl ProblemKind {
             Self::Navigated => {
                 "The page tried to navigate, open a window or submit a form; a dashboard page \
                  only draws inside its frame."
+            }
+            Self::Requested => {
+                "The page requested a file: a dashboard page loads nothing. The runtime already \
+                 provides d3 and tq, and data comes only from tq.dataset."
             }
             Self::ScriptError => {
                 "A page script threw an exception; fix the script (the message, when present, is \
@@ -531,6 +541,7 @@ impl Problem {
         match self {
             Self::NotRendered => ProblemKind::NotRendered,
             Self::Navigated => ProblemKind::Navigated,
+            Self::Requested => ProblemKind::Requested,
             Self::ScriptError { .. } => ProblemKind::ScriptError,
             Self::Unmapped { .. } => ProblemKind::Unmapped,
             Self::Mismatch { .. } => ProblemKind::Mismatch,
@@ -620,6 +631,7 @@ impl CheckVerdict {
                     match problem {
                         Problem::NotRendered
                         | Problem::Navigated
+                        | Problem::Requested
                         | Problem::Timeout { .. }
                         | Problem::TooLarge { .. }
                         | Problem::UnsupportedContent { .. }
@@ -1039,6 +1051,7 @@ mod tests {
         let problems = [
             Problem::NotRendered,
             Problem::Navigated,
+            Problem::Requested,
             Problem::ScriptError { message: None },
             Problem::Unmapped {
                 reference: None,
