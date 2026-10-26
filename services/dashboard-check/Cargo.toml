@@ -17,6 +17,12 @@ path = "src/main.rs"
 test = false
 doc = false
 
+[[test]]
+name = "pid1_cleanup"
+# Its own main instead of libtest's: the same binary is the driver, the container's PID 1 and
+# the process the cleanup must remove (tests/pid1_cleanup.rs).
+harness = false
+
 [dependencies]
 axum = { workspace = true, features = ["http1", "json", "tokio"] }
 # The sandbox's files travel to the browser base64-encoded (Fetch.fulfillRequest).

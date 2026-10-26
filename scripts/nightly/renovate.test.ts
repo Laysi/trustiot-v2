@@ -316,8 +316,9 @@ describe("every copy of a pin is updated by the same pull request", () => {
     // The chart, the dev environment, crates/protocol/tests, tools/migrate/tests and
     // services/certs/tests (workstation.rs, broker.rs and broker_certificate.rs).
     expect(copies("docker.io/library/eclipse-mosquitto")).toBe(7);
-    // The dashboard check image's own Containerfile is the fifth (Laysi/trustiot-v2#150).
-    expect(copies("gcr.io/distroless/cc-debian13")).toBe(5);
+    // The dashboard check image's own Containerfile is the fifth, and its PID 1 cleanup test
+    // (services/dashboard-check/tests/pid1_cleanup.rs) the sixth (Laysi/trustiot-v2#150).
+    expect(copies("gcr.io/distroless/cc-debian13")).toBe(6);
   });
 
   test("ClickHouse gets LTS minors only, and its floating tag is one", () => {
