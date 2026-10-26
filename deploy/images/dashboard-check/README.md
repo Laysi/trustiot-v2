@@ -21,7 +21,7 @@ release.yml、nightly 與映像測試用同一份 build context（`scripts/relea
 
 arm64 那一層沒有 `RUN`，所以 x86 的機器不用模擬器也能建置：
 
-1. `chromium` 階段在建置機器自己的平台上執行（`FROM --platform=$BUILDPLATFORM` 的 `debian:trixie-slim`，以 digest 釘選）。apt 用自己的設定：架構是 arm64，唯一的來源是 `snapshot.debian.org` 上 `DEBIAN_SNAPSHOT` 那個時間的 `trixie`、`trixie-updates` 與 `trixie-security`，以該階段 `debian-archive-keyring` 的 Debian 金鑰驗證 Release 簽章，再以簽過的索引檢查每個下載檔案的 SHA-256。apt 只下載（`--download-only`），不安裝。
+1. `chromium` 階段在建置機器自己的平台上執行（`FROM --platform=$BUILDPLATFORM` 的 `debian:trixie-slim`，以 digest 釘選）。apt 用自己的設定：架構是 arm64，唯一的來源是 `snapshot.debian.org` 上 `DEBIAN_SNAPSHOT` 那個時間的 `trixie`、`trixie-updates` 與 `trixie-security`，一律走 https，以基底映像（以 digest 釘選）的 CA bundle 驗證伺服器憑證；再以該階段 `debian-archive-keyring` 的 Debian 金鑰驗證 Release 簽章，以簽過的索引檢查每個下載檔案的 SHA-256。snapshot 的 Release 檔保留原本的有效期限，所以不檢查期限（`Check-Valid-Until`），索引來自 snapshot 伺服器本身由 https 保證。apt 只下載（`--download-only`），不安裝。沒有另外釘選每個 `.deb` 的 SHA-256：那會讓 Renovate 更新 Chromium 的 pull request 還得手動補上每個套件的雜湊。
 2. 套件資料庫是基底映像的套件，所以 apt 只下載基底沒有的；下列套件標成已安裝但其實不在映像裡，也不寫進映像的套件資料庫：`awk`、`debconf`、`openssl`、`openssl-provider-legacy`（基底套件的依賴，distroless 本來就沒有；`debconf` 只給不會執行的 maintainer script 用），以及 `x11-utils`、`xdg-utils`（`chromium-common` 給桌面瀏覽器的輔助 script 用，headless shell 不會執行）。
 3. 每個下載的套件以 `dpkg-deb --extract` 解開到 `/rootfs`，不執行任何 maintainer script，控制欄位與檔案的 md5sums 寫到 `/rootfs/var/lib/dpkg/status.d/`。基底已有的套件只能升級（Debian 小版本更新時），版本比基底舊就停止；Chromium 的版本不是 `CHROMIUM_VERSION` 就停止；有 set-user-ID 或 set-group-ID 的檔案就停止。文件、man page 與語系檔刪掉（保留 `copyright`）。
 4. 最後一層以基底為底，只有 `COPY`：`/rootfs`、執行檔與 `www/sandbox/`。

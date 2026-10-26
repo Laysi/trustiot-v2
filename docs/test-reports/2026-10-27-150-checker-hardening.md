@@ -74,3 +74,28 @@ docker run --rm --network none -v "$PWD:/w:ro" --tmpfs /tmp:rw,mode=1777 -e HOME
 
 - 探測計畫、判定（含 TLS alert 的拒絕）與 script：通過（單元測試）。
 - 在真的叢集（Istio ambient、k3s）裡全部沒有回應：待測，由 coordinator 加上 `smoke` 標籤的 nightly 執行。
+
+## 3. 映像的 Debian 套件改走 https
+
+`deploy/images/dashboard-check/Containerfile` 的 snapshot 來源改成 `https://snapshot.debian.org/...`，apt 以基底映像（以 digest 釘選）的 CA bundle 驗證伺服器憑證（`Acquire::https::CaInfo`）。`Check-Valid-Until "false"` 保留（snapshot 的 Release 檔保留原本的有效期限）。
+
+### 指令
+
+```sh
+# Containerfile 的靜態規則（不建映像；DASHBOARD_CHECK_IMAGE 指向自己的標籤，所以不會重建 :image-test）
+DASHBOARD_CHECK_IMAGE=localhost/trustiot-e2e/dashboard-check:hardening-y bun test deploy/images/dashboard-check -t "Containerfile"
+
+# 以 scripts/nightly/service-image.ts 的 buildServiceImage 建出 localhost/trustiot-e2e/dashboard-check:hardening-y，再跑整個映像測試
+DASHBOARD_CHECK_IMAGE=localhost/trustiot-e2e/dashboard-check:hardening-y bun test deploy/images/dashboard-check
+```
+
+### 結果
+
+- 修正前：靜態規則「takes every package from the pinned Debian snapshot over https」失敗（Containerfile 是 `URIs: http://snapshot.debian.org/...`）。
+- 修正後：靜態規則 6 個全過；映像建置的 apt 輸出每一筆都是 `https://snapshot.debian.org/...`（共下載 157 MB），解開的 `/rootfs` 與修正前建出的層相同（Docker 的快取命中），表示拿到的是同一批套件。
+- 映像測試（manifest list `sha256:ceb0ff53a1a0fb07172d6d47c54854a74cde6ff55b25d65a07a2ff53d2da0143`，也含第 1 節的清理）：44 個全過，0 失敗；33 次檢查，每次 152–5167 ms（中位數 407 ms），容器記憶體最高讀數 167.3 MiB（上限 512Mi）；「檢查後沒有留下瀏覽器行程」通過，服務以 PID 1 的清理在真的 Chromium 之後執行。
+
+### 結論
+
+- 套件只經 https 從 snapshot 伺服器取得、映像測試全部通過：通過。
+- 沒有另外釘選每個 `.deb` 的 SHA-256：Renovate 更新 Chromium 的 pull request 會需要手動補上每個套件的雜湊，所以不做（`deploy/images/dashboard-check/README.md`）。

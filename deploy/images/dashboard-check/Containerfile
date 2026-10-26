@@ -34,11 +34,17 @@ USER root
 
 # The packages of the final image's base, so apt downloads only what it lacks.
 COPY --from=base /var/lib/dpkg/status.d/ /target/status.d/
+# The CA bundle of the final image's base (pinned by digest above), for apt's https: this stage
+# has no ca-certificates of its own.
+COPY --from=base /etc/ssl/certs/ca-certificates.crt /apt/ca-certificates.crt
 
 # apt runs with a configuration of its own under /apt: the target's architecture, the snapshot as
-# the only source, signed by Debian's archive keys (debian-archive-keyring of this stage), and a
-# package database made of the base image's packages. apt checks the Release signatures and every
-# downloaded file's SHA-256 against the signed index; nothing is installed in this stage.
+# the only source, fetched over https and signed by Debian's archive keys (debian-archive-keyring
+# of this stage), and a package database made of the base image's packages. apt checks the
+# snapshot server's certificate against the base image's CA bundle, the Release signatures, and
+# every downloaded file's SHA-256 against the signed index; nothing is installed in this stage.
+# A snapshot's Release files keep their original Valid-Until, so that check is off
+# (Check-Valid-Until); https is what makes the index come from the snapshot server itself.
 # Some packages are listed as installed although they are not, so apt does not download them;
 # they are not in the image's package database either:
 # - awk, debconf, openssl, openssl-provider-legacy: dependencies of the base's own packages
@@ -56,13 +62,13 @@ RUN set -eu; \
     chown _apt:root /apt/state/lists/partial /apt/cache/archives/partial; \
     printf '%s\n' \
       'Types: deb' \
-      "URIs: http://snapshot.debian.org/archive/debian/${DEBIAN_SNAPSHOT}" \
+      "URIs: https://snapshot.debian.org/archive/debian/${DEBIAN_SNAPSHOT}" \
       'Suites: trixie trixie-updates' \
       'Components: main' \
       'Signed-By: /usr/share/keyrings/debian-archive-keyring.pgp' \
       '' \
       'Types: deb' \
-      "URIs: http://snapshot.debian.org/archive/debian-security/${DEBIAN_SNAPSHOT}" \
+      "URIs: https://snapshot.debian.org/archive/debian-security/${DEBIAN_SNAPSHOT}" \
       'Suites: trixie-security' \
       'Components: main' \
       'Signed-By: /usr/share/keyrings/debian-archive-keyring.pgp' \
@@ -92,6 +98,7 @@ RUN set -eu; \
       'APT::Install-Recommends "false";' \
       'APT::Install-Suggests "false";' \
       'Acquire::Check-Valid-Until "false";' \
+      'Acquire::https::CaInfo "/apt/ca-certificates.crt";' \
       'Acquire::Retries "5";' \
       'Acquire::Languages "none";' \
       > /apt/apt.conf; \
