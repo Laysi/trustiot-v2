@@ -15,6 +15,7 @@ import {
   numberAxisRange,
   offLine,
   type Placed,
+  RELATIVE_TOLERANCE,
   sliceAngle,
   timeAxisRange,
   within,
@@ -225,27 +226,443 @@ export function parseCssContent(value: string): CssContent {
 /** `overflow` values that clip or scroll away the part of the content past the box. */
 const CLIPPING: ReadonlySet<string> = new Set(["hidden", "clip", "scroll", "auto"]);
 
-/** Whether a computed colour paints nothing: `transparent`, or an `rgba(...)` with zero alpha. */
-export function isTransparent(color: string): boolean {
-  const value = color.trim().toLowerCase();
-  if (value === "transparent") return true;
-  const rgba = /^rgba?\(\s*[\d.]+\s*,\s*[\d.]+\s*,\s*[\d.]+\s*,\s*([\d.]+)\s*\)$/.exec(value);
-  return rgba !== null && Number(rgba[1]) === 0;
+/**
+ * Text painted fainter than this is hidden: the alpha of its paint (the faintest of `color`,
+ * `-webkit-text-fill-color` and, in SVG, `fill` with `fill-opacity`) times the `opacity` of the
+ * mark and of every ancestor. At a tenth of full strength no digit reads on any background.
+ */
+export const MIN_TEXT_ALPHA = 0.1;
+
+/** Functions a browser serializes a computed colour with; their alpha is read, not guessed. */
+const COLOR_FUNCTIONS: ReadonlySet<string> = new Set([
+  "rgb",
+  "rgba",
+  "hsl",
+  "hsla",
+  "hwb",
+  "lab",
+  "lch",
+  "oklab",
+  "oklch",
+  "color",
+]);
+/** The legacy syntax `rgba(r, g, b, a)`: the alpha is the fourth comma-separated value. */
+const COMMA_COLOR_FUNCTIONS: ReadonlySet<string> = new Set(["rgb", "rgba", "hsl", "hsla"]);
+const CSS_NUMBER = /^[+-]?(?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?%?$/;
+
+/** A CSS number or percentage as a fraction clamped to 0 to 1, or `null` when it is not one. */
+function fraction(token: string): number | null {
+  if (!CSS_NUMBER.test(token)) return null;
+  const value = Number.parseFloat(token) / (token.endsWith("%") ? 100 : 1);
+  return Number.isFinite(value) ? Math.min(1, Math.max(0, value)) : null;
+}
+
+/**
+ * The alpha (0 to 1) of a computed colour, in every syntax a browser serializes one with:
+ * `rgb()`/`rgba()` with commas, and `color()`, `lab()`, `lch()`, `oklab()`, `oklch()` (and the
+ * others) with `/ alpha`; `transparent`, `none`, `context-fill` and `context-stroke` are 0, and so
+ * is an alpha written `none`. Any other function (a gradient's `url()`, too), or an alpha that is
+ * not a plain number (fail closed), is 0. `null` when the value names no colour the comparison can
+ * read: empty, or another keyword left as written (`red`, `currentColor`), which only a DOM without
+ * computed colours returns (a browser resolves them).
+ */
+export function colorAlpha(value: string): number | null {
+  const text = value.trim().toLowerCase();
+  if (text === "") return null;
+  // `context-fill` and `context-stroke` paint nothing outside a marker or a `use`.
+  if (text === "transparent" || text === "none" || text === "context-fill" || text === "context-stroke") return 0;
+  const hex = /^#([0-9a-f]{3,4}|[0-9a-f]{6}|[0-9a-f]{8})$/.exec(text)?.[1];
+  if (hex !== undefined) {
+    if (hex.length === 3 || hex.length === 6) return 1;
+    const digits = hex.length === 4 ? `${hex.slice(3)}${hex.slice(3)}` : hex.slice(6);
+    return Number.parseInt(digits, 16) / 255;
+  }
+  const call = /^([a-z-]+)\(([^()]*)\)$/.exec(text);
+  if (call === null) return /^[a-z-]+$/.test(text) ? null : 0;
+  const name = call[1] ?? "";
+  const args = call[2] ?? "";
+  if (!COLOR_FUNCTIONS.has(name)) return 0;
+  let token: string;
+  const slash = args.lastIndexOf("/");
+  if (slash >= 0) {
+    token = args.slice(slash + 1).trim();
+  } else if (COMMA_COLOR_FUNCTIONS.has(name) && args.includes(",")) {
+    const parts = args.split(",");
+    if (parts.length === 3) return 1;
+    if (parts.length !== 4) return 0;
+    token = (parts[3] ?? "").trim();
+  } else {
+    return 1;
+  }
+  if (token === "none") return 0;
+  return fraction(token) ?? 0;
+}
+
+/** A computed `opacity` or `fill-opacity` as 0 to 1: 1 when empty (no computed styles), 0 when unreadable. */
+function opacityOf(value: string): number {
+  const text = value.trim();
+  return text === "" ? 1 : (fraction(text) ?? 0);
+}
+
+/** The alpha a mark's text, or its pseudo-element's, is painted with: the faintest of its paints. */
+function paintAlpha(dom: DomAccess, element: Element, pseudo: string | null, svg: boolean): number {
+  const paints = [colorAlpha(dom.style(element, pseudo, "color"))];
+  // Chromium paints HTML text with -webkit-text-fill-color, which defaults to the colour; SVG text
+  // with its fill.
+  paints.push(colorAlpha(dom.style(element, pseudo, "-webkit-text-fill-color")));
+  if (svg && pseudo === null) {
+    const fill = colorAlpha(dom.style(element, null, "fill"));
+    paints.push(fill === null ? null : fill * opacityOf(dom.style(element, null, "fill-opacity")));
+  }
+  let alpha = 1;
+  for (const paint of paints) if (paint !== null) alpha = Math.min(alpha, paint);
+  return alpha;
+}
+
+/** The product of the `opacity()` functions in a computed `filter`; 1 for `none`. */
+function filterOpacity(value: string): number {
+  let product = 1;
+  const pattern = /(?:^|[\s)])opacity\(([^()]*)\)/g;
+  const text = value.toLowerCase();
+  for (let match = pattern.exec(text); match !== null; match = pattern.exec(text)) {
+    const argument = (match[1] ?? "").trim();
+    product *= argument === "" ? 1 : (fraction(argument) ?? 0);
+  }
+  return product;
+}
+
+/**
+ * Text turned further than this from upright, either way, can read as other digits (a 6 for a 9
+ * once a reader takes it for sideways text); slanted tick labels (d3's usual −45°) stay within it.
+ */
+export const MAX_TEXT_TURN_DEG = 45;
+/** Text stretched more than this many times in one direction than in another is squeezed past reading. */
+export const MAX_TEXT_STRETCH = 4;
+/**
+ * Text drawn smaller than this many CSS pixels (its font size times its scale on screen, zoom
+ * included) shows nothing readable. Small enough that a chart scaled down to fit a phone still
+ * passes.
+ */
+export const MIN_TEXT_SIZE_PX = 2;
+/** Letter spacing tighter than this many em runs the digits into each other. */
+export const MIN_LETTER_SPACING_EM = -0.2;
+/**
+ * A pie slice's angle reads true only when its chart is scaled alike in every direction: up to the
+ * geometry's own tolerance.
+ */
+export const MAX_SLICE_STRETCH = 1 + RELATIVE_TOLERANCE;
+/** Rounding in a browser's matrices (single precision in SVG), so a −45° label is not judged −45.00001°. */
+const TURN_SLACK_DEG = 0.01;
+
+/**
+ * The linear part `[a, b, c, d]` of a CSS `matrix(a, b, c, d, e, f)`: how an element is turned,
+ * mirrored, stretched and scaled on screen (a translation does not change how text reads).
+ */
+export type Linear = readonly [number, number, number, number];
+
+const IDENTITY: Linear = [1, 0, 0, 1];
+
+/** `m · n`: `n` applies first, as an element's own transform applies before its parent's. */
+function multiply(m: Linear, n: Linear): Linear {
+  return [m[0] * n[0] + m[2] * n[1], m[1] * n[0] + m[3] * n[1], m[0] * n[2] + m[2] * n[3], m[1] * n[2] + m[3] * n[3]];
+}
+
+const CSS_PLAIN_NUMBER = /^[+-]?(?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?$/;
+
+/** Numbers separated by commas or spaces; `null` when any is not one. */
+function numberList(text: string): number[] | null {
+  const numbers: number[] = [];
+  for (const token of text.trim().split(/\s*,\s*|\s+/)) {
+    if (!CSS_PLAIN_NUMBER.test(token)) return null;
+    numbers.push(Number(token));
+  }
+  return numbers;
+}
+
+/** A 3 × 3 linear map, row-major: what a transform does to x, y and z before it is flattened. */
+type Linear3 = readonly [number, number, number, number, number, number, number, number, number];
+
+const IDENTITY3: Linear3 = [1, 0, 0, 0, 1, 0, 0, 0, 1];
+
+function multiply3(m: Linear3, n: Linear3): Linear3 {
+  const out: number[] = [];
+  for (let row = 0; row < 3; row++) {
+    for (let column = 0; column < 3; column++) {
+      let sum = 0;
+      for (let k = 0; k < 3; k++) sum += (m[row * 3 + k] ?? 0) * (n[k * 3 + column] ?? 0);
+      out.push(sum);
+    }
+  }
+  return out as unknown as Linear3;
+}
+
+/** What the screen shows of a 3 × 3 map: its x and y rows and columns (an orthographic flattening). */
+function flatten(m: Linear3): Linear {
+  return [m[0], m[3], m[1], m[4]];
+}
+
+/**
+ * A computed `transform`: `none`, `matrix(...)` or `matrix3d(...)` (its linear part over `m44`);
+ * `null` for anything else, and for a `matrix3d` with perspective or a `m44` that is not
+ * positive, whose picture no linear map describes (it can be turned over).
+ */
+function transformLinear(value: string): Linear3 | null {
+  const text = value.trim().toLowerCase();
+  if (text === "" || text === "none") return IDENTITY3;
+  const call = /^(matrix|matrix3d)\(([^()]*)\)$/.exec(text);
+  const v = call === null ? null : numberList(call[2] ?? "");
+  if (call === null || v === null) return null;
+  if (call[1] === "matrix") {
+    const [a, b, c, d] = v;
+    if (v.length !== 6 || a === undefined || b === undefined || c === undefined || d === undefined) return null;
+    return [a, c, 0, b, d, 0, 0, 0, 1];
+  }
+  // matrix3d is column-major: m11 m12 m13 m14 m21 ... m44; m14, m24, m34 are perspective.
+  if (v.length !== 16 || v[3] !== 0 || v[7] !== 0 || v[11] !== 0) return null;
+  const w = v[15] ?? Number.NaN;
+  if (!(w > 0)) return null;
+  const at = (i: number) => (v[i] ?? Number.NaN) / w;
+  return [at(0), at(4), at(8), at(1), at(5), at(9), at(2), at(6), at(10)];
+}
+
+/** A CSS angle in degrees; `null` when it is not one. */
+function degreesOf(token: string): number | null {
+  const match = /^([+-]?(?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?)(deg|grad|rad|turn)?$/.exec(token);
+  if (match === null) return null;
+  const value = Number(match[1]);
+  const unit = match[2];
+  if (unit === undefined) return value === 0 ? 0 : null;
+  return value * (unit === "deg" ? 1 : unit === "grad" ? 0.9 : unit === "rad" ? 180 / Math.PI : 360);
+}
+
+/** A computed `rotate`: `none`, an angle, or an axis (`x`, `y`, `z` or three numbers) and an angle. */
+function rotateLinear(value: string): Linear3 | null {
+  const text = value.trim().toLowerCase();
+  if (text === "" || text === "none") return IDENTITY3;
+  const tokens = text.split(/\s+/);
+  const angle = degreesOf(tokens[tokens.length - 1] ?? "");
+  if (angle === null) return null;
+  const named = (name: string | undefined) =>
+    name === "x" ? [1, 0, 0] : name === "y" ? [0, 1, 0] : name === "z" ? [0, 0, 1] : null;
+  const axis =
+    tokens.length === 1
+      ? [0, 0, 1]
+      : tokens.length === 2
+        ? named(tokens[0])
+        : tokens.length === 4
+          ? numberList(tokens.slice(0, 3).join(" "))
+          : null;
+  if (axis === null) return null;
+  const [x = 0, y = 0, z = 0] = axis;
+  const length = Math.hypot(x, y, z);
+  // A zero axis turns nothing (CSS Transforms 2).
+  if (!(length > 0)) return IDENTITY3;
+  const [ux, uy, uz] = [x / length, y / length, z / length];
+  const radians = (angle * Math.PI) / 180;
+  const cos = Math.cos(radians);
+  const sin = Math.sin(radians);
+  const t = 1 - cos;
+  // The rotation about the axis (Rodrigues), clockwise on screen for a positive angle about z.
+  return [
+    cos + ux * ux * t,
+    ux * uy * t - uz * sin,
+    ux * uz * t + uy * sin,
+    uy * ux * t + uz * sin,
+    cos + uy * uy * t,
+    uy * uz * t - ux * sin,
+    uz * ux * t - uy * sin,
+    uz * uy * t + ux * sin,
+    cos + uz * uz * t,
+  ];
+}
+
+/** A computed `scale`: `none`, or one to three factors (x, y, z; y defaults to x, z to 1). */
+function scaleLinear(value: string): Linear3 | null {
+  const text = value.trim().toLowerCase();
+  if (text === "" || text === "none") return IDENTITY3;
+  const factors: number[] = [];
+  for (const token of text.split(/\s+/)) {
+    if (!CSS_NUMBER.test(token)) return null;
+    factors.push(Number.parseFloat(token) / (token.endsWith("%") ? 100 : 1));
+  }
+  const [x, y = x, z = 1] = factors;
+  return factors.length > 3 || x === undefined || y === undefined ? null : [x, 0, 0, 0, y, 0, 0, 0, z];
+}
+
+/** A computed `zoom` as a factor: 1 when empty or `normal`, `null` when unreadable. */
+function zoomOf(value: string): number | null {
+  const text = value.trim().toLowerCase();
+  if (text === "" || text === "normal") return 1;
+  if (!CSS_NUMBER.test(text)) return null;
+  const zoom = Number.parseFloat(text) / (text.endsWith("%") ? 100 : 1);
+  return zoom > 0 ? zoom : null;
+}
+
+/**
+ * An element's own transform on screen, or its pseudo-element's: `rotate`, `scale` and `transform`
+ * composed in 3D (CSS Transforms 2 applies `translate`, `rotate`, `scale`, `transform` in that
+ * order, outermost first) and flattened, and the element's `zoom`, which scales alike in every
+ * direction. `null` when one of them could not be read, or when the element sets a `perspective`
+ * or keeps its children in 3D (`transform-style: preserve-3d`): flattening each element into its
+ * parent's plane is then no longer what the screen shows.
+ */
+function ownLinear(dom: DomAccess, element: Element, pseudo: string | null): Linear | null {
+  const rotate = rotateLinear(dom.style(element, pseudo, "rotate"));
+  const scale = scaleLinear(dom.style(element, pseudo, "scale"));
+  const transform = transformLinear(dom.style(element, pseudo, "transform"));
+  const zoom = pseudo === null ? zoomOf(dom.style(element, null, "zoom")) : 1;
+  if (rotate === null || scale === null || transform === null || zoom === null) return null;
+  if (pseudo === null) {
+    const perspective = dom.style(element, null, "perspective").trim();
+    if (perspective !== "" && perspective !== "none") return null;
+    if (dom.style(element, null, "transform-style").trim() === "preserve-3d") return null;
+  }
+  const [a, b, c, d] = flatten(multiply3(multiply3(rotate, scale), transform));
+  return [zoom * a, zoom * b, zoom * c, zoom * d];
+}
+
+/** How much `m` scales areas: its determinant (negative when it mirrors). */
+function determinantOf(m: Linear): number {
+  return m[0] * m[3] - m[1] * m[2];
+}
+
+/** How much `m` stretches one direction more than another (the ratio of its singular values). */
+export function stretchOf(m: Linear): number {
+  const [a, b, c, d] = m;
+  const sum = a * a + b * b + c * c + d * d;
+  const determinant = a * d - b * c;
+  const root = Math.sqrt(Math.max(0, sum * sum - 4 * determinant * determinant));
+  const small = (sum - root) / 2;
+  return small > 0 ? Math.sqrt((sum + root) / 2 / small) : Number.POSITIVE_INFINITY;
+}
+
+/**
+ * Whether text drawn through `m` can read as other text: mirrored (a negative determinant; none
+ * collapses it), turned past MAX_TEXT_TURN_DEG, or stretched past MAX_TEXT_STRETCH. Translation and
+ * uniform scaling read the same. `null` (a transform that could not be read) is judged misread.
+ */
+export function misreads(m: Linear | null): boolean {
+  if (m === null) return true;
+  const [a, b, c, d] = m;
+  if (!(a * d - b * c > 0)) return true;
+  // The turn of m's rotation part (its polar decomposition); for a rotation by θ it is θ.
+  const turn = (Math.atan2(b - c, a + d) * 180) / Math.PI;
+  return !(Math.abs(turn) <= MAX_TEXT_TURN_DEG + TURN_SLACK_DEG) || !(stretchOf(m) <= MAX_TEXT_STRETCH);
+}
+
+/** How an element is presented through its ancestors. */
+export interface Presentation {
+  /** The product of its own and its ancestors' opacity (`opacity`, and `opacity()` in `filter`). */
+  opacity: number;
+  /** How it is turned, mirrored, stretched and scaled on screen; `null` when a transform could not be read. */
+  linear: Linear | null;
+}
+
+/**
+ * Reads the presentation of elements, each ancestor once: a document has up to MAX_ELEMENTS
+ * elements and MAX_MARKS marks, so the walk up from every mark shares what it read. One per
+ * comparison (the document does not change while it runs). With layout, an SVG element's
+ * transform is its screen matrix, which holds every ancestor's transform (HTML ones included) and
+ * its `<svg>`'s viewBox; any other element adds its own transform to its parent's.
+ */
+export function presenter(dom: DomAccess, layout: boolean): (element: Element) => Presentation {
+  const known = new Map<Element, Presentation>();
+  return (element) => {
+    // Iterative, from the nearest known ancestor down: a deep document must not exhaust the stack.
+    const chain: Element[] = [];
+    let base: Presentation = { opacity: 1, linear: IDENTITY };
+    for (let node: Node | null = element; node !== null && dom.nodeType(node) === 1; node = dom.parentNode(node)) {
+      const found = known.get(node as Element);
+      if (found !== undefined) {
+        base = found;
+        break;
+      }
+      chain.push(node as Element);
+    }
+    for (let i = chain.length - 1; i >= 0; i--) {
+      const current = chain[i] as Element;
+      const opacity =
+        base.opacity *
+        opacityOf(dom.style(current, null, "opacity")) *
+        filterOpacity(dom.style(current, null, "filter"));
+      const screen = layout && dom.namespaceURI(current) === SVG_NS ? dom.screenMatrix(current) : null;
+      let linear: Linear | null = null;
+      if (base.linear !== null) {
+        if (screen !== null) {
+          linear = [screen.a, screen.b, screen.c, screen.d];
+        } else {
+          const own = ownLinear(dom, current, null);
+          linear = own === null ? null : multiply(base.linear, own);
+        }
+      }
+      base = { opacity, linear };
+      known.set(current, base);
+    }
+    return base;
+  };
+}
+
+const SVG_TEXT: ReadonlySet<string> = new Set(["text", "tspan", "textPath"]);
+
+/**
+ * Whether SVG text places its glyphs one by one: a list of `x`, `y`, `dx` or `dy` positions (which
+ * can reorder or stack the digits), `rotate` (turns each glyph), `textLength` (squeezes them) or a
+ * `textPath` (bends them along a path), on the mark or the text it is part of.
+ */
+function placesGlyphs(dom: DomAccess, element: Element): boolean {
+  for (let node: Node | null = element; node !== null && dom.nodeType(node) === 1; node = dom.parentNode(node)) {
+    const current = node as Element;
+    const name = dom.localName(current);
+    if (dom.namespaceURI(current) !== SVG_NS || !SVG_TEXT.has(name)) return false;
+    if (name === "textPath") return true;
+    if (dom.getAttribute(current, "rotate") !== null || dom.getAttribute(current, "textLength") !== null) return true;
+    for (const place of ["x", "y", "dx", "dy"]) {
+      const value = dom.getAttribute(current, place);
+      if (value !== null && value.trim().split(/[\s,]+/).length > 1) return true;
+    }
+  }
+  return false;
+}
+
+/** A computed length in pixels (`normal` letter spacing is 0); `null` when empty, `NaN` when unreadable. */
+function pixels(value: string): number | null {
+  const text = value.trim().toLowerCase();
+  if (text === "") return null;
+  if (text === "normal") return 0;
+  return text.endsWith("px") && CSS_PLAIN_NUMBER.test(text.slice(0, -2)) ? Number(text.slice(0, -2)) : Number.NaN;
+}
+
+/** Whether letter spacing runs the digits into each other (tighter than MIN_LETTER_SPACING_EM). */
+function cramped(dom: DomAccess, element: Element, pseudo: string | null, fontSize: string): boolean {
+  const spacing = pixels(dom.style(element, pseudo, "letter-spacing"));
+  const size = pixels(fontSize);
+  if (spacing === null || size === null) return false;
+  return !(spacing >= MIN_LETTER_SPACING_EM * size);
 }
 
 /**
  * Whether a text mark's rendered text may differ from its `textContent`, so comparing the two is
  * not enough (frontend/sandbox/README.md, 「檢查規則」). A text mark is one text node, no element
- * children, shown whole and in order. Flags: an element child (its own text or styling changes the
- * number), a hidden mark (`display: none`, `visibility: hidden`, a transparent colour), a bidi
- * override (the digits read in another order), a restyled `::first-letter`/`::first-line` (a digit
- * hidden, resized or made transparent), a zero-size box (`font-size: 0`), and a clipping box the
- * content overflows, so part is cut off (an ellipsis is this with `text-overflow` set). The
- * box-size and clipping checks need layout, so they run only when the caller says it has layout
- * (`layout`: the checker's browser and the runtime's, never a unit test's DOM). A mark with no box
- * but visible text (`display: contents`) is not hidden and is not flagged.
+ * children, shown whole, upright and in order. Flags: an element child (its own text or styling
+ * changes the number), a hidden mark (`display: none`, `visibility: hidden`, a paint fainter than
+ * MIN_TEXT_ALPHA through its colours and the opacity of the mark and its ancestors), a transform
+ * of the mark or an ancestor that mirrors it, turns it past MAX_TEXT_TURN_DEG or stretches it past
+ * MAX_TEXT_STRETCH, SVG text that places its glyphs one by one, letter spacing that runs the digits
+ * together, glyphs drawn smaller than MIN_TEXT_SIZE_PX, a bidi override (the digits read in another
+ * order), a restyled `::first-letter`/`::first-line` (a digit hidden, resized, made faint, turned or
+ * crowded), a box with no area (`font-size: 0`), and a clipping box the content overflows, so part is cut off (an ellipsis is this with `text-overflow` set). The box-size and
+ * clipping checks, and an SVG element's screen matrix, need layout, so they are used only when the
+ * caller says it has layout (`layout`: the checker's browser and the runtime's, never a unit test's
+ * DOM). A mark with no box but visible text (`display: contents`) is not hidden and is not flagged.
+ * `present` reads the presentation through the ancestors; a comparison passes one it shares
+ * between marks.
  */
-export function concealsText(dom: DomAccess, element: Element, layout: boolean): boolean {
+export function concealsText(
+  dom: DomAccess,
+  element: Element,
+  layout: boolean,
+  present: (element: Element) => Presentation = presenter(dom, layout),
+): boolean {
   for (let child = dom.firstChild(element); child !== null; child = dom.nextSibling(child)) {
     if (dom.nodeType(child) === 1) return true;
   }
@@ -253,23 +670,38 @@ export function concealsText(dom: DomAccess, element: Element, layout: boolean):
   if (display === "none") return true;
   const visibility = dom.style(element, null, "visibility");
   if (visibility === "hidden" || visibility === "collapse") return true;
-  if (isTransparent(dom.style(element, null, "color"))) return true;
+  const svg = dom.namespaceURI(element) === SVG_NS;
+  const { opacity, linear } = present(element);
+  if (!(paintAlpha(dom, element, null, svg) * opacity >= MIN_TEXT_ALPHA)) return true;
+  if (linear === null || misreads(linear)) return true;
+  if (svg && placesGlyphs(dom, element)) return true;
+  const own = dom.style(element, null, "font-size");
+  // The size the glyphs are drawn at: a uniform scale is allowed, down to a readable size.
+  const fontSize = pixels(own);
+  if (fontSize !== null && !(fontSize * Math.sqrt(Math.abs(determinantOf(linear))) >= MIN_TEXT_SIZE_PX)) {
+    return true;
+  }
+  if (cramped(dom, element, null, own)) return true;
   const bidi = dom.style(element, null, "unicode-bidi");
   if (bidi.includes("override") || bidi === "plaintext") return true;
-  const own = dom.style(element, null, "font-size");
   for (const pseudo of ["::first-letter", "::first-line"] as const) {
     const size = dom.style(element, pseudo, "font-size");
     if (size !== "" && own !== "" && size !== own) return true;
     const pseudoVisibility = dom.style(element, pseudo, "visibility");
     if (pseudoVisibility === "hidden" || pseudoVisibility === "collapse") return true;
-    if (isTransparent(dom.style(element, pseudo, "color"))) return true;
+    const pseudoOpacity =
+      opacity * opacityOf(dom.style(element, pseudo, "opacity")) * filterOpacity(dom.style(element, pseudo, "filter"));
+    if (!(paintAlpha(dom, element, pseudo, false) * pseudoOpacity >= MIN_TEXT_ALPHA)) return true;
+    const pseudoOwn = ownLinear(dom, element, pseudo);
+    if (pseudoOwn === null || misreads(multiply(linear, pseudoOwn))) return true;
+    if (cramped(dom, element, pseudo, own)) return true;
   }
   if (layout) {
     // A box with no area shows nothing (font-size: 0); display: contents has no box of its own but
     // still shows its text through its parent, so it is not hidden.
     if (display !== "contents") {
       const box = dom.box(element);
-      if (box.width <= 0 || box.height <= 0) return true;
+      if (!(box.width > 0 && box.height > 0)) return true;
     }
     const scroll = dom.scrollSize(element);
     if (CLIPPING.has(dom.style(element, null, "overflow-x")) && scroll.scrollWidth - scroll.clientWidth > 1) {
@@ -337,6 +769,7 @@ export function compareDocument(dom: DomAccess, model: Model, locale: Locale, la
   // so every mark is a finding.
   const rootBox = layout ? dom.box(root) : null;
   const unlaid = rootBox !== null && (rootBox.width <= 0 || rootBox.height <= 0);
+  const present = presenter(dom, layout);
 
   const add = (problem: Problem, fix: Fix | null) => {
     findings.push({ problem, fix });
@@ -422,7 +855,12 @@ export function compareDocument(dom: DomAccess, model: Model, locale: Locale, la
         if (!(error instanceof FormatError)) throw error;
         expected = null;
       }
-      if (expected === null || dom.textContent(element) !== expected || unlaid || concealsText(dom, element, layout)) {
+      if (
+        expected === null ||
+        dom.textContent(element) !== expected ||
+        unlaid ||
+        concealsText(dom, element, layout, present)
+      ) {
         add(withTag({ kind: "mismatch", reference: canonical, value: resolved.value }, tag), fix);
       } else if (reference.form === "t" && state.axis !== null) {
         tick(element, reference, canonical, state.axis);
@@ -556,7 +994,7 @@ export function compareDocument(dom: DomAccess, model: Model, locale: Locale, la
   }
 
   if (dom.liveAnimations() > 0) add({ kind: "timeout", phase: "render" }, null);
-  for (const key of groupOrder) geometry(dom, key, groups[key] ?? [], add);
+  for (const key of groupOrder) geometry(dom, key, groups[key] ?? [], add, present);
   for (const axis of axes) {
     const placed = axis.ticks.map((tick) => ({ tick, at: tickPosition(dom, tick.element) }));
     const xs: Placed[] = placed.map(({ tick, at }) => ({ value: tick.value, position: at.x }));
@@ -626,6 +1064,7 @@ function geometry(
   key: string,
   marks: GeometryMark[],
   add: (problem: Problem, fix: Fix | null) => void,
+  present: (element: Element) => Presentation,
 ) {
   const channel = key.slice(key.indexOf("|") + 1) as MarkChannel;
   const fail = (mark: GeometryMark) =>
@@ -660,7 +1099,16 @@ function geometry(
       const d = dom.style(mark.element, null, "d");
       const path = d.startsWith("path(") ? parseCssContent(d.slice(5)).strings[0] : undefined;
       const slice = sliceAngle(path ?? dom.getAttribute(mark.element, "d") ?? "");
-      if (dom.localName(mark.element) !== "path" || slice === null || slice.radius <= 0) {
+      // A slice's angle is read from its path, before any transform: a chart scaled more in one
+      // direction than another shows other angles on screen.
+      const linear = present(mark.element).linear;
+      if (
+        dom.localName(mark.element) !== "path" ||
+        slice === null ||
+        slice.radius <= 0 ||
+        linear === null ||
+        !(stretchOf(linear) <= MAX_SLICE_STRETCH)
+      ) {
         fail(mark);
         continue;
       }

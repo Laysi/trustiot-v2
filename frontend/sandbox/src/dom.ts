@@ -19,6 +19,16 @@ export interface Point {
   y: number;
 }
 
+/** An affine map `matrix(a, b, c, d, e, f)`: x' = a·x + c·y + e, y' = b·x + d·y + f. */
+export interface Matrix {
+  a: number;
+  b: number;
+  c: number;
+  d: number;
+  e: number;
+  f: number;
+}
+
 export interface DomAccess {
   documentElement(): Element | null;
   firstChild(node: Node): Node | null;
@@ -43,6 +53,11 @@ export interface DomAccess {
   };
   /** Where an SVG element's own coordinate system starts in the viewport; `null` when unknown. */
   origin(element: Element): Point | null;
+  /**
+   * How an SVG element's own coordinates map to the viewport (`getScreenCTM`): its own and every
+   * ancestor's transform, HTML ancestors included, and its `<svg>`'s viewBox; `null` when unknown.
+   */
+  screenMatrix(element: Element): Matrix | null;
   /** A computed style property of the element or one of its pseudo-elements (`"::before"`). */
   style(element: Element, pseudo: string | null, property: string): string;
   /**
@@ -146,17 +161,74 @@ export function captureDom(win: DomWindow): DomAccess {
   const pending = win.Animation === undefined ? undefined : getter<boolean>(win.Animation.prototype, "pending");
   const graphics = (win as unknown as { SVGGraphicsElement?: { prototype: object } }).SVGGraphicsElement;
   const getScreenCTM = graphics === undefined ? undefined : method(graphics.prototype, "getScreenCTM");
-  const rectNumber = (rect: unknown, name: string) => {
-    const value = (rect as Record<string, unknown> | null)?.[name];
-    return typeof value === "number" && Number.isFinite(value) ? value : 0;
+  // The DOMRect and matrix getters too: a page that later replaces `DOMRectReadOnly.prototype`'s
+  // `width` or `SVGMatrix.prototype`'s `a` must not change the boxes and matrices read here.
+  const rectPrototype = (win as unknown as { DOMRectReadOnly?: { prototype: object } }).DOMRectReadOnly?.prototype;
+  const rectGet = {
+    left: getter<unknown>(rectPrototype, "left"),
+    top: getter<unknown>(rectPrototype, "top"),
+    width: getter<unknown>(rectPrototype, "width"),
+    height: getter<unknown>(rectPrototype, "height"),
   };
+  // Chromium's getScreenCTM returns an SVGMatrix, whose getters are not DOMMatrixReadOnly's (each
+  // throws on the other's objects); a DOM without SVGMatrix returns a DOMMatrix. Each matrix is read
+  // with the getters of the interface it is an instance of, found through the captured prototypes.
+  const matrixInterfaces = win as unknown as {
+    SVGMatrix?: { prototype: object };
+    DOMMatrix?: { prototype: object };
+    DOMMatrixReadOnly?: { prototype: object };
+  };
+  const matrixReaders: { prototype: object; get: Record<keyof Matrix, (target: object) => unknown> }[] = [];
+  for (const prototype of [
+    matrixInterfaces.SVGMatrix?.prototype,
+    matrixInterfaces.DOMMatrix?.prototype,
+    matrixInterfaces.DOMMatrixReadOnly?.prototype,
+  ]) {
+    if (prototype === undefined) continue;
+    matrixReaders.push({
+      prototype,
+      get: {
+        a: getter<unknown>(prototype, "a"),
+        b: getter<unknown>(prototype, "b"),
+        c: getter<unknown>(prototype, "c"),
+        d: getter<unknown>(prototype, "d"),
+        e: getter<unknown>(prototype, "e"),
+        f: getter<unknown>(prototype, "f"),
+      },
+    });
+  }
+  const readerOf = (matrix: object) => {
+    for (let current = getPrototypeOf(matrix) as object | null; current !== null; current = getPrototypeOf(current)) {
+      for (const reader of matrixReaders) if (reader.prototype === current) return reader;
+    }
+    return undefined;
+  };
+  const finite = (value: unknown): number | null =>
+    typeof value === "number" && Number.isFinite(value) ? value : null;
+  const rectNumber = (rect: object, name: keyof typeof rectGet) => finite(rectGet[name](rect)) ?? 0;
   if (getAttribute === undefined || setAttribute === undefined || removeAttribute === undefined) {
     throw new Error("the DOM has no attribute functions");
   }
 
+  const screenMatrix = (target: Element): Matrix | null => {
+    if (getScreenCTM === undefined) return null;
+    const matrix = apply(getScreenCTM, target, []) as object | null;
+    if (matrix === null || typeof matrix !== "object") return null;
+    const reader = readerOf(matrix);
+    if (reader === undefined) return null;
+    const a = finite(reader.get.a(matrix));
+    const b = finite(reader.get.b(matrix));
+    const c = finite(reader.get.c(matrix));
+    const d = finite(reader.get.d(matrix));
+    const e = finite(reader.get.e(matrix));
+    const f = finite(reader.get.f(matrix));
+    if (a === null || b === null || c === null || d === null || e === null || f === null) return null;
+    return { a, b, c, d, e, f };
+  };
+
   const box = (target: Element): Box => {
     if (getBoundingClientRect === undefined) return { left: 0, top: 0, width: 0, height: 0 };
-    const rect = apply(getBoundingClientRect, target, []);
+    const rect = apply(getBoundingClientRect, target, []) as object;
     return {
       left: rectNumber(rect, "left"),
       top: rectNumber(rect, "top"),
@@ -185,13 +257,12 @@ export function captureDom(win: DomWindow): DomAccess {
     shadowRoot: (target) => shadowRoot(target) ?? null,
     box,
     origin: (target) => {
-      if (getScreenCTM === undefined) return null;
       // The element's user-space origin in client coordinates: its own and its ancestors'
       // transforms, and where its <svg> sits.
-      const matrix = apply(getScreenCTM, target, []) as { e?: unknown; f?: unknown } | null;
-      if (matrix === null || typeof matrix.e !== "number" || typeof matrix.f !== "number") return null;
-      return { x: matrix.e, y: matrix.f };
+      const matrix = screenMatrix(target);
+      return matrix === null ? null : { x: matrix.e, y: matrix.f };
     },
+    screenMatrix,
     style: (target, pseudo, property) => {
       if (getPropertyValue === undefined) return "";
       const declaration = apply(getComputedStyle, win, pseudo === null ? [target] : [target, pseudo]);
