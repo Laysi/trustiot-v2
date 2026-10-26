@@ -2,7 +2,7 @@
 
 Laysi/trustiot-v2#535：broker 的伺服器憑證改由 chart 的 CronJob `<release>-mqtt-broker-certificate` 在叢集內產生金鑰、經 certs 服務的 broker 埠（8082）簽發，寫進 chart 宣告的空 Secret `<release>-mqtt-broker-tls`，效期過半時以新金鑰換發，broker 由 trust sidecar 送 SIGHUP 換上。做法、兩個決定（Opaque 的空 Secret 與 broker 在 Secret 填好之前的狀態；CronJob 自己的 ServiceAccount、第一次簽發也由 CronJob 做）、效期與換發時間、換發時閘道器會不會斷線、根儀式之前的狀態，都在 [deploy/chart/README.md](../../deploy/chart/README.md) 的「MQTT broker」「伺服器憑證」；簽發端點在 [services/certs/README.md](../../services/certs/README.md) 的「broker 伺服器憑證」；私鑰的保管在 [docs/architecture/secrets.md](../architecture/secrets.md) 的「broker 伺服器憑證私鑰」。
 
-這份報告是四條驗收條件的證據：下列自動化測試在建置主機上以 `CI=1` 執行（容器測試不略過）。驗收條件 4 與驗收條件 2 在叢集裡的部分由 nightly 驗證，見最後的「nightly（待補）」。
+這份報告是四條驗收條件的證據：下列自動化測試在建置主機上以 `CI=1` 執行（容器測試不略過）。驗收條件 4 與驗收條件 2 在叢集裡的部分由 nightly 驗證，見最後的「nightly」。
 
 ## 環境
 
@@ -128,9 +128,9 @@ chart 層的放行規則由上面的 chart 測試證明；在 ambient mesh 裡�
 
 排版改好後在最後的樹上重跑：`cargo fmt --all --check` 沒有差異；`cargo clippy --locked -p migrate --all-targets -- -D warnings` 沒有警告；`CI=1 cargo test --locked -p migrate --no-fail-fast` 22 個測試目標，152 通過，0 失敗，0 略過。排版只動測試的換行，其他檢查沿用上表。
 
-## nightly（待補）
+## nightly
 
-工作站與建置主機不跑 Kubernetes，所以以下在 PR 帶 `smoke` label 的 nightly smoke（k3d、Istio ambient）第一次執行後補上結果與 run 連結。每份 values 在 certs 的 CA 儀式之後：
+工作站與建置主機不跑 Kubernetes，所以以下由 PR 帶 `smoke` label 的 nightly smoke（k3d、Istio ambient）驗證。每份 values 在 certs 的 CA 儀式之後：
 
 1. 從渲染結果確認設計：一個 CronJob、在 ambient mesh、自己的 ServiceAccount（不是 broker 的）、只掛投射的 token、一個容器、不掛不讀任何 Secret；它寫的 Secret 就是 broker 以 `server-tls` 掛的那一個，其他 workload 都不掛不讀。
 2. 以 `kubectl create job --from=cronjob/trustiot-mqtt-broker-certificate` 執行一次：Job 成功，代表 CronJob 的 pod 在 mesh 裡連到 `trustiot-certs-broker:8082` 並拿到憑證（驗收條件 4 的正面）。
@@ -139,13 +139,25 @@ chart 層的放行規則由上面的 chart 測試證明；在 ambient mesh 裡�
 5. 從 broker 自己的 pod（mesh 裡的另一個 workload，API 埠的 `ca.pem` 前後都是 200）POST 到 8082 拿不到 HTTP 回應（驗收條件 4 的負面）。
 6. namespace 的每個 ServiceAccount 以 `kubectl auth can-i --as` 問：只有 CronJob 的能 `get` 與 `patch` 這個 Secret（驗收條件 2 的叢集部分）。
 
-結果：待補（PR 的 nightly smoke run 連結與兩種形態的報告行）。
+結果（2026-10-26，PR Laysi/trustiot-v2#663 的 head `f2c55af0`，nightly run [40352104018](https://github.com/Laysi/trustiot-v2/actions/runs/40352104018) 的 `smoke` job，k3d、Istio ambient）：兩種形態都通過。報告行如下（序號省略）：
+
+- onprem（namespace `nightly-onprem`）：`trustiot-mqtt-broker-certificate ran once as trustiot-mqtt-broker-certificate (Job trustiot-mqtt-broker-certificate-smoke) and succeeded within 4 s; Secret trustiot-mqtt-broker-tls (empty before the run): Opaque, bound to itself, generation 1, only tls.crt,tls.key; tls.crt: serial … for mqtt-broker.trustiot.internal, trustiot-mqtt-broker.nightly-onprem.svc, serverAuth only, signed by the issuing CA, then the issuing CA, until Oct 28 15:54:09 2026 GMT; the broker listened on 8883 after 57 s more (mosquitto restarts 0 -> 1); from the broker's pod ca.pem on the API port answered 200 before and after, /internal/certs/v1/broker-certificate on the broker port got no answer: command terminated with exit code 1; of 15 ServiceAccounts only trustiot-mqtt-broker-certificate may get and patch trustiot-mqtt-broker-tls (63 can-i answers)`
+- saas（namespace `nightly-saas`）：同上，名稱是 `trustiot-mqtt-broker.nightly-saas.svc`，效期到 Oct 28 15:59:08 2026 GMT，broker 在 51 秒後開始聽 8883，其餘相同。
+
+對應上面的六項：
+
+1. 渲染結果與設計相符（檢查在 `checkBrokerCertificate` 執行 Job 之前做，不符時整個 smoke 失敗）。
+2. Job 成功，代表 CronJob 的 pod 在 mesh 裡連到 `trustiot-certs-broker:8082` 並拿到憑證（驗收條件 4 的正面）。
+3. Secret 在執行前是空的，執行後是 Opaque、綁定自己、generation 1、只有 `tls.crt` 與 `tls.key`；`tls.crt` 給兩個名稱、只有 serverAuth、由簽發 CA 簽，再接簽發 CA。
+4. broker 在 57 秒與 51 秒後開始聽 8883，`mosquitto` 重啟一次。
+5. 從 broker 自己的 pod：API 埠的 `ca.pem` 前後都是 200，broker 埠的 `/internal/certs/v1/broker-certificate` 拿不到回應（驗收條件 4 的負面）。
+6. 15 個 ServiceAccount 共 63 個 `can-i` 回答，只有 CronJob 的能 `get` 與 `patch` 這個 Secret（驗收條件 2 的叢集部分）。
 
 ## 結論
 
 | 驗收條件 | 結果 |
 | --- | --- |
 | 1. broker 以簽出的憑證提供 inner TLS；用戶端以 README 的信任錨與名稱驗過；錯的名稱或不是我們 CA 簽的憑證被拒（測試） | 通過（`broker_certificate.rs`） |
-| 2. 私鑰只在 broker 掛載的 Secret：其他 pod 不掛、自訂 `env` 讀不到、簽發 workload 的 Role 只碰這個 Secret（`bun test deploy/chart`）；日誌與端點不含私鑰 | 通過（chart 測試、`mqtt_certificate.rs`、`broker_certificate.rs`）；叢集裡的 `can-i` 檢查待 nightly |
+| 2. 私鑰只在 broker 掛載的 Secret：其他 pod 不掛、自訂 `env` 讀不到、簽發 workload 的 Role 只碰這個 Secret（`bun test deploy/chart`）；日誌與端點不含私鑰 | 通過（chart 測試、`mqtt_certificate.rs`、`broker_certificate.rs`）；叢集裡的 `can-i` 檢查也通過（nightly run 40352104018） |
 | 3. 到期前輪替，量測一次：短效期、broker 換上新憑證、新連線驗到它（測試） | 通過（`broker_certificate.rs`，效期 1 小時、過半時換發） |
-| 4. Istio ambient 的安全關卡前提：簽發 workload 連得到 `<release>-certs-broker:8082` 並拿到憑證，其他 workload 被拒 | 待補（nightly，見上一節）；chart 層的規則與 nightly 檢查的邏輯已測 |
+| 4. Istio ambient 的安全關卡前提：簽發 workload 連得到 `<release>-certs-broker:8082` 並拿到憑證，其他 workload 被拒 | 通過（nightly run 40352104018，兩種形態，見「nightly」）；chart 層的規則與 nightly 檢查的邏輯另有測試 |
