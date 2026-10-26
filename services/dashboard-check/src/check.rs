@@ -3,10 +3,16 @@
 //!
 //! The browser loads the checker's host page; the host page gets the request through
 //! `tqCheckHost.start(request)`, frames the sandbox, sends it `init` and `data`, and reports
-//! `ready`, `returned`, `rendered` and `error` through the [`REPORT_BINDING`]. The checker trusts none of
-//! the page: it confirms the quiet period itself from an isolated world of the sandbox frame,
-//! and runs the comparison there, where the page's scripts cannot reach, with the request's data
-//! as the argument. The page never sees the values it is compared with.
+//! `ready`, `returned`, `rendered` and `error` through the [`REPORT_BINDING`]. The checker
+//! trusts nothing the page's scripts report: it confirms the quiet period itself from an
+//! isolated world of the sandbox frame, and runs the comparison there, out of the page scripts'
+//! reach, with the request's data as the call's argument, so no page script changes the
+//! comparison or what it is compared with.
+//!
+//! The verdict is only as trustworthy as the renderer. Chromium runs without its own sandbox,
+//! and code that takes over the renderer runs in the process that holds the isolated world and
+//! the binding, so it can make its own check pass. It cannot reach another check (`cleanup`) or
+//! leave the pod (README.md, 「威脅模型」).
 
 use std::path::PathBuf;
 use std::sync::Arc;

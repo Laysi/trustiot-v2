@@ -26,7 +26,7 @@
 2. **只有 assistant 進得來**：部署要以 mesh 的授權只讓 assistant 呼叫 API 埠；請求不帶使用者身分，服務也不驗證身分。
 3. **檢查之間不留東西**：每次檢查用新的瀏覽器行程與新的目錄，結束時（不論正常、失敗、逾時或請求被中斷）整個 process group 用 SIGKILL 殺掉。服務是容器的 PID 1 時，還會以 `kill(-1, SIGKILL)` 殺掉 PID namespace 裡其他所有行程並回收，直到 `/proc` 裡只剩服務自己：不論行程的狀態，離開 process group 的行程跑不掉，主執行緒已結束而其他執行緒還在跑的行程（`/proc` 顯示為 zombie）也跑不掉；期限內還在的就是清理失敗。對所有行程送訊號只在 PID 1 做得到（程式上需要一個只有 PID 1 才建得出來的憑證，送出前再確認一次），不是 PID 1 時不會走到。另外清空工作目錄、`/dev/shm`、`/dev/mqueue`，清空 `/dev/termination-log`，刪掉所有 System V 的共享記憶體、訊息佇列與 semaphore。pod 的 volume 與 IPC namespace 在容器重啟後還在，所以啟動時也做一次。這一點防的是跨租戶：一個頁面若能留下行程或檔案，就能讀到之後別的租戶的檢查資料，再從自己下一次檢查的判定（例如 script 錯誤訊息）帶出去。
 4. **服務本身碰不到**：服務啟動時設 `PR_SET_DUMPABLE` 為 0，同一個使用者的行程（瀏覽器）不能 ptrace 它，也讀不到它的 `/proc/<pid>/mem`、`fd`、`environ`。瀏覽器只拿到 fd 0–2（`/dev/null`）與 3、4 兩條 pipe，環境變數只有指向它自己目錄的 `HOME`、`TMPDIR`、`XDG_CONFIG_HOME`、`XDG_CACHE_HOME`；它的 OOM 分數調到 1000，記憶體不夠時核心先殺瀏覽器。
-5. **比對不被頁面騙**：比對程式在沙箱 frame 的 isolated world 執行，頁面改寫 DOM 原型或全域物件影響不到它；畫完的條件也由服務在 isolated world 自己確認，不相信 runtime 的 `rendered`。比對的輸入（預期的值）只送進 isolated world，頁面看不到。
+5. **比對不被頁面的 script 騙**：比對程式在沙箱 frame 的 isolated world 執行，頁面的 script 改寫 DOM 原型或全域物件影響不到它；畫完的條件也由服務在 isolated world 自己確認，不相信 runtime 的 `rendered`。比對的輸入（請求的資料）以呼叫的參數直接送進 isolated world，不經過頁面。這只對頁面的 script 成立，判定的可信度以 renderer 為限：Chromium 沒有自己的沙箱，攻破 renderer 的程式與 isolated world、binding 在同一個行程裡，能讓自己這一次的檢查通過，也就是讓自己的頁面存成新版本。它碰不到別次的檢查（第 3 點），也出不了 pod（第 1 點）。
 6. **判定只帶得出有限的東西**：判定裡來自頁面的只有 script 錯誤訊息（第一行、移除控制與不可見字元、最多 200 字元）與字面數字（只有數字與分隔符號），其餘都來自請求自己的資料；服務回傳前以 `CheckVerdict::validate` 確認，assistant 收到後再確認一次。
 
 剩下的風險：

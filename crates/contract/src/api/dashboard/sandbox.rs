@@ -31,11 +31,10 @@
 //! host as a script or stylesheet. Such a request reaches only the platform's own host and
 //! carries no cookie: the document's origin is opaque, so the browser treats it as a request
 //! from another site and leaves out the `SameSite=Lax` session cookie (both checked in
-//! Chromium on 2026-10-26). The checker's contract is to refuse every such request and fail
-//! the page with `check::Problem::Requested` (`frontend/sandbox/README.md`, 「檢查規則」 and
-//! 「檢查服務的流程」; `services/dashboard-check` is still a skeleton and implements it with the
-//! rest of Laysi/trustiot-v2#150). A page could still make such a request only when it is
-//! displayed, which is why what the request can reach matters.
+//! Chromium on 2026-10-26). The checker refuses every such request and fails the page with
+//! `check::Problem::Requested` (`frontend/sandbox/README.md`, 「檢查規則」 and 「檢查服務的流程」;
+//! `services/dashboard-check/README.md`, 「流程」). A page could still make such a request
+//! only when it is displayed, which is why what the request can reach matters.
 //!
 //! What these headers do not cover is tracked in Laysi/trustiot-v2#699.
 
