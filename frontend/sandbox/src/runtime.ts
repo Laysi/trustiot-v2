@@ -39,6 +39,12 @@ export interface RuntimeEnvironment {
   post(message: SandboxMessage): void;
   /** The d3 namespace the page gets as `d3`. */
   d3: unknown;
+  /**
+   * Whether the window lays its document out: true in a browser (installSandbox), false in a test
+   * DOM without layout. The display-time comparison's layout rules run only with it, and it is
+   * never read from the page (compareDocument).
+   */
+  layout: boolean;
 }
 
 export interface Runtime {
@@ -716,7 +722,7 @@ export function startRuntime(env: RuntimeEnvironment): Runtime {
       for (const name of FLAGS) if (dom.getAttribute(element, name) !== null) dom.removeAttribute(element, name);
     }
     flagged = [];
-    const { findings } = compareDocument(dom, delivered.model, init.locale);
+    const { findings } = compareDocument(dom, delivered.model, init.locale, env.layout);
     let rewritten = 0;
     for (const finding of findings) {
       if (finding.fix !== null) {
@@ -891,6 +897,8 @@ export function installSandbox(win: DomWindow): Runtime | null {
     window: win,
     post: (message) => apply(postMessage, parent, [message, "*"]),
     d3: (win as unknown as { d3?: unknown }).d3,
+    // The sandbox frame is a browser document, which is laid out.
+    layout: true,
   });
   apply(win.EventTarget.prototype.addEventListener, win, [
     "message",

@@ -191,6 +191,8 @@ export async function openFrame(beforeStart: (win: DomWindow) => void = () => {}
       for (const wake of [...waiting]) wake();
     },
     d3: (win as unknown as { d3: unknown }).d3,
+    // happy-dom has no layout.
+    layout: false,
   });
   const next = (accept: (message: SandboxMessage) => boolean, limitMs: number, from = 0) =>
     new Promise<SandboxMessage | null>((resolve) => {
@@ -292,7 +294,12 @@ export async function checkInFrame(request: CheckRequest): Promise<CheckVerdict>
     const doneError = scriptError(done);
     if (doneError !== null) return doneError;
     return verdictOf(
-      compareDocument(frame.dom, { spec: request.spec, results: request.datasets, tz: request.tz }, request.locale),
+      compareDocument(
+        frame.dom,
+        { spec: request.spec, results: request.datasets, tz: request.tz },
+        request.locale,
+        false,
+      ),
     );
   } finally {
     await frame.close();

@@ -604,6 +604,16 @@
       }
     },
     {
+      "name": "text-mark-root-zero",
+      "page": "pages/text-mark-root-zero.html",
+      "unit": false,
+      "about": "The document's root box is made empty while its content still shows, and the value overflows a clipping box. Browser-only: it needs real layout; the root's box must not decide whether layout rules run.",
+      "expect": {
+        "verdict": "failed",
+        "problems": [{ "kind": "mismatch", "reference": "f|week_kwh", "value": 690, "tag": "b" }]
+      }
+    },
+    {
       "name": "unsupported-canvas",
       "page": "pages/unsupported-canvas.html",
       "unit": true,

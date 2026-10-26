@@ -11,8 +11,9 @@ export function createCompare(win: DomWindow): (input: unknown) => CheckVerdict 
   const dom = captureDom(win);
   return (input) => {
     const parsed = CompareInputSchema.parse(input);
+    // The checker runs in a browser, which lays the document out (compareDocument's `layout`).
     return verdictOf(
-      compareDocument(dom, { spec: parsed.spec, results: parsed.datasets, tz: parsed.tz }, parsed.locale),
+      compareDocument(dom, { spec: parsed.spec, results: parsed.datasets, tz: parsed.tz }, parsed.locale, true),
     );
   };
 }

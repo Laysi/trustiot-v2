@@ -13,7 +13,7 @@ import {
   verdictOf,
   withoutNumbers,
 } from "../src/compare.ts";
-import { captureDom, type DomAccess, type DomWindow } from "../src/dom.ts";
+import { type Box, captureDom, type DomAccess, type DomWindow } from "../src/dom.ts";
 import { type CheckRequest, CheckRequestSchema, type CheckVerdict, MAX_PROBLEMS } from "../src/protocol.ts";
 import { layoutDom } from "./harness.ts";
 
@@ -29,6 +29,8 @@ interface Options {
   /** Computed style values; `undefined` falls back to happy-dom's. */
   style?: Style;
   animations?: number;
+  /** Judge as a browser with layout would, with these boxes (`box`, by default every element 20 × 16). */
+  layout?: { box?: (element: Element, root: boolean) => Box | undefined };
 }
 
 const windows: Window[] = [];
@@ -47,13 +49,21 @@ function documentOf(body: string): { win: DomWindow; dom: DomAccess } {
 
 function judge(body: string, options: Options = {}): CheckVerdict {
   const { dom } = documentOf(body);
+  const layout = options.layout;
   const access: DomAccess = {
     ...dom,
     style: (element, pseudo, property) =>
       options.style?.(element, pseudo, property) ?? dom.style(element, pseudo, property),
     liveAnimations: () => options.animations ?? 0,
+    ...(layout === undefined
+      ? {}
+      : {
+          box: (element: Element) =>
+            layout.box?.(element, element === dom.documentElement()) ?? { left: 0, top: 0, width: 20, height: 16 },
+          scrollSize: () => ({ scrollWidth: 20, clientWidth: 20, scrollHeight: 16, clientHeight: 16 }),
+        }),
   };
-  return verdictOf(compareDocument(access, model, "zh-TW"));
+  return verdictOf(compareDocument(access, model, "zh-TW", layout !== undefined));
 }
 
 const problems = (verdict: CheckVerdict) => (verdict.verdict === "failed" ? verdict.problems : []);
@@ -152,6 +162,40 @@ describe("text marks", () => {
     // An overflow box whose content fits (no overflow) is not clipped, so it passes.
     expect(concealsText(stub({ style: { "overflow-x": "hidden" } }), element, true)).toBe(false);
     expect(concealsText(stub({}), element, true)).toBe(false);
+  });
+});
+
+describe("layout is the caller's fact, not the page's", () => {
+  const page =
+    '<p data-tq="f|week_kwh">690</p><svg>' +
+    '<rect data-tq="c|daily_energy|kwh|0" data-tq-chart="bars" data-tq-channel="height" height="10"/></svg>';
+  const emptyRoot =
+    (width: number, height: number) =>
+    (_element: Element, root: boolean): Box | undefined =>
+      root ? { left: 0, top: 0, width, height } : undefined;
+
+  test("with layout, plain marks in a root with an area pass", () => {
+    expect(marks(judge(page, { layout: {} }))).toEqual([
+      { reference: "f|week_kwh", value: 690 },
+      { reference: "c|daily_energy|kwh|0", value: 120.5 },
+    ]);
+  });
+
+  test("with layout, a root box without an area makes every mark a finding", () => {
+    for (const [width, height] of [
+      [0, 0],
+      [1200, 0],
+      [0, 400],
+    ] as const) {
+      expect(problems(judge(page, { layout: { box: emptyRoot(width, height) } }))).toEqual([
+        { kind: "mismatch", reference: "f|week_kwh", value: 690, tag: "p" },
+        { kind: "mark_geometry", reference: "c|daily_energy|kwh|0", channel: "height" },
+      ]);
+    }
+  });
+
+  test("without layout (a unit test's DOM) the root's empty box decides nothing", () => {
+    expect(problems(judge(page))).toEqual([]);
   });
 });
 
@@ -333,7 +377,7 @@ describe("content the check cannot read, and animations", () => {
   test("an open shadow root", () => {
     const { win, dom } = documentOf('<div id="host"></div>');
     win.document.getElementById("host")?.attachShadow({ mode: "open" });
-    expect(problems(verdictOf(compareDocument(dom, model, "zh-TW")))).toEqual([
+    expect(problems(verdictOf(compareDocument(dom, model, "zh-TW", false)))).toEqual([
       { kind: "unsupported_content", content: "shadow_root" },
     ]);
   });
@@ -356,7 +400,7 @@ describe("size limits", () => {
       fragment.appendChild(item);
     }
     win.document.body.appendChild(fragment);
-    expect(problems(verdictOf(compareDocument(dom, model, "zh-TW")))).toEqual([
+    expect(problems(verdictOf(compareDocument(dom, model, "zh-TW", false)))).toEqual([
       { kind: "too_large", limit: "marks", max: 10_000 },
     ]);
   });

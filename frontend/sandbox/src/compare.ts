@@ -241,11 +241,11 @@ export function isTransparent(color: string): boolean {
  * override (the digits read in another order), a restyled `::first-letter`/`::first-line` (a digit
  * hidden, resized or made transparent), a zero-size box (`font-size: 0`), and a clipping box the
  * content overflows, so part is cut off (an ellipsis is this with `text-overflow` set). The
- * box-size and clipping checks need layout, so they run only where there is layout (the checker's
- * browser and the view, not a unit test's DOM), gated by `layoutAvailable`. A mark with no box but
- * visible text (`display: contents`) is not hidden and is not flagged.
+ * box-size and clipping checks need layout, so they run only when the caller says it has layout
+ * (`layout`: the checker's browser and the runtime's, never a unit test's DOM). A mark with no box
+ * but visible text (`display: contents`) is not hidden and is not flagged.
  */
-export function concealsText(dom: DomAccess, element: Element, layoutAvailable: boolean): boolean {
+export function concealsText(dom: DomAccess, element: Element, layout: boolean): boolean {
   for (let child = dom.firstChild(element); child !== null; child = dom.nextSibling(child)) {
     if (dom.nodeType(child) === 1) return true;
   }
@@ -264,7 +264,7 @@ export function concealsText(dom: DomAccess, element: Element, layoutAvailable: 
     if (pseudoVisibility === "hidden" || pseudoVisibility === "collapse") return true;
     if (isTransparent(dom.style(element, pseudo, "color"))) return true;
   }
-  if (layoutAvailable) {
+  if (layout) {
     // A box with no area shows nothing (font-size: 0); display: contents has no box of its own but
     // still shows its text through its parent, so it is not hidden.
     if (display !== "contents") {
@@ -311,8 +311,13 @@ interface AxisTick {
 /**
  * Judges the document against the data: every rule of the README's table except those only the
  * checker sees (script errors, navigation, requests, closed shadow roots, the time limits).
+ *
+ * `layout` is the caller's fact, never read from the page: whether the document is laid out by a
+ * browser (the checker and the runtime pass true; a unit test's DOM, which reports every box as
+ * empty, passes false). The page styles its own root, so the root's box must not decide whether
+ * the layout rules run.
  */
-export function compareDocument(dom: DomAccess, model: Model, locale: Locale): Comparison {
+export function compareDocument(dom: DomAccess, model: Model, locale: Locale, layout: boolean): Comparison {
   const findings: Finding[] = [];
   const marks: MarkReport[] = [];
   const reported: Record<string, true> = Object.create(null);
@@ -326,10 +331,12 @@ export function compareDocument(dom: DomAccess, model: Model, locale: Locale): C
   // (computed styles, layout) run over it.
   const limit = sizeLimit(dom, root);
   if (limit !== null) return { findings: [{ problem: limit, fix: null }], marks };
-  // Layout-dependent checks (a mark's box, clipping) run only where there is layout: the checker's
-  // browser and the view, not a unit test's DOM, which reports every box as empty.
-  const rootBox = dom.box(root);
-  const layoutAvailable = rootBox.width > 0 || rootBox.height > 0;
+  // With layout, the root always has an area: the frame's width, and #tq-root's padding in the
+  // sandbox's own styles. A root box with no area means the page hid how its marks render (the
+  // document's own box emptied while its content overflows it, or a frame that is not laid out),
+  // so every mark is a finding.
+  const rootBox = layout ? dom.box(root) : null;
+  const unlaid = rootBox !== null && (rootBox.width <= 0 || rootBox.height <= 0);
 
   const add = (problem: Problem, fix: Fix | null) => {
     findings.push({ problem, fix });
@@ -396,12 +403,16 @@ export function compareDocument(dom: DomAccess, model: Model, locale: Locale): C
         unmapped();
         return { graphic };
       }
-      const key = `${chart}|${knownChannel}`;
-      if (!(key in groups)) {
-        groups[key] = [];
-        groupOrder.push(key);
+      if (unlaid) {
+        add({ kind: "mark_geometry", reference: canonical, channel: knownChannel }, fix);
+      } else {
+        const key = `${chart}|${knownChannel}`;
+        if (!(key in groups)) {
+          groups[key] = [];
+          groupOrder.push(key);
+        }
+        groups[key]?.push({ element, reference: canonical, resolved });
       }
-      groups[key]?.push({ element, reference: canonical, resolved });
     } else {
       const format = dom.getAttribute(element, "data-tq-format") ?? undefined;
       let expected: string | null;
@@ -411,7 +422,7 @@ export function compareDocument(dom: DomAccess, model: Model, locale: Locale): C
         if (!(error instanceof FormatError)) throw error;
         expected = null;
       }
-      if (expected === null || dom.textContent(element) !== expected || concealsText(dom, element, layoutAvailable)) {
+      if (expected === null || dom.textContent(element) !== expected || unlaid || concealsText(dom, element, layout)) {
         add(withTag({ kind: "mismatch", reference: canonical, value: resolved.value }, tag), fix);
       } else if (reference.form === "t" && state.axis !== null) {
         tick(element, reference, canonical, state.axis);
