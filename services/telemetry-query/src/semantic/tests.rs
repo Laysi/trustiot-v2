@@ -96,23 +96,50 @@ fn the_series_parameter_is_an_escaped_array_of_tuples() {
 #[test]
 fn requests_are_checked_before_anything_is_queried() {
     let now = at(NOW);
-    assert!(check(&query(&["energy_kwh"], Interval::Day1), Kind::Usage, now).is_ok());
+    assert!(
+        check(
+            &query(&["energy_kwh"], Interval::Day1),
+            Kind::Usage,
+            Windows::PLATFORM,
+            now
+        )
+        .is_ok()
+    );
     // The series: 1 to 20, distinct, with valid keys.
     assert_eq!(
-        status(check(&query(&[], Interval::Total), Kind::Usage, now)),
+        status(check(
+            &query(&[], Interval::Total),
+            Kind::Usage,
+            Windows::PLATFORM,
+            now
+        )),
         422
     );
     let many: Vec<String> = (0..21).map(|n| format!("p{n}")).collect();
     let many: Vec<&str> = many.iter().map(String::as_str).collect();
     assert_eq!(
-        status(check(&query(&many, Interval::Total), Kind::Usage, now)),
+        status(check(
+            &query(&many, Interval::Total),
+            Kind::Usage,
+            Windows::PLATFORM,
+            now
+        )),
         422
     );
-    assert!(check(&query(&many[..20], Interval::Total), Kind::Usage, now).is_ok());
+    assert!(
+        check(
+            &query(&many[..20], Interval::Total),
+            Kind::Usage,
+            Windows::PLATFORM,
+            now
+        )
+        .is_ok()
+    );
     assert_eq!(
         status(check(
             &query(&["a", "a"], Interval::Total),
             Kind::Usage,
+            Windows::PLATFORM,
             now
         )),
         422
@@ -121,6 +148,7 @@ fn requests_are_checked_before_anything_is_queried() {
         status(check(
             &query(&["x' OR 1=1"], Interval::Total),
             Kind::Usage,
+            Windows::PLATFORM,
             now
         )),
         422
@@ -129,21 +157,59 @@ fn requests_are_checked_before_anything_is_queried() {
     for tz in ["Asia/Taipei') --", "asia/taipei", "", "Mars/Olympus"] {
         let mut bad = query(&["a"], Interval::Total);
         bad.tz = tz.to_owned();
-        assert_eq!(status(check(&bad, Kind::Usage, now)), 422, "{tz}");
+        assert_eq!(
+            status(check(&bad, Kind::Usage, Windows::PLATFORM, now)),
+            422,
+            "{tz}"
+        );
     }
     // The period and the range.
     let mut bad = query(&["a"], Interval::Total);
     bad.period = Some("last_7_days'".to_owned());
-    assert_eq!(status(check(&bad, Kind::Usage, now)), 422);
+    assert_eq!(
+        status(check(&bad, Kind::Usage, Windows::PLATFORM, now)),
+        422
+    );
     bad.period = None;
     bad.from = Some(at("2026-10-02T00:00:00Z"));
     bad.to = Some(at("2026-10-01T00:00:00Z"));
-    assert_eq!(status(check(&bad, Kind::Usage, now)), 422);
-    // Wholly before the queryable period: 403 with its start.
+    assert_eq!(
+        status(check(&bad, Kind::Usage, Windows::PLATFORM, now)),
+        422
+    );
+    // Wholly before the queryable period: 403 with its start. The period is the account's
+    // windows, read when the account is checked: the checks before it let the range through.
     bad.from = Some(at("2026-01-01T00:00:00Z"));
     bad.to = Some(at("2026-02-01T00:00:00Z"));
-    let refused = check(&bad, Kind::Usage, now).err().expect("refused");
+    assert!(validate(&bad, now).is_ok());
+    let refused = check(&bad, Kind::Usage, Windows::PLATFORM, now)
+        .err()
+        .expect("refused");
     assert_eq!(refused.status().as_u16(), 403);
+    // Everything else refused above is refused before the account is looked up.
+    for refused in [
+        query(&[], Interval::Total),
+        query(&many, Interval::Total),
+        query(&["a", "a"], Interval::Total),
+        query(&["x' OR 1=1"], Interval::Total),
+        SeriesQuery {
+            tz: "asia/taipei".to_owned(),
+            ..query(&["a"], Interval::Total)
+        },
+        SeriesQuery {
+            period: Some("last_7_days'".to_owned()),
+            ..query(&["a"], Interval::Total)
+        },
+        SeriesQuery {
+            period: None,
+            from: Some(at("2026-10-02T00:00:00Z")),
+            to: Some(at("2026-10-01T00:00:00Z")),
+            ..query(&["a"], Interval::Total)
+        },
+    ] {
+        let response = validate(&refused, now).expect_err("refused");
+        assert_eq!(response.status().as_u16(), 422, "{refused:?}");
+    }
 }
 
 #[test]
@@ -197,7 +263,7 @@ fn checked(interval: Interval) -> (SeriesQuery, Checked) {
     query.period = None;
     query.from = Some(at("2026-10-20T00:00:00Z"));
     query.to = Some(at("2026-10-21T00:00:00Z"));
-    let checked = check(&query, Kind::Usage, at(NOW)).expect("a valid request");
+    let checked = check(&query, Kind::Usage, Windows::PLATFORM, at(NOW)).expect("a valid request");
     (query, checked)
 }
 
@@ -577,8 +643,10 @@ async fn a_usage_over_too_many_minute_cells_is_too_heavy() {
     let mut heavy = query(&points, Interval::Day1);
     heavy.tz = "Asia/Kolkata".to_owned();
     heavy.period = Some("last_60_days".to_owned());
-    assert!(check(&heavy, Kind::Statistics, at(NOW)).is_ok());
-    let refused = check(&heavy, Kind::Usage, at(NOW)).err().expect("refused");
+    assert!(check(&heavy, Kind::Statistics, Windows::PLATFORM, at(NOW)).is_ok());
+    let refused = check(&heavy, Kind::Usage, Windows::PLATFORM, at(NOW))
+        .err()
+        .expect("refused");
     assert_eq!(refused.status().as_u16(), 422);
     let body = http_body_util::BodyExt::collect(refused.into_body())
         .await
@@ -589,7 +657,7 @@ async fn a_usage_over_too_many_minute_cells_is_too_heavy() {
     assert_eq!(body["details"]["parameter"], "series");
     // Ten series fit.
     heavy.series.truncate(10);
-    assert!(check(&heavy, Kind::Usage, at(NOW)).is_ok());
+    assert!(check(&heavy, Kind::Usage, Windows::PLATFORM, at(NOW)).is_ok());
 }
 
 #[tokio::test]
@@ -605,7 +673,9 @@ async fn a_range_ending_too_far_after_now_is_refused_not_a_panic() {
                 "to": to,
             });
             let asked: SeriesQuery = serde_json::from_value(body).expect("a request");
-            let refused = check(&asked, kind, at(NOW)).err().expect("refused");
+            let refused = check(&asked, kind, Windows::PLATFORM, at(NOW))
+                .err()
+                .expect("refused");
             assert_eq!(refused.status().as_u16(), 422, "{to}");
             let body = http_body_util::BodyExt::collect(refused.into_body())
                 .await
@@ -623,5 +693,5 @@ async fn a_range_ending_too_far_after_now_is_refused_not_a_panic() {
     edge.period = None;
     edge.from = Some(at("2026-10-25T00:00:00Z"));
     edge.to = Some(range::latest_end(at(NOW)));
-    assert!(check(&edge, Kind::Usage, at(NOW)).is_ok());
+    assert!(check(&edge, Kind::Usage, Windows::PLATFORM, at(NOW)).is_ok());
 }

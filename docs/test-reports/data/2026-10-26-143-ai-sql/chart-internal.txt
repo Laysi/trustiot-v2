@@ -1,0 +1,37 @@
+pass every service reads the public keys from the ConfigMap it mounts whole, never from a value
+pass without the identity service nothing publishes keys, so no service is told where they are
+pass only the identity service mounts its signing keys, read-only and mode 0440, in a container without a token
+pass the identity pod's init container generates and publishes the keys with a token only it mounts, and the Role names exactly the Secret and the ConfigMap
+pass a rotation or a revocation restarts the identity service only, which gets the revocation before its files do
+pass the rotation CronJob runs the init container's command as the identity ServiceAccount, with no Role, binding or Secret mount of its own
+pass the maximum key age and the schedule change the CronJob and the identity service's check only
+pass a signing key a person made before Laysi/trustiot-v2#404 reaches the init container only, which imports it
+pass no Role but the identity service's may write a ConfigMap or name its signing keys (the certs service's writes only its requests)
+pass the identity service alone gets the cookie routes, with host names, to address its tokens
+pass /internal is denied at the gateway even when a catch-all route matches it
+pass the mesh in deploy/istio decodes %2F and merges slashes, so /internal* catches every spelling
+pass a private key (d) among the internal identity public keys
+pass an internal identity public key that is not 32 bytes
+pass an internal identity public key in padded base64
+pass more than eight internal identity public keys
+pass the internal identity signing key as a plain value
+pass public path under /internal
+pass cookie route under /internal
+pass an internal identity key id listed twice
+pass env that reads the generated internal identity signing keys
+pass env that reads the generated internal identity signing keys while the identity service is off
+pass an internal identity key generation of 0
+pass an internal identity key generation of 0 as a number
+pass an internal identity key generation below the revocation
+pass an internal identity key generation that is not a number
+pass public path under /internal
+pass cookie route under /internal
+pass an internal identity key generation the init container would refuse
+pass an internal identity key generation below the revocation
+pass env that reads the generated internal identity signing keys
+pass checking the static files, or giving them no route, is caught; only DENY makes /internal no problem
+pass a token from stdin goes as x-internal-identity, and only whether it arrived is printed
+pass signs with the newest published key, in the identity service's format
+pass a key listed with another public key, or not listed, never signs
+pass the services' checks: signature, key, type, issuer, lifetime and time
+pass neither the signer nor an error shows a key or a token

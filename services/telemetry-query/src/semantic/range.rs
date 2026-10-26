@@ -1,7 +1,7 @@
 //! What a semantic request's range becomes before anything is queried: the time zone, the
 //! relative period resolved at the request's "now", the table that answers it exactly, the
-//! queryable period of that table, and the limits (services/telemetry-query/README.md,
-//! 「語意查詢」).
+//! queryable period of that table (the account's window, [`Windows::earliest`]), and the limits
+//! (services/telemetry-query/README.md, 「語意查詢」).
 //!
 //! Local calendar arithmetic uses the IANA Time Zone Database compiled into the service
 //! (`jiff-tzdb`), never the host's, so every replica resolves a period alike. ClickHouse puts
@@ -11,31 +11,28 @@
 
 use std::sync::OnceLock;
 
-use chrono::{DateTime, Months, TimeDelta, Utc};
+use chrono::{DateTime, TimeDelta, Utc};
 use jiff::tz::{TimeZone, TimeZoneDatabase};
 use jiff::{Timestamp, ToSpan, civil::Date};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
-use crate::history::AGGREGATED_MONTHS;
-
-/// How much later than the queryable period's start the service starts reading: the database
-/// evaluates its own window's `now()` after the service took its "now" (the account check, the
-/// request and clock skew), so the service's start must never be earlier than the database's.
-pub const PERIOD_MARGIN: TimeDelta = TimeDelta::minutes(5);
+use crate::period::{View, Windows};
 
 /// How far around the range the usage reads, for the reading before the range (the baseline)
 /// and for the cumulative check, which judges the data point rather than the range.
 pub const LOOKAROUND: TimeDelta = TimeDelta::hours(24);
 
-/// How far after the request's "now" a range may end. The longest relative period, `this_year`
-/// asked at the first instant of a leap year, ends 366 local days later; the one more day covers
-/// a change of the zone's UTC offset within the year. A later `to` is refused before any date
-/// arithmetic: chrono panics when an addition overflows (serde accepts years such as +262142),
-/// and ClickHouse's `DateTime` wraps after [`LAST_DATETIME_SECONDS`].
+/// How far after the request's "now" a range may end, in the semantic API and in the history
+/// API ([`crate::history`]). The longest relative period, `this_year` asked at the first instant
+/// of a leap year, ends 366 local days later; the one more day covers a change of the zone's UTC
+/// offset within the year. A later `to` is refused before any date arithmetic: chrono panics
+/// when an addition overflows (serde accepts years such as +262142), and ClickHouse's `DateTime`
+/// wraps after [`LAST_DATETIME_SECONDS`].
 pub const MAX_AHEAD: TimeDelta = TimeDelta::days(367);
 /// The last second ClickHouse's `DateTime` (seconds in a `UInt32`) holds:
-/// 2106-02-07T06:28:15Z. The statements compare buckets with `toDateTime({to:Int64}, 'UTC')`.
+/// 2106-02-07T06:28:15Z. The one-minute and one-hour cells' `bucket` is a `DateTime`; the
+/// statements of both APIs compare it with the range's `to`.
 pub const LAST_DATETIME_SECONDS: i64 = 4_294_967_295;
 
 /// The most series one request names.
@@ -273,18 +270,14 @@ impl Resolution {
             Self::Hour => HOUR_MS,
         }
     }
-}
 
-/// The start of the queryable period of `table` at `now`: [`AGGREGATED_MONTHS`] calendar months
-/// back (a day the month lacks becomes its last day, as ClickHouse's `subtractMonths` does),
-/// [`PERIOD_MARGIN`] later, rounded up to the table's cell. Every cell from it on (inclusive)
-/// may be read; the database's own window starts at or before it.
-pub fn queryable_start(table: Resolution, now: DateTime<Utc>) -> DateTime<Utc> {
-    let start = now
-        .checked_sub_months(Months::new(AGGREGATED_MONTHS))
-        .unwrap_or(DateTime::<Utc>::MIN_UTC)
-        + PERIOD_MARGIN;
-    ceil(start, table.cell_ms()).unwrap_or(start)
+    /// The tenant view the table is read through, whose window the account carries.
+    pub const fn view(self) -> View {
+        match self {
+            Self::Minute => View::Minute,
+            Self::Hour => View::Hour,
+        }
+    }
 }
 
 /// Whether every bucket boundary of `from..to` in `tz` falls on a whole UTC hour, so the
@@ -364,13 +357,13 @@ pub struct Plan {
     pub window_to: DateTime<Utc>,
 }
 
-/// Plans a request at `now` in `tz`.
-pub fn plan(
+/// The range asked, `from` inclusive and `to` exclusive, resolved at `now` in `tz`: what can be
+/// checked without the account's windows, before the account is looked up.
+pub fn resolve(
     asked: &Asked<'_>,
-    kind: Kind,
     now: DateTime<Utc>,
     tz: &TimeZone,
-) -> Result<Plan, Refusal> {
+) -> Result<(DateTime<Utc>, DateTime<Utc>), Refusal> {
     let latest = latest_end(now);
     let (from, to) = match (asked.period, asked.from, asked.to) {
         (Some(period), None, None) => Period::parse(period)
@@ -395,11 +388,27 @@ pub fn plan(
     if from >= to {
         return Err(Refusal::Range);
     }
-    let minute_start = queryable_start(Resolution::Minute, now);
-    if to <= minute_start {
-        return Err(Refusal::OutsidePeriod(minute_start));
+    Ok((from, to))
+}
+
+/// Plans a request at `now` in `tz`, for an account whose views keep `windows`: each table is
+/// read from its own queryable start ([`Windows::earliest`], never earlier than the database's
+/// window), and a range that ends before both is refused.
+pub fn plan(
+    asked: &Asked<'_>,
+    kind: Kind,
+    windows: Windows,
+    now: DateTime<Utc>,
+    tz: &TimeZone,
+) -> Result<Plan, Refusal> {
+    let latest = latest_end(now);
+    let (from, to) = resolve(asked, now, tz)?;
+    let minute_start = windows.earliest(View::Minute, now);
+    let hour_start = windows.earliest(View::Hour, now);
+    let sooner = minute_start.min(hour_start);
+    if to <= sooner {
+        return Err(Refusal::OutsidePeriod(sooner));
     }
-    let hour_start = queryable_start(Resolution::Hour, now);
     let hourly = !matches!(asked.interval.unit(), Unit::Minutes(_))
         && to > hour_start
         && whole_hours(tz, from.max(hour_start), to);
@@ -408,7 +417,10 @@ pub fn plan(
     } else {
         Resolution::Minute
     };
-    let earliest = queryable_start(resolution, now);
+    let earliest = windows.earliest(resolution.view(), now);
+    if to <= earliest {
+        return Err(Refusal::OutsidePeriod(earliest));
+    }
     let start = from.max(earliest);
     let series = i64::try_from(asked.series).unwrap_or(i64::MAX);
     let rows = series.saturating_mul(asked.interval.max_buckets(start, to));
@@ -572,43 +584,78 @@ mod tests {
     }
 
     #[test]
-    fn the_queryable_period_starts_later_than_the_databases_rounded_up_to_the_cell() {
+    fn each_table_is_cut_where_the_accounts_window_for_it_starts() {
         let now = at("2026-10-26T10:17:42.500Z");
-        // Three months back is 2026-07-26 10:17:42.5; five minutes later 10:22:42.5.
+        let (utc, kolkata) = (tz("UTC"), tz("Asia/Kolkata"));
+        let year = asked(Some("this_year"), None, Interval::Day1, 1);
+        // The platform's windows, three months on both tables: 2026-07-26 10:17:42.5, five
+        // minutes later and rounded up to the table's cell (crate::period).
+        let hour = plan(&year, Kind::Statistics, Windows::PLATFORM, now, &utc).expect("a plan");
+        assert_eq!(hour.resolution, Resolution::Hour);
+        assert_eq!(hour.earliest, at("2026-07-26T11:00:00Z"));
+        assert_eq!(hour.earliest, Windows::PLATFORM.earliest(View::Hour, now));
+        let minute =
+            plan(&year, Kind::Statistics, Windows::PLATFORM, now, &kolkata).expect("a plan");
+        assert_eq!(minute.resolution, Resolution::Minute);
+        assert_eq!(minute.earliest, at("2026-07-26T10:23:00Z"));
         assert_eq!(
-            queryable_start(Resolution::Minute, now),
-            at("2026-07-26T10:23:00Z")
+            minute.earliest,
+            Windows::PLATFORM.earliest(View::Minute, now)
+        );
+        // Other windows: each table its own, and a range is refused only before both.
+        let windows = Windows::new(7, 1, 12);
+        let hour = plan(&year, Kind::Statistics, windows, now, &utc).expect("a plan");
+        assert_eq!(hour.earliest, at("2025-10-26T11:00:00Z"));
+        assert_eq!(hour.from, at("2026-01-01T00:00:00Z"));
+        assert!(!hour.truncated);
+        let minute = plan(&year, Kind::Statistics, windows, now, &kolkata).expect("a plan");
+        assert_eq!(minute.earliest, at("2026-09-26T10:23:00Z"));
+        assert_eq!(minute.from, minute.earliest);
+        assert!(minute.truncated);
+        let january = asked(
+            None,
+            Some(("2026-01-01T00:00:00Z", "2026-02-01T00:00:00Z")),
+            Interval::Total,
+            1,
+        );
+        let hour = plan(&january, Kind::Statistics, windows, now, &utc).expect("a plan");
+        assert_eq!(hour.resolution, Resolution::Hour);
+        assert!(!hour.truncated);
+        // A half-hour zone needs the minute table, whose window starts later.
+        assert_eq!(
+            plan(&january, Kind::Statistics, windows, now, &kolkata),
+            Err(Refusal::OutsidePeriod(at("2026-09-26T10:23:00Z")))
+        );
+        let before = asked(
+            None,
+            Some(("2025-01-01T00:00:00Z", "2025-10-26T11:00:00Z")),
+            Interval::Total,
+            1,
         );
         assert_eq!(
-            queryable_start(Resolution::Hour, now),
-            at("2026-07-26T11:00:00Z")
+            plan(&before, Kind::Usage, windows, now, &utc),
+            Err(Refusal::OutsidePeriod(at("2025-10-26T11:00:00Z")))
         );
-        // A day the month lacks becomes its last day, as ClickHouse's subtractMonths does.
+        // When the margin crosses a midnight the shorter month clamps, the start is the
+        // window just before that midnight: the latest the database may take.
+        let now = at("2027-05-30T23:56:00Z");
+        let late = asked(
+            None,
+            Some(("2027-01-01T00:00:00Z", "2027-03-01T00:00:00Z")),
+            Interval::Total,
+            1,
+        );
         assert_eq!(
-            queryable_start(Resolution::Minute, at("2026-05-31T12:00:00Z")),
-            at("2026-02-28T12:05:00Z")
+            plan(&late, Kind::Statistics, Windows::PLATFORM, now, &utc),
+            Err(Refusal::OutsidePeriod(at("2027-03-01T00:00:00Z")))
         );
-        // Already on a boundary: stays there.
-        assert_eq!(
-            queryable_start(Resolution::Hour, at("2026-10-26T09:55:00Z")),
-            at("2026-07-26T10:00:00Z")
-        );
-        // Never earlier than now minus three months, the database's window.
-        for now in [
-            now,
-            at("2026-03-31T23:59:59.999Z"),
-            at("2026-01-01T00:00:00Z"),
-        ] {
-            let database = now
-                .checked_sub_months(Months::new(AGGREGATED_MONTHS))
-                .expect("in range");
-            for table in [Resolution::Minute, Resolution::Hour] {
-                assert!(
-                    queryable_start(table, now) >= database + PERIOD_MARGIN,
-                    "{now}"
-                );
-            }
-        }
+        let later = Asked {
+            to: Some(at("2027-03-01T01:00:00Z")),
+            ..late
+        };
+        let plan = plan(&later, Kind::Statistics, Windows::PLATFORM, now, &utc).expect("a plan");
+        assert_eq!(plan.from, at("2027-03-01T00:00:00Z"));
+        assert!(plan.truncated);
     }
 
     fn asked(
@@ -629,7 +676,7 @@ mod tests {
     const NOW: &str = "2026-10-26T10:17:42Z";
 
     fn planned(asked: &Asked<'_>, kind: Kind, zone: &str) -> Result<Plan, Refusal> {
-        plan(asked, kind, at(NOW), &tz(zone))
+        plan(asked, kind, Windows::PLATFORM, at(NOW), &tz(zone))
     }
 
     #[test]
@@ -796,11 +843,18 @@ mod tests {
         assert_eq!(latest, at("2027-10-28T10:17:42Z"), "367 days after now");
         let utc = tz("UTC");
         for kind in [Kind::Statistics, Kind::Usage] {
-            let edge = plan(&ending(latest), kind, now, &utc).expect("the latest end");
+            let edge =
+                plan(&ending(latest), kind, Windows::PLATFORM, now, &utc).expect("the latest end");
             assert_eq!(edge.to, at("2027-10-28T10:17:00Z"));
             assert!(edge.ends_after_now);
             assert_eq!(
-                plan(&ending(latest + TimeDelta::seconds(1)), kind, now, &utc),
+                plan(
+                    &ending(latest + TimeDelta::seconds(1)),
+                    kind,
+                    Windows::PLATFORM,
+                    now,
+                    &utc
+                ),
                 Err(Refusal::TooLate(latest))
             );
             // Past ClickHouse's DateTime, and years serde accepts but chrono cannot add to: refused
@@ -811,7 +865,7 @@ mod tests {
                 DateTime::<Utc>::MAX_UTC,
             ] {
                 assert_eq!(
-                    plan(&ending(to), kind, now, &utc),
+                    plan(&ending(to), kind, Windows::PLATFORM, now, &utc),
                     Err(Refusal::TooLate(latest)),
                     "{to}"
                 );
@@ -871,7 +925,7 @@ mod tests {
                         interval: Interval::Total,
                         series: 1,
                     };
-                    let planned = plan(&asked, Kind::Statistics, now, &zone);
+                    let planned = plan(&asked, Kind::Statistics, Windows::PLATFORM, now, &zone);
                     assert!(
                         !matches!(planned, Err(Refusal::TooLate(_))),
                         "{period} in {name} at {now}"

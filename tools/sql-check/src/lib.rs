@@ -180,6 +180,37 @@ pub const EXCEPTIONS: &[Exception] = &[
                  SET ROLE NONE as an attack that must fail",
     },
     Exception {
+        path: "services/telemetry-query/tests/sql_check.rs",
+        rules: &[Rule::SqlBuiltFromStrings, Rule::SessionSetting],
+        reason: "ClickHouse, not Postgres: the AI's SQL check (Laysi/trustiot-v2#143) must refuse \
+                 SET ROLE and other statements before they reach ClickHouse, and must size up \
+                 long, deep and wide queries the test builds with format!; the only Postgres is \
+                 a counting port that must see no connection",
+    },
+    Exception {
+        path: "services/telemetry-query/tests/sql_api.rs",
+        rules: &[Rule::SqlBuiltFromStrings, Rule::SessionSetting],
+        reason: "ClickHouse, not Postgres: sends SET ROLE and other statements to the AI's SQL \
+                 endpoint (Laysi/trustiot-v2#143), which must refuse them before they reach \
+                 ClickHouse, and long queries it builds with format!; checks ClickHouse's \
+                 query_log to show none ran",
+    },
+    Exception {
+        path: "services/telemetry-query/tests/queryable_period.rs",
+        rules: &[Rule::SessionSetting],
+        reason: "ClickHouse, not Postgres: runs SET ROLE NONE as a tenant account inside a \
+                 ClickHouse session, as an attack on the queryable period that must fail \
+                 (Laysi/trustiot-v2#143)",
+    },
+    Exception {
+        path: "services/assistant/tests/telemetry_sql.rs",
+        rules: &[Rule::SqlBuiltFromStrings, Rule::SessionSetting],
+        reason: "ClickHouse, not Postgres: the assistant's telemetry_sql tool sends the model's \
+                 SQL, SET ROLE and queries the test builds with format! included, to the SQL \
+                 endpoint, which must refuse them before Postgres or ClickHouse is reached \
+                 (Laysi/trustiot-v2#143); both are counting ports or a stand-in",
+    },
+    Exception {
         path: "tools/migrate/tests/registry.rs",
         rules: &[Rule::SessionSetting],
         reason: "lists SET ROLE, set_config and pg_settings as text that no service's Postgres \

@@ -1,0 +1,83 @@
+Security review fixes (2026-10-26): what each new test reported before its fix.
+
+== 1+2 operand grouping and fallback keywords, unit tests before the fix
+test sql::tests::a_keyword_the_parser_fell_back_to_a_name_for_is_refused ... FAILED
+test sql::tests::every_operand_that_is_an_operation_is_printed_in_parentheses ... FAILED
+test sql::tests::the_tree_is_rewritten_into_the_form_clickhouse_runs ... FAILED
+assertion `left == right` failed: SELECT 1 + 2 || 3 FROM tenant_telemetry
+  left: "SELECT 1 + 2 || 3 FROM trustiot.tenant_telemetry"
+ right: "SELECT 1 + (2 || 3) FROM trustiot.tenant_telemetry"
+assertion `left == right` failed: SELECT - -1, - - - value_int, 1 - -1 FROM tenant_telemetry
+  left: "SELECT -(-1), -(-(-value_int)), 1 - -1 FROM trustiot.tenant_telemetry"
+ right: "SELECT -(-1), -(-(-value_int)), 1 - (-1) FROM trustiot.tenant_telemetry"
+test result: FAILED. 47 passed; 3 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+test a_query_over_the_limits_only_as_printed_is_refused_as_such ... FAILED
+test result: FAILED. 12 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+
+== 1+2 operand grouping, sql_api before the fix (ClickHouse's EXPLAIN AST differs)
+assertion `left == right` failed: ClickHouse groups the printed query as sqlparser did: SELECT 1 + 2 || 3 FROM trustiot.tenant_telemetry
+test the_endpoint_runs_only_checked_selects_as_the_callers_tenant ... FAILED
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 9.75s
+
+== 3+4 names written as strings, ORDER BY after a parenthesized query, unit tests before the fix
+test sql::tests::a_string_where_a_name_belongs_is_refused ... FAILED
+test sql::tests::clauses_that_change_what_is_read_or_how_are_refused ... FAILED
+test result: FAILED. 49 passed; 2 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+
+== 3+4 sql_api before the fix
+assertion `left == right` failed: (SELECT point FROM tenant_telemetry_1m UNION ALL SELECT point FROM tenant_telemetry_1h) ORDER BY point LIMIT 3
+  left: Object {"code": String("validation_failed"), "details": Object {"class": String("query_error"), "kind": String("syntax")}, "message_key": String("error.validation_failed")}
+ right: Object {"code": String("validation_failed"), "details": Object {"class": String("clause_not_allowed"), "clause": String("set_operation_order")}, "message_key": String("error.validation_failed")}
+test the_endpoint_runs_only_checked_selects_as_the_callers_tenant ... FAILED
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 8.52s
+
+== 6 a changeable window was not repaired (5d), before the fix
+assertion `left == right` failed: the window was set again
+  left: 2
+ right: 3
+test each_tenant_account_sees_its_own_readings_only ... FAILED
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 38.16s
+
+== 6 a changeable SQL_tenant_id was served (5e), before the fix
+  left: 200
+ right: 503
+test each_tenant_account_sees_its_own_readings_only ... FAILED
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 37.81s
+
+== 7 month-end clamp, the code before the fix
+test period::tests::the_clamp_never_overflows ... FAILED
+test period::tests::a_margin_across_a_clamped_midnight_takes_the_window_before_it ... FAILED
+test period::tests::the_clamp_is_never_earlier_than_the_window_a_little_later ... FAILED
+assertion `left == right` failed: Raw: a window before chrono's first time starts there
+  left: -262143-01-01T00:05:00Z
+ right: -262143-01-01T00:00:00Z
+assertion `left == right` failed
+  left: 2027-03-01T00:01:00Z
+ right: 2027-03-01T00:00:00Z
+test result: FAILED. 6 passed; 3 failed; 0 ignored; 0 measured; 44 filtered out; finished in 0.17s
+
+== 7 month-end clamp, the formula first prescribed (no midnight term)
+test period::tests::a_margin_across_a_clamped_midnight_takes_the_window_before_it ... FAILED
+test period::tests::the_clamp_is_never_earlier_than_the_window_a_little_later ... FAILED
+assertion `left == right` failed
+  left: 2027-02-28T00:01:00Z
+ right: 2027-03-01T00:00:00Z
+test result: FAILED. 7 passed; 2 failed; 0 ignored; 0 measured; 44 filtered out; finished in 0.05s
+
+== 8 a failed account check on the SQL route, before the fix
+assertion `left == right` failed: 497: {"code":"internal","message_key":"error.internal"}
+  left: 500
+ right: 503
+test the_endpoint_runs_only_checked_selects_as_the_callers_tenant ... FAILED
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 11.04s
+
+== 9 the logged fingerprint was the plain hash, before the fix
+test sql_api::tests::the_logged_fingerprint_is_keyed_per_process ... FAILED
+assertion `left != right` failed: not the plain hash
+  left: "0c4512fe64c2961b"
+ right: "0c4512fe64c2961b"
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 53 filtered out; finished in 0.00s
+
+== 10 object keys in tool results were not capped, before the fix
+test tools::tests::long_keys_are_cut_and_keys_cut_alike_are_kept_apart ... FAILED
+test result: FAILED. 1 passed; 1 failed; 0 ignored; 0 measured; 38 filtered out; finished in 0.00s

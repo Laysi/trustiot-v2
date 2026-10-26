@@ -10,6 +10,13 @@
 #[path = "../../../ingest/tests/common/mod.rs"]
 pub mod clickhouse;
 
+/// The queryable period's readings and routes, shared by `queryable_period.rs` and
+/// `sql_api.rs`.
+pub mod period;
+
+/// The PoC's attack types, shared by `tenant_accounts.rs` and `sql_api.rs`.
+pub mod poc;
+
 use std::io::{BufRead, BufReader, Read};
 use std::net::SocketAddr;
 use std::process::{Child, Command, Stdio};
@@ -399,13 +406,13 @@ impl Service {
         (status, response.text().await.expect("read the body"))
     }
 
-    /// `POST path` with the JSON body `body` and an `x-internal-identity` token (none: without
-    /// the header); the status and the body.
-    pub async fn post(&self, path: &str, token: Option<&str>, body: &Value) -> (u16, String) {
+    /// `POST path` with the JSON `body` and an `x-internal-identity` token (none: without the
+    /// header); the status and the body.
+    pub async fn post(&self, path: &str, token: Option<&str>, body: &str) -> (u16, String) {
         let mut request = reqwest::Client::new()
             .post(format!("{}{path}", self.base_url))
             .header("content-type", "application/json")
-            .body(body.to_string())
+            .body(body.to_owned())
             // Above the 45 s the service waits for ClickHouse.
             .timeout(Duration::from_secs(90));
         if let Some(token) = token {

@@ -48,6 +48,7 @@ use crate::history::{
     ReadingColumns, Routes, TIME_ZONE_INVALID, TOO_MANY_POINTS, clickhouse_error, error, invalid,
     is_unknown_time_zone, ok, reading, rows, unexpected_answer,
 };
+use crate::period::Windows;
 
 /// The routes, as the ingress gateway forwards them (no prefix is stripped).
 pub const STATISTICS_PATH: &str = "/api/telemetry/v1/statistics";
@@ -394,8 +395,20 @@ struct Checked {
     now: DateTime<Utc>,
 }
 
-/// Checks `query` against the rules and plans it at `now`.
-fn check(query: &SeriesQuery, kind: Kind, now: DateTime<Utc>) -> Result<Checked, Box<Response>> {
+/// The range as `query` asks it.
+fn asked(query: &SeriesQuery) -> Asked<'_> {
+    Asked {
+        period: query.period.as_deref(),
+        from: query.from,
+        to: query.to,
+        interval: query.interval,
+        series: query.series.len(),
+    }
+}
+
+/// Checks `query` against the rules that need neither the account nor its windows (the series,
+/// the time zone and the range asked, at `now`), before the account is looked up; the time zone.
+fn validate(query: &SeriesQuery, now: DateTime<Utc>) -> Result<TimeZone, Box<Response>> {
     let distinct: BTreeSet<&SeriesKey> = query.series.iter().collect();
     if query.series.is_empty()
         || query.series.len() > range::MAX_SERIES
@@ -409,43 +422,53 @@ fn check(query: &SeriesQuery, kind: Kind, now: DateTime<Utc>) -> Result<Checked,
     let Some(tz) = range::time_zone(&query.tz) else {
         return Err(Box::new(invalid("tz", TIME_ZONE_INVALID)));
     };
-    let asked = Asked {
-        period: query.period.as_deref(),
-        from: query.from,
-        to: query.to,
-        interval: query.interval,
-        series: query.series.len(),
-    };
-    let plan = range::plan(&asked, kind, now, &tz).map_err(|refusal| {
-        Box::new(match refusal {
-            Refusal::Period => invalid("period", PERIOD_INVALID),
-            Refusal::Range => invalid("from", RANGE_INVALID),
-            Refusal::TooLate(latest) => error(
-                ErrorBody::new(ErrorCode::ValidationFailed)
-                    .with_message_key(RANGE_INVALID)
-                    .with_detail("parameter", "to")
-                    .with_detail("latest", local(latest, &tz).to_rfc3339()),
-            ),
-            Refusal::OutsidePeriod(earliest) => error(
-                ErrorBody::new(ErrorCode::QuotaExceeded)
-                    .with_message_key(OUTSIDE_PERIOD)
-                    .with_detail("earliest", local(earliest, &tz).to_rfc3339()),
-            ),
-            Refusal::TooManyRows => error(
-                ErrorBody::new(ErrorCode::ValidationFailed)
-                    .with_message_key(TOO_MANY_POINTS)
-                    .with_detail("parameter", "interval")
-                    .with_detail("max", range::MAX_ROWS),
-            ),
-            // Fewer series or a shorter range read fewer cells; the number is not the user's.
-            Refusal::TooManyCells => error(
-                ErrorBody::new(ErrorCode::ValidationFailed)
-                    .with_message_key(QUERY_TOO_HEAVY)
-                    .with_detail("parameter", "series"),
-            ),
-        })
-    })?;
+    range::resolve(&asked(query), now, &tz).map_err(|refusal| Box::new(refused(refusal, &tz)))?;
+    Ok(tz)
+}
+
+/// Checks `query` against the rules and plans it at `now` for an account whose views keep
+/// `windows` (read back when the account was checked).
+fn check(
+    query: &SeriesQuery,
+    kind: Kind,
+    windows: Windows,
+    now: DateTime<Utc>,
+) -> Result<Checked, Box<Response>> {
+    let tz = validate(query, now)?;
+    let plan = range::plan(&asked(query), kind, windows, now, &tz)
+        .map_err(|refusal| Box::new(refused(refusal, &tz)))?;
     Ok(Checked { tz, plan, now })
+}
+
+/// The response that refuses a request's range or size.
+fn refused(refusal: Refusal, tz: &TimeZone) -> Response {
+    match refusal {
+        Refusal::Period => invalid("period", PERIOD_INVALID),
+        Refusal::Range => invalid("from", RANGE_INVALID),
+        Refusal::TooLate(latest) => error(
+            ErrorBody::new(ErrorCode::ValidationFailed)
+                .with_message_key(RANGE_INVALID)
+                .with_detail("parameter", "to")
+                .with_detail("latest", local(latest, tz).to_rfc3339()),
+        ),
+        Refusal::OutsidePeriod(earliest) => error(
+            ErrorBody::new(ErrorCode::QuotaExceeded)
+                .with_message_key(OUTSIDE_PERIOD)
+                .with_detail("earliest", local(earliest, tz).to_rfc3339()),
+        ),
+        Refusal::TooManyRows => error(
+            ErrorBody::new(ErrorCode::ValidationFailed)
+                .with_message_key(TOO_MANY_POINTS)
+                .with_detail("parameter", "interval")
+                .with_detail("max", range::MAX_ROWS),
+        ),
+        // Fewer series or a shorter range read fewer cells; the number is not the user's.
+        Refusal::TooManyCells => error(
+            ErrorBody::new(ErrorCode::ValidationFailed)
+                .with_message_key(QUERY_TOO_HEAVY)
+                .with_detail("parameter", "series"),
+        ),
+    }
 }
 
 /// The series as the text of a ClickHouse `Array(Tuple(UUID, String))` parameter: single quotes,
@@ -504,19 +527,44 @@ fn statement(kind: Kind, resolution: Resolution, unit: Unit) -> (&'static str, u
     (statement, step)
 }
 
-/// Runs the planned statement for `query` as the caller's tenant account; the response body.
-async fn run(
+/// Checks `query`, looks up the caller's tenant and checks its account, plans `query` with the
+/// account's windows and runs it as the account: the tenant, the plan and the response body.
+/// The rules that need no account refuse a request before anything is looked up.
+async fn answer(
     state: &Routes,
     user: &UserIdentity,
     query: &SeriesQuery,
     kind: Kind,
-    checked: &Checked,
-) -> Result<(TenantId, String), Box<Response>> {
+) -> Result<(TenantId, Checked, String), Box<Response>> {
+    validate(query, Utc::now())?;
     let tenant = match state.tenant(user).await {
         Ok(tenant) => tenant,
         Err(Failure::Response(response)) => return Err(response),
         Err(Failure::ClickHouse(_)) => unreachable!("tenant() does not query ClickHouse"),
     };
+    let windows = match state.verified(tenant).await {
+        Ok(windows) => windows,
+        Err(Failure::Response(response)) => return Err(response),
+        Err(Failure::ClickHouse(failure)) => {
+            return Err(Box::new(clickhouse_error(tenant, &failure)));
+        }
+    };
+    // "Now" once the account is checked: the database takes its own later still, which the
+    // queryable start's margin covers.
+    let checked = check(query, kind, windows, Utc::now())?;
+    let body = run(state, tenant, query, kind, &checked).await?;
+    Ok((tenant, checked, body))
+}
+
+/// Runs the planned statement for `query` as `tenant`'s account, which [`answer`] checked; the
+/// response body.
+async fn run(
+    state: &Routes,
+    tenant: TenantId,
+    query: &SeriesQuery,
+    kind: Kind,
+    checked: &Checked,
+) -> Result<String, Box<Response>> {
     let plan = &checked.plan;
     let (statement, step) = statement(kind, plan.resolution, plan.unit);
     let tenant_text = tenant.to_string();
@@ -553,8 +601,8 @@ async fn run(
             ("min_rises", min_rises.as_str()),
         ]);
     }
-    match state.query(tenant, statement, &params).await {
-        Ok(body) => Ok((tenant, body)),
+    match state.run_verified(tenant, statement, &params).await {
+        Ok(body) => Ok(body),
         Err(Failure::Response(response)) => Err(response),
         Err(Failure::ClickHouse(failure)) if is_unknown_time_zone(&failure) => {
             Err(Box::new(invalid("tz", TIME_ZONE_INVALID)))
@@ -618,11 +666,7 @@ pub(crate) async fn post_statistics(
         Ok(query) => query,
         Err(response) => return *response,
     };
-    let checked = match check(&query, Kind::Statistics, Utc::now()) {
-        Ok(checked) => checked,
-        Err(response) => return *response,
-    };
-    let (tenant, body) = match run(&state, &user, &query, Kind::Statistics, &checked).await {
+    let (tenant, checked, body) = match answer(&state, &user, &query, Kind::Statistics).await {
         Ok(answer) => answer,
         Err(response) => return *response,
     };
@@ -664,11 +708,7 @@ pub(crate) async fn post_usage(
         Ok(query) => query,
         Err(response) => return *response,
     };
-    let checked = match check(&query, Kind::Usage, Utc::now()) {
-        Ok(checked) => checked,
-        Err(response) => return *response,
-    };
-    let (tenant, body) = match run(&state, &user, &query, Kind::Usage, &checked).await {
+    let (tenant, checked, body) = match answer(&state, &user, &query, Kind::Usage).await {
         Ok(answer) => answer,
         Err(response) => return *response,
     };

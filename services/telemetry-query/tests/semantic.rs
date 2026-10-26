@@ -22,7 +22,7 @@
 
 mod support;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use chrono::{DateTime, TimeDelta, Utc};
 use contract::{ServiceName, TenantId, TenantRole};
@@ -31,6 +31,7 @@ use lab_dataset::index::PointKind;
 use lab_dataset::{Dataset, Loaded, Target, TimeShift, Value as Recorded, index_for_tests};
 use serde_json::{Value, json};
 use support::{ClickHouseTarget, Service, Stack, wait_account_ready};
+use telemetry_query::period::{View, Windows};
 use telemetry_query::semantic::{self, SeriesKey, Verdict, statements};
 use testkit::identity::TestIssuer;
 use uuid::Uuid;
@@ -384,6 +385,20 @@ fn rfc3339(ms: i64) -> String {
         .to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
 }
 
+/// Every start (ms) the platform's window of `view` has at some time from `low` to `high`, a
+/// second apart and both ends included. The start changes at most once a minute, and it is not
+/// monotonic across a month end (crate::period), so a range of the two is not enough.
+fn queryable_starts(view: View, low: DateTime<Utc>, high: DateTime<Utc>) -> BTreeSet<i64> {
+    let mut starts = BTreeSet::new();
+    let mut time = low;
+    while time < high {
+        starts.insert(Windows::PLATFORM.earliest(view, time).timestamp_millis());
+        time += TimeDelta::seconds(1);
+    }
+    starts.insert(Windows::PLATFORM.earliest(view, high).timestamp_millis());
+    starts
+}
+
 fn close(actual: &Value, expected: f64, what: &str) {
     let actual = actual
         .as_f64()
@@ -461,7 +476,10 @@ struct Fixture {
 
 impl Fixture {
     async fn post(&self, path: &str, token: &str, body: &Value) -> Value {
-        let (status, text) = self.service.post(path, Some(token), body).await;
+        let (status, text) = self
+            .service
+            .post(path, Some(token), &body.to_string())
+            .await;
         if status != 200 {
             let log = self.service.stdout.text();
             let tail: Vec<&str> = log.lines().rev().take(5).collect();
@@ -474,7 +492,7 @@ impl Fixture {
     }
 
     async fn status(&self, path: &str, token: Option<&str>, body: &Value) -> (u16, Value) {
-        let (status, text) = self.service.post(path, token, body).await;
+        let (status, text) = self.service.post(path, token, &body.to_string()).await;
         (status, serde_json::from_str(&text).unwrap_or(Value::Null))
     }
 
@@ -1260,7 +1278,9 @@ async fn the_semantic_api_answers_the_dataset_within_the_period_and_the_tenant()
     // baseline, and a range wholly before it is refused with its start.
     let (tenant_c, token_c) = fixture.tenant("Plant C").await;
     let now = Utc::now();
-    let edge = semantic::range::queryable_start(semantic::range::Resolution::Hour, now);
+    // The tenant's account carries the platform's windows (crate::period), which the service
+    // reads back before each query.
+    let edge = Windows::PLATFORM.earliest(View::Hour, now);
     let shift = TimeShift::ending_before(
         dataset.end(),
         edge + TimeDelta::hours(2),
@@ -1295,18 +1315,24 @@ async fn the_semantic_api_answers_the_dataset_within_the_period_and_the_tenant()
             let earliest = ms(&answer["range"]["earliest"]);
             assert_eq!(answer["range"]["truncated"], true, "{answer}");
             assert_eq!(ms(&answer["range"]["from"]), earliest);
-            // The start the service reported is its rule: three months back, five minutes later,
-            // rounded up to the table's cell, at a time between our two clock readings.
-            let cell = if tz_name == "UTC" {
-                semantic::range::Resolution::Hour
+            // The start the service reported is the account's window for the table it read
+            // (`Windows::earliest`: three months back at five minutes later, rounded up to the
+            // table's cell) at a time between our two clock readings: the one-hour table in
+            // UTC, the one-minute table in a half-hour zone.
+            let view = if tz_name == "UTC" {
+                View::Hour
             } else {
-                semantic::range::Resolution::Minute
+                View::Minute
             };
-            let low = semantic::range::queryable_start(cell, now).timestamp_millis();
-            let high = semantic::range::queryable_start(cell, Utc::now()).timestamp_millis();
+            assert_eq!(
+                answer["range"]["resolution"],
+                if view == View::Hour { "1h" } else { "1m" },
+                "{answer}"
+            );
+            let reported = queryable_starts(view, now, Utc::now());
             assert!(
-                (low..=high).contains(&earliest),
-                "{earliest} not in {low}..={high}"
+                reported.contains(&earliest),
+                "{earliest} is not a start of the window between the two clock readings: {reported:?}"
             );
             for entry in answer["series"].as_array().expect("series") {
                 assert_eq!(entry["baseline"], false, "{entry}");
@@ -1336,7 +1362,8 @@ async fn the_semantic_api_answers_the_dataset_within_the_period_and_the_tenant()
         let before = (
             before.0,
             before.1.min(
-                semantic::range::queryable_start(semantic::range::Resolution::Minute, Utc::now())
+                Windows::PLATFORM
+                    .earliest(View::Minute, Utc::now())
                     .timestamp_millis()
                     - HOUR_MS,
             ),

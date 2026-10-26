@@ -8,6 +8,9 @@
 //! `tests/history.rs` (tenant B's readings under the same device ID never reach tenant A, and
 //! the reverse) and `tests/semantic.rs` (tenant A asking for tenant B's devices gets no data,
 //! the statements run as tenant A's account read none of tenant B's rows) cover them by hand.
+//! The internal SQL endpoint (Laysi/trustiot-v2#143) is not in the OpenAPI document, which is
+//! all the suite reads; `tests/sql_api.rs` covers it by hand (the same SQL as two tenants, and
+//! the PoC's attack types through it).
 //!
 //! Starts a throwaway Postgres with TLS (podman or docker); skipped without either unless `CI`
 //! is set. Run with `--nocapture` to see every probe.

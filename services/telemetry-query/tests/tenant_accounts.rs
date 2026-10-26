@@ -12,7 +12,12 @@
 //! limits. Afterwards: a changed password is repaired on the next query; an account whose query
 //! limits an administrator weakened, or which was changed to another tenant, serves no query
 //! (503, nothing of the other tenant) and the latter is refused when its event comes again (dead
-//! letter); and nothing logs a password.
+//! letter); an account without its queryable period reads nothing, and the next query sets the
+//! period again, as it does for one with another period (Laysi/trustiot-v2#143); an account
+//! whose default role was taken away serves no query, is logged on each call and is not
+//! repaired (Laysi/trustiot-v2#143), as is one whose `SQL_tenant_id` it could change in a
+//! query's `SETTINGS`, while a window it could change is made `CONST` again (the security
+//! review of 2026-10-26); and nothing logs a password.
 //!
 //! Needs podman or docker (a TLS Postgres and a ClickHouse); skipped without one unless `CI` is
 //! set. One test: the binary shares one product database. `--nocapture` prints every attack.
@@ -25,20 +30,13 @@ use contract::{ServiceName, TenantId, TenantRole};
 use outbox::{Position, Replay};
 use sqlx::Connection;
 use support::clickhouse::Account;
+use support::poc::{A_MARKER, ATTACKS, B_MARKER, HEAVY, SYSTEM_TABLES, VICTIM, VICTIM_MARKER};
 use support::{
     ClickHouseTarget, EVENT_LIMIT, Readings, Service, Stack, random_password, wait_account_ready,
     wait_for,
 };
 use testkit::identity::TestIssuer;
 use testkit::product::DATABASE;
-
-/// A tenant that exists only in ClickHouse: its readings are written directly, as if it were
-/// another customer. Its ID is a constant so the attacks can name it in SQL text.
-const VICTIM: &str = "0199a0b0-c0d0-7e0f-8a1b-2c3d4e5f6a7b";
-/// What every text reading of the victim, and of tenant B, starts with.
-const VICTIM_MARKER: &str = "victim-marker";
-const B_MARKER: &str = "tenant-b-marker";
-const A_MARKER: &str = "tenant-a-marker";
 
 /// Readings each tenant gets.
 const READINGS: u64 = 40;
@@ -60,6 +58,12 @@ const WHO_AM_I: &str = "SELECT getSetting('SQL_tenant_id'), getSetting('readonly
   getSetting('max_execution_time'), getSetting('max_memory_usage'), getSetting('max_rows_to_read'),
   currentRoles()
 FORMAT TSV";
+/// The account's queryable period: raw days, one-minute months, one-hour months.
+const WINDOWS: &str = "SELECT getSetting('SQL_queryable_raw_days'),
+  getSetting('SQL_queryable_1m_months'), getSetting('SQL_queryable_1h_months')
+FORMAT TSV";
+/// The period every account gets until per-plan periods (Laysi/trustiot-v2#453).
+const EXPECTED_WINDOWS: &str = "7\t3\t3\n";
 /// The account's own rows: all rows it can see, and those of its tenant.
 const OWN_ROWS: &str = "SELECT count(), countIf(tenant_id = {me:UUID})
 FROM trustiot.tenant_telemetry FORMAT TSV";
@@ -69,6 +73,36 @@ const CHANGE_PASSWORD: &str =
     "ALTER USER {user:Identifier} IDENTIFIED WITH sha256_password BY {password:String}";
 const CHANGE_TENANT: &str = "ALTER USER {user:Identifier}
 SETTINGS PROFILE 'trustiot_tenant_reader', SQL_tenant_id = '0199a0b0-c0d0-7e0f-8a1b-2c3d4e5f6a7b' CONST";
+
+/// Admin change of the raw window alone, as an older plan or a change by hand would leave it.
+const CHANGE_WINDOW: &str =
+    "ALTER USER {user:Identifier} MODIFY SETTINGS SQL_queryable_raw_days = 30 CONST";
+
+/// Admin change that leaves the tenant role granted but no longer the account's default role,
+/// so a login has no active role; and the change back.
+const DROP_DEFAULT_ROLE: &str = "ALTER USER {user:Identifier} DEFAULT ROLE NONE";
+const RESTORE_DEFAULT_ROLE: &str =
+    "ALTER USER {user:Identifier} DEFAULT ROLE trustiot_tenant_reader";
+
+/// Admin changes that keep a checked setting's value but let the account change it in a
+/// query's `SETTINGS`; `TENANT` is replaced with the account's own tenant. And the change back.
+const LOOSEN_WINDOW: &str = "ALTER USER {user:Identifier}
+MODIFY SETTINGS SQL_queryable_raw_days = 7 CHANGEABLE_IN_READONLY";
+const LOOSEN_TENANT: &str = "ALTER USER {user:Identifier}
+MODIFY SETTINGS SQL_tenant_id = 'TENANT' CHANGEABLE_IN_READONLY";
+const FIX_TENANT: &str = "ALTER USER {user:Identifier}
+MODIFY SETTINGS SQL_tenant_id = 'TENANT' CONST";
+/// The raw window as a query that sets it wider sees it.
+const WIDER_WINDOW: &str = "SELECT getSetting('SQL_queryable_raw_days')
+SETTINGS SQL_queryable_raw_days = 36500 FORMAT TSV";
+/// The victim's rows as a query that sets the victim's tenant sees them; `VICTIM` is replaced
+/// with the victim's ID.
+const ROWS_OF_SETTING: &str = "SELECT count() FROM trustiot.tenant_telemetry
+SETTINGS SQL_tenant_id = 'VICTIM' FORMAT TSV";
+
+/// The service's error log when it refuses an account.
+const REFUSED_LOG: &str = "the tenant's ClickHouse account is not as the service creates it, \
+or refused its password and could not be repaired; no query runs as it";
 
 /// Admin change that weakens one of the account's limits on the account itself, after the
 /// profile, and leaves `readonly` as it is: `TENANT` is replaced with the account's own tenant.
@@ -90,193 +124,6 @@ const QUOTA_CALLS: u64 = 3;
 /// The rows of the victim and of tenant B, as the reference account counts them.
 const VICTIM_ROWS: &str = "SELECT count() FROM trustiot.telemetry
 WHERE tenant_id IN ({victim:UUID}, {b:UUID}) FORMAT TSV";
-
-/// One attack: a name, the statement, and settings sent in the URL.
-struct Attack {
-    name: &'static str,
-    sql: &'static str,
-    url: &'static [(&'static str, &'static str)],
-}
-
-const fn attack(name: &'static str, sql: &'static str) -> Attack {
-    Attack {
-        name,
-        sql,
-        url: &[],
-    }
-}
-
-/// The PoC's attack types, as tenant A's account. Each must be refused or answer without a
-/// reading of another tenant.
-const ATTACKS: &[Attack] = &[
-    // Direct reads of the base tables, and filters on the view.
-    attack("base table", "SELECT value_string FROM trustiot.telemetry"),
-    attack("batch commits", "SELECT * FROM trustiot.batch_commits"),
-    attack(
-        "view filtered to another tenant",
-        "SELECT value_string FROM trustiot.tenant_telemetry WHERE tenant_id = '0199a0b0-c0d0-7e0f-8a1b-2c3d4e5f6a7b'",
-    ),
-    attack(
-        "view with an always-true filter",
-        "SELECT value_string FROM trustiot.tenant_telemetry WHERE 1 OR tenant_id != tenant_id",
-    ),
-    attack(
-        "explicit PREWHERE",
-        "SELECT value_string FROM trustiot.tenant_telemetry PREWHERE tenant_id = '0199a0b0-c0d0-7e0f-8a1b-2c3d4e5f6a7b'",
-    ),
-    attack(
-        "FINAL",
-        "SELECT value_string FROM trustiot.tenant_telemetry FINAL",
-    ),
-    // Joins, subqueries and set operations that reach the base table.
-    attack(
-        "join with the base table",
-        "SELECT t.value_string FROM trustiot.tenant_telemetry AS v JOIN trustiot.telemetry AS t ON 1",
-    ),
-    attack(
-        "scalar subquery",
-        "SELECT (SELECT groupArray(value_string) FROM trustiot.telemetry)",
-    ),
-    attack(
-        "IN subquery",
-        "SELECT value_string FROM trustiot.tenant_telemetry WHERE device_id IN (SELECT device_id FROM trustiot.telemetry)",
-    ),
-    attack(
-        "UNION ALL",
-        "SELECT value_string FROM trustiot.tenant_telemetry UNION ALL SELECT value_string FROM trustiot.telemetry",
-    ),
-    attack(
-        "common table expression",
-        "WITH x AS (SELECT value_string FROM trustiot.telemetry) SELECT * FROM x",
-    ),
-    // Table functions.
-    attack(
-        "merge()",
-        "SELECT value_string FROM merge('trustiot', '^tele')",
-    ),
-    attack(
-        "view()",
-        "SELECT * FROM view(SELECT value_string FROM trustiot.telemetry)",
-    ),
-    attack(
-        "remote() to the same server",
-        "SELECT value_string FROM remote('127.0.0.1:9000', trustiot.telemetry)",
-    ),
-    attack(
-        "clusterAllReplicas()",
-        "SELECT value_string FROM clusterAllReplicas('default', trustiot.telemetry)",
-    ),
-    attack(
-        "url() back to the HTTP interface",
-        "SELECT * FROM url('http://127.0.0.1:8123/?query=SELECT+value_string+FROM+trustiot.telemetry', 'LineAsString')",
-    ),
-    attack(
-        "file()",
-        "SELECT * FROM file('/etc/passwd', 'LineAsString')",
-    ),
-    // Another tenant through the setting, and the limits through settings.
-    attack(
-        "SETTINGS clause with another tenant",
-        "SELECT value_string FROM trustiot.tenant_telemetry SETTINGS SQL_tenant_id = '0199a0b0-c0d0-7e0f-8a1b-2c3d4e5f6a7b'",
-    ),
-    Attack {
-        name: "URL setting with another tenant",
-        sql: "SELECT value_string FROM trustiot.tenant_telemetry",
-        url: &[("SQL_tenant_id", VICTIM)],
-    },
-    attack(
-        "SET another tenant",
-        "SET SQL_tenant_id = '0199a0b0-c0d0-7e0f-8a1b-2c3d4e5f6a7b'",
-    ),
-    attack(
-        "SETTINGS readonly = 0",
-        "SELECT value_string FROM trustiot.tenant_telemetry SETTINGS readonly = 0",
-    ),
-    attack(
-        "SETTINGS without the row limit",
-        "SELECT count() FROM numbers(2000000000) SETTINGS max_rows_to_read = 0",
-    ),
-    Attack {
-        name: "URL setting without the time limit",
-        sql: "SELECT 1",
-        url: &[("max_execution_time", "0")],
-    },
-    // Other identities.
-    attack(
-        "EXECUTE AS the view's definer",
-        "EXECUTE AS trustiot_tenant_view_definer SELECT value_string FROM trustiot.telemetry",
-    ),
-    Attack {
-        name: "URL role of the ingest service",
-        sql: "SELECT value_string FROM trustiot.telemetry",
-        url: &[("role", "trustiot_ingest")],
-    },
-    // Writes and access management.
-    attack(
-        "insert into the base table",
-        "INSERT INTO trustiot.telemetry (tenant_id, point, value_type, value_string) VALUES ('0199a0b0-c0d0-7e0f-8a1b-2c3d4e5f6a7b', 'x', 'string', 'written')",
-    ),
-    attack(
-        "delete from the base table",
-        "ALTER TABLE trustiot.telemetry DELETE WHERE 1",
-    ),
-    attack(
-        "truncate the base table",
-        "TRUNCATE TABLE trustiot.telemetry",
-    ),
-    attack(
-        "create a table",
-        "CREATE TABLE default.copy ENGINE = Memory AS SELECT * FROM trustiot.tenant_telemetry",
-    ),
-    attack(
-        "create a tenant account",
-        "CREATE USER trustiot_tenant_account_ffffffffffffffffffffffffffffffff",
-    ),
-    attack(
-        "change the service's account",
-        "ALTER USER trustiot_telemetry_query IDENTIFIED WITH no_password",
-    ),
-    attack(
-        "grant the base table",
-        "GRANT SELECT ON trustiot.telemetry TO trustiot_tenant_reader",
-    ),
-    attack(
-        "drop the row policy",
-        "DROP ROW POLICY tenant_isolation ON trustiot.tenant_telemetry",
-    ),
-];
-
-/// System tables that would show other tenants' queries, readings or accounts: each must be
-/// refused for want of the privilege (`ACCESS_DENIED`), after `SYSTEM FLUSH LOGS` has created
-/// the log tables, so a missing table cannot pass for a refusal.
-const SYSTEM_TABLES: &[&str] = &[
-    "SELECT count() FROM system.query_log",
-    "SELECT count() FROM system.text_log",
-    "SELECT count() FROM system.processes",
-    "SELECT count() FROM system.parts",
-    "SELECT count() FROM system.users",
-    "SELECT count() FROM system.role_grants",
-    "SELECT count() FROM system.settings_profile_elements",
-];
-
-/// Heavy queries the settings profile stops (0004_access.sql), with the error each must end in.
-const HEAVY: &[(&str, &str, &str)] = &[
-    (
-        "reads more than max_rows_to_read",
-        "SELECT count() FROM numbers(2000000000)",
-        "TOO_MANY_ROWS",
-    ),
-    (
-        "holds more than max_memory_usage",
-        "SELECT length(groupArray(toString(number))) FROM numbers(200000000)",
-        "MEMORY_LIMIT_EXCEEDED",
-    ),
-    (
-        "runs longer than max_execution_time",
-        "SELECT count() FROM numbers_mt(999000000) WHERE NOT ignore(SHA256(SHA256(SHA256(toString(number)))))",
-        "TIMEOUT_EXCEEDED",
-    ),
-];
 
 #[allow(
     clippy::print_stderr,
@@ -396,6 +243,15 @@ async fn each_tenant_account_sees_its_own_readings_only() {
         who,
         format!("{a}\t1\t30\t536870912\t1000000000\t['trustiot_tenant_reader']\n"),
         "tenant, readonly, limits and role of the account"
+    );
+    assert_eq!(
+        stack
+            .clickhouse
+            .query(&account_a, WINDOWS)
+            .await
+            .unwrap_or_else(|error| panic!("read the windows: {}", error.body)),
+        EXPECTED_WINDOWS,
+        "the queryable period, set when the account was created"
     );
 
     // 2. Readings of A, B and the victim.
@@ -520,6 +376,16 @@ async fn each_tenant_account_sees_its_own_readings_only() {
         format!("{a}\t1\t3600\t536870912\t1000000000\t['trustiot_tenant_reader']\n"),
         "the weakened limit is in force for the account, readonly is not changed"
     );
+    // ALTER USER ... SETTINGS replaces all of the account's settings, so the windows are gone
+    // too: the account reads nothing (the row policies need them) until they are set again.
+    for sql in [WINDOWS, OWN_ROWS] {
+        let error = stack
+            .clickhouse
+            .query_with(&account_a, sql, &[("param_me", &a_text)])
+            .await
+            .expect_err("an account without its queryable period reads nothing");
+        assert_eq!(error.code(), "UNKNOWN_SETTING", "{sql}: {}", error.body);
+    }
     let (status, body) = service.get(&path, Some(&token_a)).await;
     assert_eq!(status, 503, "{body}");
     assert!(!body.contains(A_MARKER), "{body}");
@@ -540,6 +406,175 @@ async fn each_tenant_account_sees_its_own_readings_only() {
         latest.to_string().contains(A_MARKER),
         "served again: {latest}"
     );
+    let period_set = "set the tenant account's queryable period";
+    assert_eq!(service.stdout.messages(period_set).len(), 1);
+    assert_eq!(
+        stack
+            .clickhouse
+            .query(&account_a, WINDOWS)
+            .await
+            .unwrap_or_else(|error| panic!("read the windows: {}", error.body)),
+        EXPECTED_WINDOWS,
+        "the API set the queryable period again before it served the account"
+    );
+
+    // 5b. Another period on the account (a plan change, or a change by hand): the next query
+    //     sets the service's period again before it runs.
+    admin_query(&stack, CHANGE_WINDOW, &[("param_user", &user_a)]).await;
+    assert_eq!(
+        stack
+            .clickhouse
+            .query(&account_a, WINDOWS)
+            .await
+            .unwrap_or_else(|error| panic!("read the windows: {}", error.body)),
+        "30\t3\t3\n"
+    );
+    service.get_ok(&path, &token_a).await;
+    assert_eq!(service.stdout.messages(period_set).len(), 2);
+    assert_eq!(
+        stack
+            .clickhouse
+            .query(&account_a, WINDOWS)
+            .await
+            .unwrap_or_else(|error| panic!("read the windows: {}", error.body)),
+        EXPECTED_WINDOWS,
+        "the service's period, from the query after the change"
+    );
+
+    // 5c. The tenant role is no longer the account's default role (the owner's decision of
+    //     2026-10-26 on Laysi/trustiot-v2#143): every call answers 503 with nothing of the
+    //     tenant and logs why, and the service does not set the role again; an administrator
+    //     does, and the next call is served.
+    admin_query(&stack, DROP_DEFAULT_ROLE, &[("param_user", &user_a)]).await;
+    let other_roles = || {
+        service
+            .stdout
+            .messages(REFUSED_LOG)
+            .into_iter()
+            .filter(|line| {
+                line["fields"]["error"]
+                    .as_str()
+                    .is_some_and(|error| error.contains("(other roles)"))
+            })
+            .count()
+    };
+    for call in 1..=2 {
+        let (status, body) = service.get(&path, Some(&token_a)).await;
+        assert_eq!(status, 503, "call {call}: {body}");
+        assert!(!body.contains(A_MARKER), "call {call}: {body}");
+        wait_for(
+            &format!("call {call}'s refusal of the account without its role in the log"),
+            EVENT_LIMIT,
+            || async { (other_roles() == call).then_some(()) },
+        )
+        .await;
+        assert_eq!(
+            admin_query(&stack, ACCOUNT_AS_ADMIN, &[("param_user", &user_a)]).await,
+            "[]\t['::/0']\t['sha256_password']\n",
+            "call {call}: the service did not set the default role again"
+        );
+    }
+    admin_query(&stack, RESTORE_DEFAULT_ROLE, &[("param_user", &user_a)]).await;
+    let latest = service.get_ok(&path, &token_a).await;
+    assert!(
+        latest.to_string().contains(A_MARKER),
+        "served again once an administrator set the role: {latest}"
+    );
+    assert_eq!(
+        service.stdout.messages(period_set).len(),
+        2,
+        "the role change left the queryable period as it was"
+    );
+
+    // 5d. A window left at the service's value but made CHANGEABLE_IN_READONLY: the account
+    //     could widen it in a query's SETTINGS, so the next call makes it CONST again before it
+    //     runs, as it sets another value again (the security review of 2026-10-26).
+    admin_query(&stack, LOOSEN_WINDOW, &[("param_user", &user_a)]).await;
+    assert_eq!(
+        stack
+            .clickhouse
+            .query(&account_a, WIDER_WINDOW)
+            .await
+            .unwrap_or_else(|error| panic!("widen the loosened window: {}", error.body)),
+        "36500\n",
+        "the account can widen a window it may change"
+    );
+    let latest = service.get_ok(&path, &token_a).await;
+    assert!(latest.to_string().contains(A_MARKER), "{latest}");
+    assert_eq!(
+        service.stdout.messages(period_set).len(),
+        3,
+        "the window was set again"
+    );
+    let error = stack
+        .clickhouse
+        .query(&account_a, WIDER_WINDOW)
+        .await
+        .expect_err("the window is CONST again");
+    assert_eq!(error.code(), "READONLY", "{}", error.body);
+
+    // 5e. SQL_tenant_id left at the tenant but made CHANGEABLE_IN_READONLY: the account could
+    //     read another tenant's rows with a query's SETTINGS. Every call answers 503 with
+    //     nothing of either tenant and logs why, and the service does not repair it (as for the
+    //     role); an administrator does, and the next call is served.
+    admin_query(
+        &stack,
+        &LOOSEN_TENANT.replace("TENANT", &a_text),
+        &[("param_user", &user_a)],
+    )
+    .await;
+    let victim_rows = || async {
+        stack
+            .clickhouse
+            .query(&account_a, &ROWS_OF_SETTING.replace("VICTIM", VICTIM))
+            .await
+    };
+    let rows = victim_rows()
+        .await
+        .unwrap_or_else(|error| panic!("switch the loosened tenant: {}", error.body));
+    assert_ne!(rows, "0\n", "the loosened account reads the victim's rows");
+    let changeable = || {
+        service
+            .stdout
+            .messages(REFUSED_LOG)
+            .into_iter()
+            .filter(|line| {
+                line["fields"]["error"]
+                    .as_str()
+                    .is_some_and(|error| error.contains("(settings the account may change)"))
+            })
+            .count()
+    };
+    for call in 1..=2 {
+        let (status, body) = service.get(&path, Some(&token_a)).await;
+        assert_eq!(status, 503, "call {call}: {body}");
+        for marker in [A_MARKER, VICTIM_MARKER] {
+            assert!(!body.contains(marker), "call {call}: {body}");
+        }
+        wait_for(
+            &format!("call {call}'s refusal of the changeable tenant in the log"),
+            EVENT_LIMIT,
+            || async { (changeable() == call).then_some(()) },
+        )
+        .await;
+        assert!(
+            victim_rows().await.is_ok(),
+            "call {call}: the service did not make the tenant CONST again"
+        );
+    }
+    admin_query(
+        &stack,
+        &FIX_TENANT.replace("TENANT", &a_text),
+        &[("param_user", &user_a)],
+    )
+    .await;
+    let latest = service.get_ok(&path, &token_a).await;
+    assert!(
+        latest.to_string().contains(A_MARKER),
+        "served again once an administrator made the tenant CONST: {latest}"
+    );
+    let error = victim_rows().await.expect_err("the tenant is CONST again");
+    assert_eq!(error.code(), "READONLY", "{}", error.body);
 
     // 6. An account changed to another tenant: the API refuses it and shows nothing of the other
     //    tenant (every statement also filters on the caller's tenant, a second layer), and the

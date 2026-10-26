@@ -11,13 +11,13 @@
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
-use chrono::{DateTime, Datelike, FixedOffset, Months, TimeDelta, TimeZone as _, Utc};
+use chrono::{DateTime, Datelike, FixedOffset, Months, NaiveTime, TimeDelta, TimeZone as _, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use uuid::Uuid;
 
 use super::telemetry::{AGGREGATED_MONTHS, MAX_POINT_LEN, Reading, parse_device_id, parse_time};
-use crate::callee::{Callee, Post};
+use crate::callee::{Callee, NoRefusal, Post, Unprocessable};
 use crate::model::BoxFuture;
 use crate::tools::{
     CUT_MARKER, MAX_RESULT_TEXT_CHARS, Tool, ToolContext, ToolError, ToolOutput, ToolSpec, cap_text,
@@ -36,7 +36,7 @@ pub const MAX_ROWS: i64 = 10_000;
 /// The most bucket rows handed to the model; above it the tool keeps the per-series figures.
 pub const MAX_RESULT_ROWS: usize = 500;
 /// The queryable period starts this much after "3 months ago" (the service's
-/// `range::PERIOD_MARGIN`), so a request sent at the edge is not refused in transit.
+/// `period::PERIOD_MARGIN`), so a request sent at the edge is not refused in transit.
 pub const PERIOD_MARGIN_MINUTES: i64 = 5;
 /// A range ends at most this many days after now (the service's `range::MAX_AHEAD`): no
 /// relative period ends later, and the service refuses a later `to`.
@@ -252,18 +252,21 @@ impl Tool for TelemetryStatistics {
     ) -> BoxFuture<'static, Result<ToolOutput, ToolError>> {
         Box::pin(async move {
             let body = check(input, Utc::now())?;
-            let answer: Statistics = self
+            let answer = self
                 .telemetry
-                .post(
+                .post::<_, Statistics, NoRefusal>(
                     &context,
                     Post {
                         tool: Self::NAME,
                         path: STATISTICS_PATH,
                         body: &body,
                         rejected_input: REJECTED,
+                        unprocessable: Unprocessable::Rejected,
+                        status_messages: &[],
                     },
                 )
-                .await?;
+                .await?
+                .answered();
             statistics_output(&body, answer)
         })
     }
@@ -308,18 +311,21 @@ impl Tool for TelemetryUsage {
     ) -> BoxFuture<'static, Result<ToolOutput, ToolError>> {
         Box::pin(async move {
             let body = check(input, Utc::now())?;
-            let answer: Usage = self
+            let answer = self
                 .telemetry
-                .post(
+                .post::<_, Usage, NoRefusal>(
                     &context,
                     Post {
                         tool: Self::NAME,
                         path: USAGE_PATH,
                         body: &body,
                         rejected_input: REJECTED,
+                        unprocessable: Unprocessable::Rejected,
+                        status_messages: &[],
                     },
                 )
-                .await?;
+                .await?
+                .answered();
             usage_output(&body, answer)
         })
     }
@@ -457,13 +463,24 @@ fn is_point_key(point: &str) -> bool {
 }
 
 /// The start of the queryable period at `now`, as the service computes it for the one-minute
-/// table: 3 months back, 5 minutes later, rounded up to the minute. The service may answer from
-/// a later start (the hour table's), which only cuts more.
+/// table from the account's window of 3 months (`telemetry_query::period::Windows::earliest`):
+/// the window at 5 minutes later or, when those 5 minutes cross a UTC midnight, the window just
+/// before that midnight (subtracting months jumps back where a shorter month clamps the day),
+/// whichever starts later, rounded up to the minute. The service may answer from a later start
+/// (the hour table's), which only cuts more.
 fn earliest(now: DateTime<Utc>) -> DateTime<Utc> {
-    let start = now
-        .checked_sub_months(Months::new(AGGREGATED_MONTHS))
-        .unwrap_or(DateTime::<Utc>::MIN_UTC)
-        + TimeDelta::minutes(PERIOD_MARGIN_MINUTES);
+    let months = Months::new(AGGREGATED_MONTHS);
+    let later = now
+        .checked_add_signed(TimeDelta::minutes(PERIOD_MARGIN_MINUTES))
+        .unwrap_or(DateTime::<Utc>::MAX_UTC);
+    let before_midnight = (later.date_naive() != now.date_naive())
+        .then(|| later.date_naive().and_time(NaiveTime::MIN).and_utc())
+        .and_then(|midnight| midnight.checked_sub_signed(TimeDelta::nanoseconds(1)))
+        .and_then(|time| time.checked_sub_months(months));
+    let start = later
+        .checked_sub_months(months)
+        .max(before_midnight)
+        .unwrap_or(DateTime::<Utc>::MIN_UTC);
     let floored = floor_minute(start);
     if floored == start {
         start

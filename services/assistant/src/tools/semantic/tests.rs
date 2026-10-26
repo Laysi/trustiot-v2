@@ -192,6 +192,35 @@ fn the_rows_must_fit_the_service_limit() {
 }
 
 #[test]
+fn the_queryable_start_is_the_services_for_the_one_minute_table() {
+    use telemetry_query::period::{View, Windows};
+    // Every minute around each month end of 2027 and 2028, where subtracting months clamps
+    // the day and jumps back, and a minute in the middle of each month.
+    let mut checked = 0;
+    for year in [2027, 2028] {
+        for month in 1..=12 {
+            let first = Utc
+                .with_ymd_and_hms(year, month, 1, 0, 0, 0)
+                .single()
+                .expect("a month");
+            let around = (-24 * 60..=24 * 60).map(|minute| first + TimeDelta::minutes(minute));
+            let middle = [first + TimeDelta::days(14) + TimeDelta::seconds(37)];
+            for now in around.chain(middle) {
+                for now in [now, now + TimeDelta::milliseconds(500)] {
+                    assert_eq!(
+                        earliest(now),
+                        Windows::PLATFORM.earliest(View::Minute, now),
+                        "{now}"
+                    );
+                    checked += 1;
+                }
+            }
+        }
+    }
+    assert!(checked > 100_000, "{checked}");
+}
+
+#[test]
 fn a_range_wholly_before_the_queryable_period_is_refused_with_its_start() {
     // 2026-10-26T10:17:42Z - 3 months + 5 minutes, rounded up to the minute.
     assert_eq!(earliest(at(NOW)), at("2026-07-26T10:23:00Z"));

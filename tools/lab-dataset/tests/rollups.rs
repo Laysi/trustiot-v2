@@ -45,12 +45,16 @@ const HOUR_MS: i64 = 3_600_000;
 /// The tenant the dataset is loaded for.
 const TENANT: &str = "00000000-0000-4000-8000-000000014109";
 /// A tenant account as telemetry-query creates one (0004_access.sql), for [`TENANT`]: ClickHouse
-/// 26.8 takes no query parameter in a `SETTINGS` value, so the tenant ID is a literal.
+/// 26.8 takes no query parameter in a `SETTINGS` value, so the tenant ID is a literal. Its
+/// queryable period (0011_queryable_period.sql) is the longest the settings accept, so the
+/// dataset's times, wherever they lie, stay visible.
 const READER: &str = "rollup_fixture_tenant";
 const CREATE_READER: &str = "CREATE USER rollup_fixture_tenant
 IDENTIFIED WITH sha256_password BY {password:String}
 DEFAULT ROLE trustiot_tenant_reader
-SETTINGS PROFILE 'trustiot_tenant_reader', SQL_tenant_id = '00000000-0000-4000-8000-000000014109' CONST";
+SETTINGS PROFILE 'trustiot_tenant_reader', SQL_tenant_id = '00000000-0000-4000-8000-000000014109' CONST,
+  SQL_queryable_raw_days = 36500 CONST, SQL_queryable_1m_months = 1200 CONST,
+  SQL_queryable_1h_months = 1200 CONST";
 /// The ingest service's account: the ingest role, nothing else.
 const INGEST: &str = "rollup_fixture_ingest";
 const CREATE_INGEST: &str = "CREATE USER rollup_fixture_ingest

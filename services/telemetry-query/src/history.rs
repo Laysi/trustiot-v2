@@ -22,16 +22,32 @@
 //!
 //! The queryable period is fixed for now to the strictest plan's (docs/product/plans.md, Starter):
 //! raw readings of the last [`RAW_DAYS`] days, aggregated series of the last [`AGGREGATED_MONTHS`]
-//! months. A range that starts earlier is cut to the period's start (`truncated`); per-plan
-//! periods come with Laysi/trustiot-v2#453.
+//! months. ClickHouse enforces it on every read ([`crate::period`]); the API cuts a range that
+//! starts earlier to where the clamp of the view it reads starts ([`Windows::earliest`],
+//! `truncated`), which is a little later than the database's window of that view, so the answer
+//! holds every reading from `earliest` on. Each view has its own window, so the automatic
+//! interval is chosen within the range the views can serve. Per-plan periods come with
+//! Laysi/trustiot-v2#453.
+//!
+//! Raw series and latest values read the raw view. Aggregated series read the aggregates
+//! (services/ingest/README.md, 「彙總表」): intervals of minutes the one-minute cells, intervals
+//! of hours and days the one-hour cells, which start on UTC hours, so a time zone whose offset is
+//! not a whole number of hours (Asia/Kolkata, Australia/Adelaide) reads the one-minute cells
+//! instead, with the range cut to their period; ClickHouse itself tells (`toStartOfHour` of a
+//! cell in the zone). A bucket is the
+//! sum of whole cells: those whose start lies in `[from, to)`, so with a `from` or a `to` that is
+//! not on a cell boundary the first bucket starts at the next cell and the last one can hold
+//! readings up to a cell after `to`.
 
 use axum::Router;
 use axum::extract::rejection::{PathRejection, QueryRejection};
-use axum::extract::{FromRef, Path, Query, State};
+use axum::extract::{DefaultBodyLimit, FromRef, Path, Query, State};
 use axum::http::header::CACHE_CONTROL;
 use axum::response::{IntoResponse, Response};
-use axum::routing::get;
-use chrono::{DateTime, Months, TimeDelta, Utc};
+use axum::routing::{get, post};
+use chrono::{DateTime, Utc};
+use contract::api::telemetry_query::RunSql;
+use contract::client::Endpoint as _;
 use contract::{ErrorBody, ErrorCode, MessageKey, TenantId};
 use serde::{Deserialize, Serialize};
 use service_kit::identity::{IdentityVerifier, UserIdentity};
@@ -39,8 +55,10 @@ use service_kit::tenant::{TenantDb, TenantDbError};
 use utoipa::ToSchema;
 use uuid::Uuid;
 
-use crate::accounts::{AccountError, Accounts, Ensured};
+use crate::accounts::{AccountError, Accounts, Ensured, Verified};
 use crate::clickhouse::{QueryError, code};
+use crate::period::{View, Windows};
+use crate::semantic::range::latest_end;
 
 /// The routes, as the ingress gateway forwards them (no prefix is stripped).
 pub const SERIES_PATH: &str = "/api/telemetry/v1/devices/{device_id}/series";
@@ -76,36 +94,66 @@ const ACCOUNT_NOT_READY: MessageKey = MessageKey::new("telemetry.account_not_rea
 /// that tenant.
 const ACCOUNT_READY: &str = "SELECT EXISTS (SELECT 1 FROM telemetry_query.tenant_accounts)";
 
-/// The numeric value of a reading (a bool as 0 or 1; NULL for a string), for min, max and avg.
-/// Buckets start where `toStartOfInterval` puts them in the time zone `tz`: minutes count from
+/// An aggregated series from the cells of `$view`: per bucket, the readings, the smallest and
+/// largest numeric value (a bool as 0 or 1), the mean of the numeric values (the sum of the
+/// cells' sums over the sum of their numeric readings; NULL without one), the latest reading,
+/// and whether a cell does not start on a `$cell_start` boundary in the time zone `tz`, which
+/// means the zone's offset is not a whole number of the view's cells and the buckets cannot be
+/// built from them. Buckets start where `toStartOfInterval` puts them in `tz`: minutes count from
 /// the Unix epoch (every time zone's offset is a whole number of 15 minutes, so 15-minute
-/// buckets start on the local quarter hour too), hours and days from the local midnight.
-/// `tenant_id` repeats what the account's row policy enforces anyway.
-macro_rules! series_statement {
-    ($interval:literal) => {
+/// buckets start on the local quarter hour too), hours and days from the local midnight. A cell
+/// counts when its start lies in `[from, to)`. `tenant_id` repeats what the account's row
+/// policy enforces anyway.
+macro_rules! cells_statement {
+    ($view:literal, $interval:literal, $cell_start:literal) => {
         concat!(
-            "SELECT toUnixTimestamp64Milli(toDateTime64(toStartOfInterval(ts, ",
+            "SELECT toUnixTimestamp64Milli(toDateTime64(toStartOfInterval(bucket, ",
             $interval,
-            "({step:UInt32}), {tz:String}), 3)) AS bucket,
-  count(), min(n), max(n), avg(n),
-  argMax(tuple(toString(value_type), value_float, value_int, value_bool, value_string), ts)
-FROM (
-  SELECT ts, value_type, value_float, value_int, value_bool, value_string,
-    multiIf(value_type = 'float', value_float, value_type = 'int', toFloat64(value_int),
-      value_type = 'bool', toFloat64(value_bool), CAST(NULL AS Nullable(Float64))) AS n
-  FROM trustiot.tenant_telemetry
-  WHERE tenant_id = {tenant:UUID} AND device_id = {device:UUID} AND point = {point:String}
-    AND ts >= fromUnixTimestamp64Milli({from:Int64}) AND ts < fromUnixTimestamp64Milli({to:Int64})
-)
-GROUP BY bucket ORDER BY bucket LIMIT {limit:UInt32}
+            "({step:UInt32}), {tz:String}), 3)) AS start,
+  sum(readings), min(value_min), max(value_max),
+  if(sum(numeric_readings) = 0, NULL, sum(value_sum) / sum(numeric_readings)),
+  argMax(tuple(toString(last.value_type), last.value_float, last.value_int, last.value_bool,
+    last.value_string), last.ts),
+  max(",
+            $cell_start,
+            "(bucket, {tz:String}) != bucket)
+FROM ",
+            $view,
+            "
+WHERE tenant_id = {tenant:UUID} AND device_id = {device:UUID} AND point = {point:String}
+  AND bucket >= fromUnixTimestamp64Milli({from:Int64})
+  AND bucket < fromUnixTimestamp64Milli({to:Int64})
+GROUP BY start ORDER BY start LIMIT {limit:UInt32}
 FORMAT JSONCompactEachRow"
         )
     };
 }
 
-const SERIES_MINUTES: &str = series_statement!("toIntervalMinute");
-const SERIES_HOURS: &str = series_statement!("toIntervalHour");
-const SERIES_DAYS: &str = series_statement!("toIntervalDay");
+const MINUTE_CELLS_MINUTES: &str = cells_statement!(
+    "trustiot.tenant_telemetry_1m",
+    "toIntervalMinute",
+    "toStartOfMinute"
+);
+const MINUTE_CELLS_HOURS: &str = cells_statement!(
+    "trustiot.tenant_telemetry_1m",
+    "toIntervalHour",
+    "toStartOfMinute"
+);
+const MINUTE_CELLS_DAYS: &str = cells_statement!(
+    "trustiot.tenant_telemetry_1m",
+    "toIntervalDay",
+    "toStartOfMinute"
+);
+const HOUR_CELLS_HOURS: &str = cells_statement!(
+    "trustiot.tenant_telemetry_1h",
+    "toIntervalHour",
+    "toStartOfHour"
+);
+const HOUR_CELLS_DAYS: &str = cells_statement!(
+    "trustiot.tenant_telemetry_1h",
+    "toIntervalDay",
+    "toStartOfHour"
+);
 
 /// Raw readings in time order. `{tz}` is checked here too, so a raw series refuses an unknown
 /// time zone like an aggregated one.
@@ -205,6 +253,28 @@ impl Interval {
         let range = (to - from).num_seconds().max(0);
         // The range is never negative and a bucket at least a minute.
         Some((range + seconds - 1) / seconds + 2)
+    }
+
+    /// The view the interval reads first: raw readings, the one-minute cells for minutes, the
+    /// one-hour cells for hours and days (the one-minute cells when the time zone is not whole
+    /// hours from UTC).
+    fn view(self) -> View {
+        match self.bucket() {
+            None => View::Raw,
+            Some((Unit::Minute, _)) => View::Minute,
+            Some((Unit::Hour | Unit::Day, _)) => View::Hour,
+        }
+    }
+}
+
+/// The statement of an aggregated series of `unit` from `view`'s cells.
+fn cells_statement(view: View, unit: Unit) -> &'static str {
+    match (view, unit) {
+        (View::Hour, Unit::Hour) => HOUR_CELLS_HOURS,
+        (View::Hour, Unit::Day) => HOUR_CELLS_DAYS,
+        (_, Unit::Hour) => MINUTE_CELLS_HOURS,
+        (_, Unit::Day) => MINUTE_CELLS_DAYS,
+        (_, Unit::Minute) => MINUTE_CELLS_MINUTES,
     }
 }
 
@@ -317,7 +387,8 @@ impl FromRef<Routes> for IdentityVerifier {
 }
 
 impl Routes {
-    /// The state the routes share: the semantic API (`crate::semantic`) uses it too.
+    /// The state the routes share: the semantic API (`crate::semantic`) and the internal SQL
+    /// endpoint (`crate::sql_api`) use it too.
     pub fn new(verifier: IdentityVerifier, db: TenantDb, accounts: Accounts) -> Self {
         Self {
             verifier,
@@ -327,16 +398,18 @@ impl Routes {
     }
 }
 
-/// The service's API: [`SERIES_PATH`] and [`LATEST_PATH`].
+/// The service's API: [`SERIES_PATH`] and [`LATEST_PATH`], and the internal SQL endpoint
+/// ([`crate::sql_api`]).
 pub fn routes(verifier: IdentityVerifier, db: TenantDb, accounts: Accounts) -> Router {
     Router::new()
         .route(SERIES_PATH, get(get_series))
         .route(LATEST_PATH, get(get_latest))
-        .with_state(Routes {
-            verifier,
-            db,
-            accounts,
-        })
+        .route(
+            RunSql::ROUTE,
+            post(crate::sql_api::run_sql)
+                .layer(DefaultBodyLimit::max(crate::sql_api::MAX_REQUEST_BYTES)),
+        )
+        .with_state(Routes::new(verifier, db, accounts))
 }
 
 /// An error response.
@@ -378,28 +451,38 @@ fn is_point(point: &str) -> bool {
     (1..=MAX_POINT_LEN).contains(&point.len())
 }
 
-/// The start of the queryable period of `interval` at `now`.
-fn earliest(interval: Interval, now: DateTime<Utc>) -> DateTime<Utc> {
-    if interval == Interval::Raw {
-        now - TimeDelta::days(RAW_DAYS)
-    } else {
-        now.checked_sub_months(Months::new(AGGREGATED_MONTHS))
-            .unwrap_or(DateTime::<Utc>::MIN_UTC)
-    }
-}
-
-/// What a request becomes once checked: the interval and the range within the period.
+/// What a request becomes once checked: the interval, the view it reads, and the range within
+/// that view's period.
 #[derive(Debug, PartialEq, Eq)]
 struct Plan {
     interval: Interval,
+    view: View,
     from: DateTime<Utc>,
     to: DateTime<Utc>,
     truncated: bool,
+    /// Where the clamp of `view` starts ([`Windows::earliest`]).
     earliest: DateTime<Utc>,
 }
 
-/// Checks a series request against the rules and the queryable period at `now`.
-fn plan(params: &SeriesParams, now: DateTime<Utc>) -> Result<Plan, Box<Response>> {
+/// The refusal of a range that lies wholly before the period starting at `earliest`.
+fn outside_period(earliest: DateTime<Utc>) -> Box<Response> {
+    Box::new(error(
+        ErrorBody::new(ErrorCode::QuotaExceeded)
+            .with_message_key(OUTSIDE_PERIOD)
+            .with_detail("earliest", earliest.to_rfc3339()),
+    ))
+}
+
+/// Whether `interval` gives at most [`MAX_BUCKETS`] buckets over `from..to` (raw readings are
+/// counted after the query instead).
+fn fits(interval: Interval, from: DateTime<Utc>, to: DateTime<Utc>) -> bool {
+    interval
+        .max_buckets(from, to)
+        .is_none_or(|buckets| buckets <= i64::from(MAX_BUCKETS))
+}
+
+/// Checks a series request against the rules that need neither the account nor the time.
+fn validate(params: &SeriesParams) -> Result<(), Box<Response>> {
     if !is_point(&params.point) {
         return Err(Box::new(invalid("point", POINT_INVALID)));
     }
@@ -409,53 +492,113 @@ fn plan(params: &SeriesParams, now: DateTime<Utc>) -> Result<Plan, Box<Response>
     if params.from >= params.to {
         return Err(Box::new(invalid("from", RANGE_INVALID)));
     }
-    // The automatic choice is always aggregated, so its period is the aggregated one.
-    let period_of = params.interval.unwrap_or(Interval::Day1);
-    let earliest = earliest(period_of, now);
+    Ok(())
+}
+
+/// Checks a series request against the rules and the queryable period of an account with
+/// `windows` at `now`. Each view has its own window (one plan may keep hourly cells longer
+/// than minute cells), so a range is cut to the window of the view its interval reads.
+fn plan(
+    params: &SeriesParams,
+    windows: Windows,
+    now: DateTime<Utc>,
+) -> Result<Plan, Box<Response>> {
+    validate(params)?;
+    // Before any arithmetic on the request's times.
+    if !ends_in_time(params.to, now) {
+        return Err(Box::new(invalid("to", RANGE_INVALID)));
+    }
+    match params.interval {
+        Some(interval) => plan_interval(params, interval, interval.view(), windows, now),
+        None => plan_automatic(params, windows, now),
+    }
+}
+
+/// Whether a range ending at `to` ends no later than the semantic API's ranges may
+/// ([`latest_end`]): [`MAX_AHEAD`] after `now`, and never past the last second of the cells'
+/// `bucket`, a ClickHouse `DateTime` that wraps silently after 2106 (an empty answer although
+/// data exists). chrono reads years up to +262142, so this comes before any arithmetic on `to`.
+///
+/// [`MAX_AHEAD`]: crate::semantic::range::MAX_AHEAD
+fn ends_in_time(to: DateTime<Utc>, now: DateTime<Utc>) -> bool {
+    to <= latest_end(now)
+}
+
+/// The plan of `interval` read from `view`: the range cut to that view's period. Also the plan
+/// of an hour or day interval that falls back to the one-minute cells, for a time zone that is
+/// not whole hours from UTC.
+fn plan_interval(
+    params: &SeriesParams,
+    interval: Interval,
+    view: View,
+    windows: Windows,
+    now: DateTime<Utc>,
+) -> Result<Plan, Box<Response>> {
+    let earliest = windows.earliest(view, now);
     if params.to <= earliest {
+        return Err(outside_period(earliest));
+    }
+    let from = params.from.max(earliest);
+    if !fits(interval, from, params.to) {
         return Err(Box::new(error(
-            ErrorBody::new(ErrorCode::QuotaExceeded)
-                .with_message_key(OUTSIDE_PERIOD)
-                .with_detail("earliest", earliest.to_rfc3339()),
+            ErrorBody::new(ErrorCode::ValidationFailed)
+                .with_message_key(TOO_MANY_POINTS)
+                .with_detail("parameter", "interval")
+                .with_detail("max", MAX_BUCKETS),
         )));
     }
-    let truncated = params.from < earliest;
-    let from = params.from.max(earliest);
-    let to = params.to;
-    let interval = match params.interval {
-        Some(interval) => {
-            if interval
-                .max_buckets(from, to)
-                .is_some_and(|buckets| buckets > i64::from(MAX_BUCKETS))
-            {
-                return Err(Box::new(error(
-                    ErrorBody::new(ErrorCode::ValidationFailed)
-                        .with_message_key(TOO_MANY_POINTS)
-                        .with_detail("parameter", "interval")
-                        .with_detail("max", MAX_BUCKETS),
-                )));
-            }
-            interval
-        }
-        None => Interval::AGGREGATED
-            .into_iter()
-            .find(|interval| {
-                interval
-                    .max_buckets(from, to)
-                    .is_some_and(|buckets| buckets <= i64::from(MAX_BUCKETS))
-            })
-            .ok_or_else(|| Box::new(invalid("to", RANGE_INVALID)))?,
-    };
     Ok(Plan {
         interval,
+        view,
         from,
-        to,
-        truncated,
+        to: params.to,
+        truncated: params.from < earliest,
         earliest,
     })
 }
 
-/// Maps a ClickHouse failure of a tenant query to the response, and logs it without its text.
+/// The automatic interval: the range cut as little as the two aggregates' periods allow, then
+/// the finest aggregated interval whose view holds that whole range and which gives at most
+/// [`MAX_BUCKETS`] buckets over it. When no interval fits from the earlier of the two starts,
+/// the range starts at the later one instead (a shorter range fits finer intervals).
+fn plan_automatic(
+    params: &SeriesParams,
+    windows: Windows,
+    now: DateTime<Utc>,
+) -> Result<Plan, Box<Response>> {
+    let (minute, hour) = (
+        windows.earliest(View::Minute, now),
+        windows.earliest(View::Hour, now),
+    );
+    let (sooner, later) = (minute.min(hour), minute.max(hour));
+    if params.to <= sooner {
+        return Err(outside_period(sooner));
+    }
+    for start in [sooner, later] {
+        let from = params.from.max(start);
+        if params.to <= from {
+            break;
+        }
+        let chosen = Interval::AGGREGATED.into_iter().find(|interval| {
+            windows.earliest(interval.view(), now) <= from && fits(*interval, from, params.to)
+        });
+        if let Some(interval) = chosen {
+            let view = interval.view();
+            return Ok(Plan {
+                interval,
+                view,
+                from,
+                to: params.to,
+                truncated: params.from < from,
+                earliest: windows.earliest(view, now),
+            });
+        }
+    }
+    Err(Box::new(invalid("to", RANGE_INVALID)))
+}
+
+/// Maps a ClickHouse failure of a tenant query, or of the account check before one, to the
+/// response, and logs it without its text.
 pub(crate) fn clickhouse_error(tenant: TenantId, failure: &QueryError) -> Response {
     let (code, key) = match failure.code() {
         Some(code::TIMEOUT_EXCEEDED) => (ErrorCode::Timeout, None),
@@ -492,6 +635,11 @@ pub(crate) enum Failure {
 }
 
 impl Routes {
+    /// The tenant accounts and the ClickHouse client.
+    pub(crate) fn accounts(&self) -> &Accounts {
+        &self.accounts
+    }
+
     /// The caller's tenant, once its account exists.
     pub(crate) async fn tenant(&self, user: &UserIdentity) -> Result<TenantId, Failure> {
         let Some(tenant) = user.tenant_id() else {
@@ -528,43 +676,96 @@ impl Routes {
         }
     }
 
-    /// Runs `statement` as `tenant`'s account, after checking the account is as the service
-    /// creates it ([`Accounts::verify`]: its tenant, role, `readonly` and query limits). When
-    /// ClickHouse refuses the account's password (a new password generation of the service's
-    /// account, or a changed account), the check sets it again first. An account that differs
-    /// in anything else is refused with 503, without running the statement: its limits or its
-    /// tenant may not hold.
-    pub(crate) async fn query(
-        &self,
-        tenant: TenantId,
-        statement: &str,
-        params: &[(&str, &str)],
-    ) -> Result<String, Failure> {
+    /// Checks `tenant`'s account before a query runs as it ([`Accounts::verify`]: its tenant,
+    /// role, `readonly` and query limits), and returns the windows the database applies to its
+    /// queries. When ClickHouse refuses the account's password (a new password generation of
+    /// the service's account, or a changed account), the check sets it again first; missing or
+    /// other windows are set too. An account that differs in anything else is refused with 503,
+    /// and nothing may run as it: its limits or its tenant may not hold.
+    pub(crate) async fn verified(&self, tenant: TenantId) -> Result<Windows, Failure> {
         match self.accounts.verify(tenant).await {
-            Ok(Ensured::Ready) => {}
-            Ok(Ensured::PasswordSet) => {
-                tracing::info!(tenant_id = %tenant, "set the tenant account's password again");
+            Ok(Verified {
+                ensured,
+                windows,
+                windows_set: _,
+            }) => {
+                if ensured == Ensured::PasswordSet {
+                    tracing::info!(tenant_id = %tenant, "set the tenant account's password again");
+                }
+                Ok(windows)
             }
             Err(AccountError::ClickHouse { source, .. }) if !source.is_authentication() => {
-                return Err(Failure::ClickHouse(source));
+                Err(Failure::ClickHouse(source))
             }
             Err(failure) => {
                 tracing::error!(
                     tenant_id = %tenant,
                     error = %failure,
-                    "the tenant's ClickHouse account is not as the service creates it, or refused                      its password and could not be repaired; no query runs as it"
+                    "the tenant's ClickHouse account is not as the service creates it, or refused \
+                     its password and could not be repaired; no query runs as it"
                 );
-                return Err(Failure::Response(Box::new(error(ErrorBody::new(
+                Err(Failure::Response(Box::new(error(ErrorBody::new(
                     ErrorCode::Unavailable,
-                )))));
+                )))))
             }
         }
+    }
+
+    /// Runs `statement` as `tenant`'s account, which [`Routes::verified`] checked for this
+    /// request.
+    pub(crate) async fn run_verified(
+        &self,
+        tenant: TenantId,
+        statement: &str,
+        params: &[(&str, &str)],
+    ) -> Result<String, Failure> {
         let account = self.accounts.account(tenant);
         self.accounts
             .clickhouse()
             .query(account.credentials(), statement, params, None)
             .await
             .map_err(Failure::ClickHouse)
+    }
+}
+
+/// The texts of a series statement's query parameters that come from its plan.
+struct PlanTexts {
+    from: String,
+    to: String,
+    step: Option<String>,
+    limit: String,
+}
+
+impl PlanTexts {
+    fn new(plan: &Plan, limit: usize) -> Self {
+        Self {
+            from: plan.from.timestamp_millis().to_string(),
+            to: plan.to.timestamp_millis().to_string(),
+            step: plan.interval.bucket().map(|(_, step)| step.to_string()),
+            limit: limit.to_string(),
+        }
+    }
+
+    /// The query parameters of the series statement.
+    fn params<'a>(
+        &'a self,
+        tenant: &'a str,
+        device: &'a str,
+        request: &'a SeriesParams,
+    ) -> Vec<(&'a str, &'a str)> {
+        let mut params = vec![
+            ("tenant", tenant),
+            ("device", device),
+            ("point", request.point.as_str()),
+            ("from", self.from.as_str()),
+            ("to", self.to.as_str()),
+            ("tz", request.tz.as_str()),
+            ("limit", self.limit.as_str()),
+        ];
+        if let Some(step) = &self.step {
+            params.push(("step", step.as_str()));
+        }
+        params
     }
 }
 
@@ -625,6 +826,100 @@ pub(crate) fn unexpected_answer(tenant: TenantId) -> Response {
     error(ErrorBody::new(ErrorCode::Internal))
 }
 
+/// Runs a series statement as `tenant`'s verified account; a refusal becomes its response.
+async fn series_body(
+    state: &Routes,
+    tenant: TenantId,
+    statement: &str,
+    params: &[(&str, &str)],
+) -> Result<String, Box<Response>> {
+    match state.run_verified(tenant, statement, params).await {
+        Ok(body) => Ok(body),
+        Err(Failure::Response(response)) => Err(response),
+        Err(Failure::ClickHouse(failure)) if is_unknown_time_zone(&failure) => {
+            Err(Box::new(invalid("tz", TIME_ZONE_INVALID)))
+        }
+        Err(Failure::ClickHouse(failure)) => Err(Box::new(clickhouse_error(tenant, &failure))),
+    }
+}
+
+/// A raw series: one point per reading.
+async fn raw_series(
+    state: &Routes,
+    tenant: TenantId,
+    params: &[(&str, &str)],
+) -> Result<Vec<SeriesPoint>, Box<Response>> {
+    let body = series_body(state, tenant, RAW_SERIES, params).await?;
+    rows(
+        &body,
+        |(millis, kind, float, int, boolean, text): (
+            i64,
+            String,
+            Option<f64>,
+            i64,
+            bool,
+            String,
+        )| {
+            let last = reading((kind, float, int, boolean, text))?;
+            let value = numeric(&last);
+            Some(SeriesPoint {
+                time: utc_millis(millis)?,
+                count: 1,
+                min: value,
+                max: value,
+                avg: value,
+                last,
+            })
+        },
+    )
+    .ok_or_else(|| Box::new(unexpected_answer(tenant)))
+}
+
+/// One line of [`cells_statement!`]: the bucket's start, readings, min, max, mean, the latest
+/// reading, and whether a cell is off the time zone's boundaries.
+type CellsLine = (
+    i64,
+    u64,
+    Option<f64>,
+    Option<f64>,
+    Option<f64>,
+    ReadingColumns,
+    u8,
+);
+
+/// An aggregated series from the cells of an aggregate, and whether a cell did not start on the
+/// time zone's boundary of the view's cell (the series is then wrong and must not be served).
+async fn cells_series(
+    state: &Routes,
+    tenant: TenantId,
+    statement: &str,
+    params: &[(&str, &str)],
+) -> Result<(Vec<SeriesPoint>, bool), Box<Response>> {
+    let body = series_body(state, tenant, statement, params).await?;
+    let lines = rows(
+        &body,
+        |(millis, count, min, max, avg, last, misaligned): CellsLine| {
+            Some((
+                SeriesPoint {
+                    time: utc_millis(millis)?,
+                    count,
+                    min,
+                    max,
+                    avg,
+                    last: reading(last)?,
+                },
+                misaligned != 0,
+            ))
+        },
+    )
+    .ok_or_else(|| Box::new(unexpected_answer(tenant)))?;
+    let misaligned = lines.iter().any(|(_, misaligned)| *misaligned);
+    Ok((
+        lines.into_iter().map(|(point, _)| point).collect(),
+        misaligned,
+    ))
+}
+
 /// A data point's series over a time range: raw readings, or buckets of an interval that
 /// follow the time zone `tz`, within the queryable period.
 #[utoipa::path(
@@ -666,94 +961,77 @@ async fn get_series(
     let Ok(Query(params)) = params else {
         return error(ErrorBody::new(ErrorCode::InvalidRequest).with_message_key(QUERY_INVALID));
     };
-    let plan = match plan(&params, Utc::now()) {
-        Ok(plan) => plan,
-        Err(response) => return *response,
-    };
+    if let Err(response) = validate(&params) {
+        return *response;
+    }
     let tenant = match state.tenant(&user).await {
         Ok(tenant) => tenant,
         Err(Failure::Response(response)) => return *response,
         Err(Failure::ClickHouse(_)) => unreachable!("tenant() does not query ClickHouse"),
     };
-    let (statement, step, limit) = match plan.interval.bucket() {
-        None => (RAW_SERIES, 0, MAX_RAW_READINGS + 1),
-        Some((Unit::Minute, step)) => (SERIES_MINUTES, step, usize::from(MAX_BUCKETS)),
-        Some((Unit::Hour, step)) => (SERIES_HOURS, step, usize::from(MAX_BUCKETS)),
-        Some((Unit::Day, step)) => (SERIES_DAYS, step, usize::from(MAX_BUCKETS)),
-    };
-    let (tenant_text, device_text) = (tenant.to_string(), device.to_string());
-    let (from, to) = (
-        plan.from.timestamp_millis().to_string(),
-        plan.to.timestamp_millis().to_string(),
-    );
-    let (step, limit) = (step.to_string(), limit.to_string());
-    let mut query_params = vec![
-        ("tenant", tenant_text.as_str()),
-        ("device", device_text.as_str()),
-        ("point", params.point.as_str()),
-        ("from", from.as_str()),
-        ("to", to.as_str()),
-        ("tz", params.tz.as_str()),
-        ("limit", limit.as_str()),
-    ];
-    if plan.interval != Interval::Raw {
-        query_params.push(("step", step.as_str()));
-    }
-    let body = match state.query(tenant, statement, &query_params).await {
-        Ok(body) => body,
+    let windows = match state.verified(tenant).await {
+        Ok(windows) => windows,
         Err(Failure::Response(response)) => return *response,
-        Err(Failure::ClickHouse(failure)) if is_unknown_time_zone(&failure) => {
-            return invalid("tz", TIME_ZONE_INVALID);
-        }
         Err(Failure::ClickHouse(failure)) => return clickhouse_error(tenant, &failure),
     };
-    let points = if plan.interval == Interval::Raw {
-        rows(
-            &body,
-            |(millis, kind, float, int, boolean, text): (
-                i64,
-                String,
-                Option<f64>,
-                i64,
-                bool,
-                String,
-            )| {
-                let last = reading((kind, float, int, boolean, text))?;
-                let value = numeric(&last);
-                Some(SeriesPoint {
-                    time: utc_millis(millis)?,
-                    count: 1,
-                    min: value,
-                    max: value,
-                    avg: value,
-                    last,
-                })
-            },
-        )
-    } else {
-        rows(
-            &body,
-            |(millis, count, min, max, avg, last): (
-                i64,
-                u64,
-                Option<f64>,
-                Option<f64>,
-                Option<f64>,
-                ReadingColumns,
-            )| {
-                Some(SeriesPoint {
-                    time: utc_millis(millis)?,
-                    count,
-                    min,
-                    max,
-                    avg,
-                    last: reading(last)?,
-                })
-            },
-        )
+    let now = Utc::now();
+    let mut plan = match plan(&params, windows, now) {
+        Ok(plan) => plan,
+        Err(response) => return *response,
     };
-    let Some(points) = points else {
-        return unexpected_answer(tenant);
+    let (tenant_text, device_text) = (tenant.to_string(), device.to_string());
+    let points = match plan.interval.bucket() {
+        None => {
+            let texts = PlanTexts::new(&plan, MAX_RAW_READINGS + 1);
+            let query_params = texts.params(&tenant_text, &device_text, &params);
+            raw_series(&state, tenant, &query_params).await
+        }
+        Some((unit, _)) => {
+            let texts = PlanTexts::new(&plan, usize::from(MAX_BUCKETS));
+            let query_params = texts.params(&tenant_text, &device_text, &params);
+            match cells_series(
+                &state,
+                tenant,
+                cells_statement(plan.view, unit),
+                &query_params,
+            )
+            .await
+            {
+                // The one-hour cells start on UTC hours and the time zone's hours do not: the
+                // one-minute cells instead, with the range cut to their own period.
+                Ok((_, true)) if plan.view == View::Hour => {
+                    match plan_interval(&params, plan.interval, View::Minute, windows, now) {
+                        Ok(minute) => {
+                            plan = minute;
+                            let texts = PlanTexts::new(&plan, usize::from(MAX_BUCKETS));
+                            let query_params = texts.params(&tenant_text, &device_text, &params);
+                            cells_series(
+                                &state,
+                                tenant,
+                                cells_statement(View::Minute, unit),
+                                &query_params,
+                            )
+                            .await
+                        }
+                        Err(response) => Err(response),
+                    }
+                }
+                other => other,
+            }
+            .and_then(|(points, misaligned)| {
+                if misaligned {
+                    // A time zone whose offset is not a whole number of minutes: no real zone
+                    // within the aggregates' retention has one.
+                    Err(Box::new(unexpected_answer(tenant)))
+                } else {
+                    Ok(points)
+                }
+            })
+        }
+    };
+    let points = match points {
+        Ok(points) => points,
+        Err(response) => return *response,
     };
     if plan.interval == Interval::Raw && points.len() > MAX_RAW_READINGS {
         return error(
@@ -810,7 +1088,12 @@ async fn get_latest(
         Err(Failure::Response(response)) => return *response,
         Err(Failure::ClickHouse(_)) => unreachable!("tenant() does not query ClickHouse"),
     };
-    let earliest = earliest(Interval::Raw, Utc::now());
+    let windows = match state.verified(tenant).await {
+        Ok(windows) => windows,
+        Err(Failure::Response(response)) => return *response,
+        Err(Failure::ClickHouse(failure)) => return clickhouse_error(tenant, &failure),
+    };
+    let earliest = windows.earliest(View::Raw, Utc::now());
     let (tenant_text, device_text) = (tenant.to_string(), device.to_string());
     let from = earliest.timestamp_millis().to_string();
     let limit = (MAX_LATEST_POINTS + 1).to_string();
@@ -820,7 +1103,7 @@ async fn get_latest(
         ("from", from.as_str()),
         ("limit", limit.as_str()),
     ];
-    let body = match state.query(tenant, LATEST, &params).await {
+    let body = match state.run_verified(tenant, LATEST, &params).await {
         Ok(body) => body,
         Err(Failure::Response(response)) => return *response,
         Err(Failure::ClickHouse(failure)) => return clickhouse_error(tenant, &failure),
@@ -872,6 +1155,46 @@ mod tests {
 
     const NOW: &str = "2026-10-21T12:00:00Z";
 
+    fn plan_at(params: &SeriesParams, now: DateTime<Utc>) -> Result<Plan, Box<Response>> {
+        plan(params, Windows::PLATFORM, now)
+    }
+
+    #[test]
+    fn intervals_read_the_view_of_their_cells() {
+        assert_eq!(Interval::Raw.view(), View::Raw);
+        for interval in [Interval::Minute1, Interval::Minutes5, Interval::Minutes15] {
+            assert_eq!(interval.view(), View::Minute, "{interval:?}");
+        }
+        for interval in [
+            Interval::Hour1,
+            Interval::Hours3,
+            Interval::Hours6,
+            Interval::Hours12,
+            Interval::Day1,
+        ] {
+            assert_eq!(interval.view(), View::Hour, "{interval:?}");
+        }
+        assert_eq!(cells_statement(View::Hour, Unit::Day), HOUR_CELLS_DAYS);
+        assert_eq!(cells_statement(View::Minute, Unit::Day), MINUTE_CELLS_DAYS);
+        assert_eq!(cells_statement(View::Hour, Unit::Hour), HOUR_CELLS_HOURS);
+        assert_eq!(
+            cells_statement(View::Minute, Unit::Hour),
+            MINUTE_CELLS_HOURS
+        );
+        assert_eq!(
+            cells_statement(View::Minute, Unit::Minute),
+            MINUTE_CELLS_MINUTES
+        );
+        for statement in [HOUR_CELLS_HOURS, HOUR_CELLS_DAYS] {
+            assert!(statement.contains("FROM trustiot.tenant_telemetry_1h\n"));
+            assert!(statement.contains("max(toStartOfHour(bucket, {tz:String}) != bucket)"));
+        }
+        for statement in [MINUTE_CELLS_MINUTES, MINUTE_CELLS_HOURS, MINUTE_CELLS_DAYS] {
+            assert!(statement.contains("FROM trustiot.tenant_telemetry_1m\n"));
+            assert!(statement.contains("max(toStartOfMinute(bucket, {tz:String}) != bucket)"));
+        }
+    }
+
     fn status(result: Result<Plan, Box<Response>>) -> u16 {
         result.expect_err("refused").status().as_u16()
     }
@@ -885,9 +1208,9 @@ mod tests {
             ("2026-10-19T12:00:00Z", Interval::Minutes5),
             ("2026-10-14T12:00:00Z", Interval::Minutes15),
             ("2026-09-21T12:00:00Z", Interval::Hour1),
-            ("2026-07-21T12:00:00Z", Interval::Hours3),
+            ("2026-07-21T13:00:00Z", Interval::Hours3),
         ] {
-            let plan = plan(&params(from, NOW, None), now).expect("a plan");
+            let plan = plan_at(&params(from, NOW, None), now).expect("a plan");
             assert_eq!(plan.interval, interval, "{from}");
             assert!(!plan.truncated, "{from}");
         }
@@ -897,13 +1220,13 @@ mod tests {
     fn ranges_are_cut_to_the_queryable_period() {
         let now = at(NOW);
         // Raw: seven days.
-        let raw = plan(
+        let raw = plan_at(
             &params("2026-10-01T00:00:00Z", NOW, Some(Interval::Hours6)),
             now,
         )
         .expect("aggregated reaches back three months");
         assert!(!raw.truncated);
-        let raw = plan(
+        let raw = plan_at(
             &params(
                 "2026-10-13T00:00:00Z",
                 "2026-10-15T00:00:00Z",
@@ -913,11 +1236,15 @@ mod tests {
         )
         .expect("partly inside");
         assert!(raw.truncated);
-        assert_eq!(raw.from, at("2026-10-14T12:00:00Z"));
-        assert_eq!(raw.earliest, at("2026-10-14T12:00:00Z"));
+        assert_eq!(
+            raw.from,
+            at("2026-10-14T12:05:00Z"),
+            "seven days and the margin"
+        );
+        assert_eq!(raw.earliest, at("2026-10-14T12:05:00Z"));
         // Wholly before the raw period: refused with the period's start.
         assert_eq!(
-            status(plan(
+            status(plan_at(
                 &params(
                     "2026-10-01T00:00:00Z",
                     "2026-10-14T12:00:00Z",
@@ -928,16 +1255,128 @@ mod tests {
             403
         );
         // Aggregated: three calendar months.
-        let aggregated = plan(
+        let aggregated = plan_at(
             &params("2026-01-01T00:00:00Z", NOW, Some(Interval::Day1)),
             now,
         )
         .expect("partly inside");
         assert!(aggregated.truncated);
-        assert_eq!(aggregated.from, at("2026-07-21T12:00:00Z"));
+        assert_eq!(
+            aggregated.from,
+            at("2026-07-21T13:00:00Z"),
+            "three months and the margin, on the next whole hour"
+        );
+        assert_eq!(
+            status(plan_at(
+                &params("2026-01-01T00:00:00Z", "2026-07-21T12:00:00Z", None),
+                now
+            )),
+            403
+        );
+    }
+
+    #[test]
+    fn each_interval_is_cut_to_the_period_of_the_view_it_reads() {
+        let now = at(NOW);
+        // Minutes read the one-minute cells: their clamp is on a whole minute.
+        let minutes = plan_at(
+            &params(
+                "2026-07-21T00:00:00Z",
+                "2026-07-25T00:00:00Z",
+                Some(Interval::Minutes15),
+            ),
+            now,
+        )
+        .expect("partly inside");
+        assert_eq!(minutes.view, View::Minute);
+        assert!(minutes.truncated);
+        assert_eq!(minutes.from, at("2026-07-21T12:05:00Z"));
+        assert_eq!(minutes.earliest, at("2026-07-21T12:05:00Z"));
+        // A plan that keeps hours longer than minutes: an hour interval reaches back to the
+        // hours' period, a minute interval only to the minutes'.
+        let windows = Windows::new(7, 13, 36);
+        let hours = plan(
+            &params(
+                "2024-01-01T00:00:00Z",
+                "2024-01-03T00:00:00Z",
+                Some(Interval::Hour1),
+            ),
+            windows,
+            now,
+        )
+        .expect("inside the hours' period");
+        assert_eq!((hours.view, hours.truncated), (View::Hour, false));
+        assert_eq!(hours.earliest, at("2023-10-21T13:00:00Z"));
         assert_eq!(
             status(plan(
-                &params("2026-01-01T00:00:00Z", "2026-07-21T12:00:00Z", None),
+                &params(
+                    "2024-01-01T00:00:00Z",
+                    "2024-01-03T00:00:00Z",
+                    Some(Interval::Minutes15)
+                ),
+                windows,
+                now
+            )),
+            403,
+            "before the minutes' period"
+        );
+        // The automatic interval prefers the whole range at a coarser interval to a finer one
+        // over the part the minute cells still hold.
+        let automatic = plan(
+            &params("2024-10-21T12:00:00Z", "2025-09-21T22:00:00Z", None),
+            windows,
+            now,
+        )
+        .expect("inside the hours' period");
+        assert_eq!(
+            (automatic.interval, automatic.view, automatic.truncated),
+            (Interval::Hours6, View::Hour, false)
+        );
+        assert_eq!(automatic.from, at("2024-10-21T12:00:00Z"));
+        // Within both periods: the finest interval, from the minute cells.
+        let recent =
+            plan(&params("2026-10-21T00:00:00Z", NOW, None), windows, now).expect("recent");
+        assert_eq!(
+            (recent.interval, recent.view),
+            (Interval::Minute1, View::Minute)
+        );
+        // Wholly before both periods: refused with the earlier start.
+        let refused = plan(
+            &params("2020-01-01T00:00:00Z", "2020-02-01T00:00:00Z", None),
+            windows,
+            now,
+        )
+        .expect_err("refused");
+        assert_eq!(refused.status().as_u16(), 403);
+    }
+
+    #[test]
+    fn the_fallback_to_minute_cells_is_cut_to_their_period() {
+        // A time zone off the whole hours reads the one-minute cells: with a shorter minute
+        // window, the hour interval's range is cut again, or refused when wholly before it.
+        let now = at(NOW);
+        let windows = Windows::new(7, 1, 3);
+        let request = params("2026-08-21T00:00:00Z", NOW, Some(Interval::Hours3));
+        let hours = plan(&request, windows, now).expect("inside the hours' period");
+        assert_eq!((hours.view, hours.truncated), (View::Hour, false));
+        let minutes = plan_interval(&request, hours.interval, View::Minute, windows, now)
+            .expect("partly inside the minutes' period");
+        assert_eq!(minutes.view, View::Minute);
+        assert!(minutes.truncated);
+        assert_eq!(minutes.from, at("2026-09-21T12:05:00Z"));
+        assert_eq!(minutes.earliest, minutes.from);
+        let before = params(
+            "2026-08-21T00:00:00Z",
+            "2026-09-01T00:00:00Z",
+            Some(Interval::Hours3),
+        );
+        assert!(plan(&before, windows, now).is_ok());
+        assert_eq!(
+            status(plan_interval(
+                &before,
+                Interval::Hours3,
+                View::Minute,
+                windows,
                 now
             )),
             403
@@ -957,7 +1396,7 @@ mod tests {
             &"A".repeat(65),
         ] {
             bad_tz.tz = tz.to_owned();
-            assert_eq!(status(plan(&bad_tz, now)), 422, "{tz}");
+            assert_eq!(status(plan_at(&bad_tz, now)), 422, "{tz}");
         }
         for tz in [
             "UTC",
@@ -966,34 +1405,88 @@ mod tests {
             "Etc/GMT+8",
         ] {
             bad_tz.tz = tz.to_owned();
-            assert!(plan(&bad_tz, now).is_ok(), "{tz}");
+            assert!(plan_at(&bad_tz, now).is_ok(), "{tz}");
         }
         let mut bad_point = params("2026-10-21T00:00:00Z", NOW, None);
         for point in [String::new(), "p".repeat(129)] {
             bad_point.point = point;
-            assert_eq!(status(plan(&bad_point, now)), 422);
+            assert_eq!(status(plan_at(&bad_point, now)), 422);
         }
         assert_eq!(
-            status(plan(&params(NOW, NOW, None), now)),
+            status(plan_at(&params(NOW, NOW, None), now)),
             422,
             "an empty range"
         );
         assert_eq!(
-            status(plan(
+            status(plan_at(
                 &params("2026-09-21T12:00:00Z", NOW, Some(Interval::Minute1)),
                 now
             )),
             422,
             "a month of minutes has too many buckets"
         );
+        // A century of cells, in both aggregates, has more days than buckets.
         assert_eq!(
             status(plan(
-                &params("2026-10-21T00:00:00Z", "3000-01-01T00:00:00Z", None),
+                &params("1950-01-01T00:00:00Z", NOW, None),
+                Windows::new(7, 1_200, 1_200),
                 now
             )),
             422,
             "no interval fits"
         );
+    }
+
+    async fn body_json(response: Response) -> serde_json::Value {
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("the body");
+        serde_json::from_slice(&bytes).expect("a JSON body")
+    }
+
+    #[tokio::test]
+    async fn a_range_ends_at_most_max_ahead_after_now() {
+        let now = at(NOW);
+        // chrono's RFC 3339 reads a signed year of any length, up to +262142: such a `to` is
+        // refused before any arithmetic on it, so nothing overflows.
+        for to in [
+            "+262142-12-31T23:59:00Z",
+            "2106-02-08T00:00:00Z",
+            "2027-10-23T12:00:00.001Z",
+        ] {
+            let request: SeriesParams = serde_json::from_value(serde_json::json!({
+                "point": "temp",
+                "from": "2026-10-21T00:00:00Z",
+                "to": to,
+                "tz": "UTC",
+            }))
+            .expect("the query string parses");
+            for interval in [None, Some(Interval::Raw), Some(Interval::Day1)] {
+                let request = SeriesParams {
+                    interval,
+                    ..request.clone()
+                };
+                let refused = plan_at(&request, now).expect_err(to);
+                assert_eq!(refused.status().as_u16(), 422, "{to}");
+            }
+        }
+        let refused = plan_at(
+            &params("2026-10-21T00:00:00Z", "2106-02-08T00:00:00Z", None),
+            now,
+        )
+        .expect_err("past the cells' DateTime");
+        let body = body_json(*refused).await;
+        assert_eq!(body["message_key"], "telemetry.range_invalid");
+        assert_eq!(body["details"]["parameter"], "to");
+        // 367 days ahead (the semantic API's `MAX_AHEAD`) still plans.
+        assert!(plan_at(&params(NOW, "2027-10-23T12:00:00Z", None), now).is_ok());
+        assert!(ends_in_time(at("2027-10-23T12:00:00Z"), now));
+        assert!(!ends_in_time(at("2027-10-23T12:00:00.001Z"), now));
+        assert!(!ends_in_time(DateTime::<Utc>::MAX_UTC, now));
+        // Never past the cells' last second, 2106-02-07T06:28:15Z, whatever the clock says.
+        let late = at("2106-01-01T00:00:00Z");
+        assert!(ends_in_time(at("2106-02-07T06:28:15Z"), late));
+        assert!(!ends_in_time(at("2106-02-07T06:28:16Z"), late));
     }
 
     #[test]
@@ -1025,9 +1518,11 @@ mod tests {
     #[test]
     fn statements_use_parameters_only() {
         for statement in [
-            SERIES_MINUTES,
-            SERIES_HOURS,
-            SERIES_DAYS,
+            MINUTE_CELLS_MINUTES,
+            MINUTE_CELLS_HOURS,
+            MINUTE_CELLS_DAYS,
+            HOUR_CELLS_HOURS,
+            HOUR_CELLS_DAYS,
             RAW_SERIES,
             LATEST,
         ] {

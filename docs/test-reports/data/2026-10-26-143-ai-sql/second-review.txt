@@ -1,0 +1,89 @@
+Second security review fixes (2026-10-26): what each new test reported before its fix, and
+after.
+
+== H1 nesting rules in the lexer (a59bd32): the two lexer tests with the rule switched off
+== (the call of `nesting` in lexer::tokens_nested removed)
+cargo test -p telemetry-query --test sql_check -- position_inside parentheses_and_brackets
+test parentheses_and_brackets_nest_at_most_the_limit ... FAILED
+test a_position_inside_another_is_refused_by_the_lexer_before_the_parser ... FAILED
+thread 'parentheses_and_brackets_nest_at_most_the_limit' panicked at services/telemetry-query/tests/sql_check.rs:60:17:
+thread 'a_position_inside_another_is_refused_by_the_lexer_before_the_parser' panicked at services/telemetry-query/tests/sql_check.rs:60:17:
+test result: FAILED. 0 passed; 2 failed; 0 ignored; 0 measured; 14 filtered out; finished in 0.01s
+(sql_check.rs:60 is lexer_refusal's `tokens(sql).expect_err(sql)`: the lexer accepted the
+ reviewer's 40-level position query and 17 levels of parentheses; the parse of the 40-level
+ query would not have finished, so the test asserts the lexer's refusal first.)
+After: both pass, with the rest of sql_check (16 tests).
+
+== H1 audit finding, one-argument position (955d030): unit test before the walk's rule
+cargo test -p telemetry-query --lib expressions_outside_the_allowlist
+thread 'sql::tests::expressions_outside_the_allowlist_are_refused' panicked at services/telemetry-query/src/sql/tests.rs:31:18:
+SELECT position(value_float BETWEEN 1 AND 2 IN 'a') FROM tenant_telemetry: expected a refusal, got Err(Internal("the printed query does not pass the check again"))
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 81 filtered out; finished in 0.01s
+After: passes; the generated scan finds no internal error (parser-survey.txt, section 6).
+
+== L3 account check on the SQL route (30f4e56): the stand-in ClickHouse test before the fix
+CI=1 cargo test -p telemetry-query --test sql_api -- --nocapture
+First run: the test waits for the new warning and the old code logs "a telemetry query failed":
+the warning of the check's ClickHouse error 497: not within 60s
+Second run, with that wait switched off, to see the answers:
+endpoint account check refused by ClickHouse (497): 503 unavailable
+endpoint account check refused by ClickHouse (164): 503 unavailable
+assertion `left == right` failed: 241: {"code":"validation_failed","message_key":"telemetry.query_too_heavy"}
+  left: 422
+ right: 503
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 11.11s
+After:
+endpoint account check refused by ClickHouse (497): 503 unavailable
+endpoint account check refused by ClickHouse (164): 503 unavailable
+endpoint account check refused by ClickHouse (241): 503 unavailable
+endpoint account check refused by ClickHouse (158): 503 unavailable
+endpoint account check refused by ClickHouse (396): 503 unavailable
+endpoint account check refused by ClickHouse (159): 503 unavailable
+endpoint account check refused by ClickHouse (201): 503 unavailable
+endpoint account check refused by ClickHouse (202): 503 unavailable
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 11.19s
+
+== L2 ClickHouse syntax error on a checked query (ffffbbe): the log test with the warning
+== switched off (the old INFO line for every refusal)
+cargo test -p telemetry-query --lib a_syntax_error_from_clickhouse
+thread 'sql_api::tests::a_syntax_error_from_clickhouse_is_a_warning_without_the_sql' panicked at services/telemetry-query/src/sql_api/tests.rs:352:9:
+assertion `left == right` failed: 62: {"class": "query_error", "error_kind": "ClickHouse error 62 (HTTP 500)", "message": "an AI's query did not run", "sql_bytes": "44", "sql_hash": "<keyed hash>", "tenant_id": "<a random test tenant>"}
+  left: Level(Info)
+ right: Level(Warn)
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 83 filtered out; finished in 0.00s
+After: passes (62 at WARN with sql_bytes and sql_hash, 47 and 241 at INFO, no SQL text).
+
+== L4 sqlparser upgrade tripwire (54d3a6c), raised when the review rechecked e2a328b: the
+== version test with SURVEYED_SQLPARSER temporarily set to 0.62.0 (the change was not committed)
+cargo test -p telemetry-query --test sql_check sqlparser_is
+test sqlparser_is_the_version_whose_speculative_parses_were_surveyed ... FAILED
+thread 'sqlparser_is_the_version_whose_speculative_parses_were_surveyed' panicked at services/telemetry-query/tests/sql_check.rs:955:5:
+Cargo.lock resolves sqlparser ["0.63.0"], but its speculative parses were surveyed for 0.62.0 only. Before this upgrade merges, follow services/telemetry-query/README.md, section 「升級 sqlparser」: (1) list the new version's maybe_parse, try_parse and index-reset sites and compare them with docs/test-reports/data/2026-10-26-143-ai-sql/parser-survey.txt; (2) add the construct of each new or changed site the check can reach to NESTED_EXPRESSIONS or NESTED_QUERIES in this file and run the_parse_reads_each_token_a_bounded_number_of_times; (3) a speculative parse that does not remember its failure and reads again after its inner parse succeeded needs a lexer rule or a work bound first; (4) then set SURVEYED_SQLPARSER to the new version.
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 16 filtered out; finished in 0.00s
+After (the constant back at 0.63.0, as committed): passes.
+
+== L4 Renovate rule: renovate-config-validator --strict with the pinned image of the
+== 2026-10-13 report (ghcr.io/renovatebot/renovate:44.155.1@sha256:f5796f26...)
+e2a328b's renovate.json5:
+ INFO: Validating renovate.json5
+ INFO: Config validated successfully against 1 file(s)
+54d3a6c's renovate.json5:
+ INFO: Validating renovate.json5
+ INFO: Config validated successfully against 1 file(s)
+54d3a6c's renovate.json5 with groupName misspelled groupNme in the new rule (exit 1):
+"message": "Invalid configuration option: packageRules[14].groupNme"
+
+== L4 Renovate rule test (a2ff890): the new test in scripts/nightly/renovate.test.ts with a
+== temporary change each time (both restored, neither committed)
+bun test scripts/nightly/renovate.test.ts -t "sqlparser"
+renovate.json5, the sqlparser rule's groupName set to "rust crates":
+error: expect(received).toBe(expected)
+Expected: "sqlparser"
+Received: "rust crates"
+(fail) every copy of a pin is updated by the same pull request > an sqlparser version change carries a note about the guard in the telemetry-query tests
+sql_check.rs, the constant renamed to SURVEYED_VERSION:
+error: expect(received).toMatch(expected)
+Expected substring or pattern: /^const SURVEYED_SQLPARSER: &str = "[^"]+";$/m
+(fail) every copy of a pin is updated by the same pull request > an sqlparser version change carries a note about the guard in the telemetry-query tests
+Received: the whole of services/telemetry-query/tests/sql_check.rs (not repeated here)
+After (both restored): 25 pass, 0 fail.

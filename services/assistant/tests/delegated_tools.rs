@@ -1443,7 +1443,7 @@ fn the_tools_follow_the_services_routes_and_limits() {
     const { assert!(semantic::MAX_RESULT_ROWS <= range::MAX_ROWS) };
     assert_eq!(
         semantic::PERIOD_MARGIN_MINUTES,
-        range::PERIOD_MARGIN.num_minutes()
+        telemetry_query::period::PERIOD_MARGIN.num_minutes()
     );
     assert_eq!(semantic::MAX_LAST_DAYS, range::MAX_LAST_DAYS);
     assert_eq!(semantic::MAX_AHEAD_DAYS, range::MAX_AHEAD.num_days());
