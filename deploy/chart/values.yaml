@@ -587,7 +587,7 @@ clickhouse:
       # chart tests fail when the three differ, and Renovate updates the three together.
       repository: docker.io/clickhouse/clickhouse-server
       tag: "26.8"
-      digest: sha256:110d3d1f8e1ed7e451a6b5d85a16761e948ad43bc2d9ddf10b155964a8b2b40c
+      digest: sha256:d426d2f612e1e189c90f9a3f8dcd85a03c6851273833817a296bb327e63aa7a7
       pullPolicy: IfNotPresent
     # Bootstrap account with access management, created by the image from the variables below
     # and used only by the migration Job. The image's passwordless "default" user is removed.
