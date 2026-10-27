@@ -1,0 +1,6 @@
+# The AI gateway (services/ai-gateway, decisions 15 and 28): holds the AI provider keys and
+# forwards requests and streams in each provider's native protocol by model role. Packed with
+# deploy/images/rust-binary.Containerfile; distroless/static brings the CA certificates its TLS
+# to the providers trusts.
+[rust]
+package = "ai-gateway"

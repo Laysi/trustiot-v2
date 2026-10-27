@@ -112,8 +112,6 @@ export function missingSecrets(objects: K8sObject[]): Map<string, Set<string>> {
   const created = new Set<string | undefined>(flat.filter((o) => o.kind === "Secret").map((o) => o.metadata?.name));
   // CloudNativePG creates these for each Cluster; a dummy one would stop it from making its own.
   for (const name of operatorSecretsOf(objects)) created.add(name);
-  // The smoke issues a real certificate for these (serverTlsSecretsOf).
-  for (const { name } of serverTlsSecretsOf(objects, "")) created.add(name);
   const needed = new Map<string, Set<string>>();
   const need = (name: unknown, key?: unknown): void => {
     if (typeof name !== "string" || created.has(name)) return;
@@ -316,11 +314,12 @@ export interface PodProblem {
 
 /**
  * Components whose pods are short runs of a CronJob (deploy/chart/templates/internal-identity.yaml,
- * Laysi/trustiot-v2#429): the schedule can start one while the smoke looks at the pods, so a pod
+ * Laysi/trustiot-v2#429; the MQTT broker's certificate, templates/mqtt-broker-certificate.yaml,
+ * Laysi/trustiot-v2#535): the schedule can start one while the smoke looks at the pods, so a pod
  * of theirs that is still starting or running is a run in progress, not a problem. A failed run, or
  * one that cannot pull or start its container, still is.
  */
-export const SCHEDULED_RUN_COMPONENTS: ReadonlySet<string> = new Set(["identity-key-rotation"]);
+export const SCHEDULED_RUN_COMPONENTS: ReadonlySet<string> = new Set(["identity-key-rotation", "mqtt-broker-certificate"]);
 
 /** Pods (from `kubectl get pods -o json`) that are neither running and ready nor completed, nor a scheduled run in progress. */
 export function podProblems(podList: { items?: unknown[] }): PodProblem[] {
@@ -360,10 +359,18 @@ export function migrationJobsOf(objects: K8sObject[]): string[] {
     .flatMap((o) => (o.metadata?.name === undefined ? [] : [o.metadata.name]));
 }
 
+/** The migration Job's variables that bind generated passwords to Secrets (`key=Secret,...`). */
+const PASSWORD_BINDINGS: ReadonlySet<string> = new Set([
+  "TRUSTIOT__PASSWORDS__POSTGRES",
+  "TRUSTIOT__PASSWORDS__CLICKHOUSE_COLLECTOR",
+  "TRUSTIOT__PASSWORDS__CLICKHOUSE_TELEMETRY_QUERY",
+]);
+
 /**
  * The Secrets the migration Job fills with the passwords it generates (Laysi/trustiot-v2#60), each
- * with the keys it writes, from the Job's TRUSTIOT__PASSWORDS__POSTGRES (`role=Secret,...`) and
- * TRUSTIOT__PASSWORDS__CLICKHOUSE_COLLECTOR (`account=Secret`); and the bundled ClickHouse's admin
+ * with the keys it writes, from the Job's TRUSTIOT__PASSWORDS__POSTGRES (`role=Secret,...`),
+ * TRUSTIOT__PASSWORDS__CLICKHOUSE_COLLECTOR and TRUSTIOT__PASSWORDS__CLICKHOUSE_TELEMETRY_QUERY
+ * (`account=Secret`, Laysi/trustiot-v2#539); and the bundled ClickHouse's admin
  * password Secret, which the ClickHouse pod's init container fills and the Job reads
  * (Laysi/trustiot-v2#403), from TRUSTIOT__CLICKHOUSE__PASSWORD_SECRET, keyed by the account in
  * TRUSTIOT__CLICKHOUSE__USERNAME.
@@ -382,7 +389,7 @@ export function passwordSecretsOf(objects: K8sObject[]): Map<string, string[]> {
         secrets.set(adminSecret, [...(secrets.get(adminSecret) ?? []), adminUser].sort());
       }
       for (const env of envs) {
-        if (env.name !== "TRUSTIOT__PASSWORDS__POSTGRES" && env.name !== "TRUSTIOT__PASSWORDS__CLICKHOUSE_COLLECTOR") continue;
+        if (!PASSWORD_BINDINGS.has(asString(env.name) ?? "")) continue;
         for (const binding of (asString(env.value) ?? "").split(",").filter((b) => b !== "")) {
           const [key, secret] = binding.split("=");
           if (key === undefined || secret === undefined || key === "" || secret === "") continue;
@@ -513,6 +520,17 @@ export function servicePortOf(objects: K8sObject[], component: string, portName:
 }
 
 /**
+ * The pod of the release's bundled ClickHouse (templates/clickhouse.yaml): the first pod of its
+ * one StatefulSet, which runs a single replica. Throws when the release has no such StatefulSet,
+ * as with an external ClickHouse.
+ */
+export function clickhousePodOf(objects: K8sObject[]): string {
+  const sets = flatten(objects).filter((o) => o.kind === "StatefulSet" && o.metadata?.labels?.["app.kubernetes.io/component"] === "clickhouse");
+  if (sets.length !== 1) throw new Error(`the release should have one bundled ClickHouse StatefulSet, found ${sets.length}`);
+  return `${sets[0]!.metadata?.name ?? ""}-0`;
+}
+
+/**
  * The release's platform settings (templates/platform-config.yaml, the ConfigMap every service
  * reads through envFrom): non-secret values such as TRUSTIOT_APP_HOST and
  * TRUSTIOT_POSTGRES_DATABASE.
@@ -556,54 +574,11 @@ export function missingTlsSecrets(objects: K8sObject[]): string[] {
   return [...names].sort();
 }
 
-/**
- * The volume name under which a pod of the release mounts a server certificate Secret that the
- * installing environment provides (the MQTT broker's, deploy/chart/README.md, "MQTT broker",
- * Laysi/trustiot-v2#84). A dummy generic Secret would not load, so the smoke issues a real one.
- */
-export const SERVER_TLS_VOLUME = "server-tls";
-
-/** A server certificate Secret a pod mounts, and the DNS names its clients reach the pod by. */
-export interface ServerTlsSecret {
-  name: string;
-  /** For every Service of the release that selects the pod: `<service>`, `<service>.<namespace>`, `.svc`, `.svc.cluster.local`. */
-  hosts: string[];
-}
-
 /** Whether a Service's selector (a plain label map) selects pods with these labels. */
 function serviceSelects(service: K8sObject, labels: Record<string, string>): boolean {
   const selector = asMap(asMap(service.spec).selector);
   const entries = Object.entries(selector);
   return entries.length > 0 && entries.every(([key, value]) => labels[key] === value);
-}
-
-/**
- * The server certificate Secrets that pods of the release mount as {@link SERVER_TLS_VOLUME} and
- * the release does not create, each with the host names of the Services in front of those pods.
- */
-export function serverTlsSecretsOf(objects: K8sObject[], namespace: string): ServerTlsSecret[] {
-  const flat = flatten(objects);
-  const created = new Set(flat.filter((o) => o.kind === "Secret").map((o) => o.metadata?.name));
-  const services = flat.filter((o) => o.kind === "Service");
-  const found = new Map<string, Set<string>>();
-  for (const object of flat) {
-    const template = podTemplate(object);
-    if (template === undefined) continue;
-    for (const volume of asArray(template.spec.volumes).filter(isMap)) {
-      const name = asString(asMap(volume.secret).secretName);
-      if (volume.name !== SERVER_TLS_VOLUME || name === undefined || created.has(name)) continue;
-      const hosts = found.get(name) ?? new Set<string>();
-      for (const service of services.filter((s) => serviceSelects(s, template.labels))) {
-        const short = service.metadata?.name;
-        if (short === undefined) continue;
-        for (const host of [short, `${short}.${namespace}`, `${short}.${namespace}.svc`, `${short}.${namespace}.svc.cluster.local`]) hosts.add(host);
-      }
-      found.set(name, hosts);
-    }
-  }
-  return [...found]
-    .map(([name, hosts]) => ({ name, hosts: [...hosts].sort() }))
-    .sort((a, b) => a.name.localeCompare(b.name));
 }
 
 /** The pod label that names a component of the chart, and the MQTT broker's value of it. */

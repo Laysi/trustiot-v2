@@ -61,7 +61,8 @@ pub struct RequestError(String);
 #[derive(Clone, Copy)]
 pub enum Auth<'a> {
     /// No `Authorization` header: the certs service's public CA and CRL files, which the MQTT
-    /// broker's trust sidecar reads inside the mesh (src/mqtt_trust.rs).
+    /// broker's trust sidecar reads inside the mesh (src/mqtt_trust.rs), and its broker
+    /// certificate issuance, which the mesh authorizes (src/mqtt_certificate.rs).
     None,
     /// `Authorization: Bearer <token>` (a Kubernetes ServiceAccount token).
     Bearer(&'a str),
@@ -177,7 +178,30 @@ impl Client {
             url,
             query,
             auth,
-            Some(("text/plain; charset=utf-8", body)),
+            Some(("text/plain; charset=utf-8", Bytes::from(body))),
+        )
+        .await
+    }
+
+    /// `POST url` with `body` as `content_type`, for a binary body such as a DER certificate
+    /// signing request (`application/pkcs10`).
+    ///
+    /// # Errors
+    ///
+    /// When there is no complete response within [`REQUEST_TIMEOUT`]; any status is a response.
+    pub async fn post_bytes(
+        &self,
+        url: &str,
+        auth: Auth<'_>,
+        content_type: &'static str,
+        body: Vec<u8>,
+    ) -> Result<Response, RequestError> {
+        self.send(
+            Method::POST,
+            url,
+            &[],
+            auth,
+            Some((content_type, Bytes::from(body))),
         )
         .await
     }
@@ -200,7 +224,7 @@ impl Client {
             url,
             query,
             auth,
-            Some(("application/merge-patch+json", body)),
+            Some(("application/merge-patch+json", Bytes::from(body))),
         )
         .await
     }
@@ -211,7 +235,7 @@ impl Client {
         url: &str,
         query: &[(&str, &str)],
         auth: Auth<'_>,
-        body: Option<(&'static str, String)>,
+        body: Option<(&'static str, Bytes)>,
     ) -> Result<Response, RequestError> {
         tokio::time::timeout(
             REQUEST_TIMEOUT,
@@ -227,7 +251,7 @@ impl Client {
         url: &str,
         query: &[(&str, &str)],
         auth: Auth<'_>,
-        body: Option<(&'static str, String)>,
+        body: Option<(&'static str, Bytes)>,
     ) -> Result<Response, RequestError> {
         let uri: Uri = url
             .parse()
@@ -309,10 +333,10 @@ impl Client {
                 builder = builder.header(CONTENT_TYPE, content_type);
                 body
             }
-            None => String::new(),
+            None => Bytes::new(),
         };
         let request = builder
-            .body(Full::new(Bytes::from(body)))
+            .body(Full::new(body))
             .map_err(|error| RequestError(format!("cannot build the request: {error}")))?;
 
         let tcp = TcpStream::connect((host.as_str(), port))

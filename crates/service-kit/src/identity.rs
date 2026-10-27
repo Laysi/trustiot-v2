@@ -18,6 +18,9 @@
 //! - [`OnBehalf`]: calls another service's internal API on behalf of the request's user, with a
 //!   token the identity service exchanges for one addressed to that service
 //!   (Laysi/trustiot-v2#106).
+//! - [`RunDelegations`]: an agent run that acts for its user longer than the request's token
+//!   lives, through a delegation the identity service exchanges for a token on every call
+//!   (Laysi/trustiot-v2#551).
 //! - [`ExchangeVerifier`]: the identity service's check of the token a caller exchanges.
 //! - [`IdentityError`]: why a token was rejected; as a response, 401 with the M1 body
 //!   `unauthenticated` (503 `unavailable` while the service has no keys yet).
@@ -62,6 +65,7 @@
 mod keys;
 mod on_behalf;
 mod published;
+mod run_delegation;
 #[cfg(test)]
 mod test_keys;
 mod token;
@@ -80,6 +84,7 @@ use contract::{
 pub use self::keys::{IdentityKeys, InvalidKeys, KeyProblem, MAX_KEY_ID_LEN, MAX_KEYS};
 pub use self::on_behalf::{OnBehalf, OnBehalfError};
 pub use self::published::{PublishedKeys, READINESS_CHECK, RELOAD_INTERVAL};
+pub use self::run_delegation::{RunDelegation, RunDelegationError, RunDelegations};
 
 /// The only JWS `alg` accepted: EdDSA (RFC 8037), with Ed25519 keys only.
 pub const ALGORITHM: &str = "EdDSA";

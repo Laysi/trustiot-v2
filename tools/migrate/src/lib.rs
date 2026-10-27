@@ -19,8 +19,15 @@
 //!   (Laysi/trustiot-v2#78).
 //! - [`mqtt_accounts::converge`] and [`mqtt_trust`]: the MQTT broker's init containers and
 //!   sidecar, which keep the cloud services' broker accounts, the dynamic-security file, the
-//!   gateway trust files, and reload the broker when they or its server certificate change
-//!   (Laysi/trustiot-v2#84).
+//!   gateway trust files, open the gateway listener once the server certificate is usable, and
+//!   reload the broker when they or its server certificate change (Laysi/trustiot-v2#84,
+//!   Laysi/trustiot-v2#535).
+//! - [`mqtt_certificate::converge`]: the MQTT broker's certificate CronJob, which keeps the
+//!   broker's server certificate and key in the Secret the chart declares: a new key and a
+//!   certificate from the certs service when there is none, and before half of its validity has
+//!   passed (Laysi/trustiot-v2#535).
+//! - [`platform_admin::bootstrap`]: `migrate bootstrap-platform-admin`, which an operator runs
+//!   once to make the deployment's first platform administrator (Laysi/trustiot-v2#582).
 //!
 //! Every step is idempotent: a second run on the same databases changes nothing, which
 //! [`Report::changes`] states and the tests check against the catalogs.
@@ -31,16 +38,29 @@ pub mod clickhouse_admin;
 pub mod clickhouse_files;
 pub mod config;
 pub mod http;
+/// Email addresses as the identity service normalizes them (compiled into the service as well),
+/// for `migrate bootstrap-platform-admin` (Laysi/trustiot-v2#582).
+#[path = "../../../services/identity/src/email.rs"]
+pub mod identity_email;
 pub mod kube;
 pub mod mqtt_accounts;
+pub mod mqtt_certificate;
 pub mod mqtt_trust;
 pub mod passwords;
+pub mod platform_admin;
 pub mod postgres;
 pub mod registry;
-/// The raw data retention, the ingest service's file (compiled into the service as well): the
-/// run sets it as the TTL of the telemetry and completion tables (Laysi/trustiot-v2#92).
+// The raw and aggregate data retention, the ingest service's file (compiled into the service as
+// well): the run sets it as the TTL of the telemetry, completion and aggregate tables
+// (Laysi/trustiot-v2#92, Laysi/trustiot-v2#141). A plain comment, not `///`: with an outer doc
+// comment rustdoc resolves the links of the file's own module documentation from here.
 #[path = "../../../services/ingest/src/retention.rs"]
 pub mod retention;
+// The statements on the one-minute and one-hour aggregates, the ingest service's file (compiled
+// into the service as well): the run backfills the aggregates with them once
+// (Laysi/trustiot-v2#141).
+#[path = "../../../services/ingest/src/rollup.rs"]
+pub mod rollup;
 pub mod secret;
 pub mod signing_keys;
 
@@ -101,8 +121,14 @@ pub enum Error {
     CaKeys(String),
     #[error("MQTT broker: {0}")]
     MqttBroker(String),
+    /// `migrate mqtt-broker-certificate`; never contains the key or the Secret's data.
+    #[error("MQTT broker server certificate: {0}")]
+    BrokerCertificate(String),
     #[error("Kubernetes API: {0}")]
     Kube(String),
+    /// `migrate bootstrap-platform-admin`; never contains the address.
+    #[error("platform administrator: {0}")]
+    PlatformAdmin(String),
 }
 
 impl Error {
@@ -149,12 +175,12 @@ pub fn sha256_hex(text: &str) -> String {
 /// fails. A failed Postgres file leaves nothing behind (one transaction per file); ClickHouse
 /// statements are idempotent, so the next run repeats a half-applied ClickHouse file.
 pub async fn run(config: &RunConfig, registry: &Registry) -> Result<Report, Error> {
-    // The setting was validated when it was loaded; checked again before anything changes, so a
-    // RunConfig built in code cannot skip it (Laysi/trustiot-v2#92).
+    // The settings were validated when they were loaded; checked again before anything changes,
+    // so a RunConfig built in code cannot skip them (Laysi/trustiot-v2#92, Laysi/trustiot-v2#141).
     let retention = config
         .clickhouse
         .as_ref()
-        .map(config::ClickHouseSettings::raw_retention)
+        .map(config::ClickHouseSettings::retention)
         .transpose()
         .map_err(|invalid| Error::ClickHouse(format!("{}: {}", invalid.key, invalid.message)))?;
     postgres::check_registry(registry)?;

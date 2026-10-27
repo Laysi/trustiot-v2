@@ -43,6 +43,13 @@ hyper-util = { version = "0.1.21", default-features = false }
 # TLS for the AI provider clients (crates/ai-clients) with ring, not reqwest's TLS features: those
 # need aws-lc-rs or a process-wide crypto provider (see crates/ai-clients/README.md).
 hyper-rustls = { version = "0.27.10", default-features = false }
+# Local calendar arithmetic over the IANA Time Zone Database compiled in (jiff-tzdb), never the
+# host's: the relative periods and the table choice of telemetry-query's semantic API
+# (Laysi/trustiot-v2#142). Features are chosen per member.
+jiff = { version = "0.2.35", default-features = false }
+# The names of the IANA Time Zone Database, which a user's time zone preference must be one of
+# (services/identity, Laysi/trustiot-v2#497). Data only: no dependencies, no_std.
+jiff-tzdb = "0.1.9"
 # kill(2) for the MQTT broker's trust sidecar (tools/migrate/src/mqtt_trust.rs).
 libc = "0.2.190"
 log = "0.4.34"
@@ -64,6 +71,10 @@ serde = "1.0.229"
 serde_json = "1.0.151"
 sha2 = { version = "0.11.0", default-features = false }
 socket2 = "0.6.5"
+# The AI's read-only SQL in services/telemetry-query (src/sql), with its ClickHouse dialect. No
+# default features: no serde, and no `recursive-protection` (stacker); the check runs on a thread
+# with a large stack instead.
+sqlparser = { version = "0.63.0", default-features = false, features = ["std"] }
 sqlx = { version = "0.9.0", default-features = false }
 syn = { version = "2.0.119", default-features = false }
 thiserror = "2.0.21"

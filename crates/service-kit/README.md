@@ -75,7 +75,7 @@ async fn start(context: Context<Config>) -> Result<Router, BoxError> {
 - 環境變數的值都是字串，kit 依欄位型別轉成數字或布林；清單用逗號分隔，例如 `TRUSTIOT__CORS__ORIGINS=https://a.example,https://b.example`。元素本身含逗號的清單寫在設定檔。
 - 時間長度欄位加 `#[serde(deserialize_with = "service_kit::config::duration")]`，值寫成 `5s`、`500ms`、`1m 30s`。`duration` 不設上限（humantime 接受 `500000000000y` 這類值）：服務自己的時間欄位要在 `Validate` 設合理上限，免得 `Instant + Duration` 溢位 panic。
 - 缺少必要的鍵、型別錯誤、未知的鍵，以及 `Validate::validate` 回傳的 `Invalid`，都會讓服務在接流量之前以 exit code 1 停止。錯誤訊息只寫鍵、環境變數名稱與來源，不寫設定值；服務自己的 `Invalid` 訊息也不能含設定值。
-- 不帶產品名稱前綴的服務（AI 閘道，[決策 28](../../docs/architecture/decisions.md)）用 `ServiceInfo::with_env_prefix` 換掉 `TRUSTIOT`；平台設定的前綴也跟著換，部署時要對應。
+- 不帶產品名稱前綴的服務（AI 閘道，[決策 28](../../docs/architecture/decisions.md)）用 `ServiceInfo::with_env_prefix` 換掉 `TRUSTIOT`；平台設定的前綴也跟著換，部署時要對應。chart 依服務的前綴產生 Postgres 的接線（`deploy/chart/templates/_service.tpl`）：AI 閘道得到 `AI_GATEWAY_POSTGRES_*` 與 `AI_GATEWAY__DATABASE__USERNAME`、`AI_GATEWAY__DATABASE__PASSWORD`（Laysi/trustiot-v2#605）。
 - 不要用 `Debug` 印出整個設定：連線字串等設定可能含密碼。
 
 平台設定：Helm chart 以單一底線的 `TRUSTIOT_<NAME>` 變數把平台設定交給每個服務（例如 `TRUSTIOT_POSTGRES_HOST`，清單見 [chart 的 README](../../deploy/chart/README.md)「chart 與服務的約定」）。kit 把它們放進設定的 `platform` 表，鍵是去掉前綴後轉小寫的名稱：
@@ -166,6 +166,7 @@ kit 的設定與預設值（環境變數以 `TRUSTIOT` 前綴為例）：
 - 每個請求一行 `request completed`（5xx 是 ERROR 等級的 `request failed`），只記 method、路由樣板（不記實際路徑與 query）、狀態碼與耗時；不記標頭與 body。health 端點不記。
 - handler panic 時回 500，並記一行 ERROR `thread panicked`，含位置與 panic 訊息，所以 panic 與 `expect` 的訊息不能放資料。handler 超過 `http.request_timeout` 時回 504，記一行 WARN。兩者的回應 body 見 [contract feature](#contract-feature)。
 - `telemetry.log_filter` 調整等級，`target=level` 指令對所有 target 都有效：經 `log` crate 橋接進來的事件（`reqwest` 等相依套件用 `log` 發日誌）以事件原本的 target 比對，日誌行的 `target` 也是原本的，所以 `debug,reqwest=warn` 讓 reqwest 只剩 WARN 以上。span 不受它影響，一律在 INFO 以上建立，等級調到 `warn` 時，warn 日誌仍帶 trace id。
+- 相依套件在詳細等級會寫出不能離開行程的資料時，服務以 `ServiceInfo::with_log_ceilings(&[LogCeiling::new("<target>", Level::DEBUG)])` 固定那個 target（含子模組，`tungstenite` 涵蓋 `tungstenite::protocol`，不涵蓋 `tungstenite_extra`）的上限：`telemetry.log_filter` 怎麼設都打不開更詳細的等級，經 `tracing` 與經 `log` crate 的事件、stdout 與 OTLP 都一樣（`src/telemetry/log_layer.rs` 的測試）。例如 `services/mqtt-bridge` 把 `tungstenite` 固定在 DEBUG：它在 TRACE 會寫出每個 frame 的內容（Laysi/trustiot-v2#600）。
 
 規則（[觀測文件](../../docs/architecture/observability.md)、功能重建清單 M2）：
 
@@ -384,6 +385,26 @@ async fn device_certs(State(state): State<AppState>, user: UserIdentity) -> Resu
 - `OnBehalfError` 實作 `IntoResponse`，回 M1：交換失敗（`Exchange`）只有 `timeout`、`unavailable` 照傳，其他一律 `internal`，並記一筆 ERROR，欄位是呼叫端、受眾與身分服務回的代碼，提示檢查 `mesh.calls` 或請求的剩餘效期；呼叫對方失敗（`Call`）照 `CallError::code()`，例如對方的 `not_found` 原樣傳遞。token 不進日誌。
 - 身分服務自己用 `ExchangeVerifier` 驗證交換請求帶的 token：與 `IdentityVerifier` 做同樣的檢查，只是接受任何受眾。只有 token 交換可以用它；其他地方一律用 `IdentityVerifier`，受眾是自己。它目前是公開型別，其他服務也拿得到，限制它只給身分服務記在 Laysi/trustiot-v2#509。
 
+### agent 執行期間的委派（`RunDelegations`）
+
+`OnBehalf` 換的是請求自己的 token，所以呼叫最晚跟著請求的 token 在 60 秒內結束。AI 助理的主 agent 回答一個問題可能跑上好幾分鐘，每次工具呼叫都要以使用者的身分呼叫其他服務，這時用 `RunDelegations`（決策 27，Laysi/trustiot-v2#551）：請求的 token 還有效時建立一個 run 委派，之後每次呼叫前以它換一張受眾是對方的 60 秒 token。契約是 `contract::api::identity::CreateRunDelegation` 與 `ExchangeRunDelegation`（[contract README](../contract/README.md) 的「run 委派」），身分服務那邊的規則、上限與威脅模型在 [services/identity/README.md](../../services/identity/README.md) 的「agent 執行期間的委派」。
+
+```rust
+// 啟動時建一次，和 OnBehalf 用同一個身分服務 token 交換埠的 client
+let delegations = RunDelegations::new(InternalClient::<service::Identity>::new(identity_url, timeout)?);
+
+// handler 裡，請求的 token 還有效時
+let run = delegations.start(&user, RunId::generate(), Duration::from_secs(600)).await?;
+// 幾分鐘後，每次工具呼叫
+let devices = run.call(&state.assets, &ListDevices { /* ... */ }).await?;
+```
+
+- 只有身分服務列為持有者的服務（目前只有 `assistant`）建立得了委派；其他服務拿到 403。
+- `start` 為每個 run 以作業系統的 CSPRNG 產生一把 Ed25519 金鑰，公鑰交給身分服務綁進委派，私鑰只留在 `RunDelegation` 裡（drop 時清零）；每次換 token 都以它簽 `run_proof_message(委派, 受眾, 現在)`。所以委派本身外洩（日誌、存下的 run）換不到 token。`RunDelegation` 不能序列化，`Debug` 只顯示 run、持有者與到期時間；clone 共用同一把金鑰，run 裡的平行工作可以同時呼叫。run 結束就 drop。
+- 效期 1–900 秒（`RUN_DELEGATION_MAX_LIFETIME_SECS`），以整秒計，超出時 `start` 不送請求就回 `Lifetime`。到期後換不到 token，要以使用者的新請求重新開始。
+- 身分服務每次換 token 都重查：session 結束（登出、撤銷、過期）後回 `unauthenticated`，使用者被移出租戶後回 `permission_denied`，改角色時下一張 token 就帶新角色。`RunDelegationError` 實作 `IntoResponse`：建立與換 token 被拒時把 `unauthenticated`、`permission_denied` 照傳給使用者（記 INFO，run 照預期結束），`timeout`、`unavailable` 照傳，其他一律 `internal`（記 ERROR）；呼叫對方失敗（`Call`）照 `CallError::code()`。`permission_denied` 也可能是 `mesh.calls` 少了這條呼叫，身分服務的 WARN 日誌寫出 `not_listed`。
+- 受眾只到 `mesh.calls` 上本服務可以呼叫的服務，和 `OnBehalf` 同一份清單；換出的 token 帶 `act`，對方不能再換。
+
 ### 背景工作沒有使用者身分
 
 `UserIdentity` 只能由 `IdentityVerifier` 從通過檢查的 token 建立，handler 透過 extractor 拿到它。它沒有其他建構方式、沒有 `Default`、沒有 `Deserialize`，`ServiceIdentity` 也不能轉成它，所以背景工作、排程工作與事件消費這些沒有請求的程式拿不到使用者身分，只能以 `ServiceIdentity`（服務自己）執行：
@@ -396,7 +417,7 @@ let actor = ServiceIdentity::new(ServiceName::Assets); // 或 verifier.service_i
 context.spawn(purge_expired(actor));
 ```
 
-這由 `src/identity.rs` 的 compile-fail doctest 證明：以欄位、`From`、`Into`、`Deserialize`、`Default` 建立 `UserIdentity` 都無法編譯。不要把 handler 拿到的 `UserIdentity` 移進 `Context::spawn` 或 `tokio::spawn`：token 60 秒就過期，背景工作要做的事以服務自己的身分執行。
+這由 `src/identity.rs` 的 compile-fail doctest 證明：以欄位、`From`、`Into`、`Deserialize`、`Default` 建立 `UserIdentity` 都無法編譯。不要把 handler 拿到的 `UserIdentity` 移進 `Context::spawn` 或 `tokio::spawn`：token 60 秒就過期，背景工作要做的事以服務自己的身分執行。使用者發起、要以使用者身分跑得比 60 秒久的 agent run 用上一節的 `RunDelegations`，在請求裡建立委派，run 結束就丟掉。
 
 決定（2026-10-21，Laysi/trustiot-v2#106，決策 27）：背景工作不冒用使用者，也不換 token。它以服務自己的資料庫角色（`BackgroundTenantDb`、`PlatformDb`）做事，跨服務的影響走事件（決策 4）；`OnBehalf` 只收 `UserIdentity`，所以背景工作無法代表使用者呼叫。呼叫 `ai-gateway` 不需要 token（決策 28，只靠 mesh 授權）。背景工作需要同步呼叫另一個服務的內部 API 時（目前沒有），另以服務自己的 token 處理，屆時再定。`services/assets/tests/background_identity.rs` 以資產服務驗證：沒有任何 token 驗得過時，事件消費者照樣完成工作。
 
@@ -453,13 +474,13 @@ async fn device_names(db: &TenantDb, user: &UserIdentity) -> Result<Vec<String>,
 | `BackgroundTenantDb::begin(TenantId, purpose)` | 排程工作、事件消費 | 工作本身：事件帶的租戶，或平台角色查詢找出的租戶。以 DEBUG 記下服務、租戶與 `purpose` |
 | `BackgroundTenantDb::begin_without_tenant(purpose)` | 不帶租戶資料的表（例如 outbox 消費端自己的表）、全平台事件的處理 | 不設定租戶：看不到也寫不進任何租戶的列。以 DEBUG 記下服務與 `purpose` |
 | `PlatformDb::begin(PlatformActor, purpose)` | 平台後台、跨租戶的工作 | 不設定租戶；平台角色只看得到表上有 `platform_access` policy 的資料。以 INFO 記一行 `platform database access`（actor、`purpose`）；操作本身由寫入的事件記進身分服務的事件紀錄（`outbox::publish_as` 帶 actor，[services/identity](../../services/identity/README.md) 的「事件層與操作紀錄」，Laysi/trustiot-v2#130） |
-| `PlatformDb::reader(PlatformActor, purpose)` → `PlatformReader::begin()` | 每隔幾秒就要跨租戶讀一次的例行工作，例如 outbox 消費端輪詢事件 | 同 `PlatformDb::begin`，但交易是 `READ ONLY`（資料庫拒絕寫入）。`begin()` 在 `BEGIN READ ONLY` 之後立刻執行 `SELECT 1`：在交易的第一個查詢之前，`SET TRANSACTION READ WRITE` 還能改回讀寫，之後 Postgres 拒絕（Laysi/trustiot-v2#271 驗證的 F-4）。actor 與 `purpose` 在建立 `PlatformReader` 時以 INFO 記一次（`platform database reader`），每筆交易只記 DEBUG，免得每秒一行 INFO |
+| `PlatformDb::reader(PlatformActor, purpose)` → `PlatformReader::begin()` | 每隔幾秒就要跨租戶讀一次的例行工作，例如 outbox 消費端輪詢事件。也可以用在使用者請求的路徑上（決策 29，2026-10-23），條件是查詢條件只能來自已驗證的內部身分 token（例如 token 的使用者），不取自請求的本文、路徑或查詢字串；kit 每筆交易只記用途，所以處理常式要另以 DEBUG 記下是哪個使用者。例如身分服務以 token 的使用者列出他所屬的租戶（[services/identity](../../services/identity/README.md) 的「目前的 session 與切換租戶」） | 同 `PlatformDb::begin`，但交易是 `READ ONLY`（資料庫拒絕寫入）。`begin()` 在 `BEGIN READ ONLY` 之後立刻執行 `SELECT 1`：在交易的第一個查詢之前，`SET TRANSACTION READ WRITE` 還能改回讀寫，之後 Postgres 拒絕（Laysi/trustiot-v2#271 驗證的 F-4）。actor 與 `purpose` 在建立 `PlatformReader` 時以 INFO 記一次（`platform database reader`），每筆交易只記 DEBUG，免得每秒一行 INFO |
 
 - 交易的第一個陳述就是 `SELECT set_config('trustiot.tenant_id', $1, true)`：等同 `SET LOCAL`，但值以參數綁定。交易結束（commit、rollback、drop、出錯）設定就消失，連線回到 pool 時不帶租戶。
 - 連線回到 pool 時，kit 再查一次（pool 的 `after_release`，每次歸還一個查詢）：session 層級還有 `trustiot.tenant_id`（有人以 `set_config(..., false)` 或 `SET` 設定，例如藏在 PL/pgSQL `EXECUTE` 字串裡、sql-check 看不到的寫法），就關掉這條連線、不放回 pool，並記一行 ERROR `closed a database session left with a session-level tenant`。否則下一個拿到這條連線的交易會在那個租戶裡執行，包括 `begin_without_tenant` 與 `TenantDb::pool()` 上的直接查詢（Laysi/trustiot-v2#271 驗證的 F-1）。新連線的同類檢查是下面的 `TenantPreset`。
 - `TenantTransaction` 沒有改租戶的方法，`TenantDb` 也沒有以任意租戶開交易的 handler 用方法；`src/tenant.rs` 的 compile-fail doctest 證明這些寫法無法編譯。SQL 裡設定租戶或角色由 `tools/sql-check` 擋下，只有 `src/tenant.rs` 例外。
 - 背景工作沒有使用者身分（見[內部身分](#背景工作沒有使用者身分)），所以決定：代表單一租戶的工作用 `BackgroundTenantDb` 開交易，租戶來自工作本身；要找出「哪些租戶有工作」這種跨租戶查詢，用 `PlatformDb` 與 `PlatformActor::service`，會留紀錄。
-- `BackgroundTenantDb` 是能指定租戶的能力，只有啟動時的 `TenantDb::connect_lazy_with_background(options, pool, ServiceIdentity)` 會一併產生（與 `TenantDb` 共用 pool）。把 `TenantDb` 放進 router 的 state、`BackgroundTenantDb` 只交給背景工作：handler 手上的 `TenantDb` 沒有任何接受租戶的方法，無法把請求裡的租戶拿去開交易（compile-fail doctest 證明）。例外只有身分服務的兩處，都由私下持有 `BackgroundTenantDb` 的元件使用，handler 拿不到（見 [services/identity](../../services/identity/README.md) 的「資料庫」）：session 查詢（查 session 時請求還沒有內部身分，租戶取自剛從資料庫讀出的 session 列，不取自請求），以及建立租戶（Laysi/trustiot-v2#65：新租戶的 ID 由 `TenantStore::create` 自己產生，請求無法指定）。
+- `BackgroundTenantDb` 是能指定租戶的能力，只有啟動時的 `TenantDb::connect_lazy_with_background(options, pool, ServiceIdentity)` 會一併產生（與 `TenantDb` 共用 pool）。把 `TenantDb` 放進 router 的 state、`BackgroundTenantDb` 只交給背景工作：handler 手上的 `TenantDb` 沒有任何接受租戶的方法，無法把請求裡的租戶拿去開交易（compile-fail doctest 證明）。例外只有身分服務的三處，都由私下持有 `BackgroundTenantDb` 的元件使用，handler 拿不到（見 [services/identity](../../services/identity/README.md) 的「資料庫」）：session 查詢（查 session 時請求還沒有內部身分，租戶取自剛從資料庫讀出的 session 列，不取自請求），建立租戶（Laysi/trustiot-v2#65：新租戶的 ID 由 `TenantStore::create` 自己產生，請求無法指定），以及平台管理者設定成員角色（Laysi/trustiot-v2#583：`MemberStore::set_role` 在開交易之前先確認是平台管理者本人的請求，租戶取自路徑，交易裡只寫那一筆成員資格與事件）。
 - `PlatformActor::admin(&UserIdentity)` 只有平台管理者（A2）拿得到；`PlatformActor` 沒有其他建構方式。
 
 ### outbox（`crates/outbox`）
@@ -528,7 +549,7 @@ async fn device_names(db: &TenantDb, user: &UserIdentity) -> Result<Vec<String>,
 
 - RLS 擋的是程式漏寫租戶條件。SQL 注入可以用服務角色改掉 `trustiot.tenant_id`，所以只用參數化查詢；`tools/sql-check` 隨 `cargo test --workspace` 擋下由字串組成的 SQL、`AssertSqlSafe`、SQL 裡的 `set_config` 與 `SET ROLE` 等（規則見[它的 README](../../tools/sql-check/README.md)）。
 - 本機開發環境（`scripts/`）的 Postgres 只接受 TLS，憑證由 `up` 當場產生的開發 CA 簽發，給服務的 `TRUSTIOT_POSTGRES_SSLMODE` 是 `verify-full`、`TRUSTIOT_POSTGRES_CA_FILE` 指向那個 CA（Laysi/trustiot-v2#273，見 [scripts/README.md](../../scripts/README.md)「Postgres 的 TLS」）。開發環境給範例服務一個一般的資料庫角色，它以 `verify-full` 連上本機 Postgres，`/readyz` 的 `postgres` 檢查通過才就緒。
-- AI 閘道（不依賴 contract）沒有 `tenant`；它若有租戶資料表，需要不經 contract 的租戶交易介面。
+- AI 閘道（不依賴 contract）沒有 `tenant`。它的 schema `ai_gateway`（模型角色的設定，Laysi/trustiot-v2#605）不是租戶資料，只用 `postgres::connect_lazy` 與 `migrations::MigrationCheck`，兩者都不需要 `contract`；它若有租戶資料表（帳本與額度，Laysi/trustiot-v2#140），需要不經 contract 的租戶交易介面。
 
 ## contract feature
 

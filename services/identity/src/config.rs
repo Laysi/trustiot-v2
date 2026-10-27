@@ -15,6 +15,9 @@ use crate::session::WARM_CONNECTIONS;
 /// Most database connections one replica may open.
 pub const MAX_DATABASE_CONNECTIONS: u32 = 100;
 
+/// `TRUSTIOT__DATABASE__MAX_CONNECTIONS` when it is not set.
+pub const DEFAULT_MAX_CONNECTIONS: u32 = 10;
+
 /// Shortest `TRUSTIOT_IDENTITY_KEY_PROPAGATION_SECONDS`, the schema minimum of the chart's
 /// `internalIdentity.keyPropagationSeconds`.
 pub const MIN_KEY_PROPAGATION_SECONDS: u64 = 120;
@@ -190,7 +193,8 @@ pub struct Database {
     /// `TRUSTIOT__DATABASE__PASSWORD`, from a Secret.
     pub password: String,
     /// `TRUSTIOT__DATABASE__PLATFORM_USERNAME`. The chart always sets it with the password;
-    /// without both, the event log is off ([`Config::platform_role`]).
+    /// without both, the event log is off and the current session API answers 503
+    /// ([`Config::platform_role`]).
     #[serde(default)]
     pub platform_username: Option<String>,
     /// `TRUSTIOT__DATABASE__PLATFORM_PASSWORD`, from a Secret.
@@ -198,15 +202,14 @@ pub struct Database {
     pub platform_password: Option<String>,
     /// `TRUSTIOT__DATABASE__MAX_CONNECTIONS`: most connections of the session store's pool per
     /// replica, from [`WARM_CONNECTIONS`] (the ones always kept open) to
-    /// [`MAX_DATABASE_CONNECTIONS`]. Default 10. The tenant API and the event log have small
-    /// pools of their own besides ([`crate::tenants::POOL_CONNECTIONS`],
-    /// [`crate::event_log::SERVICE_CONNECTIONS`], [`crate::event_log::platform_connections`]).
+    /// [`MAX_DATABASE_CONNECTIONS`]. Default [`DEFAULT_MAX_CONNECTIONS`]. The other work has
+    /// small pools of its own besides; [`crate::connections_per_replica`] adds them all up.
     #[serde(default = "default_max_connections")]
     pub max_connections: u32,
 }
 
 const fn default_max_connections() -> u32 {
-    10
+    DEFAULT_MAX_CONNECTIONS
 }
 
 const fn default_propagation_seconds() -> u64 {

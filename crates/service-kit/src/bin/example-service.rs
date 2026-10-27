@@ -91,7 +91,17 @@ struct DatabaseCredentials {
     platform_username: Option<String>,
     #[serde(default)]
     platform_password: Option<String>,
+    /// `database.max_connections`: the chart sets it for every service that uses Postgres
+    /// (deploy/chart, `services.<name>.database.maxConnections`, Laysi/trustiot-v2#575).
+    /// Accepted so the example starts there; its pool stays at [`EXAMPLE_POOL_CONNECTIONS`],
+    /// fewer than any service's budget.
+    #[serde(default)]
+    max_connections: Option<u32>,
 }
+
+/// Connections of the example's one pool.
+#[cfg(feature = "contract")]
+const EXAMPLE_POOL_CONNECTIONS: u32 = 4;
 
 /// Never prints the passwords.
 #[cfg(feature = "contract")]
@@ -101,6 +111,7 @@ impl std::fmt::Debug for DatabaseCredentials {
             .field("username", &self.username)
             .field("platform_username", &self.platform_username)
             .field("platform_password_set", &self.platform_password.is_some())
+            .field("max_connections", &self.max_connections)
             .finish_non_exhaustive()
     }
 }
@@ -207,7 +218,7 @@ async fn start(context: Context<Config>) -> Result<Router, BoxError> {
             Some(postgres) => {
                 let db = service_kit::tenant::TenantDb::connect_lazy(
                     postgres.connect_options(),
-                    sqlx::postgres::PgPoolOptions::new().max_connections(4),
+                    sqlx::postgres::PgPoolOptions::new().max_connections(EXAMPLE_POOL_CONNECTIONS),
                 )?;
                 let ping = db.clone();
                 context.health().add_check("postgres", move || {

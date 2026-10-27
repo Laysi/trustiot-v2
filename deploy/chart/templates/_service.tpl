@@ -34,6 +34,24 @@ Returns YAML {ports: [{name, containerPort, ...}]}; use with fromYaml.
 {{- dict "ports" $ports | toYaml -}}
 {{- end -}}
 
+{{/*
+Prefix of a service's own settings (service-kit's env prefix, crates/service-kit/README.md, 「設定」):
+TRUSTIOT, except the AI gateway, which carries no product name (decision 28) and reads AI_GATEWAY.
+Argument: the service name.
+*/}}
+{{- define "trustiot.service.envPrefix" -}}
+{{- ternary "AI_GATEWAY" "TRUSTIOT" (eq . "ai-gateway") -}}
+{{- end -}}
+
+{{/*
+Pods a rolling update starts above a service's replicas before it stops old ones (the Deployment's
+maxSurge; maxUnavailable is 0, so a single replica rolls without downtime). The Postgres connection
+check counts them ("trustiot.postgres.connectionPlan"), so both read it here.
+*/}}
+{{- define "trustiot.service.maxSurge" -}}
+1
+{{- end -}}
+
 {{- define "trustiot.service.serviceAccount" -}}
 apiVersion: v1
 kind: ServiceAccount
@@ -59,9 +77,10 @@ spec:
     {{- include "trustiot.selectorLabels" . | nindent 4 }}
   ports:
     {{- range .config.ports }}
-    {{- /* The identity service's token exchange has a Service of its own
-    (templates/token-exchange.yaml, Laysi/trustiot-v2#106). */}}
-    {{- if not (and (eq $.name "identity") (eq .name "token-exchange")) }}
+    {{- /* The identity service's token exchange and the certs service's MQTT broker certificate
+    issuance have a Service of their own (templates/token-exchange.yaml, Laysi/trustiot-v2#106;
+    templates/certs-broker.yaml, Laysi/trustiot-v2#557). */}}
+    {{- if not (or (and (eq $.name "identity") (eq .name "token-exchange")) (and (eq $.name "certs") (eq .name "broker-certs"))) }}
     - name: {{ .name }}
       port: {{ .servicePort | default .containerPort }}
       targetPort: {{ .name }}
@@ -75,8 +94,10 @@ spec:
 
 {{/*
 Container env: the chart's variables first (OTEL_SERVICE_NAME, the collector endpoint, SENTRY_DSN,
-the Postgres CA file, login role and password for a service that uses Postgres, the credentials
-the service lists, for identity, its routes and signing key settings, and for certs, its CA files),
+the Postgres CA file, login role, password and pool size for a service that uses Postgres, the
+credentials the service lists, for identity, its routes and signing key settings, for certs, its CA
+files, for mqtt-bridge, the broker's address, and for assistant, the addresses of the services it
+calls),
 then serviceDefaults.env and services.<name>.env.
 Custom env cannot take over what the chart controls:
 - names starting with TRUSTIOT_ plus a letter or digit, SENTRY_ or OTEL_ are reserved, so the
@@ -90,30 +111,68 @@ Custom env cannot take over what the chart controls:
   and owner password) and the password Secrets the migration Job fills (each service's and the
   collector's) are out of reach in every key: a service gets its own database password only
   through the chart;
-- for a service that uses Postgres, TRUSTIOT__DATABASE__USERNAME and TRUSTIOT__DATABASE__PASSWORD
-  are the chart's, and so are TRUSTIOT__DATABASE__PLATFORM_USERNAME and
-  TRUSTIOT__DATABASE__PLATFORM_PASSWORD (set for a service whose platform role logs in);
+- for a service that uses Postgres, <prefix>__DATABASE__USERNAME and <prefix>__DATABASE__PASSWORD
+  are the chart's, and so are <prefix>__DATABASE__PLATFORM_USERNAME and
+  <prefix>__DATABASE__PLATFORM_PASSWORD (set for a service whose platform role logs in) and
+  <prefix>__DATABASE__MAX_CONNECTIONS (services.<name>.database.maxConnections, which the
+  Postgres connection check counts), where <prefix> is the service's settings prefix
+  ("trustiot.service.envPrefix"); a service whose prefix is not TRUSTIOT does not read the
+  platform ConfigMap's TRUSTIOT_POSTGRES_*, so it also gets <prefix>_POSTGRES_HOST, _PORT,
+  _DATABASE and _SSLMODE ("trustiot.postgres.connection"), which are the chart's too, like
+  <prefix>_POSTGRES_CA_FILE;
+- for mqtt-bridge, TRUSTIOT__BROKER__ADDRESS is the chart's ("trustiot.mqttBridge.env"): the bridge
+  relays the gateways' connections to the in-cluster broker only, even while it is off;
+- for assistant, the addresses of the AI gateway, the identity service's token exchange,
+  telemetry-query and assets are the chart's ("trustiot.assistant.env"), derived from
+  mesh.calls.assistant, even while unset: an address in env would point it at a service the mesh
+  does not let it call;
 - for telemetry-query, TRUSTIOT__CLICKHOUSE__USERNAME and TRUSTIOT__CLICKHOUSE__PASSWORD are the
-  chart's: its ClickHouse account and the password the migration Job generates for it.
+  chart's: its ClickHouse account and the password the migration Job generates for it;
+- for ai-gateway, whose settings carry the prefix AI_GATEWAY ("trustiot.service.envPrefix"), the
+  names of its platform settings and settings file (AI_GATEWAY_ plus a letter or digit), its
+  providers and roles (AI_GATEWAY__PROVIDERS__*, AI_GATEWAY__ROLES__*) and every other variable of
+  its ConfigMap are the chart's ("trustiot.aiGateway.config"), so the providers' key variables,
+  endpoints and models come from values.ai only; container env would win over the ConfigMap.
 Returns a YAML list; use with fromYamlArray.
 */}}
 {{- define "trustiot.service.env" -}}
 {{- $name := .name -}}
 {{- $config := .config -}}
 {{- $values := .root.Values -}}
+{{- $prefix := include "trustiot.service.envPrefix" .name -}}
+{{- $assistantNames := list -}}
+{{- if eq $name "assistant" -}}
+{{- $assistantNames = include "trustiot.assistant.reserved" .root | fromYamlArray -}}
+{{- end -}}
+{{- $aiGatewayNames := list -}}
+{{- if eq $name "ai-gateway" -}}
+{{- $aiGatewayNames = keys (include "trustiot.aiGateway.config" .root | fromYaml).data -}}
+{{- end -}}
 {{- $dbEnv := list -}}
 {{- if has $name (include "trustiot.postgres.clients" .root | fromYaml).services -}}
 {{- /* The service's own Postgres login role and its password, which the migration Job generates
 into the service's own Secret and sets. */ -}}
 {{- $secret := include "trustiot.migrate.passwordSecret" (dict "root" .root "component" $name) | fromYaml -}}
-{{- $dbEnv = append $dbEnv (dict "name" "TRUSTIOT__DATABASE__USERNAME" "value" $secret.key) -}}
-{{- $dbEnv = append $dbEnv (dict "name" "TRUSTIOT__DATABASE__PASSWORD" "valueFrom" (dict "secretKeyRef" (dict "name" $secret.name "key" $secret.key))) -}}
+{{- $dbEnv = append $dbEnv (dict "name" (printf "%s__DATABASE__USERNAME" $prefix) "value" $secret.key) -}}
+{{- $dbEnv = append $dbEnv (dict "name" (printf "%s__DATABASE__PASSWORD" $prefix) "valueFrom" (dict "secretKeyRef" (dict "name" $secret.name "key" $secret.key))) -}}
+{{- /* The size of its main pool, which the connection check counts with its other pools
+("trustiot.postgres.connectionPlan", Laysi/trustiot-v2#575). */ -}}
+{{- $poolSize := include "trustiot.postgres.poolSize" (dict "root" .root "name" $name "config" $config) -}}
+{{- $dbEnv = append $dbEnv (dict "name" (printf "%s__DATABASE__MAX_CONNECTIONS" $prefix) "value" $poolSize) -}}
+{{- if ne $prefix "TRUSTIOT" -}}
+{{- /* Where Postgres is, under the service's own prefix: the platform ConfigMap names it
+TRUSTIOT_POSTGRES_*, which such a service does not read. */ -}}
+{{- $postgres := include "trustiot.postgres.connection" .root | fromYaml -}}
+{{- range $setting, $field := dict "HOST" "host" "PORT" "port" "DATABASE" "database" "SSLMODE" "sslMode" -}}
+{{- $dbEnv = append $dbEnv (dict "name" (printf "%s_POSTGRES_%s" $prefix $setting) "value" (get $postgres $field)) -}}
+{{- end -}}
+{{- end -}}
 {{- /* Its platform role too, when it logs in ("trustiot.migrate.platformLogins"): the role an
 outbox consumer reads its producers' events with. */ -}}
 {{- if include "trustiot.migrate.platformLogin" (dict "root" .root "name" $name) -}}
 {{- $platform := include "trustiot.migrate.passwordSecret" (dict "root" .root "component" $name "role" "platform") | fromYaml -}}
-{{- $dbEnv = append $dbEnv (dict "name" "TRUSTIOT__DATABASE__PLATFORM_USERNAME" "value" $platform.key) -}}
-{{- $dbEnv = append $dbEnv (dict "name" "TRUSTIOT__DATABASE__PLATFORM_PASSWORD" "valueFrom" (dict "secretKeyRef" (dict "name" $platform.name "key" $platform.key))) -}}
+{{- $dbEnv = append $dbEnv (dict "name" (printf "%s__DATABASE__PLATFORM_USERNAME" $prefix) "value" $platform.key) -}}
+{{- $dbEnv = append $dbEnv (dict "name" (printf "%s__DATABASE__PLATFORM_PASSWORD" $prefix) "valueFrom" (dict "secretKeyRef" (dict "name" $platform.name "key" $platform.key))) -}}
 {{- end -}}
 {{- end -}}
 {{- $clickhouseEnv := list -}}
@@ -136,11 +195,26 @@ generates its password into the service's Secret and sets it
 {{- if regexMatch "(?i)^(TRUSTIOT_[A-Z0-9]|SENTRY_|OTEL_)" .name -}}
 {{- fail (printf "services.%s: env %s: names starting with TRUSTIOT_, SENTRY_ or OTEL_ are set by the chart" $name .name) -}}
 {{- end -}}
-{{- if and $values.observability.collector.enabled (regexMatch "(?i)^TRUSTIOT__TELEMETRY__OTLP_ENDPOINT$" .name) -}}
+{{- if and $values.observability.collector.enabled (eq (upper .name) (printf "%s__TELEMETRY__OTLP_ENDPOINT" $prefix)) -}}
 {{- fail (printf "services.%s: env %s is set by the chart: it points at the OpenTelemetry collector (observability.collector)" $name .name) -}}
 {{- end -}}
-{{- if and $dbEnv (regexMatch "(?i)^TRUSTIOT__DATABASE__(PLATFORM_)?(USERNAME|PASSWORD)$" .name) -}}
-{{- fail (printf "services.%s: env %s is set by the chart: the service's login roles and the passwords the migration Job generates for them" $name .name) -}}
+{{- if and (eq $name "mqtt-bridge") (regexMatch "(?i)^TRUSTIOT__BROKER__ADDRESS$" .name) -}}
+{{- fail (printf "services.mqtt-bridge: env %s is set by the chart: the bridge relays only to the in-cluster broker's gateway port (mqttBroker.enabled)" .name) -}}
+{{- end -}}
+{{- if and (eq $name "assistant") (has (upper .name) $assistantNames) -}}
+{{- fail (printf "services.assistant: env %s is set by the chart from mesh.calls.assistant: the assistant calls only the services the mesh lets it call" .name) -}}
+{{- end -}}
+{{- if eq $name "ai-gateway" -}}
+{{- $reserved := or (regexMatch "(?i)^AI_GATEWAY_[A-Z0-9]" .name) (regexMatch "(?i)^AI_GATEWAY__(PROVIDERS|ROLES)__" .name) (has (upper .name) $aiGatewayNames) -}}
+{{- if $reserved -}}
+{{- fail (printf "services.ai-gateway: env %s is set by the chart from values.ai (the providers, their key variables and endpoints, the model roles and the gateway's time limits)" .name) -}}
+{{- end -}}
+{{- end -}}
+{{- if and $dbEnv (or (regexMatch (printf "(?i)^%s__DATABASE__(PLATFORM_)?(USERNAME|PASSWORD)$" $prefix) .name) (regexMatch (printf "(?i)^%s_POSTGRES_" $prefix) .name)) -}}
+{{- fail (printf "services.%s: env %s is set by the chart: where Postgres is, the service's login roles and the passwords the migration Job generates for them" $name .name) -}}
+{{- end -}}
+{{- if and $dbEnv (regexMatch (printf "(?i)^%s__DATABASE__MAX_CONNECTIONS$" $prefix) .name) -}}
+{{- fail (printf "services.%s: env %s is set by the chart from services.%s.database.maxConnections, which the Postgres connection check counts" $name .name $name) -}}
 {{- end -}}
 {{- if and $clickhouseEnv (regexMatch "(?i)^TRUSTIOT__CLICKHOUSE__(USERNAME|PASSWORD)$" .name) -}}
 {{- fail (printf "services.%s: env %s is set by the chart: the service's ClickHouse account and the password the migration Job generates for it" $name .name) -}}
@@ -162,8 +236,9 @@ generates its password into the service's Secret and sets it
 {{- end -}}
 {{- $env := list (dict "name" "OTEL_SERVICE_NAME" "value" $name) -}}
 {{- if $values.observability.collector.enabled -}}
-{{- /* service-kit exports logs, traces and metrics only when its own setting names the endpoint. */ -}}
-{{- $env = append $env (dict "name" "TRUSTIOT__TELEMETRY__OTLP_ENDPOINT" "value" (include "trustiot.collector.endpoint" .root)) -}}
+{{- /* service-kit exports logs, traces and metrics only when its own setting names the endpoint,
+under the service's own prefix. */ -}}
+{{- $env = append $env (dict "name" (printf "%s__TELEMETRY__OTLP_ENDPOINT" $prefix) "value" (include "trustiot.collector.endpoint" .root)) -}}
 {{- end -}}
 {{- with $values.observability.sentry -}}
 {{- if .enabled -}}
@@ -173,7 +248,7 @@ generates its password into the service's Secret and sets it
 {{- /* The Postgres server's CA, only where the service template mounts it ("trustiot.caMounts"). */ -}}
 {{- range include "trustiot.caMounts" (dict "root" .root "name" $name) | fromYamlArray -}}
 {{- if eq .volume "postgres-ca" -}}
-{{- $env = append $env (dict "name" "TRUSTIOT_POSTGRES_CA_FILE" "value" (printf "%s/ca.crt" .dir)) -}}
+{{- $env = append $env (dict "name" (printf "%s_POSTGRES_CA_FILE" $prefix) "value" (printf "%s/ca.crt" .dir)) -}}
 {{- end -}}
 {{- end -}}
 {{- $credentialEnv := include "trustiot.credentialEnv" (dict "root" .root "name" $name "credentials" ($config.credentials | default list)) | fromYamlArray -}}
@@ -185,7 +260,15 @@ generates its password into the service's Secret and sets it
 {{- if eq $name "certs" -}}
 {{- $certsEnv = include "trustiot.certs.env" .root | fromYamlArray -}}
 {{- end -}}
-{{- $env = concat $env $dbEnv $clickhouseEnv $credentialEnv $identityEnv $certsEnv ($config.env | default list) -}}
+{{- $mqttBridgeEnv := list -}}
+{{- if eq $name "mqtt-bridge" -}}
+{{- $mqttBridgeEnv = include "trustiot.mqttBridge.env" .root | fromYamlArray -}}
+{{- end -}}
+{{- $assistantEnv := list -}}
+{{- if eq $name "assistant" -}}
+{{- $assistantEnv = include "trustiot.assistant.env" .root | fromYamlArray -}}
+{{- end -}}
+{{- $env = concat $env $dbEnv $clickhouseEnv $credentialEnv $identityEnv $certsEnv $mqttBridgeEnv $assistantEnv ($config.env | default list) -}}
 {{- $names := list -}}
 {{- range $env -}}
 {{- $names = append $names .name -}}
@@ -257,7 +340,7 @@ spec:
     rollingUpdate:
       # Start the new pod before stopping the old one, so a single replica rolls without downtime.
       maxUnavailable: 0
-      maxSurge: 1
+      maxSurge: {{ include "trustiot.service.maxSurge" .root }}
   selector:
     matchLabels:
       {{- include "trustiot.selectorLabels" . | nindent 6 }}
@@ -274,6 +357,10 @@ spec:
         {{- /* Restart pods when the platform settings they read through envFrom change. */}}
         {{- $checksum := include (print .root.Template.BasePath "/platform-config.yaml") .root | sha256sum }}
         {{- $annotations := dict "checksum/platform-config" $checksum }}
+        {{- /* The AI gateway reads its settings at startup only (templates/ai-gateway.yaml). */}}
+        {{- if eq .name "ai-gateway" }}
+        {{- $_ := set $annotations "checksum/ai-gateway-config" (include (print .root.Template.BasePath "/ai-gateway.yaml") .root | sha256sum) }}
+        {{- end }}
         {{- toYaml (merge $annotations ($config.podAnnotations | default dict)) | nindent 8 }}
     spec:
       serviceAccountName: {{ include "trustiot.componentName" . }}
@@ -328,6 +415,10 @@ spec:
           envFrom:
             - configMapRef:
                 name: {{ include "trustiot.platformConfigName" .root }}
+            {{- if eq .name "ai-gateway" }}
+            - configMapRef:
+                name: {{ include "trustiot.aiGateway.configName" .root }}
+            {{- end }}
           env:
             {{- toYaml $env | nindent 12 }}
           {{- with $config.probes.startup }}

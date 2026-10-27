@@ -1,0 +1,123 @@
+# Laysi/trustiot-v2#582 after merging origin/main (b7da9509), merge commit 70dbd741
+# Developer workstation (x86_64 Linux). Command lines, test binaries and result lines only.
+
+$ cargo fmt --all --check
+(no diff)
+$ cargo clippy --workspace --all-targets -- -D warnings
+(no warnings)
+$ cargo run -p openapi -- --check
+(api/openapi.json matches)
+$ CI=1 cargo test -p identity -p migrate -p contract -p repo-check -p sql-check --no-fail-fast
+Running unittests src/lib.rs
+test result: ok. 43 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+Running tests/client.rs
+test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+Running tests/client_logging.rs
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+Running tests/error_format.rs
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+Running tests/events.rs
+test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+Running unittests src/lib.rs
+test result: ok. 100 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+Running tests/adversarial.rs
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+Running tests/cross_tenant.rs
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+Running tests/event_log.rs
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+Running tests/ext_authz.rs
+test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+Running tests/login.rs
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+Running tests/members.rs
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+Running tests/migrations.rs
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+Running tests/platform_admin.rs
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+Running tests/tenants.rs
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+Running tests/token_claims.rs
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+Running unittests src/lib.rs
+test result: ok. 61 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+Running tests/ca_keys.rs
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+Running tests/clickhouse.rs
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+Running tests/clickhouse_admin.rs
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+Running tests/clickhouse_telemetry_query.rs
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+Running tests/concurrent_runs.rs
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+Running tests/file_escapes.rs
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+Running tests/fresh_database.rs
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+Running tests/mqtt_accounts.rs
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+Running tests/mqtt_broker.rs
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+Running tests/mqtt_trust.rs
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+Running tests/one_instance_per_cluster.rs
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+Running tests/outbox_and_tenant_roles.rs
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+Running tests/passwords.rs
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+Running tests/platform_admin.rs
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+Running tests/registry.rs
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+Running tests/service_records.rs
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+Running tests/signing_keys.rs
+test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+Running tests/system_databases.rs
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+Running tests/wait_for_job.rs
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+Running unittests src/lib.rs
+test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+Running tests/repository.rs
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+Running unittests src/lib.rs
+test result: ok. 20 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+Running tests/check.rs
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+Doc-tests contract
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+Doc-tests identity
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+Doc-tests migrate
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+Doc-tests repo_check
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+Doc-tests sql_check
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+
+$ bun install --cwd scripts --frozen-lockfile && bun test scripts
+1659 pass
+9 skip
+0 fail
+Ran 1668 tests across 53 files.
+
+$ bun run --cwd scripts typecheck
+(exit 0)
+
+$ bun test deploy/chart
+627 pass
+0 fail
+Ran 627 tests across 9 files.
+
+$ bun install --cwd frontend --frozen-lockfile && bun run --cwd frontend api:check
+(exit 0)
+
+$ bun run --cwd frontend test
+131 pass
+0 fail
+Ran 131 tests across 12 files.

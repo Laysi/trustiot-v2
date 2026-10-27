@@ -1,0 +1,86 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s)
+     Running unittests src/lib.rs (target/debug/deps/mqtt_bridge-5fad6332852b3d6b)
+
+running 18 tests
+test client_ip::tests::only_cf_connecting_ip_counts ... ok
+test client_ip::tests::settings_parse_strictly ... ok
+test client_ip::tests::other_headers_are_no_fallback ... ok
+test config::tests::defaults_follow_the_feasibility_test ... ok
+test config::tests::the_on_prem_source_is_refused_until_it_is_built ... ok
+test config::tests::unknown_keys_are_refused ... ok
+test client_ip::tests::repeated_or_malformed_values_are_refused ... ok
+test config::tests::the_client_ip_source_and_the_broker_are_required ... ok
+test handshake::tests::statuses_follow_rfc_6455 ... ok
+test config::tests::an_unknown_client_ip_source_is_refused_without_echoing_it ... ok
+test memory::tests::a_cap_beyond_the_limit_is_refused_with_both_settings_named ... ok
+test memory::tests::no_limit_means_nothing_to_check ... ok
+test memory::tests::the_default_cap_fits_the_charts_default_memory_limit ... ok
+test handshake::tests::the_rfc_example_is_accepted ... ok
+test memory::tests::the_own_cgroup_is_the_v2_line ... ok
+test handshake::tests::every_rule_is_checked ... ok
+test config::tests::broker_addresses_need_a_host_and_a_port ... ok
+test config::tests::time_limits_are_bounded ... ok
+
+test result: ok. 18 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/keepalive.rs (target/debug/deps/keepalive-d597056b04851611)
+
+running 2 tests
+test without_pings_the_idle_cutoff_ends_the_connection ... ok
+44 pings over 9s kept the connection through a 3s idle cut-off
+test pings_keep_a_keepalive_0_connection_open_past_the_idle_cutoff ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 9.03s
+
+     Running tests/limits.rs (target/debug/deps/limits-1a2c9ddbb9143872)
+
+running 5 tests
+test an_unreachable_broker_answers_502_without_upgrading ... ok
+test an_upgrade_without_the_mqtt_subprotocol_is_refused ... ok
+test a_full_bridge_refuses_with_503_and_frees_the_slot_when_a_connection_ends ... ok
+test frames_and_messages_beyond_the_gateways_32_kib_end_the_connection ... ok
+test connection_and_traffic_metrics_reach_the_collector ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.08s
+
+     Running tests/relay.rs (target/debug/deps/relay-43cefaf3682fb886)
+
+running 4 tests
+test the_gateways_mtls_goes_through_to_the_broker ... ok
+test bytes_pass_unchanged_both_ways_in_messages_of_at_most_8_kib ... ok
+test when_the_broker_closes_the_gateway_gets_its_last_bytes_then_a_close ... ok
+test a_text_message_ends_the_connection ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.04s
+
+     Running tests/shutdown.rs (target/debug/deps/shutdown-87804001c98bd35f)
+
+running 1 test
+gateways reconnected to the new bridge after SIGTERM: [38.704403ms, 39.871438ms, 41.049172ms, 42.090007ms, 43.1182ms]
+test sigterm_closes_every_websocket_before_exit_and_gateways_reconnect_to_the_new_pod ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 10.05s
+
+     Running tests/source_ip.rs (target/debug/deps/source_ip-e6dd8b6a1e764784)
+
+running 2 tests
+test without_the_trusted_header_the_upgrade_is_refused_and_the_broker_untouched ... ok
+test spoofed_forwarding_headers_do_not_change_the_recorded_ip ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.07s
+
+     Running tests/startup.rs (target/debug/deps/startup-b2161dfaf39b440d)
+
+running 3 tests
+test the_on_prem_mode_refuses_to_start_until_it_is_implemented ... ok
+test a_missing_mode_or_broker_address_refuses_to_start ... ok
+test an_unknown_source_ip_mode_refuses_to_start ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+   Doc-tests mqtt_bridge
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

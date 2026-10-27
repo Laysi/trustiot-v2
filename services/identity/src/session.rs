@@ -22,7 +22,7 @@ use axum::http::header::COOKIE;
 use axum::http::{HeaderMap, HeaderValue};
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use contract::{TenantGrant, TenantId, TenantRole, UserId};
+use contract::{SessionId, TenantGrant, TenantId, TenantRole, UserId};
 use service_kit::identity::ServiceIdentity;
 use service_kit::postgres::InsecureConnection;
 use service_kit::shutdown::Shutdown;
@@ -275,6 +275,9 @@ const CLEAR_COOKIE: &str =
 /// and whether the user is a platform administrator.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SessionGrant {
+    /// The session itself, for the token's `sid` claim: an agent run's delegation is bound to it
+    /// (Laysi/trustiot-v2#551).
+    pub session: SessionId,
     /// The user the session belongs to.
     pub user: UserId,
     /// The session's tenant and the user's current role in it; `None` when the session has not
@@ -352,7 +355,7 @@ WHERE id = $1::uuid AND revoked_at IS NULL AND expires_at > now()
 
 /// The user's role in the transaction's tenant. Row-level security already limits the rows to
 /// that tenant; the tenant condition is repeated so the query means the same without it.
-const MEMBERSHIP_ROLE: &str = "SELECT tenant_role FROM identity.memberships
+pub(crate) const MEMBERSHIP_ROLE: &str = "SELECT tenant_role FROM identity.memberships
 WHERE tenant_id = $1::uuid AND user_id = $2::uuid";
 
 /// Names the work in the kit's DEBUG log of each tenant transaction.
@@ -529,6 +532,9 @@ impl PgSessionStore {
         let Some((session, user, tenant, platform_admin, due)) = row else {
             return Ok(None);
         };
+        let session_id: SessionId = session
+            .parse()
+            .map_err(|_| StoreError::Inconsistent("session id"))?;
         let user: UserId = user
             .parse()
             .map_err(|_| StoreError::Inconsistent("user id"))?;
@@ -548,6 +554,7 @@ impl PgSessionStore {
             self.extend(session);
         }
         Ok(Some(SessionGrant {
+            session: session_id,
             user,
             tenant,
             platform_admin,
@@ -717,7 +724,7 @@ pub(crate) fn error_kind(error: &sqlx::Error) -> String {
 
 /// The roles the schema allows. Anything else is refused rather than issued: an unknown role
 /// would reach services as [`TenantRole::Unrecognized`].
-fn parse_role(role: &str) -> Result<TenantRole, StoreError> {
+pub(crate) fn parse_role(role: &str) -> Result<TenantRole, StoreError> {
     match role {
         "viewer" => Ok(TenantRole::Viewer),
         "editor" => Ok(TenantRole::Editor),

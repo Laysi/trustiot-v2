@@ -50,6 +50,7 @@ fn issuer(seed: u8, entries: &[(u8, &str)]) -> Issuer {
 
 fn grant() -> SessionGrant {
     SessionGrant {
+        session: contract::SessionId::generate(),
         user: USER.parse().expect("user"),
         tenant: Some(TenantGrant {
             id: TENANT.parse().expect("tenant"),

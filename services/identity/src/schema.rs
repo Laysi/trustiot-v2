@@ -36,6 +36,27 @@ pub const SCHEMA: Schema = Schema {
             name: "0004_login.sql",
             sql: include_str!("../migrations/postgres/0004_login.sql"),
         },
+        // Platform administrators set members' roles (Laysi/trustiot-v2#583).
+        Migration {
+            name: "0005_member_roles.sql",
+            sql: include_str!("../migrations/postgres/0005_member_roles.sql"),
+        },
+        // The first platform administrator's once-only marker (Laysi/trustiot-v2#582). It was
+        // 0005_platform_admin_bootstrap.sql only on its unmerged pull request branch; main's
+        // 0005_member_roles.sql merged first, so this file took the next number. No release or
+        // deployed database ever had the old name: only main's files ship.
+        Migration {
+            name: "0006_platform_admin_bootstrap.sql",
+            sql: include_str!("../migrations/postgres/0006_platform_admin_bootstrap.sql"),
+        },
+        // Preferences and switching a session's tenant (Laysi/trustiot-v2#497). It was
+        // 0005_preferences_and_tenant_switch.sql only on its unmerged pull request branch; main's
+        // 0005 and 0006 merged first, so this file took the next number. No release or deployed
+        // database ever had the old name: only main's files ship.
+        Migration {
+            name: "0007_preferences_and_tenant_switch.sql",
+            sql: include_str!("../migrations/postgres/0007_preferences_and_tenant_switch.sql"),
+        },
     ],
 };
 
@@ -43,5 +64,6 @@ pub const SCHEMA: Schema = Schema {
 /// "事件層與操作紀錄"): the service runs one consumer per producer, and the migration Job makes
 /// its platform role a reader of each one's `outbox_event` (the registry's `Outbox::consumes`).
 /// A producer is added here when it starts writing events, in the same change: `identity`
-/// (tenants, Laysi/trustiot-v2#65) and `assets` (device models, Laysi/trustiot-v2#99).
-pub const CONSUMES: &[&str] = &["identity", "assets"];
+/// (tenants, Laysi/trustiot-v2#65), `assets` (device models, Laysi/trustiot-v2#99) and `certs`
+/// (factory registrations, platform-wide, Laysi/trustiot-v2#79).
+pub const CONSUMES: &[&str] = &["identity", "assets", "certs"];

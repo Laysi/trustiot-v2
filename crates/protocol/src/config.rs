@@ -322,6 +322,13 @@ pub enum Transport {
 }
 
 /// An IPv4 or IPv6 address literal or a DNS host name.
+///
+/// An address must be unicast (not unspecified, multicast or the IPv4 broadcast address; an
+/// IPv4-mapped IPv6 address follows the IPv4 rules). A name has labels of ASCII letters, digits
+/// and inner hyphens, at most 253 bytes, and must not end in a number (a last label of decimal
+/// digits, or of `0x` followed by hex digits), since resolvers read such a name as an IPv4
+/// address. Loopback addresses are accepted here: whether a device may be the gateway itself is
+/// the caller's rule.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(try_from = "String", into = "String")]
 pub struct Host(String);
@@ -382,14 +389,19 @@ fn is_valid_host(host: &str) -> bool {
             && !ip.is_multicast()
             && ip != IpAddr::from([255, 255, 255, 255]);
     }
-    // A name whose last label is all digits reads as a mistyped IPv4 address such as
-    // 192.168.1.300 (RFC 3696 section 2); refuse it rather than resolve it as a name.
+    // A name that ends in a number is read as an IPv4 address, not looked up: refuse it rather
+    // than let it pass as a name. That is a last label of decimal digits, which reads as a
+    // mistyped address such as 192.168.1.300 (RFC 3696 section 2), and a last label of `0x` or
+    // `0X` followed by hex digits or nothing, which getaddrinfo (glibc and musl, through
+    // inet_aton) parses as a number: `0x7f000001` and `0x7f.0.0.0x1` are 127.0.0.1, `0x0` is
+    // 0.0.0.0, and they would get past the address rules above. This is the "ends in a number"
+    // rule of the WHATWG URL Standard's host parser.
     !host.is_empty()
         && host.len() <= MAX_HOST_LEN
         && host
             .rsplit('.')
             .next()
-            .is_some_and(|last| !last.bytes().all(|byte| byte.is_ascii_digit()))
+            .is_some_and(|last| !ends_in_a_number(last))
         && host.split('.').all(|label| {
             let bytes = label.as_bytes();
             !bytes.is_empty()
@@ -400,6 +412,19 @@ fn is_valid_host(host: &str) -> bool {
                 && bytes.first() != Some(&b'-')
                 && bytes.last() != Some(&b'-')
         })
+}
+
+/// Whether a host name's last label makes a resolver read the name as an IPv4 address: decimal
+/// digits only, or `0x`/`0X` followed by hex digits or nothing (the WHATWG URL Standard's "ends
+/// in a number").
+fn ends_in_a_number(label: &str) -> bool {
+    if label.bytes().all(|byte| byte.is_ascii_digit()) {
+        return true;
+    }
+    label
+        .strip_prefix("0x")
+        .or_else(|| label.strip_prefix("0X"))
+        .is_some_and(|hex| hex.bytes().all(|byte| byte.is_ascii_hexdigit()))
 }
 
 impl TryFrom<String> for Host {

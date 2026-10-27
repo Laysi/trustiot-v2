@@ -27,6 +27,11 @@ pub const START_LIMIT: Duration = Duration::from_secs(60);
 /// second when idle; the bound is for a loaded host.
 pub const EVENT_LIMIT: Duration = Duration::from_secs(60);
 
+/// The longest a log line may take to reach a test after the response it belongs to: a reader
+/// thread collects the service's stdout, so a line can arrive after its response does. The
+/// bound is for a loaded host.
+pub const LOG_LIMIT: Duration = Duration::from_secs(30);
+
 /// Writes `jwks` to a file of its own under Cargo's temporary directory for these tests and
 /// returns its path.
 fn keys_file(jwks: &str) -> std::path::PathBuf {

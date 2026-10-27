@@ -1,0 +1,54 @@
+== the broker's name, the root: accepted true
+status exit status: 0
+Client certs-test-gateway sending CONNECT
+Client certs-test-gateway received CONNACK (0)
+Client certs-test-gateway sending PUBLISH (d0, q0, r0, m1, 'certs/test', ... (5 bytes))
+Client certs-test-gateway sending DISCONNECT
+
+== another name: accepted false
+status exit status: 14
+Client certs-test-gateway sending CONNECT
+OpenSSL Error while trying to get the error[0]: error:0A000086:SSL routines::certificate verify failed
+Error: Protocol error
+
+== another CA: accepted false
+status exit status: 14
+Client certs-test-gateway sending CONNECT
+OpenSSL Error while trying to get the error[0]: error:0A000086:SSL routines::certificate verify failed
+Error: Protocol error
+
+== the broker certificate as a client's: accepted false
+status exit status: 7
+Client certs-test-broker sending CONNECT
+OpenSSL Error while trying to get the error[0]: error:0A000413:SSL routines::ssl/tls alert unsupported certificate
+Error: The connection was lost
+
+== broker log
+1792706042: mosquitto version 2.1.2 starting
+1792706042: Config loaded from /run/trustiot/mosquitto.conf.
+1792706042: Bridge support available.
+1792706042: Persistence support available.
+1792706042: TLS support available.
+1792706042: TLS-PSK support available.
+1792706042: Websockets support available.
+1792706042: Opening ipv4 listen socket on port 8883.
+1792706042: mosquitto version 2.1.2 running
+1792706042: New connection from 127.0.0.1:49618 on port 8883.
+1792706042: New client connected from 127.0.0.1:49618 as certs-test-gateway (p4, c1, k60, u'gw-557-accepted').
+1792706042: No will message specified.
+1792706042: Client certs-test-gateway negotiated TLSv1.3 cipher TLS_AES_256_GCM_SHA384
+1792706042: Sending CONNACK to certs-test-gateway (0, 0)
+1792706042: Received PUBLISH from certs-test-gateway (d0, q0, r0, m0, 'certs/test', ... (5 bytes))
+1792706042: Received DISCONNECT from certs-test-gateway
+1792706042: Client certs-test-gateway [127.0.0.1:49618] disconnected.
+1792706042: New connection from 127.0.0.1:49624 on port 8883.
+1792706042: OpenSSL Error while trying to get the error[0]: error:0A000412:SSL routines::ssl/tls alert bad certificate
+1792706042: Client 127.0.0.1 [127.0.0.1:49624] disconnected: Protocol error.
+1792706042: New connection from 127.0.0.1:49640 on port 8883.
+1792706042: OpenSSL Error while trying to get the error[0]: error:0A000418:SSL routines::tlsv1 alert unknown ca
+1792706042: Client 127.0.0.1 [127.0.0.1:49640] disconnected: Protocol error.
+1792706043: New connection from 127.0.0.1:49648 on port 8883.
+1792706043: OpenSSL Error while trying to get the error[0]: error:0A000086:SSL routines::certificate verify failed
+1792706043: Client 127.0.0.1 [127.0.0.1:49648] disconnected: Protocol error.
+1792706042: Info: running mosquitto as user: mosquitto.
+

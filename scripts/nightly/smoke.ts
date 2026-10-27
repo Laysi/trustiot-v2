@@ -3,7 +3,10 @@
 // Cluster is healthy, each ingress gateway's NetworkPolicy admits exactly the ports its Istio pods
 // use, every Service that exposes a probe routes to a ready pod, the migration Job generated the
 // passwords into the Secrets the chart declares, the identity and assets services built from the
-// commit answer through the ingress with a session cookie (api.ts, Laysi/trustiot-v2#65), and an
+// commit answer through the ingress with a session cookie (api.ts, Laysi/trustiot-v2#65), so does
+// the telemetry-query service once it made the new tenant's ClickHouse account, which the smoke
+// then finds in ClickHouse (api.ts, Laysi/trustiot-v2#539), the AI assistant is ready with a
+// Postgres session of its own role (api.ts, Laysi/trustiot-v2#592), and an
 // uninstall leaves nothing behind but the objects the chart keeps on purpose (the database and the
 // password Secrets), which are then deleted. The same request through the ingress also proves the
 // MS0 edges with the real services (api.ts, Laysi/trustiot-v2#77): a stolen identity header never
@@ -20,15 +23,33 @@
 // After the ingress e2e test, the SaaS shape also runs the service-to-service authorization e2e
 // test (mesh.e2e.ts, e2e.ts). Components the chart gains later are covered without
 // changes here, because the checks read the release's own manifests (manifests.ts).
-// The MQTT broker (Laysi/trustiot-v2#84) mounts a server certificate Secret that the installing
-// environment provides: the smoke issues one from a CA it makes for the run, for the names of the
-// broker's Services, and checks that no Service of the release is reachable from outside the
-// cluster and that no route sends traffic to the broker.
+// The MQTT broker (Laysi/trustiot-v2#84): the smoke checks that no Service of the release is
+// reachable from outside the cluster and that no route sends traffic to the broker. Nothing
+// creates its server certificate either: once the certs service signs (below), the smoke runs the
+// chart's certificate CronJob once and checks the certificate it put in the Secret the chart
+// declares, that the broker then opens its gateway port, and that the certs service's broker
+// port refuses the broker's own pod (broker-certificate.ts, Laysi/trustiot-v2#535).
+// The certs service (Laysi/trustiot-v2#517) runs with a root CA the smoke makes for the run with
+// certs-ca: it checks that the service waits for its issuing CA certificate, signs the request the
+// init container wrote, upgrades the release with the certificate, and checks that the service then
+// signs, inside the mesh and through the ingress, for platform administrators only (certs.ts).
 import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 
-import { apiValues, routesOfValues, runApiCheck } from "./api.ts";
+import { apiValues, checkAssistantLogin, ingressAccess, routesOfValues, runApiCheck } from "./api.ts";
+import { checkBrokerCertificate } from "./broker-certificate.ts";
+import {
+  CERTS_CA,
+  checkCertsSigning,
+  checkCertsWaiting,
+  type CertsWaiting,
+  issuingValues,
+  rootCommonName,
+  rootValues,
+  signIssuingCa,
+  TestRoot,
+} from "./certs.ts";
 import { gatherDiagnostics } from "./diagnostics.ts";
 import { E2E_SUITES, installEvidenceSection, runClusterE2e, suitesOf } from "./e2e.ts";
 import { exec, retry, run, RunLog, waitUntilGone } from "./exec.ts";
@@ -64,8 +85,6 @@ import {
   postgresClustersOf,
   readyEndpointsFor,
   restartsOf,
-  type ServerTlsSecret,
-  serverTlsSecretsOf,
   workloadsOf,
 } from "./manifests.ts";
 import { smokeNamespaceOf, smokeProviderNameOf } from "./platform.ts";
@@ -90,6 +109,8 @@ export interface SmokeContext {
   log: RunLog;
   /** Fails a run on purpose after the install, to exercise the failure path and notification. */
   simulateFailure: boolean;
+  /** The `certs-ca` program built with the certs image (run.ts), which makes the run's test root CA (certs.ts). */
+  certsCa: string;
 }
 
 export const RELEASE = "trustiot";
@@ -187,6 +208,14 @@ export async function smokeShape(ctx: SmokeContext, shape: Shape): Promise<Shape
   // The ClusterIP the release pins for the tunnel ingress (ingress-address.ts); undefined for a
   // shape whose ingress faces the network directly.
   let fixedClusterIp: string | undefined;
+  // The certs service's CA (certs.ts, Laysi/trustiot-v2#517): the run's test root, whose private
+  // key lives only in this object until it signs or the shape ends; what the waiting check found;
+  // and the issuing CA certificate the root signed.
+  let testRoot: TestRoot | undefined;
+  let certsWaiting: CertsWaiting | undefined;
+  let issuingCa: { certificate: string; keyId: string } | undefined;
+  // The platform administrator the bootstrap made in the API check (api.ts), whom the certs check acts as.
+  let platformAdmin: string | undefined;
   try {
     passed =
       (await check("namespace with the restricted Pod Security level", async () => {
@@ -198,12 +227,23 @@ export async function smokeShape(ctx: SmokeContext, shape: Shape): Promise<Shape
       (await check("the values of the API check", async () => {
         // Laysi/trustiot-v2#65: the release runs the identity and assets services built from this
         // commit, behind the smoke namespace's ext_authz provider (platform.ts). No key is made
-        // here: the identity pod's init container generates it (Laysi/trustiot-v2#404).
+        // here: the identity pod's init container generates it (Laysi/trustiot-v2#404). Also the
+        // AI gateway (Laysi/trustiot-v2#536), telemetry-query (Laysi/trustiot-v2#539) and the AI
+        // assistant (Laysi/trustiot-v2#592).
         const file = join(ctx.outDir, `values-api-${shape.name}.yaml`);
         const routes = routesOfValues(ctx.chartDir, shape.valuesFiles);
         writeFileSync(file, Bun.YAML.stringify(apiValues(shape.name, routes), null, 2));
         values.push("-f", file);
-        return `${basename(file)}: identity and assets, provider ${smokeProviderNameOf(shape.name)}`;
+        return `${basename(file)}: identity, assets, ai-gateway, telemetry-query, certs and assistant, provider ${smokeProviderNameOf(shape.name)}`;
+      })) &&
+      (await check("a test root CA for the certs service, made for this run, sets certificateAuthority.rootCertificate (Laysi/trustiot-v2#517)", async () => {
+        // The README's ceremony, step 1 and 2 (services/certs/README.md, 「發簽發 CA 憑證」): the
+        // root's private key stays in testRoot, never on a disk; only its certificate is written.
+        testRoot = await TestRoot.create((cmd, options) => run(ctx.log, cmd, options), ctx.certsCa, rootCommonName(shape.name));
+        const file = join(ctx.outDir, `values-certs-${shape.name}.yaml`);
+        writeFileSync(file, Bun.YAML.stringify(rootValues(testRoot.certificate), null, 2));
+        values.push("-f", file);
+        return `${CERTS_CA} root create made "${testRoot.commonName}"; ${basename(file)}: its certificate`;
       })) &&
       (await check("the tunnel ingress gets a fixed ClusterIP from the static band of the cluster's Service range (Laysi/trustiot-v2#478)", async () => {
         // cloudflared forwards to the ingress Service's ClusterIP, so the chart pins it
@@ -237,9 +277,7 @@ export async function smokeShape(ctx: SmokeContext, shape: Shape): Promise<Shape
         }
         const tls = missingTlsSecrets(objects);
         for (const name of tls) ingressCa = await createTlsSecret(ctx, namespace, name, ingressHostsOf(objects));
-        const servers = serverTlsSecretsOf(objects, namespace);
-        for (const secret of servers) await createServerTlsSecret(ctx, namespace, secret);
-        const created = [...missing.keys(), ...tls, ...servers.map((secret) => secret.name)];
+        const created = [...missing.keys(), ...tls];
         return created.length === 0 ? "none needed" : `${created.length} created: ${created.join(", ")}`;
       })) &&
       (await check("helm install --wait", async () => {
@@ -410,9 +448,61 @@ export async function smokeShape(ctx: SmokeContext, shape: Shape): Promise<Shape
         const broker = mqttBrokerServicesOf(objects);
         return `${count} Services, each ClusterIP without node ports or external addresses; MQTT broker: ${broker.length === 0 ? "not in this release" : `${broker.join(", ")}, named by no route`}`;
       })) &&
+      (await check("the AI assistant is ready: it logged in to Postgres as assistant_app on its current schema (Laysi/trustiot-v2#592)", async () => {
+        // Its readiness is a connection of its own role and the migration check of its schema
+        // (services/assistant/README.md); it calls no model or service before a question.
+        const objects = parseManifests(manifest);
+        const deployments = objects.filter((o) => o.kind === "Deployment" && o.metadata?.labels?.["app.kubernetes.io/component"] === "assistant");
+        if (deployments.length !== 1) throw new Error(`the release should have one assistant Deployment, found ${deployments.length}`);
+        const name = deployments[0]!.metadata?.name ?? "";
+        const status = await kubectlJson(["get", "--namespace", namespace, `deployment/${name}`, "--output", "json"]);
+        const ready = (JSON.parse(status.stdout) as { status?: { readyReplicas?: number } }).status?.readyReplicas ?? 0;
+        const { psql } = await ingressAccess(ctx, namespace, objects, ingressCa);
+        return checkAssistantLogin({ psql }, `deployment/${name}`, ready);
+      })) &&
       (await check(
-        "through the ingress, a new tenant reaches the assets service, a stolen identity header never does, and Host ports and normalized paths reach it (Laysi/trustiot-v2#65, #77)",
-        () => runApiCheck(ctx, namespace, parseManifests(manifest), ingressCa, `nightly smoke ${shape.name}`),
+        "through the ingress, a new tenant reaches the assets service and, with its ClickHouse account, the telemetry API; a stolen identity header never does, and Host ports and normalized paths reach it (Laysi/trustiot-v2#65, #77, #539)",
+        async () => {
+          const checked = await runApiCheck(ctx, namespace, parseManifests(manifest), ingressCa, `nightly smoke ${shape.name}`);
+          platformAdmin = checked.platformAdmin;
+          return checked.detail;
+        },
+      )) &&
+      (await check(
+        "certs waits for its issuing CA certificate: the init container wrote the key Secret and the request ConfigMap, the mesh serves the root alone, and the workstation certificate API answers 401, 403 and 503 ca_not_ready (Laysi/trustiot-v2#517)",
+        async () => {
+          if (testRoot === undefined) throw new Error("no test root was made");
+          if (platformAdmin === undefined) throw new Error("the API check made no platform administrator");
+          const found = await checkCertsWaiting(ctx, namespace, parseManifests(manifest), ingressCa, testRoot, platformAdmin, `nightly smoke certs ${shape.name}`);
+          certsWaiting = found.waiting;
+          return found.detail;
+        },
+      )) &&
+      (await check("the test root signs the issuing CA's request from the ConfigMap, and helm upgrade sets the certificate (Laysi/trustiot-v2#517)", async () => {
+        // The README's ceremony, step 4 and 5: the key id certs-ca prints must be the request's.
+        if (testRoot === undefined || certsWaiting === undefined) throw new Error("the waiting check left nothing to sign");
+        issuingCa = await signIssuingCa(ctx, ctx.certsCa, testRoot, certsWaiting, shape.name);
+        const file = join(ctx.outDir, `values-certs-issuing-${shape.name}.yaml`);
+        writeFileSync(file, Bun.YAML.stringify(issuingValues(issuingCa.certificate), null, 2));
+        values.push("-f", file);
+        await helm(["upgrade", RELEASE, ctx.chartDir, "--namespace", namespace, ...values, "--wait", "--wait-for-jobs", "--timeout", "5m"], 6 * 60_000);
+        // The uninstall check compares with the release's objects as they are now.
+        manifest = (await helm(["get", "manifest", RELEASE, "--namespace", namespace], 60_000, true)).stdout;
+        return `${CERTS_CA} root sign certified key ${issuingCa.keyId}, the key of ${certsWaiting.objects.configMap}'s request; ${basename(file)}: issuingCertificates; release upgraded`;
+      })) &&
+      (await check(
+        "certs signs with the issuing CA without a restart: the mesh serves the root and the issuing CA and a CRL the issuing CA signed, and only a platform administrator issues and revokes a workstation certificate (Laysi/trustiot-v2#517)",
+        async () => {
+          if (testRoot === undefined || certsWaiting === undefined || issuingCa === undefined) throw new Error("no issuing CA certificate was set");
+          return checkCertsSigning(ctx, namespace, parseManifests(manifest), ingressCa, testRoot, issuingCa, certsWaiting);
+        },
+      )) &&
+      (await check(
+        "the broker's certificate CronJob gets a server certificate from the certs service's broker port into the Secret only the broker mounts, the broker opens its gateway port, and the broker port refuses the broker's own pod (Laysi/trustiot-v2#535)",
+        async () => {
+          if (issuingCa === undefined) throw new Error("no issuing CA certificate was set");
+          return checkBrokerCertificate(ctx, namespace, parseManifests(manifest), issuingCa.certificate);
+        },
       )) &&
       (await check("helm uninstall leaves no object of the release but the kept database and password Secrets", async () => {
         await helm(["uninstall", RELEASE, "--namespace", namespace, "--wait", "--timeout", "3m"], 4 * 60_000);
@@ -449,6 +539,9 @@ export async function smokeShape(ctx: SmokeContext, shape: Shape): Promise<Shape
     const detail = error instanceof Error ? (error.stack ?? error.message) : String(error);
     checks.push({ name: "smoke test internal error", ok: false, detail, durationMs: 0 });
     passed = false;
+  } finally {
+    // Signing dropped the key already; a shape that failed before that drops it here.
+    testRoot?.discard();
   }
 
   if (!passed) diagnostics = await collectDiagnostics(ctx, namespace, shape);
@@ -494,58 +587,6 @@ async function createTlsSecret(ctx: SmokeContext, namespace: string, name: strin
       { env: { KUBECONFIG: ctx.kubeconfig }, timeoutMs: 60_000 },
     );
     return readFileSync(cert, "utf8");
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
-}
-
-/**
- * A server certificate for the Services of a pod that mounts it (manifests.ts, serverTlsSecretsOf),
- * issued by a CA made for this run alone, as a kubernetes.io/tls Secret whose tls.crt holds the
- * certificate and then the CA's, like the chain the cluster will issue (Laysi/trustiot-v2#535).
- * Both keys live in a private temporary directory only as long as the commands need them, and
- * are never logged; the CA's key is thrown away, so nothing else can be signed with it.
- */
-async function createServerTlsSecret(ctx: SmokeContext, namespace: string, secret: ServerTlsSecret): Promise<void> {
-  if (secret.hosts.length === 0) throw new Error(`no Service of the release selects the pods that mount ${secret.name}`);
-  const dir = mkdtempSync(join(tmpdir(), "nightly-server-tls-"));
-  const file = (name: string) => join(dir, name);
-  try {
-    // Every extension spelled out, so nothing depends on the runner's openssl.cnf.
-    const config = [
-      "[req]",
-      "distinguished_name = dn",
-      "prompt = no",
-      "[dn]",
-      "CN = nightly.test",
-      "[ca]",
-      "basicConstraints = critical,CA:TRUE,pathlen:0",
-      "keyUsage = critical,keyCertSign,cRLSign",
-      "subjectKeyIdentifier = hash",
-      "[server]",
-      "basicConstraints = critical,CA:FALSE",
-      "keyUsage = critical,digitalSignature",
-      "extendedKeyUsage = serverAuth",
-      `subjectAltName = ${secret.hosts.map((host) => `DNS:${host}`).join(",")}`,
-      "subjectKeyIdentifier = hash",
-      "authorityKeyIdentifier = keyid",
-    ];
-    writeFileSync(file("openssl.cnf"), `${config.join("\n")}\n`);
-    const key = ["-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:P-256", "-nodes", "-config", file("openssl.cnf")];
-    const openssl = (args: string[]) => run(ctx.log, ["openssl", ...args], { timeoutMs: 30_000 });
-    await openssl(["req", "-x509", ...key, "-extensions", "ca", "-subj", "/CN=nightly server CA", "-days", "1", "-keyout", file("ca.key"), "-out", file("ca.crt")]);
-    await openssl(["req", "-new", ...key, "-subj", `/CN=${secret.hosts[0]}`, "-keyout", file("tls.key"), "-out", file("tls.csr")]);
-    await openssl([
-      "x509", "-req", "-in", file("tls.csr"), "-CA", file("ca.crt"), "-CAkey", file("ca.key"),
-      "-CAcreateserial", "-CAserial", file("ca.srl"), "-days", "1",
-      "-extfile", file("openssl.cnf"), "-extensions", "server", "-out", file("server.crt"),
-    ]);
-    writeFileSync(file("tls.crt"), `${readFileSync(file("server.crt"), "utf8")}${readFileSync(file("ca.crt"), "utf8")}`);
-    await run(
-      ctx.log,
-      [ctx.kubectl, "create", "secret", "tls", secret.name, "--namespace", namespace, `--cert=${file("tls.crt")}`, `--key=${file("tls.key")}`],
-      { env: { KUBECONFIG: ctx.kubeconfig }, timeoutMs: 60_000 },
-    );
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

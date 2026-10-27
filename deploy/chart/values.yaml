@@ -185,7 +185,13 @@ serviceDefaults:
 # that ships its image; until then it stays disabled. Besides the serviceDefaults fields, an
 # entry can list `credentials`: the dependency Secrets that only this service receives
 # (qdrant-read, qdrant-write, object-storage, smtp, ai; the AI keys only for ai-gateway and the
-# Qdrant keys only for knowledge); see README.md.
+# Qdrant keys only for knowledge); see README.md. A service that uses Postgres (mesh.calls) also
+# has `database.maxConnections`: the size of its main pool, which the chart passes as
+# TRUSTIOT__DATABASE__MAX_CONNECTIONS (AI_GATEWAY__DATABASE__MAX_CONNECTIONS for ai-gateway). Its
+# other pools are fixed by its code; the render fails when
+# every replica of every such service, plus one more of each during a rolling update, could open
+# more connections than postgres.bundled.parameters.max_connections allows (README.md,
+# 「叢集內的 Postgres」).
 services:
   # The SPA's static files (services/web, decision 2). While enabled, every path on hosts.app
   # outside /api and /auth reaches it without the cookie check, and without the Cookie and
@@ -217,10 +223,35 @@ services:
     # Mails login codes through the relay in `smtp` (services/identity/README.md, "登入").
     credentials:
       - smtp
+    # The ext_authz check's pool, 3 to 100 (it always keeps 3 open). Each replica opens 21 more
+    # in its other pools: 31 in all.
+    database:
+      maxConnections: 10
   assets:
     enabled: false
+    # 2 to 100. Each replica opens 4 more as its platform role (README.md, 「連線預算」): 14 in all.
+    database:
+      maxConnections: 10
   certs:
     enabled: false
+    # 2 to 100. Each replica opens 4 more for factory registrations: 9 in all.
+    database:
+      maxConnections: 5
+    # The API (http: the CA chain and CRLs for the MQTT broker, the workstation certificate API)
+    # and the MQTT broker's server certificate issuance on a port of its own (broker-certs, the
+    # service's broker.listen_addr; Laysi/trustiot-v2#557). The mesh lets the ingress gateway and
+    # the services that list certs in mesh.calls reach the API port only, and the MQTT broker's
+    # pod the broker-certs port too (README.md, "呼叫矩陣"). The numbers are the service's
+    # defaults; keep both ports when overriding the list: the render fails without broker-certs
+    # while the MQTT broker is enabled. The broker always calls the Service
+    # <release>-certs-broker on 8082, which forwards to whatever containerPort broker-certs has.
+    ports:
+      - name: http
+        containerPort: 8080
+        appProtocol: http
+      - name: broker-certs
+        containerPort: 8082
+        appProtocol: http
     # The issuing CA keys file is mode 0440, owned by root and the pod's fsGroup, so the service
     # reads it through this group and no other user in the container can (README.md, "閘道器憑證
     # CA"). A group of its own, not identity's: no other pod is in it. On OpenShift set fsGroup to
@@ -231,14 +262,50 @@ services:
     enabled: false
   telemetry-query:
     enabled: false
+    # 2 to 100. Each replica opens 2 more to read the identity service's events: 12 in all.
+    database:
+      maxConnections: 10
   gateway-ops:
     enabled: false
+  # The gateways' MQTT inside WebSocket (services/mqtt-bridge, decision 6): ingress.publicPaths.mqtt
+  # on hosts.gateway reaches it without the cookie check, and it relays each connection unchanged
+  # to the broker's gateway port, so it needs mqttBroker.enabled (the chart sets the address) or it
+  # does not start. It records the gateway's address from the header that ingress.exposure implies
+  # (TRUSTIOT_CLIENT_IP_SOURCE); it supports the tunnel exposure only until
+  # Laysi/trustiot-v2#446 and does not start with any other.
   mqtt-bridge:
     enabled: false
+  # The AI assistant (services/assistant, decision 31): keeps its conversations in Postgres as
+  # assistant_app, calls the models through the AI gateway, and runs its tools as the asking user
+  # against telemetry-query and assets (mesh.calls.assistant below). The chart sets the address of
+  # each of those services from mesh.calls.assistant, and env cannot (README.md, 「AI 助理」); it
+  # does not start without the AI gateway's (services.ai-gateway.enabled and ai-gateway listed).
+  # It has no API yet (the chat API is Laysi/trustiot-v2#146).
   assistant:
     enabled: false
+    # 2 to 100. It opens no other pool: 4 in all. Until the chat API (Laysi/trustiot-v2#146) only
+    # the readiness check uses it.
+    database:
+      maxConnections: 4
+  # The AI gateway (services/ai-gateway, decisions 15 and 28): the providers, model roles and limits
+  # come from `ai` below. Only the AI assistant, the knowledge base and alerts may call it
+  # (mesh.calls; README.md, "服務間授權（mesh）").
   ai-gateway:
     enabled: false
+    # The provider keys (ai.providers.*.apiKeySecret): only this service may list them, and the
+    # gateway does not start without them, so the render fails while it is enabled without ai.
+    credentials:
+      - ai
+    # A model's answer streams for minutes and cannot go on in another pod, so the gateway lets
+    # the streams in flight run to their end while it drains (services/ai-gateway/README.md,
+    # 「關機」). The chart sets its shutdown.drain_timeout to drainSeconds - 10 s (300 s here);
+    # 11 to 3605.
+    drainSeconds: 310
+    # The settings pool (AI_GATEWAY__DATABASE__MAX_CONNECTIONS), 2 to 32: one short query per
+    # forwarded request. It is the gateway's only pool: 4 in all. templates/_service.tpl
+    # ("trustiot.service.env") passes it under the gateway's prefix, like every service's pool.
+    database:
+      maxConnections: 4
   alerts:
     enabled: false
   field-context:
@@ -281,6 +348,12 @@ mesh:
     # (services/certs/README.md).
     certs:
       - postgres
+    # The AI gateway keeps the platform administrator's changes to the model roles' models, the
+    # settings generation every forwarded request checks, and the log of every change in Postgres
+    # (services/ai-gateway/README.md, 「資料庫」). It refuses AI calls with 503 while Postgres
+    # cannot be read.
+    ai-gateway:
+      - postgres
     # ClickHouse (decision 14): ingest writes telemetry, telemetry-query reads it with per-tenant
     # read-only accounts (docs/architecture/deployment.md). telemetry-query keeps which tenants
     # have an account in Postgres and reads the identity service's events from there as its
@@ -298,6 +371,15 @@ mesh:
       - mqtt-broker
     mqtt-bridge:
       - mqtt-broker
+    # The AI assistant (Laysi/trustiot-v2#592): the AI gateway for the models; telemetry-query and
+    # assets for its tools, which call them as the asking user, so it also reaches the identity
+    # service's token exchange and the exchange grants exactly these audiences (README.md,
+    # 「代表使用者呼叫」); Postgres for its conversations (services/assistant/README.md).
+    assistant:
+      - ai-gateway
+      - telemetry-query
+      - assets
+      - postgres
 
 # Internal identity (decision 27): for every request that passes the cookie check, the identity
 # service signs a short-lived token for the backend, and every service verifies it with the
@@ -456,7 +538,12 @@ postgres:
       effective_cache_size: 384MB
       work_mem: 4MB
       maintenance_work_mem: 64MB
-      max_connections: 100
+      # Fits identity, assets, certs, telemetry-query, assistant and ai-gateway at one replica
+      # each while all of them roll at once (148) plus the 18 reserved connections (166), with 34
+      # to spare for the next service that uses Postgres; the render fails when the enabled
+      # services need more. Changing it restarts the bundled Postgres. The memory estimate is in
+      # README.md (「叢集內的 Postgres」).
+      max_connections: 200
     # The image is built for arm64 only (decision 5).
     nodeSelector:
       kubernetes.io/arch: arm64
@@ -575,7 +662,8 @@ mqttBroker:
   image:
     # eclipse-mosquitto 2.1 (Alpine), pinned to the multi-arch index digest (arm64 included).
     # crates/protocol/tests/broker.rs, tools/migrate/tests/mqtt_broker.rs and scripts/lib/stack.ts
-    # use the same tag and digest; the chart tests fail when they differ.
+    # use the same tag and digest; the chart tests fail when they differ. When the version changes,
+    # repeat the pre-CONNECT timeout measurement (services/mqtt-bridge/README.md, connection limits).
     repository: docker.io/library/eclipse-mosquitto
     tag: 2.1.2-alpine
     digest: sha256:38c0da4f2ef84284d47b3b3eeea1cb3bdeabe81ee10caf0cd5c5ff61ee3ea408
@@ -589,6 +677,19 @@ mqttBroker:
   # How often the broker pod's trust sidecar fetches the CA certificates and CRLs from the certs
   # service and checks the server certificate Secret; the broker reloads them when they changed.
   trustInterval: 30s
+  # The broker's server certificate (Laysi/trustiot-v2#535) is issued in the cluster: the CronJob
+  # <release>-mqtt-broker-certificate (migration image, arm64 only) generates a P-256 key in its
+  # pod, has the certs service sign it, and writes both into the Secret <release>-mqtt-broker-tls,
+  # which the chart declares empty; it renews the certificate, with a new key, once half of its
+  # validity has passed (the certs service's broker.validity, 30 days by default). Increase this
+  # number to renew it at the CronJob's next run instead, for example after the issuing CA changed.
+  certificateGeneration: "1"
+  # When that CronJob runs, in Etc/UTC: @hourly, or a cron schedule whose hour, day of month, month
+  # and day of week are *, so it runs at least every hour; the minute is a comma-separated list of
+  # *, */<step> (1 to 59) or minutes from 0 to 59, no ranges. A run that finds a certificate it
+  # keeps only reads the Secret. The first certificate comes at the first run after the certs
+  # service can sign (README.md, "MQTT broker").
+  certificateSchedule: "*/15 * * * *"
   storage:
     # Sessions, queued and retained messages, the dynamic security file and the trust files.
     size: 1Gi
@@ -655,25 +756,34 @@ smtp:
     usernameKey: username
     passwordKey: password
 
-# OpenAI-compatible endpoints (decisions 15, 16, 26 and 28). On-prem points at the
-# customer's endpoints (for example vLLM or Ollama).
+# The AI gateway's providers and model roles (services/ai-gateway, decisions 15 and 28, J8). Each
+# provider speaks its native protocol; only ai-gateway gets the keys. The chart hands the gateway
+# these settings in the ConfigMap <release>-ai-gateway, without any key (README.md, "AI 閘道").
 ai:
-  chat:
-    baseUrl: ""
-    apiKeySecret:
-      name: ""
-      key: api-key
-  embedding:
-    baseUrl: ""
-    apiKeySecret:
-      name: ""
-      key: api-key
-  # Reranking uses a chat-completions endpoint with a fast model (decision 26).
-  rerank:
-    baseUrl: ""
-    apiKeySecret:
-      name: ""
-      key: api-key
+  providers:
+    # Anthropic Messages. A provider is configured when its apiKeySecret has a name.
+    anthropic:
+      # Empty: Anthropic's own API (https://api.anthropic.com). To go through Cloudflare AI Gateway,
+      # set its https URL here (for example https://gateway.ai.cloudflare.com/v1/<account>/<gateway>/anthropic).
+      baseUrl: ""
+      apiKeySecret:
+        name: ""
+        key: api-key
+    # OpenAI Decisions. Empty baseUrl: OpenAI's own API (https://api.openai.com).
+    openai:
+      baseUrl: ""
+      apiKeySecret:
+        name: ""
+        key: api-key
+  # Model roles: <role>: {models: [<provider>/<model id>, ...]}, the first choice first and then its
+  # fallbacks (1 to 8). The gateway needs at least one role, and every provider a role names needs
+  # its apiKeySecret. Optional per role: maxConcurrent, queueWait, timeouts (connect, firstToken,
+  # streamIdle, streamTotal, response), maxResponseBytes, maxEventBytes (README.md, "AI 閘道").
+  roles: {}
+  # The gateway's http.request_timeout: a call's time budget up to its response or first streamed
+  # output is this minus a tenth, at most 2 s. Every role's queueWait plus the longer of its
+  # response and firstToken limits must fit, or the gateway does not start; the defaults need 300 s.
+  requestTimeout: 10m
 
 observability:
   # Error tracking (decision 24): SaaS sends to sentry.io; on-prem is off unless the

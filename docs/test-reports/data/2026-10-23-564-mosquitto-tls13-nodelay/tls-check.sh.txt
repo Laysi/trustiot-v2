@@ -1,0 +1,120 @@
+#!/usr/bin/env bash
+# Laysi/trustiot-v2#564 acceptance check: run the chart's rendered mosquitto.conf in the image the
+# chart pins and report the TLS 1.3 suite the gateways' listener negotiates.
+# Usage: bash tls-check.sh <rendered mosquitto.conf> <label> <expected TLS 1.3 suite>
+# Exits non-zero unless every handshake completes with TLS 1.3, a verified server certificate and
+# the expected suite. Certificates are throwaway, made here at run time, and deleted at the end.
+set -euo pipefail
+conf=$(realpath "$1")
+label=$2
+expected=$3
+here=$(dirname "$(realpath "$0")")
+exec > "$here/tls-$label.log" 2>&1
+run="$here/run-$label"
+image="docker.io/library/eclipse-mosquitto:2.1.2-alpine@sha256:38c0da4f2ef84284d47b3b3eeea1cb3bdeabe81ee10caf0cd5c5ff61ee3ea408"
+name="issue-564-tls-$label"
+port_host=18883
+
+rm -rf "$run"
+mkdir -p "$run/data/trust/current" "$run/tls" "$run/ca"
+cd "$run"
+touch ca/index.txt
+echo 1000 > ca/crlnumber
+cat > ca/ca.cnf <<'EOF'
+[ca]
+default_ca = test_ca
+[test_ca]
+database = ca/index.txt
+crlnumber = ca/crlnumber
+default_md = sha256
+default_crl_days = 1
+[ext_server]
+basicConstraints = critical,CA:false
+keyUsage = critical,digitalSignature
+extendedKeyUsage = serverAuth
+subjectAltName = DNS:localhost,IP:127.0.0.1
+[ext_client]
+basicConstraints = critical,CA:false
+keyUsage = critical,digitalSignature
+extendedKeyUsage = clientAuth
+EOF
+ec=(-newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes)
+openssl req -x509 "${ec[@]}" -keyout ca/ca.key -out ca/ca.pem -days 1 -subj "/CN=issue-564 test CA" \
+  -addext basicConstraints=critical,CA:true -addext keyUsage=critical,keyCertSign,cRLSign 2>/dev/null
+openssl req "${ec[@]}" -keyout tls/tls.key -out ca/server.csr -subj "/CN=localhost" 2>/dev/null
+openssl x509 -req -in ca/server.csr -CA ca/ca.pem -CAkey ca/ca.key -CAcreateserial -days 1 \
+  -extfile ca/ca.cnf -extensions ext_server -out tls/tls.crt 2>/dev/null
+openssl req "${ec[@]}" -keyout ca/client.key -out ca/client.csr -subj "/CN=gw-test-0001" 2>/dev/null
+openssl x509 -req -in ca/client.csr -CA ca/ca.pem -CAkey ca/ca.key -CAcreateserial -days 1 \
+  -extfile ca/ca.cnf -extensions ext_client -out ca/client.pem 2>/dev/null
+openssl ca -config ca/ca.cnf -gencrl -keyfile ca/ca.key -cert ca/ca.pem -out data/trust/current/crl.pem 2>/dev/null
+cp ca/ca.pem data/trust/current/ca.pem
+# Dynamic security file the accounts init container would write: default deny, no clients.
+cat > data/dynamic-security.json <<'EOF'
+{"defaultACLAccess":{"publishClientSend":false,"publishClientReceive":false,"subscribe":false,"unsubscribe":false},"clients":[],"groups":[],"roles":[]}
+EOF
+chmod -R u+rwX,go-rwx "$run"
+
+cleanup() {
+  podman rm --force --volumes "$name" >/dev/null 2>&1 || true
+  rm -rf "$run"
+}
+trap cleanup EXIT
+
+echo "== image: $image"
+echo "== config lines under test (from the rendered ConfigMap):"
+grep -nE '^(listener|tls_version|ciphers_tls1\.3|set_tcp_nodelay)' "$conf" || true
+
+# As in the chart: UID/GID 1883, read-only root, the config as a read-only file, the Secret's
+# directory read-only, a writable data volume and a tmpfs for the probe socket. keep-id maps this
+# user to 1883 so the container can read the throwaway files without loosening their modes.
+podman run -d --name "$name" \
+  --userns keep-id:uid=1883,gid=1883 --user 1883:1883 --read-only \
+  -p "127.0.0.1:$port_host:8883" \
+  -v "$conf:/mosquitto/config/mosquitto.conf:ro,Z" \
+  -v "$run/tls:/etc/trustiot/mqtt-broker-tls:ro,Z" \
+  -v "$run/data:/mosquitto/data:Z" \
+  --mount type=tmpfs,destination=/run/mosquitto \
+  "$image" /usr/sbin/mosquitto -c /mosquitto/config/mosquitto.conf >/dev/null
+
+for _ in $(seq 1 120); do
+  if podman logs "$name" 2>&1 | grep -q "mosquitto version .* running"; then break; fi
+  if [ "$(podman inspect -f '{{.State.Running}}' "$name")" != "true" ]; then
+    echo "broker exited:"; podman logs "$name" 2>&1; exit 1
+  fi
+  sleep 0.5
+done
+podman logs "$name" 2>&1 | grep -q "mosquitto version .* running" || { echo "broker never reported running"; podman logs "$name" 2>&1; exit 1; }
+
+failures=0
+handshake() {
+  local suites=$1 out rc=0
+  echo
+  echo "== client: openssl s_client -tls1_3 -ciphersuites $suites (client certificate CN=gw-test-0001)"
+  out=$(echo Q | openssl s_client -connect "127.0.0.1:$port_host" -tls1_3 -ciphersuites "$suites" \
+    -CAfile ca/ca.pem -cert ca/client.pem -key ca/client.key -servername localhost -verify_return_error \
+    -brief 2>&1) || rc=$?
+  grep -E '^(Protocol version|Ciphersuite|Verification|CONNECTION ESTABLISHED)' <<<"$out" || true
+  echo "openssl exit status: $rc"
+  # A handshake counts only when it completed with TLS 1.3, the server certificate verified, and
+  # the suite this run expects.
+  if [ "$rc" -eq 0 ] && grep -qx 'CONNECTION ESTABLISHED' <<<"$out" \
+    && grep -qx 'Protocol version: TLSv1.3' <<<"$out" && grep -qx 'Verification: OK' <<<"$out" \
+    && grep -qx "Ciphersuite: $expected" <<<"$out"; then
+    echo "RESULT: PASS (negotiated $expected)"
+  else
+    echo "RESULT: FAIL (expected TLSv1.3, verification OK and $expected); openssl output:"
+    echo "$out"
+    failures=$((failures + 1))
+  fi
+}
+# The gateway's order (ChaCha20 first), then a client that prefers AES: the server's order decides.
+handshake "TLS_CHACHA20_POLY1305_SHA256:TLS_AES_256_GCM_SHA384:TLS_AES_128_GCM_SHA256"
+handshake "TLS_AES_256_GCM_SHA384:TLS_AES_128_GCM_SHA256:TLS_CHACHA20_POLY1305_SHA256"
+
+echo
+echo "== broker log:"
+podman logs "$name" 2>&1
+echo
+echo "== handshakes failed: $failures"
+[ "$failures" -eq 0 ]

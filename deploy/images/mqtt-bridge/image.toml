@@ -1,0 +1,5 @@
+# The MQTT bridge (services/mqtt-bridge): relays each gateway's MQTT inside WebSocket to the
+# broker's gateway port as TCP, without terminating the gateway's TLS. Packed with
+# deploy/images/rust-binary.Containerfile.
+[rust]
+package = "mqtt-bridge"

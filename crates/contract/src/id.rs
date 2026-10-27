@@ -85,9 +85,31 @@ uuid_id!(
     EventId
 );
 uuid_id!(
+    /// A login session of the identity service (`identity.sessions`). It names the session but
+    /// is no credential: the session's cookie is, and only its hash is stored.
+    SessionId
+);
+uuid_id!(
+    /// One run of an agent on behalf of a user, such as one answer of the assistant's main agent
+    /// (Laysi/trustiot-v2#551); the identity service binds the run's delegation to it.
+    RunId
+);
+uuid_id!(
     /// A device model of a tenant (rebuild checklist C1), made by the assets service; unlike the
     /// model's name, which is unique per tenant only, it is unique across tenants.
     DeviceModelId
+);
+uuid_id!(
+    /// A device of a tenant (rebuild checklist C2, Laysi/trustiot-v2#100): one Modbus endpoint
+    /// a gateway polls, made by the assets service. Unique across tenants; telemetry and the
+    /// gateway configuration name the device by it (as text, `protocol::DeviceId`).
+    DeviceId
+);
+uuid_id!(
+    /// One binding of a gateway to a tenant (rebuild checklist D3, Laysi/trustiot-v2#101), made
+    /// by the assets service. A gateway gets a new one every time it is bound, so a binding and
+    /// its events always belong to one tenant.
+    GatewayBindingId
 );
 
 #[cfg(test)]

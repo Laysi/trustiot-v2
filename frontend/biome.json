@@ -9,6 +9,11 @@
     "indentWidth": 2,
     "lineWidth": 120
   },
+  "css": {
+    "parser": {
+      "tailwindDirectives": true
+    }
+  },
   "javascript": {
     "formatter": {
       "quoteStyle": "double",
@@ -31,11 +36,30 @@
         "noDangerouslySetInnerHtmlWithChildren": "error",
         "noGlobalEval": "error"
       },
+      "style": {
+        "noRestrictedImports": {
+          "level": "error",
+          "options": {
+            "patterns": [
+              {
+                "group": ["zod", "zod/**"],
+                "message": "Import `z` from src/lib/zod.ts, which sets zod's `jitless` mode first (the page's CSP forbids `new Function`). `zod/compile` compiles with `new Function`, so it is never used."
+              }
+            ]
+          }
+        }
+      },
       "suspicious": {
         "noConsole": { "level": "error", "options": { "allow": ["error", "warn"] } }
       }
     }
   },
+  "overrides": [
+    {
+      "includes": ["src/lib/zod.ts"],
+      "linter": { "rules": { "style": { "noRestrictedImports": "off" } } }
+    }
+  ],
   "assist": {
     "actions": {
       "source": {

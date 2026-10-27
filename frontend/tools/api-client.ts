@@ -23,7 +23,10 @@ const HEADER =
 /** The file's content for `spec` (a parsed OpenAPI document). */
 export async function render(spec: OpenAPI3): Promise<string> {
   // openapi-typescript resolves references in place; the copy keeps the caller's object intact.
-  const ast = await openapiTS(structuredClone(spec));
+  // `emptyObjectsUnknown`: an object schema without properties (the error bodies' `details`, for
+  // example `{"max": 40}`) becomes `Record<string, unknown>`, not `Record<string, never>`, which
+  // would say it can have no key at all and so could not be bound to a zod schema.
+  const ast = await openapiTS(structuredClone(spec), { emptyObjectsUnknown: true });
   return HEADER + astToString(ast);
 }
 

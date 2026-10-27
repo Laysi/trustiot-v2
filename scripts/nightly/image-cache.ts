@@ -9,6 +9,7 @@
 //   bun scripts/nightly/image-cache.ts key             prints key=<cache key of NIGHTLY_IMAGES> (for $GITHUB_OUTPUT)
 //   bun scripts/nightly/image-cache.ts key <image>     prints key=<cache key of one image>
 //   bun scripts/nightly/image-cache.ts complete <dir>  prints built=true when <dir> holds every tarball of NIGHTLY_IMAGES
+//                                                      and every program of NIGHTLY_PROGRAMS
 import { existsSync, mkdirSync, renameSync, rmSync } from "node:fs";
 import { join, resolve } from "node:path";
 
@@ -53,10 +54,29 @@ export const IMAGE_CACHE_VERSION = "v1";
 /**
  * The Rust images the nightly builds from the commit and deploys: the migration Job's
  * (Laysi/trustiot-v2#60), and the identity and assets services the smoke test calls through the
- * ingress (Laysi/trustiot-v2#65). They share one cache entry, since every Rust change reaches all
- * of them anyway (each key covers the whole workspace).
+ * ingress (Laysi/trustiot-v2#65), the AI gateway, which the smoke only starts: no provider key
+ * reaches CI (Laysi/trustiot-v2#536), the telemetry-query service, whose history API the smoke
+ * calls through the ingress and whose tenant account it looks up in ClickHouse
+ * (Laysi/trustiot-v2#539), the certs service, whose CA the smoke sets up with a test root
+ * (Laysi/trustiot-v2#517), and the AI assistant, which the smoke waits for until it is ready, that
+ * is logged in to Postgres as assistant_app (Laysi/trustiot-v2#592). They share one cache entry,
+ * since every Rust change reaches all of them anyway (each key covers the whole workspace).
  */
-export const NIGHTLY_IMAGES = ["migrate", "identity", "assets"] as const;
+export const NIGHTLY_IMAGES = ["migrate", "identity", "assets", "ai-gateway", "telemetry-query", "certs", "assistant"] as const;
+
+/**
+ * Programs the nightly runs on the runner itself, by the image whose package builds them. An
+ * image's build compiles every binary of its package (`--bins`), so these cost no extra compile;
+ * they are aarch64 static executables, which the arm64 runner runs as they are, and they go into
+ * the cache entry beside the tarballs, so a hit has them too. `certs-ca`, the offline root
+ * ceremony, makes and uses the run's test root CA (certs.ts); it never goes into an image.
+ */
+export const NIGHTLY_PROGRAMS: Readonly<Record<string, readonly string[]>> = { certs: ["certs-ca"] };
+
+/** The programs built with image `name` (NIGHTLY_PROGRAMS); none for most images. */
+export function programsOf(name: string): readonly string[] {
+  return NIGHTLY_PROGRAMS[name] ?? [];
+}
 
 const NAME = /^[a-z0-9][a-z0-9-]*$/;
 
@@ -114,12 +134,33 @@ export function imageCacheFile(dir: string, name: string): string {
   return join(dir, `${name}.tar`);
 }
 
+/** A program built with an image (NIGHTLY_PROGRAMS) in the cache directory. */
+export function programCacheFile(dir: string, program: string): string {
+  return join(dir, program);
+}
+
 /**
- * Whether `dir` holds the tarball of every image in `names`: nightly.yml saves the entry only
- * then, so a restored entry never lacks an image (a hit installs no build tools).
+ * Whether `dir` holds the tarball of every image in `names` and every program built with them:
+ * nightly.yml saves the entry only then, so a restored entry never lacks one (a hit installs no
+ * build tools).
  */
 export function cacheComplete(dir: string, names: readonly string[]): boolean {
-  return names.every((name) => existsSync(imageCacheFile(dir, name)));
+  return names.every(
+    (name) => existsSync(imageCacheFile(dir, name)) && programsOf(name).every((program) => existsSync(programCacheFile(dir, program))),
+  );
+}
+
+/**
+ * Says that the cached `image`, or a program cached with it, cannot be used and is built instead:
+ * in the run log and, in CI, as a GitHub warning, since the bad entry stays under its key until the
+ * inputs change.
+ */
+export function reportUnusableCache(log: RunLog, image: string, problem: string): void {
+  const message =
+    `the cached ${image} cannot be used (${problem}); building it instead. Delete the Actions cache entry nightly-images-… that holds it ` +
+    "(the repository's Actions caches page, or `gh cache delete <key>` with the key the workflow printed), or every run until the inputs change builds again";
+  log.line(message);
+  if (process.env.GITHUB_ACTIONS === "true") console.log(`::warning title=Nightly image cache::${message}`);
 }
 
 /** What became of the restored tarball. */
@@ -145,11 +186,7 @@ export async function loadCachedImage(
     return "missing";
   }
   const unusable = (problem: string): CachedImage => {
-    const message =
-      `the cached ${image} cannot be used (${problem}); building it instead. Delete the Actions cache entry nightly-images-… that holds it ` +
-      "(the repository's Actions caches page, or `gh cache delete <key>` with the key the workflow printed), or every run until the inputs change builds again";
-    log.line(message);
-    if (process.env.GITHUB_ACTIONS === "true") console.log(`::warning title=Nightly image cache::${message}`);
+    reportUnusableCache(log, image, problem);
     return "unusable";
   };
   const reason = (error: unknown) => (error instanceof Error ? error.message : String(error)).split("\n")[0]!;

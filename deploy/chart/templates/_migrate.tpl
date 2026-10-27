@@ -90,7 +90,7 @@ and nothing without a platform role is.
 Returns a YAML list; use with fromYamlArray.
 */}}
 {{- define "trustiot.migrate.platformLogins" -}}
-{{- list "assets" "identity" "telemetry-query" | toYaml -}}
+{{- list "assets" "certs" "identity" "telemetry-query" | toYaml -}}
 {{- end -}}
 
 {{/*
@@ -162,8 +162,10 @@ ClickHouse's admin password Secret while the chart generates that password
 identity service's signing keys Secret while the identity service is enabled
 ("trustiot.identity.keys"), which the identity pod's init container fills, then the certs
 service's issuing CA keys Secret while the certs service is enabled ("trustiot.certs.ca"), which
-the certs pod's init container fills, then the MQTT broker's accounts Secret while the broker is
-enabled ("trustiot.mqttBroker.accountsSecret"), which the broker pod's init container fills.
+the certs pod's init container fills, then, while the MQTT broker is enabled, its accounts Secret
+("trustiot.mqttBroker.accountsSecret"), which the broker pod's init container fills, and its
+server certificate Secret ("trustiot.mqttBroker.tlsSecret"), which the broker's certificate
+CronJob fills (templates/mqtt-broker-certificate.yaml).
 templates/passwords.yaml declares one per entry. Returns a YAML list; use with fromYamlArray.
 */}}
 {{- define "trustiot.filledSecretObjects" -}}
@@ -182,6 +184,7 @@ templates/passwords.yaml declares one per entry. Returns a YAML list; use with f
 {{- end -}}
 {{- if include "trustiot.mqttBroker.enabled" . -}}
 {{- $objects = append $objects (dict "name" (include "trustiot.mqttBroker.accountsSecret" .) "component" "mqtt-broker") -}}
+{{- $objects = append $objects (dict "name" (include "trustiot.mqttBroker.tlsSecret" .) "component" "mqtt-broker") -}}
 {{- end -}}
 {{- toYaml $objects -}}
 {{- end -}}
@@ -282,22 +285,7 @@ Returns a YAML list; use with fromYamlArray.
 */}}
 {{- define "trustiot.migrate.env" -}}
 {{- $v := .Values -}}
-{{- $env := list -}}
-{{- $postgresCa := include "trustiot.postgres.caSecret" . | fromYaml -}}
-{{- if $postgresCa.name -}}
-{{- $env = append $env (dict "name" "TRUSTIOT_POSTGRES_CA_FILE" "value" "/etc/trustiot/postgres-ca/ca.crt") -}}
-{{- end -}}
-{{- if eq $v.postgres.mode "bundled" -}}
-{{- /* The database owner; CloudNativePG generates its password into <cluster>-app. */ -}}
-{{- $app := printf "%s-app" (include "trustiot.postgres.clusterName" .) -}}
-{{- $env = append $env (dict "name" "TRUSTIOT__POSTGRES__USERNAME" "valueFrom" (dict "secretKeyRef" (dict "name" $app "key" "username"))) -}}
-{{- $env = append $env (dict "name" "TRUSTIOT__POSTGRES__PASSWORD" "valueFrom" (dict "secretKeyRef" (dict "name" $app "key" "password"))) -}}
-{{- else -}}
-{{- with $v.postgres.external.migrationSecret -}}
-{{- $env = append $env (dict "name" "TRUSTIOT__POSTGRES__USERNAME" "valueFrom" (dict "secretKeyRef" (dict "name" .name "key" .usernameKey))) -}}
-{{- $env = append $env (dict "name" "TRUSTIOT__POSTGRES__PASSWORD" "valueFrom" (dict "secretKeyRef" (dict "name" .name "key" .passwordKey))) -}}
-{{- end -}}
-{{- end -}}
+{{- $env := include "trustiot.migrate.postgresEnv" . | fromYamlArray -}}
 {{- if eq $v.clickhouse.mode "bundled" -}}
 {{- $admin := include "trustiot.clickhouse.adminPassword" . | fromYaml -}}
 {{- $env = append $env (dict "name" "TRUSTIOT__CLICKHOUSE__USERNAME" "value" $v.clickhouse.bundled.adminUser) -}}
@@ -316,6 +304,44 @@ replace (tools/migrate/src/clickhouse_admin.rs). The key is the account. */ -}}
 {{- $env = append $env (dict "name" "TRUSTIOT__CLICKHOUSE__PASSWORD" "valueFrom" (dict "secretKeyRef" (dict "name" .name "key" .passwordKey))) -}}
 {{- end -}}
 {{- end -}}
+{{- include "trustiot.migrate.apiEnv" (dict "root" . "env" $env) -}}
+{{- end -}}
+
+{{/*
+The Postgres part of the Job's env: the CA file and the migration role's credentials, from
+Secrets only. Shared with the platform administrator bootstrap (templates/platform-admin-bootstrap.yaml),
+which connects exactly as the Job does. Returns a YAML list; use with fromYamlArray.
+*/}}
+{{- define "trustiot.migrate.postgresEnv" -}}
+{{- $v := .Values -}}
+{{- $env := list -}}
+{{- $postgresCa := include "trustiot.postgres.caSecret" . | fromYaml -}}
+{{- if $postgresCa.name -}}
+{{- $env = append $env (dict "name" "TRUSTIOT_POSTGRES_CA_FILE" "value" "/etc/trustiot/postgres-ca/ca.crt") -}}
+{{- end -}}
+{{- if eq $v.postgres.mode "bundled" -}}
+{{- /* The database owner; CloudNativePG generates its password into <cluster>-app. */ -}}
+{{- $app := printf "%s-app" (include "trustiot.postgres.clusterName" .) -}}
+{{- $env = append $env (dict "name" "TRUSTIOT__POSTGRES__USERNAME" "valueFrom" (dict "secretKeyRef" (dict "name" $app "key" "username"))) -}}
+{{- $env = append $env (dict "name" "TRUSTIOT__POSTGRES__PASSWORD" "valueFrom" (dict "secretKeyRef" (dict "name" $app "key" "password"))) -}}
+{{- else -}}
+{{- with $v.postgres.external.migrationSecret -}}
+{{- $env = append $env (dict "name" "TRUSTIOT__POSTGRES__USERNAME" "valueFrom" (dict "secretKeyRef" (dict "name" .name "key" .usernameKey))) -}}
+{{- $env = append $env (dict "name" "TRUSTIOT__POSTGRES__PASSWORD" "valueFrom" (dict "secretKeyRef" (dict "name" .name "key" .passwordKey))) -}}
+{{- end -}}
+{{- end -}}
+{{- toYaml $env -}}
+{{- end -}}
+
+{{/*
+The rest of the Job's env after the databases' credentials: how it reaches the Secrets it fills,
+and the waits. Argument: dict "root" $ "env" <the env so far>. Returns the whole env as a YAML
+list.
+*/}}
+{{- define "trustiot.migrate.apiEnv" -}}
+{{- $env := .env -}}
+{{- with .root -}}
+{{- $v := .Values -}}
 {{- /* The password Secrets the Job fills, as key=Secret pairs, and how it reaches them and the
 bundled ClickHouse's generated admin Secret: the Kubernetes API with its own projected token
 ("trustiot.migrate.kubeApiVolume"), whose Role in migrate.yaml allows get and patch on exactly the
@@ -346,6 +372,7 @@ passwords. */ -}}
 {{- end -}}
 {{- $env = append $env (dict "name" "TRUSTIOT__WAIT__DATABASES" "value" $v.migrate.wait.databases) -}}
 {{- $env = append $env (dict "name" "TRUSTIOT__WAIT__LOCK" "value" $v.migrate.wait.lock) -}}
+{{- end -}}
 {{- toYaml $env -}}
 {{- end -}}
 

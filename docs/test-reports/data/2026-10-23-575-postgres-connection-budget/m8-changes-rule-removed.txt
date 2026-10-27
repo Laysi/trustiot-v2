@@ -1,0 +1,44 @@
+mutation: m8-changes-rule-removed
+file: scripts/ci/changes.ts
+- "deploy/chart/templates/_postgres.tpl",
++ (removed)
+command: bun test scripts/ci/changes.test.ts
+exit status: 1
+
+bun test v1.4.2 (744846f84)
+::notice title=changes::Path rules not compared, they run every job: the `workflow_dispatch` event is not compared by path
+rust: runs (the `workflow_dispatch` event is not compared by path)
+cargo-deny: runs (the `workflow_dispatch` event is not compared by path)
+helm: runs (the `workflow_dispatch` event is not compared by path)
+host: runs (the `workflow_dispatch` event is not compared by path)
+postgres-image: runs (the `workflow_dispatch` event is not compared by path)
+frontend: runs (the `workflow_dispatch` event is not compared by path)
+
+scripts/ci/changes.test.ts:
+496 |           if (!affectsRust(path)) uncovered.push(`${where}: "${match[1]}"`);
+497 |         }
+498 |       }
+499 |     }
+500 |     expect(checked).toBeGreaterThan(5);
+501 |     expect(uncovered).toEqual([]);
+                            ^
+error: expect(received).toEqual(expected)
+
+- []
++ [
++   "crates/testkit/src/chart.rs: "deploy/chart/templates/_postgres.tpl"",
++ ]
+
+- Expected  - 1
++ Received  + 3
+
+(fail) guards: files the jobs read are covered > every repository path a Rust source names runs rust [274.08ms]
+usage: bun scripts/ci/changes.ts [--explain <commit on main>]
+usage: bun scripts/ci/changes.ts [--explain <commit on main>]
+usage: bun scripts/ci/changes.ts [--explain <commit on main>]
+usage: bun scripts/ci/changes.ts [--explain <commit on main>]
+
+ 281 pass
+ 1 fail
+ 837 expect() calls
+Ran 282 tests across 1 file. [33.42s]

@@ -1,0 +1,107 @@
+# CI=1 cargo test --locked -p assistant -p migrate -p testkit --no-fail-fast -- --nocapture
+# The assistant part, whole (the panic in tests/tools.rs is a tool the test makes fail on purpose).
+
+     Running unittests src/lib.rs (target/debug/deps/assistant-f9e210102e67c9d7)
+
+running 18 tests
+test budget::tests::large_budgets_do_not_overflow ... ok
+test budget::tests::every_processed_token_counts_and_the_thresholds_are_inclusive ... ok
+test config::tests::role_names_follow_the_gateway ... ok
+test config::tests::the_defaults_are_valid_and_limits_are_enforced ... ok
+test config::tests::gateway_urls_are_plain_http_origins ... ok
+test model::anthropic::tests::an_empty_refusal_has_no_message_to_keep ... ok
+test model::anthropic::tests::a_missing_usage_is_estimated_not_zero ... ok
+test model::anthropic::tests::only_identifier_error_types_are_kept ... ok
+test prompt::tests::an_empty_tenant_context_stays_empty ... ok
+test prompt::tests::the_tenant_context_cannot_close_its_tags ... ok
+test model::anthropic::tests::statuses_map_to_kinds ... ok
+test model::anthropic::tests::the_context_is_what_the_answering_attempt_counted ... ok
+test prompt::tests::the_tenant_context_is_wrapped_as_data ... ok
+test store::tests::a_message_reads_back_only_as_its_exact_bytes ... ok
+test store::tests::text_with_u0000_is_refused_up_front ... ok
+test store::tests::tool_definitions_read_back_as_the_same_json ... ok
+test model::anthropic::tests::messages_are_estimated_high_and_images_by_count ... ok
+test store::tests::append_refuses_a_conversation_of_another_owner_or_preamble ... ok
+
+test result: ok. 18 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.08s
+
+     Running tests/agent.rs (target/debug/deps/agent-c19776a89302dca3)
+
+running 12 tests
+test an_unreachable_gateway_is_unavailable ... ok
+test a_question_whose_first_call_does_not_fit_is_not_sent ... ok
+test a_refusal_is_not_kept_and_the_conversation_goes_on ... ok
+test a_call_that_would_cross_the_budget_is_not_sent ... ok
+test tool_calls_past_the_budget_are_not_run ... ok
+test two_users_asking_at_once_do_not_wait_for_each_other ... ok
+test gateway_errors_reach_the_user_without_their_text ... ok
+test later_requests_resend_the_history_byte_for_byte ... ok
+test every_step_is_logged_with_its_duration ... ok
+test the_agent_winds_down_near_the_budget_and_answers ... ok
+test a_long_analysis_runs_without_a_step_limit ... ok
+test a_model_call_that_times_out_ends_with_a_generic_error ... ok
+
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.00s
+
+     Running tests/cross_tenant.rs (target/debug/deps/cross_tenant-c96a431d03fe0492)
+
+running 1 test
+result | subject | probe | outcome
+pass | assistant.conversations | coverage | declared table
+pass | assistant.messages | coverage | declared table
+pass | assistant.trustiot_migrate_applied | coverage | exempt table: the migration Job's record of the files applied in this schema (crates/service-kit/sql/migration-records.sql): file names and SHA-256 hashes, no tenant data; the service role only reads it, for its readiness check
+pass | api | coverage | no HTTP API: no HTTP API yet: the chat API is Laysi/trustiot-v2#146, which declares its endpoints in this test
+pass | assistant.conversations | seed | 2 rows per tenant
+pass | assistant.messages | seed | 2 rows per tenant
+pass | postgres | session as tenant A | the kit accepts the service role's session
+pass | assistant.conversations | read as tenant A | 4 rows visible, all own, none of tenant B
+pass | assistant.conversations | read without a tenant | no row visible
+pass | assistant.conversations | update own rows as tenant A | refused (<thread>)
+pass | assistant.conversations | move own rows into tenant B | refused (<thread>)
+pass | assistant.conversations | insert into tenant B | refused (<thread>)
+pass | assistant.messages | read as tenant A | 2 rows visible, all own, none of tenant B
+pass | assistant.messages | read without a tenant | no row visible
+pass | assistant.messages | update own rows as tenant A | refused (<thread>)
+pass | assistant.messages | move own rows into tenant B | refused (<thread>)
+pass | assistant.messages | insert into tenant B | refused (<thread>)
+pass | postgres | session as tenant B | the kit accepts the service role's session
+pass | assistant.conversations | read as tenant B | 4 rows visible, all own, none of tenant A
+pass | assistant.conversations | update own rows as tenant B | refused (<thread>)
+pass | assistant.conversations | move own rows into tenant A | refused (<thread>)
+pass | assistant.conversations | insert into tenant A | refused (<thread>)
+pass | assistant.messages | read as tenant B | 2 rows visible, all own, none of tenant A
+pass | assistant.messages | update own rows as tenant B | refused (<thread>)
+pass | assistant.messages | move own rows into tenant A | refused (<thread>)
+pass | assistant.messages | insert into tenant A | refused (<thread>)
+26 probes, 0 failed
+test tenants_are_isolated ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.64s
+
+     Running tests/history_store.rs (target/debug/deps/history_store-edff3843ce94eb36)
+
+running 5 tests
+test a_stored_conversation_reads_back_byte_for_byte_and_continues ... ok
+test other_tenants_and_other_users_get_nothing ... ok
+test appending_is_idempotent_and_never_overwrites ... ok
+test a_corrupt_history_fails_the_load ... ok
+test the_service_role_cannot_change_or_remove_stored_history ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 7.13s
+
+     Running tests/tools.rs (target/debug/deps/tools-a2300370f53dd428)
+
+running 7 tests
+
+thread 'failures_stay_in_their_call_and_tell_the_model_what_to_do' (<thread>) panicked at services/assistant/tests/tools.rs:228:32:
+internal detail 01a1681f-3dad-7090-bb14-00180bea5d2b
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test the_tool_set_follows_the_rules ... ok
+test tools_get_the_principal_and_the_delegation_not_the_input ... ok
+test calls_past_the_per_step_limit_are_not_run ... ok
+test results_over_the_limits_become_a_request_to_narrow ... ok
+test calls_run_concurrently_and_results_keep_the_call_order ... ok
+test tool_result_images_reach_the_model ... ok
+test failures_stay_in_their_call_and_tell_the_model_what_to_do ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.00s

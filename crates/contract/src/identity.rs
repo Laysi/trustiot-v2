@@ -10,7 +10,7 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
-use crate::id::{TenantId, UserId};
+use crate::id::{SessionId, TenantId, UserId};
 use crate::service::ServiceName;
 
 /// The request header that carries the signed internal identity token to a service. The entry
@@ -50,6 +50,13 @@ pub struct InternalClaims {
     /// service the request was routed to (Laysi/trustiot-v2#106).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub act: Option<Actor>,
+    /// The session the ingress gateway's request came with. Only the tokens the ext_authz check
+    /// signs carry it (never an exchanged token), so the identity service can bind an agent run's
+    /// delegation to that session and refuse the delegation once the session ends
+    /// (Laysi/trustiot-v2#551). It names the session and is no credential; other services
+    /// ignore it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sid: Option<SessionId>,
 }
 
 /// The `act` claim of an exchanged token: who acts for the user.
@@ -182,6 +189,7 @@ mod tests {
             }),
             platform_admin: false,
             act: None,
+            sid: None,
         }
     }
 
@@ -215,6 +223,33 @@ mod tests {
         let parsed: InternalClaims = serde_json::from_value(value).expect("deserialize");
         assert!(!parsed.platform_admin);
         assert_eq!(parsed.tenant_id(), claims().tenant_id());
+    }
+
+    #[test]
+    fn the_session_claim_round_trips_and_is_omitted_when_absent() {
+        let mut with_session = claims();
+        let session: SessionId = "01928f6e-7a3c-7d4e-8f00-00000000005e"
+            .parse()
+            .expect("session id");
+        with_session.sid = Some(session);
+        let value = serde_json::to_value(&with_session).expect("serialize");
+        assert_eq!(value["sid"], json!("01928f6e-7a3c-7d4e-8f00-00000000005e"));
+        assert_eq!(
+            serde_json::from_value::<InternalClaims>(value).expect("deserialize"),
+            with_session
+        );
+        // Without a session (an exchanged token, or one from an identity service before
+        // Laysi/trustiot-v2#551) the member is absent, and `null` reads as absent.
+        let value = serde_json::to_value(claims()).expect("serialize");
+        assert!(value.get("sid").is_none(), "{value}");
+        let mut explicit_null = value;
+        explicit_null["sid"] = json!(null);
+        assert_eq!(
+            serde_json::from_value::<InternalClaims>(explicit_null)
+                .expect("deserialize")
+                .sid,
+            None
+        );
     }
 
     #[test]

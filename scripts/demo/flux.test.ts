@@ -609,13 +609,17 @@ describe("requiredSecrets", () => {
   test("a service that requests a credential needs its Secret; optional values and disabled services do not", () => {
     const values = {
       smtp: { credentialsSecret: { name: "trustiot-smtp" } },
-      ai: { chat: { apiKeySecret: { name: "trustiot-anthropic" } } },
-      services: { identity: { enabled: true, credentials: ["smtp"] }, assistant: { enabled: false, credentials: ["ai"] } },
+      ai: { providers: { anthropic: { apiKeySecret: { name: "trustiot-anthropic" } } } },
+      services: { identity: { enabled: true, credentials: ["smtp"] }, "ai-gateway": { enabled: false, credentials: ["ai"] } },
     };
     const release = { spec: { valuesFrom: [{ kind: "Secret", name: "optional-one", optional: true }, { kind: "ConfigMap", name: "c" }] } };
     const { secrets, problems } = requiredSecrets({}, release, values);
     expect(problems).toEqual([]);
     expect(Object.keys(secrets)).toEqual(["trustiot-smtp"]);
+    // The AI gateway, once the demo values turn it on (deploy/flux/README.md, 「展示叢集」), needs the
+    // Anthropic key's Secret.
+    const gatewayOn = { ...values, services: { ...values.services, "ai-gateway": { enabled: true, credentials: ["ai"] } } };
+    expect(Object.keys(requiredSecrets({}, release, gatewayOn).secrets)).toEqual(["trustiot-smtp", "trustiot-anthropic"]);
     expect(requiredSecrets({}, {}, { services: { x: { enabled: true, credentials: ["unknown"] } } }).problems[0]).toContain("does not know");
   });
 });

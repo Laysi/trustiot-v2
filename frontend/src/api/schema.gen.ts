@@ -79,6 +79,100 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/assets/v1/devices": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The tenant's devices. */
+        get: operations["listDevices"];
+        put?: never;
+        /**
+         * Creates a device on a gateway bound to the caller's tenant; `assets.device_created` is
+         *     written in the same transaction.
+         */
+        post: operations["createDevice"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/assets/v1/devices/{device_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** One device. */
+        get: operations["getDevice"];
+        /**
+         * Replaces a device's connection settings and poll interval; `assets.device_updated` is
+         *     written in the same transaction.
+         */
+        put: operations["updateDevice"];
+        post?: never;
+        /** Deletes a device; `assets.device_deleted` is written in the same transaction. */
+        delete: operations["deleteDevice"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/assets/v1/platform/gateways": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The device pool with each gateway's current binding. Platform administrators only. */
+        get: operations["listPoolGateways"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/assets/v1/platform/gateways/{hardware_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** One gateway of the device pool with its current binding. Platform administrators only. */
+        get: operations["getPoolGateway"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/assets/v1/platform/gateways/{hardware_id}/binding": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Binds a gateway of the device pool to a tenant; idempotent. Platform administrators only. */
+        put: operations["bindGateway"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/assets/v1/tenant": {
         parameters: {
             query?: never;
@@ -90,6 +184,23 @@ export interface paths {
         get: operations["getAssetsTenant"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/certs/v1/gateway-registrations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Registers a gateway at the factory and returns its initial certificate. */
+        post: operations["registerGateway"];
         delete?: never;
         options?: never;
         head?: never;
@@ -188,6 +299,44 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/identity/v1/platform/tenants/{tenant_id}/members": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Sets a user's role in a tenant, creating the membership when the user has none there.
+         *     Platform administrators only, in their own request.
+         */
+        put: operations["setPlatformTenantMemberRole"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/identity/v1/preferences": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Reads the user's own preferences. */
+        get: operations["getPreferences"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Changes the user's own preferences: the fields given, each from its allow list. */
+        patch: operations["updatePreferences"];
+        trace?: never;
+    };
     "/api/identity/v1/sessions": {
         parameters: {
             query?: never;
@@ -212,11 +361,35 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get?: never;
+        /**
+         * Reads the current session: the user, the tenant it acts in with the user's role there, and
+         *     the user's tenants.
+         */
+        get: operations["getCurrentSession"];
         put?: never;
         post?: never;
         /** Logs out: revokes the session of the request's cookie. */
         delete: operations["logOut"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/identity/v1/sessions/current/tenant": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Switches the session to another of the user's tenants; its next request acts there with the
+         *     user's role in it.
+         */
+        put: operations["switchTenant"];
+        post?: never;
+        delete?: never;
         options?: never;
         head?: never;
         patch?: never;
@@ -276,6 +449,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/telemetry/v1/statistics": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * The statistics of each series over a range, in buckets of the requested time zone, from the
+         *     one-minute or one-hour aggregates.
+         */
+        post: operations["queryTelemetryStatistics"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/telemetry/v1/usage": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * The usage of each cumulative series over a range, in buckets of the requested time zone, from
+         *     the one-minute or one-hour aggregates, after a check that the series behaves like a counter.
+         */
+        post: operations["queryTelemetryUsage"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/auth/login": {
         parameters: {
             query?: never;
@@ -307,6 +520,17 @@ export interface components {
             /** @description The tenant's ID. */
             tenant_id: components["schemas"]["TenantId"];
         };
+        /** @description The body of a binding. */
+        BindGateway: {
+            /** @description The tenant to bind the gateway to. */
+            tenant_id: components["schemas"]["TenantId"];
+        };
+        /**
+         * @description A bucket length of the semantic API: whole local minutes, hours, days, Monday weeks and
+         *     months of the requested time zone, or the whole range.
+         * @enum {string}
+         */
+        BucketInterval: "1m" | "5m" | "15m" | "1h" | "1d" | "1w" | "1mo" | "total";
         /** @description The answer to `send_code`, the same whether or not a user has the address. */
         CodeSent: {
             /**
@@ -325,6 +549,37 @@ export interface components {
              */
             resend_after_secs: number;
         };
+        /** @description The body of `POST /api/assets/v1/devices`. Unknown fields are refused. */
+        CreateDevice: {
+            /** @description The gateway that polls it: one currently bound to the caller's tenant. */
+            hardware_id: string;
+            /** @description See [`Device::host`]. */
+            host: string;
+            /** @description One of the caller's tenant's device models. */
+            model_id: components["schemas"]["DeviceModelId"];
+            /** @description The new device's name, unique in the tenant (see [`Device::name`]). */
+            name: string;
+            /**
+             * Format: int32
+             * @description See [`Device::poll_interval_ms`]; 60000 when absent.
+             */
+            poll_interval_ms?: number | null;
+            /**
+             * Format: int32
+             * @description See [`Device::port`].
+             */
+            port: number;
+            /**
+             * @description `modbus_tcp`: Modbus TCP to the device. `rtu_over_tcp`: RTU frames over TCP to an RS485 converter; the devices behind one converter (the same host and port on one gateway) share its connection, so they all use this transport and each has its own unit ID.
+             * @enum {string}
+             */
+            transport: "modbus_tcp" | "rtu_over_tcp";
+            /**
+             * Format: int32
+             * @description See [`Device::unit_id`]; 1 when absent.
+             */
+            unit_id?: number | null;
+        };
         /** @description The body of `POST /api/assets/v1/device-models`. Unknown fields are refused. */
         CreateDeviceModel: {
             /** @description The new model's name, unique in the tenant (see [`DeviceModel::name`]). */
@@ -339,6 +594,127 @@ export interface components {
              *     format characters or line and paragraph separators.
              */
             name: string;
+        };
+        /** @description The cumulative check over the window read around the range. */
+        CumulativeCheck: {
+            /** Format: int64 */
+            comparisons: number;
+            /**
+             * Format: int64
+             * @description How often the value fell, rose, and was compared with the one before.
+             */
+            drops: number;
+            /**
+             * Format: date-time
+             * @description The window the check read.
+             */
+            from: string;
+            /** Format: int64 */
+            rises: number;
+            /** Format: date-time */
+            to: string;
+            verdict: components["schemas"]["Verdict"];
+        };
+        /** @description The session of the request. */
+        CurrentSession: {
+            active_tenant: components["schemas"]["TenantMembership"] | null;
+            /** @description The address the user logs in with; `null` for a user who cannot log in by email. */
+            email: string | null;
+            /** @description Whether the user is a platform administrator (A2), independent of any tenant. */
+            platform_admin: boolean;
+            /**
+             * @description Every tenant the user belongs to, by name; switch with
+             *     `PUT /api/identity/v1/sessions/current/tenant`.
+             */
+            tenants: components["schemas"]["TenantMembership"][];
+            /** @description The signed-in user. */
+            user_id: components["schemas"]["UserId"];
+        };
+        /**
+         * @description Whether a series had readings in the range.
+         * @enum {string}
+         */
+        DataStatus: "ok" | "no_data";
+        /** @description A device: a Modbus endpoint one of the tenant's gateways polls with one of its models. */
+        Device: {
+            /**
+             * Format: date-time
+             * @description When the device was created, by the database clock.
+             */
+            created_at: string;
+            /** @description The device's ID; telemetry names the device by it. */
+            device_id: components["schemas"]["DeviceId"];
+            /**
+             * @description The hardware ID of the gateway that polls the device, bound to the tenant; never
+             *     changed after creation.
+             * @example tg-0001
+             */
+            hardware_id: string;
+            /**
+             * @description The IP address or DNS name of the device, or of the converter it is behind; never the
+             *     gateway itself (a loopback address or `localhost`).
+             * @example 192.0.2.10
+             */
+            host: string;
+            /** @description The device model the gateway reads the device with; never changed after creation. */
+            model_id: components["schemas"]["DeviceModelId"];
+            /**
+             * @description The name, unique in the tenant, never changed after creation: 1-40 lowercase letters or
+             *     digits in groups joined by single hyphens, starting with a letter (the naming rule of
+             *     models).
+             * @example line-1-meter
+             */
+            name: string;
+            /**
+             * Format: int32
+             * @description How often the gateway polls the device, in milliseconds: 1000 (1 s) to 86400000
+             *     (1 day); 60000 (1 minute) when a request leaves it out. A plan may set a longer minimum.
+             * @example 60000
+             */
+            poll_interval_ms: number;
+            /**
+             * Format: int32
+             * @description The TCP port. Converters use many ports (502, 4196, 8886, 8899, ...); no default.
+             * @example 502
+             */
+            port: number;
+            /**
+             * Format: int64
+             * @description 1 at creation, one more with every update; send it back with an update to refuse
+             *     overwriting someone else's change.
+             */
+            revision: number;
+            /**
+             * @description `modbus_tcp`: Modbus TCP to the device. `rtu_over_tcp`: RTU frames over TCP to an RS485 converter; the devices behind one converter (the same host and port on one gateway) share its connection, so they all use this transport and each has its own unit ID.
+             * @enum {string}
+             */
+            transport: "modbus_tcp" | "rtu_over_tcp";
+            /**
+             * Format: int32
+             * @description The Modbus unit ID (station number): 0-255 for Modbus TCP, 1-247 for RTU over TCP; 1
+             *     when a request leaves it out.
+             * @example 1
+             */
+            unit_id: number;
+            /**
+             * Format: date-time
+             * @description When the device was last changed.
+             */
+            updated_at: string;
+        };
+        /**
+         * Format: uuid
+         * @description A device of a tenant (rebuild checklist C2, Laysi/trustiot-v2#100): one Modbus endpoint
+         *     a gateway polls, made by the assets service. Unique across tenants; telemetry and the
+         *     gateway configuration name the device by it (as text, `protocol::DeviceId`).
+         *
+         *     Serialized as a lowercase hyphenated UUID string.
+         */
+        DeviceId: string;
+        /** @description The tenant's devices, by name. */
+        DeviceList: {
+            /** @description Every device of the tenant. */
+            devices: components["schemas"]["Device"][];
         };
         /** @description A device model. */
         DeviceModel: {
@@ -494,7 +870,7 @@ export interface components {
              * @description Values the translated message refers to, for example `{"max": 40}`. Never user-facing
              *     text, internal error text, or personal data. Absent when empty.
              */
-            details?: Record<string, never>;
+            details?: Record<string, unknown>;
             /** @description The request fields that were rejected. Absent when empty. */
             field_errors?: components["schemas"]["FieldError"][];
             /** @description The message the client shows, translated by the client. */
@@ -523,7 +899,7 @@ export interface components {
         /** @description A rejected field of the request body. */
         FieldError: {
             /** @description Values the message refers to. Absent when empty. */
-            details?: Record<string, never>;
+            details?: Record<string, unknown>;
             /**
              * @description JSON Pointer (RFC 6901) to the rejected value in the request body, for example
              *     `/points/3/address`; an empty string means the whole body.
@@ -531,6 +907,98 @@ export interface components {
             field: string;
             /** @description The message the client shows next to the field. */
             message_key: components["schemas"]["MessageKey"];
+        };
+        /** @description A spacing between two readings of at least [`GAP_FACTOR`] times the usual one. */
+        Gap: {
+            /**
+             * Format: date-time
+             * @description The reading before the gap and the one after it.
+             */
+            from: string;
+            /** Format: date-time */
+            to: string;
+        };
+        /** @description A gateway's binding to a tenant. */
+        GatewayBinding: {
+            /** @description The binding: a new one every time the gateway is bound. */
+            binding_id: components["schemas"]["GatewayBindingId"];
+            /**
+             * Format: date-time
+             * @description When it was bound, by the database clock.
+             */
+            bound_at: string;
+            /**
+             * @description The gateway's hardware ID.
+             * @example tg-0001
+             */
+            hardware_id: string;
+            /** @description The tenant the gateway is bound to. */
+            tenant_id: components["schemas"]["TenantId"];
+        };
+        /**
+         * Format: uuid
+         * @description One binding of a gateway to a tenant (rebuild checklist D3, Laysi/trustiot-v2#101), made
+         *     by the assets service. A gateway gets a new one every time it is bound, so a binding and
+         *     its events always belong to one tenant.
+         *
+         *     Serialized as a lowercase hyphenated UUID string.
+         */
+        GatewayBindingId: string;
+        /** @description A gateway's factory registration, as the service records it. */
+        GatewayRegistration: {
+            /** @description The issuing CA that signed the initial certificate: the SHA-256 of its public key. */
+            ca_key_id: string;
+            /**
+             * @description The initial certificate, PEM: the gateway's MQTT client certificate, subject
+             *     `CN=<hardware_id>`, extended key usage client authentication only.
+             */
+            certificate: string;
+            /**
+             * @description The initial certificate, then the issuing CA certificate that signed it (the loaded
+             *     issuing CA whose key id is `ca_key_id`), PEM: the chain the gateway presents as its MQTT
+             *     client certificate. The root is not in it. When that issuing CA is no longer loaded (a
+             *     repeat after rotation removed it, services/certs/README.md, "輪替" step 3), the chain is
+             *     the initial certificate alone.
+             */
+            certificate_chain: string;
+            /**
+             * @description The SHA-256 of the endorsement key (its DER SubjectPublicKeyInfo), 64 lower-case hex
+             *     digits.
+             */
+            endorsement_key_sha256: string;
+            /** @description The gateway's hardware ID. */
+            hardware_id: string;
+            /**
+             * Format: date-time
+             * @description When the initial certificate expires; the gateway renews it through the renewal endpoint
+             *     before then.
+             */
+            not_after: string;
+            /**
+             * Format: date-time
+             * @description When the initial certificate becomes valid.
+             */
+            not_before: string;
+            /**
+             * @description The SHA-256 of the registered public key (its DER SubjectPublicKeyInfo), 64 lower-case
+             *     hex digits.
+             */
+            public_key_sha256: string;
+            /**
+             * Format: date-time
+             * @description When it was registered.
+             */
+            registered_at: string;
+            /**
+             * @description The root CA certificate, PEM: the gateway's only trust anchor for the MQTT broker's
+             *     server certificate (services/certs/README.md, "閘道器對 broker 伺服器憑證的信任"). The
+             *     root CRL (Laysi/trustiot-v2#560) can join it here as a new field.
+             */
+            root_certificate: string;
+            /** @description The serial number of the initial certificate, lower-case hex. */
+            serial: string;
+            /** @description The name of the workstation that registered it. */
+            workstation: string;
         };
         /**
          * @description How readings are grouped: `raw` (no grouping) or a bucket length.
@@ -554,6 +1022,11 @@ export interface components {
              */
             workstation: string;
         };
+        /**
+         * @description A language the interface or AI answers may use.
+         * @enum {string}
+         */
+        Language: "auto" | "zh-TW" | "en";
         /** @description The latest value of each data point of a device that has a reading in the raw period. */
         Latest: {
             /**
@@ -654,10 +1127,104 @@ export interface components {
             step: "verify_code";
         };
         /**
+         * @description A role in a tenant, as the API takes and returns it: setting a member's role, and the tenants
+         *     of the current session.
+         * @enum {string}
+         */
+        MemberRole: "viewer" | "editor" | "admin";
+        /** @description A user's membership of a tenant. */
+        Membership: {
+            previous_role?: components["schemas"]["MemberRole"] | null;
+            /** @description The role now. */
+            role: components["schemas"]["MemberRole"];
+            /** @description The tenant. */
+            tenant_id: components["schemas"]["TenantId"];
+            /** @description The member. */
+            user_id: components["schemas"]["UserId"];
+        };
+        /**
          * @description Key of the translated message the client shows; never the message itself.
          * @example error.not_found
          */
         MessageKey: string;
+        /** @description A gateway of the device pool. */
+        PoolGateway: {
+            binding?: components["schemas"]["GatewayBinding"] | null;
+            /**
+             * @description The hardware ID: the common name of its certificates and its MQTT identity.
+             * @example tg-0001
+             */
+            hardware_id: string;
+            /**
+             * Format: date-time
+             * @description When the assets service put it in the pool.
+             */
+            pooled_at: string;
+            /**
+             * Format: date-time
+             * @description When the certs service registered it at the factory.
+             */
+            registered_at: string;
+            /** @description The production workstation that registered it. */
+            workstation: string;
+        };
+        /** @description A page of the device pool, by hardware ID (byte order). */
+        PoolGatewayList: {
+            /** @description The gateways. */
+            gateways: components["schemas"]["PoolGateway"][];
+            /** @description The `after` of the next page; `null` on the last one. */
+            next_after?: string | null;
+        };
+        /** @description A user's preferences. */
+        Preferences: {
+            /** @description The language AI answers are written in; `auto` answers in the language of the question. */
+            ai_language: components["schemas"]["Language"];
+            /** @description The interface's language; `auto` follows the browser. */
+            language: components["schemas"]["Language"];
+            /** @description The interface's colors. */
+            theme: components["schemas"]["Theme"];
+            /**
+             * @description An IANA time zone name such as `Asia/Taipei`, or `auto` to follow the browser.
+             * @example Asia/Taipei
+             */
+            time_zone: string;
+        };
+        /** @description The range an answer covers. */
+        QueryRange: {
+            /**
+             * Format: date-time
+             * @description The start of the queryable period of the table read, at the time of the request.
+             */
+            earliest: string;
+            /**
+             * @description Whether the range ends after the request's time (a period still running, such as
+             *     `today`): its last bucket is not complete.
+             */
+            ends_after_now: boolean;
+            /**
+             * Format: date-time
+             * @description The range read: `from` inclusive, `to` exclusive. `from` is later than requested when the
+             *     request started before the queryable period (`truncated`).
+             */
+            from: string;
+            interval: components["schemas"]["BucketInterval"];
+            /**
+             * Format: date-time
+             * @description When the request was answered.
+             */
+            queried_at: string;
+            /**
+             * @description The aggregate table read: one-minute or one-hour cells. A minimum's or maximum's time is
+             *     the start of its cell.
+             */
+            resolution: components["schemas"]["Resolution"];
+            /** Format: date-time */
+            to: string;
+            /** @description Whether `from` was moved to the start of the queryable period. */
+            truncated: boolean;
+            /** @description The time zone the buckets follow; every time in the answer has its offset. */
+            tz: string;
+        };
         /** @description One reading's value, as its type stored it. */
         Reading: {
             /** @enum {string} */
@@ -686,6 +1253,42 @@ export interface components {
             /** @description A text reading. */
             value: string;
         };
+        /**
+         * @description The body of `POST /api/certs/v1/gateway-registrations` (factory registration, rebuild
+         *     checklist D1, decision 12). Unknown fields are refused. The request carries the workstation's
+         *     signature in the `trustiot-workstation-*` headers; see the certs service's README
+         *     ("出廠登錄").
+         */
+        RegisterGateway: {
+            /**
+             * @description A PKCS #10 certificate signing request from the gateway's TPM, PEM (`-----BEGIN
+             *     CERTIFICATE REQUEST-----`), at most 4096 bytes as DER, signed with ecdsa-with-SHA256 by
+             *     the TPM's ECDSA P-256 key. Its public key is registered and never changes; everything else
+             *     in it is ignored.
+             */
+            certificate_request: string;
+            /**
+             * @description The public part of the TPM's endorsement key, PEM (`-----BEGIN PUBLIC KEY-----`, an X.509
+             *     SubjectPublicKeyInfo of at most 2048 bytes as DER): RSA of 2048 to 4096 bits, or ECDSA
+             *     P-256 or P-384. The workstation reads and checks it before it calls; the service records
+             *     it to recognise the TPM.
+             */
+            endorsement_key: string;
+            /**
+             * @description The gateway's hardware ID, which becomes its identity everywhere: the common name of its
+             *     certificates, its MQTT username and the gateway segment of its topics. 1-64 ASCII
+             *     letters, digits, `.`, `_` or `-`, starting with a letter or digit. A hardware ID is
+             *     registered once, and for now it stays taken after it is decommissioned; whether a
+             *     decommissioned hardware ID may be registered again is decided in Laysi/trustiot-v2#115.
+             * @example gw-0042
+             */
+            hardware_id: string;
+        };
+        /**
+         * @description The aggregate table a request reads.
+         * @enum {string}
+         */
+        Resolution: "1m" | "1h";
         /**
          * @description A reason a workstation certificate can be revoked for: the RFC 5280 CRLReason codes that
          *     apply to an end entity, without `certificateHold` (a revocation here is final).
@@ -730,6 +1333,19 @@ export interface components {
             /** @description The time zone the buckets follow. */
             tz: string;
         };
+        /** @description One data point of one device. */
+        SeriesKey: {
+            /**
+             * Format: uuid
+             * @description The device.
+             */
+            device_id: string;
+            /**
+             * @description The data point key: 1 to 128 letters, digits, `.`, `_` or `-`, starting with a letter or
+             *     digit.
+             */
+            point: string;
+        };
         /** @description One bucket of a series (for `raw`, one reading). */
         SeriesPoint: {
             /**
@@ -761,6 +1377,183 @@ export interface components {
              */
             time: string;
         };
+        /**
+         * @description A semantic request: which series, which range in which time zone, and the bucket length. The
+         *     tenant is the caller's; nothing else can name one.
+         */
+        SeriesQuery: {
+            /**
+             * Format: date-time
+             * @description The range's start, RFC 3339 with an offset (inclusive), rounded down to the minute.
+             */
+            from?: string | null;
+            /** @description The bucket length; `total` (the default) gives one bucket for the whole range. */
+            interval?: components["schemas"]["BucketInterval"];
+            /**
+             * @description A period relative to the request's time: `today`, `yesterday`, `this_week`, `last_week`,
+             *     `this_month`, `last_month`, `this_year`, `last_year` (whole local periods, weeks from
+             *     Monday), `last_<N>_days` (N local days with today, 1 to 366) or `last_<N>_hours` (up to
+             *     now, 1 to 72). Either this or `from` and `to`.
+             */
+            period?: string | null;
+            /** @description 1 to 20 distinct series. */
+            series: components["schemas"]["SeriesKey"][];
+            /**
+             * Format: date-time
+             * @description The range's end, RFC 3339 with an offset (exclusive), rounded down to the minute.
+             */
+            to?: string | null;
+            /**
+             * @description An IANA time zone name, such as `Asia/Taipei`: the local hours, days, Monday weeks and
+             *     months the buckets and the period follow, and the offset of every time in the answer.
+             * @example Asia/Taipei
+             */
+            tz: string;
+        };
+        /** @description A series' statistics over the range. */
+        SeriesStatistics: {
+            /**
+             * Format: double
+             * @description The mean of the numeric readings; for an on/off point, the share of readings that were on.
+             */
+            avg?: number | null;
+            /**
+             * Format: int64
+             * @description Readings in the range, and how many of them are numeric (float, int, bool).
+             */
+            count: number;
+            /** Format: uuid */
+            device_id: string;
+            first?: components["schemas"]["TimedReading"] | null;
+            highest?: components["schemas"]["TimedValue"] | null;
+            last?: components["schemas"]["TimedReading"] | null;
+            lowest?: components["schemas"]["TimedValue"] | null;
+            /**
+             * Format: double
+             * @description The largest value and the start of the cell it was in.
+             */
+            max?: number | null;
+            /** Format: date-time */
+            max_time?: string | null;
+            /**
+             * Format: double
+             * @description The smallest value and the start of the cell it was in.
+             */
+            min?: number | null;
+            /** Format: date-time */
+            min_time?: string | null;
+            /** Format: int64 */
+            numeric_count: number;
+            point: string;
+            /** @description The buckets with readings, in time order; buckets without readings are left out. */
+            rows: components["schemas"]["StatisticsRow"][];
+            status: components["schemas"]["DataStatus"];
+        };
+        /** @description A series' usage over the range. */
+        SeriesUsage: {
+            /**
+             * @description Whether a reading before the range was found, so the usage up to the first reading in the
+             *     range is counted.
+             */
+            baseline: boolean;
+            check?: components["schemas"]["CumulativeCheck"] | null;
+            /** Format: uuid */
+            device_id: string;
+            /**
+             * Format: int64
+             * @description Drops in the range, each counted as a reset or wrap that started again from 0: each loses
+             *     at most the usage of one sampling interval.
+             */
+            drops: number;
+            first_reading?: components["schemas"]["TimedValue"] | null;
+            /**
+             * Format: int64
+             * @description Gaps in the range, and the longest.
+             */
+            gaps: number;
+            highest?: components["schemas"]["TimedValue"] | null;
+            largest_suspicious_step?: components["schemas"]["TimedValue"] | null;
+            last_reading?: components["schemas"]["TimedValue"] | null;
+            longest_gap?: components["schemas"]["Gap"] | null;
+            lowest?: components["schemas"]["TimedValue"] | null;
+            point: string;
+            /**
+             * Format: int64
+             * @description Readings in the range.
+             */
+            readings: number;
+            /**
+             * @description The buckets with readings, in time order; a bucket without readings is left out (unknown,
+             *     not zero), and the usage across a gap is in the first bucket after it.
+             */
+            rows: components["schemas"]["UsageRow"][];
+            /**
+             * Format: int64
+             * @description Cells left out because their first or last value was not a finite number.
+             */
+            skipped_cells: number;
+            status: components["schemas"]["UsageStatus"];
+            /**
+             * Format: int64
+             * @description Steps much faster than the series usually rises, and the largest: the total includes them,
+             *     and they may be a meter misread.
+             */
+            suspicious_steps: number;
+            /**
+             * Format: double
+             * @description The usage over the range; absent unless `status` is `ok`.
+             */
+            total?: number | null;
+        };
+        /**
+         * @description The body of `PUT /api/identity/v1/platform/tenants/{tenant_id}/members`. Unknown fields are
+         *     ignored. Its `Debug` leaves the address out: it is personal data.
+         */
+        SetMemberRole: {
+            /**
+             * @description The email address of an existing user, compared after trimming and in ASCII lower case,
+             *     as logging in compares it.
+             */
+            email: string;
+            /** @description The role to give the user in the tenant. */
+            role: components["schemas"]["MemberRole"];
+        };
+        /** @description Statistics of each series. */
+        Statistics: {
+            range: components["schemas"]["QueryRange"];
+            /** @description One entry per requested series, in the request's order. */
+            series: components["schemas"]["SeriesStatistics"][];
+        };
+        /** @description One bucket of a series' statistics. */
+        StatisticsRow: {
+            /** Format: double */
+            avg?: number | null;
+            /**
+             * Format: int64
+             * @description Readings in the bucket.
+             */
+            count: number;
+            /** @description The bucket's latest reading. */
+            last: components["schemas"]["Reading"];
+            /** Format: double */
+            max?: number | null;
+            /**
+             * Format: double
+             * @description The smallest, largest and mean numeric value (a bool counts as 0 or 1); `null` when the
+             *     bucket holds only text readings.
+             */
+            min?: number | null;
+            /**
+             * Format: date-time
+             * @description The bucket's start.
+             */
+            time: string;
+        };
+        /** @description The body of `PUT /api/identity/v1/sessions/current/tenant`. */
+        SwitchTenant: {
+            /** @description One of the user's tenants. */
+            tenant_id: components["schemas"]["TenantId"];
+        };
         /** @description A tenant. */
         Tenant: {
             /**
@@ -780,6 +1573,75 @@ export interface components {
          *     Serialized as a lowercase hyphenated UUID string.
          */
         TenantId: string;
+        /** @description A tenant the user belongs to, with their role there. */
+        TenantMembership: {
+            /**
+             * @description The tenant's name; `null` only for a tenant that has no record, which only data written
+             *     outside the API has.
+             */
+            name: string | null;
+            /** @description The user's role in the tenant. */
+            role: components["schemas"]["MemberRole"];
+            /** @description The tenant. */
+            tenant_id: components["schemas"]["TenantId"];
+        };
+        /**
+         * @description The interface's colors.
+         * @enum {string}
+         */
+        Theme: "system" | "light" | "dark";
+        /** @description A reading and when it was taken. */
+        TimedReading: {
+            /** Format: date-time */
+            time: string;
+            value: components["schemas"]["Reading"];
+        };
+        /** @description A number and the time it belongs to (a bucket's start, or a reading's time). */
+        TimedValue: {
+            /** Format: date-time */
+            time: string;
+            /** Format: double */
+            value: number;
+        };
+        /**
+         * @description The body of `PUT /api/assets/v1/devices/{device_id}`: the device's settings, which replace
+         *     all of the current ones (a field left out takes its default). Unknown fields are refused.
+         */
+        UpdateDevice: {
+            /** @description If sent, the device's current gateway: a device stays on its gateway. */
+            hardware_id?: string | null;
+            /** @description See [`Device::host`]. */
+            host: string;
+            model_id?: components["schemas"]["DeviceModelId"] | null;
+            /** @description If sent, the device's current name: names never change. */
+            name?: string | null;
+            /**
+             * Format: int32
+             * @description See [`Device::poll_interval_ms`]; 60000 when absent.
+             */
+            poll_interval_ms?: number | null;
+            /**
+             * Format: int32
+             * @description See [`Device::port`].
+             */
+            port: number;
+            /**
+             * Format: int64
+             * @description The revision the client last read (`revision` of the device it read): the update is
+             *     refused with 409 when the device changed since. Required.
+             */
+            revision: number;
+            /**
+             * @description `modbus_tcp`: Modbus TCP to the device. `rtu_over_tcp`: RTU frames over TCP to an RS485 converter; the devices behind one converter (the same host and port on one gateway) share its connection, so they all use this transport and each has its own unit ID.
+             * @enum {string}
+             */
+            transport: "modbus_tcp" | "rtu_over_tcp";
+            /**
+             * Format: int32
+             * @description See [`Device::unit_id`]; 1 when absent.
+             */
+            unit_id?: number | null;
+        };
         /**
          * @description The body of `PUT /api/assets/v1/device-models/{model_id}`: the new data points, which replace
          *     all of the model's. Unknown fields are refused.
@@ -798,12 +1660,76 @@ export interface components {
             revision: number;
         };
         /**
+         * @description The body of `PATCH /api/identity/v1/preferences`: the settings to change. A field left out
+         *     keeps its value; `null` and unknown fields are refused.
+         */
+        UpdatePreferences: {
+            /** @description The language AI answers are written in. */
+            ai_language?: components["schemas"]["Language"];
+            /** @description The interface's language. */
+            language?: components["schemas"]["Language"];
+            /** @description The interface's colors. */
+            theme?: components["schemas"]["Theme"];
+            /**
+             * @description `auto` or an IANA time zone name, spelled as the tzdb spells it.
+             * @example Asia/Taipei
+             */
+            time_zone?: string;
+        };
+        /** @description Usage of each series. */
+        Usage: {
+            range: components["schemas"]["QueryRange"];
+            /** @description One entry per requested series, in the request's order. */
+            series: components["schemas"]["SeriesUsage"][];
+        };
+        /** @description One bucket of a series' usage. */
+        UsageRow: {
+            /** @description The bucket starts after a gap: its usage includes the usage of the gap. */
+            after_gap: boolean;
+            /**
+             * Format: int64
+             * @description Drops counted as a reset or wrap in the bucket.
+             */
+            drops: number;
+            /**
+             * Format: int64
+             * @description Readings in the bucket.
+             */
+            readings: number;
+            /**
+             * Format: int64
+             * @description Steps in the bucket much faster than the series usually rises (a misread or a replaced
+             *     meter): the usage includes them.
+             */
+            suspicious_steps: number;
+            /**
+             * Format: date-time
+             * @description The bucket's start.
+             */
+            time: string;
+            /**
+             * Format: double
+             * @description The increase of the counter in the bucket.
+             */
+            usage: number;
+        };
+        /**
+         * @description Whether a series' usage could be computed.
+         * @enum {string}
+         */
+        UsageStatus: "ok" | "no_data" | "not_numeric" | "not_cumulative";
+        /**
          * Format: uuid
          * @description A user account; one user can be a member of several tenants.
          *
          *     Serialized as a lowercase hyphenated UUID string.
          */
         UserId: string;
+        /**
+         * @description What the cumulative check concluded.
+         * @enum {string}
+         */
+        Verdict: "cumulative" | "too_few_readings" | "not_cumulative";
         /** @description A workstation certificate as the ledger records it. */
         WorkstationCertificate: {
             /** @description The issuing CA that signed it: the SHA-256 of its public key, 64 lower-case hex digits. */
@@ -1323,6 +2249,558 @@ export interface operations {
             };
         };
     };
+    listDevices: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The caller's tenant's devices, by name. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeviceList"];
+                };
+            };
+            /** @description No valid session (`unauthenticated`). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No tenant or no role in it (`permission_denied`). */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The database failed (`unavailable`). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    createDevice: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateDevice"];
+            };
+        };
+        responses: {
+            /** @description The device was created; `Location` is its URL. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Device"];
+                };
+            };
+            /** @description The `Content-Type` is not `application/json`, the body is larger than 16 KiB (`device.body_too_large`), or it is not a JSON object (`device.body_invalid`) (`invalid_request`). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No valid session (`unauthenticated`). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No tenant, or a role below editor (`permission_denied`). */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The tenant has a device of this name (`device.name_taken`), or another device of the gateway at the same host and port uses the other transport (`device.transport_mismatch`) or the same unit ID (`device.unit_taken`) (`conflict`). Nothing was written. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description A field rule is broken, the gateway is not bound to the caller's tenant (`device.gateway_not_bound`), or the tenant has no such model (`device.model_not_found`) (`validation_failed`); `field_errors` names each problem with a JSON Pointer and a `device.*` key. Nothing was written. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The database failed (`unavailable`). Nothing was written. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    getDevice: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The device's ID. */
+                device_id: components["schemas"]["DeviceId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The device. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Device"];
+                };
+            };
+            /** @description No valid session (`unauthenticated`). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No tenant or no role in it (`permission_denied`). */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No such device in the caller's tenant (`not_found`). */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The database failed (`unavailable`). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    updateDevice: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The device's ID. */
+                device_id: components["schemas"]["DeviceId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateDevice"];
+            };
+        };
+        responses: {
+            /** @description The device after the update, at its next revision. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Device"];
+                };
+            };
+            /** @description The `Content-Type` is not `application/json`, the body is larger than 16 KiB (`device.body_too_large`), or it is not a JSON object (`device.body_invalid`) (`invalid_request`). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No valid session (`unauthenticated`). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No tenant, or a role below editor (`permission_denied`). */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No such device in the caller's tenant (`not_found`). */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The device's gateway binding has ended, so it can only be deleted (`device.binding_ended`), the device is no longer at the `revision` sent (`device.revision_mismatch`, `details.current`), or another device of the gateway at the same host and port uses the other transport (`device.transport_mismatch`) or the same unit ID (`device.unit_taken`) (`conflict`). Nothing was written. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description A field rule is broken, `revision` is missing or not a positive integer, or `name`, `hardware_id` or `model_id` is not the device's (`device.name_immutable`, `device.gateway_immutable`, `device.model_immutable`) (`validation_failed`). Nothing was written. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The database failed (`unavailable`). Nothing was written. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    deleteDevice: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The device's ID. */
+                device_id: components["schemas"]["DeviceId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The device was deleted. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No valid session (`unauthenticated`). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No tenant, or a role below editor (`permission_denied`). */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No such device in the caller's tenant (`not_found`). */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The database failed (`unavailable`). Nothing was deleted. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    listPoolGateways: {
+        parameters: {
+            query?: {
+                /** @description `unbound` for the gateways bound to no tenant (the ones to bind), `bound` for the bound ones; absent for every gateway. */
+                state?: string;
+                /** @description The previous page's `next_after`, for the next page. */
+                after?: string;
+                /** @description Gateways per page, 1 to 500; default 100. */
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description A page of the pool, by hardware ID. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PoolGatewayList"];
+                };
+            };
+            /** @description An unknown or malformed parameter (`invalid_request`). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No valid session (`unauthenticated`). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Not a platform administrator, or not the administrator's own request (`permission_denied`). */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The database failed (`unavailable`). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    getPoolGateway: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The gateway's hardware ID. */
+                hardware_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The gateway. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PoolGateway"];
+                };
+            };
+            /** @description No valid session (`unauthenticated`). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Not a platform administrator, or not the administrator's own request (`permission_denied`). */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The pool has no such gateway (`not_found`). */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The database failed (`unavailable`). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    bindGateway: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The gateway's hardware ID. */
+                hardware_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BindGateway"];
+            };
+        };
+        responses: {
+            /** @description The gateway was bound to this tenant already: the existing binding. Nothing was written, so retrying after a lost response is safe. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GatewayBinding"];
+                };
+            };
+            /** @description The gateway is now bound to the tenant; `assets.gateway_bound` was written in the same transaction. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GatewayBinding"];
+                };
+            };
+            /** @description The `Content-Type` is not `application/json`, the body is larger than 4 KiB (`gateway_binding.body_too_large`), or it is not a JSON object (`gateway_binding.body_invalid`) (`invalid_request`). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No valid session (`unauthenticated`). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Not a platform administrator, or not the administrator's own request (`permission_denied`). */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The device pool has no such gateway (`not_found`). */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Another tenant holds the gateway (`conflict`, `gateway_binding.bound_to_another_tenant`). Nothing was written. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description An unknown field, `tenant_id` missing or not a UUID, or a tenant the assets service does not know (`gateway_binding.tenant_unknown`) (`validation_failed`). Nothing was written. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The database failed (`unavailable`). Nothing was written; retrying is safe. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
     getAssetsTenant: {
         parameters: {
             query?: never;
@@ -1369,6 +2847,102 @@ export interface operations {
                 };
             };
             /** @description The database failed (`unavailable`). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    registerGateway: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description The workstation certificate, DER, standard base64 with padding. */
+                "trustiot-workstation-certificate": string;
+                /** @description When the workstation signed the request, Unix seconds; within 300 seconds of the service's clock. */
+                "trustiot-workstation-timestamp": string;
+                /** @description 22 to 64 base64url characters, never used twice with the same certificate. */
+                "trustiot-workstation-nonce": string;
+                /** @description ECDSA P-256 with SHA-256 by the workstation certificate's key over `trustiot-workstation-request-v1`, the method, the path, the timestamp, the nonce and the lower-case hex SHA-256 of the body, one per line; the DER signature in standard base64 with padding. */
+                "trustiot-workstation-signature": string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RegisterGateway"];
+            };
+        };
+        responses: {
+            /** @description The same hardware ID, public key and endorsement key were registered before: the first registration and its certificate. Nothing was signed or written. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GatewayRegistration"];
+                };
+            };
+            /** @description Registered: the gateway certificate was signed and recorded with the registration, and `certs.gateway_registered` was written. The certificate's subject is `CN=<hardware_id>`, its extended key usage client authentication only, valid for the configured gateway validity (default 90 days). */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GatewayRegistration"];
+                };
+            };
+            /** @description The `Content-Type` is not `application/json`, the body is larger than 16 KiB (`gateway_registration.body_too_large`), or it is not a JSON object (`gateway_registration.body_invalid`) (`invalid_request`). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No valid session (`unauthenticated`). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Not a platform administrator (`permission_denied`), or the workstation signature does not hold (`gateway_registration.workstation_refused`, `details.reason`: `missing`, `malformed`, `untrusted`, `expired`, `not_workstation`, `signature_invalid`, `stale`, `revoked` or `replayed`). */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The hardware ID is registered with another public key (`gateway_registration.public_key_mismatch`) or endorsement key (`gateway_registration.endorsement_key_mismatch`), or was decommissioned (`gateway_registration.decommissioned`); or another gateway has the public key (`gateway_registration.public_key_in_use`) or, active, the endorsement key (`gateway_registration.endorsement_key_in_use`) (`conflict`). Nothing was registered. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description An unknown or missing field, a hardware ID that breaks the gateway ID rule (`gateway_registration.hardware_id_invalid`), a certificate request that is not one PEM CSR (`gateway_registration.request_invalid`), not for ECDSA P-256 with ecdsa-with-SHA256 (`gateway_registration.request_unsupported`) or not signed by its own key (`gateway_registration.request_signature_invalid`), or an endorsement key that is not one PEM public key (`gateway_registration.endorsement_key_invalid`) or not RSA 2048/3072/4096 or ECDSA P-256/P-384 (`gateway_registration.endorsement_key_unsupported`) (`validation_failed`). Nothing was registered. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No issuing CA is loaded or can sign yet (`gateway_registration.ca_not_ready`), or the database failed (`unavailable`). Nothing was registered. */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -1736,6 +3310,212 @@ export interface operations {
             };
         };
     };
+    setPlatformTenantMemberRole: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The tenant's ID. */
+                tenant_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SetMemberRole"];
+            };
+        };
+        responses: {
+            /** @description The user was a member: the role is set, and `identity.member_role_changed` written in the same transaction unless the role was already this one (then nothing was written). */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Membership"];
+                };
+            };
+            /** @description The user was not a member: the membership was created, and `identity.member_role_changed` written in the same transaction. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Membership"];
+                };
+            };
+            /** @description The tenant ID is not a UUID, the `Content-Type` is not `application/json`, or the body is over 4096 bytes or not a JSON object with a string `email` and a string `role` (`invalid_request`). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No valid session (`unauthenticated`). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Not a platform administrator, or not the administrator's own request: another service exchanged the token (`permission_denied`). */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No tenant has the ID; nothing was written (`not_found`). */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The email is not an address (`/email`, `member.email_invalid`), no user has it (`/email`, `member.email_unknown`; no user is created), or the role is not `viewer`, `editor` or `admin` (`/role`, `member.role_invalid`) (`validation_failed`). Nothing was written. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The database failed; nothing was written (`unavailable`). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    getPreferences: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The user's preferences; the defaults (`auto`, `auto`, `auto`, `system`) for a user who never changed one. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Preferences"];
+                };
+            };
+            /** @description No valid session (`unauthenticated`). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description A token another service exchanged for a call on the user's behalf (`permission_denied`): only the user's own requests read their preferences. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The database failed (`unavailable`). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    updatePreferences: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdatePreferences"];
+            };
+        };
+        responses: {
+            /** @description The preferences after the change; fields left out kept their value. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Preferences"];
+                };
+            };
+            /** @description The `Content-Type` is not `application/json`, the body is over 1024 bytes, or it is not a JSON object of the four fields with string values; unknown fields and `null` are refused (`invalid_request`). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No valid session, or the user no longer exists (`unauthenticated`). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description A cross-site request (`permission_denied`, message key `security.cross_site_request`), or a token another service exchanged for a call on the user's behalf (`permission_denied`); nothing changed. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description A value outside its allow list (`validation_failed`; `/language` `preferences.language_invalid`, `/ai_language` `preferences.ai_language_invalid`, `/time_zone` `preferences.time_zone_invalid`, `/theme` `preferences.theme_invalid`); nothing changed. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The database failed; nothing changed (`unavailable`). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
     logOutEverywhere: {
         parameters: {
             query?: never;
@@ -1772,6 +3552,53 @@ export interface operations {
             };
         };
     };
+    getCurrentSession: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The session: the user, the tenant it acts in with the user's role there (as of this request), and every tenant the user belongs to. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CurrentSession"];
+                };
+            };
+            /** @description No valid session (`unauthenticated`). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description A token another service exchanged for a call on the user's behalf (`permission_denied`): only the user's own requests read the session. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The database failed, too many reads of users' tenants were waiting, or the platform role has no credentials (`unavailable`). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
     logOut: {
         parameters: {
             query?: never;
@@ -1798,6 +3625,66 @@ export interface operations {
                 };
             };
             /** @description The database failed; nothing was revoked (`unavailable`). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    switchTenant: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SwitchTenant"];
+            };
+        };
+        responses: {
+            /** @description The session acts in the tenant from its next request on; the body is the session as it is now. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CurrentSession"];
+                };
+            };
+            /** @description The `Content-Type` is not `application/json`, the body is over 1024 bytes, or it is not the JSON object `{"tenant_id": "<uuid>"}` (`invalid_request`). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No valid session, a token that names no session, or a session cookie that is missing, is not the session the token was signed from, or whose session has ended (`unauthenticated`); nothing changed. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The user is not a member of the tenant, or there is no such tenant (`permission_denied`, message key `session.tenant_not_member`); a cross-site request (message key `security.cross_site_request`); or a token another service exchanged (`permission_denied`). The session keeps its tenant. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The database failed, too many reads of users' tenants were waiting, or the platform role has no credentials; nothing changed (`unavailable`). */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -2041,6 +3928,198 @@ export interface operations {
                 };
             };
             /** @description A parameter breaks a rule (`validation_failed`, detail `parameter`), the series would have too many points (`telemetry.too_many_points`), or the query reads or holds too much (`telemetry.query_too_heavy`). */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The tenant's query quota or concurrency limit is used up (`rate_limited`). */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Postgres or ClickHouse failed, or the tenant's ClickHouse account is not as the service creates it (`unavailable`). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The query ran into its time limit (`timeout`). */
+            504: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    queryTelemetryStatistics: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SeriesQuery"];
+            };
+        };
+        responses: {
+            /** @description The statistics of each series, in the request's order. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Statistics"];
+                };
+            };
+            /** @description The body is not the JSON object described, or has a field it does not describe (`invalid_request`, `telemetry.query_invalid`). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No valid session (`unauthenticated`). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No tenant (`permission_denied`), or the range lies wholly before the queryable period (`quota_exceeded`, `telemetry.outside_queryable_period`, detail `earliest`). */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The tenant's account has not been created yet (`not_found`, `telemetry.account_not_ready`). */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description A field breaks a rule (`validation_failed`, detail `parameter`: `series`, `tz`, `period`, `from`, or `to` with detail `latest` when it ends too far after now), the answer would have too many rows (`telemetry.too_many_points`), or the query reads or holds too much (`telemetry.query_too_heavy`). */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The tenant's query quota or concurrency limit is used up (`rate_limited`). */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Postgres or ClickHouse failed, or the tenant's ClickHouse account is not as the service creates it (`unavailable`). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The query ran into its time limit (`timeout`). */
+            504: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    queryTelemetryUsage: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SeriesQuery"];
+            };
+        };
+        responses: {
+            /** @description The usage of each series, in the request's order; a series that is not a counter or not numeric has a `status` that says so and no usage. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Usage"];
+                };
+            };
+            /** @description The body is not the JSON object described, or has a field it does not describe (`invalid_request`, `telemetry.query_invalid`). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No valid session (`unauthenticated`). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No tenant (`permission_denied`), or the range lies wholly before the queryable period (`quota_exceeded`, `telemetry.outside_queryable_period`, detail `earliest`). */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The tenant's account has not been created yet (`not_found`, `telemetry.account_not_ready`). */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description A field breaks a rule (`validation_failed`, detail `parameter`: `series`, `tz`, `period`, `from`, or `to` with detail `latest` when it ends too far after now), the answer would have too many rows (`telemetry.too_many_points`), or the request would read too many one-minute cells (detail `parameter`: `series`) or the query reads or holds too much (`telemetry.query_too_heavy`). */
             422: {
                 headers: {
                     [name: string]: unknown;

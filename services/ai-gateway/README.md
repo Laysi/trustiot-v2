@@ -4,12 +4,14 @@
 
 閘道與產品無關（決策 28）：租戶只是不透明的 ID，設定用自己的前綴 `AI_GATEWAY`，也不依賴 `crates/contract`（`tests/no_contract.rs` 以 `cargo tree -p ai-gateway` 檢查，service-kit 以 `default-features = false` 引入）。
 
-目前支援兩種協定：Anthropic Messages（含串流）與 OpenAI Decisions。不在這裡：用量帳本與租戶額度（Laysi/trustiot-v2#140）、執行期更換角色的模型與管理 API（Laysi/trustiot-v2#537）、映像、chart、Secret 與 AuthorizationPolicy（Laysi/trustiot-v2#536）、Vertex AI（Laysi/trustiot-v2#440）。沒有資料庫。
+目前支援兩種協定：Anthropic Messages（含串流）與 OpenAI Decisions。模型角色的模型清單可以在執行中更換：更換存在 Postgres，每個轉送請求都確認設定有沒有變（見「資料庫」與「多副本」，Laysi/trustiot-v2#605）。不在這裡：更換用的管理 API（Laysi/trustiot-v2#606、Laysi/trustiot-v2#607）、用量帳本與租戶額度（Laysi/trustiot-v2#140）、Vertex AI（Laysi/trustiot-v2#440）。部署（映像 `deploy/images/ai-gateway`、chart 從 values 的 `ai` 產生的設定、金鑰的 Secret、只允許三個呼叫端的 AuthorizationPolicy）見 [chart README](../../deploy/chart/README.md)「AI 閘道」（Laysi/trustiot-v2#536）。
 
 | 檔案 | 內容 |
 | --- | --- |
-| `src/config.rs` | 設定與啟動時的檢查 |
-| `src/gateway.rs` | 每個角色的模型與供應商 client、讀 key、時間預算 |
+| `src/config.rs` | 設定與啟動時的檢查，以及設定與存下的模型清單共用的模型規則（`RoleRules`） |
+| `src/gateway.rs` | 每個角色的模型與供應商 client、讀 key、時間預算；設定的快照與它的重載 |
+| `src/store.rs` | Postgres 裡的模型清單、設定世代與變更紀錄：讀取、更換、重設 |
+| `src/schema.rs`、`migrations/postgres/` | schema `ai_gateway` 的 migration（由 `tools/migrate` 執行） |
 | `src/relay.rs` | 內部 API：讀請求、依序嘗試模型、交回回應或轉送串流、日誌 |
 | `src/body.rs` | 請求本文的檢查與換 `model` |
 | `src/reject.rs` | 錯誤回應（各協定自己的錯誤格式） |
@@ -40,7 +42,7 @@
 
 ### 範例：一次最小的呼叫
 
-確認一把供應商金鑰能用（例如輪替 Anthropic 金鑰後，[展示環境 runbook](../../docs/runbooks/demo-environment.md)「輪替 Resend 與 Anthropic 金鑰」）就送一次最小的 Messages 呼叫。`<gateway>` 是閘道的位址與連接埠，`main` 換成設定裡用那個供應商的角色；內部 API 只開給 mesh 授權的呼叫端，在叢集裡從哪裡送出由部署（Laysi/trustiot-v2#536）決定。
+確認一把供應商金鑰能用（例如輪替 Anthropic 金鑰後，[展示環境 runbook](../../docs/runbooks/demo-environment.md)「輪替 Resend 與 Anthropic 金鑰」）就送一次最小的 Messages 呼叫。`<gateway>` 是閘道的位址與連接埠，`main` 換成設定裡用那個供應商的角色；內部 API 只開給 mesh 授權的呼叫端，所以在叢集裡以 `kubectl port-forward` 連進閘道的 pod 送出，`<gateway>` 是轉出來的本機埠（chart README「AI 閘道」）。
 
 ```sh
 curl -sS -D - -X POST "http://<gateway>/internal/roles/main/v1/messages" \
@@ -64,6 +66,7 @@ HTTP 200 而且 `ai-gateway-model` 是那個供應商的模型，表示金鑰可
 | 供應商拒絕閘道的 key（401、403），或回 4xx、5xx 以外的狀態 | 502 `api_error`，不帶供應商的訊息 | 502 `server_error` |
 | 最後一個模型逾時、時間預算用完，或請求本文沒在時間預算內送完 | 504 `timeout_error` | 504 `server_error` |
 | 每個模型都到了並發上限 | 529 `overloaded_error` | 503 `server_error` |
+| 讀不到模型角色的設定（Postgres 連不上、查詢失敗，或超過 `database.timeout`）；不呼叫供應商 | 503 `api_error` | 503 `server_error` |
 | 連不上供應商、回應不合協定 | 502 `api_error` | 502 `server_error` |
 
 串流的錯誤：第一個輸出之前失敗、而且沒有下一個模型時，如果失敗是供應商的 `error` 事件，暫存的事件與那個 `error` 事件照原樣以 200 串流交回；其他失敗照上表回 JSON。第一個輸出之後的失敗不換模型：供應商的 `error` 事件照原樣轉送後結束；逾時（`stream_idle`、`stream_total`）或連線中斷時，閘道補一個 `event: error`（`timeout_error` 或 `api_error`）後結束。供應商的 `error` 事件轉送前一樣遮蔽 key（見「金鑰與 TLS」）。
@@ -84,11 +87,12 @@ HTTP 200 而且 `ai-gateway-model` 是那個供應商的模型，表示金鑰可
 - 每次嘗試受角色的 `timeouts` 限制（ai-clients 的 `Timeouts`）：`connect` 連線與 TLS 交握；`response` 非串流的回應標頭與本文；`first_token` 串流從送出到第一個內容區塊事件；`stream_idle` 串流兩段資料之間；`stream_total` 整條串流。另有 `queue_wait`：等並發名額的時間，等不到算過載。
 - 整個呼叫（讀請求本文加上所有嘗試，到非串流的回應或串流的第一個輸出為止）不超過時間預算：service-kit 的 `http.request_timeout` 減去它的十分之一、最多 2 秒。預算用完回 504（呼叫端協定的格式），不再嘗試下一個模型；這比 service-kit 自己沒有本文的 504 早到。
 - 啟動時檢查每個角色：`queue_wait` 加上 `response` 與 `first_token` 較長者，要在時間預算內，否則不啟動（錯誤訊息寫出角色的設定名稱與 `AI_GATEWAY__HTTP__REQUEST_TIMEOUT`）。service-kit 的預設 `http.request_timeout` 是 30 秒，角色預設的 `response` 是 300 秒，所以部署一定要調高 `AI_GATEWAY__HTTP__REQUEST_TIMEOUT`，例如 `10m`（上限 1 小時）。
+- 這個檢查只保證角色設定的模型上限放得進時間預算，不包含 `database.timeout`：設定確認（見「資料庫」）在同一個時間預算裡跑，它自己的上限是 `database.timeout` 與這次呼叫剩下的預算較短者，平常是一次很短的查詢。把它最壞的情況加進靜態檢查，等於要每個部署為了資料庫異常多留 `database.timeout`（預設 5 秒）的預算，也會讓 chart 鏡像的同一個檢查拒絕現有的 values。資料庫慢只會縮短那一次呼叫：預算用完回 504，或設定確認逾時回 503，不會超過時間預算。
 - 串流的第一個輸出之後不受時間預算限制，只受 `stream_idle` 與 `stream_total`。
 
 ## 設定
 
-設定來自 `AI_GATEWAY__` 開頭的環境變數（`__` 分隔層級，名稱轉小寫；清單以逗號分隔；時間長度寫成 `30s`、`10m`），或 `AI_GATEWAY_CONFIG_FILE` 指的 TOML 檔，與 service-kit 的其他設定（`http`、`shutdown`、`telemetry`，見 [crates/service-kit/README.md](../../crates/service-kit/README.md)）相同的規則。只在啟動時讀；改設定要重新啟動（執行期更換在 Laysi/trustiot-v2#537）。錯誤訊息只寫設定名稱，不寫值。
+設定來自 `AI_GATEWAY__` 開頭的環境變數（`__` 分隔層級，名稱轉小寫；清單以逗號分隔；時間長度寫成 `30s`、`10m`），或 `AI_GATEWAY_CONFIG_FILE` 指的 TOML 檔，與 service-kit 的其他設定（`http`、`shutdown`、`telemetry`，見 [crates/service-kit/README.md](../../crates/service-kit/README.md)）相同的規則。設定只在啟動時讀，改設定要重新啟動；唯一的例外是模型角色的模型清單，它可以在執行中以存進資料庫的清單取代（見「資料庫」），其他欄位（角色有哪些、供應商、協定、上限與時間）仍只來自設定。錯誤訊息只寫設定名稱，不寫值。
 
 供應商（`providers.<name>`，名稱是 1 到 32 個小寫英文字母、數字或 `_`，字母開頭）：
 
@@ -120,6 +124,16 @@ HTTP 200 而且 `ai-gateway-model` 是那個供應商的模型，表示金鑰可
 | `max_request_bytes` | `AI_GATEWAY__MAX_REQUEST_BYTES` | 32 MiB | 請求本文上限（Anthropic Messages 的上限）；1 KiB 到 256 MiB |
 | `http.request_timeout` | `AI_GATEWAY__HTTP__REQUEST_TIMEOUT` | `30s`（service-kit） | 見「時間上限」；部署要調高 |
 
+資料庫（見「資料庫」；chart 從平台設定與 migration Job 產生的密碼填入這些變數，見 chart README「AI 閘道」）：
+
+| 鍵 | 環境變數 | 預設 | 說明 |
+| --- | --- | --- | --- |
+| 平台設定 | `AI_GATEWAY_POSTGRES_HOST`、`_PORT`、`_DATABASE`、`_SSLMODE`、`_CA_FILE` | 必填 | Postgres 的位置與驗證伺服器憑證的 CA，與其他服務的 `TRUSTIOT_POSTGRES_*` 相同，只是用閘道自己的前綴；`_SSLMODE` 只收 `verify-full` |
+| `database.username` | `AI_GATEWAY__DATABASE__USERNAME` | 必填 | 服務角色 `ai_gateway_app` |
+| `database.password` | `AI_GATEWAY__DATABASE__PASSWORD` | 必填 | 由 Secret 提供；不進日誌與 `Debug` |
+| `database.max_connections` | `AI_GATEWAY__DATABASE__MAX_CONNECTIONS` | `4` | 每個副本的連線池大小，2 到 32（chart 的連線預算記同一個範圍，`deploy/chart/README.md`「連線預算」） |
+| `database.timeout` | `AI_GATEWAY__DATABASE__TIMEOUT` | `5s` | 每個轉送請求等設定確認（取得連線、讀世代、必要時重載）的上限，100 ms 到 60 s，而且不超過這次呼叫剩下的時間預算；超過回 503。也是伺服器端 `lock_timeout` 與 `statement_timeout` 的上限（見「資料庫」） |
+
 至少要有一個角色。一個最小的設定：
 
 ```sh
@@ -130,34 +144,70 @@ AI_GATEWAY__PROVIDERS__OPENAI__KEY_ENV=OPENAI_API_KEY
 AI_GATEWAY__ROLES__MAIN__MODELS=anthropic/claude-opus-5-5,anthropic/claude-sonnet-5-5
 AI_GATEWAY__ROLES__ROUTER__MODELS=openai/gpt-6-luna
 AI_GATEWAY__HTTP__REQUEST_TIMEOUT=10m
-# 加上 ANTHROPIC_API_KEY、OPENAI_API_KEY（由 Secret 提供）
+# 加上 ANTHROPIC_API_KEY、OPENAI_API_KEY（由 Secret 提供），
+# AI_GATEWAY_POSTGRES_*、AI_GATEWAY__DATABASE__USERNAME 與 AI_GATEWAY__DATABASE__PASSWORD
 ```
+
+本機開發環境（`bun scripts/dev.ts`）的 `env` 印出 `TRUSTIOT_POSTGRES_*` 與 `TRUSTIOT_DEV_AI_GATEWAY_DATABASE_{USERNAME,PASSWORD}`，改名成上面的變數就能在主機上以 `cargo run -p ai-gateway` 啟動（[scripts/README.md](../../scripts/README.md)）。
+
+## 資料庫
+
+chart 的 `ai.roles` 決定有哪些角色、各自的協定、上限、時間與預設的模型；Postgres 的 schema `ai_gateway`（決策 29：owner `ai_gateway_owner`、服務角色 `ai_gateway_app`，沒有平台角色、沒有 outbox，都不是租戶資料）只存模型清單的覆寫，部署不會丟掉管理員的更換（Laysi/trustiot-v2#537 的 2026-10-23 決定）。
+
+| 表 | 內容 | 服務角色的權限 |
+| --- | --- | --- |
+| `role_models` | 每個更換過的角色一列：`models`（1 到 8 個 `<provider>/<model>`，重設之後是 NULL）、`version`、`updated_at`、`updated_by` | SELECT、INSERT、UPDATE（只有 `models`、`version`、`updated_at`、`updated_by` 欄；不能 DELETE、TRUNCATE） |
+| `settings_generation` | 只有一列的 `generation`，每次更換或重設加一 | SELECT、UPDATE（只有 `generation` 欄） |
+| `role_model_changes` | append-only 的變更紀錄：`version`、`role`、`action`（`set` 或 `reset`）、`models`、`changed_at`、`changed_by` | SELECT、INSERT（UPDATE、DELETE、TRUNCATE 被資料庫拒絕） |
+
+兩個 trigger 讓每個角色（owner 也一樣）的 UPDATE 都要讓數字上升：`settings_generation` 的 `generation` 要變大，`role_models` 的 `version` 要變大而且 `role` 不能改，否則資料庫以 SQLSTATE 42501 拒絕。版本比對依賴這兩個順序，所以不只靠程式碼保證。從備份還原是重新寫入列（INSERT 或 COPY），trigger 不擋，副本怎麼處理見「多副本」。
+
+每個交易在伺服器端也有上限：開始後先 `set_config('lock_timeout', …, true)` 與 `set_config('statement_timeout', …, true)`（等同 `SET LOCAL`）。轉送請求的讀取設成這次設定確認剩下的時間（`database.timeout` 與呼叫剩下的時間預算較短者，從同一個期限算起），而且兩者都是每個敘述各自計算，所以重載的兩個查詢之前各設一次；更換與重設的每個敘述是 `database.timeout`。閘道放棄的查詢（例如被 migration 的鎖擋住的讀取，或排在另一個寫入者後面的更換）不會在呼叫端拿到回應之後還佔著伺服器的程序。每個轉送請求的世代讀取也在這樣的短交易裡（`BEGIN READ ONLY`、設定上限、`SELECT generation`、`COMMIT`）：比連線啟動參數多幾次來回，但 `SET LOCAL` 在連線池（例如 PgBouncer 的交易模式）後面也成立，與 identity 的 `members.rs` 做法一致。
+
+更換與重設（`src/store.rs` 的 `Store::set_models`、`Store::reset`；管理 API 在 Laysi/trustiot-v2#606）：
+
+- 先檢查，被拒絕的更換什麼都不寫：模型清單的規則與設定的 `models` 相同（1 到 8 個不重複的 `<provider>/<model>`、供應商有設定、模型 ID 是不含空白與逗號的可列印 ASCII），而且每個模型的供應商協定要等於角色的協定；角色要是設定裡有的。換協定是 chart 加上呼叫端程式的變更，不能靠覆寫做到。重設接受任何合格的角色名稱，所以 chart 移除的角色留下的清單也能清掉。
+- 再在一個交易裡：世代加一（它的列鎖讓寫入者排隊）、鎖住角色的列並比對呼叫端讀到的版本（角色的列的 `version`，沒有列的角色是 0；不符回衝突，什麼都不寫）、寫入覆寫或把它清成 NULL、寫一筆變更紀錄、commit。
+- 版本就是這次更換之後的世代，所以重設之後再更換，新版本仍比重設前大。重設保留角色的列與重設的版本，不刪除：帶著重設前任何版本（包括從沒更換過時讀到的 0）的更換都是衝突，不會在別人的更換與重設之後悄悄蓋掉。重設沒有覆寫的角色（從沒更換過或已經重設）什麼都不寫。
+
+存下的清單對目前的設定不再成立時（供應商被移除、chart 改了角色的協定、角色被移除），該角色忽略它、用設定的模型，記 ERROR `ignored the stored models of a model role; it uses its configured models`（`role`、`version`、`reason`），快照的 `ignored` 也標記它，給之後的管理 API 顯示。使用存下的清單時記 INFO `model role uses stored models`。
+
+讀不到設定時不放行（與 Laysi/trustiot-v2#140 帳本的規則一致）：Postgres 連不上、查詢失敗或超過 `database.timeout`，轉送請求以呼叫端協定的格式回 503，不呼叫供應商，記 WARN `refused a model call: the model role settings could not be checked`。readiness 是 migration 檢查（`migrations`，schema 的 migration 都已套用）加上讀一次世代（`postgres`）。
+
+## 多副本
+
+更換的呼叫回 200 之後才開始的請求，在任何副本都用新的模型。
+
+做法：每個轉送請求在讀完本文之後讀一次 `SELECT generation`（小的連線池，算在這次呼叫的時間預算內）。與記憶體裡快照的世代相同就用快照；不同時，在 `REPEATABLE READ READ ONLY` 的交易裡一次讀入所有覆寫與世代，建新的快照並換上（同一個副本同時只有一個重載，拿到重載的鎖之後才讀，所以換上的一定是最後一次讀到的資料庫）。重載以（角色、`<provider>/<model>`）為鍵重用既有的 client，所以沒變的模型的並發計數不會歸零。進行中的請求、串流與同一個請求內的備援，沿用它開始時拿到的快照；串流結束前它的 client 不會被釋放。
+
+資料庫是設定的來源：資料庫的世代比副本記憶體裡的舊（例如從備份還原）時，副本同樣改用資料庫裡的設定，並記 WARN `the settings generation in the database went back, as after restoring a backup; using the stored settings`（`loaded`：記憶體裡的世代，`stored`：資料庫的世代；不記模型清單）。不需要重新啟動閘道。
 
 ## 金鑰與 TLS
 
-- 每個供應商的 key 在啟動時從 `key_env` 指的環境變數讀一次；沒設、空的或含空白與控制字元時不啟動，錯誤訊息只寫變數名稱。key 只存在 ai-clients 的 `ApiKey`（`Debug` 不顯示、drop 時清除、標頭標成 sensitive）與閘道用來遮蔽錯誤訊息的副本（同樣在 drop 時清除）；環境變數本身仍留在程序環境裡，部署時只讓這個 pod 拿得到那個 Secret（Laysi/trustiot-v2#536）。
+- 每個供應商的 key 在啟動時從 `key_env` 指的環境變數讀一次；沒設、空的或含空白與控制字元時不啟動，錯誤訊息只寫變數名稱。key 只存在 ai-clients 的 `ApiKey`（`Debug` 不顯示、drop 時清除、標頭標成 sensitive）與閘道用來遮蔽錯誤訊息的副本（同樣在 drop 時清除）；環境變數本身仍留在程序環境裡，所以 chart 只讓這個 pod 拿得到那個 Secret（`services.<name>.credentials` 的 `ai` 只能給 `ai-gateway`，變數是 `TRUSTIOT_AI_ANTHROPIC_API_KEY`、`TRUSTIOT_AI_OPENAI_API_KEY`）。
 - key 不進日誌也不進回應：供應商錯誤訊息裡的 key 換成 `[REDACTED]`，401 與 403 的訊息整個不交回。串流的 `error` 事件先解析成 JSON，在解碼後的每個字串與欄位名稱、以及原始文字裡找 key，所以用 JSON 跳脫寫成的 key 也會被換掉；找到時事件資料改寫成遮蔽後的 JSON（欄位順序可能改變），沒找到時照原樣轉送，不是 JSON 的資料換成閘道自己的 `api_error` 事件。供應商的錯誤 `type`、`code` 與 request ID 也遮蔽後才交回或寫進日誌。成功的回應與串流照原樣轉送，不檢查。`tests/process.rs` 以 trace 等級執行真正的程式檢查。
 - 連供應商的 TLS 信任系統的根憑證（`SSL_CERT_FILE` 或 `SSL_CERT_DIR` 有設時用它們），一張都載不到就不啟動，所以映像要有 CA bundle。不走 proxy、不跟隨重新導向（ai-clients 的「規則」）。
-- 閘道本身不驗證呼叫端：內部 API 只靠 mesh 授權，只有 assistant、knowledge、alerts 能連（決策 28；AuthorizationPolicy 在 Laysi/trustiot-v2#536）。
+- 閘道本身不驗證呼叫端：內部 API 只靠 mesh 授權，只有 assistant、knowledge、alerts 能連（決策 28；chart 在 `mesh.calls` 把其他服務列為呼叫端時拒絕渲染，見 chart README「服務間授權（mesh）」）。
 
 ## 日誌
 
-每次呼叫記一行，欄位有 `role`、`protocol`、`tenant`、`model`、`attempts`、`provider_request_id`、`duration_ms`：成功是 INFO `model call completed`（加 `streaming`、`outcome`），換模型是 WARN `falling back to the next model`（加 `next_model`、`class`、`status`、`error_type`），失敗是 WARN `model call failed`（串流途中是 `model stream failed`，加 `class`、`status`、`error_type`，連線與協定錯誤加 `detail`），呼叫端在串流結束前離開是 WARN `the caller left before the stream ended`。啟動時每個角色記一行 INFO `model role ready`（`role`、`protocol`、`models`）。不記請求或回應的本文、供應商的錯誤訊息與 key。
+每次呼叫記一行，欄位有 `role`、`protocol`、`tenant`、`model`、`attempts`、`provider_request_id`、`duration_ms`：成功是 INFO `model call completed`（加 `streaming`、`outcome`），換模型是 WARN `falling back to the next model`（加 `next_model`、`class`、`status`、`error_type`），失敗是 WARN `model call failed`（串流途中是 `model stream failed`，加 `class`、`status`、`error_type`，連線與協定錯誤加 `detail`），呼叫端在串流結束前離開是 WARN `the caller left before the stream ended`。啟動時每個角色記一行 INFO `model role ready`（`role`、`protocol`、`models`，啟動時資料庫還沒讀，所以是設定的模型）；讀不到設定、忽略或使用存下的模型清單的日誌見「資料庫」，資料庫的世代倒退的日誌見「多副本」。不記請求或回應的本文、供應商的錯誤訊息與 key。
 
 ## 關機
 
-service-kit 對長連線的建議是在 `Shutdown::stopping` 時結束 SSE，讓用戶端改連新的 pod；閘道刻意不這樣做：模型的回答不能在另一個 pod 接續，提早結束只會讓呼叫端整段重來並重複計費。進行中的串流在 drain 期間照常轉送到結束，`shutdown.drain_timeout`（預設 20 秒）到了才隨程序結束被切斷。部署（Laysi/trustiot-v2#536）要把 `AI_GATEWAY__SHUTDOWN__DRAIN_TIMEOUT` 與 chart 的 `drainSeconds` 調到能涵蓋一般的回答長度（service-kit 的「收尾」一節說明兩者的關係）。
+service-kit 對長連線的建議是在 `Shutdown::stopping` 時結束 SSE，讓用戶端改連新的 pod；閘道刻意不這樣做：模型的回答不能在另一個 pod 接續，提早結束只會讓呼叫端整段重來並重複計費。進行中的串流在 drain 期間照常轉送到結束，`shutdown.drain_timeout`（預設 20 秒）到了才隨程序結束被切斷。chart 給閘道的 `drainSeconds` 預設是 310 秒，並把 `AI_GATEWAY__SHUTDOWN__DRAIN_TIMEOUT` 設成它減 10 秒（300 秒），涵蓋一般的回答長度（service-kit 的「收尾」一節說明兩者的關係；chart README「AI 閘道」）。
 
 ## 測試
 
-`cargo test -p ai-gateway`。不連真正的供應商、不用真的 key：供應商是 loopback 上的腳本化 HTTP/1.1 伺服器（以路徑引入 `crates/ai-clients/tests/support/mod.rs`），回應用 ai-clients 的錄製樣本（`crates/ai-clients/tests/fixtures/`），key 在執行時產生。
+`cargo test -p ai-gateway`。`tests/process.rs` 與 `tests/roles_store.rs` 以 podman 或 docker 啟動 service-kit 的測試用 TLS Postgres（以路徑引入 `crates/service-kit/tests/support/postgres.rs`），沒有容器執行環境時跳過（設了 `CI` 時失敗）。不連真正的供應商、不用真的 key：供應商是 loopback 上的腳本化 HTTP/1.1 伺服器（以路徑引入 `crates/ai-clients/tests/support/mod.rs`），回應用 ai-clients 的錄製樣本（`crates/ai-clients/tests/fixtures/`），key 在執行時產生。
 
 | 檔案 | 內容 |
 | --- | --- |
 | `tests/messages.rs` | 本文除了 `model` 逐位元組相同（thinking 與 signature、快取斷點、對話中的 system 訊息）、缺 `model` 時補上、串流原樣交回、第一個輸出之後的錯誤原樣轉送且不換模型、拒答的串流、各種不能轉送的請求在送出前拒絕、本文沒在時間預算內送完時回 504 |
 | `tests/fallback.rs` | 429、529、供應商 504、閘道自己的逾時（`TIMEOUT_UNDER_TEST`，15 秒）與並發上限都換下一個模型；串流第一個輸出之前的 `error` 事件與 429 也換；全部失敗時交回最後一個錯誤；400、401、500 與拒答不換；供應商訊息裡的 key 被遮蔽 |
 | `tests/decisions.rs` | 錄製的 Decisions 請求逐位元組轉送、回應原樣交回、拒答、429 與 503 換模型、不合格的請求與未知角色 |
-| `tests/process.rs` | 真正的程式：以測試 CA 與 `SSL_CERT_FILE` 走 TLS、key 從 `key_env` 讀取並送到供應商、trace 等級的日誌與回應裡都沒有 key；沒有 key 或角色的時間上限超過 `http.request_timeout` 時不啟動 |
+| `tests/process.rs` | 真正的程式：以測試 CA 與 `SSL_CERT_FILE` 走 TLS、key 從 `key_env` 讀取並送到供應商、trace 等級的日誌與回應裡都沒有 key 與資料庫密碼；沒有 key、沒有 Postgres 的平台設定或角色的時間上限超過 `http.request_timeout` 時不啟動；兩個程序共用一個資料庫時，一邊的更換在另一邊的下一個請求生效；重新啟動後用最後一次更換；資料庫還原成較舊的設定時副本改用它並記 WARN；不再成立的覆寫被忽略並記 ERROR |
+| `tests/roles_store.rs` | 更換與重設：被拒絕的更換不寫任何東西、每次更換寫一筆紀錄、重設之後版本仍上升與衝突、服務角色不能改寫或刪除變更紀錄；服務角色與 owner 都不能讓世代或版本不升反降、也不能改角色名稱（trigger 回 42501）；被鎖擋住的讀取由伺服器在呼叫的期限結束（`lock_timeout` 的 55P03 或 `statement_timeout` 的 57014），不等到 `database.timeout`；下一個請求用新的模型、只在世代改變時重載；資料庫連不上（從啟動起、或中途斷線）時回 503 而不呼叫供應商；進行中的串流保留它的模型；重載不讓沒變的模型的並發計數歸零 |
 | `tests/no_contract.rs` | `cargo tree -p ai-gateway` 沒有 `contract` |
 
 `src/` 裡的單元測試涵蓋設定檢查、本文的換 `model`、錯誤格式與備援條件，以及 key 的遮蔽：互相重疊的 key、錯誤的 `type` 與 `code`、串流 `error` 事件裡用 JSON 跳脫寫成的 key。

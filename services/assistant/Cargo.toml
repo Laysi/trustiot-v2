@@ -1,0 +1,61 @@
+[package]
+name = "assistant"
+description = "TrustIoT v2 AI assistant (decision 31): the main agent loop with tools, an append-only conversation history, prompt caching and a token budget per question, calling Claude through the AI gateway."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "assistant"
+path = "src/main.rs"
+test = false
+doc = false
+
+[dependencies]
+# Anthropic Messages types: content blocks (thinking, tool calls) kept as received, usage by
+# billing category, stop reasons (src/model/anthropic.rs only).
+ai-clients = { path = "../../crates/ai-clients" }
+axum.workspace = true
+# Tool result images are checked to be base64 before they go to the model.
+base64.workspace = true
+# The telemetry tools check the model's times and the queryable period before they call.
+chrono = { workspace = true, features = ["alloc", "now"] }
+# Tenant and user IDs, the internal identity token a tool calls with, service names.
+contract = { path = "../../crates/contract" }
+# The `assistant.model_calls` counter (cache reads, docs/architecture/ai-assistant.md).
+opentelemetry = { workspace = true, features = ["metrics"] }
+# The AI gateway's internal API over plain HTTP: ztunnel adds mutual TLS inside the mesh, so no
+# TLS stack here (the same rule as crates/contract's internal client).
+reqwest.workspace = true
+serde = { workspace = true, features = ["derive"] }
+# `raw_value`: the conversation history is kept as the JSON text received and sent back as it is.
+serde_json = { workspace = true, features = ["raw_value"] }
+service-kit = { path = "../../crates/service-kit" }
+# The conversation store (src/store.rs) in the service role's tenant transactions; same TLS
+# stack as service-kit, which verifies the server on every connection (checklist M3).
+sqlx = { workspace = true, features = ["postgres", "runtime-tokio", "tls-rustls-ring-webpki"] }
+thiserror.workspace = true
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "sync", "time"] }
+tracing.workspace = true
+# Run and model call IDs (UUIDv7); device and model IDs in the services' answers.
+uuid = { workspace = true, features = ["serde", "v7"] }
+
+[dev-dependencies]
+# The tools read what these services answer: tests/delegated_tools.rs parses the services' own
+# response types and compares the routes and limits the tools copy.
+assets = { path = "../assets" }
+# The stand-in AI gateway of tests/gateway.rs.
+axum = { workspace = true, features = ["http1", "tokio"] }
+chrono = { workspace = true, features = ["now"] }
+telemetry-query = { path = "../telemetry-query" }
+# The product's schema (the migration Job), test identity tokens (and the request's verified
+# identity a question's delegation starts from), and the cross-tenant suite.
+testkit = { path = "../../crates/testkit" }
+tokio = { workspace = true, features = ["macros", "net", "rt-multi-thread", "sync", "time"] }
+# Captures the log events the tests check.
+tracing-subscriber = { workspace = true, features = ["registry", "std"] }
+
+[lints]
+workspace = true

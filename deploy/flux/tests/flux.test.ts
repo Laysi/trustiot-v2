@@ -747,6 +747,66 @@ describe("the demo release", () => {
   );
 
   test(
+    "with all four Postgres services on, the overlay passes the chart's connection check, which still refuses two identity replicas more (Laysi/trustiot-v2#575)",
+    () => {
+      // The demo slice turns certs and telemetry-query on next to identity and assets, and Flux rolls
+      // every service at once: the chart refuses values whose pools could then exceed Postgres'
+      // max_connections (deploy/chart/README.md, 「連線預算」).
+      const allFour: YamlMap = { services: { certs: { enabled: true }, "telemetry-query": { enabled: true } } };
+      const result = helmTemplate([overlay, allFour], setLiteral);
+      expect(result.stderr).toBe("");
+      expect(result.code).toBe(0);
+      const objects = parseAll(result.stdout);
+      const postgresClients = objects
+        .filter((m) => m.kind === "Deployment" && JSON.stringify(m).includes("TRUSTIOT__DATABASE__MAX_CONNECTIONS"))
+        .map((m) => m.metadata.name)
+        .sort();
+      expect(postgresClients).toEqual(["trustiot-assets", "trustiot-certs", "trustiot-identity", "trustiot-telemetry-query"]);
+      // The control: three identity replicas are 31 x 4 instead of 31 x 2, past the default 200.
+      const more = helmTemplate([overlay, allFour], [...setLiteral, "--set", "services.identity.replicas=3"]);
+      expect(more.code).not.toBe(0);
+      expect(more.stderr).toContain("postgres.bundled.parameters.max_connections is 200, but 212 connections are needed");
+    },
+    SLOW_TEST_MS,
+  );
+
+  test(
+    "the README's values that turn telemetry-query on render with the overlay: the service, its cookie route on the private app host, no Secret to add (Laysi/trustiot-v2#539)",
+    () => {
+      // The YAML block under 「打開 telemetry-query」 in deploy/flux/README.md, as an operator copies it.
+      const readme = read("deploy/flux/README.md");
+      const section = readme.slice(readme.indexOf("- **打開 telemetry-query**"));
+      const block = /\n {2}```yaml\n([\s\S]*?)\n {2}```\n/.exec(section)?.[1];
+      expect(block).toBeDefined();
+      const values = Bun.YAML.parse((block ?? "").replaceAll(/^ {2}/gm, "")) as YamlMap;
+      expect(Object.keys(values).sort()).toEqual(["ingress", "services"]);
+      // The overlay sets no route yet; once it does, the README's list must keep those (helm
+      // replaces a list as a whole), which this test cannot know, so it stops here.
+      expect(isMap(overlay.ingress) ? overlay.ingress.routes : undefined).toBeUndefined();
+      const result = helmTemplate([overlay, values], setLiteral);
+      expect(result.stderr).toBe("");
+      expect(result.code).toBe(0);
+      const objects = parseAll(result.stdout);
+      const deployment = objects.find((m) => m.kind === "Deployment" && m.metadata.name === "trustiot-telemetry-query");
+      expect(deployment).toBeDefined();
+      const pod = (spec(deployment!).template as { spec: { imagePullSecrets: { name: string }[] } }).spec;
+      expect(pod.imagePullSecrets).toEqual([{ name: GHCR_PULL_NAME }]);
+      const routes = objects.filter((m) => m.kind === "HTTPRoute").map((m) => JSON.stringify(m.spec));
+      expect(
+        routes.some((r) => r.includes('"value":"/api/telemetry"') && r.includes('"name":"trustiot-telemetry-query"') && r.includes(privateExample["app-host"]!)),
+      ).toBe(true);
+      // The passwords are generated in the cluster: the only Secret it reads is the one the chart
+      // declares for the migration Job to fill.
+      const secretRefs = new Set(
+        [...JSON.stringify(spec(deployment!)).matchAll(/"secretKeyRef":\{"key":"[^"]+","name":"([^"]+)"\}/g)].map((m) => m[1]),
+      );
+      expect([...secretRefs]).toEqual(["trustiot-telemetry-query-password"]);
+      expect(objects.some((m) => m.kind === "Secret" && m.metadata.name === "trustiot-telemetry-query-password")).toBe(true);
+    },
+    SLOW_TEST_MS,
+  );
+
+  test(
     "the private values arrive verbatim and change nothing else; through --set syntax the sender would set another value",
     () => {
       const literal = helmTemplate([overlay], setLiteral);
@@ -781,9 +841,10 @@ describe("the demo release", () => {
   );
 });
 
-// The MQTT broker (Laysi/trustiot-v2#84) needs a server certificate Secret that nothing in a
-// cluster issues yet (Laysi/trustiot-v2#535), so no cluster turns it on: the chart's shapes leave
-// it off, and so must every values file and value a cluster's release reads.
+// The MQTT broker (Laysi/trustiot-v2#84) is off in the chart's shapes. Its server certificate now
+// comes from the chart's own CronJob (Laysi/trustiot-v2#535), but turning the broker on in a
+// cluster is a change of its own, which updates this test; until then every values file and value
+// a cluster's release reads must leave it off.
 describe.each([...CLUSTERS])("the MQTT broker stays off in the %s cluster", (cluster) => {
   test("no values file of the release sets mqttBroker, and no private value targets it", () => {
     const data = one(cluster, "ConfigMap", "trustiot-values").data as Record<string, string>;

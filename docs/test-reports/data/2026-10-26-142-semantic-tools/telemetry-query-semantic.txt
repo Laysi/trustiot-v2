@@ -1,0 +1,330 @@
+     Running tests/semantic.rs
+
+running 1 test
+dataset synthetic version 1 (the synthetic fixture)
+latest meter-1: equal to the dataset's last readings
+latest meter-2: equal to the dataset's last readings
+latest press-1: equal to the dataset's last readings
+statistics "UTC" 15m meter-1/energy_kwh: 16 buckets, 48 readings, equal to the dataset
+statistics "UTC" 15m meter-1/power_kw: 16 buckets, 48 readings, equal to the dataset
+statistics "UTC" 15m meter-2/pulses: 16 buckets, 47 readings, equal to the dataset
+statistics "UTC" 15m meter-2/power_kw: 16 buckets, 47 readings, equal to the dataset
+statistics "UTC" 15m press-1/running: 14 buckets, 42 readings, equal to the dataset
+statistics "UTC" 15m press-1/mode: 14 buckets, 42 readings, equal to the dataset
+statistics "UTC" 15m press-1/cycle_count: 14 buckets, 42 readings, equal to the dataset
+statistics "UTC" 1h meter-1/energy_kwh: 4 buckets, 48 readings, equal to the dataset
+statistics "UTC" 1h meter-1/power_kw: 4 buckets, 48 readings, equal to the dataset
+statistics "UTC" 1h meter-2/pulses: 4 buckets, 47 readings, equal to the dataset
+statistics "UTC" 1h meter-2/power_kw: 4 buckets, 47 readings, equal to the dataset
+statistics "UTC" 1h press-1/running: 4 buckets, 42 readings, equal to the dataset
+statistics "UTC" 1h press-1/mode: 4 buckets, 42 readings, equal to the dataset
+statistics "UTC" 1h press-1/cycle_count: 4 buckets, 42 readings, equal to the dataset
+statistics "UTC" 1d meter-1/energy_kwh: 2 buckets, 48 readings, equal to the dataset
+statistics "UTC" 1d meter-1/power_kw: 2 buckets, 48 readings, equal to the dataset
+statistics "UTC" 1d meter-2/pulses: 2 buckets, 47 readings, equal to the dataset
+statistics "UTC" 1d meter-2/power_kw: 2 buckets, 47 readings, equal to the dataset
+statistics "UTC" 1d press-1/running: 2 buckets, 42 readings, equal to the dataset
+statistics "UTC" 1d press-1/mode: 2 buckets, 42 readings, equal to the dataset
+statistics "UTC" 1d press-1/cycle_count: 2 buckets, 42 readings, equal to the dataset
+statistics "UTC" 1w meter-1/energy_kwh: 1 buckets, 48 readings, equal to the dataset
+statistics "UTC" 1w meter-1/power_kw: 1 buckets, 48 readings, equal to the dataset
+statistics "UTC" 1w meter-2/pulses: 1 buckets, 47 readings, equal to the dataset
+statistics "UTC" 1w meter-2/power_kw: 1 buckets, 47 readings, equal to the dataset
+statistics "UTC" 1w press-1/running: 1 buckets, 42 readings, equal to the dataset
+statistics "UTC" 1w press-1/mode: 1 buckets, 42 readings, equal to the dataset
+statistics "UTC" 1w press-1/cycle_count: 1 buckets, 42 readings, equal to the dataset
+statistics "UTC" 1mo meter-1/energy_kwh: 1 buckets, 48 readings, equal to the dataset
+statistics "UTC" 1mo meter-1/power_kw: 1 buckets, 48 readings, equal to the dataset
+statistics "UTC" 1mo meter-2/pulses: 1 buckets, 47 readings, equal to the dataset
+statistics "UTC" 1mo meter-2/power_kw: 1 buckets, 47 readings, equal to the dataset
+statistics "UTC" 1mo press-1/running: 1 buckets, 42 readings, equal to the dataset
+statistics "UTC" 1mo press-1/mode: 1 buckets, 42 readings, equal to the dataset
+statistics "UTC" 1mo press-1/cycle_count: 1 buckets, 42 readings, equal to the dataset
+statistics "UTC" total meter-1/energy_kwh: 1 buckets, 48 readings, equal to the dataset
+statistics "UTC" total meter-1/power_kw: 1 buckets, 48 readings, equal to the dataset
+statistics "UTC" total meter-2/pulses: 1 buckets, 47 readings, equal to the dataset
+statistics "UTC" total meter-2/power_kw: 1 buckets, 47 readings, equal to the dataset
+statistics "UTC" total press-1/running: 1 buckets, 42 readings, equal to the dataset
+statistics "UTC" total press-1/mode: 1 buckets, 42 readings, equal to the dataset
+statistics "UTC" total press-1/cycle_count: 1 buckets, 42 readings, equal to the dataset
+statistics "Asia/Taipei" 15m meter-1/energy_kwh: 16 buckets, 48 readings, equal to the dataset
+statistics "Asia/Taipei" 15m meter-1/power_kw: 16 buckets, 48 readings, equal to the dataset
+statistics "Asia/Taipei" 15m meter-2/pulses: 16 buckets, 47 readings, equal to the dataset
+statistics "Asia/Taipei" 15m meter-2/power_kw: 16 buckets, 47 readings, equal to the dataset
+statistics "Asia/Taipei" 15m press-1/running: 14 buckets, 42 readings, equal to the dataset
+statistics "Asia/Taipei" 15m press-1/mode: 14 buckets, 42 readings, equal to the dataset
+statistics "Asia/Taipei" 15m press-1/cycle_count: 14 buckets, 42 readings, equal to the dataset
+statistics "Asia/Taipei" 1h meter-1/energy_kwh: 4 buckets, 48 readings, equal to the dataset
+statistics "Asia/Taipei" 1h meter-1/power_kw: 4 buckets, 48 readings, equal to the dataset
+statistics "Asia/Taipei" 1h meter-2/pulses: 4 buckets, 47 readings, equal to the dataset
+statistics "Asia/Taipei" 1h meter-2/power_kw: 4 buckets, 47 readings, equal to the dataset
+statistics "Asia/Taipei" 1h press-1/running: 4 buckets, 42 readings, equal to the dataset
+statistics "Asia/Taipei" 1h press-1/mode: 4 buckets, 42 readings, equal to the dataset
+statistics "Asia/Taipei" 1h press-1/cycle_count: 4 buckets, 42 readings, equal to the dataset
+statistics "Asia/Taipei" 1d meter-1/energy_kwh: 1 buckets, 48 readings, equal to the dataset
+statistics "Asia/Taipei" 1d meter-1/power_kw: 1 buckets, 48 readings, equal to the dataset
+statistics "Asia/Taipei" 1d meter-2/pulses: 1 buckets, 47 readings, equal to the dataset
+statistics "Asia/Taipei" 1d meter-2/power_kw: 1 buckets, 47 readings, equal to the dataset
+statistics "Asia/Taipei" 1d press-1/running: 1 buckets, 42 readings, equal to the dataset
+statistics "Asia/Taipei" 1d press-1/mode: 1 buckets, 42 readings, equal to the dataset
+statistics "Asia/Taipei" 1d press-1/cycle_count: 1 buckets, 42 readings, equal to the dataset
+statistics "Asia/Taipei" 1w meter-1/energy_kwh: 1 buckets, 48 readings, equal to the dataset
+statistics "Asia/Taipei" 1w meter-1/power_kw: 1 buckets, 48 readings, equal to the dataset
+statistics "Asia/Taipei" 1w meter-2/pulses: 1 buckets, 47 readings, equal to the dataset
+statistics "Asia/Taipei" 1w meter-2/power_kw: 1 buckets, 47 readings, equal to the dataset
+statistics "Asia/Taipei" 1w press-1/running: 1 buckets, 42 readings, equal to the dataset
+statistics "Asia/Taipei" 1w press-1/mode: 1 buckets, 42 readings, equal to the dataset
+statistics "Asia/Taipei" 1w press-1/cycle_count: 1 buckets, 42 readings, equal to the dataset
+statistics "Asia/Taipei" 1mo meter-1/energy_kwh: 1 buckets, 48 readings, equal to the dataset
+statistics "Asia/Taipei" 1mo meter-1/power_kw: 1 buckets, 48 readings, equal to the dataset
+statistics "Asia/Taipei" 1mo meter-2/pulses: 1 buckets, 47 readings, equal to the dataset
+statistics "Asia/Taipei" 1mo meter-2/power_kw: 1 buckets, 47 readings, equal to the dataset
+statistics "Asia/Taipei" 1mo press-1/running: 1 buckets, 42 readings, equal to the dataset
+statistics "Asia/Taipei" 1mo press-1/mode: 1 buckets, 42 readings, equal to the dataset
+statistics "Asia/Taipei" 1mo press-1/cycle_count: 1 buckets, 42 readings, equal to the dataset
+statistics "Asia/Taipei" total meter-1/energy_kwh: 1 buckets, 48 readings, equal to the dataset
+statistics "Asia/Taipei" total meter-1/power_kw: 1 buckets, 48 readings, equal to the dataset
+statistics "Asia/Taipei" total meter-2/pulses: 1 buckets, 47 readings, equal to the dataset
+statistics "Asia/Taipei" total meter-2/power_kw: 1 buckets, 47 readings, equal to the dataset
+statistics "Asia/Taipei" total press-1/running: 1 buckets, 42 readings, equal to the dataset
+statistics "Asia/Taipei" total press-1/mode: 1 buckets, 42 readings, equal to the dataset
+statistics "Asia/Taipei" total press-1/cycle_count: 1 buckets, 42 readings, equal to the dataset
+statistics "Asia/Kolkata" 15m meter-1/energy_kwh: 16 buckets, 48 readings, equal to the dataset
+statistics "Asia/Kolkata" 15m meter-1/power_kw: 16 buckets, 48 readings, equal to the dataset
+statistics "Asia/Kolkata" 15m meter-2/pulses: 16 buckets, 47 readings, equal to the dataset
+statistics "Asia/Kolkata" 15m meter-2/power_kw: 16 buckets, 47 readings, equal to the dataset
+statistics "Asia/Kolkata" 15m press-1/running: 14 buckets, 42 readings, equal to the dataset
+statistics "Asia/Kolkata" 15m press-1/mode: 14 buckets, 42 readings, equal to the dataset
+statistics "Asia/Kolkata" 15m press-1/cycle_count: 14 buckets, 42 readings, equal to the dataset
+statistics "Asia/Kolkata" 1h meter-1/energy_kwh: 5 buckets, 48 readings, equal to the dataset
+statistics "Asia/Kolkata" 1h meter-1/power_kw: 5 buckets, 48 readings, equal to the dataset
+statistics "Asia/Kolkata" 1h meter-2/pulses: 5 buckets, 47 readings, equal to the dataset
+statistics "Asia/Kolkata" 1h meter-2/power_kw: 5 buckets, 47 readings, equal to the dataset
+statistics "Asia/Kolkata" 1h press-1/running: 5 buckets, 42 readings, equal to the dataset
+statistics "Asia/Kolkata" 1h press-1/mode: 5 buckets, 42 readings, equal to the dataset
+statistics "Asia/Kolkata" 1h press-1/cycle_count: 5 buckets, 42 readings, equal to the dataset
+statistics "Asia/Kolkata" 1d meter-1/energy_kwh: 1 buckets, 48 readings, equal to the dataset
+statistics "Asia/Kolkata" 1d meter-1/power_kw: 1 buckets, 48 readings, equal to the dataset
+statistics "Asia/Kolkata" 1d meter-2/pulses: 1 buckets, 47 readings, equal to the dataset
+statistics "Asia/Kolkata" 1d meter-2/power_kw: 1 buckets, 47 readings, equal to the dataset
+statistics "Asia/Kolkata" 1d press-1/running: 1 buckets, 42 readings, equal to the dataset
+statistics "Asia/Kolkata" 1d press-1/mode: 1 buckets, 42 readings, equal to the dataset
+statistics "Asia/Kolkata" 1d press-1/cycle_count: 1 buckets, 42 readings, equal to the dataset
+statistics "Asia/Kolkata" 1w meter-1/energy_kwh: 1 buckets, 48 readings, equal to the dataset
+statistics "Asia/Kolkata" 1w meter-1/power_kw: 1 buckets, 48 readings, equal to the dataset
+statistics "Asia/Kolkata" 1w meter-2/pulses: 1 buckets, 47 readings, equal to the dataset
+statistics "Asia/Kolkata" 1w meter-2/power_kw: 1 buckets, 47 readings, equal to the dataset
+statistics "Asia/Kolkata" 1w press-1/running: 1 buckets, 42 readings, equal to the dataset
+statistics "Asia/Kolkata" 1w press-1/mode: 1 buckets, 42 readings, equal to the dataset
+statistics "Asia/Kolkata" 1w press-1/cycle_count: 1 buckets, 42 readings, equal to the dataset
+statistics "Asia/Kolkata" 1mo meter-1/energy_kwh: 1 buckets, 48 readings, equal to the dataset
+statistics "Asia/Kolkata" 1mo meter-1/power_kw: 1 buckets, 48 readings, equal to the dataset
+statistics "Asia/Kolkata" 1mo meter-2/pulses: 1 buckets, 47 readings, equal to the dataset
+statistics "Asia/Kolkata" 1mo meter-2/power_kw: 1 buckets, 47 readings, equal to the dataset
+statistics "Asia/Kolkata" 1mo press-1/running: 1 buckets, 42 readings, equal to the dataset
+statistics "Asia/Kolkata" 1mo press-1/mode: 1 buckets, 42 readings, equal to the dataset
+statistics "Asia/Kolkata" 1mo press-1/cycle_count: 1 buckets, 42 readings, equal to the dataset
+statistics "Asia/Kolkata" total meter-1/energy_kwh: 1 buckets, 48 readings, equal to the dataset
+statistics "Asia/Kolkata" total meter-1/power_kw: 1 buckets, 48 readings, equal to the dataset
+statistics "Asia/Kolkata" total meter-2/pulses: 1 buckets, 47 readings, equal to the dataset
+statistics "Asia/Kolkata" total meter-2/power_kw: 1 buckets, 47 readings, equal to the dataset
+statistics "Asia/Kolkata" total press-1/running: 1 buckets, 42 readings, equal to the dataset
+statistics "Asia/Kolkata" total press-1/mode: 1 buckets, 42 readings, equal to the dataset
+statistics "Asia/Kolkata" total press-1/cycle_count: 1 buckets, 42 readings, equal to the dataset
+usage "UTC" 1h "1h" meter-1/energy_kwh: 164.04600000000045 over 4 buckets, 1 drops, 0 gaps, 0 suspicious steps, check 1 drops / 6 rises / 7 comparisons (TooFewReadings), baseline false; equal to the reference
+usage "UTC" 1h "1h" meter-1/power_kw: not_cumulative (check: 6 drops, 1 rises, 7 comparisons)
+usage "UTC" 1h "1h" meter-2/pulses: 3048 over 4 buckets, 1 drops, 0 gaps, 0 suspicious steps, check 1 drops / 6 rises / 7 comparisons (TooFewReadings), baseline false; equal to the reference
+usage "UTC" 1h "1h" meter-2/power_kw: not_cumulative (check: 5 drops, 2 rises, 7 comparisons)
+usage "UTC" 1h "1h" press-1/running: not_numeric (check: 0 drops, 0 rises, 0 comparisons)
+usage "UTC" 1h "1h" press-1/mode: not_numeric (check: 0 drops, 0 rises, 0 comparisons)
+usage "UTC" 1h "1h" press-1/cycle_count: 172 over 4 buckets, 0 drops, 1 gaps, 0 suspicious steps, check 0 drops / 7 rises / 7 comparisons (TooFewReadings), baseline false; equal to the reference
+usage "UTC" 1h "1h" meter-1/energy_kwh: 120.34699999999992 over 3 buckets, 1 drops, 0 gaps, 0 suspicious steps, check 1 drops / 6 rises / 7 comparisons (TooFewReadings), baseline true; equal to the reference
+usage "UTC" 1h "1h" meter-1/power_kw: not_cumulative (check: 6 drops, 1 rises, 7 comparisons)
+usage "UTC" 1h "1h" meter-2/pulses: 2325 over 3 buckets, 1 drops, 0 gaps, 0 suspicious steps, check 1 drops / 6 rises / 7 comparisons (TooFewReadings), baseline true; equal to the reference
+usage "UTC" 1h "1h" meter-2/power_kw: not_cumulative (check: 5 drops, 2 rises, 7 comparisons)
+usage "UTC" 1h "1h" press-1/running: not_numeric (check: 0 drops, 0 rises, 0 comparisons)
+usage "UTC" 1h "1h" press-1/mode: not_numeric (check: 0 drops, 0 rises, 0 comparisons)
+usage "UTC" 1h "1h" press-1/cycle_count: 128 over 3 buckets, 0 drops, 1 gaps, 0 suspicious steps, check 0 drops / 7 rises / 7 comparisons (TooFewReadings), baseline true; equal to the reference
+usage "UTC" 1d "1h" meter-1/energy_kwh: 164.04600000000045 over 2 buckets, 1 drops, 0 gaps, 0 suspicious steps, check 1 drops / 6 rises / 7 comparisons (TooFewReadings), baseline false; equal to the reference
+usage "UTC" 1d "1h" meter-1/power_kw: not_cumulative (check: 6 drops, 1 rises, 7 comparisons)
+usage "UTC" 1d "1h" meter-2/pulses: 3048 over 2 buckets, 1 drops, 0 gaps, 0 suspicious steps, check 1 drops / 6 rises / 7 comparisons (TooFewReadings), baseline false; equal to the reference
+usage "UTC" 1d "1h" meter-2/power_kw: not_cumulative (check: 5 drops, 2 rises, 7 comparisons)
+usage "UTC" 1d "1h" press-1/running: not_numeric (check: 0 drops, 0 rises, 0 comparisons)
+usage "UTC" 1d "1h" press-1/mode: not_numeric (check: 0 drops, 0 rises, 0 comparisons)
+usage "UTC" 1d "1h" press-1/cycle_count: 172 over 2 buckets, 0 drops, 1 gaps, 0 suspicious steps, check 0 drops / 7 rises / 7 comparisons (TooFewReadings), baseline false; equal to the reference
+usage "UTC" 1w "1h" meter-1/energy_kwh: 164.04600000000045 over 1 buckets, 1 drops, 0 gaps, 0 suspicious steps, check 1 drops / 6 rises / 7 comparisons (TooFewReadings), baseline false; equal to the reference
+usage "UTC" 1w "1h" meter-1/power_kw: not_cumulative (check: 6 drops, 1 rises, 7 comparisons)
+usage "UTC" 1w "1h" meter-2/pulses: 3048 over 1 buckets, 1 drops, 0 gaps, 0 suspicious steps, check 1 drops / 6 rises / 7 comparisons (TooFewReadings), baseline false; equal to the reference
+usage "UTC" 1w "1h" meter-2/power_kw: not_cumulative (check: 5 drops, 2 rises, 7 comparisons)
+usage "UTC" 1w "1h" press-1/running: not_numeric (check: 0 drops, 0 rises, 0 comparisons)
+usage "UTC" 1w "1h" press-1/mode: not_numeric (check: 0 drops, 0 rises, 0 comparisons)
+usage "UTC" 1w "1h" press-1/cycle_count: 172 over 1 buckets, 0 drops, 1 gaps, 0 suspicious steps, check 0 drops / 7 rises / 7 comparisons (TooFewReadings), baseline false; equal to the reference
+usage "UTC" 1mo "1h" meter-1/energy_kwh: 164.04600000000045 over 1 buckets, 1 drops, 0 gaps, 0 suspicious steps, check 1 drops / 6 rises / 7 comparisons (TooFewReadings), baseline false; equal to the reference
+usage "UTC" 1mo "1h" meter-1/power_kw: not_cumulative (check: 6 drops, 1 rises, 7 comparisons)
+usage "UTC" 1mo "1h" meter-2/pulses: 3048 over 1 buckets, 1 drops, 0 gaps, 0 suspicious steps, check 1 drops / 6 rises / 7 comparisons (TooFewReadings), baseline false; equal to the reference
+usage "UTC" 1mo "1h" meter-2/power_kw: not_cumulative (check: 5 drops, 2 rises, 7 comparisons)
+usage "UTC" 1mo "1h" press-1/running: not_numeric (check: 0 drops, 0 rises, 0 comparisons)
+usage "UTC" 1mo "1h" press-1/mode: not_numeric (check: 0 drops, 0 rises, 0 comparisons)
+usage "UTC" 1mo "1h" press-1/cycle_count: 172 over 1 buckets, 0 drops, 1 gaps, 0 suspicious steps, check 0 drops / 7 rises / 7 comparisons (TooFewReadings), baseline false; equal to the reference
+usage "UTC" total "1h" meter-1/energy_kwh: 164.04600000000045 over 1 buckets, 1 drops, 0 gaps, 0 suspicious steps, check 1 drops / 6 rises / 7 comparisons (TooFewReadings), baseline false; equal to the reference
+usage "UTC" total "1h" meter-1/power_kw: not_cumulative (check: 6 drops, 1 rises, 7 comparisons)
+usage "UTC" total "1h" meter-2/pulses: 3048 over 1 buckets, 1 drops, 0 gaps, 0 suspicious steps, check 1 drops / 6 rises / 7 comparisons (TooFewReadings), baseline false; equal to the reference
+usage "UTC" total "1h" meter-2/power_kw: not_cumulative (check: 5 drops, 2 rises, 7 comparisons)
+usage "UTC" total "1h" press-1/running: not_numeric (check: 0 drops, 0 rises, 0 comparisons)
+usage "UTC" total "1h" press-1/mode: not_numeric (check: 0 drops, 0 rises, 0 comparisons)
+usage "UTC" total "1h" press-1/cycle_count: 172 over 1 buckets, 0 drops, 1 gaps, 0 suspicious steps, check 0 drops / 7 rises / 7 comparisons (TooFewReadings), baseline false; equal to the reference
+usage "UTC" 15m "1m" meter-1/energy_kwh: 164.04600000000048 over 16 buckets, 1 drops, 0 gaps, 0 suspicious steps, check 1 drops / 46 rises / 47 comparisons (Cumulative), baseline false; equal to the reference
+usage "UTC" 15m "1m" meter-1/power_kw: not_cumulative (check: 26 drops, 21 rises, 47 comparisons)
+usage "UTC" 15m "1m" meter-2/pulses: 3048 over 16 buckets, 1 drops, 1 gaps, 0 suspicious steps, check 1 drops / 45 rises / 46 comparisons (Cumulative), baseline false; equal to the reference
+usage "UTC" 15m "1m" meter-2/power_kw: not_cumulative (check: 26 drops, 20 rises, 46 comparisons)
+usage "UTC" 15m "1m" press-1/running: not_numeric (check: 0 drops, 0 rises, 0 comparisons)
+usage "UTC" 15m "1m" press-1/mode: not_numeric (check: 0 drops, 0 rises, 0 comparisons)
+usage "UTC" 15m "1m" press-1/cycle_count: 172 over 14 buckets, 0 drops, 1 gaps, 0 suspicious steps, check 0 drops / 37 rises / 41 comparisons (Cumulative), baseline false; equal to the reference
+usage "Asia/Taipei" 1h "1h" meter-1/energy_kwh: 164.04600000000045 over 4 buckets, 1 drops, 0 gaps, 0 suspicious steps, check 1 drops / 6 rises / 7 comparisons (TooFewReadings), baseline false; equal to the reference
+usage "Asia/Taipei" 1h "1h" meter-1/power_kw: not_cumulative (check: 6 drops, 1 rises, 7 comparisons)
+usage "Asia/Taipei" 1h "1h" meter-2/pulses: 3048 over 4 buckets, 1 drops, 0 gaps, 0 suspicious steps, check 1 drops / 6 rises / 7 comparisons (TooFewReadings), baseline false; equal to the reference
+usage "Asia/Taipei" 1h "1h" meter-2/power_kw: not_cumulative (check: 5 drops, 2 rises, 7 comparisons)
+usage "Asia/Taipei" 1h "1h" press-1/running: not_numeric (check: 0 drops, 0 rises, 0 comparisons)
+usage "Asia/Taipei" 1h "1h" press-1/mode: not_numeric (check: 0 drops, 0 rises, 0 comparisons)
+usage "Asia/Taipei" 1h "1h" press-1/cycle_count: 172 over 4 buckets, 0 drops, 1 gaps, 0 suspicious steps, check 0 drops / 7 rises / 7 comparisons (TooFewReadings), baseline false; equal to the reference
+usage "Asia/Taipei" 1h "1h" meter-1/energy_kwh: 120.34699999999992 over 3 buckets, 1 drops, 0 gaps, 0 suspicious steps, check 1 drops / 6 rises / 7 comparisons (TooFewReadings), baseline true; equal to the reference
+usage "Asia/Taipei" 1h "1h" meter-1/power_kw: not_cumulative (check: 6 drops, 1 rises, 7 comparisons)
+usage "Asia/Taipei" 1h "1h" meter-2/pulses: 2325 over 3 buckets, 1 drops, 0 gaps, 0 suspicious steps, check 1 drops / 6 rises / 7 comparisons (TooFewReadings), baseline true; equal to the reference
+usage "Asia/Taipei" 1h "1h" meter-2/power_kw: not_cumulative (check: 5 drops, 2 rises, 7 comparisons)
+usage "Asia/Taipei" 1h "1h" press-1/running: not_numeric (check: 0 drops, 0 rises, 0 comparisons)
+usage "Asia/Taipei" 1h "1h" press-1/mode: not_numeric (check: 0 drops, 0 rises, 0 comparisons)
+usage "Asia/Taipei" 1h "1h" press-1/cycle_count: 128 over 3 buckets, 0 drops, 1 gaps, 0 suspicious steps, check 0 drops / 7 rises / 7 comparisons (TooFewReadings), baseline true; equal to the reference
+usage "Asia/Taipei" 1d "1h" meter-1/energy_kwh: 164.04600000000045 over 1 buckets, 1 drops, 0 gaps, 0 suspicious steps, check 1 drops / 6 rises / 7 comparisons (TooFewReadings), baseline false; equal to the reference
+usage "Asia/Taipei" 1d "1h" meter-1/power_kw: not_cumulative (check: 6 drops, 1 rises, 7 comparisons)
+usage "Asia/Taipei" 1d "1h" meter-2/pulses: 3048 over 1 buckets, 1 drops, 0 gaps, 0 suspicious steps, check 1 drops / 6 rises / 7 comparisons (TooFewReadings), baseline false; equal to the reference
+usage "Asia/Taipei" 1d "1h" meter-2/power_kw: not_cumulative (check: 5 drops, 2 rises, 7 comparisons)
+usage "Asia/Taipei" 1d "1h" press-1/running: not_numeric (check: 0 drops, 0 rises, 0 comparisons)
+usage "Asia/Taipei" 1d "1h" press-1/mode: not_numeric (check: 0 drops, 0 rises, 0 comparisons)
+usage "Asia/Taipei" 1d "1h" press-1/cycle_count: 172 over 1 buckets, 0 drops, 1 gaps, 0 suspicious steps, check 0 drops / 7 rises / 7 comparisons (TooFewReadings), baseline false; equal to the reference
+usage "Asia/Taipei" 1w "1h" meter-1/energy_kwh: 164.04600000000045 over 1 buckets, 1 drops, 0 gaps, 0 suspicious steps, check 1 drops / 6 rises / 7 comparisons (TooFewReadings), baseline false; equal to the reference
+usage "Asia/Taipei" 1w "1h" meter-1/power_kw: not_cumulative (check: 6 drops, 1 rises, 7 comparisons)
+usage "Asia/Taipei" 1w "1h" meter-2/pulses: 3048 over 1 buckets, 1 drops, 0 gaps, 0 suspicious steps, check 1 drops / 6 rises / 7 comparisons (TooFewReadings), baseline false; equal to the reference
+usage "Asia/Taipei" 1w "1h" meter-2/power_kw: not_cumulative (check: 5 drops, 2 rises, 7 comparisons)
+usage "Asia/Taipei" 1w "1h" press-1/running: not_numeric (check: 0 drops, 0 rises, 0 comparisons)
+usage "Asia/Taipei" 1w "1h" press-1/mode: not_numeric (check: 0 drops, 0 rises, 0 comparisons)
+usage "Asia/Taipei" 1w "1h" press-1/cycle_count: 172 over 1 buckets, 0 drops, 1 gaps, 0 suspicious steps, check 0 drops / 7 rises / 7 comparisons (TooFewReadings), baseline false; equal to the reference
+usage "Asia/Taipei" 1mo "1h" meter-1/energy_kwh: 164.04600000000045 over 1 buckets, 1 drops, 0 gaps, 0 suspicious steps, check 1 drops / 6 rises / 7 comparisons (TooFewReadings), baseline false; equal to the reference
+usage "Asia/Taipei" 1mo "1h" meter-1/power_kw: not_cumulative (check: 6 drops, 1 rises, 7 comparisons)
+usage "Asia/Taipei" 1mo "1h" meter-2/pulses: 3048 over 1 buckets, 1 drops, 0 gaps, 0 suspicious steps, check 1 drops / 6 rises / 7 comparisons (TooFewReadings), baseline false; equal to the reference
+usage "Asia/Taipei" 1mo "1h" meter-2/power_kw: not_cumulative (check: 5 drops, 2 rises, 7 comparisons)
+usage "Asia/Taipei" 1mo "1h" press-1/running: not_numeric (check: 0 drops, 0 rises, 0 comparisons)
+usage "Asia/Taipei" 1mo "1h" press-1/mode: not_numeric (check: 0 drops, 0 rises, 0 comparisons)
+usage "Asia/Taipei" 1mo "1h" press-1/cycle_count: 172 over 1 buckets, 0 drops, 1 gaps, 0 suspicious steps, check 0 drops / 7 rises / 7 comparisons (TooFewReadings), baseline false; equal to the reference
+usage "Asia/Taipei" total "1h" meter-1/energy_kwh: 164.04600000000045 over 1 buckets, 1 drops, 0 gaps, 0 suspicious steps, check 1 drops / 6 rises / 7 comparisons (TooFewReadings), baseline false; equal to the reference
+usage "Asia/Taipei" total "1h" meter-1/power_kw: not_cumulative (check: 6 drops, 1 rises, 7 comparisons)
+usage "Asia/Taipei" total "1h" meter-2/pulses: 3048 over 1 buckets, 1 drops, 0 gaps, 0 suspicious steps, check 1 drops / 6 rises / 7 comparisons (TooFewReadings), baseline false; equal to the reference
+usage "Asia/Taipei" total "1h" meter-2/power_kw: not_cumulative (check: 5 drops, 2 rises, 7 comparisons)
+usage "Asia/Taipei" total "1h" press-1/running: not_numeric (check: 0 drops, 0 rises, 0 comparisons)
+usage "Asia/Taipei" total "1h" press-1/mode: not_numeric (check: 0 drops, 0 rises, 0 comparisons)
+usage "Asia/Taipei" total "1h" press-1/cycle_count: 172 over 1 buckets, 0 drops, 1 gaps, 0 suspicious steps, check 0 drops / 7 rises / 7 comparisons (TooFewReadings), baseline false; equal to the reference
+usage "Asia/Taipei" 15m "1m" meter-1/energy_kwh: 164.04600000000048 over 16 buckets, 1 drops, 0 gaps, 0 suspicious steps, check 1 drops / 46 rises / 47 comparisons (Cumulative), baseline false; equal to the reference
+usage "Asia/Taipei" 15m "1m" meter-1/power_kw: not_cumulative (check: 26 drops, 21 rises, 47 comparisons)
+usage "Asia/Taipei" 15m "1m" meter-2/pulses: 3048 over 16 buckets, 1 drops, 1 gaps, 0 suspicious steps, check 1 drops / 45 rises / 46 comparisons (Cumulative), baseline false; equal to the reference
+usage "Asia/Taipei" 15m "1m" meter-2/power_kw: not_cumulative (check: 26 drops, 20 rises, 46 comparisons)
+usage "Asia/Taipei" 15m "1m" press-1/running: not_numeric (check: 0 drops, 0 rises, 0 comparisons)
+usage "Asia/Taipei" 15m "1m" press-1/mode: not_numeric (check: 0 drops, 0 rises, 0 comparisons)
+usage "Asia/Taipei" 15m "1m" press-1/cycle_count: 172 over 14 buckets, 0 drops, 1 gaps, 0 suspicious steps, check 0 drops / 37 rises / 41 comparisons (Cumulative), baseline false; equal to the reference
+usage "Asia/Kolkata" 1h "1m" meter-1/energy_kwh: 164.04600000000048 over 5 buckets, 1 drops, 0 gaps, 0 suspicious steps, check 1 drops / 46 rises / 47 comparisons (Cumulative), baseline false; equal to the reference
+usage "Asia/Kolkata" 1h "1m" meter-1/power_kw: not_cumulative (check: 26 drops, 21 rises, 47 comparisons)
+usage "Asia/Kolkata" 1h "1m" meter-2/pulses: 3048 over 5 buckets, 1 drops, 1 gaps, 0 suspicious steps, check 1 drops / 45 rises / 46 comparisons (Cumulative), baseline false; equal to the reference
+usage "Asia/Kolkata" 1h "1m" meter-2/power_kw: not_cumulative (check: 26 drops, 20 rises, 46 comparisons)
+usage "Asia/Kolkata" 1h "1m" press-1/running: not_numeric (check: 0 drops, 0 rises, 0 comparisons)
+usage "Asia/Kolkata" 1h "1m" press-1/mode: not_numeric (check: 0 drops, 0 rises, 0 comparisons)
+usage "Asia/Kolkata" 1h "1m" press-1/cycle_count: 172 over 5 buckets, 0 drops, 1 gaps, 0 suspicious steps, check 0 drops / 37 rises / 41 comparisons (Cumulative), baseline false; equal to the reference
+usage "Asia/Kolkata" 1h "1m" meter-1/energy_kwh: 120.34699999999994 over 4 buckets, 1 drops, 0 gaps, 0 suspicious steps, check 1 drops / 46 rises / 47 comparisons (Cumulative), baseline true; equal to the reference
+usage "Asia/Kolkata" 1h "1m" meter-1/power_kw: not_cumulative (check: 26 drops, 21 rises, 47 comparisons)
+usage "Asia/Kolkata" 1h "1m" meter-2/pulses: 2325 over 4 buckets, 1 drops, 0 gaps, 0 suspicious steps, check 1 drops / 45 rises / 46 comparisons (Cumulative), baseline true; equal to the reference
+usage "Asia/Kolkata" 1h "1m" meter-2/power_kw: not_cumulative (check: 26 drops, 20 rises, 46 comparisons)
+usage "Asia/Kolkata" 1h "1m" press-1/running: not_numeric (check: 0 drops, 0 rises, 0 comparisons)
+usage "Asia/Kolkata" 1h "1m" press-1/mode: not_numeric (check: 0 drops, 0 rises, 0 comparisons)
+usage "Asia/Kolkata" 1h "1m" press-1/cycle_count: 128 over 4 buckets, 0 drops, 1 gaps, 0 suspicious steps, check 0 drops / 37 rises / 41 comparisons (Cumulative), baseline true; equal to the reference
+usage "Asia/Kolkata" 1d "1m" meter-1/energy_kwh: 164.04600000000045 over 1 buckets, 1 drops, 0 gaps, 0 suspicious steps, check 1 drops / 46 rises / 47 comparisons (Cumulative), baseline false; equal to the reference
+usage "Asia/Kolkata" 1d "1m" meter-1/power_kw: not_cumulative (check: 26 drops, 21 rises, 47 comparisons)
+usage "Asia/Kolkata" 1d "1m" meter-2/pulses: 3048 over 1 buckets, 1 drops, 1 gaps, 0 suspicious steps, check 1 drops / 45 rises / 46 comparisons (Cumulative), baseline false; equal to the reference
+usage "Asia/Kolkata" 1d "1m" meter-2/power_kw: not_cumulative (check: 26 drops, 20 rises, 46 comparisons)
+usage "Asia/Kolkata" 1d "1m" press-1/running: not_numeric (check: 0 drops, 0 rises, 0 comparisons)
+usage "Asia/Kolkata" 1d "1m" press-1/mode: not_numeric (check: 0 drops, 0 rises, 0 comparisons)
+usage "Asia/Kolkata" 1d "1m" press-1/cycle_count: 172 over 1 buckets, 0 drops, 1 gaps, 0 suspicious steps, check 0 drops / 37 rises / 41 comparisons (Cumulative), baseline false; equal to the reference
+usage "Asia/Kolkata" 1w "1m" meter-1/energy_kwh: 164.04600000000045 over 1 buckets, 1 drops, 0 gaps, 0 suspicious steps, check 1 drops / 46 rises / 47 comparisons (Cumulative), baseline false; equal to the reference
+usage "Asia/Kolkata" 1w "1m" meter-1/power_kw: not_cumulative (check: 26 drops, 21 rises, 47 comparisons)
+usage "Asia/Kolkata" 1w "1m" meter-2/pulses: 3048 over 1 buckets, 1 drops, 1 gaps, 0 suspicious steps, check 1 drops / 45 rises / 46 comparisons (Cumulative), baseline false; equal to the reference
+usage "Asia/Kolkata" 1w "1m" meter-2/power_kw: not_cumulative (check: 26 drops, 20 rises, 46 comparisons)
+usage "Asia/Kolkata" 1w "1m" press-1/running: not_numeric (check: 0 drops, 0 rises, 0 comparisons)
+usage "Asia/Kolkata" 1w "1m" press-1/mode: not_numeric (check: 0 drops, 0 rises, 0 comparisons)
+usage "Asia/Kolkata" 1w "1m" press-1/cycle_count: 172 over 1 buckets, 0 drops, 1 gaps, 0 suspicious steps, check 0 drops / 37 rises / 41 comparisons (Cumulative), baseline false; equal to the reference
+usage "Asia/Kolkata" 1mo "1m" meter-1/energy_kwh: 164.04600000000045 over 1 buckets, 1 drops, 0 gaps, 0 suspicious steps, check 1 drops / 46 rises / 47 comparisons (Cumulative), baseline false; equal to the reference
+usage "Asia/Kolkata" 1mo "1m" meter-1/power_kw: not_cumulative (check: 26 drops, 21 rises, 47 comparisons)
+usage "Asia/Kolkata" 1mo "1m" meter-2/pulses: 3048 over 1 buckets, 1 drops, 1 gaps, 0 suspicious steps, check 1 drops / 45 rises / 46 comparisons (Cumulative), baseline false; equal to the reference
+usage "Asia/Kolkata" 1mo "1m" meter-2/power_kw: not_cumulative (check: 26 drops, 20 rises, 46 comparisons)
+usage "Asia/Kolkata" 1mo "1m" press-1/running: not_numeric (check: 0 drops, 0 rises, 0 comparisons)
+usage "Asia/Kolkata" 1mo "1m" press-1/mode: not_numeric (check: 0 drops, 0 rises, 0 comparisons)
+usage "Asia/Kolkata" 1mo "1m" press-1/cycle_count: 172 over 1 buckets, 0 drops, 1 gaps, 0 suspicious steps, check 0 drops / 37 rises / 41 comparisons (Cumulative), baseline false; equal to the reference
+usage "Asia/Kolkata" total "1m" meter-1/energy_kwh: 164.04600000000045 over 1 buckets, 1 drops, 0 gaps, 0 suspicious steps, check 1 drops / 46 rises / 47 comparisons (Cumulative), baseline false; equal to the reference
+usage "Asia/Kolkata" total "1m" meter-1/power_kw: not_cumulative (check: 26 drops, 21 rises, 47 comparisons)
+usage "Asia/Kolkata" total "1m" meter-2/pulses: 3048 over 1 buckets, 1 drops, 1 gaps, 0 suspicious steps, check 1 drops / 45 rises / 46 comparisons (Cumulative), baseline false; equal to the reference
+usage "Asia/Kolkata" total "1m" meter-2/power_kw: not_cumulative (check: 26 drops, 20 rises, 46 comparisons)
+usage "Asia/Kolkata" total "1m" press-1/running: not_numeric (check: 0 drops, 0 rises, 0 comparisons)
+usage "Asia/Kolkata" total "1m" press-1/mode: not_numeric (check: 0 drops, 0 rises, 0 comparisons)
+usage "Asia/Kolkata" total "1m" press-1/cycle_count: 172 over 1 buckets, 0 drops, 1 gaps, 0 suspicious steps, check 0 drops / 37 rises / 41 comparisons (Cumulative), baseline false; equal to the reference
+usage "Asia/Kolkata" 15m "1m" meter-1/energy_kwh: 164.04600000000048 over 16 buckets, 1 drops, 0 gaps, 0 suspicious steps, check 1 drops / 46 rises / 47 comparisons (Cumulative), baseline false; equal to the reference
+usage "Asia/Kolkata" 15m "1m" meter-1/power_kw: not_cumulative (check: 26 drops, 21 rises, 47 comparisons)
+usage "Asia/Kolkata" 15m "1m" meter-2/pulses: 3048 over 16 buckets, 1 drops, 1 gaps, 0 suspicious steps, check 1 drops / 45 rises / 46 comparisons (Cumulative), baseline false; equal to the reference
+usage "Asia/Kolkata" 15m "1m" meter-2/power_kw: not_cumulative (check: 26 drops, 20 rises, 46 comparisons)
+usage "Asia/Kolkata" 15m "1m" press-1/running: not_numeric (check: 0 drops, 0 rises, 0 comparisons)
+usage "Asia/Kolkata" 15m "1m" press-1/mode: not_numeric (check: 0 drops, 0 rises, 0 comparisons)
+usage "Asia/Kolkata" 15m "1m" press-1/cycle_count: 172 over 14 buckets, 0 drops, 1 gaps, 0 suspicious steps, check 0 drops / 37 rises / 41 comparisons (Cumulative), baseline false; equal to the reference
+fixture, Asia/Kolkata: energy_kwh 164.04600000000045 with 1 reset, pulses 3048 with 1 wrap (wrap-aware 3099), cycle_count 172.0 across a 35-minute gap; both gauges not_cumulative, running and mode not_numeric
+fixture, Asia/Taipei: energy_kwh 164.04600000000045 with 1 reset, pulses 3048 with 1 wrap (wrap-aware 3099), cycle_count 172.0 across a 35-minute gap; both gauges not_cumulative, running and mode not_numeric
+tenant: A gets no data for B's devices, a tenant field is refused (400)
+injection: hostile values refused by the API (400/422), an end after 2106 or in year +262142 a 422 on `to`; bound as values below it, they match no row or fail; tenant B's rows are not in tenant A's account
+usage "UTC" 1h "1h" meter-1/energy_kwh: 81.987 over 2 buckets, 0 drops, 0 gaps, 0 suspicious steps, check 0 drops / 3 rises / 3 comparisons (TooFewReadings), baseline false; equal to the reference
+usage "UTC" 1h "1h" meter-1/power_kw: not_cumulative (check: 3 drops, 0 rises, 3 comparisons)
+usage "UTC" 1h "1h" meter-2/pulses: 1509 over 2 buckets, 0 drops, 0 gaps, 0 suspicious steps, check 0 drops / 3 rises / 3 comparisons (TooFewReadings), baseline false; equal to the reference
+usage "UTC" 1h "1h" meter-2/power_kw: 37.908 over 2 buckets, 2 drops, 0 gaps, 0 suspicious steps, check 2 drops / 1 rises / 3 comparisons (TooFewReadings), baseline false; equal to the reference
+usage "UTC" 1h "1h" press-1/running: not_numeric (check: 0 drops, 0 rises, 0 comparisons)
+usage "UTC" 1h "1h" press-1/mode: not_numeric (check: 0 drops, 0 rises, 0 comparisons)
+usage "UTC" 1h "1h" press-1/cycle_count: 68 over 2 buckets, 0 drops, 0 gaps, 0 suspicious steps, check 0 drops / 3 rises / 3 comparisons (TooFewReadings), baseline false; equal to the reference
+statistics "UTC" 1h meter-1/energy_kwh: 2 buckets, 24 readings, equal to the dataset
+statistics "UTC" 1h meter-1/power_kw: 2 buckets, 24 readings, equal to the dataset
+statistics "UTC" 1h meter-2/pulses: 2 buckets, 24 readings, equal to the dataset
+statistics "UTC" 1h meter-2/power_kw: 2 buckets, 24 readings, equal to the dataset
+statistics "UTC" 1h press-1/running: 2 buckets, 18 readings, equal to the dataset
+statistics "UTC" 1h press-1/mode: 2 buckets, 18 readings, equal to the dataset
+statistics "UTC" 1h press-1/cycle_count: 2 buckets, 18 readings, equal to the dataset
+period UTC: cut at "2026-07-25T21:00:00Z" ("1h" table), earlier readings left out
+usage "Asia/Kolkata" 1h "1m" meter-1/energy_kwh: 113.24400000000078 over 4 buckets, 1 drops, 0 gaps, 0 suspicious steps, check 1 drops / 33 rises / 34 comparisons (Cumulative), baseline false; equal to the reference
+usage "Asia/Kolkata" 1h "1m" meter-1/power_kw: not_cumulative (check: 19 drops, 15 rises, 34 comparisons)
+usage "Asia/Kolkata" 1h "1m" meter-2/pulses: 2190 over 4 buckets, 1 drops, 0 gaps, 0 suspicious steps, check 1 drops / 33 rises / 34 comparisons (Cumulative), baseline false; equal to the reference
+usage "Asia/Kolkata" 1h "1m" meter-2/power_kw: not_cumulative (check: 18 drops, 16 rises, 34 comparisons)
+usage "Asia/Kolkata" 1h "1m" press-1/running: not_numeric (check: 0 drops, 0 rises, 0 comparisons)
+usage "Asia/Kolkata" 1h "1m" press-1/mode: not_numeric (check: 0 drops, 0 rises, 0 comparisons)
+usage "Asia/Kolkata" 1h "1m" press-1/cycle_count: 120 over 4 buckets, 0 drops, 1 gaps, 0 suspicious steps, check 0 drops / 24 rises / 28 comparisons (Cumulative), baseline false; equal to the reference
+statistics "Asia/Kolkata" 1h meter-1/energy_kwh: 4 buckets, 35 readings, equal to the dataset
+statistics "Asia/Kolkata" 1h meter-1/power_kw: 4 buckets, 35 readings, equal to the dataset
+statistics "Asia/Kolkata" 1h meter-2/pulses: 4 buckets, 35 readings, equal to the dataset
+statistics "Asia/Kolkata" 1h meter-2/power_kw: 4 buckets, 35 readings, equal to the dataset
+statistics "Asia/Kolkata" 1h press-1/running: 4 buckets, 29 readings, equal to the dataset
+statistics "Asia/Kolkata" 1h press-1/mode: 4 buckets, 29 readings, equal to the dataset
+statistics "Asia/Kolkata" 1h press-1/cycle_count: 4 buckets, 29 readings, equal to the dataset
+period Asia/Kolkata: cut at "2026-07-26T01:33:00+05:30" ("1m" table), earlier readings left out
+period: the latest values leave out a data point last read 8 days ago (raw period, 7 days); its statistics from the aggregates still hold it
+usage "Asia/Kolkata" total "1m" rules/misread_zero: 1536 over 1 buckets, 1 drops, 0 gaps, 1 suspicious steps, check 1 drops / 178 rises / 179 comparisons (Cumulative), baseline false; equal to the reference
+usage "Asia/Kolkata" total "1m" rules/torn_read: 70358 over 1 buckets, 1 drops, 0 gaps, 2 suspicious steps, check 1 drops / 178 rises / 179 comparisons (Cumulative), baseline false; equal to the reference
+usage "Asia/Kolkata" total "1m" rules/replaced_meter: 4178 over 1 buckets, 0 drops, 0 gaps, 1 suspicious steps, check 0 drops / 179 rises / 179 comparisons (Cumulative), baseline false; equal to the reference
+usage "Asia/Kolkata" total "1m" rules/long_gap: 358 over 1 buckets, 0 drops, 1 gaps, 0 suspicious steps, check 0 drops / 107 rises / 107 comparisons (Cumulative), baseline false; equal to the reference
+usage "Asia/Kolkata" total "1m" rules/idle_bursts: not_cumulative (check: 3 drops, 3 rises, 179 comparisons)
+rules, Asia/Kolkata ("1m" table): misread_zero 1, torn_read 2, replaced_meter 1 suspicious steps; long_gap 0 with 1 gap; idle_bursts not_cumulative
+usage "UTC" total "1h" rules/misread_zero: 1548 over 1 buckets, 1 drops, 0 gaps, 1 suspicious steps, check 1 drops / 28 rises / 29 comparisons (Cumulative), baseline false; equal to the reference
+usage "UTC" total "1h" rules/torn_read: 70358 over 1 buckets, 1 drops, 0 gaps, 1 suspicious steps, check 1 drops / 28 rises / 29 comparisons (Cumulative), baseline false; equal to the reference
+usage "UTC" total "1h" rules/replaced_meter: 4178 over 1 buckets, 0 drops, 0 gaps, 1 suspicious steps, check 0 drops / 29 rises / 29 comparisons (Cumulative), baseline false; equal to the reference
+usage "UTC" total "1h" rules/long_gap: 358 over 1 buckets, 0 drops, 1 gaps, 0 suspicious steps, check 0 drops / 17 rises / 17 comparisons (Cumulative), baseline false; equal to the reference
+usage "UTC" total "1h" rules/idle_bursts: not_cumulative (check: 3 drops, 0 rises, 29 comparisons)
+rules, UTC ("1h" table): misread_zero 1, torn_read 1, replaced_meter 1 suspicious steps; long_gap 0 with 1 gap; idle_bursts not_cumulative
+test the_semantic_api_answers_the_dataset_within_the_period_and_the_tenant ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 12.34s

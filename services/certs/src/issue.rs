@@ -1,5 +1,5 @@
-//! Client certificates from certificate signing requests (decisions 6 and 12;
-//! Laysi/trustiot-v2#78 acceptance 1, Laysi/trustiot-v2#534).
+//! Certificates from certificate signing requests (decisions 6 and 12; Laysi/trustiot-v2#78
+//! acceptance 1, Laysi/trustiot-v2#534, Laysi/trustiot-v2#557).
 //!
 //! The CA takes exactly one thing from a CSR: its public key, after checking that the CSR is
 //! signed by the matching private key (proof of possession) and that the key is ECDSA P-256, the
@@ -7,8 +7,8 @@
 //! key usages, extended key usages, basic constraints, any other requested extension or
 //! attribute) is ignored: the profile decides the certificate.
 //!
-//! Two profiles, signed by the same issuing CA and told apart by the extended key usage
-//! (services/certs/README.md, "閘道器憑證" and "工作站憑證"):
+//! Three profiles, signed by the same issuing CA and told apart by the extended key usage
+//! (services/certs/README.md, "閘道器憑證", "工作站憑證" and "broker 伺服器憑證"):
 //!
 //! - [`Profile::Gateway`] ([`gateway_certificate`]): subject `CN=<gateway id>` only;
 //!   extendedKeyUsage clientAuth only; valid for `gateway.validity`. The gateway id is the MQTT
@@ -17,17 +17,23 @@
 //!   only, which is never a gateway id (`:` is not in a gateway id); extendedKeyUsage
 //!   [`WORKSTATION_PURPOSE`] only and never clientAuth, so a TLS server that authenticates
 //!   clients, the MQTT broker among them, refuses it; valid for `workstation.validity`.
+//! - [`Profile::Broker`] ([`broker_certificate`]): the MQTT broker's TLS server certificate;
+//!   subject `CN=`[`BROKER_SERVER_NAME`] only; the DNS subject alternative names of
+//!   [`BrokerNames`] (that name, the same in every deployment, then the broker's Service name);
+//!   extendedKeyUsage serverAuth only, so the broker refuses it as a gateway's client
+//!   certificate; valid for `broker.validity`.
 //!
-//! Both: basicConstraints `cA=FALSE` (critical); keyUsage digitalSignature (critical); subject
+//! All: basicConstraints `cA=FALSE` (critical); keyUsage digitalSignature (critical); subject
 //! and authority key identifiers; a random positive 128-bit serial number; valid from five
-//! minutes before signing (clock skew), never past the issuing CA certificate. No subject
-//! alternative name and no CRL distribution point: Mosquitto reads the CRLs from a file
-//! (decision 6).
+//! minutes before signing (clock skew), never past the issuing CA certificate. No CRL
+//! distribution point: Mosquitto reads the CRLs from a file (decision 6). Only the broker
+//! profile has subject alternative names.
 //!
 //! Who may get a certificate for which gateway id is the caller's decision: the factory
 //! registration (Laysi/trustiot-v2#79) and the renewal endpoint (Laysi/trustiot-v2#81).
 //! Workstation certificates are issued only through the platform administrators' API
-//! ([`crate::workstations`]). [`record`] puts a certificate in the ledger only when its issuing
+//! ([`crate::workstations`]), broker certificates only on the port the mesh opens to the MQTT
+//! broker alone ([`crate::broker`]). [`record`] puts a certificate in the ledger only when its issuing
 //! CA already has a CRL, so nothing is handed out that the broker could not check.
 
 use std::time::Duration;
@@ -35,15 +41,15 @@ use std::time::Duration;
 use protocol::GatewayId;
 use rcgen::{
     CertificateParams, CustomExtension, DistinguishedName, DnType, ExtendedKeyUsagePurpose, IsCa,
-    KeyUsagePurpose, PKCS_ECDSA_P256_SHA256, SerialNumber, SubjectPublicKeyInfo,
+    KeyUsagePurpose, PKCS_ECDSA_P256_SHA256, SanType, SerialNumber, SubjectPublicKeyInfo,
 };
-use sqlx::PgConnection;
+use sqlx::{PgConnection, PgPool};
 use time::OffsetDateTime;
 use x509_parser::certification_request::X509CertificationRequest;
 use x509_parser::oid_registry::OID_SIG_ECDSA_WITH_SHA256;
 use x509_parser::prelude::FromDer;
 
-use crate::authority::IssuingCa;
+use crate::authority::{Authority, CaState, IssuingCa, unix_now};
 
 /// Largest CSR accepted, DER. A P-256 CSR is about 250 bytes; the limit leaves room for
 /// attributes a client adds, which are ignored.
@@ -60,28 +66,41 @@ pub const MIN_REMAINING_SECS: i64 = 3600;
 /// its next bit set (always 16 octets in DER).
 pub const SERIAL_BYTES: usize = 16;
 
-/// The extended key usage of workstation certificates, "TrustIoT production workstation": an
-/// OID under the UUID arc 2.25 (ITU-T X.667; UUID `edc7e7d8-ab9e-4c72-a01b-aa39eb83e905`), which
-/// needs no registration. Neither clientAuth, serverAuth nor anyExtendedKeyUsage, so no TLS peer
-/// accepts a workstation certificate; the registration API (Laysi/trustiot-v2#79) requires it.
-pub const WORKSTATION_PURPOSE: &str = "2.25.316065004478888347166512336770143873285";
-
-/// [`WORKSTATION_PURPOSE`] as DER content octets (no tag and length), the form verifiers
-/// compare: the first two arcs as 2 × 40 + 25 = 105, then the UUID's 128 bits in base 128.
-pub const WORKSTATION_PURPOSE_DER: [u8; 20] = [
-    0x69, 0x83, 0xdb, 0xc7, 0xf3, 0xf6, 0x95, 0xb9, 0xf2, 0xb1, 0xe5, 0xa0, 0x8d, 0xea, 0xc7, 0x9e,
-    0xdc, 0x8f, 0xd2, 0x05,
-];
+// The workstation profile's purpose and subject prefix live in `contract::certs`, which the
+// workstation tool (factory/workstation) shares, so the issuer and its verifiers cannot drift.
+pub use contract::certs::{
+    WORKSTATION_PURPOSE, WORKSTATION_PURPOSE_DER, WORKSTATION_SUBJECT_PREFIX,
+};
 
 /// The extendedKeyUsage extension (RFC 5280 section 4.2.1.12).
 const EXTENDED_KEY_USAGE_OID: [u64; 4] = [2, 5, 29, 37];
 
-/// What every workstation certificate's common name starts with.
-pub const WORKSTATION_SUBJECT_PREFIX: &str = "workstation:";
-
 /// Longest workstation name, in bytes: with [`WORKSTATION_SUBJECT_PREFIX`] the common name stays
 /// within the ledger's 64 characters.
 pub const MAX_WORKSTATION_NAME_LEN: usize = 48;
+
+/// Serializes a workstation certificate's revocation with the factory registrations it signs
+/// (Laysi/trustiot-v2#79): a registration holds this transaction lock shared from before it
+/// reads the certificate's ledger row until it commits, and a revocation takes it exclusively
+/// before it updates the row. A revocation committed first is seen by the registration's read; a
+/// registration that read the row first commits before the revocation can. A row lock would
+/// need an UPDATE grant the platform role does not have. `$1` is the certificate's serial number;
+/// the first key is a fixed class, so these locks never meet the one-key locks of
+/// `service_kit::job_lock` or the outbox, and a hash collision only makes one wait for the other.
+pub const LOCK_WORKSTATION_SHARED: &str =
+    "SELECT pg_advisory_xact_lock_shared(1953983347, hashtext(encode($1, 'hex')))";
+
+/// The exclusive form of [`LOCK_WORKSTATION_SHARED`], for a revocation.
+pub const LOCK_WORKSTATION: &str =
+    "SELECT pg_advisory_xact_lock(1953983347, hashtext(encode($1, 'hex')))";
+
+/// The name every MQTT client verifies the broker's server certificate against
+/// ([`contract::certs::BROKER_SERVER_NAME`], shared with the broker's certificate issuer in
+/// tools/migrate). It is also the certificate's common name and its subject in the ledger.
+pub use contract::certs::BROKER_SERVER_NAME;
+
+/// Longest DNS name a broker certificate carries: 253 characters as text (RFC 1035).
+pub const MAX_DNS_NAME_LEN: usize = 253;
 
 /// Why no certificate was issued. Names the problem, never the request's content.
 #[derive(Debug, thiserror::Error)]
@@ -96,6 +115,8 @@ pub enum IssueError {
     UnsupportedKey,
     #[error("the request's signature does not verify with its public key")]
     BadSignature,
+    #[error("the gateway id is the MQTT broker's server name, which no gateway may have")]
+    ReservedGatewayId,
     #[error(
         "the issuing CA certificate expires in less than {MIN_REMAINING_SECS} seconds; a newer \
          issuing CA must sign"
@@ -114,6 +135,8 @@ pub enum Profile {
     Gateway,
     /// A production workstation's certificate, which no TLS peer accepts.
     Workstation,
+    /// The MQTT broker's TLS server certificate (Laysi/trustiot-v2#557).
+    Broker,
 }
 
 impl Profile {
@@ -123,8 +146,69 @@ impl Profile {
         match self {
             Self::Gateway => "gateway",
             Self::Workstation => "workstation",
+            Self::Broker => "broker",
         }
     }
+}
+
+/// The DNS names of the broker's server certificate: [`BROKER_SERVER_NAME`] first, then the
+/// broker's Service name when the deployment sets one (`broker.service_name`: the chart's
+/// `<release>-mqtt-broker.<namespace>.svc`, the name Laysi/trustiot-v2#84 promised in-cluster
+/// clients). The caller of the endpoint never chooses them: a CSR's names are ignored.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BrokerNames(Vec<String>);
+
+impl BrokerNames {
+    /// [`BROKER_SERVER_NAME`], then `service_name` when given and different.
+    ///
+    /// # Errors
+    ///
+    /// When `service_name` is not a DNS name ([`is_dns_name`]); the message names the rule.
+    pub fn new(service_name: Option<&str>) -> Result<Self, String> {
+        let mut names = vec![BROKER_SERVER_NAME.to_owned()];
+        if let Some(name) = service_name {
+            if !is_dns_name(name) {
+                return Err(format!(
+                    "must be a lower-case DNS name of at most {MAX_DNS_NAME_LEN} characters: two \
+                     or more labels of 1 to 63 letters, digits and inner hyphens"
+                ));
+            }
+            if name != BROKER_SERVER_NAME {
+                names.push(name.to_owned());
+            }
+        }
+        Ok(Self(names))
+    }
+
+    /// The names, [`BROKER_SERVER_NAME`] first.
+    #[must_use]
+    pub fn as_slice(&self) -> &[String] {
+        &self.0
+    }
+}
+
+/// Whether `name` is a lower-case DNS host name: at most [`MAX_DNS_NAME_LEN`] characters, two
+/// or more labels of 1 to 63 ASCII lower-case letters, digits or hyphens, none starting or
+/// ending with a hyphen, the last one with a letter. So no wildcard, no trailing dot and no IP
+/// address.
+#[must_use]
+pub fn is_dns_name(name: &str) -> bool {
+    let labels: Vec<&str> = name.split('.').collect();
+    let label_ok = |label: &&str| {
+        let bytes = label.as_bytes();
+        (1..=63).contains(&bytes.len())
+            && bytes
+                .iter()
+                .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || *byte == b'-')
+            && bytes.first() != Some(&b'-')
+            && bytes.last() != Some(&b'-')
+    };
+    name.len() <= MAX_DNS_NAME_LEN
+        && labels.len() >= 2
+        && labels.iter().all(label_ok)
+        && labels
+            .last()
+            .is_some_and(|last| last.bytes().any(|byte| byte.is_ascii_lowercase()))
 }
 
 /// A production workstation's name, as a platform administrator gives it: 1 to
@@ -168,14 +252,19 @@ pub struct IssuedCertificate {
     pub ca_key_id: String,
     /// The profile that decided it.
     pub profile: Profile,
-    /// Its common name: the gateway id, or `workstation:<name>`.
+    /// Its common name: the gateway id, `workstation:<name>`, or [`BROKER_SERVER_NAME`].
     pub subject: String,
+    /// Its DNS subject alternative names: empty but for the broker profile.
+    pub names: Vec<String>,
     /// Unix seconds.
     pub not_before: i64,
     /// Unix seconds.
     pub not_after: i64,
     /// The certificate, DER.
     pub der: Vec<u8>,
+    /// The certificate of the issuing CA that signed it, DER: the rest of the chain a TLS
+    /// server sends.
+    pub issuer_der: Vec<u8>,
 }
 
 /// The public key of `request` (DER), once it is shown to be a P-256 key whose private key
@@ -228,8 +317,11 @@ pub fn new_serial() -> Result<Vec<u8>, IssueError> {
 ///
 /// # Errors
 ///
-/// When the request is refused ([`requested_key`]), the issuing CA certificate expires within
-/// [`MIN_REMAINING_SECS`], or signing fails.
+/// When the request is refused ([`requested_key`]), the gateway id is [`BROKER_SERVER_NAME`]
+/// (a gateway id may have dots, and a client that falls back to the common name when a
+/// certificate has no DNS name, as OpenSSL's host check does, would otherwise read a gateway
+/// certificate as the broker's; its extended key usage already refuses it, this is the second
+/// line), the issuing CA certificate expires within [`MIN_REMAINING_SECS`], or signing fails.
 pub fn gateway_certificate(
     ca: &IssuingCa,
     request: &[u8],
@@ -237,11 +329,15 @@ pub fn gateway_certificate(
     validity: Duration,
     now: i64,
 ) -> Result<IssuedCertificate, IssueError> {
+    if gateway.as_str().eq_ignore_ascii_case(BROKER_SERVER_NAME) {
+        return Err(IssueError::ReservedGatewayId);
+    }
     sign(
         ca,
         request,
         Profile::Gateway,
         gateway.as_str().to_owned(),
+        &[],
         validity,
         now,
     )
@@ -266,6 +362,32 @@ pub fn workstation_certificate(
         request,
         Profile::Workstation,
         workstation.subject(),
+        &[],
+        validity,
+        now,
+    )
+}
+
+/// Signs the MQTT broker's server certificate with `ca` at `now` (Unix seconds), valid for
+/// `validity`, for the public key of `request` (DER), with the DNS names `names`. See the module
+/// documentation for the profile.
+///
+/// # Errors
+///
+/// As [`gateway_certificate`].
+pub fn broker_certificate(
+    ca: &IssuingCa,
+    request: &[u8],
+    names: &BrokerNames,
+    validity: Duration,
+    now: i64,
+) -> Result<IssuedCertificate, IssueError> {
+    sign(
+        ca,
+        request,
+        Profile::Broker,
+        BROKER_SERVER_NAME.to_owned(),
+        names.as_slice(),
         validity,
         now,
     )
@@ -276,6 +398,7 @@ fn sign(
     request: &[u8],
     profile: Profile,
     subject: String,
+    names: &[String],
     validity: Duration,
     now: i64,
 ) -> Result<IssuedCertificate, IssueError> {
@@ -305,7 +428,19 @@ fn sign(
                 workstation_extended_key_usage(),
             )];
         }
+        Profile::Broker => {
+            params.extended_key_usages = vec![ExtendedKeyUsagePurpose::ServerAuth];
+        }
     }
+    params.subject_alt_names = names
+        .iter()
+        .map(|name| {
+            name.as_str()
+                .try_into()
+                .map(SanType::DnsName)
+                .map_err(|_| IssueError::Sign(format!("{name:?} is not a DNS name")))
+        })
+        .collect::<Result<_, _>>()?;
     params.use_authority_key_identifier_extension = true;
     params.serial_number = Some(SerialNumber::from_slice(&serial));
     params.not_before = timestamp(not_before)?;
@@ -318,9 +453,11 @@ fn sign(
         ca_key_id: ca.key_id().to_owned(),
         profile,
         subject,
+        names: names.to_vec(),
         not_before,
         not_after,
         der: certificate.der().to_vec(),
+        issuer_der: ca.certificate_der().to_vec(),
     })
 }
 
@@ -395,6 +532,110 @@ pub async fn record(
     Ok(())
 }
 
+/// Why [`sign_and_record`] or [`sign_and_record_in`] issued nothing. The caller turns it into its
+/// response; the log line is already written.
+#[derive(Debug)]
+pub enum Refusal {
+    /// No issuing CA can sign now: none is loaded, none that is valid has a CRL yet, or the
+    /// newest expires within [`MIN_REMAINING_SECS`]. Retrying later helps once the CA is set up or
+    /// its first CRL is out.
+    NotReady,
+    /// The request was refused ([`requested_key`]'s reasons).
+    Request(IssueError),
+    /// Signing failed: no randomness, or rcgen refused.
+    Failed,
+    /// The database failed; nothing was recorded.
+    Database,
+}
+
+/// Signs a certificate with `sign` and records it in one transaction on `pool`, with the newest
+/// issuing CA of `ca` that is valid and already has a CRL, so nothing is handed out that the
+/// broker could not check against one ([`crate::authority::Authority::signer`], [`record`]).
+/// `what` names the certificate in the log lines, for example "a workstation certificate". The
+/// log never carries the request or the certificate.
+///
+/// # Errors
+///
+/// [`Refusal`], after logging why.
+pub async fn sign_and_record(
+    pool: &PgPool,
+    ca: &CaState,
+    what: &str,
+    sign: impl FnOnce(&IssuingCa, i64) -> Result<IssuedCertificate, IssueError>,
+) -> Result<IssuedCertificate, Refusal> {
+    let Some(authority) = ca.authority() else {
+        tracing::warn!("refused {what}: no issuing CA is loaded");
+        return Err(Refusal::NotReady);
+    };
+    let mut tx = pool.begin().await.map_err(|e| database(what, &e))?;
+    let issued = sign_and_record_in(&mut tx, &authority, what, sign).await?;
+    tx.commit().await.map_err(|e| database(what, &e))?;
+    Ok(issued)
+}
+
+/// [`sign_and_record`] inside the caller's transaction, with the issuing CAs of `authority`:
+/// reads which of them have a CRL, signs with the newest valid one that has, and records the
+/// certificate, all on `connection`. The caller commits, so the certificate is recorded together
+/// with whatever else the transaction writes (the factory registration, Laysi/trustiot-v2#79,
+/// writes the registration and its event with it); on any refusal the caller rolls back.
+///
+/// # Errors
+///
+/// [`Refusal`], after logging why.
+pub async fn sign_and_record_in(
+    connection: &mut PgConnection,
+    authority: &Authority,
+    what: &str,
+    sign: impl FnOnce(&IssuingCa, i64) -> Result<IssuedCertificate, IssueError>,
+) -> Result<IssuedCertificate, Refusal> {
+    let ids: Vec<String> = authority
+        .issuing()
+        .iter()
+        .map(|ca| ca.key_id().to_owned())
+        .collect();
+    let with_crl: Vec<String> =
+        sqlx::query_scalar("SELECT ca_key_id FROM certs.crls WHERE ca_key_id = ANY($1)")
+            .bind(&ids)
+            .fetch_all(&mut *connection)
+            .await
+            .map_err(|e| database(what, &e))?;
+    let now = unix_now();
+    let Some(signer) = authority.signer(now, |id| with_crl.iter().any(|known| known == id)) else {
+        tracing::warn!(
+            "refused {what}: no valid issuing CA has a CRL yet (the CRL job gives a new one its \
+             first CRL within crl.check_interval)"
+        );
+        return Err(Refusal::NotReady);
+    };
+    let issued = sign(signer, now).map_err(|failure| match failure {
+        IssueError::IssuingCaExpiring => {
+            tracing::warn!(ca_key_id = %signer.key_id(), "refused {what}: {failure}");
+            Refusal::NotReady
+        }
+        IssueError::Random | IssueError::Sign(_) => {
+            tracing::error!(problem = %failure, "could not sign {what}");
+            Refusal::Failed
+        }
+        refused => Refusal::Request(refused),
+    })?;
+    match record(connection, &issued).await {
+        Ok(()) => Ok(issued),
+        Err(RecordError::NoCrl(ca_key_id)) => {
+            // The CRL was read in this transaction and CRLs are never removed, so this means a
+            // broken invariant; refuse rather than hand out an uncheckable certificate.
+            tracing::error!(ca_key_id = %ca_key_id, "the signing CA has no CRL after all");
+            Err(Refusal::NotReady)
+        }
+        Err(RecordError::Database(e)) => Err(database(what, &e)),
+    }
+}
+
+/// Logs a database failure while issuing `what`; [`Refusal::Database`].
+fn database(what: &str, error: &dyn std::fmt::Display) -> Refusal {
+    tracing::error!(error = %error, "could not issue {what}");
+    Refusal::Database
+}
+
 /// `seconds` as a UTC time for Postgres; out-of-range times clamp to the epoch.
 pub(crate) fn utc(seconds: i64) -> chrono::DateTime<chrono::Utc> {
     chrono::DateTime::from_timestamp(seconds, 0).unwrap_or_default()
@@ -466,6 +707,54 @@ mod tests {
         let value = workstation_extended_key_usage();
         assert_eq!(&value[..4], [0x30, 22, 0x06, 20]);
         assert_eq!(value.len(), 24);
+    }
+
+    #[test]
+    fn broker_names_start_with_the_fixed_name_and_take_only_dns_names() {
+        assert!(is_dns_name(BROKER_SERVER_NAME));
+        assert_eq!(
+            BrokerNames::new(None).expect("names").as_slice(),
+            [BROKER_SERVER_NAME]
+        );
+        assert_eq!(
+            BrokerNames::new(Some(BROKER_SERVER_NAME))
+                .expect("names")
+                .as_slice(),
+            [BROKER_SERVER_NAME]
+        );
+        let service = "trustiot-mqtt-broker.trustiot.svc";
+        assert_eq!(
+            BrokerNames::new(Some(service)).expect("names").as_slice(),
+            [BROKER_SERVER_NAME, service]
+        );
+        let longest = format!("{}.{}.svc", "a".repeat(63), "b".repeat(63));
+        for name in ["a.b", "x-1.y2.svc", "a1.svc", longest.as_str()] {
+            assert!(is_dns_name(name), "{name}");
+        }
+        let long_label = format!("{}.svc", "a".repeat(64));
+        let too_long = format!("{}.svc", ["a".repeat(60).as_str(); 5].join("."));
+        assert!(too_long.len() > MAX_DNS_NAME_LEN);
+        for name in [
+            "",
+            "localhost",
+            ".svc",
+            "a..svc",
+            "a.svc.",
+            "*.svc.cluster.local",
+            "-a.svc",
+            "a-.svc",
+            "A.svc",
+            "a_b.svc",
+            "127.0.0.1",
+            "a.123",
+            "a b.svc",
+            "ä.svc",
+            long_label.as_str(),
+            too_long.as_str(),
+        ] {
+            assert!(!is_dns_name(name), "{name:?}");
+            assert!(BrokerNames::new(Some(name)).is_err(), "{name:?}");
+        }
     }
 
     #[test]

@@ -70,13 +70,17 @@ export function identityKeyObjectsOf(objects: K8sObject[]): IdentityKeyObjects {
 /** The go-template that summarizes the Secret as `<uid>|<bound uid>|<key>,<key>,` without its data. */
 export const SECRET_SUMMARY_TEMPLATE = `{{.metadata.uid}}|{{with .metadata.annotations}}{{index . "${BOUND_UID_ANNOTATION}"}}{{end}}|{{range $key, $value := .data}}{{$key}},{{end}}`;
 
-/** Why the Secret's summary is not that of a Secret the init container filled; empty when it is. */
-export function secretSummaryProblems(name: string, summary: string): string[] {
+/**
+ * Why the Secret's summary is not that of a Secret the init container filled; empty when it is.
+ * `expectedKey`: its only key, the identity service's signing keys unless given (certs.ts passes
+ * the certs service's issuing CA keys).
+ */
+export function secretSummaryProblems(name: string, summary: string, expectedKey: string = SIGNING_KEYS_KEY): string[] {
   const [uid, bound, keys, ...rest] = summary.trim().split("|");
   if (uid === undefined || bound === undefined || keys === undefined || rest.length > 0) return [`${name}: unexpected summary`];
   const names = keys.split(",").filter((key) => key !== "");
   const problems: string[] = [];
-  if (names.join(",") !== SIGNING_KEYS_KEY) problems.push(`${name}: holds the keys [${names.join(", ")}], expected only ${SIGNING_KEYS_KEY}`);
+  if (names.join(",") !== expectedKey) problems.push(`${name}: holds the keys [${names.join(", ")}], expected only ${expectedKey}`);
   if (uid === "" || bound !== uid) problems.push(`${name}: not bound to itself (${BOUND_UID_ANNOTATION} is not its uid)`);
   return problems;
 }

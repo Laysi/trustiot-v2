@@ -15,6 +15,7 @@
 | `modbus` | `FakeModbus`：測試行程內的假 Modbus TCP 與 RTU-over-TCP 端點，支援站號、故障注入（`Fault`）與請求紀錄；見[假 Modbus 端點](#假-modbus-端點) |
 | `mqtt` | 閘道器到 broker 的整條路：`TestPki`、`front::WsFront`（入口與 mqtt-bridge 的替身）、`mosquitto::Mosquitto`；見[MQTT 測試環境](#mqtt-測試環境) |
 | `clock` | 真實 socket 上的時間控制：`manual()` 讓暫停的 tokio 時鐘只在測試 `advance` 時前進；`bounded(what, future)` 以牆上時間限制等待；見[時間控制](#時間控制) |
+| `chart` | chart 對服務的假設：`postgres_connection_budget(service)` 讀 `deploy/chart/templates/_postgres.tpl` 的 `trustiot.postgres.connectionBudgets`（每個副本的連線預算，Laysi/trustiot-v2#575）；`pool_size_calls(src)` 列出 crate 的 `src` 裡每個 `.max_connections(...)`。用 Postgres 的服務各有一個 `tests/chart_connections.rs`，以兩者確認程式的連線池與 chart 的預算相同，加了連線池就失敗（見 [chart 的 README](../../deploy/chart/README.md)「叢集內的 Postgres」） |
 
 ## 新服務怎麼接上
 

@@ -8,18 +8,25 @@
 //! (Laysi/trustiot-v2#78). `migrate mqtt-broker-accounts`: the MQTT broker's init container, which
 //! keeps the services' broker passwords and the dynamic-security file. `migrate mqtt-broker-trust
 //! [--once]`: the broker's sidecar (with `--once`, its init container), which keeps the gateway
-//! trust files and reloads the broker (Laysi/trustiot-v2#84). Settings come from the
-//! environment (crates/service-kit, "設定"); logs are JSON lines on stdout. Exit codes: 0 done,
-//! 1 failed, 2 unusable settings or arguments.
+//! trust files, opens the gateway listener and reloads the broker (Laysi/trustiot-v2#84). `migrate
+//! mqtt-broker-certificate`: the CronJob that keeps the broker's server certificate and key
+//! (Laysi/trustiot-v2#535). `migrate
+//! bootstrap-platform-admin`: makes the user whose email address is the first line of stdin the
+//! deployment's first platform administrator, once ever (Laysi/trustiot-v2#582). Settings come
+//! from the environment (crates/service-kit, "設定"); logs are JSON lines on stdout. Exit codes:
+//! 0 done, 1 failed, 2 unusable settings, arguments or input, 3 (`bootstrap-platform-admin`
+//! only) the first platform administrator was created before, nothing changed.
 
 use std::process::ExitCode;
 use std::time::Duration;
 
 use migrate::Report;
 use migrate::config::{
-    CaKeysConfig, ClickHouseAdminConfig, MqttAccountsConfig, MqttTrustConfig, RunConfig,
-    SigningKeysConfig, WaitForJobConfig,
+    BootstrapConfig, CaKeysConfig, ClickHouseAdminConfig, MqttAccountsConfig,
+    MqttCertificateConfig, MqttTrustConfig, RunConfig, SigningKeysConfig, WaitForJobConfig,
 };
+use migrate::mqtt_certificate::Outcome as CertificateOutcome;
+use migrate::platform_admin::{self, EXIT_ALREADY_CREATED, Outcome};
 use migrate::registry::PRODUCT;
 use serde::de::DeserializeOwned;
 use service_kit::ServiceInfo;
@@ -180,6 +187,81 @@ async fn mqtt_broker_trust(once: bool) -> ExitCode {
     code
 }
 
+async fn mqtt_broker_certificate() -> ExitCode {
+    let (settings, telemetry) = match load::<MqttCertificateConfig>() {
+        Ok(loaded) => loaded,
+        Err(code) => return code,
+    };
+    let mut report = Report::default();
+    let code =
+        match migrate::mqtt_certificate::converge(&settings.app.certificate, &mut report).await {
+            // Each outcome logged its own line; waiting for the CA ceremony is not a failure of
+            // this run.
+            Ok(
+                CertificateOutcome::Kept(_)
+                | CertificateOutcome::Issued { .. }
+                | CertificateOutcome::Waiting { .. },
+            ) => ExitCode::SUCCESS,
+            Err(error) => {
+                tracing::error!(error = %error, "the broker's server certificate is not in place");
+                ExitCode::FAILURE
+            }
+        };
+    telemetry.shutdown(TELEMETRY_FLUSH).await;
+    code
+}
+
+async fn bootstrap_platform_admin() -> ExitCode {
+    let (settings, telemetry) = match load::<BootstrapConfig>() {
+        Ok(loaded) => loaded,
+        Err(code) => return code,
+    };
+    tracing::info!("reading the first platform administrator's email address from stdin");
+    let read =
+        tokio::task::spawn_blocking(|| platform_admin::read_email(std::io::stdin().lock())).await;
+    let code = match read {
+        Ok(Ok(email)) => match platform_admin::bootstrap(&settings.app, &email).await {
+            Ok(Outcome::Created {
+                user_id,
+                existing_user,
+            }) => {
+                tracing::info!(
+                    user_id = %user_id,
+                    existing_user,
+                    "created the first platform administrator"
+                );
+                ExitCode::SUCCESS
+            }
+            Ok(Outcome::AlreadyCreated {
+                user_id,
+                created_at,
+            }) => {
+                tracing::warn!(
+                    user_id = %user_id,
+                    created_at = %created_at,
+                    "the first platform administrator was created before; nothing changed \
+                     (docs/runbooks/platform-admin.md)"
+                );
+                ExitCode::from(EXIT_ALREADY_CREATED)
+            }
+            Err(error) => {
+                tracing::error!(error = %error, "the first platform administrator was not created");
+                ExitCode::FAILURE
+            }
+        },
+        Ok(Err(error)) => {
+            tracing::error!(error = %error, "no email address on stdin");
+            ExitCode::from(2)
+        }
+        Err(_) => {
+            tracing::error!("reading stdin failed");
+            ExitCode::FAILURE
+        }
+    };
+    telemetry.shutdown(TELEMETRY_FLUSH).await;
+    code
+}
+
 #[tokio::main]
 async fn main() -> ExitCode {
     let command = std::env::args().nth(1);
@@ -190,6 +272,20 @@ async fn main() -> ExitCode {
         Some("identity-signing-keys") => identity_signing_keys().await,
         Some("certs-ca-keys") => certs_ca_keys().await,
         Some("mqtt-broker-accounts") => mqtt_broker_accounts().await,
+        Some("mqtt-broker-certificate") => mqtt_broker_certificate().await,
+        Some("bootstrap-platform-admin") => match std::env::args().nth(2) {
+            None => bootstrap_platform_admin().await,
+            // The address comes from stdin only, never from an argument (it would show in the
+            // process list and the pod spec).
+            Some(_) => {
+                telemetry::init_fallback(&INFO);
+                tracing::error!(
+                    "`migrate bootstrap-platform-admin` takes no arguments; write the email \
+                     address to its stdin"
+                );
+                ExitCode::from(2)
+            }
+        },
         Some("mqtt-broker-trust") => match std::env::args().nth(2).as_deref() {
             None => mqtt_broker_trust(false).await,
             Some("--once") => mqtt_broker_trust(true).await,
@@ -206,7 +302,8 @@ async fn main() -> ExitCode {
             tracing::error!(
                 "unknown command; use `migrate run`, `migrate wait-for-job`, `migrate \
                  clickhouse-admin-password`, `migrate identity-signing-keys`, `migrate \
-                 certs-ca-keys`, `migrate mqtt-broker-accounts` or `migrate mqtt-broker-trust`"
+                 certs-ca-keys`, `migrate mqtt-broker-accounts`, `migrate mqtt-broker-trust`, \
+                 `migrate mqtt-broker-certificate` or `migrate bootstrap-platform-admin`"
             );
             ExitCode::from(2)
         }

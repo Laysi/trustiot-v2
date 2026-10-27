@@ -180,9 +180,12 @@ Returns a YAML list; use with fromYamlArray.
 {{- $rows = append $rows (dict "credential" "object-storage" "env" "TRUSTIOT_S3_SECRET_ACCESS_KEY" "secret" $s3.name "key" $s3.secretAccessKeyKey "available" true "owners" $anyService) -}}
 {{- $rows = append $rows (dict "credential" "smtp" "env" "TRUSTIOT_SMTP_USERNAME" "secret" $smtp.name "key" $smtp.usernameKey "available" true "owners" $anyService "optional" true) -}}
 {{- $rows = append $rows (dict "credential" "smtp" "env" "TRUSTIOT_SMTP_PASSWORD" "secret" $smtp.name "key" $smtp.passwordKey "available" true "owners" $anyService "optional" true) -}}
-{{- $rows = append $rows (dict "credential" "ai" "env" "TRUSTIOT_AI_CHAT_API_KEY" "secret" $ai.chat.apiKeySecret.name "key" $ai.chat.apiKeySecret.key "available" true "owners" $aiOwners) -}}
-{{- $rows = append $rows (dict "credential" "ai" "env" "TRUSTIOT_AI_EMBEDDING_API_KEY" "secret" $ai.embedding.apiKeySecret.name "key" $ai.embedding.apiKeySecret.key "available" true "owners" $aiOwners) -}}
-{{- $rows = append $rows (dict "credential" "ai" "env" "TRUSTIOT_AI_RERANK_API_KEY" "secret" $ai.rerank.apiKeySecret.name "key" $ai.rerank.apiKeySecret.key "available" true "owners" $aiOwners) -}}
+{{- /* One key per provider of the AI gateway ("trustiot.aiGateway.providers"), each in the variable
+the gateway's key_env names for it. */ -}}
+{{- range $name, $provider := include "trustiot.aiGateway.providers" . | fromYaml -}}
+{{- $secret := (get ($ai.providers | default dict) $name | default dict).apiKeySecret | default dict -}}
+{{- $rows = append $rows (dict "credential" "ai" "env" $provider.keyEnv "secret" ($secret.name | default "") "key" ($secret.key | default "api-key") "available" true "owners" $aiOwners) -}}
+{{- end -}}
 {{- toYaml $rows -}}
 {{- end -}}
 

@@ -184,6 +184,37 @@ is no such port>}; use with fromYaml.
 {{- end -}}
 
 {{/*
+The certs service's ports as its AuthorizationPolicy splits them (Laysi/trustiot-v2#557): the
+MQTT broker's server certificate issuance, the container port named broker-certs (the service's
+broker.listen_addr, where it serves POST /internal/certs/v1/broker-certificate and nothing else),
+and its API ports, every other port in ports (the health port is never one). The ingress gateway,
+the services that list certs in mesh.calls and the broker's trust sidecar reach the API ports only
+(the certs service's policy, templates/mesh.yaml); the broker's certificate CronJob
+(templates/mqtt-broker-certificate.yaml, Laysi/trustiot-v2#535) reaches the broker-certs port, and
+only that port (its own Service and policies, templates/certs-broker.yaml), so no other workload,
+the broker's own pod included, can get a certificate for the broker's name.
+Fails when no API port is left: a rule with an empty port list would match every port.
+Argument: the root context. Returns YAML {api: [<number>, ...], broker: <number, 0 when there is
+no such port>}; use with fromYaml.
+*/}}
+{{- define "trustiot.mesh.certsPorts" -}}
+{{- $config := include "trustiot.serviceConfig" (dict "root" . "name" "certs" "values" .Values.services.certs) | fromYaml -}}
+{{- $api := list -}}
+{{- $broker := 0 -}}
+{{- range $config.ports -}}
+{{- if eq .name "broker-certs" -}}
+{{- $broker = int .containerPort -}}
+{{- else -}}
+{{- $api = append $api (int .containerPort) -}}
+{{- end -}}
+{{- end -}}
+{{- if not $api -}}
+{{- fail "services.certs.ports: the API port (http) is missing; broker-certs serves the MQTT broker's server certificate only" -}}
+{{- end -}}
+{{- dict "api" $api "broker" $broker | toYaml -}}
+{{- end -}}
+
+{{/*
 Who may call each enabled service and in-cluster component. Callers come from these places only:
 - mesh.calls, the list of calls (<caller service>: [<callee service or component>, ...]); a
   call whose caller or callee is disabled is skipped, so the list can name services before
@@ -200,11 +231,19 @@ Who may call each enabled service and in-cluster component. Callers come from th
   OpenTelemetry collector, and the collector writes to the bundled ClickHouse (decision 22);
 - the migration Job, fixed in the chart too: it reaches the bundled ClickHouse while
   migrate.enabled is true (tools/migrate);
-- the MQTT broker's trust sidecar, fixed in the chart too: it reaches the certs service while
-  both run (templates/mqtt-broker.yaml).
+- the MQTT broker's trust sidecar, fixed in the chart too: it reaches the certs service's API
+  ports while both run (templates/mqtt-broker.yaml);
+- the MQTT broker's server certificate (Laysi/trustiot-v2#557, Laysi/trustiot-v2#535): the pod of
+  the broker's certificate CronJob (mqtt-broker-certificate, templates/mqtt-broker-certificate.yaml)
+  reaches the certs service's broker-certs port, and only that port ("trustiot.mesh.certsPorts"),
+  while both run. It is the certs entry's brokerCallers, not a caller of the API ports' rule:
+  templates/certs-broker.yaml renders its Service and policies.
 The MQTT broker admits each of its callers on one port only ("trustiot.mqtt-broker.callers"):
 its entry also has portRules, [{callers, ports}], and mesh.calls may list it as the callee of
-those callers only.
+those callers only. mesh.calls may list ai-gateway as the callee of the AI assistant, the knowledge
+base and alerts only ("trustiot.aiGateway.callers"), whether or not they are enabled; the ingress
+gateway never reaches it, because "trustiot.ingress.plan" refuses every cookie route to ai-gateway
+and no public path leads there.
 Every other connection is refused. Callers must be keys under services and callees keys under
 services, components ("trustiot.mesh.components") or direct callees ("trustiot.mesh.directCallees",
 which get no entry here); other names fail the render.
@@ -212,6 +251,8 @@ Returns YAML {services: [{name, callers: [service or component keys], ingress: b
 fromYaml. The identity service's entry also has apiPorts (the ports its callers and the ingress
 gateway reach), exchangeCallers (the callers on behalf of users, sorted) and exchangePort (the
 only port they reach); the render fails when there are such callers but no token-exchange port.
+The certs service's entry likewise has apiPorts, brokerCallers (the broker's certificate CronJob,
+while the broker runs) and brokerPort; the render fails when the broker runs but there is no broker-certs port.
 */}}
 {{- define "trustiot.mesh.plan" -}}
 {{- $v := .Values -}}
@@ -231,7 +272,14 @@ only port they reach); the render fails when there are such callers but no token
 {{- fail (printf "mesh.calls.%s: must be a list of services" $caller) -}}
 {{- end -}}
 {{- $brokerCallers := include "trustiot.mqtt-broker.callers" $ | fromYaml -}}
+{{- $aiGatewayCallers := include "trustiot.aiGateway.callers" $ | fromYamlArray -}}
 {{- range $callees -}}
+{{- if and (eq (toString .) "ai-gateway") (not (has $caller $aiGatewayCallers)) -}}
+{{- fail (printf "mesh.calls.%s: only %s may call ai-gateway (decision 28): it verifies no internal identity and spends the AI provider accounts, so the mesh alone keeps every other service out (deploy/chart/README.md, \"服務間授權（mesh）\")" $caller (join ", " $aiGatewayCallers)) -}}
+{{- end -}}
+{{- if eq (toString .) "mqtt-bridge" -}}
+{{- fail (printf "mesh.calls.%s: no service may call mqtt-bridge: only the ingress gateway reaches it (decisions 6 and 27), because a caller could set the trusted source-IP header itself and reach the broker's gateway port through it (services/mqtt-bridge/README.md, \"來源 IP\")" $caller) -}}
+{{- end -}}
 {{- if and (eq (toString .) "mqtt-broker") (not (has $caller (concat $brokerCallers.gateway.callers $brokerCallers.service.callers))) -}}
 {{- fail (printf "mesh.calls.%s: the MQTT broker admits only %s on its gateway port and %s on its service port (deploy/chart/README.md, \"MQTT broker\")" $caller (join ", " $brokerCallers.gateway.callers) (join ", " $brokerCallers.service.callers)) -}}
 {{- end -}}
@@ -296,9 +344,23 @@ only port they reach); the render fails when there are such callers but no token
 {{- /* The migration Job applies the DDL and creates the accounts (tools/migrate). */ -}}
 {{- $callers = append $callers "migrate" -}}
 {{- end -}}
-{{- if and (eq $name "certs") (get $components "mqtt-broker") -}}
+{{- if eq $name "certs" -}}
+{{- /* The API ports serve the CA chain, the CRLs and the workstation API; the broker-certs port
+the MQTT broker's server certificate, for the broker's certificate CronJob alone
+(Laysi/trustiot-v2#557, Laysi/trustiot-v2#535): the broker's own pod never reaches it. */ -}}
+{{- $ports := include "trustiot.mesh.certsPorts" $ | fromYaml -}}
+{{- $brokerCallers := list -}}
+{{- if get $components "mqtt-broker" -}}
 {{- /* The broker's trust sidecar fetches the CA certificates and CRLs. */ -}}
 {{- $callers = append $callers "mqtt-broker" -}}
+{{- $brokerCallers = list "mqtt-broker-certificate" -}}
+{{- if not $ports.broker -}}
+{{- fail "services.certs.ports: the MQTT broker's server certificate needs the port named broker-certs (the service's broker.listen_addr, default 8082), because mqttBroker.enabled is true" -}}
+{{- end -}}
+{{- end -}}
+{{- $_ := set $planned "apiPorts" $ports.api -}}
+{{- $_ := set $planned "brokerCallers" $brokerCallers -}}
+{{- $_ := set $planned "brokerPort" $ports.broker -}}
 {{- end -}}
 {{- if eq $name "mqtt-broker" -}}
 {{- /* Each caller on its own port: mqtt-bridge on the gateway port, the account holders on the

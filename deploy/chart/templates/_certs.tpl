@@ -93,9 +93,26 @@ Argument: dict "certificates" <list> "key" <values path> "max" <int>.
 {{- end -}}
 
 {{/*
+The port of the Service <release>-certs-broker (templates/certs-broker.yaml), which the MQTT
+broker's certificate CronJob calls for the broker's server certificate: always 8082, whatever
+container port broker-certs has, so the address
+http://<release>-certs-broker.<namespace>.svc:8082 never changes. The Service forwards to the
+container port by name; the policies match the container port.
+*/}}
+{{- define "trustiot.certs.brokerServicePort" -}}
+8082
+{{- end -}}
+
+{{/*
 Env entries only the certs service gets, set by the chart (custom env cannot repeat a name):
 TRUSTIOT__CA__KEYS_FILE, TRUSTIOT__CA__ROOT_CERTIFICATE_FILE and TRUSTIOT__CA__CERTIFICATES_FILE,
-the files of the mounts above, which the service reads again when they change.
+the files of the mounts above, which the service reads again when they change; and for the MQTT
+broker's server certificate (Laysi/trustiot-v2#557) TRUSTIOT__BROKER__LISTEN_ADDR, the
+broker-certs port of services.certs.ports, so the service listens where the Service and the
+policies point ("trustiot.mesh.certsPorts"), and, while the broker runs,
+TRUSTIOT__BROKER__SERVICE_NAME, the broker Service's name <release>-mqtt-broker.<namespace>.svc,
+which the certificate carries after mqtt-broker.trustiot.internal (deploy/chart/README.md,
+"伺服器憑證").
 Returns a YAML list; use with fromYamlArray.
 */}}
 {{- define "trustiot.certs.env" -}}
@@ -104,6 +121,13 @@ Returns a YAML list; use with fromYamlArray.
 {{- $env := list (dict "name" "TRUSTIOT__CA__KEYS_FILE" "value" (printf "%s/%s" (include "trustiot.certs.keysDir" .) $ca.secretKey)) -}}
 {{- $env = append $env (dict "name" "TRUSTIOT__CA__ROOT_CERTIFICATE_FILE" "value" (printf "%s/root.pem" $certificates)) -}}
 {{- $env = append $env (dict "name" "TRUSTIOT__CA__CERTIFICATES_FILE" "value" (printf "%s/issuing.pem" $certificates)) -}}
+{{- $ports := include "trustiot.mesh.certsPorts" . | fromYaml -}}
+{{- if $ports.broker -}}
+{{- $env = append $env (dict "name" "TRUSTIOT__BROKER__LISTEN_ADDR" "value" (printf "0.0.0.0:%d" (int $ports.broker))) -}}
+{{- end -}}
+{{- if .Values.mqttBroker.enabled -}}
+{{- $env = append $env (dict "name" "TRUSTIOT__BROKER__SERVICE_NAME" "value" (include "trustiot.mqttBroker.serviceHost" .)) -}}
+{{- end -}}
 {{- toYaml $env -}}
 {{- end -}}
 

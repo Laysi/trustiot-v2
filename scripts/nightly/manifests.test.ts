@@ -24,7 +24,6 @@ import {
   podProblems,
   restartsOf,
   readyEndpointsFor,
-  serverTlsSecretsOf,
   workloadsOf,
 } from "./manifests.ts";
 import { discoverShapes, valuesArgs } from "./smoke.ts";
@@ -169,6 +168,14 @@ spec:
       "rel-otel-collector-password": ["trustiot_collector"],
       "rel-assets-password": ["assets_app"],
       "rel-identity-password": ["identity_app"],
+    });
+    // telemetry-query's ClickHouse account shares the Secret of its Postgres roles (Laysi/trustiot-v2#539).
+    const telemetry = job([
+      { name: "TRUSTIOT__PASSWORDS__POSTGRES", value: "telemetry_query_app=rel-telemetry-query-password,telemetry_query_platform=rel-telemetry-query-password" },
+      { name: "TRUSTIOT__PASSWORDS__CLICKHOUSE_TELEMETRY_QUERY", value: "trustiot_telemetry_query=rel-telemetry-query-password" },
+    ]);
+    expect(Object.fromEntries(passwordSecretsOf(telemetry))).toEqual({
+      "rel-telemetry-query-password": ["telemetry_query_app", "telemetry_query_platform", "trustiot_telemetry_query"],
     });
     expect(passwordSecretsOf(job([])).size).toBe(0);
   });
@@ -505,6 +512,11 @@ describe("pods", () => {
         run("done", { phase: "Succeeded" }),
         run("failed", { phase: "Failed" }),
         run("pull", { phase: "Pending", containerStatuses: [{ name: "key-rotation", ready: false, state: { waiting: { reason: "ImagePullBackOff" } } }] }),
+        // So is a run of the MQTT broker's certificate CronJob (Laysi/trustiot-v2#535).
+        {
+          metadata: { name: "certificate", labels: { "app.kubernetes.io/component": "mqtt-broker-certificate" } },
+          status: { phase: "Running", containerStatuses: [{ name: "certificate", ready: false, restartCount: 0 }] },
+        },
         // The same phase in a service's pod is still a problem.
         pod("service", { phase: "Pending" }),
       ],
@@ -557,13 +569,15 @@ describe("the chart as deployed by the nightly", () => {
       // The password Secrets the migration Job fills are kept too (Laysi/trustiot-v2#60); the
       // smoke values enable the collector, whose ClickHouse password the Job generates.
       // So is the bundled ClickHouse's admin password Secret, which its init container fills and
-      // the Job reads (Laysi/trustiot-v2#403), and the MQTT broker's accounts Secret, which its
-      // init container fills (Laysi/trustiot-v2#84).
+      // the Job reads (Laysi/trustiot-v2#403), the MQTT broker's accounts Secret, which its init
+      // container fills (Laysi/trustiot-v2#84), and its server certificate Secret, which its
+      // certificate CronJob fills (Laysi/trustiot-v2#535).
       expect(keptObjectsOf(objects)).toEqual([
         "cluster.postgresql.cnpg.io/trustiot-postgres",
         "secret/trustiot-otel-collector-password",
         "secret/trustiot-clickhouse-admin-password",
         "secret/trustiot-mqtt-broker-accounts",
+        "secret/trustiot-mqtt-broker-tls",
         "imagecatalog.postgresql.cnpg.io/trustiot-postgres",
       ]);
       expect([...passwordSecretsOf(objects)]).toEqual([
@@ -573,15 +587,9 @@ describe("the chart as deployed by the nightly", () => {
       // The empty Secrets are the release's own: no dummy is made for them.
       expect(missingSecrets(objects).has("trustiot-otel-collector-password")).toBe(false);
       expect(missingSecrets(objects).has("trustiot-clickhouse-admin-password")).toBe(false);
-      // The smoke values run the MQTT broker (Laysi/trustiot-v2#84): the smoke issues its server
-      // certificate for its Service's names instead of a dummy, and checks that nothing exposes it.
-      const namespace = `nightly-${shape}`;
-      expect(serverTlsSecretsOf(objects, namespace)).toEqual([
-        {
-          name: "trustiot-mqtt-broker-tls",
-          hosts: ["", `.${namespace}`, `.${namespace}.svc`, `.${namespace}.svc.cluster.local`].map((suffix) => `trustiot-mqtt-broker${suffix}`),
-        },
-      ]);
+      // The smoke values run the MQTT broker (Laysi/trustiot-v2#84): the chart declares its server
+      // certificate Secret for its CronJob to fill (Laysi/trustiot-v2#535), so no dummy is made,
+      // and the smoke checks that nothing exposes the broker.
       expect(missingSecrets(objects).has("trustiot-mqtt-broker-tls")).toBe(false);
       expect(mqttBrokerServicesOf(objects)).toEqual(["trustiot-mqtt-broker"]);
       expect(exposureProblems(objects, { items: objects.filter((o) => o.kind === "Service") })).toEqual([]);
@@ -839,20 +847,11 @@ spec:
     ],
   });
 
-  test("the smoke issues a certificate for the server-tls volume's Secret, for the Services in front of its pods, and no dummy", () => {
-    expect(serverTlsSecretsOf(objects, "nightly-saas")).toEqual([
-      {
-        name: "broker-tls",
-        hosts: [
-          "trustiot-mqtt-broker",
-          "trustiot-mqtt-broker.nightly-saas",
-          "trustiot-mqtt-broker.nightly-saas.svc",
-          "trustiot-mqtt-broker.nightly-saas.svc.cluster.local",
-        ],
-      },
-    ]);
-    // A Service with an empty selector selects no pod; a Secret the release creates needs nothing.
-    expect([...missingSecrets(objects).keys()]).toEqual(["not-a-server-certificate"]);
+  test("a Secret the release declares gets no dummy, one it does not declare does, and the broker's Services are found", () => {
+    // The chart declares the broker's server certificate Secret (Laysi/trustiot-v2#535); this
+    // fixture does not, so its server-tls Secret gets a dummy like any other. A Service with an
+    // empty selector selects no pod.
+    expect([...missingSecrets(objects).keys()]).toEqual(["broker-tls", "not-a-server-certificate"]);
     expect(mqttBrokerServicesOf(objects)).toEqual(["trustiot-mqtt-broker"]);
   });
 
