@@ -14,6 +14,9 @@
 //! - A lost or refused connection is [`Event::Disconnected`], followed by a reconnect after a
 //!   delay that doubles from [`RECONNECT_DELAY_MIN`] up to [`RECONNECT_DELAY_MAX`], with
 //!   jitter.
+//! - What the client holds for the caller is bounded: messages by [`MAX_HELD_BYTES`] (the
+//!   client stops reading from the broker while they fill it), status events by
+//!   [`MAX_QUEUED_EVENTS`] (the client does not reconnect while they fill it).
 //!
 //! The password never reaches a log or an error at any level: [`Password`] prints as
 //! `Password(<redacted>)`, and the CONNECT packet is encoded into a buffer that is wiped once
@@ -26,7 +29,6 @@ mod driver;
 
 use std::fmt;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use bytes::Bytes;
@@ -35,7 +37,7 @@ use tokio::sync::{mpsc, oneshot};
 pub use crate::config::{
     Config, ConfigError, DEFAULT_PORT, MAX_PASSWORD_BYTES, Password, PasswordError, USERNAME_PREFIX,
 };
-use crate::driver::{Ack, Command, Delivery, Driver, ShutdownRequest};
+use crate::driver::{Ack, Budget, Command, Delivery, Driver, ShutdownRequest};
 
 /// The keepalive the client asks for; the broker may set another in its CONNACK, which the
 /// client then follows. The client sends PINGREQ at this interval and treats the connection as
@@ -52,14 +54,30 @@ pub const WRITE_TIMEOUT: Duration = Duration::from_secs(30);
 /// Maximum is lower; the chart's broker allows 20). Further publishes wait for a free slot.
 pub const MAX_INFLIGHT: u16 = 16;
 
+/// How long a sent publish may wait for its PUBACK. When one waits longer, the connection
+/// counts as lost: every publish in flight fails with [`PublishError::ConnectionLost`] and its
+/// slot is free again. The packet id of an unanswered publish cannot be reused, and the broker
+/// counts it against its Receive Maximum, so only a new connection frees the slot for certain.
+pub const PUBACK_TIMEOUT: Duration = Duration::from_secs(30);
+
 /// The Receive Maximum the client sends: most QoS 1 messages the broker sends before the
 /// client acknowledges them. The client acknowledges a message when [`Events::recv`] hands it
 /// over, so the broker never sends more than this many ahead of the caller.
 pub const RECEIVE_MAXIMUM: u16 = 32;
 
-/// Most messages waiting in [`Events`] before QoS 0 messages are dropped (QoS 1 messages are
-/// held back by [`RECEIVE_MAXIMUM`] instead).
-pub const MAX_QUEUED_MESSAGES: usize = 1024;
+/// Most bytes of messages the client holds for the caller: those waiting in [`Events`] (QoS 1
+/// ones not acknowledged yet among them) and those that arrived before the SUBACK. Each message
+/// counts its payload, its topic and a fixed overhead for its bookkeeping. The client stops
+/// reading from the broker before a message could take the total above this, so TCP flow
+/// control and the broker's own queue limits hold everything else, QoS 0 messages included,
+/// until [`Events::recv`] makes room. It equals the broker's `max_queued_bytes` (16 MiB,
+/// deploy/chart): the client holds no more for a slow caller than the broker queues for it.
+pub const MAX_HELD_BYTES: usize = 16 * 1024 * 1024;
+
+/// Most status events ([`Event::Connected`], [`Event::Disconnected`]) waiting in [`Events`].
+/// The client makes no new connection attempt while it could take them above this, so a caller
+/// that stops reading stops the reconnects rather than growing the queue.
+pub const MAX_QUEUED_EVENTS: usize = 64;
 
 /// The Maximum Packet Size of both directions: `protocol::topic::MIN_MAX_PACKET_BYTES`
 /// (1 MiB + 8 KiB), what the broker and every client of the protocol accept.
@@ -212,15 +230,16 @@ pub enum ConnectionError {
     Protocol(String),
 }
 
-/// What happened on the connection, in order.
+/// What happened on the connection, in order. Its `Debug` form never shows a payload.
 #[derive(Debug)]
 pub enum Event {
     /// A connection is up: the first one or a reconnect. Each connection is a new session, so
     /// anything the caller keeps in sync through the broker should be synchronised again.
     Connected {
         /// The subscriptions given to [`Client::start`], in the same order, with the broker's
-        /// SUBACK reason codes.
-        subscriptions: Vec<SubscriptionOutcome>,
+        /// SUBACK reason codes. [`Subscriptions::all_granted`] says whether the broker granted
+        /// every one with QoS 1, as asked; the client logs a warning for each one it did not.
+        subscriptions: Subscriptions,
     },
     /// The connection could not be made or was lost. The client tries again after
     /// `retry_in`.
@@ -234,6 +253,41 @@ pub enum Event {
     Message(Message),
 }
 
+/// The broker's answers to the subscriptions of one connection, in the order given to
+/// [`Client::start`]. Derefs to a slice of [`SubscriptionOutcome`].
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Subscriptions(Vec<SubscriptionOutcome>);
+
+impl Subscriptions {
+    pub(crate) fn new(outcomes: Vec<SubscriptionOutcome>) -> Self {
+        Self(outcomes)
+    }
+
+    /// Whether the broker granted every subscription with QoS 1, as asked: `false` when it
+    /// refused one or granted only QoS 0. True when there are no subscriptions.
+    #[must_use]
+    pub fn all_granted(&self) -> bool {
+        self.0.iter().all(SubscriptionOutcome::is_granted)
+    }
+}
+
+impl std::ops::Deref for Subscriptions {
+    type Target = [SubscriptionOutcome];
+
+    fn deref(&self) -> &[SubscriptionOutcome] {
+        &self.0
+    }
+}
+
+impl IntoIterator for Subscriptions {
+    type Item = SubscriptionOutcome;
+    type IntoIter = std::vec::IntoIter<SubscriptionOutcome>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.into_iter()
+    }
+}
+
 /// One subscription and the broker's answer to it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SubscriptionOutcome {
@@ -245,56 +299,97 @@ pub struct SubscriptionOutcome {
 }
 
 impl SubscriptionOutcome {
-    /// Whether the broker granted the subscription.
+    /// The QoS the broker granted, or `None` when it refused the subscription. Every
+    /// subscription asks for QoS 1, so 0 means the broker granted less than asked.
+    #[must_use]
+    pub fn granted_qos(&self) -> Option<u8> {
+        (self.code < 0x80).then_some(self.code)
+    }
+
+    /// Whether the broker granted the subscription with QoS 1, as asked.
     #[must_use]
     pub fn is_granted(&self) -> bool {
-        self.code < 0x80
+        self.granted_qos() == Some(1)
     }
 }
 
-/// A message from a subscription.
-#[derive(Clone, Debug, PartialEq, Eq)]
+/// A message from a subscription. Its `Debug` form shows the topic and the payload's length,
+/// never the payload.
+#[derive(Clone, PartialEq, Eq)]
 pub struct Message {
     /// The topic it was published to.
     pub topic: String,
     /// The payload.
     pub payload: Bytes,
+    /// The QoS the broker delivered it with: 1, or 0 when the publisher sent it with QoS 0 or
+    /// the broker granted the subscription only QoS 0. A caller that needs every message
+    /// acknowledged end to end refuses QoS 0 messages.
+    pub qos: u8,
     /// Whether it is a retained message the broker sent because of a new subscription.
     pub retain: bool,
 }
 
+impl fmt::Debug for Message {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Message")
+            .field("topic", &self.topic)
+            .field("payload_bytes", &self.payload.len())
+            .field("qos", &self.qos)
+            .field("retain", &self.retain)
+            .finish()
+    }
+}
+
 /// The events of the connection. Keep reading them: QoS 1 messages are acknowledged as
-/// [`Events::recv`] returns them, so a caller that stops reading stops the flow of messages
-/// (QoS 0 messages beyond [`MAX_QUEUED_MESSAGES`] are dropped).
+/// [`Events::recv`] returns them, and the client stops reading from the broker while the
+/// messages waiting here fill [`MAX_HELD_BYTES`], so a caller that stops reading stops the
+/// flow of messages (README.md, "要一直讀 `Events`").
+///
+/// Dropping it while subscribed discards messages: from then on the client acknowledges every
+/// QoS 1 message at once, those that were waiting here included, and drops it.
 pub struct Events {
     deliveries: mpsc::UnboundedReceiver<Delivery>,
     acks: mpsc::UnboundedSender<Ack>,
-    queued: Arc<AtomicUsize>,
+    budget: Arc<Budget>,
 }
 
 impl fmt::Debug for Events {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Events")
-            .field("queued", &self.queued.load(Ordering::Relaxed))
+            .field("held_bytes", &self.budget.held_bytes())
+            .field("queued_events", &self.budget.queued_events())
             .finish_non_exhaustive()
     }
 }
 
 impl Events {
-    /// The next event; `None` once the client has shut down. A QoS 1 message is acknowledged
-    /// to the broker when it is returned here.
+    /// The next event. A QoS 1 message is acknowledged to the broker when it is returned here.
+    ///
+    /// `None` once the connection task has ended: after [`Client::shutdown`] or once every
+    /// [`Client`] is dropped, after the remaining events. `None` without either means the task
+    /// failed (it logs an error): the client is unusable and the service is not ready.
     pub async fn recv(&mut self) -> Option<Event> {
-        match self.deliveries.recv().await? {
-            Delivery::Event(event) => Some(event),
-            Delivery::Message { message, ack } => {
-                self.queued.fetch_sub(1, Ordering::Relaxed);
+        let event = match self.deliveries.recv().await? {
+            Delivery::Event(event) => {
+                self.budget.event_taken();
+                event
+            }
+            Delivery::Message { message, ack, cost } => {
+                self.budget.message_taken(cost);
                 if let Some(ack) = ack {
                     // The task is gone once the client shut down; nothing to acknowledge then.
                     let _ = self.acks.send(ack);
                 }
-                Some(Event::Message(message))
+                Event::Message(message)
             }
-        }
+        };
+        Some(event)
+    }
+}
+
+impl Drop for Events {
+    fn drop(&mut self) {
+        self.budget.consumer_dropped();
     }
 }
 
@@ -327,8 +422,9 @@ impl Client {
         // One entry per Client::shutdown call; the task ends at the first.
         let (shutdown, shutdown_receiver) = mpsc::unbounded_channel();
         let (acks, ack_receiver) = mpsc::unbounded_channel();
+        // Unbounded as a channel, bounded by the budget: the task counts what it sends.
         let (delivery_sender, deliveries) = mpsc::unbounded_channel();
-        let queued = Arc::new(AtomicUsize::new(0));
+        let budget = Arc::new(Budget::default());
         let driver = Driver::new(
             config,
             Arc::clone(&client_id),
@@ -337,9 +433,22 @@ impl Client {
             shutdown_receiver,
             ack_receiver,
             delivery_sender,
-            Arc::clone(&queued),
+            Arc::clone(&budget),
         );
-        runtime.spawn(driver.run());
+        let task = runtime.spawn(driver.run());
+        let task_client_id = Arc::clone(&client_id);
+        runtime.spawn(async move {
+            // A panic drops the task's channels: publishes fail with Closed and Events::recv
+            // returns None. Say why, without the panic's message.
+            if let Err(error) = task.await
+                && error.is_panic()
+            {
+                tracing::error!(
+                    client_id = %task_client_id,
+                    "the mqtt connection task panicked; the client is closed"
+                );
+            }
+        });
         Ok((
             Self {
                 commands,
@@ -349,7 +458,7 @@ impl Client {
             Events {
                 deliveries,
                 acks,
-                queued,
+                budget,
             },
         ))
     }
@@ -497,6 +606,35 @@ mod tests {
         }
         // Other non-ASCII text is fine.
         assert!(valid_topic("a/\u{e9}\u{4e2d}\u{fffd}/b"));
+    }
+
+    #[test]
+    fn a_subscription_granted_qos_0_is_not_granted() {
+        let outcome = |code| SubscriptionOutcome {
+            filter: "a/b".to_owned(),
+            code,
+        };
+        assert!(outcome(0x01).is_granted());
+        assert_eq!(outcome(0x00).granted_qos(), Some(0));
+        assert!(!outcome(0x00).is_granted());
+        assert_eq!(outcome(0x87).granted_qos(), None);
+        assert!(Subscriptions::new(vec![outcome(0x01), outcome(0x01)]).all_granted());
+        assert!(!Subscriptions::new(vec![outcome(0x01), outcome(0x00)]).all_granted());
+        assert!(!Subscriptions::new(vec![outcome(0x87)]).all_granted());
+        assert!(Subscriptions::default().all_granted());
+    }
+
+    #[test]
+    fn a_message_debug_never_shows_its_payload() {
+        let message = Message {
+            topic: "a/b".to_owned(),
+            payload: Bytes::from_static(b"payload-text"),
+            qos: 1,
+            retain: false,
+        };
+        let debug = format!("{:?}", Event::Message(message));
+        assert!(!debug.contains("payload-text"), "{debug}");
+        assert!(debug.contains("payload_bytes: 12"), "{debug}");
     }
 
     #[test]

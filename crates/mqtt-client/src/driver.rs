@@ -5,10 +5,10 @@
 //! matching of each PUBACK to its publish are kept here, so a reason code always reaches the
 //! caller of the publish it belongs to (README.md, "為什麼這樣用 rumqttc").
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Duration;
 
 use bytes::{Bytes, BytesMut};
@@ -21,20 +21,119 @@ use rumqttc::v5::mqttbytes::v5::{
 use rumqttc::v5::mqttbytes::{Error as CodecError, QoS};
 use tokio::io::AsyncWriteExt as _;
 use tokio::net::TcpStream;
-use tokio::sync::{mpsc, oneshot};
-use tokio::time::{Instant, MissedTickBehavior, interval_at, sleep, timeout};
+use tokio::sync::{Notify, mpsc, oneshot};
+use tokio::time::{Instant, MissedTickBehavior, interval_at, sleep, sleep_until, timeout};
 use tokio_util::codec::Framed;
 use zeroize::Zeroize as _;
 
 use crate::config::{Config, Password};
 use crate::{
-    CONNECT_TIMEOUT, ConnectionError, Event, KEEP_ALIVE, MAX_INFLIGHT, MAX_PACKET_BYTES,
-    MAX_QUEUED_MESSAGES, Message, PublishError, PublishOptions, RECEIVE_MAXIMUM, STABLE_CONNECTION,
-    SubscriptionOutcome, WRITE_TIMEOUT, backoff, codes,
+    CONNECT_TIMEOUT, ConnectionError, Event, KEEP_ALIVE, MAX_HELD_BYTES, MAX_INFLIGHT,
+    MAX_PACKET_BYTES, MAX_QUEUED_EVENTS, Message, PUBACK_TIMEOUT, PublishError, PublishOptions,
+    RECEIVE_MAXIMUM, STABLE_CONNECTION, SubscriptionOutcome, Subscriptions, WRITE_TIMEOUT, backoff,
+    codes,
 };
 
 /// The packet id of the SUBSCRIBE sent on every connection; publishes take the others.
 const SUBSCRIBE_PACKET_ID: u16 = 1;
+
+/// What a held message costs besides its topic and payload: the [`Delivery`], the topic's and
+/// the payload's allocations and the channel's slot, rounded up.
+const MESSAGE_OVERHEAD: usize = 256;
+
+/// The most one message can cost: a packet of [`MAX_PACKET_BYTES`] and the overhead.
+const MAX_MESSAGE_COST: usize = protocol::topic::MIN_MAX_PACKET_BYTES + MESSAGE_OVERHEAD;
+
+/// The client reads the next packet only while the held messages leave room for one more of
+/// the largest kind, so they never take more than [`MAX_HELD_BYTES`].
+const READ_LIMIT: usize = MAX_HELD_BYTES - MAX_MESSAGE_COST;
+
+const _: () = assert!(MAX_HELD_BYTES >= 4 * MAX_MESSAGE_COST);
+
+/// Most status events one connection attempt delivers: [`Event::Connected`] and
+/// [`Event::Disconnected`].
+const EVENTS_PER_ATTEMPT: usize = 2;
+
+/// How often at most the client warns that it stopped reading because the caller is behind.
+const PAUSE_WARNING_INTERVAL: Duration = Duration::from_secs(60);
+
+/// What the client holds for [`crate::Events`], shared between the two.
+#[derive(Debug, Default)]
+pub(crate) struct Budget {
+    /// The cost ([`message_cost`]) of the messages waiting in the channel.
+    held_bytes: AtomicUsize,
+    /// Status events waiting in the channel.
+    queued_events: AtomicUsize,
+    /// [`crate::Events`] was dropped: nobody takes messages any more.
+    consumer_gone: AtomicBool,
+    /// Woken when [`crate::Events`] takes something or is dropped. The task is its only
+    /// waiter; `notify_one` keeps a wakeup that comes while the task is not waiting.
+    space: Notify,
+}
+
+impl Budget {
+    pub(crate) fn held_bytes(&self) -> usize {
+        self.held_bytes.load(Ordering::Acquire)
+    }
+
+    pub(crate) fn queued_events(&self) -> usize {
+        self.queued_events.load(Ordering::Acquire)
+    }
+
+    pub(crate) fn message_taken(&self, cost: usize) {
+        self.held_bytes.fetch_sub(cost, Ordering::AcqRel);
+        self.space.notify_one();
+    }
+
+    pub(crate) fn event_taken(&self) {
+        self.queued_events.fetch_sub(1, Ordering::AcqRel);
+        self.space.notify_one();
+    }
+
+    pub(crate) fn consumer_dropped(&self) {
+        self.consumer_gone.store(true, Ordering::Release);
+        self.space.notify_one();
+    }
+
+    fn is_consumer_gone(&self) -> bool {
+        self.consumer_gone.load(Ordering::Acquire)
+    }
+
+    /// Whether the held messages and `extra` bytes leave room for one more message. Once the
+    /// caller is gone nothing is held for it: the channel is dropped with what it held.
+    fn fits(&self, extra: usize) -> bool {
+        let held = if self.is_consumer_gone() {
+            0
+        } else {
+            self.held_bytes()
+        };
+        held.saturating_add(extra) <= READ_LIMIT
+    }
+
+    /// Whether a connection attempt may start: room to read a message and for the status
+    /// events of one attempt.
+    fn fits_an_attempt(&self) -> bool {
+        self.is_consumer_gone()
+            || (self.fits(0)
+                && self.queued_events().saturating_add(EVENTS_PER_ATTEMPT) <= MAX_QUEUED_EVENTS)
+    }
+}
+
+/// What a message held for the caller counts against [`MAX_HELD_BYTES`].
+fn message_cost(topic_bytes: usize, payload_bytes: usize) -> usize {
+    topic_bytes
+        .saturating_add(payload_bytes)
+        .saturating_add(MESSAGE_OVERHEAD)
+}
+
+/// A publish waiting for its PUBACK.
+struct InFlight {
+    reply: oneshot::Sender<Result<(), PublishError>>,
+    /// When the connection counts as lost if no PUBACK came.
+    deadline: Instant,
+}
+
+type Window = HashMap<u16, InFlight>;
 
 /// A publish from a [`crate::Client`].
 pub(crate) struct Command {
@@ -58,7 +157,12 @@ pub(crate) struct Ack {
 /// What the task hands to [`crate::Events`].
 pub(crate) enum Delivery {
     Event(Event),
-    Message { message: Message, ack: Option<Ack> },
+    Message {
+        message: Message,
+        ack: Option<Ack>,
+        /// Its [`message_cost`], given back to the budget when the caller takes it.
+        cost: usize,
+    },
 }
 
 type Connection = Framed<TcpStream, Codec>;
@@ -70,8 +174,11 @@ struct Session {
     inflight_limit: usize,
     /// The broker's Maximum Packet Size, or ours when it sent none.
     max_outgoing: u32,
-    /// Messages that arrived before the SUBACK, delivered after [`Event::Connected`].
+    /// Messages that arrived before the SUBACK, delivered after [`Event::Connected`], each in
+    /// its own allocation ([`detach`]).
     early: Vec<Publish>,
+    /// Their [`message_cost`] together.
+    early_bytes: usize,
 }
 
 /// The encoded CONNECT, which holds the password: wiped when dropped, also when the future
@@ -106,14 +213,18 @@ pub(crate) struct Driver {
     /// Closed (`recv` returns `None`) once every [`crate::Client`] is dropped.
     shutdown: mpsc::UnboundedReceiver<ShutdownRequest>,
     acks: mpsc::UnboundedReceiver<Ack>,
+    /// Unbounded as a channel; [`Budget`] bounds what it holds.
     deliveries: mpsc::UnboundedSender<Delivery>,
-    queued: Arc<AtomicUsize>,
+    budget: Arc<Budget>,
     /// Numbers the connections, so an acknowledgement never goes to a later connection.
     connection: u64,
-    /// QoS 1 messages of this connection delivered but not acknowledged yet.
-    unacknowledged: usize,
-    /// QoS 0 messages dropped because [`crate::Events`] was full, for the warning.
-    dropped: u64,
+    /// The packet ids of this connection's QoS 1 messages not acknowledged yet, in the order
+    /// they arrived, which is the order their PUBACKs must go in (MQTT 5, section 4.6).
+    pending: VecDeque<u16>,
+    /// The warning that the caller dropped [`crate::Events`] was logged.
+    warned_consumer_gone: bool,
+    /// When the client last warned that it stopped reading because the caller is behind.
+    last_pause_warning: Option<Instant>,
 }
 
 impl Driver {
@@ -129,7 +240,7 @@ impl Driver {
         shutdown: mpsc::UnboundedReceiver<ShutdownRequest>,
         acks: mpsc::UnboundedReceiver<Ack>,
         deliveries: mpsc::UnboundedSender<Delivery>,
-        queued: Arc<AtomicUsize>,
+        budget: Arc<Budget>,
     ) -> Self {
         Self {
             target: Target {
@@ -144,10 +255,11 @@ impl Driver {
             shutdown,
             acks,
             deliveries,
-            queued,
+            budget,
             connection: 0,
-            unacknowledged: 0,
-            dropped: 0,
+            pending: VecDeque::new(),
+            warned_consumer_gone: false,
+            last_pause_warning: None,
         }
     }
 
@@ -156,7 +268,7 @@ impl Driver {
         let mut failures: u32 = 0;
         loop {
             self.connection = self.connection.wrapping_add(1);
-            self.unacknowledged = 0;
+            self.pending.clear();
             let error = match self.connect().await {
                 Ok(session) => {
                     let since = Instant::now();
@@ -181,21 +293,39 @@ impl Driver {
                 retry_in_ms = retry_in.as_millis(),
                 "mqtt connection failed or lost; reconnecting"
             );
-            self.deliver(Delivery::Event(Event::Disconnected { error, retry_in }));
+            self.deliver_event(Event::Disconnected { error, retry_in });
             if let Some(done) = self.wait(retry_in).await {
                 return finish(done);
             }
         }
     }
 
-    /// Waits `delay` before the next attempt. Publishes fail at once meanwhile. Returns
-    /// `Some` when the client shut down.
+    /// Waits `delay` before the next attempt, and then until the caller has read enough of
+    /// [`crate::Events`] for one ([`Budget::fits_an_attempt`]). Publishes fail at once
+    /// meanwhile. Returns `Some` when the client shut down.
     async fn wait(&mut self, delay: Duration) -> Option<Option<oneshot::Sender<()>>> {
         let deadline = sleep(delay);
         tokio::pin!(deadline);
+        let mut delay_over = false;
+        let mut warned = false;
         loop {
+            if delay_over {
+                if self.budget.fits_an_attempt() {
+                    return None;
+                }
+                if !warned {
+                    warned = true;
+                    tracing::warn!(
+                        client_id = %self.target.client_id,
+                        held_bytes = self.budget.held_bytes(),
+                        queued_events = self.budget.queued_events(),
+                        "the caller is not reading mqtt events; the next connection attempt waits for it"
+                    );
+                }
+            }
             tokio::select! {
-                () = &mut deadline => return None,
+                () = &mut deadline, if !delay_over => delay_over = true,
+                () = self.budget.space.notified(), if delay_over => {}
                 done = self.shutdown.recv() => return Some(done),
                 command = self.commands.recv() => match command {
                     // Every Client is gone.
@@ -224,7 +354,7 @@ impl Driver {
             username = %target.username,
             "connecting to the mqtt broker"
         );
-        let handshake = timeout(CONNECT_TIMEOUT, target.handshake(password));
+        let handshake = timeout(CONNECT_TIMEOUT, target.handshake(password, &self.budget));
         tokio::pin!(handshake);
         let (session, subscriptions) = loop {
             tokio::select! {
@@ -255,15 +385,26 @@ impl Driver {
             max_packet_bytes = session.max_outgoing,
             "connected to the mqtt broker"
         );
-        for outcome in subscriptions.iter().filter(|outcome| !outcome.is_granted()) {
-            tracing::warn!(
-                client_id = %self.target.client_id,
-                filter = %outcome.filter,
-                code = outcome.code,
-                "the broker refused a subscription"
-            );
+        for outcome in &subscriptions {
+            match outcome.granted_qos() {
+                Some(1) => {}
+                Some(qos) => tracing::warn!(
+                    client_id = %self.target.client_id,
+                    filter = %outcome.filter,
+                    granted_qos = qos,
+                    "the broker granted a subscription a lower QoS than asked; its messages are not acknowledged"
+                ),
+                None => tracing::warn!(
+                    client_id = %self.target.client_id,
+                    filter = %outcome.filter,
+                    code = outcome.code,
+                    "the broker refused a subscription"
+                ),
+            }
         }
-        self.deliver(Delivery::Event(Event::Connected { subscriptions }));
+        self.deliver_event(Event::Connected {
+            subscriptions: Subscriptions::new(subscriptions),
+        });
         Ok(session)
     }
 }
@@ -272,6 +413,7 @@ impl Target {
     async fn handshake(
         &self,
         password: Password,
+        budget: &Budget,
     ) -> Result<(Session, Vec<SubscriptionOutcome>), ConnectionError> {
         let mut stream = TcpStream::connect((self.host.as_str(), self.port))
             .await
@@ -303,7 +445,7 @@ impl Target {
             }
         };
         let mut session = session(framed, &connack)?;
-        let subscriptions = self.subscribe(&mut session).await?;
+        let subscriptions = self.subscribe(&mut session, budget).await?;
         Ok((session, subscriptions))
     }
 
@@ -355,10 +497,11 @@ impl Target {
     }
 
     /// Subscribes to every filter in one SUBSCRIBE and waits for its SUBACK. Messages that
-    /// arrive first are kept for after [`Event::Connected`].
+    /// arrive first are kept for after [`Event::Connected`], within the budget.
     async fn subscribe(
         &self,
         session: &mut Session,
+        budget: &Budget,
     ) -> Result<Vec<SubscriptionOutcome>, ConnectionError> {
         if self.subscriptions.is_empty() {
             return Ok(Vec::new());
@@ -390,13 +533,20 @@ impl Target {
                         })
                         .collect());
                 }
-                Packet::Publish(publish) => {
-                    if session.early.len() >= usize::from(RECEIVE_MAXIMUM) + MAX_QUEUED_MESSAGES {
+                Packet::Publish(mut publish) => {
+                    // Room for this one was checked before it was read.
+                    detach(&mut publish);
+                    session.early_bytes = session
+                        .early_bytes
+                        .saturating_add(message_cost(publish.topic.len(), publish.payload.len()));
+                    session.early.push(publish);
+                    if !budget.fits(session.early_bytes) {
+                        // Every message before the SUBACK is unusual: with a clean start the
+                        // broker has nothing queued for a new session.
                         return Err(ConnectionError::Protocol(
-                            "too many messages before the SUBACK".to_owned(),
+                            "more messages before the SUBACK than the client holds".to_owned(),
                         ));
                     }
-                    session.early.push(publish);
                 }
                 Packet::Disconnect(disconnect) => return Err(server_disconnect(&disconnect)),
                 other => {
@@ -413,14 +563,14 @@ impl Target {
 impl Driver {
     /// Serves a connection until it is lost or the client shuts down.
     async fn serve(&mut self, mut session: Session) -> Stop {
-        let mut inflight: HashMap<u16, oneshot::Sender<Result<(), PublishError>>> = HashMap::new();
+        let mut inflight = Window::new();
         let stop = self.serve_loop(&mut session, &mut inflight).await;
         let failure = match &stop {
             Stop::Shutdown(_) => PublishError::Closed,
             Stop::Lost(_) => PublishError::ConnectionLost,
         };
-        for (_, reply) in inflight.drain() {
-            let _ = reply.send(Err(failure.clone()));
+        for (_, entry) in inflight.drain() {
+            let _ = entry.reply.send(Err(failure.clone()));
         }
         if let Stop::Shutdown(_) = &stop {
             let disconnect = Disconnect::new(DisconnectReasonCode::NormalDisconnection);
@@ -431,11 +581,14 @@ impl Driver {
         stop
     }
 
-    async fn serve_loop(
-        &mut self,
-        session: &mut Session,
-        inflight: &mut HashMap<u16, oneshot::Sender<Result<(), PublishError>>>,
-    ) -> Stop {
+    /// Reads from the broker only while the held messages leave room for one more
+    /// ([`Budget::fits`]). While it does not read, it still writes: publishes, acknowledgements
+    /// of the messages the caller takes, and a PINGREQ at every keepalive tick, so the broker
+    /// keeps the connection. A missing PINGRESP counts only after a whole keepalive of reading,
+    /// so a dead broker is noticed late while the caller is behind; a publish still fails after
+    /// [`PUBACK_TIMEOUT`] without its PUBACK, which also ends a stall that lasts that long.
+    async fn serve_loop(&mut self, session: &mut Session, inflight: &mut Window) -> Stop {
+        session.early_bytes = 0;
         for publish in std::mem::take(&mut session.early) {
             if let Err(error) = self.receive(publish) {
                 return Stop::Lost(error);
@@ -445,23 +598,40 @@ impl Driver {
         let mut ping = interval_at(Instant::now() + session.keep_alive, session.keep_alive);
         ping.set_missed_tick_behavior(MissedTickBehavior::Delay);
         let mut awaiting_pong = false;
+        // Since when the client reads from the broker; `None` while it does not.
+        let mut reading_since = Some(Instant::now());
         loop {
+            if self.budget.is_consumer_gone()
+                && !self.pending.is_empty()
+                && let Err(error) = self.acknowledge_pending(session).await
+            {
+                return Stop::Lost(error);
+            }
+            let can_read = self.budget.fits(0);
+            match (can_read, reading_since) {
+                (true, None) => {
+                    reading_since = Some(Instant::now());
+                    tracing::debug!(client_id = %self.target.client_id, "reading from the mqtt broker again");
+                }
+                (false, Some(_)) => {
+                    reading_since = None;
+                    self.warn_paused();
+                }
+                _ => {}
+            }
+            // Woken when the caller takes something or drops the events: to read again, or to
+            // acknowledge what it left.
+            let watch_caller = !can_read || !self.pending.is_empty();
             let can_publish = inflight.len() < session.inflight_limit;
+            let puback_deadline = inflight.values().map(|entry| entry.deadline).min();
             let result = tokio::select! {
-                packet = session.framed.next() => match packet {
+                packet = session.framed.next(), if can_read => match packet {
                     Some(Ok(packet)) => self.incoming(packet, inflight, &mut awaiting_pong),
                     Some(Err(error)) => Err(codec_error(error, "reading from the broker")),
                     None => Err(ConnectionError::Closed),
                 },
-                Some(ack) = self.acks.recv() => {
-                    if ack.connection == self.connection {
-                        self.unacknowledged = self.unacknowledged.saturating_sub(1);
-                        let puback = PubAck::new(ack.packet_id, None);
-                        send(&mut session.framed, Packet::PubAck(puback)).await
-                    } else {
-                        Ok(())
-                    }
-                }
+                () = self.budget.space.notified(), if watch_caller => Ok(()),
+                Some(ack) = self.acks.recv() => self.acknowledge(session, &ack).await,
                 // Read even while the in-flight window is full.
                 done = self.shutdown.recv() => return Stop::Shutdown(done),
                 command = self.commands.recv(), if can_publish => match command {
@@ -470,8 +640,17 @@ impl Driver {
                         self.publish(session, inflight, &mut next_packet_id, command).await
                     }
                 },
+                () = sleep_until(puback_deadline.unwrap_or_else(Instant::now)),
+                    if puback_deadline.is_some() =>
+                {
+                    Err(ConnectionError::Timeout {
+                        waiting_for: "the broker's PUBACK",
+                    })
+                }
                 _ = ping.tick() => {
-                    if awaiting_pong {
+                    let read_a_whole_keepalive = reading_since
+                        .is_some_and(|since| since.elapsed() >= session.keep_alive);
+                    if awaiting_pong && read_a_whole_keepalive {
                         Err(ConnectionError::KeepAlive)
                     } else {
                         awaiting_pong = true;
@@ -485,12 +664,57 @@ impl Driver {
         }
     }
 
+    /// The caller took a QoS 1 message: acknowledge it, when it came on this connection and is
+    /// still waiting for its acknowledgement.
+    async fn acknowledge(
+        &mut self,
+        session: &mut Session,
+        ack: &Ack,
+    ) -> Result<(), ConnectionError> {
+        if ack.connection != self.connection {
+            return Ok(());
+        }
+        let Some(position) = self.pending.iter().position(|&id| id == ack.packet_id) else {
+            return Ok(());
+        };
+        // The caller takes messages in order, so this is the oldest one.
+        self.pending.remove(position);
+        let puback = PubAck::new(ack.packet_id, None);
+        send(&mut session.framed, Packet::PubAck(puback)).await
+    }
+
+    /// The caller dropped [`crate::Events`]: acknowledge every QoS 1 message it will never
+    /// take, in the order they arrived, so the broker goes on sending.
+    async fn acknowledge_pending(&mut self, session: &mut Session) -> Result<(), ConnectionError> {
+        self.warn_consumer_gone();
+        while let Some(packet_id) = self.pending.pop_front() {
+            let puback = PubAck::new(packet_id, None);
+            send(&mut session.framed, Packet::PubAck(puback)).await?;
+        }
+        Ok(())
+    }
+
+    fn warn_paused(&mut self) {
+        if self
+            .last_pause_warning
+            .is_some_and(|last| last.elapsed() < PAUSE_WARNING_INTERVAL)
+        {
+            return;
+        }
+        self.last_pause_warning = Some(Instant::now());
+        tracing::warn!(
+            client_id = %self.target.client_id,
+            held_bytes = self.budget.held_bytes(),
+            "the caller is behind on mqtt events; reading from the broker stops until it catches up"
+        );
+    }
+
     /// Sends one publish and records it as in flight, unless its caller stopped waiting before
     /// it was taken from the queue or it is larger than the broker accepts.
     async fn publish(
         &self,
         session: &mut Session,
-        inflight: &mut HashMap<u16, oneshot::Sender<Result<(), PublishError>>>,
+        inflight: &mut Window,
         next_packet_id: &mut u16,
         command: Command,
     ) -> Result<(), ConnectionError> {
@@ -521,7 +745,13 @@ impl Driver {
             bytes = size,
             "publish"
         );
-        inflight.insert(packet_id, reply);
+        inflight.insert(
+            packet_id,
+            InFlight {
+                reply,
+                deadline: Instant::now() + PUBACK_TIMEOUT,
+            },
+        );
         send(&mut session.framed, Packet::Publish(publish)).await
     }
 
@@ -529,12 +759,12 @@ impl Driver {
     fn incoming(
         &mut self,
         packet: Packet,
-        inflight: &mut HashMap<u16, oneshot::Sender<Result<(), PublishError>>>,
+        inflight: &mut Window,
         awaiting_pong: &mut bool,
     ) -> Result<(), ConnectionError> {
         match packet {
             Packet::PubAck(puback) => {
-                let Some(reply) = inflight.remove(&puback.pkid) else {
+                let Some(entry) = inflight.remove(&puback.pkid) else {
                     return Err(ConnectionError::Protocol(format!(
                         "PUBACK for packet id {} that is not in flight",
                         puback.pkid
@@ -555,7 +785,7 @@ impl Driver {
                     }),
                 };
                 // The caller may have stopped waiting.
-                let _ = reply.send(result);
+                let _ = entry.reply.send(result);
                 Ok(())
             }
             Packet::Publish(publish) => self.receive(publish),
@@ -572,7 +802,7 @@ impl Driver {
     }
 
     /// A message from a subscription: hands it to [`crate::Events`]. A QoS 1 message is
-    /// acknowledged when the caller takes it.
+    /// acknowledged when the caller takes it, or at once when the caller dropped the events.
     fn receive(&mut self, publish: Publish) -> Result<(), ConnectionError> {
         let topic = std::str::from_utf8(&publish.topic)
             .map_err(|_| ConnectionError::Protocol("a topic name is not UTF-8".to_owned()))?;
@@ -583,32 +813,21 @@ impl Driver {
                 "a PUBLISH without a topic name".to_owned(),
             ));
         }
-        let ack = match publish.qos {
-            QoS::AtMostOnce => {
-                if self.queued.load(Ordering::Relaxed) >= MAX_QUEUED_MESSAGES {
-                    self.dropped = self.dropped.saturating_add(1);
-                    if self.dropped.is_power_of_two() {
-                        tracing::warn!(
-                            client_id = %self.target.client_id,
-                            dropped = self.dropped,
-                            "the caller is not reading mqtt events; QoS 0 messages are dropped"
-                        );
-                    }
-                    return Ok(());
-                }
-                None
-            }
+        let qos = match publish.qos {
+            QoS::AtMostOnce => 0,
             QoS::AtLeastOnce => {
-                if self.unacknowledged >= usize::from(RECEIVE_MAXIMUM) {
+                if self.pending.len() >= usize::from(RECEIVE_MAXIMUM) {
                     return Err(ConnectionError::Protocol(
                         "the broker sent more QoS 1 messages than the Receive Maximum".to_owned(),
                     ));
                 }
-                self.unacknowledged += 1;
-                Some(Ack {
-                    connection: self.connection,
-                    packet_id: publish.pkid,
-                })
+                if self.pending.contains(&publish.pkid) {
+                    return Err(ConnectionError::Protocol(format!(
+                        "packet id {} reused before its PUBACK",
+                        publish.pkid
+                    )));
+                }
+                1
             }
             QoS::ExactlyOnce => {
                 return Err(ConnectionError::Protocol(
@@ -616,33 +835,83 @@ impl Driver {
                 ));
             }
         };
+        if self.budget.is_consumer_gone() {
+            self.discard(qos, publish.pkid);
+            return Ok(());
+        }
         tracing::trace!(
             client_id = %self.target.client_id,
             topic = %topic,
             bytes = publish.payload.len(),
+            qos,
             "message"
         );
+        let cost = message_cost(topic.len(), publish.payload.len());
         let message = Message {
             topic: topic.to_owned(),
-            payload: publish.payload,
+            // Its own allocation: a slice would keep the codec's whole read buffer alive, which
+            // the budget does not count.
+            payload: Bytes::copy_from_slice(&publish.payload),
+            qos,
             retain: publish.retain,
         };
-        self.queued.fetch_add(1, Ordering::Relaxed);
+        let ack = (qos == 1).then_some(Ack {
+            connection: self.connection,
+            packet_id: publish.pkid,
+        });
+        // Counted before it is sent, so the caller never gives back more than was counted.
+        self.budget.held_bytes.fetch_add(cost, Ordering::AcqRel);
         if self
             .deliveries
-            .send(Delivery::Message { message, ack })
+            .send(Delivery::Message { message, ack, cost })
             .is_err()
         {
-            // Nobody reads the events any more.
-            self.queued.fetch_sub(1, Ordering::Relaxed);
+            self.budget.held_bytes.fetch_sub(cost, Ordering::AcqRel);
+            self.discard(qos, publish.pkid);
+            return Ok(());
+        }
+        if qos == 1 {
+            self.pending.push_back(publish.pkid);
         }
         Ok(())
     }
 
-    fn deliver(&self, delivery: Delivery) {
-        // Nobody may read the events any more; publishing goes on.
-        let _ = self.deliveries.send(delivery);
+    /// The caller dropped [`crate::Events`]: the message is dropped, and a QoS 1 one is
+    /// acknowledged with the others ([`Self::acknowledge_pending`]).
+    fn discard(&mut self, qos: u8, packet_id: u16) {
+        self.warn_consumer_gone();
+        if qos == 1 {
+            self.pending.push_back(packet_id);
+        }
     }
+
+    fn warn_consumer_gone(&mut self) {
+        if !self.warned_consumer_gone {
+            self.warned_consumer_gone = true;
+            tracing::warn!(
+                client_id = %self.target.client_id,
+                "the mqtt events are no longer read; messages are acknowledged and dropped"
+            );
+        }
+    }
+
+    /// Hands a status event to [`crate::Events`]; [`Self::wait`] keeps them within
+    /// [`MAX_QUEUED_EVENTS`].
+    fn deliver_event(&self, event: Event) {
+        self.budget.queued_events.fetch_add(1, Ordering::AcqRel);
+        if self.deliveries.send(Delivery::Event(event)).is_err() {
+            // Nobody reads the events any more; publishing goes on.
+            self.budget.queued_events.fetch_sub(1, Ordering::AcqRel);
+        }
+    }
+}
+
+/// Gives a received message its own allocations and drops what is not delivered, so what it
+/// holds is what [`message_cost`] counts.
+fn detach(publish: &mut Publish) {
+    publish.topic = Bytes::copy_from_slice(&publish.topic);
+    publish.payload = Bytes::copy_from_slice(&publish.payload);
+    publish.properties = None;
 }
 
 /// The session parameters from a successful CONNACK.
@@ -678,6 +947,7 @@ fn session(framed: Connection, connack: &ConnAck) -> Result<Session, ConnectionE
         inflight_limit: usize::from(MAX_INFLIGHT.min(receive_maximum)),
         max_outgoing,
         early: Vec::new(),
+        early_bytes: 0,
     })
 }
 
@@ -791,6 +1061,31 @@ mod tests {
         inflight.insert(3, ());
         inflight.insert(4, ());
         assert_eq!(allocate(&mut next, &inflight), 5);
+    }
+
+    #[test]
+    fn the_budget_stops_reading_before_a_message_could_exceed_it() {
+        let budget = Budget::default();
+        assert!(budget.fits(0));
+        assert!(budget.fits_an_attempt());
+        budget.held_bytes.store(READ_LIMIT, Ordering::Release);
+        assert!(budget.fits(0));
+        assert!(!budget.fits(1));
+        budget.held_bytes.store(READ_LIMIT + 1, Ordering::Release);
+        assert!(!budget.fits(0));
+        assert!(!budget.fits_an_attempt());
+        budget.message_taken(1);
+        assert!(budget.fits(0));
+        budget.queued_events.store(
+            MAX_QUEUED_EVENTS - EVENTS_PER_ATTEMPT + 1,
+            Ordering::Release,
+        );
+        assert!(!budget.fits_an_attempt());
+        // Once the caller is gone, nothing is held for it.
+        budget.held_bytes.store(MAX_HELD_BYTES, Ordering::Release);
+        budget.consumer_dropped();
+        assert!(budget.fits(0));
+        assert!(budget.fits_an_attempt());
     }
 
     #[test]

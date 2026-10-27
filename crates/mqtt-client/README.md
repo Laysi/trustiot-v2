@@ -16,12 +16,13 @@ let (client, mut events) = Client::start(&config, subscriptions)?;
 
 while let Some(event) = events.recv().await {
     match event {
-        // 第一次連上與每次重連都有；subscriptions 是每個訂閱的 SUBACK 原因碼。
+        // 第一次連上與每次重連都有；subscriptions 是每個訂閱的 SUBACK 原因碼，
+        // subscriptions.all_granted() 是全部都以 QoS 1 核准。
         Event::Connected { subscriptions } => { /* 需要時做一次完整同步 */ }
         // 連不上或斷線；client 在 retry_in 之後自己重連。
         Event::Disconnected { error, retry_in } => { /* 記錄、更新 readiness */ }
         Event::Message(message) => {
-            // message.topic、message.payload、message.retain
+            // message.topic、message.payload、message.qos、message.retain
             let delivery = Channel::TelemetryAck.delivery();
             let options = PublishOptions { retain: delivery.retain, message_expiry: delivery.message_expiry };
             client.publish(&ack_topic, ack_payload, options).await?;
@@ -31,10 +32,13 @@ while let Some(event) = events.recv().await {
 ```
 
 - `Client::start` 檢查設定、讀一次密碼檔（不能用就在啟動時失敗）、檢查每個 topic filter，然後在目前的 Tokio runtime 起一個 task 持有連線，第一次連線立刻開始。
-- `Client` 可以 clone；最後一個 clone 被 drop 或呼叫 `Client::shutdown` 時送 DISCONNECT、結束 task，`Events::recv` 送完剩下的事件後回 `None`。shutdown 走自己的通道，in-flight 已滿、broker 不回 PUBACK 時也會結束。
-- `Client::publish` 一律 QoS 1，等 PUBACK 才回來：原因碼 0x80 以上是 `PublishError::Refused { code, reason }`（例如沒有權限的 topic 是 0x87），0x10（沒有訂閱者）算成功。沒有連線時立刻回 `NotConnected`，不排隊，連線建立中（含 `Client::start` 之後第一次連上之前）也是，所以要發布的呼叫端先等 `Event::Connected`；future 在送出前被取消，那則 publish 就不送；送出後、PUBACK 前斷線是 `ConnectionLost`（broker 可能收到了，也可能沒有）；封包超過 broker 的上限時回 `TooLarge`，不送出、不斷線。
-- 訂閱在 `Client::start` 時給，每次連線（含重連）都重新訂閱，一個 SUBSCRIBE 帶全部的 filter，SUBACK 之後才送 `Event::Connected`。shared subscription 寫成 `$share/<群組>/<filter>`。被拒的訂閱（0x80 以上）照樣回報在 `Connected` 裡並記警告，連線不斷；要不要因此停止服務由呼叫端決定。
-- 要一直讀 `Events`：QoS 1 的訊息在 `Events::recv` 交出時才回 PUBACK，broker 最多先送 `RECEIVE_MAXIMUM`（32）則未確認的訊息，所以呼叫端不讀，訊息就停在 broker，不會在服務裡無限累積；QoS 0 的訊息在 `Events` 裡已有 `MAX_QUEUED_MESSAGES`（1024）則時丟棄並記警告。在處理訊息的迴圈裡 `await` 一個 publish 不會卡死：連線 task 不等呼叫端讀事件。
+- `Client` 可以 clone；最後一個 clone 被 drop 或呼叫 `Client::shutdown` 時送 DISCONNECT、結束 task，`Events::recv` 送完剩下的事件後回 `None`。shutdown 走自己的通道，in-flight 已滿、broker 不回 PUBACK 時也會結束。沒有 shutdown、`Client` 也還在，`Events::recv` 卻回 `None`，表示連線 task 異常結束（panic；task 另記一行 error）：client 已不能用，服務應回報 not ready。
+- `Client::publish` 一律 QoS 1，等 PUBACK 才回來：原因碼 0x80 以上是 `PublishError::Refused { code, reason }`（例如沒有權限的 topic 是 0x87），0x10（沒有訂閱者）算成功。沒有連線時立刻回 `NotConnected`，不排隊，連線建立中（含 `Client::start` 之後第一次連上之前）也是，所以要發布的呼叫端先等 `Event::Connected`；future 在送出前被取消，那則 publish 就不送；送出後、PUBACK 前斷線是 `ConnectionLost`（broker 可能收到了，也可能沒有）；送出後 `PUBACK_TIMEOUT`（30 秒）內沒有 PUBACK 也當成斷線，in-flight 的 publish 都回 `ConnectionLost`，空位在重連後釋出（沒回 PUBACK 的 packet id 不能重用，broker 也還把它算在 Receive Maximum 裡）；封包超過 broker 的上限時回 `TooLarge`，不送出、不斷線。
+- 訂閱在 `Client::start` 時給，每次連線（含重連）都重新訂閱，一個 SUBSCRIBE 帶全部的 filter，都要求 QoS 1，SUBACK 之後才送 `Event::Connected`。shared subscription 寫成 `$share/<群組>/<filter>`。被拒的訂閱（0x80 以上）與只核准 QoS 0 的訂閱（0x00）照樣回報在 `Connected` 裡並各記一行警告，連線不斷；`SubscriptionOutcome::granted_qos()` 是核准的 QoS，`is_granted()` 與 `Subscriptions::all_granted()` 只在核准 QoS 1 時成立。要不要因此停止服務由呼叫端決定。
+- 每則訊息帶 `qos`（0 或 1）。訂閱都是 QoS 1，但發布端用 QoS 0 發的訊息，broker 照 QoS 0 交付；需要逐則確認的呼叫端（例如 ingest 的遙測）拒收 QoS 0 的訊息。`Message` 與 `Event` 的 `Debug` 只印 topic 與 payload 長度，不印 payload。
+- 要一直讀 `Events`：QoS 1 的訊息在 `Events::recv` 交出時才回 PUBACK，broker 最多先送 `RECEIVE_MAXIMUM`（32）則未確認的訊息。client 為呼叫端保留的訊息（`Events` 裡等著的，與 SUBACK 前先到的）以位元組計，上限 `MAX_HELD_BYTES`（16 MiB）：保留的量不夠再放一則最大的訊息時，client 就不再讀 socket，QoS 0 的訊息也一樣，由 TCP 的流量控制與 broker 自己的佇列上限（`max_queued_bytes`、`max_queued_messages`，超過時 broker 丟棄）擋住，呼叫端讀走之後才繼續讀。狀態事件（`Connected`、`Disconnected`）最多 `MAX_QUEUED_EVENTS`（64）則：放不下下一次連線的事件時，client 不重連，等呼叫端讀。
+- 呼叫端卡住時的 keepalive：不讀 socket 的期間 client 照樣寫，PUBACK、publish 照送，每個 keepalive 也照送 PINGREQ，broker 不會因為 keepalive 斷線；但讀不到 PINGRESP，所以要恢復讀取滿一個 keepalive 之後才會判定 broker 沒回應，broker 死掉在這段期間發現得比較晚。這段期間 publish 的 PUBACK 也讀不到，`PUBACK_TIMEOUT` 到了就斷線重連（重連也要等呼叫端讀出空間）。所以在處理訊息的迴圈裡 `await` 一個 publish，平常不會卡死（連線 task 不等呼叫端讀事件），但呼叫端落後超過 `MAX_HELD_BYTES` 時，那個 publish 最多等 `PUBACK_TIMEOUT` 後回 `ConnectionLost`。
+- 訂閱中把 `Events` drop 掉，就是不要訊息了：之後的 QoS 1 訊息（含已在 `Events` 裡等著的）由 client 立刻依序回 PUBACK 後丟棄，記一行警告，連線照常，不會因為未確認的訊息累積而斷線重連。只發布、不訂閱的服務可以直接 drop `Events`。
 - 每次連線都是新的 session（clean start）：斷線期間的訊息不保留，`Event::Connected` 之後該重送的狀態（例如 gateway-ops 的 desired 設定）由呼叫端重送。PUBACK 在交給呼叫端時就送出，服務在處理完之前當掉，那則訊息就沒了；需要確實送達的資料靠應用層的確認（遙測的 `TelemetryAck`）。
 
 ## 設定
@@ -58,7 +62,10 @@ while let Some(event) = events.recv().await {
 | `CONNECT_TIMEOUT` | 10 秒 | TCP 連線、CONNECT／CONNACK、SUBSCRIBE／SUBACK 加起來的上限 |
 | `WRITE_TIMEOUT` | 30 秒 | 一次寫入卡住超過這個時間就當成斷線 |
 | `MAX_INFLIGHT` | 16 | 同時等 PUBACK 的 publish 上限；broker 的 Receive Maximum 較小時用它的（chart 的 broker 是 20）。滿了之後的 publish 等空位 |
+| `PUBACK_TIMEOUT` | 30 秒 | 送出的 publish 等 PUBACK 的上限，超過就當成斷線，釋出 in-flight 的空位 |
 | `RECEIVE_MAXIMUM` | 32 | 送給 broker 的 Receive Maximum：未確認的 QoS 1 訊息上限 |
+| `MAX_HELD_BYTES` | 16 MiB | 為呼叫端保留的訊息上限，每則以 payload、topic 加 256 位元組的簿記計。等於 chart 的 broker 為每個用戶端排隊的上限 `max_queued_bytes`：服務為落後的呼叫端保留的量不比 broker 多。到了就不讀 socket（見「要一直讀 `Events`」） |
+| `MAX_QUEUED_EVENTS` | 64 | `Events` 裡等著的狀態事件上限；放不下下一次連線的事件時不重連 |
 | `MAX_PACKET_BYTES` | 1 MiB + 8 KiB | 兩個方向的 Maximum Packet Size，等於 `protocol::topic::MIN_MAX_PACKET_BYTES`（[crates/protocol](../protocol/README.md)「傳輸：MQTT 5」）。送出的上限取它與 broker 在 CONNACK 給的值中較小者 |
 | `RECONNECT_DELAY_MIN`、`RECONNECT_DELAY_MAX` | 0.5 秒、30 秒 | 重連的等待從上限 0.5 秒起每次失敗加倍，最多 30 秒，實際等待是上限的一半到上限之間的隨機值，同時斷線的副本不會同時回來。連線維持 `STABLE_CONNECTION`（60 秒）以上才把等待重設回最小值，連上又立刻斷的情況不會變成快速重試 |
 
@@ -72,7 +79,7 @@ while let Some(event) = events.recv().await {
 
 - **雲端用 rumqttc，閘道器不用。** 閘道器 agent（Laysi/trustiot-v2#86）自己寫 MQTT 5 的編解碼與狀態機，因為它要在 WebSocket 裡跑內層 TLS，rumqttc 不能接自訂的串流。雲端服務在 mesh 裡以明文 TCP 連 1883，沒有這個限制，就不再寫一份編解碼（2026-10-24 拆分 Laysi/trustiot-v2#82 時決定）。
 - **只用 rumqttc 的封包型別與 codec（`rumqttc::v5::mqttbytes`），連線、packet id、keepalive、重連由本 crate 自己做。** rumqttc 0.25.1 的 `EventLoop` 不能把 PUBACK 的原因碼交還給發出那則 publish 的呼叫端：它自己配 packet id，事件裡只有 packet id，而且原因碼不是成功時只記一行警告。要對回去，只能依事件的先後去猜，連線中斷、id 衝突、SUBSCRIBE 與 PUBLISH 共用 id 時都可能把 0x87 交給錯的呼叫端。自己配 packet id 就能一對一對應，也能做到「交給呼叫端時才回 PUBACK」的流量控制。代價是 keepalive、packet id、重連這些（`src/driver.rs`）由我們維護與測試；MQTT 5 的編解碼仍是 rumqttc 的。
-- **記憶體。** 可行性測試記下 rumqttc 的 `EventLoop` 預設每條連線預配約 13 MB（`MqttState` 依 in-flight 上限預配，要設 `set_outgoing_inflight_upper_limit`；docs/feasibility/2026-10-09-cloud-poc.md「MQTT broker」第 5 點）。本 crate 不用 `MqttState`，每條連線只有 codec 的讀寫緩衝區（隨最大的封包成長，上限是 `MAX_PACKET_BYTES`）、最多 `MAX_INFLIGHT` 個等待中的 publish、最多 `RECEIVE_MAXIMUM` 加 `MAX_QUEUED_MESSAGES` 則交給呼叫端的訊息。實際量測每條連線的記憶體延後到另開的 P2 issue。
+- **記憶體。** 可行性測試記下 rumqttc 的 `EventLoop` 預設每條連線預配約 13 MB（`MqttState` 依 in-flight 上限預配，要設 `set_outgoing_inflight_upper_limit`；docs/feasibility/2026-10-09-cloud-poc.md「MQTT broker」第 5 點）。本 crate 不用 `MqttState`，每條連線只有 codec 的讀寫緩衝區（隨最大的封包成長，上限是 `MAX_PACKET_BYTES`）、最多 `MAX_INFLIGHT` 個等待中的 publish、最多 `MAX_HELD_BYTES` 交給呼叫端的訊息（每則訊息複製成自己的配置，不會拖住 codec 整個讀取緩衝區）、最多 `MAX_QUEUED_EVENTS` 則狀態事件。實際量測每條連線的記憶體延後到另開的 P2 issue。
 - **維護狀態。** rumqttc 最後一次發版是 0.25.1（2025-11）。不開預設 feature：不引入 TLS 與任何 TLS 後端（aws-lc 等），也不引入 WebSocket 與 proxy。只有這個 crate 依賴它，要換函式庫時只動這裡。
 
 ## 測試
