@@ -1,4 +1,4 @@
-# Copied by release.yml from deploy/chart/values-saas.yaml at v0.0.0-rc.10. Do not edit; see deploy/flux/README.md.
+# Copied by release.yml from deploy/chart/values-saas.yaml at v0.0.0-rc.11. Do not edit; see deploy/flux/README.md.
 # SaaS deployment shape: multi-tenant, single-node k3s, reached only through Cloudflare Tunnel.
 # Use together with an instance overlay that sets hosts, external endpoints and Secret names
 # (for the SaaS cluster that overlay lives in deploy/flux, Laysi/trustiot-v2#70).
@@ -23,7 +23,8 @@ qdrant:
 # objectStorage: hosted S3 or R2 (decision 20). The instance overlay sets the endpoint,
 # region, bucket and credentials Secret.
 # smtp: our email provider. The instance overlay sets host, from and the credentials Secret.
-# ai: cloud LLM, embedding and rerank APIs (decisions 15 and 26), set by the instance overlay.
+# ai: the AI gateway's providers (their key Secrets and, through Cloudflare AI Gateway, their
+# endpoints) and model roles (decisions 15 and 28), set by the instance overlay.
 
 observability:
   sentry:
