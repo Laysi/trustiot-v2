@@ -64,4 +64,24 @@ cargo run --locked -q -p openapi -- --check
 | 正式設定路徑無法關掉限制；測試開關只在測試程式碼可及之處 | 通過：`exempt_for_tests` 只在 `#[cfg(test)]` 或 `test-exempt-addresses` feature 下存在，正式建置的 feature 樹沒有它（`cargo tree`），`repo-check` 在任何正式依賴、其他 feature 或 `default` 打開它時失敗；agent 目前沒有設定檔、環境變數或 MQTT 設定的讀取路徑，`Endpoints::new`／`TcpConnection::new` 沒有任何參數能放行位址 |
 | `cargo test -p agent` 與 aarch64 建置通過 | 通過 |
 
+## 2026-10-27：與 main 合併之後
+
+main 合併進分支兩次，都以 signed merge，沒有 rebase：
+
+- `304de010`（合併 commit `47959cf5`）帶進 `tools/lab-dataset`（Laysi/trustiot-v2#685）。它的錄製工具在 `Recorder::run` 裡自己建 `Endpoints::new`，測試 `tests/record.rs` 的假 RS485 轉換器聽在 127.0.0.1，合併後被守門員拒絕：輪詢一直連不上而進入退避，測試在等第 2 秒的輪詢時逾時失敗（下表第一列）。
+- 修正（commit `d778f9b3`）：`Recorder::run` 改由呼叫端傳入 `Endpoints`。指令傳 `Recorder::endpoints()`，也就是正式路徑；測試傳同一組 endpoints 加上 `exempt_for_tests([127.0.0.1])`，這個方法因 lab-dataset 的 `[dev-dependencies]` 打開 agent 的 `test-exempt-addresses` 才存在。lab-dataset 自己的程式沒有測試用的 feature 或 `cfg`，所以 `cargo build -p lab-dataset` 建出的指令放行不了任何位址；`repo-check` 的 `test_only_feature_uses` 本來就允許 dev-dependency 打開它。
+- `509c3f1f`（Laysi/trustiot-v2#574，合併 commit `2e224402`）帶進 agent 服務本身（設定、MQTT、TLS、TPM、`main.rs`）。衝突在 `Cargo.lock`、`edge/agent/Cargo.toml` 與 `edge/agent/README.md`，兩邊都保留；`Cargo.lock` 以 main 的為底由 cargo 重新產生，只多了 agent 的 `agent`（自我 dev-dependency）與 `libc` 兩條。#574 的程式沒有建立 Modbus 連線：`main.rs` 還不輪詢設備，新的對外連線只有 `transport.rs` 連 MQTT broker，位址來自閘道器本機的設定檔，不是租戶設定，所以不需要守門員。
+
+| 檢查（合併 commit `2e224402` 的樹，`CI=1`） | 結果 | 原始資料 |
+| --- | --- | --- |
+| `cargo test -p lab-dataset --test record`，合併 `304de010` 後、修正前 | 失敗（預期）：`timed out after 60s waiting for 5 polls by second 2` | [lab-dataset-record.txt](data/2026-10-24-653-agent-address-guard/lab-dataset-record.txt) |
+| 同一個測試，修正後 | 通過 | 同上 |
+| `cargo fmt --all --check` | 通過 | [after-merge-574.txt](data/2026-10-24-653-agent-address-guard/after-merge-574.txt) |
+| `cargo test -p agent` | 291 個全部通過（lib 162、`main.rs` 1、`binary` 7、`broker` 4、`dependencies` 1、`link` 51、`liveness` 4、`modbus_address_guard` 1、`modbus_fake_endpoint` 9、`modbus_rtu_converter` 8、`modbus_rtu_framing` 6、`modbus_tcp_framing` 8、`polling_recovery` 3、`systemd_unit` 6、`tpm_swtpm` 1、`transport` 19）；`dependencies` 確認自我 dev-dependency 與 `libc` 沒有帶進禁止的 crate | 同上 |
+| `cargo test -p lab-dataset` | 53 個全部通過（lib 37、`anomalies` 4、`clickhouse_load` 1、`record` 1、`rollups` 1、`synthetic_fixture` 8、doctest 1） | 同上 |
+| `cargo test -p repo-check` | 28 個全部通過（lib 18、`repository` 10），含 `test_only_feature_uses` | 同上 |
+| workspace clippy（`-D warnings`） | 通過 | 同上 |
+| `cargo build --target aarch64-unknown-linux-gnu -p agent` | 失敗：自 #574 起 agent 依賴 ring，ring 要用目標平台的 C 編譯器，建置主機沒有 `aarch64-linux-gnu-gcc`；與本分支無關 | 同上 |
+| `cargo zigbuild --target aarch64-unknown-linux-gnu -p agent`（CI 與 CLAUDE.md 的做法） | 通過 | 同上 |
+
 待測：在閘道器上以 systemd 執行 agent 的端到端實測（Laysi/trustiot-v2#102）還不存在；它用正式路徑，假 Modbus 要放在閘道器以外的位址，README 已寫明。
