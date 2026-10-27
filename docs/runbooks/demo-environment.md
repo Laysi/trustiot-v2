@@ -169,7 +169,7 @@ ssh "$DEMO_SSH_HOST" 'curl -sS http://127.0.0.1:18080/internal/certs/v1/crl.pem 
 H=~/.config/trustiot-workstation/access-headers    # 「工作站的 service token」的交付步驟建立的檔案
 ```
 
-1. **平台管理員存在**：照 [platform-admin.md](platform-admin.md)（展示環境在展示機上以 `sudo k3s kubectl`，namespace 與 release 都是 `trustiot`）。不確定是否已建立時照樣執行一次：結束碼 3 表示已經建立過，日誌的 `user_id` 是那一位。地址只在 attach 之後輸入，不寫進任何紀錄。
+1. **平台管理員存在**：照 [platform-admin.md](platform-admin.md)（展示環境在展示機上以 `sudo k3s kubectl`，namespace 與 release 都是 `trustiot`）。不確定是否已建立時照樣執行一次：結束碼 3 表示已經建立過，日誌的 `user_id` 是那一位。地址只在 attach 之後輸入，不寫進任何紀錄。建立用的 CronJob `trustiot-platform-admin-bootstrap`，以及身分服務讀 `trustiot-smtp` 帳密寄出驗證碼的設定，都是 chart `0.0.0-rc.11` 才有：展示叢集還釘在 rc.10 時兩者都沒有，先換版。
 2. **登入**（[factory/workstation](../../factory/workstation/README.md)「`login`」）：
 
    ```sh
@@ -196,14 +196,7 @@ H=~/.config/trustiot-workstation/access-headers    # 「工作站的 service tok
    ```
 
    `422`，`validation_failed`，`field_errors` 的鍵是 `workstation_certificate.field_required`。這是 certs 自己的回應；沒有 `/api/certs` 的路由時是入口的 404。
-5. **一般成員讀不到**：以一個不是平台管理員的使用者登入（先 `trustiot-workstation logout --headers-file "$H"`，工作站一次只存一個 session），重做第 3 步與第 4 步，兩個都是 `403`（`permission_denied`）。展示環境目前只有 `bootstrap-platform-admin` 能建立使用者，它建立的都是平台管理員；建立使用者的 API 在 Laysi/trustiot-v2#105。在那之前要做這一步，經使用者同意後：照 platform-admin.md「復原：再建立一次」只做第 2 步（刪除標記），以第二個地址照「步驟」建立（結束碼 0，記下 `user_id`），再以 superuser 收回它的平台管理員：
-
-   ```sh
-   ssh "$DEMO_SSH_HOST" 'sudo k3s kubectl -n trustiot get cluster trustiot-postgres -o jsonpath="{.status.currentPrimary}"'
-   ssh "$DEMO_SSH_HOST" "sudo k3s kubectl -n trustiot exec -i <primary> -c postgres -- psql -d trustiot -v ON_ERROR_STOP=1 -c \"UPDATE identity.users SET platform_admin = false WHERE id = '<第二個 user_id>'\""
-   ```
-
-   這兩步直接改資料庫，操作紀錄只有那一筆 `identity.platform_admin_granted`；誰在何時做的記在 Laysi/trustiot-v2#619 的留言。
+5. **一般成員讀不到**：以一個不是平台管理員的使用者登入（先 `trustiot-workstation logout --headers-file "$H"`，工作站一次只存一個 session），重做第 3 步與第 4 步，兩個都是 `403`（`permission_denied`）。展示環境目前只有 `bootstrap-platform-admin` 能建立使用者，它建立的都是平台管理員；建立使用者的 API 在 Laysi/trustiot-v2#105。專案擁有者在 2026-10-24 決定這一步等 Laysi/trustiot-v2#105 完成、展示環境能建立一般成員之後再做，不直接改資料庫造一個。這個行為已有自動化測試涵蓋：身分服務的 `tests/event_log.rs`（租戶的 `admin` 讀平台的操作紀錄是 403）與 certs 的 `tests/workstation.rs`（只有平台管理員能簽發與撤銷工作站憑證）。
 6. **登出**：`trustiot-workstation logout --headers-file "$H"`。第 3 到 5 步的狀態碼（不含 cookie、標頭與回應的本文）存進 Laysi/trustiot-v2#619 的留言。
 
 ## 換 chart 版本
