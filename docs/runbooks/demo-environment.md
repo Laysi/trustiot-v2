@@ -45,7 +45,7 @@
 
 ## 部署
 
-2026-10-22 的狀態：平台元件已與 repo 對齊（`scripts/demo/platform.ts`，Laysi/trustiot-v2#465）；Flux 已裝在展示叢集（Laysi/trustiot-v2#467，[測試報告](../test-reports/2026-10-22-467-demo-flux-install.md)），HelmRelease 釘在 chart `0.0.0-rc.10`，打開的服務是 `identity` 與 `assets`；tunnel 的路由已照「架構」的「路由」切到入口的固定 ClusterIP（第 2 段，Laysi/trustiot-v2#469）。之後展示環境的內容都由 main 決定：開 PR 改 `deploy/flux/clusters/demo/`，合併後 Flux 套用（GitRepository 每分鐘讀一次 main）。不要在叢集上直接改 Flux 管理的物件，下一次同步會改回去（[deploy/flux/README.md](../../deploy/flux/README.md)「日常操作」）。
+2026-10-22 的狀態：平台元件已與 repo 對齊（`scripts/demo/platform.ts`，Laysi/trustiot-v2#465）；Flux 已裝在展示叢集（Laysi/trustiot-v2#467，[測試報告](../test-reports/2026-10-22-467-demo-flux-install.md)），HelmRelease 釘在 chart `0.0.0-rc.10`，打開的服務是 `identity` 與 `assets`；tunnel 的路由已照「架構」的「路由」切到入口的固定 ClusterIP（第 2 段，Laysi/trustiot-v2#469）。2026-10-28 起 main 把展示叢集釘在 chart `0.0.0-rc.11`（第一個含 certs 的版本），換版前先對齊了 istiod（Laysi/trustiot-v2#619，見「換 chart 版本」）。之後展示環境的內容都由 main 決定：開 PR 改 `deploy/flux/clusters/demo/`，合併後 Flux 套用（GitRepository 每分鐘讀一次 main）。不要在叢集上直接改 Flux 管理的物件，下一次同步會改回去（[deploy/flux/README.md](../../deploy/flux/README.md)「日常操作」）。
 
 會寫入展示機或叢集的步驟，都由有展示機 SSH 權限的維運人員在持有 lab 鎖（展示機的 `~/e2e.lock`）時執行。腳本照 [scripts/README.md](../../scripts/README.md)「展示機（`demo/`）」的規則先印出計畫與確認碼，加上 `--apply --confirm <確認碼>` 才動手；本文寫成手動指令的步驟（重設展示資料、輪替 deploy key 與 age 金鑰）也要先取得 lab 鎖，鎖的擁有者寫成 `Laysi/trustiot-v2#<issue> <UTC 時間> demo <步驟>`，`<issue>` 是這次工作的 issue。
 
