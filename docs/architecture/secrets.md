@@ -194,6 +194,7 @@ chart 的規則由 `bun test deploy/chart` 檢查，見 [deploy/chart/README.md]
 閘道器 mTLS 的自建 CA（決策 6、12）分兩層（2026-10-21 決定，Laysi/trustiot-v2#78；做法、比較過的選項與儀式的每一步在 [services/certs/README.md](../../services/certs/README.md)）：
 
 - **根 CA**（ECDSA P-384）：離線產生與保管，以 age 加密給兩位維運人員、存兩份離線媒體（下方清冊的「根 CA 私鑰」）。只在簽發 CA 的儀式與備份檢查時於離線的機器上取出，由 `certs-ca` 工具從 stdin 讀、只寫到 stdout，不經指令參數也不寫檔。根憑證是公開資料，放在 values 的 `certificateAuthority.rootCertificate`。
+  - 展示環境例外（2026-10-28 決定，Laysi/trustiot-v2#619）：展示環境的根不做離線儀式，私鑰以權限 0600 的明文檔存在一位保管人的電腦上，仍不進叢集、不進 git（[docs/runbooks/demo-environment.md](../runbooks/demo-environment.md)「簽發 CA 的儀式」）。正式環境的保管方式在 Laysi/trustiot-v2#716 重新決定。
 - **簽發 CA**（ECDSA P-256，每一代一把）：在叢集內產生，沒有人建立、看到、複製或輸入它，取代原本「SaaS 以 SOPS、地端由安裝產生或客戶匯入」的寫法。
   - chart 在 certs 啟用時宣告空的 Secret `<release>-certs-ca-keys`（`templates/passwords.yaml`，與上兩節的 Secret 相同的 metadata）與空的 ConfigMap `<release>-certs-ca-requests`（`templates/certs-ca.yaml`）。certs pod 的 init container `ca-keys`（migration 映像的 `migrate certs-ca-keys`，在 `wait-for-migrations` 之前）以 certs ServiceAccount 的 projected token 產生金鑰寫進 Secret，再把每把金鑰的 CSR 寫進 ConfigMap；Role `<release>-certs-ca-keys` 只有這兩個物件的 `get`、`patch`（`resourceNames`）。
   - Secret 的資料只在記著自己 uid 時採用（規則同「migration Job 產生的密碼」）：被刪除、清空或從備份還原的 Secret 當作遺失，產生新的一組，不沿用可能有別人拿過的副本。
@@ -269,7 +270,7 @@ SaaS 叢集的 Secret 來源是 `deploy/flux/` 內以 SOPS 加密的檔案，由
 
 ## 密鑰清冊
 
-「SaaS」欄是我們自營 SaaS 的保管位置，「地端」欄是客戶安裝時的位置。「SOPS」指 `deploy/flux/` 內以 SOPS 加密、由 Flux 解密的 Secret（ci-release.md）。展示環境（`deploy/flux/clusters/demo`，Laysi/trustiot-v2#457）用自己的一套：叢集的 age 私鑰與 deploy key 在展示機上產生、不離開展示機（age 私鑰不做離線備份），GHCR 拉取 token（只有展示叢集有，SaaS 叢集等 Laysi/trustiot-v2#502）、SMTP 帳密與 Anthropic 金鑰（展示專用工作區，設用量上限）各自一份，與 SaaS 分開輪替，見 [deploy/flux/README.md](../../deploy/flux/README.md)「展示叢集」，SMTP 帳密與 Anthropic 金鑰的建立、輪替與測試信見 [展示環境 runbook](../runbooks/demo-environment.md)「外寄郵件與 Anthropic 金鑰」；展示機自己的 Cloudflare Tunnel token 也只屬於展示環境，見下方「主機、映像與發佈」表中的「展示環境的 Cloudflare Tunnel token」一列。輪替步驟見 [runbook](../runbooks/secrets.md) 的對應小節。還沒實作的元件，保管與注入方式是本清冊定下的規則，實作 issue 照做並補上 runbook 的指令。
+「SaaS」欄是我們自營 SaaS 的保管位置，「地端」欄是客戶安裝時的位置。「SOPS」指 `deploy/flux/` 內以 SOPS 加密、由 Flux 解密的 Secret（ci-release.md）。展示環境（`deploy/flux/clusters/demo`，Laysi/trustiot-v2#457）用自己的一套：叢集的 age 私鑰與 deploy key 在展示機上產生、不離開展示機（age 私鑰不做離線備份），GHCR 拉取 token（只有展示叢集有，SaaS 叢集等 Laysi/trustiot-v2#502）、SMTP 帳密與 Anthropic 金鑰（展示專用工作區，設用量上限）各自一份，與 SaaS 分開輪替，見 [deploy/flux/README.md](../../deploy/flux/README.md)「展示叢集」，SMTP 帳密與 Anthropic 金鑰的建立、輪替與測試信見 [展示環境 runbook](../runbooks/demo-environment.md)「外寄郵件與 Anthropic 金鑰」；展示機自己的 Cloudflare Tunnel token 也只屬於展示環境，見下方「主機、映像與發佈」表中的「展示環境的 Cloudflare Tunnel token」一列；展示環境的根 CA 私鑰是權限 0600 的明文檔，在一位保管人的電腦上（2026-10-28 決定，見上方「閘道器憑證 CA」的展示環境例外）。輪替步驟見 [runbook](../runbooks/secrets.md) 的對應小節。還沒實作的元件，保管與注入方式是本清冊定下的規則，實作 issue 照做並補上 runbook 的指令。
 
 ### 平台信任根與簽章金鑰
 

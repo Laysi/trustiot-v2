@@ -49,11 +49,23 @@ services:
     enabled: true
   assets:
     enabled: true
-  # Laysi/trustiot-v2#619. It starts without the root certificate: the issuing CA key waits for the
-  # ceremony, and the workstation certificate API answers 503 (ca_not_ready) until then
+  # Laysi/trustiot-v2#619. Its issuing CA key is made in the cluster and signs once
+  # certificateAuthority below holds the root and the key's certificate
   # (docs/runbooks/demo-environment.md, 「簽發 CA 的儀式」).
   certs:
     enabled: true
+
+# The demo's own gateway CA (Laysi/trustiot-v2#619), set by the ceremony on 2026-10-28
+# (docs/runbooks/demo-environment.md, 「簽發 CA 的儀式」). Both are public: each is the
+# certificate's DER in base64 on one line. The demo root signs nothing outside the demo.
+#   root:    CN "TrustIoT Demo Gateway Root CA 1", valid until 2046-10-27, SHA-256 fingerprint
+#            C7:65:CF:FA:3F:5A:DE:1B:DC:88:2D:19:DB:75:67:B5:FE:E0:7F:D2:C8:C5:1F:DD:11:1B:9B:D7:D6:6D:F9:4B
+#   issuing: CN "TrustIoT Demo Gateway Issuing CA G1 2026-10-28", generation 1, valid until
+#            2028-10-26, key id ceb15ae91a4af83223d9da33cfbcc041bb6de13885f68e9f06046b0f8a8a8302
+certificateAuthority:
+  rootCertificate: MIIB1DCCAVqgAwIBAgIQblV7oSgcuJTPJCxGOFUPdDAKBggqhkjOPQQDAzAqMSgwJgYDVQQDDB9UcnVzdElvVCBEZW1vIEdhdGV3YXkgUm9vdCBDQSAxMB4XDTI2MTAyNzE4MzMxNloXDTQ2MTAyNzE5MzMxNlowKjEoMCYGA1UEAwwfVHJ1c3RJb1QgRGVtbyBHYXRld2F5IFJvb3QgQ0EgMTB2MBAGByqGSM49AgEGBSuBBAAiA2IABC4AQelvJ9Kf8jq6T9xcT2yXkrLnc+1wMLZcO3HSB3lN8olvcda1w/Rl6if7xEBgG0B/lIxm3Sg2b2aRiAMJlkcHP7aRt17xGprxZUYuLuQ8MsScQ9M2i2ntxCPIgf/WSaNFMEMwDgYDVR0PAQH/BAQDAgEGMB0GA1UdDgQWBBTzmApjMwleVktgPYcByx668YlpuDASBgNVHRMBAf8ECDAGAQH/AgEBMAoGCCqGSM49BAMDA2gAMGUCMHV8s3Hv0+m1DSy2NqEFsOJmyOj2a5Rkuq/EhknP1X3l/Gw+YOy4wxUdwJ5WR5iN4AIxALgXx6QPR9oIIJHuFB6lnW4+4CgFC+3d6TG7Lar2rtBvDMS+EeUmR0OC43KfOap91w==
+  issuingCertificates:
+    - MIIB5zCCAW2gAwIBAgIQY6EfblKot/OnlcB1/ZF67DAKBggqhkjOPQQDAzAqMSgwJgYDVQQDDB9UcnVzdElvVCBEZW1vIEdhdGV3YXkgUm9vdCBDQSAxMB4XDTI2MTAyNzE4MzMxNloXDTI4MTAyNjE5MzMxNlowOTE3MDUGA1UEAwwuVHJ1c3RJb1QgRGVtbyBHYXRld2F5IElzc3VpbmcgQ0EgRzEgMjAyNi0xMC0yODBZMBMGByqGSM49AgEGCCqGSM49AwEHA0IABOSW6uf0pp588W8zZSJS4fvyB4ViFkY0JNXXWFHEtbAvQ69S4e8EcHw8A9YW51qPXuYjVo1mdEXXQgwggJNRop2jZjBkMB8GA1UdIwQYMBaAFPOYCmMzCV5WS2A9hwHLHrrxiWm4MA4GA1UdDwEB/wQEAwIBBjAdBgNVHQ4EFgQUzrFa6RpK+DIj2dozz7zAQbtt4TgwEgYDVR0TAQH/BAgwBgEB/wIBADAKBggqhkjOPQQDAwNoADBlAjEArNCQyPmYbUy0TUWtUZ18HPVZZg3RExYrA05lrMtvaOt4NR7ZCYlQRFT6jGRP1UTvAjA8y8+k52CmEEK5fFdE36NPVRK3YSbSw1tHI/hxSbm9czVb6QUN/FeRbMDHAzA2NDI=
 
 postgres:
   bundled:

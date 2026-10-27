@@ -78,10 +78,18 @@ bun scripts/demo/tunnel.ts route-origin --ssh-host "$DEMO_SSH_HOST" # 路由該�
 
 ## 簽發 CA 的儀式
 
-展示環境的 certs 服務（Laysi/trustiot-v2#619）有自己的根 CA。儀式就是 [services/certs/README.md](../../services/certs/README.md)「發簽發 CA 憑證」的 1 到 5 步，只有順序不同：展示環境先啟用 certs、還沒有根憑證（[deploy/flux/README.md](../../deploy/flux/README.md)「日常變更」的「打開 certs」第 1 步），根的保管人在同一次離線作業裡建立根 CA 並簽發簽發 CA，之後一個 PR 同時設定根憑證與簽發 CA 憑證。這樣保管人只要取出離線的機器一次，代價是兩點與 README 不同：
+展示環境的 certs 服務（Laysi/trustiot-v2#619）有自己的根 CA。儀式照 [services/certs/README.md](../../services/certs/README.md)「發簽發 CA 憑證」的 1 到 5 步，有兩處不同：根的保管方式（下一段），以及順序。展示環境先啟用 certs、還沒有根憑證（[deploy/flux/README.md](../../deploy/flux/README.md)「日常變更」的「打開 certs」第 1 步），保管人一次建立根 CA 並簽發簽發 CA，之後一個 PR 同時設定根憑證與簽發 CA 憑證。順序不同的代價有兩點：
 
 - 等待中的金鑰 id 不從 certs 主容器的 `keys wait for a certificate` 那一行讀：沒有根憑證時服務載入不了 CA，只記一次 ERROR `cannot load the issuing CA`、之後每 `crl.check_interval` 一行 WARN `no issuing CA is loaded, so the service cannot sign gateway certificates`，不列等待中的金鑰。改讀 init container `ca-keys` 的 INFO `the issuing CA keys are in place`，欄位 `keys` 是金鑰 id，`generations` 是對應的代。寫入 Secret 與 CSR 的就是這個 init container，所以它的 id 與主容器讀到的相同。
 - 這段期間 `ca.pem` 與 `crl.pem` 回 503，工作站憑證與出廠登錄的 API 回 503（`ca_not_ready`）；readiness 不受影響，升級不會因此失敗或回滾。展示環境還沒有 broker（Laysi/trustiot-v2#84），沒有東西在讀這兩個檔。
+
+**展示環境的保管方式**（2026-10-28 專案擁有者決定）：展示環境的根不做離線儀式。根的私鑰在保管人自己的電腦上產生，以權限 0600 的明文檔案存在那台電腦上，只有一位保管人。理由有三：
+
+- 沒有專用的離線機器，也沒有第二位保管人。
+- USB 隨身碟這類快閃媒體長期不通電會流失資料，不適合長期保存私鑰。
+- 展示資料可以遺失；根的私鑰遺失或外洩時，代價是重做儀式、展示用閘道器重新登錄。
+
+不變的規則：根的私鑰不進 repo（加密的也不放）、不進叢集，不出現在 issue、PR、留言或日誌；不印到終端機，也不當指令參數（`certs-ca` 從 stdin 讀）。這個例外只給展示環境：正式環境的保管方式與儀式在 Laysi/trustiot-v2#716 重新決定，在那之前以 services/certs/README.md 為準。
 
 **金鑰 id** 是公鑰的 DER SubjectPublicKeyInfo 的 SHA-256，小寫十六進位 64 字元（`crates/ca-keys` 的 `key_id`；init container、certs 服務與 `certs-ca` 都用它）。任何人都能以 openssl 從 CSR 或憑證自己算出來，不必相信別人抄來的值：
 
@@ -92,14 +100,15 @@ openssl x509 -in issuing-ca-generation-1.pem -noout -pubkey | openssl pkey -pubi
 
 （2026-10-28 以 `certs-ca root sign` 實測：它印出的 `for key` 與這兩行的結果相同。）
 
-展示環境的根只給展示環境：不拿來簽 SaaS 或地端的簽發 CA，正式環境的閘道器也不信任它；展示用閘道器（Laysi/trustiot-v2#458）登錄時拿到的信任錨就是它。展示資料可以遺失（「重設展示資料」不動簽發 CA 的金鑰 Secret，CRL 由服務自己重發），根的私鑰不行：兩份備份都遺失時要重做整個儀式，每台展示用閘道器重新登錄、換上新的根。
+展示環境的根只給展示環境：不拿來簽 SaaS 或地端的簽發 CA，正式環境的閘道器也不信任它；展示用閘道器（Laysi/trustiot-v2#458）登錄時拿到的信任錨就是它。展示資料可以遺失（「重設展示資料」不動簽發 CA 的金鑰 Secret，CRL 由服務自己重發）。根的私鑰遺失或外洩時，以新的根重做整個儀式，每台展示用閘道器重新登錄、換上新的根（「保管紀錄」）。
 
 角色：
 
 - 有展示機 SSH 權限的維運人員做第 1、2、5 步（只讀，不取 lab 鎖）。
-- 兩位根的保管人（維運人員 A、B）做第 3 步。
-- 第 2 步的金鑰 id 由另一個人（保管人 B 或第 4 步的審查人）在簽發前自己再讀一次。
-- 第 4 步的 PR 由保管人之一核准；不是保管人的審查人，從保管人那裡經 PR 以外的管道拿到根憑證的指紋。審查人要能以 SSH 讀展示機的叢集（第 4 步自己讀金鑰 id）。
+- 根的保管人在自己的電腦上做第 3 步。
+- 第 4 步的 PR 由保管人核准；不是保管人的審查人，從保管人那裡經 PR 以外的管道拿到根憑證的指紋。審查人要能以 SSH 讀展示機的叢集（第 4 步自己讀金鑰 id）。
+
+第 2 步的金鑰 id 不必在簽發前由第二個人再讀一次：簽錯的 CSR 會在第 4 步（審查人自己從叢集讀金鑰 id）或第 5 步被發現，展示環境的處理是換根（第 5 步），代價只有展示用閘道器重新登錄。
 
 在 issue 或 PR 貼出的輸出，只能是指令刻意挑出的欄位（狀態碼、金鑰 id、固定的文字），不貼整行日誌、網址或錯誤訊息：它們可能帶著主機名稱。
 
@@ -124,40 +133,52 @@ ssh "$DEMO_SSH_HOST" 'sudo k3s kubectl -n trustiot logs deployment/trustiot-cert
 openssl req -in issuing-ca-generation-1.csr.pem -noout -pubkey | openssl pkey -pubin -outform DER | sha256sum | cut -d' ' -f1
 ```
 
-第一次啟用只有第 1 代，第二行只印出一個金鑰 id，第三行從 CSR 算出的要與它相同；不同時停下，照 services/certs/README.md 第 4 步的說明調查。金鑰 id 是公開資料，可以寫進 issue 留言。CSR 也是公開資料，以可移除媒體帶到離線的機器。
+第一次啟用只有第 1 代，第二行只印出一個金鑰 id，第三行從 CSR 算出的要與它相同；不同時停下，照 services/certs/README.md 第 4 步的說明調查。金鑰 id 是公開資料，可以寫進 issue 留言。CSR 也是公開資料，複製到保管人的電腦。
 
-**第二個人**（保管人 B 或審查人）在第 3 步之前，用自己的 SSH 帳號與自己的終端機再執行一次第二行，結果與第一個人抄下的相同才能簽發。只要叢集裡的金鑰 Secret 在這之間被重新產生（例如被刪除），兩次讀到的就不同。
+### 3. 在保管人的電腦上建立根 CA 並簽發
 
-### 3. 離線：建立根 CA 並簽發
-
-**建置工具**（在可信、連網的建置機，儀式之前）：
+**建置工具**（儀式之前，在可信的建置機或保管人的電腦上）：
 
 1. 確認 tag 指向發佈時的 commit：`git fetch origin --tags`，`git rev-parse v<部署中的版本>^{commit}`（部署中的版本是 `chart.yaml` 的 `ref.tag`）要等於那一版 GitHub Release 頁面寫的「來源 commit」，也等於建出它的 release.yml 執行紀錄（Release 頁面連到的那次執行）的 commit。不同就停下。
-2. `git checkout v<部署中的版本>`，再 `cargo build --release --locked -p certs --bin certs-ca`；`age` 以 `bun scripts/flux/age.ts` 從原始碼建出。兩者記下 SHA-256。
-3. （建議）另一個人在另一台機器以同一個 tag 再建一次，比對 SHA-256。不相同時，先查清楚再用。
-4. 兩個執行檔以可移除媒體帶到離線的機器，在那裡再核對一次 SHA-256。
+2. `git checkout v<部署中的版本>`，再 `cargo build --release --locked -p certs --bin certs-ca`，記下 SHA-256。展示環境的私鑰不加密，不需要 `age`。
+3. 在別台機器建出時，複製到保管人的電腦之後再核對一次 SHA-256。
 
-**離線的機器**：
+**保管人的電腦**：
 
-- 優先用不寫入磁碟的 live 系統：從唯讀媒體開機，工作目錄在記憶體裡（例如 `/tmp`），沒有掛任何內建磁碟，關機就全部消失。做不到時，用一個空的工作目錄，結束後、關機前刪掉整個工作目錄。
-- 每位保管人的 age identity（私鑰）只放在自己的媒體上，`age --decrypt -i` 直接讀媒體上的檔案，不複製到這台機器。
-- 不連網；帶進來的只有兩個執行檔、CSR 與保管人自己的媒體。
+- 根的私鑰放在只有保管人讀得到的目錄（權限 0700），檔案權限 0600。這個目錄不在任何 git 工作目錄裡，也不在會同步到雲端的資料夾裡。私鑰只存在這台電腦上，不另做備份：遺失時重做儀式（「保管紀錄」）。
+- 私鑰只經過重新導向（`>`、`<`）：不 `cat`、不複製貼上、不當指令參數。
 
-**步驟**（照 services/certs/README.md「發簽發 CA 憑證」的第 1、4 步）：
+**步驟**（照 services/certs/README.md「發簽發 CA 憑證」的第 1、4 步）。下面的指令都在保管目錄裡執行，`$T` 是放 `certs-ca` 的目錄：
 
-1. **續做規則**：保管人的媒體上已經有 `root-key.age`（例如上次在建立之後被中斷），就跳過 `root create`，沿用媒體上的 `root-key.age` 與 `root.pem`。要放棄一個已經建立的根（例如兩份備份沒有都做好就中斷、或決定重來），兩份 `root-key.age` 都銷毀，並寫進不進 repo 的維運紀錄；不留下沒人管的根。
-2. 建立根 CA：CN 寫 `TrustIoT Demo Gateway Root CA 1`。私鑰直接以 `age` 加密給兩位保管人，`root-key.age` 複製到兩份離線媒體，各保管一份。
-3. 計算根憑證的指紋：`openssl x509 -in root.pem -noout -fingerprint -sha256`（沒有 openssl 時：`sed '/-----/d' root.pem | base64 -d | sha256sum`，是同一個值，只是小寫、沒有冒號）。兩位保管人各自抄下，寫進不進 repo 的維運紀錄。第 4 步核准的人以這個值為準。
-4. 簽發前再以第 2 步的 openssl 指令，從帶進來的 CSR 算一次金鑰 id，要等於第 2 步兩個人讀到的值。
-5. 簽發簽發 CA：CN 寫 `TrustIoT Demo Gateway Issuing CA G1 <儀式日期>`。`certs-ca root sign` 在 stderr 印出 `for key <金鑰 id>`，**和第 2 步的 id 一致才繼續**；不一致時刪掉這張憑證、停下，照 services/certs/README.md 第 4 步的說明調查。
-6. 兩位保管人各自以 `certs-ca root check` 檢查自己那一份（README「根 CA 私鑰的備份」）。
-7. 帶回連網環境的只有 `root.pem` 與 `issuing-ca-generation-1.pem`（公開資料）。`root-key.age` 與 identity 不離開保管人的媒體。不是 live 系統時，刪掉工作目錄再關機。
+1. **續做規則**：目錄裡已經有 `root-key.pem` 與 `root.pem`（例如上次在建立之後被中斷），就跳過第 2 步，沿用這兩個檔。要放棄一個已經建立的根（例如決定重來），刪掉它的 `root-key.pem`，並寫進不進 repo 的維運紀錄；不留下沒人管的根。
+2. 建立根 CA，CN 寫 `TrustIoT Demo Gateway Root CA 1`。私鑰先寫進同一個目錄的暫存檔（`mktemp` 建的檔案權限是 0600），成功才改名：
+
+   ```sh
+   umask 077
+   t=$(mktemp root-key.XXXXXX)
+   "$T/certs-ca" root create --common-name "TrustIoT Demo Gateway Root CA 1" --certificate root.pem > "$t" && mv "$t" root-key.pem
+   "$T/certs-ca" root check --root-certificate root.pem < root-key.pem
+   ```
+
+   `root create` 不把私鑰寫到終端機，`root.pem` 已經存在時也拒絕執行。失敗時刪掉暫存檔與留下的 `root.pem`，從這一步重來。`root check` 印出 `the root private key belongs to the root certificate in root.pem (key <金鑰 id>)`。
+3. 計算根憑證的指紋：`openssl x509 -in root.pem -noout -fingerprint -sha256`，寫進不進 repo 的維運紀錄。第 4 步核准的人以這個值為準。
+4. 簽發前再以第 2 步的 openssl 指令，從複製過來的 CSR 算一次金鑰 id，要等於第 2 步讀到的值。
+5. 簽發簽發 CA，CN 寫 `TrustIoT Demo Gateway Issuing CA G1 <儀式日期>`：
+
+   ```sh
+   "$T/certs-ca" root sign --root-certificate root.pem --request issuing-ca-generation-1.csr.pem \
+     --common-name "TrustIoT Demo Gateway Issuing CA G1 <儀式日期>" --certificate issuing-ca-generation-1.pem < root-key.pem
+   openssl verify -CAfile root.pem issuing-ca-generation-1.pem
+   ```
+
+   `certs-ca root sign` 在 stderr 印出 `for key <金鑰 id>`，**和第 2 步的 id 一致才繼續**；不一致時刪掉這張憑證、停下，照 services/certs/README.md 第 4 步的說明調查。`openssl verify` 印出 `issuing-ca-generation-1.pem: OK`。
+6. 帶出這個目錄的只有 `root.pem` 與 `issuing-ca-generation-1.pem`（公開資料）。
 
 兩張憑證的 CN 不放主機名稱、人名或客戶名稱：它們都會進公開的 repo。
 
 ### 4. PR：設定根憑證與簽發 CA 憑證
 
-把兩張憑證各轉成一行 base64（`sed '/-----/d' <檔案> | tr -d '\n'`），照 deploy/flux/README.md「打開 certs」第 2 步寫進 `values-demo.yaml` 的 `certificateAuthority`。PR 的說明寫：儀式日期、金鑰 id、兩份備份都已檢查；不寫保管人是誰、媒體在哪裡。PR 的說明只是方便閱讀，審查不以它為準：寫 PR 的人也能改 values 與說明。
+把兩張憑證各轉成一行 base64（`sed '/-----/d' <檔案> | tr -d '\n'`），照 deploy/flux/README.md「打開 certs」第 2 步寫進 `values-demo.yaml` 的 `certificateAuthority`。PR 的說明寫儀式日期與金鑰 id，不寫保管人是誰、私鑰在哪台電腦。PR 的說明只是方便閱讀，審查不以它為準：寫 PR 的人也能改 values 與說明。
 
 審查的人從 PR 的 values 取回憑證，再自己核對三件事：
 
@@ -172,7 +193,7 @@ ssh "$DEMO_SSH_HOST" 'sudo k3s kubectl -n trustiot logs deployment/trustiot-cert
   | grep 'the issuing CA keys are in place' | grep -oE '[0-9a-f]{64}' | sort -u                             # 3
 ```
 
-1. 根的指紋等於保管人在離線的機器上算出、記在維運紀錄裡的值。核准的人是保管人之一，或經 PR 以外的管道（當面或電話）從保管人拿到這個值；不從 PR 的說明或留言拿。
+1. 根的指紋等於保管人記在維運紀錄裡的值。核准的人是保管人，或經 PR 以外的管道（當面或電話）從保管人拿到這個值；不從 PR 的說明或留言拿。
 2. 簽發 CA 鏈得到這個根。
 3. 從簽發 CA 憑證算出的金鑰 id，等於審查人自己從叢集讀到的等待中的金鑰 id。
 
@@ -192,7 +213,7 @@ ssh "$DEMO_SSH_HOST" 'sudo k3s kubectl -n trustiot logs deployment/trustiot-cert
 
 1. 開 PR 把它從 `certificateAuthority.issuingCertificates` 拿掉，合併。
 2. 在維運紀錄與 Laysi/trustiot-v2#619 記下金鑰 id、日期與經過（不寫人名）。
-3. 安排換根：根 CRL 還沒有實作（Laysi/trustiot-v2#560），根沒有辦法撤銷它簽過的簽發 CA，信任這個根的閘道器會一直接受那張憑證。所以以新的根（CN `TrustIoT Demo Gateway Root CA 2`）重做整個儀式，舊根的兩份 `root-key.age` 銷毀並記錄；已經以舊根登錄的展示用閘道器重新登錄。
+3. 換根：根 CRL 還沒有實作（Laysi/trustiot-v2#560），根沒有辦法撤銷它簽過的簽發 CA，信任這個根的閘道器會一直接受那張憑證。所以以新的根（CN `TrustIoT Demo Gateway Root CA 2`）重做整個儀式，刪掉舊根的私鑰檔並記錄；已經以舊根登錄的展示用閘道器重新登錄。
 
 再以 `GET` 讀 CRL。`crl.pem` 是內部端點，入口沒有它的路由，所以以 port-forward 直接連 certs 的 pod（不經 mesh，需要展示機上的叢集管理權限）。開兩個終端機：
 
@@ -208,9 +229,11 @@ ssh "$DEMO_SSH_HOST" 'curl -s http://127.0.0.1:18080/internal/certs/v1/crl.pem |
 
 ### 保管紀錄
 
-- **根憑證**：`values-demo.yaml` 的 `certificateAuthority.rootCertificate`（git 保留每一版），兩份離線媒體上也各有一份 `root.pem`。它的指紋另記在不進 repo 的維運紀錄（第 3 步），第 4 步以那個值核對。
-- **根的私鑰**：兩份 `root-key.age`，各在一份離線媒體上，由兩位保管人各保管一份，兩人的 identity 都解得開任一份。保管人是誰、媒體放在哪裡，只記在不進 repo 的維運紀錄（與「Cloudflare 上的設定」的變更清單同一處），不寫進 repo、issue、PR 或留言。公開的紀錄（issue 留言）只寫：儀式日期、根憑證的 SHA-256 指紋、簽發 CA 的金鑰 id、兩份備份的檢查日期，以及「兩位保管人」這個角色。放棄或銷毀的根也記在維運紀錄。
-- 每年至少一次、以及每次儀式之後，兩位保管人各自檢查自己那一份（services/certs/README.md「根 CA 私鑰的備份」），檢查日期補進 issue 或維運紀錄。保管人異動時，在離線的機器上以新的 recipient 重新加密，舊的媒體銷毀。
+- **根憑證**：`values-demo.yaml` 的 `certificateAuthority.rootCertificate`（git 保留每一版），保管人的電腦上也有 `root.pem`。它的指紋另記在不進 repo 的維運紀錄（第 3 步），第 4 步以那個值核對。
+- **根的私鑰**：一個權限 0600 的明文檔，在保管人的電腦上，沒有其他副本。保管人是誰、在哪台電腦，只記在不進 repo 的維運紀錄（與「Cloudflare 上的設定」的變更清單同一處），不寫進 repo、issue、PR 或留言。公開的紀錄（issue 留言）只寫：儀式日期、根憑證的 SHA-256 指紋、簽發 CA 的金鑰 id，以及「一位保管人」這個角色。放棄或刪除的根也記在維運紀錄。
+- **之後再用到私鑰**：簽發 CA 輪替（services/certs/README.md「輪替」）要以根簽新一代的 CSR，同樣以 `< root-key.pem` 交給 `certs-ca root sign`；用之前先以 `certs-ca root check` 確認這個檔還是這張根憑證的私鑰。
+- **遺失或外洩**（電腦壞了、檔案被刪，或電腦、檔案可能被別人取得）：以新的根（CN 的編號加一）重做整個儀式，`values-demo.yaml` 換成新的根憑證與簽發 CA 憑證，每台展示用閘道器重新登錄；外洩時舊根的私鑰檔若還在也刪掉，並記進維運紀錄。保管人異動時，依 [docs/runbooks/secrets.md](secrets.md) 的「維運人員加入與離開」判斷要不要換根。
+- 展示環境的根在 2026-10-28 建立，根憑證的指紋與簽發 CA 的金鑰 id 記在 Laysi/trustiot-v2#619 的留言。
 
 ## 平台管理員的登入確認
 

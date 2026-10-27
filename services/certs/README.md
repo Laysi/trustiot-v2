@@ -41,6 +41,7 @@ Laysi/trustiot-v2#632（2026-10-24）加上：
 根 CA 在每次儀式另簽一張根 CRL，列出撤銷的簽發 CA，給閘道器驗 broker 的伺服器憑證用（2026-10-23 決定，見[閘道器對 broker 伺服器憑證的信任](#閘道器對-broker-伺服器憑證的信任)；閘道器端從檔案載入並檢查已在 Laysi/trustiot-v2#86，簽發與提供還沒實作，Laysi/trustiot-v2#560）。
 
 - **根 CA**：私鑰只在離線的機器上產生與使用，不進叢集、不進 git（加密的也不放）、不在任何連網主機；以 age 加密給兩位維運人員，存兩份離線媒體，各由一人保管（2026-10-22 決定；與 [docs/architecture/secrets.md](../../docs/architecture/secrets.md) 的「根 CA 私鑰」相同）。只在簽發 CA 的儀式與備份檢查時取出。根憑證是公開資料，放在 chart 的 values。
+  - 展示環境例外（2026-10-28 決定，Laysi/trustiot-v2#619）：展示環境的根不做離線儀式，私鑰以權限 0600 的明文檔存在一位保管人的電腦上，仍不進叢集、不進 git（[docs/runbooks/demo-environment.md](../../docs/runbooks/demo-environment.md)「簽發 CA 的儀式」）。沒有專用的離線機器與第二位保管人、快閃媒體又不適合長期保存時，上面的做法執行不了，所以正式環境的保管方式與儀式在 Laysi/trustiot-v2#716 重新決定。
 - **簽發 CA**：私鑰在叢集內產生，沒有人建立、看到、複製或輸入它，做法與內部身分簽章金鑰相同（[docs/architecture/secrets.md](../../docs/architecture/secrets.md) 的「閘道器憑證 CA」）：
   - chart 宣告空的 Secret `<release>-certs-ca-keys`。certs pod 的 init container `ca-keys`（migration 映像的 `migrate certs-ca-keys`，[tools/migrate](../../tools/migrate/README.md)）產生 P-256 金鑰，寫進這個 Secret 的 `issuing-ca-keys.json`（格式在 [crates/ca-keys](../../crates/ca-keys/README.md)），再把每把金鑰的 CSR 寫進 ConfigMap `<release>-certs-ca-requests`（`issuing-ca-generation-<代>.csr.pem`）。
   - 維運人員把 CSR 帶到離線的機器，以根 CA 簽出簽發 CA 憑證（`certs-ca root sign`），憑證（公開）放進 values 的 `certificateAuthority.issuingCertificates`。chart 把根憑證與簽發 CA 憑證寫進 ConfigMap `<release>-certs-ca-certificates`，服務每 30 秒重讀，不必重啟。
