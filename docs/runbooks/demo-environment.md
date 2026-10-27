@@ -705,7 +705,7 @@ bun scripts/demo/tunnel.ts remove --ssh-host "$DEMO_SSH_HOST" --apply --confirm 
 
 policy 掛在涵蓋三個主機名稱的 application 上，所以 token 在 gateway 與 ota 主機名稱也過得了 Access；那兩個主機名稱沒有 cookie 的路由（「架構」），持有 token 的人到得了的地方與受邀的人相同。Access 對 service token 的請求一樣在送往 tunnel 的請求加上 JWT，所以 tunnel 的 `originRequest.access` 不必改。2026-10-05 以後建立的 Zero Trust 組織預設是嚴格的 service token 模式，Access 不回 `CF_Authorization` cookie；工作站工具每個請求都帶這兩個標頭，兩種模式都能用，也不受 binding cookie 影響。
 
-**交付**：工作站上從不登入 Cloudflare 的管理介面。建立 token 的人在自己的裝置上建立，Client ID 與 Client Secret 只顯示在那台裝置上：最直接的做法是他在工作站旁，操作員看著那個畫面，在下面的提示輸入；不能同處時，用端到端加密、取用後就刪除的管道送到操作員自己的裝置，操作員看著那台裝置輸入，交付後雙方確認訊息已刪除。不經雲端剪貼簿或跨裝置同步的剪貼簿，也不存成檔案再搬。
+**交付**：工作站上從不登入 Cloudflare 的管理介面。建立 token 的人在自己的裝置上建立，Client ID 與 Client Secret 只顯示在那台裝置上：最直接的做法是建立的人在工作站旁，操作員看著那個畫面，在下面的提示輸入；不能同處時，用端到端加密、取用後就刪除的管道送到操作員自己的裝置，操作員看著那台裝置輸入，交付後雙方確認訊息已刪除。不經雲端剪貼簿或跨裝置同步的剪貼簿，也不存成檔案再搬。
 
 以操作員自己的 Linux 帳號、在 bash 執行。不用編輯器，所以不留下 swap、復原或備份檔；secret 以 `read -rs` 讀，不顯示在畫面上，也不進 shell 的歷史紀錄。檔案路徑自選，不在任何 git checkout 裡：
 
