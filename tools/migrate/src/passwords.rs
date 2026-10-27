@@ -75,6 +75,7 @@ const KEPT_ANNOTATIONS: &[&str] = &[
     "trustiot.io/description",
     GENERATION_ANNOTATION,
     UID_ANNOTATION,
+    crate::mqtt_certificate::GENERATION_ANNOTATION,
 ];
 
 /// The field manager of the run's patches, as `metadata.managedFields` shows it.

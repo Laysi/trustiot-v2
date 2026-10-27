@@ -30,7 +30,8 @@ bytes = "1.12.1"
 cbor4ii = "1.2.3"
 chrono = { version = "0.4.45", default-features = false }
 ed25519-dalek = { version = "3.0.0", default-features = false }
-# `stream::unfold` for relaying a provider stream as a response body (services/ai-gateway).
+# `stream::unfold` for relaying a provider stream as a response body (services/ai-gateway); the
+# WebSocket's Stream and Sink, adapted for the inner TLS (edge/agent).
 futures-util = { version = "0.3.34", default-features = false }
 getrandom = "0.4.3"
 hmac = "0.13.0"
@@ -42,6 +43,10 @@ hyper-util = { version = "0.1.21", default-features = false }
 # TLS for the AI provider clients (crates/ai-clients) with ring, not reqwest's TLS features: those
 # need aws-lc-rs or a process-wide crypto provider (see crates/ai-clients/README.md).
 hyper-rustls = { version = "0.27.10", default-features = false }
+# Local calendar arithmetic over the IANA Time Zone Database compiled in (jiff-tzdb), never the
+# host's: the relative periods and the table choice of telemetry-query's semantic API
+# (Laysi/trustiot-v2#142). Features are chosen per member.
+jiff = { version = "0.2.35", default-features = false }
 # The names of the IANA Time Zone Database, which a user's time zone preference must be one of
 # (services/identity, Laysi/trustiot-v2#497). Data only: no dependencies, no_std.
 jiff-tzdb = "0.1.9"
@@ -57,6 +62,7 @@ proc-macro2 = { version = "1.0.107", default-features = false }
 prost = { version = "0.14.4", default-features = false }
 rcgen = { version = "0.14.10", default-features = false }
 reqwest = { version = "0.13.5", default-features = false }
+ring = { version = "0.17.14", default-features = false }
 rustls = { version = "0.23.45", default-features = false }
 # The system's root certificates, trusted by the AI provider clients (crates/ai-clients).
 rustls-native-certs = "0.8.4"
@@ -65,6 +71,10 @@ serde = "1.0.229"
 serde_json = "1.0.151"
 sha2 = { version = "0.11.0", default-features = false }
 socket2 = "0.6.5"
+# The AI's read-only SQL in services/telemetry-query (src/sql), with its ClickHouse dialect. No
+# default features: no serde, and no `recursive-protection` (stacker); the check runs on a thread
+# with a large stack instead.
+sqlparser = { version = "0.63.0", default-features = false, features = ["std"] }
 sqlx = { version = "0.9.0", default-features = false }
 syn = { version = "2.0.119", default-features = false }
 thiserror = "2.0.21"
@@ -88,7 +98,8 @@ utoipa = "6.0.0"
 uuid = "1.28.0"
 # The empty stand-in below, for tests that check it is the one in use.
 webpki-roots = { path = "crates/webpki-roots-empty" }
-# Parses and verifies CSRs and certificates for the certs service (services/certs).
+# Parses and verifies CSRs and certificates for the certs service (services/certs); reads the
+# gateway ID, public key and expiry from the gateway's client certificate (edge/agent).
 x509-parser = { version = "0.18.1", default-features = false }
 zeroize = "1.9.1"
 

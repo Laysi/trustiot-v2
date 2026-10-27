@@ -1,0 +1,34 @@
+
+running 1 test
+backfill of rows written before 0010: the aggregates equal the raw rows (84 one-minute and 36 one-hour cells)
+backfill: the backfill views showed the admin nothing until it named itself, then 7 receive days to fill; the backfill wrote 84 one-minute and 40 one-hour rows, a second one 0 and 0
+rows written after 0010: the aggregates equal the raw rows (100 one-minute and 37 one-hour cells)
+bound: after the raw rows of days 12 and 10 (part of it) expired, a second apply and a backfill with a 10-day or a 400-day raw retention wrote nothing, the check with 10 days reported nothing and the repair with 10 days wrote nothing; the same check with 400 days would have erased [["telemetry_1m_backfill", "2026-10-13", "8", "-8"], ["telemetry_1m_backfill", "2026-10-15", "4", "-4"], ["telemetry_1h_backfill", "2026-10-13", "4", "-8"], ["telemetry_1h_backfill", "2026-10-15", "4", "-4"]]; the cells per receive day stayed {"2026-10-13": 8, "2026-10-15": 8, "2026-10-16": 8, "2026-10-17": 8, "2026-10-22": 8, "2026-10-24": 8, "2026-10-25": 52}
+bound: within it, the cells of a batch deleted without its reconcile were offered as [["telemetry_1m_backfill", "2026-10-22", "8", "-8"], ["telemetry_1h_backfill", "2026-10-22", "4", "-8"]], left alone by the backfill and corrected by the repair; the lost cells of 2026-10-17 were offered as [["telemetry_1m_backfill", "2026-10-17", "8", "8"], ["telemetry_1h_backfill", "2026-10-17", "4", "8"]] and filled by the backfill; the expired days kept their cells
+exact retry: the aggregates equal the raw rows (20 one-minute and 8 one-hour cells)
+partial attempt, no completion record: the aggregates equal the raw rows (24 one-minute and 8 one-hour cells)
+rewrite: before the reconcile, 14 cells differ from the raw rows
+rewrite and reconcile: the aggregates equal the raw rows (32 one-minute and 12 one-hour cells)
+rewrite: the reconcile wrote 10 one-minute rows, then 0 and 4 one-hour rows after the interruption, then 0 and 0; the other stream's cells are unchanged
+rewrite a day after the buffer's age: the aggregates equal the raw rows (12 one-minute and 4 one-hour cells)
+reconcile window: a batch first received at 2026-09-24 23:59:00.000 and rewritten at 2026-10-25 16:32:48.194: with a window of 30 receive days the reconcile wrote (0, 0) rows and 10 cells still differed; with the contract's 31 days it wrote 6 one-minute and 4 one-hour rows and the aggregates equal the raw rows
+deduplication hazard: a rewrite with the same insert_deduplication_token answered OK and wrote 0 of 12 rows
+deduplication hazard: a rewrite with identical content answered OK and wrote 0 of 12 rows
+deduplication hazard: a rewrite with identical content and insert_deduplicate = 0 answered OK and wrote 0 of 12 rows
+rewrite with deduplicate_insert = 'disable' and reconcile: the aggregates equal the raw rows (12 one-minute and 7 one-hour cells)
+crash between the raw and a view part: the aggregates equal the raw rows (16 one-minute and 8 one-hour cells)
+reconcile after stopping an earlier INSERT: the aggregates equal the raw rows (13 one-minute and 5 one-hour cells)
+query ID: while an INSERT of the stream ran with the stream's settings, another statement with its ID was refused (QUERY_WITH_SAME_ID_IS_ALREADY_RUNNING); the reconcile with the stream's settings stopped it (QUERY_WAS_CANCELLED) after it had landed 3 rows, and ran; once it had run no row landed (still 3 raw rows and the same cells after the asynchronous insert queue was flushed); the reconcile of those rows wrote 1 one-minute and 1 one-hour rows
+cumulative points: the aggregates equal the raw rows (25 one-minute and 8 one-hour cells)
+energy reset_in_hour [5.0, 7.0, 0.0, 6.0] (wraps at 0): consecutive differences 8, one-minute view 8, one-hour view 8
+energy first_zero [0.0, 5.0, 0.0, 3.0] (wraps at 0): consecutive differences 8, one-minute view 8, one-hour view 8
+energy wrap_in_hour [90.0, 95.0, 3.0, 8.0] (wraps at 100): consecutive differences 18, one-minute view 18, one-hour view 18
+energy reset_between_hours [10.0, 12.0, 4.0, 9.0] (wraps at 0): consecutive differences 11, one-minute view 11, one-hour view 11
+energy steady [1.0, 2.0, 3.0, 5.0, 6.0] (wraps at 0): consecutive differences 5, one-minute view 5, one-hour view 5
+energy outside_condition [5.0, 7.0, 0.0, 9.0] (wraps at 0): consecutive differences 11, one-minute view 11, one-hour view 13
+retention: of 31 receive days 380 to 410 days ago, the one-minute table kept 16 and dropped 15 by chrono's 13 months plus a day; the one-hour table kept all 31
+server: 26.8.22.13
+test the_aggregates_follow_the_raw_rows ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 26.64s
+

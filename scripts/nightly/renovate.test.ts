@@ -18,6 +18,7 @@ interface Rule {
   allowedVersions?: string;
   versioning?: string;
   matchUpdateTypes?: string[];
+  groupName?: string;
   prBodyNotes?: string[];
 }
 interface Manager {
@@ -310,9 +311,10 @@ describe("every copy of a pin is updated by the same pull request", () => {
     const copies = (image: string) => new Set(pins.filter((p) => p.image === image).map((p) => p.file)).size;
     // The chart, the dev environment, services/ingest/tests and tools/migrate/tests.
     expect(copies("docker.io/clickhouse/clickhouse-server")).toBe(4);
-    // The chart, the dev environment, crates/protocol/tests, tools/migrate/tests and
-    // services/certs/tests (workstation.rs and broker.rs).
-    expect(copies("docker.io/library/eclipse-mosquitto")).toBe(6);
+    // The chart, the dev environment, crates/protocol/tests, crates/testkit (the agent's test
+    // broker), tools/migrate/tests and services/certs/tests (workstation.rs, broker.rs and
+    // broker_certificate.rs).
+    expect(copies("docker.io/library/eclipse-mosquitto")).toBe(8);
     expect(copies("gcr.io/distroless/cc-debian13")).toBe(4);
   });
 
@@ -332,6 +334,19 @@ describe("every copy of a pin is updated by the same pull request", () => {
     const version = /^const EXPORTER_VERSION = "([^"]+)";$/m.exec(chartTests)?.[1];
     const collector = pins.find((p) => p.image === "docker.io/otel/opentelemetry-collector-contrib" && p.file === "deploy/chart/values.yaml");
     expect(collector?.tag).toBe(version);
+  });
+
+  test("an sqlparser version change carries a note about the guard in the telemetry-query tests", () => {
+    const isSqlparser = (r: Rule) => (r.matchManagers?.includes("cargo") ?? false) && (r.matchPackageNames?.includes("sqlparser") ?? false);
+    const rule = rulesFor(isSqlparser);
+    expect(rule.matchUpdateTypes).toEqual(["major", "minor", "patch"]);
+    // A group of its own, after the rust crates rule (a later rule wins): the deliberate failure
+    // holds back only this pull request, not the weekly crate group.
+    expect(rule.groupName).toBe("sqlparser");
+    expect(config.packageRules.findLastIndex(isSqlparser)).toBeGreaterThan(config.packageRules.findIndex((r) => r.groupName === "rust crates"));
+    expect(rule.prBodyNotes?.join(" ")).toContain("SURVEYED_SQLPARSER");
+    const sqlCheck = readFileSync(join(REPO_ROOT, "services", "telemetry-query", "tests", "sql_check.rs"), "utf8");
+    expect(sqlCheck).toMatch(/^const SURVEYED_SQLPARSER: &str = "[^"]+";$/m);
   });
 
   test("the nightly's k3s and Istio are the versions the SaaS host and the lab install", () => {

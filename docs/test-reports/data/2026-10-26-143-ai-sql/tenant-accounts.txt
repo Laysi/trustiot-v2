@@ -1,0 +1,49 @@
+
+running 1 test
+attack                               base table: refused: ACCESS_DENIED
+attack                            batch commits: refused: ACCESS_DENIED
+attack          view filtered to another tenant: answered without another tenant's readings
+attack          view with an always-true filter: answered without another tenant's readings
+attack                        explicit PREWHERE: refused: ILLEGAL_PREWHERE
+attack                                    FINAL: answered without another tenant's readings
+attack                 join with the base table: refused: ACCESS_DENIED
+attack                          scalar subquery: refused: ACCESS_DENIED
+attack                              IN subquery: refused: ACCESS_DENIED
+attack                                UNION ALL: refused: ACCESS_DENIED
+attack                  common table expression: refused: ACCESS_DENIED
+attack                                  merge(): refused: CANNOT_EXTRACT_TABLE_STRUCTURE
+attack                                   view(): refused: ACCESS_DENIED
+attack              remote() to the same server: refused: ACCESS_DENIED
+attack                     clusterAllReplicas(): refused: ACCESS_DENIED
+attack         url() back to the HTTP interface: refused: ACCESS_DENIED
+attack                                   file(): refused: DATABASE_ACCESS_DENIED
+attack      SETTINGS clause with another tenant: refused: READONLY
+attack          URL setting with another tenant: refused: READONLY
+attack                       SET another tenant: refused: READONLY
+attack                    SETTINGS readonly = 0: refused: READONLY
+attack           SETTINGS without the row limit: refused: READONLY
+attack       URL setting without the time limit: refused: READONLY
+attack            EXECUTE AS the view's definer: refused: ACCESS_DENIED
+attack           URL role of the ingest service: refused: SET_NON_GRANTED_ROLE
+attack               insert into the base table: refused: ACCESS_DENIED
+attack               delete from the base table: refused: ACCESS_DENIED
+attack                  truncate the base table: refused: ACCESS_DENIED
+attack                           create a table: refused: ACCESS_DENIED
+attack                  create a tenant account: refused: ACCESS_DENIED
+attack             change the service's account: refused: ACCESS_DENIED
+attack                     grant the base table: refused: ACCESS_DENIED
+attack                      drop the row policy: refused: ACCESS_DENIED
+attack                         system.query_log: refused: ACCESS_DENIED
+attack                          system.text_log: refused: ACCESS_DENIED
+attack                         system.processes: refused: ACCESS_DENIED
+attack                             system.parts: refused: ACCESS_DENIED
+attack                             system.users: refused: ACCESS_DENIED
+attack                       system.role_grants: refused: ACCESS_DENIED
+attack         system.settings_profile_elements: refused: ACCESS_DENIED
+heavy query         reads more than max_rows_to_read: stopped with TOO_MANY_ROWS
+heavy query         holds more than max_memory_usage: stopped with MEMORY_LIMIT_EXCEEDED
+heavy query      runs longer than max_execution_time: stopped with TIMEOUT_EXCEEDED
+test each_tenant_account_sees_its_own_readings_only ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 39.08s
+

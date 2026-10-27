@@ -1,0 +1,166 @@
+After merging Laysi/trustiot-v2#142 (merge commit 9474de3), 2026-10-26.
+
+== cargo test per crate (CI set for the crates that start containers: telemetry-query, assistant, ingest, migrate)
+-- telemetry-query
+Running unittests src/lib.rs
+test result: ok. 82 passed; 0 failed; 0 ignored
+Running tests/chart_connections.rs
+test result: ok. 1 passed; 0 failed; 0 ignored
+Running tests/cross_tenant.rs
+test result: ok. 1 passed; 0 failed; 0 ignored
+Running tests/history.rs
+test result: ok. 1 passed; 0 failed; 0 ignored
+Running tests/queryable_period.rs
+test result: ok. 1 passed; 0 failed; 0 ignored
+Running tests/semantic.rs
+test result: ok. 1 passed; 0 failed; 0 ignored
+Running tests/sql_api.rs
+test result: ok. 1 passed; 0 failed; 0 ignored
+Running tests/sql_check.rs
+test result: ok. 13 passed; 0 failed; 0 ignored
+Running tests/tenant_accounts.rs
+test result: ok. 1 passed; 0 failed; 0 ignored
+Doc-tests telemetry_query
+test result: ok. 0 passed; 0 failed; 0 ignored
+-- assistant
+Running unittests src/lib.rs
+test result: ok. 48 passed; 0 failed; 0 ignored
+Running tests/agent.rs
+test result: ok. 10 passed; 0 failed; 0 ignored
+Running tests/agent_logs.rs
+test result: ok. 2 passed; 0 failed; 0 ignored
+Running tests/chart_connections.rs
+test result: ok. 1 passed; 0 failed; 0 ignored
+Running tests/cross_tenant.rs
+test result: ok. 1 passed; 0 failed; 0 ignored
+Running tests/delegated_tools.rs
+test result: ok. 13 passed; 0 failed; 0 ignored
+Running tests/history_store.rs
+test result: ok. 5 passed; 0 failed; 0 ignored
+Running tests/startup.rs
+test result: ok. 1 passed; 0 failed; 0 ignored
+Running tests/telemetry_sql.rs
+test result: ok. 2 passed; 0 failed; 0 ignored
+Running tests/tools.rs
+test result: ok. 7 passed; 0 failed; 0 ignored
+Doc-tests assistant
+test result: ok. 0 passed; 0 failed; 1 ignored
+-- ingest
+Running unittests src/lib.rs
+test result: ok. 14 passed; 0 failed; 0 ignored
+Running tests/clickhouse.rs
+test result: ok. 2 passed; 0 failed; 0 ignored
+Running tests/disk_watermark.rs
+test result: ok. 1 passed; 0 failed; 0 ignored
+Running tests/migrations.rs
+test result: ok. 6 passed; 0 failed; 0 ignored
+Running tests/rollups.rs
+test result: ok. 1 passed; 0 failed; 0 ignored
+Doc-tests ingest
+test result: ok. 0 passed; 0 failed; 0 ignored
+-- contract
+Running unittests src/lib.rs
+test result: ok. 48 passed; 0 failed; 0 ignored
+Running tests/client.rs
+test result: ok. 14 passed; 0 failed; 0 ignored
+Running tests/client_logging.rs
+test result: ok. 1 passed; 0 failed; 0 ignored
+Running tests/error_format.rs
+test result: ok. 7 passed; 0 failed; 0 ignored
+Running tests/events.rs
+test result: ok. 17 passed; 0 failed; 0 ignored
+Doc-tests contract
+test result: ok. 6 passed; 0 failed; 0 ignored
+test result: ok. 4 passed; 0 failed; 0 ignored
+-- openapi
+Running unittests src/lib.rs
+test result: ok. 12 passed; 0 failed; 0 ignored
+Running unittests src/main.rs
+test result: ok. 0 passed; 0 failed; 0 ignored
+Running tests/openapi.rs
+test result: ok. 5 passed; 0 failed; 0 ignored
+Doc-tests openapi
+test result: ok. 0 passed; 0 failed; 0 ignored
+-- repo-check
+Running unittests src/lib.rs
+test result: ok. 17 passed; 0 failed; 0 ignored
+Running tests/repository.rs
+test result: ok. 9 passed; 0 failed; 0 ignored
+Doc-tests repo_check
+test result: ok. 0 passed; 0 failed; 0 ignored
+-- sql-check
+Running unittests src/lib.rs
+test result: ok. 20 passed; 0 failed; 0 ignored
+Running tests/check.rs
+test result: ok. 6 passed; 0 failed; 0 ignored
+Doc-tests sql_check
+test result: ok. 0 passed; 0 failed; 0 ignored
+-- migrate (--no-fail-fast)
+Running unittests src/lib.rs
+test result: ok. 77 passed; 0 failed; 0 ignored
+Running tests/ca_keys.rs
+test result: ok. 7 passed; 0 failed; 0 ignored
+Running tests/clickhouse.rs
+test result: ok. 1 passed; 0 failed; 0 ignored
+Running tests/clickhouse_admin.rs
+test result: ok. 6 passed; 0 failed; 0 ignored
+Running tests/clickhouse_backfill.rs
+test result: ok. 1 passed; 0 failed; 0 ignored
+Running tests/clickhouse_telemetry_query.rs
+test result: ok. 1 passed; 0 failed; 0 ignored
+Running tests/concurrent_runs.rs
+test result: ok. 1 passed; 0 failed; 0 ignored
+Running tests/file_escapes.rs
+test result: ok. 1 passed; 0 failed; 0 ignored
+Running tests/fresh_database.rs
+test result: ok. 1 passed; 0 failed; 0 ignored
+Running tests/mqtt_accounts.rs
+test result: ok. 3 passed; 0 failed; 0 ignored
+Running tests/mqtt_broker.rs
+test gateways_need_a_current_certificate_of_our_ca ... FAILED
+test result: FAILED. 3 passed; 1 failed; 0 ignored
+Running tests/mqtt_trust.rs
+test result: ok. 4 passed; 0 failed; 0 ignored
+Running tests/one_instance_per_cluster.rs
+test result: ok. 1 passed; 0 failed; 0 ignored
+Running tests/outbox_and_tenant_roles.rs
+test result: ok. 1 passed; 0 failed; 0 ignored
+Running tests/passwords.rs
+test result: ok. 11 passed; 0 failed; 0 ignored
+Running tests/platform_admin.rs
+test result: ok. 1 passed; 0 failed; 0 ignored
+Running tests/registry.rs
+test result: ok. 6 passed; 0 failed; 0 ignored
+Running tests/service_records.rs
+test result: ok. 1 passed; 0 failed; 0 ignored
+Running tests/settings.rs
+test result: ok. 1 passed; 0 failed; 0 ignored
+Running tests/signing_keys.rs
+test result: ok. 15 passed; 0 failed; 0 ignored
+Running tests/system_databases.rs
+test result: ok. 2 passed; 0 failed; 0 ignored
+Running tests/wait_for_job.rs
+test result: ok. 4 passed; 0 failed; 0 ignored
+Doc-tests migrate
+test result: ok. 0 passed; 0 failed; 0 ignored
+gw-a after the reload must connect: status exit status: 1
+stdout:
+stderr: Error response from daemon: container <id> is not running
+
+== telemetry-query --test semantic -- --nocapture: the queryable period after the merge
+tenant: A gets no data for B's devices, a tenant field is refused (400)
+injection: hostile values refused by the API (400/422), an end after 2106 or in year +262142 a 422 on `to`; bound as values below it, they match no row or fail; tenant B's rows are not in tenant A's account
+period UTC: cut at "2026-07-26T01:00:00Z" ("1h" table), earlier readings left out
+period Asia/Kolkata: cut at "2026-07-26T05:59:00+05:30" ("1m" table), earlier readings left out
+period: the latest values leave out a data point last read 8 days ago (raw period, 7 days); its statistics from the aggregates still hold it
+test the_semantic_api_answers_the_dataset_within_the_period_and_the_tenant ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored
+
+== telemetry-query --test history -- --nocapture: the truncation and the shared end bound
+period raw 10..6 days back: truncated to "2026-10-19T00:28:29.769Z", 0 points
+period 1d 200 days back..now: truncated to "2026-07-26T01:00:00Z", 427 readings (120-day-old readings left out)
+refusal 422 validation_failed "telemetry.range_invalid": /api/telemetry/v1/devices/<device>/series?point=temp&from=2026-10-25T23:23:28.829Z&to=%2B262142-12-31T23:59:00Z&tz=UTC
+refusal 422 validation_failed "telemetry.range_invalid": /api/telemetry/v1/devices/<device>/series?point=temp&from=2026-10-25T23:23:28.829Z&to=2106-02-08T00:00:00Z&tz=UTC&interval=1h
+quota: call 118 answered 429 rate_limited
+test history_matches_clickhouse_within_the_queryable_period ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored

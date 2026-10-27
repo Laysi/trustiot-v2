@@ -1,0 +1,25 @@
+$ proto install zig && proto install cargo-zigbuild   # zig 0.16.0, cargo-zigbuild 0.23.4 (.prototools)
+$ CARGO_ZIGBUILD_ZIG_PATH="$(proto bin zig --reporter text | tail -n 1)" PATH="$(dirname "$(proto bin cargo-zigbuild --reporter text | tail -n 1)"):$PATH" cargo zigbuild --locked --release --target aarch64-unknown-linux-gnu -p agent
+Finished `release` profile [optimized] (one linker warning: "ignoring deprecated linker optimization setting '1'", from Zig's linker)
+
+$ file target/aarch64-unknown-linux-gnu/release/trustiot-agent
+trustiot-agent: ELF 64-bit LSB pie executable, ARM aarch64, version 1 (SYSV), dynamically linked, interpreter /lib/ld-linux-aarch64.so.1, for GNU/Linux 2.0.0, stripped
+
+$ stat -c %s target/aarch64-unknown-linux-gnu/release/trustiot-agent
+2742960
+
+$ readelf -d target/aarch64-unknown-linux-gnu/release/trustiot-agent | grep NEEDED
+0x0000000000000001 (NEEDED)             Shared library: [libm.so.6]
+0x0000000000000001 (NEEDED)             Shared library: [libc.so.6]
+0x0000000000000001 (NEEDED)             Shared library: [libpthread.so.0]
+0x0000000000000001 (NEEDED)             Shared library: [libdl.so.2]
+
+$ readelf -V target/aarch64-unknown-linux-gnu/release/trustiot-agent | grep -o 'GLIBC_[0-9.]*' | sort -uV | tail -1   # newest glibc symbol version needed
+GLIBC_2.30
+
+$ bash <the "aarch64 build of the gateway crates" step of .github/workflows/ci.yml, x64 branch>   # dev profile, protocol and agent
+trustiot-agent: ELF 64-bit LSB pie executable, ARM aarch64, version 1 (SYSV), dynamically linked, interpreter /lib/ld-linux-aarch64.so.1, for GNU/Linux 2.0.0, with debug_info, not stripped
+
+$ cargo build --locked --target aarch64-unknown-linux-gnu -p agent   # without Zig
+error: failed to run custom build command for `ring v0.17.14`
+  cargo:warning=Compiler family detection failed due to error: ToolNotFound: failed to find tool "aarch64-linux-gnu-gcc"

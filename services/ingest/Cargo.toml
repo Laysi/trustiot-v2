@@ -10,8 +10,9 @@ repository.workspace = true
 # The service is built in steps under Laysi/trustiot-v2#91: this release (Laysi/trustiot-v2#640)
 # starts it with readiness and the gateway binding projection; the telemetry path is
 # Laysi/trustiot-v2#641. The crate also carries the ClickHouse DDL in migrations/clickhouse, the
-# raw data retention (src/retention.rs), the disk watermark alert (alerts/), and the tests that run
-# them against a real ClickHouse.
+# raw and aggregate data retention (src/retention.rs), the statements on the aggregate tables
+# (src/rollup.rs), the disk watermark alert (alerts/), and the tests that run them against a real
+# ClickHouse.
 
 [[bin]]
 name = "ingest"
@@ -50,8 +51,10 @@ tokio-rustls = { workspace = true, features = ["ring"] }
 [dev-dependencies]
 # Binds gateways through the assets service's own code, as the producer of the event.
 assets = { path = "../assets" }
-# Event times a step earlier or later than a binding's, for the ordering test.
-chrono.workspace = true
+# Reading times and receive times the aggregate tests write, the calendar months the retention
+# test counts independently of ClickHouse (tests/rollups.rs), and an event time an hour before a
+# binding's for the ordering test (tests/gateway_bindings.rs).
+chrono = { workspace = true, features = ["now"] }
 # Talks to ClickHouse over its HTTP interface, plain HTTP to a local test container.
 reqwest.workspace = true
 serde_json.workspace = true

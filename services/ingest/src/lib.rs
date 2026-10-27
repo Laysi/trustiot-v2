@@ -12,8 +12,15 @@
 //! - [`schema`]: the Postgres migration files this release expects, which readiness checks and
 //!   the migration Job applies.
 //! - [`config`]: the settings.
-//! - [`retention`]: the platform's raw data retention, which the migration Job applies as the
-//!   ClickHouse tables' TTL (rebuild checklist I2, Laysi/trustiot-v2#92).
+//! - [`retention`]: the platform's raw and aggregate data retention, which the migration Job
+//!   applies as the tables' TTL (rebuild checklist I2, Laysi/trustiot-v2#92,
+//!   Laysi/trustiot-v2#141).
+//! - [`rollup`]: the statements on the one-minute and one-hour aggregate tables: the settings
+//!   every statement that writes a stream must carry ([`rollup::stream_settings`]) and the
+//!   reconcile the ingest service must run after an I1 rewrite (no code writes or rewrites
+//!   telemetry yet: the write path and the rewrite are Laysi/trustiot-v2#641, which takes over
+//!   that contract), the backfill the migration Job runs, and the energy query of cumulative
+//!   points.
 //!
 //! The crate also owns the ClickHouse schema in `migrations/clickhouse/`: the migration Job
 //! (Laysi/trustiot-v2#60) applies it at deploy time, and runtime code never creates or alters
@@ -24,6 +31,7 @@ pub mod bindings;
 pub mod clickhouse;
 pub mod config;
 pub mod retention;
+pub mod rollup;
 pub mod schema;
 pub mod transport;
 

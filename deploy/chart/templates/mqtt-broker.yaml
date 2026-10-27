@@ -14,8 +14,12 @@ gateway port and the cloud services with a broker account on the service port, n
   which keeps every connection. The pod shares its process namespace for that, and every
   container runs as the pod's user, so the sidecar may signal the broker; they mount the same
   volumes anyway, and no token is left in the pod once the init containers are done.
-- The server certificate Secret is not part of the chart ("trustiot.mqttBroker.tlsSecret"): the
-  pod starts once it exists.
+- The server certificate Secret ("trustiot.mqttBroker.tlsSecret") is declared empty by
+  templates/passwords.yaml and filled by the CronJob of templates/mqtt-broker-certificate.yaml
+  (Laysi/trustiot-v2#535). Until it holds a certificate and key that belong together the broker
+  runs without its gateway port: the gateway listener (gateway-listener.conf in the ConfigMap) is
+  in no file the broker reads until the trust containers copy it into the listeners directory,
+  an emptyDir the broker includes read-only.
 */ -}}
 {{- if include "trustiot.mqttBroker.enabled" . }}
 {{- $broker := .Values.mqttBroker }}
@@ -40,6 +44,8 @@ metadata:
 data:
   mosquitto.conf: |
     {{- include "trustiot.mqttBroker.config" . | nindent 4 }}
+  gateway-listener.conf: |
+    {{- include "trustiot.mqttBroker.gatewayListener" . | nindent 4 }}
 ---
 apiVersion: v1
 kind: ServiceAccount
@@ -98,8 +104,10 @@ spec:
         # AuthorizationPolicy (decision 27).
         istio.io/dataplane-mode: ambient
       annotations:
-        # The configuration is a subPath mount, which the kubelet never updates: restart instead.
-        checksum/mqtt-broker-config: {{ include "trustiot.mqttBroker.config" . | sha256sum }}
+        # The configuration is a subPath mount, which the kubelet never updates, and the trust
+        # containers copy the gateway listener only when the server certificate becomes usable:
+        # restart instead.
+        checksum/mqtt-broker-config: {{ list (include "trustiot.mqttBroker.config" .) (include "trustiot.mqttBroker.gatewayListener" .) | toJson | sha256sum }}
         # A new account holder or passwordGeneration restarts the broker, whose init container
         # writes the accounts first.
         checksum/mqtt-broker-accounts: {{ list (include "trustiot.mqttBroker.accountsSecret" .) $accounts (include "trustiot.mqttBroker.passwordGeneration" .) | toJson | sha256sum }}
@@ -163,6 +171,11 @@ spec:
             - name: server-tls
               mountPath: {{ include "trustiot.mqttBroker.tlsDir" . }}
               readOnly: true
+            # The gateway listener once the server certificate is usable, written by the trust
+            # containers; mosquitto.conf includes this directory.
+            - name: listeners
+              mountPath: {{ include "trustiot.mqttBroker.listenersDir" . }}
+              readOnly: true
             # The probes' Unix socket.
             - name: run
               mountPath: /run/mosquitto
@@ -178,6 +191,10 @@ spec:
             secretName: {{ include "trustiot.mqttBroker.tlsSecret" . }}
             {{- /* 0440, written in decimal: YAML 1.1 (Kubernetes) reads a leading 0 as octal, YAML 1.2 does not. */}}
             defaultMode: 288
+        - name: listeners
+          emptyDir:
+            medium: Memory
+            sizeLimit: 1Mi
         - name: run
           emptyDir:
             medium: Memory

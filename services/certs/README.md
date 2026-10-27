@@ -16,7 +16,7 @@ Laysi/trustiot-v2#534（2026-10-22）加上：
 
 Laysi/trustiot-v2#557（2026-10-23）加上：
 
-- MQTT broker 的 TLS 伺服器憑證的 profile（EKU 只有 serverAuth，不能當閘道器憑證）、閘道器驗證的名稱 `mqtt-broker.trustiot.internal`，以及只給 broker 的簽發端點，在自己的埠上（見[broker 伺服器憑證](#broker-伺服器憑證)）。broker 這一側產生私鑰、取得與輪替憑證是 Laysi/trustiot-v2#535。
+- MQTT broker 的 TLS 伺服器憑證的 profile（EKU 只有 serverAuth，不能當閘道器憑證）、閘道器驗證的名稱 `mqtt-broker.trustiot.internal`，以及只給 broker 的憑證 CronJob 的簽發端點，在自己的埠上（見[broker 伺服器憑證](#broker-伺服器憑證)）。私鑰在叢集內產生、取得與到期前換發的是 chart 的 CronJob `<release>-mqtt-broker-certificate`（Laysi/trustiot-v2#535，[deploy/chart/README.md](../../deploy/chart/README.md) 的「伺服器憑證」）。
 
 Laysi/trustiot-v2#79（2026-10-23）加上：
 
@@ -31,10 +31,10 @@ Laysi/trustiot-v2#79（2026-10-23）加上：
   └─ 簽發 CA，每一代一張（ECDSA P-256，預設 2 年、不超過根，pathLen 0）
        ├─ 閘道器用戶端憑證（ECDSA P-256 的 TPM 金鑰，預設 90 天、不超過簽發 CA）
        ├─ 產線工作站憑證（ECDSA P-256，預設 180 天、不超過簽發 CA；EKU 沒有 clientAuth，見「工作站憑證」）
-       └─ MQTT broker 的伺服器憑證（ECDSA P-256，預設 30 天、不超過簽發 CA；EKU 只有 serverAuth，見「broker 伺服器憑證」；broker 這一側的金鑰與輪替在 Laysi/trustiot-v2#535）
+       └─ MQTT broker 的伺服器憑證（ECDSA P-256，預設 30 天、不超過簽發 CA；EKU 只有 serverAuth，見「broker 伺服器憑證」；私鑰與換發在 chart 的憑證 CronJob，Laysi/trustiot-v2#535）
 ```
 
-根 CA 在每次儀式另簽一張根 CRL，列出撤銷的簽發 CA，給閘道器驗 broker 的伺服器憑證用（2026-10-23 決定，見[閘道器對 broker 伺服器憑證的信任](#閘道器對-broker-伺服器憑證的信任)；還沒實作）。
+根 CA 在每次儀式另簽一張根 CRL，列出撤銷的簽發 CA，給閘道器驗 broker 的伺服器憑證用（2026-10-23 決定，見[閘道器對 broker 伺服器憑證的信任](#閘道器對-broker-伺服器憑證的信任)；閘道器端從檔案載入並檢查已在 Laysi/trustiot-v2#86，簽發與提供還沒實作，Laysi/trustiot-v2#560）。
 
 - **根 CA**：私鑰只在離線的機器上產生與使用，不進叢集、不進 git（加密的也不放）、不在任何連網主機；以 age 加密給兩位維運人員，存兩份離線媒體，各由一人保管（2026-10-22 決定；與 [docs/architecture/secrets.md](../../docs/architecture/secrets.md) 的「根 CA 私鑰」相同）。只在簽發 CA 的儀式與備份檢查時取出。根憑證是公開資料，放在 chart 的 values。
 - **簽發 CA**：私鑰在叢集內產生，沒有人建立、看到、複製或輸入它，做法與內部身分簽章金鑰相同（[docs/architecture/secrets.md](../../docs/architecture/secrets.md) 的「閘道器憑證 CA」）：
@@ -55,7 +55,7 @@ Laysi/trustiot-v2#79（2026-10-23）加上：
 
 已知的限制（後續 issue 見 Laysi/trustiot-v2#78 的實作紀錄）：
 
-- 根 CRL 還沒實作：簽發 CA 外洩時，broker 這一側靠「移除它的金鑰、broker 不再讀到它的 CRL」拒絕它簽的閘道器憑證（見[簽發 CA 金鑰遺失或外洩](#簽發-ca-金鑰遺失或外洩)）；閘道器這一側要靠根 CRL 才拒絕外洩的簽發 CA 簽的假伺服器憑證（2026-10-23 決定，見[閘道器對 broker 伺服器憑證的信任](#閘道器對-broker-伺服器憑證的信任)）。`certs-ca` 簽根 CRL、certs 提供它（Laysi/trustiot-v2#560）、閘道器取用與檢查（Laysi/trustiot-v2#86）都還沒做，這之前閘道器端的這個風險只能靠換根解除，而換根也還沒有做法（下一點）。
+- 根 CRL 還沒實作：簽發 CA 外洩時，broker 這一側靠「移除它的金鑰、broker 不再讀到它的 CRL」拒絕它簽的閘道器憑證（見[簽發 CA 金鑰遺失或外洩](#簽發-ca-金鑰遺失或外洩)）；閘道器這一側要靠根 CRL 才拒絕外洩的簽發 CA 簽的假伺服器憑證（2026-10-23 決定，見[閘道器對 broker 伺服器憑證的信任](#閘道器對-broker-伺服器憑證的信任)）。`certs-ca` 簽根 CRL、certs 提供它（Laysi/trustiot-v2#560）、閘道器取用新的根 CRL（Laysi/trustiot-v2#563）都還沒做（閘道器從檔案載入並檢查已在 Laysi/trustiot-v2#86），這之前閘道器端的這個風險只能靠換根解除，而換根也還沒有做法（下一點）。
 - 閘道器不檢查 broker 伺服器憑證本身的撤銷（它沒有簽發 CA 的 CRL，見同一節的「撤銷」）。broker 的私鑰外洩時，根 CRL 實作之後照[簽發 CA 金鑰遺失或外洩](#簽發-ca-金鑰遺失或外洩)最後一段，以根 CRL 撤銷簽出那張憑證的一代；在那之前，持有私鑰又站上連線路徑的攻擊者可以冒充 broker 到那張憑證過期為止，所以它的效期短（預設 30 天，見[broker 伺服器憑證](#broker-伺服器憑證)）。
 - 根 CRL 擋不住一直站在連線路徑上的攻擊者：它可以擋下新的根 CRL，閘道器手上的舊 CRL 不列外洩的簽發 CA。根 CRL 過期也不擋連線（理由見同一節），所以這段期間沒有上限。
 - 根 CA 換新還沒有做法。地端的 CA 階層（誰保管客戶的根 CA）延後：地端專用的工作排在 SaaS 之後（決策 1 的 2026-10-18 補充，Laysi/trustiot-v2#446）；chart 本身兩種型態相同。
@@ -189,7 +189,7 @@ age --decrypt -i <自己的 identity> root-key.age \
 
 ## 閘道器對 broker 伺服器憑證的信任
 
-2026-10-23 決定（Laysi/trustiot-v2#556）。閘道器的內層 TLS 在 WebSocket 裡直達 broker（決策 6），閘道器 agent（Laysi/trustiot-v2#86）照下表驗證 broker 的伺服器憑證。根 CRL 那一列還沒實作（見[根 CRL](#根-crl)），其他各列在 agent 實作內層 TLS 時就照做。
+2026-10-23 決定（Laysi/trustiot-v2#556）。閘道器的內層 TLS 在 WebSocket 裡直達 broker（決策 6），閘道器 agent（Laysi/trustiot-v2#86）照下表驗證 broker 的伺服器憑證（[edge/agent](../../edge/agent/README.md)「內層 TLS 對 broker 的信任」）。根 CRL 那一列，agent 從設定的檔案載入根 CRL 並檢查；換上新的根 CRL 時清掉 resumption 快取屬於取用新 CRL 的部分（Laysi/trustiot-v2#563），簽發與提供見[根 CRL](#根-crl)。
 
 | 項目 | 設定 |
 | --- | --- |
@@ -221,6 +221,11 @@ age --decrypt -i <自己的 identity> root-key.age \
 - **順序**：撤銷某一代的根 CRL 放進 values 之前，broker 要已換上新一代簽的伺服器憑證（Laysi/trustiot-v2#535 的換新），否則取到新 CRL 的閘道器連不上 broker。儀式可以同時簽出新的簽發 CA 憑證與根 CRL，根 CRL 晚一步放進 values。
 - **過期**：nextUpdate 過了，閘道器仍然以手上的根 CRL 驗證、照常連線，並在狀態回報裡標出根 CRL 已過期。不擋連線，是因為根 CRL 要靠人到離線的機器簽，儀式晚了不該讓整個機隊斷線；改由 certs 的告警與閘道器的狀態回報讓人知道。
 - **還沒有根 CRL 時**（目前，以及後續 issue 完成前出廠的閘道器）：閘道器不檢查撤銷，照常連線；取到第一張之後開始檢查。
+- **格式**（2026-10-23，Laysi/trustiot-v2#86 的安全審查；`certs-ca` 簽根 CRL 時照做，Laysi/trustiot-v2#560）：閘道器的 agent 拒絕不符的根 CRL、不啟動。
+  - 不帶 issuing distribution point：webpki 只把帶它的 CRL 用在範圍內的憑證，範圍排除簽發 CA（例如 onlyContainsUserCerts）或 URI 對不上簽發 CA 的 CRL distribution point 時，等於不檢查。
+  - 不是 delta CRL，也不帶 webpki 不認得的 critical extension。
+  - 簽章演算法要是 rustls 的 ring provider 接受的（根是 P-384，就是 ecdsa-with-SHA384），AlgorithmIdentifier 照標準編碼、不多帶參數：webpki 依位元組比對演算法，對不上時每次握手都失敗。
+- **換根與主體**：新的根要用新的主體（subject）。CRL 只以主體指出簽發者，兩個同名的根同時在信任錨裡時，webpki 會拿錯的根的金鑰驗 CRL，經另一個根的連線全部失敗；agent 拒絕主體重複的 `broker.ca`。一張根 CRL 只涵蓋簽它的根底下的簽發 CA：換根期間 `broker.ca` 有兩個根時，agent 只載入一張根 CRL（`broker.crl`），另一個根底下的簽發 CA 不檢查撤銷。這是已知的限制，支援多張根 CRL 與換根的做法一起規劃（根 CA 換新還沒有做法，見[已知的限制](#ca-階層與私鑰保管)；取用多張根 CRL 屬於 Laysi/trustiot-v2#563 的範圍）。
 
 剩下的風險：
 
@@ -402,7 +407,7 @@ trustiot-workstation register --hardware-id <硬體 ID> --csr gateway.csr --ek e
 
 ## broker 伺服器憑證
 
-2026-10-23 決定（Laysi/trustiot-v2#557）。MQTT broker 在閘道器埠（8883）以這張憑證向閘道器證明自己；閘道器以下面的信任錨與名稱驗證它。和閘道器、工作站憑證同一個簽發 CA，以 EKU 區分（理由同[工作站憑證](#工作站憑證)的「profile 的決定」：多一個簽發 CA 要多一套金鑰、儀式、輪替與 CRL）。私鑰在 broker 的 pod 產生，不經過 certs 服務；broker 產生金鑰、取得與輪替憑證是 Laysi/trustiot-v2#535。閘道器怎麼驗證它（信任錨、名稱、用途、以根 CRL 檢查簽發 CA）見[閘道器對 broker 伺服器憑證的信任](#閘道器對-broker-伺服器憑證的信任)（Laysi/trustiot-v2#556）。
+2026-10-23 決定（Laysi/trustiot-v2#557）。MQTT broker 在閘道器埠（8883）以這張憑證向閘道器證明自己；閘道器以下面的信任錨與名稱驗證它。和閘道器、工作站憑證同一個簽發 CA，以 EKU 區分（理由同[工作站憑證](#工作站憑證)的「profile 的決定」：多一個簽發 CA 要多一套金鑰、儀式、輪替與 CRL）。私鑰在叢集內由 chart 的 CronJob `<release>-mqtt-broker-certificate` 產生，不經過 certs 服務；它在儀式之後取得第一張憑證、過了效期一半就以新的私鑰換發，寫進只有 broker 的 pod 掛的 Secret `<release>-mqtt-broker-tls`，broker 以 SIGHUP 換上，不中斷連線（Laysi/trustiot-v2#535，[deploy/chart/README.md](../../deploy/chart/README.md) 的「伺服器憑證」）。閘道器怎麼驗證它（信任錨、名稱、用途、以根 CRL 檢查簽發 CA）見[閘道器對 broker 伺服器憑證的信任](#閘道器對-broker-伺服器憑證的信任)（Laysi/trustiot-v2#556）。
 
 ### 閘道器驗證的名稱與信任錨
 
@@ -418,7 +423,7 @@ trustiot-workstation register --hardware-id <硬體 ID> --csr gateway.csr --ek e
 | Service 名稱 `<release>-mqtt-broker.<namespace>.svc` | 隨 release 與 namespace 改變，閘道器也看不到叢集內的名稱 |
 | IP SAN | 地端的位址會變，SaaS 經入口時是負載平衡器的位址 |
 
-依 Laysi/trustiot-v2#84 的約定（[deploy/chart/README.md](../../deploy/chart/README.md) 的「伺服器憑證」），憑證另外帶 broker 的 Service 名稱：chart 開啟 broker 時以 `TRUSTIOT__BROKER__SERVICE_NAME` 交給服務 `<release>-mqtt-broker.<namespace>.svc`，成為第二個 SAN。
+依 Laysi/trustiot-v2#84 的約定（[deploy/chart/README.md](../../deploy/chart/README.md) 的「伺服器憑證」），憑證另外帶 broker 的 Service 名稱：chart 開啟 broker 時以 `TRUSTIOT__BROKER__SERVICE_NAME` 交給服務 `<release>-mqtt-broker.<namespace>.svc`，成為第二個 SAN。憑證 CronJob 拿到同一個值，簽回的憑證名稱不是這兩個就不寫入。
 
 ### 欄位
 
@@ -443,7 +448,7 @@ trustiot-workstation register --hardware-id <硬體 ID> --csr gateway.csr --ek e
 
 ### 簽發端點
 
-`src/broker.rs`：`POST /internal/certs/v1/broker-certificate`，只在 broker 埠（`broker.listen_addr`，預設 8082，chart 的埠名 `broker-certs`）。API 埠沒有這個路徑，broker 埠也只有這個路徑。端點本身不驗證呼叫者：授權在 mesh，chart 為這個埠建自己的 Service、AuthorizationPolicy 與 NetworkPolicy `<release>-certs-broker`，只放行 broker 的 ServiceAccount，入口 gateway 與其他服務都只到 API 埠（[deploy/chart/README.md](../../deploy/chart/README.md) 的「服務間授權（mesh）」與「MQTT broker」）。拿到這個名稱的憑證就能對每台閘道器冒充 broker，所以它不和 `/internal` 的公開資料共用埠。
+`src/broker.rs`：`POST /internal/certs/v1/broker-certificate`，只在 broker 埠（`broker.listen_addr`，預設 8082，chart 的埠名 `broker-certs`）。API 埠沒有這個路徑，broker 埠也只有這個路徑。端點本身不驗證呼叫者：授權在 mesh，chart 為這個埠建自己的 Service、AuthorizationPolicy 與 NetworkPolicy `<release>-certs-broker`，只放行 broker 的憑證 CronJob 的 ServiceAccount `<release>-mqtt-broker-certificate`，broker 的 pod、入口 gateway 與其他服務都只到 API 埠（[deploy/chart/README.md](../../deploy/chart/README.md) 的「服務間授權（mesh）」與「MQTT broker」）。拿到這個名稱的憑證就能對每台閘道器冒充 broker，所以它不和 `/internal` 的公開資料共用埠。
 
 請求的本文是 DER 的 PKCS #10 CSR，`Content-Type: application/pkcs10`。每個回應帶 `cache-control: no-store`；錯誤的本文是一行純文字，不重複請求的內容：
 
@@ -485,7 +490,7 @@ Laysi/trustiot-v2#535 原本也寫「雲端服務以我們 CA 的用戶端憑證
 | `GET /internal/certs/v1/crl.pem` | 每個憑證還有效的簽發 CA 的目前 CRL，PEM（Mosquitto 的 `crlfile`）。其中一個還沒有 CRL 時 503，取用端保留手上的檔案；沒有任何可用的簽發 CA 時是空檔，broker 因此改用不信任任何閘道器的佔位 CA，拒絕每張閘道器憑證（Mosquitto 載入空的 CRL 檔會停止，所以 broker 不直接用它） |
 | `GET /internal/certs/v1/ca.pem` | 根憑證，接著每個可用的簽發 CA 憑證，PEM。還沒載入 CA 時 503 |
 
-broker 埠（`broker.listen_addr`，預設 8082）只有一個端點，mesh 只放行 MQTT broker 的 pod（見[broker 伺服器憑證](#broker-伺服器憑證)的「簽發端點」）：
+broker 埠（`broker.listen_addr`，預設 8082）只有一個端點，mesh 只放行 MQTT broker 的憑證 CronJob 的 pod（見[broker 伺服器憑證](#broker-伺服器憑證)的「簽發端點」）：
 
 | 端點 | 回應 |
 | --- | --- |
@@ -548,7 +553,7 @@ schema `certs`，DDL 在 `migrations/postgres/`，由 migration Job（登記在 
 | `workstation_request_nonces` | 工作站請求用過的 nonce：憑證序號、nonce、過期時間；過了時間的接受範圍才刪除 | 無 |
 | `trustiot_migrate_applied` | migration Job 套用過的檔案，`certs_app` 只能 `SELECT` | 無 |
 
-這裡不存任何私鑰：簽發 CA 私鑰在 Secret，根私鑰離線，閘道器的私鑰不離開 TPM，工作站的私鑰不離開工作站，broker 的私鑰不離開 broker 的 pod。
+這裡不存任何私鑰：簽發 CA 私鑰在 Secret，根私鑰離線，閘道器的私鑰不離開 TPM，工作站的私鑰不離開工作站，broker 的私鑰只在 broker 的 Secret 與產生它的 CronJob 的記憶體裡。
 
 ## 映像
 
@@ -574,6 +579,7 @@ CARGO_BUILD_JOBS=2 cargo test -p certs
 | `tests/registration.rs` | Laysi/trustiot-v2#79：工作站簽章只接受工作站憑證，閘道器憑證、別的 CA、別的金鑰、別的本文或路徑、超過 300 秒的時間、過期的憑證、缺少、重複或格式錯的標頭都拒絕並說明原因；簽發 CA 簽的、其餘都符合工作站 profile 的憑證，只要 keyUsage 沒有 digitalSignature（或沒有 keyUsage）或是 CA:TRUE，也以 `not_workstation` 拒絕；EK 只接受 RSA 2048/3072/4096 與 P-256、P-384。真的服務：新的硬體 ID 201、憑證 CN 是硬體 ID 且在根之下驗證為用戶端憑證、寫一筆全平台事件；重送 200 同一張憑證、什麼都不寫；完全相同的請求重送回 `replayed`；換公鑰或 EK 409，別台的公鑰或 EK 409，不支援的 EK 422；少了工作站簽章、沒有 token、別的簽發者、租戶管理員、交換來的 token、別的金鑰或本文、以閘道器憑證冒充工作站，都不登錄；兩個相同的登錄同時到達只簽一張；除役的硬體 ID 409，superuser 也刪不掉、清不掉、改不了；`certs_app` 讀不到登錄；撤銷的工作站憑證 403 `revoked`。Laysi/trustiot-v2#610：201 與 200 的 `certificate_chain` 是 `certificate` 再接簽發 CA，簽發 CA 的公鑰驗得過 leaf 的簽章、金鑰 id 等於 `ca_key_id`、根驗得過它；載入兩把簽發 CA 時重送放的是簽出它的第 1 代，不是現在簽章的第 2 代；第 1 代的金鑰與憑證移除後重送仍 200、同一張憑證，鏈只有 leaf，WARN 只帶 `ca_key_id`（容器） |
 | `tests/workstation_tool.rs` | Laysi/trustiot-v2#615：產線工作站工具（`factory/workstation`）對真的服務：前面放一個檢查 session cookie、換成平台管理員內部 token 的 ingress 替身，工具 `enroll` 取得工作站憑證後登錄一台閘道器、重跑、再讓 ingress 在服務提交後丟掉回應（工具重送得到 200）；另一個新的硬體 ID 第一個 201 就被丟掉、重送得到 200。每個硬體 ID 都剛好一筆登錄、一張閘道器憑證、一筆 `certs.gateway_registered` 事件，工具的紀錄是 `registered`、序號等於資料庫的（容器） |
 | `tests/broker.rs` | Laysi/trustiot-v2#557：CSR 要求別的 CN、O、DNS 與 IP 名稱、CA、keyCertSign 與 clientAuth、anyExtendedKeyUsage 時，簽出的仍是 CA 決定的 broker profile（主體、DNS 名稱依設定、EKU 只有 serverAuth）；rustls 以根為信任錨時，憑證對兩個名稱都驗得過，對別的名稱、IP 拒絕，信任別的根時拒絕，同名但別的 CA 簽的憑證也拒絕，當用戶端憑證時以用途拒絕；閘道器憑證不能當伺服器憑證，閘道器 id 不能是 broker 的名稱；簽章驗不過、P-384 或不是 CSR 時拒絕。真的服務在 broker 埠簽出、記為 `broker`、回整條鏈並記 INFO，日誌沒有憑證；錯的 `Content-Type`、PEM、壞的或過大的 CSR、別的曲線都不簽也不記；API 埠沒有這個端點，broker 埠沒有其他路徑。簽發 CA 還沒有第一張 CRL 時回 503、不記錄，有了才簽。Mosquitto（OpenSSL）以簽出的憑證與測試產生的私鑰當伺服器：信任根、連 `mqtt-broker.trustiot.internal` 的閘道器憑證連得上，別的名稱或信任別的 CA 時用戶端拒絕，broker 的憑證當用戶端憑證時 broker 以用途拒絕（容器） |
+| `tests/broker_certificate.rs` | Laysi/trustiot-v2#535 驗收條件 1 與 3：chart 的 CronJob 執行的 `migrate mqtt-broker-certificate`（`converge_at`）對真的服務的 broker 埠與一個只有這個 Secret 的 Kubernetes API 替身：第一次執行把宣告的空 Secret 填入 `tls.crt`（憑證再接簽發 CA）與 `tls.key`、綁定 uid、記下代；Mosquitto 以 chart 的閘道器 listener（`deploy/chart/files/mosquitto/gateway-listener.conf`，MQTT 5、TLS 1.3）提供它，只信任根的 rustls 用戶端對 `mqtt-broker.trustiot.internal` 驗得過並拿到成功的 CONNACK，別的名稱、信任別的 CA、同名但別的 CA 簽的憑證都被用戶端拒絕。輪替一次：效期設成最短的 1 小時，效期過半前的執行不寫入，過半時（換發程式的時鐘；服務以實際時間簽）寫入新的憑證與新的金鑰，broker 收到 SIGHUP 後新連線驗到新的序號，重載前的連線仍回 PINGRESP；之後的執行保留新憑證。服務與 broker 的日誌都沒有私鑰（容器；`-- --nocapture` 印出測試報告引用的證據行） |
 | `tests/workstation.rs` | Laysi/trustiot-v2#534：CSR 要求別的 CN、O、SAN、CA、keyUsage 與 clientAuth、serverAuth、anyExtendedKeyUsage 時，簽出的仍是 CA 決定的工作站 profile（EKU 只有工作站用途），rustls 驗用戶端憑證時接受閘道器憑證、拒絕工作站憑證；簽章驗不過、主體改過或 P-384 的 CSR 拒絕；沒有 token、不是 token、別的金鑰簽的、別的 audience、過期的 token 回 401，租戶管理員、沒有租戶的使用者與代使用者交換來的平台管理員 token 回 403，簽發與撤銷都一樣，而且簽發紀錄不變；壞的 CSR、不認得的欄位與錯的 Content-Type 不簽發；閘道器憑證、不存在或格式錯的序號撤銷回 404，撤銷寫入原因並記 INFO，重複撤銷回 409，下一張排程 CRL 列出它與原因；Mosquitto（OpenSSL）以 `ca.pem` 與 `crl.pem` 驗用戶端憑證時接受閘道器憑證，拒絕撤銷的閘道器憑證與 API 簽出的工作站憑證（容器） |
 
-chart 的部分（Secret、Role、掛載、values 的檢查）在 `deploy/chart/tests/chart.test.ts` 的 “gateway certificate authority”，broker 埠只有 broker 連得到在 “MQTT broker” 的 “the broker alone reaches the certs service's broker-certs port”，init container 對假的 Kubernetes API 的行為在 `tools/migrate/tests/ca_keys.rs`，金鑰檔的格式與規則在 `crates/ca-keys` 的單元測試。
+chart 的部分（Secret、Role、掛載、values 的檢查）在 `deploy/chart/tests/chart.test.ts` 的 “gateway certificate authority”，broker 埠只有 broker 憑證的 CronJob 連得到在 “MQTT broker” 的 “the broker's certificate CronJob alone reaches the certs service's broker-certs port”，init container 對假的 Kubernetes API 的行為在 `tools/migrate/tests/ca_keys.rs`，金鑰檔的格式與規則在 `crates/ca-keys` 的單元測試。

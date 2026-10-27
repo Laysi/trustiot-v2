@@ -19,9 +19,11 @@
 
 閘道器以 443 的 WebSocket 連到 MQTT 轉接服務，再到 Mosquitto（[決策 6](../../docs/architecture/decisions.md)）；雲端服務在叢集內直接連 broker。雙方一律用 MQTT 5：
 
-- 發布到 ACL 不允許的 topic 時，MQTT 5 回 PUBACK reason code 0x87（not authorized），MQTT 3.1.1 則照樣回 PUBACK 並默默丟掉訊息（[可行性測試](../../docs/feasibility/2026-10-09-cloud-poc.md) MQTT broker 段）。閘道器要把 reason code ≥ 0x80 的 PUBACK 當成發送失敗，遙測批次留在緩衝裡、記錄錯誤，不能當成已送出。
+- 發布到 ACL 不允許的 topic 時，MQTT 5 回 PUBACK reason code 0x87（not authorized），MQTT 3.1.1 則照樣回 PUBACK 並默默丟掉訊息（[可行性測試](../../docs/feasibility/2026-10-09-cloud-poc.md) MQTT broker 段）。閘道器要把 reason code ≥ 0x80 的 PUBACK 當成發送失敗，遙測批次留在緩衝裡、記錄錯誤，不能當成已送出；只有 0x00 與 0x10（no matching subscribers）算送達，MQTT 5 不允許出現在 PUBACK 的碼（例如 0x01、0x7F）是協定錯誤，同樣不算送達（Laysi/trustiot-v2#86）。
 - 需要 MQTT 5 的訊息到期時間（message expiry interval），讓過時的控制訊息不會在離線閘道器的 session 裡排隊。
+- 閘道器每次都以 Clean Start、Session Expiry 0 連線（2026-10-21，Laysi/trustiot-v2#86，理由見 [edge/agent](../../edge/agent/README.md)「MQTT 用戶端」）：broker 不替離線的閘道器保留 session，送給離線閘道器的 QoS 1 訊息不會排隊，直接遺失。設定靠 retained 訊息在訂閱時送到；`log-request`、`live-control` 要由雲端在閘道器重新上線（`online`）後再送；訊息到期時間仍限制閘道器連線中、還沒收下的訊息。
 - 雲端服務以 shared subscription（`$share/<group>/...`）分攤訊息到多個副本：`Channel::shared_filter`。
+- broker 要支援 QoS 1 與 retained 訊息：閘道器的 will 與 `status` 是 QoS 1、retained，`down` 頻道的訂閱都要求 QoS 1。SUBACK 只給 QoS 0 時閘道器當成訂閱失敗、斷線並照退避重連；CONNACK 宣告 Maximum QoS 0 或 Retain Available 0 時同樣斷線（Laysi/trustiot-v2#86）。
 
 broker 與每個用戶端接受的 maximum packet size 至少要是 `MIN_MAX_PACKET_BYTES`（1 MiB + 8 KiB）：broker 的設定由 Laysi/trustiot-v2#84 負責；MQTT 用戶端函式庫的預設上限常遠小於此，閘道器與雲端服務都要明確設定並以 1 MiB 的設定訊息測試。
 
@@ -69,7 +71,7 @@ broker 與每個用戶端接受的 maximum packet size 至少要是 `MIN_MAX_PAC
 - `v1` 是格式的主版本（`PROTOCOL_VERSION`）。不相容的變更使用新的 topic 樹，新舊閘道器可以並存，雲端同時服務兩者。
 - `{gateway}` 是閘道器憑證的 CN（`GatewayId`），也是它的 MQTT username 與 client ID。broker 的 ACL 讓閘道器只能發布到自己的 `up/`、只能訂閱自己的 `down/`，所以雲端以 topic 判定閘道器身分，不採信 payload 內容（清單 I1）。
 - `up` 是閘道器到雲端，`down` 是雲端到閘道器。
-- 閘道器逐一訂閱每個 `down` channel（`gateway_subscriptions`），不訂閱 `down/#`，新版雲端新增的 channel 不會送到不認得它的舊 agent。
+- 閘道器逐一訂閱 `down` channel（每個 channel 自己的 topic；全部是 `gateway_subscriptions`），不訂閱 `down/#`，新版雲端新增的 channel 不會送到不認得它的舊 agent。閘道器收下 QoS 1 的訊息就回 PUBACK，所以只訂閱有處理程式的 channel（Laysi/trustiot-v2#86，[edge/agent](../../edge/agent/README.md)「訂閱」）；雲端發布到閘道器沒有訂閱的 channel 時，非 retained 的訊息沒有人收到（broker 可以回 PUBACK 0x10，no matching subscribers）。
 
 ID（閘道器、設備、串流、session、租約、請求 ID 與資料點鍵）都是 1–64 個 ASCII 英數字、`.`、`_`、`-`，以英數字開頭；不可能含有 `/`、`+`、`#`、`$`，放進 topic 不會變成萬用字元或系統 topic。
 
@@ -146,7 +148,7 @@ Mosquitto 以 `use_identity_as_username` 把憑證 CN 當成 username，dynsec �
 2. 同一串流一次只送一批，收到確認才送下一批；確認逾時就原封不動重送同一批。
 3. 雲端以「topic 的閘道器 + 串流 ID」為單位記錄已提交的最高序號。只靠串流 ID 選高水位是錯的：閘道器可以自己取任何串流 ID。
 4. 雲端在整批落盤並寫入批次完成紀錄後才回 `committed`；序號不高於高水位的批次直接回 `duplicate`；永遠不可能接受的批次（解碼失敗、驗證失敗）回 `rejected`，雲端可用 `TelemetryBatch::peek_header` 從壞掉的 payload 取出串流與序號來回應。
-5. 緩衝的最長保存時間是 `telemetry::BUFFER_MAX_AGE_DAYS`（30 天，Laysi/trustiot-v2#92）：一批從形成起超過 30 天還沒收到確認，閘道器就丟棄它並記錄，丟棄的筆數進心跳的 `buffer`。雲端的原始資料保存期限一定比它長（migration Job 拒絕更短的設定），因為串流的高水位存在批次完成紀錄裡、與原始資料一起過期：雲端已提交、但確認遺失的批次，必須在它的完成紀錄過期前重送，否則會被寫入兩次。閘道器以哪個時鐘量測批次的年齡由 Laysi/trustiot-v2#90 決定，條件是時鐘往回調整不會讓批次留得比 30 天久。理由與數字的推導見 [資料保存期限](../../docs/architecture/data-retention.md)。
+5. 緩衝的最長保存時間是 `telemetry::BUFFER_MAX_AGE_DAYS`（30 天，Laysi/trustiot-v2#92）：一批從形成起超過 30 天還沒收到確認，閘道器就丟棄它並記錄，丟棄的筆數進心跳的 `buffer`。雲端的原始資料保存期限一定比它長（至少 33 天，migration Job 拒絕更短的設定），因為串流的高水位存在批次完成紀錄裡、與原始資料一起過期：雲端已提交、但確認遺失的批次，必須在它的完成紀錄過期前重送，否則會被寫入兩次。閘道器以哪個時鐘量測批次的年齡由 Laysi/trustiot-v2#90 決定，條件是時鐘往回調整不會讓批次留得比 30 天久。理由與數字的推導見 [資料保存期限](../../docs/architecture/data-retention.md)。
 
 `down/telemetry-ack` 的 `TelemetryAck`：`v`、`stream`、`seq`、`server_time`（雲端時鐘，閘道器可用來察覺自己的時鐘錯誤）與 `outcome`。`outcome` 是以 `status` 區分的 map：
 
@@ -202,7 +204,7 @@ Mosquitto 以 `use_identity_as_username` 把憑證 CN 當成 username，dynsec �
 - `online`：`session`、`agent_version`、`protocol_rev`（agent 實作的最高修訂版；雲端不送更高 `rev` 的設定給它）。
 - `offline`：`session`、`reason`（`shutdown` 或 `connection_lost`）。
 
-每次連線，閘道器產生新的 `SessionId`，把 LWT 設成這個 session 的 `offline`／`connection_lost`（`Status::last_will`，retain），連上後第一則訊息發布同一個 session 的 `online`；正常關機前自己發布 `offline`／`shutdown`。舊連線的 LWT 可能比新連線的 `online` 晚到，所以雲端忽略 session 不是最新 `online` 的 `offline`；心跳停止超過間隔容許的時間也視為離線。
+每次連線，閘道器產生新的 `SessionId`，把 LWT 設成這個 session 的 `offline`／`connection_lost`（`Status::last_will`，retain），連上後第一則訊息發布同一個 session 的 `online`；正常關機前自己發布 `offline`／`shutdown`。舊連線的 LWT 可能比新連線的 `online` 晚到，所以雲端忽略 session 不是最新 `online` 的 `offline`；心跳停止超過間隔容許的時間也視為離線。Mosquitto 只在收到 DISCONNECT 0x04 或連線沒有 DISCONNECT 就斷掉時發布 LWT，收到 0x00 以外的其他 reason code（例如 0x80、0x82、0x83）也會丟掉它，與 MQTT 5 規格不同（2.1.2 實測，Laysi/trustiot-v2#86）；所以閘道器除了正常關機（`offline`／`shutdown` 之後 DISCONNECT 0x00）之外，一律以 DISCONNECT 0x04 結束連線。
 
 `up/heartbeat` 的 `Heartbeat` 每 `interval_s` 秒送一次（QoS 0，遺失一則無妨）：
 

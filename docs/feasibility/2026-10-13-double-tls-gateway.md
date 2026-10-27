@@ -22,7 +22,7 @@
 | --- | --- | --- | --- |
 | 穩態 CPU 與延遲 | 通過 | Enterprise 頻率：單核 0.44%（ChaCha20）、0.55%（AES-128）；QoS1 往返 p99 在區網上 1.5–2.9 ms；閘道器端送出路徑 p99：ChaCha20 不到 0.3 ms，AES-128 約 1 ms；每秒 5,000 則 1 KiB 訊息時 23–32% 單核 | 兩層都把 ChaCha20-Poly1305 排第一 |
 | 重連成本 | 通過 | 完整握手 p50 11–13 ms（CPU 5–8 ms），resumption 6–8 ms（CPU 2.6–3.6 ms）；TPM 簽章每次加約 70 ms，只發生在完整握手 | 兩層都開 session resumption |
-| 各端協商的套件 | 確認 | Envoy（BoringSSL）、Mosquitto（OpenSSL 3.5）照用戶端的順序選；Cloudflare 依文件也是 | 套件由閘道器決定 |
+| 各端協商的套件 | 確認 | Envoy（BoringSSL）照用戶端的順序選；Cloudflare 依文件也是。Mosquitto（OpenSSL 3.5）依自己的順序選（2026-10-21 更正，見下方） | 外層由閘道器決定；broker 要以 `ciphers_tls1.3` 把 ChaCha20 排第一 |
 | resumption 與撤銷 | 通過 | 發新 CRL 並 SIGHUP 後，被撤銷的閘道器收到 `CertificateRevoked` | 決策 6 的停權步驟不變 |
 
 ## 測試方法
@@ -85,7 +85,7 @@
 
 - **rustls 0.23.45（閘道器）**：預設的套件順序是 AES-256-GCM、AES-128-GCM、ChaCha20，不會因為 CPU 沒有 AES 指令就改選 ChaCha20。兩層都沒設定時，實測協商出 AES-256-GCM；在壓力情境下，比 ChaCha20 多用 59% 的 CPU。
 - **Envoy（地端入口，BoringSSL）**：在有 AES 硬體的主機上，BoringSSL 的 TLS 1.3 預設把三種套件放在同一個「同等偏好」組，由用戶端的順序決定。實測用戶端把 ChaCha20 排第一，就協商出 ChaCha20。未設定 `ecdh_curves` 時選 X25519，不選 X25519MLKEM768。
-- **Mosquitto 2.1.2（OpenSSL 3.5.8）**：照用戶端的順序選，實測得到 ChaCha20。用戶端提供 X25519MLKEM768 時會選它。
+- **Mosquitto 2.1.2（OpenSSL 3.5.8）**：實測得到 ChaCha20，但這次的用戶端只提供 ChaCha20（`--inner-suites chacha`），所以不能證明它照用戶端的順序選。2026-10-21 更正（Laysi/trustiot-v2#86，[測試報告](../test-reports/2026-10-21-86-agent-mqtt-connection.md)）：agent 依序提供 ChaCha20、AES-256-GCM、AES-128-GCM 時，Mosquitto 選 AES-256-GCM；listener 加上 `ciphers_tls1.3 TLS_CHACHA20_POLY1305_SHA256:TLS_AES_256_GCM_SHA384:TLS_AES_128_GCM_SHA256` 後選 ChaCha20。用戶端提供 X25519MLKEM768 時會選它。
 - **Cloudflare（SaaS 外層，依文件，未實測）**：
   - Cloudflare 的文件說，TLS 1.3 的套件順序是 BoringSSL 寫死的。依 BoringSSL 的原始碼，有 AES 硬體時三種套件屬同一偏好組，由用戶端的順序決定。
   - Cloudflare 的部落格說，它依用戶端宣告的偏好選擇，對沒有 AES 硬體的用戶端優先選 ChaCha20。
@@ -209,7 +209,7 @@ QoS1 往返（ms）走的是區網與工作站上的伺服器，不含網際網�
 - **閘道器替身**：
   - 編譯：Rust 1.99.0（repo 的釘選版本），以 cargo-zigbuild 0.23.4 加 Zig 0.16.0 交叉編譯成 `aarch64-unknown-linux-gnu.2.36`。
   - crate：rustls 0.23.45、tokio-rustls 0.26.6、tokio-tungstenite 0.30.0、tokio 1.53.2、ring 0.17.14、aws-lc-rs 1.18.1（aws-lc-sys 0.45.0）。
-- **伺服器端**：工作站（x86\_64 8 核，Fedora 44，podman 5.8.7）。
+- **伺服器端**：x86\_64 Linux 工作站（8 核），以 podman 執行。
   - Mosquitto：`eclipse-mosquitto:2.1.2-alpine`（OpenSSL 3.5.8）。
   - Envoy：`istio/proxyv2:1.30.5`（Envoy 1.38.5，BoringSSL）。
   - 轉接服務與 SaaS 模型的 TLS 終止器：自寫 Rust 程式，rustls 0.23.45 加 aws-lc-rs。

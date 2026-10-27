@@ -538,6 +538,8 @@ impl ClickHouse {
             password: Some(self.admin_password.clone()),
             password_secret: None,
             raw_retention_days: None,
+            aggregate_1m_retention_months: None,
+            aggregate_1h_retention_months: None,
         }
     }
 }

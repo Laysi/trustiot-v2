@@ -94,9 +94,10 @@ Argument: dict "certificates" <list> "key" <values path> "max" <int>.
 
 {{/*
 The port of the Service <release>-certs-broker (templates/certs-broker.yaml), which the MQTT
-broker calls for its server certificate: always 8082, whatever container port broker-certs has,
-so the broker's address http://<release>-certs-broker.<namespace>.svc:8082 never changes. The
-Service forwards to the container port by name; the policies match the container port.
+broker's certificate CronJob calls for the broker's server certificate: always 8082, whatever
+container port broker-certs has, so the address
+http://<release>-certs-broker.<namespace>.svc:8082 never changes. The Service forwards to the
+container port by name; the policies match the container port.
 */}}
 {{- define "trustiot.certs.brokerServicePort" -}}
 8082
@@ -125,7 +126,7 @@ Returns a YAML list; use with fromYamlArray.
 {{- $env = append $env (dict "name" "TRUSTIOT__BROKER__LISTEN_ADDR" "value" (printf "0.0.0.0:%d" (int $ports.broker))) -}}
 {{- end -}}
 {{- if .Values.mqttBroker.enabled -}}
-{{- $env = append $env (dict "name" "TRUSTIOT__BROKER__SERVICE_NAME" "value" (printf "%s.%s.svc" (include "trustiot.componentName" (dict "root" . "name" "mqtt-broker")) .Release.Namespace)) -}}
+{{- $env = append $env (dict "name" "TRUSTIOT__BROKER__SERVICE_NAME" "value" (include "trustiot.mqttBroker.serviceHost" .)) -}}
 {{- end -}}
 {{- toYaml $env -}}
 {{- end -}}
