@@ -7,6 +7,15 @@ rust-version.workspace = true
 publish.workspace = true
 repository.workspace = true
 
+[features]
+# Test code only: `TcpConnection::exempt_for_tests` and `Endpoints::exempt_for_tests`, which let a
+# test reach the fake Modbus endpoint on 127.0.0.1 although the address guard refuses loopback
+# (src/modbus/address.rs, Laysi/trustiot-v2#653). Only dev-dependencies enable it (the one on
+# this crate below, and tools/lab-dataset's for its recorder test), so a build of the agent or of
+# a tool that uses it never has it; `cargo test -p repo-check` fails when a normal or build
+# dependency, another feature or a default enables it.
+test-exempt-addresses = []
+
 [[bin]]
 name = "trustiot-agent"
 path = "src/main.rs"
@@ -20,6 +29,8 @@ path = "src/main.rs"
 bytes.workspace = true
 # The WebSocket's Stream and Sink, adapted to AsyncRead and AsyncWrite for the inner TLS.
 futures-util = { workspace = true, features = ["sink", "std"] }
+# getifaddrs: the gateway's own interface addresses, which the address guard refuses.
+libc.workspace = true
 protocol = { path = "../../crates/protocol" }
 # SHA-256 of what the TPM signs, and the check of the TPM key's test signature (`tpm`). rustls'
 # own provider, so no second crypto library.
@@ -48,6 +59,8 @@ tracing-subscriber = { workspace = true, features = ["fmt", "std"] }
 x509-parser.workspace = true
 
 [dev-dependencies]
+# This crate's own tests, with the feature that lets them reach the fake endpoint on loopback.
+agent = { path = ".", features = ["test-exempt-addresses"] }
 # PEM-encodes tampered root CRLs in the TLS unit tests.
 base64.workspace = true
 # A test CA and certificates made at test time, also for the TPM key in the TPM tests.

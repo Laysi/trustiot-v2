@@ -1,0 +1,39 @@
+# 2026-10-27, merge commit 47959cf5 (main 304de010 merged in), before the lab-dataset change
+$ cargo test --locked -p lab-dataset --test record
+Finished `test` profile [unoptimized + debuginfo] target(s) in 18.93s
+     Running tests/record.rs (<host copy>/target/debug/deps/record-e9289b661634aa0a)
+
+running 1 test
+test a_recording_of_a_fake_converter_loads_into_clickhouse has been running for over 60 seconds
+test a_recording_of_a_fake_converter_loads_into_clickhouse ... FAILED
+
+failures:
+
+---- a_recording_of_a_fake_converter_loads_into_clickhouse stdout ----
+
+thread 'a_recording_of_a_fake_converter_loads_into_clickhouse' (2053676) panicked at crates/testkit/src/clock.rs:104:17:
+timed out after 60s waiting for 5 polls by second 2
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    a_recording_of_a_fake_converter_loads_into_clickhouse
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 60.00s
+
+error: test failed, to rerun pass `-p lab-dataset --test record`
+exit 101 at 00:38:09 (build host)
+
+# the same tree with the lab-dataset change (commit d778f9b3)
+$ cargo test --locked -p lab-dataset --test record
+$ cargo clippy --locked -p lab-dataset -p agent --all-targets -- -D warnings
+Finished `test` profile [unoptimized + debuginfo] target(s) in 22.04s
+     Running tests/record.rs (<host copy>/target/debug/deps/record-02d54d9d84a2e3a4)
+
+running 1 test
+test a_recording_of_a_fake_converter_loads_into_clickhouse ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.22s
+
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 10.49s
+exit 0 at 21:44:13 (build host)
