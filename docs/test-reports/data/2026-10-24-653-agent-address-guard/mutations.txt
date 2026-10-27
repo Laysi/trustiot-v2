@@ -1,0 +1,45 @@
+Mutation 1: the guard allows every address
+edge/agent/src/modbus/address.rs, AddressGuard::connect:
+  self.exempts(address.ip()) || (refusal(address.ip(), &interfaces).is_none() || true)
+
+$ cargo test --locked -p agent --lib modbus::tcp::tests 2>&1 | grep -E "^test |test result" ; cargo test --locked -p agent --test modbus_address_guard 2>&1 | grep -E "^test |test result|panicked"
+test modbus::tcp::tests::the_framing_follows_the_transport ... ok
+test modbus::tcp::tests::refused_hosts_are_never_dialed ... FAILED
+test modbus::tcp::tests::a_name_is_resolved_once_and_its_checked_address_dialed ... FAILED
+test modbus::tcp::tests::link_local_and_private_addresses_are_dialed ... ok
+test modbus::tcp::tests::only_the_allowed_addresses_of_a_name_are_dialed ... FAILED
+test modbus::tcp::tests::an_idle_connection_the_device_closed_is_not_reused ... ok
+test modbus::tcp::tests::rtu_frames_between_requests_are_dropped_and_a_cut_one_too ... ok
+test modbus::tcp::tests::what_arrives_between_requests_is_dropped ... ok
+test modbus::tcp::tests::connections_use_tcp_keepalive ... ok
+test modbus::tcp::tests::a_read_cut_off_while_sending_does_not_reuse_the_connection ... ok
+test modbus::tcp::tests::refused_hosts_reach_nothing has been running for over 60 seconds
+test modbus::tcp::tests::refused_hosts_reach_nothing ... FAILED
+test result: FAILED. 7 passed; 4 failed; 0 ignored; 0 measured; 63 filtered out; finished in 60.00s
+test hosts_on_the_gateway_itself_reach_nothing ... FAILED
+thread 'hosts_on_the_gateway_itself_reach_nothing' (1234918) panicked at edge/agent/tests/modbus_address_guard.rs:92:9:
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+exit 101 at 14:16:04 (build host)
+
+Mutation 2: the checked addresses are thrown away and the name is resolved again for dialing
+edge/agent/src/modbus/address.rs, AddressGuard::connect:
+  let _ = allowed;
+  for address in self.resolve(host, port).await.unwrap_or_default() {
+
+$ cargo test --locked -p agent --lib modbus::tcp::tests 2>&1 | grep -E "^test |test result"
+test modbus::tcp::tests::link_local_and_private_addresses_are_dialed ... FAILED
+test modbus::tcp::tests::the_framing_follows_the_transport ... ok
+test modbus::tcp::tests::rtu_frames_between_requests_are_dropped_and_a_cut_one_too ... ok
+test modbus::tcp::tests::only_the_allowed_addresses_of_a_name_are_dialed ... FAILED
+test modbus::tcp::tests::connections_use_tcp_keepalive ... ok
+test modbus::tcp::tests::what_arrives_between_requests_is_dropped ... ok
+test modbus::tcp::tests::an_idle_connection_the_device_closed_is_not_reused ... ok
+test modbus::tcp::tests::a_read_cut_off_while_sending_does_not_reuse_the_connection ... ok
+test modbus::tcp::tests::refused_hosts_are_never_dialed ... ok
+test modbus::tcp::tests::refused_hosts_reach_nothing ... ok
+test modbus::tcp::tests::a_name_is_resolved_once_and_its_checked_address_dialed has been running for over 60 seconds
+test modbus::tcp::tests::a_name_is_resolved_once_and_its_checked_address_dialed ... FAILED
+test result: FAILED. 8 passed; 3 failed; 0 ignored; 0 measured; 63 filtered out; finished in 60.00s
+exit 101 at 14:21:18 (build host)
+
+Both mutations were reverted; checks.txt is the run on the unmutated code.

@@ -39,6 +39,11 @@ toml.workspace = true
 uuid = { workspace = true, features = ["serde", "v8"] }
 
 [dev-dependencies]
+# The recorder's test reaches testkit's fake converter on 127.0.0.1, which the agent's address
+# guard refuses: `test-exempt-addresses` adds `Endpoints::exempt_for_tests`. Only this
+# dev-dependency enables it, so `cargo build -p lab-dataset` never has it (repo-check refuses a
+# normal dependency that does).
+agent = { path = "../../edge/agent", features = ["test-exempt-addresses"] }
 # The reconcile and energy statements on the aggregate tables (services/ingest/src/rollup.rs),
 # run on the loaded fixture by tests/rollups.rs.
 ingest = { path = "../../services/ingest" }

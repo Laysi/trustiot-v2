@@ -210,6 +210,11 @@ impl GatewayBinder {
             return Ok(Outcome::AlreadyBound(binding));
         }
         let binding_id = GatewayBindingId::generate();
+        // This INSERT must stay the transaction's first write: the transaction gets its ID here,
+        // after `ON CONFLICT` has waited for a concurrent binding of the gateway, and the certs
+        // service orders a gateway's bindings by the ID of the transaction that wrote their event
+        // (`services/certs/README.md`, "目前的綁定"). An earlier write would take the ID before
+        // the wait, so a later binding could sort before the one it waited for.
         let inserted = sqlx::query(INSERT_BINDING)
             .bind(tenant.to_string())
             .bind(binding_id.to_string())

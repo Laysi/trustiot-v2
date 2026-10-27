@@ -188,17 +188,16 @@ pub const PRODUCT: Registry = Registry {
         // `certs.gateway_registered` puts the gateway in the device pool. Writes
         // `assets.device_model_*` (Laysi/trustiot-v2#99), `assets.gateway_bound`
         // (Laysi/trustiot-v2#101) and `assets.device_*` (Laysi/trustiot-v2#100) with its service
-        // role. A producer needs a reader for the outbox
-        // policy, and the gateway configuration that will consume these events
-        // (Laysi/trustiot-v2#93) does not exist yet, so assets reads its own events for now: no
-        // subscription does. When the real consumer is listed here, drop "assets" and the Job
-        // revokes the read (it syncs the readers on every run).
+        // role; identity's event log and the certs service (Laysi/trustiot-v2#632,
+        // `assets.gateway_bound`) read them. Until Laysi/trustiot-v2#632 assets also read its own
+        // events, as the outbox policy's reader until a real consumer was listed; the Job revokes
+        // that read on its next run (it syncs the readers on every run).
         Service {
             name: assets_schema::SCHEMA.service,
             platform_role: true,
             outbox: Outbox {
                 producer: assets_schema::SCHEMA.outbox_producer,
-                consumes: &["identity", "certs", "assets"],
+                consumes: &["identity", "certs"],
             },
             migrations: assets_schema::SCHEMA.migrations,
         },
@@ -218,23 +217,30 @@ pub const PRODUCT: Registry = Registry {
         // `certs.gateway_registered` (a gateway belongs to no tenant at the factory), which only
         // a producer's platform role may write, so the chart binds a password to
         // `certs_platform` as well ("trustiot.migrate.platformLogins" in
-        // deploy/chart/templates/_migrate.tpl). identity's event log reads these events.
+        // deploy/chart/templates/_migrate.tpl). identity's event log and assets' device pool read
+        // these events. Reads assets' events as the same platform role (Laysi/trustiot-v2#632):
+        // every `assets.gateway_bound` gives the service a gateway's tenant, for the renewal and
+        // the broker's permissions.
         Service {
             name: certs_schema::SCHEMA.service,
             platform_role: true,
             outbox: Outbox {
                 producer: certs_schema::SCHEMA.outbox_producer,
-                consumes: &[],
+                consumes: &["assets"],
             },
             migrations: certs_schema::SCHEMA.migrations,
         },
         // The AI assistant's conversations and their append-only history
-        // (Laysi/trustiot-v2#553): tenant data under row-level security, no events, and nothing
-        // read across tenants, so no platform role. The chart lists `postgres` for the assistant
-        // (Laysi/trustiot-v2#592), so the Job lets its `assistant_app` log in like every client's.
+        // (Laysi/trustiot-v2#553): tenant data under row-level security, no events. The chart
+        // lists `postgres` for the assistant (Laysi/trustiot-v2#592), so the Job lets its
+        // `assistant_app` log in like every client's. Its platform role `assistant_platform`
+        // (Laysi/trustiot-v2#644) only purges conversations deleted more than 30 days ago (its
+        // policies in 0002_conversation_threads.sql); no code connects as it until the purge job
+        // (Laysi/trustiot-v2#645), so the chart binds no Secret to it yet
+        // (`UNBOUND_PLATFORM_ROLES` in tests/registry.rs).
         Service {
             name: assistant_schema::SCHEMA.service,
-            platform_role: false,
+            platform_role: true,
             outbox: Outbox {
                 producer: assistant_schema::SCHEMA.outbox_producer,
                 consumes: &[],

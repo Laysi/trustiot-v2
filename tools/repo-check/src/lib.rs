@@ -382,6 +382,111 @@ pub fn non_dev_uses(metadata_json: &str, dev_only: &[&str]) -> Result<Vec<String
     Ok(uses)
 }
 
+/// Features that only tests may enable, as `(crate, feature)`. Each one switches a safety check
+/// off for test code, such as the agent's address guard, which refuses loopback where the fake
+/// Modbus endpoint listens (Laysi/trustiot-v2#653), so a build that ships must never have one.
+pub const TEST_ONLY_FEATURES: &[(&str, &str)] = &[("agent", "test-exempt-addresses")];
+
+/// Every way a build could enable a feature in `test_only` outside tests, as one line each, from
+/// `cargo metadata --no-deps --format-version 1` output: a normal or build dependency that asks
+/// for it, and a feature of any package that turns it on (`<dependency>/<feature>` or
+/// `<dependency>?/<feature>`, or another feature of the crate itself, `default` included).
+/// A dev-dependency that asks for it is fine: only tests build with dev-dependencies.
+pub fn test_only_feature_uses(
+    metadata_json: &str,
+    test_only: &[(&str, &str)],
+) -> Result<Vec<String>, CheckError> {
+    const FILE: &str = "cargo metadata output";
+    let metadata: serde_json::Value =
+        serde_json::from_str(metadata_json).map_err(|error| CheckError::Parse {
+            file: FILE.to_owned(),
+            message: error.to_string(),
+        })?;
+    let missing = |key| CheckError::MissingKey {
+        file: FILE.to_owned(),
+        key,
+    };
+    let packages = metadata
+        .get("packages")
+        .and_then(serde_json::Value::as_array)
+        .ok_or_else(|| missing("packages"))?;
+    let mut uses = Vec::new();
+    for package in packages {
+        let package_name = package
+            .get("name")
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| missing("packages.name"))?;
+        let dependencies = package
+            .get("dependencies")
+            .and_then(serde_json::Value::as_array)
+            .ok_or_else(|| missing("packages.dependencies"))?;
+        // The name a feature string uses for each dependency (its rename, if any), and the crate.
+        let mut dependency_keys = Vec::new();
+        for dependency in dependencies {
+            let name = dependency
+                .get("name")
+                .and_then(serde_json::Value::as_str)
+                .ok_or_else(|| missing("packages.dependencies.name"))?;
+            let key = dependency
+                .get("rename")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or(name);
+            dependency_keys.push((key, name));
+            let kind = dependency.get("kind").and_then(serde_json::Value::as_str);
+            if kind == Some("dev") {
+                continue;
+            }
+            let features = dependency
+                .get("features")
+                .and_then(serde_json::Value::as_array)
+                .ok_or_else(|| missing("packages.dependencies.features"))?;
+            for (krate, feature) in test_only {
+                if name == *krate
+                    && features
+                        .iter()
+                        .any(|enabled| enabled.as_str() == Some(*feature))
+                {
+                    uses.push(format!(
+                        "{package_name} enables {krate}/{feature} through a {} dependency",
+                        kind.unwrap_or("normal")
+                    ));
+                }
+            }
+        }
+        let features = package
+            .get("features")
+            .and_then(serde_json::Value::as_object)
+            .ok_or_else(|| missing("packages.features"))?;
+        for (feature_name, enables) in features {
+            let enables = enables
+                .as_array()
+                .ok_or_else(|| missing("packages.features"))?;
+            for enabled in enables.iter().filter_map(serde_json::Value::as_str) {
+                for (krate, feature) in test_only {
+                    let own = package_name == *krate && enabled == *feature;
+                    let through_dependency =
+                        enabled
+                            .split_once('/')
+                            .is_some_and(|(dependency, enabled_feature)| {
+                                let key = dependency.strip_suffix('?').unwrap_or(dependency);
+                                enabled_feature == *feature
+                                    && dependency_keys
+                                        .iter()
+                                        .any(|(name, target)| *name == key && target == krate)
+                            });
+                    if own || through_dependency {
+                        uses.push(format!(
+                            "{package_name} feature {feature_name} enables {krate}/{feature}"
+                        ));
+                    }
+                }
+            }
+        }
+    }
+    uses.sort();
+    Ok(uses)
+}
+
 /// Directories the `AGENTS.md` search skips: build output, installed dependencies, and hidden
 /// directories such as `.git` and the agent worktrees under `.claude`.
 fn is_skipped_dir(name: &OsStr) -> bool {
@@ -800,6 +905,73 @@ mod tests {
             ),
             Err(CheckError::MissingKey {
                 key: "packages",
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn test_only_features_are_enabled_only_by_dev_dependencies() {
+        let metadata = r#"{"packages": [
+            {"name": "agent", "features": {"test-exempt-addresses": [], "fast": []},
+             "dependencies": [
+                {"name": "agent", "kind": "dev", "features": ["test-exempt-addresses"]},
+                {"name": "libc", "kind": null, "features": []}
+            ]},
+            {"name": "gateway", "features": {}, "dependencies": [
+                {"name": "agent", "kind": null, "features": ["fast"]}
+            ]},
+            {"name": "probe", "features": {}, "dependencies": [
+                {"name": "agent", "kind": "dev", "features": ["test-exempt-addresses"]}
+            ]}
+        ]}"#;
+        assert_eq!(
+            test_only_feature_uses(metadata, TEST_ONLY_FEATURES),
+            Ok(vec![])
+        );
+
+        let metadata = r#"{"packages": [
+            {"name": "agent", "features": {
+                "test-exempt-addresses": [],
+                "default": ["test-exempt-addresses"],
+                "lab": ["fast", "test-exempt-addresses"]
+             }, "dependencies": []},
+            {"name": "gateway", "features": {}, "dependencies": [
+                {"name": "agent", "kind": null, "features": ["test-exempt-addresses"]}
+            ]},
+            {"name": "build-tool", "features": {}, "dependencies": [
+                {"name": "agent", "kind": "build", "features": ["test-exempt-addresses"]}
+            ]},
+            {"name": "renamed", "features": {
+                "on": ["edge-agent/test-exempt-addresses"],
+                "maybe": ["edge-agent?/test-exempt-addresses"],
+                "unrelated": ["other/test-exempt-addresses"]
+             }, "dependencies": [
+                {"name": "agent", "rename": "edge-agent", "kind": null, "optional": true,
+                 "features": []},
+                {"name": "other", "kind": null, "features": []}
+            ]}
+        ]}"#;
+        assert_eq!(
+            test_only_feature_uses(metadata, TEST_ONLY_FEATURES),
+            Ok(vec![
+                "agent feature default enables agent/test-exempt-addresses".to_owned(),
+                "agent feature lab enables agent/test-exempt-addresses".to_owned(),
+                "build-tool enables agent/test-exempt-addresses through a build dependency"
+                    .to_owned(),
+                "gateway enables agent/test-exempt-addresses through a normal dependency"
+                    .to_owned(),
+                "renamed feature maybe enables agent/test-exempt-addresses".to_owned(),
+                "renamed feature on enables agent/test-exempt-addresses".to_owned(),
+            ])
+        );
+        assert!(matches!(
+            test_only_feature_uses(
+                r#"{"packages": [{"name": "a", "dependencies": []}]}"#,
+                TEST_ONLY_FEATURES
+            ),
+            Err(CheckError::MissingKey {
+                key: "packages.features",
                 ..
             })
         ));

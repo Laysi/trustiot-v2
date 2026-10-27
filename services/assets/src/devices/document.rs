@@ -412,8 +412,9 @@ pub fn gateway_device(id: GatewayDeviceId, model: ModelName, settings: &Settings
 /// This is input validation, not a security boundary: the cloud cannot resolve a name the way
 /// the gateway will on the site's network, and any other DNS name may resolve to a loopback
 /// address there, or start to after the check. Keeping the poller off the gateway's own
-/// services is the gateway's to enforce when it resolves and connects (edge/agent's
-/// `modbus::tcp::connect`), which this check does not replace.
+/// services is the gateway's to enforce when it resolves and connects: edge/agent's address
+/// guard (`modbus/address.rs`, Laysi/trustiot-v2#653) connects only to resolved addresses it
+/// checked. This check does not replace it.
 #[must_use]
 pub fn parse_host(text: &str) -> Option<Host> {
     let host = Host::new(text).ok()?;

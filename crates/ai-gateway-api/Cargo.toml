@@ -1,0 +1,21 @@
+[package]
+name = "ai-gateway-api"
+description = "Wire types of the AI gateway's admin API (Laysi/trustiot-v2#606): the model roles, the change request, the actor header and the error codes, shared by the gateway and the identity service that calls it."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+repository.workspace = true
+
+# Never depend on crates/contract (or anything that pulls it in): the AI gateway uses this crate
+# and stays free of product contracts so it can be split out (decision 28). Only serde types and
+# constants here. tests/no_contract.rs checks it.
+[dependencies]
+serde = { workspace = true, features = ["derive"] }
+
+[dev-dependencies]
+# The JSON these types read and write, spelled out in the tests.
+serde_json.workspace = true
+
+[lints]
+workspace = true
