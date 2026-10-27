@@ -10,6 +10,13 @@
 #[path = "../../../ingest/tests/common/mod.rs"]
 pub mod clickhouse;
 
+/// The queryable period's readings and routes, shared by `queryable_period.rs` and
+/// `sql_api.rs`.
+pub mod period;
+
+/// The PoC's attack types, shared by `tenant_accounts.rs` and `sql_api.rs`.
+pub mod poc;
+
 use std::io::{BufRead, BufReader, Read};
 use std::net::SocketAddr;
 use std::process::{Child, Command, Stdio};
@@ -66,7 +73,7 @@ ON trustiot.telemetry AS PERMISSIVE FOR SELECT USING 1 TO trustiot_test_referenc
 const INSERT_READINGS: &str = "INSERT INTO trustiot.telemetry (tenant_id, gateway_id, stream_id,
   batch_seq, device_id, point, ts, received_at, value_type, value_float, value_int, value_bool,
   value_string)
-SELECT {tenant:UUID}, generateUUIDv4(), generateUUIDv4(), number, {device:UUID}, {point:String},
+SELECT {tenant:UUID}, 'test-gateway', 'stream-1', number, {device:UUID}, {point:String},
   fromUnixTimestamp64Milli({start:Int64} + toInt64(number) * {step:Int64}), now64(3),
   {type:String},
   if({type:String} = 'float', round(sin(number) * 100, 3), 0),
@@ -386,6 +393,26 @@ impl Service {
     pub async fn get(&self, path: &str, token: Option<&str>) -> (u16, String) {
         let mut request = reqwest::Client::new()
             .get(format!("{}{path}", self.base_url))
+            // Above the 45 s the service waits for ClickHouse.
+            .timeout(Duration::from_secs(90));
+        if let Some(token) = token {
+            request = request.header("x-internal-identity", token);
+        }
+        let response = request
+            .send()
+            .await
+            .expect("call the telemetry-query service");
+        let status = response.status().as_u16();
+        (status, response.text().await.expect("read the body"))
+    }
+
+    /// `POST path` with the JSON `body` and an `x-internal-identity` token (none: without the
+    /// header); the status and the body.
+    pub async fn post(&self, path: &str, token: Option<&str>, body: &str) -> (u16, String) {
+        let mut request = reqwest::Client::new()
+            .post(format!("{}{path}", self.base_url))
+            .header("content-type", "application/json")
+            .body(body.to_owned())
             // Above the 45 s the service waits for ClickHouse.
             .timeout(Duration::from_secs(90));
         if let Some(token) = token {

@@ -5,10 +5,11 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use repo_check::{
-    DEV_ONLY_CRATES, PROTOTOOLS, RUNTIME_SOURCE_GLOB, RUST_TOOLCHAIN, WORKSPACE_MANIFEST,
-    Workspace, check_member_manifest, check_rust_pins, check_rust_version, find_agents_files,
-    find_container_removal_sources, find_container_removals_without_volumes, find_runtime_sources,
-    find_schema_changes, non_dev_uses, parse_metadata, prototools_pin,
+    DEV_ONLY_CRATES, PROTOTOOLS, RUNTIME_SOURCE_GLOB, RUST_TOOLCHAIN, TEST_ONLY_FEATURES,
+    WORKSPACE_MANIFEST, Workspace, check_member_manifest, check_rust_pins, check_rust_version,
+    find_agents_files, find_container_removal_sources, find_container_removals_without_volumes,
+    find_runtime_sources, find_schema_changes, non_dev_uses, parse_metadata, prototools_pin,
+    test_only_feature_uses,
 };
 
 /// `cargo metadata --no-deps --format-version 1` of this workspace.
@@ -68,6 +69,18 @@ fn dev_only_crates_are_only_dev_dependencies() {
     assert!(
         uses.is_empty(),
         "move these to [dev-dependencies]:\n{}",
+        uses.join("\n")
+    );
+}
+
+/// Features that switch a safety check off for tests never reach a build that ships.
+#[test]
+fn test_only_features_are_only_enabled_by_dev_dependencies() {
+    let uses = test_only_feature_uses(&metadata(), TEST_ONLY_FEATURES)
+        .unwrap_or_else(|error| panic!("{error}"));
+    assert!(
+        uses.is_empty(),
+        "only a [dev-dependencies] entry may enable these features:\n{}",
         uses.join("\n")
     );
 }

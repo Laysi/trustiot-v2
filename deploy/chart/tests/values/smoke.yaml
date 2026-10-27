@@ -70,7 +70,9 @@ services:
       runAsGroup: 65532
 
 # The MQTT broker (Laysi/trustiot-v2#84) runs only here, never in a deployment shape or under
-# deploy/flux. Its server certificate Secret is not part of the chart: the nightly issues one from a
-# CA it creates for the run (scripts/nightly/smoke.ts) before it installs the chart.
+# deploy/flux. Its server certificate comes from the chart's CronJob
+# <release>-mqtt-broker-certificate (Laysi/trustiot-v2#535) once the certs service can sign, that
+# is after the run's CA ceremony (scripts/nightly/certs.ts); scripts/nightly/broker-certificate.ts
+# runs it once and checks the result.
 mqttBroker:
   enabled: true

@@ -534,6 +534,8 @@ describe.skipIf(!ENABLED)("the dev environment with podman", () => {
           "certs_platform",
           "assistant_app",
           "ai_gateway_app",
+          "ingest_app",
+          "ingest_platform",
         ]);
         for (const login of logins) {
           expect(firstState.credentials.services[login.stateKey].user).toBe(login.role);

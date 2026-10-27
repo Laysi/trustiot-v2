@@ -50,4 +50,22 @@ pub const FILES: &[Migration] = &[
             "../../../services/ingest/migrations/clickhouse/0009_telemetry_query_grantees.sql"
         ),
     },
+    Migration {
+        name: "0010_telemetry_rollups.sql",
+        sql: include_str!(
+            "../../../services/ingest/migrations/clickhouse/0010_telemetry_rollups.sql"
+        ),
+    },
+    Migration {
+        name: "0011_queryable_period.sql",
+        sql: include_str!(
+            "../../../services/ingest/migrations/clickhouse/0011_queryable_period.sql"
+        ),
+    },
+    Migration {
+        name: "0012_gateway_stream_ids.sql",
+        sql: include_str!(
+            "../../../services/ingest/migrations/clickhouse/0012_gateway_stream_ids.sql"
+        ),
+    },
 ];

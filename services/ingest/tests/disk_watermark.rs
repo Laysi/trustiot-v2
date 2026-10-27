@@ -169,6 +169,7 @@ async fn the_disk_watermark_alert_fires_past_each_threshold() {
     for sql in [
         "SELECT count() FROM trustiot.telemetry",
         "SELECT count() FROM trustiot.batch_commits",
+        "SELECT count() FROM trustiot.stream_commits",
         "SELECT count() FROM trustiot.tenant_telemetry",
         "SELECT count() FROM trustiot_logs.otel_logs",
         "INSERT INTO trustiot_logs.otel_logs (Body) VALUES ('injected')",

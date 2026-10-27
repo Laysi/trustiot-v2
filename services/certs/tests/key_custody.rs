@@ -108,6 +108,14 @@ const ALLOWED: &[(&str, &str, usize, &str)] = &[
         "the MQTT broker's trust sidecar reads the broker's own server key (no CA key) from the \
          Secret it mounts, only to check that it belongs to the certificate before a reload",
     ),
+    (
+        "tools/migrate/src/mqtt_certificate.rs",
+        "serialized_der",
+        1,
+        "the broker certificate CronJob writes the broker's new server key (no CA key), generated \
+         in its memory, as tls.key into the Secret only the broker mounts, in a buffer wiped on \
+         drop (Laysi/trustiot-v2#535)",
+    ),
 ];
 
 /// The directories scanned: every non-test Rust source that handles the CA keys.

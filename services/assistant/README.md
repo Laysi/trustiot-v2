@@ -13,14 +13,18 @@ AI 助理（決策 31）的主 agent 迴圈：使用者對自己租戶的資料�
 | `src/model/anthropic.rs` | 經 AI 閘道的 Anthropic Messages：請求的快取排列、回應解析、錯誤對應 |
 | `src/history.rs` | 對話：固定的前段（`Preamble`）與只往後加的歷史 |
 | `src/tools.rs` | `Tool` trait、`ToolRegistry`（上限、並行、逾時、結果大小）、`ToolContext` 與 `Delegation` |
-| `src/tools/telemetry.rs` | 工具 `telemetry_series`、`telemetry_latest`（telemetry-query 的歷史 API） |
+| `src/tools/telemetry.rs` | 工具 `telemetry_latest`（telemetry-query 的歷史 API） |
+| `src/tools/semantic.rs` | 工具 `telemetry_statistics`、`telemetry_usage`（telemetry-query 的語意查詢 API，Laysi/trustiot-v2#142） |
 | `src/tools/device_models.rs` | 工具 `device_models`（assets 的設備型號列表） |
-| `src/callee.rs` | 工具以使用者身分呼叫其他服務的 HTTP client：每次呼叫換 token、錯誤只看狀態碼 |
+| `src/tools/telemetry_sql.rs` | 工具 `telemetry_sql`（telemetry-query 的內部 SQL 入口），拒絕類別對應的固定說明 |
+| `src/callee.rs` | 工具以使用者身分呼叫其他服務的 HTTP client（GET 與 JSON 本文的 POST）：每次呼叫換 token、錯誤只看狀態碼（`telemetry_sql` 的 422 例外，嚴格解析成封閉的拒絕型別） |
 | `src/delegation.rs` | 一次提問的 run 委派：`QuestionRuns::start`（聊天 API 的入口）、`QuestionRun`（截止時間、撤銷） |
 | `src/budget.rs` | 每個問題的 token 預算 |
 | `src/prompt.rs` | 平台 system prompt（有版本）與對話中的固定指示 |
 | `src/config.rs` | 設定與啟動檢查 |
-| `src/store.rs` | 對話與歷史的 Postgres 儲存：只往後加、原樣保存、依租戶隔離 |
+| `src/store.rs` | 對話與歷史的 Postgres 儲存：只往後加、原樣保存、依租戶隔離，捨棄最後一輪；錯誤型別 `StoreError` |
+| `src/store/threads.rs` | 對話串：清單、標題、封存、軟刪除、已刪除清單、還原、30 天後的清除 |
+| `src/store/runs.rs` | 提問紀錄：開始（一個對話同時只有一個進行中）、結束、要求停止、查詢 |
 | `src/schema.rs` | 本版本預期的 migration 檔（`migrations/postgres/`），`tools/migrate` 也編進它 |
 
 ## 一次問答怎麼跑
@@ -44,23 +48,28 @@ AI 助理（決策 31）的主 agent 迴圈：使用者對自己租戶的資料�
 
 ## 工具
 
-工具在每次呼叫其他服務前，以這次提問的委派換一張受眾是該服務的 token（`Delegation::token_for`），帶在 `x-internal-identity`，呼叫的是 web 前端經入口 gateway 呼叫的同一組 API（`/api/...`）。被呼叫端照一般請求檢查 token 的受眾、使用者的租戶與角色，所以工具讀得到的正是使用者自己讀得到的（決策 27、29）。
+工具在每次呼叫其他服務前，以這次提問的委派換一張受眾是該服務的 token（`Delegation::token_for`），帶在 `x-internal-identity`，呼叫的是 web 前端經入口 gateway 呼叫的同一組 API（`/api/...`）；`telemetry_sql` 是例外，呼叫只給 AI 用的內部入口 `POST /internal/telemetry/v1/sql`（入口 gateway 不轉送 `/internal`，瀏覽器送不了 SQL）。被呼叫端照一般請求檢查 token 的受眾、使用者的租戶與角色，所以工具讀得到的正是使用者自己讀得到的（決策 27、29）。
 
 | 工具 | 呼叫 | 輸入 | 回給模型 |
 | --- | --- | --- | --- |
-| `telemetry_series` | telemetry-query `GET /api/telemetry/v1/devices/{device_id}/series` | `device_id`、`point`、`from`、`to`（RFC 3339）、`tz`（IANA），選填 `interval`（`raw`、`1m` … `1d`） | 實際查詢的範圍與間隔、`truncated`、`earliest`，以及每個有讀數的區間一列 `[起點, 筆數, 最小, 最大, 平均, 最後讀數]`；最多 500 列 |
 | `telemetry_latest` | telemetry-query `GET /api/telemetry/v1/devices/{device_id}/latest` | `device_id`，選填 `points`（最多 100 個資料點） | 每個資料點一列 `[資料點, 時間, 值]`，依資料點排序，與總數 `total`；最多 200 列 |
+| `telemetry_statistics` | telemetry-query `POST /api/telemetry/v1/statistics` | API 的請求本文：`series`（1 到 20 個 `{device_id, point}`）、`tz`（IANA），`period`（例如 `this_month`、`last_7_days`）或 `from` 加 `to`，選填 `interval`（`1m` … `1mo`、`total`，預設 `total`） | 實際查詢的範圍（`range`），每個資料點的筆數、最小與最大（含所在分鐘或小時的起點）、平均、第一與最後讀數；有 `interval` 時另有每個有讀數的區間一列 `[起點, 筆數, 最小, 最大, 平均, 最後讀數]` 與平均最高、最低的區間；`notes` 說明沒有資料（資料不足）與被截到可查期間；最多 500 列，超過時只留各資料點的數字 |
+| `telemetry_usage` | telemetry-query `POST /api/telemetry/v1/usage` | 同 `telemetry_statistics` | 每個資料點的 `status`（`ok`、`no_data`、`not_numeric`、`not_cumulative`），`ok` 的有 `total`、讀數、重置、斷訊、可疑跳增與累計檢查；有 `interval` 時另有每個有讀數的區間一列 `[起點, 用量, 讀數, 重置, 斷訊後, 可疑跳增]` 與用量最高、最低的區間；`notes` 是每種狀況給模型的固定說明（改用 `telemetry_statistics`、資料不足、無法確認是累計值、總量可能含錶的誤讀）；沒有任何資料點算得出用量時是錯誤結果；最多 500 列 |
 | `device_models` | assets `GET /api/assets/v1/device-models` | 選填 `name_contains` | 每個型號一列 `[型號 ID, 名稱, 版本, 資料點數, 更新時間]`，依名稱排序，與總數 `total`；最多 200 列 |
+| `telemetry_sql` | telemetry-query `POST /internal/telemetry/v1/sql`（[services/telemetry-query](../telemetry-query/README.md)「AI 的唯讀 SQL」） | `sql`（一個 `SELECT`，最多 16 KiB）；列數上限固定送 200，模型改不了 | `columns`（名稱與 ClickHouse 型別）、`rows`、`row_count`、各 view 的 `queryable_from` 與 `queried_at`；服務印回的 SQL 不回給模型。超過 200 列時服務整個拒絕、不截斷 |
 
 - **租戶與使用者只來自 `ToolContext.principal` 與 token**：輸入的 schema 沒有租戶或使用者欄位（`additionalProperties: false`），多出任何欄位（例如 `tenant_id`）時工具不呼叫、回錯誤說明可用的欄位；被呼叫端收不到租戶參數。
-- **呼叫前先檢查**：`device_id` 要是 UUID，時間要是 RFC 3339、`from` 早於 `to`，範圍要碰得到可查期間（原始讀數 7 天、彙總 3 個月，與 telemetry-query 相同，測試比對兩邊的常數）。沒給 `interval` 時，工具選不超過 500 個區間的最細間隔（服務自己的上限是 1,500，模型讀不了那麼多）；指定的間隔超過 500 個區間、或原始讀數超過 500 筆時，回錯誤請模型改用較粗的間隔或較短的範圍。
+- **呼叫前先檢查**：`device_id` 要是 UUID，資料點 key 要符合服務的規則，時間要是 RFC 3339。語意工具另檢查：1 到 20 個不重複的資料點、`period` 與 `from`/`to` 只給一種、`period` 的寫法、`from` 至少早於 `to` 一分鐘、列數（資料點數乘區間數，以名目長度估計）不超過服務的 10,000 列、範圍要碰得到可查期間（與 telemetry-query 以帳號時間窗算的 1 分鐘表起點相同：3 個月的時間窗在 5 分鐘後的起點，這 5 分鐘跨過月底往回跳的午夜時取午夜前的起點，單元測試逐分鐘比對兩年的每個月底；相對期間裡只有 `last_year` 可能整段在可查期間之前）、`to` 不晚於現在之後 367 天（telemetry-query 的 `range::MAX_AHEAD`；相對期間最長到 366 天後，所以不會碰到）。不符合時不呼叫，回錯誤說明怎麼改。這些常數與 telemetry-query 的相同，`tests/delegated_tools.rs` 比對兩邊；語意工具的輸入 schema 也與 `api/openapi.json` 的 `SeriesQuery` 比對欄位、必填、上限、pattern 與 enum，所以工具的輸入就是 API 的本文，儀表板可以原樣存下再送。
+- **語意工具的結果**：時間都帶 `tz` 的時差；`notes` 是工具自己的固定文字（只帶資料點 key、設備 ID 與數字），說明每個資料點的狀況與要對使用者說的話，例如 `not_cumulative`（讀數下降的次數對上升的次數太多，是瞬時值，改用 `telemetry_statistics`、不要把讀數相加）、`no_data`（資料不足，不要估計）、`too_few_readings`（無法確認是累計值，數字要說是未確認的）、可疑跳增（總量可能含錶的誤讀，要一併說明）。
 - **結果**：只放被呼叫端回給這個使用者的欄位，精簡成表格；超過工具結果的大小上限（`tools.max_text_bytes`）時，`ToolRegistry` 改回錯誤並附各工具的縮小方式。被呼叫端的回應以本服務自己的型別解析，未知欄位忽略；`tests/delegated_tools.rs` 以 telemetry-query 與 assets 自己的回應型別產生回應，確認兩邊對得上。
-- **裝置寫的文字是不可信的輸入**：文字讀數、資料點的 key（設備回報的）與型號名稱（成員輸入的）原樣進到模型的 context，可能夾帶要模型做別的事的指示（間接 prompt injection）。工具結果裡每個字串最多 256 個字元（`tools::MAX_RESULT_TEXT_CHARS`），超過的截斷並以 `…[cut]` 結尾，工具說明告訴模型這個上限，也說這些文字是資料、不是指示。上限擋得住的是單一值塞滿結果、或夾帶長篇指示；擋不住短的指示（256 個字元足以寫一句「忽略使用者的問題」），也不能讓模型分辨資料與指示。實際的保護是權限：每個工具只以提問者的身分讀資料，沒有寫入工具，模型被說服也拿不到使用者本來拿不到的東西（[docs/architecture/ai-assistant.md](../../docs/architecture/ai-assistant.md)「安全」）。
-- **錯誤**（`src/callee.rs`）：只讀成功回應的本文。錯誤回應只看狀態碼，本文不讀，所以不會進到模型或日誌：
+- **裝置寫的文字是不可信的輸入**：文字讀數、資料點的 key（設備回報的）與型號名稱（成員輸入的）原樣進到模型的 context，可能夾帶要模型做別的事的指示（間接 prompt injection）。工具結果裡每個字串最多 256 個字元（`tools::MAX_RESULT_TEXT_CHARS`），超過的截斷並以 `…[cut]` 結尾；物件的 key 也一樣（例如 SQL 結果裡 ClickHouse `Map` 值的 key），截斷後與已有的 key 相同時加上 `#2`、`#3`…，不丟掉值。工具說明告訴模型這個上限，也說這些文字是資料、不是指示。上限擋得住的是單一值塞滿結果、或夾帶長篇指示；擋不住短的指示（256 個字元足以寫一句「忽略使用者的問題」），也不能讓模型分辨資料與指示。實際的保護是權限：每個工具只以提問者的身分讀資料，沒有寫入工具，模型被說服也拿不到使用者本來拿不到的東西（[docs/architecture/ai-assistant.md](../../docs/architecture/ai-assistant.md)「安全」）。
+- **`telemetry_sql`**（Laysi/trustiot-v2#143）：工具說明列出三個 view 的欄位與型別、可查期間（原始讀數最多 7 天、1 分鐘與 1 小時彙總最多 3 個月，實際由方案與資料庫決定）、SQL 的規則（一個 SELECT、只讀這三個 view、時間函式要寫時區、CAST 的型別）與 200 列的上限。服務拒絕時回 422，`details` 是封閉的拒絕類別（`contract::api::telemetry_query::SqlRefusal`）：`Callee::post` 只在本文正好是錯誤本文的三個欄位、`code` 是 `validation_failed`、`details` 解析後再序列化完全相同時才接受，多一個欄位、型別不對或這個版本不認得的類別、子句、`kind` 都當成失敗。工具把類別換成固定的英文說明（該改什麼），只帶數字與模型自己寫的表名或函式名；名稱先以服務的識別字規則（`[A-Za-z_][A-Za-z0-9_]*`、每段最多 128 bytes、最多 3 段）再檢查一次，不符合就當成失敗，所以服務的文字不會進到模型。這個工具只給雲端模型；地端模型之後只用語意層工具（決策 16）。
+- **錯誤**（`src/callee.rs`，GET 與 POST 同一條路徑）：只讀成功回應的本文，以及 `telemetry_sql` 的 422（上一點的嚴格解析；它的 `Post` 設 `Unprocessable::Refusal`，語意工具設 `Unprocessable::Rejected`，422 與 400 一樣只回固定說明）。其他錯誤回應只看狀態碼，本文不讀，所以不會進到模型或日誌：
 
 | 被呼叫端 | 工具結果 | 日誌的 `outcome` |
 | --- | --- | --- |
-| 400、422 | 工具自己的固定說明（參數的規則與正確寫法） | `input_error` |
+| 400、422 | 工具自己的固定說明（參數的規則與正確寫法）；`telemetry_sql` 的 422 是該拒絕類別的固定說明，不是正好的拒絕型別時改當失敗 | `input_error` |
+| `telemetry_sql` 的 404（租戶的帳號還沒建立）、429（查詢額度用完）、504（查詢超過時間上限） | 各自的固定說明：這次提問不要再查、或改讀彙總表與縮小範圍 | `input_error` |
 | 403、404（例如設備屬於別的租戶、不存在） | 固定訊息：服務拒絕了這個使用者的請求，不要以同樣的輸入再試 | `denied` |
 | 401、其他 4xx、5xx、逾時、連線失敗、回應無法解析或超過 8 MiB | 固定訊息：工具失敗，可以再試一次 | `failed` |
 | 身分服務拒絕換 token（委派被撤銷） | 提問結束，見下方 | `revoked` |
@@ -84,20 +93,52 @@ service-kit 把這兩種拒絕都記成 INFO（`the identity service refused the
 
 ## 對話的儲存（Postgres）
 
-對話與歷史存在 assistant 自己的 schema（`migrations/postgres/0001_assistant.sql`，Laysi/trustiot-v2#553），由 migration Job 套用（`src/schema.rs` 登錄在 `tools/migrate`）。兩張表都是租戶資料，依決策 29 啟用 RLS；沒有平台角色，沒有東西跨租戶讀對話。
+對話、歷史與對話串存在 assistant 自己的 schema（`migrations/postgres/0001_assistant.sql`，Laysi/trustiot-v2#553；`0002_conversation_threads.sql`，Laysi/trustiot-v2#644），由 migration Job 套用（`src/schema.rs` 登錄在 `tools/migrate`）。四張表都是租戶資料，依決策 29 啟用 RLS。唯一跨租戶的是清除用的平台角色 `assistant_platform`：它只看得到、只刪得掉刪除超過 30 天的對話。
 
 | 表 | 一列是 | 內容 |
 | --- | --- | --- |
-| `assistant.conversations` | 一個對話 | 擁有者（租戶、使用者）與開始時固定的 `Preamble`：system prompt 全文與版本、租戶脈絡（已跳脫、包好標籤的區塊）、工具定義（JSON 陣列，依名稱排序）、effort、快取時效 |
-| `assistant.messages` | 歷史的一則訊息 | 位置（`seq`，從 0 起、依送給模型的順序）、`EntryKind`、格式（`anthropic_messages`），以及訊息本身：送給模型的 JSON 文字的位元組，存成 `bytea` |
+| `assistant.conversations` | 一個對話 | 擁有者（租戶、使用者）與開始時固定的 `Preamble`：system prompt 全文與版本、租戶脈絡（已跳脫、包好標籤的區塊）、工具定義（JSON 陣列，依名稱排序）、effort、快取時效；對話串的標題與來源、封存時間、刪除時間、最後活動時間 |
+| `assistant.messages` | 歷史的一則訊息 | 位置（`seq`，從 0 起、依寫入的順序）、`EntryKind`、格式（`anthropic_messages`），以及訊息本身：送給模型的 JSON 文字的位元組，存成 `bytea`，最多 32 MiB |
+| `assistant.discarded_rounds` | 捨棄的一輪 | 從這一輪的問題到它最後一則訊息的位置範圍（含兩端） |
+| `assistant.runs` | 一次提問 | run ID（run 委派的 ID）、對話、提問者、狀態（`running`、`answered`、`failed`、`cancelled`、`interrupted`）、失敗原因代碼、開始、截止、結束與要求停止的時間；不存問題本身 |
 
-- **只能新增**：服務角色 `assistant_app` 對兩張表只有 SELECT 與 INSERT，沒有 UPDATE、DELETE、TRUNCATE，資料庫直接拒絕改寫或刪除（`tests/history_store.rs`）。訊息對對話的外鍵是 NO ACTION，沒有串聯刪除。刪除對話怎麼做由 Laysi/trustiot-v2#146 決定，屆時另加 migration。
+### 權限
+
+| 角色 | `conversations` | `messages` | `discarded_rounds` | `runs` |
+| --- | --- | --- | --- | --- |
+| `assistant_app`（服務角色，交易的租戶內） | SELECT；INSERT 擁有者與 `Preamble` 的欄位；UPDATE 只限 `title`、`title_source`、`archived_at`、`deleted_at`、`last_activity_at`，刪除超過 30 天的列連鎖定都做不到（restrictive policy `expired_stay_deleted`） | SELECT；INSERT（不含 `created_at`） | SELECT；INSERT（不含 `created_at`） | SELECT；INSERT run ID、對話、提問者與截止時間；UPDATE 只限 `status`、`result_code`、`ended_at`、`cancel_requested_at` |
+| `assistant_platform`（清除，跨租戶） | 只看得到刪除超過 30 天的列（policy `platform_access`），只讀 `tenant_id`、`conversation_id`、`deleted_at`；DELETE 只刪得掉這些列（`platform_purge`）；restrictive policy `platform_expired_only` 讓交易設的租戶不多開任何列 | 無 | 無 | 無 |
+
+兩個角色都沒有 TRUNCATE；服務角色在哪張表都沒有 DELETE，訊息也沒有 UPDATE。時間由資料庫填：`created_at`、`started_at` 不能寫入（沒有那一欄的 INSERT 權限），觸發器 `conversations_clock`、`runs_clock` 要求 `archived_at`、`deleted_at`、`last_activity_at`、`ended_at`、`cancel_requested_at` 改成交易的 `now()`，`last_activity_at` 不往回走，已刪除的對話在還原前 `deleted_at` 不能換成新的時間，已結束的 run 不能再改；違反時回 `42501`。所以服務角色不能把刪除時間往前改讓對話提早被清除，也不能一直往後延讓它永遠不被清除。
+
+### 規則
+
+- **只能新增**：歷史的訊息只會加入，不會被改寫或個別刪除，資料庫直接拒絕（`tests/history_store.rs`）。對話只能整個離開資料庫：刪除滿 30 天後由清除連同訊息、捨棄紀錄與提問紀錄一起刪掉（外鍵 `ON DELETE CASCADE`，以表的擁有者執行，不受 RLS 影響）。
 - **原樣保存**：訊息不用 jsonb（會重排鍵、改寫數字），也不用 text（位元組受資料庫與連線的編碼影響）。讀回時檢查是 UTF-8、剛好一個 JSON 值，而且長度與存的相同，所以送回模型的就是存進去的位元組，thinking 區塊與 `signature` 不變。不符的列讓載入失敗（`StoreError::Corrupt`），不會送出改過的歷史。system prompt 存全文而不只存版本，新版本上線後舊對話照樣以原本的文字繼續。工具定義寫入前先確認讀回後序列化的結果相同，做不到就拒絕儲存（`StoreError::Unstorable`）。
-- **只往後加、不分岔**：`store::append(tx, 對話, stored)` 從第 `stored` 則開始寫。已經存在、內容相同的訊息略過，所以 commit 結果不明時可以安全重試；同一個位置已有不同的訊息（另一個寫入者先加了）回 `StoreError::Conflict`，不覆寫。從儲存的結尾之後開始寫會留下空洞，回 `StoreError::Gap`。主鍵 `(tenant_id, conversation_id, seq)` 讓兩個同時寫同一位置的寫入者只有一個成功，不需要鎖。
-- **租戶與擁有者**：每個函式都收 service-kit 的 `TenantTransaction`，交易的租戶不是對話的租戶時回 `StoreError::WrongTenant`。`store::load` 只回傳屬於該使用者的對話，同租戶的其他使用者拿到 `None`：對話的工具以擁有者的身分執行，別人接著問會變成以擁有者的身分讀資料。`store::create` 與 `store::append` 也自己核對已存的擁有者與 `Preamble`，不同就回 `StoreError::Conflict`、什麼都不寫，不靠呼叫端怎麼建出 `Conversation`（單元測試 `append_refuses_a_conversation_of_another_owner_or_preamble`）。誰可以檢視別人的對話由 Laysi/trustiot-v2#146 決定。
+- **大小上限**：一則訊息最多 32 MiB（`store::MAX_MESSAGE_BYTES`，資料庫的 `messages_body_size` 也擋）。訊息會出現在之後的每個請求裡，而 AI 閘道拒絕超過 32 MiB 的請求（`max_request_bytes`，Anthropic Messages 的上限），更大的訊息永遠送不出去。預設的工具結果上限是 64 KiB 文字加 4 張 5 MiB 的圖（約 20.06 MiB），其餘空間給 JSON 外框與同一步的其他結果；推導寫在 migration 裡。
+- **只往後加、不分岔**：`store::create`、`store::load`、`store::append` 都回傳 `Stored`：記憶體裡的對話有幾則已經存了、下一則在資料庫的位置、讀取時捨棄過幾輪。下一次 `store::append(tx, 對話, stored)` 從那裡接著寫。`append` 先以 `FOR NO KEY UPDATE` 鎖住對話那一列，所以與刪除、捨棄、開始提問依序執行。已經存在、內容相同的訊息略過，commit 結果不明時可以安全重試；同一個位置已有不同的訊息（另一個寫入者先加了）、或 `stored` 之後有人捨棄了一輪，回 `StoreError::Conflict`，不覆寫，呼叫端重新載入。從儲存的結尾之後開始寫會留下空洞，回 `StoreError::Gap`。
+- **租戶與擁有者**：每個函式（清除除外）都收 service-kit 的 `TenantTransaction` 與執行者的 `Principal`，交易的租戶不是對話的租戶時回 `StoreError::WrongTenant`。對話只屬於開始它的使用者：同租戶其他使用者的對話一律當作不存在（`StoreError::NotStored`、`None` 或清單裡沒有），處理請求的程式因此不會洩漏對話是否存在。對話的工具以擁有者的身分執行，別人接著問會變成以擁有者的身分讀資料。`store::create` 與 `store::append` 也自己核對已存的擁有者與 `Preamble`，不同就回 `StoreError::Conflict`、什麼都不寫，不靠呼叫端怎麼建出 `Conversation`（單元測試 `append_refuses_a_conversation_of_another_owner_or_preamble`）。分享給別人看是 Laysi/trustiot-v2#650。
+- **軟刪除**：`store::delete` 記下刪除時間，回傳標題、刪除時間與可還原的期限（刪除後 30 天，`store::DELETED_RETENTION_DAYS`）。之後除了 `store::list_deleted`（擁有者的「已刪除」清單，只有標題與時間，沒有訊息）與 `store::restore`，所有函式都當它不存在，擁有者也一樣：讀不到、改不了名、不能封存、不能捨棄、不能開始提問，`store::append` 回 `StoreError::NotStored`、不再寫入任何訊息。刪除與正在進行的 `append` 依對話那一列的鎖排序：不是訊息先寫完再刪除，就是 `append` 因已刪除而失敗，不會刪除後還多出訊息。
+- **還原**：`store::restore` 只在刪除後 30 天內有效，對話原樣回來：刪除不動訊息、捨棄紀錄與提問紀錄，還原後歷史逐位元組相同。滿 30 天的對話在擁有者的已刪除清單消失、還原回 `StoreError::NotStored`，資料庫也拒絕服務角色對它的任何更動（`expired_stay_deleted`），程式有錯也救不回來。
+- **清除**：`store::purge_expired(PlatformTransaction, 上限)` 以平台角色 `assistant_platform`（service-kit 的 `PlatformDb`，每個交易記一行 `platform database access`）刪掉最多「上限」個刪除超過 30 天的對話，從最舊的開始，連同訊息、捨棄紀錄與提問紀錄；回傳刪了幾個，少於上限時表示清完了。restrictive policy `platform_expired_only` 讓平台角色不論交易設了什麼租戶，都只看得到、刪得掉刪除滿 30 天的對話（0001 的 `tenant_isolation` 沒有指定角色，也套用到平台角色，沒有這條 policy 時，設了租戶的平台交易看得到、刪得掉那個租戶的每個對話），所以清除即使寫錯也刪不到還在 30 天內或沒刪除的對話；它對訊息與其他表沒有任何權限。還原與清除同時發生在同一個對話時只有一個結果：先拿到列鎖的一方贏，另一方等它 commit 後重新檢查條件，什麼都不做。選平台角色而不是在每個租戶的交易裡以服務角色刪除：服務角色看不到哪些租戶有過期的對話，而且那樣服務角色就得有 DELETE。代價是多一個資料庫角色與帳密：清除的排程與它的連線池是 Laysi/trustiot-v2#645，在那之前 chart 不給 `assistant_platform` 帳密（`tools/migrate/tests/registry.rs` 的 `UNBOUND_PLATFORM_ROLES`）。
+- **捨棄最後一輪**（重新產生回答）：`store::discard_last_round(tx, principal, id, from, stored)`，`from` 是最後一輪的問題在 `store::load` 回傳的歷史中的位置，`stored` 是 `load` 或 `append` 回傳的值，歷史在那之後不能變過（否則 `StoreError::Conflict`）。只能捨棄最後一輪：`from` 不是問題、後面還有問題或超出範圍時回 `StoreError::NotLastRound`。訊息留在資料庫，只在 `discarded_rounds` 記下範圍；`load` 略過它們，所以送給模型的歷史與那一輪之前逐位元組相同。下一輪寫在被捨棄的訊息之後（位置繼續往後數，所以位置不再等於歷史中的順序）。捨棄後要重新 `load`：手上的 `stored` 與記憶體裡的對話還含有被捨棄的一輪，`append` 會拒絕。
+- **提問紀錄**：`store::start_run` 鎖住對話那一列，先把截止時間已過、還在 `running` 的提問改成 `interrupted`（服務在提問中重啟），還有進行中的提問時回 `StoreError::AlreadyRunning`；唯一索引 `runs_one_running_per_conversation` 在資料庫守同一條規則，所以同時開始的兩個提問只有一個成功。截止時間是 run 委派的截止時間，最多一小時後。`store::finish_run` 記下結果（`answered`、`failed` 加原因代碼、`cancelled`），對話在提問中被刪除時也照樣能結束；已結束的回 `StoreError::RunEnded`。`store::request_cancel` 記下第一次要求停止的時間，`store::run_status` 查詢。失敗、取消或提問中被刪除的那一輪不寫進歷史（呼叫端的規則，Laysi/trustiot-v2#646），只在這裡留下結果。
+- **標題與清單**：`store::set_title` 的來源有三種：`User`（使用者改名）一律取代；`Model`（模型產生）只取代空的或暫定的標題；`Provisional`（取自第一個問題）只填空的標題。標題 1 到 200 個字元、不含控制字元。`store::archive` 封存或取消封存，封存的對話仍可使用。`store::list` 依最後活動時間（寫入訊息的時間）由新到舊，預設不含封存的，每頁最多 `store::MAX_PAGE`（100）個，以回傳的 `next` 接著取下一頁；`store::metadata` 取單一對話。
+- **什麼時候真正消失**：被捨棄的訊息與刪除的對話在清除之前都還在資料庫（與備份）裡；清除之後，資料仍留在清除前做的備份裡，直到那些備份的保存期限屆滿。刪除的對話在滿 30 天後的下一次清除時刪掉；沒刪除的對話，連同它捨棄的回合，保存多久由 Laysi/trustiot-v2#652 決定，在那之前一直保存。
+- **錯誤不含資料**：Postgres 的錯誤訊息與 DETAIL 會帶欄位值（例如重複鍵的租戶與對話 ID），`StoreError` 只留 SQLSTATE 或失敗的類別（`DatabaseFailure`），`Display` 與 `Debug` 都可以直接寫進日誌或回應。
 - 模型上一次回報的歷史大小（`Conversation::measured`）不儲存，載入後的第一次呼叫重新估計。
 
-服務啟動時建立服務角色 `assistant_app` 的連線池（verify-full 的 TLS，`database.*` 與平台設定，見「設定」），不在啟動時連線（Laysi/trustiot-v2#592）。readiness 有兩項：`postgres` 以服務角色開一條通過 service-kit session 檢查的連線，migration 檢查（`MigrationCheck` 與 `schema::SCHEMA`）確認資料庫有這一版預期的每個 migration 檔案；任一項不過時 `/readyz` 回 503，日誌寫出原因（[service-kit 的 migration 檢查](../../crates/service-kit/README.md#migration-檢查migrations)）。readiness 不呼叫 AI 閘道或其他服務。chart 在 `mesh.calls.assistant` 列了 `postgres` 時給它帳密與連線池大小（`services.assistant.database.maxConnections`，算進 chart 的連線預算，見 chart README 的「連線預算」，Laysi/trustiot-v2#575），migration Job 讓 `assistant_app` 能登入。對話串的 API 在 Laysi/trustiot-v2#146 呼叫 `store::create`、`store::append`、`store::load`。
+### 給聊天 API 的介面
+
+| 誰 | 用哪些函式 |
+| --- | --- |
+| 聊天 API（Laysi/trustiot-v2#645） | 開始對話 `create`；繼續 `load`、`append`；對話串 `list`、`metadata`、`set_title`、`archive`、`delete`、`list_deleted`、`restore`；清除的排程 `purge_expired`（平台角色的連線池算進連線預算） |
+| 提問（Laysi/trustiot-v2#646） | `start_run` 後才呼叫模型，結束時 `finish_run`；停止 `request_cancel`；重新產生回答 `discard_last_round` 後重新 `load` 再問 |
+| 分享（Laysi/trustiot-v2#650） | `load` 只給擁有者；分享另開一條唯讀的路徑，同樣要把刪除的對話當作不存在 |
+
+呼叫端要遵守：同一個請求的多個呼叫放在同一個 `TenantTransaction`，由呼叫端 commit；只有回答完成的一輪才 `append`；`discard_last_round` 之後重新 `load`；`StoreError::NotStored` 對使用者一律是「找不到」，不區分不存在、別人的或已刪除。
+
+服務啟動時建立服務角色 `assistant_app` 的連線池（verify-full 的 TLS，`database.*` 與平台設定，見「設定」），不在啟動時連線（Laysi/trustiot-v2#592）。readiness 有兩項：`postgres` 以服務角色開一條通過 service-kit session 檢查的連線，migration 檢查（`MigrationCheck` 與 `schema::SCHEMA`）確認資料庫有這一版預期的每個 migration 檔案；任一項不過時 `/readyz` 回 503，日誌寫出原因（[service-kit 的 migration 檢查](../../crates/service-kit/README.md#migration-檢查migrations)）。readiness 不呼叫 AI 閘道或其他服務。chart 在 `mesh.calls.assistant` 列了 `postgres` 時給它帳密與連線池大小（`services.assistant.database.maxConnections`，算進 chart 的連線預算，見 chart README 的「連線預算」，Laysi/trustiot-v2#575），migration Job 讓 `assistant_app` 能登入。聊天 API（Laysi/trustiot-v2#645）呼叫上面「給聊天 API 的介面」列的函式。
 
 ## 設定
 
@@ -124,10 +165,10 @@ service-kit 把這兩種拒絕都記成 INFO（`the identity service refused the
 | `tools.max_image_bytes` | `TRUSTIOT__TOOLS__MAX_IMAGE_BYTES` | 5 MiB | 一張圖（base64 文字）的上限；不超過 5 MiB |
 | `identity.exchange_url` | `TRUSTIOT__IDENTITY__EXCHANGE_URL` | 無 | 身分服務 token 交換埠的 `http://<host>[:<port>]`（`http://<release>-identity-exchange:8082`），不能有路徑、帳密或 query；沒有就沒有工具。呼叫身分服務的時間上限是 15 秒（`IDENTITY_TIMEOUT`） |
 | `identity.run_lifetime` | `TRUSTIOT__IDENTITY__RUN_LIFETIME` | `15m` | 一次提問的委派效期；整數秒，2 到 15 分鐘（身分服務的上限 900 秒）。提問在到期前 30 秒結束 |
-| `telemetry_query.url` | `TRUSTIOT__TELEMETRY_QUERY__URL` | 無 | telemetry-query 的 `http://<host>[:<port>]`；沒有就沒有 `telemetry_series`、`telemetry_latest`。設了就要有 `identity.exchange_url` |
+| `telemetry_query.url` | `TRUSTIOT__TELEMETRY_QUERY__URL` | 無 | telemetry-query 的 `http://<host>[:<port>]`；沒有就沒有 `telemetry_latest`、`telemetry_statistics`、`telemetry_usage`。設了就要有 `identity.exchange_url` |
 | `assets.url` | `TRUSTIOT__ASSETS__URL` | 無 | assets 的 `http://<host>[:<port>]`；沒有就沒有 `device_models`。設了就要有 `identity.exchange_url` |
 
-工具呼叫其他服務的時間上限與 `tools.call_timeout` 相同（`ToolRegistry` 的上限才是真正的界線），連線最多 10 秒，成功回應的本文最多 8 MiB。mesh 內是純 HTTP，由 ztunnel 加上 mTLS；不用環境變數的 proxy，不跟隨轉址（token 的 header 會跟著轉過去）。chart 從 `mesh.calls.assistant` 填 `ai_gateway.url`、`identity.exchange_url`、`telemetry_query.url` 與 `assets.url`，`services.assistant.env` 不能設定這四個（[chart README](../../deploy/chart/README.md)「AI 助理」）；授權矩陣在同一份 README 的「呼叫矩陣」。
+工具呼叫其他服務的時間上限與 `tools.call_timeout` 相同（`ToolRegistry` 的上限才是真正的界線），連線最多 10 秒，成功回應的本文最多 8 MiB，`telemetry_sql` 讀的 422 本文最多 32 KiB（`MAX_REFUSAL_BYTES`）。mesh 內是純 HTTP，由 ztunnel 加上 mTLS；不用環境變數的 proxy，不跟隨轉址（token 的 header 會跟著轉過去）。chart 從 `mesh.calls.assistant` 填 `ai_gateway.url`、`identity.exchange_url`、`telemetry_query.url` 與 `assets.url`，`services.assistant.env` 不能設定這四個（[chart README](../../deploy/chart/README.md)「AI 助理」）；授權矩陣在同一份 README 的「呼叫矩陣」。
 
 ## 錯誤
 
@@ -156,20 +197,22 @@ service-kit 把這兩種拒絕都記成 INFO（`the identity service refused the
 | 聊天 API 與串流（Laysi/trustiot-v2#146） | `Agent::start_conversation`、`Agent::ask` |
 | 聊天 API 開始一個問題（Laysi/trustiot-v2#146） | 處理請求時以 `delegation::QuestionRuns::start(&UserIdentity, conversation.principal())` 取得 `QuestionRun`，交給 `Agent::ask`；`Assistant::runs` 為 `None`（沒有設定 `identity.exchange_url`）時改用 `tools::NoDelegation`。`StartError` 已實作 `IntoResponse`（見「代表使用者呼叫」） |
 | 更多工具（語意層、唯讀 SQL、儀表板） | 實作 `tools::Tool`，放進 `ToolRegistry`（最多 10 個），以 `callee::Callee` 呼叫服務；工具從 `ToolContext.principal` 取租戶與使用者，不從輸入取 |
-| 對話存進 Postgres（Laysi/trustiot-v2#553 已完成儲存，連線池由 Laysi/trustiot-v2#592 接上） | `store::create`、`store::append`、`store::load`，在對話租戶的 `TenantTransaction` 裡呼叫，交易取自 `start` 建立的 `TenantDb`（現在只給 readiness 用），見[對話的儲存](#對話的儲存postgres) |
+| 對話存進 Postgres（Laysi/trustiot-v2#553 儲存、Laysi/trustiot-v2#644 對話串與提問紀錄已完成，連線池由 Laysi/trustiot-v2#592 接上） | `store` 的函式，在對話租戶的 `TenantTransaction` 裡呼叫，交易取自 `start` 建立的 `TenantDb`（現在只給 readiness 用）；清除另用 `assistant_platform` 的 `PlatformDb`（Laysi/trustiot-v2#645 建立），見[給聊天 API 的介面](#給聊天-api-的介面) |
 | 每次呼叫預扣額度（Laysi/trustiot-v2#140） | 每次呼叫的 `ModelRequest::call_id`（帳本的 `llm_call_id`，現在只記在日誌）；閘道拒絕時以 `ModelError` 回到迴圈 |
 
 ## 測試
 
-`cargo test -p assistant`（`tests/history_store.rs`、`tests/startup.rs` 與 `tests/cross_tenant.rs` 以 podman 或 docker 起一個拋棄式 TLS Postgres，以 migration Job 套用整個產品的 schema；沒有容器執行環境時在本機略過，設了 `CI` 時失敗）。測試以本機 loopback 上的替身 AI 閘道回放 `tests/fixtures/` 的回應（取自官方文件，見該目錄的 README），不呼叫供應商，也沒有 API key。
+`cargo test -p assistant`（`tests/history_store.rs`、`tests/conversation_threads.rs`、`tests/startup.rs` 與 `tests/cross_tenant.rs` 以 podman 或 docker 起一個拋棄式 TLS Postgres，以 migration Job 套用整個產品的 schema；沒有容器執行環境時在本機略過，設了 `CI` 時失敗）。測試以本機 loopback 上的替身 AI 閘道回放 `tests/fixtures/` 的回應（取自官方文件，見該目錄的 README），不呼叫供應商，也沒有 API key。
 
 | 檔案 | 內容 |
 | --- | --- |
 | `tests/agent.rs` | 60 步的長分析不受步數限制；接近預算時收尾並回答；放不進剩餘預算的呼叫不送出、輸出上限降到剩下的空間；用量超過估計而預算用完時工具不執行；第二個問題的請求逐位元組以前一次請求的歷史開頭（thinking 與 signature、system、工具定義不變，租戶脈絡包在標籤裡）；兩個使用者同時發問互不等待；模型逾時與閘道錯誤只給固定訊息、日誌沒有錯誤文字；拒答不留在歷史；每一步的時間與快取讀取都記在日誌 |
 | `tests/tools.rs` | 工具組規則（最多 10 個、名稱、schema）；並行執行、結果依呼叫順序；一步超過呼叫數上限的呼叫不執行；輸入錯誤、失敗、panic、逾時、不存在的工具各自回錯誤給模型；結果超過大小與圖片上限時請模型縮小範圍；工具拿到的身分來自對話；圖片照 Anthropic 格式送給模型 |
-| `tests/delegated_tools.rs` | 三個工具各以使用者身分、受眾正確且在呼叫當下交換的 token 呼叫服務，請求裡沒有租戶或使用者，超過 60 秒後的呼叫仍成功、舊 token 會被拒（替身以「每次模型呼叫過 61 秒」的虛擬時鐘模擬，不真的等）；服務回 403、404、422、503 與非 JSON 時模型與日誌都看不到回應本文；身分服務拒絕交換（撤銷）時該步停止、問題結束、不再重試；身分服務暫時無法使用只讓該次呼叫失敗；問題在委派到期前結束、沒有剩餘時間的問題不開始；只有對話的使用者能開始問題，為別人的對話建立的 run 在送出任何東西前被拒；裝置寫的長文字截到 256 個字元、加上截斷標記才給模型；工具輸入不收租戶、使用者與多餘欄位；工具的路徑與上限跟 telemetry-query、assets 的程式一致 |
+| `tests/delegated_tools.rs` | 四個呼叫服務的工具各以使用者身分、受眾正確且在呼叫當下交換的 token 呼叫服務，請求裡沒有租戶或使用者，超過 60 秒後的呼叫仍成功、舊 token 會被拒（替身以「每次模型呼叫過 61 秒」的虛擬時鐘模擬，不真的等）；服務回 403、404、422、503 與非 JSON 時模型與日誌都看不到回應本文；身分服務拒絕交換（撤銷）時該步停止、問題結束、不再重試；身分服務暫時無法使用只讓該次呼叫失敗；問題在委派到期前結束、沒有剩餘時間的問題不開始；只有對話的使用者能開始問題，為別人的對話建立的 run 在送出任何東西前被拒；裝置寫的長文字截到 256 個字元、加上截斷標記才給模型；工具輸入不收租戶、使用者與多餘欄位；工具的路徑與上限跟 telemetry-query、assets 的程式一致；語意工具以 POST 送出的本文是 API 的 `SeriesQuery`（替身照服務的型別解析、拒絕未知欄位），輸入 schema 與 `telemetry_query::openapi()` 的 `SeriesQuery` 一致；列數超過服務上限時不呼叫 |
 | `tests/history_store.rs` | 主 agent 跑完的對話（thinking 與 signature、工具呼叫與結果）存進去、讀回來逐位元組相同，載入的對話接著問時請求的前段與歷史和原本的逐位元組相同；服務角色的 UPDATE、DELETE、TRUNCATE 在租戶交易內外都被資料庫拒絕（`42501`）；重複寫入不改變什麼，兩個寫入者分岔時後者被拒、不覆寫，空洞與沒建立的對話被拒；其他租戶與同租戶的其他使用者載入不到；損壞的列讓載入失敗 |
 | `tests/startup.rs` | 執行檔本身：以 `assistant_app` 登入、資料庫有這一版的 migration 時 `/readyz` 回 200，日誌記下工具數且不含密碼；密碼錯誤時 readiness 記下失敗、回 503；少了一個 migration 檔案時日誌寫出缺的檔案、回 503，補回後恢復 |
 | `tests/chart_connections.rs` | chart 的 Postgres 連線預算（`trustiot.postgres.connectionBudgets`）與程式開的連線池一致：沒有其他連線池，`database.maxConnections` 的範圍與服務接受的相同；程式多了一個連線池時失敗 |
-| `tests/cross_tenant.rs` | 跨租戶負向測試（決策 29，`crates/testkit`）：兩張表的讀、寫、搬移、插入探測與覆蓋檢查 |
-| `src/` 的單元測試 | 設定檢查（含被呼叫服務的位址、委派時長與資料庫帳密、連線池上限）、截止時間的計算、`StartError` 的錯誤碼、字串上限、時間區間的粒度選擇與查詢範圍、狀態碼類別、預算門檻、租戶脈絡的跳脫、狀態碼對應、錯誤 `type` 過濾、沒有用量時的估計、送出前的訊息估計（圖片按張數）、工具定義與訊息讀回的位元組檢查 |
+| `tests/conversation_threads.rs` | 對話串（Laysi/trustiot-v2#644）：刪除的對話對擁有者與同租戶的人都不存在、只在擁有者的已刪除清單出現，還原後每一列與刪除前相同；滿 30 天的不能還原，清除連同訊息、捨棄紀錄與提問紀錄刪掉（跨租戶），沒過期的與沒刪除的不受影響；清除角色只看得到、刪得掉過期的對話（它的交易自己設定租戶也一樣），碰不到訊息，服務角色什麼都刪不掉（`42501`）；還原與清除、刪除與寫入同時發生時兩種順序各測一次（以 `pg_blocking_pids` 確認後到的一方在等鎖，不靠時間）；捨棄最後一輪後歷史與之前逐位元組相同、下一輪接在後面，捨棄不是最後一輪的被拒；同時開始兩個提問只有一個成功，過了截止時間的提問在下一次開始時變成 `interrupted`；同租戶的其他使用者讀、改名、封存、刪除、還原、捨棄、開始與停止提問都當作不存在、資料不變；資料庫拒絕指定 `created_at`、`started_at` 與往前改的時間（`42501`），拒絕超過 32 MiB 的訊息（`23514`）；`StoreError` 不含 Postgres 的訊息與 DETAIL；標題規則、封存與清單分頁 |
+| `tests/cross_tenant.rs` | 跨租戶負向測試（決策 29，`crates/testkit`）：四張表（對話、訊息、捨棄的回合、提問紀錄）的讀、寫、搬移、插入探測與覆蓋檢查 |
+| `tests/telemetry_sql.rs` | `telemetry_sql` 經工具組呼叫：對 telemetry-query 真正的路由（Postgres 與 ClickHouse 是計數的 loopback 埠），系統表、table function、白名單外的函式、`SET ROLE`、`SET DEFAULT ROLE`、多個敘述、`SETTINGS`、CAST、沒寫時區、沒讀 view、引號識別字、反斜線、語法錯誤與太深的巢狀各自回固定的類別說明，兩個資料庫都沒有連線，日誌沒有 SQL；對替身，答案（長文字截斷）、執行後的拒絕、多欄位或不認得的類別與名稱、404、429、504、403、400、5xx 與非 JSON 各自回固定訊息，模型與日誌都看不到服務的本文；每次呼叫換新 token、請求正好是 SQL 加 200 列 |
+| `src/` 的單元測試 | 設定檢查（含被呼叫服務的位址、委派時長與資料庫帳密、連線池上限）、截止時間的計算、`StartError` 的錯誤碼、字串上限、時間區間的粒度選擇與查詢範圍、狀態碼類別、422 拒絕本文的嚴格解析、`telemetry_sql` 每個拒絕類別的說明與名稱的再檢查、預算門檻、租戶脈絡的跳脫、狀態碼對應、錯誤 `type` 過濾、沒有用量時的估計、送出前的訊息估計（圖片按張數）、工具定義與訊息讀回的位元組檢查、migration 與程式的上限一致（30 天、32 MiB、200 個字元）、資料庫錯誤只留類別、失敗原因代碼的格式 |

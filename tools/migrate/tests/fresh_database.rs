@@ -63,6 +63,27 @@ const IDENTITY_PLATFORM_ON_ASSETS_EVENTS: &str = "SELECT
     has_table_privilege('identity_platform', 'assets.outbox_event',
         'INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER'),
     has_schema_privilege('identity_platform', 'assets', 'CREATE')";
+/// The relations of schema assets the certs service's platform role can do anything with
+/// (Laysi/trustiot-v2#632): it reads assets' events for the gateway bindings, nothing else.
+const CERTS_PLATFORM_IN_ASSETS: &str = "SELECT c.relname::text FROM pg_class c
+    JOIN pg_namespace n ON n.oid = c.relnamespace
+    WHERE n.nspname = 'assets' AND c.relkind IN ('r', 'p', 'v', 'm', 'f')
+      AND has_table_privilege('certs_platform', c.oid,
+          'SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER')
+    ORDER BY 1";
+/// What it may do with assets' events: read them, and no write of any kind.
+const CERTS_PLATFORM_ON_ASSETS_EVENTS: &str = "SELECT
+    has_table_privilege('certs_platform', 'assets.outbox_event', 'SELECT'),
+    has_table_privilege('certs_platform', 'assets.outbox_event',
+        'INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER'),
+    has_schema_privilege('certs_platform', 'assets', 'CREATE')";
+/// The certs service's consumer tables and its copy of the bindings and tenant statuses
+/// (Laysi/trustiot-v2#632), with whether row-level security is on.
+const CERTS_CONSUMER_TABLES: &str = "SELECT c.relname::text, c.relrowsecurity FROM pg_class c
+    JOIN pg_namespace n ON n.oid = c.relnamespace
+    WHERE n.nspname = 'certs' AND c.relname IN ('outbox_subscription', 'outbox_inbox',
+        'outbox_dead_letter', 'outbox_version', 'gateway_bindings', 'tenant_statuses')
+    ORDER BY 1";
 /// The roles the assets outbox's read policy names.
 const ASSETS_EVENT_READERS: &str = "SELECT array_to_string(polroles::regrole[], ',')
     FROM pg_policy WHERE polrelid = 'assets.outbox_event'::regclass AND polname = 'consumer_read'";
@@ -145,8 +166,8 @@ async fn a_fresh_database_gets_every_migration_once() {
     }
     // Only identity_app is bound here: this deployment gives identity's platform role no Secret
     // (the chart binds one for the event log's consumer, Laysi/trustiot-v2#130), and the assets,
-    // telemetry-query, certs, assistant and ai-gateway services are not part of it, so their
-    // roles stay NOLOGIN.
+    // telemetry-query, certs, assistant, ai-gateway and ingest services are not part of it, so
+    // their roles stay NOLOGIN.
     assert_eq!(
         report.roles_without_password,
         [
@@ -158,7 +179,10 @@ async fn a_fresh_database_gets_every_migration_once() {
             "certs_app",
             "certs_platform",
             "assistant_app",
-            "ai_gateway_app"
+            "assistant_platform",
+            "ai_gateway_app",
+            "ingest_app",
+            "ingest_platform"
         ]
     );
     let first = db.password("identity_app");
@@ -211,10 +235,10 @@ async fn a_fresh_database_gets_every_migration_once() {
         .await
         .expect("count tables");
     assert_eq!(
-        tables, 15,
+        tables, 16,
         "users, memberships, sessions, tenants, login_codes, event_log and platform_event_log, \
          the first platform administrator's marker platform_admin_bootstrap \
-         (Laysi/trustiot-v2#582), \
+         (Laysi/trustiot-v2#582), preferences (Laysi/trustiot-v2#497), \
          the outbox's outbox_aggregate and outbox_event, its consumer tables \
          outbox_subscription, outbox_inbox, outbox_dead_letter and outbox_version (the event log \
          consumes identity's own events, Laysi/trustiot-v2#130), and the migration records \
@@ -277,7 +301,52 @@ async fn a_fresh_database_gets_every_migration_once() {
         .expect("read the assets outbox's read policy");
     let mut readers: Vec<&str> = readers.split(',').collect();
     readers.sort_unstable();
-    assert_eq!(readers, ["assets_platform", "identity_platform"]);
+    // The certs service reads assets' events too (Laysi/trustiot-v2#632); assets itself no
+    // longer does: it read its own events only until a real consumer was listed. ingest consumes
+    // assets.gateway_bound for its gateway binding projection (Laysi/trustiot-v2#640): its entry
+    // in src/registry.rs has `consumes: &["assets"]`, and the Job sets this policy to exactly the
+    // consumers' platform roles (src/postgres.rs, `consumer_read`), no migration file of its own.
+    assert_eq!(
+        readers,
+        ["certs_platform", "identity_platform", "ingest_platform"]
+    );
+    let reachable: Vec<String> = sqlx::query_scalar(CERTS_PLATFORM_IN_ASSETS)
+        .fetch_all(&mut admin)
+        .await
+        .expect("read certs_platform's rights in assets");
+    assert_eq!(
+        reachable,
+        ["outbox_event"],
+        "certs_platform in schema assets"
+    );
+    let rights: (bool, bool, bool) = sqlx::query_as(CERTS_PLATFORM_ON_ASSETS_EVENTS)
+        .fetch_one(&mut admin)
+        .await
+        .expect("read certs_platform's rights on assets.outbox_event");
+    assert_eq!(
+        rights,
+        (true, false, false),
+        "certs_platform: SELECT on assets.outbox_event, no write, no CREATE in assets"
+    );
+    // The consumer's bookkeeping, where its subscription is recorded once the service runs, and
+    // the two tenant tables of 0005_gateway_bindings.sql under row-level security.
+    let tables: Vec<(String, bool)> = sqlx::query_as(CERTS_CONSUMER_TABLES)
+        .fetch_all(&mut admin)
+        .await
+        .expect("read the certs consumer's tables");
+    assert_eq!(
+        tables,
+        [
+            ("gateway_bindings", true),
+            ("outbox_dead_letter", false),
+            ("outbox_inbox", false),
+            ("outbox_subscription", false),
+            ("outbox_version", false),
+            ("tenant_statuses", true),
+        ]
+        .map(|(name, rls)| (name.to_owned(), rls)),
+        "the certs service's consumer tables and tenant tables"
+    );
 
     // 3. The service role passes service-kit's session check and finds its schema first.
     let mut app_conn = db

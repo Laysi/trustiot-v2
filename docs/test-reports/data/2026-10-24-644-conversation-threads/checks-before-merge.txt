@@ -1,0 +1,52 @@
+Laysi/trustiot-v2#644, build host (x86_64 Linux), CI=1, commit bbf0b679 (before merging main 757f52df)
+
+$ cargo fmt --all --check
+$ cargo clippy --locked --workspace --all-targets -- -D warnings
+$ cargo test --locked -p assistant
+$ cargo test --locked -p migrate -p sql-check -p repo-check -p testkit
+(the run stopped at the first failing test binary; the failure is fixed in 94e9f143, see the report)
+
+== fmt ok
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 12.34s
+== clippy exit 0
+     Running unittests src/lib.rs (assistant)
+test result: ok. 34 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.71s
+     Running tests/agent.rs
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.00s
+     Running tests/agent_logs.rs
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+     Running tests/chart_connections.rs
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/conversation_threads.rs
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.64s
+     Running tests/cross_tenant.rs
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.23s
+     Running tests/delegated_tools.rs
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.03s
+     Running tests/history_store.rs
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.68s
+     Running tests/startup.rs
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.25s
+     Running tests/tools.rs
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.00s
+     (doc tests)
+test result: ok. 0 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s
+== assistant exit 0
+     Running unittests src/lib.rs (migrate)
+test result: ok. 61 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.09s
+     Running tests/ca_keys.rs
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+     Running tests/clickhouse.rs
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 14.32s
+     Running tests/clickhouse_admin.rs
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 19.95s
+     Running tests/clickhouse_telemetry_query.rs
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 11.14s
+     Running tests/concurrent_runs.rs
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 11.67s
+     Running tests/file_escapes.rs
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.10s
+     Running tests/fresh_database.rs
+test a_fresh_database_gets_every_migration_once ... FAILED
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.45s
+exit 101 at 16:22:50 (build host)

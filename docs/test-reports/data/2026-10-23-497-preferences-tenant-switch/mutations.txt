@@ -1,0 +1,68 @@
+# Each mutation applied to the fixed code, the regression test run with CI=1, the file restored after.
+# Run by a throwaway script outside the repository; the sources were byte-identical before and after (SHA-1 checked).
+M1 (F1) MAX_BODY_BYTES = 1 << 20 in both handlers
+  cargo test -p identity --test account -- --exact account_writes_need_the_users_own_same_origin_json_request
+  FAILED as expected (exit 101)
+    thread 'account_writes_need_the_users_own_same_origin_json_request' panicked at services/identity/tests/account.rs:739:21:
+    assertion `left == right` failed: 1025 bytes: 200
+    left: 200
+    right: 400
+    error: test failed, to rerun pass `-p identity --test account`
+M2 (F2) UPDATE_PREFERENCES: WHERE user_id = $1::uuid -> WHERE $1::uuid IS NOT NULL (rows check kept)
+  cargo test -p identity --test account -- --exact users_change_only_their_own_preferences_within_the_allow_lists
+  FAILED as expected (exit 101)
+    thread 'users_change_only_their_own_preferences_within_the_allow_lists' panicked at services/identity/tests/account.rs:954:5:
+    assertion `left == right` failed: 503
+    left: 503
+    right: 200
+    error: test failed, to rerun pass `-p identity --test account`
+M2b (F2) the same WHERE mutation with the one-row check removed (first returned row taken)
+  cargo test -p identity --test account -- --exact users_change_only_their_own_preferences_within_the_allow_lists
+  FAILED as expected (exit 101)
+    thread 'users_change_only_their_own_preferences_within_the_allow_lists' panicked at services/identity/tests/account.rs:959:5:
+    assertion `left == right` failed
+    left: Object {"ai_language": String("auto"), "language": String("zh-TW"), "theme": String("light"), "time_zone": String("Asia/Taipei")}
+    right: Object {"ai_language": String("auto"), "language": String("zh-TW"), "theme": String("system"), "time_zone": String("Asia/Taipei")}
+    error: test failed, to rerun pass `-p identity --test account`
+M3 (F3) tenants::POOL_CONNECTIONS = 3 (the service-role pool the account API now shares)
+  cargo test -p identity --lib -- tests::the_readme_states_the_connections_per_replica
+  FAILED as expected (exit 101)
+    thread 'tests::the_readme_states_the_connections_per_replica' panicked at services/identity/src/lib.rs:376:9:
+    error: test failed, to rerun pass `-p identity --lib`
+M3b (F3) event log platform pool CONSUMES + 3 (the platform pool the membership reads now share)
+  cargo test -p identity --lib -- tests::the_readme_states_the_connections_per_replica
+  FAILED as expected (exit 101)
+    thread 'tests::the_readme_states_the_connections_per_replica' panicked at services/identity/src/lib.rs:376:9:
+    error: test failed, to rerun pass `-p identity --lib`
+M4 (F6) GET /sessions/current without the exchanged-token refusal
+  cargo test -p identity --test account -- --exact account_writes_need_the_users_own_same_origin_json_request
+  FAILED as expected (exit 101)
+    thread 'account_writes_need_the_users_own_same_origin_json_request' panicked at services/identity/tests/account.rs:332:5:
+    assertion `left == right` failed: 200
+    left: 200
+    right: 403
+    error: test failed, to rerun pass `-p identity --test account`
+M4b (F6) GET /preferences without the exchanged-token refusal
+  cargo test -p identity --test account -- --exact account_writes_need_the_users_own_same_origin_json_request
+  FAILED as expected (exit 101)
+    thread 'account_writes_need_the_users_own_same_origin_json_request' panicked at services/identity/tests/account.rs:332:5:
+    assertion `left == right` failed: 200
+    left: 200
+    right: 403
+    error: test failed, to rerun pass `-p identity --test account`
+M5 (F7) the three #[schema(required = true)] annotations removed
+  cargo test -p identity --lib -- current_session::tests::every_field_of_the_session_is_required_in_the_api_document
+  FAILED as expected (exit 101)
+    thread 'current_session::tests::every_field_of_the_session_is_required_in_the_api_document' panicked at services/identity/src/current_session.rs:657:13:
+    assertion `left == right` failed: CurrentSession
+    left: ["active_tenant", "email", "platform_admin", "tenants", "user_id"]
+    right: ["platform_admin", "tenants", "user_id"]
+    error: test failed, to rerun pass `-p identity --lib`
+M6 (F8) SWITCH_TENANT without AND expires_at > now()
+  cargo test -p identity --test account -- --exact a_session_switches_only_to_the_users_own_tenants
+  FAILED as expected (exit 101)
+    thread 'a_session_switches_only_to_the_users_own_tenants' panicked at services/identity/tests/account.rs:332:5:
+    assertion `left == right` failed: 200
+    left: 200
+    right: 401
+    error: test failed, to rerun pass `-p identity --test account`

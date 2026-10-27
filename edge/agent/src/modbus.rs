@@ -17,7 +17,12 @@
 //! and byte count over RTU, which has no transaction); others are discarded and the request
 //! keeps waiting. [`endpoint::Endpoints`] gives every device at the same endpoint one
 //! [`endpoint::SharedConnection`], which their polls use one request at a time.
+//!
+//! A connection goes only to an address it checked (`address.rs`): the host is resolved once,
+//! and loopback, unspecified, multicast and broadcast addresses, the gateway's own addresses
+//! and the cloud metadata addresses are refused (Laysi/trustiot-v2#653).
 
+mod address;
 pub mod decode;
 pub mod endpoint;
 mod mbap;

@@ -4,6 +4,7 @@
 //! (`testkit::clock::manual`), so they fire in order, never because the machine is slow.
 
 use std::collections::BTreeMap;
+use std::net::Ipv4Addr;
 use std::time::Duration;
 
 use agent::modbus::tcp::TcpConnection;
@@ -93,6 +94,9 @@ fn connection(endpoint: &FakeModbus) -> TcpConnection {
         endpoint.address().port(),
         DEFAULT_CONNECT_TIMEOUT,
     )
+    // The address guard refuses loopback, where the fake endpoint listens; only tests can
+    // exempt it.
+    .exempt_for_tests([Ipv4Addr::LOCALHOST.into()])
 }
 
 /// Polls once while `meanwhile` moves the clock or watches the endpoint.

@@ -1,24 +1,79 @@
 [package]
 name = "agent"
-description = "The TrustIoT gateway agent (decision 10). So far its Modbus reading (rebuild checklist F1, F2, F5): merged reads, a Modbus TCP and RTU-over-TCP client for the read function codes 1-4 with one shared connection per endpoint, decoding, and scaling; and polling each device on a fixed schedule with timeouts, reconnect backoff, TCP keepalive and a watchdog (F4)."
+description = "The TrustIoT gateway agent (decision 10): the trustiot-agent service with its MQTT 5 connection to the cloud (a 443 WebSocket with mTLS inside), its TPM identity key (decision 12), presence and heartbeat; and its Modbus reading (rebuild checklist F1, F2, F5): merged reads, a Modbus TCP and RTU-over-TCP client for the read function codes 1-4 with one shared connection per endpoint, decoding, and scaling; and polling each device on a fixed schedule with timeouts, reconnect backoff, TCP keepalive and a per-device watchdog (F4)."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 publish.workspace = true
 repository.workspace = true
 
-# The agent runs on the gateway: every dependency must build for aarch64-unknown-linux-gnu
-# without a C toolchain (ci.yml builds every edge/ member for that target).
+[features]
+# Test code only: `TcpConnection::exempt_for_tests` and `Endpoints::exempt_for_tests`, which let a
+# test reach the fake Modbus endpoint on 127.0.0.1 although the address guard refuses loopback
+# (src/modbus/address.rs, Laysi/trustiot-v2#653). Only dev-dependencies enable it (the one on
+# this crate below, and tools/lab-dataset's for its recorder test), so a build of the agent or of
+# a tool that uses it never has it; `cargo test -p repo-check` fails when a normal or build
+# dependency, another feature or a default enables it.
+test-exempt-addresses = []
+
+[[bin]]
+name = "trustiot-agent"
+path = "src/main.rs"
+
+# The agent runs on the gateway: every dependency must build for aarch64-unknown-linux-gnu (ci.yml
+# builds every edge/ member for that target). All are pure Rust except ring (the TLS provider),
+# whose build script compiles C and assembly with the target's C compiler: native on an arm64
+# host, Zig through cargo-zigbuild when cross-compiling. tests/dependencies.rs keeps out
+# webpki-roots, rustls-native-certs, OpenSSL, aws-lc and the TPM C libraries.
 [dependencies]
+bytes.workspace = true
+# The WebSocket's Stream and Sink, adapted to AsyncRead and AsyncWrite for the inner TLS.
+futures-util = { workspace = true, features = ["sink", "std"] }
+# getifaddrs: the gateway's own interface addresses, which the address guard refuses.
+libc.workspace = true
 protocol = { path = "../../crates/protocol" }
-# TCP keepalive's idle time, probe interval and probe count (`all` has the last two).
+# SHA-256 of what the TPM signs, and the check of the TPM key's test signature (`tpm`). rustls'
+# own provider, so no second crypto library.
+ring.workspace = true
+# TLS 1.3 only, so neither crate needs its `tls12` feature; ring is the only provider. The TPM
+# key is a rustls `SigningKey` (`tpm`).
+rustls = { workspace = true, features = ["ring", "std"] }
+rustls-pki-types = { workspace = true, features = ["std"] }
+serde = { workspace = true, features = ["derive"] }
+# TCP keepalive's idle time, probe interval and probe count, for the MQTT connection
+# (`transport::configure_tcp`) and the Modbus connections; tokio can only switch keepalive on.
+# `all` has the last two (and their getters), no code of its own.
 socket2 = { workspace = true, features = ["all"] }
-tokio = { workspace = true, features = ["io-util", "net", "sync", "time"] }
+thiserror.workspace = true
+tokio = { workspace = true, features = ["io-util", "macros", "net", "rt", "rt-multi-thread", "signal", "sync", "time"] }
+tokio-rustls = { workspace = true, features = ["ring"] }
+# The client handshake only; TLS is ours (tokio-rustls), so no TLS or root-store features.
+tokio-tungstenite = { workspace = true, features = ["handshake"] }
+tokio-util.workspace = true
+toml.workspace = true
+tracing.workspace = true
+tracing-subscriber = { workspace = true, features = ["fmt", "std"] }
+# The gateway ID (CN), the public key and the expiry of the client certificate; the root checks
+# of broker.ca and the root CRL's issuer, number, dates and extensions. Signatures are checked
+# with the TLS provider's algorithms instead (tls.rs), so x509-parser's `verify` is not used.
+x509-parser.workspace = true
 
 [dev-dependencies]
-# The fake Modbus endpoint with fault injection (`testkit::modbus`) and the paused clock.
+# This crate's own tests, with the feature that lets them reach the fake endpoint on loopback.
+agent = { path = ".", features = ["test-exempt-addresses"] }
+# PEM-encodes tampered root CRLs in the TLS unit tests.
+base64.workspace = true
+# A test CA and certificates made at test time, also for the TPM key in the TPM tests.
+rcgen = { workspace = true, features = ["crypto", "pem", "ring"] }
+# The fake TPM's software key (`ring::signature::EcdsaKeyPair`).
+ring = { workspace = true, features = ["alloc"] }
+serde_json.workspace = true
+# The fake Modbus endpoint with fault injection (`testkit::modbus`), the paused clock, the
+# Mosquitto broker with mTLS and WebSocket front (`testkit::mqtt`), and the swtpm container
+# (`testkit::container`).
 testkit = { path = "../../crates/testkit" }
-tokio = { workspace = true, features = ["macros", "rt", "test-util"] }
+# `process` runs the executable (tests/binary.rs).
+tokio = { workspace = true, features = ["macros", "process", "rt", "test-util"] }
 
 [lints]
 workspace = true

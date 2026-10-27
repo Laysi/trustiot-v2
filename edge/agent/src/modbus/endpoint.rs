@@ -22,6 +22,7 @@ use std::time::Duration;
 use protocol::config::{Device, Transport};
 use tokio::sync::Mutex;
 
+use super::address::AddressGuard;
 use super::pdu::Read;
 use super::tcp::TcpConnection;
 use super::{Connection, Exchange};
@@ -82,16 +83,34 @@ impl<C: Disconnect + Send> Disconnect for SharedConnection<C> {
 #[derive(Debug)]
 pub struct Endpoints {
     connect_timeout: Duration,
+    /// The address guard of every connection it creates (`address.rs`).
+    guard: AddressGuard,
     connections: HashMap<(Transport, String, u16), SharedConnection>,
 }
 
 impl Endpoints {
-    /// No endpoints yet; connections it creates wait at most `connect_timeout` to connect.
+    /// No endpoints yet; connections it creates wait at most `connect_timeout` to connect, and
+    /// connect only to addresses the address guard allows ([`TcpConnection`]).
     pub fn new(connect_timeout: Duration) -> Self {
         Self {
             connect_timeout,
+            guard: AddressGuard::default(),
             connections: HashMap::new(),
         }
+    }
+
+    /// Test code only: lets the connections it creates from now on reach `addresses` although
+    /// the address guard refuses them, as [`TcpConnection::exempt_for_tests`] does. It exists
+    /// only in this crate's unit tests and with the `test-exempt-addresses` feature, which only
+    /// dev-dependencies enable (`Cargo.toml`).
+    #[cfg(any(test, feature = "test-exempt-addresses"))]
+    #[must_use]
+    pub fn exempt_for_tests(
+        mut self,
+        addresses: impl IntoIterator<Item = std::net::IpAddr>,
+    ) -> Self {
+        self.guard.exempt(addresses);
+        self
     }
 
     /// The connection `device` reads through: the same one for every device with the same
@@ -104,11 +123,12 @@ impl Endpoints {
         self.connections
             .entry((device.transport, host.clone(), device.port))
             .or_insert_with(|| {
-                SharedConnection::new(TcpConnection::new(
+                SharedConnection::new(TcpConnection::guarded(
                     device.transport,
                     host,
                     device.port,
                     self.connect_timeout,
+                    self.guard.clone(),
                 ))
             })
             .clone()

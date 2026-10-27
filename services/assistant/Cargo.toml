@@ -34,8 +34,9 @@ serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true, features = ["raw_value"] }
 service-kit = { path = "../../crates/service-kit" }
 # The conversation store (src/store.rs) in the service role's tenant transactions; same TLS
-# stack as service-kit, which verifies the server on every connection (checklist M3).
-sqlx = { workspace = true, features = ["postgres", "runtime-tokio", "tls-rustls-ring-webpki"] }
+# stack as service-kit, which verifies the server on every connection (checklist M3). `chrono`:
+# the thread's and runs' times (timestamptz) as `DateTime<Utc>`.
+sqlx = { workspace = true, features = ["chrono", "postgres", "runtime-tokio", "tls-rustls-ring-webpki"] }
 thiserror.workspace = true
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "sync", "time"] }
 tracing.workspace = true

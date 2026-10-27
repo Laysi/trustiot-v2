@@ -64,6 +64,9 @@ x509-parser = { workspace = true, features = ["verify"] }
 zeroize.workspace = true
 
 [dev-dependencies]
+# The MQTT broker's certificate issuer (`migrate mqtt-broker-certificate`, Laysi/trustiot-v2#535)
+# against this service's broker port in tests/broker_certificate.rs.
+migrate = { path = "../../tools/migrate" }
 # Decodes the OTLP metric export the CRL test receives, to read the gauges.
 opentelemetry-proto = { workspace = true, features = ["gen-tonic-messages", "metrics"] }
 prost = { workspace = true, features = ["std"] }
@@ -73,7 +76,13 @@ reqwest.workspace = true
 rustls = { workspace = true, features = ["ring", "std"] }
 # The product's schema (the migration Job) and the cross-tenant suite.
 testkit = { path = "../../crates/testkit" }
-tokio = { workspace = true, features = ["macros", "process", "rt-multi-thread", "time"] }
+# The stand-in for the ingress in front of the service (tests/workstation_tool.rs).
+tokio = { workspace = true, features = ["io-util", "macros", "net", "process", "rt-multi-thread", "time"] }
+# Captures the audit log lines of the platform role's reads in tests/bindings.rs.
+tracing-subscriber = { workspace = true, features = ["registry", "std"] }
+# The production workstation tool, which enrolls and registers gateways against the real service
+# (tests/workstation_tool.rs).
+workstation = { path = "../../factory/workstation" }
 
 [lints]
 workspace = true
