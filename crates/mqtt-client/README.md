@@ -79,3 +79,4 @@ while let Some(event) = events.recv().await {
 
 - `cargo test -p mqtt-client`：設定與密碼檔的檢查、原因碼、退避、client id 不需要 broker；`tests/stand_in.rs` 以本機回送位址上的假 broker 測 in-flight 已滿時的 shutdown，以及連線建立中的 publish 立刻回 `NotConnected` 而且不會在連上後送出。
 - `tests/broker.rs` 與 `tests/logging.rs` 以 podman 或 docker 起拋棄式的 Mosquitto 2.1.2（與 chart 同一個映像與 digest，開 dynamic security，只發布到本機回送位址），沒有容器執行環境時略過，設了 `CI` 時失敗：`CI=1 cargo test -p mqtt-client -- --nocapture` 印出測試報告引用的 `evidence:` 行。涵蓋：正確密碼登入、錯的密碼被拒（Mosquitto 2.1.2 的 dynamic security 回 CONNACK 0x87 not authorized，不是 0x86）、直接與 shared 訂閱的 SUBACK 與被拒的訂閱（0x87）、1 MiB 的 payload 原樣收回、沒有權限的 topic 回 0x87、超過上限的封包不送出也不斷線、同一帳號的兩個實例同時連線、broker 重啟後自動重連並通知、broker 換了密碼後在密碼檔更新前被拒、更新後的下一次連線就用新密碼。
+- broker 容器的設定在 `tests/support/mod.rs`，不用 testkit 的 `mqtt::mosquitto`：那是閘道器路徑用的，只把 mTLS 的閘道器埠（8883，憑證當使用者名稱）發布到主機，帳密的 listener 只在容器內；這裡要測的是服務埠 1883 的帳密登入、只收 MQTT 5、`max_packet_size`、服務角色（含 `$share`）與換密碼。兩者釘同一個映像與 digest，`scripts/nightly/renovate.test.ts` 數這些副本。
