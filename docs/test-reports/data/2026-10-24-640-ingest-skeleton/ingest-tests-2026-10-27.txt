@@ -1,0 +1,62 @@
+# Build host (x86_64 Linux), CI=1, merged tree of 9ba9e950 (main ff01511e merged), 2026-10-27
+# Output filtered to the test lines, the binding steps, the probes and the readiness cases.
+$ cargo test --locked -p ingest -- --nocapture
+     Running unittests src/lib.rs
+test clickhouse::tests::error_codes_come_from_the_body ... ok
+test clickhouse::tests::the_account_never_prints_its_password ... ok
+test config::tests::clickhouse_urls ... ok
+test config::tests::an_https_clickhouse_needs_its_ca_and_the_roles_must_differ ... ok
+test retention::tests::a_retention_below_the_minimum_is_refused ... ok
+test retention::tests::months_hold_at_least_the_bound_in_days ... ok
+test retention::tests::each_aggregate_rule_refuses_with_its_reason ... ok
+test retention::tests::the_minimum_is_the_reconcile_window_and_two_days ... ok
+test retention::tests::the_platform_aggregate_values_pass ... ok
+test retention::tests::an_implausibly_long_retention_is_refused ... ok
+test retention::tests::valid_aggregate_settings_are_kept ... ok
+test retention::tests::the_platform_value_is_longer_than_the_buffer ... ok
+test rollup::tests::a_rewrite_statement_ends_on_the_server_before_its_client_gives_up ... ok
+test rollup::tests::every_stream_has_its_own_query_id ... ok
+test rollup::tests::parameters_are_quoted_for_the_array_type ... ok
+test rollup::tests::the_backfills_and_repairs_differ_only_in_table_and_filter ... ok
+test rollup::tests::the_energy_queries_read_the_tenant_views ... ok
+test rollup::tests::the_two_reconciles_differ_only_in_table_and_bucket ... ok
+test transport::tests::credentials_are_sensitive_headers ... ok
+test transport::tests::a_client_never_switches_scheme_or_leaks_credentials ... ok
+test result: ok. 20 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/clickhouse.rs
+test only_the_window_start_is_replaced ... ok
+test clickhouse_schema_and_tenant_isolation ... ok
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 19.29s
+     Running tests/cross_tenant.rs
+19 probes, 0 failed
+test tenants_are_isolated ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.53s
+     Running tests/disk_watermark.rs
+test the_disk_watermark_alert_fires_past_each_threshold ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 11.36s
+     Running tests/gateway_bindings.rs
+after a later binding with a skewed clock: [("01a17de3-3957-7675-9a40-703eef4a269f", "01a17de3-3a12-7747-a5bf-c43b2941b259", false), ("01a17de3-3957-7675-9a40-703f14fe6ac2", "01a17de3-45c8-7120-9b6b-c925f47affd1", false)]
+after the earlier binding arrived late: [("01a17de3-3957-7675-9a40-703eef4a269f", "01a17de3-3a12-7747-a5bf-c43b2941b259", false), ("01a17de3-3957-7675-9a40-703f14fe6ac2", "01a17de3-45c8-7120-9b6b-c925f47affd1", false)]
+dead-lettered: ("01a17de3-4da1-73f0-9d0e-d6b9fd7adc07", "assets.gateway_bound names a recorded binding with another gateway")
+test bindings_are_projected_once_and_newest_first ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 10.56s
+     Running tests/migrations.rs
+test splitter_rejects_ambiguous_files ... ok
+test every_file_has_statements ... ok
+test files_are_numbered_in_apply_order ... ok
+test tables_use_only_mergetree_engines ... ok
+test views_run_as_their_definer ... ok
+test statements_are_idempotent_and_never_destroy_data ... ok
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/rollups.rs
+test the_aggregates_follow_the_raw_rows ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 38.61s
+     Running tests/startup.rs
+both reachable: /readyz 200 {"status":"ready"}
+ClickHouse unreachable: /readyz 503 {"status":"unavailable"}; logged {"check":"clickhouse","error":"cannot connect to 127.0.0.1:37643: Connection refused (os error 111)"}
+ClickHouse refuses the password: /readyz 503 {"status":"unavailable"}; logged {"check":"clickhouse","error":"ClickHouse error 516 (HTTP 403)"}
+Postgres unreachable: /readyz 503 {"status":"unavailable"}; logged {"check":"postgres","error":"timed out after 800 ms"}
+test readiness_follows_postgres_and_clickhouse ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 7.27s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+exit 0 at 23:10:58 (build host)

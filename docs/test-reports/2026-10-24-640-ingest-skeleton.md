@@ -2,11 +2,11 @@
 
 對應 Laysi/trustiot-v2#640。
 
-這份報告記錄 2026-10-24 在開發者工作站與建置主機上的檢查：ingest 執行檔的 readiness、`ingest.gateway_bindings` 由 `assets.gateway_bound` 維護的行為、跨租戶負向測試，以及登記 schema 之後 workspace 與腳本的測試。
+這份報告記錄 2026-10-24 在開發者工作站與建置主機上的檢查：ingest 執行檔的 readiness、`ingest.gateway_bindings` 由 `assets.gateway_bound` 維護的行為、跨租戶負向測試，以及登記 schema 之後 workspace 與腳本的測試。2026-10-27 補上安全審查的修正（綁定的先後改依事件位置）與合併 main 到 `ff01511e` 之後的檢查，見「安全審查之後」與「合併 main 之後」。
 
 ## 環境
 
-- 程式碼：分支 `feat/640-ingest-service-skeleton`，基於 main `1ad0ffc5`；ingest 的測試在 `a768442c` 的工作樹快照上執行；之後合併 main 的 `757f52df`（`117fdf2c`），整個 workspace 的檢查見「workspace 檢查」。
+- 程式碼：分支 `feat/640-ingest-service-skeleton`，基於 main `1ad0ffc5`；ingest 的測試在 `a768442c` 的工作樹快照上執行；之後合併 main 的 `757f52df`（`117fdf2c`），整個 workspace 的檢查見「workspace 檢查」。2026-10-27：安全審查的修正 `3ca69d15`，再合併 main 到 `dab88223`（`6d6418f1`）、`509c3f1f`（`82286ea5`）與 `ff01511e`（`9ba9e950`），最後一次合併的樹上的檢查見「合併 main 之後」。
 - 建置主機（x86_64 Linux）：Rust 的 clippy 與測試、`bun test scripts`、`bun test deploy/chart`。每次在工作樹的快照上執行，設了 `CI=1`，所以沒有容器執行環境時容器測試失敗而不是略過。
 - 開發者工作站（x86_64 Linux）：`cargo fmt --all --check`、`cargo metadata --locked`、`bun test scripts/tests/product-logins.test.ts scripts/tests/migrate.test.ts scripts/ci/changes.test.ts`。
 - Postgres 是 `testkit::product` 的 TLS Postgres（migration Job 套用整個產品 schema，服務以 `verify-full` 連線）；ClickHouse 是 `services/ingest/tests/common` 的測試容器，套用全部 ClickHouse migration。
@@ -60,6 +60,14 @@ ingest 執行檔以真的 Postgres 執行（ClickHouse 指向關閉的埠，消�
 | 6. 已記錄的 `binding_id` 配上另一個閘道器 | 進 dead letter，原因 `assets.gateway_bound names a recorded binding with another gateway`；另一個閘道器沒有任何列；之後的事件照常套用 |
 | 7. 平台角色 `ingest_platform` 寫入綁定 | `42501`（只有 SELECT） |
 
+### 安全審查之後
+
+`427d9690` 的安全審查指出：`bound_at` 與 UUIDv7 的 `binding_id` 都來自寫入事件的資產服務副本的時鐘，一個時鐘偏差的副本可能讓較舊的綁定排成目前的綁定。`3ca69d15` 改成依事件在資產服務 outbox 紀錄裡的位置（`position_tx`、`position_id`）排序，與 certs 的投影（Laysi/trustiot-v2#632）同一條規則；`bound_at` 只供閱讀，拿掉 `unbound_at >= bound_at` 的 CHECK。上表第 4、5 步是新版本，在 `9ba9e950` 的樹上的輸出（[ingest-tests-2026-10-27.txt](data/2026-10-24-640-ingest-skeleton/ingest-tests-2026-10-27.txt)）：
+
+- 第 4 步之後兩列（`after a later binding with a skewed clock`），第 5 步重播之後仍是同樣的兩列（`after the earlier binding arrived late`），兩次 `gateway_tenant` 都回租戶 B；測試斷言這兩點。
+- 第 6 步的 dead letter 原因與先前相同。
+- `cross_tenant` 19 probes、0 failed；`startup` 的四個情境與上表相同。
+
 ### 跨租戶負向測試（`tests/cross_tenant.rs`）
 
 19 個 probe 全部通過：`ingest.gateway_bindings` 以服務角色在租戶 A、B 各只看到自己的兩列，沒有租戶時看不到任何列；更新、搬到另一個租戶、寫入另一個租戶都回 `42501`。outbox 消費端的四張表與 `trustiot_migrate_applied` 以理由豁免，ingest 沒有 HTTP API。
@@ -100,7 +108,51 @@ $ bun test deploy/chart
 exit 0 at 16:20:27 (build host)
 ```
 
-合併 main 的 `757f52df`（Laysi/trustiot-v2#655）之後（`117fdf2c`）：衝突只在 registry 與登入清單，兩邊都保留。工作站上 `cargo fmt --all --check`、`cargo metadata --locked` 與 `bun test scripts/tests/product-logins.test.ts scripts/tests/migrate.test.ts`（23 pass、0 fail）通過。建置主機上的整套檢查待測：2026-10-24 兩次排入時建置主機的磁碟空間都不足，工作沒有執行。
+合併 main 的 `757f52df`（Laysi/trustiot-v2#655）之後（`117fdf2c`）：衝突只在 registry 與登入清單，兩邊都保留。工作站上 `cargo fmt --all --check`、`cargo metadata --locked` 與 `bun test scripts/tests/product-logins.test.ts scripts/tests/migrate.test.ts`（23 pass、0 fail）通過。2026-10-24 建置主機的磁碟空間不足，整套檢查改在下面最後一次合併之後的樹上執行。
+
+### 合併 main 之後
+
+2026-10-27 再合併 main 三次：
+
+- `dab88223`（`6d6418f1`）沒有衝突。
+- `509c3f1f`（`82286ea5`，含 Laysi/trustiot-v2#687 的彙總表與 Laysi/trustiot-v2#574 的閘道器 agent）有四個衝突，兩邊都保留：
+  - `Cargo.lock` 取 main 的版本，再由 cargo 重新解析，與 main 只差 ingest 的相依清單。
+  - `services/ingest/Cargo.toml` 保留服務的相依與 `[[bin]]`，dev-dependency 用 main 的 `chrono`（`features = ["now"]`）。
+  - `services/ingest/src/lib.rs` 的模組清單加上 `rollup`。
+  - `services/ingest/README.md` 開頭一段合併兩邊的說明。
+- `ff01511e`（`9ba9e950`，含 Laysi/trustiot-v2#632 的 certs 綁定投影、Laysi/trustiot-v2#606 的 AI 閘道管理 API、Laysi/trustiot-v2#644 的助理對話儲存）有兩個衝突，兩邊都保留：
+  - `tools/migrate/tests/fresh_database.rs`：沒有密碼的角色依 registry 的順序是 `assistant_platform`（main）、`ai_gateway_app`、`ingest_app`、`ingest_platform`。`assets.outbox_event` 的讀取者是 `certs_platform`、`identity_platform`、`ingest_platform`（assets 不再讀自己的事件，是 main 的變更），之後是 main 對 certs 消費端權限與表的檢查。
+  - `scripts/tests/product-logins.test.ts`：assets 與 certs 的 `consumes` 用 main 的預期，chart 的平台登入清單是 `assets`、`certs`、`identity`、`ingest`、`telemetry-query`。
+  - 自動合併的 `tools/migrate/src/registry.rs`（ingest 在 ai-gateway 之後，`consumes: &["assets"]`）與 `Cargo.lock`（與 main 只差 ingest 的相依）也逐一確認過。
+
+`9ba9e950` 的樹，建置主機，`CI=1`：
+
+```
+$ cargo fmt --all --check
+$ cargo clippy --locked --workspace --all-targets -- -D warnings
+（沒有輸出）
+$ cargo test --locked -p ingest -- --nocapture
+9 個 test result 全部 ok，33 passed
+$ cargo test --locked -p migrate
+24 個 test result 全部 ok，170 passed（含 fresh_database、registry）
+$ cargo test --locked -p repo-check
+3 個 test result 全部 ok，28 passed
+$ cargo test --locked -p sql-check
+3 個 test result 全部 ok，26 passed
+$ cargo run --locked -p openapi -- --check
+api/openapi.json is up to date
+$ cargo deny --locked check
+advisories ok, bans ok, licenses ok, sources ok
+$ bun test deploy/chart
+ 659 pass
+ 0 fail
+$ bun install --cwd scripts --frozen-lockfile
+$ bun test scripts
+ 1704 pass
+ 9 skip
+ 0 fail
+exit 0 at 23:10:58 (build host)
+```
 
 ## 結論
 
@@ -109,4 +161,4 @@ exit 0 at 16:20:27 (build host)
 | `cargo run -p ingest` 以 `bun scripts/dev.ts env` 的 Postgres 設定加 ClickHouse 設定啟動，兩者都連得上時 readiness 200，任一個連不上時不是 200 | 通過：`tests/startup.rs` 執行同一個執行檔，Postgres 的平台設定是 `dev.ts env` 印出的同一組變數（`TRUSTIOT_POSTGRES_*`，由 `testkit::product` 給值），ClickHouse 是既有的測試容器 |
 | 平台管理員綁定後對照表有租戶與 `binding_id`；同一事件兩次、整個訂閱重播都只有一列；較舊的綁定晚到不覆蓋較新的 | 通過：上方「綁定對照表」第 1 至 5 步 |
 | 跨租戶負向測試涵蓋新的表並通過 | 通過：`tests/cross_tenant.rs` 19 個 probe；`cargo test -p testkit` 在 workspace 的測試裡通過（「workspace 檢查」） |
-| migration Job 建立 `ingest` schema、角色與 outbox 消費的權限；`cargo test --workspace`、`cargo clippy --workspace --all-targets -- -D warnings` 通過 | 合併 main 之前通過：`fresh_database` 確認兩個 ingest 角色存在且 NOLOGIN、`ingest_platform` 列在 `assets.outbox_event` 的 `consumer_read`，workspace 的測試與 clippy 通過。合併 main 之後的整套檢查待測（建置主機磁碟空間不足），PR 的 CI 會再跑一次 |
+| migration Job 建立 `ingest` schema、角色與 outbox 消費的權限；`cargo test --workspace`、`cargo clippy --workspace --all-targets -- -D warnings` 通過 | 合併 main 之前通過：`fresh_database` 確認兩個 ingest 角色存在且 NOLOGIN、`ingest_platform` 列在 `assets.outbox_event` 的 `consumer_read`，workspace 的測試與 clippy 通過。合併 main 到 `ff01511e` 之後（`9ba9e950`）也通過：clippy、`migrate`（含 `fresh_database`）、`ingest`、`repo-check`、`sql-check` 的測試（「合併 main 之後」）；整個 workspace 的測試由 PR 的 CI 執行 |
