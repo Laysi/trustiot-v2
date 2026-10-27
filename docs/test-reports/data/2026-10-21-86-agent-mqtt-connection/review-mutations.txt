@@ -1,0 +1,1326 @@
+## C1 (outer trusts broker.ca, inner trusts cloud.trust)
+mutation in edge/agent/src/setup.rs
+- let outer = tls::outer_config(&config.outer_trust).map_err(SetupError::OuterTls)?;
++ let outer = tls::outer_config(&[config.outer_trust.clone(), vec![config.broker_ca.clone()]].concat()).map_err(SetupError::OuterTls)?; ...
+$ cargo test -p agent --test transport _ca_is_refused
+failed: a_broker_certificate_from_the_outer_ca_is_refused, a_front_certificate_from_the_broker_ca_is_refused at edge/agent/tests/transport.rs:287:5
+first assertion: timed out after 30s waiting for CONNACK
+exit code: 101
+
+## C1 (config: broker.name equal to the cloud.url host)
+mutation in edge/agent/src/config.rs
+- if lower_broker_name.trim_end_matches('.') == url.host().trim_end_matches('.') {
++ if false && lower_broker_name.trim_end_matches('.') == url.host().trim_end_matches('.') {
+$ cargo test -p agent --lib values_that_break_a_rule_are_refused_with_their_key
+failed: config::tests::values_that_break_a_rule_are_refused_with_their_key at edge/agent/src/config.rs:344:29
+exit code: 101
+
+## C2 (reset after any accepted connection)
+mutation in edge/agent/src/link.rs
+- .is_some_and(|at| at.elapsed() >= STABLE_AFTER)
++ .is_some()
+$ cargo test -p agent --test link only_a_connection_that_stayed_up_resets_the_backoff
+failed: only_a_connection_that_stayed_up_resets_the_backoff at edge/agent/tests/link.rs:433:5
+first assertion: after drop 1: waited 1s, expected just under 2s
+exit code: 101
+
+## C2 (never reset)
+mutation in edge/agent/src/link.rs
+- .is_some_and(|at| at.elapsed() >= STABLE_AFTER)
++ .is_some_and(|_| false)
+$ cargo test -p agent --test link only_a_connection_that_stayed_up_resets_the_backoff
+failed: only_a_connection_that_stayed_up_resets_the_backoff at edge/agent/tests/link.rs:433:5
+first assertion: after a stable connection: waited 60s, expected just under 1s
+exit code: 101
+
+## C3 (adopt a Server Keep Alive of 0)
+mutation in edge/agent/src/mqtt/connection.rs
+- Some(0) => tracing::warn!(
++ Some(0) if false => tracing::warn!(
+$ cargo test -p agent --test link a_server_keep_alive_of_zero_keeps_the_agents_own_keepalive
+failed: a_server_keep_alive_of_zero_keeps_the_agents_own_keepalive at crates/testkit/src/clock.rs:104:17
+first assertion: timed out after 60s waiting for a PINGREQ
+exit code: 101
+
+## C4 (drop the stream on a stop before CONNACK)
+mutation in edge/agent/src/mqtt/connection.rs
+- stop_deadline = Some(Instant::now() + STOP_ACK_TIMEOUT);
++ return Ok(());
+$ cargo test -p agent --test link a_stop_while_waiting_for_connack
+failed: a_stop_while_waiting_for_connack_still_ends_with_offline_and_a_normal_disconnect at edge/agent/tests/link.rs:735:9
+first assertion: the stream was dropped instead of a clean stop
+exit code: 101
+
+## C5 (keep control characters)
+mutation in edge/agent/src/link.rs
+- .map(|c| if c.is_control() { ' ' } else { c })
++ .map(|c| c)
+$ cargo test -p agent --test link reason_strings_from_the_broker_lose_their_control_characters
+failed: reason_strings_from_the_broker_lose_their_control_characters at edge/agent/tests/link.rs:798:5
+exit code: 101
+
+## C6 (no numeric-host check)
+mutation in edge/agent/src/transport.rs
+- if ends_in_a_number(bare) {
++ if false && ends_in_a_number(bare) {
+$ cargo test -p agent --lib only_wss_urls_on_our_own_domain_with_the_mqtt_path_are_accepted
+failed: transport::tests::only_wss_urls_on_our_own_domain_with_the_mqtt_path_are_accepted at edge/agent/src/transport.rs:454:46
+first assertion: wss://0x7f000001/mqtt: CloudUrl { url: "wss://0x7f000001/mqtt", host: "0x7f000001", port: 443 }
+exit code: 101
+
+## C7 (no client certificate check)
+mutation in edge/agent/src/tls.rs
+-     let verifier = WebPkiClientVerifier::builder_with_provider(
++     if identity.chain.len() < usize::MAX { ...
+$ cargo test -p agent --test binary certificate
+failed: check_refuses_a_certificate_the_broker_ca_did_not_issue, an_expired_certificate_only_warns_because_the_clock_may_be_wrong at edge/agent/tests/binary.rs:258:5
+first assertion: assertion `left == right` failed:  WARN trustiot_agent: identity.key.source is "file": for development and tests only; production gateways keep the key in the TPM
+exit code: 101
+
+## C7 (no key usage check)
+mutation in edge/agent/src/identity.rs
+- Ok(Some(usage)) if !usage.value.digital_signature() => {
++ Ok(Some(usage)) if false && !usage.value.digital_signature() => {
+$ cargo test -p agent --lib identities_that_could_mislead_the_broker_are_refused
+failed: identity::tests::identities_that_could_mislead_the_broker_are_refused at edge/agent/src/identity.rs:378:48
+exit code: 101
+
+## P2 (RESPONSE_TIMEOUT back to 30 s)
+mutation in edge/agent/src/tpm.rs
+- pub const RESPONSE_TIMEOUT: Duration = Duration::from_secs(10);
++ pub const RESPONSE_TIMEOUT: Duration = Duration::from_secs(30);
+$ cargo test -p agent --test systemd_unit a_stuck_tpm
+failed: a_stuck_tpm_cannot_outlast_the_watchdog_or_the_start_timeout at edge/agent/tests/systemd_unit.rs:239:5
+first assertion: RESPONSE_TIMEOUT 30s + tick 1s must stay below half of WatchdogSec (15000 ms)
+exit code: 101
+
+## P3 (no PUBACK deadline)
+mutation in edge/agent/src/mqtt/connection.rs
+- let ack_deadline = if up && !delivering {
++ let ack_deadline = if false && up && !delivering {
+$ cargo test -p agent --test link a_puback_that_never_comes_ends_the_connection_after_its_deadline
+failed: a_puback_that_never_comes_ends_the_connection_after_its_deadline at crates/testkit/src/clock.rs:104:17
+first assertion: timed out after 60s waiting for the DISCONNECT
+exit code: 101
+
+## P3 (QoS 0 waits for the in-flight window)
+mutation in edge/agent/src/mqtt/connection.rs
+- let take_at_most_once = up && !at_most_once_closed;
++ let take_at_most_once = up && st.publishes < st.limit && !at_most_once_closed;
+$ cargo test -p agent --test link qos_0_publishes_pass_a_full_inflight_window
+failed: qos_0_publishes_pass_a_full_inflight_window at edge/agent/tests/link.rs:857:9
+first assertion: the heartbeat waited behind the full window
+exit code: 101
+
+## SUBACK refusal only logged (pre-commit review)
+mutation in edge/agent/src/mqtt/connection.rs
+- if let Some((topic, code)) = refused {
++ if let Some((topic, code)) = refused.filter(|_| false) {
+$ cargo test -p agent --test link a_refused_subscription
+failed: a_refused_subscription_ends_the_connection_and_never_reports_connected at edge/agent/tests/link.rs:505:5
+first assertion: assertion `left == right` failed: a non-zero DISCONNECT, so the broker publishes the will
+exit code: 101
+
+## Connected reported right after SUBSCRIBE (pre-commit review)
+mutation in edge/agent/src/mqtt/connection.rs
+- if !announced && st.connected_at.is_some() && st.stopping.is_none() {
++ if !announced && st.stopping.is_none() {
+$ cargo test -p agent --test link a_refused_subscription
+failed: a_refused_subscription_ends_the_connection_and_never_reports_connected at edge/agent/tests/link.rs:498:5
+first assertion: assertion `left == right` failed
+exit code: 101
+
+## invalid explicit port falls back to 443 (pre-commit review)
+mutation in edge/agent/src/transport.rs
+- let port = explicit_port(authority)?.unwrap_or(443);
++ let port = explicit_port(authority).ok().flatten().unwrap_or(443);
+$ cargo test -p agent --lib only_wss_urls_on_our_own_domain_with_the_mqtt_path_are_accepted
+failed: transport::tests::only_wss_urls_on_our_own_domain_with_the_mqtt_path_are_accepted at edge/agent/src/transport.rs:486:46
+first assertion: wss://gw.trustiot.example:0/mqtt: CloudUrl { url: "wss://gw.trustiot.example/mqtt", host: "gw.trustiot.example", port: 443 }
+exit code: 101
+
+## reason codes: accept any code below 0x80 (pre-commit review)
+mutation in edge/agent/src/mqtt/packet.rs
+-         if allowed.contains(&code) {
++         if code < 0x80 || allowed.contains(&code) { ...
+$ cargo test -p agent --lib only_the_reason_codes_mqtt_5_allows_are_accepted
+failed: mqtt::packet::tests::only_the_reason_codes_mqtt_5_allows_are_accepted at edge/agent/src/mqtt/packet.rs:1067:40
+exit code: 101
+
+## reason codes: accept any code below 0x80, link level (pre-commit review)
+mutation in edge/agent/src/mqtt/packet.rs
+-         if allowed.contains(&code) {
++         if code < 0x80 || allowed.contains(&code) { ...
+$ cargo test -p agent --test link reason_code
+failed: a_puback_with_a_reason_code_mqtt_5_does_not_allow_is_never_a_success at edge/agent/tests/link.rs:597:9
+first assertion: assertion `left == right` failed: PUBACK 0x01 is a protocol error
+exit code: 101
+
+## SUBACK granting QoS 2 accepted (pre-commit review)
+mutation in edge/agent/src/mqtt/connection.rs
+- if ack.reasons.contains(&reason::GRANTED_QOS_2) {
++ if false && ack.reasons.contains(&reason::GRANTED_QOS_2) {
+$ cargo test -p agent --test link connack_and_suback_codes_outside_their_sets_end_the_connection
+failed: connack_and_suback_codes_outside_their_sets_end_the_connection at edge/agent/tests/link.rs:645:9
+first assertion: assertion `left == right` failed: SUBACK 0x02
+exit code: 101
+
+## front restart rebinds before the old listener is gone (pre-commit review)
+mutation in crates/testkit/src/mqtt/front.rs
+-         self.stop().await;
++         if let Some(serving) = self.serving.take() { ...
+$ cargo test -p testkit --lib a_restart_rebinds_the_same_port_once_the_old_listener_is_gone
+failed: mqtt::front::tests::a_restart_rebinds_the_same_port_once_the_old_listener_is_gone at crates/testkit/src/mqtt/front.rs:398:41
+exit code: 101
+
+## sweep: Mosquitto start does not retry a taken port
+mutation in crates/testkit/src/mqtt/mosquitto.rs
+- const START_ATTEMPTS: usize = 5;
++ const START_ATTEMPTS: usize = 1;
+$ cargo test -p testkit --lib a_port_taken_before_the_runtime_binds_it_is_retried_with_another
+failed: mqtt::mosquitto::tests::a_port_taken_before_the_runtime_binds_it_is_retried_with_another at crates/testkit/src/mqtt/mosquitto.rs:163:13
+exit code: 101
+
+## sweep: a dropped subscription only kills the exec client
+mutation in crates/testkit/src/mqtt/mosquitto.rs
+- r#"kill "$(cat "$0")" 2>/dev/null; rm -f "$0""#,
++ r#"true"#,
+$ cargo test -p testkit --lib a_dropped_subscription_stops_mosquitto_sub_in_the_container
+failed: mqtt::mosquitto::tests::a_dropped_subscription_stops_mosquitto_sub_in_the_container at crates/testkit/src/mqtt/mosquitto.rs:655:9
+exit code: 101
+
+## sweep: the closed port can be taken by another socket
+mutation in edge/agent/tests/binary.rs
+-             .bind(&std::net::SocketAddr::from(([127, 0, 0, 1], 0)).into())
++             .set_reuse_address(true) ...
+$ cargo test -p agent --test binary a_closed_port_refuses_connections_and_cannot_be_taken
+failed: a_closed_port_refuses_connections_and_cannot_be_taken at edge/agent/tests/binary.rs:151:46
+exit code: 101
+
+## publish waits for room in the queue (pre-commit review: memory bound)
+mutation in edge/agent/src/link.rs
+-                 .try_reserve_owned()
++                 .reserve_owned() ...
+$ cargo test -p agent --test link publish_never_waits_for_room
+failed: publish_never_waits_for_room_so_callers_beyond_the_queue_hold_nothing at edge/agent/tests/link.rs:290:10
+exit code: 101
+
+## reserve fails at once instead of waiting (pre-commit review: memory bound)
+mutation in edge/agent/src/link.rs
+-             .reserve_owned()
++             .try_reserve_owned() ...
+$ cargo test -p agent --test link reserve_waits_without_a_payload
+failed: reserve_waits_without_a_payload_and_hands_out_places_in_order at edge/agent/tests/link.rs:345:5
+first assertion: assertion failed: waiters.iter().all(|waiter| !waiter.is_finished())
+exit code: 101
+
+## a permit used after the stop waits only for its reply (pre-commit review: memory bound)
+mutation in edge/agent/src/link.rs
+-         () = queue.closed() => Err(PublishError::Stopped),
++ 
+$ cargo test -p agent --test link publishing_fails_at_once_while_offline
+failed: publishing_fails_at_once_while_offline_and_checks_the_channel_first at crates/testkit/src/clock.rs:104:17
+first assertion: timed out after 60s waiting for a permit used after the stop
+exit code: 101
+
+## a request dropped with a closed queue reports ConnectionLost (pre-commit review: memory bound)
+mutation in edge/agent/src/link.rs
+-             Err(_) if queue.is_closed() => Err(PublishError::Stopped),
++ 
+$ cargo test -p agent --test link publishes_still_queued_when_the_supervisor_goes_away
+failed: publishes_still_queued_when_the_supervisor_goes_away_report_the_stop at edge/agent/tests/link.rs:981:5
+first assertion: assertion `left == right` failed
+exit code: 101
+
+## SUBACK granting QoS 0 only warns (pre-commit review)
+mutation in edge/agent/src/mqtt/connection.rs
+-                     reason::GRANTED_QOS_0 => {
++                     reason::GRANTED_QOS_0 => { ...
+$ cargo test -p agent --test link a_broker_that_cannot_deliver_at_qos_1_or_retain_is_never_connected
+failed: a_broker_that_cannot_deliver_at_qos_1_or_retain_is_never_connected at edge/agent/tests/link.rs:847:5
+first assertion: assertion `left == right` failed: a QoS 0 grant is no subscription the gateway can rely on
+exit code: 101
+
+## sweep: CONNACK Maximum QoS 0 accepted
+mutation in edge/agent/src/mqtt/connection.rs
+-     if ack.maximum_qos == Some(0) {
++     if false && ack.maximum_qos == Some(0) {
+$ cargo test -p agent --test link a_broker_that_cannot_deliver_at_qos_1_or_retain_is_never_connected
+failed: a_broker_that_cannot_deliver_at_qos_1_or_retain_is_never_connected at edge/agent/tests/link.rs:815:9
+first assertion: assertion `left == right` failed: no online status to a broker with Maximum QoS 0
+exit code: 101
+
+## sweep: CONNACK Retain Available 0 accepted
+mutation in edge/agent/src/mqtt/connection.rs
+-     if ack.retain_available == Some(false) {
++     if false && ack.retain_available == Some(false) {
+$ cargo test -p agent --test link a_broker_that_cannot_deliver_at_qos_1_or_retain_is_never_connected
+failed: a_broker_that_cannot_deliver_at_qos_1_or_retain_is_never_connected at edge/agent/tests/link.rs:815:9
+first assertion: assertion `left == right` failed: no online status to a broker with Retain Available 0
+exit code: 101
+
+## testkit: stop_listening only drops (pre-commit check run)
+mutation in crates/testkit/src/mqtt.rs
+-     let _ = socket2::SockRef::from(listener).shutdown(std::net::Shutdown::Both);
++     let _ = listener;
+$ cargo test -p testkit --lib a_stopped_listener_frees_its_port_while_a_copy_of_its_descriptor_is_open
+failed: mqtt::tests::a_stopped_listener_frees_its_port_while_a_copy_of_its_descriptor_is_open at crates/testkit/src/mqtt.rs:373:63
+exit code: 101
+
+## testkit: the front drops its listener without stop_listening (pre-commit check run)
+mutation in crates/testkit/src/mqtt/front.rs
+- stop_listening(&listener);
++ (removed)
+$ CI=true <testkit lib test binary>   # the whole lib suite, 40 times
+a_restart_rebinds_the_same_port_once_the_old_listener_is_gone failed in 11 of 40 runs
+restart 0: Address already in use (os error 98)
+
+## a PUBACK for an identifier not in flight is only ignored (pre-commit review)
+mutation in edge/agent/src/mqtt/connection.rs
+-                 return Err(violation(
++                 return Ok(false);
+$ cargo test -p agent --test link broken_packets_are_answered_with_the_matching_disconnect
+failed: broken_packets_are_answered_with_the_matching_disconnect at crates/testkit/src/clock.rs:104:17
+first assertion: timed out after 60s waiting for PUBACK for nothing
+exit code: 101
+
+## sweep: a PINGRESP without a PINGREQ is accepted
+mutation in edge/agent/src/mqtt/connection.rs
+-             if st.ping_sent.take().is_none() {
++             if st.ping_sent.take().is_none() && false {
+$ cargo test -p agent --test link broken_packets_are_answered_with_the_matching_disconnect
+failed: broken_packets_are_answered_with_the_matching_disconnect at crates/testkit/src/clock.rs:104:17
+first assertion: timed out after 60s waiting for PINGRESP without a PINGREQ
+exit code: 101
+
+## a refused subscription ends with DISCONNECT 0x83 again, real Mosquitto (pre-commit review: the will)
+mutation in edge/agent/src/mqtt/connection.rs
+-                     close(stream, st, reason::DISCONNECT_WITH_WILL).await;
++                     close(stream, st, 0x83).await; ...
+$ cargo test -p agent --test broker a_refused_subscription_leaves_the_will_as_the_status_and_the_agent_tries_again
+failed: a_refused_subscription_leaves_the_will_as_the_status_and_the_agent_tries_again at crates/testkit/src/mqtt/mosquitto.rs:622:21
+first assertion: timed out after 120s waiting for the will of the refused connection; other messages: 219 on trustiot/v1/gw/gw-test-1/up/status, none of them the will of the first session (list sho [...]
+exit code: 101
+
+## a refused subscription ends with DISCONNECT 0x83 again, link test (pre-commit review: the will)
+mutation in edge/agent/src/mqtt/connection.rs
+-                     close(stream, st, reason::DISCONNECT_WITH_WILL).await;
++                     close(stream, st, 0x83).await; ...
+$ cargo test -p agent --test link a_refused_subscription_ends_the_connection_and_never_reports_connected
+failed: a_refused_subscription_ends_the_connection_and_never_reports_connected at edge/agent/tests/link.rs:645:5
+first assertion: assertion `left == right` failed: DISCONNECT 0x04, so the broker publishes the will (Mosquitto drops it for 0x83)
+exit code: 101
+
+## sweep: protocol errors send their own reason code again (0x81/0x82/0x94/0x95)
+mutation in edge/agent/src/mqtt/connection.rs
+-     close(stream, st, reason::DISCONNECT_WITH_WILL).await;
++     close(stream, st, error.reason_code()).await; ...
+$ cargo test -p agent --test link broken_packets_end_the_connection_with_the_will
+failed: broken_packets_end_the_connection_with_the_will at edge/agent/tests/link.rs:753:9
+first assertion: assertion `left == right` failed: reserved packet type: DISCONNECT 0x04, so the broker publishes the will
+exit code: 101
+
+## sweep: the PUBACK or SUBACK deadline sends DISCONNECT 0x80 again
+mutation in edge/agent/src/mqtt/connection.rs
+-                 close(stream, st, reason::DISCONNECT_WITH_WILL).await;
++                 close(stream, st, 0x80).await; ...
+$ cargo test -p agent --test link a_puback_that_never_comes_ends_the_connection_after_its_deadline
+failed: a_puback_that_never_comes_ends_the_connection_after_its_deadline at edge/agent/tests/link.rs:1289:5
+first assertion: assertion `left == right` failed
+exit code: 101
+
+## testkit: dropping the front only aborts its loop (pre-commit review)
+mutation in crates/testkit/src/mqtt/front.rs
+-             stop_listening(&*serving.listener);
++ 
+$ cargo test -p testkit --lib stopping_or_dropping_closes_the_port_while_a_copy_of_the_listener_is_open
+failed: mqtt::front::tests::stopping_or_dropping_closes_the_port_while_a_copy_of_the_listener_is_open at crates/testkit/src/mqtt/front.rs:430:57
+exit code: 101
+
+## testkit: stopping the front only drops its listener (deterministic form of the earlier statistical check)
+mutation in crates/testkit/src/mqtt/front.rs
+-             stop_listening(&*listener);
++ 
+$ cargo test -p testkit --lib stopping_or_dropping_closes_the_port_while_a_copy_of_the_listener_is_open
+failed: mqtt::front::tests::stopping_or_dropping_closes_the_port_while_a_copy_of_the_listener_is_open at crates/testkit/src/mqtt/front.rs:430:57
+exit code: 101
+
+## a stop reports written publishes as Stopped again (pre-commit review)
+mutation in edge/agent/src/mqtt/connection.rs
+-     for (_, entry) in st.in_flight.drain() {
++     let failure = match outcome { ...
+$ cargo test -p agent --test link a_stop_reports_written_publishes_as_maybe_delivered_and_queued_ones_as_not_sent
+failed: a_stop_reports_written_publishes_as_maybe_delivered_and_queued_ones_as_not_sent at edge/agent/tests/link.rs:1008:5
+first assertion: assertion `left == right` failed: written without a PUBACK: it may have reached the broker
+exit code: 101
+
+## sweep: a failed QoS 0 write drops its reply again
+mutation in edge/agent/src/mqtt/connection.rs
+-             let written = write(stream, st, &[&header, &payload]).await;
++             write(stream, st, &[&header, &payload]).await?; ...
+$ cargo test -p agent --test link a_qos_0_write_that_fails_during_a_stop_is_not_reported_as_never_sent
+failed: a_qos_0_write_that_fails_during_a_stop_is_not_reported_as_never_sent at edge/agent/tests/link.rs:1064:5
+first assertion: assertion `left == right` failed
+exit code: 101
+
+## sweep: overlong variable byte integers accepted again (unit)
+mutation in edge/agent/src/mqtt/packet.rs
+-             if index > 0 && byte == 0 {
++             if false {
+$ cargo test -p agent --lib mqtt::packet::tests
+failed: mqtt::packet::tests::every_mqtt_5_must_rule_on_received_packets_is_enforced, mqtt::packet::tests::varints_round_trip_at_every_width_boundary at edge/agent/src/mqtt/packet.rs:1684:44
+first assertion: Remaining Length 0 in two bytes: [d0, 80, 00] accepted: Some((PingResp, 3))
+exit code: 101
+
+## sweep: overlong variable byte integers accepted again (link, after CONNACK)
+mutation in edge/agent/src/mqtt/packet.rs
+-             if index > 0 && byte == 0 {
++             if false {
+$ cargo test -p agent --test link broken_packets_end_the_connection_with_the_will
+failed: broken_packets_end_the_connection_with_the_will at edge/agent/tests/link.rs:780:9
+first assertion: overlong Remaining Length: protocol error: PINGRESP without a PINGREQ
+exit code: 101
+
+## sweep: overlong variable byte integers accepted again (link, CONNACK)
+mutation in edge/agent/src/mqtt/packet.rs
+-             if index > 0 && byte == 0 {
++             if false {
+$ cargo test -p agent --test link a_connack_that_breaks_mqtt_5_ends_the_connection_with_the_will
+failed: a_connack_that_breaks_mqtt_5_ends_the_connection_with_the_will at edge/agent/tests/link.rs:895:9
+first assertion: assertion `left == right` failed: Remaining Length 3 in two bytes: DISCONNECT 0x04 and no online status
+exit code: 101
+
+## sweep: CONNACK without a Property Length accepted again (check removed, properties optional) (unit)
+mutation in edge/agent/src/mqtt/packet.rs
+-     // Unlike PUBACK and DISCONNECT, an MQTT 5 CONNACK has no short form: no properties are a ...
++     let reason = reason::check("CONNACK", code, reason::CONNACK)?; ...
+$ cargo test -p agent --lib mqtt::packet::tests
+failed: mqtt::packet::tests::every_mqtt_5_must_rule_on_received_packets_is_enforced at edge/agent/src/mqtt/packet.rs:1679:44
+first assertion: CONNACK without properties: [20, 02, 00, 00] accepted: Some((ConnAck(ConnAck { session_present: false, reason: 0, receive_maximum: None, maximum_qos: None, retain_available: None,  [...]
+exit code: 101
+
+## sweep: CONNACK without a Property Length accepted again (link)
+mutation in edge/agent/src/mqtt/packet.rs
+-     // Unlike PUBACK and DISCONNECT, an MQTT 5 CONNACK has no short form: no properties are a ...
++     let reason = reason::check("CONNACK", code, reason::CONNACK)?; ...
+$ cargo test -p agent --test link a_connack_that_breaks_mqtt_5_ends_the_connection_with_the_will
+failed: a_connack_that_breaks_mqtt_5_ends_the_connection_with_the_will at edge/agent/tests/link.rs:895:9
+first assertion: assertion `left == right` failed: CONNACK without a property length: DISCONNECT 0x04 and no online status
+exit code: 101
+
+## sweep: Session Present on a refused CONNACK accepted (unit)
+mutation in edge/agent/src/mqtt/packet.rs
+-     if session_present && reason != reason::SUCCESS {
++     if false {
+$ cargo test -p agent --lib mqtt::packet::tests
+failed: mqtt::packet::tests::every_mqtt_5_must_rule_on_received_packets_is_enforced at edge/agent/src/mqtt/packet.rs:1684:44
+first assertion: Session Present on a refusal: [20, 03, 01, 87, 00] accepted: Some((ConnAck(ConnAck { session_present: true, reason: 135, receive_maximum: None, maximum_qos: None, retain_available: [...]
+exit code: 101
+
+## sweep: Session Present on a refused CONNACK accepted (link)
+mutation in edge/agent/src/mqtt/packet.rs
+-     if session_present && reason != reason::SUCCESS {
++     if false {
+$ cargo test -p agent --test link a_connack_that_breaks_mqtt_5_ends_the_connection_with_the_will
+failed: a_connack_that_breaks_mqtt_5_ends_the_connection_with_the_will at edge/agent/tests/link.rs:895:9
+first assertion: assertion `left == right` failed: Session Present on a refusal: DISCONNECT 0x04 and no online status
+exit code: 101
+
+## sweep: CONNACK accepts Authentication Method/Data and Response Information (unit)
+mutation in edge/agent/src/mqtt/packet.rs
+-             SERVER_KEEP_ALIVE, ...
++             SERVER_KEEP_ALIVE, ...
+$ cargo test -p agent --lib mqtt::packet::tests
+failed: mqtt::packet::tests::every_mqtt_5_must_rule_on_received_packets_is_enforced at edge/agent/src/mqtt/packet.rs:1687:44
+first assertion: Authentication Method in CONNACK: [20, 08, 00, 00, 05, 15, 00, 02, 61, 62] accepted: Some((ConnAck(ConnAck { session_present: false, reason: 0, receive_maximum: None, maximum_qos:  [...]
+exit code: 101
+
+## sweep: CONNACK accepts Authentication Method/Data and Response Information (link)
+mutation in edge/agent/src/mqtt/packet.rs
+-             SERVER_KEEP_ALIVE, ...
++             SERVER_KEEP_ALIVE, ...
+$ cargo test -p agent --test link a_connack_that_breaks_mqtt_5_ends_the_connection_with_the_will
+failed: a_connack_that_breaks_mqtt_5_ends_the_connection_with_the_will at edge/agent/tests/link.rs:895:9
+first assertion: assertion `left == right` failed: Authentication Method without one in CONNECT: DISCONNECT 0x04 and no online status
+exit code: 101
+
+## sweep: wildcard in a Response Topic accepted (unit)
+mutation in edge/agent/src/mqtt/packet.rs
+-                 if list.string("response topic")?.contains(['+', '#']) {
++                 if list.string("response topic")?.contains(['+', '#']) && false {
+$ cargo test -p agent --lib mqtt::packet::tests
+failed: mqtt::packet::tests::every_mqtt_5_must_rule_on_received_packets_is_enforced at edge/agent/src/mqtt/packet.rs:1684:44
+first assertion: '#' in a response topic: [30, 09, 00, 01, 61, 05, 08, 00, 02, 72, 23] accepted: Some((Publish(Publish { topic: "a", payload: [], qos: 0, retain: false, packet_id: None }), 11))
+exit code: 101
+
+## sweep: wildcard in a Response Topic accepted (link)
+mutation in edge/agent/src/mqtt/packet.rs
+-                 if list.string("response topic")?.contains(['+', '#']) {
++                 if list.string("response topic")?.contains(['+', '#']) && false {
+$ cargo test -p agent --test link broken_packets_end_the_connection_with_the_will
+failed: broken_packets_end_the_connection_with_the_will at crates/testkit/src/clock.rs:104:17
+first assertion: timed out after 60s waiting for wildcard in a response topic
+exit code: 101
+
+## sweep: PUBACK packet identifier 0 left to the connection (unit)
+mutation in edge/agent/src/mqtt/packet.rs
+-     let packet_id = nonzero_packet_id(&mut reader)?; ...
++     let packet_id = reader.u16("packet identifier")?; ...
+$ cargo test -p agent --lib mqtt::packet::tests
+failed: mqtt::packet::tests::every_mqtt_5_must_rule_on_received_packets_is_enforced at edge/agent/src/mqtt/packet.rs:1684:44
+first assertion: PUBACK for packet identifier 0: [40, 02, 00, 00] accepted: Some((PubAck(PubAck { packet_id: 0, reason: 0, reason_string: None }), 4))
+exit code: 101
+
+## sweep: PUBACK packet identifier 0 left to the connection (link)
+mutation in edge/agent/src/mqtt/packet.rs
+-     let packet_id = nonzero_packet_id(&mut reader)?; ...
++     let packet_id = reader.u16("packet identifier")?; ...
+$ cargo test -p agent --test link broken_packets_end_the_connection_with_the_will
+failed: broken_packets_end_the_connection_with_the_will at edge/agent/tests/link.rs:780:9
+first assertion: PUBACK with packet identifier 0: protocol error: PUBACK for a packet identifier not in use
+exit code: 101
+
+## sweep: SUBACK packet identifier 0 left to the connection (unit)
+mutation in edge/agent/src/mqtt/packet.rs
+-     let packet_id = nonzero_packet_id(&mut reader)?; ...
++     let packet_id = reader.u16("packet identifier")?; ...
+$ cargo test -p agent --lib mqtt::packet::tests
+failed: mqtt::packet::tests::every_mqtt_5_must_rule_on_received_packets_is_enforced at edge/agent/src/mqtt/packet.rs:1684:44
+first assertion: SUBACK for packet identifier 0: [90, 04, 00, 00, 00, 01] accepted: Some((SubAck(SubAck { packet_id: 0, reasons: [1], reason_string: None }), 6))
+exit code: 101
+
+## sweep: connection accepts Session Present after the clean start (link; check untested before)
+mutation in edge/agent/src/mqtt/connection.rs
+-     if ack.session_present {
++     if false {
+$ cargo test -p agent --test link a_connack_that_breaks_mqtt_5_ends_the_connection_with_the_will
+failed: a_connack_that_breaks_mqtt_5_ends_the_connection_with_the_will at edge/agent/tests/link.rs:895:9
+first assertion: assertion `left == right` failed: Session Present after the clean start: DISCONNECT 0x04 and no online status
+exit code: 101
+
+## sweep: AUTH from the server accepted (unit)
+mutation in edge/agent/src/mqtt/packet.rs
+-         other => return Err(DecodeError::Unexpected(other)),
++         PacketType::Auth => Inbound::PingResp, ...
+$ cargo test -p agent --lib mqtt::packet::tests
+failed: mqtt::packet::tests::every_mqtt_5_must_rule_on_received_packets_is_enforced, mqtt::packet::tests::rule_breaking_packets_are_refused_with_the_right_reason at edge/agent/src/mqtt/packet.rs:1685:44
+first assertion: AUTH: [f0, 02, 18, 00] accepted: Some((PingResp, 4))
+exit code: 101
+
+## sweep: AUTH from the server accepted (link)
+mutation in edge/agent/src/mqtt/packet.rs
+-         other => return Err(DecodeError::Unexpected(other)),
++         PacketType::Auth => Inbound::PingResp, ...
+$ cargo test -p agent --test link broken_packets_end_the_connection_with_the_will
+failed: broken_packets_end_the_connection_with_the_will at edge/agent/tests/link.rs:780:9
+first assertion: AUTH: protocol error: PINGRESP without a PINGREQ
+exit code: 101
+
+## stop: a write ignores the stop deadline
+mutation in edge/agent/src/mqtt/connection.rs
+-         let deadline = stop_deadline.map_or(started + limit, |stop| stop.min(started + limit));
++         let deadline = started + limit;
+$ cargo test -p agent --test link a_stop_cuts_a_stuck_write_at_the_stop_deadline_and_sends_nothing_after_it
+failed: a_stop_cuts_a_stuck_write_at_the_stop_deadline_and_sends_nothing_after_it at edge/agent/tests/link.rs:1167:5
+first assertion: the stop took 89.999s; the write timeout is 90s
+exit code: 101
+
+## stop: a write does not notice a shutdown (stuck write)
+mutation in edge/agent/src/mqtt/connection.rs
+-             () = shutdown.cancelled(), if st.stopping.is_none() => {
++             () = shutdown.cancelled(), if false => {
+$ cargo test -p agent --test link a_stop_cuts_a_stuck_write_at_the_stop_deadline_and_sends_nothing_after_it
+failed: a_stop_cuts_a_stuck_write_at_the_stop_deadline_and_sends_nothing_after_it at edge/agent/tests/link.rs:1167:5
+first assertion: the stop took 89.999s; the write timeout is 90s
+exit code: 101
+
+## stop: a write does not notice a shutdown (CONNECT write)
+mutation in edge/agent/src/mqtt/connection.rs
+-             () = shutdown.cancelled(), if st.stopping.is_none() => {
++             () = shutdown.cancelled(), if false => {
+$ cargo test -p agent --test link a_stop_during_the_connect_write_keeps_one_deadline_for_connack
+failed: a_stop_during_the_connect_write_keeps_one_deadline_for_connack at edge/agent/tests/link.rs:1476:5
+first assertion: the stop took 8s
+exit code: 101
+
+## stop: the CONNACK wait starts a deadline of its own after the CONNECT write
+mutation in edge/agent/src/mqtt/connection.rs
+-     let mut stop_deadline: Option<Instant> = st.stopping.as_ref().map(|stop| stop.deadline);
++     let mut stop_deadline: Option<Instant> = None;
+$ cargo test -p agent --test link a_stop_during_the_connect_write_keeps_one_deadline_for_connack
+failed: a_stop_during_the_connect_write_keeps_one_deadline_for_connack at edge/agent/tests/link.rs:1476:5
+first assertion: the stop took 8s
+exit code: 101
+
+## max packet: agent packets are written whatever the broker's Maximum Packet Size
+mutation in edge/agent/src/mqtt/connection.rs
+-     let size = parts.iter().map(|part| part.len()).sum::<usize>(); ...
++     let size = parts.iter().map(|part| part.len()).sum::<usize>(); ...
+$ cargo test -p agent --test link packets_above_the_brokers_maximum_packet_size_are_never_sent
+failed: packets_above_the_brokers_maximum_packet_size_are_never_sent at edge/agent/tests/link.rs:438:9
+first assertion: assertion `left == right` failed: Maximum Packet Size 50: no online status
+exit code: 101
+
+## max packet: the closing DISCONNECT is sent even when it does not fit
+mutation in edge/agent/src/mqtt/connection.rs
+-     let fits = disconnect.len() <= st.server_max_packet;
++     let fits = true;
+$ cargo test -p agent --test link packets_above_the_brokers_maximum_packet_size_are_never_sent
+failed: packets_above_the_brokers_maximum_packet_size_are_never_sent at edge/agent/tests/link.rs:438:9
+first assertion: assertion `left == right` failed: Maximum Packet Size 2: no online status
+exit code: 101
+
+## queues: a connection's queues take publishes from its start, not from Connected
+mutation in edge/agent/src/mqtt/connection.rs
+-     let (accepting, mut requests) = Requests::new(params.session.clone()); ...
++     let (accepting, mut requests) = Requests::new(params.session.clone()); ...
+$ cargo test -p agent --test link publishes_during_connect_and_setup_fail_at_once_and_are_never_sent_later
+failed: publishes_during_connect_and_setup_fail_at_once_and_are_never_sent_later at edge/agent/tests/link.rs:1388:9
+first assertion: assertion `left == right` failed: CONNACK pending: publish on Telemetry
+exit code: 101
+
+## queues: requests left in an ended connection's queues are answered ConnectionLost
+mutation in edge/agent/src/mqtt/connection.rs
+-         PublishError::NotConnected ...
++         PublishError::ConnectionLost ...
+$ cargo test -p agent --test link requests_still_queued_when_a_connection_ends_are_answered_and_never_sent_later
+failed: requests_still_queued_when_a_connection_ends_are_answered_and_never_sent_later at edge/agent/tests/link.rs:1494:9
+first assertion: assertion `left == right` failed: the queued QoS 1 request was never sent
+exit code: 101
+
+## queues: an ended connection's queues are kept, unanswered
+mutation in edge/agent/src/mqtt/connection.rs
+-     requests.close(&unsent);
++     let _ = &unsent; ...
+$ cargo test -p agent --test link requests_still_queued_when_a_connection_ends_are_answered_and_never_sent_later
+failed: requests_still_queued_when_a_connection_ends_are_answered_and_never_sent_later at crates/testkit/src/clock.rs:104:17
+first assertion: timed out after 60s waiting for QoS 1
+exit code: 101
+
+## queues: publish_in_session ignores the session
+mutation in edge/agent/src/link.rs
+-             Some(accepting) if session.is_none_or(|session| *session == accepting.session) => {
++             Some(accepting) if session.is_some() || session.is_none() => {
+$ cargo test -p agent --test link a_message_for_an_ended_session_is_never_sent_on_the_next_connection
+failed: a_message_for_an_ended_session_is_never_sent_on_the_next_connection at edge/agent/tests/link.rs:1536:5
+first assertion: assertion `left == right` failed
+exit code: 101
+
+## queues: publish and reserve do not refuse once the stop began
+mutation in edge/agent/src/link.rs
+-         if self.shutdown.is_cancelled() { ...
++         let current = self.current.lock();
+$ cargo test -p agent --test link a_permit_belongs_to_the_connection_it_was_reserved_on
+failed: a_permit_belongs_to_the_connection_it_was_reserved_on at edge/agent/tests/link.rs:1388:9
+first assertion: assertion `left == right` failed: stopping: publish on Telemetry
+exit code: 101
+
+## queues: a permit used once the stop began is queued
+mutation in edge/agent/src/link.rs
+-         if self.link.shutdown.is_cancelled() { ...
++         self.link.send(
+$ cargo test -p agent --test link a_permit_belongs_to_the_connection_it_was_reserved_on
+failed: a_permit_belongs_to_the_connection_it_was_reserved_on at edge/agent/tests/link.rs:1585:5
+first assertion: assertion `left == right` failed: a permit used once the stop began
+exit code: 101
+
+## reply: a written publish dropped with the supervisor reports Stopped
+mutation in edge/agent/src/link.rs
+-         if self.lost_on_drop
++         if !self.lost_on_drop && self.lost_on_drop
+$ cargo test -p agent --test link when_the_supervisor_goes_away_written_publishes_are_lost_and_queued_ones_stopped
+failed: when_the_supervisor_goes_away_written_publishes_are_lost_and_queued_ones_stopped at edge/agent/tests/link.rs:1370:5
+first assertion: assertion `left == right` failed
+exit code: 101
+
+## audit: the PINGRESP deadline runs while the connection does not read
+mutation in edge/agent/src/mqtt/connection.rs
+-             Some(_) if self.pending_delivery.is_some() => None,
++             Some(_) if self.pending_delivery.is_some() && false => None,
+$ cargo test -p agent --test link waiting_for_the_application_suspends_the_puback_and_pingresp_deadlines
+failed: waiting_for_the_application_suspends_the_puback_and_pingresp_deadlines at edge/agent/tests/link.rs:1943:5
+first assertion: assertion `left == right` failed
+exit code: 101
+
+## audit: the PINGRESP deadline does not restart when reading resumes
+mutation in edge/agent/src/mqtt/connection.rs
+-             Some(sent) => Some(sent.max(self.reading_since) + self.ping_timeout()),
++             Some(sent) => Some(sent + self.ping_timeout()),
+$ cargo test -p agent --test link waiting_for_the_application_suspends_the_puback_and_pingresp_deadlines
+failed: waiting_for_the_application_suspends_the_puback_and_pingresp_deadlines at edge/agent/tests/link.rs:1964:5
+first assertion: assertion `left == right` failed
+exit code: 101
+
+## audit: the PUBACK deadline does not restart when reading resumes
+mutation in edge/agent/src/mqtt/connection.rs
+-             .map(|since| since.max(self.reading_since) + self.ack_timeout())
++             .map(|since| since + self.ack_timeout())
+$ cargo test -p agent --test link waiting_for_the_application_suspends_the_puback_and_pingresp_deadlines
+failed: waiting_for_the_application_suspends_the_puback_and_pingresp_deadlines at edge/agent/tests/link.rs:1964:5
+first assertion: assertion `left == right` failed
+exit code: 101
+
+## audit: the moment reading resumes is not recorded
+mutation in edge/agent/src/mqtt/connection.rs
+-                     st.reading_since = Instant::now();
++                     let _ = Instant::now();
+$ cargo test -p agent --test link waiting_for_the_application_suspends_the_puback_and_pingresp_deadlines
+failed: waiting_for_the_application_suspends_the_puback_and_pingresp_deadlines at edge/agent/tests/link.rs:1964:5
+first assertion: assertion `left == right` failed
+exit code: 101
+
+## audit: a refused online status is ignored
+mutation in edge/agent/src/mqtt/connection.rs
+-                 Pending::Online if refused => Err(LinkError::OnlineRefused(code)),
++                 Pending::Online if refused => Ok(false),
+$ cargo test -p agent --test link a_refused_online_status_ends_the_connection_and_the_link_tries_again
+failed: a_refused_online_status_ends_the_connection_and_the_link_tries_again at edge/agent/tests/link.rs:2000:5
+first assertion: assertion `left == right` failed: closed without DISCONNECT, which publishes the will
+exit code: 101
+
+## audit: a SUBACK has no deadline
+mutation in edge/agent/src/mqtt/connection.rs
+-             .values() ...
++             .values() ...
+$ cargo test -p agent --test link a_suback_that_never_comes_ends_the_connection_with_the_will
+failed: a_suback_that_never_comes_ends_the_connection_with_the_will at crates/testkit/src/clock.rs:104:17
+first assertion: timed out after 60s waiting for the DISCONNECT
+exit code: 101
+
+## audit: a subscription refused during a stop ends the stop with the will
+mutation in edge/agent/src/mqtt/connection.rs
+-                 if st.stopping.is_none() { ...
++                 if st.stopping.is_none() || st.stopping.is_some() { ...
+$ cargo test -p agent --test link a_subscription_refused_during_a_stop_still_ends_with_a_normal_disconnect
+failed: a_subscription_refused_during_a_stop_still_ends_with_a_normal_disconnect at edge/agent/tests/link.rs:2091:5
+first assertion: assertion `left == right` failed
+exit code: 101
+
+## audit: the write timeout is twice the keepalive
+mutation in edge/agent/src/mqtt/connection.rs
+-         (self.params.keep_alive * 3 / 2).max(Duration::from_secs(10))
++         (self.params.keep_alive * 2).max(Duration::from_secs(10))
+$ cargo test -p agent --test link a_write_the_broker_does_not_take_ends_the_connection
+failed: a_write_the_broker_does_not_take_ends_the_connection at edge/agent/tests/link.rs:2129:9
+first assertion: keepalive 60s: the write gave up after 120s, expected 90s
+exit code: 101
+
+## audit: the write timeout has no 10 s floor
+mutation in edge/agent/src/mqtt/connection.rs
+-         (self.params.keep_alive * 3 / 2).max(Duration::from_secs(10))
++         (self.params.keep_alive * 3 / 2).max(Duration::from_secs(1))
+$ cargo test -p agent --test link a_write_the_broker_does_not_take_ends_the_connection
+failed: a_write_the_broker_does_not_take_ends_the_connection at edge/agent/tests/link.rs:2129:9
+first assertion: keepalive 4s: the write gave up after 6s, expected 10s
+exit code: 101
+
+## audit: the incoming messages never end after the supervisor stopped
+mutation in edge/agent/src/link.rs
+-         self.state.send_replace(LinkState::Stopped);
++         self.state.send_replace(LinkState::Stopped); ...
+$ cargo test -p agent --test link incoming_ends_once_the_supervisor_has_stopped_and_every_message_was_taken
+failed: incoming_ends_once_the_supervisor_has_stopped_and_every_message_was_taken at crates/testkit/src/clock.rs:104:17
+first assertion: timed out after 60s waiting for the end of the messages
+exit code: 101
+
+## audit: opening a connection may take twice connect_timeout
+mutation in edge/agent/src/link.rs
+-                 tokio::time::timeout(self.settings.connect_timeout, self.connector.connect());
++                 tokio::time::timeout(self.settings.connect_timeout * 2, self.connector.connect());
+$ cargo test -p agent --test link connection_attempts_and_connack_are_bounded_by_the_connect_timeout
+failed: connection_attempts_and_connack_are_bounded_by_the_connect_timeout at edge/agent/tests/link.rs:2214:5
+first assertion: 60s
+exit code: 101
+
+## audit: CONNACK may take twice connect_timeout
+mutation in edge/agent/src/mqtt/connection.rs
+-     let connack_deadline = Instant::now() + params.connack_timeout;
++     let connack_deadline = Instant::now() + params.connack_timeout * 2;
+$ cargo test -p agent --test link connection_attempts_and_connack_are_bounded_by_the_connect_timeout
+failed: connection_attempts_and_connack_are_bounded_by_the_connect_timeout at edge/agent/tests/link.rs:2234:5
+first assertion: 60s
+exit code: 101
+
+## audit: a stream closed before CONNACK is not reported as closed
+mutation in edge/agent/src/mqtt/connection.rs
+-         ReadFailure::Closed => LinkError::Closed,
++         ReadFailure::Closed => LinkError::KeepAlive(Duration::ZERO),
+$ cargo test -p agent --test link connection_attempts_and_connack_are_bounded_by_the_connect_timeout
+failed: connection_attempts_and_connack_are_bounded_by_the_connect_timeout at crates/testkit/src/clock.rs:104:17
+first assertion: timed out after 60s waiting for the closed connection
+exit code: 101
+
+## audit: pings wait for both directions to be quiet
+mutation in edge/agent/src/mqtt/connection.rs
+-             None => Some(self.last_sent.min(self.last_received) + self.keep_alive),
++             None => Some(self.last_sent.max(self.last_received) + self.keep_alive),
+$ cargo test -p agent --test link pings_start_when_the_broker_is_quiet_even_while_the_agent_keeps_sending
+failed: pings_start_when_the_broker_is_quiet_even_while_the_agent_keeps_sending at edge/agent/tests/link.rs:2278:5
+first assertion: a keepalive after the broker's last packet: 100s
+exit code: 101
+
+## audit: PUBACK 0x10 is a refusal
+mutation in edge/agent/src/mqtt/connection.rs
+-                 reason::SUCCESS | reason::NO_MATCHING_SUBSCRIBERS
++                 reason::SUCCESS
+$ cargo test -p agent --test link puback_codes_decide_the_outcome_and_a_refusal_carries_the_brokers_reason
+failed: puback_codes_decide_the_outcome_and_a_refusal_carries_the_brokers_reason at edge/agent/tests/link.rs:2297:5
+first assertion: assertion `left == right` failed
+exit code: 101
+
+## audit: errors show the whole reason string (PUBACK)
+mutation in edge/agent/src/link.rs
+-         Some(text) => format!(": {}", printable(text, 200)),
++         Some(text) => format!(": {}", printable(text, usize::MAX)),
+$ cargo test -p agent --test link puback_codes_decide_the_outcome_and_a_refusal_carries_the_brokers_reason
+failed: puback_codes_decide_the_outcome_and_a_refusal_carries_the_brokers_reason at edge/agent/tests/link.rs:2325:5
+first assertion: the broker refused the message: 0x87 (not authorized): role lacks it yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy [...]
+exit code: 101
+
+## audit: errors show the whole reason string (DISCONNECT)
+mutation in edge/agent/src/link.rs
+-         Some(text) => format!(": {}", printable(text, 200)),
++         Some(text) => format!(": {}", printable(text, usize::MAX)),
+$ cargo test -p agent --test link reason_strings_from_the_broker_lose_their_control_characters
+failed: reason_strings_from_the_broker_lose_their_control_characters at edge/agent/tests/link.rs:1844:5
+first assertion: the broker disconnected: 0x98 (administrative action): yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy [...]
+exit code: 101
+
+## audit: a heartbeat waits for room instead of being skipped
+mutation in edge/agent/src/heartbeat.rs
+-     match link ...
++     match async { link.reserve(Channel::Heartbeat).await?.publish(payload).await }.await {
+$ cargo test -p agent --test link a_heartbeat_that_finds_the_queue_full_is_skipped_not_delayed
+failed: a_heartbeat_that_finds_the_queue_full_is_skipped_not_delayed at edge/agent/tests/link.rs:2391:5
+first assertion: the next heartbeat comes an interval after the skipped one: 40s
+exit code: 101
+
+## audit: a wait in reserve ended by a stop reports NotConnected
+mutation in edge/agent/src/link.rs
+-             .map_err(|_| self.no_connection())?;
++             .map_err(|_| PublishError::NotConnected)?;
+$ cargo test -p agent --test link a_stop_reports_written_publishes_as_maybe_delivered_and_queued_ones_as_not_sent
+failed: a_stop_reports_written_publishes_as_maybe_delivered_and_queued_ones_as_not_sent at edge/agent/tests/link.rs:1210:5
+first assertion: assertion `left == right` failed: a wait for a place ends with the stop
+exit code: 101
+
+## audit: one TCP timeout per address is three times as long
+mutation in edge/agent/src/transport.rs
+-         match tokio::time::timeout(limit, connect(address)).await {
++         match tokio::time::timeout(limit * 3, connect(address)).await {
+$ cargo test -p agent --lib transport::tests::each_resolved_address_gets_its_own_ten_seconds
+failed: transport::tests::each_resolved_address_gets_its_own_ten_seconds at edge/agent/src/transport.rs:461:9
+first assertion: assertion `left == right` failed
+exit code: 101
+
+## audit: WebSocket messages are not split at 32 KiB
+mutation in edge/agent/src/transport.rs
+-         let len = buf.len().min(MAX_OUTGOING_MESSAGE);
++         let len = buf.len();
+$ cargo test -p agent --lib transport::tests::bytes_travel_in_binary_messages_of_at_most_32_kib_and_pings_are_answered
+failed: transport::tests::bytes_travel_in_binary_messages_of_at_most_32_kib_and_pings_are_answered at edge/agent/src/transport.rs:501:42
+first assertion: called `Result::unwrap()` on an `Err` value: Custom { kind: Other, error: WriteBufferFull(Frame(Frame { header: FrameHeader { is_final: true, rsv1: false, rsv2: false, rsv3: false, [...]
+exit code: 101
+
+## audit: a text message is skipped
+mutation in edge/agent/src/transport.rs
+-                 Some(Ok(Message::Text(_))) => { ...
++                 Some(Ok(Message::Text(_))) => {}
+$ cargo test -p agent --lib transport::tests::a_text_message_is_an_error_and_a_close_ends_the_stream
+failed: transport::tests::a_text_message_is_an_error_and_a_close_ends_the_stream at crates/testkit/src/clock.rs:104:17
+first assertion: timed out after 60s waiting for the read
+exit code: 101
+
+## audit: a WebSocket close is an error
+mutation in edge/agent/src/transport.rs
+-                 Some(Ok(Message::Close(_))) | None => return Poll::Ready(Ok(())),
++                 Some(Ok(Message::Close(_))) | None => return Poll::Ready(Err(io::Error::other("closed"))),
+$ cargo test -p agent --lib transport::tests::a_text_message_is_an_error_and_a_close_ends_the_stream
+failed: transport::tests::a_text_message_is_an_error_and_a_close_ends_the_stream at edge/agent/src/transport.rs:565:14
+first assertion: called `Result::unwrap()` on an `Err` value: Custom { kind: Other, error: "closed" }
+exit code: 101
+
+## audit: the watchdog is fed without progress
+mutation in edge/agent/src/main.rs
+-         if now == last {
++         if now == last && false {
+$ cargo test -p agent --bin trustiot-agent the_watchdog_is_fed_only_while_the_connection_thread_makes_progress
+failed: tests::the_watchdog_is_fed_only_while_the_connection_thread_makes_progress at edge/agent/src/main.rs:415:9
+first assertion: assertion `left == right` failed
+exit code: 101
+
+## audit: STATUS= does not name the TCP step
+mutation in edge/agent/src/link.rs
+-             Self::Tcp => "TCP",
++             Self::Tcp => "the network",
+$ cargo test -p agent --test binary without_a_broker_the_agent_is_ready_feeds_the_watchdog_and_stops_on_sigterm
+failed: without_a_broker_the_agent_is_ready_feeds_the_watchdog_and_stops_on_sigterm at edge/agent/tests/binary.rs:200:5
+first assertion: STATUS=gateway gw-test-1: disconnected (connecting failed at the network: Connection refused (os error 111)); retrying in 0 s
+exit code: 101
+
+## audit (testkit): the front upgrades any path
+mutation in crates/testkit/src/mqtt/front.rs
+-             if path != "/mqtt" {
++             if path == "/never" {
+$ cargo test -p testkit --lib mqtt::front::tests::the_front_upgrades_only_mqtt_on_its_path_relays_and_pings
+failed: mqtt::front::tests::the_front_upgrades_only_mqtt_on_its_path_relays_and_pings at crates/testkit/src/mqtt/front.rs:459:9
+first assertion: assertion `left == right` failed: Ok(WebSocketStream { inner: WebSocket { socket: AllowStd { inner: TlsStream { io: TcpStream { addr: 127.0.0.1:57434, peer: 127.0.0.1:33125, fd: 11 [...]
+exit code: 101
+
+## audit (testkit): the front upgrades without the mqtt subprotocol
+mutation in crates/testkit/src/mqtt/front.rs
+-             if !asks_mqtt {
++             if !asks_mqtt && false {
+$ cargo test -p testkit --lib mqtt::front::tests::the_front_upgrades_only_mqtt_on_its_path_relays_and_pings
+failed: mqtt::front::tests::the_front_upgrades_only_mqtt_on_its_path_relays_and_pings at crates/testkit/src/mqtt/front.rs:466:13
+first assertion: assertion `left == right` failed: None: Err(Protocol(SecWebSocketSubProtocolError(ServerSentSubProtocolNoneRequested)))
+exit code: 101
+
+## audit (testkit): the front never pings
+mutation in crates/testkit/src/mqtt/front.rs
+-             _ = ping.tick(), if options.ping_interval.is_some() => {
++             _ = ping.tick(), if options.ping_interval.is_some() && false => {
+$ cargo test -p testkit --lib mqtt::front::tests::the_front_upgrades_only_mqtt_on_its_path_relays_and_pings
+failed: mqtt::front::tests::the_front_upgrades_only_mqtt_on_its_path_relays_and_pings at crates/testkit/src/clock.rs:104:17
+first assertion: timed out after 60s waiting for a ping
+exit code: 101
+
+## audit: the reported retry_in is not the delay the link waits
+mutation in edge/agent/src/link.rs
+-                 retry_in: delay,
++                 retry_in: delay * 2,
+$ cargo test -p agent --test link a_refused_subscription_ends_the_connection_and_never_reports_connected
+failed: a_refused_subscription_ends_the_connection_and_never_reports_connected at edge/agent/tests/link.rs:649:5
+first assertion: retry_in: waited 1.999999998s, expected just under 1s
+exit code: 101
+
+## write timeout: based on the configured keepalive, not the Server Keep Alive
+mutation in edge/agent/src/mqtt/connection.rs
+-         (self.keep_alive * 3 / 2).max(Duration::from_secs(10))
++         (self.params.keep_alive * 3 / 2).max(Duration::from_secs(10))
+$ cargo test -p agent --test link a_write_the_broker_does_not_take_ends_the_connection
+failed: a_write_the_broker_does_not_take_ends_the_connection at edge/agent/tests/link.rs:2138:9
+first assertion: keepalive 60s, CONNACK [20, 06, 00, 00, 03, 13, 00, 14]: the write gave up after 90s, expected 30s
+exit code: 101
+
+## watchdog: fed from the connection thread's ticks only (unit)
+mutation in edge/agent/src/liveness.rs
+-         match progress.check(Instant::now()) {
++         match { let _ = &progress; Liveness::Alive } {
+$ cargo test -p agent --lib liveness::tests::a_wait_past_its_deadline_stops_the_watchdog_and_says_why
+failed: liveness::tests::a_wait_past_its_deadline_stops_the_watchdog_and_says_why at edge/agent/src/liveness.rs:307:9
+first assertion: assertion `left == right` failed
+exit code: 101
+
+## watchdog: fed from the connection thread's ticks only (link)
+mutation in edge/agent/src/liveness.rs
+-         match progress.check(Instant::now()) {
++         match { let _ = &progress; Liveness::Alive } {
+$ cargo test -p agent --test liveness a_connection_task_stuck_in_a_wait_stops_the_watchdog
+failed: a_connection_task_stuck_in_a_wait_stops_the_watchdog at edge/agent/tests/liveness.rs:365:13
+first assertion: assertion `left == right` failed
+exit code: 101
+
+## watchdog: the phase's deadline is ignored (link)
+mutation in edge/agent/src/liveness.rs
+-             Some(deadline) if now > deadline + SLACK => Liveness::Overstayed {
++             Some(deadline) if now > deadline + SLACK && false => Liveness::Overstayed {
+$ cargo test -p agent --test liveness a_connection_task_stuck_in_a_wait_stops_the_watchdog
+failed: a_connection_task_stuck_in_a_wait_stops_the_watchdog at edge/agent/tests/liveness.rs:365:13
+first assertion: assertion `left == right` failed
+exit code: 101
+
+## watchdog: the phase's deadline is ignored (declarations)
+mutation in edge/agent/src/liveness.rs
+-             Some(deadline) if now > deadline + SLACK => Liveness::Overstayed {
++             Some(deadline) if now > deadline + SLACK && false => Liveness::Overstayed {
+$ cargo test -p agent --test liveness every_wait_of_a_connection_is_declared_with_its_deadline
+failed: every_wait_of_a_connection_is_declared_with_its_deadline at edge/agent/tests/liveness.rs:72:5
+first assertion: assertion `left == right` failed: AwaitConnack just after its deadline plus SLACK
+exit code: 101
+
+## watchdog: fed while the connection thread is blocked
+mutation in edge/agent/src/liveness.rs
+-         if !thread_moved {
++         if !thread_moved && false {
+$ cargo test -p agent --lib liveness::tests::a_blocked_connection_thread_stops_the_watchdog
+failed: liveness::tests::a_blocked_connection_thread_stops_the_watchdog at edge/agent/src/liveness.rs:353:9
+first assertion: assertion `left == right` failed
+exit code: 101
+
+## watchdog: opening a connection is not allowed a TPM response
+mutation in edge/agent/src/link.rs
+-                     .and_then(|at| at.checked_add(crate::tpm::RESPONSE_TIMEOUT)),
++                     .and_then(|at| at.checked_add(std::time::Duration::ZERO)),
+$ cargo test -p agent --test liveness opening_a_connection_may_take_the_connect_timeout_and_one_tpm_response
+failed: opening_a_connection_may_take_the_connect_timeout_and_one_tpm_response at edge/agent/tests/liveness.rs:67:5
+first assertion: assertion `left == right` failed: Connecting at its deadline plus SLACK
+exit code: 101
+
+## watchdog: a backoff has no deadline
+mutation in edge/agent/src/link.rs
+-                 tokio::time::Instant::now().checked_add(delay),
++                 None.filter(|_: &tokio::time::Instant| delay.is_zero()),
+$ cargo test -p agent --test liveness every_wait_of_a_connection_is_declared_with_its_deadline
+failed: every_wait_of_a_connection_is_declared_with_its_deadline at edge/agent/tests/liveness.rs:202:5
+first assertion: assertion failed: matches!(progress.check(now + Duration::from_secs(60) + SLACK + late),
+exit code: 101
+
+## watchdog: a write is not declared
+mutation in edge/agent/src/mqtt/connection.rs
+-     st.progress.enter(Phase::Writing, Some(started + limit));
++ 
+$ cargo test -p agent --test liveness a_write_may_take_its_own_timeout
+failed: a_write_may_take_its_own_timeout at crates/testkit/src/clock.rs:104:17
+first assertion: timed out after 60s waiting for the phase Writing
+exit code: 101
+
+## watchdog: the CONNACK wait is not declared
+mutation in edge/agent/src/mqtt/connection.rs
+-             st.progress.enter(Phase::AwaitConnack, Some(deadline));
++ 
+$ cargo test -p agent --test liveness every_wait_of_a_connection_is_declared_with_its_deadline
+failed: every_wait_of_a_connection_is_declared_with_its_deadline at crates/testkit/src/clock.rs:104:17
+first assertion: timed out after 60s waiting for the phase AwaitConnack
+exit code: 101
+
+## watchdog: the wait for the application restarts with every write
+mutation in edge/agent/src/mqtt/connection.rs
+-             (None, true) => st.progress.enter_since( ...
++             (None, true) => st.progress.enter( ...
+$ cargo test -p agent --test liveness every_wait_of_a_connection_is_declared_with_its_deadline
+failed: every_wait_of_a_connection_is_declared_with_its_deadline at edge/agent/tests/liveness.rs:173:5
+first assertion: assertion `left == right` failed: the limit counts from the first moment the message waited
+exit code: 101
+
+## watchdog: a stop has no deadline
+mutation in edge/agent/src/mqtt/connection.rs
+-             (Some(deadline), _) => st.progress.enter(Phase::Stopping, Some(deadline)),
++             (Some(_), _) => st.progress.enter(Phase::Stopping, None),
+$ cargo test -p agent --test liveness every_wait_of_a_connection_is_declared_with_its_deadline
+failed: every_wait_of_a_connection_is_declared_with_its_deadline at edge/agent/tests/liveness.rs:72:5
+first assertion: assertion `left == right` failed: Stopping just after its deadline plus SLACK
+exit code: 101
+
+## watchdog: the connected wait ignores the keepalive timer
+mutation in edge/agent/src/mqtt/connection.rs
+-                 [ack_deadline, tick].into_iter().flatten().min(),
++                 ack_deadline.or(tick.map(|tick| tick + Duration::from_secs(60))),
+$ cargo test -p agent --test liveness every_wait_of_a_connection_is_declared_with_its_deadline
+failed: every_wait_of_a_connection_is_declared_with_its_deadline at edge/agent/tests/liveness.rs:72:5
+first assertion: assertion `left == right` failed: AwaitSuback just after its deadline plus SLACK
+exit code: 101
+
+## ack deadline: a PUBLISH's PUBACK counts from before its write
+mutation in edge/agent/src/mqtt/connection.rs
+-             write(stream, st, &[&header, &payload]).await?; ...
++             write(stream, st, &[&header, &payload]).await?;
+$ cargo test -p agent --test link a_slow_write_does_not_use_up_the_time_for_its_puback
+failed: a_slow_write_does_not_use_up_the_time_for_its_puback at edge/agent/tests/link.rs:2447:5
+first assertion: the agent gave up early: Ok(Some(Disconnect { reason: 4 }))
+exit code: 101
+
+## ack deadline: the online status's PUBACK counts from before its write
+mutation in edge/agent/src/mqtt/connection.rs
+-     write(stream, st, &[&header, payload]).await?; ...
++     write(stream, st, &[&header, payload]).await?;
+$ cargo test -p agent --test link slow_writes_during_setup_do_not_use_up_the_time_for_their_acknowledgements
+failed: slow_writes_during_setup_do_not_use_up_the_time_for_their_acknowledgements at edge/agent/tests/link.rs:2491:9
+first assertion: slow SUBSCRIBE false: the agent gave up early: Ok(Some(Disconnect { reason: 4 }))
+exit code: 101
+
+## ack deadline: the SUBACK counts from before the SUBSCRIBE's write
+mutation in edge/agent/src/mqtt/connection.rs
+-         st.written(subscribe_id);
++ 
+$ cargo test -p agent --test link slow_writes_during_setup_do_not_use_up_the_time_for_their_acknowledgements
+failed: slow_writes_during_setup_do_not_use_up_the_time_for_their_acknowledgements at edge/agent/tests/link.rs:2491:9
+first assertion: slow SUBSCRIBE true: the agent gave up early: Ok(Some(Disconnect { reason: 4 }))
+exit code: 101
+
+## subscriptions: the link always subscribes to every down channel
+mutation in edge/agent/src/mqtt/connection.rs
+-             subscriptions: params ...
++             subscriptions: protocol::topic::Channel::ALL ...
+$ cargo test -p agent --test link without_subscriptions_no_subscribe_follows_online_and_its_puback_connects
+failed: without_subscriptions_no_subscribe_follows_online_and_its_puback_connects at edge/agent/tests/link.rs:662:5
+first assertion: assertion `left == right` failed
+exit code: 101
+
+## subscriptions: an empty set still sends a SUBSCRIBE
+mutation in edge/agent/src/mqtt/connection.rs
+-     if st.stopping.is_none() && !st.subscriptions.is_empty() {
++     if st.stopping.is_none() {
+$ cargo test -p agent --test link without_subscriptions_no_subscribe_follows_online_and_its_puback_connects
+failed: without_subscriptions_no_subscribe_follows_online_and_its_puback_connects at edge/agent/tests/link.rs:657:5
+first assertion: assertion `left == right` failed
+exit code: 101
+
+## subscriptions: with an empty set, Connected right after writing online
+mutation in edge/agent/src/mqtt/connection.rs
+-         write(stream, st, &[&subscribe]).await?; ...
++         write(stream, st, &[&subscribe]).await?; ...
+$ cargo test -p agent --test link without_subscriptions_no_subscribe_follows_online_and_its_puback_connects
+failed: without_subscriptions_no_subscribe_follows_online_and_its_puback_connects at edge/agent/tests/link.rs:657:5
+first assertion: assertion `left == right` failed
+exit code: 101
+
+## subscriptions: Connected without online's PUBACK
+mutation in edge/agent/src/mqtt/connection.rs
+-         if self.online_acknowledged && self.subscribed && self.connected_at.is_none() {
++         if self.subscribed && self.connected_at.is_none() {
+$ cargo test -p agent --test link connected_waits_for_both_the_puback_of_online_and_the_suback_in_either_order
+failed: connected_waits_for_both_the_puback_of_online_and_the_suback_in_either_order at edge/agent/tests/link.rs:710:9
+first assertion: assertion `left == right` failed: connected after only the SUBACK
+exit code: 101
+
+## subscriptions: Connected at the SUBACK alone
+mutation in edge/agent/src/mqtt/connection.rs
+-             st.subscribed = true; ...
++             st.subscribed = true; ...
+$ cargo test -p agent --test link connected_waits_for_both_the_puback_of_online_and_the_suback_in_either_order
+failed: connected_waits_for_both_the_puback_of_online_and_the_suback_in_either_order at edge/agent/tests/link.rs:710:9
+first assertion: assertion `left == right` failed: connected after only the SUBACK
+exit code: 101
+
+## subscriptions: a message on a channel the link did not subscribe to is delivered
+mutation in edge/agent/src/mqtt/connection.rs
+-     if !subscriptions.contains(parsed.channel) {
++     if false && !subscriptions.contains(parsed.channel) {
+$ cargo test -p agent --test link a_message_on_a_channel_the_link_did_not_subscribe_to_is_acknowledged_and_dropped
+failed: a_message_on_a_channel_the_link_did_not_subscribe_to_is_acknowledged_and_dropped at edge/agent/tests/link.rs:626:5
+first assertion: assertion `left == right` failed: the first message delivered is the one on the subscribed channel
+exit code: 101
+
+## subscriptions: an up channel is accepted
+mutation in edge/agent/src/link.rs
+-             if channel.direction() != Direction::Down {
++             if false && channel.direction() != Direction::Down {
+$ cargo test -p agent --lib subscriptions_are_down_channels_each_once_in_order
+failed: link::tests::subscriptions_are_down_channels_each_once_in_order at edge/agent/src/link.rs:1030:9
+first assertion: assertion `left == right` failed
+exit code: 101
+
+## subscriptions: a channel listed twice is accepted
+mutation in edge/agent/src/link.rs
+-             if list.contains(&channel) {
++             if false && list.contains(&channel) {
+$ cargo test -p agent --lib subscriptions_are_down_channels_each_once_in_order
+failed: link::tests::subscriptions_are_down_channels_each_once_in_order at edge/agent/src/link.rs:1034:9
+first assertion: assertion `left == right` failed
+exit code: 101
+
+## subscriptions: the encoder writes a SUBSCRIBE without a topic filter
+mutation in edge/agent/src/mqtt/packet.rs
+-     if filters.is_empty() { ...
++ 
+$ cargo test -p agent --lib encoders_refuse_what_mqtt_cannot_carry
+failed: mqtt::packet::tests::encoders_refuse_what_mqtt_cannot_carry at edge/agent/src/mqtt/packet.rs:1257:9
+first assertion: assertion `left == right` failed
+exit code: 101
+
+## subscriptions: the binary subscribes to every down channel
+mutation in edge/agent/src/main.rs
+-     link_settings.subscriptions = Subscriptions::none();
++     link_settings.subscriptions = Subscriptions::new( ...
+$ cargo test -p agent --test binary connected_the_agent_subscribes_to_nothing_reports_its_session_and_stops_on_sigterm
+failed: connected_the_agent_subscribes_to_nothing_reports_its_session_and_stops_on_sigterm at edge/agent/tests/binary.rs:238:18
+first assertion: expected the first heartbeat right after online, got Some(Subscribe { id: 2, filters: [("trustiot/v1/gw/gw-test-1/down/telemetry-ack", 1), ("trustiot/v1/gw/gw-test-1/down/config",  [...]
+exit code: 101
+
+## inner trust, anchor: a certificate not issued by itself passes as a root
+mutation in edge/agent/src/tls.rs
+-     if certificate.subject().as_raw() != certificate.issuer().as_raw() {
++     if false {
+$ cargo test -p agent --lib the_inner_trust_anchors_are_root_ca_certificates_only
+failed: tls::tests::the_inner_trust_anchors_are_root_ca_certificates_only at edge/agent/src/tls.rs:621:9
+first assertion: is not signed by its own key: signature verification error
+exit code: 101
+
+## inner trust, anchor: a certificate without cA passes as a root
+mutation in edge/agent/src/tls.rs
+-         Ok(Some(constraints)) if constraints.value.ca => {}
++         Ok(_) if true => {}
+$ cargo test -p agent --lib the_inner_trust_anchors_are_root_ca_certificates_only
+failed: tls::tests::the_inner_trust_anchors_are_root_ca_certificates_only at edge/agent/src/tls.rs:571:22
+first assertion: expected NotARoot, got Ok(BrokerTrust { path: "<scratch dir>/broker-ca.pem", anchors: [CertificateDer(0x308201943082013ba0030201020214071e42b63fd92528b79 [...]
+exit code: 101
+
+## inner trust, anchor: a certificate not signed by its own key passes as a root
+mutation in edge/agent/src/tls.rs
+-     certificate ...
++     Ok(())
+$ cargo test -p agent --lib the_inner_trust_anchors_are_root_ca_certificates_only
+failed: tls::tests::the_inner_trust_anchors_are_root_ca_certificates_only at edge/agent/src/tls.rs:569:22
+first assertion: expected NotARoot, got Ok(BrokerTrust { path: "<scratch dir>/broker-ca.pem", anchors: [CertificateDer(0x3082017130820117a003020102020828038228424668b4300 [...]
+exit code: 101
+
+## inner trust, verifier: without with_crls
+mutation in edge/agent/src/tls.rs
+-             .with_crls(crl.crls()) ...
++             .allow_unknown_revocation_status() ...
+$ cargo test -p agent --test transport a_root_crl_that_revokes_the_issuing_ca_refuses_the_broker
+failed: a_root_crl_that_revokes_the_issuing_ca_refuses_the_broker at edge/agent/tests/transport.rs:460:5
+first assertion: timed out after 30s waiting for CONNACK
+exit code: 101
+
+## inner trust, verifier: without allow_unknown_revocation_status
+mutation in edge/agent/src/tls.rs
+-             .with_crls(crl.crls()) ...
++             .with_crls(crl.crls()) ...
+$ cargo test -p agent --test transport a_root_crl_that_does_not_list_the_issuing_ca_lets_the_agent_connect
+failed: a_root_crl_that_does_not_list_the_issuing_ca_lets_the_agent_connect at edge/agent/tests/support/wss.rs:229:40
+first assertion: called `Result::unwrap()` on an `Err` value: "tls handshake eof"
+exit code: 101
+
+## inner trust, verifier: with only_check_end_entity_revocation
+mutation in edge/agent/src/tls.rs
+-             .with_crls(crl.crls()) ...
++             .with_crls(crl.crls()) ...
+$ cargo test -p agent --test transport a_root_crl_that_revokes_the_issuing_ca_refuses_the_broker
+failed: a_root_crl_that_revokes_the_issuing_ca_refuses_the_broker at edge/agent/tests/transport.rs:460:5
+first assertion: timed out after 30s waiting for CONNACK
+exit code: 101
+
+## inner trust, verifier: with enforce_revocation_expiration
+mutation in edge/agent/src/tls.rs
+-             .with_crls(crl.crls()) ...
++             .with_crls(crl.crls()) ...
+$ cargo test -p agent --test transport an_expired_root_crl_still_counts_and_still_lets_the_agent_connect
+failed: an_expired_root_crl_still_counts_and_still_lets_the_agent_connect at edge/agent/tests/support/wss.rs:229:40
+first assertion: called `Result::unwrap()` on an `Err` value: "tls handshake eof"
+exit code: 101
+
+## inner trust, root CRL: the signature is not checked at load
+mutation in edge/agent/src/tls.rs
+-         if crl.verify_signature(anchor.public_key()).is_err() {
++         if false {
+$ cargo test -p agent --test transport a_root_crl_the_root_did_not_sign_stops_the_agent_from_starting
+failed: a_root_crl_the_root_did_not_sign_stops_the_agent_from_starting at edge/agent/tests/transport.rs:528:37
+first assertion: called `Option::unwrap()` on a `None` value
+exit code: 101
+
+## inner trust, root CRL: no anchor check at load at all
+mutation in edge/agent/src/tls.rs
+-         signed_by_an_anchor(&crl, trust).map_err(bad)?;
++ 
+$ cargo test -p agent --lib a_root_crl_is_loaded_only_when_a_trust_anchor_signed_it
+failed: tls::tests::a_root_crl_is_loaded_only_when_a_trust_anchor_signed_it at edge/agent/src/tls.rs:665:22
+first assertion: expected BadCrl, got Ok(Loaded { path: "<scratch dir>/root-crl.pem", der: CertificateRevocationListDer(0x3081d4307c020101300a06082a8648ce3d040302301a31183016 [...]
+exit code: 101
+
+## inner trust, root CRL: an anchor without cRLSign may sign it
+mutation in edge/agent/src/tls.rs
+-             Ok(Some(usage)) if !usage.value.crl_sign() => Err(format!(
++             Ok(Some(usage)) if false && !usage.value.crl_sign() => Err(format!(
+$ cargo test -p agent --lib a_root_crl_needs_a_root_that_may_sign_crls
+failed: tls::tests::a_root_crl_needs_a_root_that_may_sign_crls at edge/agent/src/tls.rs:665:22
+first assertion: expected BadCrl, got Ok(Loaded { path: "<scratch dir>/root-crl.pem", der: CertificateRevocationListDer(0x3081fc308182020101300a06082a8648ce3d04030330203 [...]
+exit code: 101
+
+## inner trust, root CRL: a missing file stops the agent instead of meaning no CRL yet
+mutation in edge/agent/src/tls.rs
+-                 return Ok(Self::Missing(path.to_owned()));
++                 return Err(TlsError::BadCrl { path: path.to_owned(), reason: "missing".to_owned() });
+$ cargo test -p agent --test transport the_broker_s_chain_through_the_issuing_ca_it_sends_is_accepted
+failed: the_broker_s_chain_through_the_issuing_ca_it_sends_is_accepted at edge/agent/tests/transport.rs:392:23
+first assertion: called `Result::unwrap()` on an `Err` value: "broker.crl: the root CRL <scratch dir>/root-crl.pem cannot be used: missing"
+exit code: 101
+
+## inner trust, name: SNI and the name check use another name
+mutation in edge/agent/src/tls.rs
+-     ServerName::try_from(BROKER_NAME) ...
++     ServerName::try_from("other.trustiot.test") ...
+$ cargo test -p agent --test transport the_broker_s_chain_through_the_issuing_ca_it_sends_is_accepted
+failed: the_broker_s_chain_through_the_issuing_ca_it_sends_is_accepted at edge/agent/tests/support/wss.rs:229:40
+first assertion: called `Result::unwrap()` on an `Err` value: "tls handshake eof"
+exit code: 101
+
+## inner trust, config: cloud.url may be the broker's inner name
+mutation in edge/agent/src/config.rs
+-             .eq_ignore_ascii_case(BROKER_NAME)
++             .eq_ignore_ascii_case("never.trustiot.test")
+$ cargo test -p agent --lib the_broker_name_is_fixed_and_an_old_broker_name_key_is_refused
+failed: config::tests::the_broker_name_is_fixed_and_an_old_broker_name_key_is_refused at edge/agent/src/config.rs:340:29
+exit code: 101
+
+## security review 2026-10-23, L1: a root CRL with an issuing distribution point loads
+mutation in edge/agent/src/tls.rs
+-             .any(|extension| extension.oid == OID_X509_EXT_ISSUER_DISTRIBUTION_POINT)
++             .any(|extension| false && extension.oid == OID_X509_EXT_ISSUER_DISTRIBUTION_POINT)
+$ cargo test -p agent --lib a_root_crl_with_an_issuing_distribution_point_is_refused
+failed: tls::tests::a_root_crl_with_an_issuing_distribution_point_is_refused at edge/agent/src/tls.rs:809:22
+first assertion: expected BadCrl, got Ok(Loaded { path: "<scratch dir>/root-crl.pem", der: CertificateRevocationListDer(0x308201113081b8020101300a06082a8648ce3d040302301a3118 [...]
+exit code: 101
+
+## security review 2026-10-23, L2: signature algorithms matched loosely (parameters ignored), as x509-parser does
+mutation in edge/agent/src/tls.rs
+-         if candidate.signature_alg_id().as_ref() != algorithm.contents {
++         if !algorithm.contents.starts_with(candidate.signature_alg_id().as_ref()) {
+$ cargo test -p agent --lib signatures_are_checked_only_with_the_algorithms_the_handshake_accepts
+failed: tls::tests::signatures_are_checked_only_with_the_algorithms_the_handshake_accepts at edge/agent/src/tls.rs:809:22
+first assertion: expected BadCrl, got Ok(Loaded { path: "<scratch dir>/root-crl.pem", der: CertificateRevocationListDer(0x3081d8307e020101300c06082a8648ce3d04030205003 [...]
+exit code: 101
+
+## security review 2026-10-23, L2: a root's own signature is not checked
+mutation in edge/agent/src/tls.rs
+-     verify_as_the_handshake_does(der, certificate.public_key().raw) ...
++ 
+$ cargo test -p agent --lib signatures_are_checked_only_with_the_algorithms_the_handshake_accepts
+failed: tls::tests::signatures_are_checked_only_with_the_algorithms_the_handshake_accepts at edge/agent/src/tls.rs:714:22
+first assertion: expected NotARoot, got Ok(BrokerTrust { path: "<scratch dir>/broker-ca.pem", anchors: [CertificateDer(0x3082018130820125a00302010202144f05aa26d10fd9ff [...]
+exit code: 101
+
+## security review 2026-10-23, L2: the root CRL's signature is not checked
+mutation in edge/agent/src/tls.rs
+-     verify_as_the_handshake_does(der, anchor.public_key().raw).map_err(|reason| {
++     Ok::<(), String>(()).map_err(|reason| {
+$ cargo test -p agent --test transport a_root_crl_the_root_did_not_sign_stops_the_agent_from_starting
+failed: a_root_crl_the_root_did_not_sign_stops_the_agent_from_starting at edge/agent/tests/transport.rs:528:37
+first assertion: called `Option::unwrap()` on a `None` value
+exit code: 101
+
+## security review 2026-10-23, L3: two roots with the same subject load
+mutation in edge/agent/src/tls.rs
+-             if let Some(first) = subjects.iter().position(|seen| *seen == subject) {
++             if let Some(first) = subjects.iter().position(|seen| false && *seen == subject) {
+$ cargo test -p agent --lib two_roots_with_the_same_subject_are_refused
+failed: tls::tests::two_roots_with_the_same_subject_are_refused at edge/agent/src/tls.rs:1063:26
+first assertion: same name, other key: expected DuplicateRoot, got Ok(BrokerTrust { path: "<scratch dir>/broker-ca.pem", anchors: [CertificateDer(0x3082016d30820114a003 [...]
+exit code: 101
+
+## security review 2026-10-23, L4: names go into error messages as they are
+mutation in edge/agent/src/tls.rs
+-     crate::link::printable(&name.to_string(), MAX_NAME_CHARS)
++     name.to_string()
+$ cargo test -p agent --lib names_in_errors_have_no_control_characters_and_are_cut_short
+failed: tls::tests::names_in_errors_have_no_control_characters_and_are_cut_short at edge/agent/src/tls.rs:1087:13
+first assertion: "the CA file <scratch dir>/broker-ca.pem may hold only root CA certificates (self-issued, self-signed, cA set), but certificate 1 is issued by CN=evil\n202 [...]
+exit code: 101
+
+## security review 2026-10-23, gap: no webpki parse of the root CRL at load
+mutation in edge/agent/src/tls.rs
+-         WebPkiServerVerifier::builder_with_provider(Arc::clone(&trust.roots), Arc::new(provider())) ...
++ 
+$ cargo test -p agent --lib what_webpki_refuses_in_a_crl_is_refused_at_load
+failed: tls::tests::what_webpki_refuses_in_a_crl_is_refused_at_load at edge/agent/src/tls.rs:806:22
+first assertion: expected BadCrl, got Ok(Loaded { path: "<scratch dir>/root-crl.pem", der: CertificateRevocationListDer(0x3081e8308190020101300a06082a8648ce3d040302301a311 [...]
+exit code: 101
+
+## security review 2026-10-23, gap: a root CRL of exactly the size limit is refused
+mutation in edge/agent/src/tls.rs
+-         if u64::try_from(bytes.len()).map_or(true, |len| len > MAX_ROOT_CRL_BYTES) {
++         if u64::try_from(bytes.len()).map_or(true, |len| len >= MAX_ROOT_CRL_BYTES) {
+$ cargo test -p agent --lib a_root_crl_of_exactly_the_size_limit_is_read
+failed: tls::tests::a_root_crl_of_exactly_the_size_limit_is_read at edge/agent/src/tls.rs:1226:9
+first assertion: assertion failed: matches!(load(&dir, &trust, Some(padded(limit).as_bytes())),
+exit code: 101
+
+## security review 2026-10-23, gap: a root CRL one byte over the size limit is read
+mutation in edge/agent/src/tls.rs
+-         if u64::try_from(bytes.len()).map_or(true, |len| len > MAX_ROOT_CRL_BYTES) {
++         if u64::try_from(bytes.len()).map_or(true, |len| len > MAX_ROOT_CRL_BYTES + 1) {
+$ cargo test -p agent --lib a_root_crl_of_exactly_the_size_limit_is_read
+failed: tls::tests::a_root_crl_of_exactly_the_size_limit_is_read at edge/agent/src/tls.rs:809:22
+first assertion: expected BadCrl, got Ok(Loaded { path: "<scratch dir>/root-crl.pem", der: CertificateRevocationListDer(0x3081d3307c020101300a06082a8648ce3d040302301a3118301 [...]
+exit code: 101
