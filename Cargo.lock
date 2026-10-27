@@ -6,10 +6,27 @@ version = 4
 name = "agent"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
+ "bytes",
+ "futures-util",
  "protocol",
+ "rcgen",
+ "ring",
+ "rustls",
+ "rustls-pki-types",
+ "serde",
+ "serde_json",
  "socket2",
  "testkit",
+ "thiserror",
  "tokio",
+ "tokio-rustls",
+ "tokio-tungstenite",
+ "tokio-util",
+ "toml",
+ "tracing",
+ "tracing-subscriber",
+ "x509-parser",
 ]
 
 [[package]]
@@ -2747,16 +2764,23 @@ dependencies = [
  "base64 0.22.1",
  "contract",
  "ed25519-dalek",
+ "futures-util",
  "http",
  "migrate",
+ "protocol",
  "rcgen",
  "reqwest",
+ "rustls",
+ "rustls-pki-types",
  "serde",
  "serde_json",
  "service-kit",
+ "socket2",
  "sqlx",
  "tokio",
  "tokio-modbus",
+ "tokio-rustls",
+ "tokio-tungstenite",
  "uuid",
 ]
 

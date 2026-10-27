@@ -1,0 +1,34 @@
+# trustiot-agent configuration: /etc/trustiot/agent.toml (edge/agent/README.md, "執行檔與設定").
+# Unknown keys are errors. Paths must be absolute.
+
+[cloud]
+# The gateway endpoint: wss on a DNS name of our own domain (no IP address, and no name whose
+# last label is a number), path /mqtt. The port defaults to 443.
+url = "wss://gw.trustiot.example/mqtt"
+# Trust anchors of the outer TLS (Cloudflare or the on-prem ingress), at least one file.
+# SaaS: the OS bundle. On-prem: the customer's CA or ours. A factory TLS-interception CA can be
+# added as another file.
+trust = ["/etc/ssl/certs/ca-certificates.crt"]
+
+[broker]
+# Our root CA certificate(s), PEM: the only trust anchors of the inner mTLS. Roots only
+# (self-issued, self-signed CA certificates); an issuing CA or a leaf here is refused. The
+# broker's name is fixed (mqtt-broker.trustiot.internal); there is no name key.
+ca = "/etc/trustiot/broker-ca.pem"
+# Optional: where the root CRL is kept (one PEM "X509 CRL", signed by a root above). A file that
+# does not exist yet means no root CRL: the agent connects without checking revocation.
+crl = "/var/lib/trustiot-agent/root-crl.pem"
+
+[identity]
+# The gateway certificate chain (PEM, leaf first, then the issuing CA). Its CN is the gateway ID.
+certificate = "/var/lib/trustiot-agent/gateway.pem"
+# Production: the TPM key. device defaults to /dev/tpmrm0, handle to 0x81000100.
+# Development and tests only: key = { source = "file", path = "/path/to/key.pem" }
+key = { source = "tpm", device = "/dev/tpmrm0", handle = 0x81000100 }
+
+# Optional; the values below are the defaults.
+[connection]
+heartbeat_interval_s = 60   # 10-3600
+reconnect_base_ms = 1000    # 100-60000, the first reconnect delay's ceiling
+reconnect_cap_ms = 60000    # reconnect_base_ms-3600000, the largest ceiling
+inflight_limit = 32         # 1-256 QoS 1 publishes waiting for a PUBACK

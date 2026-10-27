@@ -312,9 +312,9 @@ describe("every copy of a pin is updated by the same pull request", () => {
     // The chart, the dev environment, services/ingest/tests and tools/migrate/tests.
     expect(copies("docker.io/clickhouse/clickhouse-server")).toBe(4);
     // The chart, the dev environment, crates/protocol/tests, crates/mqtt-client/tests,
-    // tools/migrate/tests and services/certs/tests (workstation.rs, broker.rs and
-    // broker_certificate.rs).
-    expect(copies("docker.io/library/eclipse-mosquitto")).toBe(8);
+    // crates/testkit (the agent's test broker), tools/migrate/tests and services/certs/tests
+    // (workstation.rs, broker.rs and broker_certificate.rs).
+    expect(copies("docker.io/library/eclipse-mosquitto")).toBe(9);
     expect(copies("gcr.io/distroless/cc-debian13")).toBe(4);
   });
 
