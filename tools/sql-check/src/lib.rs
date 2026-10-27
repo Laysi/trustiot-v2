@@ -246,6 +246,14 @@ pub const EXCEPTIONS: &[Exception] = &[
                  become with set_config('role', ...) to show what each setup the session check \
                  refuses for that role reaches without a tenant (Laysi/trustiot-v2#381)",
     },
+    Exception {
+        path: "services/assistant/tests/platform_tenant/mod.rs",
+        rules: &[Rule::SessionSetting],
+        reason: "sets a tenant with set_config in a transaction of the assistant's purge role, \
+                 as nothing may, to test that the restrictive policy platform_expired_only \
+                 still keeps that tenant's live and restorable conversations from it \
+                 (Laysi/trustiot-v2#644)",
+    },
 ];
 
 /// sqlx functions whose first argument is SQL.

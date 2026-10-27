@@ -179,6 +179,7 @@ async fn a_fresh_database_gets_every_migration_once() {
             "certs_app",
             "certs_platform",
             "assistant_app",
+            "assistant_platform",
             "ai_gateway_app"
         ]
     );
