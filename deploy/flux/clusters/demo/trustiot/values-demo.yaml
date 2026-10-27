@@ -23,6 +23,23 @@ ingress:
     # change it only as deploy/chart/README.md, 「固定的入口 ClusterIP」, says. It is the only IP
     # address this file may name (`bun test deploy/flux`).
     clusterIP: 10.43.0.80
+  # Cookie routes on the app host. `host: app` names the chart value hosts.app, not a host name: the
+  # real one is only in the private values. Helm replaces this list as a whole, so a change that
+  # adds a route keeps every route here (deploy/flux/README.md, 「日常變更」).
+  routes:
+    # The identity service's own API (services/identity/README.md): the production workstation
+    # tool's logout (DELETE /api/identity/v1/sessions/current) and the platform administrator's
+    # check of the event log (Laysi/trustiot-v2#619).
+    - host: app
+      path: /api/identity
+      match: PathPrefix
+      service: identity
+    # The certs service's platform-admin API: workstation certificates and factory registration
+    # (services/certs/README.md, 「工作站憑證」 and 「出廠登錄」; Laysi/trustiot-v2#619).
+    - host: app
+      path: /api/certs
+      match: PathPrefix
+      service: certs
 
 # The slice's services are switched on here, one by one, as their issues land in a release
 # (deploy/flux/README.md, 「展示叢集」). A service is on only while the deployed chart
@@ -31,6 +48,11 @@ services:
   identity:
     enabled: true
   assets:
+    enabled: true
+  # Laysi/trustiot-v2#619. It starts without the root certificate: the issuing CA key waits for the
+  # ceremony, and the workstation certificate API answers 503 (ca_not_ready) until then
+  # (docs/runbooks/demo-environment.md, 「簽發 CA 的儀式」).
+  certs:
     enabled: true
 
 postgres:

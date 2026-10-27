@@ -235,7 +235,7 @@ bun scripts/flux/components.ts    # 重寫 gotk-components.yaml 與控制器映�
 | chart 版本 | 自己的 `chart.yaml` 與 `values-saas.yaml`；deploy PR 把它與 SaaS 一起移到新版，只動它時用 `pin-chart.ts` | 換版與 SaaS 一樣是「合併即部署、revert 即回滾」，簽章驗證也相同；代價是一個 deploy PR 可能同時動兩個叢集 |
 | values | HelmRelease 依序讀 `values-saas.yaml`、`values-demo.yaml`，最後是 SOPS 加密的 Secret `trustiot-demo-values` 的四個 key，各自以 `targetPath` 與 `literal: true` 寫進一個值：`app-host` → `hosts.app`、`gateway-host` → `hosts.gateway`、`ota-host` → `hosts.ota`、`smtp-from` → `smtp.from` | 主機名稱與寄件人不公開（[密鑰與權限](../../docs/architecture/secrets.md)「公開 repo 的資訊規則」），只在加密的 Secret 裡。加密的內容在 PR 裡看不到，所以它只能設這四個值：整份 values 的寫法能改任何設定（映像、ingress、環境變數），沒有 `literal` 時 Flux 以 Helm 的 `--set` 語法讀值，逗號就能接上另一個 `路徑=值`。Secret 帶 `reconcile.fluxcd.io/watch: Enabled`，改了就升級 |
 | 入口的 ClusterIP | 固定：`values-demo.yaml` 以 `ingress.tunnel.clusterIP` 設一個展示機 Service 網段（`10.43.0.0/16`）靜態區段裡沒被使用的位址，tunnel 的路由指向這個位址（Laysi/trustiot-v2#478）。設為 `10.43.0.80`（Laysi/trustiot-v2#480），與換到含這個欄位的 chart 版本在同一個 PR，而且在展示環境第一次部署（Laysi/trustiot-v2#467）之前；較舊的 chart 不認得這個欄位，schema 拒絕整份 values，HelmRelease 就失敗 | 入口 Service 重建後拿回同一個位址，路由不失效，舊位址也不會被別的 Service 拿走而經 tunnel 公開；ClusterIP 建立後不能改，所以要在 Service 第一次建立前設好。選法與改位址的步驟見 [chart 的 README](../chart/README.md)「固定的入口 ClusterIP」 |
-| 服務 | `values-demo.yaml` 的 `services` 逐一打開切片的服務（目前 `identity`、`assets`） | 只開部署中那一版 chart 有映像的服務；切片的 issue 進了 release 後，在這裡打開（AI 閘道與 telemetry-query 要另設的值見下方「打開 AI 閘道」「打開 telemetry-query」） |
+| 服務 | `values-demo.yaml` 的 `services` 逐一打開切片的服務（目前 `identity`、`assets`、`certs`），`ingress.routes` 列出 app 主機的 cookie 路由（目前 `/api/identity`、`/api/certs`） | 只開部署中那一版 chart 有映像的服務；切片的 issue 進了 release 後，在這裡打開（certs、AI 閘道與 telemetry-query 要另設的值見下方「打開 certs」「打開 AI 閘道」「打開 telemetry-query」） |
 | 外部端點 | Qdrant 的網址在 `.invalid`（RFC 6761，不會解析）；Sentry 關閉 | 切片不用知識庫，SaaS 型態的 schema 又要求外部網址；沒有展示用的 Sentry 專案，錯誤留在 ClickHouse 的日誌 |
 | 備份與磁碟 | 沒有備份；Postgres 10Gi、ClickHouse 20Gi | 里程碑「展示切片」接受展示資料遺失；一台閘道器加幾具電表的量 |
 
@@ -309,6 +309,19 @@ age-keygen 的輸出不是終端機時，私鑰寫到管線、`Public key: …` 
 
 - **私有 values**（主機名稱、寄件人）：收件者以自己的私鑰 `SOPS_AGE_KEY_FILE=<私鑰檔> sops edit deploy/flux/clusters/demo/trustiot/trustiot-demo-values.sops.yaml` 改其中一個 key 的值（不加 key；HelmRelease 只讀那四個），或以上表的 `demo-values.ts` 整份重新產生；開 PR，內文寫明改了哪些 key，由另一位維運人員解開審查後合併。Secret 帶 watch label，Flux 套用後 helm-controller 立刻升級。改主機名稱時，Cloudflare 的路由、DNS 與 Access 要一起改。
 - **打開切片的服務**：服務的 issue 進了某一版 chart、展示叢集也部署了那一版之後，在 `values-demo.yaml` 的 `services` 加上 `<服務>: {enabled: true}`；它用到的 Secret 以 SOPS 檔一起加進來並列進 `kustomization.yaml`；開 PR 合併。`bun test deploy/flux` 以 HEAD 的 chart 渲染展示叢集的 values，打開的服務若少了 chart 要求的設定，測試會失敗。打開前確認展示機的記憶體還放得下。
+- **打開 certs**（Laysi/trustiot-v2#619）：展示叢集部署的 chart 要含 `deploy/images/certs`、`services.certs` 與 `certificateAuthority`（2026-10-22 的 Laysi/trustiot-v2#78 起），也要含 2026-10-24 的 Laysi/trustiot-v2#609（整版滾動的連線預算檢查，`max_connections` 從 100 調高）：`0.0.0-rc.10` 兩者都沒有，2026-10-28 從 main 發的 `0.0.0-rc.11` 兩者都有。先照下方「換版」換到 rc.11 或之後的版本，這個變更要在換版之後才合併：`chart.yaml` 釘的版本不晚於 rc.10 時，`bun test deploy/flux` 失敗。rc.10 的 schema 接受任何名稱的服務，所以在 rc.10 上合併時渲染照樣通過，但那一版沒有發佈 certs 的映像：pod 拉不到映像，Helm 升級等到 `timeout` 後失敗並 rollback，重試 3 次。分兩次改 `values-demo.yaml`，中間是簽發 CA 的儀式（[展示環境 runbook](../../docs/runbooks/demo-environment.md)「簽發 CA 的儀式」）：
+  1. **打開服務與路由**（已在 `values-demo.yaml`）：`services.certs.enabled: true`，以及 app 主機的兩條 cookie 路由：`/api/certs` 給 certs（平台管理員的工作站憑證 API 與出廠登錄，[服務的 README](../../services/certs/README.md)「工作站憑證」「出廠登錄」），`/api/identity` 給身分服務自己的 API（產線工作站工具的 `logout` 與平台管理員的確認都要它，[factory/workstation](../../factory/workstation/README.md)）。不用加 Secret：服務角色的密碼由 migration Job 在叢集裡產生，簽發 CA 的私鑰由 certs pod 的 init container 產生（`<release>-certs-ca-keys`），兩者都不經過人。這時還沒有根憑證：服務照常就緒，記 ERROR `cannot load the issuing CA`（根憑證是空的），之後每次檢查記 WARN `no issuing CA is loaded`，工作站憑證的 API 回 503 `workstation_certificate.ca_not_ready`，等第 2 步。打開 certs 時，chart 也為 gateway 主機名稱的 `/certs/renew`（`ingress.publicPaths.certRenewal`，完整路徑比對、不需要 cookie）掛上指向 certs 的路由。換發端點（Laysi/trustiot-v2#81）還沒實作，所以 certs 對這個路徑回 404，不會回別的內容。tunnel 本來就讓這個路徑略過 Access，所以 `tunnel.ts check --stage 2` 對它的預期不變（到得了入口）。certs 也開始消費資產服務的 `assets.gateway_bound`（Laysi/trustiot-v2#632），資產服務已在展示環境打開，不用另外設定。連線預算：identity、assets、certs 各一個副本、一起滾動時要 62 + 28 + 18 條，加上保留的 18 條共 126 條，chart 預設的 `max_connections` 放得下（Laysi/trustiot-v2#609 起 160，Laysi/trustiot-v2#655 起 200），不用改（[chart 的 README](../chart/README.md)「連線預算」）。migration Job 重跑、每個服務滾動重啟一次，不要排在展示前；打開前在展示機上 `free -h` 確認記憶體放得下（服務的記憶體上限是 chart 預設的 256Mi）。
+  2. **設定根憑證與簽發 CA 憑證**（儀式之後，另一個 PR）：兩者都是公開資料，各是 DER 的 base64、一行（runbook 的步驟印出）。kubelet 更新掛載的 ConfigMap 後服務自己重讀，pod 不重啟、Job 不重跑。
+
+  ```yaml
+  certificateAuthority:
+    rootCertificate: <根憑證 DER 的 base64，一行>
+    issuingCertificates:
+      - <簽發 CA 第 1 代憑證 DER 的 base64，一行>
+  ```
+
+  `ingress.routes` 是清單，Helm 會整個取代：之後加別的路由（例如下方的 telemetry-query）要保留這兩條。
+
 - **打開 AI 閘道**（Laysi/trustiot-v2#536）：展示叢集部署的 chart 含 `deploy/images/ai-gateway` 之後，`values-demo.yaml` 加上下面的值，`trustiot-anthropic.sops.yaml` 已在 main 上並列在 `kustomization.yaml`（上表）。`credentials: [ai]` 是 chart 的預設，仍寫出來：`scripts/demo/flux.ts` 只從展示叢集的 values 判斷要哪些 Secret，看不到 chart 的預設。展示環境只有 Anthropic 的金鑰，所以角色只能用 `anthropic/` 的模型；角色名稱與模型由呼叫端的 issue 決定（AI 助理是 Laysi/trustiot-v2#145），沒有角色時 chart 拒絕渲染。`baseUrl` 留空是 Anthropic 自己的 API，要經 Cloudflare AI Gateway 時才設。閘道沒有呼叫端時誰都連不到它（`mesh.calls` 由呼叫端的 issue 加上），打開後確認 pod 就緒；金鑰能不能用，以 chart README「AI 閘道」的 port-forward 送一次最小的呼叫確認。
 
   ```yaml
@@ -334,6 +347,14 @@ age-keygen 的輸出不是終端機時，私鑰寫到管線、`Public key: …` 
       enabled: true
   ingress:
     routes:                      # 整個清單：連同 values-demo.yaml 已有的路由
+      - host: app
+        path: /api/identity
+        match: PathPrefix
+        service: identity
+      - host: app
+        path: /api/certs
+        match: PathPrefix
+        service: certs
       - host: app
         path: /api/telemetry
         match: PathPrefix

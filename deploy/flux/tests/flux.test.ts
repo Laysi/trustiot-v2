@@ -702,6 +702,32 @@ describe("the demo release", () => {
     expect(hostProblems(overlayText, allowedAddresses)).toEqual([]);
   });
 
+  // The last released chart version that lacks what a service needs on the demo cluster
+  // (deploy/flux/README.md, 「日常變更」). The schema of such a version accepts any service name, so
+  // the overlay renders there, but the release has no image for it: the pod cannot pull, the Helm
+  // upgrade times out and rolls back. certs also needs Laysi/trustiot-v2#609's connection budget.
+  const LACKING_UP_TO: Record<string, string> = { certs: "0.0.0-rc.10" };
+  /** Services the overlay switches on while the pinned chart version still lacks them. */
+  const tooEarly = (values: YamlMap, tag: string): string[] =>
+    Object.entries(LACKING_UP_TO).filter(([service, last]) => {
+      const services = isMap(values.services) ? values.services : {};
+      const entry = services[service];
+      return isMap(entry) && entry.enabled === true && Bun.semver.order(tag, last) <= 0;
+    }).map(([service, last]) => `${service} is on, but the chart ${tag} is not later than ${last}`);
+
+  test("a service is switched on only once the pinned chart ships it (Laysi/trustiot-v2#619)", () => {
+    const ref = spec(one("demo", "OCIRepository", "trustiot")).ref;
+    const tag = isMap(ref) && typeof ref.tag === "string" ? ref.tag : "";
+    expect(tag).not.toBe("");
+    expect(tooEarly(overlay, tag)).toEqual([]);
+    // The check itself: on, at or before the last version without it, is refused; off, or later, is not.
+    const certsOn = { services: { certs: { enabled: true } } };
+    expect(tooEarly(certsOn, "0.0.0-rc.10")).toEqual(["certs is on, but the chart 0.0.0-rc.10 is not later than 0.0.0-rc.10"]);
+    expect(tooEarly(certsOn, "0.0.0-rc.9")).toHaveLength(1);
+    expect(tooEarly(certsOn, "0.0.0-rc.11")).toEqual([]);
+    expect(tooEarly({ services: { certs: { enabled: false } } }, "0.0.0-rc.10")).toEqual([]);
+  });
+
   test("the host check refuses any other host name, a mail address and an IP address", () => {
     const lines = overlayText.split("\n").length;
     const problems = (text: string) => hostProblems(text, allowedAddresses);
@@ -719,17 +745,32 @@ describe("the demo release", () => {
   });
 
   test(
-    "with the private values, the chart at HEAD accepts it: the services that exist, Resend's relay, no Sentry, no Qdrant",
+    "with the private values, the chart at HEAD accepts it: the services that exist, their cookie routes, Resend's relay, no Sentry, no Qdrant",
     () => {
       const result = helmTemplate([overlay], setLiteral);
       expect(result.stderr).toBe("");
       expect(result.code).toBe(0);
       const objects = parseAll(result.stdout);
       const deployments = objects.filter((m) => m.kind === "Deployment").map((m) => m.metadata.name).sort();
-      expect(deployments).toEqual(["trustiot-assets", "trustiot-identity", "trustiot-otel-collector"]);
-      for (const name of ["trustiot-assets", "trustiot-identity"]) {
+      expect(deployments).toEqual(["trustiot-assets", "trustiot-certs", "trustiot-identity", "trustiot-otel-collector"]);
+      for (const name of ["trustiot-assets", "trustiot-certs", "trustiot-identity"]) {
         const pod = (spec(objects.find((m) => m.kind === "Deployment" && m.metadata.name === name)!).template as { spec: { imagePullSecrets: { name: string }[] } }).spec;
         expect(pod.imagePullSecrets).toEqual([{ name: GHCR_PULL_NAME }]);
+      }
+      // The cookie routes on the private app host (Laysi/trustiot-v2#619): the identity service's own
+      // API, which the workstation tool's logout and the platform administrator's check use, and the
+      // certs service's platform-admin API. Each goes to its own service and nowhere else.
+      const routes = objects.filter((m) => m.kind === "HTTPRoute").map((m) => JSON.stringify(m.spec));
+      for (const [path, backend] of [
+        ["/api/identity", "trustiot-identity"],
+        ["/api/certs", "trustiot-certs"],
+      ] as const) {
+        const matching = routes.filter((r) => r.includes(`"value":"${path}"`));
+        expect({ path, routes: matching.length }).toEqual({ path, routes: 1 });
+        expect(matching[0]).toContain(`"name":"${backend}"`);
+        expect(matching[0]).toContain(privateExample["app-host"]!);
+        expect(matching[0]).not.toContain(privateExample["gateway-host"]!);
+        expect(matching[0]).not.toContain(privateExample["ota-host"]!);
       }
       const platform = objects.find((m) => m.kind === "ConfigMap" && m.metadata.name === "trustiot-platform")?.data as Record<string, string>;
       expect(platform.TRUSTIOT_APP_HOST).toBe(privateExample["app-host"]);
@@ -780,9 +821,13 @@ describe("the demo release", () => {
       expect(block).toBeDefined();
       const values = Bun.YAML.parse((block ?? "").replaceAll(/^ {2}/gm, "")) as YamlMap;
       expect(Object.keys(values).sort()).toEqual(["ingress", "services"]);
-      // The overlay sets no route yet; once it does, the README's list must keep those (helm
-      // replaces a list as a whole), which this test cannot know, so it stops here.
-      expect(isMap(overlay.ingress) ? overlay.ingress.routes : undefined).toBeUndefined();
+      // Helm replaces a list as a whole, so the README's list keeps every route the overlay has,
+      // in the overlay's order, and adds its own after them.
+      const overlayRoutes = isMap(overlay.ingress) ? overlay.ingress.routes : undefined;
+      expect(Array.isArray(overlayRoutes)).toBe(true);
+      const readmeRoutes = isMap(values.ingress) ? values.ingress.routes : undefined;
+      expect(Array.isArray(readmeRoutes)).toBe(true);
+      expect((readmeRoutes as unknown[]).slice(0, (overlayRoutes as unknown[]).length)).toEqual(overlayRoutes as unknown[]);
       const result = helmTemplate([overlay, values], setLiteral);
       expect(result.stderr).toBe("");
       expect(result.code).toBe(0);
