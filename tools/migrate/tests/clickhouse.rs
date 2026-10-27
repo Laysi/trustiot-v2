@@ -105,7 +105,7 @@ async fn clickhouse_ddl_and_the_collector_account() {
     let commits_after = report
         .changes
         .iter()
-        .position(|change| change.contains("table trustiot.batch_commits to 180 days"));
+        .position(|change| change.contains("table trustiot.stream_commits to 180 days"));
     assert!(
         telemetry_first < commits_after,
         "a shorter retention changes telemetry first: {:?}",
@@ -135,14 +135,24 @@ async fn clickhouse_ddl_and_the_collector_account() {
     for expected in [
         format!("generated the password of {COLLECTOR} in Secret {COLLECTOR_SECRET} (it had none)"),
         format!("created ClickHouse account {COLLECTOR}"),
-        // The files create both tables with 400 days, as an existing deployment has them; the
-        // same run sets the platform retention (Laysi/trustiot-v2#92), completion records last.
+        // The files create telemetry with 400 days and the completion table with 3650, the
+        // longest retention the Job accepts (0012_gateway_stream_ids.sql); the same run sets the
+        // platform retention (Laysi/trustiot-v2#92), completion records last.
         "set the retention of ClickHouse table trustiot.telemetry to 180 days (was 400)".to_owned(),
-        "set the retention of ClickHouse table trustiot.batch_commits to 180 days (was 400)"
+        "set the retention of ClickHouse table trustiot.stream_commits to 180 days (was 3650)"
             .to_owned(),
     ] {
         assert!(report.changes.contains(&expected), "{:?}", report.changes);
     }
+    // The retired completion table keeps the TTL its file gave it: the run no longer manages it.
+    assert!(
+        !report
+            .changes
+            .iter()
+            .any(|change| change.contains("table trustiot.batch_commits")),
+        "{:?}",
+        report.changes
+    );
     let first = collector_password(&db);
     let tables = clickhouse
         .query("SELECT name FROM system.tables WHERE database = 'trustiot_logs' ORDER BY name FORMAT TSV")
@@ -435,7 +445,7 @@ async fn clickhouse_ddl_and_the_collector_account() {
 
 /// Both tables' engine settings, from which the TTL is read.
 const TABLE_ENGINES: &str = "SELECT name, engine_full FROM system.tables
-WHERE database = 'trustiot' AND name IN ('telemetry', 'batch_commits') FORMAT JSONEachRow";
+WHERE database = 'trustiot' AND name IN ('telemetry', 'stream_commits') FORMAT JSONEachRow";
 
 /// The retention in days of the telemetry and completion tables, as the server reports it.
 async fn ttl_days(clickhouse: &ClickHouse) -> (u32, u32) {
@@ -451,7 +461,7 @@ async fn ttl_days(clickhouse: &ClickHouse) -> (u32, u32) {
         let engine_full = row["engine_full"].as_str().expect("a string column");
         match row["name"].as_str() {
             Some("telemetry") => telemetry = Some(managed_ttl_days(engine_full, "received_at")),
-            Some("batch_commits") => commits = Some(managed_ttl_days(engine_full, "committed_at")),
+            Some("stream_commits") => commits = Some(managed_ttl_days(engine_full, "committed_at")),
             other => panic!("unexpected table {other:?}"),
         }
     }
@@ -459,7 +469,10 @@ async fn ttl_days(clickhouse: &ClickHouse) -> (u32, u32) {
         ttl.unwrap_or_else(|| panic!("no table {table}"))
             .unwrap_or_else(|problem| panic!("{table}: {problem}"))
     };
-    (read(telemetry, "telemetry"), read(commits, "batch_commits"))
+    (
+        read(telemetry, "telemetry"),
+        read(commits, "stream_commits"),
+    )
 }
 
 fn with_retention(db: &Database, clickhouse: &ClickHouse, days: Option<u32>) -> RunConfig {
@@ -487,7 +500,7 @@ const DROP_INGEST_ACCOUNT: &str = "DROP USER migrate_test_ingest";
 /// long ago.
 const INSERT_READINGS: &str = "INSERT INTO trustiot.telemetry (tenant_id, gateway_id, stream_id,
     batch_seq, device_id, point, ts, received_at, value_type, value_float)
-SELECT {tenant:UUID}, generateUUIDv4(), generateUUIDv4(), 1, generateUUIDv4(), point, ts,
+SELECT {tenant:UUID}, 'migrate-test-gateway', 'stream-1', 1, generateUUIDv4(), point, ts,
     received_at, 'float', 1.5
 FROM VALUES('point String, ts DateTime64(3, \\'UTC\\'), received_at DateTime64(3, \\'UTC\\')',
     ('old_timestamp_received_now', now64(3) - toIntervalDay(1095), now64(3)),
@@ -496,9 +509,9 @@ FROM VALUES('point String, ts DateTime64(3, \\'UTC\\'), received_at DateTime64(3
 
 /// Completion records of the same tenant: committed now (seq 1), a day before the retention ends
 /// (seq 2) and a day after it ended (seq 3).
-const INSERT_COMMITS: &str = "INSERT INTO trustiot.batch_commits (tenant_id, gateway_id,
-    stream_id, seq, row_count, committed_at)
-SELECT {tenant:UUID}, generateUUIDv4(), generateUUIDv4(), seq, 1, committed_at
+const INSERT_COMMITS: &str = "INSERT INTO trustiot.stream_commits (tenant_id, binding_id,
+    gateway_id, stream_id, seq, row_count, committed_at)
+SELECT {tenant:UUID}, generateUUIDv4(), 'migrate-test-gateway', 'stream-1', seq, 1, committed_at
 FROM VALUES('seq UInt64, committed_at DateTime64(3, \\'UTC\\')',
     (1, now64(3)),
     (2, now64(3) - toIntervalDay({days:UInt32} - 1)),
@@ -506,9 +519,9 @@ FROM VALUES('seq UInt64, committed_at DateTime64(3, \\'UTC\\')',
 
 /// OPTIMIZE ... FINAL merges every part of the table, and a merge applies its TTL.
 const MERGE_TELEMETRY: &str = "OPTIMIZE TABLE trustiot.telemetry FINAL";
-const MERGE_COMMITS: &str = "OPTIMIZE TABLE trustiot.batch_commits FINAL";
+const MERGE_COMMITS: &str = "OPTIMIZE TABLE trustiot.stream_commits FINAL";
 const KEPT_READINGS: &str = "SELECT point FROM trustiot.telemetry WHERE tenant_id = {tenant:UUID} ORDER BY point FORMAT TSV";
-const KEPT_COMMITS: &str = "SELECT seq FROM trustiot.batch_commits WHERE tenant_id = {tenant:UUID} ORDER BY seq FORMAT TSV";
+const KEPT_COMMITS: &str = "SELECT seq FROM trustiot.stream_commits WHERE tenant_id = {tenant:UUID} ORDER BY seq FORMAT TSV";
 
 /// The run sets the platform retention as the TTL of the telemetry and completion tables; rows
 /// expire by the server's receive time, so readings with an old gateway timestamp that just
@@ -590,7 +603,7 @@ async fn raw_retention(db: &Database, clickhouse: &ClickHouse) {
     assert_eq!(
         report.changes,
         [
-            "set the retention of ClickHouse table trustiot.batch_commits to 365 days (was 180)",
+            "set the retention of ClickHouse table trustiot.stream_commits to 365 days (was 180)",
             "set the retention of ClickHouse table trustiot.telemetry to 365 days (was 180)",
         ]
     );
@@ -603,7 +616,7 @@ async fn raw_retention(db: &Database, clickhouse: &ClickHouse) {
         report.changes,
         [
             "set the retention of ClickHouse table trustiot.telemetry to 180 days (was 365)",
-            "set the retention of ClickHouse table trustiot.batch_commits to 180 days (was 365)",
+            "set the retention of ClickHouse table trustiot.stream_commits to 180 days (was 365)",
         ]
     );
     let report = migrate::run(&with_retention(db, clickhouse, None), &CLICKHOUSE_ONLY)
@@ -745,7 +758,7 @@ async fn aggregate_retention(db: &Database, clickhouse: &ClickHouse) {
         [
             "set the retention of ClickHouse table trustiot.telemetry_1h to 60 months (was 48)",
             "set the retention of ClickHouse table trustiot.telemetry_1m to 14 months (was 13)",
-            "set the retention of ClickHouse table trustiot.batch_commits to 400 days (was 180)",
+            "set the retention of ClickHouse table trustiot.stream_commits to 400 days (was 180)",
             "set the retention of ClickHouse table trustiot.telemetry to 400 days (was 180)",
         ]
     );
@@ -763,7 +776,7 @@ async fn aggregate_retention(db: &Database, clickhouse: &ClickHouse) {
         report.changes,
         [
             "set the retention of ClickHouse table trustiot.telemetry to 180 days (was 400)",
-            "set the retention of ClickHouse table trustiot.batch_commits to 180 days (was 400)",
+            "set the retention of ClickHouse table trustiot.stream_commits to 180 days (was 400)",
             "set the retention of ClickHouse table trustiot.telemetry_1m to 13 months (was 14)",
             "set the retention of ClickHouse table trustiot.telemetry_1h to 48 months (was 60)",
         ]

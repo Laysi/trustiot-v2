@@ -1043,7 +1043,7 @@ mod tests {
             // Runtime code never runs CREATE TABLE; the migration Job does.
             /// ALTER TABLE belongs in migrations/.
             const INSERT: &str = "INSERT INTO trustiot.telemetry (a) VALUES (1)";
-            const DELETE: &str = "DELETE FROM trustiot.telemetry WHERE stream_id = {s:UUID}";
+            const DELETE: &str = "DELETE FROM trustiot.telemetry WHERE stream_id = {s:String}";
             const USER: &str = "CREATE USER tenant_x IDENTIFIED WITH sha256_password BY 'x'";
             const GRANT: &str = "GRANT trustiot_tenant_reader TO tenant_x";
             fn create_table() {}

@@ -274,11 +274,16 @@ MODIFY TTL toDateTime(received_at) + toIntervalDay({days:UInt32})",
 
 /// The completion records (the high-water marks) get the same number of days: `committed_at` is
 /// never earlier than the `received_at` of the batch's rows, so a record outlives its rows.
+///
+/// The table keyed by gateway plus stream (`0012_gateway_stream_ids.sql`). The retired
+/// `trustiot.batch_commits` is no longer managed: nothing writes or reads it (the ingest role
+/// has no privilege on it), so its TTL protects nothing, and leaving it alone lets a later
+/// cleanup remove it without breaking the run.
 const COMMITS_RETENTION: RetentionTable = RetentionTable {
-    table: "batch_commits",
+    table: "stream_commits",
     column: "committed_at",
     unit: TtlUnit::Days,
-    modify: "ALTER TABLE trustiot.batch_commits
+    modify: "ALTER TABLE trustiot.stream_commits
 MODIFY TTL toDateTime(committed_at) + toIntervalDay({days:UInt32})",
 };
 
@@ -1446,9 +1451,9 @@ mod tests {
                      fsync_after_insert = 1, index_granularity = 8192";
         assert_eq!(managed_ttl_days(files, "received_at"), Ok(400));
         // As ClickHouse 26.8 stores the run's query parameter.
-        let run = "ReplacingMergeTree PARTITION BY toYYYYMM(committed_at) ORDER BY (stream_id, \
-                   seq) TTL toDateTime(committed_at) + toIntervalDay(_CAST(180, 'UInt32')) \
-                   SETTINGS fsync_after_insert = 1";
+        let run = "ReplacingMergeTree PARTITION BY toYYYYMM(committed_at) ORDER BY (gateway_id, \
+                   stream_id, seq) TTL toDateTime(committed_at) + \
+                   toIntervalDay(_CAST(180, 'UInt32')) SETTINGS fsync_after_insert = 1";
         assert_eq!(managed_ttl_days(run, "committed_at"), Ok(180));
         assert_eq!(
             managed_ttl_days(

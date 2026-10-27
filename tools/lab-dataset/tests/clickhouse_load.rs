@@ -35,11 +35,11 @@ const READER: &str = "lab_dataset_test_reader";
 const CREATE_READER: &str = "CREATE USER lab_dataset_test_reader IDENTIFIED WITH \
      sha256_password BY {password:String} HOST ANY";
 const GRANT_TELEMETRY: &str = "GRANT SELECT ON trustiot.telemetry TO lab_dataset_test_reader";
-const GRANT_COMMITS: &str = "GRANT SELECT ON trustiot.batch_commits TO lab_dataset_test_reader";
+const GRANT_COMMITS: &str = "GRANT SELECT ON trustiot.stream_commits TO lab_dataset_test_reader";
 const POLICY_TELEMETRY: &str = "CREATE ROW POLICY lab_dataset_test_all_rows ON \
      trustiot.telemetry AS PERMISSIVE FOR SELECT USING 1 TO lab_dataset_test_reader";
 const POLICY_COMMITS: &str = "CREATE ROW POLICY lab_dataset_test_all_rows ON \
-     trustiot.batch_commits AS PERMISSIVE FOR SELECT USING 1 TO lab_dataset_test_reader";
+     trustiot.stream_commits AS PERMISSIVE FOR SELECT USING 1 TO lab_dataset_test_reader";
 
 /// Keeps every INSERT in its own part, so `_part` shows the insert order.
 const STOP_MERGES: &str = "SYSTEM STOP MERGES trustiot.telemetry";
@@ -59,8 +59,8 @@ FROM trustiot.telemetry WHERE tenant_id = {tenant:UUID}
 GROUP BY stream_id, batch_seq ORDER BY block FORMAT TSV";
 
 const COMMITS: &str = "SELECT toString(stream_id), seq, row_count,
-  toUnixTimestamp64Milli(committed_at), toString(gateway_id)
-FROM trustiot.batch_commits FINAL WHERE tenant_id = {tenant:UUID} ORDER BY stream_id, seq FORMAT TSV";
+  toUnixTimestamp64Milli(committed_at), toString(gateway_id), toString(binding_id)
+FROM trustiot.stream_commits FINAL WHERE tenant_id = {tenant:UUID} ORDER BY stream_id, seq FORMAT TSV";
 
 fn random_hex() -> String {
     format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple())
@@ -217,6 +217,7 @@ async fn check_tenant(server: &ClickHouse, reader: &Account, dataset: &Dataset, 
                     .timestamp_millis()
                     .to_string(),
                 loaded.gateway.to_string(),
+                loaded.binding.to_string(),
             ]
         })
         .collect();
@@ -328,6 +329,7 @@ async fn the_fixture_loads_as_the_ingest_service_writes_it() {
         version: u32::try_from(printed["version"].as_u64().unwrap()).unwrap(),
         tenant: printed["tenant"].as_str().unwrap().parse().unwrap(),
         gateway: printed["gateway"].as_str().unwrap().parse().unwrap(),
+        binding: printed["binding"].as_str().unwrap().parse().unwrap(),
         shift_ms: printed["shift_ms"].as_i64().unwrap(),
         devices: serde_json::from_value(printed["devices"].clone()).unwrap(),
         streams: serde_json::from_value(printed["streams"].clone()).unwrap(),
@@ -342,6 +344,8 @@ async fn the_fixture_loads_as_the_ingest_service_writes_it() {
         (tenant_b, gateway_b, shift_b)
     );
     assert_eq!(b.device("press-1"), Some(press));
+    // The stand-in binding is per tenant and gateway, never the nil UUID.
+    assert!(!a.binding.is_nil() && !b.binding.is_nil() && a.binding != b.binding);
     check_tenant(&server, &reader, &dataset, &b).await;
 
     // Each tenant has its own devices and streams, and A is unchanged by B's load.

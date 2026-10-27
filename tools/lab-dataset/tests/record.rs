@@ -329,14 +329,14 @@ const READER: &str = "lab_record_test_reader";
 const SETUP: [&str; 5] = [
     "CREATE USER lab_record_test_reader IDENTIFIED WITH sha256_password BY {password:String} HOST ANY",
     "GRANT SELECT ON trustiot.telemetry TO lab_record_test_reader",
-    "GRANT SELECT ON trustiot.batch_commits TO lab_record_test_reader",
+    "GRANT SELECT ON trustiot.stream_commits TO lab_record_test_reader",
     "CREATE ROW POLICY lab_record_test_all_rows ON trustiot.telemetry AS PERMISSIVE FOR SELECT USING 1 TO lab_record_test_reader",
-    "CREATE ROW POLICY lab_record_test_all_rows ON trustiot.batch_commits AS PERMISSIVE FOR SELECT USING 1 TO lab_record_test_reader",
+    "CREATE ROW POLICY lab_record_test_all_rows ON trustiot.stream_commits AS PERMISSIVE FOR SELECT USING 1 TO lab_record_test_reader",
 ];
 const SERIES: &str = "SELECT toString(device_id), point, count()
 FROM trustiot.telemetry WHERE tenant_id = {tenant:UUID} GROUP BY device_id, point FORMAT TSV";
 const COMMITS: &str = "SELECT count(), sum(row_count)
-FROM trustiot.batch_commits FINAL WHERE tenant_id = {tenant:UUID} FORMAT TSV";
+FROM trustiot.stream_commits FINAL WHERE tenant_id = {tenant:UUID} FORMAT TSV";
 
 /// Loads the recording into a throwaway ClickHouse and compares the counts with the index.
 async fn load(dataset: &Dataset) {

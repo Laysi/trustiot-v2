@@ -101,7 +101,7 @@ datasets/lab/
 
 ## 批次與完成紀錄
 
-每一批（`stream` + `batch_seq`）一次 INSERT 進 `trustiot.telemetry`，然後在 `trustiot.batch_commits` 寫一筆完成紀錄（`row_count` 是該批筆數，`committed_at` 是該批的 `received_at`），就像 ingest 寫完並落盤後才記錄完成（I1）。索引 `uncommitted` 列出的批次只寫資料、不寫完成紀錄，用來測試只計入已完成批次的處理（例如 Laysi/trustiot-v2#141 的彙總）與批次重寫。寫完成紀錄的程式只有 `tools/lab-dataset/src/clickhouse.rs` 的 `commit_batch` 一處；Laysi/trustiot-v2#639 改變 `batch_commits` 的鍵時在那裡一起改。
+每一批（`stream` + `batch_seq`）一次 INSERT 進 `trustiot.telemetry`，然後在 `trustiot.stream_commits` 寫一筆完成紀錄（`row_count` 是該批筆數，`committed_at` 是該批的 `received_at`，`binding_id` 是由資料集、租戶與閘道器推導的代用 ID），就像 ingest 寫完並落盤後才記錄完成（I1）。索引 `uncommitted` 列出的批次只寫資料、不寫完成紀錄，用來測試只計入已完成批次的處理（例如 Laysi/trustiot-v2#141 的彙總）與批次重寫。寫完成紀錄的程式只有 `tools/lab-dataset/src/clickhouse.rs` 的 `commit_batch` 一處；完成表的鍵或欄位改變時（例如 Laysi/trustiot-v2#639 把完成紀錄移到以閘道器 + 串流為鍵的 `stream_commits`）在那裡一起改。
 
 ## 人工異常片段
 
@@ -238,7 +238,7 @@ let expected = dataset.readings()?;            // 預期值從資料集本身算
 - **租戶與閘道器**：由呼叫端指定（`Target::new(tenant, gateway)`）。設備與串流的 UUID 由資料集名稱、租戶、閘道器與代號推導（UUID v8，同樣的輸入永遠得到同樣的 ID），所以兩個租戶各有自己的設備；`Target::with_device(key, uuid)` 改用測試自己建立的設備（例如在資產服務建好的設備）。`Loaded` 列出每個設備與串流代號對應的 UUID、位移與寫入的筆數。
 - **時間**：見「時間」。比對預期值時，把資料集的時間加上 `loaded.shift()`。
 - **換資料集**：`lab_dataset::index_for_tests()` 預設是合成 fixture，設了 `TRUSTIOT_LAB_DATASET_INDEX`（索引檔路徑）就改用那份。測試的預期值從 `Dataset::readings()` 算、不寫死 fixture 的數字，換成 lab 資料集（Laysi/trustiot-v2#681）時只換索引、不改測試。彙總表的測試 `tools/lab-dataset/tests/rollups.rs` 就是這樣：讀值與批次來自資料集，要算電能的資料點是索引裡 `kind = "cumulative"` 的每一個（溢位值取它的 `wraps_at`），例如 `TRUSTIOT_LAB_DATASET_INDEX=<索引檔> cargo test -p lab-dataset --test rollups -- --nocapture`；語意查詢 API 的測試 `services/telemetry-query/tests/semantic.rs` 也一樣（`cargo test -p telemetry-query --test semantic -- --nocapture`），fixture 才有的性質（一次重置、一次 32 位元回捲、漏讀）只在沒有設定這個變數時檢查。
-- **寫入帳號**：要能 INSERT `trustiot.telemetry` 與 `trustiot.batch_commits`（`trustiot_ingest` 角色，或測試的管理帳號）。讀回比對時注意 row policy：沒有 policy 點名的帳號（包括管理帳號）讀這兩張表得到 0 列，見 [services/ingest](../../services/ingest/README.md)「租戶隔離」；`tools/lab-dataset/tests/clickhouse_load.rs` 示範建一個測試用的讀取帳號。
+- **寫入帳號**：要能 INSERT `trustiot.telemetry` 與 `trustiot.stream_commits`（`trustiot_ingest` 角色，或測試的管理帳號）。讀回比對時注意 row policy：沒有 policy 點名的帳號（包括管理帳號）讀這兩張表得到 0 列，見 [services/ingest](../../services/ingest/README.md)「租戶隔離」；`tools/lab-dataset/tests/clickhouse_load.rs` 示範建一個測試用的讀取帳號。
 - **只載一次**：同一個資料集對同一個租戶與閘道器載入兩次，會以同樣的 ID 寫兩次，不支援；中途失敗時已寫入的批次留著，換一個租戶或閘道器重載。
 
 ## 指令

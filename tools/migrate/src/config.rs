@@ -96,7 +96,7 @@ pub struct ClickHouseSettings {
     #[serde(default)]
     pub password_secret: Option<String>,
     /// `TRUSTIOT__CLICKHOUSE__RAW_RETENTION_DAYS`: the raw data retention in days, which the run
-    /// sets as the TTL of `trustiot.telemetry` and `trustiot.batch_commits` (src/clickhouse.rs).
+    /// sets as the TTL of `trustiot.telemetry` and `trustiot.stream_commits` (src/clickhouse.rs).
     /// Unset: the platform value (`retention::RAW_RETENTION_DAYS`, 180 days). It must be at
     /// least `retention::MIN_RAW_RETENTION_DAYS` (33 days: longer than the gateway buffer's
     /// maximum age, and two days longer than the I1 reconcile's window), or the run stops before

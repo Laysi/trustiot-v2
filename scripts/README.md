@@ -92,13 +92,13 @@ Job 依序套用 `services/ingest/migrations/clickhouse/`，記在 `trustiot_mig
 | 種類 | 名稱 |
 | --- | --- |
 | 資料庫 | `trustiot`、`trustiot_logs`、`trustiot_migrate`（Job 自己的紀錄） |
-| 表與 view | `trustiot.telemetry`、`trustiot.batch_commits`、`trustiot.tenant_telemetry`（租戶讀的 view）、1 分鐘與 1 小時彙總表 `trustiot.telemetry_1m`、`telemetry_1h` 與租戶讀它們的 `tenant_telemetry_1m`、`tenant_telemetry_1h`（填入彙總表的 materialized view 與 backfill view 也在）、`trustiot_logs.otel_logs`、`trustiot_logs.otel_traces`；兩張遙測表的 TTL 對齊 180 天的原始資料保存期限，彙總表 13 與 48 個月 |
+| 表與 view | `trustiot.telemetry`、完成表 `trustiot.stream_commits`（`0012` 停用的舊完成表 `trustiot.batch_commits` 也在，沒有任何角色能讀寫）、`trustiot.tenant_telemetry`（租戶讀的 view）、1 分鐘與 1 小時彙總表 `trustiot.telemetry_1m`、`telemetry_1h` 與租戶讀它們的 `tenant_telemetry_1m`、`tenant_telemetry_1h`（填入彙總表的 materialized view 與 backfill view 也在）、`trustiot_logs.otel_logs`、`trustiot_logs.otel_traces`；兩張遙測表的 TTL 對齊 180 天的原始資料保存期限，彙總表 13 與 48 個月 |
 | 角色 | `trustiot_ingest`、`trustiot_tenant_reader`、`trustiot_otel_collector`、`trustiot_monitoring`，以及帳號 `trustiot_tenant_view_definer`（租戶 view 的 DEFINER，不能登入）、`trustiot_rollup_definer`（彙總表的 DEFINER，不能登入）與 `trustiot_telemetry_query`（`HOST NONE`，不能登入） |
 | row policy、profile、quota | `deny_by_default`、`tenant_isolation`、`service_all_rows` 等，細節見 [services/ingest](../services/ingest/README.md) 「租戶隔離」 |
 
 本機沒有設定 collector 與 telemetry-query 的帳號（不設 `TRUSTIOT__PASSWORDS__CLICKHOUSE_COLLECTOR` 與 `_TELEMETRY_QUERY`，同一個沒有這兩項的 chart）：Job 不管 collector 的帳號，`trustiot_telemetry_query` 維持 `HOST NONE`。`SERVICES` 目前只有 `example-service`，沒有服務需要這兩個帳號；要在開發環境跑 telemetry-query 時，再為它加 `TRUSTIOT__PASSWORDS__CLICKHOUSE_TELEMETRY_QUERY` 與放它密碼的 Secret。
 
-**bootstrap 管理帳號讀不到 `trustiot.telemetry` 與 `trustiot.batch_commits`**：`deny_by_default` 這條 row policy 對所有帳號生效，只有被其他 policy 點名的帳號（`trustiot_ingest` 角色、租戶角色）看得到列，管理帳號讀到 0 列，這是設計。要讀回資料請看下方「載入 lab 資料集」。
+**bootstrap 管理帳號讀不到 `trustiot.telemetry` 與 `trustiot.stream_commits`**：`deny_by_default` 這條 row policy 對所有帳號生效，只有被其他 policy 點名的帳號（`trustiot_ingest` 角色、租戶角色）看得到列，管理帳號讀到 0 列，這是設計。要讀回資料請看下方「載入 lab 資料集」。
 
 #### 哪些角色綁密碼
 
@@ -234,7 +234,7 @@ curl -i -H 'Host: localhost' -H 'Cookie: __Host-trustiot-session=<seed 印出的
    - `--end-before now` 把資料集的時間搬到現在之前一天內（原始資料只保留 180 天、查詢只看近 7 天，不位移的 2026-01 資料會被 TTL 清掉）；`--shift-ms` 指定確切的位移。載入結果以 JSON 印在標準輸出：`rows`、`batches`、`committed_batches` 與設備、串流的 UUID，合成 fixture 是 316 列、16 批、15 批有完成紀錄（最後一批沒有，是設計）。
    - 同一個資料集對同一個租戶與閘道器只載一次；要重載，換租戶或閘道器 UUID。
 
-3. 讀回確認：bootstrap 管理帳號讀 `trustiot.telemetry` 與 `trustiot.batch_commits` 得到 **0 列**（`deny_by_default`，見上方），所以要用一個被 policy 點名的帳號。`trustiot_ingest` 角色有 `service_all_rows` policy，下面建一個開發用的帳號給它（密碼隨機產生，只在這個 shell 的變數裡；ClickHouse 的 HTTP 介面不用指令列帶密碼，帳密由 stdin 的 curl 設定交給 curl）：
+3. 讀回確認：bootstrap 管理帳號讀 `trustiot.telemetry` 與 `trustiot.stream_commits` 得到 **0 列**（`deny_by_default`，見上方），所以要用一個被 policy 點名的帳號。`trustiot_ingest` 角色有 `service_all_rows` policy，下面建一個開發用的帳號給它（密碼隨機產生，只在這個 shell 的變數裡；ClickHouse 的 HTTP 介面不用指令列帶密碼，帳密由 stdin 的 curl 設定交給 curl）：
 
    ```sh
    # 一個函式：ch <帳號> <密碼> "<SQL>"；SQL 寫成一行、不含雙引號與反斜線
@@ -247,11 +247,11 @@ curl -i -H 'Host: localhost' -H 'Cookie: __Host-trustiot-session=<seed 印出的
 
    TENANT=00000000-0000-4000-8000-000000000b01   # 載入時用的租戶 UUID
    ch lab_dataset_reader "$READER_PASSWORD" "SELECT count() FROM trustiot.telemetry WHERE tenant_id = '$TENANT'"
-   ch lab_dataset_reader "$READER_PASSWORD" "SELECT count() FROM trustiot.batch_commits FINAL WHERE tenant_id = '$TENANT'"
+   ch lab_dataset_reader "$READER_PASSWORD" "SELECT count() FROM trustiot.stream_commits FINAL WHERE tenant_id = '$TENANT'"
    ch "$CLICKHOUSE_USER" "$CLICKHOUSE_PASSWORD" "SELECT count() FROM trustiot.telemetry"   # 管理帳號：0
    ```
 
-   合成 fixture 的預期值：`telemetry` 316、`batch_commits` 15，等於載入結果的 `rows` 與 `committed_batches`，也等於索引（兩個分段的 `rows` 211 加 105；`live` 1–13 與 `backlog` 1–3 共 16 批，扣掉 `uncommitted` 的一批）。`lab_dataset_reader` 是開發環境專用、有 `trustiot_ingest` 的全部權限（含 `INSERT` 與 `ALTER DELETE`），不要用在別處；`down` 保留 ClickHouse 的資料磁碟區，帳號也留著，重做上面三句即換新密碼，`purge` 一併刪除。
+   合成 fixture 的預期值：`telemetry` 316、`stream_commits` 15，等於載入結果的 `rows` 與 `committed_batches`，也等於索引（兩個分段的 `rows` 211 加 105；`live` 1–13 與 `backlog` 1–3 共 16 批，扣掉 `uncommitted` 的一批）。`lab_dataset_reader` 是開發環境專用、有 `trustiot_ingest` 的全部權限（含 `INSERT` 與 `ALTER DELETE`），不要用在別處；`down` 保留 ClickHouse 的資料磁碟區，帳號也留著，重做上面三句即換新密碼，`purge` 一併刪除。
 
 不要把載入工具指向開發環境以外的 ClickHouse：它會寫進任何它拿到的伺服器。
 

@@ -180,6 +180,13 @@ pub const EXCEPTIONS: &[Exception] = &[
                  SET ROLE NONE as an attack that must fail",
     },
     Exception {
+        path: "services/ingest/tests/migrations.rs",
+        rules: &[Rule::SqlBuiltFromStrings],
+        reason: "ClickHouse, not Postgres, and no sqlx: the upgrade test creates per-run users \
+                 with a password generated at run time (CREATE USER cannot bind it) and writes \
+                 rows in the pre-0012 shape (Laysi/trustiot-v2#639)",
+    },
+    Exception {
         path: "services/telemetry-query/tests/sql_check.rs",
         rules: &[Rule::SqlBuiltFromStrings, Rule::SessionSetting],
         reason: "ClickHouse, not Postgres: the AI's SQL check (Laysi/trustiot-v2#143) must refuse \

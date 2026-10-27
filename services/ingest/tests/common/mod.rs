@@ -249,7 +249,8 @@ impl ClickHouse {
 
     /// Always a throwaway container, whatever `TEST_CLICKHOUSE_URL` says: for a test that changes
     /// server-wide state a shared server must not keep, such as stopped merges or an account that
-    /// reads every row (tools/lab-dataset/tests/clickhouse_load.rs).
+    /// reads every row (tools/lab-dataset/tests/clickhouse_load.rs), or that needs a server on
+    /// which no migration was applied yet (tests/migrations.rs).
     pub async fn start_throwaway() -> Option<Self> {
         let Some(runtime) = container_runtime() else {
             unavailable("podman or docker");
@@ -497,13 +498,18 @@ impl ClickHouse {
     /// Applies every migration file, statement by statement, as the admin.
     pub async fn apply_migrations(&self) {
         for migration in migrations() {
-            for statement in &migration.statements {
-                if let Err(error) = self.admin(statement).await {
-                    panic!(
-                        "{}: statement failed:\n{statement}\n{}",
-                        migration.name, error.body
-                    );
-                }
+            self.apply(&migration).await;
+        }
+    }
+
+    /// Applies one migration file, statement by statement, as the admin.
+    pub async fn apply(&self, migration: &Migration) {
+        for statement in &migration.statements {
+            if let Err(error) = self.admin(statement).await {
+                panic!(
+                    "{}: statement failed:\n{statement}\n{}",
+                    migration.name, error.body
+                );
             }
         }
     }

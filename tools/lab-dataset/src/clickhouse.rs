@@ -1,11 +1,12 @@
 //! Writing to ClickHouse's telemetry table and batch completion table
-//! (services/ingest/migrations/clickhouse/0002_telemetry.sql, 0003_batch_commits.sql) over the
-//! HTTP interface, with the migration Job's HTTP client: `http://`, or `https://` trusting only a
-//! named CA (`migrate::http`).
+//! (services/ingest/migrations/clickhouse/0002_telemetry.sql, 0012_gateway_stream_ids.sql) over
+//! the HTTP interface, with the migration Job's HTTP client: `http://`, or `https://` trusting
+//! only a named CA (`migrate::http`).
 //!
-//! [`ClickHouse::commit_batch`] is the only code that writes a completion record. When
-//! Laysi/trustiot-v2#639 re-keys `trustiot.batch_commits` by gateway and stream, it changes
-//! there (and in the ingest service), nowhere else.
+//! [`ClickHouse::commit_batch`] is the only code that writes a completion record: when the
+//! completion table's key or columns change, it changes there (and in the ingest service),
+//! nowhere else. The gateway and stream IDs are UUIDs written as text, which the protocol's ID
+//! rule accepts (the same text 0012_gateway_stream_ids.sql gives the rows written before it).
 
 use std::fmt;
 use std::path::Path;
@@ -24,9 +25,9 @@ const INSERT_TELEMETRY: &str = "INSERT INTO trustiot.telemetry (tenant_id, gatew
      stream_id, batch_seq, device_id, point, ts, received_at, value_type, value_float, \
      value_int, value_bool, value_string) FORMAT JSONEachRow";
 
-/// Inserts one batch's completion record.
-const INSERT_BATCH_COMMIT: &str = "INSERT INTO trustiot.batch_commits (tenant_id, gateway_id, \
-     stream_id, seq, row_count, committed_at) FORMAT JSONEachRow";
+/// Inserts one batch's completion record into the table keyed by gateway plus stream.
+const INSERT_BATCH_COMMIT: &str = "INSERT INTO trustiot.stream_commits (tenant_id, binding_id, \
+     gateway_id, stream_id, seq, row_count, committed_at) FORMAT JSONEachRow";
 
 /// ClickHouse error texts are cut to this many characters in errors.
 const ERROR_TEXT_LIMIT: usize = 2000;
@@ -109,10 +110,12 @@ impl<'a> TelemetryRow<'a> {
     }
 }
 
-/// A batch's completion record (`trustiot.batch_commits`).
+/// A batch's completion record (`trustiot.stream_commits`).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct BatchCommit {
     pub tenant_id: Uuid,
+    /// The gateway binding the batch was written under; never the nil UUID (`binding_id_set`).
+    pub binding_id: Uuid,
     pub gateway_id: Uuid,
     pub stream_id: Uuid,
     pub seq: u64,
@@ -124,6 +127,7 @@ pub struct BatchCommit {
 #[derive(Serialize)]
 struct BatchCommitRow {
     tenant_id: Uuid,
+    binding_id: Uuid,
     gateway_id: Uuid,
     stream_id: Uuid,
     seq: u64,
@@ -257,6 +261,7 @@ impl ClickHouse {
     pub(crate) async fn commit_batch(&self, commit: &BatchCommit) -> Result<(), Error> {
         let row = BatchCommitRow {
             tenant_id: commit.tenant_id,
+            binding_id: commit.binding_id,
             gateway_id: commit.gateway_id,
             stream_id: commit.stream_id,
             seq: commit.seq,

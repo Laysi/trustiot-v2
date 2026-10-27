@@ -70,6 +70,11 @@ const TENANT_POLICIES: &str = "SELECT table, short_name, select_filter FROM syst
 WHERE database = 'trustiot' AND short_name IN ('tenant_isolation', 'tenant_view_definer')
 ORDER BY table, short_name FORMAT TSVRaw";
 
+/// The type of the raw view's gateway column: `String` once 0012_gateway_stream_ids.sql rebuilt
+/// the view (0005_tenant_view.sql created it with `UUID`).
+const REBUILT_VIEW: &str = "SELECT type FROM system.columns
+WHERE database = 'trustiot' AND table = 'tenant_telemetry' AND name = 'gateway_id' FORMAT TSV";
+
 /// Window changes in the form the service's account writes them (src/accounts.rs,
 /// `SET_WINDOWS`): a plan change.
 const WIDEN: &str = "ALTER USER {user:Identifier} MODIFY SETTINGS
@@ -231,7 +236,17 @@ async fn edge_count(stack: &Stack, account: &Account) -> u64 {
 }
 
 /// 1. The nine tenant policies carry the window of their table.
+///
+/// The raw view is the one 0012_gateway_stream_ids.sql rebuilt with `CREATE OR REPLACE VIEW` after
+/// 0011 set its window (its `gateway_id` is text; Laysi/trustiot-v2#639). Row policies are bound to
+/// the view's name, so the policy on it, and what steps 2 to 7 read through it, are those of the
+/// rebuilt view.
 async fn policies_carry_the_window(stack: &Stack) {
+    assert_eq!(
+        stack.clickhouse.admin_ok(REBUILT_VIEW).await,
+        "String\n",
+        "tenant_telemetry is not the view 0012_gateway_stream_ids.sql rebuilt"
+    );
     let rows = stack.clickhouse.admin_ok(TENANT_POLICIES).await;
     let mut seen = Vec::new();
     for row in rows.lines() {
