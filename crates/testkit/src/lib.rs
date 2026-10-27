@@ -13,6 +13,8 @@
 //!   container runtime skips a test locally but fails it in CI.
 //! - [`modbus`]: a fake Modbus TCP and RTU-over-TCP endpoint with unit identifiers and fault
 //!   injection (rebuild checklist M7), for the gateway's acquisition tests.
+//! - [`mqtt`]: the gateway's way to the broker: a test PKI, a WebSocket front standing in for
+//!   the ingress and the MQTT relay, and Mosquitto with mTLS and the gateway role.
 //! - [`clock`]: time control for tests on real sockets: a paused tokio clock that moves only
 //!   when the test advances it, and waits bounded by wall-clock time.
 //! - [`chart`]: what the deployment chart assumes about a service, such as its Postgres
@@ -26,5 +28,6 @@ pub mod container;
 pub mod identity;
 pub mod isolation;
 pub mod modbus;
+pub mod mqtt;
 pub mod postgres;
 pub mod product;
