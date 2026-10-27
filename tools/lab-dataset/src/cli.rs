@@ -314,7 +314,12 @@ pub async fn run(command: Command, env: impl Fn(&str) -> Option<String>) -> Resu
             let config = Config::read(&config).map_err(|error| error.to_string())?;
             let recorder = Recorder::new(config).map_err(|error| error.to_string())?;
             let recorded = recorder
-                .run(&out, Utc::now(), stop_after(duration))
+                .run(
+                    Recorder::endpoints(),
+                    &out,
+                    Utc::now(),
+                    stop_after(duration),
+                )
                 .await
                 .map_err(|error| error.to_string())?;
             serde_json::to_string_pretty(&recorded).map_err(|error| error.to_string())

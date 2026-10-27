@@ -10,9 +10,10 @@ repository.workspace = true
 [features]
 # Test code only: `TcpConnection::exempt_for_tests` and `Endpoints::exempt_for_tests`, which let a
 # test reach the fake Modbus endpoint on 127.0.0.1 although the address guard refuses loopback
-# (src/modbus/address.rs, Laysi/trustiot-v2#653). Only the dev-dependency on this crate below
-# enables it, so a build of the agent never has it; `cargo test -p repo-check` fails when a
-# normal dependency, another feature or a default enables it.
+# (src/modbus/address.rs, Laysi/trustiot-v2#653). Only dev-dependencies enable it (the one on
+# this crate below, and tools/lab-dataset's for its recorder test), so a build of the agent or of
+# a tool that uses it never has it; `cargo test -p repo-check` fails when a normal or build
+# dependency, another feature or a default enables it.
 test-exempt-addresses = []
 
 # The agent runs on the gateway: every dependency must build for aarch64-unknown-linux-gnu

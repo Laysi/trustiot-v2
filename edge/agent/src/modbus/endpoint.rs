@@ -102,7 +102,7 @@ impl Endpoints {
     /// Test code only: lets the connections it creates from now on reach `addresses` although
     /// the address guard refuses them, as [`TcpConnection::exempt_for_tests`] does. It exists
     /// only in this crate's unit tests and with the `test-exempt-addresses` feature, which only
-    /// this crate's dev-dependency on itself enables.
+    /// dev-dependencies enable (`Cargo.toml`).
     #[cfg(any(test, feature = "test-exempt-addresses"))]
     #[must_use]
     pub fn exempt_for_tests(

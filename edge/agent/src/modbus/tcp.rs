@@ -102,9 +102,9 @@ impl TcpConnection {
 
     /// Test code only: lets this connection reach `addresses` although the address guard
     /// refuses them, such as a fake Modbus endpoint on 127.0.0.1. It exists only in this crate's
-    /// unit tests and with the `test-exempt-addresses` feature, which only this crate's
-    /// dev-dependency on itself enables, so no configuration file, environment variable or
-    /// setting delivered over MQTT can reach it.
+    /// unit tests and with the `test-exempt-addresses` feature, which only dev-dependencies
+    /// enable (`Cargo.toml`), so no configuration file, environment variable or setting
+    /// delivered over MQTT can reach it.
     #[cfg(any(test, feature = "test-exempt-addresses"))]
     #[must_use]
     pub fn exempt_for_tests(

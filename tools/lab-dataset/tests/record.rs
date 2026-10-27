@@ -22,9 +22,11 @@ mod common;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
+use std::net::Ipv4Addr;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use agent::modbus::endpoint::Endpoints;
 use chrono::{DateTime, TimeDelta, Utc};
 use lab_dataset::record::{Config, Recorded, Recorder};
 use lab_dataset::{Dataset, Target, Value, time};
@@ -180,6 +182,13 @@ fn expected() -> Series {
     expected
 }
 
+/// The recorder's endpoints with testkit's fake converter on 127.0.0.1 let through: the agent's
+/// address guard refuses loopback (Laysi/trustiot-v2#653). `exempt_for_tests` exists here only
+/// because this crate's dev-dependency on the agent enables `test-exempt-addresses`.
+fn endpoints() -> Endpoints {
+    Recorder::endpoints().exempt_for_tests([Ipv4Addr::LOCALHOST.into()])
+}
+
 /// Polls that have ended once every device polled at `tick`: the meter every second, the press
 /// every other second, both first at 0.
 fn polls_by(tick: u32) -> u64 {
@@ -198,7 +207,7 @@ async fn record(config_path: &Path, out: &Path) -> (Recorded, BTreeSet<(u8, u8)>
     let mut polls = recorder.polls();
     let (stop, stopped) = oneshot::channel::<()>();
     let start = time::parse(WALL_START).unwrap();
-    let run = recorder.run(out, start, async {
+    let run = recorder.run(endpoints(), out, start, async {
         let _ = stopped.await;
     });
     let drive = async {
@@ -465,7 +474,12 @@ fn a_recording_of_a_fake_converter_loads_into_clickhouse() {
         .block_on(async {
             let recorder = Recorder::new(Config::read(&config_path).unwrap()).unwrap();
             recorder
-                .run(&out, Utc::now(), std::future::ready(()))
+                .run(
+                    Recorder::endpoints(),
+                    &out,
+                    Utc::now(),
+                    std::future::ready(()),
+                )
                 .await
                 .unwrap_err()
                 .to_string()

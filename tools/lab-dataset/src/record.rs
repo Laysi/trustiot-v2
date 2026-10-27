@@ -262,10 +262,20 @@ impl Recorder {
         self.polls.subscribe()
     }
 
-    /// Polls every device until `stop` completes, then writes the last batch, the index, and
-    /// checks the result with [`Dataset::open`]. The dataset goes to `out/<name>/`, which must
-    /// not exist yet (a dataset's files never change once written). `wall_start` is the time of
-    /// the recording's start; later times add the elapsed time of tokio's monotonic clock, so a
+    /// The endpoints a recording reads through: the gateway agent's, with the polling
+    /// settings' connect timeout. They connect only to addresses the agent's address guard
+    /// allows (Laysi/trustiot-v2#653), so a converter on loopback or on one of this machine's
+    /// own addresses, such as one reached through a local port forward, is refused.
+    #[must_use]
+    pub fn endpoints() -> Endpoints {
+        Endpoints::new(Settings::default().connect_timeout)
+    }
+
+    /// Polls every device through `endpoints` (normally [`Recorder::endpoints`]) until `stop`
+    /// completes, then writes the last batch, the index, and checks the result with
+    /// [`Dataset::open`]. The dataset goes to `out/<name>/`, which must not exist yet (a
+    /// dataset's files never change once written). `wall_start` is the time of the
+    /// recording's start; later times add the elapsed time of tokio's monotonic clock, so a
     /// clock step during the recording cannot reorder readings.
     ///
     /// # Errors
@@ -274,6 +284,7 @@ impl Recorder {
     /// its own check (files already written stay for inspection).
     pub async fn run(
         self,
+        mut endpoints: Endpoints,
         out: &Path,
         wall_start: DateTime<Utc>,
         stop: impl Future<Output = ()>,
@@ -300,7 +311,6 @@ impl Recorder {
             start: Instant::now(),
         });
         let settings = Settings::default();
-        let mut endpoints = Endpoints::new(settings.connect_timeout);
         let (sender, mut receiver) = mpsc::unbounded_channel::<Vec<AgentReading>>();
         let mut tasks = JoinSet::new();
         for planned in &self.devices {

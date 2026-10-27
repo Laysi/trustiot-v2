@@ -171,8 +171,8 @@ impl Interfaces {
 /// The agent's own configuration has no way to change what it refuses. Tests that run the fake
 /// Modbus endpoint on 127.0.0.1 exempt that address through `exempt_for_tests` on
 /// [`super::tcp::TcpConnection`] or [`super::endpoint::Endpoints`], which exist only in this
-/// crate's unit tests and with the `test-exempt-addresses` feature that only this crate's
-/// dev-dependency on itself enables (`Cargo.toml`).
+/// crate's unit tests and with the `test-exempt-addresses` feature that only dev-dependencies
+/// enable (`Cargo.toml`).
 #[derive(Clone, Debug, Default)]
 pub(crate) struct AddressGuard {
     /// Addresses a test may reach although they are refused, in canonical form.
