@@ -26,10 +26,11 @@
 //! instructions, ChaCha20 took 21–34% less CPU there, and rustls would otherwise offer
 //! AES-256-GCM first (Laysi/trustiot-v2#75). Cloudflare and Envoy follow the client's order;
 //! Mosquitto follows its own, so the broker's gateway listener must set `ciphers_tls1.3` with
-//! ChaCha20 first (decision 6; the chart's listener lacks it yet, Laysi/trustiot-v2#564). Session resumption stays on in both, with a small in-memory
-//! cache: a resumed inner handshake needs no TPM signature (about 70 ms less per reconnect),
-//! and revocation still works because SIGHUP on the broker invalidates every ticket. The
-//! provider is ring; aws-lc-rs would add a CMake C build and about 120 ms of start-up.
+//! ChaCha20 first (decision 6; the chart sets it since Laysi/trustiot-v2#564). Session
+//! resumption stays on in both, with a small in-memory cache: a resumed inner handshake needs
+//! no TPM signature (about 70 ms less per reconnect), and revocation still works because SIGHUP
+//! on the broker invalidates every ticket. The provider is ring; aws-lc-rs would add a CMake C
+//! build and about 120 ms of start-up.
 
 use std::io::Read;
 use std::path::{Path, PathBuf};

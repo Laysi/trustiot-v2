@@ -74,7 +74,7 @@ trustiot-agent [--config <file>] [--check]
 
 開一條連線（上面 1–4 步）最多 30 秒（`CONNECT_TIMEOUT`），之後等 CONNACK 另外最多 30 秒；逾時都算連線失敗，照退避重試。
 
-兩層都只用 TLS 1.3，套件順序是 ChaCha20-Poly1305、AES-256-GCM、AES-128-GCM（閘道器的 CPU 沒有 AES 指令，rustls 預設會選 AES-256-GCM），都開 session resumption（每層各記 8 個）：resumption 不需要 TPM 簽章，重連省下約 70 ms。加密實作只用 `ring`。Mosquitto 依自己的套件順序選，不依用戶端的順序，所以 broker 的 mTLS listener 要以 `ciphers_tls1.3` 把 `TLS_CHACHA20_POLY1305_SHA256` 排第一（chart 給閘道器的 listener 在 2026-10-23 還沒有這一行，Laysi/trustiot-v2#564），否則協商出 AES-256-GCM（2026-10-21 實測，[測試報告](../../docs/test-reports/2026-10-21-86-agent-mqtt-connection.md)）。
+兩層都只用 TLS 1.3，套件順序是 ChaCha20-Poly1305、AES-256-GCM、AES-128-GCM（閘道器的 CPU 沒有 AES 指令，rustls 預設會選 AES-256-GCM），都開 session resumption（每層各記 8 個）：resumption 不需要 TPM 簽章，重連省下約 70 ms。加密實作只用 `ring`。Mosquitto 依自己的套件順序選，不依用戶端的順序，所以 broker 的 mTLS listener 要以 `ciphers_tls1.3` 把 `TLS_CHACHA20_POLY1305_SHA256` 排第一（chart 給閘道器的 listener 在 2026-10-23 補上，Laysi/trustiot-v2#564），否則協商出 AES-256-GCM（2026-10-21 實測，[測試報告](../../docs/test-reports/2026-10-21-86-agent-mqtt-connection.md)）。
 
 ### 內層 TLS 對 broker 的信任
 

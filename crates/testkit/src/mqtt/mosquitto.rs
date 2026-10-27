@@ -3,8 +3,8 @@
 //! `set_tcp_nodelay`), dynamic security with the protocol's gateway role
 //! ([`protocol::acl::gateway_role_acls`]), anonymous access off. It is not the chart's
 //! configuration (`deploy/chart/files/mosquitto/mosquitto.conf`), which also checks a CRL,
-//! accepts only MQTT 5 and takes the username as the client ID, but lacks `ciphers_tls1.3` and
-//! `set_tcp_nodelay` yet (Laysi/trustiot-v2#564).
+//! accepts only MQTT 5 and takes the username as the client ID; both set `ciphers_tls1.3` and
+//! `set_tcp_nodelay` alike (the chart since Laysi/trustiot-v2#564).
 //!
 //! The listener lists ChaCha20-Poly1305 first in `ciphers_tls1.3`: Mosquitto picks the cipher
 //! suite by its own order, not the client's, and without the setting it negotiates AES-256-GCM
