@@ -944,7 +944,7 @@ Mosquitto 沒有的限制，不另外發明：
 
 還沒處理的風險：
 
-- 1883 上的服務帳號可以用任何 client id，包括閘道器的 ID，因此一個被入侵的服務可以接走某個閘道器的 session。dynamic security 只能把一個 client 綁在一個 client id，有多個副本的服務不能這樣綁；目前靠 mesh 只放行三個服務來限縮。
+- 1883 上的服務帳號可以用任何 client id，包括閘道器的 ID，因此一個被入侵的服務可以接走某個閘道器的 session。dynamic security 只能把一個 client 綁在一個 client id，有多個副本的服務不能這樣綁；目前靠 mesh 只放行三個服務來限縮。服務共用的用戶端 [crates/mqtt-client](../../crates/mqtt-client/README.md) 的 client id 一律是 `service:<服務>:<隨機>`，正常運作時不會碰到閘道器的 ID；這只防誤用，擋不住被入侵的服務。
 - 叢集內的實測只在 nightly 的 k3d：nightly 不讀日誌，所以健康檢查不留 TLS 錯誤日誌以探針的設計（不經 TLS、不經網路）與 Rust 測試的日誌檢查為證。nightly 在儀式之後跑一次憑證 CronJob，檢查 Secret 裡的憑證、broker 開了閘道器埠、broker 的 pod 連不到簽發埠（`scripts/nightly/broker-certificate.ts`）；過了效期一半的換發與 sidecar 送的 SIGHUP 還沒在叢集上觀察過，只有 Rust 測試。
 
 ## OpenTelemetry collector

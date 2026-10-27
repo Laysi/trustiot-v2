@@ -1,0 +1,39 @@
+[package]
+name = "mqtt-client"
+description = "The MQTT 5 client cloud services use on the broker's service port: password from a file, re-read on every connection; QoS 1 publish that waits for PUBACK; subscriptions renewed on every connection; bounded reconnect with jitter."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+repository.workspace = true
+
+[dependencies]
+bytes.workspace = true
+# SinkExt and StreamExt over the framed connection.
+futures-util = { workspace = true, features = ["sink", "std"] }
+# Jitter of the reconnect delay and the random part of the client id.
+getrandom.workspace = true
+# MIN_MAX_PACKET_BYTES: the packet size both sides accept.
+protocol = { path = "../protocol" }
+# Only the MQTT 5 packet types and their codec (`rumqttc::v5::mqttbytes`); the connection, its
+# state and the reconnects are this crate's own (README.md, "為什麼這樣用 rumqttc").
+rumqttc.workspace = true
+serde = { workspace = true, features = ["derive"] }
+thiserror.workspace = true
+tokio = { workspace = true, features = ["macros", "net", "rt", "sync", "time"] }
+tokio-util = { workspace = true, features = ["codec"] }
+tracing.workspace = true
+# The password is wiped from memory once the CONNECT packet is written.
+zeroize.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
+# Throwaway Mosquitto containers (tests/broker.rs).
+testkit = { path = "../testkit" }
+tokio = { workspace = true, features = ["macros", "net", "rt", "rt-multi-thread", "sync", "time"] }
+# tests/logging.rs captures every log record, `log` ones included, at TRACE.
+tracing-log = { workspace = true, features = ["log-tracer", "std"] }
+tracing-subscriber = { workspace = true, features = ["fmt", "registry", "std"] }
+
+[lints]
+workspace = true
