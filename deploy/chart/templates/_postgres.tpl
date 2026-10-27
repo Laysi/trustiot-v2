@@ -191,7 +191,7 @@ Per service that may use Postgres, what one replica opens at most:
                   ai-gateway       none: the settings pool is its only one
                   assets           PLATFORM_CONNECTIONS (its platform role)
                   assistant        none: only the service role's pool (Laysi/trustiot-v2#592)
-                  certs           REGISTRATION_CONNECTIONS (its platform role)
+                  certs            PLATFORM_CONNECTIONS (its platform role)
                   identity         the tenant, login, login send, delegation and event log pools
                                    as identity_app (16), and the event log's pool as
                                    identity_platform, its consumed producers plus 2 (5)
