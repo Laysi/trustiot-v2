@@ -1,5 +1,5 @@
 //! Static checks of the ClickHouse migration files, which need no server, and the upgrade of
-//! `0010_gateway_stream_ids.sql` against real ClickHouse servers.
+//! `0012_gateway_stream_ids.sql` against real ClickHouse servers.
 
 mod common;
 
@@ -108,10 +108,11 @@ fn starts_with(tokens: &[String], prefix: &[&str]) -> bool {
 const NEVER: [&str; 5] = ["DROP", "TRUNCATE", "DETACH", "EXCHANGE", "RENAME"];
 
 /// The `CREATE ... IF NOT EXISTS` forms the files use.
-const CREATE_FORMS: [&[&str]; 8] = [
+const CREATE_FORMS: [&[&str]; 9] = [
     &["CREATE", "DATABASE", "IF", "NOT", "EXISTS"],
     &["CREATE", "TABLE", "IF", "NOT", "EXISTS"],
     &["CREATE", "VIEW", "IF", "NOT", "EXISTS"],
+    &["CREATE", "MATERIALIZED", "VIEW", "IF", "NOT", "EXISTS"],
     &["CREATE", "ROLE", "IF", "NOT", "EXISTS"],
     &["CREATE", "USER", "IF", "NOT", "EXISTS"],
     &["CREATE", "QUOTA", "IF", "NOT", "EXISTS"],
@@ -119,11 +120,14 @@ const CREATE_FORMS: [&[&str]; 8] = [
     &["CREATE", "ROW", "POLICY", "IF", "NOT", "EXISTS"],
 ];
 
-/// Access statements: they change who may do what, never the data.
-const ACCESS_FORMS: [&[&str]; 4] = [
+/// Access statements: they change who may do what, never the data. `ALTER ROW POLICY` changes
+/// which rows a policy shows (0011_queryable_period.sql adds the queryable period to the tenant
+/// policies); renaming one is refused with the other `NEVER` words.
+const ACCESS_FORMS: [&[&str]; 5] = [
     &["GRANT"],
     &["REVOKE"],
     &["ALTER", "USER"],
+    &["ALTER", "ROW", "POLICY"],
     &["SET", "DEFAULT", "ROLE"],
 ];
 
@@ -168,14 +172,14 @@ const LOSSLESS_TYPE_CHANGES: [(&str, &str, &str, &str); 2] = [
         "trustiot.telemetry",
         "gateway_id",
         "String",
-        "UUID to String writes each UUID as its text form (0010_gateway_stream_ids.sql, checked \
+        "UUID to String writes each UUID as its text form (0012_gateway_stream_ids.sql, checked \
          by id_migration_gives_one_schema_on_fresh_and_upgraded_servers)",
     ),
     (
         "trustiot.telemetry",
         "stream_id",
         "String",
-        "UUID to String writes each UUID as its text form (0010_gateway_stream_ids.sql, checked \
+        "UUID to String writes each UUID as its text form (0012_gateway_stream_ids.sql, checked \
          by id_migration_gives_one_schema_on_fresh_and_upgraded_servers)",
     ),
 ];
@@ -231,7 +235,7 @@ fn check_statement_form(file: &str, statement: &str, views: &BTreeMap<String, Ve
     // replaced with the same name, DEFINER and SQL SECURITY, so only its columns can change. A
     // plain view holds no data and ClickHouse keeps grants and row policies by its name; 26.8 has
     // no other way to change a plain view's columns (MODIFY QUERY is refused for storage View,
-    // see 0010_gateway_stream_ids.sql).
+    // see 0012_gateway_stream_ids.sql).
     if starts_with(&words, &["CREATE", "OR", "REPLACE", "VIEW"]) {
         let header = view_header(&tokens, 4).unwrap_or_else(|| {
             panic!("{file}: CREATE OR REPLACE VIEW without AS SELECT:\n{statement}")
@@ -277,11 +281,11 @@ fn check_statement_form(file: &str, statement: &str, views: &BTreeMap<String, Ve
     }
     panic!(
         "{file}: statement form not allowed in migrations. Allowed: CREATE DATABASE, TABLE, VIEW, \
-         ROLE, USER, QUOTA, SETTINGS PROFILE or ROW POLICY with IF NOT EXISTS; ALTER TABLE with one \
-         of ADD COLUMN IF NOT EXISTS, ADD CONSTRAINT IF NOT EXISTS, MODIFY COLUMN, COMMENT COLUMN, \
-         MODIFY COMMENT, MODIFY TTL; GRANT, REVOKE, ALTER USER, SET DEFAULT ROLE; and CREATE OR \
-         REPLACE VIEW of a plain view an earlier file created (services/ingest/README.md, file \
-         format):\n{statement}"
+         MATERIALIZED VIEW, ROLE, USER, QUOTA, SETTINGS PROFILE or ROW POLICY with IF NOT EXISTS; \
+         ALTER TABLE with one of ADD COLUMN IF NOT EXISTS, ADD CONSTRAINT IF NOT EXISTS, MODIFY \
+         COLUMN, COMMENT COLUMN, MODIFY COMMENT, MODIFY TTL; GRANT, REVOKE, ALTER USER, ALTER ROW \
+         POLICY, SET DEFAULT ROLE; and CREATE OR REPLACE VIEW of a plain view an earlier file \
+         created (services/ingest/README.md, file format):\n{statement}"
     );
 }
 
@@ -383,7 +387,7 @@ fn splitter_rejects_ambiguous_files() {
 
 /// The file that changes the gateway and stream IDs to text and adds the completion table keyed
 /// by gateway plus stream (Laysi/trustiot-v2#639).
-const ID_MIGRATION: &str = "0010_gateway_stream_ids.sql";
+const ID_MIGRATION: &str = "0012_gateway_stream_ids.sql";
 
 /// What the ID migration defines, as text: the trustiot relations with their DDL and columns, and
 /// the access entities of the product (names that start with trustiot_, without the bootstrap
@@ -448,7 +452,7 @@ fn split_at_id_migration() -> (Vec<Migration>, Migration) {
         .unwrap_or_else(|| panic!("{ID_MIGRATION} is missing"));
     let mut after = all.split_off(at);
     let id_migration = after.remove(0);
-    // The upgrade case is a server at 0009: the ID migration is the newest file it gets. A later
+    // The upgrade case is a server at 0011: the ID migration is the newest file it gets. A later
     // file joins this test only if it must be compared the same way.
     let later: Vec<&str> = after.iter().map(|m| m.name.as_str()).collect();
     assert!(
@@ -459,10 +463,11 @@ fn split_at_id_migration() -> (Vec<Migration>, Migration) {
 }
 
 /// Laysi/trustiot-v2#639: the ID migration gives the same schema on a fresh server and on a server
-/// that already had 0001 to 0009 and data in the old shape (a reading with UUID gateway and stream
+/// that already had 0001 to 0011 and data in the old shape (readings with UUID gateway and stream
 /// IDs and an old completion record), and applying it a second time changes nothing on either.
 /// The reading written before the change stays readable, with its UUIDs as text, also through the
-/// tenant view.
+/// tenant view, and the view it rebuilds keeps the queryable period of 0011_queryable_period.sql:
+/// the row policies are bound to the view's name, so an older reading stays hidden.
 ///
 /// Always two containers of the test's own, one after the other: the comparison needs servers on
 /// which nothing was applied before.
@@ -471,7 +476,7 @@ async fn id_migration_gives_one_schema_on_fresh_and_upgraded_servers() {
     let (before, id_migration) = split_at_id_migration();
 
     // A fresh server: every file, then the ID migration once more.
-    let Some(fresh) = ClickHouse::start_fresh().await else {
+    let Some(fresh) = ClickHouse::start_throwaway().await else {
         return;
     };
     fresh.apply_migrations().await;
@@ -484,8 +489,8 @@ async fn id_migration_gives_one_schema_on_fresh_and_upgraded_servers() {
     );
     drop(fresh);
 
-    // A server at 0009 with data written in the old shape.
-    let Some(upgraded) = ClickHouse::start_fresh().await else {
+    // A server at 0011 with data written in the old shape.
+    let Some(upgraded) = ClickHouse::start_throwaway().await else {
         return;
     };
     for migration in &before {
@@ -509,10 +514,14 @@ async fn id_migration_gives_one_schema_on_fresh_and_upgraded_servers() {
         user: "upgrade_tenant".to_owned(),
         password: password.clone(),
     };
+    // The windows the telemetry-query service gives every account (0011_queryable_period.sql):
+    // raw readings of the last 7 days.
     upgraded
         .admin_ok(&format!(
             "CREATE USER {} IDENTIFIED WITH sha256_password BY '{password}' \
-             SETTINGS PROFILE 'trustiot_tenant_reader', SQL_tenant_id = '{tenant}' CONST",
+             SETTINGS PROFILE 'trustiot_tenant_reader', SQL_tenant_id = '{tenant}' CONST, \
+             SQL_queryable_raw_days = 7 CONST, SQL_queryable_1m_months = 3 CONST, \
+             SQL_queryable_1h_months = 3 CONST",
             tenant_account.user
         ))
         .await;
@@ -527,6 +536,13 @@ async fn id_migration_gives_one_schema_on_fresh_and_upgraded_servers() {
              ('{tenant}', '{gateway}', '{stream}', 1, generateUUIDv4(), 'legacy', \
              now64(3, 'UTC'), now64(3, 'UTC'), 'int', 42)"
         ),
+        // Read 30 days ago, received now: kept by the TTL, outside the 7-day window.
+        format!(
+            "INSERT INTO trustiot.telemetry (tenant_id, gateway_id, stream_id, batch_seq, \
+             device_id, point, ts, received_at, value_type, value_int) VALUES \
+             ('{tenant}', '{gateway}', '{stream}', 2, generateUUIDv4(), 'legacy_old', \
+             now64(3, 'UTC') - toIntervalDay(30), now64(3, 'UTC'), 'int', 7)"
+        ),
         format!(
             "INSERT INTO trustiot.batch_commits (tenant_id, gateway_id, stream_id, seq, \
              row_count, committed_at) VALUES ('{tenant}', '{gateway}', '{stream}', 1, 1, \
@@ -539,6 +555,20 @@ async fn id_migration_gives_one_schema_on_fresh_and_upgraded_servers() {
             .unwrap_or_else(|error| panic!("{sql}: {}", error.body));
     }
 
+    // Before the ID migration, the view of 0005 with the window of 0011 shows only the reading
+    // inside the window.
+    let before_upgrade = upgraded
+        .query(
+            &tenant_account,
+            "SELECT point, value_int FROM trustiot.tenant_telemetry ORDER BY point FORMAT TSV",
+        )
+        .await
+        .unwrap_or_else(|error| panic!("read through the tenant view: {}", error.body));
+    assert_eq!(
+        before_upgrade, "legacy\t42\n",
+        "the window before {ID_MIGRATION}"
+    );
+
     upgraded.apply(&id_migration).await;
     let upgraded_schema = schema(&upgraded).await;
     upgraded.apply(&id_migration).await;
@@ -549,7 +579,7 @@ async fn id_migration_gives_one_schema_on_fresh_and_upgraded_servers() {
     );
     assert_eq!(
         upgraded_schema, fresh_schema,
-        "{ID_MIGRATION} gives a different schema on a server that had 0001 to 0009"
+        "{ID_MIGRATION} gives a different schema on a server that had 0001 to 0011"
     );
     #[allow(clippy::print_stdout, reason = "test evidence")]
     {
@@ -571,6 +601,16 @@ async fn id_migration_gives_one_schema_on_fresh_and_upgraded_servers() {
         .await
         .unwrap_or_else(|error| panic!("read the legacy reading: {}", error.body));
     assert_eq!(row, format!("{gateway}\t{stream}\tString\tString\t42\n"));
+    let old = upgraded
+        .query(
+            &ingest,
+            "SELECT gateway_id, value_int FROM trustiot.telemetry WHERE point = 'legacy_old' \
+             FORMAT TSV",
+        )
+        .await
+        .unwrap_or_else(|error| panic!("read the older reading: {}", error.body));
+    assert_eq!(old, format!("{gateway}\t7\n"), "the older reading is kept");
+    // Through the rebuilt view: the reading inside the window only, with its text gateway ID.
     let through_view = upgraded
         .query(
             &tenant_account,
@@ -579,7 +619,11 @@ async fn id_migration_gives_one_schema_on_fresh_and_upgraded_servers() {
         )
         .await
         .unwrap_or_else(|error| panic!("read through the tenant view: {}", error.body));
-    assert_eq!(through_view, format!("{gateway}\tString\t42\n"));
+    assert_eq!(
+        through_view,
+        format!("{gateway}\tString\t42\n"),
+        "the rebuilt view keeps the window of 0011_queryable_period.sql"
+    );
     // The old completion record stays where it was, out of the ingest role's reach.
     let error = upgraded
         .query(&ingest, "SELECT count() FROM trustiot.batch_commits")

@@ -10,7 +10,7 @@ use serde::Deserialize;
 use service_kit::config::{Invalid, Validate};
 use service_kit::postgres::{PostgresConfig, SslMode};
 
-use crate::retention::RawRetention;
+use crate::retention::{AggregateRetention, RawRetention, Retention, Rollup};
 
 /// How long the Job waits by default for each database to accept it and for another run's lock.
 pub const DEFAULT_WAIT: Duration = Duration::from_secs(600);
@@ -97,12 +97,28 @@ pub struct ClickHouseSettings {
     pub password_secret: Option<String>,
     /// `TRUSTIOT__CLICKHOUSE__RAW_RETENTION_DAYS`: the raw data retention in days, which the run
     /// sets as the TTL of `trustiot.telemetry` and `trustiot.stream_commits` (src/clickhouse.rs).
-    /// Unset: the platform value (`retention::RAW_RETENTION_DAYS`, 180 days). It must be longer
-    /// than the gateway buffer's maximum age, or the run stops before it changes anything
-    /// (Laysi/trustiot-v2#92, docs/architecture/data-retention.md). The chart does not set it;
+    /// Unset: the platform value (`retention::RAW_RETENTION_DAYS`, 180 days). It must be at
+    /// least `retention::MIN_RAW_RETENTION_DAYS` (33 days: longer than the gateway buffer's
+    /// maximum age, and two days longer than the I1 reconcile's window), or the run stops before
+    /// it changes anything (Laysi/trustiot-v2#92, Laysi/trustiot-v2#141,
+    /// docs/architecture/data-retention.md). The chart does not set it;
     /// a values key for on-premises deployments comes with Laysi/trustiot-v2#446.
     #[serde(default)]
     pub raw_retention_days: Option<u32>,
+    /// `TRUSTIOT__CLICKHOUSE__AGGREGATE_1M_RETENTION_MONTHS`: how many months the run keeps the
+    /// one-minute aggregates (`trustiot.telemetry_1m`, by the receive day). Unset: the platform
+    /// value (`retention::AGGREGATE_1M_RETENTION_MONTHS`, 13 months). At least 13 months, at most
+    /// 120, and never fewer days than the raw retention, or the run stops before it changes
+    /// anything (Laysi/trustiot-v2#141, docs/architecture/data-retention.md).
+    #[serde(default)]
+    pub aggregate_1m_retention_months: Option<u32>,
+    /// `TRUSTIOT__CLICKHOUSE__AGGREGATE_1H_RETENTION_MONTHS`: how many months the run keeps the
+    /// one-hour aggregates (`trustiot.telemetry_1h`). Unset: the platform value
+    /// (`retention::AGGREGATE_1H_RETENTION_MONTHS`, 48 months). At least the one-minute value, at
+    /// most 120. The chart sets neither aggregate setting yet; values keys for on-premises
+    /// deployments come with Laysi/trustiot-v2#446.
+    #[serde(default)]
+    pub aggregate_1h_retention_months: Option<u32>,
 }
 
 impl ClickHouseSettings {
@@ -110,11 +126,39 @@ impl ClickHouseSettings {
     ///
     /// # Errors
     ///
-    /// When the setting is not longer than the gateway buffer's maximum age, or implausibly long.
+    /// When the setting is shorter than the minimum (`retention::MIN_RAW_RETENTION_DAYS`), or
+    /// implausibly long.
     pub fn raw_retention(&self) -> Result<RawRetention, Invalid> {
         self.raw_retention_days
             .map_or(Ok(RawRetention::PLATFORM), RawRetention::from_days)
             .map_err(|error| Invalid::new("clickhouse.raw_retention_days", error.to_string()))
+    }
+
+    /// The raw and aggregate retention the run applies: the settings, or the platform values.
+    ///
+    /// # Errors
+    ///
+    /// When the raw retention is refused ([`ClickHouseSettings::raw_retention`]), or the aggregate
+    /// settings break a rule of `retention::AggregateRetention::new`; the error names the
+    /// setting.
+    pub fn retention(&self) -> Result<Retention, Invalid> {
+        let raw = self.raw_retention()?;
+        let platform = AggregateRetention::PLATFORM;
+        let aggregates = AggregateRetention::new(
+            raw,
+            self.aggregate_1m_retention_months
+                .unwrap_or(platform.minute_months()),
+            self.aggregate_1h_retention_months
+                .unwrap_or(platform.hour_months()),
+        )
+        .map_err(|error| {
+            let key = match error.rollup() {
+                Rollup::Minute => "clickhouse.aggregate_1m_retention_months",
+                Rollup::Hour => "clickhouse.aggregate_1h_retention_months",
+            };
+            Invalid::new(key, error.to_string())
+        })?;
+        Ok(Retention { raw, aggregates })
     }
 }
 
@@ -125,6 +169,14 @@ impl fmt::Debug for ClickHouseSettings {
             .field("password", &self.password.as_ref().map(|_| "<redacted>"))
             .field("password_secret", &self.password_secret)
             .field("raw_retention_days", &self.raw_retention_days)
+            .field(
+                "aggregate_1m_retention_months",
+                &self.aggregate_1m_retention_months,
+            )
+            .field(
+                "aggregate_1h_retention_months",
+                &self.aggregate_1h_retention_months,
+            )
             .finish()
     }
 }
@@ -434,7 +486,7 @@ impl Validate for RunConfig {
                 ));
             }
             // Checked at start, before the run touches either database.
-            clickhouse.raw_retention()?;
+            clickhouse.retention()?;
             match (&clickhouse.password, &clickhouse.password_secret) {
                 (Some(_), None) => {}
                 (None, Some(secret)) => {
@@ -1050,6 +1102,14 @@ pub struct MqttTrustSettings {
     /// `TRUSTIOT__TRUST__TLS_DIR`: the mount of the broker's server certificate Secret
     /// (`tls.crt`, `tls.key`).
     pub tls_dir: PathBuf,
+    /// `TRUSTIOT__TRUST__LISTENERS_DIR`: the directory the broker's configuration includes
+    /// (`include_dir`), empty when the pod starts. The gateway listener's file goes there once
+    /// the Secret holds a usable server certificate (Laysi/trustiot-v2#535).
+    pub listeners_dir: PathBuf,
+    /// `TRUSTIOT__TRUST__GATEWAY_LISTENER`: the gateway listener's configuration (the chart's
+    /// ConfigMap), copied into `listeners_dir`. Its `listener <port>` line names the port the
+    /// sidecar checks the broker listens on.
+    pub gateway_listener: PathBuf,
     /// `TRUSTIOT__TRUST__INTERVAL`: how often the sidecar fetches the files and checks the
     /// Secret. Default 30 seconds.
     #[serde(
@@ -1063,27 +1123,41 @@ fn default_trust_interval() -> Duration {
     DEFAULT_TRUST_INTERVAL
 }
 
+/// Whether `url` is an `http://` URL without credentials, query or fragment: the certs
+/// service's addresses inside the mesh, which ztunnel encrypts.
+fn is_mesh_http_url(url: &str) -> bool {
+    url.starts_with("http://")
+        && !url.contains('@')
+        && !url.contains('?')
+        && !url.contains('#')
+        && url.len() > "http://".len()
+}
+
 impl Validate for MqttTrustConfig {
     fn validate(&self) -> Result<(), Invalid> {
         let trust = &self.trust;
         let url = &trust.certs_url;
-        if !url.is_empty()
-            && (!url.starts_with("http://")
-                || url.contains('@')
-                || url.contains('?')
-                || url.contains('#')
-                || url.len() <= "http://".len())
-        {
+        if !url.is_empty() && !is_mesh_http_url(url) {
             return Err(Invalid::new(
                 "trust.certs_url",
                 "must be empty or an http:// URL of the certs service without credentials, query \
                  or fragment (the mesh encrypts it)",
             ));
         }
-        for (key, path) in [("trust.dir", &trust.dir), ("trust.tls_dir", &trust.tls_dir)] {
+        for (key, path) in [
+            ("trust.dir", &trust.dir),
+            ("trust.tls_dir", &trust.tls_dir),
+            ("trust.listeners_dir", &trust.listeners_dir),
+        ] {
             if !path.is_absolute() {
                 return Err(Invalid::new(key, "must be an absolute path"));
             }
+        }
+        if !trust.gateway_listener.is_absolute() || trust.gateway_listener.file_name().is_none() {
+            return Err(Invalid::new(
+                "trust.gateway_listener",
+                "must be an absolute path to a file",
+            ));
         }
         if trust.interval < Duration::from_secs(1) || trust.interval > MAX_WAIT {
             return Err(Invalid::new(
@@ -1092,6 +1166,105 @@ impl Validate for MqttTrustConfig {
             ));
         }
         Ok(())
+    }
+}
+
+/// How long `migrate mqtt-broker-certificate` retries an API server or a certs service that
+/// does not answer, or answers that it cannot sign yet, by default. Short: the CronJob runs again
+/// on its schedule.
+pub const DEFAULT_CERTIFICATE_WAIT: Duration = Duration::from_secs(120);
+
+/// Settings of `migrate mqtt-broker-certificate`, the CronJob that keeps the MQTT broker's server
+/// certificate and key in the Secret the chart declares (src/mqtt_certificate.rs;
+/// Laysi/trustiot-v2#535).
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MqttCertificateConfig {
+    pub certificate: MqttCertificateSettings,
+}
+
+/// `certificate.*` of `migrate mqtt-broker-certificate`.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MqttCertificateSettings {
+    /// `TRUSTIOT__CERTIFICATE__API_URL`: the API server, `https://` (the chart sets
+    /// `https://kubernetes.default.svc`). `http://` is accepted for 127.0.0.1 only, for tests.
+    pub api_url: String,
+    /// `TRUSTIOT__CERTIFICATE__NAMESPACE`: the release namespace, where the Secret is.
+    pub namespace: String,
+    /// `TRUSTIOT__CERTIFICATE__TOKEN_FILE`: the projected token of the issuer's own
+    /// ServiceAccount, which only its pod mounts; read on every request.
+    pub token_file: PathBuf,
+    /// `TRUSTIOT__CERTIFICATE__CA_FILE`: the cluster CA (`kube-root-ca.crt`), the only trust
+    /// anchor.
+    pub ca_file: PathBuf,
+    /// `TRUSTIOT__CERTIFICATE__SECRET`: the Secret the chart declares empty for the server
+    /// certificate and key (`tls.crt`, `tls.key`).
+    pub secret: String,
+    /// `TRUSTIOT__CERTIFICATE__CERTS_URL`: the certs service's broker certificate port,
+    /// `http://<release>-certs-broker.<namespace>.svc:8082` inside the mesh, which admits this
+    /// workload alone.
+    pub certs_url: String,
+    /// `TRUSTIOT__CERTIFICATE__SERVICE_NAME`: the broker Service's name, the second DNS name the
+    /// certs service puts in the certificate (its `broker.service_name`); empty when it puts
+    /// none. A certificate with other names is refused.
+    #[serde(default)]
+    pub service_name: String,
+    /// `TRUSTIOT__CERTIFICATE__GENERATION`: the chart's `mqttBroker.certificateGeneration`; a
+    /// higher one than the Secret records renews the certificate at once (with a new key).
+    pub generation: String,
+    /// `TRUSTIOT__CERTIFICATE__WAIT`: how long it retries the API server and the certs service.
+    /// Default 2 minutes.
+    #[serde(
+        default = "default_certificate_wait",
+        deserialize_with = "service_kit::config::duration"
+    )]
+    pub wait: Duration,
+}
+
+fn default_certificate_wait() -> Duration {
+    DEFAULT_CERTIFICATE_WAIT
+}
+
+impl Validate for MqttCertificateConfig {
+    fn validate(&self) -> Result<(), Invalid> {
+        let certificate = &self.certificate;
+        check_api_url("certificate.api_url", &certificate.api_url)?;
+        if !is_dns_label(&certificate.namespace) {
+            return Err(Invalid::new(
+                "certificate.namespace",
+                "must be a Kubernetes namespace name (DNS label)",
+            ));
+        }
+        if !is_object_name(&certificate.secret) {
+            return Err(Invalid::new(
+                "certificate.secret",
+                "must be a Kubernetes object name (lower-case letters, digits, - and .)",
+            ));
+        }
+        if !is_mesh_http_url(&certificate.certs_url) {
+            return Err(Invalid::new(
+                "certificate.certs_url",
+                "must be an http:// URL of the certs service's broker certificate port without \
+                 credentials, query or fragment (the mesh encrypts it)",
+            ));
+        }
+        if !certificate.service_name.is_empty() && !is_object_name(&certificate.service_name) {
+            return Err(Invalid::new(
+                "certificate.service_name",
+                "must be empty or a DNS name (lower-case letters, digits, - and .)",
+            ));
+        }
+        crate::passwords::parse_generation(&certificate.generation)
+            .filter(|generation| *generation >= 1)
+            .ok_or_else(|| {
+                Invalid::new(
+                    "certificate.generation",
+                    "must be 1 to 9 decimal digits, at least 1 (generations are compared as \
+                     numbers and only go up)",
+                )
+            })?;
+        check_wait("certificate.wait", certificate.wait)
     }
 }
 
@@ -1198,6 +1371,8 @@ mod tests {
                 password: password.map(str::to_owned),
                 password_secret: password_secret.map(str::to_owned),
                 raw_retention_days: None,
+                aggregate_1m_retention_months: None,
+                aggregate_1h_retention_months: None,
             }),
             passwords: passwords.then(|| settings("", "")),
             wait: WaitSettings::default(),
@@ -1299,14 +1474,18 @@ mod tests {
         );
     }
 
-    /// The raw data retention (Laysi/trustiot-v2#92): unset is the platform value; a setting that
-    /// is not longer than the gateway buffer's maximum age, or implausibly long, is refused at
-    /// start, as the environment variable the chart would set.
+    /// The raw data retention (Laysi/trustiot-v2#92): unset is the platform value; a setting
+    /// below the minimum (the gateway buffer's maximum age, the reconcile window and two days,
+    /// Laysi/trustiot-v2#141), or implausibly long, is refused at start, as the environment
+    /// variable the chart would set.
     #[test]
     fn the_raw_retention_must_outlast_the_gateway_buffer() {
         use protocol::telemetry::BUFFER_MAX_AGE_DAYS;
 
-        use crate::retention::{MAX_RAW_RETENTION_DAYS, RAW_RETENTION_DAYS};
+        use crate::retention::{
+            MAX_AGGREGATE_RETENTION_MONTHS, MAX_RAW_RETENTION_DAYS, MIN_RAW_RETENTION_DAYS,
+            RAW_RETENTION_DAYS, RECONCILE_WINDOW_DAYS,
+        };
 
         let with = |days: Option<u32>| {
             let mut config = run_config(Some("a-password"), None, false);
@@ -1323,18 +1502,35 @@ mod tests {
         };
         assert_eq!(retention(&with(None)), Some(Ok(RAW_RETENTION_DAYS)));
         assert_eq!(RAW_RETENTION_DAYS, 180);
-        for days in [BUFFER_MAX_AGE_DAYS + 1, 365, MAX_RAW_RETENTION_DAYS] {
-            let config = with(Some(days));
+        assert_eq!(MIN_RAW_RETENTION_DAYS, 33);
+        for days in [MIN_RAW_RETENTION_DAYS, 365, MAX_RAW_RETENTION_DAYS] {
+            let mut config = with(Some(days));
+            // The aggregates must keep their rows at least as long (Laysi/trustiot-v2#141): ten
+            // years of raw data need the longest aggregate retention.
+            if let Some(clickhouse) = config.clickhouse.as_mut()
+                && days == MAX_RAW_RETENTION_DAYS
+            {
+                clickhouse.aggregate_1m_retention_months = Some(MAX_AGGREGATE_RETENTION_MONTHS);
+                clickhouse.aggregate_1h_retention_months = Some(MAX_AGGREGATE_RETENTION_MONTHS);
+            }
             assert!(config.validate().is_ok(), "{days} days");
             assert_eq!(retention(&config), Some(Ok(days)));
         }
-        for days in [0, 1, BUFFER_MAX_AGE_DAYS, MAX_RAW_RETENTION_DAYS + 1] {
+        for days in [
+            0,
+            1,
+            BUFFER_MAX_AGE_DAYS,
+            RECONCILE_WINDOW_DAYS,
+            MIN_RAW_RETENTION_DAYS - 1,
+            MAX_RAW_RETENTION_DAYS + 1,
+        ] {
             let invalid = with(Some(days)).validate().expect_err("refused");
             assert_eq!(invalid.key, "clickhouse.raw_retention_days", "{days} days");
         }
 
         // As the environment variable, loaded the way main() loads it: a configuration error
-        // (exit code 2) before anything runs, naming the key and the buffer's maximum age.
+        // (exit code 2, tests/settings.rs runs the binary) before anything runs, naming the key,
+        // the buffer's maximum age, the reconcile window and the minimum.
         let vars = |days: &str| {
             [
                 ("TRUSTIOT_POSTGRES_HOST", "postgres"),
@@ -1351,31 +1547,133 @@ mod tests {
             ]
             .map(|(name, value)| (name.into(), value.into()))
         };
-        let loaded = service_kit::config::load_from::<RunConfig, _>("TRUSTIOT", vars("181"))
-            .expect("181 days is accepted");
-        assert_eq!(
-            loaded
-                .app
-                .clickhouse
-                .as_ref()
-                .map(|clickhouse| clickhouse.raw_retention().map(RawRetention::days)),
-            Some(Ok(181))
-        );
-        for days in ["30", "7", "0"] {
+        for (days, accepted) in [("181", 181), ("33", 33)] {
+            let loaded = service_kit::config::load_from::<RunConfig, _>("TRUSTIOT", vars(days))
+                .unwrap_or_else(|error| panic!("{days} days is accepted: {error}"));
+            assert_eq!(
+                loaded
+                    .app
+                    .clickhouse
+                    .as_ref()
+                    .map(|clickhouse| clickhouse.raw_retention().map(RawRetention::days)),
+                Some(Ok(accepted))
+            );
+        }
+        for days in ["32", "31", "30", "7", "0"] {
             let error = service_kit::config::load_from::<RunConfig, _>("TRUSTIOT", vars(days))
-                .expect_err("not longer than the gateway buffer");
+                .expect_err("below the minimum");
             let text = error.to_string();
             assert!(
                 text.contains("clickhouse.raw_retention_days")
                     && text.contains(&format!(
                         "gateway buffer's maximum age of {BUFFER_MAX_AGE_DAYS} days"
-                    )),
+                    ))
+                    && text.contains(&format!(
+                        "reconcile's window of {RECONCILE_WINDOW_DAYS} receive days"
+                    ))
+                    && text.contains(&format!("use at least {MIN_RAW_RETENTION_DAYS} days")),
                 "{days}: {text}"
             );
         }
         assert!(
             service_kit::config::load_from::<RunConfig, _>("TRUSTIOT", vars("-1")).is_err(),
             "a negative retention is refused"
+        );
+    }
+
+    /// The aggregate retention (Laysi/trustiot-v2#141): unset is 13 and 48 months; each refused
+    /// setting is named, with its rule's reason, as the environment variables the chart would
+    /// set, before anything runs.
+    #[test]
+    fn the_aggregate_retention_settings_are_checked_at_start() {
+        let vars = |extra: &[(&'static str, &'static str)]| {
+            let mut vars = vec![
+                ("TRUSTIOT_POSTGRES_HOST", "postgres"),
+                ("TRUSTIOT_POSTGRES_PORT", "5432"),
+                ("TRUSTIOT_POSTGRES_DATABASE", "trustiot"),
+                ("TRUSTIOT_POSTGRES_SSLMODE", "verify-full"),
+                ("TRUSTIOT_POSTGRES_CA_FILE", "/ca.crt"),
+                ("TRUSTIOT_CLICKHOUSE_URL", "http://clickhouse:8123"),
+                ("TRUSTIOT__POSTGRES__USERNAME", "trustiot_owner"),
+                ("TRUSTIOT__POSTGRES__PASSWORD", "unused"),
+                ("TRUSTIOT__CLICKHOUSE__USERNAME", "trustiot_admin"),
+                ("TRUSTIOT__CLICKHOUSE__PASSWORD", "unused"),
+            ];
+            vars.extend_from_slice(extra);
+            vars.into_iter()
+                .map(|(name, value)| (name.into(), value.into()))
+                .collect::<Vec<(std::ffi::OsString, std::ffi::OsString)>>()
+        };
+        let months = |extra: &[(&'static str, &'static str)]| {
+            service_kit::config::load_from::<RunConfig, _>("TRUSTIOT", vars(extra)).map(|loaded| {
+                let retention = loaded
+                    .app
+                    .clickhouse
+                    .as_ref()
+                    .expect("ClickHouse settings")
+                    .retention()
+                    .expect("validated when loaded");
+                (
+                    retention.raw.days(),
+                    retention.aggregates.minute_months(),
+                    retention.aggregates.hour_months(),
+                )
+            })
+        };
+        assert_eq!(months(&[]).expect("the platform values"), (180, 13, 48));
+        assert_eq!(
+            months(&[
+                ("TRUSTIOT__CLICKHOUSE__AGGREGATE_1M_RETENTION_MONTHS", "24"),
+                ("TRUSTIOT__CLICKHOUSE__AGGREGATE_1H_RETENTION_MONTHS", "60"),
+            ])
+            .expect("24 and 60 months are accepted"),
+            (180, 24, 60)
+        );
+        for (extra, key, reason) in [
+            (
+                &[("TRUSTIOT__CLICKHOUSE__AGGREGATE_1M_RETENTION_MONTHS", "12")][..],
+                "clickhouse.aggregate_1m_retention_months",
+                "year-on-year",
+            ),
+            (
+                &[("TRUSTIOT__CLICKHOUSE__AGGREGATE_1M_RETENTION_MONTHS", "395")][..],
+                "clickhouse.aggregate_1m_retention_months",
+                "another unit",
+            ),
+            (
+                &[("TRUSTIOT__CLICKHOUSE__AGGREGATE_1H_RETENTION_MONTHS", "12")][..],
+                "clickhouse.aggregate_1h_retention_months",
+                "at least as long as the finer table",
+            ),
+            (
+                &[(
+                    "TRUSTIOT__CLICKHOUSE__AGGREGATE_1H_RETENTION_MONTHS",
+                    "1461",
+                )][..],
+                "clickhouse.aggregate_1h_retention_months",
+                "another unit",
+            ),
+            (
+                &[("TRUSTIOT__CLICKHOUSE__RAW_RETENTION_DAYS", "400")][..],
+                "clickhouse.aggregate_1m_retention_months",
+                "shorter than the raw data retention of 400 days",
+            ),
+        ] {
+            let error = months(extra).expect_err("refused");
+            let text = error.to_string();
+            assert!(
+                text.contains(key) && text.contains(reason),
+                "{extra:?}: {text}"
+            );
+        }
+        // A longer raw retention is accepted together with a long enough one-minute value.
+        assert_eq!(
+            months(&[
+                ("TRUSTIOT__CLICKHOUSE__RAW_RETENTION_DAYS", "400"),
+                ("TRUSTIOT__CLICKHOUSE__AGGREGATE_1M_RETENTION_MONTHS", "14"),
+            ])
+            .expect("400 days with 14 months"),
+            (400, 14, 48)
         );
     }
 
@@ -1603,6 +1901,10 @@ mod tests {
                 certs_url: "http://trustiot-certs.trustiot.svc:8080".to_owned(),
                 dir: PathBuf::from("/mosquitto/data/trust"),
                 tls_dir: PathBuf::from("/etc/trustiot/mqtt-broker-tls"),
+                listeners_dir: PathBuf::from("/mosquitto/listeners"),
+                gateway_listener: PathBuf::from(
+                    "/etc/trustiot/mqtt-broker-config/gateway-listener.conf",
+                ),
                 interval: DEFAULT_TRUST_INTERVAL,
             },
         }
@@ -1616,7 +1918,7 @@ mod tests {
         let mut without_certs = mqtt_trust_config();
         without_certs.trust.certs_url = String::new();
         assert!(without_certs.validate().is_ok(), "no certs service");
-        let broken: [MqttTrustBreakage; 7] = [
+        let broken: [MqttTrustBreakage; 10] = [
             ("trust.certs_url", |t| {
                 t.certs_url = "https://trustiot-certs:8080".to_owned();
             }),
@@ -1626,12 +1928,85 @@ mod tests {
             ("trust.certs_url", |t| t.certs_url = "http://".to_owned()),
             ("trust.dir", |t| t.dir = PathBuf::from("trust")),
             ("trust.tls_dir", |t| t.tls_dir = PathBuf::from("tls")),
+            ("trust.listeners_dir", |t| {
+                t.listeners_dir = PathBuf::from("listeners");
+            }),
+            ("trust.gateway_listener", |t| {
+                t.gateway_listener = PathBuf::from("gateway-listener.conf");
+            }),
+            ("trust.gateway_listener", |t| {
+                t.gateway_listener = PathBuf::from("/");
+            }),
             ("trust.interval", |t| t.interval = Duration::ZERO),
             ("trust.interval", |t| t.interval = Duration::from_secs(7200)),
         ];
         for (key, change) in broken {
             let mut config = mqtt_trust_config();
             change(&mut config.trust);
+            assert_eq!(
+                config
+                    .validate()
+                    .err()
+                    .map(|invalid| invalid.key)
+                    .as_deref(),
+                Some(key)
+            );
+        }
+    }
+
+    fn mqtt_certificate_config() -> MqttCertificateConfig {
+        MqttCertificateConfig {
+            certificate: MqttCertificateSettings {
+                api_url: "https://kubernetes.default.svc".to_owned(),
+                namespace: "trustiot".to_owned(),
+                token_file: PathBuf::from("/var/run/secrets/trustiot/kube/token"),
+                ca_file: PathBuf::from("/var/run/secrets/trustiot/kube/ca.crt"),
+                secret: "trustiot-mqtt-broker-tls".to_owned(),
+                certs_url: "http://trustiot-certs-broker.trustiot.svc:8082".to_owned(),
+                service_name: "trustiot-mqtt-broker.trustiot.svc".to_owned(),
+                generation: "1".to_owned(),
+                wait: DEFAULT_CERTIFICATE_WAIT,
+            },
+        }
+    }
+
+    type MqttCertificateBreakage = (&'static str, fn(&mut MqttCertificateSettings));
+
+    #[test]
+    fn mqtt_certificate_settings() {
+        assert!(mqtt_certificate_config().validate().is_ok());
+        let mut without_service = mqtt_certificate_config();
+        without_service.certificate.service_name = String::new();
+        assert!(without_service.validate().is_ok(), "no second name");
+        let broken: [MqttCertificateBreakage; 12] = [
+            ("certificate.api_url", |c| {
+                c.api_url = "http://kubernetes.default.svc".to_owned();
+            }),
+            ("certificate.namespace", |c| {
+                c.namespace = "Trust".to_owned()
+            }),
+            ("certificate.secret", |c| c.secret = String::new()),
+            ("certificate.certs_url", |c| c.certs_url = String::new()),
+            ("certificate.certs_url", |c| {
+                c.certs_url = "https://trustiot-certs-broker:8082".to_owned();
+            }),
+            ("certificate.certs_url", |c| {
+                c.certs_url = "http://user:pw@trustiot-certs-broker:8082".to_owned();
+            }),
+            ("certificate.service_name", |c| {
+                c.service_name = "Broker.svc".to_owned();
+            }),
+            ("certificate.generation", |c| c.generation = "0".to_owned()),
+            ("certificate.generation", |c| c.generation = "x".to_owned()),
+            ("certificate.generation", |c| {
+                c.generation = "1234567890".to_owned();
+            }),
+            ("certificate.wait", |c| c.wait = Duration::ZERO),
+            ("certificate.wait", |c| c.wait = Duration::from_secs(7200)),
+        ];
+        for (key, change) in broken {
+            let mut config = mqtt_certificate_config();
+            change(&mut config.certificate);
             assert_eq!(
                 config
                     .validate()

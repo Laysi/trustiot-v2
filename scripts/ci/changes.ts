@@ -134,8 +134,10 @@ const RUST_READ_FILES: ReadonlySet<string> = new Set([
   // crates/testkit/src/chart.rs: the Postgres connection budgets that the services' tests
   // (services/*/tests/chart_connections.rs) hold their pools to
   "deploy/chart/templates/_postgres.tpl",
-  // tools/migrate/tests/mqtt_broker.rs runs the MQTT broker's configuration (include_str!)
+  // tools/migrate/tests/mqtt_broker.rs and services/certs/tests/broker_certificate.rs run the MQTT
+  // broker's configuration and its gateway listener (include_str!)
   "deploy/chart/files/mosquitto/mosquitto.conf",
+  "deploy/chart/files/mosquitto/gateway-listener.conf",
 ]);
 
 /**
@@ -190,7 +192,9 @@ const HELM_READ_FILES: ReadonlySet<string> = new Set([
   "scripts/ci/check-secret-handling.ts",
   "scripts/lib/stack.ts",
   "services/ingest/tests/common/mod.rs",
-  // The labels and annotations the Job keeps on the password Secrets it binds.
+  // The labels and annotations the Job keeps on the password Secrets it binds, and the broker
+  // certificate CronJob's own annotation among them.
+  "tools/migrate/src/mqtt_certificate.rs",
   "tools/migrate/src/passwords.rs",
   "tools/migrate/tests/mqtt_broker.rs",
 ]);

@@ -46,8 +46,9 @@ hyper-util = { workspace = true, features = ["tokio"] }
 libc.workspace = true
 percent-encoding.workspace = true
 # The MQTT broker's placeholder CA and its CRL, generated when no gateway CA is available
-# (src/mqtt_trust.rs).
-rcgen = { workspace = true, features = ["crypto", "ring"] }
+# (src/mqtt_trust.rs), and the broker's server key and its certificate signing request
+# (src/mqtt_certificate.rs), whose PKCS #8 copy is wiped when dropped.
+rcgen = { workspace = true, features = ["crypto", "ring", "zeroize"] }
 rustls = { workspace = true, features = ["ring", "std", "tls12"] }
 rustls-pki-types = { workspace = true, features = ["std"] }
 tokio-rustls = { workspace = true, features = ["ring"] }
@@ -72,7 +73,7 @@ zeroize.workspace = true
 # A person's PKCS#8 PEM key (from before Laysi/trustiot-v2#404) for the import tests.
 ed25519-dalek = { workspace = true, features = ["pem", "pkcs8"] }
 # The TLS Postgres the integration tests start (shared with crates/service-kit's tests).
-rcgen = { workspace = true, features = ["crypto", "pem", "ring"] }
+rcgen = { workspace = true, features = ["crypto", "pem", "ring", "zeroize"] }
 # The fake Kubernetes API of the wait-for-job tests serves HTTPS (tokio-rustls, a normal
 # dependency) with a certificate from a test CA.
 tokio = { workspace = true, features = ["io-util", "net", "sync"] }

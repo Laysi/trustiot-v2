@@ -135,6 +135,16 @@
       groupName: "rust crates",
     },
     {
+      description: "sqlparser: the AI SQL check's nesting rules (services/telemetry-query/src/sql/lexer.rs) rest on a survey of the pinned version's speculative parses. A version change fails the telemetry-query tests (SURVEYED_SQLPARSER) on purpose, until someone has redone that survey for the new version; its own group keeps that failure out of the weekly rust crates pull request",
+      matchManagers: ["cargo"],
+      matchPackageNames: ["sqlparser"],
+      matchUpdateTypes: ["major", "minor", "patch"],
+      groupName: "sqlparser",
+      prBodyNotes: [
+        "This sqlparser version change fails `cargo test -p telemetry-query` on purpose (`sqlparser_is_the_version_whose_speculative_parses_were_surveyed` in `services/telemetry-query/tests/sql_check.rs`): redo the speculative-parse survey for the new version as `services/telemetry-query/README.md` describes (section 「升級 sqlparser」), comparing it with `docs/test-reports/data/2026-10-26-143-ai-sql/parser-survey.txt`, add the construct of every new reachable speculative parse to the counting test's templates, then update `SURVEYED_SQLPARSER` in that test file.",
+      ],
+    },
+    {
       description: "Bun packages for scripts: one weekly pull request",
       matchManagers: ["npm", "bun"],
       groupName: "scripts packages",

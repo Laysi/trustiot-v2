@@ -18,7 +18,7 @@ Bun + TypeScript 腳本：本地一鍵啟動（清單 M6）、種子資料、CI 
 
 | 動作 | 指令 | 說明 |
 | --- | --- | --- |
-| 啟動 | `bun scripts/dev.ts up` | 產生新的密碼、起好所有容器並等到每項健康檢查都通過，再以 migration Job（`tools/migrate`）建立每個服務的角色、套用它的 migration，並為每個登入角色產生密碼（見「migration Job 與服務的登入角色」）；有任何一項失敗就以非 0 結束。身分服務的簽章金鑰在這時產生（已有就沿用）；身分服務本身不由 `up` 啟動，見下方「身分服務」 |
+| 啟動 | `bun scripts/dev.ts up` | 產生新的密碼、起好所有容器並等到每項健康檢查都通過，再以 migration Job（`tools/migrate`）建立每個服務的角色、套用它的 migration、套用產品的 ClickHouse DDL，並為每個登入角色產生密碼（見「migration Job 與服務的登入角色」）；有任何一項失敗就以非 0 結束。身分服務的簽章金鑰在這時產生（已有就沿用）；身分服務本身不由 `up` 啟動，見下方「身分服務」 |
 | 種子資料 | `bun scripts/dev.ts seed` | 載入開發用資料（含身分服務的開發使用者、租戶成員資格與 session），可重複執行，結束前讀回確認；印出開發 session 的 cookie |
 | 狀態 | `bun scripts/dev.ts status` | 重跑健康與安全檢查（含「錯誤密碼與匿名連線被拒」） |
 | 連線設定 | `bun scripts/dev.ts env` | 以 `KEY=value` 印出連線設定與密碼，輸出含標準的 `PG*` 變數（含 TLS：`PGSSLMODE=verify-full`、`PGSSLROOTCERT`）與服務的 `TRUSTIOT_POSTGRES_*` 平台設定，bash 可用 `set -a; eval "$(bun scripts/dev.ts env)"; set +a`，之後直接 `psql`；見下方「Postgres 的 TLS」；每個服務登入角色的帳密（`identity_app`、`assets_app`、`assets_platform`）見「migration Job 與服務的登入角色」；身分服務要的其他設定（公鑰、私鑰路徑、路由）見「身分服務」 |
@@ -76,12 +76,29 @@ service-kit 連 Postgres 一律用 `sslmode=verify-full`（Laysi/trustiot-v2#53�
 #### `up` 做的事
 
 1. 建立 migration 角色 `trustiot_owner`（LOGIN、CREATEROLE、不是 superuser、沒有 BYPASSRLS，並成為資料庫 `trustiot` 的擁有者）：這是 migration Job 要求的形狀（[tools/migrate](../tools/migrate/README.md) 「一次執行做什麼」第 2 步），也是 chart 的 CloudNativePG 給 `trustiot_owner` 的樣子。它的密碼每次 `up` 重新產生，只存在 `up` 的行程與它啟動的 Job 的環境裡，不寫進檔案。
-2. 以 `cargo build --package migrate` 建出 migration Job 的 binary，**不加參數、不用本機專用的設定**執行它（環境變數與 chart 的 Job 相同：`TRUSTIOT_POSTGRES_*`、`TRUSTIOT__POSTGRES__*`、`TRUSTIOT__PASSWORDS__*`），所以每個服務的 `<schema>_owner`、`<schema>_app`（有平台角色的服務還有 `<schema>_platform`）、schema、`database.sql`、`services/<名稱>/migrations/postgres/` 的每個檔案、outbox 表與 RLS 都由 Job 的程式建立，`dev.ts` 沒有另一套套用 DDL 的邏輯。Job 不處理 ClickHouse（沒有設定 ClickHouse 的連線）。
+2. 以 `cargo build --package migrate` 建出 migration Job 的 binary，**不加參數、不用本機專用的設定**執行它（環境變數與 chart 的 Job 相同：`TRUSTIOT_POSTGRES_*`、`TRUSTIOT_CLICKHOUSE_URL`、`TRUSTIOT__POSTGRES__*`、`TRUSTIOT__CLICKHOUSE__*`、`TRUSTIOT__PASSWORDS__*`），所以每個服務的 `<schema>_owner`、`<schema>_app`（有平台角色的服務還有 `<schema>_platform`）、schema、`database.sql`、`services/<名稱>/migrations/postgres/` 的每個檔案、outbox 表與 RLS 都由 Job 的程式建立，`dev.ts` 沒有另一套套用 DDL 的邏輯。同一次執行也把產品的 ClickHouse DDL（`services/ingest/migrations/clickhouse/`）套用到本機的 ClickHouse，見下方「`up` 在 ClickHouse 建立的東西」。
 3. Job 為每個綁了 Secret 的登入角色產生的密碼存進本機的 state 檔，與其他服務的登入一起（`env` 印出它們，見下）。
 
 `example-service` 的角色與密碼仍由 `up` 自己建立（`lib/secrets.ts` 的 `serviceRoleSql`）：它不在 Job 的服務清單（`PRODUCT`）裡。Job 與 `up` 的角色互不干擾，Job 只動它自己標記過的登入角色。
 
 `up` 也以 superuser 收回 PUBLIC 對 `postgres` 與 `template1` 的 `CONNECT, TEMPORARY`，與 bundled Cluster 相同（Laysi/trustiot-v2#427）：語句取自 chart 的 `deploy/chart/files/postgres/system-databases.sql` 裡的兩句 `REVOKE`（只有一份來源；該檔另建的 CloudNativePG 角色 `streaming_replica` 與 `cnpg_metrics_exporter` 在這裡沒有 operator、也沒有密碼可登入，所以不建立）。語句冪等，每次 `up` 都執行，所以舊的開發環境再 `up` 一次就補上，不必 `purge`。Job 對其他資料庫的警告（`warnings`）會在 `up` 的輸出以 `WARNING:` 列出，沒有警告時 `migration Job finished` 那一行顯示 `0 warning(s)`。端對端測試斷言服務角色連不上這兩個資料庫、Job 沒有警告。
+
+#### `up` 在 ClickHouse 建立的東西
+
+Job 以 `TRUSTIOT_CLICKHOUSE_URL`（`http://127.0.0.1:<ClickHouse 的本機埠>`）與 `TRUSTIOT__CLICKHOUSE__USERNAME`、`__PASSWORD` 連到本機的 ClickHouse，帳號是 `up` 這次產生的 bootstrap 管理帳號（`env` 的 `CLICKHOUSE_USER`、`CLICKHOUSE_PASSWORD`）。容器以 `CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT=1` 起動，這個帳號因此能建立帳號、角色與 row policy，也能授出 `0007_monitoring.sql` 要的 `system.disks` 的 `SELECT`；`tools/migrate` 的測試與 ingest 的測試用同樣的方式起 ClickHouse 與管理帳號（`tools/migrate/tests/support/mod.rs`、`services/ingest/tests/common/mod.rs`）。密碼只在 Job 的環境變數裡，不在任何指令列。
+
+Job 依序套用 `services/ingest/migrations/clickhouse/`，記在 `trustiot_migrate.applied`，所以再 `up` 一次只套用新增的檔案，舊的開發環境（資料磁碟區裡沒有這些表）再 `up` 一次就補上，不必 `purge`：
+
+| 種類 | 名稱 |
+| --- | --- |
+| 資料庫 | `trustiot`、`trustiot_logs`、`trustiot_migrate`（Job 自己的紀錄） |
+| 表與 view | `trustiot.telemetry`、完成表 `trustiot.stream_commits`（`0012` 停用的舊完成表 `trustiot.batch_commits` 也在，沒有任何角色能讀寫）、`trustiot.tenant_telemetry`（租戶讀的 view）、1 分鐘與 1 小時彙總表 `trustiot.telemetry_1m`、`telemetry_1h` 與租戶讀它們的 `tenant_telemetry_1m`、`tenant_telemetry_1h`（填入彙總表的 materialized view 與 backfill view 也在）、`trustiot_logs.otel_logs`、`trustiot_logs.otel_traces`；兩張遙測表的 TTL 對齊 180 天的原始資料保存期限，彙總表 13 與 48 個月 |
+| 角色 | `trustiot_ingest`、`trustiot_tenant_reader`、`trustiot_otel_collector`、`trustiot_monitoring`，以及帳號 `trustiot_tenant_view_definer`（租戶 view 的 DEFINER，不能登入）、`trustiot_rollup_definer`（彙總表的 DEFINER，不能登入）與 `trustiot_telemetry_query`（`HOST NONE`，不能登入） |
+| row policy、profile、quota | `deny_by_default`、`tenant_isolation`、`service_all_rows` 等，細節見 [services/ingest](../services/ingest/README.md) 「租戶隔離」 |
+
+本機沒有設定 collector 與 telemetry-query 的帳號（不設 `TRUSTIOT__PASSWORDS__CLICKHOUSE_COLLECTOR` 與 `_TELEMETRY_QUERY`，同一個沒有這兩項的 chart）：Job 不管 collector 的帳號，`trustiot_telemetry_query` 維持 `HOST NONE`。`SERVICES` 目前只有 `example-service`，沒有服務需要這兩個帳號；要在開發環境跑 telemetry-query 時，再為它加 `TRUSTIOT__PASSWORDS__CLICKHOUSE_TELEMETRY_QUERY` 與放它密碼的 Secret。
+
+**bootstrap 管理帳號讀不到 `trustiot.telemetry` 與 `trustiot.stream_commits`**：`deny_by_default` 這條 row policy 對所有帳號生效，只有被其他 policy 點名的帳號（`trustiot_ingest` 角色、租戶角色）看得到列，管理帳號讀到 0 列，這是設計。要讀回資料請看下方「載入 lab 資料集」。
 
 #### 哪些角色綁密碼
 
@@ -123,8 +140,9 @@ service-kit 連 Postgres 一律用 `sslmode=verify-full`（Laysi/trustiot-v2#53�
 | `TRUSTIOT_DEV_CERTS_DATABASE_USERNAME`、`..._PASSWORD` | `certs_app`（Laysi/trustiot-v2#78） |
 | `TRUSTIOT_DEV_CERTS_PLATFORM_DATABASE_USERNAME`、`..._PASSWORD` | `certs_platform`（出廠登錄寫全平台事件，Laysi/trustiot-v2#79） |
 | `TRUSTIOT_DEV_ASSISTANT_DATABASE_USERNAME`、`..._PASSWORD` | `assistant_app`（Laysi/trustiot-v2#553） |
+| `TRUSTIOT_DEV_AI_GATEWAY_DATABASE_USERNAME`、`..._PASSWORD` | `ai_gateway_app`（模型角色的設定，Laysi/trustiot-v2#605） |
 
-使用者把它們設成服務讀的 `TRUSTIOT__DATABASE__USERNAME` 與 `TRUSTIOT__DATABASE__PASSWORD`（平台角色是 chart 給服務的 `TRUSTIOT__DATABASE__PLATFORM_USERNAME` 與 `TRUSTIOT__DATABASE__PLATFORM_PASSWORD`）。端對端測試以這些帳密逐一以 `verify-full` 登入本機 Postgres。
+使用者把它們設成服務讀的 `TRUSTIOT__DATABASE__USERNAME` 與 `TRUSTIOT__DATABASE__PASSWORD`（平台角色是 chart 給服務的 `TRUSTIOT__DATABASE__PLATFORM_USERNAME` 與 `TRUSTIOT__DATABASE__PLATFORM_PASSWORD`）。AI 閘道用自己的前綴（決策 28）：設成 `AI_GATEWAY__DATABASE__USERNAME` 與 `AI_GATEWAY__DATABASE__PASSWORD`，Postgres 的位置也要從 `env` 印的 `TRUSTIOT_POSTGRES_*` 改名成 `AI_GATEWAY_POSTGRES_*`（`services/ai-gateway/README.md`，「資料庫」）。端對端測試以這些帳密逐一以 `verify-full` 登入本機 Postgres。
 
 ### 身分服務
 
@@ -146,7 +164,7 @@ service-kit 連 Postgres 一律用 `sslmode=verify-full`（Laysi/trustiot-v2#53�
 | `TRUSTIOT_IDENTITY_SIGNING_KEYS_FILE` | 只有身分服務 | 簽章金鑰檔 `signing-keys.json` 的**路徑**，不是內容 |
 | `TRUSTIOT_INGRESS_ROUTES` | 只有身分服務 | 本機的 cookie 路由：`localhost` 的每個路徑（`PathPrefix /`）給 `assets`（kit 的範例服務 `GET /v1/whoami` 接受的受眾）；沒有入口 gateway，所以呼叫 ext_authz 的人自己帶 `Host: localhost` |
 | `TRUSTIOT_DEV_IDENTITY_DATABASE_USERNAME`、`..._PASSWORD` | 只有身分服務 | `identity_app` 與 Job 產生的密碼，見上一節「`env` 印出的服務登入」 |
-| `TRUSTIOT_DEV_IDENTITY_PLATFORM_DATABASE_USERNAME`、`..._PASSWORD` | 只有身分服務 | `identity_platform` 與 Job 產生的密碼：事件紀錄以平台角色讀事件（Laysi/trustiot-v2#130）；沒有它時服務照常啟動，只是事件紀錄關閉 |
+| `TRUSTIOT_DEV_IDENTITY_PLATFORM_DATABASE_USERNAME`、`..._PASSWORD` | 只有身分服務 | `identity_platform` 與 Job 產生的密碼：事件紀錄以平台角色讀事件（Laysi/trustiot-v2#130），目前的 session 以它列出使用者所屬的租戶（Laysi/trustiot-v2#497）；沒有它時服務照常啟動，只是事件紀錄關閉、讀取目前的 session 與切換租戶回 503 |
 | `TRUSTIOT_POSTGRES_*` | 所有服務 | 與原本相同（`verify-full`、開發 CA 的路徑） |
 
 #### 在主機上啟動身分服務
@@ -193,6 +211,49 @@ curl -i -H 'Host: localhost' -H 'Cookie: __Host-trustiot-session=<seed 印出的
 - Postgres 的 TLS：不用 TLS 的連線被拒；以開發 CA 與 `127.0.0.1` 驗證後的 TLS 連線能進到 SCRAM；用另一個 CA 驗證會失敗，用憑證沒有的主機名稱驗證也會失敗（兩者都要確實是憑證被拒絕，不是連不上）；容器內的 `psql` 以 `verify-full` 登入並讀回 `pg_stat_ssl` 確認連線有加密。
 - 範例服務的 `/readyz` 含 `postgres` 檢查，所以它通過就是服務以 `verify-full` 連上了資料庫。
 - 身分服務的簽章金鑰檔存在、權限 0600（目錄 0700）、是 Ed25519 PKCS#8 金鑰（`status` 只印 `kid`，不印內容）。
+
+### 載入 lab 資料集
+
+`tools/lab-dataset` 把 [`datasets/lab/synthetic`](../datasets/lab/synthetic/) 的合成 fixture（格式與規則見 [datasets/lab/README.md](../datasets/lab/README.md)）照 ingest 的寫法寫進本機 ClickHouse 的 `trustiot.telemetry` 與 `trustiot.batch_commits`（Laysi/trustiot-v2#679）。前提是 `up` 已經跑過：表由它的 migration Job 建立（見上方「`up` 在 ClickHouse 建立的東西」），載入工具不建表。
+
+1. 把連線設定帶進 shell（`CLICKHOUSE_URL`、`CLICKHOUSE_USER`、`CLICKHOUSE_PASSWORD` 就是載入工具讀的變數）：
+
+   ```sh
+   set -a; eval "$(bun scripts/dev.ts env)"; set +a
+   ```
+
+2. 載入：
+
+   ```sh
+   cargo run -p lab-dataset -- load datasets/lab/synthetic/index.toml \
+     --tenant <租戶 UUID> --gateway <閘道器 UUID> --end-before now
+   ```
+
+   - **租戶 ID**：任何 UUID 都能載入（ClickHouse 的資料不指向 Postgres）。要讓資料屬於開發 session 的租戶，用 `seed` 印出的那一個：`bun scripts/dev.ts seed` 的輸出有一行 `identity dev session (user ..., tenant <UUID>, role admin)`，固定是 `00000000-0000-4000-8000-000000000b01`（`lib/identity.ts` 的 `DEV_TENANT_ID`）。要測跨租戶，把同一份資料載入第二個租戶（換一個 UUID）。
+   - **閘道器 ID**：任何 UUID，例如 `uuidgen`；設備與串流的 UUID 由資料集名稱、租戶、閘道器與代號推導，同樣的輸入得到同樣的 ID。
+   - `--end-before now` 把資料集的時間搬到現在之前一天內（原始資料只保留 180 天、查詢只看近 7 天，不位移的 2026-01 資料會被 TTL 清掉）；`--shift-ms` 指定確切的位移。載入結果以 JSON 印在標準輸出：`rows`、`batches`、`committed_batches` 與設備、串流的 UUID，合成 fixture 是 316 列、16 批、15 批有完成紀錄（最後一批沒有，是設計）。
+   - 同一個資料集對同一個租戶與閘道器只載一次；要重載，換租戶或閘道器 UUID。
+
+3. 讀回確認：bootstrap 管理帳號讀 `trustiot.telemetry` 與 `trustiot.stream_commits` 得到 **0 列**（`deny_by_default`，見上方），所以要用一個被 policy 點名的帳號。`trustiot_ingest` 角色有 `service_all_rows` policy，下面建一個開發用的帳號給它（密碼隨機產生，只在這個 shell 的變數裡；ClickHouse 的 HTTP 介面不用指令列帶密碼，帳密由 stdin 的 curl 設定交給 curl）：
+
+   ```sh
+   # 一個函式：ch <帳號> <密碼> "<SQL>"；SQL 寫成一行、不含雙引號與反斜線
+   ch() { printf 'header = "X-ClickHouse-User: %s"\nheader = "X-ClickHouse-Key: %s"\nurl = "%s"\ndata-binary = "%s"\n' "$1" "$2" "$CLICKHOUSE_URL" "$3" | curl -sS --fail-with-body --config -; }
+
+   READER_PASSWORD="$(openssl rand -hex 24)"
+   ch "$CLICKHOUSE_USER" "$CLICKHOUSE_PASSWORD" "DROP USER IF EXISTS lab_dataset_reader"
+   ch "$CLICKHOUSE_USER" "$CLICKHOUSE_PASSWORD" "CREATE USER lab_dataset_reader IDENTIFIED WITH sha256_password BY '$READER_PASSWORD'"
+   ch "$CLICKHOUSE_USER" "$CLICKHOUSE_PASSWORD" "GRANT trustiot_ingest TO lab_dataset_reader"
+
+   TENANT=00000000-0000-4000-8000-000000000b01   # 載入時用的租戶 UUID
+   ch lab_dataset_reader "$READER_PASSWORD" "SELECT count() FROM trustiot.telemetry WHERE tenant_id = '$TENANT'"
+   ch lab_dataset_reader "$READER_PASSWORD" "SELECT count() FROM trustiot.stream_commits FINAL WHERE tenant_id = '$TENANT'"
+   ch "$CLICKHOUSE_USER" "$CLICKHOUSE_PASSWORD" "SELECT count() FROM trustiot.telemetry"   # 管理帳號：0
+   ```
+
+   合成 fixture 的預期值：`telemetry` 316、`stream_commits` 15，等於載入結果的 `rows` 與 `committed_batches`，也等於索引（兩個分段的 `rows` 211 加 105；`live` 1–13 與 `backlog` 1–3 共 16 批，扣掉 `uncommitted` 的一批）。`lab_dataset_reader` 是開發環境專用、有 `trustiot_ingest` 的全部權限（含 `INSERT` 與 `ALTER DELETE`），不要用在別處；`down` 保留 ClickHouse 的資料磁碟區，帳號也留著，重做上面三句即換新密碼，`purge` 一併刪除。
+
+不要把載入工具指向開發環境以外的 ClickHouse：它會寫進任何它拿到的伺服器。
 
 ### 種子資料
 

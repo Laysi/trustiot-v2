@@ -51,7 +51,7 @@ flowchart TB
 內部 API、設定（供應商端點、key 的環境變數、角色與備援、時間上限）、錯誤與日誌見 [services/ai-gateway/README.md](../../services/ai-gateway/README.md)（2026-10-22，Laysi/trustiot-v2#139：Anthropic Messages 與 OpenAI Decisions）。
 
 1. **照原生協定轉送，不轉換格式**（決策 15）：呼叫端（assistant、knowledge、alerts）以內部 API 指定模型角色，請求本文用該角色供應商的原生格式；閘道依角色填入模型與憑證、轉送到供應商，回應與串流原樣交回。SaaS 支援三種協定：Anthropic Messages、Vertex AI 的 Gemini（生成、嵌入、顯式快取）、OpenAI Decisions；地端的 OpenAI 相容端點在 SaaS 完成後加入。不採用相容層的理由：Anthropic 的 OpenAI 相容層官方定位不是給正式環境用的，不支援 prompt caching、用量的快取欄位永遠是空的、不回傳 thinking、`strict` 與 effort 被忽略，也用不到 tool search 與 context editing；Gemini 的相容端點仍在 beta，不能用 Files API，影片輸入沒有文件。LiteLLM、Envoy AI Gateway 等閘道支援快取，也是靠自己轉成原生協定。
-2. **角色、備援與逾時**：platform admin 隨時可以更換角色的模型（J8），換成同一協定的模型不必改程式，換協定要呼叫端支援。每個角色設一串備援模型，429、過載或逾時時改用下一個（例如 main 從 Opus 5.5 換成 Sonnet 5.5）；快取依模型分開，換模型後從零開始。供應商的拒答（例如 Anthropic 的 `stop_reason: refusal`）照常記帳，交回呼叫端，由它回通用訊息（J2）。
+2. **角色、備援與逾時**：platform admin 隨時可以更換角色的模型（J8），換成同一協定的模型不必改程式，換協定要呼叫端支援。chart 的 `ai.roles` 決定有哪些角色、各自的協定、上限與預設模型；更換只是模型清單的覆寫，存在 Postgres 的 schema `ai_gateway`，部署不會丟掉它，重設才回到預設模型；每次更換與重設在同一個交易寫進 append-only 的變更紀錄。每個轉送請求都確認設定世代，所以更換的呼叫回 200 之後才開始的請求，在任何副本都用新的模型；讀不到設定時以 503 拒絕，不呼叫供應商（2026-10-23，Laysi/trustiot-v2#537、Laysi/trustiot-v2#605；做法見 [services/ai-gateway/README.md](../../services/ai-gateway/README.md)「資料庫」與「多副本」，管理 API 在 Laysi/trustiot-v2#606）。每個角色設一串備援模型，429、過載或逾時時改用下一個（例如 main 從 Opus 5.5 換成 Sonnet 5.5）；快取依模型分開，換模型後從零開始。供應商的拒答（例如 Anthropic 的 `stop_reason: refusal`）照常記帳，交回呼叫端，由它回通用訊息（J2）。
 3. **帳本**（決策 28）：以 llm\_call\_id 去重，依供應商回報的分類記錄用量：一般輸入、快取寫入（5 分鐘與 1 小時分開）、快取讀取、輸出（含 thinking），以及 Gemini 各模態的輸入（文字、圖片、影片、音訊）。單價表依這些類別定價，另外記 Gemini 顯式快取的儲存費（token 數乘以時數）；Decisions 只收輸入費；Embedding 2 依模態計價（文字 token、圖片張數、音訊秒數、影片格數）。供應商沒回報用量時（含串流中途中斷，J8），輸入與已產生的輸出（含 thinking）分別在本地估算並標記，絕不記 0：輸入用 `count_tokens` 或本地 tokenizer 計算，輸出依已收到的內容計算；thinking 只回傳摘要或不回傳時看不到實際長度，這筆估算標為下限。Claude 的 token 數以供應商回報或 `count_tokens` 為準，本地 tokenizer 會偏差。
 4. **額度**：預扣與結算照決策 28；agent 迴圈裡的每一次模型呼叫各自預扣、各自結算。
 5. **憑證**（[密鑰與權限](secrets.md)）：Anthropic 與 OpenAI 用 API key；Vertex AI 優先用 Workload Identity Federation，不放長期金鑰（密鑰規則 8），不可行時才用服務帳號金鑰，在接入 Vertex AI 的 issue（Laysi/trustiot-v2#440）決定。都只給 `ai-gateway`。
@@ -63,8 +63,8 @@ flowchart TB
 
 | 工具 | 內容 | 執行的服務 | 里程碑 |
 | --- | --- | --- | --- |
-| 語意層查詢 | 用電量、異常區段、斷訊、停機、比較，回傳精簡的表格（J3） | telemetry-query | MS3 |
-| 唯讀 SQL | 經語法解析、以租戶唯讀帳號執行的 SELECT；語意層工具不夠時用來回答，也是儀表板資料集的主要來源（J3、決策 33） | telemetry-query | MS3 |
+| 語意層查詢 | 最新值（`telemetry_latest`）、統計（`telemetry_statistics`：筆數、最小、最大、平均、第一與最後讀數）與用量（`telemetry_usage`：用電量等累計值的增量，附累計檢查與可疑跳增），依使用者時區的相對期間（`period`，週從星期一開始）或時間範圍、以區間回傳精簡的表格（J3，Laysi/trustiot-v2#142；計算方式見 [services/telemetry-query](../../services/telemetry-query/README.md)「語意查詢」）。異常區段、斷訊、停機與比較在 Laysi/trustiot-v2#455 | telemetry-query | MS3 |
+| 唯讀 SQL | 經語法解析、以租戶唯讀帳號執行的 SELECT；語意層工具不夠時用來回答，也是儀表板資料集的主要來源（J3、決策 33）。工具 `telemetry_sql` 呼叫內部入口 `POST /internal/telemetry/v1/sql`：只接受 AI 助理換出的 token（之後加上 Laysi/trustiot-v2#150 的儀表板後端），入口 gateway 不轉送，瀏覽器送不了 SQL；viewer、editor、admin 都可以（2026-10-26 決定，Laysi/trustiot-v2#143）。只給雲端模型（下方「地端」第 6 點） | telemetry-query | MS3 |
 | 設備與知識 | 設備、型號、資料點、knowledge、assetNotes（J6） | assets | MS3 |
 | 儀表板 | 建立與修改儀表板：資料集與頁面程式，寫入後由平台檢查（J4，見下方「儀表板」） | assistant | MS3 |
 | 寫入 | AI 設備上架、修改型號；先暫停，確認畫面由服務依參數產生（J4） | assets | MS3 |
@@ -79,7 +79,7 @@ flowchart TB
 3. 工具結果可以帶圖片：文件檢索直接回傳頁面圖，由主 agent 自己讀（決策 26）。
 4. 租戶範圍、可查期間（B3）與權限由服務依內部身分注入，模型看不到也改不了（決策 27、29）。
 5. 工具數上限管的是工具組，不是呼叫次數：一次模型回應可以要求任意多個呼叫，所以每一步只同時執行前幾個（預設 8 個），之後的呼叫回錯誤、請模型下一步再叫，一次回應造成的後端負載有上限（Laysi/trustiot-v2#145）。
-6. 工具以使用者的身分呼叫服務：每個問題開始時以請求的身分建立 run 委派（Laysi/trustiot-v2#551），每次呼叫前換一張受眾是被呼叫服務的 token；問題在委派到期前 30 秒結束，委派被撤銷（登出、被移出租戶）時當下這一步取消、問題結束、不重試。被呼叫服務的錯誤只看狀態碼，回應本文不進模型也不進日誌。設備與成員寫的文字（文字讀數、資料點 key、型號名稱）是不可信的輸入，每個字串截到 256 個字元；這限制長度，不讓文字變得可信。第一批工具是遙測的時間序列與最新值、設備型號列表（Laysi/trustiot-v2#591，[services/assistant](../../services/assistant/README.md)「工具」與「代表使用者呼叫」）。
+6. 工具以使用者的身分呼叫服務：每個問題開始時以請求的身分建立 run 委派（Laysi/trustiot-v2#551），每次呼叫前換一張受眾是被呼叫服務的 token；問題在委派到期前 30 秒結束，委派被撤銷（登出、被移出租戶）時當下這一步取消、問題結束、不重試。被呼叫服務的錯誤只看狀態碼，回應本文不進模型也不進日誌；唯一的例外是唯讀 SQL 的拒絕（422），本文嚴格解析成封閉的拒絕類別，模型只拿到每個類別固定的說明（Laysi/trustiot-v2#143）。設備與成員寫的文字（文字讀數、資料點 key、型號名稱）是不可信的輸入，每個字串截到 256 個字元；這限制長度，不讓文字變得可信。目前的工具共 5 個：遙測的最新值與設備型號列表（Laysi/trustiot-v2#591）、遙測的統計與用量（Laysi/trustiot-v2#142；統計取代 Laysi/trustiot-v2#591 的時間序列工具，兩者是同一種功能，依規則 1 合併）、唯讀 SQL（`telemetry_sql`，Laysi/trustiot-v2#143）。唯讀 SQL 只給雲端模型，地端模型只有前 4 個（「地端」第 6 點；[services/assistant](../../services/assistant/README.md)「工具」與「代表使用者呼叫」）。語意工具的輸入就是 telemetry-query 語意查詢 API 的請求本文，儀表板的資料集可以原樣存下、以檢視者身分重送。
 
 ### 儀表板
 
@@ -174,3 +174,4 @@ Claude Opus 5.5 的 thinking 綁定產生它的對話：system prompt、工具�
 3. 嵌入用 EmbeddingGemma 2（決策 26）；影音預設關閉，除非客戶有能處理影音的端點。
 4. 小模型的工具數量要縮減，寫入工具一律確認或關閉；每個模型等級跑同一份題庫，結果列成支援矩陣。
 5. 儀表板的頁面程式與 SQL 由小模型寫不可靠：依支援矩陣決定地端是否開放建立儀表板，或只提供固定的儀表板範本。
+6. 唯讀 SQL 工具（`telemetry_sql`）只給雲端模型，地端模型只用語意層工具（決策 16）；接上地端模型時不註冊這個工具（`services/assistant/src/lib.rs`）。

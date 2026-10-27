@@ -12,7 +12,9 @@ use std::time::Duration;
 
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
-use migrate::config::{AdminSettings, KeySettings, MqttAccountSettings, PasswordSettings};
+use migrate::config::{
+    AdminSettings, KeySettings, MqttAccountSettings, MqttCertificateSettings, PasswordSettings,
+};
 use serde_json::{Map, Value, json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
@@ -397,6 +399,32 @@ impl FakeSecrets {
         }
     }
 
+    /// Settings of the MQTT broker's certificate issuer for this fake: it fills `secret` with a
+    /// certificate from the certs service at `certs_url` for the broker Service `service_name`
+    /// and `generation`.
+    pub fn certificate_settings(
+        &self,
+        secret: &str,
+        certs_url: &str,
+        service_name: &str,
+        generation: &str,
+    ) -> MqttCertificateSettings {
+        let dir = scratch_dir("kube-token");
+        let token_file = dir.join("token");
+        std::fs::write(&token_file, format!("{}\n", self.token)).expect("write the token");
+        MqttCertificateSettings {
+            api_url: self.url.clone(),
+            namespace: NAMESPACE.to_owned(),
+            token_file,
+            ca_file: dir.join("unused-ca.crt"),
+            secret: secret.to_owned(),
+            certs_url: certs_url.to_owned(),
+            service_name: service_name.to_owned(),
+            generation: generation.to_owned(),
+            wait: Duration::from_secs(120),
+        }
+    }
+
     fn answer(&self, head: &str, body: &[u8]) -> (u16, String) {
         let mut lines = head.lines();
         let line = lines.next().unwrap_or_default().to_owned();
@@ -636,7 +664,7 @@ fn status(code: u16, reason: &str) -> (u16, String) {
 }
 
 /// The head (request line and headers) and the body of one request.
-async fn read_request(stream: &mut tokio::net::TcpStream) -> Option<(String, Vec<u8>)> {
+pub async fn read_request(stream: &mut tokio::net::TcpStream) -> Option<(String, Vec<u8>)> {
     let mut request = Vec::new();
     let mut buffer = [0_u8; 4096];
     let head_end = loop {

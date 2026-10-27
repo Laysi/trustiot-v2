@@ -3,14 +3,8 @@ import { isRouteErrorResponse, useRouteError } from "react-router";
 
 import { ApiError, classifyError } from "../api/errors.ts";
 import { useI18n } from "../i18n/useI18n.ts";
-import {
-  ForbiddenPage,
-  GenericErrorPage,
-  NotFoundPage,
-  SignedOutPage,
-  TenantSuspendedPage,
-  UnavailablePage,
-} from "./pages.tsx";
+import { TenantSuspendedPage } from "../session/TenantSuspendedPage.tsx";
+import { ForbiddenPage, GenericErrorPage, NotFoundPage, SignedOutPage, UnavailablePage } from "./pages.tsx";
 
 /**
  * The routes' error boundary. API errors get the page that tells the user what to do; anything

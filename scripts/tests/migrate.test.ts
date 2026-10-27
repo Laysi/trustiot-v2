@@ -1,6 +1,9 @@
 // How `up` runs the migration Job (lib/migrate.ts): its settings, what it may inherit, and what
 // is printed when it fails.
 import { describe, expect, test } from "bun:test";
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import {
   jobEnvironment,
@@ -11,6 +14,7 @@ import {
   scrub,
   warningLines,
   secretNames,
+  runMigrationJob,
   type MigrationRun,
 } from "../lib/migrate.ts";
 import { productLogins } from "../lib/product-logins.ts";
@@ -20,6 +24,7 @@ const run: MigrationRun = {
   binary: "/repo/target/debug/migrate",
   postgres: { port: 15432, database: "trustiot", caFile: "/state/tls/ca.crt" },
   login: { user: MIGRATION_ROLE, password: "migration-login-value" },
+  clickhouse: { port: 18123, user: "trustiot_dev", password: "clickhouse-login-value" },
   stateDir: "/state",
   logins: [{ role: "identity_app", secret: "dev-identity-password" }],
 };
@@ -50,12 +55,119 @@ describe("the Job's environment", () => {
     expect(env.TRUSTIOT__PASSWORDS__GENERATION).toBe("1");
   });
 
+  test("applies the product's ClickHouse DDL to the local ClickHouse as its bootstrap account", () => {
+    expect(env.TRUSTIOT_CLICKHOUSE_URL).toBe("http://127.0.0.1:18123");
+    expect(env.TRUSTIOT__CLICKHOUSE__USERNAME).toBe("trustiot_dev");
+    expect(env.TRUSTIOT__CLICKHOUSE__PASSWORD).toBe("clickhouse-login-value");
+    // The password comes with the account, not through a Secret of the stand-in API.
+    expect(env.TRUSTIOT__CLICKHOUSE__PASSWORD_SECRET).toBeUndefined();
+  });
+
+  test("leaves the collector and telemetry-query accounts unset, as a chart without them does", () => {
+    expect(env.TRUSTIOT__PASSWORDS__CLICKHOUSE_COLLECTOR).toBeUndefined();
+    expect(env.TRUSTIOT__PASSWORDS__CLICKHOUSE_TELEMETRY_QUERY).toBeUndefined();
+    expect(env.TRUSTIOT_CLICKHOUSE_CA_FILE).toBeUndefined();
+    expect(env.TRUSTIOT__CLICKHOUSE__RAW_RETENTION_DAYS).toBeUndefined();
+  });
+
+  test("follows the ClickHouse port the environment published", () => {
+    const other = jobEnvironment(
+      { ...run, clickhouse: { ...run.clickhouse, port: 28123 } },
+      { url: "http://127.0.0.1:4321" },
+      "/state/kube-token.abc",
+      {},
+    );
+    expect(other.TRUSTIOT_CLICKHOUSE_URL).toBe("http://127.0.0.1:28123");
+  });
+
+  test("keeps the Postgres settings the same with and without the ClickHouse ones", () => {
+    const postgres = Object.fromEntries(
+      Object.entries(env).filter(([name]) => !name.includes("CLICKHOUSE") && !["PATH", "HOME"].includes(name)),
+    );
+    expect(postgres).toEqual({
+      TRUSTIOT_POSTGRES_HOST: "127.0.0.1",
+      TRUSTIOT_POSTGRES_PORT: "15432",
+      TRUSTIOT_POSTGRES_DATABASE: "trustiot",
+      TRUSTIOT_POSTGRES_SSLMODE: "verify-full",
+      TRUSTIOT_POSTGRES_CA_FILE: "/state/tls/ca.crt",
+      TRUSTIOT__POSTGRES__USERNAME: "trustiot_owner",
+      TRUSTIOT__POSTGRES__PASSWORD: "migration-login-value",
+      TRUSTIOT__PASSWORDS__API_URL: "http://127.0.0.1:4321",
+      TRUSTIOT__PASSWORDS__NAMESPACE: "trustiot-dev",
+      TRUSTIOT__PASSWORDS__TOKEN_FILE: "/state/kube-token.abc",
+      TRUSTIOT__PASSWORDS__CA_FILE: "/state/tls/ca.crt",
+      TRUSTIOT__PASSWORDS__GENERATION: "1",
+      TRUSTIOT__PASSWORDS__POSTGRES: "identity_app=dev-identity-password",
+      TRUSTIOT__WAIT__DATABASES: "2m",
+      TRUSTIOT__WAIT__LOCK: "2m",
+    });
+  });
+
   test("inherits only what a process needs, not the caller's TRUSTIOT settings", () => {
     expect(env.PATH).toBe("/bin");
     expect(env.HOME).toBe("/home/dev");
     expect(Object.values(env)).not.toContain("someone-else");
     expect(env.TRUSTIOT_CONFIG_FILE).toBeUndefined();
     expect(env.CARGO_BUILD_JOBS).toBeUndefined();
+  });
+});
+
+describe("how the Job is started", () => {
+  // A stand-in binary that only reports what it was given and fails: nothing here starts a
+  // database or a container. runMigrationJob prints the Job's output when it fails, so the
+  // report shows the argument count and the environment the process received, and what the
+  // error message does and does not contain.
+  const clickhousePassword = "clickhouse-pass-value-0123";
+  const migrationPassword = "migration-pass-value-4567";
+
+  async function failingRun(): Promise<{ error: Error }> {
+    const dir = mkdtempSync(join(tmpdir(), "trustiot-dev-migrate-"));
+    try {
+      const binary = join(dir, "migrate");
+      writeFileSync(
+        binary,
+        [
+          "#!/bin/sh",
+          'echo "argc=$#"',
+          'echo "clickhouse-url=$TRUSTIOT_CLICKHOUSE_URL"',
+          'echo "clickhouse-user=$TRUSTIOT__CLICKHOUSE__USERNAME"',
+          'echo "clickhouse-password=$TRUSTIOT__CLICKHOUSE__PASSWORD"',
+          'echo "postgres-password=$TRUSTIOT__POSTGRES__PASSWORD"',
+          "exit 3",
+          "",
+        ].join("\n"),
+      );
+      chmodSync(binary, 0o700);
+      const error = await runMigrationJob({
+        ...run,
+        binary,
+        stateDir: dir,
+        login: { user: MIGRATION_ROLE, password: migrationPassword },
+        clickhouse: { port: 18123, user: "trustiot_dev", password: clickhousePassword },
+      }).then(
+        () => new Error("the Job was expected to fail"),
+        (reason: unknown) => (reason instanceof Error ? reason : new Error(String(reason))),
+      );
+      return { error };
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+
+  test("takes no argument, so no password can be on its command line, and gets the ClickHouse settings in its environment", async () => {
+    const { error } = await failingRun();
+    expect(error.message).toContain("failed with exit code 3");
+    expect(error.message).toContain("argc=0");
+    expect(error.message).toContain("clickhouse-url=http://127.0.0.1:18123");
+    expect(error.message).toContain("clickhouse-user=trustiot_dev");
+  });
+
+  test("removes the ClickHouse and migration passwords from the output it prints when the Job fails", async () => {
+    const { error } = await failingRun();
+    expect(error.message).not.toContain(clickhousePassword);
+    expect(error.message).not.toContain(migrationPassword);
+    expect(error.message).toContain("clickhouse-password=<redacted>");
+    expect(error.message).toContain("postgres-password=<redacted>");
   });
 });
 
@@ -79,7 +191,8 @@ describe("password bindings", () => {
       "identity_app=dev-identity-password,identity_platform=dev-identity-password," +
         "assets_app=dev-assets-password,assets_platform=dev-assets-password," +
         "telemetry_query_app=dev-telemetry-query-password,telemetry_query_platform=dev-telemetry-query-password," +
-        "certs_app=dev-certs-password,certs_platform=dev-certs-password,assistant_app=dev-assistant-password",
+        "certs_app=dev-certs-password,certs_platform=dev-certs-password,assistant_app=dev-assistant-password," +
+        "ai_gateway_app=dev-ai-gateway-password",
     );
     // The Job refuses a binding whose Secret the API does not declare, and the same Secret holds
     // a service's two passwords: declared once.
@@ -89,6 +202,7 @@ describe("password bindings", () => {
       "dev-telemetry-query-password",
       "dev-certs-password",
       "dev-assistant-password",
+      "dev-ai-gateway-password",
     ]);
     const env = jobEnvironment({ ...run, logins }, { url: "http://127.0.0.1:4321" }, "/state/kube-token.abc", {});
     expect(env.TRUSTIOT__PASSWORDS__POSTGRES).toBe(text);

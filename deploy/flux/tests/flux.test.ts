@@ -747,7 +747,7 @@ describe("the demo release", () => {
   );
 
   test(
-    "with all four Postgres services on, the overlay passes the chart's connection check, which still refuses one replica more (Laysi/trustiot-v2#575)",
+    "with all four Postgres services on, the overlay passes the chart's connection check, which still refuses two identity replicas more (Laysi/trustiot-v2#575)",
     () => {
       // The demo slice turns certs and telemetry-query on next to identity and assets, and Flux rolls
       // every service at once: the chart refuses values whose pools could then exceed Postgres'
@@ -762,10 +762,10 @@ describe("the demo release", () => {
         .map((m) => m.metadata.name)
         .sort();
       expect(postgresClients).toEqual(["trustiot-assets", "trustiot-certs", "trustiot-identity", "trustiot-telemetry-query"]);
-      // The control: a second identity replica is 31 x 3 instead of 31 x 2, past the default 160.
-      const more = helmTemplate([overlay, allFour], [...setLiteral, "--set", "services.identity.replicas=2"]);
+      // The control: three identity replicas are 31 x 4 instead of 31 x 2, past the default 200.
+      const more = helmTemplate([overlay, allFour], [...setLiteral, "--set", "services.identity.replicas=3"]);
       expect(more.code).not.toBe(0);
-      expect(more.stderr).toContain("postgres.bundled.parameters.max_connections is 160, but 181 connections are needed");
+      expect(more.stderr).toContain("postgres.bundled.parameters.max_connections is 200, but 212 connections are needed");
     },
     SLOW_TEST_MS,
   );
@@ -841,9 +841,10 @@ describe("the demo release", () => {
   );
 });
 
-// The MQTT broker (Laysi/trustiot-v2#84) needs a server certificate Secret that nothing in a
-// cluster issues yet (Laysi/trustiot-v2#535), so no cluster turns it on: the chart's shapes leave
-// it off, and so must every values file and value a cluster's release reads.
+// The MQTT broker (Laysi/trustiot-v2#84) is off in the chart's shapes. Its server certificate now
+// comes from the chart's own CronJob (Laysi/trustiot-v2#535), but turning the broker on in a
+// cluster is a change of its own, which updates this test; until then every values file and value
+// a cluster's release reads must leave it off.
 describe.each([...CLUSTERS])("the MQTT broker stays off in the %s cluster", (cluster) => {
   test("no values file of the release sets mqttBroker, and no private value targets it", () => {
     const data = one(cluster, "ConfigMap", "trustiot-values").data as Record<string, string>;

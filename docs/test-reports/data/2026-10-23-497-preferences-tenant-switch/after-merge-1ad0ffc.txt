@@ -1,0 +1,111 @@
+# Laysi/trustiot-v2#497 after merging origin/main 1ad0ffc (2026-10-24), developer workstation
+
+## Exit status of each check
+cargo fmt --all --check: exit=0
+cargo clippy --workspace --all-targets -- -D warnings: exit=0
+cargo clippy -p service-kit --no-default-features --all-targets -- -D warnings: exit=0
+cargo run -p openapi -- --check: exit=0
+CI=1 cargo test --no-fail-fast -p identity -p testkit -p repo-check -p sql-check -p openapi -p contract: exit=0
+CI=1 cargo test -p migrate --test registry --test fresh_database: exit=0
+cargo deny --locked check: exit=0
+bun install --cwd frontend --frozen-lockfile: exit=0
+bun run --cwd frontend api:check: exit=0
+bun run --cwd frontend typecheck: exit=0
+bun run --cwd frontend lint: exit=0
+bun run --cwd frontend test: exit=0
+bun run --cwd frontend build: exit=0
+bun run --cwd frontend check:dist: exit=0
+bun test deploy/chart: exit=0
+bun install --cwd scripts --frozen-lockfile: exit=0
+bun test scripts/ci/changes.test.ts: exit=0
+
+## CI=1 cargo test --no-fail-fast -p identity -p testkit -p repo-check -p sql-check -p openapi -p contract
+     Running unittests src/lib.rs [contract]
+test result: ok. 43 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/client.rs [client]
+test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.31s
+     Running tests/client_logging.rs [client_logging]
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+     Running tests/error_format.rs [error_format]
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/events.rs [events]
+test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running unittests src/lib.rs [identity]
+test result: ok. 113 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.45s
+     Running tests/account.rs [account]
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.73s
+     Running tests/adversarial.rs [adversarial]
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 23.94s
+     Running tests/chart_connections.rs [chart_connections]
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+     Running tests/cross_tenant.rs [cross_tenant]
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.06s
+     Running tests/event_log.rs [event_log]
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 11.22s
+     Running tests/ext_authz.rs [ext_authz]
+test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 17.75s
+     Running tests/login.rs [login]
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 12.57s
+     Running tests/members.rs [members]
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.61s
+     Running tests/migrations.rs [migrations]
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.81s
+     Running tests/platform_admin.rs [platform_admin]
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.45s
+     Running tests/tenants.rs [tenants]
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.66s
+     Running tests/token_claims.rs [token_claims]
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+     Running unittests src/lib.rs [openapi]
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+     Running unittests src/main.rs [openapi]
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/openapi.rs [openapi]
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+     Running unittests src/lib.rs [repo_check]
+test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/repository.rs [repository]
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.14s
+     Running unittests src/lib.rs [sql_check]
+test result: ok. 20 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/check.rs [check]
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.20s
+     Running unittests src/lib.rs [testkit]
+test result: ok. 35 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.24s
+     Running tests/container_volumes.rs [container_volumes]
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.61s
+     Running tests/modbus_endpoint.rs [modbus_endpoint]
+test result: ok. 20 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 9.33s
+     Running tests/modbus_example.rs [modbus_example]
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+     Running tests/postgres_isolation.rs [postgres_isolation]
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 13.86s
+     Running tests/postgres_start.rs [postgres_start]
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.71s
+   Doc-tests contract
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.20s
+   Doc-tests identity
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+   Doc-tests openapi
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+   Doc-tests repo_check
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+   Doc-tests sql_check
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+   Doc-tests testkit
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+## CI=1 cargo test -p migrate --test registry --test fresh_database
+     Running tests/fresh_database.rs [fresh_database]
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.88s
+     Running tests/registry.rs [registry]
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+## cargo deny --locked check
+advisories ok, bans ok, licenses ok, sources ok
+
+## bun counts
+bun run --cwd frontend test:  131 pass,  0 fail
+bun test deploy/chart:  648 pass,  0 fail
+bun test scripts/ci/changes.test.ts:  282 pass,  0 fail

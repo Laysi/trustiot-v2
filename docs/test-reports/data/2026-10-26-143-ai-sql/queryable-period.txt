@@ -1,0 +1,102 @@
+
+period                                  plain raw: answered, 12 lines
+period                  raw older than the window: answered, 0 lines
+period                             raw since 1970: answered, 12 lines
+period                                raw OR true: answered, 12 lines
+period                         raw PREWHERE older: refused: ILLEGAL_PREWHERE
+period                            raw FINAL older: answered, 0 lines
+period                                 raw toDate: answered, 0 lines
+period                               raw dateDiff: answered, 0 lines
+period                        raw toUnixTimestamp: answered, 0 lines
+period                                raw BETWEEN: answered, 0 lines
+period                            raw table alias: answered, 0 lines
+period                     raw alias shadowing ts: answered, 12 lines
+period              raw alias shadowing tenant_id: answered, 12 lines
+period                          raw WITH constant: answered, 12 lines
+period                      raw WITH shadowing ts: answered, 12 lines
+period                                   subquery: answered, 0 lines
+period                          nested subqueries: answered, 0 lines
+period                    common table expression: answered, 0 lines
+period           chained common table expressions: answered, 0 lines
+period                                  self JOIN: answered, 0 lines
+period                                 CROSS JOIN: answered, 144 lines
+period                          LEFT JOIN ON true: answered, 144 lines
+period                                  FULL JOIN: answered, 12 lines
+period                                  ASOF JOIN: answered, 12 lines
+period                                 PASTE JOIN: answered, 12 lines
+period                    raw JOIN one-hour cells: answered, 84 lines
+period                                IN subquery: answered, 0 lines
+period                          IN tuple subquery: answered, 12 lines
+period                                  GLOBAL IN: answered, 12 lines
+period                            scalar subquery: answered, 1 lines
+period                      scalar subquery older: answered, 1 lines
+period             arrayJoin of a scalar subquery: answered, 12 lines
+period                        arrayJoin of tuples: answered, 12 lines
+period                                  UNION ALL: answered, 12 lines
+period                             UNION DISTINCT: answered, 4 lines
+period                                  INTERSECT: answered, 12 lines
+period                                     EXCEPT: answered, 12 lines
+period            window function over neighbours: answered, 12 lines
+period                                 lagInFrame: answered, 12 lines
+period                                   neighbor: refused: DEPRECATED_FUNCTION
+period                                WITH TOTALS: answered, 6 lines
+period                                     ROLLUP: answered, 6 lines
+period                                   LIMIT BY: answered, 4 lines
+period                               argMin by ts: answered, 1 lines
+period                   groupArray of everything: answered, 1 lines
+period                           one-minute cells: answered, 7 lines
+period     one-minute cells older than the window: answered, 0 lines
+period                  one-minute tuple elements: answered, 7 lines
+period                             one-hour cells: answered, 7 lines
+period       one-hour cells older than the window: answered, 0 lines
+period            one-hour alias shadowing bucket: answered, 7 lines
+period             one-minute JOIN one-hour cells: answered, 49 lines
+period               UNION ALL of the three views: answered, 26 lines
+period                      view() table function: answered, 12 lines
+period                     merge() table function: answered, 12 lines
+period                                     SAMPLE: answered, 12 lines
+period                             raw base table: refused: ACCESS_DENIED
+period                      one-minute base table: refused: ACCESS_DENIED
+period                        one-hour base table: refused: ACCESS_DENIED
+period                SETTINGS a wider raw window: refused: READONLY
+period     SETTINGS readonly 0 and a wider window: refused: READONLY
+period                     SETTINGS in a subquery: answered, 12 lines
+period      SETTINGS another tenant in a subquery: answered, 12 lines
+period                       URL wider raw window: refused: READONLY
+period                  URL wider one-hour window: refused: READONLY
+period          URL readonly 0 and a wider window: refused: READONLY
+period                     SET a wider raw window: refused: READONLY
+period                  SETTINGS session_timezone: refused: READONLY
+period                       URL session_timezone: refused: READONLY
+period                   SETTINGS use_query_cache: refused: READONLY
+period                    ALTER USER CURRENT_USER: refused: ACCESS_DENIED
+period                 ALTER USER by its own name: refused: ACCESS_DENIED
+period                    CREATE SETTINGS PROFILE: refused: ACCESS_DENIED
+period                     ALTER SETTINGS PROFILE: refused: ACCESS_DENIED
+period                           ALTER ROW POLICY: refused: ACCESS_DENIED
+period              EXECUTE AS the views' definer: refused: ACCESS_DENIED
+period             URL role of the ingest service: refused: SET_NON_GRANTED_ROLE
+period        throwIf on hidden raw rows in WHERE: answered, 1 lines
+period     throwIf on hidden raw rows in PREWHERE: refused: ILLEGAL_PREWHERE
+period       throwIf on hidden raw rows in SELECT: answered, 12 lines
+period         throwIf on hidden one-minute cells: answered, 1 lines
+period           throwIf on hidden one-hour cells: answered, 1 lines
+period          failing cast of hidden raw values: answered, 1 lines
+period            failing cast of one-hour values: refused: CANNOT_PARSE_TEXT
+period                session: SET a wider window: refused: READONLY
+period                  session: SELECT after SET: answered, 12 lines
+period        session: SELECT after SET ROLE NONE: refused: ACCESS_DENIED
+period: edge readings inside the raw window, later query: 30 -> 29
+period: plan change after widening every window: windows 365	12	12
+period: plan change after narrowing the one-hour window to a month: windows 7	3	1
+period: plan change after restoring the service's windows: windows 7	3	3
+period      no windows, trustiot.tenant_telemetry: refused: UNKNOWN_SETTING
+period   no windows, trustiot.tenant_telemetry_1m: refused: UNKNOWN_SETTING
+period   no windows, trustiot.tenant_telemetry_1h: refused: UNKNOWN_SETTING
+period                              raw window -1: refused: CANNOT_CONVERT_TYPE
+period                           raw window 70000: refused: CANNOT_CONVERT_TYPE
+period                           raw window 'abc': refused: CANNOT_PARSE_TEXT
+test the_database_keeps_tenant_queries_inside_the_queryable_period ... ok
+
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 17.84s

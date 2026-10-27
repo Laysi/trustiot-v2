@@ -453,7 +453,9 @@ const DATABASE_SETUP = "crates/service-kit/sql/database.sql";
  * creates each service's roles and schema, applies the service's migrations, and generates the
  * password of each service login role into a Secret, which here is the stand-in API of
  * lib/secret-api.ts. The password of every login role the chart binds (lib/product-logins.ts) is
- * read back and kept in the state file with the other service logins, so `env` can print it.
+ * read back and kept in the state file with the other service logins, so `env` can print it. The
+ * same run applies the ingest service's ClickHouse DDL (`trustiot.telemetry`, `stream_commits`,
+ * the row policies and the tenant view) to the local ClickHouse, so `lab-dataset load` has tables.
  */
 async function migrateDatabase(ctx: Context, state: State, migrationPassword: string): Promise<void> {
   const binary = await cargoBuild(ctx, { package: "migrate", bin: "migrate" });
@@ -467,6 +469,11 @@ async function migrateDatabase(ctx: Context, state: State, migrationPassword: st
       caFile: readCaPath(ctx),
     },
     login: { user: MIGRATION_ROLE, password: migrationPassword },
+    clickhouse: {
+      port: state.ports.clickhouse,
+      user: state.credentials.clickhouse.user,
+      password: state.credentials.clickhouse.password,
+    },
     stateDir: ctx.dir,
     logins,
   });

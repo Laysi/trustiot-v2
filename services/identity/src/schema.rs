@@ -49,6 +49,14 @@ pub const SCHEMA: Schema = Schema {
             name: "0006_platform_admin_bootstrap.sql",
             sql: include_str!("../migrations/postgres/0006_platform_admin_bootstrap.sql"),
         },
+        // Preferences and switching a session's tenant (Laysi/trustiot-v2#497). It was
+        // 0005_preferences_and_tenant_switch.sql only on its unmerged pull request branch; main's
+        // 0005 and 0006 merged first, so this file took the next number. No release or deployed
+        // database ever had the old name: only main's files ship.
+        Migration {
+            name: "0007_preferences_and_tenant_switch.sql",
+            sql: include_str!("../migrations/postgres/0007_preferences_and_tenant_switch.sql"),
+        },
     ],
 };
 
