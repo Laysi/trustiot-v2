@@ -158,8 +158,8 @@ jobs:
         if: ${{ !cancelled() && steps.toolchain.outcome == 'success' }}
         run: |
           # The gateway runs on aarch64: crates/protocol and every workspace member under
-          # edge/ must build for it (docs/architecture/repository-layout.md). Libraries build
-          # without a cross linker; the first gateway binary adds one.
+          # edge/ must build for it (docs/architecture/repository-layout.md), the agent's
+          # executable included (glibc, docs/architecture/ci-release.md).
           packages=()
           for manifest in crates/protocol/Cargo.toml edge/*/Cargo.toml; do
             if [[ -f "$manifest" ]]; then
@@ -172,13 +172,20 @@ jobs:
             exit 0
           fi
           # On the arm64 runner the host is the gateway target: build natively, which reuses
-          # the build cache of the steps above. On an x64 host, cross-compile.
+          # the build cache of the steps above. On an x64 host, cross-compile: ring builds C
+          # for the target and the executable links against the target's glibc, so the pinned
+          # Zig is the C compiler and linker (cargo-zigbuild, as the release build uses it).
           host="$(rustc -vV | sed -n 's/^host: //p')"
           if [[ "$host" == aarch64-unknown-linux-gnu ]]; then
             cargo build --locked "${packages[@]}"
           else
+            proto install zig
+            proto install cargo-zigbuild
             rustup target add aarch64-unknown-linux-gnu
-            cargo build --locked --target aarch64-unknown-linux-gnu "${packages[@]}"
+            # --reporter text: proto prints NDJSON when it thinks an agent runs it.
+            zigbuild="$(proto bin cargo-zigbuild --reporter text | tail -n 1)"
+            CARGO_ZIGBUILD_ZIG_PATH="$(proto bin zig --reporter text | tail -n 1)" PATH="$(dirname "$zigbuild"):$PATH" \
+              cargo zigbuild --locked --target aarch64-unknown-linux-gnu "${packages[@]}"
           fi
 
   cargo-deny:

@@ -30,7 +30,8 @@ bytes = "1.12.1"
 cbor4ii = "1.2.3"
 chrono = { version = "0.4.45", default-features = false }
 ed25519-dalek = { version = "3.0.0", default-features = false }
-# `stream::unfold` for relaying a provider stream as a response body (services/ai-gateway).
+# `stream::unfold` for relaying a provider stream as a response body (services/ai-gateway); the
+# WebSocket's Stream and Sink, adapted for the inner TLS (edge/agent).
 futures-util = { version = "0.3.34", default-features = false }
 getrandom = "0.4.3"
 hmac = "0.13.0"
@@ -61,6 +62,7 @@ proc-macro2 = { version = "1.0.107", default-features = false }
 prost = { version = "0.14.4", default-features = false }
 rcgen = { version = "0.14.10", default-features = false }
 reqwest = { version = "0.13.5", default-features = false }
+ring = { version = "0.17.14", default-features = false }
 rustls = { version = "0.23.45", default-features = false }
 # The system's root certificates, trusted by the AI provider clients (crates/ai-clients).
 rustls-native-certs = "0.8.4"
@@ -96,7 +98,8 @@ utoipa = "6.0.0"
 uuid = "1.28.0"
 # The empty stand-in below, for tests that check it is the one in use.
 webpki-roots = { path = "crates/webpki-roots-empty" }
-# Parses and verifies CSRs and certificates for the certs service (services/certs).
+# Parses and verifies CSRs and certificates for the certs service (services/certs); reads the
+# gateway ID, public key and expiry from the gateway's client certificate (edge/agent).
 x509-parser = { version = "0.18.1", default-features = false }
 zeroize = "1.9.1"
 
