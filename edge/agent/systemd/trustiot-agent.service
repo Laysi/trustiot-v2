@@ -1,0 +1,70 @@
+# The TrustIoT gateway agent (edge/agent/README.md, section "systemd").
+# Installed as /usr/lib/systemd/system/trustiot-agent.service, with the executable at
+# /usr/bin/trustiot-agent and the account from trustiot-agent.sysusers
+# (/usr/lib/sysusers.d/trustiot-agent.conf). The TPM's /dev/tpmrm0 belongs to the group tss
+# (Debian's tpm-udev), which must exist before the service starts.
+
+[Unit]
+Description=TrustIoT gateway agent
+Documentation=https://github.com/Laysi/trustiot-v2/tree/main/edge/agent
+# Not network-online.target: a site without network must not delay boot, and the agent retries
+# on its own (it reports READY=1 before its first connection).
+After=network.target
+# An unattended gateway never gives up restarting.
+StartLimitIntervalSec=0
+
+[Service]
+Type=notify
+NotifyAccess=main
+ExecStart=/usr/bin/trustiot-agent --config /etc/trustiot/agent.toml
+Restart=always
+RestartSec=2s
+RestartSteps=5
+RestartMaxDelaySec=1min
+# The agent sends WATCHDOG=1 every 15 s while its connection thread runs.
+WatchdogSec=30s
+TimeoutStartSec=30s
+# The agent stops within 10 s: offline/shutdown, at most 5 s for its PUBACK, then DISCONNECT.
+TimeoutStopSec=20s
+
+User=trustiot-agent
+Group=trustiot-agent
+SupplementaryGroups=tss
+# /etc/trustiot stays root's (read-only here); /var/lib/trustiot-agent is the agent's.
+ConfigurationDirectory=trustiot
+StateDirectory=trustiot-agent
+StateDirectoryMode=0700
+UMask=0077
+
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateIPC=yes
+RemoveIPC=yes
+# Not PrivateDevices=, which would hide the TPM; only the TPM resource manager is allowed.
+DevicePolicy=closed
+DeviceAllow=/dev/tpmrm0 rw
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+# Not ProcSubset=pid: the heartbeat reads /proc/meminfo and /proc/uptime.
+ProtectProc=invisible
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+SystemCallErrorNumber=EPERM
+
+[Install]
+WantedBy=multi-user.target
