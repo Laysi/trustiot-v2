@@ -1,0 +1,23 @@
+diff --git a/crates/protocol/src/health.rs b/crates/protocol/src/health.rs
+index e2cc52c..f0037f6 100644
+--- a/crates/protocol/src/health.rs
++++ b/crates/protocol/src/health.rs
+@@ -152,7 +152,8 @@ pub struct Heartbeat {
+     pub sent_at: UnixMillis,
+     /// Seconds until the next heartbeat; the cloud considers the gateway gone after a few
+     /// missed intervals.
+-    pub interval_s: u32,
++    #[serde(rename = "interval_s")]
++    pub interval_secs: u32,
+     /// The agent's release.
+     pub agent_version: AgentVersion,
+     /// The configuration version in use; `None` before the first one is applied.
+@@ -342,7 +343,7 @@ impl Message for Heartbeat {
+ 
+     fn validate(&self) -> Result<(), Invalid> {
+         let mut issues = Issues::default();
+-        if self.interval_s == 0 {
++        if self.interval_secs == 0 {
+             issues.push(IssueCode::OutOfRange, "interval_s", "must be at least 1");
+         }
+         let cpu = self.system.cpu_percent;
