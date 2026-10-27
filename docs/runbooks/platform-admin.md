@@ -35,7 +35,7 @@
    kubectl -n <namespace> attach -i job/platform-admin-bootstrap -c bootstrap-platform-admin
    ```
 
-   沒有提示字元，日誌的第一行 `reading the first platform administrator's email address from stdin` 可能已經寫完。只讀第一行，Enter 之後指令就執行，結束時 attach 也結束；這段時間 attach 顯示容器的日誌（JSON 行）。不要把地址先寫進檔案再導入：檔案留存要靠人記得刪。
+   沒有提示字元，日誌的第一行 `reading the first platform administrator's email address from stdin` 可能已經寫完。kubectl 會先印出兩行提示。`If you don't see a command prompt, try pressing enter.` 不要照做：先按 Enter 會送出一個空行，指令只讀第一行，於是以結束碼 2 結束（`no email address on stdin`），要刪掉 Job 從步驟 1 重來；直接輸入地址再按 Enter。另一行 `All commands and output from this session will be recorded in container logs` 是 kubectl 的通用警告，這裡不適用：容器沒有 TTY（`tty: false`），輸入的內容不會回顯到容器的輸出，指令也不記地址，所以地址不會進容器的日誌。只讀第一行，Enter 之後指令就執行，結束時 attach 也結束；這段時間 attach 顯示容器的日誌（JSON 行）。不要把地址先寫進檔案再導入：檔案留存要靠人記得刪。
 
 3. 看結束碼與日誌：
 
