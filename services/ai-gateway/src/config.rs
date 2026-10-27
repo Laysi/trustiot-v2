@@ -7,6 +7,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
+use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -55,10 +56,38 @@ pub struct Config {
     /// The largest request body accepted, in bytes; a larger one is refused with 413.
     #[serde(default = "default_max_request_bytes")]
     pub max_request_bytes: usize,
+    /// Where the admin API listens.
+    #[serde(default)]
+    pub admin: Admin,
 }
 
 fn default_max_request_bytes() -> usize {
     DEFAULT_MAX_REQUEST_BYTES
+}
+
+/// The admin API's port (Laysi/trustiot-v2#606; README.md, 「管理 API」 and 「驗證方式」). It is
+/// not the API port, so the mesh can let the identity service, and nobody else, reach it: the
+/// gateway authenticates no caller itself (decisions 27 and 28).
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Admin {
+    /// `AI_GATEWAY__ADMIN__LISTEN_ADDR`: default `127.0.0.1:8082`, which no other pod can reach.
+    /// The chart sets `0.0.0.0:8082` only together with the Service and the mesh policies that
+    /// admit the identity service alone to this port (Laysi/trustiot-v2#607): until then the
+    /// AI gateway's AuthorizationPolicy admits its callers on every port, and a wildcard default
+    /// would open the admin API to them. Startup fails when it is taken.
+    pub listen_addr: SocketAddr,
+}
+
+/// The admin API's port.
+pub const DEFAULT_ADMIN_PORT: u16 = 8082;
+
+impl Default for Admin {
+    fn default() -> Self {
+        Self {
+            listen_addr: SocketAddr::from(([127, 0, 0, 1], DEFAULT_ADMIN_PORT)),
+        }
+    }
 }
 
 /// The platform settings the gateway reads, under its own prefix: `AI_GATEWAY_POSTGRES_*` (the
@@ -708,6 +737,23 @@ mod tests {
         assert_eq!(anthropic.protocol, Protocol::AnthropicMessages);
         assert_eq!(anthropic.base_url(), "https://api.anthropic.com");
         assert_eq!(anthropic.key_env, "ANTHROPIC_API_KEY");
+        // The admin port listens on loopback until the chart opens it (Laysi/trustiot-v2#607).
+        assert_eq!(
+            config.admin.listen_addr,
+            "127.0.0.1:8082".parse::<SocketAddr>().unwrap()
+        );
+        let config = load(&with_provider(&[
+            (
+                "AI_GATEWAY__ROLES__MAIN__MODELS",
+                "anthropic/claude-opus-5-5",
+            ),
+            ("AI_GATEWAY__ADMIN__LISTEN_ADDR", "0.0.0.0:9082"),
+        ]))
+        .unwrap();
+        assert_eq!(
+            config.admin.listen_addr,
+            "0.0.0.0:9082".parse::<SocketAddr>().unwrap()
+        );
     }
 
     #[test]
