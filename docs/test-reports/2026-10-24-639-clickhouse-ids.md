@@ -2,7 +2,7 @@
 
 對應 Laysi/trustiot-v2#639。
 
-這份報告記錄 2026-10-24 在建置主機上，以真的 ClickHouse 容器執行 `services/ingest/migrations/clickhouse/0010_gateway_stream_ids.sql` 與相關測試的結果。
+這份報告記錄 2026-10-24 在建置主機上，以真的 ClickHouse 容器執行 `services/ingest/migrations/clickhouse/0010_gateway_stream_ids.sql` 與相關測試的結果。這個檔案在 2026-10-27 合併 main 時改名為 `0012_gateway_stream_ids.sql`，合併後的結果見 `2026-10-27-639-merge-main.md`。
 
 ## 環境
 

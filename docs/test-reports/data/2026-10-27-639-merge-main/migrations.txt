@@ -1,0 +1,199 @@
+
+running 7 tests
+......schema after 0012_gateway_stream_ids.sql, the same on both servers:
+batch_commits	ReplacingMergeTree	CREATE TABLE trustiot.batch_commits (`tenant_id` UUID COMMENT \'Tenant that owns the stream\', `gateway_id` UUID COMMENT \'Gateway that sent the batch\', `stream_id` UUID COMMENT \'Gateway batch stream\', `seq` UInt64 COMMENT \'Batch sequence number within the stream\', `row_count` UInt64 COMMENT \'Number of telemetry rows written for the batch\', `committed_at` DateTime64(3, \'UTC\') COMMENT \'When every row of the batch was on disk, UTC, milliseconds\' CODEC(DoubleDelta, ZSTD(1)), CONSTRAINT tenant_id_set CHECK tenant_id != toUUID(\'00000000-0000-0000-0000-000000000000\')) ENGINE = ReplacingMergeTree PARTITION BY toYYYYMM(committed_at) ORDER BY (stream_id, seq) TTL toDateTime(committed_at) + toIntervalDay(400) SETTINGS fsync_after_insert = 1, fsync_part_directory = 1, index_granularity = 8192 COMMENT \'One record per fully written gateway batch, source of each stream\\\'s high-water mark\'	One record per fully written gateway batch, source of each stream\'s high-water mark
+stream_commits	ReplacingMergeTree	CREATE TABLE trustiot.stream_commits (`tenant_id` UUID COMMENT \'Tenant the gateway was bound to when the batch was written, from the ingest service\\\'s binding table\', `binding_id` UUID COMMENT \'Gateway binding in force when the batch was written, from the same binding table, for tracing\', `gateway_id` String COMMENT \'Gateway that sent the batch: protocol GatewayId, the gateway segment of the MQTT topic\', `stream_id` String COMMENT \'Gateway batch stream: protocol StreamId, unique only within its gateway\', `seq` UInt64 COMMENT \'Batch sequence number within the stream, from 1\', `row_count` UInt64 COMMENT \'Number of telemetry rows written for the batch\', `committed_at` DateTime64(3, \'UTC\') COMMENT \'When every row of the batch was on disk, UTC, milliseconds\' CODEC(DoubleDelta, ZSTD(1)), CONSTRAINT tenant_id_set CHECK tenant_id != toUUID(\'00000000-0000-0000-0000-000000000000\'), CONSTRAINT binding_id_set CHECK binding_id != toUUID(\'00000000-0000-0000-0000-000000000000\'), CONSTRAINT gateway_id_valid CHECK match(gateway_id, \'^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$\'), CONSTRAINT stream_id_valid CHECK match(stream_id, \'^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$\'), CONSTRAINT seq_positive CHECK seq >= 1) ENGINE = ReplacingMergeTree PARTITION BY toYYYYMM(committed_at) ORDER BY (gateway_id, stream_id, seq) TTL toDateTime(committed_at) + toIntervalDay(3650) SETTINGS fsync_after_insert = 1, fsync_part_directory = 1, index_granularity = 8192 COMMENT \'One record per fully written gateway batch, keyed by gateway and stream, source of each stream\\\'s high-water mark\'	One record per fully written gateway batch, keyed by gateway and stream, source of each stream\'s high-water mark
+telemetry	MergeTree	CREATE TABLE trustiot.telemetry (`tenant_id` UUID COMMENT \'Tenant that owns the gateway, taken from the gateway connection certificate, never from the payload\', `gateway_id` String COMMENT \'Gateway that sent the batch: protocol GatewayId, the gateway segment of the MQTT topic, never taken from the payload\', `stream_id` String COMMENT \'Gateway batch stream: protocol StreamId, chosen by the gateway, unique only within its gateway, so a batch is (gateway_id, stream_id, batch_seq)\', `batch_seq` UInt64 COMMENT \'Sequence number of the batch within its stream\', `device_id` UUID COMMENT \'Device the reading belongs to\', `point` LowCardinality(String) COMMENT \'Data point key within the device model (C1)\', `ts` DateTime64(3, \'UTC\') COMMENT \'Reading time from the gateway, UTC, milliseconds\' CODEC(DoubleDelta, ZSTD(1)), `received_at` DateTime64(3, \'UTC\') COMMENT \'Server receive time, UTC, milliseconds, drives partitioning and retention\' CODEC(DoubleDelta, ZSTD(1)), `value_type` Enum8(\'float\' = 1, \'int\' = 2, \'bool\' = 3, \'string\' = 4) COMMENT \'Which value column holds the reading\', `value_float` Float64 DEFAULT 0 CODEC(Gorilla(8), ZSTD(1)), `value_int` Int64 DEFAULT 0 CODEC(T64, ZSTD(1)), `value_bool` Bool DEFAULT false, `value_string` String DEFAULT \'\' CODEC(ZSTD(1)), CONSTRAINT tenant_id_set CHECK tenant_id != toUUID(\'00000000-0000-0000-0000-000000000000\'), CONSTRAINT point_length CHECK (length(point) >= 1) AND (length(point) <= 128), CONSTRAINT value_matches_type CHECK ((value_type = \'float\') OR (value_float = 0)) AND ((value_type = \'int\') OR (value_int = 0)) AND ((value_type = \'bool\') OR (value_bool = false)) AND ((value_type = \'string\') OR (value_string = \'\')), CONSTRAINT gateway_id_valid CHECK match(gateway_id, \'^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$\'), CONSTRAINT stream_id_valid CHECK match(stream_id, \'^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$\')) ENGINE = MergeTree PARTITION BY toYYYYMM(received_at) ORDER BY (tenant_id, device_id, point, ts) TTL toDateTime(received_at) + toIntervalDay(400) SETTINGS fsync_after_insert = 1, fsync_part_directory = 1, non_replicated_deduplication_window = 1000, index_granularity = 8192 COMMENT \'Tenant telemetry readings, tenant isolation by row policy (0004_access.sql)\'	Tenant telemetry readings, tenant isolation by row policy (0004_access.sql)
+telemetry_1h	AggregatingMergeTree	CREATE TABLE trustiot.telemetry_1h (`tenant_id` UUID COMMENT \'Tenant that owns the readings\', `device_id` UUID COMMENT \'Device the readings belong to\', `point` LowCardinality(String) COMMENT \'Data point key within the device model (C1)\', `bucket` DateTime(\'UTC\') COMMENT \'Reading time ts truncated to the UTC hour\', `gateway_id` String COMMENT \'Gateway that sent the readings\', `stream_id` String COMMENT \'Gateway batch stream the readings came in\', `received_day` Date COMMENT \'Server receive day (UTC), drives partitioning and retention\', `readings` SimpleAggregateFunction(sum, Int64) COMMENT \'Readings in the cell\', `numeric_readings` SimpleAggregateFunction(sum, Int64) COMMENT \'Readings with a numeric value: float, int, bool as 0 or 1\', `value_sum` SimpleAggregateFunction(sum, Float64) COMMENT \'Sum of the numeric values\', `value_min` SimpleAggregateFunction(min, Nullable(Float64)) COMMENT \'Smallest numeric value, NULL without one\', `value_max` SimpleAggregateFunction(max, Nullable(Float64)) COMMENT \'Largest numeric value, NULL without one\', `first` AggregateFunction(argMin, Tuple(ts DateTime64(3, \'UTC\'), value_type Enum8(\'float\' = 1, \'int\' = 2, \'bool\' = 3, \'string\' = 4), value_float Float64, value_int Int64, value_bool Bool, value_string String), DateTime64(3, \'UTC\')) COMMENT \'Earliest reading by ts with its typed value\', `last` AggregateFunction(argMax, Tuple(ts DateTime64(3, \'UTC\'), value_type Enum8(\'float\' = 1, \'int\' = 2, \'bool\' = 3, \'string\' = 4), value_float Float64, value_int Int64, value_bool Bool, value_string String), DateTime64(3, \'UTC\')) COMMENT \'Latest reading by ts with its typed value\') ENGINE = AggregatingMergeTree PARTITION BY toYYYYMM(received_day) ORDER BY (tenant_id, device_id, point, bucket, gateway_id, stream_id, received_day) TTL (received_day + toIntervalMonth(48)) + toIntervalDay(1) SETTINGS fsync_after_insert = 1, fsync_part_directory = 1, non_replicated_deduplication_window = 1000, index_granularity = 8192 COMMENT \'One-hour aggregates of trustiot.telemetry, tenant isolation by row policy (0010_telemetry_rollups.sql)\'	One-hour aggregates of trustiot.telemetry, tenant isolation by row policy (0010_telemetry_rollups.sql)
+telemetry_1h_backfill	View	CREATE VIEW trustiot.telemetry_1h_backfill DEFINER = trustiot_rollup_definer SQL SECURITY DEFINER AS SELECT tenant_id, device_id, point, bucket, gateway_id, stream_id, received_day, r.raw_readings - a.agg_readings AS readings, r.raw_numeric_readings - a.agg_numeric_readings AS numeric_readings, r.raw_value_sum - a.agg_value_sum AS value_sum, r.raw_value_min AS value_min, r.raw_value_max AS value_max, r.raw_first AS first, r.raw_last AS last, a.agg_present AS aggregated FROM (SELECT tenant_id, device_id, point, bucket, gateway_id, stream_id, received_day, toInt64(count()) AS raw_readings, toInt64(count(value_number)) AS raw_numeric_readings, sum(ifNull(value_number, 0)) AS raw_value_sum, min(value_number) AS raw_value_min, max(value_number) AS raw_value_max, argMinState(reading, ts) AS raw_first, argMaxState(reading, ts) AS raw_last FROM (SELECT tenant_id, device_id, point, toStartOfHour(ts) AS bucket, toString(gateway_id) AS gateway_id, toString(stream_id) AS stream_id, toDate(received_at) AS received_day, ts, multiIf(value_type = \'float\', value_float, value_type = \'int\', toFloat64(value_int), value_type = \'bool\', toFloat64(value_bool), NULL) AS value_number, CAST((ts, value_type, value_float, value_int, value_bool, value_string), \'Tuple(ts DateTime64(3, \\\'UTC\\\'), value_type Enum8(\\\'float\\\' = 1, \\\'int\\\' = 2, \\\'bool\\\' = 3, \\\'string\\\' = 4), value_float Float64, value_int Int64, value_bool Bool, value_string String)\') AS reading FROM trustiot.telemetry WHERE (toDate(received_at) >= greatest({first_day:Date}, (toDate(now(\'UTC\')) - least({raw_retention_days:UInt32}, 3650)) + 2)) AND (toDate(received_at) <= {last_day:Date})) GROUP BY tenant_id, device_id, point, bucket, gateway_id, stream_id, received_day) AS r FULL OUTER JOIN (SELECT tenant_id, device_id, point, bucket, gateway_id, stream_id, received_day, sum(readings) AS agg_readings, sum(numeric_readings) AS agg_numeric_readings, sum(value_sum) AS agg_value_sum, toUInt8(1) AS agg_present FROM trustiot.telemetry_1h WHERE (received_day >= greatest({first_day:Date}, (toDate(now(\'UTC\')) - least({raw_retention_days:UInt32}, 3650)) + 2)) AND (received_day <= {last_day:Date}) GROUP BY tenant_id, device_id, point, bucket, gateway_id, stream_id, received_day) AS a USING (tenant_id, device_id, point, bucket, gateway_id, stream_id, received_day) WHERE (r.raw_readings != a.agg_readings) OR (r.raw_numeric_readings != a.agg_numeric_readings) OR (abs(r.raw_value_sum - a.agg_value_sum) > (1e-9 * greatest(abs(r.raw_value_sum), abs(a.agg_value_sum), 1))) SETTINGS join_use_nulls = 0	
+telemetry_1h_mv	MaterializedView	CREATE MATERIALIZED VIEW trustiot.telemetry_1h_mv TO trustiot.telemetry_1h (`tenant_id` UUID, `device_id` UUID, `point` LowCardinality(String), `bucket` DateTime(\'UTC\'), `gateway_id` String, `stream_id` String, `received_day` Date, `readings` Int64, `numeric_readings` Int64, `value_sum` Float64, `value_min` Nullable(Float64), `value_max` Nullable(Float64), `first` AggregateFunction(argMin, Tuple(ts DateTime64(3, \'UTC\'), value_type Enum8(\'float\' = 1, \'int\' = 2, \'bool\' = 3, \'string\' = 4), value_float Float64, value_int Int64, value_bool Bool, value_string String), DateTime64(3, \'UTC\')), `last` AggregateFunction(argMax, Tuple(ts DateTime64(3, \'UTC\'), value_type Enum8(\'float\' = 1, \'int\' = 2, \'bool\' = 3, \'string\' = 4), value_float Float64, value_int Int64, value_bool Bool, value_string String), DateTime64(3, \'UTC\'))) DEFINER = trustiot_rollup_definer SQL SECURITY DEFINER AS SELECT tenant_id, device_id, point, bucket, gateway_id, stream_id, received_day, toInt64(count()) AS readings, toInt64(count(value_number)) AS numeric_readings, sum(ifNull(value_number, 0)) AS value_sum, min(value_number) AS value_min, max(value_number) AS value_max, argMinState(reading, ts) AS first, argMaxState(reading, ts) AS last FROM (SELECT tenant_id, device_id, point, toStartOfHour(ts) AS bucket, toString(gateway_id) AS gateway_id, toString(stream_id) AS stream_id, toDate(received_at) AS received_day, ts, multiIf(value_type = \'float\', value_float, value_type = \'int\', toFloat64(value_int), value_type = \'bool\', toFloat64(value_bool), NULL) AS value_number, CAST((ts, value_type, value_float, value_int, value_bool, value_string), \'Tuple(ts DateTime64(3, \\\'UTC\\\'), value_type Enum8(\\\'float\\\' = 1, \\\'int\\\' = 2, \\\'bool\\\' = 3, \\\'string\\\' = 4), value_float Float64, value_int Int64, value_bool Bool, value_string String)\') AS reading FROM trustiot.telemetry) GROUP BY tenant_id, device_id, point, bucket, gateway_id, stream_id, received_day	
+telemetry_1m	AggregatingMergeTree	CREATE TABLE trustiot.telemetry_1m (`tenant_id` UUID COMMENT \'Tenant that owns the readings\', `device_id` UUID COMMENT \'Device the readings belong to\', `point` LowCardinality(String) COMMENT \'Data point key within the device model (C1)\', `bucket` DateTime(\'UTC\') COMMENT \'Reading time ts truncated to the UTC minute\', `gateway_id` String COMMENT \'Gateway that sent the readings\', `stream_id` String COMMENT \'Gateway batch stream the readings came in\', `received_day` Date COMMENT \'Server receive day (UTC), drives partitioning and retention\', `readings` SimpleAggregateFunction(sum, Int64) COMMENT \'Readings in the cell\', `numeric_readings` SimpleAggregateFunction(sum, Int64) COMMENT \'Readings with a numeric value: float, int, bool as 0 or 1\', `value_sum` SimpleAggregateFunction(sum, Float64) COMMENT \'Sum of the numeric values\', `value_min` SimpleAggregateFunction(min, Nullable(Float64)) COMMENT \'Smallest numeric value, NULL without one\', `value_max` SimpleAggregateFunction(max, Nullable(Float64)) COMMENT \'Largest numeric value, NULL without one\', `first` AggregateFunction(argMin, Tuple(ts DateTime64(3, \'UTC\'), value_type Enum8(\'float\' = 1, \'int\' = 2, \'bool\' = 3, \'string\' = 4), value_float Float64, value_int Int64, value_bool Bool, value_string String), DateTime64(3, \'UTC\')) COMMENT \'Earliest reading by ts with its typed value\', `last` AggregateFunction(argMax, Tuple(ts DateTime64(3, \'UTC\'), value_type Enum8(\'float\' = 1, \'int\' = 2, \'bool\' = 3, \'string\' = 4), value_float Float64, value_int Int64, value_bool Bool, value_string String), DateTime64(3, \'UTC\')) COMMENT \'Latest reading by ts with its typed value\') ENGINE = AggregatingMergeTree PARTITION BY toYYYYMM(received_day) ORDER BY (tenant_id, device_id, point, bucket, gateway_id, stream_id, received_day) TTL (received_day + toIntervalMonth(13)) + toIntervalDay(1) SETTINGS fsync_after_insert = 1, fsync_part_directory = 1, non_replicated_deduplication_window = 1000, index_granularity = 8192 COMMENT \'One-minute aggregates of trustiot.telemetry, tenant isolation by row policy (0010_telemetry_rollups.sql)\'	One-minute aggregates of trustiot.telemetry, tenant isolation by row policy (0010_telemetry_rollups.sql)
+telemetry_1m_backfill	View	CREATE VIEW trustiot.telemetry_1m_backfill DEFINER = trustiot_rollup_definer SQL SECURITY DEFINER AS SELECT tenant_id, device_id, point, bucket, gateway_id, stream_id, received_day, r.raw_readings - a.agg_readings AS readings, r.raw_numeric_readings - a.agg_numeric_readings AS numeric_readings, r.raw_value_sum - a.agg_value_sum AS value_sum, r.raw_value_min AS value_min, r.raw_value_max AS value_max, r.raw_first AS first, r.raw_last AS last, a.agg_present AS aggregated FROM (SELECT tenant_id, device_id, point, bucket, gateway_id, stream_id, received_day, toInt64(count()) AS raw_readings, toInt64(count(value_number)) AS raw_numeric_readings, sum(ifNull(value_number, 0)) AS raw_value_sum, min(value_number) AS raw_value_min, max(value_number) AS raw_value_max, argMinState(reading, ts) AS raw_first, argMaxState(reading, ts) AS raw_last FROM (SELECT tenant_id, device_id, point, toStartOfMinute(ts) AS bucket, toString(gateway_id) AS gateway_id, toString(stream_id) AS stream_id, toDate(received_at) AS received_day, ts, multiIf(value_type = \'float\', value_float, value_type = \'int\', toFloat64(value_int), value_type = \'bool\', toFloat64(value_bool), NULL) AS value_number, CAST((ts, value_type, value_float, value_int, value_bool, value_string), \'Tuple(ts DateTime64(3, \\\'UTC\\\'), value_type Enum8(\\\'float\\\' = 1, \\\'int\\\' = 2, \\\'bool\\\' = 3, \\\'string\\\' = 4), value_float Float64, value_int Int64, value_bool Bool, value_string String)\') AS reading FROM trustiot.telemetry WHERE (toDate(received_at) >= greatest({first_day:Date}, (toDate(now(\'UTC\')) - least({raw_retention_days:UInt32}, 3650)) + 2)) AND (toDate(received_at) <= {last_day:Date})) GROUP BY tenant_id, device_id, point, bucket, gateway_id, stream_id, received_day) AS r FULL OUTER JOIN (SELECT tenant_id, device_id, point, bucket, gateway_id, stream_id, received_day, sum(readings) AS agg_readings, sum(numeric_readings) AS agg_numeric_readings, sum(value_sum) AS agg_value_sum, toUInt8(1) AS agg_present FROM trustiot.telemetry_1m WHERE (received_day >= greatest({first_day:Date}, (toDate(now(\'UTC\')) - least({raw_retention_days:UInt32}, 3650)) + 2)) AND (received_day <= {last_day:Date}) GROUP BY tenant_id, device_id, point, bucket, gateway_id, stream_id, received_day) AS a USING (tenant_id, device_id, point, bucket, gateway_id, stream_id, received_day) WHERE (r.raw_readings != a.agg_readings) OR (r.raw_numeric_readings != a.agg_numeric_readings) OR (abs(r.raw_value_sum - a.agg_value_sum) > (1e-9 * greatest(abs(r.raw_value_sum), abs(a.agg_value_sum), 1))) SETTINGS join_use_nulls = 0	
+telemetry_1m_mv	MaterializedView	CREATE MATERIALIZED VIEW trustiot.telemetry_1m_mv TO trustiot.telemetry_1m (`tenant_id` UUID, `device_id` UUID, `point` LowCardinality(String), `bucket` DateTime(\'UTC\'), `gateway_id` String, `stream_id` String, `received_day` Date, `readings` Int64, `numeric_readings` Int64, `value_sum` Float64, `value_min` Nullable(Float64), `value_max` Nullable(Float64), `first` AggregateFunction(argMin, Tuple(ts DateTime64(3, \'UTC\'), value_type Enum8(\'float\' = 1, \'int\' = 2, \'bool\' = 3, \'string\' = 4), value_float Float64, value_int Int64, value_bool Bool, value_string String), DateTime64(3, \'UTC\')), `last` AggregateFunction(argMax, Tuple(ts DateTime64(3, \'UTC\'), value_type Enum8(\'float\' = 1, \'int\' = 2, \'bool\' = 3, \'string\' = 4), value_float Float64, value_int Int64, value_bool Bool, value_string String), DateTime64(3, \'UTC\'))) DEFINER = trustiot_rollup_definer SQL SECURITY DEFINER AS SELECT tenant_id, device_id, point, bucket, gateway_id, stream_id, received_day, toInt64(count()) AS readings, toInt64(count(value_number)) AS numeric_readings, sum(ifNull(value_number, 0)) AS value_sum, min(value_number) AS value_min, max(value_number) AS value_max, argMinState(reading, ts) AS first, argMaxState(reading, ts) AS last FROM (SELECT tenant_id, device_id, point, toStartOfMinute(ts) AS bucket, toString(gateway_id) AS gateway_id, toString(stream_id) AS stream_id, toDate(received_at) AS received_day, ts, multiIf(value_type = \'float\', value_float, value_type = \'int\', toFloat64(value_int), value_type = \'bool\', toFloat64(value_bool), NULL) AS value_number, CAST((ts, value_type, value_float, value_int, value_bool, value_string), \'Tuple(ts DateTime64(3, \\\'UTC\\\'), value_type Enum8(\\\'float\\\' = 1, \\\'int\\\' = 2, \\\'bool\\\' = 3, \\\'string\\\' = 4), value_float Float64, value_int Int64, value_bool Bool, value_string String)\') AS reading FROM trustiot.telemetry) GROUP BY tenant_id, device_id, point, bucket, gateway_id, stream_id, received_day	
+tenant_telemetry	View	CREATE VIEW trustiot.tenant_telemetry (`tenant_id` UUID, `gateway_id` String, `device_id` UUID, `point` LowCardinality(String), `ts` DateTime64(3, \'UTC\'), `received_at` DateTime64(3, \'UTC\'), `value_type` Enum8(\'float\' = 1, \'int\' = 2, \'bool\' = 3, \'string\' = 4), `value_float` Float64, `value_int` Int64, `value_bool` Bool, `value_string` String) DEFINER = trustiot_tenant_view_definer SQL SECURITY DEFINER COMMENT \'Telemetry readings of the calling tenant account, the only relation tenant accounts may read (0005_tenant_view.sql)\' AS SELECT tenant_id, gateway_id, device_id, point, ts, received_at, value_type, value_float, value_int, value_bool, value_string FROM trustiot.telemetry	Telemetry readings of the calling tenant account, the only relation tenant accounts may read (0005_tenant_view.sql)
+tenant_telemetry_1h	View	CREATE VIEW trustiot.tenant_telemetry_1h (`tenant_id` UUID, `device_id` UUID, `point` LowCardinality(String), `bucket` DateTime(\'UTC\'), `readings` Int64, `numeric_readings` Int64, `value_sum` Float64, `value_min` Nullable(Float64), `value_max` Nullable(Float64), `first` Tuple(ts DateTime64(3, \'UTC\'), value_type Enum8(\'float\' = 1, \'int\' = 2, \'bool\' = 3, \'string\' = 4), value_float Float64, value_int Int64, value_bool Bool, value_string String), `last` Tuple(ts DateTime64(3, \'UTC\'), value_type Enum8(\'float\' = 1, \'int\' = 2, \'bool\' = 3, \'string\' = 4), value_float Float64, value_int Int64, value_bool Bool, value_string String)) DEFINER = trustiot_tenant_view_definer SQL SECURITY DEFINER COMMENT \'One-hour aggregates of the calling tenant account (0010_telemetry_rollups.sql)\' AS SELECT tenant_id, device_id, point, bucket, sum(readings) AS readings, sum(numeric_readings) AS numeric_readings, sum(value_sum) AS value_sum, min(value_min) AS value_min, max(value_max) AS value_max, argMinMerge(first) AS first, argMaxMerge(last) AS last FROM trustiot.telemetry_1h GROUP BY tenant_id, device_id, point, bucket HAVING readings > 0	One-hour aggregates of the calling tenant account (0010_telemetry_rollups.sql)
+tenant_telemetry_1m	View	CREATE VIEW trustiot.tenant_telemetry_1m (`tenant_id` UUID, `device_id` UUID, `point` LowCardinality(String), `bucket` DateTime(\'UTC\'), `readings` Int64, `numeric_readings` Int64, `value_sum` Float64, `value_min` Nullable(Float64), `value_max` Nullable(Float64), `first` Tuple(ts DateTime64(3, \'UTC\'), value_type Enum8(\'float\' = 1, \'int\' = 2, \'bool\' = 3, \'string\' = 4), value_float Float64, value_int Int64, value_bool Bool, value_string String), `last` Tuple(ts DateTime64(3, \'UTC\'), value_type Enum8(\'float\' = 1, \'int\' = 2, \'bool\' = 3, \'string\' = 4), value_float Float64, value_int Int64, value_bool Bool, value_string String)) DEFINER = trustiot_tenant_view_definer SQL SECURITY DEFINER COMMENT \'One-minute aggregates of the calling tenant account (0010_telemetry_rollups.sql)\' AS SELECT tenant_id, device_id, point, bucket, sum(readings) AS readings, sum(numeric_readings) AS numeric_readings, sum(value_sum) AS value_sum, min(value_min) AS value_min, max(value_max) AS value_max, argMinMerge(first) AS first, argMaxMerge(last) AS last FROM trustiot.telemetry_1m GROUP BY tenant_id, device_id, point, bucket HAVING readings > 0	One-minute aggregates of the calling tenant account (0010_telemetry_rollups.sql)
+
+batch_commits	1	tenant_id	UUID	Tenant that owns the stream
+batch_commits	2	gateway_id	UUID	Gateway that sent the batch
+batch_commits	3	stream_id	UUID	Gateway batch stream
+batch_commits	4	seq	UInt64	Batch sequence number within the stream
+batch_commits	5	row_count	UInt64	Number of telemetry rows written for the batch
+batch_commits	6	committed_at	DateTime64(3, \'UTC\')	When every row of the batch was on disk, UTC, milliseconds
+stream_commits	1	tenant_id	UUID	Tenant the gateway was bound to when the batch was written, from the ingest service\'s binding table
+stream_commits	2	binding_id	UUID	Gateway binding in force when the batch was written, from the same binding table, for tracing
+stream_commits	3	gateway_id	String	Gateway that sent the batch: protocol GatewayId, the gateway segment of the MQTT topic
+stream_commits	4	stream_id	String	Gateway batch stream: protocol StreamId, unique only within its gateway
+stream_commits	5	seq	UInt64	Batch sequence number within the stream, from 1
+stream_commits	6	row_count	UInt64	Number of telemetry rows written for the batch
+stream_commits	7	committed_at	DateTime64(3, \'UTC\')	When every row of the batch was on disk, UTC, milliseconds
+telemetry	1	tenant_id	UUID	Tenant that owns the gateway, taken from the gateway connection certificate, never from the payload
+telemetry	2	gateway_id	String	Gateway that sent the batch: protocol GatewayId, the gateway segment of the MQTT topic, never taken from the payload
+telemetry	3	stream_id	String	Gateway batch stream: protocol StreamId, chosen by the gateway, unique only within its gateway, so a batch is (gateway_id, stream_id, batch_seq)
+telemetry	4	batch_seq	UInt64	Sequence number of the batch within its stream
+telemetry	5	device_id	UUID	Device the reading belongs to
+telemetry	6	point	LowCardinality(String)	Data point key within the device model (C1)
+telemetry	7	ts	DateTime64(3, \'UTC\')	Reading time from the gateway, UTC, milliseconds
+telemetry	8	received_at	DateTime64(3, \'UTC\')	Server receive time, UTC, milliseconds, drives partitioning and retention
+telemetry	9	value_type	Enum8(\'float\' = 1, \'int\' = 2, \'bool\' = 3, \'string\' = 4)	Which value column holds the reading
+telemetry	10	value_float	Float64	
+telemetry	11	value_int	Int64	
+telemetry	12	value_bool	Bool	
+telemetry	13	value_string	String	
+telemetry_1h	1	tenant_id	UUID	Tenant that owns the readings
+telemetry_1h	2	device_id	UUID	Device the readings belong to
+telemetry_1h	3	point	LowCardinality(String)	Data point key within the device model (C1)
+telemetry_1h	4	bucket	DateTime(\'UTC\')	Reading time ts truncated to the UTC hour
+telemetry_1h	5	gateway_id	String	Gateway that sent the readings
+telemetry_1h	6	stream_id	String	Gateway batch stream the readings came in
+telemetry_1h	7	received_day	Date	Server receive day (UTC), drives partitioning and retention
+telemetry_1h	8	readings	SimpleAggregateFunction(sum, Int64)	Readings in the cell
+telemetry_1h	9	numeric_readings	SimpleAggregateFunction(sum, Int64)	Readings with a numeric value: float, int, bool as 0 or 1
+telemetry_1h	10	value_sum	SimpleAggregateFunction(sum, Float64)	Sum of the numeric values
+telemetry_1h	11	value_min	SimpleAggregateFunction(min, Nullable(Float64))	Smallest numeric value, NULL without one
+telemetry_1h	12	value_max	SimpleAggregateFunction(max, Nullable(Float64))	Largest numeric value, NULL without one
+telemetry_1h	13	first	AggregateFunction(argMin, Tuple(ts DateTime64(3, \'UTC\'), value_type Enum8(\'float\' = 1, \'int\' = 2, \'bool\' = 3, \'string\' = 4), value_float Float64, value_int Int64, value_bool Bool, value_string String), DateTime64(3, \'UTC\'))	Earliest reading by ts with its typed value
+telemetry_1h	14	last	AggregateFunction(argMax, Tuple(ts DateTime64(3, \'UTC\'), value_type Enum8(\'float\' = 1, \'int\' = 2, \'bool\' = 3, \'string\' = 4), value_float Float64, value_int Int64, value_bool Bool, value_string String), DateTime64(3, \'UTC\'))	Latest reading by ts with its typed value
+telemetry_1h_mv	1	tenant_id	UUID	
+telemetry_1h_mv	2	device_id	UUID	
+telemetry_1h_mv	3	point	LowCardinality(String)	
+telemetry_1h_mv	4	bucket	DateTime(\'UTC\')	
+telemetry_1h_mv	5	gateway_id	String	
+telemetry_1h_mv	6	stream_id	String	
+telemetry_1h_mv	7	received_day	Date	
+telemetry_1h_mv	8	readings	Int64	
+telemetry_1h_mv	9	numeric_readings	Int64	
+telemetry_1h_mv	10	value_sum	Float64	
+telemetry_1h_mv	11	value_min	Nullable(Float64)	
+telemetry_1h_mv	12	value_max	Nullable(Float64)	
+telemetry_1h_mv	13	first	AggregateFunction(argMin, Tuple(ts DateTime64(3, \'UTC\'), value_type Enum8(\'float\' = 1, \'int\' = 2, \'bool\' = 3, \'string\' = 4), value_float Float64, value_int Int64, value_bool Bool, value_string String), DateTime64(3, \'UTC\'))	
+telemetry_1h_mv	14	last	AggregateFunction(argMax, Tuple(ts DateTime64(3, \'UTC\'), value_type Enum8(\'float\' = 1, \'int\' = 2, \'bool\' = 3, \'string\' = 4), value_float Float64, value_int Int64, value_bool Bool, value_string String), DateTime64(3, \'UTC\'))	
+telemetry_1m	1	tenant_id	UUID	Tenant that owns the readings
+telemetry_1m	2	device_id	UUID	Device the readings belong to
+telemetry_1m	3	point	LowCardinality(String)	Data point key within the device model (C1)
+telemetry_1m	4	bucket	DateTime(\'UTC\')	Reading time ts truncated to the UTC minute
+telemetry_1m	5	gateway_id	String	Gateway that sent the readings
+telemetry_1m	6	stream_id	String	Gateway batch stream the readings came in
+telemetry_1m	7	received_day	Date	Server receive day (UTC), drives partitioning and retention
+telemetry_1m	8	readings	SimpleAggregateFunction(sum, Int64)	Readings in the cell
+telemetry_1m	9	numeric_readings	SimpleAggregateFunction(sum, Int64)	Readings with a numeric value: float, int, bool as 0 or 1
+telemetry_1m	10	value_sum	SimpleAggregateFunction(sum, Float64)	Sum of the numeric values
+telemetry_1m	11	value_min	SimpleAggregateFunction(min, Nullable(Float64))	Smallest numeric value, NULL without one
+telemetry_1m	12	value_max	SimpleAggregateFunction(max, Nullable(Float64))	Largest numeric value, NULL without one
+telemetry_1m	13	first	AggregateFunction(argMin, Tuple(ts DateTime64(3, \'UTC\'), value_type Enum8(\'float\' = 1, \'int\' = 2, \'bool\' = 3, \'string\' = 4), value_float Float64, value_int Int64, value_bool Bool, value_string String), DateTime64(3, \'UTC\'))	Earliest reading by ts with its typed value
+telemetry_1m	14	last	AggregateFunction(argMax, Tuple(ts DateTime64(3, \'UTC\'), value_type Enum8(\'float\' = 1, \'int\' = 2, \'bool\' = 3, \'string\' = 4), value_float Float64, value_int Int64, value_bool Bool, value_string String), DateTime64(3, \'UTC\'))	Latest reading by ts with its typed value
+telemetry_1m_mv	1	tenant_id	UUID	
+telemetry_1m_mv	2	device_id	UUID	
+telemetry_1m_mv	3	point	LowCardinality(String)	
+telemetry_1m_mv	4	bucket	DateTime(\'UTC\')	
+telemetry_1m_mv	5	gateway_id	String	
+telemetry_1m_mv	6	stream_id	String	
+telemetry_1m_mv	7	received_day	Date	
+telemetry_1m_mv	8	readings	Int64	
+telemetry_1m_mv	9	numeric_readings	Int64	
+telemetry_1m_mv	10	value_sum	Float64	
+telemetry_1m_mv	11	value_min	Nullable(Float64)	
+telemetry_1m_mv	12	value_max	Nullable(Float64)	
+telemetry_1m_mv	13	first	AggregateFunction(argMin, Tuple(ts DateTime64(3, \'UTC\'), value_type Enum8(\'float\' = 1, \'int\' = 2, \'bool\' = 3, \'string\' = 4), value_float Float64, value_int Int64, value_bool Bool, value_string String), DateTime64(3, \'UTC\'))	
+telemetry_1m_mv	14	last	AggregateFunction(argMax, Tuple(ts DateTime64(3, \'UTC\'), value_type Enum8(\'float\' = 1, \'int\' = 2, \'bool\' = 3, \'string\' = 4), value_float Float64, value_int Int64, value_bool Bool, value_string String), DateTime64(3, \'UTC\'))	
+tenant_telemetry	1	tenant_id	UUID	
+tenant_telemetry	2	gateway_id	String	
+tenant_telemetry	3	device_id	UUID	
+tenant_telemetry	4	point	LowCardinality(String)	
+tenant_telemetry	5	ts	DateTime64(3, \'UTC\')	
+tenant_telemetry	6	received_at	DateTime64(3, \'UTC\')	
+tenant_telemetry	7	value_type	Enum8(\'float\' = 1, \'int\' = 2, \'bool\' = 3, \'string\' = 4)	
+tenant_telemetry	8	value_float	Float64	
+tenant_telemetry	9	value_int	Int64	
+tenant_telemetry	10	value_bool	Bool	
+tenant_telemetry	11	value_string	String	
+tenant_telemetry_1h	1	tenant_id	UUID	
+tenant_telemetry_1h	2	device_id	UUID	
+tenant_telemetry_1h	3	point	LowCardinality(String)	
+tenant_telemetry_1h	4	bucket	DateTime(\'UTC\')	
+tenant_telemetry_1h	5	readings	Int64	
+tenant_telemetry_1h	6	numeric_readings	Int64	
+tenant_telemetry_1h	7	value_sum	Float64	
+tenant_telemetry_1h	8	value_min	Nullable(Float64)	
+tenant_telemetry_1h	9	value_max	Nullable(Float64)	
+tenant_telemetry_1h	10	first	Tuple(ts DateTime64(3, \'UTC\'), value_type Enum8(\'float\' = 1, \'int\' = 2, \'bool\' = 3, \'string\' = 4), value_float Float64, value_int Int64, value_bool Bool, value_string String)	
+tenant_telemetry_1h	11	last	Tuple(ts DateTime64(3, \'UTC\'), value_type Enum8(\'float\' = 1, \'int\' = 2, \'bool\' = 3, \'string\' = 4), value_float Float64, value_int Int64, value_bool Bool, value_string String)	
+tenant_telemetry_1m	1	tenant_id	UUID	
+tenant_telemetry_1m	2	device_id	UUID	
+tenant_telemetry_1m	3	point	LowCardinality(String)	
+tenant_telemetry_1m	4	bucket	DateTime(\'UTC\')	
+tenant_telemetry_1m	5	readings	Int64	
+tenant_telemetry_1m	6	numeric_readings	Int64	
+tenant_telemetry_1m	7	value_sum	Float64	
+tenant_telemetry_1m	8	value_min	Nullable(Float64)	
+tenant_telemetry_1m	9	value_max	Nullable(Float64)	
+tenant_telemetry_1m	10	first	Tuple(ts DateTime64(3, \'UTC\'), value_type Enum8(\'float\' = 1, \'int\' = 2, \'bool\' = 3, \'string\' = 4), value_float Float64, value_int Int64, value_bool Bool, value_string String)	
+tenant_telemetry_1m	11	last	Tuple(ts DateTime64(3, \'UTC\'), value_type Enum8(\'float\' = 1, \'int\' = 2, \'bool\' = 3, \'string\' = 4), value_float Float64, value_int Int64, value_bool Bool, value_string String)	
+
+trustiot_ingest	ALTER DELETE	trustiot	telemetry	\N	0	0
+trustiot_ingest	INSERT	trustiot	stream_commits	\N	0	0
+trustiot_ingest	INSERT	trustiot	telemetry	\N	0	0
+trustiot_ingest	INSERT	trustiot	telemetry_1h	\N	0	0
+trustiot_ingest	INSERT	trustiot	telemetry_1m	\N	0	0
+trustiot_ingest	SELECT	trustiot	stream_commits	\N	0	0
+trustiot_ingest	SELECT	trustiot	telemetry	\N	0	0
+trustiot_ingest	SELECT	trustiot	telemetry_1h	\N	0	0
+trustiot_ingest	SELECT	trustiot	telemetry_1m	\N	0	0
+trustiot_monitoring	SELECT	system	disks	\N	0	0
+trustiot_otel_collector	INSERT	trustiot_logs	otel_logs	\N	0	0
+trustiot_otel_collector	INSERT	trustiot_logs	otel_traces	\N	0	0
+trustiot_otel_collector	SHOW COLUMNS	trustiot_logs	otel_logs	\N	0	0
+trustiot_otel_collector	SHOW COLUMNS	trustiot_logs	otel_traces	\N	0	0
+trustiot_rollup_definer	INSERT	trustiot	telemetry_1h	\N	0	0
+trustiot_rollup_definer	INSERT	trustiot	telemetry_1m	\N	0	0
+trustiot_rollup_definer	SELECT	trustiot	telemetry	\N	0	0
+trustiot_rollup_definer	SELECT	trustiot	telemetry_1h	\N	0	0
+trustiot_rollup_definer	SELECT	trustiot	telemetry_1m	\N	0	0
+trustiot_telemetry_query	ALTER USER	\N	\N	\N	0	0
+trustiot_telemetry_query	CREATE USER	\N	\N	\N	0	0
+trustiot_tenant_reader	SELECT	trustiot	tenant_telemetry	\N	0	0
+trustiot_tenant_reader	SELECT	trustiot	tenant_telemetry_1h	\N	0	0
+trustiot_tenant_reader	SELECT	trustiot	tenant_telemetry_1m	\N	0	0
+trustiot_tenant_view_definer	SELECT	trustiot	telemetry	\N	0	0
+trustiot_tenant_view_definer	SELECT	trustiot	telemetry_1h	\N	0	0
+trustiot_tenant_view_definer	SELECT	trustiot	telemetry_1m	\N	0	0
+
+trustiot_telemetry_query	trustiot_tenant_reader	1
+
+deny_by_default	trustiot	batch_commits	0	0	1	[]	[]
+deny_by_default	trustiot	stream_commits	0	0	1	[]	[]
+deny_by_default	trustiot	telemetry	0	0	1	[]	[]
+deny_by_default	trustiot	telemetry_1h	0	0	1	[]	[]
+deny_by_default	trustiot	telemetry_1h_backfill	0	0	1	[]	[]
+deny_by_default	trustiot	telemetry_1h_mv	0	0	1	[]	[]
+deny_by_default	trustiot	telemetry_1m	0	0	1	[]	[]
+deny_by_default	trustiot	telemetry_1m_backfill	0	0	1	[]	[]
+deny_by_default	trustiot	telemetry_1m_mv	0	0	1	[]	[]
+deny_by_default	trustiot	tenant_telemetry	0	0	1	[]	[]
+deny_by_default	trustiot	tenant_telemetry_1h	0	0	1	[]	[]
+deny_by_default	trustiot	tenant_telemetry_1m	0	0	1	[]	[]
+migration_account	trustiot	telemetry_1h_backfill	1	0	0	[]	[]
+migration_account	trustiot	telemetry_1m_backfill	1	0	0	[]	[]
+rollup_definer	trustiot	telemetry	1	0	0	['trustiot_rollup_definer']	[]
+rollup_definer	trustiot	telemetry_1h	1	0	0	['trustiot_rollup_definer']	[]
+rollup_definer	trustiot	telemetry_1m	1	0	0	['trustiot_rollup_definer']	[]
+service_all_rows	trustiot	batch_commits	1	0	0	['trustiot_ingest']	[]
+service_all_rows	trustiot	stream_commits	1	0	0	['trustiot_ingest']	[]
+service_all_rows	trustiot	telemetry	1	0	0	['trustiot_ingest']	[]
+service_all_rows	trustiot	telemetry_1h	1	0	0	['trustiot_ingest']	[]
+service_all_rows	trustiot	telemetry_1m	1	0	0	['trustiot_ingest']	[]
+tenant_isolation	trustiot	telemetry	(tenant_id = toUUID(getSetting(\'SQL_tenant_id\'))) AND (ts >= (now64(3, \'UTC\') - toIntervalDay(least(accurateCast(getSetting(\'SQL_queryable_raw_days\'), \'UInt16\'), 36500))))	0	0	['trustiot_tenant_reader']	[]
+tenant_isolation	trustiot	telemetry_1h	(tenant_id = toUUID(getSetting(\'SQL_tenant_id\'))) AND (bucket >= (now64(3, \'UTC\') - toIntervalMonth(least(accurateCast(getSetting(\'SQL_queryable_1h_months\'), \'UInt16\'), 1200))))	0	0	['trustiot_tenant_reader']	[]
+tenant_isolation	trustiot	telemetry_1m	(tenant_id = toUUID(getSetting(\'SQL_tenant_id\'))) AND (bucket >= (now64(3, \'UTC\') - toIntervalMonth(least(accurateCast(getSetting(\'SQL_queryable_1m_months\'), \'UInt16\'), 1200))))	0	0	['trustiot_tenant_reader']	[]
+tenant_isolation	trustiot	tenant_telemetry	(tenant_id = toUUID(getSetting(\'SQL_tenant_id\'))) AND (ts >= (now64(3, \'UTC\') - toIntervalDay(least(accurateCast(getSetting(\'SQL_queryable_raw_days\'), \'UInt16\'), 36500))))	0	0	['trustiot_tenant_reader']	[]
+tenant_isolation	trustiot	tenant_telemetry_1h	(tenant_id = toUUID(getSetting(\'SQL_tenant_id\'))) AND (bucket >= (now64(3, \'UTC\') - toIntervalMonth(least(accurateCast(getSetting(\'SQL_queryable_1h_months\'), \'UInt16\'), 1200))))	0	0	['trustiot_tenant_reader']	[]
+tenant_isolation	trustiot	tenant_telemetry_1m	(tenant_id = toUUID(getSetting(\'SQL_tenant_id\'))) AND (bucket >= (now64(3, \'UTC\') - toIntervalMonth(least(accurateCast(getSetting(\'SQL_queryable_1m_months\'), \'UInt16\'), 1200))))	0	0	['trustiot_tenant_reader']	[]
+tenant_view_definer	trustiot	telemetry	(tenant_id = toUUID(getSetting(\'SQL_tenant_id\'))) AND (ts >= (now64(3, \'UTC\') - toIntervalDay(least(accurateCast(getSetting(\'SQL_queryable_raw_days\'), \'UInt16\'), 36500))))	0	0	['trustiot_tenant_view_definer']	[]
+tenant_view_definer	trustiot	telemetry_1h	(tenant_id = toUUID(getSetting(\'SQL_tenant_id\'))) AND (bucket >= (now64(3, \'UTC\') - toIntervalMonth(least(accurateCast(getSetting(\'SQL_queryable_1h_months\'), \'UInt16\'), 1200))))	0	0	['trustiot_tenant_view_definer']	[]
+tenant_view_definer	trustiot	telemetry_1m	(tenant_id = toUUID(getSetting(\'SQL_tenant_id\'))) AND (bucket >= (now64(3, \'UTC\') - toIntervalMonth(least(accurateCast(getSetting(\'SQL_queryable_1m_months\'), \'UInt16\'), 1200))))	0	0	['trustiot_tenant_view_definer']	[]
+
+legacy reading after the upgrade: 8cfcd5fd-f114-4166-8662-d1d1a5d04331	6d19b5b2-2d7c-414f-8b6e-f9fc011de650	String	String	42
+through the tenant view: 8cfcd5fd-f114-4166-8662-d1d1a5d04331	String	42
+.
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 24.11s
+
