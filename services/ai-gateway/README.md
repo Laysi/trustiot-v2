@@ -4,7 +4,7 @@
 
 閘道與產品無關（決策 28）：租戶只是不透明的 ID，設定用自己的前綴 `AI_GATEWAY`，也不依賴 `crates/contract`（`tests/no_contract.rs` 以 `cargo tree -p ai-gateway` 檢查，service-kit 以 `default-features = false` 引入）。
 
-目前支援兩種協定：Anthropic Messages（含串流）與 OpenAI Decisions。模型角色的模型清單可以在執行中更換：更換存在 Postgres，每個轉送請求都確認設定有沒有變（見「資料庫」與「多副本」，Laysi/trustiot-v2#605）。不在這裡：更換用的管理 API（Laysi/trustiot-v2#606、Laysi/trustiot-v2#607）、用量帳本與租戶額度（Laysi/trustiot-v2#140）、Vertex AI（Laysi/trustiot-v2#440）。部署（映像 `deploy/images/ai-gateway`、chart 從 values 的 `ai` 產生的設定、金鑰的 Secret、只允許三個呼叫端的 AuthorizationPolicy）見 [chart README](../../deploy/chart/README.md)「AI 閘道」（Laysi/trustiot-v2#536）。
+目前支援兩種協定：Anthropic Messages（含串流）與 OpenAI Decisions。模型角色的模型清單可以在執行中更換：更換存在 Postgres，每個轉送請求都確認設定有沒有變（見「資料庫」與「多副本」，Laysi/trustiot-v2#605）；更換用的管理 API 在自己的管理埠，只給身分服務呼叫（見「管理 API」與「驗證方式」，Laysi/trustiot-v2#606）。不在這裡：管理埠的 Service 與授權（Laysi/trustiot-v2#607）、身分服務的平台管理員路由（Laysi/trustiot-v2#608）、用量帳本與租戶額度（Laysi/trustiot-v2#140）、Vertex AI（Laysi/trustiot-v2#440）。部署（映像 `deploy/images/ai-gateway`、chart 從 values 的 `ai` 產生的設定、金鑰的 Secret、只允許三個呼叫端的 AuthorizationPolicy）見 [chart README](../../deploy/chart/README.md)「AI 閘道」（Laysi/trustiot-v2#536）。
 
 | 檔案 | 內容 |
 | --- | --- |
@@ -13,6 +13,7 @@
 | `src/store.rs` | Postgres 裡的模型清單、設定世代與變更紀錄：讀取、更換、重設 |
 | `src/schema.rs`、`migrations/postgres/` | schema `ai_gateway` 的 migration（由 `tools/migrate` 執行） |
 | `src/relay.rs` | 內部 API：讀請求、依序嘗試模型、交回回應或轉送串流、日誌 |
+| `src/admin.rs` | 管理 API（管理埠）：列出角色、更換、重設，操作者標頭與錯誤；線上格式在 `crates/ai-gateway-api` |
 | `src/body.rs` | 請求本文的檢查與換 `model` |
 | `src/reject.rs` | 錯誤回應（各協定自己的錯誤格式） |
 
@@ -123,6 +124,7 @@ HTTP 200 而且 `ai-gateway-model` 是那個供應商的模型，表示金鑰可
 | --- | --- | --- | --- |
 | `max_request_bytes` | `AI_GATEWAY__MAX_REQUEST_BYTES` | 32 MiB | 請求本文上限（Anthropic Messages 的上限）；1 KiB 到 256 MiB |
 | `http.request_timeout` | `AI_GATEWAY__HTTP__REQUEST_TIMEOUT` | `30s`（service-kit） | 見「時間上限」；部署要調高 |
+| `admin.listen_addr` | `AI_GATEWAY__ADMIN__LISTEN_ADDR` | `127.0.0.1:8082` | 管理 API 的埠（見「管理 API」）；預設只聽 loopback，chart 加上只允許身分服務的授權時才改成 `0.0.0.0:8082`（見「驗證方式」）。埠被占用時不啟動 |
 
 資料庫（見「資料庫」；chart 從平台設定與 migration Job 產生的密碼填入這些變數，見 chart README「AI 閘道」）：
 
@@ -164,13 +166,13 @@ chart 的 `ai.roles` 決定有哪些角色、各自的協定、上限、時間�
 
 每個交易在伺服器端也有上限：開始後先 `set_config('lock_timeout', …, true)` 與 `set_config('statement_timeout', …, true)`（等同 `SET LOCAL`）。轉送請求的讀取設成這次設定確認剩下的時間（`database.timeout` 與呼叫剩下的時間預算較短者，從同一個期限算起），而且兩者都是每個敘述各自計算，所以重載的兩個查詢之前各設一次；更換與重設的每個敘述是 `database.timeout`。閘道放棄的查詢（例如被 migration 的鎖擋住的讀取，或排在另一個寫入者後面的更換）不會在呼叫端拿到回應之後還佔著伺服器的程序。每個轉送請求的世代讀取也在這樣的短交易裡（`BEGIN READ ONLY`、設定上限、`SELECT generation`、`COMMIT`）：比連線啟動參數多幾次來回，但 `SET LOCAL` 在連線池（例如 PgBouncer 的交易模式）後面也成立，與 identity 的 `members.rs` 做法一致。
 
-更換與重設（`src/store.rs` 的 `Store::set_models`、`Store::reset`；管理 API 在 Laysi/trustiot-v2#606）：
+更換與重設（`src/store.rs` 的 `Store::set_models`、`Store::reset`，由「管理 API」呼叫）：
 
 - 先檢查，被拒絕的更換什麼都不寫：模型清單的規則與設定的 `models` 相同（1 到 8 個不重複的 `<provider>/<model>`、供應商有設定、模型 ID 是不含空白與逗號的可列印 ASCII），而且每個模型的供應商協定要等於角色的協定；角色要是設定裡有的。換協定是 chart 加上呼叫端程式的變更，不能靠覆寫做到。重設接受任何合格的角色名稱，所以 chart 移除的角色留下的清單也能清掉。
 - 再在一個交易裡：世代加一（它的列鎖讓寫入者排隊）、鎖住角色的列並比對呼叫端讀到的版本（角色的列的 `version`，沒有列的角色是 0；不符回衝突，什麼都不寫）、寫入覆寫或把它清成 NULL、寫一筆變更紀錄、commit。
 - 版本就是這次更換之後的世代，所以重設之後再更換，新版本仍比重設前大。重設保留角色的列與重設的版本，不刪除：帶著重設前任何版本（包括從沒更換過時讀到的 0）的更換都是衝突，不會在別人的更換與重設之後悄悄蓋掉。重設沒有覆寫的角色（從沒更換過或已經重設）什麼都不寫。
 
-存下的清單對目前的設定不再成立時（供應商被移除、chart 改了角色的協定、角色被移除），該角色忽略它、用設定的模型，記 ERROR `ignored the stored models of a model role; it uses its configured models`（`role`、`version`、`reason`），快照的 `ignored` 也標記它，給之後的管理 API 顯示。使用存下的清單時記 INFO `model role uses stored models`。
+存下的清單對目前的設定不再成立時（供應商被移除、chart 改了角色的協定、角色被移除），該角色忽略它、用設定的模型，記 ERROR `ignored the stored models of a model role; it uses its configured models`（`role`、`version`、`reason`），快照的 `ignored` 也標記它，管理 API 的 `GET` 以 `ignored` 顯示。使用存下的清單時記 INFO `model role uses stored models`。
 
 讀不到設定時不放行（與 Laysi/trustiot-v2#140 帳本的規則一致）：Postgres 連不上、查詢失敗或超過 `database.timeout`，轉送請求以呼叫端協定的格式回 503，不呼叫供應商，記 WARN `refused a model call: the model role settings could not be checked`。readiness 是 migration 檢查（`migrations`，schema 的 migration 都已套用）加上讀一次世代（`postgres`）。
 
@@ -182,16 +184,73 @@ chart 的 `ai.roles` 決定有哪些角色、各自的協定、上限、時間�
 
 資料庫是設定的來源：資料庫的世代比副本記憶體裡的舊（例如從備份還原）時，副本同樣改用資料庫裡的設定，並記 WARN `the settings generation in the database went back, as after restoring a backup; using the stored settings`（`loaded`：記憶體裡的世代，`stored`：資料庫的世代；不記模型清單）。不需要重新啟動閘道。
 
+## 管理 API
+
+platform admin 更換模型角色的模型，經身分服務呼叫這組 API（身分服務的路由在 Laysi/trustiot-v2#608）。它在自己的管理埠 `admin.listen_addr`，不在 API 埠：管理埠只有下表的路由，轉送路由與 `/healthz`、`/readyz` 都不在這裡（回 404），管理路由在 API 埠也回 404。路徑都在 `/internal/` 底下，入口不轉送（決策 27）。請求與回應的型別在 [crates/ai-gateway-api](../../crates/ai-gateway-api/README.md)，閘道與身分服務共用。
+
+| 方法與路徑 | 內容 | 成功 |
+| --- | --- | --- |
+| `GET /internal/admin/v1/roles` | 每個設定的角色，以及已設定的供應商與各自的協定（讓呼叫端知道哪些模型能選） | 200 `{"roles": [...], "providers": [{"name", "protocol"}]}` |
+| `PUT /internal/admin/v1/roles/{role}` | 本文 `{"models": ["<provider>/<model>", ...], "expected_version": <讀到的版本>}`，不能有其他欄位，上限 16 KiB；寫入 `Store::set_models`（見「資料庫」） | 200，更換後的角色 |
+| `DELETE /internal/admin/v1/roles/{role}?expected_version=<讀到的版本>` | 重設為設定的模型（`Store::reset`）：寫一筆 `reset` 變更紀錄，版本繼續往上；角色沒有覆寫時什麼都不寫，版本不變 | 200，重設後的角色 |
+
+每個角色的欄位：`role`、`protocol`（`anthropic-messages` 或 `openai-decisions`，只有設定能改）、`models`（現在生效的模型，依備援順序）、`configured_models`（設定的模型，重設回到這裡）、`source`（`configuration` 或 `database`）、`version`（更換與重設要帶的版本：角色最後一次更換或重設的設定世代，從沒更換過是 0）、`ignored`（存下的清單因為不再成立而沒有使用時才有：`models` 與 `reason`，見「資料庫」）、`updated_at`（UTC 的 RFC 3339）與 `updated_by`（最後一次更換或重設的操作者，從沒有過是 `null`）。
+
+更換與重設回應的角色是寫入之後重新讀取的結果，所以處理請求的副本立刻用新的模型，其他副本在下一個轉送請求時用（見「多副本」）。重新讀取失敗時更換仍已生效，回應只寫更換本身知道的欄位（沒有 `updated_at`）。
+
+`GET` 也經過「多副本」的設定確認，所以看到的是資料庫現在的設定，與轉送請求用的相同。
+
+請求標頭 `ai-gateway-actor`（每個管理請求都必填，剛好一個）：誰要求這次操作，1 到 128 個可列印 ASCII 字元（空白可以在中間），由身分服務填入，例如平台管理員的使用者 ID。閘道把它原樣寫進變更紀錄（`changed_by`）、角色的 `updated_by` 與日誌，不驗證內容；它的意義見「驗證方式」。
+
+錯誤用 `{"error": {"code": "...", "message": "..."}}`，所有管理 API 的回應都帶 `cache-control: no-store`，訊息不引用請求的內容（模型名稱、操作者、本文）：
+
+| 情況 | 狀態 | `code` |
+| --- | --- | --- |
+| 缺少、重複或不合格的 `ai-gateway-actor` | 400 | `invalid_actor` |
+| 本文不是只有 `models`（字串清單）與 `expected_version`（整數）的 JSON 物件；`DELETE` 沒有合格的 `expected_version`；版本是負數 | 400 | `invalid_request` |
+| 本文超過 16 KiB | 413 | `request_too_large` |
+| 設定裡沒有這個角色 | 404 | `role_not_found` |
+| 沒有這條管理路由 | 404 | `not_found` |
+| 版本與目前不符（別人先改了） | 409 | `version_conflict`，另帶 `current_version` |
+| 模型清單不合格：數量不是 1 到 8、不是 `<provider>/<model>`、模型 ID 不合規則、重複 | 422 | `invalid_models` |
+| 模型的供應商沒有設定 | 422 | `unknown_provider` |
+| 模型的協定與角色不同（含一份清單混用兩種協定） | 422 | `protocol_mismatch` |
+| Postgres 連不上或查詢失敗 | 503 | `unavailable` |
+
+被拒絕的請求什麼都不寫：`GET` 與轉送請求仍是原本的模型（`tests/admin.rs`）。405 等其他狀態沿用 HTTP 框架的預設。檢查順序：操作者、角色、本文，然後是模型清單與版本（`Store::set_models`）。
+
+範例（`<admin>` 是管理埠的位址；叢集裡只有身分服務連得到，見「驗證方式」）：
+
+```sh
+curl -sS "http://<admin>/internal/admin/v1/roles" -H 'ai-gateway-actor: user:0f3a'
+curl -sS -X PUT "http://<admin>/internal/admin/v1/roles/main" -H 'ai-gateway-actor: user:0f3a' \
+  -H 'content-type: application/json' \
+  -d '{"models":["anthropic/claude-sonnet-5-5"],"expected_version":0}'
+curl -sS -X DELETE "http://<admin>/internal/admin/v1/roles/main?expected_version=1" -H 'ai-gateway-actor: user:0f3a'
+```
+
+## 驗證方式
+
+閘道不驗證任何呼叫端，管理埠也一樣（決策 27、28：不驗證內部身分、沒有 cookie 路由，閘道也不知道 platform admin 是什麼；2026-10-23 對 Laysi/trustiot-v2#537 的決定）。安全靠三層，各自負責一件事：
+
+1. **誰能連到管理埠：mesh。** chart 給管理埠自己的 Service、AuthorizationPolicy 與 NetworkPolicy，只允許身分服務的身分（SPIFFE principal）連進來；轉送的呼叫端（assistant、knowledge、alerts）只能連 API 埠（Laysi/trustiot-v2#607）。這與身分服務的 token exchange 埠、certs 的 broker-certs 埠是同一種做法。
+2. **這個人能不能更換：身分服務。** 身分服務的 `/api/identity/v1/platform/ai/model-roles` 路由檢查登入、CSRF 與平台管理員身分，通過後才呼叫管理埠（Laysi/trustiot-v2#608）。身分服務本來就簽發每個使用者的 token，被入侵時本來就能做任何事，給它這個埠不增加新的信任對象。
+3. **更換本身合不合法：閘道。** 角色要存在、模型要符合設定的規則與角色的協定、版本要是目前的版本；不合格的更換什麼都不寫（見「管理 API」與「資料庫」）。
+
+`ai-gateway-actor` 只是記錄，不是驗證：它是身分服務告訴閘道「這次是誰要求的」，閘道照記不查。它可信的程度等於呼叫端：mesh 只讓身分服務連到管理埠，所以變更紀錄裡的操作者就是身分服務檢查過的人。閘道只擋掉不合格的值（不是 1 到 128 個可列印 ASCII），讓紀錄與日誌不會被控制字元或過長的值弄亂。
+
+管理埠的預設位址是 `127.0.0.1:8082`，只有同一個 pod 連得到。原因：在 Laysi/trustiot-v2#607 之前，閘道的 AuthorizationPolicy 允許三個呼叫端連任何埠，管理埠若預設聽 `0.0.0.0`，它們就能直接以 pod 位址呼叫管理 API。chart 在 Laysi/trustiot-v2#607 加上管理埠的 Service 與只允許身分服務的授權時，同時把 `AI_GATEWAY__ADMIN__LISTEN_ADDR` 設成 `0.0.0.0:8082`；在那之前，管理 API 只有測試與 `kubectl port-forward` 進 pod 連得到。
+
 ## 金鑰與 TLS
 
 - 每個供應商的 key 在啟動時從 `key_env` 指的環境變數讀一次；沒設、空的或含空白與控制字元時不啟動，錯誤訊息只寫變數名稱。key 只存在 ai-clients 的 `ApiKey`（`Debug` 不顯示、drop 時清除、標頭標成 sensitive）與閘道用來遮蔽錯誤訊息的副本（同樣在 drop 時清除）；環境變數本身仍留在程序環境裡，所以 chart 只讓這個 pod 拿得到那個 Secret（`services.<name>.credentials` 的 `ai` 只能給 `ai-gateway`，變數是 `TRUSTIOT_AI_ANTHROPIC_API_KEY`、`TRUSTIOT_AI_OPENAI_API_KEY`）。
 - key 不進日誌也不進回應：供應商錯誤訊息裡的 key 換成 `[REDACTED]`，401 與 403 的訊息整個不交回。串流的 `error` 事件先解析成 JSON，在解碼後的每個字串與欄位名稱、以及原始文字裡找 key，所以用 JSON 跳脫寫成的 key 也會被換掉；找到時事件資料改寫成遮蔽後的 JSON（欄位順序可能改變），沒找到時照原樣轉送，不是 JSON 的資料換成閘道自己的 `api_error` 事件。供應商的錯誤 `type`、`code` 與 request ID 也遮蔽後才交回或寫進日誌。成功的回應與串流照原樣轉送，不檢查。`tests/process.rs` 以 trace 等級執行真正的程式檢查。
 - 連供應商的 TLS 信任系統的根憑證（`SSL_CERT_FILE` 或 `SSL_CERT_DIR` 有設時用它們），一張都載不到就不啟動，所以映像要有 CA bundle。不走 proxy、不跟隨重新導向（ai-clients 的「規則」）。
-- 閘道本身不驗證呼叫端：內部 API 只靠 mesh 授權，只有 assistant、knowledge、alerts 能連（決策 28；chart 在 `mesh.calls` 把其他服務列為呼叫端時拒絕渲染，見 chart README「服務間授權（mesh）」）。
+- 閘道本身不驗證呼叫端：內部 API 只靠 mesh 授權，只有 assistant、knowledge、alerts 能連（決策 28；chart 在 `mesh.calls` 把其他服務列為呼叫端時拒絕渲染，見 chart README「服務間授權（mesh）」）；管理 API 見「驗證方式」。
 
 ## 日誌
 
-每次呼叫記一行，欄位有 `role`、`protocol`、`tenant`、`model`、`attempts`、`provider_request_id`、`duration_ms`：成功是 INFO `model call completed`（加 `streaming`、`outcome`），換模型是 WARN `falling back to the next model`（加 `next_model`、`class`、`status`、`error_type`），失敗是 WARN `model call failed`（串流途中是 `model stream failed`，加 `class`、`status`、`error_type`，連線與協定錯誤加 `detail`），呼叫端在串流結束前離開是 WARN `the caller left before the stream ended`。啟動時每個角色記一行 INFO `model role ready`（`role`、`protocol`、`models`，啟動時資料庫還沒讀，所以是設定的模型）；讀不到設定、忽略或使用存下的模型清單的日誌見「資料庫」，資料庫的世代倒退的日誌見「多副本」。不記請求或回應的本文、供應商的錯誤訊息與 key。
+每次呼叫記一行，欄位有 `role`、`protocol`、`tenant`、`model`、`attempts`、`provider_request_id`、`duration_ms`：成功是 INFO `model call completed`（加 `streaming`、`outcome`），換模型是 WARN `falling back to the next model`（加 `next_model`、`class`、`status`、`error_type`），失敗是 WARN `model call failed`（串流途中是 `model stream failed`，加 `class`、`status`、`error_type`，連線與協定錯誤加 `detail`），呼叫端在串流結束前離開是 WARN `the caller left before the stream ended`。啟動時每個角色記一行 INFO `model role ready`（`role`、`protocol`、`models`，啟動時資料庫還沒讀，所以是設定的模型）；讀不到設定、忽略或使用存下的模型清單的日誌見「資料庫」，資料庫的世代倒退的日誌見「多副本」。管理 API：啟動時記 INFO `serving the admin API`（`address`）；每次寫入的更換與重設記 INFO `model role changed`（`role`、`actor`、`action`：`set` 或 `reset`、`version`、`models`：之後生效的模型清單，模型名稱不是密鑰）；被拒絕的更換記 INFO `refused a model role change`（`role`、`actor`、`code`），Postgres 失敗記 WARN `a model role change failed in the database; nothing was changed`，讀不到設定記 WARN `an admin request could not read the model role settings`。不記請求或回應的本文、供應商的錯誤訊息與 key。
 
 ## 關機
 
@@ -199,15 +258,16 @@ service-kit 對長連線的建議是在 `Shutdown::stopping` 時結束 SSE，讓
 
 ## 測試
 
-`cargo test -p ai-gateway`。`tests/process.rs` 與 `tests/roles_store.rs` 以 podman 或 docker 啟動 service-kit 的測試用 TLS Postgres（以路徑引入 `crates/service-kit/tests/support/postgres.rs`），沒有容器執行環境時跳過（設了 `CI` 時失敗）。不連真正的供應商、不用真的 key：供應商是 loopback 上的腳本化 HTTP/1.1 伺服器（以路徑引入 `crates/ai-clients/tests/support/mod.rs`），回應用 ai-clients 的錄製樣本（`crates/ai-clients/tests/fixtures/`），key 在執行時產生。
+`cargo test -p ai-gateway`。`tests/process.rs`、`tests/roles_store.rs` 與 `tests/admin.rs` 以 podman 或 docker 啟動 service-kit 的測試用 TLS Postgres（以路徑引入 `crates/service-kit/tests/support/postgres.rs`），沒有容器執行環境時跳過（設了 `CI` 時失敗）。不連真正的供應商、不用真的 key：供應商是 loopback 上的腳本化 HTTP/1.1 伺服器（以路徑引入 `crates/ai-clients/tests/support/mod.rs`），回應用 ai-clients 的錄製樣本（`crates/ai-clients/tests/fixtures/`），key 在執行時產生。
 
 | 檔案 | 內容 |
 | --- | --- |
 | `tests/messages.rs` | 本文除了 `model` 逐位元組相同（thinking 與 signature、快取斷點、對話中的 system 訊息）、缺 `model` 時補上、串流原樣交回、第一個輸出之後的錯誤原樣轉送且不換模型、拒答的串流、各種不能轉送的請求在送出前拒絕、本文沒在時間預算內送完時回 504 |
 | `tests/fallback.rs` | 429、529、供應商 504、閘道自己的逾時（`TIMEOUT_UNDER_TEST`，15 秒）與並發上限都換下一個模型；串流第一個輸出之前的 `error` 事件與 429 也換；全部失敗時交回最後一個錯誤；400、401、500 與拒答不換；供應商訊息裡的 key 被遮蔽 |
 | `tests/decisions.rs` | 錄製的 Decisions 請求逐位元組轉送、回應原樣交回、拒答、429 與 503 換模型、不合格的請求與未知角色 |
-| `tests/process.rs` | 真正的程式：以測試 CA 與 `SSL_CERT_FILE` 走 TLS、key 從 `key_env` 讀取並送到供應商、trace 等級的日誌與回應裡都沒有 key 與資料庫密碼；沒有 key、沒有 Postgres 的平台設定或角色的時間上限超過 `http.request_timeout` 時不啟動；兩個程序共用一個資料庫時，一邊的更換在另一邊的下一個請求生效；重新啟動後用最後一次更換；資料庫還原成較舊的設定時副本改用它並記 WARN；不再成立的覆寫被忽略並記 ERROR |
+| `tests/process.rs` | 真正的程式：以測試 CA 與 `SSL_CERT_FILE` 走 TLS、key 從 `key_env` 讀取並送到供應商、trace 等級的日誌與回應裡都沒有 key 與資料庫密碼；沒有 key、沒有 Postgres 的平台設定或角色的時間上限超過 `http.request_timeout` 時不啟動；兩個程序共用一個資料庫時，一邊的更換在另一邊的下一個請求生效；重新啟動後用最後一次更換；資料庫還原成較舊的設定時副本改用它並記 WARN；不再成立的覆寫被忽略並記 ERROR；經一個程序的管理埠更換後另一個程序的下一個請求與重新啟動的程序都用新模型、變更紀錄與日誌有操作者；兩個埠各自只有自己的路由 |
 | `tests/roles_store.rs` | 更換與重設：被拒絕的更換不寫任何東西、每次更換寫一筆紀錄、重設之後版本仍上升與衝突、服務角色不能改寫或刪除變更紀錄；服務角色與 owner 都不能讓世代或版本不升反降、也不能改角色名稱（trigger 回 42501）；被鎖擋住的讀取由伺服器在呼叫的期限結束（`lock_timeout` 的 55P03 或 `statement_timeout` 的 57014），不等到 `database.timeout`；下一個請求用新的模型、只在世代改變時重載；資料庫連不上（從啟動起、或中途斷線）時回 503 而不呼叫供應商；進行中的串流保留它的模型；重載不讓沒變的模型的並發計數歸零 |
-| `tests/no_contract.rs` | `cargo tree -p ai-gateway` 沒有 `contract` |
+| `tests/admin.rs` | 管理 API：更換與重設的版本、`GET` 的內容、下一個轉送請求用更換後的模型；別種協定、沒有設定的供應商、不合格的清單、過期的版本、缺少或不合格的操作者、不合格的本文都回各自的代碼而且什麼都沒寫；資料庫連不上回 503；管理與轉送的 router 沒有共用的路由 |
+| `tests/no_contract.rs` | `cargo tree -p ai-gateway` 沒有 `contract`（`crates/ai-gateway-api` 有自己的同一項檢查） |
 
 `src/` 裡的單元測試涵蓋設定檢查、本文的換 `model`、錯誤格式與備援條件，以及 key 的遮蔽：互相重疊的 key、錯誤的 `type` 與 `code`、串流 `error` 事件裡用 JSON 跳脫寫成的 key。

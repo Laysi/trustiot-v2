@@ -268,6 +268,7 @@ cargo run --release -p lab-dataset -- record <repo 外的設定檔> --out <repo 
 `lab-dataset record` 讀實際的設備，寫出本頁格式的資料集（索引加分段檔）；它就是 Laysi/trustiot-v2#680 到 lab 錄第一版時用的工具。
 
 - **用閘道器 agent 的程式讀設備**：設備與型號是 `crates/protocol` 的設定（`DeviceModel`、`Device`），先經過與閘道器相同的設定驗證；每台設備由 agent 的 `polling::run` 依固定節拍輪詢（逾時、重連退避、watchdog 都相同），連線由 `Endpoints` 分配，所以同一台 RS485 轉換器下的設備共用一條連線、一次一個請求，RTU 框架丟掉其他站號的回應（[edge/agent](../../edge/agent/README.md)，Laysi/trustiot-v2#87、Laysi/trustiot-v2#88）。讀取失敗的資料點沒有讀值，就是資料缺漏，與閘道器看到的一樣。
+- **連線位址的限制也相同**：錄製工具和 agent 一樣拒絕 loopback、執行機器自己網卡上的位址、多播、廣播與雲端 metadata 位址（[edge/agent](../../edge/agent/README.md)「連線位址的限制」），所以設定檔的 `host` 要直接寫轉換器的位址；經本機 port forward（例如 `127.0.0.1` 上的 ssh 轉送）連到的轉換器會被拒絕，每次讀取都以連線失敗結束。
 - **錄製工具也是一個主站**：轉換器把每台設備的回應送給所有 TCP 連線（[現場硬限制](../../docs/requirements/field-constraints.md)），所以錄製期間不能有其他程式連同一台轉換器，包括 agent。[milestones](../../docs/roadmap/milestones.md)「展示切片」規定 agent 開始輪詢 lab 的 RS485 轉換器後，其他程式不再連它：Laysi/trustiot-v2#680 要在那之前錄。
 - **寫出的目錄**是 `--out` 之下以資料集名稱命名的目錄，必須還不存在（寫好的資料集不會被改寫）；`--out` 放在 repo 外，分段檔不進版控。錄到 `--duration-s` 秒或按 Ctrl-C 為止，最後一批寫完後以 `Dataset::open` 檢查整份資料集。每關閉一個分段檔就重寫一次索引，所以中途被強制結束時，索引仍然是已完成分段的有效資料集（寫到一半的分段檔不在索引裡）。
 - **結果**以 JSON 印到標準輸出：筆數、批次數、分段數、時間範圍，以及被略過的讀值數（`dropped_readings`：例如計數器讀到不小於 `wraps_at` 的值，這種讀值不符合索引的規則）。

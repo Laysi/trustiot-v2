@@ -10,6 +10,7 @@
 //! successor is due at once (it sends that request before it yields), or after it reported that
 //! it sleeps until the next due poll.
 
+use std::net::Ipv4Addr;
 use std::ops::ControlFlow;
 use std::time::Duration;
 
@@ -90,7 +91,11 @@ fn device(endpoint: &FakeModbus, settings: &Settings) -> (DeviceReader, SharedCo
     config.validate().expect("the test configuration is valid");
     assert_eq!(polling::poll_period(&device), PERIOD);
     let reader = DeviceReader::new(&device, &model).expect("a plan for a validated model");
-    let connection = Endpoints::new(settings.connect_timeout).connection(&device);
+    // The address guard refuses loopback, where the fake endpoint listens; only tests can
+    // exempt it.
+    let connection = Endpoints::new(settings.connect_timeout)
+        .exempt_for_tests([Ipv4Addr::LOCALHOST.into()])
+        .connection(&device);
     (reader, connection)
 }
 

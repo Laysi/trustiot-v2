@@ -5,7 +5,10 @@
 //! not fit in the request timeout. With a real Postgres (tests/support/database.rs): two
 //! processes on one database both use a change for their next request, a restarted process uses
 //! the last change, a stored model list that the configuration no longer allows is ignored
-//! with an ERROR, and settings restored from an older backup are adopted with a WARN. The database tests skip without podman or docker, and fail without them when
+//! with an ERROR, and settings restored from an older backup are adopted with a WARN. Through the
+//! admin port (src/admin.rs): a change made on one process is used by the other's next request
+//! and after a restart, the change log and the log name the actor, and each port serves only its
+//! own routes. The database tests skip without podman or docker, and fail without them when
 //! `CI` is set.
 
 mod support;
@@ -69,6 +72,7 @@ fn spawn(vars: &[(String, String)]) -> Child {
         .env_clear()
         .env("AI_GATEWAY__HTTP__LISTEN_ADDR", "127.0.0.1:0")
         .env("AI_GATEWAY__HTTP__HEALTH_LISTEN_ADDR", "127.0.0.1:0")
+        .env("AI_GATEWAY__ADMIN__LISTEN_ADDR", "127.0.0.1:0")
         .env("AI_GATEWAY__SHUTDOWN__DRAIN_DELAY", "0s")
         .env("AI_GATEWAY__TELEMETRY__LOG_FILTER", "trace")
         .env(
@@ -167,6 +171,8 @@ async fn finish(mut child: Child, outputs: Vec<tokio::task::JoinHandle<String>>)
 struct Running {
     child: Child,
     address: String,
+    /// The admin API's port.
+    admin_address: String,
     seen: Vec<String>,
     outputs: Vec<tokio::task::JoinHandle<String>>,
 }
@@ -177,6 +183,12 @@ impl Running {
         let stderr = drain(child.stderr.take().expect("piped stderr"));
         let mut stdout = BufReader::new(child.stdout.take().expect("piped stdout"));
         let mut seen = Vec::new();
+        // The admin port is bound while the service starts, before the API port.
+        let admin = wait_for(&mut stdout, &mut seen, "serving the admin API").await;
+        let admin_address = admin["fields"]["address"]
+            .as_str()
+            .expect("the admin address")
+            .to_owned();
         let listening = wait_for(&mut stdout, &mut seen, "listening").await;
         let address = listening["fields"]["address"]
             .as_str()
@@ -185,9 +197,40 @@ impl Running {
         Self {
             child,
             address,
+            admin_address,
             seen,
             outputs: vec![drain(stdout), stderr],
         }
+    }
+
+    /// A request to `path` on `address` with `headers` and a JSON `body`: the status and the
+    /// body.
+    async fn request(
+        address: &str,
+        method: reqwest::Method,
+        path: &str,
+        headers: &[(&str, &str)],
+        body: Option<serde_json::Value>,
+    ) -> (u16, String) {
+        let mut request = reqwest::Client::new().request(method, format!("http://{address}{path}"));
+        for (name, value) in headers {
+            request = request.header(*name, *value);
+        }
+        if let Some(body) = body {
+            request = request
+                .header("content-type", "application/json")
+                .body(body.to_string());
+        }
+        let response = tokio::time::timeout(PROCESS_LIMIT, request.send())
+            .await
+            .expect("the gateway answers in time")
+            .expect("send the request");
+        let status = response.status().as_u16();
+        let text = tokio::time::timeout(PROCESS_LIMIT, response.text())
+            .await
+            .expect("the body arrives in time")
+            .expect("read the body");
+        (status, text)
     }
 
     /// A call to role `main`: the status and the model that answered.
@@ -649,4 +692,165 @@ async fn settings_restored_from_an_older_backup_are_adopted_with_a_warning() {
     assert_eq!(warned["level"], "WARN", "{warned}");
     assert_eq!(warned["fields"]["loaded"], 2, "{warned}");
     assert_eq!(warned["fields"]["stored"], 1, "{warned}");
+}
+
+/// The actor of the admin requests below.
+const ADMIN_ACTOR: &str = "user:0f3a-admin";
+
+/// The INFO a written change is logged with.
+const CHANGED: &str = "model role changed";
+
+#[tokio::test]
+async fn a_change_through_the_admin_port_reaches_every_process_and_outlives_a_restart() {
+    let Some(database) = Database::new(
+        "CREATE DATABASE ai_gateway_admin_processes OWNER ai_gateway_owner",
+        "ai_gateway_admin_processes",
+    )
+    .await
+    else {
+        return;
+    };
+    let first = Server::start(vec![message_reply(), message_reply()]).await;
+    let second = Server::start(vec![message_reply(), message_reply()]).await;
+    let vars = settings(&database, &first, Some(&second));
+    let a = Running::start(&vars).await;
+    let b = Running::start(&vars).await;
+    assert_eq!(a.call().await, (200, Some("first/model-one".to_owned())));
+    assert_eq!(b.call().await, (200, Some("first/model-one".to_owned())));
+
+    // Process A's admin port changes the role; process B's next request uses the change.
+    let (status, body) = Running::request(
+        &a.admin_address,
+        reqwest::Method::PUT,
+        "/internal/admin/v1/roles/main",
+        &[("ai-gateway-actor", ADMIN_ACTOR)],
+        Some(serde_json::json!({"models": ["second/model-two"], "expected_version": 0})),
+    )
+    .await;
+    assert_eq!(status, 200, "{body}");
+    let changed: serde_json::Value = serde_json::from_str(&body).expect("a JSON body");
+    assert_eq!(changed["version"], 1, "{changed}");
+    assert_eq!(changed["source"], "database", "{changed}");
+    assert_eq!(b.call().await, (200, Some("second/model-two".to_owned())));
+    assert_eq!(model_of(&second, 0), "model-two");
+
+    // The change log and process A's log name the actor.
+    let mut app = database.connect("ai_gateway_app").await;
+    let records: Vec<(i64, String, String)> =
+        sqlx::query_as("SELECT version, action, changed_by FROM ai_gateway.role_model_changes")
+            .fetch_all(&mut app)
+            .await
+            .expect("read the change log");
+    assert_eq!(records, [(1, "set".to_owned(), ADMIN_ACTOR.to_owned())]);
+    let log = a.stop().await;
+    let line = log
+        .iter()
+        .find(|line| line["message"] == CHANGED)
+        .unwrap_or_else(|| panic!("no `{CHANGED}` in {log:?}"));
+    assert_eq!(line["level"], "INFO", "{line}");
+    assert_eq!(line["fields"]["role"], "main", "{line}");
+    assert_eq!(line["fields"]["actor"], ADMIN_ACTOR, "{line}");
+    assert_eq!(line["fields"]["action"], "set", "{line}");
+    assert_eq!(line["fields"]["version"], 1, "{line}");
+    assert_eq!(line["fields"]["models"], "second/model-two", "{line}");
+    b.stop().await;
+
+    // A restarted process uses the change.
+    let restarted = Running::start(&vars).await;
+    assert_eq!(
+        restarted.call().await,
+        (200, Some("second/model-two".to_owned()))
+    );
+    restarted.stop().await;
+    assert_eq!(first.request_count(), 2);
+    assert_eq!(second.request_count(), 2);
+}
+
+#[tokio::test]
+async fn each_port_serves_only_its_own_routes() {
+    let Some(database) = Database::new(
+        "CREATE DATABASE ai_gateway_admin_ports OWNER ai_gateway_owner",
+        "ai_gateway_admin_ports",
+    )
+    .await
+    else {
+        return;
+    };
+    let first = Server::start(Vec::new()).await;
+    let running = Running::start(&settings(&database, &first, None)).await;
+    assert_ne!(running.address, running.admin_address);
+    let actor = [("ai-gateway-actor", ADMIN_ACTOR)];
+    let change = || Some(serde_json::json!({"models": ["first/model-two"], "expected_version": 0}));
+
+    // The admin port serves the admin routes.
+    let (status, body) = Running::request(
+        &running.admin_address,
+        reqwest::Method::GET,
+        "/internal/admin/v1/roles",
+        &actor,
+        None,
+    )
+    .await;
+    assert_eq!(status, 200, "{body}");
+
+    // The admin routes are not on the API port.
+    for (method, path, body) in [
+        (reqwest::Method::GET, "/internal/admin/v1/roles", None),
+        (
+            reqwest::Method::PUT,
+            "/internal/admin/v1/roles/main",
+            change(),
+        ),
+        (
+            reqwest::Method::DELETE,
+            "/internal/admin/v1/roles/main?expected_version=0",
+            None,
+        ),
+    ] {
+        let (status, text) =
+            Running::request(&running.address, method.clone(), path, &actor, body).await;
+        assert_eq!(status, 404, "{method} {path} on the API port: {text}");
+    }
+
+    // The forwarding routes and the health routes are not on the admin port.
+    for (path, body) in [
+        (
+            "/internal/roles/main/v1/messages",
+            serde_json::json!({"max_tokens": 16, "messages": []}),
+        ),
+        ("/internal/roles/main/v1/decisions", serde_json::json!({})),
+    ] {
+        let (status, text) = Running::request(
+            &running.admin_address,
+            reqwest::Method::POST,
+            path,
+            &[("ai-gateway-tenant", TENANT)],
+            Some(body),
+        )
+        .await;
+        assert_eq!(status, 404, "POST {path} on the admin port: {text}");
+        let error: serde_json::Value = serde_json::from_str(&text).expect("a JSON error");
+        assert_eq!(error["error"]["code"], "not_found", "{error}");
+    }
+    for path in ["/healthz", "/readyz"] {
+        let (status, text) = Running::request(
+            &running.admin_address,
+            reqwest::Method::GET,
+            path,
+            &[],
+            None,
+        )
+        .await;
+        assert_eq!(status, 404, "GET {path} on the admin port: {text}");
+    }
+    running.stop().await;
+    assert_eq!(first.request_count(), 0);
+
+    // Nothing was changed through the API port.
+    let mut app = database.connect("ai_gateway_app").await;
+    let changes: i64 = sqlx::query_scalar("SELECT count(*) FROM ai_gateway.role_model_changes")
+        .fetch_one(&mut app)
+        .await
+        .expect("count the changes");
+    assert_eq!(changes, 0);
 }

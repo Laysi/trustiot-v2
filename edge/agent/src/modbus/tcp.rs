@@ -14,6 +14,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::time::{Instant, timeout, timeout_at};
 
+use super::address::AddressGuard;
 use super::pdu::{Data, Read};
 use super::{Connection, Exchange, ReadError, mbap, rtu};
 
@@ -39,11 +40,17 @@ const MAX_IDLE_READS: usize = 64;
 ///
 /// Several devices behind one converter or gateway share one `TcpConnection` and use it in
 /// turn ([`super::endpoint`]).
+///
+/// Each connect resolves the host once and connects only to an address that passed the address
+/// guard (`address.rs`): loopback, unspecified, multicast and broadcast addresses, the gateway's
+/// own addresses and the cloud metadata addresses are refused with [`ReadError::Connect`]
+/// before a socket is opened.
 #[derive(Debug)]
 pub struct TcpConnection {
     host: String,
     port: u16,
     connect_timeout: Duration,
+    guard: AddressGuard,
     stream: Option<TcpStream>,
     /// Bytes received and not yet part of a whole frame; never longer than one frame plus one
     /// socket read.
@@ -64,15 +71,48 @@ impl TcpConnection {
         port: u16,
         connect_timeout: Duration,
     ) -> Self {
+        Self::guarded(
+            transport,
+            host,
+            port,
+            connect_timeout,
+            AddressGuard::default(),
+        )
+    }
+
+    /// [`Self::new`] with the address guard `guard`.
+    pub(crate) fn guarded(
+        transport: Transport,
+        host: impl Into<String>,
+        port: u16,
+        connect_timeout: Duration,
+        guard: AddressGuard,
+    ) -> Self {
         Self {
             host: host.into(),
             port,
             connect_timeout,
+            guard,
             stream: None,
             buffer: Vec::with_capacity(mbap::MAX_FRAME + READ_CHUNK),
             framing: Framing::new(transport),
             sending: false,
         }
+    }
+
+    /// Test code only: lets this connection reach `addresses` although the address guard
+    /// refuses them, such as a fake Modbus endpoint on 127.0.0.1. It exists only in this crate's
+    /// unit tests and with the `test-exempt-addresses` feature, which only dev-dependencies
+    /// enable (`Cargo.toml`), so no configuration file, environment variable or setting
+    /// delivered over MQTT can reach it.
+    #[cfg(any(test, feature = "test-exempt-addresses"))]
+    #[must_use]
+    pub fn exempt_for_tests(
+        mut self,
+        addresses: impl IntoIterator<Item = std::net::IpAddr>,
+    ) -> Self {
+        self.guard.exempt(addresses);
+        self
     }
 
     /// How frames travel on the connection.
@@ -109,7 +149,7 @@ impl TcpConnection {
         if self.stream.is_some() {
             return Ok(false);
         }
-        let stream = connect(&self.host, self.port, self.connect_timeout).await?;
+        let stream = connect(&self.guard, &self.host, self.port, self.connect_timeout).await?;
         self.buffer.clear();
         self.stream = Some(stream);
         Ok(true)
@@ -302,10 +342,17 @@ enum Ended {
     Broken(ReadError),
 }
 
-async fn connect(host: &str, port: u16, limit: Duration) -> Result<TcpStream, ReadError> {
-    let stream = match timeout(limit, TcpStream::connect((host, port))).await {
+/// Connects to `host` and `port` through `guard`, waiting at most `limit`, name resolution
+/// included.
+async fn connect(
+    guard: &AddressGuard,
+    host: &str,
+    port: u16,
+    limit: Duration,
+) -> Result<TcpStream, ReadError> {
+    let stream = match timeout(limit, guard.connect(host, port)).await {
         Ok(Ok(stream)) => stream,
-        Ok(Err(error)) => return Err(ReadError::Connect(error.to_string())),
+        Ok(Err(error)) => return Err(error),
         Err(_) => {
             return Err(ReadError::Connect(format!(
                 "no connection within {} ms",
@@ -413,10 +460,284 @@ async fn await_response(
 
 #[cfg(test)]
 mod tests {
+    use std::io;
+    use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
     use protocol::config::FunctionCode;
+    use protocol::health::FailureKind;
+    use socket2::{Domain, Socket, Type};
     use testkit::clock::{self, bounded};
 
     use super::*;
+    use crate::modbus::address::Interfaces;
+    use crate::modbus::address::hooks::Hooks;
+
+    const LOOPBACK: IpAddr = IpAddr::V4(Ipv4Addr::LOCALHOST);
+    /// Long enough never to fire on a loaded machine: these tests do not wait for it.
+    const CONNECT_TIMEOUT: Duration = Duration::from_secs(60);
+    /// What every refusal starts with.
+    const REFUSED: &str = "refused: every address the host resolved to points at the gateway \
+                           itself or is not allowed";
+
+    /// A guard that lets the tests reach their listeners on 127.0.0.1.
+    fn loopback_exempt() -> AddressGuard {
+        let mut guard = AddressGuard::default();
+        guard.exempt([LOOPBACK]);
+        guard
+    }
+
+    fn holding() -> Read {
+        Read::new(FunctionCode::ReadHoldingRegisters, 0, 1).unwrap()
+    }
+
+    /// The hosts the guard refuses, other than the gateway's own addresses.
+    const REFUSED_HOSTS: [&str; 14] = [
+        "127.0.0.1",
+        "127.0.0.53",
+        "::1",
+        "::ffff:127.0.0.1",
+        "0.0.0.0",
+        "::",
+        "localhost",
+        "224.0.0.1",
+        "ff02::1",
+        "255.255.255.255",
+        "169.254.169.254",
+        "::ffff:169.254.169.254",
+        "fd00:ec2::254",
+        "::ffff:0.0.0.0",
+    ];
+
+    /// Every refused host: [`REFUSED_HOSTS`], each address on the machine's interfaces and the
+    /// broadcast address of each of its IPv4 subnets.
+    fn refused_hosts() -> Vec<String> {
+        let interfaces = Interfaces::read().unwrap();
+        REFUSED_HOSTS
+            .iter()
+            .map(|host| (*host).to_owned())
+            .chain(interfaces.addresses().iter().map(IpAddr::to_string))
+            .chain(interfaces.broadcasts().iter().map(Ipv4Addr::to_string))
+            .collect()
+    }
+
+    /// A non-blocking listener on every address of the machine, IPv6 and IPv4 when the machine
+    /// has IPv6: whatever a refused host would have reached on this machine lands here.
+    fn witness() -> std::net::TcpListener {
+        let dual_stack = || -> io::Result<Socket> {
+            let socket = Socket::new(Domain::IPV6, Type::STREAM, None)?;
+            socket.set_only_v6(false)?;
+            socket.bind(&SocketAddr::from((Ipv6Addr::UNSPECIFIED, 0)).into())?;
+            Ok(socket)
+        };
+        let socket = dual_stack().unwrap_or_else(|_| {
+            let socket = Socket::new(Domain::IPV4, Type::STREAM, None).unwrap();
+            socket
+                .bind(&SocketAddr::from((Ipv4Addr::UNSPECIFIED, 0)).into())
+                .unwrap();
+            socket
+        });
+        socket.listen(16).unwrap();
+        let listener = std::net::TcpListener::from(socket);
+        listener.set_nonblocking(true).unwrap();
+        listener
+    }
+
+    fn refused(exchange: &Exchange) -> bool {
+        matches!(&exchange.result, Err(ReadError::Connect(detail)) if detail.starts_with(REFUSED))
+    }
+
+    #[tokio::test]
+    async fn refused_hosts_reach_nothing() {
+        let witness = witness();
+        let port = witness.local_addr().unwrap().port();
+        for host in refused_hosts() {
+            let mut connection =
+                TcpConnection::new(Transport::ModbusTcp, host.as_str(), port, CONNECT_TIMEOUT);
+            let exchange = bounded(
+                "a refused read",
+                connection.read(1, holding(), CONNECT_TIMEOUT),
+            )
+            .await;
+            assert!(refused(&exchange), "{host}: {exchange:?}");
+            assert_eq!(exchange.result.unwrap_err().kind(), FailureKind::Connect);
+            assert!(!connection.is_open(), "{host}");
+        }
+        // A connection that had been opened would be waiting in the backlog by now: connect
+        // returns only after the handshake.
+        match witness.accept() {
+            Err(error) if error.kind() == io::ErrorKind::WouldBlock => {}
+            other => panic!("a refused host reached the listener: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn refused_hosts_are_never_dialed() {
+        let hooks = Arc::new(Hooks::new(|host, port| match host {
+            "localhost" => Ok(vec![
+                SocketAddr::from((Ipv4Addr::LOCALHOST, port)),
+                SocketAddr::from((Ipv6Addr::LOCALHOST, port)),
+            ]),
+            _ => Ok(vec![SocketAddr::new(host.parse().unwrap(), port)]),
+        }));
+        let hosts = refused_hosts();
+        for host in &hosts {
+            let guard = AddressGuard::default().with_hooks(Arc::clone(&hooks));
+            let mut connection = TcpConnection::guarded(
+                Transport::RtuOverTcp,
+                host.as_str(),
+                502,
+                CONNECT_TIMEOUT,
+                guard,
+            );
+            let exchange = bounded(
+                "a refused read",
+                connection.read(1, holding(), CONNECT_TIMEOUT),
+            )
+            .await;
+            assert!(refused(&exchange), "{host}: {exchange:?}");
+        }
+        assert_eq!(hooks.lookups(), hosts, "each host was looked up once");
+        assert!(hooks.dialed().is_empty(), "dialed: {:?}", hooks.dialed());
+    }
+
+    #[tokio::test]
+    async fn only_the_allowed_addresses_of_a_name_are_dialed() {
+        let listener = tokio::net::TcpListener::bind((LOOPBACK, 0)).await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let hooks = Arc::new(Hooks::new(|_, port| {
+            Ok([
+                "127.0.0.2",
+                "169.254.169.254",
+                "::1",
+                "224.0.0.1",
+                "127.0.0.1",
+            ]
+            .into_iter()
+            .map(|ip| SocketAddr::new(ip.parse().unwrap(), port))
+            .collect())
+        }));
+        let mut connection = TcpConnection::guarded(
+            Transport::ModbusTcp,
+            "converter.invalid",
+            port,
+            CONNECT_TIMEOUT,
+            AddressGuard::default().with_hooks(Arc::clone(&hooks)),
+        )
+        .exempt_for_tests([LOOPBACK]);
+        let (exchange, _device) = bounded("a read", async {
+            tokio::join!(
+                connection.read(1, holding(), CONNECT_TIMEOUT),
+                answer_once(&listener, 7)
+            )
+        })
+        .await;
+        assert_eq!(exchange.result, Ok(Data::Registers(vec![7])));
+        assert_eq!(hooks.dialed(), [SocketAddr::from((LOOPBACK, port))]);
+    }
+
+    #[tokio::test]
+    async fn a_name_is_resolved_once_and_its_checked_address_dialed() {
+        let listener = tokio::net::TcpListener::bind((LOOPBACK, 0)).await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        // The first answer is an address the test may reach; every later one is loopback that
+        // nothing exempts, as a DNS rebinding would answer after the check.
+        let lookups = AtomicUsize::new(0);
+        let hooks = Arc::new(Hooks::new(move |_, port| {
+            let ip = if lookups.fetch_add(1, Ordering::SeqCst) == 0 {
+                LOOPBACK
+            } else {
+                IpAddr::V4(Ipv4Addr::new(127, 0, 0, 2))
+            };
+            Ok(vec![SocketAddr::new(ip, port)])
+        }));
+        let mut connection = TcpConnection::guarded(
+            Transport::ModbusTcp,
+            "converter.invalid",
+            port,
+            CONNECT_TIMEOUT,
+            AddressGuard::default().with_hooks(Arc::clone(&hooks)),
+        )
+        .exempt_for_tests([LOOPBACK]);
+        let (exchange, _device) = bounded("the first read", async {
+            tokio::join!(
+                connection.read(1, holding(), CONNECT_TIMEOUT),
+                answer_once(&listener, 7)
+            )
+        })
+        .await;
+        assert_eq!(exchange.result, Ok(Data::Registers(vec![7])));
+        assert_eq!(hooks.lookups(), ["converter.invalid"], "one lookup");
+        assert_eq!(hooks.dialed(), [SocketAddr::from((LOOPBACK, port))]);
+
+        // A new connection resolves again, and checks again.
+        connection.close();
+        let exchange = bounded(
+            "the read after the name changed",
+            connection.read(1, holding(), CONNECT_TIMEOUT),
+        )
+        .await;
+        assert_eq!(
+            exchange.result,
+            Err(ReadError::Connect(format!("{REFUSED} (127.0.0.2)")))
+        );
+        assert_eq!(hooks.lookups().len(), 2);
+        assert_eq!(
+            hooks.dialed().len(),
+            1,
+            "the refused address was not dialed"
+        );
+    }
+
+    #[tokio::test]
+    async fn link_local_and_private_addresses_are_dialed() {
+        let interfaces = Interfaces::read().unwrap();
+        // Unlikely to be the machine's own; any that is would be refused, so it is left out.
+        let expected: Vec<SocketAddr> = [
+            "169.254.1.20",
+            "169.254.169.253",
+            "10.213.47.201",
+            "172.29.201.77",
+            "192.168.213.201",
+            "fd3e:91a2:7c4d::20",
+            "::ffff:10.213.47.202",
+        ]
+        .into_iter()
+        .map(|ip| ip.parse::<IpAddr>().unwrap())
+        .filter(|ip| !interfaces.addresses().contains(&ip.to_canonical()))
+        .map(|ip| SocketAddr::new(ip.to_canonical(), 502))
+        .collect();
+        assert!(expected.len() >= 5, "{expected:?}");
+        let resolved = expected.clone();
+        let hooks = Arc::new(Hooks::new(move |_, _| {
+            Ok(resolved
+                .iter()
+                .map(|address| match address.ip() {
+                    // Answer the mapped spelling; the guard dials it as IPv4.
+                    IpAddr::V4(v4) if v4.octets() == [10, 213, 47, 202] => {
+                        SocketAddr::new(IpAddr::V6(v4.to_ipv6_mapped()), address.port())
+                    }
+                    _ => *address,
+                })
+                .collect())
+        }));
+        let mut connection = TcpConnection::guarded(
+            Transport::RtuOverTcp,
+            "converter.invalid",
+            502,
+            CONNECT_TIMEOUT,
+            AddressGuard::default().with_hooks(Arc::clone(&hooks)),
+        );
+        let exchange = bounded("a read", connection.read(1, holding(), CONNECT_TIMEOUT)).await;
+        // Every address was allowed and dialed in order; the tests dial none of them for real.
+        assert_eq!(hooks.dialed(), expected);
+        let last = expected.last().unwrap();
+        assert_eq!(
+            exchange.result,
+            Err(ReadError::Connect(format!("{last} is not dialed in tests")))
+        );
+    }
 
     /// A connected client socket and the device side of it.
     async fn pair(listener: &tokio::net::TcpListener) -> (TcpStream, TcpStream) {
@@ -444,7 +765,12 @@ mod tests {
         let port = listener.local_addr().unwrap().port();
         let stream = bounded(
             "a connection",
-            connect("127.0.0.1", port, Duration::from_secs(10)),
+            connect(
+                &loopback_exempt(),
+                "127.0.0.1",
+                port,
+                Duration::from_secs(10),
+            ),
         )
         .await
         .unwrap();
@@ -484,7 +810,8 @@ mod tests {
             "127.0.0.1",
             port,
             Duration::from_secs(10),
-        );
+        )
+        .exempt_for_tests([LOOPBACK]);
         let read = Read::new(FunctionCode::ReadHoldingRegisters, 0, 1).unwrap();
         let timeout = Duration::from_secs(5);
 

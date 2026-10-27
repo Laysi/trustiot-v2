@@ -5,8 +5,9 @@
 //! - A conversation the agent ran (thinking blocks with signatures, tool calls and results)
 //!   reads back byte for byte, and the request of the next question from the loaded
 //!   conversation starts with exactly the bytes the stored one would have sent.
-//! - The service role cannot change or remove a stored conversation or message: the database
-//!   refuses UPDATE, DELETE and TRUNCATE.
+//! - The service role cannot change or remove a stored message or a conversation's owner and
+//!   preamble: the database refuses UPDATE, DELETE and TRUNCATE (Laysi/trustiot-v2#644 gives it
+//!   UPDATE on the thread's own columns only; tests/conversation_threads.rs).
 //! - Appending is idempotent and never overwrites; gaps, unknown conversations, other tenants
 //!   and other users are refused; a corrupt row fails the load.
 //!
@@ -21,7 +22,7 @@ use assistant::Agent;
 use assistant::history::{Conversation, EntryKind, Principal};
 use assistant::model::ModelClient;
 use assistant::model::anthropic::AnthropicGateway;
-use assistant::store::{self, StoreError};
+use assistant::store::{self, Loaded, StoreError, Stored};
 use assistant::tools::{NoDelegation, Tool, ToolRegistry};
 use contract::identity::{TenantGrant, TenantRole};
 use contract::{ServiceName, TenantId};
@@ -49,7 +50,9 @@ const CHANGES: [&str; 8] = [
     "TRUNCATE assistant.conversations",
 ];
 
-/// The privileges the service role must not hold on either table.
+/// Whether the service role holds a privilege on the whole table. Since Laysi/trustiot-v2#644
+/// INSERT is granted only on the columns the service may choose, so the database fills
+/// `created_at`.
 const PRIVILEGE: &str = "SELECT has_table_privilege('assistant_app', $1, $2)";
 
 /// What the database holds for a conversation, as the superuser reads it.
@@ -106,7 +109,7 @@ impl Db {
         self.product.superuser().await
     }
 
-    async fn create(&self, user: &UserIdentity, conversation: &Conversation) -> usize {
+    async fn create(&self, user: &UserIdentity, conversation: &Conversation) -> Stored {
         let mut tx = self.db.begin(user).await.expect("a tenant transaction");
         let stored = store::create(&mut tx, conversation)
             .await
@@ -119,8 +122,8 @@ impl Db {
         &self,
         user: &UserIdentity,
         conversation: &Conversation,
-        stored: usize,
-    ) -> Result<usize, StoreError> {
+        stored: Stored,
+    ) -> Result<Stored, StoreError> {
         let mut tx = self.db.begin(user).await.expect("a tenant transaction");
         let result = store::append(&mut tx, conversation, stored).await;
         if result.is_ok() {
@@ -137,6 +140,19 @@ impl Db {
         principal: Principal,
         id: Uuid,
     ) -> Result<Option<Conversation>, StoreError> {
+        Ok(self
+            .load_stored(user, principal, id)
+            .await?
+            .map(|loaded| loaded.conversation))
+    }
+
+    /// The conversation and where its stored part ends.
+    async fn load_stored(
+        &self,
+        user: &UserIdentity,
+        principal: Principal,
+        id: Uuid,
+    ) -> Result<Option<Loaded>, StoreError> {
         let mut tx = self.db.begin(user).await.expect("a tenant transaction");
         let loaded = store::load(&mut tx, principal, id).await;
         tx.commit().await.expect("commit");
@@ -238,7 +254,7 @@ async fn a_stored_conversation_reads_back_byte_for_byte_and_continues() {
     );
 
     let stored = db.create(&user, &conversation).await;
-    assert_eq!(stored, conversation.len());
+    assert_eq!(stored.messages(), conversation.len());
 
     // The database holds the exact bytes of every message, thinking and signatures included,
     // and the preamble as the conversation fixed it.
@@ -355,7 +371,7 @@ async fn a_stored_conversation_reads_back_byte_for_byte_and_continues() {
         .append(&user, &loaded, stored)
         .await
         .expect("append the second question");
-    assert_eq!(appended, loaded.len());
+    assert_eq!(appended.messages(), loaded.len());
     assert_eq!(loaded.len(), conversation.len() + 6);
     let again = db
         .load(&user, owner, conversation.id())
@@ -385,8 +401,8 @@ async fn the_service_role_cannot_change_or_remove_stored_history() {
                 .expect("read the privilege");
             assert_eq!(
                 held,
-                matches!(privilege, "SELECT" | "INSERT"),
-                "assistant_app's {privilege} on {table}"
+                privilege == "SELECT",
+                "assistant_app's table-wide {privilege} on {table}"
             );
         }
     }
@@ -436,7 +452,7 @@ async fn appending_is_idempotent_and_never_overwrites() {
     let owner = principal(&user);
     let conversation = conversation_with_question(owner, "First?");
     let stored = db.create(&user, &conversation).await;
-    assert_eq!(stored, 1);
+    assert_eq!(stored.messages(), 1);
 
     // A retry of what is stored changes nothing.
     {
@@ -445,20 +461,25 @@ async fn appending_is_idempotent_and_never_overwrites() {
             store::create(&mut tx, &conversation)
                 .await
                 .expect("a retry"),
-            1
+            stored
         );
         tx.commit().await.expect("commit");
     }
     assert_eq!(
-        db.append(&user, &conversation, 0).await.expect("a retry"),
-        1
+        db.append(&user, &conversation, stored)
+            .await
+            .expect("a retry"),
+        stored
     );
 
     // Two writers continue the same stored conversation differently: the first one wins, the
     // second is refused and overwrites nothing.
-    let load = || db.load(&user, owner, conversation.id());
-    let mut first = load().await.expect("load").expect("stored");
-    let mut second = load().await.expect("load").expect("stored");
+    let load = || db.load_stored(&user, owner, conversation.id());
+    let Loaded {
+        conversation: mut first,
+        stored: read,
+    } = load().await.expect("load").expect("stored");
+    let mut second = load().await.expect("load").expect("stored").conversation;
     first.append(
         EntryKind::Question,
         model().user_text("From one writer").expect("text"),
@@ -467,38 +488,74 @@ async fn appending_is_idempotent_and_never_overwrites() {
         EntryKind::Question,
         model().user_text("From another writer").expect("text"),
     );
-    assert_eq!(db.append(&user, &first, 1).await.expect("appended"), 2);
+    let after_first = db.append(&user, &first, read).await.expect("appended");
+    assert_eq!(after_first.messages(), 2);
+    // The same append again, as after a commit whose outcome was lost: nothing changes.
+    assert_eq!(
+        db.append(&user, &first, read).await.expect("a retry"),
+        after_first
+    );
     assert!(matches!(
-        db.append(&user, &second, 1).await,
+        db.append(&user, &second, read).await,
         Err(StoreError::Conflict(_))
     ));
     // Nor does a writer whose copy is shorter than what is stored pass.
     assert!(matches!(
-        db.append(&user, &conversation, 1).await,
+        db.append(&user, &conversation, stored).await,
         Err(StoreError::Conflict(_))
     ));
     let stored_now = load().await.expect("load").expect("stored");
-    assert_eq!(entries(&stored_now), entries(&first));
+    assert_eq!(entries(&stored_now.conversation), entries(&first));
 
-    // No gaps: appending from after the stored end, or after the conversation's own end.
-    let mut longer = load().await.expect("load").expect("stored");
+    // No gaps: a position past the conversation's own end, or past the stored end.
+    let Loaded {
+        conversation: mut longer,
+        stored: two,
+    } = load().await.expect("load").expect("stored");
     for text in ["Three", "Four"] {
         longer.append(EntryKind::Question, model().user_text(text).expect("text"));
     }
+    let four = {
+        // Stored in a transaction that rolls back: a position the database never reached.
+        let mut tx = db.db.begin(&user).await.expect("a tenant transaction");
+        let four = store::append(&mut tx, &longer, two)
+            .await
+            .expect("appended");
+        tx.rollback().await.expect("roll back");
+        four
+    };
     assert!(matches!(
-        db.append(&user, &longer, 3).await,
-        Err(StoreError::Gap { from: 3, stored: 2 })
+        db.append(&user, &first, four).await,
+        Err(StoreError::Gap { from: 4, stored: 2 })
     ));
+    longer.append(
+        EntryKind::Question,
+        model().user_text("Five").expect("text"),
+    );
     assert!(matches!(
-        db.append(&user, &longer, 5).await,
-        Err(StoreError::Gap { from: 5, stored: 4 })
+        db.append(&user, &longer, four).await,
+        Err(StoreError::Gap { from: 4, stored: 2 })
     ));
-    assert_eq!(db.append(&user, &longer, 2).await.expect("appended"), 4);
+    assert_eq!(
+        db.append(&user, &longer, two)
+            .await
+            .expect("appended")
+            .messages(),
+        5
+    );
 
-    // A conversation that was never created cannot get messages.
+    // A conversation that was never created cannot get messages, even from a position of
+    // another conversation.
     let unknown = conversation_with_question(owner, "Never created");
     assert!(matches!(
-        db.append(&user, &unknown, 0).await,
+        db.append(&user, &unknown, stored).await,
+        Err(StoreError::Conflict(_))
+    ));
+    let mut tx = db.db.begin(&user).await.expect("a tenant transaction");
+    let unknown_stored = store::create(&mut tx, &unknown).await.expect("created");
+    tx.rollback().await.expect("roll back");
+    assert!(matches!(
+        db.append(&user, &unknown, unknown_stored).await,
         Err(StoreError::NotStored)
     ));
 }
@@ -512,7 +569,7 @@ async fn other_tenants_and_other_users_get_nothing() {
     let user = db.user(tenant);
     let owner = principal(&user);
     let conversation = conversation_with_question(owner, "Mine only?");
-    db.create(&user, &conversation).await;
+    let stored = db.create(&user, &conversation).await;
 
     // Another user of the same tenant: the conversation's tools run as its owner, so only the
     // owner loads it.
@@ -545,7 +602,7 @@ async fn other_tenants_and_other_users_get_nothing() {
         Err(StoreError::WrongTenant)
     ));
     assert!(matches!(
-        store::append(&mut tx, &conversation, 0).await,
+        store::append(&mut tx, &conversation, stored).await,
         Err(StoreError::WrongTenant)
     ));
     assert!(matches!(

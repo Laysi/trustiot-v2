@@ -6,6 +6,7 @@
 //! (`testkit::clock::manual`), so they fire in order, never because the machine is slow.
 
 use std::collections::BTreeMap;
+use std::net::Ipv4Addr;
 use std::time::Duration;
 
 use agent::modbus::endpoint::Endpoints;
@@ -123,6 +124,12 @@ fn devices(
             (device, reader)
         })
         .collect()
+}
+
+/// The endpoints of a test. The address guard refuses loopback, where the fake converter
+/// listens; only tests can exempt it.
+fn loopback_endpoints() -> Endpoints {
+    Endpoints::new(DEFAULT_CONNECT_TIMEOUT).exempt_for_tests([Ipv4Addr::LOCALHOST.into()])
 }
 
 /// The device and reader of a test with one device.
@@ -270,7 +277,7 @@ async fn every_function_code_and_type_reads_over_rtu() {
             ],
         )],
     ));
-    let mut endpoints = Endpoints::new(DEFAULT_CONNECT_TIMEOUT);
+    let mut endpoints = loopback_endpoints();
     let mut connection = endpoints.connection(&device);
     let poll = bounded(
         "a poll",
@@ -317,7 +324,7 @@ async fn an_exception_over_rtu_fails_only_its_request() {
             vec![holding("a", 0), holding("b", 100), input("c", 0)],
         )],
     ));
-    let mut connection = Endpoints::new(DEFAULT_CONNECT_TIMEOUT).connection(&device);
+    let mut connection = loopback_endpoints().connection(&device);
     let poll = bounded(
         "a poll",
         reader.poll(&mut connection, &TestClock::new(), TIMEOUT),
@@ -349,7 +356,7 @@ async fn devices_on_one_converter_share_one_connection_and_take_turns() {
             ("meter-3", 3, vec![holding("power", 0), input("energy", 0)]),
         ],
     );
-    let mut endpoints = Endpoints::new(DEFAULT_CONNECT_TIMEOUT);
+    let mut endpoints = loopback_endpoints();
     let [(one, first), (two, second), (three, third)] = &devices[..] else {
         panic!("three devices");
     };
@@ -436,7 +443,7 @@ async fn broadcast_responses_never_land_on_another_device() {
     let [(meter, meter_reader), (drive, drive_reader)] = &devices[..] else {
         panic!("two devices");
     };
-    let mut endpoints = Endpoints::new(DEFAULT_CONNECT_TIMEOUT);
+    let mut endpoints = loopback_endpoints();
     let mut meter_connection = endpoints.connection(meter);
     let mut drive_connection = endpoints.connection(drive);
     // Another client of the same converter (a field SCADA, say), on its own connection. It
@@ -446,7 +453,8 @@ async fn broadcast_responses_never_land_on_another_device() {
         "127.0.0.1",
         endpoint.address().port(),
         DEFAULT_CONNECT_TIMEOUT,
-    );
+    )
+    .exempt_for_tests([Ipv4Addr::LOCALHOST.into()]);
     let clock = TestClock::new();
     let read = |start, count| {
         Read::new(FunctionCode::ReadHoldingRegisters, start, count).expect("a valid range")
@@ -545,7 +553,7 @@ async fn a_silent_device_holds_the_others_up_by_one_timeout_per_request() {
     let [(one, first), (two, second), (three, third)] = &devices[..] else {
         panic!("three devices");
     };
-    let mut endpoints = Endpoints::new(DEFAULT_CONNECT_TIMEOUT);
+    let mut endpoints = loopback_endpoints();
     let (mut c1, mut c2, mut c3) = (
         endpoints.connection(one),
         endpoints.connection(two),
@@ -612,7 +620,7 @@ async fn a_siblings_late_answer_is_a_unit_mismatch_not_a_value() {
     let [(one, first), (two, second)] = &devices[..] else {
         panic!("two devices");
     };
-    let mut endpoints = Endpoints::new(DEFAULT_CONNECT_TIMEOUT);
+    let mut endpoints = loopback_endpoints();
     let (mut c1, mut c2) = (endpoints.connection(one), endpoints.connection(two));
     let clock = TestClock::new();
 
@@ -661,7 +669,7 @@ async fn a_late_answer_of_another_shape_is_not_taken_for_the_next_request() {
             vec![holding("a", 0), holding("b", 1), holding("c", 100)],
         )],
     ));
-    let mut connection = Endpoints::new(DEFAULT_CONNECT_TIMEOUT).connection(&device);
+    let mut connection = loopback_endpoints().connection(&device);
     let clock = TestClock::new();
     let (poll, ()) = bounded("a poll and the clock", async {
         tokio::join!(reader.poll(&mut connection, &clock, TIMEOUT), async {
@@ -705,7 +713,7 @@ async fn known_limitation_a_late_answer_of_the_same_shape_is_taken_for_the_next_
         &endpoint,
         vec![("meter-1", 1, vec![holding("a", 0), holding("c", 100)])],
     ));
-    let mut connection = Endpoints::new(DEFAULT_CONNECT_TIMEOUT).connection(&device);
+    let mut connection = loopback_endpoints().connection(&device);
     let clock = TestClock::new();
     let (poll, ()) = bounded("a poll and the clock", async {
         tokio::join!(reader.poll(&mut connection, &clock, TIMEOUT), async {

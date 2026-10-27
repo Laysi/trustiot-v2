@@ -1,9 +1,8 @@
-//! Cross-tenant negative tests (decision 29, crates/testkit): the certs service keeps no tenant
-//! data of its own, so what applies is the coverage check and the outbox. Every relation the
-//! service role can reach must be declared, and so must every operation of its client API: the
-//! CA's tables are exempt here with the reason they hold no tenant data, and a new table or
-//! operation fails this test until it is declared (a tenant table with row-level security and
-//! the probes, an endpoint to attack) or exempted with a reason. Its other endpoints serve public
+//! Cross-tenant negative tests (decision 29, crates/testkit). Every relation the service role can
+//! reach must be declared, and so must every operation of its client API: the CA's tables are
+//! exempt here with the reason they hold no tenant data, and a new table or operation fails this
+//! test until it is declared (a tenant table with row-level security and the probes, an endpoint
+//! to attack) or exempted with a reason. Its other endpoints serve public
 //! CA data under `/internal`, which the OpenAPI document leaves out because the ingress never
 //! routes it.
 //!
@@ -15,8 +14,14 @@
 //! port of its own outside the OpenAPI document, which only the broker's workload reaches. The
 //! workstation API is for platform administrators only, which `tests/workstation.rs` tests. The
 //! registrations themselves (`certs.gateway_registrations`, `certs.workstation_request_nonces`)
-//! are platform data the service role cannot reach at all, only the platform role. If a later
-//! issue stores tenant ids here, the tables become tenant tables and get the probes.
+//! are platform data the service role cannot reach at all, only the platform role.
+//!
+//! Since Laysi/trustiot-v2#632 the service keeps which tenant each gateway is bound to
+//! (`certs.gateway_bindings`) and each tenant's status (`certs.tenant_statuses`): tenant tables,
+//! probed here. The service role inserts bindings and stores statuses in the event's tenant only;
+//! the reads across tenants are the platform role's (`tests/bindings.rs` checks that it sees every
+//! tenant and that each read is in the audit log). Consuming the assets service's events also gave
+//! the schema the outbox consumer's bookkeeping tables, which hold no tenant data.
 //!
 //! Since the factory registration the service is an outbox producer (`certs.gateway_registered`,
 //! platform-wide), so its schema has the outbox's tables with the tenant policies of every
@@ -41,6 +46,21 @@ const SEED_EVENT: &str = "INSERT INTO certs.outbox_event
      envelope)
 VALUES (1, $2::uuid, 'testkit.canary', $1::uuid, 'testkit', $3, 1, '{}'::jsonb)";
 
+/// One binding of the tenant: `$2` is the binding id, the canary the gateway's hardware ID
+/// (`canary-a-<32 hex>` fits the hardware ID rule).
+const SEED_BINDING: &str = "INSERT INTO certs.gateway_bindings
+    (tenant_id, binding_id, hardware_id, bound_at, position_tx, position_id)
+VALUES ($1::uuid, $2::uuid, $3, now(), 1, 1)";
+
+/// The tenant's status, one row per tenant; the table has no column for `$2` (the tenant id
+/// again) or the canary.
+const SEED_STATUS: &str = "INSERT INTO certs.tenant_statuses (tenant_id, status, version)
+SELECT $1::uuid, 'suspended', 1 WHERE $2::uuid IS NOT NULL AND $3::text IS NOT NULL";
+
+const CONSUMER_TABLE: &str = "the outbox consumer's bookkeeping (crates/outbox): subscription \
+     positions and processed or failed event IDs, no tenant data; the consumer reads and writes \
+     it in transactions without a tenant";
+
 /// One aggregate of the tenant, its sequence in the outbox: the canary is the aggregate id; the
 /// table has no column for `$2`.
 const SEED_AGGREGATE: &str = "INSERT INTO certs.outbox_aggregate
@@ -61,6 +81,24 @@ async fn every_relation_and_operation_the_service_has_is_declared() {
     .table(pg_table!("certs.outbox_event", seed = SEED_EVENT))
     // The service role reads and advances the sequence of its tenant's aggregates only.
     .table(pg_table!("certs.outbox_aggregate", seed = SEED_AGGREGATE))
+    // The service role only inserts bindings (no SELECT, UPDATE or DELETE), in the event's
+    // tenant: the probes check that it cannot write one for another tenant.
+    .table(pg_table!("certs.gateway_bindings", seed = SEED_BINDING))
+    // The service role reads and replaces its tenant's status only (no DELETE).
+    .table(pg_table!(
+        "certs.tenant_statuses",
+        seed = SEED_STATUS,
+        one_per_tenant
+    ))
+    .exempt("certs.outbox_subscription", CONSUMER_TABLE)
+    .exempt("certs.outbox_inbox", CONSUMER_TABLE)
+    .exempt("certs.outbox_dead_letter", CONSUMER_TABLE)
+    .exempt(
+        "certs.outbox_version",
+        "the versions notification-mode consumers stored per aggregate (crates/outbox), no \
+         tenant data; unused by this service so far (the tenant statuses keep their own \
+         version)",
+    )
     .exempt(
         "certs.issued_certificates",
         "the ledger of signed gateway, workstation and MQTT broker certificates: serial \

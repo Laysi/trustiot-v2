@@ -18,6 +18,8 @@ doc = false
 # tests/no_contract.rs checks it.
 [dependencies]
 ai-clients = { path = "../../crates/ai-clients" }
+# The admin API's wire types, shared with the identity service (src/admin.rs).
+ai-gateway-api = { path = "../../crates/ai-gateway-api" }
 axum = { workspace = true, features = ["http1", "tokio"] }
 bytes.workspace = true
 # `stream::unfold`: a provider stream relayed as the response body (src/relay.rs).

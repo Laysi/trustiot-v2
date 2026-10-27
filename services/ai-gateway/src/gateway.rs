@@ -392,6 +392,16 @@ impl Gateway {
         &self.rules
     }
 
+    /// The models the configuration gives `role`, which a reset goes back to.
+    pub fn configured_models(&self, role: &str) -> Option<&[String]> {
+        self.roles.get(role).map(|role| role.models.as_slice())
+    }
+
+    /// The store the roles' models come from; `None` without [`Gateway::with_store`].
+    pub fn store(&self) -> Option<&Store> {
+        self.live.as_ref().map(|live| &live.store)
+    }
+
     /// The snapshot in memory, without checking the database.
     pub fn current(&self) -> Arc<Snapshot> {
         Arc::clone(&self.current.read().unwrap_or_else(PoisonError::into_inner))

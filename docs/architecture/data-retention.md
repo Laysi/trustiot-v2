@@ -1,6 +1,6 @@
 # 資料保存期限與磁碟水位
 
-原始遙測資料在 ClickHouse 存多久、閘道器的緩衝最多存多久、兩者的關係，以及 ClickHouse 磁碟快滿時的告警（清單 I2、G1、B3；Laysi/trustiot-v2#92，2026-10-21 訂定）；1 分鐘與 1 小時彙總表存多久（Laysi/trustiot-v2#141，2026-10-25 訂定，見下方「彙總資料的保存期限」）；租戶看得到多久以前的資料，以及由誰強制（Laysi/trustiot-v2#143，2026-10-26 訂定，見下方「可查期間」）。地端以 values 自訂保存期限由 Laysi/trustiot-v2#446 接上。
+原始遙測資料在 ClickHouse 存多久、閘道器的緩衝最多存多久、兩者的關係，以及 ClickHouse 磁碟快滿時的告警（清單 I2、G1、B3；Laysi/trustiot-v2#92，2026-10-21 訂定）；1 分鐘與 1 小時彙總表存多久（Laysi/trustiot-v2#141，2026-10-25 訂定，見下方「彙總資料的保存期限」）；租戶看得到多久以前的資料，以及由誰強制（Laysi/trustiot-v2#143，2026-10-26 訂定，見下方「可查期間」）；AI 助理刪除的對話留多久（Laysi/trustiot-v2#644，見下方「AI 助理刪除的對話」）。地端以 values 自訂保存期限由 Laysi/trustiot-v2#446 接上。
 
 ## 訂定的值
 
@@ -83,3 +83,17 @@ ClickHouse 的磁碟滿了就停擺：寫入失敗，套用保存期限的 merge
 - 測試：`services/ingest/tests/disk_watermark.rs` 把真的 ClickHouse 的資料目錄放在 256 MiB 的 tmpfs，填到 85 % 與 95 %，確認依序觸發 `warning`、`critical`，釋放後回到 `ok`；監控角色讀不到其他東西，沒有角色的帳號讀不到 `system.disks`。
 - 告警查詢失敗時（ClickHouse 停擺或過載、角色不見、`system.disks` 被拒）規則不回傳任何列。Laysi/trustiot-v2#183 在 Grafana 設定這條規則時，NoData 與 Error 要設成告警，不能是 OK，否則告警正好在它要防的停擺期間沉默。
 - 觸發時：先確認是資料量成長還是別的東西（日誌表、系統表、卡住的 mutation），清掉不需要的部分。例行的處理只有擴充磁碟（StorageClass 支援 `allowVolumeExpansion` 時改 PVC 大小，外部 ClickHouse 照供應商的方式）。不要縮短保存期限來釋放空間：那會永久刪掉每個租戶的原始資料，SaaS 上也違反對方案的承諾（見上方「設定與變更」）；而且 `MATERIALIZE TTL` 自己也需要暫時的空間，接近滿時反而更糟。
+
+## AI 助理刪除的對話
+
+AI 助理的對話存在 Postgres（assistant 的 schema），不在 ClickHouse。
+
+| 項目 | 值 | 在哪裡 |
+|---|---|---|
+| 使用者刪除的對話可以還原的期間；期滿後連同訊息、捨棄的回合與提問紀錄清除 | 30 天（2026-10-24 產品負責人決定，Laysi/trustiot-v2#644） | `services/assistant/src/store.rs` 的 `DELETED_RETENTION_DAYS`；資料庫的同一個值寫在 `services/assistant/migrations/postgres/0002_conversation_threads.sql` 的 policy，單元測試比對兩者 |
+
+- 30 天從刪除的時間起算，用資料庫時鐘的 `deleted_at`；服務角色不能指定或往前改這個時間。
+- 刪除後只有擁有者的「已刪除」清單看得到它，其他地方（含擁有者）都當它不存在。期滿後服務角色不能更改或還原它（`expired_stay_deleted`），只有清除用的平台角色 `assistant_platform` 刪得掉它；平台角色不論交易設了什麼租戶，都只看得到、刪得掉刪除滿 30 天的對話（restrictive policy `platform_expired_only`）。
+- 清除由排程執行（Laysi/trustiot-v2#645），所以實際刪除可能晚於滿 30 天的時間點；在清除之前，資料仍在資料庫與備份裡；清除之後，資料仍留在清除前做的備份裡，直到那些備份的保存期限屆滿。
+- 沒有刪除的對話（含它捨棄的回合）保存多久由 Laysi/trustiot-v2#652 決定；在那之前一直保存。
+- 細節見 [services/assistant](../../services/assistant/README.md) 的「對話的儲存」。

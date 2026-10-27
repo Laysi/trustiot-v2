@@ -22,6 +22,10 @@ Laysi/trustiot-v2#79（2026-10-23）加上：
 
 - 出廠登錄 API（見[出廠登錄](#出廠登錄)）：產線工作站以工作站憑證簽請求、平台管理員登入，登錄閘道器的硬體 ID、TPM 金鑰與背書金鑰，取得第一張閘道器憑證；以平台角色 `certs_platform` 寫入，並發出全平台事件 `certs.gateway_registered`。certs 從此是事件的產生者。
 
+Laysi/trustiot-v2#632（2026-10-24）加上：
+
+- 消費資產服務的 `assets.gateway_bound`，維護閘道器目前綁定的租戶，以及租戶狀態（正常／停權）的表，和平台角色的跨租戶讀取介面，給換發（Laysi/trustiot-v2#81）與 broker 權限（Laysi/trustiot-v2#633）用（見[閘道器的綁定與租戶狀態](#閘道器的綁定與租戶狀態)）。certs 從此也是事件的消費端，也開始存租戶 ID（兩張照決策 29 的租戶表）。
+
 ## CA 階層與私鑰保管
 
 2026-10-21 決定（Laysi/trustiot-v2#78）。
@@ -165,7 +169,7 @@ age --decrypt -i <自己的 identity> root-key.age \
 
 規則在[架構決策](../../docs/architecture/decisions.md)的決策 6、12 與清單 B1、D2–D4（2026-10-24 決定，Laysi/trustiot-v2#638），這裡只摘要 certs 要做的事：
 
-- 閘道器憑證只帶硬體 ID（`CN`），不帶租戶；綁定改變時憑證內容不變，簽發紀錄也不存租戶（見[資料庫](#資料庫)）。租戶一律是該硬體 ID 在資產服務目前的綁定：certs 消費 `assets.gateway_bound`（之後加上 Laysi/trustiot-v2#115 的解綁事件）維護自己的對照表，並以事件收斂的本地狀態表記租戶狀態（清單 B1 的通知模式，Laysi/trustiot-v2#632）；換發與 broker 權限都不同步呼叫資產服務或身分服務。
+- 閘道器憑證只帶硬體 ID（`CN`），不帶租戶；綁定改變時憑證內容不變，簽發紀錄也不存租戶（見[資料庫](#資料庫)）。租戶一律是該硬體 ID 在資產服務目前的綁定：certs 消費 `assets.gateway_bound`（之後加上 Laysi/trustiot-v2#115 的解綁事件）維護自己的對照表，並以事件收斂的本地狀態表記租戶狀態（清單 B1 的通知模式，Laysi/trustiot-v2#632，見[閘道器的綁定與租戶狀態](#閘道器的綁定與租戶狀態)）；換發與 broker 權限都不同步呼叫資產服務或身分服務。
 - **換發**（Laysi/trustiot-v2#81）：登錄有效（未除役）、閘道器目前有綁定、該租戶未停權才簽發。簽不簽由簽發當下的綁定與租戶狀態決定，不是把租戶寫進憑證。還沒綁定（在設備池裡）的閘道器不換發，出廠憑證到期後要等綁定才能換發。停權的事件與狀態由 Laysi/trustiot-v2#107 建立，在那之前表裡的租戶都是「正常」，測試直接寫入「停權」作為測試替身；Laysi/trustiot-v2#108 接上真實來源，不改換發的拒絕邏輯。
 - **broker 權限**（Laysi/trustiot-v2#633）：閘道器在 dynsec 有角色的條件是已出廠登錄、沒有除役、目前有綁定，而且至少有一張沒撤銷、沒過期的閘道器憑證；還沒綁定的閘道器連得上 broker，但不能發布或訂閱任何東西；解綁就拿掉角色。
 - **解綁與改綁**：解綁時撤銷這台閘道器目前的憑證（Laysi/trustiot-v2#115，以 Laysi/trustiot-v2#636 的撤銷函式）。閘道器交給下一個租戶時一定換新的 SD 卡；新卡在閘道器綁到新租戶之後，以同一顆 TPM 經換發取得憑證。把舊卡裝回同一台硬體不在支援的流程內（見決策 12）。
@@ -405,6 +409,55 @@ trustiot-workstation register --hardware-id <硬體 ID> --csr gateway.csr --ek e
 
 每次新登錄記一行 INFO `registered a gateway`（平台管理員的使用者 id、工作站、硬體 ID、序號、簽發 CA 的金鑰 id、到期時間），重送記 `a gateway registration repeated an existing one`，工作站被拒記 `refused a gateway registration: ...` 與原因；都不含 CSR、金鑰或憑證。平台角色的每個交易另有 service-kit 的 `platform database access`（用途 `gateway-registration`）。
 
+## 閘道器的綁定與租戶狀態
+
+2026-10-24 起（Laysi/trustiot-v2#632，`src/bindings.rs`）。閘道器憑證只帶硬體 ID、不帶租戶；閘道器屬於哪個租戶一律是資產服務「目前的綁定」，各服務以事件維護自己的對照表（決策 12，見[閘道器的租戶歸屬與換發條件](#閘道器的租戶歸屬與換發條件)）。certs 的對照表給換發（Laysi/trustiot-v2#81）、broker 權限（Laysi/trustiot-v2#633）與停權（Laysi/trustiot-v2#108）讀，它們的請求路徑上不必呼叫其他服務。
+
+### 消費的事件
+
+- 訂閱 `certs.assets-events`（`SUBSCRIPTION`，永遠不改名），讀資產服務的 outbox。`tools/migrate/src/registry.rs` 把 certs 列為 `assets` 的消費端，migration Job 因此讓 `certs_platform` 讀 `assets.outbox_event`，並在 `certs` 建立消費端的四張表。訂閱從頭讀，所以這個版本之前的綁定也會補上。
+- `assets.gateway_bound`（`contract::events::assets::GatewayBound`）：消費端在事件的租戶交易裡以 `certs_app` 寫 `gateway_bindings` 一列（租戶、綁定 ID、硬體 ID、事件的 `occurred_at`、事件在資產服務 log 的位置）。主鍵（租戶、綁定 ID）已經有這一列時什麼都不寫，所以同一個事件送兩次、整個訂閱重播都只有一列、內容不變。每次處理記一行 INFO `applied assets.gateway_bound`（硬體 ID、綁定 ID、租戶、事件 ID、`created`）。
+- 錯誤分類比照資產服務的設備池消費端：
+
+| 情況 | 處理 |
+| --- | --- |
+| 硬體 ID 或綁定 ID 不合規則（解碼失敗）、沒有租戶（全平台事件）、aggregate 不是該綁定的 `gateway_binding`、表以 SQLSTATE 22xxx 或 23514 拒絕的值 | 每次重試都會失敗：進 dead letter，訂閱繼續處理之後的事件 |
+| 其他資料庫錯誤（連線、逾時、序列化衝突等） | 暫時的：退避後重試同一個事件 |
+| aggregate 是 `gateway_binding`、但這個版本不認得的事件（例如 Laysi/trustiot-v2#115 的解綁事件，在資產服務先部署時） | 重試，不略過：綁定的事件會改變目前的綁定，略過就永遠遺失，閘道器會一直留在舊的租戶。訂閱停在這個事件，lag 告警會顯示，直到認得它的 certs 版本上線 |
+| 資產服務其他 aggregate 的事件（設備型號、設備） | 略過：與綁定無關 |
+
+### 目前的綁定：以事件在 log 的順序判斷新舊
+
+一台閘道器目前的綁定，是它在資產服務 log 裡位置最後（`position_tx`、`position_id`，即 `crates/outbox` 的 `Position`）的那個綁定，而且沒有 `unbound_at`。不用時間判斷：資產服務要等前一個綁定結束（解綁，Laysi/trustiot-v2#115）才建立新的綁定，新綁定的交易在前一個綁定 commit 之後才寫入，它的事件在 log 裡一定排在後面；`occurred_at` 來自各副本的時鐘，不保證這個順序。這依賴資產服務的一個不變式：綁定交易的第一個寫入必須是 `gateway_bindings` 的 `INSERT ... ON CONFLICT`，交易在它等完前一個綁定之後才取得交易 ID，事件的位置（`tx_order`）就是這個 ID（`services/assets/src/gateways/binding.rs` 的註解）。較舊的綁定晚到時（例如修好後重播的 dead letter）照樣存下，但不會變成目前的綁定。`bound_at` 只供讀取。
+
+表沒有「每台閘道器一列」的唯一限制，也不在處理時更新別的列：消費端在事件的租戶交易裡，RLS 看不到、也改不了別的租戶的列，閘道器換租戶時新舊綁定在不同租戶。所以一個綁定一列，誰是目前的綁定在讀取時由平台角色決定。
+
+解綁（Laysi/trustiot-v2#115）之後會以自己的事件，在同一個租戶（綁定的 aggregate）設定該列的 `unbound_at`；欄位已經在表上，讀取也已經把結束的綁定當作沒有綁定，不必遷移資料。那時再給 `certs_app` 更新這一欄的權限。`unbound_at` 不與 `bound_at` 比較（表上沒有這個 CHECK）：兩個時間來自不同副本的時鐘，順序以 log 為準，時鐘偏差不能讓解綁被拒、進 dead letter。
+
+### 租戶狀態
+
+`tenant_statuses` 每個租戶一列：狀態（`active` 或 `suspended`）與版本號。寫入只有 `store_tenant_status`：版本號比已存的大才覆蓋（清單 B1 的通知模式），所以晚到或重播的舊狀態不會蓋掉新的，同時寫同一個租戶的交易會排隊再比較；它要在該租戶的交易裡執行，寫別的租戶被 RLS 以 42501 拒絕。沒有紀錄的租戶讀成正常。
+
+現在沒有任何事件寫它：租戶的停權事件與狀態由 Laysi/trustiot-v2#107 建立，Laysi/trustiot-v2#108 接上停權的處理，屆時由消費端在事件的租戶交易呼叫同一個寫入函式，讀取介面不變。在那之前，測試直接以租戶交易呼叫 `store_tenant_status` 寫入「停權」當作測試替身（`tests/bindings.rs`）。
+
+### 讀取介面
+
+`Projection`（以平台角色 `certs_platform` 的連線池建立）：
+
+| 方法 | 給誰 | 回傳 |
+| --- | --- | --- |
+| `gateway_tenant(hardware_id, purpose)` | 換發（Laysi/trustiot-v2#81） | 目前的綁定（租戶、綁定 ID、硬體 ID、`bound_at`）；從沒綁定過或最後的綁定已結束時是 `None` |
+| `tenant_suspended(tenant_id, purpose)` | 換發，之後停權（Laysi/trustiot-v2#108） | 是否停權；沒有紀錄是 `false` |
+| `bound_gateways(purpose)` | broker 權限的完整比對（Laysi/trustiot-v2#633） | 所有租戶目前已綁定的閘道器，依硬體 ID 的位元組順序 |
+
+這三個讀取都不在請求者的租戶交易裡：換發是沒有使用者身分的公開請求，同步要看全部租戶。所以是平台角色的跨租戶讀取：
+
+- 兩張表的 `platform_access` policy 只給 `certs_platform`、只限 `SELECT`，它也只有這兩張表的 `SELECT`；查詢只取上表的欄位。
+- 每次讀取是一筆自己的 `PlatformDb::begin` 交易，第一個語句就是 `SET TRANSACTION READ ONLY`，資料庫拒絕其中的任何寫入。`PlatformDb::begin` 每筆交易記一行 INFO `platform database access`，帶 actor（`service`、`certs`）與呼叫端給的 `purpose`（例如 `renew-gateway-certificate`），所以每次讀取都在稽核日誌裡。不用 `PlatformDb::reader`：它只在建立時記一次 INFO、之後每筆交易只記 DEBUG，適合每秒輪詢的消費端；這三個讀取頻率低（一台閘道器幾十天換發一次、同步定期一次），每次都要留下紀錄。
+- 租戶交易讀不到別的租戶：`certs_app` 對 `gateway_bindings` 只有 `INSERT`（`ON CONFLICT DO NOTHING` 不指定衝突目標就不需要 `SELECT`），讀不到任何綁定；`tenant_statuses` 的 `tenant_isolation` 只讓它讀寫交易的租戶那一列。
+- 平台角色的連線池（`PLATFORM_CONNECTIONS`，每個副本 4 條）由出廠登錄、這個消費端的輪詢與 lag 量測、以及這三個讀取共用，都是短交易；沒有新增連線池，chart 的連線預算不變。
+- 每個讀取交易在伺服器端設上限（`SET LOCAL`）：`statement_timeout` 5 秒（`READ_STATEMENT_TIMEOUT`）、`lock_timeout` 2 秒（`READ_LOCK_TIMEOUT`，例如等 migration 的 `ALTER TABLE`）。慢的查詢不會長時間佔住共用池的連線，超過時 Postgres 取消它，讀取回錯誤。
+
 ## broker 伺服器憑證
 
 2026-10-23 決定（Laysi/trustiot-v2#557）。MQTT broker 在閘道器埠（8883）以這張憑證向閘道器證明自己；閘道器以下面的信任錨與名稱驗證它。和閘道器、工作站憑證同一個簽發 CA，以 EKU 區分（理由同[工作站憑證](#工作站憑證)的「profile 的決定」：多一個簽發 CA 要多一套金鑰、儀式、輪替與 CRL）。私鑰在叢集內由 chart 的 CronJob `<release>-mqtt-broker-certificate` 產生，不經過 certs 服務；它在儀式之後取得第一張憑證、過了效期一半就以新的私鑰換發，寫進只有 broker 的 pod 掛的 Secret `<release>-mqtt-broker-tls`，broker 以 SIGHUP 換上，不中斷連線（Laysi/trustiot-v2#535，[deploy/chart/README.md](../../deploy/chart/README.md) 的「伺服器憑證」）。閘道器怎麼驗證它（信任錨、名稱、用途、以根 CRL 檢查簽發 CA）見[閘道器對 broker 伺服器憑證的信任](#閘道器對-broker-伺服器憑證的信任)（Laysi/trustiot-v2#556）。
@@ -515,7 +568,7 @@ broker 埠（`broker.listen_addr`，預設 8082）只有一個端點，mesh 只�
 | `TRUSTIOT_POSTGRES_HOST`、`_PORT`、`_DATABASE`、`_SSLMODE`、`_CA_FILE` | 平台設定：Postgres 位置；只接受 `verify-full`，`_CA_FILE` 必填 |
 | `TRUSTIOT_INTERNAL_IDENTITY_KEYS_FILE` | 平台設定：身分服務的公鑰（JWK Set），驗內部身分 token 用；chart 在身分服務啟用時設定，檔案變更時不必重啟就重讀。沒有這個變數時服務不啟動 |
 | `TRUSTIOT__DATABASE__USERNAME`、`TRUSTIOT__DATABASE__PASSWORD` | 服務角色 `certs_app` 的帳密：密碼來自 Secret `<release>-certs-password` 的 `certs_app` key |
-| `TRUSTIOT__DATABASE__PLATFORM_USERNAME`、`TRUSTIOT__DATABASE__PLATFORM_PASSWORD` | 平台角色 `certs_platform` 的帳密（出廠登錄寫全平台事件用）：密碼來自同一個 Secret 的 `certs_platform` key；帳號不能和服務角色相同，密碼不能是空的 |
+| `TRUSTIOT__DATABASE__PLATFORM_USERNAME`、`TRUSTIOT__DATABASE__PLATFORM_PASSWORD` | 平台角色 `certs_platform` 的帳密（出廠登錄寫全平台事件、讀資產服務的事件、跨租戶讀綁定與租戶狀態用）：密碼來自同一個 Secret 的 `certs_platform` key；帳號不能和服務角色相同，密碼不能是空的 |
 | `TRUSTIOT__DATABASE__MAX_CONNECTIONS` | 每個副本服務角色的連線上限，2–100，預設 5；平台角色另有最多 4 條；chart 以 `services.certs.database.maxConnections` 設定。連線池的大小或數量改變時，chart 的連線預算（`deploy/chart/templates/_postgres.tpl`，見 chart README 的「連線預算」）要一起改，`tests/chart_connections.rs` 比對兩者 |
 | `TRUSTIOT__CA__KEYS_FILE` | 簽發 CA 金鑰檔；chart 設成 `/etc/trustiot/certs-ca-keys/issuing-ca-keys.json` |
 | `TRUSTIOT__CA__ROOT_CERTIFICATE_FILE` | 根憑證；chart 設成 `/etc/trustiot/certs-ca/root.pem` |
@@ -535,22 +588,25 @@ broker 埠（`broker.listen_addr`，預設 8082）只有一個端點，mesh 只�
 
 ## 資料庫
 
-schema `certs`，DDL 在 `migrations/postgres/`，由 migration Job（登記在 `tools/migrate/src/registry.rs` 的 `PRODUCT`；從 Laysi/trustiot-v2#79 起產生事件、有平台角色，不消費事件）以 migration 角色套用。outbox 的表（`outbox_event`、`outbox_aggregate` 等）與它們的租戶政策由 Job 依 `crates/outbox` 建立，同每個產生者。檔案清單在 `src/schema.rs`，Job 與服務的 readiness 編譯同一份。
+schema `certs`，DDL 在 `migrations/postgres/`，由 migration Job（登記在 `tools/migrate/src/registry.rs` 的 `PRODUCT`；從 Laysi/trustiot-v2#79 起產生事件、有平台角色，從 Laysi/trustiot-v2#632 起消費 `assets` 的事件）以 migration 角色套用。outbox 的表（產生端的 `outbox_event`、`outbox_aggregate` 與它們的租戶政策，消費端的 `outbox_subscription`、`outbox_inbox`、`outbox_dead_letter`、`outbox_version`）由 Job 依 `crates/outbox` 建立，同每個產生者與消費端。檔案清單在 `src/schema.rs`，Job 與服務的 readiness 編譯同一份。
 
 | 角色 | 權限 |
 | --- | --- |
 | `certs_owner`（migration 角色） | 擁有 schema 與所有表 |
-| `certs_app`（服務角色） | `issued_certificates` 的 `SELECT`、`INSERT`，以及只限 `revoked_at`、`revocation_reason` 兩欄的 `UPDATE`（`0002_workstation_certificates.sql`，Laysi/trustiot-v2#534；閘道器的撤銷 Laysi/trustiot-v2#82 沿用），改不了簽出的內容、也不能刪除；`crls` 的 `SELECT`、`INSERT`、`UPDATE`；登錄的兩張表完全碰不到 |
-| `certs_platform`（平台角色，Laysi/trustiot-v2#79） | `0004_gateway_registrations.sql`：`crls` 的 `SELECT`；`issued_certificates` 與 `gateway_registrations` 的 `SELECT`、`INSERT`；`workstation_request_nonces` 的 `SELECT`、`INSERT`、`DELETE`；outbox 的寫入（Job 授予每個產生者的平台角色）。沒有任何 `UPDATE` |
+| `certs_app`（服務角色） | `issued_certificates` 的 `SELECT`、`INSERT`，以及只限 `revoked_at`、`revocation_reason` 兩欄的 `UPDATE`（`0002_workstation_certificates.sql`，Laysi/trustiot-v2#534；閘道器的撤銷 Laysi/trustiot-v2#82 沿用），改不了簽出的內容、也不能刪除；`crls` 的 `SELECT`、`INSERT`、`UPDATE`；登錄的兩張表完全碰不到。`0005_gateway_bindings.sql`（Laysi/trustiot-v2#632）：`gateway_bindings` 只有 `INSERT`，`tenant_statuses` 的 `SELECT`、`INSERT`、`UPDATE`，都受 RLS 限制在交易的租戶；消費端的四張表（Job 授權） |
+| `certs_platform`（平台角色，Laysi/trustiot-v2#79） | `0004_gateway_registrations.sql`：`crls` 的 `SELECT`；`issued_certificates` 與 `gateway_registrations` 的 `SELECT`、`INSERT`；`workstation_request_nonces` 的 `SELECT`、`INSERT`、`DELETE`；outbox 的寫入（Job 授予每個產生者的平台角色）。`0005_gateway_bindings.sql`：`gateway_bindings` 與 `tenant_statuses` 的 `SELECT`（`platform_access`，所有租戶）；`assets.outbox_event` 的 `SELECT`（Job 授予消費端的平台角色）。沒有任何 `UPDATE` |
 
 撤銷是最終的，對所有角色都一樣，包括擁有者與 superuser：`0002_workstation_certificates.sql` 的 trigger `issued_certificates_guard` 在每次 `UPDATE` 前檢查兩件事。一是撤銷過的列不能再改：不能收回撤銷、改撤銷時間或原因，否則有問題或被入侵的服務能讓憑證從下一張 CRL 消失。二是 `UPDATE` 只能改撤銷的兩欄：欄位權限已經這樣限制服務角色，trigger 再擋下擁有者與 superuser；它比對撤銷兩欄以外的整列，所以之後新增的欄位也不能改，除非新的 migration 另外處理。違反時錯誤是 SQLSTATE 42501（`insufficient_privilege`），訊息寫明序號。服務撤銷時只更新 `revoked_at IS NULL` 的列，不會碰到 trigger；trigger 只有擁有者能停用（`ALTER TABLE`），只有 superuser 能略過（`session_replication_role`）。
 
 | 表 | 內容 | RLS |
 | --- | --- | --- |
-| `issued_certificates` | 每張簽出的憑證：序號（主鍵）、簽發 CA 的金鑰 id、profile（`gateway`、`workstation` 或 `broker`；`broker` 由 `0003_broker_certificates.sql` 加入）、CN、效期、簽發時間、DER，撤銷時間與原因 | 無：不是租戶資料。閘道器憑證屬於閘道器，閘道器屬於哪個租戶是資產服務的綁定（見[閘道器的租戶歸屬與換發條件](#閘道器的租戶歸屬與換發條件)）；產線工作站與 MQTT broker 屬於平台，不屬於租戶；之後在這裡存租戶 id 時要改成租戶表 |
+| `issued_certificates` | 每張簽出的憑證：序號（主鍵）、簽發 CA 的金鑰 id、profile（`gateway`、`workstation` 或 `broker`；`broker` 由 `0003_broker_certificates.sql` 加入）、CN、效期、簽發時間、DER，撤銷時間與原因 | 無：不是租戶資料。閘道器憑證屬於閘道器，閘道器屬於哪個租戶是資產服務的綁定（見[閘道器的租戶歸屬與換發條件](#閘道器的租戶歸屬與換發條件)；certs 的副本在 `gateway_bindings`）；產線工作站與 MQTT broker 屬於平台，不屬於租戶；之後在這裡存租戶 id 時要改成租戶表 |
 | `crls` | 每個簽發 CA 目前的 CRL：金鑰 id（主鍵）、CRL 編號、thisUpdate、nextUpdate、DER | 無：公開資料 |
 | `gateway_registrations` | 每台登錄的閘道器：硬體 ID（主鍵）、TPM 金鑰的公鑰（唯一）、EK 與它的 SHA-256（使用中的列之間唯一）、第一張憑證的序號、登錄的工作站與它的憑證序號、平台管理員、登錄時間、除役時間。trigger 讓所有角色（含擁有者與 superuser）都不能刪除、清空或改寫，只能把 `decommissioned_at` 從 NULL 設定一次，違反時 SQLSTATE 42501 | 無：閘道器出廠時不屬於任何租戶，之後由資產服務指派 |
 | `workstation_request_nonces` | 工作站請求用過的 nonce：憑證序號、nonce、過期時間；過了時間的接受範圍才刪除 | 無 |
+| `gateway_bindings` | 資產服務的每個綁定（[閘道器的綁定與租戶狀態](#閘道器的綁定與租戶狀態)）：租戶與綁定 ID（主鍵）、硬體 ID、`bound_at`、事件在資產服務 log 的位置 `position_tx`、`position_id`、留給 Laysi/trustiot-v2#115 的 `unbound_at`、`recorded_at`。索引 `gateway_bindings_latest`（硬體 ID、位置由新到舊）給平台角色的跨租戶查詢，是「每個索引以 `tenant_id` 開頭」刻意的例外 | `tenant_isolation`；`certs_platform` 另有唯讀的 `platform_access` |
+| `tenant_statuses` | 每個租戶的狀態：租戶（主鍵）、`active` 或 `suspended`、版本號（不小於 0）、`updated_at` | `tenant_isolation`；`certs_platform` 另有唯讀的 `platform_access` |
+| `outbox_subscription`、`outbox_inbox`、`outbox_dead_letter`、`outbox_version` | 消費端的訂閱位置、處理過與進 dead letter 的事件 ID（`crates/outbox`） | 無：不是租戶資料 |
 | `trustiot_migrate_applied` | migration Job 套用過的檔案，`certs_app` 只能 `SELECT` | 無 |
 
 這裡不存任何私鑰：簽發 CA 私鑰在 Secret，根私鑰離線，閘道器的私鑰不離開 TPM，工作站的私鑰不離開工作站，broker 的私鑰只在 broker 的 Secret 與產生它的 CronJob 的記憶體裡。
@@ -575,7 +631,8 @@ CARGO_BUILD_JOBS=2 cargo test -p certs
 | `tests/crl.rs` | 驗收條件 2：CRL 的內容，以及 TLS 伺服器依它拒絕撤銷的憑證、CRL 過期後拒絕全部；新 CRL 的 nextUpdate 減 thisUpdate 是 `crl.validity` 加往前的 5 分鐘；真的服務依排程為每個簽發 CA 重發 CRL 並由 `crl.pem` 發布；以 superuser 拿住工作鎖、把 nextUpdate 調近時 `certs.crl.expiring` 經 OTLP 變成 1 並記 ERROR，放開後工作重發、指標回到 0（容器） |
 | `tests/key_custody.rs` | 驗收條件 3：程式檢查，只有列出並說明理由的位置能把私鑰變成位元組或文字；執行時，日誌開到 `trace`、開 OTLP、有等待中的金鑰、重讀與兩種壞掉的金鑰檔，日誌、端點（含簽發工作站憑證與 broker 伺服器憑證的回應，以及 broker 埠的其他路徑）與遙測都不含私鑰的任何片段（PKCS#8 涵蓋私鑰純量的任 24 個 base64 字元，其餘部分是演算法與公鑰，簽發 CA 憑證本來就公開；私鑰純量的十六進位、base64 與十進位位元組）（容器） |
 | `tests/ceremony.rs` | 真的 `certs-ca`：`root create` 的私鑰只到 stdout、`root sign` 只從 stdin 讀、簽出的簽發 CA 服務接受並印出金鑰 id、`root check` 認得自己的私鑰；別的私鑰、P-256 私鑰、根的名稱、0 天、已存在的輸出檔都拒絕，且不印出私鑰；真的服務在儀式前就緒、`certs.ca.signing` 是 0、每次檢查記 WARN 與等待中的金鑰 id，掛上憑證後不重啟就變成 1 並發出第一張 CRL（容器） |
-| `tests/cross_tenant.rs` | [crates/testkit](../../crates/testkit/README.md) 的覆蓋檢查：服務角色碰得到的每張表、規格裡的每個端點都要宣告；CA 的表都不是租戶資料而豁免（broker 伺服器憑證也屬於平台），outbox 的兩張表照租戶表探測（服務角色寫不了別的租戶的事件），所以不再以 `without_tenant_data` 宣告；登錄的表服務角色碰不到；工作站憑證的兩個端點與出廠登錄只給平台管理員，豁免並說明理由；broker 的簽發端點在自己的埠上，不在規格裡（容器） |
+| `tests/cross_tenant.rs` | [crates/testkit](../../crates/testkit/README.md) 的覆蓋檢查：服務角色碰得到的每張表、規格裡的每個端點都要宣告；CA 的表都不是租戶資料而豁免（broker 伺服器憑證也屬於平台），outbox 的兩張表照租戶表探測（服務角色寫不了別的租戶的事件），所以不再以 `without_tenant_data` 宣告；Laysi/trustiot-v2#632 的 `gateway_bindings` 與 `tenant_statuses` 照租戶表探測（每個租戶一列的 `one_per_tenant`），消費端的四張表豁免；登錄的表服務角色碰不到；工作站憑證的兩個端點與出廠登錄只給平台管理員，豁免並說明理由；broker 的簽發端點在自己的埠上，不在規格裡（容器） |
+| `tests/bindings.rs` | Laysi/trustiot-v2#632：真的服務建立訂閱 `certs.assets-events`（讀 `assets`）；以 `assets_app` 照綁定的寫法在租戶交易寫 `assets.gateway_bound` 後，表裡有這台閘道器、正確的租戶、綁定 ID、`occurred_at` 與事件位置，`gateway_tenant` 與 `bound_gateways` 讀得到；同一個事件再送一次、整個訂閱重播（`Replay::Reprocess`）後仍是同一列、內容不變。自己的訂閱的消費端：同一台閘道器較舊的綁定（log 位置較前、別的租戶）在較新的之後才到時存下但不是目前的綁定；不合規則的硬體 ID 與沒有租戶的綁定進 dead letter，之後的綁定照常處理。租戶狀態：沒有紀錄是正常、只接受較大的版本號、寫入停權後 `tenant_suspended` 為真；租戶交易寫不了別的租戶的狀態（42501）、只看得到自己的。平台角色讀得到兩個租戶的綁定、取 log 最後的綁定、略過已結束的，每次讀取都有一行 `platform database access`（actor `service`、`certs`、呼叫端的 purpose）（容器） |
 | `tests/registration.rs` | Laysi/trustiot-v2#79：工作站簽章只接受工作站憑證，閘道器憑證、別的 CA、別的金鑰、別的本文或路徑、超過 300 秒的時間、過期的憑證、缺少、重複或格式錯的標頭都拒絕並說明原因；簽發 CA 簽的、其餘都符合工作站 profile 的憑證，只要 keyUsage 沒有 digitalSignature（或沒有 keyUsage）或是 CA:TRUE，也以 `not_workstation` 拒絕；EK 只接受 RSA 2048/3072/4096 與 P-256、P-384。真的服務：新的硬體 ID 201、憑證 CN 是硬體 ID 且在根之下驗證為用戶端憑證、寫一筆全平台事件；重送 200 同一張憑證、什麼都不寫；完全相同的請求重送回 `replayed`；換公鑰或 EK 409，別台的公鑰或 EK 409，不支援的 EK 422；少了工作站簽章、沒有 token、別的簽發者、租戶管理員、交換來的 token、別的金鑰或本文、以閘道器憑證冒充工作站，都不登錄；兩個相同的登錄同時到達只簽一張；除役的硬體 ID 409，superuser 也刪不掉、清不掉、改不了；`certs_app` 讀不到登錄；撤銷的工作站憑證 403 `revoked`。Laysi/trustiot-v2#610：201 與 200 的 `certificate_chain` 是 `certificate` 再接簽發 CA，簽發 CA 的公鑰驗得過 leaf 的簽章、金鑰 id 等於 `ca_key_id`、根驗得過它；載入兩把簽發 CA 時重送放的是簽出它的第 1 代，不是現在簽章的第 2 代；第 1 代的金鑰與憑證移除後重送仍 200、同一張憑證，鏈只有 leaf，WARN 只帶 `ca_key_id`（容器） |
 | `tests/workstation_tool.rs` | Laysi/trustiot-v2#615：產線工作站工具（`factory/workstation`）對真的服務：前面放一個檢查 session cookie、換成平台管理員內部 token 的 ingress 替身，工具 `enroll` 取得工作站憑證後登錄一台閘道器、重跑、再讓 ingress 在服務提交後丟掉回應（工具重送得到 200）；另一個新的硬體 ID 第一個 201 就被丟掉、重送得到 200。每個硬體 ID 都剛好一筆登錄、一張閘道器憑證、一筆 `certs.gateway_registered` 事件，工具的紀錄是 `registered`、序號等於資料庫的（容器） |
 | `tests/broker.rs` | Laysi/trustiot-v2#557：CSR 要求別的 CN、O、DNS 與 IP 名稱、CA、keyCertSign 與 clientAuth、anyExtendedKeyUsage 時，簽出的仍是 CA 決定的 broker profile（主體、DNS 名稱依設定、EKU 只有 serverAuth）；rustls 以根為信任錨時，憑證對兩個名稱都驗得過，對別的名稱、IP 拒絕，信任別的根時拒絕，同名但別的 CA 簽的憑證也拒絕，當用戶端憑證時以用途拒絕；閘道器憑證不能當伺服器憑證，閘道器 id 不能是 broker 的名稱；簽章驗不過、P-384 或不是 CSR 時拒絕。真的服務在 broker 埠簽出、記為 `broker`、回整條鏈並記 INFO，日誌沒有憑證；錯的 `Content-Type`、PEM、壞的或過大的 CSR、別的曲線都不簽也不記；API 埠沒有這個端點，broker 埠沒有其他路徑。簽發 CA 還沒有第一張 CRL 時回 503、不記錄，有了才簽。Mosquitto（OpenSSL）以簽出的憑證與測試產生的私鑰當伺服器：信任根、連 `mqtt-broker.trustiot.internal` 的閘道器憑證連得上，別的名稱或信任別的 CA 時用戶端拒絕，broker 的憑證當用戶端憑證時 broker 以用途拒絕（容器） |
