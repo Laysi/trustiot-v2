@@ -80,12 +80,28 @@ bun scripts/demo/tunnel.ts route-origin --ssh-host "$DEMO_SSH_HOST" # 路由該�
 
 展示環境的 certs 服務（Laysi/trustiot-v2#619）有自己的根 CA。儀式就是 [services/certs/README.md](../../services/certs/README.md)「發簽發 CA 憑證」的 1 到 5 步，只有順序不同：展示環境先啟用 certs、還沒有根憑證（[deploy/flux/README.md](../../deploy/flux/README.md)「日常變更」的「打開 certs」第 1 步），根的保管人在同一次離線作業裡建立根 CA 並簽發簽發 CA，之後一個 PR 同時設定根憑證與簽發 CA 憑證。這樣保管人只要取出離線的機器一次，代價是兩點與 README 不同：
 
-- 等待中的金鑰 id 不從 certs 主容器的 `keys wait for a certificate` 那一行讀：沒有根憑證時服務載入不了 CA，只記一次 ERROR `cannot load the issuing CA`、之後每 `crl.check_interval` 一行 WARN `no issuing CA is loaded, so the service cannot sign gateway certificates`，不列等待中的金鑰。改讀 init container `ca-keys` 的 INFO `the issuing CA keys are in place`，欄位 `keys` 是金鑰 id（公鑰的 SHA-256），`generations` 是對應的代。寫入 Secret 與 CSR 的就是這個 init container，所以它的 id 與主容器讀到的相同。
+- 等待中的金鑰 id 不從 certs 主容器的 `keys wait for a certificate` 那一行讀：沒有根憑證時服務載入不了 CA，只記一次 ERROR `cannot load the issuing CA`、之後每 `crl.check_interval` 一行 WARN `no issuing CA is loaded, so the service cannot sign gateway certificates`，不列等待中的金鑰。改讀 init container `ca-keys` 的 INFO `the issuing CA keys are in place`，欄位 `keys` 是金鑰 id，`generations` 是對應的代。寫入 Secret 與 CSR 的就是這個 init container，所以它的 id 與主容器讀到的相同。
 - 這段期間 `ca.pem` 與 `crl.pem` 回 503，工作站憑證與出廠登錄的 API 回 503（`ca_not_ready`）；readiness 不受影響，升級不會因此失敗或回滾。展示環境還沒有 broker（Laysi/trustiot-v2#84），沒有東西在讀這兩個檔。
+
+**金鑰 id** 是公鑰的 DER SubjectPublicKeyInfo 的 SHA-256，小寫十六進位 64 字元（`crates/ca-keys` 的 `key_id`；init container、certs 服務與 `certs-ca` 都用它）。任何人都能以 openssl 從 CSR 或憑證自己算出來，不必相信別人抄來的值：
+
+```sh
+openssl req -in issuing-ca-generation-1.csr.pem -noout -pubkey | openssl pkey -pubin -outform DER | sha256sum | cut -d' ' -f1   # CSR
+openssl x509 -in issuing-ca-generation-1.pem -noout -pubkey | openssl pkey -pubin -outform DER | sha256sum | cut -d' ' -f1      # 憑證
+```
+
+（2026-10-28 以 `certs-ca root sign` 實測：它印出的 `for key` 與這兩行的結果相同。）
 
 展示環境的根只給展示環境：不拿來簽 SaaS 或地端的簽發 CA，正式環境的閘道器也不信任它；展示用閘道器（Laysi/trustiot-v2#458）登錄時拿到的信任錨就是它。展示資料可以遺失（「重設展示資料」不動簽發 CA 的金鑰 Secret，CRL 由服務自己重發），根的私鑰不行：兩份備份都遺失時要重做整個儀式，每台展示用閘道器重新登錄、換上新的根。
 
-角色：有展示機 SSH 權限的維運人員做第 1、2、5 步（只讀，不取 lab 鎖）；兩位根的保管人（維運人員 A、B）做第 3 步；第 4 步的 PR 由另一位審查。
+角色：
+
+- 有展示機 SSH 權限的維運人員做第 1、2、5 步（只讀，不取 lab 鎖）。
+- 兩位根的保管人（維運人員 A、B）做第 3 步。
+- 第 2 步的金鑰 id 由另一個人（保管人 B 或第 4 步的審查人）在簽發前自己再讀一次。
+- 第 4 步的 PR 由保管人之一核准；不是保管人的審查人，從保管人那裡經 PR 以外的管道拿到根憑證的指紋。審查人要能以 SSH 讀展示機的叢集（第 4 步自己讀金鑰 id）。
+
+在 issue 或 PR 貼出的輸出，只能是指令刻意挑出的欄位（狀態碼、金鑰 id、固定的文字），不貼整行日誌、網址或錯誤訊息：它們可能帶著主機名稱。
 
 ### 1. 確認 certs 已啟用
 
@@ -103,101 +119,158 @@ HelmRelease 最新一筆是 `deployed`，`trustiot-certs` available。這份輸�
 
 ```sh
 ssh "$DEMO_SSH_HOST" "sudo k3s kubectl -n trustiot get configmap trustiot-certs-ca-requests -o jsonpath='{.data.issuing-ca-generation-1\.csr\.pem}'" > issuing-ca-generation-1.csr.pem
-ssh "$DEMO_SSH_HOST" 'sudo k3s kubectl -n trustiot logs deployment/trustiot-certs -c ca-keys' | grep 'the issuing CA keys are in place'
+ssh "$DEMO_SSH_HOST" 'sudo k3s kubectl -n trustiot logs deployment/trustiot-certs -c ca-keys' \
+  | grep 'the issuing CA keys are in place' | grep -oE '[0-9a-f]{64}' | sort -u
+openssl req -in issuing-ca-generation-1.csr.pem -noout -pubkey | openssl pkey -pubin -outform DER | sha256sum | cut -d' ' -f1
 ```
 
-第一次啟用只有第 1 代，`keys` 只有一個 id，把它抄下來（64 個十六進位字元，公開資料，可以寫進 issue 留言）。CSR 也是公開資料，以可移除媒體帶到離線的機器。
+第一次啟用只有第 1 代，第二行只印出一個金鑰 id，第三行從 CSR 算出的要與它相同；不同時停下，照 services/certs/README.md 第 4 步的說明調查。金鑰 id 是公開資料，可以寫進 issue 留言。CSR 也是公開資料，以可移除媒體帶到離線的機器。
+
+**第二個人**（保管人 B 或審查人）在第 3 步之前，用自己的 SSH 帳號與自己的終端機再執行一次第二行，結果與第一個人抄下的相同才能簽發。只要叢集裡的金鑰 Secret 在這之間被重新產生（例如被刪除），兩次讀到的就不同。
 
 ### 3. 離線：建立根 CA 並簽發
 
-兩位保管人在離線的機器上，照 services/certs/README.md「發簽發 CA 憑證」的準備與第 1、4 步：
+**建置工具**（在可信、連網的建置機，儀式之前）：
 
-- `certs-ca` 以部署中的版本建置：`git checkout v<部署中的版本>`（`chart.yaml` 的 `ref.tag`），再 `cargo build --release --locked -p certs --bin certs-ca`；`age` 以 `bun scripts/flux/age.ts` 從原始碼建出。兩者記下 SHA-256，帶到離線的機器後核對。
-- 根 CA 的 CN 寫 `TrustIoT Demo Gateway Root CA 1`，簽發 CA 寫 `TrustIoT Demo Gateway Issuing CA G1 <儀式日期>`。不放主機名稱、人名或客戶名稱：兩張憑證都會進公開的 repo。
-- `certs-ca root create` 的私鑰直接以 `age` 加密給兩位保管人，`root-key.age` 複製到兩份離線媒體，各保管一份。
-- `certs-ca root sign` 在 stderr 印出 `for key <金鑰 id>`。**和第 2 步抄下的 id 一致才繼續**；不一致時刪掉這張憑證、停下，照 services/certs/README.md 第 4 步的說明調查。
-- 兩位保管人各自以 `certs-ca root check` 檢查自己那一份（README「根 CA 私鑰的備份」）。
-- 帶回連網環境的只有 `root.pem` 與 `issuing-ca-generation-1.pem`（公開資料）。`root-key.age` 與 identity 不離開離線媒體與保管人。
+1. 確認 tag 指向發佈時的 commit：`git fetch origin --tags`，`git rev-parse v<部署中的版本>^{commit}`（部署中的版本是 `chart.yaml` 的 `ref.tag`）要等於那一版 GitHub Release 頁面寫的「來源 commit」，也等於建出它的 release.yml 執行紀錄（Release 頁面連到的那次執行）的 commit。不同就停下。
+2. `git checkout v<部署中的版本>`，再 `cargo build --release --locked -p certs --bin certs-ca`；`age` 以 `bun scripts/flux/age.ts` 從原始碼建出。兩者記下 SHA-256。
+3. （建議）另一個人在另一台機器以同一個 tag 再建一次，比對 SHA-256。不相同時，先查清楚再用。
+4. 兩個執行檔以可移除媒體帶到離線的機器，在那裡再核對一次 SHA-256。
+
+**離線的機器**：
+
+- 優先用不寫入磁碟的 live 系統：從唯讀媒體開機，工作目錄在記憶體裡（例如 `/tmp`），沒有掛任何內建磁碟，關機就全部消失。做不到時，用一個空的工作目錄，結束後、關機前刪掉整個工作目錄。
+- 每位保管人的 age identity（私鑰）只放在自己的媒體上，`age --decrypt -i` 直接讀媒體上的檔案，不複製到這台機器。
+- 不連網；帶進來的只有兩個執行檔、CSR 與保管人自己的媒體。
+
+**步驟**（照 services/certs/README.md「發簽發 CA 憑證」的第 1、4 步）：
+
+1. **續做規則**：保管人的媒體上已經有 `root-key.age`（例如上次在建立之後被中斷），就跳過 `root create`，沿用媒體上的 `root-key.age` 與 `root.pem`。要放棄一個已經建立的根（例如兩份備份沒有都做好就中斷、或決定重來），兩份 `root-key.age` 都銷毀，並寫進不進 repo 的維運紀錄；不留下沒人管的根。
+2. 建立根 CA：CN 寫 `TrustIoT Demo Gateway Root CA 1`。私鑰直接以 `age` 加密給兩位保管人，`root-key.age` 複製到兩份離線媒體，各保管一份。
+3. 計算根憑證的指紋：`openssl x509 -in root.pem -noout -fingerprint -sha256`（沒有 openssl 時：`sed '/-----/d' root.pem | base64 -d | sha256sum`，是同一個值，只是小寫、沒有冒號）。兩位保管人各自抄下，寫進不進 repo 的維運紀錄。第 4 步核准的人以這個值為準。
+4. 簽發前再以第 2 步的 openssl 指令，從帶進來的 CSR 算一次金鑰 id，要等於第 2 步兩個人讀到的值。
+5. 簽發簽發 CA：CN 寫 `TrustIoT Demo Gateway Issuing CA G1 <儀式日期>`。`certs-ca root sign` 在 stderr 印出 `for key <金鑰 id>`，**和第 2 步的 id 一致才繼續**；不一致時刪掉這張憑證、停下，照 services/certs/README.md 第 4 步的說明調查。
+6. 兩位保管人各自以 `certs-ca root check` 檢查自己那一份（README「根 CA 私鑰的備份」）。
+7. 帶回連網環境的只有 `root.pem` 與 `issuing-ca-generation-1.pem`（公開資料）。`root-key.age` 與 identity 不離開保管人的媒體。不是 live 系統時，刪掉工作目錄再關機。
+
+兩張憑證的 CN 不放主機名稱、人名或客戶名稱：它們都會進公開的 repo。
 
 ### 4. PR：設定根憑證與簽發 CA 憑證
 
-把兩張憑證各轉成一行 base64（`sed '/-----/d' <檔案> | tr -d '\n'`），照 deploy/flux/README.md「打開 certs」第 2 步寫進 `values-demo.yaml` 的 `certificateAuthority`。PR 的說明寫：儀式日期、金鑰 id、根憑證的 SHA-256 指紋（`openssl x509 -in root.pem -noout -fingerprint -sha256`），以及兩份備份都已檢查；不寫保管人是誰、媒體在哪裡。審查的人從 PR 的 values 取回憑證核對：
+把兩張憑證各轉成一行 base64（`sed '/-----/d' <檔案> | tr -d '\n'`），照 deploy/flux/README.md「打開 certs」第 2 步寫進 `values-demo.yaml` 的 `certificateAuthority`。PR 的說明寫：儀式日期、金鑰 id、兩份備份都已檢查；不寫保管人是誰、媒體在哪裡。PR 的說明只是方便閱讀，審查不以它為準：寫 PR 的人也能改 values 與說明。
+
+審查的人從 PR 的 values 取回憑證，再自己核對三件事：
 
 ```sh
 printf '%s' '<rootCertificate 的值>' | base64 -d > root.der
 printf '%s' '<issuingCertificates 的值>' | base64 -d > issuing.der
-openssl x509 -inform DER -in root.der -noout -subject -fingerprint -sha256
 openssl x509 -inform DER -in root.der -out root.pem && openssl x509 -inform DER -in issuing.der -out issuing.pem
-openssl verify -CAfile root.pem issuing.pem    # issuing.pem: OK
+openssl x509 -in root.pem -noout -fingerprint -sha256                                                      # 1
+openssl verify -CAfile root.pem issuing.pem                                                                 # 2：issuing.pem: OK
+openssl x509 -in issuing.pem -noout -pubkey | openssl pkey -pubin -outform DER | sha256sum | cut -d' ' -f1  # 3
+ssh "$DEMO_SSH_HOST" 'sudo k3s kubectl -n trustiot logs deployment/trustiot-certs -c ca-keys' \
+  | grep 'the issuing CA keys are in place' | grep -oE '[0-9a-f]{64}' | sort -u                             # 3
 ```
 
-指紋等於 PR 說明寫的，簽發 CA 鏈得到根，才核准。合併後 certs 的 pod 不重啟：kubelet 更新掛載的 ConfigMap，服務最多 30 秒後重讀。
+1. 根的指紋等於保管人在離線的機器上算出、記在維運紀錄裡的值。核准的人是保管人之一，或經 PR 以外的管道（當面或電話）從保管人拿到這個值；不從 PR 的說明或留言拿。
+2. 簽發 CA 鏈得到這個根。
+3. 從簽發 CA 憑證算出的金鑰 id，等於審查人自己從叢集讀到的等待中的金鑰 id。
+
+三項都成立才核准。合併後 certs 的 pod 不重啟：kubelet 更新掛載的 ConfigMap，服務最多 30 秒後重讀。
 
 ### 5. 確認
 
 ```sh
-ssh "$DEMO_SSH_HOST" 'sudo k3s kubectl -n trustiot logs deployment/trustiot-certs -c certs --since=30m' | grep -E 'loaded the issuing CA|issued a new CRL'
+ssh "$DEMO_SSH_HOST" 'sudo k3s kubectl -n trustiot logs deployment/trustiot-certs -c certs --since=30m' \
+  | grep -oE '"message":"(loaded the issuing CA|issued a new CRL)"|"(current|ca_key_id)":"([0-9a-f]{64}|none)"|"crl_number":[0-9]+'
 ```
 
-- INFO `loaded the issuing CA`，`current` 是第 2 步的金鑰 id（不是 `none`）。`certs.ca.signing` 就是依同一個判斷變成 1：服務有一張這一刻有效的簽發 CA 憑證。展示環境讀不到這個指標本身：collector 的指標管線在 Laysi/trustiot-v2#183 之前不送到任何地方，所以以這一行為證據。
-- 下一輪 CRL 工作（最多 `crl.check_interval`，預設 5 分鐘）記 INFO `issued a new CRL`，`ca_key_id` 是同一個 id，`crl_number` 是 1。在那之前工作站憑證的 API 仍回 503（`ca_not_ready`）。
+- `loaded the issuing CA` 之後的 `current` 是第 2 步的金鑰 id（不是 `none`）。`certs.ca.signing` 就是依同一個判斷變成 1：服務有一張這一刻有效的簽發 CA 憑證。展示環境讀不到這個指標本身：collector 的指標管線在 Laysi/trustiot-v2#183 之前不送到任何地方，所以以這一行為證據。
+- 下一輪 CRL 工作（最多 `crl.check_interval`，預設 5 分鐘）記 `issued a new CRL`，`ca_key_id` 是同一個 id，`crl_number` 是 1。在那之前工作站憑證的 API 仍回 503（`ca_not_ready`）。
+
+**`current` 不是第 2 步的 id 時**（包括第 2 步之後、合併之前金鑰 Secret 被重新產生，這時 `current` 是 `none`）：叢集裡沒有這張簽發 CA 憑證的私鑰，持有私鑰的可能是別人。把這張憑證當成外洩：
+
+1. 開 PR 把它從 `certificateAuthority.issuingCertificates` 拿掉，合併。
+2. 在維運紀錄與 Laysi/trustiot-v2#619 記下金鑰 id、日期與經過（不寫人名）。
+3. 安排換根：根 CRL 還沒有實作（Laysi/trustiot-v2#560），根沒有辦法撤銷它簽過的簽發 CA，信任這個根的閘道器會一直接受那張憑證。所以以新的根（CN `TrustIoT Demo Gateway Root CA 2`）重做整個儀式，舊根的兩份 `root-key.age` 銷毀並記錄；已經以舊根登錄的展示用閘道器重新登錄。
 
 再以 `GET` 讀 CRL。`crl.pem` 是內部端點，入口沒有它的路由，所以以 port-forward 直接連 certs 的 pod（不經 mesh，需要展示機上的叢集管理權限）。開兩個終端機：
 
 ```sh
-# 終端機 1：保持開著，確認完以 Ctrl-C 結束
+# 終端機 1：保持開著
 ssh "$DEMO_SSH_HOST" 'sudo k3s kubectl -n trustiot port-forward deploy/trustiot-certs 18080:8080'
 # 終端機 2
-ssh "$DEMO_SSH_HOST" 'curl -sS -o /dev/null -w "%{http_code}\n" http://127.0.0.1:18080/internal/certs/v1/crl.pem'
-ssh "$DEMO_SSH_HOST" 'curl -sS http://127.0.0.1:18080/internal/certs/v1/crl.pem | openssl crl -noout -issuer -lastupdate -nextupdate -crlnumber'
+ssh "$DEMO_SSH_HOST" 'curl -s -o /dev/null -w "%{http_code}\n" http://127.0.0.1:18080/internal/certs/v1/crl.pem'
+ssh "$DEMO_SSH_HOST" 'curl -s http://127.0.0.1:18080/internal/certs/v1/crl.pem | openssl crl -noout -issuer -lastupdate -nextupdate -crlnumber'
 ```
 
-第一個是 `200`；第二個的 issuer 是第 3 步簽發 CA 的 CN（展示機沒有 `openssl` 時，改以 `grep -c 'BEGIN X509 CRL'` 確認是 1）。還沒有 CRL 時是 503（`an issuing CA has no CRL yet`），等一輪再試。日誌與這兩個輸出都只有公開資料，存進 Laysi/trustiot-v2#619 的留言。
+兩個 curl 跑完就在終端機 1 按 Ctrl-C 關掉 port-forward，不要留著。第一個是 `200`；第二個的 issuer 是第 3 步簽發 CA 的 CN（展示機沒有 `openssl` 時，改以 `grep -c 'BEGIN X509 CRL'` 確認是 1）。還沒有 CRL 時是 503（`an issuing CA has no CRL yet`），等一輪再試。這些輸出都只有公開資料，存進 Laysi/trustiot-v2#619 的留言。
 
 ### 保管紀錄
 
-- **根憑證**：`values-demo.yaml` 的 `certificateAuthority.rootCertificate`（git 保留每一版），兩份離線媒體上也各有一份 `root.pem`。
-- **根的私鑰**：兩份 `root-key.age`，各在一份離線媒體上，由兩位保管人各保管一份，兩人的 identity 都解得開任一份。保管人是誰、媒體放在哪裡，只記在不進 repo 的維運紀錄（與「Cloudflare 上的設定」的變更清單同一處），不寫進 repo、issue、PR 或留言。公開的紀錄（issue 留言）只寫：儀式日期、根憑證的 SHA-256 指紋、簽發 CA 的金鑰 id、兩份備份的檢查日期，以及「兩位保管人」這個角色。
+- **根憑證**：`values-demo.yaml` 的 `certificateAuthority.rootCertificate`（git 保留每一版），兩份離線媒體上也各有一份 `root.pem`。它的指紋另記在不進 repo 的維運紀錄（第 3 步），第 4 步以那個值核對。
+- **根的私鑰**：兩份 `root-key.age`，各在一份離線媒體上，由兩位保管人各保管一份，兩人的 identity 都解得開任一份。保管人是誰、媒體放在哪裡，只記在不進 repo 的維運紀錄（與「Cloudflare 上的設定」的變更清單同一處），不寫進 repo、issue、PR 或留言。公開的紀錄（issue 留言）只寫：儀式日期、根憑證的 SHA-256 指紋、簽發 CA 的金鑰 id、兩份備份的檢查日期，以及「兩位保管人」這個角色。放棄或銷毀的根也記在維運紀錄。
 - 每年至少一次、以及每次儀式之後，兩位保管人各自檢查自己那一份（services/certs/README.md「根 CA 私鑰的備份」），檢查日期補進 issue 或維運紀錄。保管人異動時，在離線的機器上以新的 recipient 重新加密，舊的媒體銷毀。
 
 ## 平台管理員的登入確認
 
-產線工作站登錄閘道器（Laysi/trustiot-v2#80、Laysi/trustiot-v2#618）要平台管理員在工作站上的 session。工作站經 Access 的 service token 通過 Cloudflare（「Access 名單」的「工作站的 service token」），再以 email 驗證碼登入平台。以下在持有工作站的操作員的 Linux 帳號執行，`H` 是他的標頭檔：
+產線工作站登錄閘道器（Laysi/trustiot-v2#80、Laysi/trustiot-v2#618）要平台管理員在工作站上的 session。工作站經 Access 的 service token 通過 Cloudflare（「Access 名單」的「工作站的 service token」），再以 email 驗證碼登入平台。以下在持有工作站的操作員的 Linux 帳號、以 bash 執行，`H` 是操作員的標頭檔。`DEMO_APP_HOST` 用小寫，與 session 檔記的網址比對：
 
 ```sh
-: "${DEMO_APP_HOST:?set DEMO_APP_HOST to the app host name}"
+: "${DEMO_APP_HOST:?set DEMO_APP_HOST to the app host name, in lower case}"
 H=~/.config/trustiot-workstation/access-headers    # 「工作站的 service token」的交付步驟建立的檔案
+S="$XDG_RUNTIME_DIR/trustiot-workstation/session"  # 工作站工具的 session 檔：origin= 與 cookie= 各一行
+# curl 的設定（標頭）經 stdin 交給 curl（-K -），不出現在命令列與 shell 的歷史紀錄
+token_headers() { grep -iE '^cf-access-client-(id|secret):' "$H" | sed 's/^/header = "/; s/$/"/'; }
+session_headers() {
+  token_headers
+  sed -n 's/^cookie=\(.*\)$/header = "Cookie: __Host-trustiot-session=\1"/p' "$S"
+}
+# 平台網址只取自 session 檔的 origin=，而且必須是 DEMO_APP_HOST 的；不是就拒絕
+session_origin() {
+  local origin
+  origin=$(sed -n 's/^origin=//p' "$S" 2>/dev/null)
+  if [ -z "$origin" ] || [ "$origin" != "https://$DEMO_APP_HOST" ]; then
+    echo 'refused: no session, or the session belongs to another platform' >&2
+    return 1
+  fi
+  printf '%s\n' "$origin"
+}
+# 只印狀態碼，以及回應裡的 M1 code 與 message key；不印網址、標頭或本文的其他內容
+status_and_keys() {
+  local out
+  out=$(curl -s -K - -w '\n%{http_code}' "$1")
+  printf '%s %s\n' "${out##*$'\n'}" \
+    "$(printf '%s' "${out%$'\n'*}" | grep -oE '"(code|message_key)":"[a-z0-9_.]+"' | sort -u | tr '\n' ' ')"
+}
 ```
 
 1. **平台管理員存在**：照 [platform-admin.md](platform-admin.md)（展示環境在展示機上以 `sudo k3s kubectl`，namespace 與 release 都是 `trustiot`）。不確定是否已建立時照樣執行一次：結束碼 3 表示已經建立過，日誌的 `user_id` 是那一位。地址只在 attach 之後輸入，不寫進任何紀錄。建立用的 CronJob `trustiot-platform-admin-bootstrap`，以及身分服務讀 `trustiot-smtp` 帳密寄出驗證碼的設定，都是 chart `0.0.0-rc.11` 才有：展示叢集還釘在 rc.10 時兩者都沒有，先換版。
-2. **登入**（[factory/workstation](../../factory/workstation/README.md)「`login`」）：
+2. **登入**（[factory/workstation](../../factory/workstation/README.md)「`login`」）：工具只從命令列收 email，所以先以 `read` 讀進變數，地址不留在 shell 的歷史紀錄：
 
    ```sh
-   trustiot-workstation login --url "https://$DEMO_APP_HOST" --email <平台管理員的 email> --headers-file "$H"
+   read -r -p 'email: ' e
+   trustiot-workstation login --url "https://$DEMO_APP_HOST" --email "$e" --headers-file "$H"; unset e
    ```
 
    驗證碼寄到那個地址（Resend 的 SMTP，「外寄郵件與 Anthropic 金鑰」），從提示輸入。
-3. **讀平台的操作紀錄**：cookie 與 token 都從檔案經 stdin 交給 curl（`-K -`），不出現在命令列與 shell 的歷史紀錄；只印狀態碼：
+3. **讀平台的操作紀錄**：只印狀態碼：
 
    ```sh
-   session_headers() {
-     grep -iE '^cf-access-client-(id|secret):' "$H" | sed 's/^/header = "/; s/$/"/'
-     sed -n 's/^cookie=\(.*\)$/header = "Cookie: __Host-trustiot-session=\1"/p' "$XDG_RUNTIME_DIR/trustiot-workstation/session"
-   }
-   session_headers | curl -sS -o /dev/null -w '%{http_code}\n' -K - "https://$DEMO_APP_HOST/api/identity/v1/platform/event-log?limit=1"
+   o=$(session_origin) && session_headers | curl -s -o /dev/null -w '%{http_code}\n' -K - "$o/api/identity/v1/platform/event-log?limit=1"
    ```
 
    平台管理員是 `200`。
 4. **`/api/certs` 到得了 certs**：送一個空的簽發請求，certs 檢查完呼叫者是平台管理員、讀了本文之後以缺欄位拒絕，什麼都不簽：
 
    ```sh
-   { session_headers; echo 'header = "Content-Type: application/json"'; echo 'data = "{}"'; } \
-     | curl -sS -K - -w '\n%{http_code}\n' "https://$DEMO_APP_HOST/api/certs/v1/workstation-certificates"
+   o=$(session_origin) && { session_headers; echo 'header = "Content-Type: application/json"'; echo 'data = "{}"'; } \
+     | status_and_keys "$o/api/certs/v1/workstation-certificates"
    ```
 
-   `422`，`validation_failed`，`field_errors` 的鍵是 `workstation_certificate.field_required`。這是 certs 自己的回應；沒有 `/api/certs` 的路由時是入口的 404。
+   `422`，`"code":"validation_failed"`，message key 有 `workstation_certificate.field_required`。這是 certs 自己的回應；沒有 `/api/certs` 的路由時是入口的 404。
 5. **一般成員讀不到**：以一個不是平台管理員的使用者登入（先 `trustiot-workstation logout --headers-file "$H"`，工作站一次只存一個 session），重做第 3 步與第 4 步，兩個都是 `403`（`permission_denied`）。展示環境目前只有 `bootstrap-platform-admin` 能建立使用者，它建立的都是平台管理員；建立使用者的 API 在 Laysi/trustiot-v2#105。專案擁有者在 2026-10-24 決定這一步等 Laysi/trustiot-v2#105 完成、展示環境能建立一般成員之後再做，不直接改資料庫造一個。這個行為已有自動化測試涵蓋：身分服務的 `tests/event_log.rs`（租戶的 `admin` 讀平台的操作紀錄是 403）與 certs 的 `tests/workstation.rs`（只有平台管理員能簽發與撤銷工作站憑證）。
-6. **登出**：`trustiot-workstation logout --headers-file "$H"`。第 3 到 5 步的狀態碼（不含 cookie、標頭與回應的本文）存進 Laysi/trustiot-v2#619 的留言。
+6. **登出**：`trustiot-workstation logout --headers-file "$H"`。第 3 到 5 步印出的那一行（狀態碼與 key，不含 cookie、標頭、網址與本文）存進 Laysi/trustiot-v2#619 的留言。
 
 ## 換 chart 版本
 
@@ -225,7 +298,11 @@ Laysi/trustiot-v2#500（commit `26b454d`）起，入口的跨站請求檢查要 
 
 換版時 migration Job 重跑，每個服務與 ClickHouse（init container 用 migration 映像）都重啟一次（[deploy/chart/README.md](../../deploy/chart/README.md)「叢集內的 ClickHouse」），展示環境短暫中斷，不要排在展示前。
 
+**換發端點上線**：certs 打開之後，chart 為 gateway 主機名稱的 `/certs/renew` 掛著指向 certs 的路由，tunnel 也讓這個路徑略過 Access（「架構」）。換發端點（Laysi/trustiot-v2#81）還沒實作，certs 對它回 404。一旦釘的 chart 含 Laysi/trustiot-v2#81 的換發端點，這個路徑就經既有的 Bypass 對網際網路開放，展示環境這邊不必再改任何東西。所以換到第一個含 Laysi/trustiot-v2#81 的版本之前，先在換版的 issue 審查這個暴露（端點自己的驗證與限流、是否要照「`/mqtt` 的速率限制」把 `/certs/renew` 也加進去、`check --stage 2` 對它的預期），確認後才合併。
+
 退回是 revert 那個 PR。對齊 istiod 本來就排在升級 chart 之前，新的 istiod values 與舊版 chart 會同時存在一段時間，所以 revert 不必同時退回 istiod；確實要退回時用 `platform.ts --rollback`（條件見 scripts/README.md 同一節）。
+
+退回到 `0.0.0-rc.10` 或更早、沒有 certs 的版本時，先合併一個關掉 certs 的 PR（`services.certs.enabled: false`，拿掉 `/api/certs` 的路由），再 revert 換版的 PR：順序反過來時 `bun test deploy/flux` 失敗（deploy/flux/README.md「打開 certs」），那一版也沒有 certs 的映像。關掉 certs 時，chart 標了 `helm.sh/resource-policy: keep` 的 Secret `trustiot-certs-password`、`trustiot-certs-ca-keys`（簽發 CA 的私鑰）與 ConfigMap `trustiot-certs-ca-requests` 留在叢集裡；放憑證的 ConfigMap `trustiot-certs-ca-certificates` 沒有標，會被刪掉，它的內容在 values 裡。之後再打開 certs 時 chart 接回留下的物件（`deploy/chart/templates/passwords.yaml` 與 `certs-ca.yaml` 開頭的說明），init container 沿用原來的金鑰，values 裡的簽發 CA 憑證仍然對得上，不必重做儀式；以「簽發 CA 的儀式」第 5 步確認 `current` 仍是原來的金鑰 id。
 
 ## 重設展示資料
 
@@ -628,33 +705,45 @@ bun scripts/demo/tunnel.ts remove --ssh-host "$DEMO_SSH_HOST" --apply --confirm 
 
 policy 掛在涵蓋三個主機名稱的 application 上，所以 token 在 gateway 與 ota 主機名稱也過得了 Access；那兩個主機名稱沒有 cookie 的路由（「架構」），持有 token 的人到得了的地方與受邀的人相同。Access 對 service token 的請求一樣在送往 tunnel 的請求加上 JWT，所以 tunnel 的 `originRequest.access` 不必改。2026-10-05 以後建立的 Zero Trust 組織預設是嚴格的 service token 模式，Access 不回 `CF_Authorization` cookie；工作站工具每個請求都帶這兩個標頭，兩種模式都能用，也不受 binding cookie 影響。
 
-**交付**：最直接的做法是建立 token 的人在工作站旁，操作員當場以自己的 Linux 帳號貼進檔案；不能同處時，用端到端加密、取用後就刪除的管道，交付後確認對方已刪除。檔案路徑自選，不在任何 git checkout 裡：
+**交付**：工作站上從不登入 Cloudflare 的管理介面。建立 token 的人在自己的裝置上建立，Client ID 與 Client Secret 只顯示在那台裝置上：最直接的做法是他在工作站旁，操作員看著那個畫面，在下面的提示輸入；不能同處時，用端到端加密、取用後就刪除的管道送到操作員自己的裝置，操作員看著那台裝置輸入，交付後雙方確認訊息已刪除。不經雲端剪貼簿或跨裝置同步的剪貼簿，也不存成檔案再搬。
+
+以操作員自己的 Linux 帳號、在 bash 執行。不用編輯器，所以不留下 swap、復原或備份檔；secret 以 `read -rs` 讀，不顯示在畫面上，也不進 shell 的歷史紀錄。檔案路徑自選，不在任何 git checkout 裡：
 
 ```sh
-install -d -m 700 ~/.config/trustiot-workstation
-install -m 600 /dev/null ~/.config/trustiot-workstation/access-headers
-"${EDITOR:-vi}" ~/.config/trustiot-workstation/access-headers
+(
+  set -e
+  umask 077
+  d=~/.config/trustiot-workstation
+  install -d -m 700 "$d"; chmod 700 "$d"
+  read -r -p 'Client ID: ' id
+  read -rs -p 'Client Secret: ' secret; echo
+  t=$(mktemp "$d/.access-headers.XXXXXX")
+  trap 'rm -f "$t"' EXIT; trap 'exit 1' INT TERM HUP   # no copy is left behind, whatever stops it
+  printf 'cf-access-client-id: %s\ncf-access-client-secret: %s\n' "$id" "$secret" > "$t"
+  mv -f "$t" "$d/access-headers"
+)
+stat -c '%a %U' ~/.config/trustiot-workstation/access-headers   # 600 與操作員自己
 ```
 
-內容照 factory/workstation 的「經 Cloudflare Access（`--headers-file`）」：`cf-access-client-id: <client id>` 與 `cf-access-client-secret: <client secret>` 各一行。貼完清掉剪貼簿。工具要求檔案是 0600、屬於執行的使用者。
+`printf` 是 bash 的內建指令，secret 不出現在任何行程的命令列；變數只在括號裡的 subshell，結束就消失。secret 先寫進 `mktemp` 建立的新檔（0600），再以 `mv` 整個換掉舊檔：直接重導向到已經存在的檔案會沿用它原來的權限，`umask` 管不到。中途中斷或 `mv` 失敗時，`trap` 刪掉這個暫存檔。內容照 factory/workstation 的「經 Cloudflare Access（`--headers-file`）」：`cf-access-client-id:` 與 `cf-access-client-secret:` 各一行。工具要求檔案是 0600、屬於執行的使用者。
+
+這個目錄不進任何備份與同步：工作站的備份工具與雲端同步（家目錄同步、`~/.config` 的 dotfiles 同步）都把 `~/.config/trustiot-workstation` 排除，確認排除之後才寫入。懷疑檔案被備份、同步或複製出去時，當成外洩，照下方「到期、外洩與異動」刪掉重建。
 
 **確認**：
 
 1. 沒帶 token 的請求照樣被擋：`bun scripts/demo/tunnel.ts check --ssh-host "$DEMO_SSH_HOST" --stage 2` 通過（預期不變，見「檢查對外的請求」）。
-2. 從工作站以 curl 各送一次，只印狀態碼與 Access 的回應（Access 的 team 網域換成佔位符）：
+2. 從工作站以 curl 各送一次。輸出只有狀態碼、固定的 yes/no 與 M1 錯誤的 code，從不印網址，所以不會帶出 Access 的 team 網域或 app 主機名稱。`token_headers` 與 `status_and_keys` 是「平台管理員的登入確認」開頭定義的函式，先在同一個 shell 執行那一段：
 
    ```sh
-   : "${DEMO_APP_HOST:?set DEMO_APP_HOST to the app host name}"
-   H=~/.config/trustiot-workstation/access-headers
+   u="https://$DEMO_APP_HOST/api/certs/v1/workstation-certificates"
    # 沒帶 token：302 到 Access 的登入頁
-   curl -sS -o /dev/null -w '%{http_code} %{redirect_url}\n' "https://$DEMO_APP_HOST/api/certs/v1/workstation-certificates" \
-     | sed -E 's#https://[^/ ]+\.cloudflareaccess\.com/[^ ]*#https://<team>.cloudflareaccess.com/...#'
+   curl -s -o /dev/null -w '%{http_code} %{redirect_url}\n' "$u" \
+     | awk '{ print $1, ($2 ~ /^https:\/\/[a-z0-9-]+\.cloudflareaccess\.com\// ? "redirects-to-access=yes" : "redirects-to-access=no") }'
    # 帶 token、沒有 session：過了 Access 與 connector，入口的 cookie 檢查回 401 unauthenticated
-   grep -iE '^cf-access-client-(id|secret):' "$H" | sed 's/^/header = "/; s/$/"/' \
-     | curl -sS -K - -w '\n%{http_code}\n' "https://$DEMO_APP_HOST/api/certs/v1/workstation-certificates"
+   token_headers | status_and_keys "$u"
    ```
 
-   第一個是 `302 https://<team>.cloudflareaccess.com/...`。第二個是 `401`，本文是 M1 錯誤、`code` 是 `unauthenticated`：請求過了 Access 與 connector 的 JWT 檢查、對到 `/api/certs` 的 cookie 路由（沒有這條路由時是入口的 404），由身分服務的 cookie 檢查拒絕。certs 自己的回應在「平台管理員的登入確認」第 4 步確認。token 經 stdin 交給 curl（`-K -`），不出現在命令列；兩個輸出都不含 token 與主機名稱，可以存進 Laysi/trustiot-v2#619 的留言。
+   第一個是 `302 redirects-to-access=yes`。第二個是 `401 "code":"unauthenticated"`（後面可能還有 message key）：請求過了 Access 與 connector 的 JWT 檢查、對到 `/api/certs` 的 cookie 路由（沒有這條路由時是入口的 404），由身分服務的 cookie 檢查拒絕。certs 自己的回應在「平台管理員的登入確認」第 4 步確認。token 經 stdin 交給 curl（`-K -`），不出現在命令列；兩個輸出都不含 token、網址與主機名稱，可以存進 Laysi/trustiot-v2#619 的留言。
 
 **到期、外洩與異動**：
 
