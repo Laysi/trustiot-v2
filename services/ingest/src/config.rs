@@ -8,9 +8,10 @@ use service_kit::config::{Invalid, Validate};
 use service_kit::postgres::{PostgresConfig, SslMode};
 
 /// Fewest connections of the service role's pool: one for the binding consumer's delivery, one
-/// for the telemetry path's stream locks (it handles as many batches at once as the pool has
-/// connections beyond the consumer's, [`crate::telemetry::concurrency`]).
-pub const MIN_DATABASE_CONNECTIONS: u32 = 2;
+/// for readiness (the `postgres` ping and the migration check), and one for the telemetry path's
+/// stream locks (it handles as many batches at once as the pool has connections beyond those
+/// two, [`crate::telemetry::concurrency`]).
+pub const MIN_DATABASE_CONNECTIONS: u32 = 3;
 
 /// Most connections of the service role's pool per replica.
 pub const MAX_DATABASE_CONNECTIONS: u32 = 100;
@@ -33,6 +34,49 @@ pub struct Config {
     /// image and the chart's settings for it, these included, come together in
     /// Laysi/trustiot-v2#642.
     pub mqtt: mqtt_client::Config,
+    /// `telemetry_limits.*`: each gateway's limits on the telemetry path
+    /// ([`crate::telemetry::limits`]). Optional.
+    #[serde(default)]
+    pub telemetry_limits: TelemetryLimits,
+}
+
+/// Most batches per minute a gateway's bucket may be set to refill with.
+pub const MAX_GATEWAY_BATCHES_PER_MINUTE: u32 = 60_000;
+
+/// Most batches a gateway's bucket may be set to hold.
+pub const MAX_GATEWAY_BURST: u32 = 10_000;
+
+/// `telemetry_limits.*`: how many batches one gateway may send to one replica. A replica's
+/// share of a gateway's messages is the broker's to decide, so the gateway's whole allowance is
+/// the replicas' sum.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TelemetryLimits {
+    /// `TRUSTIOT__TELEMETRY_LIMITS__BATCHES_PER_MINUTE`: how fast a gateway's bucket refills,
+    /// 1 to [`MAX_GATEWAY_BATCHES_PER_MINUTE`]. Default 600 (10 a second).
+    #[serde(default = "default_batches_per_minute")]
+    pub batches_per_minute: u32,
+    /// `TRUSTIOT__TELEMETRY_LIMITS__BURST`: the bucket's capacity, 1 to [`MAX_GATEWAY_BURST`].
+    /// Default 60.
+    #[serde(default = "default_burst")]
+    pub burst: u32,
+}
+
+const fn default_batches_per_minute() -> u32 {
+    600
+}
+
+const fn default_burst() -> u32 {
+    60
+}
+
+impl Default for TelemetryLimits {
+    fn default() -> Self {
+        Self {
+            batches_per_minute: default_batches_per_minute(),
+            burst: default_burst(),
+        }
+    }
 }
 
 /// The platform settings the service reads. No `deny_unknown_fields`: every service gets every
@@ -173,6 +217,19 @@ impl Validate for Config {
                 ),
             ));
         }
+        let limits = &self.telemetry_limits;
+        if !(1..=MAX_GATEWAY_BATCHES_PER_MINUTE).contains(&limits.batches_per_minute) {
+            return Err(Invalid::new(
+                "telemetry_limits.batches_per_minute",
+                format!("must be between 1 and {MAX_GATEWAY_BATCHES_PER_MINUTE}"),
+            ));
+        }
+        if !(1..=MAX_GATEWAY_BURST).contains(&limits.burst) {
+            return Err(Invalid::new(
+                "telemetry_limits.burst",
+                format!("must be between 1 and {MAX_GATEWAY_BURST}"),
+            ));
+        }
         for (key, username) in [
             ("database.username", &database.username),
             ("database.platform_username", &database.platform_username),
@@ -282,6 +339,39 @@ mod tests {
                 username: "service:ingest".to_owned(),
                 password_file: PathBuf::from("/etc/trustiot/mqtt/ingest"),
             },
+            telemetry_limits: TelemetryLimits::default(),
+        }
+    }
+
+    #[test]
+    fn the_pool_and_the_gateway_limits_are_bounded() {
+        let mut small = config("http://clickhouse:8123", None);
+        small.database.max_connections = MIN_DATABASE_CONNECTIONS - 1;
+        let error = small
+            .validate()
+            .expect_err("no connection left for readiness");
+        assert_eq!(error.key, "database.max_connections");
+        for (rate, burst, key) in [
+            (0, 60, Some("telemetry_limits.batches_per_minute")),
+            (
+                MAX_GATEWAY_BATCHES_PER_MINUTE + 1,
+                60,
+                Some("telemetry_limits.batches_per_minute"),
+            ),
+            (600, 0, Some("telemetry_limits.burst")),
+            (600, MAX_GATEWAY_BURST + 1, Some("telemetry_limits.burst")),
+            (1, 1, None),
+        ] {
+            let mut limited = config("http://clickhouse:8123", None);
+            limited.telemetry_limits = TelemetryLimits {
+                batches_per_minute: rate,
+                burst,
+            };
+            assert_eq!(
+                limited.validate().err().map(|error| error.key),
+                key.map(str::to_owned),
+                "{rate} a minute, burst {burst}"
+            );
         }
     }
 

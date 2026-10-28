@@ -51,6 +51,7 @@ use crate::bindings::{GatewayBindings, GatewayBoundHandler};
 use crate::clickhouse::{Account, ClickHouse};
 use crate::config::Config;
 use crate::telemetry::hooks::NoHooks;
+use crate::telemetry::limits::LimitSettings;
 use crate::telemetry::{Parts, Pipeline, Subscription};
 
 /// Connections of the platform role's pool: the consumer's reads of the assets service's events,
@@ -112,13 +113,19 @@ pub async fn start(context: Context<Config>) -> Result<Router, BoxError> {
         async move { clickhouse.ping().await }
     });
 
+    let concurrency = telemetry::concurrency(config.database.max_connections);
     let pipeline = Pipeline::start(Parts {
         clickhouse,
         bindings: GatewayBindings::new(&platform),
         locks: db.pool().clone(),
         mqtt: config.mqtt.clone(),
         subscription: Subscription::Shared(telemetry::SHARE_GROUP.to_owned()),
-        concurrency: telemetry::concurrency(config.database.max_connections),
+        concurrency,
+        limits: LimitSettings {
+            batches_per_minute: config.telemetry_limits.batches_per_minute,
+            burst: config.telemetry_limits.burst,
+            max_in_progress: telemetry::gateway_in_progress(concurrency),
+        },
         hooks: Arc::new(NoHooks),
     })?;
     let connection = pipeline.connection();

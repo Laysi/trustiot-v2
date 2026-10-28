@@ -9,6 +9,11 @@
 //!   the broker replays retained messages at every new subscription): it is dropped and logged.
 //!   A message the broker delivered with QoS 0 is dropped and logged too; the gateway sends the
 //!   batch again.
+//! - Before anything else, each message counts against its gateway's limits ([`limits`]): a
+//!   token bucket of batches and a cap on the gateway's batches in hand. A message over them is
+//!   answered `retry` with [`THROTTLED_RETRY_AFTER_MS`] and nothing more is done with it, so a
+//!   gateway that floods its topic cannot take the replica's batch slots and connections from
+//!   the others. The per-message log lines about a gateway are limited the same way.
 //! - A payload that does not decode, or a batch the table cannot hold ([`batch::prepare`]), is
 //!   answered `rejected` with the first issue, addressed by the header `peek_header` reads; a
 //!   payload without even a header is only logged.
@@ -26,10 +31,15 @@
 //!   or below it is answered `duplicate` with the rows of its first commit. Otherwise the rows an
 //!   earlier attempt left are deleted, whatever tenant they were written for (the aggregates of
 //!   a tenant other than the current one are reconciled at once), the whole batch is inserted,
-//!   the current tenant's aggregates are reconciled, and the completion record is written; only
-//!   then is the batch answered `committed`. Every statement carries the stream's settings
-//!   ([`store`]). A failure anywhere answers `retry` and writes no completion record, so the
-//!   gateway sends the batch again and the next attempt starts over.
+//!   the current tenant's aggregates are reconciled, the rows of the batch in the table are
+//!   counted against its record count, and the completion record is written; only then is the
+//!   batch answered `committed`. The count narrows, but does not close, the window in which a
+//!   replica whose lock session was lost (and whose rows another replica then deleted and
+//!   rewrote) writes a completion record: only fencing the writes with the lock would close it.
+//!   Every statement carries the stream's settings ([`store`]); a statement that names the
+//!   batch's series runs once per part of them that fits a URL ([`crate::rollup`],
+//!   `ReconcileParams::split`). A failure anywhere answers `retry` and writes no completion
+//!   record, so the gateway sends the batch again and the next attempt starts over.
 //!
 //!   One window is left: an attempt that ends between deleting another tenant's rows and
 //!   reconciling that tenant (the gateway was rebound between two attempts of one batch) leaves
@@ -43,12 +53,13 @@
 
 pub mod batch;
 pub mod hooks;
+pub mod limits;
 pub mod metrics;
 pub mod store;
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::{Instant, SystemTime};
+use std::time::{Duration, Instant, SystemTime};
 
 use mqtt_client::{Client, Event, Events, Message, PublishOptions};
 use protocol::telemetry::{AckOutcome, TelemetryAck, TelemetryBatch};
@@ -65,8 +76,24 @@ use crate::bindings::{GatewayBindings, GatewayTenant};
 use crate::clickhouse::ClickHouse;
 use crate::telemetry::batch::{Prepared, datetime64};
 use crate::telemetry::hooks::{Checkpoint, Hooks, Point};
+use crate::telemetry::limits::{GatewayLimits, InProgress, LimitSettings, Throttled};
 use crate::telemetry::metrics::{Metrics, Outcome};
 use crate::telemetry::store::{Store, StoreError};
+
+/// Logs a line about the gateway `$gateway` at `$level`, as `tracing::$level!` with the rest,
+/// when the gateway's log budget allows it ([`limits`]); the line carries how many lines about
+/// the gateway were suppressed since the last one logged (`suppressed_logs`).
+macro_rules! gateway_log {
+    ($processor:expr, $level:ident, $gateway:expr, $($rest:tt)+) => {
+        if let Some(suppressed_logs) = $processor.limits.log_allowed($gateway, Instant::now()) {
+            tracing::$level!(suppressed_logs, $($rest)+);
+        }
+    };
+}
+
+/// Throttled messages answered at once; one over its gateway's limits beyond them is dropped
+/// without an answer (the gateway sends it again when its own wait for the answer ends).
+pub const THROTTLED_REPLIES: usize = 16;
 
 /// The shared subscription's group: every replica of the service is in it, so each batch goes
 /// to one of them.
@@ -86,11 +113,24 @@ pub const UNBOUND_RETRY_AFTER_MS: u32 = 30_000;
 /// that arrived while the first attempt was still running).
 pub const BUSY_RETRY_AFTER_MS: u32 = 2_000;
 
+/// `retry` for a message over its gateway's limits ([`limits`]): longer than the others, so a
+/// gateway that sends faster than its bucket refills is slowed down.
+pub const THROTTLED_RETRY_AFTER_MS: u32 = 10_000;
+
 /// How many batches a replica writes at once, for a service-role pool of `max_connections`:
-/// each holds one connection for its stream's lock, and the binding consumer keeps one.
+/// each holds one connection for its stream's lock, the binding consumer keeps one, and one
+/// stays free for readiness (the `postgres` ping and the migration check), so a replica that is
+/// busy writing still answers its probes.
 #[must_use]
 pub fn concurrency(max_connections: u32) -> usize {
-    usize::try_from(max_connections.saturating_sub(1).max(1)).unwrap_or(1)
+    usize::try_from(max_connections.saturating_sub(2).max(1)).unwrap_or(1)
+}
+
+/// How many batches of one gateway a replica handles at once, for a pipeline that handles
+/// `concurrency` at once: half, so one gateway leaves the other half to the rest.
+#[must_use]
+pub fn gateway_in_progress(concurrency: usize) -> usize {
+    (concurrency / 2).max(1)
 }
 
 /// The job name of a stream's lock: the topic's gateway and the stream. Gateway and stream IDs
@@ -151,6 +191,8 @@ pub struct Parts {
     pub subscription: Subscription,
     /// How many batches are written at once: [`concurrency`] for the service.
     pub concurrency: usize,
+    /// Each gateway's limits: from the settings, with [`gateway_in_progress`] for the service.
+    pub limits: LimitSettings,
     /// [`hooks::NoHooks`] for the service.
     pub hooks: Arc<dyn Hooks>,
 }
@@ -209,6 +251,7 @@ impl Pipeline {
                 client,
                 hooks: parts.hooks,
                 metrics: Metrics::new(),
+                limits: GatewayLimits::new(parts.limits),
             }),
             events,
             connection: Connection::default(),
@@ -224,8 +267,10 @@ impl Pipeline {
 
     /// Handles the connection's events until `stop` is cancelled: each batch in a task of its
     /// own, at most the pipeline's concurrency at once (the next message is not read before one
-    /// ends, so the broker holds the rest). Once stopped, it lets the batches in hand finish and
-    /// send their acknowledgements, then disconnects.
+    /// ends, so the broker holds the rest). A message over its gateway's limits takes no batch
+    /// slot: it is answered in a task of its own, at most [`THROTTLED_REPLIES`] at once, and
+    /// dropped without an answer beyond that. Once stopped, it lets the batches in hand finish
+    /// and send their acknowledgements, then disconnects.
     pub async fn run(self, stop: CancellationToken) {
         let Self {
             processor,
@@ -234,6 +279,7 @@ impl Pipeline {
             concurrency,
         } = self;
         let permits = Arc::new(Semaphore::new(concurrency));
+        let reply_permits = Arc::new(Semaphore::new(THROTTLED_REPLIES));
         let mut handlers = JoinSet::new();
         loop {
             let event = tokio::select! {
@@ -278,6 +324,23 @@ impl Pipeline {
                     );
                 }
                 Some(Event::Message(message)) => {
+                    let admitted = match processor.admit(&message) {
+                        Admission::Admitted(in_progress) => in_progress,
+                        Admission::Throttled { gateway, reason } => {
+                            let processor = Arc::clone(&processor);
+                            if let Ok(reply) = Arc::clone(&reply_permits).try_acquire_owned() {
+                                handlers.spawn(async move {
+                                    processor.throttled(&gateway, reason, &message).await;
+                                    drop(reply);
+                                });
+                            } else {
+                                processor
+                                    .metrics
+                                    .handled(Outcome::Throttled, Duration::ZERO);
+                            }
+                            continue;
+                        }
+                    };
                     let permit = tokio::select! {
                         biased;
                         () = stop.cancelled() => break,
@@ -287,7 +350,7 @@ impl Pipeline {
                     let processor = Arc::clone(&processor);
                     handlers.spawn(async move {
                         processor.process(message).await;
-                        drop(permit);
+                        drop((permit, admitted));
                     });
                 }
             }
@@ -312,6 +375,17 @@ enum WriteError {
     Store(StoreError),
     /// A row could not be written as JSON (a decoded batch never has such a value).
     Encode,
+    /// The table holds another number of the batch's rows than the batch has records, right
+    /// before the completion record: another attempt wrote or deleted rows of the batch
+    /// meanwhile (its replica's lock session was lost).
+    #[allow(
+        dead_code,
+        reason = "the counts are logged through Debug, in the failure line"
+    )]
+    RowCount {
+        found: u64,
+        records: u32,
+    },
 }
 
 impl From<StoreError> for WriteError {
@@ -348,6 +422,7 @@ struct Processor {
     client: Client,
     hooks: Arc<dyn Hooks>,
     metrics: Metrics,
+    limits: GatewayLimits,
 }
 
 /// An answer to send, and to whom.
@@ -358,7 +433,66 @@ struct Reply {
     outcome: AckOutcome,
 }
 
+/// Whether a message is handled, by its gateway's limits.
+enum Admission {
+    /// Handle it. The guard counts it as in progress for its gateway; there is none for a
+    /// message whose topic names no gateway, which [`Processor::handle`] drops.
+    Admitted(Option<InProgress>),
+    /// Answer `retry` without handling it.
+    Throttled {
+        gateway: GatewayId,
+        reason: Throttled,
+    },
+}
+
 impl Processor {
+    /// Counts `message` against its gateway's limits, before anything else is done with it.
+    fn admit(&self, message: &Message) -> Admission {
+        let Ok(parsed) = parse_topic(&message.topic) else {
+            return Admission::Admitted(None);
+        };
+        match self.limits.admit(&parsed.gateway, Instant::now()) {
+            Ok(in_progress) => Admission::Admitted(Some(in_progress)),
+            Err(reason) => Admission::Throttled {
+                gateway: parsed.gateway,
+                reason,
+            },
+        }
+    }
+
+    /// Answers a message over its gateway's limits `retry` with [`THROTTLED_RETRY_AFTER_MS`],
+    /// reading no more of it than its header: no binding lookup, no lock, no ClickHouse
+    /// statement. A retained or QoS 0 message, which gets no answer in any case, and one without
+    /// a readable header are only counted.
+    async fn throttled(&self, gateway: &GatewayId, reason: Throttled, message: &Message) {
+        let started = Instant::now();
+        gateway_log!(
+            self,
+            warn,
+            gateway,
+            gateway_id = %gateway,
+            reason = reason.as_str(),
+            "telemetry over the gateway's limits; not handled, answered retry when it can be"
+        );
+        let header = if message.retain || message.qos == 0 {
+            None
+        } else {
+            TelemetryBatch::peek_header(&message.payload).ok()
+        };
+        if let Some(header) = header {
+            self.send(Reply {
+                gateway: gateway.clone(),
+                stream: header.stream,
+                seq: header.seq,
+                outcome: AckOutcome::Retry {
+                    after_ms: THROTTLED_RETRY_AFTER_MS,
+                },
+            })
+            .await;
+        }
+        self.metrics.handled(Outcome::Throttled, started.elapsed());
+    }
+
     async fn process(&self, message: Message) {
         let started = Instant::now();
         let received_at = self.hooks.received_at().unwrap_or_else(now_millis);
@@ -390,7 +524,7 @@ impl Processor {
             }
         };
         if message.retain {
-            tracing::warn!(
+            gateway_log!(self, warn, &gateway,
                 gateway_id = %gateway,
                 payload_bytes,
                 "dropped a retained telemetry message: telemetry is never retained, so the \
@@ -399,7 +533,7 @@ impl Processor {
             return (Outcome::RetainDropped, None);
         }
         if message.qos == 0 {
-            tracing::warn!(
+            gateway_log!(self, warn, &gateway,
                 gateway_id = %gateway,
                 payload_bytes,
                 "dropped a telemetry message delivered with QoS 0; the gateway sends it again"
@@ -414,7 +548,7 @@ impl Processor {
                         Issue::new(IssueCode::DecodeFailed, "", error.to_string())
                     });
                 let Ok(header) = TelemetryBatch::peek_header(&message.payload) else {
-                    tracing::warn!(
+                    gateway_log!(self, warn, &gateway,
                         gateway_id = %gateway,
                         payload_bytes,
                         code = issue.code.as_str(),
@@ -439,7 +573,7 @@ impl Processor {
         let tenant = match self.bindings.gateway_tenant(&gateway).await {
             Ok(Some(tenant)) => tenant,
             Ok(None) => {
-                tracing::info!(
+                gateway_log!(self, info, &gateway,
                     gateway_id = %gateway,
                     stream_id = %stream,
                     seq = seq.get(),
@@ -449,7 +583,7 @@ impl Processor {
             }
             Err(error) => {
                 self.metrics.failed("postgres", "gateway_tenant");
-                tracing::warn!(
+                gateway_log!(self, warn, &gateway,
                     gateway_id = %gateway,
                     stream_id = %stream,
                     seq = seq.get(),
@@ -513,9 +647,10 @@ impl Processor {
                 let step = match &error {
                     WriteError::Store(error) => error.step.as_str(),
                     WriteError::Encode => "encode",
+                    WriteError::RowCount { .. } => store::Step::RowCount.as_str(),
                 };
                 self.metrics.failed("clickhouse", step);
-                tracing::warn!(
+                gateway_log!(self, warn, &gateway,
                     gateway_id = %gateway,
                     stream_id = %stream,
                     seq = seq.get(),
@@ -526,7 +661,7 @@ impl Processor {
                 (Outcome::Retry, Some(retry(RETRY_AFTER_MS)))
             }
             Ok(None) => {
-                tracing::info!(
+                gateway_log!(self, info, &gateway,
                     gateway_id = %gateway,
                     stream_id = %stream,
                     seq = seq.get(),
@@ -536,7 +671,7 @@ impl Processor {
             }
             Err(error) => {
                 self.metrics.failed("postgres", "stream_lock");
-                tracing::warn!(
+                gateway_log!(self, warn, &gateway,
                     gateway_id = %gateway,
                     stream_id = %stream,
                     seq = seq.get(),
@@ -556,7 +691,7 @@ impl Processor {
         seq: Seq,
         issue: &Issue,
     ) -> (Outcome, Option<Reply>) {
-        tracing::warn!(
+        gateway_log!(self, warn, &gateway,
             gateway_id = %gateway,
             stream_id = %stream,
             seq = seq.get(),
@@ -608,7 +743,7 @@ impl Processor {
         let mark = store.high_water_mark().await?;
         if batch.seq.get() <= mark.max_seq {
             if mark.committed_rows.is_none() {
-                tracing::warn!(
+                gateway_log!(self, warn, &batch.gateway,
                     gateway_id = %batch.gateway,
                     stream_id = %batch.stream,
                     seq = batch.seq.get(),
@@ -632,7 +767,7 @@ impl Processor {
             // The aggregates of another tenant still count the deleted rows: reconcile them now.
             // This attempt's own tenant is reconciled after the insert.
             for other in leftover.iter().filter(|other| **other != tenant_id) {
-                tracing::warn!(
+                gateway_log!(self, warn, &batch.gateway,
                     gateway_id = %batch.gateway,
                     stream_id = %batch.stream,
                     seq = batch.seq.get(),
@@ -651,6 +786,16 @@ impl Processor {
         self.checkpoint(Point::RowsWritten, batch).await;
         store.reconcile(&tenant_id).await?;
         self.checkpoint(Point::BeforeCommitRecord, batch).await;
+        // The batch's rows, of any tenant, are exactly its records: no attempt that lost its lock
+        // deleted or added rows of it meanwhile. This narrows that window but does not close it
+        // (module documentation).
+        let found = store.batch_rows().await?;
+        if found != u64::from(batch.records) {
+            return Err(WriteError::RowCount {
+                found,
+                records: batch.records,
+            });
+        }
         // Taken once the rows are on disk, and never before they were received, so the record
         // does not expire before them.
         let committed_at = datetime64(now_millis().max(received_at)).ok_or(WriteError::Encode)?;
@@ -698,7 +843,7 @@ impl Processor {
         };
         let topic = Channel::TelemetryAck.topic(&reply.gateway);
         if let Err(error) = self.client.publish(&topic, payload, options).await {
-            tracing::warn!(
+            gateway_log!(self, warn, &reply.gateway,
                 gateway_id = %reply.gateway,
                 stream_id = %ack.stream,
                 seq = ack.seq.get(),
@@ -714,11 +859,15 @@ mod tests {
     use super::*;
 
     #[test]
-    fn one_connection_stays_with_the_binding_consumer() {
+    fn one_connection_stays_with_the_binding_consumer_and_one_with_readiness() {
+        assert_eq!(concurrency(crate::config::MIN_DATABASE_CONNECTIONS), 1);
+        assert_eq!(concurrency(10), 8);
         assert_eq!(concurrency(2), 1);
-        assert_eq!(concurrency(10), 9);
-        assert_eq!(concurrency(1), 1);
         assert_eq!(concurrency(0), 1);
+        // A gateway gets half the slots, at least one.
+        assert_eq!(gateway_in_progress(concurrency(10)), 4);
+        assert_eq!(gateway_in_progress(1), 1);
+        assert_eq!(gateway_in_progress(3), 1);
     }
 
     #[test]

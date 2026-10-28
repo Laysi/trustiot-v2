@@ -25,10 +25,18 @@
 //! 6. Two replicas in different share groups get every batch: while one holds a stream's lock
 //!    the other answers `retry`; batch after batch, exactly one commits, the table holds each
 //!    once.
-//! 7. Over everything written: both aggregate tables equal the raw rows, every statement of the
+//! 7. Full batches, as many distinct series as the agent's `BatchBuilder` puts into 256 KiB with
+//!    64-character point keys: `committed` at once, and again after a refused completion record
+//!    (the leftover search, the DELETE and the reconcile name every series; they are split into
+//!    parts that fit one URL field).
+//! 8. A gateway floods its topic with replays of a committed batch: past its bucket they are
+//!    answered `retry` with no ClickHouse statement, its log lines are limited, and another
+//!    gateway's batch sent after the flood is `committed`.
+//! 9. Over everything written: both aggregate tables equal the raw rows, every statement of the
 //!    service's account carried the stream settings, every completion record is no earlier than
-//!    its batch's rows were received, and what the leftover search and the DELETE read next to a
-//!    table with background rows of other devices.
+//!    its batch's rows were received, and what the leftover search, the row count before the
+//!    completion record and the DELETE read next to a table with background rows of other
+//!    devices.
 //!
 //! Starts throwaway containers with podman or docker; skipped without either unless `CI` is set.
 //! Run with `--nocapture` to see the evidence lines.
@@ -46,12 +54,16 @@ use std::time::Duration;
 
 use common::{Account, ClickHouse};
 use ingest::bindings::GatewayBindings;
+use ingest::config::TelemetryLimits;
+use ingest::rollup::stream_query_id;
 use ingest::telemetry::hooks::{Checkpoint, HookFuture, Hooks, Point};
+use ingest::telemetry::limits::{LOG_BURST, LOG_REFILL, LimitSettings};
 use ingest::telemetry::{
-    BUSY_RETRY_AFTER_MS, Parts, Pipeline, RETRY_AFTER_MS, Subscription, UNBOUND_RETRY_AFTER_MS,
+    BUSY_RETRY_AFTER_MS, Parts, Pipeline, RETRY_AFTER_MS, Subscription, THROTTLED_RETRY_AFTER_MS,
+    UNBOUND_RETRY_AFTER_MS, gateway_in_progress,
 };
-use protocol::telemetry::AckOutcome;
-use protocol::{GatewayId, IssueCode, StreamId};
+use protocol::telemetry::{AckOutcome, BatchBuilder, Reading, Sample, TelemetryBatch};
+use protocol::{DeviceId, GatewayId, IssueCode, PointKey, Seq, StreamId, UnixMillis, Value};
 use service_kit::tenant::{PlatformDb, TenantDb};
 use sqlx::postgres::PgPoolOptions;
 use support::broker::{ACK_WAIT, Broker, Gateway, batch, now_millis};
@@ -174,16 +186,37 @@ FROM system.query_log
 WHERE user = {user:String} AND type = 'QueryStart'
 GROUP BY query_kind ORDER BY query_kind FORMAT TabSeparated";
 
-/// What the leftover search and the DELETE read.
-const LEFTOVER_READS: &str = "SELECT query_kind, count(), max(read_rows), max(read_bytes)
+/// What the leftover search, the row count before the completion record and the DELETE read.
+const LEFTOVER_READS: &str = "SELECT
+    multiIf(query_kind = 'Delete', 'DELETE',
+        startsWith(query, 'SELECT DISTINCT tenant_id'), 'leftover search', 'row count') AS what,
+    count(), max(read_rows), max(read_bytes)
 FROM system.query_log
 WHERE user = {user:String} AND type = 'QueryFinish'
-    AND (query_kind = 'Delete' OR startsWith(query, 'SELECT DISTINCT tenant_id'))
-GROUP BY query_kind ORDER BY query_kind FORMAT TabSeparated";
+    AND (query_kind = 'Delete' OR startsWith(query, 'SELECT DISTINCT tenant_id')
+        OR startsWith(query, 'SELECT count() FROM trustiot.telemetry'))
+GROUP BY what ORDER BY what FORMAT TabSeparated";
 
 /// The tenant column's comment (0013_tenant_id_comment.sql).
 const TENANT_COMMENT: &str = "SELECT comment FROM system.columns
 WHERE database = 'trustiot' AND table = 'telemetry' AND name = 'tenant_id' FORMAT TabSeparated";
+
+/// The high-water mark reads of one stream by the service's account: one per batch the pipeline
+/// handled (a throttled message reaches no statement).
+const HIGH_WATER_MARK_READS: &str = "SELECT count() FROM system.query_log
+WHERE user = {user:String} AND type = 'QueryStart' AND query_id = {query_id:String}
+    AND startsWith(query, 'SELECT max(seq)')
+FORMAT TabSeparated";
+
+/// Batches the test's pipelines handle at once.
+const CONCURRENCY: usize = 4;
+
+/// Replays of a committed batch the flooding gateway sends in step 8.
+const FLOOD: u64 = 200;
+
+/// The flooding gateway's bucket in step 8: so slow that the flood outlasts it.
+const FLOOD_BATCHES_PER_MINUTE: u32 = 1;
+const FLOOD_BURST: u32 = 5;
 
 /// The advisory locks held on the database, by any session.
 const ADVISORY_LOCKS: &str = "SELECT count(*) FROM pg_locks WHERE locktype = 'advisory'";
@@ -403,16 +436,39 @@ impl Harness {
         })
     }
 
-    /// Starts a pipeline as the service does, with `subscription` and `hooks`, and waits until
-    /// its subscription is granted.
+    /// Starts a pipeline as the service does, with `subscription`, `hooks` and the service's
+    /// default limits, and waits until its subscription is granted.
     async fn pipeline(&self, subscription: Subscription, hooks: TestHooks) -> Running {
+        let defaults = TelemetryLimits::default();
+        self.limited_pipeline(
+            subscription,
+            hooks,
+            defaults.batches_per_minute,
+            defaults.burst,
+        )
+        .await
+    }
+
+    /// [`Harness::pipeline`] with each gateway's bucket set to `batches_per_minute` and `burst`.
+    async fn limited_pipeline(
+        &self,
+        subscription: Subscription,
+        hooks: TestHooks,
+        batches_per_minute: u32,
+        burst: u32,
+    ) -> Running {
         let pipeline = Pipeline::start(Parts {
             clickhouse: self.service_clickhouse.clone(),
             bindings: GatewayBindings::new(&self.platform),
             locks: self.db.pool().clone(),
             mqtt: self.broker.ingest_config(),
             subscription,
-            concurrency: 4,
+            concurrency: CONCURRENCY,
+            limits: LimitSettings {
+                batches_per_minute,
+                burst,
+                max_in_progress: gateway_in_progress(CONCURRENCY),
+            },
             hooks: Arc::new(hooks),
         })
         .expect("start the pipeline");
@@ -534,6 +590,38 @@ fn payload(stream: &StreamId, seq: u64, devices: &[uuid::Uuid]) -> Vec<u8> {
     batch(stream, seq, devices, 5, now_millis())
         .encode()
         .expect("encode the batch")
+}
+
+/// Data points per device in [`full_batch`].
+const FULL_BATCH_POINTS: u32 = 4;
+
+/// A batch as full as the agent's [`BatchBuilder`] makes one on the telemetry channel (256 KiB):
+/// one reading per series, [`FULL_BATCH_POINTS`] points per device, every point key as long as
+/// the protocol allows (64 characters), so the batch names as many distinct series as fit.
+fn full_batch(stream: &StreamId, seq: u64) -> TelemetryBatch {
+    let mut builder = BatchBuilder::new(stream.clone(), Seq::new(seq).expect("a sequence number"));
+    let at = UnixMillis::new(now_millis());
+    let mut index = 0_u32;
+    loop {
+        let device =
+            DeviceId::new(uuid::Uuid::new_v4().hyphenated().to_string()).expect("a device ID");
+        for point in 0..FULL_BATCH_POINTS {
+            let key = format!("{point}-{}", "k".repeat(62));
+            let reading = Reading {
+                device: device.clone(),
+                point: PointKey::new(key).expect("a point key of 64 characters"),
+                sample: Sample {
+                    at,
+                    value: Value::Float(f64::from(index) + 0.25 * f64::from(point)),
+                },
+                clock_synced: true,
+            };
+            if let Some(batch) = builder.push(reading).expect("a reading the builder takes") {
+                return batch;
+            }
+        }
+        index += 1;
+    }
 }
 
 /// `payload` decoded as plain CBOR, changed by `change`, and encoded again: fields the protocol
@@ -1062,7 +1150,181 @@ async fn telemetry_is_written_once_and_acknowledged_after_it_is_on_disk() {
     holder.stop().await;
     other.stop().await;
 
-    // 7. Over everything written.
+    // 7. Full batches: as many distinct series as the channel's 256 KiB holds, with the longest
+    //    point keys. Written at once, and rewritten after a failed completion record (the leftover
+    //    search and the DELETE then find rows of every series).
+    let service = harness
+        .pipeline(
+            Subscription::Shared("ingest".to_owned()),
+            TestHooks::default(),
+        )
+        .await;
+    let (full, full_stream, _) = new_gateway("full");
+    gateways.push(full.as_str().to_owned());
+    bind(&harness.product, &full, tenant, 1).await;
+    for (seq, fail_first) in [(1, false), (2, true)] {
+        let batch = full_batch(&full_stream, seq);
+        let records = u32::try_from(batch.record_count()).expect("a record count");
+        let series = batch.series.len();
+        let payload = batch.encode().expect("encode the full batch");
+        if fail_first {
+            harness.clickhouse.admin_ok(REVOKE_COMMIT).await;
+            sender.send(&full, payload.clone(), false).await;
+            let ack = sender.ack(&full, &full_stream, seq).await;
+            assert_eq!(
+                ack.outcome,
+                AckOutcome::Retry {
+                    after_ms: RETRY_AFTER_MS
+                },
+                "full batch {seq} while the completion table refuses"
+            );
+            assert_eq!(
+                harness.batch_rows(&full, &full_stream, seq).await,
+                u64::from(records),
+                "full batch {seq}: the rows landed before the completion record failed"
+            );
+            harness.clickhouse.admin_ok(GRANT_COMMIT).await;
+        }
+        sender.send(&full, payload.clone(), false).await;
+        let ack = sender.ack(&full, &full_stream, seq).await;
+        assert_eq!(
+            ack.outcome,
+            AckOutcome::Committed { records },
+            "full batch {seq} ({} bytes, {series} series); failures logged: {:?}",
+            payload.len(),
+            logs.matching(&["writing a telemetry batch failed", full.as_str()])
+        );
+        assert_eq!(
+            harness.batch_rows(&full, &full_stream, seq).await,
+            u64::from(records),
+            "full batch {seq}"
+        );
+        println!(
+            "7. full batch {seq} ({} bytes, {series} series, point keys of 64 characters{}): \
+             {:?}, {records} rows",
+            payload.len(),
+            if fail_first {
+                ", rewritten after a failed completion record"
+            } else {
+                ""
+            },
+            ack.outcome
+        );
+    }
+    service.stop().await;
+
+    // 8. A gateway floods its topic with replays of a committed batch; another gateway's batch
+    //    is still committed. Past its bucket, the flood is answered retry with no statement and
+    //    no binding lookup, and its log lines are limited.
+    let limited = harness
+        .limited_pipeline(
+            Subscription::Shared("ingest".to_owned()),
+            TestHooks::default(),
+            FLOOD_BATCHES_PER_MINUTE,
+            FLOOD_BURST,
+        )
+        .await;
+    let flood_started = std::time::Instant::now();
+    let (flooder, flood_stream, flood_devices) = new_gateway("flood");
+    gateways.push(flooder.as_str().to_owned());
+    bind(&harness.product, &flooder, tenant, 1).await;
+    let replay = payload(&flood_stream, 1, &flood_devices);
+    sender.send(&flooder, replay.clone(), false).await;
+    let ack = sender.ack(&flooder, &flood_stream, 1).await;
+    assert_eq!(ack.outcome, AckOutcome::Committed { records: RECORDS });
+    for _ in 0..FLOOD {
+        sender.send(&flooder, replay.clone(), false).await;
+    }
+    let (fair, fair_stream, fair_devices) = new_gateway("fair");
+    gateways.push(fair.as_str().to_owned());
+    bind(&harness.product, &fair, tenant, 1).await;
+    sender
+        .send(&fair, payload(&fair_stream, 1, &fair_devices), false)
+        .await;
+    // Bounded by the stand-in gateway's wait for an answer (ACK_WAIT).
+    let ack = sender.ack(&fair, &fair_stream, 1).await;
+    assert_eq!(
+        ack.outcome,
+        AckOutcome::Committed { records: RECORDS },
+        "the other gateway's batch during the flood"
+    );
+    // The flood's answers, until none has come for a while.
+    let mut answers = Vec::new();
+    loop {
+        let more = sender
+            .acks_within(&flooder, &flood_stream, 1, ABSENCE_WINDOW)
+            .await;
+        if more.is_empty() {
+            break;
+        }
+        answers.extend(more.into_iter().map(|ack| ack.outcome));
+    }
+    let elapsed = flood_started.elapsed();
+    let count = |wanted: &AckOutcome| answers.iter().filter(|outcome| *outcome == wanted).count();
+    let duplicates = count(&AckOutcome::Duplicate { records: RECORDS });
+    let throttled = count(&AckOutcome::Retry {
+        after_ms: THROTTLED_RETRY_AFTER_MS,
+    });
+    // An admitted replay that found the stream's lock taken by another admitted one.
+    let busy = count(&AckOutcome::Retry {
+        after_ms: BUSY_RETRY_AFTER_MS,
+    });
+    assert_eq!(
+        duplicates + throttled + busy,
+        answers.len(),
+        "only duplicate, busy and throttled answers: {answers:?}"
+    );
+    assert!(throttled > 0, "{answers:?}");
+    // The bucket: its burst less the commit's token, and what refilled since.
+    let refilled = elapsed.as_secs() * u64::from(FLOOD_BATCHES_PER_MINUTE) / 60 + 1;
+    let admitted_bound = u64::from(FLOOD_BURST) - 1 + refilled;
+    let admitted = u64::try_from(duplicates + busy).expect("a count");
+    assert!(
+        admitted <= admitted_bound,
+        "{admitted} replays handled, at most {admitted_bound} admitted"
+    );
+    harness.clickhouse.admin_ok(FLUSH_LOGS).await;
+    let query_id = stream_query_id(flooder.as_str(), flood_stream.as_str());
+    let reads: u64 = harness
+        .clickhouse
+        .query_with(
+            &harness.clickhouse.admin,
+            HIGH_WATER_MARK_READS,
+            &[("param_user", USER), ("param_query_id", &query_id)],
+        )
+        .await
+        .unwrap_or_else(|error| panic!("read the query log: {}", error.body))
+        .trim()
+        .parse()
+        .expect("a count");
+    assert!(
+        reads <= 1 + admitted_bound,
+        "{reads} high-water mark reads for {FLOOD} replays: throttled messages reached ClickHouse"
+    );
+    let flood_logs = logs.matching(&[flooder.as_str(), "suppressed_logs="]);
+    let log_bound = u64::from(LOG_BURST) + elapsed.as_secs() / LOG_REFILL.as_secs() + 1;
+    assert!(
+        u64::try_from(flood_logs.len()).expect("a count") <= log_bound,
+        "{} log lines about the flooding gateway, at most {log_bound}: {flood_logs:#?}",
+        flood_logs.len()
+    );
+    assert!(
+        flood_logs
+            .iter()
+            .any(|line| line.contains("over the gateway's limits")),
+        "{flood_logs:#?}"
+    );
+    limited.stop().await;
+    println!(
+        "8. {FLOOD} replays from one gateway (bucket {FLOOD_BURST}, {FLOOD_BATCHES_PER_MINUTE} a \
+         minute): {duplicates} duplicate, {busy} retry while another held the lock, {throttled} retry after {THROTTLED_RETRY_AFTER_MS} ms, \
+         {} unanswered; {reads} high-water mark reads in ClickHouse; {} log lines about it; the \
+         other gateway's batch: committed",
+        FLOOD - u64::try_from(answers.len()).expect("a count"),
+        flood_logs.len()
+    );
+
+    // 9. Over everything written.
     let gateways = format!(
         "[{}]",
         gateways
@@ -1082,7 +1344,7 @@ async fn telemetry_is_written_once_and_acknowledged_after_it_is_on_disk() {
         );
         assert_ne!(fields[1], "0", "{table}: no cells compared");
         println!(
-            "7. {table} against the raw rows: {} cells, {} differ",
+            "9. {table} against the raw rows: {} cells, {} differ",
             fields[1], fields[0]
         );
     }
@@ -1094,7 +1356,7 @@ async fn telemetry_is_written_once_and_acknowledged_after_it_is_on_disk() {
         "a completion record earlier than its rows: {answer}"
     );
     println!(
-        "7. min(committed_at) - max(received_at) per batch: smallest {smallest} ms over {} batches",
+        "9. min(committed_at) - max(received_at) per batch: smallest {smallest} ms over {} batches",
         fields[1]
     );
 
@@ -1118,7 +1380,7 @@ async fn telemetry_is_written_once_and_acknowledged_after_it_is_on_disk() {
         );
         kinds.push(fields[0].to_owned());
         println!(
-            "7. statements of kind {}: {}, with the stream settings: {}",
+            "9. statements of kind {}: {}, with the stream settings: {}",
             fields[0], fields[1], fields[2]
         );
     }
@@ -1138,6 +1400,7 @@ async fn telemetry_is_written_once_and_acknowledged_after_it_is_on_disk() {
         .await
         .unwrap_or_else(|error| panic!("read the query log: {}", error.body));
     let total = harness.read(TABLE_ROWS, &[]).await;
+    assert_eq!(reads.lines().count(), 3, "{reads}");
     for line in reads.lines() {
         let fields: Vec<&str> = line.split('\t').collect();
         let read: u64 = fields[2].parse().expect("read rows");
@@ -1148,15 +1411,8 @@ async fn telemetry_is_written_once_and_acknowledged_after_it_is_on_disk() {
             fields[0]
         );
         println!(
-            "7. {} ({} statements): at most {} rows ({} bytes) read of {total} in the table",
-            if fields[0] == "Delete" {
-                "DELETE"
-            } else {
-                "leftover search"
-            },
-            fields[1],
-            fields[2],
-            fields[3]
+            "9. {} ({} statements): at most {} rows ({} bytes) read of {total} in the table",
+            fields[0], fields[1], fields[2], fields[3]
         );
     }
     let comment = harness.clickhouse.admin_ok(TENANT_COMMENT).await;
@@ -1164,7 +1420,7 @@ async fn telemetry_is_written_once_and_acknowledged_after_it_is_on_disk() {
         comment.contains("binding table") && !comment.contains("certificate"),
         "{comment}"
     );
-    println!("7. telemetry.tenant_id comment: {}", comment.trim());
+    println!("9. telemetry.tenant_id comment: {}", comment.trim());
 
     // No reading value and no password in the log.
     let text = logs.lines().join("\n");

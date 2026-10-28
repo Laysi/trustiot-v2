@@ -64,7 +64,8 @@
 //! 4. Run [`RECONCILE_1M`] and [`RECONCILE_1H`] with the batch's parameters ([`ReconcileParams`]).
 //!    Each inserts, for the cells of this stream that the batch touches, the difference between
 //!    the cells recomputed from the raw rows and the cells as they are; when they agree it
-//!    inserts nothing.
+//!    inserts nothing. A batch with more series than one URL field holds runs them once per
+//!    part of its series ([`ReconcileParams::split`]).
 //! 5. Write the completion record, then acknowledge.
 //!
 //! A crash anywhere before step 5 leaves no completion record, so the gateway sends the batch
@@ -321,6 +322,16 @@ pub struct ReconcileParams {
     pub last_ts: String,
 }
 
+/// The most one statement's `param_series` may take in the URL, percent-encoded as the ingest
+/// service's HTTP client sends it ([`url_encoded_len`]). The client's request target, the path
+/// with every parameter and setting, must stay under 64 KiB (the `http` crate refuses a longer
+/// URI, so the request is never sent), and ClickHouse takes a query-string field of at most
+/// `http_max_field_value_size` (128 KiB by default). A full 256 KiB batch names about 1,800
+/// series of 64-character point keys, about 240 KB encoded (Laysi/trustiot-v2#641, security
+/// review): sent as one parameter, the batch could never be written. Half the client's limit
+/// leaves room for the other parameters and settings.
+pub const MAX_SERIES_PARAM_BYTES: usize = 32 * 1024;
+
 impl ReconcileParams {
     /// The parameters as `param_<name>` pairs, [`RECONCILE_WINDOW_DAYS`] included.
     #[must_use]
@@ -328,9 +339,9 @@ impl ReconcileParams {
         let series = self
             .series
             .iter()
-            .map(|(device, point)| format!("({}, {})", quoted(device), quoted(point)))
+            .map(series_item)
             .collect::<Vec<_>>()
-            .join(", ");
+            .join(SERIES_SEPARATOR);
         vec![
             ("param_tenant", self.tenant.clone()),
             ("param_gateway", self.gateway.clone()),
@@ -341,6 +352,69 @@ impl ReconcileParams {
             ("param_window_days", RECONCILE_WINDOW_DAYS.to_string()),
         ]
     }
+
+    /// The parameters in parts, in order, whose `param_series` each stays within
+    /// [`MAX_SERIES_PARAM_BYTES`] encoded; one part for most batches, and one part without
+    /// series for a batch without any. Every part has the batch's other parameters (tenant,
+    /// stream, reading-time range). The statements that take them select per series, so running
+    /// a statement once per part covers what it would cover with every series at once.
+    #[must_use]
+    pub fn split(&self) -> Vec<Self> {
+        // The brackets around the list.
+        let empty = url_encoded_len("[]");
+        let separator = url_encoded_len(SERIES_SEPARATOR);
+        let mut parts = Vec::new();
+        let mut series: Vec<(String, String)> = Vec::new();
+        let mut size = empty;
+        for pair in &self.series {
+            let item = url_encoded_len(&series_item(pair));
+            let growth = if series.is_empty() {
+                item
+            } else {
+                separator + item
+            };
+            if !series.is_empty() && size + growth > MAX_SERIES_PARAM_BYTES {
+                parts.push(self.with_series(std::mem::take(&mut series)));
+                size = empty + item;
+            } else {
+                size += growth;
+            }
+            series.push(pair.clone());
+        }
+        parts.push(self.with_series(series));
+        parts
+    }
+
+    fn with_series(&self, series: Vec<(String, String)>) -> Self {
+        Self {
+            series,
+            ..self.clone()
+        }
+    }
+}
+
+/// Between two items of `param_series`.
+const SERIES_SEPARATOR: &str = ", ";
+
+/// One item of `param_series`: `('device', 'point')`.
+fn series_item((device, point): &(String, String)) -> String {
+    format!("({}, {})", quoted(device), quoted(point))
+}
+
+/// The length of `text` percent-encoded with every byte but ASCII letters, digits and `-._~`
+/// escaped, as the ingest service's HTTP client encodes a query parameter
+/// (src/transport.rs, `QUERY_VALUE`).
+#[must_use]
+pub fn url_encoded_len(text: &str) -> usize {
+    text.bytes()
+        .map(|byte| {
+            if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~') {
+                1
+            } else {
+                3
+            }
+        })
+        .sum()
 }
 
 /// A string in the text form of a ClickHouse query parameter of type Array(Tuple(...)): single
@@ -477,6 +551,61 @@ mod tests {
         // One more receive day than the gateway buffer's 30 (owner decision of 2026-10-26).
         assert!(pairs.contains(&("param_window_days", "31".to_owned())));
         assert_eq!(pairs.len(), 7);
+    }
+
+    #[test]
+    fn many_series_are_split_into_parts_that_fit_a_url_field() {
+        let params = |series: Vec<(String, String)>| ReconcileParams {
+            tenant: "t".to_owned(),
+            gateway: "g".to_owned(),
+            stream: "s".to_owned(),
+            series,
+            first_ts: "2026-10-25 00:00:00.000".to_owned(),
+            last_ts: "2026-10-25 00:05:00.000".to_owned(),
+        };
+        let series_param = |part: &ReconcileParams| {
+            part.to_query_pairs()
+                .into_iter()
+                .find(|(name, _)| *name == "param_series")
+                .unwrap()
+                .1
+        };
+        // A full 256 KiB batch names about 1,800 series of 64-character point keys.
+        let many: Vec<(String, String)> = (0..2_000)
+            .map(|index| {
+                (
+                    format!("00000000-0000-4000-8000-{index:012}"),
+                    format!("{index:064}"),
+                )
+            })
+            .collect();
+        let whole = params(many.clone());
+        assert!(url_encoded_len(&series_param(&whole)) > 2 * MAX_SERIES_PARAM_BYTES);
+        let parts = whole.split();
+        assert!(parts.len() > 2, "{} parts", parts.len());
+        for (index, part) in parts.iter().enumerate() {
+            let encoded = url_encoded_len(&series_param(part));
+            assert!(encoded <= MAX_SERIES_PARAM_BYTES, "{encoded}");
+            if index + 1 < parts.len() {
+                // Full parts: the next series would not have fit.
+                assert!(
+                    encoded > MAX_SERIES_PARAM_BYTES - 200,
+                    "part {index}: {encoded}"
+                );
+            }
+            assert_eq!(
+                (&part.tenant, &part.first_ts, &part.last_ts),
+                (&whole.tenant, &whole.first_ts, &whole.last_ts)
+            );
+        }
+        let rejoined: Vec<(String, String)> =
+            parts.into_iter().flat_map(|part| part.series).collect();
+        assert_eq!(rejoined, many, "every series once, in order");
+        // Few series: one part, unchanged; none: one part without series.
+        let few = params(many[..3].to_vec());
+        assert_eq!(few.split(), vec![few.clone()]);
+        assert_eq!(params(Vec::new()).split(), vec![params(Vec::new())]);
+        assert_eq!(series_param(&params(Vec::new())), "[]");
     }
 
     #[test]

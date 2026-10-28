@@ -9,6 +9,7 @@ Laysi/trustiot-v2#641（清單 I1、決策 8）。寫入流程的說明在 [serv
 - Rust 1.99.0（`rust-toolchain.toml`）。
 - 容器映像（都以 multi-arch index 的 digest 釘選）：ClickHouse `clickhouse-server:26.8`（`services/ingest/tests/common/mod.rs`）、Postgres `postgres:18.6-alpine`（`testkit` 的 `product_postgres`，帶 TLS，套用 migration Job 的全部 Postgres migration）、Mosquitto `eclipse-mosquitto:2.1.2-alpine`（`testkit::mqtt::mosquitto`，dynamic security，`service:ingest` 的角色取自 `tools/migrate` 的定義）。
 - `tests/telemetry.rs` 的 ClickHouse 先放 200,000 列別的串流的資料，用來量找殘留列的那一句讀了多少。
+- 安全審查後（同日）`tests/telemetry.rs` 多了第 7、8 步，原來的第 7 步改為第 9 步；[telemetry.txt](data/2026-10-29-641-ingest-telemetry/telemetry.txt) 是修正後在建置主機（Linux）跑的輸出，分支已合入 main `fdf7bd01`（多出的 commit 只改 chart 與 ai-gateway）。下表與結論中修正前的數字（語句數、讀取列數）取自第一次在建置主機（macOS）的執行，修正後的數字列在「安全審查後的修正」。
 
 ## 指令
 
@@ -22,7 +23,8 @@ CI=1 cargo test -p ingest --test telemetry --test startup -- --nocapture
 
 兩個測試都通過；輸出（只留測試本身印的行與結果）：
 
-- [telemetry.txt](data/2026-10-29-641-ingest-telemetry/telemetry.txt)：`tests/telemetry.rs`
+- [telemetry.txt](data/2026-10-29-641-ingest-telemetry/telemetry.txt)：`tests/telemetry.rs`（安全審查後的版本）
+- [full-batch-before.txt](data/2026-10-29-641-ingest-telemetry/full-batch-before.txt)：修正前滿的批次的失敗，與找出上限的臨時探測
 - [startup.txt](data/2026-10-29-641-ingest-telemetry/startup.txt)：`tests/startup.rs`
 
 重點數據：
@@ -61,8 +63,8 @@ CI=1 cargo test -p ingest --test telemetry --test startup -- --nocapture
 | 兩個副本同時處理同一串流時沒有重複資料 | 通過（第 6 步） |
 | retain 旗標為 1 的批次被丟棄並記錄；解不開的 payload 以 `peek_header` 回 `rejected` | 通過（第 4、2 步） |
 | broker 連不上時 readiness 不是 200，連上後恢復 | 通過（`startup.rs` 第 5 步） |
-| 重寫之後兩張彙總表與原始資料一致；刪除之前寫過相同內容的批次也完整寫入 | 通過（第 7 步；第 5 步重寫的是相同的區塊） |
-| 每一句都帶 `stream_settings`，client 請求逾時不短於 `CLIENT_TIMEOUT_SECONDS` | 通過（第 7 步讀 `system.query_log`；逾時由 `src/clickhouse.rs` 的單元測試檢查） |
+| 重寫之後兩張彙總表與原始資料一致；刪除之前寫過相同內容的批次也完整寫入 | 通過（第 9 步；第 5 步重寫的是相同的區塊） |
+| 每一句都帶 `stream_settings`，client 請求逾時不短於 `CLIENT_TIMEOUT_SECONDS` | 通過（第 9 步讀 `system.query_log`；逾時由 `src/clickhouse.rs` 的單元測試檢查） |
 | `cargo test --workspace`、`cargo clippy --workspace --all-targets -- -D warnings` 通過；`CI` 設定時不略過 | 通過，分兩台建置主機跑完（見下方「全 workspace 的檢查」） |
 
 ### 全 workspace 的檢查
@@ -71,5 +73,18 @@ CI=1 cargo test -p ingest --test telemetry --test startup -- --nocapture
 
 - 建置主機（macOS）：`cargo fmt --all --check`；`cargo clippy --workspace --all-targets --locked --exclude agent -- -D warnings`；`cargo test --workspace --locked --exclude agent --no-fail-fast`；`cargo deny --locked check`（advisories、bans、licenses、sources 都 ok）。測試中 219 個 test binary 通過，另有 5 個 binary 在 macOS 上失敗，都不是這次改的 crate，也都與 macOS 有關（容器裡的 Linux 執行檔、連接埠與 accept queue 的行為）：`ai-clients` 的 `anthropic_http`、`migrate` 的 `mqtt_broker`、`service-kit` 的 `container` 與 `verify_container`、`testkit` 的 lib 測試。
 - 建置主機（Linux）：上面這 5 個 binary 全部通過（14、6、1、1、41 個測試）；`cargo clippy -p agent --all-targets --locked -- -D warnings` 與 `cargo test -p agent --locked --no-fail-fast` 通過。
+
+## 安全審查後的修正（2026-10-29）
+
+審查（分支 `c872335c`）沒有 Critical；以下四項在同一個分支修正。
+
+| 項目 | 修正 | 證據 |
+| --- | --- | --- |
+| H1：滿的批次永遠寫不進去 | 先重現：以 agent 的 `BatchBuilder` 做出 262,037 bytes、1,845 個 series（每台設備 4 個資料點、名稱 64 字元）的批次，第一句（找殘留列）就失敗、回 `Retry { after_ms: 5000 }`，高水位不前進。原因在服務端的 HTTP 用戶端：整個 `param_series` 放在 URL，而 `http` crate 不接受 64 KiB 以上的 URI，請求根本沒送出（臨時探測：63 KiB 的參數成功、64 KiB 起一律 `uri too long`）。改成依編碼後的長度把 series 切成每段不超過 32 KiB（`MAX_SERIES_PARAM_BYTES`；先試過 64 KiB 一段，整個 URI 仍超過上限而失敗），找殘留列、DELETE、數列與兩句對帳每段各跑一次 | 第 7 步：同樣大小的批次一次就 `Committed { records: 1845 }`；收回完成表的 `INSERT` 後回 `retry`、列已寫入，授權回來重送 `Committed { records: 1845 }`、列 1,845（找殘留列與 DELETE 都分段點名每個 series）。單元測試：切段後每段不超過上限、合起來與原本相同（`rollup.rs`），長度的計算與實際的編碼器一致、32 KiB 一段加上其他參數仍是合法的 URI（`transport.rs`） |
+| M1：沒有閘道器之間的公平性 | 每台閘道器一個批次桶（預設每分鐘 600 批、最多存 60 批，`TRUSTIOT__TELEMETRY_LIMITS__*`）與處理中批次的上限（同時處理數的一半），在查綁定之前檢查；超過的只讀標頭、回 `Retry { after_ms: 10000 }`，不查綁定、不拿鎖、不下 ClickHouse 語句、不佔處理名額。逐則的日誌每台閘道器先給 5 行、之後每 10 秒 1 行，略過的行數記在下一行（`suppressed_logs`） | 第 8 步（桶設為 5 批、每分鐘 1 批）：200 則重播得到 3 個 `duplicate`、1 個 `Retry { after_ms: 2000 }`（兩則被放行的重播搶同一個鎖）、178 個 `Retry { after_ms: 10000 }`、18 則沒有回覆（同時送出的限額確認已滿）；這個串流在 ClickHouse 只有 4 次讀高水位（第一次寫入 1 次加 3 次 `duplicate`）；關於它的日誌 5 行；洗版之後送出的另一台閘道器的批次 `Committed`。單元測試：桶的補充與上限、處理中上限、被拒的訊息不扣額度、日誌額度與略過計數、閒置閘道器的清除（`limits.rs`） |
+| L1：完成紀錄之前數列 | 寫完成紀錄之前以與 DELETE 相同的條件（不分租戶）數這批的列，不等於筆數就回 `retry`（`step` 是 `row_count`）。這縮小、但沒有關閉鎖遺失的窗口：要關閉得讓寫入帶 fencing | 每次 `committed` 之前都經過這一句：第 9 步的 `query_log` 有 41 句數列，最多讀 5,497 列（表中共 203,990 列）；三句（找殘留列、數列、DELETE）的條件相同由 `store.rs` 的單元測試比對 |
+| L3：readiness 一定拿得到連線 | 同時處理的批次改為 `MAX_CONNECTIONS` − 2，下限改為 3（一條給消費端、一條給 readiness） | `telemetry::concurrency` 與 `config.rs` 的單元測試 |
+
+修正後在建置主機（Linux）：`cargo clippy -p ingest -p migrate --all-targets -- -D warnings` 通過，`cargo test -p ingest --test telemetry` 通過（41 秒）；第 9 步兩張彙總表各 3,730 與 3,722 格、差異 0 格，Delete 11/11、Insert 122/122、Select 109/109 句都帶串流設定。
 
 待測：真的斷電重設後的落盤（Laysi/trustiot-v2#643，需要可以強制斷電的環境）；吞吐量與積壓的量測（還沒有 issue，見 PR 的後續提議）。

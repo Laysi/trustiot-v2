@@ -5,10 +5,11 @@
 //! earlier attempt at the same stream that still runs on the server is stopped before the next
 //! one starts, so no two attempts' statements overlap, whichever replica made them.
 
+use std::collections::BTreeSet;
 use std::fmt;
 
 use crate::clickhouse::{ClickHouse, QueryError, Request};
-use crate::rollup::{self, RECONCILE_1H, RECONCILE_1M, REWRITE_SETTINGS};
+use crate::rollup::{self, RECONCILE_1H, RECONCILE_1M, REWRITE_SETTINGS, ReconcileParams};
 use crate::telemetry::batch::Prepared;
 
 /// A stream's high-water mark (the highest committed sequence number, 0 without a record) and,
@@ -53,6 +54,18 @@ WHERE (device_id, point) IN {series:Array(Tuple(UUID, String))}
     AND batch_seq = {seq:UInt64}
     AND received_at >= toDateTime64(toDate(now('UTC')) - {window_days:UInt32}, 3, 'UTC')";
 
+/// How many rows of the batch the table holds, for any tenant, with the condition of
+/// [`LEFTOVER_TENANTS`]: compared with the batch's record count right before the completion
+/// record is written.
+const BATCH_ROWS: &str = "SELECT count() FROM trustiot.telemetry
+WHERE (device_id, point) IN {series:Array(Tuple(UUID, String))}
+    AND ts BETWEEN {first_ts:DateTime64(3, 'UTC')} AND {last_ts:DateTime64(3, 'UTC')}
+    AND gateway_id = {gateway:String}
+    AND stream_id = {stream:String}
+    AND batch_seq = {seq:UInt64}
+    AND received_at >= toDateTime64(toDate(now('UTC')) - {window_days:UInt32}, 3, 'UTC')
+FORMAT TabSeparated";
+
 /// Waits until the deleted rows are gone on every replica before the statement answers.
 const DELETE_SETTINGS: (&str, &str) = ("lightweight_deletes_sync", "2");
 
@@ -75,6 +88,7 @@ pub enum Step {
     Insert,
     Reconcile1m,
     Reconcile1h,
+    RowCount,
     Commit,
 }
 
@@ -89,6 +103,7 @@ impl Step {
             Self::Insert => "insert",
             Self::Reconcile1m => "reconcile_1m",
             Self::Reconcile1h => "reconcile_1h",
+            Self::RowCount => "row_count",
             Self::Commit => "commit",
         }
     }
@@ -129,6 +144,10 @@ pub struct Store<'a> {
     clickhouse: &'a ClickHouse,
     batch: &'a Prepared,
     settings: Vec<(&'static str, String)>,
+    /// The batch's series and reading times in parts that each fit one URL field
+    /// ([`ReconcileParams::split`]), without a tenant: every statement that names the batch's
+    /// series runs once per part.
+    parts: Vec<ReconcileParams>,
 }
 
 impl<'a> Store<'a> {
@@ -137,6 +156,7 @@ impl<'a> Store<'a> {
         Self {
             clickhouse,
             batch,
+            parts: batch.reconcile_params("").split(),
             settings: rollup::stream_settings(batch.gateway.as_str(), batch.stream.as_str())
                 .into_iter()
                 .collect(),
@@ -221,13 +241,12 @@ impl<'a> Store<'a> {
         })
     }
 
-    /// The parameters of [`LEFTOVER_TENANTS`] and [`DELETE_ROWS`]: the batch's series and
-    /// reading times as the reconcile takes them, its stream and sequence number, and the window.
-    fn leftover_params(&self) -> Vec<(&'static str, String)> {
-        // The tenant is not part of the condition; any value leaves the other pairs unchanged.
-        let mut params: Vec<(&'static str, String)> = self
-            .batch
-            .reconcile_params("")
+    /// The parameters of [`LEFTOVER_TENANTS`], [`DELETE_ROWS`] and [`BATCH_ROWS`] for one part of
+    /// the batch's series: those series and the batch's reading times as the reconcile takes
+    /// them, its stream and sequence number, and the window.
+    fn condition_params(&self, part: &ReconcileParams) -> Vec<(&'static str, String)> {
+        // The tenant is not part of the condition.
+        let mut params: Vec<(&'static str, String)> = part
             .to_query_pairs()
             .into_iter()
             .filter(|(name, _)| *name != "param_tenant")
@@ -237,34 +256,42 @@ impl<'a> Store<'a> {
         params
     }
 
+    /// Runs `statement` with the condition's parameters once per part of the batch's series,
+    /// and returns the answers in order.
+    async fn run_per_part(
+        &self,
+        step: Step,
+        statement: &str,
+        settings: &[(&'static str, String)],
+    ) -> Result<Vec<String>, StoreError> {
+        let mut answers = Vec::with_capacity(self.parts.len());
+        for part in &self.parts {
+            let owned = self.condition_params(part);
+            let params: Vec<(&str, &str)> = owned
+                .iter()
+                .map(|(name, value)| (*name, value.as_str()))
+                .collect();
+            answers.push(self.run(step, statement, &params, settings, None).await?);
+        }
+        Ok(answers)
+    }
+
     /// The tenants whose rows of the batch an earlier attempt left, none when there are none.
     ///
     /// # Errors
     ///
-    /// When the statement fails or answers something else than tenant IDs.
+    /// When a statement fails or answers something else than tenant IDs.
     pub async fn leftover_tenants(&self) -> Result<Vec<String>, StoreError> {
-        let owned = self.leftover_params();
-        let params: Vec<(&str, &str)> = owned
-            .iter()
-            .map(|(name, value)| (*name, value.as_str()))
-            .collect();
-        let answer = self
-            .run(
-                Step::LeftoverRows,
-                LEFTOVER_TENANTS,
-                &params,
-                &self.settings,
-                None,
-            )
+        let answers = self
+            .run_per_part(Step::LeftoverRows, LEFTOVER_TENANTS, &self.settings)
             .await?;
-        answer
-            .lines()
-            .map(|line| {
-                uuid::Uuid::try_parse(line)
-                    .map(|tenant| tenant.hyphenated().to_string())
-                    .map_err(|_| Self::malformed(Step::LeftoverRows))
-            })
-            .collect()
+        let mut tenants = BTreeSet::new();
+        for line in answers.iter().flat_map(|answer| answer.lines()) {
+            let tenant =
+                uuid::Uuid::try_parse(line).map_err(|_| Self::malformed(Step::LeftoverRows))?;
+            tenants.insert(tenant.hyphenated().to_string());
+        }
+        Ok(tenants.into_iter().collect())
     }
 
     /// Deletes the rows of the batch that an earlier attempt left, for any tenant, and returns
@@ -272,17 +299,31 @@ impl<'a> Store<'a> {
     ///
     /// # Errors
     ///
-    /// When the statement fails.
+    /// When a statement fails.
     pub async fn delete_rows(&self) -> Result<(), StoreError> {
-        let owned = self.leftover_params();
-        let params: Vec<(&str, &str)> = owned
-            .iter()
-            .map(|(name, value)| (*name, value.as_str()))
-            .collect();
         let settings = self.settings_with(&[DELETE_SETTINGS]);
-        self.run(Step::Delete, DELETE_ROWS, &params, &settings, None)
+        self.run_per_part(Step::Delete, DELETE_ROWS, &settings)
             .await
             .map(drop)
+    }
+
+    /// How many rows of the batch the table holds, for any tenant.
+    ///
+    /// # Errors
+    ///
+    /// When a statement fails or answers something else than a count.
+    pub async fn batch_rows(&self) -> Result<u64, StoreError> {
+        let answers = self
+            .run_per_part(Step::RowCount, BATCH_ROWS, &self.settings)
+            .await?;
+        answers.iter().try_fold(0_u64, |total, answer| {
+            answer
+                .trim()
+                .parse::<u64>()
+                .ok()
+                .and_then(|rows| total.checked_add(rows))
+                .ok_or_else(|| Self::malformed(Step::RowCount))
+        })
     }
 
     /// Inserts the batch's rows (`rows`, from [`Prepared::rows`]) in one statement, with
@@ -302,24 +343,32 @@ impl<'a> Store<'a> {
             .map(drop)
     }
 
-    /// Runs [`RECONCILE_1M`] and [`RECONCILE_1H`] for the batch written for `tenant`.
+    /// Runs [`RECONCILE_1M`] and [`RECONCILE_1H`] for the batch written for `tenant`, once per
+    /// part of its series.
     ///
     /// # Errors
     ///
-    /// When either statement fails.
+    /// When a statement fails.
     pub async fn reconcile(&self, tenant: &str) -> Result<(), StoreError> {
-        let pairs = self.batch.reconcile_params(tenant).to_query_pairs();
-        // to_query_pairs names them as the URL does (`param_<name>`); execute adds the prefix.
-        let params: Vec<(&str, &str)> = pairs
-            .iter()
-            .map(|(name, value)| (name.strip_prefix("param_").unwrap_or(name), value.as_str()))
-            .collect();
-        for (step, statement) in [
-            (Step::Reconcile1m, RECONCILE_1M),
-            (Step::Reconcile1h, RECONCILE_1H),
-        ] {
-            self.run(step, statement, &params, &self.settings, None)
-                .await?;
+        for part in &self.parts {
+            let part = ReconcileParams {
+                tenant: tenant.to_owned(),
+                ..part.clone()
+            };
+            let pairs = part.to_query_pairs();
+            // to_query_pairs names them as the URL does (`param_<name>`); execute adds the
+            // prefix.
+            let params: Vec<(&str, &str)> = pairs
+                .iter()
+                .map(|(name, value)| (name.strip_prefix("param_").unwrap_or(name), value.as_str()))
+                .collect();
+            for (step, statement) in [
+                (Step::Reconcile1m, RECONCILE_1M),
+                (Step::Reconcile1h, RECONCILE_1H),
+            ] {
+                self.run(step, statement, &params, &self.settings, None)
+                    .await?;
+            }
         }
         Ok(())
     }
@@ -348,7 +397,7 @@ mod tests {
 
     #[test]
     fn the_batch_condition_bounds_the_rows_read() {
-        // The two statements have the same condition.
+        // The three statements have the same condition.
         let condition = |statement: &'static str| {
             let start = statement.find("WHERE").unwrap();
             statement
@@ -358,6 +407,8 @@ mod tests {
                 .trim_end_matches("\nORDER BY tenant_id")
         };
         assert_eq!(condition(LEFTOVER_TENANTS), condition(DELETE_ROWS));
+        assert_eq!(condition(BATCH_ROWS), condition(DELETE_ROWS));
+        assert!(BATCH_ROWS.starts_with("SELECT count() FROM trustiot.telemetry\nWHERE "));
         // Any tenant's rows: the gateway may have been bound to another one since.
         assert!(!DELETE_ROWS.contains("tenant_id"));
         assert!(DELETE_ROWS.contains("(device_id, point) IN {series:"));

@@ -26,6 +26,9 @@ pub enum Outcome {
     /// Not even a batch header can be read, or the topic is not a telemetry topic: dropped
     /// without an answer, since there is nothing to address one to.
     Undecodable,
+    /// Over its gateway's limits: acknowledged `retry` without being handled, or dropped without
+    /// an answer when it could not have one or too many such answers were being sent.
+    Throttled,
 }
 
 impl Outcome {
@@ -40,6 +43,7 @@ impl Outcome {
             Self::RetainDropped => "retain_dropped",
             Self::QosDropped => "qos0_dropped",
             Self::Undecodable => "undecodable",
+            Self::Throttled => "throttled",
         }
     }
 }

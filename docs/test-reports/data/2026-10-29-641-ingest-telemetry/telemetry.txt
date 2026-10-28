@@ -1,16 +1,16 @@
-     Running tests/telemetry.rs (<host copy>/target/debug/deps/telemetry-9f6794ac0b880dcf)
+     Running tests/telemetry.rs (<host copy>/target/debug/deps/telemetry-a97961237994085c)
 
 running 1 test
-1. committed: Committed { records: 20 }, 20 rows, tenant = binding's 424d5429-7cb6-4ee6-bd99-6ae39864fc9b (payload claimed cc7e6918-9c88-4325-a59f-90d0b64477ba)
+1. committed: Committed { records: 20 }, 20 rows, tenant = binding's 53ce2baa-0fcf-49a1-b8c7-437fe4339ae4 (payload claimed 8bf70413-4c67-41a9-80d7-ef38e1afb042)
 1. sent again: Duplicate { records: 20 }, still 20 rows, one record
 2. unbound gateway: Retry { after_ms: 30000 }, 0 rows, no record
 2. device not a UUID: rejected InvalidValue "series[0].device: a device ID must be a UUID (the assets service creates devices so)", 0 rows
 2. header readable, body not: rejected DecodeFailed "malformed payload: Mismatch { name: "array", found: 5 }", 0 rows
-2. no header: no answer; logged: 2026-10-28T18:59:36.704634Z  WARN ingest::telemetry: dropped a telemetry message without a readable batch header gateway_id=gw-once-32c4b272e7a04155891687dfb91ed19e payload_bytes=3 code="decode_failed"
-3. completion table refuses: Retry { after_ms: 5000 }, 20 rows, no record; logged: 2026-10-28T18:59:36.929577Z  WARN ingest::telemetry: writing a telemetry batch failed; answered retry, no completion record gateway_id=gw-failing-6963a864fb7f46c0beedbe6340fa3325 stream_id=s-failing seq=1 step="commit" error=Store(StoreError { step: Commit, code: Some(497), unreachable: false })
+2. no header: no answer; logged: 2026-10-28T20:31:38.557552Z  WARN ingest::telemetry: dropped a telemetry message without a readable batch header suppressed_logs=0 gateway_id=gw-once-e5c3359dcc7e4f7c853986a22f35412f payload_bytes=3 code="decode_failed"
+3. completion table refuses: Retry { after_ms: 5000 }, 20 rows, no record; logged: 2026-10-28T20:31:38.849893Z  WARN ingest::telemetry: writing a telemetry batch failed; answered retry, no completion record suppressed_logs=0 gateway_id=gw-failing-9d486fbea8ac4eb39be5cb0eeef0bcb8 stream_id=s-failing seq=1 step="commit" error=Store(StoreError { step: Commit, code: Some(497), unreachable: false })
 3. accepted again, resent: Committed { records: 20 }, 20 rows, one record
-3. rebound between attempts: Committed { records: 20 }, 20 rows, all under the new tenant; logged: 2026-10-28T18:59:41.003433Z  WARN ingest::telemetry: an earlier attempt wrote this batch for another tenant; its rows are deleted and the batch is written for the gateway's current tenant gateway_id=gw-rebound-2e67ac363e814c50935a76f50a808e56 stream_id=s-rebound seq=1
-4. retained batch replayed with the flag: no answer, rows unchanged; logged: 2026-10-28T18:59:41.270480Z  WARN ingest::telemetry: dropped a retained telemetry message: telemetry is never retained, so the gateway broke the protocol and the broker replays an old message gateway_id=gw-retained-08f31652f5fe404ab5ac11f9a24b58f3 payload_bytes=587
+3. rebound between attempts: Committed { records: 20 }, 20 rows, all under the new tenant; logged: 2026-10-28T20:31:43.506386Z  WARN ingest::telemetry: an earlier attempt wrote this batch for another tenant; its rows are deleted and the batch is written for the gateway's current tenant suppressed_logs=0 gateway_id=gw-rebound-1dca5ba953ae434996b21f9cd3b11f85 stream_id=s-rebound seq=1
+4. retained batch replayed with the flag: no answer, rows unchanged; logged: 2026-10-28T20:31:43.941568Z  WARN ingest::telemetry: dropped a retained telemetry message: telemetry is never retained, so the gateway broke the protocol and the broker replays an old message suppressed_logs=0 gateway_id=gw-retained-47c96b34a7d34b87b27d692a6ab78518 payload_bytes=587
 5. ended after the rows: 20 rows, no record, no answer
 5. resent to a new pipeline: deleted, identical block written again (20 rows), no answer while held before the record, then Committed { records: 20 } with the record on disk
 6. lock held by one replica: both resends answered retry, then the holder committed
@@ -22,16 +22,19 @@ running 1 test
 6. batch 6 to both replicas: [Retry { after_ms: 2000 }, Committed { records: 20 }], 20 rows
 6. batch 7 to both replicas: [Retry { after_ms: 2000 }, Committed { records: 20 }], 20 rows
 6. batch 8 to both replicas: [Retry { after_ms: 2000 }, Committed { records: 20 }], 20 rows
-7. telemetry_1m against the raw rows: 24 cells, 0 differ
-7. telemetry_1h against the raw rows: 24 cells, 0 differ
-7. min(committed_at) - max(received_at) per batch: smallest 45 ms over 13 batches
-7. statements of kind Delete: 3, with the stream settings: 3
-7. statements of kind Insert: 61, with the stream settings: 61
-7. statements of kind Select: 34, with the stream settings: 34
-7. DELETE (3 statements): at most 0 rows (0 bytes) read of 200260 in the table
-7. leftover search (16 statements): at most 100 rows (3694 bytes) read of 200260 in the table
-7. telemetry.tenant_id comment: Tenant the gateway was bound to when the batch was written, from the ingest service\'s binding table, never from the payload
+7. full batch 1 (262037 bytes, 1845 series, point keys of 64 characters): Committed { records: 1845 }, 1845 rows
+7. full batch 2 (262037 bytes, 1845 series, point keys of 64 characters, rewritten after a failed completion record): Committed { records: 1845 }, 1845 rows
+8. 200 replays from one gateway (bucket 5, 1 a minute): 3 duplicate, 1 retry while another held the lock, 178 retry after 10000 ms, 18 unanswered; 4 high-water mark reads in ClickHouse; 5 log lines about it; the other gateway's batch: committed
+9. telemetry_1m against the raw rows: 3730 cells, 0 differ
+9. telemetry_1h against the raw rows: 3722 cells, 0 differ
+9. min(committed_at) - max(received_at) per batch: smallest 100 ms over 17 batches
+9. statements of kind Delete: 11, with the stream settings: 11
+9. statements of kind Insert: 122, with the stream settings: 122
+9. statements of kind Select: 109, with the stream settings: 109
+9. DELETE (11 statements): at most 0 rows (0 bytes) read of 203990 in the table
+9. leftover search (42 statements): at most 1845 rows (199556 bytes) read of 203990 in the table
+9. row count (41 statements): at most 5497 rows (434925 bytes) read of 203990 in the table
+9. telemetry.tenant_id comment: Tenant the gateway was bound to when the batch was written, from the ingest service\'s binding table, never from the payload
 test telemetry_is_written_once_and_acknowledged_after_it_is_on_disk ... ok
 
-test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 24.13s
-
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 40.91s
