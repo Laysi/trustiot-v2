@@ -4,7 +4,7 @@ Laysi/trustiot-v2#81：閘道器以 TPM 金鑰簽一次性挑戰，經公開路�
 
 ## 環境
 
-- **程式碼**：分支 `feat/81-cert-renewal`。功能 commit 先是 `8f49bbad`（基於 main `5dad0429`），之後 rebase 到 main `9d879e95`（Laysi/trustiot-v2#722，只改閘道器 agent 與 `crates/protocol/README.md`，沒有衝突）成為 `21218ce1`，內容相同。本報告的 commit 只加文件與測試輸出。
+- **程式碼**：分支 `feat/81-cert-renewal`。功能 commit 先是 `8f49bbad`（基於 main `5dad0429`），之後 rebase 到 main `9d879e95`（Laysi/trustiot-v2#722，只改閘道器 agent 與 `crates/protocol/README.md`，沒有衝突）成為 `21218ce1`，內容相同。本報告的 commit 只加文件與測試輸出。安全審查之後的修正是 `d3dc6c20`（見「安全審查後的修正」），報告的更新在它之後的 commit。
 - **機器**：建置主機，經檢查佇列執行：`certs` 的換發測試與證據行在建置主機（macOS，aarch64，`CI=1`）；整個 workspace 的檢查在建置主機（x86_64 Linux）。容器測試由 podman 起 `testkit::product` 的拋棄式 TLS Postgres，以 migration Job 的程式套用整個產品的 schema，再以 `certs_app` 與 `certs_platform` 啟動真的 `certs` 執行檔。`tests/renewal_lag.rs` 是自己的測試執行檔、自己的資料庫。
 - **工具**：`.prototools` 與 `rust-toolchain.toml` 釘選的 Rust 1.99.0、Bun 1.4.2、cargo-deny。
 - **設定**：`CI=1`。換發的設定以環境變數給（各測試檔開頭）：情境測試放寬限流、時間窗 1 天、每秒回報；限流測試每個硬體 ID 2 個、每小時一個，全域 6 個、每分鐘一個；lag 測試 `TRUSTIOT__RENEWAL__MAX_CONSUMER_LAG=1s`。指標以 OTLP/HTTP 送到測試裡的 collector 替身。
@@ -47,6 +47,24 @@ bun test deploy/chart
 - 限流：每個硬體 ID 超過後 429、`Retry-After: 3600`；全域超過後 50 個新硬體 ID 都 429，資料庫只存下限流放行的 6 個挑戰。
 - lag：平台角色登不進去（lag 不明）的副本兩步都 503 `bindings_stale`、`Retry-After: 30`，挑戰沒有作廢、正常的副本之後兌換成功；消費端停在不認得的綁定事件、lag 超過 1 秒後兩步都 503，兌換沒有作廢挑戰。
 
+## 安全審查後的修正
+
+安全審查（`87b44b1d`）沒有 Critical 或 High，修正了兩項：
+
+- **M1**：原本只有一道全域限流，任何人以捏造的硬體 ID 每秒送超過 20 個取挑戰請求，就讓每台閘道器的換發都得到 429，包括只能經這個端點恢復的閘道器。`d3dc6c20` 讓取挑戰與兌換各有一道全域限流（同樣的設定），每個硬體 ID 的限流仍是兩步共用。還剩下的風險（洪水期間其他閘道器取不到挑戰）與入口以來源 IP 限流的前提條件寫在 services/certs/README.md「換發」的「規則與取捨」與 docs/runbooks/demo-environment.md 的「換發端點上線」。
+- **L1**：`bindings_stale` 與 `ca_not_ready` 的 503 原本在限流之前，每個請求一行 INFO。限流移到本文檢查之後、lag 與 CA 的檢查之前。
+
+| 指令 | 在哪裡、哪個 commit | 結果 |
+| --- | --- | --- |
+| `cargo fmt --all --check`，`cargo clippy --locked -p certs --all-targets -- -D warnings`，`cargo test --locked -p repo-check`，`cargo test --locked -p certs`，`cargo test --locked -p certs --test renewal --test renewal_lag -- --nocapture` | 建置主機（macOS，`CI=1`），`d3dc6c20` 的工作樹 | 全部通過：certs 的單元測試 29 個（限流的 5 個在內），`renewal` 3 個、`renewal_lag` 1 個，其他測試檔都通過；repo-check 通過 |
+
+證據行在 [security-review-fixes.txt](data/2026-10-29-81-cert-renewal/security-review-fixes.txt)：
+
+- M1（`rate_limits_answer_429_and_bound_the_challenges`）：已登錄、已綁定的 `rl-ok` 先拿到挑戰；接著取挑戰的全域限流用完（每個硬體 ID 的 429 之後，50 個新硬體 ID 都 429，只存下 6 個挑戰），`rl-ok` 兌換仍是 201。捏造的兌換 5 個 409（兌換那一道的 6 個，換發用掉 1 個），之後 15 個 429，取挑戰仍是 429。
+- L1（`over_the_limits_a_stale_replica_logs_no_refusal_at_info`）：平台角色登不進去（lag 不明）的副本收到 30 個新硬體 ID 的 60 個請求（每個一次取挑戰、一次兌換），12 個（每一步 6 個）回 503 `bindings_stale`、各一行 INFO，48 個回 429、沒有 INFO 行。
+- 測試等 lag 的方式：限流改在 lag 的檢查之前之後，503 也扣限流，所以 `tests/renewal.rs` 改看匯出的 `outbox.consumer.lag`，不再輪詢端點；`tests/renewal_lag.rs` 每次輪詢用新的硬體 ID，證據行改取兌換那一步的拒絕（之前取到的是啟動時、lag 還不明的那一行）。
+- 前面「證據行」的其他結果（換發、拒絕、挑戰、拒絕的指標、時間窗、lag）在修正後重跑時相同，只有序號與 ID 不同，`certs.renewal.challenges` 從 10 變成 9（少了原本輪詢等 lag 時取的那一個挑戰）。
+
 ## 結論
 
 | 驗收條件 | 結果 |
@@ -54,7 +72,7 @@ bun test deploy/chart
 | 已登錄、已綁定、租戶正常的閘道器以正確的簽章換到新憑證：CN 是硬體 ID、公鑰是登錄的那一把、鏈到 `root_certificate`；目前憑證已過期或已撤銷時同樣成功 | 通過：`tests/renewal.rs` 撤銷閘道器唯一的憑證後換發，CN、公鑰、鏈與 rustls 的用戶端憑證驗證都通過。已過期的情況沒有另外測：端點不讀閘道器現有的憑證（請求不帶憑證、不經 mTLS），撤銷與過期走的是同一條路徑 |
 | 除役、未綁定、租戶停權時拒絕，不簽憑證、不寫簽發紀錄 | 通過：除役、沒綁定過、綁定已結束、停權（測試替身）都 403，簽發紀錄不變、沒有事件 |
 | 重送 409、竄改的簽章 401、別台設備或別的用途的挑戰 403、過期 410，失敗的兌換讓挑戰作廢 | 通過：每種失敗之後再用同一個挑戰都是 409 |
-| 超過每個硬體 ID 與全域的限流回 429 與 `Retry-After`；大量取挑戰不讓資料庫無上限成長 | 通過：`tests/renewal.rs` 的限流測試；取挑戰時刪掉過期的挑戰也有測試。上限的推導見 README「限流與資源上限」 |
+| 超過每個硬體 ID 與全域的限流回 429 與 `Retry-After`；大量取挑戰不讓資料庫無上限成長 | 通過：`tests/renewal.rs` 的限流測試；取挑戰時刪掉過期的挑戰也有測試。上限的推導見 README「限流與資源上限」。安全審查後取挑戰與兌換各有一道全域限流，取挑戰的洪水之後已經拿到挑戰的閘道器仍然換發成功；超過限流的請求在 lag 不明時也只回 429、不記 INFO |
 | 成功換發的租戶事件與簽發紀錄在同一個交易；每次拒絕有結構化日誌與依原因的指標；已登錄的硬體 ID 在一個時間窗內被拒多次只寫一筆事件（帶次數），未登錄的不寫事件 | 通過：交易 ID 相同；每次拒絕的日誌與 OTLP 指標；7 次拒絕一筆事件；未登錄沒有事件 |
 | aarch64 建置、`cargo test --workspace`、clippy、`openapi --check`、`bun test deploy/chart`、`bun run --cwd frontend test` | 通過：見「結果」的表 |
 | 消費端 lag 不明或超過上限時回 503，不簽憑證 | 通過：`tests/renewal.rs`（不明）與 `tests/renewal_lag.rs`（超過上限） |
