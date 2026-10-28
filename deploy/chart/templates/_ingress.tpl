@@ -124,8 +124,10 @@ Argument: the path. Returns "true" or "".
 Backend of a route: the Service name and port number of an enabled service. The ports with a
 Service and policies of their own fail the render, because the service's Service leaves them out
 and only their own callers may reach them: the identity service's token-exchange
-(templates/token-exchange.yaml) and the certs service's broker-certs, which issues the MQTT
-broker's server certificate (templates/certs-broker.yaml, Laysi/trustiot-v2#557).
+(templates/token-exchange.yaml), the certs service's broker-certs, which issues the MQTT
+broker's server certificate (templates/certs-broker.yaml, Laysi/trustiot-v2#557), and the AI
+gateway's admin, which changes the model roles' models (templates/ai-gateway-admin.yaml,
+Laysi/trustiot-v2#607; a route to ai-gateway fails earlier anyway, "trustiot.ingress.plan").
 Argument: dict "root" $ "service" <key under services> "port" <port name> "where" <for errors>.
 Returns YAML {name, port}; use with fromYaml.
 */}}
@@ -134,7 +136,7 @@ Returns YAML {name, port}; use with fromYaml.
 {{- if not $entry -}}
 {{- fail (printf "%s: unknown service %q" .where .service) -}}
 {{- end -}}
-{{- if or (and (eq .service "identity") (eq .port "token-exchange")) (and (eq .service "certs") (eq .port "broker-certs")) -}}
+{{- if eq .port (get (include "trustiot.mesh.ownPolicyPorts" .root | fromYaml) .service) -}}
 {{- fail (printf "%s: port %q of service %q has a Service and policies of its own; the ingress gateway never reaches it" .where .port .service) -}}
 {{- end -}}
 {{- $config := include "trustiot.serviceConfig" (dict "root" .root "name" .service "values" $entry) | fromYaml -}}
@@ -232,7 +234,7 @@ Returns YAML {public: [...], routes: [...]}; each item has host, hostname, path,
 {{- end -}}
 {{- $seen = append $seen $id -}}
 {{- if eq $route.service "ai-gateway" -}}
-{{- fail (printf "%s: ai-gateway takes no internal identity tokens and serves only other services (decision 28), so it gets no cookie route" $where) -}}
+{{- fail (printf "%s: ai-gateway takes no internal identity tokens and serves only other services (decision 28), so it gets no cookie route; its admin port is the identity service's alone (templates/ai-gateway-admin.yaml)" $where) -}}
 {{- end -}}
 {{- if eq $route.service "web" -}}
 {{- fail (printf "%s: web serves only the SPA's static files, which need neither the session cookie nor an internal identity, so it gets no cookie route" $where) -}}

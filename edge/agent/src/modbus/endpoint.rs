@@ -134,6 +134,17 @@ impl Endpoints {
             .clone()
     }
 
+    /// Forgets the connection of every endpoint that no device reads through any more (no
+    /// handle from [`Endpoints::connection`] is left), which closes it, and returns how many it
+    /// forgot. A device added later at such an endpoint gets a new
+    /// connection. Endpoints still in use keep theirs, so their devices are not reconnected.
+    pub fn prune(&mut self) -> usize {
+        let before = self.connections.len();
+        self.connections
+            .retain(|_, connection| Arc::strong_count(&connection.connection) > 1);
+        before - self.connections.len()
+    }
+
     /// How many endpoints have a connection.
     pub fn len(&self) -> usize {
         self.connections.len()
@@ -287,5 +298,28 @@ mod tests {
         };
         assert_eq!(transport(&converter), rtu);
         assert_eq!(transport(&other_transport), Transport::ModbusTcp);
+    }
+
+    #[test]
+    fn prune_forgets_only_endpoints_nobody_reads_through() {
+        let mut endpoints = Endpoints::new(Duration::from_secs(10));
+        let rtu = Transport::RtuOverTcp;
+        let kept = endpoints.connection(&device(rtu, "192.0.2.10", 502));
+        let sibling = endpoints.connection(&device(rtu, "192.0.2.10", 502));
+        drop(endpoints.connection(&device(rtu, "192.0.2.11", 502)));
+        assert_eq!(endpoints.len(), 2);
+        assert_eq!(endpoints.prune(), 1);
+        assert_eq!(endpoints.len(), 1);
+        drop(sibling);
+        assert_eq!(endpoints.prune(), 0, "one handle is still in use");
+        assert!(
+            endpoints
+                .connection(&device(rtu, "192.0.2.10", 502))
+                .same(&kept),
+            "the endpoint in use keeps its connection"
+        );
+        drop(kept);
+        assert_eq!(endpoints.prune(), 1);
+        assert!(endpoints.is_empty());
     }
 }

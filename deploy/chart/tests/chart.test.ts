@@ -4920,6 +4920,8 @@ describe("service-to-service authorization (decision 27)", () => {
   // The certs service issues the MQTT broker's server certificate on a port of its own
   // (Laysi/trustiot-v2#557).
   const BROKER_CERTS_PORT = 8082;
+  // The AI gateway serves its admin API on a port of its own (Laysi/trustiot-v2#607).
+  const AI_GATEWAY_ADMIN_PORT = 8082;
   // An identity (or certs) AuthorizationPolicy rule: these principals, on this port only.
   const identityRule = (port: number, principals: string[]) => ({ from: [{ source: { principals } }], to: [{ operation: { ports: [String(port)] } }] });
   // Test stand-ins that run traefik/whoami, which listens on http only, so their overlays probe
@@ -5675,13 +5677,16 @@ describe("service-to-service authorization (decision 27)", () => {
         const [container] = podSpec(workload).containers;
         // The identity service also serves its token exchange on a port of its own, which has a
         // Service of its own (Laysi/trustiot-v2#106); the certs service likewise the MQTT broker's
-        // server certificate (Laysi/trustiot-v2#557).
+        // server certificate (Laysi/trustiot-v2#557), and the AI gateway its admin API
+        // (Laysi/trustiot-v2#607).
         const servedPorts: [string, number][] =
           service === "identity"
             ? [["http", API_PORT], ["token-exchange", EXCHANGE_PORT]]
             : service === "certs"
               ? [["http", API_PORT], ["broker-certs", BROKER_CERTS_PORT]]
-              : [["http", API_PORT]];
+              : service === "ai-gateway"
+                ? [["http", API_PORT], ["admin", AI_GATEWAY_ADMIN_PORT]]
+                : [["http", API_PORT]];
         expect({ label, ports: container?.ports?.map(({ name: port, containerPort }) => ({ name: port, containerPort })) }).toEqual({
           label,
           ports: [...servedPorts.map(([port, containerPort]) => ({ name: port, containerPort })), { name: "health", containerPort: HEALTH_PORT }],
@@ -5760,6 +5765,32 @@ describe("service-to-service authorization (decision 27)", () => {
     );
     expect(result.code).not.toBe(0);
     expect(result.stderr).toMatch(/services\.smoke-echo: probes\.readiness uses port "metrics", which is not in ports/);
+  });
+
+  // The node source reaches a pod's probe ports without mTLS or AuthorizationPolicy, so a probe on
+  // a port that only its own callers may reach would open it to every process on the node: the
+  // identity service's token exchange, the certs service's broker certificate issuance and the AI
+  // gateway's admin API. By name or by number, in any probe kind and handler.
+  test.each([
+    ["identity", "readiness by name", { httpGet: { path: "/readyz", port: "token-exchange" } }, [], /services\.identity: probes\.readiness uses port "token-exchange"/],
+    ["identity", "liveness by number", { tcpSocket: { port: 8082 } }, [], /services\.identity: probes\.liveness uses port 8082, the port token-exchange/],
+    ["certs", "startup by name", { tcpSocket: { port: "broker-certs" } }, [], /services\.certs: probes\.startup uses port "broker-certs"/],
+    ["certs", "readiness by number", { httpGet: { path: "/readyz", port: 8082 } }, [], /services\.certs: probes\.readiness uses port 8082, the port broker-certs/],
+    ["ai-gateway", "readiness by name", { httpGet: { path: "/readyz", port: "admin" } }, [], /services\.ai-gateway: probes\.readiness uses port "admin"/],
+    ["ai-gateway", "liveness by number", { grpc: { port: 8082 } }, [], /services\.ai-gateway: probes\.liveness uses port 8082, the port admin/],
+    [
+      "ai-gateway",
+      "liveness by the number of a moved admin port",
+      { tcpSocket: { port: 9182 } },
+      ["--set-json", 'services.ai-gateway.ports=[{"name":"http","containerPort":8080},{"name":"admin","containerPort":9182}]'],
+      /services\.ai-gateway: probes\.liveness uses port 9182, the port admin/,
+    ],
+  ] as [string, string, object, string[], RegExp][])("a %s probe on its port with its own Service and policies fails the render (%s)", (service, label, probe, extra, expected) => {
+    const kind = label.split(" ")[0];
+    const result = helmTemplate([...SHAPES.saas], [...enableAllServices, ...extra, "--set-json", `services.${service}.probes.${kind}=${JSON.stringify(probe)}`]);
+    expect(result.code).not.toBe(0);
+    expect(result.stderr).toMatch(expected);
+    expect(result.stderr).toMatch(/has a Service and policies of its own: the node reaches a pod's probe ports without mTLS or AuthorizationPolicy/);
   });
 });
 
@@ -6019,6 +6050,57 @@ describe("AI gateway settings (decisions 15 and 28, Laysi/trustiot-v2#536)", () 
       ["--set-json", 'services.ai-gateway.env=[{"name":"AI_GATEWAY__TELEMETRY__OTLP_ENDPOINT","value":"http://elsewhere:4318"}]'],
       /services\.ai-gateway: env AI_GATEWAY__TELEMETRY__OTLP_ENDPOINT is set by the chart/,
     ],
+    // The admin API's address is the chart's (Laysi/trustiot-v2#607): 0.0.0.0 would let every
+    // caller of the gateway reach it by the pod's address before its policies exist, and a moved
+    // port would leave the policies on the old one. Refused with and without the identity service.
+    [
+      "custom env that opens the admin API",
+      SHAPES.saas,
+      ["--set-json", 'services.ai-gateway.env=[{"name":"AI_GATEWAY__ADMIN__LISTEN_ADDR","value":"0.0.0.0:8082"}]'],
+      /services\.ai-gateway: env AI_GATEWAY__ADMIN__LISTEN_ADDR is set by the chart: the admin API changes every tenant's models/,
+    ],
+    [
+      "custom env for every service that opens the gateway's admin API, in lower case",
+      SHAPES.saas,
+      ["--set", "services.identity.enabled=true", "--set-json", 'serviceDefaults.env=[{"name":"ai_gateway__admin__listen_addr","value":"0.0.0.0:8082"}]'],
+      /services\.ai-gateway: env ai_gateway__admin__listen_addr is set by the chart: the admin API changes every tenant's models/,
+    ],
+    [
+      "custom env that sets any other admin API setting",
+      SHAPES.onprem,
+      [...AI_GATEWAY_SETTINGS, "--set-json", 'services.ai-gateway.env=[{"name":"AI_GATEWAY__ADMIN__ANYTHING","value":"x"}]'],
+      /services\.ai-gateway: env AI_GATEWAY__ADMIN__ANYTHING is set by the chart/,
+    ],
+    [
+      "a gateway without the admin port while the identity service calls it",
+      SHAPES.saas,
+      ["--set", "services.identity.enabled=true", "--set-json", 'services.ai-gateway.ports=[{"name":"http","containerPort":8080}]'],
+      /services\.ai-gateway\.ports: the admin API needs the port named admin .* because identity calls it \(Laysi\/trustiot-v2#607\)/,
+    ],
+    [
+      "a gateway with the admin port only",
+      SHAPES.saas,
+      ["--set-json", 'services.ai-gateway.ports=[{"name":"admin","containerPort":8082}]'],
+      /services\.ai-gateway\.ports: the API port \(http\) is missing; admin serves the admin API only/,
+    ],
+    [
+      "a service named after the admin API's Service and policies",
+      SHAPES.saas,
+      ["--set", "services.ai-gateway-admin.enabled=true"],
+      /services\.ai-gateway-admin: the name belongs to the AI gateway's admin API/,
+    ],
+    [
+      "an ingress route to the gateway's admin port",
+      SHAPES.saas,
+      ["--set", "services.identity.enabled=true", "--set-json", 'ingress.routes=[{"host":"app","path":"/api/ai","match":"PathPrefix","service":"ai-gateway","port":"admin"}]'],
+      /ingress\.routes\[0\]: ai-gateway takes no internal identity tokens .* its admin port is the identity service's alone/,
+    ],
+    [
+      "an ingress route to the gateway's API port",
+      SHAPES.saas,
+      ["--set-json", 'ingress.routes=[{"host":"app","path":"/api/ai","match":"PathPrefix","service":"ai-gateway","port":"http"}]'],
+      /ingress\.routes\[0\]: ai-gateway takes no internal identity tokens/,
+    ],
     // Without its database the gateway refuses to start (services/ai-gateway/README.md, 「資料庫」).
     [
       "a gateway without postgres under mesh.calls",
@@ -6104,6 +6186,138 @@ describe("AI gateway settings (decisions 15 and 28, Laysi/trustiot-v2#536)", () 
     expect(jobs).toContain(`ai_gateway_app=${RELEASE}-ai-gateway-password`);
   });
 
+  // Laysi/trustiot-v2#607: the admin API changes which models every tenant's assistant uses, so
+  // only the identity service, which checks the platform administrator, reaches its port; the
+  // services that forward model calls reach the API port only (templates/ai-gateway-admin.yaml,
+  // the same split as templates/certs-broker.yaml).
+  describe("admin API (Laysi/trustiot-v2#607)", () => {
+    const GATEWAY = `${RELEASE}-ai-gateway`;
+    const ADMIN = `${RELEASE}-ai-gateway-admin`;
+    const ADMIN_SERVICE_PORT = 8082;
+    const ADMIN_URL = `http://${ADMIN}.${NAMESPACE}.svc:${ADMIN_SERVICE_PORT}`;
+    const principal = (service: string) => `cluster.local/ns/${NAMESPACE}/sa/${RELEASE}-${service}`;
+    const podSelector = (service: string) => ({ "app.kubernetes.io/name": "trustiot", "app.kubernetes.io/instance": RELEASE, "app.kubernetes.io/component": service });
+    const policy = (manifests: Manifest[], kind: "AuthorizationPolicy" | "NetworkPolicy", name: string) => find(manifests, kind, name).spec as MeshPolicy & NetworkPolicySpec;
+    const servicePorts = (manifests: Manifest[], name: string) =>
+      (find(manifests, "Service", name).spec as { ports: { name: string; port: number; targetPort: string }[] }).ports.map((p) => [p.name, p.port, p.targetPort]);
+    const envOf = (manifests: Manifest[], name: string) => podSpec(find(manifests, "Deployment", name)).containers.flatMap((c) => c.env ?? []);
+    // Every service, and every one that may forward model calls through the gateway does.
+    const FORWARDERS = ["alerts", "assistant", "knowledge"];
+    const allForwarding = [
+      ...enableAllServices,
+      "--set-json",
+      'mesh.calls.assistant=["ai-gateway","postgres"]',
+      "--set-json",
+      'mesh.calls.alerts=["ai-gateway"]',
+      "--set-json",
+      'mesh.calls.knowledge=["ai-gateway"]',
+    ];
+
+    test.each(SHAPE_NAMES)("%s: the identity service alone reaches the admin port, which the gateway's Service leaves out; its callers reach the API port only", (shape) => {
+      const manifests = render(SHAPES[shape], allForwarding);
+      const gatewayLabels = (find(manifests, "Deployment", GATEWAY).spec as { template: { metadata: { labels: Record<string, string> } } }).template.metadata.labels;
+      const onGateway = (selector: Record<string, string>) => Object.entries(selector).every(([key, value]) => gatewayLabels[key] === value);
+
+      // The gateway's own policy: the forwarding services on the API port only.
+      expect(policy(manifests, "AuthorizationPolicy", GATEWAY).rules).toEqual([
+        { from: [{ source: { principals: FORWARDERS.map(principal) } }], to: [{ operation: { ports: ["8080"] } }] },
+      ]);
+      // The admin API's policy, on the gateway's pods: the identity service on the admin port only.
+      const admin = policy(manifests, "AuthorizationPolicy", ADMIN);
+      expect(admin.action).toBe("ALLOW");
+      expect(onGateway(admin.selector.matchLabels)).toBe(true);
+      expect(admin.rules).toEqual([{ from: [{ source: { principals: [principal("identity")] } }], to: [{ operation: { ports: [String(ADMIN_SERVICE_PORT)] } }] }]);
+      // Across every AuthorizationPolicy on the gateway's pods (one with neither selector nor
+      // targetRefs applies to every workload, so it counts): ALLOW policies add up, so a rule
+      // without ports, or with the admin port, decides who reaches the admin API, and only the
+      // identity service's does; the identity service does not reach the API port.
+      const onGatewayPolicies = manifests.filter((m) => {
+        if (m.kind !== "AuthorizationPolicy") return false;
+        const spec = m.spec as { selector?: { matchLabels?: Record<string, string> }; targetRefs?: unknown[] };
+        if (spec.targetRefs !== undefined) return false;
+        return onGateway(spec.selector?.matchLabels ?? {});
+      });
+      expect(onGatewayPolicies.map((m) => m.metadata.name).sort()).toEqual([GATEWAY, ADMIN]);
+      const reaching = (port: number) =>
+        onGatewayPolicies
+          .flatMap((m) => (m.spec as MeshPolicy).rules ?? [])
+          .flatMap((rule) => {
+            const ports = rule.to?.flatMap((to) => to.operation.ports);
+            return ports === undefined || ports.includes(String(port)) ? rule.from.flatMap((from) => from.source.principals) : [];
+          })
+          .sort();
+      expect(reaching(ADMIN_SERVICE_PORT)).toEqual([principal("identity")]);
+      expect(reaching(8080)).toEqual(FORWARDERS.map(principal));
+      // The NetworkPolicy sees HBONE only: it admits the identity service's pods.
+      const network = policy(manifests, "NetworkPolicy", ADMIN);
+      expect(network.podSelector).toEqual(policy(manifests, "NetworkPolicy", GATEWAY).podSelector);
+      expect(network.policyTypes).toEqual(["Ingress"]);
+      expect(network.ingress).toEqual([{ from: [{ podSelector: { matchLabels: podSelector("identity") } }], ports: [{ port: 15008, protocol: "TCP" }] }]);
+      const identityLabels = (find(manifests, "Deployment", `${RELEASE}-identity`).spec as { template: { metadata: { labels: Record<string, string> } } }).template.metadata.labels;
+      expect(Object.entries(podSelector("identity")).every(([key, value]) => identityLabels[key] === value)).toBe(true);
+
+      // The gateway's Service leaves the port out; its own Service has it alone, on the gateway's pods.
+      expect(servicePorts(manifests, GATEWAY)).toEqual([["http", 8080, "http"]]);
+      expect(servicePorts(manifests, ADMIN)).toEqual([["admin", ADMIN_SERVICE_PORT, "admin"]]);
+      const adminService = find(manifests, "Service", ADMIN);
+      expect((adminService.spec as { type: string }).type).toBe("ClusterIP");
+      expect((adminService.spec as { selector: Record<string, string> }).selector).toEqual((find(manifests, "Service", GATEWAY).spec as { selector: Record<string, string> }).selector);
+      expect(adminService.metadata.labels?.["app.kubernetes.io/component"]).toBe("ai-gateway-admin");
+
+      // The gateway listens on the pod's address, where the Service points.
+      const container = podSpec(find(manifests, "Deployment", GATEWAY)).containers[0];
+      expect(container?.ports?.map((p) => [p.name, p.containerPort])).toEqual([
+        ["http", 8080],
+        ["admin", ADMIN_SERVICE_PORT],
+        ["health", 8081],
+      ]);
+      expect(container?.env).toContainEqual({ name: "AI_GATEWAY__ADMIN__LISTEN_ADDR", value: `0.0.0.0:${ADMIN_SERVICE_PORT}` });
+      // Only the identity service gets the admin API's address, and only the gateway its listen
+      // address; neither is a call on behalf of users.
+      for (const deployment of manifests.filter((m) => m.kind === "Deployment")) {
+        const names = podSpec(deployment).containers.flatMap((c) => (c.env ?? []).map((e) => e.name));
+        expect(names.includes("TRUSTIOT_AI_GATEWAY_ADMIN_URL"), deployment.metadata.name).toBe(deployment.metadata.name === `${RELEASE}-identity`);
+        expect(names.some((n) => n.startsWith("AI_GATEWAY__ADMIN__")), deployment.metadata.name).toBe(deployment.metadata.name === GATEWAY);
+      }
+      const identityEnv = envOf(manifests, `${RELEASE}-identity`);
+      expect(identityEnv).toContainEqual({ name: "TRUSTIOT_AI_GATEWAY_ADMIN_URL", value: ADMIN_URL });
+      const onBehalf = JSON.parse(identityEnv.find((e) => e.name === "TRUSTIOT_ON_BEHALF_CALLS")?.value ?? "null") as Record<string, string[]>;
+      expect(Object.keys(onBehalf)).not.toContain("identity");
+      expect(Object.values(onBehalf).flat()).not.toContain("ai-gateway");
+    }, SLOW_TEST_MS);
+
+    test.each(SHAPE_NAMES)("%s: the admin Service stays on 8082 when the container port changes, and the policy and listen address follow the container port", (shape) => {
+      const CONTAINER_PORT = 9082;
+      const manifests = render(SHAPES[shape], [
+        ...enableAllServices,
+        "--set-json",
+        `services.ai-gateway.ports=[{"name":"http","containerPort":8080,"appProtocol":"http"},{"name":"admin","containerPort":${CONTAINER_PORT},"appProtocol":"http"}]`,
+      ]);
+      expect(servicePorts(manifests, ADMIN)).toEqual([["admin", ADMIN_SERVICE_PORT, "admin"]]);
+      expect(envOf(manifests, GATEWAY)).toContainEqual({ name: "AI_GATEWAY__ADMIN__LISTEN_ADDR", value: `0.0.0.0:${CONTAINER_PORT}` });
+      expect(policy(manifests, "AuthorizationPolicy", ADMIN).rules).toEqual([
+        { from: [{ source: { principals: [principal("identity")] } }], to: [{ operation: { ports: [String(CONTAINER_PORT)] } }] },
+      ]);
+      expect(envOf(manifests, `${RELEASE}-identity`)).toContainEqual({ name: "TRUSTIOT_AI_GATEWAY_ADMIN_URL", value: ADMIN_URL });
+      // The gateway's own policy still admits its callers on the API port alone.
+      expect((policy(manifests, "AuthorizationPolicy", GATEWAY).rules ?? []).flatMap((rule) => rule.to?.flatMap((to) => to.operation.ports) ?? [])).toEqual(["8080"]);
+    }, SLOW_TEST_MS);
+
+    test.each(SHAPE_NAMES)("%s: without the identity service the admin API stays on loopback, with no Service or policies of its own", (shape) => {
+      const manifests = render(SHAPES[shape], [...enableAllServices, "--set", "services.identity.enabled=false"]);
+      expect(manifests.filter((m) => m.metadata.name === ADMIN)).toEqual([]);
+      const env = envOf(manifests, GATEWAY);
+      expect(env.filter((e) => e.name.startsWith("AI_GATEWAY__ADMIN__"))).toEqual([]);
+      // The gateway's own Service and policy still leave the admin port out, so nothing reaches
+      // it even if it listened beyond loopback.
+      expect(servicePorts(manifests, GATEWAY)).toEqual([["http", 8080, "http"]]);
+      expect((policy(manifests, "AuthorizationPolicy", GATEWAY).rules ?? []).flatMap((rule) => rule.to?.flatMap((to) => to.operation.ports) ?? [])).toEqual(["8080"]);
+      // Without the gateway, nothing of it, and the identity service gets no address.
+      const withoutGateway = render(SHAPES[shape], ["--set", "services.identity.enabled=true"]);
+      expect(withoutGateway.filter((m) => m.metadata.name === ADMIN)).toEqual([]);
+      expect(envOf(withoutGateway, `${RELEASE}-identity`).map((e) => e.name)).not.toContain("TRUSTIOT_AI_GATEWAY_ADMIN_URL");
+    }, SLOW_TEST_MS);
+  });
 });
 
 // Values of ingress.tunnel.clusterIP that are not one plain IPv4 address (Laysi/trustiot-v2#478):
@@ -7343,7 +7557,15 @@ describe("e2e overlays", () => {
       migrate: false,
       filledByTest: [],
     })),
-    { name: "mesh.e2e.ts", files: [...SHAPES.saas, E2E_VALUES, "tests/e2e/values-mesh-e2e.yaml"], args: [], migrate: false, filledByTest: [] },
+    {
+      name: "mesh.e2e.ts",
+      files: [...SHAPES.saas, E2E_VALUES, "tests/e2e/values-mesh-e2e.yaml"],
+      args: [],
+      migrate: false,
+      // The AI gateway lists postgres, which the chart requires; the test writes its password
+      // into the Secret once Helm has declared it (Laysi/trustiot-v2#607).
+      filledByTest: [`${RELEASE}-ai-gateway-password`],
+    },
     {
       name: "otel.e2e.ts, step 1 (ClickHouse only)",
       files: [...SHAPES.onprem, OTEL_VALUES],
