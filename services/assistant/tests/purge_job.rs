@@ -207,6 +207,10 @@ async fn one_replica_purges_at_a_time() {
     let purged = first.wait_logged(PURGED).await;
     assert_eq!(purged["level"], "INFO", "{purged}");
     assert_eq!(purged["fields"]["purged"], 1, "{purged}");
+    assert_eq!(
+        purged["fields"]["skipped"], 0,
+        "nothing stayed locked: {purged}"
+    );
     rows = sqlx::query_scalar::<_, i64>(COUNT_ROWS)
         .bind(id.to_string())
         .fetch_one(&mut admin)

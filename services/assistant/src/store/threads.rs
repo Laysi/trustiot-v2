@@ -26,11 +26,21 @@ pub const MAX_PAGE: usize = 100;
 /// and runs. Nothing of the service holds such a lock for long (a restore that started just
 /// before the 30 days ended commits in milliseconds; the service role cannot even lock an expired
 /// row, `expired_stay_deleted`), so a wait this long means a stuck session: the round stops
-/// instead of holding its platform connection and the job lock behind it, and the next round
-/// tries again. `SKIP LOCKED` would pass over such rows without waiting, but `SELECT ... FOR
-/// UPDATE` needs the UPDATE privilege on the table, which the platform role does not have and
-/// should not get (tests/conversation_threads.rs checks the refusal).
+/// instead of holding its platform connection and the job lock behind it, and the purge then
+/// deletes that batch's conversations one at a time ([`purge_one`]) to pass over the locked one.
+/// `SKIP LOCKED` would pass over such rows without waiting, but `SELECT ... FOR UPDATE` needs the
+/// UPDATE privilege on the table, which the platform role does not have and should not get
+/// (tests/conversation_threads.rs checks the refusal).
 pub const PURGE_LOCK_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// How long [`purge_one`] waits for the one conversation it deletes, after a batch gave up on
+/// a lock. A row that a short transaction holds (a restore that started just before the 30 days
+/// ended commits in milliseconds) is granted well within it; a row that stays locked costs this
+/// wait once per round and is skipped until the next. Shorter than [`PURGE_LOCK_TIMEOUT`]
+/// because the batch has already waited that long: a round that meets N rows that stay locked
+/// waits at most N times (5 s + 1 s), when each is found in a batch of its own, and deletes
+/// every other expired conversation.
+pub const PURGE_ROW_LOCK_TIMEOUT: Duration = Duration::from_secs(1);
 
 /// SQLSTATE `lock_not_available`: [`purge_expired`] waited [`PURGE_LOCK_TIMEOUT`] for a lock.
 pub const LOCK_NOT_AVAILABLE: &str = "55P03";
@@ -106,16 +116,40 @@ WHERE tenant_id = $1::uuid AND conversation_id = $2::uuid AND user_id = $3::uuid
     AND deleted_at IS NOT NULL AND deleted_at > now() - make_interval(days => $4)
 RETURNING 1 AS updated";
 
-/// `$1` the retention in days, `$2` how many. As the platform role, whose policies show it only
-/// conversations deleted more than 30 days ago: the condition here only repeats them. A row that
-/// a restore changed while this statement waited for its lock is checked again and skipped.
+/// `$1` the retention in days, `$2` how many, `$3` and `$4` the conversations to leave out (their
+/// tenants and IDs, pairwise, as text arrays; empty when none). As the platform role, whose
+/// policies show it only conversations deleted more than 30 days ago: the condition here only
+/// repeats them. A row that a restore changed while this statement waited for its lock is
+/// checked again and skipped.
 const PURGE: &str = "DELETE FROM assistant.conversations
 WHERE deleted_at <= now() - make_interval(days => $1)
     AND (tenant_id, conversation_id) IN (
         SELECT tenant_id, conversation_id FROM assistant.conversations
         WHERE deleted_at <= now() - make_interval(days => $1)
+            AND (tenant_id, conversation_id) NOT IN (
+                SELECT skipped.tenant_id, skipped.conversation_id
+                FROM unnest($3::text[]::uuid[], $4::text[]::uuid[])
+                    AS skipped (tenant_id, conversation_id))
         ORDER BY deleted_at
         LIMIT $2)";
+
+/// The keys of the conversations [`PURGE`] would delete next, with the same parameters; it locks
+/// nothing.
+const EXPIRED: &str =
+    "SELECT tenant_id::text AS tenant_id, conversation_id::text AS conversation_id
+FROM assistant.conversations
+WHERE deleted_at <= now() - make_interval(days => $1)
+    AND (tenant_id, conversation_id) NOT IN (
+        SELECT skipped.tenant_id, skipped.conversation_id
+        FROM unnest($3::text[]::uuid[], $4::text[]::uuid[]) AS skipped (tenant_id, conversation_id))
+ORDER BY deleted_at
+LIMIT $2";
+
+/// `$1` tenant, `$2` conversation, `$3` the retention in days: one expired conversation, if it is
+/// still expired.
+const PURGE_ONE: &str = "DELETE FROM assistant.conversations
+WHERE tenant_id = $1::uuid AND conversation_id = $2::uuid
+    AND deleted_at <= now() - make_interval(days => $3)";
 
 /// Whether `title` may be a conversation's title, as it is (the API trims the white space around
 /// a user's title first): 1 to [`MAX_TITLE_CHARS`] characters; no control character (Cc), no
@@ -569,10 +603,39 @@ pub async fn restore(
         .ok_or(StoreError::NotStored)
 }
 
+/// An expired conversation by its key, as the purge finds it. Its IDs never reach a log line.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ExpiredConversation {
+    /// The conversation's tenant.
+    pub tenant_id: Uuid,
+    /// The conversation.
+    pub conversation_id: Uuid,
+}
+
+/// [`PURGE`]'s and [`EXPIRED`]'s `$3` and `$4`: the tenants and the IDs of `skipped`, pairwise.
+fn skipped_keys(skipped: &[ExpiredConversation]) -> (Vec<String>, Vec<String>) {
+    skipped
+        .iter()
+        .map(|key| (key.tenant_id.to_string(), key.conversation_id.to_string()))
+        .unzip()
+}
+
+/// Sets `tx`'s `lock_timeout` to `timeout`.
+async fn set_lock_timeout(
+    tx: &mut PlatformTransaction,
+    timeout: Duration,
+) -> Result<(), StoreError> {
+    sqlx::query(SET_LOCK_TIMEOUT)
+        .bind(format!("{}ms", timeout.as_millis()))
+        .execute(&mut **tx)
+        .await?;
+    Ok(())
+}
+
 /// Removes up to `limit` conversations of any tenant that were deleted more than
 /// [`DELETED_RETENTION_DAYS`] days ago, oldest first, with everything that belongs to them
-/// (messages, discarded rounds, runs: `ON DELETE CASCADE`). Returns how many it removed; the
-/// caller repeats until it gets fewer than `limit`.
+/// (messages, discarded rounds, runs: `ON DELETE CASCADE`), leaving out `skipped`. Returns how
+/// many it removed; the caller repeats until it gets fewer than `limit`.
 ///
 /// `tx` is a transaction of the assistant's platform role (`assistant_platform`, through
 /// service-kit's `PlatformDb`, which logs each one): the role sees and deletes only expired
@@ -581,21 +644,85 @@ pub async fn restore(
 ///
 /// It sets the transaction's `lock_timeout` to [`PURGE_LOCK_TIMEOUT`] first, so every caller
 /// waits at most that long for a row another session holds: then it fails with SQLSTATE
-/// [`LOCK_NOT_AVAILABLE`], nothing of the statement is deleted, and the caller rolls `tx` back
-/// and tries again later.
+/// [`LOCK_NOT_AVAILABLE`], nothing of the statement is deleted, and the caller rolls `tx` back.
+/// The purge then deletes the batch's conversations ([`expired_conversations`]) one at a time
+/// with [`purge_one`], and leaves the ones that stay locked out of its next batches
+/// (`skipped`), so one locked row never holds up the others.
 ///
 /// # Errors
 ///
 /// A database failure; [`StoreError::sqlstate`] is [`LOCK_NOT_AVAILABLE`] after the lock wait.
-pub async fn purge_expired(tx: &mut PlatformTransaction, limit: u32) -> Result<u64, StoreError> {
-    sqlx::query(SET_LOCK_TIMEOUT)
-        .bind(format!("{}ms", PURGE_LOCK_TIMEOUT.as_millis()))
-        .execute(&mut **tx)
-        .await?;
+pub async fn purge_expired(
+    tx: &mut PlatformTransaction,
+    limit: u32,
+    skipped: &[ExpiredConversation],
+) -> Result<u64, StoreError> {
+    set_lock_timeout(tx, PURGE_LOCK_TIMEOUT).await?;
+    let (tenants, ids) = skipped_keys(skipped);
     Ok(sqlx::query(PURGE)
         .bind(DELETED_RETENTION_DAYS)
         .bind(i64::from(limit))
+        .bind(&tenants)
+        .bind(&ids)
         .execute(&mut **tx)
         .await?
         .rows_affected())
+}
+
+/// The keys of the up to `limit` expired conversations that [`purge_expired`] with the same
+/// `skipped` would remove next, oldest first. It reads only keys and locks nothing, so it never
+/// waits for a row.
+///
+/// # Errors
+///
+/// A database failure, or a key that does not read back as a UUID ([`StoreError::Corrupt`]).
+pub async fn expired_conversations(
+    tx: &mut PlatformTransaction,
+    limit: u32,
+    skipped: &[ExpiredConversation],
+) -> Result<Vec<ExpiredConversation>, StoreError> {
+    let (tenants, ids) = skipped_keys(skipped);
+    let rows = sqlx::query(EXPIRED)
+        .bind(DELETED_RETENTION_DAYS)
+        .bind(i64::from(limit))
+        .bind(&tenants)
+        .bind(&ids)
+        .fetch_all(&mut **tx)
+        .await?;
+    rows.iter()
+        .map(|row| {
+            let key = |column: &str| -> Result<Uuid, StoreError> {
+                row.try_get::<String, _>(column)?
+                    .parse()
+                    .map_err(|_| StoreError::Corrupt("an expired conversation's key"))
+            };
+            Ok(ExpiredConversation {
+                tenant_id: key("tenant_id")?,
+                conversation_id: key("conversation_id")?,
+            })
+        })
+        .collect()
+}
+
+/// Removes the one expired conversation `conversation` with everything that belongs to it, if it is
+/// still expired (a restore may have taken it back since it was found). Returns whether it
+/// removed it. Waits at most [`PURGE_ROW_LOCK_TIMEOUT`] for its row: then it fails with
+/// [`LOCK_NOT_AVAILABLE`], and the caller rolls `tx` back and skips it until the next round.
+///
+/// # Errors
+///
+/// A database failure; [`StoreError::sqlstate`] is [`LOCK_NOT_AVAILABLE`] after the lock wait.
+pub async fn purge_one(
+    tx: &mut PlatformTransaction,
+    conversation: ExpiredConversation,
+) -> Result<bool, StoreError> {
+    set_lock_timeout(tx, PURGE_ROW_LOCK_TIMEOUT).await?;
+    Ok(sqlx::query(PURGE_ONE)
+        .bind(conversation.tenant_id.to_string())
+        .bind(conversation.conversation_id.to_string())
+        .bind(DELETED_RETENTION_DAYS)
+        .execute(&mut **tx)
+        .await?
+        .rows_affected()
+        == 1)
 }

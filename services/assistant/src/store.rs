@@ -51,9 +51,10 @@ pub use runs::{
     RunOutcome, RunRecord, RunStatus, finish_run, request_cancel, run_status, start_run,
 };
 pub use threads::{
-    ConversationSummary, DeletedConversation, DeletedCursor, LOCK_NOT_AVAILABLE, ListCursor,
-    ListFilter, MAX_PAGE, PURGE_LOCK_TIMEOUT, Page, Title, TitleSource, archive, delete, list,
-    list_deleted, metadata, purge_expired, restore, set_title, title_is_valid,
+    ConversationSummary, DeletedConversation, DeletedCursor, ExpiredConversation,
+    LOCK_NOT_AVAILABLE, ListCursor, ListFilter, MAX_PAGE, PURGE_LOCK_TIMEOUT,
+    PURGE_ROW_LOCK_TIMEOUT, Page, Title, TitleSource, archive, delete, expired_conversations, list,
+    list_deleted, metadata, purge_expired, purge_one, restore, set_title, title_is_valid,
 };
 
 /// How long a deleted conversation can be restored; after it the purge removes it for good. A

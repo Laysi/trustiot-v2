@@ -789,7 +789,9 @@ async fn expired_conversations_are_purged_and_nothing_else() {
     // The purge removes the two expired conversations with every row they hold, and nothing
     // else.
     let mut tx = db.platform_tx().await;
-    let purged = store::purge_expired(&mut tx, 100).await.expect("purge");
+    let purged = store::purge_expired(&mut tx, 100, &[])
+        .await
+        .expect("purge");
     tx.commit().await.expect("commit");
     assert_eq!(purged, 2);
     for id in [expired, expired_elsewhere] {
@@ -799,7 +801,12 @@ async fn expired_conversations_are_purged_and_nothing_else() {
     assert_eq!(db.snapshot(recent).await, recent_before);
     assert_eq!(db.snapshot(live).await, live_before);
     let mut tx = db.platform_tx().await;
-    assert_eq!(store::purge_expired(&mut tx, 100).await.expect("purge"), 0);
+    assert_eq!(
+        store::purge_expired(&mut tx, 100, &[])
+            .await
+            .expect("purge"),
+        0
+    );
     tx.commit().await.expect("commit");
     db.restore(&owner, recent).await.expect("still restorable");
     assert!(db.load(&owner, live).await.is_some());
@@ -858,7 +865,7 @@ async fn expired_conversations_are_purged_and_nothing_else() {
                 .expect("restore");
             let holder = backend_pid(&mut restoring).await;
             let purge = tokio::spawn(async move {
-                let purged = store::purge_expired(&mut purging, 100).await;
+                let purged = store::purge_expired(&mut purging, 100, &[]).await;
                 (purged, purging)
             });
             db.wait_until_blocking(holder, "the purge").await;
@@ -876,7 +883,7 @@ async fn expired_conversations_are_purged_and_nothing_else() {
             println!("restore first: restored, the purge removed nothing");
         } else {
             assert_eq!(
-                store::purge_expired(&mut purging, 100)
+                store::purge_expired(&mut purging, 100, &[])
                     .await
                     .expect("purge"),
                 1
@@ -900,26 +907,31 @@ async fn expired_conversations_are_purged_and_nothing_else() {
         }
     }
 
-    // A session holds a lock on an expired conversation: the purge waits PURGE_LOCK_TIMEOUT,
-    // then fails with 55P03 and deletes nothing of the batch; once the lock is gone it purges.
-    let (id, _) = db.with_every_kind_of_row(&owner).await;
-    db.delete(&owner, id).await;
-    db.backdate(id, month_ago).await;
-    let before = db.snapshot(id).await;
+    // A session holds a lock on the oldest expired conversation for a whole round. A batch waits
+    // PURGE_LOCK_TIMEOUT, then fails with 55P03 and deletes nothing of it; the round then
+    // deletes the batch's conversations one at a time, skips the locked one, and still purges
+    // the newer one. Once the lock is gone, the next round purges the skipped one.
+    let (older, _) = db.with_every_kind_of_row(&owner).await;
+    let (newer, _) = db.with_every_kind_of_row(&owner).await;
+    for (id, days) in [(older, 32), (newer, 31)] {
+        db.delete(&owner, id).await;
+        db.backdate(id, Utc::now() - TimeDelta::days(days)).await;
+    }
+    let older_before = db.snapshot(older).await;
     let mut admin = db.superuser().await;
     let mut holding = admin.begin().await.expect("a superuser transaction");
     sqlx::query(
         "SELECT 1 FROM assistant.conversations WHERE conversation_id = $1::uuid FOR UPDATE",
     )
-    .bind(id.to_string())
+    .bind(older.to_string())
     .fetch_one(&mut *holding)
     .await
-    .expect("lock the expired conversation");
+    .expect("lock the older expired conversation");
     let mut tx = db.platform_tx().await;
     let waited = Instant::now();
-    let failure = store::purge_expired(&mut tx, 100)
+    let failure = store::purge_expired(&mut tx, 100, &[])
         .await
-        .expect_err("the purge gives up on the locked row");
+        .expect_err("the batch gives up on the locked row");
     let waited = waited.elapsed();
     tx.rollback().await.expect("roll back");
     assert_eq!(
@@ -931,45 +943,109 @@ async fn expired_conversations_are_purged_and_nothing_else() {
         waited >= store::PURGE_LOCK_TIMEOUT,
         "it waited the lock timeout it set: {waited:?}"
     );
-    assert!(!format!("{failure} {failure:?}").contains(&id.to_string()));
-    // The purge job's round gives up the same way: one WARN line of its own with the failure's
-    // class (sqlx adds its slow-statement WARN, with the SQL text and no values), no line of
-    // purged conversations, and the next round tries again.
+    assert!(!format!("{failure} {failure:?}").contains(&older.to_string()));
+    assert!(
+        !db.snapshot(newer).await.is_gone(),
+        "the failed batch deleted nothing"
+    );
+    // Before: what the purge finds next, oldest first; it reads keys and locks nothing.
+    let mut tx = db.platform_tx().await;
+    let next = store::expired_conversations(&mut tx, 100, &[])
+        .await
+        .expect("the expired keys");
+    tx.rollback().await.expect("roll back");
+    let key = |id: Uuid| store::ExpiredConversation {
+        tenant_id: owner_tenant.into(),
+        conversation_id: id,
+    };
+    assert_eq!(next, [key(older), key(newer)]);
+
+    // The job's round: the newer one is purged, the older one skipped, one WARN line of its
+    // own with the counts and nothing else.
     let (capture, guard) = Capture::install();
-    let purged = assistant::purge::round(&db.platform)
+    let round = assistant::purge::round(&db.platform)
         .await
         .expect("a round that meets a locked row ends without an error");
     drop(guard);
-    assert_eq!(purged, 0);
-    let events = capture.events();
-    let warned: Vec<_> = events
-        .iter()
-        .filter(|event| event.level == tracing::Level::WARN && event.target == "assistant::purge")
-        .collect();
-    assert_eq!(warned.len(), 1, "{events:?}");
     assert_eq!(
-        warned[0].fields.get("error").map(String::as_str),
-        Some("database error (SQLSTATE 55P03)"),
-        "{warned:?}"
+        round,
+        assistant::purge::Round {
+            purged: 1,
+            skipped: 1
+        }
     );
     assert!(
-        events
-            .iter()
-            .all(|event| event.message != "purged expired conversations"),
-        "{events:?}"
+        db.snapshot(newer).await.is_gone(),
+        "the newer one is purged"
     );
-    assert!(!format!("{events:?}").contains(&id.to_string()));
-    holding.rollback().await.expect("release the lock");
-    assert_eq!(db.snapshot(id).await, before, "nothing of it was deleted");
+    assert_eq!(
+        db.snapshot(older).await,
+        older_before,
+        "nothing of the locked one was deleted"
+    );
+    let events = capture.events();
+    let own: Vec<_> = events
+        .iter()
+        .filter(|event| event.target == "assistant::purge")
+        .collect();
+    assert_eq!(own.len(), 1, "one line per round: {events:?}");
+    assert_eq!(own[0].level, tracing::Level::WARN, "{own:?}");
+    assert_eq!(
+        (
+            own[0].fields.get("purged").map(String::as_str),
+            own[0].fields.get("skipped").map(String::as_str),
+            own[0].fields.get("job").map(String::as_str),
+        ),
+        (Some("1"), Some("1"), Some("purge")),
+        "{own:?}"
+    );
+    let logged = format!("{events:?}");
+    for id in [older, newer] {
+        assert!(!logged.contains(&id.to_string()), "no ID in the log");
+    }
+    assert!(
+        !logged.contains(&owner_tenant.to_string()),
+        "no tenant in the log"
+    );
+    // The round leaves the skipped one out of its later batches: the keys without it.
     let mut tx = db.platform_tx().await;
-    assert_eq!(store::purge_expired(&mut tx, 100).await.expect("purge"), 1);
-    tx.commit().await.expect("commit");
     assert!(
-        db.snapshot(id).await.is_gone(),
+        store::expired_conversations(&mut tx, 100, &[key(older)])
+            .await
+            .expect("the expired keys")
+            .is_empty()
+    );
+    tx.rollback().await.expect("roll back");
+
+    // Released: the next round purges it, and says so at INFO.
+    holding.rollback().await.expect("release the lock");
+    let (capture, guard) = Capture::install();
+    let round = assistant::purge::round(&db.platform)
+        .await
+        .expect("the next round");
+    drop(guard);
+    assert_eq!(
+        round,
+        assistant::purge::Round {
+            purged: 1,
+            skipped: 0
+        }
+    );
+    assert!(
+        db.snapshot(older).await.is_gone(),
         "purged once the lock is gone"
     );
+    let events = capture.events();
+    let own: Vec<_> = events
+        .iter()
+        .filter(|event| event.target == "assistant::purge")
+        .collect();
+    assert_eq!(own.len(), 1, "{events:?}");
+    assert_eq!(own[0].level, tracing::Level::INFO, "{own:?}");
+    assert_eq!(own[0].message, "purged expired conversations", "{own:?}");
     println!(
-        "a locked expired conversation: the purge gave up after {waited:?} (55P03), then purged it"
+        "a locked expired conversation: the batch gave up after {waited:?} (55P03); the round \
+         purged the newer one and skipped the locked one (WARN), the next round purged it"
     );
 }
 
