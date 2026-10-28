@@ -12,10 +12,13 @@
 //!   every hardware ID, registered or not, so it tells nothing. A redemption deletes the row
 //!   before any check, so a challenge is redeemed at most once whatever the outcome. Every insert
 //!   removes long-expired rows, and the rate limits bound the inserts, so the table stays small.
-//! - **Rate limits come before any database work** ([`limiter`]): per hardware ID and for all
-//!   requests together, per replica; past either the answer is 429 with `Retry-After`. At most
-//!   `renewal.max_concurrent` requests per replica do database work at once; a request that waits
-//!   longer than [`PERMIT_WAIT`] for its turn gets 503.
+//! - **Rate limits come first** ([`limiter`]): right after the body is read, before the other
+//!   checks and any database work, per replica: per hardware ID over both steps, and for all
+//!   hardware IDs together per step, so a flood of challenge requests leaves the redemptions
+//!   their turns. Past a limit the answer is 429 with `Retry-After`, logged at DEBUG only, so
+//!   the INFO lines of the refusals after the limits (stale bindings, no CA) are no more than
+//!   the limits let through. At most `renewal.max_concurrent` requests per replica do database
+//!   work at once; a request that waits longer than [`PERMIT_WAIT`] for its turn gets 503.
 //! - **The decision reads one snapshot.** The redemption reads the registration, the gateway's
 //!   current binding and its tenant's status in one read-only statement of the platform role
 //!   ([`crate::bindings::Projection`]'s audited transaction), verifies the signature with the
@@ -455,6 +458,14 @@ impl Request {
         }
     }
 
+    /// The step whose global rate limit the request counts against.
+    fn limited_step(&self) -> limiter::Step {
+        match self {
+            Self::Challenge(_) => limiter::Step::Challenge,
+            Self::Renew { .. } => limiter::Step::Renew,
+        }
+    }
+
     fn hardware_id(&self) -> &GatewayId {
         match self {
             Self::Challenge(hardware_id) | Self::Renew { hardware_id, .. } => hardware_id,
@@ -472,6 +483,17 @@ async fn renew(State(state): State<Routes>, headers: HeaderMap, body: Body) -> R
         Err(refused) => return state.invalid(refused),
     };
     let (step, hardware_id) = (request.step(), request.hardware_id().clone());
+    // The limits first: every refusal after them is an INFO line, so over the limits a flood of
+    // made-up hardware IDs is answered without one, whatever else is wrong.
+    let limited = request.limited_step();
+    if let Err(wait) = state
+        .limiter
+        .check(limited, hardware_id.as_str(), Instant::now())
+    {
+        let seconds = wait.as_secs() + u64::from(wait.subsec_nanos() > 0);
+        let reason = Reason::RateLimited(seconds.max(1));
+        return state.refuse(step, &hardware_id, reason).await;
+    }
     if !bindings_current((state.lag)(), state.limits.max_consumer_lag) {
         return state
             .refuse(step, &hardware_id, Reason::BindingsStale)
@@ -480,11 +502,6 @@ async fn renew(State(state): State<Routes>, headers: HeaderMap, body: Body) -> R
     let Some(authority) = state.ca.authority() else {
         return state.refuse(step, &hardware_id, Reason::CaNotReady).await;
     };
-    if let Err(wait) = state.limiter.check(hardware_id.as_str(), Instant::now()) {
-        let seconds = wait.as_secs() + u64::from(wait.subsec_nanos() > 0);
-        let reason = Reason::RateLimited(seconds.max(1));
-        return state.refuse(step, &hardware_id, reason).await;
-    }
     let permits = Arc::clone(&state.permits);
     let Ok(Ok(_permit)) = tokio::time::timeout(PERMIT_WAIT, permits.acquire_owned()).await else {
         return state.refuse(step, &hardware_id, Reason::Busy).await;

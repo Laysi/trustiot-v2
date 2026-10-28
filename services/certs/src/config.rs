@@ -336,9 +336,10 @@ const fn default_alert_before() -> Duration {
 }
 
 /// `renewal.*`: the limits of the renewal endpoint (Laysi/trustiot-v2#81; README.md, "換發").
-/// The rate limits count both steps, per replica: a hardware ID may send `gateway_burst`
-/// requests at once and one more every `gateway_interval`, and all hardware IDs together
-/// `global_burst` at once and one more every `global_interval`.
+/// The rate limits count per replica: a hardware ID may send `gateway_burst` requests of
+/// either step at once and one more every `gateway_interval`, and all hardware IDs together
+/// `global_burst` requests of each step at once and one more of each every `global_interval`
+/// (the challenge step and the renew step have a global limit each).
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RenewalLimits {
@@ -351,11 +352,11 @@ pub struct RenewalLimits {
         deserialize_with = "service_kit::config::duration"
     )]
     pub gateway_interval: Duration,
-    /// `TRUSTIOT__RENEWAL__GLOBAL_BURST`: default 100, 1 to 10000.
+    /// `TRUSTIOT__RENEWAL__GLOBAL_BURST`: for each step; default 100, 1 to 10000.
     #[serde(default = "default_global_burst")]
     pub global_burst: u32,
-    /// `TRUSTIOT__RENEWAL__GLOBAL_INTERVAL`: default 50 ms (20 requests a second), 1 ms to 60
-    /// seconds.
+    /// `TRUSTIOT__RENEWAL__GLOBAL_INTERVAL`: for each step; default 50 ms (20 requests of each
+    /// step a second), 1 ms to 60 seconds.
     #[serde(
         default = "default_global_interval",
         deserialize_with = "service_kit::config::duration"

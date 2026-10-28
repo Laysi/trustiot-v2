@@ -16,7 +16,12 @@
 //!   without touching the challenge (acceptance 7; a too high lag is `tests/renewal_lag.rs`).
 //! - `rate_limits_answer_429_and_bound_the_challenges`: past the per-hardware-ID and the global
 //!   limit the answer is 429 with `Retry-After`, and a flood of challenge requests stores no more
-//!   rows than the limit lets through (acceptance 4).
+//!   rows than the limit lets through (acceptance 4); each step has a global limit of its own, so
+//!   a gateway that holds a challenge still renews after the flood used up the challenges' limit.
+//! - `over_the_limits_a_stale_replica_logs_no_refusal_at_info`: the limits come before the lag
+//!   check, so on a replica whose lag is unknown a flood of made-up hardware IDs gets 503 (one
+//!   INFO line each) only as often as the limits let through, and 429 without an INFO line past
+//!   them.
 //!
 //! Skipped without podman or docker unless `CI` is set. Run with `--nocapture` to see the
 //! evidence lines the test report quotes.
@@ -24,7 +29,7 @@
 mod support;
 
 use std::collections::BTreeMap;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use base64::Engine as _;
 use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
@@ -402,6 +407,65 @@ fn counters(collector: &FakeCollector) -> BTreeMap<(String, String), u64> {
     totals
 }
 
+/// Whether the collector received the lag of the service's consumer of the assets service's
+/// events (`outbox.consumer.lag`), which is reported only while the lag is known.
+fn bindings_lag_reported(collector: &FakeCollector) -> bool {
+    use opentelemetry_proto::tonic::collector::metrics::v1::ExportMetricsServiceRequest;
+    use opentelemetry_proto::tonic::common::v1::any_value;
+    use opentelemetry_proto::tonic::metrics::v1::metric;
+    use prost::Message as _;
+
+    collector.bodies("/v1/metrics").iter().any(|body| {
+        let request = ExportMetricsServiceRequest::decode(body.as_slice()).expect("OTLP metrics");
+        request
+            .resource_metrics
+            .iter()
+            .flat_map(|resource| &resource.scope_metrics)
+            .flat_map(|scope| &scope.metrics)
+            .filter(|metric| metric.name == "outbox.consumer.lag")
+            .filter_map(|metric| match &metric.data {
+                Some(metric::Data::Gauge(gauge)) => Some(&gauge.data_points),
+                _ => None,
+            })
+            .flatten()
+            .any(|point| {
+                point.attributes.iter().any(|attribute| {
+                    attribute.key == "outbox.subscription"
+                        && attribute
+                            .value
+                            .as_ref()
+                            .and_then(|value| value.value.as_ref())
+                            == Some(&any_value::Value::StringValue(
+                                certs::bindings::SUBSCRIPTION.to_owned(),
+                            ))
+                })
+            })
+    })
+}
+
+/// Waits until the service knows its consumer's lag, so the renewal decides instead of answering
+/// 503 (`bindings_stale`). It watches the exported lag rather than polling the endpoint: the rate
+/// limits come first and count every request, 503s too.
+async fn wait_for_bindings_lag(collector: &FakeCollector) {
+    wait_for(
+        "the lag of the consumer of the assets service's events",
+        || async { bindings_lag_reported(collector).then_some(()) },
+    )
+    .await;
+}
+
+/// A renew request for a challenge that was never handed out, with a well-formed signature.
+fn made_up_renewal(hardware_id: &str, n: u8) -> Value {
+    json!({"step": "renew", "hardware_id": hardware_id,
+        "nonce": URL_SAFE_NO_PAD.encode([n; 32]), "signature": "MEUCIQ=="})
+}
+
+/// The most requests a global limit of `burst` and one more every `interval` lets through within
+/// `elapsed`.
+fn admitted_at_most(burst: u64, interval: Duration, elapsed: Duration) -> u64 {
+    burst + elapsed.as_secs() / interval.as_secs().max(1) + 1
+}
+
 #[tokio::test(flavor = "multi_thread")]
 #[expect(
     clippy::too_many_lines,
@@ -475,13 +539,8 @@ async fn renewal_issues_for_the_registered_key_and_refuses_the_rest() {
     );
     tx.commit().await.expect("commit the suspension");
 
-    // The endpoint answers once the consumer's lag is known (a hardware ID of its own, so the
-    // 503s before that are no refusal lines of the gateways below).
-    wait_for("the renewal endpoint to hand out challenges", || async {
-        let answer = send(&service, &challenge_request("rn-wait")).await;
-        (answer.status == 200).then_some(())
-    })
-    .await;
+    // The endpoint decides once the consumer's lag is known; until then it answers 503.
+    wait_for_bindings_lag(&collector).await;
 
     // Acceptance 1: the gateway's only certificate is revoked; the renewal does not look at it.
     sqlx::query(
@@ -875,31 +934,52 @@ async fn renewal_issues_for_the_registered_key_and_refuses_the_rest() {
     );
 }
 
+/// Per hardware ID 2 requests, then one an hour; per step 6 at once, then one a minute.
+const TIGHT_LIMITS: [(&str, &str); 4] = [
+    ("TRUSTIOT__RENEWAL__GATEWAY_BURST", "2"),
+    ("TRUSTIOT__RENEWAL__GATEWAY_INTERVAL", "1h"),
+    ("TRUSTIOT__RENEWAL__GLOBAL_BURST", "6"),
+    ("TRUSTIOT__RENEWAL__GLOBAL_INTERVAL", "60s"),
+];
+
+/// The global limit of [`TIGHT_LIMITS`].
+const GLOBAL_BURST: u64 = 6;
+const GLOBAL_INTERVAL: Duration = Duration::from_secs(60);
+
 #[tokio::test(flavor = "multi_thread")]
 async fn rate_limits_answer_429_and_bound_the_challenges() {
     let Some(product) = product_postgres(LOGINS).await else {
         return;
     };
     let ca = TestCa::new(&[1]);
-    let service = Service::start(
-        &product,
-        &ca,
-        &[
-            ("TRUSTIOT__RENEWAL__GATEWAY_BURST", "2"),
-            ("TRUSTIOT__RENEWAL__GATEWAY_INTERVAL", "1h"),
-            ("TRUSTIOT__RENEWAL__GLOBAL_BURST", "6"),
-            ("TRUSTIOT__RENEWAL__GLOBAL_INTERVAL", "60s"),
-        ],
-    )
-    .await;
-    // Until the consumer's lag is known the answer is 503, which takes nothing from the limits.
-    wait_for("the renewal endpoint to hand out challenges", || async {
-        let answer = send(&service, &challenge_request("rl-a")).await;
-        assert!(matches!(answer.status, 200 | 503), "{answer:?}");
-        (answer.status == 200).then_some(())
+    let collector = FakeCollector::start();
+    let endpoint = collector.url();
+    let mut env = FAST_CRLS.to_vec();
+    env.extend(TIGHT_LIMITS);
+    env.extend([
+        ("TRUSTIOT__TELEMETRY__OTLP_ENDPOINT", endpoint.as_str()),
+        ("OTEL_METRIC_EXPORT_INTERVAL", "300"),
+    ]);
+    let service = Service::start(&product, &ca, &env).await;
+    wait_for("the published CRLs", || async {
+        let (status, _) = service.get(certs::http::CRL_PATH).await;
+        (status == 200).then_some(())
     })
     .await;
+    // A registered, bound gateway, which holds a challenge through the flood below.
+    let key = Factory::new(&service).await.register("rl-ok").await;
+    bind(
+        &product,
+        &assets_writer(&product),
+        TenantId::generate(),
+        "rl-ok",
+    )
+    .await;
+    wait_for_bindings_lag(&collector).await;
+    let pending = challenge(&service, "rl-ok").await;
+
     // Per hardware ID: 2, then 429 for about an hour.
+    challenge(&service, "rl-a").await;
     challenge(&service, "rl-a").await;
     let answer = send(&service, &challenge_request("rl-a")).await;
     assert_eq!(answer.status, 429, "{answer:?}");
@@ -907,8 +987,9 @@ async fn rate_limits_answer_429_and_bound_the_challenges() {
     let wait = answer.retry_after.expect("Retry-After");
     assert!((3500..=3600).contains(&wait), "Retry-After {wait}");
     println!("evidence: per hardware ID: 429, Retry-After {wait}");
-    // Together: 6 in all (2 so far), then 429 for up to a minute, whatever the hardware ID.
-    for hardware_id in ["rl-b", "rl-c", "rl-d", "rl-e"] {
+    // Challenges together: 6 in all (3 so far), then 429 for up to a minute, whatever the
+    // hardware ID.
+    for hardware_id in ["rl-b", "rl-c", "rl-d"] {
         challenge(&service, hardware_id).await;
     }
     let mut refused = 0;
@@ -919,14 +1000,6 @@ async fn rate_limits_answer_429_and_bound_the_challenges() {
         assert!((1..=60).contains(&wait), "Retry-After {wait}");
         refused += 1;
     }
-    // A renew step counts too.
-    let answer = send(
-        &service,
-        &json!({"step": "renew", "hardware_id": "rl-b",
-            "nonce": URL_SAFE_NO_PAD.encode([7_u8; 32]), "signature": "MEUCIQ=="}),
-    )
-    .await;
-    assert_eq!(answer.status, 429, "{answer:?}");
     let stored: i64 = sqlx::query_scalar(
         "SELECT count(*) FROM certs.renewal_challenges WHERE hardware_id LIKE 'rl-%'",
     )
@@ -938,7 +1011,97 @@ async fn rate_limits_answer_429_and_bound_the_challenges() {
         "only the requests the limits let through stored a challenge"
     );
     println!(
-        "evidence: global: {refused} requests of new hardware IDs refused with 429; 6 challenges \
-         stored in all"
+        "evidence: global: {refused} challenge requests of new hardware IDs refused with 429; 6 \
+         challenges stored in all"
+    );
+
+    // The renew step has a global limit of its own: the flood of challenge requests did not take
+    // the turn of the gateway that holds a challenge.
+    let renewed = send(&service, &renew_request(&key, &pending)).await;
+    assert_eq!(renewed.status, 201, "{renewed:?}");
+    let started = Instant::now();
+    println!("evidence: challenge limit used up by the flood; rl-ok still renewed: 201");
+    // Made-up redemptions use up the renew step's limit (one turn taken by the renewal), and
+    // only it.
+    let (mut admitted, mut limited) = (0_u64, 0_u64);
+    for n in 0..20 {
+        let answer = send(&service, &made_up_renewal(&format!("rl-made-up-{n}"), n)).await;
+        match answer.status {
+            409 => {
+                assert_eq!(limited, 0, "a 409 after a 429: {answer:?}");
+                admitted += 1;
+            }
+            429 => limited += 1,
+            _ => panic!("a made-up redemption: {answer:?}"),
+        }
+    }
+    let most = admitted_at_most(GLOBAL_BURST, GLOBAL_INTERVAL, started.elapsed()) - 1;
+    assert!(
+        (GLOBAL_BURST - 1..=most).contains(&admitted),
+        "{admitted} made-up redemptions let through, {limited} refused"
+    );
+    assert!(limited > 0, "the renew step's limit was reached");
+    let answer = send(&service, &challenge_request("rl-e")).await;
+    assert_eq!(
+        answer.status, 429,
+        "the challenges are still limited: {answer:?}"
+    );
+    println!(
+        "evidence: renew limit: {admitted} made-up redemptions answered 409, then {limited} 429"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn over_the_limits_a_stale_replica_logs_no_refusal_at_info() {
+    let Some(product) = product_postgres(LOGINS).await else {
+        return;
+    };
+    let ca = TestCa::new(&[1]);
+    // The consumer's lag stays unknown: the platform role cannot log in.
+    let mut env = TIGHT_LIMITS.to_vec();
+    env.push(("TRUSTIOT__DATABASE__PLATFORM_PASSWORD", "not-the-password"));
+    let blind = Service::start(&product, &ca, &env).await;
+    // Each hardware ID sends one request of each step, within its own limit; the global limits
+    // let 6 of each step through to the lag check.
+    let started = Instant::now();
+    let (mut stale, mut limited) = (0_u64, 0_u64);
+    for n in 0..30 {
+        let hardware_id = format!("bl-{n}");
+        for body in [
+            challenge_request(&hardware_id),
+            made_up_renewal(&hardware_id, n),
+        ] {
+            let answer = send(&blind, &body).await;
+            if answer.is(503, &BINDINGS_STALE) {
+                stale += 1;
+            } else {
+                assert_eq!(answer.status, 429, "{answer:?}");
+                limited += 1;
+            }
+        }
+    }
+    let most = 2 * admitted_at_most(GLOBAL_BURST, GLOBAL_INTERVAL, started.elapsed());
+    assert!(
+        (2 * GLOBAL_BURST..=most).contains(&stale),
+        "{stale} requests reached the lag check, {limited} were limited"
+    );
+    // One INFO line for each request the limits let through, none for the others.
+    let lines = wait_for("the refusal lines of the stale replica", || async {
+        let lines = blind.stdout.messages(REFUSED);
+        (u64::try_from(lines.len()).expect("a count") >= stale).then_some(lines)
+    })
+    .await;
+    assert_eq!(
+        u64::try_from(lines.len()).expect("a count"),
+        stale,
+        "{lines:?}"
+    );
+    for line in &lines {
+        assert_eq!(line["level"], "INFO", "{line}");
+        assert_eq!(line["fields"]["reason"], "bindings_stale", "{line}");
+    }
+    println!(
+        "evidence: unknown lag: 60 requests of 30 new hardware IDs: {stale} answered 503 with an \
+         INFO line each, {limited} answered 429 without one"
     );
 }

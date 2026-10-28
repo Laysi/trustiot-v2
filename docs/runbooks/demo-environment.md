@@ -321,7 +321,10 @@ Laysi/trustiot-v2#500（commit `26b454d`）起，入口的跨站請求檢查要 
 
 換版時 migration Job 重跑，每個服務與 ClickHouse（init container 用 migration 映像）都重啟一次（[deploy/chart/README.md](../../deploy/chart/README.md)「叢集內的 ClickHouse」），展示環境短暫中斷，不要排在展示前。
 
-**換發端點上線**：certs 打開之後，chart 為 gateway 主機名稱的 `/certs/renew` 掛著指向 certs 的路由，tunnel 也讓這個路徑略過 Access（「架構」）。換發端點由 Laysi/trustiot-v2#81 實作（services/certs/README.md 的「換發」）；釘的 chart 還不含它時，certs 對這個路徑回 404。一旦釘的 chart 含 Laysi/trustiot-v2#81 的換發端點，這個路徑就經既有的 Bypass 對網際網路開放，展示環境這邊不必再改任何東西。所以換到第一個含 Laysi/trustiot-v2#81 的版本之前，先在換版的 issue 審查這個暴露（端點自己的驗證與限流、是否要照「`/mqtt` 的速率限制」把 `/certs/renew` 也加進去、`check --stage 2` 對它的預期），確認後才合併。
+**換發端點上線**：certs 打開之後，chart 為 gateway 主機名稱的 `/certs/renew` 掛著指向 certs 的路由，tunnel 也讓這個路徑略過 Access（「架構」）。換發端點由 Laysi/trustiot-v2#81 實作（services/certs/README.md 的「換發」）；釘的 chart 還不含它時，certs 對這個路徑回 404。一旦釘的 chart 含 Laysi/trustiot-v2#81 的換發端點，這個路徑就經既有的 Bypass 對網際網路開放，展示環境這邊不必再改任何東西。所以換到第一個含 Laysi/trustiot-v2#81 的版本之前，下面兩件都完成才合併 pin PR：
+
+1. **前提條件：入口的速率限制涵蓋 `/certs/renew`**。照「`/mqtt` 的速率限制」最後一段改那條規則，讀回 ruleset 確認，再從工作站在 10 秒內連續送 41 次 `POST /certs/renew`（本文空的即可，certs 回 400 或 404，不碰資料庫），第 41 次起得到 Cloudflare 的 429（`server: cloudflare`），等 10 秒後再送一次，不再是 Cloudflare 的 429。理由：換發端點自己只有每個副本的限流，任何人都能以捏造的硬體 ID 用完它的全域限流，讓每台閘道器取挑戰都得到 429，包括憑證已過期、只能經這個端點恢復的閘道器；以來源 IP 計數只能在入口做（services/certs/README.md「換發」的「規則與取捨」）。
+2. 在換版的 issue 審查這個暴露（端點自己的驗證與限流、`check --stage 2` 對它的預期），確認後才合併。
 
 退回是 revert 那個 PR。對齊 istiod 本來就排在升級 chart 之前，新的 istiod values 與舊版 chart 會同時存在一段時間，所以 revert 不必同時退回 istiod；確實要退回時用 `platform.ts --rollback`（條件見 scripts/README.md 同一節）。
 
@@ -509,7 +512,7 @@ token 一年到期，在到期前 14 天輪替（建立的人在團隊行事曆�
 3. tunnel 的路由（先回 418；入口部署後，照「架構」的「路由」的步驟，改成 `route-origin` 通過時印出的 origin，也就是展示叢集 values 固定的入口 ClusterIP；切換後讀回路由設定，再馬上執行 `check --stage 2`）：兩條略過路徑的錨定規則在前、不要求 JWT，其餘每條都設 `originRequest.access`（team 名稱與三個主機名稱那個 application 的 AUD），最後 catch-all 回 404。
 4. gateway 主機名稱的 configuration rule（Browser Integrity Check 關閉）。
 5. 三筆 proxied CNAME 指向 `<tunnel ID>.cfargotunnel.com`。DNS 紀錄一定在 Access application 之後建立，主機名稱不會有一段沒有保護的時間。
-6. `/mqtt` 升級的速率限制（下方「`/mqtt` 的速率限制」）。展示環境部署 mqtt-bridge 之前就要套用。
+6. `/mqtt` 升級的速率限制（下方「`/mqtt` 的速率限制」）。展示環境部署 mqtt-bridge 之前就要套用；釘的 chart 含換發端點（Laysi/trustiot-v2#81）之前，規則也要涵蓋 `/certs/renew`（「換發端點上線」）。
 
 token 由同一個人在 Cloudflare 的 API 執行環境裡取得並加密（見下方「安裝 connector」第 2 步），不經過其他地方。在那個執行環境裡依序：以 `GET /accounts/<帳號>/cfd_tunnel/<tunnel>` 確認名稱是 `trustiot-demo`、`config_src` 是 `cloudflare`；以 `GET …/cfd_tunnel/<tunnel>/token` 取得 token，確認它是以 `eyJhIjoi` 開頭的字串、解開後的 `t` 等於 tunnel ID；以 `crypto.subtle.exportKey("spki")` 算公鑰的 SHA-256，與 `handoff-key` 印出的相同才加密；只回傳 tunnel ID、指紋、密文與它的位元組數。
 
@@ -533,7 +536,7 @@ token 由同一個人在 Cloudflare 的 API 執行環境裡取得並加密（見
 - zone 的「Normalize incoming URLs」（URL normalization）保持開啟：`/%6Dqtt` 這類編碼過的路徑先正規化成 `/mqtt` 再比對，才會被計數。
 - tunnel 的錨定路由 `^/mqtt$` 比對的是解碼後的路徑：`/%2Fmqtt`、`//mqtt` 這類不等於 `/mqtt` 的路徑比對不到，走同一主機名稱其他路徑的 `originRequest.access`（沒有 JWT 回 403），到不了 mqtt-bridge，所以不會繞過計數連上它。
 
-這條規則用掉 Free 方案唯一的一條；`/certs/renew` 也要限制時，把運算式改成 `http.request.uri.path in {"/mqtt" "/certs/renew"}`，共用同一個門檻。
+這條規則用掉 Free 方案唯一的一條，`/certs/renew` 也用它：釘的 chart 含換發端點（Laysi/trustiot-v2#81）之前，一定要以「Update a zone ruleset rule」把運算式改成 `(http.request.uri.path in {"/mqtt" "/certs/renew"})`、`description` 改成 `mqtt-bridge and certs renewal: /mqtt and /certs/renew per IP (Laysi/trustiot-v2#600, Laysi/trustiot-v2#81)`，其他欄位不變，共用同一個門檻（「換發端點上線」）。同一個 IP 後面的閘道器一起重連時，換發也可能被擋 10 秒，閘道器退避後重試。還原時改回上面的運算式與 `description`。
 
 套用（有 Cloudflare 權限的維運人員，在 Cloudflare 的 API 執行環境裡，照本節開頭的規則先寫進變更清單、經使用者同意）：
 

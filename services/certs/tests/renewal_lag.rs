@@ -9,6 +9,7 @@
 
 mod support;
 
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
 
 use base64::Engine as _;
@@ -85,16 +86,18 @@ async fn a_lag_past_the_limit_refuses_both_steps() {
     };
     let ca = TestCa::new(&[1]);
     let mut env = FAST_CRLS.to_vec();
-    env.extend([
-        ("TRUSTIOT__RENEWAL__MAX_CONSUMER_LAG", "1s"),
-        // The polling below stays mostly within the per-hardware-ID limit.
-        ("TRUSTIOT__RENEWAL__GATEWAY_BURST", "100"),
-        ("TRUSTIOT__RENEWAL__GATEWAY_INTERVAL", "1s"),
-    ]);
+    env.push(("TRUSTIOT__RENEWAL__MAX_CONSUMER_LAG", "1s"));
     let service = Service::start(&product, &ca, &env).await;
-    let challenge_request = json!({"step": "challenge", "hardware_id": "lag-0001"});
+    // The rate limits come before the lag check and count the 503s too, so each poll names a
+    // hardware ID of its own: none of them reaches its limit, and the global one (100 at once,
+    // 20 a second) is well above the polling.
+    let polls = AtomicU32::new(0);
+    let poll = || {
+        let n = polls.fetch_add(1, Ordering::Relaxed);
+        json!({"step": "challenge", "hardware_id": format!("lag-poll-{n}")})
+    };
     let pending: Challenge = wait_for("a renewal challenge", || async {
-        let (status, body, _) = send(&service, &challenge_request).await;
+        let (status, body, _) = send(&service, &poll()).await;
         (status == 200).then(|| serde_json::from_value(body).expect("a challenge"))
     })
     .await;
@@ -126,11 +129,10 @@ async fn a_lag_past_the_limit_refuses_both_steps() {
     .expect("write the event");
     tx.commit().await.expect("commit the event");
 
-    // Within a lag measurement or two (every 15 s), the challenge step is refused. Until then the
-    // polling may meet the rate limit, which comes after the lag check.
+    // Within a lag measurement or two (every 15 s), the challenge step is refused.
     let retry_after = wait_for("the renewal to refuse on the lag", || async {
-        let (status, body, retry_after) = send(&service, &challenge_request).await;
-        if matches!(status, 200 | 429) {
+        let (status, body, retry_after) = send(&service, &poll()).await;
+        if status == 200 {
             return None;
         }
         assert_eq!((status, message_key(&body)), (503, BINDINGS_STALE.as_str()));
@@ -138,10 +140,11 @@ async fn a_lag_past_the_limit_refuses_both_steps() {
     })
     .await;
     assert_eq!(retry_after.as_deref(), Some("30"));
-    // The renew step too, before it takes the challenge.
+    // The renew step too, before it takes the challenge (its hardware ID has used one request of
+    // its limit).
     let renew = json!({
         "step": "renew",
-        "hardware_id": "lag-0001",
+        "hardware_id": pending.hardware_id,
         "nonce": pending.nonce,
         "signature": "MEUCIQ==",
     });
@@ -155,11 +158,14 @@ async fn a_lag_past_the_limit_refuses_both_steps() {
             .await
             .expect("count the challenges");
     assert_eq!(stored, 1, "the refused renew step left the challenge alone");
+    // The renew step's line: the polls before the first lag measurement are refused the same way.
     let line = service
         .stdout
         .messages("refused a certificate renewal request")
         .into_iter()
-        .find(|line| line["fields"]["reason"] == "bindings_stale")
+        .find(|line| {
+            line["fields"]["reason"] == "bindings_stale" && line["fields"]["step"] == "renew"
+        })
         .expect("the refusal's log line");
     println!(
         "evidence: lag past 1 s: challenge and renew 503 {}, Retry-After 30; challenge kept; \
