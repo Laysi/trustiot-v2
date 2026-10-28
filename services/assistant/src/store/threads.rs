@@ -158,7 +158,7 @@ WHERE tenant_id = $1::uuid AND conversation_id = $2::uuid
 /// U+2029), which would reorder or break how the title and what follows it are shown wherever it
 /// is displayed (shared, Laysi/trustiot-v2#650); and at
 /// least one visible character, one that is neither white space nor an invisible format
-/// character ([`invisible`]), so a title of zero-width spaces cannot pass for a name. The marks
+/// character (`invisible`), so a title of zero-width spaces cannot pass for a name. The marks
 /// a script needs stay allowed beside visible characters: the zero-width joiner and non-joiner
 /// (emoji sequences, Persian) and the left-to-right, right-to-left and Arabic letter marks.
 ///

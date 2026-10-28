@@ -1,6 +1,6 @@
 //! The assistant's client API under `/api/assistant/v1` (Laysi/trustiot-v2#645): the
 //! conversation threads ([`conversations`]). Each resource keeps its handlers and types in a
-//! module of its own and adds its router in [`routes`] and its handlers in [`ApiDoc`]; this
+//! module of its own and adds its router in [`routes`] and its handlers in `ApiDoc`; this
 //! module holds what they share: the request's identity as the store's [`Principal`], the M1
 //! error responses, the transaction around a request, the body and paging rules, and the cursor
 //! codec. services/assistant/README.md, 「API」, describes the endpoints.

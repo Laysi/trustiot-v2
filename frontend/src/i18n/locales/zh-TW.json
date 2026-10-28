@@ -126,7 +126,7 @@
 
   "conversation.body_invalid": "請求必須是 JSON 物件，且只能有這個動作接受的欄位。",
   "conversation.update_empty": "沒有要變更的內容。請提供新標題或封存設定。",
-  "conversation.title_invalid": "標題需為 1 到 {max} 個字元，不可包含換行或其他控制字元。",
+  "conversation.title_invalid": "標題需為 1 到 {max} 個字元，要有看得見的文字，不可包含換行、控制字元或文字方向控制字元。",
   "conversation.limit_invalid": "每次可取 1 到 {max} 個對話。",
   "conversation.cursor_invalid": "這一頁清單已失效，請重新載入清單。",
   "conversation.question_running": "這個對話還有問題正在回答，請等回答完成後再刪除對話。",
