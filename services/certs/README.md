@@ -26,6 +26,10 @@ Laysi/trustiot-v2#632（2026-10-24）加上：
 
 - 消費資產服務的 `assets.gateway_bound`，維護閘道器目前綁定的租戶，以及租戶狀態（正常／停權）的表，和平台角色的跨租戶讀取介面，給換發（Laysi/trustiot-v2#81）與 broker 權限（Laysi/trustiot-v2#633）用（見[閘道器的綁定與租戶狀態](#閘道器的綁定與租戶狀態)）。certs 從此也是事件的消費端，也開始存租戶 ID（兩張照決策 29 的租戶表）。
 
+Laysi/trustiot-v2#633（2026-10-29）加上：
+
+- 以 broker 帳號 `service:certs` 連 MQTT broker 的服務埠，依 Postgres 冪等地同步 dynamic security 裡閘道器的 client 與角色：連線（含重連）時與定期做完整比對，出廠登錄與綁定之後立刻同步那一台（見[broker 權限（dynamic security）](#broker-權限dynamic-security)）。broker 重啟、dynsec 檔被 init container 重設之後，閘道器的權限由 certs 自動補回。
+
 ## CA 階層與私鑰保管
 
 2026-10-21 決定（Laysi/trustiot-v2#78）。
@@ -461,6 +465,41 @@ trustiot-workstation register --hardware-id <硬體 ID> --csr gateway.csr --ek e
 - 平台角色的連線池（`PLATFORM_CONNECTIONS`，每個副本 4 條）由出廠登錄、這個消費端的輪詢與 lag 量測、以及這三個讀取共用，都是短交易；沒有新增連線池，chart 的連線預算不變。
 - 每個讀取交易在伺服器端設上限（`SET LOCAL`）：`statement_timeout` 5 秒（`READ_STATEMENT_TIMEOUT`）、`lock_timeout` 2 秒（`READ_LOCK_TIMEOUT`，例如等 migration 的 `ALTER TABLE`）。慢的查詢不會長時間佔住共用池的連線，超過時 Postgres 取消它，讀取回錯誤。
 
+## broker 權限（dynamic security）
+
+2026-10-29 起（Laysi/trustiot-v2#633，`src/dynsec.rs`）。Mosquitto 以 dynamic security（dynsec）決定每個 client 能做什麼；閘道器以憑證的 CN（硬體 ID）當 username，dynsec 裡沒有這個 client 時連得上，但任何發布或訂閱都被拒絕（PUBACK／SUBACK 0x87）。chart 的 init container 只寫服務帳號、chart 的角色與群組（[deploy/chart/README.md](../../deploy/chart/README.md) 的「角色（dynamic security）」），閘道器的 client 由 certs 維護。
+
+### 條件
+
+閘道器在 dynsec 有 client 的條件（2026-10-24 決定，見[閘道器的租戶歸屬與換發條件](#閘道器的租戶歸屬與換發條件)）：已出廠登錄、沒有除役、目前有綁定（資產服務 log 裡最後的綁定沒有結束，見[閘道器的綁定與租戶狀態](#閘道器的綁定與租戶狀態)），而且至少有一張沒撤銷、沒過期的閘道器憑證。符合時 client 的 username 是硬體 ID、沒有密碼、只有 chart 的閘道器角色 `trustiot-gateway`（`protocol::acl::GATEWAY_ROLE`，只能發布自己的 `up/`、訂閱自己的 `down/`），沒有群組、沒有停用；不符合時沒有 client。查詢是 `DESIRED`，以平台角色 `certs_platform` 的唯讀交易讀（每次讀取有一行 `platform database access`，purpose `sync-broker-permissions`）。租戶停權（Laysi/trustiot-v2#108）不在條件內，由該 issue 決定要不要加入。
+
+### 只動閘道器的 client
+
+- 只比對、只改 username 是合規則 `protocol::GatewayId` 的 client。服務帳號（`service:*`，不可能是合規則的硬體 ID）、chart 的角色與群組永遠不送任何指令，仍由 init container 擁有。
+- 缺少的閘道器：一個 `createClient`，同時帶角色、不帶密碼。Mosquitto 2.1 的 `createClient` 不踢掉已經連著的同名連線，而 ACL 每次檢查都依 username 查 client，所以已連線、剛綁定的閘道器不必重連就能發布。
+- 多出來的閘道器 client：`deleteClient`，Mosquitto 同時斷開它的連線。
+- 角色不對、有群組、被停用、綁了 client id，或 text name 不是 certs 設的 `TrustIoT gateway (certs-managed)` 的閘道器 client：刪除後重建，同時清掉任何人手動設的密碼。Mosquitto 2.1 的 `listClients` 與 `getClient` 都不透露 client 有沒有密碼，所以以 text name 判斷是不是 certs 建立的：別人建立（可能帶密碼）的會被換掉。certs 建立之後才被 `setClientPassword` 設上的密碼看不出來；能下這個指令的只有 dynsec 管理角色，而持有它本來就等同掌控 broker。
+- 沒有差異時不送任何修改指令（只有 `listClients` 或 `getClient` 的讀取）。
+
+### 時機
+
+- **完整比對**：每次連上 broker（第一次與每次重連，例如 broker 重啟、dynsec 檔被重設之後）以及每 `dynsec.interval`（預設 5 分鐘）。先以 `listClients` 分頁（每頁 500）讀 broker 的全部 client，再讀 Postgres，所以這中間 commit 的變更不是兩邊都看到，就是由下一項的立即同步補上。
+- **立即同步一台**：出廠登錄 commit 之後（`registrations`）、綁定事件處理完之後（`SyncAfterBinding`：在事件的交易裡記下交易 ID，worker 等它 commit 再比對，最多 10 秒，否則留到下一輪）只比對那一台（`getClient`）。換發（Laysi/trustiot-v2#81）簽出新憑證後也要呼叫同一個 `BrokerSync::gateway`；誰後合併誰接上。
+- **單一副本**：每次比對，不論完整或單台，都在工作鎖 `dynsec`（`service_kit::job_lock`）之內，兩個副本的修改不會交錯；拿不到鎖的副本 1 秒後再試。每個副本各自連 broker，所以各自的請求與事件都能同步。
+- 失敗（broker 拒絕指令、沒有回應、Postgres 讀不到）記 WARN，最多 30 秒（或較短的 `dynsec.interval`）後重做完整比對；單台的請求排隊等不到時（佇列 4096）記 WARN 丟棄，下一次完整比對涵蓋它。
+
+### 連線與帳號
+
+- 用 `crates/mqtt-client`，帳號 `service:certs`，密碼檔每次連線重讀（chart 掛 broker 帳號 Secret 的 `certs` key，Laysi/trustiot-v2#634 接上）。`service:certs` 是唯一有 dynsec 管理角色的服務帳號（[docs/architecture/secrets.md](../../docs/architecture/secrets.md) 的「MQTT dynsec 管理帳密」），設定只接受這個帳號。
+- 指令送到 `$CONTROL/dynamic-security/v1`，回應從 `$CONTROL/dynamic-security/v1/response` 讀，以每個指令的 `correlationData` 對應；Mosquitto 只把回應送給發出指令的 client。一則訊息最多 50 個變更，等回應最多 30 秒。
+- 沒有設定 broker（`TRUSTIOT__MQTT__HOST` 等都沒設）時不同步，啟動時記一行 INFO `no mqtt broker is configured; the broker's gateway permissions are not synced`。broker 連不上不影響 readiness：CRL 與 CA 鏈仍要提供給 broker，同步只是延後。
+
+### 日誌
+
+- 每個變更一行 INFO `changed a gateway's broker permissions`（`hardware_id`、`action`：`added`、`removed` 或 `replaced`、`role`）；broker 拒絕時一行 WARN `the broker refused a change of a gateway's permissions`。
+- 完整比對有變更時一行 INFO `brought the broker's gateway permissions in line with postgres`（各項數量），沒有變更時只有 DEBUG `the broker's gateway permissions match postgres`。
+- 不記 broker 密碼（`crates/mqtt-client` 從不顯示它），也不記指令的原文。
+
 ## broker 伺服器憑證
 
 2026-10-23 決定（Laysi/trustiot-v2#557）。MQTT broker 在閘道器埠（8883）以這張憑證向閘道器證明自己；閘道器以下面的信任錨與名稱驗證它。和閘道器、工作站憑證同一個簽發 CA，以 EKU 區分（理由同[工作站憑證](#工作站憑證)的「profile 的決定」：多一個簽發 CA 要多一套金鑰、儀式、輪替與 CRL）。私鑰在叢集內由 chart 的 CronJob `<release>-mqtt-broker-certificate` 產生，不經過 certs 服務；它在儀式之後取得第一張憑證、過了效期一半就以新的私鑰換發，寫進只有 broker 的 pod 掛的 Secret `<release>-mqtt-broker-tls`，broker 以 SIGHUP 換上，不中斷連線（Laysi/trustiot-v2#535，[deploy/chart/README.md](../../deploy/chart/README.md) 的「伺服器憑證」）。閘道器怎麼驗證它（信任錨、名稱、用途、以根 CRL 檢查簽發 CA）見[閘道器對 broker 伺服器憑證的信任](#閘道器對-broker-伺服器憑證的信任)（Laysi/trustiot-v2#556）。
@@ -586,6 +625,10 @@ broker 埠（`broker.listen_addr`，預設 8082）只有一個端點，mesh 只�
 | `TRUSTIOT__CRL__VALIDITY` | 新 CRL 的效期，最多 31 天，預設 `7d` |
 | `TRUSTIOT__CRL__RENEW_BEFORE` | 剩不到這麼久就重發，預設 `5d` |
 | `TRUSTIOT__CRL__ALERT_BEFORE` | 剩不到這麼久就告警，預設 `3d` |
+| `TRUSTIOT__MQTT__HOST`、`TRUSTIOT__MQTT__PORT` | MQTT broker 的服務埠（[broker 權限](#broker-權限dynamic-security)），埠預設 1883。整組 `TRUSTIOT__MQTT__*` 都沒設時不同步閘道器的權限 |
+| `TRUSTIOT__MQTT__USERNAME` | 只能是 `service:certs`（唯一有 dynsec 管理角色的帳號） |
+| `TRUSTIOT__MQTT__PASSWORD_FILE` | broker 帳號密碼檔的絕對路徑，每次連線重讀 |
+| `TRUSTIOT__DYNSEC__INTERVAL` | 完整比對的週期，1 秒到 1 小時，預設 `5m` |
 
 三個 `TRUSTIOT__CA__*` 由 chart 設定，自訂 `env` 不能覆寫。健康埠（預設 8081）只有 `/healthz` 與 `/readyz`，端點在 8080，broker 伺服器憑證的簽發在 8082。readiness 要服務角色開得出通過 service-kit session 檢查的連線、有一組可用的內部身分公鑰，而且資料庫有這一版預期的每個 migration 檔案；能不能簽章不影響 readiness，看指標 `certs.ca.signing`（理由見[發簽發 CA 憑證](#發簽發-ca-憑證)第 2 步）。設定不能用時以 exit code 1 結束。
 
@@ -636,6 +679,7 @@ CARGO_BUILD_JOBS=2 cargo test -p certs
 | `tests/ceremony.rs` | 真的 `certs-ca`：`root create` 的私鑰只到 stdout、`root sign` 只從 stdin 讀、簽出的簽發 CA 服務接受並印出金鑰 id、`root check` 認得自己的私鑰；別的私鑰、P-256 私鑰、根的名稱、0 天、已存在的輸出檔都拒絕，且不印出私鑰；真的服務在儀式前就緒、`certs.ca.signing` 是 0、每次檢查記 WARN 與等待中的金鑰 id，掛上憑證後不重啟就變成 1 並發出第一張 CRL（容器） |
 | `tests/cross_tenant.rs` | [crates/testkit](../../crates/testkit/README.md) 的覆蓋檢查：服務角色碰得到的每張表、規格裡的每個端點都要宣告；CA 的表都不是租戶資料而豁免（broker 伺服器憑證也屬於平台），outbox 的兩張表照租戶表探測（服務角色寫不了別的租戶的事件），所以不再以 `without_tenant_data` 宣告；Laysi/trustiot-v2#632 的 `gateway_bindings` 與 `tenant_statuses` 照租戶表探測（每個租戶一列的 `one_per_tenant`），消費端的四張表豁免；登錄的表服務角色碰不到；工作站憑證的兩個端點與出廠登錄只給平台管理員，豁免並說明理由；broker 的簽發端點在自己的埠上，不在規格裡（容器） |
 | `tests/bindings.rs` | Laysi/trustiot-v2#632：真的服務建立訂閱 `certs.assets-events`（讀 `assets`）；以 `assets_app` 照綁定的寫法在租戶交易寫 `assets.gateway_bound` 後，表裡有這台閘道器、正確的租戶、綁定 ID、`occurred_at` 與事件位置，`gateway_tenant` 與 `bound_gateways` 讀得到；同一個事件再送一次、整個訂閱重播（`Replay::Reprocess`）後仍是同一列、內容不變。自己的訂閱的消費端：同一台閘道器較舊的綁定（log 位置較前、別的租戶）在較新的之後才到時存下但不是目前的綁定；不合規則的硬體 ID 與沒有租戶的綁定進 dead letter，之後的綁定照常處理。租戶狀態：沒有紀錄是正常、只接受較大的版本號、寫入停權後 `tenant_suspended` 為真；租戶交易寫不了別的租戶的狀態（42501）、只看得到自己的。平台角色讀得到兩個租戶的綁定、取 log 最後的綁定、略過已結束的，每次讀取都有一行 `platform database access`（actor `service`、`certs`、呼叫端的 purpose）（容器） |
+| `tests/dynsec.rs` | Laysi/trustiot-v2#633：Mosquitto 以 chart 的設定（`mosquitto.conf` 與閘道器 listener）與 init container 寫的 dynsec 檔（`migrate::mqtt_accounts::reconcile`）啟動，真的服務以 `service:certs` 在服務埠同步，閘道器以出廠登錄簽出的憑證在 8883 以 MQTT 5 連線：已登錄未綁定的閘道器連得上、發布得到 PUBACK 0x87，綁定後同一條連線就能發布（驗收條件 2）；兩台都綁定後，閘道器能發布自己的 `up/`、訂閱自己的 `down/`，發布或訂閱另一台的得到 0x87（驗收條件 1）；沒有變更時多次完整比對不送修改，dynsec 檔逐位元組不變（驗收條件 4）；broker 以只有 chart 項目加上一個不該存在的閘道器 client 的檔案重啟後，一輪比對補回兩台、刪掉多的，服務帳號、角色與群組不變（驗收條件 3）；`trace` 日誌不含 broker 密碼的任何 8 字元片段（驗收條件 5）（容器；`-- --nocapture` 印出測試報告引用的證據行） |
 | `tests/registration.rs` | Laysi/trustiot-v2#79：工作站簽章只接受工作站憑證，閘道器憑證、別的 CA、別的金鑰、別的本文或路徑、超過 300 秒的時間、過期的憑證、缺少、重複或格式錯的標頭都拒絕並說明原因；簽發 CA 簽的、其餘都符合工作站 profile 的憑證，只要 keyUsage 沒有 digitalSignature（或沒有 keyUsage）或是 CA:TRUE，也以 `not_workstation` 拒絕；EK 只接受 RSA 2048/3072/4096 與 P-256、P-384。真的服務：新的硬體 ID 201、憑證 CN 是硬體 ID 且在根之下驗證為用戶端憑證、寫一筆全平台事件；重送 200 同一張憑證、什麼都不寫；完全相同的請求重送回 `replayed`；換公鑰或 EK 409，別台的公鑰或 EK 409，不支援的 EK 422；少了工作站簽章、沒有 token、別的簽發者、租戶管理員、交換來的 token、別的金鑰或本文、以閘道器憑證冒充工作站，都不登錄；兩個相同的登錄同時到達只簽一張；除役的硬體 ID 409，superuser 也刪不掉、清不掉、改不了；`certs_app` 讀不到登錄；撤銷的工作站憑證 403 `revoked`。Laysi/trustiot-v2#610：201 與 200 的 `certificate_chain` 是 `certificate` 再接簽發 CA，簽發 CA 的公鑰驗得過 leaf 的簽章、金鑰 id 等於 `ca_key_id`、根驗得過它；載入兩把簽發 CA 時重送放的是簽出它的第 1 代，不是現在簽章的第 2 代；第 1 代的金鑰與憑證移除後重送仍 200、同一張憑證，鏈只有 leaf，WARN 只帶 `ca_key_id`（容器） |
 | `tests/workstation_tool.rs` | Laysi/trustiot-v2#615：產線工作站工具（`factory/workstation`）對真的服務：前面放一個檢查 session cookie、換成平台管理員內部 token 的 ingress 替身，工具 `enroll` 取得工作站憑證後登錄一台閘道器、重跑、再讓 ingress 在服務提交後丟掉回應（工具重送得到 200）；另一個新的硬體 ID 第一個 201 就被丟掉、重送得到 200。每個硬體 ID 都剛好一筆登錄、一張閘道器憑證、一筆 `certs.gateway_registered` 事件，工具的紀錄是 `registered`、序號等於資料庫的（容器） |
 | `tests/broker.rs` | Laysi/trustiot-v2#557：CSR 要求別的 CN、O、DNS 與 IP 名稱、CA、keyCertSign 與 clientAuth、anyExtendedKeyUsage 時，簽出的仍是 CA 決定的 broker profile（主體、DNS 名稱依設定、EKU 只有 serverAuth）；rustls 以根為信任錨時，憑證對兩個名稱都驗得過，對別的名稱、IP 拒絕，信任別的根時拒絕，同名但別的 CA 簽的憑證也拒絕，當用戶端憑證時以用途拒絕；閘道器憑證不能當伺服器憑證，閘道器 id 不能是 broker 的名稱；簽章驗不過、P-384 或不是 CSR 時拒絕。真的服務在 broker 埠簽出、記為 `broker`、回整條鏈並記 INFO，日誌沒有憑證；錯的 `Content-Type`、PEM、壞的或過大的 CSR、別的曲線都不簽也不記；API 埠沒有這個端點，broker 埠沒有其他路徑。簽發 CA 還沒有第一張 CRL 時回 503、不記錄，有了才簽。Mosquitto（OpenSSL）以簽出的憑證與測試產生的私鑰當伺服器：信任根、連 `mqtt-broker.trustiot.internal` 的閘道器憑證連得上，別的名稱或信任別的 CA 時用戶端拒絕，broker 的憑證當用戶端憑證時 broker 以用途拒絕（容器） |

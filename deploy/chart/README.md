@@ -827,15 +827,15 @@ broker 的權限全部在 dynamic security，預設拒絕：`defaultACLAccess` �
 
 | 角色 | 給誰 | 規則 |
 | --- | --- | --- |
-| `trustiot-gateway` | 每個閘道器 client（登記在 Laysi/trustiot-v2#82） | `protocol::gateway_role_acls()`（`crates/protocol` 的 `acl` 模組）：只能發布到自己 `trustiot/v1/gw/<CN>/up/` 底下的協定頻道、只能訂閱與接收自己的 `down/`。dynamic security 不能依 retain 旗標授權，所以閘道器可以在自己的 `up` 頻道發 retained，每個頻道最多一則（Laysi/trustiot-v2#268） |
+| `trustiot-gateway` | 每個閘道器 client（certs 依 Postgres 同步，Laysi/trustiot-v2#633，見 services/certs/README.md 的「broker 權限（dynamic security）」） | `protocol::gateway_role_acls()`（`crates/protocol` 的 `acl` 模組）：只能發布到自己 `trustiot/v1/gw/<CN>/up/` 底下的協定頻道、只能訂閱與接收自己的 `down/`。dynamic security 不能依 retain 旗標授權，所以閘道器可以在自己的 `up` 頻道發 retained，每個頻道最多一則（Laysi/trustiot-v2#268） |
 | `trustiot-service-ingest` | `service:ingest` | 接收所有閘道器的 `up/telemetry`、`up/log`，發布 `down/telemetry-ack` |
 | `trustiot-service-gateway-ops` | `service:gateway-ops` | 接收 `up/status`、`up/heartbeat`、`up/config-report`、`up/live`、`up/log-dump`，發布 `down/config`、`down/live-control`、`down/log-request` |
 | `trustiot-service-certs` | `service:certs` | 沒有頻道 |
 | `trustiot-dynsec-admin` | `service:certs` | 只有 `$CONTROL/dynamic-security/#`：送 dynamic security 的指令、讀回應。持有者可以改每個 client 與角色，等同掌控 broker，所以只給 certs |
 
-- 管理角色只給 certs（2026-10-23 決定，docs/architecture/secrets.md 的「MQTT dynsec 管理帳密」）：閘道器的登記跟著 certs 簽發憑證，撤銷靠 certs 發的 CRL（以憑證登入的 client 停用不了，見下方「信任檔與重新載入」）。gateway-ops 不持有它：持有者等同掌控 broker，而 gateway-ops 另外處理即時控制與閘道器的資料，給它會擴大它被入侵時的影響。Laysi/trustiot-v2#82 的流程需要 gateway-ops 也能管理時，把 `tools/migrate/src/mqtt_accounts.rs` 的 `SERVICES` 裡 gateway-ops 的 `dynsec_admin` 改成 `true`，並更新這段與 secrets.md 那一列。
+- 管理角色只給 certs（2026-10-23 決定，docs/architecture/secrets.md 的「MQTT dynsec 管理帳密」）：閘道器的登記跟著 certs 簽發憑證，撤銷靠 certs 發的 CRL（以憑證登入的 client 停用不了，見下方「信任檔與重新載入」）。gateway-ops 不持有它：持有者等同掌控 broker，而 gateway-ops 另外處理即時控制與閘道器的資料，給它會擴大它被入侵時的影響。2026-10-24 決定 gateway-ops 不加入：閘道器 client 全部由 certs 依 Postgres 同步（Laysi/trustiot-v2#633）。之後真的需要時，把 `tools/migrate/src/mqtt_accounts.rs` 的 `SERVICES` 裡 gateway-ops 的 `dynsec_admin` 改成 `true`，並更新這段與 secrets.md 那一列。
 - 服務接收的頻道可以直接訂閱，也可以用任何群組的 shared subscription（`$share/<群組>/trustiot/v1/gw/+/up/<頻道>`）讓多個副本分攤；topic 表以 `crates/protocol/README.md` 為準，服務的 issue 改 `SERVICES` 裡自己的那一列。
-- init container 每次都把 `trustiot-gateway`、`trustiot-dynsec-admin` 與 `trustiot-service-*` 換成這個版本的定義，移除不再存在的 `trustiot-service-*` 角色、離開清單的服務帳號與群組裡的服務帳號成員（服務帳號只有 chart 給的角色）；broker 存下的閘道器 client、群組與其他角色保留。
+- init container 每次都把 `trustiot-gateway`、`trustiot-dynsec-admin` 與 `trustiot-service-*` 換成這個版本的定義，移除不再存在的 `trustiot-service-*` 角色、離開清單的服務帳號與群組裡的服務帳號成員（服務帳號只有 chart 給的角色）；broker 存下的閘道器 client、群組與其他角色保留。閘道器 client 由 certs 維護：它每次連上 broker（包括 broker 重啟之後）就與 Postgres 完整比對一次，補上缺的、刪掉多的，只動 username 是合規則硬體 ID 的 client，不碰服務帳號、chart 的角色與群組（Laysi/trustiot-v2#633）。
 
 ### 服務的帳號
 
@@ -847,7 +847,7 @@ broker 的權限全部在 dynamic security，預設拒絕：`defaultACLAccess` �
 - 給服務的介面：Secret 的 key 是服務名稱，使用者名稱是 `service:<服務>`，位址是 `<release>-mqtt-broker.<namespace>.svc:1883`。chart 還沒把密碼交給任何服務：第一個接上 broker 的服務在它的 issue 把自己那個 key 只交給自己的 pod，並處理輪替後的重啟。
 - 輪替：調大 `mqttBroker.passwordGeneration`。值與帳號持有者的清單進到 broker pod 的 annotation `checksum/mqtt-broker-accounts`，所以升級時 broker 重啟，init container 先產生新密碼並寫入雜湊。代只往上走：rollback 渲染出較小的值時保留現有的密碼。
 - 帳號持有者改變（`mesh.calls` 加上或拿掉 `mqtt-broker`）也讓 broker 重啟：新的服務拿到帳號，離開的服務的帳號被移除。
-- dynamic security 檔不能用時，init container 停止並指出是哪一筆、哪個欄位，不改那個檔，broker 停在 `Init`。不能用是指：不是 JSON、`roles`/`clients`/`groups` 不是陣列（這種檔 Mosquitto 自己也不會啟動）、同一個物件裡重複的 key（Mosquitto 讀第一個，init container 用的 JSON 程式庫讀最後一個），或保留下來的角色、client、群組有 Mosquitto 會默默略過或讀錯的內容：缺名稱或名稱重複、欄位型別不對（例如 `disabled` 或 `allow` 寫成字串）、不認得的 ACL 類型、重複的 ACL，或欄位名稱只差大小寫（Mosquitto 查欄位不分大小寫，手改的項目可能因此蓋過 chart 的帳號或預設權限）。broker 自己存的檔一定符合（`tools/migrate/tests/mqtt_broker.rs` 驗過）；chart 管理的角色與服務帳號不檢查，因為每次都整個換掉。處理：修正那一筆、從備份還原，或刪掉檔案，broker 以沒有閘道器 client 的新檔啟動，閘道器要重新登記（Laysi/trustiot-v2#82）。init container 不替它猜，也不丟掉看不懂的項目。
+- dynamic security 檔不能用時，init container 停止並指出是哪一筆、哪個欄位，不改那個檔，broker 停在 `Init`。不能用是指：不是 JSON、`roles`/`clients`/`groups` 不是陣列（這種檔 Mosquitto 自己也不會啟動）、同一個物件裡重複的 key（Mosquitto 讀第一個，init container 用的 JSON 程式庫讀最後一個），或保留下來的角色、client、群組有 Mosquitto 會默默略過或讀錯的內容：缺名稱或名稱重複、欄位型別不對（例如 `disabled` 或 `allow` 寫成字串）、不認得的 ACL 類型、重複的 ACL，或欄位名稱只差大小寫（Mosquitto 查欄位不分大小寫，手改的項目可能因此蓋過 chart 的帳號或預設權限）。broker 自己存的檔一定符合（`tools/migrate/tests/mqtt_broker.rs` 驗過）；chart 管理的角色與服務帳號不檢查，因為每次都整個換掉。處理：修正那一筆、從備份還原，或刪掉檔案，broker 以沒有閘道器 client 的新檔啟動，certs 重新連上後的第一次完整比對就依 Postgres 補回所有閘道器的 client，閘道器不必重新登記（Laysi/trustiot-v2#633）。init container 不替它猜，也不丟掉看不懂的項目。
 
 ### 信任檔與重新載入
 

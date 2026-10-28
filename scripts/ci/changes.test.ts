@@ -101,7 +101,7 @@ describe("path rules", () => {
     ["a Rust file under scripts", "scripts/ci/fixture.rs"],
     ["SQL outside the crates (a Rust file may include it)", "deploy/sql/seed.sql"],
     ["the chart values a service-kit test reads", "deploy/chart/values.yaml"],
-    ["the MQTT broker configuration a migrate test runs", "deploy/chart/files/mosquitto/mosquitto.conf"],
+    ["the MQTT broker configuration the migrate and certs tests run", "deploy/chart/files/mosquitto/mosquitto.conf"],
     ["the MQTT broker's gateway listener the migrate and certs tests run", "deploy/chart/files/mosquitto/gateway-listener.conf"],
     ["the git ignore rules (the OpenAPI diff uses git status)", ".gitignore"],
     ["ci.yml", ".github/workflows/ci.yml"],
