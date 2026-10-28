@@ -6,7 +6,7 @@ Laysi/trustiot-v2#645：AI 助理的 API 骨架（`/api/assistant/v1`）、對�
 
 ## 環境
 
-- **程式碼**：分支 `feat/645-assistant-chat-api`，從 main `5dad042` 分出；結果取自 commit `095e552` 的樹。之後的 commit 只改這份報告與 `docs/architecture/data-retention.md` 的一個標點。
+- **程式碼**：分支 `feat/645-assistant-chat-api`，從 main `5dad042` 分出；完整的數字取自 commit `095e552` 的樹。之後的 `2f53f8f` 與這份報告最後的修改只改文件（這份報告、`docs/architecture/data-retention.md` 的一個標點、`deploy/chart/README.md` 的一個數字）；合併 commit `c262825` 帶進 main，在它的樹上重跑的檢查見「結果」表下方。
 - **機器**：本機（x86_64 Linux 工作站）。容器測試以 podman 起拋棄式 TLS Postgres，以 migration Job 套用整個產品的 schema（`testkit::product`，每個測試執行檔一個資料庫）。API 與清除的測試啟動 `assistant` 執行檔本身當子行程（`services/assistant/tests/service/mod.rs`），清除的測試同時起兩個行程。
 - **工具**：`.prototools` 與 `rust-toolchain.toml` 釘選的版本：Rust 1.99.0、Bun 1.4.2、Helm 4.3.0、kubeconform 0.8.0、cargo-deny 0.20.2、gitleaks 8.30.1。
 - **設定**：`CI=1`，所以沒有容器執行環境時測試會失敗，不會略過。不連真正的 AI 供應商：主 agent 的模型是 loopback 上回放 `tests/fixtures/` 的替身，服務設定的 AI 閘道位址沒有東西在聽（這些測試都不發問）。
@@ -61,6 +61,8 @@ git archive HEAD | tar -x -C <空目錄> && gitleaks dir --redact <空目錄>
 | `bun scripts/ci/check-secret-handling.ts` | 沒有違規（537 個檔案、7 個容器建置檔） |
 | `bun scripts/ci/check-workflows.ts` | 沒有違規 |
 | gitleaks（分支的 commit、`git archive HEAD` 的樹） | 都沒有發現 |
+
+**合併 main 後重跑**：合併 commit `c262825`（main 的 `fdf7bd0`，帶進 Laysi/trustiot-v2#722 的 edge/agent 與 Laysi/trustiot-v2#725 的 AI 閘道管理埠 Service 與 mesh 政策）的樹上，重跑 main 的變更可能影響的檢查：`cargo fmt --all --check` 與 `cargo clippy --workspace --all-targets -- -D warnings` 通過，`cargo run -p openapi -- --check` 通過，`CI=1 cargo test -p repo-check` 28 通過，`bun test deploy/flux` 78 通過，`bun test deploy/chart` 680 通過（多出的是 #725 的 chart 測試），都是 0 失敗。上表其他的數字仍是 `095e552` 的。
 
 ### 新的常數
 

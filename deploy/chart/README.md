@@ -468,7 +468,7 @@ chart 產生下列物件：
 | `postgres.bundled.parameters.effective_cache_size` | `384MB` | 查詢規劃用的快取估計，不實際配置記憶體 |
 | `postgres.bundled.parameters.work_mem` | `4MB` | 每個排序或 hash 的上限，一個查詢可能用好幾份 |
 | `postgres.bundled.parameters.maintenance_work_mem` | `64MB` | VACUUM、建索引用 |
-| `postgres.bundled.parameters.max_connections` | `200` | 10–1000；`bundled` 時 chart 檢查：啟用的服務在整版滾動時所有連線池的加總，加上保留給 superuser、CloudNativePG、migration Job 與第一位平台管理員的 bootstrap 的 18 條，不能超過它，超過就渲染失敗。預設值放得下六個用 Postgres 的服務各一個副本（166 條，還有 34 條餘裕），記憶體估算在 1Gi 以內；算法、每個服務的數字與估算見「叢集內的 Postgres」的連線預算 |
+| `postgres.bundled.parameters.max_connections` | `200` | 10–1000；`bundled` 時 chart 檢查：啟用的服務在整版滾動時所有連線池的加總，加上保留給 superuser、CloudNativePG、migration Job 與第一位平台管理員的 bootstrap 的 18 條，不能超過它，超過就渲染失敗。預設值放得下六個用 Postgres 的服務各一個副本（178 條，還有 22 條餘裕），記憶體估算在 1Gi 以內；算法、每個服務的數字與估算見「叢集內的 Postgres」的連線預算 |
 | `postgres.bundled.nodeSelector` | `kubernetes.io/arch: arm64` | 映像只有 arm64（決策 5） |
 | `postgres.bundled.tolerations` | `[]` | |
 | `postgres.bundled.operator.namespace` | `cnpg-system` | CloudNativePG operator 所在的 namespace；NetworkPolicy 只放行它的 pod 連 Postgres pod 的 8000（instance manager） |
