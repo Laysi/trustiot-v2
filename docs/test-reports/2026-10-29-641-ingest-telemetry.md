@@ -5,7 +5,7 @@ Laysi/trustiot-v2#641（清單 I1、決策 8）。寫入流程的說明在 [serv
 ## 環境
 
 - 建置主機（macOS arm64），podman 起拋棄式容器；設了 `CI=1`，找不到容器執行環境時測試失敗而不是略過。
-- 分支 `feat/641-ingest-telemetry`，以 origin/main `5dad0429` 為基礎。
+- 分支 `feat/641-ingest-telemetry`。容器測試以 main `5dad0429` 為基礎時執行；之後改以 main `9d879e95` 為基礎（多出的 commit 只改 `edge/agent` 與文件），ingest 的程式不變。
 - Rust 1.99.0（`rust-toolchain.toml`）。
 - 容器映像（都以 multi-arch index 的 digest 釘選）：ClickHouse `clickhouse-server:26.8`（`services/ingest/tests/common/mod.rs`）、Postgres `postgres:18.6-alpine`（`testkit` 的 `product_postgres`，帶 TLS，套用 migration Job 的全部 Postgres migration）、Mosquitto `eclipse-mosquitto:2.1.2-alpine`（`testkit::mqtt::mosquitto`，dynamic security，`service:ingest` 的角色取自 `tools/migrate` 的定義）。
 - `tests/telemetry.rs` 的 ClickHouse 先放 200,000 列別的串流的資料，用來量找殘留列的那一句讀了多少。
@@ -63,6 +63,13 @@ CI=1 cargo test -p ingest --test telemetry --test startup -- --nocapture
 | broker 連不上時 readiness 不是 200，連上後恢復 | 通過（`startup.rs` 第 5 步） |
 | 重寫之後兩張彙總表與原始資料一致；刪除之前寫過相同內容的批次也完整寫入 | 通過（第 7 步；第 5 步重寫的是相同的區塊） |
 | 每一句都帶 `stream_settings`，client 請求逾時不短於 `CLIENT_TIMEOUT_SECONDS` | 通過（第 7 步讀 `system.query_log`；逾時由 `src/clickhouse.rs` 的單元測試檢查） |
-| `cargo test --workspace`、`cargo clippy --workspace --all-targets -- -D warnings` 通過；`CI` 設定時不略過 | 見 PR 的驗證一節 |
+| `cargo test --workspace`、`cargo clippy --workspace --all-targets -- -D warnings` 通過；`CI` 設定時不略過 | 通過，分兩台建置主機跑完（見下方「全 workspace 的檢查」） |
+
+### 全 workspace 的檢查
+
+都設了 `CI=1`，2026-10-29：
+
+- 建置主機（macOS）：`cargo fmt --all --check`；`cargo clippy --workspace --all-targets --locked --exclude agent -- -D warnings`；`cargo test --workspace --locked --exclude agent --no-fail-fast`；`cargo deny --locked check`（advisories、bans、licenses、sources 都 ok）。測試中 219 個 test binary 通過，另有 5 個 binary 在 macOS 上失敗，都不是這次改的 crate，也都與 macOS 有關（容器裡的 Linux 執行檔、連接埠與 accept queue 的行為）：`ai-clients` 的 `anthropic_http`、`migrate` 的 `mqtt_broker`、`service-kit` 的 `container` 與 `verify_container`、`testkit` 的 lib 測試。
+- 建置主機（Linux）：上面這 5 個 binary 全部通過（14、6、1、1、41 個測試）；`cargo clippy -p agent --all-targets --locked -- -D warnings` 與 `cargo test -p agent --locked --no-fail-fast` 通過。
 
 待測：真的斷電重設後的落盤（Laysi/trustiot-v2#643，需要可以強制斷電的環境）；吞吐量與積壓的量測（還沒有 issue，見 PR 的後續提議）。
