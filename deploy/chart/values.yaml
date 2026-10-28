@@ -280,13 +280,14 @@ services:
   # against telemetry-query and assets (mesh.calls.assistant below). The chart sets the address of
   # each of those services from mesh.calls.assistant, and env cannot (README.md, 「AI 助理」); it
   # does not start without the AI gateway's (services.ai-gateway.enabled and ai-gateway listed).
-  # It has no API yet (the chat API is Laysi/trustiot-v2#146).
+  # Its API serves the users' conversation threads (Laysi/trustiot-v2#645); it verifies internal
+  # identity tokens, so it does not start without the identity service.
   assistant:
     enabled: false
-    # 2 to 100. It opens no other pool: 4 in all. Until the chat API (Laysi/trustiot-v2#146) only
-    # the readiness check uses it.
+    # 4 to 100: readiness, the purge's job lock and the API's requests. The purge's platform
+    # role opens 2 more (Laysi/trustiot-v2#645): 10 in all.
     database:
-      maxConnections: 4
+      maxConnections: 8
   # The AI gateway (services/ai-gateway, decisions 15 and 28): the providers, model roles and limits
   # come from `ai` below. Only the AI assistant, the knowledge base and alerts may call it
   # (mesh.calls; README.md, "服務間授權（mesh）").
@@ -539,7 +540,7 @@ postgres:
       work_mem: 4MB
       maintenance_work_mem: 64MB
       # Fits identity, assets, certs, telemetry-query, assistant and ai-gateway at one replica
-      # each while all of them roll at once (148) plus the 18 reserved connections (166), with 34
+      # each while all of them roll at once (160) plus the 18 reserved connections (178), with 22
       # to spare for the next service that uses Postgres; the render fails when the enabled
       # services need more. Changing it restarts the bundled Postgres. The memory estimate is in
       # README.md (「叢集內的 Postgres」).

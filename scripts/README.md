@@ -140,6 +140,7 @@ Job 依序套用 `services/ingest/migrations/clickhouse/`，記在 `trustiot_mig
 | `TRUSTIOT_DEV_CERTS_DATABASE_USERNAME`、`..._PASSWORD` | `certs_app`（Laysi/trustiot-v2#78） |
 | `TRUSTIOT_DEV_CERTS_PLATFORM_DATABASE_USERNAME`、`..._PASSWORD` | `certs_platform`（出廠登錄寫全平台事件，Laysi/trustiot-v2#79） |
 | `TRUSTIOT_DEV_ASSISTANT_DATABASE_USERNAME`、`..._PASSWORD` | `assistant_app`（Laysi/trustiot-v2#553） |
+| `TRUSTIOT_DEV_ASSISTANT_PLATFORM_DATABASE_USERNAME`、`..._PASSWORD` | `assistant_platform`（清除刪除滿 30 天的對話，Laysi/trustiot-v2#645） |
 | `TRUSTIOT_DEV_AI_GATEWAY_DATABASE_USERNAME`、`..._PASSWORD` | `ai_gateway_app`（模型角色的設定，Laysi/trustiot-v2#605） |
 | `TRUSTIOT_DEV_INGEST_DATABASE_USERNAME`、`..._PASSWORD` | `ingest_app`（Laysi/trustiot-v2#640） |
 | `TRUSTIOT_DEV_INGEST_PLATFORM_DATABASE_USERNAME`、`..._PASSWORD` | `ingest_platform`（查閘道器目前的租戶，Laysi/trustiot-v2#640） |

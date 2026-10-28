@@ -155,7 +155,8 @@ pub struct Service {
 impl Service {
     /// Starts the service on free local ports against `product`, trusting the internal identity
     /// keys `jwks` (written to a keys file, as the chart's ConfigMap volume holds them), with the
-    /// roles the chart gives it and `env` on top, and waits until it is ready. The AI gateway's
+    /// roles the chart gives it (`assistant_app`, and `assistant_platform` for the purge) and
+    /// `env` on top, and waits until it is ready. The AI gateway's
     /// address points where nothing listens: no test here asks a question. The environment is
     /// otherwise empty, so the developer's own variables cannot leak in.
     pub async fn start(product: &ProductPostgres, jwks: &str, env: &[(&str, &str)]) -> Self {
@@ -177,6 +178,11 @@ impl Service {
             .env("TRUSTIOT_INTERNAL_IDENTITY_KEYS_FILE", &keys_file)
             .env("TRUSTIOT__DATABASE__USERNAME", "assistant_app")
             .env("TRUSTIOT__DATABASE__PASSWORD", TEST_PASSWORD)
+            .env(
+                "TRUSTIOT__DATABASE__PLATFORM_USERNAME",
+                "assistant_platform",
+            )
+            .env("TRUSTIOT__DATABASE__PLATFORM_PASSWORD", TEST_PASSWORD)
             .env("TRUSTIOT__AI_GATEWAY__URL", closed_origin())
             .envs(product.platform_env())
             .envs(env.iter().copied())

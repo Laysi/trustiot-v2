@@ -48,7 +48,9 @@ use service_kit::tenant::{
 };
 use sqlx::postgres::{PgDatabaseError, PgPoolOptions};
 use sqlx::{Connection, PgConnection, Row};
-use support::{CountReadings, StandIn, WAIT, agent, fixture, ok, respond, settings, tool_step};
+use support::{
+    Capture, CountReadings, StandIn, WAIT, agent, fixture, ok, respond, settings, tool_step,
+};
 use testkit::identity::TestIssuer;
 use testkit::product::{DATABASE, ProductPostgres, product_postgres};
 use uuid::Uuid;
@@ -930,6 +932,33 @@ async fn expired_conversations_are_purged_and_nothing_else() {
         "it waited the lock timeout it set: {waited:?}"
     );
     assert!(!format!("{failure} {failure:?}").contains(&id.to_string()));
+    // The purge job's round gives up the same way: one WARN line of its own with the failure's
+    // class (sqlx adds its slow-statement WARN, with the SQL text and no values), no line of
+    // purged conversations, and the next round tries again.
+    let (capture, guard) = Capture::install();
+    let purged = assistant::purge::round(&db.platform)
+        .await
+        .expect("a round that meets a locked row ends without an error");
+    drop(guard);
+    assert_eq!(purged, 0);
+    let events = capture.events();
+    let warned: Vec<_> = events
+        .iter()
+        .filter(|event| event.level == tracing::Level::WARN && event.target == "assistant::purge")
+        .collect();
+    assert_eq!(warned.len(), 1, "{events:?}");
+    assert_eq!(
+        warned[0].fields.get("error").map(String::as_str),
+        Some("database error (SQLSTATE 55P03)"),
+        "{warned:?}"
+    );
+    assert!(
+        events
+            .iter()
+            .all(|event| event.message != "purged expired conversations"),
+        "{events:?}"
+    );
+    assert!(!format!("{events:?}").contains(&id.to_string()));
     holding.rollback().await.expect("release the lock");
     assert_eq!(db.snapshot(id).await, before, "nothing of it was deleted");
     let mut tx = db.platform_tx().await;

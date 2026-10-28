@@ -499,7 +499,7 @@ pub async fn restore(
 /// `tx` is a transaction of the assistant's platform role (`assistant_platform`, through
 /// service-kit's `PlatformDb`, which logs each one): the role sees and deletes only expired
 /// conversations, so this cannot remove a conversation that is live or still restorable,
-/// whatever the statement says. The scheduled job that calls it is Laysi/trustiot-v2#645's.
+/// whatever the statement says. The scheduled job [`crate::purge`] calls it.
 ///
 /// It sets the transaction's `lock_timeout` to [`PURGE_LOCK_TIMEOUT`] first, so every caller
 /// waits at most that long for a row another session holds: then it fails with SQLSTATE

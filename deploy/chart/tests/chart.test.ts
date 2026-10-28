@@ -3051,20 +3051,20 @@ describe("Postgres connection budget (Laysi/trustiot-v2#575)", () => {
     expect(Object.fromEntries(postgresServices.map((name) => [name, perReplica(name)]))).toEqual({
       "ai-gateway": 4,
       assets: 14,
-      assistant: 4,
+      assistant: 10,
       certs: 9,
       identity: 31,
       "telemetry-query": 12,
     });
     expect(reserved).toBe(18);
-    // 34 to spare for the next service that uses Postgres (README.md, 「連線預算」).
-    expect(needed).toBe(166);
+    // 22 to spare for the next service that uses Postgres (README.md, 「連線預算」).
+    expect(needed).toBe(178);
     expect(limit).toBe(200);
     const readme = readFileSync(join(CHART_DIR, "README.md"), "utf8");
     for (const name of postgresServices) {
       expect(readme).toContain(`| \`${name}\` | \`${services[name]?.database?.maxConnections}\` | ${budgets[name]?.otherPools} | ${perReplica(name)} |`);
     }
-    expect(readme).toContain(`| 合計 | | | 74 | 148 |`);
+    expect(readme).toContain(`| 合計 | | | 80 | 160 |`);
   });
 
   test.each(SHAPE_NAMES)("%s: the defaults, every Postgres service and every planned service pass the check", (shape) => {
@@ -3084,7 +3084,7 @@ describe("Postgres connection budget (Laysi/trustiot-v2#575)", () => {
     expect(below.code).not.toBe(0);
     expect(below.stderr).toContain(
       `postgres.bundled.parameters.max_connections is ${needed - 1}, but ${needed} connections are needed: the services can open ${needed - reserved} while all of them roll at once ` +
-        "(per replica x pods: ai-gateway 4 x 2, assets 14 x 2, assistant 4 x 2, certs 9 x 2, identity 31 x 2, telemetry-query 12 x 2), " +
+        "(per replica x pods: ai-gateway 4 x 2, assets 14 x 2, assistant 10 x 2, certs 9 x 2, identity 31 x 2, telemetry-query 12 x 2), " +
         `and ${reserved} stay reserved for superusers, CloudNativePG, the migration Job and the platform administrator bootstrap.`,
     );
     // The string form of max_connections counts the same.
@@ -5543,11 +5543,17 @@ describe("service-to-service authorization (decision 27)", () => {
       const postgres = manifests.some((m) => m.kind === "NetworkPolicy" && m.metadata.name === `${RELEASE}-postgres`) ? ["postgres:5432"] : [];
       expect(reached).toEqual([...["ai-gateway", "assets", "identity-exchange", "otel-collector", "telemetry-query"].map((s) => `${s}:15008`), ...postgres].sort());
       // Its database login is assistant_app, with the password from its own Secret, and its pool is
-      // the size the connection budget counts (Laysi/trustiot-v2#575).
+      // the size the connection budget counts (Laysi/trustiot-v2#575); its scheduled purge logs in as
+      // assistant_platform, with the password from the same Secret (Laysi/trustiot-v2#645).
       expect(assistantEnv(manifests).filter((e) => e.name.startsWith("TRUSTIOT__DATABASE__"))).toEqual([
         { name: "TRUSTIOT__DATABASE__USERNAME", value: "assistant_app" },
         { name: "TRUSTIOT__DATABASE__PASSWORD", valueFrom: { secretKeyRef: { name: `${RELEASE}-assistant-password`, key: "assistant_app" } } },
-        { name: "TRUSTIOT__DATABASE__MAX_CONNECTIONS", value: "4" },
+        { name: "TRUSTIOT__DATABASE__MAX_CONNECTIONS", value: "8" },
+        { name: "TRUSTIOT__DATABASE__PLATFORM_USERNAME", value: "assistant_platform" },
+        {
+          name: "TRUSTIOT__DATABASE__PLATFORM_PASSWORD",
+          valueFrom: { secretKeyRef: { name: `${RELEASE}-assistant-password`, key: "assistant_platform" } },
+        },
       ]);
     });
 

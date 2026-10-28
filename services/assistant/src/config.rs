@@ -1,6 +1,7 @@
 //! The assistant's settings (README.md, 「設定」): where the AI gateway is, the model call, the
-//! token budget of a question, the limits of tool calls, the service role's database login and
-//! the public keys the API verifies identity tokens with.
+//! token budget of a question, the limits of tool calls, the database logins of the service role
+//! and of the purge's platform role, the purge's schedule, and the public keys the API verifies
+//! identity tokens with.
 //! They come from `TRUSTIOT__*` variables (the platform settings from `TRUSTIOT_*`) or the TOML
 //! file named by `TRUSTIOT_CONFIG_FILE`, through service-kit, and are checked at startup. Error
 //! messages name keys, never values.
@@ -33,8 +34,9 @@ pub const MAX_CALLS_PER_STEP: usize = 32;
 pub const MAX_IMAGE_BYTES: usize = 5 << 20;
 
 /// Fewest connections of the service role's pool: the two readiness checks (a ping and the
-/// migration check) may run at the same time.
-pub const MIN_DATABASE_CONNECTIONS: u32 = 2;
+/// migration check) may run at the same time, the purge's job lock holds one session while a
+/// round runs, and one is left for a request.
+pub const MIN_DATABASE_CONNECTIONS: u32 = 4;
 
 /// Most connections of the service role's pool per replica.
 pub const MAX_DATABASE_CONNECTIONS: u32 = 100;
@@ -64,6 +66,9 @@ pub struct Config {
     /// The assets service: the device model tool.
     #[serde(default)]
     pub assets: Peer,
+    /// The scheduled purge of conversations deleted more than 30 days ago.
+    #[serde(default)]
+    pub purge: Purge,
 }
 
 /// The platform settings the service reads. No `deny_unknown_fields`: every service gets every
@@ -87,7 +92,8 @@ pub struct Platform {
 }
 
 /// `database.*`: the service role (`assistant_app`), which reads and writes the conversations
-/// under row-level security. No platform role: nothing reads conversations across tenants.
+/// under row-level security, and the platform role (`assistant_platform`), with which the purge
+/// sees and deletes only conversations deleted more than 30 days ago, across tenants.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Database {
@@ -95,23 +101,29 @@ pub struct Database {
     pub username: String,
     /// `TRUSTIOT__DATABASE__PASSWORD`, from a Secret.
     pub password: String,
+    /// `TRUSTIOT__DATABASE__PLATFORM_USERNAME`.
+    pub platform_username: String,
+    /// `TRUSTIOT__DATABASE__PLATFORM_PASSWORD`, from a Secret.
+    pub platform_password: String,
     /// `TRUSTIOT__DATABASE__MAX_CONNECTIONS`: most connections of the service role's pool per
-    /// replica, from [`MIN_DATABASE_CONNECTIONS`] to [`MAX_DATABASE_CONNECTIONS`]. Default 4:
-    /// only readiness uses the pool until the chat API (Laysi/trustiot-v2#146) stores
-    /// conversations.
+    /// replica, from [`MIN_DATABASE_CONNECTIONS`] to [`MAX_DATABASE_CONNECTIONS`]. Default 8:
+    /// the two readiness checks, the purge's job lock, and five requests at a time, each of which
+    /// holds one connection for one short transaction. The platform role's pool has
+    /// [`crate::PLATFORM_CONNECTIONS`] more.
     #[serde(default = "default_max_connections")]
     pub max_connections: u32,
 }
 
 const fn default_max_connections() -> u32 {
-    4
+    8
 }
 
-/// Never prints the password.
+/// Never prints the passwords.
 impl fmt::Debug for Database {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Database")
             .field("username", &self.username)
+            .field("platform_username", &self.platform_username)
             .field("max_connections", &self.max_connections)
             .finish_non_exhaustive()
     }
@@ -121,16 +133,62 @@ impl Config {
     /// Where and how the service role connects: TLS with verify-full against the deployment's CA.
     #[must_use]
     pub fn service_role(&self) -> PostgresConfig {
+        self.postgres(&self.database.username, &self.database.password)
+    }
+
+    /// Where and how the purge's platform role connects, the same way.
+    #[must_use]
+    pub fn platform_role(&self) -> PostgresConfig {
+        self.postgres(
+            &self.database.platform_username,
+            &self.database.platform_password,
+        )
+    }
+
+    fn postgres(&self, username: &str, password: &str) -> PostgresConfig {
         PostgresConfig {
             host: self.platform.postgres_host.clone(),
             port: self.platform.postgres_port,
             database: self.platform.postgres_database.clone(),
             ssl_mode: self.platform.postgres_sslmode,
             ca_file: self.platform.postgres_ca_file.clone(),
-            username: self.database.username.clone(),
-            password: self.database.password.clone(),
+            username: username.to_owned(),
+            password: password.to_owned(),
         }
     }
+}
+
+/// The shortest purge interval: a round that finds nothing is one small query, so a minute
+/// cannot load the database, and a misconfiguration cannot make it shorter.
+pub const MIN_PURGE_INTERVAL: Duration = Duration::from_secs(60);
+/// The longest: a conversation is purged at most a day after its 30 days end.
+pub const MAX_PURGE_INTERVAL: Duration = Duration::from_secs(24 * 60 * 60);
+
+/// `purge.*`: the scheduled purge of conversations deleted more than 30 days ago
+/// (`crate::purge`).
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Purge {
+    /// `TRUSTIOT__PURGE__INTERVAL`: how often one replica runs a round, from
+    /// [`MIN_PURGE_INTERVAL`] to [`MAX_PURGE_INTERVAL`]. Default an hour: a conversation goes
+    /// within an hour after its 30 days, and the empty rounds in between cost one query each.
+    #[serde(
+        default = "default_purge_interval",
+        deserialize_with = "service_kit::config::duration"
+    )]
+    pub interval: Duration,
+}
+
+impl Default for Purge {
+    fn default() -> Self {
+        Self {
+            interval: default_purge_interval(),
+        }
+    }
+}
+
+fn default_purge_interval() -> Duration {
+    Duration::from_secs(60 * 60)
 }
 
 /// The shortest run delegation a question may have: a question needs time for a few model calls.
@@ -349,11 +407,34 @@ impl Validate for Config {
                 ),
             ));
         }
-        if database.username.trim().is_empty() {
-            return Err(Invalid::new("database.username", "must not be blank"));
+        for (key, username) in [
+            ("database.username", &database.username),
+            ("database.platform_username", &database.platform_username),
+        ] {
+            if username.trim().is_empty() {
+                return Err(Invalid::new(key, "must not be blank"));
+            }
         }
-        if database.password.is_empty() {
-            return Err(Invalid::new("database.password", "must not be empty"));
+        if database.username == database.platform_username {
+            return Err(Invalid::new(
+                "database.platform_username",
+                "must be another role than database.username: only the platform role may delete \
+                 expired conversations across tenants",
+            ));
+        }
+        for (key, password) in [
+            ("database.password", &database.password),
+            ("database.platform_password", &database.platform_password),
+        ] {
+            if password.is_empty() {
+                return Err(Invalid::new(key, "must not be empty"));
+            }
+        }
+        if !(MIN_PURGE_INTERVAL..=MAX_PURGE_INTERVAL).contains(&self.purge.interval) {
+            return Err(Invalid::new(
+                "purge.interval",
+                "must be between 1 minute and 24 hours",
+            ));
         }
         check_gateway_url(&self.ai_gateway.url)
             .map_err(|message| Invalid::new("ai_gateway.url", message))?;
@@ -536,6 +617,8 @@ mod tests {
             database: Database {
                 username: "assistant_app".into(),
                 password: "generated in the cluster".into(),
+                platform_username: "assistant_platform".into(),
+                platform_password: "also generated in the cluster".into(),
                 max_connections: default_max_connections(),
             },
             ai_gateway: AiGateway {
@@ -549,6 +632,7 @@ mod tests {
             identity: Identity::default(),
             telemetry_query: Peer::default(),
             assets: Peer::default(),
+            purge: Purge::default(),
         }
     }
 
@@ -639,7 +723,16 @@ mod tests {
             ("TRUSTIOT_DEPLOYMENT_MODE", "saas"),
             ("TRUSTIOT__DATABASE__USERNAME", "assistant_app"),
             ("TRUSTIOT__DATABASE__PASSWORD", "from the password Secret"),
+            (
+                "TRUSTIOT__DATABASE__PLATFORM_USERNAME",
+                "assistant_platform",
+            ),
+            (
+                "TRUSTIOT__DATABASE__PLATFORM_PASSWORD",
+                "from the platform password Secret",
+            ),
             ("TRUSTIOT__DATABASE__MAX_CONNECTIONS", "6"),
+            ("TRUSTIOT__PURGE__INTERVAL", "15m"),
             ("TRUSTIOT__AI_GATEWAY__URL", "http://ai-gateway:8080"),
             (
                 "TRUSTIOT__IDENTITY__EXCHANGE_URL",
@@ -682,9 +775,20 @@ mod tests {
             ("trustiot-postgres-rw", 5432, "assistant_app")
         );
         assert_eq!(role.ssl_mode, SslMode::VerifyFull);
-        // The password never reaches a log line through Debug.
+        let platform = config.platform_role();
+        assert_eq!(
+            (platform.username.as_str(), platform.password.as_str()),
+            ("assistant_platform", "from the platform password Secret")
+        );
+        assert_eq!(platform.host, role.host);
+        assert_eq!(config.purge.interval, Duration::from_secs(15 * 60));
+        // The passwords never reach a log line through Debug.
         let debug = format!("{config:?}");
         assert!(!debug.contains("from the password Secret"), "{debug}");
+        assert!(
+            !debug.contains("from the platform password Secret"),
+            "{debug}"
+        );
     }
 
     #[test]
@@ -710,6 +814,42 @@ mod tests {
         let mut no_password = config();
         no_password.database.password = String::new();
         assert_eq!(key_of(&no_password), Err("database.password".into()));
+        let mut blank_platform = config();
+        blank_platform.database.platform_username = String::new();
+        assert_eq!(
+            key_of(&blank_platform),
+            Err("database.platform_username".into())
+        );
+        let mut same_role = config();
+        same_role.database.platform_username = same_role.database.username.clone();
+        assert_eq!(key_of(&same_role), Err("database.platform_username".into()));
+        let mut no_platform_password = config();
+        no_platform_password.database.platform_password = String::new();
+        assert_eq!(
+            key_of(&no_platform_password),
+            Err("database.platform_password".into())
+        );
+    }
+
+    #[test]
+    fn the_purge_runs_every_minute_to_every_day() {
+        assert_eq!(config().purge.interval, Duration::from_secs(60 * 60));
+        for (interval, valid) in [
+            (MIN_PURGE_INTERVAL, true),
+            (MAX_PURGE_INTERVAL, true),
+            (Duration::from_secs(59), false),
+            (MAX_PURGE_INTERVAL + Duration::from_secs(1), false),
+            (Duration::ZERO, false),
+        ] {
+            let mut config = config();
+            config.purge.interval = interval;
+            let expected = if valid {
+                Ok(())
+            } else {
+                Err("purge.interval".to_owned())
+            };
+            assert_eq!(key_of(&config), expected, "{interval:?}");
+        }
     }
 
     #[test]

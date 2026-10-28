@@ -11,7 +11,8 @@
 //!   the tool calls and results, the system prompt, the tool definitions or the tenant context.
 //! - Renaming, archiving, the list's filter and pages, and the 400s and 422s of each.
 //! - Delete, the deleted list and restore; a running question keeps its conversation (409);
-//!   past 30 days a conversation cannot be restored.
+//!   past 30 days a conversation cannot be restored, and a purge round removes it with its
+//!   messages while a recently deleted and a live one stay.
 //! - Writes need the JSON content type; every response carries `cache-control: no-store`.
 //!
 //! Starts a throwaway Postgres with TLS (podman or docker); skipped without either unless `CI`
@@ -32,7 +33,7 @@ use contract::{ServiceName, TenantId};
 use reqwest::Method;
 use serde_json::{Value, json};
 use service::{Reply, Service, User};
-use service_kit::tenant::TenantDb;
+use service_kit::tenant::{PlatformDb, TenantDb};
 use sqlx::postgres::PgPoolOptions;
 use sqlx::{Connection, Row};
 use support::{StandIn, fixture, ok, respond, settings, tool_step};
@@ -91,10 +92,12 @@ struct Api {
     /// The service role's pool, for what the API cannot do yet: storing a conversation with
     /// questions (Laysi/trustiot-v2#646) and starting a question's run.
     db: TenantDb,
+    /// The purge's platform role, to run a purge round now instead of waiting for the schedule.
+    platform: PlatformDb,
 }
 
 async fn api() -> Option<Api> {
-    let product = product_postgres(&["assistant_app"]).await?;
+    let product = product_postgres(&["assistant_app", "assistant_platform"]).await?;
     let issuer = TestIssuer::new();
     let service = Service::start(&product, &issuer.jwks(), &[]).await;
     let db = TenantDb::connect_lazy(
@@ -102,11 +105,17 @@ async fn api() -> Option<Api> {
         PgPoolOptions::new().max_connections(2),
     )
     .expect("the service role's pool verifies the server");
+    let platform = PlatformDb::connect_lazy(
+        product.postgres.options("assistant_platform", DATABASE),
+        PgPoolOptions::new().max_connections(1),
+    )
+    .expect("the platform role's pool verifies the server");
     Some(Api {
         product,
         issuer,
         service,
         db,
+        platform,
     })
 }
 
@@ -1000,6 +1009,27 @@ async fn delete_the_deleted_list_and_restore() {
     api.call(&owner, Method::POST, &restore_path(id), Some(&json!({})))
         .await
         .expect_error(404, "not_found", "error.not_found");
+
+    // A purge round removes it with its messages; a recently deleted one and a live one stay.
+    // Every service of this test binary also runs a round when it starts, and that may be the
+    // one that removes it, so the state is checked, not the round's count.
+    let recent = api.create(&owner).await;
+    api.call(&owner, Method::DELETE, &conversation(recent), None)
+        .await
+        .expect_status(200);
+    let (recent_before, other_before) = (api.snapshot(recent).await, api.snapshot(other).await);
+    assistant::purge::round(&api.platform)
+        .await
+        .expect("a purge round");
+    assert_eq!(
+        api.snapshot(id).await,
+        "\n[]\n[]\n[]",
+        "the conversation and every row of it are gone"
+    );
+    assert_eq!(api.snapshot(recent).await, recent_before);
+    assert_eq!(api.snapshot(other).await, other_before);
+    assert_eq!(api.ids(&owner, DELETED).await, [recent]);
+    assert_eq!(api.ids(&owner, CONVERSATIONS).await, [other]);
     println!("deleted: {deleted}");
 }
 

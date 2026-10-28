@@ -7,7 +7,7 @@
 //!
 //! The client API ([`api`], Laysi/trustiot-v2#645) serves a user's conversation threads under
 //! `/api/assistant/v1`: starting, listing, reading, renaming, archiving, deleting and restoring
-//! them.
+//! them. The scheduled [`purge`] removes the conversations deleted more than 30 days ago.
 //!
 //! Where later work plugs in:
 //! - asking a question in a conversation and streaming the answer (Laysi/trustiot-v2#646,
@@ -37,7 +37,7 @@ use contract::client::InternalClient;
 use contract::{ServiceName, service};
 use service_kit::identity::{IdentityVerifier, PublishedKeys};
 use service_kit::migrations::MigrationCheck;
-use service_kit::tenant::TenantDb;
+use service_kit::tenant::{PlatformDb, TenantDb};
 use service_kit::{BoxError, Context};
 use sqlx::postgres::PgPoolOptions;
 use utoipa::OpenApi as _;
@@ -51,6 +51,7 @@ pub mod delegation;
 pub mod history;
 pub mod model;
 pub mod prompt;
+pub mod purge;
 pub mod schema;
 pub mod store;
 pub mod tools;
@@ -61,6 +62,11 @@ pub use config::Config;
 /// How long getting a database connection may take, opening a new one included.
 pub const ACQUIRE_TIMEOUT: Duration = Duration::from_secs(5);
 
+/// Connections of the platform role's pool: the purge's one transaction at a time
+/// ([`purge::round`]) and the readiness ping. The purge's job lock is on the service role's
+/// pool (`config::MIN_DATABASE_CONNECTIONS`).
+pub const PLATFORM_CONNECTIONS: u32 = 2;
+
 /// The client API's OpenAPI document (merged into `api/openapi.json` by `tools/openapi`).
 #[must_use]
 pub fn openapi() -> utoipa::openapi::OpenApi {
@@ -68,13 +74,15 @@ pub fn openapi() -> utoipa::openapi::OpenApi {
 }
 
 /// The service's startup for `service_kit::run`: builds the agent and its tools from the
-/// configuration, which fails startup when they cannot be built, opens the service role's pool
-/// lazily (with the session check of `crates/service-kit`), follows the identity service's public
-/// keys file, and serves the API ([`api::routes`]). Readiness passes while the role
-/// (`assistant_app`) can open a checked session, the service has a usable set of public keys,
-/// and the database has every migration file this release expects ([`schema::SCHEMA`]). It
-/// calls neither the AI gateway nor the services the tools call, so the service is ready
-/// without a model. Asking questions (and so the run delegation) is Laysi/trustiot-v2#646.
+/// configuration, which fails startup when they cannot be built, opens the service role's and
+/// the platform role's pools lazily (with the session check of `crates/service-kit`), schedules
+/// the purge ([`purge::spawn`]), follows the identity service's public keys file, and serves the
+/// API ([`api::routes`]). Readiness passes while both roles (`assistant_app`,
+/// `assistant_platform`) can open a checked session, so a purge that cannot log in shows, the
+/// service has a usable set of public keys, and the database has every migration file this
+/// release expects ([`schema::SCHEMA`]). It calls neither the AI gateway nor the services the
+/// tools call, so the service is ready without a model. Asking questions (and so the run
+/// delegation) is Laysi/trustiot-v2#646.
 ///
 /// # Errors
 ///
@@ -89,12 +97,22 @@ pub async fn start(context: Context<Config>) -> Result<Router, BoxError> {
             .max_connections(config.database.max_connections)
             .acquire_timeout(ACQUIRE_TIMEOUT),
     )?;
-    let ping = db.clone();
+    let platform = PlatformDb::connect_lazy(
+        config.platform_role().connect_options(),
+        PgPoolOptions::new()
+            .max_connections(PLATFORM_CONNECTIONS)
+            .acquire_timeout(ACQUIRE_TIMEOUT),
+    )?;
+    let (ping_db, ping_platform) = (db.clone(), platform.clone());
     context.health().add_check("postgres", move || {
-        let db = ping.clone();
-        async move { db.ping().await }
+        let (db, platform) = (ping_db.clone(), ping_platform.clone());
+        async move {
+            db.ping().await?;
+            platform.ping().await
+        }
     });
     MigrationCheck::new(&schema::SCHEMA, db.pool().clone()).register(context.health());
+    purge::spawn(&context, db.pool().clone(), platform, config.purge.interval);
     let keys = PublishedKeys::watch(
         &context,
         config.platform.internal_identity_keys_file.clone(),

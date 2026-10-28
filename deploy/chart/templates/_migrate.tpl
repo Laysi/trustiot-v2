@@ -84,13 +84,15 @@ tenants (service-kit's PlatformDb), which every outbox consumer needs to read it
 events. tools/migrate creates a platform role for every service its registry marks, but a role
 logs in only while a Secret is bound to it, and the chart binds one only to the services listed
 here: a platform role nobody logs in with stays NOLOGIN. identity is listed because it keeps
-the event log (Laysi/trustiot-v2#130) and reads the events it records as its platform role.
+the event log (Laysi/trustiot-v2#130) and reads the events it records as its platform role, and
+assistant because its scheduled purge deletes the conversations deleted more than 30 days ago,
+across tenants, as its platform role (Laysi/trustiot-v2#645).
 tools/migrate/tests/registry.rs checks this list against the registry: every consumer is in it,
 and nothing without a platform role is.
 Returns a YAML list; use with fromYamlArray.
 */}}
 {{- define "trustiot.migrate.platformLogins" -}}
-{{- list "assets" "certs" "identity" "ingest" "telemetry-query" | toYaml -}}
+{{- list "assets" "assistant" "certs" "identity" "ingest" "telemetry-query" | toYaml -}}
 {{- end -}}
 
 {{/*
