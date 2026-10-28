@@ -1,0 +1,11 @@
+evidence: broker docker.io/library/eclipse-mosquitto:2.1.2-alpine@sha256:38c0da4f2ef84284d47b3b3eeea1cb3bdeabe81ee10caf0cd5c5ff61ee3ea408 with the chart's mosquitto.conf and gateway listener, dynamic-security file from migrate::mqtt_accounts::reconcile (3 clients, 5 roles)
+evidence: certs connected as service:certs and compared: nothing registered, nothing to change
+evidence: gw-633-a registered (serial 4ef96353f12f7aa3a8796f87b1c26df4), not bound: CONNACK 0x00, PUBACK 0x87 on trustiot/v1/gw/gw-633-a/up/status
+evidence: gw-633-a bound: the same connection's publish 10 got PUBACK 0x10; service logged `changed a gateway's broker permissions` hardware_id=gw-633-a action=added
+evidence: gw-633-a bound: PUBLISH own up/telemetry -> 0x10, SUBSCRIBE own down/config -> 0x01, PUBLISH gw-633-b up/telemetry -> 0x87, SUBSCRIBE gw-633-b down/config -> 0x87; gw-633-b: own up/status -> 0x10, gw-633-a up/status -> 0x87
+evidence: no change: 3 whole comparisons (`the broker's gateway permissions match postgres`), no `changed a gateway's broker permissions` line, dynamic-security file sha256 0302f401ecfe33c0202df7147e6e9acbffbc0fbeb708b5429ecd413c76a1aaf5 before and after
+evidence: after the restart with the chart's entries and gw-633-ghost: gateway clients ["gw-633-a", "gw-633-b"] (each with trustiot-gateway only), gw-633-ghost removed; service accounts ["service:certs", "service:gateway-ops", "service:ingest"] and 5 roles unchanged; file read right after the restart had 4 clients
+evidence: gw-633-a after the restart: PUBACK 0x10
+evidence: 275361 bytes of service output at trace: none of the 25 8-character pieces of the broker password
+test the_service_keeps_the_brokers_gateway_clients_in_line_with_postgres ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 12.66s
