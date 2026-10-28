@@ -8,7 +8,8 @@
 //! lock granted, starts the second process, and waits until the second logs that it skipped the
 //! round because another replica holds the lock; the second opened no platform transaction. Then
 //! the gate opens, and the first round deletes the expired conversation and logs how many it
-//! deleted. No step waits a fixed time: each waits for what it names.
+//! deleted, and no log line of either process has its ID, tenant or title. No step waits a fixed
+//! time: each waits for what it names.
 //!
 //! Its own test binary, so its own Postgres: the trigger would hold every other test's purge.
 //! Starts a throwaway Postgres with TLS (podman or docker); skipped without either unless `CI`
@@ -77,6 +78,9 @@ const COUNT_ROWS: &str = "SELECT
 const SKIPPED: &str = "scheduled job skipped; another replica holds its lock";
 /// What a finished round logs.
 const PURGED: &str = "purged expired conversations";
+/// The purged conversation's title: no log line of either process may have it.
+const TITLE_MARKER: &str = "PURGED-TITLE-MARKER-7c41";
+
 /// What `PlatformDb::begin` logs for every transaction.
 const PLATFORM_ACCESS: &str = "platform database access";
 
@@ -134,6 +138,16 @@ async fn one_replica_purges_at_a_time() {
     store::create(&mut tx, &conversation)
         .await
         .expect("store it");
+    let named = store::set_title(
+        &mut tx,
+        owner.principal(),
+        id,
+        &format!("Meters {TITLE_MARKER}"),
+        store::TitleSource::User,
+    )
+    .await
+    .expect("name it");
+    assert!(named, "the title is stored");
     store::delete(&mut tx, owner.principal(), id)
         .await
         .expect("delete it");
@@ -217,15 +231,19 @@ async fn one_replica_purges_at_a_time() {
         .await
         .expect("count its rows");
     assert_eq!(rows, 0, "purged with its messages");
-    let line = first.stdout.text();
-    assert!(
-        !line.contains(&id.to_string()),
-        "no conversation ID in the log"
-    );
-    assert!(
-        !line.contains(&owner.tenant.to_string()),
-        "no tenant in the log"
-    );
+    for (replica, process) in [("first", &first), ("second", &second)] {
+        let log = format!("{}\n{}", process.stdout.text(), process.stderr.text());
+        for (what, text) in [
+            ("conversation ID", id.to_string()),
+            ("tenant", owner.tenant.to_string()),
+            ("title", TITLE_MARKER.to_owned()),
+        ] {
+            assert!(
+                !log.contains(&text),
+                "no {what} in the {replica} replica's log"
+            );
+        }
+    }
     assert!(
         second.stdout.messages(PURGED).is_empty(),
         "the second never ran a round"

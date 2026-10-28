@@ -306,6 +306,24 @@ impl Api {
         assert_eq!(moved, 1, "the conversation to move back exists");
     }
 
+    /// Fails unless `request` answers `user` byte for byte what `missing`, the same request for
+    /// an ID that does not exist, gets: the one 404 (see [`seen`]).
+    async fn expect_as_missing(
+        &self,
+        user: &User,
+        (method, path, body): (Method, String, Option<Value>),
+        (missing_method, missing_path, missing_body): (Method, String, Option<Value>),
+    ) {
+        assert_eq!(method, missing_method, "the same request");
+        assert_eq!(body, missing_body, "the same request");
+        let reply = self.call(user, method.clone(), &path, body.as_ref()).await;
+        let nobodys = self
+            .call(user, method.clone(), &missing_path, body.as_ref())
+            .await;
+        assert_eq!(reply.status, 404, "{method} {path}: {}", reply.body);
+        assert_eq!(seen(&reply), seen(&nobodys), "{method} {path}");
+    }
+
     /// Starts a conversation through the API and returns the response, whatever it is.
     async fn try_start(&self, user: &User) -> Reply {
         self.call(user, Method::POST, CONVERSATIONS, Some(&json!({})))
@@ -797,9 +815,13 @@ async fn rename_archive_and_the_pages_of_the_list() {
         Value::Null,
         "the refused updates archived nothing"
     );
-    api.call(&owner, Method::GET, &conversation("not-a-uuid"), None)
-        .await
-        .expect_error(404, "not_found", "error.not_found");
+    // A path ID that is not a UUID is the one 404 too, on every request by ID.
+    for (request, missing) in requests_by_id("not-a-uuid")
+        .into_iter()
+        .zip(requests_by_id(Uuid::now_v7()))
+    {
+        api.expect_as_missing(&owner, request, missing).await;
+    }
 
     // Archive: out of the default list, in the archived one.
     let archived = api
@@ -1042,10 +1064,14 @@ async fn delete_the_deleted_list_and_restore() {
     assert_eq!(deleted.body, "", "a delete answers without a body");
     assert_eq!(deleted.header("content-type"), None);
     assert_eq!(api.ids(&owner, CONVERSATIONS).await, [other]);
-    for (method, path, body) in requests_by_id(id).into_iter().take(4) {
-        api.call(&owner, method, &path, body.as_ref())
-            .await
-            .expect_error(404, "not_found", "error.not_found");
+    // Every request by ID but restore gets the one 404, byte for byte as for an ID that does
+    // not exist.
+    for (request, missing) in requests_by_id(id)
+        .into_iter()
+        .zip(requests_by_id(Uuid::now_v7()))
+        .take(4)
+    {
+        api.expect_as_missing(&owner, request, missing).await;
     }
     let listed = api.call(&owner, Method::GET, DELETED, None).await;
     listed.expect_status(200);
@@ -1084,9 +1110,10 @@ async fn delete_the_deleted_list_and_restore() {
     // Back in its place: its last activity is its last question, before `other` started.
     assert_eq!(api.ids(&owner, CONVERSATIONS).await, [other, id]);
     assert!(api.ids(&owner, DELETED).await.is_empty());
-    api.call(&owner, Method::POST, &restore_path(id), Some(&json!({})))
-        .await
-        .expect_error(404, "not_found", "error.not_found");
+    // Restoring a conversation that is not deleted is the one 404.
+    let restore = |id: Uuid| (Method::POST, restore_path(id), Some(json!({})));
+    api.expect_as_missing(&owner, restore(id), restore(Uuid::now_v7()))
+        .await;
 
     // Past 30 days: not in the deleted list, not restorable.
     api.call(&owner, Method::DELETE, &conversation(id), None)
@@ -1094,9 +1121,8 @@ async fn delete_the_deleted_list_and_restore() {
         .expect_status(204);
     api.backdate(id, Utc::now() - TimeDelta::days(31)).await;
     assert!(api.ids(&owner, DELETED).await.is_empty());
-    api.call(&owner, Method::POST, &restore_path(id), Some(&json!({})))
-        .await
-        .expect_error(404, "not_found", "error.not_found");
+    api.expect_as_missing(&owner, restore(id), restore(Uuid::now_v7()))
+        .await;
 
     // A purge round removes it with its messages; a recently deleted one and a live one stay.
     // Every service of this test binary also runs a round when it starts, and that may be the
