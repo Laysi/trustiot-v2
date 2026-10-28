@@ -31,7 +31,7 @@ use std::collections::BTreeSet;
 use std::fmt;
 use std::future::Future;
 
-use contract::{ServiceName, TenantGrant, TenantId, TenantRole};
+use contract::{ServiceName, TenantGrant, TenantId, TenantRole, UserId};
 use service_kit::identity::UserIdentity;
 use uuid::Uuid;
 
@@ -73,21 +73,33 @@ impl Side {
     }
 }
 
-/// The two tenants of one run, new for every run, so a database shared between runs works.
+/// The two tenants of one run and the user of its tokens, new for every run, so a database
+/// shared between runs works.
 #[derive(Clone, Copy, Debug)]
 pub struct World {
     a: TenantId,
     b: TenantId,
+    user: UserId,
 }
 
 impl World {
-    /// Two new tenants.
+    /// Two new tenants and a new user.
     #[must_use]
     pub fn new() -> Self {
         Self {
             a: TenantId::generate(),
             b: TenantId::generate(),
+            user: UserId::generate(),
         }
+    }
+
+    /// The user every token of the run names ([`Attack::claims`]): one person who is an admin
+    /// of both tenants, as a user may belong to several. The rows a store seeds for an owner
+    /// (`pg_table!(..., owned)`) belong to this user in both tenants, so an endpoint that serves
+    /// only the caller's own rows has rows to serve, and only the tenant keeps the two apart.
+    #[must_use]
+    pub fn user(&self) -> UserId {
+        self.user
     }
 
     /// The tenant of `side`.
@@ -257,14 +269,18 @@ impl<'a> Attack<'a> {
     }
 
     /// Claims for an admin of `side`'s tenant (the most privileged tenant user), or for a user
-    /// without a tenant.
+    /// without a tenant; always the run's user ([`World::user`]), so the same person attacks
+    /// the other tenant's rows, and its own rows in the other tenant.
     #[must_use]
     pub fn claims(&self, side: Option<Side>) -> contract::InternalClaims {
+        let world = self.seeded.world();
         let grant = side.map(|side| TenantGrant {
-            id: self.seeded.world().tenant(side),
+            id: world.tenant(side),
             role: TenantRole::Admin,
         });
-        TestIssuer::claims(self.service, grant)
+        let mut claims = TestIssuer::claims(self.service, grant);
+        claims.sub = world.user();
+        claims
     }
 
     /// The verified identity of an admin of the attacker's tenant.
@@ -678,6 +694,25 @@ mod tests {
                 .any(|marker| seeded.markers(Side::A).contains(marker)),
             "the tenants share no marker"
         );
+    }
+
+    #[test]
+    fn every_token_of_a_run_names_its_user() {
+        let seeded = seeded();
+        let issuer = TestIssuer::new();
+        let user = seeded.world().user();
+        for attacker in [Side::A, Side::B] {
+            let attack = Attack::new(&seeded, attacker, &issuer, ServiceName::Assistant);
+            for side in [Some(Side::A), Some(Side::B), None] {
+                let claims = attack.claims(side);
+                assert_eq!(claims.sub, user, "{attacker:?} as {side:?}");
+                assert_eq!(
+                    claims.tenant.map(|grant| (grant.id, grant.role)),
+                    side.map(|side| (seeded.world().tenant(side), TenantRole::Admin))
+                );
+            }
+        }
+        assert_ne!(World::new().user(), user, "each run has a user of its own");
     }
 
     #[test]
