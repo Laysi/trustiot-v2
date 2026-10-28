@@ -16,13 +16,17 @@
 //!   RS485 converter, with one shared connection per endpoint (rebuild checklist F1, F2, F5).
 //! - [`polling`]: polls each device on a fixed schedule with bounded waits, reconnect backoff
 //!   and a per-device watchdog that closes the connection of a device that stopped answering
-//!   (F4); not the systemd watchdog. The service does not run it yet.
+//!   (F4); not the systemd watchdog.
+//! - [`desired`]: receives the desired configuration on `down/config`, applies it atomically
+//!   (one polling loop per device, unchanged devices untouched), saves it on the data partition
+//!   so the gateway polls with it after a restart without the cloud, and reports the outcome
+//!   (rebuild checklist E1).
 //!
-//! Scheduling the polls in the service, the offline buffer and configuration apply build on
-//! these (`README.md` lists what is where).
+//! The offline buffer builds on these (`README.md` lists what is where).
 
 pub mod backoff;
 pub mod config;
+pub mod desired;
 pub mod heartbeat;
 pub mod identity;
 pub mod link;
