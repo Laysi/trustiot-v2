@@ -670,17 +670,23 @@ pub async fn purge_expired(
 }
 
 /// The keys of the up to `limit` expired conversations that [`purge_expired`] with the same
-/// `skipped` would remove next, oldest first. It reads only keys and locks nothing, so it never
-/// waits for a row.
+/// `skipped` would remove next, oldest first. It reads only keys and locks no row, so a row
+/// another session holds does not make it wait. A table lock does: an `ALTER TABLE`, a
+/// `LOCK TABLE`, a `VACUUM FULL` that holds or queues for ACCESS EXCLUSIVE on the table. So it
+/// sets the transaction's `lock_timeout` to [`PURGE_LOCK_TIMEOUT`] first, like
+/// [`purge_expired`]: the purge holds the job lock and a platform connection while it waits, and
+/// never waits for a lock without a bound.
 ///
 /// # Errors
 ///
-/// A database failure, or a key that does not read back as a UUID ([`StoreError::Corrupt`]).
+/// A database failure, or a key that does not read back as a UUID ([`StoreError::Corrupt`]);
+/// [`StoreError::sqlstate`] is [`LOCK_NOT_AVAILABLE`] after the lock wait.
 pub async fn expired_conversations(
     tx: &mut PlatformTransaction,
     limit: u32,
     skipped: &[ExpiredConversation],
 ) -> Result<Vec<ExpiredConversation>, StoreError> {
+    set_lock_timeout(tx, PURGE_LOCK_TIMEOUT).await?;
     let (tenants, ids) = skipped_keys(skipped);
     let rows = sqlx::query(EXPIRED)
         .bind(DELETED_RETENTION_DAYS)
