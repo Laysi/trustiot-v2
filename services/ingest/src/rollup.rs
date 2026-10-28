@@ -4,13 +4,13 @@
 //! migration Job runs (tools/migrate compiles this file in as its `rollup` module). The
 //! reasoning is in README.md, section 「彙總表」.
 //!
-//! # The I1 rewrite (contract for Laysi/trustiot-v2#641)
+//! # The I1 rewrite
 //!
-//! Nothing in this repository writes, deletes or rewrites telemetry rows yet: the ingest
-//! service's write path and its I1 rewrite are built in Laysi/trustiot-v2#641 (part of
-//! Laysi/trustiot-v2#91), which must follow the steps below and merges after this file. Until
-//! then every batch reaches ClickHouse as INSERTs only (the lab dataset loader included), and
-//! the views aggregate each in full.
+//! The ingest service's write path (`src/telemetry/`, Laysi/trustiot-v2#641) follows the
+//! steps below for every batch above its stream's high-water mark: it deletes the rows an
+//! earlier attempt left (step 2) only when there are any, and always reconciles (step 4), since
+//! an attempt that ended after its DELETE leaves no rows to find. The lab dataset loader still
+//! writes INSERTs only, and the views aggregate each in full.
 //!
 //! The materialized views add every block inserted into `trustiot.telemetry` to the aggregates,
 //! but a `DELETE FROM` does not reach them. When the ingest service rewrites a batch that has no
@@ -171,10 +171,10 @@ pub fn stream_query_id(gateway: &str, stream: &str) -> String {
 /// waits for its flush, and one that does not wait lands after the statements that follow it;
 /// switching to asynchronous inserts requires verifying step 1 again first.
 ///
-/// Only the tests call it so far: no code writes telemetry yet. It is the contract for the
-/// ingest service's write path and its I1 rewrite (Laysi/trustiot-v2#641), which must send every
-/// statement of a stream with these settings, every INSERT and the rewrite's DELETE, INSERT and
-/// reconcile, over a client whose request timeout is at least [`CLIENT_TIMEOUT_SECONDS`].
+/// The telemetry path sends every statement of a stream with these settings
+/// (`src/telemetry/store.rs`): the high-water mark read, every INSERT and the rewrite's
+/// DELETE, INSERT and reconcile, over a client whose request timeout is at least
+/// [`CLIENT_TIMEOUT_SECONDS`] (`REQUEST_TIMEOUT` in `src/clickhouse.rs`).
 #[must_use]
 pub fn stream_settings(gateway: &str, stream: &str) -> [(&'static str, String); 5] {
     [

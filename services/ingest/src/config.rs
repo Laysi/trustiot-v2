@@ -1,5 +1,4 @@
-//! The ingest service's configuration (services/ingest/README.md, "設定"). The MQTT settings
-//! arrive with the telemetry path (Laysi/trustiot-v2#641).
+//! The ingest service's configuration (services/ingest/README.md, "設定").
 
 use std::fmt;
 use std::path::PathBuf;
@@ -9,14 +8,15 @@ use service_kit::config::{Invalid, Validate};
 use service_kit::postgres::{PostgresConfig, SslMode};
 
 /// Fewest connections of the service role's pool: one for the binding consumer's delivery, one
-/// for the telemetry path.
+/// for the telemetry path's stream locks (it handles as many batches at once as the pool has
+/// connections beyond the consumer's, [`crate::telemetry::concurrency`]).
 pub const MIN_DATABASE_CONNECTIONS: u32 = 2;
 
 /// Most connections of the service role's pool per replica.
 pub const MAX_DATABASE_CONNECTIONS: u32 = 100;
 
-/// The service's settings: the platform settings the chart sets, the database roles, and the
-/// service's ClickHouse account.
+/// The service's settings: the platform settings the chart sets, the database roles, the
+/// service's ClickHouse account, and its broker account.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Config {
@@ -26,6 +26,13 @@ pub struct Config {
     pub database: Database,
     /// The service's ClickHouse account.
     pub clickhouse: ClickHouse,
+    /// `mqtt.*`: the broker's service port and the service's account `service:ingest`
+    /// (crates/mqtt-client, "設定"; deploy/chart/README.md, "MQTT broker"). Required: the service
+    /// has no use without its telemetry. No deployment runs the service yet (the chart has
+    /// `services.ingest.enabled: false` and there is no ingest image under deploy/images); its
+    /// image and the chart's settings for it, these included, come together in
+    /// Laysi/trustiot-v2#642.
+    pub mqtt: mqtt_client::Config,
 }
 
 /// The platform settings the service reads. No `deny_unknown_fields`: every service gets every
@@ -199,6 +206,15 @@ impl Validate for Config {
                  query",
             ));
         }
+        if let Err(error) = self.mqtt.validate() {
+            let key = match error {
+                mqtt_client::ConfigError::Host => "mqtt.host",
+                mqtt_client::ConfigError::Port => "mqtt.port",
+                mqtt_client::ConfigError::Username => "mqtt.username",
+                mqtt_client::ConfigError::PasswordFile => "mqtt.password_file",
+            };
+            return Err(Invalid::new(key, error.to_string()));
+        }
         if url.starts_with("https://") && self.platform.clickhouse_ca_file.is_none() {
             return Err(Invalid::new(
                 "platform.clickhouse_ca_file",
@@ -260,6 +276,12 @@ mod tests {
                 username: "trustiot_ingest_writer".to_owned(),
                 password: "p".to_owned(),
             },
+            mqtt: mqtt_client::Config {
+                host: "mqtt-broker".to_owned(),
+                port: mqtt_client::DEFAULT_PORT,
+                username: "service:ingest".to_owned(),
+                password_file: PathBuf::from("/etc/trustiot/mqtt/ingest"),
+            },
         }
     }
 
@@ -283,5 +305,9 @@ mod tests {
         empty.clickhouse.password.clear();
         let error = empty.validate().expect_err("no password");
         assert_eq!(error.key, "clickhouse.password");
+        let mut gateway = config("http://clickhouse:8123", None);
+        gateway.mqtt.username = "gw-0001".to_owned();
+        let error = gateway.validate().expect_err("not a service account");
+        assert_eq!(error.key, "mqtt.username");
     }
 }

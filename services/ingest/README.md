@@ -118,6 +118,7 @@ DDL 是 `migrations/clickhouse/` 的 SQL 檔，部署時由 migration Job（Lays
 | `0010_telemetry_rollups.sql` | 1 分鐘與 1 小時彙總表 `trustiot.telemetry_1m`、`telemetry_1h`，填入它們的 materialized view 與這些 view 的 DEFINER 帳號 `trustiot_rollup_definer`，租戶讀的 view `tenant_telemetry_1m`、`tenant_telemetry_1h`，以及補進既有資料與檢查一致性用的 backfill view（補資料由 migration Job 在套用之後執行；Laysi/trustiot-v2#141；見下方「彙總表」） |
 | `0011_queryable_period.sql` | 可查期間由 ClickHouse 強制：租戶 view 的 DEFINER 與租戶角色在三張表、三個 view 上的 row policy 加上時間窗條件，窗長取自每個租戶帳號的 `CONST` 設定（Laysi/trustiot-v2#143；見下方「可查期間」） |
 | `0012_gateway_stream_ids.sql` | `telemetry` 的 `gateway_id`、`stream_id` 改成文字（協定的 `GatewayId`、`StreamId`）並加上 ID 格式的 constraint；新的批次完成表 `trustiot.stream_commits`（以閘道器 + 串流為鍵）與它的權限、row policy；收回 ingest 對 `batch_commits` 的權限；以 `CREATE OR REPLACE VIEW` 重建租戶 view，欄位型別跟著改（Laysi/trustiot-v2#639） |
+| `0013_tenant_id_comment.sql` | 更正 `telemetry.tenant_id` 的欄位說明：租戶取自 ingest 的閘道器綁定表，不是閘道器的連線憑證（`COMMENT COLUMN`，只改 metadata，不重寫資料；Laysi/trustiot-v2#641） |
 
 檔案格式（migration Job 與測試都依賴）：
 
