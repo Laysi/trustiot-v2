@@ -20,7 +20,9 @@
 //! - A request that waits for a conversation another session holds gives up after the request's
 //!   lock timeout with 503 and changes nothing.
 //! - A database failure answers 503 with nothing of the database's text, and the log has none of
-//!   it either: only the SQLSTATE.
+//!   it either: only the SQLSTATE. The index that makes it fails is added and dropped
+//!   `CONCURRENTLY`, so no request of the other tests here ever waits behind that DDL; the test
+//!   proves it with a request served while the drop waits.
 //!
 //! Starts a throwaway Postgres with TLS (podman or docker); skipped without either unless `CI`
 //! is set.
@@ -40,7 +42,7 @@ use contract::identity::TenantRole;
 use contract::{ServiceName, TenantId, UserId};
 use reqwest::Method;
 use serde_json::{Value, json};
-use service::{Reply, Service, User};
+use service::{Reply, Service, User, wait_for};
 use service_kit::tenant::{PlatformDb, TenantDb};
 use sqlx::postgres::PgPoolOptions;
 use sqlx::{Connection, Row};
@@ -1388,12 +1390,32 @@ const LEAK_CANARY_INDEX: &str = "leak_canary_one_conversation_per_user";
 /// database of its own, and no other test uses this ID.
 const LEAK_CANARY_USER: Uuid = Uuid::from_u128(0x6a5e_c0de_0645_4000_8000_0000_0000_0001);
 
-/// Adds the canary index; its name and user are the constants above.
-const ADD_LEAK_CANARY: &str = "CREATE UNIQUE INDEX leak_canary_one_conversation_per_user
+/// Adds the canary index; its name and user are the constants above. The other tests of this
+/// file share the database, so the DDL must not make their requests wait: `CONCURRENTLY` takes
+/// SHARE UPDATE EXCLUSIVE on the table, which no read or write conflicts with, where a plain
+/// `CREATE INDEX` takes SHARE and holds every write until it is built. It waits for the other
+/// tests' open transactions instead, which slows only this test.
+const ADD_LEAK_CANARY: &str =
+    "CREATE UNIQUE INDEX CONCURRENTLY leak_canary_one_conversation_per_user
     ON assistant.conversations (tenant_id, user_id)
     WHERE user_id = '6a5ec0de-0645-4000-8000-000000000001'::uuid";
 
-const DROP_LEAK_CANARY: &str = "DROP INDEX assistant.leak_canary_one_conversation_per_user";
+/// Drops it, `CONCURRENTLY` for the same reason: a plain `DROP INDEX` takes ACCESS EXCLUSIVE on
+/// the table, so while it waits for one open transaction every request after it waits too,
+/// until the request's lock timeout (503) or the purge's (a round that purges nothing).
+const DROP_LEAK_CANARY: &str =
+    "DROP INDEX CONCURRENTLY assistant.leak_canary_one_conversation_per_user";
+
+/// Reads the table in an open transaction, as a request in flight does (ACCESS SHARE).
+const READ_CONVERSATIONS: &str = "SELECT count(*) FROM assistant.conversations";
+
+/// Whether the session `$2` waits for a lock that the session `$1` holds.
+const WAITS_FOR: &str = "SELECT $1 = ANY (pg_blocking_pids($2))";
+
+/// How long the canary's drop may take to reach the open transaction of the test: it waits for
+/// every transaction that uses the table, the other tests' included (the longest holds a row for
+/// a few seconds), so the bound is generous.
+const DROP_WAIT_LIMIT: Duration = Duration::from_secs(120);
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_database_failure_shows_nothing_of_the_database() {
@@ -1469,12 +1491,60 @@ async fn a_database_failure_shows_nothing_of_the_database() {
         "the failed start stored nothing"
     );
 
-    sqlx::raw_sql(DROP_LEAK_CANARY)
-        .execute(&mut admin)
+    // The drop waits for every transaction that uses the table, here one the test holds open.
+    // Requests that come meanwhile are served at once; behind a plain DROP INDEX they would wait
+    // for its ACCESS EXCLUSIVE until the request's lock timeout and answer 503.
+    let mut reader = api.product.superuser().await;
+    let mut in_flight = reader.begin().await.expect("a superuser transaction");
+    sqlx::query(READ_CONVERSATIONS)
+        .execute(&mut *in_flight)
         .await
+        .expect("read the table");
+    let reader_pid: i32 = sqlx::query_scalar("SELECT pg_backend_pid()")
+        .fetch_one(&mut *in_flight)
+        .await
+        .expect("the reader's session");
+    let dropper_pid: i32 = sqlx::query_scalar("SELECT pg_backend_pid()")
+        .fetch_one(&mut admin)
+        .await
+        .expect("the dropper's session");
+    let dropping = tokio::spawn(async move {
+        sqlx::raw_sql(DROP_LEAK_CANARY)
+            .execute(&mut admin)
+            .await
+            .map(|_| ())
+    });
+    wait_for(
+        "the canary's drop waiting for the open transaction",
+        DROP_WAIT_LIMIT,
+        || async {
+            let mut observer = api.product.superuser().await;
+            let waits: bool = sqlx::query_scalar(WAITS_FOR)
+                .bind(reader_pid)
+                .bind(dropper_pid)
+                .fetch_one(&mut observer)
+                .await
+                .expect("read the lock waits");
+            waits.then_some(())
+        },
+    )
+    .await;
+    let colleague = User::new(owner.tenant, TenantRole::Viewer);
+    let started = Instant::now();
+    let read = api.call(&colleague, Method::GET, CONVERSATIONS, None).await;
+    let start = api.try_start(&colleague).await;
+    let served_in = started.elapsed();
+    read.expect_status(200);
+    start.expect_status(201);
+    assert!(!dropping.is_finished(), "the drop still waits");
+    in_flight.commit().await.expect("end the open transaction");
+    dropping
+        .await
+        .expect("the drop's task")
         .expect("drop the canary index");
     println!(
-        "POST {CONVERSATIONS} after a unique violation: 503 {}; logged {logged}",
+        "POST {CONVERSATIONS} after a unique violation: 503 {}; logged {logged}; while the \
+         canary's drop waited, a read and a start answered 200 and 201 in {served_in:?}",
         failed.body
     );
 }
