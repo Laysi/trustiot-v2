@@ -5760,6 +5760,32 @@ describe("service-to-service authorization (decision 27)", () => {
     expect(result.code).not.toBe(0);
     expect(result.stderr).toMatch(/services\.smoke-echo: probes\.readiness uses port "metrics", which is not in ports/);
   });
+
+  // The node source reaches a pod's probe ports without mTLS or AuthorizationPolicy, so a probe on
+  // a port that only its own callers may reach would open it to every process on the node: the
+  // identity service's token exchange, the certs service's broker certificate issuance and the AI
+  // gateway's admin API. By name or by number, in any probe kind and handler.
+  test.each([
+    ["identity", "readiness by name", { httpGet: { path: "/readyz", port: "token-exchange" } }, [], /services\.identity: probes\.readiness uses port "token-exchange"/],
+    ["identity", "liveness by number", { tcpSocket: { port: 8082 } }, [], /services\.identity: probes\.liveness uses port 8082, the port token-exchange/],
+    ["certs", "startup by name", { tcpSocket: { port: "broker-certs" } }, [], /services\.certs: probes\.startup uses port "broker-certs"/],
+    ["certs", "readiness by number", { httpGet: { path: "/readyz", port: 8082 } }, [], /services\.certs: probes\.readiness uses port 8082, the port broker-certs/],
+    ["ai-gateway", "readiness by name", { httpGet: { path: "/readyz", port: "admin" } }, [], /services\.ai-gateway: probes\.readiness uses port "admin"/],
+    ["ai-gateway", "liveness by number", { grpc: { port: 8082 } }, [], /services\.ai-gateway: probes\.liveness uses port 8082, the port admin/],
+    [
+      "ai-gateway",
+      "liveness by the number of a moved admin port",
+      { tcpSocket: { port: 9182 } },
+      ["--set-json", 'services.ai-gateway.ports=[{"name":"http","containerPort":8080},{"name":"admin","containerPort":9182}]'],
+      /services\.ai-gateway: probes\.liveness uses port 9182, the port admin/,
+    ],
+  ] as [string, string, object, string[], RegExp][])("a %s probe on its port with its own Service and policies fails the render (%s)", (service, label, probe, extra, expected) => {
+    const kind = label.split(" ")[0];
+    const result = helmTemplate([...SHAPES.saas], [...enableAllServices, ...extra, "--set-json", `services.${service}.probes.${kind}=${JSON.stringify(probe)}`]);
+    expect(result.code).not.toBe(0);
+    expect(result.stderr).toMatch(expected);
+    expect(result.stderr).toMatch(/has a Service and policies of its own: the node reaches a pod's probe ports without mTLS or AuthorizationPolicy/);
+  });
 });
 
 describe("AI gateway settings (decisions 15 and 28, Laysi/trustiot-v2#536)", () => {

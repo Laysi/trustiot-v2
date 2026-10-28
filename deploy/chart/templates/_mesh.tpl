@@ -17,6 +17,20 @@ health port, which serves /healthz and /readyz only, so the node never reaches t
 {{- end -}}
 
 {{/*
+Ports of a service that have a Service and policies of their own, so that only their own callers
+reach them: the identity service's token exchange (templates/token-exchange.yaml,
+Laysi/trustiot-v2#106), the certs service's MQTT broker certificate issuance
+(templates/certs-broker.yaml, Laysi/trustiot-v2#557) and the AI gateway's admin API
+(templates/ai-gateway-admin.yaml, Laysi/trustiot-v2#607). The service's own Service leaves them
+out, no ingress route reaches them, and no probe may use them: the node source above would reach
+them without mTLS or AuthorizationPolicy ("trustiot.service.deployment").
+Returns YAML {<service>: <port name>}; use with fromYaml.
+*/}}
+{{- define "trustiot.mesh.ownPolicyPorts" -}}
+{{- dict "identity" "token-exchange" "certs" "broker-certs" "ai-gateway" "admin" | toYaml -}}
+{{- end -}}
+
+{{/*
 Container ports and probes of an enabled service or in-cluster component, as its pod spec
 renders them. A service's come from "trustiot.service.containerPorts" (its ports plus the health
 port) and its probes, as its Deployment renders them. A component <name> defines

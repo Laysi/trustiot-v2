@@ -76,12 +76,12 @@ spec:
   selector:
     {{- include "trustiot.selectorLabels" . | nindent 4 }}
   ports:
-    {{- range .config.ports }}
     {{- /* The identity service's token exchange, the certs service's MQTT broker certificate
     issuance and the AI gateway's admin API have a Service of their own
-    (templates/token-exchange.yaml, Laysi/trustiot-v2#106; templates/certs-broker.yaml,
-    Laysi/trustiot-v2#557; templates/ai-gateway-admin.yaml, Laysi/trustiot-v2#607). */}}
-    {{- if not (or (and (eq $.name "identity") (eq .name "token-exchange")) (and (eq $.name "certs") (eq .name "broker-certs")) (and (eq $.name "ai-gateway") (eq .name "admin"))) }}
+    ("trustiot.mesh.ownPolicyPorts"). */}}
+    {{- $ownPort := get (include "trustiot.mesh.ownPolicyPorts" . | fromYaml) .name }}
+    {{- range .config.ports }}
+    {{- if ne .name $ownPort }}
     - name: {{ .name }}
       port: {{ .servicePort | default .containerPort }}
       targetPort: {{ .name }}
@@ -307,11 +307,32 @@ under the service's own prefix. */ -}}
 {{- range $containerPorts -}}
 {{- $portNames = append $portNames .name -}}
 {{- end -}}
+{{- /* A port with a Service and policies of its own ("trustiot.mesh.ownPolicyPorts") is never
+probed, by name or by number: the node source reaches every probe port without mTLS or
+AuthorizationPolicy, so a probe there would open it to every process on the node. */ -}}
+{{- $ownPort := get (include "trustiot.mesh.ownPolicyPorts" . | fromYaml) .name -}}
+{{- $ownNumber := 0 -}}
+{{- range $containerPorts -}}
+{{- if and $ownPort (eq .name $ownPort) -}}
+{{- $ownNumber = int .containerPort -}}
+{{- end -}}
+{{- end -}}
 {{- range $kind, $probe := $config.probes -}}
 {{- range $handler := list "httpGet" "tcpSocket" "grpc" -}}
 {{- $port := (get $probe $handler | default dict).port -}}
 {{- if and (kindIs "string" $port) (not (has $port $portNames)) -}}
 {{- fail (printf "services.%s: probes.%s uses port %q, which is not in ports" $.name $kind $port) -}}
+{{- end -}}
+{{- $own := "" -}}
+{{- if and $ownPort (kindIs "string" $port) (eq $port $ownPort) -}}
+{{- $own = printf "%q" $port -}}
+{{- else if and $ownNumber (or (kindIs "float64" $port) (kindIs "int" $port) (kindIs "int64" $port)) -}}
+{{- if eq (int $port) $ownNumber -}}
+{{- $own = printf "%d, the port %s" $ownNumber $ownPort -}}
+{{- end -}}
+{{- end -}}
+{{- if $own -}}
+{{- fail (printf "services.%s: probes.%s uses port %s, which has a Service and policies of its own: the node reaches a pod's probe ports without mTLS or AuthorizationPolicy, so every process on the node could call it; probe the health port (README.md, 「節點來源」)" $.name $kind $own) -}}
 {{- end -}}
 {{- end -}}
 {{- end -}}

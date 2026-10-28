@@ -19,6 +19,12 @@ Laysi/trustiot-v2#608), may call it; the services that forward model calls throu
   matches;
 - a NetworkPolicy that admits HBONE from the identity service's pods. It cannot see the
   application port inside the tunnel, so the port split is the AuthorizationPolicy's alone.
+Known exception: the internal identity key rotation CronJob (templates/internal-identity.yaml)
+runs as the identity service's ServiceAccount, so the AuthorizationPolicy admits it too; only
+this NetworkPolicy keeps it out, because its pods do not carry the identity service's selector
+labels. The job never calls the admin API.
+No probe may use the admin port, by name or by number ("trustiot.mesh.ownPolicyPorts"): the node
+source reaches probe ports without mTLS or AuthorizationPolicy.
 Rendered while the AI gateway and the identity service are both enabled; the plan fails the
 render when they are but the gateway has no admin port. Without the identity service nothing
 here renders and the gateway keeps its admin API on loopback ("trustiot.aiGateway.env").

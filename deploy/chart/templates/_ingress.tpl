@@ -136,7 +136,7 @@ Returns YAML {name, port}; use with fromYaml.
 {{- if not $entry -}}
 {{- fail (printf "%s: unknown service %q" .where .service) -}}
 {{- end -}}
-{{- if or (and (eq .service "identity") (eq .port "token-exchange")) (and (eq .service "certs") (eq .port "broker-certs")) (and (eq .service "ai-gateway") (eq .port "admin")) -}}
+{{- if eq .port (get (include "trustiot.mesh.ownPolicyPorts" .root | fromYaml) .service) -}}
 {{- fail (printf "%s: port %q of service %q has a Service and policies of its own; the ingress gateway never reaches it" .where .port .service) -}}
 {{- end -}}
 {{- $config := include "trustiot.serviceConfig" (dict "root" .root "name" .service "values" $entry) | fromYaml -}}
