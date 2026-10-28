@@ -131,7 +131,9 @@ fn adopt(
     created: bool,
 ) -> Result<Provisioned, ProvisionError> {
     let refused = |reason| ProvisionError::Refused { handle, reason };
-    let public = marshal::parse_public_area(&object.area).map_err(refused)?;
+    // Exactly decision 12's template, stricter than `TpmKey::open`: provisioning takes over an
+    // object only if it is what this function would have created.
+    let public = marshal::parse_provisioned_area(&object.area).map_err(refused)?;
     match TpmKey::with_public(worker, handle, public) {
         Ok(key) => Ok(Provisioned { key, created }),
         Err(error @ TpmError::SelfTestFailed) => Err(refused(error)),
@@ -497,6 +499,75 @@ mod tests {
             matches!(result, Err(ProvisionError::Tpm(TpmError::Response(code))) if code.code() == 0x921),
             "{result:?}"
         );
+    }
+
+    /// The recorded ReadPublic of the key, with its public area changed by `edit` (the sizes are
+    /// fixed up; the name is left as recorded, which provisioning does not check).
+    fn key_response_with(edit: impl FnOnce(&mut Vec<u8>)) -> String {
+        let recorded = hex(recorded::READ_PUBLIC_KEY_RESPONSE);
+        let mut area = marshal::parse_read_public_area(&recorded).unwrap().area;
+        // Header (10 bytes), then the TPM2B_PUBLIC's size and the area, then name and
+        // qualifiedName.
+        let rest = recorded[12 + area.len()..].to_vec();
+        edit(&mut area);
+        let mut response = recorded[..10].to_vec();
+        response.extend_from_slice(&u16::try_from(area.len()).unwrap().to_be_bytes());
+        response.extend_from_slice(&area);
+        response.extend_from_slice(&rest);
+        let size = u32::try_from(response.len()).unwrap().to_be_bytes();
+        response[2..6].copy_from_slice(&size);
+        response.iter().map(|byte| format!("{byte:02x}")).collect()
+    }
+
+    /// A change to a public area, for [`key_response_with`].
+    type AreaEdit = Box<dyn FnOnce(&mut Vec<u8>)>;
+
+    #[test]
+    fn a_signing_key_that_differs_from_the_template_is_refused_after_reading_it_only() {
+        // Unchanged, the response is the recorded one and the key is reused.
+        assert_eq!(
+            key_response_with(|_| {}),
+            recorded::READ_PUBLIC_KEY_RESPONSE
+        );
+        // TPMT_PUBLIC: type (0..2), nameAlg (2..4), objectAttributes (4..8), authPolicy (8..).
+        let set_attribute = |bit: u32| {
+            move |area: &mut Vec<u8>| {
+                let attributes = u32::from_be_bytes(area[4..8].try_into().unwrap()) | bit;
+                area[4..8].copy_from_slice(&attributes.to_be_bytes());
+            }
+        };
+        let cases: [(&str, AreaEdit); 5] = [
+            // SHA-384 as the name algorithm.
+            (
+                "name algorithm 0x000c",
+                Box::new(|area| area[2..4].copy_from_slice(&[0x00, 0x0c])),
+            ),
+            ("attributes 0x00040472", Box::new(set_attribute(0x400))), // noDA
+            ("attributes 0x00040872", Box::new(set_attribute(0x800))), // encryptedDuplication
+            ("attributes 0x000400f2", Box::new(set_attribute(0x80))),  // adminWithPolicy
+            // A 32-byte authPolicy.
+            (
+                "32-byte authPolicy",
+                Box::new(|area| {
+                    area.splice(8..10, [0x00, 0x20].into_iter().chain([0xa5; 32]));
+                }),
+            ),
+        ];
+        for (expected, edit) in cases {
+            let response = key_response_with(edit);
+            let (result, sent) = run(&[(&read_public(KEY), &response)]);
+            match result {
+                Err(ProvisionError::Refused { handle, reason }) => {
+                    assert_eq!(handle, KEY);
+                    let reason = reason.to_string();
+                    assert!(reason.contains("not decision 12's key"), "{reason}");
+                    assert!(reason.contains(expected), "{expected:?} in {reason}");
+                }
+                other => panic!("{expected}: expected a refusal, got {other:?}"),
+            }
+            // No test signature, nothing else.
+            assert_eq!(sent.len(), 1, "{expected}");
+        }
     }
 
     #[test]

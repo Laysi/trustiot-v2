@@ -334,6 +334,39 @@ pub(crate) fn matches_template(area: &[u8], template: &[u8]) -> bool {
     coordinate(&mut reader, "x") && coordinate(&mut reader, "y") && reader.finish("unique").is_ok()
 }
 
+/// Checks that `area` is decision 12's key exactly, as provisioning requires before it adopts an
+/// object: [`parse_public_area`]'s checks, then every field before `unique` equal to
+/// [`key_template`], so the name algorithm is SHA-256, the attributes are exactly the five
+/// required ones (no `noDA`, `encryptedDuplication` or any other bit) and there is no
+/// authorization policy. `TpmKey::open` keeps the looser [`parse_public_area`] (decision 12).
+pub(crate) fn parse_provisioned_area(area: &[u8]) -> Result<PublicKey, TpmError> {
+    let public = parse_public_area(area)?;
+    let template = key_template();
+    if matches_template(area, &template) {
+        return Ok(public);
+    }
+    let field = |bytes: &[u8]| -> Result<(u16, u32, usize), TpmError> {
+        let mut reader = Reader::new(bytes);
+        let _type = reader.u16("type")?;
+        let name_alg = reader.u16("nameAlg")?;
+        let attributes = reader.u32("objectAttributes")?;
+        let auth_policy = reader.sized("authPolicy")?;
+        Ok((name_alg, attributes, auth_policy.len()))
+    };
+    let (name_alg, attributes, policy) = field(area)?;
+    let expected = field(&template)?;
+    if (name_alg, attributes, policy) == expected {
+        return Err(unsuitable(
+            "its unique is not a P-256 point with coordinates of 1 to 32 bytes".to_owned(),
+        ));
+    }
+    Err(unsuitable(format!(
+        "it is not decision 12's key: name algorithm {name_alg:#06x}, attributes {attributes:#010x} \
+         and a {policy}-byte authPolicy, where the template has {:#06x}, {:#010x} and no policy",
+        expected.0, expected.1
+    )))
+}
+
 /// The name of an object whose name algorithm is SHA-256 (both templates here): the algorithm
 /// identifier followed by the SHA-256 of its `TPMT_PUBLIC` (Part 1, section 16).
 pub(crate) fn sha256_name(area: &[u8]) -> Vec<u8> {

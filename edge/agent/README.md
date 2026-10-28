@@ -350,9 +350,9 @@ polling::run(&reader, polling::poll_period(&device), &mut connection, &clock, &s
 
 `tpm::ensure_key(transport, handle)` 讓持久 handle 上有 agent 要用的金鑰（決策 12 的 (5)，Laysi/trustiot-v2#611），產線工具的 `provision` 子命令（Laysi/trustiot-v2#613）呼叫它。agent 本身在閘道器上不呼叫：它只以 `TpmKey::open` 使用已經佈建好的金鑰。回傳的 `Provisioned` 有金鑰（`TpmKey`，可以簽 CSR）與 `created`。
 
-- **沿用**：handle 上的物件通過 `TpmKey::open` 的檢查（範本與自測簽章）就是這把金鑰，`created = false`。TPM 的狀態在重刷 SD 卡後仍在，重跑就走這條，得到同一個公鑰、不多一個持久 handle。
+- **沿用**：handle 上的物件與決策 12 的範本在 `unique` 以外的每個欄位都相同（名稱演算法 SHA-256、屬性剛好 `0x00040072`、沒有 authPolicy），並通過自測簽章，就是這把金鑰，`created = false`。這比 `TpmKey::open` 嚴格：open 不看名稱演算法、policy 與額外的屬性 bit，理由見決策 12。TPM 的狀態在重刷 SD 卡後仍在，重跑就走這條，得到同一個公鑰、不多一個持久 handle。
 - **建立**：handle 是空的（ReadPublic 回 `TPM_RC_HANDLE`）時，以 TPM2_Create 在 SRK 下建立同範本的金鑰、TPM2_Load、以 TPM2_EvictControl 持久化，再讀回確認公開區域與建立時相同、通過同樣的檢查，`created = true`。載入的暫時物件用完就 FlushContext。
-- **拒絕**：handle 上是其他任何物件（RSA、restricted、P-384、儲存金鑰、有密碼的金鑰、不能簽章的金鑰）回 `ProvisionError::Refused`，只送過 TPM2_ReadPublic 與最多一次自測簽章，**絕不 evict、不改**。有密碼而且沒有 `noDA` 的金鑰，自測簽章的授權失敗會讓 TPM 的字典攻擊計數加一（agent 啟動時也一樣）；其他狀態不變。
+- **拒絕**：handle 上是其他任何物件（RSA、restricted、P-384、儲存金鑰、有密碼的金鑰、不能簽章的金鑰，以及名稱演算法不同、帶 policy 或多了 `noDA` 等屬性的簽章金鑰）回 `ProvisionError::Refused`，只送過 TPM2_ReadPublic 與最多一次自測簽章，**絕不 evict、不改**。範本不同的物件只讀不簽；範本相同但有密碼的金鑰要靠自測簽章的授權失敗分辨，沒有 `noDA` 的這種金鑰會讓 TPM 的字典攻擊計數加一（agent 啟動時也一樣）；其他狀態不變。
 - **SRK**：`0x81000001`（`SRK_HANDLE`）是標準的 ECC SRK（tpm2-tools 預設範本 `tpm2_createprimary -C o -g sha256 -G ecc256:aes128cfb`，比對 `unique` 以外的每個欄位）就以它為父金鑰；否則在 owner hierarchy 以同範本建一個暫時的 primary，Load 之後就 flush。工具從不寫入 `0x81000001`（那個 handle 歸 LUKS 那一側，Laysi/trustiot-v2#95）。
 - **中斷與同時執行**：Create 與 EvictControl 之間行程死掉時，載入的金鑰是暫時物件，核心的資源管理器在行程關閉 `/dev/tpmrm0` 時清掉它，什麼都沒持久化，下次重跑建一把新的。兩個行程同時建立時，後到的 EvictControl 得到 `TPM_RC_NV_DEFINED`，它 flush 自己的金鑰、讀回先到的那把，通過檢查就沿用。
 - handle 必須在 owner 的持久範圍（`0x81000000`–`0x817fffff`）而且不是 `SRK_HANDLE`，否則在送出任何指令前回 `UnsupportedHandle`。

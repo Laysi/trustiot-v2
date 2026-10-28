@@ -1,0 +1,24 @@
+== MUTATION: adopt calls parse_public_area (1 site)
+test tpm::provision::tests::authorization_failures_are_told_from_other_codes ... ok
+test tpm::provision::tests::handles_that_cannot_hold_the_key_are_refused_before_any_command ... ok
+test tpm::provision::tests::an_existing_key_is_reused_with_two_commands ... ok
+test tpm::provision::tests::a_signing_key_that_differs_from_the_template_is_refused_after_reading_it_only ... FAILED
+test tpm::provision::tests::a_tpm_error_reading_the_handle_is_not_taken_for_an_empty_handle ... ok
+test tpm::provision::tests::without_the_standard_srk_a_transient_primary_is_made_and_flushed ... ok
+test tpm::provision::tests::an_occupied_handle_after_create_reuses_the_other_runs_key ... ok
+test tpm::provision::tests::other_objects_are_refused_after_reading_them_only ... ok
+test tpm::provision::tests::an_empty_handle_gets_a_key_under_the_srk_and_a_retry_is_resent ... ok
+test tpm::provision::tests::retries_give_up_after_a_bound ... ok
+thread 'tpm::provision::tests::a_signing_key_that_differs_from_the_template_is_refused_after_reading_it_only' (399874) panicked at edge/agent/src/tpm/provision.rs:566:26:
+name algorithm 0x000c: expected a refusal, got Err(Tpm(Io(Custom { kind: Other, error: "the script has no more answers" })))
+test result: FAILED. 9 passed; 1 failed; 0 ignored; 0 measured; 170 filtered out; finished in 1.63s
+test objects_that_do_not_match_are_refused_and_the_tpm_is_unchanged ... FAILED
+test after_tpm2_clear_a_rerun_creates_a_different_key ... ok
+test a_non_standard_srk_is_left_alone_and_a_transient_primary_is_used ... ok
+test a_process_that_dies_before_the_key_is_persisted_leaves_nothing_and_a_rerun_creates_it ... ok
+test two_processes_creating_at_once_end_with_one_key ... ok
+test an_empty_handle_gets_the_decision_12_key_and_reruns_reuse_it ... ok
+thread 'objects_that_do_not_match_are_refused_and_the_tpm_is_unchanged' (399985) panicked at edge/agent/tests/tpm_provision.rs:378:22:
+0x81000108 should be refused, got Ok(Provisioned { key: TpmKey { handle: 0x81000108, .. }, created: false })
+test result: FAILED. 5 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.37s
+== RESTORED: adopt calls parse_provisioned_area (1 site)

@@ -346,6 +346,11 @@ object 0x81000104 -G ecc256:ecdsa-sha256:null -a "$signing|noda" -p "$(password)
 object 0x81000105 -G ecc256:null:null -a "fixedtpm|fixedparent|sensitivedataorigin|userwithauth|decrypt"
 object 0x81000106 -G ecc256:null:aes128cfb -a "fixedtpm|fixedparent|sensitivedataorigin|userwithauth|restricted|decrypt"
 object 0x81000107 -G ecc256:ecdsa-sha256:null -a "$signing" -p "$(password)"
+# Signing keys that pass the test signature but differ from the template.
+object 0x81000108 -g sha384 -G ecc256:ecdsa-sha256:null -a "$signing"
+head -c 32 /dev/urandom > policy.digest
+object 0x81000109 -G ecc256:ecdsa-sha256:null -a "$signing" -L policy.digest
+object 0x8100010a -G ecc256:ecdsa-sha256:null -a "$signing|noda"
 "#;
 
 /// The line of `Swtpm::snapshot` with the dictionary-attack counter.
@@ -376,17 +381,21 @@ fn objects_that_do_not_match_are_refused_and_the_tpm_is_unchanged() {
         (reason, watch.codes())
     };
     for (handle, expected, codes) in [
-        (0x8100_0101, "not an ECC key", &[READ_PUBLIC][..]),
+        // These three would sign the test message; only the exact template is adopted.
+        (0x8100_0108, "name algorithm 0x000c", &[READ_PUBLIC][..]),
+        (0x8100_0109, "32-byte authPolicy", &[READ_PUBLIC]),
+        (0x8100_010a, "attributes 0x00040472", &[READ_PUBLIC]),
+        (0x8100_0101, "not an ECC key", &[READ_PUBLIC]),
         (0x8100_0102, "have [restricted]", &[READ_PUBLIC]),
         (0x8100_0103, "with hash 0x000c", &[READ_PUBLIC]),
-        // Its template is right; the test signature with the empty password fails.
-        (0x8100_0104, "TPM_RC_BAD_AUTH", &[READ_PUBLIC, SIGN]),
+        // noDA with a password: refused for the attribute, before any test signature.
+        (0x8100_0104, "attributes 0x00040472", &[READ_PUBLIC]),
         (0x8100_0105, "hash none", &[READ_PUBLIC]),
         (0x8100_0106, "symmetric", &[READ_PUBLIC]),
     ] {
         let (reason, sent) = refuse(handle);
         assert!(reason.contains(expected), "{handle:#010x}: {reason}");
-        // Read, at most a test signature, nothing else.
+        // Read, nothing else.
         assert_eq!(sent, codes, "{handle:#010x}");
     }
     assert_eq!(swtpm.snapshot(), before, "the TPM changed");

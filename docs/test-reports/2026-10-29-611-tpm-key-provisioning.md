@@ -52,7 +52,7 @@ CI=true cargo test --locked -p agent --test tpm_provision --test tpm_swtpm
 | --- | --- |
 | `an_empty_handle_gets_the_decision_12_key_and_reruns_reuse_it` | 標準 SRK 下的空 handle 得到金鑰（`created = true`），送出的指令依序是 ReadPublic、ReadPublic、Create、Load、EvictControl、FlushContext、ReadPublic、Sign。`tpm2_readpublic` 顯示屬性 `0x40072`（fixedtpm\|fixedparent\|sensitivedataorigin\|userwithauth\|sign）、ECC NIST P-256、ECDSA-SHA256、sym null。SPKI 與 tpm2-tools 算出的相同，簽章能以公鑰驗證。在同一條連線與新連線上重跑都得到 `created = false`，只送 ReadPublic 與 Sign，SPKI 相同，持久 handle 仍是 `[0x81000001, 0x81000100]`，沒有暫時 handle。`TpmKey::open` 讀到同一把金鑰 |
 | `a_non_standard_srk_is_left_alone_and_a_transient_primary_is_used` | `0x81000001` 上不是標準 SRK 時，改用暫時的 primary。primary 用完就 flush，`0x81000001` 不變 |
-| `objects_that_do_not_match_are_refused_and_the_tpm_is_unchanged` | 拒絕 RSA 2048、restricted、P-384（ECDSA-SHA384）、有密碼且 noDA、只能解密、儲存金鑰這六種物件。每次只送 ReadPublic，有密碼的那個多送一次 Sign。前後的 `snapshot()` 完全相同，涵蓋持久、暫時與 NV handle、每個物件的 readpublic，以及變動的屬性（含字典攻擊計數）。有密碼但沒有 noDA 的金鑰也被拒絕（`TPM_RC_AUTH_FAIL`），唯一的變化是 `TPM2_PT_LOCKOUT_COUNTER` 從 0x0 變成 0x1 |
+| `objects_that_do_not_match_are_refused_and_the_tpm_is_unchanged` | 拒絕 RSA 2048、restricted、P-384（ECDSA-SHA384）、有密碼且 noDA、只能解密、儲存金鑰，以及三把能通過自測簽章但範本不同的 P-256 ECDSA-SHA256 簽章金鑰：名稱演算法 SHA-384、帶 32 bytes 的 authPolicy、多了 noDA。這九種物件每次都只送 ReadPublic。前後的 `snapshot()` 完全相同，涵蓋持久、暫時與 NV handle、每個物件的 readpublic，以及變動的屬性（含字典攻擊計數）。有密碼但沒有 noDA 的金鑰範本相同，所以會送 ReadPublic 與一次 Sign，因自測簽章失敗（`TPM_RC_AUTH_FAIL`）而被拒絕；唯一的變化是 `TPM2_PT_LOCKOUT_COUNTER` 從 0x0 變成 0x1 |
 | `two_processes_creating_at_once_end_with_one_key` | 兩個 session 同時建立，會合點讓兩邊都停在 EvictControl 前再同時放行。結果一個 `created = true`，另一個收到 `TPM_RC_NV_DEFINED` 後讀回並沿用。兩者 SPKI 相同，與 tpm2-tools 讀到的一致，持久 handle 只多一個，沒有暫時 handle |
 | `a_process_that_dies_before_the_key_is_persisted_leaves_nothing_and_a_rerun_creates_it` | 行程分別死在 Load 與 EvictControl：之後沒有暫時 handle，持久 handle 只有 SRK。重跑時建立金鑰 |
 | `after_tpm2_clear_a_rerun_creates_a_different_key` | 執行 `tpm2_clear` 後，SRK 與金鑰都不見了。重跑時以暫時 primary 建立新金鑰，SPKI 與 clear 前不同、與 tpm2-tools 讀到的一致，持久 handle 只剩新金鑰 |
@@ -62,14 +62,35 @@ CI=true cargo test --locked -p agent --test tpm_provision --test tpm_swtpm
 - 以 swtpm 錄下的整段交換（`edge/agent/src/tpm/fixtures.rs`）逐 byte 比對 CreatePrimary、Create、Load、EvictControl、FlushContext、ReadPublic 與 Sign 的指令，並解析它們的回應，包括 `TPM_RC_RETRY`、`TPM_RC_NV_DEFINED`、`TPM_RC_HANDLE`，以及 flush 不存在的 handle。
 - 驗證暫時 primary 的名稱等於 tpm2-tools 建立的 SRK 名稱，以及建立時的公開區域等於持久化後讀回的公開區域。
 - 以截斷、延長、膨脹的內層長度與亂資料測試解析，確認都被拒絕而且不會 panic。
+- `a_signing_key_that_differs_from_the_template_is_refused_after_reading_it_only`：把錄下的金鑰 ReadPublic 回應改成名稱演算法 SHA-384、加上 noDA、encryptedDuplication 或 adminWithPolicy、帶 32 bytes 的 authPolicy，每一種都被拒絕，而且只送 ReadPublic。
 - 以腳本化的假 TPM 測 `ensure_key` 的流程：重送 RETRY，最多 9 次就放棄；暫時 primary 被 flush；NV_DEFINED 走沿用；不支援的 handle 在送出任何指令前就被拒絕；授權失敗被歸類為拒絕。
+
+### 範本完全相同才沿用（安全審查的修正）
+
+這個分支的安全審查發現，`adopt` 原本只做 `TpmKey::open` 的檢查，所以名稱演算法不同、帶 authPolicy，或多了 `noDA` 等屬性的 P-256 簽章金鑰都能通過自測簽章並被沿用。修正後，`adopt` 先以 `marshal::parse_provisioned_area` 要求範本完全相同，`TpmKey::open` 維持原狀，理由寫在決策 12。
+
+為了確認新測試確實擋得住這個問題，我在建置主機上做了一次突變：把 `adopt` 改回呼叫 `parse_public_area`，再跑兩個新測試，原始輸出見 [mutation.txt](data/2026-10-29-611-tpm-key-provisioning/mutation.txt)。
+
+- `a_signing_key_that_differs_from_the_template_is_refused_after_reading_it_only` 失敗。名稱演算法 SHA-384 的金鑰被當成可沿用的金鑰，接著送出自測簽章，但腳本沒有準備這個指令的回應。
+- `objects_that_do_not_match_are_refused_and_the_tpm_is_unchanged` 失敗，訊息是 `0x81000108 should be refused, got Ok(Provisioned { key: TpmKey { handle: 0x81000108, .. }, created: false })`：名稱演算法為 SHA-384 的金鑰被沿用了。
+- 其餘測試都通過。
+
+改回修正後，在建置主機上重跑以下檢查，全部通過，原始輸出見 [checks-after-review.txt](data/2026-10-29-611-tpm-key-provisioning/checks-after-review.txt)：
+
+- `cargo fmt --all --check`
+- `cargo clippy --locked --workspace --all-targets -- -D warnings`
+- `CI=true cargo test --locked -p agent`：lib 180 個，比上表多了新的單元測試；tpm_provision 6 個，tpm_swtpm 1 個，dependencies 1 個。
+- `cargo build --locked --target aarch64-unknown-linux-gnu -p agent`
+- `cargo test --locked -p repo-check`
+
+`crates/testkit` 與 `scripts/` 沒有變更，所以 `cargo test -p testkit` 與 bun 的檢查沿用上表的結果。
 
 ## 結論
 
 | 驗收條件 | 結果 |
 | --- | --- |
 | swtpm 上空的 0x81000100 得到決策 12 屬性的金鑰（tpm2_readpublic 確認）；重跑與新連線得到同一個公鑰，持久 handle 清單不變 | 通過（`an_empty_handle_gets_the_decision_12_key_and_reruns_reuse_it`） |
-| 不符的物件（RSA、restricted、P-384、有密碼）被拒絕，TPM 狀態與之前完全相同 | 通過（`objects_that_do_not_match_are_refused_and_the_tpm_is_unchanged`）。有一個例外寫在決策 12 的理由欄：有密碼而沒有 noDA 的金鑰，自測簽章會使字典攻擊計數加一，與 agent 開啟它時相同 |
+| 不符的物件（RSA、restricted、P-384、有密碼）被拒絕，TPM 狀態與之前完全相同 | 通過（`objects_that_do_not_match_are_refused_and_the_tpm_is_unchanged`）。安全審查之後，名稱演算法不同、帶 policy 或多了屬性的簽章金鑰也會被拒絕。有一個例外寫在決策 12 的理由欄：有密碼而沒有 noDA 的金鑰，自測簽章會使字典攻擊計數加一，與 agent 開啟它時相同 |
 | 兩個行程同時執行，最後只有一把金鑰、同一個公鑰 | 通過（`two_processes_creating_at_once_end_with_one_key`；兩個行程以同一顆 swtpm 上的兩個 session 模擬） |
 | tpm2_clear 後重跑得到不同的新金鑰 | 通過（`after_tpm2_clear_a_rerun_creates_a_different_key`） |
 | 解析器有錄製回應的單元測試；aarch64 建置通過；`dependencies.rs` 通過 | 通過 |
