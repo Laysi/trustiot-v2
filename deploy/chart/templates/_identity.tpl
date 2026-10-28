@@ -119,6 +119,9 @@ so custom env cannot replace them):
 - TRUSTIOT_ON_BEHALF_CALLS: which service may call which on behalf of users, as JSON
   {<caller>: [<callee>, ...]} ("trustiot.mesh.onBehalfCalls"), so the token exchange gives a
   service tokens only for the services mesh.calls lets it call (Laysi/trustiot-v2#106);
+- TRUSTIOT_AI_GATEWAY_ADMIN_URL, while the AI gateway runs: its admin API's Service
+  ("trustiot.aiGateway.adminUrl", templates/ai-gateway-admin.yaml, Laysi/trustiot-v2#607), which
+  only the identity service may call; it is not in mesh.calls or TRUSTIOT_ON_BEHALF_CALLS;
 - TRUSTIOT_IDENTITY_SIGNING_KEYS_FILE: the signing keys file the init container fills;
 - TRUSTIOT_IDENTITY_REVOKE_BEFORE_GENERATION: it never signs with a key of a lower generation,
   even before the kubelet updates the file after a revocation;
@@ -138,6 +141,9 @@ Returns a YAML list; use with fromYamlArray.
 {{- $env := list (dict "name" "TRUSTIOT_INGRESS_ROUTES" "value" ($routes | toJson)) -}}
 {{- $onBehalf := include "trustiot.mesh.onBehalfCalls" . | fromYaml -}}
 {{- $env = append $env (dict "name" "TRUSTIOT_ON_BEHALF_CALLS" "value" ($onBehalf.calls | toJson)) -}}
+{{- if include "trustiot.aiGateway.adminEnabled" . -}}
+{{- $env = append $env (dict "name" "TRUSTIOT_AI_GATEWAY_ADMIN_URL" "value" (include "trustiot.aiGateway.adminUrl" .)) -}}
+{{- end -}}
 {{- $env = append $env (dict "name" "TRUSTIOT_IDENTITY_SIGNING_KEYS_FILE" "value" (printf "%s/%s" (include "trustiot.identity.signingKeysDir" .) $keys.secretKey)) -}}
 {{- $env = append $env (dict "name" "TRUSTIOT_IDENTITY_REVOKE_BEFORE_GENERATION" "value" $keys.revokeBefore) -}}
 {{- $env = append $env (dict "name" "TRUSTIOT_IDENTITY_KEY_PROPAGATION_SECONDS" "value" $keys.propagationSeconds) -}}
