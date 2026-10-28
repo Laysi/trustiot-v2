@@ -218,7 +218,7 @@ mesh:
     knowledge: [ai-gateway, postgres]   # 例子：knowledge 可以呼叫 AI 閘道，並使用 Postgres
 ```
 
-`ai-gateway` 只能由 AI 助理（`assistant`）、知識庫（`knowledge`）與警報（`alerts`）呼叫（決策 28，Laysi/trustiot-v2#536）：它不驗證內部身分、花的是供應商的帳號，所以只有 mesh 擋得住其他服務。`mesh.calls` 裡任何其他服務把 `ai-gateway` 列為被呼叫端時渲染失敗，不論兩邊有沒有啟用、有沒有做 schema 驗證（`templates/_ai-gateway.tpl` 的 `trustiot.aiGateway.callers`，`_mesh.tpl` 的 `trustiot.mesh.plan` 執行）；它也不能有 cookie 路由（見「入口 gateway」）。這三個服務真的呼叫它時，由各自的 issue 加上 `mesh.calls`：預設 values 目前只有 `assistant` 列它（Laysi/trustiot-v2#592），所以它的 AuthorizationPolicy 只放行 AI 助理（下方「呼叫矩陣」）。
+`ai-gateway` 只能由 AI 助理（`assistant`）、知識庫（`knowledge`）與警報（`alerts`）呼叫（決策 28，Laysi/trustiot-v2#536）：它不驗證內部身分、花的是供應商的帳號，所以只有 mesh 擋得住其他服務。`mesh.calls` 裡任何其他服務把 `ai-gateway` 列為被呼叫端時渲染失敗，不論兩邊有沒有啟用、有沒有做 schema 驗證（`templates/_ai-gateway.tpl` 的 `trustiot.aiGateway.callers`，`_mesh.tpl` 的 `trustiot.mesh.plan` 執行）；它也不能有 cookie 路由（見「入口 gateway」）。這三個服務真的呼叫它時，由各自的 issue 加上 `mesh.calls`：預設 values 目前只有 `assistant` 列它（Laysi/trustiot-v2#592），所以它的 AuthorizationPolicy 只放行 AI 助理（下方「呼叫矩陣」）。這些呼叫端只連得到 API 埠（`services.ai-gateway.ports` 中 `admin` 以外的埠，預設只有 `http`，`templates/_mesh.tpl` 的 `trustiot.mesh.aiGatewayPorts`），連不到管理埠，見下方「AI 閘道的管理埠」一條。
 
 除了 `mesh.calls`，入口 gateway（ServiceAccount `<release>-ingress-istio`）自動可以呼叫它路由到的服務（例外路徑與 `ingress.routes` 的後端），以及做 cookie 驗證（ext_authz）的身分服務（只到它的 API 埠 `http`，見下一段）。
 
@@ -244,8 +244,8 @@ chart 產生下列物件：
 | 物件 | 內容 |
 | --- | --- |
 | NetworkPolicy `<release>-default-deny` | 選取 namespace 內所有 pod、不放行任何連入：沒有其他 NetworkPolicy 放行的連線一律拒絕。服務全關時也會產生 |
-| AuthorizationPolicy `<release>-<服務或元件>` | 每個啟用的服務與每個部署的叢集內元件（目前是 `bundled` 的 ClickHouse）一個，ALLOW，以 selector 選它的 pod，只允許呼叫端的 principals（ztunnel 在 L4 執行）。沒有任何呼叫端時是沒有規則的 ALLOW，拒絕所有連線。身分服務的政策只到 API 埠，token exchange 另有 `<release>-identity-exchange`（見上方「代表使用者呼叫」）；certs 服務的政策也只到 API 埠，簽 MQTT broker 伺服器憑證的埠另有 `<release>-certs-broker`（見下方 MQTT broker 一條） |
-| NetworkPolicy `<release>-<服務或元件>` | 同上，每個一個（token exchange 另有 `<release>-identity-exchange`，broker 憑證的埠另有 `<release>-certs-broker`）：只從同一批呼叫端的 pod（與入口 gateway 的 pod）放行 TCP 15008，也就是 ztunnel 的 HBONE 埠，mesh 內的連線都從這裡進來，不直接連應用程式的埠；另對節點來源 `169.254.7.127/32`（kubelet 的健康檢查由 istio-cni SNAT 成這個位址）只放行該工作負載探針實際連的 TCP 埠，服務是健康埠（`healthPort`，預設 8081），見下方「節點來源」。只有 exec 探針時不產生這條規則；沒有呼叫端也沒有探針埠時 `ingress: []`，拒絕所有連入 |
+| AuthorizationPolicy `<release>-<服務或元件>` | 每個啟用的服務與每個部署的叢集內元件（目前是 `bundled` 的 ClickHouse）一個，ALLOW，以 selector 選它的 pod，只允許呼叫端的 principals（ztunnel 在 L4 執行）。沒有任何呼叫端時是沒有規則的 ALLOW，拒絕所有連線。身分服務的政策只到 API 埠，token exchange 另有 `<release>-identity-exchange`（見上方「代表使用者呼叫」）；certs 服務的政策也只到 API 埠，簽 MQTT broker 伺服器憑證的埠另有 `<release>-certs-broker`（見下方 MQTT broker 一條）；AI 閘道的政策也只到 API 埠，管理埠另有 `<release>-ai-gateway-admin`（見下方「AI 閘道的管理埠」一條） |
+| NetworkPolicy `<release>-<服務或元件>` | 同上，每個一個（token exchange 另有 `<release>-identity-exchange`，broker 憑證的埠另有 `<release>-certs-broker`，AI 閘道的管理埠另有 `<release>-ai-gateway-admin`）：只從同一批呼叫端的 pod（與入口 gateway 的 pod）放行 TCP 15008，也就是 ztunnel 的 HBONE 埠，mesh 內的連線都從這裡進來，不直接連應用程式的埠；另對節點來源 `169.254.7.127/32`（kubelet 的健康檢查由 istio-cni SNAT 成這個位址）只放行該工作負載探針實際連的 TCP 埠，服務是健康埠（`healthPort`，預設 8081），見下方「節點來源」。只有 exec 探針時不產生這條規則；沒有呼叫端也沒有探針埠時 `ingress: []`，拒絕所有連入 |
 
 - 兩層的分工：AuthorizationPolicy 驗證 mTLS 憑證裡的身分，ztunnel 對每條代理的連線檢查；NetworkPolicy 只看來源 pod 的 label 與 IP，擋的是新建立的 TCP 連線。拿掉 NetworkPolicy 時，清單外的呼叫仍被 ztunnel 重置；拿掉 AuthorizationPolicy 時，清單外的服務連不到對方的 15008，非 mesh 的 pod 連不到任何埠。被拒時呼叫端看到的是連線重置或拒絕，不是 HTTP 403（docs/feasibility/2026-10-10-edge-poc.md）。2026-10-10 在實驗機實測兩個方向（docs/test-reports/2026-10-10-63-mesh-authz.md）。
 - NetworkPolicy 這一層的限制，主要防線是 AuthorizationPolicy：
@@ -256,11 +256,23 @@ chart 產生下列物件：
   - chart 只對探針實際連的埠放行：startup、liveness、readiness 探針中 `httpGet`、`tcpSocket`、`grpc` 的埠，具名的埠換成 container port 的數字，exec 探針不需要網路規則（Laysi/trustiot-v2#265）。埠由 `templates/_mesh.tpl` 的 `trustiot.mesh.probePorts` 從 pod 用的同一份探針設定推得：服務來自 `serviceDefaults.probes` 與 `services.<name>.probes`，叢集內元件來自 `trustiot.<元件>.pod`（ClickHouse 是 `templates/_clickhouse.tpl` 的 `trustiot.clickhouse.pod`），不在 values 另寫一份，改探針時 NetworkPolicy 跟著變。chart 測試對兩份 values 的多種組合，逐一比對每個工作負載 pod spec 裡的探針埠與這條規則。
   - 服務的探針連獨立的健康埠（`serviceDefaults.healthPort`，預設 8081，埠名 `health`），service-kit 在這個埠只提供 `/healthz`、`/readyz`，其他路徑一律 404（`crates/service-kit` 的 `http.health_listen_addr`）。所以節點來源對服務只放行健康埠，碰不到 API 埠（`http`，8080），也就碰不到只靠 AuthorizationPolicy 限定呼叫端的 `/internal/` 路徑（Laysi/trustiot-v2#286）。健康埠只是 container port：Service 不開它，`ingress.routes` 也指不到它（`port: health` 會讓渲染失敗），只有 kubelet 會連。服務的 `ports` 不能用 `health` 這個名稱或健康埠的埠號。chart 測試對兩份 values 與各種疊加（全部服務、smoke 與 ingress e2e 的 overlay），逐一檢查每個服務的節點來源規則只有健康埠。
   - 覆寫 `services.<name>.probes` 讓探針連 `http` 會讓節點來源重新連得到那個服務的整個 API，所以服務不要這樣做。只有測試用的替身這樣設：`tests/values/smoke.yaml` 與 `tests/e2e/values-e2e.yaml` 的 traefik/whoami 只能聽一個埠，探針因此連 `http`；身分服務替身與 TrustIoT 服務一樣有健康埠。
+  - 有自己的 Service 與政策的埠，探針一律不能連：身分服務的 `token-exchange`、certs 服務的 `broker-certs`，以及 AI 閘道的 `admin`（`templates/_mesh.tpl` 的 `trustiot.mesh.ownPolicyPorts`）。只有它們自己的呼叫端連得到這些埠，探針連了就等於對節點上每個行程開放，所以 `services.<name>.probes` 的任何探針（startup、liveness、readiness 的 `httpGet`、`tcpSocket`、`grpc`）以埠名或埠號指向它們時，渲染失敗（`templates/_service.tpl`）。`http` 不在這條限制內，因為上面的替身要用。
   - ClickHouse 只開 HTTP 8123 給節點（`/ping` 以外的查詢都要帳密），原生協定 9000 從節點連不到。
 - NetworkPolicy 只管連入（`Ingress`），不限制連出：外部依賴（Qdrant Cloud、S3、SMTP、AI 端點、外部資料庫）以主機名稱指定，NetworkPolicy 無法依主機名稱放行。
 - 不部署 waypoint：L4 的身分已足夠。服務之間需要 L7 規則（例如依路徑或方法）時才為該服務加 waypoint，並把它的 AuthorizationPolicy 改成以 `targetRefs` 指向 Service、在 ztunnel 層放行 waypoint 的 ServiceAccount；代表使用者呼叫的授權（內部身分 token）由身分服務換 token 時依清單檢查、被呼叫端驗證 token 的受眾，不靠 waypoint（Laysi/trustiot-v2#106）。
 - 叢集測試 `tests/e2e/mesh.e2e.ts` 以真實連線驗證清單內放行、清單外被拒，以及兩層各自生效；也驗證清單內的呼叫端連得到 `token-exchange`、連不到身分服務的 API 埠，清單外的服務帶著使用者的 token 仍被拒，用法見該目錄的 README。服務在這個測試裡跑身分服務替身，不驗證 token，所以它看到的拒絕都是 L4 的；token exchange 自己的檢查（清單、只換一跳）由 Rust 測試驗證。
 - MQTT broker（`mqttBroker.enabled`）也在 `trustiot.mesh.components`，但它的 AuthorizationPolicy 依埠分開：`mqtt-bridge` 只到閘道器埠，有 broker 帳號的服務只到服務埠，`mesh.calls` 也只能列這幾個呼叫端（見「MQTT broker」）。它的探針是 exec，所以沒有節點來源的規則；它的 trust sidecar 連 certs 服務由 chart 自動加上。broker 伺服器憑證的簽發也由 chart 自動放行（Laysi/trustiot-v2#557、Laysi/trustiot-v2#535）：certs 服務在自己的埠 `broker-certs`（預設 8082，服務的 `broker.listen_addr`）簽這張憑證，那個埠有自己的 Service、AuthorizationPolicy 與 NetworkPolicy `<release>-certs-broker`，只放行 broker 的憑證 CronJob 的 ServiceAccount `<release>-mqtt-broker-certificate`（broker 的 pod 自己也連不到），而且只到這個埠；certs 自己的政策只放行它的呼叫端到 API 埠（`trustiot.mesh.certsPorts`），certs 的 Service 也不開這個埠。拿到 broker 名稱的憑證就能對每台閘道器冒充 broker，所以其他服務與入口 gateway 都連不到它；`ingress.routes` 指向 `broker-certs`（或身分服務的 `token-exchange`）時渲染失敗，`services.certs.ports` 覆寫時要保留 `broker-certs`（broker 開啟而沒有這個埠時渲染失敗），`services` 底下不能有叫 `certs-broker` 的服務。broker 沒有部署時這兩個政策沒有規則，什麼都不放行。
+- AI 閘道的管理埠（Laysi/trustiot-v2#607，決策 28）：AI 閘道在自己的埠 `admin`（預設 8082，閘道的 `admin.listen_addr`）提供管理 API，讀取與更換每個模型角色用的模型。換模型會讓所有租戶的 AI 助理改用另一個供應商或模型，所以只有驗證並記錄平台管理員變更的身分服務連得到它（Laysi/trustiot-v2#608）。這個埠有自己的 Service、AuthorizationPolicy 與 NetworkPolicy `<release>-ai-gateway-admin`（`templates/ai-gateway-admin.yaml`）：
+  - Service 固定開 8082，以埠名轉到 container port `admin`，所以改 container port 不會移動位址；身分服務以 `TRUSTIOT_AI_GATEWAY_ADMIN_URL`（`http://<release>-ai-gateway-admin.<namespace>.svc:8082`，只有身分服務拿到）呼叫它。AI 閘道自己的 Service 不開這個埠。
+  - AuthorizationPolicy 選 AI 閘道的 pod，只放行身分服務的 ServiceAccount `<release>-identity`，而且只到 `admin` 埠；AI 閘道自己的政策只放行 `mesh.calls` 的呼叫端（`assistant`、`knowledge`、`alerts`）到 API 埠。ALLOW 政策是聯集，所以身分服務連不到轉發的 API 埠，AI 助理等服務也連不到管理埠。
+  - NetworkPolicy 只從身分服務的 pod 放行 HBONE 的 15008；它看不到通道裡的應用程式埠，分埠只靠 AuthorizationPolicy。
+  - 管理埠的呼叫端固定是身分服務（`templates/_ai-gateway.tpl` 的 `trustiot.aiGateway.managers`），不經 `mesh.calls`，也不在 `TRUSTIOT_ON_BEHALF_CALLS`：管理 API 不收內部身分 token，平台管理員的權限由身分服務檢查。
+  - AI 閘道與身分服務都啟用時，chart 把 `AI_GATEWAY__ADMIN__LISTEN_ADDR` 設成 `0.0.0.0:<admin 的 container port>`，這三個物件與 `TRUSTIOT_AI_GATEWAY_ADMIN_URL` 也只在這時產生；沒有身分服務時閘道的管理 API 留在預設的 `127.0.0.1:8082`，pod 外連不到。`AI_GATEWAY__ADMIN__` 開頭的變數由 chart 決定，`services.ai-gateway.env` 與 `serviceDefaults.env` 設定時渲染失敗。
+  - `services.ai-gateway.ports` 覆寫時要保留 `admin`：身分服務啟用而沒有這個埠時渲染失敗；只剩 `admin`、沒有 API 埠時也失敗。`ingress.routes` 指向 `ai-gateway`（任何埠，包括 `admin`）時渲染失敗，`services` 底下不能有叫 `ai-gateway-admin` 的服務。
+  - 已知的例外：身分服務的內部金鑰輪替 CronJob（`templates/internal-identity.yaml`）與身分服務共用 ServiceAccount `<release>-identity`，所以 AuthorizationPolicy 也放行它；擋住它的只有 NetworkPolicy，因為它的 pod 不帶身分服務的 selector label。這個 Job 不呼叫管理 API。
+  - 探針不能連 `admin`：節點來源不經 mTLS 與 AuthorizationPolicy，探針連的埠節點上每個行程都連得到（見上面「節點來源」），所以 `services.ai-gateway.probes` 以埠名或埠號指向 `admin` 時渲染失敗。
+  - 回到 Laysi/trustiot-v2#607 之前的 chart 版本時，先把 AI 閘道縮成 0 個 replica（`kubectl -n <namespace> scale deployment <release>-ai-gateway --replicas=0`），再 rollback，之後再恢復 replica 數。原因是舊版的閘道政策沒有限定埠，而在換掉之前，還聽著 `0.0.0.0:8082` 的 pod 會讓既有的呼叫端（例如 AI 助理）短暫連得到管理 API。
+  - 這條同步呼叫是決策 4「不做跨服務的同步寫入」的例外，理由見 docs/architecture/decisions.md 的決策 28。
 - 叢集內的 ClickHouse 走同一套規則：只有 `mesh.calls` 列出的 `ingest` 與 `telemetry-query`，以及 chart 自動加上的 OpenTelemetry collector（Laysi/trustiot-v2#73）與 migration Job（`migrate.enabled` 為 true 時，Laysi/trustiot-v2#60）連得到它，其他服務與 pod 都被拒，kubelet 的 `/ping` 探測經 `169.254.7.127/32` 照常通過，節點來源只開 HTTP 8123。`mesh.calls` 的呼叫端只能是服務，元件之間的呼叫由 `trustiot.mesh.plan` 自己加（`_mesh.tpl`），collector 與 migration Job 都是這樣；還沒有的 Grafana（Laysi/trustiot-v2#183）加入時也要這樣加進來。ClickHouse 的政策只以 chart 測試驗證，2026-10-10 的實驗機測試沒有部署它（見測試報告）。
 - collector 也是 mesh 內的元件（`trustiot.mesh.components` 的 `otel-collector`，埠與探針定義在 `trustiot.otel-collector.pod`）：每個啟用的服務都自動是它的呼叫端（送 OTLP），其他 pod 連不到它，節點來源只開健康檢查的 13133。它連出到外部 ClickHouse 或 SIEM 不受 NetworkPolicy 限制（只管連入）；SIEM 在同一個 namespace 時，要另外以 NetworkPolicy 放行 collector 的 pod 連它。
 - `postgres` 是「這個服務用 Postgres」的宣告，不經 mesh：Postgres 的每條連線本身就是 TLS 並以 verify-full 驗證伺服器，叢集內的 Postgres pod 也不加入 ambient mesh（見「叢集內的 Postgres」），所以它沒有 AuthorizationPolicy，也不走 HBONE。列出 `postgres` 的服務才會掛上 Postgres 的 CA 並拿到 `TRUSTIOT_POSTGRES_CA_FILE`（`ai-gateway` 是 `AI_GATEWAY_POSTGRES_CA_FILE`；`external` 也一樣）；`bundled` 時 `<release>-postgres` 這個 NetworkPolicy 也只放行這些服務的 pod 連 5432。同一份清單決定兩件事，不會一邊有、一邊沒有。
@@ -268,11 +280,12 @@ chart 產生下列物件：
 
 #### 呼叫矩陣
 
-預設 values、所有服務啟用時渲染出的授權，兩種部署形態相同。「允許的呼叫端」是被呼叫端的 AuthorizationPolicy 的 principals（省略 `<release>-`），NetworkPolicy 放行同一批 pod；身分服務的政策依埠分開：`identity` 的呼叫端（入口 gateway）只連得到 API 埠 `http`；`identity-exchange` 是身分服務的 token exchange（`token-exchange` 埠，選的是身分服務的 pod），呼叫端是 `TRUSTIOT_ON_BEHALF_CALLS` 的呼叫端，預設 values 只有 `assistant`，它自己不是服務，所以「代表使用者呼叫」是 `—`；certs 服務同樣依埠分開：`certs` 的呼叫端只連得到 `http`，`certs-broker` 是簽 MQTT broker 伺服器憑證的 `broker-certs` 埠（選的是 certs 的 pod），只放行 broker 的憑證 CronJob（`mqtt-broker-certificate`），預設 values 不部署 broker，所以沒有呼叫端；「代表使用者呼叫」是身分服務願意為誰換出以它為受眾的 token（`TRUSTIOT_ON_BEHALF_CALLS`），`—` 表示被呼叫端不是服務、不收內部身分 token。`tests/chart.test.ts` 的「README.md's call matrix」比對這張表與渲染結果：改了預設的 `mesh.calls`、例外路徑或預設的 `ingress.routes`，要在同一個變更更新這張表。
+預設 values、所有服務啟用時渲染出的授權，兩種部署形態相同。「允許的呼叫端」是被呼叫端的 AuthorizationPolicy 的 principals（省略 `<release>-`），NetworkPolicy 放行同一批 pod；身分服務的政策依埠分開：`identity` 的呼叫端（入口 gateway）只連得到 API 埠 `http`；`identity-exchange` 是身分服務的 token exchange（`token-exchange` 埠，選的是身分服務的 pod），呼叫端是 `TRUSTIOT_ON_BEHALF_CALLS` 的呼叫端，預設 values 只有 `assistant`，它自己不是服務，所以「代表使用者呼叫」是 `—`；certs 服務同樣依埠分開：`certs` 的呼叫端只連得到 `http`，`certs-broker` 是簽 MQTT broker 伺服器憑證的 `broker-certs` 埠（選的是 certs 的 pod），只放行 broker 的憑證 CronJob（`mqtt-broker-certificate`），預設 values 不部署 broker，所以沒有呼叫端；AI 閘道同樣依埠分開：`ai-gateway` 的呼叫端只連得到 API 埠 `http`，`ai-gateway-admin` 是 AI 閘道的管理埠 `admin`（選的是 AI 閘道的 pod），只放行身分服務，它不收內部身分 token，所以「代表使用者呼叫」是 `—`；「代表使用者呼叫」是身分服務願意為誰換出以它為受眾的 token（`TRUSTIOT_ON_BEHALF_CALLS`），`—` 表示被呼叫端不是服務、不收內部身分 token。`tests/chart.test.ts` 的「README.md's call matrix」比對這張表與渲染結果：改了預設的 `mesh.calls`、例外路徑或預設的 `ingress.routes`，要在同一個變更更新這張表。
 
 | 被呼叫端 | 允許的呼叫端 | 代表使用者呼叫 |
 | --- | --- | --- |
 | `ai-gateway` | `assistant` | （無） |
+| `ai-gateway-admin` | `identity` | — |
 | `alerts` | （無） | （無） |
 | `assets` | `assistant` | `assistant` |
 | `assistant` | （無） | （無） |
@@ -334,7 +347,7 @@ chart 產生下列物件：
 | `services.<name>.replicas` | 覆寫副本數 |
 | `services.<name>.ports` | 整個取代埠清單；埠名與埠號不能重複，也不能用 `health` 或健康埠的埠號；探針只能指向清單內的埠名與 `health`。只有 `identity` 有預設值：`http` 8080 與 token exchange 的 `token-exchange` 8082（服務的 `exchange.listen_addr`），`token-exchange` 由自己的 Service `<release>-identity-exchange` 提供，mesh 依這兩個埠分開授權（見「服務間授權（mesh）」的代表使用者呼叫），覆寫時兩個都要保留 |
 | `services.<name>.healthPort` | 覆寫健康埠的埠號；服務的 `http.health_listen_addr` 要跟著改 |
-| `services.<name>.env` | 接在 `serviceDefaults.env` 後面，名稱不能重複。`TRUSTIOT_` 後面接英數字、`SENTRY_`、`OTEL_` 開頭的名稱（不分大小寫）保留給 chart，避免覆寫平台設定與 chart 給的密鑰；`TRUSTIOT__`（兩個底線）開頭的名稱不在保留範圍。名稱像密鑰（含 SECRET、PASSW、PASSPHRASE、PWD、TOKEN、API_KEY、DSN、PRIVATE、CREDENTIAL，或以 `_KEY` 結尾，不分大小寫）的變數只能用 `valueFrom.secretKeyRef`，不能用字面值或 ConfigMap 等其他來源；每一項只能有 `value` 或一個 `valueFrom` 來源。任何變數都不能讀 values 指定的依賴帳密與 Sentry DSN（同一個 Secret 的同一個 key），依賴帳密要改列在 `credentials`。`ai-gateway` 的設定前綴是 `AI_GATEWAY`（見「AI 閘道」），所以它另外保留 `AI_GATEWAY_` 後接英數字（平台設定與設定檔的名稱）、`AI_GATEWAY__PROVIDERS__`、`AI_GATEWAY__ROLES__` 開頭的名稱，以及它的 ConfigMap 裡的每個變數：供應商、金鑰變數、端點與模型只能來自 `ai`，container 的 `env` 會蓋過 ConfigMap |
+| `services.<name>.env` | 接在 `serviceDefaults.env` 後面，名稱不能重複。`TRUSTIOT_` 後面接英數字、`SENTRY_`、`OTEL_` 開頭的名稱（不分大小寫）保留給 chart，避免覆寫平台設定與 chart 給的密鑰；`TRUSTIOT__`（兩個底線）開頭的名稱不在保留範圍。名稱像密鑰（含 SECRET、PASSW、PASSPHRASE、PWD、TOKEN、API_KEY、DSN、PRIVATE、CREDENTIAL，或以 `_KEY` 結尾，不分大小寫）的變數只能用 `valueFrom.secretKeyRef`，不能用字面值或 ConfigMap 等其他來源；每一項只能有 `value` 或一個 `valueFrom` 來源。任何變數都不能讀 values 指定的依賴帳密與 Sentry DSN（同一個 Secret 的同一個 key），依賴帳密要改列在 `credentials`。`ai-gateway` 的設定前綴是 `AI_GATEWAY`（見「AI 閘道」），所以它另外保留 `AI_GATEWAY_` 後接英數字（平台設定與設定檔的名稱）、`AI_GATEWAY__PROVIDERS__`、`AI_GATEWAY__ROLES__` 開頭的名稱，以及它的 ConfigMap 裡的每個變數：供應商、金鑰變數、端點與模型只能來自 `ai`，container 的 `env` 會蓋過 ConfigMap；`AI_GATEWAY__ADMIN__` 開頭的名稱也保留給 chart（管理 API 的監聽位址，見「服務間授權（mesh）」的「AI 閘道的管理埠」） |
 | `services.<name>.credentials` | 只給這個服務的依賴帳密，可列 `qdrant-read`、`qdrant-write`、`object-storage`、`smtp`、`ai`，變數見「密鑰的環境變數」；不能放在 `serviceDefaults`，避免每個服務都拿到。`identity` 預設列 `smtp`：它用 `smtp` 的 relay 寄登入驗證碼（`services/identity/README.md`）。`ai` 只能給 `ai-gateway`（決策 28），`ai-gateway` 預設就列 `ai`，拿掉時開啟它會渲染失敗（閘道沒有金鑰不啟動）；`qdrant-read` 與 `qdrant-write` 只能給 `knowledge`，因為 Qdrant 查詢的租戶條件由知識庫服務加上（docs/architecture/rag.md） |
 | `services.<name>.database` | 用 Postgres（`mesh.calls` 列出 `postgres`）的服務的連線設定；不能放在 `serviceDefaults` |
 | `services.<name>.database.maxConnections` | 服務主要連線池的大小，chart 以 `TRUSTIOT__DATABASE__MAX_CONNECTIONS` 傳入（`ai-gateway` 是 `AI_GATEWAY__DATABASE__MAX_CONNECTIONS`；自訂 `env` 不能設定這個變數）。`identity` 預設 `10`（3–100，它常駐 3 條）、`assets` 與 `telemetry-query` 預設 `10`（2–100）、`certs` 預設 `5`（2–100）、`assistant` 預設 `4`（2–100）、`ai-gateway` 預設 `4`（2–32），範圍外渲染失敗。用 Postgres 的服務一定要有；所有服務在整版滾動時的連線加總超過 `postgres.bundled.parameters.max_connections` 時渲染失敗，見「叢集內的 Postgres」的連線預算 |
@@ -596,11 +609,15 @@ collector 開啟時另有 `AI_GATEWAY__TELEMETRY__OTLP_ENDPOINT`（與其他服�
 | `AI_GATEWAY__DATABASE__USERNAME`、`AI_GATEWAY__DATABASE__PASSWORD` | `ai_gateway_app` 與 Secret `<release>-ai-gateway-password` 的同名 key |
 | `AI_GATEWAY__DATABASE__MAX_CONNECTIONS` | `services.ai-gateway.database.maxConnections`（預設 `4`，2–32），算進連線預算（「叢集內的 Postgres」的「連線預算」） |
 
-這些名稱保留給 chart，自訂 `env` 不能設定。閘道讀不到 Postgres 時以 503 拒絕 AI 呼叫，readiness 也包含 migration 與 Postgres 的檢查；`mesh.calls.ai-gateway` 沒有 `postgres` 時閘道缺少資料庫設定、不會啟動，所以渲染失敗（見下一段）。
+這些名稱保留給 chart，自訂 `env` 不能設定。
 
-開啟 `ai-gateway` 時，閘道會拒絕啟動的設定都讓渲染失敗，不論有沒有做 schema 驗證，所以 values 的錯誤不會變成一直重啟的 pod：`credentials` 沒有 `ai`、`mesh.calls.ai-gateway` 沒有 `postgres`、沒有角色、角色或模型不合規則、用到沒有 `apiKeySecret.name` 的供應商、上限超出範圍、某個角色的 `queueWait` 加上 `timeouts.response` 與 `timeouts.firstToken` 較長者放不進 `ai.requestTimeout` 減去十分之一（最多 2 秒；chart 以毫秒計算並無條件進位，所以不會比閘道寬鬆）、`drainSeconds` 不在 11 到 3605 之間。chart 只認得 `anthropic` 與 `openai` 兩個供應商。
+**管理 API**（Laysi/trustiot-v2#607）：閘道在自己的埠 `admin`（預設 8082）提供更換模型的管理 API（`services/ai-gateway/README.md`「管理 API」），`services.ai-gateway.ports` 的預設因此是 `http` 與 `admin` 兩個埠。只有身分服務連得到它，由它驗證平台管理員的權限並記錄變更；身分服務也啟用時，chart 把 `AI_GATEWAY__ADMIN__LISTEN_ADDR` 設成 `0.0.0.0:<admin 的 container port>`，產生 Service 與政策 `<release>-ai-gateway-admin`，並把位址以 `TRUSTIOT_AI_GATEWAY_ADMIN_URL` 只交給身分服務；沒有身分服務時管理 API 留在 `127.0.0.1:8082`。`AI_GATEWAY__ADMIN__` 開頭的變數保留給 chart。授權的細節見「服務間授權（mesh）」的「AI 閘道的管理埠」與「呼叫矩陣」。
 
-閘道在收到請求之前不連供應商，readiness 也不依賴供應商連得到：沒有金鑰的 CI 與 nightly 以假的 Secret 值就能讓它就緒（`scripts/nightly/api.ts` 的 `AI_GATEWAY_SMOKE`），但這不證明金鑰能用。確認一把金鑰能用要送一次真的請求（`services/ai-gateway/README.md` 的「範例：一次最小的呼叫」）。內部 API 只開給 mesh 授權的三個呼叫端，所以從叢集外送時以 `kubectl port-forward` 連進閘道的 pod：port-forward 進入 pod 自己的網路命名空間，不經 ztunnel 與 NetworkPolicy，需要能對那個 namespace 的 pod 做 `pods/portforward` 的權限，與 `kubectl exec` 同級，只給維運的管理者：
+閘道讀不到 Postgres 時以 503 拒絕 AI 呼叫，readiness 也包含 migration 與 Postgres 的檢查；`mesh.calls.ai-gateway` 沒有 `postgres` 時閘道缺少資料庫設定、不會啟動，所以渲染失敗（見下一段）。
+
+開啟 `ai-gateway` 時，閘道會拒絕啟動的設定都讓渲染失敗，不論有沒有做 schema 驗證，所以 values 的錯誤不會變成一直重啟的 pod：`credentials` 沒有 `ai`、`mesh.calls.ai-gateway` 沒有 `postgres`、`ports` 沒有 API 埠（或身分服務也啟用而沒有 `admin`）、沒有角色、角色或模型不合規則、用到沒有 `apiKeySecret.name` 的供應商、上限超出範圍、某個角色的 `queueWait` 加上 `timeouts.response` 與 `timeouts.firstToken` 較長者放不進 `ai.requestTimeout` 減去十分之一（最多 2 秒；chart 以毫秒計算並無條件進位，所以不會比閘道寬鬆）、`drainSeconds` 不在 11 到 3605 之間。chart 只認得 `anthropic` 與 `openai` 兩個供應商。
+
+閘道在收到請求之前不連供應商，readiness 也不依賴供應商連得到：沒有金鑰的 CI 與 nightly 以假的 Secret 值就能讓它就緒（`scripts/nightly/api.ts` 的 `AI_GATEWAY_SMOKE`），但這不證明金鑰能用。確認一把金鑰能用要送一次真的請求（`services/ai-gateway/README.md` 的「範例：一次最小的呼叫」）。內部 API 只開給 mesh 授權的三個呼叫端（管理埠只開給身分服務），所以從叢集外送時以 `kubectl port-forward` 連進閘道的 pod：port-forward 進入 pod 自己的網路命名空間，不經 ztunnel 與 NetworkPolicy，需要能對那個 namespace 的 pod 做 `pods/portforward` 的權限，與 `kubectl exec` 同級，只給維運的管理者：
 
 ```sh
 kubectl -n <namespace> port-forward deploy/<release>-ai-gateway 18080:8080
@@ -1043,6 +1060,7 @@ SIEM 連不上時 exporter 在記憶體佇列重試 5 分鐘，不影響寫進 C
 | --- | --- | --- |
 | `TRUSTIOT_INGRESS_ROUTES` | `ingress.routes` 換成實際主機名稱的 JSON 陣列 `[{host, path, match, service}]`，決定 token 的受眾 | 一律（沒有路由時是 `[]`） |
 | `TRUSTIOT_ON_BEHALF_CALLS` | `mesh.calls` 中兩個啟用的服務之間、不含 `ai-gateway` 的呼叫，JSON `{"<呼叫端>": ["<被呼叫端>", ...]}`：token 交換只替這些呼叫換 token（見「服務間授權（mesh）」） | 一律（沒有這種呼叫時是 `{}`） |
+| `TRUSTIOT_AI_GATEWAY_ADMIN_URL` | AI 閘道管理 API 的 Service `http://<release>-ai-gateway-admin.<namespace>.svc:8082`，只有身分服務連得到（見「服務間授權（mesh）」的「AI 閘道的管理埠」，Laysi/trustiot-v2#607） | `services.ai-gateway` 開啟時 |
 | `TRUSTIOT_IDENTITY_SIGNING_KEYS_FILE` | 掛載的簽章金鑰檔 `/etc/trustiot/identity-signing-keys/signing-keys.json` | 一律 |
 | `TRUSTIOT_IDENTITY_REVOKE_BEFORE_GENERATION` | `internalIdentity.revokeBeforeGeneration`：不用代比它小的金鑰簽章 | 一律 |
 | `TRUSTIOT_IDENTITY_KEY_PROPAGATION_SECONDS` | `internalIdentity.keyPropagationSeconds`：金鑰與公開的公鑰不一致多久之後記 ERROR | 一律 |
