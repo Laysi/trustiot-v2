@@ -2802,6 +2802,7 @@ dependencies = [
  "protocol",
  "rcgen",
  "reqwest",
+ "ring",
  "rustls",
  "rustls-pki-types",
  "serde",

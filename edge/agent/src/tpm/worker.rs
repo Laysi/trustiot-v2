@@ -18,6 +18,28 @@ use super::marshal::MAX_RESPONSE_BYTES;
 /// handshake at a time; a full queue is refused rather than waited on.
 pub(crate) const QUEUE_CAPACITY: usize = 8;
 
+/// The warnings after which a command is sent again (TPM 2.0 Part 2, section 6.6.3): the TPM did
+/// not run it. `TPM_RC_YIELDED` (0x908), `TPM_RC_TESTING` (0x90a) and `TPM_RC_RETRY` (0x922),
+/// which swtpm returned for TPM2_Create on 2026-10-29. tpm2-tss resends the same three.
+const RETRY_WARNINGS: [u32; 3] = [0x908, 0x90a, 0x922];
+/// How often a command is sent again after those warnings, and the pause before the first
+/// resend, doubled for each further one up to [`RETRY_PAUSE_MAX`]: about 1.6 s in all, well
+/// within the caller's wait.
+const RETRIES: u32 = 8;
+const RETRY_PAUSE: Duration = Duration::from_millis(10);
+const RETRY_PAUSE_MAX: Duration = Duration::from_millis(500);
+
+/// Whether the worker sends a command again when the TPM answers with one of
+/// [`RETRY_WARNINGS`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Retry {
+    /// Return the warning to the caller (the agent's signing path, unchanged since
+    /// Laysi/trustiot-v2#86).
+    Never,
+    /// Resend up to [`RETRIES`] times (provisioning).
+    OnWarnings,
+}
+
 /// Something that carries TPM 2.0 commands to a TPM and brings back its responses: the kernel's
 /// resource manager (`/dev/tpmrm0`) in production, a TCP socket to a software TPM in tests.
 ///
@@ -115,12 +137,17 @@ pub(crate) struct Worker {
 }
 
 impl Worker {
-    /// Starts the thread that owns `channel`. A response must arrive within `timeout`.
-    pub(crate) fn spawn(channel: Box<dyn TpmChannel>, timeout: Duration) -> Result<Self, TpmError> {
+    /// Starts the thread that owns `channel`. A response must arrive within `timeout`, resends
+    /// included.
+    pub(crate) fn spawn(
+        channel: Box<dyn TpmChannel>,
+        timeout: Duration,
+        retry: Retry,
+    ) -> Result<Self, TpmError> {
         let (requests, queue) = mpsc::sync_channel(QUEUE_CAPACITY);
         thread::Builder::new()
             .name("tpm".to_owned())
-            .spawn(move || serve(channel, &queue))
+            .spawn(move || serve(channel, &queue, retry))
             .map_err(TpmError::Spawn)?;
         Ok(Self { requests, timeout })
     }
@@ -158,10 +185,30 @@ impl Pending {
 }
 
 /// The worker thread: one command at a time, until every sender is gone.
-fn serve(mut channel: Box<dyn TpmChannel>, queue: &Receiver<Request>) {
+fn serve(mut channel: Box<dyn TpmChannel>, queue: &Receiver<Request>, retry: Retry) {
     while let Ok(Request { command, reply }) = queue.recv() {
-        let result = channel.transact(&command).map_err(TpmError::Io);
+        let mut result = channel.transact(&command).map_err(TpmError::Io);
+        if retry == Retry::OnWarnings {
+            let mut pause = RETRY_PAUSE;
+            for _ in 0..RETRIES {
+                if !result.as_deref().is_ok_and(is_retry_warning) {
+                    break;
+                }
+                thread::sleep(pause);
+                pause = (pause * 2).min(RETRY_PAUSE_MAX);
+                result = channel.transact(&command).map_err(TpmError::Io);
+            }
+        }
         // The caller may have given up waiting; then nobody needs the response.
         let _ = reply.send(result);
     }
+}
+
+/// Whether `response` is a bare header with one of [`RETRY_WARNINGS`].
+fn is_retry_warning(response: &[u8]) -> bool {
+    response.len() == 10
+        && response
+            .get(6..10)
+            .and_then(|code| <[u8; 4]>::try_from(code).ok())
+            .is_some_and(|code| RETRY_WARNINGS.contains(&u32::from_be_bytes(code)))
 }
