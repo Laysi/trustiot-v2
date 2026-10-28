@@ -4148,7 +4148,7 @@
               }
             }
           },
-          "description": "No body, `null`, or an empty object."
+          "description": "Nothing to set: send `Content-Type: application/json` (required, against cross-site requests) with no body, `null`, or an empty object."
         },
         "responses": {
           "201": {
@@ -4232,15 +4232,8 @@
           }
         ],
         "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/DeletedConversation"
-                }
-              }
-            },
-            "description": "Deleted; until when it can be restored."
+          "204": {
+            "description": "Deleted; it can be restored for 30 days (the deleted list gives until when). No body."
           },
           "401": {
             "content": {
@@ -4501,7 +4494,7 @@
               }
             }
           },
-          "description": "No body, `null`, or an empty object."
+          "description": "Nothing to set: send `Content-Type: application/json` (required, against cross-site requests) with no body, `null`, or an empty object."
         },
         "responses": {
           "200": {

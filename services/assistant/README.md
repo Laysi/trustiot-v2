@@ -159,11 +159,11 @@ service-kit 把這兩種拒絕都記成 INFO（`the identity service refused the
 | 方法與路徑 | 做什麼 | 成功時 |
 | --- | --- | --- |
 | `GET /conversations` | 自己的對話，依最後活動時間由新到舊；預設只列沒封存的，`archived=true` 只列封存的 | 200 `ConversationList` |
-| `POST /conversations` | 開始一個空的對話；沒有本文、`null` 或 `{}` | 201 `Conversation`，`Location` 指向它 |
+| `POST /conversations` | 開始一個空的對話；送 `Content-Type: application/json`，本文是空的、`null` 或 `{}` | 201 `Conversation`，`Location` 指向它 |
 | `GET /conversations/{id}` | 對話與聊天顯示的訊息 | 200 `ConversationDetail` |
 | `PATCH /conversations/{id}` | 改名（`title`）、封存或取消封存（`archived`），至少一項，在同一個交易 | 200 `Conversation` |
-| `DELETE /conversations/{id}` | 刪除，30 天內可以還原 | 200 `DeletedConversation`（含 `restorable_until`） |
-| `POST /conversations/{id}/restore` | 還原 30 天內刪除的對話；沒有本文、`null` 或 `{}` | 200 `Conversation` |
+| `DELETE /conversations/{id}` | 刪除，30 天內可以還原（期限見已刪除清單的 `restorable_until`） | 204，沒有本文 |
+| `POST /conversations/{id}/restore` | 還原 30 天內刪除的對話；送 `Content-Type: application/json`，本文是空的、`null` 或 `{}` | 200 `Conversation` |
 | `GET /deleted-conversations` | 還能還原的已刪除對話，依刪除時間由新到舊，只有標題與時間 | 200 `DeletedConversationList` |
 
 型別與每個狀態碼在 `api/openapi.json`（tag `assistant`），前端的 client 由它產生。
@@ -174,7 +174,7 @@ service-kit 把這兩種拒絕都記成 INFO（`the identity service refused the
 - **改名與封存**：`title` 去掉前後的空白後要 1 到 200 個字元、不含控制字元，標題來源記為 `user`，之後模型產生的標題不會取代它。封存的對話照常可以讀、可以繼續。
 - **分頁**：照身分服務操作紀錄的慣例：`limit`（1 到 100，預設 50）、`cursor`（上一頁的 `next_cursor`），回應 `{"conversations": [...], "next_cursor": ...}`，最後一頁的 `next_cursor` 是 `null`。順序是（時間、ID）由新到舊，時間相同時看 ID，所以翻頁不重複、不遺漏。`next_cursor` 對客戶端是不透明的，內容是清單的種類、資料庫的時間（微秒，Postgres 的精度）與 ID；沒封存的、封存的與已刪除的三個清單的 cursor 只能用在自己的清單。cursor 不簽章：store 只看呼叫者自己的對話，改過的 cursor 只會移動自己清單的起點。
 - **刪除與還原**：刪除只記下刪除時間（`store::delete`），30 天內 `POST .../restore` 原樣還原，之後清除會刪掉它。有提問進行中、截止時間未過時，刪除回 409，什麼都不改；刪除先鎖住對話那一列才檢查提問，所以與開始提問同時發生時只有一個結果（見「規則」的軟刪除）。
-- **寫入要 JSON**：`POST` 與 `PATCH` 要 `Content-Type: application/json`（防 CSRF，[身分服務的規則](../identity/README.md#租戶)）；`DELETE` 不用（跨 origin 的 `DELETE` 本來就要 preflight）。
+- **寫入要 JSON**：`POST` 與 `PATCH` 要 `Content-Type: application/json`（防 CSRF，[身分服務的規則](../identity/README.md#租戶)），沒有欄位的開始對話與還原也一樣：送這個 `Content-Type`，本文是空的、`null` 或 `{}`；少了它回 400。`DELETE` 不用（跨 origin 的 `DELETE` 本來就要 preflight）。
 
 | 情況 | 回應 |
 | --- | --- |

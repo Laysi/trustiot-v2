@@ -194,7 +194,7 @@ async fn deleted_conversation(
     service
         .as_user(issuer, user, HttpMethod::DELETE, &path, None)
         .await
-        .expect_status(200);
+        .expect_status(204);
     id
 }
 

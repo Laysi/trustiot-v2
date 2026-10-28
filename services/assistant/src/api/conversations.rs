@@ -8,6 +8,9 @@
 //! conversation the caller cannot see: one that does not exist, another user's or another
 //! tenant's, a deleted one (except to restore it), and a path ID that is not a UUID.
 //!
+//! A delete answers 204 without a body; the deleted list tells until when a conversation can be
+//! restored. Every other success answers with the conversation (or the page) as JSON.
+//!
 //! | Request | Response |
 //! | --- | --- |
 //! | No valid internal identity token | 401 `unauthenticated` |
@@ -364,7 +367,7 @@ async fn list_conversations(
     path = "/api/assistant/v1/conversations",
     tag = "assistant",
     operation_id = "createConversation",
-    request_body(content = Option<CreateConversation>, description = "No body, `null`, or an empty object."),
+    request_body(content = Option<CreateConversation>, description = "Nothing to set: send `Content-Type: application/json` (required, against cross-site requests) with no body, `null`, or an empty object."),
     responses(
         (status = 201, description = "The conversation was started; `Location` names it.", body = Conversation,
             headers(("location" = String, description = "The conversation's path."))),
@@ -632,7 +635,7 @@ async fn update_in(
     operation_id = "deleteConversation",
     params(("conversation_id" = Uuid, Path, description = "The conversation's ID.")),
     responses(
-        (status = 200, description = "Deleted; until when it can be restored.", body = DeletedConversation),
+        (status = 204, description = "Deleted; it can be restored for 30 days (the deleted list gives until when). No body."),
         (status = 401, description = "No valid session (`unauthenticated`).", body = ErrorBody),
         (status = 403, description = "No tenant (`permission_denied`).", body = ErrorBody),
         (status = 404, description = "No such conversation of the caller's, or it is already deleted (`not_found`).", body = ErrorBody),
@@ -659,14 +662,16 @@ async fn delete_conversation(
     };
     let result = store::delete(&mut tx, principal, id).await;
     match super::finish(tx, result).await {
-        Ok(deleted) => {
+        // The deletion time and the restore deadline are the deleted list's to give: the
+        // contract for DELETE is 204 without a body (Laysi/trustiot-v2#645).
+        Ok(_) => {
             tracing::info!(
                 user_id = %user.user_id(),
                 tenant_id = %principal.tenant_id,
                 conversation_id = %id,
                 "conversation deleted"
             );
-            super::ok(StatusCode::OK, &DeletedConversation::from(&deleted))
+            super::no_content()
         }
         Err(failure) => super::store_failure(&user, Some(id), ACTION, &failure),
     }
@@ -680,7 +685,7 @@ async fn delete_conversation(
     tag = "assistant",
     operation_id = "restoreConversation",
     params(("conversation_id" = Uuid, Path, description = "The conversation's ID.")),
-    request_body(content = Option<RestoreConversation>, description = "No body, `null`, or an empty object."),
+    request_body(content = Option<RestoreConversation>, description = "Nothing to set: send `Content-Type: application/json` (required, against cross-site requests) with no body, `null`, or an empty object."),
     responses(
         (status = 200, description = "Restored; the conversation as it is now.", body = Conversation),
         (status = 400, description = "The `Content-Type` is not `application/json` (`invalid_request`), or there is a body other than `null` or an empty object (`conversation.body_invalid`).", body = ErrorBody),

@@ -3138,7 +3138,7 @@ export interface operations {
             path?: never;
             cookie?: never;
         };
-        /** @description No body, `null`, or an empty object. */
+        /** @description Nothing to set: send `Content-Type: application/json` (required, against cross-site requests) with no body, `null`, or an empty object. */
         requestBody?: {
             content: {
                 "application/json": components["schemas"]["CreateConversation"] | null;
@@ -3265,14 +3265,12 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Deleted; until when it can be restored. */
-            200: {
+            /** @description Deleted; it can be restored for 30 days (the deleted list gives until when). No body. */
+            204: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content: {
-                    "application/json": components["schemas"]["DeletedConversation"];
-                };
+                content?: never;
             };
             /** @description No valid session (`unauthenticated`). */
             401: {
@@ -3412,7 +3410,7 @@ export interface operations {
             };
             cookie?: never;
         };
-        /** @description No body, `null`, or an empty object. */
+        /** @description Nothing to set: send `Content-Type: application/json` (required, against cross-site requests) with no body, `null`, or an empty object. */
         requestBody?: {
             content: {
                 "application/json": components["schemas"]["RestoreConversation"] | null;

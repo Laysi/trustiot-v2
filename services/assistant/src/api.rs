@@ -183,6 +183,11 @@ pub(crate) fn ok<T: Serialize>(status: StatusCode, body: &T) -> Response {
     (status, [(CACHE_CONTROL, "no-store")], axum::Json(body)).into_response()
 }
 
+/// 204 without a body, with `cache-control: no-store` like every response of the API.
+pub(crate) fn no_content() -> Response {
+    (StatusCode::NO_CONTENT, [(CACHE_CONTROL, "no-store")]).into_response()
+}
+
 pub(crate) fn error(body: ErrorBody) -> Response {
     (
         body.http_status(),

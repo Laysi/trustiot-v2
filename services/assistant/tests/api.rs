@@ -390,7 +390,7 @@ async fn another_user_of_the_tenant_gets_what_a_missing_id_gets() {
     let deleted = api.create(&owner).await;
     api.call(&owner, Method::DELETE, &conversation(deleted), None)
         .await
-        .expect_status(200);
+        .expect_status(204);
     let before = [
         api.snapshot(live).await,
         api.snapshot(archived).await,
@@ -846,7 +846,7 @@ async fn rename_archive_and_the_pages_of_the_list() {
     for extra in [first, second] {
         api.call(&owner, Method::DELETE, &conversation(extra), None)
             .await
-            .expect_status(200);
+            .expect_status(204);
     }
     let deleted = api
         .call(&owner, Method::GET, &format!("{DELETED}?limit=1"), None)
@@ -953,14 +953,10 @@ async fn delete_the_deleted_list_and_restore() {
     let deleted = api
         .call(&owner, Method::DELETE, &conversation(id), None)
         .await;
-    deleted.expect_status(200);
+    deleted.expect_status(204);
     assert_eq!(deleted.header("cache-control"), Some("no-store"));
-    let deleted = deleted.json();
-    assert_eq!(deleted["id"], id.to_string());
-    assert_eq!(
-        time(&deleted["restorable_until"]) - time(&deleted["deleted_at"]),
-        TimeDelta::days(30)
-    );
+    assert_eq!(deleted.body, "", "a delete answers without a body");
+    assert_eq!(deleted.header("content-type"), None);
     assert_eq!(api.ids(&owner, CONVERSATIONS).await, [other]);
     for (method, path, body) in requests_by_id(id).into_iter().take(4) {
         api.call(&owner, method, &path, body.as_ref())
@@ -969,14 +965,20 @@ async fn delete_the_deleted_list_and_restore() {
     }
     let listed = api.call(&owner, Method::GET, DELETED, None).await;
     listed.expect_status(200);
+    let listed = listed.json();
+    let deleted = &listed["conversations"][0];
     assert_eq!(
-        listed.json()["conversations"],
+        listed["conversations"],
         json!([{
             "id": id.to_string(),
             "title": Value::Null,
             "deleted_at": deleted["deleted_at"],
             "restorable_until": deleted["restorable_until"],
         }])
+    );
+    assert_eq!(
+        time(&deleted["restorable_until"]) - time(&deleted["deleted_at"]),
+        TimeDelta::days(30)
     );
 
     // Restored: as it was.
@@ -1005,7 +1007,7 @@ async fn delete_the_deleted_list_and_restore() {
     // Past 30 days: not in the deleted list, not restorable.
     api.call(&owner, Method::DELETE, &conversation(id), None)
         .await
-        .expect_status(200);
+        .expect_status(204);
     api.backdate(id, Utc::now() - TimeDelta::days(31)).await;
     assert!(api.ids(&owner, DELETED).await.is_empty());
     api.call(&owner, Method::POST, &restore_path(id), Some(&json!({})))
@@ -1018,7 +1020,7 @@ async fn delete_the_deleted_list_and_restore() {
     let recent = api.create(&owner).await;
     api.call(&owner, Method::DELETE, &conversation(recent), None)
         .await
-        .expect_status(200);
+        .expect_status(204);
     let (recent_before, other_before) = (api.snapshot(recent).await, api.snapshot(other).await);
     assistant::purge::round(&api.platform)
         .await
