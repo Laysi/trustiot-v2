@@ -1,6 +1,6 @@
 # ingest（資料接收）
 
-閘道器的遙測資料經 MQTT 寫進 ClickHouse，整批落盤後才回確認（決策 8、清單 I1）。服務在 Laysi/trustiot-v2#91 底下分段實作：2026-10-24 起有服務骨架、Postgres schema 與閘道器綁定對照表（Laysi/trustiot-v2#640，見[服務與設定](#服務與設定)、[閘道器綁定對照表](#閘道器綁定對照表)）；MQTT 的訂閱、寫入與確認是 Laysi/trustiot-v2#641，映像與 chart 的部署是 Laysi/trustiot-v2#642。這個 crate 也放 ClickHouse 的 schema、保存期限的值（`src/retention.rs`）、彙總表的對帳與電能查詢語句（`src/rollup.rs`）與它們的測試（Laysi/trustiot-v2#59、Laysi/trustiot-v2#92、Laysi/trustiot-v2#141）。
+閘道器的遙測資料經 MQTT 寫進 ClickHouse，整批落盤後才回確認（決策 8、清單 I1）。服務在 Laysi/trustiot-v2#91 底下分段實作：2026-10-24 起有服務骨架、Postgres schema 與閘道器綁定對照表（Laysi/trustiot-v2#640，見[服務與設定](#服務與設定)、[閘道器綁定對照表](#閘道器綁定對照表)），2026-10-29 起有 MQTT 的訂閱、寫入與確認（Laysi/trustiot-v2#641，見[寫入流程](#寫入流程)）；映像與 chart 的部署是 Laysi/trustiot-v2#642，在那之前沒有任何部署執行這個服務（chart 的 `services.ingest.enabled` 是 `false`，`deploy/images/` 也沒有它的映像）。這個 crate 也放 ClickHouse 的 schema、保存期限的值（`src/retention.rs`）、彙總表的對帳與電能查詢語句（`src/rollup.rs`）與它們的測試（Laysi/trustiot-v2#59、Laysi/trustiot-v2#92、Laysi/trustiot-v2#141）。
 
 ## 閘道器的租戶歸屬
 
@@ -14,17 +14,18 @@
 
 ## 服務與設定
 
-`cargo run -p ingest`（`src/main.rs`）以 `crates/service-kit` 啟動：設定、JSON 日誌、`/healthz`、`/readyz`、指標與優雅關閉都照 service-kit。服務沒有 HTTP API，只有健康檢查的端點（`tools/openapi` 的 `SERVICES_WITHOUT_API`）。啟動時建立兩個 Postgres 連線池（都是 lazy 連線，連線前做 service-kit 的 session 檢查）與 ClickHouse 的用戶端，並啟動 `assets.gateway_bound` 的消費端。
+`cargo run -p ingest`（`src/main.rs`）以 `crates/service-kit` 啟動：設定、JSON 日誌、`/healthz`、`/readyz`、指標與優雅關閉都照 service-kit。服務沒有 HTTP API，只有健康檢查的端點（`tools/openapi` 的 `SERVICES_WITHOUT_API`）。啟動時建立兩個 Postgres 連線池（都是 lazy 連線，連線前做 service-kit 的 session 檢查）與 ClickHouse 的用戶端，啟動 `assets.gateway_bound` 的消費端，並以 `crates/mqtt-client` 連 broker、啟動遙測的寫入流程（見[寫入流程](#寫入流程)）。關閉時先停止接新的訊息，等處理中的批次寫完並回確認，再中斷 broker 的連線。
 
 readiness 在下列全部成立時才是 200：
 
 - `postgres`：服務角色與平台角色都能開出通過檢查的 session；
 - migration 檢查：資料庫有這個版本預期的每個 Postgres migration 檔（`src/schema.rs`）；
-- `clickhouse`：ClickHouse 以服務帳號回答 `SELECT 1`。這個檢查涵蓋位址、TLS 與帳密，不涵蓋帳號的權限：寫入路徑（Laysi/trustiot-v2#641）會把缺少的權限當成那條語句的錯誤回報。不用碰表的語句，readiness 就不依賴 ClickHouse 的表名（Laysi/trustiot-v2#639 正在改表）。
+- `clickhouse`：ClickHouse 以服務帳號回答 `SELECT 1`。這個檢查涵蓋位址、TLS 與帳密，不涵蓋帳號的權限：寫入流程把缺少的權限當成那條語句的錯誤，回 `retry` 並記在指標與日誌。不用碰表的語句，readiness 就不依賴 ClickHouse 的表名。
+- `mqtt`：連上 broker，而且遙測的共用訂閱以 QoS 1 獲准（`Subscriptions::all_granted`；broker 拒絕或只給 QoS 0 都不算）。斷線時立刻不是 200，重連並重新訂閱成功後恢復；用戶端自己重連，間隔最長 `RECONNECT_DELAY_MAX`（30 秒），每次連線最多 `CONNECT_TIMEOUT`（10 秒）。
 
 每個檢查最多 800 毫秒（service-kit），失敗時日誌 WARN `readiness check failed` 帶檢查名稱與原因；原因只有連線錯誤的種類或 ClickHouse 的錯誤代碼，不含回應內文與密碼。
 
-設定（`src/config.rs`，`TRUSTIOT__*` 段落都是 `deny_unknown_fields`；MQTT 的設定由 Laysi/trustiot-v2#641 加上，chart 的變數由 Laysi/trustiot-v2#642 渲染）：
+設定（`src/config.rs`，`TRUSTIOT__*` 段落都是 `deny_unknown_fields`；chart 的變數由 Laysi/trustiot-v2#642 渲染）：
 
 | 變數 | 說明 |
 | --- | --- |
@@ -35,12 +36,16 @@ readiness 在下列全部成立時才是 200：
 | `TRUSTIOT_CLICKHOUSE_URL` | 平台設定：ClickHouse 的 HTTP 介面，`http://host:port`（chart 內建的 ClickHouse，走 mesh 的 mTLS）或 `https://host:port`（外部），不能帶帳密、路徑、查詢字串 |
 | `TRUSTIOT_CLICKHOUSE_CA_FILE` | 平台設定：`https` 時必填，是唯一信任的 CA，並檢查伺服器憑證的名稱（相當於 `verify-full`）；不信任系統或公開的根憑證 |
 | `TRUSTIOT__CLICKHOUSE__USERNAME`、`_PASSWORD` | 服務的 ClickHouse 寫入帳號，持有角色 `trustiot_ingest`（見下方的角色表）；帳號與密碼的交付是 Laysi/trustiot-v2#642 |
+| `TRUSTIOT__MQTT__HOST` | 必填：broker 的主機名稱或 IP，叢集內是 `<release>-mqtt-broker.<namespace>.svc`。走 broker 的服務埠（明文 MQTT，只有 mesh 連得到，由 ztunnel 的 mTLS 保護；見 [crates/mqtt-client](../../crates/mqtt-client/README.md)） |
+| `TRUSTIOT__MQTT__PORT` | broker 的服務埠，預設 1883 |
+| `TRUSTIOT__MQTT__USERNAME` | 必填：服務的 broker 帳號 `service:ingest`，它的角色由 migration Job 建立（`tools/migrate/src/mqtt_accounts.rs` 的 `SERVICES`）：訂閱閘道器的遙測與日誌（直接與 `$share/` 共用訂閱；日誌頻道還沒有程式使用）、只能發布遙測的確認 |
+| `TRUSTIOT__MQTT__PASSWORD_FILE` | 必填：存放這個帳號密碼的檔案（chart 掛上 broker 帳號 Secret 裡 ingest 的那個 key）；每次連線都重讀，換密碼後下一次重連就生效。設定與日誌只出現路徑，不出現密碼 |
 
 ClickHouse 的用戶端（`src/clickhouse.rs`、`src/transport.rs`）複製自 telemetry-query：HTTP/1.1 走 hyper，`https` 以 rustls 與 ring、只信任設定的 CA；每個請求一條連線，單一請求最多 30 秒。三個複本（migration Job、telemetry-query、ingest）合成一個 crate 是之後的工作。
 
 ## Postgres schema 與角色
 
-schema `ingest`，DDL 在 `migrations/postgres/`，由 migration Job 套用（`tools/migrate/src/registry.rs` 的 `PRODUCT`：有平台角色、消費 `assets` 的事件）；檔案清單在 `src/schema.rs`，readiness 檢查同一份。消費端的表在 ingest 自己的 schema（決策 4）。寫入路徑之後以 Postgres 的 advisory lock 讓一個串流同時只由一個副本處理（Laysi/trustiot-v2#641）。
+schema `ingest`，DDL 在 `migrations/postgres/`，由 migration Job 套用（`tools/migrate/src/registry.rs` 的 `PRODUCT`：有平台角色、消費 `assets` 的事件）；檔案清單在 `src/schema.rs`，readiness 檢查同一份。消費端的表在 ingest 自己的 schema（決策 4）。寫入流程以 Postgres 的 advisory lock 讓一個串流同時只由一個副本處理（service-kit 的 `JobLock`，以服務角色的連線池取得；見[寫入流程](#寫入流程)），不另外建表。
 
 | 角色 | 權限 |
 | --- | --- |
@@ -92,13 +97,71 @@ schema `ingest`，DDL 在 `migrations/postgres/`，由 migration Job 套用（`t
 
 需要 podman 或 docker（沒有時略過，設了 `CI` 時改為失敗）：
 
-- `tests/startup.rs`：真的 binary 以 `testkit::product` 的 Postgres（平台設定與 `bun scripts/dev.ts env` 給的變數相同）與 `tests/common` 的 ClickHouse（套用全部 ClickHouse migration，建立持有 `trustiot_ingest` 的帳號）啟動。兩者都連得上時 `/readyz` 是 200；ClickHouse 連不上、ClickHouse 拒絕密碼、Postgres 連不上時都不是 200，日誌點名失敗的檢查，也不含密碼。
+- `tests/startup.rs`：真的 binary 以 `testkit::product` 的 Postgres（平台設定與 `bun scripts/dev.ts env` 給的變數相同）、`tests/common` 的 ClickHouse（套用全部 ClickHouse migration，建立持有 `trustiot_ingest` 的帳號）與 Mosquitto（`tests/support/broker.rs`，`service:ingest` 的角色取自 migration Job 自己的定義）啟動。三者都連得上時 `/readyz` 是 200；ClickHouse 連不上、ClickHouse 拒絕密碼、Postgres 連不上時都不是 200，日誌點名失敗的檢查，也不含密碼；broker 停下時不是 200、日誌點名 `mqtt`，broker 回來後恢復 200。最後經這個 binary 送一批：回 `committed`，同一批再送回 `duplicate`，兩次 ClickHouse 的列數相同。
+- `tests/telemetry.rs`：寫入流程本身，見下一節的「測試」。
 - `tests/gateway_bindings.rs`：以資產服務自己的 `GatewayBinder` 綁定閘道器，ingest 的表有該租戶與 `binding_id`，查詢回答它們；整個訂閱重播與同一個綁定的重複事件都只有一列；事件紀錄裡較晚的綁定成為目前的綁定，即使它的 `occurred_at` 較早（時鐘偏差的副本）；較早的綁定晚到才記錄時不蓋過它；無法記錄的事件進 dead letter、後面的事件照常處理；平台角色寫不進這張表。
 - `tests/cross_tenant.rs`：`crates/testkit` 的跨租戶負向測試宣告 `ingest.gateway_bindings`，服務角色讀不到也改不了別的租戶的綁定。
 
 ```sh
 cargo test -p ingest --test startup --test gateway_bindings --test cross_tenant -- --nocapture
 ```
+
+## 寫入流程
+
+`src/telemetry/`（Laysi/trustiot-v2#641）：閘道器的遙測批次經 broker 寫進 ClickHouse，整批與完成紀錄都落盤之後才在閘道器的 `down/telemetry-ack` 回確認（協定與確認的格式見 [crates/protocol](../../crates/protocol/README.md)）。寫入 ClickHouse 的約定在下方「[I1 重寫與對帳](#i1-重寫與對帳)」，這裡是服務怎麼照它做。
+
+一則訊息的處理：
+
+1. **訂閱**：每個副本以共用訂閱 `$share/ingest/trustiot/v1/gw/+/up/telemetry`（QoS 1）訂閱，broker 把每一則交給其中一個副本。閘道器取自 topic（broker 的 ACL 讓閘道器只能發布到自己的 topic），不取自 payload。
+2. **丟棄、不回確認**：retain 旗標為 1 的訊息（遙測從不 retain；broker 在每次新訂閱時重播 retained 訊息，所以這是閘道器違反協定的舊訊息）、以 QoS 0 交付的訊息（閘道器會重送），以及連批次標頭都讀不出來的 payload，都只記錄日誌與指標。
+3. **`rejected`**：payload 解不開時以 `peek_header` 讀出的串流與序號回 `rejected`（`decode_failed`）。協定接受、但這張表存不了的批次也整批 `rejected`：設備 ID 不是 UUID（`invalid_value`，資產服務建立的設備都是 UUID）或讀值時間超過 `DateTime64` 的範圍（`out_of_range`）。回 `retry` 只會讓這個串流永遠卡住。
+4. **租戶**：每次嘗試在訊息到達時查一次綁定對照表，整次嘗試都用這個答案；批次內容裡的租戶或綁定一律不看（protocol 的解碼本來就忽略未定義的欄位）。沒有綁定時回 `retry`（`after_ms` 30 秒）、不寫入；查詢失敗回 `retry`（5 秒）。
+5. **一個串流一個副本**：以 Postgres 的 advisory lock（service-kit 的 `JobLock`，key 由 `ingest` 與 `telemetry/<閘道器>/<串流>` 算出）。拿不到鎖的副本回 `retry`（2 秒）；寫入期間鎖所在的 session 斷了也回 `retry`、不寫完成紀錄。閘道器一個串流一次只有一批在途（遙測規則 2），所以正常時不會發生，只有閘道器重送與副本切換時兩個副本才會同時拿到同一個串流。
+6. **在鎖內寫入**：
+   1. 從完成表讀這個串流的高水位，序號不高於它就回 `duplicate`，`records` 是那批完成紀錄的 `row_count`；
+   2. 找前一次嘗試留下的列（`LEFTOVER_TENANTS`：條件同下面的 DELETE），有的話以同步的 `DELETE FROM` 刪掉，而且不管它們是寫給哪個租戶的；寫給目前租戶以外的租戶的（兩次嘗試之間閘道器改綁），立刻對帳那個租戶的彙總，並記 WARN；
+   3. 以 `REWRITE_SETTINGS` 寫入整批；
+   4. 對帳目前租戶的 1 分鐘與 1 小時彙總（`RECONCILE_1M`、`RECONCILE_1H`；只寫一次就成功的批次什麼都不寫）；
+   5. 寫完成紀錄：租戶與 `binding_id` 是第 4 步查到的，`committed_at` 是寫完列之後服務的時間、但不早於 `received_at`（同一個時鐘在訊息到達時記下），所以完成紀錄不會比它描述的列早過期；
+   6. 回 `committed`，`records` 是這批的筆數。
+
+   每一句都帶這個串流的 `stream_settings`（query ID `trustiot-rewrite/<閘道器>/<串流>`），ClickHouse 用戶端的請求逾時是 `REQUEST_TIMEOUT`（30 秒，`src/clickhouse.rs`），不短於 `CLIENT_TIMEOUT_SECONDS`。任何一步失敗都回 `retry`（5 秒）、不寫完成紀錄，閘道器重送後下一次嘗試從頭來。
+7. **確認**：以 QoS 1 發布到 `trustiot/v1/gw/<閘道器>/down/telemetry-ack`，不 retain；發布失敗只記錄，閘道器沒收到確認就會重送。
+
+DELETE 的條件（`DELETE_ROWS`）不含租戶：設備與資料點在這批的 `(device_id, point)` 之中、讀值時間在這批的第一筆與最後一筆之間（排序鍵 `(tenant_id, device_id, point, ts)` 的後三欄），閘道器、串流、序號相同，`received_at` 在對帳窗口（`RECONCILE_WINDOW_DAYS`，31 個收到日）之內（分區鍵 `toYYYYMM(received_at)`）。所以它只讀這批碰到的 partition 與 granule，不掃整張表；測試量過找殘留列那一句讀的列數（見下面「測試」）。
+
+剩下的一個窗口：閘道器在同一批的兩次嘗試之間改綁，而第二次嘗試剛好在刪掉舊租戶的列之後、對帳舊租戶之前結束，舊租戶的彙總就還算著刪掉的列，下一次嘗試也找不到列來點名那個租戶。[docs/runbooks/migrations.md](../../docs/runbooks/migrations.md) 的一致性檢查與修正（`src/rollup.rs` 的 `REPAIR_1M`、`REPAIR_1H`）找得到並修正它。
+
+同時處理的批次：每個副本最多 `TRUSTIOT__DATABASE__MAX_CONNECTIONS` − 1 批（每批在鎖的期間佔一條服務角色的連線，留一條給 readiness 與其他查詢），超過時暫停從 broker 收訊息。
+
+指標（經 service-kit 的 OpenTelemetry 匯出）：
+
+| 指標 | 說明 |
+| --- | --- |
+| `ingest.telemetry.batches` | 遙測頻道上的訊息數，`outcome` 是 `committed`、`duplicate`、`rejected`、`retry`、`retain_dropped`、`qos0_dropped`、`undecodable` |
+| `ingest.telemetry.records` | 寫進 ClickHouse 並回 `committed` 的讀值筆數 |
+| `ingest.telemetry.duration` | 從訊息到達到送出確認的秒數，依 `outcome` |
+| `ingest.telemetry.write_failures` | 失敗的語句，`store`（`clickhouse`、`postgres`）與 `step`（例如 `insert`、`commit`、`gateway_tenant`、`stream_lock`）；每一筆都回了 `retry` |
+
+處理失敗與積壓的告警在 Laysi/trustiot-v2#183。日誌只記閘道器、串流、序號、筆數、步驟與錯誤的種類，不記 payload 的內容與任何密碼。
+
+### 測試
+
+`tests/telemetry.rs` 在同一個 process 裡啟動寫入流程（`telemetry::Pipeline`，與 binary 相同的程式），連拋棄式的 Postgres（`testkit::product`）、ClickHouse（`tests/common`）與 Mosquitto（`tests/support/broker.rs`），ClickHouse 先放 20 萬列別的串流的資料。測試掛鉤（`telemetry::hooks`）讓測試停在寫入的某一步、決定在哪裡結束，並固定 `received_at`。一個測試依序涵蓋：
+
+1. 一批回 `committed`，同一批再送回 `duplicate`、列數不變；批次內容裡加上的租戶欄位被忽略，列與完成紀錄的租戶是綁定表的。
+2. 沒有綁定的閘道器回 `retry`、一列都沒寫；設備 ID 不是 UUID、payload 的內文壞掉都以讀出的標頭回 `rejected`、一列都沒寫，連標頭都沒有的只記日誌。
+3. 收回 ingest 帳號在 `stream_commits` 的 `INSERT`（ClickHouse 失敗）：回 `retry`、沒有完成紀錄；授權回來後重送回 `committed`，列只有一份。兩次嘗試之間改綁：列與完成紀錄只在新租戶下。
+4. 直接（非共用）訂閱時 broker 重播的 retained 訊息被丟棄並記錄，列不變。
+5. 在「列已寫入、完成紀錄未寫」時結束：寫入流程停在 `RowsWritten` 時被中止，鎖釋放後以新的寫入流程重送那一批（同樣的 `received_at`，所以重寫的區塊與刪掉的完全相同，開著去重時會被丟掉）：停在刪除之後與完成紀錄之前時都沒有任何確認，回 `committed` 時完成紀錄已經在了，列完整、沒有重複。
+6. 兩個副本各在自己的共用群組，同一個串流的每一批兩邊都收到：一個停在拿到鎖之後時，重送的那一批在兩邊都回 `retry`（持有鎖的副本的第二個處理與另一個副本）；之後每一批只有一個 `committed`，列沒有重複。
+7. 兩張彙總表與原始列一致（`RAW_VS_1M`、`RAW_VS_1H` 沒有差異）；每批的 `committed_at` 不早於它的 `received_at`；`system.query_log` 裡寫入流程的每一句都帶串流的 query ID、`replace_running_query = 1`、`max_execution_time = 20`、`async_insert = 0`，找殘留列那一句讀的列數遠少於整張表；`telemetry.tenant_id` 的欄位說明已更正；日誌不含密碼。
+
+```sh
+cargo test -p ingest --test telemetry -- --nocapture
+```
+
+斷電重設後已確認的資料不掉、寫到一半斷電再重送不重複的實測在 Laysi/trustiot-v2#643；吞吐量與積壓的量測還沒做。
 
 ## ClickHouse schema
 
@@ -170,11 +233,11 @@ DDL 是 `migrations/clickhouse/` 的 SQL 檔，部署時由 migration Job（Lays
 | `row_count` | UInt64 | 這批寫進 `telemetry` 的筆數；重複的批次回 `duplicate` 時回報這個數 |
 | `committed_at` | DateTime64(3, 'UTC') | 整批落盤的時間 |
 
-給之後實作 ingest（Laysi/trustiot-v2#641）與部署（Laysi/trustiot-v2#642）的不變式：
+ingest 的寫入流程（[寫入流程](#寫入流程)，Laysi/trustiot-v2#641）與部署（Laysi/trustiot-v2#642）遵守的不變式：
 
 - **鍵是閘道器 + 串流。** `ReplacingMergeTree`、`ORDER BY (gateway_id, stream_id, seq)`。協定的遙測規則 3：雲端以「topic 的閘道器 + 串流 ID」記錄高水位，串流 ID 由閘道器自己取，兩台閘道器可以用同一個串流 ID。高水位是 `SELECT max(seq) FROM trustiot.stream_commits WHERE gateway_id = <topic 的閘道器> AND stream_id = <串流>`，沒有紀錄時是 0（序號從 1 開始）；查詢落在排序鍵的前綴上。`gateway_id` 一律取自 topic，不取自 payload。
 - **租戶與綁定只記錄、不當鍵。** 高水位屬於閘道器與它的串流，不因閘道器改綁別的租戶而重來；`tenant_id`、`binding_id` 記下這批是在哪個綁定下寫的。
-- **高水位只取自這張表，不取自 `telemetry`。** 跨 partition 的 INSERT 不是原子的，`telemetry` 可能有沒完成的批次的一部分；沒有完成紀錄的批次以 `DELETE FROM trustiot.telemetry WHERE gateway_id = … AND stream_id = … AND batch_seq = …` 刪掉後重寫。
+- **高水位只取自這張表，不取自 `telemetry`。** 跨 partition 的 INSERT 不是原子的，`telemetry` 可能有沒完成的批次的一部分；沒有完成紀錄的批次以 `DELETE FROM trustiot.telemetry` 刪掉後重寫，條件是閘道器、串流、序號，再加上限定讀取範圍的設備、資料點、讀值時間與收到日（`src/telemetry/store.rs` 的 `DELETE_ROWS`，見[寫入流程](#寫入流程)），不含租戶。
 - **紀錄可能重複，讀的人不數筆數。** 同一個（閘道器、串流、序號）寫兩次時，`ReplacingMergeTree` 只在同一個 partition 內、而且要等 merge 才合併。`max(seq)` 與任一筆的 `row_count` 不受影響；不要以紀錄的筆數當成批次數。
 - **落盤**：同樣開 `fsync_after_insert`、`fsync_part_directory`。
 - **保存期限**：`TTL toDateTime(committed_at) + toIntervalDay(<天數>)`，天數與 `telemetry` 相同（migration Job 設定，見上一節）。`committed_at` 不早於該批的 `received_at`，所以完成紀錄不會比它描述的資料早過期，測試會比對兩張表的 TTL 天數。建表時是 3650 天（Job 接受的最長保存期限），在 Job 對齊之前也不短於 `telemetry`。
@@ -226,16 +289,16 @@ OpenTelemetry collector（決策 22，`deploy/chart` 的 `observability.collecto
 - 參數：`device`、`point`、`from`、`to`（UTC，含 `from` 不含 `to`）、`wraps_at`（不會溢位的填 0）。結果是 `from` 之後第一筆到 `to` 之前最後一筆的增量，沒有讀值時是 0。
 - 使用者與 AI 查用量走 telemetry-query 的語意查詢 API（Laysi/trustiot-v2#142）：格內與跨格的規則相同，另有累計檢查與可疑跳增；它還不知道設備型號的 `wraps_at`（型號標記是 Laysi/trustiot-v2#691），溢位一律當成歸零，少算最多一個讀數間隔（[services/telemetry-query](../telemetry-query/README.md)「語意查詢」）。
 
-#### I1 重寫與對帳（Laysi/trustiot-v2#641 的前提）
+#### I1 重寫與對帳
 
-目前還沒有程式寫入、刪除或重寫遙測列：ingest 的寫入路徑與 I1 的重寫都在 Laysi/trustiot-v2#641（Laysi/trustiot-v2#91 底下的一項）。它寫入串流的每一句 INSERT 都要照下面第 1 步帶 `stream_settings`，重寫必須照下面的步驟做，並且在彙總表（Laysi/trustiot-v2#141）合併之後才合併；同樣的步驟寫在 `src/rollup.rs` 的模組說明。
+ingest 的寫入流程（`src/telemetry/`，Laysi/trustiot-v2#641，見[寫入流程](#寫入流程)）照下面的步驟寫入與重寫遙測列：寫入串流的每一句都照第 1 步帶 `stream_settings`。同樣的步驟寫在 `src/rollup.rs` 的模組說明；改寫入流程時兩處與這裡一起改。寫入流程不先判斷這是不是重寫：每次嘗試都先找這批已寫入的列，有才刪除（第 2 步），之後一律對帳（第 4 步，只寫一次就成功的批次什麼都不寫）。
 
 materialized view 只處理 INSERT。重寫一批（沒有完成紀錄的批次）時，前一次嘗試已寫進 ClickHouse 的列，刪掉之後仍算在彙總表裡；前一次的原始列寫入了、彙總那一份沒寫（兩者之間當機）時，彙總表又少算。一個串流的一批這樣重寫：
 
 1. 這個串流的每一句寫入都帶 `stream_settings`：每次嘗試的 INSERT（包括第一次），以及下面第 2 到 4 步。它們用這個串流自己的 query ID（`stream_query_id`，`trustiot-rewrite/<閘道器>/<串流>`），設 `replace_running_query = 1`，`max_execution_time` 是 `STATEMENT_MAX_SECONDS`（20 秒），`async_insert = 0`。前一次嘗試的某一句還在伺服器上執行時（client 已經放棄或當機），ClickHouse 26.8 在新的一句開始之前取消同一個帳號、同一個 query ID 的那一句，最多等 `replace_running_query_max_wait_ms`（`REPLACE_WAIT_MS`，5 秒）讓它結束。它停下之前已寫入的區塊留著，和這批其他的列一樣算；它結束之後不會再有列落地。到時還沒結束，新的一句以 `QUERY_WITH_SAME_ID_IS_ALREADY_RUNNING` 失敗，別的帳號用同一個 query ID 時也一樣：舊的那句已收到取消，但要到它下一次檢查取消時才停下，在那之前仍佔著這個 query ID，所以這次嘗試停在這裡、不寫完成紀錄，下一次嘗試再等它一次。ingest 的 ClickHouse client 對這些語句的請求逾時至少要 `CLIENT_TIMEOUT_SECONDS`（30 秒），比等待加上執行的上限長，所以 client 放棄之前伺服器已經停下那一句。一個串流仍只由一個 ingest replica 處理；這一步確保前一次嘗試的語句不會和下一次重疊。
-   - INSERT 一定要同步（`async_insert = 0`；伺服器的預設是 1）：在 ClickHouse 26.8 上，非同步 INSERT 會繞過這一步。等待落地的（`wait_for_async_insert = 1`）中斷不了，取消或 `max_execution_time` 都要等它緩衝的列落地之後才結束那一句；不等待的立刻放掉 query ID，它的列與 view 寫入的部分可能在重寫的 DELETE 之後才落地，原始列與彙總就一起多算一次，兩邊一致，對帳看不出來。要把寫入路徑改成非同步 INSERT（例如為了吞吐量），先重新驗證這份約定。同步 INSERT 下每一批的 INSERT 各自產生原始、1 分鐘與 1 小時的 part；對吞吐量的影響在 Laysi/trustiot-v2#641 延後的驗證裡量測。
+   - INSERT 一定要同步（`async_insert = 0`；伺服器的預設是 1）：在 ClickHouse 26.8 上，非同步 INSERT 會繞過這一步。等待落地的（`wait_for_async_insert = 1`）中斷不了，取消或 `max_execution_time` 都要等它緩衝的列落地之後才結束那一句；不等待的立刻放掉 query ID，它的列與 view 寫入的部分可能在重寫的 DELETE 之後才落地，原始列與彙總就一起多算一次，兩邊一致，對帳看不出來。要把寫入路徑改成非同步 INSERT（例如為了吞吐量），先重新驗證這份約定。同步 INSERT 下每一批的 INSERT 各自產生原始、1 分鐘與 1 小時的 part；對吞吐量的影響還沒有量測。
    - query ID 的規則：沒有任何服務把呼叫端給的 query ID 轉給 ClickHouse。佔著某個串流 query ID 的語句在結束之前會卡住這個串流的寫入，這是安全的失敗：不寫完成紀錄，這批會重送。query ID 裡的閘道器 ID 取自訊息的 topic（閘道器的憑證），不取自 payload，所以閘道器只點得到自己的串流。
-2. 同步刪除這批的列：`DELETE FROM trustiot.telemetry`，`lightweight_deletes_sync = 2`。
+2. 同步刪除這批的列：`DELETE FROM trustiot.telemetry`，`lightweight_deletes_sync = 2`。條件不含租戶，前一次嘗試寫給哪個租戶的列都刪；寫給目前租戶以外的租戶的列（兩次嘗試之間閘道器改綁），刪除後立刻以那個租戶執行第 4 步的對帳，再寫入整批。
 3. 以 `REWRITE_SETTINGS`（`deduplicate_insert = 'disable'`）寫入整批。開著去重時，內容與刪除之前寫過的區塊相同（同樣的列，或同樣的 `insert_deduplication_token`）的區塊會被直接丟掉、不報錯，這批的列就不見了。ClickHouse 26.8 的 `insert_deduplicate = 0` 關不掉它：設定 `deduplicate_insert`（預設 `enable`）取代了它，同步與非同步 INSERT 都一樣，只有設成 `backward_compatible_choice` 時才看 `insert_deduplicate`。
 4. 以這批的參數（`ReconcileParams`）執行 `RECONCILE_1M` 與 `RECONCILE_1H`：對這批碰到的、這個串流的每一格，寫入從原始列重算的值與彙總表現在的值的差，一致時什麼都不寫。這兩句帶 `deduplicate_insert_select = 'disable'`，與之前某次相同的差值不會被當成重複丟掉。
 5. 寫完成紀錄，再回確認。

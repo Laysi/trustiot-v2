@@ -65,7 +65,7 @@ tokio-rustls = { workspace = true, features = ["ring"] }
 assets = { path = "../assets" }
 # Encodes test batches that carry fields the protocol does not define (tests/telemetry.rs).
 cbor4ii = { workspace = true, features = ["serde1", "use_std"] }
-# The broker accounts and roles the chart gives the services (tests/telemetry.rs builds the test
+# The broker roles the migration Job gives the services (tests/support/broker.rs builds the test
 # broker's role for service:ingest from tools/migrate's own definition).
 migrate = { path = "../../tools/migrate" }
 # Talks to ClickHouse over its HTTP interface, plain HTTP to a local test container.
@@ -73,6 +73,8 @@ reqwest.workspace = true
 # The product's schema (the migration Job), test identity tokens, and the cross-tenant suite.
 testkit = { path = "../../crates/testkit" }
 tokio = { workspace = true, features = ["macros", "process", "rt", "rt-multi-thread", "time"] }
+# The telemetry path's log lines in tests/telemetry.rs, which runs it in its own process.
+tracing-subscriber = { workspace = true, features = ["fmt", "registry", "std"] }
 uuid = { workspace = true, features = ["v4"] }
 
 [lints]
