@@ -79,6 +79,9 @@ on:
       - tools/lab-dataset/**
       - edge/agent/**
       - services/ingest/**
+      # tools/migrate compiles in gateway-ops' schema list with #[path]; the service has no
+      # nightly image until Laysi/trustiot-v2#721.
+      - services/gateway-ops/src/schema.rs
       - deploy/chart/**
       - deploy/cloudnative-pg/**
       - deploy/images/postgres/**
