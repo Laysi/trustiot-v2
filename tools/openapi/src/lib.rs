@@ -79,6 +79,10 @@ pub const SERVICES_WITHOUT_API: &[&str] = &[
     // health endpoints (docs/architecture/deployment.md). It talks to gateways over MQTT and to
     // the assets service through its events (Laysi/trustiot-v2#640).
     "ingest",
+    // Keeps each gateway's desired configuration, generated from the assets service's events
+    // (Laysi/trustiot-v2#719); no HTTP API besides the health endpoints. It delivers the
+    // configurations to gateways over MQTT (Laysi/trustiot-v2#720).
+    "gateway-ops",
     // Serves the SPA's static files (frontend/) on the app host; no API besides the health
     // endpoints (Laysi/trustiot-v2#123, services/web/README.md).
     "web",

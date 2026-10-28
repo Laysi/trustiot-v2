@@ -454,9 +454,10 @@ fn device_events_decode_every_version() {
 
     let created = decode_fixtures::<DeviceCreated>();
     let names: Vec<&str> = created.iter().map(|(name, _)| name.as_str()).collect();
-    assert_eq!(names, ["v1", "v1-binding"]);
-    let with_binding = created[1].1.clone();
-    let created = created[0].1.clone();
+    // In file name order, as `decode_fixtures` reads them: `-` sorts before `.`.
+    assert_eq!(names, ["v1-binding", "v1"]);
+    let with_binding = created[0].1.clone();
+    let created = created[1].1.clone();
     assert_eq!(
         created,
         DeviceCreated {
@@ -488,15 +489,15 @@ fn device_events_decode_every_version() {
 
     let updated = decode_fixtures::<DeviceUpdated>();
     assert_eq!(updated.len(), 2);
-    assert_eq!(updated[0].1.binding_id, None);
+    assert_eq!(updated[1].1.binding_id, None);
     assert_eq!(
-        updated[1].1,
+        updated[0].1,
         DeviceUpdated {
             binding_id: Some(binding_id),
-            ..updated[0].1.clone()
+            ..updated[1].1.clone()
         }
     );
-    let updated = &updated[0].1;
+    let updated = &updated[1].1;
     assert_eq!(updated.device_id, device_id);
     assert_eq!(updated.revision, 2);
     assert_eq!(updated.device.transport, Transport::ModbusTcp);
@@ -524,13 +525,13 @@ fn device_events_decode_every_version() {
     let deleted = decode_fixtures::<DeviceDeleted>();
     assert_eq!(deleted.len(), 2);
     assert_eq!(
-        deleted[1].1,
+        deleted[0].1,
         DeviceDeleted {
             binding_id: Some(binding_id),
-            ..deleted[0].1.clone()
+            ..deleted[1].1.clone()
         }
     );
-    let deleted = &deleted[0].1;
+    let deleted = &deleted[1].1;
     assert_eq!(
         *deleted,
         DeviceDeleted {

@@ -1,0 +1,50 @@
+[package]
+name = "gateway-ops"
+description = "TrustIoT v2 gateway operations service: each gateway's versioned desired configuration, generated from the assets service's events (decision 7)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+repository.workspace = true
+
+# The service is built in steps under Laysi/trustiot-v2#93: this release (Laysi/trustiot-v2#719)
+# keeps the projection of the assets service's models, devices and bindings and stores every
+# gateway's desired configuration as versions in Postgres; the MQTT delivery and the apply
+# reports are Laysi/trustiot-v2#720, the chart Laysi/trustiot-v2#721.
+
+[[bin]]
+name = "gateway-ops"
+path = "src/main.rs"
+test = false
+doc = false
+
+[dependencies]
+axum.workspace = true
+contract = { path = "../../crates/contract" }
+# The counters of generated, failed and ignored configurations (README.md, "指標").
+opentelemetry = { workspace = true, features = ["metrics"] }
+# Consumes the assets service's model, device and binding events (decision 4).
+outbox = { path = "../../crates/outbox" }
+# The configuration's wire format and its rules (crates/protocol, "設定下發").
+protocol = { path = "../../crates/protocol" }
+serde = { workspace = true, features = ["derive"] }
+# Models and devices are stored as the JSON of their protocol types.
+serde_json.workspace = true
+service-kit = { path = "../../crates/service-kit" }
+# Same TLS stack as service-kit: every connection verifies the server (checklist M3).
+sqlx = { workspace = true, features = ["chrono", "postgres", "runtime-tokio", "tls-rustls-ring-webpki"] }
+chrono.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["macros", "net", "rt-multi-thread", "time"] }
+tracing.workspace = true
+
+[dev-dependencies]
+reqwest.workspace = true
+# The product's schema (the migration Job) and the cross-tenant suite.
+testkit = { path = "../../crates/testkit" }
+tokio = { workspace = true, features = ["macros", "process", "rt", "rt-multi-thread", "time"] }
+# Captures the service's log events in the tests that run the consumer in the test's thread.
+tracing-subscriber = { workspace = true, features = ["registry", "std"] }
+
+[lints]
+workspace = true
