@@ -193,7 +193,7 @@ Mosquitto 以 `use_identity_as_username` 把憑證 CN 當成 username，dynsec �
 | 較舊 | 不套用（過期的 retained 訊息不能讓閘道器倒退，Laysi/trustiot#139） | `ConfigReport::stale`：`rejected` 附 `stale_version` |
 | 解不開 | 維持上一版 | `rejected`，版本取自 `DesiredConfig::peek_header`，issues 取自 `DecodeError::to_issues` |
 
-空 payload 表示 retained 設定被清除（例如除役），由閘道器自行決定處理方式。
+空 payload 表示 retained 設定被清除（例如除役），由閘道器自行決定處理方式：閘道器 agent 維持目前的設定、不回報（沒有版本可回報；除役的閘道器由撤銷憑證停下），連版本都讀不到的 payload 也一樣（Laysi/trustiot-v2#94，[edge/agent](../../edge/agent/README.md)「設定下發與套用」）。
 
 `up/config-report` 的 `ConfigReport`：`version`（回報的是哪一版）、`outcome`（`applied`、`rejected`）、`active_version`（回報後實際使用的版本，從未套用過則省略）、`issues[]`（拒絕原因，最多 64 項，每項有 `code`、`path`、`message`；`path` 例如 `devices[2].unit_id`）。雲端收到 `stale_version` 時，以高於 `active_version` 的版本重新發布。
 
