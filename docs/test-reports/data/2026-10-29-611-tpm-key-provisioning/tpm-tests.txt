@@ -34,6 +34,4 @@ test the_tpm_key_signs_and_completes_an_mtls_handshake_and_unusable_keys_are_ref
 
 test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.94s
 
-rcheck: removed 0 dangling test volumes
-rcheck: removed 0 dangling podman test volumes
-rcheck: exit 0 at 02:34:46 (build host, 611-68936fda)
+exit 0 at 02:34:46 (build host)
