@@ -5,9 +5,16 @@
 //! ([`model::ModelClient`], decision 15). Design: docs/architecture/ai-assistant.md; the
 //! crate's layout and settings: README.md.
 //!
+//! The client API ([`api`], Laysi/trustiot-v2#645) serves a user's conversation threads under
+//! `/api/assistant/v1`: starting, listing, reading, renaming, archiving, deleting and restoring
+//! them.
+//!
 //! Where later work plugs in:
-//! - the chat API and its streaming (Laysi/trustiot-v2#146): [`Agent::start_conversation`] and
-//!   [`Agent::ask`];
+//! - asking a question in a conversation and streaming the answer (Laysi/trustiot-v2#646,
+//!   Laysi/trustiot-v2#147): a handler in [`api::conversations`] around [`Agent::ask`], with
+//!   [`store::start_run`] and [`store::append`];
+//! - more resources of the API (the AI dashboards, Laysi/trustiot-v2#150): a module under
+//!   [`api`], merged in [`api::routes`] and listed in its OpenAPI document;
 //! - the user's identity for tool calls during a long run (the run delegation of
 //!   Laysi/trustiot-v2#551): the chat API starts a question's delegation with
 //!   [`delegation::QuestionRuns::start`] while it handles the request, and hands the
@@ -17,7 +24,7 @@
 //! - the database: [`start`] opens the service role's pool (Laysi/trustiot-v2#592) and readiness
 //!   checks it and [`schema::SCHEMA`]; [`store`] keeps conversations and their append-only
 //!   history (Laysi/trustiot-v2#553) in transactions of the conversation's tenant, which the
-//!   chat API (Laysi/trustiot-v2#146) opens on that pool;
+//!   API opens on that pool for each request;
 //! - the per-call quota pre-deduction of the AI gateway's ledger (Laysi/trustiot-v2#140): each
 //!   call's [`model::ModelRequest::call_id`] (the ledger's `llm_call_id`), and the gateway's
 //!   refusal reaching the agent as a [`model::ModelError`].
@@ -28,12 +35,15 @@ use std::time::Duration;
 use axum::Router;
 use contract::client::InternalClient;
 use contract::{ServiceName, service};
+use service_kit::identity::{IdentityVerifier, PublishedKeys};
 use service_kit::migrations::MigrationCheck;
 use service_kit::tenant::TenantDb;
 use service_kit::{BoxError, Context};
 use sqlx::postgres::PgPoolOptions;
+use utoipa::OpenApi as _;
 
 pub mod agent;
+pub mod api;
 pub mod budget;
 pub mod callee;
 pub mod config;
@@ -51,14 +61,20 @@ pub use config::Config;
 /// How long getting a database connection may take, opening a new one included.
 pub const ACQUIRE_TIMEOUT: Duration = Duration::from_secs(5);
 
+/// The client API's OpenAPI document (merged into `api/openapi.json` by `tools/openapi`).
+#[must_use]
+pub fn openapi() -> utoipa::openapi::OpenApi {
+    api::ApiDoc::openapi()
+}
+
 /// The service's startup for `service_kit::run`: builds the agent and its tools from the
-/// configuration, which fails startup when they cannot be built, and opens the service role's
-/// pool lazily (with the session check of `crates/service-kit`). Readiness passes while the role
-/// (`assistant_app`) can open a checked session and the database has every migration file this
-/// release expects ([`schema::SCHEMA`]). It calls neither the AI gateway nor the services the
-/// tools call, so the service is ready without a model. The service has no API of its own yet
-/// (the chat API is Laysi/trustiot-v2#146), so it serves only service-kit's health endpoints,
-/// and the assistant is not kept.
+/// configuration, which fails startup when they cannot be built, opens the service role's pool
+/// lazily (with the session check of `crates/service-kit`), follows the identity service's public
+/// keys file, and serves the API ([`api::routes`]). Readiness passes while the role
+/// (`assistant_app`) can open a checked session, the service has a usable set of public keys,
+/// and the database has every migration file this release expects ([`schema::SCHEMA`]). It
+/// calls neither the AI gateway nor the services the tools call, so the service is ready
+/// without a model. Asking questions (and so the run delegation) is Laysi/trustiot-v2#646.
 ///
 /// # Errors
 ///
@@ -79,12 +95,18 @@ pub async fn start(context: Context<Config>) -> Result<Router, BoxError> {
         async move { db.ping().await }
     });
     MigrationCheck::new(&schema::SCHEMA, db.pool().clone()).register(context.health());
+    let keys = PublishedKeys::watch(
+        &context,
+        config.platform.internal_identity_keys_file.clone(),
+    )
+    .await;
+    let verifier = IdentityVerifier::new(ServiceName::Assistant, keys);
     tracing::info!(
         tools = assistant.agent.tool_count(),
         delegation = assistant.runs.is_some(),
         "assistant ready"
     );
-    Ok(Router::new())
+    Ok(api::routes(verifier, db, Arc::new(assistant.agent)))
 }
 
 /// The agent with its tools, and how a question starts its delegation.

@@ -70,6 +70,13 @@ pub const SERVICES: &[Source] = &[
         name: "telemetry-query",
         openapi: telemetry_query::openapi,
     },
+    // The AI assistant's conversation threads (Laysi/trustiot-v2#645); asking questions is
+    // Laysi/trustiot-v2#646. Its calls to the AI gateway and the services its tools call are
+    // not part of the client API.
+    Source {
+        name: "assistant",
+        openapi: assistant::openapi,
+    },
 ];
 
 /// Directories under `services/` that have no HTTP API of their own to document (workers, for
@@ -89,10 +96,6 @@ pub const SERVICES_WITHOUT_API: &[&str] = &[
     // crates/contract, whose error types every spec here shares, and the client API never
     // reaches it (decision 27).
     "ai-gateway",
-    // The AI assistant's agent loop (Laysi/trustiot-v2#145, decision 31). It serves only the
-    // health endpoints until the chat API (Laysi/trustiot-v2#146) adds its routes and its
-    // `openapi()`; move it to `SERVICES` then.
-    "assistant",
     // Relays the gateways' MQTT inside WebSocket to the broker as TCP (Laysi/trustiot-v2#85,
     // decision 6); its only endpoint is the WebSocket upgrade on the public path, described in
     // services/mqtt-bridge/README.md, and no HTTP API besides the health endpoints.

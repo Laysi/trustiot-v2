@@ -76,6 +76,180 @@
         ],
         "type": "object"
       },
+      "Conversation": {
+        "description": "A conversation as the list shows it.",
+        "properties": {
+          "archived_at": {
+            "description": "When it was archived; `null` when it is not.",
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "created_at": {
+            "description": "When it was started, by the database clock.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "id": {
+            "description": "The conversation's ID.",
+            "format": "uuid",
+            "type": "string"
+          },
+          "last_activity_at": {
+            "description": "When messages were last added to it (when it was started, before that); the list's order.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "title": {
+            "description": "Its title; `null` until it gets one.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "title_source": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ConversationTitleSource",
+                "description": "Who gave the title; `null` without one."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "created_at",
+          "last_activity_at"
+        ],
+        "type": "object"
+      },
+      "ConversationDetail": {
+        "description": "A conversation with the messages the chat shows: the questions and the answers, oldest\nfirst. The assistant's reasoning, its tool calls and their results, and the instructions it\nstarted with are not part of it.",
+        "properties": {
+          "archived_at": {
+            "description": "When it was archived; `null` when it is not.",
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "created_at": {
+            "description": "When it was started, by the database clock.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "id": {
+            "description": "The conversation's ID.",
+            "format": "uuid",
+            "type": "string"
+          },
+          "last_activity_at": {
+            "description": "When messages were last added to it (when it was started, before that).",
+            "format": "date-time",
+            "type": "string"
+          },
+          "messages": {
+            "description": "The questions and answers, oldest first.",
+            "items": {
+              "$ref": "#/components/schemas/ConversationMessage"
+            },
+            "type": "array"
+          },
+          "title": {
+            "description": "Its title; `null` until it gets one.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "title_source": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ConversationTitleSource",
+                "description": "Who gave the title; `null` without one."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "created_at",
+          "last_activity_at",
+          "messages"
+        ],
+        "type": "object"
+      },
+      "ConversationList": {
+        "description": "One page of the caller's conversations, most recently active first.",
+        "properties": {
+          "conversations": {
+            "description": "The conversations, most recently active first (by `last_activity_at`, then `id`).",
+            "items": {
+              "$ref": "#/components/schemas/Conversation"
+            },
+            "type": "array"
+          },
+          "next_cursor": {
+            "description": "Pass it as `cursor` for the next page of the same list; `null` on the last page. Opaque.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "conversations"
+        ],
+        "type": "object"
+      },
+      "ConversationMessage": {
+        "description": "One message the chat shows: only its text.",
+        "properties": {
+          "kind": {
+            "$ref": "#/components/schemas/ConversationMessageKind"
+          },
+          "text": {
+            "description": "The question as the user asked it, or the text of the answer.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "text"
+        ],
+        "type": "object"
+      },
+      "ConversationMessageKind": {
+        "description": "What a message of the chat is.",
+        "enum": [
+          "question",
+          "answer"
+        ],
+        "type": "string"
+      },
+      "ConversationTitleSource": {
+        "description": "Who gave a conversation its title.",
+        "enum": [
+          "provisional",
+          "user",
+          "model"
+        ],
+        "type": "string"
+      },
+      "CreateConversation": {
+        "additionalProperties": false,
+        "description": "Starting a conversation takes no settings: no body, `null`, or an empty object.",
+        "type": "object"
+      },
       "CreateDevice": {
         "additionalProperties": false,
         "description": "The body of `POST /api/assets/v1/devices`. Unknown fields are refused.",
@@ -279,6 +453,62 @@
           "no_data"
         ],
         "type": "string"
+      },
+      "DeletedConversation": {
+        "description": "A deleted conversation: no messages.",
+        "properties": {
+          "deleted_at": {
+            "description": "When it was deleted, by the database clock.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "id": {
+            "description": "The conversation's ID.",
+            "format": "uuid",
+            "type": "string"
+          },
+          "restorable_until": {
+            "description": "Until when it can be restored (30 days after `deleted_at`); it is removed for good after.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "title": {
+            "description": "Its title; `null` if it had none.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "deleted_at",
+          "restorable_until"
+        ],
+        "type": "object"
+      },
+      "DeletedConversationList": {
+        "description": "One page of the caller's deleted conversations that can still be restored, most recently\ndeleted first.",
+        "properties": {
+          "conversations": {
+            "description": "The conversations, most recently deleted first (by `deleted_at`, then `id`).",
+            "items": {
+              "$ref": "#/components/schemas/DeletedConversation"
+            },
+            "type": "array"
+          },
+          "next_cursor": {
+            "description": "Pass it as `cursor` for the next page; `null` on the last page. Opaque.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "conversations"
+        ],
+        "type": "object"
       },
       "Device": {
         "description": "A device: a Modbus endpoint one of the tenant's gateways polls with one of its models.",
@@ -1502,6 +1732,11 @@
         ],
         "type": "string"
       },
+      "RestoreConversation": {
+        "additionalProperties": false,
+        "description": "Restoring a conversation takes no settings: no body, `null`, or an empty object.",
+        "type": "object"
+      },
       "RevocationReason": {
         "description": "A reason a workstation certificate can be revoked for: the RFC 5280 CRLReason codes that\napply to an end entity, without `certificateHold` (a revocation here is final).",
         "enum": [
@@ -2186,6 +2421,27 @@
           "time",
           "value"
         ],
+        "type": "object"
+      },
+      "UpdateConversation": {
+        "additionalProperties": false,
+        "description": "What to change: at least one of the two.",
+        "properties": {
+          "archived": {
+            "description": "`true` archives the conversation, `false` takes it out of the archive. An archived\nconversation is listed only with `archived=true`, and can still be read and continued.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "title": {
+            "description": "The new title, 1 to 200 characters after trimming the surrounding white space, without\ncontrol characters. It replaces any title, the model's included.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
         "type": "object"
       },
       "UpdateDevice": {
@@ -3780,6 +4036,622 @@
         "summary": "The caller's tenant, once this service has processed its `identity.tenant_created`.",
         "tags": [
           "assets"
+        ]
+      }
+    },
+    "/api/assistant/v1/conversations": {
+      "get": {
+        "operationId": "listConversations",
+        "parameters": [
+          {
+            "description": "`true` lists only the archived conversations; without it, or `false`, only the ones not archived.",
+            "in": "query",
+            "name": "archived",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "description": "Conversations per page, 1 to 100; default 50.",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "format": "int32",
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "The previous page's `next_cursor` of the same list, for the next page.",
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConversationList"
+                }
+              }
+            },
+            "description": "A page of the caller's conversations; deleted ones are never listed."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "A malformed query, `archived` other than `true` or `false` (`invalid_request`), a `limit` out of range (`conversation.limit_invalid`), or a `cursor` that is not a `next_cursor` of this list (`conversation.cursor_invalid`)."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No valid session (`unauthenticated`)."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No tenant (`permission_denied`)."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The database failed (`unavailable`)."
+          }
+        },
+        "summary": "The caller's conversations, most recently active first.",
+        "tags": [
+          "assistant"
+        ]
+      },
+      "post": {
+        "operationId": "createConversation",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/CreateConversation"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            }
+          },
+          "description": "No body, `null`, or an empty object."
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Conversation"
+                }
+              }
+            },
+            "description": "The conversation was started; `Location` names it.",
+            "headers": {
+              "location": {
+                "description": "The conversation's path.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The `Content-Type` is not `application/json` (`invalid_request`), or there is a body other than `null` or an empty object (`conversation.body_invalid`)."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No valid session (`unauthenticated`)."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No tenant (`permission_denied`)."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The database failed (`unavailable`); nothing was written."
+          }
+        },
+        "summary": "Starts a conversation for the caller: empty, with today's system prompt, tools and model\nsettings fixed for its whole life.",
+        "tags": [
+          "assistant"
+        ]
+      }
+    },
+    "/api/assistant/v1/conversations/{conversation_id}": {
+      "delete": {
+        "operationId": "deleteConversation",
+        "parameters": [
+          {
+            "description": "The conversation's ID.",
+            "in": "path",
+            "name": "conversation_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeletedConversation"
+                }
+              }
+            },
+            "description": "Deleted; until when it can be restored."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No valid session (`unauthenticated`)."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No tenant (`permission_denied`)."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No such conversation of the caller's, or it is already deleted (`not_found`)."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "A question of the conversation is being answered (`conflict`, `conversation.question_running`). Nothing changed."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The database failed (`unavailable`); nothing changed."
+          }
+        },
+        "summary": "Deletes one of the caller's conversations. It leaves every list but the deleted one, and\ncan be restored for 30 days; then it is removed for good.",
+        "tags": [
+          "assistant"
+        ]
+      },
+      "get": {
+        "operationId": "getConversation",
+        "parameters": [
+          {
+            "description": "The conversation's ID.",
+            "in": "path",
+            "name": "conversation_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConversationDetail"
+                }
+              }
+            },
+            "description": "The conversation and the messages the chat shows."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No valid session (`unauthenticated`)."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No tenant (`permission_denied`)."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No such conversation of the caller's, or it is deleted (`not_found`)."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The database failed (`unavailable`)."
+          }
+        },
+        "summary": "One of the caller's conversations with its questions and answers.",
+        "tags": [
+          "assistant"
+        ]
+      },
+      "patch": {
+        "operationId": "updateConversation",
+        "parameters": [
+          {
+            "description": "The conversation's ID.",
+            "in": "path",
+            "name": "conversation_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateConversation"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Conversation"
+                }
+              }
+            },
+            "description": "The conversation as it is now."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The `Content-Type` is not `application/json` (`invalid_request`), the body is not a JSON object of `title` and `archived` (`conversation.body_invalid`), or it has neither (`conversation.update_empty`)."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No valid session (`unauthenticated`)."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No tenant (`permission_denied`)."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No such conversation of the caller's, or it is deleted (`not_found`)."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The title is empty after trimming, longer than 200 characters, or has a control character (`validation_failed`, field `/title`, `conversation.title_invalid`). Nothing was written."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The database failed (`unavailable`); nothing was written."
+          }
+        },
+        "summary": "Renames, archives or unarchives one of the caller's conversations, both in one transaction.",
+        "tags": [
+          "assistant"
+        ]
+      }
+    },
+    "/api/assistant/v1/conversations/{conversation_id}/restore": {
+      "post": {
+        "operationId": "restoreConversation",
+        "parameters": [
+          {
+            "description": "The conversation's ID.",
+            "in": "path",
+            "name": "conversation_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/RestoreConversation"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            }
+          },
+          "description": "No body, `null`, or an empty object."
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Conversation"
+                }
+              }
+            },
+            "description": "Restored; the conversation as it is now."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The `Content-Type` is not `application/json` (`invalid_request`), or there is a body other than `null` or an empty object (`conversation.body_invalid`)."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No valid session (`unauthenticated`)."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No tenant (`permission_denied`)."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No deleted conversation of the caller's with this ID that can still be restored (`not_found`)."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The database failed (`unavailable`); nothing changed."
+          }
+        },
+        "summary": "Restores one of the caller's deleted conversations, as it was when it was deleted. Only\nwithin 30 days of the deletion.",
+        "tags": [
+          "assistant"
+        ]
+      }
+    },
+    "/api/assistant/v1/deleted-conversations": {
+      "get": {
+        "operationId": "listDeletedConversations",
+        "parameters": [
+          {
+            "description": "Conversations per page, 1 to 100; default 50.",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "format": "int32",
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "The previous page's `next_cursor` of this list, for the next page.",
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeletedConversationList"
+                }
+              }
+            },
+            "description": "A page of the caller's deleted conversations that can still be restored."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "A malformed query (`invalid_request`), a `limit` out of range (`conversation.limit_invalid`), or a `cursor` that is not a `next_cursor` of this list (`conversation.cursor_invalid`)."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No valid session (`unauthenticated`)."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No tenant (`permission_denied`)."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The database failed (`unavailable`)."
+          }
+        },
+        "summary": "The caller's deleted conversations that can still be restored, most recently deleted first:\ntitles and times, no messages.",
+        "tags": [
+          "assistant"
         ]
       }
     },
@@ -5532,6 +6404,10 @@
     {
       "description": "Sites, devices and data points (services/assets).",
       "name": "assets"
+    },
+    {
+      "description": "The AI assistant's conversations (services/assistant).",
+      "name": "assistant"
     },
     {
       "description": "Workstation certificates and factory registration from the issuing CA (services/certs).",

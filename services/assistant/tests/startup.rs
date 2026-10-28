@@ -2,9 +2,10 @@
 //! applied by the migration Job itself (`testkit::product`), and the service role
 //! `assistant_app` with the settings the chart sets.
 //!
-//! - Readiness passes once `assistant_app` logs in and the database has every migration file
-//!   this release expects, without the AI gateway or any service the tools call: none of them
-//!   listens here, and the service calls none of them before a question.
+//! - Readiness passes once `assistant_app` logs in, the service has the identity service's
+//!   public keys and the database has every migration file this release expects, without the AI
+//!   gateway or any service the tools call: none of them listens here, and the service calls none
+//!   of them before a question.
 //! - It stays unready while the role cannot log in, and while its migration record is missing.
 //!
 //! Starts a throwaway Postgres with TLS (podman or docker); skipped without either unless `CI`
@@ -18,6 +19,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use serde_json::Value;
+use testkit::identity::TestIssuer;
 use testkit::postgres::TEST_PASSWORD;
 use testkit::product::{ProductPostgres, product_postgres};
 
@@ -45,6 +47,19 @@ const RESTORE_RECORD: &str =
     "INSERT INTO assistant.trustiot_migrate_applied (component, name, sha256)
     SELECT component, name, sha256 FROM trustiot_migrate.applied
     WHERE component = 'assistant' AND name = '0001_assistant.sql'";
+
+/// A keys file with a test issuer's public key, as the chart's ConfigMap volume holds the
+/// identity service's: under Cargo's temporary directory for these tests.
+fn keys_file() -> std::path::PathBuf {
+    let path = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!(
+        "assistant-startup-jwks-{}.json",
+        std::process::id()
+    ));
+    TestIssuer::new()
+        .write_jwks(&path)
+        .expect("write the keys file");
+    path
+}
 
 /// An origin where nothing listens: a port the OS handed out and that was closed again.
 fn closed_origin() -> String {
@@ -106,6 +121,7 @@ impl Service {
             .env("TRUSTIOT__HTTP__HEALTH_LISTEN_ADDR", "127.0.0.1:0")
             .env("TRUSTIOT__SHUTDOWN__DRAIN_DELAY", "100ms")
             .env("TRUSTIOT__SHUTDOWN__DRAIN_TIMEOUT", "5s")
+            .env("TRUSTIOT_INTERNAL_IDENTITY_KEYS_FILE", keys_file())
             .env("TRUSTIOT__DATABASE__USERNAME", "assistant_app")
             .env("TRUSTIOT__DATABASE__PASSWORD", password)
             .env("TRUSTIOT__AI_GATEWAY__URL", closed_origin())

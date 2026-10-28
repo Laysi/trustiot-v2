@@ -17,11 +17,13 @@ doc = false
 # Anthropic Messages types: content blocks (thinking, tool calls) kept as received, usage by
 # billing category, stop reasons (src/model/anthropic.rs only).
 ai-clients = { path = "../../crates/ai-clients" }
-axum.workspace = true
+# The chat API (src/api.rs): JSON bodies and the list's query parameters.
+axum = { workspace = true, features = ["json", "query"] }
 # Tool result images are checked to be base64 before they go to the model.
 base64.workspace = true
-# The telemetry tools check the model's times and the queryable period before they call.
-chrono = { workspace = true, features = ["alloc", "now"] }
+# The telemetry tools check the model's times and the queryable period before they call; the
+# chat API's times and cursors (`serde`).
+chrono = { workspace = true, features = ["alloc", "now", "serde"] }
 # Tenant and user IDs, the internal identity token a tool calls with, service names.
 contract = { path = "../../crates/contract" }
 # The `assistant.model_calls` counter (cache reads, docs/architecture/ai-assistant.md).
@@ -40,6 +42,8 @@ sqlx = { workspace = true, features = ["chrono", "postgres", "runtime-tokio", "t
 thiserror.workspace = true
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "sync", "time"] }
 tracing.workspace = true
+# The chat API's OpenAPI document (merged into api/openapi.json by tools/openapi).
+utoipa = { workspace = true, features = ["chrono", "uuid"] }
 # Run and model call IDs (UUIDv7); device and model IDs in the services' answers.
 uuid = { workspace = true, features = ["serde", "v7"] }
 

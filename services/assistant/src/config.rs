@@ -1,5 +1,6 @@
 //! The assistant's settings (README.md, 「設定」): where the AI gateway is, the model call, the
-//! token budget of a question, the limits of tool calls and the service role's database login.
+//! token budget of a question, the limits of tool calls, the service role's database login and
+//! the public keys the API verifies identity tokens with.
 //! They come from `TRUSTIOT__*` variables (the platform settings from `TRUSTIOT_*`) or the TOML
 //! file named by `TRUSTIOT_CONFIG_FILE`, through service-kit, and are checked at startup. Error
 //! messages name keys, never values.
@@ -69,6 +70,10 @@ pub struct Config {
 /// platform setting.
 #[derive(Debug, Deserialize)]
 pub struct Platform {
+    /// `TRUSTIOT_INTERNAL_IDENTITY_KEYS_FILE`: the file with the public keys internal identity
+    /// tokens are verified with (the chart's ConfigMap volume), read again while the service
+    /// runs.
+    pub internal_identity_keys_file: PathBuf,
     /// `TRUSTIOT_POSTGRES_HOST`.
     pub postgres_host: String,
     /// `TRUSTIOT_POSTGRES_PORT`.
@@ -521,6 +526,7 @@ mod tests {
     fn config() -> Config {
         Config {
             platform: Platform {
+                internal_identity_keys_file: "/etc/trustiot/identity-keys/jwks.json".into(),
                 postgres_host: "trustiot-postgres-rw".into(),
                 postgres_port: 5432,
                 postgres_database: "trustiot".into(),
@@ -617,6 +623,10 @@ mod tests {
     #[test]
     fn the_settings_read_from_the_environment() {
         let vars = [
+            (
+                "TRUSTIOT_INTERNAL_IDENTITY_KEYS_FILE",
+                "/etc/trustiot/identity-keys/jwks.json",
+            ),
             ("TRUSTIOT_POSTGRES_HOST", "trustiot-postgres-rw"),
             ("TRUSTIOT_POSTGRES_PORT", "5432"),
             ("TRUSTIOT_POSTGRES_DATABASE", "trustiot"),
@@ -662,6 +672,10 @@ mod tests {
         );
         assert_eq!(config.assets.url.as_deref(), Some("http://assets:8080"));
         assert_eq!(config.database.max_connections, 6);
+        assert_eq!(
+            config.platform.internal_identity_keys_file,
+            PathBuf::from("/etc/trustiot/identity-keys/jwks.json")
+        );
         let role = config.service_role();
         assert_eq!(
             (role.host.as_str(), role.port, role.username.as_str()),

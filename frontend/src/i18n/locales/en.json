@@ -124,6 +124,13 @@
   "gateway_binding.tenant_unknown": "This tenant doesn't exist, or it was created a moment ago and isn't ready yet. Check the tenant or try again in a moment.",
   "gateway_binding.bound_to_another_tenant": "This gateway is bound to another tenant. Unbind it first.",
 
+  "conversation.body_invalid": "The request must be a JSON object with only the fields this action takes.",
+  "conversation.update_empty": "Nothing to change. Send a new title or the archive setting.",
+  "conversation.title_invalid": "Enter a title of 1 to {max} characters, without line breaks or other control characters.",
+  "conversation.limit_invalid": "Ask for 1 to {max} conversations at a time.",
+  "conversation.cursor_invalid": "This page of the list is no longer valid. Reload the list.",
+  "conversation.question_running": "A question in this conversation is still being answered. Wait for the answer, then delete the conversation.",
+
   "login.email_invalid": "Enter a valid email address.",
   "login.code_invalid": "Enter the whole code from the email.",
   "login.redirect_invalid": "The page to return to after signing in isn't on this site.",
