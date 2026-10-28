@@ -117,6 +117,85 @@ WHERE deleted_at <= now() - make_interval(days => $1)
         ORDER BY deleted_at
         LIMIT $2)";
 
+/// Whether `title` may be a conversation's title, as it is (the API trims the white space around
+/// a user's title first): 1 to [`MAX_TITLE_CHARS`] characters; no control character (Cc), no
+/// bidirectional embedding, override or isolate control (U+202A to U+202E, U+2066 to U+2069), no
+/// deprecated format character (U+206A to U+206F) and no line or paragraph separator (U+2028,
+/// U+2029), which would reorder or break how the title and what follows it are shown wherever it
+/// is displayed (shared, Laysi/trustiot-v2#650); and at
+/// least one visible character, one that is neither white space nor an invisible format
+/// character ([`invisible`]), so a title of zero-width spaces cannot pass for a name. The marks
+/// a script needs stay allowed beside visible characters: the zero-width joiner and non-joiner
+/// (emoji sequences, Persian) and the left-to-right, right-to-left and Arabic letter marks.
+///
+/// One rule for every title: the API answers a field error with it, and [`set_title`] refuses
+/// any other title, the model's (Laysi/trustiot-v2#651) included. The database's CHECK
+/// (`char_length(title) BETWEEN 1 AND 200`, 0002_conversation_threads.sql) keeps only the length.
+#[must_use]
+pub fn title_is_valid(title: &str) -> bool {
+    let chars = title.chars().count();
+    (1..=MAX_TITLE_CHARS).contains(&chars)
+        && !title.chars().any(refused_in_title)
+        && title.chars().any(|c| !c.is_whitespace() && !invisible(c))
+}
+
+/// Characters no title may contain: controls (Cc), the bidirectional embedding, override and
+/// isolate controls, the line and paragraph separators, and the deprecated format characters
+/// U+206A to U+206F (symmetric swapping, Arabic form shaping, digit shapes), which also change
+/// how text is shown.
+fn refused_in_title(c: char) -> bool {
+    c.is_control()
+        || matches!(
+            c,
+            '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{206F}' | '\u{2028}' | '\u{2029}'
+        )
+}
+
+/// Characters that show nothing by themselves: every code point of Unicode's
+/// Default_Ignorable_Code_Point property (DerivedCoreProperties.txt: the soft hyphen, the
+/// combining grapheme joiner, the Arabic letter mark, the Hangul and Khmer fillers, the Mongolian
+/// variation selectors and vowel separator, the zero-width space, joiners and directional marks,
+/// the word joiner and invisible operators, the variation selectors and their supplement, the
+/// byte order mark, the shorthand and musical format controls, the tags and the reserved
+/// ranges among them), the other format characters (General_Category Cf: the Arabic, Syriac and
+/// Kaithi prepended marks, the Egyptian hieroglyph format controls and the interlinear
+/// annotation characters), and the braille pattern blank, which renders as an empty cell.
+fn invisible(c: char) -> bool {
+    matches!(
+        c,
+        // Default_Ignorable_Code_Point.
+        '\u{00AD}'
+            | '\u{034F}'
+            | '\u{061C}'
+            | '\u{115F}'..='\u{1160}'
+            | '\u{17B4}'..='\u{17B5}'
+            | '\u{180B}'..='\u{180F}'
+            | '\u{200B}'..='\u{200F}'
+            | '\u{202A}'..='\u{202E}'
+            | '\u{2060}'..='\u{206F}'
+            | '\u{3164}'
+            | '\u{FE00}'..='\u{FE0F}'
+            | '\u{FEFF}'
+            | '\u{FFA0}'
+            | '\u{FFF0}'..='\u{FFF8}'
+            | '\u{1BCA0}'..='\u{1BCA3}'
+            | '\u{1D173}'..='\u{1D17A}'
+            | '\u{E0000}'..='\u{E0FFF}'
+            // The other format characters (Cf).
+            | '\u{0600}'..='\u{0605}'
+            | '\u{06DD}'
+            | '\u{070F}'
+            | '\u{0890}'..='\u{0891}'
+            | '\u{08E2}'
+            | '\u{110BD}'
+            | '\u{110CD}'
+            | '\u{13430}'..='\u{1343F}'
+            | '\u{FFF9}'..='\u{FFFB}'
+            // Braille pattern blank.
+            | '\u{2800}'
+    )
+}
+
 /// Who named a conversation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TitleSource {
@@ -318,9 +397,8 @@ pub async fn metadata(
 ///
 /// # Errors
 ///
-/// [`StoreError::Unstorable`] for an empty title, one over [`MAX_TITLE_CHARS`] characters or
-/// one with control characters; [`StoreError::NotStored`], [`StoreError::WrongTenant`] or a
-/// database failure.
+/// [`StoreError::Unstorable`] for a title [`title_is_valid`] refuses; [`StoreError::NotStored`],
+/// [`StoreError::WrongTenant`] or a database failure.
 pub async fn set_title(
     tx: &mut TenantTransaction,
     principal: Principal,
@@ -329,10 +407,10 @@ pub async fn set_title(
     source: TitleSource,
 ) -> Result<bool, StoreError> {
     check_tenant(tx, principal.tenant_id)?;
-    let chars = title.chars().count();
-    if chars == 0 || chars > MAX_TITLE_CHARS || title.chars().any(char::is_control) {
+    if !title_is_valid(title) {
         return Err(StoreError::Unstorable(
-            "a title has 1 to 200 characters and no control characters",
+            "a title has 1 to 200 characters, at least one visible, and no control or \
+             bidirectional formatting characters",
         ));
     }
     let updated = sqlx::query(SET_TITLE)

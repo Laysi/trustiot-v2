@@ -53,7 +53,7 @@ pub use runs::{
 pub use threads::{
     ConversationSummary, DeletedConversation, DeletedCursor, LOCK_NOT_AVAILABLE, ListCursor,
     ListFilter, MAX_PAGE, PURGE_LOCK_TIMEOUT, Page, Title, TitleSource, archive, delete, list,
-    list_deleted, metadata, purge_expired, restore, set_title,
+    list_deleted, metadata, purge_expired, restore, set_title, title_is_valid,
 };
 
 /// How long a deleted conversation can be restored; after it the purge removes it for good. A
@@ -174,7 +174,7 @@ pub enum StoreError {
     #[error("the stored conversation differs at {0}")]
     Conflict(&'static str),
     /// The value cannot be stored as it is (a message over [`MAX_MESSAGE_BYTES`], a title that
-    /// is empty, too long or has control characters, text with U+0000, a deadline out of range).
+    /// [`title_is_valid`] refuses, text with U+0000, a deadline out of range).
     #[error("the value cannot be stored: {0}")]
     Unstorable(&'static str),
     /// A stored row does not read back as a conversation.

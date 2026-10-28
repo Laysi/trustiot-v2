@@ -19,7 +19,7 @@
 //! | A write (`POST`, `PATCH`) whose `Content-Type` is not `application/json` | 400 `invalid_request` |
 //! | A body that is not a JSON object of the endpoint's fields (starting and restoring take none: no body, `null` or `{}`), or over [`MAX_BODY_BYTES`] | 400 `invalid_request`, key `conversation.body_invalid` |
 //! | An update with neither `title` nor `archived` | 400 `invalid_request`, key `conversation.update_empty` |
-//! | A title that is empty after trimming, longer than 200 characters, or has a control character | 422 `validation_failed`, field `/title`, key `conversation.title_invalid`, `{"max": 200}` |
+//! | A title that, after trimming, is empty, longer than 200 characters, has no visible character, or has a control, bidirectional formatting or line separator character (`store::title_is_valid`) | 422 `validation_failed`, field `/title`, key `conversation.title_invalid`, `{"max": 200}` |
 //! | `archived` other than `true` or `false` in the list's query | 400 `invalid_request` |
 //! | A `limit` that is not 1 to 100 | 400 `invalid_request`, key `conversation.limit_invalid`, `{"max": 100}` |
 //! | A `cursor` that is not a `next_cursor` of the same list | 400 `invalid_request`, key `conversation.cursor_invalid` |
@@ -266,8 +266,10 @@ pub struct RestoreConversation {}
 #[derive(Debug, Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct UpdateConversation {
-    /// The new title, 1 to 200 characters after trimming the surrounding white space, without
-    /// control characters. It replaces any title, the model's included.
+    /// The new title, 1 to 200 characters after trimming the surrounding white space, at least
+    /// one of them visible, without control, bidirectional or deprecated formatting (U+202A to
+    /// U+202E, U+2066 to U+206F) or line separator characters. It replaces any title, the
+    /// model's included.
     #[serde(default)]
     pub title: Option<String>,
     /// `true` archives the conversation, `false` takes it out of the archive. An archived
@@ -524,7 +526,7 @@ async fn detail(
         (status = 401, description = "No valid session (`unauthenticated`).", body = ErrorBody),
         (status = 403, description = "No tenant (`permission_denied`).", body = ErrorBody),
         (status = 404, description = "No such conversation of the caller's, or it is deleted (`not_found`).", body = ErrorBody),
-        (status = 422, description = "The title is empty after trimming, longer than 200 characters, or has a control character (`validation_failed`, field `/title`, `conversation.title_invalid`). Nothing was written.", body = ErrorBody),
+        (status = 422, description = "The title, after trimming, is empty, longer than 200 characters, has no visible character, or has a control, bidirectional formatting or line separator character (`validation_failed`, field `/title`, `conversation.title_invalid`). Nothing was written.", body = ErrorBody),
         (status = 503, description = "The database failed (`unavailable`); nothing was written.", body = ErrorBody),
     )
 )]
@@ -600,13 +602,11 @@ fn parse_update(body: &Bytes) -> Result<Update, ErrorBody> {
     })
 }
 
-/// `raw` without its surrounding white space, when that is 1 to [`MAX_TITLE_CHARS`] characters
-/// with no control character (the store's rule, checked here so the client gets a field error).
+/// `raw` without its surrounding white space, when the store accepts that as a title
+/// ([`store::title_is_valid`], checked here so the client gets a field error).
 fn parse_title(raw: &str) -> Option<String> {
     let title = raw.trim();
-    let chars = title.chars().count();
-    ((1..=MAX_TITLE_CHARS).contains(&chars) && !title.chars().any(char::is_control))
-        .then(|| title.to_owned())
+    store::title_is_valid(title).then(|| title.to_owned())
 }
 
 async fn update_in(
@@ -893,6 +893,25 @@ mod tests {
                 archived: Some(false),
             })
         );
+        // Joiners and directional marks beside visible characters: an emoji sequence (ZWJ),
+        // Persian (ZWNJ), Hebrew after a right-to-left mark, Arabic after the Arabic letter mark.
+        for title in [
+            "\u{1F469}\u{200D}\u{1F4BB} energy",
+            "\u{0645}\u{06CC}\u{200C}\u{062E}\u{0648}\u{0627}\u{0647}\u{0645}",
+            "\u{200F}\u{05E9}\u{05DC}\u{05D5}\u{05DD}",
+            "\u{061C}\u{0645}\u{0631}\u{062D}\u{0628}\u{0627}",
+            "a\u{200E}b",
+        ] {
+            let body = serde_json::json!({ "title": title }).to_string();
+            assert_eq!(
+                update(&body),
+                Ok(Update {
+                    title: Some(title.to_owned()),
+                    archived: None,
+                }),
+                "{title:?}"
+            );
+        }
 
         for (body, key) in [
             ("{}", "conversation.update_empty"),
@@ -921,6 +940,33 @@ mod tests {
             "line\nbreak".into(),
             "nul\u{0}".into(),
             "tab\tinside".into(),
+            // Nothing visible: zero-width and format characters only, with or without spaces.
+            "\u{200B}".into(),
+            " \u{200B}\u{200D} ".into(),
+            "\u{FEFF}".into(),
+            "\u{00AD}".into(),
+            "\u{2060}\u{200C}".into(),
+            "\u{200E}\u{200F}\u{061C}".into(),
+            "\u{3164}".into(),
+            "\u{E0100}".into(),
+            "\u{E01EF}\u{FE0F}".into(),
+            "\u{2800}\u{2800}".into(),
+            "\u{1D173}".into(),
+            "\u{FFF9}".into(),
+            "\u{0600}".into(),
+            "a\u{206A}b".into(),
+            // Bidirectional embedding, override and isolate controls, line and paragraph
+            // separators, even beside visible characters.
+            "invoice\u{202E}fdp.exe".into(),
+            "a\u{202A}b".into(),
+            "a\u{202B}b".into(),
+            "a\u{202C}b".into(),
+            "a\u{202D}b".into(),
+            "a\u{2066}b\u{2069}".into(),
+            "a\u{2067}b".into(),
+            "a\u{2068}b".into(),
+            "a\u{2028}b".into(),
+            "a\u{2029}b".into(),
         ] {
             let body = serde_json::json!({ "title": title }).to_string();
             let refused = update(&body).expect_err(&body);

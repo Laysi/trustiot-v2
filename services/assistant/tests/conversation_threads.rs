@@ -1595,12 +1595,42 @@ async fn titles_archive_and_the_list() {
         (title.text.as_str(), title.source),
         ("My readings", TitleSource::User)
     );
-    for bad in [String::new(), "x".repeat(201), "a\nb".to_owned()] {
-        assert!(matches!(
-            store::set_title(&mut tx, who, first, &bad, TitleSource::User).await,
-            Err(StoreError::Unstorable(_))
-        ));
+    // One rule for every source (store::title_is_valid): nothing visible, bidirectional
+    // controls and separators are refused whoever names the conversation.
+    for bad in [
+        String::new(),
+        "x".repeat(201),
+        "a\nb".to_owned(),
+        "\u{200B}".to_owned(),
+        "\u{FEFF}\u{200D}".to_owned(),
+        "\u{E0100}".to_owned(),
+        "\u{2800}".to_owned(),
+        " ".to_owned(),
+        "report\u{202E}fdp.exe".to_owned(),
+        "a\u{2066}b\u{2069}".to_owned(),
+        "a\u{2028}b".to_owned(),
+    ] {
+        for source in [
+            TitleSource::User,
+            TitleSource::Model,
+            TitleSource::Provisional,
+        ] {
+            assert!(
+                matches!(
+                    store::set_title(&mut tx, who, first, &bad, source).await,
+                    Err(StoreError::Unstorable(_))
+                ),
+                "{bad:?} ({source:?})"
+            );
+        }
     }
+    // Joiners and marks beside visible characters are a title.
+    let joined = "\u{1F469}\u{200D}\u{1F4BB} \u{200F}\u{05E9}\u{05DC}\u{05D5}\u{05DD}";
+    assert!(
+        store::set_title(&mut tx, who, second, joined, TitleSource::User)
+            .await
+            .expect("a title with a ZWJ sequence and a right-to-left mark")
+    );
     store::archive(&mut tx, who, second, true)
         .await
         .expect("archive");

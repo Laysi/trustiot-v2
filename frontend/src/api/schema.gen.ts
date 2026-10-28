@@ -1809,8 +1809,10 @@ export interface components {
              */
             archived?: boolean | null;
             /**
-             * @description The new title, 1 to 200 characters after trimming the surrounding white space, without
-             *     control characters. It replaces any title, the model's included.
+             * @description The new title, 1 to 200 characters after trimming the surrounding white space, at least
+             *     one of them visible, without control, bidirectional or deprecated formatting (U+202A to
+             *     U+202E, U+2066 to U+206F) or line separator characters. It replaces any title, the
+             *     model's included.
              */
             title?: string | null;
         };
@@ -3380,7 +3382,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description The title is empty after trimming, longer than 200 characters, or has a control character (`validation_failed`, field `/title`, `conversation.title_invalid`). Nothing was written. */
+            /** @description The title, after trimming, is empty, longer than 200 characters, has no visible character, or has a control, bidirectional formatting or line separator character (`validation_failed`, field `/title`, `conversation.title_invalid`). Nothing was written. */
             422: {
                 headers: {
                     [name: string]: unknown;
