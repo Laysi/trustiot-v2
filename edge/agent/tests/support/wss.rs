@@ -28,7 +28,8 @@ use tokio_util::sync::CancellationToken;
 use super::{FakeBroker, GATEWAY, gateway};
 
 /// The files of one gateway: the configuration and what it names. The configuration names a
-/// root CRL `root-crl.pem`, which does not exist until a test writes it.
+/// root CRL `root-crl.pem`, which does not exist until a test writes it. `state` is the agent's
+/// state directory (`STATE_DIRECTORY`).
 pub struct Files {
     dir: ScratchDir,
 }
@@ -38,6 +39,7 @@ impl Files {
         let dir = ScratchDir::new("agent-transport");
         let leaf = pki.gateway(GATEWAY);
         let files = Self { dir };
+        std::fs::create_dir(files.path("state")).unwrap();
         files.write("public-ca.pem", &pki.public_ca.pem);
         files.write("broker-ca.pem", &pki.broker_ca.pem);
         files.write("gateway.pem", &leaf.cert_pem);

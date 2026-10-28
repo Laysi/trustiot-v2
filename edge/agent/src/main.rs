@@ -12,8 +12,9 @@
 //! Threads: the connection (TLS handshakes, MQTT) runs on its own thread with a single-threaded
 //! tokio runtime, because a full inner handshake waits about 70 ms for the TPM signature inside
 //! rustls' synchronous signing call; that blocks only this thread. Everything else (heartbeat,
-//! the systemd watchdog's notifications, signals, and later the Modbus polling of
-//! [`agent::polling`], with its own per-device watchdog) runs on a two-thread runtime.
+//! the systemd watchdog's notifications, signals, the dispatch of `down` messages, and the
+//! Modbus polling of [`agent::polling`] with its own per-device watchdog, one task per device
+//! of the configuration [`agent::desired`] applies) runs on a two-thread runtime.
 //!
 //! The systemd watchdog is fed only while the connection task makes progress and both runtimes
 //! run: the connection task declares every wait with its deadline ([`agent::liveness`]), the
@@ -26,16 +27,24 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 use agent::config::{self, Config};
+use agent::desired::fleet::{Fleet, Sink};
+use agent::desired::store::{self, Store};
+use agent::desired::{self, Applier, Inbox};
 use agent::heartbeat::{self, HeartbeatSettings};
 use agent::identity::utc;
-use agent::link::{self, Link, LinkState, Subscriptions};
+use agent::link::{self, Incoming, Link, LinkState, Subscriptions};
 use agent::liveness::{self, Progress};
+use agent::modbus::endpoint::Endpoints;
+use agent::modbus::{Clock, Timestamp};
+use agent::polling::{self, Polled};
 use agent::sdnotify::{self, Notification, Notifier, PROGRESS_TICK};
 use agent::setup::Setup;
 use agent::tls::{RootCrl, Validity};
+use protocol::topic::Channel;
+use protocol::{DeviceId, UnixMillis};
 use tokio::signal::unix::{SignalKind, signal};
 use tokio_util::sync::CancellationToken;
 use tracing::Level;
@@ -109,6 +118,10 @@ fn main() -> ExitCode {
         .map_err(|error| error.to_string())
         .and_then(|config| {
             Setup::new(&config).map_err(|error| format!("{}: {error}", args.config.display()))
+        })
+        .and_then(|setup| {
+            let directory = std::env::var_os(store::STATE_DIRECTORY_VARIABLE);
+            store::state_directory(directory.as_deref()).map(|directory| (setup, directory))
         }) {
         Ok(setup) => setup,
         Err(error) => {
@@ -116,6 +129,7 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
+    let (setup, state_directory) = setup;
     if setup.file_key {
         tracing::warn!(
             "identity.key.source is \"file\": for development and tests only; production gateways keep the key in the TPM"
@@ -138,7 +152,7 @@ fn main() -> ExitCode {
         );
         return ExitCode::SUCCESS;
     }
-    run(setup)
+    run(setup, state_directory)
 }
 
 /// Says once at start whether the broker's chain is checked against a root CRL.
@@ -196,7 +210,7 @@ fn init_logging() {
     }
 }
 
-fn run(setup: Setup) -> ExitCode {
+fn run(setup: Setup, state_directory: PathBuf) -> ExitCode {
     let runtime = match tokio::runtime::Builder::new_multi_thread()
         .worker_threads(2)
         .thread_name("agent")
@@ -220,15 +234,35 @@ fn run(setup: Setup) -> ExitCode {
         certificate_not_after: setup.certificate_not_after,
     };
     let gateway = setup.gateway.clone();
-    // The link subscribes only to the down channels something handles, and nothing handles one
-    // yet, so it subscribes to none and nobody takes `incoming`. Each later issue adds its
-    // channel here together with the handler that takes its messages from `incoming`: config
-    // (Laysi/trustiot-v2#94), telemetry-ack (Laysi/trustiot-v2#90), log-request
+    // The link subscribes only to the down channels something handles: a subscribed channel
+    // nobody takes messages from would acknowledge them and lose them. `dispatch` hands each
+    // message to its handler. Each later issue adds its channel here and in `dispatch` together
+    // with its handler: telemetry-ack (Laysi/trustiot-v2#90), log-request
     // (Laysi/trustiot-v2#185) and live-control (Laysi/trustiot-v2#121).
     let mut link_settings = setup.link;
-    link_settings.subscriptions = Subscriptions::none();
+    link_settings.subscriptions = match Subscriptions::new([Channel::Config]) {
+        Ok(subscriptions) => subscriptions,
+        Err(error) => {
+            tracing::error!(%error, "invalid subscriptions");
+            return ExitCode::FAILURE;
+        }
+    };
     let (link, incoming, supervisor) = link::link(link_settings, setup.connector, shutdown.clone());
-    drop(incoming);
+    let (config_inbox, config_deliveries) = desired::inbox();
+    runtime.spawn(dispatch(incoming, config_inbox));
+    let poll_settings = polling::Settings::default();
+    let fleet = Fleet::new(
+        Endpoints::new(poll_settings.connect_timeout),
+        poll_settings,
+        Arc::new(SystemClock),
+        Arc::new(UntilBuffer),
+    );
+    runtime.spawn(desired::run(
+        Applier::new(fleet, Store::new(state_directory)),
+        link.clone(),
+        config_deliveries,
+        shutdown.clone(),
+    ));
     let progress = supervisor.progress();
     let ticks = Arc::new(AtomicU64::new(0));
     let connection = {
@@ -352,6 +386,56 @@ async fn serve(
         }
     }
     ExitCode::SUCCESS
+}
+
+/// Hands every message the cloud sends to the handler of its channel, at once: `Incoming`
+/// must be emptied promptly (a message waiting longer than `liveness::DELIVERY_LIMIT` counts
+/// as a stuck agent), and no handler makes it wait.
+async fn dispatch(mut incoming: Incoming, config: Inbox) {
+    while let Some(message) = incoming.recv().await {
+        match message.channel {
+            Channel::Config => config.deliver(message.payload),
+            channel => tracing::warn!(?channel, "no handler for a message; dropped"),
+        }
+    }
+}
+
+/// Stamps readings with the system clock. Whether it is synchronized is
+/// Laysi/trustiot-v2#90's to find out; until then readings say it is not.
+struct SystemClock;
+
+impl Clock for SystemClock {
+    fn now(&self) -> Timestamp {
+        let millis = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .map_or(0, |since| {
+                u64::try_from(since.as_millis()).unwrap_or(u64::MAX)
+            });
+        Timestamp {
+            at: UnixMillis::new(millis),
+            synced: false,
+        }
+    }
+}
+
+/// Where polls go until the offline buffer (Laysi/trustiot-v2#90) takes the readings and the
+/// device statistics (Laysi/trustiot-v2#117) take the rest: logged at debug level and dropped.
+struct UntilBuffer;
+
+impl Sink for UntilBuffer {
+    fn polled(&self, device: &DeviceId, polled: Polled) {
+        tracing::debug!(
+            %device,
+            readings = polled.poll.readings.len(),
+            failed = polled.poll.failed.len(),
+            missed = polled.missed,
+            "polled"
+        );
+    }
+
+    fn removed(&self, device: &DeviceId) {
+        tracing::debug!(%device, "no longer polled");
+    }
 }
 
 /// Shows the link state in `systemctl status`.

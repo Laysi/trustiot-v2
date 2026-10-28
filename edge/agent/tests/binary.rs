@@ -1,7 +1,8 @@
 //! The `trustiot-agent` executable as systemd runs it (Laysi/trustiot-v2#86): `--check`, the
 //! `sd_notify` messages (`READY=1` before the first connection, `STATUS=`, `WATCHDOG=1` at half
-//! of `WATCHDOG_USEC`, `STOPPING=1`), and SIGTERM ending with `offline`/`shutdown`, a normal
-//! DISCONNECT and exit code 0. The test plays systemd's notification socket (an abstract Unix
+//! of `WATCHDOG_USEC`, `STOPPING=1`), the device configuration (subscribed, applied, reported,
+//! saved, and polled after a restart without the broker; Laysi/trustiot-v2#94), and SIGTERM
+//! ending with `offline`/`shutdown`, a normal DISCONNECT and exit code 0. The test plays systemd's notification socket (an abstract Unix
 //! socket, as `NOTIFY_SOCKET=@...`) and the broker (`support::wss::InnerBroker` behind the
 //! in-process front).
 
@@ -16,13 +17,20 @@ use std::os::linux::net::SocketAddrExt;
 use std::process::Stdio;
 use std::sync::atomic::{AtomicU32, Ordering};
 
+use protocol::config::{
+    ByteOrder, ConfigReport, DataPoint, DataType, DesiredConfig, Device, DeviceModel, FunctionCode,
+    Host, Transport,
+};
 use protocol::health::{OfflineReason, Status};
 use protocol::topic::Channel;
+use protocol::{ConfigVersion, DeviceId, ModelName, PointKey, V1};
 use support::wss::{Files, InnerBroker, front};
-use support::{GATEWAY, Packet, gateway, puback};
+use support::{GATEWAY, Packet, gateway, puback, publish};
 use testkit::clock::bounded;
 use testkit::mqtt::{Authority, TestPki, mtls_server};
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader, Lines};
 use tokio::net::UnixDatagram;
+use tokio::process::ChildStderr;
 use tokio::process::{Child, Command};
 
 const EXECUTABLE: &str = env!("CARGO_BIN_EXE_trustiot-agent");
@@ -84,6 +92,8 @@ fn agent(files: &Files, notify: &NotifySocket) -> Child {
     Command::new(EXECUTABLE)
         .args(["--config", &files.path("agent.toml")])
         .env("NOTIFY_SOCKET", notify.env())
+        // As systemd passes the unit's StateDirectory.
+        .env("STATE_DIRECTORY", files.path("state"))
         .env("WATCHDOG_USEC", "2000000")
         .env_remove("WATCHDOG_PID")
         .env("TRUSTIOT_AGENT_LOG", "debug")
@@ -218,8 +228,88 @@ async fn without_a_broker_the_agent_is_ready_feeds_the_watchdog_and_stops_on_sig
     assert!(log.contains("stopped"), "{log}");
 }
 
+/// Version 1 of a configuration with one device at 127.0.0.1, an address the agent's address
+/// guard refuses (Laysi/trustiot-v2#653): polling it fails without opening a socket, so the test
+/// sends no packet to any device.
+fn desired_config() -> Vec<u8> {
+    let model = DeviceModel {
+        name: ModelName::new("meter").unwrap(),
+        points: vec![DataPoint {
+            key: PointKey::new("power").unwrap(),
+            function_code: FunctionCode::ReadHoldingRegisters,
+            address: 0,
+            data_type: DataType::U16,
+            byte_order: ByteOrder::Abcd,
+            length: None,
+            scale: None,
+            offset: None,
+        }],
+    };
+    DesiredConfig {
+        v: V1,
+        rev: 1,
+        version: ConfigVersion::new(1).unwrap(),
+        devices: vec![Device {
+            id: DeviceId::new("meter-1").unwrap(),
+            model: model.name.clone(),
+            transport: Transport::ModbusTcp,
+            host: Host::new("127.0.0.1").unwrap(),
+            port: 502,
+            unit_id: 1,
+            poll_interval_ms: 1000,
+        }],
+        models: vec![model],
+    }
+    .encode()
+    .unwrap()
+}
+
+/// The agent's log, read line by line while it runs.
+struct Log {
+    lines: Lines<BufReader<ChildStderr>>,
+    seen: Vec<String>,
+}
+
+impl Log {
+    fn of(child: &mut Child) -> Self {
+        Self {
+            lines: BufReader::new(child.stderr.take().unwrap()).lines(),
+            seen: Vec::new(),
+        }
+    }
+
+    /// Waits for a line that contains every one of `parts`.
+    async fn wait_for(&mut self, parts: &[&str]) -> String {
+        let lines = &mut self.lines;
+        let seen = &mut self.seen;
+        bounded(format!("a log line with {parts:?}"), async {
+            loop {
+                let Some(line) = lines.next_line().await.unwrap() else {
+                    panic!("the log ended without {parts:?}:\n{}", seen.join("\n"))
+                };
+                seen.push(line.clone());
+                if parts.iter().all(|part| line.contains(part)) {
+                    return line;
+                }
+            }
+        })
+        .await
+    }
+
+    /// Waits for the process to exit; returns whether it succeeded and the rest of the log.
+    async fn exit(self, mut child: Child) -> (bool, String) {
+        let mut rest = String::new();
+        let mut stderr = self.lines.into_inner();
+        bounded("the rest of the log", stderr.read_to_string(&mut rest))
+            .await
+            .unwrap();
+        let status = bounded("the agent to exit", child.wait()).await.unwrap();
+        (status.success(), rest)
+    }
+}
+
 #[tokio::test]
-async fn connected_the_agent_subscribes_to_nothing_reports_its_session_and_stops_on_sigterm() {
+async fn connected_the_agent_applies_its_configuration_reports_it_and_polls_it_after_a_restart() {
     let pki = TestPki::new();
     let mut broker = InnerBroker::start(mtls_server(&pki.broker, &pki.broker_ca)).await;
     let front = front(&pki, broker.address, |_| {}).await;
@@ -227,16 +317,55 @@ async fn connected_the_agent_subscribes_to_nothing_reports_its_session_and_stops
     let mut notify = NotifySocket::new();
     let child = agent(&files, &notify);
     notify.wait_for("READY=1", |line| line == "READY=1").await;
-    let (mut mqtt, _) = broker.next_broker().await;
-    // Nothing in the agent handles a down channel yet, so its link subscribes to none: the
-    // broker expects no SUBSCRIBE, and right after `online` comes the first heartbeat, which
-    // the agent sends once Connected.
+    let (mqtt, _) = broker.next_broker().await;
+    // The agent handles down/config, so its link subscribes to it after `online`, and only to
+    // it; `accept` checks the SUBSCRIBE.
+    let mut mqtt = mqtt.subscribing(&[Channel::Config]);
     let (_, session) = bounded("the connection", mqtt.accept()).await;
-    match bounded("the first heartbeat", mqtt.read_answering_pings()).await {
-        Some(Packet::Publish(publish)) if publish.topic == Channel::Heartbeat.topic(&gateway()) => {
+    // The broker delivers the retained configuration right after the SUBACK.
+    let config = desired_config();
+    mqtt.send(&publish(
+        &Channel::Config.topic(&gateway()),
+        &config,
+        1,
+        true,
+        Some(1),
+    ))
+    .await;
+    // The first heartbeat (sent once Connected), the PUBACK of the delivery and the report, in
+    // any order.
+    let (mut heartbeat, mut acked, mut report) = (false, false, None);
+    while !(heartbeat && acked && report.is_some()) {
+        match bounded(
+            "the heartbeat, PUBACK and report",
+            mqtt.read_answering_pings(),
+        )
+        .await
+        {
+            Some(Packet::Publish(publish))
+                if publish.topic == Channel::Heartbeat.topic(&gateway()) =>
+            {
+                heartbeat = true;
+            }
+            Some(Packet::Publish(publish))
+                if publish.topic == Channel::ConfigReport.topic(&gateway()) =>
+            {
+                mqtt.send(&puback(publish.id.unwrap(), 0)).await;
+                report = Some(ConfigReport::decode(&publish.payload).unwrap());
+            }
+            Some(Packet::PubAck { id: 1, reason: 0 }) => acked = true,
+            other => panic!("expected the heartbeat, the PUBACK and the report, got {other:?}"),
         }
-        other => panic!("expected the first heartbeat right after online, got {other:?}"),
     }
+    assert_eq!(
+        report,
+        Some(ConfigReport::applied(ConfigVersion::new(1).unwrap()))
+    );
+    // Saved on the data partition before it took effect.
+    assert_eq!(
+        std::fs::read(files.path("state/desired-config.cbor")).unwrap(),
+        config
+    );
     let connected = format!("STATUS=gateway {GATEWAY}: connected, session {session}");
     notify
         .wait_for("the connected status", |line| line == connected)
@@ -267,6 +396,22 @@ async fn connected_the_agent_subscribes_to_nothing_reports_its_session_and_stops
     );
     let (success, log) = exit(child).await;
     assert!(success, "{log}");
+    assert!(log.contains("applied the configuration"), "{log}");
+
+    // Started again with no way to the broker, it polls the saved configuration at once. The
+    // device's address is refused by the address guard, so each poll fails to connect.
+    let closed = ClosedPort::new();
+    files.write_config(closed.port(), "public-ca.pem");
+    let notify = NotifySocket::new();
+    let mut child = agent(&files, &notify);
+    let mut log = Log::of(&mut child);
+    log.wait_for(&["polling with the saved configuration", "version=1"])
+        .await;
+    log.wait_for(&["polled", "device=meter-1", "failed=1"])
+        .await;
+    terminate(&child);
+    let (success, rest) = log.exit(child).await;
+    assert!(success, "{rest}");
 }
 
 async fn check(files: &Files) -> std::process::Output {
