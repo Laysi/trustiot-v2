@@ -2,11 +2,11 @@
 
 Laysi/trustiot-v2#645：AI 助理的 API 骨架（`/api/assistant/v1`）、對話串的七個端點（清單、開始、讀取、改名與封存、刪除、已刪除清單、還原），以及刪除滿 30 天的對話的排程清除（每個副本都排程，同一時間一個副本以平台角色 `assistant_platform` 分批刪除）。這份報告是驗收條件的證據：全部由下列自動化測試以 `CI=1` 實際執行，需要容器的測試沒有略過。
 
-2026-10-28 第一次執行之後，獨立安全審查提出的修正（下方「審查後的修正」，F1 到 F7）在 2026-10-29 加入，所有指令都在修正後的樹上重跑；下面的數字都是重跑的結果。
+2026-10-28 第一次執行之後，獨立安全審查提出的修正（下方「審查後的修正」，F1 到 F7）在 2026-10-29 加入，所有指令都在修正後的樹上重跑；下面的數字都是重跑的結果。複審之後又修了清除的兩個 Low 項目（下方「複審後的修正」，R1、R2），`cargo test -p assistant` 等相關的檢查在那個 commit 上重跑。
 
 ## 環境
 
-- **程式碼**：分支 `feat/645-assistant-chat-api`，從 main `5dad042` 分出；完整的數字取自 commit `095e552` 的樹。之後的 `2f53f8f` 與這份報告最後的修改只改文件（這份報告、`docs/architecture/data-retention.md` 的一個標點、`deploy/chart/README.md` 的一個數字）；合併 commit `c262825` 帶進 main，在它的樹上重跑的檢查見「結果」表下方。
+- **程式碼**：分支 `feat/645-assistant-chat-api`，從 main `5dad042` 分出；完整的數字取自 commit `095e552` 的樹。之後的 `2f53f8f` 與這份報告最後的修改只改文件（這份報告、`docs/architecture/data-retention.md` 的一個標點、`deploy/chart/README.md` 的一個數字）；合併 commit `c262825` 帶進 main，在它的樹上重跑的檢查見「結果」表下方。R1、R2 的修正是 `dcbaefe`，在它的樹上重跑的檢查也在那裡。
 - **機器**：本機（x86_64 Linux 工作站）。容器測試以 podman 起拋棄式 TLS Postgres，以 migration Job 套用整個產品的 schema（`testkit::product`，每個測試執行檔一個資料庫）。API 與清除的測試啟動 `assistant` 執行檔本身當子行程（`services/assistant/tests/service/mod.rs`），清除的測試同時起兩個行程。
 - **工具**：`.prototools` 與 `rust-toolchain.toml` 釘選的版本：Rust 1.99.0、Bun 1.4.2、Helm 4.3.0、kubeconform 0.8.0、cargo-deny 0.20.2、gitleaks 8.30.1。
 - **設定**：`CI=1`，所以沒有容器執行環境時測試會失敗，不會略過。不連真正的 AI 供應商：主 agent 的模型是 loopback 上回放 `tests/fixtures/` 的替身，服務設定的 AI 閘道位址沒有東西在聽（這些測試都不發問）。
@@ -63,6 +63,8 @@ git archive HEAD | tar -x -C <空目錄> && gitleaks dir --redact <空目錄>
 | gitleaks（分支的 commit、`git archive HEAD` 的樹） | 都沒有發現 |
 
 **合併 main 後重跑**：合併 commit `c262825`（main 的 `fdf7bd0`，帶進 Laysi/trustiot-v2#722 的 edge/agent 與 Laysi/trustiot-v2#725 的 AI 閘道管理埠 Service 與 mesh 政策）的樹上，重跑 main 的變更可能影響的檢查：`cargo fmt --all --check` 與 `cargo clippy --workspace --all-targets -- -D warnings` 通過，`cargo run -p openapi -- --check` 通過，`CI=1 cargo test -p repo-check` 28 通過，`bun test deploy/flux` 78 通過，`bun test deploy/chart` 680 通過（多出的是 #725 的 chart 測試），都是 0 失敗。上表其他的數字仍是 `095e552` 的。
+
+**R1、R2 的修正後重跑**（`dcbaefe` 的樹）：`cargo fmt --all --check` 與 `cargo clippy --workspace --all-targets -- -D warnings` 通過；`CI=1 cargo test -p assistant --no-fail-fast` 單元 57、`agent` 10、`agent_logs` 2、`api` 10、`chart_connections` 1、`conversation_threads` 12、`cross_tenant` 2、`delegated_tools` 13、`history_store` 5、`purge_job` 1、`purge_locks` 2（新的）、`startup` 1、`telemetry_sql` 2、`tools` 7，共 125 個全部通過，文件測試 1 個忽略；跑了 179 秒。
 
 ### 新的常數
 
@@ -200,6 +202,30 @@ git archive HEAD | tar -x -C <空目錄> && gitleaks dir --redact <空目錄>
 
 清除的日誌沒有標題：見上方「清除只在一個副本執行」第 4 點。
 
+## 複審後的修正
+
+複審（`61f93ec..095e552`）沒有 Medium 以上的項目，清除的一次刪一個有兩個 Low 項目，修正是 `dcbaefe`。測試在新的測試執行檔 `tests/purge_locks.rs`，有自己的 Postgres：表鎖會擋住共用資料庫的其他測試，或讓 `conversation_threads.rs` 裡清除測試自己的 5 秒逾時失敗。兩個測試以一個 mutex 輪流執行，先開好平台連線池唯一的那條連線再鎖表（新連線的 session 檢查會以 `pg_get_expr` 讀表的 policy，ACCESS EXCLUSIVE 下會等鎖；這裡測的是一輪自己的敘述）。
+
+### R2：整張表被鎖住時一輪提早結束
+
+`a_table_lock_ends_the_round_after_one_fallback_batch`（單獨執行 14.0 秒）：三個過期的對話，superuser 以 `LOCK TABLE assistant.conversations IN SHARE MODE` 擋住所有 DELETE（讀取不擋）。
+
+- 一輪回傳 `Round { purged: 0, skipped: 3 }`，什麼都沒刪。
+- 這一輪開的平台交易是 2 + 3 個（批次、讀鍵、每個對話一次刪除），以 `platform database access` 的行數計算，不靠時間。拿掉修正（改回「有略過就算有進展」）時同一個測試數到 7 個（多了第二批與第二次讀鍵），測試失敗。
+- 一行 WARN `purge round stopped early: a lock held up its deletions; the next round tries again`（`purge::STOPPED_EARLY`），欄位只有 `job`、`purged`、`skipped`，沒有租戶與 ID。
+- 鎖放開後，下一輪回傳 `Round { purged: 3, skipped: 0 }`，記 INFO `purged expired conversations`。
+
+### R1：讀候選也有等鎖上限
+
+`an_exclusive_table_lock_does_not_hold_the_round`（單獨執行 17.5 秒）：兩個過期的對話，superuser 以 `LOCK TABLE assistant.conversations IN ACCESS EXCLUSIVE MODE` 連讀取都擋。
+
+- 一輪在鎖還在的時候就回傳 `Round { purged: 0, skipped: 0 }`：批次與讀鍵各等 `PURGE_LOCK_TIMEOUT`（5 秒）後放棄，平台交易只有這 2 個。
+- 一行 `STOPPED_EARLY` 的 WARN，只有計數。
+- 鎖放開後兩個都還在；下一輪回傳 `Round { purged: 2, skipped: 0 }`，記 INFO。
+- 拿掉修正（讀鍵不設 `lock_timeout`）時，一輪一直等到測試的上限 120 秒（`ROUND_LIMIT`），測試以「the round did not end while the table stayed exclusively locked」失敗。
+
+兩個測試在同一個執行檔裡輪流跑，共 28.2 秒（`cargo test -p assistant` 那一次）。
+
 ## 結論
 
 | 驗收條件 | 證據 | 結果 |
@@ -214,4 +240,5 @@ git archive HEAD | tar -x -C <空目錄> && gitleaks dir --redact <空目錄>
 | 沒有身分標頭、簽章錯誤、受眾不是 assistant 的 token 被拒 | `tests/api.rs` 的 `a_request_needs_a_token_for_the_assistant_and_a_tenant`：每個端點在沒有 token、別的簽發者、給 assets 的 token 時都回 401，沒有租戶時回 403，都帶 `cache-control: no-store`，什麼都沒建立 | 通過 |
 | 資料庫錯誤的回應與日誌不含 Postgres 的錯誤文字 | `tests/api.rs` 的 `a_database_failure_shows_nothing_of_the_database`（唯一鍵衝突，見上） | 通過 |
 | 審查 F2 到 F6 的修正 | 上方「審查後的修正」各節 | 通過 |
+| 複審 R1、R2 的修正 | 上方「複審後的修正」各節 | 通過 |
 | `cargo run -p openapi -- --check`、`bun run --cwd frontend api:check`、`bun run --cwd frontend test`、`cargo test -p assistant`、`cargo test -p openapi`、`bun test deploy/chart`、`cargo clippy --workspace --all-targets -- -D warnings` 通過 | 上方「結果」表 | 通過 |
