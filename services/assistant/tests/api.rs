@@ -31,13 +31,13 @@ use assistant::store::{self, RunOutcome};
 use assistant::tools::{NoDelegation, Tool, ToolContext, ToolError, ToolOutput, ToolSpec};
 use chrono::{DateTime, TimeDelta, Utc};
 use contract::identity::TenantRole;
-use contract::{ServiceName, TenantId};
+use contract::{ServiceName, TenantId, UserId};
 use reqwest::Method;
 use serde_json::{Value, json};
 use service::{Reply, Service, User};
 use service_kit::tenant::{PlatformDb, TenantDb};
 use sqlx::postgres::PgPoolOptions;
-use sqlx::{AssertSqlSafe, Connection, Row};
+use sqlx::{Connection, Row};
 use support::{StandIn, fixture, ok, respond, settings, tool_step};
 use testkit::identity::TestIssuer;
 use testkit::product::{DATABASE, ProductPostgres, product_postgres};
@@ -1150,25 +1150,41 @@ const DATABASE_TEXT: [&str; 5] = [
     LEAK_CANARY_INDEX,
 ];
 
-/// A unique index the superuser adds for one tenant only, so the other tests of this file are
-/// not affected: a user of that tenant can start one conversation, and the second fails with
-/// `23505` and the index's name and the key's values in the database's text.
+/// The name of a unique index the superuser adds for one user only ([`LEAK_CANARY_USER`]), so the
+/// other tests of this file, whose users are random, are not affected: that user can start one
+/// conversation per tenant, and the second fails with `23505` and the index's name and the key's
+/// values in the database's text.
 const LEAK_CANARY_INDEX: &str = "leak_canary_one_conversation_per_user";
+
+/// The one user the canary index applies to. Fixed, because DDL takes no bound values and SQL
+/// here is never built from strings (decision 29, `tools/sql-check`); each test binary has a
+/// database of its own, and no other test uses this ID.
+const LEAK_CANARY_USER: Uuid = Uuid::from_u128(0x6a5e_c0de_0645_4000_8000_0000_0000_0001);
+
+/// Adds the canary index; its name and user are the constants above.
+const ADD_LEAK_CANARY: &str = "CREATE UNIQUE INDEX leak_canary_one_conversation_per_user
+    ON assistant.conversations (tenant_id, user_id)
+    WHERE user_id = '6a5ec0de-0645-4000-8000-000000000001'::uuid";
+
+const DROP_LEAK_CANARY: &str = "DROP INDEX assistant.leak_canary_one_conversation_per_user";
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_database_failure_shows_nothing_of_the_database() {
     let Some(api) = api().await else { return };
-    let owner = User::new(TenantId::generate(), TenantRole::Viewer);
+    assert!(
+        ADD_LEAK_CANARY.contains(LEAK_CANARY_INDEX) && DROP_LEAK_CANARY.contains(LEAK_CANARY_INDEX)
+    );
+    assert!(ADD_LEAK_CANARY.contains(&LEAK_CANARY_USER.to_string()));
+    let owner = User {
+        tenant: TenantId::generate(),
+        id: UserId::from_uuid(LEAK_CANARY_USER),
+        role: TenantRole::Viewer,
+    };
     let mut admin = api.product.superuser().await;
-    // DDL takes no parameters; the only value is a UUID this test generated.
-    sqlx::raw_sql(AssertSqlSafe(format!(
-        "CREATE UNIQUE INDEX {LEAK_CANARY_INDEX} ON assistant.conversations (tenant_id, user_id) \
-         WHERE tenant_id = '{}'::uuid",
-        owner.tenant
-    )))
-    .execute(&mut admin)
-    .await
-    .expect("add the canary index");
+    sqlx::raw_sql(ADD_LEAK_CANARY)
+        .execute(&mut admin)
+        .await
+        .expect("add the canary index");
 
     // The database's own words for the failure, to prove the strings above are the ones it uses.
     let mut probe = admin.begin().await.expect("a superuser transaction");
@@ -1226,12 +1242,10 @@ async fn a_database_failure_shows_nothing_of_the_database() {
         "the failed start stored nothing"
     );
 
-    sqlx::raw_sql(AssertSqlSafe(format!(
-        "DROP INDEX assistant.{LEAK_CANARY_INDEX}"
-    )))
-    .execute(&mut admin)
-    .await
-    .expect("drop the canary index");
+    sqlx::raw_sql(DROP_LEAK_CANARY)
+        .execute(&mut admin)
+        .await
+        .expect("drop the canary index");
     println!(
         "POST {CONVERSATIONS} after a unique violation: 503 {}; logged {logged}",
         failed.body
