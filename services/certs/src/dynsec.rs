@@ -26,6 +26,12 @@
 //!   name ([`CLIENT_TEXTNAME`]) is deleted and created again, which also clears a password
 //!   someone may have set on it (the broker never says whether a client has one; see
 //!   [`BrokerClient::is_correct_gateway_client`]).
+//! - **No mass removal** ([`guard`]): a whole comparison that would remove or replace more than
+//!   [`removal_limit`] gateway clients, or any while Postgres says no gateway should have the
+//!   role, sends only its additions and logs an ERROR, since every `deleteClient` drops a
+//!   gateway's connection and a broken read of Postgres would otherwise cut off the fleet. A
+//!   listing or an answer that is not what Mosquitto 2.1 writes fails the round instead of being
+//!   read as "no roles" or "no more clients" ([`BrokerClient::from_json`], [`Listing`]).
 //! - **One gateway now** ([`BrokerSync::gateway`]) compares that gateway alone (`getClient`):
 //!   after a factory registration commits ([`crate::registrations`]), after a binding event is
 //!   applied ([`SyncAfterBinding`], which waits for the delivery's transaction to commit), and
@@ -203,42 +209,37 @@ pub struct BrokerClient {
 }
 
 impl BrokerClient {
-    /// A client from a verbose `listClients` entry or a `getClient` answer; `None` when it has no
-    /// username.
+    /// A client from a verbose `listClients` entry or a `getClient` answer. `None` when the entry
+    /// is not what Mosquitto 2.1 writes: no username, `roles` or `groups` missing or not arrays, a
+    /// role without a name, or a `disabled`, `textname` or `clientid` of another type. Reading
+    /// such an entry as "no roles" would make every gateway client look wrong and replace the
+    /// whole fleet after a change of the listing's format; the caller fails instead.
     #[must_use]
     pub fn from_json(value: &Value) -> Option<Self> {
         let username = value.get("username")?.as_str()?.to_owned();
         let roles = value
-            .get("roles")
-            .and_then(Value::as_array)
-            .map(|roles| {
-                roles
-                    .iter()
-                    .map(|role| {
-                        role.get("rolename")
-                            .and_then(Value::as_str)
-                            .unwrap_or_default()
-                            .to_owned()
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
-        let groups = value
-            .get("groups")
-            .and_then(Value::as_array)
-            .map_or(0, Vec::len);
-        let disabled = value
-            .get("disabled")
-            .and_then(Value::as_bool)
-            .unwrap_or(false);
-        let text = |key: &str| value.get(key).and_then(Value::as_str).map(str::to_owned);
+            .get("roles")?
+            .as_array()?
+            .iter()
+            .map(|role| role.get("rolename")?.as_str().map(str::to_owned))
+            .collect::<Option<Vec<_>>>()?;
+        let groups = value.get("groups")?.as_array()?.len();
+        // Mosquitto writes `disabled` only when it is true.
+        let disabled = match value.get("disabled") {
+            None => false,
+            Some(disabled) => disabled.as_bool()?,
+        };
+        let text = |key: &str| match value.get(key) {
+            None => Some(None),
+            Some(text) => text.as_str().map(|text| Some(text.to_owned())),
+        };
         Some(Self {
             username,
             roles,
             groups,
             disabled,
-            textname: text("textname"),
-            clientid: text("clientid"),
+            textname: text("textname")?,
+            clientid: text("clientid")?,
         })
     }
 
@@ -348,6 +349,179 @@ pub fn plan(
     }
     changes.sort();
     changes
+}
+
+/// Removals and replacements a whole comparison applies whatever the fleet's size.
+pub const ALWAYS_ALLOWED_REMOVALS: usize = 10;
+
+/// Beyond [`ALWAYS_ALLOWED_REMOVALS`], the share of the broker's gateway clients, in percent, a
+/// whole comparison may remove or replace in one round.
+pub const MAX_REMOVAL_PERCENT: usize = 10;
+
+/// How many gateway clients a whole comparison may remove or replace when the broker has
+/// `gateway_clients`: [`ALWAYS_ALLOWED_REMOVALS`], or [`MAX_REMOVAL_PERCENT`] of them when that
+/// is more.
+#[must_use]
+pub fn removal_limit(gateway_clients: usize) -> usize {
+    ALWAYS_ALLOWED_REMOVALS.max(gateway_clients.saturating_mul(MAX_REMOVAL_PERCENT) / 100)
+}
+
+/// The removals and replacements a whole comparison held back ([`guard`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Withheld {
+    /// Removals and replacements not sent.
+    pub changes: usize,
+    /// Gateway clients the broker has.
+    pub gateway_clients: usize,
+    /// What [`removal_limit`] allows.
+    pub limit: usize,
+}
+
+/// The changes of a whole comparison it may send. Every `deleteClient` drops a gateway's
+/// connection, so a Postgres that suddenly says few or no gateways should have the role (a
+/// broken grant or policy of `certs_platform`, an emptied or rebuilt binding table, a restore
+/// from an older backup) would cut off the fleet. When `desired` is empty while the broker has
+/// gateway clients, or the removals and replacements exceed [`removal_limit`], none of them is
+/// sent and the additions alone are; the caller logs an ERROR and the next round compares again.
+/// Single-gateway comparisons are not limited: they follow one registration, binding or
+/// renewal.
+#[must_use]
+pub fn guard(
+    desired: usize,
+    gateway_clients: usize,
+    changes: Vec<Change>,
+) -> (Vec<Change>, Option<Withheld>) {
+    let destructive = changes
+        .iter()
+        .filter(|change| !matches!(change, Change::Add(_)))
+        .count();
+    let limit = removal_limit(gateway_clients);
+    let refuse = destructive > 0 && (destructive > limit || desired == 0);
+    if !refuse {
+        return (changes, None);
+    }
+    // A replacement is one change, `Change::Replace`, whose `deleteClient` and `createClient`
+    // come from `Change::commands` together; it is withheld whole. The additions kept are only
+    // gateways the broker has no client for (`plan`), so none of them duplicates a client.
+    let additions = changes
+        .into_iter()
+        .filter(|change| matches!(change, Change::Add(_)))
+        .collect();
+    (
+        additions,
+        Some(Withheld {
+            changes: destructive,
+            gateway_clients,
+            limit,
+        }),
+    )
+}
+
+/// The reason a change's answer is a failure, if it is: no answer, or an `error` of any type,
+/// except "Client not found" for `deleteClient` (gone already, which is what deleting it was
+/// for).
+fn command_failure(command: &Value, answer: Option<&Value>) -> Option<String> {
+    let Some(answer) = answer else {
+        return Some("no answer".to_owned());
+    };
+    let error = answer.get("error")?;
+    match (command["command"].as_str(), error.as_str()) {
+        (Some("deleteClient"), Some("Client not found")) => None,
+        (_, Some(error)) => Some(error.to_owned()),
+        (_, None) => Some("an error that is not text".to_owned()),
+    }
+}
+
+/// A read command's `data`, or why there is none: an `error` of any type is a refusal.
+fn answer_data(command: &'static str, answer: Option<Value>) -> Result<Value, SyncError> {
+    let mut answer = answer.ok_or(SyncError::Malformed {
+        command,
+        problem: "no answer",
+    })?;
+    if let Some(error) = answer.get("error") {
+        return Err(SyncError::Refused {
+            command,
+            error: error
+                .as_str()
+                .unwrap_or("an error that is not text")
+                .to_owned(),
+        });
+    }
+    answer
+        .get_mut("data")
+        .map(Value::take)
+        .ok_or(SyncError::Malformed {
+            command,
+            problem: "no data",
+        })
+}
+
+/// The pages of one `listClients` listing.
+#[derive(Debug, Default)]
+struct Listing {
+    clients: Vec<BrokerClient>,
+    total: Option<usize>,
+}
+
+impl Listing {
+    /// Adds the `data` of the page at the current offset ([`Listing::offset`]); `Ok(true)` once
+    /// the listing is complete. Fails when the pages do not add up to one consistent listing of
+    /// `totalCount` distinct clients, so that a partial listing never leaves stray gateway
+    /// clients in place.
+    fn add(&mut self, data: &Value) -> Result<bool, &'static str> {
+        let total = data
+            .get("totalCount")
+            .and_then(Value::as_u64)
+            .and_then(|total| usize::try_from(total).ok())
+            .ok_or("no totalCount")?;
+        if self.total.is_some_and(|before| before != total) {
+            return Err("totalCount changed between pages");
+        }
+        self.total = Some(total);
+        let page = data
+            .get("clients")
+            .and_then(Value::as_array)
+            .ok_or("no clients")?;
+        for entry in page {
+            self.clients.push(
+                BrokerClient::from_json(entry)
+                    .ok_or("a client without a username, roles or groups")?,
+            );
+        }
+        if self.clients.len() < total {
+            return if page.is_empty() {
+                Err("a page ended the listing before totalCount")
+            } else {
+                Ok(false)
+            };
+        }
+        let distinct: BTreeSet<&str> = self
+            .clients
+            .iter()
+            .map(|client| client.username.as_str())
+            .collect();
+        if self.clients.len() != total || distinct.len() != total {
+            return Err("the pages repeat or miss clients");
+        }
+        Ok(true)
+    }
+
+    /// The offset of the next page.
+    fn offset(&self) -> usize {
+        self.clients.len()
+    }
+}
+
+/// Adds a request to the gateways waiting for a comparison: the transactions to wait for
+/// accumulate, so a later request without one (a registration) never drops the wait for a
+/// binding event's delivery that is still running.
+fn enqueue(pending: &mut BTreeMap<GatewayId, Vec<String>>, request: Request) {
+    let waits = pending.entry(request.hardware_id).or_default();
+    if let Some(xid) = request.after
+        && !waits.contains(&xid)
+    {
+        waits.push(xid);
+    }
 }
 
 /// What one comparison changed.
@@ -558,27 +732,13 @@ impl Broker {
     /// One read command's `data`.
     async fn read(&self, command: &'static str, body: Value) -> Result<Value, SyncError> {
         let mut answers = self.send(vec![body]).await?;
-        let answer = answers.pop().ok_or(SyncError::Malformed {
-            command,
-            problem: "no answer",
-        })?;
-        if let Some(error) = answer.get("error").and_then(Value::as_str) {
-            return Err(SyncError::Refused {
-                command,
-                error: error.to_owned(),
-            });
-        }
-        answer.get("data").cloned().ok_or(SyncError::Malformed {
-            command,
-            problem: "no data",
-        })
+        answer_data(command, answers.pop())
     }
 
     /// Every client of the broker, page by page.
     async fn list_clients(&self) -> Result<Vec<BrokerClient>, SyncError> {
         const COMMAND: &str = "listClients";
-        let mut clients = Vec::new();
-        let mut offset = 0_usize;
+        let mut listing = Listing::default();
         loop {
             let data = self
                 .read(
@@ -587,32 +747,16 @@ impl Broker {
                         "command": COMMAND,
                         "verbose": true,
                         "count": LIST_PAGE,
-                        "offset": offset,
+                        "offset": listing.offset(),
                     }),
                 )
                 .await?;
-            let malformed = |problem| SyncError::Malformed {
+            let complete = listing.add(&data).map_err(|problem| SyncError::Malformed {
                 command: COMMAND,
                 problem,
-            };
-            let total = data
-                .get("totalCount")
-                .and_then(Value::as_u64)
-                .and_then(|total| usize::try_from(total).ok())
-                .ok_or_else(|| malformed("no totalCount"))?;
-            let page = data
-                .get("clients")
-                .and_then(Value::as_array)
-                .ok_or_else(|| malformed("no clients"))?;
-            for entry in page {
-                clients.push(
-                    BrokerClient::from_json(entry)
-                        .ok_or_else(|| malformed("a client without a username"))?,
-                );
-            }
-            offset = offset.saturating_add(page.len());
-            if page.is_empty() || offset >= total {
-                return Ok(clients);
+            })?;
+            if complete {
+                return Ok(listing.clients);
             }
         }
     }
@@ -664,15 +808,8 @@ impl Broker {
             for change in batch {
                 let mut errors = Vec::new();
                 for command in change.commands() {
-                    let answer = answers.next();
-                    let error = answer
-                        .and_then(|answer| answer.get("error"))
-                        .and_then(Value::as_str);
-                    match (command["command"].as_str(), error) {
-                        (_, None) => {}
-                        // Gone already: what deleting it was for.
-                        (Some("deleteClient"), Some("Client not found")) => {}
-                        (_, Some(error)) => errors.push(error.to_owned()),
+                    if let Some(failure) = command_failure(&command, answers.next()) {
+                        errors.push(failure);
                     }
                 }
                 if errors.is_empty() {
@@ -707,10 +844,24 @@ impl Broker {
     async fn full(&self) -> Result<Outcome, SyncError> {
         let current = self.list_clients().await?;
         let desired = self.desired(None).await?;
-        let changes = plan(&desired, &current, None);
+        let planned = plan(&desired, &current, None);
+        let gateway_clients = outcome(&desired, &current, &[]).gateway_clients;
+        let (changes, withheld) = guard(desired.len(), gateway_clients, planned);
+        if let Some(withheld) = withheld {
+            tracing::error!(
+                job = JOB,
+                desired = desired.len(),
+                gateway_clients = withheld.gateway_clients,
+                withheld = withheld.changes,
+                limit = withheld.limit,
+                "refused to remove or replace this many gateway clients of the broker at once; \
+                 check the certs_platform grants and the gateway bindings in postgres"
+            );
+        }
         let outcome = outcome(&desired, &current, &changes);
         self.apply(&changes).await?;
-        if changes.is_empty() {
+        // With changes withheld the broker does not match; the ERROR above says so.
+        if changes.is_empty() && withheld.is_none() {
             tracing::debug!(
                 job = JOB,
                 desired = outcome.desired,
@@ -758,17 +909,23 @@ impl Broker {
     }
 
     /// Compares the gateways of `pending` one by one, at most [`GATEWAYS_PER_ROUND`], removing
-    /// each one done. A gateway whose transaction is still running, or whose comparison failed,
-    /// stays; the first failure ends the round.
+    /// each one done. A gateway with a transaction still running keeps the ones still running and
+    /// waits; one whose comparison failed stays; the first failure ends the round.
     async fn gateways(
         &self,
-        pending: &mut BTreeMap<GatewayId, Option<String>>,
+        pending: &mut BTreeMap<GatewayId, Vec<String>>,
     ) -> Result<(), SyncError> {
         let ids: Vec<GatewayId> = pending.keys().take(GATEWAYS_PER_ROUND).cloned().collect();
         for id in ids {
-            if let Some(Some(xid)) = pending.get(&id)
-                && !self.ended(xid).await?
-            {
+            let waits = pending.get(&id).cloned().unwrap_or_default();
+            let mut running = Vec::new();
+            for xid in waits {
+                if !self.ended(&xid).await? {
+                    running.push(xid);
+                }
+            }
+            if !running.is_empty() {
+                pending.insert(id, running);
                 continue;
             }
             self.one(&id).await?;
@@ -942,7 +1099,7 @@ async fn work(
     // The first whole comparison follows the first connection.
     let mut full_at: Option<Instant> = None;
     let mut next_tick = Instant::now() + interval;
-    let mut pending: BTreeMap<GatewayId, Option<String>> = BTreeMap::new();
+    let mut pending: BTreeMap<GatewayId, Vec<String>> = BTreeMap::new();
     let mut gateways_at = Instant::now();
     loop {
         let wake = [
@@ -957,9 +1114,7 @@ async fn work(
         tokio::select! {
             () = connected.notified() => full_at = Some(Instant::now()),
             request = requests.recv() => match request {
-                Some(request) => {
-                    pending.insert(request.hardware_id, request.after);
-                }
+                Some(request) => enqueue(&mut pending, request),
                 // Every handle is gone: the service is stopping.
                 None => return,
             },
@@ -967,7 +1122,7 @@ async fn work(
         }
         // Take everything that queued up meanwhile, so one lock covers it.
         while let Ok(request) = requests.try_recv() {
-            pending.insert(request.hardware_id, request.after);
+            enqueue(&mut pending, request);
         }
         let now = Instant::now();
         if now >= next_tick {
@@ -1167,9 +1322,21 @@ mod tests {
         let mut bare = client("gw-b", &[]);
         bare.textname = None;
         assert_eq!(
-            BrokerClient::from_json(&json!({ "username": "gw-b" })),
+            BrokerClient::from_json(&json!({ "username": "gw-b", "roles": [], "groups": [] })),
             Some(bare)
         );
+        // Not what Mosquitto writes: no client rather than one that looks like it has no role.
+        for entry in [
+            json!({ "username": "gw-b" }),
+            json!({ "username": "gw-b", "roles": [] }),
+            json!({ "username": "gw-b", "groups": [] }),
+            json!({ "username": "gw-b", "roles": {}, "groups": [] }),
+            json!({ "username": "gw-b", "roles": [{ "priority": 0 }], "groups": [] }),
+            json!({ "username": "gw-b", "roles": [], "groups": [], "disabled": "true" }),
+            json!({ "username": "gw-b", "roles": [], "groups": [], "textname": 1 }),
+        ] {
+            assert_eq!(BrokerClient::from_json(&entry), None, "{entry}");
+        }
         // What the service creates reads back as correct.
         let created = BrokerClient::from_json(&json!({
             "username": "gw-c",
@@ -1223,5 +1390,215 @@ mod tests {
                 removed: 1,
             }
         );
+    }
+
+    fn fleet(count: usize) -> Vec<BrokerClient> {
+        (0..count)
+            .map(|n| client(&format!("gw-{n:03}"), &[GATEWAY_ROLE]))
+            .collect()
+    }
+
+    fn ids(clients: &[BrokerClient]) -> BTreeSet<GatewayId> {
+        clients.iter().map(|client| id(&client.username)).collect()
+    }
+
+    #[test]
+    fn an_empty_postgres_takes_no_gateway_away() {
+        let current = fleet(100);
+        let changes = plan(&BTreeSet::new(), &current, None);
+        assert_eq!(changes.len(), 100);
+        let (sent, withheld) = guard(0, 100, changes);
+        assert!(sent.is_empty(), "{sent:?}");
+        assert_eq!(
+            withheld,
+            Some(Withheld {
+                changes: 100,
+                gateway_clients: 100,
+                limit: ALWAYS_ALLOWED_REMOVALS,
+            })
+        );
+        // Even one gateway client is kept while Postgres says none should exist.
+        let (sent, withheld) = guard(0, 1, plan(&BTreeSet::new(), &fleet(1), None));
+        assert!(sent.is_empty());
+        assert!(withheld.is_some());
+    }
+
+    #[test]
+    fn single_removals_still_apply() {
+        let current = fleet(100);
+        let mut wanted = ids(&current);
+        let gone = id("gw-042");
+        wanted.remove(&gone);
+        wanted.insert(id("gw-new"));
+        let (sent, withheld) = guard(wanted.len(), 100, plan(&wanted, &current, None));
+        assert_eq!(withheld, None);
+        assert_eq!(sent, [Change::Add(id("gw-new")), Change::Remove(gone)]);
+        // Up to the limit in one round; one more is withheld.
+        let limit = removal_limit(100);
+        assert_eq!(limit, ALWAYS_ALLOWED_REMOVALS);
+        let wanted = ids(&current[limit..]);
+        let (sent, withheld) = guard(wanted.len(), 100, plan(&wanted, &current, None));
+        assert_eq!((sent.len(), withheld), (limit, None));
+        let wanted = ids(&current[limit + 1..]);
+        let (sent, withheld) = guard(wanted.len(), 100, plan(&wanted, &current, None));
+        assert!(sent.is_empty());
+        assert_eq!(withheld.map(|withheld| withheld.changes), Some(limit + 1));
+        // A large fleet may lose its share.
+        assert_eq!(removal_limit(5000), 500);
+    }
+
+    #[test]
+    fn replacing_the_fleet_is_withheld_but_additions_go_through() {
+        // A change of the listing's format that made every client look wrong.
+        let current: Vec<BrokerClient> = fleet(100)
+            .into_iter()
+            .map(|mut client| {
+                client.textname = None;
+                client
+            })
+            .collect();
+        let mut wanted = ids(&current);
+        wanted.insert(id("gw-new"));
+        let planned = plan(&wanted, &current, None);
+        // Each replacement is one change: no separate addition for a client that exists.
+        assert_eq!(planned.len(), 101);
+        assert_eq!(
+            planned
+                .iter()
+                .filter(|change| matches!(change, Change::Replace(_)))
+                .count(),
+            100
+        );
+        let (sent, withheld) = guard(wanted.len(), 100, planned);
+        // Neither half of a withheld replacement is sent: no createClient for an existing client.
+        assert_eq!(sent, [Change::Add(id("gw-new"))]);
+        let commands: Vec<Value> = sent.iter().flat_map(Change::commands).collect();
+        assert_eq!(commands.len(), 1);
+        assert_eq!(commands[0]["username"], "gw-new");
+        assert_eq!(withheld.map(|withheld| withheld.changes), Some(100));
+    }
+
+    #[test]
+    fn every_error_of_an_answer_is_a_failure() {
+        let delete = json!({ "command": "deleteClient", "username": "gw-a" });
+        let create = &Change::Add(id("gw-a")).commands()[0];
+        assert_eq!(
+            command_failure(create, Some(&json!({ "command": "createClient" }))),
+            None
+        );
+        assert_eq!(
+            command_failure(&delete, Some(&json!({ "error": "Client not found" }))),
+            None
+        );
+        assert_eq!(
+            command_failure(create, Some(&json!({ "error": "Client not found" }))),
+            Some("Client not found".to_owned())
+        );
+        for error in [json!(5), json!(true), json!({ "code": 1 }), json!(null)] {
+            assert!(
+                command_failure(&delete, Some(&json!({ "error": error }))).is_some(),
+                "{error}"
+            );
+        }
+        assert!(command_failure(create, None).is_some());
+
+        assert_eq!(
+            answer_data("getClient", Some(json!({ "data": { "client": 1 } }))).expect("data")["client"],
+            1
+        );
+        assert!(matches!(
+            answer_data("getClient", Some(json!({ "error": 7, "data": {} }))),
+            Err(SyncError::Refused { .. })
+        ));
+        assert!(matches!(
+            answer_data("getClient", Some(json!({}))),
+            Err(SyncError::Malformed { .. })
+        ));
+        assert!(matches!(
+            answer_data("getClient", None),
+            Err(SyncError::Malformed { .. })
+        ));
+    }
+
+    fn entry(username: &str) -> Value {
+        json!({ "username": username, "roles": [], "groups": [] })
+    }
+
+    #[test]
+    fn a_listing_must_add_up_to_its_total() {
+        // Two pages of two, then one.
+        let mut listing = Listing::default();
+        let page = |clients: Vec<Value>| json!({ "totalCount": 5, "clients": clients });
+        assert_eq!(listing.add(&page(vec![entry("a"), entry("b")])), Ok(false));
+        assert_eq!(listing.offset(), 2);
+        assert_eq!(listing.add(&page(vec![entry("c"), entry("d")])), Ok(false));
+        assert_eq!(listing.add(&page(vec![entry("e")])), Ok(true));
+        assert_eq!(listing.clients.len(), 5);
+        // An empty broker.
+        let mut empty = Listing::default();
+        assert_eq!(
+            empty.add(&json!({ "totalCount": 0, "clients": [] })),
+            Ok(true)
+        );
+
+        let total3 = |clients: Vec<Value>| json!({ "totalCount": 3, "clients": clients });
+        // The second page is empty before totalCount.
+        let mut short = Listing::default();
+        assert_eq!(short.add(&total3(vec![entry("a"), entry("b")])), Ok(false));
+        assert!(short.add(&total3(vec![])).is_err());
+        // Every page is the same one.
+        let mut repeated = Listing::default();
+        assert_eq!(
+            repeated.add(&total3(vec![entry("a"), entry("b")])),
+            Ok(false)
+        );
+        assert!(repeated.add(&total3(vec![entry("a"), entry("b")])).is_err());
+        // Enough entries, but one repeated.
+        let mut duplicate = Listing::default();
+        assert!(
+            duplicate
+                .add(&total3(vec![entry("a"), entry("b"), entry("a")]))
+                .is_err()
+        );
+        // totalCount moves between pages.
+        let mut moving = Listing::default();
+        assert_eq!(moving.add(&total3(vec![entry("a")])), Ok(false));
+        assert!(
+            moving
+                .add(&json!({ "totalCount": 4, "clients": [entry("b")] }))
+                .is_err()
+        );
+        // An entry of another format.
+        let mut drifted = Listing::default();
+        assert!(
+            drifted
+                .add(&total3(vec![json!({ "username": "a" })]))
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn a_registration_does_not_drop_a_bindings_wait() {
+        let mut pending = BTreeMap::new();
+        let gateway = id("gw-a");
+        let request = |after: Option<&str>| Request {
+            hardware_id: gateway.clone(),
+            after: after.map(str::to_owned),
+        };
+        enqueue(&mut pending, request(Some("100")));
+        enqueue(&mut pending, request(None));
+        assert_eq!(pending[&gateway], ["100"]);
+        enqueue(&mut pending, request(Some("101")));
+        enqueue(&mut pending, request(Some("100")));
+        assert_eq!(pending[&gateway], ["100", "101"]);
+        // A request without a wait alone compares at once.
+        enqueue(
+            &mut pending,
+            Request {
+                hardware_id: id("gw-b"),
+                after: None,
+            },
+        );
+        assert!(pending[&id("gw-b")].is_empty());
     }
 }

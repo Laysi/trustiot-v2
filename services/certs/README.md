@@ -475,11 +475,13 @@ trustiot-workstation register --hardware-id <硬體 ID> --csr gateway.csr --ek e
 
 ### 只動閘道器的 client
 
-- 只比對、只改 username 是合規則 `protocol::GatewayId` 的 client。服務帳號（`service:*`，不可能是合規則的硬體 ID）、chart 的角色與群組永遠不送任何指令，仍由 init container 擁有。
+- 只比對、只改 username 是合規則 `protocol::GatewayId` 的 client。服務帳號（`service:*`，不可能是合規則的硬體 ID）、chart 的角色與群組永遠不送任何指令，仍由 init container 擁有。反過來說，username 符合硬體 ID 格式的 client 全部由 certs 管理：有人手動建立的 `admin`、`debug` 這類 client，因為不是 Postgres 裡該有角色的閘道器，會在下一次完整比對被刪除。要手動建立 client 時，名稱要帶 `:`（硬體 ID 不能有）。
 - 缺少的閘道器：一個 `createClient`，同時帶角色、不帶密碼。Mosquitto 2.1 的 `createClient` 不踢掉已經連著的同名連線，而 ACL 每次檢查都依 username 查 client，所以已連線、剛綁定的閘道器不必重連就能發布。
 - 多出來的閘道器 client：`deleteClient`，Mosquitto 同時斷開它的連線。
-- 角色不對、有群組、被停用、綁了 client id，或 text name 不是 certs 設的 `TrustIoT gateway (certs-managed)` 的閘道器 client：刪除後重建，同時清掉任何人手動設的密碼。Mosquitto 2.1 的 `listClients` 與 `getClient` 都不透露 client 有沒有密碼，所以以 text name 判斷是不是 certs 建立的：別人建立（可能帶密碼）的會被換掉。certs 建立之後才被 `setClientPassword` 設上的密碼看不出來；能下這個指令的只有 dynsec 管理角色，而持有它本來就等同掌控 broker。
+- 角色不對、有群組、被停用、綁了 client id，或 text name 不是 certs 設的 `TrustIoT gateway (certs-managed)` 的閘道器 client：刪除後重建，同時清掉任何人手動設的密碼。Mosquitto 2.1 的 `listClients` 與 `getClient` 都不透露 client 有沒有密碼，所以以 text name 判斷是不是 certs 建立的：別人建立（可能帶密碼）的會被換掉。certs 建立之後才被 `setClientPassword` 設上的密碼看不出來；能下這個指令的只有 dynsec 管理角色，而持有它本來就等同掌控 broker。剩下的風險：外洩的 dynsec 管理帳密（`service:certs` 的密碼）可以替某台閘道器的 client 設上密碼，再以那個硬體 ID 和密碼登入服務埠 1883，繞過憑證與 CRL，取得那台閘道器的權限。chart 目前的緩解是 1883 只在叢集內：broker 的 Service 是沒有 node port 的 ClusterIP、不能有入口路由，AuthorizationPolicy 只讓 `mesh.calls` 列出 `mqtt-broker` 的服務（`ingest`、`gateway-ops`、`certs`）的 pod 連 1883，NetworkPolicy 只放行同一批 pod（見 [deploy/chart/README.md](../../deploy/chart/README.md) 的「MQTT broker」）。所以要利用它，還得在這三個服務的 pod 裡執行程式。
 - 沒有差異時不送任何修改指令（只有 `listClients` 或 `getClient` 的讀取）。
+- **一次刪掉一大批的保護**（`guard`）：每個 `deleteClient` 都會斷開閘道器的連線，所以 Postgres 突然說很少或沒有閘道器該有角色時（`certs_platform` 的權限或 policy 壞了、綁定表被清空或重建、從較舊的備份還原），照做會讓整批閘道器失去發布權限。完整比對要刪除加上重建的 client 數超過上限時（10 個，或 broker 上閘道器 client 的 10%，取大者：`ALWAYS_ALLOWED_REMOVALS`、`MAX_REMOVAL_PERCENT`），或 Postgres 說沒有任何閘道器該有角色、broker 卻有閘道器 client 時，這一輪不送任何刪除與重建，只送新增，並記一行 ERROR `refused to remove or replace this many gateway clients of the broker at once`（數量與上限，不列硬體 ID）；下一輪再比對一次。單台的同步（登錄、綁定、換發之後）不受限制。所以最後一台閘道器的權限不會由完整比對拿掉：解綁與撤銷之後的單台同步（Laysi/trustiot-v2#115、Laysi/trustiot-v2#636）會拿掉；大量撤銷或解綁也是經由這些單台同步逐台處理，不靠完整比對。ERROR 持續出現時，先查 `certs_platform` 能不能讀到登錄、簽發紀錄與綁定。
+- broker 的回應要完全符合 Mosquitto 2.1 的格式才採用：`listClients` 的每個項目要有 `roles` 與 `groups` 陣列、每個角色有名稱，各頁加起來要剛好是 `totalCount` 個不重複的 client（頁數不夠、重複、`totalCount` 在頁之間改變都算錯）；任何型別的 `error` 都算失敗。不符合時這一輪不送任何修改，記 WARN 後重試，避免因為格式改變或不完整的清單，把整批 client 當成不對而刪除重建，或漏掉多出來的 client。
 
 ### 時機
 
