@@ -433,7 +433,9 @@ fn gateway_bound_decodes_every_version() {
 
 /// The device events (Laysi/trustiot-v2#100): tenant events of the device's tenant, written by
 /// the assets service; created and updated carry the device in the gateway's own format, which
-/// the configuration accepts, and the delete names what a consumer needs to let go of it.
+/// the configuration accepts, and the delete names what a consumer needs to let go of it. Since
+/// Laysi/trustiot-v2#719 each also names the device's binding (`v1-binding.json`); the events
+/// written before it (`v1.json`) still decode, without one.
 #[test]
 fn device_events_decode_every_version() {
     let device_id: DeviceId = "01928f6e-7a3c-7d4e-8f00-000000000d01"
@@ -446,9 +448,14 @@ fn device_events_decode_every_version() {
     let hardware_id = GatewayId::new("tg-0001").expect("hardware id");
     let model_name = ModelName::new("power-meter").expect("model name");
 
+    let binding_id: GatewayBindingId = "01928f6e-7a3c-7d4e-8f00-000000000b01"
+        .parse()
+        .expect("binding id");
+
     let created = decode_fixtures::<DeviceCreated>();
     let names: Vec<&str> = created.iter().map(|(name, _)| name.as_str()).collect();
-    assert_eq!(names, ["v1"]);
+    assert_eq!(names, ["v1", "v1-binding"]);
+    let with_binding = created[1].1.clone();
     let created = created[0].1.clone();
     assert_eq!(
         created,
@@ -458,6 +465,7 @@ fn device_events_decode_every_version() {
             name: name.clone(),
             hardware_id: hardware_id.clone(),
             model_id,
+            binding_id: None,
             device: Device {
                 id: protocol::DeviceId::new(device_id.to_string()).expect("protocol id"),
                 model: model_name.clone(),
@@ -470,8 +478,24 @@ fn device_events_decode_every_version() {
         }
     );
 
+    assert_eq!(
+        with_binding,
+        DeviceCreated {
+            binding_id: Some(binding_id),
+            ..created.clone()
+        }
+    );
+
     let updated = decode_fixtures::<DeviceUpdated>();
-    assert_eq!(updated.len(), 1);
+    assert_eq!(updated.len(), 2);
+    assert_eq!(updated[0].1.binding_id, None);
+    assert_eq!(
+        updated[1].1,
+        DeviceUpdated {
+            binding_id: Some(binding_id),
+            ..updated[0].1.clone()
+        }
+    );
     let updated = &updated[0].1;
     assert_eq!(updated.device_id, device_id);
     assert_eq!(updated.revision, 2);
@@ -498,7 +522,14 @@ fn device_events_decode_every_version() {
     }
 
     let deleted = decode_fixtures::<DeviceDeleted>();
-    assert_eq!(deleted.len(), 1);
+    assert_eq!(deleted.len(), 2);
+    assert_eq!(
+        deleted[1].1,
+        DeviceDeleted {
+            binding_id: Some(binding_id),
+            ..deleted[0].1.clone()
+        }
+    );
     let deleted = &deleted[0].1;
     assert_eq!(
         *deleted,
@@ -507,6 +538,7 @@ fn device_events_decode_every_version() {
             name,
             hardware_id,
             model_id,
+            binding_id: None,
             revision: 2,
         }
     );
@@ -532,6 +564,23 @@ fn device_events_decode_every_version() {
             "model_id": "01928f6e-7a3c-7d4e-8f00-000000000a01",
             "revision": 2,
         })
+    );
+    let envelope = EventEnvelope::new(
+        &DeviceDeleted {
+            binding_id: Some(binding_id),
+            ..deleted.clone()
+        },
+        Some(tenant()),
+    )
+    .expect("encode");
+    assert_eq!(
+        envelope.payload["binding_id"],
+        json!("01928f6e-7a3c-7d4e-8f00-000000000b01")
+    );
+    let envelope = EventEnvelope::new(&with_binding, Some(tenant())).expect("encode");
+    assert_eq!(
+        envelope.decode::<DeviceCreated>().expect("round trip"),
+        with_binding
     );
     let envelope = EventEnvelope::new(&created, Some(tenant())).expect("encode");
     assert_eq!(envelope.event_type, "assets.device_created");

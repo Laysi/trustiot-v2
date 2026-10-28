@@ -103,7 +103,7 @@ RETURNING revision, created_at, updated_at";
 
 /// A device. `$1`: the device ID.
 const DELETE_DEVICE: &str = "DELETE FROM assets.devices WHERE device_id = $1::uuid
-RETURNING name, hardware_id, model_id::text AS model_id, revision";
+RETURNING name, hardware_id, model_id::text AS model_id, binding_id::text AS binding_id, revision";
 
 /// SQLSTATE `unique_violation`.
 const UNIQUE_VIOLATION: &str = "23505";
@@ -392,6 +392,7 @@ pub async fn create(
             name: stored.name.clone(),
             hardware_id: stored.hardware_id.clone(),
             model_id: stored.model_id,
+            binding_id: Some(stored.binding_id),
             device: protocol_device(&stored)?,
         },
     )
@@ -502,6 +503,7 @@ pub async fn replace(
             name: stored.name.clone(),
             hardware_id: stored.hardware_id.clone(),
             model_id: stored.model_id,
+            binding_id: Some(stored.binding_id),
             device: protocol_device(&stored)?,
         },
     )
@@ -539,6 +541,11 @@ pub async fn delete(
             .try_get::<String, _>("model_id")?
             .parse()
             .map_err(|_| StoreError::Corrupt)?,
+        binding_id: Some(
+            row.try_get::<String, _>("binding_id")?
+                .parse()
+                .map_err(|_| StoreError::Corrupt)?,
+        ),
         revision,
     };
     publish(&mut tx, device_id, &deleted).await?;

@@ -30,6 +30,14 @@
 //! devices from the events alone. [`DeviceDeleted`] names the device, its gateway and its model,
 //! which is what the gateway configuration needs to drop it and the field context service
 //! (MS4, docs/architecture/field-context.md) needs to unmap it.
+//!
+//! Every device event also names the device's gateway binding, `binding_id` (optional, added
+//! on 2026-10-29 by Laysi/trustiot-v2#719): the binding that was the gateway's current one when
+//! the device was created, which the assets service never changes. A gateway that is unbound and
+//! bound to the same tenant again (Laysi/trustiot-v2#115) gets a new binding, so the gateway
+//! configuration leaves out the devices of an earlier binding. Events written before the field
+//! existed have no `binding_id`; a consumer then knows only the tenant (`services/gateway-ops`,
+//! README.md, "綁定與租戶").
 
 use protocol::config::{Device, DeviceModel};
 use protocol::{GatewayId, ModelName};
@@ -137,6 +145,11 @@ pub struct DeviceCreated {
     pub hardware_id: GatewayId,
     /// The model it uses (`assets.device_model_*`); `device.model` is that model's name.
     pub model_id: DeviceModelId,
+    /// The gateway binding the device belongs to: the gateway's current binding when the device
+    /// was created, never changed afterwards (a binding of the event's tenant). `None` in events written before
+    /// 2026-10-29 (Laysi/trustiot-v2#719), which the consumer must accept.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub binding_id: Option<GatewayBindingId>,
     /// The device as the gateway's configuration carries it: `id` is `device_id` as text,
     /// `model` the model's name, and the connection settings and poll interval passed the
     /// assets service's rules, which include crates/protocol's.
@@ -164,6 +177,11 @@ pub struct DeviceUpdated {
     pub hardware_id: GatewayId,
     /// The model it uses, as created.
     pub model_id: DeviceModelId,
+    /// The gateway binding the device belongs to: the gateway's current binding when the device
+    /// was created, never changed afterwards (an update is refused once the binding has ended). `None` in events written before
+    /// 2026-10-29 (Laysi/trustiot-v2#719), which the consumer must accept.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub binding_id: Option<GatewayBindingId>,
     /// The whole device after the update, as in [`DeviceCreated::device`].
     pub device: Device,
 }
@@ -186,6 +204,11 @@ pub struct DeviceDeleted {
     pub hardware_id: GatewayId,
     /// The model it used, which may be deleted now if no other device uses it.
     pub model_id: DeviceModelId,
+    /// The gateway binding the device belongs to: the gateway's current binding when the device
+    /// was created, never changed afterwards (as created). `None` in events written before
+    /// 2026-10-29 (Laysi/trustiot-v2#719), which the consumer must accept.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub binding_id: Option<GatewayBindingId>,
     /// The device's last revision.
     pub revision: u64,
 }
