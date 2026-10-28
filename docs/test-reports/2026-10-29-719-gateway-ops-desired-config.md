@@ -85,7 +85,7 @@ gateway-ops 測試的輸出見 [gateway-ops-tests.txt](data/2026-10-29-719-gatew
 - workspace（x86_64 Linux）：`cargo fmt --check` 與 clippy 沒有輸出；246 個測試執行檔，2051 通過、0 失敗、1 忽略（既有的）；`api/openapi.json is up to date`。結束於 `exit 0 at 03:27:25 (build host)`。
 - macOS 的建置主機上，`tools/migrate/tests/mqtt_broker.rs` 有 4 個測試在啟動 Mosquitto 容器時失敗（`lsetxattr ... read-only file system`：那台主機的 podman 不能替掛載的目錄重新標記 SELinux 標籤），和這次的變更無關；同一個檔案在 x86_64 Linux 的整個 workspace 執行裡通過。
 - 腳本與 chart：見下方「腳本與 chart」。
-- 密鑰掃描：branch 的兩個 commit 與 `git archive HEAD` 的樹都 `no leaks found`。
+- 密鑰掃描：branch 的每個 commit 與 `git archive HEAD` 的樹都 `no leaks found`（每次交出 branch 之前重跑）。
 
 ### 腳本與 chart
 
@@ -97,6 +97,24 @@ gateway-ops 測試的輸出見 [gateway-ops-tests.txt](data/2026-10-29-719-gatew
 - 本機開發環境的端對端測試（`TRUSTIOT_DEV_E2E=1 bun test scripts/tests/e2e.test.ts`，建置主機，macOS）：`up` 跑的 migration Job 成功，`migration Job finished: 151 change(s), 0 warning(s); identity_app, …, ingest_app, ingest_platform, gateway_ops_app, gateway_ops_platform can log in`，也就是本機環境替 gateway-ops 的兩個角色綁了密碼。之後的 example-service 檢查失敗（`GET /healthz ... Unable to connect`），因為那台主機以 cargo 建出的是 macOS 的執行檔，放不進 Linux 容器執行；這個測試要在 x86_64 Linux 上跑完整流程，這次沒有再跑（與這次的變更無關的部分，待測）。
 - `bun test deploy/chart`：659 通過、0 失敗（`_migrate.tpl` 的 `platformLogins` 多了 `gateway-ops`）。
 - `check-workflows.ts`：4 個檔案沒有違規；`lint-workflows.ts`：3 個 workflow 檔沒有錯誤。結束於 `exit 0 at 03:57:36 (build host)`。
+
+## 安全審查後的修正
+
+2026-10-29 的安全審查（`ec534e00`）之後，commit `7f833960` 修正了 M1、M2、L1，並補上 L2 的測試（`services/gateway-ops/README.md`「綁定與租戶」「錯誤」「讀取介面」）。
+
+- gateway-ops 的 clippy 與測試在建置主機（macOS）上，對 `7f833960` 的樹執行，設了 `CI=1`。輸出見 [review-fixes-gateway-ops-tests.txt](data/2026-10-29-719-gateway-ops-desired-config/review-fixes-gateway-ops-tests.txt)，結束於 `exit 0 at 04:39:57 (build host, macOS)`。
+- 整個 workspace 在建置主機（x86_64 Linux）上，對 `7f833960` 執行：`cargo fmt --check`、clippy 都沒有輸出；`api/openapi.json is up to date`；249 個測試執行檔，2071 通過、0 失敗、1 忽略（既有的）。結束於 `exit 0 at 05:00:58 (build host)`。見 [review-fixes-workspace-summary.txt](data/2026-10-29-719-gateway-ops-desired-config/review-fixes-workspace-summary.txt)。
+
+| 項目 | 測試 | 結果 |
+| --- | --- | --- |
+| M1：改綁到別的租戶、新租戶的設定產生不出來 | `a_rebind_whose_configuration_cannot_be_made_never_keeps_the_earlier_tenants`：A 綁定時有設備；B 為即將到來的綁定寫了一個引用不存在型號的設備；改綁到 B | `versions [1, 2, 3, 4] in tenants ["A", "A", "B", "B"], devices [0, 1, 0, 1]`。第 3 版是 B 的、沒有設備，`current()` 回 B 的第 3 版，不含 A 的設備；型號送到後第 4 版列出 B 的設備 |
+| M1：讀取介面的防線 | `the_delivery_refuses_a_version_not_made_for_the_latest_binding`：superuser 寫一個比所有事件都晚、沒有對應版本的綁定 | `current()` 回 `the latest desired configuration of gateway … was not made for its latest binding`；`latest_versions()` 略過這台閘道器，另一台照常列出 |
+| M2：設定產生不出來時刪除設備 | `a_deletion_takes_effect_while_the_configuration_cannot_be_made`：違規的設備讓整份設定失敗 | 失敗期間新增後又刪除的設備：不存版本。過期 revision 的刪除：不存版本。生效的刪除：第 3 版是第 2 版去掉這個設備（0 個設備、沒有型號）。違規的設備刪除後，第 4 版列出剩下的設備。輸出 `versions [1, 2, 3, 4], devices per version [0, 1, 0, 1]` |
+| M2：超過 `MAX_DEVICES` | `generate.rs` 的單元測試 `more_devices_than_a_configuration_holds_are_refused_and_a_deletion_still_trims` 與 `a_deletion_leaves_the_stored_version_without_the_device_and_its_unused_model` | 1001 個設備以 `too_many` 被拒；1000 個設備的那一版去掉一個設備之後仍然編得出來；不再有設備使用的型號一起去掉 |
+| L1：沒有 `binding_id` 的設備事件 | `other_tenants_and_ended_bindings_stay_out` | B 在綁定之前寫、沒有 `binding_id` 的設備不在任何一版；B 綁定之後寫、沒有 `binding_id` 的設備記錄成 B 的綁定，出現在第 5 版。輸出 `versions [1, 2, 3, 4, 5] in tenants ["A", "A", "B", "B", "B"]` |
+| L2：不認得的事件 | `tests/unknown_events.rs` | 不在追蹤 aggregate 的未知事件被確認、不進 dead letter；綁定 aggregate 的未知事件連續 5 次 poll 都是 `Outcome::Retry`，不確認、不進 dead letter，後面的綁定事件沒有被處理 |
+
+原本的測試（重播、錯誤、跨租戶、啟動與 SIGTERM）在同一次執行裡照樣通過。
 
 ## 結論
 
