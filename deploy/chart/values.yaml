@@ -234,9 +234,14 @@ services:
       maxConnections: 10
   certs:
     enabled: false
-    # 2 to 100. Each replica opens 4 more for factory registrations: 9 in all.
+    # 2 to 100. Each replica opens 4 more as its platform role (factory registrations, the
+    # binding consumer and the certificate renewal's reads, which renewal.max_concurrent keeps
+    # below 4): 9 in all.
     database:
       maxConnections: 5
+    # The certificate renewal's limits (Laysi/trustiot-v2#81) have no fields here; set
+    # TRUSTIOT__RENEWAL__* in env when the defaults do not fit (services/certs/README.md, 「換發」).
+    # Its rate limits count per replica.
     # The API (http: the CA chain and CRLs for the MQTT broker, the workstation certificate API)
     # and the MQTT broker's server certificate issuance on a port of its own (broker-certs, the
     # service's broker.listen_addr; Laysi/trustiot-v2#557). The mesh lets the ingress gateway and

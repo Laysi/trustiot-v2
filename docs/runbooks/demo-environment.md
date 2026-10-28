@@ -321,7 +321,7 @@ Laysi/trustiot-v2#500（commit `26b454d`）起，入口的跨站請求檢查要 
 
 換版時 migration Job 重跑，每個服務與 ClickHouse（init container 用 migration 映像）都重啟一次（[deploy/chart/README.md](../../deploy/chart/README.md)「叢集內的 ClickHouse」），展示環境短暫中斷，不要排在展示前。
 
-**換發端點上線**：certs 打開之後，chart 為 gateway 主機名稱的 `/certs/renew` 掛著指向 certs 的路由，tunnel 也讓這個路徑略過 Access（「架構」）。換發端點（Laysi/trustiot-v2#81）還沒實作，certs 對它回 404。一旦釘的 chart 含 Laysi/trustiot-v2#81 的換發端點，這個路徑就經既有的 Bypass 對網際網路開放，展示環境這邊不必再改任何東西。所以換到第一個含 Laysi/trustiot-v2#81 的版本之前，先在換版的 issue 審查這個暴露（端點自己的驗證與限流、是否要照「`/mqtt` 的速率限制」把 `/certs/renew` 也加進去、`check --stage 2` 對它的預期），確認後才合併。
+**換發端點上線**：certs 打開之後，chart 為 gateway 主機名稱的 `/certs/renew` 掛著指向 certs 的路由，tunnel 也讓這個路徑略過 Access（「架構」）。換發端點由 Laysi/trustiot-v2#81 實作（services/certs/README.md 的「換發」）；釘的 chart 還不含它時，certs 對這個路徑回 404。一旦釘的 chart 含 Laysi/trustiot-v2#81 的換發端點，這個路徑就經既有的 Bypass 對網際網路開放，展示環境這邊不必再改任何東西。所以換到第一個含 Laysi/trustiot-v2#81 的版本之前，先在換版的 issue 審查這個暴露（端點自己的驗證與限流、是否要照「`/mqtt` 的速率限制」把 `/certs/renew` 也加進去、`check --stage 2` 對它的預期），確認後才合併。
 
 退回是 revert 那個 PR。對齊 istiod 本來就排在升級 chart 之前，新的 istiod values 與舊版 chart 會同時存在一段時間，所以 revert 不必同時退回 istiod；確實要退回時用 `platform.ts --rollback`（條件見 scripts/README.md 同一節）。
 

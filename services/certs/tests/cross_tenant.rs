@@ -30,6 +30,13 @@
 //! declares the service as one without tenant data (`Suite::without_tenant_data`), which a
 //! tenant table would contradict.
 //!
+//! The renewal endpoint (Laysi/trustiot-v2#81) is a gateway protocol on the public path
+//! `/certs/renew`, outside the OpenAPI document like the `/internal` endpoints: a gateway proves
+//! who it is with its TPM signature, not a token, and nothing it sends names a tenant
+//! (`tests/renewal.rs`). Its challenges (`certs.renewal_challenges`) hold a hardware ID and a
+//! nonce, no tenant data; its refusal counts are the platform role's, which the service role
+//! cannot reach.
+//!
 //! Starts a throwaway Postgres with TLS (podman or docker); skipped without either unless `CI`
 //! is set. Run with `--nocapture` to see every probe.
 
@@ -110,6 +117,12 @@ async fn every_relation_and_operation_the_service_has_is_declared() {
     .exempt(
         "certs.crls",
         "each issuing CA's current CRL, public data of the PKI; no tenant data",
+    )
+    .exempt(
+        "certs.renewal_challenges",
+        "the renewal's single-use challenges (Laysi/trustiot-v2#81): a nonce, the hardware ID \
+         it was handed out for, the purpose and the expiry, no tenant data; a challenge looks \
+         the same whether or not the gateway is bound to a tenant",
     )
     .exempt(
         "certs.trustiot_migrate_applied",
