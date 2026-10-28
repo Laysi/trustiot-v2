@@ -14,6 +14,8 @@
 //!   past 30 days a conversation cannot be restored, and a purge round removes it with its
 //!   messages while a recently deleted and a live one stay.
 //! - Writes need the JSON content type; every response carries `cache-control: no-store`.
+//! - A request that waits for a conversation another session holds gives up after the request's
+//!   lock timeout with 503 and changes nothing.
 //! - A database failure answers 503 with nothing of the database's text, and the log has none of
 //!   it either: only the SQLSTATE.
 //!
@@ -25,8 +27,9 @@ mod support;
 
 use std::collections::BTreeSet;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
+use assistant::api::REQUEST_LOCK_TIMEOUT;
 use assistant::store::{self, RunOutcome};
 use assistant::tools::{NoDelegation, Tool, ToolContext, ToolError, ToolOutput, ToolSpec};
 use chrono::{DateTime, TimeDelta, Utc};
@@ -1251,5 +1254,74 @@ async fn a_database_failure_shows_nothing_of_the_database() {
     println!(
         "POST {CONVERSATIONS} after a unique violation: 503 {}; logged {logged}",
         failed.body
+    );
+}
+
+/// Locks the conversation's row in a superuser transaction, as a stuck session would.
+const HOLD_ROW: &str =
+    "SELECT 1 FROM assistant.conversations WHERE conversation_id = $1::uuid FOR UPDATE";
+
+/// A rename and a delete that wait for a conversation another session holds give up after
+/// `REQUEST_LOCK_TIMEOUT` (the transaction's `lock_timeout`): 503 `unavailable`, the failure
+/// logged with its SQLSTATE only, nothing changed. Once the lock is gone, the same requests
+/// succeed.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_request_that_waits_for_a_held_conversation_gives_up() {
+    let Some(api) = api().await else { return };
+    let owner = User::new(TenantId::generate(), TenantRole::Editor);
+    let id = api.create(&owner).await;
+    let before = api.snapshot(id).await;
+    let mut admin = api.product.superuser().await;
+    let mut holding = admin.begin().await.expect("a superuser transaction");
+    sqlx::query(HOLD_ROW)
+        .bind(id.to_string())
+        .fetch_one(&mut *holding)
+        .await
+        .expect("lock the conversation's row");
+
+    let rename = json!({"title": "Renamed while held"});
+    for (method, body) in [(Method::PATCH, Some(&rename)), (Method::DELETE, None)] {
+        let started = Instant::now();
+        // The call's own limit (tests/service/mod.rs) bounds the wait: without the lock timeout
+        // the request would wait as long as the lock is held.
+        let reply = api
+            .call(&owner, method.clone(), &conversation(id), body)
+            .await;
+        let waited = started.elapsed();
+        reply.expect_error(503, "unavailable", "error.unavailable");
+        assert_eq!(reply.header("cache-control"), Some("no-store"));
+        assert!(
+            waited >= REQUEST_LOCK_TIMEOUT,
+            "{method} waited for the lock until its timeout: {waited:?}"
+        );
+    }
+    assert_eq!(api.snapshot(id).await, before, "nothing changed");
+    let failures: Vec<Value> = api
+        .service
+        .stdout
+        .messages("conversation request failed")
+        .into_iter()
+        .filter(|line| line["fields"]["conversation_id"] == id.to_string())
+        .collect();
+    assert_eq!(failures.len(), 2, "{failures:?}");
+    for line in &failures {
+        assert_eq!(line["level"], "ERROR", "{line}");
+        assert_eq!(
+            line["fields"]["error"], "database error (SQLSTATE 55P03)",
+            "{line}"
+        );
+    }
+
+    holding.rollback().await.expect("release the lock");
+    api.call(&owner, Method::PATCH, &conversation(id), Some(&rename))
+        .await
+        .expect_status(200);
+    api.call(&owner, Method::DELETE, &conversation(id), None)
+        .await
+        .expect_status(204);
+    println!(
+        "PATCH and DELETE of a held conversation: 503 after the {REQUEST_LOCK_TIMEOUT:?} lock \
+         timeout, nothing changed; 200 and 204 once released; logged {}",
+        failures[0]
     );
 }

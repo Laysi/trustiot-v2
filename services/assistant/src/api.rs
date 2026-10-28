@@ -24,6 +24,7 @@ use serde::de::DeserializeOwned;
 use service_kit::identity::{IdentityVerifier, UserIdentity};
 use service_kit::tenant::{TenantDb, TenantDbError, TenantTransaction};
 use std::sync::Arc;
+use std::time::Duration;
 use utoipa::OpenApi;
 use uuid::Uuid;
 
@@ -33,6 +34,20 @@ use crate::store::{MAX_PAGE, StoreError};
 
 /// Items per page when the request sets no `limit`.
 pub const DEFAULT_PAGE: usize = 50;
+
+/// How long a statement of a request's transaction waits for a lock before it fails with
+/// SQLSTATE `55P03` and the request answers 503 `unavailable`, set as the transaction's
+/// `lock_timeout`. The locks a request meets are the row of the same conversation that another
+/// request holds for one short transaction (a rename, a delete, an append, a question's start:
+/// milliseconds). A wait of 2 s is far beyond those, so it means a stuck session or a
+/// migration's table lock: the request gives its connection back to the pool, which readiness
+/// and the purge's job lock share (8 connections by default), instead of holding it for as long
+/// as the other session does. With the 5 s a request may wait for a connection
+/// ([`crate::ACQUIRE_TIMEOUT`]), a request that meets both still answers within seconds.
+pub const REQUEST_LOCK_TIMEOUT: Duration = Duration::from_secs(2);
+
+/// Sets `$1` as the transaction's `lock_timeout`, like `SET LOCAL`.
+const SET_LOCK_TIMEOUT: &str = "SELECT set_config('lock_timeout', $1, true)";
 
 /// The client API's OpenAPI document (merged into `api/openapi.json` by `tools/openapi`).
 #[derive(OpenApi)]
@@ -95,8 +110,9 @@ pub(crate) fn parse_id(path: Result<Path<String>, PathRejection>) -> Option<Uuid
     path.ok()?.0.parse().ok()
 }
 
-/// A transaction in the request's tenant, or the response when none can start: 403 without a
-/// tenant, 503 when the database fails (logged with the failure's class only).
+/// A transaction in the request's tenant, whose statements wait at most [`REQUEST_LOCK_TIMEOUT`]
+/// for a lock, or the response when none can start: 403 without a tenant, 503 when the database
+/// fails (logged with the failure's class only).
 #[allow(
     clippy::result_large_err,
     reason = "the error is the response to answer at once"
@@ -106,7 +122,7 @@ pub(crate) async fn begin(
     user: &UserIdentity,
     action: &'static str,
 ) -> Result<TenantTransaction, Response> {
-    db.begin(user).await.map_err(|failure| match failure {
+    let mut tx = db.begin(user).await.map_err(|failure| match failure {
         TenantDbError::NoTenant => error(ErrorBody::new(ErrorCode::PermissionDenied)),
         other => {
             let kind = match other {
@@ -123,7 +139,25 @@ pub(crate) async fn begin(
             );
             error(ErrorBody::new(ErrorCode::Unavailable))
         }
-    })
+    })?;
+    let set = sqlx::query(SET_LOCK_TIMEOUT)
+        .bind(format!("{}ms", REQUEST_LOCK_TIMEOUT.as_millis()))
+        .execute(&mut *tx)
+        .await;
+    if let Err(failure) = set {
+        // The class only: sqlx's text can carry values.
+        let kind = StoreError::from(failure).to_string();
+        tracing::error!(
+            user_id = %user.user_id(),
+            action,
+            error = %kind,
+            "could not start a database transaction"
+        );
+        // A rollback that fails leaves nothing behind: the connection is closed then.
+        let _ = tx.rollback().await;
+        return Err(error(ErrorBody::new(ErrorCode::Unavailable)));
+    }
+    Ok(tx)
 }
 
 /// Commits `tx` when the request's work succeeded and rolls it back otherwise.

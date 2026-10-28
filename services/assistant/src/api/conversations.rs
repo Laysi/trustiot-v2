@@ -24,6 +24,7 @@
 //! | A `limit` that is not 1 to 100 | 400 `invalid_request`, key `conversation.limit_invalid`, `{"max": 100}` |
 //! | A `cursor` that is not a `next_cursor` of the same list | 400 `invalid_request`, key `conversation.cursor_invalid` |
 //! | Deleting while a question of the conversation runs | 409 `conflict`, key `conversation.question_running`; nothing changes |
+//! | A lock (another request's or a stuck session's on the conversation) not granted within [`super::REQUEST_LOCK_TIMEOUT`] | 503 `unavailable`; nothing was written |
 //! | The database failed | 503 `unavailable`; nothing was written |
 //!
 //! A write that changed something logs one INFO line with the user, tenant and conversation,
