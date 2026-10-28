@@ -51,8 +51,9 @@ pub use runs::{
     RunOutcome, RunRecord, RunStatus, finish_run, request_cancel, run_status, start_run,
 };
 pub use threads::{
-    ConversationSummary, DeletedConversation, DeletedCursor, ListCursor, MAX_PAGE, Page, Title,
-    TitleSource, archive, delete, list, list_deleted, metadata, purge_expired, restore, set_title,
+    ConversationSummary, DeletedConversation, DeletedCursor, LOCK_NOT_AVAILABLE, ListCursor,
+    ListFilter, MAX_PAGE, PURGE_LOCK_TIMEOUT, Page, Title, TitleSource, archive, delete, list,
+    list_deleted, metadata, purge_expired, restore, set_title,
 };
 
 /// How long a deleted conversation can be restored; after it the purge removes it for good. A
@@ -183,9 +184,9 @@ pub enum StoreError {
     /// round: not a question, a later question follows it, or past the end.
     #[error("only the last round of the history can be discarded")]
     NotLastRound,
-    /// [`start_run`] while another question of the conversation is running and its deadline has
-    /// not passed.
-    #[error("another question of the conversation is running")]
+    /// A question of the conversation is running and its deadline has not passed: [`start_run`]
+    /// does not start another, and [`delete`] does not delete the conversation.
+    #[error("a question of the conversation is running")]
     AlreadyRunning,
     /// No run of this user with that ID (or its conversation is deleted, for
     /// [`request_cancel`] and [`run_status`]).
