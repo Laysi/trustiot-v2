@@ -17,11 +17,15 @@
 //!    from the gateway's latest one.
 //!
 //! A device event whose tenant is not the tenant the gateway is bound to now, or whose binding is
-//! not the gateway's current one, is recorded but changes no configuration: generating in the
-//! bound tenant's transaction could not even see it. A configuration that cannot be built (a
-//! missing model, a rule broken) is logged at ERROR, counted, and not stored, so the gateway
-//! keeps its previous version; the event still counts as processed, and the event that repairs
-//! the projection (the model arriving, the device changing) regenerates the gateway.
+//! not the gateway's current one (or unknown), is recorded but changes no configuration:
+//! generating in the bound tenant's transaction could not even see it. A configuration that
+//! cannot be built (a missing model, a rule broken) is logged at ERROR and counted; the event
+//! still counts as processed, and the event that repairs the projection (the model arriving, the
+//! device changing) regenerates the gateway. Meanwhile the gateway keeps its previous version
+//! only when that version was made for the same binding; otherwise a version without devices is
+//! stored for the binding, so another tenant's or binding's devices never stay the latest. A
+//! deletion while the configuration cannot be built stores the previous version without the
+//! deleted device, so a removed device really goes (README.md, "錯誤").
 //!
 //! Versions: a gateway's next version is its latest version, whichever tenant holds it, plus
 //! one, so versions rise across bindings and a gateway never sees a lower one for newer content.
@@ -137,9 +141,17 @@ ORDER BY hardware_id";
 const RECORDED_DEVICE: &str = "SELECT hardware_id, binding_id::text AS binding_id
 FROM gateway_ops.devices WHERE tenant_id = $1::uuid AND device_id = $2::uuid";
 
+/// The tenant's binding of a gateway whose event comes last before a position in the assets
+/// service's log: the binding a device event without `binding_id` was written under. `$1`
+/// tenant, `$2` hardware ID, `$3` and `$4` the device event's position.
+const BINDING_BEFORE: &str = "SELECT binding_id::text FROM gateway_ops.gateway_bindings
+WHERE tenant_id = $1::uuid AND hardware_id = $2 AND (position_tx, position_id) < ($3, $4)
+ORDER BY position_tx DESC, position_id DESC
+LIMIT 1";
+
 /// A device, replacing the stored one only for a higher revision. `$1` tenant, `$2` device, `$3`
-/// hardware ID, `$4` model, `$5` binding (NULL when the event names none), `$6` revision, `$7`
-/// the device as JSON.
+/// hardware ID, `$4` model, `$5` binding (NULL when none is known), `$6` revision, `$7` the
+/// device as JSON.
 const UPSERT_DEVICE: &str = "INSERT INTO gateway_ops.devices AS stored
     (tenant_id, device_id, hardware_id, model_id, binding_id, revision, device, deleted)
 VALUES ($1::uuid, $2::uuid, $3, $4::uuid, $5::uuid, $6, $7::jsonb, false)
@@ -162,12 +174,12 @@ ON CONFLICT (tenant_id, device_id) DO UPDATE
 RETURNING 1";
 
 /// The devices a gateway's configuration for a binding holds: the tenant's live devices on the
-/// gateway that belong to the binding, or name none. `$1` tenant, `$2` hardware ID, `$3` binding.
+/// gateway that belong to the binding. A device of no known binding is in none. `$1` tenant, `$2`
+/// hardware ID, `$3` binding.
 const GATEWAY_DEVICES: &str = "SELECT device_id::text AS device_id, model_id::text AS model_id,
     device::text AS device
 FROM gateway_ops.devices
-WHERE tenant_id = $1::uuid AND hardware_id = $2 AND NOT deleted
-    AND (binding_id IS NULL OR binding_id = $3::uuid)
+WHERE tenant_id = $1::uuid AND hardware_id = $2 AND NOT deleted AND binding_id = $3::uuid
 ORDER BY device_id";
 
 /// The live models of `$2` (model IDs as text) in tenant `$1`.
@@ -194,6 +206,9 @@ pub enum Ignored {
     OtherTenant,
     /// The device belongs to an earlier binding of the gateway in the same tenant.
     EndedBinding,
+    /// The device's binding is unknown: its events name none, and the tenant had no binding of
+    /// the gateway before the first of them (README.md, "綁定與租戶").
+    UnknownBinding,
 }
 
 impl Ignored {
@@ -204,7 +219,14 @@ impl Ignored {
             Self::Unbound => "unbound",
             Self::OtherTenant => "other_tenant",
             Self::EndedBinding => "ended_binding",
+            Self::UnknownBinding => "unknown_binding",
         }
+    }
+
+    /// Whether the event is worth a WARN: the assets service wrote a device outside the
+    /// gateway's binding, which it does not do.
+    fn suspicious(self) -> bool {
+        matches!(self, Self::OtherTenant | Self::UnknownBinding)
     }
 }
 
@@ -307,7 +329,34 @@ struct DeviceChange<'a> {
 enum Made {
     Stored(ConfigVersion),
     Unchanged,
+    /// Not made; the gateway keeps its previous version, made for the same binding.
     Failed(GenerationError),
+    /// Not made; a fallback version was stored instead (README.md, "錯誤").
+    Fallback {
+        error: GenerationError,
+        version: ConfigVersion,
+        fallback: Fallback,
+    },
+}
+
+/// The version stored when a gateway's configuration cannot be made but its previous version
+/// must not stay the latest.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Fallback {
+    /// The previous version was made for another binding (or there is none): a version without
+    /// devices for the current binding.
+    Empty,
+    /// A device was deleted: the previous version without it.
+    WithoutDeletedDevice,
+}
+
+impl Fallback {
+    fn name(self) -> &'static str {
+        match self {
+            Self::Empty => "empty",
+            Self::WithoutDeletedDevice => "without_deleted_device",
+        }
+    }
 }
 
 /// The consumer's handler; see the module. Cloning is cheap and shares the pool.
@@ -503,7 +552,7 @@ impl AssetsEventsHandler {
         );
         for state in &states {
             if let Ok(binding) = state.current_in(tenant) {
-                let made = make(tx, tenant, state, binding, delivery.envelope.id).await?;
+                let made = make(tx, tenant, state, binding, delivery.envelope.id, None).await?;
                 self.report(
                     &state.hardware_id,
                     tenant,
@@ -543,8 +592,11 @@ impl AssetsEventsHandler {
             .bind(device_id.to_string())
             .fetch_optional(&mut *tx)
             .await?;
-        let mut device_binding = binding_id;
-        if let Some(recorded) = recorded {
+        // The device's binding: the event's; else the recorded one; else, for a device recorded
+        // for the first time from an event written before 2026-10-29, the tenant's binding of
+        // the gateway that came last before the event in the log, which is the binding the
+        // assets service wrote it under. Without any, the device is in no configuration.
+        let device_binding = if let Some(recorded) = recorded {
             let recorded_gateway: String = recorded.try_get("hardware_id")?;
             if recorded_gateway != hardware_id.as_str() {
                 return Err(HandlerError::permanent(
@@ -552,22 +604,29 @@ impl AssetsEventsHandler {
                 ));
             }
             let recorded_binding: Option<String> = recorded.try_get("binding_id")?;
-            let recorded_binding = recorded_binding
-                .map(|text| text.parse::<GatewayBindingId>())
-                .transpose()
-                .map_err(|_| HandlerError::permanent("a recorded device has an invalid binding"))?;
+            let recorded_binding = parse_binding(recorded_binding)?;
             match (binding_id, recorded_binding) {
                 (Some(sent), Some(stored)) if sent != stored => {
                     return Err(HandlerError::permanent(
                         "a device event names another binding than the recorded one",
                     ));
                 }
-                (None, stored) => device_binding = stored,
-                _ => {}
+                (sent, stored) => sent.or(stored),
             }
-        }
+        } else if binding_id.is_some() {
+            binding_id
+        } else {
+            let before: Option<String> = sqlx::query_scalar(BINDING_BEFORE)
+                .bind(tenant.to_string())
+                .bind(hardware_id.as_str())
+                .bind(delivery.position.tx())
+                .bind(delivery.position.id())
+                .fetch_optional(&mut *tx)
+                .await?;
+            parse_binding(before)?
+        };
         let state = self.single_state(hardware_id).await?;
-        let binding_text = binding_id.map(|binding| binding.to_string());
+        let binding_text = device_binding.map(|binding| binding.to_string());
         let changed = if let Some(device) = device {
             let json = serde_json::to_string(device).map_err(|error| {
                 HandlerError::permanent("the device cannot be stored").with_source(error)
@@ -608,19 +667,23 @@ impl AssetsEventsHandler {
         let relevant = state
             .current_in(tenant)
             .and_then(|current| match device_binding {
-                Some(binding) if binding != current => Err(Ignored::EndedBinding),
-                _ => Ok(current),
+                Some(binding) if binding == current => Ok(current),
+                Some(_) => Err(Ignored::EndedBinding),
+                None => Err(Ignored::UnknownBinding),
             });
         match relevant {
             Ok(binding) => {
-                let made = make(tx, tenant, &state, binding, delivery.envelope.id).await?;
+                // Only a deletion that took effect in the projection may trim a stored version:
+                // a stale one (a newer revision is stored) or one already applied must not.
+                let deleted = (device.is_none() && changed).then_some(device_id);
+                let made = make(tx, tenant, &state, binding, delivery.envelope.id, deleted).await?;
                 self.report(hardware_id, tenant, binding, delivery.envelope.id, &made);
             }
             Err(ignored) => {
                 self.metrics
                     .ignored
                     .add(1, &[KeyValue::new("reason", ignored.reason())]);
-                if ignored == Ignored::OtherTenant {
+                if ignored.suspicious() {
                     tracing::warn!(
                         event_type = delivery.envelope.event_type.as_str(),
                         event_id = %delivery.envelope.id,
@@ -700,7 +763,15 @@ impl AssetsEventsHandler {
             "applied assets.gateway_bound"
         );
         if current {
-            let made = make(tx, tenant, &state, bound.binding_id, delivery.envelope.id).await?;
+            let made = make(
+                tx,
+                tenant,
+                &state,
+                bound.binding_id,
+                delivery.envelope.id,
+                None,
+            )
+            .await?;
             self.report(
                 &bound.hardware_id,
                 tenant,
@@ -752,6 +823,27 @@ impl AssetsEventsHandler {
                     reason = error.reason(),
                     error = %error,
                     "gateway configuration not generated; the gateway keeps its previous version"
+                );
+            }
+            Made::Fallback {
+                error,
+                version,
+                fallback,
+            } => {
+                self.metrics
+                    .failed
+                    .add(1, &[KeyValue::new("reason", error.reason())]);
+                self.metrics.stored.add(1, &[]);
+                tracing::error!(
+                    hardware_id = hardware_id.as_str(),
+                    tenant_id = %tenant,
+                    binding_id = %binding,
+                    event_id = %event_id,
+                    reason = error.reason(),
+                    error = %error,
+                    fallback = fallback.name(),
+                    version = version.get(),
+                    "gateway configuration not generated; a fallback version was stored"
                 );
             }
         }
@@ -908,6 +1000,13 @@ fn in_aggregate(delivery: &Delivery, kind: &str, id: &str) -> Result<(), Handler
     }
 }
 
+/// A binding read from the projection.
+fn parse_binding(text: Option<String>) -> Result<Option<GatewayBindingId>, HandlerError> {
+    text.map(|text| text.parse::<GatewayBindingId>())
+        .transpose()
+        .map_err(|_| HandlerError::permanent("a recorded binding ID is invalid"))
+}
+
 /// A revision as the tables store it: 1 to `i64::MAX`.
 fn stored_revision(revision: u64) -> Result<i64, HandlerError> {
     i64::try_from(revision)
@@ -961,37 +1060,97 @@ fn gateway_state(row: &PgRow) -> Result<GatewayState, HandlerError> {
 }
 
 /// Makes the gateway's configuration for `binding` of `tenant` from the tenant's rows and stores
-/// it when it differs from the latest version.
+/// it when it differs from the latest version. `deleted` is the device whose deletion the event
+/// is, if it is one. When the configuration cannot be made, see [`fallback`].
 async fn make(
     tx: &mut PgConnection,
     tenant: TenantId,
     state: &GatewayState,
     binding: GatewayBindingId,
     event_id: EventId,
+    deleted: Option<DeviceId>,
 ) -> Result<Made, HandlerError> {
     let content = match read_content(tx, tenant, &state.hardware_id, binding).await? {
         Ok(content) => content,
-        Err(error) => return Ok(Made::Failed(error)),
-    };
-    if let Some(latest) = state.config
-        && latest.tenant_id == tenant
-        && latest.binding_id == binding
-        && latest.bound
-    {
-        let payload: Option<Vec<u8>> = sqlx::query_scalar(CONFIG_PAYLOAD)
-            .bind(tenant.to_string())
-            .bind(state.hardware_id.as_str())
-            .bind(version_column(latest.version)?)
-            .fetch_optional(&mut *tx)
-            .await?;
-        let unchanged = payload
-            .and_then(|payload| DesiredConfig::decode(&payload).ok())
-            .is_some_and(|stored| content.same_as(&stored));
-        if unchanged {
-            return Ok(Made::Unchanged);
+        Err(error) => {
+            return fallback(tx, tenant, state, binding, event_id, deleted, error).await;
         }
+    };
+    if let Some(previous) = previous_of_binding(tx, tenant, state, binding).await?
+        && content.same_as(&previous)
+    {
+        return Ok(Made::Unchanged);
     }
-    store(tx, tenant, state, binding, true, &content, event_id).await
+    match store(tx, tenant, state, binding, true, &content, event_id).await? {
+        Made::Failed(error) => fallback(tx, tenant, state, binding, event_id, deleted, error).await,
+        made => Ok(made),
+    }
+}
+
+/// The gateway's latest version, decoded, when it was made for `binding` of `tenant` and the
+/// binding still held; `None` otherwise. A stored payload that no longer decodes counts as none,
+/// so the next version replaces it.
+async fn previous_of_binding(
+    tx: &mut PgConnection,
+    tenant: TenantId,
+    state: &GatewayState,
+    binding: GatewayBindingId,
+) -> Result<Option<DesiredConfig>, HandlerError> {
+    let Some(latest) = state.config else {
+        return Ok(None);
+    };
+    if latest.tenant_id != tenant || latest.binding_id != binding || !latest.bound {
+        return Ok(None);
+    }
+    let payload: Option<Vec<u8>> = sqlx::query_scalar(CONFIG_PAYLOAD)
+        .bind(tenant.to_string())
+        .bind(state.hardware_id.as_str())
+        .bind(version_column(latest.version)?)
+        .fetch_optional(&mut *tx)
+        .await?;
+    Ok(payload.and_then(|payload| DesiredConfig::decode(&payload).ok()))
+}
+
+/// What is stored when the configuration for `binding` cannot be made (`error`):
+///
+/// - The latest version was made for another binding, another tenant's included, or there is
+///   none: a version without devices for `binding`, so the gateway's latest version never lists
+///   devices that are not the current binding's (the delivery would publish them).
+/// - Otherwise, for the deletion of a device that version lists: that version without the
+///   device, so a removed device goes even while the rest cannot be made (rebuild checklist E1).
+/// - Otherwise nothing: the gateway keeps its previous version.
+async fn fallback(
+    tx: &mut PgConnection,
+    tenant: TenantId,
+    state: &GatewayState,
+    binding: GatewayBindingId,
+    event_id: EventId,
+    deleted: Option<DeviceId>,
+    error: GenerationError,
+) -> Result<Made, HandlerError> {
+    let (content, kind) = match previous_of_binding(tx, tenant, state, binding).await? {
+        None => (Content::empty(), Fallback::Empty),
+        Some(previous) => {
+            let Some(content) =
+                deleted.and_then(|device_id| Content::without_device(&previous, device_id))
+            else {
+                return Ok(Made::Failed(error));
+            };
+            (content, Fallback::WithoutDeletedDevice)
+        }
+    };
+    Ok(
+        match store(tx, tenant, state, binding, true, &content, event_id).await? {
+            Made::Stored(version) => Made::Fallback {
+                error,
+                version,
+                fallback: kind,
+            },
+            // A smaller version of a valid configuration, or no devices at all, always encodes;
+            // should it not, the original error is the one to report.
+            _ => Made::Failed(error),
+        },
+    )
 }
 
 /// Stores `content` as the gateway's next version.

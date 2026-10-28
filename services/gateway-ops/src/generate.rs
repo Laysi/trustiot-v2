@@ -8,7 +8,8 @@
 //! crates/protocol's rules ([`DesiredConfig`]'s validation, the one the gateway runs before it
 //! applies a configuration); [`encode`] refuses one too large for its MQTT channel. The caller
 //! then keeps the gateway's previous version (rebuild checklist E1: a reference to a missing
-//! resource is an explicit error).
+//! resource is an explicit error), or stores what [`Content::empty`] or
+//! [`Content::without_device`] gives when keeping it would be wrong (README.md, "錯誤").
 
 use std::collections::{BTreeMap, HashMap};
 use std::fmt::Write as _;
@@ -73,6 +74,31 @@ impl Content {
     #[must_use]
     pub fn same_as(&self, config: &DesiredConfig) -> bool {
         self.models == config.models && self.devices == config.devices
+    }
+
+    /// `config`'s content without the device `device_id` and without the models no remaining
+    /// device uses; `None` when `config` does not list the device. What a deletion leaves of a
+    /// stored version while the gateway's full configuration cannot be made (README.md, "錯誤"):
+    /// everything in it was validated and stored before, and it holds less than that version.
+    #[must_use]
+    pub fn without_device(config: &DesiredConfig, device_id: DeviceId) -> Option<Self> {
+        let id = device_id.to_string();
+        let devices: Vec<Device> = config
+            .devices
+            .iter()
+            .filter(|device| device.id.as_str() != id)
+            .cloned()
+            .collect();
+        if devices.len() == config.devices.len() {
+            return None;
+        }
+        let models = config
+            .models
+            .iter()
+            .filter(|model| devices.iter().any(|device| device.model == model.name))
+            .cloned()
+            .collect();
+        Some(Self { models, devices })
     }
 }
 
@@ -357,5 +383,90 @@ mod tests {
         assert_eq!(invalid.reason(), "invalid");
         // The summary names codes and paths, never the connection settings.
         assert!(!invalid.to_string().contains("192.0.2.10"), "{invalid}");
+    }
+
+    #[test]
+    fn a_deletion_leaves_the_stored_version_without_the_device_and_its_unused_model() {
+        let (meter, sensor) = (DeviceModelId::generate(), DeviceModelId::generate());
+        let ids: Vec<DeviceId> = (0..3).map(|_| DeviceId::generate()).collect();
+        let rows = vec![
+            DeviceRow {
+                device_id: ids[0],
+                model_id: meter,
+                device: device(ids[0], "meter", 1),
+            },
+            DeviceRow {
+                device_id: ids[1],
+                model_id: meter,
+                device: device(ids[1], "meter", 2),
+            },
+            DeviceRow {
+                device_id: ids[2],
+                model_id: sensor,
+                device: device(ids[2], "sensor", 3),
+            },
+        ];
+        let known = models(&[(meter, "meter"), (sensor, "sensor")]);
+        let version = ConfigVersion::new(4).expect("a version");
+        let stored = build(rows, &known).expect("valid").at(version);
+
+        // The sensor's only device goes, and its model with it; the meters stay as stored.
+        let left = Content::without_device(&stored, ids[2]).expect("listed");
+        let names: Vec<&str> = left.models.iter().map(|m| m.name.as_str()).collect();
+        assert_eq!(names, ["meter"]);
+        assert_eq!(left.devices.len(), 2);
+        assert!(
+            left.devices
+                .iter()
+                .all(|d| d.id.as_str() != ids[2].to_string())
+        );
+        DesiredConfig::decode(&encode(&left, version).expect("encodes")).expect("valid");
+
+        // One of two meters goes: the model stays.
+        let left = Content::without_device(&stored, ids[0]).expect("listed");
+        assert_eq!(left.models.len(), 2);
+        assert_eq!(left.devices.len(), 2);
+
+        // A device the version does not list leaves nothing to store.
+        assert_eq!(Content::without_device(&stored, DeviceId::generate()), None);
+    }
+
+    #[test]
+    fn more_devices_than_a_configuration_holds_are_refused_and_a_deletion_still_trims() {
+        // MAX_DEVICES + 1 devices, each on its own converter port so no other rule breaks.
+        let meter = DeviceModelId::generate();
+        let known = models(&[(meter, "meter")]);
+        let rows: Vec<DeviceRow> = (0..=protocol::config::MAX_DEVICES)
+            .map(|index| {
+                let id = DeviceId::generate();
+                let mut polled = device(id, "meter", 1);
+                polled.port = u16::try_from(1000 + index).expect("a port");
+                DeviceRow {
+                    device_id: id,
+                    model_id: meter,
+                    device: polled,
+                }
+            })
+            .collect();
+        let too_many = build(rows.clone(), &known).expect_err("one device too many");
+        assert_eq!(too_many.reason(), "invalid");
+        let GenerationError::Invalid(issues) = &too_many else {
+            panic!("{too_many:?}");
+        };
+        assert!(
+            issues
+                .issues()
+                .iter()
+                .any(|issue| issue.code == IssueCode::TooMany)
+        );
+
+        // The version stored before the last device came: deleting one of its devices still
+        // gives a configuration to store.
+        let stored = build(rows[..protocol::config::MAX_DEVICES].to_vec(), &known)
+            .expect("at the limit")
+            .at(ConfigVersion::new(9).expect("a version"));
+        let left = Content::without_device(&stored, rows[0].device_id).expect("listed");
+        assert_eq!(left.devices.len(), protocol::config::MAX_DEVICES - 1);
+        encode(&left, ConfigVersion::new(10).expect("a version")).expect("encodes");
     }
 }

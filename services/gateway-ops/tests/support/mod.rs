@@ -144,16 +144,23 @@ impl Assets {
     /// Binds `gateway` to `tenant`: `assets.gateway_bound`.
     pub async fn bind(&self, tenant: TenantId, gateway: &GatewayId) -> (GatewayBindingId, EventId) {
         let binding_id = GatewayBindingId::generate();
+        (binding_id, self.bind_as(tenant, gateway, binding_id).await)
+    }
+
+    /// Binds `gateway` to `tenant` with the binding ID `binding_id`: `assets.gateway_bound`.
+    pub async fn bind_as(
+        &self,
+        tenant: TenantId,
+        gateway: &GatewayId,
+        binding_id: GatewayBindingId,
+    ) -> EventId {
         let event = GatewayBound {
             binding_id,
             hardware_id: gateway.clone(),
         };
         let id = binding_id.to_string();
-        (
-            binding_id,
-            self.publish(tenant, GATEWAY_BINDING_AGGREGATE, &id, &event)
-                .await,
-        )
+        self.publish(tenant, GATEWAY_BINDING_AGGREGATE, &id, &event)
+            .await
     }
 
     /// Creates `model` in `tenant`: `assets.device_model_created`, revision 1.

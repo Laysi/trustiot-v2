@@ -48,7 +48,9 @@ schema `gateway_ops` 由 migration Job（`tools/migrate`）建立並套用 `migr
 設備事件 `assets.device_created`、`_updated`、`_deleted` 自 2026-10-29 起帶選填的 `binding_id`：寫入事件時設備所屬的綁定（[crates/contract](../../crates/contract/README.md)、[services/assets](../assets/README.md)）。一台閘道器的設定只收：
 
 1. 事件租戶就是閘道器目前綁定的租戶的設備；
-2. 而且設備的 `binding_id` 是目前的綁定，或者是 NULL。
+2. 而且設備的綁定就是目前的綁定。
+
+設備的綁定依序取：事件的 `binding_id`；投影裡已記錄的綁定；都沒有時（2026-10-29 以前寫的事件，而且投影第一次看到這個設備），取同一個租戶、同一台閘道器的綁定裡，事件紀錄位置在這個設備事件**之前**最後的那一個，也就是資產服務寫這個事件時設備所屬的綁定。以事件位置而不是目前狀態推斷，所以重播（`Replay::Reprocess`）得到同樣的結果。仍然找不到時，`binding_id` 存 NULL，這個設備不進任何設定。
 
 不符合的設備事件仍記進投影（它是該租戶的資料），但不產生新版本，也不出現在任何設定裡：
 
@@ -57,8 +59,9 @@ schema `gateway_ops` 由 migration Job（`tools/migrate`）建立並套用 `migr
 | 閘道器目前沒有綁定（還沒綁，或已解綁） | 不產生 | INFO `device event ignored for the gateway configuration`，`reason=unbound` |
 | 閘道器綁在別的租戶 | 不產生 | **WARN**，`reason=other_tenant`：資產服務在綁定之外寫了設備，值得追查 |
 | 設備屬於同一租戶先前的綁定 | 不產生 | INFO，`reason=ended_binding` |
+| 設備的綁定不明（事件沒有 `binding_id`，事件之前這個租戶也沒有綁過這台閘道器） | 不產生 | **WARN**，`reason=unknown_binding`：資產服務只在綁定之內寫設備 |
 
-剩下的風險：2026-10-29 以前寫的設備事件沒有 `binding_id`，投影只能把這些設備當成「該租戶的」。同一台閘道器解綁後又綁回同一個租戶時，這些舊設備會出現在新綁定的設定裡；資產服務在綁定結束後拒絕修改舊綁定的設備，而之後的事件都帶 `binding_id`，所以這只影響 2026-10-29 以前建立、之後沒有再被修改的設備。
+剩下的風險：推斷用的是綁定事件的位置；解綁（Laysi/trustiot-v2#115）只記時間、沒有位置，所以如果某個 2026-10-29 以前寫的設備事件，寫在租戶的綁定結束之後、同一租戶再次綁定之前，投影會把它歸到結束的那個綁定（不進任何設定）。資產服務不在綁定之外寫設備，所以這不會發生；而 2026-10-29 以後的事件都帶 `binding_id`，不需要推斷。
 
 ## 由事件到設定
 
@@ -72,7 +75,7 @@ schema `gateway_ops` 由 migration Job（`tools/migrate`）建立並套用 `migr
 
 產生的規則（`src/generate.rs`）：
 
-- 設定只列這個租戶、這台閘道器、這個綁定（或沒有綁定）、沒有刪除的設備，與它們用到的型號；每個型號只列一次。
+- 設定只列這個租戶、這台閘道器、這個綁定、沒有刪除的設備，與它們用到的型號；每個型號只列一次。綁定不明（NULL）的設備不在任何設定裡。
 - 順序固定：型號依名稱、設備依 ID，所以投影內容相同就產生相同的設定。
 - 刪除的設備真的從下一版消失；刪除只是 tombstone，晚到的舊 revision 不會讓它復活。
 - 新的內容和閘道器最新的一版（同租戶、同綁定、`bound`）相同時不存新版：重播事件、重複投遞、晚到的舊 revision、只改了設定不帶的欄位（例如設備名稱）都不會多出版本。
@@ -88,7 +91,15 @@ schema `gateway_ops` 由 migration Job（`tools/migrate`）建立並套用 `migr
 
 ## 錯誤
 
-產生不出設定時不存新版本，閘道器保留上一版（清單 E1「引用不存在的資源要明確報錯」）；事件本身照樣算處理完，等修好投影的事件（型號送到、設備修正）再產生：
+產生不出設定時記錄明確的錯誤（清單 E1「引用不存在的資源要明確報錯」）；事件本身照樣算處理完，等修好投影的事件（型號送到、設備修正）再產生。這段期間：
+
+| 情況 | 存什麼 | 為什麼 |
+| --- | --- | --- |
+| 閘道器最新的一版是為**同一個綁定**做的 | 不存新版，閘道器保留上一版 | 上一版已經驗證過，而且屬於目前的綁定 |
+| 最新的一版是別的綁定（包括別的租戶）的，或還沒有任何版本，例如改綁到另一個租戶時新租戶的設定產生不出來 | 存一版**沒有設備**、`bound = true` 的設定，屬於目前的綁定 | 保留上一版等於讓下發（Laysi/trustiot-v2#720）把前一個租戶的設備送給已經綁到別的租戶的閘道器 |
+| 事件是刪除設備、刪除在投影裡生效（不是過期的 revision，也不是重複的刪除），而且最新的一版（同一個綁定）列著它 | 存一版「最新的一版去掉這個設備」（也去掉不再有設備使用的型號） | 刪除的設備要真的從閘道器消失（清單 E1）；這一版只比閘道器已經在跑的少，裡面的東西都驗證過。例如設備超過 `MAX_DEVICES`（1000）或超過編碼大小上限時，每個事件都失敗，刪除仍然生效 |
+
+原因（`reason`）：
 
 | `reason` | 原因 |
 | --- | --- |
@@ -98,7 +109,9 @@ schema `gateway_ops` 由 migration Job（`tools/migrate`）建立並套用 `migr
 | `encode` | 編碼失敗，例如超過 MQTT 頻道的大小上限 |
 | `corrupt` | 投影裡存的列讀不回來（表的規則應該讓它不會發生） |
 
-每次失敗記一行 ERROR `gateway configuration not generated; the gateway keeps its previous version`，帶 `hardware_id`、`tenant_id`、`binding_id`、`event_id`、`reason` 與 `error`；`invalid` 的 `error` 只列違反的規則代碼與路徑，不列連線設定。
+每次失敗記一行 ERROR，帶 `hardware_id`、`tenant_id`、`binding_id`、`event_id`、`reason` 與 `error`；`invalid` 的 `error` 只列違反的規則代碼與路徑，不列連線設定。保留上一版時訊息是 `gateway configuration not generated; the gateway keeps its previous version`；存了替代的版本時是 `gateway configuration not generated; a fallback version was stored`，另帶 `fallback`（`empty` 或 `without_deleted_device`）與 `version`。
+
+每台閘道器的設備上限屬於資產服務，要在寫入時擋（清單 B2）；2026-10-29 資產服務還沒有這個上限。這裡只保證超過時刪除仍然生效。
 
 事件本身有問題時（沒有租戶、不在自己的 aggregate、revision 超出範圍、和已記錄的硬體 ID、型號名稱或綁定不一致、表拒絕的值）送進 dead letter，訂閱繼續往下。資料庫錯誤重試。這個版本不認得、但屬於型號、設備或綁定 aggregate 的事件（例如 Laysi/trustiot-v2#115 的解綁事件）一律重試、不確認：確認了就永遠漏掉一次設定變更，停在那裡時消費端的延遲會顯示出來。所以**發版順序**是 gateway-ops 先認得新事件，資產服務才開始寫它。
 
@@ -108,9 +121,9 @@ meter `gateway-ops`：
 
 | 指標 | 屬性 | 意義 |
 | --- | --- | --- |
-| `gateway_ops.config.versions` | 無 | 存下的新版本數 |
-| `gateway_ops.config.failures` | `reason`（上表） | 產生不出設定的次數；大於 0 就有閘道器停在舊版本 |
-| `gateway_ops.config.ignored_device_events` | `reason`：`unbound`、`other_tenant`、`ended_binding` | 沒有產生設定的設備事件 |
+| `gateway_ops.config.versions` | 無 | 存下的新版本數（包括替代的版本） |
+| `gateway_ops.config.failures` | `reason`（上表） | 產生不出設定的次數；大於 0 就有閘道器沒拿到完整的設定 |
+| `gateway_ops.config.ignored_device_events` | `reason`：`unbound`、`other_tenant`、`ended_binding`、`unknown_binding` | 沒有產生設定的設備事件 |
 
 ## 解綁
 
@@ -130,6 +143,8 @@ meter `gateway-ops`：
 
 兩者讀到 `payload` 與 `version` 不一致、或欄位不合規則的列時回 `ReadError::Corrupt`。
 
+兩者都不交出不屬於閘道器最新綁定的設定：最新的一版必須是這台閘道器最新綁定（綁定事件在紀錄裡最後的那一個）的租戶與綁定，而且 `bound` 和綁定是否還有效一致。投影在讓一個綁定成為目前綁定的同一個交易裡就存它的一版，所以不一致代表規則被打破；這時 `current` 回 `ReadError::NotForLatestBinding`，`latest_versions` 略過那台閘道器並記 ERROR，下發端不會把一個租戶的設備送給綁在別的租戶的閘道器。
+
 ## 測試
 
 需要 podman 或 docker：測試起一個有 TLS 的 Postgres，以 migration Job 套用整個產品的 schema（`testkit::product`）。沒有容器執行環境時本機跳過，設了 `CI` 時失敗。
@@ -140,8 +155,9 @@ cargo test -p gateway-ops
 
 | 檔案 | 驗證 |
 | --- | --- |
-| `src/generate.rs`、`src/config.rs` 的單元測試 | 固定順序、每個型號一次、編碼後閘道器解得開；缺型號、型號名稱不符、違反規則的設定被拒，日誌摘要不帶連線設定；設定的驗證與 `Debug` 不印密碼 |
-| `tests/desired_config.rs` | 新增、修改設備各產生一版，payload 以 crates/protocol 解碼並驗證；同內容、晚到的舊 revision 與整段重播（`Replay::Reprocess`）不產生版本；刪除的設備從下一版消失；別的租戶、先前綁定的設備不在任何設定裡；改綁到別的租戶時版本照樣遞增、不帶舊租戶的設備；解綁存一版沒有設備的設定、只存一次；讀取介面回最新版本，平台角色不能寫入，另一個租戶的服務角色讀不到 |
+| `src/generate.rs`、`src/config.rs` 的單元測試 | 固定順序、每個型號一次、編碼後閘道器解得開；缺型號、型號名稱不符、違反規則、超過 `MAX_DEVICES` 的設定被拒，日誌摘要不帶連線設定；刪除時「上一版去掉這個設備」的內容（含 `MAX_DEVICES` 的情況）；設定的驗證與 `Debug` 不印密碼 |
+| `tests/desired_config.rs` | 新增、修改設備各產生一版，payload 以 crates/protocol 解碼並驗證；同內容、晚到的舊 revision 與整段重播（`Replay::Reprocess`）不產生版本；刪除的設備從下一版消失；別的租戶、先前綁定、綁定不明的設備不在任何設定裡，沒有 `binding_id` 的事件取事件之前的綁定；改綁到別的租戶時版本照樣遞增、不帶舊租戶的設備，新租戶的設定產生不出來時存一版沒有設備的設定；設定產生不出來時刪除仍然生效；解綁存一版沒有設備的設定、只存一次；讀取介面回最新版本、拒絕不屬於最新綁定的版本，平台角色不能寫入，另一個租戶的服務角色讀不到 |
 | `tests/generation_errors.rs` | 未知型號、違反規則、型號被刪除時不產生版本、ERROR 帶閘道器與原因、上一版不變；型號送到後產生下一版；別的租戶的設備事件記 WARN |
+| `tests/unknown_events.rs` | 這個版本不認得的事件：不在追蹤的 aggregate 時確認並往下走；在型號、設備或綁定的 aggregate 時每次 poll 都重試，不確認、不進 dead letter，後面的事件等著 |
 | `tests/cross_tenant.rs` | 服務角色對四張表的跨租戶負向測試（決策 29，crates/testkit），以及每個碰得到的關聯都有宣告 |
 | `tests/startup.rs` | 真的 binary 以 chart 給的角色啟動、ready，訂閱把綁定與設備事件變成版本，SIGTERM 以 0 結束 |

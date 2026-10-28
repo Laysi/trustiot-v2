@@ -10,9 +10,15 @@
 //! - A device event of another tenant than the gateway's current binding, and one of the
 //!   tenant's ended binding, are in no configuration; a gateway bound to another tenant gets a
 //!   higher version without the earlier tenant's devices (acceptance 3).
+//! - A device event without `binding_id` gets the tenant's binding that came last before it in
+//!   the log, or none, and a device of no binding is in no configuration.
 //! - Ending the binding stores the configuration without devices once (acceptance 2).
-//! - The read interface for the delivery (Laysi/trustiot-v2#720) returns the latest version, and
-//!   the platform role cannot write a configuration.
+//! - A gateway bound to another tenant whose configuration cannot be made gets a version without
+//!   devices for the new binding, never keeps the earlier tenant's as the latest; a deletion
+//!   while the configuration cannot be made still removes the device (README.md, "錯誤").
+//! - The read interface for the delivery (Laysi/trustiot-v2#720) returns the latest version,
+//!   refuses one not made for the gateway's latest binding, and the platform role cannot write a
+//!   configuration.
 //!
 //! The tests of this binary share the subscription, as the service's replicas do. Starts a
 //! throwaway Postgres with TLS (podman or docker); skipped without either unless `CI` is set.
@@ -20,8 +26,9 @@
 mod support;
 
 use chrono::Utc;
-use contract::{DeviceId, EventId, TenantId};
-use gateway_ops::desired::DesiredConfigs;
+use contract::{DeviceId, DeviceModelId, EventId, GatewayBindingId, TenantId};
+use gateway_ops::desired::{DesiredConfigs, ReadError};
+use protocol::config::{DesiredConfig, Transport};
 use sqlx::Connection as _;
 use support::{
     Assets, LOGINS, consumer, deliver, device, hardware_id, model, platform, position,
@@ -237,7 +244,7 @@ async fn other_tenants_and_ended_bindings_stay_out() {
             tenant_b,
             &gateway,
             meter_b,
-            Some(contract::GatewayBindingId::generate()),
+            Some(GatewayBindingId::generate()),
             stray,
             &device(stray, &meter, 2),
         )
@@ -261,7 +268,8 @@ async fn other_tenants_and_ended_bindings_stay_out() {
 
     // 3. The gateway is bound to tenant B now: the next version is higher, in tenant B, and
     //    lists neither A's device nor B's device of another binding. B's device written without
-    //    a binding is B's and stays in (README.md, "綁定與租戶").
+    //    a binding before B ever held the gateway belongs to no binding and stays out too
+    //    (README.md, "綁定與租戶").
     let (binding_b, bound_b) = assets.bind(tenant_b, &gateway).await;
     deliver(&product, &consumer, &[bound_b]).await;
     let stored = versions(&mut admin, &gateway).await;
@@ -270,7 +278,7 @@ async fn other_tenants_and_ended_bindings_stay_out() {
         (stored[2].version, stored[2].tenant_id, stored[2].binding_id),
         (3, tenant_b, binding_b)
     );
-    assert_eq!(stored[2].devices(), [id_text(legacy)]);
+    assert!(stored[2].devices().is_empty(), "{:?}", stored[2]);
 
     // 4. A's device changes after the gateway left A: no version. B's new device of the
     //    current binding: the next version.
@@ -304,20 +312,53 @@ async fn other_tenants_and_ended_bindings_stay_out() {
         stored.iter().map(|s| s.version).collect::<Vec<_>>(),
         [1, 2, 3, 4]
     );
+    assert_eq!(stored[3].devices(), [id_text(device_b)]);
+
+    // 5. A device event without a binding written while B holds the gateway: the device gets
+    //    the binding that came last before it in the log, B's, and is in the next version.
+    let inferred = DeviceId::generate();
+    let inferred_event = assets
+        .create_device(
+            tenant_b,
+            &gateway,
+            meter_b,
+            None,
+            inferred,
+            &device(inferred, &meter, 5),
+        )
+        .await;
+    deliver(&product, &consumer, &[inferred_event]).await;
+    let stored = versions(&mut admin, &gateway).await;
     assert_eq!(
-        stored[3].devices(),
-        sorted(vec![id_text(legacy), id_text(device_b)])
+        stored.iter().map(|s| s.version).collect::<Vec<_>>(),
+        [1, 2, 3, 4, 5]
     );
+    assert_eq!(
+        stored[4].devices(),
+        sorted(vec![id_text(device_b), id_text(inferred)])
+    );
+    let recorded: Option<String> = sqlx::query_scalar(
+        "SELECT binding_id::text FROM gateway_ops.devices WHERE tenant_id = $1::uuid
+         AND device_id = $2::uuid",
+    )
+    .bind(tenant_b.to_string())
+    .bind(inferred.to_string())
+    .fetch_one(&mut admin)
+    .await
+    .expect("read the device");
+    assert_eq!(recorded, Some(binding_b.to_string()));
     for version in &stored {
         let listed = version.devices();
         assert!(!listed.contains(&id_text(stray)), "{version:?}");
+        assert!(!listed.contains(&id_text(legacy)), "{version:?}");
         if version.tenant_id == tenant_b {
             assert!(!listed.contains(&id_text(device_a)), "{version:?}");
         }
     }
     println!(
-        "evidence: versions {:?} in tenants {:?}; tenant B's device of another binding is in \
-         none; tenant A's device is in none of tenant B's",
+        "evidence: versions {:?} in tenants {:?}; tenant B's devices of another binding and of \
+         no binding are in none; the device without binding_id written under B's binding is in \
+         version 5; tenant A's device is in none of tenant B's",
         stored.iter().map(|s| s.version).collect::<Vec<_>>(),
         stored
             .iter()
@@ -403,7 +444,7 @@ async fn ending_the_binding_leaves_a_configuration_without_devices() {
         .apply_unbinding(
             &mut tx,
             tenant,
-            contract::GatewayBindingId::generate(),
+            GatewayBindingId::generate(),
             Utc::now(),
             EventId::generate(),
         )
@@ -469,7 +510,7 @@ async fn the_delivery_reads_the_latest_version_and_cannot_write() {
     assert!(current.bound);
     assert_eq!(current.device_count, 1);
     assert_eq!(
-        protocol::config::DesiredConfig::decode(&current.payload).expect("valid"),
+        DesiredConfig::decode(&current.payload).expect("valid"),
         latest.config,
         "the payload exactly as stored"
     );
@@ -523,4 +564,264 @@ async fn the_delivery_reads_the_latest_version_and_cannot_write() {
     .expect("read as tenant B");
     tx.commit().await.expect("commit");
     assert_eq!(seen, 0, "tenant B reads none of gateway A's configurations");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_rebind_whose_configuration_cannot_be_made_never_keeps_the_earlier_tenants() {
+    let Some(product) = product_postgres(LOGINS).await else {
+        return;
+    };
+    let mut admin = product.superuser().await;
+    let assets = Assets::new(&product);
+    let (consumer, _) = consumer(&product).await;
+    let (tenant_a, tenant_b) = (TenantId::generate(), TenantId::generate());
+    let gateway = hardware_id("go-rebind");
+
+    // 1. Bound to tenant A, with one of A's devices.
+    let (binding_a, bound_a) = assets.bind(tenant_a, &gateway).await;
+    let meter = model("meter");
+    let (meter_a, model_a) = assets.create_model(tenant_a, &meter).await;
+    let device_a = DeviceId::generate();
+    let created_a = assets
+        .create_device(
+            tenant_a,
+            &gateway,
+            meter_a,
+            Some(binding_a),
+            device_a,
+            &device(device_a, &meter, 1),
+        )
+        .await;
+    deliver(&product, &consumer, &[bound_a, model_a, created_a]).await;
+    assert_eq!(versions(&mut admin, &gateway).await.len(), 2);
+
+    // 2. Tenant B's device for its coming binding uses a model the projection does not have,
+    //    so B's configuration cannot be made when the gateway is bound to B.
+    let binding_b = GatewayBindingId::generate();
+    let missing = DeviceModelId::generate();
+    let device_b = DeviceId::generate();
+    let created_b = assets
+        .create_device(
+            tenant_b,
+            &gateway,
+            missing,
+            Some(binding_b),
+            device_b,
+            &device(device_b, &meter, 2),
+        )
+        .await;
+    let bound_b = assets.bind_as(tenant_b, &gateway, binding_b).await;
+    deliver(&product, &consumer, &[created_b, bound_b]).await;
+
+    // The latest version is B's, without devices: A's is not kept.
+    let stored = versions(&mut admin, &gateway).await;
+    assert_eq!(stored.len(), 3, "{stored:?}");
+    assert_eq!(
+        (stored[2].tenant_id, stored[2].binding_id, stored[2].bound),
+        (tenant_b, binding_b, true)
+    );
+    assert!(stored[2].devices().is_empty(), "{:?}", stored[2]);
+    assert!(stored[2].config.models.is_empty());
+    let reads = DesiredConfigs::new(&platform(&product));
+    let current = reads
+        .current(&gateway)
+        .await
+        .expect("read")
+        .expect("a configuration");
+    assert_eq!(
+        (current.tenant_id, current.binding_id, current.device_count),
+        (tenant_b, binding_b, 0)
+    );
+    assert_eq!(current.version.get(), 3);
+    let published = DesiredConfig::decode(&current.payload).expect("valid");
+    assert!(
+        published
+            .devices
+            .iter()
+            .all(|listed| listed.id.as_str() != id_text(device_a)),
+        "none of tenant A's devices: {published:?}"
+    );
+    assert!(published.devices.is_empty());
+
+    // 3. The model arrives in B: B's device is in the next version.
+    let model_b = assets.create_model_as(tenant_b, missing, &meter).await;
+    deliver(&product, &consumer, &[model_b]).await;
+    let stored = versions(&mut admin, &gateway).await;
+    assert_eq!(stored.len(), 4, "{stored:?}");
+    assert_eq!(stored[3].tenant_id, tenant_b);
+    assert_eq!(stored[3].devices(), [id_text(device_b)]);
+    println!(
+        "evidence: rebind to B with a configuration that cannot be made: versions {:?} in \
+         tenants {:?}, devices {:?}; current() returns version {} of tenant B with {} devices",
+        stored.iter().map(|s| s.version).collect::<Vec<_>>(),
+        stored
+            .iter()
+            .map(|s| if s.tenant_id == tenant_a { "A" } else { "B" })
+            .collect::<Vec<_>>(),
+        stored.iter().map(|s| s.device_count).collect::<Vec<_>>(),
+        current.version.get(),
+        current.device_count
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_deletion_takes_effect_while_the_configuration_cannot_be_made() {
+    let Some(product) = product_postgres(LOGINS).await else {
+        return;
+    };
+    let mut admin = product.superuser().await;
+    let assets = Assets::new(&product);
+    let (consumer, _) = consumer(&product).await;
+    let tenant = TenantId::generate();
+    let gateway = hardware_id("go-trim");
+
+    let (binding, bound) = assets.bind(tenant, &gateway).await;
+    let meter = model("meter");
+    let (meter_id, model_event) = assets.create_model(tenant, &meter).await;
+    let first = DeviceId::generate();
+    let created_first = assets
+        .create_device(
+            tenant,
+            &gateway,
+            meter_id,
+            Some(binding),
+            first,
+            &device(first, &meter, 1),
+        )
+        .await;
+    deliver(&product, &consumer, &[bound, model_event, created_first]).await;
+    let stored = versions(&mut admin, &gateway).await;
+    assert_eq!(stored.len(), 2);
+    assert_eq!(stored[1].devices(), [id_text(first)]);
+
+    // 1. A device with another transport on the same converter breaks crates/protocol's rules;
+    //    a valid device after it is not in a version either: the whole configuration fails.
+    let (second, third) = (DeviceId::generate(), DeviceId::generate());
+    let mut mixed = device(second, &meter, 2);
+    mixed.transport = Transport::ModbusTcp;
+    let created_second = assets
+        .create_device(tenant, &gateway, meter_id, Some(binding), second, &mixed)
+        .await;
+    let created_third = assets
+        .create_device(
+            tenant,
+            &gateway,
+            meter_id,
+            Some(binding),
+            third,
+            &device(third, &meter, 3),
+        )
+        .await;
+    deliver(&product, &consumer, &[created_second, created_third]).await;
+    assert_eq!(versions(&mut admin, &gateway).await.len(), 2);
+
+    // 2. Deleting a device the latest version does not list, while the configuration still
+    //    fails, stores nothing.
+    let extra = DeviceId::generate();
+    let created_extra = assets
+        .create_device(
+            tenant,
+            &gateway,
+            meter_id,
+            Some(binding),
+            extra,
+            &device(extra, &meter, 5),
+        )
+        .await;
+    let deleted_extra = assets
+        .delete_device(tenant, &gateway, meter_id, Some(binding), extra, 1)
+        .await;
+    deliver(&product, &consumer, &[created_extra, deleted_extra]).await;
+    assert_eq!(versions(&mut admin, &gateway).await.len(), 2);
+
+    // 3. A stale deletion of the device of version 2 (a newer revision is stored, written while
+    //    the configuration fails) takes no effect in the projection and trims nothing.
+    let mut slower = device(first, &meter, 1);
+    slower.poll_interval_ms = 120_000;
+    let updated_first = assets
+        .update_device(tenant, &gateway, meter_id, Some(binding), first, 2, &slower)
+        .await;
+    let stale = assets
+        .delete_device(tenant, &gateway, meter_id, Some(binding), first, 1)
+        .await;
+    deliver(&product, &consumer, &[updated_first, stale]).await;
+    assert_eq!(versions(&mut admin, &gateway).await.len(), 2, "stale");
+
+    // 4. Deleting the device of version 2 while the configuration still fails (the second and
+    //    the third device still mix transports): version 3 is version 2 without it, and without
+    //    the model no device uses any more.
+    let deleted_first = assets
+        .delete_device(tenant, &gateway, meter_id, Some(binding), first, 2)
+        .await;
+    deliver(&product, &consumer, &[deleted_first]).await;
+    let stored = versions(&mut admin, &gateway).await;
+    assert_eq!(stored.len(), 3, "{stored:?}");
+    assert!(stored[2].devices().is_empty(), "{:?}", stored[2]);
+    assert!(stored[2].config.models.is_empty());
+    assert_eq!(
+        (stored[2].tenant_id, stored[2].binding_id, stored[2].bound),
+        (tenant, binding, true)
+    );
+    assert_eq!(stored[2].event_id, deleted_first);
+
+    // 5. The invalid device deleted: the configuration is made again, with the third device.
+    let deleted_second = assets
+        .delete_device(tenant, &gateway, meter_id, Some(binding), second, 1)
+        .await;
+    deliver(&product, &consumer, &[deleted_second]).await;
+    let stored = versions(&mut admin, &gateway).await;
+    assert_eq!(stored.len(), 4, "{stored:?}");
+    assert_eq!(stored[3].devices(), [id_text(third)]);
+    println!(
+        "evidence: deletion while the configuration fails: versions {:?}, devices per version \
+         {:?}",
+        stored.iter().map(|s| s.version).collect::<Vec<_>>(),
+        stored.iter().map(|s| s.device_count).collect::<Vec<_>>()
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_delivery_refuses_a_version_not_made_for_the_latest_binding() {
+    let Some(product) = product_postgres(LOGINS).await else {
+        return;
+    };
+    let mut admin = product.superuser().await;
+    let assets = Assets::new(&product);
+    let (consumer, _) = consumer(&product).await;
+    let tenant = TenantId::generate();
+    let (gateway, other) = (hardware_id("go-guard"), hardware_id("go-guard-ok"));
+    let (_, bound) = assets.bind(tenant, &gateway).await;
+    let (_, bound_other) = assets.bind(tenant, &other).await;
+    deliver(&product, &consumer, &[bound, bound_other]).await;
+    let reads = DesiredConfigs::new(&platform(&product));
+    assert!(reads.current(&gateway).await.expect("read").is_some());
+
+    // Another tenant's binding recorded after every event, without a version for it: the state
+    // the projection never leaves (it stores a version for each binding it makes current), here
+    // written by the superuser.
+    sqlx::query(
+        "INSERT INTO gateway_ops.gateway_bindings
+            (tenant_id, binding_id, hardware_id, bound_at, position_tx, position_id)
+         VALUES ($1::uuid, $2::uuid, $3, now(), $4, 0)",
+    )
+    .bind(TenantId::generate().to_string())
+    .bind(GatewayBindingId::generate().to_string())
+    .bind(gateway.as_str())
+    .bind(i64::MAX)
+    .execute(&mut admin)
+    .await
+    .expect("record a binding without a version");
+
+    let refused = reads
+        .current(&gateway)
+        .await
+        .expect_err("the latest version is not the latest binding's");
+    assert!(
+        matches!(&refused, ReadError::NotForLatestBinding(id) if id == &gateway),
+        "{refused:?}"
+    );
+    let all = reads.latest_versions().await.expect("read");
+    assert!(all.iter().all(|latest| latest.hardware_id != gateway));
+    assert!(all.iter().any(|latest| latest.hardware_id == other));
+    println!("evidence: current() of a gateway whose latest binding has no version: {refused}");
 }

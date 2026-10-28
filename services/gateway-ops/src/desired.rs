@@ -7,6 +7,14 @@
 //! `gateway_ops.desired_configs`, which opens SELECT only. The payload is returned exactly as
 //! stored, so what is published is what was validated and versioned; it is decoded here once
 //! more only to refuse a row whose payload and version disagree.
+//!
+//! A latest version that was not made for the gateway's latest binding (by the binding events'
+//! order in the assets service's log), or whose `bound` disagrees with whether that binding still
+//! holds, is never returned: the projection stores a version for every binding it makes current
+//! in the same transaction, so such a row means a broken rule, and publishing it could hand one
+//! tenant's devices to a gateway bound to another. [`DesiredConfigs::current`] fails with
+//! [`ReadError::NotForLatestBinding`], and [`DesiredConfigs::latest_versions`] leaves the gateway
+//! out and logs it at ERROR.
 
 use chrono::{DateTime, Utc};
 use contract::{GatewayBindingId, ServiceName, TenantId};
@@ -20,18 +28,46 @@ use sqlx::postgres::PgRow;
 /// The purpose the reads name in the log.
 pub const READ_PURPOSE: &str = "gateway-config-delivery";
 
-/// A gateway's latest configuration, whichever tenant holds it. `$1` hardware ID.
-const CURRENT: &str = "SELECT hardware_id, tenant_id::text AS tenant_id,
-    binding_id::text AS binding_id, version, bound, device_count, payload, created_at
-FROM gateway_ops.desired_configs
-WHERE hardware_id = $1
-ORDER BY version DESC
-LIMIT 1";
+/// A gateway's latest configuration, whichever tenant holds it, and whether it was made for the
+/// gateway's binding whose event comes last in the assets service's log and agrees with whether
+/// that binding still holds (`for_latest_binding`). `$1` hardware ID.
+const CURRENT: &str = "SELECT config.hardware_id, config.tenant_id::text AS tenant_id,
+    config.binding_id::text AS binding_id, config.version, config.bound, config.device_count,
+    config.payload, config.created_at,
+    COALESCE(binding.tenant_id = config.tenant_id AND binding.binding_id = config.binding_id
+        AND (binding.unbound_at IS NULL) = config.bound, false) AS for_latest_binding
+FROM (
+    SELECT hardware_id, tenant_id, binding_id, version, bound, device_count, payload, created_at
+    FROM gateway_ops.desired_configs
+    WHERE hardware_id = $1
+    ORDER BY version DESC
+    LIMIT 1
+) AS config
+LEFT JOIN LATERAL (
+    SELECT tenant_id, binding_id, unbound_at
+    FROM gateway_ops.gateway_bindings
+    WHERE hardware_id = config.hardware_id
+    ORDER BY position_tx DESC, position_id DESC
+    LIMIT 1
+) AS binding ON true";
 
-/// Every gateway's latest version.
-const LATEST_VERSIONS: &str = "SELECT DISTINCT ON (hardware_id) hardware_id, version
-FROM gateway_ops.desired_configs
-ORDER BY hardware_id, version DESC";
+/// Every gateway's latest version, with `for_latest_binding` as in [`CURRENT`].
+const LATEST_VERSIONS: &str = "SELECT config.hardware_id, config.version,
+    COALESCE(binding.tenant_id = config.tenant_id AND binding.binding_id = config.binding_id
+        AND (binding.unbound_at IS NULL) = config.bound, false) AS for_latest_binding
+FROM (
+    SELECT DISTINCT ON (hardware_id) hardware_id, version, tenant_id, binding_id, bound
+    FROM gateway_ops.desired_configs
+    ORDER BY hardware_id, version DESC
+) AS config
+LEFT JOIN LATERAL (
+    SELECT tenant_id, binding_id, unbound_at
+    FROM gateway_ops.gateway_bindings
+    WHERE hardware_id = config.hardware_id
+    ORDER BY position_tx DESC, position_id DESC
+    LIMIT 1
+) AS binding ON true
+ORDER BY config.hardware_id";
 
 /// A gateway's stored desired configuration.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -69,6 +105,10 @@ pub enum ReadError {
     /// A stored row breaks the rules the table and the generation enforce, which cannot happen.
     #[error("a stored desired configuration breaks the rules: {0}")]
     Corrupt(&'static str),
+    /// The gateway's latest version was not made for its latest binding (see the module), so it
+    /// is not returned.
+    #[error("the latest desired configuration of gateway {0} was not made for its latest binding")]
+    NotForLatestBinding(GatewayId),
     /// The database failed.
     #[error(transparent)]
     Database(#[from] TenantDbError),
@@ -101,7 +141,9 @@ impl DesiredConfigs {
     ///
     /// # Errors
     ///
-    /// [`ReadError`] when the database fails or the stored row is corrupt.
+    /// [`ReadError::NotForLatestBinding`] when the latest version was not made for the gateway's
+    /// latest binding (see the module), and [`ReadError`]'s other variants when the database
+    /// fails or the stored row is corrupt.
     pub async fn current(
         &self,
         hardware_id: &GatewayId,
@@ -112,10 +154,17 @@ impl DesiredConfigs {
             .fetch_optional(&mut *tx)
             .await?;
         tx.commit().await?;
-        row.as_ref().map(stored_config).transpose()
+        let Some(row) = row else {
+            return Ok(None);
+        };
+        if !row.try_get::<bool, _>("for_latest_binding")? {
+            return Err(ReadError::NotForLatestBinding(hardware_id.clone()));
+        }
+        stored_config(&row).map(Some)
     }
 
-    /// Every gateway's latest version, by hardware ID.
+    /// Every gateway's latest version, by hardware ID. A gateway whose latest version was not
+    /// made for its latest binding (see the module) is left out and logged at ERROR.
     ///
     /// # Errors
     ///
@@ -124,14 +173,25 @@ impl DesiredConfigs {
         let mut tx = self.reader.begin().await?;
         let rows = sqlx::query(LATEST_VERSIONS).fetch_all(&mut *tx).await?;
         tx.commit().await?;
-        rows.iter()
-            .map(|row| {
-                Ok(LatestVersion {
-                    hardware_id: gateway(row)?,
-                    version: version(row)?,
-                })
-            })
-            .collect()
+        let mut latest = Vec::with_capacity(rows.len());
+        for row in &rows {
+            let hardware_id = gateway(row)?;
+            let version = version(row)?;
+            if !row.try_get::<bool, _>("for_latest_binding")? {
+                tracing::error!(
+                    hardware_id = hardware_id.as_str(),
+                    version = version.get(),
+                    "latest desired configuration not made for the gateway's latest binding; \
+                     left out"
+                );
+                continue;
+            }
+            latest.push(LatestVersion {
+                hardware_id,
+                version,
+            });
+        }
+        Ok(latest)
     }
 }
 
