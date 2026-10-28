@@ -4,7 +4,7 @@
 
 閘道與產品無關（決策 28）：租戶只是不透明的 ID，設定用自己的前綴 `AI_GATEWAY`，也不依賴 `crates/contract`（`tests/no_contract.rs` 以 `cargo tree -p ai-gateway` 檢查，service-kit 以 `default-features = false` 引入）。
 
-目前支援兩種協定：Anthropic Messages（含串流）與 OpenAI Decisions。模型角色的模型清單可以在執行中更換：更換存在 Postgres，每個轉送請求都確認設定有沒有變（見「資料庫」與「多副本」，Laysi/trustiot-v2#605）；更換用的管理 API 在自己的管理埠，只給身分服務呼叫（見「管理 API」與「驗證方式」，Laysi/trustiot-v2#606）。不在這裡：管理埠的 Service 與授權（Laysi/trustiot-v2#607）、身分服務的平台管理員路由（Laysi/trustiot-v2#608）、用量帳本與租戶額度（Laysi/trustiot-v2#140）、Vertex AI（Laysi/trustiot-v2#440）。部署（映像 `deploy/images/ai-gateway`、chart 從 values 的 `ai` 產生的設定、金鑰的 Secret、只允許三個呼叫端的 AuthorizationPolicy）見 [chart README](../../deploy/chart/README.md)「AI 閘道」（Laysi/trustiot-v2#536）。
+目前支援兩種協定：Anthropic Messages（含串流）與 OpenAI Decisions。模型角色的模型清單可以在執行中更換：更換存在 Postgres，每個轉送請求都確認設定有沒有變（見「資料庫」與「多副本」，Laysi/trustiot-v2#605）；更換用的管理 API 在自己的管理埠，只給身分服務呼叫（見「管理 API」與「驗證方式」，Laysi/trustiot-v2#606）。不在這裡：身分服務的平台管理員路由（Laysi/trustiot-v2#608）、用量帳本與租戶額度（Laysi/trustiot-v2#140）、Vertex AI（Laysi/trustiot-v2#440）。部署（映像 `deploy/images/ai-gateway`、chart 從 values 的 `ai` 產生的設定、金鑰的 Secret、只允許三個呼叫端到 API 埠的 AuthorizationPolicy）見 [chart README](../../deploy/chart/README.md)「AI 閘道」（Laysi/trustiot-v2#536）；管理埠的 Service 與只允許身分服務的授權見同一份 README「服務間授權（mesh）」的「AI 閘道的管理埠」（Laysi/trustiot-v2#607）。
 
 | 檔案 | 內容 |
 | --- | --- |
@@ -124,7 +124,7 @@ HTTP 200 而且 `ai-gateway-model` 是那個供應商的模型，表示金鑰可
 | --- | --- | --- | --- |
 | `max_request_bytes` | `AI_GATEWAY__MAX_REQUEST_BYTES` | 32 MiB | 請求本文上限（Anthropic Messages 的上限）；1 KiB 到 256 MiB |
 | `http.request_timeout` | `AI_GATEWAY__HTTP__REQUEST_TIMEOUT` | `30s`（service-kit） | 見「時間上限」；部署要調高 |
-| `admin.listen_addr` | `AI_GATEWAY__ADMIN__LISTEN_ADDR` | `127.0.0.1:8082` | 管理 API 的埠（見「管理 API」）；預設只聽 loopback，chart 加上只允許身分服務的授權時才改成 `0.0.0.0:8082`（見「驗證方式」）。埠被占用時不啟動 |
+| `admin.listen_addr` | `AI_GATEWAY__ADMIN__LISTEN_ADDR` | `127.0.0.1:8082` | 管理 API 的埠（見「管理 API」）；預設只聽 loopback；chart 在身分服務也部署時改成 `0.0.0.0:<admin 埠>`，同時加上只允許身分服務的授權（見「驗證方式」）。埠被占用時不啟動 |
 
 資料庫（見「資料庫」；chart 從平台設定與 migration Job 產生的密碼填入這些變數，見 chart README「AI 閘道」）：
 
@@ -233,13 +233,13 @@ curl -sS -X DELETE "http://<admin>/internal/admin/v1/roles/main?expected_version
 
 閘道不驗證任何呼叫端，管理埠也一樣（決策 27、28：不驗證內部身分、沒有 cookie 路由，閘道也不知道 platform admin 是什麼；2026-10-23 對 Laysi/trustiot-v2#537 的決定）。安全靠三層，各自負責一件事：
 
-1. **誰能連到管理埠：mesh。** chart 給管理埠自己的 Service、AuthorizationPolicy 與 NetworkPolicy，只允許身分服務的身分（SPIFFE principal）連進來；轉送的呼叫端（assistant、knowledge、alerts）只能連 API 埠（Laysi/trustiot-v2#607）。這與身分服務的 token exchange 埠、certs 的 broker-certs 埠是同一種做法。
+1. **誰能連到管理埠：mesh。** chart 給管理埠自己的 Service、AuthorizationPolicy 與 NetworkPolicy（`<release>-ai-gateway-admin`），只允許身分服務的身分（SPIFFE principal）連進來；轉送的呼叫端（assistant、knowledge、alerts）只能連 API 埠（Laysi/trustiot-v2#607）。這與身分服務的 token exchange 埠、certs 的 broker-certs 埠是同一種做法。細節見 [chart README](../../deploy/chart/README.md)「服務間授權（mesh）」的「AI 閘道的管理埠」與「呼叫矩陣」；這條同步呼叫為什麼是決策 4 的例外見決策 28。
 2. **這個人能不能更換：身分服務。** 身分服務的 `/api/identity/v1/platform/ai/model-roles` 路由檢查登入、CSRF 與平台管理員身分，通過後才呼叫管理埠（Laysi/trustiot-v2#608）。身分服務本來就簽發每個使用者的 token，被入侵時本來就能做任何事，給它這個埠不增加新的信任對象。
 3. **更換本身合不合法：閘道。** 角色要存在、模型要符合設定的規則與角色的協定、版本要是目前的版本；不合格的更換什麼都不寫（見「管理 API」與「資料庫」）。
 
 `ai-gateway-actor` 只是記錄，不是驗證：它是身分服務告訴閘道「這次是誰要求的」，閘道照記不查。它可信的程度等於呼叫端：mesh 只讓身分服務連到管理埠，所以變更紀錄裡的操作者就是身分服務檢查過的人。閘道只擋掉不合格的值（不是 1 到 128 個可列印 ASCII），讓紀錄與日誌不會被控制字元或過長的值弄亂。
 
-管理埠的預設位址是 `127.0.0.1:8082`，只有同一個 pod 連得到。原因：在 Laysi/trustiot-v2#607 之前，閘道的 AuthorizationPolicy 允許三個呼叫端連任何埠，管理埠若預設聽 `0.0.0.0`，它們就能直接以 pod 位址呼叫管理 API。chart 在 Laysi/trustiot-v2#607 加上管理埠的 Service 與只允許身分服務的授權時，同時把 `AI_GATEWAY__ADMIN__LISTEN_ADDR` 設成 `0.0.0.0:8082`；在那之前，管理 API 只有測試與 `kubectl port-forward` 進 pod 連得到。
+管理埠的預設位址是 `127.0.0.1:8082`，只有同一個 pod 連得到。原因：閘道的 AuthorizationPolicy 若允許呼叫端連任何埠（Laysi/trustiot-v2#607 之前就是這樣），管理埠預設聽 `0.0.0.0` 時，它們就能直接以 pod 位址呼叫管理 API。chart 只在加上管理埠的 Service 與只允許身分服務的授權時（AI 閘道與身分服務都部署），才把 `AI_GATEWAY__ADMIN__LISTEN_ADDR` 設成 `0.0.0.0:<admin 埠>`；這個變數保留給 chart，`env` 設不了。沒有身分服務時，管理 API 只有 `kubectl port-forward` 進 pod 連得到。
 
 ## 金鑰與 TLS
 

@@ -77,10 +77,11 @@ spec:
     {{- include "trustiot.selectorLabels" . | nindent 4 }}
   ports:
     {{- range .config.ports }}
-    {{- /* The identity service's token exchange and the certs service's MQTT broker certificate
-    issuance have a Service of their own (templates/token-exchange.yaml, Laysi/trustiot-v2#106;
-    templates/certs-broker.yaml, Laysi/trustiot-v2#557). */}}
-    {{- if not (or (and (eq $.name "identity") (eq .name "token-exchange")) (and (eq $.name "certs") (eq .name "broker-certs"))) }}
+    {{- /* The identity service's token exchange, the certs service's MQTT broker certificate
+    issuance and the AI gateway's admin API have a Service of their own
+    (templates/token-exchange.yaml, Laysi/trustiot-v2#106; templates/certs-broker.yaml,
+    Laysi/trustiot-v2#557; templates/ai-gateway-admin.yaml, Laysi/trustiot-v2#607). */}}
+    {{- if not (or (and (eq $.name "identity") (eq .name "token-exchange")) (and (eq $.name "certs") (eq .name "broker-certs")) (and (eq $.name "ai-gateway") (eq .name "admin"))) }}
     - name: {{ .name }}
       port: {{ .servicePort | default .containerPort }}
       targetPort: {{ .name }}
@@ -96,8 +97,8 @@ spec:
 Container env: the chart's variables first (OTEL_SERVICE_NAME, the collector endpoint, SENTRY_DSN,
 the Postgres CA file, login role, password and pool size for a service that uses Postgres, the
 credentials the service lists, for identity, its routes and signing key settings, for certs, its CA
-files, for mqtt-bridge, the broker's address, and for assistant, the addresses of the services it
-calls),
+files, for mqtt-bridge, the broker's address, for assistant, the addresses of the services it
+calls, and for ai-gateway, its admin API's listen address),
 then serviceDefaults.env and services.<name>.env.
 Custom env cannot take over what the chart controls:
 - names starting with TRUSTIOT_ plus a letter or digit, SENTRY_ or OTEL_ are reserved, so the
@@ -132,7 +133,11 @@ Custom env cannot take over what the chart controls:
   names of its platform settings and settings file (AI_GATEWAY_ plus a letter or digit), its
   providers and roles (AI_GATEWAY__PROVIDERS__*, AI_GATEWAY__ROLES__*) and every other variable of
   its ConfigMap are the chart's ("trustiot.aiGateway.config"), so the providers' key variables,
-  endpoints and models come from values.ai only; container env would win over the ConfigMap.
+  endpoints and models come from values.ai only; container env would win over the ConfigMap. Its
+  admin API's settings (AI_GATEWAY__ADMIN__*) are the chart's too ("trustiot.aiGateway.env"):
+  the admin API listens on the pod's address only while the identity service, the one caller its
+  policies admit, is deployed (templates/ai-gateway-admin.yaml, Laysi/trustiot-v2#607), and on
+  loopback otherwise.
 Returns a YAML list; use with fromYamlArray.
 */}}
 {{- define "trustiot.service.env" -}}
@@ -209,6 +214,9 @@ generates its password into the service's Secret and sets it
 {{- if $reserved -}}
 {{- fail (printf "services.ai-gateway: env %s is set by the chart from values.ai (the providers, their key variables and endpoints, the model roles and the gateway's time limits)" .name) -}}
 {{- end -}}
+{{- if regexMatch "(?i)^AI_GATEWAY__ADMIN__" .name -}}
+{{- fail (printf "services.ai-gateway: env %s is set by the chart: the admin API changes every tenant's models, so it listens beyond loopback only for the identity service, behind its own Service and policies (templates/ai-gateway-admin.yaml, Laysi/trustiot-v2#607)" .name) -}}
+{{- end -}}
 {{- end -}}
 {{- if and $dbEnv (or (regexMatch (printf "(?i)^%s__DATABASE__(PLATFORM_)?(USERNAME|PASSWORD)$" $prefix) .name) (regexMatch (printf "(?i)^%s_POSTGRES_" $prefix) .name)) -}}
 {{- fail (printf "services.%s: env %s is set by the chart: where Postgres is, the service's login roles and the passwords the migration Job generates for them" $name .name) -}}
@@ -268,7 +276,11 @@ under the service's own prefix. */ -}}
 {{- if eq $name "assistant" -}}
 {{- $assistantEnv = include "trustiot.assistant.env" .root | fromYamlArray -}}
 {{- end -}}
-{{- $env = concat $env $dbEnv $clickhouseEnv $credentialEnv $identityEnv $certsEnv $mqttBridgeEnv $assistantEnv ($config.env | default list) -}}
+{{- $aiGatewayEnv := list -}}
+{{- if eq $name "ai-gateway" -}}
+{{- $aiGatewayEnv = include "trustiot.aiGateway.env" .root | fromYamlArray -}}
+{{- end -}}
+{{- $env = concat $env $dbEnv $clickhouseEnv $credentialEnv $identityEnv $certsEnv $mqttBridgeEnv $assistantEnv $aiGatewayEnv ($config.env | default list) -}}
 {{- $names := list -}}
 {{- range $env -}}
 {{- $names = append $names .name -}}

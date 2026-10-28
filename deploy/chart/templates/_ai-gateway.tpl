@@ -26,6 +26,73 @@ Returns a YAML list; use with fromYamlArray.
 {{- end -}}
 
 {{/*
+The only services that may call the AI gateway's admin API (Laysi/trustiot-v2#606,
+Laysi/trustiot-v2#607; services/ai-gateway/README.md, 「驗證方式」): the identity service, which
+checks the platform administrator before it calls. The admin API changes the models of every
+tenant's AI calls and the gateway authenticates nobody, so the mesh alone keeps everybody else
+out: the admin port has its own Service and policies (templates/ai-gateway-admin.yaml) that admit
+these services and nobody else, and the gateway's own policy admits its callers on its API ports
+only ("trustiot.mesh.aiGatewayPorts"). Fixed in the chart: mesh.calls cannot add a manager.
+Returns a YAML list; use with fromYamlArray.
+*/}}
+{{- define "trustiot.aiGateway.managers" -}}
+{{- list "identity" | toYaml -}}
+{{- end -}}
+
+{{/*
+The port of the Service <release>-ai-gateway-admin (templates/ai-gateway-admin.yaml), which the
+identity service calls for the admin API: always 8082, whatever container port admin has, so the
+address http://<release>-ai-gateway-admin.<namespace>.svc:8082 never changes. The Service forwards
+to the container port by name; the policies match the container port.
+*/}}
+{{- define "trustiot.aiGateway.adminServicePort" -}}
+8082
+{{- end -}}
+
+{{/*
+Whether the admin port's Service and policies render: while the AI gateway and one of its managers
+("trustiot.aiGateway.managers") are enabled. "trustiot.mesh.plan" fails the render when they are
+but the gateway has no admin port. Returns "true" or "".
+*/}}
+{{- define "trustiot.aiGateway.adminEnabled" -}}
+{{- if include "trustiot.aiGateway.enabled" . -}}
+{{- range include "trustiot.aiGateway.managers" . | fromYamlArray -}}
+{{- with get $.Values.services . -}}
+{{- if .enabled -}}true{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+The address of the AI gateway's admin API, http://<release>-ai-gateway-admin.<namespace>.svc:8082
+("trustiot.aiGateway.adminServicePort").
+*/}}
+{{- define "trustiot.aiGateway.adminUrl" -}}
+{{- printf "http://%s.%s.svc:%s" (include "trustiot.componentName" (dict "root" . "name" "ai-gateway-admin")) .Release.Namespace (include "trustiot.aiGateway.adminServicePort" .) -}}
+{{- end -}}
+
+{{/*
+Env entries only the AI gateway gets besides its ConfigMap, set by the chart (custom env cannot
+repeat a name, "trustiot.service.env"): AI_GATEWAY__ADMIN__LISTEN_ADDR, 0.0.0.0 on the admin port
+of services.ai-gateway.ports, so the gateway listens where the Service and the policies point
+("trustiot.mesh.aiGatewayPorts"). Only while the admin port's Service and policies render
+("trustiot.aiGateway.adminEnabled"): otherwise the gateway keeps its default, 127.0.0.1:8082,
+which no other pod reaches (services/ai-gateway/README.md, 「驗證方式」).
+Returns a YAML list; use with fromYamlArray.
+*/}}
+{{- define "trustiot.aiGateway.env" -}}
+{{- $env := list -}}
+{{- if include "trustiot.aiGateway.adminEnabled" . -}}
+{{- $ports := include "trustiot.mesh.aiGatewayPorts" . | fromYaml -}}
+{{- if $ports.admin -}}
+{{- $env = append $env (dict "name" "AI_GATEWAY__ADMIN__LISTEN_ADDR" "value" (printf "0.0.0.0:%d" (int $ports.admin))) -}}
+{{- end -}}
+{{- end -}}
+{{- toYaml $env -}}
+{{- end -}}
+
+{{/*
 The providers the chart knows, by the name under values.ai.providers: the gateway's protocol for
 it and the variable that carries its key into the pod ("trustiot.credentialCatalog", credential
 ai). The gateway reads the key from the variable its key_env names (services/ai-gateway/README.md,

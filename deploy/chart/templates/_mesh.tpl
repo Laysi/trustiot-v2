@@ -215,6 +215,36 @@ no such port>}; use with fromYaml.
 {{- end -}}
 
 {{/*
+The AI gateway's ports as its AuthorizationPolicy splits them (Laysi/trustiot-v2#607): the admin
+API, the container port named admin (the gateway's admin.listen_addr, where it serves
+/internal/admin/v1/ and nothing else, Laysi/trustiot-v2#606), and its API ports, every other port
+in ports (the health port is never one). The services that list ai-gateway in mesh.calls (the AI
+assistant, the knowledge base and alerts, "trustiot.aiGateway.callers") reach the API ports only
+(the gateway's policy, templates/mesh.yaml); the identity service ("trustiot.aiGateway.managers")
+reaches the admin port, and only that port (its own Service and policies,
+templates/ai-gateway-admin.yaml), so no caller of the forwarding API can change the models.
+Fails when no API port is left: a rule with an empty port list would match every port.
+Argument: the root context. Returns YAML {api: [<number>, ...], admin: <number, 0 when there is
+no such port>}; use with fromYaml.
+*/}}
+{{- define "trustiot.mesh.aiGatewayPorts" -}}
+{{- $config := include "trustiot.serviceConfig" (dict "root" . "name" "ai-gateway" "values" (get .Values.services "ai-gateway")) | fromYaml -}}
+{{- $api := list -}}
+{{- $admin := 0 -}}
+{{- range $config.ports -}}
+{{- if eq .name "admin" -}}
+{{- $admin = int .containerPort -}}
+{{- else -}}
+{{- $api = append $api (int .containerPort) -}}
+{{- end -}}
+{{- end -}}
+{{- if not $api -}}
+{{- fail "services.ai-gateway.ports: the API port (http) is missing; admin serves the admin API only" -}}
+{{- end -}}
+{{- dict "api" $api "admin" $admin | toYaml -}}
+{{- end -}}
+
+{{/*
 Who may call each enabled service and in-cluster component. Callers come from these places only:
 - mesh.calls, the list of calls (<caller service>: [<callee service or component>, ...]); a
   call whose caller or callee is disabled is skipped, so the list can name services before
@@ -237,7 +267,12 @@ Who may call each enabled service and in-cluster component. Callers come from th
   the broker's certificate CronJob (mqtt-broker-certificate, templates/mqtt-broker-certificate.yaml)
   reaches the certs service's broker-certs port, and only that port ("trustiot.mesh.certsPorts"),
   while both run. It is the certs entry's brokerCallers, not a caller of the API ports' rule:
-  templates/certs-broker.yaml renders its Service and policies.
+  templates/certs-broker.yaml renders its Service and policies;
+- the AI gateway's admin API (Laysi/trustiot-v2#606, Laysi/trustiot-v2#607): the identity service
+  ("trustiot.aiGateway.managers", fixed in the chart) reaches the gateway's admin port, and only
+  that port ("trustiot.mesh.aiGatewayPorts"), while both run. It is the ai-gateway entry's
+  managers, not a caller of the API ports' rule: templates/ai-gateway-admin.yaml renders its
+  Service and policies.
 The MQTT broker admits each of its callers on one port only ("trustiot.mqtt-broker.callers"):
 its entry also has portRules, [{callers, ports}], and mesh.calls may list it as the callee of
 those callers only. mesh.calls may list ai-gateway as the callee of the AI assistant, the knowledge
@@ -253,6 +288,9 @@ gateway reach), exchangeCallers (the callers on behalf of users, sorted) and exc
 only port they reach); the render fails when there are such callers but no token-exchange port.
 The certs service's entry likewise has apiPorts, brokerCallers (the broker's certificate CronJob,
 while the broker runs) and brokerPort; the render fails when the broker runs but there is no broker-certs port.
+The AI gateway's entry likewise has apiPorts (the only ports its callers reach), managers (the
+enabled services of "trustiot.aiGateway.managers", sorted) and adminPort; the render fails when
+there are managers but no admin port.
 */}}
 {{- define "trustiot.mesh.plan" -}}
 {{- $v := .Values -}}
@@ -361,6 +399,25 @@ the MQTT broker's server certificate, for the broker's certificate CronJob alone
 {{- $_ := set $planned "apiPorts" $ports.api -}}
 {{- $_ := set $planned "brokerCallers" $brokerCallers -}}
 {{- $_ := set $planned "brokerPort" $ports.broker -}}
+{{- end -}}
+{{- if eq $name "ai-gateway" -}}
+{{- /* The API ports forward the model calls, for the callers in mesh.calls; the admin port
+changes the model roles' models, for the identity service alone (Laysi/trustiot-v2#607). */ -}}
+{{- $ports := include "trustiot.mesh.aiGatewayPorts" $ | fromYaml -}}
+{{- $managers := list -}}
+{{- range include "trustiot.aiGateway.managers" $ | fromYamlArray -}}
+{{- $entry := get $v.services . -}}
+{{- if and $entry $entry.enabled -}}
+{{- $managers = append $managers . -}}
+{{- end -}}
+{{- end -}}
+{{- $managers = $managers | sortAlpha -}}
+{{- if and $managers (not $ports.admin) -}}
+{{- fail (printf "services.ai-gateway.ports: the admin API needs the port named admin (the gateway's admin.listen_addr, default 8082), because %s calls it (Laysi/trustiot-v2#607); keep it when overriding the list" (join ", " $managers)) -}}
+{{- end -}}
+{{- $_ := set $planned "apiPorts" $ports.api -}}
+{{- $_ := set $planned "managers" $managers -}}
+{{- $_ := set $planned "adminPort" $ports.admin -}}
 {{- end -}}
 {{- if eq $name "mqtt-broker" -}}
 {{- /* Each caller on its own port: mqtt-bridge on the gateway port, the account holders on the

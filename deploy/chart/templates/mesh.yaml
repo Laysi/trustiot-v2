@@ -11,8 +11,11 @@ still refuses a call that is not on the list.
    Laysi/trustiot-v2#106). The certs service's policy likewise admits its callers on its API
    ports only ("trustiot.mesh.certsPorts"): its broker-certs port, which issues the MQTT broker's
    server certificate, has its own Service and policies, for the broker's certificate CronJob
-   alone (templates/certs-broker.yaml, Laysi/trustiot-v2#557, Laysi/trustiot-v2#535). The MQTT broker's policy admits each
-   caller on its own port only
+   alone (templates/certs-broker.yaml, Laysi/trustiot-v2#557, Laysi/trustiot-v2#535). The AI
+   gateway's policy admits its callers on its API ports only ("trustiot.mesh.aiGatewayPorts"): its
+   admin port, which changes the model roles' models, has its own Service and policies, for the
+   identity service alone (templates/ai-gateway-admin.yaml, Laysi/trustiot-v2#607). The MQTT
+   broker's policy admits each caller on its own port only
    (portRules: mqtt-bridge on the gateway port, the services with a broker account on the
    service port; Laysi/trustiot-v2#84).
 2. NetworkPolicy: everything in the namespace is denied by default; each service and component
@@ -21,8 +24,8 @@ still refuses a call that is not on the list.
    lets those through unauthorized. It only stops new connections: ztunnel reuses HBONE
    connections, and a NetworkPolicy never cuts one that is already open, so the
    AuthorizationPolicy is the primary layer. It sees HBONE only, never the application port
-   inside the tunnel, so the port splits of the identity and certs services are the
-   AuthorizationPolicy's alone.
+   inside the tunnel, so the port splits of the identity and certs services and the AI gateway
+   are the AuthorizationPolicy's alone.
 No waypoint is deployed: L4 identity is all these rules need. Add one only for L7 rules between
 services, and move the affected policies to it (README.md).
 */ -}}
@@ -92,9 +95,10 @@ spec:
               - {{ . | quote }}
               {{- end }}
       {{- with $service.apiPorts }}
-      # The identity and certs services: their API ports only, never the token exchange's
-      # (templates/token-exchange.yaml) or the MQTT broker's server certificate's
-      # (templates/certs-broker.yaml).
+      # The identity and certs services and the AI gateway: their API ports only, never the
+      # token exchange's (templates/token-exchange.yaml), the MQTT broker's server certificate's
+      # (templates/certs-broker.yaml) or the AI gateway's admin API's
+      # (templates/ai-gateway-admin.yaml).
       to:
         - operation:
             ports:

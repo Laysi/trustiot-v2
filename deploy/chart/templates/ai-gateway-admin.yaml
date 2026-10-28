@@ -1,0 +1,104 @@
+{{- /*
+The AI gateway's admin API (Laysi/trustiot-v2#607; services/ai-gateway/README.md, "管理 API"): the
+gateway serves it on a port of its own, the container port named admin (the gateway's
+admin.listen_addr, default 8082), which reads and changes which model each model role uses. A
+change there moves every tenant's assistant to another provider or model, so only the identity
+service, which validates and records the platform administrators' changes (decision 28,
+Laysi/trustiot-v2#608), may call it; the services that forward model calls through the gateway
+(assistant, knowledge, alerts) reach its API ports only. Its own objects, all named
+<release>-ai-gateway-admin:
+- a Service with that port only, which the identity service addresses
+  (TRUSTIOT_AI_GATEWAY_ADMIN_URL, http://<release>-ai-gateway-admin.<namespace>.svc:8082): its
+  port is always 8082 ("trustiot.aiGateway.adminServicePort") and forwards to the container port
+  by name, so overriding the container port does not move the address; the gateway's own
+  Service leaves the port out ("trustiot.service.service");
+- an AuthorizationPolicy (ztunnel, L4) that admits the identity service's ServiceAccount (the
+  plan's managers, "trustiot.aiGateway.managers") on that port only. The gateway's own policy
+  (templates/mesh.yaml) admits the services that list ai-gateway in mesh.calls on its API ports
+  only (the plan's apiPorts). ALLOW policies add up: a connection passes when one of them
+  matches;
+- a NetworkPolicy that admits HBONE from the identity service's pods. It cannot see the
+  application port inside the tunnel, so the port split is the AuthorizationPolicy's alone.
+Rendered while the AI gateway and the identity service are both enabled; the plan fails the
+render when they are but the gateway has no admin port. Without the identity service nothing
+here renders and the gateway keeps its admin API on loopback ("trustiot.aiGateway.env").
+*/ -}}
+{{- if hasKey .Values.services "ai-gateway-admin" }}
+{{- fail "services.ai-gateway-admin: the name belongs to the AI gateway's admin API (its Service and policies, templates/ai-gateway-admin.yaml)" }}
+{{- end }}
+{{- $mesh := include "trustiot.mesh.plan" . | fromYaml }}
+{{- range $service := $mesh.services }}
+{{- if and (eq $service.name "ai-gateway") $service.managers $service.adminPort }}
+{{- $gateway := dict "root" $ "name" "ai-gateway" }}
+{{- $ctx := dict "root" $ "name" "ai-gateway-admin" }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "trustiot.componentName" $ctx }}
+  labels:
+    {{- include "trustiot.componentLabels" $ctx | nindent 4 }}
+spec:
+  # Always ClusterIP, like every service's (templates/_service.tpl).
+  type: ClusterIP
+  selector:
+    {{- include "trustiot.selectorLabels" $gateway | nindent 4 }}
+  ports:
+    # Fixed, so the identity service's address stays the same when the container port changes
+    # ("trustiot.aiGateway.adminServicePort"); the policies below match the container port,
+    # which is what ztunnel sees.
+    - name: admin
+      port: {{ include "trustiot.aiGateway.adminServicePort" $ }}
+      targetPort: admin
+      protocol: TCP
+      appProtocol: http
+---
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: {{ include "trustiot.componentName" $ctx }}
+  labels:
+    {{- include "trustiot.componentLabels" $ctx | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "trustiot.selectorLabels" $gateway | nindent 6 }}
+  action: ALLOW
+  rules:
+    # The identity service: the admin port only.
+    - from:
+        - source:
+            principals:
+              {{- range $service.managers }}
+              - {{ include "trustiot.mesh.principal" (dict "root" $ "serviceAccount" (include "trustiot.componentName" (dict "root" $ "name" .))) | quote }}
+              {{- end }}
+      to:
+        - operation:
+            ports:
+              - {{ printf "%d" (int $service.adminPort) | quote }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "trustiot.componentName" $ctx }}
+  labels:
+    {{- include "trustiot.componentLabels" $ctx | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "trustiot.selectorLabels" $gateway | nindent 6 }}
+  policyTypes:
+    - Ingress
+  ingress:
+    # Mesh traffic arrives only on ztunnel's HBONE port, from the identity service's pod IP.
+    - from:
+        {{- range $service.managers }}
+        - podSelector:
+            matchLabels:
+              {{- include "trustiot.selectorLabels" (dict "root" $ "name" .) | nindent 14 }}
+        {{- end }}
+      ports:
+        - port: {{ include "trustiot.mesh.hbonePort" $ }}
+          protocol: TCP
+{{- end }}
+{{- end }}
