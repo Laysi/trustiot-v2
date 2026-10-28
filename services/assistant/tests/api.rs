@@ -14,6 +14,9 @@
 //!   past 30 days a conversation cannot be restored, and a purge round removes it with its
 //!   messages while a recently deleted and a live one stay.
 //! - Writes need the JSON content type; every response carries `cache-control: no-store`.
+//! - A user starts at most `MAX_STARTS_PER_DAY` conversations per tenant within 24 hours,
+//!   deleted ones included, however many requests race at the limit; over it 429 with
+//!   `Retry-After`, and nothing is stored.
 //! - A request that waits for a conversation another session holds gives up after the request's
 //!   lock timeout with 503 and changes nothing.
 //! - A database failure answers 503 with nothing of the database's text, and the log has none of
@@ -25,12 +28,12 @@
 mod service;
 mod support;
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use assistant::api::REQUEST_LOCK_TIMEOUT;
-use assistant::store::{self, RunOutcome};
+use assistant::store::{self, MAX_STARTS_PER_DAY, RunOutcome};
 use assistant::tools::{NoDelegation, Tool, ToolContext, ToolError, ToolOutput, ToolSpec};
 use chrono::{DateTime, TimeDelta, Utc};
 use contract::identity::TenantRole;
@@ -44,6 +47,7 @@ use sqlx::{Connection, Row};
 use support::{StandIn, fixture, ok, respond, settings, tool_step};
 use testkit::identity::TestIssuer;
 use testkit::product::{DATABASE, ProductPostgres, product_postgres};
+use tokio::task::JoinSet;
 use uuid::Uuid;
 
 const CONVERSATIONS: &str = "/api/assistant/v1/conversations";
@@ -79,6 +83,29 @@ WHERE conversation_id = $1::uuid";
 /// time.
 const SAME_ACTIVITY: &str = "UPDATE assistant.conversations SET last_activity_at = $2
 WHERE conversation_id::text = ANY ($1)";
+
+/// The superuser stores `$3` conversations of user `$2` in tenant `$1`, started `$4` minutes
+/// ago and, when `$5`, deleted then too: a day's starts without making each one. Returns their
+/// IDs.
+const SEED_STARTS: &str = "INSERT INTO assistant.conversations
+    (tenant_id, conversation_id, user_id, prompt_version, system_prompt, tenant_context, tools,
+     effort, cache_ttl, created_at, last_activity_at, deleted_at)
+SELECT $1::uuid, gen_random_uuid(), $2::uuid, 'seed', '', '', '[]', 'medium', '5m',
+    now() - make_interval(mins => $4), now() - make_interval(mins => $4),
+    CASE WHEN $5 THEN now() - make_interval(mins => $4) END
+FROM generate_series(1, $3)
+RETURNING conversation_id::text";
+
+/// How many conversations user `$2` has stored in tenant `$1`, deleted ones included.
+const STARTED: &str = "SELECT count(*) FROM assistant.conversations
+WHERE tenant_id = $1::uuid AND user_id = $2::uuid";
+
+/// The superuser moves conversation `$1`'s start `$2` minutes back.
+const MOVE_START: &str = "UPDATE assistant.conversations
+SET created_at = now() - make_interval(mins => $2) WHERE conversation_id = $1::uuid";
+
+/// What the assistant logs when a start is refused for the daily limit.
+const START_LIMITED_LOG: &str = "conversation start refused: the user reached the daily limit";
 
 /// Strings planted where the chat must not show them.
 const THINKING_MARKER: &str = "THINKING-MARKER-5e1f";
@@ -229,6 +256,58 @@ impl Api {
             .rows_affected();
         assert_eq!(updated, 1, "the conversation to move back exists");
         tx.commit().await.expect("commit");
+    }
+
+    /// Stores `count` conversations of `user` started `minutes_ago` (see [`SEED_STARTS`]).
+    async fn seed_starts(
+        &self,
+        user: &User,
+        count: i32,
+        minutes_ago: i32,
+        deleted: bool,
+    ) -> Vec<Uuid> {
+        let mut admin = self.product.superuser().await;
+        let ids: Vec<String> = sqlx::query_scalar(SEED_STARTS)
+            .bind(user.tenant.to_string())
+            .bind(user.id.to_string())
+            .bind(count)
+            .bind(minutes_ago)
+            .bind(deleted)
+            .fetch_all(&mut admin)
+            .await
+            .expect("store the day's starts");
+        assert_eq!(ids.len(), usize::try_from(count).expect("a count"));
+        ids.iter().map(|id| id.parse().expect("a UUID")).collect()
+    }
+
+    /// How many conversations `user` has stored, deleted ones included.
+    async fn started(&self, user: &User) -> i64 {
+        let mut admin = self.product.superuser().await;
+        sqlx::query_scalar(STARTED)
+            .bind(user.tenant.to_string())
+            .bind(user.id.to_string())
+            .fetch_one(&mut admin)
+            .await
+            .expect("count the user's conversations")
+    }
+
+    /// Moves conversation `id`'s start `minutes_ago`.
+    async fn move_start(&self, id: Uuid, minutes_ago: i32) {
+        let mut admin = self.product.superuser().await;
+        let moved = sqlx::query(MOVE_START)
+            .bind(id.to_string())
+            .bind(minutes_ago)
+            .execute(&mut admin)
+            .await
+            .expect("move the start back")
+            .rows_affected();
+        assert_eq!(moved, 1, "the conversation to move back exists");
+    }
+
+    /// Starts a conversation through the API and returns the response, whatever it is.
+    async fn try_start(&self, user: &User) -> Reply {
+        self.call(user, Method::POST, CONVERSATIONS, Some(&json!({})))
+            .await
     }
 }
 
@@ -1143,6 +1222,149 @@ async fn starting_a_conversation() {
         "POST {CONVERSATIONS}: 201 {}; logged {logged}",
         created.body
     );
+}
+
+/// A user starts at most `MAX_STARTS_PER_DAY` conversations in a tenant within 24 hours by the
+/// database clock, deleted ones included: the next start answers 429 `rate_limited` with the
+/// limit and `Retry-After`, stores nothing and logs one WARN line with the user and tenant.
+/// Deleting does not give a start back; another user of the tenant and the same user in another
+/// tenant are not affected; a start more than 24 hours ago no longer counts.
+#[tokio::test(flavor = "multi_thread")]
+async fn starting_conversations_is_limited_per_user_and_day() {
+    let Some(api) = api().await else { return };
+    let max = i32::try_from(MAX_STARTS_PER_DAY).expect("a small limit");
+    let owner = User::new(TenantId::generate(), TenantRole::Viewer);
+    // The day's starts but one, all an hour ago; 40 of them deleted since, which still count.
+    let kept = api.seed_starts(&owner, max - 41, 60, false).await;
+    api.seed_starts(&owner, 40, 60, true).await;
+    let last = api.create(&owner).await;
+    assert_eq!(api.started(&owner).await, MAX_STARTS_PER_DAY);
+
+    let refused = api.try_start(&owner).await;
+    refused.expect_error(429, "rate_limited", "conversation.start_limited");
+    assert_eq!(
+        refused.json()["details"],
+        json!({"max": MAX_STARTS_PER_DAY}),
+        "{}",
+        refused.body
+    );
+    assert_eq!(refused.header("cache-control"), Some("no-store"));
+    assert_eq!(refused.header("content-type"), Some("application/json"));
+    assert_eq!(refused.header("location"), None);
+    let retry_after: u64 = refused
+        .header("retry-after")
+        .and_then(|value| value.parse().ok())
+        .unwrap_or_else(|| panic!("no Retry-After in seconds: {:?}", refused.headers));
+    // The oldest start of the day was an hour ago, so it leaves the 24 hours within 23.
+    assert!(
+        (22 * 3600..=23 * 3600).contains(&retry_after),
+        "Retry-After {retry_after}"
+    );
+    assert_eq!(
+        api.started(&owner).await,
+        MAX_STARTS_PER_DAY,
+        "nothing stored over the limit"
+    );
+    let logged = api.service.wait_logged(START_LIMITED_LOG).await;
+    assert_eq!(logged["level"], "WARN", "{logged}");
+    assert_eq!(
+        logged["fields"]["user_id"],
+        owner.id.to_string(),
+        "{logged}"
+    );
+    assert_eq!(
+        logged["fields"]["tenant_id"],
+        owner.tenant.to_string(),
+        "{logged}"
+    );
+    assert_eq!(
+        logged["fields"]["max"],
+        json!(MAX_STARTS_PER_DAY),
+        "{logged}"
+    );
+
+    // Deleting does not give a start back: the conversation stays stored until the purge.
+    api.call(&owner, Method::DELETE, &conversation(last), None)
+        .await
+        .expect_status(204);
+    api.try_start(&owner)
+        .await
+        .expect_error(429, "rate_limited", "conversation.start_limited");
+
+    // The limit is the user's in the tenant.
+    let colleague = User::new(owner.tenant, TenantRole::Viewer);
+    api.create(&colleague).await;
+    let elsewhere = User {
+        tenant: TenantId::generate(),
+        ..owner
+    };
+    api.create(&elsewhere).await;
+
+    // A start more than 24 hours ago no longer counts: one more start, then the limit again.
+    api.move_start(kept[0], 24 * 60 + 1).await;
+    api.create(&owner).await;
+    api.try_start(&owner)
+        .await
+        .expect_error(429, "rate_limited", "conversation.start_limited");
+    assert_eq!(
+        api.started(&owner).await,
+        MAX_STARTS_PER_DAY + 1,
+        "the day's starts and the one before the day"
+    );
+    assert_eq!(
+        api.service.stdout.messages(START_LIMITED_LOG).len(),
+        3,
+        "one line per refused start"
+    );
+    println!(
+        "POST {CONVERSATIONS} after {MAX_STARTS_PER_DAY} starts in 24 hours: 429 {} with \
+         retry-after {retry_after}; logged {logged}",
+        refused.body
+    );
+}
+
+/// Starts that race at the limit: the start lock orders the count and the insert of each, so
+/// exactly the free starts succeed and no more than `MAX_STARTS_PER_DAY` are stored, however
+/// the requests interleave.
+#[tokio::test(flavor = "multi_thread")]
+async fn concurrent_starts_stop_at_the_limit() {
+    const FREE: i64 = 5;
+    const RACERS: usize = 24;
+    let Some(api) = api().await else { return };
+    let owner = User::new(TenantId::generate(), TenantRole::Viewer);
+    let seeded = i32::try_from(MAX_STARTS_PER_DAY - FREE).expect("a small limit");
+    api.seed_starts(&owner, seeded, 60, false).await;
+
+    let api = Arc::new(api);
+    let mut racers = JoinSet::new();
+    for _ in 0..RACERS {
+        let api = Arc::clone(&api);
+        racers.spawn(async move { api.try_start(&owner).await });
+    }
+    let mut statuses = BTreeMap::<u16, usize>::new();
+    while let Some(reply) = racers.join_next().await {
+        let reply = reply.expect("a racing start");
+        match reply.status {
+            201 => {}
+            429 => reply.expect_error(429, "rate_limited", "conversation.start_limited"),
+            // A start that waited for the lock longer than the request's lock timeout, on a
+            // loaded machine.
+            503 => reply.expect_error(503, "unavailable", "error.unavailable"),
+            other => panic!("{other} {}", reply.body),
+        }
+        *statuses.entry(reply.status).or_default() += 1;
+    }
+    let created = i64::try_from(statuses.get(&201).copied().unwrap_or_default()).expect("a count");
+    let stored = api.started(&owner).await;
+    assert_eq!(stored, MAX_STARTS_PER_DAY - FREE + created, "{statuses:?}");
+    assert!(
+        stored <= MAX_STARTS_PER_DAY,
+        "{stored} stored: {statuses:?}"
+    );
+    if !statuses.contains_key(&503) {
+        assert_eq!(created, FREE, "{statuses:?}");
+    }
+    println!("{RACERS} racing starts with {FREE} free: {statuses:?}; {stored} stored");
 }
 
 /// What the database says about the failure below, in its message and DETAIL; none of it may

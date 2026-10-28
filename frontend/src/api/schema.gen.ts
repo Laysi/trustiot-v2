@@ -3185,6 +3185,17 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
+            /** @description The caller started 100 conversations in this tenant within the last 24 hours, deleted ones included (`rate_limited`, key `conversation.start_limited`, `details.max`); nothing was stored. */
+            429: {
+                headers: {
+                    /** @description Seconds until the oldest of those conversations leaves the 24 hours and a start is allowed again. */
+                    "retry-after"?: number;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
             /** @description The database failed (`unavailable`); nothing was written. */
             503: {
                 headers: {

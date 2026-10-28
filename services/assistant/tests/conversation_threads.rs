@@ -16,6 +16,8 @@
 //! - One question runs at a time per conversation; a question past its deadline is interrupted
 //!   by the next.
 //! - Another user of the tenant finds none of it.
+//! - A user starts at most `MAX_STARTS_PER_DAY` conversations per tenant in 24 hours; storing
+//!   one that is stored already (a retry) is not a new start.
 //! - The database sets every time itself and refuses an oversized message; a store error carries
 //!   no database text.
 //!
@@ -90,6 +92,19 @@ WHERE conversation_id = $1::uuid";
 const AGE_RUN: &str = "UPDATE assistant.runs
 SET started_at = started_at - interval '2 hours', deadline_at = deadline_at - interval '2 hours'
 WHERE run_id = $1::uuid";
+
+/// The superuser stores `$3` conversations of user `$2` in tenant `$1`, started `$4` minutes
+/// ago: a day's starts without making each one.
+const SEED_STARTS: &str = "INSERT INTO assistant.conversations
+    (tenant_id, conversation_id, user_id, prompt_version, system_prompt, tenant_context, tools,
+     effort, cache_ttl, created_at, last_activity_at)
+SELECT $1::uuid, gen_random_uuid(), $2::uuid, 'seed', '', '', '[]', 'medium', '5m',
+    now() - make_interval(mins => $4), now() - make_interval(mins => $4)
+FROM generate_series(1, $3)";
+
+/// How many conversations user `$2` has stored in tenant `$1`, deleted ones included.
+const STARTED: &str = "SELECT count(*) FROM assistant.conversations
+WHERE tenant_id = $1::uuid AND user_id = $2::uuid";
 
 /// Whether a session waits for a lock that the session `$1` holds.
 const BLOCKS_ANOTHER: &str = "SELECT EXISTS (
@@ -1627,6 +1642,71 @@ async fn store_errors_carry_no_database_text() {
     let shown = format!("{again} | {again:?}");
     assert!(matches!(again, StoreError::Conflict(_)), "{shown}");
     assert!(!shown.contains(&run.to_string()), "{shown}");
+}
+
+/// At `MAX_STARTS_PER_DAY` starts in 24 hours the store refuses a new conversation with
+/// `StartLimited` (when the oldest start leaves the day) and stores nothing; storing a
+/// conversation that is stored already, a retry, is not a new start and still succeeds.
+#[tokio::test(flavor = "multi_thread")]
+async fn starts_stop_at_the_daily_limit_but_a_retry_is_not_a_start() {
+    let Some(db) = db().await else {
+        return;
+    };
+    let owner = db.user(TenantId::generate());
+    let who = principal(&owner);
+    let started = || async {
+        let mut admin = db.superuser().await;
+        sqlx::query_scalar::<_, i64>(STARTED)
+            .bind(who.tenant_id.to_string())
+            .bind(who.user_id.to_string())
+            .fetch_one(&mut admin)
+            .await
+            .expect("count the user's conversations")
+    };
+    // The day's starts but one, all an hour ago.
+    let mut admin = db.superuser().await;
+    sqlx::query(SEED_STARTS)
+        .bind(who.tenant_id.to_string())
+        .bind(who.user_id.to_string())
+        .bind(i32::try_from(store::MAX_STARTS_PER_DAY - 1).expect("a small limit"))
+        .bind(60_i32)
+        .execute(&mut admin)
+        .await
+        .expect("store the day's starts");
+
+    let last = db.agent.start_conversation(who, "");
+    for attempt in ["the last start of the day", "its retry"] {
+        let mut tx = db.tx(&owner).await;
+        store::create(&mut tx, &last)
+            .await
+            .unwrap_or_else(|error| panic!("{attempt}: {error}"));
+        tx.commit().await.expect("commit");
+        assert_eq!(started().await, store::MAX_STARTS_PER_DAY, "{attempt}");
+    }
+
+    let next = db.agent.start_conversation(who, "");
+    let mut tx = db.tx(&owner).await;
+    let refused = store::create(&mut tx, &next)
+        .await
+        .expect_err("over the limit");
+    tx.rollback().await.expect("roll back");
+    let StoreError::StartLimited { retry_after_secs } = refused else {
+        panic!("not the start limit: {refused:?}");
+    };
+    // The oldest start was an hour ago, so it leaves the 24 hours within 23.
+    assert!(
+        (22 * 3600..=23 * 3600).contains(&retry_after_secs),
+        "{retry_after_secs}"
+    );
+    assert_eq!(
+        refused.to_string(),
+        "the user started too many conversations today"
+    );
+    assert_eq!(started().await, store::MAX_STARTS_PER_DAY, "nothing stored");
+    assert!(
+        db.load(&owner, next.id()).await.is_none(),
+        "the refused one is not stored"
+    );
 }
 
 /// Titles, the archive and the list's order and pages.

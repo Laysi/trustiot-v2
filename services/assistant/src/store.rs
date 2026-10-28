@@ -72,6 +72,55 @@ pub const MAX_MESSAGE_BYTES: usize = 32 << 20;
 /// The longest title, in characters (the database's limit too).
 pub const MAX_TITLE_CHARS: usize = 200;
 
+/// The most conversations one user may start in one tenant within [`START_WINDOW_HOURS`], by the
+/// database clock: a product rule, not a setting. Starting one stores a row with its whole
+/// preamble (the system prompt and every tool's description and schema, kilobytes to tens of
+/// kilobytes) before any question is asked, so without a bound one account in a loop could fill
+/// the Postgres every service shares. Every stored conversation counts by its `created_at`, the
+/// deleted ones included (they stay stored until the purge), so starting and deleting in a loop
+/// does not escape it. 100 a day is far beyond what a person starts by hand.
+pub const MAX_STARTS_PER_DAY: i64 = 100;
+
+/// The window of [`MAX_STARTS_PER_DAY`], in hours.
+pub const START_WINDOW_HOURS: i32 = 24;
+
+/// Serializes the starts of one user in one tenant until the transaction ends, so the count and
+/// the insert of [`create`] see every start committed before them and the limit is exact: a
+/// tenant transaction is READ COMMITTED, so the count's snapshot is taken after the lock is
+/// granted, and Postgres releases a transaction's locks only after its commit is visible.
+/// `$1` tenant, `$2` user. The two-`int4` form, whose first key is a fixed class (`asst` in
+/// ASCII): the Postgres documentation (Advisory Lock Functions: "these two key spaces do not
+/// overlap") keeps it apart from every one-`bigint` lock (service-kit's `JobLock`, identity's,
+/// assets' and the outbox's), and the class keeps it apart from the certs service's two-key
+/// locks (class 1953983347). A hash collision of two users only makes one wait for the other.
+/// The wait is bounded by the request's `lock_timeout` (`api::REQUEST_LOCK_TIMEOUT`).
+const LOCK_STARTS: &str = "SELECT pg_advisory_xact_lock(1634956148, hashtext($1 || ':' || $2))";
+
+/// `$1` tenant, `$2` conversation, `$3` user, `$4` the window in hours: whether the
+/// conversation is stored already (a retry), how many conversations the user started in the
+/// window, and in how many seconds the oldest of them leaves it. `created_at` is the database's:
+/// the service role cannot set it (0002_conversation_threads.sql grants INSERT of the other
+/// columns only). The two counts each match one of the partial indexes that lead with
+/// `(tenant_id, user_id)` (`conversations_by_activity` for the ones not deleted,
+/// `conversations_deleted` for the deleted ones), and Postgres scans each with both keys as the
+/// index condition, so a count reads only this user's rows in the tenant, never another user's;
+/// it filters the user's older rows by `created_at`, so its cost grows with the user's own
+/// stored conversations only.
+const STARTS: &str = "SELECT
+    EXISTS (SELECT 1 FROM assistant.conversations
+            WHERE tenant_id = $1::uuid AND conversation_id = $2::uuid) AS stored,
+    live.started + deleted.started AS started,
+    ceil(extract(epoch FROM least(live.oldest, deleted.oldest)
+        + make_interval(hours => $4) - now()))::bigint AS retry_after_secs
+FROM (SELECT count(*) AS started, min(created_at) AS oldest
+      FROM assistant.conversations
+      WHERE tenant_id = $1::uuid AND user_id = $3::uuid AND deleted_at IS NULL
+          AND created_at > now() - make_interval(hours => $4)) AS live,
+     (SELECT count(*) AS started, min(created_at) AS oldest
+      FROM assistant.conversations
+      WHERE tenant_id = $1::uuid AND user_id = $3::uuid AND deleted_at IS NOT NULL
+          AND created_at > now() - make_interval(hours => $4)) AS deleted";
+
 /// `$1` tenant, `$2` conversation, `$3` user, then the preamble. Stores nothing when the
 /// conversation was stored before.
 const INSERT_CONVERSATION: &str = "INSERT INTO assistant.conversations
@@ -189,6 +238,14 @@ pub enum StoreError {
     /// does not start another, and [`delete`] does not delete the conversation.
     #[error("a question of the conversation is running")]
     AlreadyRunning,
+    /// [`create`] of a new conversation by a user who started [`MAX_STARTS_PER_DAY`] in the
+    /// tenant within the last [`START_WINDOW_HOURS`] hours; nothing was stored. The oldest of them
+    /// leaves the window in `retry_after_secs` seconds.
+    #[error("the user started too many conversations today")]
+    StartLimited {
+        /// Seconds until a start is allowed again, at least 1.
+        retry_after_secs: u64,
+    },
     /// No run of this user with that ID (or its conversation is deleted, for
     /// [`request_cancel`] and [`run_status`]).
     #[error("the run is not stored")]
@@ -428,9 +485,14 @@ fn seq(position: usize) -> Result<i32, StoreError> {
 /// Storing a conversation that is already stored with the same owner, preamble and messages is
 /// not an error (a retry); with a different one it is a [`StoreError::Conflict`].
 ///
+/// A new conversation counts against its user's [`MAX_STARTS_PER_DAY`] in its tenant: `create` takes
+/// the user's start lock (`LOCK_STARTS`, held until `tx` ends), counts the conversations the user
+/// started in the last [`START_WINDOW_HOURS`] hours, deleted ones included, and refuses the new
+/// one at the limit. A retry of a stored conversation is not a new start.
+///
 /// # Errors
 ///
-/// [`StoreError::WrongTenant`], [`StoreError::Unstorable`], [`StoreError::Conflict`],
+/// [`StoreError::StartLimited`], [`StoreError::WrongTenant`], [`StoreError::Unstorable`], [`StoreError::Conflict`],
 /// [`StoreError::NotStored`] (a retry after the user deleted it), [`StoreError::Corrupt`] or a
 /// database failure; the caller rolls `tx` back then.
 pub async fn create(
@@ -439,6 +501,33 @@ pub async fn create(
 ) -> Result<Stored, StoreError> {
     let principal = conversation.principal();
     check_tenant(tx, principal.tenant_id)?;
+    let (tenant, user) = (
+        principal.tenant_id.to_string(),
+        principal.user_id.to_string(),
+    );
+    sqlx::query(LOCK_STARTS)
+        .bind(&tenant)
+        .bind(&user)
+        .execute(&mut **tx)
+        .await?;
+    let starts = sqlx::query(STARTS)
+        .bind(&tenant)
+        .bind(conversation.id().to_string())
+        .bind(&user)
+        .bind(START_WINDOW_HOURS)
+        .fetch_one(&mut **tx)
+        .await?;
+    let stored: bool = starts.try_get("stored")?;
+    let started: i64 = starts.try_get("started")?;
+    if !stored && started >= MAX_STARTS_PER_DAY {
+        let retry_after: Option<i64> = starts.try_get("retry_after_secs")?;
+        return Err(StoreError::StartLimited {
+            retry_after_secs: retry_after
+                .and_then(|secs| u64::try_from(secs).ok())
+                .unwrap_or(1)
+                .max(1),
+        });
+    }
     let preamble = conversation.preamble();
     let tools = tools_json(preamble.tools())?;
     sqlx::query(INSERT_CONVERSATION)

@@ -4199,6 +4199,26 @@
             },
             "description": "No tenant (`permission_denied`)."
           },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The caller started 100 conversations in this tenant within the last 24 hours, deleted ones included (`rate_limited`, key `conversation.start_limited`, `details.max`); nothing was stored.",
+            "headers": {
+              "retry-after": {
+                "description": "Seconds until the oldest of those conversations leaves the 24 hours and a start is allowed again.",
+                "schema": {
+                  "format": "int64",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              }
+            }
+          },
           "503": {
             "content": {
               "application/json": {

@@ -24,11 +24,13 @@
 //! | A `limit` that is not 1 to 100 | 400 `invalid_request`, key `conversation.limit_invalid`, `{"max": 100}` |
 //! | A `cursor` that is not a `next_cursor` of the same list | 400 `invalid_request`, key `conversation.cursor_invalid` |
 //! | Deleting while a question of the conversation runs | 409 `conflict`, key `conversation.question_running`; nothing changes |
+//! | Starting a conversation when the caller started [`store::MAX_STARTS_PER_DAY`] (100) in the tenant within the last 24 hours, deleted ones included | 429 `rate_limited`, key `conversation.start_limited`, `{"max": 100}`, `Retry-After` in seconds; nothing is stored |
 //! | A lock (another request's or a stuck session's on the conversation) not granted within [`super::REQUEST_LOCK_TIMEOUT`] | 503 `unavailable`; nothing was written |
 //! | The database failed | 503 `unavailable`; nothing was written |
 //!
 //! A write that changed something logs one INFO line with the user, tenant and conversation,
-//! never its title or messages.
+//! never its title or messages; a start refused by the daily limit logs one WARN line with the
+//! user and tenant.
 
 use std::sync::Arc;
 
@@ -78,6 +80,9 @@ pub const CURSOR_INVALID: MessageKey = MessageKey::new("conversation.cursor_inva
 pub const LIMIT_INVALID: MessageKey = MessageKey::new("conversation.limit_invalid");
 /// A question of the conversation is running, so it is not deleted (409).
 pub const QUESTION_RUNNING: MessageKey = MessageKey::new("conversation.question_running");
+/// The caller started [`store::MAX_STARTS_PER_DAY`] conversations in the tenant within the last
+/// [`store::START_WINDOW_HOURS`] hours (429); `details.max`.
+pub const START_LIMITED: MessageKey = MessageKey::new("conversation.start_limited");
 
 /// The tenant context of a new conversation: none yet. Nothing builds it so far (the tenant's
 /// devices, data points, plan, language and time zone), and the preamble fixes it for the
@@ -377,6 +382,8 @@ async fn list_conversations(
         (status = 400, description = "The `Content-Type` is not `application/json` (`invalid_request`), or there is a body other than `null` or an empty object (`conversation.body_invalid`).", body = ErrorBody),
         (status = 401, description = "No valid session (`unauthenticated`).", body = ErrorBody),
         (status = 403, description = "No tenant (`permission_denied`).", body = ErrorBody),
+        (status = 429, description = "The caller started 100 conversations in this tenant within the last 24 hours, deleted ones included (`rate_limited`, key `conversation.start_limited`, `details.max`); nothing was stored.", body = ErrorBody,
+            headers(("retry-after" = u64, description = "Seconds until the oldest of those conversations leaves the 24 hours and a start is allowed again."))),
         (status = 503, description = "The database failed (`unavailable`); nothing was written.", body = ErrorBody),
     )
 )]

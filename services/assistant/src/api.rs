@@ -14,7 +14,7 @@ use axum::Router;
 use axum::body::{Body, Bytes};
 use axum::extract::Path;
 use axum::extract::rejection::PathRejection;
-use axum::http::header::{CACHE_CONTROL, CONTENT_TYPE};
+use axum::http::header::{CACHE_CONTROL, CONTENT_TYPE, RETRY_AFTER};
 use axum::http::{HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use chrono::{DateTime, SecondsFormat, Utc};
@@ -30,7 +30,7 @@ use uuid::Uuid;
 
 use crate::Agent;
 use crate::history::Principal;
-use crate::store::{MAX_PAGE, StoreError};
+use crate::store::{MAX_PAGE, MAX_STARTS_PER_DAY, StoreError};
 
 /// Items per page when the request sets no `limit`.
 pub const DEFAULT_PAGE: usize = 50;
@@ -179,9 +179,10 @@ pub(crate) async fn finish<T>(
 }
 
 /// The response for a store failure. Every "no such conversation of yours" is the one
-/// [`not_found`] answer. A failure that is not the request's fault is logged at ERROR with its
-/// class only (a [`StoreError`] carries no database text, title or content) and answered 503
-/// `unavailable`.
+/// [`not_found`] answer. A start over the daily limit is 429 `rate_limited` with
+/// `Retry-After`, logged at WARN with the user and tenant. A failure that is not the request's
+/// fault is logged at ERROR with its class only (a [`StoreError`] carries no database text,
+/// title or content) and answered 503 `unavailable`.
 pub(crate) fn store_failure(
     user: &UserIdentity,
     conversation: Option<Uuid>,
@@ -193,6 +194,25 @@ pub(crate) fn store_failure(
         StoreError::AlreadyRunning => error(
             ErrorBody::new(ErrorCode::Conflict).with_message_key(conversations::QUESTION_RUNNING),
         ),
+        StoreError::StartLimited { retry_after_secs } => {
+            tracing::warn!(
+                user_id = %user.user_id(),
+                tenant_id = user.tenant_id().map(|id| id.to_string()).as_deref(),
+                action,
+                max = MAX_STARTS_PER_DAY,
+                retry_after_secs,
+                "conversation start refused: the user reached the daily limit"
+            );
+            let mut response = error(
+                ErrorBody::new(ErrorCode::RateLimited)
+                    .with_message_key(conversations::START_LIMITED)
+                    .with_detail("max", MAX_STARTS_PER_DAY),
+            );
+            response
+                .headers_mut()
+                .insert(RETRY_AFTER, HeaderValue::from(*retry_after_secs));
+            response
+        }
         _ => {
             tracing::error!(
                 user_id = %user.user_id(),

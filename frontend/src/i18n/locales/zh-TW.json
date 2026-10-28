@@ -130,6 +130,7 @@
   "conversation.limit_invalid": "每次可取 1 到 {max} 個對話。",
   "conversation.cursor_invalid": "這一頁清單已失效，請重新載入清單。",
   "conversation.question_running": "這個對話還有問題正在回答，請等回答完成後再刪除對話。",
+  "conversation.start_limited": "過去 24 小時內你已開始 {max} 個對話。請繼續使用其中一個，或稍後再開始新的對話。",
 
   "login.email_invalid": "請輸入有效的 email 地址。",
   "login.code_invalid": "請輸入 email 裡完整的驗證碼。",
