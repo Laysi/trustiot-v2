@@ -14,6 +14,8 @@
 //!   past 30 days a conversation cannot be restored, and a purge round removes it with its
 //!   messages while a recently deleted and a live one stay.
 //! - Writes need the JSON content type; every response carries `cache-control: no-store`.
+//! - A database failure answers 503 with nothing of the database's text, and the log has none of
+//!   it either: only the SQLSTATE.
 //!
 //! Starts a throwaway Postgres with TLS (podman or docker); skipped without either unless `CI`
 //! is set.
@@ -35,7 +37,7 @@ use serde_json::{Value, json};
 use service::{Reply, Service, User};
 use service_kit::tenant::{PlatformDb, TenantDb};
 use sqlx::postgres::PgPoolOptions;
-use sqlx::{Connection, Row};
+use sqlx::{AssertSqlSafe, Connection, Row};
 use support::{StandIn, fixture, ok, respond, settings, tool_step};
 use testkit::identity::TestIssuer;
 use testkit::product::{DATABASE, ProductPostgres, product_postgres};
@@ -1135,5 +1137,103 @@ async fn starting_a_conversation() {
     println!(
         "POST {CONVERSATIONS}: 201 {}; logged {logged}",
         created.body
+    );
+}
+
+/// What the database says about the failure below, in its message and DETAIL; none of it may
+/// reach the response or the log.
+const DATABASE_TEXT: [&str; 5] = [
+    "duplicate key",
+    "violates unique constraint",
+    "already exists",
+    "Key (",
+    LEAK_CANARY_INDEX,
+];
+
+/// A unique index the superuser adds for one tenant only, so the other tests of this file are
+/// not affected: a user of that tenant can start one conversation, and the second fails with
+/// `23505` and the index's name and the key's values in the database's text.
+const LEAK_CANARY_INDEX: &str = "leak_canary_one_conversation_per_user";
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_database_failure_shows_nothing_of_the_database() {
+    let Some(api) = api().await else { return };
+    let owner = User::new(TenantId::generate(), TenantRole::Viewer);
+    let mut admin = api.product.superuser().await;
+    // DDL takes no parameters; the only value is a UUID this test generated.
+    sqlx::raw_sql(AssertSqlSafe(format!(
+        "CREATE UNIQUE INDEX {LEAK_CANARY_INDEX} ON assistant.conversations (tenant_id, user_id) \
+         WHERE tenant_id = '{}'::uuid",
+        owner.tenant
+    )))
+    .execute(&mut admin)
+    .await
+    .expect("add the canary index");
+
+    // The database's own words for the failure, to prove the strings above are the ones it uses.
+    let mut probe = admin.begin().await.expect("a superuser transaction");
+    let insert = || {
+        sqlx::query(
+            "INSERT INTO assistant.conversations
+                (tenant_id, conversation_id, user_id, prompt_version, system_prompt,
+                 tenant_context, tools, effort, cache_ttl)
+             VALUES ($1::uuid, gen_random_uuid(), $2::uuid, 'probe', '', '', '[]', 'medium', '5m')",
+        )
+        .bind(owner.tenant.to_string())
+        .bind(owner.id.to_string())
+    };
+    insert()
+        .execute(&mut *probe)
+        .await
+        .expect("the first conversation of the user");
+    let refused = insert()
+        .execute(&mut *probe)
+        .await
+        .expect_err("the index refuses a second one");
+    let sqlx::Error::Database(refused) = refused else {
+        panic!("not a database error: {refused}");
+    };
+    assert_eq!(refused.code().as_deref(), Some("23505"));
+    let text = format!("{} {refused:?}", refused.message());
+    for expected in DATABASE_TEXT {
+        assert!(text.contains(expected), "{expected} not in {text}");
+    }
+    probe.rollback().await.expect("roll back the probe");
+
+    api.create(&owner).await;
+    let failed = api
+        .call(&owner, Method::POST, CONVERSATIONS, Some(&json!({})))
+        .await;
+    failed.expect_error(503, "unavailable", "error.unavailable");
+    let logged = api.service.wait_logged("conversation request failed").await;
+    assert_eq!(logged["level"], "ERROR", "{logged}");
+    assert_eq!(
+        logged["fields"]["error"], "database error (SQLSTATE 23505)",
+        "{logged}"
+    );
+    let log = format!(
+        "{}\n{}",
+        api.service.stdout.text(),
+        api.service.stderr.text()
+    );
+    for text in DATABASE_TEXT {
+        assert!(!failed.body.contains(text), "{text} in {}", failed.body);
+        assert!(!log.contains(text), "{text} in the log");
+    }
+    assert_eq!(
+        api.ids(&owner, CONVERSATIONS).await.len(),
+        1,
+        "the failed start stored nothing"
+    );
+
+    sqlx::raw_sql(AssertSqlSafe(format!(
+        "DROP INDEX assistant.{LEAK_CANARY_INDEX}"
+    )))
+    .execute(&mut admin)
+    .await
+    .expect("drop the canary index");
+    println!(
+        "POST {CONVERSATIONS} after a unique violation: 503 {}; logged {logged}",
+        failed.body
     );
 }
