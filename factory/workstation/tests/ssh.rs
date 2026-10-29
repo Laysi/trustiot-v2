@@ -16,7 +16,9 @@ use protocol::GatewayId;
 use protocol::provisioning::KeyHandle;
 use support::bench::{Bench, DESTINATION};
 use support::ssh::{CANNED_AGENT, FAKE_SUDO, GatewayKeys};
-use workstation::gateway::{self, KEPT_ENVIRONMENT, Mode, Request, SSH_OPTIONS, UploadedAgent};
+use workstation::gateway::{
+    self, HOST_KEY_OPTIONS, KEPT_ENVIRONMENT, Mode, Request, SSH_OPTIONS, UploadedAgent,
+};
 use workstation::journal::State;
 
 /// Variables a shell adds to its own environment, which `env` then lists.
@@ -26,9 +28,37 @@ fn handle() -> KeyHandle {
     KeyHandle::new(gateway::DEFAULT_HANDLE).expect("a handle")
 }
 
-/// The argument vector ssh must get for `mode`: the fixed options, `--`, the destination and
-/// the remote command.
-fn expected_argv(hardware_id: &str, mode: Mode, sudo: bool, upload: Option<&str>) -> Vec<String> {
+/// The options before `--` of every call for `hardware_id`: the fixed options, the host key
+/// bound to the hardware ID in the tool's own file, and `accept-new` (the fake's configuration
+/// leaves `StrictHostKeyChecking` at `ask`).
+fn expected_options(bench: &Bench, hardware_id: &str) -> Vec<String> {
+    let mut options: Vec<String> = SSH_OPTIONS
+        .iter()
+        .map(|&option| option.to_owned())
+        .collect();
+    options.extend([
+        "-o".to_owned(),
+        format!("HostKeyAlias=trustiot-{hardware_id}"),
+        "-o".to_owned(),
+        format!("UserKnownHostsFile={}", bench.known_hosts().as_str()),
+    ]);
+    options.extend(HOST_KEY_OPTIONS.iter().map(|&option| option.to_owned()));
+    options.extend([
+        "-o".to_owned(),
+        "StrictHostKeyChecking=accept-new".to_owned(),
+    ]);
+    options
+}
+
+/// The argument vector ssh must get for `mode`: the options, `--`, the destination and the
+/// remote command.
+fn expected_argv(
+    bench: &Bench,
+    hardware_id: &str,
+    mode: Mode,
+    sudo: bool,
+    upload: Option<&str>,
+) -> Vec<String> {
     let id = GatewayId::new(hardware_id).expect("an ID");
     let command = gateway::remote_command(
         &Request {
@@ -40,10 +70,7 @@ fn expected_argv(hardware_id: &str, mode: Mode, sudo: bool, upload: Option<&str>
         upload,
     )
     .expect("a command");
-    let mut argv: Vec<String> = SSH_OPTIONS
-        .iter()
-        .map(|&option| option.to_owned())
-        .collect();
+    let mut argv = expected_options(bench, hardware_id);
     argv.extend(["--".to_owned(), DESTINATION.to_owned(), command]);
     argv
 }
@@ -110,11 +137,11 @@ async fn only_the_agent_the_hardware_id_and_the_handle_cross_to_the_gateway() {
     assert_eq!(calls.len(), 2, "an inspection, then provision");
     assert_eq!(
         calls[0].argv,
-        expected_argv("tg-0001", Mode::Inspect, false, Some(&sha256))
+        expected_argv(&bench, "tg-0001", Mode::Inspect, false, Some(&sha256))
     );
     assert_eq!(
         calls[1].argv,
-        expected_argv("tg-0001", Mode::Provision, false, Some(&sha256))
+        expected_argv(&bench, "tg-0001", Mode::Provision, false, Some(&sha256))
     );
     for call in &calls {
         assert_eq!(call.destination, DESTINATION);
@@ -124,6 +151,20 @@ async fn only_the_agent_the_hardware_id_and_the_handle_cross_to_the_gateway() {
         );
         assert_eq!(call.status, Some(0));
     }
+    // Before each run, ssh -G with the same options (without accept-new, which it decides).
+    let mut config_call: Vec<String> = SSH_OPTIONS
+        .iter()
+        .map(|&option| option.to_owned())
+        .collect();
+    config_call.extend([
+        "-o".to_owned(),
+        "HostKeyAlias=trustiot-tg-0001".to_owned(),
+        "-o".to_owned(),
+        format!("UserKnownHostsFile={}", bench.known_hosts().as_str()),
+    ]);
+    config_call.extend(HOST_KEY_OPTIONS.iter().map(|&option| option.to_owned()));
+    config_call.extend(["-G".to_owned(), "--".to_owned(), DESTINATION.to_owned()]);
+    assert_eq!(bench.ssh.config_calls(), [config_call.clone(), config_call]);
     assert_environment_whitelisted(&bench);
     bench.assert_nothing_secret_crossed();
     assert_eq!(
@@ -184,7 +225,7 @@ async fn the_installed_agent_runs_without_an_upload_and_sudo_never_asks() {
     );
     assert_eq!(
         calls[0].argv,
-        expected_argv("tg-0002", Mode::Inspect, true, None)
+        expected_argv(&bench, "tg-0002", Mode::Inspect, true, None)
     );
     assert!(calls[0].stdin.is_empty(), "nothing on standard input");
     assert_eq!(
@@ -300,6 +341,92 @@ async fn ssh_options_without_gateway_are_refused() {
 }
 
 #[tokio::test]
+async fn an_ssh_configuration_that_skips_the_host_key_check_is_refused() {
+    let bench = Bench::start("ssh-host-keys", Vec::new()).await;
+    let keys = GatewayKeys::new();
+    let (agent, _) = canned_agent(&bench);
+    let upload = ["--upload-agent", agent.as_str()];
+    let refused = [
+        (
+            "stricthostkeychecking false\n",
+            false,
+            "StrictHostKeyChecking no",
+        ),
+        ("userknownhostsfile /dev/null\n", true, "/dev/null"),
+        (
+            "userknownhostsfile ~/.ssh/known_hosts\n",
+            true,
+            "not only in the tool's own",
+        ),
+        (
+            "knownhostscommand /usr/local/bin/host-keys %H\n",
+            false,
+            "KnownHostsCommand",
+        ),
+        (
+            "globalknownhostsfile /etc/ssh/ssh_known_hosts\n",
+            true,
+            "system's files",
+        ),
+        ("verifyhostkeydns true\n", true, "VerifyHostKeyDNS"),
+    ];
+    for (lines, first, expected) in refused {
+        bench.ssh.set_config(Some(lines), first);
+        let run = bench.run(&bench.register_args("tg-0012", &upload)).await;
+        assert_eq!(run.code, Some(1), "{lines}: {}", run.output());
+        assert!(
+            run.stderr
+                .contains("would not check the gateway's host key")
+                && run.stderr.contains(expected),
+            "{lines}: {}",
+            run.stderr
+        );
+        bench.ssh.set_config(None, first);
+    }
+    // Settings that never end are cut off at the limit instead of filling the memory.
+    bench.ssh.flood_config(true);
+    let run = bench.run(&bench.register_args("tg-0012", &upload)).await;
+    assert_eq!(run.code, Some(1), "{}", run.output());
+    assert!(run.stderr.contains("printed more than"), "{}", run.stderr);
+    bench.ssh.flood_config(false);
+    assert_eq!(bench.ssh.count(), 0, "nothing ran on the gateway");
+    assert!(bench.registry.seen().is_empty(), "nothing was registered");
+
+    // StrictHostKeyChecking yes is kept: no accept-new is added.
+    bench
+        .ssh
+        .set_config(Some("stricthostkeychecking true\n"), false);
+    bench.ssh.leave_reports(
+        &keys.report("tg-0012", None),
+        &keys.report("tg-0012", Some(true)),
+    );
+    let run = bench.run(&bench.register_args("tg-0012", &upload)).await;
+    assert_eq!(run.code, Some(0), "{}", run.output());
+    let mut kept = expected_options(&bench, "tg-0012");
+    kept.truncate(kept.len() - 2);
+    for call in bench.ssh.calls() {
+        assert_eq!(call.argv.get(..kept.len()), Some(kept.as_slice()));
+        assert_eq!(call.argv.get(kept.len()).map(String::as_str), Some("--"));
+    }
+
+    // A workstation directory whose path ssh would split or expand is refused before ssh runs.
+    let before = bench.ssh.config_calls().len();
+    for bad in ["with space", "per%cent"] {
+        let mut arguments = bench.register_args("tg-0013", &upload);
+        let dir = arguments
+            .iter()
+            .position(|argument| argument == "--dir")
+            .expect("--dir")
+            + 1;
+        arguments[dir] = bench.scratch.join(bad).to_str().expect("UTF-8").to_owned();
+        let run = bench.run(&arguments).await;
+        assert_eq!(run.code, Some(2), "{bad}: {}", run.output());
+        assert!(run.stderr.contains("--dir"), "{bad}: {}", run.stderr);
+    }
+    assert_eq!(bench.ssh.config_calls().len(), before, "ssh -G never ran");
+}
+
+#[tokio::test]
 async fn an_agent_file_others_could_replace_is_never_uploaded() {
     let bench = Bench::start("ssh-agent-file", Vec::new()).await;
     let (agent, _) = canned_agent(&bench);
@@ -310,7 +437,8 @@ async fn an_agent_file_others_could_replace_is_never_uploaded() {
             .await;
         assert_eq!(run.code, Some(1), "{mode:o}: {}", run.output());
         assert!(
-            run.stderr.contains("must not be writable by the group or others"),
+            run.stderr
+                .contains("must not be writable by the group or others"),
             "{mode:o}: {}",
             run.stderr
         );
@@ -346,8 +474,8 @@ async fn ssh_failures_are_tried_again_and_every_run_reports_the_same() {
         "the first call never reached the remote command"
     );
     let sha256 = UploadedAgent::from_bytes(bytes.clone()).sha256().to_owned();
-    let inspect = expected_argv("tg-0003", Mode::Inspect, false, Some(&sha256));
-    let provision = expected_argv("tg-0003", Mode::Provision, false, Some(&sha256));
+    let inspect = expected_argv(&bench, "tg-0003", Mode::Inspect, false, Some(&sha256));
+    let provision = expected_argv(&bench, "tg-0003", Mode::Provision, false, Some(&sha256));
     for (number, call) in calls.iter().enumerate() {
         let expected = if number < 3 { &inspect } else { &provision };
         assert_eq!(&call.argv, expected, "call {}", number + 1);

@@ -30,6 +30,7 @@ cargo build --release --locked -p workstation
 | `workstation.pem` | 工作站目錄 | 0644 | 工作站憑證（公開資料），通過檢查才寫入；寫入的是由檢查過的 DER 重新編碼的那一張，不是輸入的原文 |
 | `registrations/<硬體 ID>.json` | 工作站目錄 | 0600 | 一台閘道器的登錄紀錄：`pending`（送出前）或 `registered`（回應通過檢查後，含平台回的整筆登錄與憑證鏈），以及操作員釘住的根憑證 SHA-256（`root_sha256`，Laysi/trustiot-v2#617 安裝根憑證前再比對一次）；整檔原子替換 |
 | `registrations.jsonl` | 工作站目錄 | 0600 | 登錄的日誌，只附加：每次執行的開始、每次失敗的嘗試、成功、停止或放棄，各一行 JSON |
+| `known_hosts` | 工作站目錄 | ssh 建立 | `register --gateway` 連過的閘道器的主機金鑰，以 `trustiot-<硬體 ID>` 為名（見 `register` 的「經 ssh 取得」）；由 ssh 寫入，工具不讀也不改 |
 | `session` | `$XDG_RUNTIME_DIR/trustiot-workstation/` | 0600 | 平台管理員的 session cookie 與它所屬的平台網址 |
 | `--headers-file` 指定的檔案 | 操作員自己放 | 0600 | Cloudflare Access 的 service token（見下方） |
 
@@ -150,7 +151,10 @@ trustiot-workstation register --hardware-id <硬體 ID> --csr gateway.csr --ek e
 
 - 工具以 `BatchMode=yes` 執行 ssh，不會問密碼、passphrase 或主機金鑰。金鑰放在 ssh-agent（工具保留 `SSH_AUTH_SOCK`）或沒有 passphrase 的金鑰檔。
 - **必須在 `~/.ssh/config` 為閘道器設定 `IdentityFile`**（金鑰在 ssh-agent 時指向它的公鑰檔）。工具固定加上 `IdentitiesOnly=yes`，ssh 只送出 `IdentityFile` 指定的金鑰，不會把 ssh-agent 裡的其他金鑰拿去給閘道器試；沒有設定時 ssh 只試預設的 `~/.ssh/id_*`。
-- **閘道器的主機金鑰要先在 `known_hosts` 裡**。新閘道器的主機金鑰在出廠映像第一次開機時產生，產線網路上可以在 `~/.ssh/config` 為閘道器的網段設 `StrictHostKeyChecking accept-new`（第一次連線記下、之後改變就拒絕）；工具不覆寫這個設定，也不關閉主機金鑰檢查。重刷的閘道器主機金鑰會變，ssh 拒絕連線時以 `ssh-keygen -R <主機>` 移除舊的那筆。
+- **主機金鑰綁硬體 ID，不綁台面的位址**。工具每次執行 ssh 都加上 `HostKeyAlias=trustiot-<硬體 ID>` 與 `UserKnownHostsFile=<工作站目錄>/known_hosts`：閘道器的主機金鑰記在工具自己的檔案裡，以硬體 ID 為名；另外加上 `GlobalKnownHostsFile=/dev/null` 與 `VerifyHostKeyDNS=no`，系統的 `/etc/ssh/ssh_known_hosts` 與 DNS 上的 SSHFP 紀錄都不採用。同一個台面位址換接下一台時，用的是那台的硬體 ID，不會沿用上一台的紀錄；已經記下的硬體 ID 回了別的主機金鑰時，ssh 拒絕連線。`~/.ssh/known_hosts` 裡的紀錄不會被用到。
+- **執行前檢查 ssh 實際會用的設定**：工具先以 `ssh -G`（同樣的選項與目的地）讀出設定，`StrictHostKeyChecking` 是 `no`、`UserKnownHostsFile` 是 `/dev/null` 或不只工具的檔案、`GlobalKnownHostsFile` 不是 `/dev/null`、`VerifyHostKeyDNS` 開著、或設了 `KnownHostsCommand` 時拒絕執行（結束碼 1，閘道器上什麼都沒執行）。設定是預設的 `ask` 時（`BatchMode` 會讓它拒絕每一台新閘道器），工具加上 `StrictHostKeyChecking=accept-new`：一個硬體 ID 第一次連線時記下主機金鑰，之後每次都要相同。設成 `yes` 或 `accept-new` 時照設定；`yes` 要自己先把主機金鑰以 `trustiot-<硬體 ID>` 為名寫進工具的檔案。需要 OpenSSH 7.6 以上（`accept-new`）。工作站目錄的路徑只能有英數字與 `/`、`.`、`_`、`-`、`+`、`@`、`,`、`:`（ssh 會切開空白、展開 `%` 與 `~`），否則結束碼 2。
+- **重刷後主機金鑰改變**：重刷 SD 卡後閘道器的主機金鑰會重新產生，ssh 以 `REMOTE HOST IDENTIFICATION HAS CHANGED` 拒絕連線（重試後結束碼 23）。先核對標籤、確認這台確實剛重刷，再只移除這個硬體 ID 的那一筆後重跑：`ssh-keygen -R trustiot-<硬體 ID> -f <工作站目錄>/known_hosts`。沒有重刷卻遇到這個錯誤時不要移除，停下來回報：可能有別的機器冒用這個位址。
+- **第一次連線仍是先信任**：新閘道器的第一把主機金鑰沒有別的來源可以核對，產線網路要在實體控制下（決策 12）。主機金鑰只保證之後連到的是同一台；金鑰是否真的在那台的 TPM 裡，見「安全上的做法與限制」的殘餘風險。
 - 工具固定加上 `-T -a -x` 與 `IdentitiesOnly=yes`、`ClearAllForwardings=yes`、`ForwardAgent=no`、`ForwardX11=no`、`PermitLocalCommand=no`、`ControlMaster=no`、`ControlPath=none`（不轉送 agent、不共用連線）、`ConnectTimeout=20`、`ServerAliveInterval=15`、`ServerAliveCountMax=4`、`LogLevel=ERROR`。
 
 **閘道器端的 ssh 限制（正式產線的前提，Laysi/trustiot-v2#219）**：能在閘道器上執行 agent 的人，就能決定閘道器的金鑰與信任錨（Laysi/trustiot-v2#617 的安裝以 root 執行），所以正式產線的閘道器不讓工作站的 ssh 帳號執行任意指令。採用的做法：
@@ -246,7 +250,7 @@ trustiot-workstation logout
 | 20 | `--gateway`：工作站有這個硬體 ID 的紀錄，閘道器的 TPM 在 handle 卻沒有金鑰（TPM 被清除過，或接到別台閘道器）；沒有建立金鑰、沒有送出 | 核對標籤與 ssh 目的地；確定是同一台才加 `--allow-new-key` 重跑（平台會回 409，結束碼 10，見「TPM 被清除過」） |
 | 21 | `--gateway`：閘道器的報告沒通過檢查（硬體 ID 或 handle 不同、CSR 的主體、公鑰或簽章不對、EK 或 EK 憑證不對、超過 16 KiB、不是報告）；沒有登錄 | 確認目的地是標籤上那台閘道器、agent 是發行的版本；再發生就帶著 `registrations.jsonl` 回報 |
 | 22 | `--gateway`：agent 在閘道器上失敗（訊息有它的結束碼與意思、閘道器 stderr 的最後幾行），或上傳失敗、上傳的 agent 的 SHA-256 不符；stdout 不採用，沒有登錄 | 依訊息處理：沒有 TPM 裝置、handle 被別的物件佔用（5）、EK 憑證不符（6）要檢查閘道器；127 是沒裝 agent，給 `--upload-agent`；126 是暫存目錄 `noexec`；sudo 要密碼時設定免密碼或拿掉 `--remote-sudo` |
-| 23 | `--gateway`：ssh 重試後仍連不上閘道器或逾時（最多 5 次、420 秒內）；沒有登錄 | 檢查網路、目的地、ssh 金鑰與 `known_hosts`（以 `ssh <目的地> true` 試），再重跑同一個指令 |
+| 23 | `--gateway`：ssh 重試後仍連不上閘道器或逾時（最多 5 次、420 秒內）；沒有登錄 | 檢查網路、目的地與 ssh 金鑰（以 `ssh <目的地> true` 試），再重跑同一個指令；訊息有 `REMOTE HOST IDENTIFICATION HAS CHANGED` 時見上面「重刷後主機金鑰改變」 |
 | 24 | `verify`：平台的事件紀錄裡沒有這個硬體 ID 的 `certs.gateway_registered` 事件 | 稍等幾秒再跑；一直沒有就重跑同一個 `register`，再回報平台管理員 |
 | 75 | 用完 `--attempts` 或 `--retry-for` 仍沒有確定的回應（sysexits 的 `EX_TEMPFAIL`） | 網路恢復後重跑同一個指令 |
 
@@ -282,7 +286,7 @@ cf-access-client-secret: <client secret>
 
 - **`http://` 只限 loopback 的 IP 位址**：不接受 `localhost` 這個名稱，它經過名稱解析，可能被導向別處。
 - **只有 `register` 重試**：每個請求用一條新的連線、只送一次；沒有連線池（連線池可能在連線被關掉時重送請求）。`login`、`enroll`、`logout` 不重試。`register` 的重試是工具自己的一次新嘗試（新的簽章與 nonce），只在登錄 API 的冪等保證之下才做，見「`register`」。
-- **ssh**：工具執行系統的 `ssh`（`PATH` 上的），不自己實作 SSH；主機金鑰的檢查、金鑰與 `~/.ssh/config` 都照 OpenSSH 的設定。工具只控制命令列（固定選項、`--` 之後才是目的地，目的地不能以 `-` 開頭）、遠端指令（固定的腳本，參數只有檢查過的字）、環境（只留六個變數）與標準輸入（只有要上傳的 agent）。閘道器回的 stdout 最多讀 16 KiB、stderr 最多留 8 KiB，印出前改寫控制字元與格式字元。閘道器被控制時它能回任何報告：工具的檢查保證報告前後一致、屬於這個硬體 ID，但證明不了金鑰在 TPM 裡，這要靠出廠流程的實體控制（決策 12）。
+- **ssh**：工具執行系統的 `ssh`（`PATH` 上的），不自己實作 SSH；金鑰與 `~/.ssh/config` 照 OpenSSH 的設定，主機金鑰固定以硬體 ID 為名、只查工具自己的 `known_hosts`，執行前以 `ssh -G` 確認沒有被設定關掉。工具只控制命令列（固定選項、`--` 之後才是目的地，目的地不能以 `-` 開頭）、遠端指令（固定的腳本，參數只有檢查過的字）、環境（只留六個變數）與標準輸入（只有要上傳的 agent）。閘道器回的 stdout 最多讀 16 KiB、stderr 最多留 8 KiB，印出前改寫控制字元與格式字元。閘道器被控制時它能回任何報告：工具的檢查保證報告前後一致、屬於這個硬體 ID，但證明不了金鑰在 TPM 裡，這要靠出廠流程的實體控制（決策 12）。**殘餘風險**：以 EK 做 TPM2_MakeCredential／TPM2_ActivateCredential、證明金鑰與 EK 在同一顆 TPM 裡，這次沒有做，延後另開 issue；在那之前，被控制的閘道器（或冒用位址的機器）第一次登錄時能送出不在 TPM 裡的金鑰。
 - **TLS**：rustls 與 ring，TLS 1.2 與 1.3；信任系統的 CA（`SSL_CERT_FILE`、`SSL_CERT_DIR` 有設時用它們）或只信任 `--ca-file`。憑證與主機名稱的檢查不能關閉；不走 proxy、不跟隨重新導向。
 - **跨站檢查**：請求不帶 `Origin` 與 `Sec-Fetch-Site`，身分服務的跨站檢查因此放行（[services/identity/README.md](../../services/identity/README.md)「跨站請求」）。
 - **session 綁定平台**：session 檔記下設定它的平台網址，cookie 只送回那個網址。

@@ -457,6 +457,7 @@ async fn run(
                 gateway::SSH_PROGRAM
             )));
         }
+        Err(SshError::Configuration(message)) => return Err(Error::Failed(message)),
         Err(SshError::Local(error)) => return Err(error),
     };
     if ran.too_long {

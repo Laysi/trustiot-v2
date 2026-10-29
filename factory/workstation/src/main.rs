@@ -17,7 +17,7 @@ use tracing_subscriber::filter::{LevelFilter, Targets};
 use tracing_subscriber::layer::SubscriberExt as _;
 use tracing_subscriber::util::SubscriberInitExt as _;
 use workstation::config::{self, Options, Origin};
-use workstation::gateway::{self, Destination, SshGateway, UploadedAgent};
+use workstation::gateway::{self, Destination, KnownHosts, SshGateway, UploadedAgent};
 use workstation::http::{Client, ExtraHeaders, printable};
 use workstation::identity::{self, KeyOrigin, WorkstationDirectory};
 use workstation::journal::{Journal, State};
@@ -516,11 +516,17 @@ fn register_source(options: &Options) -> Result<Source, Error> {
         allow_new_key: options.flag("allow-new-key"),
     };
     let destination = Destination::parse(destination)?;
+    let known_hosts = KnownHosts::in_directory(directory(options)?.path())?;
     let upload = config::path_option(options, "upload-agent")?
         .map(UploadedAgent::load)
         .transpose()?;
     Ok(Source::Ssh {
-        ssh: SshGateway::new(destination, upload, options.flag("remote-sudo")),
+        ssh: SshGateway::new(
+            destination,
+            known_hosts,
+            upload,
+            options.flag("remote-sudo"),
+        ),
         plan,
     })
 }
