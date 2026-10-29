@@ -50,6 +50,9 @@ pub enum Phase {
     Connected,
     /// Waiting for the application to take a received message.
     Delivering,
+    /// Rotating to renewed client credentials: writing what the connection already accepted
+    /// and waiting for its acknowledgements before it stops and the link reconnects.
+    Rotating,
     /// Stopping: waiting for the PUBACK of `offline`/`shutdown`.
     Stopping,
     /// Sending DISCONNECT and closing the stream.
@@ -70,6 +73,7 @@ impl fmt::Display for Phase {
             Self::SettingUp => "waiting for the PUBACK of online or the SUBACK",
             Self::Connected => "connected",
             Self::Delivering => "waiting for the application to take a message",
+            Self::Rotating => "finishing the connection before using the renewed certificate",
             Self::Stopping => "stopping",
             Self::Closing => "closing the connection",
             Self::Backoff => "waiting to reconnect",

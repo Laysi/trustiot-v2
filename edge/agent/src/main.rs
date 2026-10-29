@@ -276,8 +276,9 @@ fn run(setup: Setup, state_directory: PathBuf) -> ExitCode {
     let heartbeat_settings = HeartbeatSettings {
         interval: setup.heartbeat_interval,
         agent_version: setup.link.agent_version.clone(),
-        certificate_not_after: setup.certificate_not_after,
+        certificate_not_after: setup.renewal.certificate_not_after(),
     };
+    let renewal = setup.renewal;
     let gateway = setup.gateway.clone();
     // The link subscribes only to the down channels something handles: a subscribed channel
     // nobody takes messages from would acknowledge them and lose them. `dispatch` hands each
@@ -293,6 +294,14 @@ fn run(setup: Setup, state_directory: PathBuf) -> ExitCode {
         }
     };
     let (link, incoming, supervisor) = link::link(link_settings, setup.connector, shutdown.clone());
+    // Certificate renewal (Laysi/trustiot-v2#83): on schedule, and when the broker refuses the
+    // certificate. Its TPM signature runs on the blocking pool.
+    runtime.spawn(renewal.run(
+        link.state(),
+        link.attempts(),
+        link.certificate_refused(),
+        shutdown.clone(),
+    ));
     let (config_inbox, config_deliveries) = desired::inbox();
     runtime.spawn(dispatch(incoming, config_inbox));
     let poll_settings = polling::Settings::default();
