@@ -8,6 +8,8 @@
 | `src/config.rs`、`agent.example.toml` | 設定檔（TOML）與它的檢查 | Laysi/trustiot-v2#86 |
 | `src/setup.rs`、`src/identity.rs` | 讀設定、憑證與金鑰，閘道器 ID 取自憑證的 CN | Laysi/trustiot-v2#86 |
 | `src/tpm.rs`、`src/tpm/` | `TpmKey`：TPM 內的身分金鑰（TPM2_ReadPublic、TPM2_Sign）與 rustls 的 `SigningKey` | Laysi/trustiot-v2#86 |
+| `src/tpm/provision.rs` | `ensure_key`：產線工具佈建身分金鑰（沿用、建立或拒絕） | Laysi/trustiot-v2#611 |
+| `src/tpm/endorsement.rs` | `endorsement_key`：ECC P-256 的背書金鑰（EK）與 NV 裡 EK 憑證的比對 | Laysi/trustiot-v2#612 |
 | `src/tls.rs`、`src/transport.rs` | 兩層 TLS 的設定；TCP → 外層 TLS → WebSocket → 內層 mTLS | Laysi/trustiot-v2#86 |
 | `src/mqtt/packet.rs`、`src/mqtt/connection.rs` | MQTT 5 編解碼（只含用到的部分）與一條連線的狀態機 | Laysi/trustiot-v2#86 |
 | `src/link.rs`、`src/backoff.rs` | 對外的 `Link`（publish、收訊息、狀態）與重連退避 | Laysi/trustiot-v2#86 |
@@ -377,6 +379,18 @@ polling::run(&reader, polling::poll_period(&device), &mut connection, &clock, &s
 - TPM 回 `TPM_RC_RETRY`、`TPM_RC_YIELDED` 或 `TPM_RC_TESTING`（指令沒有執行）時，工作執行緒重送同一個指令，最多 8 次、間隔從 10 ms 加倍到 500 ms（swtpm 對 TPM2_Create 回過 `TPM_RC_RETRY`）；`ensure_key` 回傳的金鑰簽章時也這樣重送。agent 的 `TpmKey::open` 不重送，行為與之前相同。每個指令最多等 `PROVISION_RESPONSE_TIMEOUT`（30 秒，重送與排隊都算在內）。
 - 指令與回應的編解碼在 `src/tpm/marshal.rs`，與 ReadPublic、Sign 一樣嚴格檢查每個長度與結構；單元測試以 swtpm 錄下的整段交換（`src/tpm/fixtures.rs`）逐 byte 比對指令並解析回應。
 
+### 背書金鑰（EK，產線工具用）
+
+`tpm::endorsement_key(transport)` 算出 TPM 的 ECC NIST P-256 背書金鑰（EK），並與 TPM 裡的 EK 憑證比對（決策 12 的 (6)，Laysi/trustiot-v2#612），產線工具的 `provision` 子命令（Laysi/trustiot-v2#613）把結果寫進報告。回傳的 `Endorsement` 有 EK 的 SubjectPublicKeyInfo（DER，`public_key_spki_der`）與 `certificate`：`EkCertificate::Matches(der)`（憑證是這把 EK 的）或 `EkCertificate::Absent`（沒有 EK 憑證）。
+
+- **EK**：在 endorsement 階層以 TCG EK Credential Profile 預設的 ECC P-256 範本 TPM2_CreatePrimary（範本 L-2：AES-128-CFB 的 restricted decrypt 金鑰、名稱演算法 SHA-256、屬性 `0x000300b2`、policy 為 `PolicyA`、`unique` 是兩個 32 bytes 的零，與 `tpm2_createek -G ecc` 相同），以 TPM2_ReadPublic 讀回後 FlushContext。不持久化，也不送任何 RSA 指令（SLB9670 做 RSA 會逾時）。primary 由背書種子與範本決定，重跑、換連線都得到同一個 EK。
+- **檢查**：回傳的公開區域在 `unique` 之前與範本逐 byte 相同、名稱是它的 SHA-256、ReadPublic 讀到的與 CreatePrimary 回傳的相同、點在 P-256 上，否則是錯誤。
+- **只支援預設範本**：TPM 在 NV 定義了 EK 範本（`0x01C0000C`）或 EK nonce（`0x01C0000B`）時，依規範 EK 要由它們產生，預設範本算出的不會是製造商憑證上的那把；這時在建立任何東西之前回 `EndorsementError::CustomTemplate`。
+- **EK 憑證**：NV `0x01C0000A`（`EK_CERTIFICATE_INDEX`）有定義且寫入過時，以每次 512 bytes（`NV_READ_CHUNK`）的 TPM2_NV_Read 讀出，最多 4096 bytes：index 有 `ownerRead`（TCG 規範的屬性）時以 owner 的空授權讀（owner 不受字典攻擊鎖定影響），否則有 `authRead` 時以 index 本身的空授權讀。內容必須剛好是一張 DER 的 X.509 憑證（後面不能有多餘的 bytes），憑證的 SubjectPublicKeyInfo 與 EK 的逐 byte 相同（`id-ecPublicKey`、`prime256v1`、未壓縮的點）才是 `Matches`；別的金鑰、或同一把金鑰的其他編碼（例如壓縮的點）回 `CertificateMismatch`，解析不了回 `CertificateInvalid`，兩者都帶讀到的 bytes。index 不存在或沒有寫入過是 `Absent`。不驗證到製造商根的憑證鏈（certs 只記錄與比對 EK，見 [`services/certs/README.md`](../../services/certs/README.md)「規則與取捨」）。
+- **endorsement 授權**：只支援空的授權（TPM 的預設）。設了授權時 CreatePrimary 授權失敗（`TPM_RC_BAD_AUTH`），回 `EndorsementError::EndorsementAuthorization`；階層的授權不計入字典攻擊計數，TPM 的狀態不變。
+- EK 從 CreatePrimary 到 FlushContext 之間是暫時物件；不論檢查結果都會 flush，行程在中間死掉時由核心的資源管理器在關閉 `/dev/tpmrm0` 時清掉，所以只能經資源管理器使用（Laysi/trustiot-v2#613 拒絕其他裝置）。TPM 的重試警告與逾時與金鑰佈建相同（`PROVISION_RESPONSE_TIMEOUT`）。
+- TPM2_NV_ReadPublic 與 NV_Read 的編解碼在 `src/tpm/marshal.rs`，與其他回應一樣嚴格檢查；單元測試以 swtpm 錄下的交換（`src/tpm/fixtures.rs`）逐 byte 比對指令並解析回應。
+
 ## 測試
 
 ```sh
@@ -398,6 +412,7 @@ cargo test -p agent --test polling_recovery             # 對 testkit 假端點�
 cargo test -p agent --test desired_config               # 設定下發與套用：移除的設備不再輪詢、其他設備不受影響、無效設定被拒、版本規則、斷網重開與重開後收斂
 cargo test -p agent --test tpm_swtpm                    # swtpm 容器：簽章、mTLS 握手、拒絕不能用的金鑰
 cargo test -p agent --test tpm_provision                # swtpm 容器：金鑰佈建的建立、沿用、拒絕、同時建立、中斷、tpm2_clear
+cargo test -p agent --test tpm_endorsement              # swtpm 容器：EK 等於 tpm2_createek 的、重跑與換連線相同；EK 憑證相符、不符、沒有；endorsement 授權與 NV 的 EK 範本被拒
 ```
 
 `tools/lab-dataset` 的錄製工具（`lab-dataset record`）以 library 使用 `modbus::endpoint::Endpoints`、`DeviceReader` 與 `polling::run`；改它們的介面時一併跑 `cargo test -p lab-dataset --test record`。錄製工具同樣經過位址限制，它的測試以 `exempt_for_tests` 放行假轉換器所在的 127.0.0.1。
@@ -407,4 +422,4 @@ cargo test -p agent --test tpm_provision                # swtpm 容器：金鑰�
 - `transport`、`broker`、`binary` 走真的 socket，每個等待都以 `testkit::clock::bounded` 設上限。WebSocket 前端（替代入口與 mqtt-bridge）、測試 CA 與 Mosquitto 容器來自 `testkit::mqtt`，用法見 [`crates/testkit/README.md`](../../crates/testkit/README.md)「MQTT 測試環境」。所有憑證與金鑰在測試時產生，不進 repo。
 - `broker` 需要 podman 或 docker：沒有時略過，`CI` 有設時失敗。
 - 假 Modbus 端點的用法見 [`crates/testkit/README.md`](../../crates/testkit/README.md)「假 Modbus 端點」。
-- `tpm_swtpm` 與 `tpm_provision` 的 swtpm 來自 `testkit::swtpm`（映像、session 與 tpm2-tools 的用法見 [`crates/testkit/README.md`](../../crates/testkit/README.md)「軟體 TPM」）。`tpm_swtpm` 以 tpm2-tools 佈建金鑰，比對 tpm2-tools 算的 SubjectPublicKeyInfo、以公鑰驗證簽章，並做一次真的 TLS 1.3 mTLS 握手（測試 CA 為 TPM 公鑰簽發用戶端憑證，CertificateVerify 剛好一次 TPM2_Sign，resumption 不簽章）。沒有 podman 或 docker 時略過，設了 `CI` 時失敗。解析與執行緒的行為在單元測試（`cargo test -p agent --lib tpm`）以 swtpm 錄下的回應與假 TPM 測。
+- `tpm_swtpm`、`tpm_provision` 與 `tpm_endorsement` 的 swtpm 來自 `testkit::swtpm`（映像、session 與 tpm2-tools 的用法見 [`crates/testkit/README.md`](../../crates/testkit/README.md)「軟體 TPM」）。`tpm_swtpm` 以 tpm2-tools 佈建金鑰，比對 tpm2-tools 算的 SubjectPublicKeyInfo、以公鑰驗證簽章，並做一次真的 TLS 1.3 mTLS 握手（測試 CA 為 TPM 公鑰簽發用戶端憑證，CertificateVerify 剛好一次 TPM2_Sign，resumption 不簽章）。沒有 podman 或 docker 時略過，設了 `CI` 時失敗。解析與執行緒的行為在單元測試（`cargo test -p agent --lib tpm`）以 swtpm 錄下的回應與假 TPM 測。

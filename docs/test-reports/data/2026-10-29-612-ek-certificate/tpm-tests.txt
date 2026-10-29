@@ -1,0 +1,95 @@
+$ cargo test --locked -p agent --lib tpm
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.09s
+     Running unittests src/lib.rs (<host copy>/target/debug/deps/agent-8ac0e8ebdecaec54)
+
+running 73 tests
+test identity::tests::the_tpm_source_reports_why_it_cannot_open ... ok
+test tpm::endorsement::flow::the_recorded_offsets_are_right ... ok
+test tpm::endorsement::flow::an_endorsement_authorization_ends_after_create_primary ... ok
+test tpm::endorsement::flow::an_ek_whose_name_is_not_its_area_is_flushed_and_refused ... ok
+test tpm::endorsement::flow::the_nv_read_response_helper_gives_the_recorded_responses ... ok
+test tpm::endorsement::flow::an_ek_point_off_the_curve_is_flushed_and_refused ... ok
+test tpm::endorsement::tests::bytes_that_are_not_exactly_one_certificate_are_refused ... ok
+test tpm::endorsement::flow::an_ek_with_other_attributes_is_flushed_and_refused ... ok
+test tpm::endorsement::flow::an_nv_answer_about_another_index_is_refused ... ok
+test tpm::endorsement::tests::a_certificate_for_another_key_or_another_encoding_is_refused ... ok
+test tpm::marshal::tests::a_tpm_signature_becomes_der_that_verifies_with_the_public_key ... ok
+test tpm::marshal::tests::an_error_code_is_reported_whatever_the_tag ... ok
+test tpm::marshal::tests::an_ek_area_is_refused_unless_it_is_the_template_and_a_p256_point ... ok
+test tpm::marshal::tests::inflated_sizes_in_nv_responses_never_read_past_the_buffer ... ok
+test tpm::marshal::tests::every_truncation_of_a_response_is_an_error ... ok
+test tpm::marshal::tests::every_truncation_and_extension_of_a_provisioning_response_is_an_error ... ok
+test tpm::marshal::tests::inflated_inner_lengths_never_read_past_the_buffer ... ok
+test tpm::marshal::tests::every_truncation_and_extension_of_an_nv_or_ek_response_is_an_error ... ok
+test tpm::marshal::tests::keys_other_than_a_p256_ecdsa_sha256_signing_key_are_refused ... ok
+test tpm::endorsement::flow::a_short_nv_read_is_refused ... ok
+test tpm::marshal::tests::commands_are_marshalled_as_tpm2_part_3_specifies ... ok
+test tpm::marshal::tests::matches_template_needs_every_field_and_a_p256_point ... ok
+test tpm::marshal::tests::keys_with_the_wrong_attributes_are_refused ... ok
+test tpm::marshal::tests::der_integers_are_minimal_and_positive ... ok
+test tpm::marshal::tests::nv_commands_are_marshalled_as_tpm2_part_3_specifies ... ok
+test tpm::marshal::tests::provisioning_error_codes_are_reported ... ok
+test tpm::marshal::tests::short_coordinates_are_left_padded_and_long_ones_refused ... ok
+test tpm::marshal::tests::read_public_gives_the_same_key_as_tpm2_tools ... ok
+test tpm::marshal::tests::the_ek_template_is_the_tcg_profile_l2_template ... ok
+test tpm::marshal::tests::the_ek_commands_are_what_swtpm_accepted_and_give_tpm2_tools_ek ... ok
+test tpm::marshal::tests::nv_responses_parse_as_recorded ... ok
+test tpm::endorsement::flow::an_index_with_only_auth_read_is_read_with_its_own_authorization ... ok
+test tpm::marshal::tests::provisioning_commands_are_what_swtpm_accepted ... ok
+test tpm::marshal::tests::the_primary_is_the_srk_and_the_created_key_is_the_one_persisted ... ok
+test tpm::marshal::tests::inflated_sizes_in_provisioning_responses_never_read_past_the_buffer ... ok
+test tpm::endorsement::flow::an_ek_template_or_nonce_is_refused_before_anything_is_created ... ok
+test tpm::endorsement::flow::a_certificate_index_never_written_is_absent ... ok
+test tpm::endorsement::flow::an_ek_that_read_public_disagrees_with_is_flushed_and_refused ... ok
+test tpm::marshal::tests::trailing_bytes_and_wrong_sizes_are_errors ... ok
+test tpm::endorsement::tests::a_certificate_for_the_ek_matches ... ok
+test tpm::provision::tests::authorization_failures_are_told_from_other_codes ... ok
+test tpm::provision::tests::handles_that_cannot_hold_the_key_are_refused_before_any_command ... ok
+test tpm::marshal::tests::the_templates_are_the_poc_key_and_the_tpm2_tools_srk ... ok
+test tpm::provision::tests::a_tpm_error_reading_the_handle_is_not_taken_for_an_empty_handle ... ok
+test tpm::rc::tests::format_one_codes_name_the_error_and_its_subject ... ok
+test tpm::rc::tests::unknown_vendor_layered_and_tpm12_codes_stay_readable ... ok
+test tpm::rc::tests::format_zero_errors_and_warnings_are_told_apart ... ok
+test tpm::endorsement::flow::a_certificate_for_another_key_is_refused ... ok
+test tpm::tests::a_device_that_is_missing_or_not_a_character_device_is_refused ... ok
+test tpm::endorsement::flow::without_a_certificate_the_ek_is_tpm2_tools_ek_and_absent_is_reported ... ok
+test tpm::provision::tests::a_signing_key_that_differs_from_the_template_is_refused_after_reading_it_only ... ok
+test tpm::endorsement::flow::an_index_of_the_largest_size_is_read_in_eight_chunks_and_judged ... ok
+test tpm::provision::tests::without_the_standard_srk_a_transient_primary_is_made_and_flushed ... ok
+test tpm::tests::a_dead_thread_makes_signing_fail_instead_of_hanging ... ok
+test tpm::tests::a_key_whose_test_signature_does_not_verify_is_refused ... ok
+test tpm::provision::tests::other_objects_are_refused_after_reading_them_only ... ok
+test tpm::tests::handles_outside_the_persistent_range_are_refused_before_any_command ... ok
+test tpm::tests::open_reads_the_key_signs_a_test_message_and_signs_with_it ... ok
+test tpm::tests::an_io_error_fails_one_request_and_the_next_one_works ... ok
+test tpm::provision::tests::an_occupied_handle_after_create_reuses_the_other_runs_key ... ok
+test tpm::provision::tests::an_existing_key_is_reused_with_two_commands ... ok
+test tpm::tests::rustls_sees_an_ecdsa_p256_key_whose_spki_matches_only_its_own_certificate ... ok
+test tpm::endorsement::flow::a_certificate_index_that_cannot_hold_a_certificate_is_refused ... ok
+test tpm::endorsement::flow::the_recorded_certificate_is_read_in_two_chunks_and_matches ... ok
+test tpm::provision::tests::an_empty_handle_gets_a_key_under_the_srk_and_a_retry_is_resent ... ok
+test tpm::tests::tpm_errors_at_open_are_returned_and_stop_the_thread ... ok
+test tpm::marshal::tests::garbage_is_rejected_without_panicking ... ok
+test tpm::endorsement::tests::certificate_garbage_is_refused_without_panicking ... ok
+test tpm::tests::dropping_the_last_clone_stops_the_thread_and_closes_the_channel ... ok
+test tpm::marshal::tests::provisioning_garbage_is_rejected_without_panicking ... ok
+test tpm::marshal::tests::nv_garbage_is_rejected_without_panicking ... ok
+test tpm::tests::a_tpm_that_does_not_answer_times_out_and_a_full_queue_is_refused ... ok
+test tpm::provision::tests::retries_give_up_after_a_bound ... ok
+
+test result: ok. 73 passed; 0 failed; 0 ignored; 0 measured; 143 filtered out; finished in 1.64s
+
+$ CI=true cargo test --locked -p agent --test tpm_endorsement
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.09s
+     Running tests/tpm_endorsement.rs (<host copy>/target/debug/deps/tpm_endorsement-e7a280a70209a16b)
+
+running 5 tests
+test an_ek_template_or_nonce_in_nv_is_refused_before_anything_is_created ... ok
+test the_ek_is_tpm2_tools_ecc_ek_and_the_same_on_every_run ... ok
+test a_process_that_dies_while_the_ek_is_loaded_leaves_nothing ... ok
+test an_endorsement_authorization_is_refused_and_the_tpm_is_unchanged ... ok
+test an_ek_certificate_is_returned_when_it_is_for_the_ek_and_refused_otherwise ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.77s
+
+
