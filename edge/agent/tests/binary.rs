@@ -647,8 +647,15 @@ fn provision_install_refuses_invalid_arguments_with_status_2_and_has_its_own_hel
 
 #[test]
 fn provision_install_without_an_agent_installation_exits_9_and_writes_nothing() {
-    // Without the agent's account (this machine is not a gateway) or without its configuration,
-    // the installation cannot be used: status 9 before standard input is read.
+    // Without the agent's account (this machine is not a gateway) or without its configuration
+    // (always /etc/trustiot/agent.toml), the installation cannot be used: status 9 before
+    // standard input is read.
+    let stderr = refused(&install(&["--hardware-id", "tg-0001"]), 9);
+    assert!(
+        stderr.contains("trustiot-agent") || stderr.contains("/etc/trustiot/agent.toml"),
+        "{stderr}"
+    );
+    // Whoever names the configuration decides where root writes: there is no --config.
     let dir = testkit::mqtt::ScratchDir::new("agent-install-binary");
     let config = dir.path().join("agent.toml");
     let stderr = refused(
@@ -658,12 +665,9 @@ fn provision_install_without_an_agent_installation_exits_9_and_writes_nothing() 
             "--config",
             config.to_str().unwrap(),
         ]),
-        9,
+        2,
     );
-    assert!(
-        stderr.contains("trustiot-agent") || stderr.contains("agent.toml"),
-        "{stderr}"
-    );
+    assert!(stderr.contains("--config is not accepted"), "{stderr}");
     assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 0);
 }
 

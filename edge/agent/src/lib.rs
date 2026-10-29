@@ -32,6 +32,7 @@
 pub mod backoff;
 pub mod config;
 pub mod desired;
+mod directory;
 pub mod heartbeat;
 pub mod identity;
 pub mod link;

@@ -26,7 +26,7 @@
 )]
 
 use std::io;
-use std::os::unix::fs::MetadataExt as _;
+use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
 use std::path::{Path, PathBuf};
 
 use agent::config::Config;
@@ -197,6 +197,9 @@ struct Gateway {
     /// The TPM key's SubjectPublicKeyInfo.
     spki: Vec<u8>,
     dir: ScratchDir,
+    /// `dir`'s path without symbolic links (the system's temporary directory may be reached
+    /// through one): install refuses a path through a link.
+    root: PathBuf,
     config: PathBuf,
     /// `/etc/trustiot` and `/var/lib/trustiot-agent` of this gateway.
     etc: PathBuf,
@@ -215,24 +218,46 @@ impl Gateway {
         let spki = provisioned.key.public_key_spki_der().to_vec();
         drop(provisioned);
         let dir = ScratchDir::new("agent-provision-install");
-        let etc = dir.path().join("etc");
-        let state = dir.path().join("state");
+        let root = dir.path().canonicalize().unwrap();
+        let etc = root.join("etc");
+        let state = root.join("state");
         std::fs::create_dir(&etc).unwrap();
         std::fs::create_dir(&state).unwrap();
-        // The outer TLS's trust: any CA certificate; this test never connects.
-        let outer = dir.write("outer-ca.pem", pem(&Pki::new().root));
-        let config = dir.write(
-            "agent.toml",
-            config_text(&outer, &etc, &state, "key = { source = \"tpm\" }", ""),
-        );
-        Some(Self {
+        // Whatever the umask: install needs directories and a configuration that only their
+        // owner can write.
+        for directory in [&root, &etc, &state] {
+            std::fs::set_permissions(directory, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let mut gateway = Self {
             swtpm,
             spki,
             dir,
-            config,
+            config: PathBuf::new(),
+            root,
             etc,
             state,
-        })
+        };
+        // The outer TLS's trust: any CA certificate; this test never connects.
+        let outer = gateway.write("outer-ca.pem", pem(&Pki::new().root));
+        gateway.config = gateway.write(
+            "agent.toml",
+            config_text(
+                &outer,
+                &gateway.etc,
+                &gateway.state,
+                "key = { source = \"tpm\" }",
+                "",
+            ),
+        );
+        Some(gateway)
+    }
+
+    /// Writes `contents` to `name` in the scratch directory, mode 0644, and returns its path.
+    fn write(&self, name: &str, contents: impl AsRef<[u8]>) -> PathBuf {
+        let path = self.root.join(name);
+        std::fs::write(&path, contents).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+        path
     }
 
     fn chain_path(&self) -> PathBuf {
@@ -432,8 +457,8 @@ fn wrong_certificates_are_refused_and_nothing_is_written() {
     // A root CRL from another root: with the new root the agent would not start.
     let crl = gateway.state.join("root-crl.pem");
     std::fs::write(&crl, other.crl()).unwrap();
-    let outer = gateway.dir.path().join("outer-ca.pem");
-    let with_crl = gateway.dir.write(
+    let outer = gateway.root.join("outer-ca.pem");
+    let with_crl = gateway.write(
         "agent-crl.toml",
         config_text(
             &outer,
@@ -464,7 +489,7 @@ fn wrong_certificates_are_refused_and_nothing_is_written() {
     assert_eq!(gateway.files(), before);
     // Running as root, install reads broker.crl only as a regular file: a symbolic link (here
     // to a usable CRL) or a FIFO, which a plain open would block on, is refused without reading.
-    let usable = gateway.dir.write("usable-crl.pem", pki.crl());
+    let usable = gateway.write("usable-crl.pem", pki.crl());
     std::fs::remove_file(&crl).unwrap();
     std::os::unix::fs::symlink(&usable, &crl).unwrap();
     gateway
@@ -473,10 +498,7 @@ fn wrong_certificates_are_refused_and_nothing_is_written() {
             &owners,
             pki.input(&leaf).as_bytes(),
         )
-        .failed(
-            Exit::Configuration,
-            "is a symbolic link, not a regular file",
-        );
+        .failed(Exit::Configuration, "is not a regular file");
     assert_eq!(gateway.files(), before);
     std::fs::remove_file(&crl).unwrap();
     let fifo = std::ffi::CString::new(crl.as_os_str().as_encoded_bytes()).unwrap();
@@ -490,7 +512,7 @@ fn wrong_certificates_are_refused_and_nothing_is_written() {
             &owners,
             pki.input(&leaf).as_bytes(),
         )
-        .failed(Exit::Configuration, "is something else, not a regular file");
+        .failed(Exit::Configuration, "is not a regular file");
     assert_eq!(gateway.files(), before);
     std::fs::remove_file(&crl).unwrap();
     // With that root's CRL revoking nothing it installs, and is then unchanged.
@@ -726,22 +748,17 @@ fn owners_are_set_per_file_and_an_unusable_configuration_is_refused_before_readi
         let root = std::fs::metadata(gateway.root_path()).unwrap();
         assert_eq!((root.uid(), root.gid()), (0, 0));
     } else {
-        // The chain was staged, then the root's owner could not be set: nothing renamed, and
-        // no staged file left.
-        ran.failed(Exit::Failure, "needs root");
-        assert!(
-            ran.stderr.contains("nothing was replaced"),
-            "{}",
-            ran.stderr
-        );
+        // The configuration belongs to this user, not to root: it is not read, nothing is
+        // written. (The clean-up when an owner cannot be set is a unit test.)
+        ran.failed(Exit::Configuration, "must belong to root (uid 0)");
         assert!(gateway.files().is_empty(), "{:?}", gateway.files());
     }
 
-    let outer = gateway.dir.path().join("outer-ca.pem");
-    let missing = gateway.dir.path().join("missing");
+    let outer = gateway.root.join("outer-ca.pem");
+    let missing = gateway.root.join("missing");
     // Paths that differ as text but name one file: through a symbolic link to a directory, and
     // through `..`.
-    let link = gateway.dir.path().join("link-to-etc");
+    let link = gateway.root.join("link-to-etc");
     std::os::unix::fs::symlink(&gateway.etc, &link).unwrap();
     let aliased = |certificate: PathBuf, crl: &str| {
         format!(
@@ -758,7 +775,7 @@ fn owners_are_set_per_file_and_an_unusable_configuration_is_refused_before_readi
         (
             "linked.toml",
             aliased(link.join("broker-ca.pem"), ""),
-            "identity.certificate and broker.ca are the same file",
+            "is a symbolic link",
         ),
         (
             "dotdot.toml",
@@ -766,6 +783,11 @@ fn owners_are_set_per_file_and_an_unusable_configuration_is_refused_before_readi
                 gateway.state.join("..").join("etc").join("broker-ca.pem"),
                 "",
             ),
+            "\"..\"",
+        ),
+        (
+            "same.toml",
+            aliased(gateway.root_path(), ""),
             "identity.certificate and broker.ca are the same file",
         ),
         (
@@ -807,7 +829,7 @@ fn owners_are_set_per_file_and_an_unusable_configuration_is_refused_before_readi
             "does not exist",
         ),
     ] {
-        let config = gateway.dir.write(name, text);
+        let config = gateway.write(name, text);
         let before = gateway.files();
         let mut stdin = Unread;
         let mut stdout = Vec::new();
@@ -829,8 +851,15 @@ fn owners_are_set_per_file_and_an_unusable_configuration_is_refused_before_readi
         assert!(stderr.contains(expected), "{name}: {stderr}");
         assert_eq!(gateway.files(), before, "{name}");
     }
-    let missing_config = gateway.dir.path().join("none.toml");
-    let ran = gateway.install(&gateway.options_with(&missing_config), &root_owned, b"");
+    let missing_config = gateway.root.join("none.toml");
+    let ran = gateway.install(
+        &gateway.options_with(&missing_config),
+        &Owners {
+            chain: mine,
+            root: mine,
+        },
+        b"",
+    );
     ran.failed(Exit::Configuration, "none.toml");
 }
 

@@ -51,7 +51,7 @@ CARGO_ZIGBUILD_ZIG_PATH="$(proto bin zig --reporter text | tail -n 1)" \
 ```text
 trustiot-agent [--config <file>] [--check]
 trustiot-agent provision --hardware-id <id> [--handle <hex>] [--device <path>] [--inspect]
-trustiot-agent provision install --hardware-id <id> [--config <file>]
+trustiot-agent provision install --hardware-id <id>
 ```
 
 後兩種是產線工作站用的子命令，不啟動服務，見「出廠佈建」與「安裝憑證鏈與根憑證」。
@@ -485,27 +485,27 @@ trustiot-agent provision --hardware-id <id> [--handle <hex>] [--device <path>] [
 登錄成功之後，產線工作站（`factory/workstation`，Laysi/trustiot-v2#617）經 ssh 執行 `trustiot-agent provision install`（`src/provision/install.rs`），在 stdin 送來登錄 API 回的憑證鏈與根憑證。送過來的只有這三張公開的憑證：閘道器憑證、簽發 CA、根；工作站憑證、私鑰與 session cookie 不會到閘道器。
 
 ```text
-trustiot-agent provision install --hardware-id <id> [--config <file>]
+trustiot-agent provision install --hardware-id <id>
 ```
 
 | 參數 | 內容 |
 | --- | --- |
 | `--hardware-id <id>` | 必填。閘道器的硬體 ID（合法的 `GatewayId`），憑證的 CN 必須是它 |
-| `--config <file>` | agent 的設定檔，預設 `/etc/trustiot/agent.toml`；兩個檔案的位置與 TPM 金鑰都從這裡讀 |
 
 **先檢查，全部通過才寫入**：
 
-1. 設定檔要載入得了（與啟動時同一套檢查），`identity.key` 必須是 TPM；`identity.certificate` 與 `broker.ca` 的目錄都要已經存在（agent 的 unit 的 `StateDirectory` 與 `ConfigurationDirectory`）。
+1. 設定檔固定是 `/etc/trustiot/agent.toml`（沒有 `--config`），檔案與它的目錄都要屬於 root、只有 root 能寫（沒有群組與其他人的寫入位元），內容與啟動時同一套檢查，`identity.key` 必須是 TPM。`identity.certificate` 與 `broker.ca` 的目錄都要已經存在（agent 的 unit 的 `StateDirectory` 與 `ConfigurationDirectory`），而且只有擁有者能寫：`identity.certificate` 的目錄屬於 `trustiot-agent`（換發要寫它），`broker.ca` 的目錄屬於 root。每個路徑都從 `/` 一層一層開（`O_DIRECTORY`、`O_NOFOLLOW`），路徑中任何一段是符號連結或有 `..` 都拒絕；之後的讀、建立、rename、刪除、flush 都在開好的目錄上做（`openat`、`renameat`、`unlinkat`），不再經過路徑文字，所以檢查之後目錄被搬走或換成連結，也寫不到別處。`broker.crl` 的目錄同樣不跟隨連結開啟，要屬於 root 或 `trustiot-agent`、別人不能寫（範例放在 agent 的 `StateDirectory`）：這樣只有 root 或 agent 能在裡面放東西，而 agent 建不了裝置檔，以 root 讀它不會開到別人放的裝置；內容要是新的根簽的才用。上層目錄（例如 `/etc`、`/var/lib`）的擁有者不檢查，靠作業系統的預設（只有 root 能寫）。
 2. stdin 最多 32 KiB，只能有 PEM `CERTIFICATE` 區塊與空行：其他種類的區塊（例如私鑰）或任何其他文字都拒絕，錯誤訊息不引用輸入的內容。剛好三張：閘道器憑證、簽發它的簽發 CA、根，順序固定。
 3. 鏈本身：閘道器憑證不是 CA、CN 剛好一個而且等於 `--hardware-id`；簽發 CA 是 CA、不是自簽、以它的金鑰驗得過閘道器憑證的簽章；根是自簽（主體等於簽發者）的 CA、以自己的金鑰驗得過、也驗得過簽發 CA 的簽章。簽章只用 TLS 握手接受的演算法驗證（與 `broker.ca` 的檢查相同）。順序顛倒、缺簽發 CA、鏈接不到送來的根、根不是自簽的 CA，都在這裡拒絕。
-4. agent 自己的啟動檢查，對要寫入的內容做：根當作 `broker.ca`（只放根、只能一張）；設定了 `broker.crl` 而檔案存在時，根 CRL 要是這個根簽的（換了根而舊的根 CRL 還在時，agent 會拒絕啟動，所以在這裡就拒絕）；這個指令以 root 執行，只把 `broker.crl` 當一般檔案讀：開檔不跟隨符號連結也不等待（`O_NOFOLLOW`、`O_NONBLOCK`），再以 `fstat` 確認是一般檔案，是符號連結、FIFO、目錄或裝置時以 9 結束，不讀它指向的東西；鏈當作 `identity.certificate`，以 TPM 金鑰檢查（`identity::from_chain`）：leaf 的公鑰必須等於 TPM 金鑰的公鑰，EKU 與 key usage 允許 TLS 用戶端驗證；最後以 webpki 的用戶端憑證檢查確認鏈接到根，有根 CRL 時一併檢查（根撤銷了的簽發 CA 被拒絕）。只有時間不對（以閘道器的時鐘看已過期或還沒生效）時在 stderr 警告，照樣安裝，理由與啟動時相同。
+4. agent 自己的啟動檢查，對要寫入的內容做：根當作 `broker.ca`（只放根、只能一張）；設定了 `broker.crl` 而檔案存在時，根 CRL 要是這個根簽的（換了根而舊的根 CRL 還在時，agent 會拒絕啟動，所以在這裡就拒絕）；這個指令以 root 執行，只把 `broker.crl` 當一般檔案讀：先以 `fstatat` 確認是一般檔案（裝置檔不會被開啟），開檔不跟隨符號連結也不等待（`O_NOFOLLOW`、`O_NONBLOCK`），再以 `fstat` 確認一次，是符號連結、FIFO、目錄或裝置時以 9 結束，不讀它指向的東西；鏈當作 `identity.certificate`，以 TPM 金鑰檢查（`identity::from_chain`）：leaf 的公鑰必須等於 TPM 金鑰的公鑰，EKU 與 key usage 允許 TLS 用戶端驗證；最後以 webpki 的用戶端憑證檢查確認鏈接到根，有根 CRL 時一併檢查（根撤銷了的簽發 CA 被拒絕）。只有時間不對（以閘道器的時鐘看已過期或還沒生效）時在 stderr 警告，照樣安裝，理由與啟動時相同。
 5. 不倒退換發過的憑證：`identity.certificate` 已經有同一把金鑰、notBefore 比送來的晚的憑證時拒絕。那是 agent 自己換發的（見「憑證換發」），而重送登錄時平台回的永遠是登錄當時那張（[services/certs/README.md](../../services/certs/README.md)「重送回原本的憑證」），換回去只會讓閘道器用舊的、可能已被撤銷或過期的憑證，再被 broker 拒絕後換發一次。真的要換回時，先刪掉那個檔案。只有現有的鏈在要安裝的根（與根 CRL）之下通過用戶端憑證檢查（不看時間）才算數：換了根之後，舊根之下較新的憑證本來就連不上，照常換掉，重新安裝不會被它卡住。現有的檔案讀不了、解析不了、是別把金鑰的憑證或不在新的根之下時，照常換掉。
 
 **寫入**：鏈（leaf、簽發 CA）寫到 `identity.certificate`，擁有者是 `trustiot-agent` 帳號與它的主要群組；根寫到 `broker.ca`，擁有者是 root:root；兩者權限都是 0644（都是公開資料）。內容是重新以 DER 編碼的標準 PEM（每行 64 字元），不是 stdin 的原文，所以重跑時比得出相同。
 
 - 內容、擁有者、權限都已經對的檔案不動（同一個 inode），所以重跑沒有副作用；不是一般檔案（例如連結）或權限不對的，即使內容相同也換掉。
-- 要換的檔案先在同一個目錄寫成新檔（`O_EXCL`、`O_NOFOLLOW`，名稱以 `.` 開頭），寫完、設好擁有者與權限、flush 到磁碟，兩個都準備好之後才 rename 蓋過舊檔，再 flush 目錄。準備過程中任何一步失敗（例如不是 root 而設不了擁有者），新檔全部刪掉、舊檔不變。寫入過程中斷時舊檔是完整的；rename 本身是原子的，兩個 rename 之間當機時一個新一個舊，重跑即補齊。
+- 要換的檔案先在同一個（開好的）目錄寫成新檔（`openat` 加 `O_EXCL`、`O_NOFOLLOW`，名稱以 `.` 開頭），寫完、設好擁有者與權限、flush 到磁碟，兩個都準備好之後才 rename 蓋過舊檔，再 flush 目錄。準備過程中任何一步失敗（例如不是 root 而設不了擁有者），新檔全部刪掉、舊檔不變。寫入過程中斷時舊檔是完整的；rename 本身是原子的，兩個 rename 之間當機時一個新一個舊，重跑即補齊。
 - 要以 root 執行（要設定擁有者）；工作站經 ssh 時視需要加 `sudo -n`。
+- **前提：能執行這個指令的人就決定了閘道器信任哪個根。** 它以 root 寫入設定檔指定的位置、換掉 `broker.ca`，所以工作站的 ssh 存取只能執行 agent 的 `provision` 子命令：以專用的金鑰登入，在 `authorized_keys` 以 `command=`（加 `restrict`）或 sshd 的 `ForceCommand` 指向只接受 `trustiot-agent provision install --hardware-id <id>`（與取 CSR 的 `provision`）的固定指令，或以 sudoers 規則把整串參數寫死，不能是可以執行任意指令的 root 或 sudo 權限。設定檔不能由參數指定，也是同樣的理由。
 - 不重啟 agent：agent 啟動時才讀這兩個檔案。閘道器剛重刷、還沒有憑證時，agent 啟動失敗後由 systemd 重啟（最多隔 1 分鐘），下一次啟動就會讀到；換了根或憑證而 agent 正在執行時，要 `systemctl restart trustiot-agent`。
 
 stdout 每個檔案一行：`<路徑>: written` 或 `<路徑>: unchanged`；診斷寫 stderr。結束碼（`provision::install::Exit`，與 `provision` 的 3–7 不重疊，工作站分得出來）：
@@ -516,7 +516,7 @@ stdout 每個檔案一行：`<路徑>: written` 或 `<路徑>: unchanged`；診�
 | 1 | 其他失敗：TPM 錯誤、讀不到 stdin、寫不了檔案（沒有 rename 任何檔案，除非訊息說了第一個已換掉） |
 | 2 | 參數錯誤 |
 | 8 | 憑證被拒絕（上面第 2 到 5 項），沒有寫任何檔案 |
-| 9 | agent 的安裝不能用：沒有設定檔或載入不了、金鑰不是 TPM、目錄不存在、`identity.certificate`、`broker.ca`、`broker.crl` 有兩個是同一個檔案（解開符號連結與 `..` 之後比對目錄）、`broker.crl` 不是一般檔案、沒有 `trustiot-agent` 帳號；沒有寫任何檔案 |
+| 9 | agent 的安裝不能用：沒有設定檔或載入不了、設定檔或它的目錄不屬於 root 或別人能寫、金鑰不是 TPM、目錄不存在、目錄的擁有者不對或別人能寫、路徑經過符號連結或有 `..`、`identity.certificate`、`broker.ca`、`broker.crl` 有兩個是同一個檔案（以目錄的裝置與 inode 加上檔名比對）、`broker.crl` 不是一般檔案或它的目錄別人能寫、沒有 `trustiot-agent` 帳號；沒有寫任何檔案 |
 
 閘道器重刷之後，工作站重跑同一個 `register`（平台回 200 與同一份登錄，見 [factory/workstation](../../factory/workstation/README.md)），憑證就照同樣的方式裝回去。
 
@@ -544,7 +544,7 @@ cargo test -p agent --test tpm_swtpm                    # swtpm 容器：簽章�
 cargo test -p agent --test tpm_provision                # swtpm 容器：金鑰佈建的建立、沿用、拒絕、同時建立、中斷、tpm2_clear
 cargo test -p agent --test tpm_endorsement              # swtpm 容器：EK 等於 tpm2_createek 的、重跑與換連線相同；EK 憑證相符、不符、沒有；endorsement 授權與 NV 的 EK 範本被拒
 cargo test -p agent --test provision                    # swtpm 容器：provision 的報告（CSR 驗得過、公鑰與 EK 相符）、不含私密資料、重跑沿用、--inspect 不改 TPM、EK 憑證不符與 handle 被佔的結束碼
-cargo test -p agent --test provision_install            # swtpm 容器：provision install 拒絕錯的憑證且不寫任何檔案、擁有者與權限、agent 的啟動檢查接受裝好的檔案、重跑不寫、換根時原子替換、設不了擁有者時不留下新檔
+cargo test -p agent --test provision_install            # swtpm 容器：provision install 拒絕錯的憑證且不寫任何檔案、擁有者與權限、agent 的啟動檢查接受裝好的檔案、重跑不寫、換根時原子替換、設定檔與目錄的擁有者、權限與符號連結的檢查（不讀設定、不寫任何檔案）
 ```
 
 `tools/lab-dataset` 的錄製工具（`lab-dataset record`）以 library 使用 `modbus::endpoint::Endpoints`、`DeviceReader` 與 `polling::run`；改它們的介面時一併跑 `cargo test -p lab-dataset --test record`。錄製工具同樣經過位址限制，它的測試以 `exempt_for_tests` 放行假轉換器所在的 127.0.0.1。

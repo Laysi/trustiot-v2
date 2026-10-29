@@ -4,15 +4,25 @@
 //! root certificate the registration answered with. They are public data; nothing else crosses.
 //!
 //! ```text
-//! trustiot-agent provision install --hardware-id <id> [--config <file>]
+//! trustiot-agent provision install --hardware-id <id>
 //! ```
+//!
+//! The command runs as root, and the configuration decides where it writes and which root the
+//! gateway trusts. So whoever can run it, or name its configuration, controls the gateway's trust
+//! anchor; the configuration is always [`crate::config::DEFAULT_PATH`] (no `--config`), and the
+//! workstation's ssh access must allow this one command only (its README).
 //!
 //! Everything is checked before anything is written:
 //!
-//! 1. The agent's configuration ([`Config::load`]) names where the files go (`identity.certificate`
-//!    and `broker.ca`) and the TPM key (`identity.key`, which must be the TPM). Both directories
-//!    must exist: they belong to the agent's installation (its unit's `StateDirectory` and
-//!    `ConfigurationDirectory`).
+//! 1. The agent's configuration ([`Config::parse`]) names where the files go
+//!    (`identity.certificate` and `broker.ca`) and the TPM key (`identity.key`, which must be the
+//!    TPM). The file and its directory must belong to root and be writable by no one else. Both
+//!    target directories must exist (they belong to the agent's installation: its unit's
+//!    `StateDirectory` and `ConfigurationDirectory`) and be writable by no one but their owner:
+//!    the agent's account [`AGENT_ACCOUNT`] for `identity.certificate`, which its renewal
+//!    rewrites, and root for `broker.ca`. Every path is opened from `/` one component at a time
+//!    without following symbolic links ([`Directory`]), and every later read and write goes
+//!    through the opened directory, never the path again.
 //! 2. Standard input, at most [`MAX_INPUT_BYTES`], is PEM `CERTIFICATE` blocks and nothing else:
 //!    exactly three, the gateway's certificate, the issuing CA that signed it, then the root.
 //! 3. The chain, here ([`check_chain`]): the gateway certificate is not a CA and its common name
@@ -34,21 +44,22 @@
 //!    changed is not held by a certificate under the old root.
 //!
 //! Then each file whose content, owner or mode differ is replaced atomically: a new file in the
-//! same directory (`O_EXCL`, `O_NOFOLLOW`), written, its owner and mode set, flushed to disk, and
-//! only when both files are ready renamed over the old ones, and the directories flushed. The
-//! chain (leaf, then the issuing CA) belongs to the agent's account [`AGENT_ACCOUNT`], the root to
-//! root; both have mode [`FILE_MODE`]. A file that is already right is not touched (same inode),
-//! so running it again changes nothing. A failure before the renames removes the new files and
-//! leaves the old ones as they were; the two renames themselves are not one atomic step, and a
-//! crash between them leaves one file new and one old, which the next run completes.
+//! same open directory (`openat` with `O_EXCL`, `O_NOFOLLOW`), written, its owner and mode set,
+//! flushed to disk, and only when both files are ready renamed over the old ones (`renameat`),
+//! and the directories flushed. The chain (leaf, then the issuing CA) belongs to the agent's
+//! account [`AGENT_ACCOUNT`], the root to root; both have mode [`FILE_MODE`]. A file that is
+//! already right is not touched (same inode), so running it again changes nothing. A failure
+//! before the renames removes the new files and leaves the old ones as they were; the two renames
+//! themselves are not one atomic step, and a crash between them leaves one file new and one old,
+//! which the next run completes.
 //!
 //! The command needs root (it sets owners). It does not restart the agent: the agent reads the
 //! files when it starts.
 
-use std::ffi::{CString, OsString};
-use std::fs::{self, File, OpenOptions};
+use std::ffi::{CString, OsStr, OsString};
+use std::fs::{self, File};
 use std::io::{self, Read, Write};
-use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _, PermissionsExt as _};
+use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, Ordering};
 
@@ -57,6 +68,7 @@ use rustls_pki_types::{CertificateDer, UnixTime};
 use x509_parser::prelude::{FromDer, X509Certificate};
 
 use crate::config::Config;
+use crate::directory::Directory;
 use crate::identity::{self, IdentityError, KeySource};
 use crate::link::printable;
 use crate::tls::{self, BrokerTrust, RootCrl, Validity};
@@ -75,8 +87,7 @@ pub const FILE_MODE: u32 = 0o644;
 pub const MAX_INPUT_BYTES: usize = 32 * 1024;
 
 /// The subcommand's help.
-pub const USAGE: &str =
-    "usage: trustiot-agent provision install --hardware-id <id> [--config <file>]
+pub const USAGE: &str = "usage: trustiot-agent provision install --hardware-id <id>
 
 Installs the gateway's certificate chain and the root certificate the production workstation
 sends on standard input (PEM: the gateway certificate, the issuing CA, then the root; nothing
@@ -85,14 +96,19 @@ is the hardware ID, the chain leads to that root, and the agent would accept the
 chain to identity.certificate (owner trustiot-agent, mode 0644) and the root to broker.ca (owner
 root, mode 0644), each replaced atomically, files that are already right untouched. Needs root.
 
+The paths come from the agent's configuration /etc/trustiot/agent.toml (no other file is
+accepted), which with its directory must belong to root and be writable by no one else. The
+directory of broker.ca must belong to root, that of identity.certificate to trustiot-agent, both
+writable by no one else, and no path may go through a symbolic link.
+
   --hardware-id <id>  the gateway's hardware ID: the certificate's common name (required)
-  --config <file>     the agent's configuration (default /etc/trustiot/agent.toml)
   --help              print this help (only as the sole argument)
 
 Exit status: 0 installed (or already installed); 1 other failure (nothing renamed, or see the
 message); 2 invalid arguments; 8 the certificates are refused, nothing was written; 9 the
 configuration or the installation cannot be used (no agent configuration, a key that is not the
-TPM's, a missing directory or account), nothing was written.";
+TPM's, a missing directory or account, a wrong owner or mode, a symbolic link), nothing was
+written.";
 
 /// How the subcommand ends: its exit status. Distinct from `provision`'s own (3 to 7), so the
 /// workstation can tell every status of both apart.
@@ -129,7 +145,9 @@ impl Exit {
 pub struct Options {
     /// The common name the gateway certificate must have.
     pub hardware_id: GatewayId,
-    /// The agent's configuration file.
+    /// The agent's configuration file: always [`crate::config::DEFAULT_PATH`] from the command
+    /// line, because whoever names it chooses where root writes and which root the gateway
+    /// trusts; tests set their own.
     pub config: PathBuf,
 }
 
@@ -161,7 +179,6 @@ pub fn parse_args(args: impl Iterator<Item = OsString>) -> Result<Command, Strin
         };
     }
     let mut hardware_id = None;
-    let mut config = None;
     while let Some(arg) = args.next() {
         let name = arg
             .to_str()
@@ -180,10 +197,10 @@ pub fn parse_args(args: impl Iterator<Item = OsString>) -> Result<Command, Strin
                 }
             }
             "--config" => {
-                let path = PathBuf::from(args.next().ok_or("--config needs a file")?);
-                if config.replace(path).is_some() {
-                    return Err("--config is given twice".to_owned());
-                }
+                return Err(format!(
+                    "--config is not accepted: the configuration is always {}",
+                    crate::config::DEFAULT_PATH
+                ));
             }
             "--help" | "-h" => return Err(HELP_ALONE.to_owned()),
             _ => return Err(format!("unknown argument {arg:?}")),
@@ -191,7 +208,7 @@ pub fn parse_args(args: impl Iterator<Item = OsString>) -> Result<Command, Strin
     }
     Ok(Command::Install(Options {
         hardware_id: hardware_id.ok_or("--hardware-id is required")?,
-        config: config.unwrap_or_else(|| PathBuf::from(crate::config::DEFAULT_PATH)),
+        config: PathBuf::from(crate::config::DEFAULT_PATH),
     }))
 }
 
@@ -364,57 +381,52 @@ fn install(
     stdin: &mut dyn Read,
     stderr: &mut dyn Write,
 ) -> Result<Vec<(PathBuf, Outcome)>, Failure> {
-    let config =
-        Config::load(&options.config).map_err(|error| Failure::Configuration(error.to_string()))?;
+    // Whoever controls the configuration chooses where root writes and which root the gateway
+    // trusts, so it is read only when root owns it and its directory (step 1).
+    let config = load_config(&options.config, owners.root)?;
     if !matches!(config.key, KeySource::Tpm { .. }) {
         return Err(Failure::Configuration(format!(
             "{}: identity.key.source is not \"tpm\": the certificate is installed only for the TPM key",
             options.config.display()
         )));
     }
-    let mut targets = Vec::new();
-    for (key, path) in [
-        ("identity.certificate", &config.certificate),
-        ("broker.ca", &config.broker_ca),
-    ] {
-        let directory = path.parent().unwrap_or(Path::new("/"));
-        let target = match (directory.canonicalize(), path.file_name()) {
-            (Ok(directory), Some(name)) if directory.is_dir() => directory.join(name),
-            _ => {
-                return Err(Failure::Configuration(format!(
-                    "{key} is {}, but the directory {} does not exist: install and start the agent first",
-                    path.display(),
-                    directory.display()
-                )));
-            }
-        };
-        targets.push((key, target));
-    }
-    // Two configured paths may name one file through a symbolic link or `..` in a directory: the
-    // second rename would then replace the first file. The comparison is on the resolved
-    // directories, because the file names themselves are replaced, never followed.
-    if targets[0].1 == targets[1].1 {
+    let chain_target = Target::open(
+        "identity.certificate",
+        &config.certificate,
+        owners.chain,
+        AGENT_ACCOUNT,
+    )?;
+    let root_target = Target::open("broker.ca", &config.broker_ca, owners.root, "root")?;
+    // Two configured paths may name one file (the directories are compared by device and inode,
+    // so a bind mount does not hide it): the second rename would then replace the first file.
+    if chain_target.is(&root_target.directory, &root_target.name)? {
         return Err(Failure::Configuration(format!(
             "{}: identity.certificate and broker.ca are the same file ({})",
             options.config.display(),
-            targets[0].1.display()
+            config.broker_ca.display()
         )));
     }
-    if let Some(crl) = config.broker_crl.as_deref() {
-        let resolved = crl
-            .parent()
-            .and_then(|directory| directory.canonicalize().ok())
-            .zip(crl.file_name())
-            .map(|(directory, name)| directory.join(name));
-        if let Some((key, _)) = targets
-            .iter()
-            .find(|(_, target)| resolved.as_ref() == Some(target))
-        {
-            return Err(Failure::Configuration(format!(
-                "{}: broker.crl and {key} are the same file ({})",
-                options.config.display(),
-                crl.display()
-            )));
+    let crl_source = match config.broker_crl.as_deref() {
+        Some(crl) => Some(CrlSource::open(crl, owners)?),
+        None => None,
+    };
+    if let Some(CrlSource::Directory {
+        path,
+        directory,
+        name,
+    }) = &crl_source
+    {
+        for (key, target) in [
+            ("identity.certificate", &chain_target),
+            ("broker.ca", &root_target),
+        ] {
+            if target.is(directory, name)? {
+                return Err(Failure::Configuration(format!(
+                    "{}: broker.crl and {key} are the same file ({})",
+                    options.config.display(),
+                    path.display()
+                )));
+            }
         }
     }
 
@@ -428,7 +440,7 @@ fn install(
     let trust = BrokerTrust::from_certificates(&config.broker_ca, vec![root])
         .map_err(|error| Failure::Refused(format!("broker.ca: {error}")))?;
     let now = crate::setup::clock_now();
-    let root_crl = root_crl(config.broker_crl.as_deref(), &trust, now)?;
+    let root_crl = root_crl(crl_source.as_ref(), &trust, now)?;
     let identity = identity::from_chain(
         &config.certificate,
         vec![
@@ -461,9 +473,7 @@ fn install(
         );
     }
     drop(identity);
-    if let Some(installed) =
-        newer_installed(&config.certificate, &chain.leaf, &trust, &root_crl, now)
-    {
+    if let Some(installed) = newer_installed(&chain_target, &chain.leaf, &trust, &root_crl, now) {
         return Err(Failure::Refused(format!(
             "{} holds a newer certificate for this TPM key (valid from {installed}): the agent \
              renewed it after the registration. To install the registration's certificate \
@@ -479,20 +489,221 @@ fn install(
     );
     let root_text = pem("CERTIFICATE", &chain.root);
     let files = [
-        (&config.certificate, chain_text, owners.chain),
-        (&config.broker_ca, root_text, owners.root),
+        (&chain_target, chain_text, owners.chain),
+        (&root_target, root_text, owners.root),
     ];
     replace_all(&files, &mut |file: &mut File, bytes: &[u8]| {
         file.write_all(bytes)
     })
     .map(|outcomes| {
-        files
-            .iter()
-            .map(|(path, _, _)| (*path).clone())
+        [config.certificate.clone(), config.broker_ca.clone()]
+            .into_iter()
             .zip(outcomes)
             .collect()
     })
     .map_err(Failure::Failed)
+}
+
+/// The largest configuration file read: the agent's is well under 4 KiB.
+const MAX_CONFIG_BYTES: u64 = 64 * 1024;
+
+/// The configuration at `path`, read only when the file and its directory belong to `owner`
+/// (root on the gateway), are writable by no one else, and are reached without a symbolic link.
+fn load_config(path: &Path, owner: Owner) -> Result<Config, Failure> {
+    let unusable = |reason: String| Failure::Configuration(format!("{}: {reason}", path.display()));
+    let (directory, name) = open_directory(path, owner, "root")?;
+    match directory.is_file(&name) {
+        Ok(Some(true)) => {}
+        Ok(Some(false)) => {
+            return Err(unusable(
+                "is not a regular file (a symbolic link is not followed)".to_owned(),
+            ));
+        }
+        Ok(None) => {
+            return Err(unusable(
+                "does not exist: install the agent first".to_owned(),
+            ));
+        }
+        Err(error) => return Err(unusable(format!("cannot be read: {error}"))),
+    }
+    let mut file = directory
+        .open_read(&name)
+        .map_err(|error| unusable(format!("cannot be read: {error}")))?;
+    let metadata = file
+        .metadata()
+        .map_err(|error| unusable(format!("cannot be read: {error}")))?;
+    if !metadata.is_file() {
+        return Err(unusable("is not a regular file".to_owned()));
+    }
+    check_owner(&metadata, owner, "root").map_err(unusable)?;
+    let mut bytes = Vec::new();
+    Read::take(&mut file, MAX_CONFIG_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|error| unusable(format!("cannot be read: {error}")))?;
+    if u64::try_from(bytes.len()).map_or(true, |len| len > MAX_CONFIG_BYTES) {
+        return Err(unusable(format!("is larger than {MAX_CONFIG_BYTES} bytes")));
+    }
+    let text = String::from_utf8(bytes).map_err(|_| unusable("is not UTF-8".to_owned()))?;
+    Config::parse(&text).map_err(|error| unusable(error.to_string()))
+}
+
+/// The directory of `path`, opened without following links ([`Directory::open`]), and the
+/// file's name in it. The directory must exist, belong to `owner` (`who`, for the message) and
+/// be writable by no one else.
+fn open_directory(path: &Path, owner: Owner, who: &str) -> Result<(Directory, OsString), Failure> {
+    let (Some(parent), Some(name)) = (path.parent(), path.file_name()) else {
+        return Err(Failure::Configuration(format!(
+            "{} is not a file's path",
+            path.display()
+        )));
+    };
+    let directory = Directory::open(parent).map_err(|error| {
+        Failure::Configuration(if error.kind() == io::ErrorKind::NotFound {
+            format!(
+                "the directory {} of {} does not exist: install and start the agent first",
+                parent.display(),
+                path.display()
+            )
+        } else {
+            format!(
+                "the directory {} of {} cannot be opened without following symbolic links: {error}",
+                parent.display(),
+                path.display()
+            )
+        })
+    })?;
+    let metadata = directory
+        .metadata()
+        .map_err(|error| Failure::Failed(format!("cannot read {}: {error}", parent.display())))?;
+    check_owner(&metadata, owner, who).map_err(|reason| {
+        Failure::Configuration(format!(
+            "the directory {} of {}: {reason}",
+            parent.display(),
+            path.display()
+        ))
+    })?;
+    Ok((directory, name.to_owned()))
+}
+
+/// Whether `metadata` belongs to `owner` (`who`, for the message) and is writable by no one
+/// else (no group or other write bit).
+fn check_owner(metadata: &fs::Metadata, owner: Owner, who: &str) -> Result<(), String> {
+    if metadata.uid() == owner.uid && metadata.mode() & 0o022 == 0 {
+        return Ok(());
+    }
+    Err(format!(
+        "must belong to {who} (uid {}) and be writable by no one else, but belongs to uid {} \
+         with mode {:o}",
+        owner.uid,
+        metadata.uid(),
+        metadata.mode() & 0o7777
+    ))
+}
+
+/// A file `provision install` writes: its directory, held open, and its name in it.
+struct Target {
+    directory: Directory,
+    name: OsString,
+}
+
+impl Target {
+    /// The target `path` of the configuration key `key` ([`open_directory`]).
+    fn open(key: &str, path: &Path, owner: Owner, who: &str) -> Result<Self, Failure> {
+        let (directory, name) =
+            open_directory(path, owner, who).map_err(|failure| match failure {
+                Failure::Configuration(reason) => {
+                    Failure::Configuration(format!("{key}: {reason}"))
+                }
+                other => other,
+            })?;
+        Ok(Self { directory, name })
+    }
+
+    /// The path, for messages.
+    fn path(&self) -> PathBuf {
+        self.directory.path().join(&self.name)
+    }
+
+    /// Whether `name` in `directory` is this file: the same name in the same directory (device
+    /// and inode).
+    fn is(&self, directory: &Directory, name: &OsStr) -> Result<bool, Failure> {
+        let identity = |directory: &Directory| {
+            directory
+                .metadata()
+                .map(|metadata| (metadata.dev(), metadata.ino()))
+                .map_err(|error| {
+                    Failure::Failed(format!(
+                        "cannot read {}: {error}",
+                        directory.path().display()
+                    ))
+                })
+        };
+        Ok(self.name == name && identity(&self.directory)? == identity(directory)?)
+    }
+}
+
+/// Where the root CRL is read from.
+enum CrlSource {
+    /// Its directory does not exist: no root CRL yet, as at start-up.
+    Missing(PathBuf),
+    /// Its directory, held open, and its name in it.
+    Directory {
+        path: PathBuf,
+        directory: Directory,
+        name: OsString,
+    },
+}
+
+impl CrlSource {
+    /// Opens the directory of `path` without following links. It must belong to root or to the
+    /// agent's account (`owners`; the example keeps the CRL in the agent's `StateDirectory`) and
+    /// be writable by no one else, so only root or the agent can put anything there, and the
+    /// agent cannot create device nodes: reading it as root opens no device another user
+    /// planted. Its content is used only when the new root signed it.
+    fn open(path: &Path, owners: &Owners) -> Result<Self, Failure> {
+        let (Some(parent), Some(name)) = (path.parent(), path.file_name()) else {
+            return Err(Failure::Configuration(format!(
+                "broker.crl: {} is not a file's path",
+                path.display()
+            )));
+        };
+        match Directory::open(parent) {
+            Ok(directory) => {
+                let metadata = directory.metadata().map_err(|error| {
+                    Failure::Failed(format!("cannot read {}: {error}", parent.display()))
+                })?;
+                let owner = if metadata.uid() == owners.chain.uid {
+                    owners.chain
+                } else {
+                    owners.root
+                };
+                let who = if owner == owners.chain {
+                    AGENT_ACCOUNT
+                } else {
+                    "root"
+                };
+                check_owner(&metadata, owner, who).map_err(|reason| {
+                    Failure::Configuration(format!(
+                        "broker.crl: the directory {} of {}: {reason}",
+                        parent.display(),
+                        path.display()
+                    ))
+                })?;
+                Ok(Self::Directory {
+                    path: path.to_owned(),
+                    directory,
+                    name: name.to_owned(),
+                })
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                Ok(Self::Missing(path.to_owned()))
+            }
+            Err(error) => Err(Failure::Configuration(format!(
+                "broker.crl: the directory {} cannot be opened without following symbolic links: {error}",
+                parent.display()
+            ))),
+        }
+    }
 }
 
 /// The notBefore (RFC 2822) of the certificate installed at `path`, when it is for the same key
@@ -504,22 +715,21 @@ fn install(
 /// such file, it cannot be read or parsed, or it is for another key, not newer or not under the
 /// new root: the file is then replaced as usual.
 fn newer_installed(
-    path: &Path,
+    target: &Target,
     leaf: &[u8],
     trust: &BrokerTrust,
     root_crl: &RootCrl,
     now: UnixTime,
 ) -> Option<String> {
     let limit = u64::try_from(MAX_INPUT_BYTES).unwrap_or(u64::MAX);
-    let metadata = fs::symlink_metadata(path).ok()?;
-    if !metadata.file_type().is_file() || metadata.len() > limit {
+    if target.directory.is_file(&target.name).ok()? != Some(true) {
         return None;
     }
-    let mut file = OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
-        .open(path)
-        .ok()?;
+    let mut file = target.directory.open_read(&target.name).ok()?;
+    let metadata = file.metadata().ok()?;
+    if !metadata.is_file() || metadata.len() > limit {
+        return None;
+    }
     let mut text = Vec::new();
     Read::take(&mut file, limit).read_to_end(&mut text).ok()?;
     let chain: Vec<CertificateDer<'static>> = certificates(&text)
@@ -553,16 +763,27 @@ fn newer_installed(
     )
 }
 
-/// The root CRL at `path` checked against the new root, as the agent will load it
-/// ([`RootCrl::from_bytes`]). Running as root, it is read only as a regular file that is not a
-/// symbolic link (`O_NOFOLLOW`, `O_NONBLOCK`, then `fstat`), so a link or a FIFO planted at the
-/// configured path cannot make it read another file or hang.
-fn root_crl(path: Option<&Path>, trust: &BrokerTrust, now: UnixTime) -> Result<RootCrl, Failure> {
-    let Some(path) = path else {
-        return Ok(RootCrl::NotConfigured);
+/// The root CRL (`None`: not configured) checked against the new root, as the agent will load it
+/// ([`RootCrl::from_bytes`]). Running as root, it is read only as a regular file reached without
+/// a symbolic link (its directory by [`Directory::open`], then `O_NOFOLLOW`, `O_NONBLOCK` and
+/// `fstat`), so a link or a FIFO planted on the configured path cannot make it read another file
+/// or hang.
+fn root_crl(
+    source: Option<&CrlSource>,
+    trust: &BrokerTrust,
+    now: UnixTime,
+) -> Result<RootCrl, Failure> {
+    let (path, directory, name) = match source {
+        None => return Ok(RootCrl::NotConfigured),
+        Some(CrlSource::Missing(path)) => return Ok(RootCrl::Missing(path.clone())),
+        Some(CrlSource::Directory {
+            path,
+            directory,
+            name,
+        }) => (path, directory, name),
     };
-    let Some(bytes) = read_regular(path, tls::MAX_ROOT_CRL_BYTES)? else {
-        return Ok(RootCrl::Missing(path.to_owned()));
+    let Some(bytes) = read_regular(path, directory, name, tls::MAX_ROOT_CRL_BYTES)? else {
+        return Ok(RootCrl::Missing(path.clone()));
     };
     RootCrl::from_bytes(path, &bytes, trust, now).map_err(|error| {
         Failure::Refused(format!(
@@ -571,30 +792,40 @@ fn root_crl(path: Option<&Path>, trust: &BrokerTrust, now: UnixTime) -> Result<R
     })
 }
 
-/// The contents of `path`, at most `limit` bytes and one more (so the caller sees a file that is
-/// too large), when it is a regular file; `None` when there is nothing at `path`. A symbolic
-/// link, a directory, a FIFO or a device is a configuration error, found without following or
-/// blocking on it.
-fn read_regular(path: &Path, limit: u64) -> Result<Option<Vec<u8>>, Failure> {
+/// The contents of `name` in `directory` (`path`, for messages), at most `limit` bytes and one
+/// more (so the caller sees a file that is too large), when it is a regular file; `None` when
+/// there is nothing there. A symbolic link, a directory, a FIFO or a device is a configuration
+/// error, found without following or blocking on it.
+fn read_regular(
+    path: &Path,
+    directory: &Directory,
+    name: &OsStr,
+    limit: u64,
+) -> Result<Option<Vec<u8>>, Failure> {
     let failed =
         |error: io::Error| Failure::Failed(format!("cannot read {}: {error}", path.display()));
-    let not_regular = |what: &str| {
-        Failure::Configuration(format!("{} is {what}, not a regular file", path.display()))
+    let not_regular = || {
+        Failure::Configuration(format!(
+            "{} is not a regular file (a symbolic link is not followed)",
+            path.display()
+        ))
     };
-    let mut file = match OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
-        .open(path)
-    {
+    // Checked before opening, so a device node is not opened; and again on the opened file, in
+    // case it was replaced in between (only root or the agent's account can write the directory,
+    // and neither of them plants device nodes: `CrlSource::open`).
+    match directory.is_file(name).map_err(failed)? {
+        None => return Ok(None),
+        Some(false) => return Err(not_regular()),
+        Some(true) => {}
+    }
+    let mut file = match directory.open_read(name) {
         Ok(file) => file,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
-        Err(error) if error.raw_os_error() == Some(libc::ELOOP) => {
-            return Err(not_regular("a symbolic link"));
-        }
+        Err(error) if error.raw_os_error() == Some(libc::ELOOP) => return Err(not_regular()),
         Err(error) => return Err(failed(error)),
     };
     if !file.metadata().map_err(failed)?.is_file() {
-        return Err(not_regular("something else"));
+        return Err(not_regular());
     }
     let mut bytes = Vec::new();
     Read::take(&mut file, limit.saturating_add(1))
@@ -795,23 +1026,23 @@ type WriteFn<'a> = dyn FnMut(&mut File, &[u8]) -> io::Result<()> + 'a;
 
 /// A new file, ready to be renamed over `target`.
 struct Staged<'a> {
-    temporary: PathBuf,
-    target: &'a Path,
+    temporary: OsString,
+    target: &'a Target,
 }
 
-/// Makes each of `files` (path, contents, owner) hold its contents with that owner and
+/// Makes each of `files` (target, contents, owner) hold its contents with that owner and
 /// [`FILE_MODE`]: the files that already do are left alone; the others are staged first, all of
 /// them, and only then renamed into place. A failure while staging removes every staged file and
-/// renames nothing.
+/// renames nothing. Every step works on the targets' open directories ([`Directory`]).
 fn replace_all(
-    files: &[(&PathBuf, String, Owner)],
+    files: &[(&Target, String, Owner)],
     write: &mut WriteFn<'_>,
 ) -> Result<Vec<Outcome>, String> {
     let mut outcomes = Vec::with_capacity(files.len());
     let mut staged: Vec<Staged<'_>> = Vec::new();
-    for (path, contents, owner) in files {
-        let current = is_current(path, contents.as_bytes(), *owner)
-            .map_err(|error| format!("cannot read {}: {error}", path.display()));
+    for (target, contents, owner) in files {
+        let current = is_current(target, contents.as_bytes(), *owner)
+            .map_err(|error| format!("cannot read {}: {error}", target.path().display()));
         let current = match current {
             Ok(current) => current,
             Err(error) => {
@@ -823,11 +1054,8 @@ fn replace_all(
             outcomes.push(Outcome::Unchanged);
             continue;
         }
-        match stage(path, contents.as_bytes(), *owner, write) {
-            Ok(temporary) => staged.push(Staged {
-                temporary,
-                target: path,
-            }),
+        match stage(target, contents.as_bytes(), *owner, write) {
+            Ok(temporary) => staged.push(Staged { temporary, target }),
             Err(error) => {
                 remove(&staged);
                 return Err(error);
@@ -836,11 +1064,12 @@ fn replace_all(
         outcomes.push(Outcome::Written);
     }
     for (index, file) in staged.iter().enumerate() {
-        if let Err(error) = fs::rename(&file.temporary, file.target) {
+        let target = file.target;
+        if let Err(error) = target.directory.rename(&file.temporary, &target.name) {
             remove(staged.get(index..).unwrap_or_default());
             return Err(format!(
                 "cannot replace {}: {error}{}",
-                file.target.display(),
+                target.path().display(),
                 if index > 0 {
                     "; the files before it were replaced, so run the command again"
                 } else {
@@ -850,15 +1079,12 @@ fn replace_all(
         }
     }
     for file in &staged {
-        let directory = file.target.parent().unwrap_or(Path::new("/"));
-        File::open(directory)
-            .and_then(|directory| directory.sync_all())
-            .map_err(|error| {
-                format!(
-                    "{} was replaced, but its directory cannot be flushed: {error}",
-                    file.target.display()
-                )
-            })?;
+        file.target.directory.sync().map_err(|error| {
+            format!(
+                "{} was replaced, but its directory cannot be flushed: {error}",
+                file.target.path().display()
+            )
+        })?;
     }
     Ok(outcomes)
 }
@@ -866,32 +1092,34 @@ fn replace_all(
 /// Removes the staged files that were not renamed; best effort, as it runs on a failure path.
 fn remove(staged: &[Staged<'_>]) {
     for file in staged {
-        let _ = fs::remove_file(&file.temporary);
+        let _ = file.target.directory.remove(&file.temporary);
     }
 }
 
-/// Whether `path` is a regular file (not a link) that holds exactly `contents`, belongs to
-/// `owner` and has exactly [`FILE_MODE`]. A missing file, or anything else at the path, is not.
-fn is_current(path: &Path, contents: &[u8], owner: Owner) -> io::Result<bool> {
-    let metadata = match fs::symlink_metadata(path) {
-        Ok(metadata) => metadata,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(false),
+/// Whether `target` is a regular file (not a link) that holds exactly `contents`, belongs to
+/// `owner` and has exactly [`FILE_MODE`]. A missing file, or anything else at the path, is not;
+/// only a regular file is opened.
+fn is_current(target: &Target, contents: &[u8], owner: Owner) -> io::Result<bool> {
+    if target.directory.is_file(&target.name)? != Some(true) {
+        return Ok(false);
+    }
+    let mut file = match target.directory.open_read(&target.name) {
+        Ok(file) => file,
+        Err(error)
+            if error.kind() == io::ErrorKind::NotFound
+                || error.raw_os_error() == Some(libc::ELOOP) =>
+        {
+            return Ok(false);
+        }
         Err(error) => return Err(error),
     };
+    let metadata = file.metadata()?;
     if !metadata.is_file()
         || metadata.uid() != owner.uid
         || metadata.gid() != owner.gid
         || metadata.mode() & 0o7777 != FILE_MODE
         || u64::try_from(contents.len()).ok() != Some(metadata.len())
     {
-        return Ok(false);
-    }
-    let mut file = OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
-        .open(path)?;
-    let opened = file.metadata()?;
-    if opened.ino() != metadata.ino() || opened.dev() != metadata.dev() {
         return Ok(false);
     }
     let mut existing = Vec::with_capacity(contents.len());
@@ -904,31 +1132,26 @@ fn is_current(path: &Path, contents: &[u8], owner: Owner) -> io::Result<bool> {
 }
 
 /// A new file next to `target` holding `contents`, with `owner` and [`FILE_MODE`], flushed to
-/// disk; removed again when any step fails.
+/// disk; removed again when any step fails. Its name in the target's directory is returned.
 fn stage(
-    target: &Path,
+    target: &Target,
     contents: &[u8],
     owner: Owner,
     write: &mut WriteFn<'_>,
-) -> Result<PathBuf, String> {
+) -> Result<OsString, String> {
     static NEXT: AtomicU32 = AtomicU32::new(0);
-    let directory = target.parent().unwrap_or(Path::new("/"));
-    let name = target
-        .file_name()
-        .map(|name| name.to_string_lossy().into_owned())
-        .unwrap_or_default();
-    let temporary = directory.join(format!(
-        ".{name}.install-{}-{}",
+    let mut temporary = OsString::from(".");
+    temporary.push(&target.name);
+    temporary.push(format!(
+        ".install-{}-{}",
         std::process::id(),
         NEXT.fetch_add(1, Ordering::Relaxed)
     ));
-    let mut file = OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .mode(0o600)
-        .custom_flags(libc::O_NOFOLLOW)
-        .open(&temporary)
-        .map_err(|error| format!("cannot create {}: {error}", temporary.display()))?;
+    let shown = || target.directory.path().join(&temporary);
+    let mut file = target
+        .directory
+        .create_new(&temporary, 0o600)
+        .map_err(|error| format!("cannot create {}: {error}", shown().display()))?;
     let written = write(&mut file, contents)
         .and_then(|()| std::os::unix::fs::fchown(&file, Some(owner.uid), Some(owner.gid)))
         .and_then(|()| file.set_permissions(fs::Permissions::from_mode(FILE_MODE)))
@@ -937,7 +1160,7 @@ fn stage(
     match written {
         Ok(()) => Ok(temporary),
         Err(error) => {
-            let _ = fs::remove_file(&temporary);
+            let _ = target.directory.remove(&temporary);
             let hint = if error.kind() == io::ErrorKind::PermissionDenied {
                 " (the command needs root: it sets the files' owners)"
             } else {
@@ -945,7 +1168,7 @@ fn stage(
             };
             Err(format!(
                 "cannot write the new {}: {error}{hint}; nothing was replaced",
-                target.display()
+                target.path().display()
             ))
         }
     }
@@ -978,13 +1201,9 @@ mod tests {
                 config: PathBuf::from("/etc/trustiot/agent.toml"),
             }))
         );
-        assert_eq!(
-            parse(&["--config", "/tmp/a.toml", "--hardware-id", "tg-0001"]),
-            Ok(Command::Install(Options {
-                hardware_id: gateway(),
-                config: PathBuf::from("/tmp/a.toml"),
-            }))
-        );
+        // Whoever names the configuration decides where root writes: there is no option for it.
+        let error = parse(&["--config", "/tmp/a.toml", "--hardware-id", "tg-0001"]).unwrap_err();
+        assert!(error.contains("--config is not accepted"), "{error}");
         assert_eq!(parse(&["--help"]), Ok(Command::Help));
         assert_eq!(parse(&["-h"]), Ok(Command::Help));
         for refused in [
@@ -1268,18 +1487,38 @@ mod tests {
         entries
     }
 
+    /// A scratch directory and its path without links (the system's temporary directory may be
+    /// reached through one, as on macOS), with mode 0755 whatever the umask.
+    fn scratch(kind: &str) -> (ScratchDir, PathBuf) {
+        let dir = ScratchDir::new(kind);
+        let path = dir.path().canonicalize().unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
+        (dir, path)
+    }
+
+    /// The target `path`, its directory opened as `install` opens it.
+    fn target(path: &Path) -> Target {
+        Target {
+            directory: Directory::open(path.parent().unwrap()).unwrap(),
+            name: path.file_name().unwrap().to_owned(),
+        }
+    }
+
     #[test]
     fn a_write_that_fails_half_way_leaves_the_old_files_whole_and_nothing_else() {
-        let dir = ScratchDir::new("install-interrupted");
-        let first = dir.write("gateway.pem", "old chain\n");
-        let second = dir.write("broker-ca.pem", "old root\n");
+        let (_dir, path) = scratch("install-interrupted");
+        let first = path.join("gateway.pem");
+        let second = path.join("broker-ca.pem");
+        fs::write(&first, "old chain\n").unwrap();
+        fs::write(&second, "old root\n").unwrap();
         fs::set_permissions(&first, fs::Permissions::from_mode(FILE_MODE)).unwrap();
         fs::set_permissions(&second, fs::Permissions::from_mode(FILE_MODE)).unwrap();
-        let before = listing(dir.path());
+        let before = listing(&path);
         let owner = me();
+        let (first_target, second_target) = (target(&first), target(&second));
         let files = [
-            (&first, "new chain\n".repeat(100), owner),
-            (&second, "new root\n".repeat(100), owner),
+            (&first_target, "new chain\n".repeat(100), owner),
+            (&second_target, "new root\n".repeat(100), owner),
         ];
         // The first file is staged whole, the second fails after half of it: neither is renamed.
         let mut calls = 0;
@@ -1296,7 +1535,7 @@ mod tests {
             error.contains("interrupted") && error.contains("nothing was replaced"),
             "{error}"
         );
-        assert_eq!(listing(dir.path()), before);
+        assert_eq!(listing(&path), before);
 
         // Then the whole write: both replaced, new inodes, nothing else left.
         let outcomes = replace_all(&files, &mut |file: &mut File, bytes: &[u8]| {
@@ -1304,7 +1543,7 @@ mod tests {
         })
         .unwrap();
         assert_eq!(outcomes, [Outcome::Written, Outcome::Written]);
-        let after = listing(dir.path());
+        let after = listing(&path);
         assert_eq!(after.len(), 2, "{after:?}");
         for ((name, inode, contents), (old_name, old_inode, _)) in after.iter().zip(&before) {
             assert_eq!(name, old_name);
@@ -1318,34 +1557,36 @@ mod tests {
 
     #[test]
     fn a_file_with_the_right_content_but_not_the_right_mode_owner_or_kind_is_replaced() {
-        let dir = ScratchDir::new("install-current");
+        let (_dir, dir) = scratch("install-current");
         let owner = me();
-        let path = dir.write("gateway.pem", "chain\n");
+        let path = dir.join("gateway.pem");
+        fs::write(&path, "chain\n").unwrap();
+        let file = target(&path);
         fs::set_permissions(&path, fs::Permissions::from_mode(0o666)).unwrap();
-        assert!(!is_current(&path, b"chain\n", owner).unwrap());
+        assert!(!is_current(&file, b"chain\n", owner).unwrap());
         fs::set_permissions(&path, fs::Permissions::from_mode(FILE_MODE)).unwrap();
-        assert!(is_current(&path, b"chain\n", owner).unwrap());
-        assert!(!is_current(&path, b"chain!\n", owner).unwrap());
-        assert!(!is_current(&path, b"chain\n\n", owner).unwrap());
+        assert!(is_current(&file, b"chain\n", owner).unwrap());
+        assert!(!is_current(&file, b"chain!\n", owner).unwrap());
+        assert!(!is_current(&file, b"chain\n\n", owner).unwrap());
         let other = Owner {
             uid: owner.uid.wrapping_add(1),
             gid: owner.gid,
         };
-        assert!(!is_current(&path, b"chain\n", other).unwrap());
+        assert!(!is_current(&file, b"chain\n", other).unwrap());
         // A link to a file with the right content is replaced by a file.
-        let link = dir.path().join("link.pem");
+        let link = dir.join("link.pem");
         std::os::unix::fs::symlink(&path, &link).unwrap();
-        assert!(!is_current(&link, b"chain\n", owner).unwrap());
-        let link_path = link.clone();
+        let link_target = target(&link);
+        assert!(!is_current(&link_target, b"chain\n", owner).unwrap());
         let outcomes = replace_all(
-            &[(&link_path, "chain\n".to_owned(), owner)],
+            &[(&link_target, "chain\n".to_owned(), owner)],
             &mut |file: &mut File, bytes: &[u8]| file.write_all(bytes),
         )
         .unwrap();
         assert_eq!(outcomes, [Outcome::Written]);
         assert!(fs::symlink_metadata(&link).unwrap().is_file());
         assert_eq!(fs::read(&path).unwrap(), b"chain\n");
-        assert!(!is_current(&dir.path().join("missing"), b"", owner).unwrap());
+        assert!(!is_current(&target(&dir.join("missing")), b"", owner).unwrap());
     }
 
     #[test]
@@ -1355,14 +1596,206 @@ mod tests {
             // As root every owner can be set; the half-way failure above covers the clean-up.
             return;
         }
-        let dir = ScratchDir::new("install-chown");
-        let path = dir.path().join("broker-ca.pem");
+        let (_dir, path) = scratch("install-chown");
         let error = replace_all(
-            &[(&path, "root\n".to_owned(), Owner { uid: 0, gid: 0 })],
+            &[(
+                &target(&path.join("broker-ca.pem")),
+                "root\n".to_owned(),
+                Owner { uid: 0, gid: 0 },
+            )],
             &mut |file: &mut File, bytes: &[u8]| file.write_all(bytes),
         )
         .unwrap_err();
         assert!(error.contains("needs root"), "{error}");
-        assert!(listing(dir.path()).is_empty());
+        assert!(listing(&path).is_empty());
+    }
+
+    #[test]
+    fn writes_go_to_the_directory_that_was_checked_even_if_it_is_moved() {
+        let (_dir, path) = scratch("install-moved");
+        let checked = path.join("state");
+        fs::create_dir(&checked).unwrap();
+        let file = target(&checked.join("gateway.pem"));
+        // After the checks, the directory is moved away and a link put in its place.
+        let moved = path.join("moved");
+        fs::rename(&checked, &moved).unwrap();
+        let elsewhere = path.join("elsewhere");
+        fs::create_dir(&elsewhere).unwrap();
+        std::os::unix::fs::symlink(&elsewhere, &checked).unwrap();
+        replace_all(
+            &[(&file, "chain\n".to_owned(), me())],
+            &mut |file: &mut File, bytes: &[u8]| file.write_all(bytes),
+        )
+        .unwrap();
+        assert_eq!(fs::read(moved.join("gateway.pem")).unwrap(), b"chain\n");
+        assert!(listing(&elsewhere).is_empty());
+    }
+
+    const CONFIG: &str = "[cloud]\nurl = \"wss://gw.trustiot.example/mqtt\"\n\
+        trust = [\"/etc/ssl/certs/ca-certificates.crt\"]\n\n[broker]\n\
+        ca = \"/etc/trustiot/broker-ca.pem\"\n\n[identity]\n\
+        certificate = \"/var/lib/trustiot-agent/gateway.pem\"\nkey = { source = \"tpm\" }\n";
+
+    #[test]
+    fn the_configuration_is_read_only_when_its_owner_alone_can_write_it() {
+        let (_dir, path) = scratch("install-config");
+        let owner = me();
+        let etc = path.join("etc");
+        fs::create_dir(&etc).unwrap();
+        fs::set_permissions(&etc, fs::Permissions::from_mode(0o755)).unwrap();
+        let config = etc.join("agent.toml");
+        fs::write(&config, CONFIG).unwrap();
+        fs::set_permissions(&config, fs::Permissions::from_mode(0o644)).unwrap();
+        let loaded = load_config(&config, owner).unwrap();
+        assert_eq!(loaded.broker_ca, Path::new("/etc/trustiot/broker-ca.pem"));
+
+        let refused = |path: &Path, owner: Owner, expected: &str| {
+            let failure = load_config(path, owner).unwrap_err();
+            assert!(
+                matches!(failure, Failure::Configuration(_)),
+                "{}: {failure:?}",
+                path.display()
+            );
+            assert!(
+                failure.to_string().contains(expected),
+                "{}: expected {expected:?} in {failure}",
+                path.display()
+            );
+        };
+        let stranger = Owner {
+            uid: owner.uid.wrapping_add(1),
+            gid: owner.gid,
+        };
+        // Another owner, of the file and its directory.
+        refused(&config, stranger, "must belong to root");
+        // Writable by the group, then by others: the file, then the directory.
+        for (path, mode, restored) in [
+            (&config, 0o664, 0o644),
+            (&config, 0o646, 0o644),
+            (&etc, 0o775, 0o755),
+            (&etc, 0o757, 0o755),
+        ] {
+            fs::set_permissions(path, fs::Permissions::from_mode(mode)).unwrap();
+            refused(&config, owner, "writable by no one else");
+            fs::set_permissions(path, fs::Permissions::from_mode(restored)).unwrap();
+        }
+        load_config(&config, owner).unwrap();
+        // Through a symbolic link: to the file, or in the directory's path.
+        let linked_file = etc.join("linked.toml");
+        std::os::unix::fs::symlink(&config, &linked_file).unwrap();
+        refused(&linked_file, owner, "not a regular file");
+        let linked_etc = path.join("linked-etc");
+        std::os::unix::fs::symlink(&etc, &linked_etc).unwrap();
+        refused(&linked_etc.join("agent.toml"), owner, "symbolic link");
+        refused(&etc.join("..").join("etc").join("agent.toml"), owner, "..");
+        refused(&etc.join("missing.toml"), owner, "does not exist");
+        refused(
+            &path.join("missing").join("agent.toml"),
+            owner,
+            "does not exist",
+        );
+        fs::create_dir(etc.join("dir.toml")).unwrap();
+        refused(&etc.join("dir.toml"), owner, "not a regular file");
+        let large = etc.join("large.toml");
+        fs::write(&large, " ".repeat(70 * 1024)).unwrap();
+        fs::set_permissions(&large, fs::Permissions::from_mode(0o644)).unwrap();
+        refused(&large, owner, "larger than");
+    }
+
+    #[test]
+    fn a_target_directory_must_belong_to_its_owner_alone() {
+        let (_dir, path) = scratch("install-target");
+        let owner = me();
+        let state = path.join("state");
+        fs::create_dir(&state).unwrap();
+        fs::set_permissions(&state, fs::Permissions::from_mode(0o700)).unwrap();
+        let file = state.join("gateway.pem");
+        Target::open("identity.certificate", &file, owner, AGENT_ACCOUNT).unwrap();
+        let stranger = Owner {
+            uid: owner.uid.wrapping_add(1),
+            gid: owner.gid,
+        };
+        let refused = |path: &Path, owner: Owner, expected: &str| {
+            let Err(failure) = Target::open("identity.certificate", path, owner, AGENT_ACCOUNT)
+            else {
+                panic!("{} was accepted", path.display());
+            };
+            assert!(matches!(failure, Failure::Configuration(_)), "{failure:?}");
+            let message = failure.to_string();
+            assert!(
+                message.starts_with("identity.certificate: ") && message.contains(expected),
+                "expected {expected:?} in {message}"
+            );
+        };
+        refused(&file, stranger, "must belong to trustiot-agent");
+        fs::set_permissions(&state, fs::Permissions::from_mode(0o770)).unwrap();
+        refused(&file, owner, "writable by no one else");
+        fs::set_permissions(&state, fs::Permissions::from_mode(0o700)).unwrap();
+        let link = path.join("link");
+        std::os::unix::fs::symlink(&state, &link).unwrap();
+        refused(&link.join("gateway.pem"), owner, "symbolic link");
+        refused(
+            &path.join("missing").join("gateway.pem"),
+            owner,
+            "does not exist",
+        );
+        // One file named two ways, here through a bind-like second name for the directory, is
+        // the same file to `Target::is`; another name in it is not.
+        let first = Target::open("a", &file, owner, "x").unwrap();
+        let second = Target::open("b", &state.join(".").join("gateway.pem"), owner, "x").unwrap();
+        assert!(first.is(&second.directory, &second.name).unwrap());
+        assert!(
+            !first
+                .is(&second.directory, OsStr::new("other.pem"))
+                .unwrap()
+        );
+    }
+
+    #[test]
+    fn the_root_crl_is_read_only_from_a_directory_only_root_or_the_agent_can_write() {
+        let (_dir, path) = scratch("install-crl-directory");
+        let owner = me();
+        let owners = Owners {
+            chain: owner,
+            root: owner,
+        };
+        let crl = path.join("root-crl.pem");
+        assert!(matches!(
+            CrlSource::open(&crl, &owners).unwrap(),
+            CrlSource::Directory { .. }
+        ));
+        assert!(matches!(
+            CrlSource::open(&path.join("missing").join("root-crl.pem"), &owners).unwrap(),
+            CrlSource::Missing(_)
+        ));
+        let refused = |owners: &Owners, expected: &str| {
+            let Err(failure) = CrlSource::open(&crl, owners) else {
+                panic!("the directory was accepted");
+            };
+            assert!(matches!(failure, Failure::Configuration(_)), "{failure:?}");
+            assert!(failure.to_string().contains(expected), "{failure}");
+        };
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o777)).unwrap();
+        refused(&owners, "writable by no one else");
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
+        let stranger = Owner {
+            uid: owner.uid.wrapping_add(1),
+            gid: owner.gid,
+        };
+        refused(
+            &Owners {
+                chain: stranger,
+                root: stranger,
+            },
+            "must belong to root",
+        );
+        let link = path.with_extension("link");
+        std::os::unix::fs::symlink(&path, &link).unwrap();
+        let linked = CrlSource::open(&link.join("root-crl.pem"), &owners);
+        let _ = fs::remove_file(&link);
+        let Err(failure) = linked else {
+            panic!("a directory through a symbolic link was accepted");
+        };
+        assert!(failure.to_string().contains("symbolic link"), "{failure}");
     }
 }
