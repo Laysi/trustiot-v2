@@ -4,7 +4,7 @@ Laysi/trustiot-v2#613：閘道器端的出廠佈建命令，印出含 CSR 與 EK
 
 ## 環境
 
-- **程式碼**：分支 `feat/613-agent-provision`。功能 commit 先是 `9d97bb5e`（基於 main `24271deb`），之後 rebase 到 main `61e20b22`（Laysi/trustiot-v2#740 與 #732 的 gateway-ops、identity 等，沒有改到本變更的檔案，沒有衝突）成為 `5cd55d36`，內容相同。本報告的 commit 只加文件與測試輸出。
+- **程式碼**：分支 `feat/613-agent-provision`。功能 commit 先是 `9d97bb5e`（基於 main `24271deb`），之後 rebase 到 main `61e20b22`（Laysi/trustiot-v2#740 與 #732 的 gateway-ops、identity 等，沒有改到本變更的檔案，沒有衝突）成為 `5cd55d36`，內容相同。報告的 commit（`12b72040` 與之後的更新）只加文件與測試輸出。
 - **機器**：建置主機（x86_64 Linux），經檢查佇列執行；swtpm 由 `testkit::swtpm` 在容器裡啟動，tpm2-tools 在同一個容器裡給出獨立的計算結果。
 - **工具**：`.prototools` 與 `rust-toolchain.toml` 釘選的 Rust 1.99.0；aarch64 建置用釘選的 zig 與 cargo-zigbuild。
 - **設定**：`CI=1`。執行檔的測試只用不存在的 `/dev/tpmrm99999` 與非 TPM 的路徑，不會碰到主機的 TPM。
@@ -43,11 +43,11 @@ cargo test --locked -p protocol --test dependencies
 | `cargo fmt --all --check`，`cargo clippy --locked --workspace --all-targets -- -D warnings`，`cargo test --locked -p repo-check`，`cargo run --locked -p openapi -- --check`，aarch64 的 `cargo zigbuild`（`-p agent -p protocol`） | `9d97bb5e` 的工作樹 | 全部通過：`api/openapi.json is up to date`；aarch64 release 建置完成（只有 zig 連結器既有的 `ignoring deprecated linker optimization setting '1'` 警告） |
 | `cargo deny --locked check`，`bun test scripts` | 加上 sysfs 檢查之前的工作樹（`Cargo.toml` 與 `Cargo.lock` 與 `9d97bb5e` 相同） | `advisories ok, bans ok, licenses ok, sources ok`；1704 個通過、9 個略過、0 失敗 |
 | 上面「驗收證據」的五個指令 | `9d97bb5e` | 全部通過，每個測試的名稱與結果在 [provision-tests.txt](data/2026-10-29-613-agent-provision/provision-tests.txt) |
-| rebase 後的全部檢查（見下節） | 本報告的 commit | 見下節 |
+| rebase 後的全部檢查（見下節） | `12b72040` | 全部通過 |
 
 ### rebase 後
 
-rebase 到 main `61e20b22` 之後，在本報告的 commit 上重跑 `cargo fmt --all --check`、`cargo clippy --locked --workspace --all-targets -- -D warnings`、`CI=1 cargo test --locked -p agent -p protocol`、`cargo test --locked -p repo-check`、`cargo run --locked -p openapi -- --check`、`cargo deny --locked check` 與 `bun test scripts`；結果寫在 PR 內文。
+rebase 到 main `61e20b22` 之後，在 `12b72040`（本報告的第一版，程式與 `5cd55d36` 相同）重跑 `cargo fmt --all --check`、`cargo clippy --locked --workspace --all-targets -- -D warnings`、`CI=1 cargo test --locked -p agent -p protocol`、`cargo test --locked -p repo-check`、`cargo run --locked -p openapi -- --check`、`cargo deny --locked check` 與 `bun test scripts`，全部通過：agent 384 個、protocol 136 個、repo-check 28 個測試通過，0 失敗；`api/openapi.json is up to date`；`advisories ok, bans ok, licenses ok, sources ok`；scripts 1704 個通過、9 個略過、0 失敗（exit 0 at 15:22:11 (build host)）。
 
 ## 測試內容
 
