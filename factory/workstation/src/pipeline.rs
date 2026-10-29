@@ -7,9 +7,15 @@
 //!    certificate, the session and the journal ([`crate::journal`]).
 //! 2. **Inspect**: `trustiot-agent provision --inspect` over ssh ([`crate::gateway`]) reports the
 //!    key at the handle, or that there is none, and creates nothing.
-//! 3. **Key policy**: a hardware ID this workstation has a record of whose TPM now has no key is a
-//!    cleared TPM, which decision 12 makes a new device: the run stops before a key is created
-//!    ([`StopKind::KeyAbsent`]) unless the operator gives `--allow-new-key`.
+//! 3. **Key policy**, for a hardware ID this workstation has a record of. The report's hardware ID
+//!    only echoes `--hardware-id`, so the endorsement key is what tells TPMs apart: one other than
+//!    the recorded one is another TPM ([`StopKind::AnotherTpm`]), which `--allow-new-key` never
+//!    lets through (clearing a TPM keeps its endorsement key). With the recorded endorsement key,
+//!    a TPM with no key at the handle, or another key than the recorded one, was cleared, which
+//!    decision 12 makes a new device: the run stops before a key is created or sent
+//!    ([`StopKind::KeyAbsent`]) unless the operator gives `--allow-new-key`. A hardware ID this
+//!    workstation has no record of is not checked: ssh reaching another unrecorded gateway is
+//!    caught only by checking the destination and the label.
 //! 4. **Provision**: when the key is absent, `trustiot-agent provision` creates it. When the
 //!    inspection found it, its report already carries a CSR signed by that key (inspecting signs
 //!    one too and changes nothing on the TPM), so no second run is made.
@@ -46,7 +52,7 @@ use x509_parser::prelude::{FromDer as _, X509Certificate};
 
 use crate::Error;
 use crate::gateway::{self, Mode, Ran, Request, SshError, SshGateway};
-use crate::journal::{Event, Journal};
+use crate::journal::{Event, Journal, Record};
 use crate::register::{self, Gateway, Registered, Registrar, one_pem_block};
 
 /// The policy for a TPM without an EK certificate, as the tool states it.
@@ -69,8 +75,9 @@ const P256_SPKI_LEN: usize = 91;
 /// (factory/workstation/README.md, "結束碼").
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum StopKind {
-    /// This workstation has a record of the hardware ID, but the TPM has no key at the handle (or
-    /// the run created one): a cleared TPM, which is a new device. `--allow-new-key` goes on.
+    /// This workstation has a record of the hardware ID and the TPM has the recorded endorsement
+    /// key, but no key at the handle or another key than the recorded one: a cleared TPM, which is
+    /// a new device. `--allow-new-key` goes on.
     KeyAbsent,
     /// The gateway's report broke a check of step 5; nothing was registered.
     ReportRefused,
@@ -78,6 +85,10 @@ pub enum StopKind {
     ProvisionFailed,
     /// ssh could not reach the gateway within its retries.
     Unreachable,
+    /// This workstation has a record of the hardware ID with another endorsement key than the
+    /// gateway reported: another TPM, so ssh reached another gateway or the label is wrong.
+    /// `--allow-new-key` never goes on.
+    AnotherTpm,
 }
 
 impl StopKind {
@@ -89,6 +100,7 @@ impl StopKind {
             Self::ReportRefused => 21,
             Self::ProvisionFailed => 22,
             Self::Unreachable => 23,
+            Self::AnotherTpm => 27,
         }
     }
 
@@ -100,6 +112,7 @@ impl StopKind {
             Self::ReportRefused => "report_refused",
             Self::ProvisionFailed => "provision_failed",
             Self::Unreachable => "gateway_unreachable",
+            Self::AnotherTpm => "another_tpm",
         }
     }
 }
@@ -147,8 +160,8 @@ pub enum ReportProblem {
         "its endorsement key differs from the one the inspection reported: another TPM answered"
     )]
     EndorsementKeyChanged,
-    #[error("its key differs from the one the inspection reported")]
-    KeyChanged,
+    #[error("it reports a key the inspection created, but an inspection must create nothing")]
+    CreatedOnInspection,
     #[error("its CSR or endorsement key is refused for the registration: {0}")]
     Input(&'static str),
 }
@@ -187,6 +200,9 @@ pub fn check_report(ran: &Ran, request: &Request<'_>) -> Result<ProvisioningRepo
     match &report.key {
         GatewayKey::Absent if request.mode == Mode::Inspect => {}
         GatewayKey::Absent => return Err(ReportProblem::NoKey),
+        GatewayKey::Present { created: true, .. } if request.mode == Mode::Inspect => {
+            return Err(ReportProblem::CreatedOnInspection);
+        }
         GatewayKey::Present {
             public_key,
             certificate_request,
@@ -304,7 +320,7 @@ pub async fn provision(
 ) -> Result<Provisioned, Error> {
     let id = plan.hardware_id.as_str();
     journal.prepare()?;
-    let known = journal.load(id)?.is_some();
+    let record = journal.load(id)?;
     let stop = |kind: StopKind, message: String, event: Event| {
         logged(
             journal,
@@ -320,11 +336,38 @@ pub async fn provision(
         mode: Mode::Inspect,
     };
     let inspected = run(journal, ssh, &inspect, now).await?;
+    // The report's hardware ID is the one this tool sent, so only the endorsement key tells
+    // whether ssh reached the TPM this workstation recorded under the hardware ID. Clearing a TPM
+    // keeps its endorsement key, so another one is another TPM, whatever --allow-new-key says.
+    if let Some(record) = &record {
+        let Some(reported) = endorsement_key_sha256(&inspected) else {
+            // check_report has read it as one PEM block already.
+            return Err(refused(
+                journal,
+                ssh,
+                id,
+                ReportProblem::EndorsementKey,
+                now,
+            ));
+        };
+        if reported != record.endorsement_key_sha256 {
+            return Err(stop(
+                StopKind::AnotherTpm,
+                another_tpm_message(journal, ssh, id, &reported, record),
+                stopped_event()
+                    .with("endorsement_key_sha256", reported)
+                    .with(
+                        "recorded_endorsement_key_sha256",
+                        record.endorsement_key_sha256.clone(),
+                    ),
+            ));
+        }
+    }
     // A key at the handle: the inspection's report already carries its CSR, so it is used as is.
     let report = if matches!(inspected.key, GatewayKey::Present { .. }) {
         inspected
     } else {
-        if known && !plan.allow_new_key {
+        if record.is_some() && !plan.allow_new_key {
             return Err(stop(
                 StopKind::KeyAbsent,
                 key_absent_message(journal, id, plan.handle, "has no key at"),
@@ -353,16 +396,11 @@ pub async fn provision(
         certificate_request,
     } = &report.key
     else {
+        // check_report refuses a provision run's report without a key already.
         return Err(refused(journal, ssh, id, ReportProblem::NoKey, now));
     };
-    if *created && known && !plan.allow_new_key {
-        // The inspection found no key either, unless the TPM was cleared in between.
-        return Err(stop(
-            StopKind::KeyAbsent,
-            key_absent_message(journal, id, plan.handle, "had a key created at"),
-            stopped_event().with("handle", plan.handle.to_string()),
-        ));
-    }
+    // An inspection never reports a created key (check_report), and a provision run is reached
+    // with a record only with --allow-new-key, so a created key needs no check of its own here.
     let gateway = Gateway::new(
         id,
         certificate_request.as_bytes(),
@@ -376,6 +414,29 @@ pub async fn provision(
         };
         refused(journal, ssh, id, problem, now)
     })?;
+    // The same TPM with another key than the recorded one was cleared and given a key since (or
+    // --handle names another handle than the recorded run's): handled like no key at all.
+    if let Some(record) = &record
+        && !plan.allow_new_key
+        && gateway.public_key_sha256() != record.public_key_sha256
+    {
+        return Err(stop(
+            StopKind::KeyAbsent,
+            key_absent_message(
+                journal,
+                id,
+                plan.handle,
+                "has another key than the recorded one at",
+            ),
+            stopped_event()
+                .with("handle", plan.handle.to_string())
+                .with("public_key_sha256", gateway.public_key_sha256())
+                .with(
+                    "recorded_public_key_sha256",
+                    record.public_key_sha256.clone(),
+                ),
+        ));
+    }
     let ek_certificate = matches!(report.ek_certificate, EkCertificate::ForThisKey { .. });
     let created = *created;
     let mut event = Event::new(time(now()), id, "provisioned")
@@ -514,13 +575,40 @@ fn refused(
     )
 }
 
+/// The SHA-256 of a checked report's endorsement key (its DER SubjectPublicKeyInfo), as the
+/// journal records it.
+fn endorsement_key_sha256(report: &ProvisioningReport) -> Option<String> {
+    one_pem_block(report.endorsement_key.as_bytes(), "PUBLIC KEY")
+        .map(|der| register::sha256_hex(&der))
+}
+
+fn another_tpm_message(
+    journal: &Journal,
+    ssh: &SshGateway,
+    id: &str,
+    reported: &str,
+    record: &Record,
+) -> String {
+    format!(
+        "the gateway at {} reported the endorsement key SHA-256 {reported}, but this workstation \
+         recorded {} for hardware ID {id} ({}): this is another TPM, so ssh reached another \
+         gateway or the label is wrong. Clearing a TPM keeps its endorsement key, so \
+         --allow-new-key does not apply. Nothing was created or registered: check the \
+         destination and the label",
+        ssh.destination(),
+        record.endorsement_key_sha256,
+        journal.record_path(id).display()
+    )
+}
+
 fn key_absent_message(journal: &Journal, id: &str, handle: KeyHandle, what: &str) -> String {
     format!(
-        "this workstation has a record of hardware ID {id} ({}), but the gateway's TPM {what} \
-         {handle}: the TPM was cleared, or this is another gateway. A cleared TPM is a new device \
-         (decision 12): check the label; to go on with a new key all the same, run the command \
-         again with --allow-new-key (the platform then refuses the hardware ID registered with \
-         another key, exit code 10, and the gateway needs a new hardware ID)",
+        "this workstation has a record of hardware ID {id} ({}), and the gateway's TPM has the \
+         recorded endorsement key but {what} {handle}: the TPM was cleared (or --handle names \
+         another handle than the recorded run's). A cleared TPM is a new device (decision 12): \
+         nothing was created or sent. To go on with a new key all the same, run the command again \
+         with --allow-new-key; when the platform has registered the hardware ID it refuses the \
+         new key (exit code 10), and the gateway then needs a new hardware ID",
         journal.record_path(id).display()
     )
 }
@@ -638,6 +726,15 @@ mod tests {
         assert_eq!(
             check(&absent, Mode::Provision).unwrap_err(),
             ReportProblem::NoKey
+        );
+        // A key is created only by provision, never by an inspection.
+        let mut created = report.clone();
+        created["key"]["created"] = true.into();
+        assert!(check(&created, Mode::Provision).is_ok());
+        assert!(check(&report, Mode::Inspect).is_ok());
+        assert_eq!(
+            check(&created, Mode::Inspect).unwrap_err(),
+            ReportProblem::CreatedOnInspection
         );
     }
 
@@ -817,10 +914,11 @@ mod tests {
             StopKind::ReportRefused,
             StopKind::ProvisionFailed,
             StopKind::Unreachable,
+            StopKind::AnotherTpm,
         ]
         .iter()
         .map(|kind| kind.exit_code())
         .collect();
-        assert_eq!(codes, [20, 21, 22, 23]);
+        assert_eq!(codes, [20, 21, 22, 23, 27]);
     }
 }

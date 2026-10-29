@@ -694,3 +694,163 @@ async fn a_known_gateway_whose_tpm_has_no_key_stops_with_20() {
         "the record keeps the registered key"
     );
 }
+
+#[tokio::test]
+async fn a_known_hardware_id_on_another_tpm_stops_with_27_even_with_allow_new_key() {
+    let bench = Bench::start("ssh-another-tpm", Vec::new()).await;
+    let keys = GatewayKeys::new();
+    let (agent, _) = canned_agent(&bench);
+    let register = |extra: &[&str]| {
+        let mut arguments = vec!["--upload-agent", agent.as_str()];
+        arguments.extend_from_slice(extra);
+        bench.register_args("tg-0011", &arguments)
+    };
+    bench.ssh.leave_reports(
+        &keys.report("tg-0011", None),
+        &keys.report("tg-0011", Some(true)),
+    );
+    let first = bench.run(&register(&[])).await;
+    assert_eq!(first.code, Some(0), "{}", first.output());
+    let record = bench
+        .journal()
+        .load("tg-0011")
+        .expect("readable")
+        .expect("a record");
+
+    // ssh reaches another gateway: its report echoes the hardware ID it was given, but its TPM
+    // has another endorsement key, with a key at the handle or without one.
+    let other = GatewayKeys::new();
+    for (what, inspect) in [
+        ("with a key", other.report("tg-0011", Some(false))),
+        ("without a key", other.report("tg-0011", None)),
+    ] {
+        for extra in [&[][..], &["--allow-new-key"][..]] {
+            bench.ssh.reset_remote();
+            bench
+                .ssh
+                .leave_reports(&inspect, &other.report("tg-0011", Some(true)));
+            let stopped = bench.run(&register(extra)).await;
+            assert_eq!(
+                stopped.code,
+                Some(27),
+                "{what} {extra:?}: {}",
+                stopped.output()
+            );
+            assert!(
+                stopped.stderr.contains("this is another TPM"),
+                "{what} {extra:?}: {}",
+                stopped.stderr
+            );
+            assert_eq!(
+                bench.ssh.agent_calls(),
+                ["provision --hardware-id tg-0011 --handle 0x81000100 --inspect"],
+                "{what} {extra:?}: nothing was created"
+            );
+            let last = bench.events("tg-0011").pop().expect("a log line");
+            assert_eq!(last["event"], "provision_stopped", "{what} {extra:?}");
+            assert_eq!(last["stop"], "another_tpm", "{what} {extra:?}");
+            assert_eq!(
+                last["recorded_endorsement_key_sha256"],
+                record.endorsement_key_sha256.as_str(),
+                "{what} {extra:?}"
+            );
+            assert_ne!(
+                last["endorsement_key_sha256"],
+                record.endorsement_key_sha256.as_str(),
+                "{what} {extra:?}"
+            );
+        }
+    }
+    assert_eq!(
+        bench.registry.seen().len(),
+        1,
+        "only the first registration"
+    );
+    let kept = bench
+        .journal()
+        .load("tg-0011")
+        .expect("readable")
+        .expect("a record");
+    assert_eq!(kept.endorsement_key_sha256, record.endorsement_key_sha256);
+    assert_eq!(kept.public_key_sha256, record.public_key_sha256);
+    assert_eq!(kept.state, State::Registered);
+}
+
+#[tokio::test]
+async fn a_known_tpm_with_another_key_stops_with_20() {
+    let bench = Bench::start("ssh-other-key", Vec::new()).await;
+    let keys = GatewayKeys::new();
+    let (agent, _) = canned_agent(&bench);
+    let register = |extra: &[&str]| {
+        let mut arguments = vec!["--upload-agent", agent.as_str()];
+        arguments.extend_from_slice(extra);
+        bench.register_args("tg-0012", &arguments)
+    };
+    bench.ssh.leave_reports(
+        &keys.report("tg-0012", None),
+        &keys.report("tg-0012", Some(true)),
+    );
+    let first = bench.run(&register(&[])).await;
+    assert_eq!(first.code, Some(0), "{}", first.output());
+    let original = keys.public_key_sha256();
+
+    // The same TPM (the same endorsement key) has another key at the handle than the recorded
+    // one: it was cleared and given a key since.
+    let rekeyed = GatewayKeys {
+        key: rcgen::KeyPair::generate().expect("a new key"),
+        ek: keys.ek,
+    };
+    bench.ssh.reset_remote();
+    bench.ssh.leave_reports(
+        &rekeyed.report("tg-0012", Some(false)),
+        &rekeyed.report("tg-0012", Some(false)),
+    );
+    let stopped = bench.run(&register(&[])).await;
+    assert_eq!(stopped.code, Some(20), "{}", stopped.output());
+    assert!(
+        stopped
+            .stderr
+            .contains("has another key than the recorded one"),
+        "{}",
+        stopped.stderr
+    );
+    assert!(
+        stopped.stderr.contains("--allow-new-key"),
+        "{}",
+        stopped.stderr
+    );
+    assert_eq!(
+        bench.ssh.agent_calls(),
+        ["provision --hardware-id tg-0012 --handle 0x81000100 --inspect"],
+        "only the inspection"
+    );
+    let last = bench.events("tg-0012").pop().expect("a log line");
+    assert_eq!(last["stop"], "key_absent");
+    assert_eq!(last["recorded_public_key_sha256"], original.as_str());
+    assert_eq!(
+        last["public_key_sha256"],
+        rekeyed.public_key_sha256().as_str()
+    );
+    assert_eq!(
+        bench.registry.seen().len(),
+        1,
+        "only the first registration"
+    );
+
+    // With --allow-new-key the key is sent, and the platform refuses it.
+    let refused = bench.run(&register(&["--allow-new-key"])).await;
+    assert_eq!(refused.code, Some(10), "{}", refused.output());
+    assert_eq!(
+        bench.registry.seen().last().expect("a request").answered,
+        409
+    );
+    let record = bench
+        .journal()
+        .load("tg-0012")
+        .expect("readable")
+        .expect("a record");
+    assert_eq!(
+        record.public_key_sha256, original,
+        "the record keeps the registered key"
+    );
+}
