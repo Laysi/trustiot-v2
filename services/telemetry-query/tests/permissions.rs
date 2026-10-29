@@ -9,8 +9,8 @@
 //! The probes need no ClickHouse: a refused caller is refused from the token before anything is
 //! read, and an admitted one's request without parameters or body fails validation (400), or,
 //! for the latest values, finds no account of its made-up tenant in Postgres (404) before any
-//! query would run. The service is pointed at a ClickHouse address that refuses connections, so
-//! a probe that reached ClickHouse would show as 503 in the probe output.
+//! query would run. The service's ClickHouse address is a loopback port that only counts the
+//! connections it accepts and closes them; the test fails when a probe opened one.
 //!
 //! `the_matrix_document_matches_the_declarations` needs nothing. The probes start a throwaway
 //! Postgres with TLS (podman or docker) and the real binary; skipped without either unless `CI`
@@ -18,14 +18,33 @@
 
 mod support;
 
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
+
 use contract::{ServiceName, TenantRole};
 use support::{ClickHouseTarget, ROLES, Service, random_password};
 use testkit::identity::TestIssuer;
 use testkit::permissions::{Access, MATRIX, Operation, Suite};
 use testkit::product::product_postgres;
+use tokio::net::TcpListener;
 
-/// A ClickHouse address nothing listens on (TCP port 1 on the loopback interface).
-const NO_CLICKHOUSE: &str = "http://127.0.0.1:1";
+/// A loopback port that accepts connections, counts them and closes them at once: a ClickHouse
+/// that is never reached unless the count says so.
+async fn counting_port() -> (u16, Arc<AtomicUsize>) {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("a loopback port");
+    let port = listener.local_addr().expect("its address").port();
+    let count = Arc::new(AtomicUsize::new(0));
+    let counted = Arc::clone(&count);
+    tokio::spawn(async move {
+        while let Ok((stream, _)) = listener.accept().await {
+            counted.fetch_add(1, Ordering::SeqCst);
+            drop(stream);
+        }
+    });
+    (port, count)
+}
 
 /// Every operation of `telemetry_query::openapi()` and what it requires.
 fn suite(issuer: &TestIssuer) -> Suite<'_> {
@@ -53,17 +72,26 @@ async fn every_operation_admits_exactly_its_declared_callers() {
     };
     let issuer = TestIssuer::new();
     let password = random_password();
+    let (clickhouse_port, clickhouse) = counting_port().await;
+    let clickhouse_url = format!("http://127.0.0.1:{clickhouse_port}");
     let service = Service::start(
         &product,
         &ClickHouseTarget {
-            url: NO_CLICKHOUSE,
+            url: &clickhouse_url,
             password: &password,
         },
         &issuer.jwks(),
     )
     .await;
+    let before = clickhouse.load(Ordering::SeqCst);
     suite(&issuer)
         .run(&service.base_url)
         .await
         .assert_passed("the telemetry-query service's permission matrix");
+    assert_eq!(
+        clickhouse.load(Ordering::SeqCst),
+        before,
+        "no probe may reach ClickHouse: refused callers stop at the token, admitted ones at \
+         validation or the missing account"
+    );
 }

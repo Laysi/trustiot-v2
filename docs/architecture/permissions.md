@@ -133,5 +133,5 @@
 | `POST /api/telemetry/v1/usage` | 租戶 viewer | |
 
 - 在 Laysi/trustiot-v2#585 之前這四個操作只檢查有沒有租戶，而且先驗證參數或 body、再檢查租戶：帶 `Unrecognized` 角色的 token 能查詢，沒有租戶的呼叫者送錯參數得到 400 而不是 403。現在角色檢查在最前面，`statistics` 與 `usage` 的 body 也在檢查之後才讀。
-- 探測不需要 ClickHouse：被拒的呼叫者在讀任何東西之前就得 403；放行的呼叫者沒帶參數或 body 得 400，`latest` 在 Postgres 找不到這個隨機租戶的帳號得 404，都在查 ClickHouse 之前。
+- 探測不需要 ClickHouse：被拒的呼叫者在讀任何東西之前就得 403；放行的呼叫者沒帶參數或 body 得 400，`latest` 在 Postgres 找不到這個隨機租戶的帳號得 404，都在查 ClickHouse 之前。測試把 ClickHouse 位址指向一個只計算連線數的本機埠，探測後斷言沒有任何連線。
 - 助理服務換發的 token 也能呼叫（租戶 R 的換發 token 探測通過授權）：助理的遙測工具以使用者的身分查詢（Laysi/trustiot-v2#142）。

@@ -185,7 +185,11 @@ impl UserIdentity {
     /// # Errors
     ///
     /// [`PermissionDenied`] when the token does not meet `requirement`; answer it as it is.
-    pub fn require(&self, requirement: Requirement, action: &str) -> Result<(), PermissionDenied> {
+    pub fn require(
+        &self,
+        requirement: Requirement,
+        action: &'static str,
+    ) -> Result<(), PermissionDenied> {
         self.meets(requirement).map_err(|denial| {
             tracing::info!(
                 user_id = %self.user_id(),
