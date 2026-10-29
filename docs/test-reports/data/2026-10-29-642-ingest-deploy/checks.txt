@@ -1,0 +1,67 @@
+Laysi/trustiot-v2#642: outputs of the checks run on the branch feat/642-ingest-chart
+(base main 24271deb). Only the test lines and results are kept; the build host's own
+lines are left out and its paths read <host copy>.
+
+== cargo test --locked -p migrate --test clickhouse_ingest
+   (throwaway Postgres and ClickHouse 26.8, podman)
+     Running tests/clickhouse_ingest.rs (<host copy>/target/debug/deps/clickhouse_ingest-b083d77323149ea6)
+
+running 1 test
+test ingest_account ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 24.90s
+
+== cargo test --locked -p migrate --lib ingest
+test clickhouse::tests::splits_like_the_ingest_tests ... ok
+test config::tests::the_ingest_account_is_fixed_and_its_own ... ok
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 89 filtered out; finished in 0.00s
+
+== cargo test --locked -p testkit --all-targets budget
+test chart::tests::a_service_without_a_budget_fails - should panic ... ok
+test chart::tests::reads_every_budget_of_the_chart ... ok
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 40 filtered out; finished in 0.00s
+exit 0 at 14:23:07 (build host)
+
+== cargo test --locked -p ingest --test chart_connections
+running 1 test
+test the_chart_budgets_every_pool_the_service_opens ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+exit 0 at 14:19:34 (build host)
+
+== bun test deploy/chart
+ 708 pass
+ 0 fail
+Ran 708 tests across 9 files. [111.08s]
+
+== bun run --cwd scripts typecheck
+$ tsc --noEmit --project tsconfig.json
+rc=0
+
+== bun scripts/ci/check-secret-handling.ts
+secret handling: 540 file(s) checked, 7 container build file(s), no violations
+
+== bun scripts/ci/check-workflows.ts
+workflow policy: 4 file(s) checked, no violations
+
+== bun scripts/ci/lint-workflows.ts
+actionlint: 3 workflow file(s), no errors
+exit 0 at 14:31:05 (build host)
+
+== bun run --cwd scripts test   (the same files as bun test scripts: release, nightly, ci/changes.test.ts included)
+ 1708 pass
+ 9 skip
+ 0 fail
+Ran 1717 tests across 54 files. [12.41s]
+
+== cargo fmt --all --check
+rc=0
+
+== cargo clippy --locked --workspace --all-targets -- -D warnings
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 17.49s
+rc=0
+
+== cargo test --locked --workspace --exclude agent
+rc=0
+229 test binaries and doc-test runs reported "test result: ok", none failed
+exit 0 at 15:15:55 (build host)

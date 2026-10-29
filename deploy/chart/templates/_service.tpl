@@ -125,14 +125,15 @@ Custom env cannot take over what the chart controls:
 - for mqtt-bridge, TRUSTIOT__BROKER__ADDRESS is the chart's ("trustiot.mqttBridge.env"): the bridge
   relays the gateways' connections to the in-cluster broker only, even while it is off;
 - for a service whose program reads the broker settings ("trustiot.mqttBroker.credentialServices",
-  certs), every <prefix>__MQTT__ name is the chart's, with the broker or without it: its broker
+  certs and ingest), every <prefix>__MQTT__ name is the chart's, with the broker or without it: its broker
   account is the in-cluster broker's, and only the chart hands it the password file;
 - for assistant, the addresses of the AI gateway, the identity service's token exchange,
   telemetry-query and assets are the chart's ("trustiot.assistant.env"), derived from
   mesh.calls.assistant, even while unset: an address in env would point it at a service the mesh
   does not let it call;
-- for telemetry-query, TRUSTIOT__CLICKHOUSE__USERNAME and TRUSTIOT__CLICKHOUSE__PASSWORD are the
-  chart's: its ClickHouse account and the password the migration Job generates for it;
+- for telemetry-query and ingest, TRUSTIOT__CLICKHOUSE__USERNAME and TRUSTIOT__CLICKHOUSE__PASSWORD
+  are the chart's: the service's ClickHouse account and the password the migration Job generates
+  for it;
 - for ai-gateway, whose settings carry the prefix AI_GATEWAY ("trustiot.service.envPrefix"), the
   names of its platform settings and settings file (AI_GATEWAY_ plus a letter or digit), its
   providers and roles (AI_GATEWAY__PROVIDERS__*, AI_GATEWAY__ROLES__*) and every other variable of
@@ -186,10 +187,11 @@ outbox consumer reads its producers' events with. */ -}}
 {{- end -}}
 {{- end -}}
 {{- $clickhouseEnv := list -}}
-{{- if eq $name "telemetry-query" -}}
-{{- /* Its own ClickHouse account, which creates the tenants' read-only accounts: the migration Job
-generates its password into the service's Secret and sets it
-(services/ingest/migrations/clickhouse/0008_telemetry_query.sql). */ -}}
+{{- if has $name (list "telemetry-query" "ingest") -}}
+{{- /* Its own ClickHouse account: the migration Job generates its password into the service's
+Secret and sets it. telemetry-query's creates the tenants' read-only accounts
+(services/ingest/migrations/clickhouse/0008_telemetry_query.sql); ingest's holds the role
+trustiot_ingest alone, which the Job gives it (Laysi/trustiot-v2#642). */ -}}
 {{- $account := include "trustiot.migrate.passwordSecret" (dict "root" .root "component" $name "role" "clickhouse") | fromYaml -}}
 {{- $clickhouseEnv = append $clickhouseEnv (dict "name" "TRUSTIOT__CLICKHOUSE__USERNAME" "value" $account.key) -}}
 {{- $clickhouseEnv = append $clickhouseEnv (dict "name" "TRUSTIOT__CLICKHOUSE__PASSWORD" "valueFrom" (dict "secretKeyRef" (dict "name" $account.name "key" $account.key))) -}}

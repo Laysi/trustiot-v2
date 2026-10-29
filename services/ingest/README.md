@@ -1,6 +1,6 @@
 # ingest（資料接收）
 
-閘道器的遙測資料經 MQTT 寫進 ClickHouse，整批落盤後才回確認（決策 8、清單 I1）。服務在 Laysi/trustiot-v2#91 底下分段實作：2026-10-24 起有服務骨架、Postgres schema 與閘道器綁定對照表（Laysi/trustiot-v2#640，見[服務與設定](#服務與設定)、[閘道器綁定對照表](#閘道器綁定對照表)），2026-10-29 起有 MQTT 的訂閱、寫入與確認（Laysi/trustiot-v2#641，見[寫入流程](#寫入流程)）；映像與 chart 的部署是 Laysi/trustiot-v2#642，在那之前沒有任何部署執行這個服務（chart 的 `services.ingest.enabled` 是 `false`，`deploy/images/` 也沒有它的映像）。這個 crate 也放 ClickHouse 的 schema、保存期限的值（`src/retention.rs`）、彙總表的對帳與電能查詢語句（`src/rollup.rs`）與它們的測試（Laysi/trustiot-v2#59、Laysi/trustiot-v2#92、Laysi/trustiot-v2#141）。
+閘道器的遙測資料經 MQTT 寫進 ClickHouse，整批落盤後才回確認（決策 8、清單 I1）。服務在 Laysi/trustiot-v2#91 底下分段實作：2026-10-24 起有服務骨架、Postgres schema 與閘道器綁定對照表（Laysi/trustiot-v2#640，見[服務與設定](#服務與設定)、[閘道器綁定對照表](#閘道器綁定對照表)），2026-10-29 起有 MQTT 的訂閱、寫入與確認（Laysi/trustiot-v2#641，見[寫入流程](#寫入流程)）；2026-10-29 起有映像（`deploy/images/ingest`）與 chart 的部署（Laysi/trustiot-v2#642，見[部署](#部署)）。這個 crate 也放 ClickHouse 的 schema、保存期限的值（`src/retention.rs`）、彙總表的對帳與電能查詢語句（`src/rollup.rs`）與它們的測試（Laysi/trustiot-v2#59、Laysi/trustiot-v2#92、Laysi/trustiot-v2#141）。
 
 ## 閘道器的租戶歸屬
 
@@ -25,17 +25,17 @@ readiness 在下列全部成立時才是 200：
 
 每個檢查最多 800 毫秒（service-kit），失敗時日誌 WARN `readiness check failed` 帶檢查名稱與原因；原因只有連線錯誤的種類或 ClickHouse 的錯誤代碼，不含回應內文與密碼。
 
-設定（`src/config.rs`，`TRUSTIOT__*` 段落都是 `deny_unknown_fields`；chart 的變數由 Laysi/trustiot-v2#642 渲染）：
+設定（`src/config.rs`，`TRUSTIOT__*` 段落都是 `deny_unknown_fields`；chart 給的變數見[部署](#部署)）：
 
 | 變數 | 說明 |
 | --- | --- |
 | `TRUSTIOT_POSTGRES_HOST`、`_PORT`、`_DATABASE`、`_SSLMODE`、`_CA_FILE` | 平台設定：Postgres 位置；只接受 `verify-full`，只信任這個 CA。本機開發由 `bun scripts/dev.ts env` 印出 |
 | `TRUSTIOT__DATABASE__USERNAME`、`_PASSWORD` | 服務角色 `ingest_app` 的帳密（本機開發是 `TRUSTIOT_DEV_INGEST_DATABASE_*`） |
 | `TRUSTIOT__DATABASE__PLATFORM_USERNAME`、`_PLATFORM_PASSWORD` | 平台角色 `ingest_platform` 的帳密，必須是另一個角色（本機開發是 `TRUSTIOT_DEV_INGEST_PLATFORM_DATABASE_*`） |
-| `TRUSTIOT__DATABASE__MAX_CONNECTIONS` | 服務角色連線池每個副本的上限，3–100，預設 10：一條給綁定的消費端、一條留給 readiness（`postgres` 的 ping 與 migration 檢查），其餘給寫入流程的串流鎖（見[寫入流程](#寫入流程)）。平台角色的連線池固定 4 條（`PLATFORM_CONNECTIONS`：消費端讀事件、readiness、寫入路徑的查詢）。chart 的連線預算（`deploy/chart/templates/_postgres.tpl`）在 Laysi/trustiot-v2#642 加入 |
+| `TRUSTIOT__DATABASE__MAX_CONNECTIONS` | 服務角色連線池每個副本的上限，3–100，預設 10：一條給綁定的消費端、一條留給 readiness（`postgres` 的 ping 與 migration 檢查），其餘給寫入流程的串流鎖（見[寫入流程](#寫入流程)）。平台角色的連線池固定 4 條（`PLATFORM_CONNECTIONS`：消費端讀事件、readiness、寫入路徑的查詢）。chart 的連線預算（`deploy/chart/templates/_postgres.tpl`）以 14 條計算這個服務的每個副本，`tests/chart_connections.rs` 比對程式開的連線池 |
 | `TRUSTIOT_CLICKHOUSE_URL` | 平台設定：ClickHouse 的 HTTP 介面，`http://host:port`（chart 內建的 ClickHouse，走 mesh 的 mTLS）或 `https://host:port`（外部），不能帶帳密、路徑、查詢字串 |
 | `TRUSTIOT_CLICKHOUSE_CA_FILE` | 平台設定：`https` 時必填，是唯一信任的 CA，並檢查伺服器憑證的名稱（相當於 `verify-full`）；不信任系統或公開的根憑證 |
-| `TRUSTIOT__CLICKHOUSE__USERNAME`、`_PASSWORD` | 服務的 ClickHouse 寫入帳號，持有角色 `trustiot_ingest`（見下方的角色表）；帳號與密碼的交付是 Laysi/trustiot-v2#642 |
+| `TRUSTIOT__CLICKHOUSE__USERNAME`、`_PASSWORD` | 服務的 ClickHouse 寫入帳號，持有角色 `trustiot_ingest`（見下方的角色表）；部署時是 migration Job 建立的 `trustiot_ingest_writer`，密碼由 Job 產生（見[部署](#部署)） |
 | `TRUSTIOT__MQTT__HOST` | 必填：broker 的主機名稱或 IP，叢集內是 `<release>-mqtt-broker.<namespace>.svc`。走 broker 的服務埠（明文 MQTT，只有 mesh 連得到，由 ztunnel 的 mTLS 保護；見 [crates/mqtt-client](../../crates/mqtt-client/README.md)） |
 | `TRUSTIOT__MQTT__PORT` | broker 的服務埠，預設 1883 |
 | `TRUSTIOT__MQTT__USERNAME` | 必填：服務的 broker 帳號 `service:ingest`，它的角色由 migration Job 建立（`tools/migrate/src/mqtt_accounts.rs` 的 `SERVICES`）：訂閱閘道器的遙測與日誌（直接與 `$share/` 共用訂閱；日誌頻道還沒有程式使用）、只能發布遙測的確認 |
@@ -44,6 +44,16 @@ readiness 在下列全部成立時才是 200：
 | `TRUSTIOT__TELEMETRY_LIMITS__BURST` | 每台閘道器的桶最多存幾批，1–10000，預設 60：安靜一段時間後可以連續送的批數 |
 
 ClickHouse 的用戶端（`src/clickhouse.rs`、`src/transport.rs`）複製自 telemetry-query：HTTP/1.1 走 hyper，`https` 以 rustls 與 ring、只信任設定的 CA；每個請求一條連線，單一請求最多 30 秒。三個複本（migration Job、telemetry-query、ingest）合成一個 crate 是之後的工作。
+
+## 部署
+
+映像是 `deploy/images/ingest`（arm64 的 Rust 執行檔，基底以 digest 固定，見 [deploy/images/README.md](../../deploy/images/README.md)）。chart 以 `services.ingest.enabled: true` 部署它，連同 `mqttBroker.enabled: true`：沒有 broker 時 chart 不給 `TRUSTIOT__MQTT__*`，服務拒絕啟動。chart 給它的設定、帳號與檢查見 [deploy/chart/README.md](../../deploy/chart/README.md) 的「ingest」，摘要：
+
+- Postgres：`ingest_app`、`ingest_platform` 的密碼由 migration Job 產生在 Secret `<release>-ingest-password`；`database.maxConnections` 預設 10。
+- ClickHouse：同一個 Secret 的 `trustiot_ingest_writer`，Job 建立這個只持有 `trustiot_ingest` 的帳號（見下方的角色表）。
+- broker：帳號 `service:ingest`，密碼檔由 chart 從 broker 帳號 Secret 只掛 `ingest` 這個 key（`trustiot.mqttBroker.serviceCredentials`），pod 的 `fsGroup` 是 65531。換 broker 密碼時服務不重啟。
+- 每台閘道器的限額（`TRUSTIOT__TELEMETRY_LIMITS__*`）chart 沒有欄位，需要時以 `services.ingest.env` 設定。
+- nightly 的 smoke 測試確認 pod 就緒、兩個 Postgres 角色都有連線、寫入帳號只有它的預設角色；還不從閘道器送遙測。
 
 ## Postgres schema 與角色
 
@@ -347,6 +357,7 @@ materialized view 只處理 INSERT。重寫一批（沒有完成紀錄的批次�
 | row policy `deny_by_default`（每張表與每個 view） | `USING 0 TO ALL`。ClickHouse 的伺服器預設 `users_without_row_policies_can_read_rows = true`：表上有 policy、但沒有 policy 適用於某帳號時，那個帳號看得到全部的列。這條讓每個帳號都至少有一條 policy，沒有被其他 policy 點名的角色或帳號一列也讀不到，不必改伺服器設定 |
 | row policy `tenant_view_definer`（`telemetry` 與兩張彙總表） | `USING tenant_id = toUUID(getSetting('SQL_tenant_id')) AND <時間窗> TO trustiot_tenant_view_definer`。租戶過濾與可查期間真正生效的地方：DEFINER view 裡的查詢沿用呼叫者的設定，`SQL_tenant_id` 與時間窗設定就是呼叫帳號的常數（時間窗見下方「可查期間」） |
 | row policy `tenant_isolation`（三個租戶 view、`telemetry` 與兩張彙總表） | `USING tenant_id = toUUID(getSetting('SQL_tenant_id')) AND <時間窗> TO trustiot_tenant_reader`；沒有這些設定的帳號查詢時報錯（`UNKNOWN_SETTING`），不會拿到資料。view 上這條是第二層；表上這條在租戶角色沒有表權限時不起作用，只在萬一誤加了表權限時仍然過濾列 |
+| 帳號 `trustiot_ingest_writer` | 部署時服務用的寫入帳號，不在 DDL 檔案裡：migration Job 在服務啟用時以 `CREATE USER ... DEFAULT ROLE trustiot_ingest` 建立，只持有這個角色、沒有直接權限與 settings；密碼由 Job 產生在 chart 的 Secret `<release>-ingest-password`。Job 每次執行都檢查角色的權限與持有者、帳號的角色與設定，不符時先讓帳號不能登入再停止（`tools/migrate/src/clickhouse.rs`，Laysi/trustiot-v2#642） |
 | row policy `service_all_rows`（`telemetry`、`stream_commits`、停用的 `batch_commits` 與兩張彙總表） | `USING 1 TO trustiot_ingest`；服務帳號另建的 policy |
 | row policy `deny_by_default`（materialized view `telemetry_1m_mv`、`telemetry_1h_mv`） | 從 materialized view `SELECT` 時，ClickHouse 以 view 的 DEFINER 讀目標表，讀者在彙總表上的 policy 不適用：沒有這條，任何拿到整個資料庫 `SELECT` 的帳號（管理帳號也是）都能經 view 讀到每個租戶的彙總（2026-10-25 測試發現）。有了它所有帳號經 materialized view 都讀到 0 列，寫入不受影響 |
 | row policy `migration_account`（backfill view） | `USING 1 TO NONE`：平常不點名任何帳號，管理帳號經 `deny_by_default` 也讀到 0 列。migration Job 補資料時、管理者依 runbook 檢查或修正時，暫時改成 `TO CURRENT_USER`，做完改回 `TO NONE`（上方「既有資料的 backfill」） |

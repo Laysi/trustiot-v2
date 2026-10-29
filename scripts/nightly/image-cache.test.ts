@@ -31,6 +31,7 @@ const PACKAGE_DIRS: Record<(typeof NIGHTLY_IMAGES)[number], string> = {
   "telemetry-query": "services/telemetry-query",
   certs: "services/certs",
   assistant: "services/assistant",
+  ingest: "services/ingest",
 };
 
 /**

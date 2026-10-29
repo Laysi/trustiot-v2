@@ -62,7 +62,7 @@ export const IMAGE_CACHE_VERSION = "v1";
  * is logged in to Postgres as assistant_app (Laysi/trustiot-v2#592). They share one cache entry,
  * since every Rust change reaches all of them anyway (each key covers the whole workspace).
  */
-export const NIGHTLY_IMAGES = ["migrate", "identity", "assets", "ai-gateway", "telemetry-query", "certs", "assistant"] as const;
+export const NIGHTLY_IMAGES = ["migrate", "identity", "assets", "ai-gateway", "telemetry-query", "certs", "assistant", "ingest"] as const;
 
 /**
  * Programs the nightly runs on the runner itself, by the image whose package builds them. An

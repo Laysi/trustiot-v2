@@ -134,6 +134,7 @@ mod tests {
             "assistant",
             "certs",
             "identity",
+            "ingest",
             "telemetry-query",
         ] {
             let budget = postgres_connection_budget(service);

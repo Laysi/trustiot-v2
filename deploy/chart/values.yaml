@@ -263,8 +263,28 @@ services:
     # null, as for identity.
     podSecurityContext:
       fsGroup: 65533
+  # Telemetry from the gateways through the MQTT broker into ClickHouse (services/ingest, decision
+  # 8, Laysi/trustiot-v2#642). It logs in on the broker's service port as service:ingest, and the
+  # chart hands it that account's password file and the broker's address (README.md, "MQTT
+  # broker"); without mqttBroker.enabled it has no telemetry and never gets ready. Its ClickHouse
+  # account trustiot_ingest_writer, with the role trustiot_ingest alone, and its Postgres roles
+  # come from the migration Job with generated passwords (README.md, 「ingest」). It has no API: the
+  # mesh lets no caller reach it. Each gateway's batch limits (TRUSTIOT__TELEMETRY_LIMITS__*) have
+  # no fields here; set them in env when the defaults do not fit (services/ingest/README.md).
   ingest:
     enabled: false
+    # 3 to 100: one connection for the binding consumer, one for readiness, the rest for the
+    # telemetry path's stream locks, so it writes maxConnections - 2 batches at once. Each replica
+    # opens 4 more as its platform role (the binding consumer's events, readiness and the
+    # telemetry path's binding lookups): 14 in all.
+    database:
+      maxConnections: 10
+    # The broker account's password file is mode 0440, owned by root and the pod's fsGroup, so the
+    # service reads it through this group and no other user in the container can (README.md,
+    # "MQTT broker"). A group of its own, as for identity and certs. On OpenShift set fsGroup to
+    # null.
+    podSecurityContext:
+      fsGroup: 65531
   telemetry-query:
     enabled: false
     # 2 to 100. Each replica opens 2 more to read the identity service's events: 12 in all.
@@ -379,14 +399,18 @@ mesh:
     ai-gateway:
       - postgres
     # ClickHouse (decision 14): ingest writes telemetry, telemetry-query reads it with per-tenant
-    # read-only accounts (docs/architecture/deployment.md). telemetry-query keeps which tenants
-    # have an account in Postgres and reads the identity service's events from there as its
-    # platform role (services/telemetry-query/README.md). The MQTT broker (Laysi/trustiot-v2#84):
-    # mqtt-bridge carries the gateways' connections to its gateway port; ingest and gateway-ops
-    # log in on its service port with their broker accounts, like certs above.
+    # read-only accounts (docs/architecture/deployment.md). ingest keeps its gateway binding
+    # projection and the stream locks in Postgres and reads the assets service's events from there
+    # as its platform role (services/ingest/README.md, Laysi/trustiot-v2#642). telemetry-query keeps
+    # which tenants have an account in Postgres and reads the identity service's events from there
+    # as its platform role (services/telemetry-query/README.md). The MQTT broker
+    # (Laysi/trustiot-v2#84): mqtt-bridge carries the gateways' connections to its gateway port;
+    # ingest and gateway-ops log in on its service port with their broker accounts, like certs
+    # above; the chart hands ingest its account (README.md, "MQTT broker").
     ingest:
       - clickhouse
       - mqtt-broker
+      - postgres
     telemetry-query:
       - clickhouse
       - postgres
@@ -561,10 +585,10 @@ postgres:
       effective_cache_size: 384MB
       work_mem: 4MB
       maintenance_work_mem: 64MB
-      # Fits identity, assets, certs, telemetry-query, assistant and ai-gateway at one replica
-      # each while all of them roll at once (148) plus the 18 reserved connections (166), with 34
-      # to spare for the next service that uses Postgres; the render fails when the enabled
-      # services need more. Changing it restarts the bundled Postgres. The memory estimate is in
+      # Fits identity, assets, certs, telemetry-query, assistant, ai-gateway and ingest at one
+      # replica each while all of them roll at once (176) plus the 18 reserved connections (194),
+      # with 6 to spare; the next service that uses Postgres raises it. The render fails when the
+      # enabled services need more. Changing it restarts the bundled Postgres. The memory estimate is in
       # README.md (「叢集內的 Postgres」).
       max_connections: 200
     # The image is built for arm64 only (decision 5).

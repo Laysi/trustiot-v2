@@ -56,8 +56,8 @@ use crate::telemetry::{Parts, Pipeline, Subscription};
 
 /// Connections of the platform role's pool: the consumer's reads of the assets service's events,
 /// one read-only transaction at a time, one for readiness, and two for the lookups of the
-/// telemetry path (Laysi/trustiot-v2#641, which may size it again with the chart's connection
-/// budget in Laysi/trustiot-v2#642).
+/// telemetry path (Laysi/trustiot-v2#641). The chart's connection budget counts it
+/// (deploy/chart/templates/_postgres.tpl, tests/chart_connections.rs).
 pub const PLATFORM_CONNECTIONS: u32 = 4;
 
 /// How long getting a database connection may take, opening a new one included.

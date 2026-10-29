@@ -54,8 +54,9 @@ on:
       # What goes into the nightly's Rust images (scripts/nightly/image-cache.ts, NIGHTLY_IMAGES):
       # the workspace, the toolchain, the build scripts and every local crate tools/migrate,
       # services/identity, services/assets, services/ai-gateway, services/telemetry-query,
-      # services/certs and services/assistant build from, plus the files tools/migrate compiles
-      # in with #[path] (scripts/nightly/image-cache.test.ts keeps this list complete).
+      # services/certs, services/assistant and services/ingest build from, plus the files
+      # tools/migrate compiles in with #[path] (scripts/nightly/image-cache.test.ts keeps this list
+      # complete).
       - Cargo.toml
       - Cargo.lock
       - rust-toolchain.toml
@@ -76,7 +77,8 @@ on:
       - factory/workstation/**
       # A dev-dependency of services/telemetry-query (tests/semantic.rs loads the lab dataset),
       # and what it depends on. services/ingest also holds the files tools/migrate compiles in
-      # with #[path] (src/retention.rs, src/rollup.rs).
+      # with #[path] (src/retention.rs, src/rollup.rs), and since Laysi/trustiot-v2#642 it is the
+      # source of the ingest image too (listed once, here).
       - tools/lab-dataset/**
       - edge/agent/**
       - services/ingest/**
@@ -93,6 +95,7 @@ on:
       - deploy/images/telemetry-query/**
       - deploy/images/certs/**
       - deploy/images/assistant/**
+      - deploy/images/ingest/**
       - deploy/istio/**
       - tools/migrate/**
       - services/identity/**
@@ -193,7 +196,10 @@ jobs:
     # the broker to open its gateway port after one restart (300 seconds), a few kubectl auth
     # can-i questions, and no image: at most 12 minutes per shape, 24 for both, usually one to
     # three minutes per shape (not measured).
-    timeout-minutes: 110
+    # Laysi/trustiot-v2#642 adds the ingest image (one more cold build on the services'
+    # dependencies) and per shape its rollout, one query of pg_stat_activity and two ClickHouse
+    # queries in the pod, with no request to it.
+    timeout-minutes: 115
     permissions:
       contents: read
     env:
@@ -227,7 +233,7 @@ jobs:
         with:
           tools: bun helm k3d kubectl
       # The Rust images (NIGHTLY_IMAGES in scripts/nightly/image-cache.ts: deploy/images/migrate,
-      # identity, assets, ai-gateway, telemetry-query, certs and assistant) are reused while nothing that goes
+      # identity, assets, ai-gateway, telemetry-query, certs, assistant and ingest) are reused while nothing that goes
       # into them changed: the key is a digest of the git object hashes of every input of their
       # builds. One entry holds every tarball and the programs built with them (certs-ca,
       # NIGHTLY_PROGRAMS), and it is saved only with all of them. Exact key only, no restore-keys:
