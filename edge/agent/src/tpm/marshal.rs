@@ -67,6 +67,9 @@ pub(crate) mod nv_attribute {
     pub(crate) const TYPE_MASK: u32 = 0xf << 4;
     pub(crate) const OWNERREAD: u32 = 1 << 17;
     pub(crate) const AUTHREAD: u32 = 1 << 18;
+    /// TPMA_NV_NO_DA: a failed authorization of the index does not count towards the TPM's
+    /// dictionary-attack lockout.
+    pub(crate) const NO_DA: u32 = 1 << 25;
     pub(crate) const WRITTEN: u32 = 1 << 29;
 }
 

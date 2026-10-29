@@ -58,6 +58,32 @@ CI=true cargo test --locked -p agent --test tpm_endorsement
 - 憑證比對（rcgen 產生）：EK 的憑證相符；別的金鑰或同一把金鑰的壓縮點是 `CertificateMismatch`；憑證後多 1 或 16 bytes、截斷、空的、SPKI 本身與不定長度編碼是 `CertificateInvalid`；五千筆變造的憑證不會 panic，也不會在 SPKI 不同時相符。
 - 以腳本化的假 TPM 測整個流程：沒有憑證時是 `Absent`、錄下的憑證分兩段讀出並相符（CreatePrimary 收到 `TPM_RC_RETRY` 時重送）、只有 `authRead` 時以 index 授權讀、4096 bytes 的 index 分八段讀出；EK 範本或 nonce 在送出 CreatePrimary 前被拒；NV_ReadPublic 描述的是別的 index 時是錯誤；屬性不同、名稱不是公開區域的 SHA-256、ReadPublic 不一致、點不在 P-256 上的 EK 都會被拒絕，而且一定送了 FlushContext；index 是計數器、沒有 ownerRead 也沒有 authRead、大小是 0、4097 或 65535 時是 `CertificateIndex`；沒寫入過是 `Absent`；NV_Read 回得比要求的短是錯誤。
 
+### 安全審查後的修正
+
+安全審查（head `2a02c602`）沒有 Critical 或 High，下列項目在之後的 commit 處理：
+
+- **M1（文件）**：`EkCertificate::Matches` 只代表憑證的 SPKI 與 EK 的公鑰位元組相同。它不驗簽章與憑證鏈，也不證明 TPM 是真品：拿到 platform 授權的人可以改寫 `0x01C0000A`，假的 TPM 或匯流排上的中間人也能回報別台設備的 EK 和它真正的憑證。
+  - 這個限制寫在 `Matches` 的 rustdoc、模組文件、`edge/agent/README.md`「背書金鑰」一節與決策 12 的 (6)，並連到 `services/certs/README.md`「規則與取捨」的「EK 只記錄、比對，不驗證」。
+  - 新增單元測試 `a_self_signed_certificate_for_the_ek_key_still_matches_because_only_the_key_is_compared`：自簽、但公鑰與 EK 相同的憑證仍然得到 `Matches`。
+- **L1**：
+  - `marshal::nv_attribute` 新增 `NO_DA`（bit 25）。
+  - index 沒有 ownerRead、只能以 authRead 讀時，必須帶 `noDA`，否則在送出任何授權之前就回 `CertificateIndex`；index 設了密碼時，空密碼的 NV_Read 才不會讓字典攻擊計數加一。
+  - 回歸測試 `flow::an_auth_read_index_without_no_da_is_refused_before_any_read`：屬性為 `RECORDED_ATTRIBUTES & !OWNERREAD & !NO_DA` 時，結果是 `CertificateIndex`，送出的指令只到 NV_ReadPublic，沒有 NV_Read。
+  - 字典攻擊計數在兩條讀取路徑上都不受影響：ownerRead 路徑用 owner 階層授權，階層授權不受字典攻擊保護；authRead 路徑只在有 `noDA` 時才送授權。swtpm 測試在兩條路徑讀取成功後都比對 `snapshot()`（含字典攻擊計數）。授權失敗時計數不變是依規範推論，沒有在 swtpm 上另外實測。
+- **L2（文件）**：CreatePrimary 的回應格式錯誤或逾時時，不知道 handle，EK 不會被 flush，清理依賴核心的資源管理器。已寫進模組文件與 README；只接受 `/dev/tpmrm*` 的檢查是 Laysi/trustiot-v2#613 的前提條件。
+- **I1**：尾端 bytes 的規則維持嚴格。Laysi/trustiot-v2#618 之後可考慮的放寬形式寫在 PR 內文：尾端全是 `0x00` 或 `0xFF`，或 TCG 的 NV 標頭 `10 01 00 <len16>`；兩種都只把 DER 本身往下游送。
+
+修正後在建置主機上重跑以下檢查，原始輸出見 [checks-after-review.txt](data/2026-10-29-612-ek-certificate/checks-after-review.txt)：
+
+| 指令 | 結果 |
+| --- | --- |
+| `cargo fmt --all --check` | 通過 |
+| `cargo clippy --locked --workspace --all-targets -- -D warnings` | 通過，沒有警告 |
+| `CI=true cargo test --locked -p agent` | 全部通過：lib 218（多了上面兩個新測試）、tpm_endorsement 5、tpm_provision 6、tpm_swtpm 1、dependencies 1，其餘測試檔與上表相同 |
+| `cargo build --locked --target aarch64-unknown-linux-gnu -p agent` | 通過 |
+
+`cargo test -p repo-check` 沿用上表的結果：這次修正只動 agent 的程式與文件。
+
 ## 結論
 
 | 驗收條件 | 結果 |
@@ -70,5 +96,5 @@ CI=true cargo test --locked -p agent --test tpm_endorsement
 
 待測（依驗證分級延後為進階驗證，或屬於後續 issue 的範圍）：
 
-- 在實體 TPM（SLB9670）上計算 EK 並讀出製造商的 EK 憑證（Laysi/trustiot-v2#618 的範圍）。其中要確認一件事：本實作要求 NV 裡剛好是一張 DER 憑證、後面不能有多餘的 bytes；若 SLB9670 的 EK 憑證 index 比憑證大、尾端有填充，會被拒絕為 `CertificateInvalid`，屆時要決定是否改為只看 DER 長度內的內容。
+- 在實體 TPM（SLB9670）上計算 EK 並讀出製造商的 EK 憑證（Laysi/trustiot-v2#618 的範圍）。其中要確認一件事：本實作要求 NV 裡剛好是一張 DER 憑證、後面不能有多餘的 bytes；若 SLB9670 的 EK 憑證 index 比憑證大、尾端有填充，會被拒絕為 `CertificateInvalid`，屆時再從上面 I1 列出的放寬形式中選擇。
 - 只能經核心資源管理器（`/dev/tpmrm*`）存取的強制檢查屬於 Laysi/trustiot-v2#613。

@@ -19,15 +19,18 @@
 //! - **The EK certificate** at NV index [`EK_CERTIFICATE_INDEX`] (`0x01C0000A`) is read when it is
 //!   defined and written, with the owner's empty authorization when the index has `ownerRead`
 //!   (the TCG profile's attributes; the owner hierarchy is not subject to dictionary-attack
-//!   lockout) or else its own empty authorization when it has `authRead`, in chunks of
-//!   [`NV_READ_CHUNK`] bytes. It must be one DER X.509 certificate and nothing after it, and its
-//!   `SubjectPublicKeyInfo` must be byte for byte the EK's (`id-ecPublicKey`, `prime256v1`, the
+//!   lockout) or else its own empty authorization when it has `authRead` and `noDA` (an index
+//!   with `authRead` only and a non-empty authorization would count the failed read towards the
+//!   lockout, so it is refused with [`EndorsementError::CertificateIndex`] before any read), in
+//!   chunks of [`NV_READ_CHUNK`] bytes. It must be one DER X.509 certificate and nothing after
+//!   it, and its `SubjectPublicKeyInfo` must be byte for byte the EK's (`id-ecPublicKey`, `prime256v1`, the
 //!   uncompressed point): then [`EkCertificate::Matches`]; a certificate for any other key, or
 //!   the same key encoded differently, is refused with [`EndorsementError::CertificateMismatch`],
 //!   and one that does not parse with [`EndorsementError::CertificateInvalid`]. No index, or an
 //!   index never written, is [`EkCertificate::Absent`]. The chain to the manufacturer's root is
 //!   not checked: the certs service records and compares the EK only
-//!   (services/certs/README.md, 「規則與取捨」).
+//!   (services/certs/README.md, 「規則與取捨」: 「EK 只記錄、比對，不驗證」). A match is therefore
+//!   no evidence that the TPM is genuine; see [`EkCertificate::Matches`].
 //! - **Endorsement authorization.** Only the empty authorization (the TPM's default) is
 //!   supported. When the hierarchy has one, TPM2_CreatePrimary fails authorization and
 //!   [`EndorsementError::EndorsementAuthorization`] is returned; hierarchy authorizations are not
@@ -36,8 +39,11 @@
 //! The EK is a transient object between TPM2_CreatePrimary and TPM2_FlushContext. It is flushed
 //! whatever the later checks find; if the process dies in between, the kernel's resource manager
 //! (`/dev/tpmrm0`) flushes it when the device is closed, so the caller must use the resource
-//! manager (Laysi/trustiot-v2#613 refuses other devices). Every command goes through the worker
-//! with resends on the TPM's retry warnings, at most [`super::PROVISION_RESPONSE_TIMEOUT`] each.
+//! manager (Laysi/trustiot-v2#613 refuses other devices). The same holds when
+//! TPM2_CreatePrimary's response is malformed or does not arrive in time: the handle is then
+//! unknown, so nothing is flushed and the resource manager removes the EK when the device is
+//! closed. Every command goes through the worker with resends on the TPM's retry warnings, at
+//! most [`super::PROVISION_RESPONSE_TIMEOUT`] each.
 
 use ring::agreement;
 use ring::rand::SystemRandom;
@@ -80,7 +86,15 @@ pub struct Endorsement {
 pub enum EkCertificate {
     /// The index is not defined, or was never written: there is no EK certificate.
     Absent,
-    /// The certificate (DER), whose public key is the EK.
+    /// The certificate (DER), whose `SubjectPublicKeyInfo` is byte for byte the EK's.
+    ///
+    /// That is all it means. Neither the certificate's signature nor its chain to a TPM
+    /// manufacturer is checked, so it does not show that the TPM is genuine: whoever holds the
+    /// platform authorization can rewrite the index (a certificate for the EK's key signed by
+    /// anyone, even a self-signed one, matches too), and a counterfeit TPM, or a man in the middle on the bus, can report
+    /// another device's EK together with that device's real certificate. The certs service
+    /// records and compares the EK without verifying it (services/certs/README.md, 「規則與取捨」:
+    /// 「EK 只記錄、比對，不驗證」).
     Matches(Vec<u8>),
 }
 
@@ -271,6 +285,13 @@ fn read_certificate(worker: &Worker) -> Result<Option<Vec<u8>>, EndorsementError
     let auth = if attributes & nv_attribute::OWNERREAD != 0 {
         marshal::TPM_RH_OWNER
     } else if attributes & nv_attribute::AUTHREAD != 0 {
+        // The empty password fails when the index has an authorization value; without noDA
+        // that failure would count towards the TPM's dictionary-attack lockout.
+        if attributes & nv_attribute::NO_DA == 0 {
+            return unreadable(format!(
+                "only authRead is set, without noDA (attributes {attributes:#010x}); reading it could count towards the dictionary-attack lockout"
+            ));
+        }
         EK_CERTIFICATE_INDEX
     } else {
         return unreadable(format!(
@@ -391,6 +412,26 @@ mod tests {
         assert_eq!(
             check_certificate(&ek, certificate.clone()).unwrap(),
             EkCertificate::Matches(certificate)
+        );
+    }
+
+    #[test]
+    fn a_self_signed_certificate_for_the_ek_key_still_matches_because_only_the_key_is_compared() {
+        // Matches says nothing about who signed the certificate: anyone who can write the NV
+        // index can store one like this.
+        let key = rcgen::KeyPair::generate().unwrap();
+        let ek = rcgen::PublicKeyData::subject_public_key_info(&key);
+        let self_signed = rcgen::CertificateParams::new(vec!["not-a-manufacturer.test".to_owned()])
+            .unwrap()
+            .self_signed(&key)
+            .unwrap()
+            .der()
+            .to_vec();
+        let (_, parsed) = X509Certificate::from_der(&self_signed).unwrap();
+        assert_eq!(parsed.issuer(), parsed.subject());
+        assert_eq!(
+            check_certificate(&ek, self_signed.clone()).unwrap(),
+            EkCertificate::Matches(self_signed)
         );
     }
 
@@ -964,6 +1005,22 @@ mod flow {
                 }
                 other => panic!("expected an unreadable index, got {other:?}"),
             }
+        }
+    }
+
+    #[test]
+    fn an_auth_read_index_without_no_da_is_refused_before_any_read() {
+        let mut steps = ek_steps();
+        steps.push(certificate_index(
+            RECORDED_ATTRIBUTES & !nv_attribute::OWNERREAD & !nv_attribute::NO_DA,
+            798,
+        ));
+        // run() requires every step to be used and nothing more: no TPM2_NV_Read is sent.
+        match run(steps) {
+            Err(EndorsementError::CertificateIndex(reason)) => {
+                assert!(reason.contains("without noDA"), "{reason}");
+            }
+            other => panic!("expected an unreadable index, got {other:?}"),
         }
     }
 
