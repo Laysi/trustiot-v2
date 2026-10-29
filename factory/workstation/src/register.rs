@@ -103,7 +103,7 @@ fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
-fn sha256_hex(bytes: &[u8]) -> String {
+pub(crate) fn sha256_hex(bytes: &[u8]) -> String {
     hex(&Sha256::digest(bytes))
 }
 
@@ -121,7 +121,7 @@ fn pem_encode(label: &str, der: &[u8]) -> String {
 
 /// The DER of the one PEM block in `bytes`, which must be labelled `label`; any other block
 /// refuses the input. Text outside the block is ignored: only what is decoded is sent.
-fn one_pem_block(bytes: &[u8], label: &str) -> Option<Vec<u8>> {
+pub(crate) fn one_pem_block(bytes: &[u8], label: &str) -> Option<Vec<u8>> {
     let text = std::str::from_utf8(bytes).ok()?;
     if text.matches("-----BEGIN").count() != 1 || text.matches("-----END").count() != 1 {
         return None;
@@ -829,6 +829,7 @@ async fn attempt_once(
             path: REGISTRATIONS_PATH,
             cookie: Some(registrar.cookie),
             headers: headers.into_headers(),
+            query: None,
             json: Some(Zeroizing::new(gateway.body.clone())),
         })
         .await

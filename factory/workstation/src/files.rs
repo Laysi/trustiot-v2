@@ -36,6 +36,9 @@ const SECRET_FORBIDDEN: u32 = 0o177;
 /// could otherwise replace the files in it.
 const DIRECTORY_FORBIDDEN: u32 = 0o022;
 
+/// Bits a file the tool uploads to run elsewhere must not have: write for the group or others.
+const EXECUTABLE_FORBIDDEN: u32 = 0o022;
+
 /// The effective user id of this process.
 #[allow(
     unsafe_code,
@@ -184,6 +187,30 @@ pub fn read_secret(path: &Path, max_bytes: usize) -> Result<Zeroizing<Vec<u8>>, 
 /// When the file cannot be read, is not a regular file, or is too large.
 pub fn read_public(path: &Path, max_bytes: usize) -> Result<Vec<u8>, Error> {
     let (mut file, _) = open_regular(path, true)?;
+    let mut buffer = Vec::new();
+    read_limited(&mut file, path, max_bytes, &mut buffer)?;
+    Ok(buffer)
+}
+
+/// Reads a file the tool hands to another machine to run (`--upload-agent`), at most
+/// `max_bytes`: a regular file, through symbolic links, that belongs to the user running the tool
+/// and that the group and others cannot write to, so nobody else could have replaced what is
+/// run as root on the gateway. The checks use the opened file, so the file read is the file
+/// checked.
+///
+/// # Errors
+///
+/// When the file cannot be read, is not a regular file, is refused, or is too large.
+pub fn read_executable(path: &Path, max_bytes: usize) -> Result<Vec<u8>, Error> {
+    let (mut file, metadata) = open_regular(path, true)?;
+    check_owner(path, metadata.uid(), effective_uid())?;
+    let mode = metadata.permissions().mode() & 0o7777;
+    if mode & EXECUTABLE_FORBIDDEN != 0 {
+        return Err(Error::WritableByOthers {
+            path: path.to_owned(),
+            mode,
+        });
+    }
     let mut buffer = Vec::new();
     read_limited(&mut file, path, max_bytes, &mut buffer)?;
     Ok(buffer)
@@ -443,6 +470,44 @@ mod tests {
         let secret = directory.join("key");
         create_secret(&secret, b"x").expect("created");
         read_secret(&secret, 4).expect("owned by the user running the tool");
+        fs::remove_dir_all(directory).expect("cleaned up");
+    }
+
+    #[test]
+    fn executables_writable_by_others_are_refused() {
+        let directory = scratch("executable");
+        let path = directory.join("trustiot-agent");
+        fs::write(&path, b"agent").expect("written");
+        for refused in [0o775, 0o757, 0o777, 0o722] {
+            fs::set_permissions(&path, Permissions::from_mode(refused)).expect("chmod");
+            let error = read_executable(&path, 16).expect_err("refused");
+            assert!(
+                matches!(error, Error::WritableByOthers { mode, .. } if mode == refused),
+                "{refused:o}: {error}"
+            );
+            assert!(error.to_string().contains("chmod go-w"), "{error}");
+        }
+        for allowed in [0o755, 0o700, 0o644, 0o500] {
+            fs::set_permissions(&path, Permissions::from_mode(allowed)).expect("chmod");
+            assert_eq!(
+                read_executable(&path, 16).expect("allowed"),
+                b"agent",
+                "{allowed:o}"
+            );
+        }
+        // Through a symbolic link, the file it points to is the one checked.
+        let link = directory.join("link");
+        symlink(&path, &link).expect("a link");
+        fs::set_permissions(&path, Permissions::from_mode(0o777)).expect("chmod");
+        assert!(matches!(
+            read_executable(&link, 16),
+            Err(Error::WritableByOthers { .. })
+        ));
+        fs::set_permissions(&path, Permissions::from_mode(0o755)).expect("chmod");
+        assert!(matches!(
+            read_executable(&path, 2),
+            Err(Error::BadFile { .. })
+        ));
         fs::remove_dir_all(directory).expect("cleaned up");
     }
 

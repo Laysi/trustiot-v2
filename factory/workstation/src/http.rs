@@ -35,6 +35,8 @@ use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::net::TcpStream;
 use tokio_rustls::TlsConnector;
 use tracing::{debug, trace};
+use unicode_properties::GeneralCategory;
+use unicode_properties::general_category::UnicodeGeneralCategory as _;
 use zeroize::Zeroizing;
 
 use crate::Error;
@@ -208,7 +210,9 @@ pub struct Response {
 const MAX_PRINTED_CHARS: usize = 120;
 
 /// `text` from a server, made safe to print on a terminal: control characters (escape
-/// sequences, carriage returns, line breaks) are written as `\u{..}` and the text is cut to
+/// sequences, carriage returns, line breaks), format characters (bidirectional overrides such as
+/// U+202E, zero-width spaces such as U+200B) and the line and paragraph separators are written as
+/// `\u{..}`, so nothing printed can reorder or hide what follows it, and the text is cut to
 /// [`MAX_PRINTED_CHARS`] characters.
 #[must_use]
 pub fn printable(text: &str) -> String {
@@ -218,13 +222,24 @@ pub fn printable(text: &str) -> String {
             shown.push_str("...");
             break;
         }
-        if character.is_control() {
+        if escaped(character) {
             shown.extend(character.escape_unicode());
         } else {
             shown.push(character);
         }
     }
     shown
+}
+
+/// Whether [`printable`] writes `character` as an escape.
+fn escaped(character: char) -> bool {
+    matches!(
+        character.general_category(),
+        GeneralCategory::Control
+            | GeneralCategory::Format
+            | GeneralCategory::LineSeparator
+            | GeneralCategory::ParagraphSeparator
+    )
 }
 
 /// An error status from the platform, with the M1 error body's code, message key,
@@ -308,11 +323,14 @@ impl fmt::Display for ApiError {
     }
 }
 
-/// One request: the method, the path, the session cookie, extra headers and a JSON body, all
-/// optional but the first two.
+/// One request: the method, the path, a query, the session cookie, extra headers and a JSON body,
+/// all optional but the first two.
 pub struct Call<'a> {
     pub method: Method,
     pub path: &'static str,
+    /// The query string without its `?`, already encoded (`url::form_urlencoded`). Never logged:
+    /// log lines and errors name the path only.
+    pub query: Option<&'a str>,
     pub cookie: Option<&'a SessionCookie>,
     /// Headers of this request alone (a registration's workstation signature). Their values are
     /// marked sensitive and never logged.
@@ -423,9 +441,13 @@ impl Client {
     }
 
     fn request(&self, call: Call<'_>) -> Result<Request<Full<Bytes>>, Problem> {
+        let uri = match call.query {
+            Some(query) => format!("{}?{query}", call.path),
+            None => call.path.to_owned(),
+        };
         let mut builder = Request::builder()
             .method(call.method)
-            .uri(call.path)
+            .uri(uri)
             .header(HOST, self.origin.authority())
             .header(ACCEPT, "application/json")
             .header(
@@ -736,6 +758,7 @@ mod tests {
                 path: "/api/identity/v1/sessions/current",
                 cookie: None,
                 headers: Vec::new(),
+                query: None,
                 json: None,
             })
             .await
@@ -778,6 +801,7 @@ mod tests {
                 path: "/",
                 cookie: None,
                 headers: Vec::new(),
+                query: None,
                 json: None,
             })
             .await
@@ -822,6 +846,18 @@ mod tests {
         );
         let long = "x".repeat(500);
         assert_eq!(printable(&long).chars().count(), MAX_PRINTED_CHARS + 3);
+    }
+
+    #[test]
+    fn format_characters_and_separators_are_escaped() {
+        // A right-to-left override that would show "tg-0001" as "1000-gt", a zero-width space,
+        // a byte order mark, a soft hyphen, and the line and paragraph separators.
+        let shown = printable("a\u{202e}tg-0001\u{200b}b\u{feff}c\u{ad}d\u{2028}e\u{2029}f");
+        assert_eq!(
+            shown,
+            r"a\u{202e}tg-0001\u{200b}b\u{feff}c\u{ad}d\u{2028}e\u{2029}f"
+        );
+        assert_eq!(printable("tg-0001 é 漢字"), "tg-0001 é 漢字");
     }
 
     #[test]

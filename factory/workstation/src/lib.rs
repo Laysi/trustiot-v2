@@ -15,19 +15,25 @@
 //! - [`register`]: the factory registration of a gateway (`register`), signed by the workstation
 //!   ([`sign`]), retried with backoff ([`retry`]), its answer checked and recorded
 //!   ([`journal`]).
+//! - [`pipeline`]: `register --gateway` (Laysi/trustiot-v2#616): `trustiot-agent provision` run
+//!   on the gateway over ssh ([`gateway`]), its report checked, then [`register`].
+//! - [`verify`]: the gateway's `certs.gateway_registered` event in the platform's event log.
 //!
 //! The operator's guide is factory/workstation/README.md.
 
 pub mod config;
 pub mod files;
+pub mod gateway;
 pub mod http;
 pub mod identity;
 pub mod journal;
+pub mod pipeline;
 pub mod register;
 pub mod retry;
 pub mod secret;
 pub mod session;
 pub mod sign;
+pub mod verify;
 
 use std::io;
 use std::path::PathBuf;
@@ -55,6 +61,15 @@ pub enum Error {
         path.display()
     )]
     DirectoryTooOpen { path: PathBuf, mode: u32 },
+    /// A file the tool uploads to run on a gateway (`--upload-agent`) is writable by the group
+    /// or others, who could replace what runs there.
+    #[error(
+        "{} has mode {mode:04o}: a file run on the gateway must not be writable by the group or \
+         others (chmod go-w {})",
+        path.display(),
+        path.display()
+    )]
+    WritableByOthers { path: PathBuf, mode: u32 },
     /// A secret file, or a directory the tool keeps files in, belongs to another user, who could
     /// read or replace it.
     #[error(
@@ -93,7 +108,32 @@ pub enum Error {
     /// its own exit code ([`register::StopKind`]).
     #[error(transparent)]
     Registration(Box<register::Stopped>),
+    /// `register --gateway` stopped before the registration: the gateway could not be reached,
+    /// its provisioning failed, its report was refused, or its TPM has no key for a known
+    /// hardware ID; each has its own exit code ([`pipeline::StopKind`]).
+    #[error(transparent)]
+    Provisioning(Box<pipeline::Stopped>),
+    /// `verify` found no registration event of the hardware ID (exit code [`NO_EVENT_EXIT_CODE`]).
+    #[error("{0}")]
+    NoEvent(String),
+    /// `verify` found a registration event of the hardware ID whose serial or public key is not
+    /// this workstation's record (exit code [`EVENT_MISMATCH_EXIT_CODE`]).
+    #[error("{0}")]
+    EventMismatch(String),
+    /// `verify` found registration events of the hardware ID, but this workstation has no
+    /// `registered` record to compare them with (exit code [`UNRECORDED_EXIT_CODE`]).
+    #[error("{0}")]
+    Unrecorded(String),
 }
+
+/// The exit code of [`Error::NoEvent`].
+pub const NO_EVENT_EXIT_CODE: u8 = 24;
+
+/// The exit code of [`Error::EventMismatch`].
+pub const EVENT_MISMATCH_EXIT_CODE: u8 = 25;
+
+/// The exit code of [`Error::Unrecorded`].
+pub const UNRECORDED_EXIT_CODE: u8 = 26;
 
 impl From<http::ApiError> for Error {
     fn from(error: http::ApiError) -> Self {
@@ -103,12 +143,18 @@ impl From<http::ApiError> for Error {
 
 impl Error {
     /// The process exit code for this failure: 2 for usage mistakes, a registration's own code
-    /// ([`register::StopKind::exit_code`]), 1 otherwise.
+    /// ([`register::StopKind::exit_code`]), a gateway run's ([`pipeline::StopKind::exit_code`]),
+    /// `verify`'s [`NO_EVENT_EXIT_CODE`], [`EVENT_MISMATCH_EXIT_CODE`] and
+    /// [`UNRECORDED_EXIT_CODE`], 1 otherwise.
     #[must_use]
     pub fn exit_code(&self) -> u8 {
         match self {
             Self::Usage(_) => 2,
             Self::Registration(stopped) => stopped.kind.exit_code(),
+            Self::Provisioning(stopped) => stopped.kind.exit_code(),
+            Self::NoEvent(_) => NO_EVENT_EXIT_CODE,
+            Self::EventMismatch(_) => EVENT_MISMATCH_EXIT_CODE,
+            Self::Unrecorded(_) => UNRECORDED_EXIT_CODE,
             _ => 1,
         }
     }

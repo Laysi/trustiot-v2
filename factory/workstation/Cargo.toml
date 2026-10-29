@@ -32,6 +32,9 @@ hyper = { workspace = true, features = ["client", "http1"] }
 hyper-util = { workspace = true, features = ["tokio"] }
 # O_NOFOLLOW when opening secret files.
 libc.workspace = true
+# The gateway's provisioning report (`protocol::provisioning`, Laysi/trustiot-v2#613) and the
+# hardware ID rule (`GatewayId`) of `register --gateway`.
+protocol = { path = "../../crates/protocol" }
 # The workstation's ECDSA P-256 key, its CSR and the registration's signature; `zeroize` wipes
 # the key's PKCS #8 copy. `x509-parser` reads a gateway's CSR, checks its signature and encodes
 # its public key as the certs service does before hashing it.
@@ -45,11 +48,14 @@ serde_json.workspace = true
 # The SHA-256 of a registration's body, of the gateway's keys and of the root certificate.
 sha2.workspace = true
 thiserror.workspace = true
-tokio = { workspace = true, features = ["io-util", "net", "rt", "time"] }
+# `process`: the system's ssh, for `register --gateway`; `macros` for its `join!`.
+tokio = { workspace = true, features = ["io-util", "macros", "net", "process", "rt", "time"] }
 tokio-rustls = { workspace = true, features = ["ring"] }
 tracing.workspace = true
 # Log lines on stderr, only from this crate (TRUSTIOT_WORKSTATION_LOG).
 tracing-subscriber = { workspace = true, features = ["fmt", "registry", "std"] }
+# `printable` escapes format characters (bidi overrides, zero-width spaces) besides controls.
+unicode-properties = { workspace = true, features = ["general-category"] }
 # The platform URL.
 url.workspace = true
 # Reads the workstation certificate: purpose, subject, validity and public key; `verify` checks
@@ -58,10 +64,15 @@ x509-parser = { workspace = true, features = ["verify"] }
 zeroize.workspace = true
 
 [dev-dependencies]
+# `trustiot-agent provision` itself (`agent::provision::run`) against a software TPM, behind the
+# fake ssh of tests/pipeline_swtpm.rs; without the test-only `test-exempt-addresses` feature.
+agent = { path = "../../edge/agent" }
 # Stand-ins for the login, logout and workstation certificate endpoints, on loopback.
 axum = { workspace = true, features = ["http1", "json", "tokio"] }
 # Test CAs and the certificates they sign; reading the CSR the stand-in receives.
 rcgen = { workspace = true, features = ["crypto", "pem", "ring", "x509-parser", "zeroize"] }
+# The software TPM (swtpm in a container, `testkit::swtpm`, Laysi/trustiot-v2#611).
+testkit = { path = "../../crates/testkit" }
 time.workspace = true
 tokio = { workspace = true, features = ["io-util", "macros", "net", "process", "rt", "rt-multi-thread", "sync", "time"] }
 
