@@ -81,4 +81,10 @@ nightly（`scripts/nightly`）的改動以單元測試驗證：`NIGHTLY_IMAGES` 
 
 - `bun test deploy/chart`：711 pass、0 fail（建置主機（macOS））。
 - `bun test scripts/nightly scripts/release/chart-images.test.ts`、`bun test deploy/flux`、`cargo fmt --all --check`：通過（本機）。
-- 全 workspace 的 `cargo test --locked --workspace --exclude agent` 與 clippy：合併 `f2722e72` 之前在建置主機（x86_64 Linux）跑過一次，clippy 通過，測試只有 `tools/sql-check` 的 `the_workspace_has_no_string_built_sql` 失敗，那是 #747 的 `tools/migrate/src/clickhouse.rs`，由 `f2722e72` 修正；合併之後的重跑因建置主機的磁碟空間不足沒有執行，待補。
+- 合併 `f2722e72` 之前，全 workspace 的測試只有 `tools/sql-check` 的 `the_workspace_has_no_string_built_sql` 失敗，那是 #747 的 `tools/migrate/src/clickhouse.rs`，由 `f2722e72` 修正。
+
+合併 `f2722e72` 之後（head `f89906b3`），在建置主機（x86_64 Linux）：
+
+- `cargo fmt --all --check`、`cargo clippy --locked --workspace --all-targets -- -D warnings`：通過。
+- `cargo test --locked --workspace --exclude agent --no-fail-fast`：238 個 `test result: ok`、0 個失敗，含 `the_workspace_has_no_string_built_sql`、各服務的 `the_chart_budgets_every_pool_the_service_opens`（gateway-ops 在內）與 `reads_every_budget_of_the_chart`。同一個 head 的前一次執行（沒有 `--no-fail-fast`）中，`crates/outbox` 的 `run_survives_panics_and_keeps_the_lag_current` 在 `podman run` 起 Postgres 容器時失敗（`tests/support/postgres.rs:233`）；本分支沒有改 `crates/outbox`，重跑就通過，是建置主機起容器的暫時問題。
+- `bun run --cwd scripts test`：1711 pass、9 skip、0 fail。
