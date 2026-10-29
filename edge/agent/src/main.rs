@@ -14,48 +14,67 @@
 //! Threads: the connection (TLS handshakes, MQTT) runs on its own thread with a single-threaded
 //! tokio runtime, because a full inner handshake waits about 70 ms for the TPM signature inside
 //! rustls' synchronous signing call; that blocks only this thread. Everything else (heartbeat,
-//! the systemd watchdog's notifications, signals, the dispatch of `down` messages, and the
-//! Modbus polling of [`agent::polling`] with its own per-device watchdog, one task per device
-//! of the configuration [`agent::desired`] applies) runs on a two-thread runtime.
+//! certificate renewal ([`agent::renewal`], whose TPM signature runs on tokio's blocking
+//! threads), the systemd watchdog's notifications, signals, the dispatch of `down` messages,
+//! the Modbus polling of [`agent::polling`] with its own per-device watchdog, one task per
+//! device of the configuration [`agent::desired`] applies, and the telemetry pipeline of
+//! [`agent::upload`] that takes the polls' readings, with its offline buffer, whose file I/O
+//! runs on tokio's blocking threads) runs on a two-thread runtime.
 //!
 //! The systemd watchdog is fed only while the connection task makes progress and both runtimes
 //! run: the connection task declares every wait with its deadline ([`agent::liveness`]), the
 //! connection thread counts ticks, and the main runtime sends `WATCHDOG=1` only while the
 //! declared wait is within its deadline and the count has moved since the last time.
-//! SIGTERM (or SIGINT) publishes `offline`/`shutdown`, disconnects cleanly and exits within
-//! [`STOP_LIMIT`].
+//! SIGTERM (or SIGINT) publishes `offline`/`shutdown` and disconnects cleanly while the polling
+//! stops and then the pipeline writes the batches in memory, the last polls' readings among
+//! them, to disk, and exits within [`STOP_LIMIT`]. When the connection thread, the
+//! configuration side or the pipeline ends unexpectedly, the others stop the same way (the
+//! pipeline's batches in memory still go to disk), and the exit code is 1.
 
 use std::ffi::OsString;
 use std::path::PathBuf;
 use std::process::ExitCode;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::{Duration, SystemTime};
+use std::time::Duration;
 
+use agent::clock::GatewayClock;
 use agent::config::{self, Config};
-use agent::desired::fleet::{Fleet, Sink};
+use agent::desired::fleet::Fleet;
 use agent::desired::store::{self, Store};
-use agent::desired::{self, Applier, Inbox};
+use agent::desired::{self, Applier, Deliveries};
+use agent::dispatch::{self, Handlers};
 use agent::heartbeat::{self, HeartbeatSettings};
 use agent::identity::utc;
-use agent::link::{self, Incoming, Link, LinkState, Subscriptions};
+use agent::link::{self, Incoming, Link, LinkState};
 use agent::liveness::{self, Progress};
 use agent::modbus::endpoint::Endpoints;
-use agent::modbus::{Clock, Timestamp};
-use agent::polling::{self, Polled};
+use agent::polling;
 use agent::sdnotify::{self, Notification, Notifier, PROGRESS_TICK};
 use agent::setup::Setup;
 use agent::tls::{RootCrl, Validity};
 use agent::tpm::TpmTransport;
-use protocol::topic::Channel;
-use protocol::{DeviceId, UnixMillis};
+use agent::upload;
 use tokio::signal::unix::{SignalKind, signal};
 use tokio_util::sync::CancellationToken;
 use tracing::Level;
 
-/// How long the agent waits for the connection to close cleanly after SIGTERM; below the unit's
-/// `TimeoutStopSec`.
+/// How long a stop waits for the connection to close cleanly and for the pipeline to write the
+/// batches in memory to disk; below the unit's `TimeoutStopSec`.
 const STOP_LIMIT: Duration = Duration::from_secs(10);
+
+/// How long a stop waits for the polling to stop (every device's read in flight to end) before
+/// the pipeline stops anyway; the readings of a poll that ends later are lost. Polling stops
+/// first so that the readings of the polls that end during the stop still go into the
+/// pipeline's last window.
+const POLLING_STOP_LIMIT: Duration = Duration::from_secs(2);
+
+// The pipeline writes for at most FLUSH_LIMIT from its stop, which comes at most
+// POLLING_STOP_LIMIT after the agent's, and then syncs once: all of it within STOP_LIMIT.
+const _: () = assert!(
+    POLLING_STOP_LIMIT.as_secs() + upload::FLUSH_LIMIT.as_secs() < STOP_LIMIT.as_secs(),
+    "the polling's stop and the flush must fit in the stop limit with time for the last sync"
+);
 
 const USAGE: &str = "usage: trustiot-agent [--config <file>] [--check]
        trustiot-agent provision --hardware-id <id> [--handle <hex>] [--device <path>] [--inspect]
@@ -273,26 +292,18 @@ fn run(setup: Setup, state_directory: PathBuf) -> ExitCode {
         Notifier::disabled()
     }));
     let shutdown = CancellationToken::new();
-    let heartbeat_settings = HeartbeatSettings {
-        interval: setup.heartbeat_interval,
-        agent_version: setup.link.agent_version.clone(),
-        certificate_not_after: setup.renewal.certificate_not_after(),
-    };
+    // Renewal updates the certificate's expiry the heartbeat reports.
+    let certificate_not_after = setup.renewal.certificate_not_after();
     let renewal = setup.renewal;
+    // One clock stamps the readings, compares the cloud's time in its acknowledgements and
+    // reports in the heartbeat, so a batch's `clock_synced` is what the uploader found.
+    let clock = GatewayClock::system();
     let gateway = setup.gateway.clone();
-    // The link subscribes only to the down channels something handles: a subscribed channel
-    // nobody takes messages from would acknowledge them and lose them. `dispatch` hands each
-    // message to its handler. Each later issue adds its channel here and in `dispatch` together
-    // with its handler: telemetry-ack (Laysi/trustiot-v2#90), log-request
-    // (Laysi/trustiot-v2#185) and live-control (Laysi/trustiot-v2#121).
+    // The link subscribes only to the down channels the dispatcher has a handler for
+    // (dispatch.rs, where each later issue adds its channel with its handler).
     let mut link_settings = setup.link;
-    link_settings.subscriptions = match Subscriptions::new([Channel::Config]) {
-        Ok(subscriptions) => subscriptions,
-        Err(error) => {
-            tracing::error!(%error, "invalid subscriptions");
-            return ExitCode::FAILURE;
-        }
-    };
+    link_settings.subscriptions = dispatch::subscriptions();
+    let agent_version = link_settings.agent_version.clone();
     let (link, incoming, supervisor) = link::link(link_settings, setup.connector, shutdown.clone());
     // Certificate renewal (Laysi/trustiot-v2#83): on schedule, and when the broker refuses the
     // certificate. Its TPM signature runs on the blocking pool.
@@ -302,21 +313,50 @@ fn run(setup: Setup, state_directory: PathBuf) -> ExitCode {
         link.certificate_refused(),
         shutdown.clone(),
     ));
-    let (config_inbox, config_deliveries) = desired::inbox();
-    runtime.spawn(dispatch(incoming, config_inbox));
+    let pipeline_stop = CancellationToken::new();
+    let mut upload_settings = upload::Settings::new(state_directory.join(upload::BUFFER_DIRECTORY));
+    upload_settings.memory_limit = setup.buffer.memory_limit;
+    upload_settings.disk_limit = setup.buffer.disk_limit;
+    upload_settings.upload_interval = setup.buffer.upload_interval;
+    let (handles, pipeline) = match upload::pipeline(
+        upload_settings,
+        link.clone(),
+        clock.clone(),
+        pipeline_stop.clone(),
+    ) {
+        Ok(created) => created,
+        Err(error) => {
+            tracing::error!(%error, "cannot start the telemetry pipeline");
+            return ExitCode::FAILURE;
+        }
+    };
+    let (config_inbox, deliveries) = desired::inbox();
     let poll_settings = polling::Settings::default();
+    // Every poll's readings go into the pipeline's window: `Readings` is the fleet's sink.
     let fleet = Fleet::new(
         Endpoints::new(poll_settings.connect_timeout),
         poll_settings,
-        Arc::new(SystemClock),
-        Arc::new(UntilBuffer),
+        Arc::new(clock.clone()),
+        Arc::new(handles.readings.clone()),
     );
-    runtime.spawn(desired::run(
-        Applier::new(fleet, Store::new(state_directory)),
-        link.clone(),
-        config_deliveries,
-        shutdown.clone(),
-    ));
+    let services = Services {
+        incoming,
+        handlers: Handlers {
+            config: config_inbox,
+            telemetry_ack: handles.acks.clone(),
+        },
+        applier: Applier::new(fleet, Store::new(state_directory)),
+        deliveries,
+        pipeline,
+        pipeline_stop,
+    };
+    let heartbeat_settings = HeartbeatSettings {
+        interval: setup.heartbeat_interval,
+        agent_version,
+        certificate_not_after,
+        buffer: handles.stats,
+        clock,
+    };
     let progress = supervisor.progress();
     let ticks = Arc::new(AtomicU64::new(0));
     let connection = {
@@ -357,6 +397,7 @@ fn run(setup: Setup, state_directory: PathBuf) -> ExitCode {
     let code = runtime.block_on(serve(
         link,
         connection,
+        services,
         heartbeat_settings,
         notifier,
         ticks,
@@ -368,6 +409,32 @@ fn run(setup: Setup, state_directory: PathBuf) -> ExitCode {
     code
 }
 
+/// What `serve` runs besides the heartbeat and the watchdog: the link's incoming messages and
+/// their handlers, the configuration side (the applier, which drives the polling, and its
+/// deliveries), and the telemetry pipeline (collector, offline buffer, uploader) with the token
+/// that stops it.
+struct Services {
+    incoming: Incoming,
+    handlers: Handlers,
+    applier: Applier,
+    deliveries: Deliveries,
+    pipeline: upload::Pipeline,
+    pipeline_stop: CancellationToken,
+}
+
+/// What ended the agent's run.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Ended {
+    /// SIGTERM or SIGINT.
+    Signal,
+    /// The connection thread, unexpectedly.
+    Connection,
+    /// The configuration side (`desired::run`), unexpectedly.
+    Configuration,
+    /// The telemetry pipeline, unexpectedly.
+    Pipeline,
+}
+
 #[allow(
     clippy::too_many_arguments,
     reason = "the pieces main wires together; a struct would only rename them"
@@ -375,6 +442,7 @@ fn run(setup: Setup, state_directory: PathBuf) -> ExitCode {
 async fn serve(
     link: Link,
     connection: std::thread::JoinHandle<()>,
+    services: Services,
     heartbeat_settings: HeartbeatSettings,
     notifier: Arc<Notifier>,
     ticks: Arc<AtomicU64>,
@@ -390,9 +458,34 @@ async fn serve(
         (Err(error), _) | (_, Err(error)) => {
             tracing::error!(%error, "cannot handle signals");
             shutdown.cancel();
+            services.pipeline_stop.cancel();
             return ExitCode::FAILURE;
         }
     };
+    let Services {
+        incoming,
+        handlers,
+        applier,
+        deliveries,
+        pipeline,
+        pipeline_stop,
+    } = services;
+    // Every message the cloud sends is taken at once and handed to its handler.
+    tokio::spawn(dispatch::run(incoming, handlers));
+    // The pipeline opens the disk buffer in its own task, the file I/O on a blocking thread, so
+    // a slow or failing data partition never delays READY=1 or the polling.
+    let mut pipeline = tokio::spawn(pipeline.run());
+    // Polls the saved configuration at once, before and without a connection, then the
+    // cloud's; stops polling once `shutdown` is cancelled.
+    let mut configuration = tokio::spawn(desired::run(
+        applier,
+        link.clone(),
+        deliveries,
+        shutdown.clone(),
+    ));
+    // A failed READY=1 is only logged: the agent keeps running, and however it stops later
+    // (systemd's start timeout sends SIGTERM), it stops through the path below, which ends the
+    // polling and flushes the pipeline.
     if let Err(error) = notifier.notify(&[
         Notification::Ready,
         Notification::Status(&format!("gateway {gateway}: connecting")),
@@ -418,77 +511,69 @@ async fn serve(
     }
 
     let mut connection = tokio::task::spawn_blocking(move || connection.join());
-    let code = tokio::select! {
-        _ = terminate.recv() => None,
-        _ = interrupt.recv() => None,
+    // Until the link stops, none of the three ends by itself.
+    let ended = tokio::select! {
+        _ = terminate.recv() => Ended::Signal,
+        _ = interrupt.recv() => Ended::Signal,
         _ = &mut connection => {
             tracing::error!("the connection thread ended unexpectedly");
-            Some(ExitCode::FAILURE)
+            Ended::Connection
+        }
+        _ = &mut configuration => {
+            tracing::error!("the configuration side ended unexpectedly; no device is polled");
+            Ended::Configuration
+        }
+        _ = &mut pipeline => {
+            tracing::error!("the telemetry pipeline ended unexpectedly");
+            Ended::Pipeline
         }
     };
-    if let Some(code) = code {
-        shutdown.cancel();
-        return code;
-    }
     tracing::info!("stopping");
     let _ = notifier.notify(&[Notification::Stopping]);
+    // Whatever ended the wait, everything that still runs stops within STOP_LIMIT: the link
+    // sends offline/shutdown and disconnects, and the configuration side stops polling.
     shutdown.cancel();
-    match tokio::time::timeout(STOP_LIMIT, connection).await {
-        Ok(_) => tracing::info!("stopped"),
-        Err(_) => {
-            tracing::warn!("the connection did not close within {STOP_LIMIT:?}; exiting anyway")
-        }
+    let stopped = tokio::time::timeout(STOP_LIMIT, async {
+        let connection = async {
+            if ended != Ended::Connection {
+                let _ = connection.await;
+            }
+        };
+        let telemetry = async {
+            // The polling stops first, so that the readings of the polls that end during the
+            // stop still go into the pipeline's last window; bounded, so that the pipeline
+            // keeps its time.
+            if ended != Ended::Configuration
+                && tokio::time::timeout(POLLING_STOP_LIMIT, &mut configuration)
+                    .await
+                    .is_err()
+            {
+                tracing::warn!(
+                    "the polling did not stop within {POLLING_STOP_LIMIT:?}; the readings of the polls that end later are lost"
+                );
+            }
+            // Then the pipeline closes its window and writes the batches in memory to disk (for
+            // at most upload::FLUSH_LIMIT from its stop, then one last sync). Returning without
+            // waiting for it would leave those batches to the runtime's teardown, which drops
+            // them.
+            pipeline_stop.cancel();
+            if ended != Ended::Pipeline && pipeline.await.is_err() {
+                tracing::error!("the telemetry pipeline failed while stopping");
+            }
+        };
+        tokio::join!(connection, telemetry);
+    })
+    .await;
+    match stopped {
+        Ok(()) => tracing::info!("stopped"),
+        Err(_) => tracing::warn!(
+            "the connection or the telemetry pipeline did not stop within {STOP_LIMIT:?}; exiting anyway"
+        ),
     }
-    ExitCode::SUCCESS
-}
-
-/// Hands every message the cloud sends to the handler of its channel, at once: `Incoming`
-/// must be emptied promptly (a message waiting longer than `liveness::DELIVERY_LIMIT` counts
-/// as a stuck agent), and no handler makes it wait.
-async fn dispatch(mut incoming: Incoming, config: Inbox) {
-    while let Some(message) = incoming.recv().await {
-        match message.channel {
-            Channel::Config => config.deliver(message.payload),
-            channel => tracing::warn!(?channel, "no handler for a message; dropped"),
-        }
-    }
-}
-
-/// Stamps readings with the system clock. Whether it is synchronized is
-/// Laysi/trustiot-v2#90's to find out; until then readings say it is not.
-struct SystemClock;
-
-impl Clock for SystemClock {
-    fn now(&self) -> Timestamp {
-        let millis = SystemTime::now()
-            .duration_since(SystemTime::UNIX_EPOCH)
-            .map_or(0, |since| {
-                u64::try_from(since.as_millis()).unwrap_or(u64::MAX)
-            });
-        Timestamp {
-            at: UnixMillis::new(millis),
-            synced: false,
-        }
-    }
-}
-
-/// Where polls go until the offline buffer (Laysi/trustiot-v2#90) takes the readings and the
-/// device statistics (Laysi/trustiot-v2#117) take the rest: logged at debug level and dropped.
-struct UntilBuffer;
-
-impl Sink for UntilBuffer {
-    fn polled(&self, device: &DeviceId, polled: Polled) {
-        tracing::debug!(
-            %device,
-            readings = polled.poll.readings.len(),
-            failed = polled.poll.failed.len(),
-            missed = polled.missed,
-            "polled"
-        );
-    }
-
-    fn removed(&self, device: &DeviceId) {
-        tracing::debug!(%device, "no longer polled");
+    if ended == Ended::Signal {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::FAILURE
     }
 }
 
@@ -538,5 +623,238 @@ mod tests {
         assert!(matches!(parse(&["--version"]), Ok(Command::Version)));
         assert!(parse(&["--config"]).is_err());
         assert!(parse(&["--verbose"]).is_err());
+    }
+
+    /// A link that never connects.
+    struct Nowhere;
+
+    impl link::Connector for Nowhere {
+        type Stream = tokio::io::DuplexStream;
+
+        async fn connect(&self) -> Result<Self::Stream, link::ConnectError> {
+            std::future::pending().await
+        }
+    }
+
+    /// The agent as `run` wires it, with the state directory `state`, a link that never
+    /// connects, and devices reached through `endpoints`.
+    struct Wired {
+        link: Link,
+        services: Services,
+        heartbeat_settings: HeartbeatSettings,
+        progress: Arc<Progress>,
+        shutdown: CancellationToken,
+        stats: upload::Stats,
+        readings: upload::Readings,
+    }
+
+    fn wire(state: &std::path::Path, endpoints: Endpoints) -> Wired {
+        let version = protocol::AgentVersion::new("0.1.0-test").unwrap();
+        let shutdown = CancellationToken::new();
+        let mut link_settings =
+            link::LinkSettings::new(protocol::GatewayId::new("gw-1").unwrap(), version.clone());
+        link_settings.subscriptions = dispatch::subscriptions();
+        let (link, incoming, supervisor) = link::link(link_settings, Nowhere, shutdown.clone());
+        let progress = supervisor.progress();
+        drop(supervisor);
+        let clock = GatewayClock::new(
+            agent::clock::SystemWall,
+            PathBuf::from("/nonexistent/trustiot-agent-test/synchronized"),
+        );
+        let pipeline_stop = CancellationToken::new();
+        let (handles, pipeline) = upload::pipeline(
+            upload::Settings::new(state.join(upload::BUFFER_DIRECTORY)),
+            link.clone(),
+            clock.clone(),
+            pipeline_stop.clone(),
+        )
+        .unwrap();
+        let (config_inbox, deliveries) = desired::inbox();
+        let fleet = Fleet::new(
+            endpoints,
+            polling::Settings::default(),
+            Arc::new(clock.clone()),
+            Arc::new(handles.readings.clone()),
+        );
+        Wired {
+            services: Services {
+                incoming,
+                handlers: Handlers {
+                    config: config_inbox,
+                    telemetry_ack: handles.acks.clone(),
+                },
+                applier: Applier::new(fleet, Store::new(state)),
+                deliveries,
+                pipeline,
+                pipeline_stop,
+            },
+            heartbeat_settings: HeartbeatSettings {
+                interval: Duration::from_secs(60),
+                agent_version: version,
+                certificate_not_after: tokio::sync::watch::channel(protocol::UnixMillis::new(0)).1,
+                buffer: handles.stats.clone(),
+                clock,
+            },
+            link,
+            progress,
+            shutdown,
+            stats: handles.stats,
+            readings: handles.readings,
+        }
+    }
+
+    impl Wired {
+        /// `serve` with a connection thread that ends at once: the same stop as SIGTERM's,
+        /// with exit code 1.
+        async fn serve_until_the_connection_ends(self) -> ExitCode {
+            serve(
+                self.link,
+                std::thread::spawn(|| {}),
+                self.services,
+                self.heartbeat_settings,
+                Arc::new(Notifier::disabled()),
+                Arc::new(AtomicU64::new(0)),
+                self.progress,
+                self.shutdown,
+                "gw-1".to_owned(),
+            )
+            .await
+        }
+    }
+
+    /// The sizes of the buffer's segment files.
+    fn segments(state: &std::path::Path) -> Vec<u64> {
+        std::fs::read_dir(state.join(upload::BUFFER_DIRECTORY))
+            .map(|entries| {
+                entries
+                    .map(|entry| entry.unwrap())
+                    .filter(|entry| entry.file_name().to_string_lossy().ends_with(".log"))
+                    .map(|entry| entry.metadata().unwrap().len())
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// Codex review before the commit (seventh round): when the connection thread ends
+    /// unexpectedly, the pipeline still writes the readings in memory to disk before `serve`
+    /// returns, and the exit code says it failed. It used to return at once, and the runtime's
+    /// teardown dropped them.
+    #[tokio::test]
+    async fn an_unexpected_end_of_the_connection_still_writes_the_batches_in_memory_to_disk() {
+        let scratch = testkit::mqtt::ScratchDir::new("agent-main");
+        let wired = wire(scratch.path(), Endpoints::new(Duration::from_secs(1)));
+        wired.readings.push([protocol::telemetry::Reading {
+            device: protocol::DeviceId::new("device-0").unwrap(),
+            point: protocol::PointKey::new("point-0").unwrap(),
+            sample: protocol::telemetry::Sample {
+                at: wired.heartbeat_settings.clock.wall(),
+                value: protocol::Value::Int(1),
+            },
+            clock_synced: false,
+        }]);
+        let code = wired.serve_until_the_connection_ends().await;
+        assert_eq!(code, ExitCode::FAILURE);
+        let segments = segments(scratch.path());
+        assert!(
+            segments.iter().any(|len| *len > 16),
+            "no batch on disk when serve returned: segment sizes {segments:?}"
+        );
+    }
+
+    /// A stop lets the polls in flight end before the pipeline closes its last window, so
+    /// their readings go to disk with the rest: here the only poll's answer is held at the
+    /// device until the stop has begun, and the pipeline is not asked to stop before it is in.
+    /// If the pipeline stopped at the same time as the polling, its window could close before
+    /// the reading arrived, and the reading would be lost without a count. The clock stands still (`testkit::clock::manual`), so neither the
+    /// request's timeout nor [`POLLING_STOP_LIMIT`] can end the wait for the answer however
+    /// slow the machine is.
+    #[tokio::test(start_paused = true)]
+    async fn a_stop_lets_the_polls_in_flight_end_and_writes_their_readings_to_disk() {
+        use protocol::config::{
+            ByteOrder, ConfigReport, DataPoint, DataType, DesiredConfig, Device, DeviceModel,
+            FunctionCode, Host, Transport,
+        };
+        use testkit::modbus::{self as fake, FakeModbus, Fault};
+
+        let _manual = testkit::clock::manual();
+        let scratch = testkit::mqtt::ScratchDir::new("agent-main-stop");
+        let device = FakeModbus::start(fake::Transport::ModbusTcp).await;
+        device.add_unit(1);
+        device.set_holding_registers(1, 0, &[2301]);
+        device.inject(Fault::hold().once());
+        let mut wired = wire(
+            scratch.path(),
+            Endpoints::new(Duration::from_secs(10))
+                .exempt_for_tests([std::net::Ipv4Addr::LOCALHOST.into()]),
+        );
+        let model = DeviceModel {
+            name: protocol::ModelName::new("meter").unwrap(),
+            points: vec![DataPoint {
+                key: protocol::PointKey::new("power").unwrap(),
+                function_code: FunctionCode::ReadHoldingRegisters,
+                address: 0,
+                data_type: DataType::U16,
+                byte_order: ByteOrder::Abcd,
+                length: None,
+                scale: None,
+                offset: None,
+            }],
+        };
+        let config = DesiredConfig {
+            v: protocol::V1,
+            rev: 1,
+            version: protocol::ConfigVersion::new(1).unwrap(),
+            devices: vec![Device {
+                id: protocol::DeviceId::new("meter-1").unwrap(),
+                model: model.name.clone(),
+                transport: Transport::ModbusTcp,
+                host: Host::new("127.0.0.1").unwrap(),
+                port: device.address().port(),
+                unit_id: 1,
+                poll_interval_ms: 60_000,
+            }],
+            models: vec![model],
+        }
+        .encode()
+        .unwrap();
+        // Applied before `serve` (which finds it saved and keeps it), so that its first poll is
+        // under way when the stop comes.
+        assert_eq!(
+            wired.services.applier.receive(config).await,
+            Some(ConfigReport::applied(
+                protocol::ConfigVersion::new(1).unwrap()
+            ))
+        );
+        // The first poll's request waits at the device for its answer.
+        device.wait_for_requests(1).await;
+        // Once the stop has begun, the device answers; until then the poll is in flight, and the
+        // pipeline must not have been asked to stop.
+        let stopping = wired.shutdown.clone();
+        let pipeline_stop = wired.services.pipeline_stop.clone();
+        let release = tokio::spawn(async move {
+            stopping.cancelled().await;
+            let pipeline_stopped_first = pipeline_stop.is_cancelled();
+            device.release(0);
+            (device, pipeline_stopped_first)
+        });
+        let stats = wired.stats.clone();
+        let code = wired.serve_until_the_connection_ends().await;
+        assert_eq!(code, ExitCode::FAILURE);
+        let (_device, pipeline_stopped_first) = release.await.unwrap();
+        assert!(
+            !pipeline_stopped_first,
+            "the pipeline was asked to stop while a poll was still in flight"
+        );
+        let stats = stats.snapshot();
+        assert_eq!(
+            (stats.pending_batches, stats.pending_records),
+            (1, 1),
+            "the reading is in a batch, not left in a window nobody closes: {stats:?}"
+        );
+        let segments = segments(scratch.path());
+        assert!(
+            segments.iter().any(|len| *len > 16),
+            "no batch on disk when serve returned: segment sizes {segments:?}"
+        );
     }
 }

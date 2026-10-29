@@ -1,7 +1,12 @@
 //! The agent's configuration file (TOML, default [`DEFAULT_PATH`]).
 //!
-//! It holds how the gateway reaches the cloud and who it is; the device configuration
-//! (`DesiredConfig`) arrives over MQTT later (Laysi/trustiot-v2#94) and is not in this file.
+//! It holds how the gateway reaches the cloud, who it is, when it renews its certificate
+//! (`[renewal]`), and the offline buffer's limits (`[buffer]`). The device configuration
+//! (`DesiredConfig`) arrives over MQTT
+//! ([`crate::desired`]) and is not in this file, nor is the state directory where the agent
+//! keeps it and the offline buffer: that comes from systemd
+//! ([`crate::desired::store::state_directory`]), because the unit's sandbox leaves no other
+//! directory writable.
 //! Every security-relevant field (the URL, both trust lists, the certificate and the key) must be
 //! given: there are no defaults for them. Unknown keys are errors, so a misspelled key is never
 //! silently ignored; that includes `broker.name`, which earlier versions had: the broker's name
@@ -35,9 +40,14 @@ use crate::link::DEFAULT_INFLIGHT_LIMIT;
 use crate::renewal::RenewalSettings;
 use crate::tls::BROKER_NAME;
 use crate::transport::CloudUrl;
+use crate::upload::{
+    DEFAULT_DISK_LIMIT, DEFAULT_MEMORY_LIMIT, DEFAULT_UPLOAD_INTERVAL, MAX_DISK_LIMIT,
+    MAX_MEMORY_LIMIT, MAX_UPLOAD_INTERVAL, MIN_UPLOAD_INTERVAL,
+};
 
 /// Where the agent reads its configuration unless told otherwise.
 pub const DEFAULT_PATH: &str = "/etc/trustiot/agent.toml";
+const MIB: u64 = 1024 * 1024;
 /// Bounds of `connection.heartbeat_interval_s`.
 pub const HEARTBEAT_INTERVAL_S: std::ops::RangeInclusive<u32> = 10..=3600;
 /// Bounds of `connection.reconnect_base_ms`.
@@ -81,6 +91,20 @@ pub struct Config {
     pub inflight_limit: u16,
     /// When to renew the client certificate, and how to retry a failed renewal.
     pub renewal: RenewalSettings,
+    /// The offline buffer and the upload.
+    pub buffer: BufferConfig,
+}
+
+/// The `[buffer]` table: the offline buffer and the upload (Laysi/trustiot-v2#90). Its files
+/// are in the state directory ([`crate::upload::BUFFER_DIRECTORY`]), which is not configured here.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BufferConfig {
+    /// Encoded batches held in memory, in bytes.
+    pub memory_limit: usize,
+    /// Buffer files on the data partition, in bytes; 0 never writes to disk.
+    pub disk_limit: u64,
+    /// How often the collected readings become batches.
+    pub upload_interval: Duration,
 }
 
 /// Why the configuration cannot be used. The message names the file or the key.
@@ -124,6 +148,8 @@ struct Raw {
     connection: RawConnection,
     #[serde(default)]
     renewal: RawRenewal,
+    #[serde(default)]
+    buffer: RawBuffer,
 }
 
 #[derive(Deserialize)]
@@ -206,6 +232,63 @@ impl Default for RawRenewal {
             retry_base_s: defaults.retry.base.as_secs(),
             retry_cap_s: defaults.retry.cap.as_secs(),
         }
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields, default)]
+struct RawBuffer {
+    memory_limit_mib: u64,
+    disk_limit_mib: u64,
+    upload_interval_s: u64,
+}
+
+impl Default for RawBuffer {
+    fn default() -> Self {
+        Self {
+            memory_limit_mib: DEFAULT_MEMORY_LIMIT as u64 / MIB,
+            disk_limit_mib: DEFAULT_DISK_LIMIT / MIB,
+            upload_interval_s: DEFAULT_UPLOAD_INTERVAL.as_secs(),
+        }
+    }
+}
+
+impl RawBuffer {
+    fn validate(self) -> Result<BufferConfig, ConfigError> {
+        let max_memory = MAX_MEMORY_LIMIT as u64 / MIB;
+        if self.memory_limit_mib > max_memory {
+            return Err(invalid(
+                "buffer.memory_limit_mib",
+                format!("must be within 0..={max_memory}"),
+            ));
+        }
+        let max_disk = MAX_DISK_LIMIT / MIB;
+        if self.disk_limit_mib > max_disk {
+            return Err(invalid(
+                "buffer.disk_limit_mib",
+                format!("must be within 0..={max_disk}"),
+            ));
+        }
+        if self.memory_limit_mib == 0 && self.disk_limit_mib == 0 {
+            // Every batch would be dropped as it is formed, even while connected.
+            return Err(invalid(
+                "buffer.memory_limit_mib",
+                "and buffer.disk_limit_mib cannot both be 0: no batch would have anywhere to wait for its acknowledgement",
+            ));
+        }
+        let interval = MIN_UPLOAD_INTERVAL.as_secs()..=MAX_UPLOAD_INTERVAL.as_secs();
+        if !interval.contains(&self.upload_interval_s) {
+            return Err(invalid(
+                "buffer.upload_interval_s",
+                format!("must be within {}..={}", interval.start(), interval.end()),
+            ));
+        }
+        Ok(BufferConfig {
+            // At most 64 MiB, checked above.
+            memory_limit: usize::try_from(self.memory_limit_mib * MIB).unwrap_or(usize::MAX),
+            disk_limit: self.disk_limit_mib * MIB,
+            upload_interval: Duration::from_secs(self.upload_interval_s),
+        })
     }
 }
 
@@ -365,6 +448,7 @@ impl Config {
                 format!("must be within retry_base_s..={RENEWAL_RETRY_CAP_MAX_S}"),
             ));
         }
+        let buffer = raw.buffer.validate()?;
         Ok(Self {
             url,
             outer_trust,
@@ -385,6 +469,7 @@ impl Config {
                     cap: Duration::from_secs(renewal.retry_cap_s),
                 },
             },
+            buffer,
         })
     }
 }
@@ -434,6 +519,66 @@ key = { source = "tpm" }
                 cap: Duration::from_secs(1800)
             }
         );
+        assert_eq!(
+            config.buffer,
+            BufferConfig {
+                memory_limit: 16 * 1024 * 1024,
+                disk_limit: 1024 * 1024 * 1024,
+                upload_interval: Duration::from_secs(10),
+            }
+        );
+    }
+
+    #[test]
+    fn buffer_settings_are_bounded() {
+        let with = |body: &str| format!("{MINIMAL}\n[buffer]\n{body}\n");
+        let config = Config::parse(&with(
+            "memory_limit_mib = 64\ndisk_limit_mib = 0\nupload_interval_s = 1",
+        ))
+        .unwrap();
+        assert_eq!(
+            config.buffer,
+            BufferConfig {
+                memory_limit: 64 * 1024 * 1024,
+                disk_limit: 0,
+                upload_interval: Duration::from_secs(1),
+            }
+        );
+        let config = Config::parse(&with(
+            "memory_limit_mib = 0\ndisk_limit_mib = 65536\nupload_interval_s = 60",
+        ))
+        .unwrap();
+        assert_eq!(config.buffer.memory_limit, 0);
+        assert_eq!(config.buffer.disk_limit, 64 * 1024 * 1024 * 1024);
+        for (body, expected) in [
+            (
+                "memory_limit_mib = 65",
+                "buffer.memory_limit_mib: must be within 0..=64",
+            ),
+            ("memory_limit_mib = -1", "memory_limit_mib"),
+            (
+                "disk_limit_mib = 65537",
+                "buffer.disk_limit_mib: must be within 0..=65536",
+            ),
+            (
+                "upload_interval_s = 0",
+                "buffer.upload_interval_s: must be within 1..=60",
+            ),
+            ("upload_interval_s = 61", "buffer.upload_interval_s"),
+            // The state directory comes from systemd (STATE_DIRECTORY), not from this file.
+            (
+                "directory = \"/var/lib/trustiot-agent\"",
+                "unknown field `directory`",
+            ),
+            ("memory_limit = 16", "unknown field `memory_limit`"),
+            (
+                "memory_limit_mib = 0\ndisk_limit_mib = 0",
+                "buffer.memory_limit_mib: and buffer.disk_limit_mib cannot both be 0",
+            ),
+        ] {
+            let error = error_of(&with(body));
+            assert!(error.contains(expected), "{body}: {error}");
+        }
     }
 
     #[test]
@@ -448,6 +593,11 @@ key = { source = "tpm" }
         // The example says its [renewal] values are the defaults.
         assert!(example.contains("\n[renewal]\n"));
         assert_eq!(config.renewal, RenewalSettings::default());
+        assert_eq!(
+            config.buffer,
+            Config::parse(MINIMAL).unwrap().buffer,
+            "the example's [buffer] table lists the defaults"
+        );
     }
 
     #[test]
