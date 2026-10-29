@@ -407,7 +407,8 @@ async fn an_agent_file_others_could_replace_is_never_uploaded() {
             .await;
         assert_eq!(run.code, Some(1), "{mode:o}: {}", run.output());
         assert!(
-            run.stderr.contains("must not be writable by the group or others"),
+            run.stderr
+                .contains("must not be writable by the group or others"),
             "{mode:o}: {}",
             run.stderr
         );
