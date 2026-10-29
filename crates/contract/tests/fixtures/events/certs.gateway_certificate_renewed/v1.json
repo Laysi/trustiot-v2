@@ -1,0 +1,20 @@
+{
+  "id": "01928f6e-7a3c-7d4e-8f00-000000000402",
+  "type": "certs.gateway_certificate_renewed",
+  "version": 1,
+  "tenant_id": "01928f6e-7a3c-7d4e-8f00-00000000000b",
+  "occurred_at": "2026-10-29T08:00:00.123Z",
+  "producer": "certs",
+  "payload": {
+    "hardware_id": "tg-0001",
+    "binding_id": "01928f6e-7a3c-7d4e-8f00-000000000b01",
+    "certificate_serial": "5d3b2af104c96e8b7f12d3e4c5b6a798",
+    "ca_key_id": "1f2d4c6a8e0b3d5f7a9c1e3b5d7f9a2c4e6b8d0f2a4c6e8b0d2f4a6c8e0b2d4f",
+    "not_before": "2026-10-29T07:55:00Z",
+    "not_after": "2027-01-27T08:00:00Z"
+  },
+  "actor": {
+    "kind": "service",
+    "service": "certs"
+  }
+}

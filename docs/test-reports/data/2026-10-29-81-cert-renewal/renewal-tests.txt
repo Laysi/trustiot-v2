@@ -1,0 +1,28 @@
+# CI=1 cargo test --locked -p certs -- --nocapture (build host, macOS), 2026-10-29: tests/renewal.rs
+# The 201 line (the renewed certificate's PEM) is left out; the evidence line after it summarizes it.
+     Running tests/renewal.rs (<host copy>/target/debug/deps/renewal-8723f51d03817532)
+
+running 2 tests
+evidence: per hardware ID: 429, Retry-After 3600
+evidence: global: 50 requests of new hardware IDs refused with 429; 6 challenges stored in all
+test rate_limits_answer_429_and_bound_the_challenges ... ok
+evidence: renewed rn-ok after its only certificate was revoked: serial 43808b9ee86a7c0e3947ac5e3a845996, CN rn-ok, the registered key, chain to the root; ledger 1 -> 2; one event in transaction 900 (ledger row 900); read log: {"binding_id":"01a183e5-1023-7550-a80a-d80859cf1a39","decommissioned":false,"hardware_id":"rn-ok","registered":true,"tenant_id":"01a183e5-1023-7550-a80a-d806b61e8318","tenant_suspended":false}
+evidence: rn-dec: 403 {"code":"permission_denied","message_key":"certificate_renewal.decommissioned"}
+evidence: rn-never: 403 {"code":"permission_denied","message_key":"certificate_renewal.not_bound"}
+evidence: rn-ended: 403 {"code":"permission_denied","message_key":"certificate_renewal.not_bound"}
+evidence: rn-susp: 403 {"code":"tenant_suspended","message_key":"error.tenant_suspended"}
+evidence: metrics {("certs.renewal.challenges", ""): 10, ("certs.renewal.issued", ""): 1, ("certs.renewal.refused", "challenge_expired"): 1, ("certs.renewal.refused", "challenge_mismatch"): 2, ("certs.renewal.refused", "challenge_unknown"): 4, ("certs.renewal.refused", "decommissioned"): 1, ("certs.renewal.refused", "invalid_request"): 1, ("certs.renewal.refused", "not_bound"): 2, ("certs.renewal.refused", "signature_invalid"): 2, ("certs.renewal.refused", "tenant_suspended"): 1}
+evidence: refusal event {"hardware_id":"rn-ok","reasons":{"challenge_expired":1,"challenge_mismatch":2,"challenge_unknown":3,"signature_invalid":1},"refusals":7,"window_end":"2026-10-27T00:00:00Z","window_start":"2026-10-26T00:00:00Z"}
+evidence: unknown lag: 503 bindings_stale, Retry-After 30; the challenge was still valid
+test renewal_issues_for_the_registered_key_and_refuses_the_rest ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 10.24s
+
+# CI=1 cargo test --locked -p certs --test renewal_lag -- --nocapture (build host, macOS), 2026-10-29
+     Running tests/renewal_lag.rs (<host copy>/target/debug/deps/renewal_lag-e9556faba60dda9f)
+
+running 1 test
+evidence: lag past 1 s: challenge and renew 503 certificate_renewal.bindings_stale, Retry-After 30; challenge kept; log: {"hardware_id":"lag-0001","reason":"bindings_stale","step":"challenge"}
+test a_lag_past_the_limit_refuses_both_steps ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 17.55s

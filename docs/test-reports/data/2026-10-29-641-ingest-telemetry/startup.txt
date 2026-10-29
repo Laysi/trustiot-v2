@@ -1,0 +1,14 @@
+     Running tests/startup.rs (<host copy>/target/debug/deps/startup-5545a36b3c6957a9)
+
+running 1 test
+all reachable: /readyz 200 {"status":"ready"}
+ClickHouse unreachable: /readyz 503 {"status":"unavailable"}; logged {"check":"clickhouse","error":"cannot connect to 127.0.0.1:61246: Connection refused (os error 61)"}
+ClickHouse refuses the password: /readyz 503 {"status":"unavailable"}; logged {"check":"clickhouse","error":"ClickHouse error 516 (HTTP 403)"}
+Postgres unreachable: /readyz 503 {"status":"unavailable"}; logged {"check":"postgres","error":"timed out after 800 ms"}
+broker stopped: /readyz 503 {"status":"unavailable"}; logged {"check":"mqtt","error":"not connected to the mqtt broker with the telemetry subscription granted"}
+broker back: /readyz 200 {"status":"ready"}
+batch sent first: acknowledged Committed { records: 20 }, 20 rows in trustiot.telemetry
+batch sent again: acknowledged Duplicate { records: 20 }, 20 rows in trustiot.telemetry
+test readiness_follows_postgres_clickhouse_and_the_broker ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 8.20s
