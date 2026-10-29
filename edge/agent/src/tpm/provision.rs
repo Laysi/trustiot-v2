@@ -146,7 +146,7 @@ fn adopt(
 
 /// A failed authorization: the key has a password (`TPM_RC_AUTH_FAIL`, or `TPM_RC_BAD_AUTH` for
 /// a `noDA` key), so the agent cannot use it.
-fn is_authorization_failure(code: ResponseCode) -> bool {
+pub(super) fn is_authorization_failure(code: ResponseCode) -> bool {
     let code = code.code();
     let format_one = code >> 16 == 0 && code & 0x080 != 0;
     format_one && matches!(code & 0x3f, 0x0e | 0x22)
@@ -250,7 +250,10 @@ impl Parent {
                 "the object at the SRK handle is not the standard SRK: leaving it alone"
             );
         }
-        let response = worker.transact(marshal::create_primary_command(&template))?;
+        let response = worker.transact(marshal::create_primary_command(
+            marshal::TPM_RH_OWNER,
+            &template,
+        ))?;
         let primary = marshal::parse_create_primary(&response)?;
         if !marshal::matches_template(&primary.area, &template)
             || primary.loaded.name != marshal::sha256_name(&primary.area)
@@ -280,7 +283,7 @@ impl Parent {
 
 /// Flushes a transient object this run loaded. A failure is only logged: the kernel's resource
 /// manager flushes it when the device is closed anyway.
-fn flush(worker: &Worker, handle: u32) {
+pub(super) fn flush(worker: &Worker, handle: u32) {
     let result = worker
         .transact(marshal::flush_context_command(handle))
         .and_then(|response| marshal::parse_flush_context(&response));
@@ -290,7 +293,7 @@ fn flush(worker: &Worker, handle: u32) {
 }
 
 /// A handle in the usual `0x81000100` form.
-struct Hex(u32);
+pub(super) struct Hex(pub(super) u32);
 
 impl std::fmt::Display for Hex {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {

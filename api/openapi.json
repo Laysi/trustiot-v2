@@ -868,6 +868,27 @@
         ],
         "type": "object"
       },
+      "IgnoredModels": {
+        "description": "A stored model list the AI gateway does not use because it no longer fits the\nconfiguration; the role uses its configured models.",
+        "properties": {
+          "models": {
+            "description": "The stored models.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "reason": {
+            "description": "Why, in English, as the AI gateway explains it (for operators; not translated).",
+            "type": "string"
+          }
+        },
+        "required": [
+          "models",
+          "reason"
+        ],
+        "type": "object"
+      },
       "Interval": {
         "description": "How readings are grouped: `raw` (no grouping) or a bucket length.",
         "enum": [
@@ -1224,6 +1245,130 @@
         ],
         "maxLength": 128,
         "pattern": "^[a-z0-9_]+(\\.[a-z0-9_]+)+$",
+        "type": "string"
+      },
+      "ModelProvider": {
+        "description": "A provider configured in the AI gateway: a role's models may name it when its protocol is\nthe role's.",
+        "properties": {
+          "name": {
+            "description": "The provider's name, the `<provider>` of a model.",
+            "type": "string"
+          },
+          "protocol": {
+            "description": "`anthropic-messages` or `openai-decisions` today.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "protocol"
+        ],
+        "type": "object"
+      },
+      "ModelRole": {
+        "description": "A model role of the AI gateway.",
+        "properties": {
+          "configured_models": {
+            "description": "The models the configuration gives the role, which a reset goes back to.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "ignored": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/IgnoredModels",
+                "description": "A stored list that is not in use; `null` when there is none."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "models": {
+            "description": "The models in effect, `<provider>/<model>` in fallback order.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "protocol": {
+            "description": "The role's protocol, which only the configuration sets: `anthropic-messages` or\n`openai-decisions` today.",
+            "type": "string"
+          },
+          "role": {
+            "description": "The role's name, such as `main`.",
+            "type": "string"
+          },
+          "source": {
+            "$ref": "#/components/schemas/ModelSource",
+            "description": "Where `models` come from."
+          },
+          "updated_at": {
+            "description": "When the role was last changed or reset; `null` when it never was, or the AI gateway\ncould not say.",
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "updated_by": {
+            "description": "Who last changed or reset the role, as the AI gateway recorded it (`user:<user ID>` for\nchanges made here); `null` when nobody did.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "version": {
+            "description": "The version a change or reset must send as `expected_version`; 0 when the role was never\nchanged.",
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "role",
+          "protocol",
+          "models",
+          "configured_models",
+          "source",
+          "version",
+          "ignored",
+          "updated_at",
+          "updated_by"
+        ],
+        "type": "object"
+      },
+      "ModelRoles": {
+        "description": "Every model role and every configured provider, by name.",
+        "properties": {
+          "providers": {
+            "description": "Every configured provider.",
+            "items": {
+              "$ref": "#/components/schemas/ModelProvider"
+            },
+            "type": "array"
+          },
+          "roles": {
+            "description": "Every configured role.",
+            "items": {
+              "$ref": "#/components/schemas/ModelRole"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "roles",
+          "providers"
+        ],
+        "type": "object"
+      },
+      "ModelSource": {
+        "description": "Where a role's models in effect come from.",
+        "enum": [
+          "configuration",
+          "database"
+        ],
         "type": "string"
       },
       "PoolGateway": {
@@ -2004,6 +2149,28 @@
         "required": [
           "email",
           "role"
+        ],
+        "type": "object"
+      },
+      "SetRoleModels": {
+        "description": "The body of `PUT /api/identity/v1/platform/ai/model-roles/{role}`. Unknown fields are\nignored.",
+        "properties": {
+          "expected_version": {
+            "description": "The role's `version` as the caller read it; the change is refused with 409 when the role\nhas another version by then.",
+            "format": "int64",
+            "type": "integer"
+          },
+          "models": {
+            "description": "1 to 8 distinct `<provider>/<model>` in fallback order, first choice first, of configured\nproviders whose protocol is the role's.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "models",
+          "expected_version"
         ],
         "type": "object"
       },
@@ -4212,6 +4379,290 @@
           }
         },
         "summary": "The caller's tenant's operation log. Administrators of the tenant only.",
+        "tags": [
+          "identity"
+        ]
+      }
+    },
+    "/api/identity/v1/platform/ai/model-roles": {
+      "get": {
+        "operationId": "listPlatformAiModelRoles",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModelRoles"
+                }
+              }
+            },
+            "description": "Every model role of the AI gateway, with the models in effect, the configured ones and where they come from, and every configured provider."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No valid session (`unauthenticated`)."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Not a platform administrator, or not the administrator's own request: another service exchanged the token (`permission_denied`)."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The AI gateway's admin API is not configured, not reachable, busy or failed (`unavailable`)."
+          }
+        },
+        "summary": "Lists the AI gateway's model roles and providers. Platform administrators only, in their own\nrequest.",
+        "tags": [
+          "identity"
+        ]
+      }
+    },
+    "/api/identity/v1/platform/ai/model-roles/{role}": {
+      "delete": {
+        "operationId": "resetPlatformAiModelRole",
+        "parameters": [
+          {
+            "description": "The role's name, such as `main`.",
+            "in": "path",
+            "name": "role",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The role's `version` as the caller read it; the reset is refused with 409 when the role has another version by then.",
+            "in": "query",
+            "name": "expected_version",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 0,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModelRole"
+                }
+              }
+            },
+            "description": "The role uses its configured models: the role as it is now. A role that had no stored models is unchanged, keeps its `version` and writes no event; otherwise `identity.ai_model_role_changed` is in the platform's operation log."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The `Content-Type` is not `application/json` (send it without a body), or the query has no integer `expected_version` of at least 0 (`invalid_request`); nothing was sent."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No valid session (`unauthenticated`)."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Not a platform administrator, not the administrator's own request (`permission_denied`), or a cross-site request (`permission_denied`, message key `security.cross_site_request`); nothing was sent."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The AI gateway has no such role (`not_found`, message key `ai_model_role.not_found`)."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The role is no longer at `expected_version` (`conflict`, message key `ai_model_role.version_conflict`, `details.current_version` when known); nothing was changed."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The AI gateway's admin API is not configured, not reachable or busy, or refused a request it should not have (`unavailable`): nothing was sent or nothing was changed."
+          },
+          "504": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The outcome is unknown (`timeout`, message key `ai_model_role.outcome_unknown`): the AI gateway did not answer in time, the connection broke, or its answer could not be read; the reset may have taken effect, so read the roles again before retrying."
+          }
+        },
+        "summary": "Resets a model role to the models the configuration gives it. Platform administrators only,\nin their own request.",
+        "tags": [
+          "identity"
+        ]
+      },
+      "put": {
+        "operationId": "setPlatformAiModelRole",
+        "parameters": [
+          {
+            "description": "The role's name, such as `main`.",
+            "in": "path",
+            "name": "role",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetRoleModels"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModelRole"
+                }
+              }
+            },
+            "description": "The models were changed: the role as it is now, with its new `version`; `identity.ai_model_role_changed` is in the platform's operation log."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The `Content-Type` is not `application/json`, or the body is over 16 KiB or not a JSON object with a string array `models` and an integer `expected_version` of at least 0 (`invalid_request`); nothing was sent."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No valid session (`unauthenticated`)."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Not a platform administrator, not the administrator's own request (`permission_denied`), or a cross-site request (`permission_denied`, message key `security.cross_site_request`); nothing was sent."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The AI gateway has no such role (`not_found`, message key `ai_model_role.not_found`)."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The role is no longer at `expected_version` (`conflict`, message key `ai_model_role.version_conflict`, `details.current_version` when known); nothing was changed."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The models were refused (`validation_failed`, field `/models`): not 1 to 8 distinct, well-formed `<provider>/<model>` (`ai_model_role.invalid_models`), a provider that is not configured (`ai_model_role.unknown_provider`), or a provider of another protocol than the role (`ai_model_role.protocol_mismatch`); nothing was changed."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The AI gateway's admin API is not configured, not reachable or busy, or refused a request it should not have (`unavailable`): nothing was sent or nothing was changed."
+          },
+          "504": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The outcome is unknown (`timeout`, message key `ai_model_role.outcome_unknown`): the AI gateway did not answer in time, the connection broke, or its answer could not be read; the change may have taken effect, so read the roles again before retrying."
+          }
+        },
+        "summary": "Changes a model role's models. Platform administrators only, in their own request.",
         "tags": [
           "identity"
         ]

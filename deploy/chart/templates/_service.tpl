@@ -97,8 +97,9 @@ spec:
 Container env: the chart's variables first (OTEL_SERVICE_NAME, the collector endpoint, SENTRY_DSN,
 the Postgres CA file, login role, password and pool size for a service that uses Postgres, the
 credentials the service lists, for identity, its routes and signing key settings, for certs, its CA
-files, for mqtt-bridge, the broker's address, for assistant, the addresses of the services it
-calls, and for ai-gateway, its admin API's listen address),
+files, for mqtt-bridge, the broker's address, for a service that gets its broker account, the
+broker's address and the account ("trustiot.mqttBroker.serviceCredentials"), for assistant, the
+addresses of the services it calls, and for ai-gateway, its admin API's listen address),
 then serviceDefaults.env and services.<name>.env.
 Custom env cannot take over what the chart controls:
 - names starting with TRUSTIOT_ plus a letter or digit, SENTRY_ or OTEL_ are reserved, so the
@@ -123,6 +124,9 @@ Custom env cannot take over what the chart controls:
   <prefix>_POSTGRES_CA_FILE;
 - for mqtt-bridge, TRUSTIOT__BROKER__ADDRESS is the chart's ("trustiot.mqttBridge.env"): the bridge
   relays the gateways' connections to the in-cluster broker only, even while it is off;
+- for a service whose program reads the broker settings ("trustiot.mqttBroker.credentialServices",
+  certs), every <prefix>__MQTT__ name is the chart's, with the broker or without it: its broker
+  account is the in-cluster broker's, and only the chart hands it the password file;
 - for assistant, the addresses of the AI gateway, the identity service's token exchange,
   telemetry-query and assets are the chart's ("trustiot.assistant.env"), derived from
   mesh.calls.assistant, even while unset: an address in env would point it at a service the mesh
@@ -153,6 +157,7 @@ Returns a YAML list; use with fromYamlArray.
 {{- if eq $name "ai-gateway" -}}
 {{- $aiGatewayNames = keys (include "trustiot.aiGateway.config" .root | fromYaml).data -}}
 {{- end -}}
+{{- $brokerClient := has $name (include "trustiot.mqttBroker.credentialServices" .root | fromYaml).services -}}
 {{- $dbEnv := list -}}
 {{- if has $name (include "trustiot.postgres.clients" .root | fromYaml).services -}}
 {{- /* The service's own Postgres login role and its password, which the migration Job generates
@@ -205,6 +210,9 @@ generates its password into the service's Secret and sets it
 {{- end -}}
 {{- if and (eq $name "mqtt-bridge") (regexMatch "(?i)^TRUSTIOT__BROKER__ADDRESS$" .name) -}}
 {{- fail (printf "services.mqtt-bridge: env %s is set by the chart: the bridge relays only to the in-cluster broker's gateway port (mqttBroker.enabled)" .name) -}}
+{{- end -}}
+{{- if and $brokerClient (regexMatch (printf "(?i)^%s__MQTT__" $prefix) .name) -}}
+{{- fail (printf "services.%s: env %s is set by the chart: the service's broker account is the in-cluster broker's (mqttBroker.enabled, mqtt-broker in mesh.calls.%s), and only the chart hands it the password" $name .name $name) -}}
 {{- end -}}
 {{- if and (eq $name "assistant") (has (upper .name) $assistantNames) -}}
 {{- fail (printf "services.assistant: env %s is set by the chart from mesh.calls.assistant: the assistant calls only the services the mesh lets it call" .name) -}}
@@ -272,6 +280,7 @@ under the service's own prefix. */ -}}
 {{- if eq $name "mqtt-bridge" -}}
 {{- $mqttBridgeEnv = include "trustiot.mqttBridge.env" .root | fromYamlArray -}}
 {{- end -}}
+{{- $brokerEnv := (include "trustiot.mqttBroker.serviceCredentials" (dict "root" .root "name" $name) | fromYaml).env -}}
 {{- $assistantEnv := list -}}
 {{- if eq $name "assistant" -}}
 {{- $assistantEnv = include "trustiot.assistant.env" .root | fromYamlArray -}}
@@ -280,7 +289,7 @@ under the service's own prefix. */ -}}
 {{- if eq $name "ai-gateway" -}}
 {{- $aiGatewayEnv = include "trustiot.aiGateway.env" .root | fromYamlArray -}}
 {{- end -}}
-{{- $env = concat $env $dbEnv $clickhouseEnv $credentialEnv $identityEnv $certsEnv $mqttBridgeEnv $assistantEnv $aiGatewayEnv ($config.env | default list) -}}
+{{- $env = concat $env $dbEnv $clickhouseEnv $credentialEnv $identityEnv $certsEnv $mqttBridgeEnv $brokerEnv $assistantEnv $aiGatewayEnv ($config.env | default list) -}}
 {{- $names := list -}}
 {{- range $env -}}
 {{- $names = append $names .name -}}
@@ -338,6 +347,9 @@ AuthorizationPolicy, so a probe there would open it to every process on the node
 {{- end -}}
 {{- $env := include "trustiot.service.env" . | fromYamlArray -}}
 {{- $caMounts := include "trustiot.caMounts" (dict "root" .root "name" .name) | fromYamlArray -}}
+{{- /* The service's own key of the MQTT broker's accounts Secret, while it gets its account
+(_mqtt-broker.tpl). */ -}}
+{{- $brokerAccount := include "trustiot.mqttBroker.serviceCredentials" (dict "root" .root "name" .name) | fromYaml -}}
 {{- $migrate := include "trustiot.migrate.enabled" .root -}}
 {{- /* The internal identity keys (decision 27, _identity.tpl): while the identity service is
 enabled, every service mounts the public keys ConfigMap; only the identity service mounts the
@@ -498,6 +510,9 @@ spec:
               mountPath: {{ include "trustiot.certs.certificatesDir" .root }}
               readOnly: true
             {{- end }}
+            {{- with $brokerAccount.volumeMounts }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
       volumes:
         - name: tmp
           emptyDir:
@@ -561,5 +576,8 @@ spec:
         - name: certs-ca-certificates
           configMap:
             name: {{ $ca.certificates }}
+        {{- end }}
+        {{- with $brokerAccount.volumes }}
+        {{- toYaml . | nindent 8 }}
         {{- end }}
 {{- end -}}

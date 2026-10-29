@@ -5,7 +5,10 @@ Renders nothing. It refuses:
   document (docs/architecture/secrets.md, Laysi/trustiot-v2#398);
 - values under which the services that use Postgres could open more connections than the bundled
   Postgres accepts while all of them roll at once ("trustiot.postgres.checkConnections" in
-  _postgres.tpl, Laysi/trustiot-v2#575).
+  _postgres.tpl, Laysi/trustiot-v2#575);
+- a Secret field of the values that names a Secret the chart protects
+  ("trustiot.values.checkSecretRefs" in _helpers.tpl, Laysi/trustiot-v2#634).
 */ -}}
 {{- $_ := include "trustiot.values.singleLine" (dict "path" "" "value" .Values) -}}
 {{- $_ = include "trustiot.postgres.checkConnections" . -}}
+{{- $_ = include "trustiot.values.checkSecretRefs" . -}}

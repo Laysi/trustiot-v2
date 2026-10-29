@@ -16,8 +16,11 @@
 //!
 //! [`ensure_key`] provisions that key for the factory tool (Laysi/trustiot-v2#80): it reuses the
 //! key at the handle, creates one where the handle is empty, and refuses anything else there
-//! without touching it (`provision`).
+//! without touching it (`provision`). [`endorsement_key`] computes the TPM's ECC P-256
+//! endorsement key and compares it with the EK certificate in NV, for the same tool
+//! (Laysi/trustiot-v2#612, `endorsement`).
 
+mod endorsement;
 #[cfg(test)]
 mod fixtures;
 mod marshal;
@@ -36,6 +39,10 @@ use rustls::SignatureScheme;
 use rustls::pki_types::SubjectPublicKeyInfoDer;
 use rustls::sign::{Signer, SigningKey};
 
+pub use endorsement::{
+    EK_CERTIFICATE_INDEX, EkCertificate, Endorsement, EndorsementError, MAX_EK_CERTIFICATE_BYTES,
+    NV_READ_CHUNK, endorsement_key,
+};
 pub use provision::{
     PROVISION_RESPONSE_TIMEOUT, ProvisionError, Provisioned, SRK_HANDLE, ensure_key,
 };

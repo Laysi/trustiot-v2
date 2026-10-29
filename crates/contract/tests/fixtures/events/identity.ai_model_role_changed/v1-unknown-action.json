@@ -1,0 +1,14 @@
+{
+  "id": "01928f6e-7a3c-7d4e-8f00-000000000403",
+  "type": "identity.ai_model_role_changed",
+  "version": 1,
+  "tenant_id": null,
+  "occurred_at": "2026-10-29T08:10:00.000Z",
+  "producer": "identity",
+  "payload": {
+    "role": "router",
+    "action": "a_later_action",
+    "version": 9,
+    "models": ["openai/gpt-6-luna"]
+  }
+}
