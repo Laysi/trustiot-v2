@@ -1,10 +1,13 @@
 //! Helpers for the service's integration tests: the ingest binary as a real process on the
 //! product's Postgres schema (`testkit::product`), its JSON log and its readiness, and waiting
-//! for a condition. ClickHouse comes from `tests/common` (the schema tests' container).
+//! for a condition. ClickHouse comes from `tests/common` (the schema tests' container), the
+//! broker from [`broker`].
 #![allow(
     dead_code,
     reason = "each test binary includes this module and uses a different subset of it"
 )]
+
+pub mod broker;
 
 use std::io::{BufRead, BufReader, Read};
 use std::net::{SocketAddr, TcpListener};
@@ -83,13 +86,14 @@ pub struct Service {
 
 impl Service {
     /// Starts the service on free local ports against `product` (with its Postgres port replaced
-    /// by `postgres_port` when given) and `clickhouse`, with the roles the chart gives it, and
-    /// waits until it listens. The environment is otherwise empty, so the developer's own
-    /// variables cannot leak in.
+    /// by `postgres_port` when given), `clickhouse` and the broker of `mqtt`, with the roles the
+    /// chart gives it, and waits until it listens. The environment is otherwise empty, so the
+    /// developer's own variables cannot leak in.
     pub async fn start(
         product: &ProductPostgres,
         postgres_port: Option<u16>,
         clickhouse: &ClickHouseTarget,
+        mqtt: &mqtt_client::Config,
     ) -> Self {
         let mut command = Command::new(INGEST);
         command
@@ -105,6 +109,10 @@ impl Service {
             .env("TRUSTIOT_CLICKHOUSE_URL", &clickhouse.url)
             .env("TRUSTIOT__CLICKHOUSE__USERNAME", &clickhouse.user)
             .env("TRUSTIOT__CLICKHOUSE__PASSWORD", &clickhouse.password)
+            .env("TRUSTIOT__MQTT__HOST", &mqtt.host)
+            .env("TRUSTIOT__MQTT__PORT", mqtt.port.to_string())
+            .env("TRUSTIOT__MQTT__USERNAME", &mqtt.username)
+            .env("TRUSTIOT__MQTT__PASSWORD_FILE", &mqtt.password_file)
             .envs(product.platform_env())
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
@@ -156,14 +164,19 @@ impl Service {
 
     /// Waits until `/readyz` answers 200.
     pub async fn wait_ready(&self) {
-        let deadline = Instant::now() + START_LIMIT;
+        self.wait_ready_within(START_LIMIT).await;
+    }
+
+    /// Waits up to `limit` until `/readyz` answers 200.
+    pub async fn wait_ready_within(&self, limit: Duration) {
+        let deadline = Instant::now() + limit;
         loop {
             if self.readiness().await.0 == 200 {
                 return;
             }
             assert!(
                 Instant::now() < deadline,
-                "/readyz of the ingest service did not answer 200 within {START_LIMIT:?}\n\
+                "/readyz of the ingest service did not answer 200 within {limit:?}\n\
                  stdout:\n{}",
                 self.stdout.text()
             );
@@ -196,6 +209,46 @@ impl Drop for Service {
             let _ = self.child.kill();
             let _ = self.child.wait();
         }
+    }
+}
+
+/// A binding row as the consumer of `assets.gateway_bound` records it: tenant, binding, hardware
+/// ID and the event's position in the assets service's log.
+const INSERT_BINDING: &str = "INSERT INTO ingest.gateway_bindings
+    (tenant_id, binding_id, hardware_id, bound_at, position_tx, position_id)
+VALUES ($1::uuid, $2::uuid, $3, now(), $4, 0)";
+
+/// Binds `gateway` to `tenant` in ingest's projection, written directly as the superuser (the
+/// projection's consumer is `tests/gateway_bindings.rs`'s), and returns the binding ID. A later
+/// binding of the same gateway needs a larger `position`.
+pub async fn bind(
+    product: &ProductPostgres,
+    gateway: &protocol::GatewayId,
+    tenant: uuid::Uuid,
+    position: i64,
+) -> uuid::Uuid {
+    let binding = uuid::Uuid::new_v4();
+    let mut admin = product.superuser().await;
+    sqlx::query(INSERT_BINDING)
+        .bind(tenant.to_string())
+        .bind(binding.to_string())
+        .bind(gateway.as_str())
+        .bind(position)
+        .execute(&mut admin)
+        .await
+        .expect("record the binding");
+    binding
+}
+
+impl Service {
+    /// Waits until the service logs `message`, and returns the first such line.
+    pub async fn wait_logged(&self, message: &str) -> Value {
+        wait_for(
+            &format!("the ingest service logging `{message}`"),
+            START_LIMIT,
+            || async { self.stdout.messages(message).into_iter().next() },
+        )
+        .await
     }
 }
 

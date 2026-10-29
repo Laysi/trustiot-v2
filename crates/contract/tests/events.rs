@@ -17,7 +17,10 @@ use contract::events::assets::{
     DeviceCreated, DeviceDeleted, DeviceModelCreated, DeviceModelDeleted, DeviceModelUpdated,
     DeviceUpdated, GatewayBound,
 };
-use contract::events::certs::GatewayRegistered;
+use contract::events::certs::{
+    GATEWAY_CERTIFICATE_AGGREGATE, GatewayCertificateRenewed, GatewayRegistered,
+    GatewayRenewalRefused, gateway_certificate_aggregate_id,
+};
 use contract::events::identity::{
     MEMBERSHIP_AGGREGATE, MemberRoleChanged, PlatformAdminGrant, PlatformAdminGranted,
     TenantCreated, membership_aggregate_id,
@@ -276,6 +279,109 @@ fn gateway_registered_decodes_every_version() {
             "endorsement_key_sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
             "certificate_serial": "4c2a19e0f3b85d7a6e01c2d3b4a59687",
             "workstation": "line-1",
+        })
+    );
+}
+
+/// `certs.gateway_certificate_renewed` (Laysi/trustiot-v2#81): a tenant event in the aggregate
+/// of the tenant and the hardware ID, written by the certs service as itself.
+#[test]
+fn gateway_certificate_renewed_decodes_every_version() {
+    let decoded = decode_fixtures::<GatewayCertificateRenewed>();
+    let names: Vec<&str> = decoded.iter().map(|(name, _)| name.as_str()).collect();
+    assert_eq!(names, ["v1"]);
+    let at = |text: &str| -> DateTime<Utc> { text.parse().expect("a time") };
+    let renewed = GatewayCertificateRenewed {
+        hardware_id: GatewayId::new("tg-0001").expect("hardware id"),
+        binding_id: "01928f6e-7a3c-7d4e-8f00-000000000b01"
+            .parse()
+            .expect("binding id"),
+        certificate_serial: "5d3b2af104c96e8b7f12d3e4c5b6a798".to_owned(),
+        ca_key_id: "1f2d4c6a8e0b3d5f7a9c1e3b5d7f9a2c4e6b8d0f2a4c6e8b0d2f4a6c8e0b2d4f".to_owned(),
+        not_before: at("2026-10-29T07:55:00Z"),
+        not_after: at("2027-01-27T08:00:00Z"),
+    };
+    assert_eq!(decoded[0].1, renewed);
+
+    let path = common::fixture_path("events/certs.gateway_certificate_renewed/v1.json");
+    let fixture: EventEnvelope =
+        serde_json::from_str(&fs::read_to_string(path).expect("read fixture")).expect("envelope");
+    let tenant: TenantId = "01928f6e-7a3c-7d4e-8f00-00000000000b"
+        .parse()
+        .expect("tenant id");
+    assert_eq!(fixture.tenant_id, Some(tenant));
+    assert_eq!(
+        fixture.actor,
+        Some(Actor::Service {
+            service: ServiceName::Certs
+        })
+    );
+
+    let envelope = EventEnvelope::new(&renewed, Some(tenant)).expect("encode");
+    assert_eq!(envelope.producer, ServiceName::Certs);
+    assert_eq!(envelope.event_type, "certs.gateway_certificate_renewed");
+    assert_eq!(
+        envelope.payload,
+        json!({
+            "hardware_id": "tg-0001",
+            "binding_id": "01928f6e-7a3c-7d4e-8f00-000000000b01",
+            "certificate_serial": "5d3b2af104c96e8b7f12d3e4c5b6a798",
+            "ca_key_id": "1f2d4c6a8e0b3d5f7a9c1e3b5d7f9a2c4e6b8d0f2a4c6e8b0d2f4a6c8e0b2d4f",
+            "not_before": "2026-10-29T07:55:00Z",
+            "not_after": "2027-01-27T08:00:00Z",
+        })
+    );
+    assert_eq!(GATEWAY_CERTIFICATE_AGGREGATE, "gateway_certificate");
+    assert_eq!(
+        gateway_certificate_aggregate_id(tenant, &renewed.hardware_id),
+        "01928f6e-7a3c-7d4e-8f00-00000000000b:tg-0001"
+    );
+}
+
+/// `certs.gateway_renewal_refused` (Laysi/trustiot-v2#81): platform-wide, one per registered
+/// hardware ID and window, with the refusals by reason.
+#[test]
+fn gateway_renewal_refused_decodes_every_version() {
+    let decoded = decode_fixtures::<GatewayRenewalRefused>();
+    let names: Vec<&str> = decoded.iter().map(|(name, _)| name.as_str()).collect();
+    assert_eq!(names, ["v1"]);
+    let at = |text: &str| -> DateTime<Utc> { text.parse().expect("a time") };
+    let refused = GatewayRenewalRefused {
+        hardware_id: GatewayId::new("tg-0001").expect("hardware id"),
+        window_start: at("2026-10-29T08:00:00Z"),
+        window_end: at("2026-10-29T09:00:00Z"),
+        refusals: 5,
+        reasons: [
+            ("challenge_unknown".to_owned(), 1),
+            ("signature_invalid".to_owned(), 4),
+        ]
+        .into(),
+    };
+    assert_eq!(decoded[0].1, refused);
+
+    let path = common::fixture_path("events/certs.gateway_renewal_refused/v1.json");
+    let fixture: EventEnvelope =
+        serde_json::from_str(&fs::read_to_string(path).expect("read fixture")).expect("envelope");
+    assert_eq!(fixture.tenant_id, None);
+    assert_eq!(
+        fixture.actor,
+        Some(Actor::Service {
+            service: ServiceName::Certs
+        })
+    );
+
+    let envelope = EventEnvelope::new(&refused, None).expect("encode");
+    assert_eq!(envelope.producer, ServiceName::Certs);
+    assert_eq!(envelope.event_type, "certs.gateway_renewal_refused");
+    assert_eq!(envelope.tenant_id, None);
+    assert_eq!(
+        envelope.payload,
+        json!({
+            "hardware_id": "tg-0001",
+            "window_start": "2026-10-29T08:00:00Z",
+            "window_end": "2026-10-29T09:00:00Z",
+            "refusals": 5,
+            "reasons": {"challenge_unknown": 1, "signature_invalid": 4},
         })
     );
 }
