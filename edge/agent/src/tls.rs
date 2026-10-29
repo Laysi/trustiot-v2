@@ -246,7 +246,20 @@ impl BrokerTrust {
     /// A file that cannot be read, holds no certificate, holds a certificate that is not a
     /// root, or holds two roots with the same subject.
     pub fn load(ca: &Path) -> Result<Self, TlsError> {
-        let anchors = read_certificates(ca)?;
+        Self::from_certificates(ca, read_certificates(ca)?)
+    }
+
+    /// The trust anchors `anchors`, checked as [`BrokerTrust::load`] checks those of a file; `ca`
+    /// is the file they are for, only named in errors. `trustiot-agent provision install` checks
+    /// a root this way before it writes the root to `broker.ca`.
+    ///
+    /// # Errors
+    ///
+    /// As [`BrokerTrust::load`], except that nothing is read.
+    pub fn from_certificates(
+        ca: &Path,
+        anchors: Vec<CertificateDer<'static>>,
+    ) -> Result<Self, TlsError> {
         if anchors.is_empty() {
             return Err(TlsError::NoUsableCertificate(ca.to_owned()));
         }
@@ -375,7 +388,7 @@ fn whole_bytes(bit_string: &[u8]) -> Option<&[u8]> {
 /// handshake's webpki checks it: only with the provider's signature algorithms
 /// ([`provider`]), matched by their exact AlgorithmIdentifier bytes. So nothing loads here
 /// that every handshake would then refuse, and the two lists cannot drift apart.
-fn verify_as_the_handshake_does(signed: &[u8], spki: &[u8]) -> Result<(), String> {
+pub(crate) fn verify_as_the_handshake_does(signed: &[u8], spki: &[u8]) -> Result<(), String> {
     let malformed = || "the signed structure is not DER that webpki reads".to_owned();
     let expect = |input, tag| {
         der_element(input)

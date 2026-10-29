@@ -6,7 +6,9 @@
 //! socket, as `NOTIFY_SOCKET=@...`) and the broker (`support::wss::InnerBroker` behind the
 //! in-process front). The `provision` subcommand (Laysi/trustiot-v2#613) is run up to where it
 //! would open the TPM: its usage errors, no TPM device, and devices other than `/dev/tpmrm<N>`;
-//! the runs against a software TPM are `tests/provision.rs`.
+//! the runs against a software TPM are `tests/provision.rs`. So is `provision install`
+//! (Laysi/trustiot-v2#617): its usage errors and help, and status 9 without an agent
+//! installation; the runs against a software TPM are `tests/provision_install.rs`.
 
 #![allow(
     clippy::unwrap_used,
@@ -604,6 +606,65 @@ fn provision_refuses_devices_other_than_the_resource_manager_with_status_4_unope
     let written = std::fs::read(&file).unwrap();
     std::fs::remove_file(file).unwrap();
     assert!(written.is_empty(), "the file was written");
+}
+
+/// `trustiot-agent provision install <args>` (Laysi/trustiot-v2#617) with empty standard input.
+fn install(args: &[&str]) -> std::process::Output {
+    std::process::Command::new(EXECUTABLE)
+        .args(["provision", "install"])
+        .args(args)
+        .stdin(Stdio::null())
+        .output()
+        .unwrap()
+}
+
+#[test]
+fn provision_install_refuses_invalid_arguments_with_status_2_and_has_its_own_help() {
+    for args in [
+        &[][..],
+        &["--hardware-id"],
+        &["--hardware-id", "tg 0001"],
+        &["--hardware-id", "$(id)"],
+        &["--hardware-id", "tg-0001", "--hardware-id", "tg-0001"],
+        &["--hardware-id", "tg-0001", "--config"],
+        &["--hardware-id", "tg-0001", "--inspect"],
+        &["--hardware-id", "tg-0001", "--help"],
+    ] {
+        let stderr = refused(&install(args), 2);
+        assert!(
+            stderr.contains("usage: trustiot-agent provision install"),
+            "{args:?}: {stderr}"
+        );
+    }
+    let output = install(&["--help"]);
+    assert_eq!(output.status.code(), Some(0));
+    let help = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        help.contains("provision install --hardware-id <id>") && help.contains("Exit status"),
+        "{help}"
+    );
+}
+
+#[test]
+fn provision_install_without_an_agent_installation_exits_9_and_writes_nothing() {
+    // Without the agent's account (this machine is not a gateway) or without its configuration,
+    // the installation cannot be used: status 9 before standard input is read.
+    let dir = testkit::mqtt::ScratchDir::new("agent-install-binary");
+    let config = dir.path().join("agent.toml");
+    let stderr = refused(
+        &install(&[
+            "--hardware-id",
+            "tg-0001",
+            "--config",
+            config.to_str().unwrap(),
+        ]),
+        9,
+    );
+    assert!(
+        stderr.contains("trustiot-agent") || stderr.contains("agent.toml"),
+        "{stderr}"
+    );
+    assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 0);
 }
 
 #[test]
