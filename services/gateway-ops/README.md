@@ -152,6 +152,9 @@ schema `gateway_ops` 由 migration Job（`tools/migrate`）建立並套用 `migr
    | `previous_binding` | 回報的版本屬於先前的綁定：記在舊租戶等於讓閘道器寫進它已經不屬於的租戶 |
 
 4. **記錄。** 通過的回報記在**回報那一版的租戶**（`config_deliveries`，服務角色、該租戶的交易）：`outcome`、`active_version`、`issues`、收到的時間；同一版再回報就覆蓋，留下最近一次；和那一版已存的回報完全相同（`outcome`、`active_version`、`issues`）而且寫入不到 60 秒的，不再寫入也不記日誌，只計入 `gateway_ops.reports.repeated`，第 5 步照樣進行。這個判斷是寫入語句本身的條件（`ON CONFLICT ... DO UPDATE ... WHERE`），所以不論回報落在哪個 replica 都成立。記 INFO `apply report recorded`，帶 `hardware_id`、`tenant_id`、`version`、`outcome`、`active_version` 與 `issue_codes`（只有代碼，不帶 issue 的訊息）。
+
+   **檢查與寫入之間。** 第 3 步的平台角色讀取與第 4 步租戶交易裡的寫入不在同一個交易，中間沒有鎖：閘道器剛好在這之間改綁到別的租戶時，回報仍會寫進原租戶。寫進去的只是原租戶自己那一版設定的套用結果（版本、`outcome`、`active_version`、issue），和回報在改綁之前送達的結果相同，不會寫進新租戶，也不帶新租戶的任何資料，所以這個版本不在租戶交易裡再確認一次綁定。之後若回報要寫進比這更敏感的資料，或要以回報驅動權限相關的動作，就要在寫入的交易裡重新確認綁定。
+
 5. **舊版本的回報。** 回報的 `version` 比最新版本舊時（閘道器收到過時的 retained 訊息，或回了 `stale_version`），不論有沒有記錄，都把最新版本再排一次發布（照節流，所以一直送回報的閘道器每個時間窗最多觸發一次發布）。crates/protocol 要求雲端收到 `stale_version` 時以比 `active_version` 大的版本重發：最新版本永遠不比閘道器套用過的小，因為比最新版本大的 `active_version` 在第 3 步就被拒絕。
 
 **資料庫錯誤。** client 把回報交給服務時就回了 PUBACK（crates/mqtt-client），閘道器不會再送同一則；所以第 3、4 步遇到資料庫錯誤時，回報回到收件匣的隊尾，5 秒後重試，從收到起最多 10 分鐘；處理中這台閘道器又送來新回報時，失敗的那則作廢（`result=superseded`），不會之後蓋掉新的。每次資料庫錯誤之後，回報的處理暫停 5 秒：資料庫多半斷了，等著的回報不會一口氣打過去，每次嘗試最多等連線池的 5 秒（`ACQUIRE_TIMEOUT`）。放棄時記 WARN `apply report lost: ...`，計入 `gateway_ops.reports.unhandled`（`result=lost`）。剩下會漏的情況：資料庫斷超過 10 分鐘，或 replica 在重試期間重啟；漏掉的只是那一則回報的紀錄，下一次發布（重發或新版本）後閘道器會再回報。被取代的回報刻意不記：同一台閘道器較新的回報才是它現在的狀態，舊回報那一版的列就少一次回報。
