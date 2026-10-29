@@ -298,13 +298,16 @@ impl fmt::Debug for UploadedAgent {
 }
 
 impl UploadedAgent {
-    /// Reads the executable at `path`: a regular file of 1 byte to [`MAX_AGENT_BYTES`].
+    /// Reads the executable at `path`: a regular file of 1 byte to [`MAX_AGENT_BYTES`] that
+    /// belongs to the user running the tool and that the group and others cannot write to
+    /// ([`files::read_executable`]): it runs as root on the gateway.
     ///
     /// # Errors
     ///
-    /// When it cannot be read, is not a regular file, is empty or is too large.
+    /// When it cannot be read, is not a regular file, belongs to another user, is writable by
+    /// the group or others, is empty or is too large.
     pub fn load(path: &Path) -> Result<Self, Error> {
-        let bytes = files::read_public(path, MAX_AGENT_BYTES)?;
+        let bytes = files::read_executable(path, MAX_AGENT_BYTES)?;
         if bytes.is_empty() {
             return Err(Error::BadFile {
                 path: path.to_owned(),

@@ -128,7 +128,7 @@ trustiot-workstation register --hardware-id <硬體 ID> --csr gateway.csr --ek e
 | `--hardware-id` | 閘道器的硬體 ID：1 到 64 個 ASCII 英數字、`.`、`_`、`-`，以英數字開頭。**取自閘道器標籤**（見下方），不取自閘道器的回答 |
 | `--gateway` | ssh 目的地：`[使用者@]主機`，主機是名稱、位址或 `~/.ssh/config` 裡的 Host。只接受 ASCII 英數字、`.`、`_`、`-`、`:`、`%`、`[`、`]` 與至多一個 `@`，不以 `-` 開頭；埠號、金鑰與其他設定寫在 ssh 設定裡 |
 | `--handle` | 閘道器金鑰的 TPM persistent handle，`0x` 加 1 到 8 個十六進位數字，預設 `0x81000100`。只接受 owner 範圍（`0x81000000` 到 `0x817fffff`），不接受 SRK 的 `0x81000001`。與 agent 的預設相同，平常不必給 |
-| `--upload-agent` | 每次執行前把這個 agent 執行檔（aarch64，最大 64 MiB）上傳到閘道器的暫存目錄執行，結束後刪除；不給時執行閘道器上已安裝的 `trustiot-agent` |
+| `--upload-agent` | 每次執行前把這個 agent 執行檔（aarch64，最大 64 MiB）上傳到閘道器的暫存目錄執行，結束後刪除；不給時執行閘道器上已安裝的 `trustiot-agent`。檔案必須屬於執行工具的使用者，群組與其他人不能寫入（例如 0755），否則拒絕：它在閘道器上以 root 執行 |
 | `--remote-sudo` | 在閘道器上以 `sudo -n` 執行 agent（ssh 的使用者讀不了 `/dev/tpmrm0` 時）。`-n` 讓 sudo 需要密碼時直接失敗，不會卡住；閘道器要為這個使用者設定免密碼執行 agent |
 | `--allow-new-key` | 工作站已有這個硬體 ID 的紀錄、閘道器的 TPM 卻沒有金鑰時，仍建立新金鑰並送出（見「TPM 被清除過」）。只在確認過標籤、要讓平台回答時才給 |
 | `--csr` | 從檔案時：閘道器 TPM 金鑰的 CSR，一個 PEM `CERTIFICATE REQUEST`，ECDSA P-256，以 ecdsa-with-SHA256 由它自己的金鑰簽章。不能和 `--gateway` 一起給 |
@@ -164,7 +164,7 @@ trustiot-workstation register --hardware-id <硬體 ID> --csr gateway.csr --ek e
 
 步驟：
 
-1. **送出前先檢查所有輸入**：硬體 ID、handle、目的地（上面的規則）與 `--upload-agent` 的檔案；不合規則時結束碼 2，**ssh 沒有執行**。工作站私鑰、憑證與 session 也先載入，載入不了時同樣什麼都沒送到閘道器。
+1. **送出前先檢查所有輸入**：硬體 ID、handle、目的地（上面的規則）與 `--upload-agent` 的檔案；不合規則時結束碼 2（`--upload-agent` 的檔案屬於別人或群組、其他人可寫入時是 1），**ssh 沒有執行**。工作站私鑰、憑證與 session 也先載入，載入不了時同樣什麼都沒送到閘道器。
 2. **檢查（`trustiot-agent provision --inspect`）**：只讀 TPM，不建立任何東西。
 3. **TPM 沒有金鑰時**：工作站沒有這個硬體 ID 的紀錄（新閘道器）就執行 `trustiot-agent provision` 建立金鑰；有紀錄就停在結束碼 20（見「TPM 被清除過」），除非給了 `--allow-new-key`。建立後的報告與檢查時的 endorsement key 要相同。
 4. **TPM 已有金鑰時**：沿用它，不再執行第二次；檢查的報告已經帶著以這把金鑰簽的 CSR。
