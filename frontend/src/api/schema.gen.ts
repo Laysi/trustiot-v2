@@ -2954,7 +2954,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description The user has not picked or joined a tenant (`permission_denied`). */
+            /** @description No tenant or no role in it (`permission_denied`). */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -4173,7 +4173,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description The user has not picked or joined a tenant (`permission_denied`). */
+            /** @description No tenant or no role in it (`permission_denied`). */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -4279,7 +4279,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description No tenant (`permission_denied`), or the range lies wholly before the queryable period (`quota_exceeded`, `telemetry.outside_queryable_period`, detail `earliest`). */
+            /** @description No tenant or no role in it (`permission_denied`), or the range lies wholly before the queryable period (`quota_exceeded`, `telemetry.outside_queryable_period`, detail `earliest`). */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -4375,7 +4375,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description No tenant (`permission_denied`), or the range lies wholly before the queryable period (`quota_exceeded`, `telemetry.outside_queryable_period`, detail `earliest`). */
+            /** @description No tenant or no role in it (`permission_denied`), or the range lies wholly before the queryable period (`quota_exceeded`, `telemetry.outside_queryable_period`, detail `earliest`). */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -4471,7 +4471,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description No tenant (`permission_denied`), or the range lies wholly before the queryable period (`quota_exceeded`, `telemetry.outside_queryable_period`, detail `earliest`). */
+            /** @description No tenant or no role in it (`permission_denied`), or the range lies wholly before the queryable period (`quota_exceeded`, `telemetry.outside_queryable_period`, detail `earliest`). */
             403: {
                 headers: {
                     [name: string]: unknown;

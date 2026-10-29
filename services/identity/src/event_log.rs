@@ -47,7 +47,7 @@ use contract::event::Actor;
 use contract::{ErrorBody, ErrorCode, EventId, ServiceName, TenantId, TenantRole, UserId};
 use outbox::{Delivery, Handler, HandlerError};
 use serde::{Deserialize, Serialize};
-use service_kit::identity::{IdentityVerifier, UserIdentity};
+use service_kit::identity::{IdentityVerifier, Requirement, UserIdentity};
 use service_kit::tenant::{PlatformActor, PlatformDb, TenantDb, TenantDbError};
 use sqlx::{PgConnection, Postgres, Transaction};
 use utoipa::ToSchema;
@@ -660,10 +660,7 @@ impl EventLog {
         user: &UserIdentity,
         query: &EventLogQuery,
     ) -> Result<EventLogPage, QueryError> {
-        if !user
-            .tenant()
-            .is_some_and(|grant| grant.role.includes(TenantRole::Admin))
-        {
+        if user.meets(Requirement::Tenant(TenantRole::Admin)).is_err() {
             return Err(QueryError::NotAllowed);
         }
         let mut tx = self.db.begin(user).await?;
@@ -722,18 +719,14 @@ fn own_platform_actor(admin: &UserIdentity) -> Result<PlatformActor, QueryError>
 }
 
 /// Refuses every caller of the back office's logs but a platform administrator's own request,
-/// from the token alone; logs the refusal at INFO.
+/// from the token alone; service-kit's shared check logs the refusal at INFO.
 fn refuse_platform_caller(user: &UserIdentity) -> Option<Response> {
-    if is_own_platform_admin(user) {
-        return None;
-    }
-    tracing::info!(
-        user_id = %user.user_id(),
-        exchanged = user.claims().act.is_some(),
-        "refused to read the back office's event log: not a platform administrator, or not the \
-         administrator's own request"
-    );
-    Some(error(ErrorCode::PermissionDenied))
+    user.require(
+        Requirement::OwnPlatformAdmin,
+        "read the back office's event log",
+    )
+    .err()
+    .map(IntoResponse::into_response)
 }
 
 /// The state of the event log routes.
@@ -791,11 +784,11 @@ async fn tenant_event_log(
     user: UserIdentity,
     raw: Result<Query<RawQuery>, QueryRejection>,
 ) -> Response {
-    if !user
-        .tenant()
-        .is_some_and(|grant| grant.role.includes(TenantRole::Admin))
-    {
-        return error(ErrorCode::PermissionDenied);
+    if let Err(refused) = user.require(
+        Requirement::Tenant(TenantRole::Admin),
+        "read the tenant's event log",
+    ) {
+        return refused.into_response();
     }
     let Some(query) = parse_query(raw) else {
         return error(ErrorCode::InvalidRequest);

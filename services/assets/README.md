@@ -162,7 +162,7 @@
 | 請求 | 回應 |
 | --- | --- |
 | 沒有有效的內部身分 token | 401 `unauthenticated` |
-| 使用者沒有選租戶、或不是成員（token 沒有 `tenant`） | 403 `permission_denied` |
+| 使用者沒有選租戶、或不是成員（token 沒有 `tenant`），或角色這個版本不認得（要求租戶 viewer，Laysi/trustiot-v2#585） | 403 `permission_denied` |
 | 這個服務還沒處理到該租戶的 `identity.tenant_created` | 404 `not_found` |
 | 資料庫出錯 | 503 `unavailable`（ERROR 日誌只記 `user_id` 與錯誤種類，不記資料） |
 | 其他 | 200，`{"tenant_id", "created_at"}`（`created_at` 是這個服務知道這個租戶的時間），`cache-control: no-store` |
@@ -225,6 +225,7 @@ CARGO_BUILD_JOBS=2 cargo test -p assets
 | --- | --- |
 | `tests/tenant_created.rs` | 以身分服務自己的 `TenantStore` 建立租戶：資產服務最後有那一列，API 只回 token 租戶的資料；重播整個事件記錄、同一個事件再送一次，都不多一列、`created_at` 不變，日誌依序記 `created` 為 true、false、false，沒有 dead letter；沒有 token、錯的受眾 401，沒有租戶 403，還沒處理的租戶 404 |
 | `tests/background_identity.rs` | Laysi/trustiot-v2#106：背景工作不需要使用者的身分。公鑰集合是空的、沒有任何 token 驗得過時，帶著真的使用者 token（受眾 `assets`、新租戶的 viewer）的請求回 503 `unavailable`，readiness 也是 503；消費端照樣以服務自己的身分（`ServiceIdentity`、自己的資料庫角色）處理 `identity.tenant_created`，新租戶在 `assets.tenants` 有一列（日誌 `created` 為 true） |
+| `tests/permissions.rs` | [權限矩陣](../../docs/architecture/permissions.md)（Laysi/trustiot-v2#585）：`openapi()` 的 16 個操作都宣告了要求（讀取是租戶 viewer，寫入是租戶 editor，設備池的三個路由是平台管理員本人），與 OpenAPI 文件、矩陣文件的 `## assets` 一節相同（不需要資料庫）；真的服務上，每個操作以每種身分各呼叫一次：沒有 token、偽造的 token、給別的服務的 token 都 401，沒有租戶、沒有租戶的平台管理員、較低的角色、不認得的角色、平台路由上的租戶角色與換發的平台管理員 token 都 403，其餘通過授權；探測前後型號、資料點、設備、綁定與 outbox 的筆數不變（容器） |
 | `tests/cross_tenant.rs` | [crates/testkit](../../crates/testkit/README.md) 的跨租戶負向測試：服務角色讀不到也改不了其他租戶的 `tenants`、`device_models`、`device_model_points`、`gateway_bindings`、`devices`，寫不了其他租戶的事件與 aggregate 序號；API（租戶、型號的列表、讀取、匯出、更新、刪除、建立、匯入，設備的列表、讀取、更新、刪除）不把一個租戶的資料給另一個租戶，也不寫進另一個租戶；建立設備的 body 必須指向呼叫者租戶已綁定的閘道器與型號，suite 的 body 範本做不到，所以豁免，由 `tests/devices.rs` 測別的租戶的閘道器與型號都被拒絕、兩個租戶都沒有寫入；消費端自己的表、設備池 `gateway_pool` 與 migration 紀錄不是租戶資料而豁免；設備池的三個平台路由只給平台管理員，租戶使用者一律 403，由 `tests/gateway_pool.rs` 測，在這裡豁免 |
 | `tests/gateway_pool.rs` | Laysi/trustiot-v2#101：以 `certs_platform` 照出廠登錄的方式寫 `certs.gateway_registered`，閘道器出現在設備池（未綁定），同一個硬體 ID 再來一次仍只有一列、內容不變、沒有 dead letter；`workstation` 超過 255 字的事件，與表的 CHECK 拒絕的事件（測試暫時加一個 CHECK）都進 dead letter，之後的合法閘道器照樣進入設備池；綁定回 201、寫出綁定與一個 `assets.gateway_bound`（目標租戶、actor 是平台管理員、payload 只有 `binding_id` 與 `hardware_id`），同一個綁定再送回 200、什麼都不寫，別的租戶 409、什麼都不寫；以 trigger 讓事件寫入失敗時回 503、綁定與事件都沒留下，重試 201；兩個租戶同時綁定一台時一個 201 一個 409，同一個租戶同時兩次時一個 201 一個 200，都只有一個綁定與一個事件；沒有 token、錯的受眾 401，租戶管理員與帶 `act` 的平台管理員 403，而且他們沒有任何平台交易或租戶交易的 INFO 日誌；對照組是平台管理員本人：讀取有 `platform database access`，綁定有一行 `tenant transaction for a platform administrator`（帶 `user_id`、`tenant_id`、`hardware_id`）；路徑、列表參數、body 的每種錯誤；日誌沒有 token |
 | `tests/device_models.rs` | Laysi/trustiot-v2#99：建立、匯入、讀取、匯出、更新、刪除各寫出對的列與事件（`revision` 依序、事件內容就是閘道器格式的型號），匯出的文件匯入後相同；每一條命名與資料點規則經建立、更新、匯入三個入口都回 422 與對的 field error，什麼都不寫；重複的名稱 409、改名 422、過期的 `revision` 409；被參照的型號刪除 409 `in_use`；viewer 只能讀、沒有租戶 403、沒有 token 401；還沒處理到 `identity.tenant_created` 的租戶 503 |

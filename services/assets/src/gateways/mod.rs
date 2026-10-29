@@ -48,11 +48,11 @@ use contract::{ErrorBody, ErrorCode, FieldError, GatewayBindingId, MessageKey, T
 use protocol::GatewayId;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
-use service_kit::identity::{IdentityVerifier, UserIdentity};
+use service_kit::identity::{IdentityVerifier, Requirement, UserIdentity};
 use service_kit::tenant::{PlatformActor, PlatformDb};
 use utoipa::ToSchema;
 
-use self::binding::{BindError, Binding, GatewayBinder, Outcome, is_own_platform_request};
+use self::binding::{BindError, Binding, GatewayBinder, Outcome};
 use self::pool::{CurrentBinding, Filter, PoolEntry, ReadError};
 
 /// The pool, as the ingress gateway forwards it (no prefix is stripped).
@@ -421,20 +421,10 @@ async fn bind_gateway(
 }
 
 /// The platform actor of a platform administrator's own request; `None` (answered 403) for
-/// anyone else, logged at INFO without the token.
+/// anyone else, logged at INFO without the token by service-kit's shared check.
 fn refuse(user: &UserIdentity, action: &'static str) -> Option<PlatformActor> {
-    if is_own_platform_request(user)
-        && let Some(admin) = PlatformActor::admin(user)
-    {
-        return Some(admin);
-    }
-    tracing::info!(
-        user_id = %user.user_id(),
-        action,
-        exchanged = user.claims().act.is_some(),
-        "refused: not a platform administrator, or not the administrator's own request"
-    );
-    None
+    user.require(Requirement::OwnPlatformAdmin, action).ok()?;
+    PlatformActor::admin(user)
 }
 
 /// The path's hardware ID; `None` (answered 404) when it breaks the hardware ID rule.

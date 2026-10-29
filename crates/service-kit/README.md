@@ -339,6 +339,34 @@ JWS compact serialization（RFC 7515），payload 是 contract 的 `InternalClai
 | `expired` | 已過 `exp + 5 秒` |
 | `not_yet_valid` | `iat` 或 `nbf` 晚於現在時間 `+ 5 秒` |
 
+### 角色檢查（`Requirement`）
+
+token 有效之後，操作要求的身分由所有服務共用的檢查判斷（A2，[權限矩陣](../../docs/architecture/permissions.md)，Laysi/trustiot-v2#585），各服務不再自己寫 403 的回應與日誌。handler 一開始、讀 body 與資料庫之前呼叫：
+
+```rust
+use axum::response::{IntoResponse, Response};
+use contract::TenantRole;
+use service_kit::identity::{Requirement, UserIdentity};
+
+async fn delete_device(user: UserIdentity) -> Response {
+    if let Err(refused) = user.require(Requirement::Tenant(TenantRole::Editor), "delete a device") {
+        return refused.into_response();
+    }
+    // ...
+}
+```
+
+| `Requirement` | 放行 | 拒絕的 `reason` |
+| --- | --- | --- |
+| `OwnRequest` | 使用者自己經入口的請求 | `exchanged_token`：帶 `act`，其他服務換發的 token |
+| `Tenant(role)` | token 的租戶裡至少 `role`（admin 包含 editor，editor 包含 viewer）；換發的 token 也可以 | `no_tenant`（平台管理員沒有租戶也是）、`unrecognized_role`（本版本不認得的角色，`TenantRole::Unrecognized` 不授予任何權限）、`role_too_low` |
+| `OwnPlatformAdmin` | 平台管理員本人的請求 | `not_platform_admin`、`exchanged_token` |
+
+- 拒絕一律是同一個回應 `PermissionDenied`：403，body 是 M1 的 `{"code":"permission_denied","message_key":"error.permission_denied"}`，帶 `cache-control: no-store`，呼叫端看不出原因。
+- 日誌是一行 INFO `refused to <action>`，欄位 `user_id`、`tenant_id`、`action`、`reason`、`exchanged`、`actor`（換發 token 的服務）；不記 token。
+- 「已登入」不需要檢查：只有驗證過的 token 才有 `UserIdentity`。
+- `UserIdentity::meets(requirement)` 是同一個判斷、不記日誌也不產生回應，給 store 在開交易前的第二道檢查（例如 assets 的閘道器綁定、身分服務的成員角色）；`UserIdentity::is_exchanged()` 回答 token 是否帶 `act`。
+
 ### 公鑰與輪替
 
 決定（2026-10-10，Laysi/trustiot-v2#52）：公鑰由部署交給每個服務，不由身分服務在執行時發布。2026-10-15 起金鑰對在叢集內產生與輪替，公鑰以檔案交給服務，服務不重啟就換上新的（Laysi/trustiot-v2#404，設計與每個失敗情況在 [docs/architecture/secrets.md](../../docs/architecture/secrets.md) 的「內部身分簽章金鑰」）。

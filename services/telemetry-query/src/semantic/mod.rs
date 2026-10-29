@@ -30,15 +30,14 @@ pub mod statements;
 use std::collections::{BTreeMap, BTreeSet};
 
 use axum::Router;
-use axum::extract::State;
-use axum::extract::rejection::JsonRejection;
-use axum::response::Response;
+use axum::extract::{FromRequest, Request, State};
+use axum::response::{IntoResponse, Response};
 use axum::routing::post;
 use chrono::{DateTime, FixedOffset, Utc};
-use contract::{ErrorBody, ErrorCode, MessageKey, TenantId};
+use contract::{ErrorBody, ErrorCode, MessageKey, TenantId, TenantRole};
 use jiff::tz::TimeZone;
 use serde::{Deserialize, Serialize};
-use service_kit::identity::UserIdentity;
+use service_kit::identity::{Requirement, UserIdentity};
 use utoipa::ToSchema;
 use uuid::Uuid;
 
@@ -626,10 +625,10 @@ fn query_range(query: &SeriesQuery, checked: &Checked) -> QueryRange {
     }
 }
 
-/// The parsed request, or the response that refuses it.
-fn parsed(
-    body: Result<axum::Json<SeriesQuery>, JsonRejection>,
-) -> Result<SeriesQuery, Box<Response>> {
+/// The request's body as a query, or the response that refuses it. Read only after the role
+/// check, so a refused caller's body is never read (docs/architecture/permissions.md).
+async fn parsed(request: Request) -> Result<SeriesQuery, Box<Response>> {
+    let body = axum::Json::<SeriesQuery>::from_request(request, &()).await;
     body.map(|axum::Json(query)| query).map_err(|_| {
         Box::new(error(
             ErrorBody::new(ErrorCode::InvalidRequest).with_message_key(QUERY_INVALID),
@@ -649,7 +648,7 @@ fn parsed(
         (status = 200, description = "The statistics of each series, in the request's order.", body = Statistics),
         (status = 400, description = "The body is not the JSON object described, or has a field it does not describe (`invalid_request`, `telemetry.query_invalid`).", body = ErrorBody),
         (status = 401, description = "No valid session (`unauthenticated`).", body = ErrorBody),
-        (status = 403, description = "No tenant (`permission_denied`), or the range lies wholly before the queryable period (`quota_exceeded`, `telemetry.outside_queryable_period`, detail `earliest`).", body = ErrorBody),
+        (status = 403, description = "No tenant or no role in it (`permission_denied`), or the range lies wholly before the queryable period (`quota_exceeded`, `telemetry.outside_queryable_period`, detail `earliest`).", body = ErrorBody),
         (status = 404, description = "The tenant's account has not been created yet (`not_found`, `telemetry.account_not_ready`).", body = ErrorBody),
         (status = 422, description = "A field breaks a rule (`validation_failed`, detail `parameter`: `series`, `tz`, `period`, `from`, or `to` with detail `latest` when it ends too far after now), the answer would have too many rows (`telemetry.too_many_points`), or the query reads or holds too much (`telemetry.query_too_heavy`).", body = ErrorBody),
         (status = 429, description = "The tenant's query quota or concurrency limit is used up (`rate_limited`).", body = ErrorBody),
@@ -660,9 +659,15 @@ fn parsed(
 pub(crate) async fn post_statistics(
     State(state): State<Routes>,
     user: UserIdentity,
-    body: Result<axum::Json<SeriesQuery>, JsonRejection>,
+    request: Request,
 ) -> Response {
-    let query = match parsed(body) {
+    if let Err(refused) = user.require(
+        Requirement::Tenant(TenantRole::Viewer),
+        "query telemetry statistics",
+    ) {
+        return refused.into_response();
+    }
+    let query = match parsed(request).await {
         Ok(query) => query,
         Err(response) => return *response,
     };
@@ -691,7 +696,7 @@ pub(crate) async fn post_statistics(
         (status = 200, description = "The usage of each series, in the request's order; a series that is not a counter or not numeric has a `status` that says so and no usage.", body = Usage),
         (status = 400, description = "The body is not the JSON object described, or has a field it does not describe (`invalid_request`, `telemetry.query_invalid`).", body = ErrorBody),
         (status = 401, description = "No valid session (`unauthenticated`).", body = ErrorBody),
-        (status = 403, description = "No tenant (`permission_denied`), or the range lies wholly before the queryable period (`quota_exceeded`, `telemetry.outside_queryable_period`, detail `earliest`).", body = ErrorBody),
+        (status = 403, description = "No tenant or no role in it (`permission_denied`), or the range lies wholly before the queryable period (`quota_exceeded`, `telemetry.outside_queryable_period`, detail `earliest`).", body = ErrorBody),
         (status = 404, description = "The tenant's account has not been created yet (`not_found`, `telemetry.account_not_ready`).", body = ErrorBody),
         (status = 422, description = "A field breaks a rule (`validation_failed`, detail `parameter`: `series`, `tz`, `period`, `from`, or `to` with detail `latest` when it ends too far after now), the answer would have too many rows (`telemetry.too_many_points`), or the request would read too many one-minute cells (detail `parameter`: `series`) or the query reads or holds too much (`telemetry.query_too_heavy`).", body = ErrorBody),
         (status = 429, description = "The tenant's query quota or concurrency limit is used up (`rate_limited`).", body = ErrorBody),
@@ -702,9 +707,15 @@ pub(crate) async fn post_statistics(
 pub(crate) async fn post_usage(
     State(state): State<Routes>,
     user: UserIdentity,
-    body: Result<axum::Json<SeriesQuery>, JsonRejection>,
+    request: Request,
 ) -> Response {
-    let query = match parsed(body) {
+    if let Err(refused) = user.require(
+        Requirement::Tenant(TenantRole::Viewer),
+        "query telemetry usage",
+    ) {
+        return refused.into_response();
+    }
+    let query = match parsed(request).await {
         Ok(query) => query,
         Err(response) => return *response,
     };

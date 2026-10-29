@@ -9,7 +9,7 @@
 //! | Request | Response |
 //! | --- | --- |
 //! | No valid internal identity token | 401 `unauthenticated` |
-//! | A user who has not picked or joined a tenant | 403 `permission_denied` |
+//! | A user who has not picked or joined a tenant, or whose role there this build does not know | 403 `permission_denied` |
 //! | A malformed device ID or query string | 400 `invalid_request` |
 //! | A parameter that breaks a rule (time zone, range, interval, data point) | 422 `validation_failed` |
 //! | The range lies wholly before the queryable period | 403 `quota_exceeded` |
@@ -48,9 +48,9 @@ use axum::routing::{get, post};
 use chrono::{DateTime, Utc};
 use contract::api::telemetry_query::RunSql;
 use contract::client::Endpoint as _;
-use contract::{ErrorBody, ErrorCode, MessageKey, TenantId};
+use contract::{ErrorBody, ErrorCode, MessageKey, TenantId, TenantRole};
 use serde::{Deserialize, Serialize};
-use service_kit::identity::{IdentityVerifier, UserIdentity};
+use service_kit::identity::{IdentityVerifier, Requirement, UserIdentity};
 use service_kit::tenant::{TenantDb, TenantDbError};
 use utoipa::ToSchema;
 use uuid::Uuid;
@@ -939,7 +939,7 @@ async fn cells_series(
         (status = 200, description = "The series.", body = Series),
         (status = 400, description = "A malformed device ID or query string (`invalid_request`).", body = ErrorBody),
         (status = 401, description = "No valid session (`unauthenticated`).", body = ErrorBody),
-        (status = 403, description = "No tenant (`permission_denied`), or the range lies wholly before the queryable period (`quota_exceeded`, `telemetry.outside_queryable_period`, detail `earliest`).", body = ErrorBody),
+        (status = 403, description = "No tenant or no role in it (`permission_denied`), or the range lies wholly before the queryable period (`quota_exceeded`, `telemetry.outside_queryable_period`, detail `earliest`).", body = ErrorBody),
         (status = 404, description = "The tenant's account has not been created yet (`not_found`, `telemetry.account_not_ready`).", body = ErrorBody),
         (status = 422, description = "A parameter breaks a rule (`validation_failed`, detail `parameter`), the series would have too many points (`telemetry.too_many_points`), or the query reads or holds too much (`telemetry.query_too_heavy`).", body = ErrorBody),
         (status = 429, description = "The tenant's query quota or concurrency limit is used up (`rate_limited`).", body = ErrorBody),
@@ -953,6 +953,12 @@ async fn get_series(
     device: Result<Path<Uuid>, PathRejection>,
     params: Result<Query<SeriesParams>, QueryRejection>,
 ) -> Response {
+    if let Err(refused) = user.require(
+        Requirement::Tenant(TenantRole::Viewer),
+        "read a telemetry series",
+    ) {
+        return refused.into_response();
+    }
     let Ok(Path(device)) = device else {
         return error(
             ErrorBody::new(ErrorCode::InvalidRequest).with_message_key(DEVICE_ID_INVALID),
@@ -1065,7 +1071,7 @@ async fn get_series(
         (status = 200, description = "The latest values; empty when the device has no reading in the raw period, or is not the tenant's.", body = Latest),
         (status = 400, description = "A malformed device ID (`invalid_request`).", body = ErrorBody),
         (status = 401, description = "No valid session (`unauthenticated`).", body = ErrorBody),
-        (status = 403, description = "The user has not picked or joined a tenant (`permission_denied`).", body = ErrorBody),
+        (status = 403, description = "No tenant or no role in it (`permission_denied`).", body = ErrorBody),
         (status = 404, description = "The tenant's account has not been created yet (`not_found`, `telemetry.account_not_ready`).", body = ErrorBody),
         (status = 422, description = "The device has more data points than one answer holds (`telemetry.too_many_points`), or the query reads or holds too much (`telemetry.query_too_heavy`).", body = ErrorBody),
         (status = 429, description = "The tenant's query quota or concurrency limit is used up (`rate_limited`).", body = ErrorBody),
@@ -1078,6 +1084,12 @@ async fn get_latest(
     user: UserIdentity,
     device: Result<Path<Uuid>, PathRejection>,
 ) -> Response {
+    if let Err(refused) = user.require(
+        Requirement::Tenant(TenantRole::Viewer),
+        "read the latest telemetry",
+    ) {
+        return refused.into_response();
+    }
     let Ok(Path(device)) = device else {
         return error(
             ErrorBody::new(ErrorCode::InvalidRequest).with_message_key(DEVICE_ID_INVALID),

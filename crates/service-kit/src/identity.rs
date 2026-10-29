@@ -21,6 +21,10 @@
 //! - [`RunDelegations`]: an agent run that acts for its user longer than the request's token
 //!   lives, through a delegation the identity service exchanges for a token on every call
 //!   (Laysi/trustiot-v2#551).
+//! - [`Requirement`], [`UserIdentity::require`] and [`PermissionDenied`]: the role checks every
+//!   service's handlers share (A2, the permission matrix in `docs/architecture/permissions.md`):
+//!   the user's own request, a minimum tenant role, or a platform administrator's own request; a
+//!   refusal answers 403 `permission_denied`.
 //! - [`ExchangeVerifier`]: the identity service's check of the token a caller exchanges.
 //! - [`IdentityError`]: why a token was rejected; as a response, 401 with the M1 body
 //!   `unauthenticated` (503 `unavailable` while the service has no keys yet).
@@ -64,6 +68,7 @@
 
 mod keys;
 mod on_behalf;
+mod permission;
 mod published;
 mod run_delegation;
 #[cfg(test)]
@@ -83,6 +88,7 @@ use contract::{
 
 pub use self::keys::{IdentityKeys, InvalidKeys, KeyProblem, MAX_KEY_ID_LEN, MAX_KEYS};
 pub use self::on_behalf::{OnBehalf, OnBehalfError};
+pub use self::permission::{Denial, PermissionDenied, Requirement};
 pub use self::published::{PublishedKeys, READINESS_CHECK, RELOAD_INTERVAL};
 pub use self::run_delegation::{RunDelegation, RunDelegationError, RunDelegations};
 
