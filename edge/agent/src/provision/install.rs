@@ -41,7 +41,9 @@
 //!    agent renewed it, and the registration's certificate (which the platform answers with on
 //!    every resend of the registration) would only take the gateway back to an older one. Only
 //!    a chain that passes under the root being installed counts, so a reinstall after the root
-//!    changed is not held by a certificate under the old root.
+//!    changed is not held by a certificate under the old root. From this check until the files
+//!    are renamed, the directory of `identity.certificate` is locked (`flock`), as the renewal
+//!    locks it to write, so a renewal cannot land in between and be overwritten.
 //!
 //! Then each file whose content, owner or mode differ is replaced atomically: a new file in the
 //! same open directory (`openat` with `O_EXCL`, `O_NOFOLLOW`), written, its owner and mode set,
@@ -473,6 +475,15 @@ fn install(
         );
     }
     drop(identity);
+    // The agent's renewal may write a newer certificate at any time: with the directory locked
+    // until the renames are done, it cannot do so between the check below and the rename, and
+    // a renewal that waited for the lock writes over the installed file afterwards.
+    chain_target.directory.lock().map_err(|error| {
+        Failure::Failed(format!(
+            "cannot lock {}: {error}",
+            chain_target.directory.path().display()
+        ))
+    })?;
     if let Some(installed) = newer_installed(&chain_target, &chain.leaf, &trust, &root_crl, now) {
         return Err(Failure::Refused(format!(
             "{} holds a newer certificate for this TPM key (valid from {installed}): the agent \

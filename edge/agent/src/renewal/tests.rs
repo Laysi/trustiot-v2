@@ -381,6 +381,33 @@ fn the_certificate_file_is_replaced_atomically_with_its_permissions() {
 }
 
 #[test]
+fn the_write_waits_for_the_directory_lock_that_provision_install_holds() {
+    let dir = ScratchDir::new("renewal-write-lock");
+    let path = dir.write("gateway.pem", "old");
+    // What `provision install` does: lock the directory, then write the certificate.
+    let held = File::open(dir.path()).unwrap();
+    held.lock().unwrap();
+    let (started, starting) = std::sync::mpsc::channel();
+    let writer = {
+        let path = path.clone();
+        std::thread::spawn(move || {
+            started.send(()).unwrap();
+            write_atomically(&path, b"renewed", SystemTime::now())
+        })
+    };
+    starting.recv().unwrap();
+    fs::write(&path, "installed").unwrap();
+    // Still waiting for the lock, whatever the timing: it cannot have finished.
+    assert!(
+        !writer.is_finished(),
+        "the renewal wrote while the lock was held"
+    );
+    held.unlock().unwrap();
+    writer.join().unwrap().unwrap();
+    assert_eq!(fs::read_to_string(&path).unwrap(), "renewed");
+}
+
+#[test]
 fn a_failed_write_leaves_the_old_certificate_file() {
     let dir = ScratchDir::new("renewal-write-fails");
     let path = dir.write("gateway.pem", "old");

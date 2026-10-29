@@ -166,6 +166,13 @@ impl Directory {
         Ok(())
     }
 
+    /// Takes the directory's exclusive lock (`flock`), waiting while another process holds it;
+    /// it is released when this `Directory` is dropped. The agent's renewal takes the same lock
+    /// to write the certificate ([`crate::renewal::write_atomically`]).
+    pub(crate) fn lock(&self) -> io::Result<()> {
+        self.file.lock()
+    }
+
     /// Flushes the directory's entries to disk (`fsync`).
     pub(crate) fn sync(&self) -> io::Result<()> {
         self.file.sync_all()
