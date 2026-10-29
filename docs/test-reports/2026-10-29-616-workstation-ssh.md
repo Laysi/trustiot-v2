@@ -64,4 +64,6 @@ evidence: exit codes [Some(0), Some(0), Some(0), Some(20), Some(10)]; platform a
 
 - **閘道器端的 ssh 限制**（強制指令的轉接程式、sudoers、工作站改送短請求）：沒有實作，是出廠映像階段的前提條件，記在 Laysi/trustiot-v2#219。在那之前 `--upload-agent` 與 `--remote-sudo` 只用在 lab 與展示用的閘道器。
 - **真的 ssh 與真的閘道器**：待測。這張 issue 只用假 ssh 與 swtpm；對 lab 的閘道器登錄在 Laysi/trustiot-v2#618。
-- **進階驗證**（依驗證分級延後）：ssh 卡住或很慢時的期限（單次 300 秒、整體 420 秒）：程式有這兩個期限，但沒有測試讓 ssh 一直不結束、等到期限，這條路徑還沒實測，以及對 `services/certs` 真實服務跑 `verify`（`services/certs/tests/workstation_tool.rs` 目前只涵蓋 Laysi/trustiot-v2#615 的登錄）。
+- **進階驗證**（依驗證分級延後到 Laysi/trustiot-v2#753）：
+  - ssh 卡住或很慢時的期限（單次 300 秒、整體 420 秒）：程式有這兩個期限，但沒有測試讓 ssh 一直不結束、等到期限，這條路徑還沒實測。
+  - 對 `services/certs` 的真實服務跑 `verify`：`services/certs/tests/workstation_tool.rs` 目前只涵蓋 Laysi/trustiot-v2#615 的登錄。
