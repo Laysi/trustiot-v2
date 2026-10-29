@@ -67,6 +67,6 @@ bun install --cwd frontend --frozen-lockfile && bun run --cwd frontend api:check
 | 驗收條件 | 結果 |
 | --- | --- |
 | 斷線後 5 秒內由 LWT 標成離線（測試） | 通過：60 至 66 ms |
-| 半開連線 90 秒內（keepalive 60 × 1.5）標成離線（測試） | 通過，附一點說明：離線由 broker 的 keepalive 規則（1.5 倍）觸發。以 agent 的 60 秒 keepalive 量到 91.1 秒：broker 在 90 秒的期限後的下一次檢查才發布 last will（Mosquitto 以秒為單位檢查），服務收到後幾十毫秒內寫入。CI 的測試以 2 秒的 keepalive 檢查同一條規則（3.1 至 3.6 秒）。心跳逾時（預設 2 × 60 + 30 = 150 秒）是後備 |
+| 半開連線 90 秒內（keepalive 60 × 1.5）標成離線（測試） | **未達成字面的「90 秒內」**：以 agent 的 60 秒 keepalive 量到 91.1 秒，超過 1.1 秒。原因：離線由 broker 的 keepalive 規則（1.5 倍）觸發，Mosquitto 以 1 秒為單位檢查 keepalive，90 秒的期限過後，下一次檢查才發布 last will；服務收到後幾十毫秒內寫入。是否接受這個結果，或修改驗收條件（例如「約 90 秒，broker 檢查粒度 1 秒」），由審查者決定。CI 的測試以 2 秒的 keepalive 檢查同一條規則（3.1 至 3.6 秒）。心跳逾時（預設 2 × 60 + 30 = 150 秒）是後備 |
 | 列表 API 顯示已套用的設定版本與最後回報時間（測試） | 通過：`applied_config_version`、`desired_config_version`、`last_seen_at` |
 | 每次狀態改變發出事件 | 以 INFO 日誌 `gateway presence changed` 與計數器 `gateway_ops.presence.changes` 代替 outbox 事件：migration Job 要求每個 outbox 生產者至少有一個消費端，目前沒有服務要跟著在線狀態走（見 PR） |
