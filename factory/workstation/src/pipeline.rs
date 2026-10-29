@@ -56,7 +56,7 @@ use x509_parser::prelude::{FromDer as _, X509Certificate};
 
 use crate::Error;
 use crate::gateway::{self, Mode, Ran, Request, SshError, SshGateway};
-use crate::install::{self, Installed};
+use crate::install::{self, InstallStopKind, Installed};
 use crate::journal::{Event, Journal, Record};
 use crate::register::{self, Gateway, Registered, Registrar, one_pem_block};
 
@@ -285,7 +285,7 @@ pub struct Outcome {
     pub provisioned: Provisioned,
     pub registered: Registered,
     /// Step 7. An error here leaves the registration recorded: its message says so, and its exit
-    /// code is the installation's ([`install::InstallStopKind`], 30 to 34).
+    /// code is the installation's ([`install::InstallStopKind`], 30 to 35).
     pub installed: Result<Installed, Error>,
 }
 
@@ -328,20 +328,28 @@ pub async fn register_gateway(
     })
 }
 
-/// `error` of step 7, its message saying that the registration stands.
+/// `error` of step 7, its message saying that the registration stands and, unless the gateway
+/// did install them ([`InstallStopKind::NotLogged`]), that the certificates are not installed.
 fn not_installed(hardware_id: &str, error: Error) -> Error {
-    let registered = format!(
-        "hardware ID {hardware_id} is registered (recorded), but its certificates are not \
-         installed on the gateway"
-    );
-    // Every failure here has an exit code of the installation's (30 to 34), never the generic 1.
+    // Every failure here has an exit code of the installation's (30 to 35), never the generic 1.
     match install::as_stop(error) {
         Error::Install(mut stopped) => {
+            let registered = if stopped.kind == InstallStopKind::NotLogged {
+                format!("hardware ID {hardware_id} is registered (recorded)")
+            } else {
+                format!(
+                    "hardware ID {hardware_id} is registered (recorded), but its certificates \
+                     are not installed on the gateway"
+                )
+            };
             stopped.message = format!("{registered}: {}", stopped.message);
             Error::Install(stopped)
         }
         // A usage error cannot happen here: the hardware ID was checked in step 1.
-        other => Error::Failed(format!("{registered}: {other}")),
+        other => Error::Failed(format!(
+            "hardware ID {hardware_id} is registered (recorded), but its certificates are not \
+             installed on the gateway: {other}"
+        )),
     }
 }
 
@@ -958,5 +966,31 @@ mod tests {
         .map(|kind| kind.exit_code())
         .collect();
         assert_eq!(codes, [20, 21, 22, 23, 27]);
+    }
+
+    #[test]
+    fn only_an_installation_that_did_not_happen_is_called_not_installed() {
+        let stop = |kind| {
+            Error::Install(Box::new(install::InstallStopped {
+                kind,
+                message: "the reason".to_owned(),
+            }))
+        };
+        let unlogged = not_installed("tg-0001", stop(InstallStopKind::NotLogged)).to_string();
+        assert!(
+            unlogged.starts_with("hardware ID tg-0001 is registered (recorded): the reason"),
+            "{unlogged}"
+        );
+        assert!(!unlogged.contains("not installed"), "{unlogged}");
+        for kind in [InstallStopKind::Refused, InstallStopKind::Failed] {
+            let message = not_installed("tg-0001", stop(kind)).to_string();
+            assert!(
+                message.contains("its certificates are not installed on the gateway: the reason"),
+                "{message}"
+            );
+        }
+        let other = not_installed("tg-0001", Error::Failed("ssh is missing".to_owned()));
+        assert_eq!(other.exit_code(), 34, "{other}");
+        assert!(other.to_string().contains("are not installed"), "{other}");
     }
 }

@@ -224,7 +224,7 @@ async fn the_readme_and_the_help_agree() {
     // Every exit code of the tool has a row in the README's table.
     for code in [
         0, 1, 2, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 30, 31,
-        32, 33, 34, 75,
+        32, 33, 34, 35, 75,
     ] {
         assert!(
             readme.contains(&format!("\n| {code} |")),

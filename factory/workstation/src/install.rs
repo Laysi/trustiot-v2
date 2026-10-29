@@ -138,6 +138,10 @@ pub enum InstallStopKind {
     /// be reached or answered with another status or a report that is not the agent's. Whether
     /// files were written is unknown; the message says what happened.
     Failed,
+    /// The gateway installed the certificates (its status 0 and report), but the journal's log
+    /// line `installed` could not be written. Not a failure of the installation: the message says
+    /// the certificates are installed, and a rerun writes the log line.
+    NotLogged,
 }
 
 impl InstallStopKind {
@@ -150,6 +154,7 @@ impl InstallStopKind {
             Self::Refused => 32,
             Self::GatewayNotReady | Self::SudoRefused => 33,
             Self::Failed => 34,
+            Self::NotLogged => 35,
         }
     }
 
@@ -163,6 +168,7 @@ impl InstallStopKind {
             Self::GatewayNotReady => "gateway_not_ready",
             Self::SudoRefused => "sudo_refused",
             Self::Failed => "failed",
+            Self::NotLogged => "installed_not_logged",
         }
     }
 }
@@ -351,9 +357,9 @@ impl Installed {
 /// # Errors
 ///
 /// [`Error::Install`] with the [`InstallStopKind`] of a stop, [`InstallStopKind::Failed`] for a
-/// record that cannot be used or a remote command that could not be run or failed otherwise; a
-/// plain error for a log line that cannot be written after the gateway installed the
-/// certificates.
+/// record that cannot be used or a remote command that could not be run or failed otherwise, and
+/// [`InstallStopKind::NotLogged`] when the gateway installed the certificates but the log line
+/// `installed` cannot be written.
 pub async fn install(
     journal: &Journal,
     hardware_id: &str,
@@ -397,11 +403,22 @@ pub async fn install(
             let installed = Installed {
                 report: printable_report(&String::from_utf8_lossy(&outcome.stdout)),
             };
-            journal.append(
-                &Event::new(now, hardware_id, "installed")
-                    .with("changed", installed.changed())
-                    .with("kept_renewed", installed.kept_renewed()),
-            )?;
+            let event = Event::new(now, hardware_id, "installed")
+                .with("changed", installed.changed())
+                .with("kept_renewed", installed.kept_renewed());
+            if let Err(log) = journal.append(&event) {
+                // The gateway has the certificates: say so, never that they are not installed.
+                return Err(stopped(
+                    InstallStopKind::NotLogged,
+                    format!(
+                        "the gateway installed the certificates of hardware ID {hardware_id} \
+                         ({}), but the journal's log line `installed` could not be written: \
+                         {log}. Fix that, then run the same command again: the gateway leaves \
+                         the files that are right untouched, and the log line is written then",
+                        installed.report.lines().collect::<Vec<_>>().join("; ")
+                    ),
+                ));
+            }
             return Ok(installed);
         }
         Some(remote_exit::REFUSED) => stopped(
@@ -1135,6 +1152,55 @@ mod tests {
                 .await
                 .expect("installed");
         }
+    }
+
+    #[tokio::test]
+    async fn an_installation_whose_log_line_fails_is_still_reported_as_installed() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let (leaf, issuing, root) = pki();
+        let journal = journal_with(&record(&leaf, &issuing, &root));
+        // A log the tool refuses to append to (readable by others), after the record was read.
+        std::fs::write(journal.log_path(), b"").expect("a log");
+        std::fs::set_permissions(journal.log_path(), std::fs::Permissions::from_mode(0o644))
+            .expect("permissions");
+        let mut gateway = Recorder::answering(
+            Some(0),
+            "/var/lib/trustiot-agent/gateway.pem: written\n/etc/trustiot/broker-ca.pem: written\n",
+            "",
+        );
+        let error = install(&journal, ID, &pin(&root), &mut gateway, now())
+            .await
+            .expect_err("the log line failed");
+        assert_eq!(gateway.calls.len(), 1);
+        assert_eq!(error.exit_code(), 35, "{error}");
+        let message = error.to_string();
+        assert!(
+            message.contains("the gateway installed the certificates")
+                && message.contains("gateway.pem: written")
+                && message.contains("could not be written"),
+            "{message}"
+        );
+        assert!(!message.contains("not installed"), "{message}");
+        assert!(log(&journal).is_empty(), "{}", log(&journal));
+    }
+
+    #[test]
+    fn install_stops_have_their_own_exit_codes() {
+        let kinds = [
+            InstallStopKind::RootMismatch,
+            InstallStopKind::NoIssuingCa,
+            InstallStopKind::Refused,
+            InstallStopKind::GatewayNotReady,
+            InstallStopKind::SudoRefused,
+            InstallStopKind::Failed,
+            InstallStopKind::NotLogged,
+        ];
+        let codes: Vec<u8> = kinds.iter().map(|kind| kind.exit_code()).collect();
+        assert_eq!(codes, [30, 31, 32, 33, 33, 34, 35]);
+        let names: std::collections::HashSet<&str> =
+            kinds.iter().map(|kind| kind.as_str()).collect();
+        assert_eq!(names.len(), kinds.len(), "each stop has its own name");
     }
 
     #[test]
