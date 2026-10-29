@@ -133,6 +133,7 @@ mod tests {
             "assets",
             "assistant",
             "certs",
+            "gateway-ops",
             "identity",
             "ingest",
             "telemetry-query",

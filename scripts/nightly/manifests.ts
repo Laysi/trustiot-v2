@@ -587,6 +587,16 @@ function serviceSelects(service: K8sObject, labels: Record<string, string>): boo
 const COMPONENT_LABEL = "app.kubernetes.io/component";
 export const MQTT_BROKER_COMPONENT = "mqtt-broker";
 
+/**
+ * The MQTT broker's pod (templates/mqtt-broker.yaml: a StatefulSet of one replica), for reading
+ * its log (Laysi/trustiot-v2#721). Throws unless the release has exactly one broker StatefulSet.
+ */
+export function mqttBrokerPodOf(objects: K8sObject[]): string {
+  const sets = flatten(objects).filter((o) => o.kind === "StatefulSet" && o.metadata?.labels?.[COMPONENT_LABEL] === MQTT_BROKER_COMPONENT);
+  if (sets.length !== 1) throw new Error(`the release should have one MQTT broker StatefulSet, found ${sets.length}`);
+  return `${sets[0]!.metadata?.name ?? ""}-0`;
+}
+
 /** The release's Services in front of the MQTT broker's pods (Laysi/trustiot-v2#84), by name. */
 export function mqttBrokerServicesOf(objects: K8sObject[]): string[] {
   const flat = flatten(objects);

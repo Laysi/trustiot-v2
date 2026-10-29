@@ -290,8 +290,27 @@ services:
     # 2 to 100. Each replica opens 2 more to read the identity service's events: 12 in all.
     database:
       maxConnections: 10
+  # Each gateway's versioned desired configuration (services/gateway-ops, decision 7,
+  # Laysi/trustiot-v2#721): generated from the assets service's events into Postgres and delivered
+  # as retained MQTT messages. It logs in on the broker's service port as service:gateway-ops, and
+  # the chart hands it that account's password file and the broker's address (README.md, "MQTT
+  # broker"); without mqttBroker.enabled no gateway gets its configuration, so the render fails.
+  # Its Postgres roles gateway_ops_app and gateway_ops_platform come from the migration Job with
+  # generated passwords (README.md, 「gateway-ops」). It has no API: the mesh lets no caller reach it.
   gateway-ops:
     enabled: false
+    # 2 to 100: one connection for the assets events consumer, one for readiness, the rest for the
+    # delivery's writes in the service role. Each replica opens 4 more as its platform role (the
+    # consumer's events, readiness and the cross-tenant reads of a gateway's binding and latest
+    # configuration): 8 in all.
+    database:
+      maxConnections: 4
+    # The broker account's password file is mode 0440, owned by root and the pod's fsGroup, so the
+    # service reads it through this group and no other user in the container can (README.md,
+    # "MQTT broker"). A group of its own, as for identity, certs and ingest. On OpenShift set
+    # fsGroup to null.
+    podSecurityContext:
+      fsGroup: 65530
   # The gateways' MQTT inside WebSocket (services/mqtt-bridge, decision 6): ingress.publicPaths.mqtt
   # on hosts.gateway reaches it without the cookie check, and it relays each connection unchanged
   # to the broker's gateway port, so it needs mqttBroker.enabled (the chart sets the address) or it
@@ -406,7 +425,9 @@ mesh:
     # as its platform role (services/telemetry-query/README.md). The MQTT broker
     # (Laysi/trustiot-v2#84): mqtt-bridge carries the gateways' connections to its gateway port;
     # ingest and gateway-ops log in on its service port with their broker accounts, like certs
-    # above; the chart hands ingest its account (README.md, "MQTT broker").
+    # above; the chart hands each its account (README.md, "MQTT broker"). gateway-ops keeps its
+    # projection and the desired configurations in Postgres and reads the assets service's events
+    # from there as its platform role (services/gateway-ops/README.md, Laysi/trustiot-v2#721).
     ingest:
       - clickhouse
       - mqtt-broker
@@ -416,6 +437,7 @@ mesh:
       - postgres
     gateway-ops:
       - mqtt-broker
+      - postgres
     mqtt-bridge:
       - mqtt-broker
     # The AI assistant (Laysi/trustiot-v2#592): the AI gateway for the models; telemetry-query and
@@ -585,12 +607,13 @@ postgres:
       effective_cache_size: 384MB
       work_mem: 4MB
       maintenance_work_mem: 64MB
-      # Fits identity, assets, certs, telemetry-query, assistant, ai-gateway and ingest at one
-      # replica each while all of them roll at once (176) plus the 18 reserved connections (194),
-      # with 6 to spare; the next service that uses Postgres raises it. The render fails when the
-      # enabled services need more. Changing it restarts the bundled Postgres. The memory estimate is in
-      # README.md (「叢集內的 Postgres」).
-      max_connections: 200
+      # Fits identity, assets, certs, telemetry-query, assistant, ai-gateway, ingest and
+      # gateway-ops at one replica each while all of them roll at once (192) plus the 18 reserved
+      # connections (210), with 10 to spare; the next service that uses Postgres raises it. The
+      # render fails when the enabled services need more. Changing it restarts the bundled
+      # Postgres (Laysi/trustiot-v2#721 raised it from 200). The memory estimate is in README.md
+      # (「叢集內的 Postgres」).
+      max_connections: 220
     # The image is built for arm64 only (decision 5).
     nodeSelector:
       kubernetes.io/arch: arm64
