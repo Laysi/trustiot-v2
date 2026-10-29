@@ -296,16 +296,19 @@ services:
   # the chart hands it that account's password file and the broker's address (README.md, "MQTT
   # broker"); without mqttBroker.enabled no gateway gets its configuration, so the render fails.
   # Its Postgres roles gateway_ops_app and gateway_ops_platform come from the migration Job with
-  # generated passwords (README.md, 「gateway-ops」). It has no API: the mesh lets no caller reach it.
+  # generated passwords (README.md, 「gateway-ops」). Its API lists a tenant's gateways with their
+  # presence (Laysi/trustiot-v2#112); the ingress reaches it only through an ingress.routes entry
+  # (README.md, 「gateway-ops」), and the mesh lets no other caller reach it.
   gateway-ops:
     enabled: false
-    # 7 to 100: 7 is the most the service role's pool uses at once (the consumer's delivery
-    # transaction, readiness' ping and migration check, the republish lock, the two publish slots
-    # and the report task; MIN_DATABASE_CONNECTIONS in services/gateway-ops/src/config.rs), so a
-    # larger pool is never used. Each replica opens 4 more as its platform role (the consumer's
-    # events and bindings, readiness and the delivery's reads): 11 in all.
+    # 9 to 100: 9 is the most the service role's pool uses at once with one API request (the
+    # consumer's delivery transaction, readiness' ping and migration check, the republish lock,
+    # the two publish slots, the report task, the presence task and a request;
+    # MIN_DATABASE_CONNECTIONS in services/gateway-ops/src/config.rs); a larger pool only serves
+    # more API requests at once. Each replica opens 4 more as its platform role (the consumer's
+    # events and bindings, readiness, and the delivery's and the presence task's reads): 13 in all.
     database:
-      maxConnections: 7
+      maxConnections: 9
     # The broker account's password file is mode 0440, owned by root and the pod's fsGroup, so the
     # service reads it through this group and no other user in the container can (README.md,
     # "MQTT broker"). A group of its own, as for identity, certs and ingest. On OpenShift set
@@ -609,8 +612,9 @@ postgres:
       work_mem: 4MB
       maintenance_work_mem: 64MB
       # Fits identity, assets, certs, telemetry-query, assistant, ai-gateway, ingest and
-      # gateway-ops at one replica each while all of them roll at once (198) plus the 18 reserved
-      # connections (216), with 4 to spare; the next service that uses Postgres raises it. The
+      # gateway-ops at one replica each while all of them roll at once (202) plus the 18 reserved
+      # connections (220), with none to spare; the next service or pool that uses Postgres raises
+      # it. The
       # render fails when the enabled services need more. Changing it restarts the bundled
       # Postgres (Laysi/trustiot-v2#721 raised it from 200). The memory estimate is in README.md
       # (「叢集內的 Postgres」).

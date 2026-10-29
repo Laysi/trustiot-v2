@@ -12,6 +12,7 @@ repository.workspace = true
 assets = { path = "../../services/assets" }
 certs = { path = "../../services/certs" }
 contract = { path = "../../crates/contract" }
+gateway-ops = { path = "../../services/gateway-ops" }
 identity = { path = "../../services/identity" }
 telemetry-query = { path = "../../services/telemetry-query" }
 serde_json.workspace = true

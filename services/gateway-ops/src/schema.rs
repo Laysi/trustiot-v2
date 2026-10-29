@@ -1,7 +1,7 @@
 //! The gateway operations service's Postgres schema as this release expects it: its
 //! migrations/postgres files in apply order (Laysi/trustiot-v2#402, Laysi/trustiot-v2#719,
-//! Laysi/trustiot-v2#720). It consumes the assets service's outbox events but produces none, so
-//! its schema gets no outbox template.
+//! Laysi/trustiot-v2#720, Laysi/trustiot-v2#112). It consumes the assets service's outbox events
+//! but produces none, so its schema gets no outbox template.
 //!
 //! Two crates compile this file: the service, whose readiness check
 //! ([`service_kit::migrations::MigrationCheck`]) keeps failing until the database has every
@@ -24,6 +24,10 @@ pub const SCHEMA: Schema = Schema {
         Migration {
             name: "0002_config_deliveries.sql",
             sql: include_str!("../migrations/postgres/0002_config_deliveries.sql"),
+        },
+        Migration {
+            name: "0003_gateway_presence.sql",
+            sql: include_str!("../migrations/postgres/0003_gateway_presence.sql"),
         },
     ],
 };

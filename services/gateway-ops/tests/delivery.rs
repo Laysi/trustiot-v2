@@ -83,6 +83,9 @@ impl Running {
             records: Records::new(background),
             locks: db.pool().clone(),
             throttle,
+            reads: std::sync::Arc::new(tokio::sync::Semaphore::new(
+                gateway_ops::delivery::CONCURRENCY,
+            )),
         })
         .expect("start the delivery");
         let handle = delivery.handle();
