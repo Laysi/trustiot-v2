@@ -10,6 +10,7 @@ use std::time::{Duration, SystemTime};
 use protocol::health::{BufferStats, Heartbeat, SystemStats};
 use protocol::topic::Channel;
 use protocol::{AgentVersion, SessionId, UnixMillis, V1};
+use tokio::sync::watch;
 use tokio::time::{Instant, sleep_until};
 use tokio_util::sync::CancellationToken;
 
@@ -22,8 +23,9 @@ pub struct HeartbeatSettings {
     pub interval: Duration,
     /// This agent's release.
     pub agent_version: AgentVersion,
-    /// When the client certificate expires.
-    pub certificate_not_after: UnixMillis,
+    /// When the client certificate expires; renewal ([`crate::renewal`]) updates it, and every
+    /// heartbeat reports the value it has then.
+    pub certificate_not_after: watch::Receiver<UnixMillis>,
 }
 
 /// Sends heartbeats while the link is connected, until `shutdown` is cancelled.
@@ -161,7 +163,7 @@ pub(crate) fn build(
             dropped_records: 0,
         },
         clock_synced: false,
-        cert_not_after: settings.certificate_not_after,
+        cert_not_after: *settings.certificate_not_after.borrow(),
         devices: Vec::new(),
     }
 }
@@ -194,7 +196,7 @@ mod tests {
         HeartbeatSettings {
             interval: Duration::from_secs(60),
             agent_version: AgentVersion::new("0.1.0").unwrap(),
-            certificate_not_after: UnixMillis::new(1_900_000_000_000),
+            certificate_not_after: watch::channel(UnixMillis::new(1_900_000_000_000)).1,
         }
     }
 
@@ -222,6 +224,21 @@ mod tests {
         );
         assert_eq!(decoded.cert_not_after.get(), 1_900_000_000_000);
         assert!(decoded.devices.is_empty());
+    }
+
+    #[test]
+    fn heartbeats_report_the_expiry_of_the_renewed_certificate() {
+        let (expiry, receiver) = watch::channel(UnixMillis::new(1_900_000_000_000));
+        let settings = HeartbeatSettings {
+            certificate_not_after: receiver,
+            ..settings()
+        };
+        let session = SessionId::new("s-1").unwrap();
+        let before = build(&settings, session.clone(), Duration::ZERO, "", "");
+        expiry.send_replace(UnixMillis::new(1_950_000_000_000));
+        let after = build(&settings, session, Duration::ZERO, "", "");
+        assert_eq!(before.cert_not_after.get(), 1_900_000_000_000);
+        assert_eq!(after.cert_not_after.get(), 1_950_000_000_000);
     }
 
     #[test]

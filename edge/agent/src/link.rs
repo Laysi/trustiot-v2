@@ -98,6 +98,13 @@ pub struct LinkSettings {
     /// The `down` channels to subscribe to on every connection: only those the application
     /// takes from [`Incoming`] and handles.
     pub subscriptions: Subscriptions,
+    /// The version of the client credentials the connector presents, if they can change while
+    /// the link runs (certificate renewal, [`crate::renewal`]): it grows each time new
+    /// credentials are in place for the next connection. A connection opened with an older
+    /// version finishes what it has accepted and reconnects at once ([`LinkError::Renewed`]);
+    /// the version of a refused certificate is what [`Link::certificate_refused`] reports.
+    /// `None`: the credentials never change (version 0).
+    pub credentials: Option<watch::Receiver<u64>>,
 }
 
 impl LinkSettings {
@@ -112,8 +119,44 @@ impl LinkSettings {
             connect_timeout: CONNECT_TIMEOUT,
             jitter: random_u64,
             subscriptions: Subscriptions::none(),
+            credentials: None,
         }
     }
+}
+
+/// How long connection attempts may keep failing at the inner mTLS or before CONNACK, while
+/// TCP, the outer TLS and the WebSocket succeed (so the cloud is reachable), before the link
+/// reports the certificate as refused although no attempt said so ([`Link::certificate_refused`]).
+/// A broker that refuses a certificate sends a TLS alert, but the alert can be lost: the broker
+/// closes the connection with the gateway's unread CONNECT in its buffer, which resets the
+/// connection, and the relay may see the reset before the alert. Each run of failures adds a
+/// random part of [`REFUSED_JITTER`], so gateways that lose the broker together do not all
+/// renew at once.
+pub const REFUSED_AFTER: Duration = Duration::from_secs(600);
+
+/// The most that is added at random to [`REFUSED_AFTER`].
+pub const REFUSED_JITTER: Duration = Duration::from_secs(300);
+
+/// A refusal of the client certificate, as [`Link::certificate_refused`] reports it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Refusal {
+    /// The credentials version ([`LinkSettings::credentials`]) the refused attempt presented.
+    pub credentials: u64,
+    /// `true` when the broker said so: a certificate alert in the inner mTLS handshake or
+    /// stream, or CONNACK 0x86 or 0x87. `false` when it is inferred from failures at the inner
+    /// mTLS that lasted [`REFUSED_AFTER`] (plus its jitter).
+    pub explicit: bool,
+}
+
+/// A connection attempt: its presence session and the credentials version it presents (at
+/// least this one: renewal puts new credentials in place before it raises the version, and the
+/// attempt reads them at its inner handshake), as [`Link::attempts`] reports it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Attempt {
+    /// The session the attempt announces once it is Connected ([`LinkState::Connected`]).
+    pub session: SessionId,
+    /// The credentials version ([`LinkSettings::credentials`]).
+    pub credentials: u64,
 }
 
 /// The `down` channels the link subscribes to, each at most once, in the order given. The
@@ -310,6 +353,91 @@ pub enum LinkError {
     /// A bug in the agent, such as a status payload that does not encode.
     #[error("internal error: {0}")]
     Internal(String),
+    /// New client credentials are in place ([`LinkSettings::credentials`]): the connection
+    /// finished what it had accepted and ended its session like a clean stop
+    /// (`offline`/`shutdown`, DISCONNECT 0x00; with the will when that did not finish in
+    /// time), and the link reconnects at once with them.
+    #[error("the client certificate was renewed; reconnecting with it")]
+    Renewed,
+}
+
+/// TLS alerts with which a server refuses a client certificate.
+fn refuses_the_certificate(alert: rustls::AlertDescription) -> bool {
+    use rustls::AlertDescription as Alert;
+    matches!(
+        alert,
+        Alert::BadCertificate
+            | Alert::UnsupportedCertificate
+            | Alert::CertificateRevoked
+            | Alert::CertificateExpired
+            | Alert::CertificateUnknown
+            | Alert::UnknownCA
+            | Alert::AccessDenied
+            | Alert::CertificateRequired
+    )
+}
+
+/// Whether `error` or one it wraps is a TLS alert from the peer refusing the client
+/// certificate. tokio-rustls hands rustls' errors over inside `io::Error`, whose `source` skips
+/// the wrapped error itself, so those are unwrapped with `get_ref`.
+fn certificate_alert(error: &(dyn StdError + 'static)) -> bool {
+    let mut next = Some(error);
+    // A chain of wrapped errors is short; the bound only guards against a cycle.
+    for _ in 0..16 {
+        let Some(error) = next else {
+            return false;
+        };
+        if let Some(rustls::Error::AlertReceived(alert)) = error.downcast_ref::<rustls::Error>() {
+            return refuses_the_certificate(*alert);
+        }
+        next = match error.downcast_ref::<std::io::Error>() {
+            Some(io) => match io.get_ref() {
+                Some(inner) => Some(inner as &(dyn StdError + 'static)),
+                None => error.source(),
+            },
+            None => error.source(),
+        };
+    }
+    false
+}
+
+/// What a failed connection attempt says about the client certificate.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Blame {
+    /// The broker refused it: a TLS alert about the certificate from the inner mTLS (in its
+    /// handshake, or in the stream it protects), or CONNACK 0x86 or 0x87 (the
+    /// broker's dynamic security no longer knows the gateway, which happens once it has no
+    /// valid certificate left; services/certs/README.md, 「broker 權限」).
+    Certificate,
+    /// It failed at the inner mTLS or before CONNACK, without saying why: the cloud was
+    /// reachable, so it may be the certificate.
+    Inner,
+    /// Anything else: the network, the outer TLS (alerts included: before the outer handshake
+    /// is done they are not authenticated) or the WebSocket, or a connection that came up.
+    Elsewhere,
+}
+
+impl Blame {
+    /// The blame for `error`, which ended an attempt that never became Connected.
+    fn of(error: &LinkError) -> Self {
+        match error {
+            LinkError::Connect(connect) if connect.stage == ConnectStage::InnerTls => {
+                if certificate_alert(&*connect.source) {
+                    Self::Certificate
+                } else {
+                    Self::Inner
+                }
+            }
+            LinkError::Connect(_) => Self::Elsewhere,
+            LinkError::Io(io) if certificate_alert(io) => Self::Certificate,
+            LinkError::Refused { reason, .. } if matches!(reason.0, 0x86 | 0x87) => {
+                Self::Certificate
+            }
+            LinkError::Io(_) | LinkError::Closed => Self::Inner,
+            LinkError::Timeout { what, .. } if *what == "CONNACK" => Self::Inner,
+            _ => Self::Elsewhere,
+        }
+    }
 }
 
 fn detail(reason_string: &Option<String>) -> String {
@@ -558,6 +686,8 @@ pub(crate) struct Counters {
 pub struct Link {
     current: Arc<Current>,
     state: watch::Receiver<LinkState>,
+    refused: watch::Receiver<Option<Refusal>>,
+    attempts: watch::Receiver<Option<Attempt>>,
     counters: Arc<Counters>,
     shutdown: CancellationToken,
 }
@@ -719,6 +849,25 @@ impl Link {
         self.state.clone()
     }
 
+    /// The last connection attempt the broker refused for its client certificate: a TLS alert
+    /// about the certificate in the inner mTLS (never one in the outer TLS, which anyone on the
+    /// path can send before the outer handshake is done), CONNACK 0x86 or 0x87, or attempts that
+    /// kept failing at the inner mTLS or before CONNACK for [`REFUSED_AFTER`] (plus jitter) while
+    /// the cloud was reachable. `None` until then. Every such attempt sends the value again, so a
+    /// watcher wakes for each one. Certificate renewal watches it to renew a certificate the
+    /// broker no longer takes (revoked, or expired by the broker's clock).
+    pub fn certificate_refused(&self) -> watch::Receiver<Option<Refusal>> {
+        self.refused.clone()
+    }
+
+    /// The latest connection attempt that got as far as the MQTT session: set before the
+    /// attempt can report [`LinkState::Connected`] for its session, so a watcher of
+    /// [`Link::state`] can tell which credentials a connected session presents. Certificate
+    /// renewal reads it to count only connections made with the certificate in use.
+    pub fn attempts(&self) -> watch::Receiver<Option<Attempt>> {
+        self.attempts.clone()
+    }
+
     /// QoS 1 publishes waiting for a PUBACK right now (never above the in-flight limit).
     pub fn in_flight(&self) -> usize {
         self.counters.in_flight.load(Ordering::Relaxed)
@@ -820,6 +969,8 @@ pub struct Supervisor<C> {
     current: Arc<Current>,
     incoming: mpsc::Sender<DownMessage>,
     state: watch::Sender<LinkState>,
+    refused: watch::Sender<Option<Refusal>>,
+    attempts: watch::Sender<Option<Attempt>>,
     counters: Arc<Counters>,
     shutdown: CancellationToken,
 }
@@ -840,11 +991,15 @@ pub fn link<C: Connector>(
 ) -> (Link, Incoming, Supervisor<C>) {
     let (incoming_sender, incoming) = mpsc::channel(INCOMING_QUEUE);
     let (state_sender, state) = watch::channel(LinkState::Connecting);
+    let (refused_sender, refused) = watch::channel(None);
+    let (attempts_sender, attempts) = watch::channel(None);
     let counters = Arc::new(Counters::default());
     let current = Arc::new(Current::default());
     let link = Link {
         current: Arc::clone(&current),
         state,
+        refused,
+        attempts,
         counters: Arc::clone(&counters),
         shutdown: shutdown.clone(),
     };
@@ -855,6 +1010,8 @@ pub fn link<C: Connector>(
         current,
         incoming: incoming_sender,
         state: state_sender,
+        refused: refused_sender,
+        attempts: attempts_sender,
         counters,
         shutdown,
     };
@@ -872,8 +1029,24 @@ impl<C: Connector> Supervisor<C> {
     /// including a refused CONNACK or a failed TLS handshake, waits for the next backoff delay.
     pub async fn run(self) {
         let mut backoff = Backoff::new(self.settings.reconnect);
+        // Since when attempts have failed in a row without blaming anything but the inner mTLS
+        // or the broker ([`Blame`]), and how long such failures may last before they count as a
+        // refusal; `None` after any other end, and with new credentials.
+        let mut inner_failures_since: Option<(tokio::time::Instant, Duration)> = None;
+        let mut last_version = 0;
         loop {
             self.state.send_replace(LinkState::Connecting);
+            // The credentials this attempt presents: at least this version, since renewal puts
+            // new credentials in place before it raises the version.
+            let mut credentials = self.settings.credentials.clone();
+            let version = credentials
+                .as_mut()
+                .map_or(0, |credentials| *credentials.borrow_and_update());
+            if version != last_version {
+                // New credentials get their own REFUSED_AFTER before the failures blame them.
+                inner_failures_since = None;
+                last_version = version;
+            }
             // A TPM signature in the inner handshake blocks this thread, so the timeout below
             // may fire up to one TPM response timeout late.
             self.progress.enter(
@@ -887,18 +1060,27 @@ impl<C: Connector> Supervisor<C> {
             let Some(result) = unless_stopped(&self.shutdown, attempt).await else {
                 break;
             };
-            let error = match result {
-                Err(_) => LinkError::Timeout {
-                    what: "the connection to the cloud",
-                    after: self.settings.connect_timeout,
-                },
-                Ok(Err(error)) => LinkError::Connect(error),
+            // The error, and whether the attempt ever became Connected.
+            let (error, connected) = match result {
+                Err(_) => (
+                    LinkError::Timeout {
+                        what: "the connection to the cloud",
+                        after: self.settings.connect_timeout,
+                    },
+                    false,
+                ),
+                Ok(Err(error)) => (LinkError::Connect(error), false),
                 Ok(Ok(_)) if self.shutdown.is_cancelled() => break,
                 Ok(Ok(stream)) => match new_session_id() {
-                    Err(error) => {
-                        LinkError::Io(std::io::Error::other(format!("session ID: {error}")))
-                    }
+                    Err(error) => (
+                        LinkError::Io(std::io::Error::other(format!("session ID: {error}"))),
+                        false,
+                    ),
                     Ok(session) => {
+                        self.attempts.send_replace(Some(Attempt {
+                            session: session.clone(),
+                            credentials: version,
+                        }));
                         let ended = connection::run(
                             stream,
                             Params {
@@ -917,6 +1099,7 @@ impl<C: Connector> Supervisor<C> {
                                 state: &self.state,
                                 counters: &self.counters,
                                 shutdown: &self.shutdown,
+                                credentials,
                             },
                         )
                         .await;
@@ -929,7 +1112,7 @@ impl<C: Connector> Supervisor<C> {
                                 {
                                     backoff.reset();
                                 }
-                                error
+                                (error, ended.connected_at.is_some())
                             }
                         }
                     }
@@ -938,6 +1121,18 @@ impl<C: Connector> Supervisor<C> {
             if self.shutdown.is_cancelled() {
                 break;
             }
+            if matches!(error, LinkError::Renewed) {
+                // A planned end: reconnect at once with the new credentials, no backoff.
+                inner_failures_since = None;
+                tracing::info!("reconnecting with the renewed client certificate");
+                continue;
+            }
+            let blame = if connected {
+                Blame::Elsewhere
+            } else {
+                Blame::of(&error)
+            };
+            self.report_refusal(blame, version, &mut inner_failures_since);
             let delay = backoff.next_delay((self.settings.jitter)());
             tracing::warn!(
                 error = %error,
@@ -963,6 +1158,60 @@ impl<C: Connector> Supervisor<C> {
         self.progress.enter(Phase::Stopped, None);
         self.state.send_replace(LinkState::Stopped);
         tracing::info!("the link to the cloud has stopped");
+    }
+
+    /// Tells [`Link::certificate_refused`] about an attempt with the credentials of `version`
+    /// that ended with `blame`: at once when the broker refused the certificate, and for
+    /// failures at the inner mTLS or before CONNACK once they have lasted [`REFUSED_AFTER`] and a
+    /// random part of [`REFUSED_JITTER`].
+    fn report_refusal(
+        &self,
+        blame: Blame,
+        version: u64,
+        inner_failures_since: &mut Option<(tokio::time::Instant, Duration)>,
+    ) {
+        let now = tokio::time::Instant::now();
+        let jitter = self.settings.jitter;
+        let mut streak = || {
+            *inner_failures_since.get_or_insert_with(|| {
+                // `jitter / 2^64` of REFUSED_JITTER: uniform, never above it.
+                let extra = (REFUSED_JITTER.as_millis() * u128::from(jitter())) >> 64;
+                let extra = Duration::from_millis(u64::try_from(extra).unwrap_or(0));
+                (now, REFUSED_AFTER + extra)
+            })
+        };
+        let explicit = match blame {
+            Blame::Elsewhere => {
+                *inner_failures_since = None;
+                return;
+            }
+            Blame::Certificate => {
+                streak();
+                true
+            }
+            Blame::Inner => {
+                let (since, after) = streak();
+                if now.duration_since(since) < after {
+                    return;
+                }
+                false
+            }
+        };
+        if explicit {
+            tracing::warn!(
+                credentials = version,
+                "the broker refuses the client certificate"
+            );
+        } else {
+            tracing::warn!(
+                credentials = version,
+                "the inner mTLS keeps failing while the cloud is reachable; the certificate may be refused"
+            );
+        }
+        self.refused.send_replace(Some(Refusal {
+            credentials: version,
+            explicit,
+        }));
     }
 }
 
@@ -1006,7 +1255,7 @@ fn fill_random(bytes: &mut [u8]) -> bool {
 
 /// A uniformly random `u64` for backoff jitter; 0 (the shortest delay) if the OS has no
 /// randomness, which still never loops faster than the backoff floor.
-fn random_u64() -> u64 {
+pub(crate) fn random_u64() -> u64 {
     let mut bytes = [0_u8; 8];
     if fill_random(&mut bytes) {
         u64::from_le_bytes(bytes)

@@ -298,6 +298,13 @@ impl BrokerTrust {
     pub fn path(&self) -> &Path {
         &self.path
     }
+
+    /// Whether `der` is one of the root CA certificates, byte for byte.
+    pub fn is_anchor(&self, der: &CertificateDer<'_>) -> bool {
+        self.anchors
+            .iter()
+            .any(|anchor| anchor.as_ref() == der.as_ref())
+    }
 }
 
 /// The subject of `der` (raw, and shown without control characters) if it is a root CA
@@ -614,6 +621,47 @@ pub fn inner_config(
         .with_client_cert_resolver(Arc::new(ClientCertificate(key)));
     config.resumption = Resumption::in_memory_sessions(SESSION_CACHE);
     Ok(Arc::new(config))
+}
+
+/// The inner mTLS client settings in use, which certificate renewal replaces while the agent
+/// runs ([`crate::renewal`]). A connection takes the settings when it opens and keeps them; the
+/// next one takes the new settings. Each replacement comes with a fresh resumption cache (see
+/// [`inner_config`]): a session resumed from a ticket of the old certificate would keep showing
+/// the broker the old certificate's identity, since a resumed TLS 1.3 handshake sends none.
+#[derive(Clone)]
+pub struct InnerConfig(Arc<std::sync::Mutex<Arc<ClientConfig>>>);
+
+impl std::fmt::Debug for InnerConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("InnerConfig").finish_non_exhaustive()
+    }
+}
+
+impl InnerConfig {
+    /// Settings that start as `config`.
+    pub fn new(config: Arc<ClientConfig>) -> Self {
+        Self(Arc::new(std::sync::Mutex::new(config)))
+    }
+
+    /// The settings for a connection opening now.
+    pub fn current(&self) -> Arc<ClientConfig> {
+        // Held only for a clone or a replacement, never across a panic point that leaves the
+        // slot broken.
+        Arc::clone(
+            &self
+                .0
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+        )
+    }
+
+    /// Makes `config` the settings of every connection that opens from now on.
+    pub fn replace(&self, config: Arc<ClientConfig>) {
+        *self
+            .0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = config;
+    }
 }
 
 /// Whether the clock's time lies inside the gateway certificate's validity.

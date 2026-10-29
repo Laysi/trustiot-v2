@@ -20,6 +20,9 @@
 //! certificate = "/var/lib/trustiot-agent/gateway.pem"
 //! key = { source = "tpm" }
 //! ```
+//!
+//! The certificate file must be in a directory the agent may write to (its state directory in
+//! production): certificate renewal ([`crate::renewal`]) replaces the file.
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -29,6 +32,7 @@ use serde::Deserialize;
 use crate::backoff::BackoffSettings;
 use crate::identity::{DEFAULT_TPM_DEVICE, DEFAULT_TPM_HANDLE, KeySource};
 use crate::link::DEFAULT_INFLIGHT_LIMIT;
+use crate::renewal::RenewalSettings;
 use crate::tls::BROKER_NAME;
 use crate::transport::CloudUrl;
 
@@ -42,6 +46,15 @@ pub const RECONNECT_BASE_MS: std::ops::RangeInclusive<u64> = 100..=60_000;
 pub const RECONNECT_CAP_MAX_MS: u64 = 3_600_000;
 /// Bounds of `connection.inflight_limit`.
 pub const INFLIGHT_LIMIT: std::ops::RangeInclusive<u16> = 1..=256;
+/// Bounds of `renewal.remaining_percent`. With less than a tenth of the validity left (9 days of
+/// a 90-day certificate) a failing endpoint leaves too little time to recover before the
+/// certificate expires; with more than four fifths left, a 90-day certificate would be renewed
+/// every 18 days or more often.
+pub const RENEWAL_REMAINING_PERCENT: std::ops::RangeInclusive<u8> = 10..=80;
+/// Bounds of `renewal.retry_base_s`.
+pub const RENEWAL_RETRY_BASE_S: std::ops::RangeInclusive<u64> = 1..=3600;
+/// The largest `renewal.retry_cap_s` (one day); the smallest is the base.
+pub const RENEWAL_RETRY_CAP_MAX_S: u64 = 86_400;
 /// The persistent handle range of a TPM 2.0 (TPM_HT_PERSISTENT).
 const PERSISTENT_HANDLES: std::ops::RangeInclusive<u32> = 0x8100_0000..=0x81FF_FFFF;
 
@@ -66,6 +79,8 @@ pub struct Config {
     pub reconnect: BackoffSettings,
     /// QoS 1 publishes that may wait for a PUBACK at once.
     pub inflight_limit: u16,
+    /// When to renew the client certificate, and how to retry a failed renewal.
+    pub renewal: RenewalSettings,
 }
 
 /// Why the configuration cannot be used. The message names the file or the key.
@@ -107,6 +122,8 @@ struct Raw {
     identity: RawIdentity,
     #[serde(default)]
     connection: RawConnection,
+    #[serde(default)]
+    renewal: RawRenewal,
 }
 
 #[derive(Deserialize)]
@@ -169,6 +186,25 @@ impl Default for RawConnection {
             reconnect_base_ms: 1000,
             reconnect_cap_ms: 60_000,
             inflight_limit: DEFAULT_INFLIGHT_LIMIT,
+        }
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields, default)]
+struct RawRenewal {
+    remaining_percent: u8,
+    retry_base_s: u64,
+    retry_cap_s: u64,
+}
+
+impl Default for RawRenewal {
+    fn default() -> Self {
+        let defaults = RenewalSettings::default();
+        Self {
+            remaining_percent: defaults.remaining_percent,
+            retry_base_s: defaults.retry.base.as_secs(),
+            retry_cap_s: defaults.retry.cap.as_secs(),
         }
     }
 }
@@ -302,6 +338,33 @@ impl Config {
                 ),
             ));
         }
+        let renewal = raw.renewal;
+        if !RENEWAL_REMAINING_PERCENT.contains(&renewal.remaining_percent) {
+            return Err(invalid(
+                "renewal.remaining_percent",
+                format!(
+                    "must be within {}..={}",
+                    RENEWAL_REMAINING_PERCENT.start(),
+                    RENEWAL_REMAINING_PERCENT.end()
+                ),
+            ));
+        }
+        if !RENEWAL_RETRY_BASE_S.contains(&renewal.retry_base_s) {
+            return Err(invalid(
+                "renewal.retry_base_s",
+                format!(
+                    "must be within {}..={}",
+                    RENEWAL_RETRY_BASE_S.start(),
+                    RENEWAL_RETRY_BASE_S.end()
+                ),
+            ));
+        }
+        if !(renewal.retry_base_s..=RENEWAL_RETRY_CAP_MAX_S).contains(&renewal.retry_cap_s) {
+            return Err(invalid(
+                "renewal.retry_cap_s",
+                format!("must be within retry_base_s..={RENEWAL_RETRY_CAP_MAX_S}"),
+            ));
+        }
         Ok(Self {
             url,
             outer_trust,
@@ -315,6 +378,13 @@ impl Config {
                 cap: Duration::from_millis(connection.reconnect_cap_ms),
             },
             inflight_limit: connection.inflight_limit,
+            renewal: RenewalSettings {
+                remaining_percent: renewal.remaining_percent,
+                retry: BackoffSettings {
+                    base: Duration::from_secs(renewal.retry_base_s),
+                    cap: Duration::from_secs(renewal.retry_cap_s),
+                },
+            },
         })
     }
 }
@@ -355,6 +425,15 @@ key = { source = "tpm" }
         assert_eq!(config.reconnect, BackoffSettings::default());
         assert_eq!(config.inflight_limit, 32);
         assert_eq!(config.broker_crl, None, "no root CRL unless configured");
+        assert_eq!(config.renewal, RenewalSettings::default());
+        assert_eq!(config.renewal.remaining_percent, 33);
+        assert_eq!(
+            config.renewal.retry,
+            BackoffSettings {
+                base: Duration::from_secs(30),
+                cap: Duration::from_secs(1800)
+            }
+        );
     }
 
     #[test]
@@ -366,6 +445,9 @@ key = { source = "tpm" }
             config.broker_crl,
             Some(PathBuf::from("/var/lib/trustiot-agent/root-crl.pem"))
         );
+        // The example says its [renewal] values are the defaults.
+        assert!(example.contains("\n[renewal]\n"));
+        assert_eq!(config.renewal, RenewalSettings::default());
     }
 
     #[test]
@@ -512,6 +594,41 @@ key = { source = "tpm" }
             error_of(&format!("{MINIMAL}\n[connection]\nkeep_alive_s = 300\n"))
                 .contains("unknown field")
         );
+        assert!(
+            error_of(&format!("{MINIMAL}\n[renewal]\nurl = \"https://x/\"\n"))
+                .contains("unknown field")
+        );
+    }
+
+    #[test]
+    fn renewal_settings_are_bounded() {
+        let with = |body: &str| format!("{MINIMAL}\n[renewal]\n{body}\n");
+        let config = Config::parse(&with(
+            "remaining_percent = 50\nretry_base_s = 10\nretry_cap_s = 600",
+        ))
+        .unwrap();
+        assert_eq!(
+            config.renewal,
+            RenewalSettings {
+                remaining_percent: 50,
+                retry: BackoffSettings {
+                    base: Duration::from_secs(10),
+                    cap: Duration::from_secs(600)
+                },
+            }
+        );
+        for (body, key) in [
+            ("remaining_percent = 9", "remaining_percent"),
+            ("remaining_percent = 81", "remaining_percent"),
+            ("remaining_percent = -1", "remaining_percent"),
+            ("retry_base_s = 0", "retry_base_s"),
+            ("retry_base_s = 3601", "retry_base_s"),
+            ("retry_base_s = 60\nretry_cap_s = 59", "retry_cap_s"),
+            ("retry_cap_s = 86401", "retry_cap_s"),
+        ] {
+            let error = error_of(&with(body));
+            assert!(error.contains(key), "{body}: {error}");
+        }
     }
 
     #[test]

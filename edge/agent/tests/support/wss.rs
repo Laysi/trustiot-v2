@@ -93,6 +93,13 @@ reconnect_cap_ms = 1000
         self.write("agent.toml", &config);
     }
 
+    /// Adds `text` (whole TOML tables) to the end of the configuration.
+    pub fn append_config(&self, text: &str) {
+        let mut config = std::fs::read_to_string(self.path("agent.toml")).unwrap();
+        config.push_str(text);
+        self.write("agent.toml", &config);
+    }
+
     /// The agent's setup from the configuration, as the binary makes it.
     pub fn setup(&self) -> Result<Setup, String> {
         let config = Config::load(std::path::Path::new(&self.path("agent.toml")))

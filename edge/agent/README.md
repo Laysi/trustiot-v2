@@ -32,7 +32,8 @@
 | `src/desired.rs` | `Applier`：依版本規則處理收到的設定、套用、存檔與回報；`run`：接收設定與送出回報的工作；`Inbox`：只留最新一則 | Laysi/trustiot-v2#94 |
 | `src/desired/fleet.rs` | `Fleet`：每台設備一個輪詢工作，套用新設定時只動有變的設備；`Plan`：套用前先規劃所有設備；`Sink`：輪詢結果交給誰 | Laysi/trustiot-v2#94 |
 | `src/desired/store.rs` | `Store`：已套用的設定存在資料分割區，原子替換 | Laysi/trustiot-v2#94 |
-| 還沒有 | 憑證換發 | Laysi/trustiot-v2#83 |
+| `src/renewal.rs` | `Renewal`：用戶端憑證的換發排程、重試、檢查、原子寫檔與換上新憑證（見「憑證換發」） | Laysi/trustiot-v2#83 |
+| `src/renewal/https.rs` | `HttpsEndpoint`：對 `cloud.url` 的主機送換發請求（HTTP/1.1，外層 TLS）、`Retry-After` | Laysi/trustiot-v2#83 |
 
 依賴都要能建置成 aarch64（`aarch64-unknown-linux-gnu`，glibc，不是 musl：[記憶體測試](../../docs/feasibility/2026-10-13-gateway-memory.md)），CI 對 `edge/` 下每個成員做這項建置。唯一編譯 C 的相依是 `ring`（rustls 的加密實作），交叉建置時要有目標的 C 編譯器，用 `.prototools` 鎖定的 zig 與 cargo-zigbuild：
 
@@ -66,8 +67,9 @@ trustiot-agent provision install --hardware-id <id> [--config <file>]
 | `identity.certificate` | 閘道器的憑證鏈（leaf 在前，接著簽發 CA）。閘道器 ID 取自 leaf 的 CN（必須是合法的 `GatewayId`），不另外設定，兩者不可能不一致 |
 | `identity.key` | 正式環境是 `{ source = "tpm", device = "/dev/tpmrm0", handle = 0x81000100 }`（handle 要在 persistent 範圍 0x81000000–0x81FFFFFF）；`{ source = "file", path = "..." }` 只給開發與測試，啟動時會記一筆警告 |
 | `connection.*` | 心跳間隔（10–3600 秒，預設 60）、重連退避的起始與上限（預設 1 秒、60 秒）、同時等 PUBACK 的 QoS 1 訊息數（1–256，預設 32） |
+| `renewal.*` | 選填，憑證換發（見「憑證換發」）：剩下多少效期時換發 `remaining_percent`（10–80，預設 33）、失敗後重試的退避起始 `retry_base_s`（1–3600 秒，預設 30）與上限 `retry_cap_s`（起始到 86400 秒，預設 1800） |
 
-啟動時讀設定、確認 `broker.ca` 只有根 CA、載入根 CRL（記下 CRL 編號與 nextUpdate；已過期時另記一筆警告）、建好兩層 TLS 的設定、讀憑證並確認金鑰與憑證的公鑰相同（TPM 的金鑰也一樣）；有 EKU 時必須含 clientAuth，有 key usage 時必須含 digitalSignature。接著以 webpki 的用戶端憑證檢查（rustls 的 `WebPkiClientVerifier`）確認憑證鏈接到 `broker.ca`，broker 一定會拒絕的憑證（例如別的 CA 簽的）就不啟動。只有時間不對（過期或還沒生效）時記一筆警告，寫出憑證的 notBefore 與 notAfter，照樣啟動：閘道器有硬體 RTC，但時間仍可能是錯的（例如 RTC 沒設定過或遺失了時間），效期以 broker 的時鐘為準，拒絕啟動只會把時鐘的問題變成停機；真的過期時 broker 會拒絕，由換發（Laysi/trustiot-v2#83）處理。全部通過才通知 systemd `READY=1`，不等第一次連線：沒有網路的現場也要能啟動，之後自己重試。`--check` 做完這些檢查就結束（0 是可用並印出閘道器 ID 與憑證的到期時間，1 是不可用並印出原因），給維運與更新後的健康檢查用。設備的設定（`DesiredConfig`）由 MQTT 送來（見「設定下發與套用」），不在這個檔案裡。
+啟動時讀設定、確認 `broker.ca` 只有根 CA、載入根 CRL（記下 CRL 編號與 nextUpdate；已過期時另記一筆警告）、建好兩層 TLS 的設定、讀憑證並確認金鑰與憑證的公鑰相同（TPM 的金鑰也一樣）；有 EKU 時必須含 clientAuth，有 key usage 時必須含 digitalSignature。接著以 webpki 的用戶端憑證檢查（rustls 的 `WebPkiClientVerifier`）確認憑證鏈接到 `broker.ca`，broker 一定會拒絕的憑證（例如別的 CA 簽的）就不啟動。只有時間不對（過期或還沒生效）時記一筆警告，寫出憑證的 notBefore 與 notAfter，照樣啟動：閘道器有硬體 RTC，但時間仍可能是錯的（例如 RTC 沒設定過或遺失了時間），效期以 broker 的時鐘為準，拒絕啟動只會把時鐘的問題變成停機；真的過期時 broker 會拒絕，由換發處理（見「憑證換發」）。全部通過才通知 systemd `READY=1`，不等第一次連線：沒有網路的現場也要能啟動，之後自己重試。`--check` 做完這些檢查就結束（0 是可用並印出閘道器 ID 與憑證的到期時間，1 是不可用並印出原因），給維運與更新後的健康檢查用。設備的設定（`DesiredConfig`）由 MQTT 送來（見「設定下發與套用」），不在這個檔案裡。
 
 日誌寫到 stderr，由 systemd 交給 journal；等級由 `TRUSTIOT_AGENT_LOG` 設定（預設 `info`）。
 
@@ -122,7 +124,7 @@ MQTT 5 的編解碼由本 crate 自己寫，只做用到的部分（2026-10-21�
 - 每次連線產生新的 `SessionId`；CONNECT 的 will 是這個 session 的 `Status::last_will`（`offline`／`connection_lost`），QoS 1、retained，發在 `up/status`。
 - CONNACK 之後第一則訊息是同一個 session 的 `online`（QoS 1、retained）；它被拒絕（例如角色少了 `up/status`）時斷線重連，雲端不會以為閘道器在線。
 - SIGTERM：送 `offline`／`shutdown`，等它的 PUBACK 最多 5 秒，再送 DISCONNECT 0x00，broker 丟掉 will；等不到 PUBACK 就送 DISCONNECT 0x04（請 broker 發布 will），雲端看到的是 `connection_lost`。這 5 秒從收到 SIGTERM 算起，也限制正在進行的寫入（例如上傳很慢時的大訊息）：期限到了還沒寫完就切斷；封包只寫了一半，之後不能再送任何封包（broker 會把 DISCONNECT 當成那個封包的後半），所以不送 DISCONNECT 直接關閉，broker 同樣發布 will。連線自己的停止最多約 7 秒（5 秒加上送 DISCONNECT 與關閉的 2 秒）；`main` 最多等 10 秒（`STOP_LIMIT`）就結束行程，unit 的 `TimeoutStopSec` 是 20 秒。正在等 CONNACK 時收到 SIGTERM，在同樣的 5 秒內繼續等：CONNACK 來了就照上面的步驟（先 `online`，再 `offline`／`shutdown` 與 DISCONNECT 0x00，不訂閱）；沒來就直接關閉。
-- 心跳：每次連上馬上送一次，之後每 `heartbeat_interval_s` 送一次（QoS 0），帶這次連線的 session。目前有的欄位：agent 版本與執行時間、作業系統的開機時間與 uptime、記憶體（`/proc/meminfo`）、用戶端憑證的到期時間；設備統計、緩衝、CPU、磁碟、溫度、降頻與開機次數是 Laysi/trustiot-v2#117 的，現在是空的或 0；時鐘是否校正是 Laysi/trustiot-v2#90 的，現在是 `false`。
+- 心跳：每次連上馬上送一次，之後每 `heartbeat_interval_s` 送一次（QoS 0），帶這次連線的 session。目前有的欄位：agent 版本與執行時間、作業系統的開機時間與 uptime、記憶體（`/proc/meminfo`）、用戶端憑證的到期時間（換發後是新憑證的）；設備統計、緩衝、CPU、磁碟、溫度、降頻與開機次數是 Laysi/trustiot-v2#117 的，現在是空的或 0；時鐘是否校正是 Laysi/trustiot-v2#90 的，現在是 `false`。
 
 ### 重連
 
@@ -141,6 +143,47 @@ MQTT 5 的編解碼由本 crate 自己寫，只做用到的部分（2026-10-21�
 | WebSocket | 讀取緩衝 16 KiB，收到的 message 最多 64 KiB，送出的最多 32 KiB |
 
 最壞情況（每則都到頻道上限）約 29 MiB；平常的遙測與心跳只用到其中一小部分。`tests/link.rs` 以停住的時鐘驗證前三項：PUBACK 不回來時正好送出 `inflight_limit` 則、佇列停在 8 則、以 `reserve` 等位置的呼叫端都在等，下一個封包是一整個 keepalive 之後的 PINGREQ；每回一個 PUBACK 剛好再送一則。佇列滿時，一千個同時的 `publish` 在第一次 poll 就全部回 `Busy`，佇列與 in-flight 都不變；`reserve` 的等待者在拿到位置之前不建 payload，位置依要求的先後給。
+
+## 憑證換發
+
+用戶端憑證（`identity.certificate`）由 agent 自己換發（決策 12、檢查清單 D2），走雲端憑證服務的 `POST /certs/renew`（`protocol::renewal`，流程見 [`services/certs/README.md`](../../services/certs/README.md)「換發」）：先要一個 challenge（`step: challenge`），再以目前憑證的金鑰（正式環境是 TPM 的金鑰）簽 challenge 的簽章輸入送回（`step: renew`），雲端為同一把已登記的金鑰簽一張新憑證。請求送到 `cloud.url` 的主機與 port（HTTPS，HTTP/1.1，外層 TLS 與 `cloud.trust` 的信任和 MQTT 連線相同），不需要用戶端憑證，所以憑證過期或被撤銷時也能換。
+
+### 什麼時候換
+
+- **照排程**：依閘道器的時鐘，效期剩下 `renewal.remaining_percent`（預設 33）時換發；90 天的憑證在剩 30 天時換。另外，從憑證放上來的時間（憑證檔的修改時間，寫檔時以閘道器的時鐘設定）起，也要等過效期的同一個比例；這個行程換過一次之後，再依單調時鐘等同樣久。所以時鐘快很多時不會一直重換，重開 agent 也一樣；時鐘慢很多時憑證看起來永遠沒到期，就靠下面 broker 的拒絕觸發。手動放上或複製憑證檔時要保留修改時間（例如 `cp -p`）：修改時間比簽發晚很多時排程換發會延後，最晚延到憑證過期後被 broker 拒絕，那時才換發。最多每小時重新讀一次時鐘（`RECHECK`），開機後 NTP 改了時間也會發現。
+- **broker 拒絕憑證時**：內層 mTLS 握手（在外層 TLS 裡面，所以是 broker 那一側送的）或連線中收到憑證相關的 TLS alert、CONNACK 0x86 或 0x87（broker 的 dynamic security 已經沒有這台閘道器），或在雲端連得到（TCP、外層 TLS、WebSocket 都成功）的情況下內層 mTLS 或 CONNACK 之前持續失敗 10 分鐘再加 0 到 5 分鐘的隨機時間（`link::REFUSED_AFTER`、`link::REFUSED_JITTER`；broker 的 alert 可能因為連線被 reset 而沒送到；隨機時間讓同一個問題下的大量閘道器不會同時換發）。這表示憑證過期（以 broker 的時鐘）或被撤銷。換上新憑證之後，這段時間重新計算。外層 TLS 握手中的 alert 不算拒絕：路徑上任何東西都送得出來，不證明是 broker。
+  - 明確的拒絕（alert、CONNACK）而憑證還沒被證明可用時，馬上換。
+  - 推斷的拒絕（內層 mTLS 一直失敗）而憑證依閘道器的時鐘仍然有效時，等下面重試的退避再換：可能是 broker 的問題，不是憑證。
+  - 已被證明可用的憑證被拒時，離上一次因拒絕而換發至少 15 分鐘（`renewal::REFUSAL_RENEWAL_INTERVAL`），冒充 broker 的東西不能讓閘道器一直換發。
+
+用某張憑證開的連線維持 60 秒（`backoff::STABLE_AFTER`）之後，這張憑證才算被證明可用。link 每次連線嘗試都回報它的 session 與所用憑證的版本（`Link::attempts`，在回報 `Connected` 之前），只有嘗試用的是使用中憑證的連線才算：換上新憑證時已經連著的那條連線是用舊憑證開的，不算；換上新憑證的過程中就已經用新憑證重連上的，算。
+
+### 重試
+
+失敗後等一段時間再從新的 challenge 開始：full jitter 的指數退避（第 n 次失敗等 0.1 秒到 min(`retry_cap_s`, `retry_base_s` × 2^(n-1)) 之間，預設 30 秒、1800 秒），永遠不放棄。回應 429 或 503 帶 `Retry-After`（秒數）時，再加上至少那麼久（最多 `retry_cap_s`）。剛換上的憑證被證明可用之前也被 broker 拒絕時，不會馬上再換，同樣等退避（或先退回上一張，見下面「退回上一張憑證」）；新憑證被證明可用之後退避才歸零。每個請求（連線到讀完回應）最多 30 秒，回應最多讀 64 KiB。
+
+### 檢查
+
+新憑證全部通過才用，否則什麼都不改（檔案與使用中的憑證都不動），記一筆錯誤後照重試的規則再換：
+
+- 回應的 HTTP 狀態與每個步驟相符（challenge 200、renew 201）、JSON 格式正確，challenge 是這台閘道器的、用途是換發、nonce 格式正確，才以金鑰簽章；renew 回應的硬體 ID 是自己的。
+- `certificate_chain` 只有 PEM 憑證（最多 4 張，不能夾帶私鑰或其他區塊），第一張就是 `certificate`。
+- `root_certificate` 必須是 `broker.ca` 裡的一張根：回應不能新增信任錨。
+- webpki 以 `broker.ca` 驗證整條鏈可以當用戶端憑證，CN 是自己的閘道器 ID，公鑰與 TPM 的金鑰相同，EKU 與 key usage 是閘道器憑證的（與啟動時的檢查相同，`identity::with_key`）。
+- 依閘道器的時鐘現在就能用：notBefore 最多比現在晚 300 秒（`renewal::CLOCK_SKEW`，與憑證服務把 notBefore 往前推的 `CLOCK_SKEW_SECS` 相同），notAfter 還沒過。閘道器有硬體 RTC，時鐘可以合理信任；還不能用的憑證換上去只會讓閘道器連不上。這與啟動時不同：啟動時手上的憑證時間不對只記警告，因為拒絕啟動只會變成停機；換發時拒絕新憑證則保留還能用的舊憑證。
+- 新憑證的 notBefore 要比上一張被證明可用的憑證晚（防重送的下限），舊的回應重送也換不回去。下限只看被證明可用的憑證：換上之後從沒成功用過的憑證不會把下限往上推。
+
+### 換上新憑證
+
+1. 憑證鏈以原子替換寫回 `identity.certificate`：同一個目錄裡的暫存檔 `<檔名>.renewal.tmp`（沿用舊檔的權限；舊檔不存在時 0600；修改時間設成閘道器時鐘的現在，排程以此為準），fsync、rename、再 fsync 目錄。中途斷電時，留下的是完整的舊檔或新檔，不會是寫一半的檔。檔案寫不進去時照樣使用新憑證並記錯誤：重開之後讀到舊憑證，需要時會再換。只有 fsync 目錄失敗時，檔案已經是新的，只是斷電仍可能回到舊的，記一筆警告。
+2. 換掉內層 TLS 的設定（之後的連線都用新憑證），心跳的 `cert_not_after` 改成新憑證的到期時間。
+3. 使用中的連線輪替：不再接受新的 publish（呼叫端拿到 `NotConnected`，與連線中斷時一樣由離線緩衝重送），已接受的照樣送出並等 PUBACK；全部確認之後像正常停止一樣送 `offline`／`shutdown` 與 DISCONNECT 0x00（broker 丟掉 will，雲端不會看到一次 `connection_lost`），然後不經退避，馬上以新憑證重連，新的 session 送 `online`。緩衝裡的資料一則都不會掉，也不會變成不確定是否送達（`ConnectionLost`）。等 PUBACK 最多 keepalive 的兩倍（至少 5 秒）；超過時送 DISCONNECT 0x04（broker 發布 will），還沒確認的訊息照連線中斷處理（`ConnectionLost`，由緩衝重送）。輪替途中收到停止訊號就照一般的停止結束。
+
+### 退回上一張憑證
+
+被證明可用、而且沒被 broker 拒絕過的憑證（照排程換發時）被換掉之前，先以同樣的原子寫法、同樣的權限存成 `<憑證檔>.prev`；因為被拒而換發時不留，因為 broker 已經不收它。新憑證在被證明可用之前就被 broker 明確拒絕（alert 或 CONNACK，不是推斷的拒絕），而 `.prev` 依閘道器的時鐘仍然有效時，換回 `.prev` 的憑證（不送任何請求），之後的換發等退避。憑證檔確實寫回（含 fsync 目錄）之後才刪掉 `.prev`；寫不回去時保留 `.prev`，重開後讀到被拒的憑證時仍能再退回。換回來的憑證算是還沒被證明可用、也沒有上一張，所以不會再從它退回去，不會來回切換。新憑證被證明可用之後刪掉 `.prev`。`.prev` 在 agent 重開後仍然有效；啟動時只有在它是這台閘道器、這把金鑰、鏈接到 `broker.ca`、而且比使用中的憑證舊時才採用，否則刪掉並記警告。
+
+`tests/renewal.rs` 以替代的換發端點（`tests/support/renewal.rs`，HTTPS、與憑證服務相同的 challenge 與簽章檢查）與檔案金鑰驗證：broker 拒絕憑證（簽發 CA 不被信任，等同被撤銷）時馬上換發並以新憑證重連，請求的 `Host` 是 `cloud.url` 的主機與 port，檔案換成新的鏈、權限不變；503 與 429 依 `Retry-After` 等待、每次重試都從 challenge 開始；對 Mosquitto 容器，效期很短的憑證在到期前換發，換發期間持續 publish 的訊息一則都沒掉也沒重複、沒有 `ConnectionLost`，舊 session 以 `offline`／`shutdown` 結束、新 session 上線，心跳帶新的到期時間；已過期的憑證換發後 broker 接受；外層 TLS 握手收到 `bad_certificate` alert 時不算拒絕、不換發。排程（含時鐘快、重開後不重換）、重試間隔的順序與範圍、每一種回應被竄改時不換（含 notBefore 太晚與已過期）、防重送的下限、被證明可用的條件、拒絕後的等待與最短間隔、退回上一張憑證（含重開之後）、原子寫檔與寫檔失敗時舊檔不變，在單元測試（`cargo test -p agent --lib renewal`）以停住的時鐘與腳本化的端點驗證；連線輪替與拒絕的判斷（外層與內層 alert 的區別、推斷拒絕的隨機時間）在 `tests/link.rs`。TPM 簽 challenge 走與 TLS 相同的 `SigningKey`（`tests/tpm_swtpm.rs` 驗證 TPM 簽章），沒有在閘道器的實體 TPM 上測過。
 
 ## systemd
 
@@ -480,11 +523,12 @@ stdout 每個檔案一行：`<路徑>: written` 或 `<路徑>: unchanged`；診�
 
 ```sh
 cargo test -p agent                                     # 全部
-cargo test -p agent --lib                               # 單元測試：設定、憑證、TLS、MQTT 編解碼、退避、心跳、sd_notify、liveness，以及 Modbus 的規劃、PDU、解碼、輪詢、MBAP 與 RTU 切框、共用連線的輪流、keepalive、一小時的節拍漂移、設定範圍、連線位址的限制
-cargo test -p agent --test link                         # MQTT 行為，對腳本化的 broker：在線狀態、訂閱、in-flight 上限、PUBACK、keepalive、退避、協定錯誤、停止
+cargo test -p agent --lib                               # 單元測試：設定、憑證、TLS、MQTT 編解碼、退避、心跳、sd_notify、liveness、憑證換發（排程、重試、檢查、原子寫檔），以及 Modbus 的規劃、PDU、解碼、輪詢、MBAP 與 RTU 切框、共用連線的輪流、keepalive、一小時的節拍漂移、設定範圍、連線位址的限制
+cargo test -p agent --test link                         # MQTT 行為，對腳本化的 broker：在線狀態、訂閱、in-flight 上限、PUBACK、keepalive、退避、協定錯誤、停止、換發後的連線輪替與憑證被拒的判斷
 cargo test -p agent --test liveness                     # systemd watchdog 的進度判斷：連線的每個等待都宣告期限、卡住的連線工作讓通知停下
 cargo test -p agent --test transport                    # 整條連線在行程內：兩層 TLS 協商的內容、resumption、重連、每種拒絕、內層的憑證鏈、名稱、用途與根 CRL
 cargo test -p agent --test broker                       # 對 Mosquitto 容器（podman 或 docker）：mTLS、retained、0x87、will、broker 與轉接重啟後重連
+cargo test -p agent --test renewal                      # 憑證換發，對替代的 HTTPS 換發端點：被拒時換發並重連、429／503 的 Retry-After、外層 TLS 的 alert 不觸發換發；對 Mosquitto 容器：到期前換發不掉訊息、過期後換發
 cargo test -p agent --test binary                       # 執行檔：--check（含根 CRL 的狀態）、sd_notify、訂閱與套用設定、重開後以存下的設定輪詢、SIGTERM；provision 的參數錯誤、沒有 TPM 裝置、非 /dev/tpmrm 的裝置
 cargo test -p agent --test systemd_unit                 # unit 檔與 systemd-analyze
 cargo test -p agent --test dependencies                 # 閘道器建置的相依
@@ -506,7 +550,7 @@ cargo test -p agent --test provision_install            # swtpm 容器：provisi
 
 - `link` 與 Modbus 的整合測試都用停住的時鐘（`start_paused`，Modbus 另加 `testkit::clock::manual()`）：keepalive、退避與逾時只在其他事情都停下時才觸發，機器再忙也不會誤判。
 - 位址限制的測試例外：被拒絕的連線不等任何計時器，它們用真的時鐘與 60 秒的連線逾時，正常情況下碰不到。連到假 Modbus 端點的測試都以 `exempt_for_tests` 放行 127.0.0.1（見「連線位址的限制」）。位址限制的單元測試以替身解析器與撥號紀錄驗證只查一次、只撥檢查過的位址；替身只真的撥 loopback，所以測試不會對執行機器所在的網路送封包。
-- `transport`、`broker`、`binary` 走真的 socket，每個等待都以 `testkit::clock::bounded` 設上限。WebSocket 前端（替代入口與 mqtt-bridge）、測試 CA 與 Mosquitto 容器來自 `testkit::mqtt`，用法見 [`crates/testkit/README.md`](../../crates/testkit/README.md)「MQTT 測試環境」。所有憑證與金鑰在測試時產生，不進 repo。
-- `broker` 需要 podman 或 docker：沒有時略過，`CI` 有設時失敗。
+- `transport`、`broker`、`renewal`、`binary` 走真的 socket，每個等待都以 `testkit::clock::bounded` 設上限。WebSocket 前端（替代入口與 mqtt-bridge）、測試 CA 與 Mosquitto 容器來自 `testkit::mqtt`，用法見 [`crates/testkit/README.md`](../../crates/testkit/README.md)「MQTT 測試環境」。所有憑證與金鑰在測試時產生，不進 repo。
+- `broker` 與 `renewal` 的 Mosquitto 測試需要 podman 或 docker：沒有時略過，`CI` 有設時失敗。
 - 假 Modbus 端點的用法見 [`crates/testkit/README.md`](../../crates/testkit/README.md)「假 Modbus 端點」。
 - `tpm_swtpm`、`tpm_provision`、`tpm_endorsement` 與 `provision` 的 swtpm 來自 `testkit::swtpm`（映像、session 與 tpm2-tools 的用法見 [`crates/testkit/README.md`](../../crates/testkit/README.md)「軟體 TPM」）。`tpm_swtpm` 以 tpm2-tools 佈建金鑰，比對 tpm2-tools 算的 SubjectPublicKeyInfo、以公鑰驗證簽章，並做一次真的 TLS 1.3 mTLS 握手（測試 CA 為 TPM 公鑰簽發用戶端憑證，CertificateVerify 剛好一次 TPM2_Sign，resumption 不簽章）。沒有 podman 或 docker 時略過，設了 `CI` 時失敗。解析與執行緒的行為在單元測試（`cargo test -p agent --lib tpm`）以 swtpm 錄下的回應與假 TPM 測。

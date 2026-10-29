@@ -1,0 +1,35 @@
+test heartbeat::tests::heartbeats_report_the_expiry_of_the_renewed_certificate ... ok
+test config::tests::renewal_settings_are_bounded ... ok
+test renewal::tests::a_failed_write_leaves_the_old_certificate_file ... ok
+test renewal::tests::retries_wait_for_retry_after_and_then_the_backoff ... ok
+test renewal::tests::renewal_is_due_with_the_configured_share_of_the_validity_left ... ok
+test renewal::tests::a_renewal_swaps_in_the_new_certificate_everywhere ... ok
+test renewal::tests::retry_after_is_read_only_as_seconds ... ok
+test renewal::tests::the_certificate_file_is_replaced_atomically_with_its_permissions ... ok
+test renewal::tests::pem_chains_round_trip_and_only_certificates_are_accepted ... ok
+test renewal::tests::a_refused_certificate_is_renewed_at_once_and_a_refused_renewal_waits ... ok
+test renewal::tests::a_clock_far_ahead_renews_once_and_not_in_a_loop ... ok
+test renewal::tests::a_renewed_certificate_that_fails_a_check_changes_nothing ... ok
+test renewal::tests::a_challenge_the_agent_did_not_ask_for_is_not_signed ... ok
+test renewal::tests::failed_attempts_back_off_and_obey_retry_after ... ok
+test renewal::tests::renewal_waits_for_the_schedule_and_then_for_the_new_certificate_s_schedule ... ok
+test result: ok. 202 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.65s
+test a_subscription_refused_during_a_stop_still_ends_with_a_normal_disconnect ... ok
+test puback_codes_decide_the_outcome_and_a_refusal_carries_the_brokers_reason ... ok
+test connack_refusals_count_at_once_and_silent_inner_failures_only_after_a_while ... ok
+test a_refused_online_status_ends_the_connection_and_the_link_tries_again ... ok
+test a_refused_subscription_ends_the_connection_and_never_reports_connected ... ok
+test a_certificate_alert_is_reported_as_a_refusal_of_the_credentials_in_use ... ok
+test a_shutdown_during_a_rotation_stops_the_link ... ok
+test refused_connections_back_off_with_jitter_and_never_give_up ... ok
+test renewed_credentials_rotate_the_connection_without_losing_what_it_accepted ... ok
+test a_held_permit_cannot_hold_up_a_rotation_past_its_deadline ... ok
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 46 filtered out; finished in 0.00s
+test an_expired_certificate_is_renewed_and_the_broker_takes_the_new_one ... ok
+test a_certificate_the_broker_refuses_is_renewed_over_https_and_the_agent_reconnects_with_it ... ok
+test the_endpoint_s_429_and_503_are_waited_out_and_each_retry_starts_with_a_challenge ... ok
+renewal under load: 933 messages, 0 retried while the link took none, none lost
+test a_short_lived_certificate_is_renewed_before_it_expires_without_losing_messages ... ok
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 21.73s
+exit 0 at 13:43:03 (build host)
+
