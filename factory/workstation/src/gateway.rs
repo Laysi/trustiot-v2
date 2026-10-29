@@ -24,7 +24,9 @@
 //! - **ssh's environment**: only [`KEPT_ENVIRONMENT`] of the tool's, so a `SendEnv` in the
 //!   operator's ssh configuration has nothing else to forward.
 //!
-//! ssh runs with [`SSH_OPTIONS`]: no password prompt (`BatchMode`), no terminal, no agent or X11
+//! ssh runs with [`SSH_OPTIONS`]: no password prompt (`BatchMode`), only the keys the ssh
+//! configuration names with `IdentityFile` (`IdentitiesOnly`, so no other key loaded in the
+//! operator's ssh agent is offered to a gateway), no terminal, no agent or X11
 //! forwarding (a gateway must not reach the operator's ssh agent), no port forwardings, no local
 //! command, no connection sharing (each attempt is its own connection, and no master process
 //! outlives the tool holding its pipes), and keepalives so a dead connection ends instead of
@@ -82,6 +84,8 @@ pub const SSH_OPTIONS: &[&str] = &[
     "-x",
     "-o",
     "BatchMode=yes",
+    "-o",
+    "IdentitiesOnly=yes",
     "-o",
     "ConnectTimeout=20",
     "-o",
@@ -318,13 +322,16 @@ impl fmt::Debug for UploadedAgent {
 }
 
 impl UploadedAgent {
-    /// Reads the executable at `path`: a regular file of 1 byte to [`MAX_AGENT_BYTES`].
+    /// Reads the executable at `path`: a regular file of 1 byte to [`MAX_AGENT_BYTES`] that
+    /// belongs to the user running the tool and that the group and others cannot write to
+    /// ([`files::read_executable`]): it runs as root on the gateway.
     ///
     /// # Errors
     ///
-    /// When it cannot be read, is not a regular file, is empty or is too large.
+    /// When it cannot be read, is not a regular file, belongs to another user, is writable by
+    /// the group or others, is empty or is too large.
     pub fn load(path: &Path) -> Result<Self, Error> {
-        let bytes = files::read_public(path, MAX_AGENT_BYTES)?;
+        let bytes = files::read_executable(path, MAX_AGENT_BYTES)?;
         if bytes.is_empty() {
             return Err(Error::BadFile {
                 path: path.to_owned(),
@@ -973,7 +980,7 @@ mod tests {
     fn destinations_are_never_options() {
         for good in [
             "gateway-01",
-            "pi@10.0.0.5",
+            "admin@192.0.2.10",
             "admin@gw.factory.example",
             "fe80::1%eth0",
             "user@[2001:db8::1]",

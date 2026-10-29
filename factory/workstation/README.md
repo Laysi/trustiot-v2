@@ -128,7 +128,7 @@ trustiot-workstation register --hardware-id <硬體 ID> --csr gateway.csr --ek e
 | `--hardware-id` | 閘道器的硬體 ID：1 到 64 個 ASCII 英數字、`.`、`_`、`-`，以英數字開頭。**取自閘道器標籤**（見下方），不取自閘道器的回答 |
 | `--gateway` | ssh 目的地：`[使用者@]主機`，主機是名稱、位址或 `~/.ssh/config` 裡的 Host。只接受 ASCII 英數字、`.`、`_`、`-`、`:`、`%`、`[`、`]` 與至多一個 `@`，不以 `-` 開頭；埠號、金鑰與其他設定寫在 ssh 設定裡 |
 | `--handle` | 閘道器金鑰的 TPM persistent handle，`0x` 加 1 到 8 個十六進位數字，預設 `0x81000100`。只接受 owner 範圍（`0x81000000` 到 `0x817fffff`），不接受 SRK 的 `0x81000001`。與 agent 的預設相同，平常不必給 |
-| `--upload-agent` | 每次執行 `provision` 前把這個 agent 執行檔（aarch64，最大 64 MiB）上傳到閘道器的暫存目錄執行，結束後刪除；不給時執行閘道器上已安裝的 `trustiot-agent`。登錄後安裝憑證一律用閘道器上已安裝的 agent（見「把憑證鏈與根憑證裝回閘道器」） |
+| `--upload-agent` | 每次執行 `provision` 前把這個 agent 執行檔（aarch64，最大 64 MiB）上傳到閘道器的暫存目錄執行，結束後刪除；不給時執行閘道器上已安裝的 `trustiot-agent`。檔案必須屬於執行工具的使用者，群組與其他人不能寫入（例如 0755），否則拒絕：它在閘道器上以 root 執行。登錄後安裝憑證一律用閘道器上已安裝的 agent（見「把憑證鏈與根憑證裝回閘道器」） |
 | `--remote-sudo` | 在閘道器上以 `sudo -n` 執行 agent（ssh 的使用者讀不了 `/dev/tpmrm0`、寫不了 agent 的檔案時；安裝憑證也用它）。`-n` 讓 sudo 需要密碼時直接失敗，不會卡住；閘道器要為這個使用者設定免密碼執行 agent |
 | `--allow-new-key` | 工作站已有這個硬體 ID 的紀錄、閘道器的 TPM 卻沒有金鑰時，仍建立新金鑰並送出（見「TPM 被清除過」）。只在確認過標籤、要讓平台回答時才給 |
 | `--csr` | 從檔案時：閘道器 TPM 金鑰的 CSR，一個 PEM `CERTIFICATE REQUEST`，ECDSA P-256，以 ecdsa-with-SHA256 由它自己的金鑰簽章。不能和 `--gateway` 一起給 |
@@ -148,13 +148,14 @@ trustiot-workstation register --hardware-id <硬體 ID> --csr gateway.csr --ek e
 
 工作站要先能以 ssh 金鑰登入閘道器，不需要輸入任何東西：
 
-- 工具以 `BatchMode=yes` 執行 ssh，不會問密碼、passphrase 或主機金鑰。金鑰放在 ssh-agent（工具保留 `SSH_AUTH_SOCK`）或沒有 passphrase 的金鑰檔，以 `~/.ssh/config` 指定。
+- 工具以 `BatchMode=yes` 執行 ssh，不會問密碼、passphrase 或主機金鑰。金鑰放在 ssh-agent（工具保留 `SSH_AUTH_SOCK`）或沒有 passphrase 的金鑰檔。
+- **必須在 `~/.ssh/config` 為閘道器設定 `IdentityFile`**（金鑰在 ssh-agent 時指向它的公鑰檔）。工具固定加上 `IdentitiesOnly=yes`，ssh 只送出 `IdentityFile` 指定的金鑰，不會把 ssh-agent 裡的其他金鑰拿去給閘道器試；沒有設定時 ssh 只試預設的 `~/.ssh/id_*`。
 - **閘道器的主機金鑰要先在 `known_hosts` 裡**。新閘道器的主機金鑰在出廠映像第一次開機時產生，產線網路上可以在 `~/.ssh/config` 為閘道器的網段設 `StrictHostKeyChecking accept-new`（第一次連線記下、之後改變就拒絕）；工具不覆寫這個設定，也不關閉主機金鑰檢查。重刷的閘道器主機金鑰會變，ssh 拒絕連線時以 `ssh-keygen -R <主機>` 移除舊的那筆。
-- 工具固定加上 `-T -a -x` 與 `ClearAllForwardings=yes`、`ForwardAgent=no`、`ForwardX11=no`、`PermitLocalCommand=no`、`ControlMaster=no`、`ControlPath=none`（不轉送 agent、不共用連線）、`ConnectTimeout=20`、`ServerAliveInterval=15`、`ServerAliveCountMax=4`、`LogLevel=ERROR`。
+- 工具固定加上 `-T -a -x` 與 `IdentitiesOnly=yes`、`ClearAllForwardings=yes`、`ForwardAgent=no`、`ForwardX11=no`、`PermitLocalCommand=no`、`ControlMaster=no`、`ControlPath=none`（不轉送 agent、不共用連線）、`ConnectTimeout=20`、`ServerAliveInterval=15`、`ServerAliveCountMax=4`、`LogLevel=ERROR`。
 
 **閘道器端的 ssh 限制（正式產線的前提，Laysi/trustiot-v2#219）**：能在閘道器上執行 agent 的人，就能決定閘道器的金鑰與信任錨（Laysi/trustiot-v2#617 的安裝以 root 執行），所以正式產線的閘道器不讓工作站的 ssh 帳號執行任意指令。採用的做法：
 
-- 工作站用**專用的 ssh 金鑰**（只給這個工具用），在 `~/.ssh/config` 為閘道器設 `IdentityFile` 與 `IdentitiesOnly yes`。
+- 工作站用**專用的 ssh 金鑰**（只給這個工具用），在 `~/.ssh/config` 為閘道器設 `IdentityFile`（工具已固定加上 `IdentitiesOnly=yes`）。
 - 閘道器上的專用帳號在 `authorized_keys` 以 `restrict,command="sudo -n /usr/local/libexec/trustiot-provision-ssh"` 綁這把金鑰：不論工作站送什麼，sshd 只執行這個固定的轉接程式，不給 shell、轉送或 pty。
 - sudoers 只允許這一個沒有參數的命令（`<帳號> ALL=(root) NOPASSWD: /usr/local/libexec/trustiot-provision-ssh ""`，空字串表示不接受任何參數），並以 `env_keep` 只保留 `SSH_ORIGINAL_COMMAND`；不用 `trustiot-agent provision *` 這類萬用字元。
 - 轉接程式從 `SSH_ORIGINAL_COMMAND` 讀工作站的請求，只接受固定的幾種形式、每個字都要符合上面的規則（英數字、`.`、`_`、`-`），再以固定的參數執行 `trustiot-agent provision`（與 #617 的安裝）；其他一律拒絕。
@@ -164,7 +165,7 @@ trustiot-workstation register --hardware-id <硬體 ID> --csr gateway.csr --ek e
 
 步驟：
 
-1. **送出前先檢查所有輸入**：硬體 ID、handle、目的地（上面的規則）與 `--upload-agent` 的檔案；不合規則時結束碼 2，**ssh 沒有執行**。工作站私鑰、憑證與 session 也先載入，載入不了時同樣什麼都沒送到閘道器。
+1. **送出前先檢查所有輸入**：硬體 ID、handle、目的地（上面的規則）與 `--upload-agent` 的檔案；不合規則時結束碼 2（`--upload-agent` 的檔案屬於別人或群組、其他人可寫入時是 1），**ssh 沒有執行**。工作站私鑰、憑證與 session 也先載入，載入不了時同樣什麼都沒送到閘道器。
 2. **檢查（`trustiot-agent provision --inspect`）**：只讀 TPM，不建立任何東西。
 3. **TPM 沒有金鑰時**：工作站沒有這個硬體 ID 的紀錄（新閘道器）就執行 `trustiot-agent provision` 建立金鑰；有紀錄就停在結束碼 20（見「TPM 被清除過」），除非給了 `--allow-new-key`。建立後的報告與檢查時的 endorsement key 要相同。
 4. **TPM 已有金鑰時**：沿用它，不再執行第二次；檢查的報告已經帶著以這把金鑰簽的 CSR。
@@ -303,13 +304,13 @@ cf-access-client-secret: <client secret>
 
 - 結果印在 stdout，提示與日誌印在 stderr。結束碼見「結束碼」。
 - `TRUSTIOT_WORKSTATION_LOG` 設定日誌等級：`off`、`error`、`warn`、`info`（預設）、`debug`、`trace`。只記這個工具自己的事件（方法、路徑、狀態碼、檔案路徑），連 `trace` 也不記驗證碼、cookie、`Set-Cookie`、私鑰、`--headers-file` 的值，或登錄請求的簽章與 nonce；email 地址也不記。
-- 平台回錯誤時只顯示狀態碼與 M1 錯誤的 `code`、訊息 key 與欄位，不顯示回應本文的其他內容。這些來自伺服器的文字與序號在印出前，控制字元（終端機的跳脫序列、換行）都改寫成 `\u{..}`，過長的截斷。
+- 平台回錯誤時只顯示狀態碼與 M1 錯誤的 `code`、訊息 key 與欄位，不顯示回應本文的其他內容。這些來自伺服器的文字與序號在印出前，控制字元（終端機的跳脫序列、換行）、格式字元（例如會反轉顯示方向的 U+202E、零寬空白 U+200B）與行、段落分隔符都改寫成 `\u{..}`，過長的截斷。
 
 ## 安全上的做法與限制
 
 - **`http://` 只限 loopback 的 IP 位址**：不接受 `localhost` 這個名稱，它經過名稱解析，可能被導向別處。
 - **只有 `register` 重試**：每個請求用一條新的連線、只送一次；沒有連線池（連線池可能在連線被關掉時重送請求）。`login`、`enroll`、`logout` 不重試。`register` 的重試是工具自己的一次新嘗試（新的簽章與 nonce），只在登錄 API 的冪等保證之下才做，見「`register`」。
-- **ssh**：工具執行系統的 `ssh`（`PATH` 上的），不自己實作 SSH；主機金鑰的檢查、金鑰與 `~/.ssh/config` 都照 OpenSSH 的設定。工具只控制命令列（固定選項、`--` 之後才是目的地，目的地不能以 `-` 開頭）、遠端指令（固定的腳本，參數只有檢查過的字）、環境（只留六個變數）與標準輸入（只有要上傳的 agent）。閘道器回的 stdout 最多讀 16 KiB、stderr 最多留 8 KiB，印出前改寫控制字元。閘道器被控制時它能回任何報告：工具的檢查保證報告前後一致、屬於這個硬體 ID，但證明不了金鑰在 TPM 裡，這要靠出廠流程的實體控制（決策 12）。
+- **ssh**：工具執行系統的 `ssh`（`PATH` 上的），不自己實作 SSH；主機金鑰的檢查、金鑰與 `~/.ssh/config` 都照 OpenSSH 的設定。工具只控制命令列（固定選項、`--` 之後才是目的地，目的地不能以 `-` 開頭）、遠端指令（固定的腳本，參數只有檢查過的字）、環境（只留六個變數）與標準輸入（只有要上傳的 agent）。閘道器回的 stdout 最多讀 16 KiB、stderr 最多留 8 KiB，印出前改寫控制字元與格式字元。閘道器被控制時它能回任何報告：工具的檢查保證報告前後一致、屬於這個硬體 ID，但證明不了金鑰在 TPM 裡，這要靠出廠流程的實體控制（決策 12）。
 - **TLS**：rustls 與 ring，TLS 1.2 與 1.3；信任系統的 CA（`SSL_CERT_FILE`、`SSL_CERT_DIR` 有設時用它們）或只信任 `--ca-file`。憑證與主機名稱的檢查不能關閉；不走 proxy、不跟隨重新導向。
 - **跨站檢查**：請求不帶 `Origin` 與 `Sec-Fetch-Site`，身分服務的跨站檢查因此放行（[services/identity/README.md](../../services/identity/README.md)「跨站請求」）。
 - **session 綁定平台**：session 檔記下設定它的平台網址，cookie 只送回那個網址。
@@ -338,4 +339,4 @@ cargo test -p workstation
 - `tests/verify.rs`（Linux）：`verify` 跟著 `next_cursor` 讀完事件紀錄、只取這個硬體 ID 的事件、從紀錄的 `registered_at` 前 1 小時開始，與紀錄比對；找不到時 24；平台的 401 撤銷並刪除 session 檔。並檢查 `--help` 列的每個指令與選項都在本 README，結束碼表每一列都在。
 - `src/install.rs` 的單元測試：以記下參數與 stdin 的替身代替閘道器，送出的命令固定、stdin 剛好是三張重新編碼的 PEM（紀錄裡多出的 PEM 前後文字不會送出）；紀錄的根憑證或 `root_sha256` 不是操作員給的指紋（含整筆紀錄一致地換成別的根）時結束碼 30、少了簽發 CA 時 31、鏈不通或 CN 不符時 1，都沒有呼叫替身；閘道器的 8 是 32，9、2 與 127 是 33，其他結束狀態與訊號是 1，訊息裡沒有控制字元；閘道器的輸出裡的控制字元與 Unicode 格式字元（U+202E 等）顯示成空白；`Payload` 的 `Debug` 不顯示內容。
 - `services/certs/tests/workstation_tool.rs`（certs 服務的測試，需要 podman 或 docker）：真的 certs 服務與 Postgres，前面是檢查 cookie、換成內部 token 的 ingress 替身。工具 `enroll` 後登錄、重跑、再讓回應在服務提交後遺失，每個硬體 ID 都剛好一筆登錄、一張閘道器憑證、一個 `certs.gateway_registered` 事件。
-- 各模組的單元測試：包裝型別的遮蔽、檔案權限、FIFO 與符號連結目錄被拒絕、擁有者檢查、網址規則（含 `localhost` 被拒絕）、標頭檔格式與錯誤訊息不含內容、伺服器文字的控制字元改寫、HTTPS 只信任 `--ca-file`、簽章可由 ring 驗證、nonce 不重複、重試間隔與上限、紀錄的原子替換與格式檢查、日誌的權限檢查。
+- 各模組的單元測試：包裝型別的遮蔽、檔案權限、FIFO 與符號連結目錄被拒絕、擁有者檢查、網址規則（含 `localhost` 被拒絕）、標頭檔格式與錯誤訊息不含內容、伺服器文字的控制字元與格式字元改寫、HTTPS 只信任 `--ca-file`、簽章可由 ring 驗證、nonce 不重複、重試間隔與上限、紀錄的原子替換與格式檢查、日誌的權限檢查。

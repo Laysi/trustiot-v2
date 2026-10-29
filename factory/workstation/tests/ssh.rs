@@ -13,6 +13,7 @@
 mod support;
 
 use std::collections::HashSet;
+use std::path::Path;
 
 use protocol::GatewayId;
 use protocol::provisioning::KeyHandle;
@@ -393,6 +394,26 @@ async fn ssh_options_without_gateway_are_refused() {
         assert!(run.stderr.contains("needs --gateway"), "{}", run.stderr);
     }
     assert_eq!(bench.ssh.count(), 0);
+}
+
+#[tokio::test]
+async fn an_agent_file_others_could_replace_is_never_uploaded() {
+    let bench = Bench::start("ssh-agent-file", Vec::new()).await;
+    let (agent, _) = canned_agent(&bench);
+    for mode in [0o775, 0o757, 0o777] {
+        support::set_mode(Path::new(&agent), mode);
+        let run = bench
+            .run(&bench.register_args("tg-0011", &["--upload-agent", &agent]))
+            .await;
+        assert_eq!(run.code, Some(1), "{mode:o}: {}", run.output());
+        assert!(
+            run.stderr.contains("must not be writable by the group or others"),
+            "{mode:o}: {}",
+            run.stderr
+        );
+    }
+    assert_eq!(bench.ssh.count(), 0, "ssh never ran");
+    support::set_mode(Path::new(&agent), 0o755);
 }
 
 #[tokio::test]

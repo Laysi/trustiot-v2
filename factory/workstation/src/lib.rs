@@ -64,6 +64,15 @@ pub enum Error {
         path.display()
     )]
     DirectoryTooOpen { path: PathBuf, mode: u32 },
+    /// A file the tool uploads to run on a gateway (`--upload-agent`) is writable by the group
+    /// or others, who could replace what runs there.
+    #[error(
+        "{} has mode {mode:04o}: a file run on the gateway must not be writable by the group or \
+         others (chmod go-w {})",
+        path.display(),
+        path.display()
+    )]
+    WritableByOthers { path: PathBuf, mode: u32 },
     /// A secret file, or a directory the tool keeps files in, belongs to another user, who could
     /// read or replace it.
     #[error(

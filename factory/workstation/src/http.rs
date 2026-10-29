@@ -35,6 +35,8 @@ use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::net::TcpStream;
 use tokio_rustls::TlsConnector;
 use tracing::{debug, trace};
+use unicode_properties::GeneralCategory;
+use unicode_properties::general_category::UnicodeGeneralCategory as _;
 use zeroize::Zeroizing;
 
 use crate::Error;
@@ -208,7 +210,9 @@ pub struct Response {
 const MAX_PRINTED_CHARS: usize = 120;
 
 /// `text` from a server, made safe to print on a terminal: control characters (escape
-/// sequences, carriage returns, line breaks) are written as `\u{..}` and the text is cut to
+/// sequences, carriage returns, line breaks), format characters (bidirectional overrides such as
+/// U+202E, zero-width spaces such as U+200B) and the line and paragraph separators are written as
+/// `\u{..}`, so nothing printed can reorder or hide what follows it, and the text is cut to
 /// [`MAX_PRINTED_CHARS`] characters.
 #[must_use]
 pub fn printable(text: &str) -> String {
@@ -218,13 +222,24 @@ pub fn printable(text: &str) -> String {
             shown.push_str("...");
             break;
         }
-        if character.is_control() {
+        if escaped(character) {
             shown.extend(character.escape_unicode());
         } else {
             shown.push(character);
         }
     }
     shown
+}
+
+/// Whether [`printable`] writes `character` as an escape.
+fn escaped(character: char) -> bool {
+    matches!(
+        character.general_category(),
+        GeneralCategory::Control
+            | GeneralCategory::Format
+            | GeneralCategory::LineSeparator
+            | GeneralCategory::ParagraphSeparator
+    )
 }
 
 /// An error status from the platform, with the M1 error body's code, message key,
@@ -831,6 +846,18 @@ mod tests {
         );
         let long = "x".repeat(500);
         assert_eq!(printable(&long).chars().count(), MAX_PRINTED_CHARS + 3);
+    }
+
+    #[test]
+    fn format_characters_and_separators_are_escaped() {
+        // A right-to-left override that would show "tg-0001" as "1000-gt", a zero-width space,
+        // a byte order mark, a soft hyphen, and the line and paragraph separators.
+        let shown = printable("a\u{202e}tg-0001\u{200b}b\u{feff}c\u{ad}d\u{2028}e\u{2029}f");
+        assert_eq!(
+            shown,
+            r"a\u{202e}tg-0001\u{200b}b\u{feff}c\u{ad}d\u{2028}e\u{2029}f"
+        );
+        assert_eq!(printable("tg-0001 é 漢字"), "tg-0001 é 漢字");
     }
 
     #[test]
