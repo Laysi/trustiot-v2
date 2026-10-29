@@ -303,26 +303,26 @@ async fn revoke_certificate(
         }
         Err(problem) => return failed(&problem),
     };
-    // Committed: give the issuing CA a CRL that lists it now. A failure is logged and leaves the
-    // revocation and this response as they are; the CRL job catches up.
-    let crl_reissued = match row.try_get::<String, _>("ca_key_id") {
-        Ok(ca_key_id) => state.crls.after_revocation(&ca_key_id, &serial).await,
-        // ledger_view below fails on the same column and answers 503.
-        Err(_) => false,
-    };
-    match ledger_view(&serial, &row) {
-        Ok(view) => {
-            tracing::info!(
-                user_id = %user.user_id(),
-                serial = %view.serial,
-                ca_key_id = %view.ca_key_id,
-                workstation = %view.workstation,
-                reason = reason.map_or("none", RevocationReason::as_str),
-                crl_reissued,
-                "revoked a workstation certificate"
-            );
-            ok(StatusCode::OK, &view)
-        }
+    // Committed. The audit line goes out first, so it is written even when the new CRL below
+    // takes long and the request is dropped meanwhile.
+    let view = ledger_view(&serial, &row);
+    if let Ok(view) = &view {
+        tracing::info!(
+            user_id = %user.user_id(),
+            serial = %view.serial,
+            ca_key_id = %view.ca_key_id,
+            workstation = %view.workstation,
+            reason = reason.map_or("none", RevocationReason::as_str),
+            "revoked a workstation certificate"
+        );
+    }
+    // Give the issuing CA a CRL that lists it now. It logs its outcome; a failure leaves the
+    // revocation and this response as they are, and the CRL job catches up.
+    if let Ok(ca_key_id) = row.try_get::<String, _>("ca_key_id") {
+        state.crls.after_revocation(&ca_key_id, &serial).await;
+    }
+    match view {
+        Ok(view) => ok(StatusCode::OK, &view),
         // Revoked and committed; only reading the row back failed.
         Err(problem) => failed(&problem),
     }

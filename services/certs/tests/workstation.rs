@@ -856,7 +856,10 @@ async fn a_revocation_is_in_the_published_crl_at_once_or_after_a_failure_within_
     let (after, _) = stored_crl(&product, &ca_key_id).await;
     assert_eq!(after, before + 1, "the next CRL number");
     let line = revocation_line(&service, &listed.serial).await;
-    assert_eq!(line["fields"]["crl_reissued"], json!(true), "{line}");
+    assert!(
+        line["fields"]["user_id"].is_string(),
+        "the audit line: {line}"
+    );
     let issued = crl_lines(&service, &ca_key_id)
         .into_iter()
         .find(|line| line["fields"]["crl_number"] == after)
@@ -868,7 +871,7 @@ async fn a_revocation_is_in_the_published_crl_at_once_or_after_a_failure_within_
     );
 
     // 2. The new CRL fails: another session holds the CA's CRL row, so the attempt gives up when
-    //    its lock wait (5 s, half the 10 s limit) runs out. The revocation still answers 200 and
+    //    its lock wait (a third of the 10 s limit) runs out. The revocation still answers 200 and
     //    is in the ledger; an ERROR line names the failure; the CRL stays as it was.
     let mut blocker = product.superuser().await;
     let mut blocking = blocker.begin().await.expect("a transaction");
@@ -894,7 +897,10 @@ async fn a_revocation_is_in_the_published_crl_at_once_or_after_a_failure_within_
         "revoked in the ledger: {ledger_rows:?}"
     );
     let line = revocation_line(&service, &failed.serial).await;
-    assert_eq!(line["fields"]["crl_reissued"], json!(false), "{line}");
+    assert!(
+        line["fields"]["user_id"].is_string(),
+        "the audit line: {line}"
+    );
     let error = wait_for("the ERROR line of the failed CRL", || async {
         service
             .stdout

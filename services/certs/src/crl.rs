@@ -41,6 +41,7 @@ use service_kit::Context;
 use service_kit::job_lock::JobLock;
 use service_kit::tenant::{BackgroundTenantDb, TenantDbError};
 use sqlx::{PgConnection, PgPool, Row as _};
+use tracing::Instrument as _;
 
 use crate::authority::{Authority, CaState, IssuingCa, unix_now};
 use crate::config::CrlSchedule;
@@ -520,12 +521,14 @@ impl Reissuer {
 
     /// Call right after the revocation of `serial`, signed by `ca_key_id`, committed: gives the
     /// CA a new CRL now ([`reissue`]) and returns whether the CA's CRL is now up to date (also
-    /// true for a CA that has expired, which needs none). It runs on a task of its own,
-    /// so a caller that goes away (a client that disconnects) does not cancel it, and gives up
-    /// after the timeout: each lock wait in Postgres after half of it, so the statement ends in
-    /// the database too and its connection returns to the pool. A failure is logged as an ERROR and changes nothing for the
-    /// revocation, which stands: the CRL job lists it within one `crl.check_interval`
-    /// ([`refresh`], [`Cause::Unlisted`]).
+    /// true for a CA that has expired, which needs none). It runs on a task of its own, in the
+    /// caller's span, so a caller that goes away (a client that disconnects) does not cancel it,
+    /// and gives up after the timeout. Each of its two lock waits in Postgres gives up after a
+    /// third of the timeout, so a stuck lock ends the statement in the database before the
+    /// timeout and its connection returns to the pool. A failure is logged as an ERROR and
+    /// changes nothing for the revocation, which stands: the CRL job lists it within one
+    /// `crl.check_interval` ([`refresh`], [`Cause::Unlisted`]). Write the revocation's own log
+    /// line before calling this.
     pub async fn after_revocation(&self, ca_key_id: &str, serial: &[u8]) -> bool {
         let (db, ca, schedule, timeout) = (
             self.db.clone(),
@@ -534,18 +537,21 @@ impl Reissuer {
             self.timeout,
         );
         let key_id = ca_key_id.to_owned();
-        let outcome = tokio::spawn(async move {
-            let authority = ca.authority().ok_or(CrlError::NoAuthority)?;
-            match tokio::time::timeout(
-                timeout,
-                reissue(&db, &authority, &key_id, &schedule, unix_now(), timeout / 2),
-            )
-            .await
-            {
-                Ok(result) => result.map(Some),
-                Err(_) => Ok(None),
+        let outcome = tokio::spawn(
+            async move {
+                let authority = ca.authority().ok_or(CrlError::NoAuthority)?;
+                match tokio::time::timeout(
+                    timeout,
+                    reissue(&db, &authority, &key_id, &schedule, unix_now(), timeout / 3),
+                )
+                .await
+                {
+                    Ok(result) => result.map(Some),
+                    Err(_) => Ok(None),
+                }
             }
-        })
+            .instrument(tracing::Span::current()),
+        )
         .await;
         let problem = match outcome {
             Ok(Ok(Some(Reissued::Issued { .. } | Reissued::CaExpired))) => return true,
