@@ -152,7 +152,8 @@ pub struct WorkstationCertificate {
 #[serde(deny_unknown_fields)]
 pub struct RevokeGateway {
     /// Why they are revoked, the same for each. Absent leaves the reason out of the CRL, as RFC
-    /// 5280 recommends over `unspecified`.
+    /// 5280 recommends over `unspecified`. `key_compromise` also ends the gateway's renewals
+    /// for good: its registered key is not trusted any more.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<RevocationReason>,
 }

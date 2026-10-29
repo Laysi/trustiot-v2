@@ -44,7 +44,7 @@ use std::time::{Duration, Instant};
 
 use base64::Engine as _;
 use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
-use certs::gateways::REVOKE_PATH;
+use certs::gateways::{LOCK_GATEWAY_CERTIFICATES, REVOKE_PATH};
 use certs::http::CRL_PATH;
 use certs::pem;
 use certs::registrations::REGISTRATIONS_PATH;
@@ -73,8 +73,9 @@ use serde_json::{Value, json};
 use service_kit::identity::ServiceIdentity;
 use service_kit::tenant::{BackgroundTenantDb, TenantDb};
 use sha2::{Digest, Sha256};
+use sqlx::Connection as _;
 use sqlx::postgres::PgPoolOptions;
-use support::{LIMIT, Service, TestCa, now, temp_dir, wait_for};
+use support::{LIMIT, Reply, Service, TestCa, now, temp_dir, wait_for};
 use testkit::container::{Container, container_runtime, runtime_output, unavailable, unique_name};
 use testkit::mqtt::mosquitto::MOSQUITTO_IMAGE;
 use testkit::product::{DATABASE, ProductPostgres, product_postgres};
@@ -850,6 +851,13 @@ fn changes(service: &Service, hardware_id: &str) -> Vec<String> {
 /// signed with its TPM key `key`. `None` while the service answers 503 (the bindings' lag is
 /// not known yet after a start) or 429 (these retries used up the hardware ID's limit).
 async fn renew(service: &Service, key: &KeyPair, hardware_id: &str) -> Option<RenewedCertificate> {
+    let reply = renewal_answer(service, key, hardware_id).await?;
+    assert_eq!(reply.status, 201, "renew {hardware_id}: {}", reply.body);
+    Some(serde_json::from_str(&reply.body).expect("a renewed certificate"))
+}
+
+/// The answer to [`renew`]'s second step, whatever it is; `None` on 503 or 429 as there.
+async fn renewal_answer(service: &Service, key: &KeyPair, hardware_id: &str) -> Option<Reply> {
     let wait = |status: u16| status == 503 || status == 429;
     let reply = service
         .post_json(
@@ -882,11 +890,20 @@ async fn renew(service: &Service, key: &KeyPair, hardware_id: &str) -> Option<Re
             }),
         )
         .await;
-    if wait(reply.status) {
-        return None;
-    }
-    assert_eq!(reply.status, 201, "renew {hardware_id}: {}", reply.body);
-    Some(serde_json::from_str(&reply.body).expect("a renewed certificate"))
+    (!wait(reply.status)).then_some(reply)
+}
+
+/// How many gateway certificates the ledger has for `hardware_id`, read as the superuser.
+async fn gateway_certificates(product: &ProductPostgres, hardware_id: &str) -> i64 {
+    let mut admin = product.superuser().await;
+    sqlx::query_scalar(
+        "SELECT count(*) FROM certs.issued_certificates
+         WHERE profile = 'gateway' AND subject = $1",
+    )
+    .bind(hardware_id)
+    .fetch_one(&mut admin)
+    .await
+    .expect("count the gateway's certificates")
 }
 
 /// Where the first JSON line of `output` with `message` and these `fields` is.
@@ -1217,8 +1234,9 @@ async fn the_service_keeps_the_brokers_gateway_clients_in_line_with_postgres() {
     // on connecting, only that request can bring a client back within the test.
     drop(service);
     let mut admin = product.superuser().await;
+    // Superseded: a keyCompromise revocation would end the gateway's renewals.
     sqlx::query(
-        "UPDATE certs.issued_certificates SET revoked_at = now(), revocation_reason = 1
+        "UPDATE certs.issued_certificates SET revoked_at = now(), revocation_reason = 4
          WHERE profile = 'gateway' AND subject = $1",
     )
     .bind(GATEWAY_A)
@@ -1484,11 +1502,7 @@ async fn revoking_a_gateway_disconnects_it_and_its_crl_then_refuses_it() {
     });
     let path = REVOKE_PATH.replace("{hardware_id}", REVOKED_GATEWAY);
     let reply = second
-        .post_json(
-            &path,
-            Some(&second.admin_token()),
-            &json!({ "reason": "key_compromise" }),
-        )
+        .post_json(&path, Some(&second.admin_token()), &json!({}))
         .await;
     let answered = started.elapsed();
     assert_eq!(reply.status, 200, "revoke: {}", reply.body);
@@ -1601,6 +1615,104 @@ async fn revoking_a_gateway_disconnects_it_and_its_crl_then_refuses_it() {
         "{REVOKED_GATEWAY} renewed (serial {}): `{CHANGED}` action=added on the second replica, \
          the new certificate connects and publishes ({published:#04x})",
         renewed.serial
+    ));
+
+    // A keyCompromise revocation ends the gateway's renewals: its registered key is not trusted.
+    let mut connected = Gateway::connect(
+        gateway_address,
+        &config(&key_r, &renewed.certificate_chain),
+        REVOKED_GATEWAY,
+    );
+    let reply = second
+        .post_json(
+            &path,
+            Some(&second.admin_token()),
+            &json!({ "reason": "key_compromise" }),
+        )
+        .await;
+    assert_eq!(
+        reply.status, 200,
+        "revoke for keyCompromise: {}",
+        reply.body
+    );
+    assert_eq!(reply.json()["revoked"][0]["serial"], renewed.serial);
+    let how = tokio::task::spawn_blocking(move || connected.wait_closed())
+        .await
+        .expect("the connection watcher");
+    let certificates = gateway_certificates(&product, REVOKED_GATEWAY).await;
+    let refused = wait_for("the renewal's answer", || async {
+        renewal_answer(&second, &key_r, REVOKED_GATEWAY).await
+    })
+    .await;
+    assert_eq!(refused.status, 403, "{}", refused.body);
+    assert_eq!(
+        refused.json()["message_key"],
+        "certificate_renewal.key_compromised"
+    );
+    assert_eq!(
+        gateway_certificates(&product, REVOKED_GATEWAY).await,
+        certificates,
+        "a certificate was signed"
+    );
+    assert_eq!(
+        changes(&second, REVOKED_GATEWAY),
+        ["removed", "added", "removed"]
+    );
+    assert!(!clients(&broker.dynsec()).contains_key(REVOKED_GATEWAY));
+    evidence(format!(
+        "{REVOKED_GATEWAY} revoked again for key_compromise: disconnected ({how}); the renewal \
+         with its registered key: {} {}; {certificates} certificates in the ledger before and \
+         after, no broker client",
+        refused.status, refused.body
+    ));
+
+    // A keyCompromise revocation that commits while a renewal is past its read still ends it:
+    // the renewal waits for the gateway's lock (held here, as a revocation holds it), then reads
+    // again in its signing transaction.
+    let mut holder = product.superuser().await;
+    let mut held = holder.begin().await.expect("a transaction");
+    sqlx::query(LOCK_GATEWAY_CERTIFICATES)
+        .bind(PROBE)
+        .execute(&mut *held)
+        .await
+        .expect("take the probe's lock");
+    let before = gateway_certificates(&product, PROBE).await;
+    let revoke_while_waiting = async {
+        wait_for("the renewal waiting for the probe's lock", || async {
+            let mut watcher = product.superuser().await;
+            let waiting: i64 = sqlx::query_scalar(
+                "SELECT count(*) FROM pg_locks
+                 WHERE locktype = 'advisory' AND classid = 1735881334 AND NOT granted",
+            )
+            .fetch_one(&mut watcher)
+            .await
+            .expect("read the locks");
+            (waiting > 0).then_some(())
+        })
+        .await;
+        sqlx::query(
+            "UPDATE certs.issued_certificates SET revoked_at = now(), revocation_reason = 1
+             WHERE profile = 'gateway' AND subject = $1 AND revoked_at IS NULL",
+        )
+        .bind(PROBE)
+        .execute(&mut *held)
+        .await
+        .expect("revoke the probe for keyCompromise");
+        held.commit().await.expect("commit the revocation");
+    };
+    let (answer, ()) = tokio::join!(renewal_answer(&second, &key_p, PROBE), revoke_while_waiting);
+    let answer = answer.expect("an answer, not 503 or 429");
+    assert_eq!(answer.status, 403, "{}", answer.body);
+    assert_eq!(
+        answer.json()["message_key"],
+        "certificate_renewal.key_compromised"
+    );
+    assert_eq!(gateway_certificates(&product, PROBE).await, before);
+    evidence(format!(
+        "{PROBE}: a renewal that passed its read waited for the gateway's lock; a keyCompromise \
+         revocation committed meanwhile; the renewal answered {} {}; {before} certificates before \
+         and after",
+        answer.status, answer.body
     ));
 }
 

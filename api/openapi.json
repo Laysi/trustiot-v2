@@ -1667,7 +1667,7 @@
             "oneOf": [
               {
                 "$ref": "#/components/schemas/RevocationReason",
-                "description": "Why they are revoked, the same for each. Absent leaves the reason out of the CRL, as RFC\n5280 recommends over `unspecified`."
+                "description": "Why they are revoked, the same for each. Absent leaves the reason out of the CRL, as RFC\n5280 recommends over `unspecified`. `key_compromise` also ends the gateway's renewals\nfor good: its registered key is not trusted any more."
               },
               {
                 "type": "null"
@@ -4210,7 +4210,7 @@
                 }
               }
             },
-            "description": "Revoked now, each certificate listed with its serial number. Before this response the ledger records the revocations and each of their issuing CAs gets a CRL that lists them (should that fail, the CRL job lists them within one check interval, default 5 minutes), and the broker is asked to drop the gateway's permissions, which also disconnects it. The broker refuses the certificates in the TLS handshake once it has loaded the new CRL, within one trust interval (default 30 seconds). A renewal may later give the gateway a new certificate if it is still bound."
+            "description": "Revoked now, each certificate listed with its serial number. Before this response the ledger records the revocations and each of their issuing CAs gets a CRL that lists them (should that fail, the CRL job lists them within one check interval, default 5 minutes), and the broker is asked to drop the gateway's permissions, which also disconnects it. The broker refuses the certificates in the TLS handshake once it has loaded the new CRL, within one trust interval (default 30 seconds). A renewal may later give the gateway a new certificate if it is still bound, unless the reason is `key_compromise`, which ends its renewals for good."
           },
           "400": {
             "content": {
@@ -4272,6 +4272,16 @@
             },
             "description": "An unknown field (`gateway_revocation.unknown_field`), or a reason that is not one of the listed ones (`gateway_revocation.reason_invalid`) (`validation_failed`). Nothing was revoked."
           },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The revocation's task failed (`internal`). Whether anything was revoked is unknown; calling again tells (409 when it was)."
+          },
           "503": {
             "content": {
               "application/json": {
@@ -4280,7 +4290,7 @@
                 }
               }
             },
-            "description": "The database failed (`unavailable`). Nothing was revoked."
+            "description": "The database failed (`unavailable`). Most likely nothing was revoked; should the connection have broken while committing, the revocation may stand without its new CRL and broker step, which the CRL job and the next whole comparison catch up. Calling again tells (409 when it was revoked)."
           }
         },
         "summary": "Revokes every certificate of a gateway that is neither revoked nor expired: decision 6's\nthree steps, see the module's documentation.",

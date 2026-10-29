@@ -3156,7 +3156,7 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Revoked now, each certificate listed with its serial number. Before this response the ledger records the revocations and each of their issuing CAs gets a CRL that lists them (should that fail, the CRL job lists them within one check interval, default 5 minutes), and the broker is asked to drop the gateway's permissions, which also disconnects it. The broker refuses the certificates in the TLS handshake once it has loaded the new CRL, within one trust interval (default 30 seconds). A renewal may later give the gateway a new certificate if it is still bound. */
+            /** @description Revoked now, each certificate listed with its serial number. Before this response the ledger records the revocations and each of their issuing CAs gets a CRL that lists them (should that fail, the CRL job lists them within one check interval, default 5 minutes), and the broker is asked to drop the gateway's permissions, which also disconnects it. The broker refuses the certificates in the TLS handshake once it has loaded the new CRL, within one trust interval (default 30 seconds). A renewal may later give the gateway a new certificate if it is still bound, unless the reason is `key_compromise`, which ends its renewals for good. */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -3219,7 +3219,16 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description The database failed (`unavailable`). Nothing was revoked. */
+            /** @description The revocation's task failed (`internal`). Whether anything was revoked is unknown; calling again tells (409 when it was). */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The database failed (`unavailable`). Most likely nothing was revoked; should the connection have broken while committing, the revocation may stand without its new CRL and broker step, which the CRL job and the next whole comparison catch up. Calling again tells (409 when it was revoked). */
             503: {
                 headers: {
                     [name: string]: unknown;

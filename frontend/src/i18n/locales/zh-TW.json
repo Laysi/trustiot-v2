@@ -140,6 +140,7 @@
   "certificate_renewal.challenge_expired": "這個挑戰已經過期，請重新取得挑戰。",
   "certificate_renewal.signature_refused": "簽章與這台閘道器登錄的金鑰不符。",
   "certificate_renewal.decommissioned": "這台閘道器已經除役，無法換發憑證。",
+  "certificate_renewal.key_compromised": "這台閘道器的金鑰已通報外洩，無法換發憑證。請更換閘道器並登錄新的那台。",
   "certificate_renewal.not_bound": "這台閘道器沒有綁定到租戶，無法換發憑證。",
   "certificate_renewal.bindings_stale": "憑證機構的閘道器綁定資料可能不是最新的，請稍後再試。",
   "certificate_renewal.ca_not_ready": "憑證機構還不能換發憑證，請過幾分鐘再試。",

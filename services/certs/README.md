@@ -36,7 +36,7 @@ Laysi/trustiot-v2#81（2026-10-29）加上：
 
 Laysi/trustiot-v2#636（2026-10-30）加上：
 
-- 平台管理員撤銷一台閘道器的 API `POST /api/certs/v1/gateways/{hardware_id}/revoke`（見[閘道器憑證的撤銷](#閘道器憑證的撤銷)）：撤銷那台閘道器每張還有效的憑證、立刻為它們的簽發 CA 重發 CRL、再拿掉 broker 的 client（斷開連線）。撤銷後的 CRL 重發從此每個副本最多同時兩個（`crl::MAX_CONCURRENT_REISSUES`）。
+- 平台管理員撤銷一台閘道器的 API `POST /api/certs/v1/gateways/{hardware_id}/revoke`（見[閘道器憑證的撤銷](#閘道器憑證的撤銷)）：撤銷那台閘道器每張還有效的憑證、立刻為它們的簽發 CA 重發 CRL、再拿掉 broker 的 client（斷開連線）。以 `key_compromise` 撤銷過的閘道器從此不能換發。撤銷後的 CRL 重發從此每個副本最多同時兩個（`crl::MAX_CONCURRENT_REISSUES`）。
 
 ## CA 階層與私鑰保管
 
@@ -492,7 +492,7 @@ trustiot-workstation register --hardware-id <硬體 ID> --csr gateway.csr --ek e
 
 回應的欄位與出廠登錄相同：`hardware_id`、`serial`、`ca_key_id`、`not_before`、`not_after`、`certificate`、`certificate_chain`（憑證再接簽出它的簽發 CA）與 `root_certificate`（`protocol::renewal::RenewedCertificate`）。
 
-換發不看閘道器現有的憑證：請求不帶憑證、端點不經 mTLS，所以目前的憑證已過期或已撤銷都不影響換發（測試撤銷了閘道器唯一的憑證之後換發）。舊憑證**不撤銷**，留到自然到期（不做 `superseded` 撤銷）：換發後閘道器可能還沒換上新憑證（寫檔失敗、重開機），舊憑證仍要能連 broker；要讓舊憑證立刻失效的情況（解綁、除役、外洩）由撤銷處理（Laysi/trustiot-v2#636、Laysi/trustiot-v2#115）。
+換發不看閘道器現有的憑證：請求不帶憑證、端點不經 mTLS，所以目前的憑證已過期或已撤銷都不影響換發（測試撤銷了閘道器唯一的憑證之後換發）；例外是以 keyCompromise 撤銷過的閘道器，它的登錄金鑰不再可信，從此不能換發（Laysi/trustiot-v2#636，見[閘道器憑證的撤銷](#閘道器憑證的撤銷)的「撤銷與換發」）。舊憑證**不撤銷**，留到自然到期（不做 `superseded` 撤銷）：換發後閘道器可能還沒換上新憑證（寫檔失敗、重開機），舊憑證仍要能連 broker；要讓舊憑證立刻失效的情況（解綁、除役、外洩）由撤銷處理（Laysi/trustiot-v2#636、Laysi/trustiot-v2#115）。
 
 ### 檢查順序與錯誤
 
@@ -511,6 +511,7 @@ trustiot-workstation register --hardware-id <硬體 ID> --csr gateway.csr --ek e
 | 6 | 挑戰過期 | 410 | `conflict` | `challenge_expired` | `challenge_expired` | 是 |
 | 6 | 簽章不對，或硬體 ID 沒有登錄 | 401 | `unauthenticated` | `signature_refused` | `signature_invalid` | 是（沒登錄的硬體 ID 不寫入） |
 | 6 | 已除役 | 403 | `permission_denied` | `decommissioned` | `decommissioned` | 是 |
+| 6 | 有一張閘道器憑證以 keyCompromise 撤銷過（Laysi/trustiot-v2#636，見[閘道器憑證的撤銷](#閘道器憑證的撤銷)） | 403 | `permission_denied` | `key_compromised` | `key_compromised` | 是 |
 | 6 | 沒有有效的綁定（在設備池、或最後的綁定已結束） | 403 | `permission_denied` | `not_bound` | `not_bound` | 是 |
 | 6 | 租戶停權 | 403 | `tenant_suspended` | `error.tenant_suspended` | `tenant_suspended` | 是 |
 | 任何一步 | 資料庫失敗、簽章失敗 | 503，`Retry-After: 5` | `unavailable` | 無 | `unavailable` | 否 |
@@ -634,7 +635,8 @@ curl -sS --fail-with-body -X POST "https://<app 主機>/api/certs/v1/gateways/<�
 | 404 `not_found` | 這個硬體 ID 沒有出廠登錄過（路徑不是合規則的硬體 ID 也是） |
 | 409 `conflict` | 登錄過，但沒有還有效的憑證可撤銷：都已撤銷或都過期（`gateway_revocation.no_valid_certificate`）；同一個請求重送也得到它 |
 | 422 `validation_failed` | 不認得的欄位（`gateway_revocation.unknown_field`）、不是列出的原因（`gateway_revocation.reason_invalid`，例如 `certificate_hold`：撤銷不能收回） |
-| 503 `unavailable` | 資料庫失敗，什麼都沒撤銷 |
+| 500 `internal` | 撤銷的 task 異常結束；不確定撤銷了沒有，再呼叫一次就知道（409 表示已撤銷） |
+| 503 `unavailable` | 資料庫失敗，通常什麼都沒撤銷；只有提交途中斷線時撤銷可能已經成立，但沒有立即的 CRL 與 broker 步驟（由 CRL 工作與下一次完整比對補上）。再呼叫一次就知道（409 表示已撤銷）。ERROR 行帶平台管理員的使用者 id |
 
 被拒絕的請求不撤銷任何憑證、不發 CRL、不動 broker。「登錄過」以簽發紀錄判斷：出廠登錄與第一張閘道器憑證在同一個交易寫入、換發只為登錄過的硬體 ID 簽、沒有任何角色刪得掉簽發紀錄，所以簽發紀錄有這個硬體 ID 的閘道器憑證，就是登錄過；不必以平台角色讀登錄表。
 
@@ -652,7 +654,7 @@ CRL 在斷線之前：斷線時 `crl.pem` 已經列出撤銷的憑證，閘道�
 
 ### 斷線與拒絕的時間（N 與 M）
 
-- **N：撤銷到已經連線的閘道器被斷開，30 秒以內。** 組成是簽發紀錄的交易、重發 CRL（最多 10 秒）、等工作鎖（另一個副本正在比對時每 1 秒再試，`dynsec::LOCK_RETRY`）與 broker 處理 `deleteClient`。`tests/dynsec.rs` 兩個副本、請求送到第二個時量到 回應 6 毫秒、斷線 8 毫秒（建置主機）。broker 連不上或拒絕時，同步記 WARN，最多 30 秒（`dynsec::ERROR_RETRY`）後的完整比對再刪除。
+- **N：撤銷到已經連線的閘道器被斷開，正常時 30 秒以內。** 組成是簽發紀錄的交易、重發 CRL（最多 10 秒）、等工作鎖（每 1 秒再試，`dynsec::LOCK_RETRY`）與 broker 處理 `deleteClient`。「正常」指 broker 連得上、沒有另一個副本正好在做完整比對：完整比對拿著工作鎖直到做完，閘道器很多時它可能要數十秒，N 就再加上它剩下的時間。`tests/dynsec.rs` 兩個副本、請求送到第二個時量到 回應 6 毫秒、斷線 8 毫秒（建置主機）。broker 連不上或拒絕時，同步記 WARN，最多 30 秒（`dynsec::ERROR_RETRY`）後的完整比對再刪除。
 - **M：撤銷到重連在 TLS 被拒，正常時 40 秒以內**：回應時 CRL 已經重發（最多 10 秒），broker 的 sidecar 再過最多一個 `mqttBroker.trustInterval`（預設 30 秒）取得、檢查並以 SIGHUP 載入。在那之前閘道器重連時 TLS 通過，但 dynsec 沒有它的 client，發布與訂閱都得到 0x87；載入之後 TLS 1.3 交握在伺服器檢查用戶端憑證時失敗（rustls 的 `CertificateRevoked`）。立即重發失敗時再加最多一輪 `crl.check_interval`（預設 5 分鐘）。
 
 ### 哪些 dynsec 指令會斷線
@@ -668,9 +670,16 @@ CRL 在斷線之前：斷線時 `crl.pem` 已經列出撤銷的憑證，閘道�
 
 所以撤銷只要刪除 client 就會斷線，不必另外踢線；新增 client（`createClient`）則不斷開已經連著的同名連線（見[broker 權限](#broker-權限dynamic-security)的「只動閘道器的 client」）。這是 chart 釘住的 broker 映像的行為，升級 Mosquitto 時這個測試會發現它改變。
 
-### 撤銷不阻止換發
+### 撤銷與換發：原因決定閘道器能不能回來
 
-換發（見[換發](#換發)）看的是登錄、目前的綁定與租戶狀態，不看之前的撤銷：已登錄、沒有除役、有綁定的閘道器在撤銷之後，仍能以登錄的 TPM 金鑰換到新憑證，broker 同步隨即補回它的 client（`tests/dynsec.rs` 證明這條路徑）。所以單獨撤銷只是讓閘道器換一張新憑證，不是把它擋在外面；TPM 金鑰外洩或要讓閘道器不能再連線時，要再除役或解綁（Laysi/trustiot-v2#115），或停權它的租戶（Laysi/trustiot-v2#108）。
+換發（見[換發](#換發)）看的是登錄、目前的綁定與租戶狀態，以及這台閘道器有沒有憑證以 keyCompromise 撤銷過：
+
+- **以 `key_compromise` 撤銷**：閘道器從此不能換發（403 `certificate_renewal.key_compromised`）。換發證明身分的就是登錄的 TPM 金鑰，金鑰不再可信，就不能再拿它換憑證；照決策 12，換 TPM 視同新設備，舊的除役、新的回產線登錄。閘道器被偷、或懷疑金鑰被濫用時用這個原因，它才真的被擋在外面。這個決定不能收回（撤銷的原因不能改，見[資料庫](#資料庫)）。
+- **其他原因或不寫原因**：已登錄、沒有除役、有綁定、租戶沒停權的閘道器之後仍能以 TPM 金鑰換到新憑證，broker 同步隨即補回它的 client。所以這種撤銷是「作廢目前的憑證、讓閘道器重新換發」，不是把它擋在外面；要擋，再除役或解綁（Laysi/trustiot-v2#115），或停權它的租戶（Laysi/trustiot-v2#108）。
+
+`tests/dynsec.rs` 兩條都走過：不寫原因的撤銷之後換發成功、新憑證能發布；再以 `key_compromise` 撤銷，連線被斷開，換發得到 403，簽發紀錄沒有多一張，broker 沒有 client。
+
+撤銷與換發的簽發以同一個鎖排序（`gateways::LOCK_GATEWAY_CERTIFICATES`，以硬體 ID 為鍵、到交易結束的 advisory lock）：撤銷的交易先取它再撤銷；換發的簽發交易先取它，再查一次有沒有 keyCompromise 撤銷，才簽章。所以換發在讀取之後、簽章之前遇到剛提交的 keyCompromise 撤銷，仍然被拒絕（`tests/dynsec.rs` 拿著鎖讓換發等，期間提交撤銷，換發得到 403、沒有簽出）；撤銷等著一個正在簽章的換發時，換發提交之後撤銷也撤銷它簽出的那張。回應列出的就是這台閘道器在那一刻全部的有效憑證。
 
 ## broker 伺服器憑證
 
@@ -875,7 +884,7 @@ CARGO_BUILD_JOBS=2 cargo test -p certs
 | `tests/renewal.rs` | Laysi/trustiot-v2#81：以工作站登錄閘道器（軟體 P-256 金鑰代替 TPM）、以 `assets_app` 寫 `assets.gateway_bound` 綁定。唯一的憑證被撤銷後換發成功：CN 是硬體 ID、公鑰是登錄的那一把、鏈接上簽發 CA 與根並在根之下驗證為用戶端憑證、`no-store`；簽發紀錄多一列，一筆租戶事件（租戶、序號、綁定 ID、`ca_key_id`）與它同一個交易，讀取的日誌帶硬體 ID 與租戶。除役、沒綁定過、綁定已結束、租戶停權（測試替身）都 403，不簽、不寫簽發紀錄與事件。重送 409；別的金鑰簽 401 且挑戰作廢；別台的挑戰 403 且對那台也作廢；別的用途的挑戰 403；過期 410 再送 409；沒登錄的硬體 ID 拿得到同樣的挑戰、兌換 401；格式錯 422。每次拒絕有 INFO 日誌、`certs.renewal.refused` 依原因的計數（OTLP）；已登錄的硬體 ID 的 7 次拒絕合併成時間窗的列，時間窗結束後成為一筆全平台事件（次數 7 與各原因），回報後列刪除、不再重複；沒登錄的硬體 ID 沒有列也沒有事件。取挑戰時刪掉過期的挑戰。平台角色登不進去（lag 不明）的副本兩步都回 503 `bindings_stale`、`Retry-After: 30`，挑戰沒有作廢，正常的副本之後兌換成功。限流：每個硬體 ID 超過後 429、`Retry-After` 約 1 小時；取挑戰的全域限流超過後 50 個新硬體 ID 都 429、`Retry-After` 1–60 秒，只存下限流放行的 6 個挑戰，之後已經拿到挑戰的閘道器仍然兌換成功（兌換有自己的全域限流），捏造的兌換用完兌換那一道後 429；lag 不明的副本收到 30 個新硬體 ID 的 60 個請求時，只有限流放行的（每一步 6 個）回 503、各記一行 INFO，其餘 429、不記 INFO（容器；`-- --nocapture` 印出測試報告引用的證據行） |
 | `tests/renewal_lag.rs` | Laysi/trustiot-v2#81：資產服務寫一個這個版本不認得的綁定事件，消費端停在它上面；lag 超過 `renewal.max_consumer_lag`（1 秒）後兩步都回 503 `bindings_stale`、`Retry-After: 30`，兌換沒有作廢挑戰。消費端從此停住，所以是自己的測試執行檔、自己的資料庫（容器） |
 | `tests/bindings.rs` | Laysi/trustiot-v2#632：真的服務建立訂閱 `certs.assets-events`（讀 `assets`）；以 `assets_app` 照綁定的寫法在租戶交易寫 `assets.gateway_bound` 後，表裡有這台閘道器、正確的租戶、綁定 ID、`occurred_at` 與事件位置，`gateway_tenant` 與 `bound_gateways` 讀得到；同一個事件再送一次、整個訂閱重播（`Replay::Reprocess`）後仍是同一列、內容不變。自己的訂閱的消費端：同一台閘道器較舊的綁定（log 位置較前、別的租戶）在較新的之後才到時存下但不是目前的綁定；不合規則的硬體 ID 與沒有租戶的綁定進 dead letter，之後的綁定照常處理。租戶狀態：沒有紀錄是正常、只接受較大的版本號、寫入停權後 `tenant_suspended` 為真；租戶交易寫不了別的租戶的狀態（42501）、只看得到自己的。平台角色讀得到兩個租戶的綁定、取 log 最後的綁定、略過已結束的，每次讀取都有一行 `platform database access`（actor `service`、`certs`、呼叫端的 purpose）（容器） |
-| `tests/dynsec.rs` | Laysi/trustiot-v2#633：Mosquitto 以 chart 的設定（`mosquitto.conf` 與閘道器 listener）與 init container 寫的 dynsec 檔（`migrate::mqtt_accounts::reconcile`）啟動，真的服務以 `service:certs` 在服務埠同步，閘道器以出廠登錄簽出的憑證在 8883 以 MQTT 5 連線：已登錄未綁定的閘道器連得上、發布得到 PUBACK 0x87，綁定後同一條連線就能發布（驗收條件 2）；兩台都綁定後，閘道器能發布自己的 `up/`、訂閱自己的 `down/`，發布或訂閱另一台的得到 0x87（驗收條件 1）；沒有變更時多次完整比對不送修改，dynsec 檔逐位元組不變（驗收條件 4）；broker 以只有 chart 項目加上一個不該存在的閘道器 client 的檔案重啟後，一輪比對補回兩台、刪掉多的，服務帳號、角色與群組不變（驗收條件 3）；`trace` 日誌不含 broker 密碼的任何 8 字元片段（驗收條件 5）。Laysi/trustiot-v2#81：閘道器唯一的憑證被撤銷、服務以 `dynsec.interval` 1 小時重啟後，連線時的完整比對刪掉它的 client（舊憑證連得上、發布得到 0x87）；換發 201 之後，單台比對把 client 加回來，日誌裡 `renewed a gateway certificate` 在 `changed a gateway's broker permissions`（`added`）之前，期間沒有完整比對的變更，新憑證的連線能發布。Laysi/trustiot-v2#636：先以 `mosquitto_ctrl dynsec` 對已連線的閘道器逐一下 `removeClientRole`、`addClientRole`、`disableClient`、`enableClient`、`deleteClient`，記下哪些斷線（見[閘道器憑證的撤銷](#閘道器憑證的撤銷)）；兩個副本、完整比對 1 小時一次，平台管理員的撤銷送到第二個：已連線的閘道器在 30 秒（N）內被斷開（DISCONNECT 0x98），第二個副本的日誌依序是撤銷、`issued a new CRL`（`revocation`）、`removed`，第一個副本什麼都沒改，回應時 `crl.pem` 已列出它；broker 載入新 CRL 之前重連得到 CONNACK 0x00、PUBACK 0x87，sidecar 的檢查（`migrate::mqtt_trust::validate`）與 SIGHUP 之後 TLS 交握以 `CertificateRevoked` 失敗，另一台照常發布；換發之後 client 回來、新憑證能發布（容器；`-- --nocapture` 印出測試報告引用的證據行）。同一個檔案的兩個測試共用 Postgres，一次一個 |
+| `tests/dynsec.rs` | Laysi/trustiot-v2#633：Mosquitto 以 chart 的設定（`mosquitto.conf` 與閘道器 listener）與 init container 寫的 dynsec 檔（`migrate::mqtt_accounts::reconcile`）啟動，真的服務以 `service:certs` 在服務埠同步，閘道器以出廠登錄簽出的憑證在 8883 以 MQTT 5 連線：已登錄未綁定的閘道器連得上、發布得到 PUBACK 0x87，綁定後同一條連線就能發布（驗收條件 2）；兩台都綁定後，閘道器能發布自己的 `up/`、訂閱自己的 `down/`，發布或訂閱另一台的得到 0x87（驗收條件 1）；沒有變更時多次完整比對不送修改，dynsec 檔逐位元組不變（驗收條件 4）；broker 以只有 chart 項目加上一個不該存在的閘道器 client 的檔案重啟後，一輪比對補回兩台、刪掉多的，服務帳號、角色與群組不變（驗收條件 3）；`trace` 日誌不含 broker 密碼的任何 8 字元片段（驗收條件 5）。Laysi/trustiot-v2#81：閘道器唯一的憑證被撤銷、服務以 `dynsec.interval` 1 小時重啟後，連線時的完整比對刪掉它的 client（舊憑證連得上、發布得到 0x87）；換發 201 之後，單台比對把 client 加回來，日誌裡 `renewed a gateway certificate` 在 `changed a gateway's broker permissions`（`added`）之前，期間沒有完整比對的變更，新憑證的連線能發布。Laysi/trustiot-v2#636：先以 `mosquitto_ctrl dynsec` 對已連線的閘道器逐一下 `removeClientRole`、`addClientRole`、`disableClient`、`enableClient`、`deleteClient`，記下哪些斷線（見[閘道器憑證的撤銷](#閘道器憑證的撤銷)）；兩個副本、完整比對 1 小時一次，平台管理員的撤銷送到第二個：已連線的閘道器在 30 秒（N）內被斷開（DISCONNECT 0x98），第二個副本的日誌依序是撤銷、`issued a new CRL`（`revocation`）、`removed`，第一個副本什麼都沒改，回應時 `crl.pem` 已列出它；broker 載入新 CRL 之前重連得到 CONNACK 0x00、PUBACK 0x87，sidecar 的檢查（`migrate::mqtt_trust::validate`）與 SIGHUP 之後 TLS 交握以 `CertificateRevoked` 失敗，另一台照常發布；換發之後 client 回來、新憑證能發布；再以 `key_compromise` 撤銷，連線被斷開，換發 403 `key_compromised`、不簽新憑證（容器；`-- --nocapture` 印出測試報告引用的證據行）。同一個檔案的兩個測試共用 Postgres，一次一個 |
 | `tests/gateway_revocation.rs` | Laysi/trustiot-v2#636 的 API：沒有 token、別的金鑰簽的 token 401，租戶管理員、沒有租戶的使用者、換發的平台管理員 token 403，錯的或沒有 `Content-Type`、過大或不是物件的本文 400，不認得的欄位與 `certificate_hold` 422，沒登錄的硬體 ID 與不是硬體 ID 的路徑 404，只剩過期憑證的閘道器 409；這 14 個請求前後簽發紀錄與兩個 CA 的 CRL 編號都不變。成功時兩個 CA 各一張還有效的憑證都以 `key_compromise` 撤銷、依序號回傳，先前的撤銷與過期的憑證不變，每個 CA 剛好多一張 CRL（`revocation`）並列出它們，INFO 一行帶平台管理員與序號、不含憑證；再撤銷一次 409、什麼都不變（容器） |
 | `tests/registration.rs` | Laysi/trustiot-v2#79：工作站簽章只接受工作站憑證，閘道器憑證、別的 CA、別的金鑰、別的本文或路徑、超過 300 秒的時間、過期的憑證、缺少、重複或格式錯的標頭都拒絕並說明原因；簽發 CA 簽的、其餘都符合工作站 profile 的憑證，只要 keyUsage 沒有 digitalSignature（或沒有 keyUsage）或是 CA:TRUE，也以 `not_workstation` 拒絕；EK 只接受 RSA 2048/3072/4096 與 P-256、P-384。真的服務：新的硬體 ID 201、憑證 CN 是硬體 ID 且在根之下驗證為用戶端憑證、寫一筆全平台事件；重送 200 同一張憑證、什麼都不寫；完全相同的請求重送回 `replayed`；換公鑰或 EK 409，別台的公鑰或 EK 409，不支援的 EK 422；少了工作站簽章、沒有 token、別的簽發者、租戶管理員、交換來的 token、別的金鑰或本文、以閘道器憑證冒充工作站，都不登錄；兩個相同的登錄同時到達只簽一張；除役的硬體 ID 409，superuser 也刪不掉、清不掉、改不了；`certs_app` 讀不到登錄；撤銷的工作站憑證 403 `revoked`。Laysi/trustiot-v2#610：201 與 200 的 `certificate_chain` 是 `certificate` 再接簽發 CA，簽發 CA 的公鑰驗得過 leaf 的簽章、金鑰 id 等於 `ca_key_id`、根驗得過它；載入兩把簽發 CA 時重送放的是簽出它的第 1 代，不是現在簽章的第 2 代；第 1 代的金鑰與憑證移除後重送仍 200、同一張憑證，鏈只有 leaf，WARN 只帶 `ca_key_id`（容器） |
 | `tests/workstation_tool.rs` | Laysi/trustiot-v2#615：產線工作站工具（`factory/workstation`）對真的服務：前面放一個檢查 session cookie、換成平台管理員內部 token 的 ingress 替身，工具 `enroll` 取得工作站憑證後登錄一台閘道器、重跑、再讓 ingress 在服務提交後丟掉回應（工具重送得到 200）；另一個新的硬體 ID 第一個 201 就被丟掉、重送得到 200。每個硬體 ID 都剛好一筆登錄、一張閘道器憑證、一筆 `certs.gateway_registered` 事件，工具的紀錄是 `registered`、序號等於資料庫的（容器） |

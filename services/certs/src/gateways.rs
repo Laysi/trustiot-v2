@@ -17,6 +17,10 @@
 //! sends the broker SIGHUP; from then on the TLS handshake refuses the certificates. Between the
 //! kick and that reload the gateway can reconnect, but it has no client and may do nothing.
 //!
+//! A gateway still registered and bound can renew afterwards ([`crate::renewal`]) and so come
+//! back with a new certificate, unless the reason is keyCompromise: that ends its renewals for
+//! good, since the renewal proves the gateway with the very key reported compromised.
+//!
 //! Once step 1 has started, the rest runs on a task of its own, so a caller that goes away (a
 //! client that disconnects, the suspension of Laysi/trustiot-v2#108 or the unbinding of
 //! Laysi/trustiot-v2#115 being cancelled) leaves no revocation without its CRL and its kick.
@@ -92,6 +96,22 @@ pub const NO_VALID_CERTIFICATE: MessageKey =
 /// the reason `$2`; returns the rows it revoked. `revoked_at` is the clock when each row is
 /// updated, not the transaction's start: the CRL job compares it with its CRL's thisUpdate to
 /// find revocations a CRL may have missed ([`crate::crl::refresh`]).
+/// Serializes the revocation of a gateway's certificates (`$1`, its hardware ID) with the
+/// signing of its renewed ones, held until the transaction ends. Both take it first: a renewal
+/// that signs while a revocation waits is revoked by it once it commits, and a renewal that waits
+/// for a revocation sees it (READ COMMITTED reads what committed before each statement), so a
+/// renewal never escapes a revocation that commits around it, and a keyCompromise revocation
+/// always ends the renewals (`crate::renewal`). Class `0x67777276` ("gwrv"); the hardware ID is
+/// hashed into the second key.
+pub const LOCK_GATEWAY_CERTIFICATES: &str =
+    "SELECT pg_advisory_xact_lock(1735881334, hashtext($1))";
+
+/// Whether a gateway certificate of `$1` was revoked for keyCompromise (1): the gateway's
+/// registered key is not trusted any more, so it cannot renew.
+pub const KEY_COMPROMISED: &str = "SELECT EXISTS (
+    SELECT 1 FROM certs.issued_certificates
+    WHERE profile = 'gateway' AND subject = $1 AND revocation_reason = 1)";
+
 const REVOKE: &str = "UPDATE certs.issued_certificates
 SET revoked_at = clock_timestamp(), revocation_reason = $2
 WHERE profile = 'gateway' AND subject = $1 AND revoked_at IS NULL
@@ -137,7 +157,7 @@ pub enum RevocationError {
     /// Every certificate of the gateway is revoked already or has expired.
     #[error("the gateway has no certificate that is neither revoked nor expired")]
     NoValidCertificate,
-    /// The database failed; nothing was revoked.
+    /// The database failed: nothing was revoked, unless the connection broke while committing.
     #[error("database: {0}")]
     Database(#[from] sqlx::Error),
     /// The revocation's task ended without an answer (a panic). Whether the ledger changed is
@@ -186,7 +206,7 @@ impl GatewayRevocation {
     ///
     /// [`RevocationError::NotRegistered`] and [`RevocationError::NoValidCertificate`] change
     /// nothing; [`RevocationError::Database`] when the ledger could not be read or written, with
-    /// nothing revoked.
+    /// nothing revoked (unless the connection broke while committing).
     pub async fn revoke(
         &self,
         hardware_id: &GatewayId,
@@ -264,6 +284,10 @@ async fn revoke_in_ledger(
     reason: Option<RevocationReason>,
 ) -> Result<Vec<RevokedCertificate>, RevocationError> {
     let mut tx = pool.begin().await?;
+    sqlx::query(LOCK_GATEWAY_CERTIFICATES)
+        .bind(hardware_id.as_str())
+        .execute(&mut *tx)
+        .await?;
     let rows = sqlx::query(REVOKE)
         .bind(hardware_id.as_str())
         .bind(reason.map(RevocationReason::code))
@@ -341,14 +365,15 @@ const BODY_KEYS: BodyKeys = BodyKeys {
     params(("hardware_id" = String, Path, description = "The gateway's hardware ID, as registered at the factory.")),
     request_body = RevokeGateway,
     responses(
-        (status = 200, description = "Revoked now, each certificate listed with its serial number. Before this response the ledger records the revocations and each of their issuing CAs gets a CRL that lists them (should that fail, the CRL job lists them within one check interval, default 5 minutes), and the broker is asked to drop the gateway's permissions, which also disconnects it. The broker refuses the certificates in the TLS handshake once it has loaded the new CRL, within one trust interval (default 30 seconds). A renewal may later give the gateway a new certificate if it is still bound.", body = RevokedGateway),
+        (status = 200, description = "Revoked now, each certificate listed with its serial number. Before this response the ledger records the revocations and each of their issuing CAs gets a CRL that lists them (should that fail, the CRL job lists them within one check interval, default 5 minutes), and the broker is asked to drop the gateway's permissions, which also disconnects it. The broker refuses the certificates in the TLS handshake once it has loaded the new CRL, within one trust interval (default 30 seconds). A renewal may later give the gateway a new certificate if it is still bound, unless the reason is `key_compromise`, which ends its renewals for good.", body = RevokedGateway),
         (status = 400, description = "The `Content-Type` is not `application/json`, the body is larger than 1 KiB (`gateway_revocation.body_too_large`), or it is not a JSON object (`gateway_revocation.body_invalid`) (`invalid_request`).", body = ErrorBody),
         (status = 401, description = "No valid session (`unauthenticated`).", body = ErrorBody),
         (status = 403, description = "Not a platform administrator (`permission_denied`).", body = ErrorBody),
         (status = 404, description = "No gateway is registered with this hardware ID (`not_found`).", body = ErrorBody),
         (status = 409, description = "The gateway has no certificate that is neither revoked nor expired (`conflict`, `gateway_revocation.no_valid_certificate`). Nothing changed.", body = ErrorBody),
         (status = 422, description = "An unknown field (`gateway_revocation.unknown_field`), or a reason that is not one of the listed ones (`gateway_revocation.reason_invalid`) (`validation_failed`). Nothing was revoked.", body = ErrorBody),
-        (status = 503, description = "The database failed (`unavailable`). Nothing was revoked.", body = ErrorBody),
+        (status = 500, description = "The revocation's task failed (`internal`). Whether anything was revoked is unknown; calling again tells (409 when it was).", body = ErrorBody),
+        (status = 503, description = "The database failed (`unavailable`). Most likely nothing was revoked; should the connection have broken while committing, the revocation may stand without its new CRL and broker step, which the CRL job and the next whole comparison catch up. Calling again tells (409 when it was revoked).", body = ErrorBody),
     )
 )]
 async fn revoke_gateway(
@@ -389,6 +414,8 @@ async fn revoke_gateway(
         Err(RevocationError::Database(problem)) => {
             tracing::error!(
                 error = %problem,
+                requested_by = "platform_admin",
+                user_id = %user.user_id(),
                 hardware_id = hardware_id.as_str(),
                 "could not revoke a gateway's certificates"
             );
@@ -397,6 +424,8 @@ async fn revoke_gateway(
         Err(problem @ RevocationError::Interrupted(_)) => {
             tracing::error!(
                 error = %problem,
+                requested_by = "platform_admin",
+                user_id = %user.user_id(),
                 hardware_id = hardware_id.as_str(),
                 "could not revoke a gateway's certificates"
             );

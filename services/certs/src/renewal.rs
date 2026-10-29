@@ -1,9 +1,10 @@
 //! The gateway certificate renewal endpoint (Laysi/trustiot-v2#81, rebuild checklist D2, decision
 //! 12; README.md, "換發"; the wire format is `protocol::renewal`).
 //!
-//! A gateway whose certificate is about to expire, has expired or was revoked cannot rely on
-//! mTLS, so it renews over plain HTTPS on the ingress's public path `/certs/renew` and proves who
-//! it is with its TPM key: it asks for a challenge, signs the challenge's signing input, and gets
+//! A gateway whose certificate is about to expire, has expired or was revoked (for any reason
+//! but keyCompromise, which ends its renewals: Laysi/trustiot-v2#636) cannot rely on mTLS, so it
+//! renews over plain HTTPS on the ingress's public path `/certs/renew` and proves who it is with
+//! its TPM key: it asks for a challenge, signs the challenge's signing input, and gets
 //! a new certificate for the public key registered at the factory. Nothing in the request is
 //! trusted before the signature holds; until then the endpoint is public, so:
 //!
@@ -88,6 +89,7 @@ use crate::authority::{Authority, CaState};
 use crate::bindings::Projection;
 use crate::config::RenewalLimits;
 use crate::dynsec::BrokerSync;
+use crate::gateways;
 use crate::issue::{self, Refusal};
 use crate::pem;
 
@@ -141,6 +143,9 @@ pub const CHALLENGE_EXPIRED: MessageKey = MessageKey::new("certificate_renewal.c
 pub const SIGNATURE_REFUSED: MessageKey = MessageKey::new("certificate_renewal.signature_refused");
 /// The gateway was decommissioned (403).
 pub const DECOMMISSIONED: MessageKey = MessageKey::new("certificate_renewal.decommissioned");
+/// A certificate of the gateway was revoked for keyCompromise: its registered key is not trusted
+/// any more (403).
+pub const KEY_COMPROMISED: MessageKey = MessageKey::new("certificate_renewal.key_compromised");
 /// The gateway is not bound to a tenant (403).
 pub const NOT_BOUND: MessageKey = MessageKey::new("certificate_renewal.not_bound");
 /// The service's copy of the bindings may be stale (503).
@@ -164,10 +169,16 @@ RETURNING expires";
 const REDEEM_CHALLENGE: &str = "DELETE FROM certs.renewal_challenges WHERE nonce = $1
 RETURNING hardware_id, purpose, expires, extract(epoch FROM now()) > expires AS expired";
 
-/// The registration of `$1`, its latest binding (whether it holds) and that binding's tenant's
-/// status, in one statement so they come from one snapshot. No row when `$1` is not registered.
+/// The registration of `$1`, whether any of its certificates was revoked for keyCompromise (1),
+/// its latest binding (whether it holds) and that binding's tenant's status, in one statement so
+/// they come from one snapshot. No row when `$1` is not registered.
 const READ_GATEWAY: &str = "SELECT registration.public_key,
     registration.decommissioned_at IS NOT NULL AS decommissioned,
+    EXISTS (
+        SELECT 1 FROM certs.issued_certificates AS issued
+        WHERE issued.profile = 'gateway' AND issued.subject = registration.hardware_id
+            AND issued.revocation_reason = 1
+    ) AS key_compromised,
     binding.tenant_id::text AS tenant_id, binding.binding_id::text AS binding_id,
     binding.current, status.status
 FROM certs.gateway_registrations AS registration
@@ -301,6 +312,8 @@ enum Reason {
     SignatureInvalid,
     /// 403.
     Decommissioned,
+    /// 403: a certificate of the gateway was revoked for keyCompromise.
+    KeyCompromised,
     /// 403.
     NotBound,
     /// 403.
@@ -321,6 +334,7 @@ impl Reason {
             Self::ChallengeExpired => "challenge_expired",
             Self::SignatureInvalid => "signature_invalid",
             Self::Decommissioned => "decommissioned",
+            Self::KeyCompromised => "key_compromised",
             Self::NotBound => "not_bound",
             Self::TenantSuspended => "tenant_suspended",
         }
@@ -337,6 +351,7 @@ impl Reason {
                 | Self::ChallengeExpired
                 | Self::SignatureInvalid
                 | Self::Decommissioned
+                | Self::KeyCompromised
                 | Self::NotBound
                 | Self::TenantSuspended
         )
@@ -400,6 +415,11 @@ impl Reason {
             Self::Decommissioned => (
                 StatusCode::FORBIDDEN,
                 refused(ErrorCode::PermissionDenied, DECOMMISSIONED),
+                None,
+            ),
+            Self::KeyCompromised => (
+                StatusCode::FORBIDDEN,
+                refused(ErrorCode::PermissionDenied, KEY_COMPROMISED),
                 None,
             ),
             Self::NotBound => (
@@ -629,6 +649,8 @@ fn signature_der(text: &str) -> Option<Vec<u8>> {
 struct Gateway {
     public_key: Vec<u8>,
     decommissioned: bool,
+    /// Whether a certificate of it was revoked for keyCompromise.
+    key_compromised: bool,
     /// Its tenant and binding while its latest binding holds.
     binding: Option<(TenantId, GatewayBindingId)>,
     /// Whether that binding's tenant is suspended.
@@ -783,6 +805,12 @@ impl Routes {
         if gateway.decommissioned {
             return Err(Reason::Decommissioned);
         }
+        // A keyCompromise revocation says the registered key itself is not trusted any more,
+        // so it cannot earn a new certificate (Laysi/trustiot-v2#636): the gateway is replaced
+        // and registered anew, as decision 12 has it for a new TPM.
+        if gateway.key_compromised {
+            return Err(Reason::KeyCompromised);
+        }
         let Some((tenant, binding)) = gateway.binding else {
             return Err(Reason::NotBound);
         };
@@ -831,6 +859,7 @@ impl Routes {
             hardware_id = %hardware_id,
             registered = true,
             decommissioned = gateway.decommissioned,
+            key_compromised = gateway.key_compromised,
             tenant_id = tenant_id.as_deref(),
             binding_id = binding_id.as_deref(),
             tenant_suspended = gateway.suspended,
@@ -855,6 +884,22 @@ impl Routes {
             .begin(tenant, PURPOSE)
             .await
             .map_err(|error| database(what, &error))?;
+        // Serialized with revocations of this gateway, then checked again: a keyCompromise
+        // revocation that committed after the read above still ends this renewal, and one that
+        // waits for this transaction revokes what it signs (`gateways::LOCK_GATEWAY_CERTIFICATES`).
+        sqlx::query(gateways::LOCK_GATEWAY_CERTIFICATES)
+            .bind(hardware_id.as_str())
+            .execute(&mut **tx.transaction())
+            .await
+            .map_err(|error| database(what, &error))?;
+        let compromised: bool = sqlx::query_scalar(gateways::KEY_COMPROMISED)
+            .bind(hardware_id.as_str())
+            .fetch_one(&mut **tx.transaction())
+            .await
+            .map_err(|error| database(what, &error))?;
+        if compromised {
+            return Err(Reason::KeyCompromised);
+        }
         let validity = self.validity;
         let issued = issue::sign_and_record_in(&mut tx, authority, what, |ca, now| {
             issue::gateway_certificate_for_key(ca, key, hardware_id, validity, now)
@@ -958,6 +1003,7 @@ fn gateway(row: &sqlx::postgres::PgRow) -> Result<Gateway, String> {
     Ok(Gateway {
         public_key: row.try_get("public_key").map_err(read)?,
         decommissioned: row.try_get("decommissioned").map_err(read)?,
+        key_compromised: row.try_get("key_compromised").map_err(read)?,
         binding,
         suspended,
     })
@@ -1033,6 +1079,7 @@ mod tests {
             Reason::ChallengeExpired,
             Reason::SignatureInvalid,
             Reason::Decommissioned,
+            Reason::KeyCompromised,
             Reason::NotBound,
             Reason::TenantSuspended,
         ]
@@ -1048,6 +1095,7 @@ mod tests {
                 "challenge_expired",
                 "signature_invalid",
                 "decommissioned",
+                "key_compromised",
                 "not_bound",
                 "tenant_suspended"
             ]
