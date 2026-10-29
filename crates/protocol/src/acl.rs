@@ -4,7 +4,8 @@
 //! (`use_identity_as_username`) and replaces `%u` in ACL topics with it. Every gateway client
 //! gets the role [`GATEWAY_ROLE`] with the rules from [`gateway_role_acls`], so a gateway can
 //! publish only to the `up` channels of `trustiot/v1/gw/{its CN}/` (one exact rule per channel,
-//! no wildcard) and subscribe only under `trustiot/v1/gw/{its CN}/down/`. A publish anywhere
+//! no wildcard) and subscribe only under `trustiot/v1/gw/{its CN}/down/`, by exact topic: the
+//! role sets [`GATEWAY_ALLOW_WILDCARD_SUBS`] to false. A publish anywhere
 //! else, including a topic under its own `up/` that is not a protocol channel, gets PUBACK
 //! reason code 0x87 (not authorized) under MQTT 5, which is why gateways must use MQTT 5:
 //! MQTT 3.1.1 acknowledges the publish and silently drops it.
@@ -25,6 +26,14 @@ use crate::topic::{Channel, Direction, TOPIC_PREFIX};
 
 /// The dynamic-security role every gateway client is bound to at provisioning.
 pub const GATEWAY_ROLE: &str = "trustiot-gateway";
+
+/// The `allowwildcardsubs` setting of [`GATEWAY_ROLE`], for the `createRole` command and the
+/// role object in the dynamic-security file. `false`: the broker refuses a SUBSCRIBE whose
+/// filter contains `+` or `#` with SUBACK reason code 0x87, whatever the `subscribePattern`
+/// rule says. A gateway subscribes to each of its `down` channels by its exact topic
+/// ([`crate::topic::gateway_subscriptions`]) and never needs a wildcard; Mosquitto allows
+/// wildcards when the setting is absent.
+pub const GATEWAY_ALLOW_WILDCARD_SUBS: bool = false;
 
 /// Mosquitto dynamic-security ACL types used by the gateway role.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize)]
@@ -175,6 +184,13 @@ mod tests {
     /// Whether `username` may use `topic` under the gateway role for `acltype`, evaluated like
     /// Mosquitto: first matching rule wins, default deny.
     fn allowed(acltype: AclType, username: &str, topic: &str) -> bool {
+        // `allowwildcardsubs false` refuses a wildcard in a subscription before any rule.
+        if acltype == AclType::SubscribePattern
+            && !GATEWAY_ALLOW_WILDCARD_SUBS
+            && topic.contains(['+', '#'])
+        {
+            return false;
+        }
         gateway_role_acls()
             .iter()
             .filter(|rule| rule.acltype == acltype)
@@ -296,8 +312,10 @@ mod tests {
             assert!(may_receive("gw-a", &topic), "{topic}");
             assert!(!may_subscribe("gw-b", &topic), "{topic}");
         }
-        assert!(may_subscribe("gw-a", "trustiot/v1/gw/gw-a/down/#"));
         for filter in [
+            // Within the `down/#` rule, but wildcards are refused by the role setting.
+            "trustiot/v1/gw/gw-a/down/#",
+            "trustiot/v1/gw/gw-a/down/+",
             "#",
             "+/#",
             "trustiot/#",

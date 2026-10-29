@@ -31,7 +31,9 @@ use std::path::Path;
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use hmac::{Hmac, KeyInit, Mac};
-use protocol::acl::{AclRule, AclType, GATEWAY_ROLE, gateway_role_acls};
+use protocol::acl::{
+    AclRule, AclType, GATEWAY_ALLOW_WILDCARD_SUBS, GATEWAY_ROLE, gateway_role_acls,
+};
 use protocol::topic::Channel;
 use serde::de::{self, Deserialize, Deserializer, MapAccess, SeqAccess, Visitor};
 use serde_json::{Map, Value, json};
@@ -242,6 +244,7 @@ pub fn managed_roles() -> Vec<Value> {
         json!({
             "rolename": GATEWAY_ROLE,
             "textname": "TrustIoT gateway (chart-managed)",
+            "allowwildcardsubs": GATEWAY_ALLOW_WILDCARD_SUBS,
             "acls": gateway_role_acls(),
         }),
         json!({
@@ -1061,6 +1064,11 @@ mod tests {
             gateway["acls"],
             serde_json::to_value(gateway_role_acls()).expect("serializable")
         );
+        assert_eq!(
+            gateway["allowwildcardsubs"],
+            json!(false),
+            "a gateway subscribes by exact topic, never with a wildcard"
+        );
     }
 
     #[test]
@@ -1081,7 +1089,7 @@ mod tests {
             ],
             "groups": [{ "groupname": "unauthenticated", "roles": [] }],
             "roles": [
-                { "rolename": GATEWAY_ROLE, "acls": [
+                { "rolename": GATEWAY_ROLE, "allowwildcardsubs": true, "acls": [
                     { "acltype": "publishClientSend", "topic": "trustiot/v1/gw/%u/up/#", "allow": true }
                 ]},
                 { "rolename": "trustiot-service-retired", "acls": [] },
@@ -1115,6 +1123,11 @@ mod tests {
         assert!(
             !gateway["acls"].to_string().contains("up/#"),
             "the old wildcard rule is replaced"
+        );
+        assert_eq!(
+            gateway["allowwildcardsubs"],
+            json!(false),
+            "a role stored with wildcard subscriptions allowed is replaced"
         );
         // A second start with the same accounts changes nothing.
         let again = reconcile(Some(&root.to_string()), &accounts()).expect("reconciled");
