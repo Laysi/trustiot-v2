@@ -1,0 +1,28 @@
+# Laysi/trustiot-v2#617: the install tests of `CI=true cargo test --locked -p agent` and `cargo test --locked -p workstation`
+# commit e134c66a, build host (x86_64 Linux); the swtpm tests ran in a container with CI set, so they cannot skip
+
+## agent: unit tests (src/provision/install.rs)
+test provision::install::tests::a_file_with_the_right_content_but_not_the_right_mode_owner_or_kind_is_replaced ... ok
+test provision::install::tests::a_staged_file_is_removed_when_its_owner_cannot_be_set ... ok
+test provision::install::tests::a_write_that_fails_half_way_leaves_the_old_files_whole_and_nothing_else ... ok
+test provision::install::tests::accounts_are_looked_up ... ok
+test provision::install::tests::arguments_are_checked ... ok
+test provision::install::tests::exit_codes_do_not_overlap_provision_s ... ok
+test provision::install::tests::only_a_chain_from_the_gateway_to_its_root_passes ... ok
+test provision::install::tests::only_certificate_blocks_are_read ... ok
+
+## agent: tests/binary.rs (the provision install tests)
+test provision_install_refuses_invalid_arguments_with_status_2_and_has_its_own_help ... ok
+test provision_install_without_an_agent_installation_exits_9_and_writes_nothing ... ok
+
+## agent: tests/provision_install.rs (swtpm)
+test owners_are_set_per_file_and_an_unusable_configuration_is_refused_before_reading ... ok
+test the_installed_files_pass_the_agents_checks_a_rerun_writes_nothing_and_a_new_root_replaces_them ... ok
+test wrong_certificates_are_refused_and_nothing_is_written ... ok
+
+## workstation: unit tests (src/install.rs)
+test install::tests::a_chain_without_its_issuing_ca_or_that_does_not_hold_is_never_sent ... ok
+test install::tests::a_root_that_is_not_the_pinned_one_is_never_sent ... ok
+test install::tests::only_the_chain_and_the_root_are_sent_with_a_fixed_command ... ok
+test install::tests::the_gateways_answers_have_their_exit_codes ... ok
+test install::tests::the_payload_does_not_show_its_contents ... ok
