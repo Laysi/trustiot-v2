@@ -1,6 +1,6 @@
 [package]
 name = "agent"
-description = "The TrustIoT gateway agent (decision 10): the trustiot-agent service with its MQTT 5 connection to the cloud (a 443 WebSocket with mTLS inside), its TPM identity key (decision 12), presence and heartbeat; its client certificate renewal over HTTPS (rebuild checklist D2); and its Modbus reading (rebuild checklist F1, F2, F5): merged reads, a Modbus TCP and RTU-over-TCP client for the read function codes 1-4 with one shared connection per endpoint, decoding, and scaling; and polling each device on a fixed schedule with timeouts, reconnect backoff, TCP keepalive and a per-device watchdog (F4)."
+description = "The TrustIoT gateway agent (decision 10): the trustiot-agent service with its MQTT 5 connection to the cloud (a 443 WebSocket with mTLS inside), its TPM identity key (decision 12), presence and heartbeat; its client certificate renewal over HTTPS (rebuild checklist D2); and its Modbus reading (rebuild checklist F1, F2, F5): merged reads, a Modbus TCP and RTU-over-TCP client for the read function codes 1-4 with one shared connection per endpoint, decoding, and scaling; and polling each device on a fixed schedule with timeouts, reconnect backoff, TCP keepalive and a per-device watchdog (F4); and the telemetry upload (G1): per-series batching, the offline buffer in memory and on the data partition, one batch in flight until the cloud's end-to-end acknowledgement, and the gateway clock's sync state and batch age."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

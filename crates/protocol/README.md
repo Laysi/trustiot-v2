@@ -146,11 +146,11 @@ Mosquitto 以 `use_identity_as_username` 把憑證 CN 當成 username，dynsec �
 
 規則：
 
-1. 序號在批次形成時編定，從 1 開始，同一串流內連續遞增、永不重複使用；序號要和緩衝一起寫入磁碟。閘道器無法得知下一個序號時（例如重裝），一律換新的串流 ID。
+1. 序號在批次形成時編定，從 1 開始，同一串流內連續遞增、永不重複使用；序號要和緩衝一起寫入磁碟。閘道器無法得知下一個序號時（例如重裝），一律換新的串流 ID。agent 每次行程啟動都換新的串流 ID，序號只存在記憶體，磁碟上的批次帶著原本的串流與序號重送（Laysi/trustiot-v2#90，[agent README](../../edge/agent/README.md)「串流與序號」）。
 2. 同一串流一次只送一批，收到確認才送下一批；確認逾時就原封不動重送同一批。
 3. 雲端以「topic 的閘道器 + 串流 ID」為單位記錄已提交的最高序號。只靠串流 ID 選高水位是錯的：閘道器可以自己取任何串流 ID。
 4. 雲端在整批落盤並寫入批次完成紀錄後才回 `committed`；序號不高於高水位的批次直接回 `duplicate`；永遠不可能接受的批次（解碼失敗、驗證失敗）回 `rejected`，雲端可用 `TelemetryBatch::peek_header` 從壞掉的 payload 取出串流與序號來回應。
-5. 緩衝的最長保存時間是 `telemetry::BUFFER_MAX_AGE_DAYS`（30 天，Laysi/trustiot-v2#92）：一批從形成起超過 30 天還沒收到確認，閘道器就丟棄它並記錄，丟棄的筆數進心跳的 `buffer`。雲端的原始資料保存期限一定比它長（至少 33 天，migration Job 拒絕更短的設定），因為串流的高水位存在批次完成紀錄裡、與原始資料一起過期：雲端已提交、但確認遺失的批次，必須在它的完成紀錄過期前重送，否則會被寫入兩次。閘道器以哪個時鐘量測批次的年齡由 Laysi/trustiot-v2#90 決定，條件是時鐘往回調整不會讓批次留得比 30 天久。理由與數字的推導見 [資料保存期限](../../docs/architecture/data-retention.md)。
+5. 緩衝的最長保存時間是 `telemetry::BUFFER_MAX_AGE_DAYS`（30 天，Laysi/trustiot-v2#92）：一批從形成起超過 30 天還沒收到確認，閘道器就丟棄它並記錄，丟棄的筆數進心跳的 `buffer`。雲端的原始資料保存期限一定比它長（至少 33 天，migration Job 拒絕更短的設定），因為串流的高水位存在批次完成紀錄裡、與原始資料一起過期：雲端已提交、但確認遺失的批次，必須在它的完成紀錄過期前重送，否則會被寫入兩次。閘道器量年齡的「現在」是系統時鐘與「啟動時的下限加上啟動以來的單調時間」兩者中較大的（下限是啟動時的系統時鐘與磁碟上最新一批的形成時間中較大的），所以時鐘往回調整不會讓批次留得比 30 天久（Laysi/trustiot-v2#90，規則與已知的限制見 [agent README](../../edge/agent/README.md)「時鐘」）。理由與數字的推導見 [資料保存期限](../../docs/architecture/data-retention.md)。
 
 `down/telemetry-ack` 的 `TelemetryAck`：`v`、`stream`、`seq`、`server_time`（雲端時鐘，閘道器可用來察覺自己的時鐘錯誤）與 `outcome`。`outcome` 是以 `status` 區分的 map：
 

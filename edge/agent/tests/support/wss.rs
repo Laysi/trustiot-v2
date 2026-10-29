@@ -29,7 +29,8 @@ use super::{FakeBroker, GATEWAY, gateway};
 
 /// The files of one gateway: the configuration and what it names. The configuration names a
 /// root CRL `root-crl.pem`, which does not exist until a test writes it. `state` is the agent's
-/// state directory (`STATE_DIRECTORY`).
+/// state directory (`STATE_DIRECTORY`), where the applied configuration and the offline buffer
+/// live.
 pub struct Files {
     dir: ScratchDir,
 }

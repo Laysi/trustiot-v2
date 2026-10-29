@@ -771,14 +771,15 @@ impl Link {
     /// [`PublishError::Stopped`] at once while the link is not Connected.
     pub async fn reserve(&self, channel: Channel) -> Result<PublishPermit, PublishError> {
         check_channel(channel)?;
-        let permit = self
-            .queue(channel, None)?
+        let (queue, session) = self.queue_of(channel, None)?;
+        let permit = queue
             .reserve_owned()
             .await
             .map_err(|_| self.no_connection())?;
         Ok(PublishPermit {
             permit,
             channel,
+            session,
             link: self.clone(),
         })
     }
@@ -790,17 +791,27 @@ impl Link {
         channel: Channel,
         session: Option<&SessionId>,
     ) -> Result<mpsc::Sender<Request>, PublishError> {
+        self.queue_of(channel, session).map(|(queue, _)| queue)
+    }
+
+    /// Like [`Link::queue`], with the session of that connection.
+    fn queue_of(
+        &self,
+        channel: Channel,
+        session: Option<&SessionId>,
+    ) -> Result<(mpsc::Sender<Request>, SessionId), PublishError> {
         if self.shutdown.is_cancelled() {
             return Err(PublishError::Stopped);
         }
         let current = self.current.lock();
         match current.as_ref() {
             Some(accepting) if session.is_none_or(|session| *session == accepting.session) => {
-                Ok(if channel.delivery().qos.level() == 0 {
+                let queue = if channel.delivery().qos.level() == 0 {
                     accepting.at_most_once.clone()
                 } else {
                     accepting.at_least_once.clone()
-                })
+                };
+                Ok((queue, accepting.session.clone()))
             }
             _ => Err(self.no_connection()),
         }
@@ -892,6 +903,7 @@ impl Link {
 pub struct PublishPermit {
     permit: mpsc::OwnedPermit<Request>,
     channel: Channel,
+    session: SessionId,
     link: Link,
 }
 
@@ -900,6 +912,12 @@ impl PublishPermit {
     #[must_use]
     pub const fn channel(&self) -> Channel {
         self.channel
+    }
+
+    /// The session of the connection whose queue holds the place.
+    #[must_use]
+    pub const fn session(&self) -> &SessionId {
+        &self.session
     }
 
     /// Publishes `payload` in the reserved place, like [`Link::publish`] but without the
@@ -1246,7 +1264,8 @@ fn new_session_id() -> Result<SessionId, protocol::IdError> {
     SessionId::new(id)
 }
 
-fn fill_random(bytes: &mut [u8]) -> bool {
+/// Fills `bytes` from the OS's randomness; `false` if it has none.
+pub(crate) fn fill_random(bytes: &mut [u8]) -> bool {
     rustls::crypto::ring::default_provider()
         .secure_random
         .fill(bytes)

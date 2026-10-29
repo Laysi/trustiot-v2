@@ -24,7 +24,8 @@ RestartMaxDelaySec=1min
 # The agent sends WATCHDOG=1 every 15 s while its connection thread runs.
 WatchdogSec=30s
 TimeoutStartSec=30s
-# The agent stops within 10 s: offline/shutdown, at most 5 s for its PUBACK, then DISCONNECT.
+# The agent stops within 10 s: offline/shutdown, at most 5 s for its PUBACK, then DISCONNECT,
+# while it stops polling and then writes the telemetry batches held in memory to disk.
 TimeoutStopSec=20s
 
 User=trustiot-agent
@@ -35,6 +36,10 @@ ConfigurationDirectory=trustiot
 StateDirectory=trustiot-agent
 StateDirectoryMode=0700
 UMask=0077
+# glibc serves every allocation from 64 KiB with its own mmap and gives it back to the system
+# when freed, so the offline buffer's batches (up to 256 KiB each) do not fragment the heap and a
+# drained buffer returns its memory (edge/agent/README.md, section "記憶體上限").
+Environment=MALLOC_MMAP_THRESHOLD_=65536
 
 NoNewPrivileges=yes
 CapabilityBoundingSet=

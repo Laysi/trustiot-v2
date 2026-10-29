@@ -362,6 +362,8 @@ async fn a_short_lived_certificate_is_renewed_before_it_expires_without_losing_m
             interval: Duration::from_secs(1),
             agent_version: AgentVersion::new("0.1.0-test").unwrap(),
             certificate_not_after: renewing.not_after.clone(),
+            buffer: agent::upload::Stats::default(),
+            clock: agent::clock::GatewayClock::system(),
         },
         tokio::time::Instant::now(),
         shutdown.clone(),

@@ -1,12 +1,15 @@
 //! The `trustiot-agent` executable as systemd runs it (Laysi/trustiot-v2#86): `--check`, the
 //! `sd_notify` messages (`READY=1` before the first connection, `STATUS=`, `WATCHDOG=1` at half
 //! of `WATCHDOG_USEC`, `STOPPING=1`), the device configuration (subscribed, applied, reported,
-//! saved, and polled after a restart without the broker; Laysi/trustiot-v2#94), and SIGTERM
-//! ending with `offline`/`shutdown`, a normal DISCONNECT and exit code 0. The test plays systemd's notification socket (an abstract Unix
-//! socket, as `NOTIFY_SOCKET=@...`) and the broker (`support::wss::InnerBroker` behind the
-//! in-process front). The `provision` subcommand (Laysi/trustiot-v2#613) is run up to where it
-//! would open the TPM: its usage errors, no TPM device, and devices other than `/dev/tpmrm<N>`;
-//! the runs against a software TPM are `tests/provision.rs`.
+//! saved, and polled after a restart without the broker; Laysi/trustiot-v2#94), the telemetry
+//! upload (subscribed to the acknowledgements, the offline buffer under `STATE_DIRECTORY`, a
+//! buffered batch sent and released by the cloud's acknowledgement; Laysi/trustiot-v2#90), and
+//! SIGTERM ending with `offline`/`shutdown`, a normal DISCONNECT and exit code 0. The test plays
+//! systemd's notification socket (an abstract Unix socket, as `NOTIFY_SOCKET=@...`) and the
+//! broker (`support::wss::InnerBroker` behind the in-process front). The `provision` subcommand
+//! (Laysi/trustiot-v2#613) is run up to where it would open the TPM: its usage errors, no TPM
+//! device, and devices other than `/dev/tpmrm<N>`; the runs against a software TPM are
+//! `tests/provision.rs`.
 
 #![allow(
     clippy::unwrap_used,
@@ -16,16 +19,21 @@
 mod support;
 
 use std::os::linux::net::SocketAddrExt;
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::atomic::{AtomicU32, Ordering};
 
+use agent::clock::{GatewayClock, SystemWall};
+use agent::link::{ConnectError, Connector, LinkSettings};
+use agent::upload;
 use protocol::config::{
     ByteOrder, ConfigReport, DataPoint, DataType, DesiredConfig, Device, DeviceModel, FunctionCode,
     Host, Transport,
 };
 use protocol::health::{OfflineReason, Status};
+use protocol::telemetry::{AckOutcome, Reading, Sample, TelemetryAck, TelemetryBatch};
 use protocol::topic::Channel;
-use protocol::{ConfigVersion, DeviceId, ModelName, PointKey, V1};
+use protocol::{AgentVersion, ConfigVersion, DeviceId, ModelName, PointKey, UnixMillis, V1, Value};
 use support::wss::{Files, InnerBroker, front};
 use support::{GATEWAY, Packet, gateway, puback, publish};
 use testkit::clock::bounded;
@@ -34,6 +42,7 @@ use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader, Lines};
 use tokio::net::UnixDatagram;
 use tokio::process::ChildStderr;
 use tokio::process::{Child, Command};
+use tokio_util::sync::CancellationToken;
 
 const EXECUTABLE: &str = env!("CARGO_BIN_EXE_trustiot-agent");
 
@@ -320,9 +329,10 @@ async fn connected_the_agent_applies_its_configuration_reports_it_and_polls_it_a
     let child = agent(&files, &notify);
     notify.wait_for("READY=1", |line| line == "READY=1").await;
     let (mqtt, _) = broker.next_broker().await;
-    // The agent handles down/config, so its link subscribes to it after `online`, and only to
-    // it; `accept` checks the SUBSCRIBE.
-    let mut mqtt = mqtt.subscribing(&[Channel::Config]);
+    // The agent handles down/config (the configuration side) and down/telemetry-ack (the
+    // telemetry pipeline), so its link subscribes to both after `online`, and only to them, in
+    // one SUBSCRIBE; `accept` checks it.
+    let mut mqtt = mqtt.subscribing(&[Channel::Config, Channel::TelemetryAck]);
     let (_, session) = bounded("the connection", mqtt.accept()).await;
     // The broker delivers the retained configuration right after the SUBACK.
     let config = desired_config();
@@ -399,6 +409,14 @@ async fn connected_the_agent_applies_its_configuration_reports_it_and_polls_it_a
     let (success, log) = exit(child).await;
     assert!(success, "{log}");
     assert!(log.contains("applied the configuration"), "{log}");
+    // The offline buffer's directory, in the state directory systemd passes, only the agent's.
+    let buffer = std::fs::metadata(files.path("state/buffer")).unwrap();
+    assert!(buffer.is_dir());
+    assert_eq!(
+        std::os::unix::fs::PermissionsExt::mode(&buffer.permissions()) & 0o777,
+        0o700
+    );
+    assert!(!log.contains("cannot open the buffer directory"), "{log}");
 
     // Started again with no way to the broker, it polls the saved configuration at once. The
     // device's address is refused by the address guard, so each poll fails to connect.
@@ -414,6 +432,188 @@ async fn connected_the_agent_applies_its_configuration_reports_it_and_polls_it_a
     terminate(&child);
     let (success, rest) = log.exit(child).await;
     assert!(success, "{rest}");
+}
+
+/// A connection that never comes up.
+struct Nowhere;
+
+impl Connector for Nowhere {
+    type Stream = tokio::io::DuplexStream;
+
+    async fn connect(&self) -> Result<Self::Stream, ConnectError> {
+        std::future::pending().await
+    }
+}
+
+/// Leaves one batch of three readings in the offline buffer of the state directory `state`, as
+/// an agent does that stops before it could send them: the library's pipeline on a link that
+/// never connects, stopped, which writes the batch in memory to disk. Returns the readings.
+async fn leave_a_batch(state: &Path) -> Vec<Reading> {
+    let shutdown = CancellationToken::new();
+    let (link, _incoming, supervisor) = agent::link::link(
+        LinkSettings::new(gateway(), AgentVersion::new("0.1.0-test").unwrap()),
+        Nowhere,
+        shutdown.clone(),
+    );
+    drop(supervisor);
+    let clock = GatewayClock::new(SystemWall, state.join("no-timesync"));
+    let stop = CancellationToken::new();
+    let (handles, pipeline) = upload::pipeline(
+        upload::Settings::new(state.join(upload::BUFFER_DIRECTORY)),
+        link,
+        clock.clone(),
+        stop.clone(),
+    )
+    .unwrap();
+    let pipeline = tokio::spawn(pipeline.run());
+    let at = clock.wall();
+    let readings: Vec<Reading> = (0..3)
+        .map(|index| Reading {
+            device: DeviceId::new("meter-1").unwrap(),
+            point: PointKey::new(format!("p{index}")).unwrap(),
+            sample: Sample {
+                at,
+                value: Value::Int(index),
+            },
+            clock_synced: false,
+        })
+        .collect();
+    handles.readings.push(readings.clone());
+    stop.cancel();
+    bounded("the pipeline to write its batch to disk", pipeline)
+        .await
+        .unwrap();
+    shutdown.cancel();
+    readings
+}
+
+/// The sizes of the segment files in the offline buffer of the state directory `state`.
+fn segments(state: &Path) -> Vec<u64> {
+    std::fs::read_dir(state.join(upload::BUFFER_DIRECTORY))
+        .unwrap()
+        .map(|entry| entry.unwrap())
+        .filter(|entry| entry.file_name().to_string_lossy().ends_with(".log"))
+        .map(|entry| entry.metadata().unwrap().len())
+        .collect()
+}
+
+/// The telemetry side of the executable (Laysi/trustiot-v2#90 with Laysi/trustiot-v2#94): a
+/// batch an earlier run left in the offline buffer under `STATE_DIRECTORY` goes up on
+/// `up/telemetry` once the agent is connected, unchanged, and the cloud's acknowledgement on
+/// `down/telemetry-ack`, which the agent's dispatcher hands to the uploader, releases it: its
+/// segment is gone when the agent has stopped. Readings the executable polls itself cannot
+/// reach a device on the test machine (the address guard refuses loopback and the machine's
+/// own addresses), so `desired_config::polled_readings_go_up_as_a_batch_and_the_clouds_acknowledgement_releases_it`
+/// follows polled readings through the same pieces in process.
+#[tokio::test]
+async fn a_batch_in_the_state_directory_goes_up_and_the_clouds_acknowledgement_releases_it() {
+    let pki = TestPki::new();
+    let mut broker = InnerBroker::start(mtls_server(&pki.broker, &pki.broker_ca)).await;
+    let front = front(&pki, broker.address, |_| {}).await;
+    let files = Files::new(&pki, front.address().port());
+    let state = PathBuf::from(files.path("state"));
+    let readings = leave_a_batch(&state).await;
+    assert!(
+        segments(&state).iter().any(|len| *len > 16),
+        "the batch is on disk: {:?}",
+        segments(&state)
+    );
+
+    let notify = NotifySocket::new();
+    let mut child = agent(&files, &notify);
+    let mut log = Log::of(&mut child);
+    let (mqtt, _) = broker.next_broker().await;
+    let mut mqtt = mqtt.subscribing(&[Channel::Config, Channel::TelemetryAck]);
+    let (_, session) = bounded("the connection", mqtt.accept()).await;
+    let telemetry = Channel::Telemetry.topic(&gateway());
+    // The first heartbeat (sent once Connected) and the batch, in either order; the next
+    // heartbeat is an hour away.
+    let (mut heartbeat, mut batch) = (false, None);
+    while !(heartbeat && batch.is_some()) {
+        match bounded(
+            "the heartbeat and the telemetry batch",
+            mqtt.read_answering_pings(),
+        )
+        .await
+        {
+            Some(Packet::Publish(publish)) if publish.topic == telemetry => {
+                assert!(publish.qos == 1 && !publish.retain, "{publish:?}");
+                assert!(batch.is_none(), "one batch, sent once");
+                mqtt.send(&puback(publish.id.unwrap(), 0)).await;
+                batch = Some(TelemetryBatch::decode(&publish.payload).unwrap());
+            }
+            Some(Packet::Publish(publish))
+                if publish.topic == Channel::Heartbeat.topic(&gateway()) =>
+            {
+                heartbeat = true;
+            }
+            other => panic!("expected the heartbeat and the telemetry batch, got {other:?}"),
+        }
+    }
+    let batch = batch.unwrap();
+    assert_eq!((batch.seq.get(), batch.clock_synced), (1, false));
+    let sent: Vec<Reading> = batch
+        .series
+        .iter()
+        .flat_map(|series| {
+            series.samples.iter().map(|sample| Reading {
+                device: series.device.clone(),
+                point: series.point.clone(),
+                sample: sample.clone(),
+                clock_synced: batch.clock_synced,
+            })
+        })
+        .collect();
+    assert_eq!(sent, readings, "the readings as they were buffered");
+
+    let ack = TelemetryAck {
+        v: V1,
+        stream: batch.stream.clone(),
+        seq: batch.seq,
+        outcome: AckOutcome::Committed { records: 3 },
+        server_time: UnixMillis::from_system_time(std::time::SystemTime::now()).unwrap(),
+    };
+    mqtt.send(&publish(
+        &Channel::TelemetryAck.topic(&gateway()),
+        &protocol::encode(&ack).unwrap(),
+        1,
+        false,
+        Some(1),
+    ))
+    .await;
+    log.wait_for(&["the cloud has the batch", "seq=1", "records=3"])
+        .await;
+
+    terminate(&child);
+    // The PUBACK of the acknowledgement may still come before `offline`.
+    let offline = loop {
+        match bounded("the offline status", mqtt.read_answering_pings()).await {
+            Some(Packet::PubAck { id: 1, reason: 0 }) => {}
+            Some(Packet::Publish(publish))
+                if publish.topic == Channel::Status.topic(&gateway()) =>
+            {
+                break publish;
+            }
+            other => panic!("expected offline, got {other:?}"),
+        }
+    };
+    let Status::Offline(status) = Status::decode(&offline.payload).unwrap() else {
+        panic!("expected offline")
+    };
+    assert_eq!(
+        (status.session, status.reason),
+        (session, OfflineReason::Shutdown)
+    );
+    mqtt.send(&puback(offline.id.unwrap(), 0)).await;
+    assert_eq!(
+        bounded("the DISCONNECT", mqtt.read()).await,
+        Some(Packet::Disconnect { reason: 0 })
+    );
+    let (success, rest) = log.exit(child).await;
+    assert!(success, "{rest}");
+    // Released: the uploader deleted the segment once its only batch was acknowledged, and the
+    // stop had nothing in memory to write.
+    assert_eq!(segments(&state), Vec::<u64>::new(), "{rest}");
 }
 
 async fn check(files: &Files) -> std::process::Output {

@@ -40,3 +40,15 @@ inflight_limit = 32         # 1-256 QoS 1 publishes waiting for a PUBACK
 remaining_percent = 33      # 10-80: renew once this share of the validity is left
 retry_base_s = 30           # 1-3600, the first retry delay's ceiling
 retry_cap_s = 1800          # retry_base_s-86400, the largest ceiling
+
+# Optional; the values below are the defaults. The offline buffer and the upload. Its files are
+# in buffer/ (mode 0700, created by the agent) in the agent's state directory, which systemd
+# passes (the unit's StateDirectory, /var/lib/trustiot-agent); it is not set here.
+[buffer]
+memory_limit_mib = 16      # 0-64: encoded batches kept in memory, all devices together
+# 0-65536: buffer files on the data partition. 0 writes no new batch there; batches an earlier
+# run left there are still sent. memory_limit_mib and disk_limit_mib cannot both be 0.
+disk_limit_mib = 1024
+# 1-60: how often the collected readings become batches; while uploads do not go through,
+# every 5 minutes instead.
+upload_interval_s = 10
