@@ -26,3 +26,9 @@ test install::tests::a_root_that_is_not_the_pinned_one_is_never_sent ... ok
 test install::tests::only_the_chain_and_the_root_are_sent_with_a_fixed_command ... ok
 test install::tests::the_gateways_answers_have_their_exit_codes ... ok
 test install::tests::the_payload_does_not_show_its_contents ... ok
+
+## after merging main 371572a3: agent tests/provision_install.rs (swtpm), the tree of 67e57bcb, build host (x86_64 Linux), CI set
+test a_renewed_certificate_is_never_replaced_by_an_older_one ... ok
+test owners_are_set_per_file_and_an_unusable_configuration_is_refused_before_reading ... ok
+test the_installed_files_pass_the_agents_checks_a_rerun_writes_nothing_and_a_new_root_replaces_them ... ok
+test wrong_certificates_are_refused_and_nothing_is_written ... ok

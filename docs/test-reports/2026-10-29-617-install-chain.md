@@ -4,7 +4,7 @@ Laysi/trustiot-v2#617：閘道器端的 `trustiot-agent provision install`（檢
 
 ## 環境
 
-- **程式碼**：分支 `feat/617-install-chain`，基於 main `ea5f27c7`（Laysi/trustiot-v2#613 的 `provision` 子命令）。agent 端是 commit `d14f38a7`，工作站端是 `e134c66a`；本報告的 commit 只加文件與測試輸出。
+- **程式碼**：分支 `feat/617-install-chain`，起初基於 main `ea5f27c7`（Laysi/trustiot-v2#613 的 `provision` 子命令）：agent 端是 commit `d14f38a7`，工作站端是 `e134c66a`。之後以 merge 併入 main `371572a3`（Laysi/trustiot-v2#83 的憑證換發；`edge/agent/src/setup.rs` 的 import 有衝突，只合併兩邊的 import）成為 `748fbcde`，再加上不倒退換發過的憑證的檢查 `67e57bcb`。報告的 commit 只加文件與測試輸出。
 - **機器**：建置主機（x86_64 Linux），經檢查佇列執行；swtpm 由 `testkit::swtpm` 在容器裡啟動。測試以一般使用者執行，所以「擁有者是 root」的情況驗的是失敗時的清理（見下方）；以 root 執行時同一個測試改驗擁有者。
 - **工具**：`.prototools` 與 `rust-toolchain.toml` 釘選的 Rust；aarch64 建置用 `rustup target add aarch64-unknown-linux-gnu` 的標準目標。
 - **設定**：`CI=true`。測試從不開啟主機的 `/dev/tpmrm0`：swtpm 的測試以注入的連線函式取代裝置（函式檢查設定的裝置路徑是 `/dev/tpmrm0`），執行檔的測試在讀設定之前就結束。
@@ -40,12 +40,15 @@ cargo test --locked -p workstation --lib install
 | `cargo test --locked --workspace --exclude agent`（含 `tools/sql-check` 與 `repo-check`） | `e134c66a` 加上本報告（未 commit 的工作樹） | 通過：236 組、1844 個測試通過，0 失敗，1 個 ignored（exit 0 at 17:26:32 (build host)） |
 | 同上，在 arm64 macOS 的建置主機 | 同上 | `ai-clients` 的 `an_unanswered_connection_attempt_is_a_connect_timeout` 失敗（`the accept queue never filled up after 64 connections`）：測試依賴 Linux 在 accept 佇列滿時不回應 SYN 的行為，與本變更無關；上一列在 x86_64 Linux 重跑通過 |
 | 上面「驗收證據」的三個指令 | `e134c66a` | 全部通過，每個測試的名稱與結果在 [install-tests.txt](data/2026-10-29-617-install-chain/install-tests.txt) |
+| `cargo fmt --all --check`、`cargo clippy --locked --workspace --all-targets -- -D warnings`、`CI=true cargo test --locked -p agent` | merge 之後、與 `67e57bcb` 相同的工作樹（commit 前） | 全部通過：agent 434 個測試（lib 264，含 Laysi/trustiot-v2#83 的換發；`provision_install` 4，多了 `a_renewed_certificate_is_never_replaced_by_an_older_one`），0 失敗（exit 0 at 18:09:42 (build host)） |
+| `cargo test --locked --workspace --exclude agent`、`cargo build --locked --target aarch64-unknown-linux-gnu -p agent`、`cargo deny --locked check` | `67e57bcb` | 未執行：建置主機（x86_64 Linux）的磁碟空間不足，檢查佇列沒有執行這個工作。併入前（`e134c66a`）的同一組檢查通過（上面幾列）；併入後要在 PR 的 CI 或下一次檢查補上 |
 
 ## 測試內容
 
 - `edge/agent/tests/provision_install.rs`（swtpm；與執行檔走同一段程式 `agent::provision::install::run`，TPM 金鑰由 `tpm::ensure_key` 在 swtpm 的持久 handle 建立，測試 PKI 以 rcgen 產生：自簽根 CA、根簽的簽發 CA、簽發 CA 簽的 leaf）：
   - `wrong_certificates_are_refused_and_nothing_is_written`：11 種錯的輸入，在空的目錄與已裝好的檔案上各跑一次，都是結束碼 8、stderr 說明原因並寫 `nothing was written`，兩個目錄的每個檔案（名稱、inode、權限、擁有者、內容）與執行前相同：leaf 的公鑰不是 TPM 金鑰的（軟體金鑰）、CN 是別的硬體 ID、鏈通不到給的根（leaf 與簽發 CA 接上別的根）、根不是 CA、順序顛倒（根、簽發 CA、leaf）、缺簽發 CA（leaf 直接接根，以及只有 leaf）、夾帶 `PRIVATE KEY` 區塊、區塊以外的文字、超過 32 KiB、空的輸入。設定了 `broker.crl` 而 CRL 是別的根簽的：結束碼 8，訊息指出 `broker.crl`，沒有寫任何檔案；換成這個根簽的 CRL：通過，兩個檔案都是 `unchanged`。自發但不是自簽的根、偽造的簽章由單元測試涵蓋。
   - `the_installed_files_pass_the_agents_checks_a_rerun_writes_nothing_and_a_new_root_replaces_them`：第一次兩個檔案都是 `written`，內容是 leaf 加簽發 CA 與根憑證的 PEM、權限 0644、擁有者是給的帳號；`agent::setup::Setup::new_with`（與 agent 啟動相同的檢查，用 swtpm 的金鑰）接受裝好的檔案，閘道器 ID 是硬體 ID、憑證在效期內。以 CRLF 換行重跑：兩個都是 `unchanged`，inode 與內容不變。換一整套 PKI：兩個都是 `written`、inode 都換了（原子替換）、`Setup` 仍接受。只換簽發 CA：只有鏈的檔案重寫，根的 inode 不變。
+  - `a_renewed_certificate_is_never_replaced_by_an_older_one`（併入 Laysi/trustiot-v2#83 之後加的）：裝上 2026 年起效的憑證（代表 agent 換發過的）之後，送 2025 年起效、同一把 TPM 金鑰的憑證（代表重送登錄拿到的）：結束碼 8、`holds a newer certificate for this TPM key`，沒有寫任何檔案；同一張 2026 年的是 `unchanged`；2027 年的照常寫入；現有檔案是別把金鑰、較新的憑證時，照常換成送來的，`Setup` 接受。
   - `owners_are_set_per_file_and_an_unusable_configuration_is_refused_before_reading`：根憑證的擁有者設為 root（0:0）時，以一般使用者執行：結束碼 1，訊息提示要 root，`nothing was replaced`，兩個目錄裡沒有任何檔案（已經寫好的鏈的暫存檔也刪掉了）。金鑰不是 TPM、`identity.certificate` 或 `broker.ca` 的目錄不存在、兩個路徑經符號連結或 `..` 指向同一個檔案、`broker.crl` 與憑證是同一個檔案、設定檔不存在：結束碼 9，stdin 沒有被讀（讀就 panic），TPM 沒有被開啟（開就 panic），沒有寫任何檔案。
 - `edge/agent/tests/binary.rs`（真的執行檔）：參數錯誤（缺 `--hardware-id`、不合法的硬體 ID、重複或未知的參數、`--help` 與其他參數一起）結束碼 2，`--help` 單獨使用印出自己的說明；沒有 agent 設定時結束碼 9，沒有寫任何檔案。
 - agent 的單元測試（`src/provision/install.rs`）：參數規則；結束碼與 `provision` 的 3–7 不重疊；以 `getpwnam_r` 查帳號（root 是 0:0、不存在的帳號、含 NUL 的名稱）；只接受 `CERTIFICATE` 區塊與空行（CRLF 可以），錯誤訊息不引用輸入；鏈的檢查（含偽造的簽章、自發但不是自簽的根）；寫入在第二個檔案中途失敗時（注入錯誤的寫入函式），兩個舊檔案完整、沒有留下暫存檔；內容正確但權限、擁有者不對或是符號連結的檔案會被替換；設定不了擁有者時暫存檔被刪除。
@@ -59,6 +62,8 @@ commit 前的 Codex 審查擋下兩處，都已修正並由上面的測試覆蓋
 | --- | --- |
 | agent：`identity.certificate` 與 `broker.ca` 只比對字串，經符號連結或 `..` 指向同一個檔案時，第二次 rename 會蓋掉第一個 | 先解開兩個檔案所在的目錄（`canonicalize`）再比對；`broker.crl` 與任一個相同也拒絕（結束碼 9） |
 | 工作站：`root_sha256` 與 `root_certificate` 在同一筆紀錄，改得了紀錄的人可以兩個一起換 | `install` 多了 `pinned_root_sha256` 參數，是操作員這次執行給的 `--root-sha256`，不從紀錄讀；根憑證與紀錄的 `root_sha256` 都要等於它 |
+
+併入 Laysi/trustiot-v2#83 之後發現：重送登錄時平台回的永遠是登錄當時的憑證，已經換發過的閘道器重跑安裝會換回較舊、可能已撤銷或過期的憑證。agent 端因此加上第 5 項檢查（同一把金鑰、notBefore 較晚的憑證不被取代，結束碼 8），測試是 `a_renewed_certificate_is_never_replaced_by_an_older_one`。
 
 ## 結論
 
