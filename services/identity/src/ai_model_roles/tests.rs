@@ -209,7 +209,8 @@ fn the_gateways_refusals_map_to_m1() {
             );
         }
     }
-    // An unclear outcome: a change may have taken effect, so the page reads the roles again.
+    // An unclear outcome: a change may have taken effect, so the page reads the roles again. A
+    // change's answer is 504, never the 503 the ingress retries; a read's is 503.
     for failure in [
         refused(503, api::ErrorCode::Unavailable, None),
         Failure::Lost("the call timed out"),
@@ -218,14 +219,20 @@ fn the_gateways_refusals_map_to_m1() {
         Failure::UnreadableSuccess { status: 200 },
     ] {
         for (operation, expected) in [
-            (Operation::Set, "ai_model_role.outcome_unknown"),
-            (Operation::Reset, "ai_model_role.outcome_unknown"),
-            (Operation::List, "error.unavailable"),
+            (
+                Operation::Set,
+                (504, "timeout", "ai_model_role.outcome_unknown"),
+            ),
+            (
+                Operation::Reset,
+                (504, "timeout", "ai_model_role.outcome_unknown"),
+            ),
+            (Operation::List, (503, "unavailable", "error.unavailable")),
         ] {
             let (status, code, key, details, fields) = answer(&failure, operation);
             assert_eq!(
                 (status, code.as_str(), key.as_str()),
-                (503, "unavailable", expected),
+                expected,
                 "{failure:?} {operation:?}"
             );
             assert_eq!((details, fields), (Value::Null, Value::Null));
@@ -453,12 +460,14 @@ fn the_spec_lists_the_routes_and_their_answers() {
         (
             "put",
             "setPlatformAiModelRole",
-            &["200", "400", "401", "403", "404", "409", "422", "503"][..],
+            &[
+                "200", "400", "401", "403", "404", "409", "422", "503", "504",
+            ][..],
         ),
         (
             "delete",
             "resetPlatformAiModelRole",
-            &["200", "400", "401", "403", "404", "409", "503"][..],
+            &["200", "400", "401", "403", "404", "409", "503", "504"][..],
         ),
     ] {
         let path = if method == "get" {

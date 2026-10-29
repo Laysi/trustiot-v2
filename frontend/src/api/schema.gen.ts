@@ -3427,8 +3427,17 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description The AI gateway's admin API is not configured, not reachable or busy (`unavailable`; nothing was changed), or the outcome is unknown (`unavailable`, message key `ai_model_role.outcome_unknown`): the change may have taken effect, so read the roles again before retrying. */
+            /** @description The AI gateway's admin API is not configured, not reachable or busy, or refused a request it should not have (`unavailable`): nothing was sent or nothing was changed. */
             503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The outcome is unknown (`timeout`, message key `ai_model_role.outcome_unknown`): the AI gateway did not answer in time, the connection broke, or its answer could not be read; the change may have taken effect, so read the roles again before retrying. */
+            504: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -3507,8 +3516,17 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description The AI gateway's admin API is not configured, not reachable or busy (`unavailable`; nothing was changed), or the outcome is unknown (`unavailable`, message key `ai_model_role.outcome_unknown`): the reset may have taken effect, so read the roles again before retrying. */
+            /** @description The AI gateway's admin API is not configured, not reachable or busy, or refused a request it should not have (`unavailable`): nothing was sent or nothing was changed. */
             503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The outcome is unknown (`timeout`, message key `ai_model_role.outcome_unknown`): the AI gateway did not answer in time, the connection broke, or its answer could not be read; the reset may have taken effect, so read the roles again before retrying. */
+            504: {
                 headers: {
                     [name: string]: unknown;
                 };

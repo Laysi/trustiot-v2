@@ -21,12 +21,14 @@
 //! | 409 `version_conflict` | 409 `conflict`, key `ai_model_role.version_conflict`, `details.current_version` |
 //! | 422 `invalid_models`, `unknown_provider`, `protocol_mismatch` | 422 `validation_failed`, field `/models`, key `ai_model_role.<code>` |
 //! | Not reached, too many calls in flight, or a refusal that means a bug (400, 413, an unknown route) | 503 `unavailable`; nothing was changed |
-//! | 503, 504, any other answer whose body or code this build cannot read, a 2xx it cannot read, a timeout, or a connection lost after sending | 503 `unavailable`; for `PUT` and `DELETE` key `ai_model_role.outcome_unknown`: the change may have taken effect, reload the roles |
+//! | 503, 504, any other answer whose body or code this build cannot read, a 2xx it cannot read, a timeout, or a connection lost after sending | `GET`: 503 `unavailable`. `PUT` and `DELETE`: 504 `timeout`, key `ai_model_role.outcome_unknown`: the change may have taken effect, reload the roles |
 //! | Success | 200 with [`ModelRoles`] (`GET`) or the role after the change ([`ModelRole`]) |
 //!
 //! The checks run in that order, and nothing is sent to the gateway before all of the service's
-//! own checks passed. A change is never sent twice: an unclear outcome is the caller's to
-//! resolve by reading the roles again. Every response of the handlers carries
+//! own checks passed. One request to this service sends a change at most once: an unclear
+//! outcome is the caller's to resolve by reading the roles again. It is never a 503, which the
+//! ingress retries (crates/service-kit, `http.request_timeout`): a retried change could run twice.
+//! A 503 of a change always means nothing was sent. Every response of the handlers carries
 //! `cache-control: no-store`.
 //!
 //! The service sends the gateway the administrator as `ai-gateway-actor: user:<user ID>`, which
@@ -295,12 +297,14 @@ enum Severity {
 impl Failure {
     /// The M1 answer for `operation`.
     fn body(&self, operation: Operation) -> ErrorBody {
+        // A change that may have taken effect answers 504, never 503: the ingress retries a 503,
+        // which would send the change again (crates/service-kit, `http.request_timeout`). A read
+        // is safe to retry.
         let unclear = || {
-            let body = ErrorBody::new(ErrorCode::Unavailable);
             if operation.changes() {
-                body.with_message_key(OUTCOME_UNKNOWN)
+                ErrorBody::new(ErrorCode::Timeout).with_message_key(OUTCOME_UNKNOWN)
             } else {
-                body
+                ErrorBody::new(ErrorCode::Unavailable)
             }
         };
         let models = |key| {
@@ -651,7 +655,8 @@ async fn list_model_roles(State(state): State<ModelRoleRoutes>, user: UserIdenti
         (status = 404, description = "The AI gateway has no such role (`not_found`, message key `ai_model_role.not_found`).", body = ErrorBody),
         (status = 409, description = "The role is no longer at `expected_version` (`conflict`, message key `ai_model_role.version_conflict`, `details.current_version` when known); nothing was changed.", body = ErrorBody),
         (status = 422, description = "The models were refused (`validation_failed`, field `/models`): not 1 to 8 distinct, well-formed `<provider>/<model>` (`ai_model_role.invalid_models`), a provider that is not configured (`ai_model_role.unknown_provider`), or a provider of another protocol than the role (`ai_model_role.protocol_mismatch`); nothing was changed.", body = ErrorBody),
-        (status = 503, description = "The AI gateway's admin API is not configured, not reachable or busy (`unavailable`; nothing was changed), or the outcome is unknown (`unavailable`, message key `ai_model_role.outcome_unknown`): the change may have taken effect, so read the roles again before retrying.", body = ErrorBody),
+        (status = 503, description = "The AI gateway's admin API is not configured, not reachable or busy, or refused a request it should not have (`unavailable`): nothing was sent or nothing was changed.", body = ErrorBody),
+        (status = 504, description = "The outcome is unknown (`timeout`, message key `ai_model_role.outcome_unknown`): the AI gateway did not answer in time, the connection broke, or its answer could not be read; the change may have taken effect, so read the roles again before retrying.", body = ErrorBody),
     )
 )]
 async fn set_model_role(
@@ -731,7 +736,8 @@ async fn set_model_role(
         (status = 403, description = "Not a platform administrator, not the administrator's own request (`permission_denied`), or a cross-site request (`permission_denied`, message key `security.cross_site_request`); nothing was sent.", body = ErrorBody),
         (status = 404, description = "The AI gateway has no such role (`not_found`, message key `ai_model_role.not_found`).", body = ErrorBody),
         (status = 409, description = "The role is no longer at `expected_version` (`conflict`, message key `ai_model_role.version_conflict`, `details.current_version` when known); nothing was changed.", body = ErrorBody),
-        (status = 503, description = "The AI gateway's admin API is not configured, not reachable or busy (`unavailable`; nothing was changed), or the outcome is unknown (`unavailable`, message key `ai_model_role.outcome_unknown`): the reset may have taken effect, so read the roles again before retrying.", body = ErrorBody),
+        (status = 503, description = "The AI gateway's admin API is not configured, not reachable or busy, or refused a request it should not have (`unavailable`): nothing was sent or nothing was changed.", body = ErrorBody),
+        (status = 504, description = "The outcome is unknown (`timeout`, message key `ai_model_role.outcome_unknown`): the AI gateway did not answer in time, the connection broke, or its answer could not be read; the reset may have taken effect, so read the roles again before retrying.", body = ErrorBody),
     )
 )]
 async fn reset_model_role(
@@ -853,9 +859,13 @@ impl RecordError {
     }
 }
 
-/// Writes `event` for `user` as the platform role, in a task of its own so it completes even
-/// when the request is dropped; logs an ERROR when it cannot. The change already took effect and
-/// the AI gateway's change log has it, so a failure here never changes the answer.
+/// Writes `event` for `user` as the platform role, in a task of its own so that, once the AI
+/// gateway has answered, it completes even when the request is dropped; logs an ERROR when it
+/// cannot. The change already took effect and the AI gateway's change log has it, so a failure
+/// here never changes the answer. A request dropped while the gateway call is in flight, or a
+/// change whose outcome is unknown, writes no event: the gateway's change log is authoritative.
+/// Two changes of one role may write their events out of version order; readers order by
+/// `version`.
 async fn record(events: Option<PlatformDb>, user: &UserIdentity, event: AiModelRoleChanged) {
     let user_id = user.user_id();
     let role = event.role.clone();

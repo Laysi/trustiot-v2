@@ -4529,7 +4529,17 @@
                 }
               }
             },
-            "description": "The AI gateway's admin API is not configured, not reachable or busy (`unavailable`; nothing was changed), or the outcome is unknown (`unavailable`, message key `ai_model_role.outcome_unknown`): the reset may have taken effect, so read the roles again before retrying."
+            "description": "The AI gateway's admin API is not configured, not reachable or busy, or refused a request it should not have (`unavailable`): nothing was sent or nothing was changed."
+          },
+          "504": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The outcome is unknown (`timeout`, message key `ai_model_role.outcome_unknown`): the AI gateway did not answer in time, the connection broke, or its answer could not be read; the reset may have taken effect, so read the roles again before retrying."
           }
         },
         "summary": "Resets a model role to the models the configuration gives it. Platform administrators only,\nin their own request.",
@@ -4639,7 +4649,17 @@
                 }
               }
             },
-            "description": "The AI gateway's admin API is not configured, not reachable or busy (`unavailable`; nothing was changed), or the outcome is unknown (`unavailable`, message key `ai_model_role.outcome_unknown`): the change may have taken effect, so read the roles again before retrying."
+            "description": "The AI gateway's admin API is not configured, not reachable or busy, or refused a request it should not have (`unavailable`): nothing was sent or nothing was changed."
+          },
+          "504": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The outcome is unknown (`timeout`, message key `ai_model_role.outcome_unknown`): the AI gateway did not answer in time, the connection broke, or its answer could not be read; the change may have taken effect, so read the roles again before retrying."
           }
         },
         "summary": "Changes a model role's models. Platform administrators only, in their own request.",

@@ -10,8 +10,9 @@
 //!   `ai-gateway-actor: user:<id>` built from the token, never the client's own header of that
 //!   name, a cookie or a token; the body it gets has only `models` and `expected_version`.
 //! - The gateway's refusals map to M1 (404, 409 with the current version, 422 with a key per
-//!   code); any other non-2xx, an unreadable answer, a lost connection or a timeout is a 503,
-//!   for a change with `ai_model_role.outcome_unknown`, and the stand-in got the write once.
+//!   code); any other non-2xx, an unreadable answer, a lost connection or a timeout is a 503
+//!   for a read, and for a change a 504 with `ai_model_role.outcome_unknown`, never the 503 the
+//!   ingress retries; the stand-in got the write once.
 //! - Cross-site requests and changes without a JSON `Content-Type` are refused before anything
 //!   is sent; so are bodies the service can tell are wrong.
 //! - Each change writes `identity.ai_model_role_changed` with the administrator as the actor,
@@ -609,6 +610,20 @@ fn assert_error(response: &support::Response, status: u16, code: &str, key: &str
     assert_eq!(body["message_key"], key, "{what}");
 }
 
+/// A change whose outcome is unknown: 504 `timeout` with `ai_model_role.outcome_unknown`. Never
+/// 503, which the ingress retries, so the change would be sent again
+/// (crates/service-kit, `http.request_timeout`).
+fn assert_outcome_unknown(response: &support::Response, what: &str) {
+    assert_ne!(response.status, 503, "{what}: the ingress would retry it");
+    assert_error(
+        response,
+        504,
+        "timeout",
+        "ai_model_role.outcome_unknown",
+        what,
+    );
+}
+
 fn assert_models_error(response: &support::Response, key: &str, what: &str) {
     assert_error(
         response,
@@ -1163,21 +1178,15 @@ async fn platform_administrators_change_model_roles_through_the_ai_gateway() {
     ] {
         stand_in.set_mode(Mode::Answer(status, body.clone()));
         let before = stand_in.count();
-        assert_error(
+        assert_outcome_unknown(
             &Call::new("PUT", role_path("main"), &platform_token)
                 .body(&set_body(&["anthropic/claude-opus-5-5"], 2))
                 .send(&service),
-            503,
-            "unavailable",
-            "ai_model_role.outcome_unknown",
             &format!("PUT answered {status} {body}"),
         );
         assert_eq!(stand_in.count(), before + 1, "one write for {status}");
-        assert_error(
+        assert_outcome_unknown(
             &Call::new("DELETE", reset_path("main", 2), &platform_token).send(&service),
-            503,
-            "unavailable",
-            "ai_model_role.outcome_unknown",
             &format!("the reset answered {status} {body}"),
         );
         assert_eq!(stand_in.count(), before + 2, "one reset for {status}");
@@ -1197,7 +1206,8 @@ async fn platform_administrators_change_model_roles_through_the_ai_gateway() {
     );
     evidence(
         "stand-in answers 500, 504, 502, 503 unavailable, 400 and 409 with an unknown code, 418 \
-         not JSON and 200 not a role: PUT and DELETE 503 ai_model_role.outcome_unknown, each sent \
+         not JSON and 200 not a role: PUT and DELETE 504 timeout ai_model_role.outcome_unknown (never \
+         503, which the ingress retries), each sent \
          exactly once; GET 503 error.unavailable; no event written",
     );
 
@@ -1289,19 +1299,13 @@ async fn platform_administrators_change_model_roles_through_the_ai_gateway() {
     assert_eq!(stand_in.count(), before + 4, "the fifth was not sent");
     for handle in hung {
         let response = handle.join().expect("the hung change's thread");
-        assert_error(
-            &response,
-            503,
-            "unavailable",
-            "ai_model_role.outcome_unknown",
-            "a hung change",
-        );
+        assert_outcome_unknown(&response, "a hung change");
     }
     assert_eq!(stand_in.count(), before + 4, "each was sent once");
     evidence(
         "stand-in hanging: 4 PUTs reached it; a 5th got 503 error.unavailable and was not sent; \
          the ext_authz check answered 200 for two users while the 4 waited; then the 4 answered \
-         503 ai_model_role.outcome_unknown, each sent once",
+         504 ai_model_role.outcome_unknown, each sent once",
     );
     stand_in.set_mode(Mode::Emulate);
 

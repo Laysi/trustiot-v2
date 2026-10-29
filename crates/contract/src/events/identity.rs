@@ -129,6 +129,11 @@ pub const AI_MODEL_ROLE_AGGREGATE: &str = "ai_model_role";
 /// tenant. The envelope's `actor` is the administrator. The aggregate is
 /// [`AI_MODEL_ROLE_AGGREGATE`] with the role's name. A reset of a role without stored models
 /// changes nothing and writes no event.
+///
+/// Two changes of one role can write their events out of version order, so neither arrival nor
+/// `aggregate_seq` orders them: order by [`AiModelRoleChanged::version`], which only goes up. The
+/// operation log can also miss a change (the request dropped while the gateway call was in
+/// flight, or an unknown outcome); the gateway's change log is the record.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AiModelRoleChanged {
     /// The role's name.
