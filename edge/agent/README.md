@@ -498,7 +498,7 @@ trustiot-agent provision install --hardware-id <id> [--config <file>]
 1. 設定檔要載入得了（與啟動時同一套檢查），`identity.key` 必須是 TPM；`identity.certificate` 與 `broker.ca` 的目錄都要已經存在（agent 的 unit 的 `StateDirectory` 與 `ConfigurationDirectory`）。
 2. stdin 最多 32 KiB，只能有 PEM `CERTIFICATE` 區塊與空行：其他種類的區塊（例如私鑰）或任何其他文字都拒絕，錯誤訊息不引用輸入的內容。剛好三張：閘道器憑證、簽發它的簽發 CA、根，順序固定。
 3. 鏈本身：閘道器憑證不是 CA、CN 剛好一個而且等於 `--hardware-id`；簽發 CA 是 CA、不是自簽、以它的金鑰驗得過閘道器憑證的簽章；根是自簽（主體等於簽發者）的 CA、以自己的金鑰驗得過、也驗得過簽發 CA 的簽章。簽章只用 TLS 握手接受的演算法驗證（與 `broker.ca` 的檢查相同）。順序顛倒、缺簽發 CA、鏈接不到送來的根、根不是自簽的 CA，都在這裡拒絕。
-4. agent 自己的啟動檢查，對要寫入的內容做：根當作 `broker.ca`（只放根、只能一張）；設定了 `broker.crl` 而檔案存在時，根 CRL 要是這個根簽的（換了根而舊的根 CRL 還在時，agent 會拒絕啟動，所以在這裡就拒絕）；鏈當作 `identity.certificate`，以 TPM 金鑰檢查（`identity::from_chain`）：leaf 的公鑰必須等於 TPM 金鑰的公鑰，EKU 與 key usage 允許 TLS 用戶端驗證；最後以 webpki 的用戶端憑證檢查確認鏈接到根，有根 CRL 時一併檢查（根撤銷了的簽發 CA 被拒絕）。只有時間不對（以閘道器的時鐘看已過期或還沒生效）時在 stderr 警告，照樣安裝，理由與啟動時相同。
+4. agent 自己的啟動檢查，對要寫入的內容做：根當作 `broker.ca`（只放根、只能一張）；設定了 `broker.crl` 而檔案存在時，根 CRL 要是這個根簽的（換了根而舊的根 CRL 還在時，agent 會拒絕啟動，所以在這裡就拒絕）；這個指令以 root 執行，只把 `broker.crl` 當一般檔案讀：開檔不跟隨符號連結也不等待（`O_NOFOLLOW`、`O_NONBLOCK`），再以 `fstat` 確認是一般檔案，是符號連結、FIFO、目錄或裝置時以 9 結束，不讀它指向的東西；鏈當作 `identity.certificate`，以 TPM 金鑰檢查（`identity::from_chain`）：leaf 的公鑰必須等於 TPM 金鑰的公鑰，EKU 與 key usage 允許 TLS 用戶端驗證；最後以 webpki 的用戶端憑證檢查確認鏈接到根，有根 CRL 時一併檢查（根撤銷了的簽發 CA 被拒絕）。只有時間不對（以閘道器的時鐘看已過期或還沒生效）時在 stderr 警告，照樣安裝，理由與啟動時相同。
 5. 不倒退換發過的憑證：`identity.certificate` 已經有同一把金鑰、notBefore 比送來的晚的憑證時拒絕。那是 agent 自己換發的（見「憑證換發」），而重送登錄時平台回的永遠是登錄當時那張（[services/certs/README.md](../../services/certs/README.md)「重送回原本的憑證」），換回去只會讓閘道器用舊的、可能已被撤銷或過期的憑證，再被 broker 拒絕後換發一次。真的要換回時，先刪掉那個檔案。現有的檔案讀不了、解析不了或是別把金鑰的憑證時，照常換掉。
 
 **寫入**：鏈（leaf、簽發 CA）寫到 `identity.certificate`，擁有者是 `trustiot-agent` 帳號與它的主要群組；根寫到 `broker.ca`，擁有者是 root:root；兩者權限都是 0644（都是公開資料）。內容是重新以 DER 編碼的標準 PEM（每行 64 字元），不是 stdin 的原文，所以重跑時比得出相同。
@@ -516,7 +516,7 @@ stdout 每個檔案一行：`<路徑>: written` 或 `<路徑>: unchanged`；診�
 | 1 | 其他失敗：TPM 錯誤、讀不到 stdin、寫不了檔案（沒有 rename 任何檔案，除非訊息說了第一個已換掉） |
 | 2 | 參數錯誤 |
 | 8 | 憑證被拒絕（上面第 2 到 5 項），沒有寫任何檔案 |
-| 9 | agent 的安裝不能用：沒有設定檔或載入不了、金鑰不是 TPM、目錄不存在、`identity.certificate`、`broker.ca`、`broker.crl` 有兩個是同一個檔案（解開符號連結與 `..` 之後比對目錄）、沒有 `trustiot-agent` 帳號；沒有寫任何檔案 |
+| 9 | agent 的安裝不能用：沒有設定檔或載入不了、金鑰不是 TPM、目錄不存在、`identity.certificate`、`broker.ca`、`broker.crl` 有兩個是同一個檔案（解開符號連結與 `..` 之後比對目錄）、`broker.crl` 不是一般檔案、沒有 `trustiot-agent` 帳號；沒有寫任何檔案 |
 
 閘道器重刷之後，工作站重跑同一個 `register`（平台回 200 與同一份登錄，見 [factory/workstation](../../factory/workstation/README.md)），憑證就照同樣的方式裝回去。
 

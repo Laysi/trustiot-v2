@@ -472,10 +472,6 @@ impl RootCrl {
         let Some(path) = path else {
             return Ok(Self::NotConfigured);
         };
-        let bad = |reason: String| TlsError::BadCrl {
-            path: path.to_owned(),
-            reason,
-        };
         let file = match std::fs::File::open(path) {
             Ok(file) => file,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
@@ -495,10 +491,28 @@ impl RootCrl {
                 path: path.to_owned(),
                 source,
             })?;
+        Self::from_bytes(path, &bytes, trust, now)
+    }
+
+    /// [`RootCrl::load`] on `bytes`, read by the caller from `path` (which names it in errors).
+    ///
+    /// # Errors
+    ///
+    /// The bytes cannot be used ([`TlsError::BadCrl`]).
+    pub fn from_bytes(
+        path: &Path,
+        bytes: &[u8],
+        trust: &BrokerTrust,
+        now: UnixTime,
+    ) -> Result<Self, TlsError> {
+        let bad = |reason: String| TlsError::BadCrl {
+            path: path.to_owned(),
+            reason,
+        };
         if u64::try_from(bytes.len()).map_or(true, |len| len > MAX_ROOT_CRL_BYTES) {
             return Err(bad(format!("larger than {MAX_ROOT_CRL_BYTES} bytes")));
         }
-        let crls = CertificateRevocationListDer::pem_slice_iter(&bytes)
+        let crls = CertificateRevocationListDer::pem_slice_iter(bytes)
             .collect::<Result<Vec<_>, _>>()
             .map_err(|error| bad(format!("not PEM: {error}")))?;
         let [der] = <[_; 1]>::try_from(crls).map_err(|crls: Vec<_>| {

@@ -462,6 +462,37 @@ fn wrong_certificates_are_refused_and_nothing_is_written() {
         )
         .failed(Exit::Refused, "does not pass as a client certificate");
     assert_eq!(gateway.files(), before);
+    // Running as root, install reads broker.crl only as a regular file: a symbolic link (here
+    // to a usable CRL) or a FIFO, which a plain open would block on, is refused without reading.
+    let usable = gateway.dir.write("usable-crl.pem", pki.crl());
+    std::fs::remove_file(&crl).unwrap();
+    std::os::unix::fs::symlink(&usable, &crl).unwrap();
+    gateway
+        .install(
+            &gateway.options_with(&with_crl),
+            &owners,
+            pki.input(&leaf).as_bytes(),
+        )
+        .failed(
+            Exit::Configuration,
+            "is a symbolic link, not a regular file",
+        );
+    assert_eq!(gateway.files(), before);
+    std::fs::remove_file(&crl).unwrap();
+    let fifo = std::ffi::CString::new(crl.as_os_str().as_encoded_bytes()).unwrap();
+    #[allow(unsafe_code, reason = "mkfifo(3) has no safe wrapper in std")]
+    // SAFETY: `fifo` is a NUL-terminated path that outlives the call.
+    let made = unsafe { libc::mkfifo(fifo.as_ptr(), 0o600) };
+    assert_eq!(made, 0, "mkfifo: {}", io::Error::last_os_error());
+    gateway
+        .install(
+            &gateway.options_with(&with_crl),
+            &owners,
+            pki.input(&leaf).as_bytes(),
+        )
+        .failed(Exit::Configuration, "is something else, not a regular file");
+    assert_eq!(gateway.files(), before);
+    std::fs::remove_file(&crl).unwrap();
     // With that root's CRL revoking nothing it installs, and is then unchanged.
     std::fs::write(&crl, pki.crl()).unwrap();
     let stdout = gateway

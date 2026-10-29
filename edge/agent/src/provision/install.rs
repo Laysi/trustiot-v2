@@ -51,7 +51,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, Ordering};
 
 use protocol::GatewayId;
-use rustls_pki_types::CertificateDer;
+use rustls_pki_types::{CertificateDer, UnixTime};
 use x509_parser::prelude::{FromDer, X509Certificate};
 
 use crate::config::Config;
@@ -426,11 +426,7 @@ fn install(
     let trust = BrokerTrust::from_certificates(&config.broker_ca, vec![root])
         .map_err(|error| Failure::Refused(format!("broker.ca: {error}")))?;
     let now = crate::setup::clock_now();
-    let root_crl = RootCrl::load(config.broker_crl.as_deref(), &trust, now).map_err(|error| {
-        Failure::Refused(format!(
-            "the agent would not start with this root: broker.crl: {error}"
-        ))
-    })?;
+    let root_crl = root_crl(config.broker_crl.as_deref(), &trust, now)?;
     let identity = identity::from_chain(
         &config.certificate,
         vec![
@@ -523,6 +519,56 @@ fn newer_installed(path: &Path, leaf: &[u8]) -> Option<String> {
             .to_rfc2822()
             .unwrap_or_else(|_| installed_from.to_string())
     })
+}
+
+/// The root CRL at `path` checked against the new root, as the agent will load it
+/// ([`RootCrl::from_bytes`]). Running as root, it is read only as a regular file that is not a
+/// symbolic link (`O_NOFOLLOW`, `O_NONBLOCK`, then `fstat`), so a link or a FIFO planted at the
+/// configured path cannot make it read another file or hang.
+fn root_crl(path: Option<&Path>, trust: &BrokerTrust, now: UnixTime) -> Result<RootCrl, Failure> {
+    let Some(path) = path else {
+        return Ok(RootCrl::NotConfigured);
+    };
+    let Some(bytes) = read_regular(path, tls::MAX_ROOT_CRL_BYTES)? else {
+        return Ok(RootCrl::Missing(path.to_owned()));
+    };
+    RootCrl::from_bytes(path, &bytes, trust, now).map_err(|error| {
+        Failure::Refused(format!(
+            "the agent would not start with this root: broker.crl: {error}"
+        ))
+    })
+}
+
+/// The contents of `path`, at most `limit` bytes and one more (so the caller sees a file that is
+/// too large), when it is a regular file; `None` when there is nothing at `path`. A symbolic
+/// link, a directory, a FIFO or a device is a configuration error, found without following or
+/// blocking on it.
+fn read_regular(path: &Path, limit: u64) -> Result<Option<Vec<u8>>, Failure> {
+    let failed =
+        |error: io::Error| Failure::Failed(format!("cannot read {}: {error}", path.display()));
+    let not_regular = |what: &str| {
+        Failure::Configuration(format!("{} is {what}, not a regular file", path.display()))
+    };
+    let mut file = match OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+        .open(path)
+    {
+        Ok(file) => file,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(error) if error.raw_os_error() == Some(libc::ELOOP) => {
+            return Err(not_regular("a symbolic link"));
+        }
+        Err(error) => return Err(failed(error)),
+    };
+    if !file.metadata().map_err(failed)?.is_file() {
+        return Err(not_regular("something else"));
+    }
+    let mut bytes = Vec::new();
+    Read::take(&mut file, limit.saturating_add(1))
+        .read_to_end(&mut bytes)
+        .map_err(failed)?;
+    Ok(Some(bytes))
 }
 
 /// Standard input, at most [`MAX_INPUT_BYTES`].
