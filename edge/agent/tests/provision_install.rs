@@ -454,8 +454,13 @@ fn wrong_certificates_are_refused_and_nothing_is_written() {
         }
     }
 
-    // A root CRL from another root: with the new root the agent would not start.
-    let crl = gateway.state.join("root-crl.pem");
+    // A root CRL from another root: with the new root the agent would not start. It lives in a
+    // directory of its own, so `files()` sees the installed files only (and never reads the FIFO
+    // below).
+    let crl_directory = gateway.root.join("crl");
+    std::fs::create_dir(&crl_directory).unwrap();
+    std::fs::set_permissions(&crl_directory, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let crl = crl_directory.join("root-crl.pem");
     std::fs::write(&crl, other.crl()).unwrap();
     let outer = gateway.root.join("outer-ca.pem");
     let with_crl = gateway.write(

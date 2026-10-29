@@ -1793,10 +1793,14 @@ mod tests {
             uid: owner.uid.wrapping_add(1),
             gid: owner.gid,
         };
+        // Neither root nor the agent's account: named as root's, the usual owner.
         refused(
             &Owners {
                 chain: stranger,
-                root: stranger,
+                root: Owner {
+                    uid: owner.uid.wrapping_add(2),
+                    gid: owner.gid,
+                },
             },
             "must belong to root",
         );
