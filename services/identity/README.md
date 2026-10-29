@@ -9,6 +9,7 @@
 - 有 token 交換：服務代表使用者呼叫另一個服務時，拿自己收到的 token 換一張受眾是對方的 token（見 [token 交換](#token-交換代表使用者呼叫)，Laysi/trustiot-v2#106，2026-10-21）。
 - **email 驗證碼登入、登出與登出所有裝置**（Laysi/trustiot-v2#103，2026-10-21，見[登入](#登入)）：這是建立 session 的唯一方式，沒有密碼登入、公開註冊，任何版本都沒有假登入；驗證碼經 chart `smtp.*` 的 relay 寄出。使用者與 email 目前由擁有者角色寫入（[測試工具怎麼建立 session](#測試工具怎麼建立-session)），沒有管理使用者的 API。
 - 一個對外的 HTTP API：平台管理者建立租戶，同一個交易寫出 `identity.tenant_created` 事件（見[租戶](#租戶)，Laysi/trustiot-v2#65，2026-10-14）；平台管理者設定既有使用者在租戶裡的角色，同一個交易寫出 `identity.member_role_changed` 事件（見[成員](#成員)，Laysi/trustiot-v2#583，2026-10-23）；規格在 `api/openapi.json`（`tools/openapi`）。
+- 平台管理者讀取、修改與重設 AI 閘道的模型角色：身分服務檢查權限之後轉給 AI 閘道的管理 API，每次變更寫出全平台事件 `identity.ai_model_role_changed`（見[AI 模型角色](#ai-模型角色)，Laysi/trustiot-v2#608，2026-10-29）。
 - 已登入的使用者讀取目前的 session（使用者、目前的租戶與角色、所屬的租戶）、把 session 切換到自己所屬的另一個租戶，並讀取與修改自己的偏好（介面語言、AI 回答語言、時區、主題）（Laysi/trustiot-v2#497，2026-10-23，見[目前的 session 與切換租戶](#目前的-session-與切換租戶)與[偏好設定](#偏好設定)）。
 - 映像見下方[映像](#映像)；chart 的 `services.identity.enabled` 預設仍是 `false`。nightly 的 smoke 從 Laysi/trustiot-v2#65 起啟用它與資產服務，經入口建立租戶；其餘啟用工作在 Laysi/trustiot-v2#77。
 
@@ -252,6 +253,44 @@ ext_authz 每個請求都查資料庫，所以被撤銷的 session 下一個請�
 - 每次變更記一行 INFO `set a member's role`，帶平台管理者的 `user_id`、`tenant_id`、`member_user_id` 與兩個角色；拒絕記 INFO `refused to set a member's role`，帶 `user_id` 與 `exchanged`。不寫 email。
 - 路由：與其他身分服務的 API 一樣在 `/api/identity` 的 cookie 路由底下（chart 的路由以路徑前綴比對，不分方法），跨站請求由 ext_authz 擋下（PUT 不是 GET 或 HEAD，`Sec-Fetch-Site` 或 `Origin` 不符時 403），服務另外要求 JSON 的 `Content-Type`（見[租戶](#租戶)）。
 
+## AI 模型角色
+
+平台管理者（A2）讀取、修改與重設 AI 閘道的模型角色（`src/ai_model_roles.rs`，Laysi/trustiot-v2#608）：身分服務只檢查權限、跨站請求與請求的形狀，再轉給 AI 閘道的管理 API；模型清單的規則（供應商、協定、版本）由 AI 閘道判斷（[services/ai-gateway 的「管理 API」](../ai-gateway/README.md#管理-api)，Laysi/trustiot-v2#606）。管理埠只有身分服務連得到（chart 的 Service `<release>-ai-gateway-admin`，Laysi/trustiot-v2#607）。
+
+| 路徑 | 轉給 AI 閘道 |
+| --- | --- |
+| `GET /api/identity/v1/platform/ai/model-roles` | `GET /internal/admin/v1/roles`：每個角色（生效的模型、設定的模型、來源、`version`、沒有使用的清單、最後一次變更的時間與操作者）與每個供應商 |
+| `PUT /api/identity/v1/platform/ai/model-roles/{role}`，body `{"models": [...], "expected_version": <讀到的版本>}` | `PUT /internal/admin/v1/roles/{role}`，body 只有這兩個欄位 |
+| `DELETE /api/identity/v1/platform/ai/model-roles/{role}?expected_version=<讀到的版本>` | `DELETE /internal/admin/v1/roles/{role}?expected_version=<讀到的版本>`：回到設定的模型 |
+
+- **誰能用**：只有平台管理者本人的請求，與[成員](#成員)相同。租戶的 `admin`、沒有租戶的使用者、經其他服務換發、帶 `act` 的 token 都 403，讀取也是；在讀 body、送出任何東西之前判斷。換模型會讓所有租戶的 AI 助理改用另一個供應商或模型，所以沒有租戶層級的權限。
+- **跨站請求**：修改與重設由 ext_authz 擋下跨站請求（`PUT`、`DELETE` 不是 GET 或 HEAD），handler 再檢查一次，免得入口哪天不再轉這兩個標頭（見[跨站請求](#跨站請求csrf)）；兩者都要求 JSON 的 `Content-Type`（可帶參數），`DELETE` 沒有 body 也要。表單送不出這個型別，前端的 API client 每個寫入都帶（`frontend/src/api/client.ts`）。
+- **轉送什麼**：方法、路徑、`expected_version`、`ai-gateway-actor: user:<token 的使用者 ID>` 與服務自己序列化的 body。使用者請求的標頭一律不轉送：cookie、`x-internal-identity`、`Authorization`、用戶端自己帶的 `ai-gateway-actor` 都到不了 AI 閘道；body 裡多餘的欄位也不轉送。AI 閘道的變更紀錄與角色的 `updated_by` 記的就是這個 actor。
+- **自己的 HTTP client**（`src/ai_model_roles/admin_client.rs`，hyper，不與 ext_authz 共用任何東西）：同時最多 4 個呼叫（`MAX_IN_FLIGHT`），再多的立刻回 503、不送出；連線 2 秒（`CONNECT_TIMEOUT`），整個呼叫含讀回應 10 秒（`CALL_TIMEOUT`），回應最多讀 256 KiB。不保留連線、不重送：一次變更最多送到 AI 閘道一次。沒有 TLS：位址是叢集內的 Service，連線由 ztunnel 的 mTLS 保護。AI 閘道卡住時最多佔住 4 個請求，每個請求都要經過的 ext_authz 照常回答（`tests/ai_model_roles.rs` 實測）。
+- **設定**：`TRUSTIOT_AI_GATEWAY_ADMIN_URL` 只接受 `http://<host>[:<port>]`（可帶結尾的 `/`）。沒有設時記 WARN、不能用時記 ERROR（不引用值），服務照常啟動，只有這三條路由回 503。
+
+| 情況 | 回應 |
+| --- | --- |
+| 沒有有效的內部身分 token | 401 `unauthenticated` |
+| 不是平台管理者，或 token 帶 `act` | 403 `permission_denied`，什麼都沒送 |
+| 跨站的修改或重設 | 403 `permission_denied`，訊息 key `security.cross_site_request`，什麼都沒送 |
+| 修改或重設的 `Content-Type` 不是 JSON；body 超過 16 KiB、不是 JSON 物件、`models` 不是字串陣列或 `expected_version` 不是 0 以上的整數；`DELETE` 沒有 0 以上的整數 `expected_version` | 400 `invalid_request`，什麼都沒送 |
+| `models` 不是 1 到 8 個 | 422 `validation_failed`，欄位 `/models`，`ai_model_role.invalid_models`，什麼都沒送 |
+| 角色名稱不可能存在（不是小寫字母開頭、只有小寫字母、數字與 `_` 的 1 到 32 個字元） | 404 `not_found`，`ai_model_role.not_found`，什麼都沒送 |
+| 沒有設定或不能用的 `TRUSTIOT_AI_GATEWAY_ADMIN_URL`；同時已有 4 個呼叫；連不上 | 503 `unavailable`，什麼都沒送，沒有改變 |
+| AI 閘道回 404 `role_not_found` | 404 `not_found`，`ai_model_role.not_found` |
+| AI 閘道回 409 `version_conflict` | 409 `conflict`，`ai_model_role.version_conflict`，`details.current_version` 是現在的版本 |
+| AI 閘道回 422 `invalid_models`、`unknown_provider`、`protocol_mismatch` | 422 `validation_failed`，欄位 `/models`，`ai_model_role.invalid_models`、`ai_model_role.unknown_provider`、`ai_model_role.protocol_mismatch` |
+| AI 閘道回 2xx 與讀得懂的角色 | 200，AI 閘道回應的內容（`GET` 是所有角色與供應商） |
+| 送出之後：逾時、連線中斷、5xx（包含 AI 閘道的 503 `unavailable`：資料庫失敗時變更可能已經 commit）、讀不懂的回應（未知的錯誤碼、錯誤碼與狀態不符、讀不懂的 2xx） | 503 `unavailable`；修改與重設帶訊息 key `ai_model_role.outcome_unknown`：變更可能已經生效，前端要重新讀取角色再決定要不要重試。服務不自動重送 |
+| AI 閘道拒絕服務自己組的請求（`invalid_request`、`invalid_actor`、`request_too_large`、`not_found`）：程式錯誤或版本不符 | 503 `unavailable`，記 ERROR；AI 閘道什麼都沒改 |
+
+只有 HTTP 狀態決定成功與否：非 2xx 不論 body 寫什麼都是失敗。回應一律 `cache-control: no-store`。
+
+- **事件**：成功而且版本改變的修改或重設寫一筆全平台事件 `identity.ai_model_role_changed`（`crates/contract` 的 `events::identity::AiModelRoleChanged`）：payload 是 `role`、`action`（`set` 或 `reset`）、`version`（AI 閘道給的新版本）與 `models`（之後生效的模型）；沒有租戶，`actor` 是平台管理者；aggregate 是 `ai_model_role` 加角色名稱，同一個角色的事件依序送達。以平台角色經 `PlatformDb`（INFO `platform database access`，purpose `ai-model-role-changed`）寫進身分服務的 outbox，用事件紀錄的平台角色連線池，消費端收進 `platform_event_log`，後台以 `GET /api/identity/v1/platform/event-log` 看得到（見[事件層與操作紀錄](#事件層與操作紀錄)）。沒有存下模型的角色再重設，版本不變，不寫事件。
+- **事件寫不進去時**：變更已經在 AI 閘道生效，它的變更紀錄也有，所以照樣回 200，並記 ERROR `could not write identity.ai_model_role_changed`（使用者 ID、角色、版本與錯誤類別），表示操作紀錄少了這一筆。原因可能是資料庫出錯、5 秒內寫不完（`EVENT_TIMEOUT`）或沒有平台角色的帳密。事件在自己的 task 裡寫，請求中途斷線也會寫完；回應在寫完（或放棄）之後才送出。
+- **日誌**：變更記 INFO `changed an AI model role`（使用者 ID、操作、角色、新版本）；權限與跨站的拒絕記 INFO；AI 閘道的回應依嚴重度記 INFO（404、409、422）、WARN（AI 閘道的 503、同時呼叫太多）或 ERROR（其他），只寫狀態碼與種類，不寫回應的 body、模型、cookie 或 token。
+
 ## 目前的 session 與切換租戶
 
 已登入的使用者讀取自己這個 session，並把它切換到自己所屬的另一個租戶（Laysi/trustiot-v2#497，`src/current_session.rs`）。兩個端點都經入口的 cookie 檢查（受眾 `identity`），和其他 API 一樣：
@@ -405,7 +444,7 @@ schema `identity`，DDL 在 `migrations/postgres/`，由 migration Job（Laysi/t
 | 寄信（`login::SEND_POOL_CONNECTIONS`） | 發驗證碼的 worker（發碼、作廢沒寄出的驗證碼）、每小時刪除舊的驗證碼 | 2 |
 | run 委派（`delegation::POOL_CONNECTIONS`） | 建立 run 委派與每次換 token 時查 session 與成員資格（見[agent 執行期間的委派](#agent-執行期間的委派)） | 4 |
 | 事件紀錄的服務角色（`event_log::SERVICE_CONNECTIONS`） | 事件紀錄的消費端寫入、租戶的事件紀錄 API | 4 |
-| 事件紀錄的平台角色（`event_log::platform_connections()`） | 消費端讀各產生端（目前三個：`identity`、`assets`、`certs`）的 outbox、後台的事件紀錄 API、列出使用者所屬的租戶（以 `identity_platform` 連線，見[事件層與操作紀錄](#事件層與操作紀錄)與[目前的 session 與切換租戶](#目前的-session-與切換租戶)） | `CONSUMES` 數加 2，目前 5 |
+| 事件紀錄的平台角色（`event_log::platform_connections()`） | 消費端讀各產生端（目前三個：`identity`、`assets`、`certs`）的 outbox、後台的事件紀錄 API、列出使用者所屬的租戶、寫 AI 模型角色的變更事件（以 `identity_platform` 連線，見[事件層與操作紀錄](#事件層與操作紀錄)、[目前的 session 與切換租戶](#目前的-session-與切換租戶)與[AI 模型角色](#ai-模型角色)） | `CONSUMES` 數加 2，目前 5 |
 
 寄信的連線池與登入請求的分開，所以大量的 `send_code` 不會讓 `verify_code` 與登出等連線、逾時回 503。worker 同時寄 4 封，但每封只在發碼的短交易裡用一條連線，寄信的期間不佔連線，所以 2 條就夠；等連線超過 5 秒（`ACQUIRE_TIMEOUT`）的那一封記 ERROR、不寄，使用者再要一次。
 
@@ -445,6 +484,7 @@ schema `identity`，DDL 在 `migrations/postgres/`，由 migration Job（Laysi/t
 | `TRUSTIOT__DATABASE__PLATFORM_USERNAME`、`TRUSTIOT__DATABASE__PLATFORM_PASSWORD` | 平台角色 `identity_platform` 的帳密，給事件紀錄與列出使用者所屬的租戶：chart 以 `identity_platform` 設定帳號，密碼來自同一個 Secret 的 `identity_platform` key。兩個一起給或都不給；帳號不能是服務角色。都不給時事件紀錄關閉（見[事件層與操作紀錄](#事件層與操作紀錄)），目前的 session 與切換租戶的 API 回 503（見[目前的 session 與切換租戶](#目前的-session-與切換租戶)） |
 | `TRUSTIOT__DATABASE__MAX_CONNECTIONS` | 每個副本 ext_authz 連線池的連線數上限，3–100（至少放得下常駐的 3 條），預設 10；租戶 API、登入與寄信另有自己的連線池（2、4、2 條，見[連線池](#連線池)），事件紀錄與 run 委派也有自己的小連線池，使用者自己的帳號共用租戶 API 與事件紀錄的連線池，都不佔 ext_authz 的連線 |
 | `TRUSTIOT__EXCHANGE__LISTEN_ADDR` | token 交換的監聽位址，預設 `0.0.0.0:8082`（chart 的埠 `token-exchange`）；埠被占用時不啟動 |
+| `TRUSTIOT_AI_GATEWAY_ADMIN_URL` | 平台設定：AI 閘道的管理 API，`http://<host>[:<port>]`；chart 只給身分服務，指向 Service `<release>-ai-gateway-admin`（Laysi/trustiot-v2#607）。沒有設時照常啟動，記 WARN；不合規則時也照常啟動，記 ERROR；兩種情況 AI 模型角色的 API 都回 503（見[AI 模型角色](#ai-模型角色)） |
 | `TRUSTIOT_SMTP_HOST`、`_PORT`、`_SECURITY`、`_FROM` | 平台設定：寄驗證碼的 relay（chart 的 `smtp.host`、`port`、`security`、`from`）。沒有 `TRUSTIOT_SMTP_HOST` 時照常啟動，但記 WARN、`send_code` 回 503；設了它，其他三個就必填，`_SECURITY` 是 `starttls` 或 `tls`，`_FROM` 是 `名稱 <地址>` 或地址，只能一行、ASCII 地址。缺少或不合規則時也照常啟動，記 ERROR、`send_code` 回 503（見[寄信（SMTP）](#寄信smtp)） |
 | `TRUSTIOT_SMTP_AUTH_REQUIRED` | 平台設定：`true` 表示 relay 需要帳號，chart 在 `smtp.credentialsSecret.name` 有值時設定；預設 `false`。是 `true` 卻沒有帳密時照常啟動，記 ERROR、`send_code` 回 503，不會不帶帳號寄信 |
 | `TRUSTIOT_SMTP_USERNAME`、`TRUSTIOT_SMTP_PASSWORD` | relay 的帳密，兩個一起設或都不設；chart 在 `services.identity.credentials` 預設列 `smtp`，從 `smtp.credentialsSecret` 給（Secret 名稱空白時不給）。引用是 `optional: true`：Secret 不存在時 pod 照常啟動、沒有這兩個變數，由 `TRUSTIOT_SMTP_AUTH_REQUIRED` 報出，而不是讓 pod 停在 `CreateContainerConfigError`、連 ext_authz 都起不來 |
@@ -511,7 +551,7 @@ curl -i -H 'Host: localhost' -H 'Cookie: __Host-trustiot-session=<seed 印出的
 CARGO_BUILD_JOBS=2 cargo test -p identity
 ```
 
-`tests/ext_authz.rs` 需要 podman 或 docker：起一個帶 TLS 的暫時 Postgres（與 `crates/service-kit` 的測試共用同一份支援程式），每個測試建自己的資料庫、套用 migration、以 `identity_app` 啟動真的 binary（它與 `tests/adversarial.rs` 只套用 `0001_identity.sql` 與 `0004_login.sql`，並代替 Job 寫入這一版每個檔案的紀錄，`tests/support/mod.rs` 的 `record_release_migrations`，readiness 的 migration 檢查才會通過；沒有給平台角色的帳密，所以事件紀錄關閉，ext_authz 不受影響）。`tests/tenants.rs`、`tests/members.rs`、`tests/login.rs`、`tests/event_log.rs`、`tests/platform_admin.rs` 與 `tests/cross_tenant.rs`（[crates/testkit](../../crates/testkit/README.md) 的跨租戶負向測試）用 testkit 的 TLS Postgres，schema 由 migration Job 的程式套用（`testkit::product`）。沒有容器時都略過，設了 `CI` 時改為失敗。
+`tests/ext_authz.rs` 需要 podman 或 docker：起一個帶 TLS 的暫時 Postgres（與 `crates/service-kit` 的測試共用同一份支援程式），每個測試建自己的資料庫、套用 migration、以 `identity_app` 啟動真的 binary（它與 `tests/adversarial.rs` 只套用 `0001_identity.sql` 與 `0004_login.sql`，並代替 Job 寫入這一版每個檔案的紀錄，`tests/support/mod.rs` 的 `record_release_migrations`，readiness 的 migration 檢查才會通過；沒有給平台角色的帳密，所以事件紀錄關閉，ext_authz 不受影響）。`tests/tenants.rs`、`tests/members.rs`、`tests/login.rs`、`tests/event_log.rs`、`tests/platform_admin.rs`、`tests/ai_model_roles.rs` 與 `tests/cross_tenant.rs`（[crates/testkit](../../crates/testkit/README.md) 的跨租戶負向測試）用 testkit 的 TLS Postgres，schema 由 migration Job 的程式套用（`testkit::product`）。沒有容器時都略過，設了 `CI` 時改為失敗。
 
 | 測試 | 驗證 |
 | --- | --- |
@@ -540,6 +580,9 @@ CARGO_BUILD_JOBS=2 cargo test -p identity
 | `tests/platform_admin.rs` | Laysi/trustiot-v2#582，真的服務、migration Job 套用的產品 schema 與假 SMTP relay：`migrate::platform_admin::bootstrap`（`migrate bootstrap-platform-admin` 的程式）以大小寫混雜、帶空白的地址建立第一位平台管理員，`platform_event_log` 收到剛好一筆 `identity.platform_admin_granted`（payload 只有 `user_id` 與 `via`、沒有 `actor`、沒有地址），沒有任何成員資格；這個使用者以驗證碼登入、經 ext_authz 換到 token，`POST /api/identity/v1/tenants` 201；再執行一次回報同一個使用者、什麼都不改；服務的日誌沒有地址。指令本身（結束碼、同時執行、復原）在 `tools/migrate/tests/platform_admin.rs` |
 | `src/members.rs` | 角色只接受 `viewer`、`editor`、`admin` 三種寫法（`unrecognized`、大小寫不同都拒絕），與 token、事件、資料表的寫法相同；body 的每個錯誤欄位都列出，body 的 `Debug` 不印 email；只有平台管理者本人的請求（沒有 `act`）可以設定，租戶的 `admin` 不行；OpenAPI 列出每個回應 |
 | `tests/members.rs` | Laysi/trustiot-v2#583，真的服務與 migration Job 套用的產品 schema：平台管理者設定之後，成員下一個經 ext_authz 的請求帶新角色（新成員 201、改角色 200、同樣的角色 200 且什麼都不寫）；每次變更在成員資格的租戶寫一筆 `identity.member_role_changed`（actor 是平台管理者、原本與新的角色、沒有 email），租戶 `admin` 讀到的操作紀錄有這兩筆，另一個租戶沒有；租戶 `admin`、別的租戶的 `admin`、沒有租戶的使用者、平台管理者經其他服務換發的 token 都 403，對不存在的租戶、壞的 body 與超過上限的 body 也是 403（先於讀取），成員資格、使用者與 outbox 都不變；不存在的租戶 404、不存在的 email 422，不寫入、不建立使用者；壞的租戶 ID、非 JSON 的 `Content-Type`、壞的 body 與超過 4096 位元組的 body 400，壞的 email 與角色 422；同時兩個請求建立同一個成員資格，一個 201、一個 200，事件前後相接；服務角色在租戶 A 的交易裡不能新增租戶 B 的成員資格、看不到也改不了它，也不能改成員資格的租戶、使用者、建立時間或刪除；日誌有設定與拒絕、沒有 email |
+| `src/ai_model_roles/tests.rs` | AI 模型角色（Laysi/trustiot-v2#608）：只有 HTTP 狀態決定成功（2xx 而 body 讀不懂、非 2xx 而 body 像成功都不是成功）；AI 閘道的每個錯誤碼對應的 M1 回應，修改與重設結果不明時帶 `ai_model_role.outcome_unknown`、讀取不帶；錯誤碼與狀態不符或未知的錯誤碼不當成那個錯誤；日誌依嚴重度、只寫種類；AI 閘道的角色轉成 API 的型別（時間解析成 UTC）；body 只能是帶 `models` 與 `expected_version` 的 JSON 物件；只有平台管理者本人的請求通過（租戶 `admin` 與帶 `act` 的 token 不行）；跨站與非 JSON 的修改被拒；不可能存在的角色名稱不轉送；OpenAPI 列出三條路由、每個回應，回應的每個欄位都是 `required` |
+| `src/ai_model_roles/admin_client.rs` | 管理 API 的 client：只接受 `http://<host>[:<port>]`（其他 scheme、帳密、路徑、query、fragment 都拒絕，錯誤不引用值）；連不上與同時呼叫已滿時什麼都沒送；不合格的 actor 與 `/internal/admin/` 以外的路徑不送出；超過上限的回應當作沒有回應 |
+| `tests/ai_model_roles.rs` | Laysi/trustiot-v2#608，真的服務、migration Job 套用的產品 schema，與測試起的假 AI 閘道管理 API（記下收到的每個請求，照 AI 閘道的規則回答，或依步驟回指定的狀態、或一直不回）：沒有 token 401，租戶 `admin`、沒有租戶的使用者、帶 `act` 的 token 在三條路由都 403，假 AI 閘道什麼都沒收到；平台管理者讀取、修改、重設得到假 AI 閘道的內容，假 AI 閘道收到的 `ai-gateway-actor` 是 token 的使用者（用戶端偽造的被換掉），沒有 cookie、token、`Authorization`，body 只有兩個欄位；協定不符、未知的供應商、重複的模型 422 各帶自己的 key，什麼都沒改；舊版本 409 帶現在的版本，沒有的角色 404；每次變更在 outbox 寫一筆沒有租戶、actor 是平台管理者的事件，後台的操作紀錄看得到，重設沒有存模型的角色不寫；跨站（ext_authz 與 handler 都擋）、非 JSON 的 `Content-Type`、0 或 9 個模型、超過 16 KiB、負的版本、不可能存在的角色名稱都在送出前拒絕；500、502、504、AI 閘道的 503、未知的錯誤碼、讀不懂的 2xx 都回 503（修改與重設帶 `ai_model_role.outcome_unknown`），每個寫入剛好送一次、不寫事件；撤銷平台角色寫 outbox 的權限時變更仍回 200 並記 ERROR；假 AI 閘道不回時 4 個變更等著、第 5 個立刻 503 不送出、ext_authz 照常回 200，等著的在 client 的時間上限之後回 503；沒有設定與連不上的位址三條路由都 503；日誌沒有 cookie、token 或偽造的 actor |
 | `tests/migrations.rs` | 真的服務與 migration Job 套用的產品 schema（Laysi/trustiot-v2#402）：Job 寫的紀錄就是 `src/schema.rs` 預期的清單（outbox 的兩個範本與 `migrations/postgres/` 的每個檔案），服務 ready 並記 INFO；以 superuser 拿掉 `0002_tenants.sql` 的紀錄時，新的行程 503，ERROR 日誌的 `missing` 寫出它，已經通過的行程維持 ready；紀錄回來後同一個行程轉為 ready；`outbox-aggregate.sql` 的 SHA-256 不同時 503，`changed` 寫出它；`identity_app` 讀得到自己的紀錄、讀不到 `trustiot_migrate.applied` 與 `assets` 的紀錄，也不能新增、修改、刪除自己的紀錄 |
 | `tests/account.rs` | 真的服務與產品 schema（含平台角色），每個請求先經這個服務的 ext_authz（Laysi/trustiot-v2#497）：目前的 session 顯示使用者、目前租戶與角色、依名稱排序的所屬租戶，沒有別人與非所屬租戶的資料；切換到所屬租戶後回應、資料庫與下一個請求的 token 都是新租戶與那裡的角色（角色變更也立即生效：直接改資料表，或由平台管理者經[成員](#成員)的 API 設定），同一使用者的另一個 session 與別人的 session 不變；切到存在但不屬於自己、與不存在的租戶回一樣的 403，session 不變；token 與 cookie 不是同一個 session、別人的 cookie 或 token、沒有 cookie 都改不到任何 session；切換之後被移除成員資格時 session 不在任何租戶；檢查之後才被撤銷的 session 401；兩個寫入的跨站請求被 cookie 檢查擋下（`cross-site`、`same-site`、別的 `Origin`），帶著 token 送到處理常式也再擋一次（含 `Sec-Fetch-Site: none` 與重複的標頭）；別的服務換來的 token（`act`）讀寫都 403、沒有 `sid` 的 token 不能切換、非 JSON 的 body 400、沒有 token 或給別的服務的 token 401，都什麼都沒改，而同源的 JSON 請求成功；大小上限以補了空白的合法 body 測：剛好 1024 bytes 200，1025 bytes 與多 1100 bytes 的 400（或連線在讀完之前被關掉）且什麼都沒改；檢查之後才過期（資料庫的時鐘，沒有撤銷）的 session 401 且不變；偏好的預設值、部分修改、`{}`、另一個使用者先存了自己的偏好，之後每次修改他的那一列都不變、16 種不在允許清單的值 422 且同一請求的合法欄位也不套用、`null`、未知欄位、陣列與想指定別的使用者的 body 400、使用者已刪除 401；`identity_app` 只能改 session 的 `active_tenant_id` 與偏好的四欄、CHECK 擋下清單外的值、沒有租戶時仍看不到成員資格與租戶，`identity_platform` 只能跨租戶讀成員資格與租戶名稱、不能寫、碰不到 session 與偏好（42501）；日誌沒有租戶名稱、email、cookie 與偏好的值 |
 | `tests/cross_tenant.rs` | 產品 schema（`testkit::product`）上，服務角色讀不到也改不了其他租戶的 `memberships`、`tenants`（每個租戶一列）、`outbox_event` 與 `outbox_aggregate`（讀、無租戶讀、更新、搬移、插入五種探測；`outbox_aggregate` 在 2026-10-15 前豁免，Laysi/trustiot-v2#413 起照租戶表測）與 `event_log`（種子是 `assets` 的設備型號事件：每個產生端的事件都在這張表、受同一個 RLS），服務角色碰得到的每個關聯都已宣告：`users`、`sessions`、`login_codes`、`trustiot_migrate_applied`、`platform_event_log` 與消費端的表不是租戶資料而豁免；真的服務上，一個租戶的 `admin` 呼叫 `GET /api/identity/v1/event-log` 只看得到自己租戶的事件、沒有租戶時看不到任何事件；`GET /api/identity/v1/sessions/current` 以租戶的 token 只顯示自己租戶的名稱、沒有租戶時什麼都不顯示（Laysi/trustiot-v2#497）；`preferences` 是使用者的設定、不是租戶資料而豁免；建立租戶、登入、兩個登出與偏好的 API 不讀租戶資料，切換租戶只回呼叫者自己所屬的租戶（同 `GET /api/identity/v1/sessions/current`），只動呼叫者自己的 session，探測的 token 指不到它（由 `tests/account.rs` 涵蓋）、平台路徑（兩個事件紀錄與設定成員角色）只給平台管理者，都豁免，設定成員角色的隔離由 `tests/members.rs` 測 |

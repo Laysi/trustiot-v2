@@ -137,6 +137,13 @@
   "member.email_unknown": "No user has this email address. Members can only be added after they have an account.",
   "member.role_invalid": "Choose viewer, editor or admin.",
 
+  "ai_model_role.not_found": "The AI gateway has no such model role. Reload the roles.",
+  "ai_model_role.version_conflict": "Someone else changed this model role meanwhile. Reload the roles and try again.",
+  "ai_model_role.invalid_models": "Choose 1 to 8 different models, each written as provider/model.",
+  "ai_model_role.unknown_provider": "A model names a provider the AI gateway does not have.",
+  "ai_model_role.protocol_mismatch": "A model belongs to a provider that speaks another protocol than this role.",
+  "ai_model_role.outcome_unknown": "We could not tell whether the change was saved. Reload the roles before trying again.",
+
   "nav.home": "Home",
 
   "tenant_switcher.label": "Organization",

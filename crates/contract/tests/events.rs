@@ -19,8 +19,9 @@ use contract::events::assets::{
 };
 use contract::events::certs::GatewayRegistered;
 use contract::events::identity::{
-    MEMBERSHIP_AGGREGATE, MemberRoleChanged, PlatformAdminGrant, PlatformAdminGranted,
-    TenantCreated, membership_aggregate_id,
+    AI_MODEL_ROLE_AGGREGATE, AiModelRoleAction, AiModelRoleChanged, MEMBERSHIP_AGGREGATE,
+    MemberRoleChanged, PlatformAdminGrant, PlatformAdminGranted, TenantCreated,
+    membership_aggregate_id,
 };
 use contract::{
     DecodeError, DeviceId, DeviceModelId, EncodeError, Event, EventEnvelope, GatewayBindingId,
@@ -330,6 +331,69 @@ fn platform_admin_granted_decodes_every_version() {
         EventEnvelope::new(&unknown, None).is_err(),
         "Unrecognized is decode only"
     );
+}
+
+/// `identity.ai_model_role_changed` (Laysi/trustiot-v2#608): a platform-wide event with the
+/// role, what was done, the version after it and the models in effect. `v1-unknown-action` is an
+/// action a later build may write: it decodes as `Unrecognized`, which never encodes.
+#[test]
+fn ai_model_role_changed_decodes_every_version() {
+    let decoded = decode_fixtures::<AiModelRoleChanged>();
+    let set = AiModelRoleChanged {
+        role: "main".to_owned(),
+        action: AiModelRoleAction::Set,
+        version: 7,
+        models: vec![
+            "anthropic/claude-sonnet-5-5".to_owned(),
+            "anthropic/claude-opus-5-5".to_owned(),
+        ],
+    };
+    // Sorted by path: `-` sorts before `.`.
+    assert_eq!(
+        decoded,
+        [
+            (
+                "v1-reset".to_owned(),
+                AiModelRoleChanged {
+                    role: "main".to_owned(),
+                    action: AiModelRoleAction::Reset,
+                    version: 8,
+                    models: vec!["anthropic/claude-opus-5-5".to_owned()],
+                }
+            ),
+            (
+                "v1-unknown-action".to_owned(),
+                AiModelRoleChanged {
+                    role: "router".to_owned(),
+                    action: AiModelRoleAction::Unrecognized,
+                    version: 9,
+                    models: vec!["openai/gpt-6-luna".to_owned()],
+                }
+            ),
+            ("v1".to_owned(), set.clone()),
+        ]
+    );
+    let envelope = EventEnvelope::new(&set, None).expect("encode");
+    assert_eq!(envelope.producer, ServiceName::Identity);
+    assert_eq!(envelope.tenant_id, None);
+    assert_eq!(
+        envelope.payload,
+        json!({
+            "role": "main",
+            "action": "set",
+            "version": 7,
+            "models": ["anthropic/claude-sonnet-5-5", "anthropic/claude-opus-5-5"]
+        })
+    );
+    let unknown = AiModelRoleChanged {
+        action: AiModelRoleAction::Unrecognized,
+        ..set
+    };
+    assert!(
+        EventEnvelope::new(&unknown, None).is_err(),
+        "Unrecognized is decode only"
+    );
+    assert_eq!(AI_MODEL_ROLE_AGGREGATE, "ai_model_role");
 }
 
 /// The device model events (Laysi/trustiot-v2#99) carry a model the gateway's configuration

@@ -32,6 +32,8 @@
 //! - [`members`]: platform administrators setting users' roles in tenants, and the event that
 //!   records each change.
 //! - [`event_log`]: the event layer: recording every producer's events, and reading them.
+//! - [`ai_model_roles`]: platform administrators reading and changing the AI gateway's model
+//!   roles through its admin API, and the event that records each change.
 //! - [`schema`]: the migration files this release expects, which readiness checks
 //!   (Laysi/trustiot-v2#402) and the migration Job applies.
 //! - [`config`]: the settings.
@@ -39,6 +41,7 @@
 //! See `README.md` in this crate for the contract with the ingress gateway, the schema, key
 //! rotation and the tests.
 
+pub mod ai_model_roles;
 pub mod audience;
 pub mod config;
 pub mod csrf;
@@ -100,7 +103,10 @@ use crate::tenants::TenantStore;
         preferences::update_preferences,
         event_log::tenant_event_log,
         event_log::platform_tenant_event_log,
-        event_log::platform_event_log
+        event_log::platform_event_log,
+        ai_model_roles::list_model_roles,
+        ai_model_roles::set_model_role,
+        ai_model_roles::reset_model_role
     ),
     tags((name = "identity", description = "Sessions, users and tenants (services/identity)."))
 )]
@@ -117,8 +123,8 @@ pub fn openapi() -> utoipa::openapi::OpenApi {
 /// session check of `crates/service-kit`), starts the worker that mails login codes, starts
 /// recording the event log ([`event_log`]), serves the token exchange and run delegations on
 /// their own port ([`serve_exchange`]), and returns the ext_authz check, login, logout, the
-/// current session and preferences APIs, the tenant API, the member API and the event log API for
-/// the API port. Readiness passes once the connections are open (`PgSessionStore::keep_warm`),
+/// current session and preferences APIs, the tenant API, the member API, the AI model role API
+/// ([`ai_model_roles`]) and the event log API for the API port. Readiness passes once the connections are open (`PgSessionStore::keep_warm`),
 /// the public keys have arrived, a key may sign, and the database has every migration file this
 /// release expects ([`schema::SCHEMA`]).
 ///
@@ -129,7 +135,8 @@ pub fn openapi() -> utoipa::openapi::OpenApi {
 /// files do not stop it: it starts unready and becomes ready when they arrive, as on a fresh
 /// install. Without `TRUSTIOT_SMTP_HOST`, or with SMTP settings it cannot use (logged at ERROR),
 /// it runs, but cannot send login codes: the ext_authz check that every request with a cookie
-/// needs must not depend on the relay.
+/// needs must not depend on the relay. Likewise without `TRUSTIOT_AI_GATEWAY_ADMIN_URL`, or with
+/// one it cannot use: only the AI model role API answers 503.
 pub async fn start(context: Context<Config>) -> Result<Router, BoxError> {
     let config = context.config();
     let platform = &config.platform;
@@ -229,6 +236,14 @@ pub async fn start(context: Context<Config>) -> Result<Router, BoxError> {
         )
     });
     let account = AccountStore::new(accounts.clone(), memberships);
+    // Platform administrators' model role API (Laysi/trustiot-v2#608): its own HTTP client to
+    // the AI gateway's admin port; the events of its changes go through the event log's
+    // platform pool (README, "連線池").
+    let model_roles = ai_model_roles::routes(
+        verifier.clone(),
+        ai_model_roles::admin_client(platform.ai_gateway_admin_url.as_deref()),
+        log.as_ref().map(|(_, platform)| platform.clone()),
+    );
     let ext_authz = ExtAuthz::new(store, issuer, platform.ingress_routes.clone());
     Ok(ext_authz::routes(ext_authz)
         .merge(login::routes(login))
@@ -240,6 +255,7 @@ pub async fn start(context: Context<Config>) -> Result<Router, BoxError> {
         ))
         .merge(tenants::routes(verifier.clone(), tenants))
         .merge(members::routes(verifier.clone(), members))
+        .merge(model_roles)
         .merge(event_log::routes(verifier, log.map(|(log, _)| log))))
 }
 

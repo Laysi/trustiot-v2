@@ -523,8 +523,28 @@ pub fn request_with_body(
     headers: &[(&str, &str)],
     body: &[u8],
 ) -> std::io::Result<Response> {
+    request_within(
+        address,
+        method,
+        target,
+        headers,
+        body,
+        Duration::from_secs(20),
+    )
+}
+
+/// [`request_with_body`], waiting up to `read_timeout` for the answer: for a request the
+/// service answers only after a time limit of its own.
+pub fn request_within(
+    address: SocketAddr,
+    method: &str,
+    target: &str,
+    headers: &[(&str, &str)],
+    body: &[u8],
+    read_timeout: Duration,
+) -> std::io::Result<Response> {
     let mut stream = TcpStream::connect_timeout(&address, Duration::from_secs(2))?;
-    stream.set_read_timeout(Some(Duration::from_secs(20)))?;
+    stream.set_read_timeout(Some(read_timeout))?;
     let mut head = format!("{method} {target} HTTP/1.1\r\nConnection: close\r\n");
     if !headers
         .iter()

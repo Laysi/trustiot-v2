@@ -113,3 +113,54 @@ pub enum PlatformAdminGrant {
     #[serde(other, skip_serializing)]
     Unrecognized,
 }
+
+/// The aggregate kind of AI model role events; the aggregate ID is the role's name, such as
+/// `main`. A platform aggregate: its events have no tenant.
+pub const AI_MODEL_ROLE_AGGREGATE: &str = "ai_model_role";
+
+/// A platform administrator changed the models of an AI model role, or reset the role to the
+/// models the configuration gives it (Laysi/trustiot-v2#608; the 2026-10-23 decisions of
+/// Laysi/trustiot-v2#537).
+///
+/// The AI gateway makes the change and keeps the authoritative, append-only change log; the
+/// identity service writes this event after the gateway answered that the change took effect,
+/// so the platform's operation log shows it with the other back office operations. A
+/// platform-wide event: the envelope's `tenant_id` is null, since model roles belong to no
+/// tenant. The envelope's `actor` is the administrator. The aggregate is
+/// [`AI_MODEL_ROLE_AGGREGATE`] with the role's name. A reset of a role without stored models
+/// changes nothing and writes no event.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AiModelRoleChanged {
+    /// The role's name.
+    pub role: String,
+    /// What the administrator did.
+    pub action: AiModelRoleAction,
+    /// The role's version after the change, as the AI gateway answered it: the version the next
+    /// change must expect.
+    pub version: i64,
+    /// The models in effect after the change, `<provider>/<model>` in fallback order, as the AI
+    /// gateway answered them.
+    pub models: Vec<String>,
+}
+
+impl Event for AiModelRoleChanged {
+    const TYPE: &'static str = "identity.ai_model_role_changed";
+    const VERSION: u32 = 1;
+    const PRODUCER: ServiceName = ServiceName::Identity;
+}
+
+/// What an administrator did to a model role ([`AiModelRoleChanged::action`]). Only add
+/// variants, never rename one: a consumer built before a variant existed decodes it as
+/// [`AiModelRoleAction::Unrecognized`] instead of failing.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AiModelRoleAction {
+    /// Stored a new model list.
+    Set,
+    /// Went back to the configured models.
+    Reset,
+    /// An action this build does not know, written by a newer producer. Decode only:
+    /// serializing it fails, so it never reaches an outbox.
+    #[serde(other, skip_serializing)]
+    Unrecognized,
+}
