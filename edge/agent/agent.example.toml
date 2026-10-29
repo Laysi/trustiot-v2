@@ -32,3 +32,11 @@ heartbeat_interval_s = 60   # 10-3600
 reconnect_base_ms = 1000    # 100-60000, the first reconnect delay's ceiling
 reconnect_cap_ms = 60000    # reconnect_base_ms-3600000, the largest ceiling
 inflight_limit = 32         # 1-256 QoS 1 publishes waiting for a PUBACK
+
+# Optional; the values below are the defaults. Renewal of the client certificate over HTTPS on
+# the host and port of cloud.url (edge/agent/README.md, "憑證換發"); identity.certificate is
+# replaced in place, so its directory must be writable by the agent.
+[renewal]
+remaining_percent = 33      # 10-80: renew once this share of the validity is left
+retry_base_s = 30           # 1-3600, the first retry delay's ceiling
+retry_cap_s = 1800          # retry_base_s-86400, the largest ceiling

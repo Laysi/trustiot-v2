@@ -222,6 +222,45 @@ impl Authority {
         self.sign(params)
     }
 
+    /// A gateway certificate for an existing key, as the certs service signs one at registration
+    /// or renewal (services/certs/README.md, 「閘道器憑證」): subject `CN=<common_name>` only,
+    /// `cA=FALSE`, keyUsage digitalSignature, EKU clientAuth only, for `public_key`, valid from
+    /// `not_before` to `not_after` (to the second). Returns the certificate in PEM; the private
+    /// key stays with whoever holds it (the gateway's TPM, or a test's software key).
+    ///
+    /// # Panics
+    ///
+    /// When rcgen refuses the parameters, for example a time before 1970.
+    #[must_use]
+    pub fn client_for_key(
+        &self,
+        common_name: &str,
+        public_key: &impl rcgen::PublicKeyData,
+        not_before: std::time::SystemTime,
+        not_after: std::time::SystemTime,
+    ) -> String {
+        let since_epoch = |at: std::time::SystemTime| {
+            let since = at
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("a time after 1970");
+            rcgen::date_time_ymd(1970, 1, 1) + std::time::Duration::from_secs(since.as_secs())
+        };
+        let mut params = CertificateParams::new(Vec::<String>::new()).expect("client params");
+        params.distinguished_name = DistinguishedName::new();
+        params
+            .distinguished_name
+            .push(DnType::CommonName, common_name);
+        params.is_ca = IsCa::ExplicitNoCa;
+        params.key_usages = vec![KeyUsagePurpose::DigitalSignature];
+        params.extended_key_usages = vec![ExtendedKeyUsagePurpose::ClientAuth];
+        params.not_before = since_epoch(not_before);
+        params.not_after = since_epoch(not_after);
+        params
+            .signed_by(public_key, &self.issuer)
+            .expect("client certificate")
+            .pem()
+    }
+
     fn sign(&self, params: CertificateParams) -> Leaf {
         let key = KeyPair::generate().expect("leaf key");
         let certificate = params

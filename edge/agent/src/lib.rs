@@ -21,6 +21,9 @@
 //!   (one polling loop per device, unchanged devices untouched), saves it on the data partition
 //!   so the gateway polls with it after a restart without the cloud, and reports the outcome
 //!   (rebuild checklist E1).
+//! - [`renewal`]: renews the client certificate over HTTPS with a TPM-signed challenge, on
+//!   schedule and when the broker refuses the certificate, and swaps it in without losing what
+//!   the connection already accepted (rebuild checklist D2).
 //!
 //! The offline buffer builds on these (`README.md` lists what is where).
 
@@ -34,6 +37,7 @@ pub mod liveness;
 pub mod modbus;
 mod mqtt;
 pub mod polling;
+pub mod renewal;
 pub mod sdnotify;
 pub mod setup;
 pub mod tls;
