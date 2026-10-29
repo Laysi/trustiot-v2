@@ -13,8 +13,15 @@
 //! for the answer, about 70 ms on the gateway's TPM (docs/feasibility/2026-10-12-tpm-poc.md).
 //! The key is used with an empty password through the password session (`TPM_RS_PW`); the
 //! digest is computed in software and signed with the null hash-check ticket.
+//!
+//! [`ensure_key`] provisions that key for the factory tool (Laysi/trustiot-v2#80): it reuses the
+//! key at the handle, creates one where the handle is empty, and refuses anything else there
+//! without touching it (`provision`).
 
+#[cfg(test)]
+mod fixtures;
 mod marshal;
+mod provision;
 mod rc;
 mod worker;
 
@@ -29,6 +36,9 @@ use rustls::SignatureScheme;
 use rustls::pki_types::SubjectPublicKeyInfoDer;
 use rustls::sign::{Signer, SigningKey};
 
+pub use provision::{
+    PROVISION_RESPONSE_TIMEOUT, ProvisionError, Provisioned, SRK_HANDLE, ensure_key,
+};
 pub use rc::ResponseCode;
 pub use worker::TpmChannel;
 
@@ -150,13 +160,19 @@ impl TpmKey {
         if handle >> 24 != 0x81 {
             return Err(TpmError::NotPersistentHandle(handle));
         }
-        let channel: Box<dyn TpmChannel> = match transport {
-            TpmTransport::Device(path) => Box::new(worker::DeviceChannel::open(&path)?),
-            TpmTransport::Channel(channel) => channel,
-        };
-        let worker = worker::Worker::spawn(channel, timeout)?;
+        let worker = spawn_worker(transport, timeout, worker::Retry::Never)?;
         let response = worker.transact(marshal::read_public_command(handle))?;
         let public = marshal::parse_read_public(&response)?;
+        Self::with_public(worker, handle, public)
+    }
+
+    /// The key at `handle` whose public area is `public` (already checked), used through
+    /// `worker`; makes the test signature.
+    fn with_public(
+        worker: worker::Worker,
+        handle: u32,
+        public: marshal::PublicKey,
+    ) -> Result<Self, TpmError> {
         let key = Self {
             inner: Arc::new(Inner {
                 handle,
@@ -209,6 +225,20 @@ impl TpmKey {
             .verify(message, signature)
             .is_ok()
     }
+}
+
+/// Opens the transport (a device is opened by the caller's thread) and starts the thread that
+/// owns it.
+fn spawn_worker(
+    transport: TpmTransport,
+    timeout: Duration,
+    retry: worker::Retry,
+) -> Result<worker::Worker, TpmError> {
+    let channel: Box<dyn TpmChannel> = match transport {
+        TpmTransport::Device(path) => Box::new(worker::DeviceChannel::open(&path)?),
+        TpmTransport::Channel(channel) => channel,
+    };
+    worker::Worker::spawn(channel, timeout, retry)
 }
 
 impl fmt::Debug for TpmKey {

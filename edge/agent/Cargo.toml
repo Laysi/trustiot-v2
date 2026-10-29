@@ -69,8 +69,8 @@ rcgen = { workspace = true, features = ["crypto", "pem", "ring"] }
 ring = { workspace = true, features = ["alloc"] }
 serde_json.workspace = true
 # The fake Modbus endpoint with fault injection (`testkit::modbus`), the paused clock, the
-# Mosquitto broker with mTLS and WebSocket front (`testkit::mqtt`), and the swtpm container
-# (`testkit::container`).
+# Mosquitto broker with mTLS and WebSocket front (`testkit::mqtt`), and the software TPM
+# (`testkit::swtpm`).
 testkit = { path = "../../crates/testkit" }
 # `process` runs the executable (tests/binary.rs).
 tokio = { workspace = true, features = ["macros", "process", "rt", "test-util"] }

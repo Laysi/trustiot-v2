@@ -1,6 +1,6 @@
-# A software TPM 2.0 (swtpm, on libtpms) and tpm2-tools for the agent's TPM test
-# (tests/tpm_swtpm.rs builds it with an empty build context). Debian's packages: the gateway runs
-# Raspberry Pi OS, which is Debian.
+# A software TPM 2.0 (swtpm, on libtpms) and tpm2-tools for the TPM tests (testkit::swtpm builds
+# it with an empty build context). Debian's packages: the gateway runs Raspberry Pi OS, which is
+# Debian.
 FROM docker.io/library/debian:trixie-slim@sha256:62bd423aeee912639ca8ee681c2b762cb3e25137e0a92b20be455898a9f034ad
 RUN apt-get update \
     && DEBIAN_FRONTEND=noninteractive apt-get install --yes --no-install-recommends \
