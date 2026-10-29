@@ -23,7 +23,8 @@
 //!    ([`BrokerTrust::from_certificates`]), the root CRL `broker.crl` against that root, the chain
 //!    as `identity.certificate` with the TPM key ([`identity::from_chain`]: the leaf's public key
 //!    must be the TPM key's, its usages must allow TLS client authentication), and webpki's client
-//!    certificate check against the root ([`tls::check_client_certificate`]). A certificate that
+//!    certificate check against the root and its CRL, so an issuing CA the root revoked is refused
+//!    ([`tls::check_client_certificate_under`]). A certificate that
 //!    is only outside its validity by this clock passes with a warning, as at start-up.
 //! 5. A renewed certificate is never replaced by an older one ([`newer_installed`]): when
 //!    `identity.certificate` holds a certificate for the same key with a later notBefore, the
@@ -425,7 +426,7 @@ fn install(
     let trust = BrokerTrust::from_certificates(&config.broker_ca, vec![root])
         .map_err(|error| Failure::Refused(format!("broker.ca: {error}")))?;
     let now = crate::setup::clock_now();
-    RootCrl::load(config.broker_crl.as_deref(), &trust, now).map_err(|error| {
+    let root_crl = RootCrl::load(config.broker_crl.as_deref(), &trust, now).map_err(|error| {
         Failure::Refused(format!(
             "the agent would not start with this root: broker.crl: {error}"
         ))
@@ -451,7 +452,7 @@ fn install(
             "the gateway certificate's common name is not the hardware ID".to_owned(),
         ));
     }
-    let validity = tls::check_client_certificate(&trust, &identity, now)
+    let validity = tls::check_client_certificate_under(&trust, &root_crl, &identity, now)
         .map_err(|error| Failure::Refused(error.to_string()))?;
     if validity == Validity::OutsideNow {
         let _ = writeln!(

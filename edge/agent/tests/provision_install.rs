@@ -39,10 +39,11 @@ use protocol::GatewayId;
 use rcgen::{
     BasicConstraints, CertificateParams, CertificateRevocationListParams, DnType,
     ExtendedKeyUsagePurpose, IsCa, Issuer, KeyIdMethod, KeyPair, KeyUsagePurpose,
-    PublicKeyData as _, SerialNumber,
+    PublicKeyData as _, RevocationReason, RevokedCertParams, SerialNumber,
 };
 use testkit::mqtt::ScratchDir;
 use testkit::swtpm::{Session, Swtpm};
+use x509_parser::prelude::{FromDer as _, X509Certificate};
 
 const HARDWARE_ID: &str = "tg-0001";
 
@@ -158,12 +159,29 @@ impl Pki {
 
     /// An empty root CRL signed by this root, PEM.
     fn crl(&self) -> String {
+        self.crl_revoking(None)
+    }
+
+    /// A root CRL signed by this root that revokes `revoked` (DER), if given.
+    fn crl_revoking(&self, revoked: Option<&[u8]>) -> String {
+        let revoked_certs = revoked
+            .map(|der| {
+                let (_, certificate) = X509Certificate::from_der(der).unwrap();
+                RevokedCertParams {
+                    serial_number: SerialNumber::from_slice(certificate.raw_serial()),
+                    revocation_time: rcgen::date_time_ymd(2021, 1, 1),
+                    reason_code: Some(RevocationReason::KeyCompromise),
+                    invalidity_date: None,
+                }
+            })
+            .into_iter()
+            .collect();
         CertificateRevocationListParams {
             this_update: rcgen::date_time_ymd(2020, 1, 1),
             next_update: rcgen::date_time_ymd(2099, 1, 1),
             crl_number: SerialNumber::from(1_u64),
             issuing_distribution_point: None,
-            revoked_certs: Vec::new(),
+            revoked_certs,
             key_identifier_method: KeyIdMethod::Sha256,
         }
         .signed_by(&self.root_issuer)
@@ -434,7 +452,17 @@ fn wrong_certificates_are_refused_and_nothing_is_written() {
         )
         .failed(Exit::Refused, "broker.crl");
     assert_eq!(gateway.files(), before);
-    // With that root's CRL it installs, and is then unchanged.
+    // That root's CRL revokes the issuing CA: the broker would refuse the gateway.
+    std::fs::write(&crl, pki.crl_revoking(Some(&pki.issuing))).unwrap();
+    gateway
+        .install(
+            &gateway.options_with(&with_crl),
+            &owners,
+            pki.input(&leaf).as_bytes(),
+        )
+        .failed(Exit::Refused, "does not pass as a client certificate");
+    assert_eq!(gateway.files(), before);
+    // With that root's CRL revoking nothing it installs, and is then unchanged.
     std::fs::write(&crl, pki.crl()).unwrap();
     let stdout = gateway
         .install(

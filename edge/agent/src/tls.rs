@@ -689,8 +689,26 @@ pub fn check_client_certificate(
     identity: &Identity,
     now: UnixTime,
 ) -> Result<Validity, TlsError> {
+    check_client_certificate_under(trust, &RootCrl::NotConfigured, identity, now)
+}
+
+/// [`check_client_certificate`], also against the root CRL: an issuing CA the root revoked fails.
+/// The gateway certificate's own status is unknown here (no issuing CA's CRL) and allowed, as in
+/// the handshake's own check of the broker's chain.
+///
+/// # Errors
+///
+/// As [`check_client_certificate`].
+pub fn check_client_certificate_under(
+    trust: &BrokerTrust,
+    root_crl: &RootCrl,
+    identity: &Identity,
+    now: UnixTime,
+) -> Result<Validity, TlsError> {
     let verifier =
         WebPkiClientVerifier::builder_with_provider(Arc::clone(&trust.roots), Arc::new(provider()))
+            .with_crls(root_crl.crls())
+            .allow_unknown_revocation_status()
             .build()
             .map_err(|error| TlsError::Verifier(error.to_string()))?;
     let refused = |source| TlsError::ClientCertificate {
