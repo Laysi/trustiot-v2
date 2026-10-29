@@ -1014,7 +1014,7 @@ async fn platform_administrators_change_model_roles_through_the_ai_gateway() {
         assert_eq!(event["aggregate_id"], "main");
     }
     evidence(format!(
-        "DELETE 200 version 2, a second DELETE 200 version 2 without an event; the platform \
+        "the reset: 200 version 2; a second reset: 200 version 2 without an event; the platform \
          operation log: {}",
         Value::Array(logged)
     ));
@@ -1178,7 +1178,7 @@ async fn platform_administrators_change_model_roles_through_the_ai_gateway() {
             503,
             "unavailable",
             "ai_model_role.outcome_unknown",
-            &format!("DELETE answered {status} {body}"),
+            &format!("the reset answered {status} {body}"),
         );
         assert_eq!(stand_in.count(), before + 2, "one reset for {status}");
         assert_error(
