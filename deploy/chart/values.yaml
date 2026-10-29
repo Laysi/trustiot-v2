@@ -299,12 +299,13 @@ services:
   # generated passwords (README.md, 「gateway-ops」). It has no API: the mesh lets no caller reach it.
   gateway-ops:
     enabled: false
-    # 2 to 100: one connection for the assets events consumer, one for readiness, the rest for the
-    # delivery's writes in the service role. Each replica opens 4 more as its platform role (the
-    # consumer's events, readiness and the cross-tenant reads of a gateway's binding and latest
-    # configuration): 8 in all.
+    # 7 to 100: 7 is the most the service role's pool uses at once (the consumer's delivery
+    # transaction, readiness' ping and migration check, the republish lock, the two publish slots
+    # and the report task; MIN_DATABASE_CONNECTIONS in services/gateway-ops/src/config.rs), so a
+    # larger pool is never used. Each replica opens 4 more as its platform role (the consumer's
+    # events and bindings, readiness and the delivery's reads): 11 in all.
     database:
-      maxConnections: 4
+      maxConnections: 7
     # The broker account's password file is mode 0440, owned by root and the pod's fsGroup, so the
     # service reads it through this group and no other user in the container can (README.md,
     # "MQTT broker"). A group of its own, as for identity, certs and ingest. On OpenShift set
@@ -608,8 +609,8 @@ postgres:
       work_mem: 4MB
       maintenance_work_mem: 64MB
       # Fits identity, assets, certs, telemetry-query, assistant, ai-gateway, ingest and
-      # gateway-ops at one replica each while all of them roll at once (192) plus the 18 reserved
-      # connections (210), with 10 to spare; the next service that uses Postgres raises it. The
+      # gateway-ops at one replica each while all of them roll at once (198) plus the 18 reserved
+      # connections (216), with 4 to spare; the next service that uses Postgres raises it. The
       # render fails when the enabled services need more. Changing it restarts the bundled
       # Postgres (Laysi/trustiot-v2#721 raised it from 200). The memory estimate is in README.md
       # (「叢集內的 Postgres」).

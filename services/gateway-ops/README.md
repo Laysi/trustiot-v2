@@ -23,7 +23,7 @@ readiness 在下列全部成立時才是 200：
 | MQTT broker | `TRUSTIOT__MQTT__HOST`（必填）、`TRUSTIOT__MQTT__PORT`（選填，預設 1883）、`TRUSTIOT__MQTT__USERNAME`（必填，`service:gateway-ops`）、`TRUSTIOT__MQTT__PASSWORD_FILE`（必填） | 和 ingest 同一個形狀（`mqtt_client::Config`）；密碼只從檔案讀（broker 帳號的 Secret，migration Job 產生），不進環境變數與日誌 |
 | 合併節流 | `TRUSTIOT__DELIVERY__THROTTLE`（選填） | 同一台閘道器的變更合併成一次發布的時間窗，100ms 到 60s，預設 1s（「下發」） |
 
-`mqtt` 一段是必填：下發是這個服務存在的目的，readiness 也要看 broker。chart 在 Laysi/trustiot-v2#721 才渲染 gateway-ops 的 Deployment（預設關閉、nightly 不部署），所以必填不會讓現有的 chart 或 nightly 壞掉；#721 渲染時要求 `mqttBroker.enabled`。
+`mqtt` 一段是必填：下發是這個服務存在的目的，readiness 也要看 broker。chart 的 `services.gateway-ops`（Laysi/trustiot-v2#721）預設關閉，開啟時要求 `mqttBroker.enabled`，沒有 broker 就渲染失敗；chart 以 broker 的 Service 與這個服務自己的 broker 帳號填這一段，nightly 部署它並以 readiness 確認它連上 broker（見下方「部署」）。
 
 本機以 `bun scripts/dev.ts env` 印出的 `TRUSTIOT_DEV_GATEWAY_OPS_DATABASE_*` 與 `TRUSTIOT_DEV_GATEWAY_OPS_PLATFORM_DATABASE_*` 設定兩個角色（[scripts/README.md](../../scripts/README.md)）。開發環境的 Mosquitto 用靜態帳號、沒有 `service:gateway-ops`，所以在本機跑 binary 要另外給一個 broker 與帳號；測試用的是 `tests/support/broker.rs` 起的 Mosquitto（「測試」）。
 
@@ -222,7 +222,7 @@ meter `gateway-ops`：
 
 - 預設 `enabled: false`；開啟時 `mqttBroker.enabled` 也必須是 `true`，否則渲染失敗：設定只經叢集內的 broker 下發。
 - `mesh.calls.gateway-ops` 預設 `[mqtt-broker, postgres]`：mesh 只放行它連 broker 的服務埠 1883；沒有任何服務能呼叫它（它沒有 API）。
-- 上表的 Postgres 設定由 chart 給：`gateway_ops_app` 與 `gateway_ops_platform` 的密碼由 migration Job 在叢集內產生，放在 Secret `<release>-gateway-ops-password`，只有這個服務的 pod 讀得到；`TRUSTIOT__DATABASE__MAX_CONNECTIONS` 是 `services.gateway-ops.database.maxConnections`（chart 預設 `4`），連同平台角色的 4 條算進 chart 的連線預算（`tests/chart_connections.rs` 比對程式與預算）。
+- 上表的 Postgres 設定由 chart 給：`gateway_ops_app` 與 `gateway_ops_platform` 的密碼由 migration Job 在叢集內產生，放在 Secret `<release>-gateway-ops-password`，只有這個服務的 pod 讀得到；`TRUSTIOT__DATABASE__MAX_CONNECTIONS` 是 `services.gateway-ops.database.maxConnections`（chart 預設 `7`，即下限，更大的連線池用不到），連同平台角色的 4 條算進 chart 的連線預算（`tests/chart_connections.rs` 比對程式與預算）。
 - broker 帳號 `service:gateway-ops`：chart 給 `TRUSTIOT__MQTT__HOST`、`_PORT`（1883）、`_USERNAME`、`_PASSWORD_FILE`（`/etc/trustiot/mqtt-broker-account/gateway-ops`，只掛這個服務自己的 key，0440，pod 的 `fsGroup` 預設 65530），密碼由 broker 的 init container 在叢集內產生；輪替時服務不重啟，下一次連線重讀密碼檔。服務讀這些設定的程式在 Laysi/trustiot-v2#720。
 - 這些變數都保留給 chart，自訂 `env` 不能設定。
 - nightly 的 smoke 以兩份 values 連同 broker 部署它，確認它就緒（readiness 包括以 `service:gateway-ops` 連上 broker、套用回報的共享訂閱以 QoS 1 獲准，所以這也證明 chart 交給它的 broker 帳號能用）、兩個角色都有連線。
