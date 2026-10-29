@@ -5140,6 +5140,16 @@
             },
             "description": "No valid session (`unauthenticated`)."
           },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "A token another service exchanged for a call on the user's behalf (`permission_denied`): only the user's own requests log them out everywhere. No session is revoked."
+          },
           "503": {
             "content": {
               "application/json": {
@@ -5363,7 +5373,7 @@
                 }
               }
             },
-            "description": "The user is not a platform administrator (`permission_denied`)."
+            "description": "The user is not a platform administrator, or not the administrator's own request: another service exchanged the token (`permission_denied`). Nothing was created."
           },
           "422": {
             "content": {
@@ -5386,7 +5396,7 @@
             "description": "The database failed; nothing was created (`unavailable`)."
           }
         },
-        "summary": "Creates a tenant. Platform administrators only.",
+        "summary": "Creates a tenant. Platform administrators' own requests only.",
         "tags": [
           "identity"
         ]

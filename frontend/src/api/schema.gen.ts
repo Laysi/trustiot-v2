@@ -445,7 +445,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Creates a tenant. Platform administrators only. */
+        /** Creates a tenant. Platform administrators' own requests only. */
         post: operations["createTenant"];
         delete?: never;
         options?: never;
@@ -3900,6 +3900,15 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
+            /** @description A token another service exchanged for a call on the user's behalf (`permission_denied`): only the user's own requests log them out everywhere. No session is revoked. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
             /** @description The database failed; nothing was revoked (`unavailable`). */
             503: {
                 headers: {
@@ -4094,7 +4103,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description The user is not a platform administrator (`permission_denied`). */
+            /** @description The user is not a platform administrator, or not the administrator's own request: another service exchanged the token (`permission_denied`). Nothing was created. */
             403: {
                 headers: {
                     [name: string]: unknown;
