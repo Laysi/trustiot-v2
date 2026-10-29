@@ -3,10 +3,10 @@
 //! TPM) blocks only this thread and the caller that waits for it.
 
 use std::fmt;
-use std::fs::{File, OpenOptions};
+use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Write};
-use std::os::unix::fs::FileTypeExt;
-use std::path::Path;
+use std::os::unix::fs::{FileTypeExt, MetadataExt};
+use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, SyncSender, TrySendError};
 use std::thread;
 use std::time::Duration;
@@ -88,6 +88,79 @@ impl DeviceChannel {
             buffer: Box::new([0; MAX_RESPONSE_BYTES]),
         })
     }
+}
+
+impl DeviceChannel {
+    /// Opens `path` like [`DeviceChannel::open`], provided the kernel lists the device as one of
+    /// its TPM resource manager (`/sys/dev/char/<major>:<minor>` links to a `tpmrm/tpmrm<N>`
+    /// entry). The device the path names is checked before it is opened, so a link or a node
+    /// that leads to the raw device is not opened; the opened file's device number is compared
+    /// with the checked one before any command, so a path swapped in between is refused too.
+    pub(crate) fn open_resource_manager(path: &Path) -> Result<Self, TpmError> {
+        let open_error = |source| TpmError::Open {
+            path: path.to_owned(),
+            source,
+        };
+        let device = fs::metadata(path).map_err(open_error)?;
+        if !device.file_type().is_char_device() {
+            return Err(open_error(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "not a character device",
+            )));
+        }
+        let number = device.rdev();
+        let (major, minor) = device_numbers(number);
+        let entry = PathBuf::from(format!("/sys/dev/char/{major}:{minor}"));
+        let refused = |found: String| TpmError::NotResourceManagerDevice {
+            path: path.to_owned(),
+            found,
+        };
+        let target = fs::read_link(&entry).map_err(|error| {
+            refused(format!(
+                "the kernel's entry {} for device {major}:{minor} cannot be read ({error})",
+                entry.display()
+            ))
+        })?;
+        if !is_resource_manager_entry(&target) {
+            return Err(refused(format!(
+                "device {major}:{minor} is {}",
+                target.display()
+            )));
+        }
+        let channel = Self::open(path)?;
+        let opened = channel.file.metadata().map_err(open_error)?.rdev();
+        if opened != number {
+            let (major, minor) = device_numbers(opened);
+            return Err(refused(format!(
+                "the path changed to device {major}:{minor} while it was opened"
+            )));
+        }
+        Ok(channel)
+    }
+}
+
+/// Splits a Linux device number into major and minor, as glibc's `major` and `minor` do.
+fn device_numbers(device: u64) -> (u64, u64) {
+    let major = ((device >> 32) & 0xffff_f000) | ((device >> 8) & 0x0000_0fff);
+    let minor = ((device >> 12) & 0xffff_ff00) | (device & 0x0000_00ff);
+    (major, minor)
+}
+
+/// Whether a `/sys/dev/char/<major>:<minor>` link target names a device of the kernel's TPM
+/// resource manager: its last two components are `tpmrm` and `tpmrm` with decimal digits (the
+/// raw device's entry ends in `tpm/tpm<N>`).
+fn is_resource_manager_entry(target: &Path) -> bool {
+    let mut components = target.components().rev();
+    let name = components.next().and_then(|name| name.as_os_str().to_str());
+    let class = components
+        .next()
+        .and_then(|class| class.as_os_str().to_str());
+    class == Some("tpmrm")
+        && name
+            .and_then(|name| name.strip_prefix("tpmrm"))
+            .is_some_and(|number| {
+                !number.is_empty() && number.bytes().all(|byte| byte.is_ascii_digit())
+            })
 }
 
 impl TpmChannel for DeviceChannel {
@@ -211,4 +284,56 @@ fn is_retry_warning(response: &[u8]) -> bool {
             .get(6..10)
             .and_then(|code| <[u8; 4]>::try_from(code).ok())
             .is_some_and(|code| RETRY_WARNINGS.contains(&u32::from_be_bytes(code)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn device_numbers_split_like_glibc() {
+        // makedev(10, 224), makedev(254, 65536) and makedev(0x1001, 0x10001) as glibc builds them.
+        assert_eq!(device_numbers(0x0000_0000_0000_0ae0), (10, 224));
+        assert_eq!(device_numbers(0x0000_0000_1000_fe00), (254, 65536));
+        assert_eq!(device_numbers(0x0000_1000_1000_0101), (0x1001, 0x0001_0001));
+    }
+
+    #[test]
+    fn only_tpmrm_entries_count_as_the_resource_manager() {
+        for target in [
+            "../../devices/platform/soc/fe204000.spi/spi_master/spi0/spi0.1/tpmrm/tpmrm0",
+            "../../devices/LNXSYSTM:00/LNXSYBUS:00/MSFT0101:00/tpmrm/tpmrm12",
+            "tpmrm/tpmrm1",
+        ] {
+            assert!(is_resource_manager_entry(Path::new(target)), "{target}");
+        }
+        for target in [
+            "../../devices/platform/soc/fe204000.spi/spi_master/spi0/spi0.1/tpm/tpm0",
+            "../../devices/virtual/mem/null",
+            "../../devices/virtual/tpmrm/tpmrm",
+            "../../devices/virtual/tpmrm/tpmrmx",
+            "../../devices/virtual/tpm/tpmrm0",
+            "tpmrm0",
+            "",
+        ] {
+            assert!(!is_resource_manager_entry(Path::new(target)), "{target}");
+        }
+    }
+
+    #[test]
+    fn devices_the_kernel_does_not_list_as_the_resource_manager_are_refused() {
+        // /dev/null is a character device whose entry is mem/null.
+        let error = DeviceChannel::open_resource_manager(Path::new("/dev/null")).unwrap_err();
+        assert!(
+            matches!(error, TpmError::NotResourceManagerDevice { .. }),
+            "{error}"
+        );
+        assert!(error.to_string().contains("/dev/null"), "{error}");
+        let missing =
+            DeviceChannel::open_resource_manager(Path::new("/dev/tpmrm99999")).unwrap_err();
+        assert!(
+            matches!(missing, TpmError::Open { ref source, .. } if source.kind() == io::ErrorKind::NotFound),
+            "{missing}"
+        );
+    }
 }

@@ -2,12 +2,14 @@
 //!
 //! ```text
 //! trustiot-agent [--config <file>] [--check]
+//! trustiot-agent provision --hardware-id <id> [--handle <hex>] [--device <path>] [--inspect]
 //! ```
 //!
 //! Start-up loads and checks the configuration, both TLS layers, the client certificate and
 //! its key (the TPM in production), then tells systemd it is ready (`READY=1`), connected or
 //! not: a gateway without network still runs and keeps trying. `--check` stops after the
-//! checks, for operators and update health checks.
+//! checks, for operators and update health checks. `provision` is the production workstation's
+//! subcommand ([`agent::provision`]): it does not start the service.
 //!
 //! Threads: the connection (TLS handshakes, MQTT) runs on its own thread with a single-threaded
 //! tokio runtime, because a full inner handshake waits about 70 ms for the TPM signature inside
@@ -23,6 +25,7 @@
 //! SIGTERM (or SIGINT) publishes `offline`/`shutdown`, disconnects cleanly and exits within
 //! [`STOP_LIMIT`].
 
+use std::ffi::OsString;
 use std::path::PathBuf;
 use std::process::ExitCode;
 use std::sync::Arc;
@@ -43,6 +46,7 @@ use agent::polling::{self, Polled};
 use agent::sdnotify::{self, Notification, Notifier, PROGRESS_TICK};
 use agent::setup::Setup;
 use agent::tls::{RootCrl, Validity};
+use agent::tpm::TpmTransport;
 use protocol::topic::Channel;
 use protocol::{DeviceId, UnixMillis};
 use tokio::signal::unix::{SignalKind, signal};
@@ -54,13 +58,15 @@ use tracing::Level;
 const STOP_LIMIT: Duration = Duration::from_secs(10);
 
 const USAGE: &str = "usage: trustiot-agent [--config <file>] [--check]
+       trustiot-agent provision --hardware-id <id> [--handle <hex>] [--device <path>] [--inspect]
 
   --config <file>  the configuration file (default /etc/trustiot/agent.toml)
   --check          check the configuration, certificate and key, then exit
   --version        print the version
   --help           print this help
 
-The log level is TRUSTIOT_AGENT_LOG (error, warn, info, debug, trace; default info).";
+The log level is TRUSTIOT_AGENT_LOG (error, warn, info, debug, trace; default info).
+`trustiot-agent provision --help` explains the production workstation's subcommand.";
 
 struct Args {
     config: PathBuf,
@@ -73,7 +79,7 @@ enum Command {
     Version,
 }
 
-fn parse_args(mut args: impl Iterator<Item = std::ffi::OsString>) -> Result<Command, String> {
+fn parse_args(mut args: impl Iterator<Item = OsString>) -> Result<Command, String> {
     let mut parsed = Args {
         config: PathBuf::from(config::DEFAULT_PATH),
         check: false,
@@ -98,7 +104,15 @@ fn parse_args(mut args: impl Iterator<Item = std::ffi::OsString>) -> Result<Comm
     reason = "a command-line program answers --help, --version and usage errors on the terminal"
 )]
 fn main() -> ExitCode {
-    let args = match parse_args(std::env::args_os().skip(1)) {
+    let mut args = std::env::args_os().skip(1).peekable();
+    if args
+        .peek()
+        .is_some_and(|first| first == agent::provision::SUBCOMMAND)
+    {
+        let _subcommand = args.next();
+        return provision(args);
+    }
+    let args = match parse_args(args) {
         Ok(Command::Run(args)) => args,
         Ok(Command::Help) => {
             println!("{USAGE}");
@@ -153,6 +167,37 @@ fn main() -> ExitCode {
         return ExitCode::SUCCESS;
     }
     run(setup, state_directory)
+}
+
+/// `trustiot-agent provision`: the report on stdout, everything else (usage errors, logs, why it
+/// failed) on stderr, and the exit status of [`agent::provision::Exit`].
+#[allow(
+    clippy::print_stdout,
+    clippy::print_stderr,
+    reason = "a command-line program answers --help and usage errors on the terminal"
+)]
+fn provision(args: impl Iterator<Item = OsString>) -> ExitCode {
+    use agent::provision::{self, Command, Exit};
+    let options = match provision::parse_args(args) {
+        Ok(Command::Provision(options)) => options,
+        Ok(Command::Help) => {
+            println!("{}", provision::USAGE);
+            return ExitCode::SUCCESS;
+        }
+        Err(error) => {
+            eprintln!("trustiot-agent provision: {error}\n\n{}", provision::USAGE);
+            return ExitCode::from(Exit::Usage.code());
+        }
+    };
+    init_logging();
+    let device = options.device.clone();
+    let exit = provision::run(
+        &options,
+        &mut || TpmTransport::Device(device.clone()),
+        &mut std::io::stdout(),
+        &mut std::io::stderr(),
+    );
+    ExitCode::from(exit.code())
 }
 
 /// Says once at start whether the broker's chain is checked against a root CRL.
@@ -465,7 +510,7 @@ mod tests {
     use super::*;
 
     fn parse(args: &[&str]) -> Result<Command, String> {
-        parse_args(args.iter().map(std::ffi::OsString::from))
+        parse_args(args.iter().map(OsString::from))
     }
 
     #[test]

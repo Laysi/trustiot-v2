@@ -29,13 +29,15 @@
 //! process closes `/dev/tpmrm0`, and nothing was persisted, so the next run creates a new key.
 //! When two runs create at once, the second TPM2_EvictControl gets `TPM_RC_NV_DEFINED`; that run
 //! flushes its own key and reuses the first one's if it passes the same checks.
+//! That relies on the resource manager, so [`ensure_key`] and [`inspect_key`] refuse any device
+//! but `/dev/tpmrm<N>` before opening it ([`super::is_resource_manager`]).
 //!
 //! Every command goes through the worker with resends on `TPM_RC_RETRY`, `TPM_RC_YIELDED` and
 //! `TPM_RC_TESTING` (`worker::Retry::OnWarnings`), and so do the signatures of the returned key.
 
 use super::marshal::{self, PublicArea};
-use super::worker::{Retry, Worker};
-use super::{ResponseCode, TpmError, TpmKey, TpmTransport, spawn_worker};
+use super::worker::Worker;
+use super::{ResponseCode, TpmError, TpmKey, TpmTransport, spawn_provisioning_worker};
 use std::time::Duration;
 
 /// The storage root key's persistent handle (TCG TPM v2.0 Provisioning Guidance, section 7.8).
@@ -93,14 +95,15 @@ pub enum ProvisionError {
 /// # Errors
 ///
 /// [`ProvisionError::UnsupportedHandle`] before any command for a handle outside the owner's
-/// persistent range or [`SRK_HANDLE`]; [`ProvisionError::Refused`] when another object is at the
-/// handle; [`ProvisionError::Tpm`] when the device cannot be opened, or the TPM refuses a
-/// command or answers malformed.
+/// persistent range or [`SRK_HANDLE`]; [`TpmError::NotResourceManager`] before the device is
+/// opened for a device that is not `/dev/tpmrm<N>`, or [`TpmError::NotResourceManagerDevice`]
+/// before any command when the kernel does not list the device as a resource manager device;
+/// [`ProvisionError::Refused`] when another
+/// object is at the handle; [`ProvisionError::Tpm`] when the device cannot be opened, or the TPM
+/// refuses a command or answers malformed.
 pub fn ensure_key(transport: TpmTransport, handle: u32) -> Result<Provisioned, ProvisionError> {
-    if !OWNER_PERSISTENT_HANDLES.contains(&handle) || handle == SRK_HANDLE {
-        return Err(ProvisionError::UnsupportedHandle(handle));
-    }
-    let worker = spawn_worker(transport, PROVISION_RESPONSE_TIMEOUT, Retry::OnWarnings)?;
+    check_handle(handle)?;
+    let worker = spawn_provisioning_worker(transport)?;
     match read_public(&worker, handle)? {
         Some(existing) => {
             tracing::info!(handle = %Hex(handle), "the handle holds an object: checking it");
@@ -110,6 +113,44 @@ pub fn ensure_key(transport: TpmTransport, handle: u32) -> Result<Provisioned, P
             tracing::info!(handle = %Hex(handle), "the handle is empty: creating the key");
             create(worker, handle)
         }
+    }
+}
+
+/// Looks at the persistent `handle` without changing anything there: `None` when it is empty,
+/// the key when it holds the gateway key (the same checks as [`ensure_key`]'s reuse, so one test
+/// signature, which counts towards the dictionary-attack lockout only for a key with a password
+/// and without `noDA`, as the agent's start does). Never creates, persists or evicts anything.
+///
+/// # Errors
+///
+/// As [`ensure_key`], except that an empty handle is `Ok(None)`.
+pub fn inspect_key(transport: TpmTransport, handle: u32) -> Result<Option<TpmKey>, ProvisionError> {
+    check_handle(handle)?;
+    let worker = spawn_provisioning_worker(transport)?;
+    match read_public(&worker, handle)? {
+        Some(existing) => {
+            tracing::info!(handle = %Hex(handle), "the handle holds an object: checking it");
+            adopt(worker, handle, &existing, false).map(|provisioned| Some(provisioned.key))
+        }
+        None => {
+            tracing::info!(handle = %Hex(handle), "the handle is empty");
+            Ok(None)
+        }
+    }
+}
+
+/// Whether [`ensure_key`] accepts `handle`: an owner persistent handle (`0x81000000` to
+/// `0x817fffff`) other than [`SRK_HANDLE`].
+#[must_use]
+pub fn is_key_handle(handle: u32) -> bool {
+    OWNER_PERSISTENT_HANDLES.contains(&handle) && handle != SRK_HANDLE
+}
+
+fn check_handle(handle: u32) -> Result<(), ProvisionError> {
+    if is_key_handle(handle) {
+        Ok(())
+    } else {
+        Err(ProvisionError::UnsupportedHandle(handle))
     }
 }
 
@@ -625,6 +666,88 @@ mod tests {
             );
             assert!(sent.is_empty());
         }
+    }
+
+    fn inspect(steps: &[(&[u8], &str)]) -> (Result<Option<TpmKey>, ProvisionError>, Vec<Vec<u8>>) {
+        let sent = Arc::new(Mutex::new(Vec::new()));
+        let scripted = Scripted {
+            script: steps
+                .iter()
+                .map(|(command, response)| (command.to_vec(), hex(response)))
+                .collect(),
+            sent: Arc::clone(&sent),
+        };
+        let result = inspect_key(TpmTransport::Channel(Box::new(scripted)), KEY);
+        let sent = sent.lock().unwrap().clone();
+        (result, sent)
+    }
+
+    #[test]
+    fn inspect_reads_an_empty_handle_only_and_checks_an_existing_key_like_ensure_key() {
+        let (result, sent) = inspect(&[(&read_public(KEY), recorded::READ_PUBLIC_EMPTY_RESPONSE)]);
+        assert!(result.unwrap().is_none());
+        assert_eq!(sent, [read_public(KEY)]);
+
+        let (result, sent) = inspect(&[
+            (&read_public(KEY), recorded::READ_PUBLIC_KEY_RESPONSE),
+            (
+                &hex(recorded::SIGN_SELF_TEST_COMMAND),
+                recorded::SIGN_SELF_TEST_RESPONSE,
+            ),
+        ]);
+        let key = result.unwrap().unwrap();
+        let persisted = marshal::parse_read_public(&hex(recorded::READ_PUBLIC_KEY_RESPONSE));
+        assert_eq!(key.public_key_spki_der(), persisted.unwrap().spki_der());
+        assert_eq!(sent.len(), 2);
+
+        // Another object is refused after reading it, as ensure_key does.
+        let (result, sent) = inspect(&[(&read_public(KEY), recorded::READ_PUBLIC_SRK_RESPONSE)]);
+        assert!(matches!(
+            result,
+            Err(ProvisionError::Refused { handle: KEY, .. })
+        ));
+        assert_eq!(sent.len(), 1);
+        // A handle ensure_key refuses is refused before any command.
+        let (result, sent) = {
+            let sent = Arc::new(Mutex::new(Vec::new()));
+            let scripted = Scripted {
+                script: VecDeque::new(),
+                sent: Arc::clone(&sent),
+            };
+            let result = inspect_key(TpmTransport::Channel(Box::new(scripted)), SRK_HANDLE);
+            let sent = sent.lock().unwrap().clone();
+            (result, sent)
+        };
+        assert!(matches!(
+            result,
+            Err(ProvisionError::UnsupportedHandle(SRK_HANDLE))
+        ));
+        assert!(sent.is_empty());
+    }
+
+    #[test]
+    fn devices_other_than_the_resource_manager_are_refused_before_they_are_opened() {
+        // /dev/null is a character device that answers nothing: opened and sent a command, it
+        // would end with a malformed response, not with this refusal.
+        for device in ["/dev/null", "/dev/tpm0", "/dev/tpmrm0/../tpm0", "tpmrm0"] {
+            let refused = |result: Result<(), ProvisionError>| {
+                assert!(
+                    matches!(
+                        result,
+                        Err(ProvisionError::Tpm(TpmError::NotResourceManager(ref path)))
+                            if path.as_os_str() == device
+                    ),
+                    "{device}: {result:?}"
+                );
+            };
+            refused(ensure_key(TpmTransport::Device(device.into()), KEY).map(|_| ()));
+            refused(inspect_key(TpmTransport::Device(device.into()), KEY).map(|_| ()));
+        }
+        // The handle is checked first.
+        assert!(matches!(
+            ensure_key(TpmTransport::Device("/dev/null".into()), SRK_HANDLE),
+            Err(ProvisionError::UnsupportedHandle(SRK_HANDLE))
+        ));
     }
 
     #[test]
