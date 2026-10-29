@@ -1,7 +1,7 @@
-//! Cross-tenant negative tests (decision 29, crates/testkit; Laysi/trustiot-v2#719 acceptance 5):
-//! the gateway operations service's Postgres role cannot read or change another tenant's
-//! bindings, models, devices or configurations, and every relation the role can reach is
-//! declared. The schema is the product's, applied by the migration Job (`testkit::product`).
+//! Cross-tenant negative tests (decision 29, crates/testkit; Laysi/trustiot-v2#719 acceptance 5,
+//! Laysi/trustiot-v2#720): the gateway operations service's Postgres role cannot read or change
+//! another tenant's bindings, models, devices, configurations or their publishes and reports,
+//! and every relation the role can reach is declared. The schema is the product's, applied by the migration Job (`testkit::product`).
 //!
 //! The suite probes the service role, which keeps the projection and writes configurations in
 //! the event's tenant. The platform role reads every tenant's bindings and configurations by
@@ -40,6 +40,18 @@ const SEED_CONFIG: &str = "INSERT INTO gateway_ops.desired_configs
     (tenant_id, hardware_id, version, binding_id, bound, payload, device_count, event_id)
 VALUES ($1::uuid, $3, 1, $2::uuid, true, '\\x01'::bytea, 0, gen_random_uuid())";
 
+/// One configuration's publish: its configuration (the foreign key's parent) is written in the
+/// same statement. `$2` is the configuration's binding ID, the canary its gateway's hardware ID.
+const SEED_DELIVERY: &str = "WITH config AS (
+    INSERT INTO gateway_ops.desired_configs
+        (tenant_id, hardware_id, version, binding_id, bound, payload, device_count, event_id)
+    VALUES ($1::uuid, $3, 1, $2::uuid, true, '\\x01'::bytea, 0, gen_random_uuid())
+    RETURNING tenant_id, hardware_id, version
+)
+INSERT INTO gateway_ops.config_deliveries
+    (tenant_id, hardware_id, version, first_published_at, last_published_at)
+SELECT tenant_id, hardware_id, version, now(), now() FROM config";
+
 const CONSUMER_TABLE: &str = "the outbox consumer's bookkeeping (crates/outbox): subscription \
      positions and processed or failed event IDs, no tenant data; the consumer reads and writes \
      it in transactions without a tenant";
@@ -61,6 +73,10 @@ async fn tenants_are_isolated() {
     .table(pg_table!("gateway_ops.device_models", seed = SEED_MODEL))
     .table(pg_table!("gateway_ops.devices", seed = SEED_DEVICE))
     .table(pg_table!("gateway_ops.desired_configs", seed = SEED_CONFIG))
+    .table(pg_table!(
+        "gateway_ops.config_deliveries",
+        seed = SEED_DELIVERY
+    ))
     .exempt("gateway_ops.outbox_subscription", CONSUMER_TABLE)
     .exempt("gateway_ops.outbox_inbox", CONSUMER_TABLE)
     .exempt("gateway_ops.outbox_dead_letter", CONSUMER_TABLE)

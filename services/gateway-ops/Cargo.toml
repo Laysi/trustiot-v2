@@ -1,16 +1,16 @@
 [package]
 name = "gateway-ops"
-description = "TrustIoT v2 gateway operations service: each gateway's versioned desired configuration, generated from the assets service's events (decision 7)."
+description = "TrustIoT v2 gateway operations service: each gateway's versioned desired configuration, generated from the assets service's events and delivered retained over MQTT (decision 7)."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 publish.workspace = true
 repository.workspace = true
 
-# The service is built in steps under Laysi/trustiot-v2#93: this release (Laysi/trustiot-v2#719)
-# keeps the projection of the assets service's models, devices and bindings and stores every
-# gateway's desired configuration as versions in Postgres; the MQTT delivery and the apply
-# reports are Laysi/trustiot-v2#720, the chart Laysi/trustiot-v2#721.
+# The service is built in steps under Laysi/trustiot-v2#93: it keeps the projection of the assets
+# service's models, devices and bindings and stores every gateway's desired configuration as
+# versions in Postgres (Laysi/trustiot-v2#719), and delivers them over MQTT and records the apply
+# reports (Laysi/trustiot-v2#720); the chart is Laysi/trustiot-v2#721.
 
 [[bin]]
 name = "gateway-ops"
@@ -21,6 +21,8 @@ doc = false
 [dependencies]
 axum.workspace = true
 contract = { path = "../../crates/contract" }
+# Publishes the configurations and receives the apply reports (README.md, "下發").
+mqtt-client = { path = "../../crates/mqtt-client" }
 # The counters of generated, failed and ignored configurations (README.md, "指標").
 opentelemetry = { workspace = true, features = ["metrics"] }
 # Consumes the assets service's model, device and binding events (decision 4).
@@ -35,16 +37,25 @@ service-kit = { path = "../../crates/service-kit" }
 sqlx = { workspace = true, features = ["chrono", "postgres", "runtime-tokio", "tls-rustls-ring-webpki"] }
 chrono.workspace = true
 thiserror.workspace = true
-tokio = { workspace = true, features = ["macros", "net", "rt-multi-thread", "time"] }
+tokio = { workspace = true, features = ["macros", "net", "rt-multi-thread", "sync", "time"] }
+# The shutdown token the delivery stops on (service-kit's `stopping_token`).
+tokio-util.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
+# Crafted apply reports: an extra field naming another gateway in the payload.
+cbor4ii = { workspace = true, features = ["serde1", "use_std"] }
+# The stand-in broker's accounts (the broker's role for service:gateway-ops from tools/migrate's
+# own definition).
+migrate = { path = "../../tools/migrate" }
 reqwest.workspace = true
 # The product's schema (the migration Job) and the cross-tenant suite.
 testkit = { path = "../../crates/testkit" }
 tokio = { workspace = true, features = ["macros", "process", "rt", "rt-multi-thread", "time"] }
 # Captures the service's log events in the tests that run the consumer in the test's thread.
 tracing-subscriber = { workspace = true, features = ["registry", "std"] }
+# The test broker's random passwords.
+uuid = { workspace = true, features = ["v4"] }
 
 [lints]
 workspace = true

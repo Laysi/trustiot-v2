@@ -1,0 +1,252 @@
+# fmt、clippy、workspace 測試：建置主機（arm64 Linux VM），CI=1，commit 3bad6845 的樹
+# cargo deny：建置主機（x86_64 Linux），同一份程式碼（== deny 段）；腳本的測試見報告的「workspace」一節
+# 每個測試執行檔一行：執行檔（crate 與檔案）與它的 test result；其餘段落照原樣
+
+== fmt
+fmt-ok
+== clippy
+     Removed 163 files, 363.8MiB total
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 11.09s
+== deny (build host, x86_64 Linux; same code, with this report being updated)
+advisories ok, bans ok, licenses ok, sources ok
+deny exit 0
+exit 0 at 21:08:46 (build host)
+== workspace test
+ai_clients unittests src/lib.rs: ok, 8 passed, 0 failed, 0 ignored
+anthropic_fixtures tests/anthropic_fixtures.rs: ok, 22 passed, 0 failed, 0 ignored
+anthropic_http tests/anthropic_http.rs: ok, 14 passed, 0 failed, 0 ignored
+decisions tests/decisions.rs: ok, 10 passed, 0 failed, 0 ignored
+no_contract tests/no_contract.rs: ok, 2 passed, 0 failed, 0 ignored
+tls tests/tls.rs: ok, 3 passed, 0 failed, 0 ignored
+ai_gateway unittests src/lib.rs: ok, 26 passed, 0 failed, 0 ignored
+admin tests/admin.rs: ok, 4 passed, 0 failed, 0 ignored
+chart_connections tests/chart_connections.rs: ok, 1 passed, 0 failed, 0 ignored
+decisions tests/decisions.rs: ok, 4 passed, 0 failed, 0 ignored
+fallback tests/fallback.rs: ok, 9 passed, 0 failed, 0 ignored
+messages tests/messages.rs: ok, 7 passed, 0 failed, 0 ignored
+no_contract tests/no_contract.rs: ok, 2 passed, 0 failed, 0 ignored
+process tests/process.rs: ok, 8 passed, 0 failed, 0 ignored
+roles_store tests/roles_store.rs: ok, 9 passed, 0 failed, 0 ignored
+ai_gateway_api unittests src/lib.rs: ok, 5 passed, 0 failed, 0 ignored
+no_contract tests/no_contract.rs: ok, 2 passed, 0 failed, 0 ignored
+assets unittests src/lib.rs: ok, 36 passed, 0 failed, 0 ignored
+background_identity tests/background_identity.rs: ok, 1 passed, 0 failed, 0 ignored
+chart_connections tests/chart_connections.rs: ok, 1 passed, 0 failed, 0 ignored
+cross_tenant tests/cross_tenant.rs: ok, 1 passed, 0 failed, 0 ignored
+device_models tests/device_models.rs: ok, 5 passed, 0 failed, 0 ignored
+devices tests/devices.rs: ok, 7 passed, 0 failed, 0 ignored
+gateway_pool tests/gateway_pool.rs: ok, 7 passed, 0 failed, 0 ignored
+migrations tests/migrations.rs: ok, 1 passed, 0 failed, 0 ignored
+tenant_created tests/tenant_created.rs: ok, 1 passed, 0 failed, 0 ignored
+assistant unittests src/lib.rs: ok, 51 passed, 0 failed, 0 ignored
+agent tests/agent.rs: ok, 10 passed, 0 failed, 0 ignored
+agent_logs tests/agent_logs.rs: ok, 2 passed, 0 failed, 0 ignored
+chart_connections tests/chart_connections.rs: ok, 1 passed, 0 failed, 0 ignored
+conversation_threads tests/conversation_threads.rs: ok, 9 passed, 0 failed, 0 ignored
+cross_tenant tests/cross_tenant.rs: ok, 1 passed, 0 failed, 0 ignored
+delegated_tools tests/delegated_tools.rs: ok, 13 passed, 0 failed, 0 ignored
+history_store tests/history_store.rs: ok, 5 passed, 0 failed, 0 ignored
+startup tests/startup.rs: ok, 1 passed, 0 failed, 0 ignored
+telemetry_sql tests/telemetry_sql.rs: ok, 2 passed, 0 failed, 0 ignored
+tools tests/tools.rs: ok, 7 passed, 0 failed, 0 ignored
+ca_keys unittests src/lib.rs: ok, 6 passed, 0 failed, 0 ignored
+certs unittests src/lib.rs: ok, 43 passed, 0 failed, 0 ignored
+bindings tests/bindings.rs: ok, 3 passed, 0 failed, 0 ignored
+broker tests/broker.rs: ok, 5 passed, 0 failed, 0 ignored
+broker_certificate tests/broker_certificate.rs: ok, 1 passed, 0 failed, 0 ignored
+ceremony tests/ceremony.rs: ok, 3 passed, 0 failed, 0 ignored
+chart_connections tests/chart_connections.rs: ok, 1 passed, 0 failed, 0 ignored
+crl tests/crl.rs: ok, 2 passed, 0 failed, 0 ignored
+cross_tenant tests/cross_tenant.rs: ok, 1 passed, 0 failed, 0 ignored
+dynsec tests/dynsec.rs: ok, 1 passed, 0 failed, 0 ignored
+issuance tests/issuance.rs: ok, 5 passed, 0 failed, 0 ignored
+key_custody tests/key_custody.rs: ok, 3 passed, 0 failed, 0 ignored
+registration tests/registration.rs: ok, 5 passed, 0 failed, 0 ignored
+renewal tests/renewal.rs: ok, 3 passed, 0 failed, 0 ignored
+renewal_lag tests/renewal_lag.rs: ok, 1 passed, 0 failed, 0 ignored
+workstation tests/workstation.rs: ok, 4 passed, 0 failed, 0 ignored
+workstation_tool tests/workstation_tool.rs: ok, 1 passed, 0 failed, 0 ignored
+contract unittests src/lib.rs: ok, 48 passed, 0 failed, 0 ignored
+client tests/client.rs: ok, 14 passed, 0 failed, 0 ignored
+client_logging tests/client_logging.rs: ok, 1 passed, 0 failed, 0 ignored
+error_format tests/error_format.rs: ok, 7 passed, 0 failed, 0 ignored
+events tests/events.rs: ok, 20 passed, 0 failed, 0 ignored
+gateway_ops unittests src/lib.rs: ok, 23 passed, 0 failed, 0 ignored
+cross_tenant tests/cross_tenant.rs: ok, 1 passed, 0 failed, 0 ignored
+delivery tests/delivery.rs: ok, 6 passed, 0 failed, 0 ignored
+desired_config tests/desired_config.rs: ok, 7 passed, 0 failed, 0 ignored
+generation_errors tests/generation_errors.rs: ok, 1 passed, 0 failed, 0 ignored
+startup tests/startup.rs: ok, 1 passed, 0 failed, 0 ignored
+unknown_events tests/unknown_events.rs: ok, 1 passed, 0 failed, 0 ignored
+identity unittests src/lib.rs: ok, 126 passed, 0 failed, 0 ignored
+account tests/account.rs: ok, 4 passed, 0 failed, 0 ignored
+adversarial tests/adversarial.rs: ok, 11 passed, 0 failed, 0 ignored
+ai_model_roles tests/ai_model_roles.rs: ok, 2 passed, 0 failed, 0 ignored
+chart_connections tests/chart_connections.rs: ok, 2 passed, 0 failed, 0 ignored
+cross_tenant tests/cross_tenant.rs: ok, 1 passed, 0 failed, 0 ignored
+event_log tests/event_log.rs: ok, 1 passed, 0 failed, 0 ignored
+ext_authz tests/ext_authz.rs: ok, 14 passed, 0 failed, 0 ignored
+login tests/login.rs: ok, 12 passed, 0 failed, 0 ignored
+members tests/members.rs: ok, 1 passed, 0 failed, 0 ignored
+migrations tests/migrations.rs: ok, 1 passed, 0 failed, 0 ignored
+platform_admin tests/platform_admin.rs: ok, 1 passed, 0 failed, 0 ignored
+tenants tests/tenants.rs: ok, 1 passed, 0 failed, 0 ignored
+token_claims tests/token_claims.rs: ok, 8 passed, 0 failed, 0 ignored
+identity_keys unittests src/lib.rs: ok, 24 passed, 0 failed, 0 ignored
+ingest unittests src/lib.rs: ok, 36 passed, 0 failed, 0 ignored
+clickhouse tests/clickhouse.rs: ok, 2 passed, 0 failed, 0 ignored
+cross_tenant tests/cross_tenant.rs: ok, 1 passed, 0 failed, 0 ignored
+disk_watermark tests/disk_watermark.rs: ok, 1 passed, 0 failed, 0 ignored
+gateway_bindings tests/gateway_bindings.rs: ok, 1 passed, 0 failed, 0 ignored
+migrations tests/migrations.rs: ok, 7 passed, 0 failed, 0 ignored
+rollups tests/rollups.rs: ok, 1 passed, 0 failed, 0 ignored
+startup tests/startup.rs: ok, 1 passed, 0 failed, 0 ignored
+telemetry tests/telemetry.rs: ok, 1 passed, 0 failed, 0 ignored
+lab_dataset unittests src/lib.rs: ok, 37 passed, 0 failed, 0 ignored
+anomalies tests/anomalies.rs: ok, 4 passed, 0 failed, 0 ignored
+clickhouse_load tests/clickhouse_load.rs: ok, 1 passed, 0 failed, 0 ignored
+record tests/record.rs: ok, 1 passed, 0 failed, 0 ignored
+rollups tests/rollups.rs: ok, 1 passed, 0 failed, 0 ignored
+synthetic_fixture tests/synthetic_fixture.rs: ok, 8 passed, 0 failed, 0 ignored
+migrate unittests src/lib.rs: ok, 90 passed, 0 failed, 0 ignored
+ca_keys tests/ca_keys.rs: ok, 7 passed, 0 failed, 0 ignored
+clickhouse tests/clickhouse.rs: ok, 1 passed, 0 failed, 0 ignored
+clickhouse_admin tests/clickhouse_admin.rs: ok, 6 passed, 0 failed, 0 ignored
+clickhouse_backfill tests/clickhouse_backfill.rs: ok, 1 passed, 0 failed, 0 ignored
+clickhouse_telemetry_query tests/clickhouse_telemetry_query.rs: ok, 1 passed, 0 failed, 0 ignored
+concurrent_runs tests/concurrent_runs.rs: ok, 1 passed, 0 failed, 0 ignored
+file_escapes tests/file_escapes.rs: ok, 1 passed, 0 failed, 0 ignored
+fresh_database tests/fresh_database.rs: ok, 1 passed, 0 failed, 0 ignored
+mqtt_accounts tests/mqtt_accounts.rs: ok, 3 passed, 0 failed, 0 ignored
+mqtt_broker tests/mqtt_broker.rs: ok, 6 passed, 0 failed, 0 ignored
+mqtt_certificate tests/mqtt_certificate.rs: ok, 5 passed, 0 failed, 0 ignored
+mqtt_trust tests/mqtt_trust.rs: ok, 5 passed, 0 failed, 0 ignored
+one_instance_per_cluster tests/one_instance_per_cluster.rs: ok, 1 passed, 0 failed, 0 ignored
+outbox_and_tenant_roles tests/outbox_and_tenant_roles.rs: ok, 1 passed, 0 failed, 0 ignored
+passwords tests/passwords.rs: ok, 11 passed, 0 failed, 0 ignored
+platform_admin tests/platform_admin.rs: ok, 1 passed, 0 failed, 0 ignored
+registry tests/registry.rs: ok, 6 passed, 0 failed, 0 ignored
+service_records tests/service_records.rs: ok, 1 passed, 0 failed, 0 ignored
+settings tests/settings.rs: ok, 1 passed, 0 failed, 0 ignored
+signing_keys tests/signing_keys.rs: ok, 15 passed, 0 failed, 0 ignored
+system_databases tests/system_databases.rs: ok, 2 passed, 0 failed, 0 ignored
+wait_for_job tests/wait_for_job.rs: ok, 4 passed, 0 failed, 0 ignored
+mqtt_bridge unittests src/lib.rs: ok, 30 passed, 0 failed, 0 ignored
+exposure tests/exposure.rs: ok, 6 passed, 0 failed, 0 ignored
+keepalive tests/keepalive.rs: ok, 2 passed, 0 failed, 0 ignored
+limits tests/limits.rs: ok, 5 passed, 0 failed, 0 ignored
+relay tests/relay.rs: ok, 4 passed, 0 failed, 0 ignored
+shutdown tests/shutdown.rs: ok, 1 passed, 0 failed, 0 ignored
+source_ip tests/source_ip.rs: ok, 2 passed, 0 failed, 0 ignored
+startup tests/startup.rs: ok, 3 passed, 0 failed, 0 ignored
+mqtt_client unittests src/lib.rs: ok, 13 passed, 0 failed, 0 ignored
+broker tests/broker.rs: ok, 2 passed, 0 failed, 0 ignored
+logging tests/logging.rs: ok, 1 passed, 0 failed, 0 ignored
+password tests/password.rs: ok, 3 passed, 0 failed, 0 ignored
+stand_in tests/stand_in.rs: ok, 2 passed, 0 failed, 0 ignored
+openapi unittests src/lib.rs: ok, 12 passed, 0 failed, 0 ignored
+openapi unittests src/main.rs: ok, 0 passed, 0 failed, 0 ignored
+openapi tests/openapi.rs: ok, 5 passed, 0 failed, 0 ignored
+outbox unittests src/lib.rs: ok, 10 passed, 0 failed, 0 ignored
+crash tests/crash.rs: ok, 2 passed, 0 failed, 0 ignored
+delivery tests/delivery.rs: ok, 13 passed, 0 failed, 0 ignored
+failure_paths tests/failure_paths.rs: ok, 3 passed, 0 failed, 0 ignored
+handler_panic tests/handler_panic.rs: ok, 7 passed, 0 failed, 0 ignored
+metrics tests/metrics.rs: ok, 1 passed, 0 failed, 0 ignored
+notify tests/notify.rs: ok, 2 passed, 0 failed, 0 ignored
+postgres_start tests/postgres_start.rs: ok, 3 passed, 0 failed, 0 ignored
+producer tests/producer.rs: ok, 4 passed, 0 failed, 0 ignored
+tenancy tests/tenancy.rs: ok, 6 passed, 0 failed, 0 ignored
+verify_271 tests/verify_271.rs: ok, 13 passed, 0 failed, 0 ignored
+protocol unittests src/lib.rs: ok, 41 passed, 0 failed, 0 ignored
+adversarial tests/adversarial.rs: ok, 16 passed, 0 failed, 0 ignored
+allocation tests/allocation.rs: ok, 1 passed, 0 failed, 0 ignored
+broker tests/broker.rs: ok, 2 passed, 0 failed, 0 ignored
+compat tests/compat.rs: ok, 10 passed, 0 failed, 0 ignored
+dependencies tests/dependencies.rs: ok, 1 passed, 0 failed, 0 ignored
+fuzz tests/fuzz.rs: ok, 5 passed, 0 failed, 0 ignored
+fuzz_split tests/fuzz_split.rs: ok, 3 passed, 0 failed, 0 ignored
+golden tests/golden.rs: ok, 6 passed, 0 failed, 0 ignored
+limits tests/limits.rs: ok, 5 passed, 0 failed, 0 ignored
+readme tests/readme.rs: ok, 2 passed, 0 failed, 0 ignored
+robustness tests/robustness.rs: ok, 12 passed, 0 failed, 0 ignored
+split tests/split.rs: ok, 13 passed, 0 failed, 0 ignored
+validation tests/validation.rs: ok, 18 passed, 0 failed, 0 ignored
+repo_check unittests src/lib.rs: ok, 18 passed, 0 failed, 0 ignored
+repository tests/repository.rs: ok, 10 passed, 0 failed, 0 ignored
+service_kit unittests src/lib.rs: ok, 109 passed, 0 failed, 0 ignored
+chart_contract tests/chart_contract.rs: ok, 4 passed, 0 failed, 0 ignored
+container tests/container.rs: ok, 1 passed, 0 failed, 0 ignored
+dependency_isolation tests/dependency_isolation.rs: ok, 2 passed, 0 failed, 0 ignored
+errors tests/errors.rs: ok, 2 passed, 0 failed, 0 ignored
+identity tests/identity.rs: ok, 3 passed, 0 failed, 0 ignored
+identity_adversarial tests/identity_adversarial.rs: ok, 17 passed, 0 failed, 0 ignored
+job_lock tests/job_lock.rs: ok, 10 passed, 0 failed, 0 ignored
+lifecycle tests/lifecycle.rs: ok, 12 passed, 0 failed, 0 ignored
+logging tests/logging.rs: ok, 1 passed, 0 failed, 0 ignored
+otlp tests/otlp.rs: ok, 9 passed, 0 failed, 0 ignored
+postgres_start tests/postgres_start.rs: ok, 3 passed, 0 failed, 0 ignored
+postgres_trust tests/postgres_trust.rs: ok, 3 passed, 0 failed, 0 ignored
+tenant_db tests/tenant_db.rs: ok, 15 passed, 0 failed, 0 ignored
+verify_config tests/verify_config.rs: ok, 6 passed, 0 failed, 0 ignored
+verify_container tests/verify_container.rs: ok, 1 passed, 0 failed, 0 ignored
+verify_job_lock tests/verify_job_lock.rs: ok, 4 passed, 0 failed, 0 ignored
+verify_leaks tests/verify_leaks.rs: ok, 2 passed, 0 failed, 0 ignored
+verify_shutdown tests/verify_shutdown.rs: ok, 6 passed, 0 failed, 0 ignored
+sql_check unittests src/lib.rs: ok, 20 passed, 0 failed, 0 ignored
+check tests/check.rs: ok, 6 passed, 0 failed, 0 ignored
+telemetry_query unittests src/lib.rs: ok, 84 passed, 0 failed, 0 ignored
+chart_connections tests/chart_connections.rs: ok, 1 passed, 0 failed, 0 ignored
+cross_tenant tests/cross_tenant.rs: ok, 1 passed, 0 failed, 0 ignored
+history tests/history.rs: ok, 1 passed, 0 failed, 0 ignored
+queryable_period tests/queryable_period.rs: ok, 1 passed, 0 failed, 0 ignored
+semantic tests/semantic.rs: ok, 1 passed, 0 failed, 0 ignored
+sql_api tests/sql_api.rs: ok, 1 passed, 0 failed, 0 ignored
+sql_check tests/sql_check.rs: ok, 17 passed, 0 failed, 0 ignored
+tenant_accounts tests/tenant_accounts.rs: ok, 1 passed, 0 failed, 0 ignored
+testkit unittests src/lib.rs: ok, 42 passed, 0 failed, 0 ignored
+container_volumes tests/container_volumes.rs: ok, 2 passed, 0 failed, 0 ignored
+modbus_endpoint tests/modbus_endpoint.rs: ok, 20 passed, 0 failed, 0 ignored
+modbus_example tests/modbus_example.rs: ok, 1 passed, 0 failed, 0 ignored
+postgres_isolation tests/postgres_isolation.rs: ok, 6 passed, 0 failed, 0 ignored
+postgres_start tests/postgres_start.rs: ok, 2 passed, 0 failed, 0 ignored
+web unittests src/lib.rs: ok, 7 passed, 0 failed, 0 ignored
+process tests/process.rs: ok, 2 passed, 0 failed, 0 ignored
+serve tests/serve.rs: ok, 13 passed, 0 failed, 0 ignored
+webpki_roots unittests src/lib.rs: ok, 0 passed, 0 failed, 0 ignored
+workstation unittests src/lib.rs: ok, 44 passed, 0 failed, 0 ignored
+trustiot_workstation unittests src/main.rs: ok, 0 passed, 0 failed, 0 ignored
+identity tests/identity.rs: ok, 4 passed, 0 failed, 0 ignored
+login tests/login.rs: ok, 17 passed, 0 failed, 0 ignored
+register tests/register.rs: ok, 10 passed, 0 failed, 0 ignored
+ai_clients doc-tests: ok, 0 passed, 0 failed, 0 ignored
+ai_gateway doc-tests: ok, 0 passed, 0 failed, 0 ignored
+ai_gateway_api doc-tests: ok, 0 passed, 0 failed, 0 ignored
+assets doc-tests: ok, 0 passed, 0 failed, 0 ignored
+assistant doc-tests: ok, 0 passed, 0 failed, 1 ignored
+ca_keys doc-tests: ok, 0 passed, 0 failed, 0 ignored
+certs doc-tests: ok, 0 passed, 0 failed, 0 ignored
+contract doc-tests: ok, 6 passed, 0 failed, 0 ignored
+contract doc-tests: ok, 4 passed, 0 failed, 0 ignored
+gateway_ops doc-tests: ok, 0 passed, 0 failed, 0 ignored
+identity doc-tests: ok, 0 passed, 0 failed, 0 ignored
+identity_keys doc-tests: ok, 0 passed, 0 failed, 0 ignored
+ingest doc-tests: ok, 0 passed, 0 failed, 0 ignored
+lab_dataset doc-tests: ok, 1 passed, 0 failed, 0 ignored
+migrate doc-tests: ok, 0 passed, 0 failed, 0 ignored
+mqtt_bridge doc-tests: ok, 0 passed, 0 failed, 0 ignored
+mqtt_client doc-tests: ok, 0 passed, 0 failed, 0 ignored
+openapi doc-tests: ok, 0 passed, 0 failed, 0 ignored
+outbox doc-tests: ok, 0 passed, 0 failed, 0 ignored
+protocol doc-tests: ok, 1 passed, 0 failed, 0 ignored
+repo_check doc-tests: ok, 0 passed, 0 failed, 0 ignored
+service_kit doc-tests: ok, 8 passed, 0 failed, 0 ignored
+service_kit doc-tests: ok, 10 passed, 0 failed, 0 ignored
+sql_check doc-tests: ok, 0 passed, 0 failed, 0 ignored
+telemetry_query doc-tests: ok, 0 passed, 0 failed, 0 ignored
+testkit doc-tests: ok, 1 passed, 0 failed, 0 ignored
+web doc-tests: ok, 0 passed, 0 failed, 0 ignored
+webpki_roots doc-tests: ok, 0 passed, 0 failed, 0 ignored
+workstation doc-tests: ok, 0 passed, 0 failed, 0 ignored
+total: 236 test result lines, 1862 passed, 0 failed, 1 ignored
+exit 0 at 21:01:38 (build host, arm64 Linux VM)

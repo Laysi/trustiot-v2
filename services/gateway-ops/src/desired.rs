@@ -1,8 +1,9 @@
 //! The read interface of the stored desired configurations (services/gateway-ops/README.md,
-//! "讀取介面"), for the delivery of Laysi/trustiot-v2#720: a gateway's current configuration, and
-//! every gateway's latest version for republishing after a start.
+//! "讀取介面"), for the delivery ([`crate::delivery`]): a gateway's current configuration, every
+//! gateway's latest version for the republish after a connection, and what an apply report is
+//! checked against ([`DesiredConfigs::report_target`]).
 //!
-//! The delivery works per gateway, before it knows a tenant, so both reads are the platform
+//! The delivery works per gateway, before it knows a tenant, so the reads are the platform
 //! role's, in READ ONLY transactions through the `platform_access` policy of
 //! `gateway_ops.desired_configs`, which opens SELECT only. The payload is returned exactly as
 //! stored, so what is published is what was validated and versioned; it is decoded here once
@@ -68,6 +69,47 @@ LEFT JOIN LATERAL (
     LIMIT 1
 ) AS binding ON true
 ORDER BY config.hardware_id";
+
+/// What an apply report is checked against: the gateway's latest version (with
+/// `for_latest_binding` as in [`CURRENT`]) and the tenant and binding of the reported version,
+/// if it exists. No payload is read. `$1` hardware ID, `$2` the reported version.
+const REPORT_TARGET: &str = "SELECT latest.version AS latest_version,
+    latest.tenant_id::text AS latest_tenant, latest.binding_id::text AS latest_binding,
+    COALESCE(binding.tenant_id = latest.tenant_id AND binding.binding_id = latest.binding_id
+        AND (binding.unbound_at IS NULL) = latest.bound, false) AS for_latest_binding,
+    reported.tenant_id::text AS reported_tenant, reported.binding_id::text AS reported_binding
+FROM (
+    SELECT hardware_id, tenant_id, binding_id, version, bound
+    FROM gateway_ops.desired_configs
+    WHERE hardware_id = $1
+    ORDER BY version DESC
+    LIMIT 1
+) AS latest
+LEFT JOIN LATERAL (
+    SELECT tenant_id, binding_id, unbound_at
+    FROM gateway_ops.gateway_bindings
+    WHERE hardware_id = latest.hardware_id
+    ORDER BY position_tx DESC, position_id DESC
+    LIMIT 1
+) AS binding ON true
+LEFT JOIN gateway_ops.desired_configs AS reported
+    ON reported.hardware_id = latest.hardware_id AND reported.version = $2";
+
+/// What [`DesiredConfigs::report_target`] found for a gateway and a reported version.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ReportTarget {
+    /// The gateway's latest version.
+    pub latest: ConfigVersion,
+    /// The tenant of the latest version.
+    pub latest_tenant: TenantId,
+    /// The binding of the latest version.
+    pub latest_binding: GatewayBindingId,
+    /// Whether the latest version was made for the gateway's latest binding (see the module).
+    pub for_latest_binding: bool,
+    /// The tenant and binding of the reported version; `None` when the gateway has no such
+    /// version.
+    pub reported: Option<(TenantId, GatewayBindingId)>,
+}
 
 /// A gateway's stored desired configuration.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -161,6 +203,59 @@ impl DesiredConfigs {
             return Err(ReadError::NotForLatestBinding(hardware_id.clone()));
         }
         stored_config(&row).map(Some)
+    }
+
+    /// What a report of `gateway` about `version` is checked against; `None` when the gateway
+    /// has no configuration at all.
+    ///
+    /// # Errors
+    ///
+    /// [`ReadError`] when the database fails or a stored row is corrupt.
+    pub async fn report_target(
+        &self,
+        hardware_id: &GatewayId,
+        version: ConfigVersion,
+    ) -> Result<Option<ReportTarget>, ReadError> {
+        let mut tx = self.reader.begin().await?;
+        let row = sqlx::query(REPORT_TARGET)
+            .bind(hardware_id.as_str())
+            .bind(i64::try_from(version.get()).unwrap_or(i64::MAX))
+            .fetch_optional(&mut *tx)
+            .await?;
+        tx.commit().await?;
+        let Some(row) = row else {
+            return Ok(None);
+        };
+        let latest = u64::try_from(row.try_get::<i64, _>("latest_version")?)
+            .ok()
+            .and_then(ConfigVersion::new)
+            .ok_or(ReadError::Corrupt("version"))?;
+        let reported_tenant: Option<String> = row.try_get("reported_tenant")?;
+        let reported_binding: Option<String> = row.try_get("reported_binding")?;
+        let reported = match (reported_tenant, reported_binding) {
+            (Some(tenant), Some(binding)) => Some((
+                tenant
+                    .parse()
+                    .map_err(|_| ReadError::Corrupt("tenant_id"))?,
+                binding
+                    .parse()
+                    .map_err(|_| ReadError::Corrupt("binding_id"))?,
+            )),
+            _ => None,
+        };
+        Ok(Some(ReportTarget {
+            latest,
+            latest_tenant: row
+                .try_get::<String, _>("latest_tenant")?
+                .parse()
+                .map_err(|_| ReadError::Corrupt("tenant_id"))?,
+            latest_binding: row
+                .try_get::<String, _>("latest_binding")?
+                .parse()
+                .map_err(|_| ReadError::Corrupt("binding_id"))?,
+            for_latest_binding: row.try_get("for_latest_binding")?,
+            reported,
+        }))
     }
 
     /// Every gateway's latest version, by hardware ID. A gateway whose latest version was not

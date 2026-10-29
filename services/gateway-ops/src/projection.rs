@@ -33,6 +33,10 @@
 //! a time across replicas, so the latest version read in step 1 cannot change before the write.
 //! The cross-tenant unique index on `(hardware_id, version)` turns any break of that rule into a
 //! retried database error instead of two configurations with one version.
+//!
+//! Each stored version is announced to the delivery ([`AssetsEventsHandler::with_delivery`],
+//! [`crate::delivery`]) before the event's transaction commits; the delivery publishes it once it
+//! is visible.
 
 use std::collections::HashMap;
 
@@ -52,6 +56,7 @@ use service_kit::tenant::{PlatformActor, PlatformDb, PlatformReader};
 use sqlx::postgres::PgRow;
 use sqlx::{PgConnection, Postgres, Row, Transaction};
 
+use crate::delivery::DeliveryHandle;
 use crate::generate::{self, Content, DeviceRow, GenerationError, ModelRow};
 
 /// The consumer's subscription to the assets service's events; never renamed (a new name starts
@@ -364,6 +369,7 @@ impl Fallback {
 pub struct AssetsEventsHandler {
     reader: PlatformReader,
     metrics: Metrics,
+    delivery: Option<DeliveryHandle>,
 }
 
 impl AssetsEventsHandler {
@@ -376,6 +382,20 @@ impl AssetsEventsHandler {
         Self {
             reader: platform.reader(actor, READ_PURPOSE),
             metrics: Metrics::new(),
+            delivery: None,
+        }
+    }
+
+    /// Announces every version it stores to `delivery`, which publishes it (README.md, "下發").
+    #[must_use]
+    pub fn with_delivery(mut self, delivery: DeliveryHandle) -> Self {
+        self.delivery = Some(delivery);
+        self
+    }
+
+    fn announce(&self, hardware_id: &GatewayId, version: ConfigVersion) {
+        if let Some(delivery) = &self.delivery {
+            delivery.changed(hardware_id, version);
         }
     }
 
@@ -795,6 +815,7 @@ impl AssetsEventsHandler {
         match made {
             Made::Stored(version) => {
                 self.metrics.stored.add(1, &[]);
+                self.announce(hardware_id, *version);
                 tracing::info!(
                     hardware_id = hardware_id.as_str(),
                     tenant_id = %tenant,
@@ -834,6 +855,7 @@ impl AssetsEventsHandler {
                     .failed
                     .add(1, &[KeyValue::new("reason", error.reason())]);
                 self.metrics.stored.add(1, &[]);
+                self.announce(hardware_id, *version);
                 tracing::error!(
                     hardware_id = hardware_id.as_str(),
                     tenant_id = %tenant,
