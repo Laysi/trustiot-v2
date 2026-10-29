@@ -15,6 +15,8 @@
 //! - [`register`]: the factory registration of a gateway (`register`), signed by the workstation
 //!   ([`sign`]), retried with backoff ([`retry`]), its answer checked and recorded
 //!   ([`journal`]).
+//! - [`install`]: the certificate chain and the root certificate of a recorded registration,
+//!   checked against the pinned root and installed on the gateway.
 //!
 //! The operator's guide is factory/workstation/README.md.
 
@@ -22,6 +24,7 @@ pub mod config;
 pub mod files;
 pub mod http;
 pub mod identity;
+pub mod install;
 pub mod journal;
 pub mod register;
 pub mod retry;
@@ -93,6 +96,10 @@ pub enum Error {
     /// its own exit code ([`register::StopKind`]).
     #[error(transparent)]
     Registration(Box<register::Stopped>),
+    /// Installing the certificates on the gateway stopped with a failed check or the gateway's
+    /// refusal; each has its own exit code ([`install::InstallStopKind`]).
+    #[error(transparent)]
+    Install(Box<install::InstallStopped>),
 }
 
 impl From<http::ApiError> for Error {
@@ -102,13 +109,15 @@ impl From<http::ApiError> for Error {
 }
 
 impl Error {
-    /// The process exit code for this failure: 2 for usage mistakes, a registration's own code
-    /// ([`register::StopKind::exit_code`]), 1 otherwise.
+    /// The process exit code for this failure: 2 for usage mistakes, a registration's or an
+    /// installation's own code ([`register::StopKind::exit_code`],
+    /// [`install::InstallStopKind::exit_code`]), 1 otherwise.
     #[must_use]
     pub fn exit_code(&self) -> u8 {
         match self {
             Self::Usage(_) => 2,
             Self::Registration(stopped) => stopped.kind.exit_code(),
+            Self::Install(stopped) => stopped.kind.exit_code(),
             _ => 1,
         }
     }
