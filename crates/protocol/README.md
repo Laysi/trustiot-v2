@@ -13,6 +13,7 @@
 | `live` | 即時訂閱控制 `LiveControl`、即時值 `LiveSamples` |
 | `logs` | 日誌上傳 `LogBatch`、拉取請求 `LogRequest`、拉取回應 `LogDump` |
 | `renewal` | HTTPS 憑證換發的請求與回應（`RenewalRequest`、`Challenge`、`RenewedCertificate`）、要簽的內容 `signing_input` 與格式檢查（見「憑證換發」） |
+| `provisioning` | 出廠佈建報告 `ProvisioningReport`：agent 的 `provision` 子命令印給產線工作站的 JSON（見「出廠佈建報告」） |
 
 測試：`cargo test -p protocol`。閘道器目標：先執行一次 `rustup target add aarch64-unknown-linux-gnu`，再 `cargo build --locked --target aarch64-unknown-linux-gnu -p protocol`；CI 以同樣方式在 job 中加入該目標（Laysi/trustiot-v2#67），不放進 `rust-toolchain.toml`，免得每個只做雲端服務的開發者與 CI job 都下載 aarch64 的標準函式庫。
 
@@ -267,6 +268,49 @@ Mosquitto 以 `use_identity_as_username` 把憑證 CN 當成 username，dynsec �
 - **簽章**：ECDSA P-256、SHA-256（TPM 簽的是內容的 SHA-256 摘要），DER 的 `ECDSA-Sig-Value`（最長 `MAX_SIGNATURE_BYTES`，72 位元組），標準 base64、補 `=`（最長 `MAX_SIGNATURE_LEN`，96 個字元；`is_signature_text` 只檢查格式，驗章在雲端）。不用 r‖s 的 64 位元組格式，以便與 CSR、TLS 共用同一套程式庫。
 - **拒絕**：一律是 M1 的錯誤本文（`contract::ErrorBody`）。閘道器只需要依 HTTP 狀態處理：429 與 503 帶 `Retry-After`（秒），等它指定的時間再從取挑戰開始；其他拒絕（400、401、403、409、410、422）以退避重試，也從取挑戰開始。取挑戰的回應不透露硬體 ID 是否登錄、綁定或除役，拒絕只在兌換時發生。
 - **相容性**：雙方都忽略不認得的欄位（與 MQTT payload 不認得的 map 鍵相同），所以較新的 agent 多送的欄位不會讓較舊的雲端拒絕換發；不認得的 `step` 或用途則拒絕。要簽的內容改變時換新的版本前綴。
+
+## 出廠佈建報告（JSON；決策 12）
+
+`provisioning` 模組（Laysi/trustiot-v2#613）。讀取端必須做的檢查見下面的「讀取端的責任」。產線工作站經 ssh 在閘道器上執行 `trustiot-agent provision`（[edge/agent](../../edge/agent/README.md)「出廠佈建」），讀它在 stdout 印的一個 JSON 物件，再自己呼叫登錄 API；工作站的憑證不到閘道器上，閘道器也不呼叫 API。報告只有公開資料。格式是 JSON（雙方各自以 `serde_json` 編解碼），本 crate 只定義型別。
+
+```json
+{
+  "version": 1,
+  "hardware_id": "tg-0001",
+  "key_handle": "0x81000100",
+  "key": {
+    "state": "present",
+    "created": true,
+    "public_key": "-----BEGIN PUBLIC KEY-----\n...",
+    "certificate_request": "-----BEGIN CERTIFICATE REQUEST-----\n..."
+  },
+  "endorsement_key": "-----BEGIN PUBLIC KEY-----\n...",
+  "ek_certificate": { "state": "for_this_key", "certificate": "-----BEGIN CERTIFICATE-----\n..." }
+}
+```
+
+| 欄位 | 內容 |
+| --- | --- |
+| `version` | `REPORT_VERSION`（1）。讀取時其他版本一律拒絕（`ReportVersion`） |
+| `hardware_id` | 子命令收到的硬體 ID（`GatewayId`），也是 CSR 的 CN |
+| `key_handle` | 金鑰的持久 handle（`KeyHandle`）：`0x` 加 8 個小寫十六進位數字，必須在 `0x81000000`–`0x81ffffff` |
+| `key` | `GatewayKey`，以 `state` 區分。`present`：`created`（這次是否新建）、`public_key`（金鑰的 SubjectPublicKeyInfo，PEM `PUBLIC KEY`，ECDSA P-256）、`certificate_request`（PKCS #10 CSR，PEM `CERTIFICATE REQUEST`：主體 `CN=<hardware_id>`、金鑰的公鑰、由 TPM 內的金鑰以 ecdsa-with-SHA256 簽章，就是登錄 API 的 `certificate_request`）。`absent`：handle 是空的，只有 `--inspect` 會回報 |
+| `endorsement_key` | TPM 的 ECC NIST P-256 背書金鑰，PEM `PUBLIC KEY`，就是登錄 API 的 `endorsement_key` |
+| `ek_certificate` | `EkCertificate`，以 `state` 區分。`for_this_key`：`certificate`（PEM `CERTIFICATE`）的 SubjectPublicKeyInfo 與 `endorsement_key` 逐 byte 相同；`absent`：TPM 沒有 EK 憑證 |
+
+- **不說「已驗證」**：欄位名稱與值都不用 verified、trusted 這類字眼。`for_this_key` 只代表 EK 憑證的公鑰是這把 EK，不驗證憑證的簽章與到製造商根的憑證鏈，不證明 TPM 是真品（信任模型見 [services/certs](../../services/certs/README.md#規則與取捨)「EK 只記錄、比對，不驗證」）。
+- **相容性**：與「憑證換發」相同，不認得的欄位略過，不認得的 `state` 或其他 `version` 拒絕。讀取端必須理解的變更提高 `REPORT_VERSION`。
+- **大小**：agent 印出的報告（含結尾換行）不超過 `MAX_REPORT_BYTES`（16 KiB，與登錄 API 的 body 上限相同）；EK 憑證最大（4096 bytes DER）、硬體 ID 最長時約是它的一半。
+
+### 讀取端的責任
+
+登錄 API 不比對 CSR 的主體：憑證的 CN 取自請求 body 的 `hardware_id`。所以讀取端（產線工作站）只有在下列各項都成立時才採用報告，否則拒絕：
+
+1. **先看結束碼**：結束碼不是 0 時丟掉 stdout，不解析。寫到一半失敗時 stdout 可能留下不完整的 JSON。
+2. **結束碼 0 不等於有報告**：`provision --help` 也以 0 結束，印的是說明。成功的定義是結束碼 0，而且 stdout 能解析成 `ProvisioningReport`。
+3. **限制讀取量**：stdout 最多讀 `MAX_REPORT_BYTES`（16 KiB），超過就拒絕，不截斷後解析。
+4. **硬體 ID 用自己的**：讀取端一律使用自己傳給 `--hardware-id` 的硬體 ID，報告的 `hardware_id` 必須與它相同；登錄時用自己的 ID，不用報告裡的。
+5. **自己檢查 CSR**：讀取端自己解析 CSR，確認三件事：主體只有一個屬性，就是等於該硬體 ID 的 CN；SubjectPublicKeyInfo 與 `public_key` 逐 byte 相同；簽章以該公鑰驗得過。
 
 ## 大小上限與拆包
 

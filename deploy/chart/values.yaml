@@ -365,9 +365,13 @@ mesh:
     assets:
       - postgres
     # The certs service keeps the ledger of the certificates it signed and its CRLs in Postgres
-    # (services/certs/README.md).
+    # (services/certs/README.md). It logs in on the MQTT broker's service port as service:certs,
+    # dynamic security's administrator, and keeps the gateways' clients and roles in line with
+    # Postgres (Laysi/trustiot-v2#633); the chart hands it its broker account
+    # (Laysi/trustiot-v2#634, README.md, "MQTT broker"). Skipped while the broker is off.
     certs:
       - postgres
+      - mqtt-broker
     # The AI gateway keeps the platform administrator's changes to the model roles' models, the
     # settings generation every forwarded request checks, and the log of every change in Postgres
     # (services/ai-gateway/README.md, 「資料庫」). It refuses AI calls with 503 while Postgres
@@ -379,8 +383,7 @@ mesh:
     # have an account in Postgres and reads the identity service's events from there as its
     # platform role (services/telemetry-query/README.md). The MQTT broker (Laysi/trustiot-v2#84):
     # mqtt-bridge carries the gateways' connections to its gateway port; ingest and gateway-ops
-    # log in on its service port with their broker accounts. certs, dynamic security's
-    # administrator, is added with the gateway registration (Laysi/trustiot-v2#82).
+    # log in on its service port with their broker accounts, like certs above.
     ingest:
       - clickhouse
       - mqtt-broker
@@ -691,8 +694,10 @@ mqttBroker:
   # The services' broker passwords are generated in the cluster: the broker pod's init container,
   # which runs the migration image (arm64 only, so the chart adds kubernetes.io/arch: arm64 to
   # nodeSelector), fills the Secret <release>-mqtt-broker-accounts, which the chart declares
-  # empty, and gives the broker only their hashes. Increase this number to rotate them: the
-  # upgrade restarts the broker, whose init container generates new ones first.
+  # empty, and gives the broker only their hashes. Each service's pod mounts its own key only.
+  # Increase this number to rotate them: the upgrade restarts the broker, whose init container
+  # generates new ones first; the services keep running and read the new password from their
+  # mounted file when they reconnect (README.md, "MQTT broker", "服務的帳號").
   passwordGeneration: "1"
   # How often the broker pod's trust sidecar fetches the CA certificates and CRLs from the certs
   # service and checks the server certificate Secret; the broker reloads them when they changed.

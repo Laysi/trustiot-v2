@@ -14,6 +14,9 @@ test = false
 doc = false
 
 [dependencies]
+# The wire types of the AI gateway's admin API, which the platform administrators' model role
+# routes call (src/ai_model_roles.rs, Laysi/trustiot-v2#608).
+ai-gateway-api = { path = "../../crates/ai-gateway-api" }
 # `query`: the event log's `from`, `to`, `limit` and `cursor` parameters.
 axum = { workspace = true, features = ["http1", "json", "query", "tokio"] }
 # Strict base64url: token segments and the session cookie have exactly one encoding.
@@ -29,6 +32,13 @@ getrandom.workspace = true
 # Login codes are stored as HMAC-SHA-256 under a key derived from the signing key, so the
 # database alone cannot test them.
 hmac.workspace = true
+# The AI gateway admin API's own HTTP/1.1 client (src/ai_model_roles/admin_client.rs): plain
+# `http://` inside the cluster, where ztunnel's mTLS encrypts, so no TLS feature at all; not
+# reqwest, whose TLS features would be unified into every member (crates/ai-clients/README.md,
+# "HTTP 與 TLS"). `Limited` bounds the answer it reads.
+http-body-util.workspace = true
+hyper = { workspace = true, features = ["client", "http1"] }
+hyper-util = { workspace = true, features = ["client-legacy", "http1", "tokio"] }
 # The signing keys the identity pod's init container generates (Laysi/trustiot-v2#404): their
 # file format and which key signs when.
 identity-keys = { path = "../../crates/identity-keys" }

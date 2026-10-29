@@ -223,6 +223,24 @@ async fn tenants_are_isolated() {
              to no tenant (tests/event_log.rs covers it)",
         )
         .exempt_endpoint(
+            "GET /api/identity/v1/platform/ai/model-roles",
+            "platform administrators' own requests only (A2, Laysi/trustiot-v2#608): it reads the \
+             AI gateway's model roles, which belong to no tenant; every tenant user and every \
+             exchanged token get 403 before anything is sent (tests/ai_model_roles.rs covers it)",
+        )
+        .exempt_endpoint(
+            "PUT /api/identity/v1/platform/ai/model-roles/{role}",
+            "platform administrators' own requests only (A2, Laysi/trustiot-v2#608): it changes a \
+             platform-wide AI model role, no tenant data; every tenant user and every exchanged \
+             token get 403 before anything is sent (tests/ai_model_roles.rs covers it)",
+        )
+        .exempt_endpoint(
+            "DELETE /api/identity/v1/platform/ai/model-roles/{role}",
+            "platform administrators' own requests only (A2, Laysi/trustiot-v2#608): it resets a \
+             platform-wide AI model role, no tenant data; every tenant user and every exchanged \
+             token get 403 before anything is sent (tests/ai_model_roles.rs covers it)",
+        )
+        .exempt_endpoint(
             "PUT /api/identity/v1/platform/tenants/{tenant_id}/members",
             "platform administrators' own requests only (A2, Laysi/trustiot-v2#583): it sets a \
              membership in the tenant the path names, by design; every tenant user, the tenant's \

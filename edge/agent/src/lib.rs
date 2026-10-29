@@ -17,6 +17,8 @@
 //! - [`polling`]: polls each device on a fixed schedule with bounded waits, reconnect backoff
 //!   and a per-device watchdog that closes the connection of a device that stopped answering
 //!   (F4); not the systemd watchdog.
+//! - [`provision`]: the `trustiot-agent provision` subcommand for the production workstation:
+//!   the TPM key, a CSR and the endorsement key in a JSON report (decision 12).
 //! - [`desired`]: receives the desired configuration on `down/config`, applies it atomically
 //!   (one polling loop per device, unchanged devices untouched), saves it on the data partition
 //!   so the gateway polls with it after a restart without the cloud, and reports the outcome
@@ -37,6 +39,7 @@ pub mod liveness;
 pub mod modbus;
 mod mqtt;
 pub mod polling;
+pub mod provision;
 pub mod renewal;
 pub mod sdnotify;
 pub mod setup;

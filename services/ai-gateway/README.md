@@ -186,7 +186,7 @@ chart 的 `ai.roles` 決定有哪些角色、各自的協定、上限、時間�
 
 ## 管理 API
 
-platform admin 更換模型角色的模型，經身分服務呼叫這組 API（身分服務的路由在 Laysi/trustiot-v2#608）。它在自己的管理埠 `admin.listen_addr`，不在 API 埠：管理埠只有下表的路由，轉送路由與 `/healthz`、`/readyz` 都不在這裡（回 404），管理路由在 API 埠也回 404。路徑都在 `/internal/` 底下，入口不轉送（決策 27）。請求與回應的型別在 [crates/ai-gateway-api](../../crates/ai-gateway-api/README.md)，閘道與身分服務共用。
+platform admin 更換模型角色的模型，經身分服務呼叫這組 API（身分服務的路由見 [services/identity 的「AI 模型角色」](../identity/README.md#ai-模型角色)，Laysi/trustiot-v2#608）。它在自己的管理埠 `admin.listen_addr`，不在 API 埠：管理埠只有下表的路由，轉送路由與 `/healthz`、`/readyz` 都不在這裡（回 404），管理路由在 API 埠也回 404。路徑都在 `/internal/` 底下，入口不轉送（決策 27）。請求與回應的型別在 [crates/ai-gateway-api](../../crates/ai-gateway-api/README.md)，閘道與身分服務共用。
 
 | 方法與路徑 | 內容 | 成功 |
 | --- | --- | --- |

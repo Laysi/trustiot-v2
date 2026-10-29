@@ -3,8 +3,9 @@
 //! This crate is the single definition of everything a gateway and the cloud exchange over
 //! MQTT 5: topic names ([`topic`]), the broker ACL that confines each gateway to its own topics
 //! ([`acl`]), payload types and their CBOR encoding ([`codec`]), size limits and batch
-//! splitting ([`telemetry::BatchBuilder`]); and the HTTPS certificate renewal's requests,
-//! answers and signing input ([`renewal`]). The edge agent and the cloud services both depend
+//! splitting ([`telemetry::BatchBuilder`]); the HTTPS certificate renewal's requests,
+//! answers and signing input ([`renewal`]); and the factory provisioning report that the agent's
+//! `provision` subcommand hands the production workstation ([`provisioning`]). The edge agent and the cloud services both depend
 //! on it, so a format change breaks the build or the golden tests on both sides at once.
 //! The crate's `README.md` is the specification for humans: topics, messages, delivery rules,
 //! size limits, versioning and the reasoning behind the encoding.
@@ -39,6 +40,7 @@ mod ids;
 pub mod live;
 pub mod logs;
 mod open_enum;
+pub mod provisioning;
 pub mod renewal;
 pub mod telemetry;
 pub mod topic;

@@ -152,6 +152,13 @@
   "member.email_unknown": "沒有使用者使用這個 email 地址。成員要先有帳號才能加入。",
   "member.role_invalid": "請選擇 viewer、editor 或 admin。",
 
+  "ai_model_role.not_found": "AI 閘道沒有這個模型角色。請重新載入角色。",
+  "ai_model_role.version_conflict": "這個模型角色剛被其他人修改。請重新載入角色後再試一次。",
+  "ai_model_role.invalid_models": "請選擇 1 到 8 個不重複的模型，每個都寫成「供應商/模型」。",
+  "ai_model_role.unknown_provider": "有模型指定了 AI 閘道沒有設定的供應商。",
+  "ai_model_role.protocol_mismatch": "有模型的供應商使用的協定和這個角色不同。",
+  "ai_model_role.outcome_unknown": "無法確認變更是否已儲存。請先重新載入角色再重試。",
+
   "nav.home": "首頁",
 
   "tenant_switcher.label": "組織",

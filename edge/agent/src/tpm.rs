@@ -16,8 +16,14 @@
 //!
 //! [`ensure_key`] provisions that key for the factory tool (Laysi/trustiot-v2#80): it reuses the
 //! key at the handle, creates one where the handle is empty, and refuses anything else there
-//! without touching it (`provision`).
+//! without touching it; [`inspect_key`] only looks (`provision`). [`endorsement_key`] computes
+//! the TPM's ECC P-256 endorsement key and compares it with the EK certificate in NV, for the same
+//! tool (Laysi/trustiot-v2#612, `endorsement`). All three create transient objects or may leave
+//! one behind when a response is lost, which only the kernel's resource manager flushes when the
+//! process ends, so they refuse any device but `/dev/tpmrm<N>` ([`is_resource_manager`]) before
+//! opening it.
 
+mod endorsement;
 #[cfg(test)]
 mod fixtures;
 mod marshal;
@@ -26,7 +32,7 @@ mod rc;
 mod worker;
 
 use std::fmt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -36,8 +42,13 @@ use rustls::SignatureScheme;
 use rustls::pki_types::SubjectPublicKeyInfoDer;
 use rustls::sign::{Signer, SigningKey};
 
+pub use endorsement::{
+    EK_CERTIFICATE_INDEX, EkCertificate, Endorsement, EndorsementError, MAX_EK_CERTIFICATE_BYTES,
+    NV_READ_CHUNK, endorsement_key,
+};
 pub use provision::{
-    PROVISION_RESPONSE_TIMEOUT, ProvisionError, Provisioned, SRK_HANDLE, ensure_key,
+    PROVISION_RESPONSE_TIMEOUT, ProvisionError, Provisioned, SRK_HANDLE, ensure_key, inspect_key,
+    is_key_handle,
 };
 pub use rc::ResponseCode;
 pub use worker::TpmChannel;
@@ -79,12 +90,71 @@ impl fmt::Debug for TpmTransport {
     }
 }
 
+/// Whether `path` is named as a device of the kernel's TPM resource manager: exactly
+/// `/dev/tpmrm` and 1 to 5 decimal digits (the kernel numbers TPMs below 65536), as the path is
+/// given. [`ensure_key`], [`inspect_key`] and [`endorsement_key`] accept no other path, and
+/// after opening one they also check that the kernel's sysfs entry for the opened device number
+/// is a `tpmrm` device, so a `/dev/tpmrm<N>` that is a link to (or a node with the numbers of)
+/// the raw device is refused before any command. Through the raw device (`/dev/tpm0`) a
+/// transient object of a process that died, or whose handle was lost with a malformed or late
+/// response, stays loaded until the TPM is reset, and the gateway's TPM has only a few slots for
+/// them (Laysi/trustiot-v2#613).
+#[must_use]
+pub fn is_resource_manager(path: &Path) -> bool {
+    path.to_str()
+        .and_then(|path| path.strip_prefix("/dev/tpmrm"))
+        .is_some_and(|number| {
+            (1..=5).contains(&number.len()) && number.bytes().all(|byte| byte.is_ascii_digit())
+        })
+}
+
+/// Opens the transport for provisioning and starts the thread that owns it, with resends on the
+/// TPM's retry warnings and [`PROVISION_RESPONSE_TIMEOUT`]. A device must be named
+/// `/dev/tpmrm<N>` ([`is_resource_manager`]), checked before it is opened, and the opened device
+/// must be a resource manager device by the kernel's account, checked before any command; any
+/// other transport passes.
+fn spawn_provisioning_worker(transport: TpmTransport) -> Result<worker::Worker, TpmError> {
+    let channel: Box<dyn TpmChannel> = match transport {
+        TpmTransport::Device(path) if !is_resource_manager(&path) => {
+            return Err(TpmError::NotResourceManager(path));
+        }
+        TpmTransport::Device(path) => {
+            Box::new(worker::DeviceChannel::open_resource_manager(&path)?)
+        }
+        TpmTransport::Channel(channel) => channel,
+    };
+    worker::Worker::spawn(
+        channel,
+        PROVISION_RESPONSE_TIMEOUT,
+        worker::Retry::OnWarnings,
+    )
+}
+
 /// Why the TPM key cannot be used or a signature failed.
 #[derive(Debug, thiserror::Error)]
 pub enum TpmError {
     /// The configured handle is not a persistent object handle (`0x81xxxxxx`).
     #[error("{0:#010x} is not a persistent TPM handle (0x81000000 to 0x81ffffff)")]
     NotPersistentHandle(u32),
+    /// Provisioning was given a device that is not the kernel's resource manager; it was not
+    /// opened.
+    #[error(
+        "{} is not a device of the kernel's TPM resource manager (/dev/tpmrm0, /dev/tpmrm1, ...): provisioning leaves transient objects in the TPM when it is interrupted, and only the resource manager flushes them",
+        .0.display()
+    )]
+    NotResourceManager(PathBuf),
+    /// Provisioning opened a `/dev/tpmrm<N>` that the kernel does not list as a resource manager
+    /// device (a link to the raw device, for example); no command was sent.
+    #[error(
+        "{} is not a device of the kernel's TPM resource manager: {found}; provisioning leaves transient objects in the TPM when it is interrupted, and only the resource manager flushes them",
+        path.display()
+    )]
+    NotResourceManagerDevice {
+        /// The device path.
+        path: PathBuf,
+        /// What the kernel says the opened device is.
+        found: String,
+    },
     /// The device could not be opened.
     #[error("cannot open the TPM device {}: {source}", path.display())]
     Open {
@@ -502,6 +572,55 @@ mod tests {
             "{error}"
         );
         // A character device that is not a TPM answers nothing.
+        let error =
+            TpmKey::open(TpmTransport::Device("/dev/null".into()), DEFAULT_KEY_HANDLE).unwrap_err();
+        assert!(matches!(error, TpmError::Malformed(_)), "{error}");
+    }
+
+    #[test]
+    fn provisioning_accepts_only_resource_manager_devices_and_refuses_others_unopened() {
+        for accepted in [
+            "/dev/tpmrm0",
+            "/dev/tpmrm1",
+            "/dev/tpmrm65535",
+            "/dev/tpmrm99999",
+        ] {
+            assert!(is_resource_manager(Path::new(accepted)), "{accepted}");
+        }
+        for refused in [
+            "/dev/tpm0",
+            "/dev/tpm",
+            "/dev/tpmrm",
+            "/dev/tpmrm123456",
+            "/dev/tpmrm0 ",
+            "/dev/tpmrma",
+            "/dev/tpmrm-1",
+            "/dev/tpmrm+1",
+            "/dev//tpmrm0",
+            "/dev/./tpmrm0",
+            "/dev/tpmrm0/",
+            "/dev/tpmrm0/../tpm0",
+            "tpmrm0",
+            "dev/tpmrm0",
+            "/tmp/tpmrm0",
+            "/dev/null",
+        ] {
+            assert!(!is_resource_manager(Path::new(refused)), "{refused}");
+        }
+        // /dev/null would answer a command with nothing (a malformed response): the refusal
+        // comes before the device is opened.
+        for device in ["/dev/null", "/dev/tpm0"] {
+            let error = endorsement_key(TpmTransport::Device(device.into())).unwrap_err();
+            assert!(
+                matches!(
+                    error,
+                    EndorsementError::Tpm(TpmError::NotResourceManager(_))
+                ),
+                "{device}: {error}"
+            );
+            assert!(error.to_string().contains("resource manager"), "{error}");
+        }
+        // The agent's own key may still be on any device the configuration names.
         let error =
             TpmKey::open(TpmTransport::Device("/dev/null".into()), DEFAULT_KEY_HANDLE).unwrap_err();
         assert!(matches!(error, TpmError::Malformed(_)), "{error}");

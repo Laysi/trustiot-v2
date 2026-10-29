@@ -1,0 +1,108 @@
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.25s
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 10.86s
+     Running unittests src/lib.rs (<host copy>/target/debug/deps/gateway_ops-ac0e063195811af4)
+
+running 4 tests
+test config::tests::debug_never_prints_passwords ... ok
+test config::tests::the_roles_must_differ_and_have_passwords ... ok
+test generate::tests::a_missing_or_misnamed_model_and_an_invalid_configuration_are_refused ... ok
+test generate::tests::devices_and_models_come_in_a_fixed_order_each_model_once ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/cross_tenant.rs (<host copy>/target/debug/deps/cross_tenant-0b976fe417918c54)
+
+running 1 test
+result | subject | probe | outcome
+pass | gateway_ops.desired_configs | coverage | declared table
+pass | gateway_ops.device_models | coverage | declared table
+pass | gateway_ops.devices | coverage | declared table
+pass | gateway_ops.gateway_bindings | coverage | declared table
+pass | gateway_ops.outbox_dead_letter | coverage | exempt table: the outbox consumer's bookkeeping (crates/outbox): subscription positions and processed or failed event IDs, no tenant data; the consumer reads and writes it in transactions without a tenant
+pass | gateway_ops.outbox_inbox | coverage | exempt table: the outbox consumer's bookkeeping (crates/outbox): subscription positions and processed or failed event IDs, no tenant data; the consumer reads and writes it in transactions without a tenant
+pass | gateway_ops.outbox_subscription | coverage | exempt table: the outbox consumer's bookkeeping (crates/outbox): subscription positions and processed or failed event IDs, no tenant data; the consumer reads and writes it in transactions without a tenant
+pass | gateway_ops.outbox_version | coverage | exempt table: the versions notification-mode consumers stored per aggregate (crates/outbox), no tenant data; unused by this service so far
+pass | gateway_ops.trustiot_migrate_applied | coverage | exempt table: the migration Job's record of the files applied in this schema (crates/service-kit/sql/migration-records.sql): file names and SHA-256 hashes, no tenant data; the service role only reads it, for its readiness check (Laysi/trustiot-v2#402)
+pass | api | coverage | no HTTP API: gateway-ops has no HTTP API besides the health endpoints so far (tools/openapi, SERVICES_WITHOUT_API): it takes models, devices and bindings from the assets service's events and delivers configurations over MQTT (Laysi/trustiot-v2#720)
+pass | gateway_ops.gateway_bindings | seed | 2 rows per tenant
+pass | gateway_ops.device_models | seed | 2 rows per tenant
+pass | gateway_ops.devices | seed | 2 rows per tenant
+pass | gateway_ops.desired_configs | seed | 2 rows per tenant
+pass | postgres | session as tenant A | the kit accepts the service role's session
+pass | gateway_ops.gateway_bindings | read as tenant A | 2 rows visible, all own, none of tenant B
+pass | gateway_ops.gateway_bindings | read without a tenant | no row visible
+pass | gateway_ops.gateway_bindings | update own rows as tenant A | refused (42501)
+pass | gateway_ops.gateway_bindings | move own rows into tenant B | refused (42501)
+pass | gateway_ops.gateway_bindings | insert into tenant B | refused (42501)
+pass | gateway_ops.device_models | read as tenant A | 2 rows visible, all own, none of tenant B
+pass | gateway_ops.device_models | read without a tenant | no row visible
+pass | gateway_ops.device_models | update own rows as tenant A | 2 rows reached, none of tenant B
+pass | gateway_ops.device_models | move own rows into tenant B | refused (42501)
+pass | gateway_ops.device_models | insert into tenant B | refused (42501)
+pass | gateway_ops.devices | read as tenant A | 2 rows visible, all own, none of tenant B
+pass | gateway_ops.devices | read without a tenant | no row visible
+pass | gateway_ops.devices | update own rows as tenant A | 2 rows reached, none of tenant B
+pass | gateway_ops.devices | move own rows into tenant B | refused (42501)
+pass | gateway_ops.devices | insert into tenant B | refused (42501)
+pass | gateway_ops.desired_configs | read as tenant A | 2 rows visible, all own, none of tenant B
+pass | gateway_ops.desired_configs | read without a tenant | no row visible
+pass | gateway_ops.desired_configs | update own rows as tenant A | refused (42501)
+pass | gateway_ops.desired_configs | move own rows into tenant B | refused (42501)
+pass | gateway_ops.desired_configs | insert into tenant B | refused (42501)
+pass | postgres | session as tenant B | the kit accepts the service role's session
+pass | gateway_ops.gateway_bindings | read as tenant B | 2 rows visible, all own, none of tenant A
+pass | gateway_ops.gateway_bindings | update own rows as tenant B | refused (42501)
+pass | gateway_ops.gateway_bindings | move own rows into tenant A | refused (42501)
+pass | gateway_ops.gateway_bindings | insert into tenant A | refused (42501)
+pass | gateway_ops.device_models | read as tenant B | 2 rows visible, all own, none of tenant A
+pass | gateway_ops.device_models | update own rows as tenant B | 2 rows reached, none of tenant A
+pass | gateway_ops.device_models | move own rows into tenant A | refused (42501)
+pass | gateway_ops.device_models | insert into tenant A | refused (42501)
+pass | gateway_ops.devices | read as tenant B | 2 rows visible, all own, none of tenant A
+pass | gateway_ops.devices | update own rows as tenant B | 2 rows reached, none of tenant A
+pass | gateway_ops.devices | move own rows into tenant A | refused (42501)
+pass | gateway_ops.devices | insert into tenant A | refused (42501)
+pass | gateway_ops.desired_configs | read as tenant B | 2 rows visible, all own, none of tenant A
+pass | gateway_ops.desired_configs | update own rows as tenant B | refused (42501)
+pass | gateway_ops.desired_configs | move own rows into tenant A | refused (42501)
+pass | gateway_ops.desired_configs | insert into tenant A | refused (42501)
+52 probes, 0 failed
+test tenants_are_isolated ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.51s
+
+     Running tests/desired_config.rs (<host copy>/target/debug/deps/desired_config-bfc8573785c8b96e)
+
+running 4 tests
+test ending_the_binding_leaves_a_configuration_without_devices ... ok
+test the_delivery_reads_the_latest_version_and_cannot_write ... ok
+evidence: versions [1, 2, 3, 4] in tenants ["A", "A", "B", "B"]; tenant B's device of another binding is in none; tenant A's device is in none of tenant B's
+test other_tenants_and_ended_bindings_stay_out ... ok
+evidence: versions [1, 2, 3, 4, 5]; devices per version [0, 1, 2, 2, 1]; 5 versions after reprocessing 8 events
+test device_changes_make_versions_and_replays_make_none ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.93s
+
+     Running tests/generation_errors.rs (<host copy>/target/debug/deps/generation_errors-acd39ed58dd6c59a)
+
+running 1 test
+evidence: unknown_model {"binding_id": "01a183d0-3bb0-74bc-b15c-8c6ab86884d4", "error": "device 01a183d0-3be9-73bd-a5af-6068e8dfa516 uses model 01a183d0-3be9-73bd-a5af-606762610eaf, which the projection does not have", "event_id": "01a183d0-3bea-714f-a68c-e69f15404e01", "hardware_id": "go-errors-01a183d03bb074bcb15c8c6965b2ccdb", "level": "ERROR", "reason": "unknown_model", "tenant_id": "01a183d0-3bb0-74bc-b15c-8c6886a87c31"}; invalid {"binding_id": "01a183d0-3bb0-74bc-b15c-8c6ab86884d4", "error": "the configuration is invalid: mixed_transport at devices[1].transport", "event_id": "01a183d0-3c1c-711a-aa79-9449efd3ce79", "hardware_id": "go-errors-01a183d03bb074bcb15c8c6965b2ccdb", "level": "ERROR", "reason": "invalid", "tenant_id": "01a183d0-3bb0-74bc-b15c-8c6886a87c31"}; other tenant {"device_id": "01a183d0-3c61-7738-a9c5-92197108f609", "event_id": "01a183d0-3c62-739d-81bc-42620edc6546", "event_type": "assets.device_created", "hardware_id": "go-errors-01a183d03bb074bcb15c8c6965b2ccdb", "level": "WARN", "reason": "other_tenant", "tenant_id": "01a183d0-3c61-7738-a9c5-92186a97e6ed"}; versions stay at 2
+test a_configuration_that_cannot_be_made_keeps_the_previous_version ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.41s
+
+     Running tests/startup.rs (<host copy>/target/debug/deps/startup-714fdc79eb3d6015)
+
+running 1 test
+evidence: ready; versions [1, 2] for the gateway; exit code Some(0) after SIGTERM
+test the_service_turns_assets_events_into_versions_and_stops_on_sigterm ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.70s
+
+   Doc-tests gateway_ops
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+exit 0 at 02:40:39 (build host, macOS)

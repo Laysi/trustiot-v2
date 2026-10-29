@@ -26,7 +26,8 @@ path = "src/main.rs"
 # host, Zig through cargo-zigbuild when cross-compiling. tests/dependencies.rs keeps out
 # webpki-roots, rustls-native-certs, OpenSSL, aws-lc and the TPM C libraries.
 [dependencies]
-# The renewal's signature (standard base64) and the renewed certificate chain written as PEM.
+# The renewal's signature (standard base64), the renewed certificate chain written as PEM, and
+# PEM for the provisioning report (`provision`).
 base64.workspace = true
 bytes.workspace = true
 # The WebSocket's Stream and Sink, adapted to AsyncRead and AsyncWrite for the inner TLS.
@@ -40,6 +41,9 @@ hyper-util = { workspace = true, features = ["tokio"] }
 # getifaddrs: the gateway's own interface addresses, which the address guard refuses.
 libc.workspace = true
 protocol = { path = "../../crates/protocol" }
+# The provisioning CSR (`provision`), signed by the TPM key through rcgen's `SigningKey`: no
+# features, so neither rcgen's crypto backends nor its key generation are compiled in.
+rcgen.workspace = true
 # SHA-256 of what the TPM signs, and the check of the TPM key's test signature (`tpm`). rustls'
 # own provider, so no second crypto library.
 ring.workspace = true
@@ -48,7 +52,8 @@ ring.workspace = true
 rustls = { workspace = true, features = ["ring", "std"] }
 rustls-pki-types = { workspace = true, features = ["std"] }
 serde = { workspace = true, features = ["derive"] }
-# The renewal endpoint's JSON (`protocol::renewal`).
+# The renewal endpoint's JSON (`protocol::renewal`) and the provisioning report on standard
+# output (`provision`).
 serde_json.workspace = true
 # TCP keepalive's idle time, probe interval and probe count, for the MQTT connection
 # (`transport::configure_tcp`) and the Modbus connections; tokio can only switch keepalive on.
@@ -73,8 +78,9 @@ x509-parser.workspace = true
 agent = { path = ".", features = ["test-exempt-addresses"] }
 # The stand-in certificate renewal endpoint (`tests/support/renewal.rs`).
 hyper = { workspace = true, features = ["http1", "server"] }
-# A test CA and certificates made at test time, also for the TPM key in the TPM tests.
-rcgen = { workspace = true, features = ["crypto", "pem", "ring"] }
+# A test CA and certificates made at test time, also for the TPM key in the TPM tests; reads the
+# provisioning CSR back as the workstation does (`x509-parser`).
+rcgen = { workspace = true, features = ["crypto", "pem", "ring", "x509-parser"] }
 # The fake TPM's software key (`ring::signature::EcdsaKeyPair`).
 ring = { workspace = true, features = ["alloc"] }
 # The fake Modbus endpoint with fault injection (`testkit::modbus`), the paused clock, the

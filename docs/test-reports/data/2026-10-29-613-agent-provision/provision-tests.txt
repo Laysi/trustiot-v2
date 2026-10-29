@@ -1,0 +1,68 @@
+x86_64
+rustc 1.99.0 (b940084d7 2026-09-28)
+     Running tests/binary.rs
+test a_closed_port_refuses_connections_and_cannot_be_taken ... ok
+test check_refuses_a_certificate_the_broker_ca_did_not_issue ... ok
+test an_expired_certificate_only_warns_because_the_clock_may_be_wrong ... ok
+test check_reports_the_root_crl_and_refuses_one_the_root_did_not_sign ... ok
+test provision_help_and_the_agents_help_name_the_subcommand ... ok
+test provision_without_a_tpm_device_exits_3_with_nothing_on_standard_output ... ok
+test check_accepts_a_working_configuration_and_refuses_a_key_of_another_certificate ... ok
+test provision_refuses_devices_other_than_the_resource_manager_with_status_4_unopened ... ok
+test connected_the_agent_applies_its_configuration_reports_it_and_polls_it_after_a_restart ... ok
+test provision_refuses_invalid_hardware_ids_handles_and_arguments_with_status_2 ... ok
+test without_a_broker_the_agent_is_ready_feeds_the_watchdog_and_stops_on_sigterm ... ok
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.02s
+     Running tests/provision.rs
+test inspect_on_an_empty_tpm_reports_the_key_absent_and_changes_nothing ... ok
+test the_report_has_a_verifying_csr_for_the_key_and_the_tpms_ek_and_reruns_reuse_the_key ... ok
+test ek_certificates_and_other_objects_at_the_handle_end_with_their_status_and_no_report ... ok
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.67s
+     Running tests/tpm_endorsement.rs
+test an_ek_template_or_nonce_in_nv_is_refused_before_anything_is_created ... ok
+test a_process_that_dies_while_the_ek_is_loaded_leaves_nothing ... ok
+test the_ek_is_tpm2_tools_ecc_ek_and_the_same_on_every_run ... ok
+test an_endorsement_authorization_is_refused_and_the_tpm_is_unchanged ... ok
+test an_ek_certificate_is_returned_when_it_is_for_the_ek_and_refused_otherwise ... ok
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.63s
+     Running tests/tpm_provision.rs
+test objects_that_do_not_match_are_refused_and_the_tpm_is_unchanged ... ok
+test an_empty_handle_gets_the_decision_12_key_and_reruns_reuse_it ... ok
+test two_processes_creating_at_once_end_with_one_key ... ok
+test after_tpm2_clear_a_rerun_creates_a_different_key ... ok
+test a_non_standard_srk_is_left_alone_and_a_transient_primary_is_used ... ok
+test a_process_that_dies_before_the_key_is_persisted_leaves_nothing_and_a_rerun_creates_it ... ok
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.89s
+test provision::tests::a_device_other_than_the_resource_manager_ends_the_run_before_any_connection ... ok
+test provision::tests::arguments_come_from_argv_only_and_are_checked ... ok
+test provision::tests::the_request_names_the_hardware_id_carries_the_key_and_verifies ... ok
+test provision::tests::failures_have_their_exit_status ... ok
+test provision::tests::check_request_refuses_another_key_another_name_and_trailing_bytes ... ok
+test tpm::provision::tests::authorization_failures_are_told_from_other_codes ... ok
+test tpm::provision::tests::handles_that_cannot_hold_the_key_are_refused_before_any_command ... ok
+test tpm::provision::tests::devices_other_than_the_resource_manager_are_refused_before_they_are_opened ... ok
+test tpm::provision::tests::an_existing_key_is_reused_with_two_commands ... ok
+test tpm::worker::tests::device_numbers_split_like_glibc ... ok
+test tpm::worker::tests::only_tpmrm_entries_count_as_the_resource_manager ... ok
+test tpm::worker::tests::devices_the_kernel_does_not_list_as_the_resource_manager_are_refused ... ok
+test tpm::tests::provisioning_accepts_only_resource_manager_devices_and_refuses_others_unopened ... ok
+test tpm::provision::tests::a_tpm_error_reading_the_handle_is_not_taken_for_an_empty_handle ... ok
+test tpm::provision::tests::other_objects_are_refused_after_reading_them_only ... ok
+test tpm::provision::tests::without_the_standard_srk_a_transient_primary_is_made_and_flushed ... ok
+test tpm::provision::tests::a_signing_key_that_differs_from_the_template_is_refused_after_reading_it_only ... ok
+test tpm::provision::tests::inspect_reads_an_empty_handle_only_and_checks_an_existing_key_like_ensure_key ... ok
+test tpm::provision::tests::an_occupied_handle_after_create_reuses_the_other_runs_key ... ok
+test provision::tests::a_request_signed_by_another_key_or_not_at_all_is_refused ... ok
+test tpm::provision::tests::an_empty_handle_gets_a_key_under_the_srk_and_a_retry_is_resent ... ok
+test tpm::provision::tests::retries_give_up_after_a_bound ... ok
+test result: ok. 22 passed; 0 failed; 0 ignored; 0 measured; 208 filtered out; finished in 1.63s
+test provisioning::tests::key_handles_are_persistent_handles_in_hex ... ok
+test provisioning::tests::no_field_or_value_claims_verification_or_trust ... ok
+test provisioning::tests::the_report_has_its_json_shape ... ok
+test provisioning::tests::unknown_fields_are_ignored_and_other_versions_refused ... ok
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 37 filtered out; finished in 0.00s
+test the_gateway_build_has_no_root_store_and_one_crypto_library ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.14s
+test the_gateway_build_pulls_only_pure_rust_crates ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.15s
+exit 0 at 15:18:51 (build host)
