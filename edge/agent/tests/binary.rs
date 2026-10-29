@@ -843,6 +843,18 @@ fn provision_install_refuses_invalid_arguments_with_status_2_and_has_its_own_hel
         help.contains("provision install --hardware-id <id>") && help.contains("Exit status"),
         "{help}"
     );
+    // The service's own help names the subcommand without --config, which it refuses.
+    let top = std::process::Command::new(EXECUTABLE)
+        .arg("--help")
+        .output()
+        .expect("the agent runs");
+    assert_eq!(top.status.code(), Some(0));
+    let top = String::from_utf8_lossy(&top.stdout);
+    let line = top
+        .lines()
+        .find(|line| line.contains("provision install"))
+        .expect("the subcommand is listed");
+    assert!(!line.contains("--config"), "{line}");
 }
 
 #[test]

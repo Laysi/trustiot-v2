@@ -3,7 +3,7 @@
 //! ```text
 //! trustiot-agent [--config <file>] [--check]
 //! trustiot-agent provision --hardware-id <id> [--handle <hex>] [--device <path>] [--inspect]
-//! trustiot-agent provision install --hardware-id <id> [--config <file>]
+//! trustiot-agent provision install --hardware-id <id>
 //! ```
 //!
 //! Start-up loads and checks the configuration, both TLS layers, the client certificate and
@@ -80,9 +80,10 @@ const _: () = assert!(
 
 const USAGE: &str = "usage: trustiot-agent [--config <file>] [--check]
        trustiot-agent provision --hardware-id <id> [--handle <hex>] [--device <path>] [--inspect]
-       trustiot-agent provision install --hardware-id <id> [--config <file>]
+       trustiot-agent provision install --hardware-id <id>
 
-  --config <file>  the configuration file (default /etc/trustiot/agent.toml)
+  --config <file>  the configuration file (default /etc/trustiot/agent.toml; provision install
+                   always reads that one)
   --check          check the configuration, certificate and key, then exit
   --version        print the version
   --help           print this help
