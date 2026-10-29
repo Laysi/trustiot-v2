@@ -645,18 +645,28 @@ impl Inner {
         let outcome = self.deliver_locked(gateway, request, current).await;
         // Ending the transaction releases the lock; a failed commit ends it too (the server
         // rolls it back with the connection).
-        if let Err(error) = lock.commit().await {
-            tracing::warn!(
-                hardware_id = gateway.as_str(),
-                error = %error,
-                "the gateway's publish lock was not released cleanly"
-            );
-        }
+        let released = match lock.commit().await {
+            Ok(()) => true,
+            Err(error) => {
+                tracing::warn!(
+                    hardware_id = gateway.as_str(),
+                    error = %error,
+                    "the gateway's publish lock was not released cleanly"
+                );
+                false
+            }
+        };
         match outcome {
             Ok((tenant, version)) => {
                 self.after_publish(gateway, tenant, version).await;
+                if !released {
+                    // The database may have failed around the publish: make sure the latest
+                    // follows, whatever the read after the publish found.
+                    self.recheck(gateway);
+                }
                 Next::Done
             }
+            // A failed or skipped publish decides its own retry; a broker's refusal is final.
             Err(next) => next,
         }
     }
@@ -874,11 +884,39 @@ impl Inner {
             let _permit = self.reads.acquire().await;
             self.configs.report_target(gateway, version).await
         };
-        if let Ok(Some(target)) = after
-            && target.latest > version
-        {
-            self.request(gateway, Trigger::Change, Some(target.latest));
+        match after {
+            Ok(Some(target)) if target.latest > version => {
+                self.request(gateway, Trigger::Change, Some(target.latest));
+            }
+            Ok(_) => {}
+            Err(error) => {
+                tracing::warn!(
+                    hardware_id = gateway.as_str(),
+                    version = version.get(),
+                    error = %error,
+                    "the latest configuration was not read again after a publish; reading it \
+                     again later"
+                );
+                self.recheck(gateway);
+            }
         }
+    }
+
+    /// Schedules a read of `gateway`'s latest version one [`RETRY_DELAY`] from now, published
+    /// when it is newer than what this replica sent: a read or the lock's release failed after a
+    /// publish, so a version stored meanwhile may not have been seen. Merges with what is waiting.
+    fn recheck(&self, gateway: &GatewayId) {
+        let now = Instant::now();
+        let request = Request {
+            trigger: Trigger::Change,
+            expected: None,
+            force: false,
+            since: now,
+        };
+        self.state()
+            .schedule
+            .retry(gateway, request, now + RETRY_DELAY);
+        self.wake.notify_one();
     }
 
     /// Republishes after each connection, under the job lock; see the module.
