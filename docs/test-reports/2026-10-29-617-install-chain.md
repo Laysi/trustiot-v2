@@ -41,7 +41,7 @@ cargo test --locked -p workstation --lib install
 | 同上，在 arm64 macOS 的建置主機 | 同上 | `ai-clients` 的 `an_unanswered_connection_attempt_is_a_connect_timeout` 失敗（`the accept queue never filled up after 64 connections`）：測試依賴 Linux 在 accept 佇列滿時不回應 SYN 的行為，與本變更無關；上一列在 x86_64 Linux 重跑通過 |
 | 上面「驗收證據」的三個指令 | `e134c66a` | 全部通過，每個測試的名稱與結果在 [install-tests.txt](data/2026-10-29-617-install-chain/install-tests.txt) |
 | `cargo fmt --all --check`、`cargo clippy --locked --workspace --all-targets -- -D warnings`、`CI=true cargo test --locked -p agent` | merge 之後、與 `67e57bcb` 相同的工作樹（commit 前） | 全部通過：agent 434 個測試（lib 264，含 Laysi/trustiot-v2#83 的換發；`provision_install` 4，多了 `a_renewed_certificate_is_never_replaced_by_an_older_one`），0 失敗（exit 0 at 18:09:42 (build host)） |
-| `cargo test --locked --workspace --exclude agent`、`cargo build --locked --target aarch64-unknown-linux-gnu -p agent`、`cargo deny --locked check` | `67e57bcb` | 未執行：建置主機（x86_64 Linux）的磁碟空間不足，檢查佇列沒有執行這個工作。併入前（`e134c66a`）的同一組檢查通過（上面幾列）；併入後要在 PR 的 CI 或下一次檢查補上 |
+| `cargo test --locked --workspace --exclude agent`、`cargo build --locked --target aarch64-unknown-linux-gnu -p agent`、`cargo deny --locked check` | `5c8fe456`（程式與 `67e57bcb` 相同） | 全部通過：workspace（不含 agent，含 workstation、`tools/sql-check` 與 `repo-check`）1844 個測試通過，0 失敗，1 個 ignored；aarch64 建置完成；`advisories ok, bans ok, licenses ok, sources ok`（exit 0 at 20:10:17 (build host)）。第一次排進佇列時建置主機磁碟不足、工作沒有執行，清出空間後補跑 |
 
 ## 測試內容
 
