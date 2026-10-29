@@ -804,6 +804,61 @@ fn matrix_rows(markdown: &str, service: &str) -> Result<Vec<Row>, String> {
     Ok(rows)
 }
 
+/// What keeps the matrix document from covering exactly the operations of the whole API spec
+/// (`api/openapi.json`, every service's `openapi()` merged): an operation of the spec that no
+/// service's section lists, one that two sections list, and one a section lists that the spec
+/// does not have. Empty when the document covers the spec. Each service's own test holds its
+/// section to its declarations; this holds the document to every service registered in
+/// `tools/openapi`, so a service with client operations cannot skip the matrix
+/// (Laysi/trustiot-v2#585).
+#[cfg(test)]
+fn spec_coverage(spec: &Value, markdown: &str) -> Vec<String> {
+    let documented = match operations(spec) {
+        Ok(documented) => documented,
+        Err(problem) => return vec![format!("api/openapi.json: {problem}")],
+    };
+    let mut problems = Vec::new();
+    let mut listed: Vec<(String, &'static str)> = Vec::new();
+    for service in ServiceName::ALL {
+        let name = service.as_str();
+        let heading = format!("## {name}");
+        if !markdown.lines().any(|line| line.trim_end() == heading) {
+            continue;
+        }
+        match matrix_rows(markdown, name) {
+            Ok(rows) => listed.extend(rows.into_iter().map(|row| (row.operation, name))),
+            Err(problem) => problems.push(problem),
+        }
+    }
+    for operation in &documented {
+        let sections: Vec<&str> = listed
+            .iter()
+            .filter(|(listed, _)| listed == operation)
+            .map(|(_, service)| *service)
+            .collect();
+        match sections.as_slice() {
+            [_] => {}
+            [] => problems.push(format!(
+                "{operation} is in api/openapi.json but in no section of {MATRIX_PATH}: declare \
+                 it in its service's tests/permissions.rs and list it in the service's section"
+            )),
+            several => problems.push(format!(
+                "{operation} is listed in more than one section of {MATRIX_PATH}: {}",
+                several.join(", ")
+            )),
+        }
+    }
+    for (operation, service) in &listed {
+        if !documented.contains(operation) {
+            problems.push(format!(
+                "{MATRIX_PATH} section `## {service}` lists {operation}, which api/openapi.json \
+                 does not have"
+            ));
+        }
+    }
+    problems
+}
+
 /// The trimmed cells of a Markdown table row, or `None` for a line that is not one.
 fn table_cells(line: &str) -> Option<Vec<&str>> {
     let inner = line.trim().strip_prefix('|')?.strip_suffix('|')?;
@@ -1037,5 +1092,46 @@ mod tests {
                 matrix_rows(MATRIX, name).unwrap_or_else(|error| panic!("{error}"));
             }
         }
+    }
+
+    /// The API spec every service's `openapi()` is merged into (`tools/openapi` keeps it equal
+    /// to what the code generates), as of this build.
+    const API_SPEC: &str = include_str!("../../../api/openapi.json");
+
+    #[test]
+    fn the_matrix_covers_every_operation_of_the_api_spec() {
+        let spec: Value = serde_json::from_str(API_SPEC).expect("api/openapi.json is JSON");
+        let problems = spec_coverage(&spec, MATRIX);
+        assert!(problems.is_empty(), "{}", problems.join("\n"));
+    }
+
+    #[test]
+    fn the_spec_coverage_finds_what_is_missing_twice_or_gone() {
+        let spec = serde_json::json!({"paths": {
+            "/v1/items": {"get": {}, "post": {}},
+            "/v1/other": {"get": {}},
+        }});
+        // DOCUMENT lists GET /v1/items and POST /v1/items under assets, GET /v1/other under certs.
+        assert_eq!(spec_coverage(&spec, DOCUMENT), Vec::<String>::new());
+
+        let missing = serde_json::json!({"paths": {
+            "/v1/items": {"get": {}, "post": {}, "delete": {}},
+            "/v1/other": {"get": {}},
+        }});
+        let problems = spec_coverage(&missing, DOCUMENT);
+        assert_eq!(problems.len(), 1, "{problems:?}");
+        assert!(problems[0].contains("DELETE /v1/items is in api/openapi.json but in no section"));
+
+        let gone = serde_json::json!({"paths": {"/v1/items": {"get": {}, "post": {}}}});
+        let problems = spec_coverage(&gone, DOCUMENT);
+        assert_eq!(problems.len(), 1, "{problems:?}");
+        assert!(problems[0].contains("`## certs` lists GET /v1/other"));
+
+        let twice = format!(
+            "{DOCUMENT}\n## identity\n\n| 操作 | 要求 | 已知落差 |\n| --- | --- | --- |\n| `GET /v1/other` | 公開 | |\n"
+        );
+        let problems = spec_coverage(&spec, &twice);
+        assert_eq!(problems.len(), 1, "{problems:?}");
+        assert!(problems[0].contains("GET /v1/other is listed in more than one section"));
     }
 }

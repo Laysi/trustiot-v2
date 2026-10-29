@@ -57,13 +57,12 @@ use contract::{ErrorBody, ErrorCode, FieldError, MessageKey, UserId};
 use outbox::Aggregate;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
-use service_kit::identity::{IdentityVerifier, UserIdentity};
+use service_kit::identity::{IdentityVerifier, Requirement, UserIdentity};
 use service_kit::tenant::{PlatformActor, PlatformDb, TenantDbError};
 use utoipa::ToSchema;
 
 use crate::csrf::{CROSS_SITE_REQUEST, cross_site};
 use crate::current_session::json_object;
-use crate::members::is_own_platform_admin;
 use crate::tenants::{error, is_json};
 
 pub use admin_client::AdminClient;
@@ -482,18 +481,16 @@ pub fn routes(
 }
 
 /// Refuses every caller but a platform administrator's own request, from the token alone.
+/// service-kit's shared check logs the refusal at INFO.
 fn refuse_caller(user: &UserIdentity, operation: Operation) -> Option<Response> {
-    if is_own_platform_admin(user) {
-        return None;
-    }
-    tracing::info!(
-        user_id = %user.user_id(),
-        exchanged = user.claims().act.is_some(),
-        operation = operation.as_str(),
-        "refused an AI model role request: not a platform administrator, or not the \
-         administrator's own request"
-    );
-    Some(error(ErrorBody::new(ErrorCode::PermissionDenied)))
+    let action = match operation {
+        Operation::List => "list the AI model roles",
+        Operation::Set => "set an AI model role",
+        Operation::Reset => "reset an AI model role",
+    };
+    user.require(Requirement::OwnPlatformAdmin, action)
+        .err()
+        .map(IntoResponse::into_response)
 }
 
 /// Refuses a change that is not a same-site JSON request, before its body is read: a

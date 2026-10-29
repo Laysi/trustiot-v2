@@ -4,11 +4,13 @@
 
 本文件不是手寫後就放著的說明：每個服務在 `tests/permissions.rs` 以 `crates/testkit` 的 `permissions` 模組宣告自己每個操作的要求，測試同時對照三方，任何一方不一致就失敗：
 
-- 服務的 OpenAPI 文件：每個操作都要宣告，宣告的每個操作都要在文件裡。已接上的服務（下方有一節的服務）新增路由時，沒決定誰能呼叫就合併不了；還沒接上的服務見「不在矩陣裡的端點」。
+- 服務的 OpenAPI 文件：每個操作都要宣告，宣告的每個操作都要在文件裡。服務新增路由時，沒決定誰能呼叫就合併不了。另外 `crates/testkit` 的單元測試 `the_matrix_covers_every_operation_of_the_api_spec` 對照整份 `api/openapi.json`：其中每個操作都要剛好列在本文件的一節，本文件列的每個操作也都要在其中，所以新的服務登記到 `tools/openapi` 而沒有接上矩陣，同樣合併不了（Laysi/trustiot-v2#585）。
 - 本文件：該服務一節的表格要與宣告逐列相同（操作、要求、已知落差）。只改本文件或只改程式都會讓測試失敗。
 - 服務本身：以真的服務程序與資料庫，對每個操作用下方「探測」列出的每種身分各送一次請求，檢查回應。
 
 做法與 [chart 的呼叫矩陣](../../deploy/chart/README.md)（由 `deploy/chart/tests/chart.test.ts` 對照）相同。各服務怎麼接上、探測的細節在 [crates/testkit 的 README](../../crates/testkit/README.md)「權限矩陣」。
+
+服務的 handler 以 `crates/service-kit` 的共用檢查判斷要求（Laysi/trustiot-v2#585）：`UserIdentity::require(Requirement::…, "<動作>")` 在 handler 一開始、讀 body 與資料庫之前呼叫，拒絕時回 403 `permission_denied`（`cache-control: no-store`，不論原因都是同一個回應），並在 INFO 記一行 `refused to <動作>`，帶使用者、租戶、原因（`no_tenant`、`unrecognized_role`、`role_too_low`、`not_platform_admin`、`exchanged_token`）與換發 token 的服務，不記 token。store 在開交易前的第二道檢查用不記日誌的 `UserIdentity::meets`。「已登入」不需要檢查：只有驗證過的 token 才有 `UserIdentity`。做法見 [crates/service-kit 的 README](../../crates/service-kit/README.md)。
 
 ## 要求
 
@@ -52,7 +54,6 @@
 
 - `/internal/...` 與服務各自的其他連接埠（例如身分服務的 ext_authz 檢查與 token 換發、certs 的 CA 公開資料與 MQTT broker 憑證簽發）：不在 `openapi()`，入口不轉送，只限叢集內的指定服務呼叫，由 mesh 的 AuthorizationPolicy 把關，誰可以呼叫誰列在 [chart 的呼叫矩陣](../../deploy/chart/README.md)。
 - 閘道器的憑證換發 `/certs/renew`（Laysi/trustiot-v2#81）：閘道器以 TPM 簽章證明身分，不用使用者 token，不在 `openapi()`；測試在 `services/certs/tests/renewal.rs`。
-- assets 與 telemetry-query 的操作：宣告與共用的角色檢查函式在 Laysi/trustiot-v2#585，完成後各加一節。
 
 ## identity
 
@@ -92,3 +93,45 @@
 
 - 出廠登錄另外要求產線工作站的憑證與簽章（D1，`services/certs/README.md`）；矩陣只管使用者的身分，工作站簽章的拒絕在 `tests/registration.rs`。
 - 探測前後比對工作站憑證與出廠登錄的帳本，任何呼叫者都沒有寫入資料（Laysi/trustiot-v2#584 的留言：viewer 與 editor 呼叫簽發與撤銷得 403、不寫入任何資料）。
+
+## assets
+
+`services/assets/tests/permissions.rs`。
+
+| 操作 | 要求 | 已知落差 |
+| --- | --- | --- |
+| `GET /api/assets/v1/tenant` | 租戶 viewer | |
+| `GET /api/assets/v1/device-models` | 租戶 viewer | |
+| `POST /api/assets/v1/device-models` | 租戶 editor | |
+| `POST /api/assets/v1/device-models/import` | 租戶 editor | |
+| `GET /api/assets/v1/device-models/{model_id}` | 租戶 viewer | |
+| `PUT /api/assets/v1/device-models/{model_id}` | 租戶 editor | |
+| `DELETE /api/assets/v1/device-models/{model_id}` | 租戶 editor | |
+| `GET /api/assets/v1/device-models/{model_id}/export` | 租戶 viewer | |
+| `GET /api/assets/v1/devices` | 租戶 viewer | |
+| `POST /api/assets/v1/devices` | 租戶 editor | |
+| `GET /api/assets/v1/devices/{device_id}` | 租戶 viewer | |
+| `PUT /api/assets/v1/devices/{device_id}` | 租戶 editor | |
+| `DELETE /api/assets/v1/devices/{device_id}` | 租戶 editor | |
+| `GET /api/assets/v1/platform/gateways` | 平台管理員，本人 | |
+| `GET /api/assets/v1/platform/gateways/{hardware_id}` | 平台管理員，本人 | |
+| `PUT /api/assets/v1/platform/gateways/{hardware_id}/binding` | 平台管理員，本人 | |
+
+- `GET /api/assets/v1/tenant` 在 Laysi/trustiot-v2#585 之前只檢查有沒有租戶，帶本版本不認得的角色（`Unrecognized`）的 token 也能讀；現在要求租戶 viewer。
+- 探測前後比對型號與其資料點、設備、閘道器綁定與 outbox 的筆數，任何呼叫者都沒有寫入資料。
+- 綁定閘道器的 `GatewayBinder` 在開交易前再檢查一次平台管理員本人（`meets`，見 `services/assets/src/gateways/binding.rs`）。
+
+## telemetry-query
+
+`services/telemetry-query/tests/permissions.rs`。
+
+| 操作 | 要求 | 已知落差 |
+| --- | --- | --- |
+| `GET /api/telemetry/v1/devices/{device_id}/series` | 租戶 viewer | |
+| `GET /api/telemetry/v1/devices/{device_id}/latest` | 租戶 viewer | |
+| `POST /api/telemetry/v1/statistics` | 租戶 viewer | |
+| `POST /api/telemetry/v1/usage` | 租戶 viewer | |
+
+- 在 Laysi/trustiot-v2#585 之前這四個操作只檢查有沒有租戶，而且先驗證參數或 body、再檢查租戶：帶 `Unrecognized` 角色的 token 能查詢，沒有租戶的呼叫者送錯參數得到 400 而不是 403。現在角色檢查在最前面，`statistics` 與 `usage` 的 body 也在檢查之後才讀。
+- 探測不需要 ClickHouse：被拒的呼叫者在讀任何東西之前就得 403；放行的呼叫者沒帶參數或 body 得 400，`latest` 在 Postgres 找不到這個隨機租戶的帳號得 404，都在查 ClickHouse 之前。測試把 ClickHouse 位址指向一個只計算連線數的本機埠，探測後斷言沒有任何連線。
+- 助理服務換發的 token 也能呼叫（租戶 R 的換發 token 探測通過授權）：助理的遙測工具以使用者的身分查詢（Laysi/trustiot-v2#142）。

@@ -192,6 +192,8 @@ async fn every_operation_admits_exactly_its_declared_callers() {
 - 需要 token 以外的東西才能通過授權的操作（登出要 session cookie），以 `Operation::header(name, value)` 讓每個探測都帶上；不能用它帶會讓被拒的身分通過的憑證。
 - 已知落差：決定是「只接受本人的請求」、程式目前卻接受換發 token 的操作，以 `.accepts_exchanged_tokens("追蹤的地方")` 宣告，矩陣文件的「已知落差」欄寫 `接受換發的 token`。換發 token 的探測改為照目前的行為檢查；修好之後它失敗，提醒同時刪掉宣告與文件的那一格。
 - `/internal` 端點與服務的其他連接埠不在 `openapi()`，不在矩陣裡；它們只限叢集內呼叫，由 mesh 與 chart 的呼叫矩陣把關（見矩陣文件「不在矩陣裡的端點」）。
+- 整份 API 規格也對照矩陣文件（Laysi/trustiot-v2#585）：單元測試 `the_matrix_covers_every_operation_of_the_api_spec` 讀 `api/openapi.json`（所有服務 `openapi()` 合併的結果），每個操作都要剛好列在矩陣文件的一節，文件列的操作也都要在規格裡。登記到 `tools/openapi` 的新服務沒有接上矩陣時，`cargo test -p testkit` 就失敗。
+- 服務的角色檢查用 `crates/service-kit` 的共用函式 `UserIdentity::require(Requirement::…, "<動作>")`（見 [service-kit 的 README](../service-kit/README.md)「角色檢查」），403 的回應與日誌在每個服務都相同。
 
 [`tests/permissions.rs`](tests/permissions.rs) 是自我測試，不需要容器：一個每種要求各有一個操作的範例服務，所有檢查都在時通過；拿掉或放寬其中一個檢查時（公開路由要求 token、「本人」路由接受換發 token、editor 的檢查降成 viewer、拿掉租戶角色檢查、平台路由接受換發 token、平台路由也放行租戶 admin、已知落差被修好），剛好在那個操作與那些身分上失敗。矩陣文件的比對另以改過的文件測：要求寫錯、少列、多列、已知落差漏寫、重複列、宣告改了而文件沒改、沒有那一節都失敗。
 
