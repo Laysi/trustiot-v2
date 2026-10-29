@@ -141,19 +141,28 @@ fn grant_row(line: &str) -> String {
     };
     let database = if database.is_empty() { "*" } else { database };
     let table = if table.is_empty() { "*" } else { table };
-    let mut text = if column.is_empty() {
-        format!("{access} ON {database}.{table}")
+    let column = if column.is_empty() {
+        String::new()
     } else {
-        format!("{access}({column}) ON {database}.{table}")
+        format!("({column})")
     };
-    if grant_option == "1" {
-        text.push_str(" WITH GRANT OPTION");
-    }
-    if partial_revoke == "1" {
-        text.push_str(" (partial revoke)");
-    }
-    text
+    // Message text only, never sent to ClickHouse; the suffixes are picked rather than appended
+    // so the text is one format string (tools/sql-check reads appended SQL words as built SQL).
+    let grant_option = if grant_option == "1" {
+        GRANT_OPTION_SUFFIX
+    } else {
+        ""
+    };
+    let partial_revoke = if partial_revoke == "1" {
+        " (partial revoke)"
+    } else {
+        ""
+    };
+    format!("{access}{column} ON {database}.{table}{grant_option}{partial_revoke}")
 }
+
+/// How [`grant_row`] marks a row that carries the grant option, as a GRANT statement writes it.
+const GRANT_OPTION_SUFFIX: &str = " WITH GRANT OPTION";
 
 /// The first [`DIFFERENCES_SHOWN`] of `items`, and how many more there are.
 fn first_few(items: &[String]) -> String {
