@@ -32,7 +32,7 @@ use std::path::PathBuf;
 
 use protocol::GatewayId;
 use protocol::provisioning::{
-    EkCertificate, GatewayKey, KeyHandle, ProvisioningReport, ReportVersion,
+    EkCertificate, GatewayKey, KeyHandle, MAX_REPORT_BYTES, ProvisioningReport, ReportVersion,
 };
 use ring::signature::{ECDSA_P256_SHA256_ASN1, UnparsedPublicKey};
 use x509_parser::certification_request::X509CertificationRequest;
@@ -56,12 +56,14 @@ TPM's endorsement key, and prints a JSON report of public data on standard outpu
   --handle <hex>      the persistent handle of the gateway key (default 0x81000100)
   --device <path>     the TPM resource manager device (default /dev/tpmrm0; only /dev/tpmrm<N>)
   --inspect           create nothing: report an empty handle as absent
-  --help              print this help
+  --help              print this help (only as the sole argument)
 
 Exit status: 0 report printed; 1 other failure; 2 invalid arguments; 3 no TPM device;
 4 not a TPM resource manager device; 5 another object at the handle; 6 the EK certificate is not
 for the EK or cannot be read; 7 an EK setup that is not supported (EK template or nonce in NV,
-endorsement authorization). Nothing is printed on standard output unless the status is 0.";
+endorsement authorization). Nothing is printed on standard output unless the status is 0. --help
+also ends with 0 and prints this help, not a report: a reader takes a report only when the status
+is 0 and standard output, at most 16 KiB, parses as one.";
 
 /// How the subcommand ends: its exit status.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -131,7 +133,18 @@ pub enum Command {
 ///
 /// A message naming the argument that is unknown, repeated, missing or invalid: then the
 /// status is [`Exit::Usage`].
-pub fn parse_args(mut args: impl Iterator<Item = OsString>) -> Result<Command, String> {
+pub fn parse_args(args: impl Iterator<Item = OsString>) -> Result<Command, String> {
+    let mut args = args.peekable();
+    if args
+        .peek()
+        .is_some_and(|arg| arg == "--help" || arg == "-h")
+    {
+        args.next();
+        return match args.next() {
+            None => Ok(Command::Help),
+            Some(_) => Err(HELP_ALONE.to_owned()),
+        };
+    }
     let mut hardware_id = None;
     let mut handle = None;
     let mut device = None;
@@ -170,7 +183,7 @@ pub fn parse_args(mut args: impl Iterator<Item = OsString>) -> Result<Command, S
                 }
                 inspect = true;
             }
-            "--help" | "-h" => return Ok(Command::Help),
+            "--help" | "-h" => return Err(HELP_ALONE.to_owned()),
             _ => return Err(format!("unknown argument {arg:?}")),
         }
     }
@@ -186,6 +199,10 @@ pub fn parse_args(mut args: impl Iterator<Item = OsString>) -> Result<Command, S
         inspect,
     }))
 }
+
+/// Why `--help` with other arguments is refused: with only the help on standard output and
+/// status 0, a reader that does not parse the output could take the run for a report.
+const HELP_ALONE: &str = "--help is accepted only as the sole argument";
 
 /// The UTF-8 value after option `name`.
 fn value(name: &str, value: Option<OsString>) -> Result<String, String> {
@@ -221,6 +238,9 @@ pub enum Failure {
     /// The report could not be encoded.
     #[error("cannot encode the report: {0}")]
     Encode(#[source] serde_json::Error),
+    /// The encoded report is larger than a reader takes.
+    #[error("the report is {0} bytes, more than the {MAX_REPORT_BYTES} a reader takes")]
+    TooLarge(usize),
 }
 
 impl Failure {
@@ -244,7 +264,8 @@ impl Failure {
             ) => Exit::EkUnsupported,
             Self::Endorsement(EndorsementError::Randomness)
             | Self::Request(_)
-            | Self::Encode(_) => Exit::Failure,
+            | Self::Encode(_)
+            | Self::TooLarge(_) => Exit::Failure,
         }
     }
 }
@@ -275,11 +296,7 @@ pub fn run(
     stdout: &mut dyn Write,
     stderr: &mut dyn Write,
 ) -> Exit {
-    let printed = report(options, connect).and_then(|report| {
-        let mut text = serde_json::to_string_pretty(&report).map_err(Failure::Encode)?;
-        text.push('\n');
-        Ok(text)
-    });
+    let printed = report(options, connect).and_then(|report| encode(&report));
     match printed {
         Ok(text) => match stdout
             .write_all(text.as_bytes())
@@ -299,6 +316,16 @@ pub fn run(
             failure.exit()
         }
     }
+}
+
+/// The report as printed: pretty JSON and a newline, at most [`MAX_REPORT_BYTES`].
+fn encode(report: &ProvisioningReport) -> Result<String, Failure> {
+    let mut text = serde_json::to_string_pretty(report).map_err(Failure::Encode)?;
+    text.push('\n');
+    if text.len() > MAX_REPORT_BYTES {
+        return Err(Failure::TooLarge(text.len()));
+    }
+    Ok(text)
 }
 
 /// The report, as the module documentation describes.
@@ -521,6 +548,18 @@ mod tests {
         assert_eq!(options.hardware_id.as_str(), "gw.factory_7-a");
         assert!(options.inspect);
         assert_eq!(parse(&["--help"]), Ok(Command::Help));
+        assert_eq!(parse(&["-h"]), Ok(Command::Help));
+        // --help only on its own: with anything else it is an argument error (status 2), so
+        // status 0 without a report needs exactly `provision --help`.
+        for args in [
+            &["--help", "--inspect"][..],
+            &["--help", "--help"],
+            &["--hardware-id", "a", "--help"],
+            &["--hardware-id", "a", "-h"],
+            &["--inspect", "--help"],
+        ] {
+            assert_eq!(parse(args), Err(HELP_ALONE.to_owned()), "{args:?}");
+        }
         // The device is checked by `run`, with its own exit status.
         let Ok(Command::Provision(options)) =
             parse(&["--hardware-id", "a", "--device", "/dev/tpm0"])
@@ -702,6 +741,36 @@ mod tests {
                 .map_err(|_| "the software key failed".to_owned())
         };
         (spki, Box::new(sign))
+    }
+
+    #[test]
+    fn the_largest_report_fits_what_a_reader_takes_and_a_larger_one_is_not_printed() {
+        let (spki, sign) = software_key();
+        let hardware_id = GatewayId::new("a".repeat(protocol::MAX_ID_LEN)).unwrap();
+        let request = signed_request(&spki, &sign, &hardware_id).unwrap();
+        let report = |certificate: &[u8]| ProvisioningReport {
+            version: ReportVersion,
+            hardware_id: hardware_id.clone(),
+            key_handle: KeyHandle::new(0x817f_ffff).unwrap(),
+            key: GatewayKey::Present {
+                created: false,
+                public_key: pem("PUBLIC KEY", &spki),
+                certificate_request: pem("CERTIFICATE REQUEST", &request),
+            },
+            endorsement_key: pem("PUBLIC KEY", &spki),
+            ek_certificate: EkCertificate::ForThisKey {
+                certificate: pem("CERTIFICATE", certificate),
+            },
+        };
+        let largest = encode(&report(&[0x5a; tpm::MAX_EK_CERTIFICATE_BYTES])).unwrap();
+        assert!(
+            largest.len() <= MAX_REPORT_BYTES / 2 + 1024,
+            "{}",
+            largest.len()
+        );
+        let too_large = encode(&report(&[0x5a; 3 * MAX_REPORT_BYTES / 4])).unwrap_err();
+        assert!(matches!(too_large, Failure::TooLarge(_)), "{too_large}");
+        assert_eq!(too_large.exit(), Exit::Failure);
     }
 
     #[test]

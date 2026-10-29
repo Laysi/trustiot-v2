@@ -5,7 +5,7 @@
 use std::fmt;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Write};
-use std::os::unix::fs::{FileTypeExt, MetadataExt};
+use std::os::unix::fs::{FileTypeExt, MetadataExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, SyncSender, TrySendError};
 use std::thread;
@@ -71,9 +71,11 @@ impl DeviceChannel {
             path: path.to_owned(),
             source,
         };
+        // O_NOCTTY: a path that leads to a terminal never becomes the controlling terminal.
         let file = OpenOptions::new()
             .read(true)
             .write(true)
+            .custom_flags(libc::O_NOCTTY)
             .open(path)
             .map_err(open_error)?;
         let metadata = file.metadata().map_err(open_error)?;

@@ -431,7 +431,9 @@ trustiot-agent provision --hardware-id <id> [--handle <hex>] [--device <path>] [
 | 6 | EK 憑證不是這把 EK 的、不是一張憑證，或讀不出來 |
 | 7 | 不支援的 EK 設定：NV 裡有 EK 範本或 nonce、endorsement 階層設了授權 |
 
-結束碼不是 0 時 stdout 一定是空的；`--help` 印說明、結束碼 0。
+結束碼不是 0 時 agent 不會開始寫 stdout，但寫到一半失敗（結束碼 1）時可能已經寫出部分 JSON，所以讀取端先看結束碼，不是 0 就丟掉 stdout。`--help` 只能單獨使用（與其他參數一起給是結束碼 2），印說明、結束碼 0：結束碼 0 本身不代表有報告，成功是結束碼 0 而且 stdout 解析得成報告。報告不超過 `MAX_REPORT_BYTES`（16 KiB），超過就以結束碼 1 結束、不印。讀取端的完整責任（硬體 ID 用自己的、自己檢查 CSR 等）見 [crates/protocol](../../crates/protocol/README.md)「讀取端的責任」。
+
+開啟裝置時帶 `O_NOCTTY`，路徑即使通到終端機也不會成為控制終端。
 
 ## 測試
 

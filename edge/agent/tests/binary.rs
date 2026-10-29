@@ -566,6 +566,8 @@ fn provision_refuses_invalid_hardware_ids_handles_and_arguments_with_status_2() 
         &["--hardware-id", "tg-0001", "--handle"],
         &["--hardware-id", "tg-0001", "--verbose"],
         &["--inspect"],
+        &["--hardware-id", "tg-0001", "--help"],
+        &["--help", "--inspect"],
     ] {
         let mut args = args.to_vec();
         args.extend_from_slice(&["--device", NO_TPM]);

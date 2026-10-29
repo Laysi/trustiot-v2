@@ -16,6 +16,27 @@
 //! - Nothing in the report says that something was verified or is trusted: the EK certificate
 //!   is reported as [`EkCertificate::ForThisKey`], which means only that its public key is the
 //!   EK's (services/certs/README.md, 「EK 只記錄、比對，不驗證」).
+//! - The agent never prints more than [`MAX_REPORT_BYTES`].
+//!
+//! # What a reader must do
+//!
+//! The registration API does not compare the CSR's subject with anything: the certificate's
+//! common name comes from the `hardware_id` of the request body. A reader (the workstation)
+//! therefore takes a report only when all of this holds, and refuses it otherwise:
+//!
+//! 1. The exit status is checked first: standard output is discarded unless the status is 0,
+//!    because a write that failed part way can leave partial JSON behind.
+//! 2. Status 0 alone is not a report: `provision --help` also ends with 0 and prints its help.
+//!    Success is status 0 *and* standard output parsing as a [`ProvisioningReport`].
+//! 3. At most [`MAX_REPORT_BYTES`] of standard output are read; more is a refusal, not a
+//!    truncated report.
+//! 4. The hardware ID is the reader's own, the one it passed as `--hardware-id`, and
+//!    [`ProvisioningReport::hardware_id`] must equal it. The reader registers its own ID, never
+//!    the report's.
+//! 5. The reader parses the CSR itself and checks that its subject is exactly one attribute,
+//!    the common name, equal to that hardware ID; that its SubjectPublicKeyInfo is
+//!    byte-for-byte the one in [`GatewayKey::Present::public_key`]; and that its signature
+//!    verifies with that key.
 
 use std::fmt;
 use std::str::FromStr;
@@ -26,6 +47,11 @@ use crate::ids::GatewayId;
 
 /// The report format's version.
 pub const REPORT_VERSION: u16 = 1;
+
+/// The most standard output a reader takes for one report, newline included: 16 KiB, the
+/// registration API's body limit. A report with the largest EK certificate the agent reads
+/// (4096 bytes of DER) and the longest hardware ID is about half of it.
+pub const MAX_REPORT_BYTES: usize = 16 * 1024;
 
 /// [`REPORT_VERSION`] in a report: written as that number, and any other number is refused when
 /// a report is read.
