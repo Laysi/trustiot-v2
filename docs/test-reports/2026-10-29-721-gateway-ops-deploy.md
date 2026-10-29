@@ -88,3 +88,12 @@ nightly（`scripts/nightly`）的改動以單元測試驗證：`NIGHTLY_IMAGES` 
 - `cargo fmt --all --check`、`cargo clippy --locked --workspace --all-targets -- -D warnings`：通過。
 - `cargo test --locked --workspace --exclude agent --no-fail-fast`：238 個 `test result: ok`、0 個失敗，含 `the_workspace_has_no_string_built_sql`、各服務的 `the_chart_budgets_every_pool_the_service_opens`（gateway-ops 在內）與 `reads_every_budget_of_the_chart`。同一個 head 的前一次執行（沒有 `--no-fail-fast`）中，`crates/outbox` 的 `run_survives_panics_and_keeps_the_lag_current` 在 `podman run` 起 Postgres 容器時失敗（`tests/support/postgres.rs:233`）；本分支沒有改 `crates/outbox`，重跑就通過，是建置主機起容器的暫時問題。
 - `bun run --cwd scripts test`：1711 pass、9 skip、0 fail。
+
+## 合併 main（Laysi/trustiot-v2#747 的 squash）之後
+
+main `41a0a342` 是 #747 squash 後的版本，合併後的 head 是 `5b135269`。衝突的檔案在 main 的版本與 #747 分支最後的 `f2722e72` 完全相同，所以每個衝突都保留本分支的那一邊。合併後與 main 的差異只剩本 issue 的檔案。
+
+- `cargo fmt --all --check`、clippy `-D warnings`：通過。`cargo test --locked --workspace --exclude agent --no-fail-fast`：238 個 `test result: ok`、0 個失敗，含 `the_workspace_has_no_string_built_sql`（建置主機（arm64 Linux VM））。
+- `bun run --cwd scripts test`：1711 pass、9 skip、0 fail（建置主機（x86_64 Linux））。
+- `bun test deploy/chart`：本機 711 pass、0 fail。
+- 在建置主機（arm64 Linux VM）上，`bun test deploy/chart` 只跑了 82 個測試，1 個失敗：`chart.test.ts` 載入時找不到釘選的 Helm（`cannot find the pinned helm; run proto install`，`~/.proto/tools/helm/4.3.0/helm` 不存在）。那台主機沒有裝這個工具，不是 arm64 才有的程式問題；其他 8 個測試檔都通過。
