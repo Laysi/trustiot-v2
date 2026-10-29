@@ -31,7 +31,23 @@
 //! command, no connection sharing (each attempt is its own connection, and no master process
 //! outlives the tool holding its pipes), and keepalives so a dead connection ends instead of
 //! hanging. The destination is checked with [`Destination::parse`] and given after `--`, so it is
-//! never read as an option. Host keys follow the operator's ssh configuration.
+//! never read as an option.
+//!
+//! # Host keys
+//!
+//! A gateway's host key is bound to its hardware ID, not to the bench address it is reached at:
+//! every call names the host key `trustiot-<hardware ID>` (`HostKeyAlias`) and looks it up only
+//! in the tool's own file, `known_hosts` in the workstation directory ([`KnownHosts`],
+//! `UserKnownHostsFile`; [`HOST_KEY_OPTIONS`] empty the system-wide file and turn off host keys
+//! from DNS). A known hardware ID that answers with another host key is refused by
+//! ssh, wherever it is plugged in. Before each run the tool asks ssh for the settings it will use
+//! (`ssh -G` with the same options) and refuses to go on when host key checking is off
+//! (`StrictHostKeyChecking no`), when the known hosts file is not the tool's (`/dev/null`
+//! included), or when a `KnownHostsCommand` could supply keys
+//! ([`check_effective_configuration`]). When the configuration leaves `StrictHostKeyChecking` at
+//! `ask`, which `BatchMode` turns into a refusal of every new gateway, the calls add
+//! `StrictHostKeyChecking=accept-new`: the first connection to a hardware ID records its host
+//! key, and every later one must match it. `yes` and `accept-new` are kept as they are.
 //!
 //! # Upload
 //!
@@ -117,6 +133,179 @@ pub const KEPT_ENVIRONMENT: &[&str] = &[
     "SSH_AUTH_SOCK",
     "XDG_RUNTIME_DIR",
 ];
+
+/// The file of the gateways' host keys, in the workstation directory.
+pub const KNOWN_HOSTS_FILE: &str = "known_hosts";
+
+/// The start of every gateway's host key alias: `trustiot-<hardware ID>`.
+pub const HOST_KEY_ALIAS_PREFIX: &str = "trustiot-";
+
+/// The longest `ssh -G` may take: it reads the configuration, which may run `Match exec`
+/// commands, and connects to nothing.
+const CONFIGURATION_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// The most of `ssh -G`'s output accepted: its settings are a few KiB.
+const MAX_CONFIGURATION_BYTES: usize = 256 * 1024;
+
+/// The host key alias of `hardware_id`.
+#[must_use]
+pub fn host_key_alias(hardware_id: &GatewayId) -> String {
+    format!("{HOST_KEY_ALIAS_PREFIX}{hardware_id}")
+}
+
+/// The tool's own known hosts file: [`KNOWN_HOSTS_FILE`] in the workstation directory, as an
+/// absolute path.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct KnownHosts(String);
+
+impl KnownHosts {
+    /// The file in `directory`. ssh splits the value of `UserKnownHostsFile` at white space,
+    /// reads quotes and backslashes in it, and expands `%` and `~`, so the path may hold only
+    /// ASCII letters, digits and `/`, `.`, `_`, `-`, `+`, `@`, `,`, `:`.
+    ///
+    /// # Errors
+    ///
+    /// A usage error when the path holds anything else, or cannot be made absolute.
+    pub fn in_directory(directory: &Path) -> Result<Self, Error> {
+        let path = std::path::absolute(directory.join(KNOWN_HOSTS_FILE)).map_err(|error| {
+            Error::Usage(format!(
+                "cannot make the path of {KNOWN_HOSTS_FILE} in {} absolute: {error}",
+                directory.display()
+            ))
+        })?;
+        let text = path.to_str().unwrap_or_default();
+        let safe = !text.is_empty()
+            && text.bytes().all(|byte| {
+                byte.is_ascii_alphanumeric()
+                    || matches!(byte, b'/' | b'.' | b'_' | b'-' | b'+' | b'@' | b',' | b':')
+            });
+        if !safe {
+            return Err(Error::Usage(format!(
+                "{}: register --gateway keeps the gateways' host keys in this file, and its path \
+                 cannot be given to ssh safely: use a workstation directory (--dir) whose path \
+                 has only ASCII letters, digits and '/', '.', '_', '-', '+', '@', ',', ':'",
+                printable(&path.to_string_lossy())
+            )));
+        }
+        Ok(Self(text.to_owned()))
+    }
+
+    /// The absolute path.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+/// What the effective configuration does with `StrictHostKeyChecking`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HostKeyChecking {
+    /// `yes` or `accept-new`: kept.
+    Kept,
+    /// `ask`: the calls add `StrictHostKeyChecking=accept-new`.
+    AcceptNew,
+}
+
+/// The options of every call that leave the tool's own file the only source of host keys: no
+/// system-wide known hosts file, no host keys from DNS.
+pub const HOST_KEY_OPTIONS: &[&str] = &[
+    "-o",
+    "GlobalKnownHostsFile=/dev/null",
+    "-o",
+    "VerifyHostKeyDNS=no",
+];
+
+/// Checks `ssh -G`'s output for one gateway: host key checking is on, the known hosts file is
+/// exactly `known_hosts`, the system-wide one is empty (`/dev/null`), host keys from DNS are not
+/// accepted, the host key alias is `alias`, and no `KnownHostsCommand` is set.
+///
+/// # Errors
+///
+/// What is wrong, as a sentence for the operator.
+pub fn check_effective_configuration(
+    output: &str,
+    alias: &str,
+    known_hosts: &KnownHosts,
+) -> Result<HostKeyChecking, String> {
+    let setting = |name: &str| {
+        output.lines().find_map(|line| {
+            let (key, value) = line.split_once(' ')?;
+            key.eq_ignore_ascii_case(name).then(|| value.trim())
+        })
+    };
+    let checking = match setting("stricthostkeychecking").map(str::to_ascii_lowercase) {
+        Some(value) if matches!(value.as_str(), "false" | "no" | "off") => {
+            return Err(
+                "the ssh configuration turns host key checking off (StrictHostKeyChecking no); \
+                 remove that setting for the gateways"
+                    .to_owned(),
+            );
+        }
+        Some(value) if value == "ask" => HostKeyChecking::AcceptNew,
+        Some(value) if matches!(value.as_str(), "true" | "yes" | "accept-new") => {
+            HostKeyChecking::Kept
+        }
+        other => {
+            return Err(format!(
+                "ssh -G reports StrictHostKeyChecking {}, which this tool does not know",
+                other
+                    .as_deref()
+                    .map_or_else(|| "(nothing)".to_owned(), printable)
+            ));
+        }
+    };
+    let files: Vec<&str> = setting("userknownhostsfile")
+        .unwrap_or_default()
+        .split_whitespace()
+        .collect();
+    if files.contains(&"/dev/null") {
+        return Err(
+            "the ssh configuration keeps known host keys in /dev/null (UserKnownHostsFile \
+             /dev/null), so no host key is ever checked; remove that setting for the gateways"
+                .to_owned(),
+        );
+    }
+    if files != [known_hosts.as_str()] {
+        return Err(format!(
+            "ssh would look up host keys in {}, not only in the tool's own {}",
+            printable(&files.join(" ")),
+            known_hosts.as_str()
+        ));
+    }
+    if setting("globalknownhostsfile") != Some("/dev/null") {
+        return Err(format!(
+            "ssh would also accept host keys from the system's files ({}), not only from the \
+             tool's own {}",
+            printable(setting("globalknownhostsfile").unwrap_or("(nothing)")),
+            known_hosts.as_str()
+        ));
+    }
+    if !matches!(
+        setting("verifyhostkeydns")
+            .map(str::to_ascii_lowercase)
+            .as_deref(),
+        Some("false" | "no")
+    ) {
+        return Err(
+            "the ssh configuration accepts host keys published in DNS (VerifyHostKeyDNS); remove \
+             that setting for the gateways"
+                .to_owned(),
+        );
+    }
+    if setting("hostkeyalias") != Some(alias) {
+        return Err(format!(
+            "ssh would not name the gateway's host key {alias} (HostKeyAlias)"
+        ));
+    }
+    if let Some(command) = setting("knownhostscommand").filter(|value| *value != "none") {
+        return Err(format!(
+            "the ssh configuration sets KnownHostsCommand ({}), which could supply any host key; \
+             remove that setting for the gateways",
+            printable(command)
+        ));
+    }
+    Ok(checking)
+}
 
 /// `$0` of the remote scripts: the name in their messages.
 pub const SCRIPT_NAME: &str = "trustiot-provision";
@@ -482,6 +671,10 @@ pub enum SshError {
         /// What the last one ended with, and the start of its standard error (printable).
         last: String,
     },
+    /// The effective ssh configuration would not check the gateway's host key against the
+    /// tool's own file, or `ssh -G` failed; nothing ran on the gateway.
+    #[error("{0}")]
+    Configuration(String),
     /// The operating system gave no randomness for the retry jitter.
     #[error(transparent)]
     Local(#[from] Error),
@@ -497,6 +690,7 @@ enum Attempt {
 #[derive(Debug)]
 pub struct SshGateway {
     destination: Destination,
+    known_hosts: KnownHosts,
     upload: Option<UploadedAgent>,
     sudo: bool,
     retry: Backoff,
@@ -506,17 +700,165 @@ pub struct SshGateway {
 
 impl SshGateway {
     /// Runs the gateway's installed agent, or uploads `upload` for each run; with `sudo`,
-    /// through `sudo -n`.
+    /// through `sudo -n`. Host keys are looked up in `known_hosts` only.
     #[must_use]
-    pub fn new(destination: Destination, upload: Option<UploadedAgent>, sudo: bool) -> Self {
+    pub fn new(
+        destination: Destination,
+        known_hosts: KnownHosts,
+        upload: Option<UploadedAgent>,
+        sudo: bool,
+    ) -> Self {
         Self {
             destination,
+            known_hosts,
             upload,
             sudo,
             retry: SSH_BACKOFF,
             attempt_timeout: ATTEMPT_TIMEOUT,
             run_timeout: RUN_TIMEOUT,
         }
+    }
+
+    /// The tool's known hosts file.
+    #[must_use]
+    pub fn known_hosts(&self) -> &KnownHosts {
+        &self.known_hosts
+    }
+
+    /// The environment ssh runs with: only [`KEPT_ENVIRONMENT`] of the tool's.
+    fn environment() -> Vec<(&'static str, OsString)> {
+        KEPT_ENVIRONMENT
+            .iter()
+            .filter_map(|name| std::env::var_os(name).map(|value| (*name, value)))
+            .collect()
+    }
+
+    /// Runs `ssh <options> -G -- <destination>`: its exit status, at most
+    /// [`MAX_CONFIGURATION_BYTES`] of its standard output and [`MAX_STDERR_BYTES`] of its standard
+    /// error, within [`CONFIGURATION_TIMEOUT`]. More output than that ends the call.
+    async fn effective_configuration(
+        &self,
+        options: &[String],
+    ) -> Result<(Option<i32>, Vec<u8>, String), SshError> {
+        let deadline = tokio::time::Instant::now() + CONFIGURATION_TIMEOUT;
+        let mut child = tokio::process::Command::new(SSH_PROGRAM)
+            .args(options)
+            .arg("-G")
+            .arg("--")
+            .arg(self.destination.as_str())
+            .env_clear()
+            .envs(Self::environment())
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .kill_on_drop(true)
+            .spawn()
+            .map_err(SshError::Spawn)?;
+        let stdout = child.stdout.take();
+        let stderr = child.stderr.take();
+        let exchange = async {
+            let out = read_bounded(stdout, MAX_CONFIGURATION_BYTES);
+            let err = read_head(stderr);
+            tokio::pin!(out, err);
+            tokio::select! {
+                (out, too_long) = &mut out => {
+                    if too_long {
+                        return (out, true, String::new());
+                    }
+                    (out, false, err.await)
+                }
+                err = &mut err => {
+                    let (out, too_long) = out.await;
+                    (out, too_long, err)
+                }
+            }
+        };
+        let stopped = |problem: String| {
+            SshError::Configuration(format!(
+                "ssh -G (the settings ssh would use for {}) {problem}. Nothing was run on the \
+                 gateway; check the ssh configuration (Match exec, Include)",
+                self.destination
+            ))
+        };
+        let Ok((stdout, too_long, stderr)) = tokio::time::timeout_at(deadline, exchange).await
+        else {
+            let _ = child.start_kill();
+            let _ = child.wait().await;
+            return Err(stopped(format!(
+                "did not end within {} s",
+                CONFIGURATION_TIMEOUT.as_secs()
+            )));
+        };
+        if too_long {
+            let _ = child.start_kill();
+            let _ = child.wait().await;
+            return Err(stopped(format!(
+                "printed more than {MAX_CONFIGURATION_BYTES} bytes"
+            )));
+        }
+        match tokio::time::timeout_at(deadline, child.wait()).await {
+            Ok(status) => Ok((status.map_err(SshError::Spawn)?.code(), stdout, stderr)),
+            Err(_) => {
+                let _ = child.start_kill();
+                let _ = child.wait().await;
+                Err(stopped(format!(
+                    "did not end within {} s",
+                    CONFIGURATION_TIMEOUT.as_secs()
+                )))
+            }
+        }
+    }
+
+    /// Every option of the calls for `hardware_id`, before `--`: [`SSH_OPTIONS`], the options
+    /// that bind the host key to the hardware ID, and `StrictHostKeyChecking=accept-new` when
+    /// the configuration leaves it at `ask`; after `ssh -G` with the same options showed that
+    /// the calls check the host key against the tool's own file (module documentation, "Host
+    /// keys").
+    async fn checked_options(&self, hardware_id: &GatewayId) -> Result<Vec<String>, SshError> {
+        let alias = host_key_alias(hardware_id);
+        let mut options: Vec<String> = SSH_OPTIONS
+            .iter()
+            .map(|&option| option.to_owned())
+            .collect();
+        options.extend([
+            "-o".to_owned(),
+            format!("HostKeyAlias={alias}"),
+            "-o".to_owned(),
+            format!("UserKnownHostsFile={}", self.known_hosts.as_str()),
+        ]);
+        options.extend(HOST_KEY_OPTIONS.iter().map(|&option| option.to_owned()));
+        let (status, stdout, stderr) = self.effective_configuration(&options).await?;
+        if status != Some(0) {
+            return Err(SshError::Configuration(format!(
+                "ssh -G (the settings ssh would use for {}) failed ({}): {}. Nothing was run on \
+                 the gateway; check the ssh configuration",
+                self.destination,
+                status.map_or_else(
+                    || "ended by a signal".to_owned(),
+                    |code| format!("status {code}")
+                ),
+                excerpt(&stderr)
+            )));
+        }
+        let checking = check_effective_configuration(
+            &String::from_utf8_lossy(&stdout),
+            &alias,
+            &self.known_hosts,
+        )
+        .map_err(|problem| {
+            SshError::Configuration(format!(
+                "ssh to {} would not check the gateway's host key: {problem}. Nothing was run on \
+                 the gateway",
+                self.destination
+            ))
+        })?;
+        if checking == HostKeyChecking::AcceptNew {
+            options.extend([
+                "-o".to_owned(),
+                "StrictHostKeyChecking=accept-new".to_owned(),
+            ]);
+        }
+        Ok(options)
     }
 
     /// The destination.
@@ -536,56 +878,55 @@ impl SshGateway {
     /// # Errors
     ///
     /// [`SshError::Spawn`] when ssh cannot be started, [`SshError::Unreachable`] when no attempt
-    /// within [`SSH_BACKOFF`] got an answer from the gateway, and a usage error (inside
-    /// [`SshError::Local`]) when a value cannot be sent.
+    /// within [`SSH_BACKOFF`] got an answer from the gateway, [`SshError::Configuration`] when
+    /// the calls would not check the gateway's host key against the tool's own file (nothing
+    /// runs then), and a usage error (inside [`SshError::Local`]) when a value cannot be sent.
     pub async fn provision(&self, request: &Request<'_>) -> Result<Ran, SshError> {
         let command = remote_command(request, self.sudo, self.uploaded_sha256())?;
         let upload = self.upload.as_ref().map(|agent| agent.bytes.as_slice());
-        self.run_retried(
-            &command,
-            upload,
-            request.hardware_id.as_str(),
-            request.mode.word(),
-        )
-        .await
+        self.run_retried(&command, upload, request.hardware_id, request.mode.word())
+            .await
     }
 
     /// Runs `trustiot-agent provision install --hardware-id <hardware_id>` of the agent installed
     /// on the gateway (with `sudo -n` when this gateway uses sudo), with `stdin` on its standard
-    /// input, retrying ssh's own failures as [`Self::provision`] does (Laysi/trustiot-v2#617).
+    /// input, with the same ssh options and host key check as [`Self::provision`] and retrying
+    /// ssh's own failures as it does (Laysi/trustiot-v2#617).
     ///
     /// # Errors
     ///
     /// As [`Self::provision`].
-    pub async fn install(&self, hardware_id: &str, stdin: &[u8]) -> Result<Ran, SshError> {
-        let command = install_command(hardware_id, self.sudo)?;
+    pub async fn install(&self, hardware_id: &GatewayId, stdin: &[u8]) -> Result<Ran, SshError> {
+        let command = install_command(hardware_id.as_str(), self.sudo)?;
         self.run_retried(&command, Some(stdin), hardware_id, "install")
             .await
     }
 
-    /// Runs `command` with `stdin` (none: an empty standard input), retrying ssh's own failures:
-    /// see the module documentation. `hardware_id` and `mode` are for the log.
+    /// Runs `command` with `stdin` (none: an empty standard input) and the options
+    /// [`Self::checked_options`] gives for `hardware_id`, retrying ssh's own failures: see the
+    /// module documentation. `mode` is for the log.
     async fn run_retried(
         &self,
         command: &str,
         stdin: Option<&[u8]>,
-        hardware_id: &str,
+        hardware_id: &GatewayId,
         mode: &str,
     ) -> Result<Ran, SshError> {
+        let options = self.checked_options(hardware_id).await?;
         let started = Instant::now();
         let run_deadline = started + self.run_timeout;
         let mut attempt: u32 = 1;
         loop {
             debug!(
                 destination = %self.destination,
-                hardware_id,
+                hardware_id = hardware_id.as_str(),
                 mode,
                 attempt,
                 "running trustiot-agent provision over ssh"
             );
             let deadline = (Instant::now() + self.attempt_timeout).min(run_deadline);
             let last = match self
-                .attempt(command, stdin, deadline)
+                .attempt(&options, command, stdin, deadline)
                 .await
                 .map_err(SshError::Spawn)?
             {
@@ -627,22 +968,19 @@ impl SshGateway {
     /// all before `deadline`, when the call is killed.
     async fn attempt(
         &self,
+        options: &[String],
         command: &str,
         stdin: Option<&[u8]>,
         deadline: Instant,
     ) -> io::Result<Attempt> {
         let deadline = tokio::time::Instant::from_std(deadline);
-        let environment: Vec<(&str, OsString)> = KEPT_ENVIRONMENT
-            .iter()
-            .filter_map(|name| std::env::var_os(name).map(|value| (*name, value)))
-            .collect();
         let mut child = tokio::process::Command::new(SSH_PROGRAM)
-            .args(SSH_OPTIONS)
+            .args(options)
             .arg("--")
             .arg(self.destination.as_str())
             .arg(command)
             .env_clear()
-            .envs(environment)
+            .envs(Self::environment())
             .stdin(if stdin.is_some() {
                 Stdio::piped()
             } else {
@@ -740,7 +1078,12 @@ impl install::Remote for &SshGateway {
                 )));
             }
         };
-        let ran = match SshGateway::install(self, hardware_id, stdin).await {
+        let hardware_id = GatewayId::new(hardware_id.as_str()).map_err(|error| {
+            Error::Failed(format!(
+                "trustiot-agent provision install: not a hardware ID: {error}"
+            ))
+        })?;
+        let ran = match SshGateway::install(self, &hardware_id, stdin).await {
             Ok(ran) => ran,
             Err(SshError::Unreachable { attempts, last }) => {
                 return Err(Error::Failed(format!(
@@ -756,6 +1099,8 @@ impl install::Remote for &SshGateway {
                     "cannot run {SSH_PROGRAM}: {error}; the tool needs the system's OpenSSH client"
                 )));
             }
+            // The same refusal as before provision: nothing ran on the gateway.
+            Err(SshError::Configuration(message)) => return Err(Error::Failed(message)),
             Err(SshError::Local(error)) => return Err(error),
         };
         if ran.too_long {
@@ -777,17 +1122,23 @@ impl install::Remote for &SshGateway {
 
 /// At most [`MAX_REPORT_BYTES`] of `stdout`, and whether more arrived.
 async fn read_report(stdout: Option<impl AsyncRead + Unpin>) -> (Vec<u8>, bool) {
-    let Some(stdout) = stdout else {
+    read_bounded(stdout, MAX_REPORT_BYTES).await
+}
+
+/// At most `max_bytes` of `reader`, and whether more arrived; nothing past `max_bytes` + 1 is
+/// read.
+async fn read_bounded(reader: Option<impl AsyncRead + Unpin>, max_bytes: usize) -> (Vec<u8>, bool) {
+    let Some(reader) = reader else {
         return (Vec::new(), false);
     };
     let mut buffer = Vec::with_capacity(4096);
-    let limit = u64::try_from(MAX_REPORT_BYTES)
+    let limit = u64::try_from(max_bytes)
         .unwrap_or(u64::MAX)
         .saturating_add(1);
     // A read error ends the output; the exit status tells what happened.
-    let _ = stdout.take(limit).read_to_end(&mut buffer).await;
-    if buffer.len() > MAX_REPORT_BYTES {
-        buffer.truncate(MAX_REPORT_BYTES);
+    let _ = reader.take(limit).read_to_end(&mut buffer).await;
+    if buffer.len() > max_bytes {
+        buffer.truncate(max_bytes);
         return (buffer, true);
     }
     (buffer, false)
@@ -938,8 +1289,19 @@ mod tests {
     async fn only_provision_install_is_run_as_the_install_step() {
         let ssh = SshGateway::new(
             Destination::parse("gw").expect("a destination"),
+            KnownHosts::in_directory(Path::new("/srv/ws")).expect("safe"),
             None,
             false,
+        );
+        // The right shape, but not a hardware ID: refused before ssh runs.
+        let arguments: Vec<String> = ["provision", "install", "--hardware-id", "tg 0001;id"]
+            .into_iter()
+            .map(str::to_owned)
+            .collect();
+        let refused = install::Remote::run_agent(&mut &ssh, &arguments, b"").await;
+        assert!(
+            matches!(&refused, Err(Error::Failed(message)) if message.contains("not a hardware ID")),
+            "{refused:?}"
         );
         for arguments in [
             vec!["provision", "--hardware-id", "tg-0001"],
@@ -1050,6 +1412,101 @@ mod tests {
                 "{bad:?}"
             );
         }
+    }
+
+    #[test]
+    fn the_known_hosts_file_is_absolute_and_safe_for_ssh() {
+        let known = KnownHosts::in_directory(Path::new("/srv/station-1/trustiot")).expect("safe");
+        assert_eq!(known.as_str(), "/srv/station-1/trustiot/known_hosts");
+        let relative = KnownHosts::in_directory(Path::new("station")).expect("made absolute");
+        assert!(relative.as_str().starts_with('/'), "{}", relative.as_str());
+        assert!(relative.as_str().ends_with("/station/known_hosts"));
+        for bad in [
+            "/srv/a b",
+            "/srv/%h",
+            "/srv/~x",
+            "/srv/a\"b",
+            "/srv/a'b",
+            "/srv/a\\b",
+            "/srv/a#b",
+            "/srv/a=b",
+            "/srv/é",
+        ] {
+            assert!(
+                matches!(
+                    KnownHosts::in_directory(Path::new(bad)),
+                    Err(Error::Usage(_))
+                ),
+                "{bad:?}"
+            );
+        }
+        assert_eq!(host_key_alias(&id("tg-0001")), "trustiot-tg-0001");
+    }
+
+    /// `ssh -G`'s output with `stricthostkeychecking`, `userknownhostsfile` and the rest as
+    /// given.
+    fn effective(checking: &str, files: &str, extra: &str) -> String {
+        format!(
+            "host gateway\nuser admin\nbatchmode yes\nstricthostkeychecking {checking}\n\
+             hostkeyalias trustiot-tg-0001\nverifyhostkeydns false\n\
+             globalknownhostsfile /dev/null\nuserknownhostsfile {files}\n{extra}"
+        )
+    }
+
+    #[test]
+    fn only_settings_that_check_the_host_key_against_the_tools_file_pass() {
+        let known = KnownHosts::in_directory(Path::new("/srv/ws")).expect("safe");
+        let file = known.as_str();
+        let check =
+            |output: &str| check_effective_configuration(output, "trustiot-tg-0001", &known);
+        assert_eq!(
+            check(&effective("ask", file, "")),
+            Ok(HostKeyChecking::AcceptNew)
+        );
+        for kept in ["true", "yes", "accept-new"] {
+            assert_eq!(
+                check(&effective(kept, file, "knownhostscommand none\n")),
+                Ok(HostKeyChecking::Kept),
+                "{kept}"
+            );
+        }
+        for off in ["false", "no", "off"] {
+            let problem = check(&effective(off, file, "")).expect_err("refused");
+            assert!(
+                problem.contains("StrictHostKeyChecking no"),
+                "{off}: {problem}"
+            );
+        }
+        let problem = check(&effective("ask", "/dev/null", "")).expect_err("refused");
+        assert!(problem.contains("/dev/null"), "{problem}");
+        let problem = check(&effective("ask", &format!("{file} /dev/null"), "")).expect_err("x");
+        assert!(problem.contains("/dev/null"), "{problem}");
+        let problem = check(&effective(
+            "ask",
+            "~/.ssh/known_hosts ~/.ssh/known_hosts2",
+            "",
+        ))
+        .expect_err("x");
+        assert!(problem.contains("not only in the tool's own"), "{problem}");
+        let problem = check(&effective(
+            "yes",
+            file,
+            "knownhostscommand /usr/local/bin/keys %H\n",
+        ))
+        .expect_err("refused");
+        assert!(problem.contains("KnownHostsCommand"), "{problem}");
+        let other_alias = effective("ask", file, "").replace("trustiot-tg-0001", "gateway");
+        assert!(check(&other_alias).expect_err("x").contains("HostKeyAlias"));
+        let unknown = effective("ask", file, "").replace("stricthostkeychecking ask\n", "");
+        assert!(check(&unknown).expect_err("x").contains("does not know"));
+        let global = effective("ask", file, "").replace(
+            "globalknownhostsfile /dev/null",
+            "globalknownhostsfile /etc/ssh/ssh_known_hosts",
+        );
+        assert!(check(&global).expect_err("x").contains("system's files"));
+        let dns =
+            effective("ask", file, "").replace("verifyhostkeydns false", "verifyhostkeydns true");
+        assert!(check(&dns).expect_err("x").contains("VerifyHostKeyDNS"));
     }
 
     #[test]

@@ -8,6 +8,14 @@
 //! fail as ssh does (status 255): `fail-before-<n>` before the remote command runs,
 //! `fail-after-<n>` after it ran (its output is lost); `corrupt-<n>` adds a byte to what the
 //! remote command reads on standard input.
+//!
+//! `ssh -G` is answered apart and not counted as a call: it records its arguments and prints
+//! settings as ssh does, the first value of each winning: the `-o` options, then the state
+//! directory's `ssh_config` (lines `<lower-case name> <value>`, the operator's configuration),
+//! then ssh's defaults (`stricthostkeychecking ask`, the user's and the system's known hosts
+//! files, `verifyhostkeydns false`).
+//! `ssh_config_first` is read before the `-o` options, as a client that let the configuration
+//! override the command line would; with `config-flood`, it prints 1 MiB of spaces instead.
 
 use std::path::{Path, PathBuf};
 
@@ -118,6 +126,42 @@ impl GatewayKeys {
 const SCRIPT: &str = r#"#!/bin/sh
 state='@STATE@'
 remote='@REMOTE@'
+for arg in "$@"; do
+    if [ "$arg" = -G ]; then
+        k=$(cat "$state/config-count" 2>/dev/null || echo 0)
+        k=$((k + 1))
+        echo "$k" > "$state/config-count"
+        for a in "$@"; do printf '%s\0' "$a"; done > "$state/config-$k"
+        if [ -f "$state/config-flood" ]; then
+            head -c 1048576 /dev/zero | tr '\0' ' '
+            exit 0
+        fi
+        seen=' '
+        emit() {
+            case "$seen" in *" $1 "*) return ;; esac
+            seen="$seen$1 "
+            printf '%s %s\n' "$1" "$2"
+        }
+        if [ -f "$state/ssh_config_first" ]; then
+            while read -r key value; do emit "$key" "$value"; done < "$state/ssh_config_first"
+        fi
+        prev=
+        for a in "$@"; do
+            if [ "$prev" = -o ]; then
+                emit "$(printf '%s' "${a%%=*}" | tr 'A-Z' 'a-z')" "${a#*=}"
+            fi
+            prev=$a
+        done
+        if [ -f "$state/ssh_config" ]; then
+            while read -r key value; do emit "$key" "$value"; done < "$state/ssh_config"
+        fi
+        emit stricthostkeychecking ask
+        emit userknownhostsfile '~/.ssh/known_hosts ~/.ssh/known_hosts2'
+        emit globalknownhostsfile '/etc/ssh/ssh_known_hosts /etc/ssh/ssh_known_hosts2'
+        emit verifyhostkeydns false
+        exit 0
+    fi
+done
 count=$(cat "$state/count" 2>/dev/null || echo 0)
 n=$((count + 1))
 echo "$n" > "$state/count"
@@ -284,6 +328,49 @@ impl FakeSsh {
     /// Makes call `n` add a byte to the remote command's standard input.
     pub fn corrupt(&self, n: usize) {
         std::fs::write(self.state.join(format!("corrupt-{n}")), "").expect("a flag");
+    }
+
+    /// Sets the operator's ssh configuration `ssh -G` reports (`None` removes it); with `first`,
+    /// it overrides even the command line's options.
+    pub fn set_config(&self, lines: Option<&str>, first: bool) {
+        let path = self.state.join(if first {
+            "ssh_config_first"
+        } else {
+            "ssh_config"
+        });
+        match lines {
+            Some(lines) => std::fs::write(path, lines).expect("a configuration"),
+            None => {
+                let _ = std::fs::remove_file(path);
+            }
+        }
+    }
+
+    /// Makes `ssh -G` print 1 MiB of spaces (`on`) or its settings.
+    pub fn flood_config(&self, on: bool) {
+        let path = self.state.join("config-flood");
+        if on {
+            std::fs::write(path, "").expect("a flag");
+        } else {
+            let _ = std::fs::remove_file(path);
+        }
+    }
+
+    /// The arguments of every `ssh -G` call so far.
+    pub fn config_calls(&self) -> Vec<Vec<String>> {
+        let count: usize = std::fs::read_to_string(self.state.join("config-count"))
+            .map(|text| text.trim().parse().expect("a count"))
+            .unwrap_or(0);
+        (1..=count)
+            .map(|k| {
+                std::fs::read(self.state.join(format!("config-{k}")))
+                    .unwrap_or_default()
+                    .split(|byte| *byte == 0)
+                    .filter(|part| !part.is_empty())
+                    .map(|part| String::from_utf8_lossy(part).into_owned())
+                    .collect()
+            })
+            .collect()
     }
 
     /// How many calls were made.

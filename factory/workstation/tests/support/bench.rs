@@ -12,6 +12,7 @@ use contract::certs::{
 use rcgen::KeyPair;
 use sha2::{Digest as _, Sha256};
 use workstation::config::Origin;
+use workstation::gateway::KnownHosts;
 use workstation::identity::{self, WorkstationDirectory};
 use workstation::journal::Journal;
 use workstation::secret::SessionCookie;
@@ -111,6 +112,11 @@ impl Bench {
         Journal::new(self.directory.path())
     }
 
+    /// The tool's known hosts file in the workstation directory.
+    pub fn known_hosts(&self) -> KnownHosts {
+        KnownHosts::in_directory(self.directory.path()).expect("a path ssh can be given")
+    }
+
     /// Writes `bytes` as an executable under the scratch directory, for `--upload-agent`.
     pub fn agent_file(&self, name: &str, bytes: &[u8]) -> PathBuf {
         let path = self.scratch.join(name);
@@ -203,9 +209,15 @@ impl Bench {
                 "the timestamp header name",
                 WORKSTATION_TIMESTAMP_HEADER.to_owned(),
             ),
+            // The directory itself is named on ssh's command line, for the tool's known hosts
+            // file there (a local option, never sent); its key and certificate files never are.
             (
-                "the workstation directory",
-                self.directory.path().display().to_string(),
+                "the workstation key's path",
+                self.directory.key().display().to_string(),
+            ),
+            (
+                "the workstation certificate's path",
+                self.directory.certificate().display().to_string(),
             ),
         ];
         let key = std::fs::read_to_string(self.directory.key()).expect("the key");

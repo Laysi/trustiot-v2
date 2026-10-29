@@ -1,8 +1,10 @@
 //! `trustiot-workstation`: the production workstation tool (factory/workstation/README.md).
 //!
 //! Exit codes: 0 done, 1 failed, 2 usage, `register`'s own (10 to 19 and 75,
-//! [`workstation::register::StopKind`]; 20 to 23 with `--gateway`,
-//! [`workstation::pipeline::StopKind`]) and `verify`'s 24 ([`workstation::NO_EVENT_EXIT_CODE`]). Results go to stdout, prompts and log lines to stderr
+//! [`workstation::register::StopKind`]; 20 to 23 and 27 with `--gateway`,
+//! [`workstation::pipeline::StopKind`]) and `verify`'s 24 to 26 ([`workstation::NO_EVENT_EXIT_CODE`],
+//! [`workstation::EVENT_MISMATCH_EXIT_CODE`], [`workstation::UNRECORDED_EXIT_CODE`]). Results go
+//! to stdout, prompts and log lines to stderr
 //! (`TRUSTIOT_WORKSTATION_LOG`: off, error, warn, info (default), debug or trace). Neither ever
 //! shows the login code, the session cookie, the private key or a `--headers-file` value.
 
@@ -17,7 +19,7 @@ use tracing_subscriber::filter::{LevelFilter, Targets};
 use tracing_subscriber::layer::SubscriberExt as _;
 use tracing_subscriber::util::SubscriberInitExt as _;
 use workstation::config::{self, Options, Origin};
-use workstation::gateway::{self, Destination, SshGateway, UploadedAgent};
+use workstation::gateway::{self, Destination, KnownHosts, SshGateway, UploadedAgent};
 use workstation::http::{Client, ExtraHeaders, printable};
 use workstation::identity::{self, KeyOrigin, WorkstationDirectory};
 use workstation::journal::{Journal, State};
@@ -516,11 +518,17 @@ fn register_source(options: &Options) -> Result<Source, Error> {
         allow_new_key: options.flag("allow-new-key"),
     };
     let destination = Destination::parse(destination)?;
+    let known_hosts = KnownHosts::in_directory(directory(options)?.path())?;
     let upload = config::path_option(options, "upload-agent")?
         .map(UploadedAgent::load)
         .transpose()?;
     Ok(Source::Ssh {
-        ssh: SshGateway::new(destination, upload, options.flag("remote-sudo")),
+        ssh: SshGateway::new(
+            destination,
+            known_hosts,
+            upload,
+            options.flag("remote-sudo"),
+        ),
         plan,
     })
 }
@@ -666,6 +674,7 @@ async fn verify(options: &Options) -> Result<(), Error> {
             verify::EVENT_TYPE
         )));
     }
+    let mut mismatched = 0_usize;
     for found in &search.found {
         let event = &found.registered;
         let serial = found.serial();
@@ -685,6 +694,7 @@ async fn verify(options: &Options) -> Result<(), Error> {
                 {
                     say("  it matches this workstation's record (serial and public key)");
                 } else {
+                    mismatched += 1;
                     tell(&format!(
                         "  it does not match this workstation's record ({}): another \
                          registration of the hardware ID; report it to a platform administrator",
@@ -694,6 +704,23 @@ async fn verify(options: &Options) -> Result<(), Error> {
             }
             _ => say("  this workstation has no registered record of the hardware ID"),
         }
+    }
+    if recorded.is_none() {
+        return Err(Error::Unrecorded(format!(
+            "this workstation has no registered record of hardware ID {hardware_id} ({}), so the \
+             event(s) above cannot be compared with it: run verify on the workstation that \
+             registered the gateway",
+            journal.record_path(hardware_id.as_str()).display()
+        )));
+    }
+    if mismatched > 0 {
+        return Err(Error::EventMismatch(format!(
+            "{mismatched} of {} {} event(s) of hardware ID {hardware_id} do not match this \
+             workstation's record (serial and public key): the hardware ID was registered \
+             another way; report it to a platform administrator",
+            search.found.len(),
+            verify::EVENT_TYPE
+        )));
     }
     Ok(())
 }

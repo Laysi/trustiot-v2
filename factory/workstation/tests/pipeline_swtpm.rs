@@ -14,8 +14,9 @@
 //! same serial), which installs the chain and the root, and the agent's own start-up checks
 //! (`agent::setup`) accept them with the TPM key; a reflash (the remote's files and the installed
 //! certificates gone, a new TPM connection, the image's agent; 200, the same serial, the
-//! certificates installed again); `tpm2_clear` (stopped with 20, nothing created); and
-//! `--allow-new-key` (the platform's 409 `public_key_mismatch`, exit code 10).
+//! certificates installed again); `tpm2_clear` (stopped with 20, nothing created);
+//! `--allow-new-key` (the platform's 409 `public_key_mismatch`, exit code 10); then the key that
+//! run created, on the same TPM with the same endorsement key (stopped with 20, nothing sent).
 //!
 //! Without podman or docker the test skips, unless `CI` is set, where it fails.
 
@@ -559,6 +560,21 @@ async fn a_gateway_registers_reruns_and_stops_after_tpm2_clear() {
         "the record keeps the registration"
     );
 
+    // 7. The same TPM (tpm2_clear kept its endorsement key) now holds the key step 6 created,
+    //    not the recorded one: handled like no key, 20, and nothing is sent.
+    let calls = bench.ssh.count();
+    let other_key = bench.run(&bench.register_args(HARDWARE_ID, &upload)).await;
+    assert_eq!(other_key.code, Some(20), "{}", other_key.output());
+    assert!(
+        other_key
+            .stderr
+            .contains("has another key than the recorded one"),
+        "{}",
+        other_key.stderr
+    );
+    assert_eq!(bench.ssh.count(), calls + 1, "only the inspection");
+    assert_eq!(answered(&bench), [201, 200, 200, 409], "nothing was sent");
+
     // What the agent was asked, every time: provision with the ID and the handle only, or
     // provision install with the ID only.
     let handle = format!("{DEFAULT_HANDLE:#010x}");
@@ -593,7 +609,8 @@ async fn a_gateway_registers_reruns_and_stops_after_tpm2_clear() {
             rerun.code,
             reflashed.code,
             cleared.code,
-            forced.code
+            forced.code,
+            other_key.code
         ],
         answered(&bench),
         bench.ssh.count(),

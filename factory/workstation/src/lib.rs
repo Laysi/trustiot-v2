@@ -123,10 +123,24 @@ pub enum Error {
     /// `verify` found no registration event of the hardware ID (exit code [`NO_EVENT_EXIT_CODE`]).
     #[error("{0}")]
     NoEvent(String),
+    /// `verify` found a registration event of the hardware ID whose serial or public key is not
+    /// this workstation's record (exit code [`EVENT_MISMATCH_EXIT_CODE`]).
+    #[error("{0}")]
+    EventMismatch(String),
+    /// `verify` found registration events of the hardware ID, but this workstation has no
+    /// `registered` record to compare them with (exit code [`UNRECORDED_EXIT_CODE`]).
+    #[error("{0}")]
+    Unrecorded(String),
 }
 
 /// The exit code of [`Error::NoEvent`].
 pub const NO_EVENT_EXIT_CODE: u8 = 24;
+
+/// The exit code of [`Error::EventMismatch`].
+pub const EVENT_MISMATCH_EXIT_CODE: u8 = 25;
+
+/// The exit code of [`Error::Unrecorded`].
+pub const UNRECORDED_EXIT_CODE: u8 = 26;
 
 impl From<http::ApiError> for Error {
     fn from(error: http::ApiError) -> Self {
@@ -137,7 +151,8 @@ impl From<http::ApiError> for Error {
 impl Error {
     /// The process exit code for this failure: 2 for usage mistakes, a registration's own code
     /// ([`register::StopKind::exit_code`]), a gateway run's ([`pipeline::StopKind::exit_code`]),
-    /// an installation's ([`install::InstallStopKind::exit_code`]), [`NO_EVENT_EXIT_CODE`], 1
+    /// an installation's ([`install::InstallStopKind::exit_code`]), `verify`'s
+    /// [`NO_EVENT_EXIT_CODE`], [`EVENT_MISMATCH_EXIT_CODE`] and [`UNRECORDED_EXIT_CODE`], 1
     /// otherwise.
     #[must_use]
     pub fn exit_code(&self) -> u8 {
@@ -147,6 +162,8 @@ impl Error {
             Self::Install(stopped) => stopped.kind.exit_code(),
             Self::Provisioning(stopped) => stopped.kind.exit_code(),
             Self::NoEvent(_) => NO_EVENT_EXIT_CODE,
+            Self::EventMismatch(_) => EVENT_MISMATCH_EXIT_CODE,
+            Self::Unrecorded(_) => UNRECORDED_EXIT_CODE,
             _ => 1,
         }
     }
