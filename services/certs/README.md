@@ -492,7 +492,7 @@ trustiot-workstation register --hardware-id <硬體 ID> --csr gateway.csr --ek e
 
 ### 連線與帳號
 
-- 用 `crates/mqtt-client`，帳號 `service:certs`，密碼檔每次連線重讀（chart 掛 broker 帳號 Secret 的 `certs` key，Laysi/trustiot-v2#634 接上）。`service:certs` 是唯一有 dynsec 管理角色的服務帳號（[docs/architecture/secrets.md](../../docs/architecture/secrets.md) 的「MQTT dynsec 管理帳密」），設定只接受這個帳號。
+- 用 `crates/mqtt-client`，帳號 `service:certs`，密碼檔每次連線重讀。chart 在 broker 開啟時給 certs 這些設定（`TRUSTIOT__MQTT__HOST`、`PORT`、`USERNAME`、`PASSWORD_FILE`，自訂 `env` 不能覆寫），並只把 broker 帳號 Secret 的 `certs` key 以目錄掛在 `/etc/trustiot/mqtt-broker-account`（密碼檔是其中的 `certs`）；輪替密碼時 certs 不重啟，kubelet 換上新檔案後下一次重連就用新密碼（Laysi/trustiot-v2#634，[deploy/chart/README.md](../../deploy/chart/README.md)「服務的帳號」）。`service:certs` 是唯一有 dynsec 管理角色的服務帳號（[docs/architecture/secrets.md](../../docs/architecture/secrets.md) 的「MQTT dynsec 管理帳密」），設定只接受這個帳號。
 - 指令送到 `$CONTROL/dynamic-security/v1`，回應從 `$CONTROL/dynamic-security/v1/response` 讀，以每個指令的 `correlationData` 對應；Mosquitto 只把回應送給發出指令的 client。一則訊息最多 50 個變更，等回應最多 30 秒。
 - 沒有設定 broker（`TRUSTIOT__MQTT__HOST` 等都沒設）時不同步，啟動時記一行 INFO `no mqtt broker is configured; the broker's gateway permissions are not synced`。broker 連不上不影響 readiness：CRL 與 CA 鏈仍要提供給 broker，同步只是延後。
 

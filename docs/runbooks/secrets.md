@@ -206,7 +206,7 @@ ClickHouse、MQTT dynsec、Grafana 的帳號由叢集內產生，值不經過人
 
 1. 把 values 的 `mqttBroker.passwordGeneration` 加一，升級。broker 的 pod 重啟，init container `accounts` 先產生新密碼寫進 Secret `<release>-mqtt-broker-accounts`（key 是服務名稱），再把雜湊寫進 broker 的 dynamic security 檔。broker 是單一副本：重啟期間閘道器與服務斷線、之後重連，session、排隊與 retained 訊息在 SQLite 裡保留。
 2. 確認：`kubectl -n <namespace> logs <release>-mqtt-broker-0 -c accounts` 有 `generated the password of <服務> in Secret <release>-mqtt-broker-accounts`（日誌只有名稱）；`kubectl -n <namespace> get secret <release>-mqtt-broker-accounts -o jsonpath='{.metadata.annotations.trustiot\.io/password-generation}'` 是新的代；broker 的 pod Ready。
-3. 使用 broker 的服務要重啟才拿到新密碼，在那之前以舊密碼重連會被拒（CONNACK 135）。第一個接上 broker 的服務在它的 issue 把重啟的方式寫進這一步。
+3. 使用 broker 的服務不必重啟（Laysi/trustiot-v2#634）：它們的 pod 以目錄掛自己的 key，kubelet 在下一次同步（預設最多 1 分鐘，加上它快取 Secret 的延遲）換上新的檔案，服務每次連線都重讀它。broker 重啟時服務斷線，之後以舊密碼重連會被拒（CONNACK 135），退避重試（最多每 30 秒一次），檔案更新後連上。確認：`kubectl -n <namespace> logs deploy/<release>-certs` 在 broker 重啟之後先有 WARN `mqtt connection failed or lost; reconnecting`，最後一行連線紀錄是 INFO `connected to the mqtt broker`；一直只有前者時，檢查 `kubectl -n <namespace> get events --field-selector involvedObject.name=<certs 的 pod>` 與 broker 的 `accounts` 日誌。
 
 代只往上走，rollback 不換。Secret 遺失時同 ClickHouse 的管理帳號：把 `mqttBroker.passwordGeneration` 加一再升級，Helm 重建 Secret，init container 產生新密碼；Secret 不存在時 init container 失敗並寫出這個處理方式，broker 停在 `Init`。不要自己建立這個 Secret。
 
