@@ -152,7 +152,7 @@ trustiot-workstation register --hardware-id <硬體 ID> --csr gateway.csr --ek e
 - **閘道器的主機金鑰要先在 `known_hosts` 裡**。新閘道器的主機金鑰在出廠映像第一次開機時產生，產線網路上可以在 `~/.ssh/config` 為閘道器的網段設 `StrictHostKeyChecking accept-new`（第一次連線記下、之後改變就拒絕）；工具不覆寫這個設定，也不關閉主機金鑰檢查。重刷的閘道器主機金鑰會變，ssh 拒絕連線時以 `ssh-keygen -R <主機>` 移除舊的那筆。
 - 工具固定加上 `-T -a -x` 與 `ClearAllForwardings=yes`、`ForwardAgent=no`、`ForwardX11=no`、`PermitLocalCommand=no`、`ControlMaster=no`、`ControlPath=none`（不轉送 agent、不共用連線）、`ConnectTimeout=20`、`ServerAliveInterval=15`、`ServerAliveCountMax=4`、`LogLevel=ERROR`。
 
-**閘道器端的 ssh 限制（正式產線的前提，尚未實作）**：能在閘道器上執行 agent 的人，就能決定閘道器的金鑰與信任錨（Laysi/trustiot-v2#617 的安裝以 root 執行），所以正式產線的閘道器不讓工作站的 ssh 帳號執行任意指令。採用的做法：
+**閘道器端的 ssh 限制（正式產線的前提，Laysi/trustiot-v2#219）**：能在閘道器上執行 agent 的人，就能決定閘道器的金鑰與信任錨（Laysi/trustiot-v2#617 的安裝以 root 執行），所以正式產線的閘道器不讓工作站的 ssh 帳號執行任意指令。採用的做法：
 
 - 工作站用**專用的 ssh 金鑰**（只給這個工具用），在 `~/.ssh/config` 為閘道器設 `IdentityFile` 與 `IdentitiesOnly yes`。
 - 閘道器上的專用帳號在 `authorized_keys` 以 `restrict,command="sudo -n /usr/local/libexec/trustiot-provision-ssh"` 綁這把金鑰：不論工作站送什麼，sshd 只執行這個固定的轉接程式，不給 shell、轉送或 pty。
@@ -160,7 +160,7 @@ trustiot-workstation register --hardware-id <硬體 ID> --csr gateway.csr --ek e
 - 轉接程式從 `SSH_ORIGINAL_COMMAND` 讀工作站的請求，只接受固定的幾種形式、每個字都要符合上面的規則（英數字、`.`、`_`、`-`），再以固定的參數執行 `trustiot-agent provision`（與 #617 的安裝）；其他一律拒絕。
 - 工作站這一側已經有的：連線逾時（`ConnectTimeout=20`、`ServerAliveInterval=15` × 4）、每次嘗試 300 秒與一次執行 420 秒的上限、`BatchMode=yes` 與主機金鑰檢查。
 
-這需要改工作站在「已安裝的 agent」模式送的請求（目前是 `sh -c '<固定腳本>' …`，轉接程式無法安全地解析；改成只有幾個字的請求），轉接程式與 sudoers 由出廠映像（Laysi/trustiot-v2#95）安裝，對真的閘道器登錄（Laysi/trustiot-v2#618）之前完成。`--upload-agent` 是上傳並執行任意程式，與這個限制不相容：只用在還沒有出廠映像的 lab 與展示用閘道器，那裡的 ssh 帳號本來就能登入 shell。
+**還沒實作**：轉接程式、sudoers，以及把工作站在「已安裝的 agent」模式送的請求（目前是 `sh -c '<固定腳本>' …`，轉接程式無法安全地解析）改成只有幾個字的短請求，都是出廠映像階段的前提條件，記在 Laysi/trustiot-v2#219。在那之前，`--upload-agent` 與 `--remote-sudo` 只用在還沒有出廠映像的 lab 與展示用閘道器（例如 Laysi/trustiot-v2#618），那裡的 ssh 帳號本來就能登入 shell；上傳並執行任意程式與這個限制不相容，正式產線不用它。
 
 步驟：
 
