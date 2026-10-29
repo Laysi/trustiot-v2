@@ -1275,6 +1275,7 @@ dependencies = [
 name = "identity"
 version = "0.1.0"
 dependencies = [
+ "ai-gateway-api",
  "axum",
  "base64 0.22.1",
  "chrono",
@@ -1282,6 +1283,9 @@ dependencies = [
  "ed25519-dalek",
  "getrandom 0.4.3",
  "hmac",
+ "http-body-util",
+ "hyper",
+ "hyper-util",
  "identity-keys",
  "jiff-tzdb",
  "migrate",
