@@ -150,6 +150,11 @@ async fn every_relation_and_operation_the_service_has_is_declared() {
              workstation only, before the gateway belongs to any tenant; no tenant data \
              (tests/registration.rs)",
         )
+        .exempt_endpoint(
+            "POST /api/certs/v1/gateways/{hardware_id}/revoke",
+            "revokes every valid certificate of a gateway: platform administrators only, by \
+             hardware ID, no tenant data (tests/gateway_revocation.rs)",
+        )
         .run(None)
         .await;
     report.assert_isolated();
