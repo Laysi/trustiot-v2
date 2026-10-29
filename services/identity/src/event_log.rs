@@ -14,8 +14,12 @@
 //! | Route | Caller | Events |
 //! | --- | --- | --- |
 //! | [`EVENT_LOG_PATH`] | an administrator of the token's tenant | that tenant's, under row-level security |
-//! | [`PLATFORM_TENANT_EVENT_LOG_PATH`] | a platform administrator (A2) | the tenant in the path's, as the platform role |
-//! | [`PLATFORM_EVENT_LOG_PATH`] | a platform administrator | platform-wide events, as the platform role |
+//! | [`PLATFORM_TENANT_EVENT_LOG_PATH`] | a platform administrator's own request (A2) | the tenant in the path's, as the platform role |
+//! | [`PLATFORM_EVENT_LOG_PATH`] | a platform administrator's own request | platform-wide events, as the platform role |
+//!
+//! A platform administrator's own request is one whose token the ingress's cookie check issued:
+//! a token another service exchanged on the administrator's behalf (`act`) gets 403, as for every
+//! platform administrator action (Laysi/trustiot-v2#104, 2026-10-23; docs/architecture/permissions.md).
 //!
 //! Query parameters, all optional: `from` (inclusive) and `to` (exclusive), RFC 3339 times
 //! compared with the event's `occurred_at`; `limit`, 1 to [`MAX_PAGE`] (default
@@ -47,6 +51,8 @@ use service_kit::identity::{IdentityVerifier, UserIdentity};
 use service_kit::tenant::{PlatformActor, PlatformDb, TenantDb, TenantDbError};
 use sqlx::{PgConnection, Postgres, Transaction};
 use utoipa::ToSchema;
+
+use crate::members::is_own_platform_admin;
 
 /// A tenant administrator's view of their own tenant's events.
 pub const EVENT_LOG_PATH: &str = "/api/identity/v1/event-log";
@@ -667,27 +673,28 @@ impl EventLog {
         Ok(page)
     }
 
-    /// A page of `tenant`'s events, for a platform administrator, read as the platform role
-    /// (logged at INFO with the administrator and the purpose).
+    /// A page of `tenant`'s events, for a platform administrator's own request, read as the
+    /// platform role (logged at INFO with the administrator and the purpose).
     ///
     /// # Errors
     ///
-    /// [`QueryError::NotAllowed`] when `admin` is not a platform administrator; otherwise when
-    /// the database fails.
+    /// [`QueryError::NotAllowed`] when `admin` is not a platform administrator, or the token was
+    /// exchanged by another service ([`is_own_platform_admin`]); otherwise when the database
+    /// fails.
     pub async fn tenant_events_for_platform(
         &self,
         admin: &UserIdentity,
         tenant: TenantId,
         query: &EventLogQuery,
     ) -> Result<EventLogPage, QueryError> {
-        let actor = PlatformActor::admin(admin).ok_or(QueryError::NotAllowed)?;
+        let actor = own_platform_actor(admin)?;
         let mut tx = self.platform.begin(actor, PLATFORM_READ_PURPOSE).await?;
         let page = page(&mut tx, Log::Tenant(tenant), query).await?;
         tx.commit().await?;
         Ok(page)
     }
 
-    /// A page of the platform-wide events, for a platform administrator.
+    /// A page of the platform-wide events, for a platform administrator's own request.
     ///
     /// # Errors
     ///
@@ -697,12 +704,36 @@ impl EventLog {
         admin: &UserIdentity,
         query: &EventLogQuery,
     ) -> Result<EventLogPage, QueryError> {
-        let actor = PlatformActor::admin(admin).ok_or(QueryError::NotAllowed)?;
+        let actor = own_platform_actor(admin)?;
         let mut tx = self.platform.begin(actor, PLATFORM_READ_PURPOSE).await?;
         let page = page(&mut tx, Log::Platform, query).await?;
         tx.commit().await?;
         Ok(page)
     }
+}
+
+/// The platform role's actor for `admin`, if it may read the back office's logs: a platform
+/// administrator's own request ([`is_own_platform_admin`]).
+fn own_platform_actor(admin: &UserIdentity) -> Result<PlatformActor, QueryError> {
+    if !is_own_platform_admin(admin) {
+        return Err(QueryError::NotAllowed);
+    }
+    PlatformActor::admin(admin).ok_or(QueryError::NotAllowed)
+}
+
+/// Refuses every caller of the back office's logs but a platform administrator's own request,
+/// from the token alone; logs the refusal at INFO.
+fn refuse_platform_caller(user: &UserIdentity) -> Option<Response> {
+    if is_own_platform_admin(user) {
+        return None;
+    }
+    tracing::info!(
+        user_id = %user.user_id(),
+        exchanged = user.claims().act.is_some(),
+        "refused to read the back office's event log: not a platform administrator, or not the \
+         administrator's own request"
+    );
+    Some(error(ErrorCode::PermissionDenied))
 }
 
 /// The state of the event log routes.
@@ -775,7 +806,8 @@ async fn tenant_event_log(
     respond(&user, log.tenant_events(&user, &query).await)
 }
 
-/// One tenant's operation log, for the back office. Platform administrators only.
+/// One tenant's operation log, for the back office. Platform administrators only, in their own
+/// request.
 #[utoipa::path(
     get,
     path = "/api/identity/v1/platform/tenants/{tenant_id}/event-log",
@@ -792,7 +824,7 @@ async fn tenant_event_log(
         (status = 200, description = "A page of the tenant's events, newest first.", body = EventLogPage),
         (status = 400, description = "A malformed tenant ID or parameter, or `from` not before `to` (`invalid_request`).", body = ErrorBody),
         (status = 401, description = "No valid session (`unauthenticated`).", body = ErrorBody),
-        (status = 403, description = "The user is not a platform administrator (`permission_denied`).", body = ErrorBody),
+        (status = 403, description = "Not a platform administrator, or not the administrator's own request: another service exchanged the token (`permission_denied`).", body = ErrorBody),
         (status = 503, description = "The database failed, or the event log is off (`unavailable`).", body = ErrorBody),
     )
 )]
@@ -802,8 +834,8 @@ async fn platform_tenant_event_log(
     Path(tenant): Path<String>,
     raw: Result<Query<RawQuery>, QueryRejection>,
 ) -> Response {
-    if !user.is_platform_admin() {
-        return error(ErrorCode::PermissionDenied);
+    if let Some(refusal) = refuse_platform_caller(&user) {
+        return refusal;
     }
     let Ok(tenant) = tenant.parse::<TenantId>() else {
         return error(ErrorCode::InvalidRequest);
@@ -820,7 +852,8 @@ async fn platform_tenant_event_log(
     )
 }
 
-/// The platform-wide operation log, for the back office. Platform administrators only.
+/// The platform-wide operation log, for the back office. Platform administrators only, in their
+/// own request.
 #[utoipa::path(
     get,
     path = "/api/identity/v1/platform/event-log",
@@ -836,7 +869,7 @@ async fn platform_tenant_event_log(
         (status = 200, description = "A page of the platform-wide events, newest first.", body = EventLogPage),
         (status = 400, description = "A malformed parameter, or `from` not before `to` (`invalid_request`).", body = ErrorBody),
         (status = 401, description = "No valid session (`unauthenticated`).", body = ErrorBody),
-        (status = 403, description = "The user is not a platform administrator (`permission_denied`).", body = ErrorBody),
+        (status = 403, description = "Not a platform administrator, or not the administrator's own request: another service exchanged the token (`permission_denied`).", body = ErrorBody),
         (status = 503, description = "The database failed, or the event log is off (`unavailable`).", body = ErrorBody),
     )
 )]
@@ -845,8 +878,8 @@ async fn platform_event_log(
     user: UserIdentity,
     raw: Result<Query<RawQuery>, QueryRejection>,
 ) -> Response {
-    if !user.is_platform_admin() {
-        return error(ErrorCode::PermissionDenied);
+    if let Some(refusal) = refuse_platform_caller(&user) {
+        return refusal;
     }
     let Some(query) = parse_query(raw) else {
         return error(ErrorCode::InvalidRequest);
@@ -1025,6 +1058,66 @@ mod tests {
         assert!(
             outbox::ConsumerConfig::new(subscription("telemetry_query"), "telemetry_query").is_ok()
         );
+    }
+
+    /// The status of `GET path` on the event log routes, with the event log off (so a caller who
+    /// gets past the role check gets 503), as `claims`.
+    async fn status(path: &str, claims: &contract::InternalClaims) -> u16 {
+        use axum::body::Body;
+        use axum::http::Request;
+        use tower::ServiceExt as _;
+
+        let issuer = testkit::identity::TestIssuer::new();
+        let router = routes(issuer.verifier(ServiceName::Identity), None);
+        let request = Request::get(path)
+            .header(contract::INTERNAL_IDENTITY_HEADER, issuer.token(claims))
+            .body(Body::empty())
+            .expect("a request");
+        router
+            .oneshot(request)
+            .await
+            .expect("the router answers")
+            .status()
+            .as_u16()
+    }
+
+    #[tokio::test]
+    async fn the_back_office_logs_refuse_exchanged_tokens() {
+        use contract::{Actor as TokenActor, TenantGrant};
+        use testkit::identity::TestIssuer;
+
+        let tenant_path = PLATFORM_TENANT_EVENT_LOG_PATH
+            .replace("{tenant_id}", &TenantId::generate().to_string());
+        let admin = |act: Option<ServiceName>| {
+            let mut claims = TestIssuer::claims(ServiceName::Identity, None);
+            claims.platform_admin = true;
+            if let Some(sub) = act {
+                claims.act = Some(TokenActor { sub });
+                claims.sid = None;
+            }
+            claims
+        };
+        let mut tenant_admin = TestIssuer::claims(
+            ServiceName::Identity,
+            Some(TenantGrant {
+                id: TenantId::generate(),
+                role: TenantRole::Admin,
+            }),
+        );
+        tenant_admin.platform_admin = false;
+        for path in [tenant_path.as_str(), PLATFORM_EVENT_LOG_PATH] {
+            // The administrator's own request gets past the check (503: the log is off here).
+            assert_eq!(status(path, &admin(None)).await, 503, "{path}");
+            // Exchanged by another service on the administrator's behalf.
+            for service in [ServiceName::Assistant, ServiceName::Assets] {
+                assert_eq!(
+                    status(path, &admin(Some(service))).await,
+                    403,
+                    "{path} exchanged by {service:?}"
+                );
+            }
+            assert_eq!(status(path, &tenant_admin).await, 403, "{path}");
+        }
     }
 
     #[test]

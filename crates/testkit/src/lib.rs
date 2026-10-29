@@ -4,6 +4,9 @@
 //! - [`isolation`]: the cross-tenant negative test suite every service runs (decision 29):
 //!   two tenants with their own data, every declared table and endpoint attacked as one tenant
 //!   against the other, and a failure for every table or endpoint the suite does not declare.
+//! - [`permissions`]: the permission matrix (A2): what each operation of a service's client API
+//!   requires, declared once, compared with the OpenAPI document and
+//!   `docs/architecture/permissions.md`, and probed over HTTP as every kind of caller.
 //! - [`identity`]: internal identity tokens signed with a key made for the test process.
 //! - [`postgres`]: a throwaway Postgres with TLS, which service-kit's `verify-full` connections
 //!   need.
@@ -32,6 +35,7 @@ pub mod identity;
 pub mod isolation;
 pub mod modbus;
 pub mod mqtt;
+pub mod permissions;
 pub mod postgres;
 pub mod product;
 pub mod swtpm;
