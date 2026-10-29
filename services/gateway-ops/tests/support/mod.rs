@@ -1,11 +1,14 @@
 //! Helpers for the service's integration tests, on the product's Postgres schema applied by the
 //! migration Job (`testkit::product`): the assets service's events written as the assets
 //! service writes them, the handler run by a consumer in the test's thread, the stored
-//! configurations, captured log events, and the gateway-ops binary as a real process.
+//! configurations, captured log events, the gateway-ops binary as a real process, and a
+//! throwaway MQTT broker with a stand-in gateway ([`broker`]).
 #![allow(
     dead_code,
     reason = "each test binary includes this module and uses a different subset of it"
 )]
+
+pub mod broker;
 
 use std::collections::BTreeMap;
 use std::io::{BufRead, BufReader, Read};
@@ -515,6 +518,20 @@ impl Capture {
             .map(|(_, fields)| fields.clone())
             .collect()
     }
+
+    /// Every captured message and field value, one per line.
+    pub fn text(&self) -> String {
+        let mut text = String::new();
+        for (message, fields) in self.0.lock().expect("the lock").iter() {
+            text.push_str(message);
+            text.push('\n');
+            for value in fields.values() {
+                text.push_str(value);
+                text.push('\n');
+            }
+        }
+        text
+    }
 }
 
 struct Visitor<'a>(&'a mut BTreeMap<String, String>);
@@ -584,12 +601,22 @@ pub struct Service {
 }
 
 impl Service {
-    /// Starts the service on free local ports against `product`, with the roles the chart gives
-    /// it, and waits until it listens. The environment is otherwise empty, so the developer's
-    /// own variables cannot leak in.
-    pub async fn start(product: &ProductPostgres) -> Self {
+    /// Starts the service on free local ports against `product` and the broker `mqtt`, with the
+    /// roles the chart gives it and a coalescing window of `throttle`, and waits until it
+    /// listens. The environment is otherwise empty, so the developer's own variables cannot leak
+    /// in.
+    pub async fn start(
+        product: &ProductPostgres,
+        mqtt: &mqtt_client::Config,
+        throttle: &str,
+    ) -> Self {
         let mut child = Command::new(GATEWAY_OPS)
             .env_clear()
+            .env("TRUSTIOT__MQTT__HOST", &mqtt.host)
+            .env("TRUSTIOT__MQTT__PORT", mqtt.port.to_string())
+            .env("TRUSTIOT__MQTT__USERNAME", &mqtt.username)
+            .env("TRUSTIOT__MQTT__PASSWORD_FILE", &mqtt.password_file)
+            .env("TRUSTIOT__DELIVERY__THROTTLE", throttle)
             .env("TRUSTIOT__HTTP__LISTEN_ADDR", "127.0.0.1:0")
             .env("TRUSTIOT__HTTP__HEALTH_LISTEN_ADDR", "127.0.0.1:0")
             .env("TRUSTIOT__SHUTDOWN__DRAIN_DELAY", "100ms")
