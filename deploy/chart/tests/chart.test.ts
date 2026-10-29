@@ -4049,7 +4049,7 @@ describe("migration Job (Laysi/trustiot-v2#60)", () => {
       expect(container.env?.filter((e) => /^TRUSTIOT__(CLICKHOUSE|DATABASE)__/.test(e.name)), shape).toEqual([
         { name: "TRUSTIOT__DATABASE__USERNAME", value: "gateway_ops_app" },
         { name: "TRUSTIOT__DATABASE__PASSWORD", valueFrom: { secretKeyRef: { name: secret, key: "gateway_ops_app" } } },
-        { name: "TRUSTIOT__DATABASE__MAX_CONNECTIONS", value: "7" },
+        { name: "TRUSTIOT__DATABASE__MAX_CONNECTIONS", value: "9" },
         { name: "TRUSTIOT__DATABASE__PLATFORM_USERNAME", value: "gateway_ops_platform" },
         { name: "TRUSTIOT__DATABASE__PLATFORM_PASSWORD", valueFrom: { secretKeyRef: { name: secret, key: "gateway_ops_platform" } } },
       ]);

@@ -49,11 +49,18 @@ bun install --cwd frontend --frozen-lockfile && bun run --cwd frontend api:check
 - `tests/cross_tenant.rs`：服務角色讀不到也改不了別的租戶的 `gateway_presence`，API 的列表只列呼叫者租戶的閘道器。
 - `tests/startup.rs`：broker 停掉時 `/readyz` 是 503，失敗的檢查是 `mqtt` 與 `presence`；恢復後就緒。
 
-整個 workspace 與其他檢查的結果在下面的「完整檢查」。
+整個 workspace 與其他檢查（建置主機，最後的程式變更之後）：
 
-## 完整檢查
-
-（見 PR 的驗證一節；這份報告在 commit 之前寫成，最後一次完整檢查的數字填在 PR。）
+| 指令 | 結果 |
+| --- | --- |
+| `cargo fmt --all --check`、`cargo clippy --locked --workspace --all-targets -- -D warnings` | 通過，沒有警告 |
+| `cargo run --locked -p openapi -- --check` | `api/openapi.json is up to date` |
+| `cargo deny --locked check` | advisories、bans、licenses、sources 都 ok |
+| `CI=1 cargo test --locked --workspace --exclude agent` | 1985 個通過、0 失敗、1 個 ignored |
+| `bun test deploy/chart` | 711 個通過、0 失敗（連線預算 220 = 202 + 18） |
+| `bun test scripts`、`bun run --cwd scripts typecheck` | 1711 個通過、9 個略過、0 失敗；型別檢查通過 |
+| `bun run --cwd frontend api:check`、`typecheck`、`lint`、`test` | 全部通過；218 個測試 |
+| `bun scripts/ci/check-workflows.ts`、`bun scripts/ci/check-secret-handling.ts` | 沒有違規 |
 
 ## 結論
 
