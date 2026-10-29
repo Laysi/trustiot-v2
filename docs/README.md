@@ -18,6 +18,7 @@ TrustIoT 將以 Rust 從零重建，不沿用舊架構。本目錄是重建的�
 | [專案目錄](architecture/repository-layout.md) | repo 的目錄結構與各目錄職責 |
 | [CI 與發佈](architecture/ci-release.md) | GitHub Actions 三個 workflow 與 GitOps 部署 |
 | [密鑰與權限](architecture/secrets.md) | 密鑰的規則、注入方式與清冊；一次性 token 的規則（M3）；公開 repo 的資訊規則 |
+| [權限矩陣](architecture/permissions.md) | 每個 API 操作要求的身分（公開、已登入、租戶角色、平台管理員本人），由各服務的測試對照宣告與實際行為（A2） |
 | [密鑰輪替 runbook](runbooks/secrets.md) | 每項密鑰的輪替步驟與外洩處理 |
 | [migration Job runbook](runbooks/migrations.md) | 既有叢集補 owner 的 CREATEROLE、收回 `postgres` 與 `template1` 的 PUBLIC 權限（叢集內與外部 Postgres）、一個 Postgres 叢集一個 TrustIoT 資料庫、服務資料庫密碼的輪替、Job 停止或服務等不到 Job 時的處理、原始資料保存期限的設定被拒或 TTL 被手動改過 |
 | [第一位平台管理員 runbook](runbooks/platform-admin.md) | 部署後以 chart 的 CronJob 執行一次 `migrate bootstrap-platform-admin`、結束碼、再建立一次的復原 SQL |

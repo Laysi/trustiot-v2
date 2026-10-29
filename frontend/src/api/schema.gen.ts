@@ -3581,7 +3581,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description The user is not a platform administrator (`permission_denied`). */
+            /** @description Not a platform administrator, or not the administrator's own request: another service exchanged the token (`permission_denied`). */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -3649,7 +3649,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description The user is not a platform administrator (`permission_denied`). */
+            /** @description Not a platform administrator, or not the administrator's own request: another service exchanged the token (`permission_denied`). */
             403: {
                 headers: {
                     [name: string]: unknown;

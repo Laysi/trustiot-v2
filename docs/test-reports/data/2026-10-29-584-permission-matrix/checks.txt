@@ -1,0 +1,36 @@
+# Negative runs and full checks (CI=1, build host, arm64 Linux VM, 2026-10-29), on the branch
+# rebased onto main b7ac543b. Negative 1 replaces services/identity/src/event_log.rs with main's
+# version; negative 2 changes one row of docs/architecture/permissions.md; both are restored
+# before the regeneration and the full checks. The full checks are cargo fmt --all --check,
+# cargo clippy --locked --workspace --all-targets -- -D warnings, the same for service-kit with
+# --no-default-features, cargo run --locked -p openapi -- --check,
+# cargo test --locked --workspace --exclude agent (passing per-binary result lines summed into
+# TOTAL) and bun run --cwd frontend api:check.
+
+=== negative 1: identity without the event-log fix ===
+ services/identity/src/event_log.rs | 121 +++++--------------------------------
+ 1 file changed, 15 insertions(+), 106 deletions(-)
+FAIL | GET /api/identity/v1/platform/tenants/{tenant_id}/event-log | platform administrator, exchanged token | expected 403 `permission_denied` (`平台管理員，本人` refuses this caller), got 200
+FAIL | GET /api/identity/v1/platform/event-log | platform administrator, exchanged token | expected 403 `permission_denied` (`平台管理員，本人` refuses this caller), got 200
+141 probes, 2 failed
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1 filtered out; finished in 3.41s
+negative 1 exit 101
+=== negative 2: the matrix document disagrees ===
+-| `GET /api/identity/v1/platform/event-log` | 平台管理員，本人 | |
++| `GET /api/identity/v1/platform/event-log` | 已登入 | |
+FAIL | GET /api/identity/v1/platform/event-log | matrix | docs/architecture/permissions.md line 74 says `已登入` / ``, the declaration `平台管理員，本人` / ``
+30 probes, 1 failed
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+negative 2 exit 101
+=== regenerated spec and client must equal the committed ones ===
+wrote api/openapi.json (202003 bytes)
+generated diff lines: 0
+=== full checks ===
+fmt ok
+clippy exit 0
+service-kit no-default clippy exit 0
+api/openapi.json is up to date
+TOTAL test binaries 245 passed 1921 failed 0 ignored 1
+workspace test exit 0
+$ bun tools/api-client.ts --check
+api:check exit 0

@@ -32,6 +32,7 @@ const PACKAGE_DIRS: Record<(typeof NIGHTLY_IMAGES)[number], string> = {
   certs: "services/certs",
   assistant: "services/assistant",
   ingest: "services/ingest",
+  "gateway-ops": "services/gateway-ops",
 };
 
 /**

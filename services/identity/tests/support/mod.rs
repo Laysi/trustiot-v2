@@ -417,6 +417,59 @@ impl Drop for Service {
     }
 }
 
+/// The identity binary on `product` (`testkit::product`, the product's schema as the migration
+/// Job applies it), trusting `issuer`'s tokens next to its own signing key (which readiness
+/// needs), with the event log on, ready. `name` names its scratch directory.
+pub fn start_on_product(
+    product: &testkit::product::ProductPostgres,
+    issuer: &testkit::identity::TestIssuer,
+    name: &str,
+) -> Service {
+    const KID: &str = "2026-10-a";
+    let key = TestKey::new(29);
+    let mut published: serde_json::Value =
+        serde_json::from_str(&issuer.jwks()).expect("the issuer's key set");
+    published["keys"]
+        .as_array_mut()
+        .expect("keys")
+        .push(key.jwk(KID));
+    let files = KeyFiles::with(
+        name,
+        &signing_keys(&[(&key, KID, 1, 0)]),
+        &published.to_string(),
+    );
+    let routes = json!([
+        {"host": "app.saas.trustiot.test", "path": "/api/identity", "match": "PathPrefix", "service": "identity"},
+    ]);
+    let mut env = files.env();
+    env.extend([
+        ("TRUSTIOT_INGRESS_ROUTES".into(), routes.to_string()),
+        ("TRUSTIOT__DATABASE__USERNAME".into(), "identity_app".into()),
+        (
+            "TRUSTIOT__DATABASE__PASSWORD".into(),
+            testkit::postgres::TEST_PASSWORD.into(),
+        ),
+        (
+            "TRUSTIOT__DATABASE__PLATFORM_USERNAME".into(),
+            "identity_platform".into(),
+        ),
+        (
+            "TRUSTIOT__DATABASE__PLATFORM_PASSWORD".into(),
+            testkit::postgres::TEST_PASSWORD.into(),
+        ),
+    ]);
+    env.extend(
+        product
+            .platform_env()
+            .into_iter()
+            .map(|(name, value)| (name.to_owned(), value)),
+    );
+    let env: Vec<(&str, &str)> = env.iter().map(|(n, v)| (n.as_str(), v.as_str())).collect();
+    let service = Service::start(&env);
+    service.wait_ready(Duration::from_secs(60));
+    service
+}
+
 /// Spawns the service without waiting for it, with a short drain delay plus `env`.
 pub fn spawn(env: &[(&str, &str)]) -> (Child, Output, Output) {
     let mut command = Command::new(IDENTITY);

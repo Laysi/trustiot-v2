@@ -17,6 +17,7 @@ import {
   ASSETS_TENANT_PATH,
   ASSISTANT_ROLE,
   checkAssistantLogin,
+  checkGatewayOps,
   checkIngest,
   checkIngressEdges,
   checkTelemetryApi,
@@ -25,6 +26,7 @@ import {
   errorCode,
   EXT_AUTHZ_PREFIX,
   grantsLoggedSql,
+  GATEWAY_OPS_ROLES,
   IDENTITY_HEADER,
   INGEST_ACCOUNT,
   INGEST_ROLE,
@@ -608,6 +610,53 @@ describe("ingest's deployment", () => {
   });
 });
 
+// Laysi/trustiot-v2#721: a ready gateway-ops reached the broker (its readiness) and holds sessions
+// of both its roles.
+describe("gateway-ops' deployment", () => {
+  const fixed = { sleep: async () => {}, limits: { loginMs: 10_000, pollMs: 1_000 } };
+  const ticking = () => {
+    let now = 0;
+    return () => (now += 1_000);
+  };
+
+  test("names the roles the migration Job makes, and the broker knows the service's account", () => {
+    expect(GATEWAY_OPS_ROLES).toEqual(["gateway_ops_app", "gateway_ops_platform"]);
+    const accounts = readFileSync(join(REPO_ROOT, "tools", "migrate", "src", "mqtt_accounts.rs"), "utf8");
+    expect(accounts).toContain('service: "gateway-ops",');
+  });
+
+  test("passes once both roles have a session", async () => {
+    const answers = ["t|0\n", "t|1\n", "t|2\n"];
+    const asked: string[] = [];
+    const detail = await checkGatewayOps(
+      {
+        ...fixed,
+        now: ticking(),
+        psql: async (sql) => {
+          asked.push(sql);
+          return answers.shift() ?? "t|1\n";
+        },
+      },
+      "deployment/trustiot-gateway-ops",
+      1,
+    );
+    expect(detail).toStartWith(
+      "deployment/trustiot-gateway-ops: 1 ready replica(s), so it reached the MQTT broker as service:gateway-ops; gateway_ops_app has 1 and gateway_ops_platform has 2 session(s) open",
+    );
+    expect(asked).toEqual([...Array(2).fill(roleSessionsSql("gateway_ops_app")), roleSessionsSql("gateway_ops_platform")]);
+  });
+
+  test("fails without a ready replica or a session of either role", async () => {
+    const deps = (psql: string) => ({ ...fixed, now: ticking(), psql: async () => psql });
+    await expect(checkGatewayOps(deps("t|1\n"), "deployment/g", 0)).rejects.toThrow("deployment/g has no ready replica");
+    await expect(checkGatewayOps(deps(""), "deployment/g", 1)).rejects.toThrow("the role gateway_ops_app does not exist");
+    await expect(checkGatewayOps(deps("t|0\n"), "deployment/g", 1)).rejects.toThrow("waiting for a session of gateway_ops_app");
+    let calls = 0;
+    const platformMissing = { ...fixed, now: ticking(), psql: async () => (calls++ === 0 ? "t|1\n" : "f|0\n") };
+    await expect(checkGatewayOps(platformMissing, "deployment/g", 1)).rejects.toThrow("waiting for a session of gateway_ops_platform");
+  });
+});
+
 describe("the API check's routes", () => {
   const existing = { host: "gateway", path: "/certs", match: "PathPrefix", service: "certs" };
 
@@ -737,6 +786,23 @@ describe("the API check's values on each deployment shape", () => {
       });
       expect(passwordSecretsOf(objects).get("trustiot-ingest-password")).toEqual(expect.arrayContaining([...INGEST_ROLES, INGEST_ACCOUNT]));
       expect([...missingSecrets(objects).keys()].filter((name) => name.includes("ingest") || name.includes("mqtt-broker"))).toEqual([]);
+      // gateway-ops from its image (Laysi/trustiot-v2#721): its Postgres roles with the passwords
+      // the migration Job generates, and its broker account from the Secret the broker's init
+      // container fills; no dummy for either.
+      const gatewayOps = named("Deployment", "trustiot-gateway-ops");
+      const gatewayOpsContainer = (gatewayOps?.spec?.template as { spec: { containers: { name: string; image: string; env: { name: string; value?: string }[] }[] } } | undefined)?.spec.containers.find(
+        (c) => c.name === "gateway-ops",
+      );
+      expect(gatewayOpsContainer?.image).toBe(serviceImageRef("gateway-ops"));
+      const gatewayOpsEnv = Object.fromEntries((gatewayOpsContainer?.env ?? []).map((e) => [e.name, e.value]));
+      expect(gatewayOpsEnv).toMatchObject({
+        TRUSTIOT__DATABASE__USERNAME: GATEWAY_OPS_ROLES[0],
+        TRUSTIOT__DATABASE__PLATFORM_USERNAME: GATEWAY_OPS_ROLES[1],
+        TRUSTIOT__MQTT__USERNAME: "service:gateway-ops",
+        TRUSTIOT__MQTT__PASSWORD_FILE: ["/etc/trustiot/mqtt-broker-account", "gateway-ops"].join("/"),
+      });
+      expect(passwordSecretsOf(objects).get("trustiot-gateway-ops-password")).toEqual(expect.arrayContaining([...GATEWAY_OPS_ROLES]));
+      expect([...missingSecrets(objects).keys()].filter((name) => name.includes("gateway-ops"))).toEqual([]);
       // Nothing makes a key for the identity service: the chart declares the Secret its init
       // container fills, so no dummy is made for it, and nothing names another one.
       expect(named("Secret", "trustiot-identity-signing-keys")).toBeDefined();

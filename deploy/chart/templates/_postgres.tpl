@@ -195,6 +195,7 @@ Per service that may use Postgres, what one replica opens at most:
                   identity         the tenant, login, login send, delegation and event log pools
                                    as identity_app (16), and the event log's pool as
                                    identity_platform, its consumed producers plus 2 (5)
+                  gateway-ops      PLATFORM_CONNECTIONS (its platform role; Laysi/trustiot-v2#721)
                   ingest           PLATFORM_CONNECTIONS (its platform role; Laysi/trustiot-v2#642)
                   telemetry-query  EVENT_READER_CONNECTIONS (its platform role)
 A service that lists postgres under mesh.calls without an entry here fails the render: give it one
@@ -208,6 +209,7 @@ these numbers differ.
   "assets": { "maxConnections": { "min": 2, "max": 100 }, "otherPools": 4 },
   "assistant": { "maxConnections": { "min": 2, "max": 100 }, "otherPools": 0 },
   "certs": { "maxConnections": { "min": 2, "max": 100 }, "otherPools": 4 },
+  "gateway-ops": { "maxConnections": { "min": 7, "max": 100 }, "otherPools": 4 },
   "identity": { "maxConnections": { "min": 3, "max": 100 }, "otherPools": 21 },
   "ingest": { "maxConnections": { "min": 3, "max": 100 }, "otherPools": 4 },
   "telemetry-query": { "maxConnections": { "min": 2, "max": 100 }, "otherPools": 2 }

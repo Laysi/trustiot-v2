@@ -171,7 +171,7 @@ fn fill_body(value: &Value, id: Uuid, tenant: Uuid, canary: &str) -> Value {
 }
 
 /// The operations of an OpenAPI document, as `METHOD /path`.
-fn operations(document: &Value) -> Result<Vec<String>, &'static str> {
+pub(crate) fn operations(document: &Value) -> Result<Vec<String>, &'static str> {
     let paths = document
         .get("paths")
         .and_then(Value::as_object)

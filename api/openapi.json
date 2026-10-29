@@ -4751,7 +4751,7 @@
                 }
               }
             },
-            "description": "The user is not a platform administrator (`permission_denied`)."
+            "description": "Not a platform administrator, or not the administrator's own request: another service exchanged the token (`permission_denied`)."
           },
           "503": {
             "content": {
@@ -4862,7 +4862,7 @@
                 }
               }
             },
-            "description": "The user is not a platform administrator (`permission_denied`)."
+            "description": "Not a platform administrator, or not the administrator's own request: another service exchanged the token (`permission_denied`)."
           },
           "503": {
             "content": {
