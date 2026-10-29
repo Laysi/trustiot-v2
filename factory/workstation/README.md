@@ -148,13 +148,14 @@ trustiot-workstation register --hardware-id <硬體 ID> --csr gateway.csr --ek e
 
 工作站要先能以 ssh 金鑰登入閘道器，不需要輸入任何東西：
 
-- 工具以 `BatchMode=yes` 執行 ssh，不會問密碼、passphrase 或主機金鑰。金鑰放在 ssh-agent（工具保留 `SSH_AUTH_SOCK`）或沒有 passphrase 的金鑰檔，以 `~/.ssh/config` 指定。
+- 工具以 `BatchMode=yes` 執行 ssh，不會問密碼、passphrase 或主機金鑰。金鑰放在 ssh-agent（工具保留 `SSH_AUTH_SOCK`）或沒有 passphrase 的金鑰檔。
+- **必須在 `~/.ssh/config` 為閘道器設定 `IdentityFile`**（金鑰在 ssh-agent 時指向它的公鑰檔）。工具固定加上 `IdentitiesOnly=yes`，ssh 只送出 `IdentityFile` 指定的金鑰，不會把 ssh-agent 裡的其他金鑰拿去給閘道器試；沒有設定時 ssh 只試預設的 `~/.ssh/id_*`。
 - **閘道器的主機金鑰要先在 `known_hosts` 裡**。新閘道器的主機金鑰在出廠映像第一次開機時產生，產線網路上可以在 `~/.ssh/config` 為閘道器的網段設 `StrictHostKeyChecking accept-new`（第一次連線記下、之後改變就拒絕）；工具不覆寫這個設定，也不關閉主機金鑰檢查。重刷的閘道器主機金鑰會變，ssh 拒絕連線時以 `ssh-keygen -R <主機>` 移除舊的那筆。
-- 工具固定加上 `-T -a -x` 與 `ClearAllForwardings=yes`、`ForwardAgent=no`、`ForwardX11=no`、`PermitLocalCommand=no`、`ControlMaster=no`、`ControlPath=none`（不轉送 agent、不共用連線）、`ConnectTimeout=20`、`ServerAliveInterval=15`、`ServerAliveCountMax=4`、`LogLevel=ERROR`。
+- 工具固定加上 `-T -a -x` 與 `IdentitiesOnly=yes`、`ClearAllForwardings=yes`、`ForwardAgent=no`、`ForwardX11=no`、`PermitLocalCommand=no`、`ControlMaster=no`、`ControlPath=none`（不轉送 agent、不共用連線）、`ConnectTimeout=20`、`ServerAliveInterval=15`、`ServerAliveCountMax=4`、`LogLevel=ERROR`。
 
 **閘道器端的 ssh 限制（正式產線的前提，Laysi/trustiot-v2#219）**：能在閘道器上執行 agent 的人，就能決定閘道器的金鑰與信任錨（Laysi/trustiot-v2#617 的安裝以 root 執行），所以正式產線的閘道器不讓工作站的 ssh 帳號執行任意指令。採用的做法：
 
-- 工作站用**專用的 ssh 金鑰**（只給這個工具用），在 `~/.ssh/config` 為閘道器設 `IdentityFile` 與 `IdentitiesOnly yes`。
+- 工作站用**專用的 ssh 金鑰**（只給這個工具用），在 `~/.ssh/config` 為閘道器設 `IdentityFile`（工具已固定加上 `IdentitiesOnly=yes`）。
 - 閘道器上的專用帳號在 `authorized_keys` 以 `restrict,command="sudo -n /usr/local/libexec/trustiot-provision-ssh"` 綁這把金鑰：不論工作站送什麼，sshd 只執行這個固定的轉接程式，不給 shell、轉送或 pty。
 - sudoers 只允許這一個沒有參數的命令（`<帳號> ALL=(root) NOPASSWD: /usr/local/libexec/trustiot-provision-ssh ""`，空字串表示不接受任何參數），並以 `env_keep` 只保留 `SSH_ORIGINAL_COMMAND`；不用 `trustiot-agent provision *` 這類萬用字元。
 - 轉接程式從 `SSH_ORIGINAL_COMMAND` 讀工作站的請求，只接受固定的幾種形式、每個字都要符合上面的規則（英數字、`.`、`_`、`-`），再以固定的參數執行 `trustiot-agent provision`（與 #617 的安裝）；其他一律拒絕。

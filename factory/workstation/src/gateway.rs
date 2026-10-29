@@ -18,7 +18,9 @@
 //! - **ssh's environment**: only [`KEPT_ENVIRONMENT`] of the tool's, so a `SendEnv` in the
 //!   operator's ssh configuration has nothing else to forward.
 //!
-//! ssh runs with [`SSH_OPTIONS`]: no password prompt (`BatchMode`), no terminal, no agent or X11
+//! ssh runs with [`SSH_OPTIONS`]: no password prompt (`BatchMode`), only the keys the ssh
+//! configuration names with `IdentityFile` (`IdentitiesOnly`, so no other key loaded in the
+//! operator's ssh agent is offered to a gateway), no terminal, no agent or X11
 //! forwarding (a gateway must not reach the operator's ssh agent), no port forwardings, no local
 //! command, no connection sharing (each attempt is its own connection, and no master process
 //! outlives the tool holding its pipes), and keepalives so a dead connection ends instead of
@@ -73,6 +75,8 @@ pub const SSH_OPTIONS: &[&str] = &[
     "-x",
     "-o",
     "BatchMode=yes",
+    "-o",
+    "IdentitiesOnly=yes",
     "-o",
     "ConnectTimeout=20",
     "-o",
