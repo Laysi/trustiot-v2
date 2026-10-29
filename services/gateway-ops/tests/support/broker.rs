@@ -46,6 +46,10 @@ const GATEWAY_USERNAME: &str = "service:test-gateway";
 pub const BROKER_WAIT: Duration = Duration::from_secs(120);
 pub const MESSAGE_WAIT: Duration = Duration::from_secs(90);
 
+/// How many times the broker's start is tried when its loopback port was taken before the
+/// container runtime bound it.
+const START_ATTEMPTS: u32 = 5;
+
 /// The broker's configuration and start, inside the container. Everything lives on the image's
 /// data volume, so a restart keeps the accounts; dynamic security is initialised only once. No
 /// `persistence`: retained messages live in memory only and a restart drops them. The script
@@ -124,52 +128,69 @@ impl Broker {
             unavailable("podman or docker");
             return None;
         };
-        // A free loopback port, named explicitly so the mapping survives a restart.
-        let port = TcpListener::bind("127.0.0.1:0")
-            .expect("bind a free port")
-            .local_addr()
-            .expect("the bound address")
-            .port();
-        let broker = Self {
-            container: Container {
+        let admin_password = random_hex();
+        // A free loopback port, named explicitly so the mapping survives a restart. The port is
+        // released before the runtime binds it, so another process (a parallel test binary) may
+        // take it in between: the runtime then refuses the mapping, and the start is tried again
+        // on another port, with a new container (the refused one is removed when dropped).
+        let mut attempt = 1;
+        let (container, port) = loop {
+            let port = TcpListener::bind("127.0.0.1:0")
+                .expect("bind a free port")
+                .local_addr()
+                .expect("the bound address")
+                .port();
+            let container = Container {
                 runtime,
                 name: unique_name("gateway-ops-mosquitto"),
-            },
+            };
+            let publish = format!("127.0.0.1:{port}:1883");
+            let output = Command::new(runtime)
+                .args([
+                    "run",
+                    "--detach",
+                    "--name",
+                    &container.name,
+                    "--user",
+                    "root",
+                    "--memory",
+                    "128m",
+                    "--publish",
+                    &publish,
+                    "--env",
+                    "ADMIN_PASSWORD",
+                    "--entrypoint",
+                    "/bin/sh",
+                    MOSQUITTO_IMAGE,
+                    "-c",
+                    START_SCRIPT,
+                ])
+                .env("ADMIN_PASSWORD", &admin_password)
+                .output()
+                .expect("run the container runtime");
+            if output.status.success() {
+                break (container, port);
+            }
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            // podman (pasta, rootlessport) reports "address already in use", docker "port is
+            // already allocated".
+            let lower = stderr.to_ascii_lowercase();
+            let port_taken = lower.contains("address already in use")
+                || lower.contains("port is already allocated");
+            assert!(
+                port_taken && attempt < START_ATTEMPTS,
+                "start Mosquitto (attempt {attempt} of {START_ATTEMPTS}): {stderr}"
+            );
+            attempt += 1;
+        };
+        let broker = Self {
+            container,
             port,
-            admin_password: random_hex(),
+            admin_password,
             service_password: random_hex(),
             gateway_password: random_hex(),
             scratch: Scratch::new(),
         };
-        let publish = format!("127.0.0.1:{port}:1883");
-        let output = Command::new(runtime)
-            .args([
-                "run",
-                "--detach",
-                "--name",
-                &broker.container.name,
-                "--user",
-                "root",
-                "--memory",
-                "128m",
-                "--publish",
-                &publish,
-                "--env",
-                "ADMIN_PASSWORD",
-                "--entrypoint",
-                "/bin/sh",
-                MOSQUITTO_IMAGE,
-                "-c",
-                START_SCRIPT,
-            ])
-            .env("ADMIN_PASSWORD", &broker.admin_password)
-            .output()
-            .expect("run the container runtime");
-        assert!(
-            output.status.success(),
-            "start Mosquitto: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
         broker.wait_ready();
 
         let defaults: Vec<Json> = default_acl_access()
