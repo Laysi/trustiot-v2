@@ -4,7 +4,7 @@ Laysi/trustiot-v2#721（清單 E1、決策 7）。部署的說明在 [deploy/cha
 
 ## 環境
 
-- 建置主機（x86_64 Linux）與建置主機（macOS），podman 起拋棄式容器；`rcheck` 依指令選主機（`bun run --cwd scripts test` 只在 Linux 跑）。
+- 建置主機（x86_64 Linux）與建置主機（macOS），podman 起拋棄式容器；`bun run --cwd scripts test` 與 cargo 在建置主機（x86_64 Linux）跑，`bun test deploy/chart` 在建置主機（macOS）跑。
 - 分支 `feat/721-gateway-ops-chart`，以 Laysi/trustiot-v2#642 的分支 `feat/642-ingest-chart`（`1ea3aa5c`，PR Laysi/trustiot-v2#747，尚未合併）為基礎，再合併 main。
 - Rust 1.99.0（`rust-toolchain.toml`）；Bun、Helm、kubeconform、actionlint、kubectl、flux 依 `.prototools`。
 - 沒有 Kubernetes：chart 只以 `helm template` 與 kubeconform 檢查；真正的部署由 nightly 在 k3d 上驗證（見「結論」）。

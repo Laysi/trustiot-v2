@@ -170,6 +170,15 @@ readiness needs the broker connection: without it the pod would never become rea
 would get a configuration (Laysi/trustiot-v2#721). */ -}}
 {{- fail "services.gateway-ops: gateway-ops delivers the gateways' configurations through the in-cluster MQTT broker, so it needs mqttBroker.enabled: true; enable the broker, or set services.gateway-ops.enabled to false (README.md, \"gateway-ops\")" -}}
 {{- end -}}
+{{- if has $name (list "ingest" "gateway-ops") -}}
+{{- /* For the same reason they need the broker in their mesh.calls: without it the chart hands
+them no broker account, the mesh refuses their connection, and the pod never becomes ready
+(security review of Laysi/trustiot-v2#721). */ -}}
+{{- $calls := index ($values.mesh.calls | default dict) $name -}}
+{{- if not (and (kindIs "slice" $calls) (has "mqtt-broker" $calls)) -}}
+{{- fail (printf "services.%s: %s works only through the in-cluster MQTT broker, so mesh.calls.%s must list mqtt-broker; without it the service gets no broker account and never becomes ready (README.md, \"%s\")" $name $name $name $name) -}}
+{{- end -}}
+{{- end -}}
 {{- $dbEnv := list -}}
 {{- if has $name (include "trustiot.postgres.clients" .root | fromYaml).services -}}
 {{- /* The service's own Postgres login role and its password, which the migration Job generates

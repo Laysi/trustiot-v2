@@ -2607,10 +2607,13 @@ describe("MQTT broker (decision 6, Laysi/trustiot-v2#84)", () => {
         rules.filter((rule) => (rule.to ?? []).some((to) => to.operation.ports.includes(String(port)))).flatMap((rule) => rule.from.flatMap((from) => from.source.principals));
       expect(principalsOn(SERVICE_PORT)).toContain(principal("ingest"));
       expect(principalsOn(GATEWAY_PORT)).not.toContain(principal("ingest"));
-      // Without mqtt-broker in mesh.calls.ingest, ingest gets neither its settings nor its key.
-      const unlisted = render(SHAPES[shape], [...brokerOn, ...callers, "--set-json", 'mesh.calls.ingest=["clickhouse","postgres"]']);
-      expect(brokerEnvOf(servicePod(unlisted, "ingest").containers[0])).toEqual([]);
-      expect(JSON.stringify(servicePod(unlisted, "ingest")).includes(ACCOUNTS)).toBe(false);
+      // Without mqtt-broker in mesh.calls.ingest, ingest would get neither its settings nor its key
+      // and never become ready, so the render fails (security review of Laysi/trustiot-v2#721, L3).
+      for (const calls of ['["clickhouse","postgres"]', "[]"]) {
+        const unlisted = helmTemplate(SHAPES[shape], [...brokerOn, ...callers, "--set-json", `mesh.calls.ingest=${calls}`]);
+        expect({ calls, code: unlisted.code }).toEqual({ calls, code: 1 });
+        expect(unlisted.stderr).toContain("services.ingest: ingest works only through the in-cluster MQTT broker, so mesh.calls.ingest must list mqtt-broker");
+      }
       // Without the broker ingest has no work, so the render fails instead of deploying a pod that
       // never becomes ready (security review of Laysi/trustiot-v2#642, I-3); with the broker it
       // renders, and with ingest off the broker is not needed.
@@ -2672,10 +2675,15 @@ describe("MQTT broker (decision 6, Laysi/trustiot-v2#84)", () => {
       expect(principalsOn(GATEWAY_PORT)).not.toContain(principal("gateway-ops"));
       expect(networkSources(rendered).components).toContain("gateway-ops");
       expect(principalsOfPolicy(rendered, "gateway-ops")).toEqual([]);
-      // Without mqtt-broker in mesh.calls.gateway-ops, it gets neither its settings nor its key.
-      const unlisted = render(SHAPES[shape], [...brokerOn, ...callers, "--set-json", 'mesh.calls.gateway-ops=["postgres"]']);
-      expect(brokerEnvOf(servicePod(unlisted, "gateway-ops").containers[0])).toEqual([]);
-      expect(JSON.stringify(servicePod(unlisted, "gateway-ops")).includes(ACCOUNTS)).toBe(false);
+      // Without mqtt-broker in mesh.calls.gateway-ops it would get neither its settings nor its key
+      // and never become ready, so the render fails (security review of Laysi/trustiot-v2#721, L3);
+      // with gateway-ops off the list does not matter.
+      for (const calls of ['["postgres"]', "[]"]) {
+        const unlisted = helmTemplate(SHAPES[shape], [...brokerOn, ...callers, "--set-json", `mesh.calls.gateway-ops=${calls}`]);
+        expect({ calls, code: unlisted.code }).toEqual({ calls, code: 1 });
+        expect(unlisted.stderr).toContain("services.gateway-ops: gateway-ops works only through the in-cluster MQTT broker, so mesh.calls.gateway-ops must list mqtt-broker");
+      }
+      expect(helmTemplate(SHAPES[shape], [...brokerOn, "--set", "services.gateway-ops.enabled=false", "--set-json", 'mesh.calls.gateway-ops=["postgres"]']).code).toBe(0);
       // Without the broker no gateway gets its configuration and the pod never becomes ready, so
       // the render fails; with the broker it renders, and with gateway-ops off the broker is not
       // needed.
@@ -2733,10 +2741,11 @@ describe("MQTT broker (decision 6, Laysi/trustiot-v2#84)", () => {
       expect(use.mounts.every((mount) => mount.subPath === undefined)).toBe(true);
       expect(use.mounts.map((mount) => mount.pod).sort()).toEqual(holders.map((service) => `Deployment/${RELEASE}-${service}`));
       expect(brokerEnvOf(servicePod(rendered, "mqtt-bridge").containers[0])).toEqual([]);
-      // A holder that does not list the broker gets nothing, even in the list.
-      const unlisted = parseManifests(renderCopy(holders, [...brokerOn, ...callers, "--set-json", 'mesh.calls.ingest=["clickhouse"]']).stdout);
-      expect(Object.keys(accountsUse(unlisted).keys).sort()).toEqual([`Deployment/${RELEASE}-certs`, `Deployment/${RELEASE}-gateway-ops`]);
-      expect(brokerEnvOf(servicePod(unlisted, "ingest").containers[0])).toEqual([]);
+      // A holder that does not list the broker gets nothing, even in the list (certs: ingest and
+      // gateway-ops refuse to render without it).
+      const unlisted = parseManifests(renderCopy(holders, [...brokerOn, ...callers, "--set-json", 'mesh.calls.certs=["postgres"]']).stdout);
+      expect(Object.keys(accountsUse(unlisted).keys).sort()).toEqual([`Deployment/${RELEASE}-gateway-ops`, `Deployment/${RELEASE}-ingest`]);
+      expect(brokerEnvOf(servicePod(unlisted, "certs").containers[0])).toEqual([]);
       // Only account holders can be in the list.
       for (const intruder of ["mqtt-bridge", "assets"]) {
         const refused = renderCopy([...holders, intruder], [...brokerOn, ...callers]);
@@ -5658,8 +5667,8 @@ describe("service-to-service authorization (decision 27)", () => {
         // render fails.
         assistant: ["ai-gateway", "knowledge"],
         "ai-gateway": ["knowledge", "postgres"],
-        // In-cluster components are no service APIs.
-        ingest: ["clickhouse"],
+        // In-cluster components are no service APIs (ingest must list the broker, Laysi/trustiot-v2#721).
+        ingest: ["clickhouse", "mqtt-broker"],
         // Disabled services on either side are skipped, as in the mesh plan.
         "gateway-ops": ["certs"],
         certs: ["field-context"],
