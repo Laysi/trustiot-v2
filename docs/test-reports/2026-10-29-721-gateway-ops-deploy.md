@@ -48,14 +48,14 @@ cargo test --locked -p gateway-ops -p testkit -p repo-check
 - mesh 只放行 gateway-ops 連 broker 的服務埠 1883，不放行閘道器埠 8883；沒有任何呼叫端連得到 gateway-ops（它的 AuthorizationPolicy 沒有 principals）。`mesh.calls.gateway-ops` 不列 `mqtt-broker` 時不給 env 也不給 key。README 的呼叫矩陣與渲染結果相符（`mqtt-broker` 的呼叫端是 `certs`、`gateway-ops`、`ingest`、`mqtt-bridge`）。
 - 開啟 gateway-ops 而 broker 沒開時渲染失敗，訊息說明要開 `mqttBroker.enabled`。
 - migration Job 的 `TRUSTIOT__PASSWORDS__POSTGRES` 含 `gateway_ops_app` 與 `gateway_ops_platform`，密碼在 `<release>-gateway-ops-password`（宣告為空，由 Job 填入）；只有 gateway-ops 的 Deployment 讀它，別的服務以 custom env 讀它時渲染失敗；bundled Postgres 的 NetworkPolicy 放行 gateway-ops 的 pod。
-- 連線預算：gateway-ops 每個 pod 8（`maxConnections` 4 + 平台 4），整版滾動時 16；八個服務全開時連線池合計 192，加上保留的 18 條共 210 ≤ `max_connections` 220（由 200 調高）。`deploy/flux` 的對照組改為多開三個 identity 副本才超出（243 > 220）。
+- 連線預算：gateway-ops 每個 pod 8（`maxConnections` 4 + 平台 4），整版滾動時 16；八個服務全開時連線池合計 192，加上保留的 18 條共 210 ≤ `max_connections` 220（由 200 調高）。`deploy/flux` 的對照組改為多開三個 identity 副本才超出（243 > 220）。（合併 Laysi/trustiot-v2#720 後下限改為 7，數字見最後一節。）
 
 nightly（`scripts/nightly`）的改動以單元測試驗證：`NIGHTLY_IMAGES` 加上 `gateway-ops`，快取 key 的輸入涵蓋 `services/gateway-ops/**` 與 `deploy/images/gateway-ops/**`（`image-cache.test.ts`）；API 檢查的 values 啟用 gateway-ops，渲染出的 Deployment 帶上述 env、密碼 Secret 由 Job 填、沒有缺少的 Secret（`api.test.ts`）；`checkGatewayOps` 在沒有就緒副本或任一角色沒有連線時失敗。
 
 ## 設計上的取捨
 
 - broker 連線只以 gateway-ops 的 readiness 證明（Laysi/trustiot-v2#720：連著 broker，且套用回報的共享訂閱以 QoS 1 獲准），與 ingest 相同。曾試過讀 broker 的日誌找 `service:gateway-ops` 的登入紀錄，但 nightly 的程式不得讀任何 pod 的日誌（`scripts/nightly/diagnostics.test.ts`：日誌印出應用程式持有的內容），所以拿掉。
-- `services.gateway-ops.database.maxConnections` 預設 4：bundled Postgres 原本只剩 6 條餘裕（Laysi/trustiot-v2#747 審查 L5），即使 4 + 4 也要調高 `max_connections`，調到 220 留 10 條；**升級到這一版會讓叢集內的 Postgres 重啟一次**（chart README 已寫明）。記憶體估計見 chart README「叢集內的 Postgres」的表（220 那欄是依斜率推估，未實測）。
+- `services.gateway-ops.database.maxConnections` 預設 4（合併 Laysi/trustiot-v2#720 後改為 7，見最後一節）：bundled Postgres 原本只剩 6 條餘裕（Laysi/trustiot-v2#747 審查 L5），即使 4 + 4 也要調高 `max_connections`，調到 220 留 10 條；**升級到這一版會讓叢集內的 Postgres 重啟一次**（chart README 已寫明）。記憶體估計見 chart README「叢集內的 Postgres」的表（220 那欄是依斜率推估，未實測）。
 
 ## 結論
 
@@ -97,3 +97,30 @@ main `41a0a342` 是 #747 squash 後的版本，合併後的 head 是 `5b135269`�
 - `bun run --cwd scripts test`：1711 pass、9 skip、0 fail（建置主機（x86_64 Linux））。
 - `bun test deploy/chart`：本機 711 pass、0 fail。
 - 在建置主機（arm64 Linux VM）上，`bun test deploy/chart` 只跑了 82 個測試，1 個失敗：`chart.test.ts` 載入時找不到釘選的 Helm（`cannot find the pinned helm; run proto install`，`~/.proto/tools/helm/4.3.0/helm` 不存在）。那台主機沒有裝這個工具，不是 arm64 才有的程式問題；其他 8 個測試檔都通過。
+
+## 合併 main（Laysi/trustiot-v2#720）並把連線池下限對齊到 7 之後
+
+main `781073bc` 是 #720 的 squash（gateway-ops 以 MQTT retained 訊息下發設定）。合併後的 head 是 `2e2376c3`，衝突只在兩份文件：`docs/requirements/rebuild-checklist.md` 的 E1 列保留 main 的版本，再接上本 issue 的句子；`services/gateway-ops/README.md` 的測試表保留 main 的列，再加上 `chart_connections` 那一列。
+
+#720 把 `MIN_DATABASE_CONNECTIONS` 定為 7。這是服務角色同時會用到的最多連線數：消費端的下發交易 1、readiness 2、重發的 job lock 1、兩個發布名額 2、套用回報 1。`91553ed5` 讓 chart 對齊這個下限：`_postgres.tpl` 的預算範圍改為 7–100，chart 預設 `services.gateway-ops.database.maxConnections` 從 4 改為 7。預設用下限 7，因為更大的連線池用不到。chart README 的範圍、預算表與說明一起更新，`services/gateway-ops/README.md` 也一樣，並刪掉「nightly 不部署」這句過時的說明。
+
+連線預算（八個用 Postgres 的服務各一個副本，整版滾動）：
+
+| 項目 | 改之前 | 改之後 |
+| --- | --- | --- |
+| gateway-ops 每個 pod（主要 + 平台） | 4 + 4 = 8 | 7 + 4 = 11 |
+| gateway-ops 整版滾動 | 16 | 22 |
+| 八個服務每副本合計／整版滾動合計 | 96／192 | 99／198 |
+| 加上保留的 18 條 | 210 | 216 |
+| `max_connections` | 220 | 220（不變） |
+| 餘裕 | 10 | 4 |
+
+- `max_connections` 不變，所以 chart README 的記憶體表（220、200、160 三欄）與結論不變。
+- `deploy/flux` 的超額對照組只開 assets、certs、identity、telemetry-query，不含 gateway-ops，所以仍是 243 > 220，測試不必改。
+
+檢查（head `91553ed5`，輸出在 `data/2026-10-29-721-gateway-ops-deploy/checks.txt` 的最後一段）：
+
+- `bun test deploy/chart`：711 pass、0 fail（建置主機（x86_64 Linux））。
+- `cargo fmt --all --check`、`cargo clippy --locked --workspace --all-targets -- -D warnings`：通過。`cargo test --locked --workspace --exclude agent --no-fail-fast`：239 個 `test result: ok`、0 個失敗。結果包括八個服務的 `the_chart_budgets_every_pool_the_service_opens`（gateway-ops 的預算範圍與程式的 7–100 相符）、`reads_every_budget_of_the_chart` 與 `the_workspace_has_no_string_built_sql`（建置主機（arm64 Linux VM））。
+- `bun run --cwd scripts test`：1711 pass、9 skip、0 fail（建置主機（x86_64 Linux））。
+- `bun test deploy/flux`：78 pass、0 fail（本機）。

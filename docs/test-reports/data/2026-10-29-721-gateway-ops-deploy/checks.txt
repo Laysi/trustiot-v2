@@ -86,3 +86,46 @@ secret handling: 546 file(s) checked, 7 container build file(s), no violations
 workflow policy: 4 file(s) checked, no violations
 actionlint: 3 workflow file(s), no errors
  341 pass / 0 fail (changes, workflow-conditions)
+
+== After merging main 781073bc (Laysi/trustiot-v2#720) and raising gateway-ops' connection floor
+   to 7 (head 91553ed5)
+
+== bun test deploy/chart (build host, x86_64 Linux)
+ 711 pass
+ 0 fail
+Ran 711 tests across 9 files. [126.15s]
+exit 0 at 22:37:48 (build host)
+
+== cargo fmt --all --check && cargo clippy --locked --workspace --all-targets -- -D warnings
+   && cargo test --locked --workspace --exclude agent --no-fail-fast (build host, arm64 Linux VM)
+     Running tests/chart_connections.rs (<host copy>/target/...)
+test the_chart_budgets_every_pool_the_service_opens ... ok
+     Running tests/chart_connections.rs (<host copy>/target/...)
+test the_chart_budgets_every_pool_the_service_opens ... ok
+     Running tests/chart_connections.rs (<host copy>/target/...)
+test the_chart_budgets_every_pool_the_service_opens ... ok
+     Running tests/chart_connections.rs (<host copy>/target/...)
+test the_chart_budgets_every_pool_the_service_opens ... ok
+     Running tests/chart_connections.rs (<host copy>/target/...)
+test the_chart_budgets_every_pool_the_service_opens ... ok
+     Running tests/chart_connections.rs (<host copy>/target/...)
+test the_chart_budgets_every_pool_the_service_opens ... ok
+     Running tests/chart_connections.rs (<host copy>/target/...)
+test the_chart_budgets_every_pool_the_service_opens ... ok
+test the_workspace_has_no_string_built_sql ... ok
+     Running tests/chart_connections.rs (<host copy>/target/...)
+test the_chart_budgets_every_pool_the_service_opens ... ok
+test chart::tests::reads_every_budget_of_the_chart ... ok
+test result lines: 239 ok, 0 FAILED
+exit 0 at 23:00:13 (build host, arm64 Linux VM)
+
+== bun install --cwd scripts --frozen-lockfile && bun run --cwd scripts test (build host, x86_64 Linux)
+ 1711 pass
+ 9 skip
+ 0 fail
+Ran 1720 tests across 54 files. [13.66s]
+exit 0 at 23:29:45 (build host)
+
+== run locally: bun test deploy/flux; bun test deploy/chart/tests/chart.test.ts -t "connection|gateway-ops|max_connections|budget"
+ 78 pass / 0 fail (deploy/flux)
+ 32 pass / 0 fail (chart budget and gateway-ops tests)
