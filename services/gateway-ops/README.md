@@ -135,7 +135,9 @@ schema `gateway_ops` 由 migration Job（`tools/migrate`）建立並套用 `migr
 
 ## 套用回報
 
-閘道器以 QoS 1、不 retained 發布 `ConfigReport` 到 `trustiot/v1/gw/<硬體 ID>/up/config-report`。服務以共享訂閱 `$share/gateway-ops/trustiot/v1/gw/+/up/config-report` 收，每則回報只到一個 replica，逐則處理（`src/delivery/reports.rs`）：
+閘道器以 QoS 1、不 retained 發布 `ConfigReport` 到 `trustiot/v1/gw/<硬體 ID>/up/config-report`。服務以共享訂閱 `$share/gateway-ops/trustiot/v1/gw/+/up/config-report` 收，每則回報只到一個 replica（`src/delivery/reports.rs`）。連線的事件迴圈只做第 1、2 步，通過的回報放進收件匣（`reports::Inbox`），由另一個 task 依序做第 3 步之後的事，所以資料庫慢或斷線時連線的事件（readiness、重發）照常處理。收件匣每台閘道器最多一則（它最新的那則，新的一到就取代還沒處理的舊的，計入 `gateway_ops.reports.unhandled` 的 `result=superseded`），依閘道器排隊的先後處理，取代不改變那台閘道器在隊伍中的位置，所以一台不停送回報的閘道器只占一個位置，擠不掉別台的回報；收件匣最多 4096 台閘道器，滿了放棄排最久的那則（`result=lost`）。
+
+處理每則回報的步驟：
 
 1. **閘道器以 topic 為準。** 回報屬於 topic 上的硬體 ID；payload 裡多出來、指向別台閘道器的欄位一律忽略（crates/protocol 的解碼略過不認得的欄位），閘道器的憑證只能發布自己的 topic。
 2. **協定檢查。** topic 不是 `up/config-report`、帶 retain 旗標（這個頻道不 retained，crates/protocol 規定視為違規丟棄）、以 QoS 0 送達、解不開，或 `outcome` 不是 `applied`／`rejected` 的回報都拒絕。
@@ -152,7 +154,7 @@ schema `gateway_ops` 由 migration Job（`tools/migrate`）建立並套用 `migr
 4. **記錄。** 通過的回報記在**回報那一版的租戶**（`config_deliveries`，服務角色、該租戶的交易）：`outcome`、`active_version`、`issues`、收到的時間；同一版再回報就覆蓋，留下最近一次。記 INFO `apply report recorded`，帶 `hardware_id`、`tenant_id`、`version`、`outcome`、`active_version` 與 `issue_codes`（只有代碼，不帶 issue 的訊息）。
 5. **舊版本的回報。** 回報的 `version` 比最新版本舊時（閘道器收到過時的 retained 訊息，或回了 `stale_version`），不論有沒有記錄，都把最新版本再排一次發布（照節流，所以一直送回報的閘道器每個時間窗最多觸發一次發布）。crates/protocol 要求雲端收到 `stale_version` 時以比 `active_version` 大的版本重發：最新版本永遠不比閘道器套用過的小，因為比最新版本大的 `active_version` 在第 3 步就被拒絕。
 
-**資料庫錯誤。** client 把回報交給服務時就回了 PUBACK（crates/mqtt-client），閘道器不會再送同一則；所以第 3、4 步遇到資料庫錯誤時，回報留在記憶體裡每 5 秒重試，從收到起最多 10 分鐘，每個 replica 最多 1024 則（同一台閘道器同一版的新回報一到，等著重試的舊回報就作廢，不會之後蓋掉新的；滿了丟最舊的）。放棄時記 WARN `apply report lost: the database failed until its retries ran out`，計入 `gateway_ops.reports.unhandled`（`result=lost`）。剩下會漏的情況：資料庫斷超過 10 分鐘，或 replica 在重試期間重啟；漏掉的只是那一則回報的紀錄，下一次發布（重發或新版本）後閘道器會再回報。
+**資料庫錯誤。** client 把回報交給服務時就回了 PUBACK（crates/mqtt-client），閘道器不會再送同一則；所以第 3、4 步遇到資料庫錯誤時，回報回到收件匣的隊尾，5 秒後重試，從收到起最多 10 分鐘；處理中這台閘道器又送來新回報時，失敗的那則作廢（`result=superseded`），不會之後蓋掉新的。每次資料庫錯誤之後，回報的處理暫停 5 秒：資料庫多半斷了，等著的回報不會一口氣打過去，每次嘗試最多等連線池的 5 秒（`ACQUIRE_TIMEOUT`）。放棄時記 WARN `apply report lost: ...`，計入 `gateway_ops.reports.unhandled`（`result=lost`）。剩下會漏的情況：資料庫斷超過 10 分鐘，或 replica 在重試期間重啟；漏掉的只是那一則回報的紀錄，下一次發布（重發或新版本）後閘道器會再回報。被取代的回報刻意不記：同一台閘道器較新的回報才是它現在的狀態，舊回報那一版的列就少一次回報。
 
 被拒的回報記 WARN `apply report refused`，帶 `reason`、`hardware_id`、`version`、`active_version`；每個 replica 每 60 秒最多記 60 行，被省略的行數記在下一行的 `suppressed_logs`，所以一台送垃圾的閘道器寫不滿日誌。指標不受這個限制。
 
@@ -187,7 +189,7 @@ meter `gateway-ops`：
 | `gateway_ops.delivery.republish_runs` | `result`：`done`、`skipped`、`interrupted`、`failed` | 連線後的重發 |
 | `gateway_ops.reports.recorded` | `outcome` | 記錄下來的套用回報 |
 | `gateway_ops.reports.refused` | `reason`（「套用回報」的表，加上 `topic`、`retained`、`qos0`、`decode`、`unknown_outcome`） | 被拒的套用回報 |
-| `gateway_ops.reports.unhandled` | `result`：`retry`、`lost` | 因資料庫錯誤沒處理完的套用回報：排進重試，或重試用完放棄 |
+| `gateway_ops.reports.unhandled` | `result`：`retry`、`superseded`、`lost` | 沒處理完的套用回報：資料庫錯誤後排進重試、被同一台閘道器較新的回報取代，或放棄（重試用完、收件匣滿了） |
 
 ## 解綁
 
@@ -222,7 +224,7 @@ cargo test -p gateway-ops
 | --- | --- |
 | `src/generate.rs`、`src/config.rs` 的單元測試 | 固定順序、每個型號一次、編碼後閘道器解得開；缺型號、型號名稱不符、違反規則、超過 `MAX_DEVICES` 的設定被拒，日誌摘要不帶連線設定；刪除時「上一版去掉這個設備」的內容（含 `MAX_DEVICES` 的情況）；設定的驗證（含 broker 與節流的範圍）與 `Debug` 不印密碼 |
 | `src/delivery/schedule.rs`、`src/delivery/reports.rs` 的單元測試 | 手動時鐘下十次快速變更合併成一次、送最新版本、晚到的舊通知不降低版本、重發馬上到期且強制送、大量回報每個時間窗一次、忙碌的閘道器等待；回報的 topic 決定閘道器、retain／QoS 0／解不開／未知 outcome 被拒、版本超前與未知版本與先前綁定被拒、舊版本的回報觸發重發、日誌額度 |
-| `tests/delivery.rs` | 真的 broker 與 Postgres：十次快速變更只發布一次最新版本（等滿節流）、新訂閱者收到 retained 的最新版本、`config_deliveries` 只記發布的那一版；broker 重啟後 readiness 失敗再恢復、重發所有閘道器、新訂閱者收到 retained 的最新版本；別的 replica 持有重發的鎖時不重發；別的 session 持有某台閘道器的發布鎖時不發布它、釋放後才發布；套用回報（rejected 帶 issue、applied）記在版本的租戶，payload 指向別台閘道器時以 topic 為準，版本超前、`active_version` 超前、沒有版本的閘道器與解不開的回報被拒且不改任何列，舊版本的回報讓最新版本再發布一次；日誌不帶 broker 密碼 |
+| `tests/delivery.rs` | 真的 broker 與 Postgres：十次快速變更只發布一次最新版本（等滿節流）、新訂閱者收到 retained 的最新版本、`config_deliveries` 只記發布的那一版；broker 重啟後 readiness 失敗再恢復、重發所有閘道器、新訂閱者收到 retained 的最新版本；別的 replica 持有重發的鎖時不重發；別的 session 持有某台閘道器的發布鎖時不發布它、釋放後才發布；套用回報（rejected 帶 issue、applied）記在版本的租戶，payload 指向別台閘道器時以 topic 為準，版本超前、`active_version` 超前、沒有版本的閘道器與解不開的回報被拒且不改任何列，舊版本的回報讓最新版本再發布一次；日誌不帶 broker 密碼；一台閘道器連送 500 則不合理的回報時，另一台的回報照樣記錄，每則洪水回報不是被拒就是被取代，沒有一則遺失 |
 | `tests/desired_config.rs` | 新增、修改設備各產生一版，payload 以 crates/protocol 解碼並驗證；同內容、晚到的舊 revision 與整段重播（`Replay::Reprocess`）不產生版本；刪除的設備從下一版消失；別的租戶、先前綁定、綁定不明的設備不在任何設定裡，沒有 `binding_id` 的事件取事件之前的綁定；改綁到別的租戶時版本照樣遞增、不帶舊租戶的設備，新租戶的設定產生不出來時存一版沒有設備的設定；設定產生不出來時刪除仍然生效；解綁存一版沒有設備的設定、只存一次；讀取介面回最新版本、拒絕不屬於最新綁定的版本，平台角色不能寫入，另一個租戶的服務角色讀不到 |
 | `tests/generation_errors.rs` | 未知型號、違反規則、型號被刪除時不產生版本、ERROR 帶閘道器與原因、上一版不變；型號送到後產生下一版；別的租戶的設備事件記 WARN |
 | `tests/unknown_events.rs` | 這個版本不認得的事件：不在追蹤的 aggregate 時確認並往下走；在型號、設備或綁定的 aggregate 時每次 poll 都重試，不確認、不進 dead letter，後面的事件等著 |

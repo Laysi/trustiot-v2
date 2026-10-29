@@ -23,8 +23,11 @@
 //!   reports over the replicas; [`reports`] checks them, and accepted ones are recorded in the
 //!   reported version's tenant. A report about a version older than the latest schedules the
 //!   latest again (throttled, so a gateway that floods reports gets one publish per throttle).
-//!   The client acknowledged a report when it handed it over, so one whose handling fails for a
-//!   database error waits in [`reports::Retries`] and is tried again for a bounded time.
+//!   The connection's event loop only checks a report and puts it in [`reports::Inbox`] (at
+//!   most one per gateway, its latest); a task of its own handles them one at a time, so a slow
+//!   or failing database never holds up the connection's events. The client acknowledged a
+//!   report when it handed it over, so one whose handling fails for a database error goes back
+//!   into the inbox and is tried again for a bounded time.
 //! - **Races between replicas.** Any replica may publish (its consumer's changes, a republish,
 //!   a report). Each gateway's read and publish run under a transaction-level advisory lock of
 //!   its own ([`publish_lock_key`]), held until the PUBACK: the next holder reads a version at
@@ -59,7 +62,9 @@ use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
 
 use self::records::{RecordError, Records};
-use self::reports::{LogBudget, Queued, Received, Refusal, Retries, check_message, judge};
+use self::reports::{
+    Inbox, LogBudget, Offered, Pending, Received, Refusal, Retried, check_message, judge,
+};
 use self::schedule::{Added, Request, Schedule, Trigger};
 use crate::desired::{DesiredConfigs, ReadError, StoredConfig};
 
@@ -158,7 +163,10 @@ pub struct Counts {
     pub reports_refused: u64,
     /// Reports whose handling failed for a database error and wait for a retry.
     pub reports_retried: u64,
-    /// Reports given up after their retries (README.md, "套用回報").
+    /// Reports never handled because a later report of the same gateway took their place.
+    pub reports_superseded: u64,
+    /// Reports given up after their retries, or because the inbox was full (README.md,
+    /// "套用回報").
     pub reports_lost: u64,
 }
 
@@ -173,6 +181,7 @@ struct Counters {
     reports_recorded: AtomicU64,
     reports_refused: AtomicU64,
     reports_retried: AtomicU64,
+    reports_superseded: AtomicU64,
     reports_lost: AtomicU64,
 }
 
@@ -193,6 +202,7 @@ impl Counters {
             reports_recorded: get(&self.reports_recorded),
             reports_refused: get(&self.reports_refused),
             reports_retried: get(&self.reports_retried),
+            reports_superseded: get(&self.reports_superseded),
             reports_lost: get(&self.reports_lost),
         }
     }
@@ -243,7 +253,8 @@ impl Metrics {
             unhandled_reports: meter
                 .u64_counter("gateway_ops.reports.unhandled")
                 .with_description(
-                    "Apply reports not handled for a database error: queued for a retry, or lost",
+                    "Apply reports not handled: queued for a retry after a database error, \
+                     superseded by a later report of the gateway, or lost",
                 )
                 .build(),
         }
@@ -302,8 +313,10 @@ struct Inner {
     counters: Counters,
     metrics: Metrics,
     log_budget: LogBudget,
-    /// Reports to handle again; only the event loop touches them.
-    retries: Mutex<Retries>,
+    /// The checked reports waiting for the report task.
+    inbox: Mutex<Inbox>,
+    /// Wakes the report task: a report was put in the inbox.
+    reports_waiting: Notify,
 }
 
 /// The delivery, started: its broker connection is being made. [`Delivery::run`] works until
@@ -400,7 +413,8 @@ impl Delivery {
             counters: Counters::default(),
             metrics: Metrics::new(),
             log_budget: LogBudget::new(),
-            retries: Mutex::new(Retries::default()),
+            inbox: Mutex::new(Inbox::default()),
+            reports_waiting: Notify::new(),
         });
         Ok(Self {
             inner,
@@ -416,8 +430,8 @@ impl Delivery {
     }
 
     /// Handles the connection's events until `stop` is cancelled: publishes what is scheduled,
-    /// republishes after each connection, and handles the reports one at a time. Once stopped,
-    /// it disconnects.
+    /// republishes after each connection, and hands the reports to the report task. Once
+    /// stopped, it disconnects.
     pub async fn run(self, stop: CancellationToken) {
         let Self {
             inner,
@@ -428,16 +442,11 @@ impl Delivery {
         let mut tasks = JoinSet::new();
         tasks.spawn(Arc::clone(&inner).schedule_loop(stop.clone()));
         tasks.spawn(Arc::clone(&inner).republish_loop(lock, Arc::clone(&republish), stop.clone()));
+        tasks.spawn(Arc::clone(&inner).report_loop(stop.clone()));
         loop {
-            let retry_at = inner.retries().next_due();
             let event = tokio::select! {
                 biased;
                 () = stop.cancelled() => break,
-                // Before new messages, so a steady stream of them cannot starve the retries.
-                () = sleep_until(retry_at), if retry_at.is_some() => {
-                    inner.retry_reports().await;
-                    continue;
-                }
                 event = events.recv() => event,
             };
             match event {
@@ -479,7 +488,7 @@ impl Delivery {
                         "no connection to the mqtt broker; reconnecting"
                     );
                 }
-                Some(Event::Message(message)) => inner.handle_report(&message).await,
+                Some(Event::Message(message)) => inner.offer_report(&message),
             }
         }
         inner.connection.set(false, false);
@@ -491,8 +500,8 @@ impl Delivery {
 }
 
 impl Inner {
-    fn retries(&self) -> MutexGuard<'_, Retries> {
-        self.retries.lock().unwrap_or_else(PoisonError::into_inner)
+    fn inbox(&self) -> MutexGuard<'_, Inbox> {
+        self.inbox.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
     fn state(&self) -> MutexGuard<'_, State> {
@@ -991,8 +1000,9 @@ impl Inner {
         }
     }
 
-    /// Checks, records and answers one report; see [`reports`].
-    async fn handle_report(&self, message: &Message) {
+    /// Checks a message from the report subscription and puts it in the inbox for the report
+    /// task; never waits, so the connection's events keep flowing whatever the database does.
+    fn offer_report(&self, message: &Message) {
         let received = match check_message(message) {
             Ok(received) => received,
             Err(refused) => {
@@ -1000,51 +1010,106 @@ impl Inner {
                 return;
             }
         };
-        // The gateway's latest word on this version: an older report waiting for a retry must
-        // not overwrite it later.
-        self.retries()
-            .supersede(&received.gateway, received.report.version);
-        self.handle_received(received, Instant::now()).await;
+        let offered = self.inbox().offer(received, Instant::now());
+        match offered {
+            Offered::Waiting => {}
+            Offered::Replaced(replaced) => self.superseded(&replaced.received),
+            Offered::Evicted(evicted) => self.lost(&evicted.received),
+        }
+        self.reports_waiting.notify_one();
     }
 
-    /// Handles the reports whose retry is due, one at a time.
-    async fn retry_reports(&self) {
-        let due = self.retries().take_due(Instant::now());
-        for pending in due {
-            self.handle_received(pending.received, pending.since).await;
+    /// Handles the reports in the inbox one at a time, in line order, until stopped. After a
+    /// database error it pauses for [`reports::REPORT_RETRY_DELAY`]: the database is likely down,
+    /// and the waiting reports are not tried in a burst against it.
+    async fn report_loop(self: Arc<Self>, stop: CancellationToken) {
+        loop {
+            let notified = self.reports_waiting.notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
+            let taken = {
+                let mut inbox = self.inbox();
+                inbox
+                    .take_due(Instant::now())
+                    .ok_or_else(|| inbox.next_due())
+            };
+            match taken {
+                Ok(pending) => {
+                    if !self.handle_pending(pending).await {
+                        tokio::select! {
+                            biased;
+                            () = stop.cancelled() => return,
+                            () = tokio::time::sleep(reports::REPORT_RETRY_DELAY) => {}
+                        }
+                    }
+                }
+                Err(next_due) => {
+                    tokio::select! {
+                        biased;
+                        () = stop.cancelled() => return,
+                        () = &mut notified => {}
+                        () = sleep_until(next_due), if next_due.is_some() => {}
+                    }
+                }
+            }
         }
     }
 
-    /// Queues `received` (arrived at `since`) for another try after a database error.
-    fn retry_later(&self, received: Received, since: Instant) {
-        let queued = self.retries().push(received.clone(), since, Instant::now());
-        let lost = match queued {
-            Queued::Waiting | Queued::Replaced => {
+    /// Puts back a report whose handling failed for a database error.
+    fn retry_later(&self, pending: Pending) {
+        let received = pending.received.clone();
+        let retried = self.inbox().retry(pending, Instant::now());
+        match retried {
+            Retried::Waiting => {
                 add(&self.counters.reports_retried);
                 self.metrics
                     .unhandled_reports
                     .add(1, &[KeyValue::new("result", "retry")]);
-                return;
             }
-            Queued::Evicted(evicted) => evicted.received,
-            Queued::Expired => received,
-        };
+            Retried::Superseded => self.superseded(&received),
+            Retried::Expired => self.lost(&received),
+            Retried::Evicted(evicted) => {
+                add(&self.counters.reports_retried);
+                self.metrics
+                    .unhandled_reports
+                    .add(1, &[KeyValue::new("result", "retry")]);
+                self.lost(&evicted.received);
+            }
+        }
+    }
+
+    /// A report never handled because a later report of its gateway took its place.
+    fn superseded(&self, received: &Received) {
+        add(&self.counters.reports_superseded);
+        self.metrics
+            .unhandled_reports
+            .add(1, &[KeyValue::new("result", "superseded")]);
+        tracing::debug!(
+            hardware_id = received.gateway.as_str(),
+            version = received.report.version.get(),
+            "apply report superseded by a later report of the gateway"
+        );
+    }
+
+    /// A report given up: its retries ran out, or the inbox was full.
+    fn lost(&self, received: &Received) {
         add(&self.counters.reports_lost);
         self.metrics
             .unhandled_reports
             .add(1, &[KeyValue::new("result", "lost")]);
         tracing::warn!(
-            hardware_id = lost.gateway.as_str(),
-            version = lost.report.version.get(),
-            outcome = lost.report.outcome.as_str(),
-            "apply report lost: the database failed until its retries ran out"
+            hardware_id = received.gateway.as_str(),
+            version = received.report.version.get(),
+            outcome = received.report.outcome.as_str(),
+            "apply report lost: the database failed until its retries ran out, or too many \
+             gateways' reports were waiting"
         );
     }
 
     /// Compares a checked report with what is stored, records it and answers it; a database
-    /// error queues it for another try.
-    async fn handle_received(&self, received: Received, since: Instant) {
-        let (gateway, report) = (&received.gateway, &received.report);
+    /// error puts it back in the inbox. Returns `false` after a database error.
+    async fn handle_pending(&self, pending: Pending) -> bool {
+        let (gateway, report) = (&pending.received.gateway, &pending.received.report);
         let target = {
             let _permit = self.reads.acquire().await;
             self.configs.report_target(gateway, report.version).await
@@ -1059,9 +1124,10 @@ impl Inner {
                     "apply report not handled: the stored versions could not be read"
                 );
                 if matches!(error, ReadError::Database(_)) {
-                    self.retry_later(received, since);
+                    self.retry_later(pending);
+                    return false;
                 }
-                return;
+                return true;
             }
         };
         let verdict = judge(report, target.as_ref());
@@ -1075,7 +1141,7 @@ impl Inner {
             if let Err(refusal) = verdict.record {
                 self.refused(refusal, Some(gateway), Some(report));
             }
-            return;
+            return true;
         };
         match self.records.reported(tenant, gateway, report).await {
             Ok(()) => {
@@ -1097,6 +1163,7 @@ impl Inner {
                     issue_codes = ?codes,
                     "apply report recorded"
                 );
+                true
             }
             Err(error) => {
                 tracing::warn!(
@@ -1106,8 +1173,10 @@ impl Inner {
                     "apply report not recorded"
                 );
                 if matches!(error, RecordError::Database(_)) {
-                    self.retry_later(received, since);
+                    self.retry_later(pending);
+                    return false;
                 }
+                true
             }
         }
     }

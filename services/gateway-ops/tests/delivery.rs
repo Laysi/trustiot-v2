@@ -762,3 +762,66 @@ async fn apply_reports_are_recorded_under_the_topics_gateway_and_unreasonable_on
         published.version.map(ConfigVersion::get)
     );
 }
+
+#[tokio::test]
+async fn a_gateway_flooding_its_report_topic_does_not_crowd_out_another() {
+    /// Reports from one gateway, each about a version never generated.
+    const FLOOD: u64 = 500;
+    let _serial = SERIAL.lock().await;
+    let Some(product) = product_postgres(LOGINS).await else {
+        return;
+    };
+    let Some(broker) = Broker::start() else {
+        return;
+    };
+    let flooder = Bound::new(&product, "go-flood").await;
+    let quiet = Bound::new(&product, "go-flood-quiet").await;
+    let quiet_latest = quiet.latest(&product).await;
+    let running = Running::start(&product, &broker, Duration::from_secs(1), false).await;
+    let gateway = Gateway::connect(&broker).await;
+    let before = running.handle.counts();
+
+    for value in 1..=FLOOD {
+        gateway
+            .report(
+                &flooder.gateway,
+                encode(&ConfigReport::applied(version(1_000 + value))),
+            )
+            .await;
+    }
+    gateway
+        .report(&quiet.gateway, encode(&ConfigReport::applied(quiet_latest)))
+        .await;
+
+    // The flooding gateway held one place in the inbox: the other gateway's report is recorded,
+    // and each flood report was either refused or replaced by the flooder's next one.
+    running
+        .wait_counts("the other gateway's report recorded", |counts| {
+            counts.reports_recorded > before.reports_recorded
+        })
+        .await;
+    let counts = running
+        .wait_counts("every flood report refused or superseded", |counts| {
+            (counts.reports_refused - before.reports_refused)
+                + (counts.reports_superseded - before.reports_superseded)
+                >= FLOOD
+        })
+        .await;
+    let mut admin = product.superuser().await;
+    let rows = deliveries(&mut admin, &quiet.gateway).await;
+    let row = rows
+        .iter()
+        .find(|row| row.version == i64::try_from(quiet_latest.get()).expect("fits"))
+        .expect("the other gateway's latest version");
+    assert_eq!(row.outcome.as_deref(), Some("applied"));
+    assert_eq!(counts.reports_lost, before.reports_lost);
+    running.stop().await;
+    println!(
+        "evidence: {FLOOD} reports of versions never generated from one gateway, then one from \
+         another: the other's recorded ({:?}); of the flood {} refused after a read and {} \
+         superseded in the inbox; none lost",
+        row.outcome,
+        counts.reports_refused - before.reports_refused,
+        counts.reports_superseded - before.reports_superseded
+    );
+}

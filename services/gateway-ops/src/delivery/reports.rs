@@ -8,9 +8,11 @@
 //! QoS 1; and the payload, decoded and validated by crates/protocol. [`judge`] then compares the
 //! report with what is stored ([`ReportTarget`]): versions the service never generated are
 //! refused, and only reports about versions of the gateway's current binding are recorded.
-//! [`Retries`] keeps the reports whose handling failed for a database error, for a bounded time.
+//! [`Inbox`] holds the checked reports until the delivery's report task handles them (off the
+//! connection's event loop), at most one per gateway, and takes back those whose handling failed
+//! for a database error, for a bounded time.
 
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::sync::Mutex;
 use std::time::Duration;
 
@@ -223,14 +225,16 @@ impl Default for LogBudget {
 /// gateway does not send it again; after this it is given up (WARN, counted).
 pub const REPORT_RETRY_LIMIT: Duration = Duration::from_secs(600);
 
-/// The wait between the tries of a failed report.
+/// The wait between the tries of a failed report, and the pause of the report handling after a
+/// database error (the database is likely down: the waiting reports are not tried in a burst).
 pub const REPORT_RETRY_DELAY: Duration = Duration::from_secs(5);
 
-/// Most reports waiting for a retry per replica; a newer report replaces a waiting one of the
-/// same gateway and version, and when full the oldest is given up.
-pub const MAX_PENDING_REPORTS: usize = 1024;
+/// Most gateways with a report waiting per replica. A gateway has at most one waiting report,
+/// so this bounds the inbox whatever the gateways send; when it is full, a report of another
+/// gateway gives up the report that has waited longest in line.
+pub const MAX_WAITING_GATEWAYS: usize = 4096;
 
-/// A report waiting to be handled again.
+/// A report waiting to be handled.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Pending {
     /// The report.
@@ -240,91 +244,125 @@ pub struct Pending {
     due: Instant,
 }
 
-/// What [`Retries::push`] did.
+/// What [`Inbox::offer`] did with a new report.
 #[derive(Debug, PartialEq)]
-pub enum Queued {
-    /// Waits for its next try.
+pub enum Offered {
+    /// Waits for its turn.
     Waiting,
-    /// Replaced a waiting report of the same gateway and version.
-    Replaced,
-    /// Waits, and the oldest waiting report was given up to make room.
+    /// Took the place of the gateway's waiting report, which is never handled: the gateway's
+    /// later word replaces it.
+    Replaced(Box<Pending>),
+    /// Waits, and the report that had waited longest was given up to make room.
     Evicted(Box<Pending>),
-    /// Older than [`REPORT_RETRY_LIMIT`]: given up.
-    Expired,
 }
 
-/// The reports waiting for a retry, oldest first. Pure bookkeeping on instants the caller passes
-/// in, so it is tested without a clock.
-#[derive(Debug, Default)]
-pub struct Retries(VecDeque<Pending>);
+/// What [`Inbox::retry`] did with a report whose handling failed.
+#[derive(Debug, PartialEq)]
+pub enum Retried {
+    /// Waits for its next try.
+    Waiting,
+    /// A newer report of the same gateway arrived while this one was handled: the newer one
+    /// waits instead.
+    Superseded,
+    /// Older than [`REPORT_RETRY_LIMIT`]: given up.
+    Expired,
+    /// Waits, and the report that had waited longest was given up to make room.
+    Evicted(Box<Pending>),
+}
 
-impl Retries {
-    /// Queues `received`, which arrived at `since`, for a try one [`REPORT_RETRY_DELAY`] after
-    /// `now`.
-    pub fn push(&mut self, received: Received, since: Instant, now: Instant) -> Queued {
-        if now.saturating_duration_since(since) >= REPORT_RETRY_LIMIT {
-            return Queued::Expired;
-        }
+/// The reports waiting to be handled: at most one per gateway (its latest), in the order their
+/// gateways got in line, so a gateway that floods its report topic holds one place and cannot
+/// push another gateway's report out or ahead. Pure bookkeeping on instants the caller passes in,
+/// so it is tested without a clock.
+#[derive(Debug, Default)]
+pub struct Inbox {
+    waiting: HashMap<GatewayId, Pending>,
+    /// The gateways with a waiting report, in line order.
+    line: VecDeque<GatewayId>,
+}
+
+impl Inbox {
+    /// Puts a report that arrived at `now` in line, due at once; see [`Offered`].
+    pub fn offer(&mut self, received: Received, now: Instant) -> Offered {
         let pending = Pending {
             received,
-            since,
-            due: now + REPORT_RETRY_DELAY,
+            since: now,
+            due: now,
         };
-        if let Some(waiting) = self.0.iter_mut().find(|waiting| {
-            waiting.received.gateway == pending.received.gateway
-                && waiting.received.report.version == pending.received.report.version
-        }) {
-            // The later report is the gateway's latest word on that version.
-            let since = waiting.since.min(pending.since);
-            *waiting = Pending { since, ..pending };
-            return Queued::Replaced;
+        if let Some(waiting) = self.waiting.get_mut(&pending.received.gateway) {
+            // The gateway keeps its place in line, so replacing its report never moves it ahead.
+            let replaced = std::mem::replace(waiting, pending);
+            return Offered::Replaced(Box::new(replaced));
         }
-        let evicted = if self.0.len() >= MAX_PENDING_REPORTS {
-            self.0.pop_front()
+        match self.enter(pending) {
+            Some(evicted) => Offered::Evicted(evicted),
+            None => Offered::Waiting,
+        }
+    }
+
+    /// Puts back a report whose handling failed at `now`, for a try one [`REPORT_RETRY_DELAY`]
+    /// later at the end of the line; see [`Retried`].
+    pub fn retry(&mut self, pending: Pending, now: Instant) -> Retried {
+        if now.saturating_duration_since(pending.since) >= REPORT_RETRY_LIMIT {
+            return Retried::Expired;
+        }
+        if self.waiting.contains_key(&pending.received.gateway) {
+            return Retried::Superseded;
+        }
+        let pending = Pending {
+            due: now + REPORT_RETRY_DELAY,
+            ..pending
+        };
+        match self.enter(pending) {
+            Some(evicted) => Retried::Evicted(evicted),
+            None => Retried::Waiting,
+        }
+    }
+
+    /// Adds a report of a gateway that has none waiting at the end of the line; returns the
+    /// report given up when the inbox was full.
+    fn enter(&mut self, pending: Pending) -> Option<Box<Pending>> {
+        let evicted = if self.waiting.len() >= MAX_WAITING_GATEWAYS {
+            self.line
+                .pop_front()
+                .and_then(|gateway| self.waiting.remove(&gateway))
+                .map(Box::new)
         } else {
             None
         };
-        self.0.push_back(pending);
-        match evicted {
-            Some(evicted) => Queued::Evicted(Box::new(evicted)),
-            None => Queued::Waiting,
-        }
+        self.line.push_back(pending.received.gateway.clone());
+        self.waiting
+            .insert(pending.received.gateway.clone(), pending);
+        evicted
     }
 
-    /// Drops the waiting report of `gateway` about `version`: a newer report about it arrived,
-    /// and an older one retried later must not overwrite it. Returns whether one was waiting.
-    pub fn supersede(&mut self, gateway: &GatewayId, version: ConfigVersion) -> bool {
-        let before = self.0.len();
-        self.0.retain(|waiting| {
-            waiting.received.gateway != *gateway || waiting.received.report.version != version
-        });
-        self.0.len() != before
-    }
-
-    /// Takes the reports due at `now`, oldest first.
-    pub fn take_due(&mut self, now: Instant) -> Vec<Pending> {
-        let (due, waiting): (VecDeque<Pending>, VecDeque<Pending>) =
-            self.0.drain(..).partition(|pending| pending.due <= now);
-        self.0 = waiting;
-        due.into()
+    /// Takes the first report in line that is due at `now`.
+    pub fn take_due(&mut self, now: Instant) -> Option<Pending> {
+        let position = self.line.iter().position(|gateway| {
+            self.waiting
+                .get(gateway)
+                .is_some_and(|pending| pending.due <= now)
+        })?;
+        let gateway = self.line.remove(position)?;
+        self.waiting.remove(&gateway)
     }
 
     /// The earliest due time.
     #[must_use]
     pub fn next_due(&self) -> Option<Instant> {
-        self.0.iter().map(|pending| pending.due).min()
+        self.waiting.values().map(|pending| pending.due).min()
     }
 
     /// How many reports wait.
     #[must_use]
     pub fn len(&self) -> usize {
-        self.0.len()
+        self.waiting.len()
     }
 
     /// Whether none waits.
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.0.is_empty()
+        self.waiting.is_empty()
     }
 }
 
@@ -520,89 +558,113 @@ mod tests {
     }
 
     #[test]
-    fn failed_reports_are_retried_after_a_delay_until_the_limit() {
-        let mut retries = Retries::default();
+    fn a_flooding_gateway_holds_one_place_and_cannot_crowd_out_another() {
+        let mut inbox = Inbox::default();
         let start = Instant::now();
-        assert_eq!(
-            retries.push(received("gw-a", 1), start, start),
-            Queued::Waiting
-        );
-        assert_eq!(retries.next_due(), Some(start + REPORT_RETRY_DELAY));
-        assert!(retries.take_due(start).is_empty());
-        let due = retries.take_due(start + REPORT_RETRY_DELAY);
-        assert_eq!(due.len(), 1);
-        assert!(retries.is_empty());
-        // Tried again until the limit from its arrival, then given up.
-        let late = start + REPORT_RETRY_LIMIT - Duration::from_millis(1);
-        assert_eq!(
-            retries.push(due[0].received.clone(), due[0].since, late),
-            Queued::Waiting
-        );
-        retries.take_due(late + REPORT_RETRY_DELAY);
-        assert_eq!(
-            retries.push(
-                due[0].received.clone(),
-                due[0].since,
-                start + REPORT_RETRY_LIMIT
-            ),
-            Queued::Expired
-        );
-        assert!(retries.is_empty());
+        assert_eq!(inbox.offer(received("gw-a", 1), start), Offered::Waiting);
+        assert_eq!(inbox.offer(received("gw-b", 1), start), Offered::Waiting);
+        // Far more reports than the inbox holds, each about another version.
+        let flood = u64::try_from(MAX_WAITING_GATEWAYS * 4).expect("fits");
+        for value in 2..=flood {
+            assert!(matches!(
+                inbox.offer(received("gw-a", value), start),
+                Offered::Replaced(_)
+            ));
+        }
+        assert_eq!(inbox.len(), 2);
+        // gw-a keeps its place in line with its latest report; gw-b's report is still there.
+        let first = inbox.take_due(start).expect("gw-a's report");
+        assert_eq!(first.received, received("gw-a", flood));
+        let second = inbox.take_due(start).expect("gw-b's report");
+        assert_eq!(second.received, received("gw-b", 1));
+        assert!(inbox.take_due(start).is_none());
     }
 
     #[test]
-    fn a_later_report_of_the_same_version_replaces_the_waiting_one() {
-        let mut retries = Retries::default();
+    fn a_full_inbox_gives_up_the_report_that_waited_longest() {
+        let mut inbox = Inbox::default();
         let start = Instant::now();
-        retries.push(received("gw-a", 1), start, start);
+        for index in 0..MAX_WAITING_GATEWAYS {
+            assert_eq!(
+                inbox.offer(received(&format!("gw-{index}"), 1), start),
+                Offered::Waiting
+            );
+        }
+        let Offered::Evicted(evicted) = inbox.offer(received("gw-new", 1), start) else {
+            panic!("the inbox is full");
+        };
+        assert_eq!(evicted.received, received("gw-0", 1));
+        assert_eq!(inbox.len(), MAX_WAITING_GATEWAYS);
+    }
+
+    #[test]
+    fn failed_reports_are_retried_after_a_delay_until_the_limit() {
+        let mut inbox = Inbox::default();
+        let start = Instant::now();
+        inbox.offer(received("gw-a", 1), start);
+        inbox.offer(received("gw-b", 1), start);
+        let failed = inbox.take_due(start).expect("gw-a's report");
+        // Back at the end of the line, due one delay later: gw-b goes first.
+        assert_eq!(inbox.retry(failed, start), Retried::Waiting);
+        assert_eq!(
+            inbox.take_due(start).expect("gw-b's report").received,
+            received("gw-b", 1)
+        );
+        assert!(inbox.take_due(start).is_none());
+        assert_eq!(inbox.next_due(), Some(start + REPORT_RETRY_DELAY));
+        let again = inbox
+            .take_due(start + REPORT_RETRY_DELAY)
+            .expect("gw-a's report again");
+        assert_eq!(again.since, start, "the limit counts from the arrival");
+        // Tried again until the limit from its arrival, then given up.
+        let late = start + REPORT_RETRY_LIMIT - Duration::from_millis(1);
+        assert_eq!(inbox.retry(again, late), Retried::Waiting);
+        let last = inbox
+            .take_due(late + REPORT_RETRY_DELAY)
+            .expect("the last try");
+        assert_eq!(
+            inbox.retry(last, start + REPORT_RETRY_LIMIT),
+            Retried::Expired
+        );
+        assert!(inbox.is_empty());
+    }
+
+    #[test]
+    fn a_report_that_arrives_during_a_failed_try_supersedes_it() {
+        let mut inbox = Inbox::default();
+        let start = Instant::now();
+        inbox.offer(received("gw-a", 1), start);
+        let in_hand = inbox.take_due(start).expect("the report");
+        // The gateway reports again while the first one is being handled; then that one fails.
         let rejected = Received {
             gateway: gateway(),
             report: ConfigReport::rejected(version(1), None, Vec::new()),
         };
+        assert_eq!(inbox.offer(rejected.clone(), start), Offered::Waiting);
+        assert_eq!(inbox.retry(in_hand, start), Retried::Superseded);
+        assert_eq!(inbox.len(), 1);
+        assert_eq!(
+            inbox.take_due(start).expect("the later report").received,
+            rejected
+        );
+    }
+
+    #[test]
+    fn a_waiting_retry_is_replaced_by_a_new_report_of_its_gateway() {
+        let mut inbox = Inbox::default();
+        let start = Instant::now();
+        inbox.offer(received("gw-a", 1), start);
+        let failed = inbox.take_due(start).expect("the report");
+        assert_eq!(inbox.retry(failed, start), Retried::Waiting);
         let later = start + Duration::from_secs(1);
-        assert_eq!(
-            retries.push(rejected.clone(), later, later),
-            Queued::Replaced
-        );
-        retries.push(received("gw-a", 2), later, later);
-        assert_eq!(retries.len(), 2);
-        let due = retries.take_due(later + REPORT_RETRY_DELAY);
-        assert_eq!(due[0].received, rejected);
-        assert_eq!(
-            due[0].since, start,
-            "the limit counts from the first arrival"
-        );
-        assert_eq!(due[1].received.report.version, version(2));
-    }
-
-    #[test]
-    fn a_new_report_supersedes_a_waiting_one_of_the_same_version() {
-        let mut retries = Retries::default();
-        let start = Instant::now();
-        retries.push(received("gw-a", 1), start, start);
-        retries.push(received("gw-a", 2), start, start);
-        assert!(retries.supersede(&gateway(), version(1)));
-        assert!(!retries.supersede(&gateway(), version(1)));
-        let due = retries.take_due(start + REPORT_RETRY_DELAY);
-        assert_eq!(due.len(), 1);
-        assert_eq!(due[0].received.report.version, version(2));
-    }
-
-    #[test]
-    fn a_full_queue_gives_up_the_oldest_report() {
-        let mut retries = Retries::default();
-        let start = Instant::now();
-        for value in 1..=u64::try_from(MAX_PENDING_REPORTS).expect("fits") {
-            assert_eq!(
-                retries.push(received("gw-a", value), start, start),
-                Queued::Waiting
-            );
-        }
-        let Queued::Evicted(evicted) = retries.push(received("gw-b", 1), start, start) else {
-            panic!("the queue is full");
+        let Offered::Replaced(replaced) = inbox.offer(received("gw-a", 2), later) else {
+            panic!("gw-a has a waiting report");
         };
-        assert_eq!(evicted.received, received("gw-a", 1));
-        assert_eq!(retries.len(), MAX_PENDING_REPORTS);
+        assert_eq!(replaced.received, received("gw-a", 1));
+        // The new report is due at once, and its retry limit counts from its own arrival.
+        let taken = inbox.take_due(later).expect("the new report");
+        assert_eq!(taken.received, received("gw-a", 2));
+        assert_eq!(taken.since, later);
     }
 
     #[test]
