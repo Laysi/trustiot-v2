@@ -8,7 +8,10 @@
 //! - The API: requests without a valid internal identity token, from users who are not platform
 //!   administrators, or with a token another service exchanged, issue and revoke nothing (the
 //!   ledger is compared before and after). A platform administrator issues and revokes; the
-//!   ledger records the revocation and the issuing CA's next CRL lists it.
+//!   ledger records the revocation and the published CRL lists it once the revocation has
+//!   answered, with the next CRL number. When that new CRL fails, the revocation still answers
+//!   200 and stands, an ERROR line says so, and the CRL job's next round lists it although the
+//!   CRL is not due (Laysi/trustiot-v2#635).
 //! - The broker's check: Mosquitto, an OpenSSL TLS server that verifies client certificates
 //!   against the service's `ca.pem` and `crl.pem` as the production broker does (decision 6),
 //!   accepts a gateway certificate and refuses a revoked gateway certificate and a workstation
@@ -25,6 +28,8 @@ use std::io::Write as _;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
+use certs::config::CrlSchedule;
+use certs::crl;
 use certs::http::{CHAIN_PATH, CRL_PATH};
 use certs::issue::{
     self, CLOCK_SKEW_SECS, IssueError, IssuedCertificate, SERIAL_BYTES, WORKSTATION_PURPOSE_DER,
@@ -43,8 +48,11 @@ use rcgen::{
     KeyPair, KeyUsagePurpose, PKCS_ECDSA_P256_SHA256, PKCS_ECDSA_P384_SHA384, SanType,
 };
 use rustls::CertificateError;
-use serde_json::json;
-use sqlx::Row as _;
+use serde_json::{Value, json};
+use service_kit::identity::ServiceIdentity;
+use service_kit::tenant::TenantDb;
+use sqlx::postgres::PgPoolOptions;
+use sqlx::{Connection as _, Row as _};
 use support::{LIMIT, Reply, Service, TestCa, now, verify_client, wait_for};
 use testkit::container::{Container, container_runtime, runtime_output, unavailable, unique_name};
 use testkit::identity::TestIssuer;
@@ -719,17 +727,216 @@ async fn only_platform_administrators_issue_and_revoke_and_the_crl_lists_a_revoc
     assert_eq!(again.status, 409, "{}", again.body);
     assert_eq!(error_of(&again).1, ALREADY_REVOKED.as_str());
 
-    // The issuing CA's next scheduled CRL lists it, with the reason.
-    let reason = wait_for("the revoked serial in the published CRLs", || async {
-        let (status, bundle) = service.get(CRL_PATH).await;
+    // The published CRLs list it already, with the reason: the revocation gave the issuing CA a
+    // new CRL before it answered (Laysi/trustiot-v2#635).
+    let (status, bundle) = service.get(CRL_PATH).await;
+    assert_eq!(status, 200, "{bundle}");
+    assert_eq!(
+        crl_entry(&bundle, &control.serial),
+        Some(Some(1)),
+        "keyCompromise"
+    );
+    println!("the published CRL lists {} (keyCompromise)", control.serial);
+}
+
+/// The first replica: rounds an hour apart, so after its first round (at startup) its CRL job
+/// stays out of the way and every new CRL of the test's CA comes from a revocation. The rest of
+/// the schedule is the default (7-day CRLs renewed below 5 days left).
+const ROUNDS_HOURLY: [(&str, &str); 1] = [("TRUSTIOT__CRL__CHECK_INTERVAL", "1h")];
+
+/// The replica after the restart: rounds every second.
+const ROUNDS_EVERY_SECOND: [(&str, &str); 1] = [("TRUSTIOT__CRL__CHECK_INTERVAL", "1s")];
+
+/// The stored CRL of `ca_key_id`: its number and the seconds it has left.
+async fn stored_crl(product: &ProductPostgres, ca_key_id: &str) -> (i64, i64) {
+    let row = sqlx::query(
+        "SELECT crl_number, extract(epoch FROM next_update - now())::bigint AS remaining
+         FROM certs.crls WHERE ca_key_id = $1",
+    )
+    .bind(ca_key_id)
+    .fetch_one(&mut product.superuser().await)
+    .await
+    .expect("read the CRL");
+    (row.get("crl_number"), row.get("remaining"))
+}
+
+/// Issues a workstation certificate named `name` through the API as a platform administrator.
+async fn issue_workstation(service: &Service, name: &str) -> WorkstationCertificate {
+    let (_, request) = plain_request(name, &PKCS_ECDSA_P256_SHA256);
+    let reply = service
+        .post_json(
+            CERTIFICATES_PATH,
+            Some(&service.admin_token()),
+            &json!({
+                "workstation": name,
+                "certificate_request": pem::encode(pem::CERTIFICATE_REQUEST, &request),
+            }),
+        )
+        .await;
+    assert_eq!(reply.status, 201, "{}", reply.body);
+    serde_json::from_str(&reply.body).expect("a workstation certificate")
+}
+
+/// Revokes `serial` through the API as a platform administrator (key compromise).
+async fn revoke_workstation(service: &Service, serial: &str) -> Reply {
+    service
+        .post_json(
+            &format!("{CERTIFICATES_PATH}/{serial}/revoke"),
+            Some(&service.admin_token()),
+            &json!({"reason": "key_compromise"}),
+        )
+        .await
+}
+
+/// The log line of the revocation of `serial`.
+async fn revocation_line(service: &Service, serial: &str) -> Value {
+    wait_for("the revocation log line", || async {
+        service
+            .stdout
+            .messages("revoked a workstation certificate")
+            .into_iter()
+            .find(|line| line["fields"]["serial"] == serial)
+    })
+    .await
+}
+
+/// The `issued a new CRL` lines of `ca_key_id` so far.
+fn crl_lines(service: &Service, ca_key_id: &str) -> Vec<Value> {
+    service
+        .stdout
+        .messages("issued a new CRL")
+        .into_iter()
+        .filter(|line| line["fields"]["ca_key_id"] == ca_key_id)
+        .collect()
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_revocation_is_in_the_published_crl_at_once_or_after_a_failure_within_one_round() {
+    let Some(product) = product_postgres(&["certs_app"]).await else {
+        return;
+    };
+    let ca = TestCa::new(&[1]);
+    let authority = ca.authority();
+    let ca_key_id = authority
+        .current(now())
+        .expect("an issuing CA")
+        .key_id()
+        .to_owned();
+    // The CA's first CRL, made here as the CRL job makes it: the tests of this binary share one
+    // database and its job lock, so the first replica's single round at startup may be another
+    // service's turn.
+    let work = TenantDb::connect_lazy_with_background(
+        product.postgres.options("certs_app", DATABASE),
+        PgPoolOptions::new().max_connections(1),
+        ServiceIdentity::new(ServiceName::Certs),
+    )
+    .expect("the certs service role's pool")
+    .1;
+    crl::refresh(&work, &authority, &CrlSchedule::default(), now())
+        .await
+        .expect("the first CRL");
+    let service = Service::start(&product, &ca, &ROUNDS_HOURLY).await;
+    published_crls(&service).await;
+    let listed = issue_workstation(&service, "line-a-ws-listed").await;
+    let failed = issue_workstation(&service, "line-a-ws-failed").await;
+
+    // 1. The new CRL at once: when the revocation answers, the published CRL lists it, with the
+    //    next number. Nothing else makes a CRL of this CA meanwhile: it is days from
+    //    renew_before and the replica's next round is an hour away.
+    let (before, _) = stored_crl(&product, &ca_key_id).await;
+    let reply = revoke_workstation(&service, &listed.serial).await;
+    assert_eq!(reply.status, 200, "{}", reply.body);
+    let (status, bundle) = service.get(CRL_PATH).await;
+    assert_eq!(status, 200, "{bundle}");
+    assert_eq!(
+        crl_entry(&bundle, &listed.serial),
+        Some(Some(1)),
+        "listed when the revocation answered (keyCompromise)"
+    );
+    let (after, _) = stored_crl(&product, &ca_key_id).await;
+    assert_eq!(after, before + 1, "the next CRL number");
+    let line = revocation_line(&service, &listed.serial).await;
+    assert_eq!(line["fields"]["crl_reissued"], json!(true), "{line}");
+    let issued = crl_lines(&service, &ca_key_id)
+        .into_iter()
+        .find(|line| line["fields"]["crl_number"] == after)
+        .unwrap_or_else(|| panic!("no log line for CRL {after}:\n{}", service.output()));
+    assert_eq!(issued["fields"]["cause"], "revocation", "{issued}");
+    println!(
+        "revoked {}: CRL {before} -> {after} before the response, listing it",
+        listed.serial
+    );
+
+    // 2. The new CRL fails: another session holds the CA's CRL row, so the attempt gives up when
+    //    its lock wait (5 s, half the 10 s limit) runs out. The revocation still answers 200 and
+    //    is in the ledger; an ERROR line names the failure; the CRL stays as it was.
+    let mut blocker = product.superuser().await;
+    let mut blocking = blocker.begin().await.expect("a transaction");
+    sqlx::query("SELECT 1 FROM certs.crls WHERE ca_key_id = $1 FOR UPDATE")
+        .bind(&ca_key_id)
+        .execute(&mut *blocking)
+        .await
+        .expect("lock the CA's CRL row");
+    let reply = revoke_workstation(&service, &failed.serial).await;
+    assert_eq!(reply.status, 200, "{}", reply.body);
+    let revoked: WorkstationCertificate =
+        serde_json::from_str(&reply.body).expect("a workstation certificate");
+    assert!(revoked.revoked_at.is_some());
+    assert_eq!(
+        revoked.revocation_reason,
+        Some(RevocationReason::KeyCompromise)
+    );
+    let ledger_rows = ledger(&product, &ca_key_id).await;
+    assert!(
+        ledger_rows
+            .iter()
+            .any(|row| row.0 == failed.serial && row.3 == 1),
+        "revoked in the ledger: {ledger_rows:?}"
+    );
+    let line = revocation_line(&service, &failed.serial).await;
+    assert_eq!(line["fields"]["crl_reissued"], json!(false), "{line}");
+    let error = wait_for("the ERROR line of the failed CRL", || async {
+        service
+            .stdout
+            .messages("could not issue a new CRL after a revocation")
+            .into_iter()
+            .find(|line| line["level"] == "ERROR" && line["fields"]["serial"] == failed.serial)
+    })
+    .await;
+    println!("the failed new CRL: {error}");
+    assert_eq!(stored_crl(&product, &ca_key_id).await.0, after, "unchanged");
+    let (status, bundle) = service.get(CRL_PATH).await;
+    assert_eq!(status, 200, "{bundle}");
+    assert_eq!(crl_entry(&bundle, &failed.serial), None, "not listed yet");
+    blocking.rollback().await.expect("release the CA's CRL row");
+
+    // 3. The replica stops before its next round; another starts (rounds every second). Its CRL
+    //    job lists the revocation in its next round, although the CRL is days from
+    //    renew_before: the revocation is newer than the CRL's thisUpdate.
+    drop(service);
+    let restarted = Service::start(&product, &ca, &ROUNDS_EVERY_SECOND).await;
+    let reason = wait_for("the job's CRL listing the revocation", || async {
+        let (status, bundle) = restarted.get(CRL_PATH).await;
         if status != 200 {
             return None;
         }
-        crl_entry(&bundle, &control.serial)
+        crl_entry(&bundle, &failed.serial)
     })
     .await;
     assert_eq!(reason, Some(1), "keyCompromise");
-    println!("the published CRL lists {} (keyCompromise)", control.serial);
+    let caught_up = crl_lines(&restarted, &ca_key_id)
+        .into_iter()
+        .find(|line| line["fields"]["cause"] == "unlisted_revocation")
+        .unwrap_or_else(|| panic!("no CRL for an unlisted revocation:\n{}", restarted.output()));
+    println!("the restarted replica's job caught up: {caught_up}");
+    let (number, remaining) = stored_crl(&product, &ca_key_id).await;
+    assert!(number > after, "a new number: {after} then {number}");
+    let renew_before =
+        i64::try_from(CrlSchedule::default().renew_before.as_secs()).expect("seconds");
+    assert!(
+        remaining > renew_before,
+        "not due by renew_before: {remaining} s left"
+    );
 }
 
 // ---- the broker's check ----

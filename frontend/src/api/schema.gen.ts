@@ -237,7 +237,9 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Revokes a workstation certificate. Its issuing CA's next scheduled CRL lists it; the
+         * Revokes a workstation certificate. Once the revocation commits, its issuing CA gets a new
+         *     CRL that lists it before the response goes out (Laysi/trustiot-v2#635; when that fails, the
+         *     revocation stands and the CRL job lists it within one `crl.check_interval`); the
          *     registration API (Laysi/trustiot-v2#79) reads the ledger, so it refuses the certificate at
          *     once.
          */
@@ -3162,7 +3164,7 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Revoked now; the ledger records the time and the reason, and the issuing CA's next scheduled CRL lists it. */
+            /** @description Revoked now; the ledger records the time and the reason, and the issuing CA's CRL lists it: a new CRL is issued right after the revocation, or, should that fail, by the CRL job within one check interval (default 5 minutes). */
             200: {
                 headers: {
                     [name: string]: unknown;

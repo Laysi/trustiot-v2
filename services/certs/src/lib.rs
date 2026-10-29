@@ -206,7 +206,7 @@ pub async fn start(context: Context<Config>) -> Result<Router, BoxError> {
         platform.clone(),
         config.renewal.refusal_flush_interval,
     );
-    monitor::start(&context, background, ca.clone(), config.crl.clone());
+    monitor::start(&context, background.clone(), ca.clone(), config.crl.clone());
 
     let keys = PublishedKeys::watch(
         &context,
@@ -214,11 +214,20 @@ pub async fn start(context: Context<Config>) -> Result<Router, BoxError> {
     )
     .await;
     let verifier = IdentityVerifier::new(ServiceName::Certs, keys);
+    // A revocation gives its issuing CA a new CRL before it answers (Laysi/trustiot-v2#635),
+    // within half the handler timeout so the response goes out even when that waits.
+    let crls = crl::Reissuer::new(
+        background,
+        ca.clone(),
+        config.crl.clone(),
+        crl::REISSUE_TIMEOUT.min(context.request_timeout() / 2),
+    );
     let api = workstations::routes(
         verifier.clone(),
         db.pool().clone(),
         ca.clone(),
         config.workstation.validity,
+        crls,
     );
     let registrations = registrations::routes(
         verifier,
