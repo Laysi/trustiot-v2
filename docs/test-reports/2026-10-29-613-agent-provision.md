@@ -59,6 +59,20 @@ rebase 到 main `61e20b22` 之後，在 `12b72040`（本報告的第一版，程
 - `tests/binary.rs`（真的執行檔）：沒有 TPM 裝置結束碼 3、stdout 空；不合法的硬體 ID、handle（不是十六進位、超出持久範圍、SRK 的 handle）與重複或未知的參數結束碼 2；`/dev/tpm0`、`/dev/null`、`/dev/tpmrm0/../tpm0` 與暫存檔結束碼 4，暫存檔仍是空的（沒有寫入任何命令）。
 - 單元測試：`TpmTransport::Device("/dev/tpm0")` 等路徑在開啟前就回 `NotResourceManager`，`run` 在呼叫連線之前就結束（連線函式會 panic）；名稱相符的路徑再以 sysfs 檢查：`/sys/dev/char/<major>:<minor>` 的連結只有 `tpmrm/tpmrm<N>` 算資源管理器（`tpm/tpm0`、`mem/null` 等不算），`/dev/null` 被拒為 `NotResourceManagerDevice`；裝置號碼以 glibc 的 `major`、`minor` 規則拆開（含超過 12 與 20 位元的號碼）；CSR 被竄改、別的金鑰簽的、別的名稱與多餘位元組都會被本地檢查拒絕；報告型別不含 verified、trusted 這類字眼，不認得的欄位忽略、其他版本拒絕。
 
+## 安全審查
+
+2026-10-29 對 `6af60e97` 的安全審查沒有 Critical、High、Medium。各項的處理如下，修正在 `b6f7eafe`：
+
+| 項目 | 處理 |
+| --- | --- |
+| L1：報告契約沒寫讀取端要做什麼（登錄 API 不比對 CSR 主體，CN 取自請求 body 的 `hardware_id`） | `protocol::provisioning` 的模組文件與 [crates/protocol/README.md](../../crates/protocol/README.md)「讀取端的責任」寫明：硬體 ID 用工作站自己的，報告的 `hardware_id` 必須相同；讀取端自己解析 CSR，確認主體只有等於該 ID 的 CN、SubjectPublicKeyInfo 與 `public_key` 逐 byte 相同、簽章驗得過；stdout 最多讀 `MAX_REPORT_BYTES`（16 KiB，與登錄 API 的 body 上限相同）。agent 也不印超過這個大小的報告（結束碼 1）；單元測試確認 EK 憑證最大（4096 bytes）、硬體 ID 最長（64 字元）的報告不超過 9 KiB，更大的報告不印 |
+| L2：`provision --help` 以 0 結束但不是 JSON | 保留結束碼 0，在 USAGE、agent README 與讀取端的責任寫明：成功是結束碼 0 而且 stdout 解析得成 `ProvisioningReport`。`--help` 改為只能單獨使用，與其他參數一起給是結束碼 2（單元測試與 `tests/binary.rs` 的結束碼 2 測試） |
+| I1：寫到一半失敗會留下部分 JSON | 讀取端的責任第 1 條與 agent README：先看結束碼，不是 0 就丟掉 stdout |
+| I2：開啟裝置沒有 `O_NOCTTY` | 開啟時加 `custom_flags(libc::O_NOCTTY)`；`libc` 原本就是 agent 的依賴，沒有新增依賴 |
+| I3–I6 | 依審查結論不改。I6（沒有 EK 憑證仍會建立金鑰，工作站要定政策）與讀取端的責任由協調者帶到 Laysi/trustiot-v2#616 |
+
+修正後在建置主機（x86_64 Linux）重跑 `cargo fmt --all --check`、`cargo clippy --locked --workspace --all-targets -- -D warnings`、`CI=1 cargo test --locked -p agent -p protocol` 與 `cargo test --locked -p repo-check`，全部通過：agent 385 個（lib 231，多了報告大小的測試）、protocol 136 個、repo-check 28 個，0 失敗（exit 0 at 15:37:30 (build host)）。
+
 ## 結論
 
 | 驗收條件 | 結果 |
