@@ -5,6 +5,7 @@ import { createRoot } from "react-dom/client";
 import { createBrowserRouter } from "react-router";
 
 import { createApiClient } from "./api/client.ts";
+import { deviceApi } from "./api/devices.ts";
 import { identityApi } from "./api/identity.ts";
 import { App } from "./app/App.tsx";
 import { LOGIN_PATH, loginPath } from "./app/paths.ts";
@@ -62,12 +63,16 @@ const queryClient = createQueryClient({
   },
 });
 
+const client = createApiClient();
 const root = document.getElementById("root");
 if (root === null) {
   throw new Error("index.html has no #root element");
 }
 createRoot(root).render(
   <StrictMode>
-    <App router={router} deps={{ queryClient, preferences, identity: identityApi(createApiClient()) }} />
+    <App
+      router={router}
+      deps={{ queryClient, preferences, identity: identityApi(client), devices: deviceApi(client) }}
+    />
   </StrictMode>,
 );
