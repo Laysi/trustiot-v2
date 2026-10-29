@@ -3,17 +3,34 @@
 //! `param_<name>`), and `wait_end_of_query`, so ClickHouse answers only once the statement has
 //! finished and a failure midway is an error status, never a cut-off 200.
 //!
-//! This release only checks the connection for readiness ([`ClickHouse::ping`]); the telemetry
-//! path (Laysi/trustiot-v2#641) writes through [`ClickHouse::query`].
+//! Readiness checks the connection ([`ClickHouse::ping`]); the telemetry path
+//! ([`crate::telemetry`]) runs its statements through [`ClickHouse::execute`], each with the
+//! settings of its stream ([`crate::rollup::stream_settings`]).
 
 use std::path::Path;
 use std::time::Duration;
 
+use crate::rollup::CLIENT_TIMEOUT_SECONDS;
 use crate::transport;
 
-/// How long one request may take. Readiness bounds its own check far below this (service-kit's
-/// 800 ms), so this only stops a statement of the telemetry path that ClickHouse never answers.
-pub const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+/// How long one request may take: [`CLIENT_TIMEOUT_SECONDS`], the shortest the I1 rewrite's
+/// contract allows (src/rollup.rs), so the server has ended a statement of a stream (its wait for
+/// an earlier one and its own `max_execution_time`) before the client gives up on it. Readiness
+/// bounds its own check far below this (service-kit's 800 ms).
+pub const REQUEST_TIMEOUT: Duration = Duration::from_secs(CLIENT_TIMEOUT_SECONDS as u64);
+
+/// One statement for [`ClickHouse::execute`].
+#[derive(Clone, Copy, Debug)]
+pub struct Request<'a> {
+    /// The statement: static SQL, every value a query parameter (`{name:Type}`).
+    pub statement: &'a str,
+    /// The query parameters, as name (without `param_`) and value.
+    pub params: &'a [(&'a str, &'a str)],
+    /// Settings for this statement, as name and value, sent in the URL.
+    pub settings: &'a [(&'a str, String)],
+    /// For an `INSERT ... FORMAT <format>`: the rows in that format, sent as the body.
+    pub data: Option<&'a str>,
+}
 
 /// The statement of [`ClickHouse::ping`]: it needs no table, so it checks the address, TLS and
 /// the account's password, not the account's grants (the telemetry path reports a missing grant
@@ -145,23 +162,54 @@ impl ClickHouse {
         statement: &str,
         params: &[(&str, &str)],
     ) -> Result<String, QueryError> {
-        let names: Vec<String> = params
+        self.execute(&Request {
+            statement,
+            params,
+            settings: &[],
+            data: None,
+        })
+        .await
+    }
+
+    /// Runs `request`: its statement with its query parameters and settings, and for an
+    /// `INSERT ... FORMAT <format>` its rows as the body (the statement then goes in the URL's
+    /// `query`). Returns the response body.
+    ///
+    /// # Errors
+    ///
+    /// As [`ClickHouse::query`].
+    pub async fn execute(&self, request: &Request<'_>) -> Result<String, QueryError> {
+        let names: Vec<String> = request
+            .params
             .iter()
             .map(|(name, _)| format!("param_{name}"))
             .collect();
         let mut query: Vec<(&str, &str)> = names
             .iter()
             .map(String::as_str)
-            .zip(params.iter().map(|(_, value)| *value))
+            .zip(request.params.iter().map(|(_, value)| *value))
             .collect();
+        query.extend(
+            request
+                .settings
+                .iter()
+                .map(|(name, value)| (*name, value.as_str())),
+        );
         query.push(("wait_end_of_query", "1"));
+        let body = match &request.data {
+            Some(data) => {
+                query.push(("query", request.statement));
+                (*data).to_owned()
+            }
+            None => request.statement.to_owned(),
+        };
         let response = self
             .client
             .post(
                 &self.url,
                 &query,
                 (&self.account.user, &self.account.password),
-                statement.to_owned(),
+                body,
             )
             .await
             .map_err(|error| QueryError::Unreachable(error.to_string()))?;
@@ -214,6 +262,12 @@ mod tests {
         );
         assert_eq!(error_code("Bad gateway"), None);
         assert_eq!(error_code("Code: x."), None);
+    }
+
+    #[test]
+    fn the_request_timeout_is_the_rewrite_contracts() {
+        // src/rollup.rs: at least CLIENT_TIMEOUT_SECONDS, longer than the server's wait and run.
+        assert!(REQUEST_TIMEOUT >= Duration::from_secs(u64::from(CLIENT_TIMEOUT_SECONDS)));
     }
 
     #[test]

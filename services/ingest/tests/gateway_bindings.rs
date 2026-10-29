@@ -11,7 +11,7 @@
 //! (`assets::gateways::binding::GatewayBinder`), the event's only producer; the events that
 //! model a late or a broken delivery are written into the assets service's outbox with the
 //! outbox's own writer, in the tenant's transaction of `assets_app`, as the producer would. The
-//! ClickHouse address points nowhere: the consumer does not need it, and readiness is
+//! ClickHouse and broker addresses point nowhere: the consumer needs neither, and readiness is
 //! `tests/startup.rs`'s.
 //!
 //! Starts a throwaway Postgres with TLS (podman or docker); skipped without either unless `CI`
@@ -35,6 +35,7 @@ use service_kit::identity::ServiceIdentity;
 use service_kit::tenant::{BackgroundTenantDb, PlatformDb, TenantDb};
 use sqlx::postgres::PgPoolOptions;
 use sqlx::{Connection, PgConnection};
+use support::broker::Scratch;
 use support::{ClickHouseTarget, EVENT_LIMIT, Service, closed_port, wait_for};
 use testkit::identity::TestIssuer;
 use testkit::product::{DATABASE, ProductPostgres, product_postgres};
@@ -157,6 +158,7 @@ async fn bindings_are_projected_once_and_newest_first() {
     else {
         return;
     };
+    let scratch = Scratch::new();
     let service = Service::start(
         &product,
         None,
@@ -164,6 +166,12 @@ async fn bindings_are_projected_once_and_newest_first() {
             url: format!("http://127.0.0.1:{}", closed_port()),
             user: "trustiot_test_ingest".to_owned(),
             password: "unused".to_owned(),
+        },
+        &mqtt_client::Config {
+            host: "127.0.0.1".to_owned(),
+            port: closed_port(),
+            username: "service:ingest".to_owned(),
+            password_file: scratch.write_secret("mqtt-password", "unused"),
         },
     )
     .await;
