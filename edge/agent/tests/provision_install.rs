@@ -129,7 +129,15 @@ impl Pki {
     /// A gateway certificate (CN `common_name`, clientAuth, digitalSignature) for the P-256 key
     /// whose SubjectPublicKeyInfo is `spki`.
     fn leaf(&self, common_name: &str, spki: &[u8]) -> Vec<u8> {
+        self.leaf_from(common_name, spki, None)
+    }
+
+    /// [`Pki::leaf`], valid from `year` (rcgen's default when `None`), as a renewal issues it.
+    fn leaf_from(&self, common_name: &str, spki: &[u8], year: Option<i32>) -> Vec<u8> {
         let mut params = CertificateParams::new(Vec::<String>::new()).unwrap();
+        if let Some(year) = year {
+            params.not_before = rcgen::date_time_ymd(year, 1, 1);
+        }
         params.distinguished_name = rcgen::DistinguishedName::new();
         params
             .distinguished_name
@@ -559,6 +567,65 @@ fn the_installed_files_pass_the_agents_checks_a_rerun_writes_nothing_and_a_new_r
         std::fs::metadata(gateway.root_path()).unwrap().ino(),
         root_inode
     );
+    assert_eq!(gateway.setup().gateway.as_str(), HARDWARE_ID);
+}
+
+#[test]
+fn a_renewed_certificate_is_never_replaced_by_an_older_one() {
+    let Some(gateway) = Gateway::start() else {
+        return;
+    };
+    let mine = me(&gateway.dir);
+    let owners = Owners {
+        chain: mine,
+        root: mine,
+    };
+    let pki = Pki::new();
+    // The registration's certificate, then the one the agent renewed it with.
+    let registered = pki.input(&pki.leaf_from(HARDWARE_ID, &gateway.spki, Some(2025)));
+    let renewed = pki.input(&pki.leaf_from(HARDWARE_ID, &gateway.spki, Some(2026)));
+    gateway
+        .install(&gateway.options(), &owners, renewed.as_bytes())
+        .installed();
+    let before = gateway.files();
+
+    // Resending the registration answers with its original certificate: refused, nothing
+    // written.
+    let ran = gateway.install(&gateway.options(), &owners, registered.as_bytes());
+    ran.failed(Exit::Refused, "holds a newer certificate for this TPM key");
+    assert!(ran.stderr.contains("nothing was written"), "{}", ran.stderr);
+    assert_eq!(gateway.files(), before);
+
+    // The same renewed certificate is unchanged; a later one is written.
+    let stdout = gateway
+        .install(&gateway.options(), &owners, renewed.as_bytes())
+        .installed()
+        .to_owned();
+    assert_eq!(stdout.matches(": unchanged\n").count(), 2, "{stdout}");
+    let later = pki.input(&pki.leaf_from(HARDWARE_ID, &gateway.spki, Some(2027)));
+    let stdout = gateway
+        .install(&gateway.options(), &owners, later.as_bytes())
+        .installed()
+        .to_owned();
+    assert!(stdout.contains(": written\n"), "{stdout}");
+
+    // A newer certificate of another key (not this TPM's) does not hold the file: the
+    // registration's certificate replaces it.
+    let other_key = pki.input(&pki.leaf_from(HARDWARE_ID, &software_spki(), Some(2030)));
+    std::fs::write(
+        gateway.chain_path(),
+        other_key
+            .split("-----BEGIN CERTIFICATE-----")
+            .nth(1)
+            .map_or_else(
+                || panic!("a certificate"),
+                |block| format!("-----BEGIN CERTIFICATE-----{block}"),
+            ),
+    )
+    .unwrap();
+    gateway
+        .install(&gateway.options(), &owners, registered.as_bytes())
+        .installed();
     assert_eq!(gateway.setup().gateway.as_str(), HARDWARE_ID);
 }
 

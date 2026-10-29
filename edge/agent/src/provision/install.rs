@@ -25,6 +25,10 @@
 //!    must be the TPM key's, its usages must allow TLS client authentication), and webpki's client
 //!    certificate check against the root ([`tls::check_client_certificate`]). A certificate that
 //!    is only outside its validity by this clock passes with a warning, as at start-up.
+//! 5. A renewed certificate is never replaced by an older one ([`newer_installed`]): when
+//!    `identity.certificate` holds a certificate for the same key with a later notBefore, the
+//!    agent renewed it, and the registration's certificate (which the platform answers with on
+//!    every resend of the registration) would only take the gateway back to an older one.
 //!
 //! Then each file whose content, owner or mode differ is replaced atomically: a new file in the
 //! same directory (`O_EXCL`, `O_NOFOLLOW`), written, its owner and mode set, flushed to disk, and
@@ -458,6 +462,14 @@ fn install(
         );
     }
     drop(identity);
+    if let Some(installed) = newer_installed(&config.certificate, &chain.leaf) {
+        return Err(Failure::Refused(format!(
+            "{} holds a newer certificate for this TPM key (valid from {installed}): the agent \
+             renewed it after the registration. To install the registration's certificate \
+             anyway, remove that file first",
+            config.certificate.display()
+        )));
+    }
 
     let chain_text = format!(
         "{}{}",
@@ -480,6 +492,36 @@ fn install(
             .collect()
     })
     .map_err(Failure::Failed)
+}
+
+/// The notBefore (RFC 2822) of the certificate installed at `path`, when it is for the same key
+/// as `leaf` (DER) and valid from a later time: the agent renewed it ([`crate::renewal`]), and
+/// the registration's certificate, which the platform answers with on every resend of the
+/// registration, is the older one. `None` when there is no such file, it cannot be read or
+/// parsed, or it is for another key or not newer: the file is then replaced as usual.
+fn newer_installed(path: &Path, leaf: &[u8]) -> Option<String> {
+    let limit = u64::try_from(MAX_INPUT_BYTES).unwrap_or(u64::MAX);
+    let metadata = fs::symlink_metadata(path).ok()?;
+    if !metadata.file_type().is_file() || metadata.len() > limit {
+        return None;
+    }
+    let mut file = OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+        .open(path)
+        .ok()?;
+    let mut text = Vec::new();
+    Read::take(&mut file, limit).read_to_end(&mut text).ok()?;
+    let installed_der = certificates(&text).ok()?.into_iter().next()?;
+    let (_, installed) = X509Certificate::from_der(&installed_der).ok()?;
+    let (_, new) = X509Certificate::from_der(leaf).ok()?;
+    let same_key = installed.public_key().raw == new.public_key().raw;
+    let installed_from = installed.validity().not_before;
+    (same_key && installed_from.timestamp() > new.validity().not_before.timestamp()).then(|| {
+        installed_from
+            .to_rfc2822()
+            .unwrap_or_else(|_| installed_from.to_string())
+    })
 }
 
 /// Standard input, at most [`MAX_INPUT_BYTES`].
