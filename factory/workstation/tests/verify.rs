@@ -1,7 +1,8 @@
 //! `verify` against the event log of the registration stand-in (Laysi/trustiot-v2#616): it
 //! finds the `certs.gateway_registered` event of a gateway registered through the fake ssh,
 //! following `next_cursor` and starting an hour before the record; it ends with 24 when there is
-//! none; the platform's own 401 ends the session. Also: the README's operator steps and the
+//! none, 25 when an event does not match the record and 26 when there is no record to compare
+//! with; the platform's own 401 ends the session. Also: the README's operator steps and the
 //! tool's `--help` name the same commands, options and exit codes.
 
 #![cfg(target_os = "linux")]
@@ -11,10 +12,10 @@ mod support;
 use support::bench::Bench;
 use support::ssh::{CANNED_AGENT, GatewayKeys};
 use support::{Environment, Scratch, run};
-use workstation::NO_EVENT_EXIT_CODE;
 use workstation::config::Origin;
 use workstation::secret::SessionCookie;
 use workstation::session::{Session, SessionStore};
+use workstation::{EVENT_MISMATCH_EXIT_CODE, NO_EVENT_EXIT_CODE, UNRECORDED_EXIT_CODE};
 
 /// Registers `hardware_id` through the fake ssh with the canned agent.
 async fn registered(bench: &Bench, hardware_id: &str) -> GatewayKeys {
@@ -103,6 +104,53 @@ async fn verify_without_an_event_ends_with_24() {
 }
 
 #[tokio::test]
+async fn verify_tells_a_mismatched_event_and_a_missing_record_apart() {
+    let bench = Bench::start("verify-compare", Vec::new()).await;
+    let _ = registered(&bench, "tg-0105").await;
+    let _ = registered(&bench, "tg-0106").await;
+    let journal = bench.journal();
+
+    // The record names another serial than the platform's event.
+    let mut record = journal
+        .load("tg-0105")
+        .expect("readable")
+        .expect("a record");
+    record.registration.as_mut().expect("a registration").serial = "0123456789abcdef".to_owned();
+    journal.write(&record).expect("rewritten");
+    let run = bench.run(&bench.verify_args("tg-0105")).await;
+    assert_eq!(
+        run.code,
+        Some(i32::from(EVENT_MISMATCH_EXIT_CODE)),
+        "{}",
+        run.output()
+    );
+    assert!(
+        run.stderr
+            .contains("does not match this workstation's record"),
+        "{}",
+        run.stderr
+    );
+    assert!(run.stdout.contains("hardware ID tg-0105"), "{}", run.stdout);
+
+    // No record of the hardware ID on this workstation: the event is shown, not compared.
+    std::fs::remove_file(journal.record_path("tg-0106")).expect("the record removed");
+    let run = bench.run(&bench.verify_args("tg-0106")).await;
+    assert_eq!(
+        run.code,
+        Some(i32::from(UNRECORDED_EXIT_CODE)),
+        "{}",
+        run.output()
+    );
+    assert!(run.stdout.contains("hardware ID tg-0106"), "{}", run.stdout);
+    assert!(
+        run.stderr
+            .contains("has no registered record of hardware ID tg-0106"),
+        "{}",
+        run.stderr
+    );
+}
+
+#[tokio::test]
 async fn verify_with_an_ended_session_forgets_it() {
     let bench = Bench::start("verify-ended", Vec::new()).await;
     let _ = registered(&bench, "tg-0104").await;
@@ -175,7 +223,7 @@ async fn the_readme_and_the_help_agree() {
     }
     // Every exit code of the tool has a row in the README's table.
     for code in [
-        0, 1, 2, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 75,
+        0, 1, 2, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 75,
     ] {
         assert!(
             readme.contains(&format!("\n| {code} |")),

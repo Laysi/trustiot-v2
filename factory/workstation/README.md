@@ -215,7 +215,8 @@ trustiot-workstation verify --hardware-id <硬體 ID>
 
 以平台管理員的 session 讀平台的事件紀錄（`GET /api/identity/v1/platform/event-log`，services/identity/README.md「事件層與操作紀錄」），找這個硬體 ID 的 `certs.gateway_registered` 事件（certs 服務第一次登錄一台閘道器時寫一筆，重跑得到的 200 不再寫）。
 
-- 印出每一筆的時間、序號、登錄的工作站與公鑰的 SHA-256，並和這台工作站的紀錄比對：序號與公鑰都相同時印「it matches this workstation's record」；不同時在 stderr 說明那是這個硬體 ID 的另一筆登錄，請回報平台管理員。
+- 印出每一筆的時間、序號、登錄的工作站與公鑰的 SHA-256，並和這台工作站的紀錄比對：序號與公鑰都相同時印「it matches this workstation's record」，每一筆都相同才是結束碼 0；有一筆不同時在 stderr 說明那是這個硬體 ID 的另一筆登錄，結束碼 25，請回報平台管理員。
+- 這台工作站沒有這個硬體 ID 的 `registered` 紀錄時，找到的事件無從比對：照樣印出，結束碼 26。到登錄那台閘道器的工作站上跑 `verify`。
 - 這台工作站有 `registered` 的紀錄時，從紀錄的 `registered_at` 前 1 小時開始找；沒有紀錄時從頭找。每頁 200 筆，最多讀 50 頁，讀到上限還沒找到時訊息會說只找了最新的幾筆。
 - 找不到時結束碼 24：事件紀錄在登錄後幾秒才寫入，稍等再跑 `verify`；一直沒有時重跑同一個 `register`（安全），仍沒有就回報平台管理員。
 - 平台自己的 401 時和 `enroll` 一樣先撤銷再刪 session 檔，請重新 `login`。
@@ -230,11 +231,11 @@ trustiot-workstation logout
 
 ## 結束碼
 
-0 完成、1 失敗、2 命令列用法錯誤適用每個指令；10 到 23 與 75 是 `register` 的，24 是 `verify` 的。
+0 完成、1 失敗、2 命令列用法錯誤適用每個指令；10 到 23 與 75 是 `register` 的，24 到 26 是 `verify` 的。
 
 | 結束碼 | 意義 | 怎麼處理 |
 | --- | --- | --- |
-| 0 | 完成；`register` 是登錄完成（201 新登錄，或 200 平台已有同一筆），`verify` 是找到了事件 | `register` 之後跑 `verify`；把憑證交給閘道器是 Laysi/trustiot-v2#617 |
+| 0 | 完成；`register` 是登錄完成（201 新登錄，或 200 平台已有同一筆），`verify` 是找到了事件、而且每一筆都和這台工作站的紀錄相同 | `register` 之後跑 `verify`；把憑證交給閘道器是 Laysi/trustiot-v2#617 |
 | 1 | 其他失敗：檔案被拒絕、有一筆紀錄讀不了、TLS 失敗、平台回了沒有對應處理的錯誤、紀錄寫不進去、找不到 `ssh`、session 已結束（`verify`） | 看訊息。500 或其他 5xx，以及沒有 M1 錯誤本文的回應（平台前面的 proxy 回的），訊息會說平台可能已經登錄、重跑是安全的：重跑同一個指令。平台已登錄但紀錄寫不進去時，修正後重跑 |
 | 2 | 命令列用法錯誤：硬體 ID、handle 或 ssh 目的地不合規則，選項的組合不對；ssh 沒有執行、什麼都沒送 | 修正指令 |
 | 10 | 409：這個硬體 ID 已經以別的 TPM 金鑰登錄 | 核對標籤；標籤沒錯就是 TPM 被清除過，那是新裝置，要新的硬體 ID（決策 12） |
@@ -252,6 +253,8 @@ trustiot-workstation logout
 | 22 | `--gateway`：agent 在閘道器上失敗（訊息有它的結束碼與意思、閘道器 stderr 的最後幾行），或上傳失敗、上傳的 agent 的 SHA-256 不符；stdout 不採用，沒有登錄 | 依訊息處理：沒有 TPM 裝置、handle 被別的物件佔用（5）、EK 憑證不符（6）要檢查閘道器；127 是沒裝 agent，給 `--upload-agent`；126 是暫存目錄 `noexec`；sudo 要密碼時設定免密碼或拿掉 `--remote-sudo` |
 | 23 | `--gateway`：ssh 重試後仍連不上閘道器或逾時（最多 5 次、420 秒內）；沒有登錄 | 檢查網路、目的地與 ssh 金鑰（以 `ssh <目的地> true` 試），再重跑同一個指令；訊息有 `REMOTE HOST IDENTIFICATION HAS CHANGED` 時見上面「重刷後主機金鑰改變」 |
 | 24 | `verify`：平台的事件紀錄裡沒有這個硬體 ID 的 `certs.gateway_registered` 事件 | 稍等幾秒再跑；一直沒有就重跑同一個 `register`，再回報平台管理員 |
+| 25 | `verify`：找到這個硬體 ID 的事件，但有一筆的序號或公鑰和這台工作站的紀錄不同（這個硬體 ID 有另一筆登錄） | 不要把憑證裝到閘道器上；帶著 `registrations.jsonl` 與印出的事件回報平台管理員 |
+| 26 | `verify`：找到這個硬體 ID 的事件，但這台工作站沒有它的 `registered` 紀錄，無從比對 | 到登錄這台閘道器的工作站上跑 `verify` |
 | 75 | 用完 `--attempts` 或 `--retry-for` 仍沒有確定的回應（sysexits 的 `EX_TEMPFAIL`） | 網路恢復後重跑同一個指令 |
 
 ## 出錯時怎麼辦
