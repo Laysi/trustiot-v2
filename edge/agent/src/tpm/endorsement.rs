@@ -50,9 +50,9 @@ use ring::rand::SystemRandom;
 use x509_parser::prelude::{FromDer, X509Certificate};
 
 use super::marshal::{self, NvPublic, nv_attribute};
-use super::provision::{Hex, PROVISION_RESPONSE_TIMEOUT, flush, is_authorization_failure};
-use super::worker::{Retry, Worker};
-use super::{ResponseCode, TpmError, TpmTransport, spawn_worker};
+use super::provision::{Hex, flush, is_authorization_failure};
+use super::worker::Worker;
+use super::{ResponseCode, TpmError, TpmTransport, spawn_provisioning_worker};
 
 /// The NV index of the ECC NIST P-256 EK certificate (TCG EK Credential Profile, section
 /// 2.2.1.5).
@@ -151,7 +151,7 @@ pub enum EndorsementError {
 
 /// Computes the TPM's ECC P-256 endorsement key and compares it with the EK certificate in NV,
 /// as the module documentation describes. Blocks for the TPM commands, each at most
-/// [`PROVISION_RESPONSE_TIMEOUT`].
+/// [`super::PROVISION_RESPONSE_TIMEOUT`].
 ///
 /// # Errors
 ///
@@ -160,9 +160,12 @@ pub enum EndorsementError {
 /// authorization value; [`EndorsementError::CertificateMismatch`],
 /// [`EndorsementError::CertificateInvalid`] or [`EndorsementError::CertificateIndex`] when the EK
 /// certificate is not this EK's or cannot be read; [`EndorsementError::Tpm`] when the device
-/// cannot be opened, or the TPM refuses a command or answers something unexpected.
+/// cannot be opened, or the TPM refuses a command or answers something unexpected; it is
+/// [`TpmError::NotResourceManager`], before the device is opened, for a device that is not
+/// `/dev/tpmrm<N>`, and [`TpmError::NotResourceManagerDevice`], before any command, when the
+/// kernel does not list the device as a resource manager device.
 pub fn endorsement_key(transport: TpmTransport) -> Result<Endorsement, EndorsementError> {
-    let worker = spawn_worker(transport, PROVISION_RESPONSE_TIMEOUT, Retry::OnWarnings)?;
+    let worker = spawn_provisioning_worker(transport)?;
     for (index, what) in [(EK_TEMPLATE_INDEX, "template"), (EK_NONCE_INDEX, "nonce")] {
         if nv_public(&worker, index)?.is_some() {
             return Err(EndorsementError::CustomTemplate { index, what });

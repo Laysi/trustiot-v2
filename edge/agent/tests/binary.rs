@@ -4,7 +4,9 @@
 //! saved, and polled after a restart without the broker; Laysi/trustiot-v2#94), and SIGTERM
 //! ending with `offline`/`shutdown`, a normal DISCONNECT and exit code 0. The test plays systemd's notification socket (an abstract Unix
 //! socket, as `NOTIFY_SOCKET=@...`) and the broker (`support::wss::InnerBroker` behind the
-//! in-process front).
+//! in-process front). The `provision` subcommand (Laysi/trustiot-v2#613) is run up to where it
+//! would open the TPM: its usage errors, no TPM device, and devices other than `/dev/tpmrm<N>`;
+//! the runs against a software TPM are `tests/provision.rs`.
 
 #![allow(
     clippy::unwrap_used,
@@ -500,4 +502,123 @@ async fn check_reports_the_root_crl_and_refuses_one_the_root_did_not_sign() {
         stderr.contains("refusing to start") && stderr.contains("broker.crl"),
         "{stderr}"
     );
+}
+
+/// `trustiot-agent provision <args>` (Laysi/trustiot-v2#613), with its log at debug level.
+fn provision(args: &[&str]) -> std::process::Output {
+    std::process::Command::new(EXECUTABLE)
+        .arg("provision")
+        .args(args)
+        .env("TRUSTIOT_AGENT_LOG", "debug")
+        .output()
+        .unwrap()
+}
+
+/// A resource manager device that cannot exist: the kernel numbers TPMs below 65536. Tests that
+/// get as far as opening the device use it, so they never touch a TPM of the machine they run on.
+const NO_TPM: &str = "/dev/tpmrm99999";
+
+/// Fails unless `output` ended with `code` and printed nothing on standard output; returns its
+/// standard error.
+fn refused(output: &std::process::Output, code: i32) -> String {
+    let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+    assert_eq!(output.status.code(), Some(code), "{stderr}");
+    assert!(
+        output.stdout.is_empty(),
+        "{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    stderr
+}
+
+#[test]
+fn provision_without_a_tpm_device_exits_3_with_nothing_on_standard_output() {
+    for extra in [&[][..], &["--inspect"], &["--handle", "0x81000200"]] {
+        let mut args = vec!["--hardware-id", "tg-0001", "--device", NO_TPM];
+        args.extend_from_slice(extra);
+        let stderr = refused(&provision(&args), 3);
+        assert!(
+            stderr.contains("cannot open the TPM device") && stderr.contains(NO_TPM),
+            "{stderr}"
+        );
+    }
+}
+
+#[test]
+fn provision_refuses_invalid_hardware_ids_handles_and_arguments_with_status_2() {
+    let long = "a".repeat(65);
+    for args in [
+        &[][..],
+        &["--hardware-id"],
+        &["--hardware-id", ""],
+        &["--hardware-id", "tg/0001"],
+        &["--hardware-id", "tg 0001"],
+        &["--hardware-id", "tg-0001;reboot"],
+        &["--hardware-id", "$(id)"],
+        &["--hardware-id", &long],
+        &["--hardware-id", "tg-0001", "--hardware-id", "tg-0002"],
+        &["--hardware-id", "tg-0001", "--handle", "0x81000001"],
+        &["--hardware-id", "tg-0001", "--handle", "0x81800000"],
+        &["--hardware-id", "tg-0001", "--handle", "0x80000001"],
+        &["--hardware-id", "tg-0001", "--handle", "0x01c0000a"],
+        &["--hardware-id", "tg-0001", "--handle", "81000100"],
+        &["--hardware-id", "tg-0001", "--handle", "0x8100010g"],
+        &["--hardware-id", "tg-0001", "--handle"],
+        &["--hardware-id", "tg-0001", "--verbose"],
+        &["--inspect"],
+        &["--hardware-id", "tg-0001", "--help"],
+        &["--help", "--inspect"],
+    ] {
+        let mut args = args.to_vec();
+        args.extend_from_slice(&["--device", NO_TPM]);
+        let stderr = refused(&provision(&args), 2);
+        assert!(
+            stderr.contains("usage: trustiot-agent provision"),
+            "{args:?}: {stderr}"
+        );
+    }
+}
+
+#[test]
+fn provision_refuses_devices_other_than_the_resource_manager_with_status_4_unopened() {
+    // /dev/null would be opened and answer the first command with nothing (status 1, a
+    // malformed response): status 4 shows the device was refused before it was opened.
+    let file = std::env::temp_dir().join(format!("tpmrm0-{}", std::process::id()));
+    std::fs::write(&file, b"").unwrap();
+    for device in [
+        "/dev/tpm0",
+        "/dev/null",
+        "/dev/tpmrm0/../tpm0",
+        file.to_str().unwrap(),
+    ] {
+        for extra in [&[][..], &["--inspect"]] {
+            let mut args = vec!["--hardware-id", "tg-0001", "--device", device];
+            args.extend_from_slice(extra);
+            let stderr = refused(&provision(&args), 4);
+            assert!(
+                stderr.contains(device) && stderr.contains("resource manager"),
+                "{stderr}"
+            );
+        }
+    }
+    let written = std::fs::read(&file).unwrap();
+    std::fs::remove_file(file).unwrap();
+    assert!(written.is_empty(), "the file was written");
+}
+
+#[test]
+fn provision_help_and_the_agents_help_name_the_subcommand() {
+    let output = provision(&["--help"]);
+    assert_eq!(output.status.code(), Some(0));
+    let help = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        help.contains("--hardware-id <id>") && help.contains("Exit status"),
+        "{help}"
+    );
+    let output = std::process::Command::new(EXECUTABLE)
+        .arg("--help")
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(0));
+    assert!(String::from_utf8_lossy(&output.stdout).contains("trustiot-agent provision"));
 }
