@@ -1,21 +1,29 @@
-//! The gateway operations service's configuration (services/gateway-ops/README.md, "設定"). The
-//! MQTT settings arrive with the delivery (Laysi/trustiot-v2#720).
+//! The gateway operations service's configuration (services/gateway-ops/README.md, "服務與設定").
 
 use std::fmt;
 use std::path::PathBuf;
+use std::time::Duration;
 
 use serde::Deserialize;
 use service_kit::config::{Invalid, Validate};
 use service_kit::postgres::{PostgresConfig, SslMode};
 
 /// Fewest connections of the service role's pool: one for the consumer's delivery, one for
-/// readiness.
-pub const MIN_DATABASE_CONNECTIONS: u32 = 2;
+/// readiness, one for the republish job's lock, and one for the writes of the delivery and of
+/// the apply reports.
+pub const MIN_DATABASE_CONNECTIONS: u32 = 4;
 
 /// Most connections of the service role's pool per replica.
 pub const MAX_DATABASE_CONNECTIONS: u32 = 100;
 
-/// The service's settings: the platform settings the chart sets and the database roles.
+/// Shortest coalescing window of the delivery ([`Delivery::throttle`]).
+pub const MIN_THROTTLE: Duration = Duration::from_millis(100);
+
+/// Longest coalescing window of the delivery ([`Delivery::throttle`]).
+pub const MAX_THROTTLE: Duration = Duration::from_secs(60);
+
+/// The service's settings: the platform settings the chart sets, the database roles, the broker
+/// and the delivery.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Config {
@@ -23,6 +31,41 @@ pub struct Config {
     pub platform: Platform,
     /// The service role's and the platform role's credentials, and the pool size.
     pub database: Database,
+    /// `mqtt.*`: the broker's service port and the service's account `service:gateway-ops`
+    /// (crates/mqtt-client, "設定"; deploy/chart/README.md, "MQTT broker"), the same keys as
+    /// ingest's. Required: delivering configurations is what the service is for, and readiness
+    /// needs the broker.
+    pub mqtt: mqtt_client::Config,
+    /// `delivery.*`: how configurations are delivered. Optional.
+    #[serde(default)]
+    pub delivery: Delivery,
+}
+
+/// `delivery.*`.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Delivery {
+    /// `TRUSTIOT__DELIVERY__THROTTLE`: the coalescing window of a gateway's changes. The first
+    /// change after a quiet period opens it, and only the gateway's latest version is published
+    /// when it ends, so a burst of changes is one publish. From [`MIN_THROTTLE`] to
+    /// [`MAX_THROTTLE`]; default 1 s.
+    #[serde(
+        default = "default_throttle",
+        deserialize_with = "service_kit::config::duration"
+    )]
+    pub throttle: Duration,
+}
+
+impl Default for Delivery {
+    fn default() -> Self {
+        Self {
+            throttle: default_throttle(),
+        }
+    }
+}
+
+const fn default_throttle() -> Duration {
+    Duration::from_secs(1)
 }
 
 /// The platform settings the service reads. No `deny_unknown_fields`: every service gets every
@@ -144,6 +187,21 @@ impl Validate for Config {
                 return Err(Invalid::new(key, "must not be empty"));
             }
         }
+        if let Err(error) = self.mqtt.validate() {
+            let key = match error {
+                mqtt_client::ConfigError::Host => "mqtt.host",
+                mqtt_client::ConfigError::Port => "mqtt.port",
+                mqtt_client::ConfigError::Username => "mqtt.username",
+                mqtt_client::ConfigError::PasswordFile => "mqtt.password_file",
+            };
+            return Err(Invalid::new(key, error.to_string()));
+        }
+        if !(MIN_THROTTLE..=MAX_THROTTLE).contains(&self.delivery.throttle) {
+            return Err(Invalid::new(
+                "delivery.throttle",
+                format!("must be between {MIN_THROTTLE:?} and {MAX_THROTTLE:?}"),
+            ));
+        }
         Ok(())
     }
 }
@@ -168,6 +226,13 @@ mod tests {
                 platform_password: "p".to_owned(),
                 max_connections: 10,
             },
+            mqtt: mqtt_client::Config {
+                host: "trustiot-mqtt-broker.trustiot.svc".to_owned(),
+                port: mqtt_client::DEFAULT_PORT,
+                username: "service:gateway-ops".to_owned(),
+                password_file: PathBuf::from("/etc/trustiot/mqtt/gateway-ops"),
+            },
+            delivery: Delivery::default(),
         }
     }
 
@@ -187,11 +252,34 @@ mod tests {
             "database.platform_password"
         );
         let mut pool = config();
-        pool.database.max_connections = 1;
+        pool.database.max_connections = 3;
         assert_eq!(
             pool.validate().expect_err("too small a pool").key,
             "database.max_connections"
         );
+    }
+
+    #[test]
+    fn the_broker_and_the_throttle_are_checked() {
+        let mut gateway = config();
+        "gw-0001".clone_into(&mut gateway.mqtt.username);
+        assert_eq!(
+            gateway.validate().expect_err("a gateway account").key,
+            "mqtt.username"
+        );
+        for throttle in [Duration::from_millis(99), Duration::from_secs(61)] {
+            let mut bad = config();
+            bad.delivery.throttle = throttle;
+            assert_eq!(
+                bad.validate().expect_err("out of bounds").key,
+                "delivery.throttle"
+            );
+        }
+        for throttle in [MIN_THROTTLE, MAX_THROTTLE] {
+            let mut good = config();
+            good.delivery.throttle = throttle;
+            assert!(good.validate().is_ok());
+        }
     }
 
     #[test]
