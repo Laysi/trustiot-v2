@@ -64,14 +64,14 @@ templates/mqtt-broker.yaml); each service's pod mounts its own key and no other
 {{/*
 The account holders ("trustiot.mqtt-broker.callers", service) whose program reads the broker
 settings, so that the chart hands them their account ("trustiot.mqttBroker.serviceCredentials"):
-certs (Laysi/trustiot-v2#633, Laysi/trustiot-v2#634). A service's settings deny unknown fields,
-so a holder joins this list in the change that makes its program read them (ingest:
-Laysi/trustiot-v2#642, gateway-ops: Laysi/trustiot-v2#93); until then the broker keeps its account
-but the service gets neither the settings nor the password. Fails the render when an entry is not
+certs (Laysi/trustiot-v2#633, Laysi/trustiot-v2#634) and ingest (Laysi/trustiot-v2#641,
+Laysi/trustiot-v2#642). A service's settings deny unknown fields, so a holder joins this list in
+the change that makes its program read them (gateway-ops: Laysi/trustiot-v2#93); until then the
+broker keeps its account but the service gets neither the settings nor the password. Fails the render when an entry is not
 an account holder. Returns YAML {services: [...]}; use with fromYaml.
 */}}
 {{- define "trustiot.mqttBroker.credentialServices" -}}
-{{- $services := list "certs" -}}
+{{- $services := list "certs" "ingest" -}}
 {{- $holders := (include "trustiot.mqtt-broker.callers" . | fromYaml).service.callers -}}
 {{- range $services -}}
 {{- if not (has . $holders) -}}

@@ -29,10 +29,8 @@ pub struct Config {
     pub clickhouse: ClickHouse,
     /// `mqtt.*`: the broker's service port and the service's account `service:ingest`
     /// (crates/mqtt-client, "設定"; deploy/chart/README.md, "MQTT broker"). Required: the service
-    /// has no use without its telemetry. No deployment runs the service yet (the chart has
-    /// `services.ingest.enabled: false` and there is no ingest image under deploy/images); its
-    /// image and the chart's settings for it, these included, come together in
-    /// Laysi/trustiot-v2#642.
+    /// has no use without its telemetry. The chart sets every `TRUSTIOT__MQTT__*` and mounts the
+    /// password file while the broker is on (Laysi/trustiot-v2#642).
     pub mqtt: mqtt_client::Config,
     /// `telemetry_limits.*`: each gateway's limits on the telemetry path
     /// ([`crate::telemetry::limits`]). Optional.
@@ -140,8 +138,9 @@ impl fmt::Debug for Database {
 }
 
 /// `clickhouse.*`: the service's own ClickHouse account, which holds the role `trustiot_ingest`
-/// (services/ingest/migrations/clickhouse/0004_access.sql). Its delivery is
-/// Laysi/trustiot-v2#642.
+/// (services/ingest/migrations/clickhouse/0004_access.sql). The migration Job creates it as
+/// `trustiot_ingest_writer` with a generated password, which the chart hands the service
+/// (tools/migrate/src/clickhouse.rs, Laysi/trustiot-v2#642).
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ClickHouse {
