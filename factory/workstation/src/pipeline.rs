@@ -285,7 +285,7 @@ pub struct Outcome {
     pub provisioned: Provisioned,
     pub registered: Registered,
     /// Step 7. An error here leaves the registration recorded: its message says so, and its exit
-    /// code is the installation's ([`install::InstallStopKind`], or 1).
+    /// code is the installation's ([`install::InstallStopKind`], 30 to 34).
     pub installed: Result<Installed, Error>,
 }
 
@@ -334,7 +334,8 @@ fn not_installed(hardware_id: &str, error: Error) -> Error {
         "hardware ID {hardware_id} is registered (recorded), but its certificates are not \
          installed on the gateway"
     );
-    match error {
+    // Every failure here has an exit code of the installation's (30 to 34), never the generic 1.
+    match install::as_stop(error) {
         Error::Install(mut stopped) => {
             stopped.message = format!("{registered}: {}", stopped.message);
             Error::Install(stopped)

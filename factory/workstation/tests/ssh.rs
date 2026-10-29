@@ -833,6 +833,17 @@ fn assert_not_installed(bench: &Bench, run: &support::Run, hardware_id: &str, st
     assert_eq!(last["stop"], stop);
 }
 
+/// A gateway's `sudo` that runs everything with `-n` except the installation, for which the ssh
+/// user has no rule: what `sudo -n` and `sudo -n -l` print and return then.
+const SUDO_WITHOUT_INSTALL_RULE: &str = r#"#!/bin/sh
+if [ "$1" != -n ]; then echo "sudo: a password is required" >&2; exit 1; fi
+shift
+case " $* " in
+    *" install "*) echo "sudo: a password is required" >&2; exit 1 ;;
+esac
+exec "$@"
+"#;
+
 #[tokio::test]
 async fn the_installation_after_the_registration_stops_with_its_own_exit_codes() {
     let bench = Bench::start("ssh-install", Vec::new()).await;
@@ -898,9 +909,45 @@ async fn the_installation_after_the_registration_stops_with_its_own_exit_codes()
     );
     assert!(bench.ssh.remote_tmp_entries().is_empty());
 
-    // The gateway stays unreachable for every attempt of the installation: 1, and the
-    // registration stands.
+    // sudo on the gateway runs the inspection but has no rule for the installation: 33, the
+    // advice names the sudoers rule rather than a rerun.
     bench.ssh.install_remote("trustiot-agent", CANNED_AGENT);
+    bench.ssh.install_remote("sudo", SUDO_WITHOUT_INSTALL_RULE);
+    let no_rule = bench
+        .run(&bench.register_args("tg-0011", &["--remote-sudo"]))
+        .await;
+    assert_eq!(no_rule.code, Some(33), "{}", no_rule.output());
+    assert!(
+        no_rule.stderr.contains("sudoers rule") && no_rule.stderr.contains("Laysi/trustiot-v2#219"),
+        "{}",
+        no_rule.stderr
+    );
+    assert!(
+        !no_rule
+            .stderr
+            .contains("Running the same command again is safe"),
+        "{}",
+        no_rule.stderr
+    );
+    assert_not_installed(&bench, &no_rule, "tg-0011", "sudo_refused");
+
+    // sudo has the rule and the agent itself fails (its 1): 34, not a sudo refusal.
+    bench.ssh.install_remote("sudo", FAKE_SUDO);
+    bench.ssh.write_remote_file("status-install", b"1");
+    let agent_failed = bench
+        .run(&bench.register_args("tg-0011", &["--remote-sudo"]))
+        .await;
+    assert_eq!(agent_failed.code, Some(34), "{}", agent_failed.output());
+    assert!(
+        !agent_failed.stderr.contains("sudoers"),
+        "{}",
+        agent_failed.stderr
+    );
+    assert_not_installed(&bench, &agent_failed, "tg-0011", "failed");
+    bench.ssh.write_remote_file("status-install", b"0");
+
+    // The gateway stays unreachable for every attempt of the installation: 34, and the
+    // registration stands.
     let first_install = bench.ssh.count() + 2;
     for call in 0..gateway::SSH_BACKOFF.max_attempts {
         bench
@@ -908,7 +955,7 @@ async fn the_installation_after_the_registration_stops_with_its_own_exit_codes()
             .fail_before(first_install + usize::try_from(call).expect("fits"));
     }
     let unreachable = bench.run(&register).await;
-    assert_eq!(unreachable.code, Some(1), "{}", unreachable.output());
+    assert_eq!(unreachable.code, Some(34), "{}", unreachable.output());
     assert!(
         unreachable
             .stderr

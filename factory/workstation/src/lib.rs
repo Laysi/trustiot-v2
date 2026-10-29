@@ -111,8 +111,8 @@ pub enum Error {
     /// its own exit code ([`register::StopKind`]).
     #[error(transparent)]
     Registration(Box<register::Stopped>),
-    /// Installing the certificates on the gateway stopped with a failed check or the gateway's
-    /// refusal; each has its own exit code ([`install::InstallStopKind`]).
+    /// Installing the certificates on the gateway stopped: a failed check, the gateway's refusal
+    /// or any other failure; each has its own exit code ([`install::InstallStopKind`]).
     #[error(transparent)]
     Install(Box<install::InstallStopped>),
     /// `register --gateway` stopped before the registration: the gateway could not be reached,

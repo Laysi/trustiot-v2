@@ -349,10 +349,20 @@ pub const UPLOAD_SCRIPT: &str = concat!(
 /// on the gateway, whose configuration names the files it writes. Positional parameters: hardware
 /// ID, `sudo` or `direct`. Standard input passes through to the agent. The same rules as
 /// [`INSTALLED_SCRIPT`].
+///
+/// With `sudo`, a status 1 is either the agent's own failure or sudo's refusal to run it; the
+/// script then asks `sudo -n -l` whether the ssh user may run the same command without a
+/// password and, when it may not, ends with [`install::SUDO_REFUSED_STATUS`] (92) instead.
+/// Every other status is the agent's (or the shell's 127).
 pub const INSTALL_SCRIPT: &str = concat!(
     "set -u; id=$1; run=$2; ",
     "set -- provision install --hardware-id \"$id\"; ",
-    "if [ \"$run\" = sudo ]; then exec sudo -n trustiot-agent \"$@\"; fi; ",
+    "if [ \"$run\" = sudo ]; then ",
+    "sudo -n trustiot-agent \"$@\"; status=$?; ",
+    "if [ \"$status\" = 1 ]; then ",
+    "if sudo -n -l trustiot-agent \"$@\" </dev/null >/dev/null 2>&1; then :; else exit 92; fi; ",
+    "fi; ",
+    "exit \"$status\"; fi; ",
     "exec trustiot-agent \"$@\"",
 );
 
@@ -1265,6 +1275,20 @@ mod tests {
             remote_command(&request, true, Some("ab;cd")),
             Err(Error::Usage(_))
         ));
+    }
+
+    #[test]
+    fn the_install_script_ends_with_the_sudo_refusal_status_the_tool_reads() {
+        assert!(
+            INSTALL_SCRIPT.contains(&format!(
+                "then :; else exit {}; fi",
+                install::SUDO_REFUSED_STATUS
+            )),
+            "{INSTALL_SCRIPT}"
+        );
+        for status in [UPLOAD_FAILED, CHECKSUM_MISMATCH, SSH_FAILURE] {
+            assert_ne!(status, install::SUDO_REFUSED_STATUS);
+        }
     }
 
     #[test]

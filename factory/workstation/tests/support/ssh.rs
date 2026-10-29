@@ -58,6 +58,7 @@ exit "$(cat "$HOME/status-$mode" 2>/dev/null || echo 0)"
 pub const FAKE_SUDO: &str = r#"#!/bin/sh
 if [ "$1" != -n ]; then echo "sudo: a password is required" >&2; exit 1; fi
 shift
+if [ "$1" = -l ]; then shift; command -v "$1" || exit 1; exit 0; fi
 printf '%s\n' "$*" >> "$HOME/sudo-calls"
 exec "$@"
 "#;

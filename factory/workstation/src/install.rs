@@ -27,8 +27,11 @@
 //!    issuing CA.
 //!
 //! The gateway checks everything again with its TPM key ([`InstallStopKind::Refused`] when it
-//! refuses), and [`InstallStopKind::GatewayNotReady`] says the agent's installation there cannot
-//! be used yet. Each outcome is a line in the journal's log (`installed` or `install_stopped`).
+//! refuses), [`InstallStopKind::GatewayNotReady`] says the agent's installation there cannot
+//! be used yet, [`InstallStopKind::SudoRefused`] that sudo there did not run the agent, and
+//! [`InstallStopKind::Failed`] covers every other failure, so that each has an exit code of its
+//! own after the registration. Each outcome is a line in the journal's log (`installed` or
+//! `install_stopped`).
 
 use std::fmt;
 
@@ -55,8 +58,16 @@ mod remote_exit {
     pub const USAGE: i32 = 2;
     pub const REFUSED: i32 = 8;
     pub const CONFIGURATION: i32 = 9;
+    pub const SUDO_REFUSED: i32 = super::SUDO_REFUSED_STATUS;
     pub const NOT_FOUND: i32 = 127;
 }
+
+/// The status of the gateway's install script (`gateway::INSTALL_SCRIPT`) when `sudo -n` ended
+/// with 1 and `sudo -n -l` does not allow the ssh user to run the same command without a
+/// password: sudo did not run the agent. sudo's own failure and the agent's both end with 1, so
+/// the script asks sudo rather than this tool guessing from the text on standard error. The agent
+/// never ends with this status (its statuses are 0 to 9).
+pub const SUDO_REFUSED_STATUS: i32 = 92;
 
 /// The largest standard error of the gateway kept for the operator.
 const MAX_REMOTE_MESSAGE_CHARS: usize = 2000;
@@ -118,6 +129,15 @@ pub enum InstallStopKind {
     /// configuration, no account, a missing directory; 127: no `trustiot-agent` installed; 2: an
     /// agent without `provision install`); it wrote nothing.
     GatewayNotReady,
+    /// `sudo -n` on the gateway did not run the agent ([`SUDO_REFUSED_STATUS`]): the ssh user
+    /// has no sudoers rule for this command without a password, or sudo cannot find
+    /// `trustiot-agent`. The same exit code as [`Self::GatewayNotReady`]: the gateway's setup
+    /// must change before a rerun can help.
+    SudoRefused,
+    /// Anything else after the registration: the record could not be used, the gateway could not
+    /// be reached or answered with another status or a report that is not the agent's. Whether
+    /// files were written is unknown; the message says what happened.
+    Failed,
 }
 
 impl InstallStopKind {
@@ -128,7 +148,8 @@ impl InstallStopKind {
             Self::RootMismatch => 30,
             Self::NoIssuingCa => 31,
             Self::Refused => 32,
-            Self::GatewayNotReady => 33,
+            Self::GatewayNotReady | Self::SudoRefused => 33,
+            Self::Failed => 34,
         }
     }
 
@@ -140,6 +161,8 @@ impl InstallStopKind {
             Self::NoIssuingCa => "no_issuing_ca",
             Self::Refused => "refused_by_gateway",
             Self::GatewayNotReady => "gateway_not_ready",
+            Self::SudoRefused => "sudo_refused",
+            Self::Failed => "failed",
         }
     }
 }
@@ -154,6 +177,16 @@ pub struct InstallStopped {
 
 fn stopped(kind: InstallStopKind, message: String) -> Error {
     Error::Install(Box::new(InstallStopped { kind, message }))
+}
+
+/// `error` as a stop of the installation: a stop or a usage error as it is, anything else as
+/// [`InstallStopKind::Failed`] with its message, so that every failure after the registration has
+/// an exit code of the installation's own rather than the generic 1.
+pub(crate) fn as_stop(error: Error) -> Error {
+    match error {
+        Error::Install(_) | Error::Usage(_) => error,
+        other => stopped(InstallStopKind::Failed, other.to_string()),
+    }
 }
 
 /// The standard input for `record`'s gateway, after checks 1 to 3 of the module documentation;
@@ -317,9 +350,10 @@ impl Installed {
 ///
 /// # Errors
 ///
-/// [`Error::Install`] with the [`InstallStopKind`] of a stop; any other error for a record that
-/// cannot be used, a remote command that could not be run or failed otherwise, or a log line that
-/// cannot be written.
+/// [`Error::Install`] with the [`InstallStopKind`] of a stop, [`InstallStopKind::Failed`] for a
+/// record that cannot be used or a remote command that could not be run or failed otherwise; a
+/// plain error for a log line that cannot be written after the gateway installed the
+/// certificates.
 pub async fn install(
     journal: &Journal,
     hardware_id: &str,
@@ -329,11 +363,14 @@ pub async fn install(
 ) -> Result<Installed, Error> {
     // The hardware ID names the record file: check it before it is used as a path.
     remote_arguments(hardware_id)?;
-    let record = journal.load(hardware_id)?.ok_or_else(|| {
-        Error::Failed(format!(
-            "this workstation has no record of hardware ID {hardware_id}: run register first; \
-             nothing was sent"
-        ))
+    let record = journal.load(hardware_id).map_err(as_stop)?.ok_or_else(|| {
+        stopped(
+            InstallStopKind::Failed,
+            format!(
+                "this workstation has no record of hardware ID {hardware_id}: run register \
+                 first; nothing was sent"
+            ),
+        )
     })?;
     let payload = match payload(&record, pinned_root_sha256) {
         Ok(payload) => payload,
@@ -389,11 +426,26 @@ pub async fn install(
                  agent on the gateway, then run the same command again"
             ),
         ),
-        status => Error::Failed(format!(
-            "the gateway's trustiot-agent provision install ended with {}: {message}. Running \
-             the same command again is safe",
-            status.map_or_else(|| "a signal".to_owned(), |code| format!("status {code}"))
-        )),
+        Some(remote_exit::SUDO_REFUSED) => stopped(
+            InstallStopKind::SudoRefused,
+            format!(
+                "sudo -n on the gateway ended with 1 and sudo -n -l does not allow the ssh user \
+                 to run trustiot-agent provision install without a password, so sudo did not \
+                 run the agent: {message}. The ssh user needs a sudoers rule that runs exactly \
+                 `trustiot-agent provision install --hardware-id <hardware ID>` without a \
+                 password (the gateway's side is Laysi/trustiot-v2#219), and trustiot-agent must \
+                 be on sudo's secure_path. Running the same command again cannot help until the \
+                 gateway's sudo configuration is fixed"
+            ),
+        ),
+        status => stopped(
+            InstallStopKind::Failed,
+            format!(
+                "the gateway's trustiot-agent provision install ended with {}: {message}. \
+                 Running the same command again is safe",
+                status.map_or_else(|| "a signal".to_owned(), |code| format!("status {code}"))
+            ),
+        ),
     };
     Err(logged_stop(
         journal,
@@ -413,6 +465,7 @@ fn logged_stop(
     status: Option<i32>,
     error: Error,
 ) -> Error {
+    let error = as_stop(error);
     let stop = match &error {
         Error::Install(stopped) => stopped.kind.as_str(),
         _ => "failed",
@@ -874,7 +927,7 @@ mod tests {
             let error = install(&journal_with(&bad), ID, &pin(&root), &mut gateway, now())
                 .await
                 .expect_err("stopped");
-            assert_eq!(error.exit_code(), 1, "{error}");
+            assert_eq!(error.exit_code(), 34, "{error}");
             assert!(error.to_string().contains(expected), "{expected}: {error}");
         }
 
@@ -891,11 +944,13 @@ mod tests {
         .await
         .expect_err("stopped");
         assert!(error.to_string().contains("run register first"), "{error}");
+        assert_eq!(error.exit_code(), 34, "{error}");
         let empty = Journal::new(&scratch("empty"));
         let error = install(&empty, ID, &pin(&root), &mut gateway, now())
             .await
             .expect_err("stopped");
         assert!(error.to_string().contains("no record"), "{error}");
+        assert_eq!(error.exit_code(), 34, "{error}");
         let error = install(&empty, "tg 0001; reboot", &pin(&root), &mut gateway, now())
             .await
             .expect_err("usage");
@@ -910,11 +965,11 @@ mod tests {
         for (status, code, expected) in [
             (Some(8), 32, "refused"),
             (Some(9), 33, "cannot be used yet"),
-            (Some(1), 1, "status 1"),
+            (Some(1), 34, "status 1"),
             (Some(127), 33, "no trustiot-agent installed"),
             (Some(2), 33, "does not know provision install"),
-            (Some(3), 1, "status 3"),
-            (None, 1, "a signal"),
+            (Some(3), 34, "status 3"),
+            (None, 34, "a signal"),
         ] {
             let mut gateway = Recorder::answering(
                 status,
@@ -935,6 +990,47 @@ mod tests {
             log.contains("refused_by_gateway") && log.contains("\"remote_status\":9"),
             "{log}"
         );
+        assert!(log.contains("\"stop\":\"failed\""), "{log}");
+    }
+
+    #[tokio::test]
+    async fn sudo_that_did_not_run_the_agent_points_at_the_sudoers_rule() {
+        let (leaf, issuing, root) = pki();
+        let journal = journal_with(&record(&leaf, &issuing, &root));
+        let mut gateway = Recorder::answering(
+            Some(SUDO_REFUSED_STATUS),
+            "",
+            "sudo: a password is required\n",
+        );
+        let error = install(&journal, ID, &pin(&root), &mut gateway, now())
+            .await
+            .expect_err("stopped");
+        assert_eq!(error.exit_code(), 33, "{error}");
+        let message = error.to_string();
+        assert!(
+            message.contains("sudoers rule") && message.contains("Laysi/trustiot-v2#219"),
+            "{message}"
+        );
+        assert!(message.contains("cannot help until"), "{message}");
+        assert!(message.contains("a password is required"), "{message}");
+        assert!(
+            log(&journal).contains("\"stop\":\"sudo_refused\""),
+            "{}",
+            log(&journal)
+        );
+        // Status 1 is the agent's own failure or sudo's: the text alone, which the agent could
+        // print too, never decides that sudo refused.
+        for stderr in [
+            "sudo: a password is required\n",
+            "trustiot-agent provision install: cannot write\n",
+        ] {
+            let mut gateway = Recorder::answering(Some(1), "", stderr);
+            let error = install(&journal, ID, &pin(&root), &mut gateway, now())
+                .await
+                .expect_err("stopped");
+            assert_eq!(error.exit_code(), 34, "{stderr}: {error}");
+            assert!(!error.to_string().contains("sudoers"), "{error}");
+        }
     }
 
     #[test]

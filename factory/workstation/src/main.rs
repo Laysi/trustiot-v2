@@ -2,7 +2,8 @@
 //!
 //! Exit codes: 0 done, 1 failed, 2 usage, `register`'s own (10 to 19 and 75,
 //! [`workstation::register::StopKind`]; 20 to 23 and 27 with `--gateway`,
-//! [`workstation::pipeline::StopKind`]) and `verify`'s 24 to 26 ([`workstation::NO_EVENT_EXIT_CODE`],
+//! [`workstation::pipeline::StopKind`]; 30 to 34 for the installation after it,
+//! [`workstation::install::InstallStopKind`]) and `verify`'s 24 to 26 ([`workstation::NO_EVENT_EXIT_CODE`],
 //! [`workstation::EVENT_MISMATCH_EXIT_CODE`], [`workstation::UNRECORDED_EXIT_CODE`]). Results go
 //! to stdout, prompts and log lines to stderr
 //! (`TRUSTIOT_WORKSTATION_LOG`: off, error, warn, info (default), debug or trace). Neither ever
