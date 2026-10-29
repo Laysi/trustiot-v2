@@ -232,6 +232,38 @@ export async function checkIngest(
 }
 
 /**
+ * gateway-ops' Postgres logins (Laysi/trustiot-v2#721): its service role and its platform role. Its
+ * readiness opens a checked session of each (services/gateway-ops/README.md, 「服務與設定」), so a
+ * ready gateway-ops has a session of both.
+ */
+export const GATEWAY_OPS_ROLES = ["gateway_ops_app", "gateway_ops_platform"] as const;
+
+/**
+ * gateway-ops is deployed as the chart means it (Laysi/trustiot-v2#721). `readyReplicas` is what
+ * its Deployment reports: a ready gateway-ops has checked sessions of both Postgres roles, the
+ * migrations it expects, and a broker connection as `service:gateway-ops` whose shared
+ * subscription to the configuration reports was granted at QoS 1 (its readiness checks,
+ * services/gateway-ops/README.md, Laysi/trustiot-v2#720), so its readiness proves the broker
+ * account the chart hands it, as ingest's does. Then each of GATEWAY_OPS_ROLES may log in and has
+ * a session (polled as for the assistant). Returns the report line.
+ */
+export async function checkGatewayOps(
+  deps: Pick<ApiCheckDeps, "psql" | "sleep" | "now" | "limits">,
+  deployment: string,
+  readyReplicas: number,
+): Promise<string> {
+  if (readyReplicas < 1) throw new Error(`${deployment} has no ready replica`);
+  const logins: string[] = [];
+  let waited = 0;
+  for (const role of GATEWAY_OPS_ROLES) {
+    const found = await waitForSession(deps, role);
+    logins.push(`${role} has ${found.sessions}`);
+    waited += found.waited;
+  }
+  return `${deployment}: ${readyReplicas} ready replica(s), so it reached the MQTT broker as service:gateway-ops; ${logins.join(" and ")} session(s) open (after ${Math.round(waited / 1000)} s)`;
+}
+
+/**
  * The values the smoke adds for the check (after tests/values/smoke.yaml): the identity and assets
  * services from the images the nightly built, the cookie routes to their APIs after the routes the
  * shape's values already set (`routes`, from routesOfValues; helm would otherwise drop them), and
@@ -246,7 +278,9 @@ export async function checkIngest(
  * mesh.calls.assistant and logs in to Postgres with the password the migration Job generates, and
  * ingest from its image (Laysi/trustiot-v2#642), which logs in on the MQTT broker that smoke.yaml
  * turns on with the account the chart hands it, and to Postgres and ClickHouse with the passwords
- * the migration Job generates (it needs no value besides its image).
+ * the migration Job generates (it needs no value besides its image), and gateway-ops from its image
+ * (Laysi/trustiot-v2#721), which logs in on the same broker with its own account and to Postgres
+ * with the passwords the migration Job generates (no value besides its image either).
  */
 export function apiValues(shape: string, routes: readonly IngressRoute[]): Record<string, unknown> {
   const image = (name: string) => {
@@ -268,6 +302,7 @@ export function apiValues(shape: string, routes: readonly IngressRoute[]): Recor
       certs: { enabled: true, image: image("certs"), env: CERTS_SMOKE_ENV.map((entry) => ({ ...entry })) },
       assistant: { enabled: true, image: image("assistant"), env: ASSISTANT_SMOKE_ENV.map((entry) => ({ ...entry })) },
       ingest: { enabled: true, image: image("ingest") },
+      "gateway-ops": { enabled: true, image: image("gateway-ops") },
     },
     ai: AI_GATEWAY_SMOKE,
     ingress: {

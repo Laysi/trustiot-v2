@@ -23,7 +23,7 @@ readiness 在下列全部成立時才是 200：
 | MQTT broker | `TRUSTIOT__MQTT__HOST`（必填）、`TRUSTIOT__MQTT__PORT`（選填，預設 1883）、`TRUSTIOT__MQTT__USERNAME`（必填，`service:gateway-ops`）、`TRUSTIOT__MQTT__PASSWORD_FILE`（必填） | 和 ingest 同一個形狀（`mqtt_client::Config`）；密碼只從檔案讀（broker 帳號的 Secret，migration Job 產生），不進環境變數與日誌 |
 | 合併節流 | `TRUSTIOT__DELIVERY__THROTTLE`（選填） | 同一台閘道器的變更合併成一次發布的時間窗，100ms 到 60s，預設 1s（「下發」） |
 
-`mqtt` 一段是必填：下發是這個服務存在的目的，readiness 也要看 broker。chart 在 Laysi/trustiot-v2#721 才渲染 gateway-ops 的 Deployment（預設關閉、nightly 不部署），所以必填不會讓現有的 chart 或 nightly 壞掉；#721 渲染時要求 `mqttBroker.enabled`。
+`mqtt` 一段是必填：下發是這個服務存在的目的，readiness 也要看 broker。chart 的 `services.gateway-ops`（Laysi/trustiot-v2#721）預設關閉，開啟時要求 `mqttBroker.enabled`，沒有 broker 就渲染失敗；chart 以 broker 的 Service 與這個服務自己的 broker 帳號填這一段，nightly 部署它並以 readiness 確認它連上 broker（見下方「部署」）。
 
 本機以 `bun scripts/dev.ts env` 印出的 `TRUSTIOT_DEV_GATEWAY_OPS_DATABASE_*` 與 `TRUSTIOT_DEV_GATEWAY_OPS_PLATFORM_DATABASE_*` 設定兩個角色（[scripts/README.md](../../scripts/README.md)）。開發環境的 Mosquitto 用靜態帳號、沒有 `service:gateway-ops`，所以在本機跑 binary 要另外給一個 broker 與帳號；測試用的是 `tests/support/broker.rs` 起的 Mosquitto（「測試」）。
 
@@ -216,6 +216,17 @@ meter `gateway-ops`：
 
 兩者也都不交出不屬於閘道器最新綁定的設定：最新的一版必須是這台閘道器最新綁定（綁定事件在紀錄裡最後的那一個）的租戶與綁定，而且 `bound` 和綁定是否還有效一致。投影在讓一個綁定成為目前綁定的同一個交易裡就存它的一版，所以不一致代表規則被打破；這時 `current` 回 `ReadError::NotForLatestBinding`，`latest_versions` 略過那台閘道器並記 ERROR，下發端不會把一個租戶的設備送給綁在別的租戶的閘道器。
 
+## 部署
+
+映像是 `deploy/images/gateway-ops`（`image.toml`，arm64，以 `deploy/images/rust-binary.Containerfile` 打包），release.yml 發佈、chart 以 digest 固定（[deploy/images/README.md](../../deploy/images/README.md)）。chart 的 `services.gateway-ops`（Laysi/trustiot-v2#721，細節在 [chart README](../../deploy/chart/README.md) 的「gateway-ops」）：
+
+- 預設 `enabled: false`；開啟時 `mqttBroker.enabled` 也必須是 `true`，否則渲染失敗：設定只經叢集內的 broker 下發。
+- `mesh.calls.gateway-ops` 預設 `[mqtt-broker, postgres]`：mesh 只放行它連 broker 的服務埠 1883；沒有任何服務能呼叫它（它沒有 API）。
+- 上表的 Postgres 設定由 chart 給：`gateway_ops_app` 與 `gateway_ops_platform` 的密碼由 migration Job 在叢集內產生，放在 Secret `<release>-gateway-ops-password`，只有這個服務的 pod 讀得到；`TRUSTIOT__DATABASE__MAX_CONNECTIONS` 是 `services.gateway-ops.database.maxConnections`（chart 預設 `7`，即下限，更大的連線池用不到），連同平台角色的 4 條算進 chart 的連線預算（`tests/chart_connections.rs` 比對程式與預算）。
+- broker 帳號 `service:gateway-ops`：chart 給 `TRUSTIOT__MQTT__HOST`、`_PORT`（1883）、`_USERNAME`、`_PASSWORD_FILE`（`/etc/trustiot/mqtt-broker-account/gateway-ops`，只掛這個服務自己的 key，0440，pod 的 `fsGroup` 預設 65530），密碼由 broker 的 init container 在叢集內產生；輪替時服務不重啟，下一次連線重讀密碼檔。服務讀這些設定的程式在 Laysi/trustiot-v2#720。
+- 這些變數都保留給 chart，自訂 `env` 不能設定。
+- nightly 的 smoke 以兩份 values 連同 broker 部署它，確認它就緒（readiness 包括以 `service:gateway-ops` 連上 broker、套用回報的共享訂閱以 QoS 1 獲准，所以這也證明 chart 交給它的 broker 帳號能用）、兩個角色都有連線。
+
 ## 測試
 
 需要 podman 或 docker：測試起一個有 TLS 的 Postgres，以 migration Job 套用整個產品的 schema（`testkit::product`）；下發的測試另起一個 Mosquitto（`tests/support/broker.rs`：和 chart 相同的連線設定、沒有 persistence，帳號與 ACL 取自 migration Job 的 `migrate::mqtt_accounts`，再加一個讀所有 `down/config`、能發布 `up/config-report` 的替身閘道器帳號）。沒有容器執行環境時本機跳過，設了 `CI` 時失敗。
@@ -234,3 +245,4 @@ cargo test -p gateway-ops
 | `tests/unknown_events.rs` | 這個版本不認得的事件：不在追蹤的 aggregate 時確認並往下走；在型號、設備或綁定的 aggregate 時每次 poll 都重試，不確認、不進 dead letter，後面的事件等著 |
 | `tests/cross_tenant.rs` | 服務角色對五張表的跨租戶負向測試（決策 29，crates/testkit），以及每個碰得到的關聯都有宣告 |
 | `tests/startup.rs` | 真的 binary 以 chart 給的角色與 broker 帳號啟動、ready，訂閱把綁定與設備事件變成版本，消費端的通知讓最新版本以 retained 送出；broker 停掉時 `/readyz` 不是 200（失敗的檢查是 `mqtt`），broker 重啟後恢復並重發；SIGTERM 以 0 結束；stdout、stderr 都不含 broker 密碼 |
+| `tests/chart_connections.rs` | chart 的連線預算（`trustiot.postgres.connectionBudgets`）與程式開的連線池一致：平台角色的 `PLATFORM_CONNECTIONS`、服務角色的 `database.max_connections` 範圍；多一個連線池時失敗 |

@@ -1,0 +1,131 @@
+Laysi/trustiot-v2#721: outputs of the checks run on the branch feat/721-gateway-ops-chart
+(based on feat/642-ingest-chart 1ea3aa5c, merged with main ea5f27c7 unless noted). Only the test
+lines and results are kept; the build host's own lines are left out and its paths read <host copy>.
+
+== bun test deploy/chart (build host, macOS)
+(pass) MQTT broker (decision 6, Laysi/trustiot-v2#84) > saas: gateway-ops gets its broker account through the same helper: its own key alone, mounted as a directory, service:gateway-ops in its settings, which custom env cannot set; the mesh lets it reach the b
+(pass) MQTT broker (decision 6, Laysi/trustiot-v2#84) > onprem: gateway-ops gets its broker account through the same helper: its own key alone, mounted as a directory, service:gateway-ops in its settings, which custom env cannot set; the mesh lets it reach the
+(pass) MQTT broker (decision 6, Laysi/trustiot-v2#84) > ingress.direct.tlsSecret cannot name a protected Secret, so no pod but certs, ingest and gateway-ops gets a broker account's key (security review of Laysi/trustiot-v2#634) [232.88ms]
+(pass) MQTT broker (decision 6, Laysi/trustiot-v2#84) > internalIdentity.signingKeySecret.name cannot name a protected Secret, so no pod but certs, ingest and gateway-ops gets a broker account's key (security review of Laysi/trustiot-v2#634) [256.89ms]
+(pass) MQTT broker (decision 6, Laysi/trustiot-v2#84) > postgres.external.caSecret.name cannot name a protected Secret, so no pod but certs, ingest and gateway-ops gets a broker account's key (security review of Laysi/trustiot-v2#634) [226.93ms]
+(pass) MQTT broker (decision 6, Laysi/trustiot-v2#84) > clickhouse.bundled.adminSecret.name cannot name a protected Secret, so no pod but certs, ingest and gateway-ops gets a broker account's key (security review of Laysi/trustiot-v2#634) [228.30ms]
+(pass) MQTT broker (decision 6, Laysi/trustiot-v2#84) > clickhouse.external.caSecret.name cannot name a protected Secret, so no pod but certs, ingest and gateway-ops gets a broker account's key (security review of Laysi/trustiot-v2#634) [226.12ms]
+(pass) MQTT broker (decision 6, Laysi/trustiot-v2#84) > qdrant.external.credentialsSecret.name cannot name a protected Secret, so no pod but certs, ingest and gateway-ops gets a broker account's key (security review of Laysi/trustiot-v2#634) [238.71ms]
+(pass) MQTT broker (decision 6, Laysi/trustiot-v2#84) > objectStorage.credentialsSecret.name cannot name a protected Secret, so no pod but certs, ingest and gateway-ops gets a broker account's key (security review of Laysi/trustiot-v2#634) [230.06ms]
+(pass) MQTT broker (decision 6, Laysi/trustiot-v2#84) > smtp.credentialsSecret.name cannot name a protected Secret, so no pod but certs, ingest and gateway-ops gets a broker account's key (security review of Laysi/trustiot-v2#634) [227.49ms]
+(pass) MQTT broker (decision 6, Laysi/trustiot-v2#84) > ai.providers.anthropic.apiKeySecret.name cannot name a protected Secret, so no pod but certs, ingest and gateway-ops gets a broker account's key (security review of Laysi/trustiot-v2#634) [251.24ms]
+(pass) MQTT broker (decision 6, Laysi/trustiot-v2#84) > ai.providers.openai.apiKeySecret.name cannot name a protected Secret, so no pod but certs, ingest and gateway-ops gets a broker account's key (security review of Laysi/trustiot-v2#634) [250.06ms]
+(pass) MQTT broker (decision 6, Laysi/trustiot-v2#84) > observability.sentry.dsnSecret.name cannot name a protected Secret, so no pod but certs, ingest and gateway-ops gets a broker account's key (security review of Laysi/trustiot-v2#634) [229.17ms]
+(pass) MQTT broker (decision 6, Laysi/trustiot-v2#84) > observability.collector.forward.authHeader.valueSecret.name cannot name a protected Secret, so no pod but certs, ingest and gateway-ops gets a broker account's key (security review of Laysi/trustiot-v2#63
+(pass) MQTT broker (decision 6, Laysi/trustiot-v2#84) > observability.collector.forward.caSecret.name cannot name a protected Secret, so no pod but certs, ingest and gateway-ops gets a broker account's key (security review of Laysi/trustiot-v2#634) [230.34ms]
+(pass) MQTT broker (decision 6, Laysi/trustiot-v2#84) > postgres.external.migrationSecret.name cannot name a protected Secret, so no pod but certs, ingest and gateway-ops gets a broker account's key (security review of Laysi/trustiot-v2#634) [229.84ms]
+(pass) MQTT broker (decision 6, Laysi/trustiot-v2#84) > clickhouse.external.migrationSecret.name cannot name a protected Secret, so no pod but certs, ingest and gateway-ops gets a broker account's key (security review of Laysi/trustiot-v2#634) [226.89ms]
+(pass) migration Job (Laysi/trustiot-v2#60) > gateway-ops' Postgres roles: the Job generates their passwords into the service's one Secret, and only the service reads them (Laysi/trustiot-v2#721) [169.09ms]
+(pass) service-to-service authorization (decision 27) > only the assistant, the knowledge base and alerts may call ai-gateway (decision 28) > gateway-ops may not list ai-gateway in mesh.calls, enabled or not, with or without schema validation [76.14ms]
+ 711 pass
+ 0 fail
+Ran 711 tests across 9 files. [66.08s]
+exit 0 at 16:48:50 (build host, macOS)
+
+== bun install --cwd scripts --frozen-lockfile && bun run --cwd scripts test (build host, x86_64 Linux)
+ 1711 pass
+ 9 skip
+ 0 fail
+Ran 1720 tests across 54 files. [12.37s]
+exit 0 at 16:49:35 (build host)
+
+== cargo fmt --all --check && cargo clippy --locked --workspace --all-targets -- -D warnings
+   && cargo test --locked -p gateway-ops -p testkit -p repo-check
+   (build host, x86_64 Linux; before merging main ea5f27c7, which changed only edge/agent,
+   crates/protocol and docs)
+    Checking lab-dataset v0.1.0 (<host copy>/src/tools/lab-dataset)
+    Checking openapi v0.1.0 (<host copy>/src/tools/openapi)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 21.45s
+     Running unittests src/lib.rs (<host copy>/target/debug/deps/gateway_ops-11db8d09ab29583d)
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+     Running tests/chart_connections.rs (<host copy>/target/debug/deps/chart_connections-d7d40cf86c7e2af5)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/cross_tenant.rs (<host copy>/target/debug/deps/cross_tenant-4e22873ede8c550d)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.71s
+     Running tests/desired_config.rs (<host copy>/target/debug/deps/desired_config-d425ad925cd5a273)
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.97s
+     Running tests/generation_errors.rs (<host copy>/target/debug/deps/generation_errors-42a5d368bc267775)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.03s
+     Running tests/startup.rs (<host copy>/target/debug/deps/startup-b0d0ffabb3f3059b)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.63s
+     Running tests/unknown_events.rs (<host copy>/target/debug/deps/unknown_events-ce1adc7e445b31bf)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.30s
+     Running unittests src/lib.rs (<host copy>/target/debug/deps/repo_check-bcdd8915540fedcd)
+test result: ok. 18 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/repository.rs (<host copy>/target/debug/deps/repository-4bf5f5e43d5bc66f)
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.13s
+     Running unittests src/lib.rs (<host copy>/target/debug/deps/testkit-71685b1ac352468e)
+test chart::tests::reads_every_budget_of_the_chart ... ok
+test result: ok. 42 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.49s
+     Running tests/container_volumes.rs (<host copy>/target/debug/deps/container_volumes-c30e728633075ce1)
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 10.47s
+     Running tests/modbus_endpoint.rs (<host copy>/target/debug/deps/modbus_endpoint-c63c2a7d4090927d)
+test result: ok. 20 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.16s
+     Running tests/modbus_example.rs (<host copy>/target/debug/deps/modbus_example-3aba61db6a0df07d)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+     Running tests/postgres_isolation.rs (<host copy>/target/debug/deps/postgres_isolation-4121afe59134e723)
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 15.39s
+     Running tests/postgres_start.rs (<host copy>/target/debug/deps/postgres_start-31d977950acbdbf1)
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 10.75s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+exit 0 at 16:47:05 (build host)
+
+== run locally: bun test deploy/flux; bun run --cwd scripts typecheck;
+   bun scripts/ci/check-secret-handling.ts; bun scripts/ci/check-workflows.ts;
+   bun scripts/ci/lint-workflows.ts; bun test scripts/ci/changes.test.ts scripts/ci/workflow-conditions.test.ts
+ 78 pass / 0 fail (deploy/flux)
+typecheck: exit 0
+secret handling: 546 file(s) checked, 7 container build file(s), no violations
+workflow policy: 4 file(s) checked, no violations
+actionlint: 3 workflow file(s), no errors
+ 341 pass / 0 fail (changes, workflow-conditions)
+
+== After merging main 781073bc (Laysi/trustiot-v2#720) and raising gateway-ops' connection floor
+   to 7 (head 91553ed5)
+
+== bun test deploy/chart (build host, x86_64 Linux)
+ 711 pass
+ 0 fail
+Ran 711 tests across 9 files. [126.15s]
+exit 0 at 22:37:48 (build host)
+
+== cargo fmt --all --check && cargo clippy --locked --workspace --all-targets -- -D warnings
+   && cargo test --locked --workspace --exclude agent --no-fail-fast (build host, arm64 Linux VM)
+     Running tests/chart_connections.rs (<host copy>/target/...)
+test the_chart_budgets_every_pool_the_service_opens ... ok
+     Running tests/chart_connections.rs (<host copy>/target/...)
+test the_chart_budgets_every_pool_the_service_opens ... ok
+     Running tests/chart_connections.rs (<host copy>/target/...)
+test the_chart_budgets_every_pool_the_service_opens ... ok
+     Running tests/chart_connections.rs (<host copy>/target/...)
+test the_chart_budgets_every_pool_the_service_opens ... ok
+     Running tests/chart_connections.rs (<host copy>/target/...)
+test the_chart_budgets_every_pool_the_service_opens ... ok
+     Running tests/chart_connections.rs (<host copy>/target/...)
+test the_chart_budgets_every_pool_the_service_opens ... ok
+     Running tests/chart_connections.rs (<host copy>/target/...)
+test the_chart_budgets_every_pool_the_service_opens ... ok
+test the_workspace_has_no_string_built_sql ... ok
+     Running tests/chart_connections.rs (<host copy>/target/...)
+test the_chart_budgets_every_pool_the_service_opens ... ok
+test chart::tests::reads_every_budget_of_the_chart ... ok
+test result lines: 239 ok, 0 FAILED
+exit 0 at 23:00:13 (build host, arm64 Linux VM)
+
+== bun install --cwd scripts --frozen-lockfile && bun run --cwd scripts test (build host, x86_64 Linux)
+ 1711 pass
+ 9 skip
+ 0 fail
+Ran 1720 tests across 54 files. [13.66s]
+exit 0 at 23:29:45 (build host)
+
+== run locally: bun test deploy/flux; bun test deploy/chart/tests/chart.test.ts -t "connection|gateway-ops|max_connections|budget"
+ 78 pass / 0 fail (deploy/flux)
+ 32 pass / 0 fail (chart budget and gateway-ops tests)

@@ -125,7 +125,7 @@ Custom env cannot take over what the chart controls:
 - for mqtt-bridge, TRUSTIOT__BROKER__ADDRESS is the chart's ("trustiot.mqttBridge.env"): the bridge
   relays the gateways' connections to the in-cluster broker only, even while it is off;
 - for a service whose program reads the broker settings ("trustiot.mqttBroker.credentialServices",
-  certs and ingest), every <prefix>__MQTT__ name is the chart's, with the broker or without it: its broker
+  certs, ingest and gateway-ops), every <prefix>__MQTT__ name is the chart's, with the broker or without it: its broker
   account is the in-cluster broker's, and only the chart hands it the password file;
 - for assistant, the addresses of the AI gateway, the identity service's token exchange,
   telemetry-query and assets are the chart's ("trustiot.assistant.env"), derived from
@@ -163,6 +163,21 @@ Returns a YAML list; use with fromYamlArray.
 {{- /* ingest reads every gateway's telemetry from the in-cluster broker and has no other work:
 without it the pod would never become ready (security review of Laysi/trustiot-v2#642). */ -}}
 {{- fail "services.ingest: ingest reads the gateways' telemetry from the in-cluster MQTT broker, so it needs mqttBroker.enabled: true; enable the broker, or set services.ingest.enabled to false (README.md, \"ingest\")" -}}
+{{- end -}}
+{{- if and (eq $name "gateway-ops") (not (include "trustiot.mqttBroker.enabled" .root)) -}}
+{{- /* gateway-ops delivers every gateway's configuration through the in-cluster broker, and its
+readiness needs the broker connection: without it the pod would never become ready, and no gateway
+would get a configuration (Laysi/trustiot-v2#721). */ -}}
+{{- fail "services.gateway-ops: gateway-ops delivers the gateways' configurations through the in-cluster MQTT broker, so it needs mqttBroker.enabled: true; enable the broker, or set services.gateway-ops.enabled to false (README.md, \"gateway-ops\")" -}}
+{{- end -}}
+{{- if has $name (list "ingest" "gateway-ops") -}}
+{{- /* For the same reason they need the broker in their mesh.calls: without it the chart hands
+them no broker account, the mesh refuses their connection, and the pod never becomes ready
+(security review of Laysi/trustiot-v2#721). */ -}}
+{{- $calls := index ($values.mesh.calls | default dict) $name -}}
+{{- if not (and (kindIs "slice" $calls) (has "mqtt-broker" $calls)) -}}
+{{- fail (printf "services.%s: %s works only through the in-cluster MQTT broker, so mesh.calls.%s must list mqtt-broker; without it the service gets no broker account and never becomes ready (README.md, \"%s\")" $name $name $name $name) -}}
+{{- end -}}
 {{- end -}}
 {{- $dbEnv := list -}}
 {{- if has $name (include "trustiot.postgres.clients" .root | fromYaml).services -}}
