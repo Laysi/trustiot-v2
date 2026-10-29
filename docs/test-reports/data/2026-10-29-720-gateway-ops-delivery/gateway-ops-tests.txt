@@ -1,0 +1,74 @@
+$ cargo clippy --locked -p gateway-ops --all-targets -- -D warnings
+$ cargo test --locked -p gateway-ops -- --nocapture
+# 建置主機（macOS），CI=1，commit 7680e89c；只留測試名稱、evidence 行與結果
+    Checking gateway-ops v0.1.0 (<host copy>/src/services/gateway-ops)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.31s
+clippy exit 0
+     Running unittests src/lib.rs (<host copy>/target/debug/deps/gateway_ops-56bfb61e9bf99079)
+test config::tests::debug_never_prints_passwords ... ok
+test delivery::reports::tests::a_later_report_of_the_same_version_replaces_the_waiting_one ... ok
+test delivery::reports::tests::a_new_report_supersedes_a_waiting_one_of_the_same_version ... ok
+test delivery::reports::tests::a_stale_report_republishes_the_latest_version ... ok
+test delivery::reports::tests::failed_reports_are_retried_after_a_delay_until_the_limit ... ok
+test config::tests::the_roles_must_differ_and_have_passwords ... ok
+test config::tests::the_broker_and_the_throttle_are_checked ... ok
+test delivery::reports::tests::the_log_budget_limits_lines_per_window_and_counts_the_rest ... ok
+test delivery::reports::tests::reports_are_recorded_only_for_generated_versions_of_the_current_binding ... ok
+test delivery::reports::tests::the_gateway_comes_from_the_topic ... ok
+test delivery::schedule::tests::a_report_waits_a_throttle_so_a_flood_of_reports_is_one_publish ... ok
+test delivery::schedule::tests::a_late_older_announcement_never_lowers_the_expected_version ... ok
+test delivery::reports::tests::messages_that_break_the_protocol_are_refused ... ok
+test delivery::schedule::tests::a_republish_is_due_at_once_and_forces_a_merged_change ... ok
+test delivery::schedule::tests::a_retry_merges_with_what_arrived_meanwhile ... ok
+test delivery::schedule::tests::busy_gateways_wait_and_the_limit_takes_the_earliest ... ok
+test delivery::schedule::tests::ten_quick_changes_become_one_publish_of_the_latest_version ... ok
+test generate::tests::a_missing_or_misnamed_model_and_an_invalid_configuration_are_refused ... ok
+test generate::tests::a_deletion_leaves_the_stored_version_without_the_device_and_its_unused_model ... ok
+test generate::tests::devices_and_models_come_in_a_fixed_order_each_model_once ... ok
+test delivery::reports::tests::a_full_queue_gives_up_the_oldest_report ... ok
+test generate::tests::more_devices_than_a_configuration_holds_are_refused_and_a_deletion_still_trims ... ok
+test result: ok. 22 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+     Running tests/cross_tenant.rs (<host copy>/target/debug/deps/cross_tenant-b0ff7d84ca46c127)
+test tenants_are_isolated ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.95s
+     Running tests/delivery.rs (<host copy>/target/debug/deps/delivery-9193254ce39b20c8)
+evidence: while another session held the publish lock of the gateway: 0 publishes over 5s; after it released the lock: version Some(2) published
+test a_gateway_another_replica_is_publishing_waits_for_its_publish_lock ... ok
+evidence: with the lock gateway-ops/config-republish held elsewhere: republish skipped 1, runs 0, republished 0
+test a_replica_finding_the_republish_lock_taken_leaves_the_republish_to_its_holder ... ok
+evidence: readiness without the broker: "not connected to the mqtt broker with the apply report subscription granted"; after the restart: ready, republish runs 1 -> 2, republished publishes 4, a new subscriber got [("go-restart-a-01a18704b684704bb0da53a58ffeee9e", 2), ("go-restart-b-01a18704b75a736a86d5ac6b8c4e169e", 3)] retained
+test a_broker_restart_republishes_every_gateway_and_readiness_follows_the_connection ... ok
+evidence: 10 announcements (versions 2..=11) within a 10s throttle -> coalesced 9, published 1 (version 11) after 10.007602333s; a new subscriber got version Some(11) retained with QoS 1; config_deliveries: [DeliveryRow { tenant_id: "01a18704-c4d6-72a6-a0bb-4e4038a916a0", version: 11, published: true, republished: false, outcome: None, active_version: None, issues: None }]
+test ten_quick_changes_are_published_once_retained_as_the_latest_version ... ok
+evidence: recorded [("go-report-01a18705216b75978b93a53e24b8faf3", "rejected"), ("go-report-01a18705216b75978b93a53e24b8faf3", "applied"), ("go-report-01a18705216b75978b93a53e24b8faf3", "applied")]; refused reasons ["version_ahead", "version_ahead", "unknown_gateway", "decode"]; stale report of version 2 -> version Some(3) published again; config_deliveries: [DeliveryRow { tenant_id: "01a18705-216b-7597-8b93-a53d73ede27c", version: 2, published: true, republished: false, outcome: Some("applied"), active_version: Some(2), issues: Some("[]") }, DeliveryRow { tenant_id: "01a18705-216b-7597-8b93-a53d73ede27c", version: 3, published: true, republished: false, outcome: None, active_version: None, issues: None }]
+test apply_reports_are_recorded_under_the_topics_gateway_and_unreasonable_ones_refused ... ok
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 43.95s
+     Running tests/desired_config.rs (<host copy>/target/debug/deps/desired_config-3514f162538bf525)
+evidence: current() of a gateway whose latest binding has no version: the latest desired configuration of gateway go-guard-01a1870533af7210ad5bc5e7d7efca0e was not made for its latest binding
+test the_delivery_refuses_a_version_not_made_for_the_latest_binding ... ok
+test the_delivery_reads_the_latest_version_and_cannot_write ... ok
+test ending_the_binding_leaves_a_configuration_without_devices ... ok
+evidence: rebind to B with a configuration that cannot be made: versions [1, 2, 3, 4] in tenants ["A", "A", "B", "B"], devices [0, 1, 0, 1]; current() returns version 3 of tenant B with 0 devices
+test a_rebind_whose_configuration_cannot_be_made_never_keeps_the_earlier_tenants ... ok
+evidence: versions [1, 2, 3, 4, 5] in tenants ["A", "A", "B", "B", "B"]; tenant B's devices of another binding and of no binding are in none; the device without binding_id written under B's binding is in version 5; tenant A's device is in none of tenant B's
+test other_tenants_and_ended_bindings_stay_out ... ok
+evidence: versions [1, 2, 3, 4, 5]; devices per version [0, 1, 2, 2, 1]; 5 versions after reprocessing 8 events
+test device_changes_make_versions_and_replays_make_none ... ok
+evidence: deletion while the configuration fails: versions [1, 2, 3, 4], devices per version [0, 1, 0, 1]
+test a_deletion_takes_effect_while_the_configuration_cannot_be_made ... ok
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.87s
+     Running tests/generation_errors.rs (<host copy>/target/debug/deps/generation_errors-08e1a59d1d1fc0f7)
+evidence: unknown_model {"binding_id": "01a18705-3f5e-75b0-a815-aff49fed4da5", "error": "device 01a18705-3f95-7197-b5f6-dcab9bd407c7 uses model 01a18705-3f95-7197-b5f6-dcaa05f4ccc4, which the projection does not have", "event_id": "01a18705-3f96-7372-9dc1-f6b99ec92ac4", "hardware_id": "go-errors-01a187053f5e75b0a815aff35194c76d", "level": "ERROR", "reason": "unknown_model", "tenant_id": "01a18705-3f5e-75b0-a815-aff25ca3fdc4"}; invalid {"binding_id": "01a18705-3f5e-75b0-a815-aff49fed4da5", "error": "the configuration is invalid: mixed_transport at devices[1].transport", "event_id": "01a18705-3fc8-7232-a26a-420d38111257", "hardware_id": "go-errors-01a187053f5e75b0a815aff35194c76d", "level": "ERROR", "reason": "invalid", "tenant_id": "01a18705-3f5e-75b0-a815-aff25ca3fdc4"}; other tenant {"device_id": "01a18705-400e-72f7-9494-2469c528b602", "event_id": "01a18705-400f-72c6-96fa-2a52d6b13bea", "event_type": "assets.device_created", "hardware_id": "go-errors-01a187053f5e75b0a815aff35194c76d", "level": "WARN", "reason": "other_tenant", "tenant_id": "01a18705-400e-72f7-9494-2468a95c1f57"}; versions stay at 2
+test a_configuration_that_cannot_be_made_keeps_the_previous_version ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.06s
+     Running tests/startup.rs (<host copy>/target/debug/deps/startup-70106398d0a50c97)
+evidence: ready; versions [1, 2] for the gateway; a new subscriber got version Some(2) retained (QoS 1); /readyz without the broker: 503 {"status":"unavailable"} (failed checks [String("mqtt")]); after the restart: ready, 2 republish runs logged, a new subscriber got version Some(2) retained; exit code Some(0) after SIGTERM
+test the_service_delivers_versions_retained_follows_the_broker_and_stops_on_sigterm ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.08s
+     Running tests/unknown_events.rs (<host copy>/target/debug/deps/unknown_events-071ca7610e6a12be)
+evidence: an unknown event of another aggregate acknowledged; an unknown event of a binding aggregate retried 5 polls in a row, not processed, not dead-lettered, and the binding event after it not processed
+test unknown_events_are_acknowledged_only_outside_the_followed_aggregates ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.99s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test exit 0
+exit 0 at 17:37:28 (build host, macOS)
