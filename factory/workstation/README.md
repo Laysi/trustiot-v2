@@ -275,13 +275,13 @@ cf-access-client-secret: <client secret>
 
 - 結果印在 stdout，提示與日誌印在 stderr。結束碼見「結束碼」。
 - `TRUSTIOT_WORKSTATION_LOG` 設定日誌等級：`off`、`error`、`warn`、`info`（預設）、`debug`、`trace`。只記這個工具自己的事件（方法、路徑、狀態碼、檔案路徑），連 `trace` 也不記驗證碼、cookie、`Set-Cookie`、私鑰、`--headers-file` 的值，或登錄請求的簽章與 nonce；email 地址也不記。
-- 平台回錯誤時只顯示狀態碼與 M1 錯誤的 `code`、訊息 key 與欄位，不顯示回應本文的其他內容。這些來自伺服器的文字與序號在印出前，控制字元（終端機的跳脫序列、換行）都改寫成 `\u{..}`，過長的截斷。
+- 平台回錯誤時只顯示狀態碼與 M1 錯誤的 `code`、訊息 key 與欄位，不顯示回應本文的其他內容。這些來自伺服器的文字與序號在印出前，控制字元（終端機的跳脫序列、換行）、格式字元（例如會反轉顯示方向的 U+202E、零寬空白 U+200B）與行、段落分隔符都改寫成 `\u{..}`，過長的截斷。
 
 ## 安全上的做法與限制
 
 - **`http://` 只限 loopback 的 IP 位址**：不接受 `localhost` 這個名稱，它經過名稱解析，可能被導向別處。
 - **只有 `register` 重試**：每個請求用一條新的連線、只送一次；沒有連線池（連線池可能在連線被關掉時重送請求）。`login`、`enroll`、`logout` 不重試。`register` 的重試是工具自己的一次新嘗試（新的簽章與 nonce），只在登錄 API 的冪等保證之下才做，見「`register`」。
-- **ssh**：工具執行系統的 `ssh`（`PATH` 上的），不自己實作 SSH；主機金鑰的檢查、金鑰與 `~/.ssh/config` 都照 OpenSSH 的設定。工具只控制命令列（固定選項、`--` 之後才是目的地，目的地不能以 `-` 開頭）、遠端指令（固定的腳本，參數只有檢查過的字）、環境（只留六個變數）與標準輸入（只有要上傳的 agent）。閘道器回的 stdout 最多讀 16 KiB、stderr 最多留 8 KiB，印出前改寫控制字元。閘道器被控制時它能回任何報告：工具的檢查保證報告前後一致、屬於這個硬體 ID，但證明不了金鑰在 TPM 裡，這要靠出廠流程的實體控制（決策 12）。
+- **ssh**：工具執行系統的 `ssh`（`PATH` 上的），不自己實作 SSH；主機金鑰的檢查、金鑰與 `~/.ssh/config` 都照 OpenSSH 的設定。工具只控制命令列（固定選項、`--` 之後才是目的地，目的地不能以 `-` 開頭）、遠端指令（固定的腳本，參數只有檢查過的字）、環境（只留六個變數）與標準輸入（只有要上傳的 agent）。閘道器回的 stdout 最多讀 16 KiB、stderr 最多留 8 KiB，印出前改寫控制字元與格式字元。閘道器被控制時它能回任何報告：工具的檢查保證報告前後一致、屬於這個硬體 ID，但證明不了金鑰在 TPM 裡，這要靠出廠流程的實體控制（決策 12）。
 - **TLS**：rustls 與 ring，TLS 1.2 與 1.3；信任系統的 CA（`SSL_CERT_FILE`、`SSL_CERT_DIR` 有設時用它們）或只信任 `--ca-file`。憑證與主機名稱的檢查不能關閉；不走 proxy、不跟隨重新導向。
 - **跨站檢查**：請求不帶 `Origin` 與 `Sec-Fetch-Site`，身分服務的跨站檢查因此放行（[services/identity/README.md](../../services/identity/README.md)「跨站請求」）。
 - **session 綁定平台**：session 檔記下設定它的平台網址，cookie 只送回那個網址。
@@ -309,4 +309,4 @@ cargo test -p workstation
 - `tests/pipeline_swtpm.rs`（Linux，需要 podman 或 docker；`CI` 有設時不跳過）：假的遠端上的 agent 是 bash 的轉接，把參數交給測試，由測試以 `agent::provision::run` 對 swtpm（`testkit::swtpm`）執行真的 `trustiot-agent provision`。同一台閘道器依序：第一次連線失敗、`provision` 的回答遺失後重試，201，每次重試報告同一把金鑰；`verify` 找到事件；以已安裝的 agent 重跑 200、同一個序號；模擬重刷（遠端檔案清空、新的 TPM 連線）200、同一個序號；`tpm2_clear` 之後停在 20、沒有建立任何東西；`--allow-new-key` 得到 409 `public_key_mismatch`，結束碼 10。
 - `tests/verify.rs`（Linux）：`verify` 跟著 `next_cursor` 讀完事件紀錄、只取這個硬體 ID 的事件、從紀錄的 `registered_at` 前 1 小時開始，與紀錄比對；找不到時 24；平台的 401 撤銷並刪除 session 檔。並檢查 `--help` 列的每個指令與選項都在本 README，結束碼表每一列都在。
 - `services/certs/tests/workstation_tool.rs`（certs 服務的測試，需要 podman 或 docker）：真的 certs 服務與 Postgres，前面是檢查 cookie、換成內部 token 的 ingress 替身。工具 `enroll` 後登錄、重跑、再讓回應在服務提交後遺失，每個硬體 ID 都剛好一筆登錄、一張閘道器憑證、一個 `certs.gateway_registered` 事件。
-- 各模組的單元測試：包裝型別的遮蔽、檔案權限、FIFO 與符號連結目錄被拒絕、擁有者檢查、網址規則（含 `localhost` 被拒絕）、標頭檔格式與錯誤訊息不含內容、伺服器文字的控制字元改寫、HTTPS 只信任 `--ca-file`、簽章可由 ring 驗證、nonce 不重複、重試間隔與上限、紀錄的原子替換與格式檢查、日誌的權限檢查。
+- 各模組的單元測試：包裝型別的遮蔽、檔案權限、FIFO 與符號連結目錄被拒絕、擁有者檢查、網址規則（含 `localhost` 被拒絕）、標頭檔格式與錯誤訊息不含內容、伺服器文字的控制字元與格式字元改寫、HTTPS 只信任 `--ca-file`、簽章可由 ring 驗證、nonce 不重複、重試間隔與上限、紀錄的原子替換與格式檢查、日誌的權限檢查。

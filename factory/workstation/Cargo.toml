@@ -54,6 +54,8 @@ tokio-rustls = { workspace = true, features = ["ring"] }
 tracing.workspace = true
 # Log lines on stderr, only from this crate (TRUSTIOT_WORKSTATION_LOG).
 tracing-subscriber = { workspace = true, features = ["fmt", "registry", "std"] }
+# `printable` escapes format characters (bidi overrides, zero-width spaces) besides controls.
+unicode-properties = { workspace = true, features = ["general-category"] }
 # The platform URL.
 url.workspace = true
 # Reads the workstation certificate: purpose, subject, validity and public key; `verify` checks
