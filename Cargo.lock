@@ -3614,6 +3614,7 @@ checksum = "1ebf944e87a7c253233ad6766e082e3cd714b5d03812acc24c318f549614536e"
 name = "workstation"
 version = "0.1.0"
 dependencies = [
+ "agent",
  "axum",
  "base64 0.22.1",
  "bytes",
@@ -3625,6 +3626,7 @@ dependencies = [
  "hyper",
  "hyper-util",
  "libc",
+ "protocol",
  "rcgen",
  "rustls",
  "rustls-native-certs",
@@ -3632,6 +3634,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.11.0",
+ "testkit",
  "thiserror",
  "time",
  "tokio",

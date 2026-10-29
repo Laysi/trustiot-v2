@@ -378,7 +378,7 @@ trustiot-workstation register --hardware-id <硬體 ID> --csr gateway.csr --ek e
   --root-sha256 <根憑證的 SHA-256>
 ```
 
-工具每次嘗試都以新的時間與 nonce 重新簽章；只在連線失敗、逾時與 502、503、504、Cloudflare 的 520 到 524 時重試（靠下一節的冪等保證：服務已提交、回應遺失時，重送得到 200 與同一筆登錄）；409、401、403、422 各自以固定的結束碼停止、不重試；200 或 201 先核對硬體 ID、兩個雜湊、憑證的 CN 與公鑰、`certificate_chain` 經簽發 CA 到 `root_certificate` 的簽章，以及 `--root-sha256` 釘住的根憑證（必填：`root_certificate` 是閘道器的唯一信任錨，指紋由平台管理員從儀式建立的根憑證算出交給產線），才記為登錄完成，結果記在工作站的 `registrations/<硬體 ID>.json` 與 `registrations.jsonl`。結束碼與紀錄的格式見工具的 README。閘道器的 CSR 與 EK 目前以檔案給；經 ssh 從閘道器的 TPM 取得是 Laysi/trustiot-v2#616。
+工具每次嘗試都以新的時間與 nonce 重新簽章；只在連線失敗、逾時與 502、503、504、Cloudflare 的 520 到 524 時重試（靠下一節的冪等保證：服務已提交、回應遺失時，重送得到 200 與同一筆登錄）；409、401、403、422 各自以固定的結束碼停止、不重試；200 或 201 先核對硬體 ID、兩個雜湊、憑證的 CN 與公鑰、`certificate_chain` 經簽發 CA 到 `root_certificate` 的簽章，以及 `--root-sha256` 釘住的根憑證（必填：`root_certificate` 是閘道器的唯一信任錨，指紋由平台管理員從儀式建立的根憑證算出交給產線），才記為登錄完成，結果記在工作站的 `registrations/<硬體 ID>.json` 與 `registrations.jsonl`。結束碼與紀錄的格式見工具的 README。閘道器的 CSR 與 EK 由工具經 ssh 在閘道器上執行 `trustiot-agent provision` 取得（`register --gateway`，Laysi/trustiot-v2#616），或以檔案給（`--csr`、`--ek`）。
 
 ### 請求與回應
 

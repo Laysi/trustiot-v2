@@ -23,42 +23,77 @@ fn usage(message: impl Into<String>) -> Error {
     Error::Usage(message.into())
 }
 
-/// The options after a command: each `--name value` at most once, only the names the command
-/// takes.
+/// The options after a command: each `--name value` or `--flag` at most once, only the names the
+/// command takes.
 #[derive(Debug, Default)]
-pub struct Options(Vec<(String, String)>);
+pub struct Options {
+    values: Vec<(String, String)>,
+    flags: Vec<String>,
+}
 
 impl Options {
-    /// Parses `arguments` (everything after the command).
+    /// Parses `arguments` (everything after the command); every option takes a value.
     ///
     /// # Errors
     ///
     /// A usage error for a stray argument, an unknown or repeated option, or a missing value.
     pub fn parse(arguments: &[String], allowed: &[&str]) -> Result<Self, Error> {
-        let mut options: Vec<(String, String)> = Vec::new();
+        Self::parse_with_flags(arguments, allowed, &[])
+    }
+
+    /// Parses `arguments`: the names in `allowed` take a value, the names in `flags` take none.
+    ///
+    /// # Errors
+    ///
+    /// A usage error for a stray argument, an unknown or repeated option, or a missing value.
+    pub fn parse_with_flags(
+        arguments: &[String],
+        allowed: &[&str],
+        flags: &[&str],
+    ) -> Result<Self, Error> {
+        let mut options = Self::default();
         let mut rest = arguments.iter();
         while let Some(flag) = rest.next() {
             let Some(name) = flag.strip_prefix("--") else {
                 return Err(usage(format!("unexpected argument {flag:?}")));
             };
-            if !allowed.contains(&name) {
+            let is_flag = flags.contains(&name);
+            if !is_flag && !allowed.contains(&name) {
                 return Err(usage(format!("unknown option --{name}")));
             }
-            if options.iter().any(|(known, _)| known == name) {
+            if options.values.iter().any(|(known, _)| known == name)
+                || options.flags.iter().any(|known| known == name)
+            {
                 return Err(usage(format!("--{name} is given twice")));
+            }
+            if is_flag {
+                options.flags.push(name.to_owned());
+                continue;
             }
             let Some(value) = rest.next() else {
                 return Err(usage(format!("--{name} needs a value")));
             };
-            options.push((name.to_owned(), value.clone()));
+            options.values.push((name.to_owned(), value.clone()));
         }
-        Ok(Self(options))
+        Ok(options)
+    }
+
+    /// Whether `--name`, an option without a value, was given.
+    #[must_use]
+    pub fn flag(&self, name: &str) -> bool {
+        self.flags.iter().any(|known| known == name)
+    }
+
+    /// Whether `--name` was given, with or without a value.
+    #[must_use]
+    pub fn given(&self, name: &str) -> bool {
+        self.flag(name) || self.optional(name).is_some()
     }
 
     /// The value of `--name`, if given.
     #[must_use]
     pub fn optional(&self, name: &str) -> Option<&str> {
-        self.0
+        self.values
             .iter()
             .find(|(known, _)| known == name)
             .map(|(_, value)| value.as_str())
@@ -295,6 +330,36 @@ mod tests {
         ] {
             assert!(
                 matches!(Options::parse(&args(wrong), &["url"]), Err(Error::Usage(_))),
+                "{wrong:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn flags_take_no_value_and_are_named_once() {
+        let options = Options::parse_with_flags(
+            &args(&["--remote-sudo", "--url", "https://a.example"]),
+            &["url"],
+            &["remote-sudo", "allow-new-key"],
+        )
+        .expect("valid");
+        assert!(options.flag("remote-sudo"));
+        assert!(options.given("remote-sudo"));
+        assert!(!options.flag("allow-new-key"));
+        assert!(!options.flag("url"));
+        assert!(options.given("url"));
+        assert_eq!(options.optional("url"), Some("https://a.example"));
+        for wrong in [
+            &["--remote-sudo", "--remote-sudo"][..],
+            &["--remote-sudo", "yes"],
+            &["--url"],
+            &["--other"],
+        ] {
+            assert!(
+                matches!(
+                    Options::parse_with_flags(&args(wrong), &["url"], &["remote-sudo"]),
+                    Err(Error::Usage(_))
+                ),
                 "{wrong:?}"
             );
         }

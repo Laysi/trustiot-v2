@@ -573,6 +573,7 @@ pub async fn enroll(
             path: ISSUE_PATH,
             cookie: Some(cookie),
             headers: Vec::new(),
+            query: None,
             json: Some(Zeroizing::new(body)),
         })
         .await?;
