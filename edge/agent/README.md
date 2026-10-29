@@ -142,12 +142,17 @@ MQTT 5 的編解碼由本 crate 自己寫，只做用到的部分（2026-10-21�
 
 ### 什麼時候換
 
-- **照排程**：依閘道器的時鐘，效期剩下 `renewal.remaining_percent`（預設 33）時換發；90 天的憑證在剩 30 天時換。這個行程換過一次之後，下一次也要依單調時鐘等過新憑證效期的同一個比例，所以時鐘快很多時不會一直重換；時鐘慢很多時憑證看起來永遠沒到期，就靠下面 broker 的拒絕觸發。最多每小時重新讀一次時鐘（`RECHECK`），開機後 NTP 改了時間也會發現。
-- **broker 拒絕憑證時馬上換**：內層 mTLS 收到憑證相關的 TLS alert、CONNACK 0x86 或 0x87（broker 的 dynamic security 已經沒有這台閘道器），或在雲端連得到（TCP、外層 TLS、WebSocket 都成功）的情況下內層 mTLS 或 CONNACK 之前持續失敗 10 分鐘（`link::REFUSED_AFTER`；broker 的 alert 可能因為連線被 reset 而沒送到）。這表示憑證過期（以 broker 的時鐘）或被撤銷。換上新憑證之後，這 10 分鐘重新計算。
+- **照排程**：依閘道器的時鐘，效期剩下 `renewal.remaining_percent`（預設 33）時換發；90 天的憑證在剩 30 天時換。另外，從憑證放上來的時間（憑證檔的修改時間，寫檔時以閘道器的時鐘設定）起，也要等過效期的同一個比例；這個行程換過一次之後，再依單調時鐘等同樣久。所以時鐘快很多時不會一直重換，重開 agent 也一樣；時鐘慢很多時憑證看起來永遠沒到期，就靠下面 broker 的拒絕觸發。手動放上或複製憑證檔時要保留修改時間（例如 `cp -p`）：修改時間比簽發晚很多時排程換發會延後，最晚延到憑證過期後被 broker 拒絕，那時才換發。最多每小時重新讀一次時鐘（`RECHECK`），開機後 NTP 改了時間也會發現。
+- **broker 拒絕憑證時**：內層 mTLS 握手（在外層 TLS 裡面，所以是 broker 那一側送的）或連線中收到憑證相關的 TLS alert、CONNACK 0x86 或 0x87（broker 的 dynamic security 已經沒有這台閘道器），或在雲端連得到（TCP、外層 TLS、WebSocket 都成功）的情況下內層 mTLS 或 CONNACK 之前持續失敗 10 分鐘再加 0 到 5 分鐘的隨機時間（`link::REFUSED_AFTER`、`link::REFUSED_JITTER`；broker 的 alert 可能因為連線被 reset 而沒送到；隨機時間讓同一個問題下的大量閘道器不會同時換發）。這表示憑證過期（以 broker 的時鐘）或被撤銷。換上新憑證之後，這段時間重新計算。外層 TLS 握手中的 alert 不算拒絕：路徑上任何東西都送得出來，不證明是 broker。
+  - 明確的拒絕（alert、CONNACK）而憑證還沒被證明可用時，馬上換。
+  - 推斷的拒絕（內層 mTLS 一直失敗）而憑證依閘道器的時鐘仍然有效時，等下面重試的退避再換：可能是 broker 的問題，不是憑證。
+  - 已被證明可用的憑證被拒時，離上一次因拒絕而換發至少 15 分鐘（`renewal::REFUSAL_RENEWAL_INTERVAL`），冒充 broker 的東西不能讓閘道器一直換發。
+
+用某張憑證開的連線維持 60 秒（`backoff::STABLE_AFTER`）之後，這張憑證才算被證明可用。link 每次連線嘗試都回報它的 session 與所用憑證的版本（`Link::attempts`，在回報 `Connected` 之前），只有嘗試用的是使用中憑證的連線才算：換上新憑證時已經連著的那條連線是用舊憑證開的，不算；換上新憑證的過程中就已經用新憑證重連上的，算。
 
 ### 重試
 
-失敗後等一段時間再從新的 challenge 開始：full jitter 的指數退避（第 n 次失敗等 0.1 秒到 min(`retry_cap_s`, `retry_base_s` × 2^(n-1)) 之間，預設 30 秒、1800 秒），永遠不放棄。回應 429 或 503 帶 `Retry-After`（秒數）時，再加上至少那麼久（最多 `retry_cap_s`）。剛換上的憑證在任何連線成功之前也被 broker 拒絕時，不會馬上再換，同樣等退避；用新憑證連上一次之後退避才歸零。每個請求（連線到讀完回應）最多 30 秒，回應最多讀 64 KiB。
+失敗後等一段時間再從新的 challenge 開始：full jitter 的指數退避（第 n 次失敗等 0.1 秒到 min(`retry_cap_s`, `retry_base_s` × 2^(n-1)) 之間，預設 30 秒、1800 秒），永遠不放棄。回應 429 或 503 帶 `Retry-After`（秒數）時，再加上至少那麼久（最多 `retry_cap_s`）。剛換上的憑證被證明可用之前也被 broker 拒絕時，不會馬上再換，同樣等退避（或先退回上一張，見下面「退回上一張憑證」）；新憑證被證明可用之後退避才歸零。每個請求（連線到讀完回應）最多 30 秒，回應最多讀 64 KiB。
 
 ### 檢查
 
@@ -156,16 +161,21 @@ MQTT 5 的編解碼由本 crate 自己寫，只做用到的部分（2026-10-21�
 - 回應的 HTTP 狀態與每個步驟相符（challenge 200、renew 201）、JSON 格式正確，challenge 是這台閘道器的、用途是換發、nonce 格式正確，才以金鑰簽章；renew 回應的硬體 ID 是自己的。
 - `certificate_chain` 只有 PEM 憑證（最多 4 張，不能夾帶私鑰或其他區塊），第一張就是 `certificate`。
 - `root_certificate` 必須是 `broker.ca` 裡的一張根：回應不能新增信任錨。
-- webpki 以 `broker.ca` 驗證整條鏈可以當用戶端憑證（時間不對時只記警告，理由與啟動時相同），CN 是自己的閘道器 ID，公鑰與 TPM 的金鑰相同，EKU 與 key usage 是閘道器憑證的（與啟動時的檢查相同，`identity::with_key`）。
-- 新憑證的 notBefore 要比目前的晚，舊的回應重送也換不回去。
+- webpki 以 `broker.ca` 驗證整條鏈可以當用戶端憑證，CN 是自己的閘道器 ID，公鑰與 TPM 的金鑰相同，EKU 與 key usage 是閘道器憑證的（與啟動時的檢查相同，`identity::with_key`）。
+- 依閘道器的時鐘現在就能用：notBefore 最多比現在晚 300 秒（`renewal::CLOCK_SKEW`，與憑證服務把 notBefore 往前推的 `CLOCK_SKEW_SECS` 相同），notAfter 還沒過。閘道器有硬體 RTC，時鐘可以合理信任；還不能用的憑證換上去只會讓閘道器連不上。這與啟動時不同：啟動時手上的憑證時間不對只記警告，因為拒絕啟動只會變成停機；換發時拒絕新憑證則保留還能用的舊憑證。
+- 新憑證的 notBefore 要比上一張被證明可用的憑證晚（防重送的下限），舊的回應重送也換不回去。下限只看被證明可用的憑證：換上之後從沒成功用過的憑證不會把下限往上推。
 
 ### 換上新憑證
 
-1. 憑證鏈以原子替換寫回 `identity.certificate`：同一個目錄裡的暫存檔 `<檔名>.renewal.tmp`（沿用舊檔的權限；舊檔不存在時 0600），fsync、rename、再 fsync 目錄。中途斷電時，留下的是完整的舊檔或新檔，不會是寫一半的檔。檔案寫不進去時照樣使用新憑證並記錯誤：重開之後讀到舊憑證，需要時會再換。
+1. 憑證鏈以原子替換寫回 `identity.certificate`：同一個目錄裡的暫存檔 `<檔名>.renewal.tmp`（沿用舊檔的權限；舊檔不存在時 0600；修改時間設成閘道器時鐘的現在，排程以此為準），fsync、rename、再 fsync 目錄。中途斷電時，留下的是完整的舊檔或新檔，不會是寫一半的檔。檔案寫不進去時照樣使用新憑證並記錯誤：重開之後讀到舊憑證，需要時會再換。只有 fsync 目錄失敗時，檔案已經是新的，只是斷電仍可能回到舊的，記一筆警告。
 2. 換掉內層 TLS 的設定（之後的連線都用新憑證），心跳的 `cert_not_after` 改成新憑證的到期時間。
 3. 使用中的連線輪替：不再接受新的 publish（呼叫端拿到 `NotConnected`，與連線中斷時一樣由離線緩衝重送），已接受的照樣送出並等 PUBACK；全部確認之後像正常停止一樣送 `offline`／`shutdown` 與 DISCONNECT 0x00（broker 丟掉 will，雲端不會看到一次 `connection_lost`），然後不經退避，馬上以新憑證重連，新的 session 送 `online`。緩衝裡的資料一則都不會掉，也不會變成不確定是否送達（`ConnectionLost`）。等 PUBACK 最多 keepalive 的兩倍（至少 5 秒）；超過時送 DISCONNECT 0x04（broker 發布 will），還沒確認的訊息照連線中斷處理（`ConnectionLost`，由緩衝重送）。輪替途中收到停止訊號就照一般的停止結束。
 
-`tests/renewal.rs` 以替代的換發端點（`tests/support/renewal.rs`，HTTPS、與憑證服務相同的 challenge 與簽章檢查）與檔案金鑰驗證：broker 拒絕憑證（簽發 CA 不被信任，等同被撤銷）時馬上換發並以新憑證重連，請求的 `Host` 是 `cloud.url` 的主機與 port，檔案換成新的鏈、權限不變；503 與 429 依 `Retry-After` 等待、每次重試都從 challenge 開始；對 Mosquitto 容器，效期很短的憑證在到期前換發，換發期間持續 publish 的訊息一則都沒掉也沒重複、沒有 `ConnectionLost`，舊 session 以 `offline`／`shutdown` 結束、新 session 上線，心跳帶新的到期時間；已過期的憑證換發後 broker 接受。排程、重試間隔的順序與範圍、每一種回應被竄改時不換、原子寫檔與寫檔失敗時舊檔不變，在單元測試（`cargo test -p agent --lib renewal`）以停住的時鐘與腳本化的端點驗證；連線輪替與拒絕的判斷在 `tests/link.rs`。TPM 簽 challenge 走與 TLS 相同的 `SigningKey`（`tests/tpm_swtpm.rs` 驗證 TPM 簽章），沒有在閘道器的實體 TPM 上測過。
+### 退回上一張憑證
+
+被證明可用、而且沒被 broker 拒絕過的憑證（照排程換發時）被換掉之前，先以同樣的原子寫法、同樣的權限存成 `<憑證檔>.prev`；因為被拒而換發時不留，因為 broker 已經不收它。新憑證在被證明可用之前就被 broker 明確拒絕（alert 或 CONNACK，不是推斷的拒絕），而 `.prev` 依閘道器的時鐘仍然有效時，換回 `.prev` 的憑證（不送任何請求），之後的換發等退避。憑證檔確實寫回（含 fsync 目錄）之後才刪掉 `.prev`；寫不回去時保留 `.prev`，重開後讀到被拒的憑證時仍能再退回。換回來的憑證算是還沒被證明可用、也沒有上一張，所以不會再從它退回去，不會來回切換。新憑證被證明可用之後刪掉 `.prev`。`.prev` 在 agent 重開後仍然有效；啟動時只有在它是這台閘道器、這把金鑰、鏈接到 `broker.ca`、而且比使用中的憑證舊時才採用，否則刪掉並記警告。
+
+`tests/renewal.rs` 以替代的換發端點（`tests/support/renewal.rs`，HTTPS、與憑證服務相同的 challenge 與簽章檢查）與檔案金鑰驗證：broker 拒絕憑證（簽發 CA 不被信任，等同被撤銷）時馬上換發並以新憑證重連，請求的 `Host` 是 `cloud.url` 的主機與 port，檔案換成新的鏈、權限不變；503 與 429 依 `Retry-After` 等待、每次重試都從 challenge 開始；對 Mosquitto 容器，效期很短的憑證在到期前換發，換發期間持續 publish 的訊息一則都沒掉也沒重複、沒有 `ConnectionLost`，舊 session 以 `offline`／`shutdown` 結束、新 session 上線，心跳帶新的到期時間；已過期的憑證換發後 broker 接受；外層 TLS 握手收到 `bad_certificate` alert 時不算拒絕、不換發。排程（含時鐘快、重開後不重換）、重試間隔的順序與範圍、每一種回應被竄改時不換（含 notBefore 太晚與已過期）、防重送的下限、被證明可用的條件、拒絕後的等待與最短間隔、退回上一張憑證（含重開之後）、原子寫檔與寫檔失敗時舊檔不變，在單元測試（`cargo test -p agent --lib renewal`）以停住的時鐘與腳本化的端點驗證；連線輪替與拒絕的判斷（外層與內層 alert 的區別、推斷拒絕的隨機時間）在 `tests/link.rs`。TPM 簽 challenge 走與 TLS 相同的 `SigningKey`（`tests/tpm_swtpm.rs` 驗證 TPM 簽章），沒有在閘道器的實體 TPM 上測過。
 
 ## systemd
 
@@ -419,7 +429,7 @@ cargo test -p agent --test link                         # MQTT 行為，對腳�
 cargo test -p agent --test liveness                     # systemd watchdog 的進度判斷：連線的每個等待都宣告期限、卡住的連線工作讓通知停下
 cargo test -p agent --test transport                    # 整條連線在行程內：兩層 TLS 協商的內容、resumption、重連、每種拒絕、內層的憑證鏈、名稱、用途與根 CRL
 cargo test -p agent --test broker                       # 對 Mosquitto 容器（podman 或 docker）：mTLS、retained、0x87、will、broker 與轉接重啟後重連
-cargo test -p agent --test renewal                      # 憑證換發，對替代的 HTTPS 換發端點：被拒時換發並重連、429／503 的 Retry-After；對 Mosquitto 容器：到期前換發不掉訊息、過期後換發
+cargo test -p agent --test renewal                      # 憑證換發，對替代的 HTTPS 換發端點：被拒時換發並重連、429／503 的 Retry-After、外層 TLS 的 alert 不觸發換發；對 Mosquitto 容器：到期前換發不掉訊息、過期後換發
 cargo test -p agent --test binary                       # 執行檔：--check（含根 CRL 的狀態）、sd_notify、訂閱與套用設定、重開後以存下的設定輪詢、SIGTERM
 cargo test -p agent --test systemd_unit                 # unit 檔與 systemd-analyze
 cargo test -p agent --test dependencies                 # 閘道器建置的相依

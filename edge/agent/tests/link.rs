@@ -24,7 +24,7 @@ use agent::ReasonCode;
 use agent::backoff::{MIN_DELAY, STABLE_AFTER};
 use agent::link::{
     self, ConnectError, ConnectStage, Connector, DownMessage, INCOMING_QUEUE, Incoming, Link,
-    LinkSettings, LinkState, PublishError, Published, REQUEST_QUEUE, Subscriptions,
+    LinkSettings, LinkState, PublishError, Published, REQUEST_QUEUE, Refusal, Subscriptions,
 };
 use protocol::health::{Heartbeat, OfflineReason, Status};
 use protocol::topic::{Channel, Direction, MIN_MAX_PACKET_BYTES};
@@ -2869,6 +2869,18 @@ fn silent_inner_error() -> ConnectError {
     ConnectError::new(ConnectStage::InnerTls, "handshake cut short")
 }
 
+/// A TLS alert in the outer TLS handshake, as tokio-rustls hands it over. Anyone on the path
+/// can send one before the handshake is done.
+fn outer_alert(description: rustls::AlertDescription) -> ConnectError {
+    ConnectError::new(
+        ConnectStage::OuterTls,
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            rustls::Error::AlertReceived(description),
+        ),
+    )
+}
+
 /// A TLS alert from the broker as tokio-rustls hands it over: a rustls error inside an
 /// `io::Error`.
 fn alert(description: rustls::AlertDescription) -> ConnectError {
@@ -2881,8 +2893,9 @@ fn alert(description: rustls::AlertDescription) -> ConnectError {
     )
 }
 
-/// The broker refusing the client certificate with an alert is reported at once, with the
-/// version of the credentials the attempt used; network, outer TLS and other alerts are not.
+/// The broker refusing the client certificate with an alert in the inner mTLS is reported at
+/// once, with the version of the credentials the attempt used; the network, the outer TLS (a
+/// certificate alert there included: it is not authenticated) and other alerts are not.
 #[tokio::test(start_paused = true)]
 async fn a_certificate_alert_is_reported_as_a_refusal_of_the_credentials_in_use() {
     let (settings, version) = renewable(settings());
@@ -2893,6 +2906,8 @@ async fn a_certificate_alert_is_reported_as_a_refusal_of_the_credentials_in_use(
             [
                 ConnectError::new(ConnectStage::Tcp, "connection refused"),
                 ConnectError::new(ConnectStage::OuterTls, "bad certificate"),
+                outer_alert(rustls::AlertDescription::BadCertificate),
+                outer_alert(rustls::AlertDescription::CertificateRevoked),
                 alert(rustls::AlertDescription::HandshakeFailure),
                 alert(rustls::AlertDescription::CertificateExpired),
             ],
@@ -2904,7 +2919,7 @@ async fn a_certificate_alert_is_reported_as_a_refusal_of_the_credentials_in_use(
     let mut refused = link.certificate_refused();
     let mut state = link.state();
     let mut failures = 0;
-    while failures < 3 {
+    while failures < 5 {
         bounded("a failed attempt", state.changed()).await.unwrap();
         if matches!(*state.borrow_and_update(), LinkState::Disconnected { .. }) {
             failures += 1;
@@ -2914,7 +2929,13 @@ async fn a_certificate_alert_is_reported_as_a_refusal_of_the_credentials_in_use(
     bounded("a refusal", refused.wait_for(Option::is_some))
         .await
         .unwrap();
-    assert_eq!(*refused.borrow(), Some(0));
+    assert_eq!(
+        *refused.borrow(),
+        Some(Refusal {
+            credentials: 0,
+            explicit: true
+        })
+    );
     shutdown.cancel();
     bounded("the supervisor to stop", supervisor).await.unwrap();
     drop(version);
@@ -2929,13 +2950,16 @@ async fn a_certificate_alert_is_reported_as_a_refusal_of_the_credentials_in_use(
     );
     let supervisor = tokio::spawn(supervisor.run());
     let mut refused = link.certificate_refused();
-    bounded("a refusal", refused.wait_for(|refused| *refused == Some(0)))
-        .await
-        .unwrap();
+    bounded(
+        "a refusal",
+        refused.wait_for(|refused| refused.is_some_and(|refused| refused.credentials == 0)),
+    )
+    .await
+    .unwrap();
     version.send_replace(5);
     bounded(
         "a refusal of version 5",
-        refused.wait_for(|refused| *refused == Some(5)),
+        refused.wait_for(|refused| refused.is_some_and(|refused| refused.credentials == 5)),
     )
     .await
     .unwrap();
@@ -2944,7 +2968,8 @@ async fn a_certificate_alert_is_reported_as_a_refusal_of_the_credentials_in_use(
 }
 
 /// CONNACK 0x87 (the broker no longer knows the gateway) is a refusal at once; failures at the
-/// inner mTLS that say nothing are one only once they have lasted REFUSED_AFTER, and new
+/// inner mTLS that say nothing are one (not explicit) only once they have lasted REFUSED_AFTER
+/// and a random part of REFUSED_JITTER, and new
 /// credentials start that time over.
 #[tokio::test(start_paused = true)]
 async fn connack_refusals_count_at_once_and_silent_inner_failures_only_after_a_while() {
@@ -2959,9 +2984,16 @@ async fn connack_refusals_count_at_once_and_silent_inner_failures_only_after_a_w
     bounded("a refusal", refused.wait_for(Option::is_some))
         .await
         .unwrap();
+    assert!(refused.borrow().is_some_and(|refused| refused.explicit));
     harness.shutdown.cancel();
 
-    let (settings, version) = renewable(crate::settings());
+    // The longest draw: the run of failures lasts REFUSED_AFTER and (almost) all of
+    // REFUSED_JITTER before it counts.
+    let (settings, version) = renewable(LinkSettings {
+        jitter: longest,
+        ..crate::settings()
+    });
+    let wanted = link::REFUSED_AFTER + link::REFUSED_JITTER - Duration::from_secs(1);
     let shutdown = CancellationToken::new();
     let (link, _incoming, supervisor) = link::link(
         settings,
@@ -2971,23 +3003,28 @@ async fn connack_refusals_count_at_once_and_silent_inner_failures_only_after_a_w
     let supervisor = tokio::spawn(supervisor.run());
     let started = Instant::now();
     let mut refused = link.certificate_refused();
-    // Bounded on the paused clock: REFUSED_AFTER and at most one backoff delay (60 s) more.
-    let limit = link::REFUSED_AFTER + Duration::from_secs(120);
+    // Bounded on the paused clock: REFUSED_AFTER, its jitter and at most one backoff delay (60 s)
+    // more.
+    let limit = link::REFUSED_AFTER + link::REFUSED_JITTER + Duration::from_secs(120);
     tokio::time::timeout(limit, refused.wait_for(Option::is_some))
         .await
         .expect("a refusal after REFUSED_AFTER")
         .unwrap();
     let after = Instant::now() - started;
-    assert!(after >= link::REFUSED_AFTER, "reported after {after:?}");
+    assert!(after >= wanted, "reported after {after:?}");
+    assert!(refused.borrow().is_some_and(|refused| !refused.explicit));
     // New credentials get their own REFUSED_AFTER before they are blamed.
     version.send_replace(1);
     let renewed = Instant::now();
-    tokio::time::timeout(limit, refused.wait_for(|refused| *refused == Some(1)))
-        .await
-        .expect("a refusal of version 1")
-        .unwrap();
+    tokio::time::timeout(
+        limit,
+        refused.wait_for(|refused| refused.is_some_and(|refused| refused.credentials == 1)),
+    )
+    .await
+    .expect("a refusal of version 1")
+    .unwrap();
     let after = Instant::now() - renewed;
-    assert!(after >= link::REFUSED_AFTER, "reported after {after:?}");
+    assert!(after >= wanted, "reported after {after:?}");
     shutdown.cancel();
     bounded("the supervisor to stop", supervisor).await.unwrap();
 }

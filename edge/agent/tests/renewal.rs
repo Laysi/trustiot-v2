@@ -4,7 +4,9 @@
 //! `tests/tpm_swtpm.rs` covers it).
 //!
 //! - In process: a broker that refuses the certificate (as when it was revoked) makes the agent
-//!   renew at once and reconnect with the new one; 429 and 503 from the endpoint are waited out.
+//!   renew at once and reconnect with the new one; 429 and 503 from the endpoint are waited out;
+//!   a certificate alert in the outer TLS handshake, which anything on the path can send, does
+//!   not make it renew.
 //! - Against Mosquitto in a container (podman or docker; without one these skip, with `CI` set
 //!   they fail): a short-lived certificate is renewed before it expires while messages keep
 //!   flowing, none lost, and an expired one is renewed and used.
@@ -36,6 +38,8 @@ use support::{FakeBroker, GATEWAY, gateway};
 use testkit::clock::bounded;
 use testkit::mqtt::mosquitto::Mosquitto;
 use testkit::mqtt::{Authority, TestPki, mtls_server};
+use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+use tokio::net::{TcpListener, TcpStream};
 use tokio_util::sync::CancellationToken;
 
 /// A generous bound for anything that crosses the container runtime (CLAUDE.md: test time
@@ -60,7 +64,9 @@ fn mode(path: &str) -> u32 {
 }
 
 /// The gateway's certificate from `issuing` for a new key, valid from `not_before` to
-/// `not_after`, written with `issuing` after it, as production gateways have it.
+/// `not_after`, written with `issuing` after it, as production gateways have it. The file is
+/// modified at `not_before`, as if put in place when it was issued: the renewal schedule also
+/// waits from the file's modification time.
 fn give_certificate(
     files: &Files,
     issuing: &Authority,
@@ -76,6 +82,12 @@ fn give_certificate(
         std::fs::Permissions::from_mode(0o640),
     )
     .unwrap();
+    std::fs::File::options()
+        .write(true)
+        .open(files.path("gateway.pem"))
+        .unwrap()
+        .set_modified(not_before)
+        .unwrap();
     key.serialize_pem()
 }
 
@@ -192,6 +204,101 @@ async fn the_endpoint_s_429_and_503_are_waited_out_and_each_retry_starts_with_a_
     // Each wait is at least the Retry-After the endpoint asked for.
     assert!(seen[1].at - seen[0].at >= Duration::from_secs(2));
     assert!(seen[2].at - seen[1].at >= Duration::from_secs(3));
+    renewing.stop().await;
+}
+
+/// A fatal `bad_certificate` alert record, as a TLS server sends it before any key exists.
+const BAD_CERTIFICATE_ALERT: [u8; 7] = [0x15, 0x03, 0x03, 0x00, 0x02, 0x02, 0x2a];
+
+/// Answers every TLS ClientHello with [`BAD_CERTIFICATE_ALERT`], as anything between the gateway
+/// and the cloud can without holding any certificate. Returns its port and the count of
+/// ClientHellos answered.
+async fn alerting_server() -> (u16, Arc<AtomicU32>) {
+    let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let answered = Arc::new(AtomicU32::new(0));
+    let counter = Arc::clone(&answered);
+    tokio::spawn(async move {
+        while let Ok((stream, _)) = listener.accept().await {
+            let counter = Arc::clone(&counter);
+            tokio::spawn(async move {
+                if answer_with_alert(stream).await {
+                    counter.fetch_add(1, Ordering::SeqCst);
+                }
+            });
+        }
+    });
+    (port, answered)
+}
+
+/// Reads the ClientHello record, answers with the alert and waits for the client to close, so
+/// no reset overtakes the alert. Returns whether a ClientHello came.
+async fn answer_with_alert(mut stream: TcpStream) -> bool {
+    let mut header = [0_u8; 5];
+    if stream.read_exact(&mut header).await.is_err() || header[0] != 0x16 {
+        return false;
+    }
+    let mut record = vec![0_u8; usize::from(u16::from_be_bytes([header[3], header[4]]))];
+    if stream.read_exact(&mut record).await.is_err() || record.first() != Some(&0x01) {
+        return false;
+    }
+    if stream.write_all(&BAD_CERTIFICATE_ALERT).await.is_err() {
+        return false;
+    }
+    let _ = stream.shutdown().await;
+    let mut rest = Vec::new();
+    let _ = tokio::time::timeout(LIMIT, stream.read_to_end(&mut rest)).await;
+    true
+}
+
+#[tokio::test]
+async fn a_certificate_alert_in_the_outer_tls_handshake_does_not_renew_the_certificate() {
+    let pki = TestPki::new();
+    let issuing = pki.broker_ca.issuing("issuing CA");
+    let (port, answered) = alerting_server().await;
+    let files = Files::new(&pki, port);
+    let now = SystemTime::now();
+    // Valid for 90 days: not due for renewal.
+    let key = give_certificate(
+        &files,
+        &issuing,
+        now - Duration::from_secs(3600),
+        now + Duration::from_secs(90 * 86_400),
+    );
+    let server = RenewalServer::start(&pki, issuing, &key, Duration::from_secs(90 * 86_400)).await;
+    let renewing = Renewing::start(&files, &server, Subscriptions::none());
+    let refused = renewing.agent.link.certificate_refused();
+
+    let first = renewing.agent.first_error().await;
+    assert!(first.contains("BadCertificate"), "{first}");
+    // Attempt after attempt ends with the alert (the reconnect delay is at most 1 s here).
+    bounded("five ClientHellos answered with the alert", async {
+        while answered.load(Ordering::SeqCst) < 5 {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await;
+    let mut state = renewing.agent.link.state();
+    let last = bounded(
+        "the link to report the fifth attempt's failure",
+        state.wait_for(|state| matches!(state, LinkState::Disconnected { .. })),
+    )
+    .await
+    .unwrap()
+    .clone();
+    assert!(
+        matches!(&last, LinkState::Disconnected { error, .. } if error.contains("BadCertificate")),
+        "{last:?}"
+    );
+    // The alert came before the outer TLS was up, from something that proved nothing: it is not
+    // the broker refusing the certificate, so nothing is renewed.
+    assert_eq!(*refused.borrow(), None, "counted as a refusal");
+    assert!(
+        server.seen().is_empty(),
+        "renewal requests: {:?}",
+        server.seen()
+    );
+    assert_eq!(*renewing.version.borrow(), 0);
     renewing.stop().await;
 }
 

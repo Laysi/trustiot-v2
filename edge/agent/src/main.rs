@@ -251,7 +251,12 @@ fn run(setup: Setup, state_directory: PathBuf) -> ExitCode {
     let (link, incoming, supervisor) = link::link(link_settings, setup.connector, shutdown.clone());
     // Certificate renewal (Laysi/trustiot-v2#83): on schedule, and when the broker refuses the
     // certificate. Its TPM signature runs on the blocking pool.
-    runtime.spawn(renewal.run(link.state(), link.certificate_refused(), shutdown.clone()));
+    runtime.spawn(renewal.run(
+        link.state(),
+        link.attempts(),
+        link.certificate_refused(),
+        shutdown.clone(),
+    ));
     let (config_inbox, config_deliveries) = desired::inbox();
     runtime.spawn(dispatch(incoming, config_inbox));
     let poll_settings = polling::Settings::default();

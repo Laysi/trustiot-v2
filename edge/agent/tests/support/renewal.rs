@@ -347,8 +347,12 @@ impl Renewing {
         let shutdown = CancellationToken::new();
         let (link, incoming, supervisor) =
             link::link(setup.link, setup.connector, shutdown.clone());
-        let renewal =
-            tokio::spawn(renewal.run(link.state(), link.certificate_refused(), shutdown.clone()));
+        let renewal = tokio::spawn(renewal.run(
+            link.state(),
+            link.attempts(),
+            link.certificate_refused(),
+            shutdown.clone(),
+        ));
         Self {
             agent: Agent {
                 link,
