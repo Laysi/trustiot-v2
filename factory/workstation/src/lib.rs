@@ -15,6 +15,8 @@
 //! - [`register`]: the factory registration of a gateway (`register`), signed by the workstation
 //!   ([`sign`]), retried with backoff ([`retry`]), its answer checked and recorded
 //!   ([`journal`]).
+//! - [`install`]: the certificate chain and the root certificate of a recorded registration,
+//!   checked against the pinned root and installed on the gateway.
 //! - [`pipeline`]: `register --gateway` (Laysi/trustiot-v2#616): `trustiot-agent provision` run
 //!   on the gateway over ssh ([`gateway`]), its report checked, then [`register`].
 //! - [`verify`]: the gateway's `certs.gateway_registered` event in the platform's event log.
@@ -26,6 +28,7 @@ pub mod files;
 pub mod gateway;
 pub mod http;
 pub mod identity;
+pub mod install;
 pub mod journal;
 pub mod pipeline;
 pub mod register;
@@ -108,6 +111,10 @@ pub enum Error {
     /// its own exit code ([`register::StopKind`]).
     #[error(transparent)]
     Registration(Box<register::Stopped>),
+    /// Installing the certificates on the gateway stopped: a failed check, the gateway's refusal
+    /// or any other failure; each has its own exit code ([`install::InstallStopKind`]).
+    #[error(transparent)]
+    Install(Box<install::InstallStopped>),
     /// `register --gateway` stopped before the registration: the gateway could not be reached,
     /// its provisioning failed, its report was refused, or its TPM has no key for a known
     /// hardware ID; each has its own exit code ([`pipeline::StopKind`]).
@@ -144,13 +151,15 @@ impl From<http::ApiError> for Error {
 impl Error {
     /// The process exit code for this failure: 2 for usage mistakes, a registration's own code
     /// ([`register::StopKind::exit_code`]), a gateway run's ([`pipeline::StopKind::exit_code`]),
-    /// `verify`'s [`NO_EVENT_EXIT_CODE`], [`EVENT_MISMATCH_EXIT_CODE`] and
-    /// [`UNRECORDED_EXIT_CODE`], 1 otherwise.
+    /// an installation's ([`install::InstallStopKind::exit_code`]), `verify`'s
+    /// [`NO_EVENT_EXIT_CODE`], [`EVENT_MISMATCH_EXIT_CODE`] and [`UNRECORDED_EXIT_CODE`], 1
+    /// otherwise.
     #[must_use]
     pub fn exit_code(&self) -> u8 {
         match self {
             Self::Usage(_) => 2,
             Self::Registration(stopped) => stopped.kind.exit_code(),
+            Self::Install(stopped) => stopped.kind.exit_code(),
             Self::Provisioning(stopped) => stopped.kind.exit_code(),
             Self::NoEvent(_) => NO_EVENT_EXIT_CODE,
             Self::EventMismatch(_) => EVENT_MISMATCH_EXIT_CODE,

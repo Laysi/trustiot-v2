@@ -246,7 +246,20 @@ impl BrokerTrust {
     /// A file that cannot be read, holds no certificate, holds a certificate that is not a
     /// root, or holds two roots with the same subject.
     pub fn load(ca: &Path) -> Result<Self, TlsError> {
-        let anchors = read_certificates(ca)?;
+        Self::from_certificates(ca, read_certificates(ca)?)
+    }
+
+    /// The trust anchors `anchors`, checked as [`BrokerTrust::load`] checks those of a file; `ca`
+    /// is the file they are for, only named in errors. `trustiot-agent provision install` checks
+    /// a root this way before it writes the root to `broker.ca`.
+    ///
+    /// # Errors
+    ///
+    /// As [`BrokerTrust::load`], except that nothing is read.
+    pub fn from_certificates(
+        ca: &Path,
+        anchors: Vec<CertificateDer<'static>>,
+    ) -> Result<Self, TlsError> {
         if anchors.is_empty() {
             return Err(TlsError::NoUsableCertificate(ca.to_owned()));
         }
@@ -382,7 +395,7 @@ fn whole_bytes(bit_string: &[u8]) -> Option<&[u8]> {
 /// handshake's webpki checks it: only with the provider's signature algorithms
 /// ([`provider`]), matched by their exact AlgorithmIdentifier bytes. So nothing loads here
 /// that every handshake would then refuse, and the two lists cannot drift apart.
-fn verify_as_the_handshake_does(signed: &[u8], spki: &[u8]) -> Result<(), String> {
+pub(crate) fn verify_as_the_handshake_does(signed: &[u8], spki: &[u8]) -> Result<(), String> {
     let malformed = || "the signed structure is not DER that webpki reads".to_owned();
     let expect = |input, tag| {
         der_element(input)
@@ -459,10 +472,6 @@ impl RootCrl {
         let Some(path) = path else {
             return Ok(Self::NotConfigured);
         };
-        let bad = |reason: String| TlsError::BadCrl {
-            path: path.to_owned(),
-            reason,
-        };
         let file = match std::fs::File::open(path) {
             Ok(file) => file,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
@@ -482,10 +491,28 @@ impl RootCrl {
                 path: path.to_owned(),
                 source,
             })?;
+        Self::from_bytes(path, &bytes, trust, now)
+    }
+
+    /// [`RootCrl::load`] on `bytes`, read by the caller from `path` (which names it in errors).
+    ///
+    /// # Errors
+    ///
+    /// The bytes cannot be used ([`TlsError::BadCrl`]).
+    pub fn from_bytes(
+        path: &Path,
+        bytes: &[u8],
+        trust: &BrokerTrust,
+        now: UnixTime,
+    ) -> Result<Self, TlsError> {
+        let bad = |reason: String| TlsError::BadCrl {
+            path: path.to_owned(),
+            reason,
+        };
         if u64::try_from(bytes.len()).map_or(true, |len| len > MAX_ROOT_CRL_BYTES) {
             return Err(bad(format!("larger than {MAX_ROOT_CRL_BYTES} bytes")));
         }
-        let crls = CertificateRevocationListDer::pem_slice_iter(&bytes)
+        let crls = CertificateRevocationListDer::pem_slice_iter(bytes)
             .collect::<Result<Vec<_>, _>>()
             .map_err(|error| bad(format!("not PEM: {error}")))?;
         let [der] = <[_; 1]>::try_from(crls).map_err(|crls: Vec<_>| {
@@ -676,22 +703,63 @@ pub fn check_client_certificate(
     identity: &Identity,
     now: UnixTime,
 ) -> Result<Validity, TlsError> {
+    check_client_certificate_under(trust, &RootCrl::NotConfigured, identity, now)
+}
+
+/// [`check_client_certificate`], also against the root CRL: an issuing CA the root revoked fails.
+/// The gateway certificate's own status is unknown here (no issuing CA's CRL) and allowed, as in
+/// the handshake's own check of the broker's chain.
+///
+/// # Errors
+///
+/// As [`check_client_certificate`].
+pub fn check_client_certificate_under(
+    trust: &BrokerTrust,
+    root_crl: &RootCrl,
+    identity: &Identity,
+    now: UnixTime,
+) -> Result<Validity, TlsError> {
+    check_chain_under(
+        trust,
+        root_crl,
+        &identity.chain,
+        (identity.not_before, identity.not_after),
+        now,
+    )
+}
+
+/// [`check_client_certificate_under`] on a chain alone (the gateway certificate first, then the
+/// issuing CA), valid from `validity.0` to `validity.1` by the gateway certificate: the key is
+/// not checked.
+///
+/// # Errors
+///
+/// As [`check_client_certificate`].
+pub fn check_chain_under(
+    trust: &BrokerTrust,
+    root_crl: &RootCrl,
+    chain: &[CertificateDer<'static>],
+    validity: (UnixMillis, UnixMillis),
+    now: UnixTime,
+) -> Result<Validity, TlsError> {
     let verifier =
         WebPkiClientVerifier::builder_with_provider(Arc::clone(&trust.roots), Arc::new(provider()))
+            .with_crls(root_crl.crls())
+            .allow_unknown_revocation_status()
             .build()
             .map_err(|error| TlsError::Verifier(error.to_string()))?;
     let refused = |source| TlsError::ClientCertificate {
         path: trust.path.clone(),
         source,
     };
-    let Some((leaf, intermediates)) = identity.chain.split_first() else {
+    let Some((leaf, intermediates)) = chain.split_first() else {
         return Err(TlsError::Verifier("no certificate".to_owned()));
     };
     match verifier.verify_client_cert(leaf, intermediates, now) {
         Ok(_) => Ok(Validity::Current),
         Err(error) if is_about_time(&error) => {
             // Once more, at a time the certificate is valid: everything but the time must hold.
-            let middle = identity.not_before.get() / 2 + identity.not_after.get() / 2;
+            let middle = validity.0.get() / 2 + validity.1.get() / 2;
             let inside = UnixTime::since_unix_epoch(Duration::from_millis(middle));
             verifier
                 .verify_client_cert(leaf, intermediates, inside)

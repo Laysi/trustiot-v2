@@ -3,6 +3,7 @@
 //! refuses to start; nothing in it needs the network, so a gateway without a connection still
 //! starts (and keeps trying to connect).
 
+use std::path::Path;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
@@ -14,6 +15,7 @@ use crate::identity::{self, IdentityError, KeySource};
 use crate::link::LinkSettings;
 use crate::renewal::{Credentials, HttpsEndpoint, Renewal};
 use crate::tls::{self, BrokerTrust, InnerConfig, RootCrl, TlsError, Validity};
+use crate::tpm::TpmTransport;
 use crate::transport::WssConnector;
 
 /// This agent's release, from the crate version.
@@ -83,7 +85,22 @@ impl Setup {
     ///
     /// See [`SetupError`].
     pub fn new(config: &Config) -> Result<Self, SetupError> {
-        let identity = identity::load(&config.certificate, &config.key)?;
+        Self::new_with(config, &mut |device| {
+            TpmTransport::Device(device.to_owned())
+        })
+    }
+
+    /// [`Setup::new`], with a TPM key reached through `open_tpm(device)` instead of the device
+    /// itself: tests pass a software TPM.
+    ///
+    /// # Errors
+    ///
+    /// See [`SetupError`].
+    pub fn new_with(
+        config: &Config,
+        open_tpm: &mut dyn FnMut(&Path) -> TpmTransport,
+    ) -> Result<Self, SetupError> {
+        let identity = identity::load_with(&config.certificate, &config.key, open_tpm)?;
         let outer = tls::outer_config(&config.outer_trust).map_err(SetupError::OuterTls)?;
         let trust = BrokerTrust::load(&config.broker_ca).map_err(SetupError::InnerTls)?;
         let root_crl = RootCrl::load(config.broker_crl.as_deref(), &trust, clock_now())
@@ -129,7 +146,7 @@ impl Setup {
 
 /// The clock's time for the certificate check. `UnixTime::now` panics on a clock before 1970,
 /// which a gateway whose RTC lost its time can have; such a time is simply "too early".
-fn clock_now() -> UnixTime {
+pub(crate) fn clock_now() -> UnixTime {
     UnixTime::since_unix_epoch(
         SystemTime::now()
             .duration_since(SystemTime::UNIX_EPOCH)

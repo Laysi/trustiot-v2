@@ -2,7 +2,8 @@
 //!
 //! Exit codes: 0 done, 1 failed, 2 usage, `register`'s own (10 to 19 and 75,
 //! [`workstation::register::StopKind`]; 20 to 23 and 27 with `--gateway`,
-//! [`workstation::pipeline::StopKind`]) and `verify`'s 24 to 26 ([`workstation::NO_EVENT_EXIT_CODE`],
+//! [`workstation::pipeline::StopKind`]; 30 to 35 for the installation after it,
+//! [`workstation::install::InstallStopKind`]) and `verify`'s 24 to 26 ([`workstation::NO_EVENT_EXIT_CODE`],
 //! [`workstation::EVENT_MISMATCH_EXIT_CODE`], [`workstation::UNRECORDED_EXIT_CODE`]). Results go
 //! to stdout, prompts and log lines to stderr
 //! (`TRUSTIOT_WORKSTATION_LOG`: off, error, warn, info (default), debug or trace). Neither ever
@@ -552,12 +553,16 @@ async fn register(options: &Options) -> Result<(), Error> {
         backoff,
         root_sha256,
     };
+    // With --gateway, the installation of the certificates on the gateway (step 7), reported
+    // after the registration's line.
+    let mut installed = None;
     let result = match &source {
         Source::Files(gateway) => register::register(&registrar, gateway, now).await,
         Source::Ssh { ssh, plan } => pipeline::register_gateway(&registrar, ssh, plan, now)
             .await
             .map(|outcome| {
                 report_provisioned(ssh, plan, &outcome.provisioned);
+                installed = Some((ssh.destination().to_string(), outcome.installed));
                 outcome.registered
             }),
     };
@@ -590,7 +595,25 @@ async fn register(options: &Options) -> Result<(), Error> {
         registered.attempts,
         record.display()
     ));
-    Ok(())
+    match installed {
+        None => Ok(()),
+        Some((destination, Ok(installed))) => {
+            let what = if installed.kept_renewed() {
+                "kept the certificate its agent renewed (newer than the registration's, for the \
+                 same TPM key) and has the root certificate"
+            } else if installed.changed() {
+                "installed the certificate chain and the root certificate"
+            } else {
+                "already had the certificate chain and the root certificate"
+            };
+            say(&format!(
+                "{destination}: {what}: {}",
+                installed.report.lines().collect::<Vec<_>>().join("; ")
+            ));
+            Ok(())
+        }
+        Some((_, Err(error))) => Err(error),
+    }
 }
 
 /// What the gateway reported, before the registration's own line.

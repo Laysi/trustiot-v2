@@ -15,6 +15,12 @@
 //!   reach a shell as code: the hardware ID is a `protocol::GatewayId`, the handle is printed from
 //!   a [`KeyHandle`], the rest are fixed words and lower-case hex.
 //! - **Standard input**: the agent executable with `--upload-agent`, nothing otherwise.
+//! - **After the registration** (Laysi/trustiot-v2#617, [`crate::install`]): `sh -c
+//!   '<script>' trustiot-provision '<hardware ID>' '<run>'` with the fixed [`INSTALL_SCRIPT`],
+//!   which runs `trustiot-agent provision install --hardware-id <hardware ID>` of the agent
+//!   installed on the gateway, never an upload: the files it writes are for the installed agent,
+//!   whose configuration names them and whose checks they must pass. Its standard input is the
+//!   gateway's certificate chain and the root certificate (PEM) and nothing else.
 //! - **ssh's environment**: only [`KEPT_ENVIRONMENT`] of the tool's, so a `SendEnv` in the
 //!   operator's ssh configuration has nothing else to forward.
 //!
@@ -53,15 +59,17 @@
 //! # Retries
 //!
 //! ssh ends with 255 when it cannot connect or the connection breaks. Neither
-//! `trustiot-agent provision` (0 to 7) nor the scripts ([`UPLOAD_FAILED`], [`CHECKSUM_MISMATCH`],
-//! 128 + a signal) end with 255, so 255 is retried, with the backoff of [`SSH_BACKOFF`]; so is an
+//! `trustiot-agent provision` (0 to 7), `trustiot-agent provision install` (0, 1, 2, 8, 9) nor the
+//! scripts ([`UPLOAD_FAILED`], [`CHECKSUM_MISMATCH`], 128 + a signal) end with 255, so 255 is
+//! retried, with the backoff of [`SSH_BACKOFF`]; so is an
 //! attempt that runs past its deadline, which is killed first. Each attempt has one deadline for
 //! all of it (upload, output and exit): [`ATTEMPT_TIMEOUT`] after it starts, but never later than
 //! [`RUN_TIMEOUT`] after the first attempt started, which also bounds the waits between attempts.
 //! So one run on the gateway ends within [`RUN_TIMEOUT`]. That is safe because
 //! `provision` is idempotent: it reuses the key at the handle, and two runs at once end with the
-//! same key (edge/agent/README.md, "金鑰佈建"). Every other status is the gateway's answer and is
-//! never retried.
+//! same key (edge/agent/README.md, "金鑰佈建"), and `provision install` leaves files that are
+//! already right untouched (edge/agent/README.md, "安裝憑證鏈與根憑證"). Every other status is
+//! the gateway's answer and is never retried.
 
 use std::ffi::OsString;
 use std::fmt;
@@ -79,6 +87,7 @@ use tracing::{debug, warn};
 use crate::Error;
 use crate::files;
 use crate::http::printable;
+use crate::install::{self, RemoteOutcome};
 use crate::retry::Backoff;
 
 /// The ssh client, found on `PATH`.
@@ -336,6 +345,27 @@ pub const UPLOAD_SCRIPT: &str = concat!(
     "status=$?; exit \"$status\"",
 );
 
+/// The remote script of `provision install` (Laysi/trustiot-v2#617): always the agent installed
+/// on the gateway, whose configuration names the files it writes. Positional parameters: hardware
+/// ID, `sudo` or `direct`. Standard input passes through to the agent. The same rules as
+/// [`INSTALLED_SCRIPT`].
+///
+/// With `sudo`, a status 1 is either the agent's own failure or sudo's refusal to run it; the
+/// script then asks `sudo -n -l` whether the ssh user may run the same command without a
+/// password and, when it may not, ends with [`install::SUDO_REFUSED_STATUS`] (92) instead.
+/// Every other status is the agent's (or the shell's 127).
+pub const INSTALL_SCRIPT: &str = concat!(
+    "set -u; id=$1; run=$2; ",
+    "set -- provision install --hardware-id \"$id\"; ",
+    "if [ \"$run\" = sudo ]; then ",
+    "sudo -n trustiot-agent \"$@\"; status=$?; ",
+    "if [ \"$status\" = 1 ]; then ",
+    "if sudo -n -l trustiot-agent \"$@\" </dev/null >/dev/null 2>&1; then :; else exit 92; fi; ",
+    "fi; ",
+    "exit \"$status\"; fi; ",
+    "exec trustiot-agent \"$@\"",
+);
+
 /// [`UPLOAD_SCRIPT`]'s status when the temporary directory or the file in it cannot be made.
 pub const UPLOAD_FAILED: i32 = 90;
 
@@ -577,19 +607,39 @@ pub fn remote_command(
     if let Some(sum) = upload_sha256 {
         words.push(sum.to_owned());
     }
+    let script = if upload_sha256.is_some() {
+        UPLOAD_SCRIPT
+    } else {
+        INSTALLED_SCRIPT
+    };
+    shell_command(script, &words)
+}
+
+/// The remote command of `provision install` for `hardware_id` (Laysi/trustiot-v2#617):
+/// [`INSTALL_SCRIPT`] with the hardware ID and `sudo` or `direct`.
+///
+/// # Errors
+///
+/// A usage error when the hardware ID is not a [safe word](is_safe_word); nothing is sent then.
+pub fn install_command(hardware_id: &str, sudo: bool) -> Result<String, Error> {
+    let words = [
+        hardware_id.to_owned(),
+        if sudo { "sudo" } else { "direct" }.to_owned(),
+    ];
+    shell_command(INSTALL_SCRIPT, &words)
+}
+
+/// `sh -c '<script>' trustiot-provision` and each word in single quotes, once every word is a
+/// [safe word](is_safe_word).
+fn shell_command(script: &str, words: &[String]) -> Result<String, Error> {
     if let Some(unsafe_word) = words.iter().find(|word| !is_safe_word(word)) {
         return Err(Error::Usage(format!(
             "{:?} cannot be sent to the gateway: only ASCII letters, digits, '.', '_' and '-'",
             printable(unsafe_word)
         )));
     }
-    let script = if upload_sha256.is_some() {
-        UPLOAD_SCRIPT
-    } else {
-        INSTALLED_SCRIPT
-    };
     let mut command = format!("sh -c '{script}' {SCRIPT_NAME}");
-    for word in &words {
+    for word in words {
         command.push_str(" '");
         command.push_str(word);
         command.push('\'');
@@ -843,21 +893,50 @@ impl SshGateway {
     /// runs then), and a usage error (inside [`SshError::Local`]) when a value cannot be sent.
     pub async fn provision(&self, request: &Request<'_>) -> Result<Ran, SshError> {
         let command = remote_command(request, self.sudo, self.uploaded_sha256())?;
-        let options = self.checked_options(request.hardware_id).await?;
+        let upload = self.upload.as_ref().map(|agent| agent.bytes.as_slice());
+        self.run_retried(&command, upload, request.hardware_id, request.mode.word())
+            .await
+    }
+
+    /// Runs `trustiot-agent provision install --hardware-id <hardware_id>` of the agent installed
+    /// on the gateway (with `sudo -n` when this gateway uses sudo), with `stdin` on its standard
+    /// input, with the same ssh options and host key check as [`Self::provision`] and retrying
+    /// ssh's own failures as it does (Laysi/trustiot-v2#617).
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::provision`].
+    pub async fn install(&self, hardware_id: &GatewayId, stdin: &[u8]) -> Result<Ran, SshError> {
+        let command = install_command(hardware_id.as_str(), self.sudo)?;
+        self.run_retried(&command, Some(stdin), hardware_id, "install")
+            .await
+    }
+
+    /// Runs `command` with `stdin` (none: an empty standard input) and the options
+    /// [`Self::checked_options`] gives for `hardware_id`, retrying ssh's own failures: see the
+    /// module documentation. `mode` is for the log.
+    async fn run_retried(
+        &self,
+        command: &str,
+        stdin: Option<&[u8]>,
+        hardware_id: &GatewayId,
+        mode: &str,
+    ) -> Result<Ran, SshError> {
+        let options = self.checked_options(hardware_id).await?;
         let started = Instant::now();
         let run_deadline = started + self.run_timeout;
         let mut attempt: u32 = 1;
         loop {
             debug!(
                 destination = %self.destination,
-                hardware_id = request.hardware_id.as_str(),
-                mode = request.mode.word(),
+                hardware_id = hardware_id.as_str(),
+                mode,
                 attempt,
                 "running trustiot-agent provision over ssh"
             );
             let deadline = (Instant::now() + self.attempt_timeout).min(run_deadline);
             let last = match self
-                .attempt(&options, &command, deadline)
+                .attempt(&options, command, stdin, deadline)
                 .await
                 .map_err(SshError::Spawn)?
             {
@@ -894,13 +973,14 @@ impl SshGateway {
         }
     }
 
-    /// One ssh call: writes the upload (if any) to its standard input, reads at most
+    /// One ssh call: writes `stdin` (if any) to its standard input, reads at most
     /// [`MAX_REPORT_BYTES`] + 1 of standard output and [`MAX_STDERR_BYTES`] of standard error,
     /// all before `deadline`, when the call is killed.
     async fn attempt(
         &self,
         options: &[String],
         command: &str,
+        stdin: Option<&[u8]>,
         deadline: Instant,
     ) -> io::Result<Attempt> {
         let deadline = tokio::time::Instant::from_std(deadline);
@@ -911,7 +991,7 @@ impl SshGateway {
             .arg(command)
             .env_clear()
             .envs(Self::environment())
-            .stdin(if self.upload.is_some() {
+            .stdin(if stdin.is_some() {
                 Stdio::piped()
             } else {
                 Stdio::null()
@@ -920,14 +1000,15 @@ impl SshGateway {
             .stderr(Stdio::piped())
             .kill_on_drop(true)
             .spawn()?;
+        let input = stdin;
         let stdin = child.stdin.take();
         let stdout = child.stdout.take();
         let stderr = child.stderr.take();
-        let upload = self.upload.as_ref().map(|agent| agent.bytes.as_slice());
         let write = async move {
-            if let (Some(mut stdin), Some(bytes)) = (stdin, upload) {
-                // The remote side may end before it reads everything (a failed mktemp): a broken
-                // pipe here is its answer, which the exit status reports.
+            if let (Some(mut stdin), Some(bytes)) = (stdin, input) {
+                // The remote side may end before it reads everything (a failed mktemp, an agent
+                // that refuses its arguments): a broken pipe here is its answer, which the exit
+                // status reports.
                 let _ = stdin.write_all(bytes).await;
                 let _ = stdin.shutdown().await;
             }
@@ -980,6 +1061,72 @@ impl SshGateway {
             stderr,
             attempts: 0,
         }))
+    }
+}
+
+/// `provision install` over ssh, after the registration (Laysi/trustiot-v2#617). The arguments
+/// must be [`install::remote_arguments`] of a hardware ID; the gateway's [`INSTALL_SCRIPT`]
+/// builds the same command from the hardware ID alone, so nothing else could be run this way.
+impl install::Remote for &SshGateway {
+    async fn run_agent(
+        &mut self,
+        arguments: &[String],
+        stdin: &[u8],
+    ) -> Result<RemoteOutcome, Error> {
+        let hardware_id = match arguments {
+            [first, second, third, hardware_id]
+                if [first.as_str(), second.as_str(), third.as_str()]
+                    == install::REMOTE_SUBCOMMAND =>
+            {
+                hardware_id
+            }
+            _ => {
+                return Err(Error::Failed(format!(
+                    "only `trustiot-agent provision install --hardware-id <id>` is run on the \
+                     gateway after the registration, not {:?}",
+                    printable(&arguments.join(" "))
+                )));
+            }
+        };
+        let hardware_id = GatewayId::new(hardware_id.as_str()).map_err(|error| {
+            Error::Failed(format!(
+                "trustiot-agent provision install: not a hardware ID: {error}"
+            ))
+        })?;
+        let ran = match SshGateway::install(self, &hardware_id, stdin).await {
+            Ok(ran) => ran,
+            Err(SshError::Unreachable { attempts, last }) => {
+                return Err(Error::Failed(format!(
+                    "trustiot-agent provision install on {}: could not reach the gateway through \
+                     ssh after {attempts} attempt(s) (last: {last}). An attempt whose answer was \
+                     lost may have installed the certificates; run the same command again: it is \
+                     safe",
+                    self.destination
+                )));
+            }
+            Err(SshError::Spawn(error)) => {
+                return Err(Error::Failed(format!(
+                    "cannot run {SSH_PROGRAM}: {error}; the tool needs the system's OpenSSH client"
+                )));
+            }
+            // The same refusal as before provision: nothing ran on the gateway.
+            Err(SshError::Configuration(message)) => return Err(Error::Failed(message)),
+            Err(SshError::Local(error)) => return Err(error),
+        };
+        if ran.too_long {
+            // The call was ended at the limit, so its status says nothing.
+            return Err(Error::Failed(format!(
+                "trustiot-agent provision install on {} wrote more than {MAX_REPORT_BYTES} bytes \
+                 on standard output, which is not its answer; the call was ended. Run the same \
+                 command again: it is safe",
+                self.destination
+            )));
+        }
+        Ok(RemoteOutcome {
+            status: ran.status,
+            stdout: ran.stdout,
+            stderr: ran.stderr.into_bytes(),
+        })
     }
 }
 
@@ -1089,7 +1236,7 @@ mod tests {
 
     #[test]
     fn scripts_cannot_be_broken_out_of() {
-        for script in [INSTALLED_SCRIPT, UPLOAD_SCRIPT] {
+        for script in [INSTALLED_SCRIPT, UPLOAD_SCRIPT, INSTALL_SCRIPT] {
             for forbidden in ['\'', '!', '\\', '\n', '`'] {
                 assert!(!script.contains(forbidden), "{forbidden:?} in {script}");
             }
@@ -1128,6 +1275,77 @@ mod tests {
             remote_command(&request, true, Some("ab;cd")),
             Err(Error::Usage(_))
         ));
+    }
+
+    #[test]
+    fn the_install_script_ends_with_the_sudo_refusal_status_the_tool_reads() {
+        assert!(
+            INSTALL_SCRIPT.contains(&format!(
+                "then :; else exit {}; fi",
+                install::SUDO_REFUSED_STATUS
+            )),
+            "{INSTALL_SCRIPT}"
+        );
+        for status in [UPLOAD_FAILED, CHECKSUM_MISMATCH, SSH_FAILURE] {
+            assert_ne!(status, install::SUDO_REFUSED_STATUS);
+        }
+    }
+
+    #[test]
+    fn the_install_command_is_its_script_and_checked_words() {
+        assert_eq!(
+            install_command("tg-0001", false).expect("a command"),
+            format!("sh -c '{INSTALL_SCRIPT}' trustiot-provision 'tg-0001' 'direct'")
+        );
+        assert_eq!(
+            install_command("tg-0001", true).expect("a command"),
+            format!("sh -c '{INSTALL_SCRIPT}' trustiot-provision 'tg-0001' 'sudo'")
+        );
+        for bad in ["tg 0001", "tg'0001", "$(reboot)", "-tg", ""] {
+            assert!(
+                matches!(install_command(bad, false), Err(Error::Usage(_))),
+                "{bad:?}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn only_provision_install_is_run_as_the_install_step() {
+        let ssh = SshGateway::new(
+            Destination::parse("gw").expect("a destination"),
+            KnownHosts::in_directory(Path::new("/srv/ws")).expect("safe"),
+            None,
+            false,
+        );
+        // The right shape, but not a hardware ID: refused before ssh runs.
+        let arguments: Vec<String> = ["provision", "install", "--hardware-id", "tg 0001;id"]
+            .into_iter()
+            .map(str::to_owned)
+            .collect();
+        let refused = install::Remote::run_agent(&mut &ssh, &arguments, b"").await;
+        assert!(
+            matches!(&refused, Err(Error::Failed(message)) if message.contains("not a hardware ID")),
+            "{refused:?}"
+        );
+        for arguments in [
+            vec!["provision", "--hardware-id", "tg-0001"],
+            vec!["provision", "install", "--hardware-id"],
+            vec!["provision", "install", "--config", "tg-0001"],
+            vec![
+                "provision",
+                "install",
+                "--hardware-id",
+                "tg-0001",
+                "--config",
+            ],
+        ] {
+            let arguments: Vec<String> = arguments.into_iter().map(str::to_owned).collect();
+            let refused = install::Remote::run_agent(&mut &ssh, &arguments, b"").await;
+            assert!(
+                matches!(&refused, Err(Error::Failed(message)) if message.contains("only")),
+                "{arguments:?}: {refused:?}"
+            );
+        }
     }
 
     #[test]

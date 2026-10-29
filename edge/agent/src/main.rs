@@ -3,13 +3,15 @@
 //! ```text
 //! trustiot-agent [--config <file>] [--check]
 //! trustiot-agent provision --hardware-id <id> [--handle <hex>] [--device <path>] [--inspect]
+//! trustiot-agent provision install --hardware-id <id>
 //! ```
 //!
 //! Start-up loads and checks the configuration, both TLS layers, the client certificate and
 //! its key (the TPM in production), then tells systemd it is ready (`READY=1`), connected or
 //! not: a gateway without network still runs and keeps trying. `--check` stops after the
-//! checks, for operators and update health checks. `provision` is the production workstation's
-//! subcommand ([`agent::provision`]): it does not start the service.
+//! checks, for operators and update health checks. `provision` and `provision install` are the
+//! production workstation's subcommands ([`agent::provision`],
+//! [`agent::provision::install`]): they do not start the service.
 //!
 //! Threads: the connection (TLS handshakes, MQTT) runs on its own thread with a single-threaded
 //! tokio runtime, because a full inner handshake waits about 70 ms for the TPM signature inside
@@ -78,14 +80,17 @@ const _: () = assert!(
 
 const USAGE: &str = "usage: trustiot-agent [--config <file>] [--check]
        trustiot-agent provision --hardware-id <id> [--handle <hex>] [--device <path>] [--inspect]
+       trustiot-agent provision install --hardware-id <id>
 
-  --config <file>  the configuration file (default /etc/trustiot/agent.toml)
+  --config <file>  the configuration file (default /etc/trustiot/agent.toml; provision install
+                   always reads that one)
   --check          check the configuration, certificate and key, then exit
   --version        print the version
   --help           print this help
 
 The log level is TRUSTIOT_AGENT_LOG (error, warn, info, debug, trace; default info).
-`trustiot-agent provision --help` explains the production workstation's subcommand.";
+`trustiot-agent provision --help` and `trustiot-agent provision install --help` explain the
+production workstation's subcommands.";
 
 struct Args {
     config: PathBuf,
@@ -197,6 +202,14 @@ fn main() -> ExitCode {
 )]
 fn provision(args: impl Iterator<Item = OsString>) -> ExitCode {
     use agent::provision::{self, Command, Exit};
+    let mut args = args.peekable();
+    if args
+        .peek()
+        .is_some_and(|first| first == provision::install::SUBCOMMAND)
+    {
+        let _subcommand = args.next();
+        return install(args);
+    }
     let options = match provision::parse_args(args) {
         Ok(Command::Provision(options)) => options,
         Ok(Command::Help) => {
@@ -213,6 +226,48 @@ fn provision(args: impl Iterator<Item = OsString>) -> ExitCode {
     let exit = provision::run(
         &options,
         &mut || TpmTransport::Device(device.clone()),
+        &mut std::io::stdout(),
+        &mut std::io::stderr(),
+    );
+    ExitCode::from(exit.code())
+}
+
+/// `trustiot-agent provision install`: the certificates from stdin, one line per file on stdout,
+/// everything else on stderr, and the exit status of [`agent::provision::install::Exit`].
+#[allow(
+    clippy::print_stdout,
+    clippy::print_stderr,
+    reason = "a command-line program answers --help and usage errors on the terminal"
+)]
+fn install(args: impl Iterator<Item = OsString>) -> ExitCode {
+    use agent::provision::install::{self, Command, Exit, Owners};
+    let options = match install::parse_args(args) {
+        Ok(Command::Install(options)) => options,
+        Ok(Command::Help) => {
+            println!("{}", install::USAGE);
+            return ExitCode::SUCCESS;
+        }
+        Err(error) => {
+            eprintln!(
+                "trustiot-agent provision install: {error}\n\n{}",
+                install::USAGE
+            );
+            return ExitCode::from(Exit::Usage.code());
+        }
+    };
+    init_logging();
+    let owners = match Owners::system() {
+        Ok(owners) => owners,
+        Err(error) => {
+            eprintln!("trustiot-agent provision install: {error}");
+            return ExitCode::from(Exit::Configuration.code());
+        }
+    };
+    let exit = install::run(
+        &options,
+        &owners,
+        &mut |device| TpmTransport::Device(device.to_owned()),
+        &mut std::io::stdin().lock(),
         &mut std::io::stdout(),
         &mut std::io::stderr(),
     );

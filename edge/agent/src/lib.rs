@@ -41,6 +41,7 @@ pub mod buffer;
 pub mod clock;
 pub mod config;
 pub mod desired;
+mod directory;
 pub mod dispatch;
 pub mod heartbeat;
 pub mod identity;

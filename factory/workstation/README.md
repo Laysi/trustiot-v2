@@ -9,6 +9,8 @@
 
 產線的一輪是：`init` → `login` → `enroll`（一台工作站做一次），每台閘道器 `register --gateway` → `verify`，交班時 `logout`。
 
+`verify` 是事後的查證，不是安裝前的關卡：`register --gateway` 登錄後就把憑證裝到閘道器上，不等 `verify`；`verify` 查出不符（結束碼 25）時，那台閘道器要隔離，見「結束碼」。
+
 ## 建置
 
 在可信的建置機（與部署的版本同一個 commit）：
@@ -28,7 +30,7 @@ cargo build --release --locked -p workstation
 | `workstation-key.pem` | 工作站目錄 | 0600，已存在就不覆寫 | 工作站的 ECDSA P-256 私鑰（PKCS #8 PEM），不離開這台工作站 |
 | `workstation.csr` | 工作站目錄 | 0644 | CSR（公開資料） |
 | `workstation.pem` | 工作站目錄 | 0644 | 工作站憑證（公開資料），通過檢查才寫入；寫入的是由檢查過的 DER 重新編碼的那一張，不是輸入的原文 |
-| `registrations/<硬體 ID>.json` | 工作站目錄 | 0600 | 一台閘道器的登錄紀錄：`pending`（送出前）或 `registered`（回應通過檢查後，含平台回的整筆登錄與憑證鏈），以及操作員釘住的根憑證 SHA-256（`root_sha256`，Laysi/trustiot-v2#617 安裝根憑證前再比對一次）；整檔原子替換 |
+| `registrations/<硬體 ID>.json` | 工作站目錄 | 0600 | 一台閘道器的登錄紀錄：`pending`（送出前）或 `registered`（回應通過檢查後，含平台回的整筆登錄與憑證鏈），以及操作員釘住的根憑證 SHA-256（`root_sha256`；Laysi/trustiot-v2#617 安裝根憑證前，它與根憑證都要等於操作員當次給的 `--root-sha256`）；整檔原子替換 |
 | `registrations.jsonl` | 工作站目錄 | 0600 | 登錄的日誌，只附加：每次執行的開始、每次失敗的嘗試、成功、停止或放棄，各一行 JSON |
 | `known_hosts` | 工作站目錄 | ssh 建立 | `register --gateway` 連過的閘道器的主機金鑰，以 `trustiot-<硬體 ID>` 為名（見 `register` 的「經 ssh 取得」）；由 ssh 寫入，工具不讀也不改 |
 | `session` | `$XDG_RUNTIME_DIR/trustiot-workstation/` | 0600 | 平台管理員的 session cookie 與它所屬的平台網址 |
@@ -129,8 +131,8 @@ trustiot-workstation register --hardware-id <硬體 ID> --csr gateway.csr --ek e
 | `--hardware-id` | 閘道器的硬體 ID：1 到 64 個 ASCII 英數字、`.`、`_`、`-`，以英數字開頭。**取自閘道器標籤**（見下方），不取自閘道器的回答 |
 | `--gateway` | ssh 目的地：`[使用者@]主機`，主機是名稱、位址或 `~/.ssh/config` 裡的 Host。只接受 ASCII 英數字、`.`、`_`、`-`、`:`、`%`、`[`、`]` 與至多一個 `@`，不以 `-` 開頭；埠號、金鑰與其他設定寫在 ssh 設定裡 |
 | `--handle` | 閘道器金鑰的 TPM persistent handle，`0x` 加 1 到 8 個十六進位數字，預設 `0x81000100`。只接受 owner 範圍（`0x81000000` 到 `0x817fffff`），不接受 SRK 的 `0x81000001`。與 agent 的預設相同，平常不必給 |
-| `--upload-agent` | 每次執行前把這個 agent 執行檔（aarch64，最大 64 MiB）上傳到閘道器的暫存目錄執行，結束後刪除；不給時執行閘道器上已安裝的 `trustiot-agent`。檔案必須屬於執行工具的使用者，群組與其他人不能寫入（例如 0755），否則拒絕：它在閘道器上以 root 執行 |
-| `--remote-sudo` | 在閘道器上以 `sudo -n` 執行 agent（ssh 的使用者讀不了 `/dev/tpmrm0` 時）。`-n` 讓 sudo 需要密碼時直接失敗，不會卡住；閘道器要為這個使用者設定免密碼執行 agent |
+| `--upload-agent` | 每次執行 `provision` 前把這個 agent 執行檔（aarch64，最大 64 MiB）上傳到閘道器的暫存目錄執行，結束後刪除；不給時執行閘道器上已安裝的 `trustiot-agent`。檔案必須屬於執行工具的使用者，群組與其他人不能寫入（例如 0755），否則拒絕：它在閘道器上以 root 執行。登錄後安裝憑證一律用閘道器上已安裝的 agent（見「把憑證鏈與根憑證裝回閘道器」） |
+| `--remote-sudo` | 在閘道器上以 `sudo -n` 執行 agent（ssh 的使用者讀不了 `/dev/tpmrm0`、寫不了 agent 的檔案時；安裝憑證也用它）。`-n` 讓 sudo 需要密碼時直接失敗，不會卡住；閘道器要為這個使用者設定免密碼執行 agent |
 | `--allow-new-key` | 工作站已有這個硬體 ID 的紀錄、閘道器的 TPM 是紀錄的那顆（EK 相同）卻沒有金鑰或是另一把金鑰時，仍建立新金鑰（或沿用那把）並送出（見「TPM 被清除過」）。EK 不同（另一顆 TPM，結束碼 27）時不放行。只在確認過標籤、要讓平台回答時才給 |
 | `--csr` | 從檔案時：閘道器 TPM 金鑰的 CSR，一個 PEM `CERTIFICATE REQUEST`，ECDSA P-256，以 ecdsa-with-SHA256 由它自己的金鑰簽章。不能和 `--gateway` 一起給 |
 | `--ek` | 從檔案時：TPM 的 endorsement key，一個 PEM `PUBLIC KEY`。不能和 `--gateway` 一起給 |
@@ -181,14 +183,15 @@ trustiot-workstation register --hardware-id <硬體 ID> --csr gateway.csr --ek e
 5. **檢查報告**（agent 的讀者義務，crates/protocol/README.md）：agent 結束碼 0、而且 stdout 是一份報告才採用，否則 stdout 整份丟掉；stdout 最多讀 16 KiB，超過就不採用；`hardware_id` 等於 `--hardware-id`、`key_handle` 等於 `--handle`；endorsement key 是 P-256 的公鑰；有 EK 憑證時它的公鑰要是這把 EK；CSR 由工具自己解析：主體只有一個 CN、等於硬體 ID，公鑰與報告的 `public_key` 逐 byte 相同，簽章驗得過。任何一項不過就停在結束碼 21，不登錄。
 6. **登錄**：以報告的 CSR 與 endorsement key，走下方「登錄的步驟」。
 7. 印出金鑰是這次建立的還是沿用的、公鑰的 SHA-256，以及登錄的結果。
+8. **安裝憑證**：以剛寫下的紀錄，在閘道器上執行已安裝的 agent 的 `provision install`，把憑證鏈與根憑證裝回去（見下方「把憑證鏈與根憑證裝回閘道器」），印出每個檔案寫了還是沒變。這次 ssh 和前面幾步用同一組選項：同樣以 `trustiot-<硬體 ID>` 為名查工具自己的 `known_hosts`，執行前同樣以 `ssh -G` 檢查。這一步停下時登錄仍然有效（紀錄維持 `registered`），訊息先說明這點，結束碼是安裝的 30 到 35；修正後重跑同一個指令（平台回 200），就會再裝一次。
 
-**到閘道器的只有這些**：ssh 的命令列是上面的固定選項、`--`、目的地，以及一個固定的 `sh -c '<固定的腳本>'`，參數只有硬體 ID、handle、`inspect` 或 `provision`、`sudo` 或 `direct`，上傳時再加 agent 的 SHA-256；標準輸入只有 agent 執行檔（上傳時），否則是空的。ssh 的環境只留 `PATH`、`HOME`、`USER`、`LOGNAME`、`SSH_AUTH_SOCK`、`XDG_RUNTIME_DIR`。session cookie、驗證碼、`--headers-file` 的值、工作站的私鑰與憑證、登錄請求的簽章標頭都不會到閘道器（`tests/ssh.rs` 以假的 ssh 記錄每次呼叫的 argv、環境與 stdin 檢查）。參數只能是英數字、`.`、`_`、`-`，不以 `-` 開頭，所以引號、空白、`;`、`$(…)` 這類值在送出前就被拒絕（結束碼 2），不靠跳脫。
+**到閘道器的只有這些**：ssh 的命令列是上面的固定選項、`--`、目的地，以及一個固定的 `sh -c '<固定的腳本>'`，參數只有硬體 ID、handle、`inspect` 或 `provision`、`sudo` 或 `direct`，上傳時再加 agent 的 SHA-256；標準輸入只有 agent 執行檔（上傳時），否則是空的。安裝憑證時是另一個固定的腳本，參數只有硬體 ID 與 `sudo` 或 `direct`，標準輸入只有閘道器憑證、簽發 CA 與根憑證三張 PEM。ssh 的環境只留 `PATH`、`HOME`、`USER`、`LOGNAME`、`SSH_AUTH_SOCK`、`XDG_RUNTIME_DIR`。session cookie、驗證碼、`--headers-file` 的值、工作站的私鑰與憑證、登錄請求的簽章標頭都不會到閘道器（`tests/ssh.rs` 以假的 ssh 記錄每次呼叫的 argv、環境與 stdin 檢查）。參數只能是英數字、`.`、`_`、`-`，不以 `-` 開頭，所以引號、空白、`;`、`$(…)` 這類值在送出前就被拒絕（結束碼 2），不靠跳脫。
 
 **上傳的 agent**：遠端腳本在 `mktemp -d` 建的私有目錄（umask 077）收下 agent，以 `sha256sum` 比對工作站送的 SHA-256，不符就不執行（遠端腳本以狀態 91 結束，工具的結束碼 22）；執行完、失敗或連線中斷（HUP、INT、PIPE、TERM）都會刪除那個目錄（sshd 以預設的訊號處理啟動 session；若閘道器上的 shell 一開始就忽略某個訊號，POSIX shell 無法再 trap 它，那個訊號就不會觸發刪除，留下的目錄是只有 ssh 使用者讀得到的 0700 目錄）。閘道器的暫存目錄（`TMPDIR` 或 `/tmp`）掛載成 `noexec` 時 agent 無法執行（狀態 126），改用出廠映像安裝的 agent 或換 `TMPDIR`。
 
-**ssh 的重試**：ssh 自己的失敗（結束碼 255：連不上、連線中斷）與逾時都會重試：最多 5 次，第一次開始 2 分鐘後不再開始新的嘗試，間隔從 1 秒起加倍、上限 10 秒。每次嘗試（上傳、執行與結束）最多 300 秒，在閘道器上的一次執行（檢查或 `provision`，含所有重試與等待）最多 420 秒，到了就結束 ssh。重試是安全的：`provision` 是冪等的，回答遺失後重跑會找到上一次建立的金鑰、報告同一把公鑰（`created` 變成 `false`），不會多建立一把。agent 自己的失敗（結束碼 1 到 7，或上傳的 90、91）不重試，重試也不會變；工具印出 agent 結束碼的意思與閘道器 stderr 的最後幾行。
+**ssh 的重試**：ssh 自己的失敗（結束碼 255：連不上、連線中斷）與逾時都會重試：最多 5 次，第一次開始 2 分鐘後不再開始新的嘗試，間隔從 1 秒起加倍、上限 10 秒。每次嘗試（上傳、執行與結束）最多 300 秒，在閘道器上的一次執行（檢查、`provision` 或安裝憑證，含所有重試與等待）最多 420 秒，到了就結束 ssh。重試是安全的：`provision` 是冪等的，回答遺失後重跑會找到上一次建立的金鑰、報告同一把公鑰（`created` 變成 `false`），不會多建立一把；安裝憑證遇到已經對的檔案不會重寫。agent 自己的失敗（結束碼 1 到 7，或上傳的 90、91）不重試，重試也不會變；工具印出 agent 結束碼的意思與閘道器 stderr 的最後幾行。
 
-**重跑的意思**：同一個指令再跑一次是安全的。TPM 的金鑰沿用（「已經在、沿用」），平台回 200 與同一筆登錄、同一個序號，紀錄維持 `registered`。重刷 SD 卡不會改變 TPM：重刷後重跑一樣得到 200 與同一個序號（重刷後閘道器沒有安裝 agent 時給 `--upload-agent`）。
+**重跑的意思**：同一個指令再跑一次是安全的。TPM 的金鑰沿用（「已經在、沿用」），平台回 200 與同一筆登錄、同一個序號，紀錄維持 `registered`。重刷 SD 卡不會改變 TPM：重刷後重跑一樣得到 200 與同一個序號，憑證也會再裝一次（重刷後閘道器沒有安裝 agent 時，`--upload-agent` 讓登錄完成，但憑證要等 agent 裝好、再跑一次才裝得上，那之前停在結束碼 33）。
 
 **TPM 被清除過**（`tpm2_clear`、BIOS 或韌體清除）：TPM 的金鑰已經不在，清除過的 TPM 是新裝置（決策 12）。清除不會改變 EK，所以工具認得出是同一顆 TPM：工作站有這個硬體 ID 的紀錄、EK 和紀錄相同，檢查時 TPM 卻沒有金鑰（或有一把不是紀錄的金鑰，例如清除後又建立過），工具停在結束碼 20，**不建立金鑰、不送出**。也可能是 `--handle` 給了和上次不同的 handle，先核對。確定是同一台而且要讓平台回答時，加 `--allow-new-key` 再跑：工具建立新金鑰（或沿用 handle 上那把）並送出。平台已經登錄這個硬體 ID 時，以 409 `public_key_mismatch` 拒絕（結束碼 10），這台閘道器要新的硬體 ID；紀錄還是 `pending`、平台其實也還沒登錄過時，平台會接受新金鑰（201）。工作站沒有紀錄（例如在另一台工作站登錄的閘道器）時看不出這種情況，由平台以 409 擋下。
 
@@ -212,6 +215,31 @@ trustiot-workstation register --hardware-id <硬體 ID> --csr gateway.csr --ek e
 
 日誌 `registrations.jsonl` 每行有 `at`、`hardware_id`、`event`，以及該事件的欄位：`provisioned`（`--gateway` 時：handle、金鑰是否這次建立、`ek_certificate` 是 `for_this_key` 或 `absent`、兩個雜湊、是否給了 `--allow-new-key`、上傳的 agent 的 SHA-256）、`provision_stopped`（`--gateway` 時停在登錄之前：步驟、agent 的結束碼或 ssh 的嘗試次數、問題、停止的種類）、`started`（平台網址、釘住的 `root_sha256`、兩個雜湊、工作站憑證序號、之前是否已記為 registered）、`attempt_failed`（第幾次、問題：`connect`、`exchange`、`timeout` 或 `status 503` 之類）、`registered`（第幾次、狀態碼、序號、`ca_key_id`、到期時間）、`stopped`（狀態碼、訊息 key、原因、停止的種類）、`gave_up`。紀錄與日誌都不含 cookie、私鑰、簽章或 nonce。
 
+#### 把憑證鏈與根憑證裝回閘道器（`install` 模組，Laysi/trustiot-v2#617）
+
+`register --gateway` 登錄記為 `registered` 之後（上面的第 8 步），函式庫函式 `install::install` 經 ssh 在閘道器上執行 agent 的 `trustiot-agent provision install --hardware-id <硬體 ID>`（[edge/agent/README.md](../../edge/agent/README.md)「安裝憑證鏈與根憑證」；有 `--remote-sudo` 時以 `sudo -n`），由閘道器再檢查一次、寫進 agent 設定的 `identity.certificate` 與 `broker.ca`。
+
+- **一律用閘道器上已安裝的 agent**，即使給了 `--upload-agent`：寫入的檔案是給已安裝的 agent 用的，路徑來自它的設定檔，檢查也要是之後讀這些檔案的那個 agent 的檢查；閘道器沒有安裝 agent 時也沒有設定檔，本來就裝不上。代價是閘道器上的 agent 比這個工具舊、還沒有 `provision install` 時，要先更新它（結束碼 33）。
+- **閘道器上的存取只能做這件事**：這個指令以 root 換掉閘道器信任的根，所以工作站登入閘道器用的 ssh 金鑰要專用，只能執行 agent 的 `provision` 子命令：在閘道器的 `authorized_keys` 以 `command=`（加 `restrict`，或 sshd 的 `ForceCommand`）指向只接受這些固定參數的指令，或以參數寫死的 sudoers 規則執行，不能有任意指令的 root 或 sudo 權限（edge/agent README「安裝憑證鏈與根憑證」的前提；閘道器那一側的轉接程式與 sudoers 是 Laysi/trustiot-v2#219，見上方「還沒實作」）。
+- **送到閘道器的只有公開資料**：ssh 的遠端命令是固定的腳本，參數只有硬體 ID（先以閘道器 ID 的規則檢查，裡面沒有空白或殼層字元）與 `sudo` 或 `direct`；stdin 只有從紀錄重新編碼的三張 PEM 憑證：閘道器憑證、簽發 CA、根憑證。紀錄裡的其他欄位不送；session cookie、工作站的私鑰與憑證、簽章標頭本來就不在紀錄裡（`tests/ssh.rs` 以假的 ssh 檢查 stdin 剛好是這三張憑證）。
+- **送出前先檢查紀錄**，任何一項不符就什麼都不送：紀錄是這個硬體 ID 的 `registered`；`root_certificate` 的 SHA-256 與紀錄裡的 `root_sha256` 都要等於操作員這次執行給的 `--root-sha256`（函式的 `pinned_root_sha256` 參數，不從紀錄讀），任何一個不符就停在結束碼 30：根憑證會成為閘道器驗 broker 的唯一信任錨；能改寫紀錄的人可以把兩個欄位一起換掉，所以只和紀錄自己比對不夠；鏈剛好是閘道器憑證（CN 是硬體 ID）再接簽發它的 CA，而且根憑證簽了那張 CA。鏈只有憑證本身時停在結束碼 31（broker 會拒絕拿不出簽發 CA 的閘道器）。
+- **閘道器的回答**：0 完成（stdout 每個檔案一行 `written` 或 `unchanged`；閘道器的 agent 在登錄之後已經為同一把 TPM 金鑰換發過憑證時，`identity.certificate` 那一行是 `renewed`：閘道器保留較新的那張、根照常安裝，這也是完成，工具印出「kept the certificate its agent renewed」，不要為了裝回登錄的憑證去刪它；結束狀態 0 但 stdout 不是剛好這兩行（先憑證鏈、再根憑證，每行是絕對路徑、`: ` 與 `written`、`unchanged` 或憑證鏈的 `renewed`，以換行結束，沒有控制字元）時不算完成，是結束碼 34）、8 閘道器拒絕了這些憑證（例如憑證的公鑰不是它 TPM 的金鑰、根的 CRL 不是這個根簽的），沒有寫任何檔案、9 閘道器上 agent 的安裝還不能用（沒有設定檔、目錄不存在、設定檔或目錄的擁有者與權限不對、路徑經過符號連結、沒有 `trustiot-agent` 帳號），沒有寫任何檔案；127（閘道器上找不到 `trustiot-agent`）與 2（agent 不認得 `provision install`，太舊）也一樣是還不能用。有 `--remote-sudo` 時，agent 自己的失敗與 sudo 拒絕執行都是結束狀態 1，所以安裝的固定腳本遇到 1 時再以 `sudo -n -l` 問 sudo 這個 ssh 使用者能不能免密碼執行同一個指令；不能時腳本改以 92 結束，表示 sudo 沒有執行 agent（沒有免密碼執行這個指令的 sudoers 規則，或 sudo 的 `secure_path` 找不到 `trustiot-agent`），工具結束碼 33，訊息指向 sudoers 與 Laysi/trustiot-v2#219，閘道器的 sudo 設定修好之前重跑沒有用。工具不從 stderr 的文字判斷是不是 sudo 拒絕。閘道器的 sudoers 把 `listpw` 設成 `always` 時 `sudo -n -l` 一律要密碼，agent 自己的 1 也會被當成 sudo 拒絕；預設的 `any` 沒有這個問題。其他結束狀態、ssh 重試後仍連不上或逾時、紀錄讀不了或不能用都算失敗（結束碼 34），重跑同一個指令是安全的；ssh 自己的失敗（255）和 `provision` 一樣重試。閘道器的 stderr 與 stdout 在顯示前把控制字元與 Unicode 格式字元（Cf 類，例如改變顯示方向的 U+202E）換成空白，stderr 併成一行，兩者都截斷。
+- **重跑與重刷**：閘道器上內容、擁有者與權限都對的檔案不會被重寫，所以重跑永遠安全。閘道器重刷映像之後 TPM 金鑰還在、檔案沒了：重跑同一個登錄（平台回 200 與同一筆登錄），憑證會再裝一次。
+- **agent 不會被重新啟動**：agent 已在執行時，新的憑證在它下次啟動時才生效。
+
+| 結束碼 | 意義 | 怎麼處理 |
+| --- | --- | --- |
+| 30 | 紀錄的 `root_certificate` 或 `root_sha256` 不是這次 `--root-sha256` 給的根，沒有送出 | 不要裝；先核對指紋。指紋沒錯就是紀錄被改過，帶著 `registrations/` 與 `registrations.jsonl` 回報平台管理員 |
+| 31 | 紀錄的鏈沒有簽發 CA，沒有送出 | 那台閘道器要走換發 |
+| 32 | 閘道器拒絕了憑證（agent 的結束碼 8），沒有寫任何檔案 | 看訊息；公鑰不是 TPM 的金鑰時，核對標籤與閘道器 |
+| 33 | 閘道器上 agent 的安裝還不能用（agent 的結束碼 9；沒裝 agent 的 127；agent 太舊的 2），或 sudo 沒有執行 agent（腳本的 92：`sudo -n` 結束狀態 1，而且 `sudo -n -l` 不允許免密碼執行這個指令），沒有寫任何檔案 | 先在閘道器上裝好（或更新）agent 與設定，或補上免密碼執行這個指令的 sudoers 規則（Laysi/trustiot-v2#219），再重跑 |
+| 34 | 其他失敗：ssh 重試後仍連不上或逾時、閘道器的其他結束狀態或訊號、紀錄讀不了或不能用；閘道器有沒有寫檔案不一定 | 看訊息修正原因後重跑同一個指令，重跑是安全的 |
+| 35 | 閘道器**已經裝好**憑證（結束狀態 0 與 agent 的報告），但工作站日誌的 `installed` 那一行寫不進去；訊息附上閘道器的報告 | 憑證已經在閘道器上，不要當成沒裝。依訊息修好日誌（例如權限）後重跑同一個指令：閘道器不重寫已經對的檔案，日誌那一行這時補上 |
+
+這六個結束碼都在登錄之後：登錄已經記下，訊息開頭說明這點；只有 35 的訊息說憑證已經裝好，其他的說沒有裝上。
+
+日誌另有 `installed`（`changed`：閘道器有沒有寫任何檔案；`kept_renewed`：閘道器是否保留了換發過的憑證）與 `install_stopped`（`stop`：`root_mismatch`、`no_issuing_ca`、`refused_by_gateway`、`gateway_not_ready`、`sudo_refused` 或 `failed`；收到閘道器結束狀態時另有 `remote_status`）。
+
 ### 6. `verify`：確認平台記下了登錄
 
 ```sh
@@ -220,7 +248,7 @@ trustiot-workstation verify --hardware-id <硬體 ID>
 
 以平台管理員的 session 讀平台的事件紀錄（`GET /api/identity/v1/platform/event-log`，services/identity/README.md「事件層與操作紀錄」），找這個硬體 ID 的 `certs.gateway_registered` 事件（certs 服務第一次登錄一台閘道器時寫一筆，重跑得到的 200 不再寫）。
 
-- 印出每一筆的時間、序號、登錄的工作站與公鑰的 SHA-256，並和這台工作站的紀錄比對：序號與公鑰都相同時印「it matches this workstation's record」，每一筆都相同才是結束碼 0；有一筆不同時在 stderr 說明那是這個硬體 ID 的另一筆登錄，結束碼 25，請回報平台管理員。
+- 印出每一筆的時間、序號、登錄的工作站與公鑰的 SHA-256，並和這台工作站的紀錄比對：序號與公鑰都相同時印「it matches this workstation's record」，每一筆都相同才是結束碼 0；有一筆不同時在 stderr 說明那是這個硬體 ID 的另一筆登錄，結束碼 25：隔離這台閘道器並回報平台管理員（見「結束碼」的 25）。
 - 這台工作站沒有這個硬體 ID 的 `registered` 紀錄時，找到的事件無從比對：照樣印出，結束碼 26。到登錄那台閘道器的工作站上跑 `verify`。
 - 這台工作站有 `registered` 的紀錄時，從紀錄的 `registered_at` 前 1 小時開始找；沒有紀錄時從頭找。每頁 200 筆，最多讀 50 頁，讀到上限還沒找到時訊息會說只找了最新的幾筆。
 - 找不到時結束碼 24：事件紀錄在登錄後幾秒才寫入，稍等再跑 `verify`；一直沒有時重跑同一個 `register`（安全），仍沒有就回報平台管理員。
@@ -236,11 +264,11 @@ trustiot-workstation logout
 
 ## 結束碼
 
-0 完成、1 失敗、2 命令列用法錯誤適用每個指令；10 到 23 與 75 是 `register` 的，24 到 26 是 `verify` 的。
+0 完成、1 失敗、2 命令列用法錯誤適用每個指令；10 到 23、27、30 到 35 與 75 是 `register` 的，24 到 26 是 `verify` 的。
 
 | 結束碼 | 意義 | 怎麼處理 |
 | --- | --- | --- |
-| 0 | 完成；`register` 是登錄完成（201 新登錄，或 200 平台已有同一筆），`verify` 是找到了事件、而且每一筆都和這台工作站的紀錄相同 | `register` 之後跑 `verify`；把憑證交給閘道器是 Laysi/trustiot-v2#617 |
+| 0 | 完成；`register` 是登錄完成（201 新登錄，或 200 平台已有同一筆），有 `--gateway` 時憑證鏈與根憑證也裝到了閘道器上；`verify` 是找到了事件、而且每一筆都和這台工作站的紀錄相同 | `register` 之後跑 `verify` |
 | 1 | 其他失敗：檔案被拒絕、有一筆紀錄讀不了、TLS 失敗、平台回了沒有對應處理的錯誤、紀錄寫不進去、找不到 `ssh`、session 已結束（`verify`） | 看訊息。500 或其他 5xx，以及沒有 M1 錯誤本文的回應（平台前面的 proxy 回的），訊息會說平台可能已經登錄、重跑是安全的：重跑同一個指令。平台已登錄但紀錄寫不進去時，修正後重跑 |
 | 2 | 命令列用法錯誤：硬體 ID、handle 或 ssh 目的地不合規則，選項的組合不對；ssh 沒有執行、什麼都沒送 | 修正指令 |
 | 10 | 409：這個硬體 ID 已經以別的 TPM 金鑰登錄 | 核對標籤；標籤沒錯就是 TPM 被清除過，那是新裝置，要新的硬體 ID（決策 12） |
@@ -258,15 +286,21 @@ trustiot-workstation logout
 | 22 | `--gateway`：agent 在閘道器上失敗（訊息有它的結束碼與意思、閘道器 stderr 的最後幾行），或上傳失敗、上傳的 agent 的 SHA-256 不符；stdout 不採用，沒有登錄 | 依訊息處理：沒有 TPM 裝置、handle 被別的物件佔用（5）、EK 憑證不符（6）要檢查閘道器；127 是沒裝 agent，給 `--upload-agent`；126 是暫存目錄 `noexec`；sudo 要密碼時設定免密碼或拿掉 `--remote-sudo` |
 | 23 | `--gateway`：ssh 重試後仍連不上閘道器或逾時（最多 5 次、420 秒內）；沒有登錄 | 檢查網路、目的地與 ssh 金鑰（以 `ssh <目的地> true` 試），再重跑同一個指令；訊息有 `REMOTE HOST IDENTIFICATION HAS CHANGED` 時見上面「重刷後主機金鑰改變」 |
 | 24 | `verify`：平台的事件紀錄裡沒有這個硬體 ID 的 `certs.gateway_registered` 事件 | 稍等幾秒再跑；一直沒有就重跑同一個 `register`，再回報平台管理員 |
-| 25 | `verify`：找到這個硬體 ID 的事件，但有一筆的序號或公鑰和這台工作站的紀錄不同（這個硬體 ID 有另一筆登錄） | 不要把憑證裝到閘道器上；帶著 `registrations.jsonl` 與印出的事件回報平台管理員 |
+| 25 | `verify`：找到這個硬體 ID 的事件，但有一筆的序號或公鑰和這台工作站的紀錄不同（這個硬體 ID 有另一筆登錄） | 隔離這台閘道器：不要出貨、不要上線。`register --gateway` 已經把憑證裝到閘道器上，`verify` 是事後的查證。帶著 `registrations.jsonl`、`registrations/<硬體 ID>.json` 與印出的事件回報平台管理員，由平台決定撤銷哪一張憑證，工作站這一側不要自己刪除或重裝憑證。從檔案登錄（`register --csr --ek`，沒有 `--gateway`）時憑證還沒裝到閘道器上，那時也不要裝 |
 | 26 | `verify`：找到這個硬體 ID 的事件，但這台工作站沒有它的 `registered` 紀錄，無從比對 | 到登錄這台閘道器的工作站上跑 `verify` |
 | 27 | `--gateway`：工作站有這個硬體 ID 的紀錄，閘道器回報的 EK 卻不是紀錄的那把：是另一顆 TPM（ssh 接到別台閘道器，或標籤錯了）；沒有建立金鑰、沒有送出，`--allow-new-key` 也不放行 | 核對 ssh 目的地與標籤，改接正確的閘道器或改用正確的硬體 ID；見「硬體 ID 從標籤來」 |
+| 30 | `--gateway`，登錄之後：紀錄的 `root_certificate` 或 `root_sha256` 不是這次 `--root-sha256` 給的根，憑證沒有送到閘道器 | 見「把憑證鏈與根憑證裝回閘道器」：先核對指紋，指紋沒錯就是紀錄被改過，回報平台管理員 |
+| 31 | `--gateway`，登錄之後：紀錄的鏈沒有簽發 CA，沒有送出 | 那台閘道器要走換發 |
+| 32 | `--gateway`，登錄之後：閘道器拒絕了憑證（agent 的結束碼 8），沒有寫任何檔案 | 看訊息；公鑰不是 TPM 的金鑰時，核對標籤與閘道器 |
+| 33 | `--gateway`，登錄之後：閘道器上 agent 的安裝還不能用（沒有設定檔、目錄或帳號，沒裝 agent，或 agent 太舊），或 sudo 沒有執行 agent（沒有免密碼的 sudoers 規則），沒有寫任何檔案 | 在閘道器上裝好（或更新）agent 與設定，或補上 sudoers 規則（Laysi/trustiot-v2#219），再重跑同一個指令（平台回 200，憑證再裝一次） |
+| 34 | `--gateway`，登錄之後：安裝的其他失敗（ssh 重試後仍連不上或逾時、閘道器的其他結束狀態、紀錄不能用） | 見「把憑證鏈與根憑證裝回閘道器」：修正原因後重跑同一個指令 |
+| 35 | `--gateway`，登錄之後：閘道器已經裝好憑證，但工作站日誌的 `installed` 那一行寫不進去 | 憑證已經裝好；修好日誌後重跑同一個指令補上那一行 |
 | 75 | 用完 `--attempts` 或 `--retry-for` 仍沒有確定的回應（sysexits 的 `EX_TEMPFAIL`） | 網路恢復後重跑同一個指令 |
 
 ## 出錯時怎麼辦
 
 - **先看結束碼與訊息**，再看工作站目錄的 `registrations.jsonl`（每次執行的每一步都有一行，不含任何密鑰）。
-- **重跑同一個指令永遠安全**：TPM 的金鑰沿用、登錄 API 是冪等的，重跑不會多建立金鑰，也不會多登錄一筆。結束碼 1、23、75 或被中斷時，修正原因後直接重跑。
+- **重跑同一個指令永遠安全**：TPM 的金鑰沿用、登錄 API 是冪等的，重跑不會多建立金鑰，也不會多登錄一筆。結束碼 1、23、34、35、75 或被中斷時，修正原因後直接重跑。
 - **不要換硬體 ID 重試**：結束碼 10、11、20、21、27 都表示這台閘道器與紀錄對不上，先核對標籤與 ssh 目的地；換一個硬體 ID 會讓同一個 TPM 登錄成另一台閘道器（平台以 409 擋下，結束碼 11）。
 - **不要手動改紀錄**：`registrations/` 的紀錄由工具原子替換；壞掉的紀錄移出目錄保存，再重跑。
 - 回報時附上結束碼、訊息與 `registrations.jsonl`；不要附 session 檔、私鑰或 `--headers-file`。
@@ -295,7 +329,7 @@ cf-access-client-secret: <client secret>
 
 - **`http://` 只限 loopback 的 IP 位址**：不接受 `localhost` 這個名稱，它經過名稱解析，可能被導向別處。
 - **只有 `register` 重試**：每個請求用一條新的連線、只送一次；沒有連線池（連線池可能在連線被關掉時重送請求）。`login`、`enroll`、`logout` 不重試。`register` 的重試是工具自己的一次新嘗試（新的簽章與 nonce），只在登錄 API 的冪等保證之下才做，見「`register`」。
-- **ssh**：工具執行系統的 `ssh`（`PATH` 上的），不自己實作 SSH；金鑰與 `~/.ssh/config` 照 OpenSSH 的設定，主機金鑰固定以硬體 ID 為名、只查工具自己的 `known_hosts`，執行前以 `ssh -G` 確認沒有被設定關掉。工具只控制命令列（固定選項、`--` 之後才是目的地，目的地不能以 `-` 開頭）、遠端指令（固定的腳本，參數只有檢查過的字）、環境（只留六個變數）與標準輸入（只有要上傳的 agent）。閘道器回的 stdout 最多讀 16 KiB、stderr 最多留 8 KiB，印出前改寫控制字元與格式字元。閘道器被控制時它能回任何報告：工具的檢查保證報告前後一致（CSR 的 CN 是這個硬體 ID、公鑰與簽章相符），有紀錄時 EK 要和紀錄相同，但報告的硬體 ID 只是照抄 `--hardware-id`，也證明不了金鑰在 TPM 裡，這要靠出廠流程的實體控制（決策 12）。**殘餘風險**：以 EK 做 TPM2_MakeCredential／TPM2_ActivateCredential、證明金鑰與 EK 在同一顆 TPM 裡，這次沒有做，延後到 Laysi/trustiot-v2#756；在那之前，被控制的閘道器（或冒用位址的機器）第一次登錄時能送出不在 TPM 裡的金鑰。
+- **ssh**：工具執行系統的 `ssh`（`PATH` 上的），不自己實作 SSH；金鑰與 `~/.ssh/config` 照 OpenSSH 的設定，主機金鑰固定以硬體 ID 為名、只查工具自己的 `known_hosts`，執行前以 `ssh -G` 確認沒有被設定關掉。工具只控制命令列（固定選項、`--` 之後才是目的地，目的地不能以 `-` 開頭）、遠端指令（固定的腳本，參數只有檢查過的字）、環境（只留六個變數）與標準輸入（只有要上傳的 agent，或安裝憑證時的三張 PEM）。閘道器回的 stdout 最多讀 16 KiB、stderr 最多留 8 KiB，印出前改寫控制字元與格式字元。閘道器被控制時它能回任何報告：工具的檢查保證報告前後一致（CSR 的 CN 是這個硬體 ID、公鑰與簽章相符），有紀錄時 EK 要和紀錄相同，但報告的硬體 ID 只是照抄 `--hardware-id`，也證明不了金鑰在 TPM 裡，這要靠出廠流程的實體控制（決策 12）。**殘餘風險**：以 EK 做 TPM2_MakeCredential／TPM2_ActivateCredential、證明金鑰與 EK 在同一顆 TPM 裡，這次沒有做，延後到 Laysi/trustiot-v2#756；在那之前，被控制的閘道器（或冒用位址的機器）第一次登錄時能送出不在 TPM 裡的金鑰。
 - **TLS**：rustls 與 ring，TLS 1.2 與 1.3；信任系統的 CA（`SSL_CERT_FILE`、`SSL_CERT_DIR` 有設時用它們）或只信任 `--ca-file`。憑證與主機名稱的檢查不能關閉；不走 proxy、不跟隨重新導向。
 - **跨站檢查**：請求不帶 `Origin` 與 `Sec-Fetch-Site`，身分服務的跨站檢查因此放行（[services/identity/README.md](../../services/identity/README.md)「跨站請求」）。
 - **session 綁定平台**：session 檔記下設定它的平台網址，cookie 只送回那個網址。
@@ -319,8 +353,9 @@ cargo test -p workstation
 - `tests/identity.rs`：`init` 的權限與不覆寫、權限太寬的私鑰被拒絕、`install-certificate` 拒絕每一種不合格的憑證（含夾帶私鑰的檔案）並存放合格的，存放的檔案是重新編碼的憑證。
 - `tests/login.rs`：以 TRACE 等級跑 `init`、`login`、`enroll`、`logout` 一輪，檢查替身收到的請求（每個請求都帶 `--headers-file` 的標頭、cookie 只在登入之後）、session 檔 0600 與登出後刪除，並在所有輸出中搜尋驗證碼、cookie、私鑰與標頭值；`send_code` 在連線中斷、逾時與 503 時都只送一次；沒有 `XDG_RUNTIME_DIR`、session 檔或標頭檔權限太寬、標頭名稱不對時，在送出任何請求前就拒絕；平台自己的 401 先撤銷再刪除 session 檔，代理的 401 與撤銷失敗時保留檔案；回應的序號不合格式或與憑證不符時不存放。
 - `tests/register.rs`：對 loopback 上的登錄替身（`tests/support/registry.rs`，以 `contract::certs::workstation_signing_input` 驗證每個請求的簽章、拒絕用過的 nonce）以 TRACE 跑 `register`：回應遺失後重送得到 200 算成功、503 後重試成功、每次嘗試的 nonce 與簽章都不同；409（四種金鑰衝突與除役）、401、403 `stale`、403 `revoked`、403 `signature_invalid`、403 `permission_denied`、422 各自以固定的結束碼停止、只送一次；回應的硬體 ID、兩個雜湊、CN、憑證公鑰不符，鏈的第一張不是憑證、少了簽發 CA 或換成根沒簽過的 CA，或整套換成別的根（只有 `--root-sha256` 擋得下）時不記為 `registered`；工作站紀錄裡同一把公鑰已登錄在別的硬體 ID 時不送出；達到嘗試上限時結束碼 75、重跑完成；寫入 `registered` 紀錄時程序被 `ulimit -f` 中斷（SIGXFSZ），原本的紀錄完整、只留下會被略過的暫存檔，重跑完成；並在所有輸出、紀錄與日誌中搜尋 cookie、回應的 `Set-Cookie`、私鑰、簽章與 nonce。也直接呼叫函式庫函式 `register::register`（`--gateway` 也用它）。
-- `tests/ssh.rs`（Linux）：`register --gateway` 經放在 `PATH` 最前面的假 `ssh`（`tests/support/ssh.rs`，記錄每次呼叫的 argv、環境與 stdin，在假的遠端以 `sh -c` 執行遠端指令）：ssh 的 argv 剛好是固定選項、目的地與預期的遠端指令，stdin 只有 agent，環境只有保留的變數，cookie、驗證碼、Access 標頭、工作站私鑰與憑證、簽章與 nonce 都沒有到閘道器；上傳的 agent 執行後、SHA-256 不符時與被 HUP 時暫存目錄都被刪除；已安裝的 agent 以 `sudo -n` 執行；含空白、`;`、引號、`$(…)`、反引號、換行的硬體 ID、handle 與目的地在 ssh 執行前被拒絕；ssh 連不上與回答遺失時重試、每次的報告相同，重試用完結束碼 23；agent 失敗 22、報告不合讀者義務 21、已登錄的硬體 ID 的 TPM（EK 相同）沒有金鑰或換了一把金鑰 20、`--allow-new-key` 後平台的 409 是 10；同一個硬體 ID 換了 EK（另一顆 TPM）有沒有金鑰、給不給 `--allow-new-key` 都停在 27，只執行了檢查。
-- `tests/pipeline_swtpm.rs`（Linux，需要 podman 或 docker；`CI` 有設時不跳過）：假的遠端上的 agent 是 bash 的轉接，把參數交給測試，由測試以 `agent::provision::run` 對 swtpm（`testkit::swtpm`）執行真的 `trustiot-agent provision`。同一台閘道器依序：第一次連線失敗、`provision` 的回答遺失後重試，201，每次重試報告同一把金鑰；`verify` 找到事件；以已安裝的 agent 重跑 200、同一個序號；模擬重刷（遠端檔案清空、新的 TPM 連線）200、同一個序號；`tpm2_clear` 之後停在 20、沒有建立任何東西；`--allow-new-key` 得到 409 `public_key_mismatch`，結束碼 10；之後同一顆 TPM（`tpm2_clear` 沒有改變 EK）帶著那次建立的金鑰，停在 20、什麼都沒送出。
+- `tests/ssh.rs`（Linux）：`register --gateway` 經放在 `PATH` 最前面的假 `ssh`（`tests/support/ssh.rs`，記錄每次呼叫的 argv、環境與 stdin，在假的遠端以 `sh -c` 執行遠端指令）：ssh 的 argv 剛好是固定選項、目的地與預期的遠端指令，stdin 只有 agent，環境只有保留的變數，cookie、驗證碼、Access 標頭、工作站私鑰與憑證、簽章與 nonce 都沒有到閘道器；上傳的 agent 執行後、SHA-256 不符時與被 HUP 時暫存目錄都被刪除；已安裝的 agent 以 `sudo -n` 執行；含空白、`;`、引號、`$(…)`、反引號、換行的硬體 ID、handle 與目的地在 ssh 執行前被拒絕；ssh 連不上與回答遺失時重試、每次的報告相同，重試用完結束碼 23；agent 失敗 22、報告不合讀者義務 21、已登錄的硬體 ID 的 TPM（EK 相同）沒有金鑰或換了一把金鑰 20、`--allow-new-key` 後平台的 409 是 10；同一個硬體 ID 換了 EK（另一顆 TPM）有沒有金鑰、給不給 `--allow-new-key` 都停在 27，只執行了檢查。登錄後的安裝（Laysi/trustiot-v2#617）：ssh 的 argv 是固定選項、目的地與安裝的固定腳本，stdin 剛好是紀錄裡的閘道器憑證、簽發 CA 與根憑證三張 PEM、沒有其他任何東西，給了 `--upload-agent` 也是已安裝的 agent 收到；`--remote-sudo` 時以 `sudo -n` 執行；回答遺失時重試；閘道器的 8 是 32，9、2 與沒有 agent 的 127 是 33，sudo 沒有安裝的規則（`sudo -n` 與 `sudo -n -l` 都拒絕）是 33、訊息指向 sudoers，有規則而 agent 自己結束狀態 1 是 34，ssh 重試用完是 34，這些情況登錄都已記下、訊息說明這點，重跑後平台回 200、裝上。
+- `tests/pipeline_swtpm.rs`（Linux，需要 podman 或 docker；`CI` 有設時不跳過）：假的遠端上的 agent 是 bash 的轉接，把參數與 stdin 交給測試，由測試以 `agent::provision::run` 與 `agent::provision::install::run` 對 swtpm（`testkit::swtpm`）執行真的 `trustiot-agent provision` 與 `provision install`（設定檔與目錄在測試的目錄裡、擁有者是測試的使用者）。同一台閘道器依序：第一次連線失敗、`provision` 的回答遺失後重試，201，每次重試報告同一把金鑰，閘道器沒有安裝 agent，所以安裝停在 33；`verify` 找到事件；以已安裝的 agent 重跑 200、同一個序號，憑證鏈與根憑證裝上，agent 自己的啟動檢查（`agent::setup`）以 TPM 金鑰接受它們；模擬重刷（遠端檔案與裝好的憑證清空、新的 TPM 連線、映像帶回 agent）200、同一個序號、同樣的憑證再裝一次；`tpm2_clear` 之後停在 20、沒有建立任何東西；`--allow-new-key` 得到 409 `public_key_mismatch`，結束碼 10；之後同一顆 TPM（`tpm2_clear` 沒有改變 EK）帶著那次建立的金鑰，停在 20、什麼都沒送出。
 - `tests/verify.rs`（Linux）：`verify` 跟著 `next_cursor` 讀完事件紀錄、只取這個硬體 ID 的事件、從紀錄的 `registered_at` 前 1 小時開始，與紀錄比對；找不到時 24；平台的 401 撤銷並刪除 session 檔。並檢查 `--help` 列的每個指令與選項都在本 README，結束碼表每一列都在。
+- `src/install.rs` 的單元測試：以記下參數與 stdin 的替身代替閘道器，送出的命令固定、stdin 剛好是三張重新編碼的 PEM（紀錄裡多出的 PEM 前後文字不會送出）；紀錄的根憑證或 `root_sha256` 不是操作員給的指紋（含整筆紀錄一致地換成別的根）時結束碼 30、少了簽發 CA 時 31、鏈不通、CN 不符、沒有紀錄或紀錄不是 `registered` 時 34，都沒有呼叫替身；結束狀態 0 而 stdout 不是 agent 的兩行報告（空的、一行、三行、沒有結尾換行、多一個空行、其他字詞、相對路徑、控制字元或 U+202E、`\r\n`、不是 UTF-8）是 34、沒有 `installed` 日誌；閘道器的 8 是 32，9、2、127 與腳本表示 sudo 拒絕的 92 是 33，其他結束狀態（包括 1，即使 stderr 以 `sudo:` 開頭）與訊號是 34，訊息裡沒有控制字元；閘道器裝好而日誌那一行寫不進去時是 35，訊息說憑證已經裝好、不說沒有裝上；閘道器的輸出裡的控制字元與 Unicode 格式字元（U+202E 等）顯示成空白；`Payload` 的 `Debug` 不顯示內容。
 - `services/certs/tests/workstation_tool.rs`（certs 服務的測試，需要 podman 或 docker）：真的 certs 服務與 Postgres，前面是檢查 cookie、換成內部 token 的 ingress 替身。工具 `enroll` 後登錄、重跑、再讓回應在服務提交後遺失，每個硬體 ID 都剛好一筆登錄、一張閘道器憑證、一個 `certs.gateway_registered` 事件。
 - 各模組的單元測試：包裝型別的遮蔽、檔案權限、FIFO 與符號連結目錄被拒絕、擁有者檢查、網址規則（含 `localhost` 被拒絕）、標頭檔格式與錯誤訊息不含內容、伺服器文字的控制字元與格式字元改寫、HTTPS 只信任 `--ca-file`、簽章可由 ring 驗證、nonce 不重複、重試間隔與上限、紀錄的原子替換與格式檢查、日誌的權限檢查。

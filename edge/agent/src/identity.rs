@@ -139,7 +139,39 @@ struct Leaf {
 ///
 /// See [`IdentityError`].
 pub fn load(certificate: &Path, key: &KeySource) -> Result<Identity, IdentityError> {
+    load_with(certificate, key, &mut |device| {
+        TpmTransport::Device(device.to_owned())
+    })
+}
+
+/// [`load`], with a TPM key reached through `open_tpm(device)` instead of the device itself:
+/// tests pass a software TPM.
+///
+/// # Errors
+///
+/// See [`IdentityError`].
+pub fn load_with(
+    certificate: &Path,
+    key: &KeySource,
+    open_tpm: &mut dyn FnMut(&Path) -> TpmTransport,
+) -> Result<Identity, IdentityError> {
     let chain = read_chain(certificate)?;
+    from_chain(certificate, chain, key, open_tpm)
+}
+
+/// The identity of `chain` (leaf first) and the key from `key`, checked as [`load`] checks the
+/// chain of a file; `certificate` is only named in errors. `trustiot-agent provision install`
+/// checks a chain this way before it writes the chain to `certificate`.
+///
+/// # Errors
+///
+/// See [`IdentityError`].
+pub fn from_chain(
+    certificate: &Path,
+    chain: Vec<CertificateDer<'static>>,
+    key: &KeySource,
+    open_tpm: &mut dyn FnMut(&Path) -> TpmTransport,
+) -> Result<Identity, IdentityError> {
     let leaf = parse_leaf(certificate, &chain)?;
     let (signing_key, key_spki): (Arc<dyn SigningKey>, Vec<u8>) = match key {
         KeySource::File { path } => {
@@ -163,7 +195,7 @@ pub fn load(certificate: &Path, key: &KeySource) -> Result<Identity, IdentityErr
             (signing_key, spki)
         }
         KeySource::Tpm { device, handle } => {
-            let tpm_key = TpmKey::open(TpmTransport::Device(device.clone()), *handle)?;
+            let tpm_key = TpmKey::open(open_tpm(device), *handle)?;
             let spki = tpm_key.public_key_spki_der().to_vec();
             (Arc::new(tpm_key), spki)
         }

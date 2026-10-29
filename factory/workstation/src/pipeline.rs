@@ -31,8 +31,12 @@
 //!    from the report here ([`crate::register::Gateway::new`]).
 //! 6. **Register**: [`crate::register::register`] (Laysi/trustiot-v2#615), which also refuses a
 //!    public key this workstation recorded under another hardware ID.
-//! 7. **Install** (Laysi/trustiot-v2#617, not yet): the chain and the root certificate go back to
-//!    the gateway after the registration, in [`register_gateway`] after step 6.
+//! 7. **Install** (Laysi/trustiot-v2#617): [`crate::install::install`] sends the registration's
+//!    certificate chain and root certificate, from the record step 6 wrote, to
+//!    `trustiot-agent provision install` of the agent installed on the gateway
+//!    ([`SshGateway::install`]), after checking the root again against `--root-sha256`. A stop
+//!    here leaves the registration recorded ([`Outcome::installed`]); the same command run again
+//!    gets the platform's 200 and installs then.
 //!
 //! A `provisioned` line in the journal's log records what the gateway reported (key created or
 //! reused, EK certificate present or absent, the uploaded agent's SHA-256); a `provision_stopped`
@@ -52,6 +56,7 @@ use x509_parser::prelude::{FromDer as _, X509Certificate};
 
 use crate::Error;
 use crate::gateway::{self, Mode, Ran, Request, SshError, SshGateway};
+use crate::install::{self, InstallStopKind, Installed};
 use crate::journal::{Event, Journal, Record};
 use crate::register::{self, Gateway, Registered, Registrar, one_pem_block};
 
@@ -273,11 +278,15 @@ pub struct Provisioned {
     pub ek_certificate: bool,
 }
 
-/// A whole run: what the gateway reported and the registration.
-#[derive(Clone, Debug)]
+/// A whole run: what the gateway reported, the registration, and the installation of its
+/// certificates on the gateway.
+#[derive(Debug)]
 pub struct Outcome {
     pub provisioned: Provisioned,
     pub registered: Registered,
+    /// Step 7. An error here leaves the registration recorded: its message says so, and its exit
+    /// code is the installation's ([`install::InstallStopKind`], 30 to 35).
+    pub installed: Result<Installed, Error>,
 }
 
 fn time(now: i64) -> DateTime<Utc> {
@@ -290,7 +299,8 @@ fn time(now: i64) -> DateTime<Utc> {
 /// # Errors
 ///
 /// [`Error::Provisioning`] for a stop of steps 2 to 5, the registration's errors for step 6, and
-/// any other error for a local problem (the journal, ssh missing).
+/// any other error for a local problem (the journal, ssh missing). A failure of step 7 is not an
+/// error of this function: it is [`Outcome::installed`], next to the registration it follows.
 pub async fn register_gateway(
     registrar: &Registrar<'_>,
     ssh: &SshGateway,
@@ -299,12 +309,48 @@ pub async fn register_gateway(
 ) -> Result<Outcome, Error> {
     let provisioned = provision(registrar.journal, ssh, plan, &now).await?;
     let registered = register::register(registrar, &provisioned.gateway, &now).await?;
-    // Laysi/trustiot-v2#617: install the chain and the root certificate on the gateway here, from
-    // `registered.registration`, through `ssh`.
+    // Step 7: from the record the registration just wrote, checked again against the operator's
+    // pinned root (`--root-sha256`), never against the record alone.
+    let id = plan.hardware_id.as_str();
+    let installed = install::install(
+        registrar.journal,
+        id,
+        &registrar.root_sha256,
+        &mut &*ssh,
+        time(now()),
+    )
+    .await
+    .map_err(|error| not_installed(id, error));
     Ok(Outcome {
         provisioned,
         registered,
+        installed,
     })
+}
+
+/// `error` of step 7, its message saying that the registration stands and, unless the gateway
+/// did install them ([`InstallStopKind::NotLogged`]), that the certificates are not installed.
+fn not_installed(hardware_id: &str, error: Error) -> Error {
+    // Every failure here has an exit code of the installation's (30 to 35), never the generic 1.
+    match install::as_stop(error) {
+        Error::Install(mut stopped) => {
+            let registered = if stopped.kind == InstallStopKind::NotLogged {
+                format!("hardware ID {hardware_id} is registered (recorded)")
+            } else {
+                format!(
+                    "hardware ID {hardware_id} is registered (recorded), but its certificates \
+                     are not installed on the gateway"
+                )
+            };
+            stopped.message = format!("{registered}: {}", stopped.message);
+            Error::Install(stopped)
+        }
+        // A usage error cannot happen here: the hardware ID was checked in step 1.
+        other => Error::Failed(format!(
+            "hardware ID {hardware_id} is registered (recorded), but its certificates are not \
+             installed on the gateway: {other}"
+        )),
+    }
 }
 
 /// Steps 2 to 5: the checked report of the gateway's key and the registration input made from it.
@@ -920,5 +966,31 @@ mod tests {
         .map(|kind| kind.exit_code())
         .collect();
         assert_eq!(codes, [20, 21, 22, 23, 27]);
+    }
+
+    #[test]
+    fn only_an_installation_that_did_not_happen_is_called_not_installed() {
+        let stop = |kind| {
+            Error::Install(Box::new(install::InstallStopped {
+                kind,
+                message: "the reason".to_owned(),
+            }))
+        };
+        let unlogged = not_installed("tg-0001", stop(InstallStopKind::NotLogged)).to_string();
+        assert!(
+            unlogged.starts_with("hardware ID tg-0001 is registered (recorded): the reason"),
+            "{unlogged}"
+        );
+        assert!(!unlogged.contains("not installed"), "{unlogged}");
+        for kind in [InstallStopKind::Refused, InstallStopKind::Failed] {
+            let message = not_installed("tg-0001", stop(kind)).to_string();
+            assert!(
+                message.contains("its certificates are not installed on the gateway: the reason"),
+                "{message}"
+            );
+        }
+        let other = not_installed("tg-0001", Error::Failed("ssh is missing".to_owned()));
+        assert_eq!(other.exit_code(), 34, "{other}");
+        assert!(other.to_string().contains("are not installed"), "{other}");
     }
 }

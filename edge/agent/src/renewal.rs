@@ -63,7 +63,8 @@
 //!
 //! **Swapping.** The chain is written over `identity.certificate` atomically ([`write_atomically`]:
 //! a temporary file in the same directory with the old file's permissions, fsync, rename, fsync of
-//! the directory), so a power cut leaves the old or the new chain, never a broken one. Then the
+//! the directory, all under the directory's `flock`, which `provision install` also takes), so a
+//! power cut leaves the old or the new chain, never a broken one. Then the
 //! inner TLS settings are replaced ([`InnerConfig`]) and the credentials' version raised: the
 //! connection in use finishes what it accepted and reconnects with the new certificate (see
 //! [`crate::link::LinkError::Renewed`]); heartbeats report the new expiry. When the file cannot be
@@ -1068,6 +1069,11 @@ fn write_atomically_like(
     let name = path
         .file_name()
         .ok_or_else(|| WriteError::NotReplaced(io::Error::other("the path has no file name")))?;
+    // `provision install` holds this lock from its check for a newer certificate until its
+    // rename, so the two never interleave; held until this function returns.
+    let lock = File::open(directory)
+        .and_then(|lock| lock.lock().map(|()| lock))
+        .map_err(WriteError::NotReplaced)?;
     let mode = match fs::metadata(like) {
         Ok(metadata) => metadata.permissions().mode() & 0o777,
         Err(error) if error.kind() == io::ErrorKind::NotFound => 0o600,
@@ -1101,9 +1107,7 @@ fn write_atomically_like(
         return Err(WriteError::NotReplaced(error));
     }
     // The rename is durable only once the directory entry is on the disk.
-    File::open(directory)
-        .and_then(|directory| directory.sync_all())
-        .map_err(WriteError::NotDurable)
+    lock.sync_all().map_err(WriteError::NotDurable)
 }
 
 /// Where the last proven certificate chain is kept next to `certificate`.

@@ -25,6 +25,11 @@
 //! manager (`/dev/tpmrm<N>`, [`tpm::is_resource_manager`]); anything else is refused before it is
 //! opened. The hardware ID and the handle come from the arguments only, never from standard
 //! input or a shell.
+//!
+//! After the registration, `trustiot-agent provision install` ([`install`]) installs the
+//! certificate chain and the root certificate the platform answered with.
+
+pub mod install;
 
 use std::ffi::OsString;
 use std::io::{self, Write};
