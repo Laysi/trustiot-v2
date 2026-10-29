@@ -288,7 +288,8 @@ pub trait Remote {
 /// The certificates are on the gateway.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Installed {
-    /// What the gateway printed: one line per file, `<path>: written` or `<path>: unchanged`.
+    /// What the gateway printed: one line per file, `<path>: written` or `<path>: unchanged`,
+    /// or `<path>: renewed` for the chain the gateway kept ([`Self::kept_renewed`]).
     pub report: String,
 }
 
@@ -297,6 +298,15 @@ impl Installed {
     #[must_use]
     pub fn changed(&self) -> bool {
         self.report.lines().any(|line| line.ends_with(": written"))
+    }
+
+    /// Whether the gateway kept a certificate its agent renewed for the same TPM key after the
+    /// registration instead of the registration's older one (edge/agent/README.md, "安裝憑證鏈
+    /// 與根憑證", step 5). The gateway then has a newer certificate than the record: that is
+    /// success, not something to undo.
+    #[must_use]
+    pub fn kept_renewed(&self) -> bool {
+        self.report.lines().any(|line| line.ends_with(": renewed"))
     }
 }
 
@@ -341,7 +351,9 @@ pub async fn install(
                 report: printable_report(&report),
             };
             journal.append(
-                &Event::new(now, hardware_id, "installed").with("changed", installed.changed()),
+                &Event::new(now, hardware_id, "installed")
+                    .with("changed", installed.changed())
+                    .with("kept_renewed", installed.kept_renewed()),
             )?;
             return Ok(installed);
         }
@@ -745,6 +757,22 @@ mod tests {
                 .await
                 .expect("installed")
                 .changed()
+        );
+
+        // A gateway whose agent renewed the certificate keeps it: installed, not a failure.
+        let mut gateway = Recorder::answering(
+            Some(0),
+            "/var/lib/trustiot-agent/gateway.pem: renewed\n/etc/trustiot/broker-ca.pem: unchanged\n",
+            "kept",
+        );
+        let installed = install(&journal, ID, &pin(&root), &mut gateway, now())
+            .await
+            .expect("installed");
+        assert!(installed.kept_renewed() && !installed.changed());
+        assert!(
+            log(&journal).contains("\"kept_renewed\":true"),
+            "{}",
+            log(&journal)
         );
     }
 

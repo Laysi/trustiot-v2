@@ -221,7 +221,7 @@ trustiot-workstation register --hardware-id <硬體 ID> --csr gateway.csr --ek e
 - **閘道器上的存取只能做這件事**：這個指令以 root 換掉閘道器信任的根，所以工作站登入閘道器用的 ssh 金鑰要專用，只能執行 agent 的 `provision` 子命令：在閘道器的 `authorized_keys` 以 `command=`（加 `restrict`，或 sshd 的 `ForceCommand`）指向只接受這些固定參數的指令，或以參數寫死的 sudoers 規則執行，不能有任意指令的 root 或 sudo 權限（edge/agent README「安裝憑證鏈與根憑證」的前提；閘道器那一側的轉接程式與 sudoers 是 Laysi/trustiot-v2#219，見上方「還沒實作」）。
 - **送到閘道器的只有公開資料**：ssh 的遠端命令是固定的腳本，參數只有硬體 ID（先以閘道器 ID 的規則檢查，裡面沒有空白或殼層字元）與 `sudo` 或 `direct`；stdin 只有從紀錄重新編碼的三張 PEM 憑證：閘道器憑證、簽發 CA、根憑證。紀錄裡的其他欄位不送；session cookie、工作站的私鑰與憑證、簽章標頭本來就不在紀錄裡（`tests/ssh.rs` 以假的 ssh 檢查 stdin 剛好是這三張憑證）。
 - **送出前先檢查紀錄**，任何一項不符就什麼都不送：紀錄是這個硬體 ID 的 `registered`；`root_certificate` 的 SHA-256 與紀錄裡的 `root_sha256` 都要等於操作員這次執行給的 `--root-sha256`（函式的 `pinned_root_sha256` 參數，不從紀錄讀），任何一個不符就停在結束碼 30：根憑證會成為閘道器驗 broker 的唯一信任錨；能改寫紀錄的人可以把兩個欄位一起換掉，所以只和紀錄自己比對不夠；鏈剛好是閘道器憑證（CN 是硬體 ID）再接簽發它的 CA，而且根憑證簽了那張 CA。鏈只有憑證本身時停在結束碼 31（broker 會拒絕拿不出簽發 CA 的閘道器）。
-- **閘道器的回答**：0 完成（stdout 每個檔案一行 `written` 或 `unchanged`）、8 閘道器拒絕了這些憑證（例如憑證的公鑰不是它 TPM 的金鑰、根的 CRL 不是這個根簽的），沒有寫任何檔案、9 閘道器上 agent 的安裝還不能用（沒有設定檔、目錄不存在、設定檔或目錄的擁有者與權限不對、路徑經過符號連結、沒有 `trustiot-agent` 帳號），沒有寫任何檔案；127（閘道器上找不到 `trustiot-agent`）與 2（agent 不認得 `provision install`，太舊）也一樣是還不能用。其他結束狀態、ssh 重試後仍連不上或逾時算失敗（結束碼 1），重跑同一個指令是安全的；ssh 自己的失敗（255）和 `provision` 一樣重試。閘道器的 stderr 與 stdout 在顯示前把控制字元與 Unicode 格式字元（Cf 類，例如改變顯示方向的 U+202E）換成空白，stderr 併成一行，兩者都截斷。
+- **閘道器的回答**：0 完成（stdout 每個檔案一行 `written` 或 `unchanged`；閘道器的 agent 在登錄之後已經為同一把 TPM 金鑰換發過憑證時，`identity.certificate` 那一行是 `renewed`：閘道器保留較新的那張、根照常安裝，這也是完成，工具印出「kept the certificate its agent renewed」，不要為了裝回登錄的憑證去刪它）、8 閘道器拒絕了這些憑證（例如憑證的公鑰不是它 TPM 的金鑰、根的 CRL 不是這個根簽的），沒有寫任何檔案、9 閘道器上 agent 的安裝還不能用（沒有設定檔、目錄不存在、設定檔或目錄的擁有者與權限不對、路徑經過符號連結、沒有 `trustiot-agent` 帳號），沒有寫任何檔案；127（閘道器上找不到 `trustiot-agent`）與 2（agent 不認得 `provision install`，太舊）也一樣是還不能用。其他結束狀態、ssh 重試後仍連不上或逾時算失敗（結束碼 1），重跑同一個指令是安全的；ssh 自己的失敗（255）和 `provision` 一樣重試。閘道器的 stderr 與 stdout 在顯示前把控制字元與 Unicode 格式字元（Cf 類，例如改變顯示方向的 U+202E）換成空白，stderr 併成一行，兩者都截斷。
 - **重跑與重刷**：閘道器上內容、擁有者與權限都對的檔案不會被重寫，所以重跑永遠安全。閘道器重刷映像之後 TPM 金鑰還在、檔案沒了：重跑同一個登錄（平台回 200 與同一筆登錄），憑證會再裝一次。
 - **agent 不會被重新啟動**：agent 已在執行時，新的憑證在它下次啟動時才生效。
 
@@ -234,7 +234,7 @@ trustiot-workstation register --hardware-id <硬體 ID> --csr gateway.csr --ek e
 
 這四個結束碼與安裝的結束碼 1 都在登錄之後：登錄已經記下，訊息開頭說明這點。
 
-日誌另有 `installed`（`changed`：閘道器有沒有寫任何檔案）與 `install_stopped`（`stop`：`root_mismatch`、`no_issuing_ca`、`refused_by_gateway`、`gateway_not_ready` 或 `failed`；收到閘道器結束狀態時另有 `remote_status`）。
+日誌另有 `installed`（`changed`：閘道器有沒有寫任何檔案；`kept_renewed`：閘道器是否保留了換發過的憑證）與 `install_stopped`（`stop`：`root_mismatch`、`no_issuing_ca`、`refused_by_gateway`、`gateway_not_ready` 或 `failed`；收到閘道器結束狀態時另有 `remote_status`）。
 
 ### 6. `verify`：確認平台記下了登錄
 

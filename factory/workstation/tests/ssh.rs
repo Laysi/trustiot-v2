@@ -936,6 +936,29 @@ async fn the_installation_after_the_registration_stops_with_its_own_exit_codes()
         "tg-0011",
         false,
     );
+
+    // The gateway's agent renewed the certificate since: it keeps that one (`renewed`), which
+    // is success, said as such, never advice to remove it.
+    bench.ssh.write_remote_file(
+        "report-install",
+        b"/var/lib/trustiot-agent/gateway.pem: renewed\n/etc/trustiot/broker-ca.pem: unchanged\n",
+    );
+    let kept = bench.run(&register).await;
+    assert_eq!(kept.code, Some(0), "{}", kept.output());
+    assert!(
+        kept.stdout
+            .contains("kept the certificate its agent renewed"),
+        "{}",
+        kept.stdout
+    );
+    assert!(
+        !kept.output().contains("remove that file"),
+        "{}",
+        kept.output()
+    );
+    let last = bench.events("tg-0011").pop().expect("a log line");
+    assert_eq!(last["event"], "installed");
+    assert_eq!(last["kept_renewed"], true);
     assert_eq!(bench.registry.registrations(), 1, "one registration");
     assert!(
         bench

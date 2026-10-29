@@ -39,8 +39,10 @@
 //! 5. A renewed certificate is never replaced by an older one ([`newer_installed`]): when
 //!    `identity.certificate` holds a certificate for the same key with a later notBefore, the
 //!    agent renewed it, and the registration's certificate (which the platform answers with on
-//!    every resend of the registration) would only take the gateway back to an older one. Only
-//!    a chain that passes under the root being installed counts, so a reinstall after the root
+//!    every resend of the registration) would only take the gateway back to an older one. That
+//!    file is kept and reported as [`Outcome::Renewed`] (`<path>: renewed`), the root is
+//!    installed as usual, and the run succeeds: the gateway already has what it needs. Only a
+//!    chain that passes under the root being installed counts, so a reinstall after the root
 //!    changed is not held by a certificate under the old root. From this check until the files
 //!    are renamed, the directory of `identity.certificate` is locked (`flock`), as the renewal
 //!    locks it to write, so a renewal cannot land in between and be overwritten.
@@ -96,7 +98,10 @@ sends on standard input (PEM: the gateway certificate, the issuing CA, then the 
 else). Checks them first: the gateway certificate's public key is the TPM key's, its common name
 is the hardware ID, the chain leads to that root, and the agent would accept them. Then writes the
 chain to identity.certificate (owner trustiot-agent, mode 0644) and the root to broker.ca (owner
-root, mode 0644), each replaced atomically, files that are already right untouched. Needs root.
+root, mode 0644), each replaced atomically, files that are already right untouched. A newer
+certificate the agent renewed for the same TPM key (under that root) is kept, not replaced by the
+registration's older one. Prints one line per file: <path>: written, unchanged, or renewed (the
+renewed certificate kept). Needs root.
 
 The paths come from the agent's configuration /etc/trustiot/agent.toml (no other file is
 accepted), which with its directory must belong to root and be writable by no one else. The
@@ -116,7 +121,8 @@ written.";
 /// workstation can tell every status of both apart.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Exit {
-    /// 0: both files hold what was sent (written now or before).
+    /// 0: both files hold what was sent (written now or before), or `identity.certificate` keeps
+    /// the newer certificate the agent renewed for the same key ([`Outcome::Renewed`]).
     Success,
     /// 1: anything not listed below, such as a TPM error or a file that could not be written.
     Failure,
@@ -324,20 +330,27 @@ pub enum Outcome {
     Unchanged,
     /// It was replaced (or created).
     Written,
+    /// `identity.certificate` only: it holds a certificate the agent renewed for the same TPM key
+    /// after the registration (a later notBefore, under the root being installed), which is kept
+    /// rather than replaced by the registration's older one (step 5); it was not touched.
+    Renewed,
 }
 
 impl Outcome {
+    /// The word after the path on standard output.
     fn as_str(self) -> &'static str {
         match self {
             Self::Unchanged => "unchanged",
             Self::Written => "written",
+            Self::Renewed => "renewed",
         }
     }
 }
 
 /// Runs the subcommand: reads the certificates from `stdin`, checks them with the TPM key
 /// reached through `open_tpm(identity.key.device)` and installs them with `owners`, printing one
-/// line per file (`<path>: written` or `<path>: unchanged`) on `stdout`, or why not on `stderr`.
+/// line per file (`<path>: written`, `<path>: unchanged` or, for `identity.certificate` only,
+/// `<path>: renewed`) on `stdout`, the chain's line first, or why not on `stderr`.
 /// On the gateway `open_tpm` opens the device and `owners` is [`Owners::system`]; tests pass a
 /// software TPM and their own user.
 pub fn run(
@@ -484,13 +497,15 @@ fn install(
             chain_target.directory.path().display()
         ))
     })?;
-    if let Some(installed) = newer_installed(&chain_target, &chain.leaf, &trust, &root_crl, now) {
-        return Err(Failure::Refused(format!(
-            "{} holds a newer certificate for this TPM key (valid from {installed}): the agent \
-             renewed it after the registration. To install the registration's certificate \
-             anyway, remove that file first",
+    // A certificate the agent renewed for this key under this root is the one to keep (step 5):
+    // the root is installed as usual, the chain file is left as it is.
+    let renewed = newer_installed(&chain_target, &chain.leaf, &trust, &root_crl, now);
+    if let Some(installed) = &renewed {
+        let _ = writeln!(
+            stderr,
+            "trustiot-agent provision install: {} holds a newer certificate for this TPM key (valid from {installed}), which the agent renewed after the registration: it is kept, not replaced by the registration's older one",
             config.certificate.display()
-        )));
+        );
     }
 
     let chain_text = format!(
@@ -499,20 +514,22 @@ fn install(
         pem("CERTIFICATE", &chain.issuing)
     );
     let root_text = pem("CERTIFICATE", &chain.root);
-    let files = [
-        (&chain_target, chain_text, owners.chain),
-        (&root_target, root_text, owners.root),
-    ];
-    replace_all(&files, &mut |file: &mut File, bytes: &[u8]| {
+    let mut files = Vec::with_capacity(2);
+    if renewed.is_none() {
+        files.push((&chain_target, chain_text, owners.chain));
+    }
+    files.push((&root_target, root_text, owners.root));
+    let mut outcomes = replace_all(&files, &mut |file: &mut File, bytes: &[u8]| {
         file.write_all(bytes)
     })
-    .map(|outcomes| {
-        [config.certificate.clone(), config.broker_ca.clone()]
-            .into_iter()
-            .zip(outcomes)
-            .collect()
-    })
-    .map_err(Failure::Failed)
+    .map_err(Failure::Failed)?;
+    if renewed.is_some() {
+        outcomes.insert(0, Outcome::Renewed);
+    }
+    Ok([config.certificate.clone(), config.broker_ca.clone()]
+        .into_iter()
+        .zip(outcomes)
+        .collect())
 }
 
 /// The largest configuration file read: the agent's is well under 4 KiB.
@@ -724,7 +741,7 @@ impl CrlSource {
 /// root being installed (`trust`, with `root_crl`) counts, whatever the clock: one under
 /// another root, as after the root changed, would not connect anyway. `None` when there is no
 /// such file, it cannot be read or parsed, or it is for another key, not newer or not under the
-/// new root: the file is then replaced as usual.
+/// new root: the file is then replaced as usual. `Some`: the file is kept.
 fn newer_installed(
     target: &Target,
     leaf: &[u8],

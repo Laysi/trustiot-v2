@@ -306,7 +306,7 @@ impl Gateway {
     }
 
     /// Every file under the gateway's two directories: name, inode, mode, owner, contents.
-    fn files(&self) -> Vec<(String, u64, u32, u32, u32, Vec<u8>)> {
+    fn files(&self) -> Vec<FileEntry> {
         let mut files = Vec::new();
         for directory in [&self.etc, &self.state] {
             for entry in std::fs::read_dir(directory).unwrap() {
@@ -344,6 +344,9 @@ fn config_text(outer: &Path, etc: &Path, state: &Path, key: &str, broker_extra: 
         state.join("gateway.pem").display(),
     )
 }
+
+/// One file of [`Gateway::files`]: name, inode, mode, owner (uid, gid), contents.
+type FileEntry = (String, u64, u32, u32, u32, Vec<u8>);
 
 struct Ran {
     exit: Exit,
@@ -675,12 +678,62 @@ fn a_renewed_certificate_is_never_replaced_by_an_older_one() {
         .installed();
     let before = gateway.files();
 
-    // Resending the registration answers with its original certificate: refused, nothing
-    // written.
+    // Resending the registration answers with its original certificate: the renewed one is
+    // kept (reported as such, never "remove it"), the root is already right, nothing is written,
+    // and the run succeeds: the gateway has what it needs.
     let ran = gateway.install(&gateway.options(), &owners, registered.as_bytes());
-    ran.failed(Exit::Refused, "holds a newer certificate for this TPM key");
-    assert!(ran.stderr.contains("nothing was written"), "{}", ran.stderr);
+    let stdout = ran.installed().to_owned();
+    assert_eq!(
+        stdout,
+        format!(
+            "{}: renewed\n{}: unchanged\n",
+            gateway.chain_path().display(),
+            gateway.root_path().display()
+        )
+    );
+    assert!(
+        ran.stderr
+            .contains("holds a newer certificate for this TPM key")
+            && ran.stderr.contains("it is kept")
+            && !ran.stderr.contains("remove that file"),
+        "{}",
+        ran.stderr
+    );
     assert_eq!(gateway.files(), before);
+
+    // The root is still installed as usual next to a kept renewed certificate.
+    std::fs::remove_file(gateway.root_path()).unwrap();
+    let stdout = gateway
+        .install(&gateway.options(), &owners, registered.as_bytes())
+        .installed()
+        .to_owned();
+    assert_eq!(
+        stdout,
+        format!(
+            "{}: renewed\n{}: written\n",
+            gateway.chain_path().display(),
+            gateway.root_path().display()
+        )
+    );
+    let entry = |files: &[FileEntry], path: PathBuf| {
+        files
+            .iter()
+            .find(|file| file.0 == path.display().to_string())
+            .cloned()
+            .unwrap_or_else(|| panic!("{} is there", path.display()))
+    };
+    let after = gateway.files();
+    assert_eq!(
+        entry(&after, gateway.chain_path()),
+        entry(&before, gateway.chain_path()),
+        "the renewed certificate's file is untouched (same inode and contents)"
+    );
+    assert_eq!(
+        entry(&after, gateway.root_path()).5,
+        entry(&before, gateway.root_path()).5,
+        "the same root again"
+    );
+    assert_eq!(gateway.setup().gateway.as_str(), HARDWARE_ID);
 
     // The same renewed certificate is unchanged; a later one is written.
     let stdout = gateway

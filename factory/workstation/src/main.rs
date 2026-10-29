@@ -597,13 +597,16 @@ async fn register(options: &Options) -> Result<(), Error> {
     match installed {
         None => Ok(()),
         Some((destination, Ok(installed))) => {
+            let what = if installed.kept_renewed() {
+                "kept the certificate its agent renewed (newer than the registration's, for the \
+                 same TPM key) and has the root certificate"
+            } else if installed.changed() {
+                "installed the certificate chain and the root certificate"
+            } else {
+                "already had the certificate chain and the root certificate"
+            };
             say(&format!(
-                "{destination}: {} the certificate chain and the root certificate: {}",
-                if installed.changed() {
-                    "installed"
-                } else {
-                    "already had"
-                },
+                "{destination}: {what}: {}",
                 installed.report.lines().collect::<Vec<_>>().join("; ")
             ));
             Ok(())
