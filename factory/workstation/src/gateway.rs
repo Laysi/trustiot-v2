@@ -790,7 +790,7 @@ mod tests {
     fn destinations_are_never_options() {
         for good in [
             "gateway-01",
-            "pi@10.0.0.5",
+            "admin@192.0.2.10",
             "admin@gw.factory.example",
             "fe80::1%eth0",
             "user@[2001:db8::1]",
