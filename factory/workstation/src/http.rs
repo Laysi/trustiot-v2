@@ -308,11 +308,14 @@ impl fmt::Display for ApiError {
     }
 }
 
-/// One request: the method, the path, the session cookie, extra headers and a JSON body, all
-/// optional but the first two.
+/// One request: the method, the path, a query, the session cookie, extra headers and a JSON body,
+/// all optional but the first two.
 pub struct Call<'a> {
     pub method: Method,
     pub path: &'static str,
+    /// The query string without its `?`, already encoded (`url::form_urlencoded`). Never logged:
+    /// log lines and errors name the path only.
+    pub query: Option<&'a str>,
     pub cookie: Option<&'a SessionCookie>,
     /// Headers of this request alone (a registration's workstation signature). Their values are
     /// marked sensitive and never logged.
@@ -423,9 +426,13 @@ impl Client {
     }
 
     fn request(&self, call: Call<'_>) -> Result<Request<Full<Bytes>>, Problem> {
+        let uri = match call.query {
+            Some(query) => format!("{}?{query}", call.path),
+            None => call.path.to_owned(),
+        };
         let mut builder = Request::builder()
             .method(call.method)
-            .uri(call.path)
+            .uri(uri)
             .header(HOST, self.origin.authority())
             .header(ACCEPT, "application/json")
             .header(
@@ -736,6 +743,7 @@ mod tests {
                 path: "/api/identity/v1/sessions/current",
                 cookie: None,
                 headers: Vec::new(),
+                query: None,
                 json: None,
             })
             .await
@@ -778,6 +786,7 @@ mod tests {
                 path: "/",
                 cookie: None,
                 headers: Vec::new(),
+                query: None,
                 json: None,
             })
             .await

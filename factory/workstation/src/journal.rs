@@ -15,6 +15,12 @@
 //! Neither holds a secret: no cookie, no key, no signature header. The registration is public
 //! (the gateway's certificate, its chain and the root certificate). An error from the platform
 //! is kept as its status, M1 message key and `details.reason` only.
+//!
+//! `register --gateway` (Laysi/trustiot-v2#616, [`crate::pipeline`]) adds two events before the
+//! registration's own: `provisioned` (the gateway's checked report: handle, whether the key was
+//! created, `ek_certificate`, both hashes, `allow_new_key`, the uploaded agent's SHA-256) and
+//! `provision_stopped` (a stop before anything was sent to the platform, with its kind). Neither
+//! carries the gateway's stdout or stderr.
 
 use std::fs::{self, OpenOptions};
 use std::io::{self, Write as _};
