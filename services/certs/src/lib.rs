@@ -118,8 +118,8 @@ pub fn openapi() -> utoipa::openapi::OpenApi {
 /// job and the monitor, follows the identity service's public keys file, opens the platform
 /// role's pool lazily for [`registrations`] and the consumer of the assets service's events
 /// ([`bindings`]), starts the broker's gateway permission sync when a broker is configured
-/// ([`dynsec`]; registrations and applied bindings ask it to sync their gateway), starts that
-/// consumer, serves the endpoints of [`http`], [`workstations`], [`registrations`] and
+/// ([`dynsec`]; registrations, renewals and applied bindings ask it to sync their gateway), starts
+/// that consumer, serves the endpoints of [`http`], [`workstations`], [`registrations`] and
 /// [`renewal`] (which also reports its refusal counts), and serves [`broker`] on its own port
 /// (`broker.listen_addr`). Readiness passes while the role can open a checked
 /// session, the service has a usable set of public keys, and the database has every migration
@@ -199,6 +199,7 @@ pub async fn start(context: Context<Config>) -> Result<Router, BoxError> {
         lag: Arc::new(move || bindings_lag.lag()),
         limits: config.renewal.clone(),
         validity: config.gateway.validity,
+        broker_sync: broker_sync.clone(),
     });
     renewal::start_reporting(
         &context,

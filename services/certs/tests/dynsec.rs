@@ -16,6 +16,10 @@
 //!   should not exist: after one comparison the gateways are back, the stray one is gone, and the
 //!   service accounts, roles and groups are what the init container wrote (acceptance 3).
 //! - The service's log at `trace` holds no piece of the broker password (acceptance 5).
+//! - A renewal asks for its gateway's comparison once it has committed (Laysi/trustiot-v2#81):
+//!   with whole comparisons an hour apart, a gateway whose only certificate was revoked loses its
+//!   client in the comparison on connecting, gets it back right after its renewal with no whole
+//!   comparison in between, and publishes with the renewed certificate.
 //!
 //! Starts a throwaway Postgres with TLS and a Mosquitto container (podman or docker); skipped
 //! without them unless `CI` is set. `-- --nocapture` prints the evidence lines of the test report.
@@ -47,6 +51,7 @@ use migrate::mqtt_trust::GATEWAY_LISTENER_FILE;
 use outbox::Aggregate;
 use protocol::GatewayId;
 use protocol::acl::GATEWAY_ROLE;
+use protocol::renewal::{Challenge, RENEWAL_PATH, RenewedCertificate};
 use protocol::topic::Channel;
 use rcgen::{
     BasicConstraints, CertificateParams, DistinguishedName, DnType, ExtendedKeyUsagePurpose, IsCa,
@@ -119,6 +124,10 @@ const NOT_AUTHORIZED: u8 = 0x87;
 /// The service's log lines this test waits for (`src/dynsec.rs`).
 const IN_SYNC: &str = "the broker's gateway permissions match postgres";
 const CHANGED: &str = "changed a gateway's broker permissions";
+/// What a whole comparison that changed something logs; a single gateway's comparison does not.
+const IN_LINE: &str = "brought the broker's gateway permissions in line with postgres";
+/// What a renewal logs once its transaction has committed (`src/renewal.rs`).
+const RENEWED: &str = "renewed a gateway certificate";
 
 /// The CRL schedule of `tests/registration.rs`: the first CRL is out within seconds, so an
 /// issuing CA can sign.
@@ -683,6 +692,61 @@ fn changes(service: &Service, hardware_id: &str) -> Vec<String> {
         .collect()
 }
 
+/// Renews `hardware_id`'s certificate as its gateway does: a challenge, then the challenge
+/// signed with its TPM key `key`. `None` while the service answers 503 (the bindings' lag is
+/// not known yet after a start) or 429 (these retries used up the hardware ID's limit).
+async fn renew(service: &Service, key: &KeyPair, hardware_id: &str) -> Option<RenewedCertificate> {
+    let wait = |status: u16| status == 503 || status == 429;
+    let reply = service
+        .post_json(
+            RENEWAL_PATH,
+            None,
+            &json!({ "step": "challenge", "hardware_id": hardware_id }),
+        )
+        .await;
+    if wait(reply.status) {
+        return None;
+    }
+    assert_eq!(
+        reply.status, 200,
+        "a challenge for {hardware_id}: {}",
+        reply.body
+    );
+    let challenge: Challenge = serde_json::from_str(&reply.body).expect("a challenge");
+    let signature = key
+        .sign(&challenge.signing_input())
+        .expect("sign the challenge");
+    let reply = service
+        .post_json(
+            RENEWAL_PATH,
+            None,
+            &json!({
+                "step": "renew",
+                "hardware_id": hardware_id,
+                "nonce": challenge.nonce,
+                "signature": STANDARD.encode(signature),
+            }),
+        )
+        .await;
+    if wait(reply.status) {
+        return None;
+    }
+    assert_eq!(reply.status, 201, "renew {hardware_id}: {}", reply.body);
+    Some(serde_json::from_str(&reply.body).expect("a renewed certificate"))
+}
+
+/// Where the first JSON line of `output` with `message` and these `fields` is.
+fn position(output: &str, message: &str, fields: &[(&str, &str)]) -> Option<usize> {
+    output.lines().position(|line| {
+        serde_json::from_str::<Value>(line).is_ok_and(|line| {
+            line["message"] == message
+                && fields
+                    .iter()
+                    .all(|(key, value)| line["fields"][*key] == *value)
+        })
+    })
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn the_service_keeps_the_brokers_gateway_clients_in_line_with_postgres() {
     let Some(product) = product_postgres(LOGINS).await else {
@@ -952,6 +1016,101 @@ async fn the_service_keeps_the_brokers_gateway_clients_in_line_with_postgres() {
         "{} bytes of service output at trace: none of the {pieces} 8-character pieces of the \
          broker password",
         output.len()
+    ));
+
+    // Laysi/trustiot-v2#81: a renewal asks for its gateway's comparison once its transaction has
+    // committed. The service starts again with whole comparisons an hour apart, so after the one
+    // on connecting, only that request can bring a client back within the test.
+    drop(service);
+    let mut admin = product.superuser().await;
+    sqlx::query(
+        "UPDATE certs.issued_certificates SET revoked_at = now(), revocation_reason = 1
+         WHERE profile = 'gateway' AND subject = $1",
+    )
+    .bind(GATEWAY_A)
+    .execute(&mut admin)
+    .await
+    .expect("revoke the first gateway's only certificate");
+    let mut env: Vec<(&str, &str)> = FAST_CRLS.to_vec();
+    env.extend([
+        ("TRUSTIOT__MQTT__HOST", "127.0.0.1"),
+        ("TRUSTIOT__MQTT__PORT", service_port.as_str()),
+        ("TRUSTIOT__MQTT__USERNAME", "service:certs"),
+        ("TRUSTIOT__MQTT__PASSWORD_FILE", password_path.as_str()),
+        ("TRUSTIOT__DYNSEC__INTERVAL", "1h"),
+        // The renewal retries until the bindings' lag is known; a limit it reaches only delays it.
+        ("TRUSTIOT__RENEWAL__GATEWAY_BURST", "100"),
+        ("TRUSTIOT__RENEWAL__GATEWAY_INTERVAL", "1s"),
+    ]);
+    let service = Service::start(&product, &ca, &env).await;
+    wait_for("the whole comparison on connecting", || async {
+        (changes(&service, GATEWAY_A) == ["removed"]
+            && !service.stdout.messages(IN_LINE).is_empty())
+        .then_some(())
+    })
+    .await;
+    assert!(changes(&service, GATEWAY_B).is_empty());
+    assert_eq!(service.stdout.messages(IN_LINE).len(), 1);
+    // The broker's CRL in this test lists nothing, so the revoked certificate still connects.
+    let mut revoked = Gateway::connect(gateway_address, &config_a, GATEWAY_A);
+    let without_client = revoked.publish(&Channel::Status.topic(&a));
+    assert_eq!(without_client, NOT_AUTHORIZED, "a gateway without a client");
+    drop(revoked);
+    evidence(format!(
+        "{GATEWAY_A}'s only certificate revoked; the service restarted with dynsec.interval 1h: \
+         its comparison on connecting logged `{CHANGED}` hardware_id={GATEWAY_A} action=removed \
+         and one `{IN_LINE}`; the old certificate connects, PUBACK {without_client:#04x}"
+    ));
+
+    let renewed = wait_for("the renewal of the first gateway", || async {
+        renew(&service, &key_a, GATEWAY_A).await
+    })
+    .await;
+    wait_for("the renewed gateway's broker client", || async {
+        (changes(&service, GATEWAY_A) == ["removed", "added"]).then_some(())
+    })
+    .await;
+    // No whole comparison changed anything since the one on connecting: the client came from
+    // the renewal's request, which follows its commit and its log line.
+    assert_eq!(
+        service.stdout.messages(IN_LINE).len(),
+        1,
+        "a whole comparison ran after the start"
+    );
+    let output = service.stdout.text();
+    let renewed_at =
+        position(&output, RENEWED, &[("hardware_id", GATEWAY_A)]).expect("the renewal's log line");
+    let added_at = position(
+        &output,
+        CHANGED,
+        &[("hardware_id", GATEWAY_A), ("action", "added")],
+    )
+    .expect("the broker client's log line");
+    assert!(
+        renewed_at < added_at,
+        "the broker client was added before the renewal committed"
+    );
+    let chain = pem::decode_all(&renewed.certificate_chain, pem::CERTIFICATE)
+        .expect("the renewed chain")
+        .into_iter()
+        .map(CertificateDer::from)
+        .collect();
+    let mut gateway = Gateway::connect(
+        gateway_address,
+        &client_config(&server_ca, chain, &key_a),
+        GATEWAY_A,
+    );
+    let published = gateway.publish(&Channel::Status.topic(&a));
+    assert!(
+        accepted(published),
+        "the renewed certificate's publish: {published:#04x}"
+    );
+    drop(gateway);
+    evidence(format!(
+        "{GATEWAY_A} renewed (serial {}): `{RENEWED}` at stdout line {renewed_at}, then \
+         `{CHANGED}` action=added at line {added_at}, still one `{IN_LINE}` (no whole \
+         comparison in between); the renewed certificate's publish: PUBACK {published:#04x}",
+        renewed.serial
     ));
 }
 

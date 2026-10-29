@@ -31,7 +31,10 @@
 //! - **Issued exactly with its event.** The certificate is signed for the registered key (never a
 //!   key the request names) and recorded in the ledger in a transaction of the gateway's tenant,
 //!   with the tenant event `certs.gateway_certificate_renewed`. Earlier certificates stay valid
-//!   until they expire.
+//!   until they expire. Once that transaction has committed, the broker's permission sync is asked
+//!   to compare this gateway alone ([`crate::dynsec::BrokerSync::gateway`]), so a gateway whose
+//!   only valid certificate had expired or was revoked gets its broker client back without
+//!   waiting for the next whole comparison.
 //! - **Refusals leave a trace without letting traffic grow the log.** Every refusal is a log line
 //!   (hardware ID, step, reason; never the nonce or the signature) and `certs.renewal.refused`
 //!   with the reason. Refusals of a registered hardware ID that carry a decision (an unknown,
@@ -84,6 +87,7 @@ use crate::api;
 use crate::authority::{Authority, CaState};
 use crate::bindings::Projection;
 use crate::config::RenewalLimits;
+use crate::dynsec::BrokerSync;
 use crate::issue::{self, Refusal};
 use crate::pem;
 
@@ -197,6 +201,8 @@ pub struct Parts {
     pub limits: RenewalLimits,
     /// `gateway.validity`.
     pub validity: Duration,
+    /// Asked to compare a gateway's broker permissions once its renewal has committed.
+    pub broker_sync: BrokerSync,
 }
 
 #[derive(Clone)]
@@ -212,6 +218,7 @@ struct Routes {
     limiter: Arc<limiter::Limiter>,
     permits: Arc<Semaphore>,
     metrics: Metrics,
+    broker_sync: BrokerSync,
 }
 
 /// `POST /certs/renew` (`protocol::renewal::RENEWAL_PATH`), both steps. The router's responses
@@ -234,6 +241,7 @@ pub fn routes(parts: Parts) -> Router {
             lag: parts.lag,
             limits: parts.limits,
             validity: parts.validity,
+            broker_sync: parts.broker_sync,
         })
 }
 
@@ -899,6 +907,10 @@ impl Routes {
             not_after = %event.not_after,
             "renewed a gateway certificate"
         );
+        // Committed: the broker's permissions follow now, not at the next whole comparison. The
+        // gateway may have lost its broker client when its only certificate expired or was
+        // revoked; the new one brings it back.
+        self.broker_sync.gateway(hardware_id);
         let certificate = pem::encode(pem::CERTIFICATE, &issued.der);
         Ok(api::ok(
             StatusCode::CREATED,
