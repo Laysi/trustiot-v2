@@ -569,12 +569,14 @@ async fn a_platform_administrator_revokes_every_valid_certificate_of_a_gateway()
     );
     println!(
         "evidence: ledger: both valid certificates revoked (reason 1), the earlier revocation and \
-         the expired certificate unchanged; CRL numbers {:?} -> {:?}; crl.pem lists {} on CA 1's \
-         CRL and {} on CA 2's, reason keyCompromise",
+         the expired certificate unchanged; CRL numbers {:?} -> {:?}; crl.pem lists {} on the \
+         CRL of CA {} and {} on the CRL of CA {}, reason keyCompromise",
         before.1,
         after.1,
         issue::hex(&valid_first.serial),
-        issue::hex(&valid_second.serial)
+        first,
+        issue::hex(&valid_second.serial),
+        second
     );
 
     // The audit line: the administrator, the hardware ID, the serial numbers; no certificate.
