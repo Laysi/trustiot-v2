@@ -686,6 +686,25 @@ fn a_renewed_certificate_is_never_replaced_by_an_older_one() {
         .install(&gateway.options(), &owners, registered.as_bytes())
         .installed();
     assert_eq!(gateway.setup().gateway.as_str(), HARDWARE_ID);
+
+    // A newer certificate of this key under another root does not hold the file either: after
+    // the root changed, the registration under the new root replaces both files.
+    gateway
+        .install(&gateway.options(), &owners, later.as_bytes())
+        .installed();
+    let rotated = Pki::new();
+    let stdout = gateway
+        .install(
+            &gateway.options(),
+            &owners,
+            rotated
+                .input(&rotated.leaf_from(HARDWARE_ID, &gateway.spki, Some(2025)))
+                .as_bytes(),
+        )
+        .installed()
+        .to_owned();
+    assert_eq!(stdout.matches(": written\n").count(), 2, "{stdout}");
+    assert_eq!(gateway.setup().gateway.as_str(), HARDWARE_ID);
 }
 
 #[test]

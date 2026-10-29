@@ -29,7 +29,9 @@
 //! 5. A renewed certificate is never replaced by an older one ([`newer_installed`]): when
 //!    `identity.certificate` holds a certificate for the same key with a later notBefore, the
 //!    agent renewed it, and the registration's certificate (which the platform answers with on
-//!    every resend of the registration) would only take the gateway back to an older one.
+//!    every resend of the registration) would only take the gateway back to an older one. Only
+//!    a chain that passes under the root being installed counts, so a reinstall after the root
+//!    changed is not held by a certificate under the old root.
 //!
 //! Then each file whose content, owner or mode differ is replaced atomically: a new file in the
 //! same directory (`O_EXCL`, `O_NOFOLLOW`), written, its owner and mode set, flushed to disk, and
@@ -50,7 +52,7 @@ use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _, PermissionsExt as
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, Ordering};
 
-use protocol::GatewayId;
+use protocol::{GatewayId, UnixMillis};
 use rustls_pki_types::{CertificateDer, UnixTime};
 use x509_parser::prelude::{FromDer, X509Certificate};
 
@@ -459,7 +461,9 @@ fn install(
         );
     }
     drop(identity);
-    if let Some(installed) = newer_installed(&config.certificate, &chain.leaf) {
+    if let Some(installed) =
+        newer_installed(&config.certificate, &chain.leaf, &trust, &root_crl, now)
+    {
         return Err(Failure::Refused(format!(
             "{} holds a newer certificate for this TPM key (valid from {installed}): the agent \
              renewed it after the registration. To install the registration's certificate \
@@ -494,9 +498,18 @@ fn install(
 /// The notBefore (RFC 2822) of the certificate installed at `path`, when it is for the same key
 /// as `leaf` (DER) and valid from a later time: the agent renewed it ([`crate::renewal`]), and
 /// the registration's certificate, which the platform answers with on every resend of the
-/// registration, is the older one. `None` when there is no such file, it cannot be read or
-/// parsed, or it is for another key or not newer: the file is then replaced as usual.
-fn newer_installed(path: &Path, leaf: &[u8]) -> Option<String> {
+/// registration, is the older one. Only a chain that passes as a client certificate under the
+/// root being installed (`trust`, with `root_crl`) counts, whatever the clock: one under
+/// another root, as after the root changed, would not connect anyway. `None` when there is no
+/// such file, it cannot be read or parsed, or it is for another key, not newer or not under the
+/// new root: the file is then replaced as usual.
+fn newer_installed(
+    path: &Path,
+    leaf: &[u8],
+    trust: &BrokerTrust,
+    root_crl: &RootCrl,
+    now: UnixTime,
+) -> Option<String> {
     let limit = u64::try_from(MAX_INPUT_BYTES).unwrap_or(u64::MAX);
     let metadata = fs::symlink_metadata(path).ok()?;
     if !metadata.file_type().is_file() || metadata.len() > limit {
@@ -509,16 +522,35 @@ fn newer_installed(path: &Path, leaf: &[u8]) -> Option<String> {
         .ok()?;
     let mut text = Vec::new();
     Read::take(&mut file, limit).read_to_end(&mut text).ok()?;
-    let installed_der = certificates(&text).ok()?.into_iter().next()?;
-    let (_, installed) = X509Certificate::from_der(&installed_der).ok()?;
+    let chain: Vec<CertificateDer<'static>> = certificates(&text)
+        .ok()?
+        .into_iter()
+        .map(CertificateDer::from)
+        .collect();
+    let (_, installed) = X509Certificate::from_der(chain.first()?).ok()?;
     let (_, new) = X509Certificate::from_der(leaf).ok()?;
     let same_key = installed.public_key().raw == new.public_key().raw;
     let installed_from = installed.validity().not_before;
-    (same_key && installed_from.timestamp() > new.validity().not_before.timestamp()).then(|| {
+    if !same_key || installed_from.timestamp() <= new.validity().not_before.timestamp() {
+        return None;
+    }
+    let millis = |time: x509_parser::time::ASN1Time| {
+        UnixMillis::new(
+            u64::try_from(time.timestamp())
+                .unwrap_or(0)
+                .saturating_mul(1000),
+        )
+    };
+    let validity = (
+        millis(installed_from),
+        millis(installed.validity().not_after),
+    );
+    tls::check_chain_under(trust, root_crl, &chain, validity, now).ok()?;
+    Some(
         installed_from
             .to_rfc2822()
-            .unwrap_or_else(|_| installed_from.to_string())
-    })
+            .unwrap_or_else(|_| installed_from.to_string()),
+    )
 }
 
 /// The root CRL at `path` checked against the new root, as the agent will load it

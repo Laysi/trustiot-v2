@@ -719,6 +719,29 @@ pub fn check_client_certificate_under(
     identity: &Identity,
     now: UnixTime,
 ) -> Result<Validity, TlsError> {
+    check_chain_under(
+        trust,
+        root_crl,
+        &identity.chain,
+        (identity.not_before, identity.not_after),
+        now,
+    )
+}
+
+/// [`check_client_certificate_under`] on a chain alone (the gateway certificate first, then the
+/// issuing CA), valid from `validity.0` to `validity.1` by the gateway certificate: the key is
+/// not checked.
+///
+/// # Errors
+///
+/// As [`check_client_certificate`].
+pub fn check_chain_under(
+    trust: &BrokerTrust,
+    root_crl: &RootCrl,
+    chain: &[CertificateDer<'static>],
+    validity: (UnixMillis, UnixMillis),
+    now: UnixTime,
+) -> Result<Validity, TlsError> {
     let verifier =
         WebPkiClientVerifier::builder_with_provider(Arc::clone(&trust.roots), Arc::new(provider()))
             .with_crls(root_crl.crls())
@@ -729,14 +752,14 @@ pub fn check_client_certificate_under(
         path: trust.path.clone(),
         source,
     };
-    let Some((leaf, intermediates)) = identity.chain.split_first() else {
+    let Some((leaf, intermediates)) = chain.split_first() else {
         return Err(TlsError::Verifier("no certificate".to_owned()));
     };
     match verifier.verify_client_cert(leaf, intermediates, now) {
         Ok(_) => Ok(Validity::Current),
         Err(error) if is_about_time(&error) => {
             // Once more, at a time the certificate is valid: everything but the time must hold.
-            let middle = identity.not_before.get() / 2 + identity.not_after.get() / 2;
+            let middle = validity.0.get() / 2 + validity.1.get() / 2;
             let inside = UnixTime::since_unix_epoch(Duration::from_millis(middle));
             verifier
                 .verify_client_cert(leaf, intermediates, inside)
