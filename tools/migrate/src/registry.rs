@@ -40,6 +40,10 @@ mod ai_gateway_schema;
 #[path = "../../../services/ingest/src/schema.rs"]
 mod ingest_schema;
 
+/// The gateway operations service's files (compiled into the service as well).
+#[path = "../../../services/gateway-ops/src/schema.rs"]
+mod gateway_ops_schema;
+
 /// The outbox tables (crates/outbox) in a service's schema.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Outbox {
@@ -277,6 +281,20 @@ pub const PRODUCT: Registry = Registry {
                 consumes: &["assets"],
             },
             migrations: ingest_schema::SCHEMA.migrations,
+        },
+        // Each gateway's desired configuration (Laysi/trustiot-v2#719): reads the assets
+        // service's model, device and binding events as its platform role, which also reads a
+        // gateway's current binding and latest configuration version across tenants (read
+        // only), so the chart binds a password to `gateway_ops_platform` as well
+        // ("trustiot.migrate.platformLogins" in deploy/chart/templates/_migrate.tpl).
+        Service {
+            name: gateway_ops_schema::SCHEMA.service,
+            platform_role: true,
+            outbox: Outbox {
+                producer: gateway_ops_schema::SCHEMA.outbox_producer,
+                consumes: &["assets"],
+            },
+            migrations: gateway_ops_schema::SCHEMA.migrations,
         },
     ],
     clickhouse: crate::clickhouse_files::FILES,

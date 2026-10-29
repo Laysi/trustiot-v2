@@ -934,6 +934,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "gateway-ops"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "chrono",
+ "contract",
+ "opentelemetry",
+ "outbox",
+ "protocol",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "service-kit",
+ "sqlx",
+ "testkit",
+ "thiserror",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "generic-array"
 version = "0.14.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"

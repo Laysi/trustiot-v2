@@ -1,0 +1,28 @@
+(skip) aarch64ElfProblem > accepts the aarch64 binary running this test
+(skip) the dev environment with podman > up uses images of this machine's platform although the store holds the service base for another one
+(skip) the dev environment with podman > up uses images of this machine's platform although the store holds Mosquitto for another one
+(skip) the dev environment with podman > starts, passes every check, seeds, rotates credentials, stops and purges without leftovers
+(skip) the test pod's script in the pinned image > sends with starttls: verified TLS, login, envelope and message, and prints only codes
+(skip) the test pod's script in the pinned image > sends with tls: verified TLS, login, envelope and message, and prints only codes
+(skip) the test pod's script in the pinned image > a refused login is curl error 67, not accepted
+(skip) the test pod's script in the pinned image > a relay without STARTTLS gets no login and no mail
+(skip) the test pod's script in the pinned image > a recipient the shell would interpret, or none, is refused before curl runs
+(skip) aarch64ElfProblem > accepts the aarch64 binary running this test
+(skip) the dev environment with podman > up uses images of this machine's platform although the store holds the service base for another one
+(skip) the dev environment with podman > up uses images of this machine's platform although the store holds Mosquitto for another one
+(skip) the dev environment with podman > starts, passes every check, seeds, rotates credentials, stops and purges without leftovers
+(skip) the test pod's script in the pinned image > sends with starttls: verified TLS, login, envelope and message, and prints only codes
+(skip) the test pod's script in the pinned image > sends with tls: verified TLS, login, envelope and message, and prints only codes
+(skip) the test pod's script in the pinned image > a refused login is curl error 67, not accepted
+(skip) the test pod's script in the pinned image > a relay without STARTTLS gets no login and no mail
+(skip) the test pod's script in the pinned image > a recipient the shell would interpret, or none, is refused before curl runs
+ 1704 pass
+ 9 skip
+ 0 fail
+Ran 1713 tests across 54 files. [11.72s]
+ 659 pass
+ 0 fail
+Ran 659 tests across 9 files. [88.26s]
+workflow policy: 4 file(s) checked, no violations
+actionlint: 3 workflow file(s), no errors
+exit 0 at 03:57:36 (build host)

@@ -1,0 +1,43 @@
+# cargo clippy --locked -p gateway-ops --all-targets -- -D warnings && cargo test --locked -p gateway-ops --no-fail-fast -- --nocapture
+# build host (macOS), CI=1, the tree committed as 7f833960; filtered to test lines, results and evidence
+    Checking gateway-ops v0.1.0 (<host copy>/src/services/gateway-ops)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.56s
+     Running unittests src/lib.rs (<host copy>/target/debug/deps/gateway_ops-ac0e063195811af4)
+test config::tests::debug_never_prints_passwords ... ok
+test config::tests::the_roles_must_differ_and_have_passwords ... ok
+test generate::tests::a_missing_or_misnamed_model_and_an_invalid_configuration_are_refused ... ok
+test generate::tests::a_deletion_leaves_the_stored_version_without_the_device_and_its_unused_model ... ok
+test generate::tests::devices_and_models_come_in_a_fixed_order_each_model_once ... ok
+test generate::tests::more_devices_than_a_configuration_holds_are_refused_and_a_deletion_still_trims ... ok
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+     Running tests/cross_tenant.rs (<host copy>/target/debug/deps/cross_tenant-0b976fe417918c54)
+test tenants_are_isolated ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.99s
+     Running tests/desired_config.rs (<host copy>/target/debug/deps/desired_config-bfc8573785c8b96e)
+evidence: current() of a gateway whose latest binding has no version: the latest desired configuration of gateway go-guard-01a1843d40137590aa5e6924a50b8c25 was not made for its latest binding
+test the_delivery_refuses_a_version_not_made_for_the_latest_binding ... ok
+test the_delivery_reads_the_latest_version_and_cannot_write ... ok
+test ending_the_binding_leaves_a_configuration_without_devices ... ok
+evidence: rebind to B with a configuration that cannot be made: versions [1, 2, 3, 4] in tenants ["A", "A", "B", "B"], devices [0, 1, 0, 1]; current() returns version 3 of tenant B with 0 devices
+test a_rebind_whose_configuration_cannot_be_made_never_keeps_the_earlier_tenants ... ok
+evidence: deletion while the configuration fails: versions [1, 2, 3, 4], devices per version [0, 1, 0, 1]
+test a_deletion_takes_effect_while_the_configuration_cannot_be_made ... ok
+evidence: versions [1, 2, 3, 4, 5] in tenants ["A", "A", "B", "B", "B"]; tenant B's devices of another binding and of no binding are in none; the device without binding_id written under B's binding is in version 5; tenant A's device is in none of tenant B's
+test other_tenants_and_ended_bindings_stay_out ... ok
+evidence: versions [1, 2, 3, 4, 5]; devices per version [0, 1, 2, 2, 1]; 5 versions after reprocessing 8 events
+test device_changes_make_versions_and_replays_make_none ... ok
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.82s
+     Running tests/generation_errors.rs (<host copy>/target/debug/deps/generation_errors-acd39ed58dd6c59a)
+evidence: unknown_model {"binding_id": "01a1843d-4c90-75a5-b94a-3345d4f58d6d", "error": "device 01a1843d-4cc8-7263-acad-0f8f7f3aa567 uses model 01a1843d-4cc8-7263-acad-0f8edf9b2af9, which the projection does not have", "event_id": "01a1843d-4cc9-72f6-8f66-190b1e2c1d86", "hardware_id": "go-errors-01a1843d4c9075a5b94a3344f7c0919d", "level": "ERROR", "reason": "unknown_model", "tenant_id": "01a1843d-4c90-75a5-b94a-334335157672"}; invalid {"binding_id": "01a1843d-4c90-75a5-b94a-3345d4f58d6d", "error": "the configuration is invalid: mixed_transport at devices[1].transport", "event_id": "01a1843d-4cfb-72a4-a439-de41912cc04e", "hardware_id": "go-errors-01a1843d4c9075a5b94a3344f7c0919d", "level": "ERROR", "reason": "invalid", "tenant_id": "01a1843d-4c90-75a5-b94a-334335157672"}; other tenant {"device_id": "01a1843d-4d41-75cb-965f-d60a1d67bab1", "event_id": "01a1843d-4d42-7782-8950-71502358cc5d", "event_type": "assets.device_created", "hardware_id": "go-errors-01a1843d4c9075a5b94a3344f7c0919d", "level": "WARN", "reason": "other_tenant", "tenant_id": "01a1843d-4d41-75cb-965f-d6092da305ac"}; versions stay at 2
+test a_configuration_that_cannot_be_made_keeps_the_previous_version ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.07s
+     Running tests/startup.rs (<host copy>/target/debug/deps/startup-714fdc79eb3d6015)
+evidence: ready; versions [1, 2] for the gateway; exit code Some(0) after SIGTERM
+test the_service_turns_assets_events_into_versions_and_stops_on_sigterm ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.73s
+     Running tests/unknown_events.rs (<host copy>/target/debug/deps/unknown_events-363ab4c57c45d95b)
+evidence: an unknown event of another aggregate acknowledged; an unknown event of a binding aggregate retried 5 polls in a row, not processed, not dead-lettered, and the binding event after it not processed
+test unknown_events_are_acknowledged_only_outside_the_followed_aggregates ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.97s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+exit 0 at 04:39:57 (build host, macOS)

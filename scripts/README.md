@@ -143,6 +143,8 @@ Job 依序套用 `services/ingest/migrations/clickhouse/`，記在 `trustiot_mig
 | `TRUSTIOT_DEV_AI_GATEWAY_DATABASE_USERNAME`、`..._PASSWORD` | `ai_gateway_app`（模型角色的設定，Laysi/trustiot-v2#605） |
 | `TRUSTIOT_DEV_INGEST_DATABASE_USERNAME`、`..._PASSWORD` | `ingest_app`（Laysi/trustiot-v2#640） |
 | `TRUSTIOT_DEV_INGEST_PLATFORM_DATABASE_USERNAME`、`..._PASSWORD` | `ingest_platform`（查閘道器目前的租戶，Laysi/trustiot-v2#640） |
+| `TRUSTIOT_DEV_GATEWAY_OPS_DATABASE_USERNAME`、`..._PASSWORD` | `gateway_ops_app`（Laysi/trustiot-v2#719） |
+| `TRUSTIOT_DEV_GATEWAY_OPS_PLATFORM_DATABASE_USERNAME`、`..._PASSWORD` | `gateway_ops_platform`（讀資產服務的事件，查閘道器目前的綁定與最新的設定版本，Laysi/trustiot-v2#719） |
 
 使用者把它們設成服務讀的 `TRUSTIOT__DATABASE__USERNAME` 與 `TRUSTIOT__DATABASE__PASSWORD`（平台角色是 chart 給服務的 `TRUSTIOT__DATABASE__PLATFORM_USERNAME` 與 `TRUSTIOT__DATABASE__PLATFORM_PASSWORD`）。AI 閘道用自己的前綴（決策 28）：設成 `AI_GATEWAY__DATABASE__USERNAME` 與 `AI_GATEWAY__DATABASE__PASSWORD`，Postgres 的位置也要從 `env` 印的 `TRUSTIOT_POSTGRES_*` 改名成 `AI_GATEWAY_POSTGRES_*`（`services/ai-gateway/README.md`，「資料庫」）。端對端測試以這些帳密逐一以 `verify-full` 登入本機 Postgres。
 

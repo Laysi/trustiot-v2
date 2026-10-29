@@ -166,7 +166,8 @@ async fn a_fresh_database_gets_every_migration_once() {
     }
     // Only identity_app is bound here: this deployment gives identity's platform role no Secret
     // (the chart binds one for the event log's consumer, Laysi/trustiot-v2#130), and the assets,
-    // telemetry-query, certs, assistant, ai-gateway and ingest services are not part of it, so
+    // telemetry-query, certs, assistant, ai-gateway, ingest and gateway-ops services are not part
+    // of it, so
     // their roles stay NOLOGIN.
     assert_eq!(
         report.roles_without_password,
@@ -182,7 +183,9 @@ async fn a_fresh_database_gets_every_migration_once() {
             "assistant_platform",
             "ai_gateway_app",
             "ingest_app",
-            "ingest_platform"
+            "ingest_platform",
+            "gateway_ops_app",
+            "gateway_ops_platform"
         ]
     );
     let first = db.password("identity_app");
@@ -306,9 +309,16 @@ async fn a_fresh_database_gets_every_migration_once() {
     // assets.gateway_bound for its gateway binding projection (Laysi/trustiot-v2#640): its entry
     // in src/registry.rs has `consumes: &["assets"]`, and the Job sets this policy to exactly the
     // consumers' platform roles (src/postgres.rs, `consumer_read`), no migration file of its own.
+    // gateway-ops consumes assets' model, device and binding events the same way
+    // (Laysi/trustiot-v2#719).
     assert_eq!(
         readers,
-        ["certs_platform", "identity_platform", "ingest_platform"]
+        [
+            "certs_platform",
+            "gateway_ops_platform",
+            "identity_platform",
+            "ingest_platform"
+        ]
     );
     let reachable: Vec<String> = sqlx::query_scalar(CERTS_PLATFORM_IN_ASSETS)
         .fetch_all(&mut admin)

@@ -146,9 +146,11 @@
 
 | 事件 | payload |
 | --- | --- |
-| `assets.device_created` | `device_id`、`revision`（1）、`name`、`hardware_id`、`model_id`、`device`：`protocol::config::Device`（`id` 是設備 ID，`model` 是型號名稱，加上連線設定與取樣間隔，閘道器設定的格式） |
+| `assets.device_created` | `device_id`、`revision`（1）、`name`、`hardware_id`、`model_id`、`binding_id`（設備所屬的綁定）、`device`：`protocol::config::Device`（`id` 是設備 ID，`model` 是型號名稱，加上連線設定與取樣間隔，閘道器設定的格式） |
 | `assets.device_updated` | 同上，`revision` 是更新後的版本 |
-| `assets.device_deleted` | `device_id`、`name`、`hardware_id`、`model_id`、`revision`（最後的版本）：閘道器設定與 field-context 從這些就能移除設備的對應；租戶只在 envelope 的 `tenant_id` |
+| `assets.device_deleted` | `device_id`、`name`、`hardware_id`、`model_id`、`binding_id`、`revision`（最後的版本）：閘道器設定與 field-context 從這些就能移除設備的對應；租戶只在 envelope 的 `tenant_id` |
+
+`binding_id` 是設備建立時閘道器目前的綁定（`assets.devices.binding_id`，之後不變），2026-10-29 起才有（Laysi/trustiot-v2#719，v1 的選填欄位）：同一個租戶解綁後再綁回同一台閘道器時，gateway-ops 以它把舊綁定的設備排除在設定之外（`services/gateway-ops/README.md`「綁定與租戶」）。之前寫的事件沒有這個欄位。
 
 ## 租戶
 

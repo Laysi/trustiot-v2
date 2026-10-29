@@ -90,7 +90,7 @@ and nothing without a platform role is.
 Returns a YAML list; use with fromYamlArray.
 */}}
 {{- define "trustiot.migrate.platformLogins" -}}
-{{- list "assets" "certs" "identity" "ingest" "telemetry-query" | toYaml -}}
+{{- list "assets" "certs" "gateway-ops" "identity" "ingest" "telemetry-query" | toYaml -}}
 {{- end -}}
 
 {{/*
