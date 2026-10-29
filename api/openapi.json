@@ -4203,7 +4203,7 @@
                 }
               }
             },
-            "description": "Revoked now; the ledger records the time and the reason, and the issuing CA's next scheduled CRL lists it."
+            "description": "Revoked now; the ledger records the time and the reason, and the issuing CA's CRL lists it: a new CRL is issued right after the revocation, or, should that fail, by the CRL job within one check interval (default 5 minutes)."
           },
           "400": {
             "content": {
@@ -4276,7 +4276,7 @@
             "description": "The database failed (`unavailable`). Nothing was revoked."
           }
         },
-        "summary": "Revokes a workstation certificate. Its issuing CA's next scheduled CRL lists it; the\nregistration API (Laysi/trustiot-v2#79) reads the ledger, so it refuses the certificate at\nonce.",
+        "summary": "Revokes a workstation certificate. Once the revocation commits, its issuing CA gets a new\nCRL that lists it before the response goes out (Laysi/trustiot-v2#635; when that fails, the\nrevocation stands and the CRL job lists it within one `crl.check_interval`); the\nregistration API (Laysi/trustiot-v2#79) reads the ledger, so it refuses the certificate at\nonce.",
         "tags": [
           "certs"
         ]

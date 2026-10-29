@@ -54,6 +54,7 @@ use sqlx::{PgPool, Row as _};
 
 use crate::api::{self, BodyKeys, Problems, error, ok, refuse};
 use crate::authority::CaState;
+use crate::crl::Reissuer;
 use crate::issue::{
     self, IssueError, IssuedCertificate, MAX_REQUEST_BYTES, MAX_WORKSTATION_NAME_LEN, Refusal,
     WORKSTATION_SUBJECT_PREFIX, WorkstationName,
@@ -105,6 +106,7 @@ pub struct Routes {
     pool: PgPool,
     ca: CaState,
     validity: Duration,
+    crls: Reissuer,
 }
 
 impl FromRef<Routes> for IdentityVerifier {
@@ -114,8 +116,15 @@ impl FromRef<Routes> for IdentityVerifier {
 }
 
 /// The workstation certificate routes: tokens verified with `verifier`, the ledger in `pool`,
-/// certificates signed by the CA of `ca`, valid for `validity` (`workstation.validity`).
-pub fn routes(verifier: IdentityVerifier, pool: PgPool, ca: CaState, validity: Duration) -> Router {
+/// certificates signed by the CA of `ca`, valid for `validity` (`workstation.validity`), and a
+/// new CRL of the issuing CA from `crls` after each revocation.
+pub fn routes(
+    verifier: IdentityVerifier,
+    pool: PgPool,
+    ca: CaState,
+    validity: Duration,
+    crls: Reissuer,
+) -> Router {
     Router::new()
         .route(CERTIFICATES_PATH, post(issue_certificate))
         .route(REVOKE_PATH, post(revoke_certificate))
@@ -125,6 +134,7 @@ pub fn routes(verifier: IdentityVerifier, pool: PgPool, ca: CaState, validity: D
             pool,
             ca,
             validity,
+            crls,
         })
 }
 
@@ -220,7 +230,9 @@ async fn issue_for(
     })
 }
 
-/// Revokes a workstation certificate. Its issuing CA's next scheduled CRL lists it; the
+/// Revokes a workstation certificate. Once the revocation commits, its issuing CA gets a new
+/// CRL that lists it before the response goes out (Laysi/trustiot-v2#635; when that fails, the
+/// revocation stands and the CRL job lists it within one `crl.check_interval`); the
 /// registration API (Laysi/trustiot-v2#79) reads the ledger, so it refuses the certificate at
 /// once.
 #[utoipa::path(
@@ -231,7 +243,7 @@ async fn issue_for(
     params(("serial" = String, Path, description = "The certificate's serial number, hex, as `serial` of the issue response.")),
     request_body = RevokeWorkstationCertificate,
     responses(
-        (status = 200, description = "Revoked now; the ledger records the time and the reason, and the issuing CA's next scheduled CRL lists it.", body = WorkstationCertificate),
+        (status = 200, description = "Revoked now; the ledger records the time and the reason, and the issuing CA's CRL lists it: a new CRL is issued right after the revocation, or, should that fail, by the CRL job within one check interval (default 5 minutes).", body = WorkstationCertificate),
         (status = 400, description = "The `Content-Type` is not `application/json`, the body is larger than 16 KiB (`workstation_certificate.body_too_large`), or it is not a JSON object (`workstation_certificate.body_invalid`) (`invalid_request`).", body = ErrorBody),
         (status = 401, description = "No valid session (`unauthenticated`).", body = ErrorBody),
         (status = 403, description = "Not a platform administrator (`permission_denied`).", body = ErrorBody),
@@ -291,18 +303,26 @@ async fn revoke_certificate(
         }
         Err(problem) => return failed(&problem),
     };
-    match ledger_view(&serial, &row) {
-        Ok(view) => {
-            tracing::info!(
-                user_id = %user.user_id(),
-                serial = %view.serial,
-                ca_key_id = %view.ca_key_id,
-                workstation = %view.workstation,
-                reason = reason.map_or("none", RevocationReason::as_str),
-                "revoked a workstation certificate"
-            );
-            ok(StatusCode::OK, &view)
-        }
+    // Committed. The audit line goes out first, so it is written even when the new CRL below
+    // takes long and the request is dropped meanwhile.
+    let view = ledger_view(&serial, &row);
+    if let Ok(view) = &view {
+        tracing::info!(
+            user_id = %user.user_id(),
+            serial = %view.serial,
+            ca_key_id = %view.ca_key_id,
+            workstation = %view.workstation,
+            reason = reason.map_or("none", RevocationReason::as_str),
+            "revoked a workstation certificate"
+        );
+    }
+    // Give the issuing CA a CRL that lists it now. It logs its outcome; a failure leaves the
+    // revocation and this response as they are, and the CRL job catches up.
+    if let Ok(ca_key_id) = row.try_get::<String, _>("ca_key_id") {
+        state.crls.after_revocation(&ca_key_id, &serial).await;
+    }
+    match view {
+        Ok(view) => ok(StatusCode::OK, &view),
         // Revoked and committed; only reading the row back failed.
         Err(problem) => failed(&problem),
     }
@@ -311,6 +331,10 @@ async fn revoke_certificate(
 /// Revokes the workstation certificate `serial` unless it is revoked already, in a transaction
 /// that first takes [`issue::LOCK_WORKSTATION`], so a factory registration that already read the
 /// certificate as valid commits before the revocation does; the revoked row, or `None`.
+///
+/// `revoked_at` is the clock when the row is updated, after the lock wait, not the
+/// transaction's start: the CRL job compares it with its CRL's thisUpdate to find revocations a
+/// CRL may have missed ([`crate::crl::refresh`]), so it must lie close to the commit.
 async fn revoke(
     pool: &PgPool,
     serial: &[u8],
@@ -323,7 +347,7 @@ async fn revoke(
         .await?;
     let row = sqlx::query(
         "UPDATE certs.issued_certificates
-         SET revoked_at = now(), revocation_reason = $2
+         SET revoked_at = clock_timestamp(), revocation_reason = $2
          WHERE serial = $1 AND profile = 'workstation' AND revoked_at IS NULL
          RETURNING ca_key_id, subject, not_before, not_after, certificate, revoked_at,
                    revocation_reason",
