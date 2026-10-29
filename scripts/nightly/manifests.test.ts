@@ -14,7 +14,6 @@ import {
   migrationOrderProblems,
   missingTlsSecrets,
   missingSecrets,
-  mqttBrokerPodOf,
   mqttBrokerServicesOf,
   passwordSecretProblems,
   passwordSecretsOf,
@@ -601,9 +600,6 @@ describe("the chart as deployed by the nightly", () => {
       // and the smoke checks that nothing exposes the broker.
       expect(missingSecrets(objects).has("trustiot-mqtt-broker-tls")).toBe(false);
       expect(mqttBrokerServicesOf(objects)).toEqual(["trustiot-mqtt-broker"]);
-      // The smoke reads gateway-ops' broker login from this pod's log (Laysi/trustiot-v2#721).
-      expect(mqttBrokerPodOf(objects)).toBe("trustiot-mqtt-broker-0");
-      expect(() => mqttBrokerPodOf(objects.filter((o) => o.kind !== "StatefulSet"))).toThrow("found 0");
       expect(exposureProblems(objects, { items: objects.filter((o) => o.kind === "Service") })).toEqual([]);
     }, 60_000);
   }

@@ -692,7 +692,7 @@ curl -sS -D - -X POST "http://127.0.0.1:18080/internal/roles/main/v1/messages" \
 - **連線預算**：每個副本 4 + 4 = 8 條，整版滾動 16 條；加入它時 `postgres.bundled.parameters.max_connections` 從 200 調到 220，**升級到這一版會讓叢集內的 Postgres 重啟一次**（見「叢集內的 Postgres」的「連線預算」）。
 - **輪替**：Postgres 的密碼隨 `migrate.passwordGeneration`（gateway-ops 跟著 Job 滾動更新）；broker 的密碼隨 `mqttBroker.passwordGeneration`，gateway-ops 不重啟，下一次重連讀新的密碼檔。
 - **關閉**：`services.gateway-ops.enabled: false` 時下一次 Job 讓 `gateway_ops_app`、`gateway_ops_platform` 不能登入，broker 移除 `service:gateway-ops` 這個帳號（它離開了帳號持有者的清單）；Secret 與資料留著（`keep`）；broker 上已經 retained 的設定訊息不因此清除。
-- nightly 的 smoke 測試開啟 gateway-ops 與 broker，確認 pod 就緒、兩個 Postgres 角色都有連線，並從 broker 自己的日誌確認 `service:gateway-ops` 登入過（`scripts/nightly/smoke.ts`）。叢集裡沒有綁定的閘道器，所以它不下發任何設定。
+- nightly 的 smoke 測試開啟 gateway-ops 與 broker，確認 pod 就緒（它的 readiness 包括以 `service:gateway-ops` 連上 broker 並獲准共享訂閱，所以這也證明 chart 交給它的 broker 帳號能用）、兩個 Postgres 角色都有連線（`scripts/nightly/smoke.ts`）。nightly 的程式不讀任何 pod 的日誌（`scripts/nightly/diagnostics.test.ts`），所以 broker 端的登入紀錄不在 nightly 驗證。叢集裡沒有綁定的閘道器，所以它不下發任何設定。
 - **展示叢集**：chart 只提供開關；展示叢集要開啟時，依 [deploy/flux/README.md](../flux/README.md) 的換版流程換到含這一版的 chart，並在 `values-demo.yaml` 打開 `services.gateway-ops.enabled`，broker 還沒開時一起打開 `mqttBroker.enabled`（否則渲染失敗）。換到這一版時叢集內的 Postgres 會因 `max_connections` 改變而重啟一次。
 
 ## migration Job

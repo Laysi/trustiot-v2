@@ -8,8 +8,8 @@
 // then finds in ClickHouse (api.ts, Laysi/trustiot-v2#539), the AI assistant is ready with a
 // Postgres session of its own role (api.ts, Laysi/trustiot-v2#592), ingest is ready, so it
 // reached ClickHouse and the MQTT broker, with Postgres sessions of both its roles and a ClickHouse
-// account that holds its role alone (api.ts, Laysi/trustiot-v2#642), gateway-ops is ready with
-// Postgres sessions of both its roles and the broker logged its login (api.ts,
+// account that holds its role alone (api.ts, Laysi/trustiot-v2#642), gateway-ops is ready, so it
+// reached the MQTT broker, with Postgres sessions of both its roles (api.ts,
 // Laysi/trustiot-v2#721), and an
 // uninstall leaves nothing behind but the objects the chart keeps on purpose (the database and the
 // password Secrets), which are then deleted. The same request through the ingress also proves the
@@ -81,7 +81,6 @@ import {
   migrationOrderProblems,
   missingSecrets,
   missingTlsSecrets,
-  mqttBrokerPodOf,
   mqttBrokerServicesOf,
   parseManifests,
   passwordSecretProblems,
@@ -480,10 +479,10 @@ export async function smokeShape(ctx: SmokeContext, shape: Shape): Promise<Shape
         const clickhouse = clickhouseAccess(ctx, namespace, clickhousePodOf(objects));
         return checkIngest({ psql, clickhouse }, `deployment/${name}`, ready);
       })) &&
-      (await check("gateway-ops is ready: it logged in to Postgres as gateway_ops_app and gateway_ops_platform, and to the MQTT broker as service:gateway-ops (Laysi/trustiot-v2#721)", async () => {
+      (await check("gateway-ops is ready, so it reached the MQTT broker as service:gateway-ops, and it logged in to Postgres as gateway_ops_app and gateway_ops_platform (Laysi/trustiot-v2#721)", async () => {
         // Its readiness is checked sessions of both Postgres roles, the migration check and the
-        // broker connection (services/gateway-ops/README.md); the broker's own log shows the login
-        // too. No gateway is bound here, so it delivers no configuration.
+        // broker connection with its subscription granted (services/gateway-ops/README.md). No
+        // gateway is bound here, so it delivers no configuration.
         const objects = parseManifests(manifest);
         const deployments = objects.filter((o) => o.kind === "Deployment" && o.metadata?.labels?.["app.kubernetes.io/component"] === "gateway-ops");
         if (deployments.length !== 1) throw new Error(`the release should have one gateway-ops Deployment, found ${deployments.length}`);
@@ -491,10 +490,7 @@ export async function smokeShape(ctx: SmokeContext, shape: Shape): Promise<Shape
         const status = await kubectlJson(["get", "--namespace", namespace, `deployment/${name}`, "--output", "json"]);
         const ready = (JSON.parse(status.stdout) as { status?: { readyReplicas?: number } }).status?.readyReplicas ?? 0;
         const { psql } = await ingressAccess(ctx, namespace, objects, ingressCa);
-        const brokerPod = mqttBrokerPodOf(objects);
-        // The log holds pod addresses and client IDs, so it stays out of the run's log (quiet).
-        const brokerLog = async () => (await kubectlJson(["logs", "--namespace", namespace, brokerPod, "-c", "mosquitto"])).stdout;
-        return checkGatewayOps({ psql, brokerLog }, `deployment/${name}`, ready);
+        return checkGatewayOps({ psql }, `deployment/${name}`, ready);
       })) &&
       (await check(
         "through the ingress, a new tenant reaches the assets service and, with its ClickHouse account, the telemetry API; a stolen identity header never does, and Host ports and normalized paths reach it (Laysi/trustiot-v2#65, #77, #539)",

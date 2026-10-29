@@ -237,33 +237,18 @@ export async function checkIngest(
  * ready gateway-ops has a session of both.
  */
 export const GATEWAY_OPS_ROLES = ["gateway_ops_app", "gateway_ops_platform"] as const;
-/** gateway-ops' broker account, which the chart hands it (deploy/chart/README.md, "MQTT broker"). */
-export const GATEWAY_OPS_BROKER_USER = "service:gateway-ops";
-
-/**
- * How many times the broker's log (Mosquitto 2.1 with connection_messages, the chart's
- * files/mosquitto/mosquitto.conf) records a client that logged in as `username`: lines such as
- * `New client connected from <address> as <client id> (p5, c1, k60, u'service:gateway-ops').`.
- * Mosquitto writes that line only after the login succeeded. No gateway ID has a `:`, so no
- * gateway's line names a service account.
- */
-export function brokerLoginsOf(log: string, username: string): number {
-  const account = `u'${username}')`;
-  return log.split("\n").filter((line) => line.includes("New client connected from ") && line.includes(account)).length;
-}
 
 /**
  * gateway-ops is deployed as the chart means it (Laysi/trustiot-v2#721). `readyReplicas` is what
- * its Deployment reports: a ready gateway-ops has checked sessions of both Postgres roles and its
- * broker connection (its readiness checks, Laysi/trustiot-v2#720). Then each of GATEWAY_OPS_ROLES
- * may log in and has a session (polled as for the assistant), and the broker's log (`brokerLog`,
- * the current log of its mosquitto container) records a login as GATEWAY_OPS_BROKER_USER, polled
- * for as long, so the broker connection is shown by the broker itself and not only by the
- * service's readiness. The log line holds a pod address and a client ID; only the count is
- * reported. Returns the report line.
+ * its Deployment reports: a ready gateway-ops has checked sessions of both Postgres roles, the
+ * migrations it expects, and a broker connection as `service:gateway-ops` whose shared
+ * subscription to the configuration reports was granted at QoS 1 (its readiness checks,
+ * services/gateway-ops/README.md, Laysi/trustiot-v2#720), so its readiness proves the broker
+ * account the chart hands it, as ingest's does. Then each of GATEWAY_OPS_ROLES may log in and has
+ * a session (polled as for the assistant). Returns the report line.
  */
 export async function checkGatewayOps(
-  deps: Pick<ApiCheckDeps, "psql" | "sleep" | "now" | "limits"> & { brokerLog: () => Promise<string> },
+  deps: Pick<ApiCheckDeps, "psql" | "sleep" | "now" | "limits">,
   deployment: string,
   readyReplicas: number,
 ): Promise<string> {
@@ -275,20 +260,7 @@ export async function checkGatewayOps(
     logins.push(`${role} has ${found.sessions}`);
     waited += found.waited;
   }
-  const sleep = deps.sleep ?? Bun.sleep;
-  const now = deps.now ?? Date.now;
-  const limitMs = deps.limits?.loginMs ?? ASSISTANT_LOGIN_LIMIT_MS;
-  const started = now();
-  let broker = 0;
-  for (;;) {
-    broker = brokerLoginsOf(await deps.brokerLog(), GATEWAY_OPS_BROKER_USER);
-    if (broker > 0) break;
-    if (now() - started >= limitMs) {
-      throw new Error(`timed out after ${Math.round(limitMs / 1000)} s waiting for the broker to log a login as ${GATEWAY_OPS_BROKER_USER}; its log has none`);
-    }
-    await sleep(deps.limits?.pollMs ?? POLL_MS);
-  }
-  return `${deployment}: ${readyReplicas} ready replica(s); ${logins.join(" and ")} session(s) open (after ${Math.round(waited / 1000)} s); the broker logged ${broker} login(s) as ${GATEWAY_OPS_BROKER_USER}`;
+  return `${deployment}: ${readyReplicas} ready replica(s), so it reached the MQTT broker as service:gateway-ops; ${logins.join(" and ")} session(s) open (after ${Math.round(waited / 1000)} s)`;
 }
 
 /**
