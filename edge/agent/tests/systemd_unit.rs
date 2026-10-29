@@ -141,6 +141,9 @@ fn the_sandbox_lines_stay() {
         service("SystemCallFilter"),
         ["@system-service", "~@privileged @resources"]
     );
+    // Not a sandbox line, but kept with them: the offline buffer's batches are allocated with
+    // their own mmap, so freeing them returns the memory (edge/agent/README.md, 記憶體上限).
+    assert_eq!(service("Environment"), ["MALLOC_MMAP_THRESHOLD_=65536"]);
     for absent in ["PrivateDevices", "ProcSubset", "PrivateUsers"] {
         // PrivateDevices hides the TPM, ProcSubset=pid hides /proc/meminfo, PrivateUsers drops
         // the tss group; each would break the agent.

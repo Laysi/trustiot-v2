@@ -1806,6 +1806,8 @@ async fn heartbeats_follow_every_connection_with_its_session() {
                 1_900_000_000_000,
             ))
             .1,
+            buffer: agent::upload::Stats::default(),
+            clock: agent::clock::GatewayClock::system(),
         },
         Instant::now(),
         harness.shutdown.clone(),
@@ -2519,6 +2521,8 @@ async fn a_heartbeat_that_finds_the_queue_full_is_skipped_not_delayed() {
                 1_900_000_000_000,
             ))
             .1,
+            buffer: agent::upload::Stats::default(),
+            clock: agent::clock::GatewayClock::system(),
         },
         Instant::now(),
         harness.shutdown.clone(),

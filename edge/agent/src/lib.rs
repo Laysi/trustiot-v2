@@ -8,8 +8,13 @@
 //! - [`link`]: the MQTT 5 connection to the cloud over a 443 WebSocket with mTLS inside
 //!   ([`transport`]), with presence (`online`, the last will, `offline` on shutdown),
 //!   reconnects with backoff ([`backoff`]) and bounded memory. The MQTT client is the agent's
-//!   own (`mqtt`); its module documentation says why.
-//! - [`heartbeat`]: the basic heartbeat; [`sdnotify`]: readiness and the systemd watchdog, which
+//!   own (`mqtt`); its module documentation says why. [`dispatch`]: the `down` channels the
+//!   link subscribes to, and the hand-over of each message to its handler.
+//! - [`upload`]: readings into batches and batches to the cloud, one at a time until the cloud
+//!   acknowledges them, through the offline buffer ([`buffer`]: memory, then the data
+//!   partition), on a stream of sequence numbers (rebuild checklist G1); [`clock`]: the
+//!   gateway's clock, whether it is synchronized, and the clock that measures a batch's age.
+//! - [`heartbeat`]: the heartbeat; [`sdnotify`]: readiness and the systemd watchdog, which
 //!   restarts the whole service and is fed only while the connection task makes progress
 //!   ([`liveness`]).
 //! - [`modbus`]: reads the data points of devices over Modbus TCP or over RTU-over-TCP to an
@@ -27,12 +32,17 @@
 //!   schedule and when the broker refuses the certificate, and swaps it in without losing what
 //!   the connection already accepted (rebuild checklist D2).
 //!
-//! The offline buffer builds on these (`README.md` lists what is where).
+//! The service wires them together: the polls of the devices [`desired`] applies stamp their
+//! readings with the [`clock::GatewayClock`] that [`upload`] compares with the cloud's time
+//! and hand them to [`upload::Readings`] (`README.md` lists what is where).
 
 pub mod backoff;
+pub mod buffer;
+pub mod clock;
 pub mod config;
 pub mod desired;
 mod directory;
+pub mod dispatch;
 pub mod heartbeat;
 pub mod identity;
 pub mod link;
@@ -47,5 +57,6 @@ pub mod setup;
 pub mod tls;
 pub mod tpm;
 pub mod transport;
+pub mod upload;
 
 pub use mqtt::packet::ReasonCode;

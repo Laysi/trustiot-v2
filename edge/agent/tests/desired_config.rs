@@ -11,7 +11,9 @@
 //! - the version rules of the protocol (same version again, older version, cleared message);
 //! - after a restart without network the saved configuration is polled at once;
 //! - after a restart the saved configuration is polled until the cloud's newer one arrives over
-//!   the link, which is then applied, saved and reported.
+//!   the link, which is then applied, saved and reported;
+//! - the readings of the polls go up as telemetry batches and the cloud's acknowledgement
+//!   releases them, with the service's wiring (Laysi/trustiot-v2#90).
 //!
 //! A restart is shown by stopping the agent's configuration side and starting a new one on the
 //! same state directory, which is what a process starting after a power cut finds; a save cut
@@ -31,19 +33,23 @@ use std::net::Ipv4Addr;
 use std::sync::Arc;
 use std::time::Duration;
 
+use agent::clock::{GatewayClock, SystemWall};
 use agent::desired::fleet::{Fleet, Sink};
 use agent::desired::store::{FILE_NAME, Store};
 use agent::desired::{self, Applier};
+use agent::dispatch::{self, Handlers};
 use agent::link::{
     self, ConnectError, ConnectStage, Connector, LinkSettings, LinkState, Subscriptions,
 };
 use agent::modbus::endpoint::Endpoints;
 use agent::modbus::{Clock, Timestamp};
 use agent::polling::{Polled, Settings};
+use agent::upload;
 use protocol::config::{
     ByteOrder, ConfigOutcome, ConfigReport, DataPoint, DataType, DesiredConfig, Device,
     DeviceModel, FunctionCode, Host, Transport,
 };
+use protocol::telemetry::{AckOutcome, TelemetryAck, TelemetryBatch};
 use protocol::topic::Channel;
 use protocol::{
     AgentVersion, ConfigVersion, DeviceId, IssueCode, ModelName, PointKey, UnixMillis, V1, Value,
@@ -818,4 +824,249 @@ async fn after_a_restart_the_gateway_converges_to_the_latest_version() {
     let mut running = Running::start(&dir, NoNetwork);
     running.records.round(&["meter-a", "meter-c"]).await;
     running.stop().await;
+}
+
+/// The service's sink (`upload::Readings`), watched: every poll also tells the test which device
+/// it was and how many readings it handed over.
+struct Watched {
+    readings: upload::Readings,
+    polls: mpsc::UnboundedSender<(String, usize)>,
+}
+
+impl Sink for Watched {
+    fn polled(&self, device: &DeviceId, polled: Polled) {
+        let _ = self
+            .polls
+            .send((device.as_str().to_owned(), polled.poll.readings.len()));
+        self.readings.polled(device, polled);
+    }
+
+    fn removed(&self, device: &DeviceId) {
+        self.readings.removed(device);
+    }
+}
+
+/// Waits for one poll of each of `devices`, each with one reading.
+async fn polls_of(polls: &mut mpsc::UnboundedReceiver<(String, usize)>, devices: &[&str]) {
+    let mut seen = Vec::new();
+    while seen.len() < devices.len() {
+        let (device, readings) = bounded(format!("polls of {devices:?}"), polls.recv())
+            .await
+            .unwrap();
+        assert_eq!(readings, 1, "{device}");
+        seen.push(device);
+    }
+    seen.sort();
+    assert_eq!(seen, devices);
+}
+
+/// The next telemetry batch the agent publishes, acknowledged with a PUBACK; heartbeats are not
+/// running here, so nothing else comes.
+async fn next_batch(broker: &mut FakeBroker<DuplexStream>) -> TelemetryBatch {
+    match bounded("a telemetry batch", broker.read_answering_pings()).await {
+        Some(Packet::Publish(publish)) if publish.topic == Channel::Telemetry.topic(&gateway()) => {
+            assert!(publish.qos == 1 && !publish.retain, "{publish:?}");
+            broker.send(&puback(publish.id.unwrap(), 0)).await;
+            TelemetryBatch::decode(&publish.payload).unwrap()
+        }
+        other => panic!("expected a telemetry batch, got {other:?}"),
+    }
+}
+
+/// Each series of `batch` as (device, point, values).
+fn series(batch: &TelemetryBatch) -> Vec<(String, String, Vec<Value>)> {
+    let mut series: Vec<_> = batch
+        .series
+        .iter()
+        .map(|series| {
+            (
+                series.device.as_str().to_owned(),
+                series.point.as_str().to_owned(),
+                series
+                    .samples
+                    .iter()
+                    .map(|sample| sample.value.clone())
+                    .collect(),
+            )
+        })
+        .collect();
+    series.sort_by(|a, b| (&a.0, &a.1).cmp(&(&b.0, &b.1)));
+    series
+}
+
+/// Laysi/trustiot-v2#90 on top of this issue: the readings of the polls of the devices the
+/// cloud's configuration names go up as a telemetry batch, and the cloud's acknowledgement
+/// releases it. Wired as `main.rs` wires the service: one subscription list and dispatcher
+/// (`dispatch`) for `down/config` and `down/telemetry-ack`, the fleet's sink is the pipeline's
+/// `Readings`, and the fleet stamps readings with the pipeline's `GatewayClock`. Only the
+/// connection (in memory), the address guard's exemption for the fake endpoint and a sink that
+/// also tells the test about each poll differ. The executable itself cannot poll a device on
+/// the test machine: `binary::a_batch_in_the_state_directory_goes_up_and_the_clouds_acknowledgement_releases_it`
+/// shows its upload with a batch left on disk.
+#[tokio::test(start_paused = true)]
+async fn polled_readings_go_up_as_a_batch_and_the_clouds_acknowledgement_releases_it() {
+    let _manual = clock::manual();
+    let bus = endpoint(&[1, 2]).await;
+    let dir = ScratchDir::new("desired-telemetry");
+    let (connector, mut brokers) = support::DuplexConnector::new();
+    let shutdown = CancellationToken::new();
+    let link_settings = LinkSettings {
+        subscriptions: dispatch::subscriptions(),
+        ..LinkSettings::new(gateway(), AgentVersion::new("0.1.0-test").unwrap())
+    };
+    let (link, incoming, supervisor) = link::link(link_settings, connector, shutdown.clone());
+    // Not synchronized until the cloud's time says so: no timesyncd flag file.
+    let gateway_clock = GatewayClock::new(SystemWall, dir.path().join("no-timesync"));
+    let mut upload_settings = upload::Settings::new(dir.path().join(upload::BUFFER_DIRECTORY));
+    upload_settings.upload_interval = upload::MIN_UPLOAD_INTERVAL;
+    let pipeline_stop = CancellationToken::new();
+    let (handles, pipeline) = upload::pipeline(
+        upload_settings,
+        link.clone(),
+        gateway_clock.clone(),
+        pipeline_stop.clone(),
+    )
+    .unwrap();
+    let (inbox, deliveries) = desired::inbox();
+    let dispatcher = tokio::spawn(dispatch::run(
+        incoming,
+        Handlers {
+            config: inbox,
+            telemetry_ack: handles.acks.clone(),
+        },
+    ));
+    let (polls_sender, mut polls) = mpsc::unbounded_channel();
+    let settings = settings();
+    let fleet = Fleet::new(
+        Endpoints::new(settings.connect_timeout).exempt_for_tests([Ipv4Addr::LOCALHOST.into()]),
+        settings,
+        Arc::new(gateway_clock.clone()),
+        Arc::new(Watched {
+            readings: handles.readings.clone(),
+            polls: polls_sender,
+        }),
+    );
+    let service = tokio::spawn(desired::run(
+        Applier::new(fleet, Store::new(dir.path())),
+        link.clone(),
+        deliveries,
+        shutdown.clone(),
+    ));
+    let pipeline = tokio::spawn(pipeline.run());
+    let supervisor = tokio::spawn(supervisor.run());
+
+    let mut broker = FakeBroker::new(bounded("the connection", brokers.recv()).await.unwrap())
+        .subscribing(dispatch::subscriptions().channels());
+    broker.accept().await;
+    // Every 5 s, so that the upload interval (1 s) closes the window between two rounds.
+    let poll_every = |device: Device| Device {
+        poll_interval_ms: 5_000,
+        ..device
+    };
+    let v1 = payload(
+        1,
+        vec![
+            poll_every(device("meter-a", &bus, 1)),
+            poll_every(device("meter-b", &bus, 2)),
+        ],
+    );
+    broker
+        .send(&publish(
+            &Channel::Config.topic(&gateway()),
+            &v1,
+            1,
+            true,
+            Some(1),
+        ))
+        .await;
+    assert_eq!(
+        report_and_ack(&mut broker, 1).await,
+        ConfigReport::applied(version(1))
+    );
+    // The first round polls at once; the window closes one upload interval after the start.
+    polls_of(&mut polls, &["meter-a", "meter-b"]).await;
+    advance(upload::MIN_UPLOAD_INTERVAL).await;
+    let first = next_batch(&mut broker).await;
+    assert_eq!((first.seq.get(), first.clock_synced), (1, false));
+    let values = |a: u16, b: u16| {
+        vec![
+            (
+                "meter-a".to_owned(),
+                "power".to_owned(),
+                vec![Value::Int(i64::from(a))],
+            ),
+            (
+                "meter-b".to_owned(),
+                "power".to_owned(),
+                vec![Value::Int(i64::from(b))],
+            ),
+        ]
+    };
+    assert_eq!(series(&first), values(BASE + 1, BASE + 2));
+    // Nothing releases the batch but the cloud's acknowledgement.
+    assert_eq!(handles.stats.snapshot().pending_batches, 1);
+    let ack = TelemetryAck {
+        v: V1,
+        stream: first.stream.clone(),
+        seq: first.seq,
+        outcome: AckOutcome::Committed { records: 2 },
+        server_time: gateway_clock.wall(),
+    };
+    broker
+        .send(&publish(
+            &Channel::TelemetryAck.topic(&gateway()),
+            &protocol::encode(&ack).unwrap(),
+            1,
+            false,
+            Some(2),
+        ))
+        .await;
+    // The paused clock does not move here: nothing but the acknowledgement can release it.
+    bounded("the acknowledged batch to leave the buffer", async {
+        while handles.stats.snapshot().pending_batches != 0 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await;
+    // The cloud's time agreed with the clock that stamps the readings: the same clock.
+    assert!(gateway_clock.synced());
+
+    // The next round's batch is the stream's next one (the first is not sent again), and its
+    // readings say the clock was synchronized.
+    bus.set_holding_registers(1, 0, &[BASE + 11]);
+    bus.set_holding_registers(2, 0, &[BASE + 12]);
+    advance(Duration::from_secs(4)).await;
+    polls_of(&mut polls, &["meter-a", "meter-b"]).await;
+    advance(upload::MIN_UPLOAD_INTERVAL).await;
+    let second = bounded(
+        "the PUBACK of the acknowledgement and the next batch",
+        async {
+            loop {
+                match broker.read_answering_pings().await {
+                    Some(Packet::PubAck { id: 2, reason: 0 }) => {}
+                    Some(Packet::Publish(publish))
+                        if publish.topic == Channel::Telemetry.topic(&gateway()) =>
+                    {
+                        broker.send(&puback(publish.id.unwrap(), 0)).await;
+                        return TelemetryBatch::decode(&publish.payload).unwrap();
+                    }
+                    other => panic!("expected the next telemetry batch, got {other:?}"),
+                }
+            }
+        },
+    )
+    .await;
+    assert_eq!(second.stream, first.stream);
+    assert_eq!((second.seq.get(), second.clock_synced), (2, true));
+    assert_eq!(series(&second), values(BASE + 11, BASE + 12));
+
+    shutdown.cancel();
+    bounded("the configuration side to stop", service)
+        .await
+        .unwrap();
+    pipeline_stop.cancel();
+    bounded("the pipeline to stop", pipeline).await.unwrap();
+    // The link's stop waits for the PUBACK of `offline` on a clock that does not move.
+    supervisor.abort();
+    dispatcher.abort();
 }

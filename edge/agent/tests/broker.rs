@@ -1,7 +1,9 @@
 //! The agent against Mosquitto 2.1 in a container (Laysi/trustiot-v2#86, acceptance criteria 1
 //! and 2): outer TLS and the WebSocket to the in-process front, the inner mTLS straight to the
 //! broker's listener with the production settings (`require_certificate`,
-//! `use_identity_as_username`, TLS 1.3, dynamic security with the gateway role).
+//! `use_identity_as_username`, TLS 1.3, dynamic security with the gateway role). The telemetry
+//! pipeline's round trip through the same broker (Laysi/trustiot-v2#90, acceptance criterion 7):
+//! a batch on `up/telemetry`, the cloud's acknowledgement on `down/telemetry-ack`.
 //!
 //! Needs podman or docker: without one the tests skip, with `CI` set they fail. The broker
 //! helpers block (they run the container runtime), so the tests run on a multi-thread runtime
@@ -14,15 +16,20 @@
 
 mod support;
 
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
 use agent::ReasonCode;
+use agent::clock::GatewayClock;
+use agent::dispatch::{self, Handlers};
 use agent::link::{LinkState, PublishError, Published, Subscriptions};
-use protocol::SessionId;
+use agent::upload::{self, Settings};
 use protocol::acl::{GATEWAY_ROLE, gateway_channel_acl_topic};
 use protocol::health::{OfflineReason, Status};
+use protocol::telemetry::{AckOutcome, Reading, Sample, TelemetryAck, TelemetryBatch};
 use protocol::topic::{Channel, MAX_LARGE_BYTES};
+use protocol::{DeviceId, PointKey, SessionId, V1, Value};
 use rustls_pki_types::pem::PemObject;
 use rustls_pki_types::{CertificateDer, ServerName};
 use serde_json::json;
@@ -34,6 +41,7 @@ use testkit::mqtt::{BROKER_NAME, TestPki};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio_rustls::TlsConnector;
+use tokio_util::sync::CancellationToken;
 
 /// A generous bound for anything that crosses the container runtime (CLAUDE.md: test time
 /// limits; CI runners are often loaded).
@@ -463,4 +471,120 @@ async fn the_agent_reconnects_after_the_relay_or_the_broker_restarts() {
         "the retained status after the restart is the new session's online: {online:?}"
     );
     agent.stop().await;
+}
+
+/// Acceptance criterion 7 of Laysi/trustiot-v2#90: the agent's link subscribes to
+/// `down/telemetry-ack` (the gateway role allows it), the pipeline's batch reaches the cloud on
+/// `up/telemetry` through Mosquitto, the cloud's `TelemetryAck` comes back through Mosquitto to
+/// the dispatcher, and the batch leaves the buffer.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_batch_goes_up_through_mosquitto_and_the_clouds_acknowledgement_releases_it() {
+    let pki = TestPki::new();
+    let Some(broker) = blocking(|| Mosquitto::start(&pki)) else {
+        return;
+    };
+    blocking(|| broker.register_gateway(GATEWAY));
+    let front = front(&pki, broker.address(), |_| {}).await;
+    let files = Files::new(&pki, front.address().port());
+    let telemetry = Channel::Telemetry.topic(&gateway());
+    let up = blocking(|| broker.subscribe(&telemetry));
+    let Agent {
+        link,
+        incoming,
+        shutdown,
+        supervisor,
+    } = Agent::start_with(&files, dispatch::subscriptions());
+    let mut state = link.state();
+    bounded(
+        "the link to connect",
+        state.wait_for(|state| matches!(state, LinkState::Connected { .. })),
+    )
+    .await
+    .unwrap();
+
+    let clock = GatewayClock::system();
+    let mut settings = Settings::new(PathBuf::from(files.path("state")).join("buffer"));
+    settings.upload_interval = upload::MIN_UPLOAD_INTERVAL;
+    let stop = CancellationToken::new();
+    let (handles, pipeline) =
+        upload::pipeline(settings, link.clone(), clock.clone(), stop.clone()).unwrap();
+    let pipeline = tokio::spawn(pipeline.run());
+    let dispatcher = tokio::spawn(dispatch::run(
+        incoming,
+        Handlers {
+            // Nothing publishes a configuration in this test.
+            config: agent::desired::inbox().0,
+            telemetry_ack: handles.acks.clone(),
+        },
+    ));
+    let now = agent::modbus::Clock::now(&clock);
+    let readings: Vec<Reading> = (0..3)
+        .map(|index| Reading {
+            device: DeviceId::new("meter-1").unwrap(),
+            point: PointKey::new(format!("p{index}")).unwrap(),
+            sample: Sample {
+                at: now.at,
+                value: Value::Int(index),
+            },
+            clock_synced: now.synced,
+        })
+        .collect();
+    handles.readings.push(readings);
+
+    let delivered = blocking(|| {
+        up.wait_for("the telemetry batch", LIMIT, |message| {
+            message.topic == telemetry
+        })
+    });
+    assert_eq!(
+        (delivered.qos, delivered.retain),
+        (1, false),
+        "{delivered:?}"
+    );
+    let batch = TelemetryBatch::decode(&delivered.payload).unwrap();
+    assert_eq!((batch.seq.get(), batch.record_count()), (1, 3));
+    assert_eq!(batch.series.len(), 3);
+    assert!(
+        batch
+            .series
+            .iter()
+            .all(|series| series.samples.iter().all(|sample| sample.at == now.at)),
+        "the timestamps as read"
+    );
+    // Nothing releases the batch but the acknowledgement.
+    assert_eq!(handles.stats.snapshot().pending_batches, 1);
+
+    let ack = TelemetryAck {
+        v: V1,
+        stream: batch.stream.clone(),
+        seq: batch.seq,
+        outcome: AckOutcome::Committed { records: 3 },
+        server_time: clock.wall(),
+    };
+    let payload = protocol::encode(&ack).unwrap();
+    let topic = Channel::TelemetryAck.topic(&gateway());
+    let sent = blocking(|| broker.publish(&topic, &payload, 1, false));
+    assert!(sent.is_some_and(|reason| reason < 0x80), "{sent:?}");
+    bounded("the acknowledged batch to leave the buffer", async {
+        while handles.stats.snapshot().pending_batches != 0 {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await;
+    let stats = handles.stats.snapshot();
+    assert_eq!(
+        (stats.pending_records, stats.dropped_records),
+        (0, 0),
+        "{stats:?}"
+    );
+    assert!(
+        clock.synced(),
+        "an acknowledgement within the window counts as a synchronized clock"
+    );
+
+    stop.cancel();
+    bounded("the pipeline to stop", pipeline).await.unwrap();
+    shutdown.cancel();
+    bounded("the link to stop", supervisor).await.unwrap();
+    bounded("the dispatcher to stop", dispatcher).await.unwrap();
 }

@@ -10,7 +10,7 @@ use std::time::{Duration, SystemTime};
 use protocol::{AgentVersion, GatewayId, IdError, UnixMillis};
 use rustls_pki_types::UnixTime;
 
-use crate::config::Config;
+use crate::config::{BufferConfig, Config};
 use crate::identity::{self, IdentityError, KeySource};
 use crate::link::LinkSettings;
 use crate::renewal::{Credentials, HttpsEndpoint, Renewal};
@@ -73,6 +73,9 @@ pub struct Setup {
     pub file_key: bool,
     /// The root CRL the inner TLS checks the broker's chain against.
     pub root_crl: RootCrl,
+    /// The offline buffer and the upload. Its directory is opened once the agent runs, not
+    /// here: a failing data partition must not keep the agent from starting.
+    pub buffer: BufferConfig,
 }
 
 impl Setup {
@@ -136,6 +139,7 @@ impl Setup {
             certificate_validity,
             file_key: matches!(config.key, KeySource::File { .. }),
             root_crl,
+            buffer: config.buffer.clone(),
         })
     }
 }
