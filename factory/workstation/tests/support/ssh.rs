@@ -20,9 +20,21 @@ use super::{Scratch, set_mode};
 /// ends with the status in `$HOME/status-<inspect|provision>` (0 without one). With
 /// `$HOME/hup`, it first sends SIGHUP to the shell that started it, as a dropped ssh session
 /// does; with `$HOME/flood`, it prints 1 MiB of spaces instead of a report, which fills the pipe
-/// long before the reader's limit is reached.
+/// long before the reader's limit is reached. As `provision install` (Laysi/trustiot-v2#617) it
+/// appends its standard input to `$HOME/install-stdin`, prints `$HOME/report-install` (or that
+/// both files were written) and ends with the status in `$HOME/status-install` (0 without one).
 pub const CANNED_AGENT: &str = r#"#!/bin/sh
 printf '%s\n' "$*" >> "$HOME/agent-calls"
+if [ "$1" = provision ] && [ "$2" = install ]; then
+    cat >> "$HOME/install-stdin"
+    if [ -f "$HOME/report-install" ]; then
+        cat "$HOME/report-install"
+    else
+        printf '%s\n' '/var/lib/trustiot-agent/gateway.pem: written' \
+            '/etc/trustiot/broker-ca.pem: written'
+    fi
+    exit "$(cat "$HOME/status-install" 2>/dev/null || echo 0)"
+fi
 mode=provision
 for arg in "$@"; do
     if [ "$arg" = --inspect ]; then mode=inspect; fi

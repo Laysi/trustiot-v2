@@ -544,12 +544,16 @@ async fn register(options: &Options) -> Result<(), Error> {
         backoff,
         root_sha256,
     };
+    // With --gateway, the installation of the certificates on the gateway (step 7), reported
+    // after the registration's line.
+    let mut installed = None;
     let result = match &source {
         Source::Files(gateway) => register::register(&registrar, gateway, now).await,
         Source::Ssh { ssh, plan } => pipeline::register_gateway(&registrar, ssh, plan, now)
             .await
             .map(|outcome| {
                 report_provisioned(ssh, plan, &outcome.provisioned);
+                installed = Some((ssh.destination().to_string(), outcome.installed));
                 outcome.registered
             }),
     };
@@ -582,7 +586,22 @@ async fn register(options: &Options) -> Result<(), Error> {
         registered.attempts,
         record.display()
     ));
-    Ok(())
+    match installed {
+        None => Ok(()),
+        Some((destination, Ok(installed))) => {
+            say(&format!(
+                "{destination}: {} the certificate chain and the root certificate: {}",
+                if installed.changed() {
+                    "installed"
+                } else {
+                    "already had"
+                },
+                installed.report.lines().collect::<Vec<_>>().join("; ")
+            ));
+            Ok(())
+        }
+        Some((_, Err(error))) => Err(error),
+    }
 }
 
 /// What the gateway reported, before the registration's own line.

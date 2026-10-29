@@ -1,9 +1,12 @@
 //! `register --gateway` through a fake `ssh` first on the tool's `PATH` (Laysi/trustiot-v2#616):
 //! what crosses to the gateway (the arguments, the environment and the standard input of every
 //! ssh call), the remote cleanup, values refused before ssh runs, retries of ssh's own failures,
-//! and the stops with their exit codes. The gateway's agent is a shell stand-in that prints
-//! reports the test made (`support::ssh::CANNED_AGENT`); tests/pipeline_swtpm.rs runs the real
-//! `trustiot-agent provision` against a software TPM instead.
+//! and the stops with their exit codes; then the installation of the certificates on the gateway
+//! (Laysi/trustiot-v2#617): its standard input is the chain and the root and nothing else, it
+//! runs the installed agent even with `--upload-agent`, and its stops have their exit codes. The
+//! gateway's agent is a shell stand-in that prints reports the test made
+//! (`support::ssh::CANNED_AGENT`); tests/pipeline_swtpm.rs runs the real `trustiot-agent
+//! provision` against a software TPM instead.
 
 #![cfg(target_os = "linux")]
 
@@ -14,7 +17,7 @@ use std::collections::HashSet;
 use protocol::GatewayId;
 use protocol::provisioning::KeyHandle;
 use support::bench::{Bench, DESTINATION};
-use support::ssh::{CANNED_AGENT, FAKE_SUDO, GatewayKeys};
+use support::ssh::{CANNED_AGENT, Call, FAKE_SUDO, GatewayKeys};
 use workstation::gateway::{self, KEPT_ENVIRONMENT, Mode, Request, SSH_OPTIONS, UploadedAgent};
 use workstation::journal::State;
 
@@ -68,6 +71,77 @@ fn assert_environment_whitelisted(bench: &Bench) {
     }
 }
 
+/// The argument vector ssh must get for `provision install` (Laysi/trustiot-v2#617).
+fn expected_install_argv(hardware_id: &str, sudo: bool) -> Vec<String> {
+    let mut argv: Vec<String> = SSH_OPTIONS
+        .iter()
+        .map(|&option| option.to_owned())
+        .collect();
+    argv.extend([
+        "--".to_owned(),
+        DESTINATION.to_owned(),
+        gateway::install_command(hardware_id, sudo).expect("a command"),
+    ]);
+    argv
+}
+
+/// The DER of every `CERTIFICATE` block in `text`, ignoring anything around them.
+fn certificates_in(text: &str) -> Vec<Vec<u8>> {
+    text.split("-----BEGIN CERTIFICATE-----")
+        .skip(1)
+        .map(|part| {
+            let body = part
+                .split("-----END CERTIFICATE-----")
+                .next()
+                .expect("a block");
+            support::registry::pem_der(body)
+        })
+        .collect()
+}
+
+/// `stdin` is `CERTIFICATE` blocks and nothing else, not even a line between them: their DER.
+fn only_certificates(stdin: &[u8]) -> Vec<Vec<u8>> {
+    let mut rest = std::str::from_utf8(stdin).expect("text");
+    let mut blocks = Vec::new();
+    while !rest.is_empty() {
+        let body = rest
+            .strip_prefix("-----BEGIN CERTIFICATE-----\n")
+            .unwrap_or_else(|| panic!("only certificate blocks: {rest:?}"));
+        let (body, after) = body
+            .split_once("-----END CERTIFICATE-----\n")
+            .expect("the block's end");
+        assert!(!body.contains("-----"), "{body}");
+        blocks.push(support::registry::pem_der(body));
+        rest = after;
+    }
+    blocks
+}
+
+/// The `provision install` call `call` was for `hardware_id`, and its standard input is exactly
+/// the recorded registration's certificate, issuing CA and root, as PEM, and nothing else
+/// (Laysi/trustiot-v2#617, acceptance criterion 5).
+fn assert_install_call(bench: &Bench, call: &Call, hardware_id: &str, sudo: bool) {
+    assert_eq!(call.argv, expected_install_argv(hardware_id, sudo));
+    assert_eq!(call.destination, DESTINATION);
+    let record = bench
+        .journal()
+        .load(hardware_id)
+        .expect("readable")
+        .expect("a record");
+    let registration = record.registration.expect("a registration");
+    let chain = certificates_in(&registration.certificate_chain);
+    assert_eq!(chain.len(), 2, "the certificate and the issuing CA");
+    assert_eq!(chain[0], certificates_in(&registration.certificate)[0]);
+    let mut expected = chain;
+    expected.extend(certificates_in(&registration.root_certificate));
+    assert_eq!(expected.len(), 3);
+    assert_eq!(
+        only_certificates(&call.stdin),
+        expected,
+        "standard input is the chain and the root, nothing else"
+    );
+}
+
 /// A bench with an uploadable canned agent: its path and bytes.
 fn canned_agent(bench: &Bench) -> (String, Vec<u8>) {
     let path = bench.agent_file("trustiot-agent", CANNED_AGENT.as_bytes());
@@ -87,11 +161,19 @@ async fn only_the_agent_the_hardware_id_and_the_handle_cross_to_the_gateway() {
     );
     let (agent, bytes) = canned_agent(&bench);
     let sha256 = UploadedAgent::from_bytes(bytes.clone()).sha256().to_owned();
+    // The certificates go to the agent installed on the gateway, never to the upload.
+    bench.ssh.install_remote("trustiot-agent", CANNED_AGENT);
 
     let run = bench
         .run(&bench.register_args("tg-0001", &["--upload-agent", &agent]))
         .await;
     assert_eq!(run.code, Some(0), "{}", run.output());
+    assert!(
+        run.stdout
+            .contains("installed the certificate chain and the root certificate"),
+        "{}",
+        run.stdout
+    );
     assert!(
         run.stdout.contains("the TPM key at 0x81000100 was created"),
         "{}",
@@ -106,7 +188,11 @@ async fn only_the_agent_the_hardware_id_and_the_handle_cross_to_the_gateway() {
     assert!(run.stderr.contains("no EK certificate"), "{}", run.stderr);
 
     let calls = bench.ssh.calls();
-    assert_eq!(calls.len(), 2, "an inspection, then provision");
+    assert_eq!(
+        calls.len(),
+        3,
+        "an inspection, provision, then the installation"
+    );
     assert_eq!(
         calls[0].argv,
         expected_argv("tg-0001", Mode::Inspect, false, Some(&sha256))
@@ -115,12 +201,20 @@ async fn only_the_agent_the_hardware_id_and_the_handle_cross_to_the_gateway() {
         calls[1].argv,
         expected_argv("tg-0001", Mode::Provision, false, Some(&sha256))
     );
-    for call in &calls {
+    for call in &calls[..2] {
         assert_eq!(call.destination, DESTINATION);
         assert_eq!(
             call.stdin, bytes,
             "standard input is the agent, nothing else"
         );
+    }
+    assert_install_call(&bench, &calls[2], "tg-0001", false);
+    assert_eq!(
+        bench.ssh.read_remote_file("install-stdin").as_bytes(),
+        calls[2].stdin,
+        "the installed agent got all of it"
+    );
+    for call in &calls {
         assert_eq!(call.status, Some(0));
     }
     assert_environment_whitelisted(&bench);
@@ -130,6 +224,7 @@ async fn only_the_agent_the_hardware_id_and_the_handle_cross_to_the_gateway() {
         [
             "provision --hardware-id tg-0001 --handle 0x81000100 --inspect",
             "provision --hardware-id tg-0001 --handle 0x81000100",
+            "provision install --hardware-id tg-0001",
         ]
     );
     assert!(
@@ -178,17 +273,19 @@ async fn the_installed_agent_runs_without_an_upload_and_sudo_never_asks() {
     let calls = bench.ssh.calls();
     assert_eq!(
         calls.len(),
-        1,
-        "the inspection found the key: no provision run"
+        2,
+        "the inspection found the key: no provision run, then the installation"
     );
     assert_eq!(
         calls[0].argv,
         expected_argv("tg-0002", Mode::Inspect, true, None)
     );
     assert!(calls[0].stdin.is_empty(), "nothing on standard input");
+    assert_install_call(&bench, &calls[1], "tg-0002", true);
     assert_eq!(
         bench.ssh.read_remote_file("sudo-calls").trim(),
-        "trustiot-agent provision --hardware-id tg-0002 --handle 0x81000100 --inspect"
+        "trustiot-agent provision --hardware-id tg-0002 --handle 0x81000100 --inspect\n\
+         trustiot-agent provision install --hardware-id tg-0002"
     );
     assert_environment_whitelisted(&bench);
     bench.assert_nothing_secret_crossed();
@@ -307,37 +404,43 @@ async fn ssh_failures_are_tried_again_and_every_run_reports_the_same() {
         &keys.report("tg-0003", Some(true)),
     );
     let (agent, bytes) = canned_agent(&bench);
+    bench.ssh.install_remote("trustiot-agent", CANNED_AGENT);
     // 1: the connection fails; 2: the inspection runs but its answer is lost; 3: the
-    // inspection; 4: provision runs but its answer is lost; 5: provision again.
+    // inspection; 4: provision runs but its answer is lost; 5: provision again; 6: the
+    // installation runs but its answer is lost; 7: the installation again.
     bench.ssh.fail_before(1);
     bench.ssh.fail_after(2);
     bench.ssh.fail_after(4);
+    bench.ssh.fail_after(6);
 
     let run = bench
         .run(&bench.register_args("tg-0003", &["--upload-agent", &agent]))
         .await;
     assert_eq!(run.code, Some(0), "{}", run.output());
     let calls = bench.ssh.calls();
-    assert_eq!(calls.len(), 5);
+    assert_eq!(calls.len(), 7);
     assert_eq!(
         calls.iter().map(|call| call.status).collect::<Vec<_>>(),
-        [None, Some(0), Some(0), Some(0), Some(0)],
+        [None, Some(0), Some(0), Some(0), Some(0), Some(0), Some(0)],
         "the first call never reached the remote command"
     );
     let sha256 = UploadedAgent::from_bytes(bytes.clone()).sha256().to_owned();
     let inspect = expected_argv("tg-0003", Mode::Inspect, false, Some(&sha256));
     let provision = expected_argv("tg-0003", Mode::Provision, false, Some(&sha256));
-    for (number, call) in calls.iter().enumerate() {
+    for (number, call) in calls.iter().enumerate().take(5) {
         let expected = if number < 3 { &inspect } else { &provision };
         assert_eq!(&call.argv, expected, "call {}", number + 1);
         assert_eq!(call.stdin, bytes, "every attempt uploads the same agent");
+    }
+    for call in &calls[5..] {
+        assert_install_call(&bench, call, "tg-0003", false);
     }
     assert_eq!(calls[1].stdout, calls[2].stdout, "the same inspection");
     assert_eq!(
         calls[3].stdout, calls[4].stdout,
         "the same provision report"
     );
-    assert_eq!(bench.ssh.agent_calls().len(), 4);
+    assert_eq!(bench.ssh.agent_calls().len(), 6);
     assert!(bench.ssh.remote_tmp_entries().is_empty());
     assert!(
         run.stderr.contains("trying again"),
@@ -496,6 +599,7 @@ async fn a_known_gateway_whose_tpm_has_no_key_stops_with_20() {
         &keys.report("tg-0010", None),
         &keys.report("tg-0010", Some(true)),
     );
+    bench.ssh.install_remote("trustiot-agent", CANNED_AGENT);
     let first = bench.run(&register(&[])).await;
     assert_eq!(first.code, Some(0), "{}", first.output());
     let original = keys.public_key_sha256();
@@ -544,4 +648,150 @@ async fn a_known_gateway_whose_tpm_has_no_key_stops_with_20() {
         record.public_key_sha256, original,
         "the record keeps the registered key"
     );
+}
+
+/// What the run said about the installation and what the log's last line for `hardware_id` is.
+fn assert_not_installed(bench: &Bench, run: &support::Run, hardware_id: &str, stop: &str) {
+    assert!(
+        run.stderr.contains(&format!(
+            "hardware ID {hardware_id} is registered (recorded), but its certificates are not \
+             installed on the gateway"
+        )),
+        "{}",
+        run.stderr
+    );
+    assert!(
+        run.stdout.contains("registered hardware ID")
+            || run
+                .stdout
+                .contains("the platform already had the registration"),
+        "the registration's own line comes first: {}",
+        run.stdout
+    );
+    let record = bench
+        .journal()
+        .load(hardware_id)
+        .expect("readable")
+        .expect("a record");
+    assert_eq!(record.state, State::Registered, "the registration stands");
+    let last = bench.events(hardware_id).pop().expect("a log line");
+    assert_eq!(last["event"], "install_stopped");
+    assert_eq!(last["stop"], stop);
+}
+
+#[tokio::test]
+async fn the_installation_after_the_registration_stops_with_its_own_exit_codes() {
+    let bench = Bench::start("ssh-install", Vec::new()).await;
+    let keys = GatewayKeys::new();
+    let present = keys.report("tg-0011", Some(false));
+    bench.ssh.leave_reports(&present, &present);
+    bench.ssh.install_remote("trustiot-agent", CANNED_AGENT);
+    let register = bench.register_args("tg-0011", &[]);
+
+    // The gateway refuses the certificates (its 8): 32.
+    bench.ssh.write_remote_file("status-install", b"8");
+    let refused = bench.run(&register).await;
+    assert_eq!(refused.code, Some(32), "{}", refused.output());
+    assert!(refused.stderr.contains("refused"), "{}", refused.stderr);
+    assert_not_installed(&bench, &refused, "tg-0011", "refused_by_gateway");
+
+    // The agent's installation cannot be used yet (its 9): 33.
+    bench.ssh.write_remote_file("status-install", b"9");
+    let not_ready = bench.run(&register).await;
+    assert_eq!(not_ready.code, Some(33), "{}", not_ready.output());
+    assert_not_installed(&bench, &not_ready, "tg-0011", "gateway_not_ready");
+
+    // An agent without provision install (its 2): 33, the advice to update it.
+    bench.ssh.write_remote_file("status-install", b"2");
+    let old = bench.run(&register).await;
+    assert_eq!(old.code, Some(33), "{}", old.output());
+    assert!(
+        old.stderr.contains("does not know provision install"),
+        "{}",
+        old.stderr
+    );
+
+    // No agent installed: --upload-agent provisions, but the upload never gets the
+    // certificates; 127 is 33 with the advice to install the agent.
+    bench.ssh.reset_remote();
+    bench.ssh.leave_reports(&present, &present);
+    let (agent, bytes) = canned_agent(&bench);
+    let before = bench.ssh.count();
+    let bare = bench
+        .run(&bench.register_args("tg-0011", &["--upload-agent", &agent]))
+        .await;
+    assert_eq!(bare.code, Some(33), "{}", bare.output());
+    assert!(
+        bare.stderr.contains("no trustiot-agent installed"),
+        "{}",
+        bare.stderr
+    );
+    assert_not_installed(&bench, &bare, "tg-0011", "gateway_not_ready");
+    let calls = bench.ssh.calls();
+    let install = calls.last().expect("the installation's call");
+    assert_eq!(
+        calls.len(),
+        before + 2,
+        "the inspection, then the installation"
+    );
+    assert_eq!(install.status, Some(127));
+    assert_install_call(&bench, install, "tg-0011", false);
+    assert_ne!(install.stdin, bytes, "the upload is not sent again");
+    assert_eq!(
+        bench.ssh.agent_calls(),
+        ["provision --hardware-id tg-0011 --handle 0x81000100 --inspect"],
+        "the uploaded agent only inspected"
+    );
+    assert!(bench.ssh.remote_tmp_entries().is_empty());
+
+    // The gateway stays unreachable for every attempt of the installation: 1, and the
+    // registration stands.
+    bench.ssh.install_remote("trustiot-agent", CANNED_AGENT);
+    let first_install = bench.ssh.count() + 2;
+    for call in 0..gateway::SSH_BACKOFF.max_attempts {
+        bench
+            .ssh
+            .fail_before(first_install + usize::try_from(call).expect("fits"));
+    }
+    let unreachable = bench.run(&register).await;
+    assert_eq!(unreachable.code, Some(1), "{}", unreachable.output());
+    assert!(
+        unreachable
+            .stderr
+            .contains("could not reach the gateway through ssh"),
+        "{}",
+        unreachable.stderr
+    );
+    assert_not_installed(&bench, &unreachable, "tg-0011", "failed");
+
+    // The same command once the gateway is ready: 200, installed.
+    let installed = bench.run(&register).await;
+    assert_eq!(installed.code, Some(0), "{}", installed.output());
+    assert!(
+        installed
+            .stdout
+            .contains("installed the certificate chain and the root certificate"),
+        "{}",
+        installed.stdout
+    );
+    let last = bench.events("tg-0011").pop().expect("a log line");
+    assert_eq!(last["event"], "installed");
+    assert_install_call(
+        &bench,
+        bench.ssh.calls().last().expect("a call"),
+        "tg-0011",
+        false,
+    );
+    assert_eq!(bench.registry.registrations(), 1, "one registration");
+    assert!(
+        bench
+            .registry
+            .seen()
+            .iter()
+            .skip(1)
+            .all(|request| request.answered == 200),
+        "every rerun got the same registration"
+    );
+    assert_environment_whitelisted(&bench);
+    bench.assert_nothing_secret_crossed();
 }

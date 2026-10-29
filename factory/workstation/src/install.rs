@@ -48,11 +48,14 @@ use crate::register::is_hardware_id;
 /// gateway needs it). The hardware ID follows as the value of `--hardware-id`.
 pub const REMOTE_SUBCOMMAND: [&str; 3] = ["provision", "install", "--hardware-id"];
 
-/// The gateway's exit statuses (`agent::provision::install::Exit`) this tool tells apart.
+/// The gateway's exit statuses this tool tells apart: the agent's
+/// (`agent::provision::install::Exit`), and the shell's for a command it cannot find.
 mod remote_exit {
     pub const SUCCESS: i32 = 0;
+    pub const USAGE: i32 = 2;
     pub const REFUSED: i32 = 8;
     pub const CONFIGURATION: i32 = 9;
+    pub const NOT_FOUND: i32 = 127;
 }
 
 /// The largest standard error of the gateway kept for the operator.
@@ -112,7 +115,8 @@ pub enum InstallStopKind {
     /// The gateway refused the certificates (its status 8); it wrote nothing.
     Refused,
     /// The agent's installation on the gateway cannot be used yet (its status 9: no
-    /// configuration, no account, a missing directory); it wrote nothing.
+    /// configuration, no account, a missing directory; 127: no `trustiot-agent` installed; 2: an
+    /// agent without `provision install`); it wrote nothing.
     GatewayNotReady,
 }
 
@@ -274,7 +278,11 @@ pub trait Remote {
     /// # Errors
     ///
     /// When the command could not be run at all (no connection, for example).
-    fn run_agent(&mut self, arguments: &[String], stdin: &[u8]) -> Result<RemoteOutcome, Error>;
+    fn run_agent(
+        &mut self,
+        arguments: &[String],
+        stdin: &[u8],
+    ) -> impl Future<Output = Result<RemoteOutcome, Error>> + Send;
 }
 
 /// The certificates are on the gateway.
@@ -302,11 +310,11 @@ impl Installed {
 /// [`Error::Install`] with the [`InstallStopKind`] of a stop; any other error for a record that
 /// cannot be used, a remote command that could not be run or failed otherwise, or a log line that
 /// cannot be written.
-pub fn install(
+pub async fn install(
     journal: &Journal,
     hardware_id: &str,
     pinned_root_sha256: &[u8; 32],
-    remote: &mut dyn Remote,
+    remote: &mut impl Remote,
     now: DateTime<Utc>,
 ) -> Result<Installed, Error> {
     // The hardware ID names the record file: check it before it is used as a path.
@@ -321,7 +329,7 @@ pub fn install(
         Ok(payload) => payload,
         Err(error) => return Err(logged_stop(journal, hardware_id, now, None, error)),
     };
-    let outcome = match remote.run_agent(&payload.arguments, &payload.stdin) {
+    let outcome = match remote.run_agent(&payload.arguments, &payload.stdin).await {
         Ok(outcome) => outcome,
         Err(error) => return Err(logged_stop(journal, hardware_id, now, None, error)),
     };
@@ -350,6 +358,23 @@ pub fn install(
                 "the agent's installation on the gateway cannot be used yet and nothing was \
                  written: {message}. Install the agent and its configuration on the gateway, \
                  then run the same command again"
+            ),
+        ),
+        Some(remote_exit::NOT_FOUND) => stopped(
+            InstallStopKind::GatewayNotReady,
+            format!(
+                "the gateway has no trustiot-agent installed, so there is nothing the \
+                 certificates could be installed for (an agent given with --upload-agent is \
+                 only used for provisioning): {message}. Install the agent and its \
+                 configuration on the gateway, then run the same command again"
+            ),
+        ),
+        Some(remote_exit::USAGE) => stopped(
+            InstallStopKind::GatewayNotReady,
+            format!(
+                "the trustiot-agent installed on the gateway does not know provision install \
+                 (an agent too old for this tool?) and wrote nothing: {message}. Update the \
+                 agent on the gateway, then run the same command again"
             ),
         ),
         status => Error::Failed(format!(
@@ -643,7 +668,7 @@ mod tests {
     }
 
     impl Remote for Recorder {
-        fn run_agent(
+        async fn run_agent(
             &mut self,
             arguments: &[String],
             stdin: &[u8],
@@ -677,8 +702,8 @@ mod tests {
         std::fs::read_to_string(journal.log_path()).unwrap_or_default()
     }
 
-    #[test]
-    fn only_the_chain_and_the_root_are_sent_with_a_fixed_command() {
+    #[tokio::test]
+    async fn only_the_chain_and_the_root_are_sent_with_a_fixed_command() {
         let (leaf, issuing, root) = pki();
         let journal = journal_with(&record(&leaf, &issuing, &root));
         let mut gateway = Recorder::answering(
@@ -686,7 +711,9 @@ mod tests {
             "/var/lib/trustiot-agent/gateway.pem: written\n/etc/trustiot/broker-ca.pem: unchanged\n",
             "",
         );
-        let installed = install(&journal, ID, &pin(&root), &mut gateway, now()).expect("installed");
+        let installed = install(&journal, ID, &pin(&root), &mut gateway, now())
+            .await
+            .expect("installed");
         assert!(installed.changed());
         assert_eq!(gateway.calls.len(), 1);
         let (arguments, stdin) = &gateway.calls[0];
@@ -715,13 +742,14 @@ mod tests {
         );
         assert!(
             !install(&journal, ID, &pin(&root), &mut gateway, now())
+                .await
                 .expect("installed")
                 .changed()
         );
     }
 
-    #[test]
-    fn a_root_that_is_not_the_pinned_one_is_never_sent() {
+    #[tokio::test]
+    async fn a_root_that_is_not_the_pinned_one_is_never_sent() {
         let (leaf, issuing, root) = pki();
         let (_, _, other_root) = pki();
         let mut changed = record(&leaf, &issuing, &root);
@@ -730,7 +758,9 @@ mod tests {
         }
         let journal = journal_with(&changed);
         let mut gateway = Recorder::answering(Some(0), "", "");
-        let error = install(&journal, ID, &pin(&root), &mut gateway, now()).expect_err("stopped");
+        let error = install(&journal, ID, &pin(&root), &mut gateway, now())
+            .await
+            .expect_err("stopped");
         assert!(gateway.calls.is_empty(), "something was sent");
         assert_eq!(error.exit_code(), 30, "{error}");
         assert!(error.to_string().contains("Nothing was sent"), "{error}");
@@ -740,7 +770,9 @@ mod tests {
         let mut repinned = record(&leaf, &issuing, &root);
         repinned.root_sha256 = hex(&Sha256::digest(&other_root));
         let journal = journal_with(&repinned);
-        let error = install(&journal, ID, &pin(&root), &mut gateway, now()).expect_err("stopped");
+        let error = install(&journal, ID, &pin(&root), &mut gateway, now())
+            .await
+            .expect_err("stopped");
         assert_eq!(error.exit_code(), 30, "{error}");
         assert!(gateway.calls.is_empty());
 
@@ -748,14 +780,16 @@ mod tests {
         // operator's fingerprint stops it.
         let (other_leaf, other_issuing, other_root) = pki();
         let journal = journal_with(&record(&other_leaf, &other_issuing, &other_root));
-        let error = install(&journal, ID, &pin(&root), &mut gateway, now()).expect_err("stopped");
+        let error = install(&journal, ID, &pin(&root), &mut gateway, now())
+            .await
+            .expect_err("stopped");
         assert_eq!(error.exit_code(), 30, "{error}");
         assert!(gateway.calls.is_empty());
         assert!(log(&journal).contains("root_mismatch"), "{}", log(&journal));
     }
 
-    #[test]
-    fn a_chain_without_its_issuing_ca_or_that_does_not_hold_is_never_sent() {
+    #[tokio::test]
+    async fn a_chain_without_its_issuing_ca_or_that_does_not_hold_is_never_sent() {
         let (leaf, issuing, root) = pki();
         let (other_leaf, other_issuing, _) = pki();
         let mut gateway = Recorder::answering(Some(0), "", "");
@@ -771,6 +805,7 @@ mod tests {
             &mut gateway,
             now(),
         )
+        .await
         .expect_err("stopped");
         assert_eq!(error.exit_code(), 31, "{error}");
 
@@ -809,6 +844,7 @@ mod tests {
                 registration.certificate_chain = chain;
             }
             let error = install(&journal_with(&bad), ID, &pin(&root), &mut gateway, now())
+                .await
                 .expect_err("stopped");
             assert_eq!(error.exit_code(), 1, "{error}");
             assert!(error.to_string().contains(expected), "{expected}: {error}");
@@ -824,26 +860,32 @@ mod tests {
             &mut gateway,
             now(),
         )
+        .await
         .expect_err("stopped");
         assert!(error.to_string().contains("run register first"), "{error}");
         let empty = Journal::new(&scratch("empty"));
-        let error = install(&empty, ID, &pin(&root), &mut gateway, now()).expect_err("stopped");
+        let error = install(&empty, ID, &pin(&root), &mut gateway, now())
+            .await
+            .expect_err("stopped");
         assert!(error.to_string().contains("no record"), "{error}");
         let error = install(&empty, "tg 0001; reboot", &pin(&root), &mut gateway, now())
+            .await
             .expect_err("usage");
         assert_eq!(error.exit_code(), 2, "{error}");
         assert!(gateway.calls.is_empty(), "something was sent");
     }
 
-    #[test]
-    fn the_gateways_answers_have_their_exit_codes() {
+    #[tokio::test]
+    async fn the_gateways_answers_have_their_exit_codes() {
         let (leaf, issuing, root) = pki();
         let journal = journal_with(&record(&leaf, &issuing, &root));
         for (status, code, expected) in [
             (Some(8), 32, "refused"),
             (Some(9), 33, "cannot be used yet"),
             (Some(1), 1, "status 1"),
-            (Some(127), 1, "status 127"),
+            (Some(127), 33, "no trustiot-agent installed"),
+            (Some(2), 33, "does not know provision install"),
+            (Some(3), 1, "status 3"),
             (None, 1, "a signal"),
         ] {
             let mut gateway = Recorder::answering(
@@ -851,8 +893,9 @@ mod tests {
                 "",
                 "trustiot-agent provision install: refused: the reason\x1b[31m\n",
             );
-            let error =
-                install(&journal, ID, &pin(&root), &mut gateway, now()).expect_err("stopped");
+            let error = install(&journal, ID, &pin(&root), &mut gateway, now())
+                .await
+                .expect_err("stopped");
             assert_eq!(error.exit_code(), code, "{error}");
             let message = error.to_string();
             assert!(message.contains(expected), "{message}");
