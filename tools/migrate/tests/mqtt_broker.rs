@@ -41,7 +41,7 @@ use migrate::mqtt_trust::{
 };
 use protocol::GatewayId;
 use protocol::acl::GATEWAY_ROLE;
-use protocol::topic::{Channel, MAX_LARGE_BYTES, MIN_MAX_PACKET_BYTES};
+use protocol::topic::{Channel, MAX_LARGE_BYTES, MIN_MAX_PACKET_BYTES, gateway_subscriptions};
 use serde_json::{Value, json};
 use support::pki::{self, Ca, Kind, Leaf};
 use support::secrets::FakeSecrets;
@@ -928,6 +928,28 @@ async fn gateways_need_a_current_certificate_of_our_ca() {
     );
     // The certificate's CN is the identity: gw-b cannot publish as gw-a.
     broker.publish_refused(&gateway("gw-b"), &topic(Channel::Status, "gw-a"));
+
+    // The gateway role allows no wildcard subscription (`allowwildcardsubs false`, Laysi/trustiot-v2#637):
+    // `down/#` and `down/+` lie within the role's `subscribePattern` rule and are still refused
+    // with SUBACK 0x87, while each exact `down` channel is granted in the same SUBSCRIBE.
+    let own = "trustiot/v1/gw/gw-a/down";
+    let (wildcard_all, wildcard_one) = (format!("{own}/#"), format!("{own}/+"));
+    let exact = gateway_subscriptions(&GatewayId::new("gw-a").expect("a gateway id"));
+    let mut filters: Vec<&str> = vec![&wildcard_all];
+    filters.extend(exact.iter().map(String::as_str));
+    filters.push(&wildcard_one);
+    let subscription = broker.subscribe(&gateway("gw-a"), &filters);
+    let mut expected = vec![NOT_AUTHORIZED];
+    expected.extend(exact.iter().map(|_| 1));
+    expected.push(NOT_AUTHORIZED);
+    assert_eq!(
+        subscription.granted, expected,
+        "wildcards refused, every exact down channel granted"
+    );
+    evidence(format!(
+        "gw-a SUBSCRIBE {filters:?} got SUBACK {:?}",
+        subscription.granted
+    ));
 
     // Acceptance criterion 1.
     broker.refused("no client certificate", &Login::NoCertificate);

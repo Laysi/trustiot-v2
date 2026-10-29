@@ -23,7 +23,7 @@ use std::process::{Child, Command, Output, Stdio};
 use std::sync::mpsc::{Receiver, RecvTimeoutError};
 use std::time::{Duration, Instant};
 
-use protocol::acl::{GATEWAY_ROLE, gateway_role_acls};
+use protocol::acl::{GATEWAY_ALLOW_WILDCARD_SUBS, GATEWAY_ROLE, gateway_role_acls};
 use serde_json::{Value as Json, json};
 
 use super::{TestPki, stop_listening};
@@ -174,7 +174,12 @@ impl Mosquitto {
         };
         broker.wait_until_ready();
         broker.control(&json!([
-            { "command": "createRole", "rolename": GATEWAY_ROLE, "acls": gateway_role_acls() },
+            {
+                "command": "createRole",
+                "rolename": GATEWAY_ROLE,
+                "allowwildcardsubs": GATEWAY_ALLOW_WILDCARD_SUBS,
+                "acls": gateway_role_acls()
+            },
             {
                 "command": "createRole",
                 "rolename": CLOUD_USER,

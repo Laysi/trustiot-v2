@@ -897,7 +897,7 @@ broker 的權限全部在 dynamic security，預設拒絕：`defaultACLAccess` �
 
 | 角色 | 給誰 | 規則 |
 | --- | --- | --- |
-| `trustiot-gateway` | 每個閘道器 client（certs 依 Postgres 同步，Laysi/trustiot-v2#633，見 services/certs/README.md 的「broker 權限（dynamic security）」） | `protocol::gateway_role_acls()`（`crates/protocol` 的 `acl` 模組）：只能發布到自己 `trustiot/v1/gw/<CN>/up/` 底下的協定頻道、只能訂閱與接收自己的 `down/`。dynamic security 不能依 retain 旗標授權，所以閘道器可以在自己的 `up` 頻道發 retained，每個頻道最多一則（Laysi/trustiot-v2#268） |
+| `trustiot-gateway` | 每個閘道器 client（certs 依 Postgres 同步，Laysi/trustiot-v2#633，見 services/certs/README.md 的「broker 權限（dynamic security）」） | `protocol::gateway_role_acls()`（`crates/protocol` 的 `acl` 模組）：只能發布到自己 `trustiot/v1/gw/<CN>/up/` 底下的協定頻道、只能訂閱與接收自己的 `down/`，並設 `allowwildcardsubs: false`（`protocol::acl::GATEWAY_ALLOW_WILDCARD_SUBS`，Laysi/trustiot-v2#637）：訂閱帶 `+` 或 `#` 的 filter 得到 SUBACK 0x87，閘道器只能逐一訂閱自己的每個 `down` 頻道。dynamic security 不能依 retain 旗標授權，所以閘道器可以在自己的 `up` 頻道發 retained，每個頻道最多一則（Laysi/trustiot-v2#268） |
 | `trustiot-service-ingest` | `service:ingest` | 接收所有閘道器的 `up/telemetry`、`up/log`，發布 `down/telemetry-ack` |
 | `trustiot-service-gateway-ops` | `service:gateway-ops` | 接收 `up/status`、`up/heartbeat`、`up/config-report`、`up/live`、`up/log-dump`，發布 `down/config`、`down/live-control`、`down/log-request` |
 | `trustiot-service-certs` | `service:certs` | 沒有頻道 |
