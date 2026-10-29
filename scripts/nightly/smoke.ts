@@ -6,7 +6,9 @@
 // commit answer through the ingress with a session cookie (api.ts, Laysi/trustiot-v2#65), so does
 // the telemetry-query service once it made the new tenant's ClickHouse account, which the smoke
 // then finds in ClickHouse (api.ts, Laysi/trustiot-v2#539), the AI assistant is ready with a
-// Postgres session of its own role (api.ts, Laysi/trustiot-v2#592), and an
+// Postgres session of its own role (api.ts, Laysi/trustiot-v2#592), ingest is ready, so it
+// reached ClickHouse and the MQTT broker, with Postgres sessions of both its roles and a ClickHouse
+// account that holds its role alone (api.ts, Laysi/trustiot-v2#642), and an
 // uninstall leaves nothing behind but the objects the chart keeps on purpose (the database and the
 // password Secrets), which are then deleted. The same request through the ingress also proves the
 // MS0 edges with the real services (api.ts, Laysi/trustiot-v2#77): a stolen identity header never
@@ -37,7 +39,7 @@ import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSy
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 
-import { apiValues, checkAssistantLogin, ingressAccess, routesOfValues, runApiCheck } from "./api.ts";
+import { apiValues, checkAssistantLogin, checkIngest, clickhouseAccess, ingressAccess, routesOfValues, runApiCheck } from "./api.ts";
 import { checkBrokerCertificate } from "./broker-certificate.ts";
 import {
   CERTS_CA,
@@ -65,6 +67,7 @@ import {
   staticBandProblems,
 } from "./ingress-address.ts";
 import {
+  clickhousePodOf,
   exposureProblems,
   gatewayPortProblems,
   gatewayPorts,
@@ -459,6 +462,20 @@ export async function smokeShape(ctx: SmokeContext, shape: Shape): Promise<Shape
         const ready = (JSON.parse(status.stdout) as { status?: { readyReplicas?: number } }).status?.readyReplicas ?? 0;
         const { psql } = await ingressAccess(ctx, namespace, objects, ingressCa);
         return checkAssistantLogin({ psql }, `deployment/${name}`, ready);
+      })) &&
+      (await check("ingest is ready: it reached ClickHouse and the MQTT broker, logged in to Postgres as ingest_app and ingest_platform, and its ClickHouse account holds trustiot_ingest alone (Laysi/trustiot-v2#642)", async () => {
+        // Its readiness is SELECT 1 to ClickHouse as its account, the QoS 1 shared subscription on
+        // the broker as service:ingest, and checked sessions of both Postgres roles
+        // (services/ingest/README.md); no gateway sends it telemetry here.
+        const objects = parseManifests(manifest);
+        const deployments = objects.filter((o) => o.kind === "Deployment" && o.metadata?.labels?.["app.kubernetes.io/component"] === "ingest");
+        if (deployments.length !== 1) throw new Error(`the release should have one ingest Deployment, found ${deployments.length}`);
+        const name = deployments[0]!.metadata?.name ?? "";
+        const status = await kubectlJson(["get", "--namespace", namespace, `deployment/${name}`, "--output", "json"]);
+        const ready = (JSON.parse(status.stdout) as { status?: { readyReplicas?: number } }).status?.readyReplicas ?? 0;
+        const { psql } = await ingressAccess(ctx, namespace, objects, ingressCa);
+        const clickhouse = clickhouseAccess(ctx, namespace, clickhousePodOf(objects));
+        return checkIngest({ psql, clickhouse }, `deployment/${name}`, ready);
       })) &&
       (await check(
         "through the ingress, a new tenant reaches the assets service and, with its ClickHouse account, the telemetry API; a stolen identity header never does, and Host ports and normalized paths reach it (Laysi/trustiot-v2#65, #77, #539)",

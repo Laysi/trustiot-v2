@@ -177,6 +177,14 @@ spec:
     expect(Object.fromEntries(passwordSecretsOf(telemetry))).toEqual({
       "rel-telemetry-query-password": ["telemetry_query_app", "telemetry_query_platform", "trustiot_telemetry_query"],
     });
+    // So does ingest's (Laysi/trustiot-v2#642).
+    const ingest = job([
+      { name: "TRUSTIOT__PASSWORDS__POSTGRES", value: "ingest_app=rel-ingest-password,ingest_platform=rel-ingest-password" },
+      { name: "TRUSTIOT__PASSWORDS__CLICKHOUSE_INGEST", value: "trustiot_ingest_writer=rel-ingest-password" },
+    ]);
+    expect(Object.fromEntries(passwordSecretsOf(ingest))).toEqual({
+      "rel-ingest-password": ["ingest_app", "ingest_platform", "trustiot_ingest_writer"],
+    });
     expect(passwordSecretsOf(job([])).size).toBe(0);
   });
 

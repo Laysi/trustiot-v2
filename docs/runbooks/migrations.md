@@ -89,13 +89,13 @@ Job 遇到這種部署會停止，不改任何角色：migration 角色擁有超
 
 ## 服務角色與 collector 的密碼
 
-不用準備：在 `mesh.calls` 列出 `postgres` 的每個服務、以及 OpenTelemetry collector，各有一個 chart 宣告的空 Secret（`<release>-<服務>-password`、`<release>-otel-collector-password`），Job 第一次執行時產生密碼寫進去、再以它設定角色與帳號（[密鑰與權限](../architecture/secrets.md) 的「migration Job 產生的密碼」）。沒有人需要看到或複製這些密碼；要確認時只看 key 是否存在，不要印出值：`kubectl -n <namespace> get secret <release>-identity-password -o jsonpath='{.data}' | jq 'keys'`。時序查詢服務（`services.telemetry-query`）啟用時，它的 Secret 另有 ClickHouse 服務帳號 `trustiot_telemetry_query` 的密碼（同名 key），同樣由 Job 產生並設定。
+不用準備：在 `mesh.calls` 列出 `postgres` 的每個服務、以及 OpenTelemetry collector，各有一個 chart 宣告的空 Secret（`<release>-<服務>-password`、`<release>-otel-collector-password`），Job 第一次執行時產生密碼寫進去、再以它設定角色與帳號（[密鑰與權限](../architecture/secrets.md) 的「migration Job 產生的密碼」）。沒有人需要看到或複製這些密碼；要確認時只看 key 是否存在，不要印出值：`kubectl -n <namespace> get secret <release>-identity-password -o jsonpath='{.data}' | jq 'keys'`。時序查詢服務（`services.telemetry-query`）啟用時，它的 Secret 另有 ClickHouse 服務帳號 `trustiot_telemetry_query` 的密碼（同名 key），同樣由 Job 產生並設定；資料接收（`services.ingest`）啟用時，它的 Secret 另有 ClickHouse 寫入帳號 `trustiot_ingest_writer` 的密碼（同名 key，Laysi/trustiot-v2#642）。
 
 ## 輪替服務角色與 collector 的密碼
 
 1. 把 `migrate.passwordGeneration` 調大一（SaaS：在覆寫檔改，經 PR 合併後由 Flux 套用；地端：`helm upgrade --reuse-values --set migrate.passwordGeneration=<新值>` 或改 values 檔）。Job 名稱跟著變，所以 Job 重跑；它為每個密碼 Secret 產生新密碼、更新 annotation `trustiot.io/password-generation`，再設定角色與帳號。服務與 collector 的 init container 改等新的 Job，所以它們跟著滾動更新，以新密碼連線。
-2. 確認：新 Job 的日誌對每個 Secret 有 `generated the password of <角色或帳號> in Secret <名稱> (password generation <新值>)`，接著有 `set the password of <角色>`（collector 是 `set the password of ClickHouse account <帳號>`）；`kubectl -n <namespace> rollout status deploy/<release>-<服務>` 與 collector 的 rollout 完成，服務健康。
-3. 舊密碼在 Job 設定新密碼的那一刻失效。Postgres 已建立的連線不受影響，直到服務的舊 pod 被換掉；舊 pod 在這段時間開新連線會失敗（readiness 讓它退出負載平衡）。舊的 collector 寫 ClickHouse 會失敗並重試（每批最多 5 分鐘），新的 collector 就緒後恢復。Postgres 一個角色只有一個密碼，這段時間無法省掉；需要時在低流量時段輪替。懷疑外洩時，再以 superuser 中止舊連線：`kubectl -n <namespace> exec -i <cluster>-1 -c postgres -- psql -d trustiot -c "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE usename = '<角色>'"`。時序查詢的租戶 ClickHouse 帳號（`trustiot_tenant_account_*`）的密碼由服務帳號的密碼推導，但 Job 不改它們：每個租戶帳號保留舊的推導密碼，直到該租戶下一次查詢時服務以新的推導密碼登入失敗、重設它的密碼再查（`services/telemetry-query/README.md`）；一直沒有查詢的租戶的帳號一直是舊密碼。平常的輪替不用處理；懷疑服務帳號的密碼外洩時，舊密碼推導得出每個租戶帳號的舊密碼，照下方「懷疑時序查詢的服務帳號外洩」處理。
+2. 確認：新 Job 的日誌對每個 Secret 有 `generated the password of <角色或帳號> in Secret <名稱> (password generation <新值>)`，接著有 `set the password of <角色>`（collector、時序查詢與資料接收的 ClickHouse 帳號是 `set the password of ClickHouse account <帳號>`）；`kubectl -n <namespace> rollout status deploy/<release>-<服務>` 與 collector 的 rollout 完成，服務健康。
+3. 舊密碼在 Job 設定新密碼的那一刻失效。Postgres 已建立的連線不受影響，直到服務的舊 pod 被換掉；舊 pod 在這段時間開新連線會失敗（readiness 讓它退出負載平衡）。舊的 collector 寫 ClickHouse 會失敗並重試（每批最多 5 分鐘），新的 collector 就緒後恢復。資料接收的舊 pod 寫 ClickHouse 也會被拒（每個 HTTP 請求都驗密碼），那批回 `retry`，閘道器保留資料、稍後重送，新的 pod 就緒後恢復；不會遺失資料。Postgres 一個角色只有一個密碼，這段時間無法省掉；需要時在低流量時段輪替。懷疑外洩時，再以 superuser 中止舊連線：`kubectl -n <namespace> exec -i <cluster>-1 -c postgres -- psql -d trustiot -c "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE usename = '<角色>'"`。時序查詢的租戶 ClickHouse 帳號（`trustiot_tenant_account_*`）的密碼由服務帳號的密碼推導，但 Job 不改它們：每個租戶帳號保留舊的推導密碼，直到該租戶下一次查詢時服務以新的推導密碼登入失敗、重設它的密碼再查（`services/telemetry-query/README.md`）；一直沒有查詢的租戶的帳號一直是舊密碼。平常的輪替不用處理；懷疑服務帳號的密碼外洩時，舊密碼推導得出每個租戶帳號的舊密碼，照下方「懷疑時序查詢的服務帳號外洩」處理。
 
 **輪替到一半 Job 失敗時**：Job 先把新密碼寫進 Secret，再 `ALTER ROLE`（collector 是 `ALTER USER`）。在這兩步之間失敗（例如資料庫斷線、Job 被中止），Secret 已是新密碼、角色還是舊密碼：已經在跑的 pod 不受影響，但這段時間重啟或新起的 pod 以 Secret 的新密碼登不進去（服務停在未就緒、collector 寫入重試），直到 Job 重試成功把角色設成 Secret 的值。這個順序是刻意的：反過來先改角色、再寫 Secret 時，失敗會留下一個沒有任何 Secret 記得密碼的角色；現在的順序任何時候 Secret 都有一個角色會接受（或下一次 Job 會設定）的密碼。處理：看 Job 的日誌、修好停止的原因，讓 Job 依 `migrate.backoffLimit` 重試（重試用完時刪掉失敗的 Job，下一次升級或調和重建它）。不要手動把 Secret 改回舊值。
 
@@ -119,7 +119,7 @@ Job 只信任它自己填過的 Secret 物件：寫入時在 annotation `trustio
    ```
 
    只挑服務會用的名稱（前綴加 32 個十六進位數字），所以產生的 SQL 裡只有這種名稱；其他名稱在下一步處理。服務在每個租戶下一次查詢時以新的推導密碼重建它的帳號，不用重啟服務；在那之前該租戶的帳號不存在，沒有人能以它登入。
-3. 找出 Job 與服務都不認得的帳號（服務帳號能以 `RENAME` 把租戶帳號改成別的名稱）：在同一個 pod 內執行 `c --query "SELECT name, storage FROM system.users WHERE NOT match(name, '^trustiot_tenant_account_[0-9a-f]{32}\$') ORDER BY name"`。認得的只有管理帳號（`users_xml`）、`trustiot_collector`（或 values 設定的 collector 帳號）、`trustiot_telemetry_query`、`trustiot_tenant_view_definer`、`trustiot_rollup_definer`（彙總表的 DEFINER，Laysi/trustiot-v2#141），以及外部 ClickHouse 上客戶自己的帳號。其他帳號稽核後以 `DROP USER` 刪掉。
+3. 找出 Job 與服務都不認得的帳號（服務帳號能以 `RENAME` 把租戶帳號改成別的名稱）：在同一個 pod 內執行 `c --query "SELECT name, storage FROM system.users WHERE NOT match(name, '^trustiot_tenant_account_[0-9a-f]{32}\$') ORDER BY name"`。認得的只有管理帳號（`users_xml`）、`trustiot_collector`（或 values 設定的 collector 帳號）、`trustiot_telemetry_query`、`trustiot_ingest_writer`（資料接收的寫入帳號，Laysi/trustiot-v2#642）、`trustiot_tenant_view_definer`、`trustiot_rollup_definer`（彙總表的 DEFINER，Laysi/trustiot-v2#141），以及外部 ClickHouse 上客戶自己的帳號。其他帳號稽核後以 `DROP USER` 刪掉。
 4. 確認下一次 Job 沒有下方表格裡 `trustiot_telemetry_query` 或 `trustiot_tenant_reader` 的停止訊息。
 
 Job 還不稽核租戶帳號本身（多出的驗證方式、設定或角色、改名）；這些記在 Laysi/trustiot-v2#528。
@@ -180,7 +180,7 @@ Flux（helm-controller v1.6.5，隨 `.prototools` 釘選的 flux 2.9.6 安裝；
 
 ## 停用服務之後留下的 Secret
 
-在 values 關掉一個服務（或把它的 `mesh.calls` 拿掉 `postgres`）之後，下一次 Job 把它的登入角色改成 `NOLOGIN`，日誌有 `revoked the login of role <服務>_app: no Secret is bound to it`；服務從 tools/migrate 的服務清單移除或改名時是 `... no service in tools/migrate's registry has it`。關掉 collector 或改它的帳號名稱時，舊的 ClickHouse 帳號改成 `HOST NONE`，日誌有 `revoked the login of ClickHouse account <帳號>: the collector no longer uses it`；時序查詢服務沒有啟用時，它的服務帳號同樣是 `HOST NONE`，日誌有 `revoked the login of ClickHouse account trustiot_telemetry_query: telemetry-query is not deployed`；只有服務帳號被鎖，已建立的租戶帳號不受影響，仍能以推導密碼登入（懷疑外洩時見上方「懷疑時序查詢的服務帳號外洩」）。角色與帳號不刪除（可能擁有物件；重新啟用時 Job 先設 Secret 的密碼再恢復登入）。只有 Job 標記過、migration 角色有 ADMIN OPTION 的角色會被改，superuser、客戶的帳號、其他實例的角色不會。ClickHouse 沒有可以標記帳號的地方，所以 Job 把拿到 `trustiot_otel_collector` 角色、但不是目前 collector 帳號的帳號都當成它的：外部 ClickHouse 上不要把這個角色給自己的帳號，給了的帳號會被改成 `HOST NONE`（以管理帳號 `ALTER USER <帳號> HOST ANY` 並 `REVOKE trustiot_otel_collector FROM <帳號>` 復原）。Job 執行時用的 migration 帳號本身不會被改，在 ClickHouse 設定檔（`users.xml` 或 `users.d/`）裡定義的帳號也不會（`ALTER USER` 改不了它們，Job 也從不建立這種帳號）。`NOLOGIN` 不中斷已經開著的連線；被關掉的服務的 pod 隨升級刪除，懷疑還有連線時以 superuser 執行 `SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE usename = '<角色>'`。
+在 values 關掉一個服務（或把它的 `mesh.calls` 拿掉 `postgres`）之後，下一次 Job 把它的登入角色改成 `NOLOGIN`，日誌有 `revoked the login of role <服務>_app: no Secret is bound to it`；服務從 tools/migrate 的服務清單移除或改名時是 `... no service in tools/migrate's registry has it`。關掉 collector 或改它的帳號名稱時，舊的 ClickHouse 帳號改成 `HOST NONE`，日誌有 `revoked the login of ClickHouse account <帳號>: the collector no longer uses it`；時序查詢服務沒有啟用時，它的服務帳號同樣是 `HOST NONE`，日誌有 `revoked the login of ClickHouse account trustiot_telemetry_query: telemetry-query is not deployed`；資料接收沒有啟用時也一樣，日誌有 `revoked the login of ClickHouse account trustiot_ingest_writer: ingest is not deployed`；只有服務帳號被鎖，已建立的租戶帳號不受影響，仍能以推導密碼登入（懷疑外洩時見上方「懷疑時序查詢的服務帳號外洩」）。角色與帳號不刪除（可能擁有物件；重新啟用時 Job 先設 Secret 的密碼再恢復登入）。只有 Job 標記過、migration 角色有 ADMIN OPTION 的角色會被改，superuser、客戶的帳號、其他實例的角色不會。ClickHouse 沒有可以標記帳號的地方，所以 Job 把拿到 `trustiot_otel_collector` 角色、但不是目前 collector 帳號的帳號都當成它的：外部 ClickHouse 上不要把這個角色給自己的帳號，給了的帳號會被改成 `HOST NONE`（以管理帳號 `ALTER USER <帳號> HOST ANY` 並 `REVOKE trustiot_otel_collector FROM <帳號>` 復原）。Job 執行時用的 migration 帳號本身不會被改，在 ClickHouse 設定檔（`users.xml` 或 `users.d/`）裡定義的帳號也不會（`ALTER USER` 改不了它們，Job 也從不建立這種帳號）。`NOLOGIN` 不中斷已經開著的連線；被關掉的服務的 pod 隨升級刪除，懷疑還有連線時以 superuser 執行 `SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE usename = '<角色>'`。
 
 它的密碼 Secret `<release>-<服務>-password` 因為 `keep` 留在 namespace 裡，chart 與 Job 的 Role 都不再列它。裡面的密碼已經登不進去，可以刪除：
 
@@ -218,9 +218,18 @@ Job 遇到下列情況會停止，不自動修改；修好之後，Job 依 `migr
 | ClickHouse：`the role trustiot_tenant_reader lacks SELECT on trustiot.<view>` | 租戶角色對某個租戶 view（`tenant_telemetry` 由 `0005_tenant_view.sql` 給，`tenant_telemetry_1m`、`tenant_telemetry_1h` 由 `0010_telemetry_rollups.sql` 給）的 `SELECT` 被收回，所有租戶帳號都讀不到那個 view | 稽核後以管理帳號 `GRANT SELECT ON trustiot.<view> TO trustiot_tenant_reader` |
 | ClickHouse：`the role trustiot_tenant_reader has grants or roles beyond SELECT on the tenant views` | 租戶角色被加了三個租戶 view 的 `SELECT` 以外的權限（包括表的權限與 `GRANT OPTION`）或角色，每個租戶帳號都會得到它們 | 稽核後以管理帳號 `REVOKE <權限> ON <對象> FROM trustiot_tenant_reader` 或 `REVOKE <角色> FROM trustiot_tenant_reader`；`GRANT OPTION` 是 `REVOKE GRANT OPTION FOR SELECT ON trustiot.<view> FROM trustiot_tenant_reader` |
 | ClickHouse：`the migration_account row policies of the backfill views still name ... after the run set them TO NONE` | Job 把彙總表 backfill view 的 policy 改回 `TO NONE` 之後，再讀時又點名了帳號：有別的程式同時在改它，例如有人在做「彙總表的 backfill 與一致性檢查」 | 等那件事做完（它最後也會改回 `TO NONE`），讓 Job 重試；不要在 Job 可能執行時做那個檢查 |
+| ClickHouse：`the role trustiot_ingest has other grants or roles than the DDL files give it (...)` | 資料接收的角色被加了或收回了權限（包括 `GRANT OPTION`），或被授予別的角色；持有它的帳號能寫入與刪除每個租戶的遙測，多出的權限也會落到寫入帳號。括號裡列出實際的差異（只有名稱）：`extra grants:` 是多的權限、`missing grants:` 是少的權限、`extra roles:` 是多的角色，每一類最多列 5 項，其餘寫成 `and <N> more`；`GRANT OPTION` 的權限寫成 `... WITH GRANT OPTION`，同時以沒有它的那一列列在少的權限 | 稽核後以管理帳號照訊息列出的權限補回或收回（`and <N> more` 時以 `SELECT * FROM system.grants WHERE role_name = 'trustiot_ingest'` 看全部）：多的是 `REVOKE <權限> ON <對象> FROM trustiot_ingest`、`REVOKE <角色> FROM trustiot_ingest`，少的是 `GRANT <權限> ON trustiot.<表> TO trustiot_ingest`；`batch_commits` 的權限在 `0012_gateway_stream_ids.sql` 已收回，不要補回（見下方「`batch_commits` 與 `0012_gateway_stream_ids.sql`」） |
+| ClickHouse：`the role trustiot_ingest is held by ... grantee(s) besides trustiot_ingest_writer` | 資料接收的角色被給了寫入帳號以外的使用者或角色（訊息列出前幾個，角色寫成 `role <名稱>`）；每個持有者都能寫入與刪除每個租戶的遙測 | 稽核後以管理帳號 `REVOKE trustiot_ingest FROM <使用者或角色>`；不知道是誰給的時，當成管理帳號外洩處理 |
+| ClickHouse：`the ClickHouse account trustiot_ingest_writer has other roles, grants or settings than trustiot_ingest as its default role` | 寫入帳號被人改過：多了角色、直接權限、`ALTER USER ... SETTINGS` 的 settings（包括在帳號上指定的 settings profile）、`ADMIN OPTION`，或 `trustiot_ingest` 不再是它的預設角色。檢查只讀帳號自己的角色、權限與 settings：以 `CREATE`／`ALTER SETTINGS PROFILE ... TO`、`QUOTA ... TO` 或 `ROW POLICY ... TO` 從另一端套到帳號上的 settings profile、quota 與 row policy 看不到，不會讓 Job 停止（稽核時另查 `system.settings_profiles`、`system.quotas`、`system.row_policies` 的 `apply_to_*`） | 稽核後以管理帳號 `DROP USER trustiot_ingest_writer`，下一次 Job 以 Secret 的密碼重建它（日誌有 `created ClickHouse account trustiot_ingest_writer`）；重建之前資料接收寫不進去，閘道器保留資料重送 |
+| ClickHouse：`the ClickHouse account trustiot_ingest_writer has the authentication methods [...] instead of the one sha256_password method the run sets` | 寫入帳號多了登入方式（`ALTER USER ... ADD IDENTIFIED WITH`），或被換成別種方式（例如 `plaintext_password`）；多出的方式是 Secret 以外的另一組登入憑證。訊息只列出方式的種類，不含密碼或 hash | 稽核後以管理帳號 `DROP USER trustiot_ingest_writer`，下一次 Job 以 Secret 的密碼重建它（日誌有 `created ClickHouse account trustiot_ingest_writer`）；查是誰加的，不知道時當成管理帳號外洩處理 |
+| ClickHouse：`the ClickHouse role trustiot_ingest does not exist after the DDL files` | 有人刪掉了資料接收的角色；`0004_access.sql` 已記為套用，Job 不會再建它 | 以管理帳號照 `services/ingest/migrations/clickhouse/` 的檔案（`0004_access.sql` 與之後改過這個角色的檔案）重建角色與它的權限，再讓 Job 重試；不要刪 `trustiot_migrate.applied` 的紀錄來重跑檔案 |
 | `did not accept the migration role within`、`not reachable within`、`held the lock for longer than` | 資料庫還沒起來，或另一個 Job 持有鎖太久 | 看資料庫的狀態；另一個 Job 卡住時先看它的日誌 |
 
 上面五個關於 `trustiot_telemetry_query` 與 `trustiot_tenant_reader` 的停止訊息出現時，Job 在停止之前先讓服務帳號不能登入（`HOST NONE`），訊息後面接著 `the run revoked the login of trustiot_telemetry_query (HOST NONE)`：修好之前服務建立不了新的租戶帳號，也重設不了租戶帳號的密碼，已建立的租戶帳號照常查詢。修好之後，服務啟用時的下一次 Job 設定密碼並恢復登入，日誌有 `let ClickHouse account trustiot_telemetry_query log in`。
+
+關於 `trustiot_ingest` 與 `trustiot_ingest_writer` 的五個停止訊息也一樣（Laysi/trustiot-v2#642）：寫入帳號存在時，Job 先讓它不能登入，訊息後面接著 `the run revoked the login of trustiot_ingest_writer (HOST NONE)`；修好之前資料接收寫不進 ClickHouse，每批回 `retry`，閘道器保留資料、稍後重送，不會遺失資料。修好之後，資料接收啟用時的下一次 Job 設定密碼並恢復登入，日誌有 `let ClickHouse account trustiot_ingest_writer log in`。寫入帳號不存在（例如被刪掉）而另有持有者時，Job 不建立它，先停止，修好之後才建立。
+
+這些停止是刻意的：Job 失敗時，每個服務 pod 的 `wait-for-migrations`（`migrate wait-for-job`）都跟著失敗，所以 ingest 的帳號或角色被改過時，修好之前不只 ingest，每個服務的滾動更新都卡在 `Init`，`helm upgrade --wait` 與 Flux 的升級也失敗。已經在跑的舊 pod 不受影響；照上表修好之後刪掉失敗的 Job（或改 `migrate.revision`），Job 重跑成功，服務接著更新。
 
 migration 檔案本身失敗（SQL 錯誤）時，那一個檔案的交易整個回滾，之前套用的檔案保留；修正方式同 `Changed`：新增一個修正用的檔案，不改已套用的。
 
@@ -272,6 +281,22 @@ Job 每次執行都把 ClickHouse 的 `trustiot.telemetry` 與完成表 `trustio
 - **改欄位型別之前先看卡住的 mutation**：在有資料的表上執行改型別的 `MODIFY COLUMN`（例如 `0012_gateway_stream_ids.sql`）之前，先查 `SELECT database, table, mutation_id, command, latest_fail_reason FROM system.mutations WHERE database = 'trustiot' AND NOT is_done`。改型別本身是一個重寫整張表的 mutation，同一張表的 mutation 依序執行；前面有一個卡住（`latest_fail_reason` 不是空的）時，改型別、Job 之後的 `MODIFY TTL` 與 ingest 刪除不完整批次的 lightweight delete 都會排在它後面等。先找出原因並處理（必要時 `KILL MUTATION`），再部署。
 - **縮短是產品決定**：縮短會永久刪掉超過新天數的資料，不是解決磁碟壓力的手段；磁碟快滿時擴充磁碟（[資料保存期限與磁碟水位](../architecture/data-retention.md)「磁碟水位告警」）。手動改的天數在下一次部署會被 Job 改回設定值。
 
+## `0012_gateway_stream_ids.sql` 套用到一半
+
+`services/ingest/migrations/clickhouse/0012_gateway_stream_ids.sql` 先以 `MODIFY COLUMN` 把 `trustiot.telemetry` 的 `gateway_id`、`stream_id` 改成 `String`，最後才以 `CREATE OR REPLACE VIEW` 重建租戶 view `trustiot.tenant_telemetry`（Laysi/trustiot-v2#668 的安全審查）。Job 可能停在兩者之間，例如 pod 被刪、Job 逾時、ClickHouse 暫時連不上。這時 view 仍宣告 `gateway_id UUID`，租戶經 view 的查詢報型別轉換錯誤。這是 fail closed：查詢失敗，不會讀到別的租戶的資料，也不會遺失資料。
+
+Job 要等一個檔案的每個陳述式都成功，才在 `trustiot_migrate.applied` 記下它，所以下一次執行從頭套用整個 `0012`；檔案裡每個陳述式都可以重複執行。處理：
+
+1. 看 Job 的日誌，找出停下的原因（上方「找到 Job 與它的日誌」「Job 停止時」）。
+2. 排除原因後讓 Job 重試（重試用完時刪掉失敗的 Job，下一次升級或調和重建它）。不要手動改 view 或欄位。
+3. 確認重建完成：照「懷疑時序查詢的服務帳號外洩」第 2 步在 ClickHouse 的 pod 內以管理帳號執行 `c --query "SELECT type FROM system.columns WHERE database = 'trustiot' AND table = 'tenant_telemetry' AND name = 'gateway_id'"`，印出 `String`。
+
+部署含 `0012` 的版本之前，照上方「原始資料的保存期限」的「改欄位型別之前先看卡住的 mutation」查 `system.mutations`。
+
+## `batch_commits` 與 `0012_gateway_stream_ids.sql`
+
+套用 `0012_gateway_stream_ids.sql` 之後，舊的完成表 `trustiot.batch_commits` 停用：完成紀錄改寫在 `trustiot.stream_commits`，`trustiot_ingest` 對 `batch_commits` 的權限已收回，它的 row policy 保留，Job 也不再管它的 TTL。migration 檔依規則不刪表，所以它一直留在資料庫裡，不占寫入流程。不要把它的權限補回 `trustiot_ingest`：Job 的檢查會把它當成多出的權限而停止（上方「Job 停止時」）。目前沒有手動刪除它的步驟；要提供時，先以測試確認刪表之後 Job 照常執行，再寫進這裡。
+
 ## 彙總資料的保存期限
 
 Job 每次執行也把 `trustiot.telemetry_1m`、`trustiot.telemetry_1h` 的 TTL 對齊 `TRUSTIOT__CLICKHOUSE__AGGREGATE_1M_RETENTION_MONTHS`、`_1H_RETENTION_MONTHS`（不設是 13 與 48 個月，Laysi/trustiot-v2#141；值與理由見[資料保存期限與磁碟水位](../architecture/data-retention.md)「彙總資料的保存期限」）。它先讀完四張表的 TTL 再改，所以一張表的 TTL 認不出來時，四張表都沒有改。
@@ -322,6 +347,13 @@ Job 第一次套用 `0010_telemetry_rollups.sql` 的那次執行，在套用完�
   ```
 
   寫入的是差，重跑無害；再做一次上面的檢查應該沒有任何列。`deduplicate_insert_select = 'disable'` 不能省：與之前某次相同的差值會被當成重複丟掉。只補缺的格、不改已有的格時（Job 的做法，`BACKFILL_1M`、`BACKFILL_1H`），在最後加上 `WHERE aggregated = 0`。
+
+## 改了 `trustiot_ingest` 權限的版本不能往回 rollback
+
+從 Laysi/trustiot-v2#642 起，Job 每次執行都要求 `trustiot_ingest` 的權限正好是它自己那一版的 DDL 檔給的（上方「Job 停止時」）。ClickHouse 的 migration 檔只能往前套用，rollback 不會收回新版給的權限，也不會補回新版收回的權限，所以 `helm rollback`（或 Flux 失敗後的 rollback）回到改這個角色權限之前、但已有這個檢查的版本時，舊版的 Job 會把差異當成被改過：讓 `trustiot_ingest_writer` 不能登入並停止，每個服務的滾動更新也等不到它（上一段）。回到 Laysi/trustiot-v2#642 之前的版本不受影響，那些版本的 Job 不檢查這個角色。
+
+- 之後任何改 `trustiot_ingest` 權限的版本（新增的 migration 檔改了它，`INGEST_EXPECTED_GRANTS` 跟著改）部署之後，不要 rollback 到它之前；有問題時往前修。
+- 真的非 rollback 不可時，先以管理帳號照舊版的 `INGEST_EXPECTED_GRANTS`（`tools/migrate/src/clickhouse.rs`）收回新版多給的權限、補回新版收回的權限，再 rollback；舊版的 ingest 程式也要能用那一版的權限寫入。之後再升級回來時，新版的 Job 會停在 `missing grants:` 或 `extra grants:`，照訊息補回或收回。
 
 ## 回到 Laysi/trustiot-v2#141 之前的版本
 
