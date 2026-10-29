@@ -404,13 +404,7 @@ fn printable_output(bytes: &[u8]) -> String {
     let shown: String = joined
         .chars()
         .take(MAX_REMOTE_MESSAGE_CHARS)
-        .map(|character| {
-            if character.is_control() {
-                ' '
-            } else {
-                character
-            }
-        })
+        .map(shown_character)
         .collect();
     if shown.is_empty() {
         "(no message)".to_owned()
@@ -426,17 +420,51 @@ fn printable_report(text: &str) -> String {
         .map(|line| {
             line.chars()
                 .take(512)
-                .map(|character| {
-                    if character.is_control() {
-                        ' '
-                    } else {
-                        character
-                    }
-                })
+                .map(shown_character)
                 .collect::<String>()
         })
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+/// `character`, or a space for one that would change how the terminal shows the rest: a control
+/// character (escape sequences, line breaks) or a Unicode format character (category Cf, such as
+/// U+202E RIGHT-TO-LEFT OVERRIDE, which can make the text read differently than it is).
+fn shown_character(character: char) -> char {
+    if character.is_control() || is_format(character) {
+        ' '
+    } else {
+        character
+    }
+}
+
+/// Whether `character` is in the Unicode general category Cf (format), Unicode 15.1. The standard
+/// library has no category lookup and the list is short, so it is spelled out here.
+fn is_format(character: char) -> bool {
+    matches!(
+        u32::from(character),
+        0x00AD
+            | 0x0600..=0x0605
+            | 0x061C
+            | 0x06DD
+            | 0x070F
+            | 0x0890..=0x0891
+            | 0x08E2
+            | 0x180E
+            | 0x200B..=0x200F
+            | 0x202A..=0x202E
+            | 0x2060..=0x2064
+            | 0x2066..=0x206F
+            | 0xFEFF
+            | 0xFFF9..=0xFFFB
+            | 0x110BD
+            | 0x110CD
+            | 0x13430..=0x1343F
+            | 0x1BCA0..=0x1BCA3
+            | 0x1D173..=0x1D17A
+            | 0xE0001
+            | 0xE0020..=0xE007F
+    )
 }
 
 fn hex(bytes: &[u8]) -> String {
@@ -836,6 +864,17 @@ mod tests {
             log.contains("refused_by_gateway") && log.contains("\"remote_status\":9"),
             "{log}"
         );
+    }
+
+    #[test]
+    fn the_gateways_text_is_shown_without_control_or_format_characters() {
+        let hostile = "a\u{1b}[31mb\u{202e}c\u{200b}d\u{feff}e\u{e0041}f\u{ad}g\r\nnext";
+        let message = printable_output(hostile.as_bytes());
+        assert_eq!(message, "a [31mb c d e f g / next");
+        let report = printable_report(hostile);
+        assert_eq!(report, "a [31mb c d e f g\nnext");
+        // Ordinary text, including other scripts, is kept.
+        assert_eq!(printable_output("閘道器 é ok".as_bytes()), "閘道器 é ok");
     }
 
     #[test]

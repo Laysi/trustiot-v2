@@ -168,7 +168,7 @@ trustiot-workstation register --hardware-id <硬體 ID> --csr gateway.csr --ek e
 
 - **送到閘道器的只有公開資料**：命令是固定的參數陣列（硬體 ID 先以閘道器 ID 的規則檢查，裡面沒有空白或殼層字元），stdin 只有從紀錄重新編碼的三張 PEM 憑證：閘道器憑證、簽發 CA、根憑證。紀錄裡的其他欄位不送；session cookie、工作站的私鑰與憑證、簽章標頭本來就不在紀錄裡。
 - **送出前先檢查紀錄**，任何一項不符就什麼都不送：紀錄是這個硬體 ID 的 `registered`；`root_certificate` 的 SHA-256 與紀錄裡的 `root_sha256` 都要等於操作員這次執行給的 `--root-sha256`（函式的 `pinned_root_sha256` 參數，不從紀錄讀），任何一個不符就停在結束碼 30：根憑證會成為閘道器驗 broker 的唯一信任錨；能改寫紀錄的人可以把兩個欄位一起換掉，所以只和紀錄自己比對不夠；鏈剛好是閘道器憑證（CN 是硬體 ID）再接簽發它的 CA，而且根憑證簽了那張 CA。鏈只有憑證本身時停在結束碼 31（broker 會拒絕拿不出簽發 CA 的閘道器）。
-- **閘道器的回答**：0 完成（stdout 每個檔案一行 `written` 或 `unchanged`）、8 閘道器拒絕了這些憑證（例如憑證的公鑰不是它 TPM 的金鑰、根的 CRL 不是這個根簽的），沒有寫任何檔案、9 閘道器上 agent 的安裝還不能用（沒有設定檔、目錄不存在、沒有 `trustiot-agent` 帳號），沒有寫任何檔案。其他結束狀態或連線中斷算失敗（結束碼 1），重跑同一個指令是安全的。閘道器的 stderr 在顯示前把控制字元換成空白、併成一行並截斷。
+- **閘道器的回答**：0 完成（stdout 每個檔案一行 `written` 或 `unchanged`）、8 閘道器拒絕了這些憑證（例如憑證的公鑰不是它 TPM 的金鑰、根的 CRL 不是這個根簽的），沒有寫任何檔案、9 閘道器上 agent 的安裝還不能用（沒有設定檔、目錄不存在、沒有 `trustiot-agent` 帳號），沒有寫任何檔案。其他結束狀態或連線中斷算失敗（結束碼 1），重跑同一個指令是安全的。閘道器的 stderr 與 stdout 在顯示前把控制字元與 Unicode 格式字元（Cf 類，例如改變顯示方向的 U+202E）換成空白，stderr 併成一行，兩者都截斷。
 - **重跑與重刷**：閘道器上內容、擁有者與權限都對的檔案不會被重寫，所以重跑永遠安全。閘道器重刷映像之後 TPM 金鑰還在、檔案沒了：重跑同一個登錄（平台回 200 與同一筆登錄），憑證會再裝一次。
 - **agent 不會被重新啟動**：agent 已在執行時，新的憑證在它下次啟動時才生效。
 
@@ -236,6 +236,6 @@ cargo test -p workstation
 - `tests/identity.rs`：`init` 的權限與不覆寫、權限太寬的私鑰被拒絕、`install-certificate` 拒絕每一種不合格的憑證（含夾帶私鑰的檔案）並存放合格的，存放的檔案是重新編碼的憑證。
 - `tests/login.rs`：以 TRACE 等級跑 `init`、`login`、`enroll`、`logout` 一輪，檢查替身收到的請求（每個請求都帶 `--headers-file` 的標頭、cookie 只在登入之後）、session 檔 0600 與登出後刪除，並在所有輸出中搜尋驗證碼、cookie、私鑰與標頭值；`send_code` 在連線中斷、逾時與 503 時都只送一次；沒有 `XDG_RUNTIME_DIR`、session 檔或標頭檔權限太寬、標頭名稱不對時，在送出任何請求前就拒絕；平台自己的 401 先撤銷再刪除 session 檔，代理的 401 與撤銷失敗時保留檔案；回應的序號不合格式或與憑證不符時不存放。
 - `tests/register.rs`：對 loopback 上的登錄替身（`tests/support/registry.rs`，以 `contract::certs::workstation_signing_input` 驗證每個請求的簽章、拒絕用過的 nonce）以 TRACE 跑 `register`：回應遺失後重送得到 200 算成功、503 後重試成功、每次嘗試的 nonce 與簽章都不同；409（四種金鑰衝突與除役）、401、403 `stale`、403 `revoked`、403 `signature_invalid`、403 `permission_denied`、422 各自以固定的結束碼停止、只送一次；回應的硬體 ID、兩個雜湊、CN、憑證公鑰不符，鏈的第一張不是憑證、少了簽發 CA 或換成根沒簽過的 CA，或整套換成別的根（只有 `--root-sha256` 擋得下）時不記為 `registered`；工作站紀錄裡同一把公鑰已登錄在別的硬體 ID 時不送出；達到嘗試上限時結束碼 75、重跑完成；寫入 `registered` 紀錄時程序被 `ulimit -f` 中斷（SIGXFSZ），原本的紀錄完整、只留下會被略過的暫存檔，重跑完成；並在所有輸出、紀錄與日誌中搜尋 cookie、回應的 `Set-Cookie`、私鑰、簽章與 nonce。也直接呼叫函式庫函式 `register::register`（#616 用的）。
-- `src/install.rs` 的單元測試：以記下參數與 stdin 的替身代替閘道器，送出的命令固定、stdin 剛好是三張重新編碼的 PEM（紀錄裡多出的 PEM 前後文字不會送出）；紀錄的根憑證或 `root_sha256` 不是操作員給的指紋（含整筆紀錄一致地換成別的根）時結束碼 30、少了簽發 CA 時 31、鏈不通或 CN 不符時 1，都沒有呼叫替身；閘道器的 8、9 分別是 32、33，其他結束狀態與訊號是 1，訊息裡沒有控制字元；`Payload` 的 `Debug` 不顯示內容。
+- `src/install.rs` 的單元測試：以記下參數與 stdin 的替身代替閘道器，送出的命令固定、stdin 剛好是三張重新編碼的 PEM（紀錄裡多出的 PEM 前後文字不會送出）；紀錄的根憑證或 `root_sha256` 不是操作員給的指紋（含整筆紀錄一致地換成別的根）時結束碼 30、少了簽發 CA 時 31、鏈不通或 CN 不符時 1，都沒有呼叫替身；閘道器的 8、9 分別是 32、33，其他結束狀態與訊號是 1，訊息裡沒有控制字元；閘道器的輸出裡的控制字元與 Unicode 格式字元（U+202E 等）顯示成空白；`Payload` 的 `Debug` 不顯示內容。
 - `services/certs/tests/workstation_tool.rs`（certs 服務的測試，需要 podman 或 docker）：真的 certs 服務與 Postgres，前面是檢查 cookie、換成內部 token 的 ingress 替身。工具 `enroll` 後登錄、重跑、再讓回應在服務提交後遺失，每個硬體 ID 都剛好一筆登錄、一張閘道器憑證、一個 `certs.gateway_registered` 事件。
 - 各模組的單元測試：包裝型別的遮蔽、檔案權限、FIFO 與符號連結目錄被拒絕、擁有者檢查、網址規則（含 `localhost` 被拒絕）、標頭檔格式與錯誤訊息不含內容、伺服器文字的控制字元改寫、HTTPS 只信任 `--ca-file`、簽章可由 ring 驗證、nonce 不重複、重試間隔與上限、紀錄的原子替換與格式檢查、日誌的權限檢查。
