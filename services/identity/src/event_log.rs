@@ -806,8 +806,7 @@ async fn tenant_event_log(
     respond(&user, log.tenant_events(&user, &query).await)
 }
 
-/// One tenant's operation log, for the back office. Platform administrators only, in their own
-/// request.
+/// One tenant's operation log, for the back office. Platform administrators only.
 #[utoipa::path(
     get,
     path = "/api/identity/v1/platform/tenants/{tenant_id}/event-log",
@@ -852,8 +851,7 @@ async fn platform_tenant_event_log(
     )
 }
 
-/// The platform-wide operation log, for the back office. Platform administrators only, in their
-/// own request.
+/// The platform-wide operation log, for the back office. Platform administrators only.
 #[utoipa::path(
     get,
     path = "/api/identity/v1/platform/event-log",
