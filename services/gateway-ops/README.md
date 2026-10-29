@@ -19,7 +19,7 @@ readiness 在下列全部成立時才是 200：
 | Postgres 位置與 TLS | `TRUSTIOT_POSTGRES_HOST`、`_PORT`、`_DATABASE`、`_SSLMODE`（只接受 `verify-full`）、`_CA_FILE` | chart 設定的平台設定 |
 | 服務角色 | `TRUSTIOT__DATABASE__USERNAME`、`TRUSTIOT__DATABASE__PASSWORD` | `gateway_ops_app`；密碼來自 migration Job 產生的 Secret |
 | 平台角色 | `TRUSTIOT__DATABASE__PLATFORM_USERNAME`、`TRUSTIOT__DATABASE__PLATFORM_PASSWORD` | `gateway_ops_platform`，必須和服務角色不同 |
-| 連線數 | `TRUSTIOT__DATABASE__MAX_CONNECTIONS` | 服務角色每個 replica 的連線上限，4 到 100，預設 10（消費端、下發與套用回報的寫入、發布中每台閘道器的鎖（最多 2 條）、重發的 job lock、readiness 共用；不夠時等連線，最多 5 秒後重試）；平台角色另外固定 4 條 |
+| 連線數 | `TRUSTIOT__DATABASE__MAX_CONNECTIONS` | 服務角色每個 replica 的連線上限，7 到 100，預設 10。下限是服務同時會用到的最多連線數：消費端的交易 1、readiness 的 ping 與 migration 檢查同時跑 2、重發的 job lock 1、發布 2（`delivery::CONCURRENCY` 個發布名額，每個名額先拿著閘道器的發布鎖到 PUBACK，再寫紀錄，同時只用 1 條）、套用回報的記錄 1（`config.rs` 的 `MIN_DATABASE_CONNECTIONS` 逐條列出）；平台角色另外固定 4 條 |
 | MQTT broker | `TRUSTIOT__MQTT__HOST`（必填）、`TRUSTIOT__MQTT__PORT`（選填，預設 1883）、`TRUSTIOT__MQTT__USERNAME`（必填，`service:gateway-ops`）、`TRUSTIOT__MQTT__PASSWORD_FILE`（必填） | 和 ingest 同一個形狀（`mqtt_client::Config`）；密碼只從檔案讀（broker 帳號的 Secret，migration Job 產生），不進環境變數與日誌 |
 | 合併節流 | `TRUSTIOT__DELIVERY__THROTTLE`（選填） | 同一台閘道器的變更合併成一次發布的時間窗，100ms 到 60s，預設 1s（「下發」） |
 
@@ -130,7 +130,7 @@ schema `gateway_ops` 由 migration Job（`tools/migrate`）建立並套用 `migr
 - **等交易提交。** 通知發生在事件的交易提交之前，所以發布前會等到通知的版本讀得到；讀到的最新版本比通知的舊時，前 60 秒每個時間窗重讀一次，之後每 60 秒重讀一次並記 WARN `an announced configuration version is not visible yet; still waiting for it`，不放棄：慢的交易仍可能提交；交易回滾時，這台閘道器下一個存下的版本會用同一個版本號，那時就送出。
 - **replica 之間。** 任何 replica 都可能發布（自己消費端的變更、重發、套用回報）。每台閘道器的「讀最新版本＋發布」在它自己的 Postgres advisory lock 底下進行（交易層級，`delivery::publish_lock_key`，以服務角色的連線取得），一直拿到收到 PUBACK：下一個拿到鎖的 replica 讀到的版本不會比較舊，而且在 broker 收下前一則之後才送，所以較舊的版本不會蓋掉較新的 retained 訊息。鎖被別的 replica 拿著時不等，過一個時間窗再試。每次發布之後再重讀最新版本，比剛送的新就再排一次。
 - **錯誤。** 連線中斷時這次發布留在排程裡，連回來馬上再送（連線後的重發也會涵蓋）。讀取遇到資料庫錯誤時 5 秒後重試。broker 拒絕（例如帳號無權發布）、超過大小、topic 不合法，以及讀取介面回 `NotForLatestBinding` 或 `Corrupt` 時記 ERROR、不重試：這些重試也不會好。
-- **並行。** 每個 replica 同時最多處理 2 台閘道器（`delivery::CONCURRENCY`），平台角色的讀取也最多 2 個；同一台閘道器同時只會有一個發布。
+- **並行與連線。** 每個 replica 同時最多發布 2 台閘道器（`delivery::CONCURRENCY` 個發布名額，排程的發布與重發共用），平台角色的讀取也最多 2 個；同一台閘道器同時只會有一個發布。一次發布依序拿發布名額、讀取的名額，最後才拿服務角色的連線取發布鎖，所以鎖的連線只等鎖底下的讀取與 PUBACK；放開鎖之後在同一個名額裡寫紀錄。發布因此同時最多用 2 條服務角色的連線（連線數下限見「服務與設定」）。
 - **日誌。** 每次發布記 INFO `gateway configuration published`，帶 `hardware_id`、`tenant_id`、`version`、`bound`、`trigger`（`change`、`report`、`republish`）；重發的發布記 DEBUG，避免整個機隊一次寫滿日誌。日誌與錯誤都不帶 broker 密碼：密碼只從檔案讀（`crates/mqtt-client`），日誌最多出現檔案路徑。
 
 ## 套用回報

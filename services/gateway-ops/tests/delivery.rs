@@ -20,6 +20,7 @@ mod support;
 use std::time::Duration;
 
 use contract::{DeviceId, DeviceModelId, GatewayBindingId, ServiceName, TenantId};
+use gateway_ops::config::MIN_DATABASE_CONNECTIONS;
 use gateway_ops::delivery::records::Records;
 use gateway_ops::delivery::{
     Delivery, DeliveryHandle, LOCK_SERVICE, Parts, REPUBLISH_JOB, publish_lock_key,
@@ -71,7 +72,8 @@ impl Running {
     ) -> Self {
         let (db, background) = TenantDb::connect_lazy_with_background(
             product.postgres.options("gateway_ops_app", DATABASE),
-            PgPoolOptions::new().max_connections(4),
+            // The smallest pool the settings accept: the delivery must work within it.
+            PgPoolOptions::new().max_connections(MIN_DATABASE_CONNECTIONS),
             ServiceIdentity::new(ServiceName::GatewayOps),
         )
         .expect("the gateway-ops service role's pool");

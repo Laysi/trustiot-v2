@@ -34,6 +34,11 @@
 //!   least as new and sends after the broker took the previous one, so an older version never
 //!   replaces a newer retained one. A replica that finds the lock taken tries again a throttle
 //!   later. After each publish the latest version is read again, and a newer one is scheduled.
+//! - **Connections.** A publish, whether scheduled or part of a republish, first takes one of
+//!   [`CONCURRENCY`] publish slots and its read's permit, and only then the lock's connection of
+//!   the service role, which it keeps until the PUBACK; it writes its record after releasing the
+//!   lock, still in its slot. So publishing never uses more than [`CONCURRENCY`] service-role
+//!   connections at once (`crate::config::MIN_DATABASE_CONNECTIONS` counts them).
 //!
 //! The service is ready (`mqtt`) while the connection is up and the report subscription is
 //! granted with QoS 1.
@@ -87,8 +92,10 @@ pub fn publish_lock_key(gateway: &GatewayId) -> i64 {
     lock_key(LOCK_SERVICE, &format!("config-publish/{gateway}"))
 }
 
-/// How many gateways one replica publishes at once, and how many of its platform-role reads run
-/// at once (`crate::PLATFORM_CONNECTIONS` keeps two connections for them).
+/// How many gateways one replica publishes at once, scheduled publishes and the republish
+/// together (each holds one service-role connection: its lock, then its record), and how many of
+/// its platform-role reads run at once (`crate::PLATFORM_CONNECTIONS` keeps two connections for
+/// them).
 pub const CONCURRENCY: usize = 2;
 
 /// The wait before a read that failed for a database error is tried again.
@@ -309,6 +316,9 @@ struct Inner {
     idle: Notify,
     /// Bounds the platform-role reads.
     reads: Semaphore,
+    /// The publish slots: bounds the publishes in progress, scheduled and republished together,
+    /// and so the service-role connections they hold.
+    publishes: Semaphore,
     connection: Connection,
     counters: Counters,
     metrics: Metrics,
@@ -409,6 +419,7 @@ impl Delivery {
             wake: Notify::new(),
             idle: Notify::new(),
             reads: Semaphore::new(CONCURRENCY),
+            publishes: Semaphore::new(CONCURRENCY),
             connection: Connection::default(),
             counters: Counters::default(),
             metrics: Metrics::new(),
@@ -609,6 +620,11 @@ impl Inner {
 
     /// Publishes `gateway`'s latest version for `request`; see the module.
     async fn deliver(&self, gateway: &GatewayId, request: Request) -> Next {
+        // The slot for the whole publish, the record and the read after it; then the read's
+        // permit, so the lock's connection is taken only once nothing else is waited for but the
+        // read under it and the PUBACK.
+        let _slot = self.publishes.acquire().await;
+        let read = self.reads.acquire().await;
         let lock = match self.lock_gateway(gateway).await {
             Ok(Some(lock)) => lock,
             // Another replica is publishing this gateway; read again after it.
@@ -623,7 +639,10 @@ impl Inner {
                 return Next::RetryAt(Instant::now() + RETRY_DELAY);
             }
         };
-        let outcome = self.deliver_locked(gateway, request).await;
+        // The read stays under the lock: the next holder must read a version at least as new.
+        let current = self.configs.current(gateway).await;
+        drop(read);
+        let outcome = self.deliver_locked(gateway, request, current).await;
         // Ending the transaction releases the lock; a failed commit ends it too (the server
         // rolls it back with the connection).
         if let Err(error) = lock.commit().await {
@@ -661,17 +680,14 @@ impl Inner {
         }
     }
 
-    /// Reads and publishes under the gateway's lock: the published tenant and version, or what
-    /// to do instead.
+    /// Publishes under the gateway's lock what `read` (made under the lock) found: the
+    /// published tenant and version, or what to do instead.
     async fn deliver_locked(
         &self,
         gateway: &GatewayId,
         request: Request,
+        read: Result<Option<StoredConfig>, ReadError>,
     ) -> Result<(TenantId, ConfigVersion), Next> {
-        let read = {
-            let _permit = self.reads.acquire().await;
-            self.configs.current(gateway).await
-        };
         let config = match read {
             Ok(Some(config)) => config,
             Ok(None) => {

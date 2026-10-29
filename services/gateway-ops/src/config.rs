@@ -8,10 +8,15 @@ use serde::Deserialize;
 use service_kit::config::{Invalid, Validate};
 use service_kit::postgres::{PostgresConfig, SslMode};
 
-/// Fewest connections of the service role's pool: one for the consumer's delivery, one for
-/// readiness, one for the republish job's lock, and one for the writes of the delivery and of
-/// the apply reports.
-pub const MIN_DATABASE_CONNECTIONS: u32 = 4;
+/// Fewest connections of the service role's pool, the most the service holds at once:
+///
+/// - 1 for the consumer's delivery transaction;
+/// - 2 for readiness, whose `postgres` ping and migration check run at the same time;
+/// - 1 for the republish job's lock (`service_kit::job_lock`), held for a whole republish;
+/// - [`crate::delivery::CONCURRENCY`] (2) for the publish slots, each holding a gateway's publish
+///   lock until the PUBACK and then writing its record, one connection at a time;
+/// - 1 for the report task, which records one apply report at a time.
+pub const MIN_DATABASE_CONNECTIONS: u32 = 7;
 
 /// Most connections of the service role's pool per replica.
 pub const MAX_DATABASE_CONNECTIONS: u32 = 100;
@@ -252,7 +257,7 @@ mod tests {
             "database.platform_password"
         );
         let mut pool = config();
-        pool.database.max_connections = 3;
+        pool.database.max_connections = MIN_DATABASE_CONNECTIONS - 1;
         assert_eq!(
             pool.validate().expect_err("too small a pool").key,
             "database.max_connections"
