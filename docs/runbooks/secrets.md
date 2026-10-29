@@ -210,6 +210,14 @@ ClickHouse、MQTT dynsec、Grafana 的帳號由叢集內產生，值不經過人
 
 代只往上走，rollback 不換。Secret 遺失時同 ClickHouse 的管理帳號：把 `mqttBroker.passwordGeneration` 加一再升級，Helm 重建 Secret，init container 產生新密碼；Secret 不存在時 init container 失敗並寫出這個處理方式，broker 停在 `Init`。不要自己建立這個 Secret。
 
+**certs 的新 pod 停在 `ContainerCreating`**（Laysi/trustiot-v2#634）：broker 開啟時，certs 的 pod 掛 Secret `<release>-mqtt-broker-accounts` 裡的 key `certs`，這個 key 由 broker 的 init container `accounts` 寫入，volume 不是 `optional`。第一次開啟 broker、certs 第一次拿到帳號，或 Secret 被刪掉、由 Helm 重建之後，key 寫入之前 certs 的新 pod 停在 `ContainerCreating`，舊的 pod 照常服務。
+
+1. `kubectl -n <namespace> get events --field-selector involvedObject.name=<certs 的 pod>`：`FailedMount`，訊息是 volume `mqtt-broker-account` 指到不存在的 key `certs`（`references non-existent secret key: certs`）或 Secret 不存在，就是在等這個 key。
+2. `kubectl -n <namespace> get pod <release>-mqtt-broker-0` 與 `kubectl -n <namespace> logs <release>-mqtt-broker-0 -c accounts`：init container 寫入後有 `generated the password of certs in Secret <release>-mqtt-broker-accounts`，kubelet 重試掛載，certs 的 pod 隨後自動啟動，不必重啟。
+3. broker 停在 `Init`、`accounts` 的日誌說 Secret 不存在，或 Secret 重建了但 broker 沒有重啟（`accounts` 沒有新的日誌）：照上一段把 `mqttBroker.passwordGeneration` 加一再升級，broker 重啟，init container 重新寫入每個帳號的密碼。
+
+缺檔時 certs 照常啟動、只停用 broker 權限同步的做法，與叢集上的實測，在 Laysi/trustiot-v2#736 評估。
+
 ### OTA 簽章私鑰
 
 Laysi/trustiot-v2#164 補上。原則：閘道器的 updater 內建公鑰，所以輪替要先發一版同時信任新舊公鑰的 updater，確認全部閘道器都已更新，才改用新私鑰簽章。

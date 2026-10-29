@@ -2492,7 +2492,9 @@ describe("MQTT broker (decision 6, Laysi/trustiot-v2#84)", () => {
       expect(accountEnv("certs")[3]?.value).toBe(`${accountMount.mountPath}/${accountVolume("certs").secret.items[0]?.key}`);
       // Only the main container: the init containers never see the password.
       for (const init of certs.initContainers ?? []) expect(JSON.stringify(init)).not.toContain("mqtt-broker-account");
-      // No other pod mounts the Secret, none through subPath, and no env of any pod reads it.
+      // No other pod mounts the Secret, none through subPath, and no env of any pod reads it. A
+      // Secret field of the values cannot point another pod at it either: the field tests below
+      // ("... cannot name a protected Secret ...") render each field with its component on.
       const use = accountsUse(rendered);
       expect(use.keys).toEqual({ [`Deployment/${RELEASE}-certs`]: ["certs"] });
       expect(use.mounts).toEqual([{ pod: `Deployment/${RELEASE}-certs`, container: "certs", subPath: undefined }]);
@@ -2603,6 +2605,116 @@ describe("MQTT broker (decision 6, Laysi/trustiot-v2#84)", () => {
       }
     } finally {
       rmSync(dir, { recursive: true, force: true });
+    }
+  }, SLOW_TEST_MS);
+
+  // Every Secret field of the values ("trustiot.values.checkSecretRefs" in _helpers.tpl), with the
+  // settings that put its component to work, as a function of the Secret's name. Each field hands
+  // its Secret to a pod or a gateway, so a protected Secret there would, for example, mount the
+  // dynsec administrator's password (key certs of the accounts Secret) into the collector, or send
+  // it to an AI provider as an API key (security review of Laysi/trustiot-v2#634).
+  const FORWARD = ["--set", "observability.collector.forward.enabled=true", "--set", "observability.collector.forward.endpoint=https://siem.trustiot.test:4318"];
+  const EXTERNAL_POSTGRES = ["--set", "postgres.mode=external", "--set", "postgres.external.host=pg.trustiot.test"];
+  const EXTERNAL_CLICKHOUSE = ["--set", "clickhouse.mode=external", "--set", "clickhouse.external.url=https://ch.trustiot.test:8443"];
+  const PROTECTED_SECRET_FIELDS: [string, (secret: string) => string[]][] = [
+    ["ingress.direct.tlsSecret", (secret) => ["--set", "ingress.exposure=direct", "--set", `ingress.direct.tlsSecret=${secret}`]],
+    [
+      "internalIdentity.signingKeySecret.name",
+      (secret) => [
+        ...["--set", "services.identity.enabled=true", "--set", `internalIdentity.signingKeySecret.name=${secret}`],
+        ...["--set-json", 'internalIdentity.publicKeys=[{"kid":"2026-10-a","x":"jxSgv4kffdHZ1jN2sf_IVpE4VGbJdheBqhCAAqI89Q8"}]'],
+      ],
+    ],
+    ["postgres.external.caSecret.name", (secret) => [...EXTERNAL_MIGRATION, ...EXTERNAL_POSTGRES, "--set", `postgres.external.caSecret.name=${secret}`]],
+    ["clickhouse.bundled.adminSecret.name", (secret) => ["--set", `clickhouse.bundled.adminSecret.name=${secret}`]],
+    ["clickhouse.external.caSecret.name", (secret) => [...EXTERNAL_MIGRATION, ...EXTERNAL_CLICKHOUSE, "--set", `clickhouse.external.caSecret.name=${secret}`]],
+    [
+      "qdrant.external.credentialsSecret.name",
+      (secret) => [
+        ...["--set", "qdrant.mode=external", "--set", "qdrant.external.url=https://qdrant.trustiot.test:6333", "--set", `qdrant.external.credentialsSecret.name=${secret}`],
+        ...["--set", "services.knowledge.enabled=true", "--set-json", 'services.knowledge.credentials=["qdrant-read","qdrant-write"]'],
+      ],
+    ],
+    ["objectStorage.credentialsSecret.name", (secret) => ["--set", `objectStorage.credentialsSecret.name=${secret}`, "--set-json", 'services.certs.credentials=["object-storage"]']],
+    ["smtp.credentialsSecret.name", (secret) => ["--set", `smtp.credentialsSecret.name=${secret}`, "--set-json", 'services.certs.credentials=["smtp"]']],
+    ...["anthropic", "openai"].map((provider): [string, (secret: string) => string[]] => [
+      `ai.providers.${provider}.apiKeySecret.name`,
+      (secret) => [
+        ...["--set", "services.ai-gateway.enabled=true", "--set", `ai.providers.${provider}.apiKeySecret.name=${secret}`],
+        ...["--set-json", `ai.roles.test={"models":["${provider}/model-test"]}`],
+      ],
+    ]),
+    [
+      "observability.sentry.dsnSecret.name",
+      (secret) => ["--set", "observability.sentry.enabled=true", "--set", "observability.sentry.environment=test", "--set", `observability.sentry.dsnSecret.name=${secret}`],
+    ],
+    [
+      "observability.collector.forward.authHeader.valueSecret.name",
+      (secret) => [...FORWARD, "--set", "observability.collector.forward.authHeader.name=Authorization", "--set", `observability.collector.forward.authHeader.valueSecret.name=${secret}`],
+    ],
+    ["observability.collector.forward.caSecret.name", (secret) => [...FORWARD, "--set", `observability.collector.forward.caSecret.name=${secret}`]],
+    // The migration Secrets are protected themselves: checked against the chart's own Secrets.
+    [
+      "postgres.external.migrationSecret.name",
+      (secret) => [...EXTERNAL_POSTGRES, "--set", "postgres.external.caSecret.name=trustiot-pg-ca", "--set", `postgres.external.migrationSecret.name=${secret}`],
+    ],
+    [
+      "clickhouse.external.migrationSecret.name",
+      (secret) => [...EXTERNAL_CLICKHOUSE, "--set", "clickhouse.external.caSecret.name=trustiot-ch-ca", "--set", `clickhouse.external.migrationSecret.name=${secret}`],
+    ],
+  ];
+  // Protected Secrets a field could name: the broker's accounts (the dynsec administrator's
+  // password under the key certs) and the certs service's issuing CA keys.
+  const PROTECTED_SECRETS = [ACCOUNTS, `${RELEASE}-certs-ca-keys`];
+  const OWN_SECRET = "trustiot-own-secret";
+
+  test("every Secret field of the values is in the list the chart checks against its protected Secrets", () => {
+    // Each key that ends in Secret (a {name, key} map, or ingress.direct.tlsSecret's bare name);
+    // global.imagePullSecrets is not one: only the kubelet reads those.
+    const fields: string[] = [];
+    const walk = (node: unknown, path: string[]) => {
+      if (!isMap(node)) return;
+      for (const [key, value] of Object.entries(node)) {
+        if (key.endsWith("Secret")) fields.push([...path, key, ...(isMap(value) ? ["name"] : [])].join("."));
+        else walk(value, [...path, key]);
+      }
+    };
+    walk(defaults, []);
+    expect(fields.sort()).toEqual(PROTECTED_SECRET_FIELDS.map(([field]) => field).sort());
+    const helpers = readFileSync(join(CHART_DIR, "templates/_helpers.tpl"), "utf8");
+    for (const field of fields.filter((f) => !f.includes("migrationSecret") && !f.startsWith("ai.providers."))) {
+      expect({ field, checked: helpers.includes(`"field" "${field}"`) }).toEqual({ field, checked: true });
+    }
+  });
+
+  test.each(PROTECTED_SECRET_FIELDS.map(([field]) => field))(
+    "%s cannot name a protected Secret, so no pod but certs gets the broker account's key (security review of Laysi/trustiot-v2#634)",
+    (field) => {
+      const settings = PROTECTED_SECRET_FIELDS.find(([name]) => name === field)?.[1];
+      if (!settings) throw new Error(`no settings for ${field}`);
+      for (const shape of SHAPE_NAMES) {
+        // A Secret of its own works, the field is in use, and only certs has the accounts Secret.
+        const rendered = render(SHAPES[shape], [...brokerOn, ...callers, ...settings(OWN_SECRET)]);
+        expect({ shape, field, used: JSON.stringify(rendered).includes(OWN_SECRET) }).toEqual({ shape, field, used: true });
+        expect({ shape, field, use: accountsUse(rendered).keys }).toEqual({ shape, field, use: { [`Deployment/${RELEASE}-certs`]: ["certs"] } });
+        for (const secret of PROTECTED_SECRETS) {
+          const refused = helmTemplate(SHAPES[shape], [...brokerOn, ...callers, ...settings(secret)]);
+          expect({ shape, field, secret, code: refused.code }).toEqual({ shape, field, secret, code: 1 });
+          expect(refused.stderr).toContain(`${field}: Secret ${secret} is one the chart hands only to its own consumers`);
+        }
+      }
+    },
+    SLOW_TEST_MS,
+  );
+
+  test.each(SHAPE_NAMES)("%s: an external database's CA cannot share the migration account's Secret (security review of Laysi/trustiot-v2#634)", (shape) => {
+    for (const [field, args] of [
+      ["postgres.external.caSecret.name", [...EXTERNAL_POSTGRES, ...EXTERNAL_MIGRATION, "--set", "postgres.external.caSecret.name=trustiot-pg-migrate"]],
+      ["clickhouse.external.caSecret.name", [...EXTERNAL_CLICKHOUSE, ...EXTERNAL_MIGRATION, "--set", "clickhouse.external.caSecret.name=trustiot-ch-migrate"]],
+    ] as const) {
+      const refused = helmTemplate(SHAPES[shape], [...args]);
+      expect({ field, code: refused.code }).toEqual({ field, code: 1 });
+      expect(refused.stderr).toContain(`${field}: Secret trustiot-`);
     }
   }, SLOW_TEST_MS);
 

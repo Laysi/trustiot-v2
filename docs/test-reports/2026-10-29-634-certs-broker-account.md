@@ -68,6 +68,34 @@ helm template trustiot . --namespace trustiot --values values-saas.yaml --values
 
 另外：`bun test deploy/flux` 與 `bun test scripts/nightly` 在 macOS 的建置主機上各有與本變更無關的失敗（README 的 shell 指令與 LibreSSL 的 `openssl` 行為），在 Linux（CI 的平台）上全部通過；本變更沒有動 `deploy/flux` 與 `scripts/`。
 
+## 安全審查後的修正
+
+2026-10-29 的安全審查（以 `d86fdfe9` 為準）沒有 Critical 或 High，有下面四項，都在下一個 commit 修正：
+
+- **M1**：values 裡指向 Secret 的欄位沒有比對受保護的 Secret，例如 `ai.providers.anthropic.apiKeySecret.name` 設成 `<release>-mqtt-broker-accounts`、key 設成 `certs`，就會把 dynsec 管理員的密碼交給 ai-gateway，當成 API key 送給 AI 供應商。修正：`templates/_helpers.tpl` 新增 `trustiot.values.checkSecretRefs`，由 `templates/values-check.yaml` 呼叫。下列欄位有名稱、而且名稱在 `trustiot.dependencySecretNames` 裡時渲染失敗，訊息寫出欄位名稱：`ingress.direct.tlsSecret`、`internalIdentity.signingKeySecret.name`、`postgres.external.caSecret.name`、`clickhouse.bundled.adminSecret.name`、`clickhouse.external.caSecret.name`、`qdrant.external.credentialsSecret.name`、`objectStorage.credentialsSecret.name`、`smtp.credentialsSecret.name`、`ai.providers.<供應商>.apiKeySecret.name`、`observability.sentry.dsnSecret.name`、`observability.collector.forward.authHeader.valueSecret.name`、`observability.collector.forward.caSecret.name`。外部 Postgres 與 ClickHouse 的 `migrationSecret.name` 本身受保護，所以只比對 chart 自己的 Secret（`trustiot.dependencySecretNames` 拆成 `trustiot.chartSecretNames` 與 `trustiot.migrationSecretNames`，合起來與原本相同）。`global.imagePullSecrets` 不在其中：只有 kubelet 讀它，容器看不到。
+- **L2**：`trustiot.dependencySecretNames` 的註解還寫 broker 的 Secret 只有 broker 的 pod 使用，已改為 broker 的 pod 與每個帳號持有者的 pod（只掛自己的 key，經 `trustiot.mqttBroker.serviceCredentials`）。
+- **L1**（只改文件）：broker 開啟後，certs 第一次拿到帳號或 accounts Secret 重建之後，certs 的新 pod 在 broker 的 init container `accounts` 寫入 key 之前停在 `FailedMount`。`docs/runbooks/secrets.md`「MQTT broker 的服務帳號密碼」新增排查步驟（`FailedMount` 事件、broker 的 `accounts` 日誌、調大 `passwordGeneration`），`deploy/chart/README.md`「服務的帳號」也寫明這個依賴。改成 `optional`、缺檔時 certs 照常啟動的做法與叢集上的實測另開 Laysi/trustiot-v2#736。
+- **I1**：`deploy/chart/README.md`「服務的帳號」補一句：覆寫 `services.certs.podSecurityContext` 拿掉 `fsGroup` 時，certs 讀不到密碼檔，啟動時就結束而 CrashLoop。
+
+新增的 chart 測試（`deploy/chart/tests/chart.test.ts`，MQTT broker 底下）：
+
+| 測試 | 檢查 |
+| --- | --- |
+| `every Secret field of the values is in the list the chart checks against its protected Secrets` | `values.yaml` 裡每個以 `Secret` 結尾的欄位都在測試的清單 `PROTECTED_SECRET_FIELDS` 裡，清單也沒有多的；非 AI、非 migration 的欄位在 `_helpers.tpl` 的檢查裡逐一列名。之後新增指向 Secret 的欄位而沒有加進檢查時，這個測試失敗 |
+| `<欄位> cannot name a protected Secret, so no pod but certs gets the broker account's key`（每個欄位一個，共 15 個） | 兩份 values、broker 與其帳號持有者都開、加上讓這個欄位生效的設定（例如 ai-gateway 開啟並有角色、collector 轉送開啟、外部資料庫）：欄位指向自己的 Secret 時渲染成功、渲染結果用到它，而且整份渲染只有 certs 的 pod 有 accounts Secret 的 volume；欄位指向 `<release>-mqtt-broker-accounts` 或 `<release>-certs-ca-keys` 時渲染失敗，訊息寫出欄位名稱與 Secret 名稱 |
+| `saas`／`onprem: an external database's CA cannot share the migration account's Secret` | 外部 Postgres 與 ClickHouse 的 CA 指向各自的 migration Secret 時渲染失敗 |
+
+修正後的結果（經檢查佇列在建置主機（macOS）以 `CI=1` 執行，`check-secret-handling` 另在工作站（x86_64 Linux）跑過一次，結果相同）：
+
+| 指令 | 結果 |
+| --- | --- |
+| `bun run --cwd scripts typecheck` | 通過 |
+| `bun test deploy/chart` | 705 pass、0 fail（8619 個 expect；原本 687 個加上新增的 18 個） |
+| `cargo test --locked -p repo-check` | 28 pass、0 fail |
+| `bun scripts/ci/check-secret-handling.ts` | 538 個檔案，沒有違規 |
+
+相容性：外部 Postgres 或 ClickHouse 的 CA 原本可以和 migration 帳號放在同一個 Secret（CA 以 `items` 只掛 `ca.crt`），現在渲染失敗，要把 CA 放進另一個 Secret。兩份 values 與測試用的 values 都沒有這樣設定。
+
 ## 結論
 
 | 驗收條件 | 結果 |
