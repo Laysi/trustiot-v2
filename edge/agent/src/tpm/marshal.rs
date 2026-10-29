@@ -2,7 +2,8 @@
 //! parsing of their responses: TPM2_ReadPublic (TPM 2.0 Part 3, section 12.4) and TPM2_Sign
 //! (section 20.2), which the agent uses at every start, and the provisioning commands of
 //! `provision`: TPM2_CreatePrimary (24.1), TPM2_Create (12.1), TPM2_Load (12.2),
-//! TPM2_EvictControl (28.5) and TPM2_FlushContext (28.4).
+//! TPM2_EvictControl (28.5) and TPM2_FlushContext (28.4); and for the endorsement key
+//! (`endorsement`), TPM2_NV_ReadPublic (31.6) and TPM2_NV_Read (31.13).
 //!
 //! A response is untrusted input: every length is checked against what is left of the buffer,
 //! every structure must end exactly where its size says, and nothing here can panic on any input.
@@ -11,7 +12,7 @@ use super::TpmError;
 use super::rc::ResponseCode;
 
 /// The largest response accepted (the kernel's `TPM_BUFSIZE`, also the usual
-/// `MAX_RESPONSE_SIZE` of a TPM). The responses parsed here are under 500 bytes.
+/// `MAX_RESPONSE_SIZE` of a TPM). The responses parsed here are under 600 bytes.
 pub(crate) const MAX_RESPONSE_BYTES: usize = 4096;
 
 const TPM_ST_NO_SESSIONS: u16 = 0x8001;
@@ -21,17 +22,21 @@ const TPM_ST_CREATION: u16 = 0x8021;
 
 const TPM_CC_EVICT_CONTROL: u32 = 0x0000_0120;
 const TPM_CC_CREATE_PRIMARY: u32 = 0x0000_0131;
+const TPM_CC_NV_READ: u32 = 0x0000_014e;
 const TPM_CC_CREATE: u32 = 0x0000_0153;
 const TPM_CC_LOAD: u32 = 0x0000_0157;
 const TPM_CC_SIGN: u32 = 0x0000_015d;
 const TPM_CC_FLUSH_CONTEXT: u32 = 0x0000_0165;
+const TPM_CC_NV_READ_PUBLIC: u32 = 0x0000_0169;
 const TPM_CC_READ_PUBLIC: u32 = 0x0000_0173;
 
 /// The password authorization session, here with an empty password.
 const TPM_RS_PW: u32 = 0x4000_0009;
 /// The owner (storage) hierarchy, used with its empty authorization as on the gateway.
-const TPM_RH_OWNER: u32 = 0x4000_0001;
+pub(crate) const TPM_RH_OWNER: u32 = 0x4000_0001;
 const TPM_RH_NULL: u32 = 0x4000_0007;
+/// The endorsement hierarchy, used with its empty authorization (the TPM's default).
+pub(crate) const TPM_RH_ENDORSEMENT: u32 = 0x4000_000b;
 
 const TPM_ALG_AES: u16 = 0x0006;
 const TPM_ALG_SHA256: u16 = 0x000b;
@@ -51,10 +56,29 @@ mod attribute {
     pub(super) const FIXED_PARENT: u32 = 1 << 4;
     pub(super) const SENSITIVE_DATA_ORIGIN: u32 = 1 << 5;
     pub(super) const USER_WITH_AUTH: u32 = 1 << 6;
+    pub(super) const ADMIN_WITH_POLICY: u32 = 1 << 7;
     pub(super) const RESTRICTED: u32 = 1 << 16;
     pub(super) const DECRYPT: u32 = 1 << 17;
     pub(super) const SIGN: u32 = 1 << 18;
 }
+
+/// `TPMA_NV` bits (Part 2, section 13.4) and the index type in bits 4 to 7.
+pub(crate) mod nv_attribute {
+    pub(crate) const TYPE_MASK: u32 = 0xf << 4;
+    pub(crate) const OWNERREAD: u32 = 1 << 17;
+    pub(crate) const AUTHREAD: u32 = 1 << 18;
+    /// TPMA_NV_NO_DA: a failed authorization of the index does not count towards the TPM's
+    /// dictionary-attack lockout.
+    pub(crate) const NO_DA: u32 = 1 << 25;
+    pub(crate) const WRITTEN: u32 = 1 << 29;
+}
+
+/// `PolicyA` of the TCG EK Credential Profile (section B.6.1): `TPM2_PolicySecret` with the
+/// endorsement hierarchy, the EK's admin policy in the default templates.
+const EK_POLICY_A_SHA256: [u8; 32] = [
+    0x83, 0x71, 0x97, 0x67, 0x44, 0x84, 0xb3, 0xf8, 0x1a, 0x90, 0xcc, 0x8d, 0x46, 0xa5, 0xd7, 0x24,
+    0xfd, 0x52, 0xd7, 0x6e, 0x06, 0x52, 0x0b, 0x64, 0xf2, 0xa1, 0xda, 0x1b, 0x33, 0x14, 0x69, 0xaa,
+];
 
 /// The attributes the key must have: generated inside the TPM and never exportable
 /// (decision 12), usable with the password session, and for signing.
@@ -150,14 +174,149 @@ pub(crate) fn srk_template() -> Vec<u8> {
     template.0
 }
 
-/// TPM2_CreatePrimary in the owner hierarchy (empty owner authorization) with `template`, an
-/// empty `userAuth` and no creation data or PCRs.
-pub(crate) fn create_primary_command(template: &[u8]) -> Vec<u8> {
+/// Bytes of each coordinate of the EK template's `unique`, all zero.
+const EK_UNIQUE_COORDINATE_BYTES: u16 = 32;
+
+/// The `TPMT_PUBLIC` of the default ECC NIST P-256 endorsement key: template L-2 of the TCG EK
+/// Credential Profile (section B.3.4), which `tpm2_createek -G ecc` uses when the TPM defines no
+/// EK template or nonce in NV. A restricted decryption key with AES-128-CFB, name algorithm
+/// SHA-256, attributes `fixedTPM`, `fixedParent`, `sensitiveDataOrigin`, `adminWithPolicy`,
+/// `restricted` and `decrypt` (0x000300b2), `PolicyA` as its policy, and a `unique` of two
+/// 32-byte zero coordinates. The EK is a function of the endorsement seed and these bytes.
+pub(crate) fn ek_template() -> Vec<u8> {
+    let attributes = attribute::FIXED_TPM
+        | attribute::FIXED_PARENT
+        | attribute::SENSITIVE_DATA_ORIGIN
+        | attribute::ADMIN_WITH_POLICY
+        | attribute::RESTRICTED
+        | attribute::DECRYPT;
+    let mut template = Vec::with_capacity(122);
+    template.extend_from_slice(&TPM_ALG_ECC.to_be_bytes());
+    template.extend_from_slice(&TPM_ALG_SHA256.to_be_bytes()); // nameAlg
+    template.extend_from_slice(&attributes.to_be_bytes());
+    // authPolicy: TPM2B_DIGEST
+    template.extend_from_slice(&32_u16.to_be_bytes());
+    template.extend_from_slice(&EK_POLICY_A_SHA256);
+    for value in [
+        TPM_ALG_AES,
+        128,
+        TPM_ALG_CFB,
+        TPM_ALG_NULL, // scheme
+        TPM_ECC_NIST_P256,
+        TPM_ALG_NULL, // kdf
+    ] {
+        template.extend_from_slice(&value.to_be_bytes());
+    }
+    for _ in 0..2 {
+        template.extend_from_slice(&EK_UNIQUE_COORDINATE_BYTES.to_be_bytes());
+        template.extend_from_slice(&[0; EK_UNIQUE_COORDINATE_BYTES as usize]);
+    }
+    template
+}
+
+/// Checks that `area` is the endorsement key made from [`ek_template`]: every field before
+/// `unique` equal to the template's, and `unique` an ECC point of two coordinates of 1 to 32
+/// bytes and nothing after it. Returns the point; whether it lies on the curve is the caller's
+/// check.
+pub(crate) fn parse_ek_area(area: &[u8]) -> Result<PublicKey, TpmError> {
+    let template = ek_template();
+    let unique_bytes = 2 * (2 + usize::from(EK_UNIQUE_COORDINATE_BYTES));
+    let prefix = template
+        .get(..template.len().saturating_sub(unique_bytes))
+        .unwrap_or_default();
+    let Some(unique) = area.strip_prefix(prefix) else {
+        return Err(unsuitable(
+            "the endorsement key's public area differs from the EK template before its unique field"
+                .to_owned(),
+        ));
+    };
+    let mut reader = Reader::new(unique);
+    let x = reader.sized("EK x coordinate")?;
+    let y = reader.sized("EK y coordinate")?;
+    reader.finish("endorsement key's TPMT_PUBLIC")?;
+    let mut point = [0_u8; 1 + 2 * P256_FIELD_BYTES];
+    point[0] = UNCOMPRESSED_POINT;
+    let (x_out, y_out) = point[1..].split_at_mut(P256_FIELD_BYTES);
+    left_pad(x, x_out, "EK x coordinate")?;
+    left_pad(y, y_out, "EK y coordinate")?;
+    Ok(PublicKey { point })
+}
+
+/// TPM2_CreatePrimary in `hierarchy` (owner or endorsement, with its empty authorization) with
+/// `template`, an empty `userAuth` and no creation data or PCRs.
+pub(crate) fn create_primary_command(hierarchy: u32, template: &[u8]) -> Vec<u8> {
     let mut command = CommandWriter::new(TPM_ST_SESSIONS, TPM_CC_CREATE_PRIMARY);
-    command.u32(TPM_RH_OWNER);
+    command.u32(hierarchy);
     command.password_session();
     command.creation_parameters(template);
     command.finish()
+}
+
+/// TPM2_NV_ReadPublic of the NV index `index`.
+pub(crate) fn nv_read_public_command(index: u32) -> Vec<u8> {
+    let mut command = CommandWriter::new(TPM_ST_NO_SESSIONS, TPM_CC_NV_READ_PUBLIC);
+    command.u32(index);
+    command.finish()
+}
+
+/// TPM2_NV_Read of `size` bytes at `offset` of the NV index `index`, authorized by `auth` (the
+/// owner hierarchy or the index itself) with the empty password.
+pub(crate) fn nv_read_command(auth: u32, index: u32, size: u16, offset: u16) -> Vec<u8> {
+    let mut command = CommandWriter::new(TPM_ST_SESSIONS, TPM_CC_NV_READ);
+    command.u32(auth);
+    command.u32(index);
+    command.password_session();
+    command.u16(size);
+    command.u16(offset);
+    command.finish()
+}
+
+/// What TPM2_NV_ReadPublic told about an NV index (`TPMS_NV_PUBLIC`, Part 2, section 13.5).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct NvPublic {
+    /// The index the TPM described, which must be the one asked for.
+    pub(crate) index: u32,
+    /// Its `TPMA_NV` attributes.
+    pub(crate) attributes: u32,
+    /// Its size in bytes.
+    pub(crate) data_size: u16,
+}
+
+/// Parses a TPM2_NV_ReadPublic response.
+pub(crate) fn parse_nv_read_public(response: &[u8]) -> Result<NvPublic, TpmError> {
+    let mut reader = response_parameters(response, TPM_ST_NO_SESSIONS)?;
+    let mut public = Reader::new(reader.sized("TPM2B_NV_PUBLIC")?);
+    let index = public.u32("nvIndex")?;
+    let _name_alg = public.u16("nameAlg")?;
+    let attributes = public.u32("attributes")?;
+    let _auth_policy = public.sized("authPolicy")?;
+    let data_size = public.u16("dataSize")?;
+    public.finish("TPMS_NV_PUBLIC")?;
+    // nvName (TPM2B_NAME): checked for shape only.
+    reader.sized("nvName")?;
+    reader.finish("TPM2_NV_ReadPublic response")?;
+    Ok(NvPublic {
+        index,
+        attributes,
+        data_size,
+    })
+}
+
+/// Parses a TPM2_NV_Read response and returns the data, which must be exactly `size` bytes.
+pub(crate) fn parse_nv_read(response: &[u8], size: u16) -> Result<Vec<u8>, TpmError> {
+    let mut reader = response_parameters(response, TPM_ST_SESSIONS)?;
+    let parameters = reader.counted("parameterSize")?;
+    let mut parameters = Reader::new(parameters);
+    let data = parameters.sized("TPM2B_MAX_NV_BUFFER")?.to_vec();
+    parameters.finish("TPM2_NV_Read parameters")?;
+    one_session_response(reader, "TPM2_NV_Read response")?;
+    if data.len() != usize::from(size) {
+        return Err(malformed(format!(
+            "TPM2_NV_Read returned {} bytes where {size} were asked for",
+            data.len()
+        )));
+    }
+    Ok(data)
 }
 
 /// TPM2_Create of an object with `template` under the storage key `parent` (empty
@@ -1181,7 +1340,7 @@ pub(crate) mod tests {
     #[test]
     fn provisioning_commands_are_what_swtpm_accepted() {
         assert_eq!(
-            create_primary_command(&srk_template()),
+            create_primary_command(TPM_RH_OWNER, &srk_template()),
             hex(recorded::CREATE_PRIMARY_COMMAND)
         );
         assert_eq!(
@@ -1270,6 +1429,261 @@ pub(crate) mod tests {
             code(parse_read_public_area(&hex(recorded::READ_PUBLIC_EMPTY_RESPONSE)).map(|_| ())),
             0x18b
         );
+    }
+
+    // The endorsement key and the NV commands.
+
+    #[test]
+    fn the_ek_template_is_the_tcg_profile_l2_template() {
+        let zeros = "00".repeat(32);
+        assert_eq!(
+            ek_template(),
+            hex(&format!(
+                "0023_000b_000300b2\
+                 _0020_837197674484b3f81a90cc8d46a5d724fd52d76e06520b64f2a1da1b331469aa\
+                 _0006_0080_0043_0010_0003_0010_0020_{zeros}_0020_{zeros}"
+            ))
+        );
+        assert_eq!(ek_template().len(), 122);
+    }
+
+    #[test]
+    fn nv_commands_are_marshalled_as_tpm2_part_3_specifies() {
+        assert_eq!(
+            nv_read_public_command(0x01c0_000a),
+            hex("8001_0000000e_00000169_01c0000a")
+        );
+        assert_eq!(
+            nv_read_command(TPM_RH_OWNER, 0x01c0_000a, 512, 0x0200),
+            hex(
+                "8002_00000023_0000014e_40000001_01c0000a_00000009_40000009_0000_00_0000_0200_0200"
+            )
+        );
+    }
+
+    #[test]
+    fn the_ek_commands_are_what_swtpm_accepted_and_give_tpm2_tools_ek() {
+        assert_eq!(
+            create_primary_command(TPM_RH_ENDORSEMENT, &ek_template()),
+            hex(recorded::EK_CREATE_PRIMARY_COMMAND)
+        );
+        assert_eq!(
+            read_public_command(0x8000_0000),
+            hex(recorded::EK_READ_PUBLIC_COMMAND)
+        );
+        let primary = parse_create_primary(&hex(recorded::EK_CREATE_PRIMARY_RESPONSE)).unwrap();
+        assert_eq!(primary.loaded.handle, 0x8000_0000);
+        assert_eq!(primary.loaded.name, sha256_name(&primary.area));
+        let read = parse_read_public_area(&hex(recorded::EK_READ_PUBLIC_RESPONSE)).unwrap();
+        assert_eq!(read.area, primary.area);
+        assert_eq!(read.name, primary.loaded.name);
+        let ek = parse_ek_area(&primary.area).unwrap();
+        assert_eq!(ek.spki_der(), hex(recorded::EK_TPM2_TOOLS_SPKI));
+        // A restricted decryption key: never usable as the gateway key.
+        assert!(parse_public_area(&primary.area).is_err());
+        assert!(!matches_template(&primary.area, &key_template()));
+        // The SRK and the gateway key are not EKs.
+        for other in [
+            recorded::READ_PUBLIC_SRK_RESPONSE,
+            recorded::READ_PUBLIC_KEY_RESPONSE,
+        ] {
+            assert!(matches!(
+                parse_ek_area(&area_of(other)),
+                Err(TpmError::UnsuitableKey(_))
+            ));
+        }
+    }
+
+    #[test]
+    fn an_ek_area_is_refused_unless_it_is_the_template_and_a_p256_point() {
+        let area = parse_create_primary(&hex(recorded::EK_CREATE_PRIMARY_RESPONSE))
+            .unwrap()
+            .area;
+        // The template up to unique (54 bytes), then x and y with their sizes.
+        assert_eq!(area.len(), 54 + 2 + 32 + 2 + 32);
+        for offset in 0..54 {
+            let mut changed = area.clone();
+            changed[offset] ^= 0x01;
+            assert!(
+                matches!(parse_ek_area(&changed), Err(TpmError::UnsuitableKey(_))),
+                "offset {offset}"
+            );
+        }
+        let mut longer = area.clone();
+        longer.push(0);
+        assert!(matches!(
+            parse_ek_area(&longer),
+            Err(TpmError::Malformed(_))
+        ));
+        for length in 54..area.len() {
+            assert!(parse_ek_area(&area[..length]).is_err(), "length {length}");
+        }
+        // A 33-byte x coordinate.
+        let mut long_x = area[..54].to_vec();
+        long_x.extend_from_slice(&33_u16.to_be_bytes());
+        long_x.push(1);
+        long_x.extend_from_slice(&area[56..]);
+        assert!(matches!(
+            parse_ek_area(&long_x),
+            Err(TpmError::Malformed(_))
+        ));
+        // A 31-byte y coordinate is right-aligned.
+        let mut short_y = area[..88].to_vec();
+        short_y.extend_from_slice(&31_u16.to_be_bytes());
+        short_y.extend_from_slice(&area[91..]);
+        let point = parse_ek_area(&short_y).unwrap().point;
+        assert_eq!(point[33], 0);
+        assert_eq!(point[34..], area[91..]);
+    }
+
+    #[test]
+    fn nv_responses_parse_as_recorded() {
+        let certificate_index =
+            parse_nv_read_public(&hex(recorded::NV_READ_PUBLIC_CERTIFICATE_RESPONSE)).unwrap();
+        assert_eq!(
+            certificate_index,
+            NvPublic {
+                index: 0x01c0_000a,
+                attributes: 0x6207_2001,
+                data_size: 798,
+            }
+        );
+        let written_and_readable =
+            nv_attribute::WRITTEN | nv_attribute::OWNERREAD | nv_attribute::AUTHREAD;
+        assert_eq!(
+            certificate_index.attributes & written_and_readable,
+            written_and_readable
+        );
+        assert_eq!(certificate_index.attributes & nv_attribute::TYPE_MASK, 0);
+        assert_eq!(
+            parse_nv_read_public(&hex(recorded::NV_READ_PUBLIC_TEMPLATE_RESPONSE))
+                .unwrap()
+                .index,
+            0x01c0_000c
+        );
+        assert!(matches!(
+            parse_nv_read_public(&hex(recorded::NV_READ_PUBLIC_UNDEFINED_RESPONSE)),
+            Err(TpmError::Response(code)) if code.code() == 0x18b
+        ));
+
+        assert_eq!(
+            nv_read_command(TPM_RH_OWNER, 0x01c0_000a, 512, 0),
+            hex(recorded::NV_READ_FIRST_COMMAND)
+        );
+        assert_eq!(
+            nv_read_command(TPM_RH_OWNER, 0x01c0_000a, 286, 512),
+            hex(recorded::NV_READ_SECOND_COMMAND)
+        );
+        let mut certificate = parse_nv_read(&hex(recorded::NV_READ_FIRST_RESPONSE), 512).unwrap();
+        certificate.extend_from_slice(
+            &parse_nv_read(&hex(recorded::NV_READ_SECOND_RESPONSE), 286).unwrap(),
+        );
+        assert_eq!(certificate, hex(recorded::EK_CERTIFICATE));
+        // Data of another length than asked for.
+        for asked in [511, 513, 0] {
+            assert!(matches!(
+                parse_nv_read(&hex(recorded::NV_READ_FIRST_RESPONSE), asked),
+                Err(TpmError::Malformed(detail)) if detail.contains("asked for")
+            ));
+        }
+    }
+
+    /// Every NV parser applied to `response`; true when all of them failed.
+    fn every_nv_parser_fails(response: &[u8]) -> bool {
+        parse_nv_read_public(response).is_err()
+            && parse_nv_read(response, 512).is_err()
+            && parse_nv_read(response, 286).is_err()
+    }
+
+    const NV_RESPONSES: [&str; 4] = [
+        recorded::NV_READ_PUBLIC_CERTIFICATE_RESPONSE,
+        recorded::NV_READ_PUBLIC_TEMPLATE_RESPONSE,
+        recorded::NV_READ_FIRST_RESPONSE,
+        recorded::NV_READ_SECOND_RESPONSE,
+    ];
+
+    #[test]
+    fn every_truncation_and_extension_of_an_nv_or_ek_response_is_an_error() {
+        for fixture in NV_RESPONSES {
+            let response = hex(fixture);
+            for length in 0..response.len() {
+                let truncated = response.get(..length).unwrap();
+                assert!(every_nv_parser_fails(truncated), "length {length}");
+                if length > HEADER_BYTES {
+                    assert!(
+                        every_nv_parser_fails(&reframe(truncated.to_vec())),
+                        "reframed length {length}"
+                    );
+                }
+            }
+            let mut longer = response.clone();
+            longer.push(0);
+            assert!(every_nv_parser_fails(&reframe(longer)));
+        }
+        for fixture in [
+            recorded::EK_CREATE_PRIMARY_RESPONSE,
+            recorded::EK_READ_PUBLIC_RESPONSE,
+        ] {
+            let response = hex(fixture);
+            for length in 0..response.len() {
+                let truncated = response.get(..length).unwrap();
+                assert!(every_provisioning_parser_fails(truncated));
+                if length > HEADER_BYTES {
+                    assert!(every_provisioning_parser_fails(&reframe(
+                        truncated.to_vec()
+                    )));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn inflated_sizes_in_nv_responses_never_read_past_the_buffer() {
+        for (fixture, size_fields) in [
+            // TPM2B_NV_PUBLIC, authPolicy, nvName.
+            (
+                recorded::NV_READ_PUBLIC_CERTIFICATE_RESPONSE,
+                &[10_usize, 22, 26][..],
+            ),
+            // parameterSize (its low half), the data's size.
+            (recorded::NV_READ_FIRST_RESPONSE, &[12, 14][..]),
+            (recorded::NV_READ_SECOND_RESPONSE, &[12, 14][..]),
+        ] {
+            let response = hex(fixture);
+            for offset in HEADER_BYTES..response.len() - 1 {
+                let mut changed = response.clone();
+                changed[offset] = 0xff;
+                changed[offset + 1] = 0xff;
+                // Must not panic; changed data may still parse.
+                let all_fail = every_nv_parser_fails(&changed);
+                if size_fields.contains(&offset) {
+                    assert!(all_fail, "offset {offset}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn nv_garbage_is_rejected_without_panicking() {
+        let mut state: u64 = 0x5851_f42d_4c95_7f2d;
+        let mut next = || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            state
+        };
+        for _ in 0..20_000 {
+            let length = usize::try_from(next() % 700).unwrap();
+            let mut garbage: Vec<u8> = (0..length).map(|_| next().to_be_bytes()[0]).collect();
+            if next() % 2 == 0 && garbage.len() >= HEADER_BYTES {
+                garbage[0] = 0x80;
+                garbage[1] = if next() % 2 == 0 { 0x01 } else { 0x02 };
+                garbage[6..10].fill(0);
+                garbage = reframe(garbage);
+            }
+            let _ = every_nv_parser_fails(&garbage);
+            let _ = parse_ek_area(&garbage);
+        }
     }
 
     /// Every provisioning parser applied to `response`; true when all of them failed.
