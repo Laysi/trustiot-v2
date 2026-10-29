@@ -71,7 +71,7 @@ Laysi/trustiot-v2#633 的 broker 權限同步合併到 main 之後，`6544fa82` 
 
 | 指令 | 在哪裡、哪個 commit | 結果 |
 | --- | --- | --- |
-| `cargo fmt --all --check`，`cargo clippy --locked -p certs --all-targets -- -D warnings`，`cargo test --locked -p repo-check`，`cargo test --locked -p certs`，`cargo test --locked -p certs --test dynsec -- --nocapture` | 建置主機（macOS，`CI=1`），接上同步那個 commit 的工作樹 | 全部通過：certs 的單元測試 43 個（含 #633 的），每個測試檔都通過（`dynsec` 1 個、`renewal` 3 個、`renewal_lag` 1 個）；repo-check 通過 |
+| `cargo fmt --all --check`，`cargo clippy --locked -p certs --all-targets -- -D warnings`，`cargo test --locked -p repo-check`，`cargo test --locked -p certs`，`cargo test --locked -p certs --test dynsec -- --nocapture` | 建置主機（macOS，`CI=1`），接上同步那個 commit 的工作樹 | 全部通過：certs 的單元測試 43 個（含 Laysi/trustiot-v2#633 的），每個測試檔都通過（`dynsec` 1 個、`renewal` 3 個、`renewal_lag` 1 個）；repo-check 通過 |
 | 同上的 `dynsec` 測試，但把 `src/renewal.rs` 的 `self.broker_sync.gateway(hardware_id)` 換成什麼都不做（突變檢查，之後還原） | 建置主機（macOS，`CI=1`） | 如預期失敗：`the renewed gateway's broker client: not within 120s`。所以只有換發的呼叫能讓 client 在測試期間回來 |
 | `bun test scripts/ci/changes.test.ts` | 本機（Linux 的建置主機磁碟不足，工作沒有執行，見下） | 283 個通過 |
 
