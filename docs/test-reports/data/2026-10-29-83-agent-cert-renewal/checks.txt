@@ -1,0 +1,177 @@
+=== cargo fmt --all --check
+=== exit 0
+=== cargo clippy --locked --workspace --all-targets -- -D warnings
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 13.66s
+=== exit 0
+=== env CI=true cargo test --locked -p agent
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.15s
+     Running tests/desired_config.rs (<host copy>/target/debug/deps/desired_config-5c623f05aac8139f)
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+     Running tests/link.rs (<host copy>/target/debug/deps/link-1c9e0ca7eabf1d5b)
+test result: ok. 56 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+     Running tests/liveness.rs (<host copy>/target/debug/deps/liveness-b675b533e9c516c4)
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/modbus_address_guard.rs (<host copy>/target/debug/deps/modbus_address_guard-7901e1fd03300f55)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/modbus_fake_endpoint.rs (<host copy>/target/debug/deps/modbus_fake_endpoint-6f495b219820474f)
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+     Running tests/modbus_rtu_converter.rs (<host copy>/target/debug/deps/modbus_rtu_converter-ba1edc112d2b932c)
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+     Running tests/modbus_rtu_framing.rs (<host copy>/target/debug/deps/modbus_rtu_framing-cd8089b90a82fd06)
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/modbus_tcp_framing.rs (<host copy>/target/debug/deps/modbus_tcp_framing-5d858c0d16cd437e)
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/polling_recovery.rs (<host copy>/target/debug/deps/polling_recovery-851ba0ca749f9425)
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/renewal.rs (<host copy>/target/debug/deps/renewal-ea463b92925a4dbe)
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 21.42s
+     Running tests/systemd_unit.rs (<host copy>/target/debug/deps/systemd_unit-a1809e94b3c93b6b)
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.08s
+     Running tests/tpm_provision.rs (<host copy>/target/debug/deps/tpm_provision-028f12a27fa92855)
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.59s
+     Running tests/tpm_swtpm.rs (<host copy>/target/debug/deps/tpm_swtpm-a9b6f68770aae11e)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.87s
+     Running tests/transport.rs (<host copy>/target/debug/deps/transport-e8b468528fba9f26)
+test result: ok. 19 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.49s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+=== exit 0
+=== cargo test --locked -p protocol
+     Running unittests src/lib.rs (<host copy>/target/debug/deps/protocol-56854fb1676a8b1e)
+test result: ok. 37 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.07s
+     Running tests/adversarial.rs (<host copy>/target/debug/deps/adversarial-2ff4234590ec3ea0)
+test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+     Running tests/allocation.rs (<host copy>/target/debug/deps/allocation-291610dab5223f1b)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/broker.rs (<host copy>/target/debug/deps/broker-eefbcbcd1d3b3850)
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 13.67s
+     Running tests/compat.rs (<host copy>/target/debug/deps/compat-765528d58ab09bae)
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/dependencies.rs (<host copy>/target/debug/deps/dependencies-8fd249713670f6c1)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.15s
+     Running tests/fuzz.rs (<host copy>/target/debug/deps/fuzz-aa2066f22eff7e9b)
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 7.12s
+     Running tests/fuzz_split.rs (<host copy>/target/debug/deps/fuzz_split-d1b1b4444f62b7fb)
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.15s
+     Running tests/golden.rs (<host copy>/target/debug/deps/golden-a4607db7d68b3ad3)
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/limits.rs (<host copy>/target/debug/deps/limits-8faa20333ccffec4)
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+     Running tests/readme.rs (<host copy>/target/debug/deps/readme-3d25ba4094649e49)
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/robustness.rs (<host copy>/target/debug/deps/robustness-01da5d912b46312c)
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.99s
+     Running tests/split.rs (<host copy>/target/debug/deps/split-843d0b395e3787d3)
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.11s
+     Running tests/validation.rs (<host copy>/target/debug/deps/validation-1e0dfc67baefb8e2)
+test result: ok. 18 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+all doctests ran in 0.13s; merged doctests compilation took 0.12s
+=== exit 0
+=== env CI=true cargo test --locked -p testkit
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 11.68s
+     Running unittests src/lib.rs (<host copy>/target/debug/deps/testkit-792237f8b6297083)
+test result: ok. 42 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.38s
+     Running tests/container_volumes.rs (<host copy>/target/debug/deps/container_volumes-b27bc0a9ed08d127)
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 10.48s
+     Running tests/modbus_endpoint.rs (<host copy>/target/debug/deps/modbus_endpoint-0460dcb8235abfac)
+test result: ok. 20 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.13s
+     Running tests/modbus_example.rs (<host copy>/target/debug/deps/modbus_example-e8527cb3d83a2b0b)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+     Running tests/postgres_isolation.rs (<host copy>/target/debug/deps/postgres_isolation-1624833dabcb77f3)
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 15.25s
+     Running tests/postgres_start.rs (<host copy>/target/debug/deps/postgres_start-0f6d967bbc0a0e46)
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 10.64s
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+all doctests ran in 0.24s; merged doctests compilation took 0.23s
+=== exit 0
+=== cargo test --locked -p repo-check
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.78s
+     Running unittests src/lib.rs (<host copy>/target/debug/deps/repo_check-cb97eb5799213f90)
+test result: ok. 18 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/repository.rs (<host copy>/target/debug/deps/repository-3bb08d58df261a4f)
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.12s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+=== exit 0
+=== cargo deny --locked check
+          │   ├── (dev) identity v0.1.0 (*)
+          │   ├── (dev) ingest v0.1.0 (*)
+          │   ├── lab-dataset v0.1.0 (*)
+          │   ├── (dev) telemetry-query v0.1.0 (*)
+          │   └── testkit v0.1.0
+          │       ├── (dev) agent v0.1.0
+          │       │   ├── (dev) agent v0.1.0 (*)
+          │       │   └── lab-dataset v0.1.0 (*)
+          │       ├── (dev) assets v0.1.0 (*)
+          │       ├── (dev) assistant v0.1.0 (*)
+          │       ├── (dev) certs v0.1.0 (*)
+          │       ├── (dev) identity v0.1.0 (*)
+          │       ├── (dev) ingest v0.1.0 (*)
+          │       ├── (dev) lab-dataset v0.1.0 (*)
+          │       ├── (dev) mqtt-client v0.1.0
+          │       │   ├── certs v0.1.0 (*)
+          │       │   └── ingest v0.1.0 (*)
+          │       └── (dev) telemetry-query v0.1.0 (*)
+          ├── mqtt-bridge v0.1.0
+          ├── outbox v0.1.0
+          │   ├── assets v0.1.0 (*)
+          │   ├── certs v0.1.0 (*)
+          │   ├── identity v0.1.0 (*)
+          │   ├── ingest v0.1.0 (*)
+          │   ├── migrate v0.1.0 (*)
+          │   └── telemetry-query v0.1.0 (*)
+          ├── telemetry-query v0.1.0 (*)
+          ├── testkit v0.1.0 (*)
+          └── web v0.1.0
+advisories ok, bans ok, licenses ok, sources ok
+=== exit 0
+=== env CARGO_ZIGBUILD_ZIG_PATH="$(proto bin zig)" PATH="<cargo-zigbuild dir>:$PATH" cargo zigbuild --locked --release --target aarch64-unknown-linux-gnu -p agent
+warning: linker stderr: ignoring deprecated linker optimization setting '1'
+  |
+  = note: `#[warn(linker_messages)]` on by default
+warning: `agent` (bin "trustiot-agent") generated 1 warning
+    Finished `release` profile [optimized] target(s) in 24.53s
+=== exit 0
+=== bun install --cwd scripts --frozen-lockfile
+bun install v1.4.2 (744846f84)
++ @actions/expressions@0.3.61
++ @types/bun@1.4.2
++ typescript@7.0.2
+7 packages installed [30.00ms]
+=== exit 0
+=== bun test scripts
+2026-10-29T05:40:43.466Z Kustomization flux-system/flux-system: Ready=True Succeeded: ok, revision main@sha1:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+2026-10-29T05:40:43.466Z OCIRepository trustiot/trustiot: Ready=True Succeeded: ok, revision sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+2026-10-29T05:40:43.466Z HelmRelease trustiot/trustiot: Ready=True Succeeded: ok, chart 0.0.0-rc.10+bbbbbbbbbbbb (deployed)
+2026-10-29T05:40:43.466Z main's deploy/flux/clusters/demo/trustiot/chart.yaml: 0.0.0-rc.10@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+2026-10-29T05:40:43.466Z   pulled:   the same
+2026-10-29T05:40:43.466Z   deployed: the same (0.0.0-rc.10+bbbbbbbbbbbb (deployed))
+2026-10-29T05:40:43.466Z pods in trustiot: 1
+2026-10-29T05:40:43.466Z   trustiot-identity-abc Running ready=true restarts=0
+2026-10-29T05:40:43.466Z WARNING: the root Kustomization flux-system has spec.suspend: true, spec.prune: false, as a remove that stopped halfway leaves it, so Flux does not apply main: run remove again (dry run first) to finish it, or resume Flux as deploy/flux/README.md 「在展示機安裝 Flux」 (中斷之後) describes
+2026-10-29T05:40:43.466Z WARNING: the operations tunnel could not be read: ssh: connect to host <address> port 22: No route to host
+2026-10-29T05:40:43.466Z ssh dropped the connection (attempt 1); retrying: kex_exchange_identification: read: Connection reset; ProxyCommand cloudflared access ssh --hostname <host>
+2026-10-29T05:40:43.470Z removed a run directory that a stopped run left behind
+2026-10-29T05:40:43.502Z ssh dropped the connection (attempt 1); retrying
+2026-10-29T05:40:43.502Z ssh dropped the connection (attempt 2); retrying
+2026-10-29T05:40:43.502Z ssh dropped the connection (attempt 3); retrying
+9 tests skipped:
+(skip) aarch64ElfProblem > accepts the aarch64 binary running this test
+(skip) the dev environment with podman > up uses images of this machine's platform although the store holds the service base for another one
+(skip) the dev environment with podman > up uses images of this machine's platform although the store holds Mosquitto for another one
+(skip) the dev environment with podman > starts, passes every check, seeds, rotates credentials, stops and purges without leftovers
+(skip) the test pod's script in the pinned image > sends with starttls: verified TLS, login, envelope and message, and prints only codes
+(skip) the test pod's script in the pinned image > sends with tls: verified TLS, login, envelope and message, and prints only codes
+(skip) the test pod's script in the pinned image > a refused login is curl error 67, not accepted
+(skip) the test pod's script in the pinned image > a relay without STARTTLS gets no login and no mail
+(skip) the test pod's script in the pinned image > a recipient the shell would interpret, or none, is refused before curl runs
+ 1704 pass
+ 9 skip
+ 0 fail
+ 7524 expect() calls
+Ran 1713 tests across 54 files. [12.16s]
+=== exit 0
+=== bun scripts/ci/check-secret-handling.ts
+secret handling: 539 file(s) checked, 7 container build file(s), no violations
+=== exit 0
+exit 0 at 13:40:51 (build host)
+
