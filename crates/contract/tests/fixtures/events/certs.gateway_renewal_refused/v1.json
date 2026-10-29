@@ -1,0 +1,22 @@
+{
+  "id": "01928f6e-7a3c-7d4e-8f00-000000000403",
+  "type": "certs.gateway_renewal_refused",
+  "version": 1,
+  "tenant_id": null,
+  "occurred_at": "2026-10-29T09:00:30.456Z",
+  "producer": "certs",
+  "payload": {
+    "hardware_id": "tg-0001",
+    "window_start": "2026-10-29T08:00:00Z",
+    "window_end": "2026-10-29T09:00:00Z",
+    "refusals": 5,
+    "reasons": {
+      "challenge_unknown": 1,
+      "signature_invalid": 4
+    }
+  },
+  "actor": {
+    "kind": "service",
+    "service": "certs"
+  }
+}
