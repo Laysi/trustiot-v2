@@ -1,0 +1,328 @@
+# 探測輸出（建置主機（arm64 Linux VM），commit 64d6eb21 的樹，CI=1）
+# CI=1 cargo test --locked -p assets -p telemetry-query --test permissions -- --nocapture
+# cargo test --locked -p service-kit --lib identity::permission
+# cargo test --locked -p testkit --lib permissions
+
+     Running tests/permissions.rs (<host copy>/target/debug/deps/permissions-d5922d33292bb603)
+
+running 2 tests
+result | subject | probe | outcome
+pass | DELETE /api/assets/v1/device-models/{model_id} | coverage | declared
+pass | DELETE /api/assets/v1/devices/{device_id} | coverage | declared
+pass | GET /api/assets/v1/device-models | coverage | declared
+pass | GET /api/assets/v1/device-models/{model_id} | coverage | declared
+pass | GET /api/assets/v1/device-models/{model_id}/export | coverage | declared
+pass | GET /api/assets/v1/devices | coverage | declared
+pass | GET /api/assets/v1/devices/{device_id} | coverage | declared
+pass | GET /api/assets/v1/platform/gateways | coverage | declared
+pass | GET /api/assets/v1/platform/gateways/{hardware_id} | coverage | declared
+pass | GET /api/assets/v1/tenant | coverage | declared
+pass | POST /api/assets/v1/device-models | coverage | declared
+pass | POST /api/assets/v1/device-models/import | coverage | declared
+pass | POST /api/assets/v1/devices | coverage | declared
+pass | PUT /api/assets/v1/device-models/{model_id} | coverage | declared
+pass | PUT /api/assets/v1/devices/{device_id} | coverage | declared
+pass | PUT /api/assets/v1/platform/gateways/{hardware_id}/binding | coverage | declared
+pass | GET /api/assets/v1/tenant | matrix | line 103: 租戶 viewer
+pass | GET /api/assets/v1/device-models | matrix | line 104: 租戶 viewer
+pass | POST /api/assets/v1/device-models | matrix | line 105: 租戶 editor
+pass | POST /api/assets/v1/device-models/import | matrix | line 106: 租戶 editor
+pass | GET /api/assets/v1/device-models/{model_id} | matrix | line 107: 租戶 viewer
+pass | PUT /api/assets/v1/device-models/{model_id} | matrix | line 108: 租戶 editor
+pass | DELETE /api/assets/v1/device-models/{model_id} | matrix | line 109: 租戶 editor
+pass | GET /api/assets/v1/device-models/{model_id}/export | matrix | line 110: 租戶 viewer
+pass | GET /api/assets/v1/devices | matrix | line 111: 租戶 viewer
+pass | POST /api/assets/v1/devices | matrix | line 112: 租戶 editor
+pass | GET /api/assets/v1/devices/{device_id} | matrix | line 113: 租戶 viewer
+pass | PUT /api/assets/v1/devices/{device_id} | matrix | line 114: 租戶 editor
+pass | DELETE /api/assets/v1/devices/{device_id} | matrix | line 115: 租戶 editor
+pass | GET /api/assets/v1/platform/gateways | matrix | line 116: 平台管理員，本人
+pass | GET /api/assets/v1/platform/gateways/{hardware_id} | matrix | line 117: 平台管理員，本人
+pass | PUT /api/assets/v1/platform/gateways/{hardware_id}/binding | matrix | line 118: 平台管理員，本人
+32 probes, 0 failed
+test the_matrix_document_matches_the_declarations ... ok
+result | subject | probe | outcome
+pass | DELETE /api/assets/v1/device-models/{model_id} | coverage | declared
+pass | DELETE /api/assets/v1/devices/{device_id} | coverage | declared
+pass | GET /api/assets/v1/device-models | coverage | declared
+pass | GET /api/assets/v1/device-models/{model_id} | coverage | declared
+pass | GET /api/assets/v1/device-models/{model_id}/export | coverage | declared
+pass | GET /api/assets/v1/devices | coverage | declared
+pass | GET /api/assets/v1/devices/{device_id} | coverage | declared
+pass | GET /api/assets/v1/platform/gateways | coverage | declared
+pass | GET /api/assets/v1/platform/gateways/{hardware_id} | coverage | declared
+pass | GET /api/assets/v1/tenant | coverage | declared
+pass | POST /api/assets/v1/device-models | coverage | declared
+pass | POST /api/assets/v1/device-models/import | coverage | declared
+pass | POST /api/assets/v1/devices | coverage | declared
+pass | PUT /api/assets/v1/device-models/{model_id} | coverage | declared
+pass | PUT /api/assets/v1/devices/{device_id} | coverage | declared
+pass | PUT /api/assets/v1/platform/gateways/{hardware_id}/binding | coverage | declared
+pass | GET /api/assets/v1/tenant | matrix | line 103: 租戶 viewer
+pass | GET /api/assets/v1/device-models | matrix | line 104: 租戶 viewer
+pass | POST /api/assets/v1/device-models | matrix | line 105: 租戶 editor
+pass | POST /api/assets/v1/device-models/import | matrix | line 106: 租戶 editor
+pass | GET /api/assets/v1/device-models/{model_id} | matrix | line 107: 租戶 viewer
+pass | PUT /api/assets/v1/device-models/{model_id} | matrix | line 108: 租戶 editor
+pass | DELETE /api/assets/v1/device-models/{model_id} | matrix | line 109: 租戶 editor
+pass | GET /api/assets/v1/device-models/{model_id}/export | matrix | line 110: 租戶 viewer
+pass | GET /api/assets/v1/devices | matrix | line 111: 租戶 viewer
+pass | POST /api/assets/v1/devices | matrix | line 112: 租戶 editor
+pass | GET /api/assets/v1/devices/{device_id} | matrix | line 113: 租戶 viewer
+pass | PUT /api/assets/v1/devices/{device_id} | matrix | line 114: 租戶 editor
+pass | DELETE /api/assets/v1/devices/{device_id} | matrix | line 115: 租戶 editor
+pass | GET /api/assets/v1/platform/gateways | matrix | line 116: 平台管理員，本人
+pass | GET /api/assets/v1/platform/gateways/{hardware_id} | matrix | line 117: 平台管理員，本人
+pass | PUT /api/assets/v1/platform/gateways/{hardware_id}/binding | matrix | line 118: 平台管理員，本人
+pass | GET /api/assets/v1/tenant | without a token | 401 `unauthenticated`
+pass | GET /api/assets/v1/tenant | forged token | 401 `unauthenticated`
+pass | GET /api/assets/v1/tenant | token for another service | 401 `unauthenticated`
+pass | GET /api/assets/v1/tenant | no tenant | 403 `permission_denied`
+pass | GET /api/assets/v1/tenant | platform administrator without a tenant | 403 `permission_denied`
+pass | GET /api/assets/v1/tenant | tenant viewer | 404 `not_found`: past authorization
+pass | GET /api/assets/v1/tenant | tenant editor | 404 `not_found`: past authorization
+pass | GET /api/assets/v1/tenant | tenant admin | 404 `not_found`: past authorization
+pass | GET /api/assets/v1/tenant | tenant unrecognized role | 403 `permission_denied`
+pass | GET /api/assets/v1/tenant | tenant viewer, exchanged token | 404 `not_found`: past authorization
+pass | GET /api/assets/v1/device-models | without a token | 401 `unauthenticated`
+pass | GET /api/assets/v1/device-models | forged token | 401 `unauthenticated`
+pass | GET /api/assets/v1/device-models | token for another service | 401 `unauthenticated`
+pass | GET /api/assets/v1/device-models | no tenant | 403 `permission_denied`
+pass | GET /api/assets/v1/device-models | platform administrator without a tenant | 403 `permission_denied`
+pass | GET /api/assets/v1/device-models | tenant viewer | 200: past authorization
+pass | GET /api/assets/v1/device-models | tenant editor | 200: past authorization
+pass | GET /api/assets/v1/device-models | tenant admin | 200: past authorization
+pass | GET /api/assets/v1/device-models | tenant unrecognized role | 403 `permission_denied`
+pass | GET /api/assets/v1/device-models | tenant viewer, exchanged token | 200: past authorization
+pass | POST /api/assets/v1/device-models | without a token | 401 `unauthenticated`
+pass | POST /api/assets/v1/device-models | forged token | 401 `unauthenticated`
+pass | POST /api/assets/v1/device-models | token for another service | 401 `unauthenticated`
+pass | POST /api/assets/v1/device-models | no tenant | 403 `permission_denied`
+pass | POST /api/assets/v1/device-models | platform administrator without a tenant | 403 `permission_denied`
+pass | POST /api/assets/v1/device-models | tenant viewer | 403 `permission_denied`
+pass | POST /api/assets/v1/device-models | tenant editor | 400 `invalid_request`: past authorization
+pass | POST /api/assets/v1/device-models | tenant admin | 400 `invalid_request`: past authorization
+pass | POST /api/assets/v1/device-models | tenant unrecognized role | 403 `permission_denied`
+pass | POST /api/assets/v1/device-models | tenant editor, exchanged token | 400 `invalid_request`: past authorization
+pass | POST /api/assets/v1/device-models/import | without a token | 401 `unauthenticated`
+pass | POST /api/assets/v1/device-models/import | forged token | 401 `unauthenticated`
+pass | POST /api/assets/v1/device-models/import | token for another service | 401 `unauthenticated`
+pass | POST /api/assets/v1/device-models/import | no tenant | 403 `permission_denied`
+pass | POST /api/assets/v1/device-models/import | platform administrator without a tenant | 403 `permission_denied`
+pass | POST /api/assets/v1/device-models/import | tenant viewer | 403 `permission_denied`
+pass | POST /api/assets/v1/device-models/import | tenant editor | 400 `invalid_request`: past authorization
+pass | POST /api/assets/v1/device-models/import | tenant admin | 400 `invalid_request`: past authorization
+pass | POST /api/assets/v1/device-models/import | tenant unrecognized role | 403 `permission_denied`
+pass | POST /api/assets/v1/device-models/import | tenant editor, exchanged token | 400 `invalid_request`: past authorization
+pass | GET /api/assets/v1/device-models/{model_id} | without a token | 401 `unauthenticated`
+pass | GET /api/assets/v1/device-models/{model_id} | forged token | 401 `unauthenticated`
+pass | GET /api/assets/v1/device-models/{model_id} | token for another service | 401 `unauthenticated`
+pass | GET /api/assets/v1/device-models/{model_id} | no tenant | 403 `permission_denied`
+pass | GET /api/assets/v1/device-models/{model_id} | platform administrator without a tenant | 403 `permission_denied`
+pass | GET /api/assets/v1/device-models/{model_id} | tenant viewer | 404 `not_found`: past authorization
+pass | GET /api/assets/v1/device-models/{model_id} | tenant editor | 404 `not_found`: past authorization
+pass | GET /api/assets/v1/device-models/{model_id} | tenant admin | 404 `not_found`: past authorization
+pass | GET /api/assets/v1/device-models/{model_id} | tenant unrecognized role | 403 `permission_denied`
+pass | GET /api/assets/v1/device-models/{model_id} | tenant viewer, exchanged token | 404 `not_found`: past authorization
+pass | PUT /api/assets/v1/device-models/{model_id} | without a token | 401 `unauthenticated`
+pass | PUT /api/assets/v1/device-models/{model_id} | forged token | 401 `unauthenticated`
+pass | PUT /api/assets/v1/device-models/{model_id} | token for another service | 401 `unauthenticated`
+pass | PUT /api/assets/v1/device-models/{model_id} | no tenant | 403 `permission_denied`
+pass | PUT /api/assets/v1/device-models/{model_id} | platform administrator without a tenant | 403 `permission_denied`
+pass | PUT /api/assets/v1/device-models/{model_id} | tenant viewer | 403 `permission_denied`
+pass | PUT /api/assets/v1/device-models/{model_id} | tenant editor | 400 `invalid_request`: past authorization
+pass | PUT /api/assets/v1/device-models/{model_id} | tenant admin | 400 `invalid_request`: past authorization
+pass | PUT /api/assets/v1/device-models/{model_id} | tenant unrecognized role | 403 `permission_denied`
+pass | PUT /api/assets/v1/device-models/{model_id} | tenant editor, exchanged token | 400 `invalid_request`: past authorization
+pass | DELETE /api/assets/v1/device-models/{model_id} | without a token | 401 `unauthenticated`
+pass | DELETE /api/assets/v1/device-models/{model_id} | forged token | 401 `unauthenticated`
+pass | DELETE /api/assets/v1/device-models/{model_id} | token for another service | 401 `unauthenticated`
+pass | DELETE /api/assets/v1/device-models/{model_id} | no tenant | 403 `permission_denied`
+pass | DELETE /api/assets/v1/device-models/{model_id} | platform administrator without a tenant | 403 `permission_denied`
+pass | DELETE /api/assets/v1/device-models/{model_id} | tenant viewer | 403 `permission_denied`
+pass | DELETE /api/assets/v1/device-models/{model_id} | tenant editor | 404 `not_found`: past authorization
+pass | DELETE /api/assets/v1/device-models/{model_id} | tenant admin | 404 `not_found`: past authorization
+pass | DELETE /api/assets/v1/device-models/{model_id} | tenant unrecognized role | 403 `permission_denied`
+pass | DELETE /api/assets/v1/device-models/{model_id} | tenant editor, exchanged token | 404 `not_found`: past authorization
+pass | GET /api/assets/v1/device-models/{model_id}/export | without a token | 401 `unauthenticated`
+pass | GET /api/assets/v1/device-models/{model_id}/export | forged token | 401 `unauthenticated`
+pass | GET /api/assets/v1/device-models/{model_id}/export | token for another service | 401 `unauthenticated`
+pass | GET /api/assets/v1/device-models/{model_id}/export | no tenant | 403 `permission_denied`
+pass | GET /api/assets/v1/device-models/{model_id}/export | platform administrator without a tenant | 403 `permission_denied`
+pass | GET /api/assets/v1/device-models/{model_id}/export | tenant viewer | 404 `not_found`: past authorization
+pass | GET /api/assets/v1/device-models/{model_id}/export | tenant editor | 404 `not_found`: past authorization
+pass | GET /api/assets/v1/device-models/{model_id}/export | tenant admin | 404 `not_found`: past authorization
+pass | GET /api/assets/v1/device-models/{model_id}/export | tenant unrecognized role | 403 `permission_denied`
+pass | GET /api/assets/v1/device-models/{model_id}/export | tenant viewer, exchanged token | 404 `not_found`: past authorization
+pass | GET /api/assets/v1/devices | without a token | 401 `unauthenticated`
+pass | GET /api/assets/v1/devices | forged token | 401 `unauthenticated`
+pass | GET /api/assets/v1/devices | token for another service | 401 `unauthenticated`
+pass | GET /api/assets/v1/devices | no tenant | 403 `permission_denied`
+pass | GET /api/assets/v1/devices | platform administrator without a tenant | 403 `permission_denied`
+pass | GET /api/assets/v1/devices | tenant viewer | 200: past authorization
+pass | GET /api/assets/v1/devices | tenant editor | 200: past authorization
+pass | GET /api/assets/v1/devices | tenant admin | 200: past authorization
+pass | GET /api/assets/v1/devices | tenant unrecognized role | 403 `permission_denied`
+pass | GET /api/assets/v1/devices | tenant viewer, exchanged token | 200: past authorization
+pass | POST /api/assets/v1/devices | without a token | 401 `unauthenticated`
+pass | POST /api/assets/v1/devices | forged token | 401 `unauthenticated`
+pass | POST /api/assets/v1/devices | token for another service | 401 `unauthenticated`
+pass | POST /api/assets/v1/devices | no tenant | 403 `permission_denied`
+pass | POST /api/assets/v1/devices | platform administrator without a tenant | 403 `permission_denied`
+pass | POST /api/assets/v1/devices | tenant viewer | 403 `permission_denied`
+pass | POST /api/assets/v1/devices | tenant editor | 400 `invalid_request`: past authorization
+pass | POST /api/assets/v1/devices | tenant admin | 400 `invalid_request`: past authorization
+pass | POST /api/assets/v1/devices | tenant unrecognized role | 403 `permission_denied`
+pass | POST /api/assets/v1/devices | tenant editor, exchanged token | 400 `invalid_request`: past authorization
+pass | GET /api/assets/v1/devices/{device_id} | without a token | 401 `unauthenticated`
+pass | GET /api/assets/v1/devices/{device_id} | forged token | 401 `unauthenticated`
+pass | GET /api/assets/v1/devices/{device_id} | token for another service | 401 `unauthenticated`
+pass | GET /api/assets/v1/devices/{device_id} | no tenant | 403 `permission_denied`
+pass | GET /api/assets/v1/devices/{device_id} | platform administrator without a tenant | 403 `permission_denied`
+pass | GET /api/assets/v1/devices/{device_id} | tenant viewer | 404 `not_found`: past authorization
+pass | GET /api/assets/v1/devices/{device_id} | tenant editor | 404 `not_found`: past authorization
+pass | GET /api/assets/v1/devices/{device_id} | tenant admin | 404 `not_found`: past authorization
+pass | GET /api/assets/v1/devices/{device_id} | tenant unrecognized role | 403 `permission_denied`
+pass | GET /api/assets/v1/devices/{device_id} | tenant viewer, exchanged token | 404 `not_found`: past authorization
+pass | PUT /api/assets/v1/devices/{device_id} | without a token | 401 `unauthenticated`
+pass | PUT /api/assets/v1/devices/{device_id} | forged token | 401 `unauthenticated`
+pass | PUT /api/assets/v1/devices/{device_id} | token for another service | 401 `unauthenticated`
+pass | PUT /api/assets/v1/devices/{device_id} | no tenant | 403 `permission_denied`
+pass | PUT /api/assets/v1/devices/{device_id} | platform administrator without a tenant | 403 `permission_denied`
+pass | PUT /api/assets/v1/devices/{device_id} | tenant viewer | 403 `permission_denied`
+pass | PUT /api/assets/v1/devices/{device_id} | tenant editor | 400 `invalid_request`: past authorization
+pass | PUT /api/assets/v1/devices/{device_id} | tenant admin | 400 `invalid_request`: past authorization
+pass | PUT /api/assets/v1/devices/{device_id} | tenant unrecognized role | 403 `permission_denied`
+pass | PUT /api/assets/v1/devices/{device_id} | tenant editor, exchanged token | 400 `invalid_request`: past authorization
+pass | DELETE /api/assets/v1/devices/{device_id} | without a token | 401 `unauthenticated`
+pass | DELETE /api/assets/v1/devices/{device_id} | forged token | 401 `unauthenticated`
+pass | DELETE /api/assets/v1/devices/{device_id} | token for another service | 401 `unauthenticated`
+pass | DELETE /api/assets/v1/devices/{device_id} | no tenant | 403 `permission_denied`
+pass | DELETE /api/assets/v1/devices/{device_id} | platform administrator without a tenant | 403 `permission_denied`
+pass | DELETE /api/assets/v1/devices/{device_id} | tenant viewer | 403 `permission_denied`
+pass | DELETE /api/assets/v1/devices/{device_id} | tenant editor | 404 `not_found`: past authorization
+pass | DELETE /api/assets/v1/devices/{device_id} | tenant admin | 404 `not_found`: past authorization
+pass | DELETE /api/assets/v1/devices/{device_id} | tenant unrecognized role | 403 `permission_denied`
+pass | DELETE /api/assets/v1/devices/{device_id} | tenant editor, exchanged token | 404 `not_found`: past authorization
+pass | GET /api/assets/v1/platform/gateways | without a token | 401 `unauthenticated`
+pass | GET /api/assets/v1/platform/gateways | forged token | 401 `unauthenticated`
+pass | GET /api/assets/v1/platform/gateways | token for another service | 401 `unauthenticated`
+pass | GET /api/assets/v1/platform/gateways | no tenant | 403 `permission_denied`
+pass | GET /api/assets/v1/platform/gateways | tenant viewer | 403 `permission_denied`
+pass | GET /api/assets/v1/platform/gateways | tenant editor | 403 `permission_denied`
+pass | GET /api/assets/v1/platform/gateways | tenant admin | 403 `permission_denied`
+pass | GET /api/assets/v1/platform/gateways | tenant unrecognized role | 403 `permission_denied`
+pass | GET /api/assets/v1/platform/gateways | platform administrator, exchanged token | 403 `permission_denied`
+pass | GET /api/assets/v1/platform/gateways | platform administrator | 200: past authorization
+pass | GET /api/assets/v1/platform/gateways/{hardware_id} | without a token | 401 `unauthenticated`
+pass | GET /api/assets/v1/platform/gateways/{hardware_id} | forged token | 401 `unauthenticated`
+pass | GET /api/assets/v1/platform/gateways/{hardware_id} | token for another service | 401 `unauthenticated`
+pass | GET /api/assets/v1/platform/gateways/{hardware_id} | no tenant | 403 `permission_denied`
+pass | GET /api/assets/v1/platform/gateways/{hardware_id} | tenant viewer | 403 `permission_denied`
+pass | GET /api/assets/v1/platform/gateways/{hardware_id} | tenant editor | 403 `permission_denied`
+pass | GET /api/assets/v1/platform/gateways/{hardware_id} | tenant admin | 403 `permission_denied`
+pass | GET /api/assets/v1/platform/gateways/{hardware_id} | tenant unrecognized role | 403 `permission_denied`
+pass | GET /api/assets/v1/platform/gateways/{hardware_id} | platform administrator, exchanged token | 403 `permission_denied`
+pass | GET /api/assets/v1/platform/gateways/{hardware_id} | platform administrator | 404 `not_found`: past authorization
+pass | PUT /api/assets/v1/platform/gateways/{hardware_id}/binding | without a token | 401 `unauthenticated`
+pass | PUT /api/assets/v1/platform/gateways/{hardware_id}/binding | forged token | 401 `unauthenticated`
+pass | PUT /api/assets/v1/platform/gateways/{hardware_id}/binding | token for another service | 401 `unauthenticated`
+pass | PUT /api/assets/v1/platform/gateways/{hardware_id}/binding | no tenant | 403 `permission_denied`
+pass | PUT /api/assets/v1/platform/gateways/{hardware_id}/binding | tenant viewer | 403 `permission_denied`
+pass | PUT /api/assets/v1/platform/gateways/{hardware_id}/binding | tenant editor | 403 `permission_denied`
+pass | PUT /api/assets/v1/platform/gateways/{hardware_id}/binding | tenant admin | 403 `permission_denied`
+pass | PUT /api/assets/v1/platform/gateways/{hardware_id}/binding | tenant unrecognized role | 403 `permission_denied`
+pass | PUT /api/assets/v1/platform/gateways/{hardware_id}/binding | platform administrator, exchanged token | 403 `permission_denied`
+pass | PUT /api/assets/v1/platform/gateways/{hardware_id}/binding | platform administrator | 400 `invalid_request`: past authorization
+192 probes, 0 failed
+test every_operation_admits_exactly_its_declared_callers_and_refusals_write_nothing ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.95s
+
+     Running tests/permissions.rs (<host copy>/target/debug/deps/permissions-a2a9f6db0ee8b8fd)
+
+running 2 tests
+result | subject | probe | outcome
+pass | GET /api/telemetry/v1/devices/{device_id}/latest | coverage | declared
+pass | GET /api/telemetry/v1/devices/{device_id}/series | coverage | declared
+pass | POST /api/telemetry/v1/statistics | coverage | declared
+pass | POST /api/telemetry/v1/usage | coverage | declared
+pass | GET /api/telemetry/v1/devices/{device_id}/series | matrix | line 130: 租戶 viewer
+pass | GET /api/telemetry/v1/devices/{device_id}/latest | matrix | line 131: 租戶 viewer
+pass | POST /api/telemetry/v1/statistics | matrix | line 132: 租戶 viewer
+pass | POST /api/telemetry/v1/usage | matrix | line 133: 租戶 viewer
+8 probes, 0 failed
+test the_matrix_document_matches_the_declarations ... ok
+result | subject | probe | outcome
+pass | GET /api/telemetry/v1/devices/{device_id}/latest | coverage | declared
+pass | GET /api/telemetry/v1/devices/{device_id}/series | coverage | declared
+pass | POST /api/telemetry/v1/statistics | coverage | declared
+pass | POST /api/telemetry/v1/usage | coverage | declared
+pass | GET /api/telemetry/v1/devices/{device_id}/series | matrix | line 130: 租戶 viewer
+pass | GET /api/telemetry/v1/devices/{device_id}/latest | matrix | line 131: 租戶 viewer
+pass | POST /api/telemetry/v1/statistics | matrix | line 132: 租戶 viewer
+pass | POST /api/telemetry/v1/usage | matrix | line 133: 租戶 viewer
+pass | GET /api/telemetry/v1/devices/{device_id}/series | without a token | 401 `unauthenticated`
+pass | GET /api/telemetry/v1/devices/{device_id}/series | forged token | 401 `unauthenticated`
+pass | GET /api/telemetry/v1/devices/{device_id}/series | token for another service | 401 `unauthenticated`
+pass | GET /api/telemetry/v1/devices/{device_id}/series | no tenant | 403 `permission_denied`
+pass | GET /api/telemetry/v1/devices/{device_id}/series | platform administrator without a tenant | 403 `permission_denied`
+pass | GET /api/telemetry/v1/devices/{device_id}/series | tenant viewer | 400 `invalid_request`: past authorization
+pass | GET /api/telemetry/v1/devices/{device_id}/series | tenant editor | 400 `invalid_request`: past authorization
+pass | GET /api/telemetry/v1/devices/{device_id}/series | tenant admin | 400 `invalid_request`: past authorization
+pass | GET /api/telemetry/v1/devices/{device_id}/series | tenant unrecognized role | 403 `permission_denied`
+pass | GET /api/telemetry/v1/devices/{device_id}/series | tenant viewer, exchanged token | 400 `invalid_request`: past authorization
+pass | GET /api/telemetry/v1/devices/{device_id}/latest | without a token | 401 `unauthenticated`
+pass | GET /api/telemetry/v1/devices/{device_id}/latest | forged token | 401 `unauthenticated`
+pass | GET /api/telemetry/v1/devices/{device_id}/latest | token for another service | 401 `unauthenticated`
+pass | GET /api/telemetry/v1/devices/{device_id}/latest | no tenant | 403 `permission_denied`
+pass | GET /api/telemetry/v1/devices/{device_id}/latest | platform administrator without a tenant | 403 `permission_denied`
+pass | GET /api/telemetry/v1/devices/{device_id}/latest | tenant viewer | 404 `not_found`: past authorization
+pass | GET /api/telemetry/v1/devices/{device_id}/latest | tenant editor | 404 `not_found`: past authorization
+pass | GET /api/telemetry/v1/devices/{device_id}/latest | tenant admin | 404 `not_found`: past authorization
+pass | GET /api/telemetry/v1/devices/{device_id}/latest | tenant unrecognized role | 403 `permission_denied`
+pass | GET /api/telemetry/v1/devices/{device_id}/latest | tenant viewer, exchanged token | 404 `not_found`: past authorization
+pass | POST /api/telemetry/v1/statistics | without a token | 401 `unauthenticated`
+pass | POST /api/telemetry/v1/statistics | forged token | 401 `unauthenticated`
+pass | POST /api/telemetry/v1/statistics | token for another service | 401 `unauthenticated`
+pass | POST /api/telemetry/v1/statistics | no tenant | 403 `permission_denied`
+pass | POST /api/telemetry/v1/statistics | platform administrator without a tenant | 403 `permission_denied`
+pass | POST /api/telemetry/v1/statistics | tenant viewer | 400 `invalid_request`: past authorization
+pass | POST /api/telemetry/v1/statistics | tenant editor | 400 `invalid_request`: past authorization
+pass | POST /api/telemetry/v1/statistics | tenant admin | 400 `invalid_request`: past authorization
+pass | POST /api/telemetry/v1/statistics | tenant unrecognized role | 403 `permission_denied`
+pass | POST /api/telemetry/v1/statistics | tenant viewer, exchanged token | 400 `invalid_request`: past authorization
+pass | POST /api/telemetry/v1/usage | without a token | 401 `unauthenticated`
+pass | POST /api/telemetry/v1/usage | forged token | 401 `unauthenticated`
+pass | POST /api/telemetry/v1/usage | token for another service | 401 `unauthenticated`
+pass | POST /api/telemetry/v1/usage | no tenant | 403 `permission_denied`
+pass | POST /api/telemetry/v1/usage | platform administrator without a tenant | 403 `permission_denied`
+pass | POST /api/telemetry/v1/usage | tenant viewer | 400 `invalid_request`: past authorization
+pass | POST /api/telemetry/v1/usage | tenant editor | 400 `invalid_request`: past authorization
+pass | POST /api/telemetry/v1/usage | tenant admin | 400 `invalid_request`: past authorization
+pass | POST /api/telemetry/v1/usage | tenant unrecognized role | 403 `permission_denied`
+pass | POST /api/telemetry/v1/usage | tenant viewer, exchanged token | 400 `invalid_request`: past authorization
+48 probes, 0 failed
+test every_operation_admits_exactly_its_declared_callers ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.16s
+
+test identity::permission::tests::every_denial_answers_the_same_403 ... ok
+test identity::permission::tests::require_reports_the_denial_and_passes_what_meets_it ... ok
+test identity::permission::tests::an_own_request_refuses_exchanged_tokens_only ... ok
+test identity::permission::tests::a_platform_administrators_own_request_only ... ok
+test identity::permission::tests::an_unrecognized_role_no_tenant_or_a_platform_administrator_gets_no_tenant_rights ... ok
+test identity::permission::tests::a_tenant_role_admits_that_role_and_the_ones_above ... ok
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 109 filtered out; finished in 0.01s
+test permissions::tests::declarations_parse_method_and_path ... ok
+test permissions::tests::a_section_reads_its_own_table_only ... ok
+test permissions::tests::path_parameters_become_uuids ... ok
+test permissions::tests::judging_is_exact_about_401_and_403 ... ok
+test permissions::tests::a_known_gap_expects_the_exchanged_token_through ... ok
+test permissions::tests::a_malformed_table_is_refused ... ok
+test permissions::tests::the_spec_coverage_finds_what_is_missing_twice_or_gone ... ok
+test permissions::tests::the_repository_matrix_has_the_header_in_every_section ... ok
+test permissions::tests::each_requirement_has_its_probes ... ok
+test permissions::tests::the_matrix_covers_every_operation_of_the_api_spec ... ok
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 42 filtered out; finished in 0.00s
+exit 0 at 01:25:26 (build host)

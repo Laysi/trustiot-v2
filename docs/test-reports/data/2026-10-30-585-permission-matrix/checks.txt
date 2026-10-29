@@ -1,0 +1,73 @@
+# 完整檢查（建置主機（arm64 Linux VM），commit 64d6eb21 的樹，CI=1）
+# 最後的 exit 1 來自腳本最後一行 grep "FAILED|panicked" 在 ws.log 沒有找到任何一行；各指令的結束碼見 probes exit 與 workspace exit。
+
+== fmt
+== clippy workspace
+    Checking mqtt-client v0.1.0 (<host copy>/src/crates/mqtt-client)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 10.29s
+== clippy service-kit no-default
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.08s
+== openapi check
+api/openapi.json is up to date
+== probes
+probes exit=0
+     Running tests/permissions.rs (<host copy>/target/debug/deps/permissions-460d60fb38337c89)
+32 probes, 0 failed
+192 probes, 0 failed
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.33s
+     Running tests/permissions.rs (<host copy>/target/debug/deps/permissions-0e0da7d92ed5b7a2)
+6 probes, 0 failed
+36 probes, 0 failed
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.60s
+     Running tests/permissions.rs (<host copy>/target/debug/deps/permissions-dc268b08a5d9a607)
+30 probes, 0 failed
+141 probes, 0 failed
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.76s
+     Running tests/permissions.rs (<host copy>/target/debug/deps/permissions-e773d703b8f8a2c2)
+8 probes, 0 failed
+48 probes, 0 failed
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.10s
+== service-kit/testkit units
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 109 filtered out; finished in 0.01s
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 42 filtered out; finished in 0.00s
+== workspace
+workspace exit=0
+245
+passed 1935 failed 0 ignored 1
+exit 1 at 01:24:44 (build host)
+
+# 本機
+bun run --cwd frontend api:check: passed
+bun test scripts/ci/changes.test.ts: 283 pass, 0 fail
+bun scripts/ci/check-workflows.ts: workflow policy: 4 file(s) checked, no violations
+bun scripts/ci/check-secret-handling.ts: secret handling: 546 file(s) checked, 7 container build file(s), no violations
+
+# 反例：把 services/assets/src/tenants.rs、services/telemetry-query/src/history.rs 與 semantic/mod.rs 的修正反向套用（git apply -R），其餘不變
+# cargo test --locked --no-fail-fast -p assets -p telemetry-query --test permissions -- --nocapture
+cargo test exit=101
+     Running tests/permissions.rs (<host copy>/target/debug/deps/permissions-d5922d33292bb603)
+32 probes, 0 failed
+FAIL | GET /api/assets/v1/tenant | tenant unrecognized role | expected 403 `permission_denied` (`租戶 viewer` refuses this caller), got 404 `not_found`
+192 probes, 1 failed
+thread 'every_operation_admits_exactly_its_declared_callers_and_refusals_write_nothing' (1311150) panicked at crates/testkit/src/isolation.rs:629:9:
+the assets service's permission matrix failed (1 of 192 probes):
+test every_operation_admits_exactly_its_declared_callers_and_refusals_write_nothing ... FAILED
+test result: FAILED. 1 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.47s
+     Running tests/permissions.rs (<host copy>/target/debug/deps/permissions-a2a9f6db0ee8b8fd)
+8 probes, 0 failed
+FAIL | GET /api/telemetry/v1/devices/{device_id}/series | no tenant | expected 403 `permission_denied` (`租戶 viewer` refuses this caller), got 400 `invalid_request`
+FAIL | GET /api/telemetry/v1/devices/{device_id}/series | platform administrator without a tenant | expected 403 `permission_denied` (`租戶 viewer` refuses this caller), got 400 `invalid_request`
+FAIL | GET /api/telemetry/v1/devices/{device_id}/series | tenant unrecognized role | expected 403 `permission_denied` (`租戶 viewer` refuses this caller), got 400 `invalid_request`
+FAIL | GET /api/telemetry/v1/devices/{device_id}/latest | tenant unrecognized role | expected 403 `permission_denied` (`租戶 viewer` refuses this caller), got 404 `not_found`
+FAIL | POST /api/telemetry/v1/statistics | no tenant | expected 403 `permission_denied` (`租戶 viewer` refuses this caller), got 400 `invalid_request`
+FAIL | POST /api/telemetry/v1/statistics | platform administrator without a tenant | expected 403 `permission_denied` (`租戶 viewer` refuses this caller), got 400 `invalid_request`
+FAIL | POST /api/telemetry/v1/statistics | tenant unrecognized role | expected 403 `permission_denied` (`租戶 viewer` refuses this caller), got 400 `invalid_request`
+FAIL | POST /api/telemetry/v1/usage | no tenant | expected 403 `permission_denied` (`租戶 viewer` refuses this caller), got 400 `invalid_request`
+FAIL | POST /api/telemetry/v1/usage | platform administrator without a tenant | expected 403 `permission_denied` (`租戶 viewer` refuses this caller), got 400 `invalid_request`
+FAIL | POST /api/telemetry/v1/usage | tenant unrecognized role | expected 403 `permission_denied` (`租戶 viewer` refuses this caller), got 400 `invalid_request`
+48 probes, 10 failed
+thread 'every_operation_admits_exactly_its_declared_callers' (1311404) panicked at crates/testkit/src/isolation.rs:629:9:
+the telemetry-query service's permission matrix failed (10 of 48 probes):
+test every_operation_admits_exactly_its_declared_callers ... FAILED
+test result: FAILED. 1 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.26s
+exit 0 at 00:58:11 (build host)
