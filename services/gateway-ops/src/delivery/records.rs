@@ -18,14 +18,35 @@ ON CONFLICT (tenant_id, hardware_id, version) DO UPDATE
     SET last_published_at = EXCLUDED.last_published_at,
         first_published_at = COALESCE(stored.first_published_at, EXCLUDED.first_published_at)";
 
-/// Records the gateway's latest report about a version. `$1` tenant, `$2` hardware ID, `$3`
-/// version, `$4` outcome, `$5` active version, `$6` issues (JSON array).
+/// How long a report that is the same as the one stored for its version (outcome, active
+/// version and issues) is not written again: a gateway repeating itself costs one write per
+/// window, on whichever replica its reports arrive.
+pub const REPEAT_WINDOW_SECONDS: f64 = 60.0;
+
+/// Records the gateway's latest report about a version, unless the stored report is the same
+/// and was written less than `$7` seconds ago; returns a row only when it wrote. `$1` tenant,
+/// `$2` hardware ID, `$3` version, `$4` outcome, `$5` active version, `$6` issues (JSON
+/// array). The check is part of the write, so it holds across replicas.
 const REPORTED: &str = "INSERT INTO gateway_ops.config_deliveries AS stored
     (tenant_id, hardware_id, version, outcome, active_version, issues, reported_at)
 VALUES ($1::uuid, $2, $3, $4, $5, $6::jsonb, now())
 ON CONFLICT (tenant_id, hardware_id, version) DO UPDATE
     SET outcome = EXCLUDED.outcome, active_version = EXCLUDED.active_version,
-        issues = EXCLUDED.issues, reported_at = EXCLUDED.reported_at";
+        issues = EXCLUDED.issues, reported_at = EXCLUDED.reported_at
+    WHERE NOT (stored.outcome IS NOT DISTINCT FROM EXCLUDED.outcome
+        AND stored.active_version IS NOT DISTINCT FROM EXCLUDED.active_version
+        AND stored.issues IS NOT DISTINCT FROM EXCLUDED.issues
+        AND stored.reported_at > now() - make_interval(secs => $7))
+RETURNING 1";
+
+/// What [`Records::reported`] did.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Reported {
+    /// The report was written.
+    Written,
+    /// The same report was written less than [`REPEAT_WINDOW_SECONDS`] ago: nothing changed.
+    Repeat,
+}
 
 /// Why a row could not be written.
 #[derive(Debug, thiserror::Error)]
@@ -87,7 +108,7 @@ impl Records {
     }
 
     /// Records `report` (an applied or rejected outcome) of `gateway` about a version of
-    /// `tenant`.
+    /// `tenant`, unless it repeats the stored one within the window; see [`Reported`].
     ///
     /// # Errors
     ///
@@ -97,25 +118,30 @@ impl Records {
         tenant: TenantId,
         gateway: &GatewayId,
         report: &ConfigReport,
-    ) -> Result<(), RecordError> {
+    ) -> Result<Reported, RecordError> {
         let outcome = match report.outcome {
             ConfigOutcome::Applied => "applied",
             ConfigOutcome::Rejected => "rejected",
             // Refused before it gets here (crate::delivery::reports).
-            ConfigOutcome::Other(_) => return Ok(()),
+            ConfigOutcome::Other(_) => return Ok(Reported::Repeat),
         };
         let issues = serde_json::to_string(&report.issues).map_err(|_| RecordError::Issues)?;
         let mut tx = self.db.begin(tenant, WRITE_PURPOSE).await?;
-        sqlx::query(REPORTED)
+        let written: Option<i32> = sqlx::query_scalar(REPORTED)
             .bind(tenant.to_string())
             .bind(gateway.as_str())
             .bind(version_column(report.version))
             .bind(outcome)
             .bind(report.active_version.map(version_column))
             .bind(issues)
-            .execute(&mut *tx)
+            .bind(REPEAT_WINDOW_SECONDS)
+            .fetch_optional(&mut *tx)
             .await?;
         tx.commit().await?;
-        Ok(())
+        Ok(if written.is_some() {
+            Reported::Written
+        } else {
+            Reported::Repeat
+        })
     }
 }

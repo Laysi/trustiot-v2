@@ -21,7 +21,7 @@ use std::time::Duration;
 
 use contract::{DeviceId, DeviceModelId, GatewayBindingId, ServiceName, TenantId};
 use gateway_ops::config::MIN_DATABASE_CONNECTIONS;
-use gateway_ops::delivery::records::Records;
+use gateway_ops::delivery::records::{Records, Reported};
 use gateway_ops::delivery::{
     Delivery, DeliveryHandle, LOCK_SERVICE, Parts, REPUBLISH_JOB, publish_lock_key,
 };
@@ -671,6 +671,37 @@ async fn apply_reports_are_recorded_under_the_topics_gateway_and_unreasonable_on
         "the gateway named in the payload has no report: {other_rows:?}"
     );
 
+    // The same report again within the window: neither written nor logged again.
+    // (A report sent while the gateway's previous one still waits replaces it in the inbox.)
+    let before_repeats = running.handle.counts();
+    for _ in 0..3 {
+        gateway
+            .report(&bound.gateway, encode(&ConfigReport::applied(v2)))
+            .await;
+    }
+    let repeats = running
+        .wait_counts("the repeated reports handled", |counts| {
+            counts.reports_repeated > before_repeats.reports_repeated
+                && (counts.reports_repeated - before_repeats.reports_repeated)
+                    + (counts.reports_superseded - before_repeats.reports_superseded)
+                    >= 3
+        })
+        .await;
+    assert_eq!(running.handle.counts().reports_recorded, expect_recorded);
+    assert_eq!(capture.messages("apply report recorded").len(), 2);
+    // Another replica's writer finds it written too: the check is part of the write.
+    let (_, background) = TenantDb::connect_lazy_with_background(
+        product.postgres.options("gateway_ops_app", DATABASE),
+        PgPoolOptions::new().max_connections(1),
+        ServiceIdentity::new(ServiceName::GatewayOps),
+    )
+    .expect("another replica's pool");
+    let other_replica = Records::new(background)
+        .reported(bound.tenant, &bound.gateway, &ConfigReport::applied(v2))
+        .await
+        .expect("the other replica's write");
+    assert_eq!(other_replica, Reported::Repeat);
+
     // Unreasonable reports are refused and change nothing.
     let unknown = hardware_id("go-report-unknown");
     let refusals: [(&str, &GatewayId, Vec<u8>); 4] = [
@@ -755,12 +786,15 @@ async fn apply_reports_are_recorded_under_the_topics_gateway_and_unreasonable_on
     let recorded_logs = capture.messages("apply report recorded");
     running.stop().await;
     println!(
-        "evidence: recorded {:?}; refused reasons {reasons:?}; stale report of version 2 -> \
+        "evidence: recorded {:?}; the same applied report 3 more times: {} not written again, \
+         {} replaced in the inbox; refused reasons {reasons:?}; stale report of version 2 -> \
          version {:?} published again; config_deliveries: {rows:?}",
         recorded_logs
             .iter()
             .map(|fields| (fields["hardware_id"].clone(), fields["outcome"].clone()))
             .collect::<Vec<_>>(),
+        repeats.reports_repeated - before_repeats.reports_repeated,
+        repeats.reports_superseded - before_repeats.reports_superseded,
         published.version.map(ConfigVersion::get)
     );
 }

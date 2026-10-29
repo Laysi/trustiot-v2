@@ -66,7 +66,7 @@ use tokio::task::JoinSet;
 use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
 
-use self::records::{RecordError, Records};
+use self::records::{RecordError, Records, Reported};
 use self::reports::{
     Inbox, LogBudget, Offered, Pending, Received, Refusal, Retried, check_message, judge,
 };
@@ -168,6 +168,9 @@ pub struct Counts {
     pub reports_recorded: u64,
     /// Reports refused.
     pub reports_refused: u64,
+    /// Accepted reports not written again: the same report about the same version was written
+    /// less than `records::REPEAT_WINDOW_SECONDS` before, by any replica.
+    pub reports_repeated: u64,
     /// Reports whose handling failed for a database error and wait for a retry.
     pub reports_retried: u64,
     /// Reports never handled because a later report of the same gateway took their place.
@@ -187,6 +190,7 @@ struct Counters {
     republish_skipped: AtomicU64,
     reports_recorded: AtomicU64,
     reports_refused: AtomicU64,
+    reports_repeated: AtomicU64,
     reports_retried: AtomicU64,
     reports_superseded: AtomicU64,
     reports_lost: AtomicU64,
@@ -208,6 +212,7 @@ impl Counters {
             republish_skipped: get(&self.republish_skipped),
             reports_recorded: get(&self.reports_recorded),
             reports_refused: get(&self.reports_refused),
+            reports_repeated: get(&self.reports_repeated),
             reports_retried: get(&self.reports_retried),
             reports_superseded: get(&self.reports_superseded),
             reports_lost: get(&self.reports_lost),
@@ -224,6 +229,7 @@ struct Metrics {
     republish_runs: Counter<u64>,
     reports: Counter<u64>,
     refused_reports: Counter<u64>,
+    repeated_reports: Counter<u64>,
     unhandled_reports: Counter<u64>,
 }
 
@@ -256,6 +262,13 @@ impl Metrics {
             refused_reports: meter
                 .u64_counter("gateway_ops.reports.refused")
                 .with_description("Apply reports refused, by reason")
+                .build(),
+            repeated_reports: meter
+                .u64_counter("gateway_ops.reports.repeated")
+                .with_description(
+                    "Accepted apply reports not written again: the same report about the same \
+                     version was written within the window",
+                )
                 .build(),
             unhandled_reports: meter
                 .u64_counter("gateway_ops.reports.unhandled")
@@ -1198,7 +1211,15 @@ impl Inner {
             return true;
         };
         match self.records.reported(tenant, gateway, report).await {
-            Ok(()) => {
+            // The same report again (a gateway that repeats itself, or floods), on this replica
+            // or another: written and logged once per window. The republish above still follows
+            // every report.
+            Ok(Reported::Repeat) => {
+                add(&self.counters.reports_repeated);
+                self.metrics.repeated_reports.add(1, &[]);
+                true
+            }
+            Ok(Reported::Written) => {
                 add(&self.counters.reports_recorded);
                 self.metrics
                     .reports
