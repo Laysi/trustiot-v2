@@ -178,6 +178,7 @@ Laysi/trustiot-v2#551（2026-10-23 決定，決策 27 的補充）：AI 助理�
 | 沒有有效的內部身分 token | 401 `unauthenticated` |
 | `DELETE /api/identity/v1/sessions/current` 沒有可用的 session cookie | 401 `unauthenticated` |
 | `DELETE /api/identity/v1/sessions/current` | 204，撤銷這個 cookie 的 session（必須屬於 token 的使用者），清除 cookie |
+| `DELETE /api/identity/v1/sessions`（登出所有裝置），token 是別的服務換來的（帶 `act`） | 403 `permission_denied`，什麼都沒有撤銷，不清除 cookie：只接受使用者本人的請求（Laysi/trustiot-v2#760，2026-10-30 決定），否則任何能代使用者呼叫的服務都能替使用者登出所有裝置；INFO `refused to log out everywhere`，帶 `user_id`、`reason` 與呼叫的服務 |
 | `DELETE /api/identity/v1/sessions`（登出所有裝置） | 204，撤銷這個使用者所有還沒結束的 session（包括這個），清除 cookie |
 | 資料庫出錯 | 503 `unavailable`，什麼都沒有撤銷 |
 
@@ -208,7 +209,7 @@ ext_authz 每個請求都查資料庫，所以被撤銷的 session 下一個請�
 | 請求 | 回應 |
 | --- | --- |
 | 沒有有效的內部身分 token | 401 `unauthenticated` |
-| 不是平台管理者（租戶的 `admin` 也不是） | 403 `permission_denied` |
+| 不是平台管理者（租戶的 `admin` 也不是），或 token 帶 `act` | 403 `permission_denied`，在解析 body 與讀資料庫之前判斷，什麼都沒有建立 |
 | `Content-Type` 不是 `application/json`（可帶 `; charset=utf-8` 之類的參數），或沒有 `Content-Type` | 400 `invalid_request` |
 | body 不是帶字串 `name` 的 JSON 物件 | 400 `invalid_request` |
 | `name` 去掉前後空白後是空的、超過 100 個字元，或含 Unicode 一般類別 Cc（控制字元）、Cf（格式字元：零寬字元、雙向文字的覆寫與隔離、BOM）、Zl、Zp（行與段落分隔符）的字元 | 422 `validation_failed`，欄位 `/name`，訊息 key `tenant.name_invalid`，`{"max": 100}` |
@@ -216,7 +217,7 @@ ext_authz 每個請求都查資料庫，所以被撤銷的 session 下一個請�
 
 | 建立了 | 201，`{"tenant_id", "name", "created_at"}` |
 
-建立租戶目前只檢查平台管理者，也接受其他服務換發、帶 `act` 的 token，與 Laysi/trustiot-v2#104 2026-10-23 的決定（平台管理員的動作只接受本人的請求）不符；這是[權限矩陣](../../docs/architecture/permissions.md)列出的已知落差，修正另行追蹤。
+建立租戶只接受平台管理者本人的請求（Laysi/trustiot-v2#104 2026-10-23 的決定，Laysi/trustiot-v2#760 起程式照做）：其他服務換發、帶 `act` 的 token 一律 403，與[成員](#成員)相同，INFO 記 `refused to create a tenant`，帶 `user_id` 與 `exchanged`。[權限矩陣](../../docs/architecture/permissions.md)沒有這一列的已知落差。
 
 - 呼叫路徑和其他 API 一樣經過入口：cookie 由這個服務自己的 ext_authz 換成內部身分 token，路由 `/api/identity` 的受眾是 `identity`；平台管理者不必屬於任何租戶，所以 token 沒有 `tenant` 也可以建立。給其他服務的 token（受眾不是 `identity`）回 401。
 - **以 cookie 認證的寫入一律要求 JSON 的 `Content-Type`**（防 CSRF）：入口把 cookie 換成呼叫者的身分，而別的 origin 的網頁也能讓瀏覽器帶著 cookie 送出 POST，但沒有 CORS preflight 時只能用表單（`application/x-www-form-urlencoded`、`multipart/form-data`）或 `text/plain`。要求 `application/json` 會讓跨 origin 的請求必須先經 preflight，而入口與服務都沒有 CORS 設定、不允許任何 preflight，所以這種網頁無法用管理者的 cookie 建立租戶。日後若加 CORS，不可對外部 origin 允許帶 cookie 的請求。之後每個以 cookie 認證的寫入 API 都照這個規則；登入與登出（Laysi/trustiot-v2#103）也照這個規則，cookie 另設 `SameSite=Lax`（見[登入](#登入)）。
