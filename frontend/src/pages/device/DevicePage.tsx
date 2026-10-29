@@ -185,7 +185,7 @@ function DeviceHeader({
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="grid min-w-0 gap-1">
           <p className="text-sm font-medium text-muted-foreground">{t("device.eyebrow")}</p>
-          <h1 className="font-mono text-2xl font-semibold tracking-tight break-all">{device.name}</h1>
+          <h1 className="font-mono text-2xl font-semibold tracking-tight wrap-anywhere">{device.name}</h1>
         </div>
         <div className="flex items-center gap-3">
           <p role="status" className="text-sm text-muted-foreground">
@@ -205,7 +205,7 @@ function DeviceHeader({
         {facts.map((fact) => (
           <div key={fact.label} className="grid min-w-0 gap-0.5">
             <dt className="text-muted-foreground">{fact.label}</dt>
-            <dd className={fact.mono ? "font-mono break-all" : "break-words"}>{fact.value}</dd>
+            <dd className={fact.mono ? "font-mono wrap-anywhere" : "wrap-anywhere"}>{fact.value}</dd>
           </div>
         ))}
       </dl>

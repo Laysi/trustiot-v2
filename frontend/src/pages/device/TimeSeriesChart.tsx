@@ -138,7 +138,7 @@ export function TimeSeriesChart(props: TimeSeriesChartProps) {
   const valueIndex = active ?? data.length - 1;
   const valueDatum = data[valueIndex];
   return (
-    <div className="grid gap-2">
+    <div className="grid min-w-0 gap-2">
       <p aria-hidden="true" className="min-h-5 text-sm tabular-nums">
         {selected ? props.describe(selected) : <span className="text-muted-foreground">{props.hint}</span>}
       </p>
@@ -155,15 +155,17 @@ export function TimeSeriesChart(props: TimeSeriesChartProps) {
         onKeyDown={onKeyDown}
         onFocus={() => setActive((current) => current ?? (data.length > 0 ? data.length - 1 : null))}
         onBlur={() => setActive(null)}
-        className={cn("w-full rounded-md", focusRing)}
+        className={cn("w-full min-w-0 rounded-md", focusRing)}
       >
+        {/* Sized by CSS (w-full), not by a width attribute: a replaced element with a percentage
+            width adds nothing to its parents' minimum width, so the measured width follows the
+            layout instead of holding it open at the first measurement. */}
         <svg
           ref={svg}
-          width={width}
           height={HEIGHT}
           aria-hidden="true"
           data-testid="history-chart"
-          className="block touch-pan-y select-none"
+          className="block w-full touch-pan-y select-none"
           onPointerMove={onPointerMove}
           onPointerDown={onPointerMove}
           onPointerLeave={() => setActive(null)}

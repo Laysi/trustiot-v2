@@ -106,7 +106,7 @@ export function LatestCard({
                     return (
                       <tr key={point.key} className={cn("border-b last:border-b-0", isSelected && "bg-accent/60")}>
                         <th scope="row" className="py-2.5 pr-4 text-left align-top font-normal">
-                          <span className="font-mono font-medium break-all">{point.key}</span>
+                          <span className="font-mono font-medium wrap-break-word">{point.key}</span>
                           {point.description ? (
                             <span className="block text-muted-foreground">{point.description}</span>
                           ) : null}
@@ -120,12 +120,12 @@ export function LatestCard({
                           {latest.isPending ? (
                             <span className="text-muted-foreground">…</span>
                           ) : reading ? (
-                            <span className="font-medium break-all">{format.reading(reading.value)}</span>
+                            <span className="font-medium wrap-break-word">{format.reading(reading.value)}</span>
                           ) : (
                             <span className="text-muted-foreground">{t("device.latest.no_reading")}</span>
                           )}
                         </td>
-                        <td className="py-2.5 pr-4 align-top whitespace-nowrap text-muted-foreground tabular-nums">
+                        <td className="py-2.5 pr-4 align-top text-muted-foreground tabular-nums">
                           {reading ? <time dateTime={reading.time}>{format.time(reading.time)}</time> : null}
                         </td>
                         <td className="py-1.5 text-right align-top">

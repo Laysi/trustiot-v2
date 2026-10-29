@@ -458,6 +458,8 @@ function BucketTable({
   const tableId = useId();
   const cell = (value: number | null | undefined) =>
     typeof value === "number" && Number.isFinite(value) ? format.number(value) : "—";
+  // Text readings have no mean, minimum or maximum: their table leaves those columns out.
+  const stats = answer.points.some((bucket) => [bucket.avg, bucket.min, bucket.max].some((v) => typeof v === "number"));
   return (
     <div className="grid justify-items-start gap-3">
       <Button variant="outline" size="sm" aria-expanded={open} aria-controls={tableId} onClick={() => setOpen(!open)}>
@@ -473,15 +475,19 @@ function BucketTable({
                 <th scope="col" className="px-3 py-2 font-medium">
                   {t("device.history.column.time")}
                 </th>
-                <th scope="col" className="px-3 py-2 text-right font-medium">
-                  {t("device.history.mean")}
-                </th>
-                <th scope="col" className="px-3 py-2 text-right font-medium">
-                  {t("device.history.min")}
-                </th>
-                <th scope="col" className="px-3 py-2 text-right font-medium">
-                  {t("device.history.max")}
-                </th>
+                {stats ? (
+                  <>
+                    <th scope="col" className="px-3 py-2 text-right font-medium">
+                      {t("device.history.mean")}
+                    </th>
+                    <th scope="col" className="px-3 py-2 text-right font-medium">
+                      {t("device.history.min")}
+                    </th>
+                    <th scope="col" className="px-3 py-2 text-right font-medium">
+                      {t("device.history.max")}
+                    </th>
+                  </>
+                ) : null}
                 <th scope="col" className="px-3 py-2 text-right font-medium">
                   {t("device.history.column.last")}
                 </th>
@@ -496,9 +502,13 @@ function BucketTable({
                   <th scope="row" className="px-3 py-1.5 text-left font-normal whitespace-nowrap">
                     <time dateTime={bucket.time}>{format.minute(bucket.time)}</time>
                   </th>
-                  <td className="px-3 py-1.5 text-right">{cell(bucket.avg)}</td>
-                  <td className="px-3 py-1.5 text-right">{cell(bucket.min)}</td>
-                  <td className="px-3 py-1.5 text-right">{cell(bucket.max)}</td>
+                  {stats ? (
+                    <>
+                      <td className="px-3 py-1.5 text-right">{cell(bucket.avg)}</td>
+                      <td className="px-3 py-1.5 text-right">{cell(bucket.min)}</td>
+                      <td className="px-3 py-1.5 text-right">{cell(bucket.max)}</td>
+                    </>
+                  ) : null}
                   <td className="max-w-48 truncate px-3 py-1.5 text-right" title={format.reading(bucket.last)}>
                     {format.reading(bucket.last)}
                   </td>

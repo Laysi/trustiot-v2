@@ -84,6 +84,15 @@ describe("axes", () => {
     }
   });
 
+  test("a narrow chart still gets two labels", () => {
+    // Two ticks asked for over 7 days: the 7-day step places only one, so it takes a finer one.
+    const to = at("2026-10-30T05:34:00Z");
+    const { ticks, step } = timeTicks(to - 7 * 24 * HOUR, to, 2, "Asia/Taipei");
+    expect(step).toBe(2 * 24 * HOUR);
+    expect(ticks.length).toBeGreaterThanOrEqual(2);
+    expect(timeTicks(to - 7 * 24 * HOUR, to, 1, "Asia/Taipei").ticks.length).toBeGreaterThanOrEqual(2);
+  });
+
   test("day ticks fall on local midnights", () => {
     const { ticks, step } = timeTicks(at("2026-10-01T05:00:00Z"), at("2026-10-31T05:00:00Z"), 10, "Asia/Taipei");
     expect(step).toBeGreaterThanOrEqual(24 * HOUR);

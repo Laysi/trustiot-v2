@@ -131,9 +131,20 @@ export function timeTicks(
   timeZone: string,
 ): { ticks: number[]; step: number } {
   const span = to - from;
-  const step = TIME_STEPS.find((candidate) => span / candidate <= Math.max(1, target)) ?? span;
+  const chosen = TIME_STEPS.findIndex((candidate) => span / candidate <= Math.max(1, target));
+  if (!(span > 0)) return { ticks: [], step: TIME_STEPS[chosen] ?? span };
+  // A narrow chart asks for one or two ticks, which a coarse step may not place at all (a 7-day
+  // step over 7 days gives one): take finer steps until the axis has at least two labels.
+  for (let index = chosen === -1 ? TIME_STEPS.length - 1 : chosen; ; index -= 1) {
+    const step = TIME_STEPS[index] as number;
+    const ticks = ticksAt(from, to, step, timeZone);
+    if (ticks.length >= 2 || index === 0) return { ticks, step };
+  }
+}
+
+/** The local times between `from` and `to` that are a whole number of `step`s. */
+function ticksAt(from: number, to: number, step: number, timeZone: string): number[] {
   const ticks: number[] = [];
-  if (!(span > 0)) return { ticks, step };
   // Steps count in wall-clock time: a tick is a local time that is a whole number of steps.
   const firstLocal = Math.ceil((from + offsetAt(from, timeZone)) / step) * step;
   for (let local = firstLocal; ticks.length < 1000; local += step) {
@@ -141,7 +152,7 @@ export function timeTicks(
     if (instant >= to) break;
     if (instant >= from && instant !== ticks[ticks.length - 1]) ticks.push(instant);
   }
-  return { ticks, step };
+  return ticks;
 }
 
 /** Where the plot sits in the SVG. */

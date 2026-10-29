@@ -283,6 +283,12 @@ describe("DevicePage", () => {
     expect(screen.queryByTestId("history-chart")).toBeNull();
     const table = within(screen.getByRole("region", { name: "History" })).getByRole("table");
     expect(within(table).getAllByText("ok").length).toBeGreaterThan(0);
+    // Text has no mean, minimum or maximum, so the table has no such columns.
+    expect(
+      within(table)
+        .getAllByRole("columnheader")
+        .map((header) => header.textContent),
+    ).toEqual(["From", "Last reading", "Readings"]);
   });
 
   test("a device without stored readings tells what to check", async () => {
