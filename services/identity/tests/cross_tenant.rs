@@ -11,20 +11,14 @@
 
 mod support;
 
-use std::time::Duration;
-
 use contract::ServiceName;
-use serde_json::json;
-use support::{KeyFiles, Service, TestKey, signing_keys};
+use support::start_on_product;
 use testkit::identity::TestIssuer;
 use testkit::isolation::Suite;
 use testkit::isolation::api::Endpoint;
 use testkit::isolation::postgres::PgStore;
 use testkit::pg_table;
-use testkit::postgres::TEST_PASSWORD;
-use testkit::product::{DATABASE, ProductPostgres, product_postgres};
-
-const KID: &str = "2026-10-a";
+use testkit::product::{DATABASE, product_postgres};
 
 /// One membership: `$1` tenant, `$2` the row id, kept as the member's user id (a new user, so
 /// the foreign key holds), `$3` the canary, which this table has no text column for.
@@ -70,57 +64,13 @@ const MIGRATION_RECORDS: &str = "the migration Job's record of the files applied
      (crates/service-kit/sql/migration-records.sql): file names and SHA-256 hashes, no tenant \
      data; the service role only reads it, for its readiness check";
 
-/// The identity binary on `product`, trusting the test issuer's tokens (and its own signing key,
-/// which readiness needs), with the event log on.
-fn start(product: &ProductPostgres, issuer: &TestIssuer) -> Service {
-    let key = TestKey::new(29);
-    let mut published: serde_json::Value =
-        serde_json::from_str(&issuer.jwks()).expect("the issuer's key set");
-    published["keys"]
-        .as_array_mut()
-        .expect("keys")
-        .push(key.jwk(KID));
-    let files = KeyFiles::with(
-        "cross-tenant",
-        &signing_keys(&[(&key, KID, 1, 0)]),
-        &published.to_string(),
-    );
-    let routes = json!([
-        {"host": "app.saas.trustiot.test", "path": "/api/identity", "match": "PathPrefix", "service": "identity"},
-    ]);
-    let mut env = files.env();
-    env.extend([
-        ("TRUSTIOT_INGRESS_ROUTES".into(), routes.to_string()),
-        ("TRUSTIOT__DATABASE__USERNAME".into(), "identity_app".into()),
-        ("TRUSTIOT__DATABASE__PASSWORD".into(), TEST_PASSWORD.into()),
-        (
-            "TRUSTIOT__DATABASE__PLATFORM_USERNAME".into(),
-            "identity_platform".into(),
-        ),
-        (
-            "TRUSTIOT__DATABASE__PLATFORM_PASSWORD".into(),
-            TEST_PASSWORD.into(),
-        ),
-    ]);
-    env.extend(
-        product
-            .platform_env()
-            .into_iter()
-            .map(|(name, value)| (name.to_owned(), value)),
-    );
-    let env: Vec<(&str, &str)> = env.iter().map(|(n, v)| (n.as_str(), v.as_str())).collect();
-    let service = Service::start(&env);
-    service.wait_ready(Duration::from_secs(60));
-    service
-}
-
 #[tokio::test(flavor = "multi_thread")]
 async fn tenants_are_isolated() {
     let Some(product) = product_postgres(&["identity_app", "identity_platform"]).await else {
         return;
     };
     let issuer = TestIssuer::new();
-    let identity = start(&product, &issuer);
+    let identity = start_on_product(&product, &issuer, "cross-tenant");
     let base_url = format!("http://{}", identity.address);
 
     let store = PgStore::new(

@@ -548,7 +548,8 @@ struct Entry {
     failed: bool,
 }
 
-/// The outcome of every probe of a run. Print it (`{report}`) as test evidence; it never
+/// The outcome of every probe of a run (the cross-tenant suite's, and the permission matrix's,
+/// [`crate::permissions`]). Print it (`{report}`) as test evidence; it never
 /// contains tokens.
 #[derive(Clone, Debug, Default)]
 pub struct Report {
@@ -612,12 +613,22 @@ impl Report {
     /// # Panics
     ///
     /// When a probe failed or none ran.
-    #[allow(clippy::print_stdout, reason = "the report is the test evidence")]
     pub fn assert_isolated(&self) {
+        self.assert_passed("cross-tenant isolation");
+    }
+
+    /// Prints the report and fails the test, naming `what` was checked (for example `the
+    /// permission matrix`), unless at least one probe ran and none failed.
+    ///
+    /// # Panics
+    ///
+    /// When a probe failed or none ran.
+    #[allow(clippy::print_stdout, reason = "the report is the test evidence")]
+    pub fn assert_passed(&self, what: &str) {
         println!("{self}");
         assert!(
             self.is_isolated(),
-            "cross-tenant isolation failed ({} of {} probes):\n{}",
+            "{what} failed ({} of {} probes):\n{}",
             self.failure_count(),
             self.entries.len(),
             self.failures().join("\n")

@@ -1,6 +1,6 @@
 [package]
 name = "testkit"
-description = "Test support for TrustIoT v2: the cross-tenant negative test suite (decision 29), test identity tokens, throwaway containers, a fake Modbus endpoint with fault injection (M7), and the gateway's MQTT path (test PKI, WebSocket front, Mosquitto with mTLS). A dev-dependency only."
+description = "Test support for TrustIoT v2: the cross-tenant negative test suite (decision 29), the permission matrix (A2), test identity tokens, throwaway containers, a fake Modbus endpoint with fault injection (M7), and the gateway's MQTT path (test PKI, WebSocket front, Mosquitto with mTLS). A dev-dependency only."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
