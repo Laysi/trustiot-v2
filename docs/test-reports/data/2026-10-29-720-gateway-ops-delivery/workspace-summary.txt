@@ -1,12 +1,17 @@
-# 建置主機（x86_64 Linux），CI=1，commit 7680e89c
+# fmt、clippy、workspace 測試：建置主機（arm64 Linux VM），CI=1，commit 3bad6845 的樹
+# cargo deny：建置主機（x86_64 Linux），同一份程式碼（== deny 段）；腳本的測試見報告的「workspace」一節
 # 每個測試執行檔一行：執行檔（crate 與檔案）與它的 test result；其餘段落照原樣
 
 == fmt
-fmt exit 0
+fmt-ok
 == clippy
-    Finished `dev` profile [unoptimized + debuginfo] target(s) in 21.92s
-clippy exit 0
-== test
+     Removed 163 files, 363.8MiB total
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 11.09s
+== deny (build host, x86_64 Linux; same code, with this report being updated)
+advisories ok, bans ok, licenses ok, sources ok
+deny exit 0
+exit 0 at 21:08:46 (build host)
+== workspace test
 ai_clients unittests src/lib.rs: ok, 8 passed, 0 failed, 0 ignored
 anthropic_fixtures tests/anthropic_fixtures.rs: ok, 22 passed, 0 failed, 0 ignored
 anthropic_http tests/anthropic_http.rs: ok, 14 passed, 0 failed, 0 ignored
@@ -66,9 +71,9 @@ client tests/client.rs: ok, 14 passed, 0 failed, 0 ignored
 client_logging tests/client_logging.rs: ok, 1 passed, 0 failed, 0 ignored
 error_format tests/error_format.rs: ok, 7 passed, 0 failed, 0 ignored
 events tests/events.rs: ok, 20 passed, 0 failed, 0 ignored
-gateway_ops unittests src/lib.rs: ok, 22 passed, 0 failed, 0 ignored
+gateway_ops unittests src/lib.rs: ok, 23 passed, 0 failed, 0 ignored
 cross_tenant tests/cross_tenant.rs: ok, 1 passed, 0 failed, 0 ignored
-delivery tests/delivery.rs: ok, 5 passed, 0 failed, 0 ignored
+delivery tests/delivery.rs: ok, 6 passed, 0 failed, 0 ignored
 desired_config tests/desired_config.rs: ok, 7 passed, 0 failed, 0 ignored
 generation_errors tests/generation_errors.rs: ok, 1 passed, 0 failed, 0 ignored
 startup tests/startup.rs: ok, 1 passed, 0 failed, 0 ignored
@@ -243,23 +248,5 @@ testkit doc-tests: ok, 1 passed, 0 failed, 0 ignored
 web doc-tests: ok, 0 passed, 0 failed, 0 ignored
 webpki_roots doc-tests: ok, 0 passed, 0 failed, 0 ignored
 workstation doc-tests: ok, 0 passed, 0 failed, 0 ignored
-total: 236 test result lines, 1860 passed, 0 failed
-test exit 0
-== deny
-          ├── telemetry-query v0.1.0 (*)
-          ├── testkit v0.1.0 (*)
-          └── web v0.1.0
-
-advisories ok, bans ok, licenses ok, sources ok
-deny exit 0
-== scripts
-
- 1704 pass
- 9 skip
- 0 fail
- 7533 expect() calls
-Ran 1713 tests across 54 files. [12.50s]
-scripts exit 0
-$ tsc --noEmit --project tsconfig.json
-typecheck exit 0
-exit 0 at 18:34:01 (build host)
+total: 236 test result lines, 1862 passed, 0 failed, 1 ignored
+exit 0 at 21:01:38 (build host, arm64 Linux VM)
