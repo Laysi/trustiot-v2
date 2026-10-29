@@ -12,6 +12,7 @@
 | `health` | 在線狀態與 LWT `Status`、心跳 `Heartbeat`（運作指標與設備讀取統計） |
 | `live` | 即時訂閱控制 `LiveControl`、即時值 `LiveSamples` |
 | `logs` | 日誌上傳 `LogBatch`、拉取請求 `LogRequest`、拉取回應 `LogDump` |
+| `renewal` | HTTPS 憑證換發的請求與回應（`RenewalRequest`、`Challenge`、`RenewedCertificate`）、要簽的內容 `signing_input` 與格式檢查（見「憑證換發」） |
 
 測試：`cargo test -p protocol`。閘道器目標：先執行一次 `rustup target add aarch64-unknown-linux-gnu`，再 `cargo build --locked --target aarch64-unknown-linux-gnu -p protocol`；CI 以同樣方式在 job 中加入該目標（Laysi/trustiot-v2#67），不放進 `rust-toolchain.toml`，免得每個只做雲端服務的開發者與 CI job 都下載 aarch64 的標準函式庫。
 
@@ -237,6 +238,35 @@ Mosquitto 以 `use_identity_as_username` 把憑證 CN 當成 username，dynsec �
 - `up/log-dump` 的 `LogDump`：`request`、`part`（從 0 起）、`last`、`coverage`（`complete`、`partial`、`unavailable`：記憶體環狀緩衝是否還涵蓋整個時段）、`available_from`（緩衝中最舊一筆的時間）、`entries[]`。以 `LogDump::split` 拆成編號連續的多則，至少一則，雲端即使沒有符合的紀錄也知道涵蓋範圍。
 
 每筆 `LogEntry`：`at`、`level`（`error`、`warn`、`info`、`debug`、`trace`）、`target`（≤ 128 bytes）、`message`（≤ 4096 bytes）、`fields`（最多 32 個，名稱 ≤ 64 bytes、值 ≤ 1024 bytes）。日誌不得含個資（Laysi/trustiot#110）。
+
+## 憑證換發（HTTPS；決策 12，清單 D2）
+
+`renewal` 模組（Laysi/trustiot-v2#81）。換發不走 MQTT：憑證過期或被撤銷時 mTLS 連不上 broker，所以閘道器經 443 的 HTTPS 換發，以 TPM 金鑰證明自己。格式是 JSON（雙方各自以 `serde_json` 編解碼），本 crate 只定義型別、上限、驗證函式與要簽的內容，閘道器與雲端組出一樣的位元組。雲端的流程、錯誤表、限流與事件在 [services/certs](../../services/certs/README.md) 的「換發」。
+
+兩步都是 `POST RENEWAL_PATH`（`/certs/renew`，gateway 主機上、Exact 比對的公開路徑，chart 的 `ingress.publicPaths.certRenewal`），`Content-Type: application/json`，本文最多 `MAX_REQUEST_BYTES`（1 KiB），以本文的 `step` 區分（`RenewalRequest`）：
+
+| 步驟 | 請求 | 成功 |
+| --- | --- | --- |
+| 取挑戰 | `{"step": "challenge", "hardware_id": "tg-0001"}`（`ChallengeRequest`） | 200 `Challenge`：`{"hardware_id": "tg-0001", "purpose": "cert-renewal", "nonce": "<43 個字元>", "expires": 1761000030}` |
+| 兌換 | `{"step": "renew", "hardware_id": "tg-0001", "nonce": "<挑戰的 nonce>", "signature": "<DER 簽章的 base64>"}`（`RenewRequest`） | 201 `RenewedCertificate`：`hardware_id`、`serial`、`ca_key_id`、`not_before`、`not_after`（RFC 3339，UTC）、`certificate`、`certificate_chain`、`root_certificate`（PEM），欄位與格式和出廠登錄的回應（`contract::certs::GatewayRegistration`）相同 |
+
+- **nonce**：`NONCE_BYTES`（32）個隨機位元組，base64url、不補 `=`，剛好 `NONCE_LEN`（43）個字元；最後一個字元多出的兩個位元必須是 0，所以同一個 nonce 只有一種寫法（`is_nonce`）。
+- **用途**：`Purpose`，目前只有 `cert-renewal`；之後的用途（例如改綁）各有自己的值，一個用途的挑戰不能兌換另一個用途。
+- **到期**：`expires` 是雲端時鐘的 Unix 秒，取挑戰後 `CHALLENGE_TTL_SECS`（30 秒）。閘道器不必比對自己的時鐘，拿到就簽、就兌換。
+- **要簽的內容**（`signing_input`、`Challenge::signing_input`）由閘道器以挑戰的四個欄位自己組，不簽伺服器給的任意位元組；雲端兌換時只用自己存下的欄位重組，不用請求裡的值：
+
+  ```text
+  trustiot-v2 challenge v1\n
+  device=<硬體 ID>\n
+  purpose=<用途>\n
+  nonce=<nonce>\n
+  expires=<Unix 秒，十進位>\n
+  ```
+
+  第一行 `SIGNING_INPUT_PREFIX` 是協定與版本。閘道器的 mTLS 與換發用同一把 TPM 金鑰，這個前綴讓簽的內容不可能與 TLS 的簽章內容相同（TLS 1.3 的 CertificateVerify 以 64 個 0x20 開頭，TLS 1.2 簽的握手訊息以 0x01 開頭；[TPM 可行性驗證](../../docs/feasibility/2026-10-12-tpm-poc.md)的「換發挑戰簽章」）。欄位都不可能含換行：硬體 ID 的規則不允許、用途固定、nonce 是 base64url、到期是數字。改格式就換掉第一行的版本。
+- **簽章**：ECDSA P-256、SHA-256（TPM 簽的是內容的 SHA-256 摘要），DER 的 `ECDSA-Sig-Value`（最長 `MAX_SIGNATURE_BYTES`，72 位元組），標準 base64、補 `=`（最長 `MAX_SIGNATURE_LEN`，96 個字元；`is_signature_text` 只檢查格式，驗章在雲端）。不用 r‖s 的 64 位元組格式，以便與 CSR、TLS 共用同一套程式庫。
+- **拒絕**：一律是 M1 的錯誤本文（`contract::ErrorBody`）。閘道器只需要依 HTTP 狀態處理：429 與 503 帶 `Retry-After`（秒），等它指定的時間再從取挑戰開始；其他拒絕（400、401、403、409、410、422）以退避重試，也從取挑戰開始。取挑戰的回應不透露硬體 ID 是否登錄、綁定或除役，拒絕只在兌換時發生。
+- **相容性**：雙方都忽略不認得的欄位（與 MQTT payload 不認得的 map 鍵相同），所以較新的 agent 多送的欄位不會讓較舊的雲端拒絕換發；不認得的 `step` 或用途則拒絕。要簽的內容改變時換新的版本前綴。
 
 ## 大小上限與拆包
 

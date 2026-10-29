@@ -1,0 +1,84 @@
+# The renewal wired to the broker permission sync (Laysi/trustiot-v2#633), after merging main
+# dcc603bf into the branch. Build host (macOS), CI=1, 2026-10-29, on the working tree of the
+# wiring commit:
+#   cargo fmt --all --check
+#   cargo clippy --locked -p certs --all-targets -- -D warnings
+#   cargo test --locked -p repo-check
+#   cargo test --locked -p certs
+#   cargo test --locked -p certs --test dynsec -- --nocapture
+# Filtered to the result lines and the evidence lines. The last two evidence lines are the
+# renewal's part of tests/dynsec.rs; the ones before it are Laysi/trustiot-v2#633's.
+FMT-OK
+    Checking migrate v0.1.0 (<host copy>/src/tools/migrate)
+    Checking testkit v0.1.0 (<host copy>/src/crates/testkit)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 3.43s
+test result: ok. 18 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.10s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running unittests src/lib.rs (<host copy>/target/debug/deps/certs-a22f29ec93b911da)
+test result: ok. 43 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/bindings.rs (<host copy>/target/debug/deps/bindings-01f83565184278a6)
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.75s
+     Running tests/broker.rs (<host copy>/target/debug/deps/broker-a90a49d232f5c748)
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.66s
+     Running tests/broker_certificate.rs (<host copy>/target/debug/deps/broker_certificate-2501f6dab3088327)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.67s
+     Running tests/ceremony.rs (<host copy>/target/debug/deps/ceremony-d0c66be23a0fdeec)
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.94s
+     Running tests/chart_connections.rs (<host copy>/target/debug/deps/chart_connections-681f066fb2853de9)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/crl.rs (<host copy>/target/debug/deps/crl-b6337b5e4422fa1a)
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 21.34s
+     Running tests/cross_tenant.rs (<host copy>/target/debug/deps/cross_tenant-9c0d9f97361cb17d)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.80s
+     Running tests/dynsec.rs (<host copy>/target/debug/deps/dynsec-00a2add002cdcfc4)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 12.79s
+     Running tests/issuance.rs (<host copy>/target/debug/deps/issuance-f6a00efd02c3d218)
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.24s
+     Running tests/key_custody.rs (<host copy>/target/debug/deps/key_custody-69e07b2f42b6ae48)
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 7.63s
+     Running tests/registration.rs (<host copy>/target/debug/deps/registration-009cb0e8d07d3bc7)
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.59s
+     Running tests/renewal.rs (<host copy>/target/debug/deps/renewal-cc8e137c43241815)
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 12.61s
+     Running tests/renewal_lag.rs (<host copy>/target/debug/deps/renewal_lag-c6d2320b8a945929)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 18.78s
+     Running tests/workstation.rs (<host copy>/target/debug/deps/workstation-64b6b98112625c1c)
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 14.45s
+     Running tests/workstation_tool.rs (<host copy>/target/debug/deps/workstation_tool-451ab7ac98d12654)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.67s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+evidence: broker docker.io/library/eclipse-mosquitto:2.1.2-alpine@sha256:38c0da4f2ef84284d47b3b3eeea1cb3bdeabe81ee10caf0cd5c5ff61ee3ea408 with the chart's mosquitto.conf and gateway listener, dynamic-security file from migrate::mqtt_accounts::reconcile (3 clients, 5 roles)
+evidence: certs connected as service:certs and compared: nothing registered, nothing to change
+evidence: gw-633-a registered (serial 52c6390ab85a906d72dcf23ad11a9580), not bound: CONNACK 0x00, PUBACK 0x87 on trustiot/v1/gw/gw-633-a/up/status
+evidence: gw-633-a bound: the same connection's publish 11 got PUBACK 0x10; service logged `changed a gateway's broker permissions` hardware_id=gw-633-a action=added
+evidence: gw-633-a bound: PUBLISH own up/telemetry -> 0x10, SUBSCRIBE own down/config -> 0x01, PUBLISH gw-633-b up/telemetry -> 0x87, SUBSCRIBE gw-633-b down/config -> 0x87; gw-633-b: own up/status -> 0x10, gw-633-a up/status -> 0x87
+evidence: no change: 3 whole comparisons (`the broker's gateway permissions match postgres`), no `changed a gateway's broker permissions` line, dynamic-security file sha256 048772e918ca83f057ed318b793f7146a5bdf62a7282146998e34180daa3a4de before and after
+evidence: after the restart with the chart's entries and gw-633-ghost: gateway clients ["gw-633-a", "gw-633-b"] (each with trustiot-gateway only), gw-633-ghost removed; service accounts ["service:certs", "service:gateway-ops", "service:ingest"] and 5 roles unchanged; file read right after the restart had 4 clients
+evidence: gw-633-a after the restart: PUBACK 0x10
+evidence: 277059 bytes of service output at trace: none of the 25 8-character pieces of the broker password
+evidence: gw-633-a's only certificate revoked; the service restarted with dynsec.interval 1h: its comparison on connecting logged `changed a gateway's broker permissions` hardware_id=gw-633-a action=removed and one `brought the broker's gateway permissions in line with postgres`; the old certificate connects, PUBACK 0x87
+evidence: gw-633-a renewed (serial 7420dcb53d8b6c6d43199f745204a05a): `renewed a gateway certificate` at stdout line 18, then `changed a gateway's broker permissions` action=added at line 21, still one `brought the broker's gateway permissions in line with postgres` (no whole comparison in between); the renewed certificate's publish: PUBACK 0x10
+test the_service_keeps_the_brokers_gateway_clients_in_line_with_postgres ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 12.92s
+
+# Mutation check, same host: the call self.broker_sync.gateway(hardware_id) in
+# src/renewal.rs replaced by a no-op, then
+#   cargo test --locked -p certs --test dynsec -- --nocapture
+# The test fails where the renewed gateway's client is awaited. The call was restored afterwards
+# (the file is byte for byte the one the run above tested).
+evidence: broker docker.io/library/eclipse-mosquitto:2.1.2-alpine@sha256:38c0da4f2ef84284d47b3b3eeea1cb3bdeabe81ee10caf0cd5c5ff61ee3ea408 with the chart's mosquitto.conf and gateway listener, dynamic-security file from migrate::mqtt_accounts::reconcile (3 clients, 5 roles)
+evidence: certs connected as service:certs and compared: nothing registered, nothing to change
+evidence: gw-633-a registered (serial 725b9a42b22b26409d46574f73d80ec2), not bound: CONNACK 0x00, PUBACK 0x87 on trustiot/v1/gw/gw-633-a/up/status
+evidence: gw-633-a bound: the same connection's publish 10 got PUBACK 0x10; service logged `changed a gateway's broker permissions` hardware_id=gw-633-a action=added
+evidence: gw-633-a bound: PUBLISH own up/telemetry -> 0x10, SUBSCRIBE own down/config -> 0x01, PUBLISH gw-633-b up/telemetry -> 0x87, SUBSCRIBE gw-633-b down/config -> 0x87; gw-633-b: own up/status -> 0x10, gw-633-a up/status -> 0x87
+evidence: no change: 3 whole comparisons (`the broker's gateway permissions match postgres`), no `changed a gateway's broker permissions` line, dynamic-security file sha256 ee4540212dedb0aca73d2a2de08adf7d72aa38ec39c41e8a3a4b4fb017276663 before and after
+evidence: after the restart with the chart's entries and gw-633-ghost: gateway clients ["gw-633-a", "gw-633-b"] (each with trustiot-gateway only), gw-633-ghost removed; service accounts ["service:certs", "service:gateway-ops", "service:ingest"] and 5 roles unchanged; file read right after the restart had 4 clients
+evidence: gw-633-a after the restart: PUBACK 0x10
+evidence: 277046 bytes of service output at trace: none of the 25 8-character pieces of the broker password
+evidence: gw-633-a's only certificate revoked; the service restarted with dynsec.interval 1h: its comparison on connecting logged `changed a gateway's broker permissions` hardware_id=gw-633-a action=removed and one `brought the broker's gateway permissions in line with postgres`; the old certificate connects, PUBACK 0x87
+test the_service_keeps_the_brokers_gateway_clients_in_line_with_postgres has been running for over 60 seconds
+thread 'the_service_keeps_the_brokers_gateway_clients_in_line_with_postgres' (420993) panicked at services/certs/tests/support/mod.rs:549:9:
+the renewed gateway's broker client: not within 120s
+test the_service_keeps_the_brokers_gateway_clients_in_line_with_postgres ... FAILED
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 135.49s

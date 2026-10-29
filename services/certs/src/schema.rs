@@ -39,5 +39,9 @@ pub const SCHEMA: Schema = Schema {
             name: "0005_gateway_bindings.sql",
             sql: include_str!("../migrations/postgres/0005_gateway_bindings.sql"),
         },
+        Migration {
+            name: "0006_certificate_renewal.sql",
+            sql: include_str!("../migrations/postgres/0006_certificate_renewal.sql"),
+        },
     ],
 };
