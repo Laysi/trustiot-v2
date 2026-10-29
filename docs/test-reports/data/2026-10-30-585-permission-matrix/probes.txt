@@ -1,4 +1,4 @@
-# 探測輸出（建置主機（arm64 Linux VM），commit 64d6eb21 的樹，CI=1）
+# 探測輸出（建置主機（arm64 Linux VM），commit 64d6eb21 的樹（rebase 前，基於 main f46c8a89；同樣的程式變更 rebase 後是 commit c03f7454），CI=1）
 # CI=1 cargo test --locked -p assets -p telemetry-query --test permissions -- --nocapture
 # cargo test --locked -p service-kit --lib identity::permission
 # cargo test --locked -p testkit --lib permissions

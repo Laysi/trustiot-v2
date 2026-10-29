@@ -4,7 +4,7 @@ Laysi/trustiot-v2#585：`crates/service-kit` 加上共用的角色檢查（`Requ
 
 ## 環境
 
-- **程式碼**：分支 `feat/585-permission-matrix`，基於 main `f46c8a89`（Laysi/trustiot-v2#584 合併後）。完整檢查在 commit `64d6eb21` 的樹上執行；檢查之後 main 沒有新的 commit。
+- **程式碼**：分支 `feat/585-permission-matrix`。實作基於 main `f46c8a89`（Laysi/trustiot-v2#584 合併後），探測與完整檢查先在 commit `64d6eb21` 的樹上執行；之後 rebase 到 main `ccd83216`（Laysi/trustiot-v2#763，只改 `crates/protocol`、`tools/migrate`、testkit 的 Mosquitto 設定與 chart README，沒有衝突），同樣的程式變更 rebase 後是 `c03f7454`；rebase 後的 `1afd17c8`（只比 `c03f7454` 多了這份報告，程式相同）再跑一次 fmt、clippy、OpenAPI 檢查與整個 workspace 的測試。
 - **機器**：建置主機（arm64 Linux VM），經檢查佇列執行。容器測試由 podman 起 `testkit::product` 的拋棄式 TLS Postgres，以 migration Job 的程式套用整個產品的 schema，再以真的 `assets`、`telemetry-query`、`identity`、`certs` 執行檔（各自的資料庫角色）回應探測。
 - **工具**：`.prototools` 與 `rust-toolchain.toml` 釘選的 Rust 1.99.0、Bun 1.4.2。
 - **設定**：`CI=1`。telemetry-query 的探測不起 ClickHouse：服務的 ClickHouse 位址指向測試裡的一個本機埠，這個埠只計算接受的連線數，探測後斷言沒有任何連線。
@@ -42,8 +42,9 @@ cargo test -p testkit --lib permissions
 | 四個服務的 `tests/permissions.rs` | 建置主機（arm64 Linux VM），`64d6eb21` | 各 2 個測試通過。宣告檢查與探測：assets 192 個、telemetry-query 48 個、identity 141 個、certs 36 個探測，全部 0 失敗；telemetry-query 的探測沒有連到 ClickHouse。assets 與 telemetry-query 的每個探測在 [probes.txt](data/2026-10-30-585-permission-matrix/probes.txt) |
 | `service-kit` 的 `identity::permission` 單元測試 | 同上 | 6 個通過（角色階層含換發的 token；不認得的角色、沒有租戶、平台管理員都沒有租戶權限；平台操作只接受本人；每種拒絕都是同一個 403 body） |
 | `testkit` 的 `permissions` 單元測試 | 同上 | 10 個通過，其中 `the_matrix_covers_every_operation_of_the_api_spec` 對照 commit 的 `api/openapi.json`，`the_spec_coverage_finds_what_is_missing_twice_or_gone` 檢查漏列、重複與已不存在的操作會被找出來 |
-| 反例：拿掉 assets 與 telemetry-query 的修正 | 建置主機（arm64 Linux VM），`08af8ad8` 之前的工作樹 | 如預期失敗：assets `192 probes, 1 failed`（`GET /api/assets/v1/tenant` 的不認得角色得 404，應為 403）；telemetry-query `48 probes, 10 failed`（四個操作的不認得角色，以及 series、statistics、usage 的沒有租戶與沒有租戶的平台管理員，得 400 或 404，應為 403） |
+| 反例：拿掉 assets 與 telemetry-query 的修正 | 建置主機（arm64 Linux VM），第一個 commit 之前的工作樹（基於 main `f46c8a89`） | 如預期失敗：assets `192 probes, 1 failed`（`GET /api/assets/v1/tenant` 的不認得角色得 404，應為 403）；telemetry-query `48 probes, 10 failed`（四個操作的不認得角色，以及 series、statistics、usage 的沒有租戶與沒有租戶的平台管理員，得 400 或 404，應為 403） |
 | `cargo fmt --all --check`，兩個 clippy，`cargo run --locked -p openapi -- --check`，`CI=1 cargo test --locked --workspace --exclude agent` | 建置主機（arm64 Linux VM），`64d6eb21` | 全部通過：fmt、兩個 clippy 沒有警告；`api/openapi.json is up to date`；workspace 1935 個測試通過、0 失敗、1 個 ignored |
+| `cargo fmt --all --check`，workspace 的 clippy，`cargo run --locked -p openapi -- --check`，`CI=1 cargo test --locked --workspace --exclude agent` | 建置主機（arm64 Linux VM），rebase 後的 `1afd17c8` | 全部通過；workspace 1936 個測試通過、0 失敗、1 個 ignored（多的一個來自 main 的 Laysi/trustiot-v2#763） |
 | `api:check`，`bun test scripts/ci/changes.test.ts`，`bun scripts/ci/check-workflows.ts`，`bun scripts/ci/check-secret-handling.ts` | 本機 | `api:check` 通過；283 個測試通過；workflow policy 與 secret handling 沒有違規 |
 
 反例與完整檢查的輸出在 [checks.txt](data/2026-10-30-585-permission-matrix/checks.txt)。
