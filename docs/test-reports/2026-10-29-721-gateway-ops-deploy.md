@@ -65,3 +65,20 @@ nightly（`scripts/nightly`）的改動以單元測試驗證：`NIGHTLY_IMAGES` 
 | mesh 只允許 gateway-ops → broker 服務埠，呼叫矩陣文件與 chart 測試一致 | 通過 |
 | 帶 `smoke` 標籤的 PR 的 nightly 以兩份 values 部署，gateway-ops 就緒且連上 broker | 待測：nightly 只在 CI 跑（工作站不跑 Kubernetes），PR 開出並加上 `smoke` 標籤後由 CI 驗證；新的檢查是 `scripts/nightly/smoke.ts` 的「gateway-ops is ready」。前提是 Laysi/trustiot-v2#720 已合併：在那之前 gateway-ops 的設定拒絕 chart 給的 `TRUSTIOT__MQTT__*`（`deny_unknown_fields`），不會就緒 |
 | `bun test deploy/chart`、`bun test scripts`、`cargo test -p repo-check`、`bun scripts/ci/check-secret-handling.ts` 通過 | 通過 |
+
+## 安全審查後的修正
+
+同日的安全審查（head `8181be21`）沒有 Critical、High、Medium。修正如下：
+
+| 項目 | 處理 | 驗證 |
+| --- | --- | --- |
+| L3 ingest、gateway-ops 不列 broker | 開啟時 `mesh.calls.<名稱>` 沒列 `mqtt-broker` 就渲染失敗並說明原因（沒有帳號、mesh 擋連線，pod 永遠不就緒） | chart 測試：兩個服務各以「只列 Postgres（ingest 加 ClickHouse）」與空清單渲染，都失敗並帶訊息；gateway-ops 關閉時同樣的清單可以渲染；helper 副本的「不列 broker 就沒有帳號」改以 certs 驗證 |
+| L2 展示叢集的換版 | chart README「gateway-ops」改為建議分兩次換版：先換 chart（Postgres 因 `max_connections` 重啟），再開 gateway-ops（broker 重啟、閘道器與 ingest 重連、migration Job 重跑、用 Postgres 的服務滾動更新） | 文件 |
+| I3、I4 | `_postgres.tpl` 的註解對齊；本報告的「環境」只寫建置主機 | 文件 |
+| I2 `max_connections` 220 的記憶體 | 不改：表中是推算值，實測延後到另開的 P2 issue | — |
+
+修正後的檢查（合併 Laysi/trustiot-v2#747 的 `f2722e72` 之前，那次合併只動到 `tools/migrate/src/clickhouse.rs`）：
+
+- `bun test deploy/chart`：711 pass、0 fail（建置主機（macOS））。
+- `bun test scripts/nightly scripts/release/chart-images.test.ts`、`bun test deploy/flux`、`cargo fmt --all --check`：通過（本機）。
+- 全 workspace 的 `cargo test --locked --workspace --exclude agent` 與 clippy：合併 `f2722e72` 之前在建置主機（x86_64 Linux）跑過一次，clippy 通過，測試只有 `tools/sql-check` 的 `the_workspace_has_no_string_built_sql` 失敗，那是 #747 的 `tools/migrate/src/clickhouse.rs`，由 `f2722e72` 修正；合併之後的重跑因建置主機的磁碟空間不足沒有執行，待補。
