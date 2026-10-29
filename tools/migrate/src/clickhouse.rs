@@ -124,6 +124,79 @@ fn bound_policies(rows: &str) -> String {
     cut(&described.join(", "))
 }
 
+/// One line of [`INGEST_ROLE_GRANTS`] as a GRANT statement names it, for a message: the
+/// privilege on its object, then `WITH GRANT OPTION` or `(partial revoke)` when set. Names only.
+fn grant_row(line: &str) -> String {
+    let fields: Vec<&str> = line.split('\t').collect();
+    let [
+        access,
+        database,
+        table,
+        column,
+        grant_option,
+        partial_revoke,
+    ] = fields[..]
+    else {
+        return line.replace('\t', " ");
+    };
+    let database = if database.is_empty() { "*" } else { database };
+    let table = if table.is_empty() { "*" } else { table };
+    let mut text = if column.is_empty() {
+        format!("{access} ON {database}.{table}")
+    } else {
+        format!("{access}({column}) ON {database}.{table}")
+    };
+    if grant_option == "1" {
+        text.push_str(" WITH GRANT OPTION");
+    }
+    if partial_revoke == "1" {
+        text.push_str(" (partial revoke)");
+    }
+    text
+}
+
+/// The first [`DIFFERENCES_SHOWN`] of `items`, and how many more there are.
+fn first_few(items: &[String]) -> String {
+    let mut text = items
+        .iter()
+        .take(DIFFERENCES_SHOWN)
+        .cloned()
+        .collect::<Vec<_>>()
+        .join(", ");
+    if items.len() > DIFFERENCES_SHOWN {
+        text.push_str(&format!(" and {} more", items.len() - DIFFERENCES_SHOWN));
+    }
+    text
+}
+
+/// How the ingest role's grants (lines of [`INGEST_ROLE_GRANTS`]) and roles ([`ROLE_ROLES`])
+/// differ from what the DDL files give it, or `None` when they do not: extra and missing grant
+/// rows and extra roles, each capped at [`DIFFERENCES_SHOWN`].
+fn ingest_role_differences(grants: &[&str], roles: &[&str]) -> Option<String> {
+    let extra: Vec<String> = grants
+        .iter()
+        .filter(|line| !INGEST_EXPECTED_GRANTS.contains(line))
+        .map(|line| grant_row(line))
+        .collect();
+    let missing: Vec<String> = INGEST_EXPECTED_GRANTS
+        .iter()
+        .filter(|line| !grants.contains(line))
+        .map(|line| grant_row(line))
+        .collect();
+    let roles: Vec<String> = roles.iter().map(|role| (*role).to_owned()).collect();
+    let mut parts = Vec::new();
+    if !extra.is_empty() {
+        parts.push(format!("extra grants: {}", first_few(&extra)));
+    }
+    if !missing.is_empty() {
+        parts.push(format!("missing grants: {}", first_few(&missing)));
+    }
+    if !roles.is_empty() {
+        parts.push(format!("extra roles: {}", first_few(&roles)));
+    }
+    (!parts.is_empty()).then(|| parts.join("; "))
+}
+
 /// How many receive days the run backfills with a raw data retention of `raw_days`: from today -
 /// `raw_days` + 3 to today, one day inside the backfill views' bound (today - `raw_days` + 2,
 /// with the retention capped at [`MAX_RAW_RETENTION_DAYS`] as the views cap it). Each statement
@@ -250,8 +323,19 @@ const INGEST_EXPECTED_GRANTS: [&str; 9] = [
     "SELECT\ttrustiot\ttelemetry_1m\t\t0\t0",
 ];
 /// Roles granted to the ingest role: none, or the account would hold more than the list above.
-const ROLE_ROLES: &str =
-    "SELECT count() FROM system.role_grants WHERE role_name = {role:String} FORMAT TSV";
+const ROLE_ROLES: &str = "SELECT granted_role_name FROM system.role_grants
+WHERE role_name = {role:String} ORDER BY granted_role_name FORMAT TSV";
+/// How many differing grant rows of each kind (extra, missing) and extra roles an error names.
+const DIFFERENCES_SHOWN: usize = GRANTEES_SHOWN;
+/// The types of an account's authentication methods, comma-separated. The run creates ingest's
+/// account, and sets its password, with one `sha256_hash` method, which ClickHouse lists as
+/// `sha256_password`; another method (`ALTER USER ... ADD IDENTIFIED WITH`) is another way to log
+/// in that no Secret holds.
+const USER_AUTH: &str =
+    "SELECT arrayStringConcat(arrayMap(method -> toString(method), auth_type), ',')
+FROM system.users WHERE name = {user:String} FORMAT TSV";
+/// The authentication methods [`USER_AUTH`] reads for ingest's account as the run made it.
+const INGEST_AUTH: &str = "sha256_password";
 /// Who holds the ingest role besides [`INGEST_ACCOUNT`] (whose grant the account check reads):
 /// every holder writes and deletes every tenant's telemetry, and could stall a stream's writes
 /// by running a long query with its query ID (services/ingest/README.md, 「I1 重寫與對帳」).
@@ -1441,8 +1525,9 @@ impl ClickHouse {
     /// ingest's account ([`INGEST_ACCOUNT`], Laysi/trustiot-v2#642). When the run manages its
     /// password (the service is deployed): the ingest role must hold exactly what the DDL files
     /// gave it and be held by the account alone, and the account must hold that role alone, as
-    /// its default role; then the run creates the account with that role and the password, or
-    /// sets the password and lets it log in. Anything else revokes the account's login, if it
+    /// its default role, and log in with the one password method the run sets (no settings, and
+    /// no second method an administrator added); then the run creates the account with that role
+    /// and the password, or sets the password and lets it log in. Anything else revokes the account's login, if it
     /// exists, and stops the run for an administrator: the account writes and deletes every
     /// tenant's telemetry. Once an administrator has repaired it, the next run lets it log in
     /// again. When the run does not manage it (the service is off), an existing account cannot
@@ -1549,12 +1634,15 @@ impl ClickHouse {
             .query("read the roles of the ingest role", ROLE_ROLES, &role)
             .await?;
         let grants: Vec<&str> = grants.lines().filter(|line| !line.is_empty()).collect();
-        if grants != INGEST_EXPECTED_GRANTS || roles.trim() != "0" {
+        let roles: Vec<&str> = roles.lines().filter(|line| !line.is_empty()).collect();
+        if let Some(differences) = ingest_role_differences(&grants, &roles) {
             return Ok(Some(format!(
                 "the role {INGEST_ROLE} has other grants or roles than the DDL files give it \
-                 (SELECT, INSERT and ALTER DELETE on trustiot.telemetry; SELECT and INSERT on \
-                 trustiot.stream_commits, trustiot.telemetry_1m and trustiot.telemetry_1h); an \
-                 administrator must revoke or grant them again (docs/runbooks/migrations.md)"
+                 ({differences}); the DDL files give it SELECT, INSERT and ALTER DELETE on \
+                 trustiot.telemetry and SELECT and INSERT on trustiot.stream_commits, \
+                 trustiot.telemetry_1m and trustiot.telemetry_1h, so an administrator must \
+                 revoke or grant them again (docs/runbooks/migrations.md)",
+                differences = cut(&differences)
             )));
         }
         let grantees = self
@@ -1601,6 +1689,23 @@ impl ClickHouse {
                  (docs/runbooks/migrations.md)"
             )));
         }
+        let auth = self
+            .query(
+                "read the ingest account's authentication methods",
+                USER_AUTH,
+                &params,
+            )
+            .await?;
+        let auth = auth.trim();
+        if auth != INGEST_AUTH {
+            return Ok(Some(format!(
+                "the ClickHouse account {user} has the authentication methods [{}] instead of \
+                 the one {INGEST_AUTH} method the run sets; any other method is a way to log in \
+                 that no Secret holds, so an administrator must drop the account \
+                 (docs/runbooks/migrations.md)",
+                cut(auth)
+            )));
+        }
         Ok(None)
     }
 }
@@ -1608,6 +1713,39 @@ impl ClickHouse {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_ingest_role_differences_name_extra_and_missing_rows_and_roles() {
+        assert_eq!(ingest_role_differences(&INGEST_EXPECTED_GRANTS, &[]), None);
+        // GRANT ... WITH GRANT OPTION replaces the row: one extra, one missing.
+        let mut granted: Vec<&str> = INGEST_EXPECTED_GRANTS.to_vec();
+        granted.retain(|line| *line != "SELECT\ttrustiot\ttelemetry\t\t0\t0");
+        granted.push("SELECT\ttrustiot\ttelemetry\t\t1\t0");
+        granted.push("SELECT\ttrustiot\ttenant_telemetry\tvalue\t0\t0");
+        granted.push("SHOW TABLES\t\t\t\t0\t0");
+        granted.push("ALTER UPDATE\ttrustiot\ttelemetry\t\t0\t1");
+        assert_eq!(
+            ingest_role_differences(&granted, &["extra_role"]).as_deref(),
+            Some(
+                "extra grants: SELECT ON trustiot.telemetry WITH GRANT OPTION, \
+                 SELECT(value) ON trustiot.tenant_telemetry, SHOW TABLES ON *.*, \
+                 ALTER UPDATE ON trustiot.telemetry (partial revoke); \
+                 missing grants: SELECT ON trustiot.telemetry; extra roles: extra_role"
+            )
+        );
+        // Each kind names five, then how many more.
+        let roles: Vec<String> = (1..=7).map(|n| format!("r{n}")).collect();
+        let roles: Vec<&str> = roles.iter().map(String::as_str).collect();
+        assert_eq!(
+            ingest_role_differences(&[], &roles).as_deref(),
+            Some(
+                "missing grants: INSERT ON trustiot.stream_commits, SELECT ON \
+                 trustiot.stream_commits, ALTER DELETE ON trustiot.telemetry, INSERT ON \
+                 trustiot.telemetry, SELECT ON trustiot.telemetry and 4 more; extra roles: r1, \
+                 r2, r3, r4, r5 and 2 more"
+            )
+        );
+    }
 
     #[test]
     fn a_bound_backfill_policy_is_named_with_whom_it_names() {

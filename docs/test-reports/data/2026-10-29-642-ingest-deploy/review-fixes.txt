@@ -1,0 +1,45 @@
+Laysi/trustiot-v2#642: the checks after the security review's fixes (L1, L4, I-3 in code; L2,
+L3, I-2 in the runbook), on the branch feat/642-ingest-chart (base main 61e20b22). Only the test
+lines and results are kept.
+
+== bun test deploy/chart
+ 708 pass
+ 0 fail
+Ran 708 tests across 9 files. [110.13s]
+
+== bun run --cwd scripts test   (the files of bun test scripts)
+ 1708 pass
+ 9 skip
+ 0 fail
+Ran 1717 tests across 54 files. [12.29s]
+
+== bun run --cwd scripts typecheck
+$ tsc --noEmit --project tsconfig.json
+rc=0
+
+== cargo fmt --all --check
+rc=0
+
+== cargo clippy --locked --workspace --all-targets -- -D warnings
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 8.83s
+rc=0
+
+== cargo test --locked -p migrate   (selected lines; every test binary reported ok)
+test clickhouse::tests::the_ingest_role_differences_name_extra_and_missing_rows_and_roles ... ok
+test config::tests::the_ingest_account_is_fixed_and_its_own ... ok
+test result: ok. 92 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.09s
+test ingest_account ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 25.17s
+rc=0
+
+== cargo test --locked -p repo-check
+test result: ok. 18 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.14s
+rc=0
+exit 0 at 16:18:24 (build host)
+
+== the first run of these fixes (16:09, build host), before the chart tests that render every
+   service were moved to the broker-on call matrix: cargo test -p migrate --test clickhouse_ingest
+   passed (ingest_account ... ok, 24.55s), and bun test deploy/chart failed 6 tests that render
+   every service without the broker, which ingest no longer allows; those are the tests changed
+   in this round.

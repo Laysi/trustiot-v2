@@ -1,7 +1,8 @@
 //! The ingest service's ClickHouse account (Laysi/trustiot-v2#642): the run creates it with the
 //! role trustiot_ingest alone and the password it generates into the service's Secret, lets it
-//! log in only while the service is deployed, and a tampered account, ingest role or ingest role
-//! holder revokes the account's login and stops the run.
+//! log in only while the service is deployed, and a tampered account (its roles, grants, settings
+//! or authentication methods), ingest role or ingest role holder revokes the account's login
+//! and stops the run.
 //!
 //! Its own binary, because the tests of one binary share one Postgres, which holds one TrustIoT
 //! database. Needs podman or docker (a throwaway Postgres for the lock and a throwaway
@@ -13,7 +14,7 @@ use migrate::Error;
 use migrate::config::{INGEST_ACCOUNT, RunConfig};
 use migrate::registry::{PRODUCT, Registry};
 use support::postgres::tls_postgres;
-use support::{ClickHouse, Database, MIGRATOR, MIGRATOR_INIT};
+use support::{ClickHouse, Database, MIGRATOR, MIGRATOR_INIT, random_hex};
 
 const CREATE: &str = "CREATE DATABASE migrate_clickhouse_ingest OWNER trustiot_owner";
 const COLLECTOR: &str = "trustiot_collector";
@@ -228,32 +229,34 @@ async fn ingest_account() {
         (
             "GRANT SELECT ON trustiot.tenant_telemetry TO trustiot_ingest",
             &["REVOKE SELECT ON trustiot.tenant_telemetry FROM trustiot_ingest"][..],
-            "the role trustiot_ingest has other grants or roles",
+            "the role trustiot_ingest has other grants or roles than the DDL files give it \
+             (extra grants: SELECT ON trustiot.tenant_telemetry);",
         ),
         (
             "GRANT SELECT ON trustiot.batch_commits TO trustiot_ingest",
             &["REVOKE SELECT ON trustiot.batch_commits FROM trustiot_ingest"][..],
-            "the role trustiot_ingest has other grants or roles",
+            "(extra grants: SELECT ON trustiot.batch_commits);",
         ),
         (
             "GRANT ALTER UPDATE ON trustiot.telemetry TO trustiot_ingest",
             &["REVOKE ALTER UPDATE ON trustiot.telemetry FROM trustiot_ingest"][..],
-            "the role trustiot_ingest has other grants or roles",
+            "(extra grants: ALTER UPDATE ON trustiot.telemetry);",
         ),
         (
             "GRANT SELECT ON trustiot.telemetry TO trustiot_ingest WITH GRANT OPTION",
             &["REVOKE GRANT OPTION FOR SELECT ON trustiot.telemetry FROM trustiot_ingest"][..],
-            "the role trustiot_ingest has other grants or roles",
+            "(extra grants: SELECT ON trustiot.telemetry WITH GRANT OPTION; missing grants: \
+             SELECT ON trustiot.telemetry);",
         ),
         (
             "REVOKE ALTER DELETE ON trustiot.telemetry FROM trustiot_ingest",
             &["GRANT ALTER DELETE ON trustiot.telemetry TO trustiot_ingest"][..],
-            "the role trustiot_ingest has other grants or roles",
+            "(missing grants: ALTER DELETE ON trustiot.telemetry);",
         ),
         (
             "GRANT migrate_test_ingest_extra TO trustiot_ingest",
             &["REVOKE migrate_test_ingest_extra FROM trustiot_ingest"][..],
-            "the role trustiot_ingest has other grants or roles",
+            "(extra roles: migrate_test_ingest_extra);",
         ),
         (
             "GRANT trustiot_ingest TO migrate_test_ingest_holder",
@@ -307,6 +310,64 @@ async fn ingest_account() {
             .query_as(INGEST_ACCOUNT, &second, "SELECT 1")
             .await
             .unwrap_or_else(|error| panic!("logs in again after {repair:?}: {error}"));
+    }
+
+    // 5b. Another authentication method (security review of Laysi/trustiot-v2#642): a second
+    //     password added next to the run's, or a method of another type in its place, is a way to
+    //     log in that no Secret holds. The run revokes the login and stops, naming the methods'
+    //     types and never a password; once an administrator drops the account, the next run
+    //     makes it again with the Secret's password.
+    let other = random_hex();
+    for (break_it, methods) in [
+        (
+            "ALTER USER trustiot_ingest_writer ADD IDENTIFIED WITH sha256_password BY \
+             {password:String}",
+            "[sha256_password,sha256_password]",
+        ),
+        (
+            "ALTER USER trustiot_ingest_writer IDENTIFIED WITH plaintext_password BY \
+             {password:String}",
+            "[plaintext_password]",
+        ),
+    ] {
+        clickhouse
+            .query_with(break_it, &[("password", other.as_str())])
+            .await
+            .unwrap_or_else(|error| panic!("{break_it}: {error}"));
+        let error = migrate::run(&ingest_config(&db, &clickhouse, true), &CLICKHOUSE_ONLY)
+            .await
+            .expect_err(break_it);
+        assert!(
+            matches!(&error, Error::ClickHouse(text)
+                if text.contains(&format!("has the authentication methods {methods} instead of the one sha256_password method"))
+                && text.contains("revoked the login of trustiot_ingest_writer")
+                && !text.contains(&other) && !text.contains(&second)),
+            "{break_it}: {error}"
+        );
+        assert_eq!(hosts().await, "0\n", "{break_it}: the login is revoked");
+        assert!(
+            clickhouse
+                .query_as(INGEST_ACCOUNT, &other, "SELECT 1")
+                .await
+                .is_err(),
+            "{break_it}: the added password cannot log in"
+        );
+        clickhouse
+            .query("DROP USER trustiot_ingest_writer")
+            .await
+            .expect("drop the account");
+        let report = migrate::run(&ingest_config(&db, &clickhouse, true), &CLICKHOUSE_ONLY)
+            .await
+            .unwrap_or_else(|error| panic!("the run after dropping the account: {error}"));
+        assert_eq!(
+            report.changes,
+            [format!("created ClickHouse account {INGEST_ACCOUNT}")],
+            "{break_it}"
+        );
+        clickhouse
+            .query_as(INGEST_ACCOUNT, &second, "SELECT 1")
+            .await
+            .unwrap_or_else(|error| panic!("logs in again after {break_it}: {error}"));
     }
 
     // 6. The service turned off: the account can no longer log in, and stays (HOST NONE); turned

@@ -47,7 +47,7 @@ ClickHouse 的用戶端（`src/clickhouse.rs`、`src/transport.rs`）複製自 t
 
 ## 部署
 
-映像是 `deploy/images/ingest`（arm64 的 Rust 執行檔，基底以 digest 固定，見 [deploy/images/README.md](../../deploy/images/README.md)）。chart 以 `services.ingest.enabled: true` 部署它，連同 `mqttBroker.enabled: true`：沒有 broker 時 chart 不給 `TRUSTIOT__MQTT__*`，服務拒絕啟動。chart 給它的設定、帳號與檢查見 [deploy/chart/README.md](../../deploy/chart/README.md) 的「ingest」，摘要：
+映像是 `deploy/images/ingest`（arm64 的 Rust 執行檔，基底以 digest 固定，見 [deploy/images/README.md](../../deploy/images/README.md)）。chart 以 `services.ingest.enabled: true` 部署它，連同 `mqttBroker.enabled: true`：沒有 broker 時渲染失敗，因為服務沒有 broker 就沒有事可做。chart 給它的設定、帳號與檢查見 [deploy/chart/README.md](../../deploy/chart/README.md) 的「ingest」，摘要：
 
 - Postgres：`ingest_app`、`ingest_platform` 的密碼由 migration Job 產生在 Secret `<release>-ingest-password`；`database.maxConnections` 預設 10。
 - ClickHouse：同一個 Secret 的 `trustiot_ingest_writer`，Job 建立這個只持有 `trustiot_ingest` 的帳號（見下方的角色表）。
@@ -357,7 +357,7 @@ materialized view 只處理 INSERT。重寫一批（沒有完成紀錄的批次�
 | row policy `deny_by_default`（每張表與每個 view） | `USING 0 TO ALL`。ClickHouse 的伺服器預設 `users_without_row_policies_can_read_rows = true`：表上有 policy、但沒有 policy 適用於某帳號時，那個帳號看得到全部的列。這條讓每個帳號都至少有一條 policy，沒有被其他 policy 點名的角色或帳號一列也讀不到，不必改伺服器設定 |
 | row policy `tenant_view_definer`（`telemetry` 與兩張彙總表） | `USING tenant_id = toUUID(getSetting('SQL_tenant_id')) AND <時間窗> TO trustiot_tenant_view_definer`。租戶過濾與可查期間真正生效的地方：DEFINER view 裡的查詢沿用呼叫者的設定，`SQL_tenant_id` 與時間窗設定就是呼叫帳號的常數（時間窗見下方「可查期間」） |
 | row policy `tenant_isolation`（三個租戶 view、`telemetry` 與兩張彙總表） | `USING tenant_id = toUUID(getSetting('SQL_tenant_id')) AND <時間窗> TO trustiot_tenant_reader`；沒有這些設定的帳號查詢時報錯（`UNKNOWN_SETTING`），不會拿到資料。view 上這條是第二層；表上這條在租戶角色沒有表權限時不起作用，只在萬一誤加了表權限時仍然過濾列 |
-| 帳號 `trustiot_ingest_writer` | 部署時服務用的寫入帳號，不在 DDL 檔案裡：migration Job 在服務啟用時以 `CREATE USER ... DEFAULT ROLE trustiot_ingest` 建立，只持有這個角色、沒有直接權限與 settings；密碼由 Job 產生在 chart 的 Secret `<release>-ingest-password`。Job 每次執行都檢查角色的權限與持有者、帳號的角色與設定，不符時先讓帳號不能登入再停止（`tools/migrate/src/clickhouse.rs`，Laysi/trustiot-v2#642） |
+| 帳號 `trustiot_ingest_writer` | 部署時服務用的寫入帳號，不在 DDL 檔案裡：migration Job 在服務啟用時以 `CREATE USER ... DEFAULT ROLE trustiot_ingest` 建立，只持有這個角色、沒有直接權限與 settings；密碼由 Job 產生在 chart 的 Secret `<release>-ingest-password`。Job 每次執行都檢查角色的權限與持有者、帳號的角色、設定與登入方式，不符時先讓帳號不能登入再停止（`tools/migrate/src/clickhouse.rs`，Laysi/trustiot-v2#642） |
 | row policy `service_all_rows`（`telemetry`、`stream_commits`、停用的 `batch_commits` 與兩張彙總表） | `USING 1 TO trustiot_ingest`；服務帳號另建的 policy |
 | row policy `deny_by_default`（materialized view `telemetry_1m_mv`、`telemetry_1h_mv`） | 從 materialized view `SELECT` 時，ClickHouse 以 view 的 DEFINER 讀目標表，讀者在彙總表上的 policy 不適用：沒有這條，任何拿到整個資料庫 `SELECT` 的帳號（管理帳號也是）都能經 view 讀到每個租戶的彙總（2026-10-25 測試發現）。有了它所有帳號經 materialized view 都讀到 0 列，寫入不受影響 |
 | row policy `migration_account`（backfill view） | `USING 1 TO NONE`：平常不點名任何帳號，管理帳號經 `deny_by_default` 也讀到 0 列。migration Job 補資料時、管理者依 runbook 檢查或修正時，暫時改成 `TO CURRENT_USER`，做完改回 `TO NONE`（上方「既有資料的 backfill」） |

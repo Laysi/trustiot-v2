@@ -313,6 +313,8 @@ describe("packagePinnedChart", () => {
         // The AI gateway renders only with a provider key and a model role (deploy/chart/README.md,
         // "AI 閘道"); on-prem's instance values set none.
         const aiGateway = ["--set", "ai.providers.anthropic.apiKeySecret.name=trustiot-anthropic", "--set-json", 'ai.roles.test={"models":["anthropic/claude-test"]}'];
+        // ingest renders only with the in-cluster MQTT broker (deploy/chart/README.md, "ingest").
+        const broker = ["--set", "mqttBroker.enabled=true"];
         const { stdout } = await run([
           helm,
           "template",
@@ -326,6 +328,7 @@ describe("packagePinnedChart", () => {
           join(CHART, "tests", "values", `${shape}-instance.yaml`),
           ...services,
           ...aiGateway,
+          ...broker,
         ]);
         const images = renderedImages(stdout);
         for (const pin of pins) {

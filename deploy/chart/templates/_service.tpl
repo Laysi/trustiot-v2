@@ -159,6 +159,11 @@ Returns a YAML list; use with fromYamlArray.
 {{- $aiGatewayNames = keys (include "trustiot.aiGateway.config" .root | fromYaml).data -}}
 {{- end -}}
 {{- $brokerClient := has $name (include "trustiot.mqttBroker.credentialServices" .root | fromYaml).services -}}
+{{- if and (eq $name "ingest") (not (include "trustiot.mqttBroker.enabled" .root)) -}}
+{{- /* ingest reads every gateway's telemetry from the in-cluster broker and has no other work:
+without it the pod would never become ready (security review of Laysi/trustiot-v2#642). */ -}}
+{{- fail "services.ingest: ingest reads the gateways' telemetry from the in-cluster MQTT broker, so it needs mqttBroker.enabled: true; enable the broker, or set services.ingest.enabled to false (README.md, \"ingest\")" -}}
+{{- end -}}
 {{- $dbEnv := list -}}
 {{- if has $name (include "trustiot.postgres.clients" .root | fromYaml).services -}}
 {{- /* The service's own Postgres login role and its password, which the migration Job generates

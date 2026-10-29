@@ -76,3 +76,14 @@ cargo test --locked --workspace --exclude agent
 | migration Job 建立的 ingest ClickHouse 帳號只有 `trustiot_ingest` 角色，多出的權限讓 Job 報錯（`cargo test -p migrate`，真的 ClickHouse） | 通過 |
 | 帶 `smoke` 標籤的 PR 的 nightly 顯示 ingest pod ready | 待測：nightly 只在 CI 跑（工作站不跑 Kubernetes），PR 開出並加上 `smoke` 標籤後由 CI 驗證；新的檢查是 `scripts/nightly/smoke.ts` 的 「ingest is ready」 |
 | `bun test scripts/release`、`bun test scripts/nightly`、`bun test scripts/ci/changes.test.ts`、`bun scripts/ci/check-secret-handling.ts`、`cargo test --workspace` 通過 | 通過（`scripts` 的三組包含在 `bun run --cwd scripts test`；`agent` 沒有改動未跑） |
+
+## 安全審查後的修正
+
+同日的安全審查（head `81d63f41`）沒有 Critical、High、Medium。以下修正後在建置主機（x86_64 Linux）重跑，分支已 rebase 到 main `61e20b22`：`bun test deploy/chart` 708 pass、0 fail；`bun run --cwd scripts test` 1708 pass、9 skip、0 fail；typecheck、`cargo fmt --all --check`、clippy `-D warnings`、`cargo test --locked -p migrate`（含 `clickhouse_ingest`）、`cargo test --locked -p repo-check` 都通過。輸出：[review-fixes.txt](data/2026-10-29-642-ingest-deploy/review-fixes.txt)。
+
+| 項目 | 處理 | 驗證 |
+| --- | --- | --- |
+| L1 寫入帳號多出登入方式 | Job 讀 `system.users` 的 `auth_type`，必須正好是一個 `sha256_password`；否則撤銷登入（`HOST NONE`）並停止，訊息只列方式的種類 | `tests/clickhouse_ingest.rs` 第 5b 步：`ALTER USER ... ADD IDENTIFIED WITH sha256_password BY ...`（ClickHouse 26.8 支援）列出 `[sha256_password,sha256_password]`，換成 `plaintext_password` 列出 `[plaintext_password]`；兩者都撤銷登入、加上的密碼登不進去、訊息不含任何密碼；管理帳號 `DROP USER` 後下一次執行以 Secret 的密碼建回 |
+| L4 停止訊息列出實際差異 | 角色的停止訊息列出多的權限列、少的權限列與多的角色，每類最多 5 項，其餘寫 `and <N> more`，只有名稱 | 單元測試 `the_ingest_role_differences_name_extra_and_missing_rows_and_roles`；`clickhouse_ingest.rs` 第 5 步逐項比對，例如 `GRANT ... WITH GRANT OPTION` 得到 `extra grants: SELECT ON trustiot.telemetry WITH GRANT OPTION; missing grants: SELECT ON trustiot.telemetry` |
+| I-3 沒有 broker 時開啟 ingest | 渲染失敗並說明要開啟 `mqttBroker.enabled` | chart 測試：只開 ingest、或開 ingest 並關 broker 都失敗；開 broker 時渲染成功。「每個服務都開」的渲染改為連同 broker，README 的呼叫矩陣跟著加上 broker 的列 |
+| L2、L3、I-2 | 只改 runbook（`docs/runbooks/migrations.md`）：檢查看不到以 `TO` 套用的 settings profile、quota 與 row policy；改了 `trustiot_ingest` 權限的版本不能往回 rollback；ingest 的停止讓每個服務的滾動更新卡在 `wait-for-migrations` | 文件 |

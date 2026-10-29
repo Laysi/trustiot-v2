@@ -282,7 +282,7 @@ chart 產生下列物件：
 
 #### 呼叫矩陣
 
-預設 values、所有服務啟用時渲染出的授權，兩種部署形態相同。「允許的呼叫端」是被呼叫端的 AuthorizationPolicy 的 principals（省略 `<release>-`），NetworkPolicy 放行同一批 pod；身分服務的政策依埠分開：`identity` 的呼叫端（入口 gateway）只連得到 API 埠 `http`；`identity-exchange` 是身分服務的 token exchange（`token-exchange` 埠，選的是身分服務的 pod），呼叫端是 `TRUSTIOT_ON_BEHALF_CALLS` 的呼叫端，預設 values 只有 `assistant`，它自己不是服務，所以「代表使用者呼叫」是 `—`；certs 服務同樣依埠分開：`certs` 的呼叫端只連得到 `http`，`certs-broker` 是簽 MQTT broker 伺服器憑證的 `broker-certs` 埠（選的是 certs 的 pod），只放行 broker 的憑證 CronJob（`mqtt-broker-certificate`），預設 values 不部署 broker，所以沒有呼叫端；AI 閘道同樣依埠分開：`ai-gateway` 的呼叫端只連得到 API 埠 `http`，`ai-gateway-admin` 是 AI 閘道的管理埠 `admin`（選的是 AI 閘道的 pod），只放行身分服務，它不收內部身分 token，所以「代表使用者呼叫」是 `—`；「代表使用者呼叫」是身分服務願意為誰換出以它為受眾的 token（`TRUSTIOT_ON_BEHALF_CALLS`），`—` 表示被呼叫端不是服務、不收內部身分 token。`tests/chart.test.ts` 的「README.md's call matrix」比對這張表與渲染結果：改了預設的 `mesh.calls`、例外路徑或預設的 `ingress.routes`，要在同一個變更更新這張表。
+預設 values、所有服務與 MQTT broker 啟用時渲染出的授權（ingest 只能與 broker 一起啟用，見「ingest」），兩種部署形態相同。「允許的呼叫端」是被呼叫端的 AuthorizationPolicy 的 principals（省略 `<release>-`），NetworkPolicy 放行同一批 pod；身分服務的政策依埠分開：`identity` 的呼叫端（入口 gateway）只連得到 API 埠 `http`；`identity-exchange` 是身分服務的 token exchange（`token-exchange` 埠，選的是身分服務的 pod），呼叫端是 `TRUSTIOT_ON_BEHALF_CALLS` 的呼叫端，預設 values 只有 `assistant`，它自己不是服務，所以「代表使用者呼叫」是 `—`；certs 服務同樣依埠分開：`certs` 的呼叫端只連得到 `http`，`certs-broker` 是簽 MQTT broker 伺服器憑證的 `broker-certs` 埠（選的是 certs 的 pod），只放行 broker 的憑證 CronJob（`mqtt-broker-certificate`），broker 沒有開啟時沒有呼叫端；AI 閘道同樣依埠分開：`ai-gateway` 的呼叫端只連得到 API 埠 `http`，`ai-gateway-admin` 是 AI 閘道的管理埠 `admin`（選的是 AI 閘道的 pod），只放行身分服務，它不收內部身分 token，所以「代表使用者呼叫」是 `—`；「代表使用者呼叫」是身分服務願意為誰換出以它為受眾的 token（`TRUSTIOT_ON_BEHALF_CALLS`），`—` 表示被呼叫端不是服務、不收內部身分 token。`tests/chart.test.ts` 的「README.md's call matrix」比對這張表與渲染結果：改了預設的 `mesh.calls`、例外路徑或預設的 `ingress.routes`，要在同一個變更更新這張表。
 
 | 被呼叫端 | 允許的呼叫端 | 代表使用者呼叫 |
 | --- | --- | --- |
@@ -291,8 +291,8 @@ chart 產生下列物件：
 | `alerts` | （無） | （無） |
 | `assets` | `assistant` | `assistant` |
 | `assistant` | （無） | （無） |
-| `certs` | `ingress-istio` | （無） |
-| `certs-broker` | （無） | — |
+| `certs` | `ingress-istio`、`mqtt-broker` | （無） |
+| `certs-broker` | `mqtt-broker-certificate` | — |
 | `clickhouse` | `ingest`、`migrate`、`otel-collector`、`telemetry-query` | — |
 | `field-context` | （無） | （無） |
 | `gateway-ops` | （無） | （無） |
@@ -303,11 +303,13 @@ chart 產生下列物件：
 | `knowledge` | （無） | （無） |
 | `migrate` | （無） | — |
 | `mqtt-bridge` | `ingress-istio` | （無） |
+| `mqtt-broker` | `certs`、`gateway-ops`、`ingest`、`mqtt-bridge` | — |
+| `mqtt-broker-certificate` | （無） | — |
 | `otel-collector` | 每個啟用的服務 | — |
 | `telemetry-query` | `assistant` | `assistant` |
 | `web` | `ingress-istio` | （無） |
 
-入口 gateway 到 `identity` 是 cookie 檢查與登入、到 `certs` 與 `mqtt-bridge` 是決策 27 的例外路徑，到 `web` 是 `hosts.app` 上 SPA 的靜態檔（見「SPA 的靜態檔」）；服務的 cookie 路由（`ingress.routes`）預設是空的，各服務的 issue 加上。`postgres` 不經 mesh，沒有 AuthorizationPolicy，連得到它的服務見上方 `postgres` 一條。預設 values 不部署 MQTT broker，所以表上沒有它；開啟後誰連得到它的哪個埠見「MQTT broker」的「誰連得到」。
+入口 gateway 到 `identity` 是 cookie 檢查與登入、到 `certs` 與 `mqtt-bridge` 是決策 27 的例外路徑，到 `web` 是 `hosts.app` 上 SPA 的靜態檔（見「SPA 的靜態檔」）；服務的 cookie 路由（`ingress.routes`）預設是空的，各服務的 issue 加上。`postgres` 不經 mesh，沒有 AuthorizationPolicy，連得到它的服務見上方 `postgres` 一條。MQTT broker 預設不部署；表上是開啟時的樣子：`mqtt-broker` 一列是連得到它的服務埠的服務，broker 向 `certs` 取 CA 憑證與 CRL，閘道器埠與其他細節見「MQTT broker」的「誰連得到」。broker 沒有開啟時沒有 `mqtt-broker` 與 `mqtt-broker-certificate` 兩列，`certs` 與 `certs-broker` 也沒有 broker 的呼叫端，ingest 也不能啟用。
 
 ### serviceDefaults 與 services.\<name\>
 
@@ -661,12 +663,12 @@ curl -sS -D - -X POST "http://127.0.0.1:18080/internal/roles/main/v1/messages" \
 | `TRUSTIOT__DATABASE__USERNAME`、`_PASSWORD`、`_PLATFORM_USERNAME`、`_PLATFORM_PASSWORD` | `ingest_app` 與 `ingest_platform`，密碼是 Secret `<release>-ingest-password` 的同名 key（見「migration Job」的「服務的資料庫帳號」） | 清單列了 `postgres` |
 | `TRUSTIOT__DATABASE__MAX_CONNECTIONS` | `services.ingest.database.maxConnections`（預設 `10`，3–100，見「連線預算」） | 清單列了 `postgres` |
 | `TRUSTIOT__CLICKHOUSE__USERNAME`、`_PASSWORD` | `trustiot_ingest_writer`，密碼是同一個 Secret 的 `trustiot_ingest_writer` key | ingest 開啟 |
-| `TRUSTIOT__MQTT__HOST`、`_PORT`、`_USERNAME`、`_PASSWORD_FILE` | broker 的服務埠與帳號 `service:ingest`，密碼檔掛在 `/etc/trustiot/mqtt-broker-account/ingest`（見「MQTT broker」的「服務的帳號」） | `mqttBroker.enabled`，而且清單列了 `mqtt-broker` |
+| `TRUSTIOT__MQTT__HOST`、`_PORT`、`_USERNAME`、`_PASSWORD_FILE` | broker 的服務埠與帳號 `service:ingest`，密碼檔掛在 `/etc/trustiot/mqtt-broker-account/ingest`（見「MQTT broker」的「服務的帳號」） | 清單列了 `mqtt-broker`（ingest 開啟時 `mqttBroker.enabled` 必須是 `true`，見下方「就緒」） |
 
-- **ClickHouse 寫入帳號**：migration Job 以 `CREATE USER trustiot_ingest_writer ... DEFAULT ROLE trustiot_ingest` 建立它，密碼由 Job 產生（`tools/migrate/src/clickhouse.rs`）。角色的權限只由 `services/ingest/migrations/clickhouse/` 的檔案給：`trustiot.telemetry` 的 `SELECT`、`INSERT`、`ALTER DELETE`（刪除不完整的批次），`trustiot.stream_commits`、`trustiot.telemetry_1m`、`trustiot.telemetry_1h` 的 `SELECT`、`INSERT`。持有這個角色就能寫入與刪除每個租戶的遙測，所以每次執行 Job 都檢查：角色的權限正好是這些、沒有 `GRANT OPTION`、沒有被授予別的角色，除了寫入帳號沒有別的使用者或角色持有它，寫入帳號只有這個預設角色、沒有直接權限與 settings。不符時 Job 先讓寫入帳號不能登入（`HOST NONE`）再停止，修好之後下一次執行恢復登入（[docs/runbooks/migrations.md](../../docs/runbooks/migrations.md) 的「Job 停止時」）。這段時間 ingest 每批回 `retry`，閘道器保留資料、稍後重送。`tools/migrate/tests/clickhouse_ingest.rs` 以真的 ClickHouse 驗證帳號能做與不能做的事、每一種被改過的情況與修復。
+- **ClickHouse 寫入帳號**：migration Job 以 `CREATE USER trustiot_ingest_writer ... DEFAULT ROLE trustiot_ingest` 建立它，密碼由 Job 產生（`tools/migrate/src/clickhouse.rs`）。角色的權限只由 `services/ingest/migrations/clickhouse/` 的檔案給：`trustiot.telemetry` 的 `SELECT`、`INSERT`、`ALTER DELETE`（刪除不完整的批次），`trustiot.stream_commits`、`trustiot.telemetry_1m`、`trustiot.telemetry_1h` 的 `SELECT`、`INSERT`。持有這個角色就能寫入與刪除每個租戶的遙測，所以每次執行 Job 都檢查：角色的權限正好是這些、沒有 `GRANT OPTION`、沒有被授予別的角色，除了寫入帳號沒有別的使用者或角色持有它，寫入帳號只有這個預設角色、沒有直接權限與 settings，而且只有 Job 設定的那一個 `sha256_password` 登入方式（多一個 `ADD IDENTIFIED WITH` 的密碼，或換成別種方式，都算被改過）。檢查看不到以 `TO` 套用到帳號的 settings profile、quota 與 row policy（見 runbook）。不符時 Job 先讓寫入帳號不能登入（`HOST NONE`）再停止，修好之後下一次執行恢復登入（[docs/runbooks/migrations.md](../../docs/runbooks/migrations.md) 的「Job 停止時」）。這段時間 ingest 每批回 `retry`，閘道器保留資料、稍後重送。`tools/migrate/tests/clickhouse_ingest.rs` 以真的 ClickHouse 驗證帳號能做與不能做的事、每一種被改過的情況與修復。
 - **query ID**：ingest 以 `trustiot-rewrite/<閘道器>/<串流>` 的 query ID 與 `replace_running_query` 讓同一串流的重寫不重疊；能以同樣的 query ID 在 ClickHouse 執行長查詢的程式，就能讓那個串流的寫入停住。叢集內的 ClickHouse 只放行 `ingest`、`telemetry-query`、collector 與 migration Job（上方呼叫矩陣），租戶沒有直接連 ClickHouse 的路；`telemetry-query` 以租戶帳號查詢，不轉送呼叫端給的 query ID（`services/telemetry-query/src` 不設定 `query_id`），collector 與 Job 是 chart 自己的元件，不送這種 ID。外部 ClickHouse 上客戶自己的帳號要由客戶管理，不要讓應用程式自選 query ID。
 - **單一閘道器的流量**：ingest 對每個閘道器限制批次的大小與頻率（`TRUSTIOT__TELEMETRY_LIMITS__*`，chart 沒有欄位，需要時以 `services.ingest.env` 設定，見 services/ingest/README.md）。超過的批次只讀標頭就回 `retry`，不查綁定、不拿鎖、不碰 ClickHouse，所以一台閘道器洗版拿不走其他閘道器的處理名額。broker 端沒有每個閘道器的速率限制：Mosquitto 沒有每個用戶端的發布速率設定，只有封包大小與佇列的上限（見「MQTT broker」的「持久化與限制」）。
-- **就緒**：readiness 要 Postgres、ClickHouse 與 broker 都通（共用訂閱以 QoS 1 獲准）。broker 沒有開啟時 chart 不給 `TRUSTIOT__MQTT__*`，ingest 拒絕啟動；渲染不因此失敗，與 `mqtt-bridge` 相同。broker 的 init container 還沒寫入 `ingest` 的密碼時，新的 pod 停在等待掛載（見「MQTT broker」的「服務的帳號」）。
+- **就緒**：readiness 要 Postgres、ClickHouse 與 broker 都通（共用訂閱以 QoS 1 獲准）。ingest 只從叢集內的 broker 收遙測，沒有 broker 就沒有事可做，所以 `services.ingest.enabled: true` 而 `mqttBroker.enabled` 不是 `true` 時渲染失敗（`services.ingest: ingest reads the gateways' telemetry from the in-cluster MQTT broker, so it needs mqttBroker.enabled: true`），不會部署一個永遠不就緒的 pod。`mesh.calls.ingest` 拿掉 `mqtt-broker` 時 chart 不給 `TRUSTIOT__MQTT__*`，ingest 拒絕啟動。broker 的 init container 還沒寫入 `ingest` 的密碼時，新的 pod 停在等待掛載（見「MQTT broker」的「服務的帳號」）。
 - **輪替**：ClickHouse 與 Postgres 的密碼隨 `migrate.passwordGeneration`（ingest 跟著 Job 滾動更新）；broker 的密碼隨 `mqttBroker.passwordGeneration`，ingest 不重啟，下一次重連讀新的密碼檔。
 - **關閉**：`services.ingest.enabled: false` 時下一次 Job 讓 `ingest_app`、`ingest_platform` 不能登入，寫入帳號改成 `HOST NONE`（日誌有 `revoked the login of ClickHouse account trustiot_ingest_writer: ingest is not deployed`）；Secret 留著（`keep`）。
 - nightly 的 smoke 測試開啟 ingest 與 broker，確認 pod 就緒、兩個 Postgres 角色都有連線、寫入帳號只有 `trustiot_ingest` 這個預設角色（`scripts/nightly/smoke.ts`）。它還不從閘道器送遙測進 broker。
