@@ -79,7 +79,7 @@ CI=true cargo test --locked -p workstation --test ssh --test pipeline_swtpm
 
 ## 寫作期間的審查閘門
 
-commit 前的 Codex 審查擋下三處，都已修正並由上面的測試覆蓋：
+commit 前的審查閘門擋下三處，都已修正並由上面的測試覆蓋：
 
 | 項目 | 處理 |
 | --- | --- |
@@ -91,7 +91,7 @@ commit 前的 Codex 審查擋下三處，都已修正並由上面的測試覆蓋
 
 ## 安全審查
 
-head `5c8fe456` 的安全審查沒有 Critical 或 High。以下每項一個 commit，都經 Codex 審查閘門：
+head `5c8fe456` 的安全審查沒有 Critical 或 High。以下每項一個 commit，都經 commit 前的審查閘門：
 
 | 項目 | 處理 | commit |
 | --- | --- | --- |
