@@ -382,10 +382,20 @@ pub async fn install(
     };
     let message = printable_output(&outcome.stderr);
     let error = match outcome.status {
+        Some(remote_exit::SUCCESS) if !is_agent_report(&outcome.stdout) => stopped(
+            InstallStopKind::Failed,
+            format!(
+                "the gateway's trustiot-agent provision install ended with status 0, but its \
+                 report is not the agent's (one line `<path>: written` or `<path>: unchanged` \
+                 for the certificate chain, then one for the root certificate): {:?}. Whether \
+                 the certificates are installed is unknown; check the agent installed on the \
+                 gateway, then run the same command again",
+                printable_report(&String::from_utf8_lossy(&outcome.stdout))
+            ),
+        ),
         Some(remote_exit::SUCCESS) => {
-            let report = String::from_utf8_lossy(&outcome.stdout).into_owned();
             let installed = Installed {
-                report: printable_report(&report),
+                report: printable_report(&String::from_utf8_lossy(&outcome.stdout)),
             };
             journal.append(
                 &Event::new(now, hardware_id, "installed")
@@ -501,6 +511,37 @@ fn printable_output(bytes: &[u8]) -> String {
     } else {
         shown
     }
+}
+
+/// Whether `stdout` is the report of the agent's `provision install` that succeeded: exactly two
+/// lines, each `<absolute path>: <outcome>` with a newline, the certificate chain's first
+/// (`written`, `unchanged` or `renewed`), then the root's (`written` or `unchanged`).
+/// Anything else (no report, more lines, other text, control characters) is not taken as
+/// success, whatever the status.
+fn is_agent_report(stdout: &[u8]) -> bool {
+    let Ok(text) = std::str::from_utf8(stdout) else {
+        return false;
+    };
+    let Some(body) = text.strip_suffix('\n') else {
+        return false;
+    };
+    let lines: Vec<&str> = body.split('\n').collect();
+    let line_is = |line: &str, outcomes: &[&str]| {
+        line.rsplit_once(": ").is_some_and(|(path, outcome)| {
+            path.len() > 1
+                && path.starts_with('/')
+                && !path
+                    .chars()
+                    .any(|character| character.is_control() || is_format(character))
+                && outcomes.contains(&outcome)
+        })
+    };
+    matches!(
+        lines.as_slice(),
+        [chain, root]
+            if line_is(chain, &["written", "unchanged", "renewed"])
+                && line_is(root, &["written", "unchanged"])
+    )
 }
 
 /// The gateway's report: its lines without control characters, bounded.
@@ -718,6 +759,8 @@ mod tests {
         calls: Vec<(Vec<String>, Vec<u8>)>,
         status: Option<i32>,
         stdout: &'static str,
+        /// Raw standard output that replaces `stdout`, for bytes that are not UTF-8.
+        stdout_bytes: Option<Vec<u8>>,
         stderr: &'static str,
     }
 
@@ -727,6 +770,7 @@ mod tests {
                 calls: Vec::new(),
                 status,
                 stdout,
+                stdout_bytes: None,
                 stderr,
             }
         }
@@ -741,7 +785,10 @@ mod tests {
             self.calls.push((arguments.to_vec(), stdin.to_vec()));
             Ok(RemoteOutcome {
                 status: self.status,
-                stdout: self.stdout.as_bytes().to_vec(),
+                stdout: self
+                    .stdout_bytes
+                    .clone()
+                    .unwrap_or_else(|| self.stdout.as_bytes().to_vec()),
                 stderr: self.stderr.as_bytes().to_vec(),
             })
         }
@@ -1030,6 +1077,63 @@ mod tests {
                 .expect_err("stopped");
             assert_eq!(error.exit_code(), 34, "{stderr}: {error}");
             assert!(!error.to_string().contains("sudoers"), "{error}");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_success_without_the_agents_report_is_not_taken_as_installed() {
+        let (leaf, issuing, root) = pki();
+        let journal = journal_with(&record(&leaf, &issuing, &root));
+        for stdout in [
+            "",
+            "\n",
+            "/var/lib/trustiot-agent/gateway.pem: written\n",
+            "/var/lib/trustiot-agent/gateway.pem: written\n/etc/trustiot/broker-ca.pem: written",
+            "/var/lib/trustiot-agent/gateway.pem: written\n/etc/trustiot/broker-ca.pem: written\n\n",
+            "/a: written\n/b: written\n/c: written\n",
+            "/a: written\n/b: renewed\n",
+            "/a: deleted\n/b: written\n",
+            "a: written\n/b: written\n",
+            "/: written\n/b: written\n",
+            "/a\x1b[31m: written\n/b: written\n",
+            "/a\u{202e}: written\n/b: written\n",
+            "/a: written\r\n/b: written\r\n",
+            "installed\nok\n",
+        ] {
+            let mut gateway = Recorder::answering(Some(0), stdout, "");
+            let error = install(&journal, ID, &pin(&root), &mut gateway, now())
+                .await
+                .expect_err("not installed");
+            assert_eq!(error.exit_code(), 34, "{stdout:?}: {error}");
+            assert!(
+                error.to_string().contains("report is not the agent's"),
+                "{stdout:?}: {error}"
+            );
+            assert!(!error.to_string().contains('\x1b'), "{error}");
+        }
+        let log = log(&journal);
+        assert!(!log.contains("\"event\":\"installed\""), "{log}");
+        assert!(
+            log.contains("\"stop\":\"failed\"") && log.contains("\"remote_status\":0"),
+            "{log}"
+        );
+        // Bytes that are not UTF-8 are not a report either.
+        let mut gateway = Recorder::answering(Some(0), "", "");
+        gateway.stdout_bytes = Some(b"/a: written\n/b: \xffwritten\n".to_vec());
+        let error = install(&journal, ID, &pin(&root), &mut gateway, now())
+            .await
+            .expect_err("not installed");
+        assert_eq!(error.exit_code(), 34, "{error}");
+        // The agent's own reports, including a kept renewal, are.
+        for stdout in [
+            "/a: written\n/b: unchanged\n",
+            "/a: unchanged\n/b: written\n",
+            "/var/lib/trustiot agent/gateway.pem: renewed\n/b: unchanged\n",
+        ] {
+            let mut gateway = Recorder::answering(Some(0), stdout, "");
+            install(&journal, ID, &pin(&root), &mut gateway, now())
+                .await
+                .expect("installed");
         }
     }
 
