@@ -91,6 +91,7 @@ use x509_parser::x509::{AlgorithmIdentifier, SubjectPublicKeyInfo};
 
 use crate::api::{self, BodyKeys, Problems, error, ok, refuse};
 use crate::authority::{Authority, CaState, unix_now};
+use crate::dynsec::BrokerSync;
 use crate::issue::{
     self, IssueError, IssuedCertificate, MAX_REQUEST_BYTES, Refusal, WORKSTATION_PURPOSE_DER,
     WORKSTATION_SUBJECT_PREFIX, WorkstationName,
@@ -584,6 +585,7 @@ pub struct Routes {
     db: PlatformDb,
     ca: CaState,
     validity: Duration,
+    broker_sync: BrokerSync,
 }
 
 impl FromRef<Routes> for IdentityVerifier {
@@ -594,12 +596,14 @@ impl FromRef<Routes> for IdentityVerifier {
 
 /// The registration route: tokens verified with `verifier`, everything written as the platform
 /// role through `db`, certificates signed by the CA of `ca`, valid for `validity`
-/// (`gateway.validity`).
+/// (`gateway.validity`); each new registration asks `broker_sync` to compare the gateway's
+/// broker permissions once it has committed (Laysi/trustiot-v2#633).
 pub fn routes(
     verifier: IdentityVerifier,
     db: PlatformDb,
     ca: CaState,
     validity: Duration,
+    broker_sync: BrokerSync,
 ) -> Router {
     Router::new()
         .route(REGISTRATIONS_PATH, post(register_gateway))
@@ -609,6 +613,7 @@ pub fn routes(
             db,
             ca,
             validity,
+            broker_sync,
         })
 }
 
@@ -707,6 +712,9 @@ async fn register_gateway(
                     not_after = %view.not_after,
                     "registered a gateway"
                 );
+                // Committed: the broker's permissions follow now, not at the next whole
+                // comparison.
+                state.broker_sync.gateway(&registration.hardware_id);
             } else {
                 tracing::info!(
                     user_id = %user.user_id(),

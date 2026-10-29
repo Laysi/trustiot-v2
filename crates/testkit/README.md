@@ -1,6 +1,6 @@
 # testkit
 
-服務測試用的共用工具。主角是跨租戶負向測試框架：每個服務在 `tests/` 用它證明租戶 A 讀不到、也改不了租戶 B 的資料（[決策 29](../../docs/architecture/decisions.md)「跨租戶負向測試列入每個服務的 CI」）。另外提供測試用的內部身分 token、帶 TLS 的拋棄式 Postgres 與容器工具，閘道器採集測試用的假 Modbus 端點與故障注入（M7，見[假 Modbus 端點](#假-modbus-端點)），以及閘道器連線測試用的 WebSocket 前端、測試 CA 與 Mosquitto 容器（見[MQTT 測試環境](#mqtt-測試環境)）。
+服務測試用的共用工具。主角是跨租戶負向測試框架：每個服務在 `tests/` 用它證明租戶 A 讀不到、也改不了租戶 B 的資料（[決策 29](../../docs/architecture/decisions.md)「跨租戶負向測試列入每個服務的 CI」）。另外提供測試用的內部身分 token、帶 TLS 的拋棄式 Postgres 與容器工具，閘道器採集測試用的假 Modbus 端點與故障注入（M7，見[假 Modbus 端點](#假-modbus-端點)），閘道器連線測試用的 WebSocket 前端、測試 CA 與 Mosquitto 容器（見[MQTT 測試環境](#mqtt-測試環境)），以及閘道器 TPM 測試用的軟體 TPM（見[軟體 TPM](#軟體-tpm)）。
 
 只能當 `[dev-dependencies]` 使用：`tools/repo-check` 擋下其他用法，因為 `tools/sql-check` 把本 crate 當測試程式檢查（它把巨集組好的靜態 SQL 以變數交給 sqlx）。
 
@@ -14,6 +14,7 @@
 | `container` | podman 或 docker 的容器，drop 時刪除；`unavailable(what)`：本機缺容器執行環境時略過測試，設了 `CI` 時改為失敗 |
 | `modbus` | `FakeModbus`：測試行程內的假 Modbus TCP 與 RTU-over-TCP 端點，支援站號、故障注入（`Fault`）與請求紀錄；見[假 Modbus 端點](#假-modbus-端點) |
 | `mqtt` | 閘道器到 broker 的整條路：`TestPki`、`front::WsFront`（入口與 mqtt-bridge 的替身）、`mosquitto::Mosquitto`；見[MQTT 測試環境](#mqtt-測試環境) |
+| `swtpm` | `Swtpm`：拋棄式容器裡的軟體 TPM 2.0（swtpm），`session()` 像開一次 `/dev/tpmrm0`，`tools(script)` 在容器內跑 tpm2-tools；見[軟體 TPM](#軟體-tpm) |
 | `clock` | 真實 socket 上的時間控制：`manual()` 讓暫停的 tokio 時鐘只在測試 `advance` 時前進；`bounded(what, future)` 以牆上時間限制等待；見[時間控制](#時間控制) |
 | `chart` | chart 對服務的假設：`postgres_connection_budget(service)` 讀 `deploy/chart/templates/_postgres.tpl` 的 `trustiot.postgres.connectionBudgets`（每個副本的連線預算，Laysi/trustiot-v2#575）；`pool_size_calls(src)` 列出 crate 的 `src` 裡每個 `.max_connections(...)`。用 Postgres 的服務各有一個 `tests/chart_connections.rs`，以兩者確認程式的連線池與 chart 的預算相同，加了連線池就失敗（見 [chart 的 README](../../deploy/chart/README.md)「叢集內的 Postgres」） |
 
@@ -289,6 +290,26 @@ broker.restart();                                              // SIGTERM 後重
 
 `Mosquitto` 的方法（`publish`、`subscribe`、`restart`、`wait_for_log`、`control`）會阻塞（它們執行容器指令），在 async 測試裡以 multi-thread runtime 加 `tokio::task::block_in_place` 呼叫，agent 的 task 才不會被卡住。`start` 先挑一個空的 port 再交給容器執行環境，中間被別人拿走時換一個 port 重試（最多 5 次）；`Subscription` 被丟掉時連容器裡的 `mosquitto_sub` 一起停掉。`publish` 回傳 PUBACK 的 reason code；`Subscription::wait_for` 略過不要的訊息、逾時時列出看到的 topic。broker 的日誌（`logs()`、`wait_for_log`）含連線的來源位址，不要原樣貼進測試報告。
 
+## 軟體 TPM
+
+閘道器的 TPM 測試用（Laysi/trustiot-v2#86、Laysi/trustiot-v2#611），模組 `swtpm`。容器裡是 swtpm（libtpms）與 tpm2-tools，測試經 swtpm 的原始指令埠（只發佈在主機的回送位址）送 TPM 2.0 指令，tpm2-tools 在容器內用來準備與檢查 TPM。
+
+- `Swtpm::start()`：一顆全新的 TPM（已做 TPM2_Startup，與閘道器的核心相同），等到它回應才回來。沒有 podman 或 docker 時回 `None`（本機略過，設了 `CI` 時失敗）；drop 時連同狀態刪除容器。
+- `swtpm.session()`：相當於一個行程開啟 `/dev/tpmrm0`。`transact(command)` 送一個完整的指令、收回完整的回應（最多 4096 bytes）；session 被丟掉時 flush 它載入的暫時物件與 session，與核心的資源管理器在行程關閉裝置（或行程死掉）時做的一樣。swtpm 一次只服務一條連線，所以所有 session 共用一條 TCP 連線，以鎖讓每個指令完整送完；兩個執行緒各拿一個 session，就像兩個行程同時使用 TPM。agent 的測試把 session 包成自己的 `TpmChannel`（`TpmTransport::Channel`）。資源管理器另外會虛擬化 handle、在物件槽不夠時換出 context，這裡沒有：libtpms 同時只能載入 3 個暫時物件（`TPM2_PT_HR_TRANSIENT_AVAIL`）。
+- `swtpm.tools(script)`：在容器內的新暫存目錄以 `sh -eu` 執行 `script`（`TPM2TOOLS_TCTI` 已指向這顆 TPM），回傳 stdout，失敗或超過 120 秒就 panic。執行前先關掉共用的連線（tpm2-tools 要自己的連線），期間持有鎖，所以不會有 session 的指令送到一半；之後的 session 指令會重新連線，TPM 的狀態不受影響。
+- `create_standard_srk()`：在 `0x81000001` 放閘道器上那種標準的 ECC SRK（`tpm2_createprimary -C o -g sha256 -G ecc256:aes128cfb`）。`persistent_handles()`、`transient_handles()` 列出 handle；`snapshot()` 是 TPM 內容的文字快照（持久、暫時與 NV 的 handle，每個持久物件的 `tpm2_readpublic`，變動的屬性，包括字典攻擊計數 `TPM2_PT_LOCKOUT_COUNTER`），用來比對一個步驟前後 TPM 有沒有變。
+- 映像以 `src/swtpm/Containerfile`（Debian trixie 的 swtpm 與 tpm2-tools，基底以 multi-arch digest 釘選）建置，build context 是空目錄，同一個行程只建一次，留在本機為 `localhost/testkit-swtpm:<Containerfile 的 SHA-256 前 8 bytes>`，下次直接沿用，不要時以 `podman rmi` 移除。apt 套件沒有釘版本，重建時可能拿到 Debian 的新修正版。
+
+```rust
+let Some(swtpm) = Swtpm::start() else { return };   // 沒有容器執行環境時略過
+swtpm.create_standard_srk();
+let mut session = swtpm.session();
+let response = session.transact(&command)?;           // 一個 TPM 2.0 指令
+let before = swtpm.snapshot();
+// ...
+assert_eq!(swtpm.snapshot(), before);
+```
+
 ## 執行
 
 ```sh
@@ -296,6 +317,7 @@ cargo test -p testkit                       # 單元測試與容器測試（需�
 cargo test -p testkit -- --nocapture        # 加上每個探測的報告
 cargo test -p testkit --test modbus_endpoint --test modbus_example   # 只跑假 Modbus 端點（不需要容器）
 cargo test -p agent --test transport --test broker                    # MQTT 測試環境的使用者（broker 需要容器）
+cargo test -p agent --test tpm_swtpm --test tpm_provision             # 軟體 TPM 的使用者（需要容器）
 ```
 
 沒有 podman 或 docker 時容器測試在本機略過；設了 `CI` 時改為失敗，CI 綠燈就代表真的跑過。
