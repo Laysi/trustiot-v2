@@ -941,8 +941,11 @@ name = "gateway-ops"
 version = "0.1.0"
 dependencies = [
  "axum",
+ "cbor4ii",
  "chrono",
  "contract",
+ "migrate",
+ "mqtt-client",
  "opentelemetry",
  "outbox",
  "protocol",
@@ -954,8 +957,10 @@ dependencies = [
  "testkit",
  "thiserror",
  "tokio",
+ "tokio-util",
  "tracing",
  "tracing-subscriber",
+ "uuid",
 ]
 
 [[package]]
