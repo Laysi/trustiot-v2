@@ -364,6 +364,19 @@ polling::run(&reader, polling::poll_period(&device), &mut connection, &clock, &s
 - 一條專用執行緒（`tpm`）擁有裝置，請求經有上限的佇列（8 個）一個一個送，佇列滿了回 `Busy`。rustls 的 `Signer::sign` 是同步呼叫，等待期間佔住呼叫它的執行緒（閘道器上約 70 ms），所以握手不能跑在負責 Modbus 輪詢的執行緒上。等待最多 `RESPONSE_TIMEOUT`（10 秒，排隊也算在內；核心對這些指令的逾時更短）：簽章佔住連線執行緒，這段時間加一次進度計數要小於 systemd watchdog 通知的間隔（15 秒），否則 systemd 會在 agent 自己放棄之前重啟它（見上方 systemd）。執行緒停了（panic）時簽章立即回錯誤，不會卡住；最後一個 `TpmKey` 與 `Signer` 被丟掉時執行緒結束並關閉裝置。
 - `TpmTransport::Channel` 接受其他 `TpmChannel`（測試以 TCP 連 swtpm）；正式環境只用 `Device`。
 
+### 金鑰佈建（產線工具用）
+
+`tpm::ensure_key(transport, handle)` 讓持久 handle 上有 agent 要用的金鑰（決策 12 的 (5)，Laysi/trustiot-v2#611），產線工具的 `provision` 子命令（Laysi/trustiot-v2#613）呼叫它。agent 本身在閘道器上不呼叫：它只以 `TpmKey::open` 使用已經佈建好的金鑰。回傳的 `Provisioned` 有金鑰（`TpmKey`，可以簽 CSR）與 `created`。
+
+- **沿用**：handle 上的物件與決策 12 的範本在 `unique` 以外的每個欄位都相同（名稱演算法 SHA-256、屬性剛好 `0x00040072`、沒有 authPolicy），並通過自測簽章，就是這把金鑰，`created = false`。這比 `TpmKey::open` 嚴格：open 不看名稱演算法、policy 與額外的屬性 bit，理由見決策 12。TPM 的狀態在重刷 SD 卡後仍在，重跑就走這條，得到同一個公鑰、不多一個持久 handle。
+- **建立**：handle 是空的（ReadPublic 回 `TPM_RC_HANDLE`）時，以 TPM2_Create 在 SRK 下建立同範本的金鑰、TPM2_Load、以 TPM2_EvictControl 持久化，再讀回確認公開區域與建立時相同、通過同樣的檢查，`created = true`。載入的暫時物件用完就 FlushContext。
+- **拒絕**：handle 上是其他任何物件（RSA、restricted、P-384、儲存金鑰、有密碼的金鑰、不能簽章的金鑰，以及名稱演算法不同、帶 policy 或多了 `noDA` 等屬性的簽章金鑰）回 `ProvisionError::Refused`，只送過 TPM2_ReadPublic 與最多一次自測簽章，**絕不 evict、不改**。範本不同的物件只讀不簽；範本相同但有密碼的金鑰要靠自測簽章的授權失敗分辨，沒有 `noDA` 的這種金鑰會讓 TPM 的字典攻擊計數加一（agent 啟動時也一樣）；其他狀態不變。
+- **SRK**：`0x81000001`（`SRK_HANDLE`）是標準的 ECC SRK（tpm2-tools 預設範本 `tpm2_createprimary -C o -g sha256 -G ecc256:aes128cfb`，比對 `unique` 以外的每個欄位）就以它為父金鑰；否則在 owner hierarchy 以同範本建一個暫時的 primary，Load 之後就 flush。工具從不寫入 `0x81000001`（那個 handle 歸 LUKS 那一側，Laysi/trustiot-v2#95）。
+- **中斷與同時執行**：Create 與 EvictControl 之間行程死掉時，載入的金鑰是暫時物件，核心的資源管理器在行程關閉 `/dev/tpmrm0` 時清掉它，什麼都沒持久化，下次重跑建一把新的。兩個行程同時建立時，後到的 EvictControl 得到 `TPM_RC_NV_DEFINED`，它 flush 自己的金鑰、讀回先到的那把，通過檢查就沿用。
+- handle 必須在 owner 的持久範圍（`0x81000000`–`0x817fffff`）而且不是 `SRK_HANDLE`，否則在送出任何指令前回 `UnsupportedHandle`。
+- TPM 回 `TPM_RC_RETRY`、`TPM_RC_YIELDED` 或 `TPM_RC_TESTING`（指令沒有執行）時，工作執行緒重送同一個指令，最多 8 次、間隔從 10 ms 加倍到 500 ms（swtpm 對 TPM2_Create 回過 `TPM_RC_RETRY`）；`ensure_key` 回傳的金鑰簽章時也這樣重送。agent 的 `TpmKey::open` 不重送，行為與之前相同。每個指令最多等 `PROVISION_RESPONSE_TIMEOUT`（30 秒，重送與排隊都算在內）。
+- 指令與回應的編解碼在 `src/tpm/marshal.rs`，與 ReadPublic、Sign 一樣嚴格檢查每個長度與結構；單元測試以 swtpm 錄下的整段交換（`src/tpm/fixtures.rs`）逐 byte 比對指令並解析回應。
+
 ## 測試
 
 ```sh
@@ -384,6 +397,7 @@ cargo test -p agent --test modbus_rtu_framing           # 以 raw socket 驗證 
 cargo test -p agent --test polling_recovery             # 對 testkit 假端點跑輪詢迴圈：watchdog 救回不回答與半開的連線、只有讀到值才重置退避
 cargo test -p agent --test desired_config               # 設定下發與套用：移除的設備不再輪詢、其他設備不受影響、無效設定被拒、版本規則、斷網重開與重開後收斂
 cargo test -p agent --test tpm_swtpm                    # swtpm 容器：簽章、mTLS 握手、拒絕不能用的金鑰
+cargo test -p agent --test tpm_provision                # swtpm 容器：金鑰佈建的建立、沿用、拒絕、同時建立、中斷、tpm2_clear
 ```
 
 `tools/lab-dataset` 的錄製工具（`lab-dataset record`）以 library 使用 `modbus::endpoint::Endpoints`、`DeviceReader` 與 `polling::run`；改它們的介面時一併跑 `cargo test -p lab-dataset --test record`。錄製工具同樣經過位址限制，它的測試以 `exempt_for_tests` 放行假轉換器所在的 127.0.0.1。
@@ -393,4 +407,4 @@ cargo test -p agent --test tpm_swtpm                    # swtpm 容器：簽章�
 - `transport`、`broker`、`binary` 走真的 socket，每個等待都以 `testkit::clock::bounded` 設上限。WebSocket 前端（替代入口與 mqtt-bridge）、測試 CA 與 Mosquitto 容器來自 `testkit::mqtt`，用法見 [`crates/testkit/README.md`](../../crates/testkit/README.md)「MQTT 測試環境」。所有憑證與金鑰在測試時產生，不進 repo。
 - `broker` 需要 podman 或 docker：沒有時略過，`CI` 有設時失敗。
 - 假 Modbus 端點的用法見 [`crates/testkit/README.md`](../../crates/testkit/README.md)「假 Modbus 端點」。
-- `tpm_swtpm` 以 `tests/swtpm/Containerfile`（Debian 的 swtpm 與 tpm2-tools，基底以 multi-arch digest 釘選）建映像，build context 是空目錄；映像留在本機（`localhost/trustiot-agent-swtpm:<Containerfile 的雜湊>`），下次直接沿用，不要時以 `podman rmi` 移除。測試時以 tpm2-tools 佈建金鑰，比對 tpm2-tools 算的 SubjectPublicKeyInfo、以公鑰驗證簽章，並做一次真的 TLS 1.3 mTLS 握手（測試 CA 為 TPM 公鑰簽發用戶端憑證，CertificateVerify 剛好一次 TPM2_Sign，resumption 不簽章）。沒有 podman 或 docker 時略過，設了 `CI` 時失敗。解析與執行緒的行為在單元測試（`cargo test -p agent --lib tpm`）以 swtpm 錄下的回應與假 TPM 測。
+- `tpm_swtpm` 與 `tpm_provision` 的 swtpm 來自 `testkit::swtpm`（映像、session 與 tpm2-tools 的用法見 [`crates/testkit/README.md`](../../crates/testkit/README.md)「軟體 TPM」）。`tpm_swtpm` 以 tpm2-tools 佈建金鑰，比對 tpm2-tools 算的 SubjectPublicKeyInfo、以公鑰驗證簽章，並做一次真的 TLS 1.3 mTLS 握手（測試 CA 為 TPM 公鑰簽發用戶端憑證，CertificateVerify 剛好一次 TPM2_Sign，resumption 不簽章）。沒有 podman 或 docker 時略過，設了 `CI` 時失敗。解析與執行緒的行為在單元測試（`cargo test -p agent --lib tpm`）以 swtpm 錄下的回應與假 TPM 測。

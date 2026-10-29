@@ -9,10 +9,26 @@
 #                          reach the identity service's token exchange port (token-exchange)
 #                          too, and no other port of it
 #                          (TRUSTIOT_ON_BEHALF_CALLS {"assets":["certs"]}, Laysi/trustiot-v2#106)
+#   assistant -> ai-gateway
+#                          listed: the API port (http) only, never the admin port
+#   identity -> ai-gateway-admin
+#                          added by the chart, not mesh.calls: the AI gateway's admin port (admin)
+#                          only, never its API port (templates/ai-gateway-admin.yaml,
+#                          Laysi/trustiot-v2#607); the identity double, like the real identity
+#                          service, gets its address as TRUSTIOT_AI_GATEWAY_ADMIN_URL
 #   everything else        not listed: refused, for example certs -> assets, assets -> alerts,
-#                          mqtt-bridge -> identity and certs -> identity
+#                          mqtt-bridge -> identity, certs -> identity, alerts -> ai-gateway and
+#                          assets -> ai-gateway-admin
 # The ingress gateway reaches identity (public paths, ext_authz), assets (the /api route),
-# certs and mqtt-bridge (public paths); nothing routes to alerts.
+# certs and mqtt-bridge (public paths); nothing routes to alerts, assistant or ai-gateway.
+#
+# The AI gateway double serves its admin port as the identity double serves the token exchange
+# (identity-double/server.ts listens on 8082 too). The chart requires the AI gateway's settings,
+# so the test creates three Secrets this overlay and values-e2e.yaml name: the provider keys
+# (trustiot-e2e-ai, a value made up at run time; the instance overlay's Secrets do not exist in
+# the test namespace), the Postgres CA (trustiot-e2e-postgres-ca, which the gateway mounts
+# because it lists postgres) and, once Helm declares it, the gateway's database password, which
+# the migration Job would fill (it is off here). The double uses none of them.
 
 services:
   # The ingress overlay's SPA stand-in is ingress.e2e.ts's: off here, so the services, their
@@ -22,8 +38,36 @@ services:
   # Reached by no route and no listed caller: refuses every connection.
   alerts:
     enabled: true
+  # Forwards model calls through the AI gateway's API port.
+  assistant:
+    enabled: true
+  # Its API port for the assistant, its admin port for the identity service.
+  ai-gateway:
+    enabled: true
+
+ai:
+  # One role of its own, so the overlay renders on either instance overlay (the on-premises one
+  # has none); the gateway needs at least one.
+  roles:
+    mesh_e2e:
+      models:
+        - anthropic/mesh-e2e
+  providers:
+    anthropic:
+      apiKeySecret:
+        name: trustiot-e2e-ai
+    openai:
+      apiKeySecret:
+        name: trustiot-e2e-ai
 
 mesh:
   calls:
     assets:
       - certs
+    # The AI gateway only: no tools (no call on behalf of users) and no database, so the
+    # assistant double needs no password Secret.
+    assistant:
+      - ai-gateway
+    # The chart requires it: the real gateway keeps the model roles' settings in Postgres.
+    ai-gateway:
+      - postgres

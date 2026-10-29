@@ -31,6 +31,9 @@ tokio-rustls = { workspace = true, features = ["ring"] }
 tokio-tungstenite = { workspace = true, features = ["handshake"] }
 # Stops a listening socket for every copy of its descriptor (`mqtt::stop_listening`).
 socket2.workspace = true
+# Names the swtpm image after the SHA-256 of its Containerfile (`swtpm`); rustls' provider, so
+# no second crypto library.
+ring.workspace = true
 # Calls the service under test over plain HTTP on the loopback interface.
 reqwest.workspace = true
 serde_json.workspace = true

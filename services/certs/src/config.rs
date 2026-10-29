@@ -47,6 +47,16 @@ pub const MAX_BROKER_VALIDITY: Duration = Duration::from_secs(90 * 86_400);
 /// `broker-certs`.
 pub const DEFAULT_BROKER_PORT: u16 = 8082;
 
+/// The broker account the gateway permission sync logs in with: the only one the chart gives the
+/// dynamic-security admin role (docs/architecture/secrets.md, "MQTT dynsec 管理帳密").
+pub const MQTT_USERNAME: &str = "service:certs";
+
+/// Shortest `dynsec.interval`.
+pub const MIN_DYNSEC_INTERVAL: Duration = Duration::from_secs(1);
+
+/// Longest `dynsec.interval`.
+pub const MAX_DYNSEC_INTERVAL: Duration = Duration::from_secs(3600);
+
 /// Longest CRL validity: Mosquitto rejects every gateway of an issuing CA once its CRL expires,
 /// so a CRL that lives long only delays revocation news, never helps.
 pub const MAX_CRL_VALIDITY: Duration = Duration::from_secs(31 * 86_400);
@@ -77,6 +87,14 @@ pub struct Config {
     /// The renewal endpoint's limits (Laysi/trustiot-v2#81).
     #[serde(default)]
     pub renewal: RenewalLimits,
+    /// `mqtt.*`: the MQTT broker's service port and the certs service's broker account, for the
+    /// gateway permission sync ([`crate::dynsec`], Laysi/trustiot-v2#633). Without it nothing is
+    /// synced: the chart sets it only when the broker is deployed.
+    #[serde(default)]
+    pub mqtt: Option<mqtt_client::Config>,
+    /// `dynsec.*`: how often the gateway permission sync compares every gateway.
+    #[serde(default)]
+    pub dynsec: DynsecSchedule,
 }
 
 /// The platform settings the service reads. No `deny_unknown_fields`: every service gets every
@@ -408,6 +426,29 @@ impl Default for RenewalLimits {
     }
 }
 
+/// `dynsec.*`: the gateway permission sync's schedule ([`crate::dynsec`]).
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DynsecSchedule {
+    /// `TRUSTIOT__DYNSEC__INTERVAL`: how often the replica that gets the job lock compares every
+    /// gateway client of the broker with Postgres, from [`MIN_DYNSEC_INTERVAL`] to
+    /// [`MAX_DYNSEC_INTERVAL`]. Default 5 minutes. It bounds how long a change that no immediate
+    /// sync covers (a certificate that expired, a sync that failed) takes to reach the broker.
+    #[serde(
+        default = "default_dynsec_interval",
+        deserialize_with = "service_kit::config::duration"
+    )]
+    pub interval: Duration,
+}
+
+impl Default for DynsecSchedule {
+    fn default() -> Self {
+        Self {
+            interval: default_dynsec_interval(),
+        }
+    }
+}
+
 const fn default_gateway_burst() -> u32 {
     4
 }
@@ -505,6 +546,10 @@ impl RenewalLimits {
         }
         Ok(())
     }
+}
+
+const fn default_dynsec_interval() -> Duration {
+    Duration::from_secs(300)
 }
 
 impl Config {
@@ -612,7 +657,48 @@ impl Validate for Config {
             return Err(Invalid::new("broker.service_name", problem));
         }
         self.crl.validate()?;
-        self.renewal.validate()
+        self.renewal.validate()?;
+        self.validate_dynsec()
+    }
+}
+
+impl Config {
+    /// The settings of the gateway permission sync. Names keys, never values.
+    fn validate_dynsec(&self) -> Result<(), Invalid> {
+        if !(MIN_DYNSEC_INTERVAL..=MAX_DYNSEC_INTERVAL).contains(&self.dynsec.interval) {
+            return Err(Invalid::new(
+                "dynsec.interval",
+                "must be between 1 second and 1 hour",
+            ));
+        }
+        let Some(mqtt) = &self.mqtt else {
+            return Ok(());
+        };
+        if let Err(problem) = mqtt.validate() {
+            let key = match problem {
+                mqtt_client::ConfigError::Host => "mqtt.host",
+                mqtt_client::ConfigError::Port => "mqtt.port",
+                mqtt_client::ConfigError::Username => "mqtt.username",
+                mqtt_client::ConfigError::PasswordFile => "mqtt.password_file",
+            };
+            return Err(Invalid::new(key, problem.to_string()));
+        }
+        if mqtt.username != MQTT_USERNAME {
+            return Err(Invalid::new(
+                "mqtt.username",
+                format!(
+                    "must be {MQTT_USERNAME}: only that account holds the dynamic-security admin \
+                     role"
+                ),
+            ));
+        }
+        if !mqtt.password_file.is_absolute() || mqtt.password_file.file_name().is_none() {
+            return Err(Invalid::new(
+                "mqtt.password_file",
+                "must be an absolute path to a file",
+            ));
+        }
+        Ok(())
     }
 }
 
@@ -683,6 +769,64 @@ mod tests {
             broker: BrokerProfile::default(),
             crl: CrlSchedule::default(),
             renewal: RenewalLimits::default(),
+            mqtt: None,
+            dynsec: DynsecSchedule::default(),
+        }
+    }
+
+    fn mqtt() -> mqtt_client::Config {
+        mqtt_client::Config {
+            host: "trustiot-mqtt-broker.trustiot.svc".to_owned(),
+            port: 1883,
+            username: MQTT_USERNAME.to_owned(),
+            password_file: PathBuf::from("/etc/trustiot/mqtt-broker-account/certs"),
+        }
+    }
+
+    #[test]
+    fn the_broker_settings_are_optional_and_checked_when_set() {
+        let mut with_broker = config();
+        with_broker.mqtt = Some(mqtt());
+        assert!(with_broker.validate().is_ok());
+        assert_eq!(config().dynsec.interval, Duration::from_secs(300));
+        let broken: [Breakage; 7] = [
+            ("dynsec.interval", |c| c.dynsec.interval = Duration::ZERO),
+            ("dynsec.interval", |c| {
+                c.dynsec.interval = MAX_DYNSEC_INTERVAL + Duration::from_secs(1);
+            }),
+            ("mqtt.host", |c| {
+                c.mqtt = Some(mqtt_client::Config {
+                    host: String::new(),
+                    ..mqtt()
+                });
+            }),
+            ("mqtt.port", |c| {
+                c.mqtt = Some(mqtt_client::Config { port: 0, ..mqtt() });
+            }),
+            ("mqtt.username", |c| {
+                c.mqtt = Some(mqtt_client::Config {
+                    username: "service:ingest".to_owned(),
+                    ..mqtt()
+                });
+            }),
+            ("mqtt.username", |c| {
+                c.mqtt = Some(mqtt_client::Config {
+                    username: "gw-1".to_owned(),
+                    ..mqtt()
+                });
+            }),
+            ("mqtt.password_file", |c| {
+                c.mqtt = Some(mqtt_client::Config {
+                    password_file: PathBuf::from("certs"),
+                    ..mqtt()
+                });
+            }),
+        ];
+        for (key, breakage) in broken {
+            let mut config = config();
+            breakage(&mut config);
+            let error = config.validate().expect_err(key);
+            assert_eq!(error.key, key, "{}", error.message);
         }
     }
 

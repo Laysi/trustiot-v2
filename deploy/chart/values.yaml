@@ -306,6 +306,21 @@ services:
     # 「關機」). The chart sets its shutdown.drain_timeout to drainSeconds - 10 s (300 s here);
     # 11 to 3605.
     drainSeconds: 310
+    # The API (http: the forwarding the assistant, the knowledge base and alerts call) and the
+    # admin API on a port of its own (admin, the gateway's admin.listen_addr; Laysi/trustiot-v2#607),
+    # which changes the model roles' models. The mesh lets the services that list ai-gateway in
+    # mesh.calls reach the API port only, and the identity service the admin port only (README.md,
+    # "呼叫矩陣"). The numbers are the service's defaults; keep both ports when overriding the
+    # list: the render fails without admin while the identity service is enabled. The identity
+    # service always calls the Service <release>-ai-gateway-admin on 8082, which forwards to
+    # whatever containerPort admin has; the chart sets AI_GATEWAY__ADMIN__LISTEN_ADDR to it.
+    ports:
+      - name: http
+        containerPort: 8080
+        appProtocol: http
+      - name: admin
+        containerPort: 8082
+        appProtocol: http
     # The settings pool (AI_GATEWAY__DATABASE__MAX_CONNECTIONS), 2 to 32: one short query per
     # forwarded request. It is the gateway's only pool: 4 in all. templates/_service.tpl
     # ("trustiot.service.env") passes it under the gateway's prefix, like every service's pool.

@@ -1,5 +1,6 @@
-//! `agent::tpm` against a real TPM 2.0 implementation: swtpm (libtpms) in a throwaway container,
-//! provisioned at test time by tpm2-tools with the key template of the 2026-10-12 PoC.
+//! `agent::tpm` against a real TPM 2.0 implementation: swtpm (libtpms) in a throwaway container
+//! (`testkit::swtpm`), provisioned at test time by tpm2-tools with the key template of the
+//! 2026-10-12 PoC.
 //!
 //! - TPM2_ReadPublic gives the same SubjectPublicKeyInfo as tpm2-tools (a second, independent
 //!   implementation), and TPM2_Sign signatures verify with it in software;
@@ -10,10 +11,8 @@
 //! - keys the agent must not use are refused: RSA, ECC without a fixed scheme, a restricted
 //!   key, P-384, a key with a password, an empty handle.
 //!
-//! The image is built from `tests/swtpm/Containerfile` (Debian's swtpm and tpm2-tools) with an
-//! empty build context and kept as `localhost/trustiot-agent-swtpm:<hash of the Containerfile>`,
-//! so later runs reuse it. swtpm's raw command port is published on the host's loopback
-//! interface only. Without podman or docker the test skips, unless `CI` is set, where it fails.
+//! Without podman or docker the test skips, unless `CI` is set, where it fails. Provisioning the
+//! key with the agent's own code is `tests/tpm_provision.rs`.
 
 #![allow(
     clippy::unwrap_used,
@@ -21,15 +20,13 @@
 )]
 
 use std::io::{self, Read, Write};
-use std::net::{SocketAddr, TcpListener, TcpStream};
-use std::path::Path;
-use std::process::Command;
+use std::net::{TcpListener, TcpStream};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::thread;
 use std::time::Duration;
 
-use agent::tpm::{MAX_RESPONSE_BYTES, TpmChannel, TpmError, TpmKey, TpmTransport};
+use agent::tpm::{TpmChannel, TpmError, TpmKey, TpmTransport};
 use rcgen::{
     BasicConstraints, CertificateParams, DnType, ExtendedKeyUsagePurpose, IsCa, Issuer, KeyPair,
 };
@@ -43,11 +40,7 @@ use rustls::{
     ClientConfig, ClientConnection, HandshakeKind, RootCertStore, ServerConfig, ServerConnection,
     SignatureScheme, StreamOwned,
 };
-use testkit::container::{Container, container_runtime, runtime_output, unavailable, unique_name};
-
-const CONTAINERFILE: &str = include_str!("swtpm/Containerfile");
-/// swtpm's raw TPM command port inside the container.
-const TPM_PORT: &str = "2321/tcp";
+use testkit::swtpm::{Session, Swtpm};
 
 /// The key provisioned with the PoC's template (ECC P-256, ECDSA-SHA256, fixedtpm, fixedparent,
 /// sensitivedataorigin, userwithauth, sign).
@@ -59,30 +52,9 @@ const PASSWORD_KEY: u32 = 0x8100_0104;
 const P384_KEY: u32 = 0x8100_0105;
 const EMPTY_HANDLE: u32 = 0x8100_01ff;
 
-/// Runs swtpm in the foreground (PID 1). `not-need-init,startup-clear`: it runs TPM2_Startup
-/// itself, as the gateway's kernel does.
-const SWTPM_SCRIPT: &str = "mkdir -p /run/swtpm && exec swtpm socket --tpm2 \
-    --tpmstate dir=/run/swtpm \
-    --server type=tcp,port=2321,bindaddr=0.0.0.0 \
-    --ctrl type=tcp,port=2322,bindaddr=127.0.0.1 \
-    --flags not-need-init,startup-clear";
-
-/// Provisions the keys with tpm2-tools inside the container, then prints the good key's
-/// SubjectPublicKeyInfo (DER, hex) as tpm2-tools computes it. Waits up to 60 s for swtpm.
-const PROVISION_SCRIPT: &str = r#"set -eu
-export TPM2TOOLS_TCTI=swtpm:host=127.0.0.1,port=2321
-cd "$(mktemp -d)"
-tries=0
-until tpm2_getcap properties-fixed > /dev/null 2>&1; do
-    tries=$((tries + 1))
-    if [ "$tries" -ge 600 ]; then echo "swtpm did not answer on port 2321 within 60 s" >&2; exit 1; fi
-    sleep 0.1
-done
-# The storage root key, as the gateway has it at 0x81000001.
-tpm2_createprimary -Q -C o -g sha256 -G ecc256 -c primary.ctx
-tpm2_evictcontrol -Q -C o -c primary.ctx 0x81000001
-tpm2_flushcontext -t
-key() {
+/// Provisions the keys with tpm2-tools under the SRK (`Swtpm::create_standard_srk`), then prints
+/// the good key's SubjectPublicKeyInfo (DER, hex) as tpm2-tools computes it.
+const PROVISION_SCRIPT: &str = r#"key() {
     handle="$1"; shift
     tpm2_create -Q -C 0x81000001 "$@" -u key.pub -r key.priv
     tpm2_load -Q -C 0x81000001 -u key.pub -r key.priv -c key.ctx
@@ -101,101 +73,23 @@ tpm2_readpublic -Q -c 0x81000100 -f der -o spki.der
 printf 'spki=%s\n' "$(od -An -v -tx1 spki.der | tr -d ' \n')"
 "#;
 
-/// How long a socket read may wait for swtpm or the TLS peer before the test fails instead of
-/// hanging. Nothing here should come close.
+/// How long a socket read may wait for the TLS peer before the test fails instead of hanging.
+/// Nothing here should come close.
 const IO_BOUND: Duration = Duration::from_secs(60);
 
-/// TPM2_Sign's command code, counted by [`CountingSocket`].
+/// TPM2_Sign's command code, counted by [`CountingSession`].
 const TPM_CC_SIGN: u32 = 0x0000_015d;
 
-/// The image, built once per Containerfile content.
-fn swtpm_image(runtime: &'static str) -> String {
-    let digest = ring::digest::digest(&ring::digest::SHA256, CONTAINERFILE.as_bytes());
-    let hash: String = digest.as_ref()[..8]
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect();
-    let image = format!("localhost/trustiot-agent-swtpm:{hash}");
-    let exists = Command::new(runtime)
-        .args(["image", "inspect", &image])
-        .output()
-        .unwrap()
-        .status
-        .success();
-    if exists {
-        return image;
-    }
-    // No file of the repository reaches the builder: the context is an empty directory.
-    let context = Path::new(env!("CARGO_TARGET_TMPDIR")).join(unique_name("swtpm-context"));
-    std::fs::create_dir_all(&context).unwrap();
-    let containerfile = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/swtpm/Containerfile");
-    let built = Command::new(runtime)
-        .args(["build", "--quiet", "--file"])
-        .arg(&containerfile)
-        .args(["--tag", &image])
-        .arg(&context)
-        .output()
-        .unwrap();
-    let _ = std::fs::remove_dir(&context);
-    assert!(
-        built.status.success(),
-        "building the swtpm image failed: {}",
-        String::from_utf8_lossy(&built.stderr)
-    );
-    image
-}
-
-/// A provisioned swtpm: the container, the host address of its command port, and the good key's
-/// SubjectPublicKeyInfo according to tpm2-tools.
-struct Swtpm {
-    container: Container,
-    address: SocketAddr,
+/// A provisioned swtpm and the good key's SubjectPublicKeyInfo according to tpm2-tools.
+struct Provisioned {
+    swtpm: Swtpm,
     tools_spki: Vec<u8>,
 }
 
-fn start_swtpm() -> Option<Swtpm> {
-    let Some(runtime) = container_runtime() else {
-        unavailable("podman or docker");
-        return None;
-    };
-    let image = swtpm_image(runtime);
-    let container = Container {
-        runtime,
-        name: unique_name("swtpm"),
-    };
-    let _id = runtime_output(
-        runtime,
-        &[
-            "run",
-            "--detach",
-            "--name",
-            &container.name,
-            "--publish",
-            "127.0.0.1::2321",
-            "--memory",
-            "256m",
-            "--cap-drop",
-            "ALL",
-            "--security-opt",
-            "no-new-privileges",
-            "--entrypoint",
-            "/bin/sh",
-            &image,
-            "-c",
-            SWTPM_SCRIPT,
-        ],
-    );
-    let output = Command::new(runtime)
-        .args(["exec", &container.name, "/bin/sh", "-c", PROVISION_SCRIPT])
-        .output()
-        .unwrap();
-    assert!(
-        output.status.success(),
-        "provisioning the swtpm keys failed: {}\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let stdout = String::from_utf8(output.stdout).unwrap();
+fn start_swtpm() -> Option<Provisioned> {
+    let swtpm = Swtpm::start()?;
+    swtpm.create_standard_srk();
+    let stdout = swtpm.tools(PROVISION_SCRIPT);
     let spki_hex = stdout
         .lines()
         .find_map(|line| line.strip_prefix("spki="))
@@ -205,56 +99,34 @@ fn start_swtpm() -> Option<Swtpm> {
         .chunks(2)
         .map(|pair| u8::from_str_radix(std::str::from_utf8(pair).unwrap(), 16).unwrap())
         .collect();
-    let address = container.host_address(TPM_PORT);
-    Some(Swtpm {
-        container,
-        address,
-        tools_spki,
-    })
+    Some(Provisioned { swtpm, tools_spki })
 }
 
-/// swtpm's command port speaks the TPM 2.0 command stream itself: a command, then a response
-/// whose header carries its size. Counts the TPM2_Sign commands it carries.
-struct CountingSocket {
-    stream: TcpStream,
+/// A swtpm session that counts the TPM2_Sign commands it carries.
+struct CountingSession {
+    session: Session,
     signs: Arc<AtomicUsize>,
 }
 
-impl TpmChannel for CountingSocket {
+impl TpmChannel for CountingSession {
     fn transact(&mut self, command: &[u8]) -> io::Result<Vec<u8>> {
         if command.get(6..10) == Some(&TPM_CC_SIGN.to_be_bytes()[..]) {
             self.signs.fetch_add(1, Ordering::SeqCst);
         }
-        self.stream.write_all(command)?;
-        let mut response = vec![0_u8; 10];
-        self.stream.read_exact(&mut response)?;
-        let size = u32::from_be_bytes(response[2..6].try_into().unwrap());
-        let size = usize::try_from(size).unwrap();
-        if !(10..=MAX_RESPONSE_BYTES).contains(&size) {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                format!("response size {size}"),
-            ));
-        }
-        response.resize(size, 0);
-        self.stream.read_exact(&mut response[10..])?;
-        Ok(response)
+        self.session.transact(command)
     }
 }
 
-impl Swtpm {
-    /// Opens `handle` over a new connection; returns the key and its TPM2_Sign counter.
+impl Provisioned {
+    /// Opens `handle` in a new session; returns the key and its TPM2_Sign counter.
     fn open(&self, handle: u32) -> (Result<TpmKey, TpmError>, Arc<AtomicUsize>) {
-        let stream = TcpStream::connect(self.address).unwrap();
-        stream.set_read_timeout(Some(IO_BOUND)).unwrap();
-        stream.set_nodelay(true).unwrap();
         let signs = Arc::new(AtomicUsize::new(0));
-        let socket = CountingSocket {
-            stream,
+        let session = CountingSession {
+            session: self.swtpm.session(),
             signs: Arc::clone(&signs),
         };
         (
-            TpmKey::open(TpmTransport::Channel(Box::new(socket)), handle),
+            TpmKey::open(TpmTransport::Channel(Box::new(session)), handle),
             signs,
         )
     }
@@ -511,7 +383,6 @@ fn the_tpm_key_signs_and_completes_an_mtls_handshake_and_unusable_keys_are_refus
     );
     assert!(refused.client.is_err());
 
-    // One connection to swtpm at a time: close this one before the next opens.
     drop(key);
 
     for (handle, expected) in [
@@ -541,5 +412,5 @@ fn the_tpm_key_signs_and_completes_an_mtls_handshake_and_unusable_keys_are_refus
         }
         other => panic!("an empty handle should be refused, got {other:?}"),
     }
-    drop(swtpm.container);
+    drop(swtpm);
 }

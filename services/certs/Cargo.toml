@@ -34,6 +34,8 @@ contract = { path = "../../crates/contract" }
 getrandom.workspace = true
 # RFC 3339 times in log lines.
 humantime.workspace = true
+# The gateway permission sync's connection to the MQTT broker's service port (src/dynsec.rs).
+mqtt-client = { path = "../../crates/mqtt-client" }
 # The CRL gauges.
 opentelemetry = { workspace = true, features = ["metrics"] }
 # The factory registration writes `certs.gateway_registered` in its transaction.
