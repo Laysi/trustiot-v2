@@ -82,7 +82,7 @@ evidence: exit codes [Some(0), Some(0), Some(0), Some(20), Some(10), Some(20)]; 
 ### 待測與延後
 
 - **閘道器端的 ssh 限制**（強制指令的轉接程式、sudoers、工作站改送短請求）：沒有實作，是出廠映像階段的前提條件，記在 Laysi/trustiot-v2#219。在那之前 `--upload-agent` 與 `--remote-sudo` 只用在 lab 與展示用的閘道器。
-- **殘餘風險：沒有證明金鑰在 TPM 裡**：沒有以 EK 做 TPM2_MakeCredential／TPM2_ActivateCredential，被控制的閘道器（或冒用位址的機器）第一次登錄時能送出不在 TPM 裡的金鑰；另開 issue 追蹤（`factory/workstation/README.md`「安全上的做法與限制」）。
+- **殘餘風險：沒有證明金鑰在 TPM 裡**：沒有以 EK 做 TPM2_MakeCredential／TPM2_ActivateCredential，被控制的閘道器（或冒用位址的機器）第一次登錄時能送出不在 TPM 裡的金鑰；延後到 Laysi/trustiot-v2#756（`factory/workstation/README.md`「安全上的做法與限制」）。
 - **沒有紀錄的另一台閘道器**：工作站認不出，靠操作員核對 ssh 目的地與標籤（README「硬體 ID 從標籤來」）。這是設計上的限制，不是待測項目。
 - **真的 ssh 與真的閘道器**：待測。這張 issue 只用假 ssh 與 swtpm；對 lab 的閘道器登錄在 Laysi/trustiot-v2#618。
 - **進階驗證**（依驗證分級延後到 Laysi/trustiot-v2#753）：

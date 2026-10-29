@@ -295,7 +295,7 @@ cf-access-client-secret: <client secret>
 
 - **`http://` 只限 loopback 的 IP 位址**：不接受 `localhost` 這個名稱，它經過名稱解析，可能被導向別處。
 - **只有 `register` 重試**：每個請求用一條新的連線、只送一次；沒有連線池（連線池可能在連線被關掉時重送請求）。`login`、`enroll`、`logout` 不重試。`register` 的重試是工具自己的一次新嘗試（新的簽章與 nonce），只在登錄 API 的冪等保證之下才做，見「`register`」。
-- **ssh**：工具執行系統的 `ssh`（`PATH` 上的），不自己實作 SSH；金鑰與 `~/.ssh/config` 照 OpenSSH 的設定，主機金鑰固定以硬體 ID 為名、只查工具自己的 `known_hosts`，執行前以 `ssh -G` 確認沒有被設定關掉。工具只控制命令列（固定選項、`--` 之後才是目的地，目的地不能以 `-` 開頭）、遠端指令（固定的腳本，參數只有檢查過的字）、環境（只留六個變數）與標準輸入（只有要上傳的 agent）。閘道器回的 stdout 最多讀 16 KiB、stderr 最多留 8 KiB，印出前改寫控制字元與格式字元。閘道器被控制時它能回任何報告：工具的檢查保證報告前後一致（CSR 的 CN 是這個硬體 ID、公鑰與簽章相符），有紀錄時 EK 要和紀錄相同，但報告的硬體 ID 只是照抄 `--hardware-id`，也證明不了金鑰在 TPM 裡，這要靠出廠流程的實體控制（決策 12）。**殘餘風險**：以 EK 做 TPM2_MakeCredential／TPM2_ActivateCredential、證明金鑰與 EK 在同一顆 TPM 裡，這次沒有做，延後另開 issue；在那之前，被控制的閘道器（或冒用位址的機器）第一次登錄時能送出不在 TPM 裡的金鑰。
+- **ssh**：工具執行系統的 `ssh`（`PATH` 上的），不自己實作 SSH；金鑰與 `~/.ssh/config` 照 OpenSSH 的設定，主機金鑰固定以硬體 ID 為名、只查工具自己的 `known_hosts`，執行前以 `ssh -G` 確認沒有被設定關掉。工具只控制命令列（固定選項、`--` 之後才是目的地，目的地不能以 `-` 開頭）、遠端指令（固定的腳本，參數只有檢查過的字）、環境（只留六個變數）與標準輸入（只有要上傳的 agent）。閘道器回的 stdout 最多讀 16 KiB、stderr 最多留 8 KiB，印出前改寫控制字元與格式字元。閘道器被控制時它能回任何報告：工具的檢查保證報告前後一致（CSR 的 CN 是這個硬體 ID、公鑰與簽章相符），有紀錄時 EK 要和紀錄相同，但報告的硬體 ID 只是照抄 `--hardware-id`，也證明不了金鑰在 TPM 裡，這要靠出廠流程的實體控制（決策 12）。**殘餘風險**：以 EK 做 TPM2_MakeCredential／TPM2_ActivateCredential、證明金鑰與 EK 在同一顆 TPM 裡，這次沒有做，延後到 Laysi/trustiot-v2#756；在那之前，被控制的閘道器（或冒用位址的機器）第一次登錄時能送出不在 TPM 裡的金鑰。
 - **TLS**：rustls 與 ring，TLS 1.2 與 1.3；信任系統的 CA（`SSL_CERT_FILE`、`SSL_CERT_DIR` 有設時用它們）或只信任 `--ca-file`。憑證與主機名稱的檢查不能關閉；不走 proxy、不跟隨重新導向。
 - **跨站檢查**：請求不帶 `Origin` 與 `Sec-Fetch-Site`，身分服務的跨站檢查因此放行（[services/identity/README.md](../../services/identity/README.md)「跨站請求」）。
 - **session 綁定平台**：session 檔記下設定它的平台網址，cookie 只送回那個網址。
