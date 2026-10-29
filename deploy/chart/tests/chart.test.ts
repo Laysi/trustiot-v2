@@ -2686,11 +2686,16 @@ describe("MQTT broker (decision 6, Laysi/trustiot-v2#84)", () => {
       }
       expect(helmTemplate(SHAPES[shape], [...brokerOn, "--set", "services.gateway-ops.enabled=true"]).code).toBe(0);
       expect(helmTemplate(SHAPES[shape], ["--set", "services.gateway-ops.enabled=false"]).code).toBe(0);
-      // Its broker settings are the chart's, in any case, from env or serviceDefaults.env.
-      for (const name of ["TRUSTIOT__MQTT__HOST", "TRUSTIOT__MQTT__USERNAME", "trustiot__mqtt__password_file"]) {
-        const result = helmTemplate(SHAPES[shape], [...brokerOn, ...callers, "--set-json", `services.gateway-ops.env=[{"name":"${name}","value":"elsewhere"}]`]);
-        expect({ name, code: result.code }).toEqual({ name, code: 1 });
-        expect(result.stderr).toContain(`services.gateway-ops: env ${name} is set by the chart: the service's broker account is the in-cluster broker's`);
+      // Its broker settings are the chart's. The schema refuses a password-like name with a
+      // literal value too, so the template's own rule is checked without the schema as well.
+      for (const name of ["TRUSTIOT__MQTT__HOST", "TRUSTIOT__MQTT__USERNAME", "trustiot__mqtt__port", "trustiot__mqtt__password_file"]) {
+        for (const schema of [[], ["--skip-schema-validation"]]) {
+          const result = helmTemplate(SHAPES[shape], [...brokerOn, ...callers, ...schema, "--set-json", `services.gateway-ops.env=[{"name":"${name}","value":"elsewhere"}]`]);
+          expect({ name, schema, code: result.code }).toEqual({ name, schema, code: 1 });
+          if (schema.length > 0 || !/passw/i.test(name)) {
+            expect(result.stderr).toContain(`services.gateway-ops: env ${name} is set by the chart: the service's broker account is the in-cluster broker's`);
+          }
+        }
       }
     },
     SLOW_TEST_MS,
@@ -3222,7 +3227,7 @@ describe("bundled Postgres (CloudNativePG, Laysi/trustiot-v2#58)", () => {
       effective_cache_size: "384MB",
       work_mem: "4MB",
       maintenance_work_mem: "64MB",
-      max_connections: "200",
+      max_connections: "220",
     });
     // The string form takes the same 10–1000 as the number (values.schema.json).
     const most = clusterSpec(render(SHAPES.saas, ["--set-string", "postgres.bundled.parameters.max_connections=1000"]));
