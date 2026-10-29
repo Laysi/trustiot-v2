@@ -21,6 +21,7 @@ use protocol::{GatewayId, SessionId};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, DuplexStream};
 use tokio::sync::mpsc;
 
+pub mod renewal;
 pub mod wss;
 
 /// The gateway of the tests.

@@ -180,6 +180,37 @@ pub fn load(certificate: &Path, key: &KeySource) -> Result<Identity, IdentityErr
     })
 }
 
+/// The identity of `chain` (leaf first) with the key `key` the agent already holds, under the
+/// same rules as [`load`]: the leaf's CN is a gateway ID, its extended key usage allows client
+/// authentication, its key usage signatures, and its public key is `key`'s. `source` names where
+/// the chain came from, for the error messages. Certificate renewal checks a renewed chain with
+/// it before using it.
+///
+/// # Errors
+///
+/// See [`IdentityError`]; an empty chain is [`IdentityError::NoCertificate`].
+pub fn with_key(
+    source: &Path,
+    chain: Vec<CertificateDer<'static>>,
+    key: Arc<dyn SigningKey>,
+) -> Result<Identity, IdentityError> {
+    let leaf = parse_leaf(source, &chain)?;
+    let key_spki = key
+        .public_key()
+        .map(|spki| spki.as_ref().to_vec())
+        .ok_or(IdentityError::KeyMismatch)?;
+    if key_spki != leaf.spki {
+        return Err(IdentityError::KeyMismatch);
+    }
+    Ok(Identity {
+        gateway: leaf.gateway,
+        chain,
+        key,
+        not_before: leaf.not_before,
+        not_after: leaf.not_after,
+    })
+}
+
 /// `at` as an RFC 3339 UTC time to the second, such as `2026-10-22T08:30:00Z`.
 pub fn utc(at: UnixMillis) -> String {
     let secs = at.get() / 1000;

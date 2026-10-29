@@ -142,6 +142,14 @@ struct Stop {
     offline_sent: bool,
 }
 
+/// A rotation in progress: newer client credentials are in place, so the connection takes no
+/// new publishes, writes what it already accepted, waits for every acknowledgement and then
+/// ends ([`LinkError::Renewed`]) for the link to reconnect with them. `deadline` bounds the
+/// wait; what is still unacknowledged then ends as when a connection is lost.
+struct Rotation {
+    deadline: Instant,
+}
+
 /// The protocol state of one connection.
 struct State<'a> {
     params: &'a Params<'a>,
@@ -177,6 +185,7 @@ struct State<'a> {
     /// Since when `pending_delivery` waits.
     delivering_since: Instant,
     stopping: Option<Stop>,
+    rotating: Option<Rotation>,
 }
 
 impl<'a> State<'a> {
@@ -215,6 +224,7 @@ impl<'a> State<'a> {
             pending_delivery: None,
             delivering_since: now,
             stopping: None,
+            rotating: None,
         }
     }
 
@@ -372,6 +382,9 @@ pub(crate) struct Channels<'a> {
     pub(crate) state: &'a watch::Sender<LinkState>,
     pub(crate) counters: &'a Counters,
     pub(crate) shutdown: &'a CancellationToken,
+    /// The client credentials' version, already marked seen for the version this connection
+    /// opened with: a change means newer credentials, and the connection rotates.
+    pub(crate) credentials: Option<watch::Receiver<u64>>,
 }
 
 /// Runs one connection over `stream` until it ends.
@@ -386,6 +399,7 @@ where
         state,
         counters,
         shutdown,
+        mut credentials,
     } = channels;
     let mut st = State::new(&params, counters, shutdown, progress);
     let mut buffer = ReadBuffer::new();
@@ -399,12 +413,18 @@ where
             requests: &mut requests,
             accepting: &mut accepting,
             current,
+            credentials: &mut credentials,
         },
         incoming,
         state,
         shutdown,
     )
     .await;
+    // A rotation ends like a clean stop, but the link goes on with the renewed credentials.
+    let result = match result {
+        Ok(()) if st.rotating.is_some() && !shutdown.is_cancelled() => Err(LinkError::Renewed),
+        other => other,
+    };
     let outcome = match result {
         Ok(()) => Outcome::Stopped,
         Err(error) => Outcome::Lost(error),
@@ -440,6 +460,10 @@ where
 enum Event<'p> {
     Shutdown,
     StopDeadline,
+    /// Newer client credentials are in place (`true`), or nothing can announce them any more
+    /// (`false`).
+    Renewed(bool),
+    RotateDeadline,
     Deliver(Option<mpsc::Permit<'p, DownMessage>>),
     Read(io::Result<usize>),
     Request(Option<Request>, Queue),
@@ -453,6 +477,8 @@ struct Queues<'q> {
     requests: &'q mut Requests,
     accepting: &'q mut Option<Accepting>,
     current: &'q Current,
+    /// Announces newer client credentials, which withdraw `current` and rotate the connection.
+    credentials: &'q mut Option<watch::Receiver<u64>>,
 }
 
 /// Why reading a packet failed.
@@ -478,6 +504,7 @@ where
         requests,
         accepting,
         current,
+        credentials,
     } = queues;
     let params = st.params;
     let will = Status::last_will(params.session.clone())
@@ -641,7 +668,8 @@ where
     let mut at_most_once_closed = false;
     let mut at_least_once_closed = false;
     loop {
-        if !announced && st.connected_at.is_some() && st.stopping.is_none() {
+        if !announced && st.connected_at.is_some() && st.stopping.is_none() && st.rotating.is_none()
+        {
             // Publishes are accepted from here on, into this connection's queues; the queues
             // are reachable before the state says Connected, so a caller that sees the state
             // finds them.
@@ -652,6 +680,23 @@ where
                 session: params.session.clone(),
             });
             announced = true;
+        }
+        // A rotation has drained once both queues have closed (no caller can add to them any
+        // more and everything in them was written), nothing waits for an acknowledgement and no
+        // received message waits for the application. It then stops like a clean stop:
+        // `offline`/`shutdown`, its PUBACK, DISCONNECT 0x00.
+        if st.rotating.is_some()
+            && st.stopping.is_none()
+            && at_most_once_closed
+            && at_least_once_closed
+            && st.in_flight.is_empty()
+            && st.pending_delivery.is_none()
+        {
+            tracing::info!(session = %params.session, "every accepted message is acknowledged; ending the session to reconnect with the renewed certificate");
+            st.stopping = Some(Stop {
+                deadline: Instant::now() + STOP_ACK_TIMEOUT,
+                offline_sent: false,
+            });
         }
         if let Some(stop) = &st.stopping
             && !stop.offline_sent
@@ -685,17 +730,24 @@ where
         };
         let far = Instant::now() + Duration::from_secs(86_400);
         let stop_deadline = st.stopping.as_ref().map(|stop| stop.deadline);
-        // The latest moment this wait may end, for the watchdog: the stop's deadline, the
-        // application taking the waiting message, or the connection's next timer (none only
-        // with the keepalive turned off, which only tests do).
-        match (stop_deadline, delivering) {
-            (Some(deadline), _) => st.progress.enter(Phase::Stopping, Some(deadline)),
-            (None, true) => st.progress.enter_since(
+        let rotate_deadline = st
+            .rotating
+            .as_ref()
+            .filter(|_| st.stopping.is_none())
+            .map(|rotation| rotation.deadline);
+        let take_renewal = credentials.is_some() && st.rotating.is_none() && up;
+        // The latest moment this wait may end, for the watchdog: the stop's or the rotation's
+        // deadline, the application taking the waiting message, or the connection's next timer
+        // (none only with the keepalive turned off, which only tests do).
+        match (stop_deadline, rotate_deadline, delivering) {
+            (Some(deadline), _, _) => st.progress.enter(Phase::Stopping, Some(deadline)),
+            (None, Some(deadline), _) => st.progress.enter(Phase::Rotating, Some(deadline)),
+            (None, None, true) => st.progress.enter_since(
                 Phase::Delivering,
                 st.delivering_since,
                 Some(st.delivering_since + DELIVERY_LIMIT),
             ),
-            (None, false) => st.progress.enter(
+            (None, None, false) => st.progress.enter(
                 if announced {
                     Phase::Connected
                 } else {
@@ -708,6 +760,8 @@ where
             biased;
             () = shutdown.cancelled(), if st.stopping.is_none() => Event::Shutdown,
             () = sleep_until(stop_deadline.unwrap_or(far)), if stop_deadline.is_some() => Event::StopDeadline,
+            () = sleep_until(rotate_deadline.unwrap_or(far)), if rotate_deadline.is_some() => Event::RotateDeadline,
+            renewed = renewed(credentials), if take_renewal => Event::Renewed(renewed),
             permit = incoming.reserve(), if delivering => Event::Deliver(permit.ok()),
             read = stream.read(buffer.scratch_mut()), if !delivering => Event::Read(read),
             request = requests.at_most_once.recv(), if take_at_most_once => Event::Request(request, Queue::AtMostOnce),
@@ -718,10 +772,39 @@ where
         match event {
             Event::Shutdown => {
                 tracing::info!(session = %params.session, "stopping: publishing offline/shutdown");
+                // A shutdown during a rotation is a plain stop.
+                st.rotating = None;
                 st.stopping = Some(Stop {
                     deadline: Instant::now() + STOP_ACK_TIMEOUT,
                     offline_sent: false,
                 });
+            }
+            Event::Renewed(false) => {
+                // Nothing can announce newer credentials any more: keep this connection.
+                *credentials = None;
+            }
+            Event::Renewed(true) => {
+                let limit = st.ack_timeout().max(STOP_ACK_TIMEOUT);
+                tracing::info!(
+                    session = %params.session,
+                    limit_s = limit.as_secs(),
+                    "the client certificate was renewed; finishing this connection before reconnecting with it"
+                );
+                // Callers get `NotConnected` from now on (the link's publish contract while it
+                // is not usable); requests already queued are still written and acknowledged.
+                // The queues close once the last sender, a caller's permit included, is gone.
+                current.withdraw(&params.session);
+                accepting.take();
+                st.rotating = Some(Rotation {
+                    deadline: Instant::now() + limit,
+                });
+            }
+            Event::RotateDeadline => {
+                tracing::warn!(
+                    "the rotation did not finish in time; disconnecting with the will and reconnecting with the renewed certificate"
+                );
+                close(stream, st, reason::DISCONNECT_WITH_WILL).await;
+                return Err(LinkError::Renewed);
             }
             Event::StopDeadline => {
                 tracing::warn!(
@@ -776,6 +859,15 @@ where
                 st.ping_sent = Some(Instant::now());
             }
         }
+    }
+}
+
+/// Waits for newer client credentials: `true` once they are in place, `false` once nothing can
+/// announce them any more. Never ends without a receiver.
+async fn renewed(credentials: &mut Option<watch::Receiver<u64>>) -> bool {
+    match credentials {
+        Some(credentials) => credentials.changed().await.is_ok(),
+        None => std::future::pending().await,
     }
 }
 
