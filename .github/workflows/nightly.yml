@@ -66,6 +66,7 @@ on:
       - crates/ca-keys/**
       - crates/contract/**
       - crates/identity-keys/**
+      - crates/mqtt-client/**
       - crates/outbox/**
       - crates/protocol/**
       - crates/service-kit/**

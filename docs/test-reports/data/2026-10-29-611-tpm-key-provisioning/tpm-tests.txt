@@ -1,0 +1,37 @@
+test tpm::tests::a_key_whose_test_signature_does_not_verify_is_refused ... ok
+test tpm::tests::an_io_error_fails_one_request_and_the_next_one_works ... ok
+test tpm::marshal::tests::inflated_inner_lengths_never_read_past_the_buffer ... ok
+test tpm::tests::open_reads_the_key_signs_a_test_message_and_signs_with_it ... ok
+test tpm::tests::rustls_sees_an_ecdsa_p256_key_whose_spki_matches_only_its_own_certificate ... ok
+test tpm::tests::tpm_errors_at_open_are_returned_and_stop_the_thread ... ok
+test tpm::provision::tests::an_empty_handle_gets_a_key_under_the_srk_and_a_retry_is_resent ... ok
+test tpm::marshal::tests::garbage_is_rejected_without_panicking ... ok
+test tpm::tests::dropping_the_last_clone_stops_the_thread_and_closes_the_channel ... ok
+test tpm::marshal::tests::provisioning_garbage_is_rejected_without_panicking ... ok
+test tpm::tests::a_tpm_that_does_not_answer_times_out_and_a_full_queue_is_refused ... ok
+test tpm::provision::tests::retries_give_up_after_a_bound ... ok
+
+test result: ok. 43 passed; 0 failed; 0 ignored; 0 measured; 136 filtered out; finished in 1.64s
+
+   Compiling agent v0.1.0 (<host copy>/src/edge/agent)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.96s
+     Running tests/tpm_provision.rs (<host copy>/target/debug/deps/tpm_provision-77ce0812d84350ff)
+
+running 6 tests
+test a_non_standard_srk_is_left_alone_and_a_transient_primary_is_used ... ok
+test two_processes_creating_at_once_end_with_one_key ... ok
+test after_tpm2_clear_a_rerun_creates_a_different_key ... ok
+test objects_that_do_not_match_are_refused_and_the_tpm_is_unchanged ... ok
+test a_process_that_dies_before_the_key_is_persisted_leaves_nothing_and_a_rerun_creates_it ... ok
+test an_empty_handle_gets_the_decision_12_key_and_reruns_reuse_it ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.81s
+
+     Running tests/tpm_swtpm.rs (<host copy>/target/debug/deps/tpm_swtpm-f70a8afc7e87b5ed)
+
+running 1 test
+test the_tpm_key_signs_and_completes_an_mtls_handshake_and_unusable_keys_are_refused ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.94s
+
+exit 0 at 02:34:46 (build host)
