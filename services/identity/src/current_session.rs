@@ -68,8 +68,8 @@ pub const TENANT_PATH: &str = "/api/identity/v1/sessions/current/tenant";
 pub const MAX_BODY_BYTES: usize = 1024;
 
 /// Membership reads that may run at once per replica. They use the event log's platform pool
-/// (services/identity/README.md, "連線池"), which has one connection for each producer's consumer
-/// ([`crate::schema::CONSUMES`]) and two more ([`crate::event_log::platform_connections`]); these
+/// (services/identity/README.md, "連線池"), which has one connection for each outbox consumer
+/// ([`crate::event_log::consumers`]) and two more ([`crate::event_log::platform_connections`]); these
 /// reads never hold more than those two, so a burst of signed-in users never keeps a consumer
 /// waiting for a connection. A test holds the sum to the pool's size.
 pub const MEMBERSHIP_READS: usize = 2;
@@ -708,10 +708,10 @@ mod tests {
     fn membership_reads_leave_every_consumer_a_connection() {
         const { assert!(MEMBERSHIP_READS >= 1) };
         let pool = usize::try_from(crate::event_log::platform_connections()).expect("fits");
+        let consumers = usize::try_from(crate::event_log::consumers()).expect("fits");
         assert!(
-            MEMBERSHIP_READS + crate::schema::CONSUMES.len() <= pool,
-            "{MEMBERSHIP_READS} reads and {} consumers in {pool} connections",
-            crate::schema::CONSUMES.len()
+            MEMBERSHIP_READS + consumers <= pool,
+            "{MEMBERSHIP_READS} reads and {consumers} consumers in {pool} connections"
         );
     }
 

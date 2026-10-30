@@ -867,11 +867,11 @@ describe("the demo release", () => {
         "trustiot-ingest",
         "trustiot-telemetry-query",
       ]);
-      // The control: three identity replicas are 31 x 4 instead of 31 x 2, past the default 240
+      // The control: three identity replicas are 33 x 4 instead of 33 x 2, past the default 240
       // (Laysi/trustiot-v2#721 raised it from 200 and Laysi/trustiot-v2#645 from 220).
       const more = helmTemplate([overlay, allOn], [...setLiteral, "--set", "services.identity.replicas=3"]);
       expect(more.code).not.toBe(0);
-      expect(more.stderr).toContain("postgres.bundled.parameters.max_connections is 240, but 266 connections are needed");
+      expect(more.stderr).toContain("postgres.bundled.parameters.max_connections is 240, but 274 connections are needed");
     },
     SLOW_TEST_MS,
   );

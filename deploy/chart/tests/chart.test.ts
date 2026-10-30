@@ -3520,22 +3520,22 @@ describe("Postgres connection budget (Laysi/trustiot-v2#575)", () => {
       assistant: 10,
       certs: 9,
       "gateway-ops": 13,
-      identity: 31,
+      identity: 33,
       ingest: 14,
       "telemetry-query": 12,
     });
     expect(reserved).toBe(18);
-    // 8 to spare (README.md, 「連線預算」): the next service or larger pool that uses Postgres
+    // 4 to spare (README.md, 「連線預算」): the next service or larger pool that uses Postgres
     // raises the limit. Laysi/trustiot-v2#721 raised it from 200 for gateway-ops,
     // Laysi/trustiot-v2#645 from 220 for the assistant's API and purge pools and gateway-ops' larger
     // pool from Laysi/trustiot-v2#112.
-    expect(needed).toBe(232);
+    expect(needed).toBe(236);
     expect(limit).toBe(240);
     const readme = readFileSync(join(CHART_DIR, "README.md"), "utf8");
     for (const name of postgresServices) {
       expect(readme).toContain(`| \`${name}\` | \`${services[name]?.database?.maxConnections}\` | ${budgets[name]?.otherPools} | ${perReplica(name)} |`);
     }
-    expect(readme).toContain(`| 合計 | | | 107 | 214 |`);
+    expect(readme).toContain(`| 合計 | | | 109 | 218 |`);
   });
 
   test.each(SHAPE_NAMES)("%s: the defaults, every Postgres service and every planned service pass the check", (shape) => {
@@ -3555,7 +3555,7 @@ describe("Postgres connection budget (Laysi/trustiot-v2#575)", () => {
     expect(below.code).not.toBe(0);
     expect(below.stderr).toContain(
       `postgres.bundled.parameters.max_connections is ${needed - 1}, but ${needed} connections are needed: the services can open ${needed - reserved} while all of them roll at once ` +
-        "(per replica x pods: ai-gateway 4 x 2, assets 14 x 2, assistant 10 x 2, certs 9 x 2, gateway-ops 13 x 2, identity 31 x 2, ingest 14 x 2, telemetry-query 12 x 2), " +
+        "(per replica x pods: ai-gateway 4 x 2, assets 14 x 2, assistant 10 x 2, certs 9 x 2, gateway-ops 13 x 2, identity 33 x 2, ingest 14 x 2, telemetry-query 12 x 2), " +
         `and ${reserved} stay reserved for superusers, CloudNativePG, the migration Job and the platform administrator bootstrap.`,
     );
     // The string form of max_connections counts the same.
@@ -3565,7 +3565,7 @@ describe("Postgres connection budget (Laysi/trustiot-v2#575)", () => {
   });
 
   test.each([
-    ["two more identity replicas", ["--set", "services.identity.replicas=3"], 31, 4],
+    ["two more identity replicas", ["--set", "services.identity.replicas=3"], 33, 4],
     ["a larger assets pool", ["--set", "services.assets.database.maxConnections=30"], 34, 2],
   ] as const)("the defaults with %s fail: every replica plus the one a rolling update adds counts", (_what, args, perReplicaAfter, pods) => {
     const result = helmTemplate(SHAPES.saas, [...enable(postgresServices), ...args]);

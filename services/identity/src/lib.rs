@@ -31,6 +31,8 @@
 //! - [`tenants`]: creating tenants, and the event that announces them.
 //! - [`tenant_state`]: platform administrators suspending and resuming tenants, and the versioned
 //!   event that carries each new state (Laysi/trustiot-v2#776).
+//! - [`state_applied`]: the certs service's confirmations that it applied a tenant's state, which
+//!   end a suspension's "processing" in the back office (Laysi/trustiot-v2#779).
 //! - [`members`]: platform administrators setting users' roles in tenants, and the event that
 //!   records each change.
 //! - [`event_log`]: the event layer: recording every producer's events, and reading them.
@@ -61,6 +63,7 @@ pub mod members;
 pub mod preferences;
 pub mod schema;
 pub mod session;
+pub mod state_applied;
 pub mod tenant_state;
 pub mod tenants;
 
@@ -85,6 +88,7 @@ use crate::login::{Login, LoginStore};
 use crate::mail::Mailer;
 use crate::preferences::PreferencesStore;
 use crate::session::{PgSessionStore, SessionStore};
+use crate::state_applied::StateAppliedRecorder;
 use crate::tenants::TenantStore;
 
 /// The client API's OpenAPI document (merged into `api/openapi.json` by `tools/openapi`). The
@@ -304,13 +308,16 @@ impl ReplicaConnections {
 }
 
 /// Opens the event log's pools lazily and starts one consumer per producer in
-/// [`schema::CONSUMES`], each recording that producer's events; returns the event log and its
+/// [`schema::CONSUMES`], each recording that producer's events, and the consumer of certs'
+/// confirmations of applied tenant states ([`state_applied`]); returns the event log and its
 /// platform pool, which the current session API also reads users' memberships from. `None`,
 /// with a WARN, when the platform role has no credentials ([`Config::platform_role`]); the
 /// current session API answers 503 then.
 ///
 /// Neither pool is part of readiness: the ext_authz check every request passes through must not
-/// fail because the platform role cannot log in, or the event log fell behind. A recorder that
+/// fail because the platform role cannot log in, or the event log fell behind. Without the
+/// platform role, no confirmation is recorded either, so suspensions stay "processing" (the safe
+/// side: the back office never shows a cut-off certs did not confirm). A recorder that
 /// cannot work retries and its consumer's lag grows (`outbox.consumer.lag.age`, crates/outbox),
 /// which is what alerts; the event log's API answers 503 while its pools cannot connect.
 fn start_event_log(context: &Context<Config>) -> Result<Option<(EventLog, PlatformDb)>, BoxError> {
@@ -352,6 +359,18 @@ fn start_event_log(context: &Context<Config>) -> Result<Option<(EventLog, Platfo
             let _ = consumer.run(stop).await;
         });
     }
+    // Certs' confirmations of applied tenant states (Laysi/trustiot-v2#779), on a subscription of
+    // their own, so neither waits for the other; `event_log::consumers` counts it in both pools.
+    let consumer = Consumer::new(
+        &platform,
+        work,
+        ConsumerConfig::new(state_applied::SUBSCRIPTION, state_applied::SOURCE)?,
+        StateAppliedRecorder,
+    );
+    let stop = context.shutdown().stopping_token();
+    context.spawn(async move {
+        let _ = consumer.run(stop).await;
+    });
     Ok(Some((EventLog::new(db, platform.clone()), platform)))
 }
 

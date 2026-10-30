@@ -27,6 +27,14 @@
 //!   (decision 34) beyond one event per registered gateway and window.
 //!
 //! Both have the certs service itself as the `actor`: the gateway is not a user.
+//!
+//! Applied tenant states (Laysi/trustiot-v2#779, rebuild checklist B1; services/identity/README.md,
+//! "停權的處理中"): once the certs service has applied a tenant's state from
+//! `identity.tenant_state_changed` (for a suspension: the tenant's gateways' certificates are in
+//! the CRL the broker loaded and the gateways were disconnected, Laysi/trustiot-v2#108), it writes
+//! one [`TenantStateApplied`] with that state's version. The identity service keeps the largest
+//! version per tenant and shows a suspended tenant as processing until the confirmed version
+//! reaches the tenant's current one.
 
 use std::collections::BTreeMap;
 
@@ -124,6 +132,35 @@ pub struct GatewayRenewalRefused {
 
 impl Event for GatewayRenewalRefused {
     const TYPE: &'static str = "certs.gateway_renewal_refused";
+    const VERSION: u32 = 1;
+    const PRODUCER: ServiceName = ServiceName::Certs;
+}
+
+/// The aggregate kind of [`TenantStateApplied`]; the aggregate ID is the tenant ID.
+pub const TENANT_STATE_AGGREGATE: &str = "tenant_state";
+
+/// The certs service applied a tenant's state of [`TenantStateApplied::state_version`] or a newer
+/// one (Laysi/trustiot-v2#779): the version of an `identity.tenant_state_changed` it received.
+/// For a suspended or deleted tenant, applied means the tenant's gateways' certificates are in the
+/// CRL the broker loaded and its gateways were disconnected; for an active one, that renewals are
+/// open again. Laysi/trustiot-v2#108 writes it.
+///
+/// A tenant event: the envelope's `tenant_id` is the tenant whose state was applied, and the
+/// identity service takes the tenant from there, never from the payload. The aggregate is
+/// [`TENANT_STATE_AGGREGATE`] with the tenant ID, so one tenant's confirmations arrive in the order
+/// they were written; the `actor` is the certs service itself. A consumer keeps the largest
+/// version: a late or repeated confirmation of an older version changes nothing, and versions may
+/// be skipped (a confirmation covers every older one). A version larger than the tenant's current
+/// one was never written by the identity service, so it confirms nothing.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TenantStateApplied {
+    /// The applied state's version (`identity.tenant_state_changed`'s `state_version`), at
+    /// least 1.
+    pub state_version: i64,
+}
+
+impl Event for TenantStateApplied {
+    const TYPE: &'static str = "certs.tenant_state_applied";
     const VERSION: u32 = 1;
     const PRODUCER: ServiceName = ServiceName::Certs;
 }

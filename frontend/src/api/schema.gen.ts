@@ -2128,9 +2128,22 @@ export interface components {
              *     the same number.
              */
             state_version: number;
+            /**
+             * @description What the back office shows (Laysi/trustiot-v2#779): `processing` while the tenant is
+             *     suspended or deleted and the certs service has not yet confirmed that it applied this
+             *     version (gateways disconnected, CRL in effect); otherwise the state. Show how long a
+             *     tenant has been processing from `state_changed_at`.
+             */
+            status: components["schemas"]["TenantStatus"];
             /** @description The tenant. */
             tenant_id: components["schemas"]["TenantId"];
         };
+        /**
+         * @description What the back office shows of a tenant's state (Laysi/trustiot-v2#779): the state, except that a
+         *     suspension or deletion the certs service has not yet confirmed is still processing.
+         * @enum {string}
+         */
+        TenantStatus: "active" | "processing" | "suspended" | "deleted";
         /**
          * @description The interface's colors.
          * @enum {string}

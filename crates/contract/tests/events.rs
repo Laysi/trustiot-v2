@@ -19,7 +19,8 @@ use contract::events::assets::{
 };
 use contract::events::certs::{
     GATEWAY_CERTIFICATE_AGGREGATE, GatewayCertificateRenewed, GatewayRegistered,
-    GatewayRenewalRefused, gateway_certificate_aggregate_id,
+    GatewayRenewalRefused, TENANT_STATE_AGGREGATE, TenantStateApplied,
+    gateway_certificate_aggregate_id,
 };
 use contract::events::identity::{
     AI_MODEL_ROLE_AGGREGATE, AiModelRoleAction, AiModelRoleChanged, MEMBERSHIP_AGGREGATE,
@@ -472,6 +473,40 @@ fn gateway_renewal_refused_decodes_every_version() {
             "reasons": {"challenge_unknown": 1, "signature_invalid": 4},
         })
     );
+}
+
+/// `certs.tenant_state_applied` (Laysi/trustiot-v2#779): a tenant event (the tenant is the
+/// envelope's) with the applied state's version only, the certs service as the actor.
+#[test]
+fn tenant_state_applied_decodes_every_version() {
+    let decoded = decode_fixtures::<TenantStateApplied>();
+    let applied = TenantStateApplied { state_version: 2 };
+    assert_eq!(decoded, [("v1".to_owned(), applied.clone())]);
+
+    let path = common::fixture_path("events/certs.tenant_state_applied/v1.json");
+    let fixture: EventEnvelope =
+        serde_json::from_str(&fs::read_to_string(path).expect("read fixture")).expect("envelope");
+    let tenant: TenantId = "01928f6e-7a3c-7d4e-8f00-00000000000d"
+        .parse()
+        .expect("tenant id");
+    assert_eq!(fixture.tenant_id, Some(tenant));
+    assert_eq!(
+        fixture.actor,
+        Some(Actor::Service {
+            service: ServiceName::Certs
+        })
+    );
+
+    let envelope = EventEnvelope::new(&applied, Some(tenant)).expect("encode");
+    assert_eq!(envelope.producer, ServiceName::Certs);
+    assert_eq!(envelope.event_type, "certs.tenant_state_applied");
+    assert_eq!(envelope.tenant_id, Some(tenant));
+    assert_eq!(envelope.payload, json!({"state_version": 2}));
+    // Only the certs service produces it: an envelope from another producer never decodes.
+    let mut forged = envelope.clone();
+    forged.producer = ServiceName::Assets;
+    assert!(forged.decode::<TenantStateApplied>().is_err());
+    assert_eq!(TENANT_STATE_AGGREGATE, "tenant_state");
 }
 
 /// `identity.platform_admin_granted` (Laysi/trustiot-v2#582): a platform-wide event that names
