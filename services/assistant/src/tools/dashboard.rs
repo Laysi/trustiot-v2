@@ -99,7 +99,9 @@ use service_kit::tenant::{BackgroundTenantDb, TenantTransaction};
 use tokio::time::Instant;
 use uuid::Uuid;
 
-use crate::dashboards::checker::{CheckOutcome, Checker, Unavailable, check_bytes};
+use crate::dashboards::checker::{
+    CHECK_CALL_TIMEOUT, CHECK_QUEUE_WAIT, CheckOutcome, Checker, Unavailable, check_bytes,
+};
 use crate::dashboards::limits::{KeyedSlots, json_len};
 use crate::dashboards::memory::{ALLOCATION_BYTES, Reservation, VALUE_BYTES, VEC_BYTES};
 use crate::dashboards::runner::{DatasetRunner, HeldResult, RunError, TelemetryError};
@@ -134,6 +136,17 @@ pub const MEMORY_WAIT: Duration = Duration::from_secs(30);
 /// Added to the phases' bounds in a call's time limit, for the work between them (merging, the
 /// formula check, building the check request).
 const CALL_MARGIN: Duration = Duration::from_secs(10);
+
+/// The time limit of one call in the service ([`DashboardTool::call_limit`] with the service's
+/// bounds and checker): 30 + 120 + 30 + (30 + 85) + 30 + 10 = 335 seconds. A question's run
+/// delegation must leave room for one such call (`config::MIN_RUN_LIFETIME_WITH_DASHBOARDS`).
+pub const CALL_LIMIT: Duration = WRITE_WAIT
+    .saturating_add(DATASETS_TIMEOUT)
+    .saturating_add(MEMORY_WAIT)
+    .saturating_add(CHECK_QUEUE_WAIT)
+    .saturating_add(CHECK_CALL_TIMEOUT)
+    .saturating_add(SAVE_TIMEOUT)
+    .saturating_add(CALL_MARGIN);
 
 /// The least time left in the question for a write to start: a write that the deadline cuts
 /// off leaves nothing behind, but the model could no longer answer.
@@ -2111,7 +2124,13 @@ fn description() -> String {
          (rows from 0), f|computation, k|constant, m|dataset|queried_at (or row_count). A digit \
          outside a mark (in text, titles, aria labels or list numbering) fails the check, and \
          so do SVG shapes outside marks, axes and decor, animations, canvas, images, frames, \
-         form fields and loading anything. `locale` (zh-TW, the default, or en) and `tz` \
+         form fields and loading anything. Text must stay legible, or the page is refused: \
+         labels horizontal or slanted at most 45° (slant crowded tick labels to -45°, never set \
+         them vertical); nothing mirrored or stretched, and a pie stays round; a readable font \
+         size, normal letter spacing and solid colour, never faint or nearly transparent; plain \
+         text elements that hold their text whole, without per-letter x, y, dx, dy or rotate \
+         lists, textLength, textPath, perspective or 3D transforms. `locale` (zh-TW, the \
+         default, or en) and `tz` \
          (default {DEFAULT_TZ}) are how the check renders the page: give the user's.\n\
          \n\
          A refused write comes back with up to {MAX_PROBLEMS} problems, each with a kind and \

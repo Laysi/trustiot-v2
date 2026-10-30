@@ -15,7 +15,8 @@
 //!   caps refuse the 61st run in a minute and a third at a time per tenant while other tenants
 //!   run, and the `dashboard` tool's runs count against the same caps; a run waiting for
 //!   telemetry-query holds no memory, an answer holds its result's memory until its body is
-//!   written or dropped, and one tenant holds at most its share; telemetry-query's refusals reach
+//!   handed to the connection or dropped (or its bound passed: a reader that stops loses the
+//!   answer and its connection), and one tenant holds at most its share; telemetry-query's refusals reach
 //!   the user only as closed keys, never as its text.
 //! - Opening a dashboard and running all its datasets calls no model.
 //!
@@ -25,17 +26,23 @@
 mod dashboard_world;
 
 use std::collections::HashSet;
+use std::io::{self, IoSlice};
+use std::net::SocketAddr;
+use std::pin::Pin;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
+use std::task::{Context, Poll};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use assistant::callee::{Caller, Operation};
 use assistant::dashboards::caps::{CONCURRENT_RUNS, Clock, RUNS_PER_MINUTE, RunCaps};
+use assistant::dashboards::memory::ResultMemory;
 use assistant::dashboards::runner::DatasetRunner;
 use assistant::model::BoxFuture as ModelFuture;
 use assistant::tools::{Delegation, DelegationError};
 use axum::http::Method;
 use axum::http::header::CONTENT_TYPE;
+use contract::api::dashboard::result::DatasetResult;
 use contract::api::dashboard::spec::Dataset;
 use contract::{
     Actor, DashboardId, INTERNAL_IDENTITY_HEADER, InternalClaims, InternalToken, ServiceName,
@@ -43,11 +50,14 @@ use contract::{
 };
 use dashboard_world::{
     Answer, Binary, Content, DATASETS, Peers, Person, SQL_PATH, STATISTICS_PATH, Script,
-    TelemetryCall, USAGE_PATH, World, call, call_raw, spec, telemetry_client, world,
+    TelemetryCall, USAGE_PATH, World, call, call_raw, spec, telemetry_client, wide_sql_answer,
+    world,
 };
 use serde_json::{Value, json};
 use testkit::identity::TestIssuer;
-use tokio::sync::Semaphore;
+use tokio::io::{AsyncRead, AsyncReadExt as _, AsyncWrite, AsyncWriteExt as _, ReadBuf};
+use tokio::net::{TcpListener, TcpSocket, TcpStream};
+use tokio::sync::{Semaphore, mpsc};
 use tower::ServiceExt as _;
 use uuid::Uuid;
 
@@ -1851,10 +1861,10 @@ async fn slow_answers_of_other_tenants_do_not_stop_a_run() {
     }
 }
 
-/// A run's answer holds the result's memory until its body has been written or dropped, not
+/// A run's answer holds the result's memory until its body has been handed over or dropped, not
 /// only while the run goes on: an answer whose body is not read yet keeps the body's length
-/// reserved for the tenant; reading the body and letting it go, or dropping the answer unread,
-/// gives it back. Served over TCP, the memory is back once the client has the whole body.
+/// reserved for the tenant; reading the whole body, or dropping the answer unread, gives it
+/// back. Served over TCP, the memory is back once the client has the whole body.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_run_answer_holds_its_memory_until_its_body_is_written_or_dropped() {
     let Some(Setup { world, peers, api }) = setup(RunCaps::default()).await else {
@@ -1899,7 +1909,7 @@ async fn a_run_answer_holds_its_memory_until_its_body_is_written_or_dropped() {
     drop(answer);
     assert_eq!(memory.used(), 0, "the answer dropped unread");
 
-    // Served over TCP: once the client has the whole body, the server has written it.
+    // Served over TCP: once the client has the whole body, the server has handed it over.
     let (other, other_saved) = tenant_with_dashboard(&world).await;
     let answer = call(
         &api.url,
@@ -1918,6 +1928,259 @@ async fn a_run_answer_holds_its_memory_until_its_body_is_written_or_dropped() {
         );
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
+}
+
+/// The rows and the text cell of the wide answer: a result of about 1.5 MB, far more than the
+/// small socket buffers below and the connection's own write buffer (about 400 KiB) hold.
+const WIDE_ROWS: usize = 1500;
+const WIDE_CELL: usize = 1000;
+
+/// The send buffer of the server's connections and the receive buffer of the reader that stops.
+const SMALL_BUFFER: usize = 4096;
+
+/// Waits until `memory` holds nothing, failing with `what` after a generous bound.
+async fn wait_until_released(memory: &ResultMemory, what: &str) {
+    let deadline = Instant::now() + dashboard_world::WAIT;
+    while memory.used() > 0 {
+        assert!(Instant::now() < deadline, "{what} was not released");
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+}
+
+/// Reads an HTTP answer's status line and headers, a little at a time: the head, and the few
+/// bytes of the body read with it.
+async fn read_head(stream: &mut TcpStream) -> (String, Vec<u8>) {
+    let mut read = Vec::new();
+    let mut buffer = [0_u8; 1024];
+    loop {
+        if let Some(end) = read.windows(4).position(|bytes| bytes == b"\r\n\r\n") {
+            let body = read.split_off(end + 4);
+            return (String::from_utf8(read).expect("a text head"), body);
+        }
+        let count = stream
+            .read(&mut buffer)
+            .await
+            .expect("read the answer's head");
+        assert!(count > 0, "the connection ended before the answer's head");
+        read.extend_from_slice(&buffer[..count]);
+    }
+}
+
+/// The `content-length` of an answer's `head`.
+fn content_length(head: &str) -> usize {
+    head.lines()
+        .find_map(|line| {
+            let (name, value) = line.split_once(':')?;
+            name.eq_ignore_ascii_case("content-length")
+                .then(|| value.trim().parse().ok())
+                .flatten()
+        })
+        .unwrap_or_else(|| panic!("no content-length in {head}"))
+}
+
+/// A server's listener whose connections have a small send buffer and report when the server
+/// drops them.
+struct WatchedListener {
+    listener: TcpListener,
+    dropped: mpsc::UnboundedSender<Instant>,
+}
+
+/// A server connection that reports the instant the server drops it. It writes as the
+/// `TcpStream` it wraps does, vectored included, so the server buffers its answers as it does
+/// on a plain `TcpListener`.
+struct WatchedConnection {
+    stream: TcpStream,
+    dropped: mpsc::UnboundedSender<Instant>,
+}
+
+impl axum::serve::Listener for WatchedListener {
+    type Io = WatchedConnection;
+    type Addr = SocketAddr;
+
+    async fn accept(&mut self) -> (WatchedConnection, SocketAddr) {
+        let (stream, address) = self.listener.accept().await.expect("accept");
+        socket2::SockRef::from(&stream)
+            .set_send_buffer_size(SMALL_BUFFER)
+            .expect("a small send buffer");
+        let dropped = self.dropped.clone();
+        (WatchedConnection { stream, dropped }, address)
+    }
+
+    fn local_addr(&self) -> io::Result<SocketAddr> {
+        self.listener.local_addr()
+    }
+}
+
+impl Drop for WatchedConnection {
+    fn drop(&mut self) {
+        let _ = self.dropped.send(Instant::now());
+    }
+}
+
+impl AsyncRead for WatchedConnection {
+    fn poll_read(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<io::Result<()>> {
+        Pin::new(&mut self.get_mut().stream).poll_read(cx, buf)
+    }
+}
+
+impl AsyncWrite for WatchedConnection {
+    fn poll_write(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &[u8],
+    ) -> Poll<io::Result<usize>> {
+        Pin::new(&mut self.get_mut().stream).poll_write(cx, buf)
+    }
+
+    fn poll_write_vectored(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        bufs: &[IoSlice<'_>],
+    ) -> Poll<io::Result<usize>> {
+        Pin::new(&mut self.get_mut().stream).poll_write_vectored(cx, bufs)
+    }
+
+    fn is_write_vectored(&self) -> bool {
+        self.stream.is_write_vectored()
+    }
+
+    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Pin::new(&mut self.get_mut().stream).poll_flush(cx)
+    }
+
+    fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Pin::new(&mut self.get_mut().stream).poll_shutdown(cx)
+    }
+}
+
+/// Reads until the connection ends, cleanly or not.
+async fn read_to_end(stream: &mut TcpStream, into: &mut Vec<u8>) {
+    let mut buffer = vec![0_u8; 64 << 10];
+    loop {
+        match stream.read(&mut buffer).await {
+            Ok(0) | Err(_) => return,
+            Ok(count) => into.extend_from_slice(&buffer[..count]),
+        }
+    }
+}
+
+/// A run's answer ends when the connection has not taken the whole body within its bound
+/// (`HELD_BODY_TIMEOUT`, shortened here). A reader that reads gets the whole body, byte for byte,
+/// and the memory is back once the connection has taken it. A reader that stops reading, on a
+/// connection whose socket buffers then fill, loses its connection at the bound while it still
+/// reads nothing, the result's memory is released by then, and reading again it gets fewer bytes
+/// than the answer's length, then the end.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_reader_that_stops_loses_the_answer_and_the_connection_at_the_bound() {
+    let Some(Setup { world, peers, api }) = setup(RunCaps::default()).await else {
+        return;
+    };
+    peers.script(Arc::new(|call| {
+        Box::pin(async move { Some((200, wide_sql_answer(&call.body, WIDE_ROWS, WIDE_CELL))) })
+    }));
+    let (viewer, saved) = tenant_with_dashboard(&world).await;
+    let path = action(saved, "dataset-runs");
+
+    // A reader that reads, from the API with the service's bound.
+    let answer = call(
+        &api.url,
+        Method::POST,
+        &path,
+        Some(&world.token(&viewer)),
+        Some(&run_body(1, "daily")),
+    )
+    .await;
+    assert_eq!(answer.status, 200, "{}", answer.text);
+    assert!(answer.text.len() > 1_000_000, "{}", answer.text.len());
+    assert_eq!(
+        answer.header("content-length"),
+        Some(answer.text.len().to_string().as_str())
+    );
+    let result: DatasetResult = serde_json::from_str(&answer.text).expect("a result");
+    assert_eq!(result.rows.len(), WIDE_ROWS);
+    assert_eq!(
+        serde_json::to_string(&result).expect("JSON"),
+        answer.text,
+        "the whole body, byte for byte as the server wrote the result"
+    );
+    wait_until_released(
+        api.runner.memory(),
+        "the memory of an answer its reader read",
+    )
+    .await;
+
+    // A reader that stops, from a server whose answers let their results go after a short bound,
+    // on connections with small socket buffers.
+    let runner = Arc::new(DatasetRunner::new(
+        Some(telemetry_client(&peers)),
+        RunCaps::default(),
+    ));
+    let bound = Duration::from_secs(1);
+    let routes = world.routes_bounded(&peers, Arc::clone(&runner), true, bound);
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+    let address = listener.local_addr().expect("the address");
+    let (dropped, mut connections_dropped) = mpsc::unbounded_channel();
+    let listener = WatchedListener { listener, dropped };
+    let server = tokio::spawn(async move { axum::serve(listener, routes).await });
+    let socket = TcpSocket::new_v4().expect("a socket");
+    socket
+        .set_recv_buffer_size(u32::try_from(SMALL_BUFFER).expect("small"))
+        .expect("a small receive buffer");
+    let mut stream = socket.connect(address).await.expect("connect");
+    let asked = Instant::now();
+    let request = serde_json::to_vec(&run_body(1, "daily")).expect("JSON");
+    let head = format!(
+        "POST {path} HTTP/1.1\r\nhost: {address}\r\n{INTERNAL_IDENTITY_HEADER}: {}\r\n\
+         content-type: application/json\r\ncontent-length: {}\r\n\r\n",
+        world.token(&viewer),
+        request.len()
+    );
+    stream
+        .write_all(head.as_bytes())
+        .await
+        .expect("the request");
+    stream
+        .write_all(&request)
+        .await
+        .expect("the request's body");
+    let (status_and_headers, mut body) =
+        tokio::time::timeout(dashboard_world::WAIT, read_head(&mut stream))
+            .await
+            .expect("the answer's head");
+    assert!(
+        status_and_headers.starts_with("HTTP/1.1 200 "),
+        "{status_and_headers}"
+    );
+    let length = content_length(&status_and_headers);
+    assert!(length > 1_000_000, "{length}");
+
+    // The reader reads nothing more. At the bound the server drops the connection, its socket
+    // buffers still full, and the result's memory is back by then.
+    let closed = tokio::time::timeout(dashboard_world::WAIT, connections_dropped.recv())
+        .await
+        .expect("the server dropped the connection of the reader that stopped, at the bound")
+        .expect("the server's listener");
+    assert!(
+        closed.duration_since(asked) >= bound,
+        "the connection was dropped before the bound"
+    );
+    assert_eq!(runner.memory().used(), 0, "the memory is back at the bound");
+
+    // Reading again, the reader gets what the socket buffers held, then the end: never the whole
+    // answer.
+    tokio::time::timeout(dashboard_world::WAIT, read_to_end(&mut stream, &mut body))
+        .await
+        .expect("the connection ends");
+    assert!(
+        body.len() < length,
+        "the reader that stopped lost the answer: {} of {length} bytes",
+        body.len()
+    );
+    server.abort();
 }
 
 /// One tenant holds at most its share of the replica's memory: with its share taken (by its

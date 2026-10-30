@@ -143,6 +143,12 @@ pub const MIN_RUN_LIFETIME: Duration = Duration::from_secs(120);
 /// The longest: the identity service's limit (`RUN_DELEGATION_MAX_LIFETIME_SECS`, 900 s).
 pub const MAX_RUN_LIFETIME: Duration =
     Duration::from_secs(contract::api::identity::RUN_DELEGATION_MAX_LIFETIME_SECS as u64);
+/// The shortest run delegation with the `dashboard` tool (`dashboard_check.url` set): one whole
+/// call of it ([`crate::tools::dashboard::CALL_LIMIT`], 335 s) and the time the question ends
+/// before its delegation expires ([`crate::delegation::RUN_END_MARGIN`], 30 s), 365 seconds. A
+/// shorter delegation would end every question before its dashboard write could finish.
+pub const MIN_RUN_LIFETIME_WITH_DASHBOARDS: Duration =
+    crate::tools::dashboard::CALL_LIMIT.saturating_add(crate::delegation::RUN_END_MARGIN);
 
 /// The identity service's token exchange port.
 #[derive(Debug, Deserialize)]
@@ -450,6 +456,19 @@ impl Validate for Config {
                      tool hands the model a whole dashboard",
                 ));
             }
+            if self.identity.run_lifetime < MIN_RUN_LIFETIME_WITH_DASHBOARDS {
+                return Err(Invalid::new(
+                    "identity.run_lifetime",
+                    format!(
+                        "must be at least {} seconds when dashboard_check.url is set: one whole \
+                         dashboard tool call ({} s) and the {} s a question ends before its \
+                         delegation expires",
+                        MIN_RUN_LIFETIME_WITH_DASHBOARDS.as_secs(),
+                        crate::tools::dashboard::CALL_LIMIT.as_secs(),
+                        crate::delegation::RUN_END_MARGIN.as_secs(),
+                    ),
+                ));
+            }
         }
         for (key, peer) in [
             ("telemetry_query.url", &self.telemetry_query),
@@ -638,6 +657,35 @@ mod tests {
         check.tools.max_text_bytes = crate::tools::dashboard::MIN_TEXT_BYTES - 1;
         assert_eq!(key_of(&check), Err("tools.max_text_bytes".into()));
         check.dashboard_check.url = None;
+        assert_eq!(key_of(&check), Ok(()));
+    }
+
+    /// With the `dashboard` tool, a question's delegation leaves room for one whole call of it
+    /// before the question ends; without the tool, two minutes stay enough.
+    #[test]
+    fn a_dashboard_check_needs_a_run_lifetime_with_room_for_one_dashboard_call() {
+        assert_eq!(MIN_RUN_LIFETIME_WITH_DASHBOARDS, Duration::from_secs(365));
+        let mut check = config();
+        check.dashboard_check.url = Some("http://trustiot-dashboard-check:8080".into());
+        for (lifetime, valid) in [
+            (MAX_RUN_LIFETIME, true),
+            (MIN_RUN_LIFETIME_WITH_DASHBOARDS, true),
+            (
+                MIN_RUN_LIFETIME_WITH_DASHBOARDS - Duration::from_secs(1),
+                false,
+            ),
+            (MIN_RUN_LIFETIME, false),
+        ] {
+            check.identity.run_lifetime = lifetime;
+            let expected = if valid {
+                Ok(())
+            } else {
+                Err("identity.run_lifetime".to_owned())
+            };
+            assert_eq!(key_of(&check), expected, "{lifetime:?}");
+        }
+        check.dashboard_check.url = None;
+        check.identity.run_lifetime = MIN_RUN_LIFETIME;
         assert_eq!(key_of(&check), Ok(()));
     }
 

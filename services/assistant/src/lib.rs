@@ -133,6 +133,7 @@ pub async fn start(context: Context<Config>) -> Result<Router, BoxError> {
         on_behalf,
         runner: assistant.runner,
         versions: Arc::new(dashboards::limits::VersionBudget::default()),
+        held_body_timeout: api::held_body::HELD_BODY_TIMEOUT,
     }))
 }
 

@@ -35,6 +35,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use assistant::api::held_body::HELD_BODY_TIMEOUT;
 use assistant::api::{self, ApiState};
 use assistant::callee::Callee;
 use assistant::dashboards::caps::{Limited, RunCaps};
@@ -562,6 +563,18 @@ impl World {
     /// The public API's routes with `runner`, calling the stand-in `peers`, for a test that calls
     /// them in this process and decides when it reads an answer's body.
     pub fn routes(&self, peers: &Peers, runner: Arc<DatasetRunner>, exchange: bool) -> Router {
+        self.routes_bounded(peers, runner, exchange, HELD_BODY_TIMEOUT)
+    }
+
+    /// [`World::routes`], whose run answers are cut off after `held_body_timeout` when the
+    /// connection has not taken them whole by then.
+    pub fn routes_bounded(
+        &self,
+        peers: &Peers,
+        runner: Arc<DatasetRunner>,
+        exchange: bool,
+        held_body_timeout: Duration,
+    ) -> Router {
         let identity = InternalClient::<service::Identity>::new(&peers.url, IDENTITY_TIMEOUT)
             .expect("a client for the exchange's stand-in");
         api::routes(ApiState {
@@ -570,6 +583,7 @@ impl World {
             on_behalf: exchange.then(|| OnBehalf::new(identity)),
             runner,
             versions: Arc::new(VersionBudget::default()),
+            held_body_timeout,
         })
     }
 }
@@ -912,6 +926,35 @@ pub fn sql_answer(body: &Value, rows: usize) -> Response {
         queried_at: now,
     };
     axum::Json(result).into_response()
+}
+
+/// A SQL answer to the request `body` of `rows` rows of two text cells, the second of
+/// `cell_bytes` bytes: an answer and a result of about `rows` × `cell_bytes` bytes.
+pub fn wide_sql_answer(body: &Value, rows: usize, cell_bytes: usize) -> Value {
+    let now = Utc::now();
+    let result = SqlResult {
+        sql: body["sql"].as_str().unwrap_or_default().to_owned(),
+        columns: vec![
+            SqlColumn {
+                name: "row".into(),
+                data_type: "String".into(),
+            },
+            SqlColumn {
+                name: "note".into(),
+                data_type: "String".into(),
+            },
+        ],
+        rows: (0..rows)
+            .map(|index| vec![json!(index.to_string()), json!("x".repeat(cell_bytes))])
+            .collect(),
+        queryable_from: QueryableFrom {
+            tenant_telemetry: now - TimeDelta::days(7),
+            tenant_telemetry_1m: now - TimeDelta::days(90),
+            tenant_telemetry_1h: now - TimeDelta::days(90),
+        },
+        queried_at: now,
+    };
+    serde_json::to_value(result).expect("a SQL answer as JSON")
 }
 
 /// The range of a semantic answer: the stand-in does not resolve periods.

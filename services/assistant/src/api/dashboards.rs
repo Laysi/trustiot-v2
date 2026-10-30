@@ -35,7 +35,7 @@
 use std::time::Duration;
 
 use axum::Router;
-use axum::body::{Body, Bytes};
+use axum::body::Body;
 use axum::extract::rejection::{PathRejection, QueryRejection};
 use axum::extract::{Path, Query, State};
 use axum::http::header::{CACHE_CONTROL, CONTENT_TYPE, RETRY_AFTER};
@@ -49,12 +49,13 @@ use contract::api::dashboard::public::{
     VERSION_CONFLICT, VERSION_NOT_FOUND, VERSIONS_LIMITED, VersionCreated, VersionList,
 };
 use contract::api::dashboard::result::DatasetResult;
-use contract::{DashboardId, ErrorBody, ErrorCode};
+use contract::{DashboardId, ErrorBody, ErrorCode, TenantId};
 use serde::Deserialize;
 use service_kit::identity::UserIdentity;
 use service_kit::tenant::TenantTransaction;
 use uuid::Uuid;
 
+use super::held_body::HeldBody;
 use super::{ApiError, ApiState, begin, commit, error, ok, parse_id, read_body, requester};
 use crate::callee::{Caller, Operation};
 use crate::dashboards::runner::{HeldResult, RunError};
@@ -522,24 +523,30 @@ async fn run_dataset(
         run_id: None,
         conversation_id: None,
     };
-    // The answer's body holds the result's memory until it has been written or dropped.
+    // The answer's body holds the result's memory until its last piece goes to the connection,
+    // and cuts the answer off when the connection has not taken it whole within the bound.
     match api.runner.run(&caller, &dataset).await {
-        Ok(result) => Ok(held_result(result)),
+        Ok(result) => Ok(held_result(
+            result,
+            requester.principal.tenant_id,
+            api.held_body_timeout,
+        )),
         Err(failure) => Ok(run_error(&failure)),
     }
 }
 
 /// The 200 of a run: the result's JSON as the body, as `axum::Json` writes it, holding the
-/// result's reserved memory until the server has written the body or dropped it (a client that
-/// went away, or reads slowly, keeps it only as long as the body is held).
-fn held_result(result: HeldResult) -> Response {
+/// result's reserved memory until its last piece goes to the connection or the body is dropped
+/// (the client went away). A body the connection has not taken whole within `bound` lets the
+/// result go and ends the response ([`HeldBody`]).
+fn held_result(result: HeldResult, tenant: TenantId, bound: Duration) -> Response {
     (
         StatusCode::OK,
         [
             (CONTENT_TYPE, "application/json"),
             (CACHE_CONTROL, "no-store"),
         ],
-        Body::from(Bytes::from_owner(result)),
+        Body::new(HeldBody::new(result, tenant, bound)),
     )
         .into_response()
 }

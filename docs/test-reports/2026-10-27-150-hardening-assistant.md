@@ -76,12 +76,12 @@ cargo test -p assistant --test <測試檔> <測試名稱>
 
 ### 第二輪（2026-10-27 至 2026-10-30）
 
-複審確認了三件事，這一輪修正：別的租戶很慢的資料集執行或 AI 寫入佔滿副本的名額時，這個租戶的執行被拒、寫入回 `check_busy`；執行的名額在回應本文寫出之前就放回，本文不在任何上限內；還原為每個新版本複製一份內容。另外寫明一件設計：同一個租戶在每個副本同時只有一次 AI 寫入，不分成員，所以一位成員慢的寫入讓同租戶其他成員的 AI 寫入等待。
+複審確認了三件事，這一輪修正：別的租戶很慢的資料集執行或 AI 寫入佔滿副本的名額時，這個租戶的執行被拒、寫入回 `check_busy`；執行的名額在回應本文寫出之前就放回，本文不在任何上限內；還原為每個新版本複製一份內容。另外寫明一件設計：同一個租戶在每個副本同時只有一次 AI 寫入，不分成員，所以一位成員慢的寫入讓同租戶其他成員的 AI 寫入等待。之後再補三件事：執行的回應本文有時限（60 秒），連線沒在時限內取走整個本文時放回記憶體、中斷回應並關閉連線；有 `dashboard` 工具時，問題的委派效期至少放得下一次完整的工具呼叫；工具的說明告訴模型頁面文字要讀得清楚的規則。
 
 | 指令 | 結果 |
 | --- | --- |
-| `cargo test -p assistant` | 全部通過：單元測試 122、`agent` 10、`agent_logs` 2、`answer_guard` 3、`chart_connections` 1、`cross_tenant` 1、`dashboard_acceptance` 2 ignored、`dashboard_tool` 13、`dashboards_api` 19、`dashboards_store` 9（1 個等 Laysi/trustiot-v2#644 的 ignored）、`delegated_tools` 13、`history_store` 5、`startup` 1、`telemetry_sql` 2、`tools` 7 |
-| `cargo test --locked -p assistant --test dashboard_acceptance -- --ignored` | 2 個通過，11.3 秒（同第一輪的兩個測試） |
+| `cargo test -p assistant` | 全部通過：單元測試 129、`agent` 10、`agent_logs` 2、`answer_guard` 3、`chart_connections` 1、`cross_tenant` 1、`dashboard_acceptance` 2 ignored、`dashboard_tool` 13、`dashboards_api` 20、`dashboards_store` 9（1 個等 Laysi/trustiot-v2#644 的 ignored）、`delegated_tools` 13、`history_store` 5、`startup` 1、`telemetry_sql` 2、`tools` 8 |
+| `cargo test --locked -p assistant --test dashboard_acceptance -- --ignored` | 2 個通過，10.7 秒（同第一輪的兩個測試） |
 | `cargo fmt --all --check`、`cargo clippy --workspace --all-targets -- -D warnings` | 通過 |
 | `cargo test -p contract`、`-p sql-check`、`-p repo-check`、`-p testkit` | 全部通過（`testkit` 67 個） |
 | `cargo test -p migrate --test registry --test fresh_database` | 通過（6 與 1 個；這一輪改了 `0002_dashboards.sql` 的還原儲存） |
@@ -105,6 +105,10 @@ cargo test -p assistant --test <測試檔> <測試名稱>
 | 最大的一次寫入加上租戶同時的 2 次最大執行放得進一個租戶的份額，所以閒置的副本做得完最大的寫入 | `src/tools/dashboard.rs`：`a_worst_case_write_fits_a_tenants_share`、`a_results_values_are_reserved_from_its_json_and_rows` | 新的上界 |
 | 預留的等待有上界，等不到時什麼都不佔；放回的與縮小後多出的給等待中的預留 | `src/dashboards/memory.rs`：`a_reservation_that_does_not_fit_in_its_wait_is_refused_and_holds_nothing`、`a_waiting_reservation_gets_what_is_released_and_shrinking_releases_the_rest`、`a_read_holds_the_declared_length_or_twice_the_limit` | 新的上界（取代第一輪的 `the_runs_of_all_tenants_share_the_places_in_flight`） |
 | 讀與解析的用量取決於上限，而不是回答或判定的內容：沒宣告長度的本文以倍增成長、不超過上限；統計與用量的表格組出前以 `max_rows` 為界；有型別的解析不超過 `PARSE_FACTOR`；判定解析前先數值 | `src/callee.rs`：`a_body_without_a_declared_length_grows_by_doubling_up_to_the_limit`；`src/dashboards/flatten.rs`：`a_table_stops_at_the_runs_max_rows`、`typed_answers_take_at_most_the_parse_factor`；`src/dashboards/checker.rs`：`a_verdict_is_parsed_only_within_its_values`、`verdict_values_fit_their_share`、`a_check_holds_its_body_and_the_largest_verdict` | 新的上界 |
+| 執行的回應本文要在 60 秒（`HELD_BODY_TIMEOUT`）內由連線取走（連線寫出一段才拿下一段），否則放回記憶體、中斷回應並關閉連線：讀取的讀者逐位元組拿到整個本文；停止讀取的讀者一直不讀，連線仍在時限後關閉、記憶體已放回，之後只拿到不完整的本文；沒讀就丟棄時立即放回 | `tests/dashboards_api.rs`：`a_reader_that_stops_loses_the_answer_and_the_connection_at_the_bound`（約 1.5 MB 的本文、小的 socket 緩衝、時限設成 1 秒）；`src/api/held_body.rs`：`a_held_body_hands_the_whole_json_over_in_pieces_then_lets_it_go`、`at_most_two_pieces_wait_to_be_written_and_a_written_piece_brings_the_next`、`at_the_bound_the_result_goes_the_waiting_connection_wakes_and_the_body_fails`、`a_body_never_asked_for_lets_the_result_go_at_the_bound`、`a_body_dropped_unread_lets_the_result_go_at_once`、`answers_whose_readers_stopped_leave_another_tenant_its_share` | 失敗：以修正前的本文（整個結果一次交給連線）跑這個整合測試的前一版，停止讀取的讀者的記憶體在 120 秒的等待結束時仍未放回；只在時限放回記憶體、不限制連線緩衝裡段數的本文，連線在 120 秒的等待結束時仍未關閉 |
+| 有 `dashboard` 工具時，問題的委派效期至少 365 秒（一次完整的工具呼叫 335 秒加結束前的 30 秒）；問題的截止時間取消進行中的呼叫，被取消的呼叫不再送出請求 | `src/config.rs`：`a_dashboard_check_needs_a_run_lifetime_with_room_for_one_dashboard_call`；`tests/dashboard_tool.rs`：`datasets_still_running_at_the_bound_are_problems_and_the_rest_is_kept`（服務的呼叫時限等於 `CALL_LIMIT`）；`tests/tools.rs`：`dropping_a_step_cancels_its_calls_before_they_send` | 新的設定檢查（修正前 2 分鐘的委派也被接受）；取消是既有的行為，新測試確認它 |
+
+在一次量到的執行裡，伺服器在送出請求後約 1.14 秒關閉停止讀取的讀者的連線（時限設成 1 秒），讀者之後拿到 1,517,271 bytes 中的 327,542 bytes（socket 緩衝裡的部分），遠低於回應的長度，所以這個測試不是剛好過。
 
 記憶體的上界（由上限推得的估計，不是實測；推導見 `services/assistant/README.md`「記憶體」）：
 
@@ -114,6 +118,7 @@ cargo test -p assistant --test <測試檔> <測試名稱>
 | 一次資料集執行，讀與解析時 | SQL 約 26 MiB，統計與用量約 54 MiB |
 | 一次 AI 寫入 | 約 164 MiB |
 | 一個租戶同時最多（最大的寫入加 2 次最大的執行） | 約 272 MiB |
+| 讀者都不讀時，一個租戶的回應本文最多佔 | 124 MiB（60 秒內最多 62 個 2 MiB 的本文）；兩個這樣的租戶之後預算仍剩 328 MiB，放得下另一個租戶的整個份額 |
 | 合計（預算、結果快取 64 MiB、其他約 64 MiB） | 約 704 MiB；chart 的 requests 128Mi、limits 768Mi 不變 |
 
 ## 結論
@@ -129,3 +134,6 @@ cargo test -p assistant --test <測試檔> <測試名稱>
 9. **結果記憶體是每個副本一個以位元組計的預算，執行在 telemetry-query 回答之後才預留，預留隨結果進入回應本文與寫入，一個租戶最多一半，別的租戶很慢的執行與寫入不讓這個租戶被拒**：行為通過（第二輪）。實際的記憶體用量量測**待測**：以量測校正預算與 chart 的值屬於 Laysi/trustiot-v2#694 的調整。
 10. **同一個租戶的 AI 寫入一次一個、不分成員**：設計如此，`services/assistant/README.md` 與 `docs/architecture/ai-assistant.md` 寫明一位成員慢的寫入讓同租戶其他成員的 AI 寫入等待。
 11. **跨服務的驗收 1 與 2 在第二輪之後仍通過**：通過。
+12. **執行的回應本文最多 60 秒：讀者停止讀取時，記憶體放回、回應中斷、連線在時限關閉；讀取的讀者仍拿到整個本文**：通過（第二輪）。
+13. **有 `dashboard` 工具時，問題的委派效期放得下一次完整的工具呼叫；截止時間取消進行中的呼叫**：通過（第二輪）。
+14. **工具的說明告訴模型頁面文字要讀得清楚**（標籤水平或最多斜 45°、不鏡像不拉伸、字級與對比讀得到、一般的文字元素）：已寫進工具的說明與 `services/assistant/README.md`；檢查與 runtime 拒絕這些頁面的證據不在這份報告。

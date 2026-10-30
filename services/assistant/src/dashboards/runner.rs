@@ -103,7 +103,9 @@ pub struct DatasetRunner {
 }
 
 /// A run's result as its JSON, holding the memory reserved for it until it is dropped. The JSON
-/// is the [`DatasetResult`] the API answers with, exactly as `axum::Json` writes it.
+/// is the [`DatasetResult`] the API answers with, exactly as `axum::Json` writes it; the API's
+/// answer body holds it until its last piece goes to the connection, within a bound
+/// (`crate::api::held_body`).
 #[derive(Debug)]
 pub struct HeldResult {
     json: Bytes,
@@ -111,6 +113,12 @@ pub struct HeldResult {
 }
 
 impl HeldResult {
+    /// `json` holding `memory`, for tests of what holds a result.
+    #[cfg(test)]
+    pub(crate) fn new(json: Bytes, memory: Reservation) -> Self {
+        Self { json, memory }
+    }
+
     /// The result's JSON.
     #[must_use]
     pub fn json(&self) -> &Bytes {
@@ -121,12 +129,6 @@ impl HeldResult {
     #[must_use]
     pub fn into_parts(self) -> (Bytes, Reservation) {
         (self.json, self.memory)
-    }
-}
-
-impl AsRef<[u8]> for HeldResult {
-    fn as_ref(&self) -> &[u8] {
-        &self.json
     }
 }
 

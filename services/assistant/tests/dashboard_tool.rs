@@ -33,7 +33,7 @@ use assistant::dashboards::checker::{CHECK_CALL_TIMEOUT, Checker, check_bytes};
 use assistant::dashboards::runner::DatasetRunner;
 use assistant::dashboards::store;
 use assistant::tools::dashboard::{
-    DATASETS_TIMEOUT, DashboardTool, MAX_WRITES_PER_QUESTION, SAVE_TIMEOUT, WriteBounds,
+    CALL_LIMIT, DATASETS_TIMEOUT, DashboardTool, MAX_WRITES_PER_QUESTION, SAVE_TIMEOUT, WriteBounds,
 };
 use assistant::tools::{Tool, ToolContent, ToolContext, ToolError, ToolOutput};
 use check_stand_in::CheckStandIn;
@@ -1492,6 +1492,9 @@ async fn datasets_still_running_at_the_bound_are_problems_and_the_rest_is_kept()
         limit > DATASETS_TIMEOUT + CHECK_CALL_TIMEOUT + SAVE_TIMEOUT,
         "{limit:?}"
     );
+    // The tool as the service builds it: the limit the configuration checks the run lifetime
+    // against.
+    assert_eq!(limit, CALL_LIMIT);
 
     // telemetry-query never answers the statistics dataset; the bound is what this test sets.
     let bounded = tool(

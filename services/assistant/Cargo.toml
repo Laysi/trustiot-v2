@@ -21,13 +21,16 @@ ai-clients = { path = "../../crates/ai-clients" }
 axum = { workspace = true, features = ["http1", "json", "query", "tokio"] }
 # Tool result images are checked to be base64 before they go to the model.
 base64.workspace = true
-# A dataset run's result as JSON, shared without a copy by the API's answer body (which holds the
-# result's reserved memory until the body is written or dropped) and the tool's result cache.
+# A dataset run's result as JSON, shared without a copy by the run's holder (the API's answer
+# body, a write of the `dashboard` tool) and the tool's result cache.
 bytes.workspace = true
 # The telemetry tools check the model's times and the queryable period before they call.
 chrono = { workspace = true, features = ["alloc", "now"] }
 # Tenant and user IDs, the internal identity token a tool calls with, service names.
 contract = { path = "../../crates/contract" }
+# The frames of a dataset run's answer body (src/api/held_body.rs), which hands the result to the
+# connection in pieces within a bound.
+hyper.workspace = true
 # The `assistant.model_calls` counter (cache reads, docs/architecture/ai-assistant.md).
 opentelemetry = { workspace = true, features = ["metrics"] }
 # The AI gateway's internal API over plain HTTP: ztunnel adds mutual TLS inside the mesh, so no
@@ -61,11 +64,15 @@ chrono = { workspace = true, features = ["now"] }
 # schema as the migration Job does.
 lab-dataset = { path = "../../tools/lab-dataset" }
 migrate = { path = "../../tools/migrate" }
+# Small socket buffers on the test server's connections, so a reader that stops reading stops
+# the server from handing over an answer's body (tests/dashboards_api.rs).
+socket2.workspace = true
 telemetry-query = { path = "../telemetry-query" }
 # The product's schema (the migration Job), test identity tokens (and the request's verified
 # identity a question's delegation starts from), and the cross-tenant suite.
 testkit = { path = "../../crates/testkit" }
-tokio = { workspace = true, features = ["macros", "net", "rt-multi-thread", "sync", "time"] }
+# `io-util`: tests/dashboards_api.rs speaks HTTP over a raw socket to read an answer slowly.
+tokio = { workspace = true, features = ["io-util", "macros", "net", "rt-multi-thread", "sync", "time"] }
 # Calls the public API's routes in the test process, so a test decides when it reads an
 # answer's body (tests/dashboards_api.rs).
 tower = { workspace = true, features = ["util"] }

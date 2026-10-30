@@ -10,8 +10,10 @@
 //!   are not the request's fault are logged with their kind only.
 
 pub mod dashboards;
+pub mod held_body;
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use axum::Router;
 use axum::body::{Body, Bytes};
@@ -48,6 +50,10 @@ pub struct ApiState {
     pub runner: Arc<DatasetRunner>,
     /// The publishes and restores each user and tenant may start in a minute, in this replica.
     pub versions: Arc<VersionBudget>,
+    /// The bound on handing a dataset run's answer body whole to the connection, after which the
+    /// answer is cut off and its result let go ([`held_body::HELD_BODY_TIMEOUT`] in the service;
+    /// tests shorten it).
+    pub held_body_timeout: Duration,
 }
 
 impl FromRef<ApiState> for IdentityVerifier {
