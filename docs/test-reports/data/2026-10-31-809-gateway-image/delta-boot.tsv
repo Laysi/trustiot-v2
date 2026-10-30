@@ -1,0 +1,6 @@
+added	/overlays/tpm-slb9670-ce0.dtbo
+changed	/config.txt
+changed	/overlays
+removed	/meta-data
+removed	/network-config
+removed	/user-data
