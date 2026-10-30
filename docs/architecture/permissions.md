@@ -135,3 +135,21 @@
 - 在 Laysi/trustiot-v2#585 之前這四個操作只檢查有沒有租戶，而且先驗證參數或 body、再檢查租戶：帶 `Unrecognized` 角色的 token 能查詢，沒有租戶的呼叫者送錯參數得到 400 而不是 403。現在角色檢查在最前面，`statistics` 與 `usage` 的 body 也在檢查之後才讀。
 - 探測不需要 ClickHouse：被拒的呼叫者在讀任何東西之前就得 403；放行的呼叫者沒帶參數或 body 得 400，`latest` 在 Postgres 找不到這個隨機租戶的帳號得 404，都在查 ClickHouse 之前。測試把 ClickHouse 位址指向一個只計算連線數的本機埠，探測後斷言沒有任何連線。
 - 助理服務換發的 token 也能呼叫（租戶 R 的換發 token 探測通過授權）：助理的遙測工具以使用者的身分查詢（Laysi/trustiot-v2#142）。
+
+## assistant
+
+`services/assistant/tests/permissions.rs`。
+
+| 操作 | 要求 | 已知落差 |
+| --- | --- | --- |
+| `GET /api/assistant/v1/conversations` | 租戶 viewer | |
+| `POST /api/assistant/v1/conversations` | 租戶 viewer | |
+| `GET /api/assistant/v1/conversations/{conversation_id}` | 租戶 viewer | |
+| `PATCH /api/assistant/v1/conversations/{conversation_id}` | 租戶 viewer | |
+| `DELETE /api/assistant/v1/conversations/{conversation_id}` | 租戶 viewer | |
+| `POST /api/assistant/v1/conversations/{conversation_id}/restore` | 租戶 viewer | |
+| `GET /api/assistant/v1/deleted-conversations` | 租戶 viewer | |
+
+- 對話只屬於開始它的使用者（Laysi/trustiot-v2#645）：租戶的每個角色都可以呼叫，但只用得到自己的對話，租戶 admin 也看不到別人的；這由 store 以租戶加使用者檢查，不是角色（`tests/api.rs` 的同租戶其他使用者、`tests/cross_tenant.rs` 的跨租戶）。
+- 在 Laysi/trustiot-v2#585 的共用檢查之前，這些操作只檢查有沒有租戶，帶本版本不認得的角色（`Unrecognized`）的 token 也能用；現在要求租戶 viewer。
+- 探測不帶 body 也不帶 `Content-Type`，所以放行的身分開始對話與還原都停在「寫入要 JSON」的 400；探測前後比對對話、訊息、捨棄紀錄與提問紀錄的筆數，任何呼叫者都沒有寫入資料。

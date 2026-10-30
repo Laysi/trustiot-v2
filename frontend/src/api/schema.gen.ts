@@ -3239,7 +3239,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description No tenant (`permission_denied`). */
+            /** @description No tenant or no role in it (`permission_denied`). */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -3302,7 +3302,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description No tenant (`permission_denied`). */
+            /** @description No tenant or no role in it (`permission_denied`). */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -3363,7 +3363,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description No tenant (`permission_denied`). */
+            /** @description No tenant or no role in it (`permission_denied`). */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -3420,7 +3420,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description No tenant (`permission_denied`). */
+            /** @description No tenant or no role in it (`permission_denied`). */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -3501,7 +3501,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description No tenant (`permission_denied`). */
+            /** @description No tenant or no role in it (`permission_denied`). */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -3583,7 +3583,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description No tenant (`permission_denied`). */
+            /** @description No tenant or no role in it (`permission_denied`). */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -3653,7 +3653,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description No tenant (`permission_denied`). */
+            /** @description No tenant or no role in it (`permission_denied`). */
             403: {
                 headers: {
                     [name: string]: unknown;

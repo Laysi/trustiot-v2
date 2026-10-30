@@ -4280,7 +4280,7 @@
                 }
               }
             },
-            "description": "No tenant (`permission_denied`)."
+            "description": "No tenant or no role in it (`permission_denied`)."
           },
           "503": {
             "content": {
@@ -4364,7 +4364,7 @@
                 }
               }
             },
-            "description": "No tenant (`permission_denied`)."
+            "description": "No tenant or no role in it (`permission_denied`)."
           },
           "429": {
             "content": {
@@ -4440,7 +4440,7 @@
                 }
               }
             },
-            "description": "No tenant (`permission_denied`)."
+            "description": "No tenant or no role in it (`permission_denied`)."
           },
           "404": {
             "content": {
@@ -4521,7 +4521,7 @@
                 }
               }
             },
-            "description": "No tenant (`permission_denied`)."
+            "description": "No tenant or no role in it (`permission_denied`)."
           },
           "404": {
             "content": {
@@ -4612,7 +4612,7 @@
                 }
               }
             },
-            "description": "No tenant (`permission_denied`)."
+            "description": "No tenant or no role in it (`permission_denied`)."
           },
           "404": {
             "content": {
@@ -4722,7 +4722,7 @@
                 }
               }
             },
-            "description": "No tenant (`permission_denied`)."
+            "description": "No tenant or no role in it (`permission_denied`)."
           },
           "404": {
             "content": {
@@ -4816,7 +4816,7 @@
                 }
               }
             },
-            "description": "No tenant (`permission_denied`)."
+            "description": "No tenant or no role in it (`permission_denied`)."
           },
           "503": {
             "content": {

@@ -175,7 +175,7 @@ service-kit 把這兩種拒絕都記成 INFO（`the identity service refused the
 
 型別與每個狀態碼在 `api/openapi.json`（tag `assistant`），前端的 client 由它產生。
 
-- **誰看得到**：對話只屬於開始它的使用者。每個請求以 token 的使用者在目前的租戶行事，與在租戶的角色無關，租戶管理者也看不到別人的對話；檢查的是 store（租戶加使用者）。不存在的、別人的、別的租戶的、已刪除的（還原除外）與路徑不是 UUID 的，回應逐位元組相同：404 `not_found`，所以回應不透露對話存不存在。
+- **誰看得到**：對話只屬於開始它的使用者。每個請求以 token 的使用者在目前的租戶行事，租戶的每個角色（viewer、editor、admin）都一樣，只能用自己的對話，租戶管理者也看不到別人的對話；檢查的是 store（租戶加使用者）。每個端點先以 service-kit 的共用檢查要求租戶 viewer（`Requirement::Tenant(TenantRole::Viewer)`），沒有租戶或角色是這一版不認得的得 403，在讀 body 與資料庫之前；權限矩陣在 [docs/architecture/permissions.md](../../docs/architecture/permissions.md) 的「assistant」，由 `tests/permissions.rs` 對照。不存在的、別人的、別的租戶的、已刪除的（還原除外）與路徑不是 UUID 的，回應逐位元組相同：404 `not_found`，所以回應不透露對話存不存在。
 - **讀取只給問答**：`GET /conversations/{id}` 的 `messages` 只有問題與回答（`EntryKind::shown`），依時間順序；回答只取 `text` 區塊（`NativeMessage::shown_text`）。thinking、工具呼叫與結果、對話中的指示，以及開頭固定的 system prompt、租戶脈絡、工具定義都不回。捨棄的回合不在裡面。
 - **開始對話**：`Agent::start_conversation` 固定這一版的 system prompt、工具組與模型設定，`store::create` 存在請求租戶的交易裡。租戶脈絡（租戶的設備、資料點、方案、語言、時區）目前沒有來源，傳空字串；它在對話開始時固定，所以現在開始的對話會一直沒有租戶脈絡。每個使用者在每個租戶 24 小時內最多開始 100 個對話，已刪除的也算（見「規則」的開始對話的上限）；超過時回 429，`Retry-After` 是最舊的那個離開 24 小時還要幾秒，什麼都不存，日誌記一行 WARN。
 - **改名與封存**：`title` 去掉前後的空白後要符合標題的規則（見「規則」的標題與清單：1 到 200 個字元，至少一個看得見的字元，不含控制、雙向格式與分行字元），標題來源記為 `user`，之後模型產生的標題不會取代它。封存的對話照常可以讀、可以繼續。
@@ -186,7 +186,7 @@ service-kit 把這兩種拒絕都記成 INFO（`the identity service refused the
 | 情況 | 回應 |
 | --- | --- |
 | 沒有有效的內部身分 token（沒有、簽章不對、受眾不是 `assistant`、過期） | 401 `unauthenticated` |
-| token 沒有租戶 | 403 `permission_denied` |
+| token 沒有租戶，或在租戶的角色是這一版不認得的 | 403 `permission_denied` |
 | 不是自己的對話，或已刪除 | 404 `not_found` |
 | 寫入的 `Content-Type` 不是 `application/json` | 400 `invalid_request` |
 | 本文不是只有該端點欄位的 JSON 物件（開始與還原沒有欄位），或超過 4096 bytes | 400 `invalid_request`，`conversation.body_invalid` |
@@ -251,7 +251,7 @@ service-kit 把這兩種拒絕都記成 INFO（`the identity service refused the
 | `the identity service refused the first token exchange of a question's run: check that mesh.calls lists this call` | WARN | `run_id`、`audience`、`code`；見「代表使用者呼叫」的撤銷 |
 | `agent run finished` | INFO | `run_id`、`conversation_id`、`tenant_id`、`steps`、`outcome`（`answered` 或 `AgentError` 的種類，含 `run_expired`、`access_revoked`、`not_the_conversations_run`）、`duration_ms`、`budget.spent`、`budget.limit`、`usage.estimated` |
 | `conversation started`、`conversation updated`、`conversation deleted`、`conversation restored` | INFO | `user_id`、`tenant_id`、`conversation_id`；`conversation updated` 另有 `renamed`（有沒有改名）與 `archived`；不記標題 |
-| `refused: no tenant` | INFO | `user_id`、`action`：API 的請求沒有租戶（403） |
+| service-kit 的 `refused to <動作>` | INFO | `user_id`、`tenant_id`、`action`、`reason`（`no_tenant`、`unrecognized_role`）、`exchanged`、`actor`：API 的請求不符角色要求（403，[service-kit 的 README](../../crates/service-kit/README.md)） |
 | `conversation start refused: the user reached the daily limit` | WARN | `user_id`、`tenant_id`、`action`、`max`（100）、`retry_after_secs`：開始對話超過每日上限（429），每次被拒一行 |
 | `could not start a database transaction`、`conversation request failed` | ERROR | `user_id`、`action`、`error`（只有類別，例如 `database error (SQLSTATE 23505)`），後者另有 `conversation_id`；API 回 503 |
 | `purged expired conversations` | INFO | `job`（`purge`）、`purged`（這一輪刪了幾個對話）、`skipped`（0）；每一輪一行 |

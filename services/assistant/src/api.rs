@@ -18,10 +18,10 @@ use axum::http::header::{CACHE_CONTROL, CONTENT_TYPE, RETRY_AFTER};
 use axum::http::{HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use chrono::{DateTime, SecondsFormat, Utc};
-use contract::{ErrorBody, ErrorCode};
+use contract::{ErrorBody, ErrorCode, TenantRole};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
-use service_kit::identity::{IdentityVerifier, UserIdentity};
+use service_kit::identity::{IdentityVerifier, Requirement, UserIdentity};
 use service_kit::tenant::{TenantDb, TenantDbError, TenantTransaction};
 use std::sync::Arc;
 use std::time::Duration;
@@ -81,27 +81,25 @@ async fn no_store(mut response: Response) -> Response {
 }
 
 /// The store's principal for the request's verified identity: its user in its current tenant.
-/// Any role in the tenant will do, since a conversation is its owner's alone (the store checks
-/// tenant and user). Without a tenant: the 403 `permission_denied` every tenant-scoped endpoint
-/// of the repository answers.
+/// Every role of the tenant will do (`Requirement::Tenant(TenantRole::Viewer)`, the permission
+/// matrix in docs/architecture/permissions.md, section `## assistant`), since a conversation is
+/// its owner's alone (the store checks tenant and user). Without a tenant, or with a role this
+/// build does not know: service-kit's 403 `permission_denied`, logged as `refused to <action>`.
 #[allow(
     clippy::result_large_err,
     reason = "the error is the response to answer at once"
 )]
 pub(crate) fn principal(user: &UserIdentity, action: &'static str) -> Result<Principal, Response> {
+    if let Err(refused) = user.require(Requirement::Tenant(TenantRole::Viewer), action) {
+        return Err(refused.into_response());
+    }
     match user.tenant() {
         Some(grant) => Ok(Principal {
             tenant_id: grant.id,
             user_id: user.user_id(),
         }),
-        None => {
-            tracing::info!(
-                user_id = %user.user_id(),
-                action,
-                "refused: no tenant"
-            );
-            Err(error(ErrorBody::new(ErrorCode::PermissionDenied)))
-        }
+        // A tenant requirement that passed means a tenant; answer the same refusal regardless.
+        None => Err(error(ErrorBody::new(ErrorCode::PermissionDenied))),
     }
 }
 

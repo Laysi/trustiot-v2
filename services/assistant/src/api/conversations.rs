@@ -14,7 +14,7 @@
 //! | Request | Response |
 //! | --- | --- |
 //! | No valid internal identity token | 401 `unauthenticated` |
-//! | No tenant | 403 `permission_denied` |
+//! | No tenant, or a role this build does not know | 403 `permission_denied` |
 //! | Not the caller's conversation, or deleted | 404 `not_found` |
 //! | A write (`POST`, `PATCH`) whose `Content-Type` is not `application/json` | 400 `invalid_request` |
 //! | A body that is not a JSON object of the endpoint's fields (starting and restoring take none: no body, `null` or `{}`), or over [`MAX_BODY_BYTES`] | 400 `invalid_request`, key `conversation.body_invalid` |
@@ -314,7 +314,7 @@ pub struct DeletedListQuery {
         (status = 200, description = "A page of the caller's conversations; deleted ones are never listed.", body = ConversationList),
         (status = 400, description = "A malformed query, `archived` other than `true` or `false` (`invalid_request`), a `limit` out of range (`conversation.limit_invalid`), or a `cursor` that is not a `next_cursor` of this list (`conversation.cursor_invalid`).", body = ErrorBody),
         (status = 401, description = "No valid session (`unauthenticated`).", body = ErrorBody),
-        (status = 403, description = "No tenant (`permission_denied`).", body = ErrorBody),
+        (status = 403, description = "No tenant or no role in it (`permission_denied`).", body = ErrorBody),
         (status = 503, description = "The database failed (`unavailable`).", body = ErrorBody),
     )
 )]
@@ -381,7 +381,7 @@ async fn list_conversations(
             headers(("location" = String, description = "The conversation's path."))),
         (status = 400, description = "The `Content-Type` is not `application/json` (`invalid_request`), or there is a body other than `null` or an empty object (`conversation.body_invalid`).", body = ErrorBody),
         (status = 401, description = "No valid session (`unauthenticated`).", body = ErrorBody),
-        (status = 403, description = "No tenant (`permission_denied`).", body = ErrorBody),
+        (status = 403, description = "No tenant or no role in it (`permission_denied`).", body = ErrorBody),
         (status = 429, description = "The caller started 100 conversations in this tenant within the last 24 hours, deleted ones included (`rate_limited`, key `conversation.start_limited`, `details.max`); nothing was stored.", body = ErrorBody,
             headers(("retry-after" = u64, description = "Seconds until the oldest of those conversations leaves the 24 hours and a start is allowed again."))),
         (status = 503, description = "The database failed (`unavailable`); nothing was written.", body = ErrorBody),
@@ -451,7 +451,7 @@ async fn create(
     responses(
         (status = 200, description = "The conversation and the messages the chat shows.", body = ConversationDetail),
         (status = 401, description = "No valid session (`unauthenticated`).", body = ErrorBody),
-        (status = 403, description = "No tenant (`permission_denied`).", body = ErrorBody),
+        (status = 403, description = "No tenant or no role in it (`permission_denied`).", body = ErrorBody),
         (status = 404, description = "No such conversation of the caller's, or it is deleted (`not_found`).", body = ErrorBody),
         (status = 503, description = "The database failed (`unavailable`).", body = ErrorBody),
     )
@@ -532,7 +532,7 @@ async fn detail(
         (status = 200, description = "The conversation as it is now.", body = Conversation),
         (status = 400, description = "The `Content-Type` is not `application/json` (`invalid_request`), the body is not a JSON object of `title` and `archived` (`conversation.body_invalid`), or it has neither (`conversation.update_empty`).", body = ErrorBody),
         (status = 401, description = "No valid session (`unauthenticated`).", body = ErrorBody),
-        (status = 403, description = "No tenant (`permission_denied`).", body = ErrorBody),
+        (status = 403, description = "No tenant or no role in it (`permission_denied`).", body = ErrorBody),
         (status = 404, description = "No such conversation of the caller's, or it is deleted (`not_found`).", body = ErrorBody),
         (status = 422, description = "The title, after trimming, is empty, longer than 200 characters, has no visible character, or has a control, bidirectional formatting or line separator character (`validation_failed`, field `/title`, `conversation.title_invalid`). Nothing was written.", body = ErrorBody),
         (status = 503, description = "The database failed (`unavailable`); nothing was written.", body = ErrorBody),
@@ -645,7 +645,7 @@ async fn update_in(
     responses(
         (status = 204, description = "Deleted; it can be restored for 30 days (the deleted list gives until when). No body."),
         (status = 401, description = "No valid session (`unauthenticated`).", body = ErrorBody),
-        (status = 403, description = "No tenant (`permission_denied`).", body = ErrorBody),
+        (status = 403, description = "No tenant or no role in it (`permission_denied`).", body = ErrorBody),
         (status = 404, description = "No such conversation of the caller's, or it is already deleted (`not_found`).", body = ErrorBody),
         (status = 409, description = "A question of the conversation is being answered (`conflict`, `conversation.question_running`). Nothing changed.", body = ErrorBody),
         (status = 503, description = "The database failed (`unavailable`); nothing changed.", body = ErrorBody),
@@ -698,7 +698,7 @@ async fn delete_conversation(
         (status = 200, description = "Restored; the conversation as it is now.", body = Conversation),
         (status = 400, description = "The `Content-Type` is not `application/json` (`invalid_request`), or there is a body other than `null` or an empty object (`conversation.body_invalid`).", body = ErrorBody),
         (status = 401, description = "No valid session (`unauthenticated`).", body = ErrorBody),
-        (status = 403, description = "No tenant (`permission_denied`).", body = ErrorBody),
+        (status = 403, description = "No tenant or no role in it (`permission_denied`).", body = ErrorBody),
         (status = 404, description = "No deleted conversation of the caller's with this ID that can still be restored (`not_found`).", body = ErrorBody),
         (status = 503, description = "The database failed (`unavailable`); nothing changed.", body = ErrorBody),
     )
@@ -770,7 +770,7 @@ async fn restore(
         (status = 200, description = "A page of the caller's deleted conversations that can still be restored.", body = DeletedConversationList),
         (status = 400, description = "A malformed query (`invalid_request`), a `limit` out of range (`conversation.limit_invalid`), or a `cursor` that is not a `next_cursor` of this list (`conversation.cursor_invalid`).", body = ErrorBody),
         (status = 401, description = "No valid session (`unauthenticated`).", body = ErrorBody),
-        (status = 403, description = "No tenant (`permission_denied`).", body = ErrorBody),
+        (status = 403, description = "No tenant or no role in it (`permission_denied`).", body = ErrorBody),
         (status = 503, description = "The database failed (`unavailable`).", body = ErrorBody),
     )
 )]
