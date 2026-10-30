@@ -209,7 +209,7 @@ runtime 收到 `data` 後呼叫 `render(tq)`：
 - 以 HTML 元素的寬高畫的長條沒有標記時看不出來；圖形一律用 SVG 並以 `tq.mark` 標記。
 - 用文字寫數字（「一百二十」）、`\p{Nd}` 以外的數字字元（上標、圈號數字、羅馬數字），以及依時間或環境改變內容的頁面，檢查擋不住；所以檢視時前端再比對一次（Laysi/trustiot-v2#462）。
 - 只影響畫面不影響 DOM 的手法：文字標記的 bidi 重排、裁切、變形、逐字擺放、字距、`::first-letter`/`::first-line` 樣式、隱藏與透明度（含祖先的 `opacity`）已經會判 `mismatch`（見上），但下列仍檢查不到：被別的元素蓋住（整個或部分數字被上層的元素、偽元素或圖形遮住）；祖先元素造成的裁切或 bidi 重排；`clip-path`、`mask`；`filter` 裡 `opacity()` 以外的效果與 `mix-blend-mode`；與背景同色或對比不足；字型本身的字形；只在 `:hover` 出現的樣式；清單以外的屬性（例如其他 ARIA 屬性）。
-- 只在檢視時才發出的同主機請求（`requested` 那一列）檢查看不到。這是已接受的殘留（擁有者 2026-10-27）：沙箱是 opaque origin，沙箱文件的 CSP 用 `script-src 'self'` 與 `style-src 'self'` 讓 runtime 自己的檔案載得進來，連帶讓顯示中的頁面能對自己這個主機發出 GET（當成 script 或 style 載入）。頁面讀不到回應（只當 script 或 style 載入，不是資料）；因為來源是 opaque，瀏覽器把它當成別的 site，不送平台的 `SameSite=Lax` session cookie（2026-10-26 在 Chromium 實測，見 `crates/contract/src/api/dashboard/sandbox.rs` 的模組說明）；CSP 把這些請求限制在同一個主機（含轉址）。發布前的檢查會拒絕發出這種請求的頁面（`requested`）。要完全關掉得把 runtime 以雜湊式 CSP 內嵌，目前不做。
+- 只在檢視時才發出的同主機請求（`requested` 那一列）檢查看不到。這是已接受的殘留（擁有者 2026-10-27）：沙箱是 opaque origin，沙箱文件的 CSP 用 `script-src 'self'` 與 `style-src 'self'` 讓 runtime 自己的檔案載得進來，連帶讓顯示中的頁面能對自己這個主機發出 GET（當成 script 或 style 載入）。頁面讀不到回應（只當 script 或 style 載入，不是資料）；因為來源是 opaque，瀏覽器把它當成別的 site，不送平台的 `SameSite=Lax` session cookie（2026-10-26 在 Chromium 實測，見 `crates/contract/src/api/dashboard/sandbox.rs` 的模組說明）；實測的只有這個 cookie，這個主機若設了 `SameSite=None` 的 cookie，會跟著請求送出；CSP 把這些請求限制在同一個主機（含轉址）。發布前的檢查會拒絕發出這種請求的頁面（`requested`）。要完全關掉得把 runtime 以雜湊式 CSP 內嵌，目前不做。
 - 沙箱還沒處理的外送缺口在 Laysi/trustiot-v2#699。
 
 ## 比對程式

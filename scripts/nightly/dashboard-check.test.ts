@@ -551,7 +551,8 @@ group("what the check reads from the release", () => {
 });
 
 // The script itself, with the runner's bash, getent, timeout, head, dd and base64 (GNU coreutils), as
-// in the probe image. Skipped where they are missing (a macOS workstation); with CI set it must run.
+// in the probe image. Skipped where one of them is missing, as where GNU coreutils or getent are
+// not installed; with CI set it must run.
 const tools = ["bash", "getent", "timeout", "base64", "head", "dd"].every((tool) => Bun.which(tool) !== null);
 group.skipIf(!tools && process.env.CI === undefined)("the probe script", () => {
   test("answers, silence and names, run at once and read back", async () => {

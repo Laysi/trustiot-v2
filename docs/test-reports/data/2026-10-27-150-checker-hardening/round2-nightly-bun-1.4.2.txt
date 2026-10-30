@@ -1,0 +1,15 @@
+oven/bun:1.4.2-debian@sha256:4f6e31d1a54d6a3dd312daef655fc998101b5043d52e12592ac293ef04b9bc73, no network, /tmp a tmpfs with exec
+1.4.2
+/usr/bin/getent
+(pass) the command for another cluster > exits 2 on an argument it does not know [20.36ms]
+
+ 54 pass
+ 0 fail
+ 263 expect() calls
+Ran 54 tests across 2 files. [346.00ms]
+
+ 1 pass
+ 44 filtered out
+ 0 fail
+ 10 expect() calls
+Ran 1 test across 1 file. [148.00ms]

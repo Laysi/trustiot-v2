@@ -1,0 +1,16 @@
+Chromium (chromium-headless-shell in localhost/trustiot-e2e/dashboard-check:hardening-y, --dump-dom), 2026-10-27
+
+Getters and computed values:
+ctm proto=[object SVGMatrix] isDOMMatrix=false isRO=false SVGMatrix===DOMMatrix false a via getter=threw Illegal invocation width via getter=27.577163696289062
+t1 ctm 0.7071,-0.7071,0.7071,0.7071
+h1 rotate=180deg scale=none ls=-6px fs=20px filter=opacity(0.05) blur(1px) fill=rgb(0, 0, 0) color=rgb(0, 0, 0) transform=none
+h2 rotate=1 1 0 57.2958deg scale=0.5 ls=normal fs=16px filter=none fill=rgb(0, 0, 0) color=rgb(0, 0, 0) transform=none
+h3 rotate=none scale=none ls=normal fs=16px filter=none fill=rgb(0, 0, 0) color=rgb(0, 0, 0) transform=none
+
+Zoom, font size and screen matrix:
+t1 zoom=1 fs=10px ctm=0.2500,0.0000,0.0000,0.2500 box={"x":10.5,"y":11,"width":9,"height":3,"top":11,"right":19.5,"bottom":14,"left":10.5}
+t2 zoom=1 fs=10px ctm=0.5000,0.0000,0.0000,0.5000 box={"x":13,"y":29,"width":14,"height":6,"top":29,"right":27,"bottom":35,"left":13}
+h1 zoom=1 fs=16px ctm=- box={"x":58,"y":19,"width":14,"height":5,"top":19,"right":72,"bottom":24,"left":58}
+h2 zoom=0.5 fs=16px ctm=- box={"x":8,"y":193,"width":50,"height":19,"top":193,"right":58,"bottom":212,"left":8}
+h1 parent zoom=0.25
+h2 parent zoom=2

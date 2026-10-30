@@ -1,0 +1,2 @@
+builtin-tampering judged by the image built from the branch's base (e397c9d), before the realm is frozen:
+builtin-tampering: the verdict {"verdict":"failed","problems":[{"kind":"script_error","message":"Error: Invalid element at key \"tq\": expected a Zod schema"},{"kind":"script_error","message":"TypeError: Math.ceil is not a function"},{"kind":"not_rendered"}]}
