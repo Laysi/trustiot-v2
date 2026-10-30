@@ -3236,7 +3236,7 @@ describe("bundled Postgres (CloudNativePG, Laysi/trustiot-v2#58)", () => {
       effective_cache_size: "384MB",
       work_mem: "4MB",
       maintenance_work_mem: "64MB",
-      max_connections: "220",
+      max_connections: "240",
     });
     // The string form takes the same 10–1000 as the number (values.schema.json).
     const most = clusterSpec(render(SHAPES.saas, ["--set-string", "postgres.bundled.parameters.max_connections=1000"]));
@@ -3517,7 +3517,7 @@ describe("Postgres connection budget (Laysi/trustiot-v2#575)", () => {
     expect(Object.fromEntries(postgresServices.map((name) => [name, perReplica(name)]))).toEqual({
       "ai-gateway": 4,
       assets: 14,
-      assistant: 4,
+      assistant: 10,
       certs: 9,
       "gateway-ops": 13,
       identity: 31,
@@ -3525,15 +3525,17 @@ describe("Postgres connection budget (Laysi/trustiot-v2#575)", () => {
       "telemetry-query": 12,
     });
     expect(reserved).toBe(18);
-    // None to spare since Laysi/trustiot-v2#112 (README.md, 「連線預算」): the next service or pool
-    // that uses Postgres raises the limit. Laysi/trustiot-v2#721 raised it from 200 for gateway-ops.
-    expect(needed).toBe(220);
-    expect(limit).toBe(220);
+    // 8 to spare (README.md, 「連線預算」): the next service or larger pool that uses Postgres
+    // raises the limit. Laysi/trustiot-v2#721 raised it from 200 for gateway-ops,
+    // Laysi/trustiot-v2#645 from 220 for the assistant's API and purge pools and gateway-ops' larger
+    // pool from Laysi/trustiot-v2#112.
+    expect(needed).toBe(232);
+    expect(limit).toBe(240);
     const readme = readFileSync(join(CHART_DIR, "README.md"), "utf8");
     for (const name of postgresServices) {
       expect(readme).toContain(`| \`${name}\` | \`${services[name]?.database?.maxConnections}\` | ${budgets[name]?.otherPools} | ${perReplica(name)} |`);
     }
-    expect(readme).toContain(`| 合計 | | | 101 | 202 |`);
+    expect(readme).toContain(`| 合計 | | | 107 | 214 |`);
   });
 
   test.each(SHAPE_NAMES)("%s: the defaults, every Postgres service and every planned service pass the check", (shape) => {
@@ -3553,7 +3555,7 @@ describe("Postgres connection budget (Laysi/trustiot-v2#575)", () => {
     expect(below.code).not.toBe(0);
     expect(below.stderr).toContain(
       `postgres.bundled.parameters.max_connections is ${needed - 1}, but ${needed} connections are needed: the services can open ${needed - reserved} while all of them roll at once ` +
-        "(per replica x pods: ai-gateway 4 x 2, assets 14 x 2, assistant 4 x 2, certs 9 x 2, gateway-ops 13 x 2, identity 31 x 2, ingest 14 x 2, telemetry-query 12 x 2), " +
+        "(per replica x pods: ai-gateway 4 x 2, assets 14 x 2, assistant 10 x 2, certs 9 x 2, gateway-ops 13 x 2, identity 31 x 2, ingest 14 x 2, telemetry-query 12 x 2), " +
         `and ${reserved} stay reserved for superusers, CloudNativePG, the migration Job and the platform administrator bootstrap.`,
     );
     // The string form of max_connections counts the same.
@@ -3568,7 +3570,7 @@ describe("Postgres connection budget (Laysi/trustiot-v2#575)", () => {
   ] as const)("the defaults with %s fail: every replica plus the one a rolling update adds counts", (_what, args, perReplicaAfter, pods) => {
     const result = helmTemplate(SHAPES.saas, [...enable(postgresServices), ...args]);
     expect(result.code).not.toBe(0);
-    expect(result.stderr).toContain("postgres.bundled.parameters.max_connections is 220, but");
+    expect(result.stderr).toContain("postgres.bundled.parameters.max_connections is 240, but");
     expect(result.stderr).toMatch(new RegExp(`(identity|assets) ${perReplicaAfter} x ${pods}`));
     // The same values fit once max_connections is raised by what they add.
     const raised = helmTemplate(SHAPES.saas, [...enable(postgresServices), ...args, "--set", "postgres.bundled.parameters.max_connections=1000"]);
@@ -6121,11 +6123,17 @@ describe("service-to-service authorization (decision 27)", () => {
       const postgres = manifests.some((m) => m.kind === "NetworkPolicy" && m.metadata.name === `${RELEASE}-postgres`) ? ["postgres:5432"] : [];
       expect(reached).toEqual([...["ai-gateway", "assets", "identity-exchange", "otel-collector", "telemetry-query"].map((s) => `${s}:15008`), ...postgres].sort());
       // Its database login is assistant_app, with the password from its own Secret, and its pool is
-      // the size the connection budget counts (Laysi/trustiot-v2#575).
+      // the size the connection budget counts (Laysi/trustiot-v2#575); its scheduled purge logs in as
+      // assistant_platform, with the password from the same Secret (Laysi/trustiot-v2#645).
       expect(assistantEnv(manifests).filter((e) => e.name.startsWith("TRUSTIOT__DATABASE__"))).toEqual([
         { name: "TRUSTIOT__DATABASE__USERNAME", value: "assistant_app" },
         { name: "TRUSTIOT__DATABASE__PASSWORD", valueFrom: { secretKeyRef: { name: `${RELEASE}-assistant-password`, key: "assistant_app" } } },
-        { name: "TRUSTIOT__DATABASE__MAX_CONNECTIONS", value: "4" },
+        { name: "TRUSTIOT__DATABASE__MAX_CONNECTIONS", value: "8" },
+        { name: "TRUSTIOT__DATABASE__PLATFORM_USERNAME", value: "assistant_platform" },
+        {
+          name: "TRUSTIOT__DATABASE__PLATFORM_PASSWORD",
+          valueFrom: { secretKeyRef: { name: `${RELEASE}-assistant-password`, key: "assistant_platform" } },
+        },
       ]);
     });
 

@@ -31,6 +31,14 @@ WHERE tenant_id = $1::uuid AND conversation_id = $2::uuid AND status = 'running'
 const RUNNING: &str = "SELECT 1 AS running FROM assistant.runs
 WHERE tenant_id = $1::uuid AND conversation_id = $2::uuid AND status = 'running'";
 
+/// `$1` tenant, `$2` conversation: a run still `running` whose deadline has not passed. The
+/// deadline is compared with `statement_timestamp()`, the time after the caller waited for the
+/// conversation's row lock, not with `now()`, the transaction's start: a transaction that
+/// waited past a deadline sees it passed.
+const RUNNING_BEFORE_DEADLINE: &str = "SELECT 1 AS running FROM assistant.runs
+WHERE tenant_id = $1::uuid AND conversation_id = $2::uuid AND status = 'running'
+    AND deadline_at > statement_timestamp()";
+
 /// `$1` tenant, `$2` run, `$3` conversation, `$4` user, `$5` microseconds until the deadline.
 const INSERT_RUN: &str =
     "INSERT INTO assistant.runs (tenant_id, run_id, conversation_id, user_id, deadline_at)
@@ -233,6 +241,23 @@ pub async fn start_run(
             }
         })?;
     record(&row)
+}
+
+/// Whether a question of the conversation is `running` and its deadline has not passed, in a
+/// statement (and so a snapshot) of its own after the caller locked the conversation's row: it
+/// sees a run committed by whoever held the lock before. It changes nothing; a run past its
+/// deadline stays `running` until the next [`start_run`] marks it interrupted.
+pub(super) async fn running_before_deadline(
+    tx: &mut TenantTransaction,
+    tenant: &str,
+    conversation: &str,
+) -> Result<bool, StoreError> {
+    Ok(sqlx::query(RUNNING_BEFORE_DEADLINE)
+        .bind(tenant)
+        .bind(conversation)
+        .fetch_optional(&mut **tx)
+        .await?
+        .is_some())
 }
 
 /// Records how `principal`'s question `run_id` ended. Works whether or not its conversation was

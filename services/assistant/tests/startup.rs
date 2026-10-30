@@ -1,11 +1,13 @@
 //! The assistant binary as the chart starts it (Laysi/trustiot-v2#592): the product's schema,
-//! applied by the migration Job itself (`testkit::product`), and the service role
-//! `assistant_app` with the settings the chart sets.
+//! applied by the migration Job itself (`testkit::product`), the service role `assistant_app`
+//! and the purge's platform role `assistant_platform` (Laysi/trustiot-v2#645), with the settings
+//! the chart sets.
 //!
-//! - Readiness passes once `assistant_app` logs in and the database has every migration file
-//!   this release expects, without the AI gateway or any service the tools call: none of them
-//!   listens here, and the service calls none of them before a question.
-//! - It stays unready while the role cannot log in, and while its migration record is missing.
+//! - Readiness passes once `assistant_app` logs in, the service has the identity service's
+//!   public keys and the database has every migration file this release expects, without the AI
+//!   gateway or any service the tools call: none of them listens here, and the service calls none
+//!   of them before a question.
+//! - It stays unready while either role cannot log in, and while its migration record is missing.
 //!
 //! Starts a throwaway Postgres with TLS (podman or docker); skipped without either unless `CI`
 //! is set.
@@ -18,6 +20,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use serde_json::Value;
+use testkit::identity::TestIssuer;
 use testkit::postgres::TEST_PASSWORD;
 use testkit::product::{ProductPostgres, product_postgres};
 
@@ -45,6 +48,19 @@ const RESTORE_RECORD: &str =
     "INSERT INTO assistant.trustiot_migrate_applied (component, name, sha256)
     SELECT component, name, sha256 FROM trustiot_migrate.applied
     WHERE component = 'assistant' AND name = '0001_assistant.sql'";
+
+/// A keys file with a test issuer's public key, as the chart's ConfigMap volume holds the
+/// identity service's: under Cargo's temporary directory for these tests.
+fn keys_file() -> std::path::PathBuf {
+    let path = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!(
+        "assistant-startup-jwks-{}.json",
+        std::process::id()
+    ));
+    TestIssuer::new()
+        .write_jwks(&path)
+        .expect("write the keys file");
+    path
+}
 
 /// An origin where nothing listens: a port the OS handed out and that was closed again.
 fn closed_origin() -> String {
@@ -99,6 +115,15 @@ impl Service {
     /// once it listens, ready or not. The environment is otherwise empty, so the developer's own
     /// variables cannot leak in.
     async fn spawn(product: &ProductPostgres, password: &str) -> Self {
+        Self::spawn_with(product, password, TEST_PASSWORD).await
+    }
+
+    /// Like [`Service::spawn`], with `platform_password` for `assistant_platform`.
+    async fn spawn_with(
+        product: &ProductPostgres,
+        password: &str,
+        platform_password: &str,
+    ) -> Self {
         let mut command = Command::new(ASSISTANT);
         command
             .env_clear()
@@ -106,8 +131,14 @@ impl Service {
             .env("TRUSTIOT__HTTP__HEALTH_LISTEN_ADDR", "127.0.0.1:0")
             .env("TRUSTIOT__SHUTDOWN__DRAIN_DELAY", "100ms")
             .env("TRUSTIOT__SHUTDOWN__DRAIN_TIMEOUT", "5s")
+            .env("TRUSTIOT_INTERNAL_IDENTITY_KEYS_FILE", keys_file())
             .env("TRUSTIOT__DATABASE__USERNAME", "assistant_app")
             .env("TRUSTIOT__DATABASE__PASSWORD", password)
+            .env(
+                "TRUSTIOT__DATABASE__PLATFORM_USERNAME",
+                "assistant_platform",
+            )
+            .env("TRUSTIOT__DATABASE__PLATFORM_PASSWORD", platform_password)
             .env("TRUSTIOT__AI_GATEWAY__URL", closed_origin())
             .env("TRUSTIOT__IDENTITY__EXCHANGE_URL", closed_origin())
             .env("TRUSTIOT__TELEMETRY_QUERY__URL", closed_origin())
@@ -211,7 +242,7 @@ where
 
 #[tokio::test(flavor = "multi_thread")]
 async fn ready_once_the_service_role_logs_in_on_the_current_schema() {
-    let Some(product) = product_postgres(&["assistant_app"]).await else {
+    let Some(product) = product_postgres(&["assistant_app", "assistant_platform"]).await else {
         return;
     };
     let mut admin = product.superuser().await;
@@ -236,7 +267,15 @@ async fn ready_once_the_service_role_logs_in_on_the_current_schema() {
     assert!(!refused.stdout.text().contains("not-the-password"));
     drop(refused);
 
-    // 3. A database without 0001_assistant.sql: a new process stays unready and names the file;
+    // 3. The same for the purge's platform role: a purge that cannot log in keeps the service
+    //    unready, so it shows.
+    let no_purge = Service::spawn_with(&product, TEST_PASSWORD, "not-the-password").await;
+    let failed = no_purge.wait_logged(CHECK_FAILED).await;
+    assert_eq!(no_purge.readiness().await, Some(503), "{failed}");
+    assert!(!no_purge.stdout.text().contains("not-the-password"));
+    drop(no_purge);
+
+    // 4. A database without 0001_assistant.sql: a new process stays unready and names the file;
     //    once the record is back it turns ready without a restart.
     sqlx::raw_sql(DELETE_RECORD)
         .execute(&mut admin)

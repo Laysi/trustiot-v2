@@ -5,19 +5,22 @@
 
 use std::path::Path;
 
+use assistant::PLATFORM_CONNECTIONS;
 use assistant::config::{MAX_DATABASE_CONNECTIONS, MIN_DATABASE_CONNECTIONS};
 use testkit::chart::{pool_size_calls, postgres_connection_budget};
 
 #[test]
 fn the_chart_budgets_every_pool_the_service_opens() {
     // The pools in src: `assistant::start` opens the service role's, sized by
-    // TRUSTIOT__DATABASE__MAX_CONNECTIONS (the chart's database.maxConnections), and no other.
-    // store.rs's is a unit test's pool against a test database (`#[cfg(test)]`), never in the
-    // service. A new pool adds a call here: budget it in the chart, then list it.
+    // TRUSTIOT__DATABASE__MAX_CONNECTIONS (the chart's database.maxConnections), and the purge's
+    // platform role's (PLATFORM_CONNECTIONS, Laysi/trustiot-v2#645). store.rs's is a unit test's
+    // pool against a test database (`#[cfg(test)]`), never in the service. A new pool adds a call
+    // here: budget it in the chart, then list it.
     let calls = pool_size_calls(&Path::new(env!("CARGO_MANIFEST_DIR")).join("src"));
     assert_eq!(
         calls,
         [
+            ("lib.rs", "PLATFORM_CONNECTIONS"),
             ("lib.rs", "config.database.max_connections"),
             ("store.rs", "2"),
         ]
@@ -28,7 +31,7 @@ fn the_chart_budgets_every_pool_the_service_opens() {
 
     let budget = postgres_connection_budget("assistant");
     assert_eq!(
-        budget.other_pools, 0,
+        budget.other_pools, PLATFORM_CONNECTIONS,
         "the chart's otherPools for assistant"
     );
     assert_eq!(

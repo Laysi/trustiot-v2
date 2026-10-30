@@ -89,11 +89,15 @@ pub struct TableSql {
     pub update_own: Option<&'static str>,
     /// Moves every visible row into the tenant `$1`.
     pub move_to: Option<&'static str>,
-    /// Inserts one row: `$1` tenant id (uuid), `$2` row id (uuid), `$3` canary (text).
+    /// Inserts one row: `$1` tenant id (uuid), `$2` row id (uuid), `$3` canary (text), and `$4`
+    /// the owner (uuid) when [`TableSql::owned`].
     pub seed: Option<&'static str>,
     /// The table holds at most one row per tenant (its key is `tenant_id`): one row is seeded
     /// per tenant, and that row's id is the tenant id.
     pub one_per_tenant: bool,
+    /// The rows belong to a user, and the service serves a user only their own: the seed gets
+    /// the run's user ([`World::user`]) as `$4`, in both tenants.
+    pub owned: bool,
 }
 
 /// A table or view in the suite. Make one with [`pg_table!`](crate::pg_table) or
@@ -135,15 +139,25 @@ impl PgTable {
 /// parameter to have a type, so a seed that does not store `$2` or `$3` still names them, for
 /// example `INSERT INTO assets.tenants (tenant_id) SELECT $1 WHERE $2::uuid IS NOT NULL AND
 /// $3::text IS NOT NULL`.
+///
+/// A table whose rows belong to a user, served only to that user (such as the assistant's
+/// conversations), adds `owned`: `pg_table!("assistant.conversations", seed = "...", owned)`.
+/// The seed then gets a fourth parameter, `$4`, the owner (uuid): the run's user, the same in
+/// both tenants and the user of every probe's token
+/// ([`World::user`](crate::isolation::World::user)), so the endpoints' positive controls see the
+/// rows, and only the tenant keeps the two tenants' rows apart.
 #[macro_export]
 macro_rules! pg_table {
     ($table:literal, seed = $seed:expr $(,)?) => {
-        $crate::pg_table!(@table $table, $seed, false)
+        $crate::pg_table!(@table $table, $seed, false, false)
     };
     ($table:literal, seed = $seed:expr, one_per_tenant $(,)?) => {
-        $crate::pg_table!(@table $table, $seed, true)
+        $crate::pg_table!(@table $table, $seed, true, false)
     };
-    (@table $table:literal, $seed:expr, $one_per_tenant:literal) => {
+    ($table:literal, seed = $seed:expr, owned $(,)?) => {
+        $crate::pg_table!(@table $table, $seed, false, true)
+    };
+    (@table $table:literal, $seed:expr, $one_per_tenant:literal, $owned:literal) => {
         $crate::isolation::postgres::PgTable::from_sql($crate::isolation::postgres::TableSql {
             name: $table,
             kind: $crate::isolation::postgres::RelationKind::Table,
@@ -156,6 +170,7 @@ macro_rules! pg_table {
             move_to: Some(concat!("UPDATE ", $table, " SET tenant_id = $1")),
             seed: Some($seed),
             one_per_tenant: $one_per_tenant,
+            owned: $owned,
         })
     };
 }
@@ -173,6 +188,7 @@ macro_rules! pg_view {
             move_to: None,
             seed: None,
             one_per_tenant: false,
+            owned: false,
         })
     };
 }
@@ -375,10 +391,7 @@ impl PgStore {
             let row = SeededRow::new(name, attacker);
             match db.begin(&user).await {
                 Err(error) => report.fail(name, probe, error.to_string()),
-                Ok(mut tx) => match sqlx::query(seed)
-                    .bind(victim_tenant)
-                    .bind(row.id)
-                    .bind(&row.canary)
+                Ok(mut tx) => match seed_query(&sql, seed, victim_tenant, &row, seeded.world())
                     .execute(&mut *tx)
                     .await
                 {
@@ -394,6 +407,26 @@ impl PgStore {
                 },
             }
         }
+    }
+}
+
+/// `seed` with its parameters: the tenant, the row's id and canary, and the run's user when the
+/// table is [`TableSql::owned`] (Postgres refuses a parameter the statement does not have).
+fn seed_query<'q>(
+    sql: &TableSql,
+    seed: &'static str,
+    tenant: Uuid,
+    row: &'q SeededRow,
+    world: World,
+) -> sqlx::query::Query<'q, sqlx::Postgres, sqlx::postgres::PgArguments> {
+    let query = sqlx::query(seed)
+        .bind(tenant)
+        .bind(row.id)
+        .bind(&row.canary);
+    if sql.owned {
+        query.bind(Uuid::from(world.user()))
+    } else {
+        query
     }
 }
 
@@ -626,10 +659,7 @@ impl Store for PgStore {
                     if sql.one_per_tenant {
                         row.id = Uuid::from(world.tenant(side));
                     }
-                    match sqlx::query(seed)
-                        .bind(Uuid::from(world.tenant(side)))
-                        .bind(row.id)
-                        .bind(&row.canary)
+                    match seed_query(&sql, seed, Uuid::from(world.tenant(side)), &row, world)
                         .execute(&mut seeder)
                         .await
                     {
@@ -774,8 +804,12 @@ mod tests {
         let view = crate::pg_view!("item_names");
         assert_eq!(view.sql.kind, RelationKind::View);
         assert!(view.sql.update_own.is_none() && view.sql.seed.is_none());
+        assert!(!table.sql.owned && !view.sql.owned);
         let single = crate::pg_table!("app.settings", seed = SEED, one_per_tenant);
-        assert!(single.sql.one_per_tenant);
+        assert!(single.sql.one_per_tenant && !single.sql.owned);
+        let owned = crate::pg_table!("app.notes", seed = SEED, owned);
+        assert!(owned.sql.owned && !owned.sql.one_per_tenant);
+        assert_eq!(owned.sql.seed, Some(SEED));
         assert_eq!(
             single.sql.read,
             "SELECT testkit_row::text FROM app.settings AS testkit_row"
