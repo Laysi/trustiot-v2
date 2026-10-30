@@ -1,0 +1,25 @@
+workspace tests rc 0
+test binaries ok: 284
+tests passed 2605, failed 0
+stress: x86_64, 20 runs of cargo test --locked -p agent --lib
+run 1: ok (2 s, load 11.52) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.93s
+run 2: ok (2 s, load 14.60) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.91s
+run 3: ok (2 s, load 14.60) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.91s
+run 4: ok (3 s, load 15.99) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.93s
+run 5: ok (2 s, load 15.99) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.89s
+run 6: ok (2 s, load 16.80) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.91s
+run 7: ok (2 s, load 16.80) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.93s
+run 8: ok (3 s, load 17.77) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.93s
+run 9: ok (2 s, load 17.77) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.90s
+run 10: ok (2 s, load 17.77) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.90s
+run 11: ok (2 s, load 20.35) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.90s
+run 12: ok (2 s, load 20.35) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.94s
+run 13: ok (3 s, load 20.97) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.88s
+run 14: ok (2 s, load 20.97) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.87s
+run 15: ok (2 s, load 21.13) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.93s
+run 16: ok (2 s, load 21.13) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.87s
+run 17: ok (2 s, load 21.13) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.89s
+run 18: ok (2 s, load 21.36) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.87s
+run 19: ok (2 s, load 21.36) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.88s
+run 20: ok (3 s, load 21.57) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.85s
+stress: 0 of 20 runs failed

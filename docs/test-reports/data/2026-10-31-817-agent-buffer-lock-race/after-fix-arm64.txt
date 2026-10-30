@@ -1,0 +1,108 @@
+    Checking protocol v0.1.0 (<host copy>/src/crates/protocol)
+    Checking webpki-roots v1.0.9 (<host copy>/src/crates/webpki-roots-empty)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 14.54s
+clippy rc 0
+     Running unittests src/lib.rs (<host copy>/target/debug/deps/agent-f788ca0e5991b772)
+test buffer::disk::tests::the_clock_file_keeps_the_age_clocks_time_and_a_damaged_one_is_ignored ... ok
+test buffer::tests::a_stop_saves_the_age_clocks_time_with_the_batches_it_writes ... ok
+test buffer::tests::a_restart_keeps_a_forward_step_the_age_clock_counted_while_batches_were_on_disk ... ok
+test buffer::tests::batches_expire_after_thirty_days_on_the_age_clock ... ok
+test buffer::tests::housekeeping_saves_the_age_clocks_time_every_minute_while_batches_are_on_disk ... ok
+test buffer::tests::housekeeping_saves_the_age_clocks_time_as_it_is_when_saving ... ok
+test clock::tests::a_backward_step_never_makes_the_age_clock_run_backward ... ok
+test clock::tests::a_wall_clock_step_between_the_publish_and_the_ack_is_never_compared ... ok
+test clock::tests::a_forward_step_that_is_corrected_never_makes_the_age_clock_run_backward ... ok
+test clock::tests::a_caller_paused_across_a_forward_step_never_returns_an_earlier_value_than_one_already_returned ... ok
+test clock::tests::before_any_comparison_the_timesync_flag_decides ... ok
+test clock::tests::only_an_acknowledgement_within_the_round_trip_limit_is_compared ... ok
+test clock::tests::a_wall_clock_step_during_a_floor_raise_is_not_counted_as_the_raise ... ok
+test clock::tests::the_floor_rises_to_the_newest_stored_batch ... ok
+test clock::tests::the_latest_comparison_decides_after_the_first ... ok
+test heartbeat::tests::the_buffer_and_the_clock_state_come_from_their_sources ... ok
+test buffer::disk::tests::in_tests_a_lock_that_a_child_process_keeps_is_waited_for ... ok
+test liveness::tests::a_blocked_connection_thread_stops_the_watchdog ... ok
+test provision::install::tests::only_certificate_blocks_are_read ... ok
+test renewal::tests::a_certificate_starting_within_the_clock_skew_is_used ... ok
+test renewal::tests::a_clock_ahead_renews_once_and_not_again_after_a_restart ... ok
+test renewal::tests::an_inferred_refusal_of_a_certificate_valid_by_this_clock_waits_for_the_backoff ... ok
+test renewal::tests::the_write_waits_for_the_directory_lock_that_provision_install_holds ... ok
+test upload::tests::a_clock_state_that_changes_back_within_a_window_keeps_every_series_in_order ... ok
+test upload::tests::a_window_becomes_batches_grouped_by_series_and_split_by_clock_state ... ok
+test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.89s
+     Running unittests src/main.rs (<host copy>/target/debug/deps/trustiot_agent-f80144a81bf9e8b2)
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/binary.rs (<host copy>/target/debug/deps/binary-ee17a263ea16b5d6)
+test an_expired_certificate_only_warns_because_the_clock_may_be_wrong ... ok
+test the_lock_check_sees_a_directorys_lock ... ok
+test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.02s
+     Running tests/broker.rs (<host copy>/target/debug/deps/broker-d838faab6d85118d)
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.05s
+     Running tests/dependencies.rs (<host copy>/target/debug/deps/dependencies-f8ac1ea27b1e6893)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.14s
+     Running tests/desired_config.rs (<host copy>/target/debug/deps/desired_config-9954094dab35ebe0)
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+     Running tests/link.rs (<host copy>/target/debug/deps/link-879a48fa3c313343)
+test result: ok. 56 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+     Running tests/live.rs (<host copy>/target/debug/deps/live-0813cd55fa4f2ccc)
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+     Running tests/liveness.rs (<host copy>/target/debug/deps/liveness-f761a746c2a806f8)
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/modbus_address_guard.rs (<host copy>/target/debug/deps/modbus_address_guard-91ae8694be738d09)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/modbus_fake_endpoint.rs (<host copy>/target/debug/deps/modbus_fake_endpoint-dd69fa25a2ba6be3)
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/modbus_rtu_converter.rs (<host copy>/target/debug/deps/modbus_rtu_converter-b2cb6a8b746f54d1)
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+     Running tests/modbus_rtu_framing.rs (<host copy>/target/debug/deps/modbus_rtu_framing-082f6e3c29f9053e)
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/modbus_tcp_framing.rs (<host copy>/target/debug/deps/modbus_tcp_framing-fc7630bf77ba4792)
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/polling_recovery.rs (<host copy>/target/debug/deps/polling_recovery-6b0ef55bd002c6b2)
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/provision.rs (<host copy>/target/debug/deps/provision-df8d99c7580b9751)
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.70s
+     Running tests/provision_install.rs (<host copy>/target/debug/deps/provision_install-ddf931428f08084f)
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.61s
+     Running tests/renewal.rs (<host copy>/target/debug/deps/renewal-196f6c7728565091)
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 21.37s
+     Running tests/systemd_unit.rs (<host copy>/target/debug/deps/systemd_unit-06eff1fba3582a94)
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+     Running tests/tpm_endorsement.rs (<host copy>/target/debug/deps/tpm_endorsement-646e78f06df5e10d)
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.23s
+     Running tests/tpm_provision.rs (<host copy>/target/debug/deps/tpm_provision-8293af41095ff32e)
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.82s
+     Running tests/tpm_swtpm.rs (<host copy>/target/debug/deps/tpm_swtpm-5981d51549eaa4cc)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.59s
+     Running tests/transport.rs (<host copy>/target/debug/deps/transport-26244987fe09941b)
+test result: ok. 19 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.46s
+     Running tests/upload.rs (<host copy>/target/debug/deps/upload-2c7f6c3f0498bacc)
+test a_refused_publish_does_not_widen_the_window_of_the_clock_comparison ... ok
+test a_clock_an_hour_ahead_is_found_off_when_the_ack_answers_a_publish_on_a_new_connection ... ok
+test a_backward_clock_step_does_not_keep_a_batch_past_thirty_days ... ok
+test a_slow_acknowledgement_never_judges_a_clock_20_s_ahead_synchronized ... ok
+test the_clouds_time_decides_clock_synced_for_batches_and_heartbeats ... ok
+test result: ok. 18 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.67s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+agent tests rc 0
+stress: aarch64, 20 runs of cargo test --locked -p agent --lib
+run 1: ok (2 s, load 10.39) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 2.11s
+run 2: ok (2 s, load 10.39) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 2.07s
+run 3: ok (3 s, load 11.16) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 2.03s
+run 4: ok (2 s, load 11.16) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 2.07s
+run 5: ok (2 s, load 11.87) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 2.04s
+run 6: ok (2 s, load 11.87) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.98s
+run 7: ok (3 s, load 12.28) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.99s
+run 8: ok (2 s, load 12.28) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 2.03s
+run 9: ok (2 s, load 12.28) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 2.00s
+run 10: ok (2 s, load 13.54) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 2.00s
+run 11: ok (3 s, load 13.54) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.98s
+run 12: ok (2 s, load 13.74) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.98s
+run 13: ok (2 s, load 13.74) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.94s
+run 14: ok (2 s, load 13.76) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.99s
+run 15: ok (2 s, load 13.76) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 2.01s
+run 16: ok (3 s, load 13.94) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 2.06s
+run 17: ok (2 s, load 13.94) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.93s
+run 18: ok (2 s, load 13.94) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.95s
+run 19: ok (2 s, load 15.30) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 2.00s
+run 20: ok (2 s, load 15.30) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.97s
+stress: 0 of 20 runs failed
