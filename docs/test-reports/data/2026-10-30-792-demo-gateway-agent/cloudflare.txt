@@ -1,0 +1,13 @@
+# Cloudflare GraphQL Analytics API，協調者 2026-10-30 查詢（docs/runbooks/demo-environment.md 的 Security Events）。
+# 「gateway 主機名稱」是展示環境的 gateway 主機名稱。
+
+firewallEventsAdaptive
+  filter: clientRequestHTTPHost = gateway 主機名稱, datetime 2026-10-30T10:13:00Z – 10:20:00Z
+  result: 0 events
+  filter: 整個 zone, datetime 2026-10-30T10:00:00Z – 10:40:00Z
+  result: 0 events（沒有 challenge、block 或 managed challenge）
+
+httpRequestsAdaptiveGroups
+  filter: clientRequestHTTPHost = gateway 主機名稱, datetime 2026-10-30T10:13:00Z – 10:20:00Z
+  result: 17 requests, 全部 GET /mqtt, edge status 404（origin 回的 404）, securityAction unknown（沒有套用任何安全動作）
+  其中 1 筆是工作站的 curl 探測（CF-RAY a529a7873ac9d2fd-NRT），其餘 16 筆是 agent 的連線嘗試。

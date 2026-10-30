@@ -1,0 +1,90 @@
+# lab 的閘道器，2026-10-30。<ssh 帳號> 是工作站登入閘道器用的帳號；<gateway 主機名稱> 是展示環境的 gateway 主機名稱。
+# 上傳到 ssh 帳號家目錄下的暫存目錄後的 SHA-256
+d402e4befe6410997d9d8887931d6940f6d68b3b7ecec8c4fa428ecc71c2ed11  080_trustiot-provision
+ad67369c5f604692cdd45bb08c6b99b6920c4c7380d60b10f34f0d71cf862ae7  agent.toml
+4c3154cd4d17fc3799c663511cdaad3b4dc61b0531ee498ef5a6185aec15ed91  trustiot-agent
+1477e96341d386f97e62741a2efa4fe47dd7c3fa154f125739ec4cdd86eb16a4  trustiot-agent.service
+5bbcae7e195dfee5a4ee3f567d3d921d5bc4d92a372ae5a9a0aa20774070317d  trustiot-agent.sysusers
+
+# /etc/trustiot/agent.toml（主機名稱遮蔽）
+[cloud]
+url = "wss://<gateway 主機名稱>/mqtt"
+trust = ["/etc/ssl/certs/ca-certificates.crt"]
+
+[broker]
+ca = "/etc/trustiot/broker-ca.pem"
+crl = "/var/lib/trustiot-agent/root-crl.pem"
+
+[identity]
+certificate = "/var/lib/trustiot-agent/gateway.pem"
+key = { source = "tpm", device = "/dev/tpmrm0", handle = 0x81000100 }
+
+# /etc/sudoers.d/080_trustiot-provision（帳號遮蔽）
+<ssh 帳號> ALL=(root) NOPASSWD: /usr/bin/trustiot-agent provision --hardware-id tg-lab-0001 --handle 0x81000100 --inspect, /usr/bin/trustiot-agent provision --hardware-id tg-lab-0001 --handle 0x81000100, /usr/bin/trustiot-agent provision install --hardware-id tg-lab-0001
+
+== before
+Fri 30 Oct 10:07:29 UTC 2026
+absent /usr/bin/trustiot-agent
+absent /usr/lib/systemd/system/trustiot-agent.service
+absent /usr/lib/sysusers.d/trustiot-agent.conf
+absent /etc/trustiot
+absent /var/lib/trustiot-agent
+absent /etc/sudoers.d/080_trustiot-provision
+no trustiot-agent account
+== sudoers check
+./080_trustiot-provision: parsed OK
+== install
+Creating group 'trustiot-agent' with GID 985.
+Creating user 'trustiot-agent' (TrustIoT gateway agent) with UID 985 and GID 985.
+/etc/sudoers: parsed OK
+/etc/sudoers.d/010_at-export: parsed OK
+/etc/sudoers.d/010_dpkg-threads: parsed OK
+/etc/sudoers.d/010_global-tty: parsed OK
+/etc/sudoers.d/010_proxy: parsed OK
+/etc/sudoers.d/080_trustiot-provision: parsed OK
+/etc/sudoers.d/090_<ssh 帳號>-nopasswd: parsed OK
+/etc/sudoers.d/README: parsed OK
+== after
+trustiot-agent:x:985:985:TrustIoT gateway agent:/var/lib/trustiot-agent:/usr/sbin/nologin
+uid=985(trustiot-agent) gid=985(trustiot-agent) groups=985(trustiot-agent)
+-r--r----- 1 root root     434 Oct 30 18:07 /etc/sudoers.d/080_trustiot-provision
+-rwxr-xr-x 1 root root 4539352 Oct 30 18:07 /usr/bin/trustiot-agent
+-rw-r--r-- 1 root root    2661 Oct 30 18:07 /usr/lib/systemd/system/trustiot-agent.service
+-rw-r--r-- 1 root root     230 Oct 30 18:07 /usr/lib/sysusers.d/trustiot-agent.conf
+drwxr-xr-x 2 root           root           4096 Oct 30 18:07 /etc/trustiot
+-rw-r--r-- 1 root           root            446 Oct 30 18:07 /etc/trustiot/agent.toml
+drwx------ 2 trustiot-agent trustiot-agent 4096 Oct 30 18:07 /var/lib/trustiot-agent
+4c3154cd4d17fc3799c663511cdaad3b4dc61b0531ee498ef5a6185aec15ed91  /usr/bin/trustiot-agent
+1477e96341d386f97e62741a2efa4fe47dd7c3fa154f125739ec4cdd86eb16a4  /usr/lib/systemd/system/trustiot-agent.service
+5bbcae7e195dfee5a4ee3f567d3d921d5bc4d92a372ae5a9a0aa20774070317d  /usr/lib/sysusers.d/trustiot-agent.conf
+ad67369c5f604692cdd45bb08c6b99b6920c4c7380d60b10f34f0d71cf862ae7  /etc/trustiot/agent.toml
+d402e4befe6410997d9d8887931d6940f6d68b3b7ecec8c4fa428ecc71c2ed11  /etc/sudoers.d/080_trustiot-provision
+disabled
+inactive
+
+# 登錄前的檢查（2026-10-30 10:07:43 UTC）
+== --check (expect 1: no certificate yet)
+2026-10-30T10:07:43.987667Z ERROR trustiot_agent: refusing to start: /etc/trustiot/agent.toml: identity.certificate / identity.key: reading the certificate file /var/lib/trustiot-agent/gateway.pem: I/O error: No such file or directory (os error 2)
+exit 1
+== inspect via sudo -n
+2026-10-30T10:07:44.198525Z  INFO agent::tpm::endorsement: the EK certificate is for the EK index=0x01c0000a
+2026-10-30T10:07:44.202372Z  INFO agent::tpm::provision: the handle holds an object: checking it handle=0x81000100
+exit 0
+  key.state=present key.created=false
+  public key SHA-256 (DER) 2914ee8b4921c5da755b61f4b01486d3feb2427d45455a397721c437361184e2
+== install dry run with empty stdin (expect 8)
+trustiot-agent provision install: refused: standard input holds no certificate; nothing was written
+exit 8
+== sudo -n -l
+/usr/bin/trustiot-agent provision install --hardware-id tg-lab-0001
+exit 0
+== cvtsudoers -f json /etc/sudoers.d/080_trustiot-provision（Commands）
+/usr/bin/trustiot-agent provision --hardware-id tg-lab-0001 --handle 0x81000100 --inspect
+/usr/bin/trustiot-agent provision --hardware-id tg-lab-0001 --handle 0x81000100
+/usr/bin/trustiot-agent provision install --hardware-id tg-lab-0001
+  runasusers=root, authenticate=false
+== systemd-analyze verify /usr/lib/systemd/system/trustiot-agent.service
+exit 0
+== tpm2_getcap handles-persistent
+- 0x81000001
+- 0x81000100

@@ -1,0 +1,18 @@
+# 建置主機（x86_64 Linux），2026-10-30 10:04–10:06 UTC
+# commit 32a5cd92a4c55e9ef3610505d5c9d260325d7ba1（當時的 origin/main）
+# zig 0.16.0、cargo-zigbuild 0.23.4（.prototools 釘選），不帶 --features
+$ CARGO_ZIGBUILD_ZIG_PATH="$(proto bin zig --reporter text | tail -n 1)" \
+  PATH="$(dirname "$(proto bin cargo-zigbuild --reporter text | tail -n 1)"):$PATH" \
+  cargo zigbuild --locked --release --target aarch64-unknown-linux-gnu -p agent
+warning: linker stderr: ignoring deprecated linker optimization setting '1'
+  |
+  = note: `#[warn(linker_messages)]` on by default
+
+warning: `agent` (bin "trustiot-agent") generated 1 warning
+    Finished `release` profile [optimized] target(s) in 2m 39s
+
+$ sha256sum target/aarch64-unknown-linux-gnu/release/trustiot-agent
+4c3154cd4d17fc3799c663511cdaad3b4dc61b0531ee498ef5a6185aec15ed91  target/aarch64-unknown-linux-gnu/release/trustiot-agent
+
+$ file target/aarch64-unknown-linux-gnu/release/trustiot-agent
+target/aarch64-unknown-linux-gnu/release/trustiot-agent: ELF 64-bit LSB pie executable, ARM aarch64, version 1 (SYSV), dynamically linked, interpreter /lib/ld-linux-aarch64.so.1, for GNU/Linux 2.0.0, stripped
