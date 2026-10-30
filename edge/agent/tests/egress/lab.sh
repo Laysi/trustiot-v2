@@ -21,6 +21,11 @@ GATEWAY_LINK_LOCAL=fe80::81:2
 PEER4=10.81.3.1
 PEER6=fd81:3::1
 
+# Runs a command in the peer namespace. nsenter rather than `ip netns exec` or `ip -n`: those also
+# mount a sysfs for the namespace, which the kernel refuses in a container that masks part of /sys
+# (podman masks /sys/firmware, for example), and nothing here needs that sysfs.
+IN_PEER=(nsenter --net=/run/netns/peer)
+
 as() {
     case "$1" in
     agent) echo "setpriv --reuid=trustiot-agent --regid=trustiot-agent --clear-groups" ;;
@@ -45,7 +50,7 @@ await_listener() {
     local flag=-tln
     [ "$proto" = udp ] && flag=-uln
     local in=()
-    [ -n "$namespace" ] && in=(ip netns exec "$namespace")
+    [ -n "$namespace" ] && in=(nsenter --net="/run/netns/$namespace")
     until "${in[@]}" ss -H "$flag" "sport = :$port" | grep -q .; do
         tries=$((tries + 1))
         if [ "$tries" -ge 600 ]; then
@@ -60,7 +65,7 @@ network() {
     # The container's own namespace is the gateway's.
     ip netns add peer
     ip link set lo up
-    ip -n peer link set lo up
+    "${IN_PEER[@]}" ip link set lo up
     ip link add veth0 type veth peer name veth1 netns peer
     ip addr add "$GATEWAY4/24" dev veth0
     ip -6 addr add "$GATEWAY6/64" dev veth0 nodad
@@ -69,15 +74,15 @@ network() {
     # subnet-router anycast addresses (fd81:3::, fe80::) to the local table.
     ip -6 addr add "$GATEWAY_LINK_LOCAL/64" dev veth0 nodad
     ip link set veth0 up
-    ip -n peer addr add "$PEER4/24" dev veth1
-    ip -n peer -6 addr add "$PEER6/64" dev veth1 nodad
-    ip -n peer link set veth1 up
+    "${IN_PEER[@]}" ip addr add "$PEER4/24" dev veth1
+    "${IN_PEER[@]}" ip -6 addr add "$PEER6/64" dev veth1 nodad
+    "${IN_PEER[@]}" ip link set veth1 up
     ip route add default via "$PEER4"
     ip -6 route add default via "$PEER6"
     # The metadata addresses answer on the peer, so a refusal of them is the rule's, not a
     # missing route.
-    ip -n peer addr add 169.254.169.254/32 dev lo
-    ip -n peer -6 addr add fd00:ec2::254/128 dev lo nodad
+    "${IN_PEER[@]}" ip addr add 169.254.169.254/32 dev lo
+    "${IN_PEER[@]}" ip -6 addr add fd00:ec2::254/128 dev lo nodad
     # An address range the gateway holds only through its routing table.
     ip route add local 198.51.100.0/24 dev lo
     # A NAT rule that sends a connection to an outside address back to the gateway itself.
@@ -95,13 +100,13 @@ EOF
     # The peer's services: a device on 80 (also reached as the metadata addresses) and the
     # cloud's 443.
     for port in 80 443; do
-        background ip netns exec peer socat "TCP4-LISTEN:$port,fork,reuseaddr" EXEC:/bin/true
-        background ip netns exec peer socat "TCP6-LISTEN:$port,ipv6only=1,fork,reuseaddr" EXEC:/bin/true
+        background "${IN_PEER[@]}" socat "TCP4-LISTEN:$port,fork,reuseaddr" EXEC:/bin/true
+        background "${IN_PEER[@]}" socat "TCP6-LISTEN:$port,ipv6only=1,fork,reuseaddr" EXEC:/bin/true
     done
     # The site's DNS server, which the gateway's /etc/resolv.conf names (NetworkManager writes
     # the network's servers there on Raspberry Pi OS), and a loopback stub on the gateway that
     # answers the same, for the case the rules refuse.
-    background ip netns exec peer dnsmasq --keep-in-foreground --no-resolv --no-hosts \
+    background "${IN_PEER[@]}" dnsmasq --keep-in-foreground --no-resolv --no-hosts \
         --bind-interfaces --listen-address="$PEER4" --host-record="cloud.test,$PEER4,$PEER6" \
         --pid-file=/run/dnsmasq-peer.pid
     background dnsmasq --keep-in-foreground --no-resolv --no-hosts \

@@ -46,6 +46,12 @@ const NFTABLES_RELOAD: &str = include_str!("../systemd/nftables-reload.conf");
 const NFTABLES_DROP_IN: &str =
     "/usr/lib/systemd/system/nftables.service.d/trustiot-agent-egress.conf";
 
+/// The systemd container runs without an SELinux label: on a host with SELinux enforcing (Fedora,
+/// for example) a dependency of trustiot-agent.service fails to start in a labelled container.
+/// Without SELinux the option changes nothing; the container stays rootless and in its own network
+/// namespace.
+const SELINUX_OFF: &str = "label=disable";
+
 /// How long systemd in the container may take to finish booting. It takes a second or two.
 const BOOT_BOUND: Duration = Duration::from_secs(120);
 
@@ -710,6 +716,8 @@ fn systemd_lab() -> Option<Lab> {
             "always",
             "--cap-add",
             "NET_ADMIN,SYS_ADMIN",
+            "--security-opt",
+            SELINUX_OFF,
             "IMAGE",
             "/sbin/init",
         ],
