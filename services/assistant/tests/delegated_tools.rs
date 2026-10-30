@@ -222,6 +222,7 @@ async fn exchange(
             sub: ServiceName::Assistant,
         }),
         sid: None,
+        tenant_suspended: false,
     };
     let token = world.issuer.token(&claims);
     world

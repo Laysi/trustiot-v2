@@ -10,7 +10,7 @@
 
 做法與 [chart 的呼叫矩陣](../../deploy/chart/README.md)（由 `deploy/chart/tests/chart.test.ts` 對照）相同。各服務怎麼接上、探測的細節在 [crates/testkit 的 README](../../crates/testkit/README.md)「權限矩陣」。
 
-服務的 handler 以 `crates/service-kit` 的共用檢查判斷要求（Laysi/trustiot-v2#585）：`UserIdentity::require(Requirement::…, "<動作>")` 在 handler 一開始、讀 body 與資料庫之前呼叫，拒絕時回 403 `permission_denied`（`cache-control: no-store`，不論原因都是同一個回應），並在 INFO 記一行 `refused to <動作>`，帶使用者、租戶、原因（`no_tenant`、`unrecognized_role`、`role_too_low`、`not_platform_admin`、`exchanged_token`）與換發 token 的服務，不記 token。store 在開交易前的第二道檢查用不記日誌的 `UserIdentity::meets`。「已登入」不需要檢查：只有驗證過的 token 才有 `UserIdentity`。做法見 [crates/service-kit 的 README](../../crates/service-kit/README.md)。
+服務的 handler 以 `crates/service-kit` 的共用檢查判斷要求（Laysi/trustiot-v2#585）：`UserIdentity::require(Requirement::…, "<動作>")` 在 handler 一開始、讀 body 與資料庫之前呼叫，拒絕時回 403 `permission_denied`（`cache-control: no-store`，不論原因都是同一個回應），並在 INFO 記一行 `refused to <動作>`，帶使用者、租戶、原因（`no_tenant`、`tenant_suspended`、`unrecognized_role`、`role_too_low`、`not_platform_admin`、`exchanged_token`）與換發 token 的服務，不記 token。例外是租戶被停權或已刪除（清單 B1，Laysi/trustiot-v2#777）：需要租戶角色的要求回 403 `tenant_suspended`，不是 `permission_denied`；身分服務的 cookie 檢查對身分服務以外的服務直接回這個代碼、不簽 token（[services/identity](../../services/identity/README.md) 的「停權時的每次請求檢查」）。本矩陣的探測都在正常的租戶。store 在開交易前的第二道檢查用不記日誌的 `UserIdentity::meets`。「已登入」不需要檢查：只有驗證過的 token 才有 `UserIdentity`。做法見 [crates/service-kit 的 README](../../crates/service-kit/README.md)。
 
 ## 要求
 

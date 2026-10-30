@@ -33,10 +33,15 @@ const SESSION = {
   user_id: "01928f6e-7a3c-7d4e-8f00-0000000000a1",
   email: "alice@example.com",
   platform_admin: false,
-  active_tenant: { tenant_id: "01928f6e-7a3c-7d4e-8f00-0000000000b1", name: "Acme Factory", role: "admin" },
+  active_tenant: {
+    tenant_id: "01928f6e-7a3c-7d4e-8f00-0000000000b1",
+    name: "Acme Factory",
+    role: "admin",
+    state: "active",
+  },
   tenants: [
-    { tenant_id: "01928f6e-7a3c-7d4e-8f00-0000000000b1", name: "Acme Factory", role: "admin" },
-    { tenant_id: "01928f6e-7a3c-7d4e-8f00-0000000000b2", name: null, role: "viewer" },
+    { tenant_id: "01928f6e-7a3c-7d4e-8f00-0000000000b1", name: "Acme Factory", role: "admin", state: "active" },
+    { tenant_id: "01928f6e-7a3c-7d4e-8f00-0000000000b2", name: null, role: "viewer", state: "suspended" },
   ],
 };
 

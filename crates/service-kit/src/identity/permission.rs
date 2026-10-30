@@ -8,7 +8,9 @@
 //! - [`UserIdentity::require`]: the check a handler runs first. A refusal is logged at INFO as
 //!   `refused to <action>` with the reason (never the token) and answers [`PermissionDenied`]:
 //!   403 with the M1 body `permission_denied` and `cache-control: no-store`, the same response
-//!   for every reason, so a caller learns nothing about which check failed.
+//!   for every reason, so a caller learns nothing about which check failed. The one exception is
+//!   a suspended tenant ([`Denial::TenantSuspended`]), which answers 403 `tenant_suspended`:
+//!   the user is meant to learn it, so the app shows the suspension page (checklist B1).
 //! - [`UserIdentity::meets`]: the same check without logging or a response, for the second
 //!   check a store makes before it opens a transaction.
 //!
@@ -47,8 +49,9 @@ pub enum Requirement {
     /// A token without a tenant, with a lower role, or with a role this build does not know
     /// ([`TenantRole::Unrecognized`], which grants nothing) is refused, and so is a platform
     /// administrator without a role in the tenant (no implicit tenant rights, decision 4 of
-    /// Laysi/trustiot-v2#104). Exchanged tokens are accepted. Requiring
-    /// [`TenantRole::Unrecognized`] refuses everyone.
+    /// Laysi/trustiot-v2#104). A token whose tenant is suspended or deleted (the
+    /// `tenant_suspended` claim, Laysi/trustiot-v2#777) is refused whatever its role. Exchanged
+    /// tokens are accepted. Requiring [`TenantRole::Unrecognized`] refuses everyone.
     Tenant(TenantRole),
     /// A platform administrator's own request: every other user, every tenant role, and an
     /// exchanged token of a platform administrator are refused (Laysi/trustiot-v2#104,
@@ -56,14 +59,18 @@ pub enum Requirement {
     OwnPlatformAdmin,
 }
 
-/// Why a valid token does not meet a [`Requirement`]. Only the logs see it: every denial answers
-/// the same [`PermissionDenied`].
+/// Why a valid token does not meet a [`Requirement`]. Only the logs see it: every denial but
+/// [`Denial::TenantSuspended`] answers the same [`PermissionDenied`] body.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
 #[non_exhaustive]
 pub enum Denial {
     /// The user has not picked or joined a tenant.
     #[error("the token has no tenant")]
     NoTenant,
+    /// The token's tenant is suspended or deleted. Unlike every other denial, the response says
+    /// so: 403 `tenant_suspended`.
+    #[error("the token's tenant is suspended")]
+    TenantSuspended,
     /// The token's role in its tenant is one this build does not know.
     #[error("the token's role in its tenant is not one this build knows")]
     UnrecognizedRole,
@@ -84,6 +91,7 @@ impl Denial {
     pub const fn reason(self) -> &'static str {
         match self {
             Self::NoTenant => "no_tenant",
+            Self::TenantSuspended => "tenant_suspended",
             Self::UnrecognizedRole => "unrecognized_role",
             Self::RoleTooLow => "role_too_low",
             Self::NotPlatformAdmin => "not_platform_admin",
@@ -94,7 +102,9 @@ impl Denial {
 
 /// The refusal of a valid token that does not meet the operation's [`Requirement`]: as a
 /// response, 403 with the M1 body `{"code":"permission_denied","message_key":
-/// "error.permission_denied"}` and `cache-control: no-store`, whatever the [`Denial`].
+/// "error.permission_denied"}` and `cache-control: no-store`, whatever the [`Denial`], except
+/// [`Denial::TenantSuspended`]: 403 `{"code":"tenant_suspended","message_key":
+/// "error.tenant_suspended"}`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
 #[error("permission denied: {denial}")]
 pub struct PermissionDenied {
@@ -108,10 +118,14 @@ impl PermissionDenied {
         self.denial
     }
 
-    /// The M1 body the refusal answers: `permission_denied`, with no detail.
+    /// The M1 body the refusal answers: `tenant_suspended` for a suspended tenant, otherwise
+    /// `permission_denied`; with no detail.
     #[must_use]
     pub fn to_error_body(self) -> ErrorBody {
-        ErrorBody::new(ErrorCode::PermissionDenied)
+        match self.denial {
+            Denial::TenantSuspended => ErrorBody::new(ErrorCode::TenantSuspended),
+            _ => ErrorBody::new(ErrorCode::PermissionDenied),
+        }
     }
 }
 
@@ -122,7 +136,7 @@ impl From<Denial> for PermissionDenied {
 }
 
 impl IntoResponse for PermissionDenied {
-    /// 403 `permission_denied`, not to be stored.
+    /// 403 [`PermissionDenied::to_error_body`], not to be stored.
     fn into_response(self) -> Response {
         let body = self.to_error_body();
         (
@@ -143,6 +157,14 @@ impl UserIdentity {
         self.claims.act.is_some()
     }
 
+    /// Whether the token's tenant is suspended or deleted (the `tenant_suspended` claim,
+    /// Laysi/trustiot-v2#777). Only the identity service gets such a token: the ingress refuses
+    /// every other route of a suspended tenant.
+    #[must_use]
+    pub fn is_tenant_suspended(&self) -> bool {
+        self.claims.tenant.is_some() && self.claims.tenant_suspended
+    }
+
     /// Whether the token meets `requirement`; the [`Denial`] when it does not. Logs nothing:
     /// a handler calls [`UserIdentity::require`], and this is for a store's second check.
     ///
@@ -158,6 +180,10 @@ impl UserIdentity {
             }
             Requirement::Tenant(needed) => {
                 let grant = self.claims.tenant.ok_or(Denial::NoTenant)?;
+                // Before the role: no role acts in a suspended tenant.
+                if self.claims.tenant_suspended {
+                    return Err(Denial::TenantSuspended);
+                }
                 if grant.role == TenantRole::Unrecognized {
                     return Err(Denial::UnrecognizedRole);
                 }
@@ -369,6 +395,73 @@ mod tests {
             json!({"code": "permission_denied", "message_key": "error.permission_denied"})
         );
         assert!(bodies.iter().all(|body| *body == bodies[0]), "{bodies:?}");
+    }
+
+    /// `claims` with the `tenant_suspended` claim set.
+    fn suspended(mut claims: Value) -> Value {
+        claims["tenant_suspended"] = json!(true);
+        claims
+    }
+
+    #[test]
+    fn a_suspended_tenant_grants_no_role_but_leaves_own_requests_and_platform_admins() {
+        for (role, _) in ROLES {
+            for act in [None, Some("assistant")] {
+                let user = user(&suspended(claims(Some(role), false, act)));
+                assert!(user.is_tenant_suspended());
+                for (_, required) in ROLES {
+                    assert_eq!(
+                        user.meets(Requirement::Tenant(required)),
+                        Err(Denial::TenantSuspended),
+                        "{role} ({act:?}) for {required:?}"
+                    );
+                }
+            }
+            // The session, preferences and logout stay usable.
+            assert_eq!(
+                user(&suspended(claims(Some(role), false, None))).meets(Requirement::OwnRequest),
+                Ok(())
+            );
+            // A platform administrator whose current tenant is suspended can still resume it.
+            assert_eq!(
+                user(&suspended(claims(Some(role), true, None)))
+                    .meets(Requirement::OwnPlatformAdmin),
+                Ok(())
+            );
+        }
+        // Without a tenant the claim means nothing (the identity service never signs that).
+        let no_tenant = user(&suspended(claims(None, false, None)));
+        assert!(!no_tenant.is_tenant_suspended());
+        assert_eq!(
+            no_tenant.meets(Requirement::Tenant(TenantRole::Viewer)),
+            Err(Denial::NoTenant)
+        );
+        assert!(!user(&claims(Some("admin"), false, None)).is_tenant_suspended());
+    }
+
+    #[tokio::test]
+    async fn a_suspended_tenant_answers_403_tenant_suspended() {
+        let refused = user(&suspended(claims(Some("admin"), false, None)))
+            .require(Requirement::Tenant(TenantRole::Viewer), "read a device")
+            .expect_err("a suspended tenant is refused");
+        assert_eq!(refused.denial(), Denial::TenantSuspended);
+        assert_eq!(refused.denial().reason(), "tenant_suspended");
+        let response = refused.into_response();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        assert_eq!(
+            response
+                .headers()
+                .get(CACHE_CONTROL)
+                .map(|value| value.as_bytes()),
+            Some(&b"no-store"[..])
+        );
+        let body = axum::body::to_bytes(response.into_body(), 1024)
+            .await
+            .expect("the body");
+        assert_eq!(
+            serde_json::from_slice::<Value>(&body).expect("JSON"),
+            json!({"code": "tenant_suspended", "message_key": "error.tenant_suspended"})
+        );
     }
 
     #[test]

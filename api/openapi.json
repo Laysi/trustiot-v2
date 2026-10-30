@@ -2783,6 +2783,10 @@
             "$ref": "#/components/schemas/MemberRole",
             "description": "The user's role in the tenant."
           },
+          "state": {
+            "$ref": "#/components/schemas/TenantState",
+            "description": "The tenant's state (Laysi/trustiot-v2#777): while it is `suspended` or `deleted`, the\nsession reaches this service only, and every other request in the tenant answers 403\n`tenant_suspended`. A tenant without a record is `active`, as the cookie check reads it."
+          },
           "tenant_id": {
             "$ref": "#/components/schemas/TenantId",
             "description": "The tenant."
@@ -2791,7 +2795,8 @@
         "required": [
           "tenant_id",
           "name",
-          "role"
+          "role",
+          "state"
         ],
         "type": "object"
       },
