@@ -20,6 +20,14 @@
 //!   with whole comparisons an hour apart, a gateway whose only certificate was revoked loses its
 //!   client in the comparison on connecting, gets it back right after its renewal with no whole
 //!   comparison in between, and publishes with the renewed certificate.
+//! - A platform administrator's revocation (Laysi/trustiot-v2#636; `README.md`, "閘道器憑證的撤
+//!   銷"), with two replicas and whole comparisons an hour apart, sent to the second: the
+//!   gateway's open connection ends (N, measured), the second replica's log shows the ledger,
+//!   the new CRL and the client's removal in that order, and the first replica changes nothing.
+//!   Before the broker loads the new CRL the old certificate connects and gets PUBACK 0x87; after
+//!   the CRL from the service passes the trust sidecar's check and the broker reloads, the TLS
+//!   handshake fails with `CertificateRevoked`. A renewal brings the client back. Before that,
+//!   which `mosquitto_ctrl dynsec` commands end a connected gateway's session is recorded.
 //!
 //! Starts a throwaway Postgres with TLS and a Mosquitto container (podman or docker); skipped
 //! without them unless `CI` is set. `-- --nocapture` prints the evidence lines of the test report.
@@ -36,6 +44,8 @@ use std::time::{Duration, Instant};
 
 use base64::Engine as _;
 use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
+use certs::gateways::{LOCK_GATEWAY_CERTIFICATES, REVOKE_PATH};
+use certs::http::CRL_PATH;
 use certs::pem;
 use certs::registrations::REGISTRATIONS_PATH;
 use certs::workstations::CERTIFICATES_PATH;
@@ -63,11 +73,14 @@ use serde_json::{Value, json};
 use service_kit::identity::ServiceIdentity;
 use service_kit::tenant::{BackgroundTenantDb, TenantDb};
 use sha2::{Digest, Sha256};
+use sqlx::Connection as _;
 use sqlx::postgres::PgPoolOptions;
-use support::{LIMIT, Service, TestCa, now, temp_dir, wait_for};
+use support::{LIMIT, Reply, Service, TestCa, now, temp_dir, wait_for};
 use testkit::container::{Container, container_runtime, runtime_output, unavailable, unique_name};
 use testkit::mqtt::mosquitto::MOSQUITTO_IMAGE;
 use testkit::product::{DATABASE, ProductPostgres, product_postgres};
+use x509_parser::prelude::FromDer as _;
+use x509_parser::revocation_list::CertificateRevocationList;
 
 /// The roles the test logs in with: the certs service's two, and the assets service's, which
 /// writes the bindings.
@@ -77,6 +90,10 @@ const LOGINS: &[&str] = &[
     "certs_app",
     "certs_platform",
 ];
+
+/// The tests of this file share one Postgres ([`product_postgres`]) and with it the services'
+/// job locks and every registered gateway, so they run one after the other.
+static ONE_AT_A_TIME: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 /// The chart's broker configuration and its gateway listener.
 const CONFIG: &str = include_str!("../../../deploy/chart/files/mosquitto/mosquitto.conf");
@@ -114,6 +131,14 @@ const SERVER_NAME: &str = "localhost";
 const GATEWAY_A: &str = "gw-633-a";
 const GATEWAY_B: &str = "gw-633-b";
 const GHOST: &str = "gw-633-ghost";
+/// The gateway the administrator revokes, and one that keeps its certificate.
+const REVOKED_GATEWAY: &str = "gw-636-revoked";
+const PROBE: &str = "gw-636-probe";
+
+/// N of `README.md`, "閘道器憑證的撤銷": a revocation ends the gateway's open connection within
+/// this long. It covers the new CRL's 10 s at most (`certs::crl::REISSUE_TIMEOUT`), the ledger,
+/// the job lock and the broker; the test bounds the time against it, not a shorter one.
+const DISCONNECT_WITHIN: Duration = Duration::from_secs(30);
 
 /// PUBACK and SUBACK reason codes.
 const SUCCESS: u8 = 0x00;
@@ -284,6 +309,63 @@ impl Broker {
 
     fn dynsec(&self) -> Value {
         serde_json::from_str(&self.dynsec_text()).expect("the dynamic-security file is JSON")
+    }
+
+    /// Runs `mosquitto_ctrl dynsec <args>` in the container against the service port, as
+    /// `service:certs` with `password`. The password is not echoed on failure.
+    fn dynsec_command(&self, password: &str, args: &[&str]) {
+        let output = Command::new(self.container.runtime)
+            .args([
+                "exec",
+                &self.container.name,
+                "mosquitto_ctrl",
+                "-h",
+                "127.0.0.1",
+                "-p",
+                "1883",
+                "-u",
+                "service:certs",
+                "-P",
+                password,
+                "dynsec",
+            ])
+            .args(args)
+            .output()
+            .expect("run mosquitto_ctrl");
+        assert!(
+            output.status.success(),
+            "mosquitto_ctrl dynsec {args:?}: {}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    /// How often the broker logged a reload.
+    fn reloads(&self) -> usize {
+        self.logs()
+            .lines()
+            .filter(|line| line.contains("Reloading config."))
+            .count()
+    }
+
+    /// What the trust sidecar does after it installed a new CRL: SIGHUP, and returns once
+    /// Mosquitto logged the reload, which it does in the same turn of its loop, so every
+    /// connection after this sees the new files.
+    async fn reload(&self) {
+        let before = self.reloads();
+        let _ = runtime_output(
+            self.container.runtime,
+            &["kill", "--signal", "HUP", &self.container.name],
+        );
+        let deadline = Instant::now() + LIMIT;
+        while self.reloads() == before {
+            assert!(
+                Instant::now() < deadline,
+                "Mosquitto did not log the reload within {LIMIT:?}:\n{}",
+                self.logs()
+            );
+            tokio::time::sleep(Duration::from_millis(200)).await;
+        }
     }
 }
 
@@ -462,6 +544,18 @@ impl Gateway {
     /// Connects with the certificate the service signed for `name`, sends CONNECT (clean start,
     /// the broker's largest keepalive) and requires a successful CONNACK.
     fn connect(address: SocketAddr, config: &Arc<rustls::ClientConfig>, name: &str) -> Self {
+        Self::try_connect(address, config, name)
+            .unwrap_or_else(|problem| panic!("{name}: could not connect: {problem}"))
+    }
+
+    /// [`Gateway::connect`], or how the TLS handshake or the CONNECT failed: a certificate the
+    /// broker refuses fails when the CONNACK is read, since under TLS 1.3 the server checks the
+    /// client's certificate after the client has finished its side of the handshake.
+    fn try_connect(
+        address: SocketAddr,
+        config: &Arc<rustls::ClientConfig>,
+        name: &str,
+    ) -> Result<Self, String> {
         let socket = TcpStream::connect_timeout(&address, LIMIT).expect("connect to the broker");
         socket
             .set_read_timeout(Some(LIMIT))
@@ -476,16 +570,64 @@ impl Gateway {
         // Version 5, clean start, keepalive 120 s (the broker's max_keepalive), no properties.
         body.extend_from_slice(&[0x05, 0x02, 0x00, 0x78, 0x00]);
         string(name, &mut body);
-        tls.write_all(&packet(0x10, &body)).expect("CONNECT");
-        let (kind, connack) = read_packet(&mut tls).expect("CONNACK");
-        assert!(
-            kind == 0x20 && connack.get(1) == Some(&0x00),
-            "{name}: expected a successful CONNACK, got {kind:02x} {connack:02x?}"
-        );
-        Self {
+        tls.write_all(&packet(0x10, &body))
+            .map_err(|error| format!("CONNECT: {error}"))?;
+        let (kind, connack) = read_packet(&mut tls).map_err(|error| format!("CONNACK: {error}"))?;
+        if kind != 0x20 || connack.get(1) != Some(&0x00) {
+            return Err(format!(
+                "expected a successful CONNACK, got {kind:02x} {connack:02x?}"
+            ));
+        }
+        Ok(Self {
             tls,
             name: name.to_owned(),
             next_id: 1,
+        })
+    }
+
+    /// Publishes with QoS 1: the PUBACK reason code, or how the connection ended (the broker
+    /// closed it or sent DISCONNECT) instead.
+    fn try_publish(&mut self, topic: &str) -> Result<u8, String> {
+        let id = self.packet_id();
+        let mut body = Vec::new();
+        string(topic, &mut body);
+        body.extend_from_slice(&id.to_be_bytes());
+        body.push(0x00);
+        body.extend_from_slice(b"{}");
+        self.tls
+            .write_all(&packet(0x32, &body))
+            .map_err(|error| format!("PUBLISH: {error}"))?;
+        loop {
+            let (kind, rest) = read_packet(&mut self.tls).map_err(|error| closed(&error))?;
+            if kind & 0xf0 == 0xe0 {
+                return Err(disconnect(&rest));
+            }
+            if kind == 0x40 && rest.get(..2) == Some(&id.to_be_bytes()[..]) {
+                return Ok(rest.get(2).copied().unwrap_or(SUCCESS));
+            }
+        }
+    }
+
+    /// Waits until the broker ends the connection (up to the socket's read timeout,
+    /// [`LIMIT`]) and says how.
+    fn wait_closed(&mut self) -> String {
+        loop {
+            match read_packet(&mut self.tls) {
+                Ok((kind, rest)) if kind & 0xf0 == 0xe0 => return disconnect(&rest),
+                Ok(_) => {}
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                    ) =>
+                {
+                    panic!(
+                        "{}: the broker kept the connection for {LIMIT:?}",
+                        self.name
+                    )
+                }
+                Err(error) => return closed(&error),
+            }
         }
     }
 
@@ -550,6 +692,19 @@ impl Gateway {
 
 fn accepted(code: u8) -> bool {
     matches!(code, SUCCESS | NO_MATCHING_SUBSCRIBERS)
+}
+
+/// A DISCONNECT packet's reason code, as text.
+fn disconnect(rest: &[u8]) -> String {
+    format!(
+        "DISCONNECT reason {:#04x}",
+        rest.first().copied().unwrap_or(0)
+    )
+}
+
+/// How reading from a connection the broker ended failed.
+fn closed(error: &std::io::Error) -> String {
+    format!("closed: {error}")
 }
 
 // ---- factory registration and binding ----
@@ -696,6 +851,13 @@ fn changes(service: &Service, hardware_id: &str) -> Vec<String> {
 /// signed with its TPM key `key`. `None` while the service answers 503 (the bindings' lag is
 /// not known yet after a start) or 429 (these retries used up the hardware ID's limit).
 async fn renew(service: &Service, key: &KeyPair, hardware_id: &str) -> Option<RenewedCertificate> {
+    let reply = renewal_answer(service, key, hardware_id).await?;
+    assert_eq!(reply.status, 201, "renew {hardware_id}: {}", reply.body);
+    Some(serde_json::from_str(&reply.body).expect("a renewed certificate"))
+}
+
+/// The answer to [`renew`]'s second step, whatever it is; `None` on 503 or 429 as there.
+async fn renewal_answer(service: &Service, key: &KeyPair, hardware_id: &str) -> Option<Reply> {
     let wait = |status: u16| status == 503 || status == 429;
     let reply = service
         .post_json(
@@ -728,11 +890,20 @@ async fn renew(service: &Service, key: &KeyPair, hardware_id: &str) -> Option<Re
             }),
         )
         .await;
-    if wait(reply.status) {
-        return None;
-    }
-    assert_eq!(reply.status, 201, "renew {hardware_id}: {}", reply.body);
-    Some(serde_json::from_str(&reply.body).expect("a renewed certificate"))
+    (!wait(reply.status)).then_some(reply)
+}
+
+/// How many gateway certificates the ledger has for `hardware_id`, read as the superuser.
+async fn gateway_certificates(product: &ProductPostgres, hardware_id: &str) -> i64 {
+    let mut admin = product.superuser().await;
+    sqlx::query_scalar(
+        "SELECT count(*) FROM certs.issued_certificates
+         WHERE profile = 'gateway' AND subject = $1",
+    )
+    .bind(hardware_id)
+    .fetch_one(&mut admin)
+    .await
+    .expect("count the gateway's certificates")
 }
 
 /// Where the first JSON line of `output` with `message` and these `fields` is.
@@ -747,8 +918,105 @@ fn position(output: &str, message: &str, fields: &[(&str, &str)]) -> Option<usiz
     })
 }
 
+/// The broker as the chart runs it, before any gateway: the chart's configuration and gateway
+/// listener, the dynamic-security file the accounts init container writes, the trust files the
+/// trust containers install, and the broker password file the chart mounts for certs.
+struct Stack {
+    broker: Broker,
+    /// Each service account's broker password.
+    passwords: BTreeMap<&'static str, String>,
+    /// The dynamic-security file with the chart's entries only.
+    chart_only: String,
+    /// The CA certificate the gateways trust for the broker's server certificate (DER).
+    server_ca: Vec<u8>,
+    /// The CA chain the broker trusts for gateways (`ca.pem`).
+    chain: String,
+    /// certs' broker password file.
+    password_path: String,
+}
+
+impl Stack {
+    async fn start(runtime: &'static str, ca: &TestCa) -> Self {
+        let authority = ca.authority();
+
+        // The broker's accounts, as the init container makes them: a password per service, hashed
+        // into the dynamic-security file next to the chart's roles.
+        let passwords: BTreeMap<&str, String> = SERVICES
+            .iter()
+            .map(|access| (access.service, random_text(32)))
+            .collect();
+        let accounts: Vec<_> = SERVICES
+            .iter()
+            .map(|access| {
+                let mut salt = [0_u8; 64];
+                getrandom::fill(&mut salt).expect("random");
+                let encoded = encode_password(
+                    passwords[access.service].as_bytes(),
+                    &salt,
+                    PASSWORD_ITERATIONS,
+                );
+                (access, encoded)
+            })
+            .collect();
+        let chart_only = reconcile(None, &accounts).expect("the init container's file");
+
+        // The trust files the broker's trust containers install: the CA chain and the issuing CA's
+        // CRL, made by the service's own code.
+        let chain = format!("{}{}", ca.root_pem, ca.issuing_pems.concat());
+        let crl = certs::crl::build(
+            &authority.issuing()[0],
+            1,
+            &[],
+            now() - 300,
+            Duration::from_secs(86_400),
+        )
+        .expect("a CRL");
+        let (server_chain, server_key, server_ca) = server_certificate();
+
+        let broker = Broker::start(runtime);
+        broker.push(&format!("{STAGE_DIR}/mosquitto.conf"), CONFIG.as_bytes());
+        broker.push(
+            &format!("{LISTENERS_DIR}/{GATEWAY_LISTENER_FILE}"),
+            GATEWAY_LISTENER.as_bytes(),
+        );
+        broker.push(&format!("{TLS_DIR}/tls.crt"), server_chain.as_bytes());
+        broker.push(&format!("{TLS_DIR}/tls.key"), server_key.as_bytes());
+        broker.push(&format!("{TRUST_DIR}/ca.pem"), chain.as_bytes());
+        broker.push(
+            &format!("{TRUST_DIR}/crl.pem"),
+            pem::encode(pem::CRL, &crl).as_bytes(),
+        );
+        broker.push(
+            &format!("{STAGE_DIR}/dynamic-security.json"),
+            chart_only.as_bytes(),
+        );
+        broker.push(&format!("{STAGE_DIR}/ready"), b"");
+        broker.wait_running(1).await;
+        evidence(format!(
+            "broker {MOSQUITTO_IMAGE} with the chart's mosquitto.conf and gateway listener, \
+             dynamic-security file from migrate::mqtt_accounts::reconcile ({} clients, {} roles)",
+            clients(&broker.dynsec()).len(),
+            roles_and_groups(&broker.dynsec()).0.len()
+        ));
+
+        // The broker account the chart would mount for certs.
+        let password_file = temp_dir("certs-mqtt").join("certs");
+        std::fs::write(&password_file, format!("{}\n", passwords["certs"])).expect("password file");
+        Self {
+            broker,
+            passwords,
+            chart_only,
+            server_ca,
+            chain,
+            password_path: password_file.display().to_string(),
+        }
+    }
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn the_service_keeps_the_brokers_gateway_clients_in_line_with_postgres() {
+    // The tests share the database and the job locks: one at a time.
+    let _one_at_a_time = ONE_AT_A_TIME.lock().await;
     let Some(product) = product_postgres(LOGINS).await else {
         return;
     };
@@ -757,73 +1025,15 @@ async fn the_service_keeps_the_brokers_gateway_clients_in_line_with_postgres() {
         return;
     };
     let ca = TestCa::new(&[1]);
-    let authority = ca.authority();
-
-    // The broker's accounts, as the init container makes them: a password per service, hashed
-    // into the dynamic-security file next to the chart's roles.
-    let passwords: BTreeMap<&str, String> = SERVICES
-        .iter()
-        .map(|access| (access.service, random_text(32)))
-        .collect();
-    let accounts: Vec<_> = SERVICES
-        .iter()
-        .map(|access| {
-            let mut salt = [0_u8; 64];
-            getrandom::fill(&mut salt).expect("random");
-            let encoded = encode_password(
-                passwords[access.service].as_bytes(),
-                &salt,
-                PASSWORD_ITERATIONS,
-            );
-            (access, encoded)
-        })
-        .collect();
-    let chart_only = reconcile(None, &accounts).expect("the init container's file");
-
-    // The trust files the broker's trust containers install: the CA chain and the issuing CA's
-    // CRL, made by the service's own code.
-    let chain = format!("{}{}", ca.root_pem, ca.issuing_pems.concat());
-    let crl = certs::crl::build(
-        &authority.issuing()[0],
-        1,
-        &[],
-        now() - 300,
-        Duration::from_secs(86_400),
-    )
-    .expect("a CRL");
-    let (server_chain, server_key, server_ca) = server_certificate();
-
-    let broker = Broker::start(runtime);
-    broker.push(&format!("{STAGE_DIR}/mosquitto.conf"), CONFIG.as_bytes());
-    broker.push(
-        &format!("{LISTENERS_DIR}/{GATEWAY_LISTENER_FILE}"),
-        GATEWAY_LISTENER.as_bytes(),
-    );
-    broker.push(&format!("{TLS_DIR}/tls.crt"), server_chain.as_bytes());
-    broker.push(&format!("{TLS_DIR}/tls.key"), server_key.as_bytes());
-    broker.push(&format!("{TRUST_DIR}/ca.pem"), chain.as_bytes());
-    broker.push(
-        &format!("{TRUST_DIR}/crl.pem"),
-        pem::encode(pem::CRL, &crl).as_bytes(),
-    );
-    broker.push(
-        &format!("{STAGE_DIR}/dynamic-security.json"),
-        chart_only.as_bytes(),
-    );
-    broker.push(&format!("{STAGE_DIR}/ready"), b"");
-    broker.wait_running(1).await;
-    evidence(format!(
-        "broker {MOSQUITTO_IMAGE} with the chart's mosquitto.conf and gateway listener, \
-         dynamic-security file from migrate::mqtt_accounts::reconcile ({} clients, {} roles)",
-        clients(&broker.dynsec()).len(),
-        roles_and_groups(&broker.dynsec()).0.len()
-    ));
-
-    // The service, logging at trace, with the broker account the chart would mount.
-    let password_file = temp_dir("certs-mqtt").join("certs");
-    std::fs::write(&password_file, format!("{}\n", passwords["certs"])).expect("password file");
+    let Stack {
+        broker,
+        passwords,
+        chart_only,
+        server_ca,
+        chain: _,
+        password_path,
+    } = Stack::start(runtime, &ca).await;
     let service_port = broker.service_port.to_string();
-    let password_path = password_file.display().to_string();
     let mut env: Vec<(&str, &str)> = FAST_CRLS.to_vec();
     env.extend([
         ("TRUSTIOT__TELEMETRY__LOG_FILTER", "trace"),
@@ -839,7 +1049,7 @@ async fn the_service_keeps_the_brokers_gateway_clients_in_line_with_postgres() {
     })
     .await;
     evidence(
-        "certs connected as service:certs and compared: nothing registered, nothing to change",
+        "certs connected as service:certs and compared: none of this test's gateways registered",
     );
 
     // Factory registration of two gateways: certificates from the service.
@@ -979,7 +1189,8 @@ async fn the_service_keeps_the_brokers_gateway_clients_in_line_with_postgres() {
     assert_eq!(roles_and_groups(&in_line), roles_and_groups(&written));
     let gateway_clients: Vec<String> = clients(&in_line)
         .into_keys()
-        .filter(|name| !name.starts_with("service:"))
+        // The other test's gateways share the database when it ran first.
+        .filter(|name| !name.starts_with("service:") && !name.starts_with("gw-636-"))
         .collect();
     assert_eq!(gateway_clients, [GATEWAY_A, GATEWAY_B]);
     evidence(format!(
@@ -1023,8 +1234,9 @@ async fn the_service_keeps_the_brokers_gateway_clients_in_line_with_postgres() {
     // on connecting, only that request can bring a client back within the test.
     drop(service);
     let mut admin = product.superuser().await;
+    // Superseded: a keyCompromise revocation would end the gateway's renewals.
     sqlx::query(
-        "UPDATE certs.issued_certificates SET revoked_at = now(), revocation_reason = 1
+        "UPDATE certs.issued_certificates SET revoked_at = now(), revocation_reason = 4
          WHERE profile = 'gateway' AND subject = $1",
     )
     .bind(GATEWAY_A)
@@ -1111,6 +1323,396 @@ async fn the_service_keeps_the_brokers_gateway_clients_in_line_with_postgres() {
          `{CHANGED}` action=added at line {added_at}, still one `{IN_LINE}` (no whole \
          comparison in between); the renewed certificate's publish: PUBACK {published:#04x}",
         renewed.serial
+    ));
+}
+
+/// Whether one of the CRLs in `bundle` (PEM) lists `serial` (hex).
+fn crl_lists(bundle: &str, serial: &str) -> bool {
+    pem::decode_all(bundle, pem::CRL)
+        .expect("PEM CRLs")
+        .iter()
+        .any(|der| {
+            let (_, crl) = CertificateRevocationList::from_der(der).expect("a CRL");
+            crl.iter_revoked_certificates()
+                .any(|revoked| hex(revoked.raw_serial()) == serial)
+        })
+}
+
+/// What a connected gateway saw after a dynamic-security command: two publishes, so a
+/// disconnection the broker makes at the end of its loop turn is seen too.
+fn after_command(session: &mut Option<Gateway>, topic: &str) -> String {
+    let Some(gateway) = session.as_mut() else {
+        return "no connection".to_owned();
+    };
+    let outcome = gateway
+        .try_publish(topic)
+        .and_then(|first| Ok((first, gateway.try_publish(topic)?)));
+    match outcome {
+        Ok((first, second)) => format!("connected, PUBACK {first:#04x} then {second:#04x}"),
+        Err(how) => {
+            *session = None;
+            format!("disconnected ({how})")
+        }
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn revoking_a_gateway_disconnects_it_and_its_crl_then_refuses_it() {
+    // The tests share the database and the job locks: one at a time.
+    let _one_at_a_time = ONE_AT_A_TIME.lock().await;
+    let Some(product) = product_postgres(LOGINS).await else {
+        return;
+    };
+    let Some(runtime) = container_runtime() else {
+        unavailable("podman or docker");
+        return;
+    };
+    let ca = TestCa::new(&[1]);
+    let Stack {
+        broker,
+        passwords,
+        chart_only: _,
+        server_ca,
+        chain,
+        password_path,
+    } = Stack::start(runtime, &ca).await;
+    let service_port = broker.service_port.to_string();
+    let gateway_address = SocketAddr::from(([127, 0, 0, 1], broker.gateway_port));
+    let mqtt = [
+        ("TRUSTIOT__MQTT__HOST", "127.0.0.1"),
+        ("TRUSTIOT__MQTT__PORT", service_port.as_str()),
+        ("TRUSTIOT__MQTT__USERNAME", "service:certs"),
+        ("TRUSTIOT__MQTT__PASSWORD_FILE", password_path.as_str()),
+    ];
+
+    // Two gateways registered and bound, with their broker clients, by a first service.
+    let mut env: Vec<(&str, &str)> = FAST_CRLS.to_vec();
+    env.extend(mqtt);
+    env.push(("TRUSTIOT__DYNSEC__INTERVAL", "2s"));
+    let setup = Service::start(&product, &ca, &env).await;
+    let workstation = Workstation::new(&setup).await;
+    let (key_r, registration_r) = workstation.register(&setup, REVOKED_GATEWAY).await;
+    let (key_p, registration_p) = workstation.register(&setup, PROBE).await;
+    let assets = assets_writer(&product);
+    let tenant = TenantId::generate();
+    bind(&assets, tenant, REVOKED_GATEWAY).await;
+    bind(&assets, tenant, PROBE).await;
+    wait_for("both gateways' broker clients", || async {
+        (changes(&setup, REVOKED_GATEWAY) == ["added"] && changes(&setup, PROBE) == ["added"])
+            .then_some(())
+    })
+    .await;
+    drop(setup);
+    let config = |key: &KeyPair, chain_pem: &str| {
+        let chain = pem::decode_all(chain_pem, pem::CERTIFICATE)
+            .expect("the chain")
+            .into_iter()
+            .map(CertificateDer::from)
+            .collect();
+        client_config(&server_ca, chain, key)
+    };
+    let config_r = config(&key_r, &registration_r.certificate_chain);
+    let config_p = config(&key_p, &registration_p.certificate_chain);
+    let (r, p) = (gateway_id(REVOKED_GATEWAY), gateway_id(PROBE));
+    let (topic_r, topic_p) = (Channel::Status.topic(&r), Channel::Status.topic(&p));
+
+    // Which dynamic-security commands end a connected gateway's session (Mosquitto keeps a
+    // session when only its permissions change). No service runs, so nothing puts the client
+    // back in between.
+    let password = passwords["certs"].as_str();
+    let mut session = Some(Gateway::connect(gateway_address, &config_p, PROBE));
+    let mut observed = BTreeMap::new();
+    for args in [
+        &["removeClientRole", PROBE, GATEWAY_ROLE][..],
+        &["addClientRole", PROBE, GATEWAY_ROLE, "0"],
+        &["disableClient", PROBE],
+        &["enableClient", PROBE],
+        &["deleteClient", PROBE],
+    ] {
+        if session.is_none() {
+            session = Gateway::try_connect(gateway_address, &config_p, PROBE).ok();
+        }
+        let before = after_command(&mut session, &topic_p);
+        broker.dynsec_command(password, args);
+        let seen = after_command(&mut session, &topic_p);
+        evidence(format!(
+            "mosquitto_ctrl dynsec {}: {PROBE} before: {before}; after: {seen}",
+            args.join(" ")
+        ));
+        observed.insert(args[0], (before, seen));
+    }
+    // Mosquitto 2.1 ends the session on every change to the client itself (DISCONNECT 0x98,
+    // administrative action), not only on its deletion; enabling it again changes nothing for a
+    // connection. A disabled client still connects with its certificate and publishes: dynsec
+    // disables password logins only, so disabling is no way to keep a gateway out.
+    for command in [
+        "removeClientRole",
+        "addClientRole",
+        "disableClient",
+        "deleteClient",
+    ] {
+        let (before, after) = &observed[command];
+        assert!(before.starts_with("connected"), "{command}: {observed:?}");
+        assert!(
+            after.starts_with("disconnected (DISCONNECT reason 0x98)"),
+            "{command}: {observed:?}"
+        );
+    }
+    let (while_disabled, enabled) = &observed["enableClient"];
+    assert!(
+        while_disabled.starts_with("connected") && !while_disabled.contains("0x87"),
+        "a disabled client's new connection: {observed:?}"
+    );
+    assert!(enabled.starts_with("connected"), "{observed:?}");
+    drop(session);
+
+    // Two replicas with whole comparisons an hour apart: after the one on connecting, only a
+    // request's own sync changes the broker.
+    let mut env: Vec<(&str, &str)> = FAST_CRLS.to_vec();
+    env.extend(mqtt);
+    env.extend([
+        // A whole comparison without changes logs at DEBUG only.
+        ("TRUSTIOT__TELEMETRY__LOG_FILTER", "debug"),
+        ("TRUSTIOT__DYNSEC__INTERVAL", "1h"),
+        ("TRUSTIOT__RENEWAL__GATEWAY_BURST", "100"),
+        ("TRUSTIOT__RENEWAL__GATEWAY_INTERVAL", "1s"),
+    ]);
+    let first = Service::start(&product, &ca, &env).await;
+    let second = Service::start(&product, &ca, &env).await;
+    let whole = |service: &Service| {
+        service.stdout.messages(IN_SYNC).len() + service.stdout.messages(IN_LINE).len()
+    };
+    wait_for("both replicas' comparison on connecting", || async {
+        (whole(&first) == 1 && whole(&second) == 1).then_some(())
+    })
+    .await;
+    wait_for("the probe's broker client again", || async {
+        clients(&broker.dynsec()).contains_key(PROBE).then_some(())
+    })
+    .await;
+
+    // Acceptance 1: connected, then revoked through the replica that is not the first.
+    let mut connected = Gateway::connect(gateway_address, &config_r, REVOKED_GATEWAY);
+    let before = connected.publish(&topic_r);
+    assert!(accepted(before), "{REVOKED_GATEWAY} before: {before:#04x}");
+    let started = Instant::now();
+    let watcher = tokio::task::spawn_blocking(move || {
+        let how = connected.wait_closed();
+        (started.elapsed(), how)
+    });
+    let path = REVOKE_PATH.replace("{hardware_id}", REVOKED_GATEWAY);
+    let reply = second
+        .post_json(&path, Some(&second.admin_token()), &json!({}))
+        .await;
+    let answered = started.elapsed();
+    assert_eq!(reply.status, 200, "revoke: {}", reply.body);
+    let revoked = reply.json();
+    assert_eq!(revoked["revoked"].as_array().map(Vec::len), Some(1));
+    assert_eq!(revoked["revoked"][0]["serial"], registration_r.serial);
+    let (closed_after, how) = watcher.await.expect("the connection watcher");
+    assert!(
+        how.starts_with("DISCONNECT reason 0x98"),
+        "how the connection ended: {how}"
+    );
+    assert!(
+        closed_after < DISCONNECT_WITHIN,
+        "N: the connection ended {closed_after:?} after the request, README says {DISCONNECT_WITHIN:?}"
+    );
+    evidence(format!(
+        "{REVOKED_GATEWAY} revoked through the second replica: 200 after {answered:?}; its open \
+         connection ended {closed_after:?} after the request ({how})"
+    ));
+    wait_for("the second replica's removal", || async {
+        (changes(&second, REVOKED_GATEWAY) == ["removed"]).then_some(())
+    })
+    .await;
+    assert!(changes(&first, REVOKED_GATEWAY).is_empty());
+    assert_eq!(
+        whole(&first),
+        1,
+        "a whole comparison ran on the first replica"
+    );
+    assert_eq!(
+        whole(&second),
+        1,
+        "a whole comparison ran on the second replica"
+    );
+    let output = second.stdout.text();
+    let revoked_at = position(
+        &output,
+        "revoked a gateway's certificates",
+        &[("hardware_id", REVOKED_GATEWAY)],
+    )
+    .expect("the revocation's line");
+    let crl_at = position(&output, "issued a new CRL", &[("cause", "revocation")])
+        .expect("the new CRL's line");
+    let removed_at = position(
+        &output,
+        CHANGED,
+        &[("hardware_id", REVOKED_GATEWAY), ("action", "removed")],
+    )
+    .expect("the removal's line");
+    assert!(
+        revoked_at < crl_at && crl_at < removed_at,
+        "the steps' order: revoked {revoked_at}, CRL {crl_at}, removed {removed_at}"
+    );
+    let (status, bundle) = second.get(CRL_PATH).await;
+    assert_eq!(status, 200);
+    assert!(crl_lists(&bundle, &registration_r.serial));
+    assert!(!clients(&broker.dynsec()).contains_key(REVOKED_GATEWAY));
+    evidence(format!(
+        "second replica's stdout: `revoked a gateway's certificates` line {revoked_at}, `issued a \
+         new CRL` cause=revocation line {crl_at}, `{CHANGED}` action=removed line {removed_at}; \
+         the first replica changed nothing; one whole comparison each; {CRL_PATH} lists serial {} \
+         when the answer arrives",
+        registration_r.serial
+    ));
+
+    // Acceptance 2: before the broker loads the new CRL, the handshake passes, with nothing
+    // allowed; after it, the handshake fails.
+    let mut early = Gateway::connect(gateway_address, &config_r, REVOKED_GATEWAY);
+    let early_code = early.publish(&topic_r);
+    assert_eq!(early_code, NOT_AUTHORIZED, "before the new CRL");
+    drop(early);
+    let trust = migrate::mqtt_trust::validate(&chain, &bundle).expect("the sidecar's check");
+    broker.push(&format!("{TRUST_DIR}/crl.pem"), trust.crl_pem.as_bytes());
+    broker.reload().await;
+    let refused = Gateway::try_connect(gateway_address, &config_r, REVOKED_GATEWAY)
+        .err()
+        .expect("the revoked certificate after the reload");
+    assert!(refused.contains("CertificateRevoked"), "{refused}");
+    let mut probe = Gateway::connect(gateway_address, &config_p, PROBE);
+    let probe_code = probe.publish(&topic_p);
+    assert!(
+        accepted(probe_code),
+        "{PROBE} after the reload: {probe_code:#04x}"
+    );
+    drop(probe);
+    evidence(format!(
+        "{REVOKED_GATEWAY} before the reload: CONNACK 0x00, PUBACK {early_code:#04x}; after the \
+         CRL from {CRL_PATH} passed migrate::mqtt_trust::validate and the broker's SIGHUP \
+         reload: {refused}; {PROBE} still publishes ({probe_code:#04x})"
+    ));
+
+    // Acceptance 3: a new certificate (renewal) brings the client back.
+    let renewed = wait_for("the renewal", || async {
+        renew(&second, &key_r, REVOKED_GATEWAY).await
+    })
+    .await;
+    wait_for("the renewed gateway's broker client", || async {
+        (changes(&second, REVOKED_GATEWAY) == ["removed", "added"]).then_some(())
+    })
+    .await;
+    let mut gateway = Gateway::connect(
+        gateway_address,
+        &config(&key_r, &renewed.certificate_chain),
+        REVOKED_GATEWAY,
+    );
+    let published = gateway.publish(&topic_r);
+    assert!(accepted(published), "after the renewal: {published:#04x}");
+    drop(gateway);
+    evidence(format!(
+        "{REVOKED_GATEWAY} renewed (serial {}): `{CHANGED}` action=added on the second replica, \
+         the new certificate connects and publishes ({published:#04x})",
+        renewed.serial
+    ));
+
+    // A keyCompromise revocation ends the gateway's renewals: its registered key is not trusted.
+    let mut connected = Gateway::connect(
+        gateway_address,
+        &config(&key_r, &renewed.certificate_chain),
+        REVOKED_GATEWAY,
+    );
+    let reply = second
+        .post_json(
+            &path,
+            Some(&second.admin_token()),
+            &json!({ "reason": "key_compromise" }),
+        )
+        .await;
+    assert_eq!(
+        reply.status, 200,
+        "revoke for keyCompromise: {}",
+        reply.body
+    );
+    assert_eq!(reply.json()["revoked"][0]["serial"], renewed.serial);
+    let how = tokio::task::spawn_blocking(move || connected.wait_closed())
+        .await
+        .expect("the connection watcher");
+    let certificates = gateway_certificates(&product, REVOKED_GATEWAY).await;
+    let refused = wait_for("the renewal's answer", || async {
+        renewal_answer(&second, &key_r, REVOKED_GATEWAY).await
+    })
+    .await;
+    assert_eq!(refused.status, 403, "{}", refused.body);
+    assert_eq!(
+        refused.json()["message_key"],
+        "certificate_renewal.key_compromised"
+    );
+    assert_eq!(
+        gateway_certificates(&product, REVOKED_GATEWAY).await,
+        certificates,
+        "a certificate was signed"
+    );
+    assert_eq!(
+        changes(&second, REVOKED_GATEWAY),
+        ["removed", "added", "removed"]
+    );
+    assert!(!clients(&broker.dynsec()).contains_key(REVOKED_GATEWAY));
+    evidence(format!(
+        "{REVOKED_GATEWAY} revoked again for key_compromise: disconnected ({how}); the renewal \
+         with its registered key: {} {}; {certificates} certificates in the ledger before and \
+         after, no broker client",
+        refused.status, refused.body
+    ));
+
+    // A keyCompromise revocation that commits while a renewal is past its read still ends it:
+    // the renewal waits for the gateway's lock (held here, as a revocation holds it), then reads
+    // again in its signing transaction.
+    let mut holder = product.superuser().await;
+    let mut held = holder.begin().await.expect("a transaction");
+    sqlx::query(LOCK_GATEWAY_CERTIFICATES)
+        .bind(PROBE)
+        .execute(&mut *held)
+        .await
+        .expect("take the probe's lock");
+    let before = gateway_certificates(&product, PROBE).await;
+    let revoke_while_waiting = async {
+        wait_for("the renewal waiting for the probe's lock", || async {
+            let mut watcher = product.superuser().await;
+            let waiting: i64 = sqlx::query_scalar(
+                "SELECT count(*) FROM pg_locks
+                 WHERE locktype = 'advisory' AND classid = 1735881334 AND NOT granted",
+            )
+            .fetch_one(&mut watcher)
+            .await
+            .expect("read the locks");
+            (waiting > 0).then_some(())
+        })
+        .await;
+        sqlx::query(
+            "UPDATE certs.issued_certificates SET revoked_at = now(), revocation_reason = 1
+             WHERE profile = 'gateway' AND subject = $1 AND revoked_at IS NULL",
+        )
+        .bind(PROBE)
+        .execute(&mut *held)
+        .await
+        .expect("revoke the probe for keyCompromise");
+        held.commit().await.expect("commit the revocation");
+    };
+    let (answer, ()) = tokio::join!(renewal_answer(&second, &key_p, PROBE), revoke_while_waiting);
+    let answer = answer.expect("an answer, not 503 or 429");
+    assert_eq!(answer.status, 403, "{}", answer.body);
+    assert_eq!(
+        answer.json()["message_key"],
+        "certificate_renewal.key_compromised"
+    );
+    assert_eq!(gateway_certificates(&product, PROBE).await, before);
+    evidence(format!(
+        "{PROBE}: a renewal that passed its read waited for the gateway's lock; a keyCompromise \
+         revocation committed meanwhile; the renewal answered {} {}; {before} certificates before \
+         and after",
+        answer.status, answer.body
     ));
 }
 

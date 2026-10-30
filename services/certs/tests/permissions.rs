@@ -40,6 +40,7 @@ fn suite(issuer: &TestIssuer) -> Suite<'_> {
             "POST /api/certs/v1/workstation-certificates/{serial}/revoke",
         ))
         .operation(platform("POST /api/certs/v1/gateway-registrations"))
+        .operation(platform("POST /api/certs/v1/gateways/{hardware_id}/revoke"))
 }
 
 /// The counts of [`WRITTEN`], read as the superuser.

@@ -1,8 +1,10 @@
 //! The certs service's client API (`services/certs`, Laysi/trustiot-v2#534): production
 //! workstation certificates, which only platform administrators issue and revoke, through the
 //! ingress with a session cookie (`/api/certs/v1/...`). The service's README ("工作站憑證")
-//! describes the profile and the steps. Also the MQTT broker's server certificate
-//! ([`BrokerCertificate`], Laysi/trustiot-v2#557), on an internal port only the broker reaches.
+//! describes the profile and the steps. Platform administrators also revoke a gateway's
+//! certificates ([`RevokeGateway`], Laysi/trustiot-v2#636; README, "閘道器憑證的撤銷"). Also the
+//! MQTT broker's server certificate ([`BrokerCertificate`], Laysi/trustiot-v2#557), on an
+//! internal port only the broker reaches.
 //!
 //! The requests refuse unknown fields: a client that sends a subject, an extension or a
 //! validity of its own learns at once that the CA decides them. The response may gain optional
@@ -43,8 +45,8 @@ pub struct RevokeWorkstationCertificate {
     pub reason: Option<RevocationReason>,
 }
 
-/// A reason a workstation certificate can be revoked for: the RFC 5280 CRLReason codes that
-/// apply to an end entity, without `certificateHold` (a revocation here is final).
+/// A reason a workstation or gateway certificate can be revoked for: the RFC 5280 CRLReason codes
+/// that apply to an end entity, without `certificateHold` (a revocation here is final).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum RevocationReason {
@@ -56,7 +58,7 @@ pub enum RevocationReason {
     AffiliationChanged,
     /// superseded (4): a new certificate replaces it, for example a renewal.
     Superseded,
-    /// cessationOfOperation (5): the workstation is retired.
+    /// cessationOfOperation (5): the workstation or gateway is retired.
     CessationOfOperation,
     /// privilegeWithdrawn (9).
     PrivilegeWithdrawn,
@@ -138,6 +140,49 @@ pub struct WorkstationCertificate {
     /// When it was revoked; absent while it is not.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub revoked_at: Option<DateTime<Utc>>,
+    /// Why it was revoked, when a reason was given.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub revocation_reason: Option<RevocationReason>,
+}
+
+/// The body of `POST /api/certs/v1/gateways/{hardware_id}/revoke` (Laysi/trustiot-v2#636): revokes
+/// every certificate of the gateway that is neither revoked nor expired. Unknown fields are
+/// refused.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct RevokeGateway {
+    /// Why they are revoked, the same for each. Absent leaves the reason out of the CRL, as RFC
+    /// 5280 recommends over `unspecified`. `key_compromise` also ends the gateway's renewals
+    /// for good: its registered key is not trusted any more.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<RevocationReason>,
+}
+
+/// What `POST /api/certs/v1/gateways/{hardware_id}/revoke` revoked.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct RevokedGateway {
+    /// The gateway's hardware ID.
+    pub hardware_id: String,
+    /// The certificates revoked by this request, by serial number; at least one. Certificates
+    /// revoked before, or expired, are not in it.
+    pub revoked: Vec<RevokedGatewayCertificate>,
+}
+
+/// A gateway certificate this request revoked, as the ledger now records it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct RevokedGatewayCertificate {
+    /// The serial number, lower-case hex.
+    #[schema(pattern = "^[0-9a-f]{2,40}$")]
+    pub serial: String,
+    /// The issuing CA that signed it: the SHA-256 of its public key, 64 lower-case hex digits.
+    #[schema(pattern = "^[0-9a-f]{64}$")]
+    pub ca_key_id: String,
+    /// When it became valid.
+    pub not_before: DateTime<Utc>,
+    /// When it would have expired; its CA's CRLs list it until then.
+    pub not_after: DateTime<Utc>,
+    /// When it was revoked.
+    pub revoked_at: DateTime<Utc>,
     /// Why it was revoked, when a reason was given.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub revocation_reason: Option<RevocationReason>,
