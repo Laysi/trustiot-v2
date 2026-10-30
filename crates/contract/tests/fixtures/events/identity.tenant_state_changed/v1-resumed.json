@@ -1,0 +1,17 @@
+{
+  "id": "01928f6e-7a3c-7d4e-8f00-000000000502",
+  "type": "identity.tenant_state_changed",
+  "version": 1,
+  "tenant_id": "01928f6e-7a3c-7d4e-8f00-00000000000d",
+  "occurred_at": "2026-10-30T09:00:00.000Z",
+  "producer": "identity",
+  "payload": {
+    "state": "active",
+    "reason": null,
+    "state_version": 3
+  },
+  "actor": {
+    "kind": "user",
+    "user_id": "01928f6e-7a3c-7d4e-8f00-0000000000d1"
+  }
+}

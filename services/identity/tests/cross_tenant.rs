@@ -200,6 +200,22 @@ async fn tenants_are_isolated() {
              transaction's tenant; the probes above attack those grants too)",
         )
         .exempt_endpoint(
+            "GET /api/identity/v1/platform/tenants/{tenant_id}/state",
+            "platform administrators' own requests only (A2, Laysi/trustiot-v2#776): it reads the \
+             state of the tenant the path names, by design; every tenant user, the tenant's own \
+             administrator and another tenant's included, and every exchanged token get 403 \
+             before anything is read (tests/tenant_state.rs covers it)",
+        )
+        .exempt_endpoint(
+            "PUT /api/identity/v1/platform/tenants/{tenant_id}/state",
+            "platform administrators' own requests only (A2, Laysi/trustiot-v2#776): it suspends \
+             or resumes the tenant the path names, by design; every tenant user, the tenant's own \
+             administrator and another tenant's included, and every exchanged token get 403 \
+             before anything is read, and nothing of either tenant changes (tests/tenant_state.rs \
+             covers it, with the service role's new UPDATE grant on the tenant's state columns \
+             kept to the transaction's tenant; the probes above attack that grant too)",
+        )
+        .exempt_endpoint(
             "POST /api/identity/v1/tenants",
             "platform administrators only, and it creates a new tenant whose ID the service makes: \
              it takes no tenant from the request and serves no existing tenant's data \

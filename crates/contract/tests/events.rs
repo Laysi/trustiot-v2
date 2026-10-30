@@ -23,8 +23,8 @@ use contract::events::certs::{
 };
 use contract::events::identity::{
     AI_MODEL_ROLE_AGGREGATE, AiModelRoleAction, AiModelRoleChanged, MEMBERSHIP_AGGREGATE,
-    MemberRoleChanged, PlatformAdminGrant, PlatformAdminGranted, TenantCreated,
-    membership_aggregate_id,
+    MemberRoleChanged, PlatformAdminGrant, PlatformAdminGranted, SuspensionReason,
+    TENANT_AGGREGATE, TenantCreated, TenantState, TenantStateChanged, membership_aggregate_id,
 };
 use contract::{
     DecodeError, DeviceId, DeviceModelId, EncodeError, Event, EventEnvelope, GatewayBindingId,
@@ -180,6 +180,93 @@ fn tenant_created_decodes_every_version() {
     assert_eq!(envelope.producer, ServiceName::Identity);
     assert_eq!(envelope.payload, json!({}));
     assert_eq!(envelope.tenant_id, Some(tenant));
+}
+
+/// `identity.tenant_state_changed` (Laysi/trustiot-v2#776): a snapshot of the state after the
+/// change, its reason and its version, the tenant the envelope's. `v1-resumed` is a resumption
+/// (no reason); `v1-unknown` a state and reason a later build may write: both decode as
+/// `Unrecognized`, which never encodes.
+#[test]
+fn tenant_state_changed_decodes_every_version() {
+    let decoded = decode_fixtures::<TenantStateChanged>();
+    let suspended = TenantStateChanged {
+        state: TenantState::Suspended,
+        reason: Some(SuspensionReason::NonPayment),
+        state_version: 2,
+    };
+    // Sorted by path: `-` sorts before `.`.
+    assert_eq!(
+        decoded,
+        [
+            (
+                "v1-resumed".to_owned(),
+                TenantStateChanged {
+                    state: TenantState::Active,
+                    reason: None,
+                    state_version: 3,
+                }
+            ),
+            (
+                "v1-unknown".to_owned(),
+                TenantStateChanged {
+                    state: TenantState::Unrecognized,
+                    reason: Some(SuspensionReason::Unrecognized),
+                    state_version: 4,
+                }
+            ),
+            ("v1".to_owned(), suspended.clone()),
+        ]
+    );
+
+    let tenant: TenantId = "01928f6e-7a3c-7d4e-8f00-00000000000d"
+        .parse()
+        .expect("tenant id");
+    let envelope = EventEnvelope::new(&suspended, Some(tenant)).expect("encode");
+    assert_eq!(envelope.producer, ServiceName::Identity);
+    assert_eq!(envelope.tenant_id, Some(tenant));
+    assert_eq!(
+        envelope.payload,
+        json!({"state": "suspended", "reason": "non_payment", "state_version": 2})
+    );
+    // Every known state and reason keeps its wire name.
+    for (state, name) in [
+        (TenantState::Active, "active"),
+        (TenantState::Suspended, "suspended"),
+        (TenantState::Deleted, "deleted"),
+    ] {
+        assert_eq!(serde_json::to_value(state).expect("encode"), json!(name));
+    }
+    for (reason, name) in [
+        (SuspensionReason::SecurityOrAbuse, "security_or_abuse"),
+        (SuspensionReason::NonPayment, "non_payment"),
+        (SuspensionReason::ContractTerminated, "contract_terminated"),
+    ] {
+        assert_eq!(serde_json::to_value(reason).expect("encode"), json!(name));
+    }
+    // A resumption writes the reason as null, and a payload without it still decodes.
+    let resumed = EventEnvelope::new(&decoded[0].1, Some(tenant)).expect("encode");
+    assert_eq!(resumed.payload["reason"], Value::Null);
+    let without: TenantStateChanged =
+        serde_json::from_value(json!({"state": "active", "state_version": 5}))
+            .expect("decode without reason");
+    assert_eq!(without.reason, None);
+    // Unrecognized is decode only, for the state and for the reason.
+    for unknown in [
+        TenantStateChanged {
+            state: TenantState::Unrecognized,
+            ..suspended.clone()
+        },
+        TenantStateChanged {
+            reason: Some(SuspensionReason::Unrecognized),
+            ..suspended.clone()
+        },
+    ] {
+        assert!(
+            EventEnvelope::new(&unknown, Some(tenant)).is_err(),
+            "Unrecognized is decode only: {unknown:?}"
+        );
+    }
+    assert_eq!(TENANT_AGGREGATE, "tenant");
 }
 
 /// `identity.member_role_changed` (Laysi/trustiot-v2#583): the member by ID only (no email),

@@ -1,27 +1,28 @@
-//! Notification mode: the event only says "this aggregate changed"; the consumer reads the
-//! producer's current state and stores it, keeping the newest version (rebuild checklist B1).
+//! Notification mode: the event carries a snapshot of the aggregate's state after the change
+//! and the snapshot's version; the consumer keeps the snapshot with the newest version (rebuild
+//! checklist B1; the 2026-10-30 decision of Laysi/trustiot-v2#107, README "通知模式").
 //!
-//! A consumer may read the state for an old event after a newer reading was already stored: a
-//! late delivery, a replay, or two replicas racing. [`store_if_newer`] makes that harmless: the
-//! consumer stores a reading only if its version is newer than the stored one.
+//! A consumer may see an old snapshot after a newer one was already stored: a late delivery, a
+//! replay, or two replicas racing. [`store_if_newer`] makes that harmless: the consumer stores a
+//! snapshot only if its version is newer than the stored one. Replaying the producer's log from
+//! the start rebuilds every aggregate's state, so a handler never needs to call the producer.
 //!
-//! The version is the aggregate's last event sequence number, which the producer reads with
-//! [`crate::aggregate_version`] in the same snapshot as the state it returns (one statement, or
-//! one `REPEATABLE READ` transaction): a version read in a later snapshot than the state could
-//! label old state as new.
+//! The producer chooses the version: a version column of its own data that goes up with every
+//! change (the identity service's `tenants.state_version`, Laysi/trustiot-v2#776), or the
+//! aggregate's event sequence number. A consumer that reads the producer's current state
+//! instead must read the version in the same snapshot as the state ([`crate::aggregate_version`]
+//! in one statement, or one `REPEATABLE READ` transaction): a version read in a later snapshot
+//! than the state could label old state as new.
 //!
 //! ```text
 //! async fn handle(&self, tx: &mut Transaction<'static, Postgres>, delivery: &Delivery)
 //!     -> Result<(), HandlerError>
 //! {
-//!     // Internal API call to the producer: state plus version, from one snapshot.
-//!     let Some(current) = self.client.tenant(delivery.aggregate.id()).await? else {
-//!         return Ok(());
-//!     };
-//!     if outbox::notify::store_if_newer(tx, "tenant_copy", &delivery.aggregate, current.version)
+//!     let event: TenantStateChanged = delivery.envelope.decode()?;
+//!     if outbox::notify::store_if_newer(tx, "tenant_state", &delivery.aggregate, event.state_version)
 //!         .await?
 //!     {
-//!         upsert_tenant_copy(tx, &current).await?;
+//!         upsert_tenant_state(tx, &event).await?;
 //!     }
 //!     Ok(())
 //! }
