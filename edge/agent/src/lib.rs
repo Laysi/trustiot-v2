@@ -28,13 +28,17 @@
 //!   (one polling loop per device, unchanged devices untouched), saves it on the data partition
 //!   so the gateway polls with it after a restart without the cloud, and reports the outcome
 //!   (rebuild checklist E1).
+//! - [`live`]: live values for open device charts (rebuild checklist I3): the leases the cloud
+//!   opens on `down/live-control`, faster polling of the leased devices, and each of their
+//!   samples published on `up/live` at once, outside the buffer and without acknowledgement.
 //! - [`renewal`]: renews the client certificate over HTTPS with a TPM-signed challenge, on
 //!   schedule and when the broker refuses the certificate, and swaps it in without losing what
 //!   the connection already accepted (rebuild checklist D2).
 //!
 //! The service wires them together: the polls of the devices [`desired`] applies stamp their
 //! readings with the [`clock::GatewayClock`] that [`upload`] compares with the cloud's time
-//! and hand them to [`upload::Readings`] (`README.md` lists what is where).
+//! and hand them to [`live::LiveSink`], which publishes those of leased devices on `up/live` and
+//! passes every poll on to [`upload::Readings`] (`README.md` lists what is where).
 
 pub mod backoff;
 pub mod buffer;
@@ -46,6 +50,7 @@ pub mod dispatch;
 pub mod heartbeat;
 pub mod identity;
 pub mod link;
+pub mod live;
 pub mod liveness;
 pub mod modbus;
 mod mqtt;

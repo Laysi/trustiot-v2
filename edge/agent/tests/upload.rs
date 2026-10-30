@@ -159,6 +159,8 @@ fn start_agent(settings: Settings, connector: impl Connector, clock: GatewayCloc
             // The scripted cloud publishes no configuration.
             config: desired::inbox().0,
             telemetry_ack: handles.acks.clone(),
+            // Nor a live lease.
+            live: agent::live::leases().0,
         },
     ));
     Agent {

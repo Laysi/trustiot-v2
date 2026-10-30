@@ -21,7 +21,8 @@
 //! the Modbus polling of [`agent::polling`] with its own per-device watchdog, one task per
 //! device of the configuration [`agent::desired`] applies, and the telemetry pipeline of
 //! [`agent::upload`] that takes the polls' readings, with its offline buffer, whose file I/O
-//! runs on tokio's blocking threads) runs on a two-thread runtime.
+//! runs on tokio's blocking threads, and the live values of [`agent::live`], which publishes
+//! the samples of leased devices on `up/live`) runs on a two-thread runtime.
 //!
 //! The systemd watchdog is fed only while the connection task makes progress and both runtimes
 //! run: the connection task declares every wait with its deadline ([`agent::liveness`]), the
@@ -49,6 +50,7 @@ use agent::dispatch::{self, Handlers};
 use agent::heartbeat::{self, HeartbeatSettings};
 use agent::identity::utc;
 use agent::link::{self, Incoming, Link, LinkState};
+use agent::live;
 use agent::liveness::{self, Progress};
 use agent::modbus::endpoint::Endpoints;
 use agent::polling;
@@ -387,23 +389,34 @@ fn run(setup: Setup, state_directory: PathBuf) -> ExitCode {
     };
     let (config_inbox, deliveries) = desired::inbox();
     let poll_settings = polling::Settings::default();
-    // Every poll's readings go into the pipeline's window: `Readings` is the fleet's sink.
+    // The live leases (down/live-control) make the fleet poll leased devices faster and send
+    // their samples to up/live at once; every regular poll's readings go on into the pipeline's
+    // window (`Readings`).
+    let (leases, watcher) = live::leases();
+    let (sink, live_publisher) = live::publisher(
+        link.clone(),
+        watcher.clone(),
+        Arc::new(handles.readings.clone()),
+    );
     let fleet = Fleet::new(
         Endpoints::new(poll_settings.connect_timeout),
         poll_settings,
         Arc::new(clock.clone()),
-        Arc::new(handles.readings.clone()),
-    );
+        Arc::new(sink),
+    )
+    .with_live(watcher);
     let services = Services {
         incoming,
         handlers: Handlers {
             config: config_inbox,
             telemetry_ack: handles.acks.clone(),
+            live: leases,
         },
         applier: Applier::new(fleet, Store::new(state_directory)),
         deliveries,
         pipeline,
         pipeline_stop,
+        live_publisher,
     };
     let heartbeat_settings = HeartbeatSettings {
         interval: setup.heartbeat_interval,
@@ -466,8 +479,8 @@ fn run(setup: Setup, state_directory: PathBuf) -> ExitCode {
 
 /// What `serve` runs besides the heartbeat and the watchdog: the link's incoming messages and
 /// their handlers, the configuration side (the applier, which drives the polling, and its
-/// deliveries), and the telemetry pipeline (collector, offline buffer, uploader) with the token
-/// that stops it.
+/// deliveries), the telemetry pipeline (collector, offline buffer, uploader) with the token
+/// that stops it, and the publisher of the live values.
 struct Services {
     incoming: Incoming,
     handlers: Handlers,
@@ -475,6 +488,7 @@ struct Services {
     deliveries: Deliveries,
     pipeline: upload::Pipeline,
     pipeline_stop: CancellationToken,
+    live_publisher: live::Publisher,
 }
 
 /// What ended the agent's run.
@@ -524,9 +538,13 @@ async fn serve(
         deliveries,
         pipeline,
         pipeline_stop,
+        live_publisher,
     } = services;
     // Every message the cloud sends is taken at once and handed to its handler.
     tokio::spawn(dispatch::run(incoming, handlers));
+    // Publishes the live values the polls of leased devices hand over; it ends with the fleet's
+    // sink, and while the link stops it drops what it gets.
+    tokio::spawn(live_publisher.run());
     // The pipeline opens the disk buffer in its own task, the file I/O on a blocking thread, so
     // a slow or failing data partition never delays READY=1 or the polling.
     let mut pipeline = tokio::spawn(pipeline.run());
@@ -725,23 +743,32 @@ mod tests {
         )
         .unwrap();
         let (config_inbox, deliveries) = desired::inbox();
+        let (leases, watcher) = live::leases();
+        let (sink, live_publisher) = live::publisher(
+            link.clone(),
+            watcher.clone(),
+            Arc::new(handles.readings.clone()),
+        );
         let fleet = Fleet::new(
             endpoints,
             polling::Settings::default(),
             Arc::new(clock.clone()),
-            Arc::new(handles.readings.clone()),
-        );
+            Arc::new(sink),
+        )
+        .with_live(watcher);
         Wired {
             services: Services {
                 incoming,
                 handlers: Handlers {
                     config: config_inbox,
                     telemetry_ack: handles.acks.clone(),
+                    live: leases,
                 },
                 applier: Applier::new(fleet, Store::new(state)),
                 deliveries,
                 pipeline,
                 pipeline_stop,
+                live_publisher,
             },
             heartbeat_settings: HeartbeatSettings {
                 interval: Duration::from_secs(60),

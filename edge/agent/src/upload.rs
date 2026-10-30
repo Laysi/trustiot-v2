@@ -338,10 +338,12 @@ impl Readings {
     }
 }
 
-/// The service's [`Sink`]: every poll's readings go into the open window, as they were stamped
-/// (by the [`GatewayClock`] the pipeline compares with the cloud's time). The rest of a poll
-/// (its failures, the polls it missed) is for the device statistics (Laysi/trustiot-v2#117);
-/// until then it is logged at debug level.
+/// The service's [`Sink`]: every regular poll's readings go into the open window, as they were
+/// stamped (by the [`GatewayClock`] the pipeline compares with the cloud's time). An extra poll,
+/// made only for live values ([`Polled::regular`], Laysi/trustiot-v2#121), is not telemetry:
+/// its readings went to `up/live` and stop here. The rest of a poll (its failures, the polls it
+/// missed) is for the device statistics (Laysi/trustiot-v2#117); until then it is logged at
+/// debug level.
 impl Sink for Readings {
     fn polled(&self, device: &DeviceId, polled: Polled) {
         tracing::debug!(
@@ -349,9 +351,12 @@ impl Sink for Readings {
             readings = polled.poll.readings.len(),
             failed = polled.poll.failed.len(),
             missed = polled.missed,
+            regular = polled.regular,
             "polled"
         );
-        self.push(polled.poll.readings);
+        if polled.regular {
+            self.push(polled.poll.readings);
+        }
     }
 
     fn removed(&self, device: &DeviceId) {

@@ -1,6 +1,6 @@
 # agent
 
-閘道器 agent（[決策 10](../../docs/architecture/decisions.md)）：在現場閘道器上讀取設備、把資料送上雲端的程式。目前有執行檔 `trustiot-agent`、systemd unit、到 broker 的連線（443 的 WebSocket 內走 mTLS 與 MQTT 5）、TPM 裡的身分金鑰（`tpm` 模組，[決策 12](../../docs/architecture/decisions.md)）、在線狀態與基本心跳；以及 Modbus 讀取（`modbus` 模組，[rebuild-checklist](../../docs/requirements/rebuild-checklist.md) F1、F2、F5）：Modbus TCP 與 RS485 轉換器的 RTU over TCP，同一個端點的設備共用一條連線；以及每台設備的輪詢排程（`polling` 模組，F4）：固定節拍、逾時、重連退避、TCP keepalive 與每台設備的 watchdog（關掉不再回答的設備的連線，與重啟整個服務的 systemd watchdog 是兩回事）；以及設定下發的閘道器端（`desired` 模組，E1）：接收雲端的 desired 設定、驗證後原子套用（每台設備一個輪詢工作）、存到資料分割區、回報結果；以及遙測的上傳與離線緩衝（`upload`、`buffer`、`clock`、`dispatch` 模組，G1）：組批、記憶體與磁碟的緩衝、等雲端的端對端確認、時鐘是否已校正。執行檔把它們接在一起：套用的設定決定輪詢哪些設備，每次輪詢的讀值進入上傳的收集視窗，形成批次送上雲端，等雲端確認才從緩衝拿掉（見「遙測上傳與離線緩衝」）。
+閘道器 agent（[決策 10](../../docs/architecture/decisions.md)）：在現場閘道器上讀取設備、把資料送上雲端的程式。目前有執行檔 `trustiot-agent`、systemd unit、到 broker 的連線（443 的 WebSocket 內走 mTLS 與 MQTT 5）、TPM 裡的身分金鑰（`tpm` 模組，[決策 12](../../docs/architecture/decisions.md)）、在線狀態與基本心跳；以及 Modbus 讀取（`modbus` 模組，[rebuild-checklist](../../docs/requirements/rebuild-checklist.md) F1、F2、F5）：Modbus TCP 與 RS485 轉換器的 RTU over TCP，同一個端點的設備共用一條連線；以及每台設備的輪詢排程（`polling` 模組，F4）：固定節拍、逾時、重連退避、TCP keepalive 與每台設備的 watchdog（關掉不再回答的設備的連線，與重啟整個服務的 systemd watchdog 是兩回事）；以及設定下發的閘道器端（`desired` 模組，E1）：接收雲端的 desired 設定、驗證後原子套用（每台設備一個輪詢工作）、存到資料分割區、回報結果；以及遙測的上傳與離線緩衝（`upload`、`buffer`、`clock`、`dispatch` 模組，G1）：組批、記憶體與磁碟的緩衝、等雲端的端對端確認、時鐘是否已校正；以及即時值的閘道器端（`live` 模組，I3）：雲端開的租約期間，租約涵蓋的設備以租約的間隔取樣，每次取樣立即送到 `up/live`，不進緩衝、不等確認。執行檔把它們接在一起：套用的設定決定輪詢哪些設備，每次輪詢的讀值進入上傳的收集視窗，形成批次送上雲端，等雲端確認才從緩衝拿掉（見「遙測上傳與離線緩衝」）；租約涵蓋的設備的讀值同時送到 `up/live`（見「即時值」）。
 
 | 在哪裡 | 內容 | issue |
 | --- | --- | --- |
@@ -35,7 +35,8 @@
 | `src/upload.rs` | 收集視窗與逐系列組批、串流與序號、一次一批的上傳與 `TelemetryAck` 的處理；給輪詢的 `Readings`（也是 `Fleet` 的 `Sink`）、給分派的 `Acks`、給心跳的 `Stats` | Laysi/trustiot-v2#90 |
 | `src/buffer.rs`、`src/buffer/disk.rs` | 離線緩衝：記憶體與磁碟的批次排成一個 FIFO、上限與丟棄；磁碟上的 segment 檔與啟動時的復原 | Laysi/trustiot-v2#90 |
 | `src/clock.rs` | `GatewayClock`：讀值的時間戳與時鐘是否已校正（systemd-timesyncd、雲端確認的時間）；`AgeClock`：批次的年齡 | Laysi/trustiot-v2#90 |
-| `src/dispatch.rs` | link 的訂閱與收到的 `down` 訊息的分派：`config` 給設定套用、`telemetry-ack` 給上傳 | Laysi/trustiot-v2#90 |
+| `src/dispatch.rs` | link 的訂閱與收到的 `down` 訊息的分派：`config` 給設定套用、`telemetry-ack` 給上傳、`live-control` 給即時值的租約 | Laysi/trustiot-v2#90、Laysi/trustiot-v2#121 |
+| `src/live.rs` | 即時值：`Leases`（租約）、`Watcher` 與 `DeviceLive`（輪詢看到的租約）、`LiveSink`（租約涵蓋的輪詢交給 `Publisher`，每次輪詢照常交給上傳）、`Publisher`（發布到 `up/live`）；見「即時值」 | Laysi/trustiot-v2#121 |
 | 還沒有 | 讀取統計（`DeviceStats`）與心跳的其餘指標（CPU、磁碟、溫度） | Laysi/trustiot-v2#117 |
 
 依賴都要能建置成 aarch64（`aarch64-unknown-linux-gnu`，glibc，不是 musl：[記憶體測試](../../docs/feasibility/2026-10-13-gateway-memory.md)），CI 對 `edge/` 下每個成員做這項建置。唯一編譯 C 的相依是 `ring`（rustls 的加密實作），交叉建置時要有目標的 C 編譯器，用 `.prototools` 鎖定的 zig 與 cargo-zigbuild：
@@ -115,7 +116,7 @@ MQTT 5 的編解碼由本 crate 自己寫，只做用到的部分（2026-10-21�
 - **CONNECT**：client ID 是憑證的 CN（= 閘道器 ID = Mosquitto 的 username），不送帳號密碼；keepalive 60 秒；will 見下方「在線狀態」；Receive Maximum 16、Maximum Packet Size `MIN_MAX_PACKET_BYTES`（1 MiB + 8 KiB）。CONNACK 的 Receive Maximum、Maximum Packet Size 照辦，Server Keep Alive 不是 0 時照辦；是 0 時（broker 不檢查連線）agent 仍用自己的 60 秒，否則連線無聲斷掉時不會發現；reason code ≥ 0x80 是拒絕（例如 0x87），記錄後退避重連。
 - **Session**：每次連線都是 Clean Start 1、Session Expiry 0，broker 不替離線的閘道器保留 session 與排隊的訊息。理由：MQTT 5 規定接續 session 時用戶端要以原本的 packet ID 重送沒有 PUBACK 的 PUBLISH，那需要跨連線保留訊息內容，屬於離線緩衝（Laysi/trustiot-v2#90）；而且每次連線本來就有新的在線 session。影響：設定以 retained 訊息在訂閱時送到；遙測確認遺失時由 Laysi/trustiot-v2#90 的重送補上；閘道器離線時雲端送的 `log-request`、`live-control` 會遺失，雲端要在閘道器重新上線（`online`）後再送。
 - **PUBLISH**：`Link::publish(channel, payload)` 只接受 `up` 的頻道，`status` 保留給 agent 自己；超過頻道上限或 broker 的 Maximum Packet Size 時直接回錯誤。QoS 與 retain 依 `Channel::delivery()`。`publish` 從不等佇列的位置：該 QoS 的佇列滿了就立刻回 `PublishError::Busy`，什麼都沒排進去；要等位置的呼叫端先以 `Link::reserve(channel).await` 拿 `PublishPermit`（等待時不帶 payload，依要求的先後拿到位置），再 `permit.publish(payload)`。心跳用 `Link::publish_in_session(session, ...)`：只送到該 session 的連線，那條連線結束後就回 `NotConnected`，不會帶著舊的 session 送上下一條連線；遇到 `Busy` 就跳過這一次，下一次照原本的間隔（連續跳過時只有第一次記警告）。QoS 1 等到 PUBACK 才回來：只有 0x00 與 0x10（no matching subscribers）是 `Acknowledged`；PUBACK 允許的其他碼（都 ≥ 0x80，例如 ACL 不允許的 0x87）是 `PublishError::Refused`，呼叫端要當成沒送出（[protocol README](../../crates/protocol/README.md)「傳輸：MQTT 5」）；MQTT 5 不允許出現在 PUBACK 的碼（例如 0x01、0x7F）是協定錯誤（見下方），呼叫端拿到 `ConnectionLost`，絕不算送達。連線在 PUBACK 之前斷掉是 `ConnectionLost`（可能送到也可能沒有），正常停止時也一樣。只有 `Connected` 的連線收 publish：連線中、建立連線的過程（等 CONNACK、`online` 的 PUBACK、SUBACK）與等著重連時，`publish` 與 `reserve` 立刻回 `NotConnected`，停止中與停止後立刻回 `Stopped`，都不排隊，緩衝是 Laysi/trustiot-v2#90 的事。佇列屬於一條連線：連線變成 `Connected` 時建立，連線結束時，還在佇列裡、沒有寫出去的請求（包括等位置的 `reserve` 與拿到但還沒用的 `PublishPermit`）都回 `NotConnected`（link 停止時是 `Stopped`），絕不會在下一條連線送出。
-- **訂閱**：link 只訂閱有人處理的 `down` 頻道，訂閱哪些明列在 `LinkSettings::subscriptions`（`Subscriptions`：只能是 `down` 頻道、不能重複，照給的順序，各以自己的 topic 訂閱，QoS 1）。理由：QoS 1 的訊息一放進 `Incoming` 的佇列就回 PUBACK，broker 從此不會再送；訂閱了卻沒有人取走的頻道，訊息等於確認之後丟掉（例如 retained 的設定）。`main.rs` 訂閱 `dispatch::subscriptions()`：`config`（見「設定下發與套用」）與 `telemetry-ack`（見「遙測上傳與離線緩衝」），在同一個 SUBSCRIBE 裡；`dispatch::run` 一收到就取走，交給它的處理程式（不等任何處理程式，`Incoming` 因此不會卡住）。之後的 issue 寫處理程式時，同一個變更把它的頻道與處理程式加進 `dispatch`：`log-request`（Laysi/trustiot-v2#185）、`live-control`（Laysi/trustiot-v2#121）。沒有訂閱時（`Subscriptions::none()`）連上後不送 SUBSCRIBE（MQTT 5 不准沒有 topic filter 的 SUBSCRIBE，MQTT-3.8.3-2；編碼時也拒絕），`online` 拿到 PUBACK 就回報 `Connected`。有訂閱時，連上後先送 `online`、再送 SUBSCRIBE；`online` 拿到 PUBACK、SUBACK 也以 QoS 1 同意全部的訂閱（兩者先後不拘）之後才回報 `Connected`（`LinkState`、`STATUS=`；心跳與退避歸零的 60 秒都從這時算）。任何一個被拒（reason code ≥ 0x80，例如角色沒有該頻道時的 0x87）就記下 topic 與 reason code、送 DISCONNECT 0x04（broker 發布 will，雲端在 `online` 之後看到 `connection_lost`；見下方「連線結束與 will」），照退避重連（`LinkError::SubscriptionRefused`）：收不到設定或請求的閘道器不算連上。只給 QoS 0（0x00）的訂閱也一樣處理（`LinkError::SubscriptionDowngraded`）：QoS 0 的訊息不受 agent 的 Receive Maximum 管，agent 的佇列滿時 broker 可能直接丟掉。停止中才收到的拒絕不影響正常的停止。收到的訊息經 `Incoming::recv()` 交給應用程式，應用程式要及時取走：一則訊息等超過 5 分鐘（`DELIVERY_LIMIT`）算 agent 卡住，systemd 的 watchdog 會重啟它（見下方「systemd」）；topic 不是自己的 `down` 頻道、是沒有訂閱的頻道（broker 的錯誤：它不該送沒有訂閱的 topic）或超過頻道上限的，丟掉並記錄，仍回 PUBACK；QoS 1 的訊息放進佇列之後才回 PUBACK。
+- **訂閱**：link 只訂閱有人處理的 `down` 頻道，訂閱哪些明列在 `LinkSettings::subscriptions`（`Subscriptions`：只能是 `down` 頻道、不能重複，照給的順序，各以自己的 topic 訂閱，QoS 1）。理由：QoS 1 的訊息一放進 `Incoming` 的佇列就回 PUBACK，broker 從此不會再送；訂閱了卻沒有人取走的頻道，訊息等於確認之後丟掉（例如 retained 的設定）。`main.rs` 訂閱 `dispatch::subscriptions()`：`config`（見「設定下發與套用」）、`telemetry-ack`（見「遙測上傳與離線緩衝」）與 `live-control`（見「即時值」），在同一個 SUBSCRIBE 裡；`dispatch::run` 一收到就取走，交給它的處理程式（不等任何處理程式，`Incoming` 因此不會卡住）。之後的 issue 寫處理程式時，同一個變更把它的頻道與處理程式加進 `dispatch`：`log-request`（Laysi/trustiot-v2#185）。沒有訂閱時（`Subscriptions::none()`）連上後不送 SUBSCRIBE（MQTT 5 不准沒有 topic filter 的 SUBSCRIBE，MQTT-3.8.3-2；編碼時也拒絕），`online` 拿到 PUBACK 就回報 `Connected`。有訂閱時，連上後先送 `online`、再送 SUBSCRIBE；`online` 拿到 PUBACK、SUBACK 也以 QoS 1 同意全部的訂閱（兩者先後不拘）之後才回報 `Connected`（`LinkState`、`STATUS=`；心跳與退避歸零的 60 秒都從這時算）。任何一個被拒（reason code ≥ 0x80，例如角色沒有該頻道時的 0x87）就記下 topic 與 reason code、送 DISCONNECT 0x04（broker 發布 will，雲端在 `online` 之後看到 `connection_lost`；見下方「連線結束與 will」），照退避重連（`LinkError::SubscriptionRefused`）：收不到設定或請求的閘道器不算連上。只給 QoS 0（0x00）的訂閱也一樣處理（`LinkError::SubscriptionDowngraded`）：QoS 0 的訊息不受 agent 的 Receive Maximum 管，agent 的佇列滿時 broker 可能直接丟掉。停止中才收到的拒絕不影響正常的停止。收到的訊息經 `Incoming::recv()` 交給應用程式，應用程式要及時取走：一則訊息等超過 5 分鐘（`DELIVERY_LIMIT`）算 agent 卡住，systemd 的 watchdog 會重啟它（見下方「systemd」）；topic 不是自己的 `down` 頻道、是沒有訂閱的頻道（broker 的錯誤：它不該送沒有訂閱的 topic）或超過頻道上限的，丟掉並記錄，仍回 PUBACK；QoS 1 的訊息放進佇列之後才回 PUBACK。
 - **keepalive**：這一條的 keepalive 都是生效中的值：broker 在 CONNACK 給了非 0 的 Server Keep Alive 時是它，否則是 agent 自己的 60 秒。任一方向 keepalive 時間內沒有封包就送 PINGREQ，keepalive 的一半之內沒收到 PINGRESP 就斷線重連；寫入超過 keepalive 的 1.5 倍（至少 10 秒）也斷線。PUBACK 或 SUBACK 在封包寫完之後超過 keepalive 的兩倍（預設 120 秒）沒來也算連線失敗（從寫完算起：上傳很慢時寫入本身花的時間不算在 broker 回覆的時間裡）：送 DISCONNECT 0x04（broker 發布 will）後重連，等著的呼叫端拿到 `ConnectionLost`；否則只回 PINGRESP 不回 PUBACK 的 broker 會讓 in-flight 一直滿著。收到的訊息等著放進佇列（這時不讀 socket）的期間不判定 PUBACK、SUBACK 與 PINGRESP 的逾時，因為讀不到它們：這期間照樣在 keepalive 到時送一次 PINGREQ（broker 要在 keepalive 內收到封包），恢復讀取之後，這三個期限從恢復的時刻重新起算。
 - **協定錯誤**：broker 送來壞掉或不該出現的封包時，在日誌記下 MQTT 5 對應的 reason code，再送 DISCONNECT 0x04 並關閉（broker 才會發布 will，見下方「連線結束與 will」）：格式錯誤 0x81（例如可變長度整數沒有用最短的編碼、固定標頭的旗標不對、字串不是合法的 UTF-8 或含 U+0000、topic 或 Response Topic 有萬用字元、packet ID 0、CONNACK 沒有屬性長度、欄位填不滿或超出 Remaining Length）、協定錯誤 0x82（例如第二個 CONNACK、clean start 之後或拒絕時 Session Present 為 1、QoS 2、對不上的 SUBACK 或 PUBACK：packet ID 不在等回覆的清單裡，包括重複的 PUBACK；沒有 PINGREQ 的 PINGRESP；該封包不允許的屬性、重複的屬性、超出範圍的屬性值，包括 agent 沒有要求的 Authentication Method、Response Information；AUTH 封包）、topic alias 0x94（沒有宣告支援）、超過 Maximum Packet Size 0x95（看到標頭就拒絕，不先配置）。reason code 不在 MQTT 5 給該封包的集合裡（CONNACK、PUBACK、SUBACK 的每一個、broker 的 DISCONNECT）也是協定錯誤 0x82；成功只認明列的碼：CONNACK 0x00、PUBACK 0x00 與 0x10、SUBACK 0x01（0x00 只給 QoS 0，當成訂閱失敗，見上；0x02 超過要求的 QoS 1，協定錯誤），從不以「小於 0x80」判斷。CONNACK 接受了 QoS 1、retained 的 will，卻宣告 Maximum QoS 0 或 Retain Available 0，也是協定錯誤 0x82（MQTT 5 要求這樣的 broker 拒絕 CONNECT），不送 `online`。MQTT 3.1.1 的 broker 以 3.1.1 的 return code（例如 0x01）拒絕時，錯誤訊息直接說 broker 不支援 MQTT 5。broker 送 DISCONNECT 時記下它的 reason code 與說明後重連。broker 送來的說明（reason string）解碼時就把控制字元（換行、tab、跳脫序列等）換成空白，記錄時最多 200 字，不能偽造或拆開日誌的行。UTF-8 字串裡的控制字元與 non-character 在 MQTT 5 只是「不應」出現，解碼時照常接受（reason string 如上換成空白）；Payload Format Indicator 為 1 時也不檢查 payload 是否為 UTF-8（MQTT 5 讓接收端決定，down 頻道都是 CBOR，由 `protocol` 解碼）。
 - **broker 的 Maximum Packet Size**：MQTT 5 不准用戶端送超過 broker 在 CONNACK 宣告的 Maximum Packet Size 的封包（MQTT-3.2.2-15）。應用程式的訊息超過時 `publish` 回 `PublishError::TooLarge`，連線不受影響；agent 自己需要的封包（`online`／`offline`、SUBSCRIBE、PUBACK、PINGREQ）放不下時不送，以 DISCONNECT 0x04 結束連線（連 DISCONNECT 都放不下時不送，直接關閉；兩種 broker 都會發布 will），照退避重試（`LinkError::PacketTooLarge`）。
@@ -141,7 +142,7 @@ MQTT 5 的編解碼由本 crate 自己寫，只做用到的部分（2026-10-21�
 | 項目 | 上限 |
 | --- | --- |
 | 等 PUBACK 的 QoS 1 訊息 | `inflight_limit`（預設 32，broker 的 Receive Maximum 較小時取它）；只記 packet ID、送出時間與回覆的通道，不留訊息內容 |
-| 等著送出的 publish | 目前連線的 QoS 0 與 QoS 1 各一個佇列，各 8 則（`REQUEST_QUEUE`；佇列隨連線建立與結束，任何時候只有一組），每則不超過頻道上限（QoS 0：心跳 1 MiB、live 64 KiB；QoS 1：256 KiB），另有一則正在寫入連線；佇列滿了 `publish` 回 `Busy`、`reserve` 等位置。QoS 0（心跳、live）不受 in-flight 上限限制，in-flight 滿了照樣送出 |
+| 等著送出的 publish | 目前連線的 QoS 0 與 QoS 1 各一個佇列，各 8 則（`REQUEST_QUEUE`；佇列隨連線建立與結束，任何時候只有一組），每則不超過頻道上限（QoS 0：心跳 1 MiB、live 64 KiB；QoS 1：256 KiB），另有一則正在寫入連線；佇列滿了 `publish` 回 `Busy`、`reserve` 等位置。QoS 0（心跳、live）不受 in-flight 上限限制，in-flight 滿了照樣送出。即時值一次只送一則（`live::Publisher`），在 QoS 0 的佇列裡最多佔一個位置，心跳永遠有位置 |
 | 收到、還沒被取走的訊息 | 佇列 16 則（`INCOMING_QUEUE`，也是送給 broker 的 Receive Maximum）加 1 則等著放進去；這時不再讀 socket，broker 的 Receive Maximum 讓它不再送 |
 | MQTT 讀取緩衝 | 一個封包，最多 `MIN_MAX_PACKET_BYTES`；超過 64 KiB 的封包處理完就縮回 |
 | WebSocket | 讀取緩衝 16 KiB，收到的 message 最多 64 KiB，送出的最多 32 KiB |
@@ -402,7 +403,7 @@ polling::run(&reader, polling::poll_period(&device), &mut connection, &clock, &s
 - **開機**：agent 一啟動就讀存下的設定，再驗證一次（壞掉的檔案與壞掉的投遞一樣被拒），通過就馬上開始輪詢，不等連線：沒有網路的現場也以上一版設定採集。連上之後收到雲端的版本，依上面的規則收斂（較新就套用、相同就回報、較舊就回報 `stale_version` 請雲端以更高的版本重發）。讀不到或無效時記錄錯誤，等雲端的設定。
 - **回報**：每個答覆是 `up/config-report` 的 `ConfigReport`，以 `Link::reserve` 等佇列位置再送出（QoS 1）。沒連線、或 PUBACK 之前連線斷了，就在下次 `Connected` 時再送；期間有更新的答覆就只送新的。broker 拒絕（例如 0x87）時記錄錯誤，不重送。
 - **連線位址**：每台設備的連線都經 `Endpoints::new`，也就是「連線位址的限制」（Laysi/trustiot-v2#653）；經 MQTT 下發的設定碰不到 `exempt_for_tests`。
-- **讀值的去處**：每次輪詢的結果交給 `Sink`（`polled`；`removed` 在設備移除時）。執行檔的 `Sink` 是上傳的 `Readings`：讀值進入收集視窗（見「遙測上傳與離線緩衝」），失敗的資料點與錯過的輪詢留給讀取統計（Laysi/trustiot-v2#117），在那之前只在 debug 等級記錄（`polled`，帶 `readings`、`failed`、`missed`）。讀值的時間戳與 `clock_synced` 來自上傳用的同一個 `GatewayClock`（見「時鐘」）。
+- **讀值的去處**：每次輪詢的結果交給 `Sink`（`polled`；`removed` 在設備移除時）。執行檔的 `Sink` 是 `live::LiveSink`：租約涵蓋的設備的讀值送到 `up/live`（見「即時值」），每次輪詢再交給上傳的 `Readings`：排定的輪詢（`Polled::regular`）的讀值進入收集視窗（見「遙測上傳與離線緩衝」），只為即時值多做的輪詢不進去；失敗的資料點與錯過的輪詢留給讀取統計（Laysi/trustiot-v2#117），在那之前只在 debug 等級記錄（`polled`，帶 `readings`、`failed`、`missed`）。讀值的時間戳與 `clock_synced` 來自上傳用的同一個 `GatewayClock`（見「時鐘」）。
 - **輪詢參數**：每台設備用 `polling::Settings::default()`（請求 5 秒、連線 10 秒、watchdog 60 秒、退避 1–60 秒），還沒有設定鍵。
 
 `tests/desired_config.rs` 對 testkit 的假 Modbus 端點驗證：移除的設備不再被輪詢、狀態被清掉、它專用的端點連線關閉；請求途中被移除的設備等回應到了才停止，共用連線的設備繼續讀到自己的值；其他設備的節拍、連線與讀值不受變更影響；無效設定被拒、回報錯誤並維持上一版；版本規則；斷網重開後以存下的設定輪詢；重開後先以存下的版本輪詢，連上後收到較新的 retained 版本就套用、存檔並回報。「重開」是停掉設定這一側、在同一個狀態目錄重新啟動，與斷電後新行程看到的磁碟內容相同；存檔途中斷電由 `store` 的單元測試以殘留的暫存檔驗證。`tests/binary.rs` 以執行檔驗證訂閱、套用、存檔與回報，以及沒有 broker 時重開、以存下的設定輪詢（設備位址被位址限制拒絕，所以不送任何封包）。輪詢的讀值送上雲端的部分見「遙測上傳與離線緩衝」的開頭。真的斷電重開沒有在閘道器硬體上測。
@@ -420,12 +421,14 @@ polling::run(&reader, polling::poll_period(&device), &mut connection, &clock, &s
 
 ```rust
 let (handles, pipeline) = upload::pipeline(upload_settings, link.clone(), clock.clone(), pipeline_stop.clone())?;
-let fleet = Fleet::new(endpoints, poll_settings, Arc::new(clock.clone()), Arc::new(handles.readings.clone()));
+let (leases, watcher) = live::leases();
+let (sink, live_publisher) = live::publisher(link.clone(), watcher.clone(), Arc::new(handles.readings.clone()));
+let fleet = Fleet::new(endpoints, poll_settings, Arc::new(clock.clone()), Arc::new(sink)).with_live(watcher);
 ```
 
-- 設定套用的 `Fleet`（見「設定下發與套用」）每完成一次輪詢就呼叫 `Sink::polled`；`upload::Readings` 實作 `Sink`，把 `poll.readings` 原樣交給 `Readings::push`。`Readings::push` 只短暫拿一下鎖，從不等待、不會失敗，所以上傳或磁碟再慢也不會拖住輪詢。
+- 設定套用的 `Fleet`（見「設定下發與套用」）每完成一次輪詢就呼叫 `Sink::polled`；`live::LiveSink` 把租約涵蓋的設備的讀值交給即時值（見「即時值」），每次輪詢再交給 `upload::Readings`。`upload::Readings` 實作 `Sink`，把排定的輪詢（`Polled::regular`）的 `poll.readings` 原樣交給 `Readings::push`；只為即時值多做的輪詢不進收集視窗。`Readings::push` 只短暫拿一下鎖，從不等待、不會失敗，所以上傳或磁碟再慢也不會拖住輪詢。
 - 讀值以同一個 `GatewayClock` 蓋時間戳（`modbus::Clock`），它也是上傳拿雲端確認的 `server_time` 比對的時鐘、心跳回報的時鐘：雲端的時間說時鐘已校正之後，之後的讀值與批次就是 `clock_synced = true`（見「時鐘」）。
-- `dispatch::run` 把 `down/config` 交給設定套用、`down/telemetry-ack` 交給上傳，兩者在同一個訂閱清單（`dispatch::subscriptions()`）。
+- `dispatch::run` 把 `down/config` 交給設定套用、`down/telemetry-ack` 交給上傳、`down/live-control` 交給即時值的租約，三者在同一個訂閱清單（`dispatch::subscriptions()`）。
 
 `tests/desired_config.rs` 的 `polled_readings_go_up_as_a_batch_and_the_clouds_acknowledgement_releases_it` 照 `main.rs` 的接法（同一個訂閱清單與分派、`Readings` 當 `Sink`、同一個 `GatewayClock`），對 testkit 的假 Modbus 端點驗證：腳本化的雲端送來設定，兩台設備的讀值在下一個上傳間隔成為 `up/telemetry` 的一批，雲端的 `TelemetryAck` 把它從緩衝拿掉，下一輪的讀值是同一個串流的下一個序號、而且 `clock_synced = true`。執行檔本身輪詢不到測試機器上的假端點（位址限制拒絕 loopback 與本機的位址），所以 `tests/binary.rs` 的 `a_batch_in_the_state_directory_goes_up_and_the_clouds_acknowledgement_releases_it` 以留在狀態目錄的緩衝裡的一批驗證執行檔的上傳：連上後原樣送出，雲端的確認經執行檔的分派把它拿掉，segment 檔刪除。
 
@@ -519,6 +522,21 @@ let fleet = Fleet::new(endpoints, poll_settings, Arc::new(clock.clone()), Arc::n
 ### 心跳
 
 心跳的 `buffer` 來自上傳：待確認的筆數（含還沒關閉的視窗）與批數、最舊的待確認讀值的時間（每一批記下自己最舊的讀值，不必解碼）、磁碟上的 bytes、啟動以來丟掉的筆數。剛啟動、磁碟還沒讀完之前是 0。`clock_synced` 與批次用同一個來源（見上方「時鐘」）。
+
+## 即時值
+
+有人開著設備的即時圖表時，雲端以租約要閘道器把這些設備的每次取樣立即送上來（[rebuild-checklist](../../docs/requirements/rebuild-checklist.md) I3，Laysi/trustiot-v2#121，2026-10-30）。訊息格式與雲端的規則見 [protocol README](../../crates/protocol/README.md)「即時值」；雲端的轉送（`up/live` 到瀏覽器）是 Laysi/trustiot-v2#120。閘道器端在 `src/live.rs`：
+
+- **租約**（`Leases`）：`dispatch::run` 把 `down/live-control` 交給 `Leases::deliver`，當場解碼並套用，不等任何東西。`start`、`renew` 建立或取代租約，從收到起 `ttl_s` 秒後結束；`stop` 結束它，不存在的租約不做任何事；不認得的 `op` 與解不開的訊息忽略（後者記警告，每 60 秒最多一筆）。租約何時結束不靠計時器：每個讀租約的地方（輪詢、`LiveSink`）都拿結束時間與當下比較，結束了就不算，所以到期的那一刻起就停止，不論有沒有東西把它拿掉。同時最多保留 `MAX_LIVE_LEASES`（64）個還沒結束的租約，再多的新租約忽略並記警告（每 60 秒最多一筆），已保留的照常 `renew`、`stop`；每個租約最多 64 台設備（protocol 的檢查），所以記憶體有上限。租約只在記憶體裡：重啟後由雲端的 `renew` 恢復；斷線期間租約照常計時，連線不通時取樣直接丟掉（見下方）。
+- **取樣**（`polling::run_live`，`Fleet::with_live`）：租約涵蓋某台設備、而且租約的 `interval_ms`（多個租約時取最短的）比設備的 `poll_interval_ms` 短時，這台設備另外以 `interval_ms` 的固定節拍輪詢，從租約開始涵蓋它的那一刻起算，所以第一筆即時值不必等一個間隔；但離這台設備上一次輪詢開始還不到一個間隔時，等到滿一個間隔。所以兩筆即時值的取樣永遠至少相隔一個間隔（在輪詢途中開始的租約也會讓那次輪詢成為即時值），租約快速地開了又停、或一直換間隔（有問題的雲端），也不會讓設備被輪詢得比間隔還快；代價是第一筆即時值最多晚一個間隔。設備原本的節拍不變：每個排定的時間，第一個在那之後結束的輪詢就是那個時間的輪詢（`Polled::regular`），其他都是只為即時值多做的輪詢。所以一個排定的時間只輪詢一次，不會為了遙測與即時值各讀一次（RS485 的匯流排很慢）；排定的輪詢的取樣時間最多晚一個 `interval_ms`；跨過排定時間的即時輪詢就算那個時間的，不會讓它變成錯過。租約有變化（開始、`renew`、`stop`）時，每台設備的輪詢迴圈都被叫醒重新看一次；租約到期時，迴圈在下一個即時節拍醒來，看到租約結束就回到原本的節拍，不再多輪詢。`interval_ms` 不比 `poll_interval_ms` 短時不多輪詢，每次排定的輪詢也是即時值。
+- **送出**（`LiveSink`、`Publisher`）：輪詢結束時，設備仍在某個租約涵蓋之下，就把這次的讀值交給 `Publisher` 的佇列（`LIVE_QUEUE`，16 次輪詢）；交接從不等待，佇列滿了就丟掉這次的即時值並記警告（每 60 秒最多一筆）。之後每次輪詢照常交給上傳的 `Readings`，只有排定的輪詢的讀值進收集視窗。`Publisher` 把一次輪詢的讀值依資料點排成 `LiveSamples` 的序列（值不能送的讀值，例如 NaN，與遙測一樣略過），超過 64 KiB 時以 `LiveSamples::split` 拆開，一則一則以 `Link::publish` 發布到 `up/live`（QoS 0，不 retain）：沒有 PUBACK 可等，只等這則寫進連線；沒有連線或 link 停止中時丟掉這次輪詢剩下的訊息，不排隊、不進緩衝、不寫磁碟。一次只送一則，所以即時值在 link 的 QoS 0 佇列裡最多佔一個位置，心跳永遠有位置；上行很慢時，佇列裡等著的輪詢最多 16 次，之後的丟掉。
+- **權限**：閘道器只能發布到自己的 `up/live`。broker 的閘道器角色（`protocol::acl::gateway_role_acls`，由 broker 的 init container 依 `tools/migrate` 設定）的規則是 `trustiot/v1/gw/%u/up/live`，`%u` 是憑證的 CN；發到別台閘道器的 `up/live` 得到 PUBACK 0x87（QoS 0 時直接丟掉，雲端收不到），也訂閱不到別台的 `up/live`（`crates/protocol/tests/broker.rs` 的 `the_gateway_role_allows_exactly_the_protocol_channels`）。
+
+取樣頻率與遙測的決定（2026-10-30，理由見 [protocol README](../../crates/protocol/README.md)「即時值」）：租約期間的取樣間隔是 `interval_ms` 與 `poll_interval_ms` 中較短的；只因租約多出來的取樣只送 `up/live`、不進一般上傳，遙測仍是設定的間隔。
+
+已知的限制：多做的輪詢與其他設備共用同一個端點的連線（例如同一台 RS485 轉換器），匯流排忙不過來時，同一個端點上其他設備的輪詢會晚、甚至錯過排定的時間（照「固定節拍」略過，計入 `missed`）。每租戶同時開啟的即時畫面數與每個畫面的設備數由雲端限制（清單 I3）。
+
+`tests/live.rs` 照 `main.rs` 的接法（同一個訂閱清單與分派、`LiveSink` 包著 `Readings` 當 `Sink`、`Fleet::with_live`），對腳本化的雲端與 testkit 的假 Modbus 端點、停住的時鐘驗證：雲端開了租約，閘道器在時鐘沒有前進的情況下就輪詢並把值送到 `up/live`（QoS 0、沒有 packet ID），緩衝裡的筆數不變；租約期間每秒一筆；`ttl_s` 到期之後沒有任何輪詢與 `up/live`，下一次輪詢是原本排定的那次，之後的遙測批次只有排定的輪詢的讀值；`renew` 把結束延後，`stop` 立刻結束。單元測試（`src/live.rs`、`src/polling.rs`）驗證租約的上限、到期、最短間隔、解不開的訊息，以及租約期間的節拍：每秒的排定輪詢一次也不少、即時輪詢每 200 ms 一次、租約結束後回到原本的節拍、跨過排定時間的即時輪詢算成排定的那次、租約每 10 ms 開關或換間隔時多做的輪詢彼此仍至少相隔 100 ms。
 
 ## TPM 簽章
 
@@ -641,7 +659,7 @@ stdout 每個檔案一行，`identity.certificate` 在前、`broker.ca` 在後�
 
 ```sh
 cargo test -p agent                                     # 全部
-cargo test -p agent --lib                               # 單元測試：設定、憑證、TLS、MQTT 編解碼、退避、心跳、sd_notify、liveness、憑證換發（排程、重試、檢查、原子寫檔），以及 Modbus 的規劃、PDU、解碼、輪詢、MBAP 與 RTU 切框、共用連線的輪流、keepalive、一小時的節拍漂移、設定範圍、連線位址的限制；緩衝的上限與丟棄、磁碟格式與復原、時鐘、組批
+cargo test -p agent --lib                               # 單元測試：設定、憑證、TLS、MQTT 編解碼、退避、心跳、sd_notify、liveness、憑證換發（排程、重試、檢查、原子寫檔），以及 Modbus 的規劃、PDU、解碼、輪詢、MBAP 與 RTU 切框、共用連線的輪流、keepalive、一小時的節拍漂移、設定範圍、連線位址的限制；緩衝的上限與丟棄、磁碟格式與復原、時鐘、組批；即時值的租約（上限、到期、renew、stop）與租約期間的輪詢節拍
 cargo test -p agent --test link                         # MQTT 行為，對腳本化的 broker：在線狀態、訂閱、in-flight 上限、PUBACK、keepalive、退避、協定錯誤、停止、換發後的連線輪替與憑證被拒的判斷
 cargo test -p agent --test liveness                     # systemd watchdog 的進度判斷：連線的每個等待都宣告期限、卡住的連線工作讓通知停下
 cargo test -p agent --test transport                    # 整條連線在行程內：兩層 TLS 協商的內容、resumption、重連、每種拒絕、內層的憑證鏈、名稱、用途與根 CRL
@@ -658,6 +676,7 @@ cargo test -p agent --test modbus_rtu_converter         # 對 testkit 假 RS485 
 cargo test -p agent --test modbus_rtu_framing           # 以 raw socket 驗證 RTU 的請求 bytes、回送、雜訊、切斷的框架與重連
 cargo test -p agent --test polling_recovery             # 對 testkit 假端點跑輪詢迴圈：watchdog 救回不回答與半開的連線、只有讀到值才重置退避
 cargo test -p agent --test desired_config               # 設定下發與套用：移除的設備不再輪詢、其他設備不受影響、無效設定被拒、版本規則、斷網重開與重開後收斂；輪詢的讀值成為批次、由確認拿掉
+cargo test -p agent --test live                         # 即時值，對腳本化的雲端與 testkit 假端點：租約涵蓋的設備每次取樣立即送到 up/live（QoS 0）、不進緩衝與批次；租約到期、stop 後停止送出，renew 延後結束
 cargo test -p agent --test tpm_swtpm                    # swtpm 容器：簽章、mTLS 握手、拒絕不能用的金鑰
 cargo test -p agent --test tpm_provision                # swtpm 容器：金鑰佈建的建立、沿用、拒絕、同時建立、中斷、tpm2_clear
 cargo test -p agent --test tpm_endorsement              # swtpm 容器：EK 等於 tpm2_createek 的、重跑與換連線相同；EK 憑證相符、不符、沒有；endorsement 授權與 NV 的 EK 範本被拒
@@ -665,7 +684,7 @@ cargo test -p agent --test provision                    # swtpm 容器：provisi
 cargo test -p agent --test provision_install            # swtpm 容器：provision install 拒絕錯的憑證且不寫任何檔案、擁有者與權限、agent 的啟動檢查接受裝好的檔案、重跑不寫、換根時原子替換、設定檔與目錄的擁有者、權限與符號連結的檢查（不讀設定、不寫任何檔案）
 ```
 
-`tools/lab-dataset` 的錄製工具（`lab-dataset record`）以 library 使用 `modbus::endpoint::Endpoints`、`DeviceReader` 與 `polling::run`；改它們的介面時一併跑 `cargo test -p lab-dataset --test record`。錄製工具同樣經過位址限制，它的測試以 `exempt_for_tests` 放行假轉換器所在的 127.0.0.1。
+`tools/lab-dataset` 的錄製工具（`lab-dataset record`）以 library 使用 `modbus::endpoint::Endpoints`、`DeviceReader` 與 `polling::run`（沒有即時值，等於 `polling::run_live` 配 `NoLive`）；改它們的介面時一併跑 `cargo test -p lab-dataset --test record`。錄製工具同樣經過位址限制，它的測試以 `exempt_for_tests` 放行假轉換器所在的 127.0.0.1。
 
 - `link`、`upload` 與 Modbus 的整合測試都用停住的時鐘（`start_paused`，Modbus 另加 `testkit::clock::manual()`）：keepalive、退避與逾時只在其他事情都停下時才觸發，機器再忙也不會誤判。
 - 位址限制的測試例外：被拒絕的連線不等任何計時器，它們用真的時鐘與 60 秒的連線逾時，正常情況下碰不到。連到假 Modbus 端點的測試都以 `exempt_for_tests` 放行 127.0.0.1（見「連線位址的限制」）。位址限制的單元測試以替身解析器與撥號紀錄驗證只查一次、只撥檢查過的位址；替身只真的撥 loopback，所以測試不會對執行機器所在的網路送封包。
