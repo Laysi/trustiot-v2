@@ -1,4 +1,4 @@
-# Copied by release.yml from deploy/chart/values-saas.yaml at v0.0.0-rc.11. Do not edit; see deploy/flux/README.md.
+# Copied by release.yml from deploy/chart/values-saas.yaml at v0.0.0-rc.12. Do not edit; see deploy/flux/README.md.
 # SaaS deployment shape: multi-tenant, single-node k3s, reached only through Cloudflare Tunnel.
 # Use together with an instance overlay that sets hosts, external endpoints and Secret names
 # (for the SaaS cluster that overlay lives in deploy/flux, Laysi/trustiot-v2#70).
