@@ -57,7 +57,7 @@ use axum::http::header::CONTENT_TYPE;
 use axum::http::{HeaderMap, Method, StatusCode, Uri};
 use axum::response::{IntoResponse, Response};
 use axum::routing::post;
-use chrono::{TimeDelta, Utc};
+use chrono::{DateTime, TimeDelta, Utc};
 use contract::api::dashboard::RuntimeVersion;
 use contract::api::dashboard::public::{DashboardKind, VersionCreated};
 use contract::api::dashboard::spec::Spec;
@@ -70,7 +70,7 @@ use contract::{
 };
 use serde_json::{Value, json};
 use service_kit::identity::{OnBehalf, ServiceIdentity, UserIdentity};
-use service_kit::tenant::{TenantDb, TenantTransaction};
+use service_kit::tenant::{PlatformDb, TenantDb, TenantTransaction};
 use sqlx::PgConnection;
 use sqlx::postgres::PgPoolOptions;
 use telemetry_query::history::Reading;
@@ -432,6 +432,51 @@ impl World {
         let id = Uuid::now_v7();
         self.store_conversation(owner, id).await;
         id
+    }
+
+    /// Deletes `owner`'s conversation `id` through the store, as the API's `DELETE` does.
+    pub async fn delete_conversation(&self, owner: &Person, id: Uuid) {
+        let mut tx = self.tx(owner).await;
+        assistant::store::delete(&mut tx, owner.principal(), id)
+            .await
+            .expect("delete the conversation");
+        tx.commit().await.expect("commit");
+    }
+
+    /// Moves the deletion of the deleted conversation `id` back to `deleted_at`, behind the
+    /// store's back: the clock trigger refuses any other time, so the superuser skips it.
+    pub async fn backdate(&self, id: Uuid, deleted_at: DateTime<Utc>) {
+        let mut admin = self.superuser().await;
+        let mut tx = sqlx::Connection::begin(&mut admin)
+            .await
+            .expect("a superuser transaction");
+        sqlx::query("SET LOCAL session_replication_role = replica")
+            .execute(&mut *tx)
+            .await
+            .expect("skip the clock trigger");
+        let updated = sqlx::query(
+            "UPDATE assistant.conversations SET deleted_at = $2
+            WHERE conversation_id = $1::uuid AND deleted_at IS NOT NULL",
+        )
+        .bind(id.to_string())
+        .bind(deleted_at)
+        .execute(&mut *tx)
+        .await
+        .expect("move the deletion back")
+        .rows_affected();
+        assert_eq!(updated, 1, "the deleted conversation to move back exists");
+        tx.commit().await.expect("commit");
+    }
+
+    /// The purge's platform role (`assistant_platform`), with the pool the service opens for it.
+    pub fn platform(&self) -> PlatformDb {
+        PlatformDb::connect_lazy(
+            self.product
+                .postgres
+                .options("assistant_platform", DATABASE),
+            PgPoolOptions::new().max_connections(assistant::PLATFORM_CONNECTIONS),
+        )
+        .expect("the platform role's pool verifies the server")
     }
 
     /// The row of `owner`'s conversation `id` (one the agent started), written as the agent

@@ -10,19 +10,25 @@
 //!   same `NotFound` as one that does not exist.
 //! - The tool writes only into its own conversation's drafts.
 //! - The service role cannot change or remove a version, nor change a dashboard beyond what the
-//!   store does, nor write a draft whose creator is not its conversation's owner; purging a
-//!   conversation removes its drafts and keeps what was published.
+//!   store does, nor write a draft whose creator is not its conversation's owner.
+//! - The conversation purge's own round removes an expired conversation's drafts with all their
+//!   versions and keeps what was published, unchanged; a draft another session holds keeps its
+//!   conversation for a round, and the round's counts and log line are the conversations' only.
 //!
 //! Starts a throwaway Postgres with TLS (podman or docker); skipped without either unless `CI`
 //! is set.
 
 mod dashboard_world;
+mod support;
 
 use assistant::dashboards::store::{self, Access, ListCursor, StoreError, VersionCursor};
+use assistant::purge::{self, Round};
+use chrono::{TimeDelta, Utc};
 use contract::api::dashboard::public::{DashboardKind, SavedBase, VersionOrigin};
 use contract::{DashboardId, TenantId, TenantRole};
 use dashboard_world::{Content, Person, World, finish, unlimited, world};
-use sqlx::Row;
+use sqlx::{Connection as _, Row};
+use support::Capture;
 use uuid::Uuid;
 
 /// SQLSTATE `insufficient_privilege`.
@@ -851,7 +857,7 @@ async fn the_service_role_cannot_change_what_was_written() {
     let archived = "UPDATE assistant.dashboards SET archived_at = '2000-01-01T00:00:00Z'
         WHERE dashboard_id = $1::uuid RETURNING archived_at";
     let mut tx = world.tx(&editor).await;
-    let archived_at: chrono::DateTime<chrono::Utc> = sqlx::query(archived)
+    let archived_at: chrono::DateTime<Utc> = sqlx::query(archived)
         .bind(saved.to_string())
         .fetch_one(&mut *tx)
         .await
@@ -859,7 +865,7 @@ async fn the_service_role_cannot_change_what_was_written() {
         .get("archived_at");
     tx.rollback().await.expect("roll back");
     assert!(
-        archived_at > chrono::Utc::now() - chrono::TimeDelta::days(1),
+        archived_at > Utc::now() - TimeDelta::days(1),
         "{archived_at}"
     );
     // A version after a gap has no previous version.
@@ -906,18 +912,74 @@ async fn the_service_role_cannot_change_what_was_written() {
     );
 }
 
+/// The conversation purge's own round (`assistant::purge::round`, as `assistant_platform`,
+/// Laysi/trustiot-v2#645) removes an expired conversation's drafts with it, and nothing it
+/// published, and a draft another session holds only keeps its conversation for a round.
+///
+/// One expired conversation has two drafts: one published into a saved dashboard (which then got
+/// a second version and a restore of its own), the other with a restore that points at its
+/// version 1, so the cascade removes rows whose foreign keys point at other rows it removes in
+/// the same statement (they are `NO ACTION`, checked at the statement's end). A second expired
+/// conversation's draft row is held by another session (`FOR UPDATE`, as a write would hold
+/// it), and a third conversation is deleted but not expired.
+///
+/// The round counts conversations as before (`Round { purged: 1, skipped: 1 }` with one WARN
+/// line of counts only): the purged one's drafts and versions are gone and the saved dashboard is
+/// unchanged, row for row; the held one stays whole. Once the lock is gone the next round purges
+/// it (`purged: 1`, INFO). No other test of this binary expires a conversation, so the counts are
+/// this test's.
 #[tokio::test(flavor = "multi_thread")]
-async fn purging_a_conversation_removes_its_drafts_and_keeps_what_was_published() {
+async fn the_purge_removes_an_expired_conversations_drafts_and_keeps_what_was_published() {
     let Some(world) = world().await else { return };
     let tenant = TenantId::generate();
     let editor = world.person(tenant, TenantRole::Editor);
     let viewer = world.person(tenant, TenantRole::Viewer);
+    // The versions' keys to other versions (the previous one, a restore's content) are NO
+    // ACTION ('a'), checked when the statement ends: RESTRICT would check each deleted row at
+    // once and could refuse the cascade halfway through a draft's versions.
+    let mut admin = world.superuser().await;
+    let actions: Vec<String> = sqlx::query_scalar(
+        "SELECT confdeltype::text FROM pg_constraint
+        WHERE contype = 'f'
+            AND conrelid = 'assistant.dashboard_versions'::regclass
+            AND confrelid = 'assistant.dashboard_versions'::regclass",
+    )
+    .fetch_all(&mut admin)
+    .await
+    .expect("the versions' keys to versions");
+    assert_eq!(actions, ["a", "a"]);
+    drop(admin);
+
+    // The saved dashboard: published from the draft, then its version 2 published, then its
+    // version 1 restored as version 3.
     let (conversation, draft, saved) = world.saved(&editor, &Content::new("Saved")).await;
+    world
+        .write_draft(
+            &editor,
+            conversation,
+            draft,
+            1,
+            None,
+            &Content::new("Saved two"),
+        )
+        .await
+        .expect("the draft's version 2");
+    let second = world.publish(&editor, draft, 2).await.expect("publish it");
+    assert_eq!((second.dashboard_id, second.version), (saved, 2));
+    let mut tx = world.tx(&editor).await;
+    let restored = store::restore(&mut tx, editor.requester(), saved, 1, 2, unlimited).await;
+    assert_eq!(
+        finish(tx, restored)
+            .await
+            .expect("restore version 1")
+            .version,
+        3
+    );
+    // The other draft: versions 1 and 2, and version 3 restoring version 1.
     let other_draft = world
         .create_draft(&editor, conversation, &Content::new("Another draft"))
         .await
         .dashboard_id;
-    // A restore in the draft too: its row points at version 1 and goes with it.
     world
         .write_draft(
             &editor,
@@ -932,31 +994,166 @@ async fn purging_a_conversation_removes_its_drafts_and_keeps_what_was_published(
     let mut tx = world.tx(&editor).await;
     let restored = store::restore(&mut tx, editor.requester(), other_draft, 1, 2, unlimited).await;
     finish(tx, restored).await.expect("restore version 1");
+    assert_eq!(content_references(&world, other_draft).await, [(3, 1)]);
 
-    let mut admin = world.superuser().await;
-    sqlx::query("DELETE FROM assistant.conversations WHERE conversation_id = $1::uuid")
-        .bind(conversation.to_string())
-        .execute(&mut admin)
+    // A second conversation whose draft another session will hold, and a third deleted only now.
+    let held = world.conversation(&editor).await;
+    let held_draft = world
+        .create_draft(&editor, held, &Content::new("Held"))
         .await
-        .expect("purge the conversation");
-    let left: i64 = sqlx::query(
-        "SELECT count(*) AS left FROM assistant.dashboard_versions
-        WHERE dashboard_id = ANY($1::uuid[])",
-    )
-    .bind(vec![draft.to_string(), other_draft.to_string()])
-    .fetch_one(&mut admin)
-    .await
-    .expect("count")
-    .get("left");
-    assert_eq!(left, 0, "the drafts' versions went with them");
+        .dashboard_id;
+    let recent = world.conversation(&editor).await;
+    let recent_draft = world
+        .create_draft(&editor, recent, &Content::new("Recent"))
+        .await
+        .dashboard_id;
+    for id in [conversation, held, recent] {
+        world.delete_conversation(&editor, id).await;
+    }
+    let month_ago = Utc::now() - TimeDelta::days(31);
+    world.backdate(conversation, month_ago).await;
+    world.backdate(held, month_ago).await;
+    let saved_before = dashboard_rows(&world, saved).await;
+    assert_eq!(
+        saved_before.1.len(),
+        3,
+        "the saved dashboard's three versions"
+    );
+    let held_before = dashboard_rows(&world, held_draft).await;
+    let recent_before = dashboard_rows(&world, recent_draft).await;
 
+    // Another session holds the held draft's row, as a write would.
+    let mut holder = world.superuser().await;
+    let mut holding = holder.begin().await.expect("the holder's transaction");
+    sqlx::query("SELECT 1 FROM assistant.dashboards WHERE dashboard_id = $1::uuid FOR UPDATE")
+        .bind(held_draft.to_string())
+        .execute(&mut *holding)
+        .await
+        .expect("hold the draft's row");
+
+    let platform = world.platform();
+    let (capture, guard) = Capture::install();
+    let round = purge::round(&platform)
+        .await
+        .expect("a round that meets a held draft ends without an error");
+    drop(guard);
+    assert_eq!(
+        round,
+        Round {
+            purged: 1,
+            skipped: 1
+        },
+        "the round counts conversations, not their drafts"
+    );
+    assert_purge_line(
+        &capture,
+        tracing::Level::WARN,
+        "1",
+        "1",
+        &[conversation, held],
+        tenant,
+    );
+
+    // The purged conversation's drafts and every version of them are gone.
+    for gone in [draft, other_draft] {
+        assert_eq!(
+            dashboard_rows(&world, gone).await,
+            (None, Vec::new()),
+            "{gone}"
+        );
+    }
+    // The saved dashboard, published from it, is unchanged, and every member still opens it.
+    assert_eq!(dashboard_rows(&world, saved).await, saved_before);
     let mut tx = world.tx(&viewer).await;
     let opened = store::open(&mut tx, viewer.principal(), saved, None).await;
-    let gone = store::open(&mut tx, editor.principal(), draft, None).await;
     tx.rollback().await.expect("roll back");
-    let opened = opened.expect("the saved dashboard stays");
-    assert_eq!(opened.version.title, "Saved");
-    assert!(matches!(gone, Err(StoreError::NotFound)), "{gone:?}");
+    assert_eq!(
+        opened.expect("the saved dashboard stays").version.title,
+        "Saved"
+    );
+    // The held conversation and the recent one are whole.
+    assert_eq!(dashboard_rows(&world, held_draft).await, held_before);
+    assert_eq!(dashboard_rows(&world, recent_draft).await, recent_before);
+
+    // Released: the next round purges the held one with its draft, and says so at INFO.
+    holding.rollback().await.expect("release the row");
+    let (capture, guard) = Capture::install();
+    let round = purge::round(&platform).await.expect("the next round");
+    drop(guard);
+    assert_eq!(
+        round,
+        Round {
+            purged: 1,
+            skipped: 0
+        }
+    );
+    assert_purge_line(&capture, tracing::Level::INFO, "1", "0", &[held], tenant);
+    assert_eq!(dashboard_rows(&world, held_draft).await, (None, Vec::new()));
+    assert_eq!(dashboard_rows(&world, recent_draft).await, recent_before);
+    assert_eq!(dashboard_rows(&world, saved).await, saved_before);
+}
+
+/// The purge's one line of a round, at `level` with `purged` and `skipped`, and nothing that
+/// names a conversation, a dashboard or the tenant.
+fn assert_purge_line(
+    capture: &Capture,
+    level: tracing::Level,
+    purged: &str,
+    skipped: &str,
+    conversations: &[Uuid],
+    tenant: TenantId,
+) {
+    let events = capture.events();
+    let own: Vec<_> = events
+        .iter()
+        .filter(|event| event.target == "assistant::purge")
+        .collect();
+    assert_eq!(own.len(), 1, "one line per round: {events:?}");
+    assert_eq!(own[0].level, level, "{own:?}");
+    let fields: Vec<&str> = own[0].fields.keys().map(String::as_str).collect();
+    assert_eq!(fields, ["job", "purged", "skipped"], "{own:?}");
+    assert_eq!(
+        (
+            own[0].fields["job"].as_str(),
+            own[0].fields["purged"].as_str(),
+            own[0].fields["skipped"].as_str()
+        ),
+        ("purge", purged, skipped),
+        "{own:?}"
+    );
+    let logged = format!("{events:?}");
+    for id in conversations {
+        assert!(
+            !logged.contains(&id.to_string()),
+            "no conversation ID in the log"
+        );
+    }
+    assert!(
+        !logged.contains(&tenant.to_string()),
+        "no tenant in the log"
+    );
+}
+
+/// Every column of `dashboard`'s row and of each of its versions, in order, as the database
+/// holds them (`None` and no versions once it is gone).
+async fn dashboard_rows(world: &World, dashboard: DashboardId) -> (Option<String>, Vec<String>) {
+    let mut admin = world.superuser().await;
+    let row: Option<String> = sqlx::query_scalar(
+        "SELECT to_jsonb(d)::text FROM assistant.dashboards d WHERE d.dashboard_id = $1::uuid",
+    )
+    .bind(dashboard.to_string())
+    .fetch_optional(&mut admin)
+    .await
+    .expect("the dashboard's row");
+    let versions: Vec<String> = sqlx::query_scalar(
+        "SELECT to_jsonb(v)::text FROM assistant.dashboard_versions v
+        WHERE v.dashboard_id = $1::uuid ORDER BY v.version",
+    )
+    .bind(dashboard.to_string())
+    .fetch_all(&mut admin)
+    .await
+    .expect("the dashboard's versions");
+    (row, versions)
 }
 
 /// The versions of `dashboard` whose rows hold content (a title, a description, a spec or a
