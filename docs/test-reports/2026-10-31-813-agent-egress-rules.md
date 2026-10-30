@@ -2,13 +2,13 @@
 
 對應 issue：Laysi/trustiot-v2#813（父 issue Laysi/trustiot-v2#96）。這份報告記錄 nftables 規則（`edge/agent/systemd/trustiot-agent-egress.nft`）、在 agent 之前載入它的 unit（`trustiot-agent-egress.service`）與閘道器檢查（`edge/agent/scripts/check-gateway.sh`）的驗證，以及對 lab 的閘道器的唯讀檢查。
 
-結果先講：在 Debian 13 容器（與閘道器相同的 nftables 1.1.3 與 systemd 257）裡，agent 帳號連 15 種該拒絕的目的地都被規則拒絕，規則的 counter 也記到；`nobody` 與 root 連同樣的目的地全部連得上，counter 不變。agent 經網路的 DNS 伺服器解析雲端名稱並連上 443。systemd 跑兩個 unit 時，規則在 agent 的行程之前載入；`nftables.service` 的 start、reload、restart 不會讓規則在 agent 執行中消失；規則或 `/etc/nftables.conf` 載入不了、`nftables.service` 的 drop-in 不見時 agent 不啟動。檢查腳本在 lab 的閘道器上唯讀執行，找出 sshd、avahi-daemon、cloudflared 聽在所有介面。
+結果先講：在 Debian 13 容器（與閘道器相同的 nftables 1.1.3 與 systemd 257）裡，agent 帳號連 18 種該拒絕的目的地都被規則拒絕，規則的 counter 也記到；`nobody` 與 root 連同樣的目的地全部連得上，counter 不變。agent 經網路的 DNS 伺服器解析雲端名稱並連上 443。systemd 跑兩個 unit 時，規則在 agent 的行程之前載入；`nftables.service` 的 start、reload、restart 不會讓規則在 agent 執行中消失；規則或 `/etc/nftables.conf` 載入不了、`nftables.service` 的 drop-in 不見時 agent 不啟動。檢查腳本在 lab 的閘道器上唯讀執行，找出 sshd、avahi-daemon、cloudflared 聽在所有介面。
 
 ## 環境
 
 - **測試**：建置主機（x86_64 Linux），`cargo test -p agent --test egress --test systemd_unit`，分支 `feat/813-agent-egress-rules`。
   - 容器：`edge/agent/tests/egress/Containerfile`，`debian:trixie-slim`（以 digest 釘選）加上 Debian 的 `nftables`、`iproute2`、`socat`、`dnsmasq-base`、`systemd`。nftables 1.1.3、systemd 257，和 lab 的閘道器相同。
-  - 規則只載入容器自己的 network namespace（`--network none`），沒有動到建置主機的規則。
+  - 規則只載入容器自己的 network namespace（`--network none`），沒有動到建置主機的規則。網路的測試在容器裡開 IPv6 forwarding（`--sysctl`，只作用在容器自己的 namespace），讓核心加入 subnet-router anycast 位址。
 - **lab 的閘道器**（展示用閘道器）：Raspberry Pi OS Lite arm64（Debian 13.7），kernel `6.18.50+rpt-rpi-v8`，nftables 1.1.3。只做唯讀檢查：沒有寫任何檔案、沒有安裝、沒有載入規則、沒有重啟任何服務。主機名稱與位址不寫進報告。
 
 ## 指令
@@ -38,6 +38,9 @@ ssh "$GATEWAY_HOST" 'cat /etc/resolv.conf; systemctl is-active systemd-resolved 
 | `0.0.0.0:8080`（核心改連 loopback） | TCP | ok | refused | local |
 | `10.81.3.2:8080`（閘道器自己的 LAN 位址） | TCP | ok | refused | local |
 | `[fd81:3::2]:8080`（閘道器自己的 IPv6 位址） | TCP | ok | refused | local |
+| `[fe80::81:2%veth0]:8080`（閘道器自己的 link-local 位址） | TCP | ok | refused | local |
+| `[fe80::81:2%veth0]:9`（同上） | UDP | ok | not-permitted | local |
+| `[fd81:3::]:9`（LAN 前綴的 subnet-router anycast，閘道器開了 IPv6 forwarding） | UDP | ok | not-permitted | anycast |
 | `198.51.100.7:8080`（`ip route add local`） | TCP | ok | refused | local |
 | `203.0.113.80:80`（NAT 轉回 `127.0.0.1:8080`） | TCP | ok | refused | local |
 | `127.0.0.1:9` | UDP | ok | not-permitted | local |
@@ -50,8 +53,8 @@ ssh "$GATEWAY_HOST" 'cat /etc/resolv.conf; systemctl is-active systemd-resolved 
 | `10.81.3.1:80`、`[fd81:3::1]:80`、`10.81.3.1:9`（LAN 上的設備） | TCP、UDP | ok | ok | 無 |
 
 - refused 是 TCP reset（`Connection refused`，立即），not-permitted 是送出時的 `EPERM`。
-- `nobody` 與 root 跑完全部目的地之後，四條規則的 counter 都是 0；`trustiot-agent` 的每一次嘗試都讓表中那條規則的 counter 增加。
-- 帳號還不存在時 `nft -f` 失敗（錯誤訊息指出 `trustiot-agent`），table 沒有建立；建立帳號後載入兩次，仍只有一個 table、5 條拒絕規則。
+- `nobody` 與 root 跑完全部目的地之後，每條規則的 counter 都是 0；`trustiot-agent` 的每一次嘗試都讓表中那條規則的 counter 增加。
+- 帳號還不存在時 `nft -f` 失敗（錯誤訊息指出 `trustiot-agent`），table 沒有建立；建立帳號後載入兩次，仍只有一個 table、6 條拒絕規則。
 
 ### 名稱解析與雲端（`the_agent_resolves_and_reaches_the_cloud_with_the_rules_in_force`）
 
@@ -84,7 +87,7 @@ ssh "$GATEWAY_HOST" 'cat /etc/resolv.conf; systemctl is-active systemd-resolved 
 
 - **名稱解析的路徑**：`/etc/resolv.conf` 由 NetworkManager（active）寫入，nameserver 不是 loopback 位址；`systemd-resolved`、dnsmasq、unbound 都是 inactive。`/etc/nsswitch.conf` 是 `files mdns4_minimal [NOTFOUND=return] dns`，`mdns4_minimal` 經 avahi 的 unix socket。所以規則不需要為 DNS 放行任何本機目的地。
 - **nftables**：套件已安裝（1.1.3），`nftables.service` 是 `disabled`，目前沒有任何規則；`/etc/nftables.conf` 是 Debian 的預設（`flush ruleset` 開頭，接著一個 chain 全部放行的 `inet filter` table）。新的規則 unit `Requires=nftables.service`，所以裝上之後 agent 啟動時會先帶起它，載入這個預設檔，行為不變。`nf_tables` 已載入，`nft_fib`、`nft_reject` 等模組在 kernel 的模組目錄裡（載入規則時由核心自動載入；這一點在閘道器上的實際載入由映像 Laysi/trustiot-v2#809 驗證）。
-- **檢查腳本**：結束碼 1。sshd 聽 `0.0.0.0:22` 與 `[::]:22`，avahi-daemon 聽 `0.0.0.0:5353`、`*:5353` 與兩個動態埠，cloudflared（遠端存取的通道）有四個綁在 `*` 的 UDP socket（QUIC 用戶端的未連線 socket）；出口規則還沒有安裝（`FAIL egress`）；`ok resolver`。cloudflared 的 TCP listener 在 loopback，沒有被列出。
+- **檢查腳本**（以這個分支最終版的腳本執行）：結束碼 1。sshd 聽 `0.0.0.0:22` 與 `[::]:22`，avahi-daemon 聽 `0.0.0.0:5353`、`*:5353` 與兩個動態埠，cloudflared（遠端存取的通道）有四個綁在 `*` 的 UDP socket（QUIC 用戶端的未連線 socket）；出口規則還沒有安裝（`FAIL egress`）；`ok resolver`。cloudflared 的 TCP listener 在 loopback，沒有被列出。
 
 ## 結論
 

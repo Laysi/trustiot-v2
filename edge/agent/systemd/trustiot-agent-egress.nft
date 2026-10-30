@@ -38,6 +38,11 @@ table inet trustiot_agent {
 		# address the local routing table holds (`ip route add local`). 0.0.0.0 and :: are
 		# included: the kernel sends a connection to them to the loopback address.
 		fib daddr type local counter goto refuse comment "local"
+		# IPv6 anycast addresses the gateway answers itself: with IPv6 forwarding on, the kernel
+		# adds the subnet-router anycast address of each prefix (fd81:3:: for fd81:3::/64, fe80::)
+		# to the local table, and delivers packets for them locally, but fib reports them as
+		# anycast, not local.
+		fib daddr type anycast counter goto refuse comment "anycast"
 		# 255.255.255.255 and every IPv4 subnet's broadcast address.
 		fib daddr type broadcast counter goto refuse comment "broadcast"
 		# 224.0.0.0/4 and ff00::/8.

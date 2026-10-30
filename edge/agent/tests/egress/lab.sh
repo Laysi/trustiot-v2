@@ -17,6 +17,7 @@ set -euo pipefail
 # The gateway's side of the LAN and the peer's (the site's router, DNS server and the cloud).
 GATEWAY4=10.81.3.2
 GATEWAY6=fd81:3::2
+GATEWAY_LINK_LOCAL=fe80::81:2
 PEER4=10.81.3.1
 PEER6=fd81:3::1
 
@@ -63,6 +64,10 @@ network() {
     ip link add veth0 type veth peer name veth1 netns peer
     ip addr add "$GATEWAY4/24" dev veth0
     ip -6 addr add "$GATEWAY6/64" dev veth0 nodad
+    # A fixed link-local address of the gateway's own, next to the one the kernel derives, so the
+    # probes can name it. The container runs with IPv6 forwarding on, so the kernel also adds the
+    # subnet-router anycast addresses (fd81:3::, fe80::) to the local table.
+    ip -6 addr add "$GATEWAY_LINK_LOCAL/64" dev veth0 nodad
     ip link set veth0 up
     ip -n peer addr add "$PEER4/24" dev veth1
     ip -n peer -6 addr add "$PEER6/64" dev veth1 nodad

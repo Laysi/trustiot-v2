@@ -11,7 +11,7 @@
 #              the wildcard addresses included, can be reached from outside and through hairpin
 #              NAT on a router, which the egress rules cannot see. Unix sockets are not listed.
 #   egress     The table inet trustiot_agent is loaded and is exactly trustiot-agent-egress.nft:
-#              the output hook jumps from the agent's account to the refusals of the four kinds of
+#              the output hook jumps from the agent's account to the refusals of the five kinds of
 #              destination, and nothing else is in the table.
 #   resolver   /etc/resolv.conf names a nameserver, and none that the rules refuse to the agent:
 #              a local address in any spelling glibc accepts (systemd-resolved's 127.0.0.53, a
@@ -27,6 +27,8 @@
 # Exit status: 0 when every check holds, 1 when one fails, 2 on a usage error or a missing tool.
 
 set -u
+# No pathname expansion: unquoted words split from /etc/resolv.conf (`nameserver *`) stay words.
+set -f
 
 allow=""
 while [ "$#" -gt 0 ]; do
@@ -126,6 +128,7 @@ meta skuid AGENT_UID jump agent
 }
 chain agent {
 fib daddr type local counter goto refuse comment "local"
+fib daddr type anycast counter goto refuse comment "anycast"
 fib daddr type broadcast counter goto refuse comment "broadcast"
 fib daddr type multicast counter goto refuse comment "multicast"
 ip daddr 169.254.169.254 counter goto refuse comment "metadata"

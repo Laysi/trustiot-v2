@@ -11,4 +11,4 @@ FAIL listeners: tcp [::]:22 (sshd)
 FAIL egress: table inet trustiot_agent is not loaded: Error: No such file or directory
 list table inet trustiot_agent
                 ^^^^^^^^^^^^^^
-ok resolver: /etc/resolv.conf names no loopback nameserver
+ok resolver: no nameserver in /etc/resolv.conf is refused by the agent's egress rules

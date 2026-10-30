@@ -118,11 +118,17 @@ impl Lab {
         // container's own namespaces with rootless podman), SETUID and SETGID to switch accounts,
         // NET_BIND_SERVICE for the listeners on 53, 80 and 443, CHOWN, FOWNER and DAC_OVERRIDE
         // for systemd-sysusers (it copies the owner and mode of /etc/gshadow to its new file).
+        // IPv6 forwarding on (only in the container's namespace), as on a gateway that shares its
+        // connection: the kernel then adds subnet-router anycast addresses the rules must refuse.
         let lab = Self::run(
             runtime,
             &[
                 "--network",
                 "none",
+                "--sysctl",
+                "net.ipv6.conf.all.forwarding=1",
+                "--sysctl",
+                "net.ipv6.conf.default.forwarding=1",
                 "--memory",
                 "512m",
                 "--cap-drop",
@@ -224,7 +230,7 @@ struct Destination {
 
 /// Every kind of destination the rules refuse, each with a listener (or, for UDP, a route), as
 /// `tests/egress/lab.sh` sets them up.
-const REFUSED: [Destination; 15] = [
+const REFUSED: [Destination; 18] = [
     Destination {
         what: "loopback",
         proto: "tcp",
@@ -266,6 +272,27 @@ const REFUSED: [Destination; 15] = [
         address: "fd81:3::2",
         port: 8080,
         rule: "local",
+    },
+    Destination {
+        what: "the gateway's own link-local address",
+        proto: "tcp",
+        address: "fe80::81:2%veth0",
+        port: 8080,
+        rule: "local",
+    },
+    Destination {
+        what: "a UDP datagram to the gateway's own link-local address",
+        proto: "udp",
+        address: "fe80::81:2%veth0",
+        port: 9,
+        rule: "local",
+    },
+    Destination {
+        what: "the LAN prefix's subnet-router anycast address, which the gateway answers itself",
+        proto: "udp",
+        address: "fd81:3::",
+        port: 9,
+        rule: "anycast",
     },
     Destination {
         what: "an address local only through `ip route add local`",
@@ -370,7 +397,7 @@ fn the_agents_account_is_refused_the_gateway_broadcast_multicast_and_metadata() 
     );
     assert_eq!(
         lab.ok("nft list chain inet trustiot_agent agent | grep -c 'goto refuse'"),
-        "5"
+        "6"
     );
 
     // Every other account reaches every destination, so each one is there to be refused.
