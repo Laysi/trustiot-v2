@@ -794,11 +794,15 @@ describe("the demo release", () => {
       }
       // The cookie routes on the private app host (Laysi/trustiot-v2#619): the identity service's own
       // API, which the workstation tool's logout and the platform administrator's check use, and the
-      // certs service's platform-admin API. Each goes to its own service and nowhere else.
+      // certs service's platform-admin API; the assets API for the gateway's binding, model and device,
+      // and the gateway-ops list of gateways (Laysi/trustiot-v2#793). Each goes to its own service and
+      // nowhere else.
       const routes = objects.filter((m) => m.kind === "HTTPRoute").map((m) => JSON.stringify(m.spec));
       for (const [path, backend] of [
         ["/api/identity", "trustiot-identity"],
         ["/api/certs", "trustiot-certs"],
+        ["/api/assets", "trustiot-assets"],
+        ["/api/gateway-ops", "trustiot-gateway-ops"],
       ] as const) {
         const matching = routes.filter((r) => r.includes(`"value":"${path}"`));
         expect({ path, routes: matching.length }).toEqual({ path, routes: 1 });
