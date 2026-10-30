@@ -71,3 +71,11 @@ export function loginPath(current: string): string {
 
 /** The personal settings page (preferences, signing out of every device). */
 export const SETTINGS_PATH = "/settings";
+
+/** The devices; one device's page is `/devices/<device ID>` (pages/device/DevicePage.tsx). */
+export const DEVICES_PATH = "/devices";
+
+/** One device's page. */
+export function devicePath(deviceId: string): string {
+  return `${DEVICES_PATH}/${encodeURIComponent(deviceId)}`;
+}
