@@ -49,12 +49,20 @@ nightly 的證據：PR 帶 `smoke` label 後 CI 以兩份 values 部署並跑 `c
 
 ## nightly 的證據
 
-待填：PR 加上 `smoke` label 後，nightly 在 SaaS 與地端兩份 values 上的 run 與每份的 `checkAssistantApi` 報告行。
+PR Laysi/trustiot-v2#790 帶 `smoke` label，head `1dd10e27` 的 nightly run [41100242876](https://github.com/Laysi/trustiot-v2/actions/runs/41100242876)（2026-10-30）通過。兩份 values（`values-api-onprem.yaml`、`values-api-saas.yaml`）各自部署後，`checkAssistantApi` 的報告行相同：
+
+- 入口在 0–1 s 內路由 `/api/assistant/v1/conversations`
+- 租戶成員 `POST /api/assistant/v1/conversations`：201，列表看得到它
+- 同租戶的另一個成員：404 `not_found`，列表看不到
+- 刪除 204、讀取 404 `not_found`、已刪除清單看得到、還原 200、讀取 200
+- 沒有 cookie：401 `unauthenticated`
+- 沒有租戶的平台管理員：403 `permission_denied`
+- 經 port-forward 直接打 assistant：成員給 assistant 的 token 200，給 assets 的 token 401 `unauthenticated`
 
 ## 結論
 
 | 驗收條件 | 結果 |
 | --- | --- |
-| 帶 `smoke` label 的 PR 的 nightly 在兩份 values 上經入口完成六項檢查 | 待測：只有 CI 跑得了叢集；程式與單元測試已就緒，run 在 PR 上產生後填入上一節 |
+| 帶 `smoke` label 的 PR 的 nightly 在兩份 values 上經入口完成六項檢查 | 通過：run 41100242876，兩份 values 六項都通過（上一節） |
 | `bun test scripts`、`bun run --cwd scripts typecheck`、`bun test deploy/chart`、`bun test deploy/flux` 通過 | 通過（上表） |
 | `deploy/flux/README.md` 的「打開 assistant」與 `deploy/chart/README.md` 的路由範例更新；`bun test deploy/flux` 以 HEAD 的 chart 渲染展示叢集的 values 仍通過 | 通過：兩份文件已更新，`bun test deploy/flux` 78 項通過（沒有改 `values-demo.yaml`，打開展示環境的服務不在本 issue） |
