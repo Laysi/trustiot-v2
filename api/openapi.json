@@ -2832,6 +2832,10 @@
             "format": "int64",
             "type": "integer"
           },
+          "status": {
+            "$ref": "#/components/schemas/TenantStatus",
+            "description": "What the back office shows (Laysi/trustiot-v2#779): `processing` while the tenant is\nsuspended or deleted and the certs service has not yet confirmed that it applied this\nversion (gateways disconnected, CRL in effect); otherwise the state. Show how long a\ntenant has been processing from `state_changed_at`."
+          },
           "tenant_id": {
             "$ref": "#/components/schemas/TenantId",
             "description": "The tenant."
@@ -2841,9 +2845,20 @@
           "tenant_id",
           "state",
           "state_version",
-          "state_changed_at"
+          "state_changed_at",
+          "status"
         ],
         "type": "object"
+      },
+      "TenantStatus": {
+        "description": "What the back office shows of a tenant's state (Laysi/trustiot-v2#779): the state, except that a\nsuspension or deletion the certs service has not yet confirmed is still processing.",
+        "enum": [
+          "active",
+          "processing",
+          "suspended",
+          "deleted"
+        ],
+        "type": "string"
       },
       "Theme": {
         "description": "The interface's colors.",

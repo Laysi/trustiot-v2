@@ -11,6 +11,12 @@
 //! sets it). A tenant starts active at version 1; each change of the state or the reason adds
 //! one. A terminated contract and `deleted` are final.
 //!
+//! Every answer also carries [`TenantStatus`], what the back office shows (Laysi/trustiot-v2#779,
+//! README "停權的處理中"): a suspended or deleted tenant is `processing` until the certs service
+//! confirmed (`certs.tenant_state_applied`, recorded by [`crate::state_applied`]) that it applied
+//! this version or a newer one, and only then `suspended` or `deleted`; an active tenant is
+//! `active` at once.
+//!
 //! | Request | Response |
 //! | --- | --- |
 //! | No valid internal identity token | 401 `unauthenticated` |
@@ -85,16 +91,18 @@ const READ_PURPOSE: &str = "read-tenant-state";
 const SET_PURPOSE: &str = "set-tenant-state";
 
 /// The tenant's state; row-level security shows no other tenant's row.
-const READ_STATE: &str =
-    "SELECT state, suspension_reason, state_version, state_changed_at FROM identity.tenants
+const READ_STATE: &str = "SELECT state, suspension_reason, state_version, state_changed_at,
+    certs_applied_version
+FROM identity.tenants
 WHERE tenant_id = $1::uuid";
 
 /// The same, locked until the transaction ends, so two requests for one tenant change it one
 /// after the other and each decides on the state the previous one left. `NO KEY`: the update
 /// changes no key, so the lock is the one the update takes anyway and would not hold up a row
 /// that refers to the tenant.
-const LOCK_STATE: &str =
-    "SELECT state, suspension_reason, state_version, state_changed_at FROM identity.tenants
+const LOCK_STATE: &str = "SELECT state, suspension_reason, state_version, state_changed_at,
+    certs_applied_version
+FROM identity.tenants
 WHERE tenant_id = $1::uuid
 FOR NO KEY UPDATE";
 
@@ -104,7 +112,7 @@ FOR NO KEY UPDATE";
 const UPDATE_STATE: &str = "UPDATE identity.tenants
 SET state = $2, suspension_reason = $3, state_version = state_version + 1
 WHERE tenant_id = $1::uuid
-RETURNING state_version, state_changed_at";
+RETURNING state_version, state_changed_at, certs_applied_version";
 
 /// A tenant's lifecycle state, as the API returns it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
@@ -147,6 +155,40 @@ impl TenantState {
             Self::Active => events::TenantState::Active,
             Self::Suspended => events::TenantState::Suspended,
             Self::Deleted => events::TenantState::Deleted,
+        }
+    }
+}
+
+/// What the back office shows of a tenant's state (Laysi/trustiot-v2#779): the state, except that a
+/// suspension or deletion the certs service has not yet confirmed is still processing.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum TenantStatus {
+    /// The tenant is active (at once after a resumption: nothing waits for a confirmation).
+    Active,
+    /// The tenant is suspended or deleted, but the certs service has not yet confirmed that it
+    /// applied this state version (gateways disconnected, CRL in effect). Shown until it does,
+    /// however long that takes.
+    Processing,
+    /// The tenant is suspended, and the certs service confirmed this version or a newer one.
+    Suspended,
+    /// The tenant is deleted, and the certs service confirmed this version or a newer one.
+    Deleted,
+}
+
+impl TenantStatus {
+    /// The status of a tenant in `state` at `state_version`, when the certs service confirmed
+    /// `applied` (0 before any confirmation): `processing` while a suspension or deletion has a
+    /// larger version than the confirmed one.
+    #[must_use]
+    pub const fn of(state: TenantState, state_version: i64, applied: i64) -> Self {
+        match state {
+            TenantState::Active => Self::Active,
+            TenantState::Suspended | TenantState::Deleted if applied < state_version => {
+                Self::Processing
+            }
+            TenantState::Suspended => Self::Suspended,
+            TenantState::Deleted => Self::Deleted,
         }
     }
 }
@@ -238,6 +280,11 @@ pub struct TenantStateSnapshot {
     /// When the tenant got this state (its creation time while it was never changed), by the
     /// database clock.
     pub state_changed_at: DateTime<Utc>,
+    /// What the back office shows (Laysi/trustiot-v2#779): `processing` while the tenant is
+    /// suspended or deleted and the certs service has not yet confirmed that it applied this
+    /// version (gateways disconnected, CRL in effect); otherwise the state. Show how long a
+    /// tenant has been processing from `state_changed_at`.
+    pub status: TenantStatus,
 }
 
 /// The state a request asks for.
@@ -325,12 +372,12 @@ impl StateError {
 }
 
 /// A row of [`READ_STATE`] or [`LOCK_STATE`].
-type Row = (String, Option<String>, i64, DateTime<Utc>);
+type Row = (String, Option<String>, i64, DateTime<Utc>, i64);
 
 /// The snapshot of `tenant` from its row; [`StateError::Inconsistent`] when the row breaks the
 /// table's rules (which its CHECK constraints hold).
 fn snapshot(tenant: TenantId, row: Row) -> Result<TenantStateSnapshot, StateError> {
-    let (state, reason, state_version, state_changed_at) = row;
+    let (state, reason, state_version, state_changed_at, applied) = row;
     let state = TenantState::parse(&state).ok_or(StateError::Inconsistent("state"))?;
     let reason = reason
         .map(|reason| {
@@ -343,6 +390,7 @@ fn snapshot(tenant: TenantId, row: Row) -> Result<TenantStateSnapshot, StateErro
         reason,
         state_version,
         state_changed_at,
+        status: TenantStatus::of(state, state_version, applied),
     })
 }
 
@@ -460,18 +508,20 @@ async fn change(
     target: Target,
 ) -> Result<TenantStateSnapshot, StateError> {
     let tenant = current.tenant_id;
-    let (state_version, state_changed_at): (i64, DateTime<Utc>) = sqlx::query_as(UPDATE_STATE)
-        .bind(tenant.to_string())
-        .bind(target.state().as_str())
-        .bind(target.reason().map(SuspensionReason::as_str))
-        .fetch_one(&mut **tx)
-        .await?;
+    let (state_version, state_changed_at, applied): (i64, DateTime<Utc>, i64) =
+        sqlx::query_as(UPDATE_STATE)
+            .bind(tenant.to_string())
+            .bind(target.state().as_str())
+            .bind(target.reason().map(SuspensionReason::as_str))
+            .fetch_one(&mut **tx)
+            .await?;
     let changed = TenantStateSnapshot {
         tenant_id: tenant,
         state: target.state(),
         reason: target.reason(),
         state_version,
         state_changed_at,
+        status: TenantStatus::of(target.state(), state_version, applied),
     };
     let aggregate = Aggregate::new(events::TENANT_AGGREGATE, tenant.to_string())?;
     // The event names the administrator, so the operation log shows who changed the state.
@@ -811,6 +861,7 @@ mod tests {
             reason,
             state_version: 3,
             state_changed_at: DateTime::UNIX_EPOCH,
+            status: TenantStatus::of(state, 3, 0),
         }
     }
 
@@ -888,5 +939,58 @@ mod tests {
             schemas["SuspensionReason"]["enum"],
             serde_json::json!(["security_or_abuse", "non_payment", "contract_terminated"])
         );
+        assert_eq!(
+            schemas["TenantStatus"]["enum"],
+            serde_json::json!(["active", "processing", "suspended", "deleted"])
+        );
+        assert_eq!(
+            schemas["TenantStateSnapshot"]["properties"]["status"]["$ref"],
+            "#/components/schemas/TenantStatus"
+        );
+    }
+
+    #[test]
+    fn a_cut_off_is_processing_until_certs_confirmed_its_version() {
+        use TenantState::{Active, Deleted, Suspended};
+        use TenantStatus as S;
+        // `(state, state_version, confirmed version)` and what the back office shows.
+        for (state, version, applied, expected) in [
+            // Active at once, confirmed or not: a resumption waits for nothing.
+            (Active, 1, 0, S::Active),
+            (Active, 4, 0, S::Active),
+            (Active, 4, 3, S::Active),
+            (Active, 4, 4, S::Active),
+            // A suspension: processing until its own version or a newer one is confirmed.
+            (Suspended, 2, 0, S::Processing),
+            (Suspended, 2, 1, S::Processing),
+            (Suspended, 2, 2, S::Suspended),
+            // An older confirmation (of the suspension before a resumption, say) is not enough.
+            (Suspended, 5, 2, S::Processing),
+            (Suspended, 5, 4, S::Processing),
+            (Suspended, 5, 5, S::Suspended),
+            // The database never stores a confirmation ahead of the state; were one read, it
+            // would cover the state.
+            (Suspended, 5, 6, S::Suspended),
+            (Deleted, 7, 6, S::Processing),
+            (Deleted, 7, 7, S::Deleted),
+        ] {
+            assert_eq!(
+                TenantStatus::of(state, version, applied),
+                expected,
+                "{state:?} at {version}, confirmed {applied}"
+            );
+        }
+        // The same names as the state where they overlap.
+        for (status, name) in [
+            (S::Active, "active"),
+            (S::Processing, "processing"),
+            (S::Suspended, "suspended"),
+            (S::Deleted, "deleted"),
+        ] {
+            assert_eq!(
+                serde_json::to_value(status).expect("serialize"),
+                serde_json::Value::String(name.to_owned())
+            );
+        }
     }
 }
