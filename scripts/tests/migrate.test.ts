@@ -191,7 +191,8 @@ describe("password bindings", () => {
       "identity_app=dev-identity-password,identity_platform=dev-identity-password," +
         "assets_app=dev-assets-password,assets_platform=dev-assets-password," +
         "telemetry_query_app=dev-telemetry-query-password,telemetry_query_platform=dev-telemetry-query-password," +
-        "certs_app=dev-certs-password,certs_platform=dev-certs-password,assistant_app=dev-assistant-password," +
+        "certs_app=dev-certs-password,certs_platform=dev-certs-password," +
+        "assistant_app=dev-assistant-password,assistant_platform=dev-assistant-password," +
         "ai_gateway_app=dev-ai-gateway-password," +
         "ingest_app=dev-ingest-password,ingest_platform=dev-ingest-password," +
         "gateway_ops_app=dev-gateway-ops-password,gateway_ops_platform=dev-gateway-ops-password",

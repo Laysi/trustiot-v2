@@ -10,6 +10,7 @@ repository.workspace = true
 [dependencies]
 # The services whose specs go into api/openapi.json (SERVICES in src/lib.rs).
 assets = { path = "../../services/assets" }
+assistant = { path = "../../services/assistant" }
 certs = { path = "../../services/certs" }
 contract = { path = "../../crates/contract" }
 gateway-ops = { path = "../../services/gateway-ops" }

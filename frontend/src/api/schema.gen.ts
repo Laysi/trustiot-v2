@@ -190,6 +190,89 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/assistant/v1/conversations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The caller's conversations, most recently active first. */
+        get: operations["listConversations"];
+        put?: never;
+        /**
+         * Starts a conversation for the caller: empty, with today's system prompt, tools and model
+         *     settings fixed for its whole life.
+         */
+        post: operations["createConversation"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/assistant/v1/conversations/{conversation_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** One of the caller's conversations with its questions and answers. */
+        get: operations["getConversation"];
+        put?: never;
+        post?: never;
+        /**
+         * Deletes one of the caller's conversations. It leaves every list but the deleted one, and
+         *     can be restored for 30 days; then it is removed for good.
+         */
+        delete: operations["deleteConversation"];
+        options?: never;
+        head?: never;
+        /** Renames, archives or unarchives one of the caller's conversations, both in one transaction. */
+        patch: operations["updateConversation"];
+        trace?: never;
+    };
+    "/api/assistant/v1/conversations/{conversation_id}/restore": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Restores one of the caller's deleted conversations, as it was when it was deleted. Only
+         *     within 30 days of the deletion.
+         */
+        post: operations["restoreConversation"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/assistant/v1/deleted-conversations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The caller's deleted conversations that can still be restored, most recently deleted first:
+         *     titles and times, no messages.
+         */
+        get: operations["listDeletedConversations"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/certs/v1/gateway-registrations": {
         parameters: {
             query?: never;
@@ -632,6 +715,89 @@ export interface components {
              */
             resend_after_secs: number;
         };
+        /** @description A conversation as the list shows it. */
+        Conversation: {
+            /**
+             * Format: date-time
+             * @description When it was archived; `null` when it is not.
+             */
+            archived_at?: string | null;
+            /**
+             * Format: date-time
+             * @description When it was started, by the database clock.
+             */
+            created_at: string;
+            /**
+             * Format: uuid
+             * @description The conversation's ID.
+             */
+            id: string;
+            /**
+             * Format: date-time
+             * @description When messages were last added to it (when it was started, before that); the list's order.
+             */
+            last_activity_at: string;
+            /** @description Its title; `null` until it gets one. */
+            title?: string | null;
+            title_source?: components["schemas"]["ConversationTitleSource"] | null;
+        };
+        /**
+         * @description A conversation with the messages the chat shows: the questions and the answers, oldest
+         *     first. The assistant's reasoning, its tool calls and their results, and the instructions it
+         *     started with are not part of it.
+         */
+        ConversationDetail: {
+            /**
+             * Format: date-time
+             * @description When it was archived; `null` when it is not.
+             */
+            archived_at?: string | null;
+            /**
+             * Format: date-time
+             * @description When it was started, by the database clock.
+             */
+            created_at: string;
+            /**
+             * Format: uuid
+             * @description The conversation's ID.
+             */
+            id: string;
+            /**
+             * Format: date-time
+             * @description When messages were last added to it (when it was started, before that).
+             */
+            last_activity_at: string;
+            /** @description The questions and answers, oldest first. */
+            messages: components["schemas"]["ConversationMessage"][];
+            /** @description Its title; `null` until it gets one. */
+            title?: string | null;
+            title_source?: components["schemas"]["ConversationTitleSource"] | null;
+        };
+        /** @description One page of the caller's conversations, most recently active first. */
+        ConversationList: {
+            /** @description The conversations, most recently active first (by `last_activity_at`, then `id`). */
+            conversations: components["schemas"]["Conversation"][];
+            /** @description Pass it as `cursor` for the next page of the same list; `null` on the last page. Opaque. */
+            next_cursor?: string | null;
+        };
+        /** @description One message the chat shows: only its text. */
+        ConversationMessage: {
+            kind: components["schemas"]["ConversationMessageKind"];
+            /** @description The question as the user asked it, or the text of the answer. */
+            text: string;
+        };
+        /**
+         * @description What a message of the chat is.
+         * @enum {string}
+         */
+        ConversationMessageKind: "question" | "answer";
+        /**
+         * @description Who gave a conversation its title.
+         * @enum {string}
+         */
+        ConversationTitleSource: "provisional" | "user" | "model";
+        /** @description Starting a conversation takes no settings: no body, `null`, or an empty object. */
+        CreateConversation: Record<string, unknown>;
         /** @description The body of `POST /api/assets/v1/devices`. Unknown fields are refused. */
         CreateDevice: {
             /** @description The gateway that polls it: one currently bound to the caller's tenant. */
@@ -718,6 +884,36 @@ export interface components {
          * @enum {string}
          */
         DataStatus: "ok" | "no_data";
+        /** @description A deleted conversation: no messages. */
+        DeletedConversation: {
+            /**
+             * Format: date-time
+             * @description When it was deleted, by the database clock.
+             */
+            deleted_at: string;
+            /**
+             * Format: uuid
+             * @description The conversation's ID.
+             */
+            id: string;
+            /**
+             * Format: date-time
+             * @description Until when it can be restored (30 days after `deleted_at`); it is removed for good after.
+             */
+            restorable_until: string;
+            /** @description Its title; `null` if it had none. */
+            title?: string | null;
+        };
+        /**
+         * @description One page of the caller's deleted conversations that can still be restored, most recently
+         *     deleted first.
+         */
+        DeletedConversationList: {
+            /** @description The conversations, most recently deleted first (by `deleted_at`, then `id`). */
+            conversations: components["schemas"]["DeletedConversation"][];
+            /** @description Pass it as `cursor` for the next page; `null` on the last page. Opaque. */
+            next_cursor?: string | null;
+        };
         /** @description A device: a Modbus endpoint one of the tenant's gateways polls with one of its models. */
         Device: {
             /**
@@ -1500,6 +1696,8 @@ export interface components {
          * @enum {string}
          */
         Resolution: "1m" | "1h";
+        /** @description Restoring a conversation takes no settings: no body, `null`, or an empty object. */
+        RestoreConversation: Record<string, unknown>;
         /**
          * @description A reason a workstation or gateway certificate can be revoked for: the RFC 5280 CRLReason codes
          *     that apply to an end entity, without `certificateHold` (a revocation here is final).
@@ -1871,6 +2069,21 @@ export interface components {
             time: string;
             /** Format: double */
             value: number;
+        };
+        /** @description What to change: at least one of the two. */
+        UpdateConversation: {
+            /**
+             * @description `true` archives the conversation, `false` takes it out of the archive. An archived
+             *     conversation is listed only with `archived=true`, and can still be read and continued.
+             */
+            archived?: boolean | null;
+            /**
+             * @description The new title, 1 to 200 characters after trimming the surrounding white space, at least
+             *     one of them visible, without control, bidirectional or deprecated formatting (U+202A to
+             *     U+202E, U+2066 to U+206F) or line separator characters. It replaces any title, the
+             *     model's included.
+             */
+            title?: string | null;
         };
         /**
          * @description The body of `PUT /api/assets/v1/devices/{device_id}`: the device's settings, which replace
@@ -3108,6 +3321,483 @@ export interface operations {
             };
             /** @description The service has not processed the tenant's creation yet (`not_found`). */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The database failed (`unavailable`). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    listConversations: {
+        parameters: {
+            query?: {
+                /** @description `true` lists only the archived conversations; without it, or `false`, only the ones not archived. */
+                archived?: boolean;
+                /** @description Conversations per page, 1 to 100; default 50. */
+                limit?: number;
+                /** @description The previous page's `next_cursor` of the same list, for the next page. */
+                cursor?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description A page of the caller's conversations; deleted ones are never listed. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConversationList"];
+                };
+            };
+            /** @description A malformed query, `archived` other than `true` or `false` (`invalid_request`), a `limit` out of range (`conversation.limit_invalid`), or a `cursor` that is not a `next_cursor` of this list (`conversation.cursor_invalid`). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No valid session (`unauthenticated`). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No tenant or no role in it (`permission_denied`). */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The database failed (`unavailable`). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    createConversation: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Nothing to set: send `Content-Type: application/json` (required, against cross-site requests) with no body, `null`, or an empty object. */
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["CreateConversation"] | null;
+            };
+        };
+        responses: {
+            /** @description The conversation was started; `Location` names it. */
+            201: {
+                headers: {
+                    /** @description The conversation's path. */
+                    location?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Conversation"];
+                };
+            };
+            /** @description The `Content-Type` is not `application/json` (`invalid_request`), or there is a body other than `null` or an empty object (`conversation.body_invalid`). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No valid session (`unauthenticated`). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No tenant or no role in it (`permission_denied`). */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The caller started 100 conversations in this tenant within the last 24 hours, deleted ones included (`rate_limited`, key `conversation.start_limited`, `details.max`); nothing was stored. */
+            429: {
+                headers: {
+                    /** @description Seconds until the oldest of those conversations leaves the 24 hours and a start is allowed again. */
+                    "retry-after"?: number;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The database failed (`unavailable`); nothing was written. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    getConversation: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The conversation's ID. */
+                conversation_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The conversation and the messages the chat shows. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConversationDetail"];
+                };
+            };
+            /** @description No valid session (`unauthenticated`). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No tenant or no role in it (`permission_denied`). */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No such conversation of the caller's, or it is deleted (`not_found`). */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The database failed (`unavailable`). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    deleteConversation: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The conversation's ID. */
+                conversation_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Deleted; it can be restored for 30 days (the deleted list gives until when). No body. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No valid session (`unauthenticated`). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No tenant or no role in it (`permission_denied`). */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No such conversation of the caller's, or it is already deleted (`not_found`). */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description A question of the conversation is being answered (`conflict`, `conversation.question_running`). Nothing changed. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The database failed (`unavailable`); nothing changed. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    updateConversation: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The conversation's ID. */
+                conversation_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateConversation"];
+            };
+        };
+        responses: {
+            /** @description The conversation as it is now. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Conversation"];
+                };
+            };
+            /** @description The `Content-Type` is not `application/json` (`invalid_request`), the body is not a JSON object of `title` and `archived` (`conversation.body_invalid`), or it has neither (`conversation.update_empty`). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No valid session (`unauthenticated`). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No tenant or no role in it (`permission_denied`). */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No such conversation of the caller's, or it is deleted (`not_found`). */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The title, after trimming, is empty, longer than 200 characters, has no visible character, or has a control, bidirectional formatting or line separator character (`validation_failed`, field `/title`, `conversation.title_invalid`). Nothing was written. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The database failed (`unavailable`); nothing was written. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    restoreConversation: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The conversation's ID. */
+                conversation_id: string;
+            };
+            cookie?: never;
+        };
+        /** @description Nothing to set: send `Content-Type: application/json` (required, against cross-site requests) with no body, `null`, or an empty object. */
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["RestoreConversation"] | null;
+            };
+        };
+        responses: {
+            /** @description Restored; the conversation as it is now. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Conversation"];
+                };
+            };
+            /** @description The `Content-Type` is not `application/json` (`invalid_request`), or there is a body other than `null` or an empty object (`conversation.body_invalid`). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No valid session (`unauthenticated`). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No tenant or no role in it (`permission_denied`). */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No deleted conversation of the caller's with this ID that can still be restored (`not_found`). */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The database failed (`unavailable`); nothing changed. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    listDeletedConversations: {
+        parameters: {
+            query?: {
+                /** @description Conversations per page, 1 to 100; default 50. */
+                limit?: number;
+                /** @description The previous page's `next_cursor` of this list, for the next page. */
+                cursor?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description A page of the caller's deleted conversations that can still be restored. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeletedConversationList"];
+                };
+            };
+            /** @description A malformed query (`invalid_request`), a `limit` out of range (`conversation.limit_invalid`), or a `cursor` that is not a `next_cursor` of this list (`conversation.cursor_invalid`). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No valid session (`unauthenticated`). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No tenant or no role in it (`permission_denied`). */
+            403: {
                 headers: {
                     [name: string]: unknown;
                 };

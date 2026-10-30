@@ -67,13 +67,10 @@ fn chart_helper(chart: &str, name: &str) -> String {
 /// purpose, so the role stays NOLOGIN, each with the reason. Add a service here only with a
 /// reason; once code connects as the role, move the service to the chart's
 /// "trustiot.migrate.platformLogins" instead. identity's platform role left the list on
-/// 2026-10-21 (Laysi/trustiot-v2#130), when its event log began to read events as it.
-const UNBOUND_PLATFORM_ROLES: &[(&str, &str)] = &[(
-    "assistant",
-    "assistant_platform only purges conversations deleted more than 30 days ago \
-     (Laysi/trustiot-v2#644); the scheduled purge that connects as it is Laysi/trustiot-v2#645, \
-     which lists the assistant in trustiot.migrate.platformLogins and budgets its pool",
-)];
+/// 2026-10-21 (Laysi/trustiot-v2#130), when its event log began to read events as it, and the
+/// assistant's on 2026-10-28 (Laysi/trustiot-v2#645), when its scheduled purge began to connect as
+/// it. Empty now; the check stays for the next platform role that no code uses yet.
+const UNBOUND_PLATFORM_ROLES: &[(&str, &str)] = &[];
 
 /// A login role logs in only while a Secret is bound to it. The chart binds `<schema>_app` for
 /// every service that uses Postgres, and `<schema>_platform` only for the services listed in

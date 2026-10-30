@@ -4,26 +4,57 @@
 //! tenant and sees only that user's conversations; a deleted one exists only for
 //! [`list_deleted`] and [`restore`].
 
+use std::time::Duration;
+
 use chrono::{DateTime, Utc};
 use service_kit::tenant::{PlatformTransaction, TenantTransaction};
 use sqlx::Row;
 use sqlx::postgres::PgRow;
 use uuid::Uuid;
 
-use super::{DELETED_RETENTION_DAYS, MAX_TITLE_CHARS, StoreError, check_tenant};
+use super::runs::running_before_deadline;
+use super::{DELETED_RETENTION_DAYS, MAX_TITLE_CHARS, StoreError, check_tenant, lock_owned};
 use crate::history::Principal;
 
 /// The most items one page of [`list`] or [`list_deleted`] returns; a larger limit is lowered
 /// to it, a limit of 0 raised to 1.
 pub const MAX_PAGE: usize = 100;
 
-/// `$1` tenant, `$2` user, `$3` whether archived ones are included, `$4` and `$5` the cursor
-/// (the last item of the previous page, or NULL), `$6` how many rows.
+/// How long [`purge_expired`]'s statement waits for a row lock before it gives up with SQLSTATE
+/// `55P03` (`lock_not_available`), set as the transaction's `lock_timeout`. The purge locks the
+/// expired conversations it deletes and, through the cascade, their messages, discarded rounds
+/// and runs. Nothing of the service holds such a lock for long (a restore that started just
+/// before the 30 days ended commits in milliseconds; the service role cannot even lock an expired
+/// row, `expired_stay_deleted`), so a wait this long means a stuck session: the round stops
+/// instead of holding its platform connection and the job lock behind it, and the purge then
+/// deletes that batch's conversations one at a time ([`purge_one`]) to pass over the locked one.
+/// `SKIP LOCKED` would pass over such rows without waiting, but `SELECT ... FOR UPDATE` needs the
+/// UPDATE privilege on the table, which the platform role does not have and should not get
+/// (tests/conversation_threads.rs checks the refusal).
+pub const PURGE_LOCK_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// How long [`purge_one`] waits for the one conversation it deletes, after a batch gave up on
+/// a lock. A row that a short transaction holds (a restore that started just before the 30 days
+/// ended commits in milliseconds) is granted well within it; a row that stays locked costs this
+/// wait once per round and is skipped until the next. Shorter than [`PURGE_LOCK_TIMEOUT`]
+/// because the batch has already waited that long: a round that meets N rows that stay locked
+/// waits at most N times (5 s + 1 s), when each is found in a batch of its own, and deletes
+/// every other expired conversation.
+pub const PURGE_ROW_LOCK_TIMEOUT: Duration = Duration::from_secs(1);
+
+/// SQLSTATE `lock_not_available`: [`purge_expired`] waited [`PURGE_LOCK_TIMEOUT`] for a lock.
+pub const LOCK_NOT_AVAILABLE: &str = "55P03";
+
+/// Sets `$1` as the transaction's `lock_timeout`, like `SET LOCAL`.
+const SET_LOCK_TIMEOUT: &str = "SELECT set_config('lock_timeout', $1, true)";
+
+/// `$1` tenant, `$2` user, `$3` whether the archived ones (or else the ones not archived), `$4`
+/// and `$5` the cursor (the last item of the previous page, or NULL), `$6` how many rows.
 const LIST: &str = "SELECT conversation_id::text AS conversation_id, title, title_source,
     created_at, last_activity_at, archived_at
 FROM assistant.conversations
 WHERE tenant_id = $1::uuid AND user_id = $2::uuid AND deleted_at IS NULL
-    AND ($3 OR archived_at IS NULL)
+    AND (archived_at IS NOT NULL) = $3
     AND ($4::timestamptz IS NULL
          OR last_activity_at < $4::timestamptz
          OR (last_activity_at = $4::timestamptz AND conversation_id < $5::uuid))
@@ -55,7 +86,8 @@ WHERE tenant_id = $1::uuid AND conversation_id = $2::uuid AND user_id = $3::uuid
     AND deleted_at IS NULL
 RETURNING 1 AS updated";
 
-/// `$1` tenant, `$2` conversation, `$3` user, `$4` the retention in days.
+/// `$1` tenant, `$2` conversation, `$3` user, `$4` the retention in days. Runs after
+/// [`lock_owned`] locked the row and no question was found running.
 const DELETE: &str = "UPDATE assistant.conversations
 SET deleted_at = now()
 WHERE tenant_id = $1::uuid AND conversation_id = $2::uuid AND user_id = $3::uuid
@@ -84,16 +116,119 @@ WHERE tenant_id = $1::uuid AND conversation_id = $2::uuid AND user_id = $3::uuid
     AND deleted_at IS NOT NULL AND deleted_at > now() - make_interval(days => $4)
 RETURNING 1 AS updated";
 
-/// `$1` the retention in days, `$2` how many. As the platform role, whose policies show it only
-/// conversations deleted more than 30 days ago: the condition here only repeats them. A row that
-/// a restore changed while this statement waited for its lock is checked again and skipped.
+/// `$1` the retention in days, `$2` how many, `$3` and `$4` the conversations to leave out (their
+/// tenants and IDs, pairwise, as text arrays; empty when none). As the platform role, whose
+/// policies show it only conversations deleted more than 30 days ago: the condition here only
+/// repeats them. A row that a restore changed while this statement waited for its lock is
+/// checked again and skipped.
 const PURGE: &str = "DELETE FROM assistant.conversations
 WHERE deleted_at <= now() - make_interval(days => $1)
     AND (tenant_id, conversation_id) IN (
         SELECT tenant_id, conversation_id FROM assistant.conversations
         WHERE deleted_at <= now() - make_interval(days => $1)
+            AND (tenant_id, conversation_id) NOT IN (
+                SELECT skipped.tenant_id, skipped.conversation_id
+                FROM unnest($3::text[]::uuid[], $4::text[]::uuid[])
+                    AS skipped (tenant_id, conversation_id))
         ORDER BY deleted_at
         LIMIT $2)";
+
+/// The keys of the conversations [`PURGE`] would delete next, with the same parameters; it locks
+/// nothing.
+const EXPIRED: &str =
+    "SELECT tenant_id::text AS tenant_id, conversation_id::text AS conversation_id
+FROM assistant.conversations
+WHERE deleted_at <= now() - make_interval(days => $1)
+    AND (tenant_id, conversation_id) NOT IN (
+        SELECT skipped.tenant_id, skipped.conversation_id
+        FROM unnest($3::text[]::uuid[], $4::text[]::uuid[]) AS skipped (tenant_id, conversation_id))
+ORDER BY deleted_at
+LIMIT $2";
+
+/// `$1` tenant, `$2` conversation, `$3` the retention in days: one expired conversation, if it is
+/// still expired.
+const PURGE_ONE: &str = "DELETE FROM assistant.conversations
+WHERE tenant_id = $1::uuid AND conversation_id = $2::uuid
+    AND deleted_at <= now() - make_interval(days => $3)";
+
+/// Whether `title` may be a conversation's title, as it is (the API trims the white space around
+/// a user's title first): 1 to [`MAX_TITLE_CHARS`] characters; no control character (Cc), no
+/// bidirectional embedding, override or isolate control (U+202A to U+202E, U+2066 to U+2069), no
+/// deprecated format character (U+206A to U+206F) and no line or paragraph separator (U+2028,
+/// U+2029), which would reorder or break how the title and what follows it are shown wherever it
+/// is displayed (shared, Laysi/trustiot-v2#650); and at
+/// least one visible character, one that is neither white space nor an invisible format
+/// character (`invisible`), so a title of zero-width spaces cannot pass for a name. The marks
+/// a script needs stay allowed beside visible characters: the zero-width joiner and non-joiner
+/// (emoji sequences, Persian) and the left-to-right, right-to-left and Arabic letter marks.
+///
+/// One rule for every title: the API answers a field error with it, and [`set_title`] refuses
+/// any other title, the model's (Laysi/trustiot-v2#651) included. The database's CHECK
+/// (`char_length(title) BETWEEN 1 AND 200`, 0002_conversation_threads.sql) keeps only the length.
+#[must_use]
+pub fn title_is_valid(title: &str) -> bool {
+    let chars = title.chars().count();
+    (1..=MAX_TITLE_CHARS).contains(&chars)
+        && !title.chars().any(refused_in_title)
+        && title.chars().any(|c| !c.is_whitespace() && !invisible(c))
+}
+
+/// Characters no title may contain: controls (Cc), the bidirectional embedding, override and
+/// isolate controls, the line and paragraph separators, and the deprecated format characters
+/// U+206A to U+206F (symmetric swapping, Arabic form shaping, digit shapes), which also change
+/// how text is shown.
+fn refused_in_title(c: char) -> bool {
+    c.is_control()
+        || matches!(
+            c,
+            '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{206F}' | '\u{2028}' | '\u{2029}'
+        )
+}
+
+/// Characters that show nothing by themselves: every code point of Unicode's
+/// Default_Ignorable_Code_Point property (DerivedCoreProperties.txt: the soft hyphen, the
+/// combining grapheme joiner, the Arabic letter mark, the Hangul and Khmer fillers, the Mongolian
+/// variation selectors and vowel separator, the zero-width space, joiners and directional marks,
+/// the word joiner and invisible operators, the variation selectors and their supplement, the
+/// byte order mark, the shorthand and musical format controls, the tags and the reserved
+/// ranges among them), the other format characters (General_Category Cf: the Arabic, Syriac and
+/// Kaithi prepended marks, the Egyptian hieroglyph format controls and the interlinear
+/// annotation characters), and the braille pattern blank, which renders as an empty cell.
+fn invisible(c: char) -> bool {
+    matches!(
+        c,
+        // Default_Ignorable_Code_Point.
+        '\u{00AD}'
+            | '\u{034F}'
+            | '\u{061C}'
+            | '\u{115F}'..='\u{1160}'
+            | '\u{17B4}'..='\u{17B5}'
+            | '\u{180B}'..='\u{180F}'
+            | '\u{200B}'..='\u{200F}'
+            | '\u{202A}'..='\u{202E}'
+            | '\u{2060}'..='\u{206F}'
+            | '\u{3164}'
+            | '\u{FE00}'..='\u{FE0F}'
+            | '\u{FEFF}'
+            | '\u{FFA0}'
+            | '\u{FFF0}'..='\u{FFF8}'
+            | '\u{1BCA0}'..='\u{1BCA3}'
+            | '\u{1D173}'..='\u{1D17A}'
+            | '\u{E0000}'..='\u{E0FFF}'
+            // The other format characters (Cf).
+            | '\u{0600}'..='\u{0605}'
+            | '\u{06DD}'
+            | '\u{070F}'
+            | '\u{0890}'..='\u{0891}'
+            | '\u{08E2}'
+            | '\u{110BD}'
+            | '\u{110CD}'
+            | '\u{13430}'..='\u{1343F}'
+            | '\u{FFF9}'..='\u{FFFB}'
+            // Braille pattern blank.
+            | '\u{2800}'
+    )
+}
 
 /// Who named a conversation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -120,6 +255,15 @@ impl TitleSource {
             .into_iter()
             .find(|source| source.as_str() == name)
     }
+}
+
+/// Which of a user's conversations [`list`] returns; deleted ones never.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ListFilter {
+    /// Those not archived: the default list.
+    Active,
+    /// The archived ones only.
+    Archived,
 }
 
 /// A conversation's title and who gave it.
@@ -221,8 +365,8 @@ fn deleted(row: &PgRow) -> Result<DeletedConversation, StoreError> {
 }
 
 /// `principal`'s conversations in the transaction's tenant, most recently active first, at most
-/// `limit` (1 to [`MAX_PAGE`]) after `after`. Archived ones only with `include_archived`;
-/// deleted ones never.
+/// `limit` (1 to [`MAX_PAGE`]) after `after`: those not archived, or only the archived ones
+/// (`filter`); deleted ones never. A cursor from the other filter's list only moves the position.
 ///
 /// # Errors
 ///
@@ -230,7 +374,7 @@ fn deleted(row: &PgRow) -> Result<DeletedConversation, StoreError> {
 pub async fn list(
     tx: &mut TenantTransaction,
     principal: Principal,
-    include_archived: bool,
+    filter: ListFilter,
     after: Option<ListCursor>,
     limit: usize,
 ) -> Result<Page<ConversationSummary, ListCursor>, StoreError> {
@@ -239,7 +383,7 @@ pub async fn list(
     let rows = sqlx::query(LIST)
         .bind(principal.tenant_id.to_string())
         .bind(principal.user_id.to_string())
-        .bind(include_archived)
+        .bind(filter == ListFilter::Archived)
         .bind(after.map(|cursor| cursor.last_activity_at))
         .bind(after.map(|cursor| cursor.id.to_string()))
         .bind(fetch_size(size))
@@ -287,9 +431,8 @@ pub async fn metadata(
 ///
 /// # Errors
 ///
-/// [`StoreError::Unstorable`] for an empty title, one over [`MAX_TITLE_CHARS`] characters or
-/// one with control characters; [`StoreError::NotStored`], [`StoreError::WrongTenant`] or a
-/// database failure.
+/// [`StoreError::Unstorable`] for a title [`title_is_valid`] refuses; [`StoreError::NotStored`],
+/// [`StoreError::WrongTenant`] or a database failure.
 pub async fn set_title(
     tx: &mut TenantTransaction,
     principal: Principal,
@@ -298,10 +441,10 @@ pub async fn set_title(
     source: TitleSource,
 ) -> Result<bool, StoreError> {
     check_tenant(tx, principal.tenant_id)?;
-    let chars = title.chars().count();
-    if chars == 0 || chars > MAX_TITLE_CHARS || title.chars().any(char::is_control) {
+    if !title_is_valid(title) {
         return Err(StoreError::Unstorable(
-            "a title has 1 to 200 characters and no control characters",
+            "a title has 1 to 200 characters, at least one visible, and no control or \
+             bidirectional formatting characters",
         ));
     }
     let updated = sqlx::query(SET_TITLE)
@@ -347,22 +490,46 @@ pub async fn archive(
 
 /// Deletes `principal`'s conversation `id`: it is gone for every other function until the owner
 /// restores it within [`DELETED_RETENTION_DAYS`] days, after which the purge removes it with its
-/// messages, discarded rounds and runs. Waits for an [`append`](super::append) or a run start
-/// that holds the conversation's row; afterwards nothing more is appended.
+/// messages, discarded rounds and runs. Afterwards nothing more is appended.
+///
+/// A conversation with a question running is not deleted ([`StoreError::AlreadyRunning`], and
+/// nothing is changed): stopping it and deleting during a question is Laysi/trustiot-v2#646. A
+/// question still `running` past its deadline (the service stopped mid-question) does not
+/// count, also when the deadline passed while the delete waited for the row lock. The delete
+/// leaves such a run as it is: the next [`start_run`](super::start_run) after a restore marks
+/// it [`RunStatus::Interrupted`](super::RunStatus::Interrupted), and the purge removes it with
+/// the conversation.
+///
+/// It locks the conversation's row first, so it waits for an [`append`](super::append) or a
+/// [`start_run`](super::start_run) that holds it, and only then looks for a running question,
+/// in a statement of its own. Under READ COMMITTED a statement sees the rows committed before
+/// it started: a single `UPDATE ... WHERE NOT EXISTS (running question)` that waited for
+/// `start_run`'s lock would re-check only the conversation's row after the wait, and miss the
+/// question `start_run` just committed. Of a delete and a question start that meet, exactly one
+/// happens: the start commits its run first and the delete refuses, or the delete commits first
+/// and the start finds no conversation ([`StoreError::NotStored`]).
 ///
 /// # Errors
 ///
-/// [`StoreError::NotStored`] (also when it is already deleted), [`StoreError::WrongTenant`],
-/// [`StoreError::Corrupt`] or a database failure.
+/// [`StoreError::NotStored`] (also when it is already deleted), [`StoreError::AlreadyRunning`],
+/// [`StoreError::WrongTenant`], [`StoreError::Corrupt`] or a database failure.
 pub async fn delete(
     tx: &mut TenantTransaction,
     principal: Principal,
     id: Uuid,
 ) -> Result<DeletedConversation, StoreError> {
     check_tenant(tx, principal.tenant_id)?;
+    let tenant_text = principal.tenant_id.to_string();
+    let id_text = id.to_string();
+    if !lock_owned(tx, &tenant_text, &id_text, principal.user_id).await? {
+        return Err(StoreError::NotStored);
+    }
+    if running_before_deadline(tx, &tenant_text, &id_text).await? {
+        return Err(StoreError::AlreadyRunning);
+    }
     sqlx::query(DELETE)
-        .bind(principal.tenant_id.to_string())
-        .bind(id.to_string())
+        .bind(&tenant_text)
+        .bind(&id_text)
         .bind(principal.user_id.to_string())
         .bind(DELETED_RETENTION_DAYS)
         .fetch_optional(&mut **tx)
@@ -436,24 +603,132 @@ pub async fn restore(
         .ok_or(StoreError::NotStored)
 }
 
+/// An expired conversation by its key, as the purge finds it. Its IDs never reach a log line.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ExpiredConversation {
+    /// The conversation's tenant.
+    pub tenant_id: Uuid,
+    /// The conversation.
+    pub conversation_id: Uuid,
+}
+
+/// [`PURGE`]'s and [`EXPIRED`]'s `$3` and `$4`: the tenants and the IDs of `skipped`, pairwise.
+fn skipped_keys(skipped: &[ExpiredConversation]) -> (Vec<String>, Vec<String>) {
+    skipped
+        .iter()
+        .map(|key| (key.tenant_id.to_string(), key.conversation_id.to_string()))
+        .unzip()
+}
+
+/// Sets `tx`'s `lock_timeout` to `timeout`.
+async fn set_lock_timeout(
+    tx: &mut PlatformTransaction,
+    timeout: Duration,
+) -> Result<(), StoreError> {
+    sqlx::query(SET_LOCK_TIMEOUT)
+        .bind(format!("{}ms", timeout.as_millis()))
+        .execute(&mut **tx)
+        .await?;
+    Ok(())
+}
+
 /// Removes up to `limit` conversations of any tenant that were deleted more than
 /// [`DELETED_RETENTION_DAYS`] days ago, oldest first, with everything that belongs to them
-/// (messages, discarded rounds, runs: `ON DELETE CASCADE`). Returns how many it removed; the
-/// caller repeats until it gets fewer than `limit`.
+/// (messages, discarded rounds, runs: `ON DELETE CASCADE`), leaving out `skipped`. Returns how
+/// many it removed; the caller repeats until it gets fewer than `limit`.
 ///
 /// `tx` is a transaction of the assistant's platform role (`assistant_platform`, through
 /// service-kit's `PlatformDb`, which logs each one): the role sees and deletes only expired
 /// conversations, so this cannot remove a conversation that is live or still restorable,
-/// whatever the statement says. The scheduled job that calls it is Laysi/trustiot-v2#645's.
+/// whatever the statement says. The scheduled job [`crate::purge`] calls it.
+///
+/// It sets the transaction's `lock_timeout` to [`PURGE_LOCK_TIMEOUT`] first, so every caller
+/// waits at most that long for a row another session holds: then it fails with SQLSTATE
+/// [`LOCK_NOT_AVAILABLE`], nothing of the statement is deleted, and the caller rolls `tx` back.
+/// The purge then deletes the batch's conversations ([`expired_conversations`]) one at a time
+/// with [`purge_one`], and leaves the ones that stay locked out of its next batches
+/// (`skipped`), so one locked row never holds up the others.
 ///
 /// # Errors
 ///
-/// A database failure.
-pub async fn purge_expired(tx: &mut PlatformTransaction, limit: u32) -> Result<u64, StoreError> {
+/// A database failure; [`StoreError::sqlstate`] is [`LOCK_NOT_AVAILABLE`] after the lock wait.
+pub async fn purge_expired(
+    tx: &mut PlatformTransaction,
+    limit: u32,
+    skipped: &[ExpiredConversation],
+) -> Result<u64, StoreError> {
+    set_lock_timeout(tx, PURGE_LOCK_TIMEOUT).await?;
+    let (tenants, ids) = skipped_keys(skipped);
     Ok(sqlx::query(PURGE)
         .bind(DELETED_RETENTION_DAYS)
         .bind(i64::from(limit))
+        .bind(&tenants)
+        .bind(&ids)
         .execute(&mut **tx)
         .await?
         .rows_affected())
+}
+
+/// The keys of the up to `limit` expired conversations that [`purge_expired`] with the same
+/// `skipped` would remove next, oldest first. It reads only keys and locks no row, so a row
+/// another session holds does not make it wait. A table lock does: an `ALTER TABLE`, a
+/// `LOCK TABLE`, a `VACUUM FULL` that holds or queues for ACCESS EXCLUSIVE on the table. So it
+/// sets the transaction's `lock_timeout` to [`PURGE_LOCK_TIMEOUT`] first, like
+/// [`purge_expired`]: the purge holds the job lock and a platform connection while it waits, and
+/// never waits for a lock without a bound.
+///
+/// # Errors
+///
+/// A database failure, or a key that does not read back as a UUID ([`StoreError::Corrupt`]);
+/// [`StoreError::sqlstate`] is [`LOCK_NOT_AVAILABLE`] after the lock wait.
+pub async fn expired_conversations(
+    tx: &mut PlatformTransaction,
+    limit: u32,
+    skipped: &[ExpiredConversation],
+) -> Result<Vec<ExpiredConversation>, StoreError> {
+    set_lock_timeout(tx, PURGE_LOCK_TIMEOUT).await?;
+    let (tenants, ids) = skipped_keys(skipped);
+    let rows = sqlx::query(EXPIRED)
+        .bind(DELETED_RETENTION_DAYS)
+        .bind(i64::from(limit))
+        .bind(&tenants)
+        .bind(&ids)
+        .fetch_all(&mut **tx)
+        .await?;
+    rows.iter()
+        .map(|row| {
+            let key = |column: &str| -> Result<Uuid, StoreError> {
+                row.try_get::<String, _>(column)?
+                    .parse()
+                    .map_err(|_| StoreError::Corrupt("an expired conversation's key"))
+            };
+            Ok(ExpiredConversation {
+                tenant_id: key("tenant_id")?,
+                conversation_id: key("conversation_id")?,
+            })
+        })
+        .collect()
+}
+
+/// Removes the one expired conversation `conversation` with everything that belongs to it, if it is
+/// still expired (a restore may have taken it back since it was found). Returns whether it
+/// removed it. Waits at most [`PURGE_ROW_LOCK_TIMEOUT`] for its row: then it fails with
+/// [`LOCK_NOT_AVAILABLE`], and the caller rolls `tx` back and skips it until the next round.
+///
+/// # Errors
+///
+/// A database failure; [`StoreError::sqlstate`] is [`LOCK_NOT_AVAILABLE`] after the lock wait.
+pub async fn purge_one(
+    tx: &mut PlatformTransaction,
+    conversation: ExpiredConversation,
+) -> Result<bool, StoreError> {
+    set_lock_timeout(tx, PURGE_ROW_LOCK_TIMEOUT).await?;
+    Ok(sqlx::query(PURGE_ONE)
+        .bind(conversation.tenant_id.to_string())
+        .bind(conversation.conversation_id.to_string())
+        .bind(DELETED_RETENTION_DAYS)
+        .execute(&mut **tx)
+        .await?
+        .rows_affected()
+        == 1)
 }

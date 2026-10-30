@@ -16,6 +16,8 @@
 //! - One question runs at a time per conversation; a question past its deadline is interrupted
 //!   by the next.
 //! - Another user of the tenant finds none of it.
+//! - A user starts at most `MAX_STARTS_PER_DAY` conversations per tenant in 24 hours; storing
+//!   one that is stored already (a retry) is not a new start.
 //! - The database sets every time itself and refuses an oversized message; a store error carries
 //!   no database text.
 //!
@@ -35,7 +37,9 @@ use std::time::{Duration, Instant};
 
 use assistant::Agent;
 use assistant::history::{Conversation, EntryKind, Principal};
-use assistant::store::{self, Loaded, RunOutcome, RunStatus, StoreError, Stored, TitleSource};
+use assistant::store::{
+    self, ListFilter, Loaded, RunOutcome, RunStatus, StoreError, Stored, TitleSource,
+};
 use assistant::tools::{NoDelegation, Tool};
 use chrono::{DateTime, TimeDelta, Utc};
 use contract::identity::{TenantGrant, TenantRole};
@@ -46,7 +50,9 @@ use service_kit::tenant::{
 };
 use sqlx::postgres::{PgDatabaseError, PgPoolOptions};
 use sqlx::{Connection, PgConnection, Row};
-use support::{CountReadings, StandIn, WAIT, agent, fixture, ok, respond, settings, tool_step};
+use support::{
+    Capture, CountReadings, StandIn, WAIT, agent, fixture, ok, respond, settings, tool_step,
+};
 use testkit::identity::TestIssuer;
 use testkit::product::{DATABASE, ProductPostgres, product_postgres};
 use uuid::Uuid;
@@ -86,6 +92,19 @@ WHERE conversation_id = $1::uuid";
 const AGE_RUN: &str = "UPDATE assistant.runs
 SET started_at = started_at - interval '2 hours', deadline_at = deadline_at - interval '2 hours'
 WHERE run_id = $1::uuid";
+
+/// The superuser stores `$3` conversations of user `$2` in tenant `$1`, started `$4` minutes
+/// ago: a day's starts without making each one.
+const SEED_STARTS: &str = "INSERT INTO assistant.conversations
+    (tenant_id, conversation_id, user_id, prompt_version, system_prompt, tenant_context, tools,
+     effort, cache_ttl, created_at, last_activity_at)
+SELECT $1::uuid, gen_random_uuid(), $2::uuid, 'seed', '', '', '[]', 'medium', '5m',
+    now() - make_interval(mins => $4), now() - make_interval(mins => $4)
+FROM generate_series(1, $3)";
+
+/// How many conversations user `$2` has stored in tenant `$1`, deleted ones included.
+const STARTED: &str = "SELECT count(*) FROM assistant.conversations
+WHERE tenant_id = $1::uuid AND user_id = $2::uuid";
 
 /// Whether a session waits for a lock that the session `$1` holds.
 const BLOCKS_ANOTHER: &str = "SELECT EXISTS (
@@ -292,17 +311,11 @@ impl Db {
         page.items.iter().map(|item| item.id).collect()
     }
 
-    async fn listed_ids(&self, user: &UserIdentity, include_archived: bool) -> Vec<Uuid> {
+    async fn listed_ids(&self, user: &UserIdentity, filter: ListFilter) -> Vec<Uuid> {
         let mut tx = self.tx(user).await;
-        let page = store::list(
-            &mut tx,
-            principal(user),
-            include_archived,
-            None,
-            store::MAX_PAGE,
-        )
-        .await
-        .expect("the list");
+        let page = store::list(&mut tx, principal(user), filter, None, store::MAX_PAGE)
+            .await
+            .expect("the list");
         tx.commit().await.expect("commit");
         page.items.iter().map(|item| item.id).collect()
     }
@@ -397,10 +410,12 @@ impl Db {
             "run status"
         );
         tx.commit().await.expect("commit");
-        assert!(
-            !self.listed_ids(user, true).await.contains(&id),
-            "the list, archived included"
-        );
+        for filter in [ListFilter::Active, ListFilter::Archived] {
+            assert!(
+                !self.listed_ids(user, filter).await.contains(&id),
+                "the list of {filter:?}"
+            );
+        }
 
         let refusals: [(&str, Result<(), StoreError>); 6] = [
             ("rename", {
@@ -553,7 +568,11 @@ async fn a_deleted_conversation_is_gone_until_its_owner_restores_it() {
     let restored = db.load(&owner, id).await.expect("restored");
     assert_eq!(entries(&restored.conversation), history);
     assert!(db.deleted_ids(&owner).await.is_empty());
-    assert!(db.listed_ids(&owner, false).await.contains(&id));
+    assert!(
+        db.listed_ids(&owner, ListFilter::Active)
+            .await
+            .contains(&id)
+    );
     println!(
         "restored conversation: {} messages and every row as before the deletion",
         history.len()
@@ -594,7 +613,9 @@ async fn another_user_of_the_tenant_finds_nothing() {
     tx.rollback().await.expect("roll back");
     assert_eq!(db.snapshot(id).await, before, "nothing changed");
 
-    // Deleted, it stays out of the colleague's reach.
+    // Deleted, it stays out of the colleague's reach (a running question keeps it, so the
+    // owner's question ends first).
+    db.finish_run(&owner, running, RunOutcome::Cancelled).await;
     db.delete(&owner, id).await;
     let deleted = db.snapshot(id).await;
     assert!(db.deleted_ids(&colleague).await.is_empty());
@@ -760,6 +781,12 @@ async fn expired_conversations_are_purged_and_nothing_else() {
         "DELETE FROM assistant.runs",
         "UPDATE assistant.conversations SET deleted_at = NULL",
         "SELECT system_prompt FROM assistant.conversations",
+        // Row locks need the UPDATE privilege, which the purge role does not have: the reason
+        // the purge waits with a lock_timeout instead of skipping locked rows
+        // (store::PURGE_LOCK_TIMEOUT).
+        "SELECT conversation_id FROM assistant.conversations FOR UPDATE SKIP LOCKED",
+        "SELECT conversation_id FROM assistant.conversations FOR NO KEY UPDATE SKIP LOCKED",
+        "SELECT conversation_id FROM assistant.conversations FOR SHARE SKIP LOCKED",
     ] {
         let mut tx = db.platform_tx().await;
         let error = sqlx::query(statement)
@@ -777,7 +804,9 @@ async fn expired_conversations_are_purged_and_nothing_else() {
     // The purge removes the two expired conversations with every row they hold, and nothing
     // else.
     let mut tx = db.platform_tx().await;
-    let purged = store::purge_expired(&mut tx, 100).await.expect("purge");
+    let purged = store::purge_expired(&mut tx, 100, &[])
+        .await
+        .expect("purge");
     tx.commit().await.expect("commit");
     assert_eq!(purged, 2);
     for id in [expired, expired_elsewhere] {
@@ -787,7 +816,12 @@ async fn expired_conversations_are_purged_and_nothing_else() {
     assert_eq!(db.snapshot(recent).await, recent_before);
     assert_eq!(db.snapshot(live).await, live_before);
     let mut tx = db.platform_tx().await;
-    assert_eq!(store::purge_expired(&mut tx, 100).await.expect("purge"), 0);
+    assert_eq!(
+        store::purge_expired(&mut tx, 100, &[])
+            .await
+            .expect("purge"),
+        0
+    );
     tx.commit().await.expect("commit");
     db.restore(&owner, recent).await.expect("still restorable");
     assert!(db.load(&owner, live).await.is_some());
@@ -846,7 +880,7 @@ async fn expired_conversations_are_purged_and_nothing_else() {
                 .expect("restore");
             let holder = backend_pid(&mut restoring).await;
             let purge = tokio::spawn(async move {
-                let purged = store::purge_expired(&mut purging, 100).await;
+                let purged = store::purge_expired(&mut purging, 100, &[]).await;
                 (purged, purging)
             });
             db.wait_until_blocking(holder, "the purge").await;
@@ -864,7 +898,7 @@ async fn expired_conversations_are_purged_and_nothing_else() {
             println!("restore first: restored, the purge removed nothing");
         } else {
             assert_eq!(
-                store::purge_expired(&mut purging, 100)
+                store::purge_expired(&mut purging, 100, &[])
                     .await
                     .expect("purge"),
                 1
@@ -887,6 +921,147 @@ async fn expired_conversations_are_purged_and_nothing_else() {
             println!("purge first: purged, the restore found nothing");
         }
     }
+
+    // A session holds a lock on the oldest expired conversation for a whole round. A batch waits
+    // PURGE_LOCK_TIMEOUT, then fails with 55P03 and deletes nothing of it; the round then
+    // deletes the batch's conversations one at a time, skips the locked one, and still purges
+    // the newer one. Once the lock is gone, the next round purges the skipped one.
+    let (older, _) = db.with_every_kind_of_row(&owner).await;
+    let (newer, _) = db.with_every_kind_of_row(&owner).await;
+    for (id, days) in [(older, 32), (newer, 31)] {
+        db.delete(&owner, id).await;
+        db.backdate(id, Utc::now() - TimeDelta::days(days)).await;
+    }
+    let older_before = db.snapshot(older).await;
+    let mut admin = db.superuser().await;
+    let mut holding = admin.begin().await.expect("a superuser transaction");
+    sqlx::query(
+        "SELECT 1 FROM assistant.conversations WHERE conversation_id = $1::uuid FOR UPDATE",
+    )
+    .bind(older.to_string())
+    .fetch_one(&mut *holding)
+    .await
+    .expect("lock the older expired conversation");
+    let mut tx = db.platform_tx().await;
+    let waited = Instant::now();
+    let failure = store::purge_expired(&mut tx, 100, &[])
+        .await
+        .expect_err("the batch gives up on the locked row");
+    let waited = waited.elapsed();
+    tx.rollback().await.expect("roll back");
+    assert_eq!(
+        failure.sqlstate(),
+        Some(store::LOCK_NOT_AVAILABLE),
+        "{failure:?}"
+    );
+    assert!(
+        waited >= store::PURGE_LOCK_TIMEOUT,
+        "it waited the lock timeout it set: {waited:?}"
+    );
+    assert!(!format!("{failure} {failure:?}").contains(&older.to_string()));
+    assert!(
+        !db.snapshot(newer).await.is_gone(),
+        "the failed batch deleted nothing"
+    );
+    // Before: what the purge finds next, oldest first; it reads keys and locks nothing.
+    let mut tx = db.platform_tx().await;
+    let next = store::expired_conversations(&mut tx, 100, &[])
+        .await
+        .expect("the expired keys");
+    tx.rollback().await.expect("roll back");
+    let key = |id: Uuid| store::ExpiredConversation {
+        tenant_id: owner_tenant.into(),
+        conversation_id: id,
+    };
+    assert_eq!(next, [key(older), key(newer)]);
+
+    // The job's round: the newer one is purged, the older one skipped, one WARN line of its
+    // own with the counts and nothing else.
+    let (capture, guard) = Capture::install();
+    let round = assistant::purge::round(&db.platform)
+        .await
+        .expect("a round that meets a locked row ends without an error");
+    drop(guard);
+    assert_eq!(
+        round,
+        assistant::purge::Round {
+            purged: 1,
+            skipped: 1
+        }
+    );
+    assert!(
+        db.snapshot(newer).await.is_gone(),
+        "the newer one is purged"
+    );
+    assert_eq!(
+        db.snapshot(older).await,
+        older_before,
+        "nothing of the locked one was deleted"
+    );
+    let events = capture.events();
+    let own: Vec<_> = events
+        .iter()
+        .filter(|event| event.target == "assistant::purge")
+        .collect();
+    assert_eq!(own.len(), 1, "one line per round: {events:?}");
+    assert_eq!(own[0].level, tracing::Level::WARN, "{own:?}");
+    assert_eq!(
+        (
+            own[0].fields.get("purged").map(String::as_str),
+            own[0].fields.get("skipped").map(String::as_str),
+            own[0].fields.get("job").map(String::as_str),
+        ),
+        (Some("1"), Some("1"), Some("purge")),
+        "{own:?}"
+    );
+    let logged = format!("{events:?}");
+    for id in [older, newer] {
+        assert!(!logged.contains(&id.to_string()), "no ID in the log");
+    }
+    assert!(
+        !logged.contains(&owner_tenant.to_string()),
+        "no tenant in the log"
+    );
+    // The round leaves the skipped one out of its later batches: the keys without it.
+    let mut tx = db.platform_tx().await;
+    assert!(
+        store::expired_conversations(&mut tx, 100, &[key(older)])
+            .await
+            .expect("the expired keys")
+            .is_empty()
+    );
+    tx.rollback().await.expect("roll back");
+
+    // Released: the next round purges it, and says so at INFO.
+    holding.rollback().await.expect("release the lock");
+    let (capture, guard) = Capture::install();
+    let round = assistant::purge::round(&db.platform)
+        .await
+        .expect("the next round");
+    drop(guard);
+    assert_eq!(
+        round,
+        assistant::purge::Round {
+            purged: 1,
+            skipped: 0
+        }
+    );
+    assert!(
+        db.snapshot(older).await.is_gone(),
+        "purged once the lock is gone"
+    );
+    let events = capture.events();
+    let own: Vec<_> = events
+        .iter()
+        .filter(|event| event.target == "assistant::purge")
+        .collect();
+    assert_eq!(own.len(), 1, "{events:?}");
+    assert_eq!(own[0].level, tracing::Level::INFO, "{own:?}");
+    assert_eq!(own[0].message, "purged expired conversations", "{own:?}");
+    println!(
+        "a locked expired conversation: the batch gave up after {waited:?} (55P03); the round \
+         purged the newer one and skipped the locked one (WARN), the next round purged it"
+    );
 }
 
 /// Acceptance criterion 4: a delete and an append of the same conversation run one after the
@@ -1109,6 +1284,165 @@ async fn one_question_runs_at_a_time() {
     println!("two starts: one ran, one refused; the expired run became interrupted");
 }
 
+/// Laysi/trustiot-v2#645: a conversation with a question running is not deleted, and nothing of
+/// it changes; a question still running past its deadline does not keep it, also when the
+/// deadline passes while the delete's transaction is open. The delete leaves such a run as it
+/// is, and the next question after a restore marks it interrupted.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_running_question_keeps_its_conversation() {
+    let Some(db) = db().await else {
+        return;
+    };
+    let owner = db.user(TenantId::generate());
+    let who = principal(&owner);
+    let (conversation, _) = db.started(&owner).await;
+    let id = conversation.id();
+    let run = db.start_run(&owner, id).await.expect("a question runs");
+    let before = db.snapshot(id).await;
+    let mut tx = db.tx(&owner).await;
+    let refused = store::delete(&mut tx, who, id).await;
+    // Committed rather than rolled back: the refusal itself changes nothing.
+    tx.commit().await.expect("commit");
+    assert!(
+        matches!(refused, Err(StoreError::AlreadyRunning)),
+        "{refused:?}"
+    );
+    assert_eq!(db.snapshot(id).await, before, "nothing changed");
+
+    // The service stopped mid-question: past its deadline the run no longer counts.
+    let mut admin = db.superuser().await;
+    sqlx::query(AGE_RUN)
+        .bind(run.to_string())
+        .execute(&mut admin)
+        .await
+        .expect("move the run back");
+    let before = db.snapshot(id).await;
+    let deleted = db.delete(&owner, id).await;
+    assert_eq!(deleted.id, id);
+    assert_eq!(
+        db.snapshot(id).await.runs,
+        before.runs,
+        "the delete changes no run"
+    );
+    db.restore(&owner, id).await.expect("restore");
+    db.start_run(&owner, id).await.expect("the next question");
+    let status: String =
+        sqlx::query_scalar("SELECT status FROM assistant.runs WHERE run_id = $1::uuid")
+            .bind(run.to_string())
+            .fetch_one(&mut admin)
+            .await
+            .expect("read the run");
+    assert_eq!(status, "interrupted", "the next question interrupted it");
+
+    // The deadline passes while the delete's transaction is already open (as when it waits for
+    // the row lock): the delete sees it passed, though the transaction's now() is before it.
+    let (conversation, _) = db.started(&owner).await;
+    let id = conversation.id();
+    let run = db.start_run(&owner, id).await.expect("a question runs");
+    let mut tx = db.tx(&owner).await;
+    let opened: DateTime<Utc> = sqlx::query_scalar("SELECT now()")
+        .fetch_one(&mut *tx)
+        .await
+        .expect("the transaction's time");
+    let deadline: DateTime<Utc> = sqlx::query_scalar(
+        "UPDATE assistant.runs SET deadline_at = clock_timestamp() WHERE run_id = $1::uuid
+         RETURNING deadline_at",
+    )
+    .bind(run.to_string())
+    .fetch_one(&mut admin)
+    .await
+    .expect("end the deadline now");
+    assert!(
+        deadline > opened,
+        "the deadline passes after the transaction opened"
+    );
+    let deleted = store::delete(&mut tx, who, id).await.expect("delete");
+    tx.commit().await.expect("commit");
+    assert_eq!(deleted.id, id);
+    println!(
+        "a running question refused the delete; past its deadline it did not, also when the \
+         deadline passed after the delete's transaction opened"
+    );
+}
+
+/// Laysi/trustiot-v2#645: a question start and a delete of one conversation that meet give
+/// exactly one of the two outcomes, in both orders. The delete locks the conversation's row
+/// before it looks for a running question, so it sees a question committed while it waited.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_question_start_and_a_delete_run_one_after_the_other() {
+    let Some(db) = db().await else {
+        return;
+    };
+    let owner = db.user(TenantId::generate());
+    let who = principal(&owner);
+
+    // The start holds the row first: the question runs, and the delete waits, then refuses.
+    let (conversation, _) = db.started(&owner).await;
+    let id = conversation.id();
+    let mut starting = db.tx(&owner).await;
+    store::start_run(
+        &mut starting,
+        who,
+        id,
+        Uuid::now_v7(),
+        Duration::from_secs(600),
+    )
+    .await
+    .expect("start the question");
+    let holder = backend_pid(&mut starting).await;
+    let mut deleting = db.tx(&owner).await;
+    let delete = tokio::spawn(async move {
+        let deleted = store::delete(&mut deleting, who, id).await;
+        (deleted, deleting)
+    });
+    db.wait_until_blocking(holder, "the delete").await;
+    starting.commit().await.expect("commit the start");
+    let (deleted, deleting) = delete.await.expect("the delete task");
+    assert!(
+        matches!(deleted, Err(StoreError::AlreadyRunning)),
+        "the delete sees the question that started first: {deleted:?}"
+    );
+    deleting.rollback().await.expect("roll back");
+    assert!(db.load(&owner, id).await.is_some(), "not deleted");
+    println!("start first: the question runs, the delete is refused");
+
+    // The delete holds the row first: the start waits, then finds no conversation.
+    let (conversation, _) = db.started(&owner).await;
+    let id = conversation.id();
+    let mut deleting = db.tx(&owner).await;
+    store::delete(&mut deleting, who, id).await.expect("delete");
+    let holder = backend_pid(&mut deleting).await;
+    let mut starting = db.tx(&owner).await;
+    let start = tokio::spawn(async move {
+        let started = store::start_run(
+            &mut starting,
+            who,
+            id,
+            Uuid::now_v7(),
+            Duration::from_secs(600),
+        )
+        .await;
+        (started, starting)
+    });
+    db.wait_until_blocking(holder, "the question start").await;
+    deleting.commit().await.expect("commit the delete");
+    let (started, starting) = start.await.expect("the start task");
+    assert!(
+        matches!(started, Err(StoreError::NotStored)),
+        "the start finds the conversation deleted: {started:?}"
+    );
+    starting.rollback().await.expect("roll back");
+    let runs: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM assistant.runs WHERE conversation_id = $1::uuid")
+            .bind(id.to_string())
+            .fetch_one(&mut db.superuser().await)
+            .await
+            .expect("count the runs");
+    assert_eq!(runs, 0, "no question started");
+    assert_eq!(db.deleted_ids(&owner).await.first(), Some(&id));
+    println!("delete first: deleted, the question start is refused");
+}
+
 /// Acceptance criterion 8: the database sets every time itself and refuses a message over
 /// 32 MiB, whatever the service role sends.
 #[tokio::test(flavor = "multi_thread")]
@@ -1310,6 +1644,71 @@ async fn store_errors_carry_no_database_text() {
     assert!(!shown.contains(&run.to_string()), "{shown}");
 }
 
+/// At `MAX_STARTS_PER_DAY` starts in 24 hours the store refuses a new conversation with
+/// `StartLimited` (when the oldest start leaves the day) and stores nothing; storing a
+/// conversation that is stored already, a retry, is not a new start and still succeeds.
+#[tokio::test(flavor = "multi_thread")]
+async fn starts_stop_at_the_daily_limit_but_a_retry_is_not_a_start() {
+    let Some(db) = db().await else {
+        return;
+    };
+    let owner = db.user(TenantId::generate());
+    let who = principal(&owner);
+    let started = || async {
+        let mut admin = db.superuser().await;
+        sqlx::query_scalar::<_, i64>(STARTED)
+            .bind(who.tenant_id.to_string())
+            .bind(who.user_id.to_string())
+            .fetch_one(&mut admin)
+            .await
+            .expect("count the user's conversations")
+    };
+    // The day's starts but one, all an hour ago.
+    let mut admin = db.superuser().await;
+    sqlx::query(SEED_STARTS)
+        .bind(who.tenant_id.to_string())
+        .bind(who.user_id.to_string())
+        .bind(i32::try_from(store::MAX_STARTS_PER_DAY - 1).expect("a small limit"))
+        .bind(60_i32)
+        .execute(&mut admin)
+        .await
+        .expect("store the day's starts");
+
+    let last = db.agent.start_conversation(who, "");
+    for attempt in ["the last start of the day", "its retry"] {
+        let mut tx = db.tx(&owner).await;
+        store::create(&mut tx, &last)
+            .await
+            .unwrap_or_else(|error| panic!("{attempt}: {error}"));
+        tx.commit().await.expect("commit");
+        assert_eq!(started().await, store::MAX_STARTS_PER_DAY, "{attempt}");
+    }
+
+    let next = db.agent.start_conversation(who, "");
+    let mut tx = db.tx(&owner).await;
+    let refused = store::create(&mut tx, &next)
+        .await
+        .expect_err("over the limit");
+    tx.rollback().await.expect("roll back");
+    let StoreError::StartLimited { retry_after_secs } = refused else {
+        panic!("not the start limit: {refused:?}");
+    };
+    // The oldest start was an hour ago, so it leaves the 24 hours within 23.
+    assert!(
+        (22 * 3600..=23 * 3600).contains(&retry_after_secs),
+        "{retry_after_secs}"
+    );
+    assert_eq!(
+        refused.to_string(),
+        "the user started too many conversations today"
+    );
+    assert_eq!(started().await, store::MAX_STARTS_PER_DAY, "nothing stored");
+    assert!(
+        db.load(&owner, next.id()).await.is_none(),
+        "the refused one is not stored"
+    );
+}
+
 /// Titles, the archive and the list's order and pages.
 #[tokio::test(flavor = "multi_thread")]
 async fn titles_archive_and_the_list() {
@@ -1321,7 +1720,10 @@ async fn titles_archive_and_the_list() {
     let (first, _) = db.started(&owner).await;
     let (second, _) = db.started(&owner).await;
     let (first, second) = (first.id(), second.id());
-    assert_eq!(db.listed_ids(&owner, false).await, [second, first]);
+    assert_eq!(
+        db.listed_ids(&owner, ListFilter::Active).await,
+        [second, first]
+    );
 
     let mut tx = db.tx(&owner).await;
     for (title, source, changed) in [
@@ -1349,27 +1751,70 @@ async fn titles_archive_and_the_list() {
         (title.text.as_str(), title.source),
         ("My readings", TitleSource::User)
     );
-    for bad in [String::new(), "x".repeat(201), "a\nb".to_owned()] {
-        assert!(matches!(
-            store::set_title(&mut tx, who, first, &bad, TitleSource::User).await,
-            Err(StoreError::Unstorable(_))
-        ));
+    // One rule for every source (store::title_is_valid): nothing visible, bidirectional
+    // controls and separators are refused whoever names the conversation.
+    for bad in [
+        String::new(),
+        "x".repeat(201),
+        "a\nb".to_owned(),
+        "\u{200B}".to_owned(),
+        "\u{FEFF}\u{200D}".to_owned(),
+        "\u{E0100}".to_owned(),
+        "\u{2800}".to_owned(),
+        " ".to_owned(),
+        "report\u{202E}fdp.exe".to_owned(),
+        "a\u{2066}b\u{2069}".to_owned(),
+        "a\u{2028}b".to_owned(),
+    ] {
+        for source in [
+            TitleSource::User,
+            TitleSource::Model,
+            TitleSource::Provisional,
+        ] {
+            assert!(
+                matches!(
+                    store::set_title(&mut tx, who, first, &bad, source).await,
+                    Err(StoreError::Unstorable(_))
+                ),
+                "{bad:?} ({source:?})"
+            );
+        }
     }
+    // Joiners and marks beside visible characters are a title.
+    let joined = "\u{1F469}\u{200D}\u{1F4BB} \u{200F}\u{05E9}\u{05DC}\u{05D5}\u{05DD}";
+    assert!(
+        store::set_title(&mut tx, who, second, joined, TitleSource::User)
+            .await
+            .expect("a title with a ZWJ sequence and a right-to-left mark")
+    );
     store::archive(&mut tx, who, second, true)
         .await
         .expect("archive");
     tx.commit().await.expect("commit");
-    assert_eq!(db.listed_ids(&owner, false).await, [first]);
-    assert_eq!(db.listed_ids(&owner, true).await, [second, first]);
+    // The default list leaves the archived one out; the archive lists only it.
+    assert_eq!(db.listed_ids(&owner, ListFilter::Active).await, [first]);
+    assert_eq!(db.listed_ids(&owner, ListFilter::Archived).await, [second]);
 
     let mut tx = db.tx(&owner).await;
-    let page = store::list(&mut tx, who, true, None, 1)
+    let page = store::list(&mut tx, who, ListFilter::Archived, None, 1)
         .await
-        .expect("the first page");
+        .expect("the archive");
     assert_eq!(page.items.len(), 1);
     assert_eq!(page.items[0].id, second);
     assert!(page.items[0].archived_at.is_some());
-    let next = store::list(&mut tx, who, true, page.next, 1)
+    assert!(page.next.is_none());
+    store::archive(&mut tx, who, second, false)
+        .await
+        .expect("take it out of the archive");
+    let page = store::list(&mut tx, who, ListFilter::Active, None, 1)
+        .await
+        .expect("the first page");
+    assert_eq!(
+        page.items.iter().map(|item| item.id).collect::<Vec<_>>(),
+        [second]
+    );
+    assert!(page.items[0].archived_at.is_none());
+    let next = store::list(&mut tx, who, ListFilter::Active, page.next, 1)
         .await
         .expect("the second page");
     assert_eq!(
@@ -1377,9 +1822,10 @@ async fn titles_archive_and_the_list() {
         [first]
     );
     assert!(next.next.is_none());
-    store::archive(&mut tx, who, second, false)
-        .await
-        .expect("take it out of the archive");
     tx.commit().await.expect("commit");
-    assert_eq!(db.listed_ids(&owner, false).await, [second, first]);
+    assert_eq!(
+        db.listed_ids(&owner, ListFilter::Active).await,
+        [second, first]
+    );
+    assert!(db.listed_ids(&owner, ListFilter::Archived).await.is_empty());
 }

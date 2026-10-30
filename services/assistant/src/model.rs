@@ -130,6 +130,15 @@ impl NativeMessage {
     pub(crate) fn raw(&self) -> &RawValue {
         &self.json
     }
+
+    /// The text the chat shows of the message: the user's text of a question, the text blocks
+    /// of an answer; never thinking, tool calls or their results. `None` when the message does
+    /// not decode in its format.
+    pub fn shown_text(&self) -> Option<String> {
+        match self.format {
+            Format::AnthropicMessages => anthropic::shown_text(self.json()),
+        }
+    }
 }
 
 impl fmt::Debug for NativeMessage {

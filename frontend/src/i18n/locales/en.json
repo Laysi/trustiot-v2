@@ -145,6 +145,14 @@
   "certificate_renewal.bindings_stale": "The certificate authority's gateway bindings may be out of date. Try again later.",
   "certificate_renewal.ca_not_ready": "The certificate authority can't renew certificates yet. Try again in a few minutes.",
 
+  "conversation.body_invalid": "The request must be a JSON object with only the fields this action takes.",
+  "conversation.update_empty": "Nothing to change. Send a new title or the archive setting.",
+  "conversation.title_invalid": "Enter a title of 1 to {max} characters with visible text, without line breaks, control characters or text-direction controls.",
+  "conversation.limit_invalid": "Ask for 1 to {max} conversations at a time.",
+  "conversation.cursor_invalid": "This page of the list is no longer valid. Reload the list.",
+  "conversation.question_running": "A question in this conversation is still being answered. Wait for the answer, then delete the conversation.",
+  "conversation.start_limited": "You have started {max} conversations in the last 24 hours. Continue one of them, or start a new one later.",
+
   "login.email_invalid": "Enter a valid email address.",
   "login.code_invalid": "Enter the whole code from the email.",
   "login.redirect_invalid": "The page to return to after signing in isn't on this site.",

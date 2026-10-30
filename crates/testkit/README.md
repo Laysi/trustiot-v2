@@ -89,6 +89,7 @@ async fn tenants_are_isolated() {
 | --- | --- | --- |
 | `pg_table!("name", seed = "…")` | 有 `tenant_id` 的表 | 名稱是字串字面值，`table`（在 `public`）或 `schema.table`，小寫、不加引號。seed 是 seeder 執行的靜態 SQL，插入一列：`$1` 租戶 id（uuid）、`$2` 新的列 id（uuid）、`$3` canary（text）；`$2` 或 `$3` 至少存一個在讀得到的欄位。需要父列的表用一個語句一起插：`WITH parent AS (INSERT INTO devices (tenant_id, id, name) VALUES ($1, gen_random_uuid(), $3) RETURNING tenant_id, id) INSERT INTO points (tenant_id, id, device_id, name) SELECT tenant_id, $2, id, $3 FROM parent` |
 | `pg_table!("name", seed = "…", one_per_tenant)` | 每個租戶最多一列的表（`tenant_id` 就是主鍵，例如 `identity.tenants`、`assets.tenants`） | 每個租戶只種一列，不管端點要幾列；那一列的 id（`$2`）就是租戶 id，所以讀得到它的 `tenant_id` 就算讀得到那一列。Postgres 要每個參數都有型別，seed 沒存 `$2` 或 `$3` 時仍要提到它們，例如 `INSERT INTO assets.tenants (tenant_id) SELECT $1 WHERE $2::uuid IS NOT NULL AND $3::text IS NOT NULL` |
+| `pg_table!("name", seed = "…", owned)` | 列屬於某個使用者、服務只給那個使用者看的表（例如 AI 助理的對話） | seed 多一個參數 `$4`：擁有者（uuid），是這一輪的使用者，兩個租戶都是同一個人，也是每個探測的 token 的使用者（`World::user`），所以只回自己的資料的端點有東西可回，兩個租戶的列只靠租戶分開：只檢查擁有者的 API 會在這裡失敗。例如 `services/assistant/tests/cross_tenant.rs` |
 | `pg_view!("name")` | 建在租戶表上的 `security_invoker` 檢視 | 只讀；攻擊者至少要看到一列（正向對照） |
 | `PgStore::exempt("schema.name", "理由")` | 服務角色用得到、但沒有租戶資料的關聯，例如 migration Job 在每個服務 schema 寫的 `trustiot_migrate_applied`（服務角色只能讀，Laysi/trustiot-v2#402） | 有 `tenant_id` 欄的不能豁免 |
 | `Endpoint::list(path, table)` | 列出呼叫者租戶資料的 `GET` | 路徑沒有參數 |
@@ -102,7 +103,7 @@ async fn tenants_are_isolated() {
 
 ## 怎麼測
 
-`Suite::run` 每次產生兩個新租戶，所以共用的資料庫也能重跑。每張表為每個租戶種幾列（讀取共用一列，每個針對單一列的寫入端點在每一輪各用一列，讓 `DELETE` 等寫入的正向對照不影響其他探測；至少兩列），每列有隨機的 id 與 canary（`canary-a-…`、`canary-b-…`）；一個租戶的 marker 是它的租戶 id 與它所有列的 id、canary（id 以帶連字號與不帶連字號兩種寫法、不分大小寫比對）。任何回應或查詢結果出現對方的 marker 就算外洩；請求本身帶的 id（路徑或 body 的列 id、body 的 `{tenant}`）被回應原樣帶回不算，canary 與其他 id 照算。
+`Suite::run` 每次產生兩個新租戶與一個新使用者，所以共用的資料庫也能重跑。這個使用者是兩個租戶的 admin（一個人可以屬於多個租戶），每個探測的 token 都是他（`Attack::claims`），不同的只有租戶。每張表為每個租戶種幾列（讀取共用一列，每個針對單一列的寫入端點在每一輪各用一列，讓 `DELETE` 等寫入的正向對照不影響其他探測；至少兩列），每列有隨機的 id 與 canary（`canary-a-…`、`canary-b-…`）；一個租戶的 marker 是它的租戶 id 與它所有列的 id、canary（id 以帶連字號與不帶連字號兩種寫法、不分大小寫比對）。任何回應或查詢結果出現對方的 marker 就算外洩；請求本身帶的 id（路徑或 body 的列 id、body 的 `{tenant}`）被回應原樣帶回不算，canary 與其他 id 照算。
 
 1. **覆蓋**：查 `pg_class`，服務角色有任何權限（直接、經所屬角色或 `PUBLIC`）的表、partitioned table、檢視、物化檢視、foreign table（系統 schema 與 extension 的除外）都要宣告或豁免；宣告了卻不存在或沒授權、`pg_table!` 宣告的表沒有 `tenant_id`、豁免的表有 `tenant_id`、同一個名稱宣告兩次，都失敗。OpenAPI 的每個 operation 也一樣。
 2. **種資料**：seeder（migration 角色或 superuser，不受 RLS 限制）執行 seed，再讀回每一列；讀不回 id 或 canary 就失敗並停止，避免拿空表做出假的通過。
