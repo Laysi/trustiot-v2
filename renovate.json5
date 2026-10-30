@@ -181,9 +181,9 @@
       ],
     },
     {
-      description: "Images written as name:tag@sha256:digest in source, tests, workflows, values files and the commands of scripts/README.md. Every copy of a pin is written this way, so one pull request updates them all (scripts/nightly/renovate.test.ts checks it)",
+      description: "Images written as name:tag@sha256:digest in source, tests, workflows, values files, the commands of scripts/README.md and the pin table of edge/image/README.md. Every copy of a pin is written this way, so one pull request updates them all (scripts/nightly/renovate.test.ts checks it)",
       customType: "regex",
-      managerFilePatterns: ["/\\.(rs|ts|ya?ml)$/", "/^scripts/README\\.md$/"],
+      managerFilePatterns: ["/\\.(rs|ts|ya?ml)$/", "/^scripts/README\\.md$/", "/^edge/image/README\\.md$/"],
       matchStrings: [
         "(?<depName>[a-z0-9][a-z0-9./_-]*[a-z0-9]):(?<currentValue>[A-Za-z0-9_][A-Za-z0-9._-]*)@(?<currentDigest>sha256:[a-f0-9]{64})",
       ],

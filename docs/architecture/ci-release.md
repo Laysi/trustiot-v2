@@ -647,7 +647,7 @@ PR 標題是 Angular 格式（`chore(deps): …`），標籤 `area:ci` 與 `depe
 
 同一個映像或工具版本常寫在好幾個檔案（chart、開發環境、測試）。Renovate 的 PR 必須一次改完每一份，否則 CI 失敗或副本互相不一致。規則（2026-10-13，Laysi/trustiot-v2#69）：
 
-- 每一份映像都寫成 Renovate 讀得到的形式：`名稱:tag@sha256:…`（原始碼、測試、workflow、values 與 `scripts/README.md` 的指令），或 chart values 的 `repository`／`tag`／`digest` 三行，或 Containerfile 的 `FROM`。同一個映像名稱與 tag 的更新，不論在哪個檔案、由哪個 manager 讀到，都進同一個分支，所以一個 PR 改完所有副本。`scripts/lib/stack.ts`、`services/ingest/tests/common/mod.rs` 與 `crates/protocol/tests/broker.rs` 原本只寫 digest、Renovate 讀不到，2026-10-13 補上 tag。
+- 每一份映像都寫成 Renovate 讀得到的形式：`名稱:tag@sha256:…`（原始碼、測試、workflow、values、`scripts/README.md` 的指令與 `edge/image/README.md` 的釘選表），或 chart values 的 `repository`／`tag`／`digest` 三行，或 Containerfile 的 `FROM`。同一個映像名稱與 tag 的更新，不論在哪個檔案、由哪個 manager 讀到，都進同一個分支，所以一個 PR 改完所有副本。`scripts/lib/stack.ts`、`services/ingest/tests/common/mod.rs` 與 `crates/protocol/tests/broker.rs` 原本只寫 digest、Renovate 讀不到，2026-10-13 補上 tag；閘道器映像的工具容器（`edge/image/src/pins.ts`）2026-10-31 同樣補上 tag（Laysi/trustiot-v2#809）。
 - `bun test scripts/nightly` 檢查：這些檔案裡每個 digest 都屬於 Renovate 讀得到的 pin（例外只有由工具重寫的 Flux 控制器與 chart 來源）；同一個映像名稱與 tag 的每一份 digest 都相同；同一個映像只有一種寫法。
 - 刻意擋下的更新（PR 會開，但 CI 失敗，要有人完成另一半）：
   - ClickHouse 換 LTS minor：chart 測試的 `CLICKHOUSE_MINOR`（`deploy/chart/tests/chart.test.ts`）只接受 26.8。決策 14 的租戶隔離分析與 `services/ingest` 的內省測試是在 26.8 上做的，換 minor 要先重做，再改這個常數。同一個 minor 的新 digest 不受影響，三份（values、`stack.ts`、`mod.rs`）在同一個 PR 更新。

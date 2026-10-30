@@ -22,10 +22,11 @@ export const SOURCE_TABLE = {
 
 /**
  * The container every build and check step runs in: Debian 13 (trixie), pinned by the digest of
- * its multi-architecture index, so the same pin serves arm64 and x86_64 hosts.
+ * its multi-architecture index, so the same pin serves arm64 and x86_64 hosts. Written as
+ * name:tag@digest so Renovate reads it and updates the copy in README.md in the same pull request.
  */
 export const TOOL_IMAGE =
-  "docker.io/library/debian@sha256:2dc419c6d7fe3dad0a2f9fd469c34cc90b0f9ba642d8fde837fe3d7d34a0e7f1";
+  "docker.io/library/debian:trixie@sha256:2dc419c6d7fe3dad0a2f9fd469c34cc90b0f9ba642d8fde837fe3d7d34a0e7f1";
 
 /**
  * snapshot.debian.org timestamp for every package the build installs, in the tool container and

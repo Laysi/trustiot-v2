@@ -88,7 +88,7 @@ describe("pins", () => {
   });
 
   test("tool image by digest, packages at exact versions from a snapshot", () => {
-    expect(TOOL_IMAGE).toMatch(/^docker\.io\/library\/debian@sha256:[0-9a-f]{64}$/);
+    expect(TOOL_IMAGE).toMatch(/^docker\.io\/library\/debian:trixie@sha256:[0-9a-f]{64}$/);
     expect(DEBIAN_SNAPSHOT).toMatch(/^\d{8}T\d{6}Z$/);
     for (const version of [...Object.values(IMAGE_PACKAGES), ...Object.values(TOOL_PACKAGES)]) expect(version).toMatch(/^[0-9][\w.+~:-]*$/);
   });
