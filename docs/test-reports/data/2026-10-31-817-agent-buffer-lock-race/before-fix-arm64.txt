@@ -1,0 +1,35 @@
+systemd user manager: yes
+EXP817-A reopen while the child is between fork and exec: Err(Custom { kind: WouldBlock, error: "/tmp/testkit-agent-exp817-3396953-1/buffer is in use by another agent (it holds the directory's lock)" })
+EXP817-A child exit status: 0; reopen after its exec: Ok(())
+EXP817-B 20000 drop-then-reopen rounds in 2.188987973s while 18225 children were spawned: 802 reopens refused with WouldBlock; first: Some("/tmp/testkit-agent-exp817-3396953-0/buffer is in use by another agent (it holds the directory's lock)")
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 361 filtered out; finished in 2.19s
+stress: aarch64, 20 runs of cargo test --locked -p agent --lib
+experiments under load:
+EXP817-A reopen while the child is between fork and exec: Err(Custom { kind: WouldBlock, error: "/tmp/testkit-agent-exp817-3418656-0/buffer is in use by another agent (it holds the directory's lock)" })
+EXP817-A child exit status: 0; reopen after its exec: Ok(())
+EXP817-B 20000 drop-then-reopen rounds in 756.545269ms while 440 children were spawned: 76 reopens refused with WouldBlock; first: Some("/tmp/testkit-agent-exp817-3418656-1/buffer is in use by another agent (it holds the directory's lock)")
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 361 filtered out; finished in 0.76s
+run 1: ok (2 s, load 12.60) test result: ok. 359 passed; 0 failed; 2 ignored; 0 measured; 2 filtered out; finished in 2.22s
+run 2: ok (2 s, load 12.60) test result: ok. 359 passed; 0 failed; 2 ignored; 0 measured; 2 filtered out; finished in 2.15s
+run 3: ok (2 s, load 13.76) test result: ok. 359 passed; 0 failed; 2 ignored; 0 measured; 2 filtered out; finished in 2.06s
+run 4: ok (2 s, load 13.76) test result: ok. 359 passed; 0 failed; 2 ignored; 0 measured; 2 filtered out; finished in 2.09s
+run 5: ok (3 s, load 14.82) test result: ok. 359 passed; 0 failed; 2 ignored; 0 measured; 2 filtered out; finished in 2.15s
+run 6: ok (3 s, load 14.82) test result: ok. 359 passed; 0 failed; 2 ignored; 0 measured; 2 filtered out; finished in 2.14s
+run 7: ok (2 s, load 15.55) test result: ok. 359 passed; 0 failed; 2 ignored; 0 measured; 2 filtered out; finished in 2.01s
+run 8: ok (2 s, load 15.55) test result: ok. 359 passed; 0 failed; 2 ignored; 0 measured; 2 filtered out; finished in 2.02s
+run 9: ok (2 s, load 15.59) test result: ok. 359 passed; 0 failed; 2 ignored; 0 measured; 2 filtered out; finished in 2.07s
+run 10: ok (3 s, load 15.59) test result: ok. 359 passed; 0 failed; 2 ignored; 0 measured; 2 filtered out; finished in 2.00s
+run 11: ok (2 s, load 15.62) test result: ok. 359 passed; 0 failed; 2 ignored; 0 measured; 2 filtered out; finished in 2.00s
+run 12: ok (2 s, load 15.62) test result: ok. 359 passed; 0 failed; 2 ignored; 0 measured; 2 filtered out; finished in 1.97s
+run 13: ok (2 s, load 15.62) test result: ok. 359 passed; 0 failed; 2 ignored; 0 measured; 2 filtered out; finished in 1.98s
+run 14: ok (3 s, load 16.21) test result: ok. 359 passed; 0 failed; 2 ignored; 0 measured; 2 filtered out; finished in 2.09s
+run 15: ok (2 s, load 16.21) test result: ok. 359 passed; 0 failed; 2 ignored; 0 measured; 2 filtered out; finished in 2.00s
+run 16: ok (2 s, load 17.88) test result: ok. 359 passed; 0 failed; 2 ignored; 0 measured; 2 filtered out; finished in 1.97s
+run 17: FAILED (3 s, load 17.88)
+test buffer::tests::start_up_keeps_at_most_the_batch_limit_of_the_newest_batches ... FAILED
+thread 'buffer::tests::start_up_keeps_at_most_the_batch_limit_of_the_newest_batches' (3437844) panicked at edge/agent/src/buffer.rs:1606:9:
+test result: FAILED. 358 passed; 1 failed; 2 ignored; 0 measured; 2 filtered out; finished in 1.99s
+run 18: ok (2 s, load 18.05) test result: ok. 359 passed; 0 failed; 2 ignored; 0 measured; 2 filtered out; finished in 2.06s
+run 19: ok (2 s, load 18.05) test result: ok. 359 passed; 0 failed; 2 ignored; 0 measured; 2 filtered out; finished in 2.15s
+run 20: ok (3 s, load 18.37) test result: ok. 359 passed; 0 failed; 2 ignored; 0 measured; 2 filtered out; finished in 2.15s
+stress: 1 of 20 runs failed
