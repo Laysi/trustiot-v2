@@ -81,6 +81,10 @@ ssh "$GATEWAY_HOST" 'cat /etc/resolv.conf; systemctl is-active systemd-resolved 
 
 把規則檔的 `fib daddr type local` 那一行刪掉、同時把 agent unit 的 `Requires=trustiot-agent-egress.service` 刪掉，四個測試全部失敗：三個網路的測試失敗在 local 的拒絕上（例如 agent 經 127.0.0.53 的 stub 解析成功、規則只剩 4 條），systemd 測試在第一個 start 之後失敗，因為規則 unit 沒有被帶起來（inactive，這是 `Requires=` 的刪除造成的）。檔案還原後再跑全部通過。這次突變在加上 `Requires=nftables.service` 與 `nftables.service` 的 drop-in 之前的版本上做。
 
+把 anycast 那條規則的種類改成不會命中的 `unreachable`（規則數不變）：agent 送往 `[fd81:3::]:9` 的 datagram 成功送出（`ok`，應為 `not-permitted`），第一個測試失敗。沒有這條規則時，開了 IPv6 forwarding 的閘道器上 agent 連得到本機的 UDP 服務。
+
+最終版本（這個分支的兩個 commit）在建置主機上：`cargo fmt --all --check`、`cargo clippy --locked --workspace --all-targets -- -D warnings`、`cargo test --locked --workspace --exclude agent`、`cargo test --locked -p agent` 都通過，原始輸出見 [tests.txt](data/2026-10-31-813-agent-egress-rules/tests.txt)。
+
 ### lab 的閘道器（唯讀）
 
 原始輸出：[gateway-inspection.txt](data/2026-10-31-813-agent-egress-rules/gateway-inspection.txt)、[gateway-check.txt](data/2026-10-31-813-agent-egress-rules/gateway-check.txt)。

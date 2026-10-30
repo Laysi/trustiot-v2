@@ -1,15 +1,36 @@
 # Build host (x86_64 Linux), branch feat/813-agent-egress-rules, 2026-10-31, CI=1 (container tests fail
 # instead of skipping). Output filtered to the test result lines.
 
+# Final tree (the branch's two commits on main 0ea43c37)
+$ cargo fmt --all --check                                          # exit 0
+$ cargo clippy --locked --workspace --all-targets -- -D warnings   # exit 0
+$ cargo test --locked --workspace --exclude agent                  # exit 0, no FAILED or panicked line
+$ cargo test --locked -p agent                                     # exit 0
+     Running unittests src/lib.rs
+test result: ok. 359 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.69s
+     Running tests/egress.rs
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 28.39s
+     Running tests/systemd_unit.rs
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.08s
+(every other agent test binary: ok, 0 failed)
+
 $ cargo test --locked -p agent --test egress --test systemd_unit -- --nocapture
-running 4 tests
-test the_rules_are_in_force_before_the_agent_starts_and_a_failed_load_keeps_it_stopped ... ok
 test the_gateway_check_flags_listeners_off_loopback_and_missing_rules ... ok
 test the_agent_resolves_and_reaches_the_cloud_with_the_rules_in_force ... ok
+test the_rules_are_in_force_before_the_agent_starts_and_a_failed_load_keeps_it_stopped ... ok
 test the_agents_account_is_refused_the_gateway_broadcast_multicast_and_metadata ... ok
-test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 23.37s
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 27.36s
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.11s
 
-# Mutation: the `fib daddr type local` rule and the agent unit's Requires= removed
+# Mutation: the anycast rule's type changed to one that never matches (`unreachable`), six rules kept
+$ cargo test --locked -p agent --test egress the_agents_account
+test the_agents_account_is_refused_the_gateway_broadcast_multicast_and_metadata ... FAILED
+assertion `left == right` failed: agent to the LAN prefix's subnet-router anycast address, which the gateway answers itself (udp fd81:3::)
+  left: "ok"
+ right: "not-permitted"
+
+# Mutation (on an earlier version, before the nftables.service drop-in): the `fib daddr type local`
+# rule and the agent unit's Requires= removed
 $ cargo test --locked -p agent --test egress
 test the_rules_are_in_force_before_the_agent_starts_and_a_failed_load_keeps_it_stopped ... FAILED
 test the_gateway_check_flags_listeners_off_loopback_and_missing_rules ... FAILED
@@ -19,11 +40,3 @@ thread 'the_rules_are_in_force_before_the_agent_starts_and_a_failed_load_keeps_i
 thread 'the_agent_resolves_and_reaches_the_cloud_with_the_rules_in_force' panicked: left: "10.81.3.1" right: "failed"
 thread 'the_agents_account_is_refused_the_gateway_broadcast_multicast_and_metadata' panicked: left: "4" right: "5"
 test result: FAILED. 0 passed; 4 failed; 0 ignored; 0 measured; 0 filtered out; finished in 13.38s
-
-# Files restored; the whole agent crate
-$ cargo test --locked -p agent
-     Running tests/egress.rs
-test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 23.17s
-     Running tests/systemd_unit.rs
-test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.11s
-(every other agent test binary: ok, 0 failed)
