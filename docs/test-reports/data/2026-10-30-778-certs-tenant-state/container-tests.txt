@@ -1,0 +1,116 @@
+     Running unittests src/lib.rs (<host copy>/target/debug/deps/certs-28596521d3abbc5d)
+test result: ok. 53 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/bindings.rs (<host copy>/target/debug/deps/bindings-9574718c2fb61629)
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.81s
+     Running tests/broker.rs (<host copy>/target/debug/deps/broker-0eeb8e3f7280ed77)
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.87s
+     Running tests/broker_certificate.rs (<host copy>/target/debug/deps/broker_certificate-6d8e77a0215bfa34)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.76s
+     Running tests/ceremony.rs (<host copy>/target/debug/deps/ceremony-3edace9206a78104)
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.00s
+     Running tests/chart_connections.rs (<host copy>/target/debug/deps/chart_connections-77509d20eebff0f8)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/crl.rs (<host copy>/target/debug/deps/crl-2da3ff69046c3203)
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 14.26s
+     Running tests/cross_tenant.rs (<host copy>/target/debug/deps/cross_tenant-d44fd305c2dc3955)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.25s
+     Running tests/dynsec.rs (<host copy>/target/debug/deps/dynsec-9626d6d4b02bd190)
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 18.46s
+     Running tests/gateway_revocation.rs (<host copy>/target/debug/deps/gateway_revocation-7d4b0e79b6caa53a)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.98s
+     Running tests/issuance.rs (<host copy>/target/debug/deps/issuance-8dd76d3df41d68b1)
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.45s
+     Running tests/key_custody.rs (<host copy>/target/debug/deps/key_custody-d8b2245427ba588a)
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.49s
+     Running tests/permissions.rs (<host copy>/target/debug/deps/permissions-66812e96bc28c51c)
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.91s
+     Running tests/registration.rs (<host copy>/target/debug/deps/registration-151daad2f7535dc9)
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.39s
+     Running tests/renewal.rs (<host copy>/target/debug/deps/renewal-31290ab5f21f4ab0)
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 13.49s
+     Running tests/renewal_lag.rs (<host copy>/target/debug/deps/renewal_lag-04d686be9ff56c6e)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 16.82s
+     Running tests/tenant_state_lag.rs (<host copy>/target/debug/deps/tenant_state_lag-8775d7170ca79a8f)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 17.64s
+     Running tests/tenant_states.rs (<host copy>/target/debug/deps/tenant_states-79f3d0a6bb773144)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.84s
+     Running tests/workstation.rs (<host copy>/target/debug/deps/workstation-75aaa09c954ce5af)
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.50s
+     Running tests/workstation_tool.rs (<host copy>/target/debug/deps/workstation_tool-438cc8a1d5ded701)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.84s
+evidence: 11 audit lines, e.g. Some({"actor": "service", "purpose": "test-renewal", "service": "certs"})
+evidence: late older binding stored [("01a18c5c-9897-77e4-b954-90aa39a37722", "01a18c5c-991e-7155-b83a-93091a996a68", 2026-10-30T10:30:41.182Z, 899, 2, true, 2026-10-30T10:30:41.248046Z), ("01a18c5c-9897-77e4-b954-90ab83a93dd9", "01a18c5c-9897-77e4-b954-90add77f9756", 2026-10-30T10:30:41.109Z, 900, 1, true, 2026-10-30T10:30:41.113967Z)]; current Binding { hardware_id: GatewayId("tg-late-01a18c5c989777e4b95490ac78d87c51"), tenant_id: TenantId(01a18c5c-9897-77e4-b954-90ab83a93dd9), binding_id: GatewayBindingId(01a18c5c-9897-77e4-b954-90add77f9756), bound_at: 2026-10-30T10:30:41.109Z }
+evidence: deleted stays (deleted, 3) after active 4, unrecognized 5; unrecognized 2 replaced by active 2, not by active 1; unknown status value refused with 23514
+evidence: dead letters "event cannot be decoded" and "assets.gateway_bound without a tenant"; the binding after them is current
+evidence: stored binding [("01a18c5c-9909-7375-84d5-417eb91df678", "01a18c5c-9909-7375-84d5-418000d43756", 2026-10-30T10:30:41.221Z, 916, 3, true, 2026-10-30T10:30:41.252525Z)]; log line {"fields":{"binding_id":"01a18c5c-9909-7375-84d5-418000d43756","created":false,"event_id":"01a18c5c-9945-718f-85b9-f4df83846285","hardware_id":"tg-bind-01a18c5c9909737584d5417f27565478","tenant_id":"01a18c5c-9909-7375-84d5-417eb91df678"},"level":"INFO","message":"applied assets.gateway_bound","service":"certs","span_id":"33e82b643615f4de","target":"certs::bindings","timestamp":"2026-10-30T10:30:42.095119Z","trace_id":"3923f0179ab0db0de9ccbe5a703cb0ae"}
+evidence: 3 applications of tg-bind-01a18c5c9909737584d5417f27565478, 0 created a row; rows unchanged
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.78s
+evidence: unknown lag: 60 requests of 30 new hardware IDs: 12 answered 503 with an INFO line each, 48 answered 429 without one
+evidence: per hardware ID: 429, Retry-After 3600
+evidence: global: 50 challenge requests of new hardware IDs refused with 429; 6 challenges stored in all
+evidence: challenge limit used up by the flood; rl-ok still renewed: 201
+evidence: renew limit: 5 made-up redemptions answered 409, then 15 429
+evidence: renewed rn-ok after its only certificate was revoked: serial 5ad3ddc8c72f8cdd89176be72a997f5d, CN rn-ok, the registered key, chain to the root; ledger 1 -> 2; one event in transaction 941 (ledger row 941); read log: {"binding_id":"01a18c5c-b714-73bc-9df0-54ad5e9a27ca","decommissioned":false,"hardware_id":"rn-ok","key_compromised":false,"registered":true,"tenant_id":"01a18c5c-af23-73bd-b05e-2d800fbd9b7e","tenant_status":"active","tenant_suspended":false}
+evidence: rn-dec: 403 {"code":"permission_denied","message_key":"certificate_renewal.decommissioned"}
+evidence: rn-never: 403 {"code":"permission_denied","message_key":"certificate_renewal.not_bound"}
+evidence: rn-ended: 403 {"code":"permission_denied","message_key":"certificate_renewal.not_bound"}
+evidence: rn-susp: 403 {"code":"tenant_suspended","message_key":"error.tenant_suspended"}
+evidence: rn-del: 403 {"code":"tenant_suspended","message_key":"error.tenant_suspended"}
+evidence: rn-unknown: 403 {"code":"tenant_suspended","message_key":"error.tenant_suspended"}
+evidence: metrics {("certs.renewal.challenges", ""): 11, ("certs.renewal.issued", ""): 1, ("certs.renewal.refused", "challenge_expired"): 1, ("certs.renewal.refused", "challenge_mismatch"): 2, ("certs.renewal.refused", "challenge_unknown"): 4, ("certs.renewal.refused", "decommissioned"): 1, ("certs.renewal.refused", "invalid_request"): 1, ("certs.renewal.refused", "not_bound"): 2, ("certs.renewal.refused", "signature_invalid"): 2, ("certs.renewal.refused", "tenant_suspended"): 3}
+evidence: refusal event {"hardware_id":"rn-ok","reasons":{"challenge_expired":1,"challenge_mismatch":2,"challenge_unknown":3,"signature_invalid":1},"refusals":7,"window_end":"2026-10-29T00:00:00Z","window_start":"2026-10-28T00:00:00Z"}
+evidence: unknown lag: 503 bindings_stale, Retry-After 30; the challenge was still valid
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 14.60s
+evidence: tenant states' lag past 1 s: challenge 503 certificate_renewal.bindings_stale, Retry-After 30; 0 dead letters; retry line: {"attempt":1,"event_id":"01a18c5c-edec-71bc-b20b-65bc58f9bdd5","reason":"a tenant state event of a version newer than this build","subscription":"certs.identity-events"}
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 20.80s
+evidence: 8 concurrent changes of one tenant: versions [2, 3, 4, 5, 6, 7, 8]
+evidence: identity tenants and certs' copies after the replay: [("01a18c5d-3f08-76ec-8ddb-80379ae373c5", "active", 1, Some("active"), Some(1)), ("01a18c5d-3f57-759f-aa8e-f46351750a7a", "suspended", 2, Some("suspended"), Some(2)), ("01a18c5d-4019-725e-8311-64c122991f59", "active", 4, Some("active"), Some(4)), ("01a18c5d-414c-759a-a116-0795c9ad642c", "deleted", 3, Some("deleted"), Some(3)), ("01a18c5d-4176-71a2-a9cf-7973d7f65a1e", "suspended", 8, Some("suspended"), Some(8))]
+evidence: out-of-order suspensions and resumptions: arrivals [5, 2, 9, 3, 7, 4, 8, 6] end at ("suspended", 9, 2026-10-30T10:31:25.044Z); arrivals [4, 7, 2, 10, 3, 6] end at ("active", 10, 2026-10-30T10:31:25.114009Z)
+evidence: read as suspended: {"active": false, "deleted": true, "ends_active": false, "ends_suspended": true, "never_created": true, "resumed": false, "suspended": true, "unrecognized": true}
+evidence: late event and full replay: 38 events delivered again, 1 stored (the sentinel), every other row unchanged (status, version, updated_at); 0 dead letters
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 9.95s
+     Running tests/clickhouse.rs (<host copy>/target/debug/deps/clickhouse-d5e985b700878045)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 35.86s
+     Running tests/clickhouse_admin.rs (<host copy>/target/debug/deps/clickhouse_admin-ba6ae4401f5a86cb)
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 17.93s
+     Running tests/clickhouse_backfill.rs (<host copy>/target/debug/deps/clickhouse_backfill-98eca6a4c0504aa9)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 25.10s
+     Running tests/clickhouse_ingest.rs (<host copy>/target/debug/deps/clickhouse_ingest-266f13bcfbd76640)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 10.86s
+     Running tests/clickhouse_telemetry_query.rs (<host copy>/target/debug/deps/clickhouse_telemetry_query-26adb3c9c186e168)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 11.80s
+     Running tests/concurrent_runs.rs (<host copy>/target/debug/deps/concurrent_runs-6d94716970e356c8)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 10.31s
+     Running tests/file_escapes.rs (<host copy>/target/debug/deps/file_escapes-ea5d5d2c7fabbdfb)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.24s
+     Running tests/fresh_database.rs (<host copy>/target/debug/deps/fresh_database-c8699911d93fe85e)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.02s
+     Running tests/mqtt_accounts.rs (<host copy>/target/debug/deps/mqtt_accounts-424083718493ec78)
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.10s
+     Running tests/mqtt_broker.rs (<host copy>/target/debug/deps/mqtt_broker-872a2edb2956cadd)
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.72s
+     Running tests/mqtt_certificate.rs (<host copy>/target/debug/deps/mqtt_certificate-ca4513891ffac7f5)
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 40.06s
+     Running tests/mqtt_trust.rs (<host copy>/target/debug/deps/mqtt_trust-4a70268db2b121d4)
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 13.28s
+     Running tests/one_instance_per_cluster.rs (<host copy>/target/debug/deps/one_instance_per_cluster-1dd7a11c4a84ee5c)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.74s
+     Running tests/outbox_and_tenant_roles.rs (<host copy>/target/debug/deps/outbox_and_tenant_roles-c1d57dcedef77816)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 7.81s
+     Running tests/passwords.rs (<host copy>/target/debug/deps/passwords-640921f6668d3cf7)
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.03s
+     Running tests/platform_admin.rs (<host copy>/target/debug/deps/platform_admin-03ff9e3c41131c0c)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.99s
+     Running tests/registry.rs (<host copy>/target/debug/deps/registry-90bee5f2577c22a9)
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+     Running tests/service_records.rs (<host copy>/target/debug/deps/service_records-f08dae0bc51b3be0)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.48s
+     Running tests/settings.rs (<host copy>/target/debug/deps/settings-48de7e883c58e76e)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/signing_keys.rs (<host copy>/target/debug/deps/signing_keys-48b4ad97753cc3f5)
+test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.07s
+     Running tests/system_databases.rs (<host copy>/target/debug/deps/system_databases-95c59eab74fdda7a)
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.32s
+     Running tests/wait_for_job.rs (<host copy>/target/debug/deps/wait_for_job-5679dea8de8a587c)
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.01s
+rcheck: exit 0 at 19:11:59 (build host (arm64 Linux VM), 778-f8743929)

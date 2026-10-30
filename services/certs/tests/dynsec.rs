@@ -44,6 +44,7 @@ use std::time::{Duration, Instant};
 
 use base64::Engine as _;
 use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
+use certs::bindings::TenantStatus;
 use certs::gateways::{LOCK_GATEWAY_CERTIFICATES, REVOKE_PATH};
 use certs::http::CRL_PATH;
 use certs::pem;
@@ -75,7 +76,7 @@ use service_kit::tenant::{BackgroundTenantDb, TenantDb};
 use sha2::{Digest, Sha256};
 use sqlx::Connection as _;
 use sqlx::postgres::PgPoolOptions;
-use support::{LIMIT, Reply, Service, TestCa, now, temp_dir, wait_for};
+use support::{LIMIT, Reply, Service, TestCa, now, store_status, temp_dir, wait_for};
 use testkit::container::{Container, container_runtime, runtime_output, unavailable, unique_name};
 use testkit::mqtt::mosquitto::MOSQUITTO_IMAGE;
 use testkit::product::{DATABASE, ProductPostgres, product_postgres};
@@ -1083,6 +1084,8 @@ async fn the_service_keeps_the_brokers_gateway_clients_in_line_with_postgres() {
 
     let assets = assets_writer(&product);
     let tenant = TenantId::generate();
+    // An active tenant, as `identity.tenant_created` leaves it: the renewal below needs one.
+    store_status(&product, tenant, TenantStatus::Active, 1).await;
     let bound_at = Instant::now();
     bind(&assets, tenant, GATEWAY_A).await;
     let mut attempts = 0_u32;
@@ -1395,6 +1398,7 @@ async fn revoking_a_gateway_disconnects_it_and_its_crl_then_refuses_it() {
     let (key_p, registration_p) = workstation.register(&setup, PROBE).await;
     let assets = assets_writer(&product);
     let tenant = TenantId::generate();
+    store_status(&product, tenant, TenantStatus::Active, 1).await;
     bind(&assets, tenant, REVOKED_GATEWAY).await;
     bind(&assets, tenant, PROBE).await;
     wait_for("both gateways' broker clients", || async {

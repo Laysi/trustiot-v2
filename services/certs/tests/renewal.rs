@@ -7,7 +7,9 @@
 //!   gateway whose only certificate is revoked gets a new certificate for its registered key that
 //!   chains to the root, with one ledger row and one tenant event in the same transaction
 //!   (acceptance 1, 5); a decommissioned, a never bound, an unbound and a suspended tenant's
-//!   gateway get no certificate and no ledger row (acceptance 2); a replayed challenge is 409, a
+//!   gateway get no certificate and no ledger row (acceptance 2), nor does the gateway of a
+//!   deleted tenant or of a tenant the service has no state for (fail closed,
+//!   Laysi/trustiot-v2#778); a replayed challenge is 409, a
 //!   wrong signature 401 and voids the challenge, another device's or another purpose's challenge
 //!   403, an expired one 410 (acceptance 3); every refusal has its log line and its metric, the
 //!   refusals of a registered hardware ID become one platform-wide event per window with the
@@ -22,6 +24,10 @@
 //!   check, so on a replica whose lag is unknown a flood of made-up hardware IDs gets 503 (one
 //!   INFO line each) only as often as the limits let through, and 429 without an INFO line past
 //!   them.
+//!
+//! A tenant's state stands in for the identity service's events here: the test stores it as
+//! their consumer does (`store_tenant_status` in the tenant's transaction); the events
+//! themselves are `tests/tenant_states.rs`.
 //!
 //! Skipped without podman or docker unless `CI` is set. Run with `--nocapture` to see the
 //! evidence lines the test report quotes.
@@ -59,7 +65,7 @@ use service_kit::identity::ServiceIdentity;
 use service_kit::tenant::{BackgroundTenantDb, TenantDb};
 use sha2::{Digest, Sha256};
 use sqlx::postgres::PgPoolOptions;
-use support::{FakeCollector, Service, TestCa, now, wait_for};
+use support::{FakeCollector, Service, TestCa, now, store_status, wait_for};
 use testkit::product::{DATABASE, ProductPostgres, product_postgres};
 use x509_parser::certificate::X509Certificate;
 use x509_parser::prelude::FromDer;
@@ -407,9 +413,9 @@ fn counters(collector: &FakeCollector) -> BTreeMap<(String, String), u64> {
     totals
 }
 
-/// Whether the collector received the lag of the service's consumer of the assets service's
-/// events (`outbox.consumer.lag`), which is reported only while the lag is known.
-fn bindings_lag_reported(collector: &FakeCollector) -> bool {
+/// Whether the collector received the lag of the service's consumer of `subscription`
+/// (`outbox.consumer.lag`), which is reported only while the lag is known.
+fn lag_reported(collector: &FakeCollector, subscription: &str) -> bool {
     use opentelemetry_proto::tonic::collector::metrics::v1::ExportMetricsServiceRequest;
     use opentelemetry_proto::tonic::common::v1::any_value;
     use opentelemetry_proto::tonic::metrics::v1::metric;
@@ -435,21 +441,23 @@ fn bindings_lag_reported(collector: &FakeCollector) -> bool {
                             .value
                             .as_ref()
                             .and_then(|value| value.value.as_ref())
-                            == Some(&any_value::Value::StringValue(
-                                certs::bindings::SUBSCRIPTION.to_owned(),
-                            ))
+                            == Some(&any_value::Value::StringValue(subscription.to_owned()))
                 })
             })
     })
 }
 
-/// Waits until the service knows its consumer's lag, so the renewal decides instead of answering
-/// 503 (`bindings_stale`). It watches the exported lag rather than polling the endpoint: the rate
+/// Waits until the service knows both its consumers' lags (the bindings' and the tenant states'),
+/// so the renewal decides instead of answering 503 (`bindings_stale`). It watches the exported lag rather than polling the endpoint: the rate
 /// limits come first and count every request, 503s too.
 async fn wait_for_bindings_lag(collector: &FakeCollector) {
     wait_for(
-        "the lag of the consumer of the assets service's events",
-        || async { bindings_lag_reported(collector).then_some(()) },
+        "the lags of the consumers of the assets service's and the identity service's events",
+        || async {
+            (lag_reported(collector, certs::bindings::SUBSCRIPTION)
+                && lag_reported(collector, certs::tenant_states::SUBSCRIPTION))
+            .then_some(())
+        },
     )
     .await;
 }
@@ -505,9 +513,23 @@ async fn renewal_issues_for_the_registered_key_and_refuses_the_rest() {
     let never_key = factory.register("rn-never").await;
     let ended_key = factory.register("rn-ended").await;
     let suspended_key = factory.register("rn-susp").await;
+    let deleted_key = factory.register("rn-del").await;
+    let unknown_key = factory.register("rn-unknown").await;
 
     let assets = assets_writer(&product);
     let (tenant, other_tenant) = (TenantId::generate(), TenantId::generate());
+    let (deleted_tenant, unknown_tenant) = (TenantId::generate(), TenantId::generate());
+    // Only an active tenant renews; `unknown_tenant` never gets a state.
+    store_status(&product, tenant, TenantStatus::Active, 1).await;
+    for (status, version) in [
+        (TenantStatus::Active, 1),
+        (TenantStatus::Suspended, 2),
+        (TenantStatus::Deleted, 3),
+    ] {
+        store_status(&product, deleted_tenant, status, version).await;
+    }
+    bind(&product, &assets, deleted_tenant, "rn-del").await;
+    bind(&product, &assets, unknown_tenant, "rn-unknown").await;
     let ok_binding = bind(&product, &assets, tenant, "rn-ok").await;
     bind(&product, &assets, tenant, "rn-other").await;
     bind(&product, &assets, tenant, "rn-dec").await;
@@ -639,6 +661,8 @@ async fn renewal_issues_for_the_registered_key_and_refuses_the_rest() {
         ("rn-never", &never_key, 403, NOT_BOUND.as_str()),
         ("rn-ended", &ended_key, 403, NOT_BOUND.as_str()),
         ("rn-susp", &suspended_key, 403, "error.tenant_suspended"),
+        ("rn-del", &deleted_key, 403, "error.tenant_suspended"),
+        ("rn-unknown", &unknown_key, 403, "error.tenant_suspended"),
     ] {
         let answer = send(
             &service,
@@ -652,7 +676,7 @@ async fn renewal_issues_for_the_registered_key_and_refuses_the_rest() {
         );
         assert_eq!(
             answer.body["code"],
-            if hardware_id == "rn-susp" {
+            if ["rn-susp", "rn-del", "rn-unknown"].contains(&hardware_id) {
                 "tenant_suspended"
             } else {
                 "permission_denied"
@@ -661,12 +685,12 @@ async fn renewal_issues_for_the_registered_key_and_refuses_the_rest() {
         assert_eq!(ledger(&product, hardware_id).await, 1, "{hardware_id}");
         println!("evidence: {hardware_id}: {} {}", answer.status, answer.body);
     }
-    for hardware_id in ["rn-dec", "rn-susp"] {
-        let tenant = if hardware_id == "rn-susp" {
-            other_tenant
-        } else {
-            tenant
-        };
+    for (hardware_id, tenant) in [
+        ("rn-dec", tenant),
+        ("rn-susp", other_tenant),
+        ("rn-del", deleted_tenant),
+        ("rn-unknown", unknown_tenant),
+    ] {
         let events: Vec<(String, String, String)> = sqlx::query_as(RENEWED_EVENTS)
             .bind(format!("{tenant}:{hardware_id}"))
             .fetch_all(&mut admin)
@@ -771,6 +795,8 @@ async fn renewal_issues_for_the_registered_key_and_refuses_the_rest() {
         ("rn-never", &["not_bound"][..]),
         ("rn-ended", &["not_bound"][..]),
         ("rn-susp", &["tenant_suspended"][..]),
+        ("rn-del", &["tenant_suspended"][..]),
+        ("rn-unknown", &["tenant_suspended"][..]),
         ("rn-ghost", &["signature_invalid"][..]),
     ];
     for (hardware_id, reasons) in expected_lines {
@@ -789,7 +815,7 @@ async fn renewal_issues_for_the_registered_key_and_refuses_the_rest() {
         ("challenge_expired", 1),
         ("decommissioned", 1),
         ("not_bound", 2),
-        ("tenant_suspended", 1),
+        ("tenant_suspended", 3),
         ("invalid_request", 1),
     ]
     .into_iter()
@@ -969,13 +995,9 @@ async fn rate_limits_answer_429_and_bound_the_challenges() {
     .await;
     // A registered, bound gateway, which holds a challenge through the flood below.
     let key = Factory::new(&service).await.register("rl-ok").await;
-    bind(
-        &product,
-        &assets_writer(&product),
-        TenantId::generate(),
-        "rl-ok",
-    )
-    .await;
+    let tenant = TenantId::generate();
+    store_status(&product, tenant, TenantStatus::Active, 1).await;
+    bind(&product, &assets_writer(&product), tenant, "rl-ok").await;
     wait_for_bindings_lag(&collector).await;
     let pending = challenge(&service, "rl-ok").await;
 

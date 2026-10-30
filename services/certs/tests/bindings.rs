@@ -11,8 +11,10 @@
 //!   but does not become current (acceptance 2); an event with an invalid hardware ID and one
 //!   without a tenant are dead-lettered, and the binding after them is stored (acceptance 4).
 //! - The tenant statuses: only a newer version replaces the stored one; a tenant without a
-//!   status is active, and a stored suspension reads as suspended (acceptance 3). A tenant's
-//!   transaction cannot store another tenant's status.
+//!   status reads as suspended (fail closed since Laysi/trustiot-v2#778), and so do a stored
+//!   suspension, a deleted tenant and a state this build does not know (acceptance 3). A deleted
+//!   tenant's row never changes again; an unrecognized one takes its own version again. A
+//!   tenant's transaction cannot store another tenant's status.
 //! - The platform role's reads see every tenant's bindings, take each gateway's latest binding,
 //!   leave out an ended one, and each read logs `platform database access` with the certs
 //!   service and the purpose (acceptance 5, with `tests/cross_tenant.rs`).
@@ -632,9 +634,9 @@ async fn statuses_keep_the_newest_version_and_platform_reads_see_every_tenant() 
     let (capture, _guard) = Capture::install();
     let (tenant_a, tenant_b) = (TenantId::generate(), TenantId::generate());
 
-    // 1. No status yet: active.
+    // 1. No status yet: suspended (fail closed, Laysi/trustiot-v2#778).
     assert!(
-        !projection
+        projection
             .tenant_suspended(tenant_a, "test-renewal")
             .await
             .expect("read the status")
@@ -667,11 +669,11 @@ async fn statuses_keep_the_newest_version_and_platform_reads_see_every_tenant() 
         );
     }
     assert!(
-        !projection
+        projection
             .tenant_suspended(tenant_b, "test-renewal")
             .await
             .expect("read the status"),
-        "another tenant stays active"
+        "another tenant, without a status, reads as suspended"
     );
     // 3. A tenant's transaction cannot store another tenant's status, and sees only its own.
     let mut tx = work
@@ -797,5 +799,119 @@ async fn statuses_keep_the_newest_version_and_platform_reads_see_every_tenant() 
         "evidence: {} audit lines, e.g. {:?}",
         lines.len(),
         lines.first()
+    );
+}
+
+/// The status a tenant's transaction stores and the platform role reads, as one row.
+const STATUS_ROW: &str =
+    "SELECT status, version FROM certs.tenant_statuses WHERE tenant_id = $1::uuid";
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_deleted_tenant_is_final_and_an_unrecognized_state_takes_its_version_again() {
+    let Some(product) = product_postgres(LOGINS).await else {
+        return;
+    };
+    let mut admin = product.superuser().await;
+    let work = certs_work(&product);
+    let projection = Projection::new(certs_platform(&product));
+    let (deleted, future) = (TenantId::generate(), TenantId::generate());
+    let store = |tenant: TenantId, status: TenantStatus, version: i64| {
+        let work = work.clone();
+        async move {
+            let mut tx = work
+                .begin(tenant, "test-status")
+                .await
+                .expect("a tenant transaction");
+            let stored = store_tenant_status(&mut tx, tenant, status, version)
+                .await
+                .expect("store the status");
+            tx.commit().await.expect("commit");
+            stored
+        }
+    };
+    let row = |tenant: TenantId| {
+        let product = product.clone();
+        async move {
+            let row: (String, i64) = sqlx::query_as(STATUS_ROW)
+                .bind(tenant.to_string())
+                .fetch_one(&mut product.superuser().await)
+                .await
+                .expect("read the row");
+            row
+        }
+    };
+
+    // A deleted tenant keeps its row whatever a later version says, and reads as suspended.
+    assert!(store(deleted, TenantStatus::Active, 1).await);
+    assert!(store(deleted, TenantStatus::Suspended, 2).await);
+    assert!(store(deleted, TenantStatus::Deleted, 3).await);
+    for (status, version) in [
+        (TenantStatus::Active, 4),
+        (TenantStatus::Unrecognized, 5),
+        (TenantStatus::Deleted, 3),
+        (TenantStatus::Active, 3),
+    ] {
+        assert!(
+            !store(deleted, status, version).await,
+            "{status:?} at {version} over deleted"
+        );
+    }
+    assert_eq!(row(deleted).await, ("deleted".to_owned(), 3));
+    assert!(
+        projection
+            .tenant_suspended(deleted, "test-renewal")
+            .await
+            .expect("read")
+    );
+
+    // A state this build does not know reads as suspended; the same version stated in a way a
+    // newer build knows replaces it (a replay after an upgrade), an older one never does, and a
+    // known state is not replaced at its own version.
+    assert!(store(future, TenantStatus::Active, 1).await);
+    assert!(store(future, TenantStatus::Unrecognized, 2).await);
+    assert!(
+        projection
+            .tenant_suspended(future, "test-renewal")
+            .await
+            .expect("read")
+    );
+    assert!(!store(future, TenantStatus::Active, 1).await, "older");
+    assert!(
+        !store(future, TenantStatus::Unrecognized, 2).await,
+        "the same unknown state again writes nothing"
+    );
+    assert!(
+        store(future, TenantStatus::Active, 2).await,
+        "same version, known"
+    );
+    assert_eq!(row(future).await, ("active".to_owned(), 2));
+    assert!(
+        !store(future, TenantStatus::Suspended, 2).await,
+        "a known state at its own version stays"
+    );
+    assert!(
+        !projection
+            .tenant_suspended(future, "test-renewal")
+            .await
+            .expect("read")
+    );
+
+    // The table refuses any other value, and a negative version.
+    let refused = sqlx::query(
+        "INSERT INTO certs.tenant_statuses (tenant_id, status, version) VALUES ($1::uuid, $2, 1)",
+    )
+    .bind(TenantId::generate().to_string())
+    .bind("archived")
+    .execute(&mut admin)
+    .await
+    .expect_err("an unknown status is refused");
+    let code = refused
+        .as_database_error()
+        .and_then(|database| database.code())
+        .map(|code| code.into_owned());
+    assert_eq!(code.as_deref(), Some("23514"), "{refused}");
+    println!(
+        "evidence: deleted stays (deleted, 3) after active 4, unrecognized 5; unrecognized 2 \
+         replaced by active 2, not by active 1; unknown status value refused with 23514"
     );
 }

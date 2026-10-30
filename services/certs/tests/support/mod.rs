@@ -17,13 +17,17 @@ use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use ca_keys::{CaKey, CaKeys, Request};
+use certs::bindings::{TenantStatus, store_tenant_status};
 use certs::ceremony;
-use contract::{Actor, InternalClaims, ServiceName, TenantGrant};
+use contract::{Actor, InternalClaims, ServiceName, TenantGrant, TenantId};
 use rcgen::KeyPair;
 use serde_json::Value;
+use service_kit::identity::ServiceIdentity;
+use service_kit::tenant::TenantDb;
+use sqlx::postgres::PgPoolOptions;
 use testkit::identity::TestIssuer;
 use testkit::postgres::TEST_PASSWORD;
-use testkit::product::ProductPostgres;
+use testkit::product::{DATABASE, ProductPostgres};
 
 /// The certs binary, built by Cargo for these tests.
 pub const CERTS: &str = env!("CARGO_BIN_EXE_certs");
@@ -532,6 +536,35 @@ pub fn verify_client(
             )),
         )
         .map(drop)
+}
+
+/// Stores `tenant`'s `status` at `version` as the consumer of the identity service's events does
+/// (Laysi/trustiot-v2#778): in the tenant's transaction, as the service role. The renewal refuses a
+/// tenant without a state, so a test that renews a gateway of a tenant it made up gives it one
+/// (`TenantStatus::Active` at 1 is what `identity.tenant_created` stores).
+pub async fn store_status(
+    product: &ProductPostgres,
+    tenant: TenantId,
+    status: TenantStatus,
+    version: i64,
+) {
+    let (_, work) = TenantDb::connect_lazy_with_background(
+        product.postgres.options("certs_app", DATABASE),
+        PgPoolOptions::new().max_connections(1),
+        ServiceIdentity::new(ServiceName::Certs),
+    )
+    .expect("the certs service role's pool");
+    let mut tx = work
+        .begin(tenant, "test-tenant-status")
+        .await
+        .expect("a tenant transaction");
+    assert!(
+        store_tenant_status(&mut tx, tenant, status, version)
+            .await
+            .expect("store the status"),
+        "{status:?} at {version} stored"
+    );
+    tx.commit().await.expect("commit the status");
 }
 
 /// Polls `check` every 100 ms until it returns `Some`, for at most [`LIMIT`]; fails naming
