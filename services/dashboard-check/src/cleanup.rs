@@ -17,13 +17,19 @@
 //! When any of it fails, the service stops (README.md, 「清理失敗」) rather than run a check
 //! next to something it could not remove.
 //!
-//! Outside a container (the service is not PID 1) only the browser's own process group and its
-//! own directory are removed: there the other processes and files are not the service's. The
-//! signal to every process needs an `Init`, which exists only in PID 1 on Linux, so no other
-//! path can reach it.
+//! The setting `cleanup` ([`CleanupScope`]) says which of the two cleanups the service must do,
+//! and it refuses to start when it cannot ([`ScopeError`]): `container`, the default and what
+//! the chart sets, needs the service to be PID 1, which a pod that shares its process namespace
+//! or a container started with an init process takes away. `browser` is only for a run outside
+//! a container, and refused when anything says the process runs in one ([`container_sign`]);
+//! then only the browser's own process group and its own directory are removed: there the other
+//! processes and files are not the service's. The signal to every process needs an `Init`,
+//! which exists only in PID 1 on Linux, so no other path can reach it.
 
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
+
+use crate::config::CleanupScope;
 
 /// How long the other processes in the PID namespace may take to go away after `SIGKILL`.
 pub const PROCESS_DEADLINE: Duration = Duration::from_secs(3);
@@ -48,6 +54,58 @@ pub enum CleanupError {
     Files(PathBuf),
     #[error("System V IPC objects could not be removed")]
     Ipc,
+}
+
+/// Why this process cannot do the cleanup its settings ask for; the service does not start.
+#[derive(Debug, thiserror::Error, PartialEq, Eq)]
+pub enum ScopeError {
+    #[error(
+        "cleanup `container` needs the service to be PID 1 of its container on Linux, and it is \
+         not (a pod that shares its process namespace, or a container started with an init \
+         process, puts another process there); only a run outside a container may set \
+         TRUSTIOT__CLEANUP=browser"
+    )]
+    NotInit,
+    #[error(
+        "cleanup `browser` is for a run outside a container, but the service is its \
+         container's PID 1, which cleans the whole container: leave TRUSTIOT__CLEANUP unset"
+    )]
+    Init,
+    #[error(
+        "cleanup `browser` is for a run outside a container, but the service runs in one \
+         ({0}); in a container the service must be PID 1 and clean the whole container"
+    )]
+    InContainer(&'static str),
+}
+
+/// The initial PID namespace's inode number on Linux (`PROC_PID_INIT_INO`): a process outside
+/// any container sees `/proc/self/ns/pid` as `pid:[4026531836]`.
+const INITIAL_PID_NAMESPACE: &str = "pid:[4026531836]";
+
+/// The first sign that this process runs in a container, or `None` when there is none: a PID
+/// namespace other than the initial one (or one that cannot be read), the files Docker and
+/// Podman leave in a container's root, or the variables a container engine or Kubernetes sets.
+/// Only a refusal follows from a sign; having none proves nothing, it only lets a run outside a
+/// container (development, tests) use `browser`.
+#[must_use]
+pub fn container_sign() -> Option<&'static str> {
+    if cfg!(target_os = "linux") {
+        match std::fs::read_link("/proc/self/ns/pid") {
+            Ok(namespace) if namespace.as_os_str() == INITIAL_PID_NAMESPACE => {}
+            Ok(_) => return Some("a PID namespace of its own"),
+            Err(_) => return Some("its PID namespace cannot be read"),
+        }
+    }
+    if Path::new("/.dockerenv").exists() || Path::new("/run/.containerenv").exists() {
+        return Some("a container engine's marker file");
+    }
+    if std::env::var_os("container").is_some() {
+        return Some("the variable `container`");
+    }
+    if std::env::var_os("KUBERNETES_SERVICE_HOST").is_some() {
+        return Some("a Kubernetes pod's variables");
+    }
+    None
 }
 
 /// The cleanup the service does in its environment.
@@ -75,12 +133,47 @@ fn is_init() -> bool {
 }
 
 impl Cleanup {
-    /// The cleanup for this process: the whole container's when it is PID 1 on Linux.
-    #[must_use]
-    pub fn for_this_process(work_dir: &Path) -> Self {
+    /// The cleanup `scope` asks for, in this process: the whole container's needs PID 1 on
+    /// Linux; the browser's alone is refused there and wherever [`container_sign`] finds one.
+    ///
+    /// # Errors
+    ///
+    /// When this process cannot do the cleanup `scope` asks for.
+    pub fn for_this_process(work_dir: &Path, scope: CleanupScope) -> Result<Self, ScopeError> {
+        Self::for_process(work_dir, scope, Init::here(), container_sign)
+    }
+
+    fn for_process(
+        work_dir: &Path,
+        scope: CleanupScope,
+        init: Option<Init>,
+        container_sign: impl FnOnce() -> Option<&'static str>,
+    ) -> Result<Self, ScopeError> {
+        match (scope, init) {
+            (CleanupScope::Container, None) => Err(ScopeError::NotInit),
+            (CleanupScope::Browser, Some(_)) => Err(ScopeError::Init),
+            (CleanupScope::Browser, None) => match container_sign() {
+                Some(sign) => Err(ScopeError::InContainer(sign)),
+                None => Ok(Self::browser_only(work_dir)),
+            },
+            (CleanupScope::Container, Some(_)) => Ok(Self {
+                work_dir: work_dir.to_owned(),
+                init,
+            }),
+        }
+    }
+
+    /// The browser's cleanup alone, whatever the environment: for the unit tests of what
+    /// uses it, which may run in a container.
+    #[cfg(test)]
+    pub(crate) fn browser_only_for_tests(work_dir: &Path) -> Self {
+        Self::browser_only(work_dir)
+    }
+
+    fn browser_only(work_dir: &Path) -> Self {
         Self {
             work_dir: work_dir.to_owned(),
-            init: Init::here(),
+            init: None,
         }
     }
 
@@ -498,12 +591,62 @@ mod tests {
         // The test process is never PID 1, so the container cleanup must leave everything.
         let dir = temp_dir("not-init");
         std::fs::write(dir.join("other"), "x").expect("write");
-        let cleanup = Cleanup::for_this_process(&dir);
+        let cleanup = Cleanup::browser_only_for_tests(&dir);
         assert!(!cleanup.whole_container());
         cleanup.container().expect("nothing to do");
         assert!(dir.join("other").exists());
         assert_eq!(signal::CALLS.load(std::sync::atomic::Ordering::SeqCst), 0);
         std::fs::remove_dir_all(&dir).expect("cleanup");
+    }
+
+    #[test]
+    fn the_service_refuses_a_cleanup_it_cannot_do_here() {
+        let dir = Path::new("/nonexistent-work-dir");
+        // The default needs PID 1: outside it there is no falling back to the browser's cleanup.
+        assert_eq!(
+            Cleanup::for_this_process(dir, CleanupScope::default()).err(),
+            Some(ScopeError::NotInit)
+        );
+        let no_sign: fn() -> Option<&'static str> = || None;
+        let sign: fn() -> Option<&'static str> = || Some("a PID namespace of its own");
+        for container_sign in [no_sign, sign] {
+            assert_eq!(
+                Cleanup::for_process(dir, CleanupScope::Container, None, container_sign).err(),
+                Some(ScopeError::NotInit)
+            );
+        }
+        // As PID 1, `browser` would leave the rest of the container alone: refused.
+        assert_eq!(
+            Cleanup::for_process(dir, CleanupScope::Browser, Some(Init(())), no_sign).err(),
+            Some(ScopeError::Init)
+        );
+        // In a container that is not PID 1 neither cleanup is possible, so the service does
+        // not start: `browser` is refused on any sign of a container.
+        assert_eq!(
+            Cleanup::for_process(dir, CleanupScope::Browser, None, sign).err(),
+            Some(ScopeError::InContainer("a PID namespace of its own"))
+        );
+        // The two that fit. Neither cleans here, so the forged proof never reaches the signal.
+        let whole = Cleanup::for_process(dir, CleanupScope::Container, Some(Init(())), sign)
+            .expect("PID 1 cleans the container");
+        assert!(whole.whole_container());
+        let browser = Cleanup::for_process(dir, CleanupScope::Browser, None, no_sign)
+            .expect("outside a container");
+        assert!(!browser.whole_container());
+        assert_eq!(signal::CALLS.load(std::sync::atomic::Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn browser_is_refused_wherever_a_container_shows() {
+        // This process is never PID 1, so `browser` is what decides; whether it is accepted
+        // depends only on the signs, which outside Linux are only files and variables.
+        let dir = Path::new("/nonexistent-work-dir");
+        let sign = container_sign();
+        let scope = Cleanup::for_this_process(dir, CleanupScope::Browser);
+        match sign {
+            Some(sign) => assert_eq!(scope.err(), Some(ScopeError::InContainer(sign))),
+            None => assert!(scope.is_ok_and(|cleanup| !cleanup.whole_container())),
+        }
     }
 
     #[test]

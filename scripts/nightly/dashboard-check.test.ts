@@ -12,6 +12,7 @@ import {
   DASHBOARD_CHECK,
   describe,
   DNS_QUERY_ID,
+  dnsHeaderOf,
   dnsQuery,
   httpRequest,
   isTlsAlert,
@@ -58,6 +59,16 @@ const TARGETS: IsolationTargets = {
 };
 /** A TLS fatal alert record (decode_error), as a TLS server refuses bytes that are not TLS. */
 const TLS_ALERT = "\u0015\u0003\u0003\u0000\u0002\u0002\u0032";
+/**
+ * A DNS response to one question as a UDP datagram (Latin-1): its header, the question, and an
+ * address record per answer. `flags` 0x8180 is a response, recursion desired and available, rcode 0.
+ */
+function dnsResponse({ id = DNS_QUERY_ID, flags = 0x8180, answers = 1 } = {}): string {
+  const header = [id >> 8, id & 0xff, flags >> 8, flags & 0xff, 0, 1, answers >> 8, answers & 0xff, 0, 0, 0, 0];
+  const question = [7, ...Buffer.from("example"), 3, ...Buffer.from("com"), 0, 0, 1, 0, 1];
+  const record = [0xc0, 12, 0, 1, 0, 1, 0, 0, 0, 60, 0, 4, 93, 184, 215, 14];
+  return String.fromCharCode(...header, ...question, ...Array.from({ length: answers }, () => record).flat());
+}
 
 group("probes", () => {
   test("refuses what could not travel as an argument or be read back", () => {
@@ -110,6 +121,17 @@ group("probes", () => {
     expect(() => dnsQuery("example.com", "udp")).toThrow("final dot");
     expect(() => dnsQuery("1.1.1.1.", "udp")).toThrow("final dot");
     expect(() => dnsQuery(`${"a".repeat(64)}.com.`, "udp")).toThrow("longer than 63");
+  });
+
+  test("a DNS answer is read from the header of one datagram", () => {
+    expect(dnsHeaderOf(dnsResponse())).toEqual({ id: DNS_QUERY_ID, response: true, rcode: 0, questions: 1, answers: 1 });
+    expect(dnsHeaderOf(dnsResponse({ flags: 0x8183, answers: 0 }))).toEqual({ id: DNS_QUERY_ID, response: true, rcode: 3, questions: 1, answers: 0 });
+    expect(dnsHeaderOf(dnsResponse({ id: 0x1234, answers: 2 }))).toMatchObject({ id: 0x1234, answers: 2 });
+    // The query itself is not a response.
+    expect(dnsHeaderOf(Buffer.from(dnsQuery(OUTSIDE_NAME, "udp")).toString("latin1"))).toMatchObject({ response: false, answers: 0 });
+    // Shorter than a header: nothing to read.
+    expect(dnsHeaderOf(dnsResponse().slice(0, 11))).toBeUndefined();
+    expect(dnsHeaderOf("")).toBeUndefined();
   });
 
   test("only complete TLS alert records are a TLS refusal", () => {
@@ -186,7 +208,8 @@ group("the isolation plan", () => {
     expect(checker.map((entry) => entry.probe.id)).toEqual([
       "loopback", "dns", "api-service", "api-endpoint-0", "collector", "outside",
       "ztunnel-dns-udp-loopback", "ztunnel-dns-tcp-loopback", "ztunnel-dns-udp-pod", "ztunnel-dns-tcp-pod",
-      "ztunnel-outbound", "ztunnel-inbound", "ztunnel-hbone",
+      "ztunnel-outbound-loopback", "ztunnel-inbound-loopback", "ztunnel-hbone-loopback",
+      "ztunnel-outbound-pod", "ztunnel-inbound-pod", "ztunnel-hbone-pod",
     ]);
     expect(checker.filter((entry) => entry.probe.id !== "loopback").every((entry) => !entry.expect.open)).toBe(true);
     const target = (id: string) => checker.find((entry) => entry.probe.id === id)!.probe;
@@ -201,13 +224,16 @@ group("the isolation plan", () => {
     expect(target("ztunnel-dns-tcp-loopback")).toEqual({ kind: "bytes", id: "ztunnel-dns-tcp-loopback", transport: "tcp", host: "127.0.0.1", port: 15_053, payload: dnsQuery(OUTSIDE_NAME, "tcp") });
     expect(target("ztunnel-dns-udp-pod")).toMatchObject({ transport: "udp", host: "10.42.0.31", port: 15_053 });
     expect(target("ztunnel-dns-tcp-pod")).toMatchObject({ transport: "tcp", host: "10.42.0.31", port: 15_053 });
-    // Its outbound, inbound and HBONE ports on loopback, each asked for the outside address.
-    expect(target("ztunnel-outbound")).toEqual({ kind: "tcp", id: "ztunnel-outbound", host: "127.0.0.1", port: 15_001, send: httpRequest("GET", OUTSIDE.host, "/") });
-    expect(target("ztunnel-inbound")).toEqual({ kind: "tcp", id: "ztunnel-inbound", host: "127.0.0.1", port: 15_006, send: httpRequest("GET", OUTSIDE.host, "/") });
-    expect(target("ztunnel-hbone")).toEqual({ kind: "tcp", id: "ztunnel-hbone", host: "127.0.0.1", port: 15_008, send: "CONNECT 1.1.1.1:80 HTTP/1.1\r\nHost: 1.1.1.1:80\r\n\r\n" });
+    // Its outbound, inbound and HBONE ports on loopback and on the pod's address, each asked for
+    // the outside address.
+    for (const [where, host] of [["loopback", "127.0.0.1"], ["pod", "10.42.0.31"]] as const) {
+      expect(target(`ztunnel-outbound-${where}`)).toEqual({ kind: "tcp", id: `ztunnel-outbound-${where}`, host, port: 15_001, send: httpRequest("GET", OUTSIDE.host, "/") });
+      expect(target(`ztunnel-inbound-${where}`)).toEqual({ kind: "tcp", id: `ztunnel-inbound-${where}`, host, port: 15_006, send: httpRequest("GET", OUTSIDE.host, "/") });
+      expect(target(`ztunnel-hbone-${where}`)).toEqual({ kind: "tcp", id: `ztunnel-hbone-${where}`, host, port: 15_008, send: "CONNECT 1.1.1.1:80 HTTP/1.1\r\nHost: 1.1.1.1:80\r\n\r\n" });
+    }
     expect(ZTUNNEL_PORTS).toEqual({ outbound: 15_001, inbound: 15_006, hbone: 15_008, dns: 15_053 });
     // Only the HBONE port may refuse with a TLS alert.
-    expect(checker.filter((entry) => !entry.expect.open && "tlsRefusal" in entry.expect).map((entry) => entry.probe.id)).toEqual(["ztunnel-hbone"]);
+    expect(checker.filter((entry) => !entry.expect.open && "tlsRefusal" in entry.expect).map((entry) => entry.probe.id)).toEqual(["ztunnel-hbone-loopback", "ztunnel-hbone-pod"]);
     // By address: a name would fail at the lookup, which the DNS probe covers, and prove nothing more.
     for (const entry of checker) if (entry.probe.kind !== "dns") expect(entry.probe.host).toMatch(/^\d+\.\d+\.\d+\.\d+$/);
     // The probe works in that pod: its own health port on loopback answers 200.
@@ -223,11 +249,16 @@ group("the isolation plan", () => {
     }
     expect(control.find((entry) => entry.probe.id === "dns")?.expect).toEqual({ open: true, resolved: true });
     // A DNS query sent as bytes to the cluster DNS answers there, over UDP and TCP: the probes that
-    // send bytes work, so their silence in the dashboard check's pod means something.
-    expect(control.filter((entry) => entry.probe.kind === "bytes")).toMatchObject([
-      { probe: { id: "dns-udp", transport: "udp", host: "10.43.0.10", port: 53, payload: dnsQuery(CLUSTER_NAME, "udp") }, expect: { open: true } },
-      { probe: { id: "dns-tcp", transport: "tcp", host: "10.43.0.10", port: 53, payload: dnsQuery(CLUSTER_NAME, "tcp") }, expect: { open: true } },
+    // send bytes work, so their silence in the dashboard check's pod means something. The name
+    // ztunnel's DNS proxy is asked for resolves through the cluster DNS, so the proxy's silence is
+    // a refusal, not a cluster DNS without an upstream: by the pod's resolver, and by a query sent
+    // as bytes whose answer holds a record (over UDP, where one read is the whole message).
+    expect(control.filter((entry) => entry.probe.kind === "bytes").map(({ probe, expect }) => ({ probe, expect }))).toEqual([
+      { probe: { kind: "bytes", id: "dns-udp", transport: "udp", host: "10.43.0.10", port: 53, payload: dnsQuery(CLUSTER_NAME, "udp") }, expect: { open: true, dnsAnswer: true } },
+      { probe: { kind: "bytes", id: "dns-tcp", transport: "tcp", host: "10.43.0.10", port: 53, payload: dnsQuery(CLUSTER_NAME, "tcp") }, expect: { open: true } },
+      { probe: { kind: "bytes", id: "outside-name-udp", transport: "udp", host: "10.43.0.10", port: 53, payload: dnsQuery(OUTSIDE_NAME, "udp") }, expect: { open: true, dnsAnswer: true } },
     ]);
+    expect(control.find((entry) => entry.probe.id === "outside-name")).toMatchObject({ probe: { kind: "dns", name: OUTSIDE_NAME }, expect: { open: true, resolved: true } });
     expect(control.filter((entry) => !entry.expect.open).map((entry) => entry.probe)).toMatchObject([
       { id: "checker-service", host: "10.43.20.5", port: 8080 },
       { id: "checker-pod", host: "10.42.0.31", port: 8080 },
@@ -270,12 +301,16 @@ group("the isolation plan", () => {
     ok(find("checker", "ztunnel-dns-udp-pod"), { kind: "silent", exit: 0 });
     bad(find("checker", "ztunnel-dns-udp-loopback"), answered("\u0074\u0071\u0081\u0083"), "DNS example.com. over UDP to ztunnel's DNS proxy port 127.0.0.1:15053: answered 4 byte(s), expected no answer");
     bad(find("checker", "ztunnel-dns-tcp-pod"), answered(TLS_ALERT), "expected no answer");
-    bad(find("checker", "ztunnel-outbound"), answered(http(301)), "1.1.1.1:80 through ztunnel's outbound port 127.0.0.1:15001: answered HTTP 301, expected no answer");
-    ok(find("checker", "ztunnel-inbound"), { kind: "silent", exit: 124 });
-    ok(find("checker", "ztunnel-hbone"), answered(TLS_ALERT));
-    ok(find("checker", "ztunnel-hbone"), { kind: "silent", exit: 0 });
-    bad(find("checker", "ztunnel-hbone"), answered("HTTP/1.1 200 Connection established\r\n\r\n"), "expected no answer");
-    bad(find("checker", "ztunnel-hbone"), answered(`${TLS_ALERT}HTTP/1.1 200 OK\r\n\r\n`), "expected no answer");
+    bad(find("checker", "ztunnel-outbound-loopback"), answered(http(301)), "1.1.1.1:80 through ztunnel's outbound port 127.0.0.1:15001: answered HTTP 301, expected no answer");
+    bad(find("checker", "ztunnel-outbound-pod"), answered(http(301)), "1.1.1.1:80 through ztunnel's outbound port 10.42.0.31:15001: answered HTTP 301, expected no answer");
+    ok(find("checker", "ztunnel-inbound-loopback"), { kind: "silent", exit: 124 });
+    bad(find("checker", "ztunnel-inbound-pod"), answered("x"), "ztunnel's inbound port 10.42.0.31:15006: answered 1 byte(s), expected no answer");
+    for (const id of ["ztunnel-hbone-loopback", "ztunnel-hbone-pod"]) {
+      ok(find("checker", id), answered(TLS_ALERT));
+      ok(find("checker", id), { kind: "silent", exit: 0 });
+      bad(find("checker", id), answered("HTTP/1.1 200 Connection established\r\n\r\n"), "expected no answer");
+      bad(find("checker", id), answered(`${TLS_ALERT}HTTP/1.1 200 OK\r\n\r\n`), "expected no answer");
+    }
     bad(find("checker", "loopback"), answered(http(503)), "expected HTTP 200");
     bad(find("checker", "loopback"), { kind: "silent", exit: 3 }, "no answer (not connected), expected an answer");
     // The controls must answer, with any status, and the name must resolve.
@@ -283,8 +318,26 @@ group("the isolation plan", () => {
     ok(find("control", "outside"), answered(http(301)));
     bad(find("control", "outside"), { kind: "silent", exit: 124 }, "from the identity service's pod, 1.1.1.1:80 outside the cluster: no answer (out of time), expected an answer");
     bad(find("control", "dns"), { kind: "unresolved" }, "expected the name to resolve");
-    ok(find("control", "dns-udp"), answered("\u0074\u0071\u0081\u0080"));
+    // Over UDP the answer must be the response to the query, without an error, with a record.
+    for (const id of ["dns-udp", "outside-name-udp"]) {
+      ok(find("control", id), answered(dnsResponse()));
+      ok(find("control", id), answered(dnsResponse({ answers: 3 })));
+      bad(find("control", id), answered("\u0074\u0071\u0081\u0080"), "answered 4 byte(s), expected a DNS answer");
+      bad(find("control", id), answered(dnsResponse({ flags: 0x8183, answers: 0 })), "rcode 3 and 0 answer record(s), expected the response to query 29809 with rcode 0 and at least one record");
+      bad(find("control", id), answered(dnsResponse({ flags: 0x8182 })), "rcode 2");
+      bad(find("control", id), answered(dnsResponse({ answers: 0 })), "0 answer record(s)");
+      bad(find("control", id), answered(dnsResponse({ id: 0x1234 })), "id 4660");
+      bad(find("control", id), answered(dnsResponse({ flags: 0x0100 })), "not a response");
+      bad(find("control", id), { kind: "silent", exit: 124 }, "no answer (out of time), expected a DNS answer");
+    }
+    bad(find("control", "outside-name-udp"), answered(dnsResponse({ flags: 0x8182 })), "DNS example.com. over UDP to the cluster DNS 10.43.0.10:53: a DNS message");
+    // Over TCP one read may hold part of the message: any byte is an answer.
+    ok(find("control", "dns-tcp"), answered("\u0000\u0030"));
     bad(find("control", "dns-tcp"), { kind: "silent", exit: 124 }, "DNS kubernetes.default.svc.cluster.local. over TCP to the cluster DNS 10.43.0.10:53: no answer (out of time), expected an answer");
+    ok(find("control", "outside-name"), { kind: "resolved", address: "93.184.215.14" });
+    bad(find("control", "outside-name"), { kind: "unresolved" }, "from the identity service's pod, DNS example.com. through the pod's resolver: did not resolve, expected the name to resolve");
+    // A plan that expects a DNS answer from anything but a UDP query is a mistake of the plan.
+    expect(probeProblem({ ...find("control", "dns-tcp"), expect: { open: true, dnsAnswer: true } }, answered(dnsResponse()))).toContain("only a DNS query sent over UDP can expect a DNS answer");
     ok(find("control", "checker-service"), { kind: "silent", exit: 0 });
     bad(find("control", "checker-pod"), answered(http(400)), "expected no answer");
     // The assistant: 200 and the verdict passed, nothing less.
@@ -310,12 +363,12 @@ group("checkIsolation", () => {
   /** What a cluster that keeps the chart's promises answers. */
   function isolated(pod: string, probe: Probe): ProbeResult {
     if (pod === pods.checker) {
-      if (probe.id === "ztunnel-hbone") return answered(TLS_ALERT);
+      if (probe.id.startsWith("ztunnel-hbone-")) return answered(TLS_ALERT);
       return probe.id === "loopback" ? answered(http(200)) : probe.kind === "dns" ? { kind: "unresolved" } : { kind: "silent", exit: 0 };
     }
     if (pod === pods.control) {
       if (probe.kind === "dns") return { kind: "resolved", address: "10.43.0.1" };
-      if (probe.kind === "bytes") return answered("\u0074\u0071\u0081\u0080");
+      if (probe.kind === "bytes") return probe.transport === "udp" ? answered(dnsResponse()) : answered("\u0000\u0030");
       return probe.id.startsWith("checker") ? { kind: "silent", exit: 124 } : answered(http(404));
     }
     return answered(http(200, '{"verdict":"passed","report":{"marks":[{"reference":"k|a","value":1}]}}'));
@@ -335,14 +388,16 @@ group("checkIsolation", () => {
       TARGETS,
     );
     expect(ran).toEqual([
-      "trustiot-dashboard-check-a: loopback dns api-service api-endpoint-0 collector outside ztunnel-dns-udp-loopback ztunnel-dns-tcp-loopback ztunnel-dns-udp-pod ztunnel-dns-tcp-pod ztunnel-outbound ztunnel-inbound ztunnel-hbone",
-      "trustiot-identity-b: dns api-service api-endpoint-0 collector outside dns-udp dns-tcp checker-service checker-pod",
+      "trustiot-dashboard-check-a: loopback dns api-service api-endpoint-0 collector outside ztunnel-dns-udp-loopback ztunnel-dns-tcp-loopback ztunnel-dns-udp-pod ztunnel-dns-tcp-pod ztunnel-outbound-loopback ztunnel-inbound-loopback ztunnel-hbone-loopback ztunnel-outbound-pod ztunnel-inbound-pod ztunnel-hbone-pod",
+      "trustiot-identity-b: dns api-service api-endpoint-0 collector outside dns-udp dns-tcp outside-name outside-name-udp checker-service checker-pod",
       "trustiot-assistant-c: check",
     ]);
     expect(detail).toContain("from the dashboard check's pod trustiot-dashboard-check-a: its own /readyz on 127.0.0.1:8081: answered HTTP 200, DNS kubernetes.default.svc.cluster.local.: did not resolve");
     expect(detail).toContain("from the identity service's pod trustiot-identity-b: DNS kubernetes.default.svc.cluster.local.: resolved to 10.43.0.1");
     expect(detail).toContain("the dashboard check's pod 10.42.0.31:8080: no answer (out of time)");
     expect(detail).toContain("1.1.1.1:80 through ztunnel's HBONE port 127.0.0.1:15008: answered only a TLS alert (7 bytes)");
+    expect(detail).toContain("1.1.1.1:80 through ztunnel's HBONE port 10.42.0.31:15008: answered only a TLS alert (7 bytes)");
+    expect(detail).toContain("DNS example.com. through the pod's resolver: resolved to 10.43.0.1");
     expect(detail).toContain("with the verdict passed");
   });
 
@@ -354,7 +409,13 @@ group("checkIsolation", () => {
     ["ztunnel's DNS proxy answers a name outside the cluster in the dashboard check's pod", (pod: string, probe: Probe) =>
       pod === pods.checker && probe.id === "ztunnel-dns-tcp-pod" ? answered("\u0000\u0004tq\u0081\u0080") : undefined, "ztunnel's DNS proxy port 10.42.0.31:15053: answered 6 byte(s), expected no answer"],
     ["the cluster DNS does not answer the bytes control, so silence proves nothing", (pod: string, probe: Probe): ProbeResult | undefined =>
-      pod === pods.control && probe.id === "dns-udp" ? { kind: "silent", exit: 124 } : undefined, "over UDP to the cluster DNS 10.43.0.10:53: no answer (out of time), expected an answer"],
+      pod === pods.control && probe.id === "dns-udp" ? { kind: "silent", exit: 124 } : undefined, "over UDP to the cluster DNS 10.43.0.10:53: no answer (out of time), expected a DNS answer"],
+    ["ztunnel's outbound port on the pod's address leads outside", (pod: string, probe: Probe) =>
+      pod === pods.checker && probe.id === "ztunnel-outbound-pod" ? answered(http(301)) : undefined, "ztunnel's outbound port 10.42.0.31:15001: answered HTTP 301, expected no answer"],
+    ["the cluster DNS cannot resolve the name outside, so the proxy's silence proves nothing", (pod: string, probe: Probe): ProbeResult | undefined =>
+      pod === pods.control && probe.id === "outside-name-udp" ? answered(dnsResponse({ flags: 0x8182, answers: 0 })) : undefined, "DNS example.com. over UDP to the cluster DNS 10.43.0.10:53: a DNS message with id 29809, a response, rcode 2 and 0 answer record(s)"],
+    ["the name outside does not resolve from the identity pod", (pod: string, probe: Probe): ProbeResult | undefined =>
+      pod === pods.control && probe.id === "outside-name" ? { kind: "unresolved" } : undefined, "DNS example.com. through the pod's resolver: did not resolve, expected the name to resolve"],
     ["another service reaches the dashboard check", (pod: string, probe: Probe) =>
       pod === pods.control && probe.id === "checker-service" ? answered(http(400)) : undefined, "the dashboard check's Service 10.43.20.5:8080: answered HTTP 400, expected no answer"],
     ["the runner has no way out, so silence proves nothing", (pod: string, probe: Probe): ProbeResult | undefined =>
@@ -464,6 +525,16 @@ group("what the check reads from the release", () => {
     expect(run).toContain('import { POD_PIDS_LIMIT } from "./dashboard-check.ts";');
   });
 
+  test("the SaaS host installer writes the process limit the chart asks of the nodes into k3s's config", async () => {
+    // Loaded by path at run time: deploy/host is its own project (it builds standalone
+    // executables), and its key file is a text import that only its own type declarations cover.
+    const desired = (await import(join(REPO_ROOT, "deploy", "host", "src", "desired.ts"))) as { K3S_CONFIG?: unknown };
+    if (typeof desired.K3S_CONFIG !== "string") throw new Error("deploy/host/src/desired.ts exports no K3S_CONFIG string");
+    const config = Bun.YAML.parse(desired.K3S_CONFIG) as Record<string, unknown>;
+    expect(config["kubelet-arg"]).toEqual([`pod-max-pids=${POD_PIDS_LIMIT}`]);
+    expect(readFileSync(join(REPO_ROOT, "deploy", "host", "README.md"), "utf8")).toContain(`\`pod-max-pids=${POD_PIDS_LIMIT}\``);
+  });
+
   test("the route, ports and paths are the service's own", () => {
     expect(readFileSync(join(REPO_ROOT, "crates", "contract", "src", "api", "dashboard", "check.rs"), "utf8")).toContain(`pub const CHECK_ROUTE: &str = "${CHECK_ROUTE}";`);
     const values = Bun.YAML.parse(readFileSync(join(REPO_ROOT, "deploy", "chart", "values.yaml"), "utf8")) as { mesh: { calls: Record<string, string[]> } };
@@ -480,7 +551,8 @@ group("what the check reads from the release", () => {
 });
 
 // The script itself, with the runner's bash, getent, timeout, head, dd and base64 (GNU coreutils), as
-// in the probe image. Skipped where they are missing (a macOS workstation); with CI set it must run.
+// in the probe image. Skipped where one of them is missing, as where GNU coreutils or getent are
+// not installed; with CI set it must run.
 const tools = ["bash", "getent", "timeout", "base64", "head", "dd"].every((tool) => Bun.which(tool) !== null);
 group.skipIf(!tools && process.env.CI === undefined)("the probe script", () => {
   test("answers, silence and names, run at once and read back", async () => {

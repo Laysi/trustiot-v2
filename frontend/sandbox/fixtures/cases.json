@@ -604,6 +604,170 @@
       }
     },
     {
+      "name": "text-mark-root-zero",
+      "page": "pages/text-mark-root-zero.html",
+      "unit": false,
+      "about": "The document's root box is made empty while its content still shows, and the value overflows a clipping box. Browser-only: it needs real layout; the root's box must not decide whether layout rules run.",
+      "expect": {
+        "verdict": "failed",
+        "problems": [{ "kind": "mismatch", "reference": "f|week_kwh", "value": 690, "tag": "b" }]
+      }
+    },
+    {
+      "name": "text-mark-faint",
+      "page": "pages/text-mark-faint.html",
+      "unit": false,
+      "about": "Each number but the last is painted too faint to be seen, in colour syntaxes other than legacy rgba(): alpha 0 in lab(), near-zero alpha in oklch() and color(), a transparent -webkit-text-fill-color, opacity 0.3 on the mark and on its parent (0.09 together), filter: opacity(), and an SVG fill-opacity; textContent carries every value. The last (alpha 0.4) is seen and passes. Browser-only: a unit DOM does not compute these colours.",
+      "expect": {
+        "verdict": "failed",
+        "problems": [
+          { "kind": "mismatch", "reference": "f|week_kwh", "value": 690, "tag": "b" },
+          { "kind": "mismatch", "reference": "k|target_kwh", "value": 1200, "tag": "b" },
+          { "kind": "mismatch", "reference": "f|peak_kw", "value": 35.5, "tag": "b" },
+          { "kind": "mismatch", "reference": "c|daily_energy|kwh|0", "value": 120.5, "tag": "b" },
+          { "kind": "mismatch", "reference": "c|daily_energy|kwh|1", "value": 98.25, "tag": "b" },
+          { "kind": "mismatch", "reference": "c|daily_energy|kwh|2", "value": 131, "tag": "text" },
+          { "kind": "mismatch", "reference": "c|daily_energy|kwh|4", "value": 87.5, "tag": "b" }
+        ]
+      }
+    },
+    {
+      "name": "text-mark-turned",
+      "page": "pages/text-mark-turned.html",
+      "unit": false,
+      "about": "Each number but the last reads differently on screen than in textContent: mirrored (scaleX(-1); an SVG group's scale(-1, 1)), turned over by an ancestor (rotate: 180deg), flipped (scale: 1 -1), reordered by SVG per-glyph x positions, run together by letter spacing, squeezed to a tenth of its width, and turned 90°. The last, slanted -30°, passes. Browser-only: the SVG cases need the screen matrix of real layout.",
+      "expect": {
+        "verdict": "failed",
+        "problems": [
+          { "kind": "mismatch", "reference": "f|week_kwh", "value": 690, "tag": "b" },
+          { "kind": "mismatch", "reference": "k|target_kwh", "value": 1200, "tag": "b" },
+          { "kind": "mismatch", "reference": "f|peak_kw", "value": 35.5, "tag": "b" },
+          { "kind": "mismatch", "reference": "c|daily_energy|kwh|0", "value": 120.5, "tag": "text" },
+          { "kind": "mismatch", "reference": "c|daily_energy|kwh|1", "value": 98.25, "tag": "text" },
+          { "kind": "mismatch", "reference": "c|daily_energy|kwh|2", "value": 131, "tag": "b" },
+          { "kind": "mismatch", "reference": "c|daily_energy|kwh|4", "value": 87.5, "tag": "b" },
+          { "kind": "mismatch", "reference": "c|daily_energy|kwh|5", "value": 142.75, "tag": "text" }
+        ]
+      }
+    },
+    {
+      "name": "slanted-labels",
+      "page": "pages/slanted-labels.html",
+      "unit": true,
+      "about": "A legitimate chart: d3 tick labels slanted -45° (text-anchor end), a KPI tilted -10°, in an SVG whose viewBox scales it up evenly. Translation, uniform scaling and a slant up to 45° pass.",
+      "expect": {
+        "verdict": "passed",
+        "marks": [
+          {
+            "reference": "f|week_kwh",
+            "value": 690
+          },
+          {
+            "reference": "c|daily_energy|day|0",
+            "value": "2026-10-20"
+          },
+          {
+            "reference": "c|daily_energy|day|1",
+            "value": "2026-10-21"
+          },
+          {
+            "reference": "c|daily_energy|day|2",
+            "value": "2026-10-22"
+          },
+          {
+            "reference": "c|daily_energy|day|3",
+            "value": "2026-10-23"
+          },
+          {
+            "reference": "c|daily_energy|day|4",
+            "value": "2026-10-24"
+          },
+          {
+            "reference": "c|daily_energy|day|5",
+            "value": "2026-10-25"
+          },
+          {
+            "reference": "c|daily_energy|day|6",
+            "value": "2026-10-26"
+          },
+          {
+            "reference": "t|daily_energy|kwh|0",
+            "value": 0
+          },
+          {
+            "reference": "t|daily_energy|kwh|20",
+            "value": 20
+          },
+          {
+            "reference": "t|daily_energy|kwh|40",
+            "value": 40
+          },
+          {
+            "reference": "t|daily_energy|kwh|60",
+            "value": 60
+          },
+          {
+            "reference": "t|daily_energy|kwh|80",
+            "value": 80
+          },
+          {
+            "reference": "t|daily_energy|kwh|100",
+            "value": 100
+          },
+          {
+            "reference": "t|daily_energy|kwh|120",
+            "value": 120
+          },
+          {
+            "reference": "t|daily_energy|kwh|140",
+            "value": 140
+          },
+          {
+            "reference": "t|daily_energy|kwh|160",
+            "value": 160
+          },
+          {
+            "reference": "c|daily_energy|kwh|0",
+            "value": 120.5
+          },
+          {
+            "reference": "c|daily_energy|kwh|1",
+            "value": 98.25
+          },
+          {
+            "reference": "c|daily_energy|kwh|2",
+            "value": 131
+          },
+          {
+            "reference": "c|daily_energy|kwh|4",
+            "value": 87.5
+          },
+          {
+            "reference": "c|daily_energy|kwh|5",
+            "value": 142.75
+          },
+          {
+            "reference": "c|daily_energy|kwh|6",
+            "value": 110
+          }
+        ]
+      }
+    },
+    {
+      "name": "wrong-pie-stretched",
+      "page": "pages/wrong-pie-stretched.html",
+      "unit": false,
+      "about": "The pie of pie.html in an SVG whose viewBox stretches it to twice its width (preserveAspectRatio none): its paths still hold the right angles, but on screen every slice shows another angle. Browser-only: it needs the screen matrix of real layout.",
+      "expect": {
+        "verdict": "failed",
+        "problems": [
+          { "kind": "mark_geometry", "reference": "c|meter_usage|usage|0", "channel": "angle" },
+          { "kind": "mark_geometry", "reference": "c|meter_usage|usage|1", "channel": "angle" },
+          { "kind": "mark_geometry", "reference": "c|meter_usage|usage|2", "channel": "angle" }
+        ]
+      }
+    },
+    {
       "name": "unsupported-canvas",
       "page": "pages/unsupported-canvas.html",
       "unit": true,

@@ -29,11 +29,30 @@ pub struct Config {
     /// `/srv/www`.
     pub site_dir: PathBuf,
     /// The only directory the browser writes to; each check gets a fresh directory inside it
-    /// (`TRUSTIOT__WORK_DIR`). The chart mounts a memory-backed volume here. When the service
-    /// runs as the container's PID 1, everything in it is removed before and after every check.
+    /// (`TRUSTIOT__WORK_DIR`). The chart mounts a memory-backed volume here. With
+    /// [`CleanupScope::Container`], everything in it is removed before and after every check.
     pub work_dir: PathBuf,
+    /// How far the cleanup between checks reaches (`TRUSTIOT__CLEANUP`).
+    pub cleanup: CleanupScope,
     /// The wait queue.
     pub queue: QueueConfig,
+}
+
+/// How far the cleanup between checks reaches (`TRUSTIOT__CLEANUP`; README.md, 「威脅模型」
+/// point 3). The service refuses to start when it cannot do the one set here
+/// (`cleanup::Cleanup::for_this_process`), so a deployment never falls back to less.
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum CleanupScope {
+    /// The whole container (`container`, the default, which the chart also sets): every other
+    /// process of the PID namespace, the work directory, the shared memory directories and the
+    /// IPC objects. Only the container's PID 1 on Linux can do it.
+    #[default]
+    Container,
+    /// Only the browser's own process group and directory (`browser`): for a run outside a
+    /// container (development, tests), where the other processes and files are not the
+    /// service's. Refused in a container's PID 1, which cleans the whole container.
+    Browser,
 }
 
 /// `queue.*`: checks that arrive while one runs.
@@ -55,6 +74,7 @@ impl Default for Config {
             chromium: PathBuf::from("/usr/lib/chromium/chromium-headless-shell"),
             site_dir: PathBuf::from("/srv/www"),
             work_dir: PathBuf::from("/tmp"),
+            cleanup: CleanupScope::default(),
             queue: QueueConfig::default(),
         }
     }
@@ -150,6 +170,8 @@ mod tests {
         );
         assert_eq!(config.site_dir, Path::new("/srv/www"));
         assert_eq!(config.work_dir, Path::new("/tmp"));
+        // Fail closed: without a setting, the service needs to clean the whole container.
+        assert_eq!(config.cleanup, CleanupScope::Container);
         assert_eq!(config.queue.max_waiting, 2);
         assert_eq!(config.queue.max_wait, Duration::from_secs(10));
         // The default request timeout covers the longest request with the defaults.
@@ -163,6 +185,7 @@ mod tests {
             ("TRUSTIOT__CHROMIUM", "/opt/chromium/headless_shell"),
             ("TRUSTIOT__SITE_DIR", "/srv/site"),
             ("TRUSTIOT__WORK_DIR", "/run/checks"),
+            ("TRUSTIOT__CLEANUP", "browser"),
             ("TRUSTIOT__QUEUE__MAX_WAITING", "0"),
             ("TRUSTIOT__QUEUE__MAX_WAIT", "3s"),
         ])
@@ -171,6 +194,9 @@ mod tests {
         assert_eq!(config.chromium, Path::new("/opt/chromium/headless_shell"));
         assert_eq!(config.site_dir, Path::new("/srv/site"));
         assert_eq!(config.work_dir, Path::new("/run/checks"));
+        assert_eq!(config.cleanup, CleanupScope::Browser);
+        let chart = load(&[("TRUSTIOT__CLEANUP", "container")]).expect("loads");
+        assert_eq!(chart.app.cleanup, CleanupScope::Container);
         assert_eq!(config.queue.max_waiting, 0);
         assert_eq!(config.queue.max_wait, Duration::from_secs(3));
     }
@@ -182,6 +208,9 @@ mod tests {
             ("TRUSTIOT__SITE_DIR", "www", "site_dir"),
             ("TRUSTIOT__WORK_DIR", "tmp", "work_dir"),
             ("TRUSTIOT__WORK_DIR", "/", "work_dir"),
+            // No other scope, and no way to turn the cleanup off.
+            ("TRUSTIOT__CLEANUP", "none", "cleanup"),
+            ("TRUSTIOT__CLEANUP", "Browser", "cleanup"),
             ("TRUSTIOT__QUEUE__MAX_WAITING", "9", "queue.max_waiting"),
             ("TRUSTIOT__QUEUE__MAX_WAIT", "0s", "queue.max_wait"),
             ("TRUSTIOT__QUEUE__MAX_WAIT", "61s", "queue.max_wait"),

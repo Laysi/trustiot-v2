@@ -5862,13 +5862,21 @@ describe("dashboard check (Laysi/trustiot-v2#150)", () => {
       expect(pod.containers).toHaveLength(1);
       expect(pod.automountServiceAccountToken).toBe(false);
       expect((find(manifests, "ServiceAccount", DASHBOARD_CHECK) as YamlMap).automountServiceAccountToken).toBe(false);
+      // The service is its container's PID 1, which the cleanup between checks needs, and the pod
+      // shares nothing of the node's.
+      const shared = pod as PodSpec & { shareProcessNamespace?: unknown; hostPID?: unknown; hostIPC?: unknown; hostNetwork?: unknown };
+      expect([shared.shareProcessNamespace, shared.hostPID, shared.hostIPC, shared.hostNetwork]).toEqual([undefined, undefined, undefined, undefined]);
       // The migration wait reads the Job through the API server, which the pod cannot reach.
       expect(pod.initContainers).toBeUndefined();
       expect(pod.volumes).toEqual([{ name: "tmp", emptyDir: { medium: "Memory", sizeLimit: "128Mi" } }]);
       expect(container.volumeMounts).toEqual([{ name: "tmp", mountPath: "/tmp" }]);
       // No platform ConfigMap, no collector endpoint, no Sentry DSN (SaaS turns Sentry on).
       expect(container.envFrom).toBeUndefined();
-      expect(container.env).toEqual([{ name: "OTEL_SERVICE_NAME", value: COMPONENT }]);
+      // TRUSTIOT__CLEANUP=container: without PID 1 the service refuses to start.
+      expect(container.env).toEqual([
+        { name: "OTEL_SERVICE_NAME", value: COMPONENT },
+        { name: "TRUSTIOT__CLEANUP", value: "container" },
+      ]);
       expect(JSON.stringify(pod)).not.toMatch(/secretKeyRef|configMapRef|serviceAccountToken|projected/);
       expect(container.image).toBe(`ghcr.io/laysi/trustiot-v2/${COMPONENT}:${chart.appVersion}`);
       expect(container.resources).toEqual({ requests: { cpu: "100m", memory: "128Mi" }, limits: { cpu: "1", memory: "512Mi" } });
@@ -5958,6 +5966,26 @@ describe("dashboard check (Laysi/trustiot-v2#150)", () => {
       ["--set", "observability.collector.enabled=false", "--set-json", 'services.dashboard-check.env=[{"name":"TRUSTIOT__TELEMETRY__OTLP_ENDPOINT","value":"http://collector.example.com:4318"}]'],
       /services\.dashboard-check: env TRUSTIOT__TELEMETRY__OTLP_ENDPOINT: the service sends no telemetry/,
     ],
+    [
+      "a smaller cleanup in env",
+      ["--set-json", 'services.dashboard-check.env=[{"name":"TRUSTIOT__CLEANUP","value":"browser"}]'],
+      /services\.dashboard-check: env TRUSTIOT__CLEANUP is set by the chart/,
+    ],
+    [
+      "a smaller cleanup in env, in other letters",
+      ["--set-json", 'services.dashboard-check.env=[{"name":"TRUSTIOT__cleanup","value":"browser"}]'],
+      /services\.dashboard-check: env TRUSTIOT__cleanup is set by the chart/,
+    ],
+    [
+      "a smaller cleanup in every service's env",
+      ["--set-json", 'serviceDefaults.env=[{"name":"TRUSTIOT__CLEANUP","value":"browser"}]'],
+      /services\.dashboard-check: env TRUSTIOT__CLEANUP is set by the chart/,
+    ],
+    ["a shared process namespace", ["--set", "services.dashboard-check.shareProcessNamespace=true"], /services\.dashboard-check\.shareProcessNamespace must stay unset/],
+    ["a shared process namespace for every service", ["--set", "serviceDefaults.shareProcessNamespace=true"], /services\.dashboard-check\.shareProcessNamespace must stay unset/],
+    ["the node's processes", ["--set", "services.dashboard-check.hostPID=true"], /services\.dashboard-check\.hostPID must stay unset/],
+    ["the node's IPC", ["--set", "services.dashboard-check.hostIPC=true"], /services\.dashboard-check\.hostIPC must stay unset/],
+    ["the node's network", ["--set", "services.dashboard-check.hostNetwork=true"], /services\.dashboard-check\.hostNetwork must stay unset/],
     ["a writable root filesystem", ["--set", "services.dashboard-check.securityContext.readOnlyRootFilesystem=false"], /services\.dashboard-check\.securityContext must keep/],
     ["privilege escalation", ["--set", "services.dashboard-check.securityContext.allowPrivilegeEscalation=true"], /services\.dashboard-check\.securityContext must keep/],
     ["a privileged container", ["--set", "services.dashboard-check.securityContext.privileged=true"], /services\.dashboard-check\.securityContext must keep/],

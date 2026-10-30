@@ -58,8 +58,9 @@ impl api::Run for Checker {
 }
 
 /// Starts the service: refuses any setting that would send something out of the pod, protects
-/// its own memory from the browser, cleans the container when it is PID 1, loads the sandbox's
-/// files, and starts one browser to prove it runs here.
+/// its own memory from the browser, refuses to run without the cleanup `cleanup` asks for (the
+/// whole container's needs PID 1), cleans the container, loads the sandbox's files, and starts
+/// one browser to prove it runs here.
 ///
 /// # Errors
 ///
@@ -83,7 +84,11 @@ pub async fn start(context: Context<Config>) -> Result<Router, BoxError> {
     if !config.work_dir.is_dir() {
         return Err("work_dir is not a directory".into());
     }
-    let cleanup = Arc::new(cleanup::Cleanup::for_this_process(&config.work_dir));
+    // Fail closed: the service never falls back to a smaller cleanup than `cleanup` asks for.
+    let cleanup = Arc::new(cleanup::Cleanup::for_this_process(
+        &config.work_dir,
+        config.cleanup,
+    )?);
     // The pod's volumes and IPC namespace outlive a container restart.
     cleanup.container()?;
     let site = Arc::new(Site::load(&config.site_dir)?);

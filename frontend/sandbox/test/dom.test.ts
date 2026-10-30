@@ -93,3 +93,74 @@ describe("captured functions", () => {
     expect(dom.localName(p)).toBe("p");
   });
 });
+
+describe("boxes and screen matrices", () => {
+  test("a box is read with the DOMRect getters saved at capture", () => {
+    const win = openWindow();
+    const dom = captureDom(win);
+    const p = win.document.body.appendChild(win.document.createElement("p"));
+    const before = dom.box(p);
+    for (const prototype of [win.DOMRect.prototype, win.DOMRectReadOnly.prototype]) {
+      for (const name of ["left", "top", "width", "height"]) {
+        Object.defineProperty(prototype, name, { get: () => 999, configurable: true });
+      }
+    }
+    expect(p.getBoundingClientRect().width).toBe(999);
+    expect(dom.box(p)).toEqual(before);
+    expect(before.width).not.toBe(999);
+  });
+
+  /** A matrix interface of its own, like Chromium's SVGMatrix, whose getters work on its objects only. */
+  function withScreenMatrix(
+    win: DomWindow,
+    values: { a: number; b: number; c: number; d: number; e: number; f: number },
+  ) {
+    const brand = new WeakSet<object>();
+    class FakeSVGMatrix {
+      constructor() {
+        brand.add(this);
+      }
+    }
+    for (const name of ["a", "b", "c", "d", "e", "f"] as const) {
+      Object.defineProperty(FakeSVGMatrix.prototype, name, {
+        get(this: object) {
+          if (!brand.has(this)) throw new TypeError("Illegal invocation");
+          return values[name];
+        },
+        configurable: true,
+      });
+    }
+    const graphics = (win as unknown as { SVGGraphicsElement: { prototype: object } }).SVGGraphicsElement.prototype;
+    Object.defineProperty(graphics, "getScreenCTM", { value: () => new FakeSVGMatrix(), configurable: true });
+    Object.defineProperty(win, "SVGMatrix", { value: FakeSVGMatrix, configurable: true, writable: true });
+    return FakeSVGMatrix;
+  }
+
+  test("a screen matrix is read with the getters of its own interface, saved at capture", () => {
+    const win = openWindow();
+    const FakeSVGMatrix = withScreenMatrix(win, { a: -1, b: 0, c: 0, d: 1, e: 10, f: 20 });
+    const dom = captureDom(win);
+    const text = win.document.createElementNS("http://www.w3.org/2000/svg", "text");
+    win.document.body.appendChild(win.document.createElementNS("http://www.w3.org/2000/svg", "svg")).appendChild(text);
+    for (const name of ["a", "d", "e", "f"]) {
+      Object.defineProperty(FakeSVGMatrix.prototype, name, { get: () => 1, configurable: true });
+    }
+    expect(dom.screenMatrix(text)).toEqual({ a: -1, b: 0, c: 0, d: 1, e: 10, f: 20 });
+    expect(dom.origin(text)).toEqual({ x: 10, y: 20 });
+  });
+
+  test("a matrix of no known interface, or with a value that is not a finite number, is unknown", () => {
+    const win = openWindow();
+    withScreenMatrix(win, { a: Number.NaN, b: 0, c: 0, d: 1, e: 0, f: 0 });
+    const text = win.document.createElementNS("http://www.w3.org/2000/svg", "text");
+    win.document.body.appendChild(text);
+    expect(captureDom(win).screenMatrix(text)).toBeNull();
+    const graphics = (win as unknown as { SVGGraphicsElement: { prototype: object } }).SVGGraphicsElement.prototype;
+    Object.defineProperty(graphics, "getScreenCTM", {
+      value: () => ({ a: 1, b: 0, c: 0, d: 1, e: 0, f: 0 }),
+      configurable: true,
+    });
+    expect(captureDom(win).screenMatrix(text)).toBeNull();
+    expect(captureDom(win).origin(text)).toBeNull();
+  });
+});

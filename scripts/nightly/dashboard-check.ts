@@ -9,14 +9,17 @@
 //   the Kubernetes API server (its Service and its endpoints), the OpenTelemetry collector and an
 //   address outside the cluster send back no byte; neither do the ports ztunnel may listen on in
 //   the pod's network namespace: a DNS query for a name outside the cluster, over UDP and TCP, to
-//   its DNS proxy port on the pod's loopback and on the pod's address, and a connection towards
-//   the outside address through its outbound, inbound and HBONE ports on loopback (the HBONE port
+//   its DNS proxy port, and a connection towards the outside address through its outbound,
+//   inbound and HBONE ports, each on the pod's loopback and on the pod's address (the HBONE port
 //   may refuse with a TLS alert, which is no way out either). Its own health port on the pod's
 //   loopback does answer, so the probe itself works there;
 // - from the identity service's pod, which may open any connection, the same probes resolve and
-//   answer (the controls that show each target is up and that the probe reaches it), and a DNS
-//   query sent as bytes over UDP and TCP to the cluster DNS answers (the control for the probes
-//   that send bytes), while the dashboard check's Service and its pod address send back nothing;
+//   answer (the controls that show each target is up and that the probe reaches it), a DNS query
+//   sent as bytes over UDP and TCP to the cluster DNS answers (the control for the probes that
+//   send bytes), and the name outside the cluster resolves through the cluster DNS, by the pod's
+//   resolver and by a query sent as bytes that gets an address back (the control for the queries
+//   to ztunnel's DNS proxy: the cluster's DNS has an upstream, so silence is a refusal), while the
+//   dashboard check's Service and its pod address send back nothing;
 // - from the assistant's pod, the one caller, a check of the sandbox's `correct` fixture page
 //   answers 200 with the verdict `passed`.
 //
@@ -53,7 +56,10 @@ export const READY_PATH = "/readyz";
 export const OUTSIDE = { host: "1.1.1.1", port: 80 } as const;
 /** A name every pod with DNS resolves; with a final dot, so no search domain is tried first. */
 export const CLUSTER_NAME = "kubernetes.default.svc.cluster.local.";
-/** A name outside the cluster, for the queries sent to ztunnel's DNS proxy port. */
+/**
+ * A name outside the cluster with an IPv4 address, for the queries sent to ztunnel's DNS proxy
+ * port; the identity pod's controls show that the cluster DNS resolves it.
+ */
 export const OUTSIDE_NAME = "example.com.";
 /**
  * The ports Istio ambient's ztunnel listens on inside each pod's network namespace: outbound
@@ -80,7 +86,8 @@ export const PROBE_START_LIMIT_S = 180;
 export const PROBE_CONTAINER_LIMIT_MS = (PROBE_START_LIMIT_S + 2 * PROBE_LIMIT_S + 60) * 1000;
 /**
  * The kubelet's process limit per pod (`podPidsLimit`) that nodes running the dashboard check
- * need (deploy/chart/README.md, 「儀表板檢查」); the nightly's k3d cluster runs with it (run.ts).
+ * need (deploy/chart/README.md, 「儀表板檢查」); the nightly's k3d cluster runs with it (run.ts),
+ * and the SaaS host installer writes it into k3s's config (deploy/host/src/desired.ts).
  */
 export const POD_PIDS_LIMIT = 16_384;
 /** How much of an answer a probe keeps. */
@@ -204,6 +211,33 @@ export function dnsQuery(name: string, transport: "udp" | "tcp"): Uint8Array {
   return Uint8Array.from(transport === "tcp" ? [message.length >> 8, message.length & 0xff, ...message] : message);
 }
 
+/** The header of a DNS message (RFC 1035, 4.1.1). */
+export interface DnsHeader {
+  id: number;
+  /** QR: a response, not a query. */
+  response: boolean;
+  rcode: number;
+  questions: number;
+  answers: number;
+}
+
+/**
+ * The header of the DNS message in one UDP datagram read as Latin-1 bytes, or undefined when the
+ * datagram is shorter than a header. (A read of a TCP stream may hold only part of a message, so
+ * the probes check answers over UDP only.)
+ */
+export function dnsHeaderOf(datagram: string): DnsHeader | undefined {
+  if (datagram.length < 12) return undefined;
+  const at = (index: number) => datagram.charCodeAt(index);
+  return {
+    id: (at(0) << 8) | at(1),
+    response: (at(2) & 0x80) !== 0,
+    rcode: at(3) & 0x0f,
+    questions: (at(4) << 8) | at(5),
+    answers: (at(6) << 8) | at(7),
+  };
+}
+
 /** Whether `bytes` (Latin-1, one character per byte) is nothing but complete TLS alert records. */
 export function isTlsAlert(bytes: string): boolean {
   if (bytes.length === 0) return false;
@@ -285,12 +319,14 @@ export function parseHttpAnswer(bytes: string): { status: number; body: string }
 
 /**
  * What a probe is expected to see. `tlsRefusal`: an answer made only of TLS alerts counts as no
- * answer (a TLS port refusing what was sent).
+ * answer (a TLS port refusing what was sent). `dnsAnswer`: a UDP probe that sent a DNS query must
+ * get back the response to it (DNS_QUERY_ID) without an error and with at least one record.
  */
 export type Expectation =
   | { open: false; tlsRefusal?: true }
   | { open: true; status?: number; verdict?: "passed" }
-  | { open: true; resolved: true };
+  | { open: true; resolved: true }
+  | { open: true; dnsAnswer: true };
 
 /** A probe with what it must see, and the pod it runs from. */
 export interface PlannedProbe {
@@ -362,33 +398,53 @@ export function isolationPlan(targets: IsolationTargets): PlannedProbe[] {
     ),
   );
   const outside = `${OUTSIDE.host}:${OUTSIDE.port}`;
-  const ztunnelPorts: PlannedProbe[] = [
-    ...(["outbound", "inbound"] as const).map(
-      (name): PlannedProbe => ({
+  const ztunnelPorts = (["127.0.0.1", checker.podIp] as const).flatMap((host): PlannedProbe[] => {
+    const where = host === "127.0.0.1" ? "loopback" : "pod";
+    return [
+      ...(["outbound", "inbound"] as const).map(
+        (name): PlannedProbe => ({
+          from: "checker",
+          probe: { kind: "tcp", id: `ztunnel-${name}-${where}`, host, port: ZTUNNEL_PORTS[name], send: get(OUTSIDE.host) },
+          expect: { open: false },
+          label: `${outside} through ztunnel's ${name} port ${host}:${ZTUNNEL_PORTS[name]}`,
+        }),
+      ),
+      {
         from: "checker",
-        probe: { kind: "tcp", id: `ztunnel-${name}`, host: "127.0.0.1", port: ZTUNNEL_PORTS[name], send: get(OUTSIDE.host) },
-        expect: { open: false },
-        label: `${outside} through ztunnel's ${name} port 127.0.0.1:${ZTUNNEL_PORTS[name]}`,
-      }),
-    ),
-    {
-      from: "checker",
-      probe: { kind: "tcp", id: "ztunnel-hbone", host: "127.0.0.1", port: ZTUNNEL_PORTS.hbone, send: `CONNECT ${outside} HTTP/1.1\r\nHost: ${outside}\r\n\r\n` },
-      expect: { open: false, tlsRefusal: true },
-      label: `${outside} through ztunnel's HBONE port 127.0.0.1:${ZTUNNEL_PORTS.hbone}`,
-    },
-  ];
+        probe: { kind: "tcp", id: `ztunnel-hbone-${where}`, host, port: ZTUNNEL_PORTS.hbone, send: `CONNECT ${outside} HTTP/1.1\r\nHost: ${outside}\r\n\r\n` },
+        expect: { open: false, tlsRefusal: true },
+        label: `${outside} through ztunnel's HBONE port ${host}:${ZTUNNEL_PORTS.hbone}`,
+      },
+    ];
+  });
+  // A read of a TCP stream may hold only part of a DNS message, so only UDP answers are read.
   const dnsControls = (["udp", "tcp"] as const).map(
     (transport): PlannedProbe => {
       const port = transport === "udp" ? clusterDns.udpPort : clusterDns.tcpPort;
       return {
         from: "control",
         probe: { kind: "bytes", id: `dns-${transport}`, transport, host: clusterDns.clusterIp, port, payload: dnsQuery(CLUSTER_NAME, transport) },
-        expect: { open: true },
+        expect: transport === "udp" ? { open: true, dnsAnswer: true } : { open: true },
         label: `DNS ${CLUSTER_NAME} over ${transport.toUpperCase()} to the cluster DNS ${clusterDns.clusterIp}:${port}`,
       };
     },
   );
+  // The name ztunnel's DNS proxy is asked for resolves through the cluster DNS, so the proxy's
+  // silence towards the dashboard check is a refusal, not a cluster without an upstream resolver.
+  const outsideNameControls: PlannedProbe[] = [
+    {
+      from: "control",
+      probe: { kind: "dns", id: "outside-name", name: OUTSIDE_NAME },
+      expect: { open: true, resolved: true },
+      label: `DNS ${OUTSIDE_NAME} through the pod's resolver`,
+    },
+    {
+      from: "control",
+      probe: { kind: "bytes", id: "outside-name-udp", transport: "udp", host: clusterDns.clusterIp, port: clusterDns.udpPort, payload: dnsQuery(OUTSIDE_NAME, "udp") },
+      expect: { open: true, dnsAnswer: true },
+      label: `DNS ${OUTSIDE_NAME} over UDP to the cluster DNS ${clusterDns.clusterIp}:${clusterDns.udpPort}`,
+    },
+  ];
   const checkHost = `${checker.service}.${targets.namespace}.svc.cluster.local`;
   const checkRequest = httpRequest("POST", checkHost, CHECK_ROUTE, { contentType: "application/json", text: targets.checkBody });
   return [
@@ -408,6 +464,7 @@ export function isolationPlan(targets: IsolationTargets): PlannedProbe[] {
       label: target.label,
     })),
     ...dnsControls,
+    ...outsideNameControls,
     {
       from: "control",
       probe: { kind: "tcp", id: "checker-service", host: checker.clusterIp, port: checker.port, send: httpRequest("POST", checkHost, CHECK_ROUTE, { contentType: "application/json", text: "{}" }) },
@@ -441,6 +498,15 @@ export function probeProblem(planned: PlannedProbe, result: ProbeResult | undefi
     return `${where}: ${seen}, expected no answer`;
   }
   if ("resolved" in expect) return result.kind === "resolved" ? undefined : `${where}: ${seen}, expected the name to resolve`;
+  if ("dnsAnswer" in expect) {
+    if (planned.probe.kind !== "bytes" || planned.probe.transport !== "udp") return `${where}: only a DNS query sent over UDP can expect a DNS answer`;
+    const header = result.kind === "answered" ? dnsHeaderOf(result.bytes) : undefined;
+    if (header === undefined) return `${where}: ${seen}, expected a DNS answer`;
+    if (header.id !== DNS_QUERY_ID || !header.response || header.rcode !== 0 || header.answers < 1) {
+      return `${where}: a DNS message with id ${header.id}, ${header.response ? "a response" : "not a response"}, rcode ${header.rcode} and ${header.answers} answer record(s), expected the response to query ${DNS_QUERY_ID} with rcode 0 and at least one record`;
+    }
+    return undefined;
+  }
   if (result.kind !== "answered") return `${where}: ${seen}, expected an answer`;
   if (expect.status === undefined) return undefined;
   const answer = parseHttpAnswer(result.bytes);

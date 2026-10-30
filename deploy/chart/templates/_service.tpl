@@ -129,7 +129,8 @@ Custom env cannot take over what the chart controls:
 - for telemetry-query, TRUSTIOT__CLICKHOUSE__USERNAME and TRUSTIOT__CLICKHOUSE__PASSWORD are the
   chart's: its ClickHouse account and the password the migration Job generates for it;
 - for dashboard-check, neither the collector's endpoint nor SENTRY_DSN: its pod has no egress and
-  no Secret ("trustiot.dashboardCheck.checkConfig" refuses env that reads one);
+  no Secret ("trustiot.dashboardCheck.checkConfig" refuses env that reads one); its cleanup
+  setting is the chart's ("trustiot.dashboardCheck.env");
 - for ai-gateway, whose settings carry the prefix AI_GATEWAY ("trustiot.service.envPrefix"), the
   names of its platform settings and settings file (AI_GATEWAY_ plus a letter or digit), its
   providers and roles (AI_GATEWAY__PROVIDERS__*, AI_GATEWAY__ROLES__*) and every other variable of
@@ -270,11 +271,15 @@ under the service's own prefix. */ -}}
 {{- if eq $name "mqtt-bridge" -}}
 {{- $mqttBridgeEnv = include "trustiot.mqttBridge.env" .root | fromYamlArray -}}
 {{- end -}}
+{{- $dashboardCheckEnv := list -}}
+{{- if $isolated -}}
+{{- $dashboardCheckEnv = include "trustiot.dashboardCheck.env" .root | fromYamlArray -}}
+{{- end -}}
 {{- $assistantEnv := list -}}
 {{- if eq $name "assistant" -}}
 {{- $assistantEnv = include "trustiot.assistant.env" .root | fromYamlArray -}}
 {{- end -}}
-{{- $env = concat $env $dbEnv $clickhouseEnv $credentialEnv $identityEnv $certsEnv $mqttBridgeEnv $assistantEnv ($config.env | default list) -}}
+{{- $env = concat $env $dbEnv $clickhouseEnv $credentialEnv $identityEnv $certsEnv $mqttBridgeEnv $assistantEnv $dashboardCheckEnv ($config.env | default list) -}}
 {{- $names := list -}}
 {{- range $env -}}
 {{- $names = append $names .name -}}

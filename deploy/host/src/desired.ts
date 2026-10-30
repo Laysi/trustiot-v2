@@ -23,6 +23,12 @@ export const K3S_CONFIG = `${MARKER}
 disable:
   - traefik
   - servicelb
+# The dashboard check's node requirement (deploy/chart/README.md, 「儀表板檢查」): the kubelet
+# caps the processes of every pod, so a page that keeps creating processes inside the check's
+# pod cannot use up the host's PIDs before the check's cleanup kills them. The value must equal
+# POD_PIDS_LIMIT in scripts/nightly/dashboard-check.ts, whose tests compare the two.
+kubelet-arg:
+  - pod-max-pids=16384
 `;
 
 // Pod and Service networks of k3s (its defaults). firewalld trusts the pod network as a

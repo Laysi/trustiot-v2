@@ -1,6 +1,6 @@
 # AI 儀表板：檢查服務、沙箱、映像與 nightly 的安全強化
 
-對應 issue：Laysi/trustiot-v2#150（AI 儀表板）。測試日期 2026-10-27（Asia/Taipei）。
+對應 issue：Laysi/trustiot-v2#150（AI 儀表板）。測試日期 2026-10-27（Asia/Taipei）；第二次審查之後的修正（第 7 節）在 2026-10-27 至 2026-10-30 測試，第 2、5 節的更正也在 2026-10-30。
 
 這份報告是 #150 安全審查之後，檢查服務（`services/dashboard-check`）、沙箱 runtime（`frontend/sandbox`）、檢查服務的映像（`deploy/images/dashboard-check`）與 nightly 隔離證明（`scripts/nightly/dashboard-check.ts`）的強化證據。每一項都有修正前與修正後的結果。原始輸出在 [data/2026-10-27-150-checker-hardening/](data/2026-10-27-150-checker-hardening/)。
 
@@ -60,15 +60,18 @@ docker run --rm --init --platform linux/arm64 --read-only --tmpfs /tmp:rw,mode=1
 ```sh
 bun test scripts/nightly/dashboard-check.test.ts
 
-# 探測 script 本身（需要 GNU coreutils 與 getent，在 Debian 容器裡跑）
+# 探測 script 本身（需要 GNU coreutils 與 getent，在 Debian 容器裡跑；.prototools 釘選的 Bun 1.4.2，映像以 digest 釘選）
 docker run --rm --network none -v "$PWD:/w:ro" --tmpfs /tmp:rw,mode=1777 -e HOME=/tmp -w /w \
-  oven/bun:1.3-debian bun test scripts/nightly/dashboard-check.test.ts -t "probe script"
+  oven/bun:1.4.2-debian@sha256:4f6e31d1a54d6a3dd312daef655fc998101b5043d52e12592ac293ef04b9bc73 \
+  bun test scripts/nightly/dashboard-check.test.ts -t "probe script"
 ```
+
+2026-10-27 第一次執行時用的是沒有釘選的 `oven/bun:1.3-debian`（Bun 1.3.14），與 `.prototools` 釘選的 Bun 1.4.2 不同。2026-10-30 以上面釘選的映像重跑。
 
 ### 結果
 
 - 修正前：新的測試在舊的 `dashboard-check.ts` 上無法載入（沒有 `dnsQuery`、`ZTUNNEL_PORTS` 等），計畫裡沒有任何 ztunnel 埠的探測。
-- 修正後：39 個測試 38 個通過，1 個略過（探測 script 本身需要 GNU 工具，開發工作站上略過，設了 `CI` 時必須執行）。同一個 script 測試在 Debian 容器（Bun 1.3.14）裡通過：UDP 與 TCP 送出的 bytes 完整到達（含 NUL），讀回第一個回應；連不上的 TCP 埠回報 `silent 3`。
+- 修正後：39 個測試 38 個通過，1 個略過（探測 script 本身需要 GNU 工具，開發工作站上略過，設了 `CI` 時必須執行）。同一個 script 測試在 Debian 容器裡通過：2026-10-27 用 Bun 1.3.14（沒有釘選，見上），2026-10-30 用釘選的 Bun 1.4.2 重跑也通過（[round2-nightly-bun-1.4.2.txt](data/2026-10-27-150-checker-hardening/round2-nightly-bun-1.4.2.txt)）。UDP 與 TCP 送出的 bytes 完整到達（含 NUL），讀回第一個回應；連不上的 TCP 埠回報 `silent 3`。
 
 ### 結論
 
@@ -156,10 +159,11 @@ DASHBOARD_CHECK_IMAGE=localhost/trustiot-e2e/dashboard-check:hardening-y bun tes
 - `harden.test.ts`：7 個全過。在獨立 realm 裡確認：換掉靜態方法或被鎖住的全域繫結在 strict mode 丟例外、換掉原型方法被凍結的 setter 擋下，兩種都到不了比對；指向內建的全域繫結（`Math`、`Array`、`Intl`、`Number`、`parseInt`、`JSON`）設成不可寫不可設定，其他全域與頁面自己新增的全域不受影響；覆寫繼承屬性的合法寫法（`obj.toString`、`err.name`、子類別方法、`for...of`、`Map.set`、在陣列上加自訂屬性）仍可用；全域物件仍可擴充；重複呼叫安全；凍結後 d3 仍能畫比例尺、`nice`、扇形與格式化。
 - `runtime.test.ts` 的檢視模式：一直把 runtime 改正的值又改回錯的頁面，在 `MAX_CORRECTION_ROUNDS`（10）輪內整份文件被隱藏，之後不再顯示；一直以正確值重畫（比隱藏門檻更多次）的頁面不會被隱藏、標記也沒有 `data-tq-flag`。全部沙箱單元測試 371 個全過（既有固定樣本的判定不變）。
 - 映像測試（manifest list `sha256:75287daeb69eb00429cadf706ef56f6e8dac181e8bef10f41d47e9e55d560078`）：45 個全過，0 失敗；34 次檢查，每次 142–5177 ms（中位數 430 ms），容器記憶體最高讀數 100.5 MiB（上限 512Mi）。新的 `builtin-tampering`（替換上述每個內建物件後畫出錯的標記值與打字的數字）在真實 Chromium 裡被判 `mismatch` 與 `literal_number`；`correct`、`pie` 等既有 d3 頁面在凍結的 realm 下判定不變，表示凍結沒有擋到合法頁面。
+- 更正（2026-10-30）：映像測試是檢查模式。檢查模式的比對在 isolated world 執行，本來就不受頁面的內建物件影響，所以 `builtin-tampering` 在 Chromium 的判定不能證明顯示時的比對免疫。它在 Chromium（V8）證明的是兩件事：凍結後，頁面替換內建物件沒有讓 runtime 壞掉，頁面照常畫完，由 isolated world 判出錯的值；以及既有 d3 頁面在凍結下判定不變。修正前（分支起點 `e397c9d` 的映像）同一頁讓 runtime 自己壞掉（`script_error`：Zod 的 schema 錯誤與 `Math.ceil is not a function`，以及 `not_rendered`），一樣是 `failed`（[round2-builtin-tampering-before.txt](data/2026-10-27-150-checker-hardening/round2-builtin-tampering-before.txt)）。顯示時的比對在頁面的 realm 執行，它的免疫只在 `harden.test.ts` 與上面的對照證明，兩者都跑在 Bun 的 `node:vm`，引擎是 JavaScriptCore，不是 Chromium 的 V8。
 
 ### 結論
 
-- runtime 載入之後，頁面除了改 DOM（比對下一次會看到）以外改不了顯示時的比對結果：通過（`harden` 單元測試在真實 realm、`builtin-tampering` 在真實瀏覽器）。
+- runtime 載入之後，頁面除了改 DOM（比對下一次會看到）以外改不了顯示時的比對結果：在 JavaScriptCore 的獨立 realm 通過（`harden` 單元測試，`node:vm`）；在 Chromium 的頁面 realm 跑顯示時的比對：待測，Chromium 裡目前只證明凍結不會讓 runtime 壞掉、合法 d3 頁面照常判定（見上方更正）。顯示時的比對只在頁面自己的文件裡改正與標記，不是強制的邊界；把結果強制套用到顯示是外層頁面的事（Laysi/trustiot-v2#462，`frontend/sandbox/README.md`「保證」）。
 - 持續改動有上限、一直改回錯值會 fail closed 隱藏、一直以正確值更新會繼續顯示：通過（檢視模式單元測試）。
 - 判定的可信度以 renderer 為限（攻破 renderer 能讓自己這次的檢查通過，但到不了別次、出不了 pod）：寫入 `services/dashboard-check/README.md`「威脅模型」第 5 點與 `docs/architecture/ai-assistant.md`「儀表板」第 4 點。
 
@@ -184,4 +188,68 @@ DASHBOARD_CHECK_IMAGE=localhost/trustiot-e2e/dashboard-check:hardening-y bun tes
 ### 結論
 
 - 文字標記畫出來的文字要等於它的值、是單一文字節點、不被重排／裁切／藏起來：通過（單元 + 瀏覽器固定樣本）。
-- 殘留：祖先元素造成的裁切或 bidi 重排、`clip-path`／`mask`／透明度等只影響畫面的手法仍檢查不到（`frontend/sandbox/README.md`「檢查不到的部分」）。
+- 殘留：祖先元素造成的裁切或 bidi 重排、`clip-path`／`mask`、透明度以外的濾鏡與 `mix-blend-mode` 等只影響畫面的手法仍檢查不到（`frontend/sandbox/README.md`「檢查不到的部分」）。透明度、填色與變形在第 7 節補上。
+
+## 7. 第二輪：第二次審查之後的修正
+
+第二次審查（re-review）之後的修正，同一個分支：`764b8cb`（W1）、`e16a49c`（W2、W3）、`19df7f0`（W7 與顯示時比對的說明更正）、`553d267`（W4）、`0e64d09`（W5、W6），以及本節所在的 commit（W8 的用詞與本報告）。顯示時比對只在頁面自己的文件裡改正與標記，不是強制的邊界；把結果強制套用到顯示由 Laysi/trustiot-v2#462 處理，這一輪只更正文件。
+
+### 指令
+
+```sh
+# 沙箱與前端
+bun run --cwd frontend api:check && bun run --cwd frontend typecheck && bun run --cwd frontend lint
+bun run --cwd frontend test && bun run --cwd frontend build && bun run --cwd frontend check:dist
+
+# 檢查服務，與 Linux 上的清理（交叉編譯，執行方式同第 1 節；單元測試在 docker run --init 後面，不是 PID 1）
+cargo test --locked -p dashboard-check
+cargo zigbuild test --locked --no-run --target aarch64-unknown-linux-musl -p dashboard-check --lib --test pid1_cleanup
+
+# 映像在 init 行程後面、以 TRUSTIOT__CLEANUP=browser 啟動（chart 的其他設定同第 3 節）
+docker run --init ... localhost/trustiot-e2e/dashboard-check:hardening-y
+docker run --init --env TRUSTIOT__CLEANUP=browser ... localhost/trustiot-e2e/dashboard-check:hardening-y
+docker run --env TRUSTIOT__CLEANUP=browser ... localhost/trustiot-e2e/dashboard-check:hardening-y
+
+# chart、nightly 與 script 的型別檢查
+bun test deploy/chart
+bun test scripts/nightly
+bun run --cwd scripts typecheck
+docker run --rm --network none -v "$PWD:/w:ro" --tmpfs /tmp:rw,exec,mode=1777 -e HOME=/tmp -w /w \
+  oven/bun:1.4.2-debian@sha256:4f6e31d1a54d6a3dd312daef655fc998101b5043d52e12592ac293ef04b9bc73 \
+  bun test scripts/nightly/dashboard-check.test.ts scripts/nightly/pod-pids-limit.test.ts
+
+# 映像（修正前的對照用分支起點的 localhost/trustiot-e2e/dashboard-check:e397c9d，加 -t 只跑新的固定樣本）
+DASHBOARD_CHECK_IMAGE=localhost/trustiot-e2e/dashboard-check:hardening-y bun test deploy/images/dashboard-check
+```
+
+### 結果
+
+| 項目 | 修正前 | 修正後 | 測試 |
+| --- | --- | --- | --- |
+| W1：版面由呼叫端決定，頁面的 CSS 關不掉版面規則（審查的 N2） | 重現：`text-mark-root-zero`（根元素的方框設成 0，內容照常顯示並被裁切）判 `passed`（[round2-root-zero-before.txt](data/2026-10-27-150-checker-hardening/round2-root-zero-before.txt)） | 判 `failed`（`mismatch`） | `compare.test.ts`、`runtime.test.ts`、固定樣本 |
+| W2：透明度與填色 | `text-mark-faint` 判 `passed`（[round2-text-and-pie-before.txt](data/2026-10-27-150-checker-hardening/round2-text-and-pie-before.txt)） | 文字的顏色、`-webkit-text-fill-color`、SVG 的 `fill` 乘 `fill-opacity`、各層祖先的 `opacity` 與 `filter: opacity()` 相乘後低於 `MIN_TEXT_ALPHA`（0.1）判 `mismatch`：7 個 | `compare.test.ts`「faint text」、固定樣本 |
+| W3：變形 | `text-mark-turned` 與 `wrong-pie-stretched` 判 `passed`（同上） | 文字的轉向超過 `MAX_TEXT_TURN_DEG`（45°）、鏡像、伸縮比超過 `MAX_TEXT_STRETCH`（4）、實際字級（`font-size` 乘縮放，含 `zoom`）小於 `MIN_TEXT_SIZE_PX`（2 px）、字距小於 `MIN_LETTER_SPACING_EM`（−0.2 em）、逐字定位（`x`／`y`／`dx`／`dy` 清單、`rotate`、`textLength`、`textPath`）都判 `mismatch`：8 個；扇形的伸縮比超過 `MAX_SLICE_STRETCH`（1.01）判 `mark_geometry`：3 個。`perspective` 與 `transform-style: preserve-3d` 一律不通過。d3 常見的 −45° 軸標籤（`slanted-labels`）照常通過 | `compare.test.ts`「turned, mirrored and stretched text」、`dom.test.ts`、固定樣本 |
+| W4：容器裡不是 PID 1 時拒絕檢查 | 分支起點的映像在 `docker run --init` 後面照常啟動，`whole_container_cleanup: false`（[round2-no-pid1.txt](data/2026-10-27-150-checker-hardening/round2-no-pid1.txt)） | 新設定 `TRUSTIOT__CLEANUP`（預設 `container`，chart 固定設定）：不是 PID 1 就拒絕啟動；`browser` 在 PID 1 或任何容器的跡象下也拒絕，結束碼 1（同一個檔案）。chart 設 `shareProcessNamespace`、`hostPID`、`hostIPC`、`hostNetwork` 或在 env 設 `TRUSTIOT__CLEANUP` 都渲染失敗 | `config.rs`、`cleanup.rs` 的單元測試（開發工作站與 Linux 容器）、`pid1_cleanup`（[round2-pid1-cleanup.txt](data/2026-10-27-150-checker-hardening/round2-pid1-cleanup.txt)）、`chart.test.ts`、映像測試的三種拒絕 |
+| W5：ztunnel 的埠與 DNS 對照 | outbound、inbound、HBONE 埠只測 loopback；DNS 代理埠的沉默可能是叢集 DNS 沒有上游 | 三個埠也測 pod 的位址；身分服務的 pod 以 resolver 與直接送給叢集 DNS 的 UDP 查詢都查得到 `example.com.`（回應要是這個查詢的、rcode 0、至少一筆紀錄） | `dashboard-check.test.ts`（計畫、判定、DNS 標頭、失敗案例） |
+| W6：kubelet 實際生效的 `podPidsLimit` | 只在建 k3d 叢集時設定，沒有讀回 | `scripts/nightly/pod-pids-limit.ts` 經節點 proxy 讀每個 kubelet 的 `/configz`，不是 16384 或讀不到就失敗並列出節點；smoke 在部署儀表板檢查的型態執行；可以對其他叢集執行（結束碼 0／1／2） | `pod-pids-limit.test.ts`（含以假的 kubectl 執行整個指令） |
+| W7：重新比對的上限與檢視模式 | 拿掉 `MAX_RECHECK_DELAY_MS` 時，持續改動的頁面一直不被比對（[round2-recheck-bound-without.txt](data/2026-10-27-150-checker-hardening/round2-recheck-bound-without.txt)）；沒有凍結迭代器原型時，13 個內建物件沒有被凍結 | 持續改動的頁面在上限內被比對、錯值被換掉；每個迭代器原型與 generator、async function 的原型都凍結 | `runtime.test.ts`、`harden.test.ts` |
+| W8：用詞 | 「不帶 cookie」、略過條件寫成某一種工作站、第 2、5 節 | 只寫實測的 `SameSite=Lax` session cookie（`SameSite=None` 的 cookie 會帶）；略過條件寫成缺 GNU coreutils 或 getent 的地方；第 2、5 節更正 | — |
+
+- Chromium 的實測（[round2-chromium-probes.txt](data/2026-10-27-150-checker-hardening/round2-chromium-probes.txt)，2026-10-27，映像裡的 `chromium-headless-shell`）：SVG 的 `getScreenCTM()` 回傳 `SVGMatrix`，不是 `DOMMatrix`（以 `DOMMatrix` 的 getter 讀會丟 `Illegal invocation`），所以比對依物件的原型鏈選讀取方式；計算後的 `rotate` 是 `180deg`、`1 1 0 57.2958deg` 這種寫法，`scale` 是 `0.5`，字距是 px，`filter` 保留 `opacity(0.05) blur(1px)`；SVG 的 CTM 含 HTML 祖先的變形與 `zoom`，計算後的 `font-size` 不含 `zoom`，HTML 的 `zoom` 是元素自己的值。
+- 新的常數（Laysi/trustiot-v2#694 的調整對象）：`MIN_TEXT_ALPHA` 0.1、`MAX_TEXT_TURN_DEG` 45、`MAX_TEXT_STRETCH` 4、`MIN_TEXT_SIZE_PX` 2、`MIN_LETTER_SPACING_EM` −0.2、`MAX_SLICE_STRETCH` 1.01（`1 + RELATIVE_TOLERANCE`）。`MAX_TEXT_TURN_DEG` 45 會拒絕轉 90° 的直式軸標籤。
+- 單元測試：前端 617 個全過；`cargo test -p dashboard-check` 49 個加 `pid1_cleanup`；Linux 容器裡清理與設定的單元測試 12 個全過，`pid1_cleanup` 的 PID 1 部分通過；`bun test deploy/chart` 699 個全過；`bun test scripts/nightly` 432 個通過、1 個略過、15 個失敗，失敗的與第一輪之前相同，是這台工作站特有的 TLS 與 openssl 測試；釘選的 Bun 1.4.2 的 Debian 容器裡，`dashboard-check.test.ts` 與 `pod-pids-limit.test.ts` 54 個全過，探測 script 本身也執行並通過（[round2-nightly-bun-1.4.2.txt](data/2026-10-27-150-checker-hardening/round2-nightly-bun-1.4.2.txt)）。那個容器的 `/tmp` 要允許執行：`pod-pids-limit.test.ts` 把假的 kubectl 放在暫存目錄，Docker 的 `--tmpfs` 預設 `noexec` 時那三個測試失敗。
+- 映像測試，每個階段都以自己的程式建出 `localhost/trustiot-e2e/dashboard-check:hardening-y`：
+
+| 階段 | 通過 | 檢查次數 | 每次檢查（中位數） | 容器記憶體最高讀數（上限 512Mi） |
+| --- | --- | --- | --- | --- |
+| W1 | 55 | 44 | 141–5153 ms（422 ms） | 98.5 MiB |
+| W2、W3 | 59 | 48 | 142–5190 ms（428 ms） | 99.0 MiB |
+| W7 | 59 | 48 | 139–5172 ms（423 ms） | 96.9 MiB |
+| W4（最後的程式） | 62 | 48 | 137–5175 ms（424 ms） | 99.6 MiB |
+
+### 結論
+
+- W1、W2、W3、W7：通過（單元測試與真實 Chromium 的固定樣本；修正前的缺口都重現過）。
+- W4：通過（設定、Linux 容器裡的 PID 1 與非 PID 1、映像的三種拒絕、chart 的渲染規則）。在叢集裡共用 process namespace 的 pod 拒絕啟動：待測，chart 不讓這個設定渲染出來，叢集裡的對照要另外做。
+- W5、W6：計畫、判定與指令通過（單元測試）；在真的叢集（Istio ambient、k3s）裡 pod 位址上的 ztunnel 埠沒有回應、`example.com.` 的對照查得到、`/configz` 讀得到而且是 16384：待測，由加上 `smoke` 標籤的 nightly 執行。
+- 顯示時比對在 Chromium（V8）的頁面 realm 的免疫：待測（見第 5 節的更正），檢視頁面在 Laysi/trustiot-v2#462。

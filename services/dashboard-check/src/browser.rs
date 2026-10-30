@@ -364,7 +364,7 @@ mod tests {
         let script = fake_browser(&dir);
         let work = dir.join("work");
         std::fs::create_dir(&work).expect("mkdir");
-        let cleanup = Arc::new(Cleanup::for_this_process(&work));
+        let cleanup = Arc::new(Cleanup::browser_only_for_tests(&work));
         let browser = Browser::launch(&script, cleanup, Arc::new(Silent)).expect("launches");
         let answer = tokio::time::timeout(
             Duration::from_secs(60),
@@ -442,7 +442,7 @@ mod tests {
         let script = fake_browser(&dir);
         let work = dir.join("work");
         std::fs::create_dir(&work).expect("mkdir");
-        let cleanup = Arc::new(Cleanup::for_this_process(&work));
+        let cleanup = Arc::new(Cleanup::browser_only_for_tests(&work));
         let browser = Browser::launch(&script, cleanup, Arc::new(Silent)).expect("launches");
         let cdp = browser.cdp().clone();
         tokio::time::timeout(
@@ -475,7 +475,7 @@ mod tests {
         let dir = temp_dir("missing");
         let work = dir.join("work");
         std::fs::create_dir(&work).expect("mkdir");
-        let cleanup = Arc::new(Cleanup::for_this_process(&work));
+        let cleanup = Arc::new(Cleanup::browser_only_for_tests(&work));
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()

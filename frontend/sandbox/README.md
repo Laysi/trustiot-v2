@@ -189,10 +189,11 @@ runtime 收到 `data` 後呼叫 `render(tq)`：
 | 沙箱 frame 沒有導向、沒有開新視窗、沒有送出表單 | `navigated` |
 | 沙箱除了自己 runtime 版本的檔案之外，沒有請求任何檔案（CSP 的 `'self'` 允許同一主機的 script 與樣式表；檢視時這種請求會從使用者的瀏覽器送到平台的主機） | `requested` |
 | 每個 `data-tq` 都是合法參照，而且對得到資料：資料集、欄、列、計算、常數都存在；`t` 參照只在 `tq.axis` 軸裡的文字標記上；圖形標記有合法的 `data-tq-chart` 與 `data-tq-channel` | `unmapped`（參照的名稱都是宣告過的才回傳參照，否則只回元素的標籤） |
-| 文字標記（有 `data-tq`、沒有 `data-tq-chart` 與 `data-tq-channel` 的元素）的 `textContent` 等於 `tq.format(值, data-tq-format)`；格式被拒絕時一律不相等。而且畫出來的文字要等於 `textContent`：標記是單一文字節點（沒有子元素，`tq.text` 寫的就是這樣），整段照順序顯示——沒有被藏起來（`display: none`、`visibility: hidden`、透明色 `transparent` 或 alpha 0）、沒有 bidi 重排（`unicode-bidi` 的 override 或 `plaintext`）、`::first-letter` 與 `::first-line` 沒有被改樣式（字級、顯示、透明色）、方框有面積（不是 `font-size: 0` 的零大小）、沒有被有裁切的 `overflow` 方框裁掉（內容超出方框，刪節號也算）。方框大小與裁切的判斷需要版面，只在有版面的地方做（檢查服務的瀏覽器與檢視，不在沒有版面的單元測試 DOM）；`display: contents` 這種沒有方框但文字照樣顯示的標記不算被藏 | `mismatch`（回傳參照與資料裡的值） |
+| 文字標記（有 `data-tq`、沒有 `data-tq-chart` 與 `data-tq-channel` 的元素）的 `textContent` 等於 `tq.format(值, data-tq-format)`；格式被拒絕時一律不相等。而且畫出來的文字要等於 `textContent`：標記是單一文字節點（沒有子元素，`tq.text` 寫的就是這樣），整段照順序、正向顯示——沒有被藏起來（`display: none`、`visibility: hidden`，或畫得太淡：文字顏色的 alpha 乘上標記本身與每一層祖先的 `opacity` 低於 `MIN_TEXT_ALPHA`（0.1）；顏色取 `color`、`-webkit-text-fill-color` 與 SVG 文字的 `fill`（乘上 `fill-opacity`）裡最淡的，`filter` 裡的 `opacity()` 也乘進去；瀏覽器序列化顏色的每種寫法都讀得出 alpha，包括 `color()`、`lab()`、`lch()`、`oklab()`、`oklch()`；讀不懂的顏色、漸層這類不是單一顏色的填色都當成透明）、沒有被變形成別的樣子（標記與祖先的 `transform`、`rotate`、`scale`、`zoom` 合起來，SVG 元素以 `getScreenCTM` 計算，含 HTML 祖先與 viewBox：不能鏡像、不能轉超過 `MAX_TEXT_TURN_DEG`（45°），也不能在一個方向比另一個方向拉長超過 `MAX_TEXT_STRETCH`（4）倍；平移與等比縮放可以，但畫出來的字級（字級乘上縮放）至少 `MIN_TEXT_SIZE_PX`（2 px）；有 `perspective`、`transform-style: preserve-3d`，或變形讀不懂時一律不符）、SVG 文字不逐字擺放（標記與它所屬的 `text`、`tspan` 的 `x`、`y`、`dx`、`dy` 都只有一個值，沒有 `rotate` 與 `textLength`，不在 `textPath` 上）、字距不讓數字疊在一起（`letter-spacing` 不小於 `MIN_LETTER_SPACING_EM`，−0.2 em）、沒有 bidi 重排（`unicode-bidi` 的 override 或 `plaintext`）、`::first-letter` 與 `::first-line` 沒有被改樣式（字級、顯示、淡到看不見、變形、字距）、方框有面積（不是 `font-size: 0` 的零大小）、沒有被有裁切的 `overflow` 方框裁掉（內容超出方框，刪節號也算）。方框大小、裁切與 SVG 的 `getScreenCTM` 需要版面；有沒有版面由呼叫端說明（檢查服務與 runtime 都在瀏覽器裡，一律有版面；單元測試的 DOM 沒有），從不由頁面自己能改樣式的 `<html>` 方框推斷。`display: contents` 這種沒有方框但文字照樣顯示的標記不算被藏 | `mismatch`（回傳參照與資料裡的值） |
+| 有版面時，文件根元素（`<html>`）的方框有面積：沙箱自己的樣式讓它一定有（frame 的寬度、`#tq-root` 的 padding），沒有面積代表頁面藏起了標記實際畫出的樣子（例如把根元素縮成零而內容照樣溢出顯示） | 每個標記都不符：文字標記 `mismatch`，圖形標記 `mark_geometry` |
 | 所有 SVG 圖形（`rect`、`circle`、`ellipse`、`line`、`path`、`polygon`、`polyline`、`use`）都在圖形標記、`tq.axis` 或 `tq.decor` 之下 | `unmapped`（沒有參照，回傳標籤） |
 | 標記以外沒有數字：不在文字標記裡的文字節點（圖形標記裡的文字也算）、每個元素上會顯示或朗讀的屬性（`title`、`alt`、`aria-label`、`aria-description`、`aria-valuetext`、`aria-valuenow`、`aria-valuemin`、`aria-valuemax`、`aria-roledescription`、`aria-placeholder`、`placeholder`、`value`、`label`）、`::before`、`::after`、`::marker` 的 `content`（`open-quote`、`close-quote` 看 `quotes`），以及有編號的清單項目（`display: list-item` 而 `list-style-type` 不是 `none`、`disc`、`circle`、`square`、`disclosure-*`；文字的 `list-style-type` 看文字），都沒有十進位數字（`\p{Nd}`，含全形） | `literal_number`（回傳位置與第一段數字，只含數字、`.` 與 `,`，最多 32 字元；清單項目回傳它在兄弟元素裡的序號） |
-| 同一張圖（`data-tq-chart`）同一個 `channel` 的標記：`width`、`height`、`radius`（寬的一半）依 `getBoundingClientRect` 與值的絕對值成正比（比例是各標記「大小 / 值」的中位數，誤差 1% 或 1 px 內；值為 0 或 `null` 時不超過 1 px；最大的標記不到 1 px 時，所有有值的標記都不符）；`x`、`y` 是值的一次函數（以方框中心為位置，Theil–Sen 直線，誤差為位置範圍的 1% 或 1 px；三個以上的標記才判定；時間以毫秒計）；`angle` 只用於 `d3.arc` 畫的 `path`（沒有 `padAngle`、`cornerRadius`），以弧的角度與值成正比（誤差 1% 或外緣 1 px 的弧長）；值不是數字（或時間）的標記一律不符 | `mark_geometry`（回傳參照與 `channel`） |
+| 同一張圖（`data-tq-chart`）同一個 `channel` 的標記：`width`、`height`、`radius`（寬的一半）依 `getBoundingClientRect` 與值的絕對值成正比（比例是各標記「大小 / 值」的中位數，誤差 1% 或 1 px 內；值為 0 或 `null` 時不超過 1 px；最大的標記不到 1 px 時，所有有值的標記都不符）；`x`、`y` 是值的一次函數（以方框中心為位置，Theil–Sen 直線，誤差為位置範圍的 1% 或 1 px；三個以上的標記才判定；時間以毫秒計）；`angle` 只用於 `d3.arc` 畫的 `path`（沒有 `padAngle`、`cornerRadius`），以弧的角度與值成正比（誤差 1% 或外緣 1 px 的弧長），而且畫面上是等比的：路徑在螢幕上的變形在任一方向的拉長不超過另一方向的 `MAX_SLICE_STRETCH`（1.01）倍（鏡像與旋轉不改變角度，可以）；值不是數字（或時間）的標記一律不符 | `mark_geometry`（回傳參照與 `channel`） |
 | 連續軸的每個刻度落在該欄可能的軸範圍內：數字是所有值的範圍（全部相同時是 `[值, 值+1]`，沒有值時是 `[0, 1]`）再擴大到包含 0，時間是所有值的範圍（只有一個時前後各加一天），再取 d3 `nice` 在刻度數 1 到 20 之下的聯集；同一軸三個以上的刻度，位置（刻度 `<g>` 的原點，依 `getScreenCTM`）是刻度值的一次函數 | `mark_geometry`（`channel: "axis"`） |
 | 沒有 `canvas`、`img`、`picture`、SVG `image`、`video`、`audio`、`iframe`、`frame`、`object`、`embed`、`input`、`textarea`、`select`、shadow root（開放的由比對程式找，封閉的由檢查服務以 CDP 找），`content` 只有加引號的文字與 `normal`、`none`、`*-quote`（沒有 `counter()`、`attr()`、`url()`） | `unsupported_content` |
 | 最多 20,000 個元素、10,000 個標記（有 `data-tq` 的元素），在其他規則之前先數 | `too_large`（超過時只回這一個問題） |
@@ -207,8 +208,8 @@ runtime 收到 `data` 後呼叫 `render(tq)`：
 - 折線與面積的路徑（`path`）只能標成 `tq.decor`，形狀不檢查；要檢查的值另外以點（`tq.mark` 的 `x`、`y`）標記。`tq.decor` 本身也不檢查：畫成數字形狀的裝飾、被宣告成裝飾的長條都看不出來。
 - 以 HTML 元素的寬高畫的長條沒有標記時看不出來；圖形一律用 SVG 並以 `tq.mark` 標記。
 - 用文字寫數字（「一百二十」）、`\p{Nd}` 以外的數字字元（上標、圈號數字、羅馬數字），以及依時間或環境改變內容的頁面，檢查擋不住；所以檢視時前端再比對一次（Laysi/trustiot-v2#462）。
-- 只影響畫面不影響 DOM 的手法：文字標記的 bidi 重排、裁切、`::first-letter`/`::first-line` 樣式與隱藏已經會判 `mismatch`（見上），但祖先元素造成的裁切或 bidi 重排、`clip-path`、`mask`、透明度、只在 `:hover` 出現的樣式、清單以外的屬性（例如其他 ARIA 屬性）仍檢查不到。
-- 只在檢視時才發出的同主機請求（`requested` 那一列）檢查看不到。這是已接受的殘留（擁有者 2026-10-27）：沙箱是 opaque origin，沙箱文件的 CSP 用 `script-src 'self'` 與 `style-src 'self'` 讓 runtime 自己的檔案載得進來，連帶讓顯示中的頁面能對自己這個主機發出 GET（當成 script 或 style 載入）。頁面讀不到回應（只當 script 或 style 載入，不是資料）；因為來源是 opaque，瀏覽器把它當成別的 site，不送平台的 `SameSite=Lax` session cookie（2026-10-26 在 Chromium 實測，見 `crates/contract/src/api/dashboard/sandbox.rs` 的模組說明）；CSP 把這些請求限制在同一個主機（含轉址）。發布前的檢查會拒絕發出這種請求的頁面（`requested`）。要完全關掉得把 runtime 以雜湊式 CSP 內嵌，目前不做。
+- 只影響畫面不影響 DOM 的手法：文字標記的 bidi 重排、裁切、變形、逐字擺放、字距、`::first-letter`/`::first-line` 樣式、隱藏與透明度（含祖先的 `opacity`）已經會判 `mismatch`（見上），但下列仍檢查不到：被別的元素蓋住（整個或部分數字被上層的元素、偽元素或圖形遮住）；祖先元素造成的裁切或 bidi 重排；`clip-path`、`mask`；`filter` 裡 `opacity()` 以外的效果與 `mix-blend-mode`；與背景同色或對比不足；字型本身的字形；只在 `:hover` 出現的樣式；清單以外的屬性（例如其他 ARIA 屬性）。
+- 只在檢視時才發出的同主機請求（`requested` 那一列）檢查看不到。這是已接受的殘留（擁有者 2026-10-27）：沙箱是 opaque origin，沙箱文件的 CSP 用 `script-src 'self'` 與 `style-src 'self'` 讓 runtime 自己的檔案載得進來，連帶讓顯示中的頁面能對自己這個主機發出 GET（當成 script 或 style 載入）。頁面讀不到回應（只當 script 或 style 載入，不是資料）；因為來源是 opaque，瀏覽器把它當成別的 site，不送平台的 `SameSite=Lax` session cookie（2026-10-26 在 Chromium 實測，見 `crates/contract/src/api/dashboard/sandbox.rs` 的模組說明）；實測的只有這個 cookie，這個主機若設了 `SameSite=None` 的 cookie，會跟著請求送出；CSP 把這些請求限制在同一個主機（含轉址）。發布前的檢查會拒絕發出這種請求的頁面（`requested`）。要完全關掉得把 runtime 以雜湊式 CSP 內嵌，目前不做。
 - 沙箱還沒處理的外送缺口在 Laysi/trustiot-v2#699。
 
 ## 比對程式
@@ -216,9 +217,10 @@ runtime 收到 `data` 後呼叫 `render(tq)`：
 同一份實作（`src/compare.ts`）有兩個入口：
 
 - **檢查（`compare.js`）**：定義 `globalThis.tqCompare(input)`，同步回傳判定。輸入是 `CompareInput`（`protocol.ts`）：`runtime`、`spec`（公開部分）、`datasets`（結果）、`locale`、`tz`，以 zod 解析（解析失敗丟出例外）。輸入一律由呼叫端提供，從不讀頁面或 runtime 的狀態；比對程式自己解析參照、計算公式、格式化。輸出是判定（`CheckVerdict`）：通過時 `{verdict: "passed", report: {marks}}`，否則 `{verdict: "failed", problems}`。CDP 才看得到的問題（`not_rendered`、`script_error`、`navigated`、`requested`、封閉的 shadow root、`timeout` 的時限）由檢查服務補上。檢查服務以 CDP 在沙箱 frame 建立 isolated world 後注入並呼叫它：isolated world 的全域物件與原型是自己的，頁面改寫 DOM 原型或全域物件騙不到它。
-- **檢視（runtime 內建）**：runtime 在頁面的 script 執行**之前**保存原始的 DOM 函式並凍結這個 realm 的內建物件（`harden`，見「頁面 API」），每次畫完後在頁面的 realm 比對：對不到資料或不相符的文字標記換成「—」並加上 `data-tq-flag`，不相符的圖形標記加上 `data-tq-flag`，標記以外的數字換成「—」，`::before`、`::after`、`::marker` 有問題的元素加上 `data-tq-flag-pseudo`（關掉產生的內容），不支援的內容加上 `data-tq-flag-hide`（隱藏），超過上限時整份文件隱藏；樣式在 `sandbox.css`。每次比對先清掉上一次的標示（之後畫對了就不再標示）。
-  - **保證**：runtime 載入之後，頁面的 script 不論做什麼，都改不了這次比對的結果，唯一的例外是改 DOM，而改了的 DOM 比對下一次就看得到。比對與它呼叫的每一段（文字、格式化、時間、幾何、內建的 d3-format）都只讀凍結後的內建物件，所以頁面換掉 `Intl`、`Math`、`Number`、`String`、`RegExp`、`Array`、`Set`、`Map` 或它們原型上的方法都沒有用（`harden` 擋下），頁面自己的 `tq.text` 與比對因此一定算出同一個、正確的字串。
-  - **持續改動有上限**：畫完後的 DOM 變動（tooltip、計時器）靜止後再比對一次；頁面若一直改個不停，從第一次改動起最多 `MAX_RECHECK_DELAY_MS`（1000 ms）內一定再比對一次，不會被無限延後。一直把 runtime 改正的值又改回錯的，連續 `MAX_CORRECTION_ROUNDS`（10）次之後整份文件隱藏，不再比對（fail closed）；一直以正確的值更新的頁面則沒有東西要改正，會一直正常顯示。
+- **檢視（runtime 內建）**：runtime 在頁面的 script 執行**之前**保存原始的 DOM 函式並凍結這個 realm 的內建物件（`harden`，見「頁面 API」），每次畫完後在頁面的 realm 比對：對不到資料或不相符的文字標記換成「—」並加上 `data-tq-flag`，不相符的圖形標記加上 `data-tq-flag`，標記以外的數字換成「—」，`::before`、`::after`、`::marker` 有問題的元素加上 `data-tq-flag-pseudo`（關掉產生的內容），不支援的內容加上 `data-tq-flag-hide`（隱藏），超過上限時整份文件隱藏；樣式在 `sandbox.css`。每次比對先清掉上一次的標示（之後畫對了就不再標示）。runtime 一律當成有版面比對，所以 frame 沒有版面時（例如 host 以 `display: none` 藏起 frame）每個標記都判不符；host 要暫時藏起 frame 時用 `visibility: hidden`。
+  - **保證**：比對算出的結果不受頁面換掉內建物件或 DOM 函式影響。比對與它呼叫的每一段（文字、格式化、時間、幾何、內建的 d3-format）只讀凍結後的內建物件，以及 runtime 在頁面 script 執行前保存的 DOM 函式（含讀方框與 `getScreenCTM` 矩陣的 getter），所以頁面換掉 `Intl`、`Math`、`Number`、`String`、`RegExp`、`Array`、`Set`、`Map`、它們原型上的方法、各種迭代器與 generator 的原型，或 DOM 原型上的函式都沒有用（`harden` 與 `captureDom` 擋下）：對同一份 DOM，頁面自己的 `tq.text` 與比對一定算出同一個、正確的字串。頁面改了 DOM，下一次比對就看得到。
+  - **不是強制的邊界**：檢視時的比對只在頁面自己的文件裡改正與標示。換成「—」、各種標示、整份文件隱藏與之後不再比對，都是頁面自己的文件與計時器裡的狀態，頁面的 script 碰得到，所以這次比對不能當成擋住錯誤數字的邊界。要讓比對的結果確實生效（例如沒有乾淨的比對結果就不顯示 frame）是外層頁面的責任，在 Laysi/trustiot-v2#462 處理。發布與否一律以檢查服務在 isolated world 的判定為準（「威脅模型」第 5 點）。
+  - **持續改動有上限**：畫完後的 DOM 變動（tooltip、計時器）靜止後再比對一次；頁面若一直改個不停，從第一次改動起最多 `MAX_RECHECK_DELAY_MS`（1000 ms）內就再比對一次，不會因為一直改動而被延後（這個上限用的是頁面所在視窗的計時器，同樣不是強制的邊界）。需要改正的比對連續超過 `MAX_CORRECTION_ROUNDS`（10）次時，整份文件隱藏，之後不再比對（fail closed）：重新比對與資料更新都算，所以不論是頁面把改正的值又改回錯的，還是每次資料更新都畫出一個對不到資料的值，都會被隱藏；只有一次沒有東西要改正的比對才重新計數，所以一直以正確的值更新的頁面會一直正常顯示。
   - 比對本身丟出例外時（理論上頁面讓它用到的東西壞掉），整份文件從此隱藏，也不再比對。這個結果只用來顯示，從不當作判定：判定一律以檢查服務在 isolated world 的比對為準（「威脅模型」第 5 點）。
 
 ## 檢查服務的流程
@@ -244,23 +246,23 @@ runtime 收到 `data` 後呼叫 `render(tq)`：
 - `expect` 是 `{verdict: "passed", marks}` 或 `{verdict: "failed", problems, may_also?}`。比對方式在 `fixtures/expect.ts` 的 `matchesExpectation`：通過的案例要有完全相同的 `marks`（順序也相同）；失敗的案例要有每個預期的問題（列出的欄位與值都相同，沒列出的欄位，例如 `script_error` 的 `message`，不比），而且沒有預期與 `may_also` 以外類別的問題。
 - 案例涵蓋 design B 第 3.4 節（正確的頁面、寫死的數字、錯列、錯的長條高度、對不到資料的標記、同步與非同步的 script 錯誤、導向、改寫原型），以及每條規則各一頁。送出表單與開新視窗的頁面預期**通過**：沙箱沒有 `allow-forms`、`allow-popups`，什麼都不會發生；瀏覽器裡判成 `navigated` 代表 frame 少了 `sandbox` 屬性。
 
-只有瀏覽器測試涵蓋的部分：真實的版面（`getBoundingClientRect`、`getScreenCTM`；單元測試從 SVG 屬性推算位置）、`::before`、`::after`、`::marker` 的 `content`、清單的預設樣式、CSS 動畫、封閉的 shadow root、非同步的 script 錯誤、導向、請求、isolated world 本身、頁面替換 realm 的內建物件（`builtin-tampering`；`harden` 在真實的 realm 凍結它們，共用的測試 realm 不能被替換）、文字標記需要版面才看得出的遮蔽（`text-mark-first-letter`、`text-mark-first-letter-color` 的 `::first-letter`、`text-mark-clipped` 與 `text-mark-ellipsis` 的裁切、`text-mark-font-size-zero` 的零大小方框；結構、`display`、`visibility`、透明色、`unicode-bidi` 的樣本在單元測試就能判），以及 SVG 裡的 `<script>`（happy-dom 解析不出來）。
+只有瀏覽器測試涵蓋的部分：真實的版面（`getBoundingClientRect`、`getScreenCTM`；單元測試從 SVG 屬性推算位置）、`::before`、`::after`、`::marker` 的 `content`、清單的預設樣式、CSS 動畫、封閉的 shadow root、非同步的 script 錯誤、導向、請求、isolated world 本身、頁面替換 realm 的內建物件（`builtin-tampering`；`harden` 在真實的 realm 凍結它們，共用的測試 realm 不能被替換）、文字標記需要版面才看得出的遮蔽（`text-mark-first-letter`、`text-mark-first-letter-color` 的 `::first-letter`、`text-mark-clipped` 與 `text-mark-ellipsis` 的裁切、`text-mark-font-size-zero` 的零大小方框、`text-mark-root-zero` 把根元素的方框縮成零、`text-mark-faint` 的各種顏色寫法與祖先透明度、`text-mark-turned` 與 `wrong-pie-stretched` 需要 `getScreenCTM` 的變形；結構、`display`、`visibility`、透明色、`unicode-bidi` 的樣本與 `slanted-labels` 在單元測試就能判，變形與顏色的各條規則另有 `test/compare.test.ts` 的單元測試），以及 SVG 裡的 `<script>`（happy-dom 解析不出來）。
 
 ## 測試
 
 - `bun run --cwd frontend test` 跑：
   - `src/protocol.test.ts`：讀 `crates/contract/tests/fixtures/dashboard/` 的固定樣本（由 Rust 型別寫出），確認每個都能解析且不遺失欄位、`publicSpec` 與 Rust 的 `Spec::public` 相同、參照的測試向量答案一致、判定與沙箱訊息拒絕封閉集合以外的內容。
   - `src/formula.test.ts`：共用的計算語言測試向量，以及位置、長度與求值的細節。
-  - `test/runtime.test.ts`：頁面的載入、畫完的訊息、頁面 API、檢視模式的比對與標示，包括一直改回錯值的頁面會在上限內被隱藏、一直以正確值更新的頁面會繼續顯示。
-  - `test/harden.test.ts`：在 `node:vm` 的獨立 realm 裡凍結內建物件（像瀏覽器的 frame 一樣有自己的內建物件），確認在呼叫時才查內建的比對不受頁面替換影響、覆寫繼承屬性的合法寫法仍可用、全域物件仍可擴充、重複呼叫安全，以及凍結後 d3 仍能畫比例尺、nice、扇形與格式化。
+  - `test/runtime.test.ts`：頁面的載入、畫完的訊息、頁面 API、檢視模式的比對與標示，包括一直改回錯值的頁面會在上限內被隱藏、一直以正確值更新的頁面會繼續顯示，以及改動比靜止期間還頻繁、從不靜止的頁面仍在 `MAX_RECHECK_DELAY_MS` 的上限下被重新比對、改正（拿掉上限時這個測試會失敗）。
+  - `test/harden.test.ts`：在 `node:vm` 的獨立 realm 裡凍結內建物件（像瀏覽器的 frame 一樣有自己的內建物件），確認在呼叫時才查內建的比對不受頁面替換影響、覆寫繼承屬性的合法寫法在 strict mode 仍可用、一份 well-known 內建物件清單（含沒有全域名稱的迭代器、generator 與 async function 原型）全部凍結、全域物件仍可擴充、重複呼叫安全，以及凍結後 d3 仍能畫比例尺、nice、扇形與格式化。
   - `test/format.test.ts`：數字、時間、布林與 `null` 的格式化，以及被拒絕的格式。
   - `test/time.test.ts`：結果裡的時間、時間點換成檢視者時區、刻度參照的時間文字。
   - `test/values.test.ts`：參照的值與頁面看到的值；Rust 寫出的 `verdict-passed.json` 每個標記的值都等於從 `check-request.json` 解析出的值。
   - `test/geometry.test.ts`：比例、直線、軸範圍與 `d3.arc` 扇形角度的計算。
-  - `test/compare.test.ts`：比對的每條規則（計算樣式與動畫用替身）、判定的去重與上限、文字與 CSS `content` 的讀法。
+  - `test/compare.test.ts`：比對的每條規則（計算樣式、動畫與螢幕矩陣用替身），包括顏色 alpha 的各種寫法、透明度、變形、逐字擺放、字距與圓餅圖的等比，以及判定的去重與上限、文字與 CSS `content` 的讀法。
   - `test/source.test.ts`：沙箱原始碼不用 `innerHTML`、`eval`、網路 API 與導向，只在 runtime 一處把字串變成程式（頁面 script），只 import 鎖定版本的 d3 模組。
   - `test/build.test.ts`：建置正好寫出 `SandboxFile` 的檔案與 host 頁，每個 script 都是獨立的 classic script，沒有 source map 與網路 API。
-  - `test/dom.test.ts`：事先保存的 DOM 函式不受頁面之後的改寫影響、動畫的計數。
+  - `test/dom.test.ts`：事先保存的 DOM 函式（含方框與螢幕矩陣的 getter）不受頁面之後的改寫影響、動畫的計數。
   - `test/host.test.ts`：host adapter 只接受自己 frame、opaque origin、格式正確的訊息，`ready` 後才送 `init` 與 `data`，第二次 `ready` 或 `load` 視為導向。
   - `test/check-host.test.ts`：`tqCheckHost.start` 拒絕不合格的請求、只執行一次，回報的種類、順序與訊息處理，frame 的大小。
   - `test/fixtures.test.ts`：固定樣本的檔案與預期判定都合格，`unit` 案例在 happy-dom 裡得到預期的判定。

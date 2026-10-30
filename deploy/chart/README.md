@@ -647,18 +647,18 @@ curl -sS -D - -X POST "http://127.0.0.1:18080/internal/roles/main/v1/messages" \
 | 連出 | 沒有：NetworkPolicy 是 `policyTypes: [Ingress, Egress]`、`egress: []`，DNS 也不行；pod 帶 `ambient.istio.io/dns-capture: "false"`，名稱查詢不經 ztunnel 的 DNS proxy，直接被 NetworkPolicy 擋下 | 不限制 |
 | 誰能呼叫 | 只有 `assistant`（AuthorizationPolicy 與 NetworkPolicy 都只放行它，加上節點的探針）；入口沒有路由 | `mesh.calls` 與入口路由 |
 | 它呼叫誰 | 沒有：不送遙測（只寫 stdout），不換 token，`mesh.calls.dashboard-check` 列了被呼叫端就渲染失敗 | `mesh.calls` 與 collector |
-| 設定與密鑰 | 只有 `OTEL_SERVICE_NAME` 與 `services.dashboard-check.env`；沒有平台 ConfigMap、`credentials`、Secret、CA 與公鑰；設定 `credentials`、從 Secret 讀 env 或設 `TRUSTIOT__TELEMETRY__OTLP_ENDPOINT` 都讓渲染失敗 | 見「chart 與服務的約定」 |
+| 設定與密鑰 | 只有 `OTEL_SERVICE_NAME`、`TRUSTIOT__CLEANUP: container` 與 `services.dashboard-check.env`；沒有平台 ConfigMap、`credentials`、Secret、CA 與公鑰；設定 `credentials`、從 Secret 讀 env、設 `TRUSTIOT__TELEMETRY__OTLP_ENDPOINT` 或 `TRUSTIOT__CLEANUP` 都讓渲染失敗 | 見「chart 與服務的約定」 |
 | ServiceAccount token | 沒有；`automountServiceAccountToken: true` 讓渲染失敗 | 沒有 |
 | init container | 沒有（等 migration 要連 API server，它也不用資料庫）；migration 狀態的 RoleBinding 不含它 | 等 migration 完成 |
 | `/tmp` | 記憶體 emptyDir（`medium: Memory`），上限 `tmpSizeLimit`（預設 `128Mi`），算進記憶體上限 | 磁碟 emptyDir |
-| 安全設定 | restricted；把 `runAsNonRoot`（pod 或容器）、seccomp、`readOnlyRootFilesystem`、`allowPrivilegeEscalation`、`privileged` 或 capabilities 改寬，或把 `runAsUser` 設成 0，都讓渲染失敗 | restricted，可覆寫 |
+| 安全設定 | restricted；把 `runAsNonRoot`（pod 或容器）、seccomp、`readOnlyRootFilesystem`、`allowPrivilegeEscalation`、`privileged` 或 capabilities 改寬，或把 `runAsUser` 設成 0，都讓渲染失敗；`shareProcessNamespace`、`hostPID`、`hostIPC`、`hostNetwork` 有設定也讓渲染失敗。服務要是容器的 PID 1 才能在檢查之間清掉整個容器，不是就拒絕啟動（`TRUSTIOT__CLEANUP: container`，[services/dashboard-check/README.md](../../services/dashboard-check/README.md)「威脅模型」第 3 點） | restricted，可覆寫 |
 | 資源 | requests `100m`、`128Mi`，limits `1`、`512Mi`：一次只做一個檢查，每次一個新的 Chromium | `serviceDefaults.resources` |
 
-- 預設關閉。SaaS 叢集在叢集自己的 values 與 `assistant` 一起開啟（[deploy/flux/README.md](../flux/README.md)）；地端維持關閉，AI 儀表板在 SaaS 之後才到地端（決策 33）。
+- 預設關閉。SaaS 叢集要在叢集自己的 values 與 `assistant` 一起開啟（[deploy/flux/README.md](../flux/README.md)）；地端維持關閉，AI 儀表板在 SaaS 之後才到地端（決策 33）。
 - 開啟後 `assistant` 拿到 `TRUSTIOT__DASHBOARD_CHECK__URL`（見「AI 助理」）；沒有開啟時 AI 助理不能發布儀表板。
 - 映像是 [deploy/images/dashboard-check](../images/dashboard-check/README.md)：服務、Debian 的 `chromium-headless-shell` 與前端建置的沙盒頁面。
-- 節點的要求（SaaS 與 demo 叢集）：kubelet 要設每個 pod 的行程數上限 `podPidsLimit`，值是 16384（k3s 在 `/etc/rancher/k3s/config.yaml` 寫 `kubelet-arg: ["pod-max-pids=16384"]`），節點的 `kernel.pid_max` 維持 64 位元 systemd 系統的預設 4194304。頁面的程式能在 pod 裡建立行程，直到檢查逾時、清理把它們全部殺掉為止（最多約 18 秒：`CHECK_TIME_LIMIT` 15 秒加清理的 3 秒）；這個上限讓一個 pod 用不完節點的 PID，影響不到同一節點的其他 pod。上限是整個節點的設定，所以值要高於平台每個 pod 的需要（執行緒最多的是 ClickHouse）；16384 尚未量測，調整由 Laysi/trustiot-v2#694 追蹤。nightly 的 k3d 叢集以同一個值執行（`scripts/nightly/run.ts`）。不以 `RLIMIT_NPROC` 限制瀏覽器：它計算的是同一個 UID 在整個節點的所有工作，而 UID 65532 也是其他映像的預設使用者，會讓檢查無故失敗。
-- nightly 以 SaaS 的 values 部署它，並在叢集裡證明這些隔離：從它的 pod 查不到 DNS 名稱，API server、collector 與叢集外的位址都沒有回應，身分服務的 pod 對同樣的目標都有回應（對照），也連不到它；`assistant` 送沙箱的 `correct` 樣本頁面，判定是 `passed`（`scripts/nightly/dashboard-check.ts`，[docs/architecture/ci-release.md](../../docs/architecture/ci-release.md)「nightly.yml」第 10 項）。
+- 節點的要求（SaaS 與 demo 叢集）：kubelet 要設每個 pod 的行程數上限 `podPidsLimit`，值是 16384（k3s 在 `/etc/rancher/k3s/config.yaml` 寫 `kubelet-arg: ["pod-max-pids=16384"]`），節點的 `kernel.pid_max` 維持 64 位元 systemd 系統的預設 4194304。頁面的程式能在 pod 裡建立行程，直到檢查逾時、清理把它們全部殺掉為止（最多約 18 秒：`CHECK_TIME_LIMIT` 15 秒加清理的 3 秒）；這個上限讓一個 pod 用不完節點的 PID，影響不到同一節點的其他 pod。上限是整個節點的設定，所以值要高於平台每個 pod 的需要（執行緒最多的是 ClickHouse）；16384 尚未量測，調整由 Laysi/trustiot-v2#694 追蹤。nightly 的 k3d 叢集以同一個值執行（`scripts/nightly/run.ts`）。SaaS 主機由 [deploy/host](../host/README.md) 的安裝程式寫入這個設定；k3s 不是由它安裝的主機（以 `--skip-k3s` 安裝，例如展示機，見 [docs/runbooks/demo-environment.md](../../docs/runbooks/demo-environment.md)），要在開啟儀表板檢查之前，手動把這一行加進該主機的 `/etc/rancher/k3s/config.yaml` 並重啟 k3s。SaaS 與展示叢集目前都還沒有開啟儀表板檢查。開啟之前，以該叢集的 kubeconfig 執行 `bun scripts/nightly/pod-pids-limit.ts --kubeconfig <檔案> [--context <名稱>]`，確認每個節點的 kubelet 實際生效的 `podPidsLimit` 是 16384（只讀：列出節點，再經 API server 的節點 proxy 讀各 kubelet 的 `/configz`，需要 `nodes/proxy` 的 get 權限；每個節點都符合時結束碼 0，否則 1 並列出不符合的節點）；nightly 對它的 k3d 叢集做同一個檢查。不以 `RLIMIT_NPROC` 限制瀏覽器：它計算的是同一個 UID 在整個節點的所有工作，而 UID 65532 也是其他映像的預設使用者，會讓檢查無故失敗。
+- nightly 以 SaaS 的 values 部署它，並在叢集裡證明這些隔離：從它的 pod 查不到 DNS 名稱，API server、collector 與叢集外的位址都沒有回應，ztunnel 在 pod 裡的埠（loopback 與 pod 的位址）也沒有回應，身分服務的 pod 對同樣的目標都有回應、查得到叢集外的名稱（對照），也連不到它；`assistant` 送沙箱的 `correct` 樣本頁面，判定是 `passed`（`scripts/nightly/dashboard-check.ts`，[docs/architecture/ci-release.md](../../docs/architecture/ci-release.md)「nightly.yml」第 10 項）。
 
 ## migration Job
 

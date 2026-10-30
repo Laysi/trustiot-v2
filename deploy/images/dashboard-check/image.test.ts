@@ -411,4 +411,41 @@ describe("image", () => {
     },
     START_TIMEOUT_MS,
   );
+
+  // The cleanup between checks covers the whole container only from PID 1
+  // (services/dashboard-check/README.md, 「威脅模型」 point 3). Behind the engine's init process, as
+  // in a pod that shares its process namespace, the service must stop rather than check with less,
+  // and the cleanup `browser`, which is for runs outside a container, must not let it run.
+  const refusals: [string, string[], string][] = [
+    ["behind an init process", ["--init"], "cleanup `container` needs the service to be PID 1"],
+    ["behind an init process with cleanup browser", ["--init", "--env", "TRUSTIOT__CLEANUP=browser"], "cleanup `browser` is for a run outside a container, but the service runs in one"],
+    ["as PID 1 with cleanup browser", ["--env", "TRUSTIOT__CLEANUP=browser"], "cleanup `browser` is for a run outside a container, but the service is its container's PID 1"],
+  ];
+  for (const [index, [what, options, reason]] of refusals.entries()) {
+    runningTest(
+      `refuses to start ${what}`,
+      async () => {
+        const name = `${container}-refused-${index}`;
+        containers.push(name);
+        await run([ENGINE, "run", "--detach", "--name", name, ...hardened(), ...options, image]);
+        const deadline = Date.now() + START_TIMEOUT_MS;
+        let state = "";
+        for (;;) {
+          state = (await run([ENGINE, "inspect", "--format", "{{.State.Status}} {{.State.ExitCode}}", name])).trim();
+          if (state.startsWith("exited ")) {
+            break;
+          }
+          if (Date.now() > deadline) {
+            throw new Error(`the service ${what} did not stop within ${START_TIMEOUT_MS / 1000} s (state ${state})`);
+          }
+          await Bun.sleep(500);
+        }
+        const logs = await exec([ENGINE, "logs", name]);
+        expect(state).not.toBe("exited 0");
+        expect(`${logs.stdout}${logs.stderr}`).toContain(reason);
+        expect(`${logs.stdout}${logs.stderr}`).not.toContain("dashboard check ready");
+      },
+      START_TIMEOUT_MS + 30_000,
+    );
+  }
 });

@@ -28,10 +28,12 @@
 //!
 //! `script-src 'self'` and `style-src 'self'` let the document load the runtime's files from
 //! the host that serves them, and so they also let a page script request any path of that
-//! host as a script or stylesheet. Such a request reaches only the platform's own host and
-//! carries no cookie: the document's origin is opaque, so the browser treats it as a request
-//! from another site and leaves out the `SameSite=Lax` session cookie (both checked in
-//! Chromium on 2026-10-26). The checker refuses every such request and fails the page with
+//! host as a script or stylesheet. Such a request reaches only the platform's own host, and it
+//! goes without the `SameSite=Lax` session cookie: the document's origin is opaque, so the
+//! browser treats it as a request from another site and leaves that cookie out (both checked
+//! in Chromium on 2026-10-26). That is all that was checked: a cookie of that host set with
+//! `SameSite=None` would go with the request. The checker refuses every such request and
+//! fails the page with
 //! `check::Problem::Requested` (`frontend/sandbox/README.md`, 「檢查規則」 and 「檢查服務的流程」;
 //! `services/dashboard-check/README.md`, 「流程」). A page could still make such a request
 //! only when it is displayed, which is why what the request can reach matters.

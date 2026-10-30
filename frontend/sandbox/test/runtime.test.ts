@@ -6,8 +6,15 @@ import { readFileSync } from "node:fs";
 import { Window } from "happy-dom";
 
 import type { DomWindow } from "../src/dom.ts";
-import type { CheckRequest, DatasetResult, SandboxMessage } from "../src/protocol.ts";
-import { describeError, installSandbox, MAX_CORRECTION_ROUNDS, timeOf, trustedEvents } from "../src/runtime.ts";
+import { type CheckRequest, type DatasetResult, QUIET_PERIOD_MS, type SandboxMessage } from "../src/protocol.ts";
+import {
+  describeError,
+  installSandbox,
+  MAX_CORRECTION_ROUNDS,
+  MAX_RECHECK_DELAY_MS,
+  timeOf,
+  trustedEvents,
+} from "../src/runtime.ts";
 import { dataMessage, type Frame, initMessage, openFrame } from "./harness.ts";
 
 const BASE = JSON.parse(readFileSync(new URL("../fixtures/request.json", import.meta.url), "utf8")) as Omit<
@@ -705,6 +712,45 @@ tq.on("data", (tq) => {
           expect(win.document.documentElement.hasAttribute("data-tq-flag-hide")).toBe(false);
           expect(win.document.getElementById("week")?.textContent).toBe("690.0");
           expect(win.document.getElementById("week")?.hasAttribute("data-tq-flag")).toBe(false);
+        },
+        "view",
+      );
+    },
+    TEST_MS,
+  );
+
+  // A page that, after it was compared, writes a wrong value once and then never goes quiet: it
+  // changes another element far more often than the quiet period. A recheck that waited for quiet
+  // would never come; MAX_RECHECK_DELAY_MS forces one while the page is still changing.
+  const restlessPage = `<p><b id="week"></b> <i id="pulse"></i></p>
+<script>
+tq.on("data", (tq) => tq.text(document.getElementById("week"), "f|week_kwh", ",.1f"));
+window.ticks = 0;
+window.lie = () => {
+  document.getElementById("week").textContent = "999,999.0";
+  setInterval(() => {
+    document.getElementById("pulse").setAttribute("data-tick", String(++window.ticks));
+  }, ${Math.floor(QUIET_PERIOD_MS / 10)});
+};
+</script>`;
+
+  test(
+    "a page that keeps changing faster than the quiet period is still compared within MAX_RECHECK_DELAY_MS",
+    async () => {
+      expect(MAX_RECHECK_DELAY_MS).toBeGreaterThan(QUIET_PERIOD_MS);
+      await withPage(
+        request(restlessPage),
+        async (frame, win) => {
+          await expectMessage(frame, "rendered", rendered(1));
+          const week = win.document.getElementById("week");
+          expect(week?.textContent).toBe("690.0");
+          (win.lie as () => void)();
+          // Corrected while the page goes on changing: the forced recheck, not a quiet one.
+          await waitFor("the wrong value replaced while the page keeps changing", () => week?.textContent === "\u2014");
+          expect(week?.hasAttribute("data-tq-flag")).toBe(true);
+          const ticks = win.ticks as number;
+          await waitFor("the page still changing after the correction", () => (win.ticks as number) > ticks + 3);
+          expect(win.document.documentElement.hasAttribute("data-tq-flag-hide")).toBe(false);
         },
         "view",
       );

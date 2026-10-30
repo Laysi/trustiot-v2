@@ -5,8 +5,10 @@
 // `Number.parse*`, `Intl.DateTimeFormat`, `Date.prototype.getTime`, and so on. If a page could
 // replace one of those, the page's own `tq.text` and the comparison would format through the same
 // replacement and agree on a wrong number. Freezing the intrinsics closes that: after `harden`,
-// nothing a page does changes what the comparison computes, except changing the DOM, which the
-// comparison re-reads.
+// replacing a built-in does not change what the comparison computes from a given DOM; a changed
+// DOM is what the next comparison reads. What the comparison then does (a corrected value, a flag,
+// a hidden document) lives in the page's own document, so it is not an enforcement boundary:
+// enforcing the outcome is the host page's job (Laysi/trustiot-v2#462).
 //
 // Scope: the standard-library objects reachable from the intrinsics seeded below, transitively, and
 // the global bindings that point at them. The comparison reads an intrinsic both ways — through the
@@ -130,18 +132,43 @@ function intrinsics(): { all: Set<object>; prototypes: Set<object> } {
       if (typeof value === "function") seedPrototype(value);
     }
   }
-  // The iterator prototypes: `[][Symbol.iterator]()` reaches %ArrayIteratorPrototype% and, above
-  // it, %IteratorPrototype%. Freezing them keeps `for...of` and spread genuine.
-  const arrayIterator = add(getPrototypeOf(add([][Symbol.iterator]()) ?? {}));
-  if (arrayIterator !== null) {
-    all.add(arrayIterator);
-    prototypes.add(arrayIterator);
-    const iterator = add(getPrototypeOf(arrayIterator));
-    if (iterator !== null) {
-      all.add(iterator);
-      prototypes.add(iterator);
+  // The prototypes no global names, reached from an object that has them: every iterator's
+  // (%ArrayIteratorPrototype%, %MapIteratorPrototype%, %SetIteratorPrototype%,
+  // %StringIteratorPrototype%, %RegExpStringIteratorPrototype%, the iterator helpers', and above
+  // them %IteratorPrototype%), and the generator and async function ones (%GeneratorFunction.prototype%,
+  // %GeneratorPrototype%, their async counterparts, %AsyncIteratorPrototype%, %AsyncFunction.prototype%).
+  // Freezing them keeps `for...of`, spread, `matchAll` and generators genuine. One the realm does
+  // not have is skipped.
+  const seedChain = (instance: unknown) => {
+    for (let object = add(getPrototypeOf(add(instance) ?? objectPrototype)); object !== null; ) {
+      if (object === objectPrototype || object === Function.prototype) break;
+      all.add(object);
+      prototypes.add(object);
+      object = add(getPrototypeOf(object));
     }
-  }
+  };
+  const attempt = (make: () => unknown) => {
+    try {
+      seedChain(make());
+    } catch {
+      // Not in this realm: nothing to freeze.
+    }
+  };
+  attempt(() => [][Symbol.iterator]());
+  attempt(() => new Map()[Symbol.iterator]());
+  attempt(() => new Set()[Symbol.iterator]());
+  attempt(() => ""[Symbol.iterator]());
+  attempt(() => "".matchAll(/(?:)/g));
+  attempt(() => (function* () {})());
+  attempt(() => (async function* () {})());
+  attempt(() => function* () {});
+  attempt(() => async function* () {});
+  attempt(() => async () => {});
+  attempt(() =>
+    (scope.Iterator as { from(value: unknown): unknown } | undefined)?.from({ next: () => ({ done: true }) }),
+  );
+  attempt(() => ([][Symbol.iterator]() as unknown as { map(f: unknown): unknown }).map((value: unknown) => value));
+  for (const name of ["Iterator", "AsyncIterator"]) seedPrototype(scope[name]);
 
   // Close the set over the objects the seeds reference: prototypes, and the values of their own
   // properties (so a prototype's methods and a constructor's static methods are frozen too). The

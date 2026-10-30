@@ -6,15 +6,31 @@ import { readFileSync } from "node:fs";
 import { Window } from "happy-dom";
 
 import {
+  colorAlpha,
   compareDocument,
   concealsText,
+  type Linear,
   literalOf,
+  MAX_SLICE_STRETCH,
+  MAX_TEXT_STRETCH,
+  MAX_TEXT_TURN_DEG,
+  MIN_LETTER_SPACING_EM,
+  MIN_TEXT_ALPHA,
+  MIN_TEXT_SIZE_PX,
+  misreads,
   parseCssContent,
+  stretchOf,
   verdictOf,
   withoutNumbers,
 } from "../src/compare.ts";
-import { captureDom, type DomAccess, type DomWindow } from "../src/dom.ts";
-import { type CheckRequest, CheckRequestSchema, type CheckVerdict, MAX_PROBLEMS } from "../src/protocol.ts";
+import { type Box, captureDom, type DomAccess, type DomWindow, type Matrix } from "../src/dom.ts";
+import {
+  type CheckRequest,
+  CheckRequestSchema,
+  type CheckVerdict,
+  MAX_PROBLEMS,
+  type Problem,
+} from "../src/protocol.ts";
 import { layoutDom } from "./harness.ts";
 
 const request: CheckRequest = CheckRequestSchema.parse({
@@ -29,6 +45,11 @@ interface Options {
   /** Computed style values; `undefined` falls back to happy-dom's. */
   style?: Style;
   animations?: number;
+  /**
+   * Judge as a browser with layout would, with these boxes (`box`, by default every element 20 × 16)
+   * and SVG screen matrices (`matrix`, by default none, so each element's computed transform counts).
+   */
+  layout?: { box?: (element: Element, root: boolean) => Box | undefined; matrix?: (element: Element) => Matrix | null };
 }
 
 const windows: Window[] = [];
@@ -47,13 +68,22 @@ function documentOf(body: string): { win: DomWindow; dom: DomAccess } {
 
 function judge(body: string, options: Options = {}): CheckVerdict {
   const { dom } = documentOf(body);
+  const layout = options.layout;
   const access: DomAccess = {
     ...dom,
     style: (element, pseudo, property) =>
       options.style?.(element, pseudo, property) ?? dom.style(element, pseudo, property),
     liveAnimations: () => options.animations ?? 0,
+    ...(layout === undefined
+      ? {}
+      : {
+          box: (element: Element) =>
+            layout.box?.(element, element === dom.documentElement()) ?? { left: 0, top: 0, width: 20, height: 16 },
+          scrollSize: () => ({ scrollWidth: 20, clientWidth: 20, scrollHeight: 16, clientHeight: 16 }),
+          screenMatrix: (element: Element) => layout.matrix?.(element) ?? null,
+        }),
   };
-  return verdictOf(compareDocument(access, model, "zh-TW"));
+  return verdictOf(compareDocument(access, model, "zh-TW", layout !== undefined));
 }
 
 const problems = (verdict: CheckVerdict) => (verdict.verdict === "failed" ? verdict.problems : []);
@@ -128,7 +158,12 @@ describe("text marks", () => {
       ({
         firstChild: () => null,
         nextSibling: () => null,
+        parentNode: () => null,
         nodeType: () => 1,
+        localName: () => "b",
+        namespaceURI: () => "http://www.w3.org/1999/xhtml",
+        getAttribute: () => null,
+        screenMatrix: () => null,
         style: (_e: Element, _p: string | null, property: string) => over.style?.[property] ?? "",
         box: () => ({ left: 0, top: 0, width: over.box?.width ?? 20, height: over.box?.height ?? 16 }),
         scrollSize: () => over.scroll ?? { scrollWidth: 20, clientWidth: 20, scrollHeight: 16, clientHeight: 16 },
@@ -152,6 +187,272 @@ describe("text marks", () => {
     // An overflow box whose content fits (no overflow) is not clipped, so it passes.
     expect(concealsText(stub({ style: { "overflow-x": "hidden" } }), element, true)).toBe(false);
     expect(concealsText(stub({}), element, true)).toBe(false);
+  });
+});
+
+describe("layout is the caller's fact, not the page's", () => {
+  const page =
+    '<p data-tq="f|week_kwh">690</p><svg>' +
+    '<rect data-tq="c|daily_energy|kwh|0" data-tq-chart="bars" data-tq-channel="height" height="10"/></svg>';
+  const emptyRoot =
+    (width: number, height: number) =>
+    (_element: Element, root: boolean): Box | undefined =>
+      root ? { left: 0, top: 0, width, height } : undefined;
+
+  test("with layout, plain marks in a root with an area pass", () => {
+    expect(marks(judge(page, { layout: {} }))).toEqual([
+      { reference: "f|week_kwh", value: 690 },
+      { reference: "c|daily_energy|kwh|0", value: 120.5 },
+    ]);
+  });
+
+  test("with layout, a root box without an area makes every mark a finding", () => {
+    for (const [width, height] of [
+      [0, 0],
+      [1200, 0],
+      [0, 400],
+    ] as const) {
+      expect(problems(judge(page, { layout: { box: emptyRoot(width, height) } }))).toEqual([
+        { kind: "mismatch", reference: "f|week_kwh", value: 690, tag: "p" },
+        { kind: "mark_geometry", reference: "c|daily_energy|kwh|0", channel: "height" },
+      ]);
+    }
+  });
+
+  test("without layout (a unit test's DOM) the root's empty box decides nothing", () => {
+    expect(problems(judge(page))).toEqual([]);
+  });
+});
+
+/** Computed styles of elements by id: `{ week: { color: "..." } }`; a pseudo-element's as `"week::first-letter"`. */
+type Table = Record<string, Record<string, string>>;
+
+const tables = (...list: Table[]) => list;
+
+function styles(table: Table): Style {
+  return (element, pseudo, property) => table[`${element.id}${pseudo ?? ""}`]?.[property];
+}
+
+const mismatch = (tag: "b" | "text" = "b"): Problem[] => [
+  { kind: "mismatch", reference: "f|week_kwh", value: 690, tag },
+];
+
+describe("faint text", () => {
+  test("colorAlpha reads the alpha of every colour syntax a browser serializes", () => {
+    const cases: [string, number | null][] = [
+      ["rgb(31, 41, 51)", 1],
+      ["rgba(0, 0, 0, 0)", 0],
+      ["rgba(0, 0, 0, 0.05)", 0.05],
+      ["rgb(0 0 0 / 40%)", 0.4],
+      ["hsl(120 50% 50% / 0.5)", 0.5],
+      ["hwb(120 10% 10% / 0)", 0],
+      ["lab(50 20 30 / 0)", 0],
+      ["lch(50 20 30)", 1],
+      ["oklab(0.5 0.1 0.1 / 0.25)", 0.25],
+      ["oklch(0.5 0.1 120 / none)", 0],
+      ["color(display-p3 1 0 0 / 0.02)", 0.02],
+      ["color(srgb 1 0 0)", 1],
+      ["COLOR(SRGB 1 0 0 / 1E-3)", 0.001],
+      ["#000", 1],
+      ["#0008", 0x88 / 255],
+      ["#00000000", 0],
+      ["transparent", 0],
+      ["none", 0],
+      ["context-fill", 0],
+      // Fail closed: what the comparison cannot read paints nothing.
+      ["rgb(0 0 0 / calc(1))", 0],
+      ["rgba(0, 0, 0, 0.5, 1)", 0],
+      ['url("#gradient")', 0],
+      ["color-mix(in srgb, red, blue)", 0],
+      // A unit DOM leaves keywords as written: nothing to read.
+      ["red", null],
+      ["currentColor", null],
+      ["", null],
+    ];
+    for (const [value, alpha] of cases) {
+      expect([value, colorAlpha(value)]).toEqual([value, alpha]);
+    }
+  });
+
+  test("a mark painted fainter than MIN_TEXT_ALPHA, through its colours, opacity and ancestors, is a mismatch", () => {
+    expect(MIN_TEXT_ALPHA).toBe(0.1);
+    const page = '<div id="card"><p id="line">本週 <b id="week" data-tq="f|week_kwh">690</b></p></div>';
+    for (const table of tables(
+      { week: { color: "lab(50 20 30 / 0)" } },
+      { week: { color: "oklch(0.5 0.1 120 / 0.05)" } },
+      { week: { color: "color(display-p3 0 0 0 / 0.02)" } },
+      { week: { "-webkit-text-fill-color": "rgba(0, 0, 0, 0)" } },
+      // 0.3 × 0.3 = 0.09: each alone is visible, together they are not.
+      { card: { opacity: "0.3" }, week: { opacity: "0.3" } },
+      { line: { filter: "blur(0px) opacity(0.05)" } },
+      { "week::first-letter": { opacity: "0.05" } },
+      { "week::first-line": { "-webkit-text-fill-color": "rgb(0 0 0 / 5%)" } },
+    )) {
+      expect([table, problems(judge(page, { style: styles(table) }))]).toEqual([table, mismatch()]);
+    }
+    for (const table of tables(
+      { week: { color: "oklch(0.5 0.1 120 / 0.2)" } },
+      { week: { color: "rgb(0 0 0 / 40%)" } },
+      { card: { opacity: "0.5" } },
+      { line: { filter: "drop-shadow(rgba(0, 0, 0, 0.5) 0px 1px 2px)" } },
+    )) {
+      expect([table, problems(judge(page, { style: styles(table) }))]).toEqual([table, []]);
+    }
+  });
+
+  test("SVG text is painted with its fill and fill-opacity", () => {
+    const page = '<svg><text id="week" data-tq="f|week_kwh">690</text></svg>';
+    for (const table of tables(
+      { week: { fill: "rgb(0, 0, 0)", "fill-opacity": "0.05" } },
+      { week: { fill: "none" } },
+      { week: { fill: 'url("#gradient")' } },
+    )) {
+      expect([table, problems(judge(page, { style: styles(table) }))]).toEqual([table, mismatch("text")]);
+    }
+    expect(problems(judge(page, { style: styles({ week: { fill: "rgb(0, 0, 0)", "fill-opacity": "0.5" } }) }))).toEqual(
+      [],
+    );
+  });
+});
+
+describe("turned, mirrored and stretched text", () => {
+  const turn = (degrees: number, scale = 1): Linear => {
+    const radians = (degrees * Math.PI) / 180;
+    return [
+      scale * Math.cos(radians),
+      scale * Math.sin(radians),
+      -scale * Math.sin(radians),
+      scale * Math.cos(radians),
+    ];
+  };
+
+  test("misreads allows translation, uniform scaling and a slant up to MAX_TEXT_TURN_DEG, nothing else", () => {
+    expect(MAX_TEXT_TURN_DEG).toBe(45);
+    expect(MAX_TEXT_STRETCH).toBe(4);
+    for (const allowed of [turn(0), turn(0, 3), turn(0, 0.5), turn(-45), turn(45), turn(-30, 2)]) {
+      expect([allowed, misreads(allowed)]).toEqual([allowed, false]);
+    }
+    // skewX(45deg) stretches by 2.6, under the limit.
+    expect(misreads([1, 0, 1, 1])).toBe(false);
+    for (const refused of [
+      turn(46),
+      turn(-90),
+      turn(180),
+      [-1, 0, 0, 1] as Linear,
+      [1, 0, 0, -1] as Linear,
+      [5, 0, 0, 1] as Linear,
+      [0, 0, 0, 1] as Linear,
+      [Number.NaN, 0, 0, 1] as Linear,
+      null,
+    ]) {
+      expect([refused, misreads(refused)]).toEqual([refused, true]);
+    }
+    expect(stretchOf(turn(30, 2))).toBeCloseTo(1, 9);
+    expect(stretchOf([3, 0, 0, 1])).toBeCloseTo(3, 9);
+  });
+
+  test("a transform of the mark or an ancestor that mirrors, turns or stretches it is a mismatch", () => {
+    const page = '<div id="card"><p id="line">本週 <b id="week" data-tq="f|week_kwh">690</b></p></div>';
+    for (const table of tables(
+      { week: { transform: "matrix(-1, 0, 0, 1, 0, 0)" } },
+      { card: { rotate: "180deg" } },
+      { line: { rotate: "x 180deg" } },
+      { week: { rotate: "-90deg" } },
+      { week: { rotate: "0.5turn" } },
+      { week: { scale: "-1 1" } },
+      { week: { transform: "matrix(5, 0, 0, 1, 0, 0)" } },
+      // Each 60° about y alone is a stretch of 2; composed in 3D they turn the text over (120°).
+      {
+        week: {
+          rotate: "y 60deg",
+          transform: "matrix3d(0.5, 0, -0.866025, 0, 0, 1, 0, 0, 0.866025, 0, 0.5, 0, 0, 0, 0, 1)",
+        },
+      },
+      // rotateY(180deg)
+      { line: { transform: "matrix3d(-1, 0, 0, 0, 0, 1, 0, 0, 0, 0, -1, 0, 0, 0, 0, 1)" } },
+      // Perspective, a negative w, preserve-3d: no flat picture describes them.
+      { week: { transform: "matrix3d(1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, -0.01, 0, 0, 0, 1)" } },
+      { week: { transform: "matrix3d(1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, -1)" } },
+      { card: { perspective: "100px" } },
+      { card: { "transform-style": "preserve-3d" } },
+      // Unreadable (a browser computes a matrix): fail closed.
+      { week: { transform: "rotate(180deg)" } },
+      { "week::first-letter": { transform: "matrix(-1, 0, 0, 1, 0, 0)" } },
+    )) {
+      expect([table, problems(judge(page, { style: styles(table) }))]).toEqual([table, mismatch()]);
+    }
+    for (const table of tables(
+      { week: { transform: "matrix(0.707107, -0.707107, 0.707107, 0.707107, 0, 0)" } },
+      { card: { transform: "matrix(2, 0, 0, 2, 40, 10)" } },
+      { week: { rotate: "1 1 0 45deg" } },
+      { line: { transform: "matrix3d(1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1)" } },
+      { card: { perspective: "none", "transform-style": "flat" } },
+    )) {
+      expect([table, problems(judge(page, { style: styles(table) }))]).toEqual([table, []]);
+    }
+  });
+
+  test("text drawn smaller than MIN_TEXT_SIZE_PX, by its font size, a scale or zoom, is a mismatch", () => {
+    expect(MIN_TEXT_SIZE_PX).toBe(2);
+    const page = '<div id="card"><b id="week" data-tq="f|week_kwh">690</b></div>';
+    for (const table of tables(
+      { week: { "font-size": "1px" } },
+      { card: { transform: "matrix(0.01, 0, 0, 0.01, 0, 0)" } },
+      { card: { zoom: "0.1" } },
+      { card: { zoom: "0" } },
+    )) {
+      expect([table, problems(judge(page, { style: styles(table) }))]).toEqual([table, mismatch()]);
+    }
+    for (const table of tables({ card: { zoom: "0.5" } }, { card: { transform: "matrix(0.25, 0, 0, 0.25, 0, 0)" } })) {
+      expect([table, problems(judge(page, { style: styles(table) }))]).toEqual([table, []]);
+    }
+  });
+
+  test("with layout, an SVG mark's screen matrix decides, ancestors and viewBox included", () => {
+    const page = '<svg><g><text id="week" data-tq="f|week_kwh">690</text></g></svg>';
+    const at =
+      (m: Linear) =>
+      (element: Element): Matrix | null =>
+        element.id === "week" ? { a: m[0], b: m[1], c: m[2], d: m[3], e: 10, f: 20 } : null;
+    expect(problems(judge(page, { layout: { matrix: at([-1, 0, 0, 1]) } }))).toEqual(mismatch("text"));
+    expect(problems(judge(page, { layout: { matrix: at(turn(180, 2)) } }))).toEqual(mismatch("text"));
+    expect(problems(judge(page, { layout: { matrix: at(turn(-45, 1.5)) } }))).toEqual([]);
+    // A viewBox shrinking 16px text to 0.8px.
+    expect(problems(judge(page, { layout: { matrix: at([0.05, 0, 0, 0.05]) } }))).toEqual(mismatch("text"));
+    // Without layout there is no screen matrix: the computed transforms count.
+    expect(problems(judge(page))).toEqual([]);
+  });
+
+  test("SVG text that places its glyphs one by one is a mismatch", () => {
+    for (const page of [
+      '<svg><text data-tq="f|week_kwh" x="30 20 10">690</text></svg>',
+      '<svg><text data-tq="f|week_kwh" x="0" dx="0,-12,-12">690</text></svg>',
+      '<svg><text data-tq="f|week_kwh" rotate="180">690</text></svg>',
+      '<svg><text data-tq="f|week_kwh" textLength="2">690</text></svg>',
+      '<svg><text x="10 20 30"><tspan data-tq="f|week_kwh">690</tspan></text></svg>',
+      '<svg><text><textPath href="#p" data-tq="f|week_kwh">690</textPath></text></svg>',
+    ]) {
+      const tag = page.includes("<tspan") ? "tspan" : page.includes("<textPath") ? "textPath" : "text";
+      expect([page, problems(judge(page))]).toEqual([
+        page,
+        [{ kind: "mismatch", reference: "f|week_kwh", value: 690, tag }],
+      ]);
+    }
+    // d3's tick labels: one x, y and dy each.
+    expect(problems(judge('<svg><text data-tq="f|week_kwh" x="0" y="9" dy="0.71em">690</text></svg>'))).toEqual([]);
+  });
+
+  test("letter spacing tighter than MIN_LETTER_SPACING_EM is a mismatch", () => {
+    expect(MIN_LETTER_SPACING_EM).toBe(-0.2);
+    const page = '<b id="week" data-tq="f|week_kwh">690</b>';
+    const spaced = (spacing: string, pseudo = "") =>
+      styles({ week: { "font-size": "16px" }, [`week${pseudo}`]: { "font-size": "16px", "letter-spacing": spacing } });
+    expect(problems(judge(page, { style: spaced("-4px") }))).toEqual(mismatch());
+    expect(problems(judge(page, { style: spaced("-8px", "::first-letter") }))).toEqual(mismatch());
+    expect(problems(judge(page, { style: spaced("-0.5em") }))).toEqual(mismatch());
+    expect(problems(judge(page, { style: spaced("-2px") }))).toEqual([]);
+    expect(problems(judge(page, { style: spaced("normal") }))).toEqual([]);
+    expect(problems(judge(page, { style: spaced("3px") }))).toEqual([]);
   });
 });
 
@@ -333,7 +634,7 @@ describe("content the check cannot read, and animations", () => {
   test("an open shadow root", () => {
     const { win, dom } = documentOf('<div id="host"></div>');
     win.document.getElementById("host")?.attachShadow({ mode: "open" });
-    expect(problems(verdictOf(compareDocument(dom, model, "zh-TW")))).toEqual([
+    expect(problems(verdictOf(compareDocument(dom, model, "zh-TW", false)))).toEqual([
       { kind: "unsupported_content", content: "shadow_root" },
     ]);
   });
@@ -356,7 +657,7 @@ describe("size limits", () => {
       fragment.appendChild(item);
     }
     win.document.body.appendChild(fragment);
-    expect(problems(verdictOf(compareDocument(dom, model, "zh-TW")))).toEqual([
+    expect(problems(verdictOf(compareDocument(dom, model, "zh-TW", false)))).toEqual([
       { kind: "too_large", limit: "marks", max: 10_000 },
     ]);
   });
@@ -409,6 +710,33 @@ describe("geometry", () => {
     expect(
       problems(judge('<svg><rect data-tq="f|week_kwh" data-tq-chart="pie" data-tq-channel="angle" width="5"/></svg>')),
     ).toEqual([{ kind: "mark_geometry", reference: "f|week_kwh", channel: "angle" }]);
+  });
+
+  test("a pie scaled more in one direction than another (past MAX_SLICE_STRETCH) shows other angles", () => {
+    // meter_usage: 310.5, 298.25, 615; d3.arc's slices, clockwise from 12 o'clock.
+    const values = [310.5, 298.25, 615];
+    const total = values.reduce((sum, value) => sum + value, 0);
+    let start = 0;
+    const slices = values.map((value, i) => {
+      const end = start + (2 * Math.PI * value) / total;
+      const point = (angle: number) => `${100 * Math.sin(angle)},${-100 * Math.cos(angle)}`;
+      const large = end - start > Math.PI ? 1 : 0;
+      const d = `M${point(start)}A100,100,0,${large},1,${point(end)}L0,0Z`;
+      start = end;
+      return `<path data-tq="c|meter_usage|usage|${i}" data-tq-chart="share" data-tq-channel="angle" d="${d}"/>`;
+    });
+    const page = `<svg><g>${slices.join("")}</g></svg>`;
+    const scaled =
+      (a: number, d: number) =>
+      (element: Element): Matrix | null =>
+        element.localName === "path" ? { a, b: 0, c: 0, d, e: 120, f: 120 } : null;
+    expect(MAX_SLICE_STRETCH).toBe(1.01);
+    expect(problems(judge(page, { layout: { matrix: scaled(1.5, 1.5) } }))).toEqual([]);
+    // Mirrored or turned, a pie still shows its angles.
+    expect(problems(judge(page, { layout: { matrix: scaled(-1, 1) } }))).toEqual([]);
+    expect(problems(judge(page, { layout: { matrix: scaled(2, 1) } }))).toEqual(
+      [0, 1, 2].map((i) => ({ kind: "mark_geometry", reference: `c|meter_usage|usage|${i}`, channel: "angle" })),
+    );
   });
 
   test("axis ticks inside the column's range and on a line pass", () => {

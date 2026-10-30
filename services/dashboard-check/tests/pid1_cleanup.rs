@@ -288,7 +288,8 @@ mod inside {
     use std::process::{Command, ExitCode, Stdio};
     use std::time::{Duration, Instant};
 
-    use dashboard_check::cleanup::Cleanup;
+    use dashboard_check::cleanup::{Cleanup, ScopeError};
+    use dashboard_check::config::CleanupScope;
 
     use super::ROLE;
 
@@ -307,11 +308,19 @@ mod inside {
         }
         let work = Path::new("/tmp/work");
         std::fs::create_dir_all(work).expect("create the work directory");
-        let cleanup = Cleanup::for_this_process(work);
-        if !cleanup.whole_container() {
-            println!("FAIL: the cleanup does not cover the container as PID 1");
+        // As PID 1 the browser's cleanup alone is refused, and the container's is the one.
+        let browser = Cleanup::for_this_process(work, CleanupScope::Browser).err();
+        if browser != Some(ScopeError::Init) {
+            println!("FAIL: cleanup `browser` as PID 1 gave {browser:?}, not ScopeError::Init");
             return ExitCode::FAILURE;
         }
+        let cleanup = match Cleanup::for_this_process(work, CleanupScope::Container) {
+            Ok(cleanup) if cleanup.whole_container() => cleanup,
+            other => {
+                println!("FAIL: the cleanup does not cover the container as PID 1: {other:?}");
+                return ExitCode::FAILURE;
+            }
+        };
         let child = Command::new(std::env::current_exe().expect("this binary"))
             .env(ROLE, "linger")
             .stdin(Stdio::null())
