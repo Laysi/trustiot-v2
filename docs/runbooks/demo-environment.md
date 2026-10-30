@@ -350,8 +350,8 @@ status_and_keys() {
 | 2. 建立展示租戶 | `POST /api/identity/v1/tenants`，body `{"name"}` | 平台管理員本人 | **不是冪等的**：每次 201 都是一個新租戶，而且平台管理員不會自動成為成員、第 1 步看不到它。重跑前先確認沒有建過（第 1 步的 `tenants`，或以 superuser 唯讀查 `identity.tenants`）；回應遺失時不要重送，先查 |
 | 3. 自己成為成員 | `PUT /api/identity/v1/platform/tenants/<租戶 ID>/members`，body `{"email", "role": "admin"}`（email 是第 1 步回的自己的地址） | 平台管理員本人 | 冪等：角色相同時 200、什麼都不寫 |
 | 4. 切到展示租戶 | `PUT /api/identity/v1/sessions/current/tenant`，body `{"tenant_id"}` | 成員 | 冪等；之後這個 session 的每個請求都帶展示租戶與在那裡的角色 |
-| 5. 綁定閘道器 | `PUT /api/assets/v1/platform/gateways/<硬體 ID>/binding`，body `{"tenant_id"}` | 平台管理員本人 | 冪等：已綁在同一個租戶時 200、什麼都不寫；別的租戶握有時 409。先以 `GET /api/assets/v1/platform/gateways/<硬體 ID>` 確認它在設備池（404 是還沒出廠登錄） |
-| 6. 建立型號 | `POST /api/assets/v1/device-models`，body `{"name", "points"}` | 租戶 editor 以上 | 名稱重複 409 `device_model.name_taken`：先以 `GET /api/assets/v1/device-models` 找同名的型號 |
+| 5. 綁定閘道器 | `PUT /api/assets/v1/platform/gateways/<硬體 ID>/binding`，body `{"tenant_id"}` | 平台管理員本人 | 冪等：已綁在同一個租戶時 200、什麼都不寫；別的租戶握有時 409。先以 `GET /api/assets/v1/platform/gateways/<硬體 ID>` 確認它在設備池（404 是還沒出廠登錄）。剛建立的租戶回 422 `gateway_binding.tenant_unknown`：資產服務還沒收到 `identity.tenant_created`，等幾秒以同一個 `tenant_id` 重送，**不要**重做第 2 步（`GET /api/assets/v1/tenant` 回 200 之後就收到了） |
+| 6. 建立型號 | `POST /api/assets/v1/device-models`，body `{"name", "points"}` | 租戶 editor 以上 | 名稱重複 409 `device_model.name_taken`：先以 `GET /api/assets/v1/device-models` 找同名的型號。503 `device_model.tenant_not_ready` 同第 5 步的 422：等幾秒重送，不要重做第 2 步 |
 | 7. 建立設備 | `POST /api/assets/v1/devices`，body `{"name", "hardware_id", "model_id", "transport", "host", "port", "unit_id", "poll_interval_ms"}` | 租戶 editor 以上 | 名稱重複 409 `device.name_taken`：先以 `GET /api/assets/v1/devices` 找同名的設備 |
 | 8. 確認 | `GET /api/gateway-ops/v1/gateways` | 租戶 viewer 以上 | 只讀 |
 
