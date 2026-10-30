@@ -190,11 +190,14 @@ Per service that may use Postgres, what one replica opens at most:
   otherPools      every other pool the replica opens, at its largest, whatever role it logs in as:
                   ai-gateway       none: the settings pool is its only one
                   assets           PLATFORM_CONNECTIONS (its platform role)
-                  assistant        none: only the service role's pool (Laysi/trustiot-v2#592)
-                  certs           REGISTRATION_CONNECTIONS (its platform role)
+                  assistant        PLATFORM_CONNECTIONS (its platform role, the purge's,
+                                   Laysi/trustiot-v2#645)
+                  certs            PLATFORM_CONNECTIONS (its platform role)
                   identity         the tenant, login, login send, delegation and event log pools
                                    as identity_app (16), and the event log's pool as
                                    identity_platform, its consumed producers plus 2 (5)
+                  gateway-ops      PLATFORM_CONNECTIONS (its platform role; Laysi/trustiot-v2#721)
+                  ingest           PLATFORM_CONNECTIONS (its platform role; Laysi/trustiot-v2#642)
                   telemetry-query  EVENT_READER_CONNECTIONS (its platform role)
 A service that lists postgres under mesh.calls without an entry here fails the render: give it one
 when it starts using Postgres. JSON, not YAML, so that each service's Rust test reads this very
@@ -205,9 +208,11 @@ these numbers differ.
 {
   "ai-gateway": { "maxConnections": { "min": 2, "max": 32 }, "otherPools": 0 },
   "assets": { "maxConnections": { "min": 2, "max": 100 }, "otherPools": 4 },
-  "assistant": { "maxConnections": { "min": 2, "max": 100 }, "otherPools": 0 },
+  "assistant": { "maxConnections": { "min": 4, "max": 100 }, "otherPools": 2 },
   "certs": { "maxConnections": { "min": 2, "max": 100 }, "otherPools": 4 },
+  "gateway-ops": { "maxConnections": { "min": 9, "max": 100 }, "otherPools": 4 },
   "identity": { "maxConnections": { "min": 3, "max": 100 }, "otherPools": 21 },
+  "ingest": { "maxConnections": { "min": 3, "max": 100 }, "otherPools": 4 },
   "telemetry-query": { "maxConnections": { "min": 2, "max": 100 }, "otherPools": 2 }
 }
 {{- end -}}

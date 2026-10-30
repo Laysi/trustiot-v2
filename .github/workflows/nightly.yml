@@ -54,19 +54,21 @@ on:
       # What goes into the nightly's Rust images (scripts/nightly/image-cache.ts, NIGHTLY_IMAGES):
       # the workspace, the toolchain, the build scripts and every local crate tools/migrate,
       # services/identity, services/assets, services/ai-gateway, services/telemetry-query,
-      # services/certs, services/assistant and services/dashboard-check build from, plus the files
-      # tools/migrate compiles in with #[path], and the frontend files the dashboard check's image
-      # packs the sandbox build of (STATIC_SITE_INPUTS; scripts/nightly/image-cache.test.ts keeps
-      # this list complete).
+      # services/certs, services/assistant, services/ingest, services/gateway-ops and
+      # services/dashboard-check build from, plus the files tools/migrate compiles in with #[path],
+      # and the frontend files the dashboard check's image packs the sandbox build of
+      # (STATIC_SITE_INPUTS; scripts/nightly/image-cache.test.ts keeps this list complete).
       - Cargo.toml
       - Cargo.lock
       - rust-toolchain.toml
       - deploy/images/rust-binary.Containerfile
       - scripts/**
       - crates/ai-clients/**
+      - crates/ai-gateway-api/**
       - crates/ca-keys/**
       - crates/contract/**
       - crates/identity-keys/**
+      - crates/mqtt-client/**
       - crates/outbox/**
       - crates/protocol/**
       - crates/service-kit/**
@@ -76,10 +78,14 @@ on:
       - factory/workstation/**
       # A dev-dependency of services/telemetry-query (tests/semantic.rs loads the lab dataset),
       # and what it depends on. services/ingest also holds the files tools/migrate compiles in
-      # with #[path] (src/retention.rs, src/rollup.rs).
+      # with #[path] (src/retention.rs, src/rollup.rs), and since Laysi/trustiot-v2#642 it is the
+      # source of the ingest image too (listed once, here).
       - tools/lab-dataset/**
       - edge/agent/**
       - services/ingest/**
+      # tools/migrate compiles in gateway-ops' schema list with #[path] (src/schema.rs), and since
+      # Laysi/trustiot-v2#721 it is the source of the gateway-ops image too.
+      - services/gateway-ops/**
       - deploy/chart/**
       - deploy/cloudnative-pg/**
       - deploy/images/postgres/**
@@ -90,6 +96,8 @@ on:
       - deploy/images/telemetry-query/**
       - deploy/images/certs/**
       - deploy/images/assistant/**
+      - deploy/images/ingest/**
+      - deploy/images/gateway-ops/**
       - deploy/images/dashboard-check/**
       - deploy/istio/**
       - tools/migrate/**
@@ -199,11 +207,17 @@ jobs:
     # the broker to open its gateway port after one restart (300 seconds), a few kubectl auth
     # can-i questions, and no image: at most 12 minutes per shape, 24 for both, usually one to
     # three minutes per shape (not measured).
+    # Laysi/trustiot-v2#642 adds the ingest image (one more cold build on the services'
+    # dependencies) and per shape its rollout, one query of pg_stat_activity and two ClickHouse
+    # queries in the pod, with no request to it.
+    # Laysi/trustiot-v2#721 adds the gateway-ops image (one more cold build on the services'
+    # dependencies) and per shape its rollout and one query of pg_stat_activity, with no request
+    # to it.
     # Laysi/trustiot-v2#150 adds the dashboard check's image (one more cold build on the same
     # dependencies, a frontend build, and Chromium with its libraries from snapshot.debian.org) and,
     # on the SaaS shape, its isolation check (three probe containers of at most a few minutes each)
     # and two requests to the assistant's dashboard API per shape: 10 more minutes.
-    timeout-minutes: 120
+    timeout-minutes: 130
     permissions:
       contents: read
     env:
@@ -237,7 +251,7 @@ jobs:
         with:
           tools: bun helm k3d kubectl
       # The Rust images (NIGHTLY_IMAGES in scripts/nightly/image-cache.ts: deploy/images/migrate,
-      # identity, assets, ai-gateway, telemetry-query, certs, assistant and dashboard-check) are reused while nothing that goes
+      # identity, assets, ai-gateway, telemetry-query, certs, assistant, ingest, gateway-ops and dashboard-check) are reused while nothing that goes
       # into them changed: the key is a digest of the git object hashes of every input of their
       # builds. One entry holds every tarball and the programs built with them (certs-ca,
       # NIGHTLY_PROGRAMS), and it is saved only with all of them. Exact key only, no restore-keys:

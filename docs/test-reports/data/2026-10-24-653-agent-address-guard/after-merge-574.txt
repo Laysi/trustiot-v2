@@ -1,0 +1,92 @@
+# 2026-10-27, the tree of merge commit 2e224402 (main 509c3f1f, #574, merged in); CI=1, so container tests run
+# each check: its summary lines, then `== <name>: exit <status>`
+$ cargo fmt --all --check
+$ cargo test --locked -p agent
+$ cargo test --locked -p lab-dataset
+$ cargo test --locked -p repo-check
+$ cargo clippy --locked --workspace --all-targets -- -D warnings
+$ cargo build --locked --target aarch64-unknown-linux-gnu -p agent
+$ CARGO_ZIGBUILD_ZIG_PATH="$(proto bin zig --reporter text | tail -n 1)" PATH="$(dirname "$(proto bin cargo-zigbuild --reporter text | tail -n 1)"):$PATH" cargo zigbuild --locked --target aarch64-unknown-linux-gnu -p agent
+== fmt
+== fmt: exit 0
+== agent
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 16.87s
+     Running unittests src/lib.rs (<host copy>/target/debug/deps/agent-d1b98ca668915283)
+test modbus::rtu::tests::an_echo_of_the_request_is_skipped ... ok
+test modbus::rtu::tests::a_frame_of_the_unit_that_does_not_fit_is_skipped_and_remembered ... ok
+test modbus::rtu::tests::noise_before_the_answer_is_skipped ... ok
+test modbus::rtu::tests::frames_of_other_units_are_counted_and_skipped ... ok
+test result: ok. 162 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.21s
+     Running unittests src/main.rs (<host copy>/target/debug/deps/trustiot_agent-9477979689341892)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/binary.rs (<host copy>/target/debug/deps/binary-7f06c254e089c2d5)
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.02s
+     Running tests/broker.rs (<host copy>/target/debug/deps/broker-735b4aeae5f64be6)
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 10.10s
+     Running tests/dependencies.rs (<host copy>/target/debug/deps/dependencies-698701cbc69a1325)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.19s
+     Running tests/link.rs (<host copy>/target/debug/deps/link-78f7cf802dcfce41)
+test a_heartbeat_that_finds_the_queue_full_is_skipped_not_delayed ... ok
+test result: ok. 51 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+     Running tests/liveness.rs (<host copy>/target/debug/deps/liveness-13fe8623608821f9)
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/modbus_address_guard.rs (<host copy>/target/debug/deps/modbus_address_guard-5ac25c90d0bb9f90)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/modbus_fake_endpoint.rs (<host copy>/target/debug/deps/modbus_fake_endpoint-e9bd75ab8153e0cc)
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+     Running tests/modbus_rtu_converter.rs (<host copy>/target/debug/deps/modbus_rtu_converter-43daeb0dcf83dbd8)
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+     Running tests/modbus_rtu_framing.rs (<host copy>/target/debug/deps/modbus_rtu_framing-70e18b6947d50c80)
+test noise_and_frames_with_a_bad_crc_before_the_answer_are_skipped ... ok
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+     Running tests/modbus_tcp_framing.rs (<host copy>/target/debug/deps/modbus_tcp_framing-983f6a033c9716f4)
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+     Running tests/polling_recovery.rs (<host copy>/target/debug/deps/polling_recovery-b25e4ce073c38651)
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/systemd_unit.rs (<host copy>/target/debug/deps/systemd_unit-a6c6b06e98b48880)
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.09s
+     Running tests/tpm_swtpm.rs (<host copy>/target/debug/deps/tpm_swtpm-6a02c84221ca4307)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 12.48s
+     Running tests/transport.rs (<host copy>/target/debug/deps/transport-d9bc60de9ddef55d)
+test result: ok. 19 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.41s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+== agent: exit 0
+== lab-dataset
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 12.97s
+     Running unittests src/lib.rs (<host copy>/target/debug/deps/lab_dataset-5db13c871a2abf2e)
+test result: ok. 37 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+     Running tests/anomalies.rs (<host copy>/target/debug/deps/anomalies-3401a2c58bfe2b54)
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+     Running tests/clickhouse_load.rs (<host copy>/target/debug/deps/clickhouse_load-9b095e680500f83b)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 14.96s
+     Running tests/record.rs (<host copy>/target/debug/deps/record-2a44f648083f8625)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.99s
+     Running tests/rollups.rs (<host copy>/target/debug/deps/rollups-39eae477e5476902)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 8.00s
+     Running tests/synthetic_fixture.rs (<host copy>/target/debug/deps/synthetic_fixture-ba944bd759ddb102)
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+== lab-dataset: exit 0
+== repo-check
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.01s
+     Running unittests src/lib.rs (<host copy>/target/debug/deps/repo_check-cb97eb5799213f90)
+test result: ok. 18 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/repository.rs (<host copy>/target/debug/deps/repository-3bb08d58df261a4f)
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.11s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+== repo-check: exit 0
+== clippy
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 14.61s
+== clippy: exit 0
+== aarch64-plain
+warning: ring@0.17.14: Compiler family detection failed due to error: ToolNotFound: failed to find tool "aarch64-linux-gnu-gcc": No such file or directory (os error 2)
+warning: ring@0.17.14: Compiler family detection failed due to error: ToolNotFound: failed to find tool "aarch64-linux-gnu-gcc": No such file or directory (os error 2)
+warning: ring@0.17.14: Compiler family detection failed due to error: ToolNotFound: failed to find tool "aarch64-linux-gnu-gcc": No such file or directory (os error 2)
+warning: ring@0.17.14: Compiler family detection failed due to error: ToolNotFound: failed to find tool "aarch64-linux-gnu-gcc": No such file or directory (os error 2)
+error: failed to run custom build command for `ring v0.17.14`
+warning: build failed, waiting for other jobs to finish...
+== aarch64-plain: exit 101
+== aarch64-zigbuild
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 19.35s
+== aarch64-zigbuild: exit 0
+exit 0 at 21:59:27 (build host)

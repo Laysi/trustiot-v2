@@ -22,6 +22,7 @@ use std::time::Duration;
 use protocol::config::{Device, Transport};
 use tokio::sync::Mutex;
 
+use super::address::AddressGuard;
 use super::pdu::Read;
 use super::tcp::TcpConnection;
 use super::{Connection, Exchange};
@@ -82,16 +83,34 @@ impl<C: Disconnect + Send> Disconnect for SharedConnection<C> {
 #[derive(Debug)]
 pub struct Endpoints {
     connect_timeout: Duration,
+    /// The address guard of every connection it creates (`address.rs`).
+    guard: AddressGuard,
     connections: HashMap<(Transport, String, u16), SharedConnection>,
 }
 
 impl Endpoints {
-    /// No endpoints yet; connections it creates wait at most `connect_timeout` to connect.
+    /// No endpoints yet; connections it creates wait at most `connect_timeout` to connect, and
+    /// connect only to addresses the address guard allows ([`TcpConnection`]).
     pub fn new(connect_timeout: Duration) -> Self {
         Self {
             connect_timeout,
+            guard: AddressGuard::default(),
             connections: HashMap::new(),
         }
+    }
+
+    /// Test code only: lets the connections it creates from now on reach `addresses` although
+    /// the address guard refuses them, as [`TcpConnection::exempt_for_tests`] does. It exists
+    /// only in this crate's unit tests and with the `test-exempt-addresses` feature, which only
+    /// dev-dependencies enable (`Cargo.toml`).
+    #[cfg(any(test, feature = "test-exempt-addresses"))]
+    #[must_use]
+    pub fn exempt_for_tests(
+        mut self,
+        addresses: impl IntoIterator<Item = std::net::IpAddr>,
+    ) -> Self {
+        self.guard.exempt(addresses);
+        self
     }
 
     /// The connection `device` reads through: the same one for every device with the same
@@ -104,14 +123,26 @@ impl Endpoints {
         self.connections
             .entry((device.transport, host.clone(), device.port))
             .or_insert_with(|| {
-                SharedConnection::new(TcpConnection::new(
+                SharedConnection::new(TcpConnection::guarded(
                     device.transport,
                     host,
                     device.port,
                     self.connect_timeout,
+                    self.guard.clone(),
                 ))
             })
             .clone()
+    }
+
+    /// Forgets the connection of every endpoint that no device reads through any more (no
+    /// handle from [`Endpoints::connection`] is left), which closes it, and returns how many it
+    /// forgot. A device added later at such an endpoint gets a new
+    /// connection. Endpoints still in use keep theirs, so their devices are not reconnected.
+    pub fn prune(&mut self) -> usize {
+        let before = self.connections.len();
+        self.connections
+            .retain(|_, connection| Arc::strong_count(&connection.connection) > 1);
+        before - self.connections.len()
     }
 
     /// How many endpoints have a connection.
@@ -267,5 +298,28 @@ mod tests {
         };
         assert_eq!(transport(&converter), rtu);
         assert_eq!(transport(&other_transport), Transport::ModbusTcp);
+    }
+
+    #[test]
+    fn prune_forgets_only_endpoints_nobody_reads_through() {
+        let mut endpoints = Endpoints::new(Duration::from_secs(10));
+        let rtu = Transport::RtuOverTcp;
+        let kept = endpoints.connection(&device(rtu, "192.0.2.10", 502));
+        let sibling = endpoints.connection(&device(rtu, "192.0.2.10", 502));
+        drop(endpoints.connection(&device(rtu, "192.0.2.11", 502)));
+        assert_eq!(endpoints.len(), 2);
+        assert_eq!(endpoints.prune(), 1);
+        assert_eq!(endpoints.len(), 1);
+        drop(sibling);
+        assert_eq!(endpoints.prune(), 0, "one handle is still in use");
+        assert!(
+            endpoints
+                .connection(&device(rtu, "192.0.2.10", 502))
+                .same(&kept),
+            "the endpoint in use keeps its connection"
+        );
+        drop(kept);
+        assert_eq!(endpoints.prune(), 1);
+        assert!(endpoints.is_empty());
     }
 }

@@ -32,13 +32,18 @@ const TENANT_VIEW_1H: &str = "trustiot.tenant_telemetry_1h";
 const TENANT_VIEWS: [&str; 3] = [TENANT_VIEW, TENANT_VIEW_1H, TENANT_VIEW_1M];
 /// The telemetry table behind the view; tenant accounts must not reach it at all.
 const TELEMETRY: &str = "trustiot.telemetry";
+/// The batch completion table keyed by gateway plus stream (0012_gateway_stream_ids.sql).
+const STREAM_COMMITS: &str = "trustiot.stream_commits";
+/// The completion table that 0012_gateway_stream_ids.sql retired; it stays, empty and unused.
+const RETIRED_COMMITS: &str = "trustiot.batch_commits";
 /// The aggregate tables behind the aggregate views.
 const TELEMETRY_1M: &str = "trustiot.telemetry_1m";
 const TELEMETRY_1H: &str = "trustiot.telemetry_1h";
 /// The tables of the trustiot database, none of which tenant accounts may reach.
-const TABLES: [&str; 4] = [
+const TABLES: [&str; 5] = [
     TELEMETRY,
-    "trustiot.batch_commits",
+    STREAM_COMMITS,
+    RETIRED_COMMITS,
     TELEMETRY_1M,
     TELEMETRY_1H,
 ];
@@ -268,12 +273,12 @@ impl World {
             .unwrap_or_else(|error| panic!("ingest insert failed: {}", error.body));
     }
 
+    /// A reading with text gateway and stream IDs, as the protocol defines them.
     fn row(&self, tenant: Uuid, device: Uuid, n: usize, value: &str) -> String {
         format!(
-            "('{tenant}', '{}', '{}', 1, '{device}', 'shared-point', \
+            "('{tenant}', 'gw-{}', 'stream-1', 1, '{device}', 'shared-point', \
              toDateTime64('2026-10-10 00:00:00', 3, 'UTC') + {n}, now64(3, 'UTC'), 'string', '{value}')",
-            Uuid::new_v4(),
-            Uuid::new_v4()
+            self.suffix
         )
     }
 
@@ -285,7 +290,12 @@ impl World {
     /// behind. Every row the test writes belongs to tenant A or B.
     async fn cleanup(&self) {
         let (a, b) = (self.tenant_a, self.tenant_b);
-        for table in ["telemetry", "batch_commits", "telemetry_1m", "telemetry_1h"] {
+        for table in [
+            "telemetry",
+            "stream_commits",
+            "telemetry_1m",
+            "telemetry_1h",
+        ] {
             // A mutation as the admin: row policies hide these rows from the admin's SELECT and
             // lightweight DELETE, but not from ALTER TABLE ... DELETE.
             self.ch
@@ -674,6 +684,11 @@ fn attacks(world: &World) -> Vec<Attack> {
             Expect::Denied,
         ),
         attack(
+            "read stream_commits",
+            "SELECT count() FROM trustiot.stream_commits",
+            Expect::Denied,
+        ),
+        attack(
             "tenant INSERT of a tenant B row",
             format!(
                 "INSERT INTO {TELEMETRY} (tenant_id, point, value_type) VALUES ('{b}', 'x', 'float')"
@@ -994,6 +1009,11 @@ fn extra_attacks(world: &World) -> Vec<Attack> {
             Expect::Denied,
         ),
         attack(
+            "mergeTreeIndex() on stream_commits",
+            "SELECT * FROM mergeTreeIndex('trustiot', 'stream_commits')",
+            Expect::Denied,
+        ),
+        attack(
             "remote('localhost')",
             format!("SELECT count() FROM remote('localhost', {v})"),
             Expect::Denied,
@@ -1070,6 +1090,10 @@ fn extra_attacks(world: &World) -> Vec<Attack> {
             "SHOW CREATE TABLE trustiot.batch_commits",
         ),
         (
+            "SHOW CREATE TABLE stream_commits",
+            "SHOW CREATE TABLE trustiot.stream_commits",
+        ),
+        (
             "SHOW CREATE TABLE telemetry",
             "SHOW CREATE TABLE trustiot.telemetry",
         ),
@@ -1124,12 +1148,15 @@ fn reads_no_rows(result: &Result<String, QueryError>) -> bool {
 async fn deny_by_default_covers_new_accounts(world: &World) {
     let ch = &world.ch;
     let tenant = world.tenant_a;
-    // One completion record, so a count of 0 below does not come from an empty table.
+    // One completion record, so a count of 0 below does not come from an empty table (the
+    // retired batch_commits stays empty: no role may write it).
     ch.query(
         &world.ingest,
         &format!(
-            "INSERT INTO trustiot.batch_commits (tenant_id, gateway_id, stream_id, seq, row_count, \
-             committed_at) VALUES ('{tenant}', generateUUIDv4(), generateUUIDv4(), 1, 1, now64(3, 'UTC'))"
+            "INSERT INTO {STREAM_COMMITS} (tenant_id, binding_id, gateway_id, stream_id, seq, \
+             row_count, committed_at) VALUES ('{tenant}', generateUUIDv4(), 'gw-{}', 'stream-1', \
+             1, 1, now64(3, 'UTC'))",
+            world.suffix
         ),
     )
     .await
@@ -1933,6 +1960,39 @@ async fn tenant_read_path_is_a_definer_view(world: &World) {
                 .collect()
         )
     );
+    // 0012_gateway_stream_ids.sql replaced the view's query: the columns follow the table's new
+    // types, and the comment of 0005_tenant_view.sql stays.
+    let columns = ch
+        .admin_ok(
+            "SELECT name, type FROM system.columns \
+             WHERE database = 'trustiot' AND table = 'tenant_telemetry' \
+               AND name IN ('tenant_id', 'gateway_id', 'device_id') ORDER BY position FORMAT TSV",
+        )
+        .await;
+    assert_eq!(
+        columns, "tenant_id\tUUID\ngateway_id\tString\ndevice_id\tUUID\n",
+        "tenant view columns"
+    );
+    let comment = ch
+        .admin_ok(
+            "SELECT comment FROM system.tables \
+             WHERE database = 'trustiot' AND name = 'tenant_telemetry' FORMAT TSV",
+        )
+        .await;
+    assert!(
+        comment.starts_with("Telemetry readings of the calling tenant account"),
+        "{comment}"
+    );
+    // The tenant reads its readings' text gateway IDs through the view.
+    assert_eq!(
+        ch.query(
+            world.pool_account(),
+            &format!("SELECT DISTINCT gateway_id FROM {TENANT_VIEW} FORMAT TSV")
+        )
+        .await
+        .unwrap_or_else(failed),
+        format!("gw-{}\n", world.suffix)
+    );
     assert_eq!(
         grants_of(ch, ROLLUP_DEFINER).await,
         sorted(vec![
@@ -2238,12 +2298,13 @@ async fn quota_is_per_user(world: &World) {
 
 /// The ingest account writes and deletes data but cannot change the schema or access control.
 async fn ingest_account_cannot_change_schema(world: &World) {
-    let stream = Uuid::new_v4();
+    let gateway = format!("gw-schema-{}", world.suffix);
+    let stream = "stream-7";
     let tenant = world.tenant_a;
     let insert = format!(
         "INSERT INTO trustiot.telemetry (tenant_id, gateway_id, stream_id, batch_seq, device_id, \
          point, ts, received_at, value_type, value_int) \
-         SELECT '{tenant}', generateUUIDv4(), '{stream}', 7, generateUUIDv4(), 'counter', \
+         SELECT '{tenant}', '{gateway}', '{stream}', 7, generateUUIDv4(), 'counter', \
          now64(3, 'UTC'), now64(3, 'UTC'), 'int', number FROM numbers(5)"
     );
     world
@@ -2252,7 +2313,8 @@ async fn ingest_account_cannot_change_schema(world: &World) {
         .await
         .unwrap_or_else(failed);
     let in_batch = format!(
-        "SELECT count() FROM trustiot.telemetry WHERE stream_id = '{stream}' AND batch_seq = 7"
+        "SELECT count() FROM trustiot.telemetry \
+         WHERE gateway_id = '{gateway}' AND stream_id = '{stream}' AND batch_seq = 7"
     );
     assert_eq!(
         world
@@ -2282,7 +2344,8 @@ async fn ingest_account_cannot_change_schema(world: &World) {
         .query_with(
             &world.ingest,
             &format!(
-                "DELETE FROM trustiot.telemetry WHERE stream_id = '{stream}' AND batch_seq = 7"
+                "DELETE FROM trustiot.telemetry \
+                 WHERE gateway_id = '{gateway}' AND stream_id = '{stream}' AND batch_seq = 7"
             ),
             &[("lightweight_deletes_sync", "2")],
         )
@@ -2311,9 +2374,9 @@ async fn ingest_account_cannot_change_schema(world: &World) {
         .query(
             &world.ingest,
             &format!(
-                "INSERT INTO trustiot.batch_commits (tenant_id, gateway_id, stream_id, seq, \
-                 row_count, committed_at) VALUES ('{tenant}', generateUUIDv4(), '{stream}', 7, 5, \
-                 now64(3, 'UTC'))"
+                "INSERT INTO {STREAM_COMMITS} (tenant_id, binding_id, gateway_id, stream_id, seq, \
+                 row_count, committed_at) VALUES ('{tenant}', generateUUIDv4(), '{gateway}', \
+                 '{stream}', 7, 5, now64(3, 'UTC'))"
             ),
         )
         .await
@@ -2324,7 +2387,8 @@ async fn ingest_account_cannot_change_schema(world: &World) {
             .query(
                 &world.ingest,
                 &format!(
-                    "SELECT max(seq) FROM trustiot.batch_commits WHERE stream_id = '{stream}'"
+                    "SELECT max(seq) FROM {STREAM_COMMITS} \
+                     WHERE gateway_id = '{gateway}' AND stream_id = '{stream}'"
                 )
             )
             .await
@@ -2362,6 +2426,16 @@ async fn ingest_account_cannot_change_schema(world: &World) {
         "GRANT trustiot_tenant_reader TO CURRENT_USER",
         "ALTER TABLE trustiot.tenant_telemetry MODIFY QUERY SELECT * FROM trustiot.telemetry",
         "ALTER TABLE trustiot.tenant_telemetry MODIFY SQL SECURITY INVOKER",
+        // Completion records are written once and never changed or deleted.
+        "DELETE FROM trustiot.stream_commits WHERE 1",
+        "ALTER TABLE trustiot.stream_commits DELETE WHERE 1",
+        "ALTER TABLE trustiot.stream_commits UPDATE row_count = 0 WHERE 1",
+        "ALTER TABLE trustiot.stream_commits MODIFY TTL toDateTime(committed_at) + INTERVAL 1 DAY",
+        "TRUNCATE TABLE trustiot.stream_commits",
+        // The retired completion table: no privilege at all (0012_gateway_stream_ids.sql).
+        "SELECT max(seq) FROM trustiot.batch_commits",
+        "INSERT INTO trustiot.batch_commits (tenant_id, seq) VALUES (generateUUIDv4(), 1)",
+        "DELETE FROM trustiot.batch_commits WHERE 1",
         // The aggregates (Laysi/trustiot-v2#141): the ingest account inserts the reconcile's
         // differences and reads them, nothing more.
         "ALTER TABLE trustiot.telemetry_1m MODIFY TTL received_day + toIntervalDay(1)",
@@ -2389,15 +2463,34 @@ async fn ingest_account_cannot_change_schema(world: &World) {
         assert_eq!(error.code(), "ACCESS_DENIED", "{sql}: {}", error.body);
     }
 
-    // Constraints reject rows without a tenant and rows whose value sits in the wrong column.
+    // Constraints reject rows without a tenant, rows whose value sits in the wrong column, and
+    // gateway or stream IDs that break the protocol's identifier rule.
+    let long_stream = "s".repeat(65);
     for (values, constraint) in [
         (
-            "('00000000-0000-0000-0000-000000000000', 'p', 'float', 1, 0)",
+            "('00000000-0000-0000-0000-000000000000', 'gw-1', 's-1', 'p', 'float', 1, 0)"
+                .to_owned(),
             "tenant_id_set",
         ),
         (
-            &*format!("('{tenant}', 'p', 'float', 1, 2)"),
+            format!("('{tenant}', 'gw-1', 's-1', 'p', 'float', 1, 2)"),
             "value_matches_type",
+        ),
+        (
+            format!("('{tenant}', 'gw/1', 's-1', 'p', 'float', 1, 0)"),
+            "gateway_id_valid",
+        ),
+        (
+            format!("('{tenant}', '', 's-1', 'p', 'float', 1, 0)"),
+            "gateway_id_valid",
+        ),
+        (
+            format!("('{tenant}', 'gw-1', '-s', 'p', 'float', 1, 0)"),
+            "stream_id_valid",
+        ),
+        (
+            format!("('{tenant}', 'gw-1', '{long_stream}', 'p', 'float', 1, 0)"),
+            "stream_id_valid",
         ),
     ] {
         let error = world
@@ -2405,13 +2498,234 @@ async fn ingest_account_cannot_change_schema(world: &World) {
             .query(
                 &world.ingest,
                 &format!(
-                    "INSERT INTO trustiot.telemetry (tenant_id, point, value_type, value_float, \
-                     value_int) VALUES {values}"
+                    "INSERT INTO trustiot.telemetry (tenant_id, gateway_id, stream_id, point, \
+                     value_type, value_float, value_int) VALUES {values}"
                 ),
             )
             .await
             .expect_err("the constraint must reject the row");
         assert!(error.body.contains(constraint), "{}", error.body);
+    }
+}
+
+/// The ingest role holds exactly what the migration files give it: reading, writing and deleting
+/// readings, reading and writing completion records in the table keyed by gateway plus stream
+/// and the aggregate cells (the reconcile of 0010_telemetry_rollups.sql), and nothing on the
+/// retired completion table (0012_gateway_stream_ids.sql).
+async fn ingest_grants_are_exact(ch: &ClickHouse) {
+    let grants = ch
+        .admin_ok(
+            "SELECT toString(access_type), database, table, column, is_partial_revoke, \
+                    grant_option \
+             FROM system.grants WHERE role_name = 'trustiot_ingest' FORMAT TSV",
+        )
+        .await;
+    let mut lines: Vec<&str> = grants.lines().collect();
+    lines.sort_unstable();
+    #[allow(clippy::print_stdout, reason = "test evidence")]
+    {
+        println!("grants of trustiot_ingest:\n{}", lines.join("\n"));
+    }
+    assert_eq!(
+        lines,
+        [
+            "ALTER DELETE\ttrustiot\ttelemetry\t\\N\t0\t0",
+            "INSERT\ttrustiot\tstream_commits\t\\N\t0\t0",
+            "INSERT\ttrustiot\ttelemetry\t\\N\t0\t0",
+            "INSERT\ttrustiot\ttelemetry_1h\t\\N\t0\t0",
+            "INSERT\ttrustiot\ttelemetry_1m\t\\N\t0\t0",
+            "SELECT\ttrustiot\tstream_commits\t\\N\t0\t0",
+            "SELECT\ttrustiot\ttelemetry\t\\N\t0\t0",
+            "SELECT\ttrustiot\ttelemetry_1h\t\\N\t0\t0",
+            "SELECT\ttrustiot\ttelemetry_1m\t\\N\t0\t0",
+        ]
+    );
+    assert_eq!(
+        ch.admin_ok(
+            "SELECT count() FROM system.role_grants \
+             WHERE role_name = 'trustiot_ingest' OR user_name = 'trustiot_ingest'"
+        )
+        .await
+        .trim(),
+        "0",
+        "the ingest role holds no other role"
+    );
+}
+
+/// Laysi/trustiot-v2#639: a stream's high-water mark belongs to the gateway of the topic plus the
+/// stream ID (telemetry rule 3 of crates/protocol/README.md). Two gateways that use the same
+/// stream ID and the same sequence numbers keep separate completion records, also after
+/// ReplacingMergeTree merged the parts, and each gets its own max(seq); the incomplete batch of
+/// one gateway is deleted without touching the other's rows of the same stream and seq.
+async fn completion_records_are_per_gateway_and_stream(world: &World) {
+    let ch = &world.ch;
+    let tenant = world.tenant_a;
+    let (gateway_a, gateway_b, gateway_c) = (
+        format!("gw-a-{}", world.suffix),
+        format!("gw-b-{}", world.suffix),
+        format!("gw-c-{}", world.suffix),
+    );
+    let (binding_a, binding_b) = (Uuid::new_v4(), Uuid::new_v4());
+    let stream = "stream-1";
+    // Gateway A commits batches 1 to 3, B batches 1 to 5 of a stream with the same ID; A's record
+    // of batch 2 is written twice, as after a retried insert. row_count tells the gateways apart.
+    let mut records = Vec::new();
+    for (gateway, binding, last, per_batch) in [
+        (&gateway_a, binding_a, 3, 10),
+        (&gateway_b, binding_b, 5, 100),
+    ] {
+        for seq in 1..=last {
+            records.push(format!(
+                "('{tenant}', '{binding}', '{gateway}', '{stream}', {seq}, {}, now64(3, 'UTC'))",
+                seq * per_batch
+            ));
+        }
+    }
+    records.push(format!(
+        "('{tenant}', '{binding_a}', '{gateway_a}', '{stream}', 2, 20, now64(3, 'UTC'))"
+    ));
+    ch.query(
+        &world.ingest,
+        &format!(
+            "INSERT INTO {STREAM_COMMITS} (tenant_id, binding_id, gateway_id, stream_id, seq, \
+             row_count, committed_at) VALUES {}",
+            records.join(", ")
+        ),
+    )
+    .await
+    .unwrap_or_else(failed);
+    // Merge every part, so ReplacingMergeTree collapses whatever shares a sorting key.
+    ch.admin_ok(&format!("OPTIMIZE TABLE {STREAM_COMMITS} FINAL"))
+        .await;
+    let per_gateway = ch
+        .query(
+            &world.ingest,
+            &format!(
+                "SELECT gateway_id, max(seq), count(), sum(row_count) FROM {STREAM_COMMITS} \
+                 WHERE gateway_id IN ('{gateway_a}', '{gateway_b}') AND stream_id = '{stream}' \
+                 GROUP BY gateway_id ORDER BY gateway_id FORMAT TSV"
+            ),
+        )
+        .await
+        .unwrap_or_else(failed);
+    assert_eq!(
+        per_gateway,
+        format!("{gateway_a}\t3\t3\t60\n{gateway_b}\t5\t5\t1500\n"),
+        "each gateway keeps its own records of the shared stream ID; only A's duplicate collapsed"
+    );
+    // The high-water mark as the ingest service reads it: max(seq) of one gateway and stream, 0
+    // when the gateway never committed a batch of it (sequence numbers start at 1).
+    for (gateway, expected) in [(&gateway_a, "3"), (&gateway_b, "5"), (&gateway_c, "0")] {
+        let mark = ch
+            .query(
+                &world.ingest,
+                &format!(
+                    "SELECT max(seq) FROM {STREAM_COMMITS} \
+                     WHERE gateway_id = '{gateway}' AND stream_id = '{stream}'"
+                ),
+            )
+            .await
+            .unwrap_or_else(failed);
+        assert_eq!(mark.trim(), expected, "high-water mark of {gateway}");
+    }
+    // The record keeps the tenant and the binding the batch was written under.
+    let traced = ch
+        .query(
+            &world.ingest,
+            &format!(
+                "SELECT tenant_id, binding_id, row_count FROM {STREAM_COMMITS} \
+                 WHERE gateway_id = '{gateway_b}' AND stream_id = '{stream}' AND seq = 4 FORMAT TSV"
+            ),
+        )
+        .await
+        .unwrap_or_else(failed);
+    assert_eq!(traced, format!("{tenant}\t{binding_b}\t400\n"));
+
+    // Batch 6 of both gateways, same stream ID and seq, is in telemetry; A's never completed, so
+    // its rows are deleted by gateway, stream and seq before it is written again (I1). B's stay.
+    let insert = format!(
+        "INSERT INTO {TELEMETRY} (tenant_id, gateway_id, stream_id, batch_seq, device_id, point, \
+         ts, received_at, value_type, value_int) \
+         SELECT '{tenant}', gateway, '{stream}', 6, generateUUIDv4(), 'two-gateways', \
+         now64(3, 'UTC'), now64(3, 'UTC'), 'int', number \
+         FROM numbers(4) ARRAY JOIN ['{gateway_a}', '{gateway_b}'] AS gateway"
+    );
+    ch.query(&world.ingest, &insert)
+        .await
+        .unwrap_or_else(failed);
+    let rows = format!(
+        "SELECT gateway_id, count() FROM {TELEMETRY} \
+         WHERE stream_id = '{stream}' AND batch_seq = 6 AND point = 'two-gateways' \
+         GROUP BY gateway_id ORDER BY gateway_id FORMAT TSV"
+    );
+    assert_eq!(
+        ch.query(&world.ingest, &rows).await.unwrap_or_else(failed),
+        format!("{gateway_a}\t4\n{gateway_b}\t4\n")
+    );
+    ch.query_with(
+        &world.ingest,
+        &format!(
+            "DELETE FROM {TELEMETRY} \
+             WHERE gateway_id = '{gateway_a}' AND stream_id = '{stream}' AND batch_seq = 6"
+        ),
+        &[("lightweight_deletes_sync", "2")],
+    )
+    .await
+    .unwrap_or_else(|error| panic!("lightweight delete: {}", error.body));
+    let after = ch.query(&world.ingest, &rows).await.unwrap_or_else(failed);
+    assert_eq!(
+        after,
+        format!("{gateway_b}\t4\n"),
+        "deleting gateway A's batch must leave gateway B's batch of the same stream and seq"
+    );
+
+    // Completion records with IDs outside the protocol's rule, a zero binding or seq 0 are refused.
+    let long_gateway = "g".repeat(65);
+    for (values, constraint) in [
+        (
+            format!("('{tenant}', '{binding_a}', 'gw/a', 's-1', 1)"),
+            "gateway_id_valid",
+        ),
+        (
+            format!("('{tenant}', '{binding_a}', '{long_gateway}', 's-1', 1)"),
+            "gateway_id_valid",
+        ),
+        (
+            format!("('{tenant}', '{binding_a}', 'gw-a', '', 1)"),
+            "stream_id_valid",
+        ),
+        (
+            format!("('{tenant}', '00000000-0000-0000-0000-000000000000', 'gw-a', 's-1', 1)"),
+            "binding_id_set",
+        ),
+        (
+            format!("('{tenant}', '{binding_a}', 'gw-a', 's-1', 0)"),
+            "seq_positive",
+        ),
+    ] {
+        let error = ch
+            .query(
+                &world.ingest,
+                &format!(
+                    "INSERT INTO {STREAM_COMMITS} (tenant_id, binding_id, gateway_id, stream_id, \
+                     seq) VALUES {values}"
+                ),
+            )
+            .await
+            .expect_err("the constraint must reject the record");
+        assert!(error.body.contains(constraint), "{values}: {}", error.body);
+    }
+    #[allow(clippy::print_stdout, reason = "test evidence")]
+    {
+        println!(
+            "completion records per gateway of stream {stream} (gateway, max(seq), records, \
+             rows):\n{}",
+            per_gateway.trim()
+        );
+        println!(
+            "telemetry rows of batch 6 after deleting gateway A's: {}",
+            after.trim()
+        );
     }
 }
 
@@ -2477,7 +2791,7 @@ fn ttl_days(info: &TableInfo, column: &str) -> u64 {
 /// and retention follow the server receive time, and completion records outlive the rows.
 async fn table_settings_are_in_place(ch: &ClickHouse) {
     let telemetry = table(ch, "telemetry").await;
-    let commits = table(ch, "batch_commits").await;
+    let commits = table(ch, "stream_commits").await;
     for info in [&telemetry, &commits] {
         assert!(info.engine.ends_with("MergeTree"), "{info:?}");
         for setting in ["fsync_after_insert = 1", "fsync_part_directory = 1"] {
@@ -2499,16 +2813,45 @@ async fn table_settings_are_in_place(ch: &ClickHouse) {
             .contains("PARTITION BY toYYYYMM(received_at)"),
         "{telemetry:?}"
     );
+    // Completion records are keyed by gateway plus stream (telemetry rule 3 of the protocol).
+    assert_eq!(commits.engine, "ReplacingMergeTree", "{commits:?}");
+    assert!(
+        commits
+            .engine_full
+            .contains("ORDER BY (gateway_id, stream_id, seq)"),
+        "{commits:?}"
+    );
     let telemetry_days = ttl_days(&telemetry, "received_at");
     let commit_days = ttl_days(&commits, "committed_at");
     assert!(
         commit_days >= telemetry_days,
-        "batch_commits keeps records {commit_days} days, shorter than telemetry's {telemetry_days}"
+        "stream_commits keeps records {commit_days} days, shorter than telemetry's {telemetry_days}"
+    );
+    // Gateway and stream IDs are text, as the protocol defines them; devices stay UUIDs.
+    let types = ch
+        .admin_ok(
+            "SELECT table, name, type FROM system.columns WHERE database = 'trustiot' \
+             AND table IN ('telemetry', 'stream_commits') \
+             AND name IN ('tenant_id', 'binding_id', 'gateway_id', 'stream_id', 'device_id') \
+             ORDER BY table, position FORMAT TSV",
+        )
+        .await;
+    assert_eq!(
+        types,
+        "stream_commits\ttenant_id\tUUID\n\
+         stream_commits\tbinding_id\tUUID\n\
+         stream_commits\tgateway_id\tString\n\
+         stream_commits\tstream_id\tString\n\
+         telemetry\ttenant_id\tUUID\n\
+         telemetry\tgateway_id\tString\n\
+         telemetry\tstream_id\tString\n\
+         telemetry\tdevice_id\tUUID\n"
     );
     #[allow(clippy::print_stdout, reason = "test evidence")]
     {
         println!("telemetry: {}", telemetry.engine_full);
-        println!("batch_commits: {}", commits.engine_full);
+        println!("stream_commits: {}", commits.engine_full);
+        println!("ID columns:\n{}", types.trim());
     }
     // The aggregates (Laysi/trustiot-v2#141): fsync on, the raw table's deduplication window
     // (a retried INSERT the raw table drops is dropped here too), partitions and retention by
@@ -2578,12 +2921,13 @@ async fn access_entities_come_from_sql(ch: &ClickHouse) {
         println!("access entities:\n{}", rows.trim());
     }
     let lines: Vec<&str> = rows.lines().collect();
-    // 4 roles (the collector's and the monitoring role included); 29 row policies: 8 of
-    // 0004/0005 (5 on the tables for the roles, 1 for the view's definer, 2 on the view) and 21
-    // of 0010 (1 for the rollup definer on the telemetry table, 1 on each materialized view, 5 on
-    // each aggregate table, 2 on each aggregate view, 2 on each backfill view); 1 settings
-    // profile; 1 quota; 2 users (the tenant views' definer and the rollup definer).
-    assert_eq!(lines.len(), 37, "{rows}");
+    // 4 roles (the collector's and the monitoring role included); 31 row policies: 8 of
+    // 0004/0005 (5 on the tables for the roles, 1 for the view's definer, 2 on the view), 21 of
+    // 0010 (1 for the rollup definer on the telemetry table, 1 on each materialized view, 5 on
+    // each aggregate table, 2 on each aggregate view, 2 on each backfill view) and 2 of 0012 (on
+    // stream_commits); 1 settings profile; 1 quota; 2 users (the tenant views' definer and the
+    // rollup definer).
+    assert_eq!(lines.len(), 39, "{rows}");
     for line in lines {
         assert!(
             line.ends_with("\tlocal_directory"),
@@ -2772,6 +3116,7 @@ async fn logs_and_telemetry_access_stay_apart(world: &World) {
         format!("SELECT count() FROM {TENANT_VIEW}"),
         format!("SELECT count() FROM {TELEMETRY}"),
         "SELECT count() FROM trustiot.batch_commits".to_owned(),
+        format!("SELECT count() FROM {STREAM_COMMITS}"),
         format!("DESC TABLE {TENANT_VIEW}"),
         format!("DESC TABLE {TELEMETRY}"),
         format!("SELECT count() FROM {TENANT_VIEW_1M}"),
@@ -2849,6 +3194,8 @@ async fn clickhouse_schema_and_tenant_isolation() {
     limits_apply_through_the_view(&world).await;
     quota_counts_reads_through_the_view(&world).await;
     ingest_account_cannot_change_schema(&world).await;
+    ingest_grants_are_exact(&world.ch).await;
+    completion_records_are_per_gateway_and_stream(&world).await;
     quota_is_per_user(&world).await;
     #[allow(clippy::print_stdout, reason = "test evidence")]
     {

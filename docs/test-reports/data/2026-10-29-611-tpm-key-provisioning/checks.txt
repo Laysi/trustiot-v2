@@ -1,0 +1,69 @@
+== fmt ok
+    Checking telemetry-query v0.1.0 (<host copy>/src/services/telemetry-query)
+    Checking testkit v0.1.0 (<host copy>/src/crates/testkit)
+    Checking lab-dataset v0.1.0 (<host copy>/src/tools/lab-dataset)
+    Checking openapi v0.1.0 (<host copy>/src/tools/openapi)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 12.48s
+== clippy exit 0
+     Running unittests src/lib.rs (<host copy>/target/debug/deps/agent-8ac0e8ebdecaec54)
+test modbus::tests::a_failed_connect_is_one_request_and_skips_the_rest ... ok
+test result: ok. 179 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.65s
+     Running unittests src/main.rs (<host copy>/target/debug/deps/trustiot_agent-22c1f2bf97de6f7a)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/binary.rs (<host copy>/target/debug/deps/binary-dd0063b8f2aa33b3)
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.02s
+     Running tests/broker.rs (<host copy>/target/debug/deps/broker-57716ef52316346b)
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.97s
+     Running tests/dependencies.rs (<host copy>/target/debug/deps/dependencies-16d1d57af4507a02)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.15s
+     Running tests/link.rs (<host copy>/target/debug/deps/link-c557e4d5ba655f72)
+test result: ok. 51 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+     Running tests/liveness.rs (<host copy>/target/debug/deps/liveness-cb6f5ff67169d58c)
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/modbus_address_guard.rs (<host copy>/target/debug/deps/modbus_address_guard-f9371a5d7ac09f5f)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/modbus_fake_endpoint.rs (<host copy>/target/debug/deps/modbus_fake_endpoint-31c15f2d454651bc)
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+     Running tests/modbus_rtu_converter.rs (<host copy>/target/debug/deps/modbus_rtu_converter-5596d0c86482057c)
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+     Running tests/modbus_rtu_framing.rs (<host copy>/target/debug/deps/modbus_rtu_framing-d15f1c72be94bde7)
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/modbus_tcp_framing.rs (<host copy>/target/debug/deps/modbus_tcp_framing-6e51138627c55b56)
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/polling_recovery.rs (<host copy>/target/debug/deps/polling_recovery-aec9d3fc6693dcb5)
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/systemd_unit.rs (<host copy>/target/debug/deps/systemd_unit-a1630ceacdb6e265)
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.07s
+     Running tests/tpm_provision.rs (<host copy>/target/debug/deps/tpm_provision-77ce0812d84350ff)
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.82s
+     Running tests/tpm_swtpm.rs (<host copy>/target/debug/deps/tpm_swtpm-f70a8afc7e87b5ed)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.94s
+     Running tests/transport.rs (<host copy>/target/debug/deps/transport-67e4e233058bab29)
+test result: ok. 19 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.41s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+== agent exit 0
+     Running unittests src/lib.rs (<host copy>/target/debug/deps/testkit-792237f8b6297083)
+test result: ok. 42 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.75s
+     Running tests/container_volumes.rs (<host copy>/target/debug/deps/container_volumes-b27bc0a9ed08d127)
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 10.49s
+     Running tests/modbus_endpoint.rs (<host copy>/target/debug/deps/modbus_endpoint-0460dcb8235abfac)
+test result: ok. 20 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.12s
+     Running tests/modbus_example.rs (<host copy>/target/debug/deps/modbus_example-e8527cb3d83a2b0b)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+     Running tests/postgres_isolation.rs (<host copy>/target/debug/deps/postgres_isolation-1624833dabcb77f3)
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 15.33s
+     Running tests/postgres_start.rs (<host copy>/target/debug/deps/postgres_start-0f6d967bbc0a0e46)
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 10.63s
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+== testkit exit 0
+     Running unittests src/lib.rs (<host copy>/target/debug/deps/repo_check-cb97eb5799213f90)
+test result: ok. 18 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/repository.rs (<host copy>/target/debug/deps/repository-3bb08d58df261a4f)
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.11s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+== repo-check exit 0
+   Compiling protocol v0.1.0 (<host copy>/src/crates/protocol)
+   Compiling agent v0.1.0 (<host copy>/src/edge/agent)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 10.84s
+== aarch64 exit 0
+exit 0 at 02:39:32 (build host)

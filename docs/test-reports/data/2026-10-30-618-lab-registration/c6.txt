@@ -1,0 +1,21 @@
+cookie-read
+no-cookie
+no-cookie-in-runlog
+no-key
+no-8-digit
+~/.local/share/trustiot-workstation:
+總用量 20
+drwx------. 1 <user> <user>  184 10月 30 17:41 .
+drwx------. 1 <user> <user>  854 10月 30 17:39 ..
+-rw-r--r--. 1 <user> <user>  102 10月 30 17:41 known_hosts
+drwx------. 1 <user> <user>   32 10月 30 17:42 registrations
+-rw-------. 1 <user> <user> 2623 10月 30 17:42 registrations.jsonl
+-rw-r--r--. 1 <user> <user>  371 10月 30 17:39 workstation.csr
+-rw-------. 1 <user> <user>  241 10月 30 17:39 workstation-key.pem
+-rw-r--r--. 1 <user> <user>  713 10月 30 17:41 workstation.pem
+
+~/.local/share/trustiot-workstation/registrations:
+總用量 4
+drwx------. 1 <user> <user>   32 10月 30 17:42 .
+drwx------. 1 <user> <user>  184 10月 30 17:41 ..
+-rw-------. 1 <user> <user> 3939 10月 30 17:42 tg-lab-0001.json

@@ -4,6 +4,7 @@
 //! dropped connection is replaced. Timeouts follow a clock that moves only when a test advances
 //! it (`testkit::clock::manual`), so a slow machine never makes a read time out.
 
+use std::net::Ipv4Addr;
 use std::time::Duration;
 
 use agent::modbus::pdu::{Data, Read};
@@ -32,7 +33,9 @@ async fn listen() -> (TcpListener, TcpConnection) {
             "127.0.0.1",
             port,
             DEFAULT_CONNECT_TIMEOUT,
-        ),
+        )
+        // The address guard refuses loopback; only tests can exempt it.
+        .exempt_for_tests([Ipv4Addr::LOCALHOST.into()]),
     )
 }
 

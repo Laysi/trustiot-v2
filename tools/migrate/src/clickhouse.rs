@@ -1,6 +1,6 @@
 //! The ClickHouse part of a run: the DDL of `services/ingest/migrations/clickhouse/` and the
-//! accounts of the OpenTelemetry collector and of telemetry-query, over the HTTP interface with
-//! the access-management account.
+//! accounts of the OpenTelemetry collector, of telemetry-query and of ingest, over the HTTP
+//! interface with the access-management account.
 //!
 //! Every statement of those files is idempotent (services/ingest/README.md, "檔案格式"), but a
 //! later `ALTER TABLE ... MODIFY TTL` would start a mutation on every run, so the run also
@@ -16,13 +16,13 @@
 //!
 //! Values (names, hashes) travel as query parameters (`{name:Type}`), never inside the SQL text.
 //! ClickHouse 26.8 takes parameters in `CREATE USER` and `ALTER USER` but not in `GRANT` or
-//! `DROP USER`, so the collector's role comes with `CREATE USER ... DEFAULT ROLE`, which grants
-//! it, and an account with other grants is reported for an administrator to drop.
+//! `DROP USER`, so the collector's and ingest's roles come with `CREATE USER ... DEFAULT ROLE`,
+//! which grants them, and an account with other grants is reported for an administrator to drop.
 
 use std::time::{Duration, Instant};
 
 use crate::config::{
-    ClickHouseSettings, RunConfig, TELEMETRY_QUERY_ACCOUNT, TENANT_ACCOUNT_PREFIX,
+    ClickHouseSettings, INGEST_ACCOUNT, RunConfig, TELEMETRY_QUERY_ACCOUNT, TENANT_ACCOUNT_PREFIX,
 };
 use crate::passwords::Api;
 use crate::registry::{Migration, Registry};
@@ -34,6 +34,10 @@ use crate::{Error, Report, clickhouse_admin, http, sha256_hex};
 /// The role `0006_logs.sql` creates for the collector: INSERT and SHOW COLUMNS on the two log
 /// tables, nothing else.
 pub const COLLECTOR_ROLE: &str = "trustiot_otel_collector";
+
+/// The ingest service's role (`0004_access.sql`): what the DDL files grant it
+/// ([`INGEST_EXPECTED_GRANTS`]), nothing else. The run gives it to [`INGEST_ACCOUNT`] alone.
+pub const INGEST_ROLE: &str = "trustiot_ingest";
 
 /// The tenant role of decision 14 (`0004_access.sql`): SELECT on the tenant views, nothing else.
 pub const TENANT_READER_ROLE: &str = "trustiot_tenant_reader";
@@ -118,6 +122,88 @@ fn bound_policies(rows: &str) -> String {
         })
         .collect();
     cut(&described.join(", "))
+}
+
+/// One line of [`INGEST_ROLE_GRANTS`] as a GRANT statement names it, for a message: the
+/// privilege on its object, then `WITH GRANT OPTION` or `(partial revoke)` when set. Names only.
+fn grant_row(line: &str) -> String {
+    let fields: Vec<&str> = line.split('\t').collect();
+    let [
+        access,
+        database,
+        table,
+        column,
+        grant_option,
+        partial_revoke,
+    ] = fields[..]
+    else {
+        return line.replace('\t', " ");
+    };
+    let database = if database.is_empty() { "*" } else { database };
+    let table = if table.is_empty() { "*" } else { table };
+    let column = if column.is_empty() {
+        String::new()
+    } else {
+        format!("({column})")
+    };
+    // Message text only, never sent to ClickHouse; the suffixes are picked rather than appended
+    // so the text is one format string (tools/sql-check reads appended SQL words as built SQL).
+    let grant_option = if grant_option == "1" {
+        GRANT_OPTION_SUFFIX
+    } else {
+        ""
+    };
+    let partial_revoke = if partial_revoke == "1" {
+        " (partial revoke)"
+    } else {
+        ""
+    };
+    format!("{access}{column} ON {database}.{table}{grant_option}{partial_revoke}")
+}
+
+/// How [`grant_row`] marks a row that carries the grant option, as a GRANT statement writes it.
+const GRANT_OPTION_SUFFIX: &str = " WITH GRANT OPTION";
+
+/// The first [`DIFFERENCES_SHOWN`] of `items`, and how many more there are.
+fn first_few(items: &[String]) -> String {
+    let mut text = items
+        .iter()
+        .take(DIFFERENCES_SHOWN)
+        .cloned()
+        .collect::<Vec<_>>()
+        .join(", ");
+    if items.len() > DIFFERENCES_SHOWN {
+        text.push_str(&format!(" and {} more", items.len() - DIFFERENCES_SHOWN));
+    }
+    text
+}
+
+/// How the ingest role's grants (lines of [`INGEST_ROLE_GRANTS`]) and roles ([`ROLE_ROLES`])
+/// differ from what the DDL files give it, or `None` when they do not: extra and missing grant
+/// rows and extra roles, each capped at [`DIFFERENCES_SHOWN`].
+fn ingest_role_differences(grants: &[&str], roles: &[&str]) -> Option<String> {
+    let extra: Vec<String> = grants
+        .iter()
+        .filter(|line| !INGEST_EXPECTED_GRANTS.contains(line))
+        .map(|line| grant_row(line))
+        .collect();
+    let missing: Vec<String> = INGEST_EXPECTED_GRANTS
+        .iter()
+        .filter(|line| !grants.contains(line))
+        .map(|line| grant_row(line))
+        .collect();
+    let roles: Vec<String> = roles.iter().map(|role| (*role).to_owned()).collect();
+    let mut parts = Vec::new();
+    if !extra.is_empty() {
+        parts.push(format!("extra grants: {}", first_few(&extra)));
+    }
+    if !missing.is_empty() {
+        parts.push(format!("missing grants: {}", first_few(&missing)));
+    }
+    if !roles.is_empty() {
+        parts.push(format!("extra roles: {}", first_few(&roles)));
+    }
+    (!parts.is_empty()).then(|| parts.join("; "))
 }
 
 /// How many receive days the run backfills with a raw data retention of `raw_days`: from today -
@@ -217,6 +303,56 @@ const TELEMETRY_QUERY_EXPECTED_GRANTS: [&str; 2] = [
 ];
 /// telemetry-query's roles: the tenant role with ADMIN OPTION, not as a default role.
 const TELEMETRY_QUERY_EXPECTED_ROLES: [&str; 1] = ["trustiot_tenant_reader\t0\t1"];
+/// Whether a role exists.
+const ROLE_EXISTS: &str = "SELECT count() FROM system.roles WHERE name = {role:String} FORMAT TSV";
+const CREATE_INGEST: &str = "CREATE USER {user:Identifier}
+IDENTIFIED WITH sha256_hash BY {hash:String} SALT {salt:String}
+DEFAULT ROLE trustiot_ingest";
+/// The ingest role's grants, one line each: privilege, database, table, column (empty for a whole
+/// table), grant option, partial revoke. They must be exactly [`INGEST_EXPECTED_GRANTS`].
+const INGEST_ROLE_GRANTS: &str = "SELECT access_type, ifNull(database, ''), ifNull(table, ''),
+  ifNull(column, ''), toUInt8(grant_option), toUInt8(is_partial_revoke)
+FROM system.grants WHERE role_name = {role:String}
+ORDER BY ifNull(database, ''), ifNull(table, ''), toString(access_type) FORMAT TSV";
+/// What the DDL files grant the ingest role after `0012_gateway_stream_ids.sql`: SELECT, INSERT
+/// and ALTER DELETE (its lightweight DELETE) on the raw readings (`0004_access.sql`), SELECT and
+/// INSERT on the completion records (`0012_gateway_stream_ids.sql`, which revoked the retired
+/// `batch_commits`) and on the two aggregates (`0010_telemetry_rollups.sql`). A migration file
+/// that changes the role's grants changes this list in the same change
+/// (tests/clickhouse_ingest.rs runs every file against the pinned ClickHouse).
+const INGEST_EXPECTED_GRANTS: [&str; 9] = [
+    "INSERT\ttrustiot\tstream_commits\t\t0\t0",
+    "SELECT\ttrustiot\tstream_commits\t\t0\t0",
+    "ALTER DELETE\ttrustiot\ttelemetry\t\t0\t0",
+    "INSERT\ttrustiot\ttelemetry\t\t0\t0",
+    "SELECT\ttrustiot\ttelemetry\t\t0\t0",
+    "INSERT\ttrustiot\ttelemetry_1h\t\t0\t0",
+    "SELECT\ttrustiot\ttelemetry_1h\t\t0\t0",
+    "INSERT\ttrustiot\ttelemetry_1m\t\t0\t0",
+    "SELECT\ttrustiot\ttelemetry_1m\t\t0\t0",
+];
+/// Roles granted to the ingest role: none, or the account would hold more than the list above.
+const ROLE_ROLES: &str = "SELECT granted_role_name FROM system.role_grants
+WHERE role_name = {role:String} ORDER BY granted_role_name FORMAT TSV";
+/// How many differing grant rows of each kind (extra, missing) and extra roles an error names.
+const DIFFERENCES_SHOWN: usize = GRANTEES_SHOWN;
+/// The types of an account's authentication methods, comma-separated. The run creates ingest's
+/// account, and sets its password, with one `sha256_hash` method, which ClickHouse lists as
+/// `sha256_password`; another method (`ALTER USER ... ADD IDENTIFIED WITH`) is another way to log
+/// in that no Secret holds.
+const USER_AUTH: &str =
+    "SELECT arrayStringConcat(arrayMap(method -> toString(method), auth_type), ',')
+FROM system.users WHERE name = {user:String} FORMAT TSV";
+/// The authentication methods [`USER_AUTH`] reads for ingest's account as the run made it.
+const INGEST_AUTH: &str = "sha256_password";
+/// Who holds the ingest role besides [`INGEST_ACCOUNT`] (whose grant the account check reads):
+/// every holder writes and deletes every tenant's telemetry, and could stall a stream's writes
+/// by running a long query with its query ID (services/ingest/README.md, 「I1 重寫與對帳」).
+const INGEST_GRANTEES: &str = "SELECT if(user_name IS NULL, concat('role ', role_name), user_name)
+FROM system.role_grants
+WHERE granted_role_name = {role:String}
+  AND NOT (user_name IS NOT NULL AND user_name = {user:String})
+ORDER BY 1 FORMAT TSV";
 /// How many host rules let the account log in; `HOST NONE` leaves none.
 const USER_HOSTS: &str = "SELECT length(host_ip) + length(host_names) + length(host_names_regexp)
   + length(host_names_like) FROM system.users WHERE name = {user:String} FORMAT TSV";
@@ -274,11 +410,16 @@ MODIFY TTL toDateTime(received_at) + toIntervalDay({days:UInt32})",
 
 /// The completion records (the high-water marks) get the same number of days: `committed_at` is
 /// never earlier than the `received_at` of the batch's rows, so a record outlives its rows.
+///
+/// The table keyed by gateway plus stream (`0012_gateway_stream_ids.sql`). The retired
+/// `trustiot.batch_commits` is no longer managed: nothing writes or reads it (the ingest role
+/// has no privilege on it), so its TTL protects nothing, and leaving it alone lets a later
+/// cleanup remove it without breaking the run.
 const COMMITS_RETENTION: RetentionTable = RetentionTable {
-    table: "batch_commits",
+    table: "stream_commits",
     column: "committed_at",
     unit: TtlUnit::Days,
-    modify: "ALTER TABLE trustiot.batch_commits
+    modify: "ALTER TABLE trustiot.stream_commits
 MODIFY TTL toDateTime(committed_at) + toIntervalDay({days:UInt32})",
 };
 
@@ -720,7 +861,7 @@ impl ClickHouse {
     /// The DDL files, the raw and aggregate data retention, the backfill of the aggregates and
     /// the check that the backfill views show nothing (when the registry has ClickHouse files,
     /// which create the tables they apply to), then the accounts of the collector and of
-    /// telemetry-query.
+    /// telemetry-query and of ingest.
     ///
     /// # Errors
     ///
@@ -733,6 +874,7 @@ impl ClickHouse {
         retention: Retention,
         collector: Option<&(String, Password)>,
         telemetry_query: Option<&Password>,
+        ingest: Option<&Password>,
         report: &mut Report,
     ) -> Result<(), Error> {
         for statement in BOOTSTRAP {
@@ -759,7 +901,8 @@ impl ClickHouse {
         }
         self.retire_collectors(collector.map(|(user, _)| user.as_str()), report)
             .await?;
-        self.ensure_telemetry_query(telemetry_query, report).await
+        self.ensure_telemetry_query(telemetry_query, report).await?;
+        self.ensure_ingest(ingest, report).await
     }
 
     /// Whether `user` may log in from any host at all.
@@ -1387,11 +1530,231 @@ impl ClickHouse {
         }
         Ok(None)
     }
+
+    /// ingest's account ([`INGEST_ACCOUNT`], Laysi/trustiot-v2#642). When the run manages its
+    /// password (the service is deployed): the ingest role must hold exactly what the DDL files
+    /// gave it and be held by the account alone, and the account must hold that role alone, as
+    /// its default role, and log in with the one password method the run sets (no settings, and
+    /// no second method an administrator added); then the run creates the account with that role
+    /// and the password, or sets the password and lets it log in. Anything else revokes the account's login, if it
+    /// exists, and stops the run for an administrator: the account writes and deletes every
+    /// tenant's telemetry. Once an administrator has repaired it, the next run lets it log in
+    /// again. When the run does not manage it (the service is off), an existing account cannot
+    /// log in at all (`HOST NONE`), so the password a kept Secret still holds writes nothing.
+    async fn ensure_ingest(
+        &self,
+        password: Option<&Password>,
+        report: &mut Report,
+    ) -> Result<(), Error> {
+        let user = INGEST_ACCOUNT;
+        let params = [("user", user)];
+        let exists = self
+            .query("look for the ingest account", USER_EXISTS, &params)
+            .await?
+            .trim()
+            != "0";
+        let Some(password) = password else {
+            if exists && self.can_log_in(user).await? {
+                self.query(&format!("revoke the login of {user}"), LOGIN_NONE, &params)
+                    .await?;
+                report.change(format!(
+                    "revoked the login of ClickHouse account {user}: ingest is not deployed"
+                ));
+            }
+            return Ok(());
+        };
+        if let Some(finding) = self.audit_ingest(exists).await? {
+            if !exists {
+                return Err(Error::ClickHouse(finding));
+            }
+            // Detection alone would leave the account able to act until an administrator reads
+            // the log.
+            let revoked = self
+                .query(&format!("revoke the login of {user}"), LOGIN_NONE, &params)
+                .await;
+            return Err(Error::ClickHouse(match revoked {
+                Ok(_) => format!(
+                    "{finding}; the run revoked the login of {user} (HOST NONE), and the first \
+                     run after the repair lets it log in again while ingest is deployed"
+                ),
+                Err(error) => {
+                    format!("{finding}; revoking the login of {user} failed as well: {error}")
+                }
+            }));
+        }
+        let (hash, salt) = password
+            .clickhouse_sha256()
+            .map_err(|error| Error::Random(error.to_string()))?;
+        let auth = [
+            ("user", user),
+            ("hash", hash.as_str()),
+            ("salt", salt.as_str()),
+        ];
+        if !exists {
+            self.query("create the ingest account", CREATE_INGEST, &auth)
+                .await?;
+            report.change(format!("created ClickHouse account {user}"));
+            return Ok(());
+        }
+        if !self.can_log_in(user).await? {
+            // Its login revoked by a run without the service, or after a finding: the Secret's
+            // password first, so it never logs in again with an older one.
+            self.query("set the ingest account's password", SET_PASSWORD, &auth)
+                .await?;
+            report.change(format!("set the password of ClickHouse account {user}"));
+            self.query(&format!("let {user} log in"), LOGIN_ANY, &params)
+                .await?;
+            report.change(format!("let ClickHouse account {user} log in"));
+            return Ok(());
+        }
+        match self.send(user, password.expose(), PROBE, &[], &[]).await {
+            Ok(_) => Ok(()),
+            Err(failure) if failure.is_authentication() => {
+                self.query("set the ingest account's password", SET_PASSWORD, &auth)
+                    .await?;
+                report.change(format!("set the password of ClickHouse account {user}"));
+                Ok(())
+            }
+            Err(failure) => Err(Error::ClickHouse(format!(
+                "log in as {user} to check its password: {}",
+                failure.text.trim()
+            ))),
+        }
+    }
+
+    /// What about the ingest role, its holders or, when it `exists`, ingest's account differs
+    /// from what the DDL files and the run gave them, if anything.
+    async fn audit_ingest(&self, exists: bool) -> Result<Option<String>, Error> {
+        let user = INGEST_ACCOUNT;
+        let role = [("role", INGEST_ROLE)];
+        let role_exists = self
+            .query("look for the ingest role", ROLE_EXISTS, &role)
+            .await?;
+        if role_exists.trim() == "0" {
+            return Ok(Some(format!(
+                "the ClickHouse role {INGEST_ROLE} does not exist after the DDL files; \
+                 0004_access.sql creates it"
+            )));
+        }
+        let grants = self
+            .query("read the ingest role's grants", INGEST_ROLE_GRANTS, &role)
+            .await?;
+        let roles = self
+            .query("read the roles of the ingest role", ROLE_ROLES, &role)
+            .await?;
+        let grants: Vec<&str> = grants.lines().filter(|line| !line.is_empty()).collect();
+        let roles: Vec<&str> = roles.lines().filter(|line| !line.is_empty()).collect();
+        if let Some(differences) = ingest_role_differences(&grants, &roles) {
+            return Ok(Some(format!(
+                "the role {INGEST_ROLE} has other grants or roles than the DDL files give it \
+                 ({differences}); the DDL files give it SELECT, INSERT and ALTER DELETE on \
+                 trustiot.telemetry and SELECT and INSERT on trustiot.stream_commits, \
+                 trustiot.telemetry_1m and trustiot.telemetry_1h, so an administrator must \
+                 revoke or grant them again (docs/runbooks/migrations.md)",
+                differences = cut(&differences)
+            )));
+        }
+        let grantees = self
+            .query(
+                "read who holds the ingest role",
+                INGEST_GRANTEES,
+                &[("role", INGEST_ROLE), ("user", user)],
+            )
+            .await?;
+        let grantees: Vec<&str> = grantees.lines().filter(|line| !line.is_empty()).collect();
+        if !grantees.is_empty() {
+            let shown = grantees
+                .iter()
+                .take(GRANTEES_SHOWN)
+                .copied()
+                .collect::<Vec<_>>()
+                .join(", ");
+            return Ok(Some(format!(
+                "the role {INGEST_ROLE} is held by {} grantee(s) besides {user}: {shown}; every \
+                 holder writes and deletes every tenant's telemetry, so an administrator must \
+                 revoke it (docs/runbooks/migrations.md)",
+                grantees.len()
+            )));
+        }
+        if !exists {
+            return Ok(None);
+        }
+        let params = [("user", user)];
+        let roles = self
+            .query("read the ingest account's roles", USER_ROLES, &params)
+            .await?;
+        let grants = self
+            .query("read the ingest account's grants", USER_GRANTS, &params)
+            .await?;
+        let settings = self
+            .query("read the ingest account's settings", USER_SETTINGS, &params)
+            .await?;
+        let roles: Vec<&str> = roles.lines().filter(|line| !line.is_empty()).collect();
+        let expected = format!("{INGEST_ROLE}\t1\t0");
+        if roles != [expected.as_str()] || grants.trim() != "0" || settings.trim() != "0" {
+            return Ok(Some(format!(
+                "the ClickHouse account {user} has other roles, grants or settings than \
+                 {INGEST_ROLE} as its default role; an administrator must revoke them \
+                 (docs/runbooks/migrations.md)"
+            )));
+        }
+        let auth = self
+            .query(
+                "read the ingest account's authentication methods",
+                USER_AUTH,
+                &params,
+            )
+            .await?;
+        let auth = auth.trim();
+        if auth != INGEST_AUTH {
+            return Ok(Some(format!(
+                "the ClickHouse account {user} has the authentication methods [{}] instead of \
+                 the one {INGEST_AUTH} method the run sets; any other method is a way to log in \
+                 that no Secret holds, so an administrator must drop the account \
+                 (docs/runbooks/migrations.md)",
+                cut(auth)
+            )));
+        }
+        Ok(None)
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_ingest_role_differences_name_extra_and_missing_rows_and_roles() {
+        assert_eq!(ingest_role_differences(&INGEST_EXPECTED_GRANTS, &[]), None);
+        // GRANT ... WITH GRANT OPTION replaces the row: one extra, one missing.
+        let mut granted: Vec<&str> = INGEST_EXPECTED_GRANTS.to_vec();
+        granted.retain(|line| *line != "SELECT\ttrustiot\ttelemetry\t\t0\t0");
+        granted.push("SELECT\ttrustiot\ttelemetry\t\t1\t0");
+        granted.push("SELECT\ttrustiot\ttenant_telemetry\tvalue\t0\t0");
+        granted.push("SHOW TABLES\t\t\t\t0\t0");
+        granted.push("ALTER UPDATE\ttrustiot\ttelemetry\t\t0\t1");
+        assert_eq!(
+            ingest_role_differences(&granted, &["extra_role"]).as_deref(),
+            Some(
+                "extra grants: SELECT ON trustiot.telemetry WITH GRANT OPTION, \
+                 SELECT(value) ON trustiot.tenant_telemetry, SHOW TABLES ON *.*, \
+                 ALTER UPDATE ON trustiot.telemetry (partial revoke); \
+                 missing grants: SELECT ON trustiot.telemetry; extra roles: extra_role"
+            )
+        );
+        // Each kind names five, then how many more.
+        let roles: Vec<String> = (1..=7).map(|n| format!("r{n}")).collect();
+        let roles: Vec<&str> = roles.iter().map(String::as_str).collect();
+        assert_eq!(
+            ingest_role_differences(&[], &roles).as_deref(),
+            Some(
+                "missing grants: INSERT ON trustiot.stream_commits, SELECT ON \
+                 trustiot.stream_commits, ALTER DELETE ON trustiot.telemetry, INSERT ON \
+                 trustiot.telemetry, SELECT ON trustiot.telemetry and 4 more; extra roles: r1, \
+                 r2, r3, r4, r5 and 2 more"
+            )
+        );
+    }
 
     #[test]
     fn a_bound_backfill_policy_is_named_with_whom_it_names() {
@@ -1446,9 +1809,9 @@ mod tests {
                      fsync_after_insert = 1, index_granularity = 8192";
         assert_eq!(managed_ttl_days(files, "received_at"), Ok(400));
         // As ClickHouse 26.8 stores the run's query parameter.
-        let run = "ReplacingMergeTree PARTITION BY toYYYYMM(committed_at) ORDER BY (stream_id, \
-                   seq) TTL toDateTime(committed_at) + toIntervalDay(_CAST(180, 'UInt32')) \
-                   SETTINGS fsync_after_insert = 1";
+        let run = "ReplacingMergeTree PARTITION BY toYYYYMM(committed_at) ORDER BY (gateway_id, \
+                   stream_id, seq) TTL toDateTime(committed_at) + \
+                   toIntervalDay(_CAST(180, 'UInt32')) SETTINGS fsync_after_insert = 1";
         assert_eq!(managed_ttl_days(run, "committed_at"), Ok(180));
         assert_eq!(
             managed_ttl_days(

@@ -160,10 +160,10 @@ describe("the local login roles against the product", () => {
   test("the parsers read the real files, so the comparison above cannot pass on an empty read", () => {
     const registry = registryServices(registrySource);
     expect(registry.find((service) => service.name === "identity")).toEqual({ name: "identity", platformRole: true, consumes: ["identity", "assets", "certs"] });
-    // "assets" reads its own outbox only until the gateway configuration's consumer registers
-    // (Laysi/trustiot-v2#93), which drops it from this list.
-    expect(registry.find((service) => service.name === "assets")).toEqual({ name: "assets", platformRole: true, consumes: ["identity", "certs", "assets"] });
-    expect(chartPlatformLogins(chartSource)).toEqual(["assets", "certs", "identity", "telemetry-query"]);
+    // certs reads assets' events (Laysi/trustiot-v2#632), so assets no longer reads its own.
+    expect(registry.find((service) => service.name === "assets")).toEqual({ name: "assets", platformRole: true, consumes: ["identity", "certs"] });
+    expect(registry.find((service) => service.name === "certs")).toEqual({ name: "certs", platformRole: true, consumes: ["assets"] });
+    expect(chartPlatformLogins(chartSource)).toEqual(["assets", "assistant", "certs", "gateway-ops", "identity", "ingest", "telemetry-query"]);
   });
 
   test("every role the local Job binds is a login role the registry creates", () => {
@@ -267,7 +267,24 @@ describe("the logins", () => {
       { service: "certs", kind: "app", role: "certs_app", secret: "dev-certs-password", stateKey: "certs" },
       { service: "certs", kind: "platform", role: "certs_platform", secret: "dev-certs-password", stateKey: "certs-platform" },
       { service: "assistant", kind: "app", role: "assistant_app", secret: "dev-assistant-password", stateKey: "assistant" },
+      {
+        service: "assistant",
+        kind: "platform",
+        role: "assistant_platform",
+        secret: "dev-assistant-password",
+        stateKey: "assistant-platform",
+      },
       { service: "ai-gateway", kind: "app", role: "ai_gateway_app", secret: "dev-ai-gateway-password", stateKey: "ai-gateway" },
+      { service: "ingest", kind: "app", role: "ingest_app", secret: "dev-ingest-password", stateKey: "ingest" },
+      { service: "ingest", kind: "platform", role: "ingest_platform", secret: "dev-ingest-password", stateKey: "ingest-platform" },
+      { service: "gateway-ops", kind: "app", role: "gateway_ops_app", secret: "dev-gateway-ops-password", stateKey: "gateway-ops" },
+      {
+        service: "gateway-ops",
+        kind: "platform",
+        role: "gateway_ops_platform",
+        secret: "dev-gateway-ops-password",
+        stateKey: "gateway-ops-platform",
+      },
     ]);
   });
 

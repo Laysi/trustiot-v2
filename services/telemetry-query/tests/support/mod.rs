@@ -73,7 +73,7 @@ ON trustiot.telemetry AS PERMISSIVE FOR SELECT USING 1 TO trustiot_test_referenc
 const INSERT_READINGS: &str = "INSERT INTO trustiot.telemetry (tenant_id, gateway_id, stream_id,
   batch_seq, device_id, point, ts, received_at, value_type, value_float, value_int, value_bool,
   value_string)
-SELECT {tenant:UUID}, generateUUIDv4(), generateUUIDv4(), number, {device:UUID}, {point:String},
+SELECT {tenant:UUID}, 'test-gateway', 'stream-1', number, {device:UUID}, {point:String},
   fromUnixTimestamp64Milli({start:Int64} + toInt64(number) * {step:Int64}), now64(3),
   {type:String},
   if({type:String} = 'float', round(sin(number) * 100, 3), 0),

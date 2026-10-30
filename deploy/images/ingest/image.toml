@@ -1,0 +1,4 @@
+# The ingest service (services/ingest): gateway telemetry from the MQTT broker into ClickHouse,
+# acknowledged once each batch is on disk. Packed with deploy/images/rust-binary.Containerfile.
+[rust]
+package = "ingest"

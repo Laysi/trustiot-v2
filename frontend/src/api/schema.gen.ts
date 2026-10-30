@@ -190,6 +190,49 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/assistant/v1/conversations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The caller's conversations, most recently active first. */
+        get: operations["listConversations"];
+        put?: never;
+        /**
+         * Starts a conversation for the caller: empty, with today's system prompt, tools and model
+         *     settings fixed for its whole life.
+         */
+        post: operations["createConversation"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/assistant/v1/conversations/{conversation_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** One of the caller's conversations with its questions and answers. */
+        get: operations["getConversation"];
+        put?: never;
+        post?: never;
+        /**
+         * Deletes one of the caller's conversations. It leaves every list but the deleted one, and
+         *     can be restored for 30 days; then it is removed for good.
+         */
+        delete: operations["deleteConversation"];
+        options?: never;
+        head?: never;
+        /** Renames, archives or unarchives one of the caller's conversations, both in one transaction. */
+        patch: operations["updateConversation"];
+        trace?: never;
+    };
     "/api/assistant/v1/conversations/{conversation_id}/dashboards": {
         parameters: {
             query?: never;
@@ -201,6 +244,26 @@ export interface paths {
         get: operations["listConversationDashboards"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/assistant/v1/conversations/{conversation_id}/restore": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Restores one of the caller's deleted conversations, as it was when it was deleted. Only
+         *     within 30 days of the deletion.
+         */
+        post: operations["restoreConversation"];
         delete?: never;
         options?: never;
         head?: never;
@@ -340,6 +403,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/assistant/v1/deleted-conversations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The caller's deleted conversations that can still be restored, most recently deleted first:
+         *     titles and times, no messages.
+         */
+        get: operations["listDeletedConversations"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/certs/v1/gateway-registrations": {
         parameters: {
             query?: never;
@@ -351,6 +434,26 @@ export interface paths {
         put?: never;
         /** Registers a gateway at the factory and returns its initial certificate. */
         post: operations["registerGateway"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/certs/v1/gateways/{hardware_id}/revoke": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Revokes every certificate of a gateway that is neither revoked nor expired: decision 6's
+         *     three steps, see the module's documentation.
+         */
+        post: operations["revokeGateway"];
         delete?: never;
         options?: never;
         head?: never;
@@ -387,11 +490,33 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Revokes a workstation certificate. Its issuing CA's next scheduled CRL lists it; the
+         * Revokes a workstation certificate. Once the revocation commits, its issuing CA gets a new
+         *     CRL that lists it before the response goes out (Laysi/trustiot-v2#635; when that fails, the
+         *     revocation stands and the CRL job lists it within one `crl.check_interval`); the
          *     registration API (Laysi/trustiot-v2#79) reads the ledger, so it refuses the certificate at
          *     once.
          */
         post: operations["revokeWorkstationCertificate"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/gateway-ops/v1/gateways": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The tenant's gateways, with whether each is connected, its last report and its configuration
+         *     versions.
+         */
+        get: operations["listGateways"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -410,6 +535,47 @@ export interface paths {
         put?: never;
         post?: never;
         delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/identity/v1/platform/ai/model-roles": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Lists the AI gateway's model roles and providers. Platform administrators only, in their own
+         *     request.
+         */
+        get: operations["listPlatformAiModelRoles"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/identity/v1/platform/ai/model-roles/{role}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Changes a model role's models. Platform administrators only, in their own request. */
+        put: operations["setPlatformAiModelRole"];
+        post?: never;
+        /**
+         * Resets a model role to the models the configuration gives it. Platform administrators only,
+         *     in their own request.
+         */
+        delete: operations["resetPlatformAiModelRole"];
         options?: never;
         head?: never;
         patch?: never;
@@ -554,7 +720,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Creates a tenant. Platform administrators only. */
+        /** Creates a tenant. Platform administrators' own requests only. */
         post: operations["createTenant"];
         delete?: never;
         options?: never;
@@ -699,6 +865,89 @@ export interface components {
              */
             resend_after_secs: number;
         };
+        /** @description A conversation as the list shows it. */
+        Conversation: {
+            /**
+             * Format: date-time
+             * @description When it was archived; `null` when it is not.
+             */
+            archived_at?: string | null;
+            /**
+             * Format: date-time
+             * @description When it was started, by the database clock.
+             */
+            created_at: string;
+            /**
+             * Format: uuid
+             * @description The conversation's ID.
+             */
+            id: string;
+            /**
+             * Format: date-time
+             * @description When messages were last added to it (when it was started, before that); the list's order.
+             */
+            last_activity_at: string;
+            /** @description Its title; `null` until it gets one. */
+            title?: string | null;
+            title_source?: components["schemas"]["ConversationTitleSource"] | null;
+        };
+        /**
+         * @description A conversation with the messages the chat shows: the questions and the answers, oldest
+         *     first. The assistant's reasoning, its tool calls and their results, and the instructions it
+         *     started with are not part of it.
+         */
+        ConversationDetail: {
+            /**
+             * Format: date-time
+             * @description When it was archived; `null` when it is not.
+             */
+            archived_at?: string | null;
+            /**
+             * Format: date-time
+             * @description When it was started, by the database clock.
+             */
+            created_at: string;
+            /**
+             * Format: uuid
+             * @description The conversation's ID.
+             */
+            id: string;
+            /**
+             * Format: date-time
+             * @description When messages were last added to it (when it was started, before that).
+             */
+            last_activity_at: string;
+            /** @description The questions and answers, oldest first. */
+            messages: components["schemas"]["ConversationMessage"][];
+            /** @description Its title; `null` until it gets one. */
+            title?: string | null;
+            title_source?: components["schemas"]["ConversationTitleSource"] | null;
+        };
+        /** @description One page of the caller's conversations, most recently active first. */
+        ConversationList: {
+            /** @description The conversations, most recently active first (by `last_activity_at`, then `id`). */
+            conversations: components["schemas"]["Conversation"][];
+            /** @description Pass it as `cursor` for the next page of the same list; `null` on the last page. Opaque. */
+            next_cursor?: string | null;
+        };
+        /** @description One message the chat shows: only its text. */
+        ConversationMessage: {
+            kind: components["schemas"]["ConversationMessageKind"];
+            /** @description The question as the user asked it, or the text of the answer. */
+            text: string;
+        };
+        /**
+         * @description What a message of the chat is.
+         * @enum {string}
+         */
+        ConversationMessageKind: "question" | "answer";
+        /**
+         * @description Who gave a conversation its title.
+         * @enum {string}
+         */
+        ConversationTitleSource: "provisional" | "user" | "model";
+        /** @description Starting a conversation takes no settings: no body, `null`, or an empty object. */
+        CreateConversation: Record<string, unknown>;
         /** @description The body of `POST /api/assets/v1/devices`. Unknown fields are refused. */
         CreateDevice: {
             /** @description The gateway that polls it: one currently bound to the caller's tenant. */
@@ -1211,6 +1460,36 @@ export interface components {
          * @enum {string}
          */
         DataStatus: "ok" | "no_data";
+        /** @description A deleted conversation: no messages. */
+        DeletedConversation: {
+            /**
+             * Format: date-time
+             * @description When it was deleted, by the database clock.
+             */
+            deleted_at: string;
+            /**
+             * Format: uuid
+             * @description The conversation's ID.
+             */
+            id: string;
+            /**
+             * Format: date-time
+             * @description Until when it can be restored (30 days after `deleted_at`); it is removed for good after.
+             */
+            restorable_until: string;
+            /** @description Its title; `null` if it had none. */
+            title?: string | null;
+        };
+        /**
+         * @description One page of the caller's deleted conversations that can still be restored, most recently
+         *     deleted first.
+         */
+        DeletedConversationList: {
+            /** @description The conversations, most recently deleted first (by `deleted_at`, then `id`). */
+            conversations: components["schemas"]["DeletedConversation"][];
+            /** @description Pass it as `cursor` for the next page; `null` on the last page. Opaque. */
+            next_cursor?: string | null;
+        };
         /** @description A device: a Modbus endpoint one of the tenant's gateways polls with one of its models. */
         Device: {
             /**
@@ -1494,6 +1773,53 @@ export interface components {
             /** Format: date-time */
             to: string;
         };
+        /** @description A gateway bound to the caller's tenant. */
+        Gateway: {
+            /**
+             * @description The agent's release the gateway reported on its current (or last) connection; `null`
+             *     before that connection reported one.
+             * @example 1.4.0
+             */
+            agent_version?: string | null;
+            /**
+             * Format: int64
+             * @description The configuration version the gateway said it has applied, in the latest heartbeat of
+             *     its current (or last) connection; `null` before that connection sent one.
+             */
+            applied_config_version?: number | null;
+            /** @description The binding (a new one each time the gateway is bound). */
+            binding_id: components["schemas"]["GatewayBindingId"];
+            /**
+             * Format: date-time
+             * @description When it was bound.
+             */
+            bound_at: string;
+            /**
+             * Format: int64
+             * @description The latest configuration version stored for the binding (what the gateway should have);
+             *     `null` before the first one.
+             */
+            desired_config_version?: number | null;
+            /**
+             * @description The hardware ID.
+             * @example tg-0001
+             */
+            hardware_id: string;
+            /**
+             * Format: date-time
+             * @description When the service last received a status or heartbeat of the gateway's current or last
+             *     session (its last report); `null` while `unknown`.
+             */
+            last_seen_at?: string | null;
+            offline_reason?: components["schemas"]["OfflineReason"] | null;
+            /** @description Whether it is connected. */
+            presence: components["schemas"]["Presence"];
+            /**
+             * Format: date-time
+             * @description When `presence` last changed, by the service's database clock; `null` while `unknown`.
+             */
+            presence_changed_at?: string | null;
+        };
         /** @description A gateway's binding to a tenant. */
         GatewayBinding: {
             /** @description The binding: a new one every time the gateway is bound. */
@@ -1520,6 +1846,11 @@ export interface components {
          *     Serialized as a lowercase hyphenated UUID string.
          */
         GatewayBindingId: string;
+        /** @description The caller's tenant's gateways. */
+        GatewayList: {
+            /** @description By hardware ID (byte order). */
+            gateways: components["schemas"]["Gateway"][];
+        };
         /** @description A gateway's factory registration, as the service records it. */
         GatewayRegistration: {
             /** @description The issuing CA that signed the initial certificate: the SHA-256 of its public key. */
@@ -1575,6 +1906,16 @@ export interface components {
             serial: string;
             /** @description The name of the workstation that registered it. */
             workstation: string;
+        };
+        /**
+         * @description A stored model list the AI gateway does not use because it no longer fits the
+         *     configuration; the role uses its configured models.
+         */
+        IgnoredModels: {
+            /** @description The stored models. */
+            models: string[];
+            /** @description Why, in English, as the AI gateway explains it (for operators; not translated). */
+            reason: string;
         };
         /**
          * @description How readings are grouped: `raw` (no grouping) or a bucket length.
@@ -1723,6 +2064,67 @@ export interface components {
          * @example error.not_found
          */
         MessageKey: string;
+        /**
+         * @description A provider configured in the AI gateway: a role's models may name it when its protocol is
+         *     the role's.
+         */
+        ModelProvider: {
+            /** @description The provider's name, the `<provider>` of a model. */
+            name: string;
+            /** @description `anthropic-messages` or `openai-decisions` today. */
+            protocol: string;
+        };
+        /** @description A model role of the AI gateway. */
+        ModelRole: {
+            /** @description The models the configuration gives the role, which a reset goes back to. */
+            configured_models: string[];
+            ignored: components["schemas"]["IgnoredModels"] | null;
+            /** @description The models in effect, `<provider>/<model>` in fallback order. */
+            models: string[];
+            /**
+             * @description The role's protocol, which only the configuration sets: `anthropic-messages` or
+             *     `openai-decisions` today.
+             */
+            protocol: string;
+            /** @description The role's name, such as `main`. */
+            role: string;
+            /** @description Where `models` come from. */
+            source: components["schemas"]["ModelSource"];
+            /**
+             * Format: date-time
+             * @description When the role was last changed or reset; `null` when it never was, or the AI gateway
+             *     could not say.
+             */
+            updated_at: string | null;
+            /**
+             * @description Who last changed or reset the role, as the AI gateway recorded it (`user:<user ID>` for
+             *     changes made here); `null` when nobody did.
+             */
+            updated_by: string | null;
+            /**
+             * Format: int64
+             * @description The version a change or reset must send as `expected_version`; 0 when the role was never
+             *     changed.
+             */
+            version: number;
+        };
+        /** @description Every model role and every configured provider, by name. */
+        ModelRoles: {
+            /** @description Every configured provider. */
+            providers: components["schemas"]["ModelProvider"][];
+            /** @description Every configured role. */
+            roles: components["schemas"]["ModelRole"][];
+        };
+        /**
+         * @description Where a role's models in effect come from.
+         * @enum {string}
+         */
+        ModelSource: "configuration" | "database";
+        /**
+         * @description Why a gateway is offline.
+         * @enum {string}
+         */
+        OfflineReason: "shutdown" | "connection_lost" | "heartbeat_timeout";
         /** @description A gateway of the device pool. */
         PoolGateway: {
             binding?: components["schemas"]["GatewayBinding"] | null;
@@ -1765,6 +2167,11 @@ export interface components {
              */
             time_zone: string;
         };
+        /**
+         * @description Whether a gateway is connected.
+         * @enum {string}
+         */
+        Presence: "online" | "offline" | "unknown";
         /** @description The range an answer covers. */
         QueryRange: {
             /**
@@ -1865,18 +2272,61 @@ export interface components {
          * @enum {string}
          */
         Resolution: "1m" | "1h";
+        /** @description Restoring a conversation takes no settings: no body, `null`, or an empty object. */
+        RestoreConversation: Record<string, unknown>;
         /**
-         * @description A reason a workstation certificate can be revoked for: the RFC 5280 CRLReason codes that
-         *     apply to an end entity, without `certificateHold` (a revocation here is final).
+         * @description A reason a workstation or gateway certificate can be revoked for: the RFC 5280 CRLReason codes
+         *     that apply to an end entity, without `certificateHold` (a revocation here is final).
          * @enum {string}
          */
         RevocationReason: "unspecified" | "key_compromise" | "affiliation_changed" | "superseded" | "cessation_of_operation" | "privilege_withdrawn";
+        /**
+         * @description The body of `POST /api/certs/v1/gateways/{hardware_id}/revoke` (Laysi/trustiot-v2#636): revokes
+         *     every certificate of the gateway that is neither revoked nor expired. Unknown fields are
+         *     refused.
+         */
+        RevokeGateway: {
+            reason?: components["schemas"]["RevocationReason"] | null;
+        };
         /**
          * @description The body of `POST /api/certs/v1/workstation-certificates/{serial}/revoke`. Unknown fields are
          *     refused.
          */
         RevokeWorkstationCertificate: {
             reason?: components["schemas"]["RevocationReason"] | null;
+        };
+        /** @description What `POST /api/certs/v1/gateways/{hardware_id}/revoke` revoked. */
+        RevokedGateway: {
+            /** @description The gateway's hardware ID. */
+            hardware_id: string;
+            /**
+             * @description The certificates revoked by this request, by serial number; at least one. Certificates
+             *     revoked before, or expired, are not in it.
+             */
+            revoked: components["schemas"]["RevokedGatewayCertificate"][];
+        };
+        /** @description A gateway certificate this request revoked, as the ledger now records it. */
+        RevokedGatewayCertificate: {
+            /** @description The issuing CA that signed it: the SHA-256 of its public key, 64 lower-case hex digits. */
+            ca_key_id: string;
+            /**
+             * Format: date-time
+             * @description When it would have expired; its CA's CRLs list it until then.
+             */
+            not_after: string;
+            /**
+             * Format: date-time
+             * @description When it became valid.
+             */
+            not_before: string;
+            revocation_reason?: components["schemas"]["RevocationReason"] | null;
+            /**
+             * Format: date-time
+             * @description When it was revoked.
+             */
+            revoked_at: string;
+            /** @description The serial number, lower-case hex. */
+            serial: string;
         };
         /** @description A data point's series. */
         Series: {
@@ -2094,6 +2544,23 @@ export interface components {
             /** @description The role to give the user in the tenant. */
             role: components["schemas"]["MemberRole"];
         };
+        /**
+         * @description The body of `PUT /api/identity/v1/platform/ai/model-roles/{role}`. Unknown fields are
+         *     ignored.
+         */
+        SetRoleModels: {
+            /**
+             * Format: int64
+             * @description The role's `version` as the caller read it; the change is refused with 409 when the role
+             *     has another version by then.
+             */
+            expected_version: number;
+            /**
+             * @description 1 to 8 distinct `<provider>/<model>` in fallback order, first choice first, of configured
+             *     providers whose protocol is the role's.
+             */
+            models: string[];
+        };
         /** @description Statistics of each series. */
         Statistics: {
             range: components["schemas"]["QueryRange"];
@@ -2178,6 +2645,21 @@ export interface components {
             time: string;
             /** Format: double */
             value: number;
+        };
+        /** @description What to change: at least one of the two. */
+        UpdateConversation: {
+            /**
+             * @description `true` archives the conversation, `false` takes it out of the archive. An archived
+             *     conversation is listed only with `archived=true`, and can still be read and continued.
+             */
+            archived?: boolean | null;
+            /**
+             * @description The new title, 1 to 200 characters after trimming the surrounding white space, at least
+             *     one of them visible, without control, bidirectional or deprecated formatting (U+202A to
+             *     U+202E, U+2066 to U+206F) or line separator characters. It replaces any title, the
+             *     model's included.
+             */
+            title?: string | null;
         };
         /**
          * @description The body of `PUT /api/assets/v1/devices/{device_id}`: the device's settings, which replace
@@ -3404,7 +3886,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description The user has not picked or joined a tenant (`permission_denied`). */
+            /** @description No tenant or no role in it (`permission_denied`). */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -3423,6 +3905,349 @@ export interface operations {
                 };
             };
             /** @description The database failed (`unavailable`). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    listConversations: {
+        parameters: {
+            query?: {
+                /** @description `true` lists only the archived conversations; without it, or `false`, only the ones not archived. */
+                archived?: boolean;
+                /** @description Conversations per page, 1 to 100; default 50. */
+                limit?: number;
+                /** @description The previous page's `next_cursor` of the same list, for the next page. */
+                cursor?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description A page of the caller's conversations; deleted ones are never listed. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConversationList"];
+                };
+            };
+            /** @description A malformed query, `archived` other than `true` or `false` (`invalid_request`), a `limit` out of range (`conversation.limit_invalid`), or a `cursor` that is not a `next_cursor` of this list (`conversation.cursor_invalid`). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No valid session (`unauthenticated`). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No tenant or no role in it (`permission_denied`). */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The database failed (`unavailable`). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    createConversation: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Nothing to set: send `Content-Type: application/json` (required, against cross-site requests) with no body, `null`, or an empty object. */
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["CreateConversation"] | null;
+            };
+        };
+        responses: {
+            /** @description The conversation was started; `Location` names it. */
+            201: {
+                headers: {
+                    /** @description The conversation's path. */
+                    location?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Conversation"];
+                };
+            };
+            /** @description The `Content-Type` is not `application/json` (`invalid_request`), or there is a body other than `null` or an empty object (`conversation.body_invalid`). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No valid session (`unauthenticated`). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No tenant or no role in it (`permission_denied`). */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The caller started 100 conversations in this tenant within the last 24 hours, deleted ones included (`rate_limited`, key `conversation.start_limited`, `details.max`); nothing was stored. */
+            429: {
+                headers: {
+                    /** @description Seconds until the oldest of those conversations leaves the 24 hours and a start is allowed again. */
+                    "retry-after"?: number;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The database failed (`unavailable`); nothing was written. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    getConversation: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The conversation's ID. */
+                conversation_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The conversation and the messages the chat shows. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConversationDetail"];
+                };
+            };
+            /** @description No valid session (`unauthenticated`). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No tenant or no role in it (`permission_denied`). */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No such conversation of the caller's, or it is deleted (`not_found`). */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The database failed (`unavailable`). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    deleteConversation: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The conversation's ID. */
+                conversation_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Deleted; it can be restored for 30 days (the deleted list gives until when). No body. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No valid session (`unauthenticated`). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No tenant or no role in it (`permission_denied`). */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No such conversation of the caller's, or it is already deleted (`not_found`). */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description A question of the conversation is being answered (`conflict`, `conversation.question_running`). Nothing changed. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The database failed (`unavailable`); nothing changed. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    updateConversation: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The conversation's ID. */
+                conversation_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateConversation"];
+            };
+        };
+        responses: {
+            /** @description The conversation as it is now. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Conversation"];
+                };
+            };
+            /** @description The `Content-Type` is not `application/json` (`invalid_request`), the body is not a JSON object of `title` and `archived` (`conversation.body_invalid`), or it has neither (`conversation.update_empty`). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No valid session (`unauthenticated`). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No tenant or no role in it (`permission_denied`). */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No such conversation of the caller's, or it is deleted (`not_found`). */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The title, after trimming, is empty, longer than 200 characters, has no visible character, or has a control, bidirectional formatting or line separator character (`validation_failed`, field `/title`, `conversation.title_invalid`). Nothing was written. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The database failed (`unavailable`); nothing was written. */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -3494,6 +4319,79 @@ export interface operations {
                 };
             };
             /** @description The database failed (`unavailable`). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    restoreConversation: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The conversation's ID. */
+                conversation_id: string;
+            };
+            cookie?: never;
+        };
+        /** @description Nothing to set: send `Content-Type: application/json` (required, against cross-site requests) with no body, `null`, or an empty object. */
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["RestoreConversation"] | null;
+            };
+        };
+        responses: {
+            /** @description Restored; the conversation as it is now. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Conversation"];
+                };
+            };
+            /** @description The `Content-Type` is not `application/json` (`invalid_request`), or there is a body other than `null` or an empty object (`conversation.body_invalid`). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No valid session (`unauthenticated`). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No tenant or no role in it (`permission_denied`). */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No deleted conversation of the caller's with this ID that can still be restored (`not_found`). */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The database failed (`unavailable`); nothing changed. */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -4131,6 +5029,67 @@ export interface operations {
             };
         };
     };
+    listDeletedConversations: {
+        parameters: {
+            query?: {
+                /** @description Conversations per page, 1 to 100; default 50. */
+                limit?: number;
+                /** @description The previous page's `next_cursor` of this list, for the next page. */
+                cursor?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description A page of the caller's deleted conversations that can still be restored. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeletedConversationList"];
+                };
+            };
+            /** @description A malformed query (`invalid_request`), a `limit` out of range (`conversation.limit_invalid`), or a `cursor` that is not a `next_cursor` of this list (`conversation.cursor_invalid`). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No valid session (`unauthenticated`). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No tenant or no role in it (`permission_denied`). */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The database failed (`unavailable`). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
     registerGateway: {
         parameters: {
             query?: never;
@@ -4227,6 +5186,105 @@ export interface operations {
             };
         };
     };
+    revokeGateway: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The gateway's hardware ID, as registered at the factory. */
+                hardware_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RevokeGateway"];
+            };
+        };
+        responses: {
+            /** @description Revoked now, each certificate listed with its serial number. Before this response the ledger records the revocations and each of their issuing CAs gets a CRL that lists them (should that fail, the CRL job lists them within one check interval, default 5 minutes), and the broker is asked to drop the gateway's permissions, which also disconnects it. The broker refuses the certificates in the TLS handshake once it has loaded the new CRL, within one trust interval (default 30 seconds). A renewal may later give the gateway a new certificate if it is still bound, unless the reason is `key_compromise`, which ends its renewals for good. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RevokedGateway"];
+                };
+            };
+            /** @description The `Content-Type` is not `application/json`, the body is larger than 1 KiB (`gateway_revocation.body_too_large`), or it is not a JSON object (`gateway_revocation.body_invalid`) (`invalid_request`). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No valid session (`unauthenticated`). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Not a platform administrator (`permission_denied`). */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No gateway is registered with this hardware ID (`not_found`). */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The gateway has no certificate that is neither revoked nor expired (`conflict`, `gateway_revocation.no_valid_certificate`). Nothing changed. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description An unknown field (`gateway_revocation.unknown_field`), or a reason that is not one of the listed ones (`gateway_revocation.reason_invalid`) (`validation_failed`). Nothing was revoked. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The revocation's task failed (`internal`). Whether anything was revoked is unknown; calling again tells (409 when it was). */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The database failed (`unavailable`). Most likely nothing was revoked; should the connection have broken while committing, the revocation may stand without its new CRL and broker step, which the CRL job and the next whole comparison catch up. Calling again tells (409 when it was revoked). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
     issueWorkstationCertificate: {
         parameters: {
             query?: never;
@@ -4312,7 +5370,7 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Revoked now; the ledger records the time and the reason, and the issuing CA's next scheduled CRL lists it. */
+            /** @description Revoked now; the ledger records the time and the reason, and the issuing CA's CRL lists it: a new CRL is issued right after the revocation, or, should that fail, by the CRL job within one check interval (default 5 minutes). */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -4376,6 +5434,53 @@ export interface operations {
                 };
             };
             /** @description The database failed (`unavailable`). Nothing was revoked. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    listGateways: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The gateways bound to the caller's tenant, by hardware ID. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GatewayList"];
+                };
+            };
+            /** @description No valid session (`unauthenticated`). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No tenant or no role in it (`permission_denied`). */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The database failed, or too many requests are being answered (`unavailable`). */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -4451,6 +5556,241 @@ export interface operations {
             };
         };
     };
+    listPlatformAiModelRoles: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Every model role of the AI gateway, with the models in effect, the configured ones and where they come from, and every configured provider. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModelRoles"];
+                };
+            };
+            /** @description No valid session (`unauthenticated`). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Not a platform administrator, or not the administrator's own request: another service exchanged the token (`permission_denied`). */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The AI gateway's admin API is not configured, not reachable, busy or failed (`unavailable`). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    setPlatformAiModelRole: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The role's name, such as `main`. */
+                role: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SetRoleModels"];
+            };
+        };
+        responses: {
+            /** @description The models were changed: the role as it is now, with its new `version`; `identity.ai_model_role_changed` is in the platform's operation log. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModelRole"];
+                };
+            };
+            /** @description The `Content-Type` is not `application/json`, or the body is over 16 KiB or not a JSON object with a string array `models` and an integer `expected_version` of at least 0 (`invalid_request`); nothing was sent. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No valid session (`unauthenticated`). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Not a platform administrator, not the administrator's own request (`permission_denied`), or a cross-site request (`permission_denied`, message key `security.cross_site_request`); nothing was sent. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The AI gateway has no such role (`not_found`, message key `ai_model_role.not_found`). */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The role is no longer at `expected_version` (`conflict`, message key `ai_model_role.version_conflict`, `details.current_version` when known); nothing was changed. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The models were refused (`validation_failed`, field `/models`): not 1 to 8 distinct, well-formed `<provider>/<model>` (`ai_model_role.invalid_models`), a provider that is not configured (`ai_model_role.unknown_provider`), or a provider of another protocol than the role (`ai_model_role.protocol_mismatch`); nothing was changed. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The AI gateway's admin API is not configured, not reachable or busy, or refused a request it should not have (`unavailable`): nothing was sent or nothing was changed. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The outcome is unknown (`timeout`, message key `ai_model_role.outcome_unknown`): the AI gateway did not answer in time, the connection broke, or its answer could not be read; the change may have taken effect, so read the roles again before retrying. */
+            504: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    resetPlatformAiModelRole: {
+        parameters: {
+            query: {
+                /** @description The role's `version` as the caller read it; the reset is refused with 409 when the role has another version by then. */
+                expected_version: number;
+            };
+            header?: never;
+            path: {
+                /** @description The role's name, such as `main`. */
+                role: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The role uses its configured models: the role as it is now. A role that had no stored models is unchanged, keeps its `version` and writes no event; otherwise `identity.ai_model_role_changed` is in the platform's operation log. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModelRole"];
+                };
+            };
+            /** @description The `Content-Type` is not `application/json` (send it without a body), or the query has no integer `expected_version` of at least 0 (`invalid_request`); nothing was sent. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No valid session (`unauthenticated`). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Not a platform administrator, not the administrator's own request (`permission_denied`), or a cross-site request (`permission_denied`, message key `security.cross_site_request`); nothing was sent. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The AI gateway has no such role (`not_found`, message key `ai_model_role.not_found`). */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The role is no longer at `expected_version` (`conflict`, message key `ai_model_role.version_conflict`, `details.current_version` when known); nothing was changed. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The AI gateway's admin API is not configured, not reachable or busy, or refused a request it should not have (`unavailable`): nothing was sent or nothing was changed. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The outcome is unknown (`timeout`, message key `ai_model_role.outcome_unknown`): the AI gateway did not answer in time, the connection broke, or its answer could not be read; the reset may have taken effect, so read the roles again before retrying. */
+            504: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
     getPlatformEventLog: {
         parameters: {
             query?: {
@@ -4496,7 +5836,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description The user is not a platform administrator (`permission_denied`). */
+            /** @description Not a platform administrator, or not the administrator's own request: another service exchanged the token (`permission_denied`). */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -4564,7 +5904,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description The user is not a platform administrator (`permission_denied`). */
+            /** @description Not a platform administrator, or not the administrator's own request: another service exchanged the token (`permission_denied`). */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -4815,6 +6155,15 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
+            /** @description A token another service exchanged for a call on the user's behalf (`permission_denied`): only the user's own requests log them out everywhere. No session is revoked. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
             /** @description The database failed; nothing was revoked (`unavailable`). */
             503: {
                 headers: {
@@ -5009,7 +6358,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description The user is not a platform administrator (`permission_denied`). */
+            /** @description The user is not a platform administrator, or not the administrator's own request: another service exchanged the token (`permission_denied`). Nothing was created. */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -5077,7 +6426,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description The user has not picked or joined a tenant (`permission_denied`). */
+            /** @description No tenant or no role in it (`permission_denied`). */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -5183,7 +6532,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description No tenant (`permission_denied`), or the range lies wholly before the queryable period (`quota_exceeded`, `telemetry.outside_queryable_period`, detail `earliest`). */
+            /** @description No tenant or no role in it (`permission_denied`), or the range lies wholly before the queryable period (`quota_exceeded`, `telemetry.outside_queryable_period`, detail `earliest`). */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -5279,7 +6628,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description No tenant (`permission_denied`), or the range lies wholly before the queryable period (`quota_exceeded`, `telemetry.outside_queryable_period`, detail `earliest`). */
+            /** @description No tenant or no role in it (`permission_denied`), or the range lies wholly before the queryable period (`quota_exceeded`, `telemetry.outside_queryable_period`, detail `earliest`). */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -5375,7 +6724,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description No tenant (`permission_denied`), or the range lies wholly before the queryable period (`quota_exceeded`, `telemetry.outside_queryable_period`, detail `earliest`). */
+            /** @description No tenant or no role in it (`permission_denied`), or the range lies wholly before the queryable period (`quota_exceeded`, `telemetry.outside_queryable_period`, detail `earliest`). */
             403: {
                 headers: {
                     [name: string]: unknown;

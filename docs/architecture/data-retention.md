@@ -1,6 +1,6 @@
 # 資料保存期限與磁碟水位
 
-原始遙測資料在 ClickHouse 存多久、閘道器的緩衝最多存多久、兩者的關係，以及 ClickHouse 磁碟快滿時的告警（清單 I2、G1、B3；Laysi/trustiot-v2#92，2026-10-21 訂定）；1 分鐘與 1 小時彙總表存多久（Laysi/trustiot-v2#141，2026-10-25 訂定，見下方「彙總資料的保存期限」）；租戶看得到多久以前的資料，以及由誰強制（Laysi/trustiot-v2#143，2026-10-26 訂定，見下方「可查期間」）。地端以 values 自訂保存期限由 Laysi/trustiot-v2#446 接上。
+原始遙測資料在 ClickHouse 存多久、閘道器的緩衝最多存多久、兩者的關係，以及 ClickHouse 磁碟快滿時的告警（清單 I2、G1、B3；Laysi/trustiot-v2#92，2026-10-21 訂定）；1 分鐘與 1 小時彙總表存多久（Laysi/trustiot-v2#141，2026-10-25 訂定，見下方「彙總資料的保存期限」）；租戶看得到多久以前的資料，以及由誰強制（Laysi/trustiot-v2#143，2026-10-26 訂定，見下方「可查期間」）；AI 助理刪除的對話留多久（Laysi/trustiot-v2#644，見下方「AI 助理刪除的對話」）。地端以 values 自訂保存期限由 Laysi/trustiot-v2#446 接上。
 
 ## 訂定的值
 
@@ -8,7 +8,7 @@
 |---|---|---|
 | 閘道器緩衝的最長保存時間 | 30 天 | `crates/protocol` 的 `telemetry::BUFFER_MAX_AGE_DAYS` |
 | 原始資料的保存期限（全平台統一，`trustiot.telemetry`） | 180 天 | `services/ingest/src/retention.rs` 的 `RAW_RETENTION_DAYS` |
-| 批次完成表的保存期限（`trustiot.batch_commits`） | 與原始資料相同（180 天） | 同上；migration Job 讓兩張表一致 |
+| 批次完成表的保存期限（`trustiot.stream_commits`，以閘道器 + 串流為鍵，Laysi/trustiot-v2#639） | 與原始資料相同（180 天） | 同上；migration Job 讓兩張表一致 |
 | 保存期限可設定的範圍 | 33 到 3650 天（2026-10-26 負責人決定，原本是 31 天起） | `RawRetention::from_days`，下限是 `MIN_RAW_RETENTION_DAYS` |
 | I1 對帳往回看的收到日 | 31 天（緩衝加一天，2026-10-26 負責人決定） | `services/ingest/src/retention.rs` 的 `RECONCILE_WINDOW_DAYS` |
 | 1 分鐘彙總（`trustiot.telemetry_1m`） | 13 個月 | `services/ingest/src/retention.rs` 的 `AGGREGATE_1M_RETENTION_MONTHS` |
@@ -24,14 +24,14 @@
 3. **完成表不短於原始資料。** `committed_at` 不早於同一批的 `received_at`，兩張表天數相同時，完成紀錄一定比它的資料晚過期。
 4. **最高方案看得到全部保存期限，其他方案較短。** [方案與權益](../product/plans.md)：原始資料的可查期間 Starter 例 7 天、Business 例 90 天、Enterprise 平台保存期全開。資料都在，方案只限制可查期間，升級後立即看得到更早的資料（清單 B3）。保存期限因此要比 Business 長，Enterprise 才有看得到的差別。
 5. **取滿足限制的最小值。** 原始資料只拿來看近期細節與重算；長期趨勢與年增率看彙總資料（至少 13 個月，Laysi/trustiot-v2#141），不需要原始資料存一年以上。180 天是 Business 範例的兩倍、涵蓋半年的比較，也遠大於 30 天的緩衝。之前 schema 裡的 400 天是暫定值，換成 180 天後儲存量約少 55 %。
-6. **緩衝 30 天。** 現場斷網多半是幾小時到幾天，長假（例如農曆年）約 9 到 10 天；30 天涵蓋整整一個月的停機，又遠短於保存期限。超過的批次丟棄並在 heartbeat 的 `buffer` 計數（[`crates/protocol` README](../../crates/protocol/README.md)），緩衝的時間由 Laysi/trustiot-v2#90 實作，校時造成的時間跳動不能讓批次留得更久。
+6. **緩衝 30 天。** 現場斷網多半是幾小時到幾天，長假（例如農曆年）約 9 到 10 天；30 天涵蓋整整一個月的停機，又遠短於保存期限。超過的批次丟棄並在 heartbeat 的 `buffer` 計數（[`crates/protocol` README](../../crates/protocol/README.md)），閘道器量緩衝的時間時，校時造成的時間跳動不會讓批次留得更久：年齡的「現在」取系統時鐘與單調時鐘接續的時間兩者中較大的，而且永不倒退：時鐘錯誤地往前跳又調回來時，跳過的時間照樣算數（Laysi/trustiot-v2#90，[agent README](../../edge/agent/README.md)「時鐘」）。
 
 儲存量估算：2026-10-09 的實測每筆約 3.1 bytes（[可行性測試結果](../feasibility/2026-10-09-cloud-poc.md)，30 天 52 億筆 15.2 GiB）。同樣的負載存 180 天約 91 GiB，加上 merge 與系統表的 1.5 倍約 137 GiB；叢集內 ClickHouse 的磁碟大小照 `deploy/chart/values.yaml` 的 `clickhouse.bundled.storage.size` 說明估算。
 
 ## 設定與變更
 
 - 設定：migration Job 的 `TRUSTIOT__CLICKHOUSE__RAW_RETENTION_DAYS`，不設就是 180 天。chart 目前不設它（SaaS 與展示環境都用平台的值）；地端的 values key 由 Laysi/trustiot-v2#446 加入，同樣經過上面的檢查。
-- Job 每次執行都把兩張表的 TTL 對齊設定（先比對、不同才改），不另寫 migration 檔：天數是設定值，不同部署可以不同。`0002_telemetry.sql`、`0003_batch_commits.sql` 建表時的 400 天不改（已套用的檔案不能改），新安裝建表後同一次執行就改成設定的天數。
+- Job 每次執行都把兩張表的 TTL 對齊設定（先比對、不同才改），不另寫 migration 檔：天數是設定值，不同部署可以不同。`0002_telemetry.sql` 建表時的 400 天不改（已套用的檔案不能改），新安裝建表後同一次執行就改成設定的天數。完成表 `stream_commits` 由 `0012_gateway_stream_ids.sql` 以 3650 天（可設定的上限）建立，在 Job 對齊之前也不短於 `telemetry`，同一次執行就改成設定的天數。`0003_batch_commits.sql` 建的舊完成表從 `0012` 起停用（ingest 沒有它的權限，見 [services/ingest](../../services/ingest/README.md#批次完成表-trustiotstream_commits)），Job 不再管它的 TTL，維持停用當時的天數。
 - 變更順序讓完成表任何時刻都不短於原始資料：延長時先改完成表、縮短時先改 `telemetry`。中途失敗時下一次執行接著完成。
 - 表的 TTL 不是 Job 管理的形式（例如有人手動加了條件或改了欄位）時，Job 停止並寫出表名，不覆蓋；處理方式在 [migration Job runbook](../runbooks/migrations.md) 的「原始資料的保存期限」。
 - 改 TTL 時 ClickHouse 在背景執行 `MATERIALIZE TTL`，重寫每個 part 的 TTL 資訊並刪掉過期的列，會占用 I/O 與暫時的磁碟空間；縮短保存期限不會立刻釋放空間。大的表改值前先看磁碟水位。
@@ -83,3 +83,17 @@ ClickHouse 的磁碟滿了就停擺：寫入失敗，套用保存期限的 merge
 - 測試：`services/ingest/tests/disk_watermark.rs` 把真的 ClickHouse 的資料目錄放在 256 MiB 的 tmpfs，填到 85 % 與 95 %，確認依序觸發 `warning`、`critical`，釋放後回到 `ok`；監控角色讀不到其他東西，沒有角色的帳號讀不到 `system.disks`。
 - 告警查詢失敗時（ClickHouse 停擺或過載、角色不見、`system.disks` 被拒）規則不回傳任何列。Laysi/trustiot-v2#183 在 Grafana 設定這條規則時，NoData 與 Error 要設成告警，不能是 OK，否則告警正好在它要防的停擺期間沉默。
 - 觸發時：先確認是資料量成長還是別的東西（日誌表、系統表、卡住的 mutation），清掉不需要的部分。例行的處理只有擴充磁碟（StorageClass 支援 `allowVolumeExpansion` 時改 PVC 大小，外部 ClickHouse 照供應商的方式）。不要縮短保存期限來釋放空間：那會永久刪掉每個租戶的原始資料，SaaS 上也違反對方案的承諾（見上方「設定與變更」）；而且 `MATERIALIZE TTL` 自己也需要暫時的空間，接近滿時反而更糟。
+
+## AI 助理刪除的對話
+
+AI 助理的對話存在 Postgres（assistant 的 schema），不在 ClickHouse。
+
+| 項目 | 值 | 在哪裡 |
+|---|---|---|
+| 使用者刪除的對話可以還原的期間；期滿後連同訊息、捨棄的回合與提問紀錄清除 | 30 天（2026-10-24 產品負責人決定，Laysi/trustiot-v2#644） | `services/assistant/src/store.rs` 的 `DELETED_RETENTION_DAYS`；資料庫的同一個值寫在 `services/assistant/migrations/postgres/0002_conversation_threads.sql` 的 policy，單元測試比對兩者 |
+
+- 30 天從刪除的時間起算，用資料庫時鐘的 `deleted_at`；服務角色不能指定或往前改這個時間。
+- 刪除後只有擁有者的「已刪除」清單看得到它，其他地方（含擁有者）都當它不存在。期滿後服務角色不能更改或還原它（`expired_stay_deleted`），只有清除用的平台角色 `assistant_platform` 刪得掉它；平台角色不論交易設了什麼租戶，都只看得到、刪得掉刪除滿 30 天的對話（restrictive policy `platform_expired_only`）。
+- 清除由排程執行（Laysi/trustiot-v2#645，預設每小時一輪，`services/assistant` 的 `purge.interval`），所以實際刪除最多晚於滿 30 天的時間點一個間隔，加上那一輪本身的時間（所有副本都停著時更晚，重新啟動後的第一輪補上）。另一個工作階段一直鎖住的過期對話會被那一輪略過（日誌的 WARN 有 `skipped` 個數），留到發現它沒被鎖的那一輪；其他過期的對話不受影響。整張表被鎖住時（例如維運的 `LOCK TABLE` 或 `ALTER TABLE`），那一輪提早結束，過期的對話都等下一輪。在清除之前，資料仍在資料庫與備份裡；清除之後，資料仍留在清除前做的備份裡，直到那些備份的保存期限屆滿。
+- 沒有刪除的對話（含它捨棄的回合）保存多久由 Laysi/trustiot-v2#652 決定；在那之前一直保存。
+- 細節見 [services/assistant](../../services/assistant/README.md) 的「對話的儲存」。

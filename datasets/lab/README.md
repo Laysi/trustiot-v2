@@ -101,7 +101,7 @@ datasets/lab/
 
 ## 批次與完成紀錄
 
-每一批（`stream` + `batch_seq`）一次 INSERT 進 `trustiot.telemetry`，然後在 `trustiot.batch_commits` 寫一筆完成紀錄（`row_count` 是該批筆數，`committed_at` 是該批的 `received_at`），就像 ingest 寫完並落盤後才記錄完成（I1）。索引 `uncommitted` 列出的批次只寫資料、不寫完成紀錄，用來測試只計入已完成批次的處理（例如 Laysi/trustiot-v2#141 的彙總）與批次重寫。寫完成紀錄的程式只有 `tools/lab-dataset/src/clickhouse.rs` 的 `commit_batch` 一處；Laysi/trustiot-v2#639 改變 `batch_commits` 的鍵時在那裡一起改。
+每一批（`stream` + `batch_seq`）一次 INSERT 進 `trustiot.telemetry`，然後在 `trustiot.stream_commits` 寫一筆完成紀錄（`row_count` 是該批筆數，`committed_at` 是該批的 `received_at`，`binding_id` 是由資料集、租戶與閘道器推導的代用 ID），就像 ingest 寫完並落盤後才記錄完成（I1）。索引 `uncommitted` 列出的批次只寫資料、不寫完成紀錄，用來測試只計入已完成批次的處理（例如 Laysi/trustiot-v2#141 的彙總）與批次重寫。寫完成紀錄的程式只有 `tools/lab-dataset/src/clickhouse.rs` 的 `commit_batch` 一處；完成表的鍵或欄位改變時（例如 Laysi/trustiot-v2#639 把完成紀錄移到以閘道器 + 串流為鍵的 `stream_commits`）在那裡一起改。
 
 ## 人工異常片段
 
@@ -238,7 +238,7 @@ let expected = dataset.readings()?;            // 預期值從資料集本身算
 - **租戶與閘道器**：由呼叫端指定（`Target::new(tenant, gateway)`）。設備與串流的 UUID 由資料集名稱、租戶、閘道器與代號推導（UUID v8，同樣的輸入永遠得到同樣的 ID），所以兩個租戶各有自己的設備；`Target::with_device(key, uuid)` 改用測試自己建立的設備（例如在資產服務建好的設備）。`Loaded` 列出每個設備與串流代號對應的 UUID、位移與寫入的筆數。
 - **時間**：見「時間」。比對預期值時，把資料集的時間加上 `loaded.shift()`。
 - **換資料集**：`lab_dataset::index_for_tests()` 預設是合成 fixture，設了 `TRUSTIOT_LAB_DATASET_INDEX`（索引檔路徑）就改用那份。測試的預期值從 `Dataset::readings()` 算、不寫死 fixture 的數字，換成 lab 資料集（Laysi/trustiot-v2#681）時只換索引、不改測試。彙總表的測試 `tools/lab-dataset/tests/rollups.rs` 就是這樣：讀值與批次來自資料集，要算電能的資料點是索引裡 `kind = "cumulative"` 的每一個（溢位值取它的 `wraps_at`），例如 `TRUSTIOT_LAB_DATASET_INDEX=<索引檔> cargo test -p lab-dataset --test rollups -- --nocapture`；語意查詢 API 的測試 `services/telemetry-query/tests/semantic.rs` 也一樣（`cargo test -p telemetry-query --test semantic -- --nocapture`），fixture 才有的性質（一次重置、一次 32 位元回捲、漏讀）只在沒有設定這個變數時檢查。
-- **寫入帳號**：要能 INSERT `trustiot.telemetry` 與 `trustiot.batch_commits`（`trustiot_ingest` 角色，或測試的管理帳號）。讀回比對時注意 row policy：沒有 policy 點名的帳號（包括管理帳號）讀這兩張表得到 0 列，見 [services/ingest](../../services/ingest/README.md)「租戶隔離」；`tools/lab-dataset/tests/clickhouse_load.rs` 示範建一個測試用的讀取帳號。
+- **寫入帳號**：要能 INSERT `trustiot.telemetry` 與 `trustiot.stream_commits`（`trustiot_ingest` 角色，或測試的管理帳號）。讀回比對時注意 row policy：沒有 policy 點名的帳號（包括管理帳號）讀這兩張表得到 0 列，見 [services/ingest](../../services/ingest/README.md)「租戶隔離」；`tools/lab-dataset/tests/clickhouse_load.rs` 示範建一個測試用的讀取帳號。
 - **只載一次**：同一個資料集對同一個租戶與閘道器載入兩次，會以同樣的 ID 寫兩次，不支援；中途失敗時已寫入的批次留著，換一個租戶或閘道器重載。
 
 ## 指令
@@ -268,6 +268,7 @@ cargo run --release -p lab-dataset -- record <repo 外的設定檔> --out <repo 
 `lab-dataset record` 讀實際的設備，寫出本頁格式的資料集（索引加分段檔）；它就是 Laysi/trustiot-v2#680 到 lab 錄第一版時用的工具。
 
 - **用閘道器 agent 的程式讀設備**：設備與型號是 `crates/protocol` 的設定（`DeviceModel`、`Device`），先經過與閘道器相同的設定驗證；每台設備由 agent 的 `polling::run` 依固定節拍輪詢（逾時、重連退避、watchdog 都相同），連線由 `Endpoints` 分配，所以同一台 RS485 轉換器下的設備共用一條連線、一次一個請求，RTU 框架丟掉其他站號的回應（[edge/agent](../../edge/agent/README.md)，Laysi/trustiot-v2#87、Laysi/trustiot-v2#88）。讀取失敗的資料點沒有讀值，就是資料缺漏，與閘道器看到的一樣。
+- **連線位址的限制也相同**：錄製工具和 agent 一樣拒絕 loopback、執行機器自己網卡上的位址、多播、廣播與雲端 metadata 位址（[edge/agent](../../edge/agent/README.md)「連線位址的限制」），所以設定檔的 `host` 要直接寫轉換器的位址；經本機 port forward（例如 `127.0.0.1` 上的 ssh 轉送）連到的轉換器會被拒絕，每次讀取都以連線失敗結束。
 - **錄製工具也是一個主站**：轉換器把每台設備的回應送給所有 TCP 連線（[現場硬限制](../../docs/requirements/field-constraints.md)），所以錄製期間不能有其他程式連同一台轉換器，包括 agent。[milestones](../../docs/roadmap/milestones.md)「展示切片」規定 agent 開始輪詢 lab 的 RS485 轉換器後，其他程式不再連它：Laysi/trustiot-v2#680 要在那之前錄。
 - **寫出的目錄**是 `--out` 之下以資料集名稱命名的目錄，必須還不存在（寫好的資料集不會被改寫）；`--out` 放在 repo 外，分段檔不進版控。錄到 `--duration-s` 秒或按 Ctrl-C 為止，最後一批寫完後以 `Dataset::open` 檢查整份資料集。每關閉一個分段檔就重寫一次索引，所以中途被強制結束時，索引仍然是已完成分段的有效資料集（寫到一半的分段檔不在索引裡）。
 - **結果**以 JSON 印到標準輸出：筆數、批次數、分段數、時間範圍，以及被略過的讀值數（`dropped_readings`：例如計數器讀到不小於 `wraps_at` 的值，這種讀值不符合索引的規則）。

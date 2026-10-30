@@ -2,6 +2,8 @@ import { type QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { type ReactNode, useEffect } from "react";
 import { RouterProvider } from "react-router/dom";
 
+import { DeviceApiProvider } from "../api/DeviceApiProvider.tsx";
+import type { DeviceApi } from "../api/devices.ts";
 import { IdentityApiProvider } from "../api/IdentityApiProvider.tsx";
 import type { IdentityApi } from "../api/identity.ts";
 import { useI18n } from "../i18n/useI18n.ts";
@@ -16,6 +18,8 @@ export interface AppDependencies {
   preferences: PreferencesStore;
   /** The identity service: the session, its tenant, the preferences and sign-in. */
   identity: IdentityApi;
+  /** The assets and telemetry-query endpoints the device page reads. */
+  devices: DeviceApi;
   /** For tests: the browser's languages, time zone and color-scheme query. */
   languages?: readonly string[];
   browserZone?: string;
@@ -38,18 +42,20 @@ export function AppProviders({ deps, children }: { deps: AppDependencies; childr
   return (
     <QueryClientProvider client={deps.queryClient}>
       <IdentityApiProvider api={deps.identity}>
-        <SessionProvider source={deps.identity}>
-          <PreferencesProvider
-            store={deps.preferences}
-            api={deps.identity}
-            {...(deps.languages ? { languages: deps.languages } : {})}
-            {...(deps.browserZone ? { browserZone: deps.browserZone } : {})}
-            {...(deps.matchMedia ? { matchMedia: deps.matchMedia } : {})}
-          >
-            <DocumentTitle />
-            {children}
-          </PreferencesProvider>
-        </SessionProvider>
+        <DeviceApiProvider api={deps.devices}>
+          <SessionProvider source={deps.identity}>
+            <PreferencesProvider
+              store={deps.preferences}
+              api={deps.identity}
+              {...(deps.languages ? { languages: deps.languages } : {})}
+              {...(deps.browserZone ? { browserZone: deps.browserZone } : {})}
+              {...(deps.matchMedia ? { matchMedia: deps.matchMedia } : {})}
+            >
+              <DocumentTitle />
+              {children}
+            </PreferencesProvider>
+          </SessionProvider>
+        </DeviceApiProvider>
       </IdentityApiProvider>
     </QueryClientProvider>
   );

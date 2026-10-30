@@ -17,15 +17,17 @@ doc = false
 # Anthropic Messages types: content blocks (thinking, tool calls) kept as received, usage by
 # billing category, stop reasons (src/model/anthropic.rs only).
 ai-clients = { path = "../../crates/ai-clients" }
-# The public dashboard API (src/api.rs): JSON bodies and query strings.
+# The client API (src/api.rs): JSON bodies and query strings; `http1` and `tokio` for the
+# dashboard API's held answer bodies.
 axum = { workspace = true, features = ["http1", "json", "query", "tokio"] }
 # Tool result images are checked to be base64 before they go to the model.
 base64.workspace = true
 # A dataset run's result as JSON, shared without a copy by the run's holder (the API's answer
 # body, a write of the `dashboard` tool) and the tool's result cache.
 bytes.workspace = true
-# The telemetry tools check the model's times and the queryable period before they call.
-chrono = { workspace = true, features = ["alloc", "now"] }
+# The telemetry tools check the model's times and the queryable period before they call; the
+# chat API's times and cursors (`serde`).
+chrono = { workspace = true, features = ["alloc", "now", "serde"] }
 # Tenant and user IDs, the internal identity token a tool calls with, service names.
 contract = { path = "../../crates/contract" }
 # The frames of a dataset run's answer body (src/api/held_body.rs), which hands the result to the
@@ -42,12 +44,13 @@ serde_json = { workspace = true, features = ["raw_value"] }
 service-kit = { path = "../../crates/service-kit" }
 # The conversation and dashboard stores (src/store.rs, src/dashboards/store.rs) in the service
 # role's tenant transactions; same TLS stack as service-kit, which verifies the server on every
-# connection (checklist M3). `chrono`: the dashboards' times.
+# connection (checklist M3). `chrono`: the thread's, runs' and dashboards' times (timestamptz)
+# as `DateTime<Utc>`.
 sqlx = { workspace = true, features = ["chrono", "postgres", "runtime-tokio", "tls-rustls-ring-webpki"] }
 thiserror.workspace = true
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "sync", "time"] }
 tracing.workspace = true
-# The public API's OpenAPI document (`assistant::openapi`, merged by tools/openapi).
+# The client API's OpenAPI document (`assistant::openapi`, merged by tools/openapi).
 utoipa = { workspace = true, features = ["chrono", "uuid"] }
 # Run and model call IDs (UUIDv7); device and model IDs in the services' answers.
 uuid = { workspace = true, features = ["serde", "v7"] }

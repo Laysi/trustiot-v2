@@ -5,7 +5,7 @@
 | 測試 | 驗證 | issue |
 | --- | --- | --- |
 | `ingress.e2e.ts` | 入口 gateway：cookie 驗證、例外路徑、標頭、路徑繞過、身分服務停機 | Laysi/trustiot-v2#62 |
-| `mesh.e2e.ts` | 服務間授權：清單內的呼叫放行、清單外的被拒（帶著使用者的 token 也一樣），AuthorizationPolicy 與 NetworkPolicy 各自生效，預設拒絕下健康檢查通過；代表使用者呼叫的服務連得到身分服務的 token 交換 | Laysi/trustiot-v2#63、Laysi/trustiot-v2#106 |
+| `mesh.e2e.ts` | 服務間授權：清單內的呼叫放行、清單外的被拒（帶著使用者的 token 也一樣），AuthorizationPolicy 與 NetworkPolicy 各自生效，預設拒絕下健康檢查通過；代表使用者呼叫的服務連得到身分服務的 token 交換；只有身分服務連得到 AI 閘道的管理埠 | Laysi/trustiot-v2#63、Laysi/trustiot-v2#106、Laysi/trustiot-v2#607 |
 
 `otel.e2e.ts`（日誌管線，Laysi/trustiot-v2#73）、`postgres.e2e.ts`（叢集內的 Postgres，Laysi/trustiot-v2#58）、`postgres-replication.e2e.ts`（叢集內 Postgres 的複寫、備份與還原，Laysi/trustiot-v2#400）、`clickhouse-admin.e2e.ts`（叢集內 ClickHouse 的管理帳號密碼，Laysi/trustiot-v2#403）、`identity-keys.e2e.ts`（內部身分簽章金鑰，Laysi/trustiot-v2#404）與 `key-rotation.e2e.ts`（依金鑰年齡自動輪替，Laysi/trustiot-v2#429）不經入口 gateway，有自己的環境變數，不用 `cluster.ts`，見最後六節。
 
@@ -108,17 +108,20 @@ bun test --timeout 600000 ./deploy/chart/tests/e2e/ingress.e2e.ts
 | assets → certs | 清單內（`values-mesh-e2e.yaml` 的 `mesh.calls`），放行，certs 收到呼叫帶的使用者 token |
 | assets → identity 的 token 交換（Service `<release>-identity-exchange` 的 `token-exchange` 埠 8082，`POST /internal/token-exchange`） | assets 代表使用者呼叫 certs，chart 因此讓它連得到身分服務的 `token-exchange` 埠（Laysi/trustiot-v2#106），放行，身分服務收到 assets 自己的 token。身分服務替身也在 8082 回應，所以第 3 階段（兩層都拿掉）清單外的 token 交換也會通過 |
 | assets → identity 的 API 埠（8080，ext_authz 所在的埠） | 只有 AuthorizationPolicy 擋：assets 只能到 `token-exchange`，NetworkPolicy 看不到 HBONE 裡的埠，為了 token 交換放行 assets 的 pod。第 1、4、5 階段被拒，第 2 階段（只剩 NetworkPolicy）通過 |
+| assistant → ai-gateway 的 API 埠（8080） | 清單內（`mesh.calls.assistant`），放行；不帶 token，AI 閘道不收內部身分 token（決策 28） |
+| identity → AI 閘道的管理 API（Service `<release>-ai-gateway-admin` 的 8082，chart 給身分服務的 `TRUSTIOT_AI_GATEWAY_ADMIN_URL`） | chart 自動加上、不在 `mesh.calls`（Laysi/trustiot-v2#607），放行；不帶 token |
+| assistant → 管理 API（經 `<release>-ai-gateway-admin` 與 AI 閘道 pod IP 的 8082）、identity → ai-gateway 的 API 埠 | 只有 AuthorizationPolicy 擋：assistant 只能到 `http`、身分服務只能到 `admin`，NetworkPolicy 看不到 HBONE 裡的埠，放行這兩個服務的 pod。第 1、4、5 階段被拒，第 2、3 階段通過 |
 | 入口 gateway → identity、certs、mqtt-bridge（例外路徑，經 `kubectl port-forward` 進入口 pod） | 放行 |
-| certs → assets、assets → alerts、mqtt-bridge 與 certs → identity 的 token 交換、stranger → certs、outsider → certs 的 Service 與 pod IP | 清單外，任一層在就被拒，即使帶著被呼叫端會接受的使用者 token |
+| certs → assets、assets → alerts、mqtt-bridge 與 certs → identity 的 token 交換、stranger → certs、outsider → certs 的 Service 與 pod IP；alerts → ai-gateway 的 API 埠與管理 API、assets 與 stranger → 管理 API、outsider → AI 閘道 pod IP 的管理埠 | 清單外，任一層在就被拒，即使帶著被呼叫端會接受的使用者 token |
 | imposter → certs | NetworkPolicy 依 label 放行它，只有 AuthorizationPolicy 擋得住；用來確認 AuthorizationPolicy 是否生效 |
 | outsider → 入口 gateway 的 pod | 只有入口的 NetworkPolicy 擋；用來確認 NetworkPolicy 是否生效 |
 
-代表使用者的呼叫（Laysi/trustiot-v2#106）：從 pod 發出的每個呼叫都帶一張使用者的內部身分 token（`x-internal-identity`），直接呼叫時受眾是被呼叫端，向身分服務換 token 時是呼叫端自己。token 由測試以這次安裝的簽章金鑰簽出（init container 填入的 Secret `<release>-identity-signing-keys`，`internal-token.ts`），用前先以服務掛載的公鑰 ConfigMap 驗過，所以是服務會接受的 token。私鑰只在測試的行程裡，token 經 `kubectl exec -i` 的 stdin 交給 pod，不出現在指令列、輸出或結果檔；呼叫的腳本（`mesh-call.ts`）只回報被呼叫端是否收到它。服務都是身分服務替身、不驗證 token，所以這裡看到的拒絕都是 mesh 在 L4 做的，驗證的是 mesh 放行什麼、token 隨清單內的呼叫到達，以及身分服務拿到的呼叫清單（安裝後檢查 `TRUSTIOT_ON_BEHALF_CALLS` 是 `{"assets":["certs"]}`）；token 交換與服務自己的檢查（受眾、過期、清單外的組合、換來的 token 不能再換）由 `services/identity` 的 Rust 測試涵蓋。身分服務的授權依埠分開：身分服務自己的 AuthorizationPolicy 只讓入口 gateway 到 `http`，token 交換自己的 AuthorizationPolicy（`<release>-identity-exchange`）只讓 assets 到 `token-exchange`；上表「assets → identity 的 API 埠」在叢集裡驗證這件事，chart 測試另外比對渲染結果。`mesh-call.ts` 與 `internal-token.ts` 有不需要叢集的單元測試，隨 `bun test deploy/chart` 執行。
+代表使用者的呼叫（Laysi/trustiot-v2#106）：從 pod 發出的每個呼叫都帶一張使用者的內部身分 token（`x-internal-identity`），直接呼叫時受眾是被呼叫端，向身分服務換 token 時是呼叫端自己。token 由測試以這次安裝的簽章金鑰簽出（init container 填入的 Secret `<release>-identity-signing-keys`，`internal-token.ts`），用前先以服務掛載的公鑰 ConfigMap 驗過，所以是服務會接受的 token。私鑰只在測試的行程裡，token 經 `kubectl exec -i` 的 stdin 交給 pod，不出現在指令列、輸出或結果檔；呼叫的腳本（`mesh-call.ts`）只回報被呼叫端是否收到它。服務都是身分服務替身、不驗證 token，所以這裡看到的拒絕都是 mesh 在 L4 做的，驗證的是 mesh 放行什麼、token 隨清單內的呼叫到達，以及身分服務拿到的呼叫清單（安裝後檢查 `TRUSTIOT_ON_BEHALF_CALLS` 是 `{"assets":["certs"]}`）；token 交換與服務自己的檢查（受眾、過期、清單外的組合、換來的 token 不能再換）由 `services/identity` 的 Rust 測試涵蓋。身分服務的授權依埠分開：身分服務自己的 AuthorizationPolicy 只讓入口 gateway 到 `http`，token 交換自己的 AuthorizationPolicy（`<release>-identity-exchange`）只讓 assets 到 `token-exchange`；上表「assets → identity 的 API 埠」在叢集裡驗證這件事，chart 測試另外比對渲染結果。AI 閘道的授權也依埠分開（Laysi/trustiot-v2#607）：它自己的 AuthorizationPolicy 只讓 assistant 到 `http`，管理埠自己的 AuthorizationPolicy（`<release>-ai-gateway-admin`）只讓身分服務到 `admin`；AI 閘道也跑身分服務替身，替身在 8082 同樣回應。安裝後也檢查身分服務的 `TRUSTIOT_AI_GATEWAY_ADMIN_URL` 與 AI 閘道的 `AI_GATEWAY__ADMIN__LISTEN_ADDR`。chart 要求 AI 閘道的設定，所以測試在安裝前建立 overlay 指名的供應商金鑰 Secret `trustiot-e2e-ai` 與 Postgres CA 的 Secret `trustiot-e2e-postgres-ca`（值在執行時產生，寫進私有暫存目錄的檔案，不出現在指令列），安裝期間另一個行程等 Helm 宣告 AI 閘道的密碼 Secret `<release>-ai-gateway-password` 後填入（真實安裝裡由 migration Job 填，這裡關掉了）並重啟它的 pod（刪掉的 pod 名稱印在測試的 log）；替身不用這些值。被刪的 pod 要跑完 preStop 與關機才消失，可能在 `helm install --wait` 回來時還在結束中，所以 beforeAll 先等它消失再進第 1 階段計算 pod 數（Laysi/trustiot-v2#730）：上限是它的 `deletionTimestamp`（刪除時間加寬限期）再加 120 秒讓 kubelet 收尾；chart 裡服務 pod 最長的寬限期（AI 閘道的 315 秒）由測試在安裝後核對。這三個 Secret 在測試開始前就存在時測試拒絕執行，結束時一併刪除。`mesh-call.ts` 與 `internal-token.ts` 有不需要叢集的單元測試，隨 `bun test deploy/chart` 執行。
 
 測試依序執行五個階段，每個階段從前一個階段留下的狀態開始：
 
-1. 兩層都在：清單內的呼叫與入口放行，清單外的與 imposter 全部被拒；所有 pod 就緒、沒有重啟（預設拒絕下 kubelet 的健康檢查照常通過）。
-2. 刪掉服務的 AuthorizationPolicy（入口的 cookie 驗證與 `/internal` 拒絕保留）：imposter 通過（確認 AuthorizationPolicy 已失效），清單外的呼叫仍全部被 NetworkPolicy 拒絕，清單內的與入口照常放行。
+1. 兩層都在：清單內的呼叫與入口放行，清單外的與 imposter 全部被拒；每個服務一個 pod 加上入口的兩個副本，都在執行、就緒、沒有重啟（預設拒絕下 kubelet 的健康檢查照常通過）。數量不符時，失敗訊息列出每個 pod 的名稱、phase、刪除時間與就緒狀態。
+2. 刪掉服務的 AuthorizationPolicy（入口的 cookie 驗證與 `/internal` 拒絕保留）：imposter 與只靠 AuthorizationPolicy 分埠的呼叫通過（確認 AuthorizationPolicy 已失效），清單外的呼叫仍全部被 NetworkPolicy 拒絕，清單內的與入口照常放行。
 3. 再刪掉 release 的所有 NetworkPolicy（依金鑰年齡輪替的 CronJob 的 NetworkPolicy 與 AuthorizationPolicy 除外：沒有人呼叫它的 pod，四個階段都不動這兩個，安裝後只確認它們在）：outsider 連得到入口 pod，清單外的呼叫全部成功，證明前後階段被拒是政策造成的，不是呼叫本身有問題。
 4. 以 `helm get manifest` 的內容重建 AuthorizationPolicy、NetworkPolicy 仍刪除：清單外的呼叫與 imposter 全部被 AuthorizationPolicy 拒絕，清單內的與入口照常放行。
 5. 重建 NetworkPolicy，回到安裝時的狀態：再檢查一次呼叫與 pod 健康狀態。
@@ -129,7 +132,7 @@ bun test --timeout 600000 ./deploy/chart/tests/e2e/ingress.e2e.ts
 
 ### 前置條件與執行
 
-前置條件同入口測試的 1、3、4、5 項：需要 Istio ambient 與 Gateway API CRD、已建立的 namespace（建議 `restricted`）、叢集拉得到的身分服務替身映像；不需要 ext_authz provider，入口只走例外路徑。測試的身分還要能在 namespace 裡建立 pod、`pods/exec` 與 `pods/portforward`，讀取簽章金鑰的 Secret 與公鑰的 ConfigMap，並刪除與建立 NetworkPolicy 和 AuthorizationPolicy。身分服務替身的映像同時用在五個服務與三個測試 pod，因為它是唯一有執行環境（Bun）、能從 pod 內發出呼叫的測試映像。
+前置條件同入口測試的 1、3、4、5 項：需要 Istio ambient 與 Gateway API CRD、已建立的 namespace（建議 `restricted`）、叢集拉得到的身分服務替身映像；不需要 ext_authz provider，入口只走例外路徑。測試的身分還要能在 namespace 裡建立 pod、`pods/exec` 與 `pods/portforward`，讀取簽章金鑰的 Secret 與公鑰的 ConfigMap，並刪除與建立 NetworkPolicy 和 AuthorizationPolicy。身分還要能在 namespace 裡建立、修改與刪除 Secret（AI 閘道的三個 Secret）。身分服務替身的映像同時用在七個服務與三個測試 pod，因為它是唯一有執行環境（Bun）、能從 pod 內發出呼叫的測試映像。
 
 在 repo 根目錄：
 
@@ -149,7 +152,7 @@ bun test --timeout 600000 ./deploy/chart/tests/e2e/mesh.e2e.ts
 | `E2E_SETTLE_MS` | `90000` | 刪除或重建政策後，等 ztunnel 與 NetworkPolicy 控制器套用的上限 |
 | `E2E_REPORT_DIR` | 空 | 設定時把每次呼叫的結果寫成 `mesh-e2e.json` |
 
-結束時只移除這次建立的 release 與三個測試 pod（名稱帶隨機字尾）。中途失敗時，刪掉的政策隨 release 一起移除；`E2E_KEEP=1` 時 release 保留在最後的狀態。
+結束時只移除這次建立的 release、三個測試 pod（名稱帶隨機字尾）與 AI 閘道的三個 Secret。中途失敗時，刪掉的政策隨 release 一起移除；`E2E_KEEP=1` 時 release 保留在最後的狀態。
 
 ## 通道斷線時的復原（`ingress.e2e.ts` 與 `mesh.e2e.ts`）
 

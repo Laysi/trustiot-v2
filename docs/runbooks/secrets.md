@@ -160,7 +160,7 @@ SaaS 目前沒有人建立的這個 Secret（`deploy/flux` 的 values 沒有設�
 
 確切指令在 [services/certs/README.md](../../services/certs/README.md)（Laysi/trustiot-v2#78）：「發簽發 CA 憑證」、「輪替」、「根 CA 私鑰的備份」與「簽發 CA 金鑰遺失或外洩」。原則：
 
-- **根 CA 私鑰**：只在簽發 CA 的儀式與備份檢查時取出，在離線的機器上以 `certs-ca` 操作（私鑰只經 stdin、stdout 與 age），完成後兩位保管人各自以 `certs-ca root check` 確認自己那一份離線備份還能解密、是這張根憑證的私鑰。根 CA 換新是重大變更：所有閘道器的信任設定都要更新，另開 issue 規劃。
+- **根 CA 私鑰**：只在簽發 CA 的儀式與備份檢查時取出，在離線的機器上以 `certs-ca` 操作（私鑰只經 stdin、stdout 與 age），完成後兩位保管人各自以 `certs-ca root check` 確認自己那一份離線備份還能解密、是這張根憑證的私鑰。根 CA 換新是重大變更：所有閘道器的信任設定都要更新，另開 issue 規劃。展示環境的根是例外（2026-10-28 決定）：私鑰是保管人電腦上權限 0600 的明文檔，使用、遺失與外洩的處理見[展示環境 runbook](demo-environment.md)「簽發 CA 的儀式」的「保管紀錄」；正式環境的保管方式在 Laysi/trustiot-v2#716 重新決定。
 - **簽發 CA 私鑰**：在叢集內產生，人不碰。輪替是調大 `certificateAuthority.keyGeneration`，以根 CA 簽新一代的 CSR，新舊兩張同時列在 `certificateAuthority.issuingCertificates`；最新的一代簽新憑證，舊的一代簽過的憑證全部到期後，以 `removeKeysBeforeGeneration` 移除它。
 - **外洩**：`keyGeneration` 與 `removeKeysBeforeGeneration` 同時調到新的一代：舊金鑰立即移除，它的 CRL 不再發布，broker 拒絕它簽的每張憑證；簽新一代之後閘道器經換發端點取得新憑證（決策 12，不必寄回）。
 
@@ -200,15 +200,23 @@ TLS 憑證（`<cluster>-ca`、`<cluster>-server`、`<cluster>-replication`）由
 
 ### 叢集內產生的帳號
 
-ClickHouse、MQTT dynsec、Grafana 的帳號由叢集內產生，值不經過人。各自的 issue 補上指令（Laysi/trustiot-v2#59、Laysi/trustiot-v2#84、Laysi/trustiot-v2#183）；Postgres 的 owner 見上一節。各服務自己的 Postgres 角色、時序查詢服務與 OpenTelemetry collector 的 ClickHouse 帳號，密碼由 migration Job 產生並設定（`<release>-<服務>-password`、`<release>-otel-collector-password`），沒有人經手（每個租戶的 ClickHouse 帳號密碼由時序查詢服務帳號的密碼推導，不另外保存）；輪替是調大 `migrate.passwordGeneration`，步驟見 [migration Job 的 runbook](migrations.md) 的「輪替服務角色與 collector 的密碼」，資料遺失時見同一份的「密碼 Secret 的資料遺失」。原則：在叢集內重新產生值、更新資料庫裡的帳號、重啟使用它的服務，三步在一次維護中完成；只有懷疑外洩或人員異動時才需要輪替。
+ClickHouse、MQTT dynsec、Grafana 的帳號由叢集內產生，值不經過人。各自的 issue 補上指令（Laysi/trustiot-v2#59、Laysi/trustiot-v2#84、Laysi/trustiot-v2#183）；Postgres 的 owner 見上一節。各服務自己的 Postgres 角色、時序查詢服務、資料接收（ingest，Laysi/trustiot-v2#642）與 OpenTelemetry collector 的 ClickHouse 帳號，密碼由 migration Job 產生並設定（`<release>-<服務>-password`、`<release>-otel-collector-password`），沒有人經手（每個租戶的 ClickHouse 帳號密碼由時序查詢服務帳號的密碼推導，不另外保存）；輪替是調大 `migrate.passwordGeneration`，步驟見 [migration Job 的 runbook](migrations.md) 的「輪替服務角色與 collector 的密碼」，資料遺失時見同一份的「密碼 Secret 的資料遺失」。原則：在叢集內重新產生值、更新資料庫裡的帳號、重啟使用它的服務，三步在一次維護中完成；只有懷疑外洩或人員異動時才需要輪替。
 
 **MQTT broker 的服務帳號密碼**（`mqttBroker.enabled`，Laysi/trustiot-v2#84；設計見 `docs/architecture/secrets.md`「MQTT broker 的服務帳號密碼」）：
 
 1. 把 values 的 `mqttBroker.passwordGeneration` 加一，升級。broker 的 pod 重啟，init container `accounts` 先產生新密碼寫進 Secret `<release>-mqtt-broker-accounts`（key 是服務名稱），再把雜湊寫進 broker 的 dynamic security 檔。broker 是單一副本：重啟期間閘道器與服務斷線、之後重連，session、排隊與 retained 訊息在 SQLite 裡保留。
 2. 確認：`kubectl -n <namespace> logs <release>-mqtt-broker-0 -c accounts` 有 `generated the password of <服務> in Secret <release>-mqtt-broker-accounts`（日誌只有名稱）；`kubectl -n <namespace> get secret <release>-mqtt-broker-accounts -o jsonpath='{.metadata.annotations.trustiot\.io/password-generation}'` 是新的代；broker 的 pod Ready。
-3. 使用 broker 的服務要重啟才拿到新密碼，在那之前以舊密碼重連會被拒（CONNACK 135）。第一個接上 broker 的服務在它的 issue 把重啟的方式寫進這一步。
+3. 使用 broker 的服務不必重啟（Laysi/trustiot-v2#634）：它們的 pod 以目錄掛自己的 key，kubelet 在下一次同步（預設最多 1 分鐘，加上它快取 Secret 的延遲）換上新的檔案，服務每次連線都重讀它。broker 重啟時服務斷線，之後以舊密碼重連會被拒（CONNACK 135），退避重試（最多每 30 秒一次），檔案更新後連上。確認：`kubectl -n <namespace> logs deploy/<release>-certs` 在 broker 重啟之後先有 WARN `mqtt connection failed or lost; reconnecting`，最後一行連線紀錄是 INFO `connected to the mqtt broker`；一直只有前者時，檢查 `kubectl -n <namespace> get events --field-selector involvedObject.name=<certs 的 pod>` 與 broker 的 `accounts` 日誌。
 
 代只往上走，rollback 不換。Secret 遺失時同 ClickHouse 的管理帳號：把 `mqttBroker.passwordGeneration` 加一再升級，Helm 重建 Secret，init container 產生新密碼；Secret 不存在時 init container 失敗並寫出這個處理方式，broker 停在 `Init`。不要自己建立這個 Secret。
+
+**certs、ingest 或 gateway-ops 的新 pod 停在 `ContainerCreating`**（Laysi/trustiot-v2#634、Laysi/trustiot-v2#642、Laysi/trustiot-v2#721）：broker 開啟時，certs 的 pod 掛 Secret `<release>-mqtt-broker-accounts` 裡的 key `certs`，ingest 的 pod 掛 key `ingest`，gateway-ops 的 pod 掛 key `gateway-ops`，這些 key 由 broker 的 init container `accounts` 寫入，volume 不是 `optional`。第一次開啟 broker、服務第一次拿到帳號，或 Secret 被刪掉、由 Helm 重建之後，key 寫入之前服務的新 pod 停在 `ContainerCreating`，舊的 pod 照常服務。以下以 certs 為例，ingest 與 gateway-ops 把 `certs` 換成自己的名稱。
+
+1. `kubectl -n <namespace> get events --field-selector involvedObject.name=<certs 的 pod>`：`FailedMount`，訊息是 volume `mqtt-broker-account` 指到不存在的 key `certs`（`references non-existent secret key: certs`）或 Secret 不存在，就是在等這個 key。
+2. `kubectl -n <namespace> get pod <release>-mqtt-broker-0` 與 `kubectl -n <namespace> logs <release>-mqtt-broker-0 -c accounts`：init container 寫入後有 `generated the password of certs in Secret <release>-mqtt-broker-accounts`，kubelet 重試掛載，certs 的 pod 隨後自動啟動，不必重啟。
+3. broker 停在 `Init`、`accounts` 的日誌說 Secret 不存在，或 Secret 重建了但 broker 沒有重啟（`accounts` 沒有新的日誌）：照上一段把 `mqttBroker.passwordGeneration` 加一再升級，broker 重啟，init container 重新寫入每個帳號的密碼。
+
+缺檔時 certs 照常啟動、只停用 broker 權限同步的做法，與叢集上的實測，在 Laysi/trustiot-v2#736 評估。ingest 與 gateway-ops 沒有 broker 就沒有工作，維持等待掛載。
 
 ### OTA 簽章私鑰
 

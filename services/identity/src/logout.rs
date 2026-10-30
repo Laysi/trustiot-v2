@@ -8,6 +8,7 @@
 //! | No valid internal identity token | 401 `unauthenticated` |
 //! | `DELETE /api/identity/v1/sessions/current` without a usable session cookie | 401 `unauthenticated` |
 //! | `DELETE /api/identity/v1/sessions/current` | 204; the session of the cookie is revoked if it is the user's, and the cookie is cleared |
+//! | `DELETE /api/identity/v1/sessions`, with a token another service exchanged (`act`) | 403 `permission_denied`; no session is revoked: logging out everywhere is for the user's own requests only (Laysi/trustiot-v2#760) |
 //! | `DELETE /api/identity/v1/sessions` | 204; every session of the user is revoked, this one included, and the cookie is cleared |
 //! | The database failed | 503 `unavailable`; nothing was revoked |
 //!
@@ -27,6 +28,7 @@ use axum::routing::delete;
 use contract::{ErrorBody, ErrorCode};
 use service_kit::identity::{IdentityVerifier, UserIdentity};
 
+use crate::current_session::exchanged_refusal;
 use crate::login::LoginStore;
 use crate::session::{clear_cookie, session_secret};
 use crate::tenants::error;
@@ -123,10 +125,14 @@ async fn log_out(
     responses(
         (status = 204, description = "Every session of the user is revoked; `Set-Cookie` clears the session cookie. The next request of any of them is refused."),
         (status = 401, description = "No valid session (`unauthenticated`).", body = ErrorBody),
+        (status = 403, description = "A token another service exchanged for a call on the user's behalf (`permission_denied`): only the user's own requests log them out everywhere. No session is revoked.", body = ErrorBody),
         (status = 503, description = "The database failed; nothing was revoked (`unavailable`).", body = ErrorBody),
     )
 )]
 async fn log_out_everywhere(State(state): State<LogoutRoutes>, user: UserIdentity) -> Response {
+    if let Some(refusal) = exchanged_refusal(&user, "refused to log out everywhere") {
+        return refusal;
+    }
     let user_id = user.user_id().to_string();
     match state.store.revoke_all(&user_id).await {
         Ok(revoked) => {

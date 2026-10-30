@@ -7,7 +7,7 @@
 //! | Request | Response |
 //! | --- | --- |
 //! | No valid internal identity token | 401 `unauthenticated` |
-//! | A user who is not a platform administrator (A2) | 403 `permission_denied` |
+//! | A user who is not a platform administrator (A2), or a token another service exchanged for a call on the administrator's behalf (`act`): only the administrator's own request creates a tenant (Laysi/trustiot-v2#104, 2026-10-23) | 403 `permission_denied`, decided from the token alone before the body is parsed or the database is read |
 //! | A `Content-Type` other than `application/json` (parameters such as `charset` allowed) | 400 `invalid_request` |
 //! | A body that is not a JSON object with a string `name` | 400 `invalid_request` |
 //! | A `name` that is empty after trimming, longer than [`MAX_NAME_CHARS`] characters, or holds a [refused character](TenantName::parse) | 422 `validation_failed`, field `/name`, key `tenant.name_invalid`, `{"max": 100}` |
@@ -44,7 +44,7 @@ use unicode_properties::GeneralCategory;
 use unicode_properties::general_category::UnicodeGeneralCategory;
 use utoipa::ToSchema;
 
-use crate::members::MemberStore;
+use crate::members::{MemberStore, is_own_platform_admin};
 
 /// The route, as the ingress gateway forwards it (no prefix is stripped).
 pub const TENANTS_PATH: &str = "/api/identity/v1/tenants";
@@ -145,8 +145,9 @@ pub(crate) fn is_json(headers: &HeaderMap) -> bool {
 /// Why a tenant was not created.
 #[derive(Debug, thiserror::Error)]
 pub enum CreateError {
-    /// The user is not a platform administrator.
-    #[error("only a platform administrator may create a tenant")]
+    /// The user is not a platform administrator, or the token is another service's exchange for
+    /// a call on the administrator's behalf.
+    #[error("only a platform administrator's own request may create a tenant")]
     NotPlatformAdmin,
     /// The transaction could not start, or a statement in it failed.
     #[error(transparent)]
@@ -242,14 +243,15 @@ impl TenantStore {
     ///
     /// # Errors
     ///
-    /// [`CreateError::NotPlatformAdmin`] when `admin` is not one; otherwise when the database
+    /// [`CreateError::NotPlatformAdmin`] when `admin` is not a platform administrator's own
+    /// request ([`is_own_platform_admin`]); otherwise when the database
     /// fails, and then nothing was created.
     pub async fn create(
         &self,
         admin: &UserIdentity,
         name: &TenantName,
     ) -> Result<Tenant, CreateError> {
-        if !admin.is_platform_admin() {
+        if !is_own_platform_admin(admin) {
             return Err(CreateError::NotPlatformAdmin);
         }
         let tenant_id = TenantId::generate();
@@ -308,7 +310,7 @@ pub fn routes(verifier: IdentityVerifier, store: TenantStore) -> Router {
         })
 }
 
-/// Creates a tenant. Platform administrators only.
+/// Creates a tenant. Platform administrators' own requests only.
 #[utoipa::path(
     post,
     path = "/api/identity/v1/tenants",
@@ -319,7 +321,7 @@ pub fn routes(verifier: IdentityVerifier, store: TenantStore) -> Router {
         (status = 201, description = "The tenant was created, and `identity.tenant_created` written in the same transaction.", body = Tenant),
         (status = 400, description = "The `Content-Type` is not `application/json`, or the body is not a JSON object with a string `name` (`invalid_request`).", body = ErrorBody),
         (status = 401, description = "No valid session (`unauthenticated`).", body = ErrorBody),
-        (status = 403, description = "The user is not a platform administrator (`permission_denied`).", body = ErrorBody),
+        (status = 403, description = "The user is not a platform administrator, or not the administrator's own request: another service exchanged the token (`permission_denied`). Nothing was created.", body = ErrorBody),
         (status = 422, description = "The name is empty, longer than 100 characters, or holds a control or format character or a line or paragraph separator (`validation_failed`, field `/name`, `tenant.name_invalid`).", body = ErrorBody),
         (status = 503, description = "The database failed; nothing was created (`unavailable`).", body = ErrorBody),
     )
@@ -330,10 +332,13 @@ async fn create_tenant(
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
-    if !user.is_platform_admin() {
+    // Decided from the token alone, before the body is parsed or the database touched.
+    if !is_own_platform_admin(&user) {
         tracing::info!(
             user_id = %user.user_id(),
-            "refused to create a tenant: not a platform administrator"
+            exchanged = user.claims().act.is_some(),
+            "refused to create a tenant: not a platform administrator, or not the \
+             administrator's own request"
         );
         return error(ErrorBody::new(ErrorCode::PermissionDenied));
     }

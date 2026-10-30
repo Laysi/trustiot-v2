@@ -203,9 +203,10 @@ validated_string!(
 );
 validated_string!(
     /// A telemetry stream, within which batch sequence numbers count and are never reused. The
-    /// agent keeps its stream across restarts by storing the next sequence number with its
-    /// buffer, and starts a new stream whenever it cannot know that number, for example after a
-    /// reinstall (rebuild checklist G1).
+    /// agent starts a new random stream every time its process starts and counts from 1 in
+    /// memory only, so no sequence number is ever reused after a crash, a power cut or a
+    /// reinstall; batches it finds on disk keep their own stream and number and go out
+    /// unchanged (rebuild checklist G1, Laysi/trustiot-v2#90).
     StreamId,
     "stream ID",
     is_valid_id,

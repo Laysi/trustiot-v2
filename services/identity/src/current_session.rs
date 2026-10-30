@@ -44,7 +44,7 @@ use axum::routing::{get, put};
 use contract::{ErrorBody, ErrorCode, MessageKey, SessionId, TenantId, UserId};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
-use service_kit::identity::{IdentityVerifier, UserIdentity};
+use service_kit::identity::{IdentityVerifier, PermissionDenied, Requirement, UserIdentity};
 use service_kit::tenant::{PlatformReader, TenantDb, TenantDbError};
 use tokio::sync::Semaphore;
 use utoipa::ToSchema;
@@ -343,16 +343,17 @@ impl AccountStore {
 /// Refuses any request to the user's own account (the session, its tenants, the preferences)
 /// that comes with a token another service exchanged for a call on the user's behalf: these
 /// APIs are for the user's own requests, through the cookie check. Logs the refusal at INFO
-/// with `message`, the reason and the calling service.
+/// with `message`, the reason and the calling service. service-kit's shared check
+/// (`Requirement::OwnRequest`) decides and answers; the log keeps this service's own messages.
 pub(crate) fn exchanged_refusal(user: &UserIdentity, message: &'static str) -> Option<Response> {
-    let actor = user.claims().act?;
+    let denial = user.meets(Requirement::OwnRequest).err()?;
     tracing::info!(
         user_id = %user.user_id(),
-        reason = "exchanged_token",
-        actor = actor.sub.as_str(),
+        reason = denial.reason(),
+        actor = user.claims().act.map(|actor| actor.sub.as_str()).unwrap_or_default(),
         "{message}"
     );
-    Some(error(ErrorBody::new(ErrorCode::PermissionDenied)))
+    Some(PermissionDenied::from(denial).into_response())
 }
 
 /// Refuses a write to the user's own account (switching the session's tenant, changing

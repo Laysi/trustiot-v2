@@ -1,0 +1,499 @@
+$ cargo fmt --all --check
+ok
+$ cargo clippy --locked --workspace --all-targets -- -D warnings
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.13s
+$ CI=true cargo test --locked -p agent
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.10s
+     Running unittests src/lib.rs (<host copy>/target/debug/deps/agent-8ac0e8ebdecaec54)
+
+running 216 tests
+test backoff::tests::ceilings_double_from_the_base_up_to_the_cap ... ok
+test backoff::tests::delays_stay_between_the_floor_and_the_ceiling ... ok
+test backoff::tests::huge_failure_counts_and_settings_do_not_overflow ... ok
+test backoff::tests::reset_starts_over_at_the_base ... ok
+test config::tests::a_minimal_file_takes_the_documented_defaults ... ok
+test identity::tests::times_are_written_as_rfc_3339_utc ... ok
+test link::tests::errors_name_the_reason_code ... ok
+test link::tests::subscriptions_are_down_channels_each_once_in_order ... ok
+test config::tests::values_that_break_a_rule_are_refused_with_their_key ... ok
+test config::tests::connection_settings_are_bounded ... ok
+test liveness::tests::a_blocked_connection_thread_stops_the_watchdog ... ok
+test liveness::tests::the_connection_task_gets_a_deadline_before_it_starts ... ok
+test modbus::address::tests::a_mapped_address_is_connected_to_as_ipv4 ... ok
+test config::tests::every_security_relevant_field_is_required ... ok
+test modbus::address::tests::a_refusal_lists_only_the_resolved_addresses ... ok
+test modbus::address::tests::an_exempt_address_is_canonical ... ok
+test desired::store::tests::a_save_replaces_the_previous_payload_and_is_private ... ok
+test desired::store::tests::nothing_saved_loads_as_none ... ok
+test desired::store::tests::the_state_directory_is_the_one_systemd_passes ... ok
+test liveness::tests::a_wait_past_its_deadline_stops_the_watchdog_and_says_why ... ok
+test heartbeat::tests::heartbeats_are_valid_messages_with_what_the_agent_knows ... ok
+test link::tests::session_ids_are_valid_and_differ ... ok
+test modbus::address::tests::field_networks_are_allowed ... ok
+test modbus::address::tests::interfaces_hold_their_addresses_and_subnet_broadcasts ... ok
+test modbus::address::tests::refused_addresses ... ok
+test identity::tests::the_tpm_source_reports_why_it_cannot_open ... ok
+test liveness::tests::a_long_backoff_keeps_the_watchdog_fed ... ok
+test config::tests::the_broker_name_is_fixed_and_an_old_broker_name_key_is_refused ... ok
+test config::tests::the_example_in_the_crate_matches_the_parser ... ok
+test modbus::decode::tests::every_multi_register_type_in_every_byte_order ... ok
+test modbus::address::tests::the_gateways_interfaces_can_be_read ... ok
+test modbus::decode::tests::sixteen_bit_types_use_only_the_byte_swap ... ok
+test modbus::decode::tests::booleans_from_bits_and_registers ... ok
+test modbus::decode::tests::non_finite_floats_are_invalid ... ok
+test modbus::decode::tests::scale_and_offset_give_floats ... ok
+test modbus::decode::tests::the_wrong_number_of_registers_is_invalid ... ok
+test modbus::decode::tests::the_documented_byte_orders_of_0xaabbccdd ... ok
+test desired::store::tests::a_missing_directory_fails_the_save ... ok
+test modbus::decode::tests::strings_end_at_nul_and_are_trimmed ... ok
+test heartbeat::tests::unreadable_proc_files_report_zeros_and_still_encode ... ok
+test config::tests::unknown_keys_anywhere_are_refused ... ok
+test modbus::endpoint::tests::devices_at_one_endpoint_share_its_connection ... ok
+test modbus::mbap::tests::requests_are_mbap_frames ... ok
+test desired::store::tests::a_save_cut_short_leaves_the_previous_payload ... ok
+test modbus::mbap::tests::transactions_start_at_random ... ok
+test modbus::mbap::tests::frames_are_taken_once_whole ... ok
+test modbus::pdu::tests::counts_are_bounded_by_one_response ... ok
+test modbus::mbap::tests::headers_no_device_sends_end_the_framing ... ok
+test modbus::mbap::tests::only_the_matching_unit_and_transaction_answers ... ok
+test identity::tests::identities_that_could_mislead_the_broker_are_refused ... ok
+test modbus::endpoint::tests::prune_forgets_only_endpoints_nobody_reads_through ... ok
+test modbus::decode::tests::u64_above_i64_max_is_invalid_unless_scaled ... ok
+test modbus::mbap::tests::frames_between_requests_are_dropped_and_a_cut_frame_stays ... ok
+test identity::tests::a_matching_file_key_gives_the_gateway_id_from_the_cn ... ok
+test modbus::pdu::tests::bit_responses_are_least_significant_first ... ok
+test modbus::pdu::tests::exceptions_are_reported ... ok
+test modbus::pdu::tests::register_responses_are_big_endian ... ok
+test modbus::pdu::tests::responses_that_do_not_fit_are_malformed ... ok
+test modbus::endpoint::tests::devices_take_turns_request_by_request ... ok
+test modbus::pdu::tests::requests_carry_only_read_function_codes ... ok
+test modbus::plan::tests::a_read_holds_at_most_2000_bits ... ok
+test modbus::plan::tests::a_read_holds_at_most_125_registers ... ok
+test modbus::endpoint::tests::a_read_dropped_while_waiting_for_its_turn_gives_it_up ... ok
+test modbus::rtu::tests::an_exception_is_the_answer ... ok
+test modbus::plan::tests::a_gap_of_ten_merges_and_eleven_splits ... ok
+test modbus::rtu::tests::frames_between_requests_are_dropped_and_a_cut_frame_stays ... ok
+test modbus::rtu::tests::frames_of_other_units_are_counted_and_skipped ... ok
+test modbus::plan::tests::no_points_need_no_reads ... ok
+test modbus::rtu::tests::noise_before_the_answer_is_skipped ... ok
+test modbus::rtu::tests::noise_that_reads_as_the_start_of_a_long_frame_does_not_hide_the_answer ... ok
+test modbus::plan::tests::strings_span_their_length ... ok
+test modbus::rtu::tests::a_frame_of_the_unit_that_does_not_fit_is_skipped_and_remembered ... ok
+test modbus::plan::tests::bits_merge_across_gaps_of_ten ... ok
+test modbus::plan::tests::function_codes_are_separate_address_spaces ... ok
+test modbus::rtu::tests::requests_are_rtu_frames ... ok
+test modbus::rtu::tests::an_answer_arriving_byte_by_byte_is_reassembled ... ok
+test modbus::plan::tests::points_past_the_last_address_are_refused ... ok
+test modbus::rtu::tests::an_echo_of_the_request_is_skipped ... ok
+test modbus::rtu::tests::the_front_is_read_by_function_code ... ok
+test modbus::rtu::tests::the_answer_is_taken_and_what_follows_stays ... ok
+test modbus::plan::tests::adjacent_points_share_a_read ... ok
+test modbus::rtu::tests::a_request_without_an_answer_says_what_arrived_instead ... ok
+test modbus::rtu::tests::crc_matches_the_specification_example_and_testkit ... ok
+test modbus::tcp::tests::link_local_and_private_addresses_are_dialed ... ok
+test modbus::tcp::tests::connections_use_tcp_keepalive ... ok
+test modbus::tests::a_failed_connect_is_one_request_and_skips_the_rest ... ok
+test modbus::tcp::tests::the_framing_follows_the_transport ... ok
+test modbus::tests::failures_carry_bounded_details ... ok
+test modbus::tests::failures_of_one_request_leave_the_others_alone ... ok
+test modbus::tests::a_lost_connection_skips_the_rest_of_the_poll ... ok
+test mqtt::packet::tests::a_partial_packet_waits_for_more_bytes ... ok
+test mqtt::packet::tests::connack_reads_the_server_limits ... ok
+test modbus::tests::an_undecodable_point_fails_alone ... ok
+test modbus::tcp::tests::rtu_frames_between_requests_are_dropped_and_a_cut_one_too ... ok
+test modbus::tcp::tests::a_read_cut_off_while_sending_does_not_reuse_the_connection ... ok
+test mqtt::packet::tests::connect_encodes_the_will_and_limits ... ok
+test mqtt::connection::tests::a_declared_size_above_the_limit_reserves_nothing_for_it ... ok
+test mqtt::packet::tests::encoders_refuse_what_mqtt_cannot_carry ... ok
+test mqtt::packet::tests::every_mqtt_5_must_rule_on_received_packets_is_enforced ... ok
+test modbus::tcp::tests::an_idle_connection_the_device_closed_is_not_reused ... ok
+test mqtt::packet::tests::a_packet_above_the_limit_is_refused_from_its_header_alone ... ok
+test mqtt::packet::tests::no_input_panics_or_reads_past_its_end ... ok
+test modbus::tests::a_poll_reads_decodes_and_stamps_every_point ... ok
+test mqtt::packet::tests::publish_header_counts_the_payload_that_follows ... ok
+test mqtt::packet::tests::publish_from_the_server_decodes_with_its_flags ... ok
+test mqtt::packet::tests::varints_round_trip_at_every_width_boundary ... ok
+test polling::tests::the_backoff_doubles_up_to_its_maximum ... ok
+test polling::tests::due_times_are_whole_periods_from_the_start ... ok
+test sdnotify::tests::messages_are_newline_separated_assignments ... ok
+test sdnotify::tests::the_watchdog_interval_is_half_the_timeout_for_this_process_only ... ok
+test tls::tests::a_root_crl_of_exactly_the_size_limit_is_read ... ok
+test tls::tests::chacha20_comes_first_and_only_tls_1_3_is_offered ... ok
+test tls::tests::a_root_crl_is_loaded_only_when_a_trust_anchor_signed_it ... ok
+test mqtt::packet::tests::puback_suback_pingresp_and_disconnect_decode_in_every_form ... ok
+test sdnotify::tests::notifications_reach_the_socket_and_do_nothing_without_one ... ok
+test setup::tests::the_crate_version_is_a_valid_agent_version ... ok
+test mqtt::packet::tests::only_the_reason_codes_mqtt_5_allows_are_accepted ... ok
+test tls::tests::the_broker_name_is_one_fixed_dns_name ... ok
+test modbus::tcp::tests::a_name_is_resolved_once_and_its_checked_address_dialed ... ok
+test tls::tests::a_root_crl_with_an_issuing_distribution_point_is_refused ... ok
+test tls::tests::names_in_errors_have_no_control_characters_and_are_cut_short ... ok
+test mqtt::packet::tests::reason_codes_print_with_their_names ... ok
+test tls::tests::the_outer_layer_has_no_trust_anchor_but_the_configured_ones ... ok
+test modbus::tcp::tests::what_arrives_between_requests_is_dropped ... ok
+test tls::tests::signatures_are_checked_only_with_the_algorithms_the_handshake_accepts ... ok
+test polling::tests::settings_have_defaults_and_ranges ... ok
+test mqtt::packet::tests::rule_breaking_packets_are_refused_with_the_right_reason ... ok
+test tpm::endorsement::flow::a_certificate_for_another_key_is_refused ... ok
+test mqtt::connection::tests::the_read_buffer_holds_one_largest_packet_and_shrinks_back ... ok
+test tpm::endorsement::flow::a_certificate_index_never_written_is_absent ... ok
+test mqtt::packet::tests::small_packets_have_their_fixed_forms ... ok
+test tls::tests::what_webpki_refuses_in_a_crl_is_refused_at_load ... ok
+test tpm::endorsement::flow::an_ek_point_off_the_curve_is_flushed_and_refused ... ok
+test tpm::endorsement::flow::an_ek_whose_name_is_not_its_area_is_flushed_and_refused ... ok
+test tpm::endorsement::flow::an_nv_answer_about_another_index_is_refused ... ok
+test tpm::endorsement::flow::an_ek_with_other_attributes_is_flushed_and_refused ... ok
+test tpm::endorsement::flow::the_recorded_offsets_are_right ... ok
+test modbus::tcp::tests::only_the_allowed_addresses_of_a_name_are_dialed ... ok
+test tpm::endorsement::flow::an_endorsement_authorization_ends_after_create_primary ... ok
+test modbus::tcp::tests::refused_hosts_are_never_dialed ... ok
+test tpm::endorsement::flow::the_nv_read_response_helper_gives_the_recorded_responses ... ok
+test tpm::endorsement::flow::an_ek_that_read_public_disagrees_with_is_flushed_and_refused ... ok
+test tpm::endorsement::flow::an_ek_template_or_nonce_is_refused_before_anything_is_created ... ok
+test tls::tests::two_roots_with_the_same_subject_are_refused ... ok
+test tpm::endorsement::tests::a_certificate_for_the_ek_matches ... ok
+test tpm::marshal::tests::a_tpm_signature_becomes_der_that_verifies_with_the_public_key ... ok
+test tpm::endorsement::flow::a_short_nv_read_is_refused ... ok
+test tpm::marshal::tests::an_ek_area_is_refused_unless_it_is_the_template_and_a_p256_point ... ok
+test tpm::marshal::tests::an_error_code_is_reported_whatever_the_tag ... ok
+test tpm::endorsement::flow::an_index_with_only_auth_read_is_read_with_its_own_authorization ... ok
+test tpm::endorsement::tests::a_certificate_for_another_key_or_another_encoding_is_refused ... ok
+test tpm::marshal::tests::commands_are_marshalled_as_tpm2_part_3_specifies ... ok
+test tpm::endorsement::tests::bytes_that_are_not_exactly_one_certificate_are_refused ... ok
+test tpm::marshal::tests::der_integers_are_minimal_and_positive ... ok
+test tpm::marshal::tests::keys_other_than_a_p256_ecdsa_sha256_signing_key_are_refused ... ok
+test tpm::marshal::tests::inflated_inner_lengths_never_read_past_the_buffer ... ok
+test tpm::marshal::tests::keys_with_the_wrong_attributes_are_refused ... ok
+test tpm::marshal::tests::matches_template_needs_every_field_and_a_p256_point ... ok
+test tpm::marshal::tests::nv_commands_are_marshalled_as_tpm2_part_3_specifies ... ok
+test tpm::marshal::tests::inflated_sizes_in_nv_responses_never_read_past_the_buffer ... ok
+test tls::tests::a_root_crl_needs_a_root_that_may_sign_crls ... ok
+test tpm::marshal::tests::every_truncation_and_extension_of_a_provisioning_response_is_an_error ... ok
+test desired::store::tests::a_file_larger_than_any_configuration_is_refused ... ok
+test modbus::tcp::tests::refused_hosts_reach_nothing ... ok
+test tpm::marshal::tests::read_public_gives_the_same_key_as_tpm2_tools ... ok
+test tpm::marshal::tests::inflated_sizes_in_provisioning_responses_never_read_past_the_buffer ... ok
+test tpm::marshal::tests::the_ek_commands_are_what_swtpm_accepted_and_give_tpm2_tools_ek ... ok
+test tpm::marshal::tests::the_templates_are_the_poc_key_and_the_tpm2_tools_srk ... ok
+test tpm::marshal::tests::provisioning_commands_are_what_swtpm_accepted ... ok
+test tpm::marshal::tests::nv_responses_parse_as_recorded ... ok
+test tpm::marshal::tests::trailing_bytes_and_wrong_sizes_are_errors ... ok
+test tpm::marshal::tests::provisioning_error_codes_are_reported ... ok
+test tpm::marshal::tests::the_primary_is_the_srk_and_the_created_key_is_the_one_persisted ... ok
+test tpm::marshal::tests::every_truncation_of_a_response_is_an_error ... ok
+test tpm::provision::tests::a_tpm_error_reading_the_handle_is_not_taken_for_an_empty_handle ... ok
+test tpm::provision::tests::authorization_failures_are_told_from_other_codes ... ok
+test tpm::provision::tests::handles_that_cannot_hold_the_key_are_refused_before_any_command ... ok
+test tpm::endorsement::flow::without_a_certificate_the_ek_is_tpm2_tools_ek_and_absent_is_reported ... ok
+test tpm::provision::tests::an_existing_key_is_reused_with_two_commands ... ok
+test tpm::marshal::tests::the_ek_template_is_the_tcg_profile_l2_template ... ok
+test tpm::provision::tests::a_signing_key_that_differs_from_the_template_is_refused_after_reading_it_only ... ok
+test tpm::marshal::tests::short_coordinates_are_left_padded_and_long_ones_refused ... ok
+test tpm::rc::tests::format_one_codes_name_the_error_and_its_subject ... ok
+test tpm::endorsement::flow::an_index_of_the_largest_size_is_read_in_eight_chunks_and_judged ... ok
+test tpm::rc::tests::format_zero_errors_and_warnings_are_told_apart ... ok
+test tls::tests::the_inner_trust_anchors_are_root_ca_certificates_only ... ok
+test tpm::rc::tests::unknown_vendor_layered_and_tpm12_codes_stay_readable ... ok
+test tpm::endorsement::flow::a_certificate_index_that_cannot_hold_a_certificate_is_refused ... ok
+test tpm::tests::a_device_that_is_missing_or_not_a_character_device_is_refused ... ok
+test tpm::provision::tests::without_the_standard_srk_a_transient_primary_is_made_and_flushed ... ok
+test tpm::provision::tests::an_occupied_handle_after_create_reuses_the_other_runs_key ... ok
+test tpm::tests::a_dead_thread_makes_signing_fail_instead_of_hanging ... ok
+test tpm::tests::handles_outside_the_persistent_range_are_refused_before_any_command ... ok
+test tpm::tests::a_key_whose_test_signature_does_not_verify_is_refused ... ok
+test tpm::marshal::tests::every_truncation_and_extension_of_an_nv_or_ek_response_is_an_error ... ok
+test tpm::tests::an_io_error_fails_one_request_and_the_next_one_works ... ok
+test tpm::provision::tests::other_objects_are_refused_after_reading_them_only ... ok
+test transport::tests::websocket_buffers_are_bounded ... ok
+test transport::tests::connections_use_nodelay_and_tcp_keepalive ... ok
+test transport::tests::only_wss_urls_on_our_own_domain_with_the_mqtt_path_are_accepted ... ok
+test transport::tests::each_resolved_address_gets_its_own_ten_seconds ... ok
+test transport::tests::a_text_message_is_an_error_and_a_close_ends_the_stream ... ok
+test tpm::tests::open_reads_the_key_signs_a_test_message_and_signs_with_it ... ok
+test tpm::tests::rustls_sees_an_ecdsa_p256_key_whose_spki_matches_only_its_own_certificate ... ok
+test transport::tests::bytes_travel_in_binary_messages_of_at_most_32_kib_and_pings_are_answered ... ok
+test tpm::endorsement::flow::the_recorded_certificate_is_read_in_two_chunks_and_matches ... ok
+test tpm::provision::tests::an_empty_handle_gets_a_key_under_the_srk_and_a_retry_is_resent ... ok
+test tpm::tests::tpm_errors_at_open_are_returned_and_stop_the_thread ... ok
+test polling::tests::the_schedule_does_not_drift_over_an_hour ... ok
+test tpm::marshal::tests::garbage_is_rejected_without_panicking ... ok
+test tpm::endorsement::tests::certificate_garbage_is_refused_without_panicking ... ok
+test tpm::tests::dropping_the_last_clone_stops_the_thread_and_closes_the_channel ... ok
+test tpm::marshal::tests::provisioning_garbage_is_rejected_without_panicking ... ok
+test tpm::marshal::tests::nv_garbage_is_rejected_without_panicking ... ok
+test tpm::tests::a_tpm_that_does_not_answer_times_out_and_a_full_queue_is_refused ... ok
+test tpm::provision::tests::retries_give_up_after_a_bound ... ok
+
+test result: ok. 216 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.65s
+
+     Running unittests src/main.rs (<host copy>/target/debug/deps/trustiot_agent-22c1f2bf97de6f7a)
+
+running 1 test
+test tests::arguments ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/binary.rs (<host copy>/target/debug/deps/binary-dd0063b8f2aa33b3)
+
+running 7 tests
+test a_closed_port_refuses_connections_and_cannot_be_taken ... ok
+test check_refuses_a_certificate_the_broker_ca_did_not_issue ... ok
+test an_expired_certificate_only_warns_because_the_clock_may_be_wrong ... ok
+test check_accepts_a_working_configuration_and_refuses_a_key_of_another_certificate ... ok
+test check_reports_the_root_crl_and_refuses_one_the_root_did_not_sign ... ok
+test connected_the_agent_applies_its_configuration_reports_it_and_polls_it_after_a_restart ... ok
+test without_a_broker_the_agent_is_ready_feeds_the_watchdog_and_stops_on_sigterm ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.01s
+
+     Running tests/broker.rs (<host copy>/target/debug/deps/broker-57716ef52316346b)
+
+running 4 tests
+test a_refused_subscription_leaves_the_will_as_the_status_and_the_agent_tries_again ... ok
+test the_agent_talks_mqtt_5_with_mosquitto_through_the_websocket_with_mtls_inside ... ok
+test the_agent_reconnects_after_the_relay_or_the_broker_restarts ... ok
+test which_ends_make_mosquitto_publish_the_will ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.71s
+
+     Running tests/dependencies.rs (<host copy>/target/debug/deps/dependencies-16d1d57af4507a02)
+
+running 1 test
+test the_gateway_build_has_no_root_store_and_one_crypto_library ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.15s
+
+     Running tests/desired_config.rs (<host copy>/target/debug/deps/desired_config-1596a1a6f77a8730)
+
+running 7 tests
+test versions_follow_the_protocol_rules ... ok
+test an_invalid_configuration_is_rejected_with_its_issues_and_the_previous_one_stays ... ok
+test a_removed_device_is_no_longer_polled_and_its_state_is_cleared ... ok
+test after_a_restart_without_network_the_saved_configuration_is_polled ... ok
+test a_change_leaves_the_other_devices_polling_untouched ... ok
+test after_a_restart_the_gateway_converges_to_the_latest_version ... ok
+test a_device_removed_during_its_request_is_stopped_after_the_answer ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/link.rs (<host copy>/target/debug/deps/link-c557e4d5ba655f72)
+
+running 51 tests
+test a_clean_stop_publishes_offline_then_disconnects_normally ... ok
+test a_message_on_a_channel_the_link_did_not_subscribe_to_is_acknowledged_and_dropped ... ok
+test a_connection_starts_with_connect_and_will_then_online_then_subscriptions ... ok
+test a_refused_online_status_ends_the_connection_and_the_link_tries_again ... ok
+test a_refused_subscription_ends_the_connection_and_never_reports_connected ... ok
+test a_missing_pingresp_ends_the_connection_and_the_link_reconnects_with_a_new_session ... ok
+test a_puback_that_never_comes_ends_the_connection_after_its_deadline ... ok
+test a_slow_write_does_not_use_up_the_time_for_its_puback ... ok
+test a_stop_cuts_a_stuck_write_at_the_stop_deadline_and_sends_nothing_after_it ... ok
+test a_server_keep_alive_of_zero_keeps_the_agents_own_keepalive ... ok
+test a_disconnect_from_the_broker_is_reported_and_followed_by_a_reconnect ... ok
+test a_permit_belongs_to_the_connection_it_was_reserved_on ... ok
+test a_qos_0_write_that_fails_during_a_stop_is_not_reported_as_never_sent ... ok
+test a_message_for_an_ended_session_is_never_sent_on_the_next_connection ... ok
+test a_broker_that_cannot_deliver_at_qos_1_or_retain_is_never_connected ... ok
+test connack_and_suback_codes_outside_their_sets_end_the_connection ... ok
+test a_connack_that_breaks_mqtt_5_ends_the_connection_with_the_will ... ok
+test pings_start_when_the_broker_is_quiet_even_while_the_agent_keeps_sending ... ok
+test connection_attempts_and_connack_are_bounded_by_the_connect_timeout ... ok
+test incoming_ends_once_the_supervisor_has_stopped_and_every_message_was_taken ... ok
+test connected_waits_for_both_the_puback_of_online_and_the_suback_in_either_order ... ok
+test packets_above_the_brokers_maximum_packet_size_are_never_sent ... ok
+test publishes_during_connect_and_setup_fail_at_once_and_are_never_sent_later ... ok
+test puback_codes_decide_the_outcome_and_a_refusal_carries_the_brokers_reason ... ok
+test publishing_fails_at_once_while_offline_and_checks_the_channel_first ... ok
+test heartbeats_follow_every_connection_with_its_session ... ok
+test a_stop_reports_written_publishes_as_maybe_delivered_and_queued_ones_as_not_sent ... ok
+test the_brokers_limits_from_connack_are_respected ... ok
+test slow_writes_during_setup_do_not_use_up_the_time_for_their_acknowledgements ... ok
+test qos_0_publishes_pass_a_full_inflight_window ... ok
+test a_write_the_broker_does_not_take_ends_the_connection ... ok
+test reason_strings_from_the_broker_lose_their_control_characters ... ok
+test down_messages_are_delivered_acknowledged_and_bounded ... ok
+test without_a_puback_for_offline_the_stop_asks_the_broker_for_the_will ... ok
+test without_subscriptions_no_subscribe_follows_online_and_its_puback_connects ... ok
+test when_the_supervisor_goes_away_written_publishes_are_lost_and_queued_ones_stopped ... ok
+test publish_never_waits_for_room_so_callers_beyond_the_queue_hold_nothing ... ok
+test a_heartbeat_that_finds_the_queue_full_is_skipped_not_delayed ... ok
+test refused_connections_back_off_with_jitter_and_never_give_up ... ok
+test reserve_waits_without_a_payload_and_hands_out_places_in_order ... ok
+test waiting_for_the_application_suspends_the_puback_and_pingresp_deadlines ... ok
+test requests_still_queued_when_a_connection_ends_are_answered_and_never_sent_later ... ok
+test only_a_connection_that_stayed_up_resets_the_backoff ... ok
+test a_suback_that_never_comes_ends_the_connection_with_the_will ... ok
+test a_stop_during_the_connect_write_keeps_one_deadline_for_connack ... ok
+test a_subscription_refused_during_a_stop_still_ends_with_a_normal_disconnect ... ok
+test a_stop_without_any_connack_gives_up_after_the_stop_deadline ... ok
+test a_stop_while_waiting_for_connack_still_ends_with_offline_and_a_normal_disconnect ... ok
+test a_puback_with_a_reason_code_mqtt_5_does_not_allow_is_never_a_success ... ok
+test the_inflight_limit_bounds_unacknowledged_publishes ... ok
+test broken_packets_end_the_connection_with_the_will ... ok
+
+test result: ok. 51 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+     Running tests/liveness.rs (<host copy>/target/debug/deps/liveness-cb6f5ff67169d58c)
+
+running 4 tests
+test opening_a_connection_may_take_the_connect_timeout_and_one_tpm_response ... ok
+test a_write_may_take_its_own_timeout ... ok
+test a_connection_task_stuck_in_a_wait_stops_the_watchdog ... ok
+test every_wait_of_a_connection_is_declared_with_its_deadline ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/modbus_address_guard.rs (<host copy>/target/debug/deps/modbus_address_guard-f9371a5d7ac09f5f)
+
+running 1 test
+test hosts_on_the_gateway_itself_reach_nothing ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/modbus_fake_endpoint.rs (<host copy>/target/debug/deps/modbus_fake_endpoint-31c15f2d454651bc)
+
+running 9 tests
+test a_late_answer_is_never_taken_for_the_next_request ... ok
+test every_type_and_byte_order_reads_from_the_fake_endpoint ... ok
+test a_half_open_connection_times_out ... ok
+test a_silent_device_times_out_and_the_connection_stays ... ok
+test an_answer_from_another_unit_is_discarded ... ok
+test a_connection_lost_twice_ends_the_poll_and_the_next_poll_reconnects ... ok
+test an_exception_fails_only_its_request ... ok
+test a_dropped_connection_is_replaced_within_the_request ... ok
+test a_broadcast_answer_for_another_unit_is_not_misattributed ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+
+     Running tests/modbus_rtu_converter.rs (<host copy>/target/debug/deps/modbus_rtu_converter-5596d0c86482057c)
+
+running 8 tests
+test a_siblings_late_answer_is_a_unit_mismatch_not_a_value ... ok
+test every_function_code_and_type_reads_over_rtu ... ok
+test a_silent_device_holds_the_others_up_by_one_timeout_per_request ... ok
+test an_exception_over_rtu_fails_only_its_request ... ok
+test known_limitation_a_late_answer_of_the_same_shape_is_taken_for_the_next_request ... ok
+test a_late_answer_of_another_shape_is_not_taken_for_the_next_request ... ok
+test devices_on_one_converter_share_one_connection_and_take_turns ... ok
+test broadcast_responses_never_land_on_another_device ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+
+     Running tests/modbus_rtu_framing.rs (<host copy>/target/debug/deps/modbus_rtu_framing-d15f1c72be94bde7)
+
+running 6 tests
+test an_echo_another_units_answer_and_the_answer_in_one_write ... ok
+test noise_and_frames_with_a_bad_crc_before_the_answer_are_skipped ... ok
+test a_frame_cut_before_the_next_request_does_not_hide_its_answer ... ok
+test a_kept_open_connection_closed_during_a_request_is_replaced ... ok
+test requests_are_rtu_frames_on_the_wire ... ok
+test what_arrives_instead_of_an_answer_decides_the_failure ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/modbus_tcp_framing.rs (<host copy>/target/debug/deps/modbus_tcp_framing-6e51138627c55b56)
+
+running 8 tests
+test a_refused_connection_is_a_connect_failure ... ok
+test a_response_that_arrives_byte_by_byte_is_reassembled ... ok
+test only_the_matching_unit_and_transaction_is_the_answer ... ok
+test an_exception_and_a_malformed_answer_keep_the_connection ... ok
+test a_header_no_device_sends_is_a_protocol_failure ... ok
+test a_new_connection_that_fails_is_not_tried_again ... ok
+test a_timeout_in_the_middle_of_a_frame_keeps_the_stream_framed ... ok
+test a_device_that_closes_after_every_answer_is_read_every_time ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/polling_recovery.rs (<host copy>/target/debug/deps/polling_recovery-aec9d3fc6693dcb5)
+
+running 3 tests
+test a_half_open_connection_is_detected_and_replaced ... ok
+test the_watchdog_recovers_a_device_that_stays_connected_but_never_answers ... ok
+test only_a_poll_that_read_values_resets_the_backoff ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/systemd_unit.rs (<host copy>/target/debug/deps/systemd_unit-a1630ceacdb6e265)
+
+running 6 tests
+test a_stuck_tpm_cannot_outlast_the_watchdog_or_the_start_timeout ... ok
+test the_agent_runs_as_its_own_account_and_never_as_root ... ok
+test the_sandbox_lines_stay ... ok
+test systemd_learns_readiness_and_liveness_from_the_agent_and_always_restarts_it ... ok
+test the_unit_scores_at_most_the_allowed_exposure ... ok
+test the_unit_passes_systemd_analyze_verify ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+
+     Running tests/tpm_endorsement.rs (<host copy>/target/debug/deps/tpm_endorsement-e7a280a70209a16b)
+
+running 5 tests
+test an_ek_template_or_nonce_in_nv_is_refused_before_anything_is_created ... ok
+test an_endorsement_authorization_is_refused_and_the_tpm_is_unchanged ... ok
+test a_process_that_dies_while_the_ek_is_loaded_leaves_nothing ... ok
+test the_ek_is_tpm2_tools_ecc_ek_and_the_same_on_every_run ... ok
+test an_ek_certificate_is_returned_when_it_is_for_the_ek_and_refused_otherwise ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.36s
+
+     Running tests/tpm_provision.rs (<host copy>/target/debug/deps/tpm_provision-77ce0812d84350ff)
+
+running 6 tests
+test two_processes_creating_at_once_end_with_one_key ... ok
+test a_process_that_dies_before_the_key_is_persisted_leaves_nothing_and_a_rerun_creates_it ... ok
+test after_tpm2_clear_a_rerun_creates_a_different_key ... ok
+test a_non_standard_srk_is_left_alone_and_a_transient_primary_is_used ... ok
+test an_empty_handle_gets_the_decision_12_key_and_reruns_reuse_it ... ok
+test objects_that_do_not_match_are_refused_and_the_tpm_is_unchanged ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.95s
+
+     Running tests/tpm_swtpm.rs (<host copy>/target/debug/deps/tpm_swtpm-f70a8afc7e87b5ed)
+
+running 1 test
+test the_tpm_key_signs_and_completes_an_mtls_handshake_and_unusable_keys_are_refused ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.94s
+
+     Running tests/transport.rs (<host copy>/target/debug/deps/transport-67e4e233058bab29)
+
+running 19 tests
+test a_front_without_tls_1_3_is_refused ... ok
+test a_front_certificate_from_the_broker_ca_is_refused ... ok
+test a_broker_without_tls_1_3_is_refused ... ok
+test a_root_crl_the_root_did_not_sign_stops_the_agent_from_starting ... ok
+test a_front_that_does_not_answer_the_mqtt_subprotocol_is_refused ... ok
+test an_outer_certificate_for_another_host_is_refused ... ok
+test a_broker_certificate_for_another_name_is_refused ... ok
+test an_outer_certificate_from_another_ca_is_refused ... ok
+test a_broker_that_does_not_send_its_issuing_ca_is_refused ... ok
+test a_broker_that_does_not_trust_the_gateway_certificate_never_sees_mqtt ... ok
+test a_broker_certificate_from_another_ca_is_refused ... ok
+test a_root_crl_that_revokes_the_issuing_ca_refuses_the_broker ... ok
+test a_certificate_without_server_auth_is_refused_as_the_broker_s ... ok
+test a_broker_certificate_from_the_outer_ca_is_refused ... ok
+test a_root_crl_that_does_not_list_the_issuing_ca_lets_the_agent_connect ... ok
+test the_broker_s_chain_through_the_issuing_ca_it_sends_is_accepted ... ok
+test an_expired_root_crl_still_counts_and_still_lets_the_agent_connect ... ok
+test the_agent_reaches_the_broker_through_tls_and_websocket_with_mtls_inside ... ok
+test after_the_broker_or_the_relay_goes_away_the_agent_reconnects_and_resumes_tls ... ok
+
+test result: ok. 19 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.39s
+
+   Doc-tests agent
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+$ cargo test --locked -p repo-check
+running 18 tests
+test result: ok. 18 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+running 10 tests
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.11s
+running 0 tests
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+$ cargo build --locked --target aarch64-unknown-linux-gnu -p agent
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 11.25s
+

@@ -84,13 +84,15 @@ tenants (service-kit's PlatformDb), which every outbox consumer needs to read it
 events. tools/migrate creates a platform role for every service its registry marks, but a role
 logs in only while a Secret is bound to it, and the chart binds one only to the services listed
 here: a platform role nobody logs in with stays NOLOGIN. identity is listed because it keeps
-the event log (Laysi/trustiot-v2#130) and reads the events it records as its platform role.
+the event log (Laysi/trustiot-v2#130) and reads the events it records as its platform role, and
+assistant because its scheduled purge deletes the conversations deleted more than 30 days ago,
+across tenants, as its platform role (Laysi/trustiot-v2#645).
 tools/migrate/tests/registry.rs checks this list against the registry: every consumer is in it,
 and nothing without a platform role is.
 Returns a YAML list; use with fromYamlArray.
 */}}
 {{- define "trustiot.migrate.platformLogins" -}}
-{{- list "assets" "certs" "identity" "telemetry-query" | toYaml -}}
+{{- list "assets" "assistant" "certs" "gateway-ops" "identity" "ingest" "telemetry-query" | toYaml -}}
 {{- end -}}
 
 {{/*
@@ -104,6 +106,10 @@ one per consumer, so a node's kubelet can read only the passwords of the pods sc
   "trustiot_telemetry_query" (role "clickhouse") in the same "<release>-telemetry-query-password"
   (services/telemetry-query/README.md; the account is defined by
   services/ingest/migrations/clickhouse/0008_telemetry_query.sql);
+- the ingest service, when enabled: its ClickHouse account's password under the key
+  "trustiot_ingest_writer" (role "clickhouse") in the same "<release>-ingest-password"; the Job
+  creates the account with the role trustiot_ingest alone (tools/migrate/src/clickhouse.rs,
+  Laysi/trustiot-v2#642);
 - the OpenTelemetry collector, when enabled: "<release>-otel-collector-password", with its
   ClickHouse account's password under the key named after the account.
 templates/passwords.yaml declares them without data; the migration Job generates each password and
@@ -127,6 +133,11 @@ for the Secrets themselves.
 {{- with get .Values.services "telemetry-query" -}}
 {{- if .enabled -}}
 {{- $secrets = append $secrets (dict "name" (include "trustiot.componentName" (dict "root" $ "name" "telemetry-query-password")) "key" "trustiot_telemetry_query" "database" "clickhouse" "component" "telemetry-query" "role" "clickhouse") -}}
+{{- end -}}
+{{- end -}}
+{{- with get .Values.services "ingest" -}}
+{{- if .enabled -}}
+{{- $secrets = append $secrets (dict "name" (include "trustiot.componentName" (dict "root" $ "name" "ingest-password")) "key" "trustiot_ingest_writer" "database" "clickhouse" "component" "ingest" "role" "clickhouse") -}}
 {{- end -}}
 {{- end -}}
 {{- with .Values.observability.collector -}}
@@ -362,6 +373,8 @@ passwords. */ -}}
 {{- $postgres = append $postgres (printf "%s=%s" .key .name) -}}
 {{- else if eq .component "telemetry-query" -}}
 {{- $env = append $env (dict "name" "TRUSTIOT__PASSWORDS__CLICKHOUSE_TELEMETRY_QUERY" "value" (printf "%s=%s" .key .name)) -}}
+{{- else if eq .component "ingest" -}}
+{{- $env = append $env (dict "name" "TRUSTIOT__PASSWORDS__CLICKHOUSE_INGEST" "value" (printf "%s=%s" .key .name)) -}}
 {{- else -}}
 {{- $env = append $env (dict "name" "TRUSTIOT__PASSWORDS__CLICKHOUSE_COLLECTOR" "value" (printf "%s=%s" .key .name)) -}}
 {{- end -}}

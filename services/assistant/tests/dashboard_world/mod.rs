@@ -36,7 +36,7 @@ use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use assistant::api::held_body::HELD_BODY_TIMEOUT;
-use assistant::api::{self, ApiState};
+use assistant::api::{self, dashboards::Dashboards};
 use assistant::callee::Callee;
 use assistant::dashboards::caps::{Limited, RunCaps};
 use assistant::dashboards::checker::Checker;
@@ -45,8 +45,11 @@ use assistant::dashboards::runner::DatasetRunner;
 use assistant::dashboards::store::{self, Author, NewVersion, Requester, StoreError};
 use assistant::delegation::IDENTITY_TIMEOUT;
 use assistant::history::Principal;
+use assistant::model::anthropic::AnthropicGateway;
+use assistant::model::{CacheTtl, Effort};
 use assistant::tools::dashboard::{DashboardTool, WriteBounds};
-use assistant::tools::{Delegation, DelegationError};
+use assistant::tools::{Delegation, DelegationError, ToolLimits, ToolRegistry};
+use assistant::{Agent, AgentSettings};
 use axum::Router;
 use axum::body::Bytes;
 use axum::extract::State;
@@ -347,7 +350,7 @@ pub struct World {
 
 /// The world, or `None` without a container runtime (testkit skips locally, fails in CI).
 pub async fn world() -> Option<World> {
-    let product = product_postgres(&["assistant_app"]).await?;
+    let product = product_postgres(&["assistant_app", "assistant_platform"]).await?;
     let db = TenantDb::connect_lazy(
         product.postgres.options("assistant_app", DATABASE),
         PgPoolOptions::new().max_connections(8),
@@ -577,15 +580,47 @@ impl World {
     ) -> Router {
         let identity = InternalClient::<service::Identity>::new(&peers.url, IDENTITY_TIMEOUT)
             .expect("a client for the exchange's stand-in");
-        api::routes(ApiState {
-            verifier: self.issuer.verifier(ServiceName::Assistant),
-            db: self.db.clone(),
-            on_behalf: exchange.then(|| OnBehalf::new(identity)),
-            runner,
-            versions: Arc::new(VersionBudget::default()),
-            held_body_timeout,
-        })
+        api::routes(
+            self.issuer.verifier(ServiceName::Assistant),
+            self.db.clone(),
+            Arc::new(idle_agent(&peers.url)),
+            Dashboards {
+                on_behalf: exchange.then(|| OnBehalf::new(identity)),
+                runner,
+                versions: Arc::new(VersionBudget::default()),
+                held_body_timeout,
+            },
+        )
     }
+}
+
+/// An agent without tools for the API's conversation routes, which no test here asks a
+/// question of; its AI gateway is the stand-in at `peers_url`, which answers no model call.
+fn idle_agent(peers_url: &str) -> Agent {
+    let gateway = AnthropicGateway::new(peers_url, "main", 32 << 20).expect("a valid gateway URL");
+    let registry = ToolRegistry::new(
+        Vec::new(),
+        ToolLimits {
+            call_timeout: WAIT,
+            max_calls_per_step: 8,
+            max_text_bytes: 64 << 10,
+            max_images: 4,
+            max_image_bytes: 5 << 20,
+        },
+    )
+    .expect("an empty tool set");
+    Agent::new(
+        Arc::new(gateway),
+        registry,
+        AgentSettings {
+            effort: Effort::Medium,
+            cache_ttl: CacheTtl::FiveMinutes,
+            max_output_tokens: 16_000,
+            call_timeout: WAIT,
+            budget_tokens: 100_000_000,
+            wind_down_percent: 80,
+        },
+    )
 }
 
 /// A client for telemetry-query's stand-in among `peers`.
@@ -1121,9 +1156,10 @@ pub struct Binary {
 }
 
 impl Binary {
-    /// Starts the assistant on free local ports against `product` as `assistant_app`, trusting
-    /// `issuer`'s keys, with every peer it calls (the identity service's exchange,
-    /// telemetry-query, assets and the AI gateway) at `peers_url`, and waits until it is ready.
+    /// Starts the assistant on free local ports against `product` as `assistant_app` (and
+    /// `assistant_platform` for the purge), trusting `issuer`'s keys, with every peer it calls
+    /// (the identity service's exchange, telemetry-query, assets and the AI gateway) at
+    /// `peers_url`, and waits until it is ready.
     /// The environment is otherwise empty, so the developer's own variables cannot leak in.
     pub async fn start(product: &ProductPostgres, issuer: &TestIssuer, peers_url: &str) -> Self {
         let keys_file = keys_file(&issuer.jwks());
@@ -1137,6 +1173,11 @@ impl Binary {
             .env("TRUSTIOT_INTERNAL_IDENTITY_KEYS_FILE", &keys_file)
             .env("TRUSTIOT__DATABASE__USERNAME", "assistant_app")
             .env("TRUSTIOT__DATABASE__PASSWORD", TEST_PASSWORD)
+            .env(
+                "TRUSTIOT__DATABASE__PLATFORM_USERNAME",
+                "assistant_platform",
+            )
+            .env("TRUSTIOT__DATABASE__PLATFORM_PASSWORD", TEST_PASSWORD)
             .env("TRUSTIOT__AI_GATEWAY__URL", peers_url)
             .env("TRUSTIOT__IDENTITY__EXCHANGE_URL", peers_url)
             .env("TRUSTIOT__TELEMETRY_QUERY__URL", peers_url)

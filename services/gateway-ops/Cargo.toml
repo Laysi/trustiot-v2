@@ -1,0 +1,70 @@
+[package]
+name = "gateway-ops"
+description = "TrustIoT v2 gateway operations service: each gateway's versioned desired configuration, generated from the assets service's events and delivered retained over MQTT (decision 7)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+repository.workspace = true
+
+# The service is built in steps under Laysi/trustiot-v2#93: it keeps the projection of the assets
+# service's models, devices and bindings and stores every gateway's desired configuration as
+# versions in Postgres (Laysi/trustiot-v2#719), and delivers them over MQTT and records the apply
+# reports (Laysi/trustiot-v2#720); the chart is Laysi/trustiot-v2#721. It follows the gateways'
+# presence and lists a tenant's gateways (Laysi/trustiot-v2#112).
+
+[[bin]]
+name = "gateway-ops"
+path = "src/main.rs"
+test = false
+doc = false
+
+[dependencies]
+# The API's list of a tenant's gateways (README.md, "API").
+axum = { workspace = true, features = ["json"] }
+contract = { path = "../../crates/contract" }
+# Publishes the configurations and receives the apply reports (README.md, "下發").
+mqtt-client = { path = "../../crates/mqtt-client" }
+# The counters of generated, failed and ignored configurations (README.md, "指標").
+opentelemetry = { workspace = true, features = ["metrics"] }
+# Consumes the assets service's model, device and binding events (decision 4).
+outbox = { path = "../../crates/outbox" }
+# The configuration's wire format and its rules (crates/protocol, "設定下發").
+protocol = { path = "../../crates/protocol" }
+serde = { workspace = true, features = ["derive"] }
+# Models and devices are stored as the JSON of their protocol types.
+serde_json.workspace = true
+service-kit = { path = "../../crates/service-kit" }
+# Same TLS stack as service-kit: every connection verifies the server (checklist M3).
+sqlx = { workspace = true, features = ["chrono", "postgres", "runtime-tokio", "tls-rustls-ring-webpki"] }
+chrono = { workspace = true, features = ["serde"] }
+thiserror.workspace = true
+tokio = { workspace = true, features = ["macros", "net", "rt-multi-thread", "sync", "time"] }
+# The shutdown token the delivery stops on (service-kit's `stopping_token`).
+tokio-util.workspace = true
+tracing.workspace = true
+# The API's OpenAPI document (merged into api/openapi.json by tools/openapi).
+utoipa = { workspace = true, features = ["chrono", "uuid"] }
+
+[dev-dependencies]
+# The payload of mqtt-client's messages in the presence task's unit tests.
+bytes.workspace = true
+# Crafted apply reports: an extra field naming another gateway in the payload.
+cbor4ii = { workspace = true, features = ["serde1", "use_std"] }
+# The stand-in broker's accounts (the broker's role for service:gateway-ops from tools/migrate's
+# own definition).
+migrate = { path = "../../tools/migrate" }
+reqwest.workspace = true
+# A stand-in gateway with a last will that can drop its connection or leave it half open: only
+# the MQTT 5 packet types and their codec, as crates/mqtt-client uses them.
+rumqttc.workspace = true
+# The product's schema (the migration Job) and the cross-tenant suite.
+testkit = { path = "../../crates/testkit" }
+tokio = { workspace = true, features = ["io-util", "macros", "net", "process", "rt", "rt-multi-thread", "time"] }
+# Captures the service's log events in the tests that run the consumer in the test's thread.
+tracing-subscriber = { workspace = true, features = ["registry", "std"] }
+# The test broker's random passwords.
+uuid = { workspace = true, features = ["v4"] }
+
+[lints]
+workspace = true

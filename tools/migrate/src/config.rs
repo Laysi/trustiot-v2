@@ -96,7 +96,7 @@ pub struct ClickHouseSettings {
     #[serde(default)]
     pub password_secret: Option<String>,
     /// `TRUSTIOT__CLICKHOUSE__RAW_RETENTION_DAYS`: the raw data retention in days, which the run
-    /// sets as the TTL of `trustiot.telemetry` and `trustiot.batch_commits` (src/clickhouse.rs).
+    /// sets as the TTL of `trustiot.telemetry` and `trustiot.stream_commits` (src/clickhouse.rs).
     /// Unset: the platform value (`retention::RAW_RETENTION_DAYS`, 180 days). It must be at
     /// least `retention::MIN_RAW_RETENTION_DAYS` (33 days: longer than the gateway buffer's
     /// maximum age, and two days longer than the I1 reconcile's window), or the run stops before
@@ -218,10 +218,21 @@ pub struct PasswordSettings {
     /// without this setting it keeps the account from logging in. Needs `clickhouse.*`.
     #[serde(default)]
     pub clickhouse_telemetry_query: Option<String>,
+    /// `TRUSTIOT__PASSWORDS__CLICKHOUSE_INGEST`: `account=secret`: the ingest service's ClickHouse
+    /// account ([`INGEST_ACCOUNT`]), which the run creates with the role `trustiot_ingest` only,
+    /// and the Secret whose key of the same name holds its password. Without this setting the run
+    /// keeps an existing account from logging in. Needs `clickhouse.*`.
+    #[serde(default)]
+    pub clickhouse_ingest: Option<String>,
 }
 
 /// The telemetry-query service's ClickHouse account, as `0008_telemetry_query.sql` names it.
 pub const TELEMETRY_QUERY_ACCOUNT: &str = "trustiot_telemetry_query";
+
+/// The ingest service's ClickHouse account (Laysi/trustiot-v2#642), which the run creates with the
+/// role `trustiot_ingest` (`0004_access.sql`) as its only role. A fixed name, so the run knows the
+/// one account that may hold that role.
+pub const INGEST_ACCOUNT: &str = "trustiot_ingest_writer";
 
 /// The names of the tenant accounts telemetry-query creates, which `0008_telemetry_query.sql`
 /// lets its account create and change.
@@ -282,6 +293,31 @@ impl PasswordSettings {
                 format!(
                     "the account must be {TELEMETRY_QUERY_ACCOUNT}, the one 0008_telemetry_query.sql defines"
                 ),
+            ));
+        }
+        Ok(binding)
+    }
+
+    /// The ingest service's account and its Secret.
+    ///
+    /// # Errors
+    ///
+    /// When the value is not one `account=secret` pair with valid names, or names another
+    /// account than [`INGEST_ACCOUNT`].
+    pub fn clickhouse_ingest(&self) -> Result<Option<Binding>, Invalid> {
+        let key = "passwords.clickhouse_ingest";
+        let mut found = bindings(key, self.clickhouse_ingest.as_deref())?;
+        if found.len() > 1 {
+            return Err(Invalid::new(key, "must be one account=secret pair"));
+        }
+        let binding = found.pop();
+        if binding
+            .as_ref()
+            .is_some_and(|binding| binding.owner != INGEST_ACCOUNT)
+        {
+            return Err(Invalid::new(
+                key,
+                format!("the account must be {INGEST_ACCOUNT}"),
             ));
         }
         Ok(binding)
@@ -451,6 +487,31 @@ impl Validate for RunConfig {
                          {TENANT_ACCOUNT_PREFIX}: those accounts belong to telemetry-query"
                     ),
                 ));
+            }
+            // Nor ingest's, which must hold the ingest role alone.
+            if collector
+                .as_ref()
+                .is_some_and(|collector| collector.owner == INGEST_ACCOUNT)
+            {
+                return Err(Invalid::new(
+                    "passwords.clickhouse_collector",
+                    format!("must not be {INGEST_ACCOUNT}: that account belongs to ingest"),
+                ));
+            }
+            // Its account name is fixed, and neither the collector's (above) nor telemetry-query's.
+            if let Some(ingest) = passwords.clickhouse_ingest()? {
+                if self.clickhouse.is_none() {
+                    return Err(Invalid::new(
+                        "passwords.clickhouse_ingest",
+                        "needs clickhouse.*, the account that creates the ingest account",
+                    ));
+                }
+                if postgres.contains(&ingest) {
+                    return Err(Invalid::new(
+                        "passwords.clickhouse_ingest",
+                        "uses the same key of the same Secret as a Postgres role",
+                    ));
+                }
             }
             // Its account name is fixed and the collector's cannot be it (above).
             if let Some(telemetry_query) = passwords.clickhouse_telemetry_query()? {
@@ -1301,6 +1362,7 @@ mod tests {
             postgres: Some(postgres.to_owned()),
             clickhouse_collector: Some(collector.to_owned()),
             clickhouse_telemetry_query: None,
+            clickhouse_ingest: None,
         }
     }
 
@@ -1472,6 +1534,61 @@ mod tests {
             key(shared).as_deref(),
             Some("passwords.clickhouse_telemetry_query")
         );
+    }
+
+    /// The ingest service's account (Laysi/trustiot-v2#642): one pair naming INGEST_ACCOUNT, which
+    /// needs clickhouse.*, shares no key with a Postgres role and is never the collector's.
+    #[test]
+    fn the_ingest_account_is_fixed_and_its_own() {
+        let with = |collector: &str, ingest: Option<&str>| {
+            let mut config = run_config(Some("a-password"), None, true);
+            let passwords = config.passwords.as_mut().expect("password settings");
+            passwords.clickhouse_collector = Some(collector.to_owned());
+            passwords.clickhouse_ingest = ingest.map(str::to_owned);
+            config
+        };
+        let key = |config: RunConfig| config.validate().err().map(|invalid| invalid.key);
+        let bound = Some("trustiot_ingest_writer=trustiot-ingest-password");
+        assert_eq!(key(with("trustiot_collector=c", bound)), None);
+        assert_eq!(
+            with("trustiot_collector=c", bound)
+                .passwords
+                .expect("password settings")
+                .clickhouse_ingest()
+                .expect("valid"),
+            Some(Binding {
+                owner: INGEST_ACCOUNT.to_owned(),
+                secret: "trustiot-ingest-password".to_owned()
+            })
+        );
+        for bad in [
+            "trustiot_ingest=trustiot-ingest-password",
+            "trustiot_telemetry_query=trustiot-ingest-password",
+            "trustiot_ingest_writer=a,trustiot_ingest_writer=b",
+            "trustiot_ingest_writer=Not/A-Secret",
+        ] {
+            assert_eq!(
+                key(with("trustiot_collector=c", Some(bad))).as_deref(),
+                Some("passwords.clickhouse_ingest"),
+                "{bad}"
+            );
+        }
+        assert_eq!(
+            key(with("trustiot_ingest_writer=c", None)).as_deref(),
+            Some("passwords.clickhouse_collector")
+        );
+        let mut without_clickhouse = with("trustiot_collector=c", bound);
+        without_clickhouse.clickhouse = None;
+        let passwords = without_clickhouse.passwords.as_mut().expect("settings");
+        passwords.clickhouse_collector = None;
+        assert_eq!(
+            key(without_clickhouse).as_deref(),
+            Some("passwords.clickhouse_ingest")
+        );
+        let mut shared = with("trustiot_collector=c", bound);
+        shared.passwords.as_mut().expect("settings").postgres =
+            Some("trustiot_ingest_writer=trustiot-ingest-password".to_owned());
+        assert_eq!(key(shared).as_deref(), Some("passwords.clickhouse_ingest"));
     }
 
     /// The raw data retention (Laysi/trustiot-v2#92): unset is the platform value; a setting

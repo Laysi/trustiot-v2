@@ -339,6 +339,34 @@ JWS compact serialization（RFC 7515），payload 是 contract 的 `InternalClai
 | `expired` | 已過 `exp + 5 秒` |
 | `not_yet_valid` | `iat` 或 `nbf` 晚於現在時間 `+ 5 秒` |
 
+### 角色檢查（`Requirement`）
+
+token 有效之後，操作要求的身分由所有服務共用的檢查判斷（A2，[權限矩陣](../../docs/architecture/permissions.md)，Laysi/trustiot-v2#585），各服務不再自己寫 403 的回應與日誌。handler 一開始、讀 body 與資料庫之前呼叫：
+
+```rust
+use axum::response::{IntoResponse, Response};
+use contract::TenantRole;
+use service_kit::identity::{Requirement, UserIdentity};
+
+async fn delete_device(user: UserIdentity) -> Response {
+    if let Err(refused) = user.require(Requirement::Tenant(TenantRole::Editor), "delete a device") {
+        return refused.into_response();
+    }
+    // ...
+}
+```
+
+| `Requirement` | 放行 | 拒絕的 `reason` |
+| --- | --- | --- |
+| `OwnRequest` | 使用者自己經入口的請求 | `exchanged_token`：帶 `act`，其他服務換發的 token |
+| `Tenant(role)` | token 的租戶裡至少 `role`（admin 包含 editor，editor 包含 viewer）；換發的 token 也可以 | `no_tenant`（平台管理員沒有租戶也是）、`unrecognized_role`（本版本不認得的角色，`TenantRole::Unrecognized` 不授予任何權限）、`role_too_low` |
+| `OwnPlatformAdmin` | 平台管理員本人的請求 | `not_platform_admin`、`exchanged_token` |
+
+- 拒絕一律是同一個回應 `PermissionDenied`：403，body 是 M1 的 `{"code":"permission_denied","message_key":"error.permission_denied"}`，帶 `cache-control: no-store`，呼叫端看不出原因。
+- 日誌是一行 INFO `refused to <action>`，欄位 `user_id`、`tenant_id`、`action`、`reason`、`exchanged`、`actor`（換發 token 的服務）；不記 token。
+- 「已登入」不需要檢查：只有驗證過的 token 才有 `UserIdentity`。
+- `UserIdentity::meets(requirement)` 是同一個判斷、不記日誌也不產生回應，給 store 在開交易前的第二道檢查（例如 assets 的閘道器綁定、身分服務的成員角色）；`UserIdentity::is_exchanged()` 回答 token 是否帶 `act`。
+
 ### 公鑰與輪替
 
 決定（2026-10-10，Laysi/trustiot-v2#52）：公鑰由部署交給每個服務，不由身分服務在執行時發布。2026-10-15 起金鑰對在叢集內產生與輪替，公鑰以檔案交給服務，服務不重啟就換上新的（Laysi/trustiot-v2#404，設計與每個失敗情況在 [docs/architecture/secrets.md](../../docs/architecture/secrets.md) 的「內部身分簽章金鑰」）。
@@ -480,7 +508,7 @@ async fn device_names(db: &TenantDb, user: &UserIdentity) -> Result<Vec<String>,
 - 連線回到 pool 時，kit 再查一次（pool 的 `after_release`，每次歸還一個查詢）：session 層級還有 `trustiot.tenant_id`（有人以 `set_config(..., false)` 或 `SET` 設定，例如藏在 PL/pgSQL `EXECUTE` 字串裡、sql-check 看不到的寫法），就關掉這條連線、不放回 pool，並記一行 ERROR `closed a database session left with a session-level tenant`。否則下一個拿到這條連線的交易會在那個租戶裡執行，包括 `begin_without_tenant` 與 `TenantDb::pool()` 上的直接查詢（Laysi/trustiot-v2#271 驗證的 F-1）。新連線的同類檢查是下面的 `TenantPreset`。
 - `TenantTransaction` 沒有改租戶的方法，`TenantDb` 也沒有以任意租戶開交易的 handler 用方法；`src/tenant.rs` 的 compile-fail doctest 證明這些寫法無法編譯。SQL 裡設定租戶或角色由 `tools/sql-check` 擋下，只有 `src/tenant.rs` 例外。
 - 背景工作沒有使用者身分（見[內部身分](#背景工作沒有使用者身分)），所以決定：代表單一租戶的工作用 `BackgroundTenantDb` 開交易，租戶來自工作本身；要找出「哪些租戶有工作」這種跨租戶查詢，用 `PlatformDb` 與 `PlatformActor::service`，會留紀錄。
-- `BackgroundTenantDb` 是能指定租戶的能力，只有啟動時的 `TenantDb::connect_lazy_with_background(options, pool, ServiceIdentity)` 會一併產生（與 `TenantDb` 共用 pool）。把 `TenantDb` 放進 router 的 state、`BackgroundTenantDb` 只交給背景工作：handler 手上的 `TenantDb` 沒有任何接受租戶的方法，無法把請求裡的租戶拿去開交易（compile-fail doctest 證明）。例外只有身分服務的三處，都由私下持有 `BackgroundTenantDb` 的元件使用，handler 拿不到（見 [services/identity](../../services/identity/README.md) 的「資料庫」）：session 查詢（查 session 時請求還沒有內部身分，租戶取自剛從資料庫讀出的 session 列，不取自請求），建立租戶（Laysi/trustiot-v2#65：新租戶的 ID 由 `TenantStore::create` 自己產生，請求無法指定），以及平台管理者設定成員角色（Laysi/trustiot-v2#583：`MemberStore::set_role` 在開交易之前先確認是平台管理者本人的請求，租戶取自路徑，交易裡只寫那一筆成員資格與事件）。
+- `BackgroundTenantDb` 是能指定租戶的能力，只有啟動時的 `TenantDb::connect_lazy_with_background(options, pool, ServiceIdentity)` 會一併產生（與 `TenantDb` 共用 pool）。把 `TenantDb` 放進 router 的 state、`BackgroundTenantDb` 只交給背景工作：handler 手上的 `TenantDb` 沒有任何接受租戶的方法，無法把請求裡的租戶拿去開交易（compile-fail doctest 證明）。例外只有身分服務的三處與 certs 的換發，都由私下持有 `BackgroundTenantDb` 的元件使用，handler 拿不到。certs 的換發（Laysi/trustiot-v2#81，[services/certs](../../services/certs/README.md) 的「換發」的「權限」）：公開端點沒有使用者身分，簽發紀錄與租戶事件寫在閘道器目前綁定的租戶，租戶取自簽章驗過之後、平台角色剛從綁定表讀出的值，不取自請求。身分服務的三處（見 [services/identity](../../services/identity/README.md) 的「資料庫」）：session 查詢（查 session 時請求還沒有內部身分，租戶取自剛從資料庫讀出的 session 列，不取自請求），建立租戶（Laysi/trustiot-v2#65：新租戶的 ID 由 `TenantStore::create` 自己產生，請求無法指定），以及平台管理者設定成員角色（Laysi/trustiot-v2#583：`MemberStore::set_role` 在開交易之前先確認是平台管理者本人的請求，租戶取自路徑，交易裡只寫那一筆成員資格與事件）。
 - `PlatformActor::admin(&UserIdentity)` 只有平台管理者（A2）拿得到；`PlatformActor` 沒有其他建構方式。
 
 ### outbox（`crates/outbox`）

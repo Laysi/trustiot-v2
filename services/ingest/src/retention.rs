@@ -2,11 +2,11 @@
 //! the one-minute and one-hour aggregates (Laysi/trustiot-v2#141). The numbers and the reasoning
 //! are in docs/architecture/data-retention.md.
 //!
-//! Raw telemetry (`trustiot.telemetry`) and the batch completion records (`trustiot.batch_commits`)
-//! expire this many days after the server received them. The migration Job (tools/migrate) sets
-//! both TTLs from its setting `TRUSTIOT__CLICKHOUSE__RAW_RETENTION_DAYS`, which defaults to
-//! [`RAW_RETENTION_DAYS`], and checks the setting with [`RawRetention::from_days`] before it
-//! touches anything.
+//! Raw telemetry (`trustiot.telemetry`) and the batch completion records
+//! (`trustiot.stream_commits`) expire this many days after the server received them. The
+//! migration Job (tools/migrate) sets both TTLs from its setting
+//! `TRUSTIOT__CLICKHOUSE__RAW_RETENTION_DAYS`, which defaults to [`RAW_RETENTION_DAYS`], and
+//! checks the setting with [`RawRetention::from_days`] before it touches anything.
 //!
 //! The retention must be at least [`MIN_RAW_RETENTION_DAYS`] (owner decision of 2026-10-26),
 //! for two reasons. It must be longer than the gateway buffer's maximum age

@@ -1,0 +1,43 @@
+$ for i in 1 2 3 4; do cargo test --locked -p gateway-ops --test delivery; done
+# 建置主機（macOS），CI=1；連接埠重試的第一版（之後只加上 Docker 的錯誤訊息、拿掉一行 stderr 輸出）
+== run 1
+test a_replica_finding_the_republish_lock_taken_leaves_the_republish_to_its_holder ... ok
+test a_broker_restart_republishes_every_gateway_and_readiness_follows_the_connection ... ok
+test a_gateway_another_replica_is_publishing_waits_for_its_publish_lock ... ok
+test apply_reports_are_recorded_under_the_topics_gateway_and_unreasonable_ones_refused ... ok
+test ten_quick_changes_are_published_once_retained_as_the_latest_version ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 44.10s
+
+run 1 exit 0
+== run 2
+test a_gateway_another_replica_is_publishing_waits_for_its_publish_lock ... ok
+test a_replica_finding_the_republish_lock_taken_leaves_the_republish_to_its_holder ... ok
+test apply_reports_are_recorded_under_the_topics_gateway_and_unreasonable_ones_refused ... ok
+test a_broker_restart_republishes_every_gateway_and_readiness_follows_the_connection ... ok
+test ten_quick_changes_are_published_once_retained_as_the_latest_version ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 43.84s
+
+run 2 exit 0
+== run 3
+test a_gateway_another_replica_is_publishing_waits_for_its_publish_lock ... ok
+test a_broker_restart_republishes_every_gateway_and_readiness_follows_the_connection ... ok
+test ten_quick_changes_are_published_once_retained_as_the_latest_version ... ok
+test a_replica_finding_the_republish_lock_taken_leaves_the_republish_to_its_holder ... ok
+test apply_reports_are_recorded_under_the_topics_gateway_and_unreasonable_ones_refused ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 44.08s
+
+run 3 exit 0
+== run 4
+test a_gateway_another_replica_is_publishing_waits_for_its_publish_lock ... ok
+test a_replica_finding_the_republish_lock_taken_leaves_the_republish_to_its_holder ... ok
+test apply_reports_are_recorded_under_the_topics_gateway_and_unreasonable_ones_refused ... ok
+test ten_quick_changes_are_published_once_retained_as_the_latest_version ... ok
+test a_broker_restart_republishes_every_gateway_and_readiness_follows_the_connection ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 44.06s
+
+run 4 exit 0
+exit 0 at 17:29:01 (build host, macOS)

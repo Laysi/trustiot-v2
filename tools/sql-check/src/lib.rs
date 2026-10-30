@@ -180,6 +180,13 @@ pub const EXCEPTIONS: &[Exception] = &[
                  SET ROLE NONE as an attack that must fail",
     },
     Exception {
+        path: "services/ingest/tests/migrations.rs",
+        rules: &[Rule::SqlBuiltFromStrings],
+        reason: "ClickHouse, not Postgres, and no sqlx: the upgrade test creates per-run users \
+                 with a password generated at run time (CREATE USER cannot bind it) and writes \
+                 rows in the pre-0012 shape (Laysi/trustiot-v2#639)",
+    },
+    Exception {
         path: "services/telemetry-query/tests/sql_check.rs",
         rules: &[Rule::SqlBuiltFromStrings, Rule::SessionSetting],
         reason: "ClickHouse, not Postgres: the AI's SQL check (Laysi/trustiot-v2#143) must refuse \
@@ -245,6 +252,14 @@ pub const EXCEPTIONS: &[Exception] = &[
                  (Laysi/trustiot-v2#366); and takes a role the service or platform role can \
                  become with set_config('role', ...) to show what each setup the session check \
                  refuses for that role reaches without a tenant (Laysi/trustiot-v2#381)",
+    },
+    Exception {
+        path: "services/assistant/tests/platform_tenant/mod.rs",
+        rules: &[Rule::SessionSetting],
+        reason: "sets a tenant with set_config in a transaction of the assistant's purge role, \
+                 as nothing may, to test that the restrictive policy platform_expired_only \
+                 still keeps that tenant's live and restorable conversations from it \
+                 (Laysi/trustiot-v2#644)",
     },
 ];
 

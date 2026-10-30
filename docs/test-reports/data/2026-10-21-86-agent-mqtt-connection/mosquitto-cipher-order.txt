@@ -1,0 +1,12 @@
+# Mosquitto 2.1.2 (MOSQUITTO_IMAGE in crates/testkit/src/mqtt/mosquitto.rs), mTLS listener with
+# tls_version tlsv1.3; the agent offers TLS13_CHACHA20_POLY1305_SHA256, TLS13_AES_256_GCM_SHA384,
+# TLS13_AES_128_GCM_SHA256 in this order (edge/agent/src/tls.rs). Broker log lines, 2026-10-21.
+
+## without ciphers_tls1.3 (the line removed from the listener for this run)
+$ cargo test -p agent --test broker the_agent_talks
+Client gw-test-1 negotiated TLSv1.3 cipher TLS_AES_256_GCM_SHA384
+
+## with ciphers_tls1.3 TLS_CHACHA20_POLY1305_SHA256:TLS_AES_256_GCM_SHA384:TLS_AES_128_GCM_SHA256
+$ cargo test -p agent --test broker the_agent_talks
+(the test waits for this line and passes)
+Client gw-test-1 negotiated TLSv1.3 cipher TLS_CHACHA20_POLY1305_SHA256

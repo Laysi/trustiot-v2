@@ -62,4 +62,16 @@ pub const FILES: &[Migration] = &[
             "../../../services/ingest/migrations/clickhouse/0011_queryable_period.sql"
         ),
     },
+    Migration {
+        name: "0012_gateway_stream_ids.sql",
+        sql: include_str!(
+            "../../../services/ingest/migrations/clickhouse/0012_gateway_stream_ids.sql"
+        ),
+    },
+    Migration {
+        name: "0013_tenant_id_comment.sql",
+        sql: include_str!(
+            "../../../services/ingest/migrations/clickhouse/0013_tenant_id_comment.sql"
+        ),
+    },
 ];

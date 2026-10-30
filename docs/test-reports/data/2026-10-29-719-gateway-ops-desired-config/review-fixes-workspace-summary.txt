@@ -1,0 +1,9 @@
+# cargo fmt --all --check && cargo clippy --locked --workspace --all-targets -- -D warnings && cargo run --locked -p openapi -- --check && cargo test --locked --workspace --no-fail-fast
+# build host (x86_64 Linux), CI=1, commit 7f833960; the test output is summed over every test binary
+    Checking gateway-ops v0.1.0 (<host copy>/src/services/gateway-ops)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.31s
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.18s
+     Running `<host copy>/target/debug/openapi --check`
+api/openapi.json is up to date
+binaries 249 passed 2071 failed 0 ignored 1
+exit 0 at 05:00:58 (build host)

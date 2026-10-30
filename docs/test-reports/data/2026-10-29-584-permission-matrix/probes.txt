@@ -1,0 +1,263 @@
+# Output of, in order (CI=1, build host, arm64 Linux VM, 2026-10-29, the branch rebased onto
+# main b7ac543b):
+#   cargo test --locked -p testkit --lib permissions
+#   cargo test --locked -p testkit --test permissions
+#   cargo test --locked -p identity --test permissions -- --nocapture
+#   cargo test --locked -p identity --lib event_log
+#   cargo test --locked -p certs --test permissions -- --nocapture
+# Compiler progress lines are left out.
+
+running 8 tests
+test permissions::tests::declarations_parse_method_and_path ... ok
+test permissions::tests::a_malformed_table_is_refused ... ok
+test permissions::tests::a_known_gap_expects_the_exchanged_token_through ... ok
+test permissions::tests::a_section_reads_its_own_table_only ... ok
+test permissions::tests::judging_is_exact_about_401_and_403 ... ok
+test permissions::tests::each_requirement_has_its_probes ... ok
+test permissions::tests::path_parameters_become_uuids ... ok
+test permissions::tests::the_repository_matrix_has_the_header_in_every_section ... ok
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 42 filtered out; finished in 0.00s
+running 5 tests
+test every_operation_must_be_declared_once_and_exist ... ok
+test the_matrix_document_must_list_exactly_the_declarations ... ok
+test the_example_passes_with_every_check_in_place ... ok
+test a_fixed_gap_says_what_to_remove ... ok
+test each_removed_check_fails_on_its_operation_and_caller ... ok
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.13s
+running 2 tests
+result | subject | probe | outcome
+pass | DELETE /api/identity/v1/platform/ai/model-roles/{role} | coverage | declared
+pass | DELETE /api/identity/v1/sessions | coverage | declared
+pass | DELETE /api/identity/v1/sessions/current | coverage | declared
+pass | GET /api/identity/v1/event-log | coverage | declared
+pass | GET /api/identity/v1/platform/ai/model-roles | coverage | declared
+pass | GET /api/identity/v1/platform/event-log | coverage | declared
+pass | GET /api/identity/v1/platform/tenants/{tenant_id}/event-log | coverage | declared
+pass | GET /api/identity/v1/preferences | coverage | declared
+pass | GET /api/identity/v1/sessions/current | coverage | declared
+pass | PATCH /api/identity/v1/preferences | coverage | declared
+pass | POST /api/identity/v1/tenants | coverage | declared
+pass | POST /auth/login | coverage | declared
+pass | PUT /api/identity/v1/platform/ai/model-roles/{role} | coverage | declared
+pass | PUT /api/identity/v1/platform/tenants/{tenant_id}/members | coverage | declared
+pass | PUT /api/identity/v1/sessions/current/tenant | coverage | declared
+pass | POST /auth/login | matrix | line 63: 公開
+pass | DELETE /api/identity/v1/sessions | matrix | line 64: 已登入
+pass | DELETE /api/identity/v1/sessions/current | matrix | line 65: 已登入
+pass | GET /api/identity/v1/sessions/current | matrix | line 66: 已登入，本人
+pass | PUT /api/identity/v1/sessions/current/tenant | matrix | line 67: 已登入，本人
+pass | GET /api/identity/v1/preferences | matrix | line 68: 已登入，本人
+pass | PATCH /api/identity/v1/preferences | matrix | line 69: 已登入，本人
+pass | GET /api/identity/v1/event-log | matrix | line 70: 租戶 admin
+pass | POST /api/identity/v1/tenants | matrix | line 71: 平台管理員，本人
+pass | PUT /api/identity/v1/platform/tenants/{tenant_id}/members | matrix | line 72: 平台管理員，本人
+pass | GET /api/identity/v1/platform/tenants/{tenant_id}/event-log | matrix | line 73: 平台管理員，本人
+pass | GET /api/identity/v1/platform/event-log | matrix | line 74: 平台管理員，本人
+pass | GET /api/identity/v1/platform/ai/model-roles | matrix | line 75: 平台管理員，本人
+pass | PUT /api/identity/v1/platform/ai/model-roles/{role} | matrix | line 76: 平台管理員，本人
+pass | DELETE /api/identity/v1/platform/ai/model-roles/{role} | matrix | line 77: 平台管理員，本人
+30 probes, 0 failed
+test the_matrix_document_matches_the_declarations ... ok
+result | subject | probe | outcome
+pass | DELETE /api/identity/v1/platform/ai/model-roles/{role} | coverage | declared
+pass | DELETE /api/identity/v1/sessions | coverage | declared
+pass | DELETE /api/identity/v1/sessions/current | coverage | declared
+pass | GET /api/identity/v1/event-log | coverage | declared
+pass | GET /api/identity/v1/platform/ai/model-roles | coverage | declared
+pass | GET /api/identity/v1/platform/event-log | coverage | declared
+pass | GET /api/identity/v1/platform/tenants/{tenant_id}/event-log | coverage | declared
+pass | GET /api/identity/v1/preferences | coverage | declared
+pass | GET /api/identity/v1/sessions/current | coverage | declared
+pass | PATCH /api/identity/v1/preferences | coverage | declared
+pass | POST /api/identity/v1/tenants | coverage | declared
+pass | POST /auth/login | coverage | declared
+pass | PUT /api/identity/v1/platform/ai/model-roles/{role} | coverage | declared
+pass | PUT /api/identity/v1/platform/tenants/{tenant_id}/members | coverage | declared
+pass | PUT /api/identity/v1/sessions/current/tenant | coverage | declared
+pass | POST /auth/login | matrix | line 63: 公開
+pass | DELETE /api/identity/v1/sessions | matrix | line 64: 已登入
+pass | DELETE /api/identity/v1/sessions/current | matrix | line 65: 已登入
+pass | GET /api/identity/v1/sessions/current | matrix | line 66: 已登入，本人
+pass | PUT /api/identity/v1/sessions/current/tenant | matrix | line 67: 已登入，本人
+pass | GET /api/identity/v1/preferences | matrix | line 68: 已登入，本人
+pass | PATCH /api/identity/v1/preferences | matrix | line 69: 已登入，本人
+pass | GET /api/identity/v1/event-log | matrix | line 70: 租戶 admin
+pass | POST /api/identity/v1/tenants | matrix | line 71: 平台管理員，本人
+pass | PUT /api/identity/v1/platform/tenants/{tenant_id}/members | matrix | line 72: 平台管理員，本人
+pass | GET /api/identity/v1/platform/tenants/{tenant_id}/event-log | matrix | line 73: 平台管理員，本人
+pass | GET /api/identity/v1/platform/event-log | matrix | line 74: 平台管理員，本人
+pass | GET /api/identity/v1/platform/ai/model-roles | matrix | line 75: 平台管理員，本人
+pass | PUT /api/identity/v1/platform/ai/model-roles/{role} | matrix | line 76: 平台管理員，本人
+pass | DELETE /api/identity/v1/platform/ai/model-roles/{role} | matrix | line 77: 平台管理員，本人
+pass | POST /auth/login | without a token | 400 `invalid_request`: past authorization
+pass | DELETE /api/identity/v1/sessions | without a token | 401 `unauthenticated`
+pass | DELETE /api/identity/v1/sessions | forged token | 401 `unauthenticated`
+pass | DELETE /api/identity/v1/sessions | token for another service | 401 `unauthenticated`
+pass | DELETE /api/identity/v1/sessions | signed in, no tenant | 204: past authorization
+pass | DELETE /api/identity/v1/sessions | exchanged token | 204: past authorization
+pass | DELETE /api/identity/v1/sessions/current | without a token | 401 `unauthenticated`
+pass | DELETE /api/identity/v1/sessions/current | forged token | 401 `unauthenticated`
+pass | DELETE /api/identity/v1/sessions/current | token for another service | 401 `unauthenticated`
+pass | DELETE /api/identity/v1/sessions/current | signed in, no tenant | 204: past authorization
+pass | DELETE /api/identity/v1/sessions/current | exchanged token | 204: past authorization
+pass | GET /api/identity/v1/sessions/current | without a token | 401 `unauthenticated`
+pass | GET /api/identity/v1/sessions/current | forged token | 401 `unauthenticated`
+pass | GET /api/identity/v1/sessions/current | token for another service | 401 `unauthenticated`
+pass | GET /api/identity/v1/sessions/current | signed in, no tenant | 200: past authorization
+pass | GET /api/identity/v1/sessions/current | exchanged token | 403 `permission_denied`
+pass | PUT /api/identity/v1/sessions/current/tenant | without a token | 401 `unauthenticated`
+pass | PUT /api/identity/v1/sessions/current/tenant | forged token | 401 `unauthenticated`
+pass | PUT /api/identity/v1/sessions/current/tenant | token for another service | 401 `unauthenticated`
+pass | PUT /api/identity/v1/sessions/current/tenant | signed in, no tenant | 400 `invalid_request`: past authorization
+pass | PUT /api/identity/v1/sessions/current/tenant | exchanged token | 403 `permission_denied`
+pass | GET /api/identity/v1/preferences | without a token | 401 `unauthenticated`
+pass | GET /api/identity/v1/preferences | forged token | 401 `unauthenticated`
+pass | GET /api/identity/v1/preferences | token for another service | 401 `unauthenticated`
+pass | GET /api/identity/v1/preferences | signed in, no tenant | 200: past authorization
+pass | GET /api/identity/v1/preferences | exchanged token | 403 `permission_denied`
+pass | PATCH /api/identity/v1/preferences | without a token | 401 `unauthenticated`
+pass | PATCH /api/identity/v1/preferences | forged token | 401 `unauthenticated`
+pass | PATCH /api/identity/v1/preferences | token for another service | 401 `unauthenticated`
+pass | PATCH /api/identity/v1/preferences | signed in, no tenant | 400 `invalid_request`: past authorization
+pass | PATCH /api/identity/v1/preferences | exchanged token | 403 `permission_denied`
+pass | GET /api/identity/v1/event-log | without a token | 401 `unauthenticated`
+pass | GET /api/identity/v1/event-log | forged token | 401 `unauthenticated`
+pass | GET /api/identity/v1/event-log | token for another service | 401 `unauthenticated`
+pass | GET /api/identity/v1/event-log | no tenant | 403 `permission_denied`
+pass | GET /api/identity/v1/event-log | platform administrator without a tenant | 403 `permission_denied`
+pass | GET /api/identity/v1/event-log | tenant viewer | 403 `permission_denied`
+pass | GET /api/identity/v1/event-log | tenant editor | 403 `permission_denied`
+pass | GET /api/identity/v1/event-log | tenant admin | 200: past authorization
+pass | GET /api/identity/v1/event-log | tenant unrecognized role | 403 `permission_denied`
+pass | GET /api/identity/v1/event-log | tenant admin, exchanged token | 200: past authorization
+pass | POST /api/identity/v1/tenants | without a token | 401 `unauthenticated`
+pass | POST /api/identity/v1/tenants | forged token | 401 `unauthenticated`
+pass | POST /api/identity/v1/tenants | token for another service | 401 `unauthenticated`
+pass | POST /api/identity/v1/tenants | no tenant | 403 `permission_denied`
+pass | POST /api/identity/v1/tenants | tenant viewer | 403 `permission_denied`
+pass | POST /api/identity/v1/tenants | tenant editor | 403 `permission_denied`
+pass | POST /api/identity/v1/tenants | tenant admin | 403 `permission_denied`
+pass | POST /api/identity/v1/tenants | tenant unrecognized role | 403 `permission_denied`
+pass | POST /api/identity/v1/tenants | platform administrator, exchanged token | 400 `invalid_request`: known gap, accepts exchanged tokens (creating a tenant checks the platform administrator flag only; the decision of Laysi/trustiot-v2#104 (2026-10-23) says own requests only, and the fix is the follow-up proposed in Laysi/trustiot-v2#584)
+pass | POST /api/identity/v1/tenants | platform administrator | 400 `invalid_request`: past authorization
+pass | PUT /api/identity/v1/platform/tenants/{tenant_id}/members | without a token | 401 `unauthenticated`
+pass | PUT /api/identity/v1/platform/tenants/{tenant_id}/members | forged token | 401 `unauthenticated`
+pass | PUT /api/identity/v1/platform/tenants/{tenant_id}/members | token for another service | 401 `unauthenticated`
+pass | PUT /api/identity/v1/platform/tenants/{tenant_id}/members | no tenant | 403 `permission_denied`
+pass | PUT /api/identity/v1/platform/tenants/{tenant_id}/members | tenant viewer | 403 `permission_denied`
+pass | PUT /api/identity/v1/platform/tenants/{tenant_id}/members | tenant editor | 403 `permission_denied`
+pass | PUT /api/identity/v1/platform/tenants/{tenant_id}/members | tenant admin | 403 `permission_denied`
+pass | PUT /api/identity/v1/platform/tenants/{tenant_id}/members | tenant unrecognized role | 403 `permission_denied`
+pass | PUT /api/identity/v1/platform/tenants/{tenant_id}/members | platform administrator, exchanged token | 403 `permission_denied`
+pass | PUT /api/identity/v1/platform/tenants/{tenant_id}/members | platform administrator | 400 `invalid_request`: past authorization
+pass | GET /api/identity/v1/platform/tenants/{tenant_id}/event-log | without a token | 401 `unauthenticated`
+pass | GET /api/identity/v1/platform/tenants/{tenant_id}/event-log | forged token | 401 `unauthenticated`
+pass | GET /api/identity/v1/platform/tenants/{tenant_id}/event-log | token for another service | 401 `unauthenticated`
+pass | GET /api/identity/v1/platform/tenants/{tenant_id}/event-log | no tenant | 403 `permission_denied`
+pass | GET /api/identity/v1/platform/tenants/{tenant_id}/event-log | tenant viewer | 403 `permission_denied`
+pass | GET /api/identity/v1/platform/tenants/{tenant_id}/event-log | tenant editor | 403 `permission_denied`
+pass | GET /api/identity/v1/platform/tenants/{tenant_id}/event-log | tenant admin | 403 `permission_denied`
+pass | GET /api/identity/v1/platform/tenants/{tenant_id}/event-log | tenant unrecognized role | 403 `permission_denied`
+pass | GET /api/identity/v1/platform/tenants/{tenant_id}/event-log | platform administrator, exchanged token | 403 `permission_denied`
+pass | GET /api/identity/v1/platform/tenants/{tenant_id}/event-log | platform administrator | 200: past authorization
+pass | GET /api/identity/v1/platform/event-log | without a token | 401 `unauthenticated`
+pass | GET /api/identity/v1/platform/event-log | forged token | 401 `unauthenticated`
+pass | GET /api/identity/v1/platform/event-log | token for another service | 401 `unauthenticated`
+pass | GET /api/identity/v1/platform/event-log | no tenant | 403 `permission_denied`
+pass | GET /api/identity/v1/platform/event-log | tenant viewer | 403 `permission_denied`
+pass | GET /api/identity/v1/platform/event-log | tenant editor | 403 `permission_denied`
+pass | GET /api/identity/v1/platform/event-log | tenant admin | 403 `permission_denied`
+pass | GET /api/identity/v1/platform/event-log | tenant unrecognized role | 403 `permission_denied`
+pass | GET /api/identity/v1/platform/event-log | platform administrator, exchanged token | 403 `permission_denied`
+pass | GET /api/identity/v1/platform/event-log | platform administrator | 200: past authorization
+pass | GET /api/identity/v1/platform/ai/model-roles | without a token | 401 `unauthenticated`
+pass | GET /api/identity/v1/platform/ai/model-roles | forged token | 401 `unauthenticated`
+pass | GET /api/identity/v1/platform/ai/model-roles | token for another service | 401 `unauthenticated`
+pass | GET /api/identity/v1/platform/ai/model-roles | no tenant | 403 `permission_denied`
+pass | GET /api/identity/v1/platform/ai/model-roles | tenant viewer | 403 `permission_denied`
+pass | GET /api/identity/v1/platform/ai/model-roles | tenant editor | 403 `permission_denied`
+pass | GET /api/identity/v1/platform/ai/model-roles | tenant admin | 403 `permission_denied`
+pass | GET /api/identity/v1/platform/ai/model-roles | tenant unrecognized role | 403 `permission_denied`
+pass | GET /api/identity/v1/platform/ai/model-roles | platform administrator, exchanged token | 403 `permission_denied`
+pass | GET /api/identity/v1/platform/ai/model-roles | platform administrator | 503 `unavailable`: past authorization
+pass | PUT /api/identity/v1/platform/ai/model-roles/{role} | without a token | 401 `unauthenticated`
+pass | PUT /api/identity/v1/platform/ai/model-roles/{role} | forged token | 401 `unauthenticated`
+pass | PUT /api/identity/v1/platform/ai/model-roles/{role} | token for another service | 401 `unauthenticated`
+pass | PUT /api/identity/v1/platform/ai/model-roles/{role} | no tenant | 403 `permission_denied`
+pass | PUT /api/identity/v1/platform/ai/model-roles/{role} | tenant viewer | 403 `permission_denied`
+pass | PUT /api/identity/v1/platform/ai/model-roles/{role} | tenant editor | 403 `permission_denied`
+pass | PUT /api/identity/v1/platform/ai/model-roles/{role} | tenant admin | 403 `permission_denied`
+pass | PUT /api/identity/v1/platform/ai/model-roles/{role} | tenant unrecognized role | 403 `permission_denied`
+pass | PUT /api/identity/v1/platform/ai/model-roles/{role} | platform administrator, exchanged token | 403 `permission_denied`
+pass | PUT /api/identity/v1/platform/ai/model-roles/{role} | platform administrator | 400 `invalid_request`: past authorization
+pass | DELETE /api/identity/v1/platform/ai/model-roles/{role} | without a token | 401 `unauthenticated`
+pass | DELETE /api/identity/v1/platform/ai/model-roles/{role} | forged token | 401 `unauthenticated`
+pass | DELETE /api/identity/v1/platform/ai/model-roles/{role} | token for another service | 401 `unauthenticated`
+pass | DELETE /api/identity/v1/platform/ai/model-roles/{role} | no tenant | 403 `permission_denied`
+pass | DELETE /api/identity/v1/platform/ai/model-roles/{role} | tenant viewer | 403 `permission_denied`
+pass | DELETE /api/identity/v1/platform/ai/model-roles/{role} | tenant editor | 403 `permission_denied`
+pass | DELETE /api/identity/v1/platform/ai/model-roles/{role} | tenant admin | 403 `permission_denied`
+pass | DELETE /api/identity/v1/platform/ai/model-roles/{role} | tenant unrecognized role | 403 `permission_denied`
+pass | DELETE /api/identity/v1/platform/ai/model-roles/{role} | platform administrator, exchanged token | 403 `permission_denied`
+pass | DELETE /api/identity/v1/platform/ai/model-roles/{role} | platform administrator | 400 `invalid_request`: past authorization
+141 probes, 0 failed
+test every_operation_admits_exactly_its_declared_callers ... ok
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.71s
+running 6 tests
+test event_log::tests::parameters_are_checked ... ok
+test event_log::tests::actors_become_columns ... ok
+test event_log::tests::cursors_round_trip_with_microseconds ... ok
+test event_log::tests::subscriptions_are_named_after_the_producer ... ok
+test event_log::tests::the_spec_documents_the_page_limits_the_handlers_accept ... ok
+test event_log::tests::the_back_office_logs_refuse_exchanged_tokens ... ok
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 121 filtered out; finished in 0.01s
+running 2 tests
+result | subject | probe | outcome
+pass | POST /api/certs/v1/gateway-registrations | coverage | declared
+pass | POST /api/certs/v1/workstation-certificates | coverage | declared
+pass | POST /api/certs/v1/workstation-certificates/{serial}/revoke | coverage | declared
+pass | POST /api/certs/v1/workstation-certificates | matrix | line 89: 平台管理員，本人
+pass | POST /api/certs/v1/workstation-certificates/{serial}/revoke | matrix | line 90: 平台管理員，本人
+pass | POST /api/certs/v1/gateway-registrations | matrix | line 91: 平台管理員，本人
+6 probes, 0 failed
+test the_matrix_document_matches_the_declarations ... ok
+result | subject | probe | outcome
+pass | POST /api/certs/v1/gateway-registrations | coverage | declared
+pass | POST /api/certs/v1/workstation-certificates | coverage | declared
+pass | POST /api/certs/v1/workstation-certificates/{serial}/revoke | coverage | declared
+pass | POST /api/certs/v1/workstation-certificates | matrix | line 89: 平台管理員，本人
+pass | POST /api/certs/v1/workstation-certificates/{serial}/revoke | matrix | line 90: 平台管理員，本人
+pass | POST /api/certs/v1/gateway-registrations | matrix | line 91: 平台管理員，本人
+pass | POST /api/certs/v1/workstation-certificates | without a token | 401 `unauthenticated`
+pass | POST /api/certs/v1/workstation-certificates | forged token | 401 `unauthenticated`
+pass | POST /api/certs/v1/workstation-certificates | token for another service | 401 `unauthenticated`
+pass | POST /api/certs/v1/workstation-certificates | no tenant | 403 `permission_denied`
+pass | POST /api/certs/v1/workstation-certificates | tenant viewer | 403 `permission_denied`
+pass | POST /api/certs/v1/workstation-certificates | tenant editor | 403 `permission_denied`
+pass | POST /api/certs/v1/workstation-certificates | tenant admin | 403 `permission_denied`
+pass | POST /api/certs/v1/workstation-certificates | tenant unrecognized role | 403 `permission_denied`
+pass | POST /api/certs/v1/workstation-certificates | platform administrator, exchanged token | 403 `permission_denied`
+pass | POST /api/certs/v1/workstation-certificates | platform administrator | 400 `invalid_request`: past authorization
+pass | POST /api/certs/v1/workstation-certificates/{serial}/revoke | without a token | 401 `unauthenticated`
+pass | POST /api/certs/v1/workstation-certificates/{serial}/revoke | forged token | 401 `unauthenticated`
+pass | POST /api/certs/v1/workstation-certificates/{serial}/revoke | token for another service | 401 `unauthenticated`
+pass | POST /api/certs/v1/workstation-certificates/{serial}/revoke | no tenant | 403 `permission_denied`
+pass | POST /api/certs/v1/workstation-certificates/{serial}/revoke | tenant viewer | 403 `permission_denied`
+pass | POST /api/certs/v1/workstation-certificates/{serial}/revoke | tenant editor | 403 `permission_denied`
+pass | POST /api/certs/v1/workstation-certificates/{serial}/revoke | tenant admin | 403 `permission_denied`
+pass | POST /api/certs/v1/workstation-certificates/{serial}/revoke | tenant unrecognized role | 403 `permission_denied`
+pass | POST /api/certs/v1/workstation-certificates/{serial}/revoke | platform administrator, exchanged token | 403 `permission_denied`
+pass | POST /api/certs/v1/workstation-certificates/{serial}/revoke | platform administrator | 400 `invalid_request`: past authorization
+pass | POST /api/certs/v1/gateway-registrations | without a token | 401 `unauthenticated`
+pass | POST /api/certs/v1/gateway-registrations | forged token | 401 `unauthenticated`
+pass | POST /api/certs/v1/gateway-registrations | token for another service | 401 `unauthenticated`
+pass | POST /api/certs/v1/gateway-registrations | no tenant | 403 `permission_denied`
+pass | POST /api/certs/v1/gateway-registrations | tenant viewer | 403 `permission_denied`
+pass | POST /api/certs/v1/gateway-registrations | tenant editor | 403 `permission_denied`
+pass | POST /api/certs/v1/gateway-registrations | tenant admin | 403 `permission_denied`
+pass | POST /api/certs/v1/gateway-registrations | tenant unrecognized role | 403 `permission_denied`
+pass | POST /api/certs/v1/gateway-registrations | platform administrator, exchanged token | 403 `permission_denied`
+pass | POST /api/certs/v1/gateway-registrations | platform administrator | 400 `invalid_request`: past authorization
+36 probes, 0 failed
+test every_operation_admits_exactly_its_declared_callers_and_refusals_write_nothing ... ok
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.64s

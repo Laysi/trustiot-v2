@@ -92,7 +92,7 @@ impl Tool for TelemetrySql {
                  \n\
                  Tables (`trustiot.` may be left out), each holding only the organisation's \
                  data:\n\
-                 - tenant_telemetry: one row per reading. device_id UUID, gateway_id UUID, \
+                 - tenant_telemetry: one row per reading. device_id UUID, gateway_id String, \
                  point LowCardinality(String) (the data point key), ts DateTime64(3, 'UTC') \
                  (when it was measured), received_at DateTime64(3, 'UTC'), value_type \
                  Enum8('float', 'int', 'bool', 'string'), value_float Float64, value_int Int64, \

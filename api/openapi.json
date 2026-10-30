@@ -76,6 +76,180 @@
         ],
         "type": "object"
       },
+      "Conversation": {
+        "description": "A conversation as the list shows it.",
+        "properties": {
+          "archived_at": {
+            "description": "When it was archived; `null` when it is not.",
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "created_at": {
+            "description": "When it was started, by the database clock.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "id": {
+            "description": "The conversation's ID.",
+            "format": "uuid",
+            "type": "string"
+          },
+          "last_activity_at": {
+            "description": "When messages were last added to it (when it was started, before that); the list's order.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "title": {
+            "description": "Its title; `null` until it gets one.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "title_source": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ConversationTitleSource",
+                "description": "Who gave the title; `null` without one."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "created_at",
+          "last_activity_at"
+        ],
+        "type": "object"
+      },
+      "ConversationDetail": {
+        "description": "A conversation with the messages the chat shows: the questions and the answers, oldest\nfirst. The assistant's reasoning, its tool calls and their results, and the instructions it\nstarted with are not part of it.",
+        "properties": {
+          "archived_at": {
+            "description": "When it was archived; `null` when it is not.",
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "created_at": {
+            "description": "When it was started, by the database clock.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "id": {
+            "description": "The conversation's ID.",
+            "format": "uuid",
+            "type": "string"
+          },
+          "last_activity_at": {
+            "description": "When messages were last added to it (when it was started, before that).",
+            "format": "date-time",
+            "type": "string"
+          },
+          "messages": {
+            "description": "The questions and answers, oldest first.",
+            "items": {
+              "$ref": "#/components/schemas/ConversationMessage"
+            },
+            "type": "array"
+          },
+          "title": {
+            "description": "Its title; `null` until it gets one.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "title_source": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ConversationTitleSource",
+                "description": "Who gave the title; `null` without one."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "created_at",
+          "last_activity_at",
+          "messages"
+        ],
+        "type": "object"
+      },
+      "ConversationList": {
+        "description": "One page of the caller's conversations, most recently active first.",
+        "properties": {
+          "conversations": {
+            "description": "The conversations, most recently active first (by `last_activity_at`, then `id`).",
+            "items": {
+              "$ref": "#/components/schemas/Conversation"
+            },
+            "type": "array"
+          },
+          "next_cursor": {
+            "description": "Pass it as `cursor` for the next page of the same list; `null` on the last page. Opaque.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "conversations"
+        ],
+        "type": "object"
+      },
+      "ConversationMessage": {
+        "description": "One message the chat shows: only its text.",
+        "properties": {
+          "kind": {
+            "$ref": "#/components/schemas/ConversationMessageKind"
+          },
+          "text": {
+            "description": "The question as the user asked it, or the text of the answer.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "text"
+        ],
+        "type": "object"
+      },
+      "ConversationMessageKind": {
+        "description": "What a message of the chat is.",
+        "enum": [
+          "question",
+          "answer"
+        ],
+        "type": "string"
+      },
+      "ConversationTitleSource": {
+        "description": "Who gave a conversation its title.",
+        "enum": [
+          "provisional",
+          "user",
+          "model"
+        ],
+        "type": "string"
+      },
+      "CreateConversation": {
+        "additionalProperties": false,
+        "description": "Starting a conversation takes no settings: no body, `null`, or an empty object.",
+        "type": "object"
+      },
       "CreateDevice": {
         "additionalProperties": false,
         "description": "The body of `POST /api/assets/v1/devices`. Unknown fields are refused.",
@@ -1224,6 +1398,62 @@
         ],
         "type": "string"
       },
+      "DeletedConversation": {
+        "description": "A deleted conversation: no messages.",
+        "properties": {
+          "deleted_at": {
+            "description": "When it was deleted, by the database clock.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "id": {
+            "description": "The conversation's ID.",
+            "format": "uuid",
+            "type": "string"
+          },
+          "restorable_until": {
+            "description": "Until when it can be restored (30 days after `deleted_at`); it is removed for good after.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "title": {
+            "description": "Its title; `null` if it had none.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "deleted_at",
+          "restorable_until"
+        ],
+        "type": "object"
+      },
+      "DeletedConversationList": {
+        "description": "One page of the caller's deleted conversations that can still be restored, most recently\ndeleted first.",
+        "properties": {
+          "conversations": {
+            "description": "The conversations, most recently deleted first (by `deleted_at`, then `id`).",
+            "items": {
+              "$ref": "#/components/schemas/DeletedConversation"
+            },
+            "type": "array"
+          },
+          "next_cursor": {
+            "description": "Pass it as `cursor` for the next page; `null` on the last page. Opaque.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "conversations"
+        ],
+        "type": "object"
+      },
       "Device": {
         "description": "A device: a Modbus endpoint one of the tenant's gateways polls with one of its models.",
         "properties": {
@@ -1700,6 +1930,92 @@
         ],
         "type": "object"
       },
+      "Gateway": {
+        "description": "A gateway bound to the caller's tenant.",
+        "properties": {
+          "agent_version": {
+            "description": "The agent's release the gateway reported on its current (or last) connection; `null`\nbefore that connection reported one.",
+            "example": "1.4.0",
+            "maxLength": 64,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "applied_config_version": {
+            "description": "The configuration version the gateway said it has applied, in the latest heartbeat of\nits current (or last) connection; `null` before that connection sent one.",
+            "format": "int64",
+            "minimum": 1,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "binding_id": {
+            "$ref": "#/components/schemas/GatewayBindingId",
+            "description": "The binding (a new one each time the gateway is bound)."
+          },
+          "bound_at": {
+            "description": "When it was bound.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "desired_config_version": {
+            "description": "The latest configuration version stored for the binding (what the gateway should have);\n`null` before the first one.",
+            "format": "int64",
+            "minimum": 1,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "hardware_id": {
+            "description": "The hardware ID.",
+            "example": "tg-0001",
+            "maxLength": 64,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$",
+            "type": "string"
+          },
+          "last_seen_at": {
+            "description": "When the service last received a status or heartbeat of the gateway's current or last\nsession (its last report); `null` while `unknown`.",
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "offline_reason": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/OfflineReason",
+                "description": "Why it is offline; `null` unless `presence` is `offline`."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "presence": {
+            "$ref": "#/components/schemas/Presence",
+            "description": "Whether it is connected."
+          },
+          "presence_changed_at": {
+            "description": "When `presence` last changed, by the service's database clock; `null` while `unknown`.",
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "hardware_id",
+          "binding_id",
+          "bound_at",
+          "presence"
+        ],
+        "type": "object"
+      },
       "GatewayBinding": {
         "description": "A gateway's binding to a tenant.",
         "properties": {
@@ -1736,6 +2052,22 @@
         "description": "One binding of a gateway to a tenant (rebuild checklist D3, Laysi/trustiot-v2#101), made\nby the assets service. A gateway gets a new one every time it is bound, so a binding and\nits events always belong to one tenant.\n\nSerialized as a lowercase hyphenated UUID string.",
         "format": "uuid",
         "type": "string"
+      },
+      "GatewayList": {
+        "description": "The caller's tenant's gateways.",
+        "properties": {
+          "gateways": {
+            "description": "By hardware ID (byte order).",
+            "items": {
+              "$ref": "#/components/schemas/Gateway"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "gateways"
+        ],
+        "type": "object"
       },
       "GatewayRegistration": {
         "description": "A gateway's factory registration, as the service records it.",
@@ -1809,6 +2141,27 @@
           "certificate",
           "certificate_chain",
           "root_certificate"
+        ],
+        "type": "object"
+      },
+      "IgnoredModels": {
+        "description": "A stored model list the AI gateway does not use because it no longer fits the\nconfiguration; the role uses its configured models.",
+        "properties": {
+          "models": {
+            "description": "The stored models.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "reason": {
+            "description": "Why, in English, as the AI gateway explains it (for operators; not translated).",
+            "type": "string"
+          }
+        },
+        "required": [
+          "models",
+          "reason"
         ],
         "type": "object"
       },
@@ -2170,6 +2523,139 @@
         "pattern": "^[a-z0-9_]+(\\.[a-z0-9_]+)+$",
         "type": "string"
       },
+      "ModelProvider": {
+        "description": "A provider configured in the AI gateway: a role's models may name it when its protocol is\nthe role's.",
+        "properties": {
+          "name": {
+            "description": "The provider's name, the `<provider>` of a model.",
+            "type": "string"
+          },
+          "protocol": {
+            "description": "`anthropic-messages` or `openai-decisions` today.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "protocol"
+        ],
+        "type": "object"
+      },
+      "ModelRole": {
+        "description": "A model role of the AI gateway.",
+        "properties": {
+          "configured_models": {
+            "description": "The models the configuration gives the role, which a reset goes back to.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "ignored": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/IgnoredModels",
+                "description": "A stored list that is not in use; `null` when there is none."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "models": {
+            "description": "The models in effect, `<provider>/<model>` in fallback order.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "protocol": {
+            "description": "The role's protocol, which only the configuration sets: `anthropic-messages` or\n`openai-decisions` today.",
+            "type": "string"
+          },
+          "role": {
+            "description": "The role's name, such as `main`.",
+            "type": "string"
+          },
+          "source": {
+            "$ref": "#/components/schemas/ModelSource",
+            "description": "Where `models` come from."
+          },
+          "updated_at": {
+            "description": "When the role was last changed or reset; `null` when it never was, or the AI gateway\ncould not say.",
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "updated_by": {
+            "description": "Who last changed or reset the role, as the AI gateway recorded it (`user:<user ID>` for\nchanges made here); `null` when nobody did.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "version": {
+            "description": "The version a change or reset must send as `expected_version`; 0 when the role was never\nchanged.",
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "role",
+          "protocol",
+          "models",
+          "configured_models",
+          "source",
+          "version",
+          "ignored",
+          "updated_at",
+          "updated_by"
+        ],
+        "type": "object"
+      },
+      "ModelRoles": {
+        "description": "Every model role and every configured provider, by name.",
+        "properties": {
+          "providers": {
+            "description": "Every configured provider.",
+            "items": {
+              "$ref": "#/components/schemas/ModelProvider"
+            },
+            "type": "array"
+          },
+          "roles": {
+            "description": "Every configured role.",
+            "items": {
+              "$ref": "#/components/schemas/ModelRole"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "roles",
+          "providers"
+        ],
+        "type": "object"
+      },
+      "ModelSource": {
+        "description": "Where a role's models in effect come from.",
+        "enum": [
+          "configuration",
+          "database"
+        ],
+        "type": "string"
+      },
+      "OfflineReason": {
+        "description": "Why a gateway is offline.",
+        "enum": [
+          "shutdown",
+          "connection_lost",
+          "heartbeat_timeout"
+        ],
+        "type": "string"
+      },
       "PoolGateway": {
         "description": "A gateway of the device pool.",
         "properties": {
@@ -2265,6 +2751,15 @@
           "theme"
         ],
         "type": "object"
+      },
+      "Presence": {
+        "description": "Whether a gateway is connected.",
+        "enum": [
+          "online",
+          "offline",
+          "unknown"
+        ],
+        "type": "string"
       },
       "QueryRange": {
         "description": "The range an answer covers.",
@@ -2446,8 +2941,13 @@
         ],
         "type": "string"
       },
+      "RestoreConversation": {
+        "additionalProperties": false,
+        "description": "Restoring a conversation takes no settings: no body, `null`, or an empty object.",
+        "type": "object"
+      },
       "RevocationReason": {
-        "description": "A reason a workstation certificate can be revoked for: the RFC 5280 CRLReason codes that\napply to an end entity, without `certificateHold` (a revocation here is final).",
+        "description": "A reason a workstation or gateway certificate can be revoked for: the RFC 5280 CRLReason codes\nthat apply to an end entity, without `certificateHold` (a revocation here is final).",
         "enum": [
           "unspecified",
           "key_compromise",
@@ -2457,6 +2957,24 @@
           "privilege_withdrawn"
         ],
         "type": "string"
+      },
+      "RevokeGateway": {
+        "additionalProperties": false,
+        "description": "The body of `POST /api/certs/v1/gateways/{hardware_id}/revoke` (Laysi/trustiot-v2#636): revokes\nevery certificate of the gateway that is neither revoked nor expired. Unknown fields are\nrefused.",
+        "properties": {
+          "reason": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/RevocationReason",
+                "description": "Why they are revoked, the same for each. Absent leaves the reason out of the CRL, as RFC\n5280 recommends over `unspecified`. `key_compromise` also ends the gateway's renewals\nfor good: its registered key is not trusted any more."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "type": "object"
       },
       "RevokeWorkstationCertificate": {
         "additionalProperties": false,
@@ -2474,6 +2992,76 @@
             ]
           }
         },
+        "type": "object"
+      },
+      "RevokedGateway": {
+        "description": "What `POST /api/certs/v1/gateways/{hardware_id}/revoke` revoked.",
+        "properties": {
+          "hardware_id": {
+            "description": "The gateway's hardware ID.",
+            "type": "string"
+          },
+          "revoked": {
+            "description": "The certificates revoked by this request, by serial number; at least one. Certificates\nrevoked before, or expired, are not in it.",
+            "items": {
+              "$ref": "#/components/schemas/RevokedGatewayCertificate"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "hardware_id",
+          "revoked"
+        ],
+        "type": "object"
+      },
+      "RevokedGatewayCertificate": {
+        "description": "A gateway certificate this request revoked, as the ledger now records it.",
+        "properties": {
+          "ca_key_id": {
+            "description": "The issuing CA that signed it: the SHA-256 of its public key, 64 lower-case hex digits.",
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "not_after": {
+            "description": "When it would have expired; its CA's CRLs list it until then.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "not_before": {
+            "description": "When it became valid.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "revocation_reason": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/RevocationReason",
+                "description": "Why it was revoked, when a reason was given."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "revoked_at": {
+            "description": "When it was revoked.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "serial": {
+            "description": "The serial number, lower-case hex.",
+            "pattern": "^[0-9a-f]{2,40}$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "serial",
+          "ca_key_id",
+          "not_before",
+          "not_after",
+          "revoked_at"
+        ],
         "type": "object"
       },
       "Series": {
@@ -2951,6 +3539,28 @@
         ],
         "type": "object"
       },
+      "SetRoleModels": {
+        "description": "The body of `PUT /api/identity/v1/platform/ai/model-roles/{role}`. Unknown fields are\nignored.",
+        "properties": {
+          "expected_version": {
+            "description": "The role's `version` as the caller read it; the change is refused with 409 when the role\nhas another version by then.",
+            "format": "int64",
+            "type": "integer"
+          },
+          "models": {
+            "description": "1 to 8 distinct `<provider>/<model>` in fallback order, first choice first, of configured\nproviders whose protocol is the role's.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "models",
+          "expected_version"
+        ],
+        "type": "object"
+      },
       "Statistics": {
         "description": "Statistics of each series.",
         "properties": {
@@ -3130,6 +3740,27 @@
           "time",
           "value"
         ],
+        "type": "object"
+      },
+      "UpdateConversation": {
+        "additionalProperties": false,
+        "description": "What to change: at least one of the two.",
+        "properties": {
+          "archived": {
+            "description": "`true` archives the conversation, `false` takes it out of the archive. An archived\nconversation is listed only with `archived=true`, and can still be read and continued.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "title": {
+            "description": "The new title, 1 to 200 characters after trimming the surrounding white space, at least\none of them visible, without control, bidirectional or deprecated formatting (U+202A to\nU+202E, U+2066 to U+206F) or line separator characters. It replaces any title, the\nmodel's included.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
         "type": "object"
       },
       "UpdateDevice": {
@@ -4698,7 +5329,7 @@
                 }
               }
             },
-            "description": "The user has not picked or joined a tenant (`permission_denied`)."
+            "description": "No tenant or no role in it (`permission_denied`)."
           },
           "404": {
             "content": {
@@ -4724,6 +5355,451 @@
         "summary": "The caller's tenant, once this service has processed its `identity.tenant_created`.",
         "tags": [
           "assets"
+        ]
+      }
+    },
+    "/api/assistant/v1/conversations": {
+      "get": {
+        "operationId": "listConversations",
+        "parameters": [
+          {
+            "description": "`true` lists only the archived conversations; without it, or `false`, only the ones not archived.",
+            "in": "query",
+            "name": "archived",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "description": "Conversations per page, 1 to 100; default 50.",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "format": "int32",
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "The previous page's `next_cursor` of the same list, for the next page.",
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConversationList"
+                }
+              }
+            },
+            "description": "A page of the caller's conversations; deleted ones are never listed."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "A malformed query, `archived` other than `true` or `false` (`invalid_request`), a `limit` out of range (`conversation.limit_invalid`), or a `cursor` that is not a `next_cursor` of this list (`conversation.cursor_invalid`)."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No valid session (`unauthenticated`)."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No tenant or no role in it (`permission_denied`)."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The database failed (`unavailable`)."
+          }
+        },
+        "summary": "The caller's conversations, most recently active first.",
+        "tags": [
+          "assistant"
+        ]
+      },
+      "post": {
+        "operationId": "createConversation",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/CreateConversation"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            }
+          },
+          "description": "Nothing to set: send `Content-Type: application/json` (required, against cross-site requests) with no body, `null`, or an empty object."
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Conversation"
+                }
+              }
+            },
+            "description": "The conversation was started; `Location` names it.",
+            "headers": {
+              "location": {
+                "description": "The conversation's path.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The `Content-Type` is not `application/json` (`invalid_request`), or there is a body other than `null` or an empty object (`conversation.body_invalid`)."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No valid session (`unauthenticated`)."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No tenant or no role in it (`permission_denied`)."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The caller started 100 conversations in this tenant within the last 24 hours, deleted ones included (`rate_limited`, key `conversation.start_limited`, `details.max`); nothing was stored.",
+            "headers": {
+              "retry-after": {
+                "description": "Seconds until the oldest of those conversations leaves the 24 hours and a start is allowed again.",
+                "schema": {
+                  "format": "int64",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The database failed (`unavailable`); nothing was written."
+          }
+        },
+        "summary": "Starts a conversation for the caller: empty, with today's system prompt, tools and model\nsettings fixed for its whole life.",
+        "tags": [
+          "assistant"
+        ]
+      }
+    },
+    "/api/assistant/v1/conversations/{conversation_id}": {
+      "delete": {
+        "operationId": "deleteConversation",
+        "parameters": [
+          {
+            "description": "The conversation's ID.",
+            "in": "path",
+            "name": "conversation_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted; it can be restored for 30 days (the deleted list gives until when). No body."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No valid session (`unauthenticated`)."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No tenant or no role in it (`permission_denied`)."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No such conversation of the caller's, or it is already deleted (`not_found`)."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "A question of the conversation is being answered (`conflict`, `conversation.question_running`). Nothing changed."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The database failed (`unavailable`); nothing changed."
+          }
+        },
+        "summary": "Deletes one of the caller's conversations. It leaves every list but the deleted one, and\ncan be restored for 30 days; then it is removed for good.",
+        "tags": [
+          "assistant"
+        ]
+      },
+      "get": {
+        "operationId": "getConversation",
+        "parameters": [
+          {
+            "description": "The conversation's ID.",
+            "in": "path",
+            "name": "conversation_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConversationDetail"
+                }
+              }
+            },
+            "description": "The conversation and the messages the chat shows."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No valid session (`unauthenticated`)."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No tenant or no role in it (`permission_denied`)."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No such conversation of the caller's, or it is deleted (`not_found`)."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The database failed (`unavailable`)."
+          }
+        },
+        "summary": "One of the caller's conversations with its questions and answers.",
+        "tags": [
+          "assistant"
+        ]
+      },
+      "patch": {
+        "operationId": "updateConversation",
+        "parameters": [
+          {
+            "description": "The conversation's ID.",
+            "in": "path",
+            "name": "conversation_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateConversation"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Conversation"
+                }
+              }
+            },
+            "description": "The conversation as it is now."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The `Content-Type` is not `application/json` (`invalid_request`), the body is not a JSON object of `title` and `archived` (`conversation.body_invalid`), or it has neither (`conversation.update_empty`)."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No valid session (`unauthenticated`)."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No tenant or no role in it (`permission_denied`)."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No such conversation of the caller's, or it is deleted (`not_found`)."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The title, after trimming, is empty, longer than 200 characters, has no visible character, or has a control, bidirectional formatting or line separator character (`validation_failed`, field `/title`, `conversation.title_invalid`). Nothing was written."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The database failed (`unavailable`); nothing was written."
+          }
+        },
+        "summary": "Renames, archives or unarchives one of the caller's conversations, both in one transaction.",
+        "tags": [
+          "assistant"
         ]
       }
     },
@@ -4814,6 +5890,106 @@
           }
         },
         "summary": "A conversation's drafts, for its owner.",
+        "tags": [
+          "assistant"
+        ]
+      }
+    },
+    "/api/assistant/v1/conversations/{conversation_id}/restore": {
+      "post": {
+        "operationId": "restoreConversation",
+        "parameters": [
+          {
+            "description": "The conversation's ID.",
+            "in": "path",
+            "name": "conversation_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/RestoreConversation"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            }
+          },
+          "description": "Nothing to set: send `Content-Type: application/json` (required, against cross-site requests) with no body, `null`, or an empty object."
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Conversation"
+                }
+              }
+            },
+            "description": "Restored; the conversation as it is now."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The `Content-Type` is not `application/json` (`invalid_request`), or there is a body other than `null` or an empty object (`conversation.body_invalid`)."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No valid session (`unauthenticated`)."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No tenant or no role in it (`permission_denied`)."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No deleted conversation of the caller's with this ID that can still be restored (`not_found`)."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The database failed (`unavailable`); nothing changed."
+          }
+        },
+        "summary": "Restores one of the caller's deleted conversations, as it was when it was deleted. Only\nwithin 30 days of the deletion.",
         "tags": [
           "assistant"
         ]
@@ -5602,6 +6778,90 @@
         ]
       }
     },
+    "/api/assistant/v1/deleted-conversations": {
+      "get": {
+        "operationId": "listDeletedConversations",
+        "parameters": [
+          {
+            "description": "Conversations per page, 1 to 100; default 50.",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "format": "int32",
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "The previous page's `next_cursor` of this list, for the next page.",
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeletedConversationList"
+                }
+              }
+            },
+            "description": "A page of the caller's deleted conversations that can still be restored."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "A malformed query (`invalid_request`), a `limit` out of range (`conversation.limit_invalid`), or a `cursor` that is not a `next_cursor` of this list (`conversation.cursor_invalid`)."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No valid session (`unauthenticated`)."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No tenant or no role in it (`permission_denied`)."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The database failed (`unavailable`)."
+          }
+        },
+        "summary": "The caller's deleted conversations that can still be restored, most recently deleted first:\ntitles and times, no messages.",
+        "tags": [
+          "assistant"
+        ]
+      }
+    },
     "/api/certs/v1/gateway-registrations": {
       "post": {
         "operationId": "registerGateway",
@@ -5741,6 +7001,128 @@
         ]
       }
     },
+    "/api/certs/v1/gateways/{hardware_id}/revoke": {
+      "post": {
+        "operationId": "revokeGateway",
+        "parameters": [
+          {
+            "description": "The gateway's hardware ID, as registered at the factory.",
+            "in": "path",
+            "name": "hardware_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RevokeGateway"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RevokedGateway"
+                }
+              }
+            },
+            "description": "Revoked now, each certificate listed with its serial number. Before this response the ledger records the revocations and each of their issuing CAs gets a CRL that lists them (should that fail, the CRL job lists them within one check interval, default 5 minutes), and the broker is asked to drop the gateway's permissions, which also disconnects it. The broker refuses the certificates in the TLS handshake once it has loaded the new CRL, within one trust interval (default 30 seconds). A renewal may later give the gateway a new certificate if it is still bound, unless the reason is `key_compromise`, which ends its renewals for good."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The `Content-Type` is not `application/json`, the body is larger than 1 KiB (`gateway_revocation.body_too_large`), or it is not a JSON object (`gateway_revocation.body_invalid`) (`invalid_request`)."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No valid session (`unauthenticated`)."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Not a platform administrator (`permission_denied`)."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No gateway is registered with this hardware ID (`not_found`)."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The gateway has no certificate that is neither revoked nor expired (`conflict`, `gateway_revocation.no_valid_certificate`). Nothing changed."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "An unknown field (`gateway_revocation.unknown_field`), or a reason that is not one of the listed ones (`gateway_revocation.reason_invalid`) (`validation_failed`). Nothing was revoked."
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The revocation's task failed (`internal`). Whether anything was revoked is unknown; calling again tells (409 when it was)."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The database failed (`unavailable`). Most likely nothing was revoked; should the connection have broken while committing, the revocation may stand without its new CRL and broker step, which the CRL job and the next whole comparison catch up. Calling again tells (409 when it was revoked)."
+          }
+        },
+        "summary": "Revokes every certificate of a gateway that is neither revoked nor expired: decision 6's\nthree steps, see the module's documentation.",
+        "tags": [
+          "certs"
+        ]
+      }
+    },
     "/api/certs/v1/workstation-certificates": {
       "post": {
         "operationId": "issueWorkstationCertificate",
@@ -5855,7 +7237,7 @@
                 }
               }
             },
-            "description": "Revoked now; the ledger records the time and the reason, and the issuing CA's next scheduled CRL lists it."
+            "description": "Revoked now; the ledger records the time and the reason, and the issuing CA's CRL lists it: a new CRL is issued right after the revocation, or, should that fail, by the CRL job within one check interval (default 5 minutes)."
           },
           "400": {
             "content": {
@@ -5928,9 +7310,60 @@
             "description": "The database failed (`unavailable`). Nothing was revoked."
           }
         },
-        "summary": "Revokes a workstation certificate. Its issuing CA's next scheduled CRL lists it; the\nregistration API (Laysi/trustiot-v2#79) reads the ledger, so it refuses the certificate at\nonce.",
+        "summary": "Revokes a workstation certificate. Once the revocation commits, its issuing CA gets a new\nCRL that lists it before the response goes out (Laysi/trustiot-v2#635; when that fails, the\nrevocation stands and the CRL job lists it within one `crl.check_interval`); the\nregistration API (Laysi/trustiot-v2#79) reads the ledger, so it refuses the certificate at\nonce.",
         "tags": [
           "certs"
+        ]
+      }
+    },
+    "/api/gateway-ops/v1/gateways": {
+      "get": {
+        "operationId": "listGateways",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GatewayList"
+                }
+              }
+            },
+            "description": "The gateways bound to the caller's tenant, by hardware ID."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No valid session (`unauthenticated`)."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No tenant or no role in it (`permission_denied`)."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The database failed, or too many requests are being answered (`unavailable`)."
+          }
+        },
+        "summary": "The tenant's gateways, with whether each is connected, its last report and its configuration\nversions.",
+        "tags": [
+          "gateway-ops"
         ]
       }
     },
@@ -6036,6 +7469,290 @@
         ]
       }
     },
+    "/api/identity/v1/platform/ai/model-roles": {
+      "get": {
+        "operationId": "listPlatformAiModelRoles",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModelRoles"
+                }
+              }
+            },
+            "description": "Every model role of the AI gateway, with the models in effect, the configured ones and where they come from, and every configured provider."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No valid session (`unauthenticated`)."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Not a platform administrator, or not the administrator's own request: another service exchanged the token (`permission_denied`)."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The AI gateway's admin API is not configured, not reachable, busy or failed (`unavailable`)."
+          }
+        },
+        "summary": "Lists the AI gateway's model roles and providers. Platform administrators only, in their own\nrequest.",
+        "tags": [
+          "identity"
+        ]
+      }
+    },
+    "/api/identity/v1/platform/ai/model-roles/{role}": {
+      "delete": {
+        "operationId": "resetPlatformAiModelRole",
+        "parameters": [
+          {
+            "description": "The role's name, such as `main`.",
+            "in": "path",
+            "name": "role",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The role's `version` as the caller read it; the reset is refused with 409 when the role has another version by then.",
+            "in": "query",
+            "name": "expected_version",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 0,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModelRole"
+                }
+              }
+            },
+            "description": "The role uses its configured models: the role as it is now. A role that had no stored models is unchanged, keeps its `version` and writes no event; otherwise `identity.ai_model_role_changed` is in the platform's operation log."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The `Content-Type` is not `application/json` (send it without a body), or the query has no integer `expected_version` of at least 0 (`invalid_request`); nothing was sent."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No valid session (`unauthenticated`)."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Not a platform administrator, not the administrator's own request (`permission_denied`), or a cross-site request (`permission_denied`, message key `security.cross_site_request`); nothing was sent."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The AI gateway has no such role (`not_found`, message key `ai_model_role.not_found`)."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The role is no longer at `expected_version` (`conflict`, message key `ai_model_role.version_conflict`, `details.current_version` when known); nothing was changed."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The AI gateway's admin API is not configured, not reachable or busy, or refused a request it should not have (`unavailable`): nothing was sent or nothing was changed."
+          },
+          "504": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The outcome is unknown (`timeout`, message key `ai_model_role.outcome_unknown`): the AI gateway did not answer in time, the connection broke, or its answer could not be read; the reset may have taken effect, so read the roles again before retrying."
+          }
+        },
+        "summary": "Resets a model role to the models the configuration gives it. Platform administrators only,\nin their own request.",
+        "tags": [
+          "identity"
+        ]
+      },
+      "put": {
+        "operationId": "setPlatformAiModelRole",
+        "parameters": [
+          {
+            "description": "The role's name, such as `main`.",
+            "in": "path",
+            "name": "role",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetRoleModels"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModelRole"
+                }
+              }
+            },
+            "description": "The models were changed: the role as it is now, with its new `version`; `identity.ai_model_role_changed` is in the platform's operation log."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The `Content-Type` is not `application/json`, or the body is over 16 KiB or not a JSON object with a string array `models` and an integer `expected_version` of at least 0 (`invalid_request`); nothing was sent."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No valid session (`unauthenticated`)."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Not a platform administrator, not the administrator's own request (`permission_denied`), or a cross-site request (`permission_denied`, message key `security.cross_site_request`); nothing was sent."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The AI gateway has no such role (`not_found`, message key `ai_model_role.not_found`)."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The role is no longer at `expected_version` (`conflict`, message key `ai_model_role.version_conflict`, `details.current_version` when known); nothing was changed."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The models were refused (`validation_failed`, field `/models`): not 1 to 8 distinct, well-formed `<provider>/<model>` (`ai_model_role.invalid_models`), a provider that is not configured (`ai_model_role.unknown_provider`), or a provider of another protocol than the role (`ai_model_role.protocol_mismatch`); nothing was changed."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The AI gateway's admin API is not configured, not reachable or busy, or refused a request it should not have (`unavailable`): nothing was sent or nothing was changed."
+          },
+          "504": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The outcome is unknown (`timeout`, message key `ai_model_role.outcome_unknown`): the AI gateway did not answer in time, the connection broke, or its answer could not be read; the change may have taken effect, so read the roles again before retrying."
+          }
+        },
+        "summary": "Changes a model role's models. Platform administrators only, in their own request.",
+        "tags": [
+          "identity"
+        ]
+      }
+    },
     "/api/identity/v1/platform/event-log": {
       "get": {
         "operationId": "getPlatformEventLog",
@@ -6119,7 +7836,7 @@
                 }
               }
             },
-            "description": "The user is not a platform administrator (`permission_denied`)."
+            "description": "Not a platform administrator, or not the administrator's own request: another service exchanged the token (`permission_denied`)."
           },
           "503": {
             "content": {
@@ -6230,7 +7947,7 @@
                 }
               }
             },
-            "description": "The user is not a platform administrator (`permission_denied`)."
+            "description": "Not a platform administrator, or not the administrator's own request: another service exchanged the token (`permission_denied`)."
           },
           "503": {
             "content": {
@@ -6508,6 +8225,16 @@
             },
             "description": "No valid session (`unauthenticated`)."
           },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "A token another service exchanged for a call on the user's behalf (`permission_denied`): only the user's own requests log them out everywhere. No session is revoked."
+          },
           "503": {
             "content": {
               "application/json": {
@@ -6731,7 +8458,7 @@
                 }
               }
             },
-            "description": "The user is not a platform administrator (`permission_denied`)."
+            "description": "The user is not a platform administrator, or not the administrator's own request: another service exchanged the token (`permission_denied`). Nothing was created."
           },
           "422": {
             "content": {
@@ -6754,7 +8481,7 @@
             "description": "The database failed; nothing was created (`unavailable`)."
           }
         },
-        "summary": "Creates a tenant. Platform administrators only.",
+        "summary": "Creates a tenant. Platform administrators' own requests only.",
         "tags": [
           "identity"
         ]
@@ -6814,7 +8541,7 @@
                 }
               }
             },
-            "description": "The user has not picked or joined a tenant (`permission_denied`)."
+            "description": "No tenant or no role in it (`permission_denied`)."
           },
           "404": {
             "content": {
@@ -6974,7 +8701,7 @@
                 }
               }
             },
-            "description": "No tenant (`permission_denied`), or the range lies wholly before the queryable period (`quota_exceeded`, `telemetry.outside_queryable_period`, detail `earliest`)."
+            "description": "No tenant or no role in it (`permission_denied`), or the range lies wholly before the queryable period (`quota_exceeded`, `telemetry.outside_queryable_period`, detail `earliest`)."
           },
           "404": {
             "content": {
@@ -7085,7 +8812,7 @@
                 }
               }
             },
-            "description": "No tenant (`permission_denied`), or the range lies wholly before the queryable period (`quota_exceeded`, `telemetry.outside_queryable_period`, detail `earliest`)."
+            "description": "No tenant or no role in it (`permission_denied`), or the range lies wholly before the queryable period (`quota_exceeded`, `telemetry.outside_queryable_period`, detail `earliest`)."
           },
           "404": {
             "content": {
@@ -7196,7 +8923,7 @@
                 }
               }
             },
-            "description": "No tenant (`permission_denied`), or the range lies wholly before the queryable period (`quota_exceeded`, `telemetry.outside_queryable_period`, detail `earliest`)."
+            "description": "No tenant or no role in it (`permission_denied`), or the range lies wholly before the queryable period (`quota_exceeded`, `telemetry.outside_queryable_period`, detail `earliest`)."
           },
           "404": {
             "content": {
@@ -7353,12 +9080,16 @@
       "name": "assets"
     },
     {
-      "description": "The AI assistant's dashboards (services/assistant).",
+      "description": "The AI assistant's conversations and dashboards (services/assistant).",
       "name": "assistant"
     },
     {
-      "description": "Workstation certificates and factory registration from the issuing CA (services/certs).",
+      "description": "Workstation certificates, factory registration and gateway revocation from the issuing CA (services/certs).",
       "name": "certs"
+    },
+    {
+      "description": "Gateways' presence and configurations (services/gateway-ops).",
+      "name": "gateway-ops"
     },
     {
       "description": "Sessions, users and tenants (services/identity).",

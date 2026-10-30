@@ -47,6 +47,16 @@ pub const MAX_BROKER_VALIDITY: Duration = Duration::from_secs(90 * 86_400);
 /// `broker-certs`.
 pub const DEFAULT_BROKER_PORT: u16 = 8082;
 
+/// The broker account the gateway permission sync logs in with: the only one the chart gives the
+/// dynamic-security admin role (docs/architecture/secrets.md, "MQTT dynsec 管理帳密").
+pub const MQTT_USERNAME: &str = "service:certs";
+
+/// Shortest `dynsec.interval`.
+pub const MIN_DYNSEC_INTERVAL: Duration = Duration::from_secs(1);
+
+/// Longest `dynsec.interval`.
+pub const MAX_DYNSEC_INTERVAL: Duration = Duration::from_secs(3600);
+
 /// Longest CRL validity: Mosquitto rejects every gateway of an issuing CA once its CRL expires,
 /// so a CRL that lives long only delays revocation news, never helps.
 pub const MAX_CRL_VALIDITY: Duration = Duration::from_secs(31 * 86_400);
@@ -74,6 +84,17 @@ pub struct Config {
     /// When CRLs are regenerated and when their expiry raises the alert.
     #[serde(default)]
     pub crl: CrlSchedule,
+    /// The renewal endpoint's limits (Laysi/trustiot-v2#81).
+    #[serde(default)]
+    pub renewal: RenewalLimits,
+    /// `mqtt.*`: the MQTT broker's service port and the certs service's broker account, for the
+    /// gateway permission sync ([`crate::dynsec`], Laysi/trustiot-v2#633). Without it nothing is
+    /// synced: the chart sets it only when the broker is deployed.
+    #[serde(default)]
+    pub mqtt: Option<mqtt_client::Config>,
+    /// `dynsec.*`: how often the gateway permission sync compares every gateway.
+    #[serde(default)]
+    pub dynsec: DynsecSchedule,
 }
 
 /// The platform settings the service reads. No `deny_unknown_fields`: every service gets every
@@ -112,7 +133,7 @@ pub struct Database {
     pub platform_password: String,
     /// `TRUSTIOT__DATABASE__MAX_CONNECTIONS`: most connections of the service role's pool per
     /// replica, from [`MIN_DATABASE_CONNECTIONS`] to [`MAX_DATABASE_CONNECTIONS`]. Default 5.
-    /// The platform role's pool has [`crate::REGISTRATION_CONNECTIONS`].
+    /// The platform role's pool has [`crate::PLATFORM_CONNECTIONS`].
     #[serde(default = "default_max_connections")]
     pub max_connections: u32,
 }
@@ -332,6 +353,205 @@ const fn default_alert_before() -> Duration {
     Duration::from_secs(3 * 86_400)
 }
 
+/// `renewal.*`: the limits of the renewal endpoint (Laysi/trustiot-v2#81; README.md, "換發").
+/// The rate limits count per replica: a hardware ID may send `gateway_burst` requests of
+/// either step at once and one more every `gateway_interval`, and all hardware IDs together
+/// `global_burst` requests of each step at once and one more of each every `global_interval`
+/// (the challenge step and the renew step have a global limit each).
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RenewalLimits {
+    /// `TRUSTIOT__RENEWAL__GATEWAY_BURST`: default 4 (one renewal is two requests), 1 to 100.
+    #[serde(default = "default_gateway_burst")]
+    pub gateway_burst: u32,
+    /// `TRUSTIOT__RENEWAL__GATEWAY_INTERVAL`: default 30 seconds, 1 second to 1 hour.
+    #[serde(
+        default = "default_gateway_interval",
+        deserialize_with = "service_kit::config::duration"
+    )]
+    pub gateway_interval: Duration,
+    /// `TRUSTIOT__RENEWAL__GLOBAL_BURST`: for each step; default 100, 1 to 10000.
+    #[serde(default = "default_global_burst")]
+    pub global_burst: u32,
+    /// `TRUSTIOT__RENEWAL__GLOBAL_INTERVAL`: for each step; default 50 ms (20 requests of each
+    /// step a second), 1 ms to 60 seconds.
+    #[serde(
+        default = "default_global_interval",
+        deserialize_with = "service_kit::config::duration"
+    )]
+    pub global_interval: Duration,
+    /// `TRUSTIOT__RENEWAL__MAX_CONCURRENT`: requests whose database work runs at once per
+    /// replica; default 2, 1 to one less than the platform role's pool
+    /// ([`crate::PLATFORM_CONNECTIONS`]), so the factory registration and the consumer of the
+    /// assets service's events always find a connection.
+    #[serde(default = "default_max_concurrent")]
+    pub max_concurrent: u32,
+    /// `TRUSTIOT__RENEWAL__MAX_CONSUMER_LAG`: the endpoint answers 503 while the oldest event the
+    /// consumer of the assets service's events has not processed is older than this, or its lag
+    /// is unknown; default 60 seconds, 1 second to 1 hour.
+    #[serde(
+        default = "default_max_consumer_lag",
+        deserialize_with = "service_kit::config::duration"
+    )]
+    pub max_consumer_lag: Duration,
+    /// `TRUSTIOT__RENEWAL__REFUSAL_WINDOW`: refused renewals of a registered hardware ID are
+    /// counted per window of this length, one `certs.gateway_renewal_refused` each; default 1
+    /// hour, 1 minute to 1 day.
+    #[serde(
+        default = "default_refusal_window",
+        deserialize_with = "service_kit::config::duration"
+    )]
+    pub refusal_window: Duration,
+    /// `TRUSTIOT__RENEWAL__REFUSAL_FLUSH_INTERVAL`: how often each replica looks for ended
+    /// windows to report; default 60 seconds, 1 second to 1 hour.
+    #[serde(
+        default = "default_refusal_flush_interval",
+        deserialize_with = "service_kit::config::duration"
+    )]
+    pub refusal_flush_interval: Duration,
+}
+
+impl Default for RenewalLimits {
+    fn default() -> Self {
+        Self {
+            gateway_burst: default_gateway_burst(),
+            gateway_interval: default_gateway_interval(),
+            global_burst: default_global_burst(),
+            global_interval: default_global_interval(),
+            max_concurrent: default_max_concurrent(),
+            max_consumer_lag: default_max_consumer_lag(),
+            refusal_window: default_refusal_window(),
+            refusal_flush_interval: default_refusal_flush_interval(),
+        }
+    }
+}
+
+/// `dynsec.*`: the gateway permission sync's schedule ([`crate::dynsec`]).
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DynsecSchedule {
+    /// `TRUSTIOT__DYNSEC__INTERVAL`: how often the replica that gets the job lock compares every
+    /// gateway client of the broker with Postgres, from [`MIN_DYNSEC_INTERVAL`] to
+    /// [`MAX_DYNSEC_INTERVAL`]. Default 5 minutes. It bounds how long a change that no immediate
+    /// sync covers (a certificate that expired, a sync that failed) takes to reach the broker.
+    #[serde(
+        default = "default_dynsec_interval",
+        deserialize_with = "service_kit::config::duration"
+    )]
+    pub interval: Duration,
+}
+
+impl Default for DynsecSchedule {
+    fn default() -> Self {
+        Self {
+            interval: default_dynsec_interval(),
+        }
+    }
+}
+
+const fn default_gateway_burst() -> u32 {
+    4
+}
+
+const fn default_gateway_interval() -> Duration {
+    Duration::from_secs(30)
+}
+
+const fn default_global_burst() -> u32 {
+    100
+}
+
+const fn default_global_interval() -> Duration {
+    Duration::from_millis(50)
+}
+
+const fn default_max_concurrent() -> u32 {
+    2
+}
+
+const fn default_max_consumer_lag() -> Duration {
+    Duration::from_secs(60)
+}
+
+const fn default_refusal_window() -> Duration {
+    Duration::from_secs(3600)
+}
+
+const fn default_refusal_flush_interval() -> Duration {
+    Duration::from_secs(60)
+}
+
+impl RenewalLimits {
+    fn validate(&self) -> Result<(), Invalid> {
+        let seconds = Duration::from_secs;
+        let counts = [
+            ("renewal.gateway_burst", self.gateway_burst, 1, 100),
+            ("renewal.global_burst", self.global_burst, 1, 10_000),
+            (
+                "renewal.max_concurrent",
+                self.max_concurrent,
+                1,
+                crate::PLATFORM_CONNECTIONS - 1,
+            ),
+        ];
+        for (key, value, min, max) in counts {
+            if !(min..=max).contains(&value) {
+                return Err(Invalid::new(
+                    key,
+                    format!("must be between {min} and {max}"),
+                ));
+            }
+        }
+        let durations = [
+            (
+                "renewal.gateway_interval",
+                self.gateway_interval,
+                seconds(1),
+                seconds(3600),
+                "1 second and 1 hour",
+            ),
+            (
+                "renewal.global_interval",
+                self.global_interval,
+                Duration::from_millis(1),
+                seconds(60),
+                "1 ms and 60 seconds",
+            ),
+            (
+                "renewal.max_consumer_lag",
+                self.max_consumer_lag,
+                seconds(1),
+                seconds(3600),
+                "1 second and 1 hour",
+            ),
+            (
+                "renewal.refusal_window",
+                self.refusal_window,
+                seconds(60),
+                seconds(86_400),
+                "1 minute and 1 day",
+            ),
+            (
+                "renewal.refusal_flush_interval",
+                self.refusal_flush_interval,
+                seconds(1),
+                seconds(3600),
+                "1 second and 1 hour",
+            ),
+        ];
+        for (key, value, min, max, range) in durations {
+            if !(min..=max).contains(&value) {
+                return Err(Invalid::new(key, format!("must be between {range}")));
+            }
+        }
+        Ok(())
+    }
+}
+
+const fn default_dynsec_interval() -> Duration {
+    Duration::from_secs(300)
+}
+
 impl Config {
     /// Where and how the service role connects.
     #[must_use]
@@ -436,7 +656,49 @@ impl Validate for Config {
         if let Err(problem) = self.broker.names() {
             return Err(Invalid::new("broker.service_name", problem));
         }
-        self.crl.validate()
+        self.crl.validate()?;
+        self.renewal.validate()?;
+        self.validate_dynsec()
+    }
+}
+
+impl Config {
+    /// The settings of the gateway permission sync. Names keys, never values.
+    fn validate_dynsec(&self) -> Result<(), Invalid> {
+        if !(MIN_DYNSEC_INTERVAL..=MAX_DYNSEC_INTERVAL).contains(&self.dynsec.interval) {
+            return Err(Invalid::new(
+                "dynsec.interval",
+                "must be between 1 second and 1 hour",
+            ));
+        }
+        let Some(mqtt) = &self.mqtt else {
+            return Ok(());
+        };
+        if let Err(problem) = mqtt.validate() {
+            let key = match problem {
+                mqtt_client::ConfigError::Host => "mqtt.host",
+                mqtt_client::ConfigError::Port => "mqtt.port",
+                mqtt_client::ConfigError::Username => "mqtt.username",
+                mqtt_client::ConfigError::PasswordFile => "mqtt.password_file",
+            };
+            return Err(Invalid::new(key, problem.to_string()));
+        }
+        if mqtt.username != MQTT_USERNAME {
+            return Err(Invalid::new(
+                "mqtt.username",
+                format!(
+                    "must be {MQTT_USERNAME}: only that account holds the dynamic-security admin \
+                     role"
+                ),
+            ));
+        }
+        if !mqtt.password_file.is_absolute() || mqtt.password_file.file_name().is_none() {
+            return Err(Invalid::new(
+                "mqtt.password_file",
+                "must be an absolute path to a file",
+            ));
+        }
+        Ok(())
     }
 }
 
@@ -506,6 +768,65 @@ mod tests {
             workstation: WorkstationProfile::default(),
             broker: BrokerProfile::default(),
             crl: CrlSchedule::default(),
+            renewal: RenewalLimits::default(),
+            mqtt: None,
+            dynsec: DynsecSchedule::default(),
+        }
+    }
+
+    fn mqtt() -> mqtt_client::Config {
+        mqtt_client::Config {
+            host: "trustiot-mqtt-broker.trustiot.svc".to_owned(),
+            port: 1883,
+            username: MQTT_USERNAME.to_owned(),
+            password_file: PathBuf::from("/etc/trustiot/mqtt-broker-account/certs"),
+        }
+    }
+
+    #[test]
+    fn the_broker_settings_are_optional_and_checked_when_set() {
+        let mut with_broker = config();
+        with_broker.mqtt = Some(mqtt());
+        assert!(with_broker.validate().is_ok());
+        assert_eq!(config().dynsec.interval, Duration::from_secs(300));
+        let broken: [Breakage; 7] = [
+            ("dynsec.interval", |c| c.dynsec.interval = Duration::ZERO),
+            ("dynsec.interval", |c| {
+                c.dynsec.interval = MAX_DYNSEC_INTERVAL + Duration::from_secs(1);
+            }),
+            ("mqtt.host", |c| {
+                c.mqtt = Some(mqtt_client::Config {
+                    host: String::new(),
+                    ..mqtt()
+                });
+            }),
+            ("mqtt.port", |c| {
+                c.mqtt = Some(mqtt_client::Config { port: 0, ..mqtt() });
+            }),
+            ("mqtt.username", |c| {
+                c.mqtt = Some(mqtt_client::Config {
+                    username: "service:ingest".to_owned(),
+                    ..mqtt()
+                });
+            }),
+            ("mqtt.username", |c| {
+                c.mqtt = Some(mqtt_client::Config {
+                    username: "gw-1".to_owned(),
+                    ..mqtt()
+                });
+            }),
+            ("mqtt.password_file", |c| {
+                c.mqtt = Some(mqtt_client::Config {
+                    password_file: PathBuf::from("certs"),
+                    ..mqtt()
+                });
+            }),
+        ];
+        for (key, breakage) in broken {
+            let mut config = config();
+            breakage(&mut config);
+            let error = config.validate().expect_err(key);
+            assert_eq!(error.key, key, "{}", error.message);
         }
     }
 
@@ -613,5 +934,59 @@ mod tests {
         let printed = format!("{:?}", config());
         assert!(!printed.contains("secret-password"));
         assert!(!printed.contains("platform-secret"));
+    }
+
+    #[test]
+    fn every_renewal_limit_is_checked() {
+        let mut edges = config();
+        edges.renewal = RenewalLimits {
+            gateway_burst: 100,
+            gateway_interval: Duration::from_secs(1),
+            global_burst: 1,
+            global_interval: Duration::from_millis(1),
+            max_concurrent: crate::PLATFORM_CONNECTIONS - 1,
+            max_consumer_lag: Duration::from_secs(3600),
+            refusal_window: Duration::from_secs(60),
+            refusal_flush_interval: Duration::from_secs(1),
+        };
+        assert!(edges.validate().is_ok());
+
+        let broken: [Breakage; 12] = [
+            ("renewal.gateway_burst", |c| c.renewal.gateway_burst = 0),
+            ("renewal.gateway_burst", |c| c.renewal.gateway_burst = 101),
+            ("renewal.global_burst", |c| c.renewal.global_burst = 10_001),
+            ("renewal.max_concurrent", |c| c.renewal.max_concurrent = 0),
+            // The platform role's pool keeps a connection for the registration and the consumer.
+            ("renewal.max_concurrent", |c| {
+                c.renewal.max_concurrent = crate::PLATFORM_CONNECTIONS;
+            }),
+            ("renewal.gateway_interval", |c| {
+                c.renewal.gateway_interval = Duration::from_millis(999);
+            }),
+            ("renewal.global_interval", |c| {
+                c.renewal.global_interval = Duration::ZERO;
+            }),
+            ("renewal.global_interval", |c| {
+                c.renewal.global_interval = Duration::from_secs(61);
+            }),
+            ("renewal.max_consumer_lag", |c| {
+                c.renewal.max_consumer_lag = Duration::ZERO;
+            }),
+            ("renewal.refusal_window", |c| {
+                c.renewal.refusal_window = Duration::from_secs(59);
+            }),
+            ("renewal.refusal_window", |c| {
+                c.renewal.refusal_window = Duration::from_secs(86_401);
+            }),
+            ("renewal.refusal_flush_interval", |c| {
+                c.renewal.refusal_flush_interval = Duration::from_secs(3601);
+            }),
+        ];
+        for (key, breakage) in broken {
+            let mut config = config();
+            breakage(&mut config);
+            let error = config.validate().expect_err(key);
+            assert_eq!(error.key, key, "{}", error.message);
+        }
     }
 }

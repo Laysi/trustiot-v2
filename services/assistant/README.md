@@ -2,12 +2,16 @@
 
 AI 助理（決策 31）的主 agent 迴圈：使用者對自己租戶的資料發問，主 agent 透過工具讀資料、回答。對話歷史只往後加、依 prompt caching 的順序排列，每個問題以 token 預算收斂，不設步數上限。只經由 AI 閘道（[services/ai-gateway](../ai-gateway/README.md)）呼叫 Claude，模型藏在一個介面後面（決策 15）。設計在 [docs/architecture/ai-assistant.md](../../docs/architecture/ai-assistant.md)；本服務由 Laysi/trustiot-v2#145 建立。
 
-公開 API（`/api/assistant/v1`）目前只有儀表板（Laysi/trustiot-v2#150，見「儀表板」）；聊天 API 與串流是 Laysi/trustiot-v2#146。
+API 在 `/api/assistant/v1`：使用者自己的對話串，開始、列出、讀取、改名、封存、刪除與還原（Laysi/trustiot-v2#645，見 [API](#api)），以及儀表板（Laysi/trustiot-v2#150，見「儀表板」）。在對話裡發問與串流是 Laysi/trustiot-v2#646、Laysi/trustiot-v2#147。
 
 ## 檔案
 
 | 路徑 | 內容 |
 | --- | --- |
+| `src/api.rs` | API 的路由組合、OpenAPI 文件（`ApiDoc`）與各資源共用的部分：請求身分換成 `Principal`、M1 錯誤回應、請求的交易、本文與分頁規則、cursor 的編碼；每個資源一個子模組，在 `api::routes` 合併 |
+| `src/api/conversations.rs` | 對話串的端點與請求、回應型別 |
+| `src/api/dashboards.rs` | 儀表板的路由：列表、開啟、版本、發布、還原、封存、執行資料集 |
+| `src/api/held_body.rs` | 資料集執行的回應本文：分段交給連線、連線寫出一段才給下一段，持有結果的記憶體到最後一段交給連線或本文被丟棄；連線在 60 秒（`HELD_BODY_TIMEOUT`）內沒取走整個本文時，放回記憶體、中斷回應並關閉連線 |
 | `src/agent.rs` | 主 agent 迴圈：呼叫模型、執行工具、收尾、錯誤與日誌 |
 | `src/model.rs` | 模型介面 `ModelClient` 與中性型別（`ModelRequest`、`ModelTurn`、`TokenCount`、`ModelError`）；原生格式的訊息是不透明的 `NativeMessage` |
 | `src/model/anthropic.rs` | 經 AI 閘道的 Anthropic Messages：請求的快取排列、回應解析、錯誤對應 |
@@ -21,9 +25,6 @@ AI 助理（決策 31）的主 agent 迴圈：使用者對自己租戶的資料�
 | `src/answer_guard.rs` | 回答的過濾：移除回答裡的 fenced code、含程式碼的 inline code、HTML 與 SQL，回報移除的類別；`find` 與 `pending` 給串流（Laysi/trustiot-v2#147）用 |
 | `src/callee.rs` | 工具與儀表板的資料集執行以使用者身分呼叫其他服務的 HTTP client（GET 與 JSON 本文的 POST）：每次呼叫換 token、錯誤只看狀態碼（`telemetry_sql` 的 422 例外，嚴格解析成封閉的拒絕型別）；`Caller` 是呼叫代表誰、日誌記成哪個工具或資料集執行 |
 | `src/delegation.rs` | 一次提問的 run 委派：`QuestionRuns::start`（聊天 API 的入口）、`QuestionRun`（截止時間、撤銷）；`OnBehalfOf` 以公開 API 請求的身分換 token（資料集執行） |
-| `src/api.rs` | 公開 API（`/api/assistant/v1`）的共用部分：每個請求驗證內部身分、`cache-control: no-store`、M1 錯誤、嚴格的請求本文；`openapi()` 的文件 |
-| `src/api/dashboards.rs` | 儀表板的路由：列表、開啟、版本、發布、還原、封存、執行資料集 |
-| `src/api/held_body.rs` | 資料集執行的回應本文：分段交給連線、連線寫出一段才給下一段，持有結果的記憶體到最後一段交給連線或本文被丟棄；連線在 60 秒（`HELD_BODY_TIMEOUT`）內沒取走整個本文時，放回記憶體、中斷回應並關閉連線 |
 | `src/dashboards/store.rs` | 儀表板與版本的 Postgres 儲存：一個函式一個完整操作、鎖、誰看得到與誰能改（草稿的可見性只由 `conversation_access` 決定） |
 | `src/dashboards/runner.rs` | 資料集的執行：以呼叫者的身分呼叫 telemetry-query，回答到了才預留記憶體，回答只在結果的上限內讀出，回答與錯誤對應成封閉的結果，結果以 JSON 帶著它的預留交出 |
 | `src/dashboards/caps.rs` | 資料集執行的上限：每個租戶、每個副本每分鐘 60 次、同時 2 個 |
@@ -34,8 +35,11 @@ AI 助理（決策 31）的主 agent 迴圈：使用者對自己租戶的資料�
 | `src/budget.rs` | 每個問題的 token 預算 |
 | `src/prompt.rs` | 平台 system prompt（有版本）與對話中的固定指示 |
 | `src/config.rs` | 設定與啟動檢查 |
-| `src/store.rs` | 對話與歷史的 Postgres 儲存：只往後加、原樣保存、依租戶隔離 |
-| `src/schema.rs` | 本版本預期的 migration 檔（`migrations/postgres/`：`0001_assistant.sql` 對話、`0002_dashboards.sql` 儀表板），`tools/migrate` 也編進它 |
+| `src/store.rs` | 對話與歷史的 Postgres 儲存：只往後加、原樣保存、依租戶隔離，捨棄最後一輪；錯誤型別 `StoreError` |
+| `src/store/threads.rs` | 對話串：清單、標題、封存、軟刪除、已刪除清單、還原、30 天後的清除 |
+| `src/store/runs.rs` | 提問紀錄：開始（一個對話同時只有一個進行中）、結束、要求停止、查詢 |
+| `src/purge.rs` | 排程清除：每個副本排程、同一時間一個副本以平台角色分批刪除過期的對話 |
+| `src/schema.rs` | 本版本預期的 migration 檔（`migrations/postgres/`：`0001_assistant.sql` 對話、`0002_conversation_threads.sql` 對話串、`0003_dashboards.sql` 儀表板），`tools/migrate` 也編進它 |
 
 ## 一次問答怎麼跑
 
@@ -152,20 +156,109 @@ service-kit 把這兩種拒絕都記成 INFO（`the identity service refused the
 
 ## 對話的儲存（Postgres）
 
-對話與歷史存在 assistant 自己的 schema（`migrations/postgres/0001_assistant.sql`，Laysi/trustiot-v2#553），由 migration Job 套用（`src/schema.rs` 登錄在 `tools/migrate`）。兩張表都是租戶資料，依決策 29 啟用 RLS；沒有平台角色，沒有東西跨租戶讀對話。
+對話、歷史與對話串存在 assistant 自己的 schema（`migrations/postgres/0001_assistant.sql`，Laysi/trustiot-v2#553；`0002_conversation_threads.sql`，Laysi/trustiot-v2#644），由 migration Job 套用（`src/schema.rs` 登錄在 `tools/migrate`）。四張表都是租戶資料，依決策 29 啟用 RLS。唯一跨租戶的是清除用的平台角色 `assistant_platform`：它只看得到、只刪得掉刪除超過 30 天的對話。
 
 | 表 | 一列是 | 內容 |
 | --- | --- | --- |
-| `assistant.conversations` | 一個對話 | 擁有者（租戶、使用者）與開始時固定的 `Preamble`：system prompt 全文與版本、租戶脈絡（已跳脫、包好標籤的區塊）、工具定義（JSON 陣列，依名稱排序）、effort、快取時效 |
-| `assistant.messages` | 歷史的一則訊息 | 位置（`seq`，從 0 起、依送給模型的順序）、`EntryKind`、格式（`anthropic_messages`），以及訊息本身：送給模型的 JSON 文字的位元組，存成 `bytea` |
+| `assistant.conversations` | 一個對話 | 擁有者（租戶、使用者）與開始時固定的 `Preamble`：system prompt 全文與版本、租戶脈絡（已跳脫、包好標籤的區塊）、工具定義（JSON 陣列，依名稱排序）、effort、快取時效；對話串的標題與來源、封存時間、刪除時間、最後活動時間 |
+| `assistant.messages` | 歷史的一則訊息 | 位置（`seq`，從 0 起、依寫入的順序）、`EntryKind`、格式（`anthropic_messages`），以及訊息本身：送給模型的 JSON 文字的位元組，存成 `bytea`，最多 32 MiB |
+| `assistant.discarded_rounds` | 捨棄的一輪 | 從這一輪的問題到它最後一則訊息的位置範圍（含兩端） |
+| `assistant.runs` | 一次提問 | run ID（run 委派的 ID）、對話、提問者、狀態（`running`、`answered`、`failed`、`cancelled`、`interrupted`）、失敗原因代碼、開始、截止、結束與要求停止的時間；不存問題本身 |
 
-- **只能新增**：服務角色 `assistant_app` 對兩張表只有 SELECT 與 INSERT，沒有 UPDATE、DELETE、TRUNCATE，資料庫直接拒絕改寫或刪除（`tests/history_store.rs`）。訊息對對話的外鍵是 NO ACTION，沒有串聯刪除。刪除對話怎麼做由 Laysi/trustiot-v2#146 決定，屆時另加 migration。
+### 權限
+
+| 角色 | `conversations` | `messages` | `discarded_rounds` | `runs` |
+| --- | --- | --- | --- | --- |
+| `assistant_app`（服務角色，交易的租戶內） | SELECT；INSERT 擁有者與 `Preamble` 的欄位；UPDATE 只限 `title`、`title_source`、`archived_at`、`deleted_at`、`last_activity_at`，刪除超過 30 天的列連鎖定都做不到（restrictive policy `expired_stay_deleted`） | SELECT；INSERT（不含 `created_at`） | SELECT；INSERT（不含 `created_at`） | SELECT；INSERT run ID、對話、提問者與截止時間；UPDATE 只限 `status`、`result_code`、`ended_at`、`cancel_requested_at` |
+| `assistant_platform`（清除，跨租戶） | 只看得到刪除超過 30 天的列（policy `platform_access`），只讀 `tenant_id`、`conversation_id`、`deleted_at`；DELETE 只刪得掉這些列（`platform_purge`）；restrictive policy `platform_expired_only` 讓交易設的租戶不多開任何列 | 無 | 無 | 無 |
+
+兩個角色都沒有 TRUNCATE；服務角色在哪張表都沒有 DELETE，訊息也沒有 UPDATE。時間由資料庫填：`created_at`、`started_at` 不能寫入（沒有那一欄的 INSERT 權限），觸發器 `conversations_clock`、`runs_clock` 要求 `archived_at`、`deleted_at`、`last_activity_at`、`ended_at`、`cancel_requested_at` 改成交易的 `now()`，`last_activity_at` 不往回走，已刪除的對話在還原前 `deleted_at` 不能換成新的時間，已結束的 run 不能再改；違反時回 `42501`。所以服務角色不能把刪除時間往前改讓對話提早被清除，也不能一直往後延讓它永遠不被清除。
+
+### 規則
+
+- **只能新增**：歷史的訊息只會加入，不會被改寫或個別刪除，資料庫直接拒絕（`tests/history_store.rs`）。對話只能整個離開資料庫：刪除滿 30 天後由清除連同訊息、捨棄紀錄與提問紀錄一起刪掉（外鍵 `ON DELETE CASCADE`，以表的擁有者執行，不受 RLS 影響）。
 - **原樣保存**：訊息不用 jsonb（會重排鍵、改寫數字），也不用 text（位元組受資料庫與連線的編碼影響）。讀回時檢查是 UTF-8、剛好一個 JSON 值，而且長度與存的相同，所以送回模型的就是存進去的位元組，thinking 區塊與 `signature` 不變。不符的列讓載入失敗（`StoreError::Corrupt`），不會送出改過的歷史。system prompt 存全文而不只存版本，新版本上線後舊對話照樣以原本的文字繼續。工具定義寫入前先確認讀回後序列化的結果相同，做不到就拒絕儲存（`StoreError::Unstorable`）。
-- **只往後加、不分岔**：`store::append(tx, 對話, stored)` 從第 `stored` 則開始寫。已經存在、內容相同的訊息略過，所以 commit 結果不明時可以安全重試；同一個位置已有不同的訊息（另一個寫入者先加了）回 `StoreError::Conflict`，不覆寫。從儲存的結尾之後開始寫會留下空洞，回 `StoreError::Gap`。主鍵 `(tenant_id, conversation_id, seq)` 讓兩個同時寫同一位置的寫入者只有一個成功，不需要鎖。
-- **租戶與擁有者**：每個函式都收 service-kit 的 `TenantTransaction`，交易的租戶不是對話的租戶時回 `StoreError::WrongTenant`。`store::load` 只回傳屬於該使用者的對話，同租戶的其他使用者拿到 `None`：對話的工具以擁有者的身分執行，別人接著問會變成以擁有者的身分讀資料。`store::create` 與 `store::append` 也自己核對已存的擁有者與 `Preamble`，不同就回 `StoreError::Conflict`、什麼都不寫，不靠呼叫端怎麼建出 `Conversation`（單元測試 `append_refuses_a_conversation_of_another_owner_or_preamble`）。誰可以檢視別人的對話由 Laysi/trustiot-v2#146 決定。
+- **大小上限**：一則訊息最多 32 MiB（`store::MAX_MESSAGE_BYTES`，資料庫的 `messages_body_size` 也擋）。訊息會出現在之後的每個請求裡，而 AI 閘道拒絕超過 32 MiB 的請求（`max_request_bytes`，Anthropic Messages 的上限），更大的訊息永遠送不出去。預設的工具結果上限是 64 KiB 文字加 4 張 5 MiB 的圖（約 20.06 MiB），其餘空間給 JSON 外框與同一步的其他結果；推導寫在 migration 裡。
+- **只往後加、不分岔**：`store::create`、`store::load`、`store::append` 都回傳 `Stored`：記憶體裡的對話有幾則已經存了、下一則在資料庫的位置、讀取時捨棄過幾輪。下一次 `store::append(tx, 對話, stored)` 從那裡接著寫。`append` 先以 `FOR NO KEY UPDATE` 鎖住對話那一列，所以與刪除、捨棄、開始提問依序執行。已經存在、內容相同的訊息略過，commit 結果不明時可以安全重試；同一個位置已有不同的訊息（另一個寫入者先加了）、或 `stored` 之後有人捨棄了一輪，回 `StoreError::Conflict`，不覆寫，呼叫端重新載入。從儲存的結尾之後開始寫會留下空洞，回 `StoreError::Gap`。
+- **租戶與擁有者**：每個函式（清除除外）都收 service-kit 的 `TenantTransaction` 與執行者的 `Principal`，交易的租戶不是對話的租戶時回 `StoreError::WrongTenant`。對話只屬於開始它的使用者：同租戶其他使用者的對話一律當作不存在（`StoreError::NotStored`、`None` 或清單裡沒有），處理請求的程式因此不會洩漏對話是否存在。對話的工具以擁有者的身分執行，別人接著問會變成以擁有者的身分讀資料。`store::create` 與 `store::append` 也自己核對已存的擁有者與 `Preamble`，不同就回 `StoreError::Conflict`、什麼都不寫，不靠呼叫端怎麼建出 `Conversation`（單元測試 `append_refuses_a_conversation_of_another_owner_or_preamble`）。分享給別人看是 Laysi/trustiot-v2#650。
+- **軟刪除**：`store::delete` 記下刪除時間，回傳標題、刪除時間與可還原的期限（刪除後 30 天，`store::DELETED_RETENTION_DAYS`）。之後除了 `store::list_deleted`（擁有者的「已刪除」清單，只有標題與時間，沒有訊息）與 `store::restore`，所有函式都當它不存在，擁有者也一樣：讀不到、改不了名、不能封存、不能捨棄、不能開始提問，`store::append` 回 `StoreError::NotStored`、不再寫入任何訊息。刪除與正在進行的 `append` 依對話那一列的鎖排序：不是訊息先寫完再刪除，就是 `append` 因已刪除而失敗，不會刪除後還多出訊息。有進行中、截止時間未過的提問時，刪除回 `StoreError::AlreadyRunning`、什麼都不改：`delete` 先鎖住對話那一列（與 `start_run` 同一把鎖），再以新的查詢檢查提問，所以同時發生的刪除與開始提問只有一個結果，不是提問先開始而刪除被拒，就是先刪除而提問因已刪除回 `StoreError::NotStored`。截止時間已過的提問（服務在提問中停掉）不擋刪除；截止時間與 `statement_timestamp()`（等到列鎖之後的時間）比較，不用交易開始的 `now()`，所以等鎖時才過了截止時間的提問也不擋。刪除不改提問紀錄：那樣的提問維持 `running`，還原後下一次 `start_run` 把它改成 `interrupted`，清除時隨對話刪掉。
+- **還原**：`store::restore` 只在刪除後 30 天內有效，對話原樣回來：刪除不動訊息、捨棄紀錄與提問紀錄，還原後歷史逐位元組相同。滿 30 天的對話在擁有者的已刪除清單消失、還原回 `StoreError::NotStored`，資料庫也拒絕服務角色對它的任何更動（`expired_stay_deleted`），程式有錯也救不回來。
+- **清除**：`store::purge_expired(PlatformTransaction, 上限, 略過的)` 以平台角色 `assistant_platform`（service-kit 的 `PlatformDb`，每個交易記一行 `platform database access`）刪掉最多「上限」個刪除超過 30 天的對話，從最舊的開始，連同訊息、捨棄紀錄與提問紀錄；回傳刪了幾個，少於上限時表示清完了。restrictive policy `platform_expired_only` 讓平台角色不論交易設了什麼租戶，都只看得到、刪得掉刪除滿 30 天的對話（0001 的 `tenant_isolation` 沒有指定角色，也套用到平台角色，沒有這條 policy 時，設了租戶的平台交易看得到、刪得掉那個租戶的每個對話），所以清除即使寫錯也刪不到還在 30 天內或沒刪除的對話；它對訊息與其他表沒有任何權限。還原與清除同時發生在同一個對話時只有一個結果：先拿到列鎖的一方贏，另一方等它 commit 後重新檢查條件，什麼都不做。清除等列鎖最多 `store::PURGE_LOCK_TIMEOUT`（5 秒，交易內的 `lock_timeout`），等不到時以 `55P03`（`store::LOCK_NOT_AVAILABLE`）失敗、這一批什麼都不刪：清除不該無限期卡住。平台角色沒有 UPDATE 權限，不能用 `FOR UPDATE SKIP LOCKED` 跳過被鎖的列（資料庫回 `42501`，測試裡有），所以一筆被鎖住的過期對話不能讓其他的也刪不掉：`store::expired_conversations` 讀出這一批的鍵（不鎖任何列；整張表被鎖住時也只等 `PURGE_LOCK_TIMEOUT`），`store::purge_one` 一次刪一個，每個一個交易、等鎖最多 `store::PURGE_ROW_LOCK_TIMEOUT`（1 秒），等不到的就略過；`purge_expired` 與 `expired_conversations` 的「略過的」參數讓之後的批次不再選到它們（`store::ExpiredConversation` 的租戶與 ID，以兩個 `uuid` 陣列傳入）。被略過的對話留到下一輪再刪。選平台角色而不是在每個租戶的交易裡以服務角色刪除：服務角色看不到哪些租戶有過期的對話，而且那樣服務角色就得有 DELETE。代價是多一個資料庫角色與帳密，以及它的連線池；誰在什麼時候呼叫見下面的[排程清除](#排程清除)。
+- **捨棄最後一輪**（重新產生回答）：`store::discard_last_round(tx, principal, id, from, stored)`，`from` 是最後一輪的問題在 `store::load` 回傳的歷史中的位置，`stored` 是 `load` 或 `append` 回傳的值，歷史在那之後不能變過（否則 `StoreError::Conflict`）。只能捨棄最後一輪：`from` 不是問題、後面還有問題或超出範圍時回 `StoreError::NotLastRound`。訊息留在資料庫，只在 `discarded_rounds` 記下範圍；`load` 略過它們，所以送給模型的歷史與那一輪之前逐位元組相同。下一輪寫在被捨棄的訊息之後（位置繼續往後數，所以位置不再等於歷史中的順序）。捨棄後要重新 `load`：手上的 `stored` 與記憶體裡的對話還含有被捨棄的一輪，`append` 會拒絕。
+- **提問紀錄**：`store::start_run` 鎖住對話那一列，先把截止時間已過、還在 `running` 的提問改成 `interrupted`（服務在提問中重啟），還有進行中的提問時回 `StoreError::AlreadyRunning`（`delete` 也一樣，見上面的軟刪除）；唯一索引 `runs_one_running_per_conversation` 在資料庫守同一條規則，所以同時開始的兩個提問只有一個成功。截止時間是 run 委派的截止時間，最多一小時後。`store::finish_run` 記下結果（`answered`、`failed` 加原因代碼、`cancelled`），對話在提問中被刪除時也照樣能結束；已結束的回 `StoreError::RunEnded`。`store::request_cancel` 記下第一次要求停止的時間，`store::run_status` 查詢。失敗、取消或提問中被刪除的那一輪不寫進歷史（呼叫端的規則，Laysi/trustiot-v2#646），只在這裡留下結果。
+- **標題與清單**：`store::set_title` 的來源有三種：`User`（使用者改名）一律取代；`Model`（模型產生）只取代空的或暫定的標題；`Provisional`（取自第一個問題）只填空的標題。標題的規則只有一份（`store::title_is_valid`），API 與 `set_title` 都用它：1 到 200 個字元；不含控制字元（Cc）、雙向文字的嵌入、覆寫與隔離控制字元（U+202A–U+202E、U+2066–U+2069）、已停用的格式字元（U+206A–U+206F）與分行、分段字元（U+2028、U+2029），它們會改變標題與後面文字顯示的順序或斷行；至少一個看得見的字元，不能只有空白或不顯示的字元（Unicode 的 Default_Ignorable_Code_Point，例如零寬字元、軟連字號、BOM、變體選擇字元，加上其他格式字元 Cf 與點字空白 U+2800）。零寬連接字元（ZWJ、ZWNJ）與方向標記（LRM、RLM、ALM）在有看得見的字元時可以用：emoji 序列與波斯文需要它們。資料庫的 CHECK 只管長度（`char_length(title) BETWEEN 1 AND 200`），沒有改。`store::archive` 封存或取消封存，封存的對話仍可使用。`store::list` 依最後活動時間（寫入訊息的時間）由新到舊，只列沒封存的或只列封存的（`store::ListFilter`），每頁最多 `store::MAX_PAGE`（100）個，以回傳的 `next` 接著取下一頁；`store::metadata` 取單一對話。
+- **開始對話的上限**：每個使用者在每個租戶，以資料庫的時鐘算 24 小時內（`store::START_WINDOW_HOURS`）最多開始 `store::MAX_STARTS_PER_DAY`（100）個對話；再開始時 `store::create` 回 `StoreError::StartLimited`（帶最舊的那個離開 24 小時還要幾秒）、什麼都不存。這是產品規則，不是設定：開始對話就存一列，裡面有整段開頭（system prompt 與每個工具的說明與 schema，幾 KB 到幾十 KB），平台目前也沒有 HTTP 的流量限制，沒有上限時一個帳號跑迴圈就能塞滿所有服務共用的 Postgres。100 個遠超過一個人手動開始的數量。計算的是這個使用者在這個租戶存著的每個對話的 `created_at`（資料庫填的，服務角色沒有那一欄的 INSERT 權限），已刪除的也算（清除前都還存著），所以邊開邊刪逃不過上限；已經存了的同一個對話再存一次（重試）不算新的。計數與寫入在同一個交易，之前先拿這個使用者在這個租戶的 advisory lock（`pg_advisory_xact_lock` 的兩個 `int4` 形式：第一個鍵固定為 `1634956148`，ASCII 的 `asst`，第二個是租戶與使用者的雜湊），交易結束才放開，所以同一個使用者同時開始的對話依序計數，上限是精確的（`tests/api.rs` 讓 24 個請求搶最後 5 個名額）。Postgres 文件說一個 `bigint` 與兩個 `int4` 的鍵空間不重疊，所以這把鎖碰不到 service-kit `JobLock`、身分服務、assets 與 outbox 的單鍵鎖，第一個鍵也與 certs 的兩鍵鎖（`1953983347`）不同；兩個使用者雜湊相同只是互相等一下。等這把鎖也受請求的 `lock_timeout` 限制。計數分成沒刪除的與已刪除的兩部分，各自走 0002 的部分索引 `conversations_by_activity` 與 `conversations_deleted`；查詢計畫以 `(tenant_id, user_id)` 為兩個索引的條件，只讀這個使用者在這個租戶的列，不碰別的使用者（測試資料庫上兩個租戶各四萬列、各兩百個使用者時確認過），再以 `created_at` 篩掉 24 小時前的，所以成本只隨這個使用者自己存著的對話數增加。沒有加新的索引。
+- **什麼時候真正消失**：被捨棄的訊息與刪除的對話在清除之前都還在資料庫（與備份）裡；清除之後，資料仍留在清除前做的備份裡，直到那些備份的保存期限屆滿。刪除的對話在滿 30 天後的下一次清除時刪掉；沒刪除的對話，連同它捨棄的回合，保存多久由 Laysi/trustiot-v2#652 決定，在那之前一直保存。
+- **錯誤不含資料**：Postgres 的錯誤訊息與 DETAIL 會帶欄位值（例如重複鍵的租戶與對話 ID），`StoreError` 只留 SQLSTATE 或失敗的類別（`DatabaseFailure`），`Display` 與 `Debug` 都可以直接寫進日誌或回應。
 - 模型上一次回報的歷史大小（`Conversation::measured`）不儲存，載入後的第一次呼叫重新估計。
 
-服務啟動時建立服務角色 `assistant_app` 的連線池（verify-full 的 TLS，`database.*` 與平台設定，見「設定」），不在啟動時連線（Laysi/trustiot-v2#592）。readiness 有三項：`postgres` 以服務角色開一條通過 service-kit session 檢查的連線，migration 檢查（`MigrationCheck` 與 `schema::SCHEMA`）確認資料庫有這一版預期的每個 migration 檔案，`internal_identity_keys` 確認已讀到可用的身分服務公鑰（公開 API 以它驗證每個請求，見「儀表板」）；任一項不過時 `/readyz` 回 503，日誌寫出原因（[service-kit 的 migration 檢查](../../crates/service-kit/README.md#migration-檢查migrations)）。readiness 不呼叫 AI 閘道或其他服務。chart 在 `mesh.calls.assistant` 列了 `postgres` 時給它帳密與連線池大小（`services.assistant.database.maxConnections`，算進 chart 的連線預算，見 chart README 的「連線預算」，Laysi/trustiot-v2#575），migration Job 讓 `assistant_app` 能登入。對話串的 API 在 Laysi/trustiot-v2#146 呼叫 `store::create`、`store::append`、`store::load`。
+### 給聊天 API 的介面
+
+| 誰 | 用哪些函式 |
+| --- | --- |
+| 對話串的 API（Laysi/trustiot-v2#645，`src/api/conversations.rs`） | 開始對話 `create`；讀取 `metadata`、`load`；對話串 `list`、`set_title`、`archive`、`delete`、`list_deleted`、`restore` |
+| 提問（Laysi/trustiot-v2#646） | `load` 後 `start_run` 才呼叫模型，回答完成的一輪 `append`，結束時 `finish_run`；停止 `request_cancel`；重新產生回答 `discard_last_round` 後重新 `load` 再問 |
+| 分享（Laysi/trustiot-v2#650） | `load` 只給擁有者；分享另開一條唯讀的路徑，同樣要把刪除的對話當作不存在 |
+| 排程清除（Laysi/trustiot-v2#645，`src/purge.rs`） | `purge_expired`，在 `assistant_platform` 的 `PlatformTransaction` 裡 |
+
+呼叫端要遵守：同一個請求的多個呼叫放在同一個 `TenantTransaction`，由呼叫端 commit；只有回答完成的一輪才 `append`；`discard_last_round` 之後重新 `load`；`StoreError::NotStored` 對使用者一律是「找不到」，不區分不存在、別人的或已刪除。
+
+服務啟動時建立服務角色 `assistant_app` 與平台角色 `assistant_platform` 的連線池（verify-full 的 TLS，`database.*` 與平台設定，見「設定」），不在啟動時連線（Laysi/trustiot-v2#592）。平台角色的連線池固定 2 條（`PLATFORM_CONNECTIONS`：清除的交易與 readiness），只給清除用。readiness 有三項：`postgres` 以兩個角色各開一條通過 service-kit session 檢查的連線，migration 檢查（`MigrationCheck` 與 `schema::SCHEMA`）確認資料庫有這一版預期的每個 migration 檔案，`internal_identity_keys` 確認已讀到可用的身分服務公鑰（API 以它驗證每個請求）；任一項不過時 `/readyz` 回 503，日誌寫出原因（[service-kit 的 migration 檢查](../../crates/service-kit/README.md#migration-檢查migrations)）。readiness 不呼叫 AI 閘道或其他服務。chart 在 `mesh.calls.assistant` 列了 `postgres` 時給它兩個角色的帳密與服務角色連線池的大小（`services.assistant.database.maxConnections`；平台角色的 2 條另算，都算進 chart 的連線預算，見 chart README 的「連線預算」，Laysi/trustiot-v2#575），migration Job 讓 `assistant_app` 與 `assistant_platform` 都能登入。API 的每個請求在這個連線池開一個請求租戶的交易，呼叫上面「給聊天 API 的介面」列的函式；儀表板的請求與 `dashboard` 工具的寫入也在這個連線池開短交易（見「儀表板」）。
+
+### 排程清除
+
+`src/purge.rs`（Laysi/trustiot-v2#645）每 `purge.interval`（預設 1 小時）跑一輪清除，服務啟動後馬上跑第一輪。每個副本都排程，同一時間只有一個副本執行：一輪在 service-kit 的 `JobLock`（Postgres advisory lock，job 名稱 `purge`，在服務角色的連線池上，service-kit 的 job lock 都用服務角色）底下執行，拿不到鎖的副本跳過這一輪（DEBUG `scheduled job skipped; another replica holds its lock`），不開平台交易。
+
+一輪以 `purge::PURGE_BATCH`（100）個對話為一批呼叫 `store::purge_expired`，每批一個 `assistant_platform` 的交易（service-kit 每個交易記一行 `platform database access`，`purpose` 是 `purge expired conversations`），直到一批少於 100 個；一批連同訊息最多上千列，交易短、鎖得少，中途失敗時之前的批次已經刪掉。
+
+**被鎖住的列**：一批等列鎖超過 5 秒（`55P03`，見上面的清除）時，這一批什麼都不刪；這一輪接著把這一批的對話一次刪一個（每個一個交易，等鎖最多 1 秒），還鎖著的略過、記下，之後的批次不再選它們，其他過期的對話照樣刪掉。所以一筆一直被鎖住的列不會讓清除停擺，只是它自己留到某一輪發現它沒被鎖時才刪，通常是下一輪。每一筆一直被鎖住的列讓一輪多等最多 6 秒（批次的 5 秒加上單筆的 1 秒）。誰會鎖住過期的列：服務角色連鎖定都做不到（`expired_stay_deleted`），只有剛好在滿 30 天前開始的還原（毫秒內 commit）、或卡住的維運工作階段。
+
+**整張表被鎖住**（`LOCK TABLE`、不是 `CONCURRENTLY` 的 `CREATE INDEX`、`ALTER TABLE`、`VACUUM FULL`，或刪除連帶刪到的 `messages` 被這樣鎖住）時，這一輪提早結束，下一輪再試：一次刪一個也一個都沒刪掉時（每個都還鎖著），或讀這一批的鍵等鎖超過 5 秒時（ACCESS EXCLUSIVE 連讀取都擋），這一輪就停，不是錯誤。一批的每個對話都還鎖著，是整張表被鎖住的跡象，不是個別卡住的列：服務角色鎖不住過期的列，要一個一個鎖住一整批得是維運的人刻意為之。不停的話，這一輪會以每個對話約 1 秒的速度走完整個過期的積壓、什麼都刪不掉，而且走過的每一個都留到下一輪，即使鎖馬上就放開。所以整張表被鎖住時，一輪最多等 5 秒加上一批 100 個各 1 秒，然後停。略過清單只在一次刪一個有刪掉東西時才會變長，而且只多出被個別鎖住的對話，所以不另設上限。死結（`40P01`）或其他錯誤讓這一輪以錯誤結束（`JobLock` 的 WARN），下一個間隔再試。
+
+每一輪結束時記一行，欄位 `job`、`purged`（這一輪刪了幾個，沒有也記 0）與 `skipped`（被鎖住、留到下一輪的個數）：都沒略過時是 INFO `purged expired conversations`，有略過時是 WARN `purged expired conversations; some stayed locked and wait for the next round`，被鎖提早結束時是 WARN `purge round stopped early: a lock held up its deletions; the next round tries again`（`purge::STOPPED_EARLY`）；不記標題、ID、租戶或內容。一次刪一個的每個交易也各有一行 service-kit 的 `platform database access`。無法登入或其他資料庫錯誤由 `JobLock` 記 WARN `scheduled job failed`，錯誤只有類別。
+
+排程只決定滿 30 天的對話多久後真的離開資料庫：能不能還原由 `deleted_at` 與資料庫的 policy 決定，與排程無關。所以刪除的對話在滿 30 天後最多再過一個 `purge.interval`（加上那一輪本身的時間）被刪掉；所有副本都停著時不會清除，重新啟動後的第一輪補上。
+
+## API
+
+路徑都在 `/api/assistant/v1` 底下；入口的路由是 Laysi/trustiot-v2#647。請求要有身分服務簽的內部身分 token（`x-internal-identity`，入口的 ext_authz 由 session cookie 換來），受眾是 `assistant`；服務以身分服務的公鑰檔（`TRUSTIOT_INTERNAL_IDENTITY_KEYS_FILE`）驗證，檔案換了會重新讀（[service-kit 的公鑰與輪替](../../crates/service-kit/README.md#公鑰與輪替)），沒有可用的公鑰時 readiness 不過。回應一律帶 `cache-control: no-store`：對話是個人的資料，service-kit 不設快取標頭。
+
+| 方法與路徑 | 做什麼 | 成功時 |
+| --- | --- | --- |
+| `GET /conversations` | 自己的對話，依最後活動時間由新到舊；預設只列沒封存的，`archived=true` 只列封存的 | 200 `ConversationList` |
+| `POST /conversations` | 開始一個空的對話；送 `Content-Type: application/json`，本文是空的、`null` 或 `{}`；每個使用者在每個租戶 24 小時內最多 100 個 | 201 `Conversation`，`Location` 指向它 |
+| `GET /conversations/{id}` | 對話與聊天顯示的訊息 | 200 `ConversationDetail` |
+| `PATCH /conversations/{id}` | 改名（`title`）、封存或取消封存（`archived`），至少一項，在同一個交易 | 200 `Conversation` |
+| `DELETE /conversations/{id}` | 刪除，30 天內可以還原（期限見已刪除清單的 `restorable_until`） | 204，沒有本文 |
+| `POST /conversations/{id}/restore` | 還原 30 天內刪除的對話；送 `Content-Type: application/json`，本文是空的、`null` 或 `{}` | 200 `Conversation` |
+| `GET /deleted-conversations` | 還能還原的已刪除對話，依刪除時間由新到舊，只有標題與時間 | 200 `DeletedConversationList` |
+
+型別與每個狀態碼在 `api/openapi.json`（tag `assistant`），前端的 client 由它產生。
+
+- **誰看得到**：對話只屬於開始它的使用者。每個請求以 token 的使用者在目前的租戶行事，租戶的每個角色（viewer、editor、admin）都一樣，只能用自己的對話，租戶管理者也看不到別人的對話；檢查的是 store（租戶加使用者）。每個端點先以 service-kit 的共用檢查要求租戶 viewer（`Requirement::Tenant(TenantRole::Viewer)`），沒有租戶或角色是這一版不認得的得 403，在讀 body 與資料庫之前；權限矩陣在 [docs/architecture/permissions.md](../../docs/architecture/permissions.md) 的「assistant」，由 `tests/permissions.rs` 對照。不存在的、別人的、別的租戶的、已刪除的（還原除外）與路徑不是 UUID 的，回應逐位元組相同：404 `not_found`，所以回應不透露對話存不存在。
+- **讀取只給問答**：`GET /conversations/{id}` 的 `messages` 只有問題與回答（`EntryKind::shown`），依時間順序；回答只取 `text` 區塊（`NativeMessage::shown_text`）。thinking、工具呼叫與結果、對話中的指示，以及開頭固定的 system prompt、租戶脈絡、工具定義都不回。捨棄的回合不在裡面。
+- **開始對話**：`Agent::start_conversation` 固定這一版的 system prompt、工具組與模型設定，`store::create` 存在請求租戶的交易裡。租戶脈絡（租戶的設備、資料點、方案、語言、時區）目前沒有來源，傳空字串；它在對話開始時固定，所以現在開始的對話會一直沒有租戶脈絡。每個使用者在每個租戶 24 小時內最多開始 100 個對話，已刪除的也算（見「規則」的開始對話的上限）；超過時回 429，`Retry-After` 是最舊的那個離開 24 小時還要幾秒，什麼都不存，日誌記一行 WARN。
+- **改名與封存**：`title` 去掉前後的空白後要符合標題的規則（見「規則」的標題與清單：1 到 200 個字元，至少一個看得見的字元，不含控制、雙向格式與分行字元），標題來源記為 `user`，之後模型產生的標題不會取代它。封存的對話照常可以讀、可以繼續。
+- **分頁**：照身分服務操作紀錄的慣例：`limit`（1 到 100，預設 50）、`cursor`（上一頁的 `next_cursor`），回應 `{"conversations": [...], "next_cursor": ...}`，最後一頁的 `next_cursor` 是 `null`。順序是（時間、ID）由新到舊，時間相同時看 ID，所以翻頁不重複、不遺漏。`next_cursor` 對客戶端是不透明的，內容是清單的種類、資料庫的時間（微秒，Postgres 的精度）與 ID；沒封存的、封存的與已刪除的三個清單的 cursor 只能用在自己的清單。cursor 不簽章：store 只看呼叫者自己的對話，改過的 cursor 只會移動自己清單的起點。
+- **刪除與還原**：刪除只記下刪除時間（`store::delete`），30 天內 `POST .../restore` 原樣還原，之後清除會刪掉它。有提問進行中、截止時間未過時，刪除回 409，什麼都不改；刪除先鎖住對話那一列才檢查提問，所以與開始提問同時發生時只有一個結果（見「規則」的軟刪除）。
+- **寫入要 JSON**：`POST` 與 `PATCH` 要 `Content-Type: application/json`（防 CSRF，[身分服務的規則](../identity/README.md#租戶)），沒有欄位的開始對話與還原也一樣：送這個 `Content-Type`，本文是空的、`null` 或 `{}`；少了它回 400。`DELETE` 不用（跨 origin 的 `DELETE` 本來就要 preflight）。
+
+| 情況 | 回應 |
+| --- | --- |
+| 沒有有效的內部身分 token（沒有、簽章不對、受眾不是 `assistant`、過期） | 401 `unauthenticated` |
+| token 沒有租戶，或在租戶的角色是這一版不認得的 | 403 `permission_denied` |
+| 不是自己的對話，或已刪除 | 404 `not_found` |
+| 寫入的 `Content-Type` 不是 `application/json` | 400 `invalid_request` |
+| 本文不是只有該端點欄位的 JSON 物件（開始與還原沒有欄位），或超過 4096 bytes | 400 `invalid_request`，`conversation.body_invalid` |
+| 更新沒有 `title` 也沒有 `archived` | 400 `invalid_request`，`conversation.update_empty` |
+| 標題不符上面的規則 | 422 `validation_failed`，欄位 `/title`，`conversation.title_invalid`，`{"max": 200}` |
+| 清單的 `archived` 不是 `true` 或 `false` | 400 `invalid_request` |
+| `limit` 不是 1 到 100 | 400 `invalid_request`，`conversation.limit_invalid`，`{"max": 100}` |
+| `cursor` 不是同一個清單的 `next_cursor` | 400 `invalid_request`，`conversation.cursor_invalid` |
+| 刪除時有提問進行中 | 409 `conflict`，`conversation.question_running`；什麼都沒改 |
+| 24 小時內已開始 100 個對話（`store::MAX_STARTS_PER_DAY`，已刪除的也算）時再開始 | 429 `rate_limited`，`conversation.start_limited`，`{"max": 100}`，`Retry-After`（秒）；什麼都沒存 |
+| 等另一個工作階段鎖住的對話（或其他鎖）超過 2 秒（`api::REQUEST_LOCK_TIMEOUT`，每個請求的交易設的 `lock_timeout`） | 503 `unavailable`，什麼都沒改；日誌記 `database error (SQLSTATE 55P03)`。其他請求只會把對話那一列鎖住一個短交易（毫秒），等這麼久表示有卡住的工作階段，請求把連線還給連線池，不陪它等 |
+| 資料庫失敗 | 503 `unavailable`，什麼都沒寫；日誌只記錯誤的類別（SQLSTATE），不記 Postgres 的訊息、SQL、標題或內容 |
 
 ## 儀表板
 
@@ -218,6 +311,7 @@ service-kit 把這兩種拒絕都記成 INFO（`the identity service refused the
 | 還原的版本與最新版的內容相同 | 409 `conflict`、`dashboard.restore_unchanged` |
 | 儀表板已有 10,000 個版本（發布、還原） | 409 `conflict`、`dashboard.too_many_versions` |
 | 同一個儀表板的兩個寫入同時進行 | 409 `conflict` |
+| 等另一個工作階段鎖住的儀表板（或其他鎖）超過 2 秒（`api::REQUEST_LOCK_TIMEOUT`，每個請求的交易設的 `lock_timeout`） | 503 `unavailable`，什麼都沒寫 |
 | 使用者在一分鐘內已以發布與還原加了 10 個版本，或租戶合計已加 30 個到已儲存的儀表板（草稿另計 30 個）（每個副本） | 429 `rate_limited`、`dashboard.versions_limited`，`Retry-After` 與 `details.retry_after`；只在其他檢查都通過時才計數 |
 | 發布已儲存的儀表板、封存草稿 | 422 `validation_failed`、`dashboard.draft_required`、`dashboard.saved_required` |
 | 資料集執行的錯誤 | 見「資料集的執行」 |
@@ -225,7 +319,7 @@ service-kit 把這兩種拒絕都記成 INFO（`the identity service refused the
 
 ### 儲存
 
-`migrations/postgres/0002_dashboards.sql`，與對話同一個 schema，由 migration Job 套用。兩張表都是租戶資料，依決策 29 啟用 RLS（只隔開租戶；租戶內誰看得到什麼由服務決定，見下方）：
+`migrations/postgres/0003_dashboards.sql`，與對話同一個 schema，由 migration Job 套用。兩張表都是租戶資料，依決策 29 啟用 RLS（只隔開租戶；租戶內誰看得到什麼由服務決定，見下方）：
 
 | 表 | 一列是 | 內容 |
 | --- | --- | --- |
@@ -237,7 +331,7 @@ service-kit 把這兩種拒絕都記成 INFO（`the identity service refused the
 - **還原不複製內容**：還原加的一列只有版本的資料（來源 `restore`、還原的版本、基礎版本、使用者、時間），沒有 runtime、標題、說明、spec 與頁面，`content_version` 指向存著那份內容的版本：還原的版本本身，或它也是還原時它指向的那一版，所以永遠只隔一層。每次讀版本（開啟、版本列表、列表的標題、資料集、發布、工具的 `read`）都從那一列取內容，結果與存著內容的版本逐位元組相同；`restored_from` 仍是使用者選的版本。資料表替每個角色守住：還原的列一定指向同一個儀表板裡、還原的版本的內容所在的那一列（外鍵 `(tenant_id, dashboard_id, restored_from, content_version)` 指向 `(tenant_id, dashboard_id, version, content_at)`，`content_at` 是每一列內容所在的版本），自己沒有任何內容；其他來源的列一定有完整的內容（CHECK）。
 - **儲存只隨新內容增加**：內容只在兩種時候寫進資料庫：工具的寫入（每次都經過模型呼叫、資料集執行與檢查，計入 AI 額度）與發布（要草稿以已儲存儀表板的最新版為基礎）。還原只加一列沒有內容的列，所以在兩個版本之間來回還原也不增加內容的儲存量，只有每分鐘的版本數（上方「發布與還原的次數」）限制列數。一個版本的內容最多是 spec 與頁面合計 56 KiB（頁面最多 40 KiB）、標題 120 字、說明 500 字，約 60 KiB：工具寫入前由 `validate_version` 檢查，資料表的 CHECK 對每個角色再檢查一次。
 - **一個操作一個交易**：`dashboards::store` 的每個函式是一個完整的操作，在呼叫者租戶的 `TenantTransaction` 裡單獨呼叫，成功才 commit。寫入先鎖儀表板的列（`FOR UPDATE`）再讀最新版本，所以同一個儀表板的寫入排隊，以舊版本為基礎的寫入被拒；發布先鎖草稿再鎖已儲存的儀表板，沒有反過來的順序。發布在資料庫裡複製版本的內容，所以複本與來源逐位元組相同。錯誤是 `StoreError`，不帶資料庫的文字或內容；日誌只記 `StoreError::log_kind`。
-- **誰看得到**：已儲存的儀表板是租戶的每個成員；草稿只有對話的擁有者。草稿的可見性只在一個地方決定：`store::conversation_access` 的一個查詢（`CONVERSATION_OWNER`）。Laysi/trustiot-v2#644（對話的軟刪除）在那個查詢加上 `AND deleted_at IS NULL`，並在寫入時以 `FOR SHARE` 鎖住對話（服務角色現在對對話沒有 UPDATE，鎖不了；`tests/dashboards_store.rs` 有一個等 #644 的 `#[ignore]` 測試）；Laysi/trustiot-v2#650（共享的讀者）在同一個函式加上讀者的存取。
+- **誰看得到**：已儲存的儀表板是租戶的每個成員；草稿只有對話的擁有者。草稿的可見性只在一個地方決定：`store::conversation_access` 的一個查詢（`CONVERSATION_OWNER`）。對話的軟刪除（Laysi/trustiot-v2#644）還沒接到草稿：那個查詢要加上 `AND deleted_at IS NULL`，並在寫入時以 `FOR SHARE` 鎖住對話（`0002_conversation_threads.sql` 給了服務角色對話的欄位 UPDATE，所以鎖得了；`tests/dashboards_store.rs` 有一個等著它的 `#[ignore]` 測試）；Laysi/trustiot-v2#650（共享的讀者）在同一個函式加上讀者的存取。
 - **誰能改**：`store::permissions` 是唯一的規則，API 回的 `permissions` 與 store 的檢查都用它：草稿的擁有者可以還原（任何角色）、editor 以上的擁有者可以發布；已儲存的儀表板由 editor 以上還原與封存。
 
 ### 資料集的執行
@@ -304,9 +398,11 @@ chart 的記憶體上限（`services.assistant.resources`，requests 128Mi、lim
 | 設定 | 變數 | 預設 | 說明 |
 | --- | --- | --- | --- |
 | 平台設定 | `TRUSTIOT_POSTGRES_HOST`、`_PORT`、`_DATABASE`、`_SSLMODE`、`_CA_FILE` | 必填 | Postgres 的位置；只接受 `verify-full`，`_CA_FILE` 是伺服器憑證唯一的信任錨。由部署設定（chart、`bun scripts/dev.ts env`） |
-| 平台設定 | `TRUSTIOT_INTERNAL_IDENTITY_KEYS_FILE` | 必填 | 身分服務公鑰（JWK Set）的檔案，公開 API 以它驗證每個請求的內部身分 token；執行期間每 5 秒重讀，讀到可用的公鑰之前 readiness 不過。chart 在身分服務開啟時給每個服務（身分服務沒開啟時本服務拒絕啟動），本機是 `bun scripts/dev.ts env` |
-| `database.username`、`database.password` | `TRUSTIOT__DATABASE__USERNAME`、`TRUSTIOT__DATABASE__PASSWORD` | 必填 | 服務角色 `assistant_app` 的帳密；chart 的密碼來自 Secret `<release>-assistant-password` 的 `assistant_app` key。沒有平台角色 |
-| `database.max_connections` | `TRUSTIOT__DATABASE__MAX_CONNECTIONS` | `4` | 服務角色連線池每個副本的上限，2 到 100；readiness 與儀表板 API 的短交易共用（資料集執行呼叫 telemetry-query 時不佔連線），聊天 API（Laysi/trustiot-v2#146）存對話時再調整。取得連線最多等 5 秒（`ACQUIRE_TIMEOUT`）。chart 以 `services.assistant.database.maxConnections`（預設 4）設定，算進 chart 的連線預算 |
+| 平台設定 | `TRUSTIOT_INTERNAL_IDENTITY_KEYS_FILE` | 必填 | 身分服務公鑰（JWK Set）的檔案，API 以它驗證每個請求的內部身分 token；執行期間每 5 秒重讀，讀到可用的公鑰之前 readiness 不過。chart 在身分服務開啟時給每個服務（身分服務沒開啟時本服務拒絕啟動），本機是 `bun scripts/dev.ts env` |
+| `database.username`、`database.password` | `TRUSTIOT__DATABASE__USERNAME`、`TRUSTIOT__DATABASE__PASSWORD` | 必填 | 服務角色 `assistant_app` 的帳密；chart 的密碼來自 Secret `<release>-assistant-password` 的 `assistant_app` key |
+| `database.platform_username`、`database.platform_password` | `TRUSTIOT__DATABASE__PLATFORM_USERNAME`、`TRUSTIOT__DATABASE__PLATFORM_PASSWORD` | 必填 | 平台角色 `assistant_platform` 的帳密，只給清除用；不能與服務角色相同。chart 的密碼來自同一個 Secret 的 `assistant_platform` key |
+| `database.max_connections` | `TRUSTIOT__DATABASE__MAX_CONNECTIONS` | `8` | 服務角色連線池每個副本的上限，4 到 100：readiness 最多同時兩條（`postgres` 與 migration 檢查）、清除的 job lock 一條，其餘給 API 的請求（每個請求一條；儀表板的資料集執行呼叫 telemetry-query 時不佔連線）與 `dashboard` 工具寫入的短交易。取得連線最多等 5 秒（`ACQUIRE_TIMEOUT`），等不到時請求回 503。chart 以 `services.assistant.database.maxConnections`（預設 8）設定，算進 chart 的連線預算 |
+| `purge.interval` | `TRUSTIOT__PURGE__INTERVAL` | `1h` | 排程清除的間隔，1 分鐘到 24 小時（見[排程清除](#排程清除)） |
 | `ai_gateway.url` | `TRUSTIOT__AI_GATEWAY__URL` | 必填 | AI 閘道的 `http://<host>[:<port>]`，不能有路徑、帳密或 query；mesh 內由 ztunnel 加上 mTLS |
 | `ai_gateway.role` | `TRUSTIOT__AI_GATEWAY__ROLE` | `main` | 主 agent 用的模型角色 |
 | `ai_gateway.max_response_bytes` | `TRUSTIOT__AI_GATEWAY__MAX_RESPONSE_BYTES` | 32 MiB | 回應本文超過就算失敗；1 KiB 到 256 MiB |
@@ -359,9 +455,17 @@ chart 的記憶體上限（`services.assistant.resources`，requests 128Mi、lim
 | `removed content from an answer` | INFO | `run_id`、`conversation_id`、`tenant_id`、`removed`（`code`、`html`、`sql`，逗號分隔） |
 | `published a dashboard`、`restored a dashboard version` | INFO | `user_id`、`tenant_id`、`from`（發布的草稿或還原的儀表板）、`dashboard_id`、`version`（新的版本） |
 | `changed whether a dashboard is archived` | INFO | `user_id`、`tenant_id`、`dashboard_id`、`archived` |
-| `refused a dashboard version: the user or tenant used the minute's budget` | INFO | `user_id`、`tenant_id`、`action`（`publish`、`restore`）、`retry_after`（秒）；公開 API 的 429 `dashboard.versions_limited` |
-| `refused: no tenant or no known role in it` | INFO | `user_id`、`action`；公開 API 的 403 |
-| `could not …`（例如 `could not publish a dashboard`、`could not open a transaction for an API request`） | ERROR | `user_id`、`dashboard_id`（有的時候）、`error_kind`（SQLSTATE 或錯誤的種類，沒有資料庫的文字）；公開 API 的 503 與 500 |
+| `refused a dashboard version: the user or tenant used the minute's budget` | INFO | `user_id`、`tenant_id`、`action`（`publish`、`restore`）、`retry_after`（秒）；儀表板 API 的 429 `dashboard.versions_limited` |
+| `refused: no tenant or no known role in it` | INFO | `user_id`、`action`；儀表板 API 的 403 |
+| `dashboard request failed` | ERROR | `user_id`、`dashboard_id`（有的時候）、`action`、`error_kind`（SQLSTATE 或錯誤的種類，沒有資料庫的文字）；儀表板 API 的 503 與 500 |
+| `conversation started`、`conversation updated`、`conversation deleted`、`conversation restored` | INFO | `user_id`、`tenant_id`、`conversation_id`；`conversation updated` 另有 `renamed`（有沒有改名）與 `archived`；不記標題 |
+| service-kit 的 `refused to <動作>` | INFO | `user_id`、`tenant_id`、`action`、`reason`（`no_tenant`、`unrecognized_role`）、`exchanged`、`actor`：API 的請求不符角色要求（403，[service-kit 的 README](../../crates/service-kit/README.md)） |
+| `conversation start refused: the user reached the daily limit` | WARN | `user_id`、`tenant_id`、`action`、`max`（100）、`retry_after_secs`：開始對話超過每日上限（429），每次被拒一行 |
+| `could not start a database transaction`、`conversation request failed` | ERROR | `user_id`、`action`、`error`（只有類別，例如 `database error (SQLSTATE 23505)`），後者另有 `conversation_id`；API 回 503（前者也是儀表板的請求） |
+| `purged expired conversations` | INFO | `job`（`purge`）、`purged`（這一輪刪了幾個對話）、`skipped`（0）；每一輪一行 |
+| `purged expired conversations; some stayed locked and wait for the next round` | WARN | `job`、`purged`、`skipped`（被鎖住、留到下一輪的個數）；取代上一行，每一輪一行。等鎖逾時的批次另有 sqlx 超過慢查詢門檻的 WARN（只有 SQL，沒有值） |
+| `purge round stopped early: a lock held up its deletions; the next round tries again` | WARN | `job`、`purged`、`skipped`：整張表被鎖住，一輪提早結束（見「排程清除」）；取代上面兩行，每一輪一行 |
+| service-kit 的 `platform database access`、`scheduled job failed` | INFO、WARN | 清除每一批的平台交易（`purpose`）；一輪失敗時的 `job` 與只有類別的 `error`（[service-kit 的 README](../../crates/service-kit/README.md)） |
 
 不記問題、回答、工具輸入與結果、錯誤訊息、儀表板的標題、SQL 或頁面，也不記被呼叫服務的 URL、查詢參數、回應本文與 token（只記狀態碼的類別）。欄位名稱都不會被 service-kit 的遮蔽規則擋掉（不用 `token`、`tokens`、`prompt`、`content` 這些字）。指標 `assistant.model_calls` 依 `outcome` 與 `cache`（`hit` 或 `miss`）計數；`cache_read` 長期為 0（只有 `miss`）表示快取失效，要接到監控（Laysi/trustiot-v2#554 以真實 API 驗證快取）。
 
@@ -369,19 +473,21 @@ chart 的記憶體上限（`services.assistant.resources`，requests 128Mi、lim
 
 | 項目 | 介接點 |
 | --- | --- |
-| 聊天 API 與串流（Laysi/trustiot-v2#146） | `Agent::start_conversation`、`Agent::ask` |
-| 回答被過濾的標示（Laysi/trustiot-v2#645、#646） | `Answer::removed`（移除的類別，空集合時沒有移除）隨回答回給前端，畫面顯示 `answer_guard::CONTENT_REMOVED`（`assistant.answer_content_removed`）。歷史存的是過濾後的文字，所以重新載入對話時要再顯示標示，就要把 `removed` 也存下來（例如回答訊息旁的欄位）：由這兩個 issue 決定欄位與 migration |
+| 在對話裡發問與串流（Laysi/trustiot-v2#646、Laysi/trustiot-v2#147） | `api::conversations` 加端點，以 `store::load` 讀出對話、`Agent::ask` 回答，提問紀錄與寫入見[給聊天 API 的介面](#給聊天-api-的介面) |
+| 回答被過濾的標示（Laysi/trustiot-v2#646） | `Answer::removed`（移除的類別，空集合時沒有移除）隨回答回給前端，畫面顯示 `answer_guard::CONTENT_REMOVED`（`assistant.answer_content_removed`）。歷史存的是過濾後的文字，所以重新載入對話時要再顯示標示，就要把 `removed` 也存下來（例如回答訊息旁的欄位）：由這兩個 issue 決定欄位與 migration |
 | 串流的過濾（Laysi/trustiot-v2#147） | `answer_guard::find`：對目前為止的文字執行，暫緩送出從第一個延伸到結尾的發現處開始的文字；回答結束時以 `guard` 的結果為準 |
-| 聊天 API 開始一個問題（Laysi/trustiot-v2#146） | 處理請求時以 `delegation::QuestionRuns::start(&UserIdentity, conversation.principal())` 取得 `QuestionRun`，交給 `Agent::ask`；`Assistant::runs` 為 `None`（沒有設定 `identity.exchange_url`）時改用 `tools::NoDelegation`。`StartError` 已實作 `IntoResponse`（見「代表使用者呼叫」） |
+| API 的其他資源 | `api` 底下加一個模組，在 `api::routes` 合併它的路由、在 `ApiDoc` 列出它的端點；身分、錯誤回應、交易、分頁與 cursor 用 `api` 的共用函式 |
+| 租戶脈絡的來源 | 開始對話時傳給 `Agent::start_conversation` 的文字，現在是空字串（`api::conversations` 的 `TENANT_CONTEXT`）；它在對話開始時固定 |
+| 發問時開始一個問題（Laysi/trustiot-v2#646） | 處理請求時以 `delegation::QuestionRuns::start(&UserIdentity, conversation.principal())` 取得 `QuestionRun`，交給 `Agent::ask`；`Assistant::runs` 為 `None`（沒有設定 `identity.exchange_url`）時改用 `tools::NoDelegation`。`StartError` 已實作 `IntoResponse`（見「代表使用者呼叫」） |
 | 更多工具 | 實作 `tools::Tool`，放進 `ToolRegistry`（最多 10 個），以 `callee::Callee` 呼叫服務；工具從 `ToolContext.principal` 取租戶與使用者，不從輸入取 |
-| 對話存進 Postgres（Laysi/trustiot-v2#553 已完成儲存，連線池由 Laysi/trustiot-v2#592 接上） | `store::create`、`store::append`、`store::load`，在對話租戶的 `TenantTransaction` 裡呼叫，交易取自 `start` 建立的 `TenantDb`（現在給 readiness 與儀表板 API 用），見[對話的儲存](#對話的儲存postgres) |
-| 對話的軟刪除（Laysi/trustiot-v2#644） | `dashboards::store` 的 `CONVERSATION_OWNER` 加上 `AND deleted_at IS NULL`，寫入時以 `FOR SHARE` 鎖對話；拿掉 `tests/dashboards_store.rs` 那個測試的 `#[ignore]` |
+| 對話存進 Postgres（Laysi/trustiot-v2#553 儲存、Laysi/trustiot-v2#644 對話串與提問紀錄已完成，連線池由 Laysi/trustiot-v2#592 接上） | `store` 的函式，在對話租戶的 `TenantTransaction` 裡呼叫，交易取自 `start` 建立的 `TenantDb`（API 的每個請求一個交易）；清除另用 `assistant_platform` 的 `PlatformDb`（`src/purge.rs`，見[排程清除](#排程清除)），見[給聊天 API 的介面](#給聊天-api-的介面) |
+| 對話軟刪除時隱藏草稿（Laysi/trustiot-v2#644 的對話軟刪除已完成） | `dashboards::store` 的 `CONVERSATION_OWNER` 加上 `AND deleted_at IS NULL`，寫入時以 `FOR SHARE` 鎖對話；拿掉 `tests/dashboards_store.rs` 那個測試的 `#[ignore]` |
 | 對話共享的讀者（Laysi/trustiot-v2#650） | `dashboards::store::conversation_access` 回讀者的存取（新的 `Access`），`store::permissions` 決定讀者能做什麼 |
 | 每次呼叫預扣額度（Laysi/trustiot-v2#140） | 每次呼叫的 `ModelRequest::call_id`（帳本的 `llm_call_id`，現在只記在日誌）；閘道拒絕時以 `ModelError` 回到迴圈 |
 
 ## 測試
 
-`cargo test -p assistant`（`tests/history_store.rs`、`tests/startup.rs`、`tests/dashboards_store.rs`、`tests/dashboards_api.rs` 與 `tests/cross_tenant.rs` 以 podman 或 docker 起一個拋棄式 TLS Postgres，以 migration Job 套用整個產品的 schema；沒有容器執行環境時在本機略過，設了 `CI` 時失敗）。`tests/dashboard_acceptance.rs` 的兩個驗收測試預設 `#[ignore]`，因為要檢查服務的映像檔：`bun test deploy/images/dashboard-check` 建出 `localhost/trustiot-e2e/dashboard-check:image-test` 之後，`DASHBOARD_CHECK_IMAGE=<映像檔> cargo test -p assistant --test dashboard_acceptance -- --ignored`（加 `--nocapture` 印出每個比對的值）；以 docker（沒有時 podman）起檢查服務、Postgres 與 ClickHouse，一次跑一個，沒有映像檔或容器執行環境時略過，設了 `CI` 時失敗。CI 目前不跑這兩個測試。測試以本機 loopback 上的替身 AI 閘道回放 `tests/fixtures/` 的回應（取自官方文件，見該目錄的 README），不呼叫供應商，也沒有 API key。
+`cargo test -p assistant`（`tests/history_store.rs`、`tests/conversation_threads.rs`、`tests/api.rs`、`tests/purge_job.rs`、`tests/purge_locks.rs`、`tests/startup.rs`、`tests/dashboards_store.rs`、`tests/dashboards_api.rs` 與 `tests/cross_tenant.rs` 以 podman 或 docker 起一個拋棄式 TLS Postgres，以 migration Job 套用整個產品的 schema；沒有容器執行環境時在本機略過，設了 `CI` 時失敗）。`tests/dashboard_acceptance.rs` 的兩個驗收測試預設 `#[ignore]`，因為要檢查服務的映像檔：`bun test deploy/images/dashboard-check` 建出 `localhost/trustiot-e2e/dashboard-check:image-test` 之後，`DASHBOARD_CHECK_IMAGE=<映像檔> cargo test -p assistant --test dashboard_acceptance -- --ignored`（加 `--nocapture` 印出每個比對的值）；以 docker（沒有時 podman）起檢查服務、Postgres 與 ClickHouse，一次跑一個，沒有映像檔或容器執行環境時略過，設了 `CI` 時失敗。CI 目前不跑這兩個測試。測試以本機 loopback 上的替身 AI 閘道回放 `tests/fixtures/` 的回應（取自官方文件，見該目錄的 README），不呼叫供應商，也沒有 API key。
 
 | 檔案 | 內容 |
 | --- | --- |
@@ -389,9 +495,13 @@ chart 的記憶體上限（`services.assistant.resources`，requests 128Mi、lim
 | `tests/tools.rs` | 工具組規則（最多 10 個、名稱、schema）；並行執行、結果依呼叫順序；一步超過呼叫數上限的呼叫不執行；輸入錯誤、失敗、panic、逾時、不存在的工具各自回錯誤給模型；結果超過大小與圖片上限時請模型縮小範圍；工具拿到的身分來自對話；圖片照 Anthropic 格式送給模型；一步被丟下時（提問的截止時間）還在跑的呼叫跟著取消，沒送出任何東西 |
 | `tests/delegated_tools.rs` | 四個呼叫服務的工具各以使用者身分、受眾正確且在呼叫當下交換的 token 呼叫服務，請求裡沒有租戶或使用者，超過 60 秒後的呼叫仍成功、舊 token 會被拒（替身以「每次模型呼叫過 61 秒」的虛擬時鐘模擬，不真的等）；服務回 403、404、422、503 與非 JSON 時模型與日誌都看不到回應本文；身分服務拒絕交換（撤銷）時該步停止、問題結束、不再重試；身分服務暫時無法使用只讓該次呼叫失敗；問題在委派到期前結束、沒有剩餘時間的問題不開始；只有對話的使用者能開始問題，為別人的對話建立的 run 在送出任何東西前被拒；裝置寫的長文字截到 256 個字元、加上截斷標記才給模型；工具輸入不收租戶、使用者與多餘欄位；工具的路徑與上限跟 telemetry-query、assets 的程式一致；語意工具以 POST 送出的本文是 API 的 `SeriesQuery`（替身照服務的型別解析、拒絕未知欄位），輸入 schema 與 `telemetry_query::openapi()` 的 `SeriesQuery` 一致；列數超過服務上限時不呼叫 |
 | `tests/history_store.rs` | 主 agent 跑完的對話（thinking 與 signature、工具呼叫與結果）存進去、讀回來逐位元組相同，載入的對話接著問時請求的前段與歷史和原本的逐位元組相同；服務角色的 UPDATE、DELETE、TRUNCATE 在租戶交易內外都被資料庫拒絕（`42501`）；重複寫入不改變什麼，兩個寫入者分岔時後者被拒、不覆寫，空洞與沒建立的對話被拒；其他租戶與同租戶的其他使用者載入不到；損壞的列讓載入失敗 |
-| `tests/startup.rs` | 執行檔本身：以 `assistant_app` 登入、讀到身分服務的公鑰檔、資料庫有這一版的 migration 時 `/readyz` 回 200，日誌記下工具數（設了 `dashboard_check.url` 時六個）與可以執行資料集且不含密碼；密碼錯誤時 readiness 記下失敗、回 503；少了一個 migration 檔案時日誌寫出缺的檔案、回 503，補回後恢復 |
-| `tests/chart_connections.rs` | chart 的 Postgres 連線預算（`trustiot.postgres.connectionBudgets`）與程式開的連線池一致：沒有其他連線池，`database.maxConnections` 的範圍與服務接受的相同；程式多了一個連線池時失敗 |
-| `tests/cross_tenant.rs` | 跨租戶負向測試（決策 29，`crates/testkit`）：對話、訊息、儀表板與版本四張表的讀、寫、搬移、插入探測與覆蓋檢查；對執行檔的每個儀表板端點（發布與對話的草稿列表除外，原因寫在豁免裡，由 `tests/dashboards_api.rs` 手寫測試），資料集執行的正向對照經替身的 token 交換與 telemetry-query 真的跑完，沒有呼叫其他服務 |
+| `tests/api.rs` | 對話串的 API，經執行檔本身（`tests/service/mod.rs` 起子行程）、真的身分驗證（測試簽發者簽的 token 與公鑰檔）與產品 schema：沒有 token、別的簽發者、給 assets 的 token 在每個端點都 401，沒有租戶 403，都帶 `no-store`、什麼都沒建立；同租戶的其他使用者（viewer、editor、admin）三個清單都是空的，對擁有者的對話（一般、封存、已刪除）的每個 ID 請求與不存在的 ID 逐位元組相同（404），資料不變；擁有者自己的請求也一樣：路徑 ID 不是 UUID 的每個請求、已刪除對話的讀取、改名、封存與刪除、還原沒刪除的與刪除超過 30 天的，回應都與同一個請求對不存在的 ID 逐位元組相同（狀態、本文、`content-type`、`cache-control`）；真的主 agent 經替身模型思考、呼叫工具、回答後存起來，讀取只回問題與回答的文字，thinking、工具輸入與結果、工具定義、租戶脈絡、system prompt 的標記都不在回應裡（但都在資料庫裡）；改名去空白、各種 400 與 422、封存與取消封存、預設與 `archived=true` 的清單、12 個對話（5 個最後活動時間相同）以每頁 5 個走完不重複不遺漏、錯的 `limit` 與錯清單或改寫過的 cursor 回 400；刪除後離開清單、讀取 404、在已刪除清單（`restorable_until` 是 30 天後），還原後讀取與每一列都和刪除前相同；有提問進行中時刪除回 409、資料不變；超過 30 天的不在已刪除清單、還原 404，一輪清除把它連同訊息與提問紀錄刪掉，其他對話不受影響；開始對話要 JSON 的 `Content-Type`，接受沒有本文、`null` 與 `{}`，回 201 與 `Location`，存的租戶脈絡是空的；日誌沒有標題；資料庫失敗（測試加的唯一索引讓第二次開始對話以 `23505` 失敗）時回 503，回應與日誌都沒有 Postgres 的訊息與 DETAIL（`duplicate key`、索引名稱、`Key (`、`already exists`），日誌只有 `database error (SQLSTATE 23505)`，什麼都沒存；那個索引以 `CONCURRENTLY` 建立與刪除，同一個執行檔的其他測試共用資料庫，它們的請求不會排在這些 DDL 後面：刪除等著測試開著的交易時，同租戶另一個使用者的讀取與開始對話立刻回 200 與 201（一般的 `DROP INDEX` 拿 ACCESS EXCLUSIVE，會讓它們等到 lock timeout 回 503，測試確認過）；另一個工作階段鎖住對話那一列時，改名與刪除在 `REQUEST_LOCK_TIMEOUT` 後回 503、日誌記 `55P03`、資料不變，鎖放開後同樣的請求成功；24 小時內開始了 100 個對話（其中 40 個已刪除）後再開始回 429 `rate_limited`、`conversation.start_limited`、`details.max` 100、`Retry-After`（依最舊的那個，一小時前開始的是 23 小時）與 `no-store`，什麼都沒存、每次記一行 WARN（使用者與租戶），刪除不會還回名額，同租戶的其他使用者與同一個使用者在別的租戶不受影響，把一個的開始時間移到 24 小時前後可以再開始一個；24 個請求同時搶最後 5 個名額時剛好 5 個成功、存的不超過 100 |
+| `tests/startup.rs` | 執行檔本身：以 `assistant_app` 登入、有身分服務的公鑰、資料庫有這一版的 migration 時 `/readyz` 回 200，日誌記下工具數（設了 `dashboard_check.url` 時六個）與可以執行資料集且不含密碼；服務角色或平台角色的密碼錯誤時 readiness 記下失敗、回 503，日誌沒有密碼；少了一個 migration 檔案時日誌寫出缺的檔案、回 503，補回後恢復 |
+| `tests/purge_job.rs` | 排程清除，經兩個執行檔共用一個資料庫：第一個副本的一輪被測試加的觸發器擋在 DELETE 裡（`pg_sleep` 等測試開閘，不靠時間）時，job lock 在服務角色的連線上，第二個副本記下跳過這一輪、沒開平台交易；開閘後第一個副本刪掉過期的對話連同訊息，記 `purged` 為 1；這個對話有帶標記的標題，兩個副本的日誌（stdout 與 stderr）都沒有它的 ID、租戶與標題；兩個副本的 readiness 都是 200。觸發器會擋住其他測試的清除，所以是自己的測試執行檔、自己的 Postgres |
+| `tests/purge_locks.rs` | 清除遇到整張表被鎖住：superuser 以 `LOCK TABLE ... IN SHARE MODE` 擋住所有 DELETE（讀取不擋）時，一輪在一次刪一個的那一批後就停（只開了批次、讀鍵與每個對話各一個平台交易，沒有第二批），`Round { purged: 0, skipped: 3 }`，一行 WARN `purge round stopped early: ...`，只有計數；以 `ACCESS EXCLUSIVE` 連讀取都擋時，一輪在鎖還在的時候就結束（讀鍵等 `PURGE_LOCK_TIMEOUT` 後放棄），什麼都沒刪，同樣一行 WARN；鎖放開後下一輪全部刪掉，記 INFO。表鎖會擋住共用資料庫的其他測試，所以是自己的測試執行檔、自己的 Postgres；兩個測試輪流執行 |
+| `tests/chart_connections.rs` | chart 的 Postgres 連線預算（`trustiot.postgres.connectionBudgets`）與程式開的連線池一致：服務角色的連線池以 `database.maxConnections` 設定、範圍與服務接受的相同，平台角色的連線池（`PLATFORM_CONNECTIONS`）是 `otherPools`；程式多了一個連線池時失敗 |
+| `tests/conversation_threads.rs` | 對話串（Laysi/trustiot-v2#644）：刪除的對話對擁有者與同租戶的人都不存在、只在擁有者的已刪除清單出現，還原後每一列與刪除前相同；滿 30 天的不能還原，清除連同訊息、捨棄紀錄與提問紀錄刪掉（跨租戶），沒過期的與沒刪除的不受影響；清除角色只看得到、刪得掉過期的對話（它的交易自己設定租戶也一樣），碰不到訊息，服務角色什麼都刪不掉（`42501`）；還原與清除、刪除與寫入、刪除與開始提問同時發生時兩種順序各測一次（以 `pg_blocking_pids` 確認後到的一方在等鎖，不靠時間）；捨棄最後一輪後歷史與之前逐位元組相同、下一輪接在後面，捨棄不是最後一輪的被拒；同時開始兩個提問只有一個成功，過了截止時間的提問在下一次開始時變成 `interrupted`；有進行中提問的對話刪除被拒、資料不變，過了截止時間（包括在刪除的交易開始之後才過）的不擋；清除的一批等不到列鎖時在 `PURGE_LOCK_TIMEOUT` 後以 `55P03` 失敗、什麼都不刪；最舊的過期對話整輪都被另一個工作階段鎖住時，`purge::round` 刪掉較新的那個、略過被鎖的（`skipped` 為 1，一行 WARN，沒有 ID 與租戶），鎖放開後下一輪刪掉它，記一行 INFO，平台角色的 `SKIP LOCKED` 被拒（`42501`）；同租戶的其他使用者讀、改名、封存、刪除、還原、捨棄、開始與停止提問都當作不存在、資料不變；資料庫拒絕指定 `created_at`、`started_at` 與往前改的時間（`42501`），拒絕超過 32 MiB 的訊息（`23514`）；`StoreError` 不含 Postgres 的訊息與 DETAIL；到開始對話的上限時 `store::create` 回 `StartLimited`（秒數依最舊的那個）、什麼都不存，重試已存的對話不算新的；標題規則、封存、只列封存的與清單分頁 |
+| `tests/cross_tenant.rs` | 跨租戶負向測試（決策 29，`crates/testkit`）：六張表（對話、訊息、捨棄的回合、提問紀錄、儀表板、儀表板的版本）的讀、寫、搬移、插入探測與覆蓋檢查；API 的每個 operation 都宣告：對話的清單、讀取、改名與封存、刪除、開始對話，已儲存儀表板的清單、讀取、版本列表、還原、封存、取消封存與資料集執行，以及草稿的發布，經執行檔本身探測（資料集執行的正向對照經替身的 token 交換與 telemetry-query 真的跑完，沒有呼叫其他服務）；對話與草稿是同一個人在兩個租戶各自擁有的（`owned`），所以只靠租戶分開；已刪除清單與還原只對已刪除的對話有作用，suite 種不出來，由同一個檔案的 `deleted_conversations_stay_in_their_tenant` 手動探測：在租戶 A 看不到、還原不了租戶 B 刪除的對話（與不存在的 ID 逐位元組相同的 404，資料不變），沒有租戶時都 403，在租戶 B 照常列出與還原；對話的草稿列表的路徑參數是對話的 ID，suite 指定不了，由 `tests/dashboards_api.rs` 手寫測試 |
 | `tests/dashboards_store.rs` | `dashboards::store` 對真的 schema：版本只往後加、舊版本讀得回來；發布第一次建立已儲存的儀表板、之後加版本，已儲存的儀表板在發布的版本的基礎版本之後有新版本或已封存時拒絕；誰可以發布、還原、封存；工具只寫自己對話的草稿（別的對話與別的使用者都是不存在）；列表分頁與只列看得到的；服務角色改不了寫過的東西（觸發器與權限，`42501`，包括版本的基礎版本；草稿的基礎版本可以降或清掉）、沒有已儲存儀表板的草稿與已發布的版本不能有基礎版本、留不下空洞；草稿的建立者不是對話的擁有者時資料庫拒絕；清除對話時刪掉草稿（包括還原的列）、留下已發布的；還原只加沒有內容的列、指向存著內容的版本（交替還原兩個版本時只隔一層），每一版（開啟、資料集、版本列表、列表的標題）讀回自己的內容，發布還原的版本時複製內容；資料表拒絕指向另一個還原、與還原的版本不符、帶著內容、沒有內容也沒有指向，或不是還原卻指向內容的列；同一個草稿同時寫入時排隊、後者衝突；軟刪除的對話（等 Laysi/trustiot-v2#644，`#[ignore]`） |
 | `tests/dashboards_api.rs` | 公開 API 對真的 schema 與替身的 token 交換、telemetry-query：沒有 token、偽造的 token、沒有租戶時每個路由都拒絕；本文、query string 與 content type 不對時 400 而且什麼都沒寫（含 SQL、頁面等欄位、陣列寫法）；回應都是 `no-store`；請求的角色決定誰能發布、還原、封存（同一個使用者升降級後立即生效）；同租戶的其他使用者與其他租戶的 admin 對別人的草稿每個路由都是 404，與不存在的相同；版本、還原、發布衝突與封存；發布比較那一版自己的基礎版本：合併了新版本之後，合併前的版本不能發布到較新的已儲存版本上，還原舊版本帶回它的基礎版本（再發布與之後工具寫的版本都回 409），還原合併過的版本則能發布；第一次發布前寫的版本（包括發布出去的那一版）與從它們還原的版本不能再發布，之後工具寫的版本也一樣，直到合併已儲存的最新版；發布與還原每個使用者每分鐘第 11 個版本、每個租戶的草稿第 31 個版本回 429 與 `Retry-After`、什麼都沒寫，已儲存的儀表板另計（草稿用完時仍能發布）；被 store 拒絕的請求（舊的基礎版本、viewer 的 40 次發布、不存在的版本）不算，其他租戶照常；回到與最新版內容相同的版本回 409、不加版本，草稿的還原不加已儲存儀表板的版本；10,000 個版本的儀表板不能再還原或發布、回 409 與原因；資料集以打開的 viewer 身分執行（token 的使用者、租戶、角色、受眾與 `act`），請求本文原樣、SQL 的列數上限 2,000；超過列數時拒絕並附上限；第 61 次執行與第三個同時執行回 429 而其他租戶照常、`dashboard` 工具的執行算進同一個上限；四個租戶各有 2 次執行在等很慢的 telemetry-query 時，第五個租戶的執行立即完成；執行的回應本文還沒讀時佔著結果 JSON 長度的記憶體，讀完放掉或沒讀就丟棄都放回，經 TCP 時用戶端拿到整個本文後放回；約 1.5 MB 的回應本文，讀取的讀者逐位元組拿到整個本文，停止讀取的讀者（小的 socket 緩衝，測試把時限設成 1 秒）一直不讀，伺服器仍在時限後關閉它的連線，記憶體這時已放回，再讀時只拿到不完整的本文；租戶的份額被佔滿時它的執行在 telemetry-query 回答後回 429（`Retry-After: 1`）、不讀回答、算進每分鐘的次數，其他租戶照常，記憶體放回後再執行；telemetry-query 的錯誤只以封閉的 key 回給使用者；沒有 token 交換時 503；打開儀表板並執行全部資料集不呼叫模型、日誌沒有標題、SQL 或頁面 |
 | `tests/dashboard_tool.rs` | `dashboard` 工具對真的 schema、替身的 token 交換、telemetry-query 與檢查服務：寫入以提問的使用者身分（委派、受眾、`act`）執行每個資料集，把頁面、公開的 spec（沒有 SQL 與語意請求）與結果送去檢查，通過後才存成這個對話的草稿，`list` 與 `read` 看得到（頁面整份）；檢查不通過（數值對不上、沒對應的圖形、較新的問題種類）與每種拿不到判定的情況（503、400、500、不是判定、引用了頁面沒有的資料集、值不在資料裡（不通過與通過的判定都是）、連不上、逾時）都什麼都不存、草稿的最新版本不變，模型與日誌都看不到檢查服務的本文；模型從判定只拿到封閉的值與工具自己的資料：script 錯誤的類別而不是訊息、刻度只給軸、超出結果的列只給自己的列數、頁面文字沒有的數字不給、`too_large` 的上限是 contract 的，通過時標記的值取自自己的資料、不含刻度；別的對話、別的使用者、別的租戶的草稿都是不存在，`base_version` 舊了或沒給、輸入格式不對、`page` 與 `page_edits` 同時給、頁面過大、資料集太多各自回固定的問題，第 7 次寫入被拒、下一個問題重新計算；已儲存的儀表板只變成這個對話的一個草稿（第二次指出既有的草稿）、封存的不能改；`rebase_saved_version` 只接受這個問題讀過的已儲存版本（讀了別的版本、別的問題讀過或只讀了草稿都拒絕，不送檢查），讀過之後寫入成功、草稿以那一版為基礎；telemetry-query 拒絕 SQL 時回 `telemetry_sql` 的類別說明，拒絕本文多了欄位時只回通用說明；撤銷的工作階段結束整個呼叫；剩下的時間不夠時不開始；同一個問題的同一個資料集只執行一次；資料集在寫入的時限內（測試設 3 秒）沒跑完時各回 `dataset_timeout`、不送檢查，跑完的留給同一個問題的下一次寫入、那次只執行沒跑完的；工具自己的呼叫時限大於資料集、檢查與存檔時限的總和；一個租戶的第二次寫入在第一次檢查時等到測試設的時限後回 `check_busy`，沒執行資料集、沒送檢查、不算進寫入次數，同時別的租戶的寫入照常存下；檢查名額設成 1 時別的租戶的檢查也等到時限後回 `check_busy`；兩個租戶的寫入在等很慢的 telemetry-query 時，第三個租戶的寫入不等待就檢查並存下；租戶的份額被佔滿時重用結果的寫入立即回 `check_busy`、不執行資料集、不送檢查、不算次數，只剩結果與值的空間而沒有檢查的空間時在資料集之後回 `check_busy`、不送檢查、算一次，新問題的資料集因記憶體被拒時是 `runs_limited`，每次寫入結束後都不佔記憶體 |
@@ -400,4 +510,4 @@ chart 的記憶體上限（`services.assistant.resources`，requests 128Mi、lim
 | `tests/answer_guard.rs` | 經 `ask` 與替身 AI 閘道：回答裡的 SQL 程式碼區塊、句子中的 SQL 敘述、HTML 與含程式碼的行內程式碼，到呼叫端與歷史時都已移除，回報移除了哪幾類、日誌只記類別不記內容，thinking 區塊逐位元組不變，下一個問題送回的歷史就是過濾後存下的那一則；改變 schema 的敘述（`CREATE OR REPLACE VIEW`、`CREATE TABLE`、`DROP TABLE`、`ALTER TABLE`、`TRUNCATE TABLE`）從回答中移除；放在 `tests/`，因為 `cargo test -p repo-check` 不允許 `src/` 出現這些文字 |
 | `tests/dashboard_world/` | 儀表板測試共用的世界：產品的 Postgres、測試用的身分簽發者、替身的身分服務 token 交換與 telemetry-query（記下每個呼叫、其他路徑都算意外）、啟動執行檔、問題的委派（每次呼叫簽發 `act` 是 assistant 的 token）與照服務組起來的 `dashboard` 工具 |
 | `tests/telemetry_sql.rs` | `telemetry_sql` 經工具組呼叫：對 telemetry-query 真正的路由（Postgres 與 ClickHouse 是計數的 loopback 埠），系統表、table function、白名單外的函式、`SET ROLE`、`SET DEFAULT ROLE`、多個敘述、`SETTINGS`、CAST、沒寫時區、沒讀 view、引號識別字、反斜線、語法錯誤與太深的巢狀各自回固定的類別說明，兩個資料庫都沒有連線，日誌沒有 SQL；對替身，答案（長文字截斷）、執行後的拒絕、多欄位或不認得的類別與名稱、404、429、504、403、400、5xx 與非 JSON 各自回固定訊息，模型與日誌都看不到服務的本文；每次呼叫換新 token、請求正好是 SQL 加 200 列 |
-| `src/` 的單元測試 | 設定檢查（含被呼叫服務的位址、委派時長（有 `dashboard` 工具時至少 365 秒）與資料庫帳密、連線池上限）、截止時間的計算、`StartError` 的錯誤碼、字串上限、時間區間的粒度選擇與查詢範圍、狀態碼類別、422 拒絕本文的嚴格解析、`telemetry_sql` 每個拒絕類別的說明與名稱的再檢查、預算門檻、租戶脈絡的跳脫、狀態碼對應、錯誤 `type` 過濾、沒有用量時的估計、送出前的訊息估計（圖片按張數）、工具定義與訊息讀回的位元組檢查；儀表板：執行上限（第 61 次、第三個同時執行、等到空位、`Retry-After` 的秒數）、每個鍵的名額與等待、發布與還原每分鐘的版本數（每個使用者、每個租戶的已儲存儀表板與草稿各自計、等到兩者都有空位的秒數、清掉閒置的使用者與租戶）、語意回答的攤平、telemetry-query 每種回答對應的錯誤、權限表、分頁 cursor；SQL 回答只在結果的上限內讀出（多的欄、多的列、比欄數寬的列、陣列與物件的格在讀出時就停，讀出的值與 contract 的型別相同）、統計與用量的表格在 `max_rows` 停、有型別的解析不超過 `PARSE_FACTOR`（對照最短的 JSON）、結果記憶體（一個租戶最多它的份額、等到放回的記憶體、縮小時放回其餘、等不到時什麼都不佔）、執行的回應本文（分段逐位元組交出後放回、連線的緩衝裡最多兩段、寫出一段才給下一段、時限到了放回並喚醒等著的連線、以錯誤結束、沒讀就丟棄時立即放回、不讀的讀者佔的量讓預算仍留得下另一個租戶的份額）、讀回答時有宣告長度照長度、沒有時倍增不超過上限、判定解析前先數值（最多標記的判定可解析、陣列值與過多的標記不解析）與每個值的大小、檢查佔的記憶體、結果讀回成值的估計、最大的寫入加 2 次最大的執行放得進一個租戶的份額、`json_len` 與 JSON 的長度相同；`dashboard` 工具的輸入解析、問題的寫入上限與資料集快取的預算（以位元組計、一個租戶的份額、一個租戶的許多問題拿不走別的租戶的結果、整個快取滿了時讓出最久沒寫的）、判定的問題與標記怎麼對應（錯誤類別、每個種類名稱與 contract 相同、標記只取解得出的參照）；回答過濾（程式碼區塊、含程式碼的行內程式碼、HTML 標籤與 script/style、各種 SQL 敘述，以及要留下的文字：不是標籤的 `<`、提到 SQL 字詞的句子、反引號裡的名稱、中文與數字、撇號）、移除後留下的標記與整理、`find` 給串流用的範圍；`rewrite_text` 只改文字區塊、其他區塊逐位元組不變；提示詞要求回答不含程式碼並說明儀表板 |
+| `src/` 的單元測試 | API 的 cursor（往返資料庫的時間、拒絕別的清單與其他寫法）、`limit`、JSON 的 `Content-Type`、更新本文與標題的規則；聊天顯示的文字只取問題與回答的 `text` 區塊；設定檢查（含被呼叫服務的位址、委派時長（有 `dashboard` 工具時至少 365 秒）與兩個角色的資料庫帳密、連線池上限、清除間隔）、截止時間的計算、`StartError` 的錯誤碼、字串上限、時間區間的粒度選擇與查詢範圍、狀態碼類別、422 拒絕本文的嚴格解析、`telemetry_sql` 每個拒絕類別的說明與名稱的再檢查、預算門檻、租戶脈絡的跳脫、狀態碼對應、錯誤 `type` 過濾、沒有用量時的估計、送出前的訊息估計（圖片按張數）、工具定義與訊息讀回的位元組檢查、migration 與程式的上限一致（30 天、32 MiB、200 個字元）、資料庫錯誤只留類別、失敗原因代碼的格式；儀表板：執行上限（第 61 次、第三個同時執行、等到空位、`Retry-After` 的秒數）、每個鍵的名額與等待、發布與還原每分鐘的版本數（每個使用者、每個租戶的已儲存儀表板與草稿各自計、等到兩者都有空位的秒數、清掉閒置的使用者與租戶）、語意回答的攤平、telemetry-query 每種回答對應的錯誤、權限表、分頁 cursor；SQL 回答只在結果的上限內讀出（多的欄、多的列、比欄數寬的列、陣列與物件的格在讀出時就停，讀出的值與 contract 的型別相同）、統計與用量的表格在 `max_rows` 停、有型別的解析不超過 `PARSE_FACTOR`（對照最短的 JSON）、結果記憶體（一個租戶最多它的份額、等到放回的記憶體、縮小時放回其餘、等不到時什麼都不佔）、執行的回應本文（分段逐位元組交出後放回、連線的緩衝裡最多兩段、寫出一段才給下一段、時限到了放回並喚醒等著的連線、以錯誤結束、沒讀就丟棄時立即放回、不讀的讀者佔的量讓預算仍留得下另一個租戶的份額）、讀回答時有宣告長度照長度、沒有時倍增不超過上限、判定解析前先數值（最多標記的判定可解析、陣列值與過多的標記不解析）與每個值的大小、檢查佔的記憶體、結果讀回成值的估計、最大的寫入加 2 次最大的執行放得進一個租戶的份額、`json_len` 與 JSON 的長度相同；`dashboard` 工具的輸入解析、問題的寫入上限與資料集快取的預算（以位元組計、一個租戶的份額、一個租戶的許多問題拿不走別的租戶的結果、整個快取滿了時讓出最久沒寫的）、判定的問題與標記怎麼對應（錯誤類別、每個種類名稱與 contract 相同、標記只取解得出的參照）；回答過濾（程式碼區塊、含程式碼的行內程式碼、HTML 標籤與 script/style、各種 SQL 敘述，以及要留下的文字：不是標籤的 `<`、提到 SQL 字詞的句子、反引號裡的名稱、中文與數字、撇號）、移除後留下的標記與整理、`find` 給串流用的範圍；`rewrite_text` 只改文字區塊、其他區塊逐位元組不變；提示詞要求回答不含程式碼並說明儀表板 |

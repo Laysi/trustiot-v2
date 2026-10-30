@@ -29,6 +29,20 @@
 //!   as the platform role with the platform-wide `certs.gateway_registered` event.
 //! - [`api`]: what the client API's handlers share.
 //! - [`broker`]: the MQTT broker's server certificate, on its own port.
+//! - [`bindings`]: which tenant each gateway is bound to and each tenant's status
+//!   (Laysi/trustiot-v2#632), kept from the assets service's `assets.gateway_bound` by an outbox
+//!   consumer and read across tenants as the platform role, for the renewal
+//!   (Laysi/trustiot-v2#81) and the broker's permissions (Laysi/trustiot-v2#633).
+//! - [`renewal`]: the gateway certificate renewal (Laysi/trustiot-v2#81) on the public path
+//!   `/certs/renew`: a challenge, the TPM signature over it, the gateway's binding and tenant
+//!   status, rate limits, and the tenant event `certs.gateway_certificate_renewed`.
+//! - [`dynsec`]: the MQTT broker's gateway permissions (Laysi/trustiot-v2#633), kept in line
+//!   with the registrations, certificates and bindings by dynamic-security commands on the
+//!   broker's service port.
+//! - [`gateways`]: revoking a gateway's certificates (Laysi/trustiot-v2#636): the ledger, a new
+//!   CRL of each issuing CA concerned, then the broker sync drops the gateway's permissions and
+//!   its connection; the platform administrators' API and the function the suspension and
+//!   unbinding call.
 //! - [`ceremony`]: the offline root's certificates, for the `certs-ca` tool.
 //! - [`schema`]: the migration files this release expects; [`config`]: the settings.
 //!
@@ -38,22 +52,28 @@
 
 mod api;
 pub mod authority;
+pub mod bindings;
 pub mod broker;
 pub mod ceremony;
 pub mod config;
 pub mod crl;
+pub mod dynsec;
+pub mod gateways;
 pub mod http;
 pub mod issue;
 pub mod monitor;
 pub mod pem;
 pub mod registrations;
+pub mod renewal;
 pub mod schema;
 pub mod workstations;
 
+use std::sync::Arc;
 use std::time::Duration;
 
 use axum::Router;
 use contract::ServiceName;
+use outbox::{Consumer, ConsumerConfig};
 use service_kit::identity::{IdentityVerifier, PublishedKeys, ServiceIdentity};
 use service_kit::migrations::MigrationCheck;
 use service_kit::tenant::{PlatformDb, TenantDb};
@@ -62,14 +82,22 @@ use sqlx::postgres::PgPoolOptions;
 use utoipa::OpenApi;
 
 use crate::authority::CaState;
+use crate::bindings::{GatewayBoundHandler, Projection};
 use crate::config::Config;
+use crate::dynsec::SyncAfterBinding;
 
 /// How long getting a database connection may take, opening a new one included.
 pub const ACQUIRE_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// Connections of the platform role's pool per replica: factory registrations, one
-/// transaction each, at the pace of a production line.
-pub const REGISTRATION_CONNECTIONS: u32 = 4;
+/// Connections of the platform role's pool per replica, shared by short transactions: factory
+/// registrations, one transaction each at the pace of a production line; the polls of the
+/// consumer of the assets service's events and its lag measurement, one read-only transaction at
+/// a time each; and the reads of [`bindings::Projection`]. The renewal ([`renewal`]) takes at most
+/// `renewal.max_concurrent` of them at a time (its reads and refusal counts, one transaction at a
+/// time per request; the setting is at most one less than this), and its report of ended refusal
+/// windows one now and then. A transaction that cannot get a connection within
+/// [`ACQUIRE_TIMEOUT`] fails: a registration or a renewal answers 503, and the consumer retries.
+pub const PLATFORM_CONNECTIONS: u32 = 4;
 
 /// The client API's OpenAPI document (merged into `api/openapi.json` by `tools/openapi`).
 #[derive(OpenApi)]
@@ -77,9 +105,10 @@ pub const REGISTRATION_CONNECTIONS: u32 = 4;
     paths(
         workstations::issue_certificate,
         workstations::revoke_certificate,
-        registrations::register_gateway
+        registrations::register_gateway,
+        gateways::revoke_gateway
     ),
-    tags((name = "certs", description = "Workstation certificates and factory registration from the issuing CA (services/certs)."))
+    tags((name = "certs", description = "Workstation certificates, factory registration and gateway revocation from the issuing CA (services/certs)."))
 )]
 struct ApiDoc;
 
@@ -93,8 +122,11 @@ pub fn openapi() -> utoipa::openapi::OpenApi {
 /// The service's startup for `service_kit::run`: opens the service role's pool lazily (with the
 /// session check of `crates/service-kit`), loads the CA files and follows them, starts the CRL
 /// job and the monitor, follows the identity service's public keys file, opens the platform
-/// role's pool lazily for [`registrations`], serves the endpoints of [`http`],
-/// [`workstations`] and [`registrations`], and serves [`broker`] on its own port
+/// role's pool lazily for [`registrations`] and the consumer of the assets service's events
+/// ([`bindings`]), starts the broker's gateway permission sync when a broker is configured
+/// ([`dynsec`]; registrations, renewals and applied bindings ask it to sync their gateway), starts
+/// that consumer, serves the endpoints of [`http`], [`workstations`], [`registrations`] and
+/// [`renewal`] (which also reports its refusal counts), and serves [`broker`] on its own port
 /// (`broker.listen_addr`). Readiness passes while the role can open a checked
 /// session, the service has a usable set of public keys, and the database has every migration
 /// file this release expects ([`schema::SCHEMA`]); whether an issuing CA can sign is reported by
@@ -102,8 +134,8 @@ pub fn openapi() -> utoipa::openapi::OpenApi {
 ///
 /// # Errors
 ///
-/// When the database settings would not verify the server, or the broker port is taken. Nothing
-/// is served then: the service exits with code 1.
+/// When the database settings would not verify the server, the consumer's settings are invalid,
+/// the MQTT client cannot be started, or the broker port is taken. Nothing is served then: the service exits with code 1.
 pub async fn start(context: Context<Config>) -> Result<Router, BoxError> {
     let config = context.config();
     let (db, background) = TenantDb::connect_lazy_with_background(
@@ -114,11 +146,12 @@ pub async fn start(context: Context<Config>) -> Result<Router, BoxError> {
         ServiceIdentity::new(ServiceName::Certs),
     )?;
     // Not part of readiness: the CRLs and the CA chain the MQTT broker reads must keep being
-    // served while the platform role cannot log in; a registration answers 503 then.
+    // served while the platform role cannot log in; a registration answers 503 then, and the
+    // consumer of the assets service's events retries (its lag shows it).
     let platform = PlatformDb::connect_lazy(
         config.platform_role().connect_options(),
         PgPoolOptions::new()
-            .max_connections(REGISTRATION_CONNECTIONS)
+            .max_connections(PLATFORM_CONNECTIONS)
             .min_connections(0)
             .acquire_timeout(ACQUIRE_TIMEOUT),
     )?;
@@ -129,6 +162,33 @@ pub async fn start(context: Context<Config>) -> Result<Router, BoxError> {
     });
     MigrationCheck::new(&schema::SCHEMA, db.pool().clone()).register(context.health());
 
+    // The broker's gateway permissions (Laysi/trustiot-v2#633): not part of readiness either,
+    // since the broker may be down while the CRLs must be served; a broker that cannot be
+    // reached only delays the sync.
+    let broker_sync = dynsec::start(
+        &context,
+        config.mqtt.as_ref(),
+        &config.dynsec,
+        Projection::new(platform.clone()),
+        db.pool().clone(),
+    )
+    .map_err(|error| format!("the broker permission sync: {error}"))?;
+
+    // `run` retries everything but a configuration mistake, which it logs; the service keeps
+    // serving then and the consumer's lag shows the problem.
+    let bindings_consumer = Consumer::new(
+        &platform,
+        background.clone(),
+        ConsumerConfig::new(bindings::SUBSCRIPTION, bindings::SOURCE_SCHEMA)?,
+        SyncAfterBinding::new(GatewayBoundHandler, broker_sync.clone()),
+    );
+    // The renewal refuses while this consumer's lag is unknown or too high.
+    let bindings_lag = bindings_consumer.clone();
+    let stop = context.shutdown().stopping_token();
+    context.spawn(async move {
+        let _ = bindings_consumer.run(stop).await;
+    });
+
     let ca = CaState::watch(&context, config.ca.clone());
     crl::start(
         &context,
@@ -137,7 +197,22 @@ pub async fn start(context: Context<Config>) -> Result<Router, BoxError> {
         ca.clone(),
         config.crl.clone(),
     );
-    monitor::start(&context, background, ca.clone(), config.crl.clone());
+    let renewal = renewal::routes(renewal::Parts {
+        pool: db.pool().clone(),
+        background: background.clone(),
+        platform: platform.clone(),
+        ca: ca.clone(),
+        lag: Arc::new(move || bindings_lag.lag()),
+        limits: config.renewal.clone(),
+        validity: config.gateway.validity,
+        broker_sync: broker_sync.clone(),
+    });
+    renewal::start_reporting(
+        &context,
+        platform.clone(),
+        config.renewal.refusal_flush_interval,
+    );
+    monitor::start(&context, background.clone(), ca.clone(), config.crl.clone());
 
     let keys = PublishedKeys::watch(
         &context,
@@ -145,18 +220,39 @@ pub async fn start(context: Context<Config>) -> Result<Router, BoxError> {
     )
     .await;
     let verifier = IdentityVerifier::new(ServiceName::Certs, keys);
+    // A revocation gives its issuing CA a new CRL before it answers (Laysi/trustiot-v2#635),
+    // within half the handler timeout so the response goes out even when that waits.
+    let crls = crl::Reissuer::new(
+        background,
+        ca.clone(),
+        config.crl.clone(),
+        crl::REISSUE_TIMEOUT.min(context.request_timeout() / 2),
+    );
+    // Decision 6's three steps for a gateway (Laysi/trustiot-v2#636): the ledger, a new CRL
+    // from the same reissuer (they share its turns), then the broker sync.
+    let gateway_revocation =
+        gateways::GatewayRevocation::new(db.pool().clone(), crls.clone(), broker_sync.clone());
     let api = workstations::routes(
         verifier.clone(),
         db.pool().clone(),
         ca.clone(),
         config.workstation.validity,
+        crls,
     );
-    let registrations =
-        registrations::routes(verifier, platform, ca.clone(), config.gateway.validity);
+    let gateways = gateways::routes(verifier.clone(), gateway_revocation);
+    let registrations = registrations::routes(
+        verifier,
+        platform,
+        ca.clone(),
+        config.gateway.validity,
+        broker_sync,
+    );
     serve_broker(&context, db.pool().clone(), ca.clone()).await?;
     Ok(http::routes(ca, db.pool().clone())
         .merge(api)
-        .merge(registrations))
+        .merge(registrations)
+        .merge(gateways)
+        .merge(renewal))
 }
 
 /// Serves the MQTT broker's certificate issuance on its own port (`broker.listen_addr`), apart

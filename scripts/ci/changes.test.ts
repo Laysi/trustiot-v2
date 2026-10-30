@@ -102,7 +102,7 @@ describe("path rules", () => {
     ["a Rust file under scripts", "scripts/ci/fixture.rs"],
     ["SQL outside the crates (a Rust file may include it)", "deploy/sql/seed.sql"],
     ["the chart values a service-kit test reads", "deploy/chart/values.yaml"],
-    ["the MQTT broker configuration a migrate test runs", "deploy/chart/files/mosquitto/mosquitto.conf"],
+    ["the MQTT broker configuration the migrate and certs tests run", "deploy/chart/files/mosquitto/mosquitto.conf"],
     ["the MQTT broker's gateway listener the migrate and certs tests run", "deploy/chart/files/mosquitto/gateway-listener.conf"],
     ["a sandbox fixture page the assistant's acceptance tests check", "frontend/sandbox/fixtures/pages/correct.html"],
     ["the sandbox fixture cases", "frontend/sandbox/fixtures/cases.json"],

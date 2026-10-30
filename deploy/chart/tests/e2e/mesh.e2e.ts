@@ -32,6 +32,16 @@
 // shows what the mesh lets through, that the token arrives with the listed call, and that the
 // identity service got the call list.
 //
+// The AI gateway's admin port (Laysi/trustiot-v2#607) is split the same way: its own Service and
+// policies (<release>-ai-gateway-admin) admit the identity service alone, on the admin port only,
+// and the gateway's own policies admit its listed caller (the assistant) on the API port only. So
+// the identity service reaches the admin API and not the API port, the assistant the API port
+// and not the admin API (by the admin Service or the pod's address), and every other service and
+// test pod neither. The NetworkPolicies admit the identity service's and the assistant's pods to
+// the gateway pod's HBONE port, so the port split is the AuthorizationPolicies' alone, like the
+// identity service's API port above. The gateway runs the identity double too, which serves the
+// echo on 8080 and 8082 (the chart's admin port).
+//
 // The NetworkPolicy-only phase comes before any unlisted call has ever succeeded: a
 // NetworkPolicy does not cut connections that are already open, and ztunnel keeps HBONE
 // connections open for reuse, so restoring NetworkPolicies after phase 3 would not refuse calls
@@ -44,7 +54,8 @@
 //
 // Not part of `bun test deploy/chart` (the file name has no .test. suffix): it needs a cluster.
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Subprocess } from "bun";
 import {
@@ -81,7 +92,7 @@ const CALL_TIMEOUT_MS = Number(process.env.E2E_CALL_TIMEOUT_MS ?? "5000");
 const SETTLE_MS = Number(process.env.E2E_SETTLE_MS ?? "90000");
 const HOSTS = { app: "app.saas.trustiot.test", gateway: "gw.saas.trustiot.test" };
 // Services of tests/e2e/values-mesh-e2e.yaml; all run the identity double's image.
-const SERVICES = ["identity", "assets", "certs", "mqtt-bridge", "alerts"] as const;
+const SERVICES = ["identity", "assets", "certs", "mqtt-bridge", "alerts", "assistant", "ai-gateway"] as const;
 type Service = (typeof SERVICES)[number];
 const SUFFIX = crypto.randomUUID().slice(0, 8);
 const TEST_POD_LABEL = "trustiot-mesh-e2e";
@@ -94,8 +105,107 @@ const EXCHANGE_PATH = "/internal/token-exchange";
 const EXCHANGE_SERVICE = "identity-exchange";
 const API_PORT = 8080;
 const EXCHANGE_PORT = 8082;
-// The call list the chart hands the identity service for values-mesh-e2e.yaml.
+// The call list the chart hands the identity service for values-mesh-e2e.yaml: the assistant's
+// call to the AI gateway is not on it (decision 28), nor the identity service's to the admin API.
 const ON_BEHALF_CALLS = { assets: ["certs"] };
+// The AI gateway's admin API (Laysi/trustiot-v2#607): a Service of its own on a fixed port
+// (templates/ai-gateway-admin.yaml), forwarding to the gateway's container port admin, 8082 by
+// default and the port the double serves its echo on besides 8080.
+const ADMIN_SERVICE = "ai-gateway-admin";
+const ADMIN_PORT = 8082;
+// The address the chart gives the identity service (TRUSTIOT_AI_GATEWAY_ADMIN_URL).
+const ADMIN_URL = `http://${OBJECT_PREFIX}-${ADMIN_SERVICE}.${NAMESPACE}.svc:${ADMIN_PORT}`;
+
+// ---------------------------------------------------------------------------------------------
+// Secrets the AI gateway's settings name (values-mesh-e2e.yaml): the provider keys and the
+// Postgres CA, which the test creates before the install, and the gateway's database password,
+// which the chart declares empty for the migration Job to fill (off here) and the test fills
+// instead. The double reads none of them; their values exist only for this run, in files of a
+// private directory, so they never appear in a command line.
+const AI_KEY_SECRET = "trustiot-e2e-ai";
+const POSTGRES_CA_SECRET = "trustiot-e2e-postgres-ca";
+const PASSWORD_SECRET = `${OBJECT_PREFIX}-ai-gateway-password`;
+const PASSWORD_KEY = "ai_gateway_app";
+// How long the filler waits for Helm to declare the password Secret: within the install's own
+// time limit (install.ts, WAIT_ARGS).
+const FILL_TIMEOUT_MS = 300_000;
+const work = mkdtempSync(join(tmpdir(), "trustiot-mesh-e2e-"));
+const createdSecrets: string[] = [];
+
+function secretFile(name: string, value: string): string {
+  const path = join(work, name);
+  writeFileSync(path, value, { mode: 0o600 });
+  return path;
+}
+const randomHex = (bytes: number) => Array.from(crypto.getRandomValues(new Uint8Array(bytes)), (b) => b.toString(16).padStart(2, "0")).join("");
+
+// The Secrets are this run's own: one left by an earlier run (the password Secret is kept on
+// uninstall, helm.sh/resource-policy keep) would be adopted, so refuse it.
+function refuseLeftoverSecrets() {
+  for (const name of [AI_KEY_SECRET, POSTGRES_CA_SECRET, PASSWORD_SECRET]) {
+    if (run(kubectlArgs("get", "secret", name, "--ignore-not-found", "--output", "name"), false).trim() !== "") {
+      throw new Error(`${NAMESPACE} already has Secret ${name} from an earlier run; delete it first`);
+    }
+  }
+}
+
+function createInputSecrets() {
+  createdSecrets.push(AI_KEY_SECRET);
+  kubectl("create", "secret", "generic", AI_KEY_SECRET, `--from-file=api-key=${secretFile("ai-key", `mesh-e2e-${randomHex(24)}`)}`);
+  createdSecrets.push(POSTGRES_CA_SECRET);
+  // Not a certificate: the double connects to no database. The gateway's pod only mounts it.
+  kubectl("create", "secret", "generic", POSTGRES_CA_SECRET, `--from-file=ca.crt=${secretFile("ca.crt", "mesh.e2e.ts: no database\n")}`);
+}
+
+// installRelease blocks until the pods are ready, and the gateway's pod cannot start before its
+// password Secret has the key, so a separate process fills it once Helm has declared it (the
+// migration Job's part in a real install) and restarts the gateway's pod instead of waiting for
+// the kubelet's next retry. The deleted pod can outlive the install: it goes through its preStop
+// sleep and shutdown while its replacement becomes ready, so beforeAll waits for it to go
+// (waitForDeletedPodsGone). The filler names the pods it deleted on stderr, in the test's log.
+function startPasswordFiller(): Subprocess {
+  createdSecrets.push(PASSWORD_SECRET);
+  const patch = secretFile("password-patch.json", JSON.stringify({ data: { [PASSWORD_KEY]: Buffer.from(randomHex(32)).toString("base64") } }));
+  const commands = {
+    get: kubectlArgs("get", "secret", PASSWORD_SECRET),
+    patch: kubectlArgs("patch", "secret", PASSWORD_SECRET, "--type", "merge", "--patch-file", patch),
+    restart: kubectlArgs(
+      "delete",
+      "pod",
+      "--selector",
+      `app.kubernetes.io/instance=${RELEASE},app.kubernetes.io/component=ai-gateway`,
+      "--wait=false",
+      "--output",
+      "name",
+    ),
+  };
+  const script = `const commands = JSON.parse(process.env.MESH_E2E_FILL ?? "{}");
+const deadline = Date.now() + ${FILL_TIMEOUT_MS};
+while (Date.now() < deadline) {
+  if (Bun.spawnSync({ cmd: commands.get, stdout: "ignore", stderr: "ignore" }).exitCode === 0) {
+    const patched = Bun.spawnSync({ cmd: commands.patch, stdout: "ignore", stderr: "pipe" });
+    if (patched.exitCode !== 0) {
+      console.error("mesh.e2e.ts: patching the AI gateway's password Secret failed: " + patched.stderr.toString());
+      process.exit(1);
+    }
+    const restarted = Bun.spawnSync({ cmd: commands.restart, stdout: "pipe", stderr: "pipe" });
+    if (restarted.exitCode !== 0) console.error("mesh.e2e.ts: restarting the AI gateway's pod failed: " + restarted.stderr.toString());
+    else {
+      const deleted = restarted.stdout.toString().trim().split("\\n").filter(Boolean).join(", ");
+      console.error("mesh.e2e.ts: filled the AI gateway's password Secret and deleted its pods: " + (deleted || "none yet"));
+    }
+    process.exit(0);
+  }
+  await Bun.sleep(1000);
+}
+console.error("mesh.e2e.ts: timed out waiting for Helm to declare the AI gateway's password Secret");
+process.exit(1);`;
+  return Bun.spawn([process.execPath, "-e", script], {
+    env: { ...process.env, MESH_E2E_FILL: JSON.stringify(commands) },
+    stdout: "ignore",
+    stderr: "inherit",
+  });
+}
 
 // ---------------------------------------------------------------------------------------------
 // Users' tokens (internal-token.ts). The signing key stays in this process; tokens reach the
@@ -162,8 +272,10 @@ function podIp(selector: string): string {
   if (!ip) throw new Error(`no pod IP for ${selector}`);
   return ip;
 }
-const servicePodUrl = (service: Service) =>
-  `http://${podIp(`${CHART_PODS},app.kubernetes.io/component=${service}`)}:${API_PORT}${ECHO_PATH}`;
+const servicePodUrl = (service: Service, port = API_PORT) =>
+  `http://${podIp(`${CHART_PODS},app.kubernetes.io/component=${service}`)}:${port}${ECHO_PATH}`;
+// The AI gateway's admin API through its own Service, at the address the identity service gets.
+const adminUrl = () => `${ADMIN_URL}${ECHO_PATH}`;
 
 // `token`: the audience of the user's token the call carries: the callee for a direct call, the
 // caller itself for the token exchange. `body`: a JSON body (POST).
@@ -178,11 +290,16 @@ const exchange = (name: string, caller: Service, audience: Service): Case => ({
   token: caller,
   body: { audience },
 });
-// The listed calls: mesh.calls in values-mesh-e2e.yaml, and the token exchange the chart adds for
-// the calls on behalf of users among them.
+// A call without a user's token: the AI gateway takes none on either port (decision 28).
+const plain = (name: string, caller: Caller, url: () => string): Case => ({ name, caller, url });
+// The listed calls: mesh.calls in values-mesh-e2e.yaml, the token exchange the chart adds for
+// the calls on behalf of users among them, and the identity service's call to the AI gateway's
+// admin API, which the chart adds (Laysi/trustiot-v2#607).
 const LISTED: Case[] = [
   direct("assets -> certs with a user's token for certs (listed)", serviceCaller("assets"), "certs"),
   exchange("assets -> identity token exchange for certs (assets calls certs on behalf of users)", "assets", "certs"),
+  plain("assistant -> ai-gateway API port (listed: the assistant forwards model calls)", serviceCaller("assistant"), () => serviceUrl("ai-gateway")),
+  plain("identity -> ai-gateway admin Service (the identity service alone reaches the admin API)", serviceCaller("identity"), adminUrl),
 ];
 // Calls nobody listed, each with a user's token the callee would accept. Each fails while either
 // layer is in place.
@@ -194,16 +311,41 @@ const UNLISTED: Case[] = [
   direct("stranger -> certs with a user's token for certs (mesh identity that is not a service)", stranger, "certs"),
   direct("outsider -> certs Service with a user's token for certs (no mesh identity)", outsider, "certs"),
   direct("outsider -> certs pod IP, application port, with a user's token for certs", outsider, "certs", () => servicePodUrl("certs")),
+  // The AI gateway: alerts may call it (decision 28) but does not list it here; assets, a
+  // service that may never call it, and the test pods reach neither port.
+  plain("alerts -> ai-gateway API port (alerts does not list ai-gateway)", serviceCaller("alerts"), () => serviceUrl("ai-gateway")),
+  plain("alerts -> ai-gateway admin Service (only the identity service reaches the admin API)", serviceCaller("alerts"), adminUrl),
+  plain("assets -> ai-gateway admin Service (only the identity service reaches the admin API)", serviceCaller("assets"), adminUrl),
+  plain("stranger -> ai-gateway admin Service (mesh identity that is not a service)", stranger, adminUrl),
+  plain("outsider -> ai-gateway pod IP, admin port (no mesh identity)", outsider, () => servicePodUrl("ai-gateway", ADMIN_PORT)),
 ];
-// A caller on behalf of users at the identity service's API port, where the ext_authz check is:
-// only the AuthorizationPolicies refuse it, since the NetworkPolicies cannot see ports inside
-// HBONE and admit assets's pods for the token exchange (Laysi/trustiot-v2#106, M2 of the
-// security review).
-const API_PORT_OF_IDENTITY: Case = direct(
-  "assets -> identity API port with a user's token for identity (assets may reach the token exchange only)",
-  serviceCaller("assets"),
-  "identity",
-);
+// Calls a NetworkPolicy admits because the caller's pods may reach the callee's pods on another
+// port, which only the AuthorizationPolicies refuse: the NetworkPolicies cannot see ports inside
+// HBONE. Each passes while the AuthorizationPolicies are removed (phases 2 and 3).
+// - A caller on behalf of users at the identity service's API port, where the ext_authz check is:
+//   the NetworkPolicies admit assets's pods for the token exchange (Laysi/trustiot-v2#106, M2 of
+//   the security review).
+// - The AI gateway's admin API (Laysi/trustiot-v2#607): the assistant, which reaches the API port,
+//   through the admin Service and the pod's address; and the identity service, which reaches the
+//   admin port, at the API port.
+const PORT_SPLIT: Case[] = [
+  direct(
+    "assets -> identity API port with a user's token for identity (assets may reach the token exchange only)",
+    serviceCaller("assets"),
+    "identity",
+  ),
+  plain("assistant -> ai-gateway admin Service (the assistant may reach the API port only)", serviceCaller("assistant"), adminUrl),
+  plain("assistant -> ai-gateway pod IP, admin port (the assistant may reach the API port only)", serviceCaller("assistant"), () =>
+    servicePodUrl("ai-gateway", ADMIN_PORT),
+  ),
+  plain("identity -> ai-gateway API port (the identity service may reach the admin port only)", serviceCaller("identity"), () => serviceUrl("ai-gateway")),
+];
+function expectPortSplit(phase: string, pass: boolean) {
+  for (const testCase of PORT_SPLIT) {
+    const result = check(phase, testCase);
+    expect({ call: testCase.name, passed: passed(result) }).toEqual({ call: testCase.name, passed: pass });
+  }
+}
 // A pod with the listed caller's labels but another ServiceAccount: the NetworkPolicy admits it
 // (it selects pods by label), the AuthorizationPolicy does not (it checks the mTLS identity).
 const IMPOSTER: Case = direct("imposter -> certs with a user's token for certs (assets labels, not its ServiceAccount)", imposter, "certs");
@@ -237,11 +379,16 @@ function check(phase: string, testCase: Case): CallResult {
 async function settle(phase: string, testCase: Case, pass: boolean): Promise<void> {
   await waitFor(`${testCase.name} to ${pass ? "pass" : "fail"} (${phase})`, () => passed(check(`${phase} (settling)`, testCase)) === pass, SETTLE_MS);
 }
-// The listed calls pass, and the callee received the user's token.
+// The listed calls pass, and the callee received the user's token when the call carried one.
 function expectListed(phase: string) {
   for (const testCase of LISTED) {
     const result = check(phase, testCase);
-    expect({ call: testCase.name, passed: passed(result), tokenEchoed: result.tokenEchoed }).toEqual({ call: testCase.name, passed: true, tokenEchoed: true });
+    const withToken = testCase.token !== undefined;
+    expect({ call: testCase.name, passed: passed(result), tokenEchoed: result.tokenEchoed }).toEqual({
+      call: testCase.name,
+      passed: true,
+      tokenEchoed: withToken ? true : undefined,
+    });
   }
 }
 function expectUnlisted(phase: string, pass: boolean) {
@@ -304,26 +451,85 @@ async function expectGatewayReachesBackends(phase: string) {
 // ---------------------------------------------------------------------------------------------
 // Pods and health checks.
 
-type PodStatus = { name: string; ready: boolean; restarts: number };
+// `deletedAt`: the pod's deletionTimestamp, set once it is deleted and still going away.
+type PodStatus = { name: string; phase: string; deletedAt?: string; ready: boolean; restarts: number };
 function podStatuses(selector: string): PodStatus[] {
   const list = JSON.parse(kubectl("get", "pods", "-l", selector, "-o", "json")) as {
-    items: { metadata: { name: string }; status: { conditions?: { type: string; status: string }[]; containerStatuses?: { restartCount: number }[] } }[];
+    items: {
+      metadata: { name: string; deletionTimestamp?: string };
+      status: { phase?: string; conditions?: { type: string; status: string }[]; containerStatuses?: { restartCount: number }[] };
+    }[];
   };
   return list.items.map((pod) => ({
     name: pod.metadata.name,
+    phase: pod.status.phase ?? "Unknown",
+    ...(pod.metadata.deletionTimestamp ? { deletedAt: pod.metadata.deletionTimestamp } : {}),
     ready: pod.status.conditions?.some((c) => c.type === "Ready" && c.status === "True") ?? false,
     restarts: (pod.status.containerStatuses ?? []).reduce((sum, c) => sum + c.restartCount, 0),
   }));
 }
+// The pods expectHealthyPods counts: the services' and the ingress gateway's.
+const countedPods = () => [
+  ...podStatuses(`${CHART_PODS},app.kubernetes.io/component in (${SERVICES.join(",")})`),
+  ...podStatuses(`gateway.networking.k8s.io/gateway-name=${GATEWAY}`),
+];
+const describePod = (pod: PodStatus) =>
+  `${pod.name} (${pod.phase}${pod.deletedAt ? `, deleted at ${pod.deletedAt}` : ""}${pod.ready ? ", ready" : ", not ready"}, ${pod.restarts} restarts)`;
 function expectHealthyPods(phase: string) {
-  const pods = [
-    ...podStatuses(`${CHART_PODS},app.kubernetes.io/component in (${SERVICES.join(",")})`),
-    ...podStatuses(`gateway.networking.k8s.io/gateway-name=${GATEWAY}`),
-  ];
+  const pods = countedPods();
   results.push({ phase, pods });
   // One pod per service plus the gateway's two replicas.
-  expect(pods.length).toBe(SERVICES.length + 2);
-  for (const pod of pods) expect(pod).toEqual({ name: pod.name, ready: true, restarts: 0 });
+  expect(pods.length, `one pod per service plus the gateway's two replicas; found ${pods.map(describePod).join("; ")}`).toBe(SERVICES.length + 2);
+  for (const pod of pods) {
+    expect({ name: pod.name, phase: pod.phase, deleted: pod.deletedAt !== undefined, ready: pod.ready, restarts: pod.restarts }).toEqual({
+      name: pod.name,
+      phase: "Running",
+      deleted: false,
+      ready: true,
+      restarts: 0,
+    });
+  }
+}
+
+// Pods of the release still going away when the install returns, such as the AI gateway's pod
+// the password filler deleted (startPasswordFiller): it goes through its preStop sleep and
+// shutdown after its replacement is ready, and `kubectl get pods` lists it until the kubelet
+// removes it, so phase 1 would count it (Laysi/trustiot-v2#730) and podIp could pick it. Kubernetes
+// sets a deleted pod's deletionTimestamp to the deletion time plus its grace period, when the
+// kubelet kills what still runs; the slack leaves the kubelet time to see that and tear the pod's
+// sandbox down on a loaded runner.
+const POD_REMOVAL_SLACK_MS = 120_000;
+// The longest terminationGracePeriodSeconds of a service's pod: the AI gateway's (preStopSleepSeconds
+// 5 s + services.ai-gateway.drainSeconds 310 s in values.yaml); beforeAll checks the rendered
+// Deployments against it. The ingress gateway's pods are Istio's, with its 30 s default.
+const LONGEST_GRACE_SECONDS = 315;
+// beforeAll's share for that wait.
+const POD_REMOVAL_BUDGET_MS = LONGEST_GRACE_SECONDS * 1000 + POD_REMOVAL_SLACK_MS;
+async function waitForDeletedPodsGone(): Promise<string[]> {
+  const deleted = countedPods().filter((pod) => pod.deletedAt !== undefined);
+  if (deleted.length === 0) return [];
+  const names = deleted.map((pod) => pod.name);
+  const lastDeadline = Math.max(...deleted.map((pod) => Date.parse(pod.deletedAt ?? "")));
+  if (Number.isNaN(lastDeadline)) throw new Error(`cannot read the deletionTimestamp of ${deleted.map(describePod).join("; ")}`);
+  const timeoutMs = lastDeadline + POD_REMOVAL_SLACK_MS - Date.now();
+  if (timeoutMs > POD_REMOVAL_BUDGET_MS) {
+    throw new Error(
+      `the deleted pods ${deleted.map(describePod).join("; ")} may take ${Math.ceil(timeoutMs / 1000)} s to go, more than ` +
+        `POD_REMOVAL_BUDGET_MS (${POD_REMOVAL_BUDGET_MS / 1000} s); a grace period grew, so raise the budget with it`,
+    );
+  }
+  const gone = () => {
+    const left = new Set(countedPods().map((pod) => pod.name));
+    return names.every((name) => !left.has(name));
+  };
+  // Checked at least once even when the deadline has already passed.
+  await waitFor(
+    `the deleted pods ${names.join(", ")} to go (grace periods end by ${new Date(lastDeadline).toISOString()}, ` +
+      `plus ${POD_REMOVAL_SLACK_MS / 1000} s for the kubelet)`,
+    gone,
+    Math.max(timeoutMs, 1_000),
+  );
+  return names;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -405,22 +611,31 @@ function testPod(name: string, dataplaneMode: "ambient" | "none", impersonate?: 
 }
 
 beforeAll(async () => {
-  installRelease(
-    ["values-saas.yaml", "tests/values/saas-instance.yaml", "tests/e2e/values-e2e.yaml", "tests/e2e/values-mesh-e2e.yaml"],
-    [...SERVICES.flatMap((service) => imageValues(service, IDENTITY_IMAGE)), ...migrateImageValues(MIGRATE_IMAGE)],
-  );
+  refuseLeftoverSecrets();
+  createInputSecrets();
+  const filler = startPasswordFiller();
+  try {
+    installRelease(
+      ["values-saas.yaml", "tests/values/saas-instance.yaml", "tests/e2e/values-e2e.yaml", "tests/e2e/values-mesh-e2e.yaml"],
+      [...SERVICES.flatMap((service) => imageValues(service, IDENTITY_IMAGE)), ...migrateImageValues(MIGRATE_IMAGE)],
+    );
+  } finally {
+    // A failed install has already removed itself; the filler must not outlive it.
+    if (filler.exitCode === null) filler.kill();
+  }
   releaseCreated = true;
+  expect(await filler.exited, "the AI gateway's password Secret filler").toBe(0);
   const parsed: unknown = Bun.YAML.parse(helm("get", "manifest", RELEASE));
   manifests = (Array.isArray(parsed) ? parsed : [parsed]).filter(
     (m): m is Manifest => typeof m === "object" && m !== null && "kind" in m,
   );
-  // One per service, the default deny, the ingress gateway's, the token exchange's, and the certs
+  // One per service, the default deny, the ingress gateway's, the token exchange's, the certs
   // service's broker-certs port's (templates/certs-broker.yaml), which admits nothing here because
-  // no MQTT broker runs.
-  expect(networkPolicies().length).toBe(SERVICES.length + 4);
-  // One per service, the token exchange's and the broker-certs port's.
-  expect(servicePolicies().length).toBe(SERVICES.length + 2);
-  for (const name of [`${OBJECT_PREFIX}-${EXCHANGE_SERVICE}`, `${OBJECT_PREFIX}-certs-broker`]) {
+  // no MQTT broker runs, and the AI gateway's admin port's (templates/ai-gateway-admin.yaml).
+  expect(networkPolicies().length).toBe(SERVICES.length + 5);
+  // One per service, the token exchange's, the broker-certs port's and the admin port's.
+  expect(servicePolicies().length).toBe(SERVICES.length + 3);
+  for (const name of [`${OBJECT_PREFIX}-${EXCHANGE_SERVICE}`, `${OBJECT_PREFIX}-certs-broker`, `${OBJECT_PREFIX}-${ADMIN_SERVICE}`]) {
     expect(manifests.filter((m) => m.metadata.name === name).map((m) => m.kind).sort()).toEqual([
       "AuthorizationPolicy",
       "NetworkPolicy",
@@ -441,6 +656,19 @@ beforeAll(async () => {
     | undefined;
   const onBehalf = identity?.spec.template.spec.containers[0]?.env?.find((e) => e.name === "TRUSTIOT_ON_BEHALF_CALLS")?.value;
   expect(JSON.parse(onBehalf ?? "null")).toEqual(ON_BEHALF_CALLS);
+  // The identity service gets the admin API's address, which the identity -> admin call uses, and
+  // the gateway listens on the pod's address for it (Laysi/trustiot-v2#607).
+  expect(identity?.spec.template.spec.containers[0]?.env?.find((e) => e.name === "TRUSTIOT_AI_GATEWAY_ADMIN_URL")?.value).toBe(ADMIN_URL);
+  const aiGateway = manifests.find((m) => m.kind === "Deployment" && m.metadata.name === `${OBJECT_PREFIX}-ai-gateway`) as
+    | (Manifest & { spec: { template: { spec: { containers: { env?: { name: string; value?: string }[] }[] } } } })
+    | undefined;
+  expect(aiGateway?.spec.template.spec.containers[0]?.env?.find((e) => e.name === "AI_GATEWAY__ADMIN__LISTEN_ADDR")?.value).toBe(`0.0.0.0:${ADMIN_PORT}`);
+  // A deleted service pod goes within its grace period, which POD_REMOVAL_BUDGET_MS allows for.
+  const graces = manifests
+    .filter((m) => m.kind === "Deployment" && (SERVICES as readonly string[]).includes(m.metadata.labels?.["app.kubernetes.io/component"] ?? ""))
+    .map((m) => (m as Manifest & { spec: { template: { spec: { terminationGracePeriodSeconds?: number } } } }).spec.template.spec.terminationGracePeriodSeconds ?? 30);
+  expect(graces).toHaveLength(SERVICES.length);
+  expect(Math.max(...graces), "the longest grace period of a service's pod (LONGEST_GRACE_SECONDS)").toBeLessThanOrEqual(LONGEST_GRACE_SECONDS);
   // The init container filled the signing keys before the identity pod started.
   loadSigner();
   results.push({ phase: "setup", signingKey: signer?.kid, onBehalfCalls: ON_BEHALF_CALLS });
@@ -452,8 +680,15 @@ beforeAll(async () => {
   kubectl("wait", `pod/${OUTSIDER_POD}`, `pod/${STRANGER_POD}`, "--for=condition=Ready", "--timeout=180s");
   kubectl("wait", `pod/${IMPOSTER_POD}`, "--for=condition=ContainersReady=false", "--timeout=180s");
   kubectl("wait", `pod/${IMPOSTER_POD}`, "--for=jsonpath={.status.containerStatuses[0].started}=true", "--timeout=180s");
+  const started = Date.now();
+  const removed = await waitForDeletedPodsGone();
+  if (removed.length > 0) {
+    const waitedSeconds = Math.round((Date.now() - started) / 1000);
+    results.push({ phase: "setup", deletedPodsAwaited: removed, waitedSeconds });
+    console.error(`mesh.e2e.ts: waited ${waitedSeconds} s for the deleted pods ${removed.join(", ")} to go before counting pods`);
+  }
   await openTunnel();
-}, 600_000);
+}, 600_000 + POD_REMOVAL_BUDGET_MS);
 
 afterAll(() => {
   tunnel?.kill();
@@ -467,6 +702,8 @@ afterAll(() => {
       errors.push(`report: ${String(error)}`);
     }
   }
+  // The Secrets' values exist only in this run's files; nothing needs them after the install.
+  rmSync(work, { recursive: true, force: true });
   if (KEEP) {
     if (errors.length) throw new Error(errors.join("\n"));
     return;
@@ -481,6 +718,15 @@ afterAll(() => {
   if (releaseCreated) {
     try {
       uninstallRelease();
+    } catch (error) {
+      errors.push(String(error));
+    }
+  }
+  // After the release: the Secrets this run created, and the password Secret, which Helm keeps
+  // on uninstall (helm.sh/resource-policy keep). refuseLeftoverSecrets made sure each is this run's.
+  for (const name of createdSecrets) {
+    try {
+      kubectl("delete", "secret", name, "--ignore-not-found");
     } catch (error) {
       errors.push(String(error));
     }
@@ -501,7 +747,7 @@ describe("service-to-service authorization (decision 27)", () => {
     await expectGatewayReachesBackends(phase);
     expectUnlisted(phase, false);
     expect(passed(check(phase, IMPOSTER))).toBe(false);
-    expect(passed(check(phase, API_PORT_OF_IDENTITY))).toBe(false);
+    expectPortSplit(phase, false);
   }, 600_000);
 
   test("2. AuthorizationPolicies removed: the NetworkPolicies alone refuse every unlisted call", async () => {
@@ -510,8 +756,10 @@ describe("service-to-service authorization (decision 27)", () => {
     // The NetworkPolicy admits the imposter by its labels, so once it gets through, the
     // AuthorizationPolicies are no longer enforced.
     await settle(phase, IMPOSTER, true);
-    // Only the AuthorizationPolicies kept assets off the identity service's API port.
-    await settle(phase, API_PORT_OF_IDENTITY, true);
+    // Only the AuthorizationPolicies kept assets off the identity service's API port, the
+    // assistant off the AI gateway's admin port and the identity service off its API port.
+    for (const testCase of PORT_SPLIT) await settle(phase, testCase, true);
+    expectPortSplit(phase, true);
     expectUnlisted(phase, false);
     expect(passed(check(phase, NETWORK_POLICY_PROBE))).toBe(false);
     expectListed(phase);
@@ -524,16 +772,17 @@ describe("service-to-service authorization (decision 27)", () => {
     await settle(phase, NETWORK_POLICY_PROBE, true);
     for (const testCase of UNLISTED) await settle(phase, testCase, true);
     expectUnlisted(phase, true);
+    expectPortSplit(phase, true);
     expectListed(phase);
   }, 600_000);
 
   test("4. AuthorizationPolicies back, NetworkPolicies still removed: the AuthorizationPolicies alone refuse every unlisted call", async () => {
     const phase = "AuthorizationPolicy only";
     restore(servicePolicies());
-    for (const testCase of [...UNLISTED, IMPOSTER, API_PORT_OF_IDENTITY]) await settle(phase, testCase, false);
+    for (const testCase of [...UNLISTED, IMPOSTER, ...PORT_SPLIT]) await settle(phase, testCase, false);
     expectUnlisted(phase, false);
     expect(passed(check(phase, IMPOSTER))).toBe(false);
-    expect(passed(check(phase, API_PORT_OF_IDENTITY))).toBe(false);
+    expectPortSplit(phase, false);
     expect(passed(check(phase, NETWORK_POLICY_PROBE))).toBe(true);
     expectListed(phase);
     await expectGatewayReachesBackends(phase);
@@ -545,7 +794,7 @@ describe("service-to-service authorization (decision 27)", () => {
     await settle(phase, NETWORK_POLICY_PROBE, false);
     expectUnlisted(phase, false);
     expect(passed(check(phase, IMPOSTER))).toBe(false);
-    expect(passed(check(phase, API_PORT_OF_IDENTITY))).toBe(false);
+    expectPortSplit(phase, false);
     expectListed(phase);
     await expectGatewayReachesBackends(phase);
     expectHealthyPods(phase);

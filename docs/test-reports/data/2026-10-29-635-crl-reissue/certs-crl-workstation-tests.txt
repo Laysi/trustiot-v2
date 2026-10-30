@@ -1,0 +1,22 @@
+# CI=1 cargo test --locked -p certs --test crl --test workstation -- --nocapture, commit cac85f1f, build host (arm64 Linux VM), 2026-10-29
+# bun run --cwd frontend api:check ran first and passed (its command line is the first line below)
+$ bun tools/api-client.ts --check
+test a_crl_revokes_what_it_lists_and_lapses_at_next_update ... ok
+reissued after the revocation: CRL 2 lists 4e61ac76d0b3b0dab8d46031c9732452
+the round after a missed reissue: CRL 3 lists both revocations
+test a_revocation_gets_a_new_crl_at_once_and_the_job_catches_up_on_one_it_missed ... ok
+24 reissues and 24 renewals by 4 concurrent round tasks: CRL numbers 2..=49 each used once; 206 observed CRLs, never going back, none missing a revocation whose reissue came before it
+test reissues_and_rounds_at_once_never_go_back_skip_a_number_or_miss_a_revocation ... ok
+CA generation 1: CRL 1 (thisUpdate 1793289444) replaced by 2 (thisUpdate 1793289452) with 12 s left
+CA generation 2: CRL 1 (thisUpdate 1793289444) replaced by 2 (thisUpdate 1793289452) with 12 s left
+test crls_are_renewed_on_schedule_and_alert_before_they_lapse ... ok
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 14.74s
+test a_request_without_proof_of_possession_is_refused ... ok
+test the_ca_decides_the_workstation_profile_and_a_tls_server_refuses_it ... ok
+revoked 588cf1fab622deb45272b1e9cb4c0720: CRL 1 -> 2 before the response, listing it
+test only_platform_administrators_issue_and_revoke_and_the_crl_lists_a_revocation ... ok
+test the_broker_accepts_a_gateway_certificate_and_refuses_a_workstation_certificate ... ok
+the failed new CRL: {"fields":{"ca_key_id":"3b3cc37ee997e1cd5d3044bf6c6c56776bce7773ba2a62bfac0322c8fa20c101","check_interval":"3600s","error":"database: error returned from database: canceling statement due to lock timeout at line 3437","serial":"4ed311bf6f7cd06a5d9c17f5bbc01ac0"},"level":"ERROR","message":"could not issue a new CRL after a revocation; the revocation stands and the CRL job lists it within one check interval","service":"certs","span_id":"d54623464d4e70a2","target":"certs::crl","timestamp":"2026-10-29T16:02:42.430821Z","trace_id":"3391032cd3808b8d89b4a09fda089a1f"}
+the restarted replica's job caught up: {"fields":{"ca_key_id":"3b3cc37ee997e1cd5d3044bf6c6c56776bce7773ba2a62bfac0322c8fa20c101","cause":"unlisted_revocation","crl_number":3,"generation":1,"next_update":1793894562,"revoked":2,"revoked_serials":"[\"4ed311bf6f7cd06a5d9c17f5bbc01ac0\", \"588cf1fab622deb45272b1e9cb4c0720\"]"},"level":"INFO","message":"issued a new CRL","service":"certs","target":"certs::crl","timestamp":"2026-10-29T16:02:42.677849Z"}
+test a_revocation_is_in_the_published_crl_at_once_or_after_a_failure_within_one_round ... ok
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.91s

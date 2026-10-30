@@ -76,11 +76,12 @@ spec:
   selector:
     {{- include "trustiot.selectorLabels" . | nindent 4 }}
   ports:
+    {{- /* The identity service's token exchange, the certs service's MQTT broker certificate
+    issuance and the AI gateway's admin API have a Service of their own
+    ("trustiot.mesh.ownPolicyPorts"). */}}
+    {{- $ownPort := get (include "trustiot.mesh.ownPolicyPorts" . | fromYaml) .name }}
     {{- range .config.ports }}
-    {{- /* The identity service's token exchange and the certs service's MQTT broker certificate
-    issuance have a Service of their own (templates/token-exchange.yaml, Laysi/trustiot-v2#106;
-    templates/certs-broker.yaml, Laysi/trustiot-v2#557). */}}
-    {{- if not (or (and (eq $.name "identity") (eq .name "token-exchange")) (and (eq $.name "certs") (eq .name "broker-certs"))) }}
+    {{- if ne .name $ownPort }}
     - name: {{ .name }}
       port: {{ .servicePort | default .containerPort }}
       targetPort: {{ .name }}
@@ -96,8 +97,9 @@ spec:
 Container env: the chart's variables first (OTEL_SERVICE_NAME, the collector endpoint, SENTRY_DSN,
 the Postgres CA file, login role, password and pool size for a service that uses Postgres, the
 credentials the service lists, for identity, its routes and signing key settings, for certs, its CA
-files, for mqtt-bridge, the broker's address, and for assistant, the addresses of the services it
-calls),
+files, for mqtt-bridge, the broker's address, for a service that gets its broker account, the
+broker's address and the account ("trustiot.mqttBroker.serviceCredentials"), for assistant, the
+addresses of the services it calls, and for ai-gateway, its admin API's listen address),
 then serviceDefaults.env and services.<name>.env.
 Custom env cannot take over what the chart controls:
 - names starting with TRUSTIOT_ plus a letter or digit, SENTRY_ or OTEL_ are reserved, so the
@@ -122,12 +124,16 @@ Custom env cannot take over what the chart controls:
   <prefix>_POSTGRES_CA_FILE;
 - for mqtt-bridge, TRUSTIOT__BROKER__ADDRESS is the chart's ("trustiot.mqttBridge.env"): the bridge
   relays the gateways' connections to the in-cluster broker only, even while it is off;
+- for a service whose program reads the broker settings ("trustiot.mqttBroker.credentialServices",
+  certs, ingest and gateway-ops), every <prefix>__MQTT__ name is the chart's, with the broker or without it: its broker
+  account is the in-cluster broker's, and only the chart hands it the password file;
 - for assistant, the addresses of the AI gateway, the identity service's token exchange,
   telemetry-query, assets and dashboard-check are the chart's ("trustiot.assistant.env"), derived
   from mesh.calls.assistant, even while unset: an address in env would point it at a service the
   mesh does not let it call;
-- for telemetry-query, TRUSTIOT__CLICKHOUSE__USERNAME and TRUSTIOT__CLICKHOUSE__PASSWORD are the
-  chart's: its ClickHouse account and the password the migration Job generates for it;
+- for telemetry-query and ingest, TRUSTIOT__CLICKHOUSE__USERNAME and TRUSTIOT__CLICKHOUSE__PASSWORD
+  are the chart's: the service's ClickHouse account and the password the migration Job generates
+  for it;
 - for dashboard-check, neither the collector's endpoint nor SENTRY_DSN: its pod has no egress and
   no Secret ("trustiot.dashboardCheck.checkConfig" refuses env that reads one); its cleanup
   setting is the chart's ("trustiot.dashboardCheck.env");
@@ -135,7 +141,11 @@ Custom env cannot take over what the chart controls:
   names of its platform settings and settings file (AI_GATEWAY_ plus a letter or digit), its
   providers and roles (AI_GATEWAY__PROVIDERS__*, AI_GATEWAY__ROLES__*) and every other variable of
   its ConfigMap are the chart's ("trustiot.aiGateway.config"), so the providers' key variables,
-  endpoints and models come from values.ai only; container env would win over the ConfigMap.
+  endpoints and models come from values.ai only; container env would win over the ConfigMap. Its
+  admin API's settings (AI_GATEWAY__ADMIN__*) are the chart's too ("trustiot.aiGateway.env"):
+  the admin API listens on the pod's address only while the identity service, the one caller its
+  policies admit, is deployed (templates/ai-gateway-admin.yaml, Laysi/trustiot-v2#607), and on
+  loopback otherwise.
 Returns a YAML list; use with fromYamlArray.
 */}}
 {{- define "trustiot.service.env" -}}
@@ -154,6 +164,27 @@ values, which turn both on. */ -}}
 {{- $aiGatewayNames := list -}}
 {{- if eq $name "ai-gateway" -}}
 {{- $aiGatewayNames = keys (include "trustiot.aiGateway.config" .root | fromYaml).data -}}
+{{- end -}}
+{{- $brokerClient := has $name (include "trustiot.mqttBroker.credentialServices" .root | fromYaml).services -}}
+{{- if and (eq $name "ingest") (not (include "trustiot.mqttBroker.enabled" .root)) -}}
+{{- /* ingest reads every gateway's telemetry from the in-cluster broker and has no other work:
+without it the pod would never become ready (security review of Laysi/trustiot-v2#642). */ -}}
+{{- fail "services.ingest: ingest reads the gateways' telemetry from the in-cluster MQTT broker, so it needs mqttBroker.enabled: true; enable the broker, or set services.ingest.enabled to false (README.md, \"ingest\")" -}}
+{{- end -}}
+{{- if and (eq $name "gateway-ops") (not (include "trustiot.mqttBroker.enabled" .root)) -}}
+{{- /* gateway-ops delivers every gateway's configuration through the in-cluster broker, and its
+readiness needs the broker connection: without it the pod would never become ready, and no gateway
+would get a configuration (Laysi/trustiot-v2#721). */ -}}
+{{- fail "services.gateway-ops: gateway-ops delivers the gateways' configurations through the in-cluster MQTT broker, so it needs mqttBroker.enabled: true; enable the broker, or set services.gateway-ops.enabled to false (README.md, \"gateway-ops\")" -}}
+{{- end -}}
+{{- if has $name (list "ingest" "gateway-ops") -}}
+{{- /* For the same reason they need the broker in their mesh.calls: without it the chart hands
+them no broker account, the mesh refuses their connection, and the pod never becomes ready
+(security review of Laysi/trustiot-v2#721). */ -}}
+{{- $calls := index ($values.mesh.calls | default dict) $name -}}
+{{- if not (and (kindIs "slice" $calls) (has "mqtt-broker" $calls)) -}}
+{{- fail (printf "services.%s: %s works only through the in-cluster MQTT broker, so mesh.calls.%s must list mqtt-broker; without it the service gets no broker account and never becomes ready (README.md, \"%s\")" $name $name $name $name) -}}
+{{- end -}}
 {{- end -}}
 {{- $dbEnv := list -}}
 {{- if has $name (include "trustiot.postgres.clients" .root | fromYaml).services -}}
@@ -183,10 +214,11 @@ outbox consumer reads its producers' events with. */ -}}
 {{- end -}}
 {{- end -}}
 {{- $clickhouseEnv := list -}}
-{{- if eq $name "telemetry-query" -}}
-{{- /* Its own ClickHouse account, which creates the tenants' read-only accounts: the migration Job
-generates its password into the service's Secret and sets it
-(services/ingest/migrations/clickhouse/0008_telemetry_query.sql). */ -}}
+{{- if has $name (list "telemetry-query" "ingest") -}}
+{{- /* Its own ClickHouse account: the migration Job generates its password into the service's
+Secret and sets it. telemetry-query's creates the tenants' read-only accounts
+(services/ingest/migrations/clickhouse/0008_telemetry_query.sql); ingest's holds the role
+trustiot_ingest alone, which the Job gives it (Laysi/trustiot-v2#642). */ -}}
 {{- $account := include "trustiot.migrate.passwordSecret" (dict "root" .root "component" $name "role" "clickhouse") | fromYaml -}}
 {{- $clickhouseEnv = append $clickhouseEnv (dict "name" "TRUSTIOT__CLICKHOUSE__USERNAME" "value" $account.key) -}}
 {{- $clickhouseEnv = append $clickhouseEnv (dict "name" "TRUSTIOT__CLICKHOUSE__PASSWORD" "valueFrom" (dict "secretKeyRef" (dict "name" $account.name "key" $account.key))) -}}
@@ -208,6 +240,9 @@ generates its password into the service's Secret and sets it
 {{- if and (eq $name "mqtt-bridge") (regexMatch "(?i)^TRUSTIOT__BROKER__ADDRESS$" .name) -}}
 {{- fail (printf "services.mqtt-bridge: env %s is set by the chart: the bridge relays only to the in-cluster broker's gateway port (mqttBroker.enabled)" .name) -}}
 {{- end -}}
+{{- if and $brokerClient (regexMatch (printf "(?i)^%s__MQTT__" $prefix) .name) -}}
+{{- fail (printf "services.%s: env %s is set by the chart: the service's broker account is the in-cluster broker's (mqttBroker.enabled, mqtt-broker in mesh.calls.%s), and only the chart hands it the password" $name .name $name) -}}
+{{- end -}}
 {{- if and (eq $name "assistant") (has (upper .name) $assistantNames) -}}
 {{- fail (printf "services.assistant: env %s is set by the chart from mesh.calls.assistant: the assistant calls only the services the mesh lets it call" .name) -}}
 {{- end -}}
@@ -215,6 +250,9 @@ generates its password into the service's Secret and sets it
 {{- $reserved := or (regexMatch "(?i)^AI_GATEWAY_[A-Z0-9]" .name) (regexMatch "(?i)^AI_GATEWAY__(PROVIDERS|ROLES)__" .name) (has (upper .name) $aiGatewayNames) -}}
 {{- if $reserved -}}
 {{- fail (printf "services.ai-gateway: env %s is set by the chart from values.ai (the providers, their key variables and endpoints, the model roles and the gateway's time limits)" .name) -}}
+{{- end -}}
+{{- if regexMatch "(?i)^AI_GATEWAY__ADMIN__" .name -}}
+{{- fail (printf "services.ai-gateway: env %s is set by the chart: the admin API changes every tenant's models, so it listens beyond loopback only for the identity service, behind its own Service and policies (templates/ai-gateway-admin.yaml, Laysi/trustiot-v2#607)" .name) -}}
 {{- end -}}
 {{- end -}}
 {{- if and $dbEnv (or (regexMatch (printf "(?i)^%s__DATABASE__(PLATFORM_)?(USERNAME|PASSWORD)$" $prefix) .name) (regexMatch (printf "(?i)^%s_POSTGRES_" $prefix) .name)) -}}
@@ -275,11 +313,16 @@ under the service's own prefix. */ -}}
 {{- if $isolated -}}
 {{- $dashboardCheckEnv = include "trustiot.dashboardCheck.env" .root | fromYamlArray -}}
 {{- end -}}
+{{- $brokerEnv := (include "trustiot.mqttBroker.serviceCredentials" (dict "root" .root "name" $name) | fromYaml).env -}}
 {{- $assistantEnv := list -}}
 {{- if eq $name "assistant" -}}
 {{- $assistantEnv = include "trustiot.assistant.env" .root | fromYamlArray -}}
 {{- end -}}
-{{- $env = concat $env $dbEnv $clickhouseEnv $credentialEnv $identityEnv $certsEnv $mqttBridgeEnv $assistantEnv $dashboardCheckEnv ($config.env | default list) -}}
+{{- $aiGatewayEnv := list -}}
+{{- if eq $name "ai-gateway" -}}
+{{- $aiGatewayEnv = include "trustiot.aiGateway.env" .root | fromYamlArray -}}
+{{- end -}}
+{{- $env = concat $env $dbEnv $clickhouseEnv $credentialEnv $identityEnv $certsEnv $mqttBridgeEnv $brokerEnv $assistantEnv $aiGatewayEnv $dashboardCheckEnv ($config.env | default list) -}}
 {{- $names := list -}}
 {{- range $env -}}
 {{- $names = append $names .name -}}
@@ -306,11 +349,32 @@ under the service's own prefix. */ -}}
 {{- range $containerPorts -}}
 {{- $portNames = append $portNames .name -}}
 {{- end -}}
+{{- /* A port with a Service and policies of its own ("trustiot.mesh.ownPolicyPorts") is never
+probed, by name or by number: the node source reaches every probe port without mTLS or
+AuthorizationPolicy, so a probe there would open it to every process on the node. */ -}}
+{{- $ownPort := get (include "trustiot.mesh.ownPolicyPorts" . | fromYaml) .name -}}
+{{- $ownNumber := 0 -}}
+{{- range $containerPorts -}}
+{{- if and $ownPort (eq .name $ownPort) -}}
+{{- $ownNumber = int .containerPort -}}
+{{- end -}}
+{{- end -}}
 {{- range $kind, $probe := $config.probes -}}
 {{- range $handler := list "httpGet" "tcpSocket" "grpc" -}}
 {{- $port := (get $probe $handler | default dict).port -}}
 {{- if and (kindIs "string" $port) (not (has $port $portNames)) -}}
 {{- fail (printf "services.%s: probes.%s uses port %q, which is not in ports" $.name $kind $port) -}}
+{{- end -}}
+{{- $own := "" -}}
+{{- if and $ownPort (kindIs "string" $port) (eq $port $ownPort) -}}
+{{- $own = printf "%q" $port -}}
+{{- else if and $ownNumber (or (kindIs "float64" $port) (kindIs "int" $port) (kindIs "int64" $port)) -}}
+{{- if eq (int $port) $ownNumber -}}
+{{- $own = printf "%d, the port %s" $ownNumber $ownPort -}}
+{{- end -}}
+{{- end -}}
+{{- if $own -}}
+{{- fail (printf "services.%s: probes.%s uses port %s, which has a Service and policies of its own: the node reaches a pod's probe ports without mTLS or AuthorizationPolicy, so every process on the node could call it; probe the health port (README.md, 「節點來源」)" $.name $kind $own) -}}
 {{- end -}}
 {{- end -}}
 {{- end -}}
@@ -322,6 +386,9 @@ keys or init containers, and nothing that reaches out of it (_dashboard-check.tp
 {{- end -}}
 {{- $env := include "trustiot.service.env" . | fromYamlArray -}}
 {{- $caMounts := include "trustiot.caMounts" (dict "root" .root "name" .name) | fromYamlArray -}}
+{{- /* The service's own key of the MQTT broker's accounts Secret, while it gets its account
+(_mqtt-broker.tpl). */ -}}
+{{- $brokerAccount := include "trustiot.mqttBroker.serviceCredentials" (dict "root" .root "name" .name) | fromYaml -}}
 {{- /* The migration wait's init container reads the Job through the API server, which the
 dashboard check's pod cannot reach; it uses no database either. */ -}}
 {{- $migrate := and (include "trustiot.migrate.enabled" .root) (not $isolated) -}}
@@ -490,6 +557,9 @@ spec:
               mountPath: {{ include "trustiot.certs.certificatesDir" .root }}
               readOnly: true
             {{- end }}
+            {{- with $brokerAccount.volumeMounts }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
       volumes:
         - name: tmp
           emptyDir:
@@ -558,5 +628,8 @@ spec:
         - name: certs-ca-certificates
           configMap:
             name: {{ $ca.certificates }}
+        {{- end }}
+        {{- with $brokerAccount.volumes }}
+        {{- toYaml . | nindent 8 }}
         {{- end }}
 {{- end -}}

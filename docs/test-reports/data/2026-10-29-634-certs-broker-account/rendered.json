@@ -1,0 +1,294 @@
+{
+  "saas": {
+    "certsBrokerEnv": [
+      {
+        "name": "TRUSTIOT__MQTT__HOST",
+        "value": "trustiot-mqtt-broker.trustiot.svc"
+      },
+      {
+        "name": "TRUSTIOT__MQTT__PORT",
+        "value": "1883"
+      },
+      {
+        "name": "TRUSTIOT__MQTT__USERNAME",
+        "value": "service:certs"
+      },
+      {
+        "name": "TRUSTIOT__MQTT__PASSWORD_FILE",
+        "value": "/etc/trustiot/mqtt-broker-account/certs"
+      }
+    ],
+    "certsAccountVolume": [
+      {
+        "name": "mqtt-broker-account",
+        "secret": {
+          "defaultMode": 288,
+          "items": [
+            {
+              "key": "certs",
+              "path": "certs"
+            }
+          ],
+          "secretName": "trustiot-mqtt-broker-accounts"
+        }
+      }
+    ],
+    "certsAccountMount": [
+      {
+        "mountPath": "/etc/trustiot/mqtt-broker-account",
+        "name": "mqtt-broker-account",
+        "readOnly": true
+      }
+    ],
+    "podsWithAccountsSecretVolume": [
+      "Deployment/trustiot-certs"
+    ],
+    "otherHoldersBrokerEnv": {
+      "ingest": [],
+      "gateway-ops": [],
+      "mqtt-bridge": []
+    },
+    "brokerAuthorizationPolicyRules": [
+      {
+        "from": [
+          {
+            "source": {
+              "principals": [
+                "cluster.local/ns/trustiot/sa/trustiot-mqtt-bridge"
+              ]
+            }
+          }
+        ],
+        "to": [
+          {
+            "operation": {
+              "ports": [
+                "8883"
+              ]
+            }
+          }
+        ]
+      },
+      {
+        "from": [
+          {
+            "source": {
+              "principals": [
+                "cluster.local/ns/trustiot/sa/trustiot-certs",
+                "cluster.local/ns/trustiot/sa/trustiot-gateway-ops",
+                "cluster.local/ns/trustiot/sa/trustiot-ingest"
+              ]
+            }
+          }
+        ],
+        "to": [
+          {
+            "operation": {
+              "ports": [
+                "1883"
+              ]
+            }
+          }
+        ]
+      }
+    ],
+    "brokerNetworkPolicyIngress": [
+      {
+        "from": [
+          {
+            "podSelector": {
+              "matchLabels": {
+                "app.kubernetes.io/name": "trustiot",
+                "app.kubernetes.io/instance": "trustiot",
+                "app.kubernetes.io/component": "certs"
+              }
+            }
+          },
+          {
+            "podSelector": {
+              "matchLabels": {
+                "app.kubernetes.io/name": "trustiot",
+                "app.kubernetes.io/instance": "trustiot",
+                "app.kubernetes.io/component": "gateway-ops"
+              }
+            }
+          },
+          {
+            "podSelector": {
+              "matchLabels": {
+                "app.kubernetes.io/name": "trustiot",
+                "app.kubernetes.io/instance": "trustiot",
+                "app.kubernetes.io/component": "ingest"
+              }
+            }
+          },
+          {
+            "podSelector": {
+              "matchLabels": {
+                "app.kubernetes.io/name": "trustiot",
+                "app.kubernetes.io/instance": "trustiot",
+                "app.kubernetes.io/component": "mqtt-bridge"
+              }
+            }
+          }
+        ],
+        "ports": [
+          {
+            "port": 15008,
+            "protocol": "TCP"
+          }
+        ]
+      }
+    ],
+    "brokerAccountsInitServices": {
+      "name": "TRUSTIOT__ACCOUNTS__SERVICES",
+      "value": "certs,gateway-ops,ingest"
+    }
+  },
+  "onprem": {
+    "certsBrokerEnv": [
+      {
+        "name": "TRUSTIOT__MQTT__HOST",
+        "value": "trustiot-mqtt-broker.trustiot.svc"
+      },
+      {
+        "name": "TRUSTIOT__MQTT__PORT",
+        "value": "1883"
+      },
+      {
+        "name": "TRUSTIOT__MQTT__USERNAME",
+        "value": "service:certs"
+      },
+      {
+        "name": "TRUSTIOT__MQTT__PASSWORD_FILE",
+        "value": "/etc/trustiot/mqtt-broker-account/certs"
+      }
+    ],
+    "certsAccountVolume": [
+      {
+        "name": "mqtt-broker-account",
+        "secret": {
+          "defaultMode": 288,
+          "items": [
+            {
+              "key": "certs",
+              "path": "certs"
+            }
+          ],
+          "secretName": "trustiot-mqtt-broker-accounts"
+        }
+      }
+    ],
+    "certsAccountMount": [
+      {
+        "mountPath": "/etc/trustiot/mqtt-broker-account",
+        "name": "mqtt-broker-account",
+        "readOnly": true
+      }
+    ],
+    "podsWithAccountsSecretVolume": [
+      "Deployment/trustiot-certs"
+    ],
+    "otherHoldersBrokerEnv": {
+      "ingest": [],
+      "gateway-ops": [],
+      "mqtt-bridge": []
+    },
+    "brokerAuthorizationPolicyRules": [
+      {
+        "from": [
+          {
+            "source": {
+              "principals": [
+                "cluster.local/ns/trustiot/sa/trustiot-mqtt-bridge"
+              ]
+            }
+          }
+        ],
+        "to": [
+          {
+            "operation": {
+              "ports": [
+                "8883"
+              ]
+            }
+          }
+        ]
+      },
+      {
+        "from": [
+          {
+            "source": {
+              "principals": [
+                "cluster.local/ns/trustiot/sa/trustiot-certs",
+                "cluster.local/ns/trustiot/sa/trustiot-gateway-ops",
+                "cluster.local/ns/trustiot/sa/trustiot-ingest"
+              ]
+            }
+          }
+        ],
+        "to": [
+          {
+            "operation": {
+              "ports": [
+                "1883"
+              ]
+            }
+          }
+        ]
+      }
+    ],
+    "brokerNetworkPolicyIngress": [
+      {
+        "from": [
+          {
+            "podSelector": {
+              "matchLabels": {
+                "app.kubernetes.io/name": "trustiot",
+                "app.kubernetes.io/instance": "trustiot",
+                "app.kubernetes.io/component": "certs"
+              }
+            }
+          },
+          {
+            "podSelector": {
+              "matchLabels": {
+                "app.kubernetes.io/name": "trustiot",
+                "app.kubernetes.io/instance": "trustiot",
+                "app.kubernetes.io/component": "gateway-ops"
+              }
+            }
+          },
+          {
+            "podSelector": {
+              "matchLabels": {
+                "app.kubernetes.io/name": "trustiot",
+                "app.kubernetes.io/instance": "trustiot",
+                "app.kubernetes.io/component": "ingest"
+              }
+            }
+          },
+          {
+            "podSelector": {
+              "matchLabels": {
+                "app.kubernetes.io/name": "trustiot",
+                "app.kubernetes.io/instance": "trustiot",
+                "app.kubernetes.io/component": "mqtt-bridge"
+              }
+            }
+          }
+        ],
+        "ports": [
+          {
+            "port": 15008,
+            "protocol": "TCP"
+          }
+        ]
+      }
+    ],
+    "brokerAccountsInitServices": {
+      "name": "TRUSTIOT__ACCOUNTS__SERVICES",
+      "value": "certs,gateway-ops,ingest"
+    }
+  }
+}

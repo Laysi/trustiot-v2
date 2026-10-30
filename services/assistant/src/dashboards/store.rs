@@ -1,5 +1,5 @@
 //! Dashboards and their versions in Postgres (Laysi/trustiot-v2#150; schema:
-//! `migrations/postgres/0002_dashboards.sql`).
+//! `migrations/postgres/0003_dashboards.sql`).
 //!
 //! Every function is one whole operation: call it alone in a [`TenantTransaction`] of the
 //! caller's tenant and commit when it returns `Ok` (roll back otherwise). The public API opens

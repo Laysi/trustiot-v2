@@ -38,7 +38,7 @@ use contract::events::assets::{GATEWAY_BINDING_AGGREGATE, GatewayBound};
 use contract::{GatewayBindingId, TenantId};
 use outbox::Aggregate;
 use protocol::GatewayId;
-use service_kit::identity::UserIdentity;
+use service_kit::identity::{Requirement, UserIdentity};
 use service_kit::tenant::{BackgroundTenantDb, TenantDbError, TenantTransaction};
 use sqlx::Row;
 
@@ -154,10 +154,11 @@ impl BindError {
 /// Whether `user` may act as a platform administrator here: the administrator's own request,
 /// whose token the ingress's cookie check issued. A token with `act` was exchanged by another
 /// service calling on the administrator's behalf (decision 27), and binding a gateway into a
-/// tenant is the administrator's own act (Laysi/trustiot-v2#104).
+/// tenant is the administrator's own act (Laysi/trustiot-v2#104). service-kit's shared check
+/// (`Requirement::OwnPlatformAdmin`), without its log: the handler logged a refusal already.
 #[must_use]
 pub fn is_own_platform_request(user: &UserIdentity) -> bool {
-    user.is_platform_admin() && user.claims().act.is_none()
+    user.meets(Requirement::OwnPlatformAdmin).is_ok()
 }
 
 /// Binds gateways to tenants; see the module.
@@ -210,6 +211,11 @@ impl GatewayBinder {
             return Ok(Outcome::AlreadyBound(binding));
         }
         let binding_id = GatewayBindingId::generate();
+        // This INSERT must stay the transaction's first write: the transaction gets its ID here,
+        // after `ON CONFLICT` has waited for a concurrent binding of the gateway, and the certs
+        // service orders a gateway's bindings by the ID of the transaction that wrote their event
+        // (`services/certs/README.md`, "目前的綁定"). An earlier write would take the ID before
+        // the wait, so a later binding could sort before the one it waited for.
         let inserted = sqlx::query(INSERT_BINDING)
             .bind(tenant.to_string())
             .bind(binding_id.to_string())

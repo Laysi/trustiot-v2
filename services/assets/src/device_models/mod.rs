@@ -51,7 +51,7 @@ use contract::{DeviceModelId, ErrorBody, ErrorCode, FieldError, MessageKey, Tena
 use protocol::PointKey;
 use protocol::config::{ByteOrder, DataType, FunctionCode};
 use serde::Serialize;
-use service_kit::identity::{IdentityVerifier, UserIdentity};
+use service_kit::identity::{IdentityVerifier, Requirement, UserIdentity};
 use service_kit::tenant::TenantDb;
 use utoipa::ToSchema;
 use utoipa::openapi::schema::{Object, ObjectBuilder, Type};
@@ -365,8 +365,11 @@ async fn no_store(mut response: Response) -> Response {
     )
 )]
 async fn list_models(State(state): State<Routes>, user: UserIdentity) -> Response {
-    if let Some(refused) = refuse(&user, TenantRole::Viewer, "list device models") {
-        return refused;
+    if let Err(refused) = user.require(
+        Requirement::Tenant(TenantRole::Viewer),
+        "list device models",
+    ) {
+        return refused.into_response();
     }
     match store::list(&state.db, &user).await {
         Ok(models) => ok(
@@ -399,8 +402,11 @@ async fn get_model(
     user: UserIdentity,
     model_id: Result<Path<String>, PathRejection>,
 ) -> Response {
-    if let Some(refused) = refuse(&user, TenantRole::Viewer, "read a device model") {
-        return refused;
+    if let Err(refused) = user.require(
+        Requirement::Tenant(TenantRole::Viewer),
+        "read a device model",
+    ) {
+        return refused.into_response();
     }
     let Some(model_id) = parse_id(model_id) else {
         return error(ErrorBody::new(ErrorCode::NotFound));
@@ -436,8 +442,11 @@ async fn export_model(
     user: UserIdentity,
     model_id: Result<Path<String>, PathRejection>,
 ) -> Response {
-    if let Some(refused) = refuse(&user, TenantRole::Viewer, "export a device model") {
-        return refused;
+    if let Err(refused) = user.require(
+        Requirement::Tenant(TenantRole::Viewer),
+        "export a device model",
+    ) {
+        return refused.into_response();
     }
     let Some(model_id) = parse_id(model_id) else {
         return error(ErrorBody::new(ErrorCode::NotFound));
@@ -535,8 +544,8 @@ async fn create_from(
         Entry::Create => ("create a device model", document::parse_create),
         Entry::Import => ("import a device model", document::parse_import),
     };
-    if let Some(refused) = refuse(&user, TenantRole::Editor, action) {
-        return refused;
+    if let Err(refused) = user.require(Requirement::Tenant(TenantRole::Editor), action) {
+        return refused.into_response();
     }
     let body = match read_json(headers, body).await {
         Ok(body) => body,
@@ -598,8 +607,11 @@ async fn update_model(
     headers: HeaderMap,
     body: Body,
 ) -> Response {
-    if let Some(refused) = refuse(&user, TenantRole::Editor, "update a device model") {
-        return refused;
+    if let Err(refused) = user.require(
+        Requirement::Tenant(TenantRole::Editor),
+        "update a device model",
+    ) {
+        return refused.into_response();
     }
     let Some(model_id) = parse_id(model_id) else {
         return error(ErrorBody::new(ErrorCode::NotFound));
@@ -654,8 +666,11 @@ async fn delete_model(
     user: UserIdentity,
     model_id: Result<Path<String>, PathRejection>,
 ) -> Response {
-    if let Some(refused) = refuse(&user, TenantRole::Editor, "delete a device model") {
-        return refused;
+    if let Err(refused) = user.require(
+        Requirement::Tenant(TenantRole::Editor),
+        "delete a device model",
+    ) {
+        return refused.into_response();
     }
     let Some(model_id) = parse_id(model_id) else {
         return error(ErrorBody::new(ErrorCode::NotFound));
@@ -677,22 +692,6 @@ async fn delete_model(
             &failure,
             "could not delete a device model",
         ),
-    }
-}
-
-/// The 403 to answer when the user has no tenant or their role there does not include `needed`;
-/// `None` when the request may go on.
-fn refuse(user: &UserIdentity, needed: TenantRole, action: &str) -> Option<Response> {
-    match user.tenant() {
-        Some(grant) if grant.role.includes(needed) => None,
-        _ => {
-            tracing::info!(
-                user_id = %user.user_id(),
-                action,
-                "refused: no tenant or not enough of a role in it"
-            );
-            Some(error(ErrorBody::new(ErrorCode::PermissionDenied)))
-        }
     }
 }
 

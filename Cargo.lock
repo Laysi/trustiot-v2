@@ -6,10 +6,32 @@ version = 4
 name = "agent"
 version = "0.1.0"
 dependencies = [
+ "agent",
+ "base64 0.22.1",
+ "bytes",
+ "futures-util",
+ "http-body-util",
+ "hyper",
+ "hyper-util",
+ "libc",
  "protocol",
+ "rcgen",
+ "ring",
+ "rustls",
+ "rustls-pki-types",
+ "serde",
+ "serde_json",
  "socket2",
  "testkit",
+ "thiserror",
  "tokio",
+ "tokio-rustls",
+ "tokio-tungstenite",
+ "tokio-util",
+ "toml",
+ "tracing",
+ "tracing-subscriber",
+ "x509-parser",
 ]
 
 [[package]]
@@ -43,6 +65,7 @@ name = "ai-gateway"
 version = "0.1.0"
 dependencies = [
  "ai-clients",
+ "ai-gateway-api",
  "axum",
  "bytes",
  "futures-util",
@@ -61,6 +84,14 @@ dependencies = [
  "tracing",
  "url",
  "zeroize",
+]
+
+[[package]]
+name = "ai-gateway-api"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -384,6 +415,7 @@ dependencies = [
  "getrandom 0.4.3",
  "humantime",
  "migrate",
+ "mqtt-client",
  "opentelemetry",
  "opentelemetry-proto",
  "outbox",
@@ -403,6 +435,7 @@ dependencies = [
  "time",
  "tokio",
  "tracing",
+ "tracing-subscriber",
  "utoipa",
  "workstation",
  "x509-parser",
@@ -804,6 +837,23 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "aedcfb3409746eddb02b9e19ebda1c3394f759a152e48ee875a0844d1b955484"
 
 [[package]]
+name = "fixedbitset"
+version = "0.5.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1d674e81391d1e1ab681a28d99df07927c6d4aa5b027d7da16ba32d1d21ecd99"
+
+[[package]]
+name = "flume"
+version = "0.11.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "da0e4dd2a88388a1f4ccc7c9ce104604dab68d9f408dc34cd45823d5a9069095"
+dependencies = [
+ "futures-core",
+ "futures-sink",
+ "spin",
+]
+
+[[package]]
 name = "flume"
 version = "0.12.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -910,6 +960,36 @@ dependencies = [
  "memchr",
  "pin-project-lite",
  "slab",
+]
+
+[[package]]
+name = "gateway-ops"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "bytes",
+ "cbor4ii",
+ "chrono",
+ "contract",
+ "migrate",
+ "mqtt-client",
+ "opentelemetry",
+ "outbox",
+ "protocol",
+ "reqwest",
+ "rumqttc",
+ "serde",
+ "serde_json",
+ "service-kit",
+ "sqlx",
+ "testkit",
+ "thiserror",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "tracing-subscriber",
+ "utoipa",
+ "uuid",
 ]
 
 [[package]]
@@ -1254,6 +1334,7 @@ dependencies = [
 name = "identity"
 version = "0.1.0"
 dependencies = [
+ "ai-gateway-api",
  "axum",
  "base64 0.22.1",
  "chrono",
@@ -1261,6 +1342,9 @@ dependencies = [
  "ed25519-dalek",
  "getrandom 0.4.3",
  "hmac",
+ "http-body-util",
+ "hyper",
+ "hyper-util",
  "identity-keys",
  "jiff-tzdb",
  "migrate",
@@ -1335,11 +1419,37 @@ dependencies = [
 name = "ingest"
 version = "0.1.0"
 dependencies = [
+ "assets",
+ "axum",
+ "base64 0.22.1",
+ "bytes",
+ "cbor4ii",
  "chrono",
+ "contract",
+ "http",
+ "http-body-util",
+ "hyper",
+ "hyper-util",
+ "migrate",
+ "mqtt-client",
+ "opentelemetry",
+ "outbox",
+ "percent-encoding",
  "protocol",
  "reqwest",
+ "rustls",
+ "rustls-pki-types",
+ "serde",
  "serde_json",
+ "service-kit",
+ "sqlx",
+ "testkit",
+ "thiserror",
  "tokio",
+ "tokio-rustls",
+ "tokio-util",
+ "tracing",
+ "tracing-subscriber",
  "uuid",
 ]
 
@@ -1589,6 +1699,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "mqtt-client"
+version = "0.1.0"
+dependencies = [
+ "bytes",
+ "futures-util",
+ "getrandom 0.4.3",
+ "protocol",
+ "rumqttc",
+ "serde",
+ "serde_json",
+ "testkit",
+ "thiserror",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "tracing-log",
+ "tracing-subscriber",
+ "zeroize",
+]
+
+[[package]]
 name = "nom"
 version = "7.1.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1655,6 +1786,7 @@ dependencies = [
  "assistant",
  "certs",
  "contract",
+ "gateway-ops",
  "identity",
  "serde_json",
  "telemetry-query",
@@ -2059,6 +2191,23 @@ dependencies = [
  "libc",
  "untrusted",
  "windows-sys 0.52.0",
+]
+
+[[package]]
+name = "rumqttc"
+version = "0.25.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0feff8d882bff0b2fddaf99355a10336d43dd3ed44204f85ece28cf9626ab519"
+dependencies = [
+ "bytes",
+ "fixedbitset",
+ "flume 0.11.1",
+ "futures-util",
+ "log",
+ "thiserror",
+ "tokio",
+ "tokio-stream",
+ "tokio-util",
 ]
 
 [[package]]
@@ -2575,7 +2724,7 @@ checksum = "488e99c397a62007e4229aec669a179816339afc6d2620ca6fa420dbee2e982c"
 dependencies = [
  "atoi",
  "chrono",
- "flume",
+ "flume 0.12.0",
  "form_urlencoded",
  "futures-channel",
  "futures-core",
@@ -2719,16 +2868,24 @@ dependencies = [
  "base64 0.22.1",
  "contract",
  "ed25519-dalek",
+ "futures-util",
  "http",
  "migrate",
+ "protocol",
  "rcgen",
  "reqwest",
+ "ring",
+ "rustls",
+ "rustls-pki-types",
  "serde",
  "serde_json",
  "service-kit",
+ "socket2",
  "sqlx",
  "tokio",
  "tokio-modbus",
+ "tokio-rustls",
+ "tokio-tungstenite",
  "uuid",
 ]
 
@@ -3493,6 +3650,7 @@ checksum = "1ebf944e87a7c253233ad6766e082e3cd714b5d03812acc24c318f549614536e"
 name = "workstation"
 version = "0.1.0"
 dependencies = [
+ "agent",
  "axum",
  "base64 0.22.1",
  "bytes",
@@ -3504,6 +3662,7 @@ dependencies = [
  "hyper",
  "hyper-util",
  "libc",
+ "protocol",
  "rcgen",
  "rustls",
  "rustls-native-certs",
@@ -3511,12 +3670,14 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.11.0",
+ "testkit",
  "thiserror",
  "time",
  "tokio",
  "tokio-rustls",
  "tracing",
  "tracing-subscriber",
+ "unicode-properties",
  "url",
  "x509-parser",
  "zeroize",

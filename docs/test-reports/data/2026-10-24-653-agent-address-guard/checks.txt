@@ -1,0 +1,63 @@
+== workspace clippy
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 12.52s
+== agent lib clippy without dev-dependencies
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.25s
+== aarch64 build
+info: component rust-std for target aarch64-unknown-linux-gnu is up to date
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 6.33s
+== features of agent in a normal build
+agent v0.1.0 (<host copy>/src/edge/agent)
+└── agent feature "default" (command-line)
+== features of agent with dev-dependencies
+agent v0.1.0 (<host copy>/src/edge/agent)
+├── agent feature "default" (command-line)
+│   [dev-dependencies]
+│   └── agent v0.1.0 (<host copy>/src/edge/agent) (*)
+└── agent feature "test-exempt-addresses"
+    [dev-dependencies]
+    └── agent v0.1.0 (<host copy>/src/edge/agent) (*)
+== guard tests
+test modbus::address::tests::a_mapped_address_is_connected_to_as_ipv4 ... ok
+test modbus::address::tests::a_refusal_lists_only_the_resolved_addresses ... ok
+test modbus::address::tests::field_networks_are_allowed ... ok
+test modbus::address::tests::interfaces_hold_their_addresses_and_subnet_broadcasts ... ok
+test modbus::address::tests::refused_addresses ... ok
+test modbus::address::tests::the_gateways_interfaces_can_be_read ... ok
+test modbus::plan::tests::function_codes_are_separate_address_spaces ... ok
+test modbus::address::tests::an_exempt_address_is_canonical ... ok
+test modbus::plan::tests::points_past_the_last_address_are_refused ... ok
+test modbus::tcp::tests::link_local_and_private_addresses_are_dialed ... ok
+test modbus::tcp::tests::only_the_allowed_addresses_of_a_name_are_dialed ... ok
+test modbus::tcp::tests::a_name_is_resolved_once_and_its_checked_address_dialed ... ok
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 62 filtered out; finished in 0.00s
+test modbus::tcp::tests::link_local_and_private_addresses_are_dialed ... ok
+test modbus::tcp::tests::the_framing_follows_the_transport ... ok
+test modbus::tcp::tests::connections_use_tcp_keepalive ... ok
+test modbus::tcp::tests::only_the_allowed_addresses_of_a_name_are_dialed ... ok
+test modbus::tcp::tests::an_idle_connection_the_device_closed_is_not_reused ... ok
+test modbus::tcp::tests::what_arrives_between_requests_is_dropped ... ok
+test modbus::tcp::tests::rtu_frames_between_requests_are_dropped_and_a_cut_one_too ... ok
+test modbus::tcp::tests::a_name_is_resolved_once_and_its_checked_address_dialed ... ok
+test modbus::tcp::tests::a_read_cut_off_while_sending_does_not_reuse_the_connection ... ok
+test modbus::tcp::tests::refused_hosts_are_never_dialed ... ok
+test modbus::tcp::tests::refused_hosts_reach_nothing ... ok
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 63 filtered out; finished in 0.00s
+test hosts_on_the_gateway_itself_reach_nothing ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test tests::test_only_features_are_enabled_only_by_dev_dependencies ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 17 filtered out; finished in 0.00s
+test test_only_features_are_only_enabled_by_dev_dependencies ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 9 filtered out; finished in 0.02s
+== cargo deny
+          │   ├── identity v0.1.0 (*)
+          │   ├── migrate v0.1.0 (*)
+          │   └── telemetry-query v0.1.0 (*)
+          ├── telemetry-query v0.1.0 (*)
+          ├── testkit v0.1.0 (*)
+          └── web v0.1.0
+
+advisories ok, bans ok, licenses ok, sources ok
+== openapi check
+api/openapi.json is up to date
+exit 0 at 15:07:56 (build host)
+

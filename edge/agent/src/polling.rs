@@ -28,6 +28,15 @@
 //!   after the backoff, opens a new connection. A request is never cut off before its poll has
 //!   run for [`Settings::minimum_watchdog`], the longest one request can take, so a device polled
 //!   less often than the watchdog still gets a whole request each poll.
+//! - **Live values.** While a lease asks for a device's samples faster than its poll interval
+//!   ([`Live`], rebuild checklist I3), the loop polls it on a second fixed-rate schedule at the
+//!   lease's interval, from the moment the lease started covering it (or one interval after the
+//!   previous poll, when that is later, so two live samples are never closer than the interval
+//!   and leases that come and go quickly never poll faster). The regular schedule goes
+//!   on underneath: the first poll that ends at or after a regular due time is that time's
+//!   regular poll ([`Polled::regular`]); every other poll is extra. So the regular polls keep
+//!   their rate (one per due time, sampled at most one live interval late), the device is never
+//!   polled twice for one due time, and the extra polls stop as soon as no lease asks for them.
 
 use std::future::Future;
 use std::ops::ControlFlow;
@@ -196,6 +205,32 @@ pub fn poll_period(device: &Device) -> Duration {
     Duration::from_millis(u64::from(device.poll_interval_ms.max(MIN_POLL_INTERVAL_MS)))
 }
 
+/// Whether live values (rebuild checklist I3) ask for a device's samples faster than its poll
+/// interval: the device's view of the live leases (`crate::live`).
+pub trait Live: Send {
+    /// The shortest sampling interval of the leases that cover the device at `now`; `None`
+    /// when none does.
+    fn interval(&self, now: Instant) -> Option<Duration>;
+
+    /// Resolves once the leases may have changed since it last resolved; never resolves when
+    /// they cannot change any more. Cancel safe.
+    fn changed(&mut self) -> impl Future<Output = ()> + Send;
+}
+
+/// No lease ever covers the device: [`run`]'s fixed schedule.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct NoLive;
+
+impl Live for NoLive {
+    fn interval(&self, _now: Instant) -> Option<Duration> {
+        None
+    }
+
+    async fn changed(&mut self) {
+        std::future::pending().await
+    }
+}
+
 /// A connection the watchdog can close, so that the next read opens a new one.
 pub trait Disconnect {
     /// Closes the connection if one is open; the next read opens a new one. It must not wait
@@ -221,15 +256,21 @@ pub enum Event {
 /// One poll, and how it went.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Polled {
-    /// When the poll was due: the start of the loop plus a whole number of periods.
+    /// When the poll was due: the start of the loop plus a whole number of periods, or, while a
+    /// lease asks for faster samples, the start of the live schedule plus a whole number of
+    /// live intervals.
     pub scheduled: Instant,
     /// When it started; at the due time unless the runtime was late.
     pub started: Instant,
     /// When it ended.
     pub ended: Instant,
-    /// Due polls skipped right before this one, because the poll before ran past them or the
-    /// backoff waited past them.
+    /// Regular due polls skipped right before this one, because the poll before ran past them or
+    /// the backoff waited past them; always 0 for an extra poll.
     pub missed: u64,
+    /// Whether this is the poll of a regular due time, at the device's poll interval: always,
+    /// unless a lease asks for faster samples. An extra poll, made only for the live values, is
+    /// not (see the module documentation).
+    pub regular: bool,
     /// What it read.
     pub poll: Poll,
     /// Set when the watchdog fired during this poll and closed the connection.
@@ -270,21 +311,74 @@ pub async fn run<C, K, F>(
     connection: &mut C,
     clock: &K,
     settings: &Settings,
-    mut on_event: F,
+    on_event: F,
 ) where
     C: Connection + Disconnect + Send,
     K: Clock,
     F: FnMut(Event) -> ControlFlow<()>,
 {
+    run_live(
+        reader,
+        period,
+        &mut NoLive,
+        connection,
+        clock,
+        settings,
+        on_event,
+    )
+    .await;
+}
+
+/// Like [`run`], and while `live` asks for samples faster than `period`, polls at the live
+/// interval as well (see the module documentation).
+pub async fn run_live<C, K, L, F>(
+    reader: &DeviceReader,
+    period: Duration,
+    live: &mut L,
+    connection: &mut C,
+    clock: &K,
+    settings: &Settings,
+    mut on_event: F,
+) where
+    C: Connection + Disconnect + Send,
+    K: Clock,
+    L: Live,
+    F: FnMut(Event) -> ControlFlow<()>,
+{
     let start = Instant::now();
     let mut schedule = Schedule::new(start, period);
+    // The live schedule, while a lease asks for samples faster than the regular ones.
+    let mut fast: Option<Schedule> = None;
+    // When the last poll started: a new live schedule (a lease that starts, starts again, or has
+    // a new shortest interval) never polls sooner than one interval after it. So two live
+    // samples are never closer than the interval, whichever poll a lease that started or ended
+    // mid-poll made live, and leases that come and go quickly cannot poll the device faster.
+    let mut last_started: Option<Instant> = None;
     let mut backoff = Backoff::new(settings.backoff_initial, settings.backoff_max);
     let mut watch = Watch::new(settings, start);
     let mut earliest = start;
     let mut delay = Duration::ZERO;
     loop {
-        let (scheduled, missed) = schedule.next(earliest);
-        if scheduled > Instant::now() {
+        let now = Instant::now();
+        match live
+            .interval(now)
+            .map(|interval| interval.max(Duration::from_millis(u64::from(MIN_POLL_INTERVAL_MS))))
+            .filter(|interval| *interval < schedule.period)
+        {
+            // A new live schedule starts at once, so that the first live sample is not a whole
+            // interval away, unless the last poll started less than an interval ago; one whose
+            // interval is unchanged goes on.
+            Some(interval) if fast.is_none_or(|fast| fast.period != interval) => {
+                let first = last_started.map_or(now, |last| after(last, interval).max(now));
+                fast = Some(Schedule::new(first, interval));
+            }
+            Some(_) => {}
+            None => fast = None,
+        }
+        let regular = schedule.peek(earliest);
+        let live_tick = fast.map(|fast| fast.peek(earliest));
+        let scheduled = live_tick.map_or(regular.due, |tick| tick.due);
+        if scheduled > now {
             let waiting = Waiting {
                 until: scheduled,
                 failures: backoff.failures,
@@ -293,9 +387,19 @@ pub async fn run<C, K, F>(
             if on_event(Event::Waiting(waiting)).is_break() {
                 return;
             }
-            sleep_until(scheduled).await;
+            // The leases are looked at again before the poll: a lease that ended during the
+            // wait stops the extra polls, a new one starts its own at once.
+            tokio::select! {
+                () = sleep_until(scheduled) => {}
+                () = live.changed() => {}
+            }
+            continue;
+        }
+        if let (Some(fast), Some(tick)) = (&mut fast, live_tick) {
+            fast.take(tick);
         }
         let started = Instant::now();
+        last_started = Some(started);
         watch.begin_poll(started);
         let poll = reader
             .poll(
@@ -319,11 +423,21 @@ pub async fn run<C, K, F>(
             Duration::ZERO
         };
         earliest = after(ended, delay);
+        // Without live values this is the poll of the regular due time. With them, the first
+        // poll that ends at or after that time takes its place, so a live poll that runs across
+        // it does not leave it missed.
+        let is_regular = ended >= regular.due;
+        let missed = if is_regular {
+            schedule.take(regular)
+        } else {
+            0
+        };
         let polled = Polled {
             scheduled,
             started,
             ended,
             missed,
+            regular: is_regular,
             poll,
             watchdog: watch.fired,
         };
@@ -334,7 +448,7 @@ pub async fn run<C, K, F>(
 }
 
 /// Due times at a fixed rate: tick `k` is `start + k × period`.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct Schedule {
     start: Instant,
     period: Duration,
@@ -361,16 +475,39 @@ impl Schedule {
         after(self.start, duration_from_nanos(nanos))
     }
 
-    /// The first tick due at or after `earliest` and not handed out yet, and how many ticks
-    /// before it are skipped.
-    fn next(&mut self, earliest: Instant) -> (Instant, u64) {
+    /// The first tick due at or after `earliest` and not handed out yet; [`Schedule::take`]
+    /// hands it out.
+    fn peek(&self, earliest: Instant) -> Tick {
         let elapsed = earliest.saturating_duration_since(self.start).as_nanos();
         let first_due = u64::try_from(elapsed.div_ceil(self.period.as_nanos())).unwrap_or(u64::MAX);
         let tick = first_due.max(self.next);
-        let missed = tick - self.next;
-        self.next = tick.saturating_add(1);
-        (self.due(tick), missed)
+        Tick {
+            tick,
+            due: self.due(tick),
+        }
     }
+
+    /// Hands out `tick` (from [`Schedule::peek`]) and returns how many ticks before it are
+    /// skipped.
+    fn take(&mut self, tick: Tick) -> u64 {
+        let missed = tick.tick.saturating_sub(self.next);
+        self.next = self.next.max(tick.tick.saturating_add(1));
+        missed
+    }
+
+    /// [`Schedule::peek`], then [`Schedule::take`]: the tick and the ticks skipped before it.
+    #[cfg(test)]
+    fn next(&mut self, earliest: Instant) -> (Instant, u64) {
+        let tick = self.peek(earliest);
+        (tick.due, self.take(tick))
+    }
+}
+
+/// One due time of a [`Schedule`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Tick {
+    tick: u64,
+    due: Instant,
 }
 
 fn duration_from_nanos(nanos: u128) -> Duration {
@@ -647,6 +784,241 @@ mod tests {
             polls.iter().any(|polled| polled.missed > 0),
             "polls longer than the period skipped due polls"
         );
+    }
+
+    /// A lease the test controls: the live interval, through a watch channel.
+    struct TestLive(tokio::sync::watch::Receiver<Option<Duration>>);
+
+    impl Live for TestLive {
+        fn interval(&self, _now: Instant) -> Option<Duration> {
+            *self.0.borrow()
+        }
+
+        async fn changed(&mut self) {
+            if self.0.changed().await.is_err() {
+                std::future::pending::<()>().await;
+            }
+        }
+    }
+
+    /// Runs the loop with `live` and polls lasting `poll_takes` until a poll is due at or after
+    /// `until`; returns every poll.
+    async fn polls_with(
+        live: &mut TestLive,
+        period: Duration,
+        poll_takes: Duration,
+        until: Duration,
+    ) -> (Instant, Vec<Polled>) {
+        let mut connection = Timed {
+            durations: vec![poll_takes].into_iter().cycle(),
+        };
+        let start = Instant::now();
+        let mut polls = Vec::new();
+        run_live(
+            &reader(),
+            period,
+            live,
+            &mut connection,
+            &FixedClock,
+            &Settings::default(),
+            |event| {
+                if let Event::Polled(polled) = event {
+                    let done = polled.scheduled >= start + until;
+                    polls.push(polled);
+                    if done {
+                        return ControlFlow::Break(());
+                    }
+                }
+                ControlFlow::Continue(())
+            },
+        )
+        .await;
+        (start, polls)
+    }
+
+    fn millis(polls: &[Polled], start: Instant, regular: bool) -> Vec<u128> {
+        polls
+            .iter()
+            .filter(|polled| polled.regular == regular)
+            .map(|polled| (polled.scheduled - start).as_millis())
+            .collect()
+    }
+
+    /// Rebuild checklist I3: a lease that starts while the loop sleeps starts live polls at once,
+    /// at the lease's interval; the regular polls keep their rate (one per due time, never
+    /// missed); once the lease ends the loop is back on the regular schedule, which never moved.
+    #[tokio::test(start_paused = true)]
+    async fn a_lease_adds_polls_at_its_interval_and_the_regular_ones_keep_their_rate() {
+        let (lease, receiver) = tokio::sync::watch::channel(None);
+        let start = Instant::now();
+        let control = tokio::spawn(async move {
+            sleep_until(start + Duration::from_millis(2500)).await;
+            lease.send_replace(Some(Duration::from_millis(200)));
+            sleep_until(start + Duration::from_millis(6250)).await;
+            lease.send_replace(None);
+            // Kept until the end, so that the loop's `changed` does not see it gone.
+            std::future::pending::<()>().await;
+        });
+        let (start, polls) = polls_with(
+            &mut TestLive(receiver),
+            Duration::from_secs(1),
+            Duration::from_millis(10),
+            Duration::from_secs(8),
+        )
+        .await;
+        control.abort();
+
+        // Regular: 0, 1 and 2 s on the regular schedule; during the lease, the first live poll
+        // that ends at or after each second; then 7 and 8 s on the regular schedule again.
+        assert_eq!(
+            millis(&polls, start, true),
+            [0, 1000, 2000, 3100, 4100, 5100, 6100, 7000, 8000]
+        );
+        // Extra: every 200 ms from the lease's start (at once) until it ended.
+        assert_eq!(
+            millis(&polls, start, false),
+            [
+                2500, 2700, 2900, 3300, 3500, 3700, 3900, 4300, 4500, 4700, 4900, 5300, 5500, 5700,
+                5900
+            ]
+        );
+        assert!(polls.iter().all(|polled| polled.missed == 0), "{polls:?}");
+        // Within the tokio timer's resolution, as in the_schedule_does_not_drift_over_an_hour.
+        assert!(
+            polls
+                .iter()
+                .all(|polled| polled.started - polled.scheduled <= Duration::from_millis(1)),
+            "every poll ran when it was due"
+        );
+    }
+
+    /// A live poll that runs across a regular due time is that time's regular poll, so the
+    /// regular schedule never counts it missed.
+    #[tokio::test(start_paused = true)]
+    async fn a_live_poll_across_a_regular_due_time_is_its_regular_poll() {
+        let (_lease, receiver) = tokio::sync::watch::channel(Some(Duration::from_millis(300)));
+        let (start, polls) = polls_with(
+            &mut TestLive(receiver),
+            Duration::from_secs(1),
+            Duration::from_millis(150),
+            Duration::from_secs(3),
+        )
+        .await;
+        // Live polls at 0, 300, 600, 900 (ends at 1050: the regular poll of 1 s), 1200, 1500,
+        // 1800, 2100 (the regular poll of 2 s), 2400, 2700, 3000 (ends at 3150: that of 3 s).
+        assert_eq!(millis(&polls, start, true), [0, 900, 2100, 3000]);
+        assert_eq!(
+            millis(&polls, start, false),
+            [300, 600, 1200, 1500, 1800, 2400, 2700]
+        );
+        assert!(polls.iter().all(|polled| polled.missed == 0), "{polls:?}");
+    }
+
+    /// Leases that start, stop and change their interval every 10 ms (a faulty or hostile
+    /// cloud) never poll the device sooner than one live interval (at least
+    /// `MIN_POLL_INTERVAL_MS`) after the previous live poll.
+    #[tokio::test(start_paused = true)]
+    async fn leases_that_come_and_go_quickly_do_not_poll_faster_than_their_interval() {
+        let (lease, receiver) = tokio::sync::watch::channel(None);
+        let start = Instant::now();
+        let control = tokio::spawn(async move {
+            let intervals = [Some(200), None, Some(150), Some(100), None];
+            let mut at = start + Duration::from_millis(2500);
+            for interval in intervals.iter().cycle().take(100) {
+                sleep_until(at).await;
+                lease.send_replace(interval.map(Duration::from_millis));
+                at += Duration::from_millis(10);
+            }
+            sleep_until(at).await;
+            lease.send_replace(None);
+            std::future::pending::<()>().await;
+        });
+        let (start, polls) = polls_with(
+            &mut TestLive(receiver),
+            Duration::from_secs(1),
+            Duration::from_millis(10),
+            Duration::from_secs(5),
+        )
+        .await;
+        control.abort();
+
+        let extra: Vec<Instant> = polls
+            .iter()
+            .filter(|polled| !polled.regular)
+            .map(|polled| polled.started)
+            .collect();
+        assert!(!extra.is_empty(), "the leases added polls: {polls:?}");
+        for pair in extra.windows(2) {
+            assert!(
+                pair[1] - pair[0] >= Duration::from_millis(u64::from(MIN_POLL_INTERVAL_MS)),
+                "extra polls {:?} and {:?} after the start are closer than the minimum interval",
+                pair[0] - start,
+                pair[1] - start
+            );
+        }
+        // The leases changed 100 times in one second: at most one extra poll per 100 ms.
+        assert!(extra.len() <= 11, "{} extra polls", extra.len());
+        // The regular polls keep their rate.
+        assert_eq!(
+            millis(&polls, start, true).len(),
+            6,
+            "one regular poll per second"
+        );
+        assert!(polls.iter().all(|polled| polled.missed == 0), "{polls:?}");
+    }
+
+    /// A lease that starts just after a poll waits one live interval after that poll, whether a
+    /// slower lease covered it or not (one that starts mid-poll makes that poll live).
+    #[tokio::test(start_paused = true)]
+    async fn a_new_lease_waits_one_interval_after_the_last_poll() {
+        for before in [None, Some(Duration::from_secs(2))] {
+            new_lease_after_a_poll(before).await;
+        }
+    }
+
+    async fn new_lease_after_a_poll(before: Option<Duration>) {
+        let (lease, receiver) = tokio::sync::watch::channel(before);
+        let start = Instant::now();
+        let control = tokio::spawn(async move {
+            sleep_until(start + Duration::from_millis(1050)).await;
+            lease.send_replace(Some(Duration::from_millis(200)));
+            std::future::pending::<()>().await;
+        });
+        let (start, polls) = polls_with(
+            &mut TestLive(receiver),
+            Duration::from_secs(1),
+            Duration::from_millis(10),
+            Duration::from_secs(2),
+        )
+        .await;
+        control.abort();
+        // The lease's first poll is 200 ms after the regular poll of 1 s, not at 1050 ms.
+        assert_eq!(
+            millis(&polls, start, true),
+            [0, 1000, 2000],
+            "before: {before:?}"
+        );
+        assert_eq!(
+            millis(&polls, start, false),
+            [1200, 1400, 1600, 1800],
+            "before: {before:?}"
+        );
+    }
+
+    /// A lease no faster than the poll interval adds no poll: every regular poll is also the
+    /// live sample.
+    #[tokio::test(start_paused = true)]
+    async fn a_lease_no_faster_than_the_poll_interval_adds_no_poll() {
+        let (_lease, receiver) = tokio::sync::watch::channel(Some(Duration::from_secs(1)));
+        let (start, polls) = polls_with(
+            &mut TestLive(receiver),
+            Duration::from_secs(1),
+            Duration::from_millis(10),
+            Duration::from_secs(3),
+        )
+        .await;
+        assert_eq!(millis(&polls, start, true), [0, 1000, 2000, 3000]);
+        assert!(millis(&polls, start, false).is_empty());
     }
 
     #[test]

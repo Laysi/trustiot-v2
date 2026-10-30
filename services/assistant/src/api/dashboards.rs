@@ -27,17 +27,23 @@
 //! | Errors of the stored dashboard | as `contract::api::dashboard::public`'s keys |
 //! | A publish or restore that would add a version past the user's or the tenant's budget for the minute ([`crate::dashboards::limits::VersionBudget`]) | 429 `rate_limited`, `dashboard.versions_limited`, `Retry-After`; nothing was written |
 //! | Errors of a dataset run | [`RunError::to_error_body`]; `Retry-After` with `dashboard.runs_limited` |
+//! | A lock (another request's or a stuck session's on the dashboard) not granted within [`super::REQUEST_LOCK_TIMEOUT`] | 503 `unavailable`; nothing was written |
 //! | The database failed | 503 `unavailable`; nothing was written |
+//!
+//! Every request's transaction starts with [`super::begin`], so its statements wait at most
+//! [`super::REQUEST_LOCK_TIMEOUT`] for a lock: two writes of one dashboard queue on its row for
+//! milliseconds, and the later one then conflicts.
 //!
 //! A write logs one INFO line with the user, tenant, dashboard and version; never a title,
 //! a spec or a page.
 
+use std::sync::Arc;
 use std::time::Duration;
 
 use axum::Router;
 use axum::body::Body;
 use axum::extract::rejection::{PathRejection, QueryRejection};
-use axum::extract::{Path, Query, State};
+use axum::extract::{FromRef, Path, Query, State};
 use axum::http::header::{CACHE_CONTROL, CONTENT_TYPE, RETRY_AFTER};
 use axum::http::{HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
@@ -49,18 +55,53 @@ use contract::api::dashboard::public::{
     VERSION_CONFLICT, VERSION_NOT_FOUND, VERSIONS_LIMITED, VersionCreated, VersionList,
 };
 use contract::api::dashboard::result::DatasetResult;
-use contract::{DashboardId, ErrorBody, ErrorCode, TenantId};
+use contract::{DashboardId, ErrorBody, ErrorCode, TenantId, TenantRole};
 use serde::Deserialize;
-use service_kit::identity::UserIdentity;
-use service_kit::tenant::TenantTransaction;
-use uuid::Uuid;
+use serde::de::DeserializeOwned;
+use service_kit::identity::{IdentityVerifier, OnBehalf, UserIdentity};
+use service_kit::tenant::TenantDb;
 
 use super::held_body::HeldBody;
-use super::{ApiError, ApiState, begin, commit, error, ok, parse_id, read_body, requester};
+use super::{begin, error, finish, not_found, ok, parse_object, read_json};
 use crate::callee::{Caller, Operation};
-use crate::dashboards::runner::{HeldResult, RunError};
+use crate::dashboards::limits::VersionBudget;
+use crate::dashboards::runner::{DatasetRunner, HeldResult, RunError};
 use crate::dashboards::store::{self, ListCursor, Requester, StoreError, VersionCursor};
 use crate::delegation::OnBehalfOf;
+use crate::history::Principal;
+
+/// The largest request body: the bodies are a few numbers and a name.
+pub const MAX_BODY_BYTES: usize = 4 * 1024;
+
+/// What the dashboard routes need besides the identity verifier and the pool.
+#[derive(Clone)]
+pub struct Dashboards {
+    /// Exchanges the request's token for one addressed to telemetry-query when a dataset runs;
+    /// `None` without `identity.exchange_url`, and dataset runs then fail (503).
+    pub on_behalf: Option<OnBehalf>,
+    /// The dataset runs, shared with the `dashboard` tool so the caps hold for both.
+    pub runner: Arc<DatasetRunner>,
+    /// The publishes and restores each user and tenant may start in a minute, in this replica.
+    pub versions: Arc<VersionBudget>,
+    /// The bound on handing a dataset run's answer body whole to the connection, after which the
+    /// answer is cut off and its result let go ([`super::held_body::HELD_BODY_TIMEOUT`] in the
+    /// service; tests shorten it).
+    pub held_body_timeout: Duration,
+}
+
+#[derive(Clone)]
+struct Routes {
+    verifier: IdentityVerifier,
+    /// The service role's pool: one short transaction of the request's tenant per request.
+    db: TenantDb,
+    dashboards: Dashboards,
+}
+
+impl FromRef<Routes> for IdentityVerifier {
+    fn from_ref(state: &Routes) -> Self {
+        state.verifier.clone()
+    }
+}
 
 /// The saved dashboards.
 pub const DASHBOARDS_PATH: &str = "/api/assistant/v1/dashboards";
@@ -103,8 +144,8 @@ struct ViewQuery {
     version: Option<u32>,
 }
 
-/// The dashboard routes, without their state.
-pub(super) fn routes() -> Router<ApiState> {
+/// The dashboard routes.
+pub fn routes(verifier: IdentityVerifier, db: TenantDb, dashboards: Dashboards) -> Router {
     Router::new()
         .route(DASHBOARDS_PATH, get(list_saved))
         .route(CONVERSATION_DASHBOARDS_PATH, get(list_drafts))
@@ -114,6 +155,11 @@ pub(super) fn routes() -> Router<ApiState> {
         .route(RESTORE_PATH, post(restore))
         .route(ARCHIVE_PATH, put(archive).delete(unarchive))
         .route(DATASET_RUNS_PATH, post(run_dataset))
+        .with_state(Routes {
+            verifier,
+            db,
+            dashboards,
+        })
 }
 
 /// The tenant's saved dashboards.
@@ -135,20 +181,32 @@ pub(super) fn routes() -> Router<ApiState> {
     )
 )]
 async fn list_saved(
-    State(api): State<ApiState>,
+    State(api): State<Routes>,
     user: UserIdentity,
     query: Result<Query<ListQuery>, QueryRejection>,
-) -> Result<Response, ApiError> {
-    let requester = requester(&user, "list dashboards")?;
-    let Ok(Query(query)) = query else {
-        return Err(invalid_request());
+) -> Response {
+    const ACTION: &str = "list dashboards";
+    let requester = match requester(&user, ACTION) {
+        Ok(requester) => requester,
+        Err(refused) => return refused,
     };
-    let cursor = list_cursor(query.cursor.as_deref())?;
-    let mut tx = begin(&api.db, &user).await?;
+    let Ok(Query(query)) = query else {
+        return invalid_request();
+    };
+    let cursor = match list_cursor(query.cursor.as_deref()) {
+        Ok(cursor) => cursor,
+        Err(refused) => return refused,
+    };
+    let mut tx = match begin(&api.db, &user, ACTION).await {
+        Ok(tx) => tx,
+        Err(refused) => return refused,
+    };
     let listed =
         store::list_saved(&mut tx, requester.principal, query.include_archived, cursor).await;
-    let list = finish(tx, &user, listed, None, "could not list dashboards").await?;
-    Ok(ok(StatusCode::OK, &list))
+    match finish(tx, listed).await {
+        Ok(list) => ok(StatusCode::OK, &list),
+        Err(failure) => dashboard_failure(&user, None, ACTION, &failure),
+    }
 }
 
 /// A conversation's drafts, for its owner.
@@ -158,7 +216,7 @@ async fn list_saved(
     tag = "assistant",
     operation_id = "listConversationDashboards",
     params(
-        ("conversation_id" = Uuid, Path, description = "The conversation's ID."),
+        ("conversation_id" = uuid::Uuid, Path, description = "The conversation's ID."),
         ("cursor" = Option<String>, Query, description = "The `next_cursor` of the page before."),
     ),
     responses(
@@ -171,22 +229,35 @@ async fn list_saved(
     )
 )]
 async fn list_drafts(
-    State(api): State<ApiState>,
+    State(api): State<Routes>,
     user: UserIdentity,
     conversation_id: Result<Path<String>, PathRejection>,
     query: Result<Query<PageQuery>, QueryRejection>,
-) -> Result<Response, ApiError> {
-    let requester = requester(&user, "list a conversation's dashboards")?;
-    let conversation_id: Uuid = parse_id(conversation_id)?;
-    let Ok(Query(query)) = query else {
-        return Err(invalid_request());
+) -> Response {
+    const ACTION: &str = "list a conversation's dashboards";
+    let requester = match requester(&user, ACTION) {
+        Ok(requester) => requester,
+        Err(refused) => return refused,
     };
-    let cursor = list_cursor(query.cursor.as_deref())?;
-    let mut tx = begin(&api.db, &user).await?;
+    let Some(conversation_id) = super::parse_id(conversation_id) else {
+        return not_found();
+    };
+    let Ok(Query(query)) = query else {
+        return invalid_request();
+    };
+    let cursor = match list_cursor(query.cursor.as_deref()) {
+        Ok(cursor) => cursor,
+        Err(refused) => return refused,
+    };
+    let mut tx = match begin(&api.db, &user, ACTION).await {
+        Ok(tx) => tx,
+        Err(refused) => return refused,
+    };
     let listed = store::list_drafts(&mut tx, requester.principal, conversation_id, cursor).await;
-    let message = "could not list a conversation's dashboards";
-    let list = finish(tx, &user, listed, None, message).await?;
-    Ok(ok(StatusCode::OK, &list))
+    match finish(tx, listed).await {
+        Ok(list) => ok(StatusCode::OK, &list),
+        Err(failure) => dashboard_failure(&user, None, ACTION, &failure),
+    }
 }
 
 /// One dashboard with one version (the latest without `version`) and what the caller may do
@@ -210,29 +281,40 @@ async fn list_drafts(
     )
 )]
 async fn get_dashboard(
-    State(api): State<ApiState>,
+    State(api): State<Routes>,
     user: UserIdentity,
     dashboard_id: Result<Path<String>, PathRejection>,
     query: Result<Query<ViewQuery>, QueryRejection>,
-) -> Result<Response, ApiError> {
-    let requester = requester(&user, "read a dashboard")?;
-    let dashboard_id: DashboardId = parse_id(dashboard_id)?;
-    let Ok(Query(query)) = query else {
-        return Err(invalid_request());
+) -> Response {
+    const ACTION: &str = "read a dashboard";
+    let requester = match requester(&user, ACTION) {
+        Ok(requester) => requester,
+        Err(refused) => return refused,
     };
-    let mut tx = begin(&api.db, &user).await?;
+    let Some(dashboard_id) = dashboard_id_of(dashboard_id) else {
+        return not_found();
+    };
+    let Ok(Query(query)) = query else {
+        return invalid_request();
+    };
+    let mut tx = match begin(&api.db, &user, ACTION).await {
+        Ok(tx) => tx,
+        Err(refused) => return refused,
+    };
     let opened = store::open(&mut tx, requester.principal, dashboard_id, query.version).await;
-    let message = "could not read a dashboard";
-    let opened = finish(tx, &user, opened, Some(dashboard_id), message).await?;
+    let opened = match finish(tx, opened).await {
+        Ok(opened) => opened,
+        Err(failure) => return dashboard_failure(&user, Some(dashboard_id), ACTION, &failure),
+    };
     let permissions = store::permissions(opened.dashboard.kind, opened.access, requester.role);
-    Ok(ok(
+    ok(
         StatusCode::OK,
         &DashboardView {
             dashboard: opened.dashboard,
             version: opened.version,
             permissions,
         },
-    ))
+    )
 }
 
 /// A dashboard's versions, the newest first, without their spec and page.
@@ -255,25 +337,38 @@ async fn get_dashboard(
     )
 )]
 async fn list_versions(
-    State(api): State<ApiState>,
+    State(api): State<Routes>,
     user: UserIdentity,
     dashboard_id: Result<Path<String>, PathRejection>,
     query: Result<Query<PageQuery>, QueryRejection>,
-) -> Result<Response, ApiError> {
-    let requester = requester(&user, "list a dashboard's versions")?;
-    let dashboard_id: DashboardId = parse_id(dashboard_id)?;
+) -> Response {
+    const ACTION: &str = "list a dashboard's versions";
+    let requester = match requester(&user, ACTION) {
+        Ok(requester) => requester,
+        Err(refused) => return refused,
+    };
+    let Some(dashboard_id) = dashboard_id_of(dashboard_id) else {
+        return not_found();
+    };
     let Ok(Query(query)) = query else {
-        return Err(invalid_request());
+        return invalid_request();
     };
     let cursor = match query.cursor.as_deref() {
         None => None,
-        Some(text) => Some(VersionCursor::parse(text).ok_or_else(invalid_request)?),
+        Some(text) => match VersionCursor::parse(text) {
+            Some(cursor) => Some(cursor),
+            None => return invalid_request(),
+        },
     };
-    let mut tx = begin(&api.db, &user).await?;
+    let mut tx = match begin(&api.db, &user, ACTION).await {
+        Ok(tx) => tx,
+        Err(refused) => return refused,
+    };
     let listed = store::versions(&mut tx, requester.principal, dashboard_id, cursor).await;
-    let message = "could not list a dashboard's versions";
-    let list = finish(tx, &user, listed, Some(dashboard_id), message).await?;
-    Ok(ok(StatusCode::OK, &list))
+    match finish(tx, listed).await {
+        Ok(list) => ok(StatusCode::OK, &list),
+        Err(failure) => dashboard_failure(&user, Some(dashboard_id), ACTION, &failure),
+    }
 }
 
 /// Publishes a version of a draft into the tenant's saved dashboards: the first time as a new
@@ -299,31 +394,39 @@ async fn list_versions(
     )
 )]
 async fn publish(
-    State(api): State<ApiState>,
+    State(api): State<Routes>,
     user: UserIdentity,
     dashboard_id: Result<Path<String>, PathRejection>,
     headers: HeaderMap,
     body: Body,
-) -> Result<Response, ApiError> {
-    let requester = requester(&user, "publish a dashboard")?;
-    let dashboard_id: DashboardId = parse_id(dashboard_id)?;
-    let request: PublishRequest = read_body(&headers, body).await?;
-    let mut tx = begin(&api.db, &user).await?;
-    let admit = |kind| api.versions.admit(requester.principal, kind);
+) -> Response {
+    const ACTION: &str = "publish a dashboard";
+    let requester = match requester(&user, ACTION) {
+        Ok(requester) => requester,
+        Err(refused) => return refused,
+    };
+    let Some(dashboard_id) = dashboard_id_of(dashboard_id) else {
+        return not_found();
+    };
+    let request: PublishRequest = match read_request(&headers, body).await {
+        Ok(request) => request,
+        Err(refused) => return refused,
+    };
+    let mut tx = match begin(&api.db, &user, ACTION).await {
+        Ok(tx) => tx,
+        Err(refused) => return refused,
+    };
+    let admit = |kind| api.dashboards.versions.admit(requester.principal, kind);
     let published = store::publish(&mut tx, requester, dashboard_id, request.version, admit).await;
     if let Err(StoreError::Limited { retry_after }) = published {
         // Rolled back: the store wrote nothing before it asked.
         drop(tx);
-        return Ok(versions_limited(&requester, retry_after, "publish"));
+        return versions_limited(&requester, retry_after, "publish");
     }
-    let message = "could not publish a dashboard";
-    let written = finish(tx, &user, published, Some(dashboard_id), message).await?;
-    Ok(created(
-        &written,
-        &requester,
-        dashboard_id,
-        "published a dashboard",
-    ))
+    match finish(tx, published).await {
+        Ok(written) => created(&written, &requester, dashboard_id, "published a dashboard"),
+        Err(failure) => dashboard_failure(&user, Some(dashboard_id), ACTION, &failure),
+    }
 }
 
 /// Adds a copy of an older version as the dashboard's next version.
@@ -346,38 +449,51 @@ async fn publish(
     )
 )]
 async fn restore(
-    State(api): State<ApiState>,
+    State(api): State<Routes>,
     user: UserIdentity,
     dashboard_id: Result<Path<String>, PathRejection>,
     headers: HeaderMap,
     body: Body,
-) -> Result<Response, ApiError> {
-    let requester = requester(&user, "restore a dashboard")?;
-    let dashboard_id: DashboardId = parse_id(dashboard_id)?;
-    let request: RestoreRequest = read_body(&headers, body).await?;
-    let mut tx = begin(&api.db, &user).await?;
+) -> Response {
+    const ACTION: &str = "restore a dashboard";
+    let requester = match requester(&user, ACTION) {
+        Ok(requester) => requester,
+        Err(refused) => return refused,
+    };
+    let Some(dashboard_id) = dashboard_id_of(dashboard_id) else {
+        return not_found();
+    };
+    let request: RestoreRequest = match read_request(&headers, body).await {
+        Ok(request) => request,
+        Err(refused) => return refused,
+    };
+    let mut tx = match begin(&api.db, &user, ACTION).await {
+        Ok(tx) => tx,
+        Err(refused) => return refused,
+    };
     let restored = store::restore(
         &mut tx,
         requester,
         dashboard_id,
         request.from_version,
         request.base_version,
-        |kind| api.versions.admit(requester.principal, kind),
+        |kind| api.dashboards.versions.admit(requester.principal, kind),
     )
     .await;
     if let Err(StoreError::Limited { retry_after }) = restored {
         // Rolled back: the store wrote nothing before it asked.
         drop(tx);
-        return Ok(versions_limited(&requester, retry_after, "restore"));
+        return versions_limited(&requester, retry_after, "restore");
     }
-    let message = "could not restore a dashboard";
-    let written = finish(tx, &user, restored, Some(dashboard_id), message).await?;
-    Ok(created(
-        &written,
-        &requester,
-        dashboard_id,
-        "restored a dashboard version",
-    ))
+    match finish(tx, restored).await {
+        Ok(written) => created(
+            &written,
+            &requester,
+            dashboard_id,
+            "restored a dashboard version",
+        ),
+        Err(failure) => dashboard_failure(&user, Some(dashboard_id), ACTION, &failure),
+    }
 }
 
 /// Archives a saved dashboard: it leaves the tenant's list (unless archived ones are asked for)
@@ -398,10 +514,10 @@ async fn restore(
     )
 )]
 async fn archive(
-    State(api): State<ApiState>,
+    State(api): State<Routes>,
     user: UserIdentity,
     dashboard_id: Result<Path<String>, PathRejection>,
-) -> Result<Response, ApiError> {
+) -> Response {
     set_archived(api, user, dashboard_id, true).await
 }
 
@@ -422,30 +538,40 @@ async fn archive(
     )
 )]
 async fn unarchive(
-    State(api): State<ApiState>,
+    State(api): State<Routes>,
     user: UserIdentity,
     dashboard_id: Result<Path<String>, PathRejection>,
-) -> Result<Response, ApiError> {
+) -> Response {
     set_archived(api, user, dashboard_id, false).await
 }
 
 async fn set_archived(
-    api: ApiState,
+    api: Routes,
     user: UserIdentity,
     dashboard_id: Result<Path<String>, PathRejection>,
     archived: bool,
-) -> Result<Response, ApiError> {
+) -> Response {
     let action = if archived {
         "archive a dashboard"
     } else {
         "unarchive a dashboard"
     };
-    let requester = requester(&user, action)?;
-    let dashboard_id: DashboardId = parse_id(dashboard_id)?;
-    let mut tx = begin(&api.db, &user).await?;
+    let requester = match requester(&user, action) {
+        Ok(requester) => requester,
+        Err(refused) => return refused,
+    };
+    let Some(dashboard_id) = dashboard_id_of(dashboard_id) else {
+        return not_found();
+    };
+    let mut tx = match begin(&api.db, &user, action).await {
+        Ok(tx) => tx,
+        Err(refused) => return refused,
+    };
     let changed = store::set_archived(&mut tx, requester, dashboard_id, archived).await;
-    let message = "could not archive a dashboard";
-    let state = finish(tx, &user, changed, Some(dashboard_id), message).await?;
+    let state = match finish(tx, changed).await {
+        Ok(state) => state,
+        Err(failure) => return dashboard_failure(&user, Some(dashboard_id), action, &failure),
+    };
     tracing::info!(
         user_id = %requester.principal.user_id,
         tenant_id = %requester.principal.tenant_id,
@@ -453,7 +579,7 @@ async fn set_archived(
         archived = state.archived_at.is_some(),
         "changed whether a dashboard is archived"
     );
-    Ok(ok(StatusCode::OK, &state))
+    ok(StatusCode::OK, &state)
 }
 
 /// Runs one dataset of one version as the caller and returns its table. Nothing is kept: every
@@ -478,17 +604,29 @@ async fn set_archived(
     )
 )]
 async fn run_dataset(
-    State(api): State<ApiState>,
+    State(api): State<Routes>,
     user: UserIdentity,
     dashboard_id: Result<Path<String>, PathRejection>,
     headers: HeaderMap,
     body: Body,
-) -> Result<Response, ApiError> {
-    let requester = requester(&user, "run a dashboard's dataset")?;
-    let dashboard_id: DashboardId = parse_id(dashboard_id)?;
-    let request: DatasetRunRequest = read_body(&headers, body).await?;
+) -> Response {
+    const ACTION: &str = "run a dashboard's dataset";
+    let requester = match requester(&user, ACTION) {
+        Ok(requester) => requester,
+        Err(refused) => return refused,
+    };
+    let Some(dashboard_id) = dashboard_id_of(dashboard_id) else {
+        return not_found();
+    };
+    let request: DatasetRunRequest = match read_request(&headers, body).await {
+        Ok(request) => request,
+        Err(refused) => return refused,
+    };
     // The transaction ends before the run calls telemetry-query: no connection is held then.
-    let mut tx = begin(&api.db, &user).await?;
+    let mut tx = match begin(&api.db, &user, ACTION).await {
+        Ok(tx) => tx,
+        Err(refused) => return refused,
+    };
     let dataset = store::dataset(
         &mut tx,
         requester.principal,
@@ -497,20 +635,21 @@ async fn run_dataset(
         &request.dataset,
     )
     .await;
-    let message = "could not read a dashboard's dataset";
-    let Some(dataset) = finish(tx, &user, dataset, Some(dashboard_id), message).await? else {
-        return Err(ErrorBody::new(ErrorCode::ValidationFailed)
-            .with_message_key(DATASET_UNKNOWN)
-            .into());
+    let dataset = match finish(tx, dataset).await {
+        Ok(Some(dataset)) => dataset,
+        Ok(None) => {
+            return error(
+                ErrorBody::new(ErrorCode::ValidationFailed).with_message_key(DATASET_UNKNOWN),
+            );
+        }
+        Err(failure) => return dashboard_failure(&user, Some(dashboard_id), ACTION, &failure),
     };
-    let Some(on_behalf) = &api.on_behalf else {
+    let Some(on_behalf) = &api.dashboards.on_behalf else {
         tracing::warn!(
             tenant_id = %requester.principal.tenant_id,
             "a dataset run cannot call telemetry-query: identity.exchange_url is not set"
         );
-        return Err(ErrorBody::new(ErrorCode::Unavailable)
-            .with_message_key(DATASET_FAILED)
-            .into());
+        return error(ErrorBody::new(ErrorCode::Unavailable).with_message_key(DATASET_FAILED));
     };
     let delegation = OnBehalfOf {
         on_behalf,
@@ -525,13 +664,13 @@ async fn run_dataset(
     };
     // The answer's body holds the result's memory until its last piece goes to the connection,
     // and cuts the answer off when the connection has not taken it whole within the bound.
-    match api.runner.run(&caller, &dataset).await {
-        Ok(result) => Ok(held_result(
+    match api.dashboards.runner.run(&caller, &dataset).await {
+        Ok(result) => held_result(
             result,
             requester.principal.tenant_id,
-            api.held_body_timeout,
-        )),
-        Err(failure) => Ok(run_error(&failure)),
+            api.dashboards.held_body_timeout,
+        ),
+        Err(failure) => run_error(&failure),
     }
 }
 
@@ -590,18 +729,50 @@ fn run_error(failure: &RunError) -> Response {
     response
 }
 
-/// Ends the request's transaction: commits it after `outcome` succeeded, rolls it back (drops
-/// it) and answers the store's failure otherwise.
-async fn finish<T>(
-    tx: TenantTransaction,
-    user: &UserIdentity,
-    outcome: Result<T, StoreError>,
-    dashboard_id: Option<DashboardId>,
-    message: &'static str,
-) -> Result<T, ApiError> {
-    let value = outcome.map_err(|failure| store_error(user, dashboard_id, &failure, message))?;
-    commit(tx, user).await?;
-    Ok(value)
+/// The requester of a request: its user, tenant and role. Every route needs at least viewer;
+/// the 403 is answered when the token has no tenant or a role this build does not know.
+#[allow(
+    clippy::result_large_err,
+    reason = "the error is the response to answer at once"
+)]
+fn requester(user: &UserIdentity, action: &'static str) -> Result<Requester, Response> {
+    match user.tenant() {
+        Some(grant) if grant.role.includes(TenantRole::Viewer) => Ok(Requester {
+            principal: Principal {
+                tenant_id: grant.id,
+                user_id: user.user_id(),
+            },
+            role: grant.role,
+        }),
+        _ => {
+            tracing::info!(
+                user_id = %user.user_id(),
+                action,
+                "refused: no tenant or no known role in it"
+            );
+            Err(error(ErrorBody::new(ErrorCode::PermissionDenied)))
+        }
+    }
+}
+
+/// The path's dashboard ID; `None` (answered with [`not_found`]) when it is not a UUID.
+fn dashboard_id_of(path: Result<Path<String>, PathRejection>) -> Option<DashboardId> {
+    super::parse_id(path).map(DashboardId::from_uuid)
+}
+
+/// The JSON body of a request as `T`, which refuses fields it does not know: 400
+/// `invalid_request` when the content type is not JSON, the body is over [`MAX_BODY_BYTES`],
+/// or it is not exactly a `T` written as a JSON object ([`super::parse_object`]: not an array of
+/// its fields, and the derived `Deserialize` refuses a duplicate field).
+#[allow(
+    clippy::result_large_err,
+    reason = "the error is the response to answer at once"
+)]
+async fn read_request<T: DeserializeOwned>(headers: &HeaderMap, body: Body) -> Result<T, Response> {
+    let bytes = read_json(headers, body, MAX_BODY_BYTES)
+        .await
+        .map_err(|_| invalid_request())?;
+    parse_object(&bytes).ok_or_else(invalid_request)
 }
 
 /// The 201 of a new version, logged.
@@ -623,7 +794,11 @@ fn created(
 }
 
 /// The cursor of a list, `None` without one: 400 for a cursor this service did not write.
-fn list_cursor(text: Option<&str>) -> Result<Option<ListCursor>, ApiError> {
+#[allow(
+    clippy::result_large_err,
+    reason = "the error is the response to answer at once"
+)]
+fn list_cursor(text: Option<&str>) -> Result<Option<ListCursor>, Response> {
     match text {
         None => Ok(None),
         Some(text) => ListCursor::parse(text)
@@ -632,21 +807,22 @@ fn list_cursor(text: Option<&str>) -> Result<Option<ListCursor>, ApiError> {
     }
 }
 
-fn invalid_request() -> ApiError {
-    ApiError(ErrorBody::new(ErrorCode::InvalidRequest))
+fn invalid_request() -> Response {
+    error(ErrorBody::new(ErrorCode::InvalidRequest))
 }
 
-/// The answer to a store failure; failures that are not the request's fault are logged with
-/// their kind only.
-fn store_error(
+/// The answer to a store failure: every dashboard the caller cannot see is the one
+/// [`not_found`] answer, byte for byte the conversations'. Failures that are not the request's
+/// fault are logged at ERROR with their kind only (`dashboard request failed`).
+fn dashboard_failure(
     user: &UserIdentity,
     dashboard_id: Option<DashboardId>,
+    action: &'static str,
     failure: &StoreError,
-    message: &'static str,
-) -> ApiError {
+) -> Response {
     let keyed = |code, key| ErrorBody::new(code).with_message_key(key);
     let body = match failure {
-        StoreError::NotFound => ErrorBody::new(ErrorCode::NotFound),
+        StoreError::NotFound => return not_found(),
         StoreError::VersionNotFound => keyed(ErrorCode::NotFound, VERSION_NOT_FOUND),
         StoreError::VersionConflict { latest } => {
             keyed(ErrorCode::Conflict, VERSION_CONFLICT).with_detail("latest", *latest)
@@ -674,8 +850,9 @@ fn store_error(
             tracing::error!(
                 user_id = %user.user_id(),
                 dashboard_id = dashboard_id.map(|id| id.to_string()).as_deref(),
+                action,
                 error_kind = failure.log_kind(),
-                "{message}"
+                "dashboard request failed"
             );
             ErrorBody::new(ErrorCode::Internal)
         }
@@ -683,11 +860,12 @@ fn store_error(
             tracing::error!(
                 user_id = %user.user_id(),
                 dashboard_id = dashboard_id.map(|id| id.to_string()).as_deref(),
+                action,
                 error_kind = failure.log_kind(),
-                "{message}"
+                "dashboard request failed"
             );
             ErrorBody::new(ErrorCode::Unavailable)
         }
     };
-    ApiError(body)
+    error(body)
 }

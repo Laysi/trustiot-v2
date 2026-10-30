@@ -1,0 +1,45 @@
+# Before the fix: branch head c872335c with the new step 7 of tests/telemetry.rs (a full batch),
+# build host (macOS), `cargo test -p ingest --test telemetry -- --nocapture`. Steps 1-6 passed;
+# step 7 failed:
+
+thread 'telemetry_is_written_once_and_acknowledged_after_it_is_on_disk' (290938) panicked at services/ingest/tests/telemetry.rs:1134:9:
+assertion `left == right` failed: full batch 1 (262037 bytes, 1845 series); failures logged: ["2026-10-28T20:16:25.998566Z  WARN ingest::telemetry: writing a telemetry batch failed; answered retry, no completion record gateway_id=gw-full-40b30364accf4fd886d79f1d71e19a32 stream_id=s-full seq=1 step=\"leftover_rows\" error=Store(StoreError { step: LeftoverRows, code: None, unreachable: true })"]
+  left: Retry { after_ms: 5000 }
+ right: Committed { records: 1845 }
+
+# Where the limit is: a temporary probe test (not committed) sent `SELECT length({p:String})`
+# through the service's ClickHouse client (src/clickhouse.rs) to a throwaway ClickHouse 26.8,
+# build host (macOS). "plain" is a value of N KiB of unreserved characters (sent as is);
+# "encoded quotes" is N KiB / 3 single quotes, N KiB once percent-encoded. The request target
+# must stay under 64 KiB: the `http` crate refuses a longer URI and the request is never sent.
+
+8 KiB plain: Ok("8192")
+8 KiB encoded quotes: Ok("2730")
+15 KiB plain: Ok("15360")
+15 KiB encoded quotes: Ok("5120")
+16 KiB plain: Ok("16384")
+16 KiB encoded quotes: Ok("5461")
+17 KiB plain: Ok("17408")
+17 KiB encoded quotes: Ok("5802")
+24 KiB plain: Ok("24576")
+24 KiB encoded quotes: Ok("8192")
+32 KiB plain: Ok("32768")
+32 KiB encoded quotes: Ok("10922")
+48 KiB plain: Ok("49152")
+48 KiB encoded quotes: Ok("16384")
+63 KiB plain: Ok("64512")
+63 KiB encoded quotes: Ok("21504")
+64 KiB plain: Err("no response from ClickHouse: cannot build the request: uri too long")
+64 KiB encoded quotes: Err("no response from ClickHouse: cannot build the request: uri too long")
+65 KiB plain: Err("no response from ClickHouse: cannot build the request: uri too long")
+65 KiB encoded quotes: Err("no response from ClickHouse: cannot build the request: uri too long")
+96 KiB plain: Err("no response from ClickHouse: cannot build the request: uri too long")
+96 KiB encoded quotes: Err("no response from ClickHouse: cannot build the request: uri too long")
+127 KiB plain: Err("no response from ClickHouse: cannot build the request: uri too long")
+127 KiB encoded quotes: Err("no response from ClickHouse: cannot build the request: uri too long")
+128 KiB plain: Err("no response from ClickHouse: cannot build the request: uri too long")
+128 KiB encoded quotes: Err("no response from ClickHouse: cannot build the request: uri too long")
+129 KiB plain: Err("no response from ClickHouse: cannot build the request: uri too long")
+129 KiB encoded quotes: Err("no response from ClickHouse: cannot build the request: uri too long")
+200 KiB plain: Err("no response from ClickHouse: cannot build the request: uri too long")
+200 KiB encoded quotes: Err("no response from ClickHouse: cannot build the request: uri too long")

@@ -1,0 +1,69 @@
+# Build host (x86_64 Linux), CI=1, feat/640-ingest-service-skeleton at a768442c, 2026-10-24.
+# Tuples in gateway_bindings: (tenant_id, binding_id, unbound) for every row of the gateway.
+$ cargo test --locked -p ingest --lib --test startup --test gateway_bindings --test cross_tenant -- --nocapture
+
+     Running unittests src/lib.rs (<host copy>/target/debug/deps/ingest-eecd773c4e392f93)
+
+running 9 tests
+test clickhouse::tests::error_codes_come_from_the_body ... ok
+test config::tests::clickhouse_urls ... ok
+test retention::tests::the_platform_value_is_longer_than_the_buffer ... ok
+test config::tests::an_https_clickhouse_needs_its_ca_and_the_roles_must_differ ... ok
+test retention::tests::a_retention_up_to_the_buffer_age_is_refused ... ok
+test retention::tests::an_implausibly_long_retention_is_refused ... ok
+test transport::tests::credentials_are_sensitive_headers ... ok
+test clickhouse::tests::the_account_never_prints_its_password ... ok
+test transport::tests::a_client_never_switches_scheme_or_leaks_credentials ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/cross_tenant.rs (<host copy>/target/debug/deps/cross_tenant-cfec81588900b44c)
+
+running 1 test
+result | subject | probe | outcome
+pass | ingest.gateway_bindings | coverage | declared table
+pass | ingest.outbox_dead_letter | coverage | exempt table: the outbox consumer's bookkeeping (crates/outbox): subscription positions and processed or failed event IDs, no tenant data; the consumer reads and writes it in transactions without a tenant
+pass | ingest.outbox_inbox | coverage | exempt table: the outbox consumer's bookkeeping (crates/outbox): subscription positions and processed or failed event IDs, no tenant data; the consumer reads and writes it in transactions without a tenant
+pass | ingest.outbox_subscription | coverage | exempt table: the outbox consumer's bookkeeping (crates/outbox): subscription positions and processed or failed event IDs, no tenant data; the consumer reads and writes it in transactions without a tenant
+pass | ingest.outbox_version | coverage | exempt table: the versions notification-mode consumers stored per aggregate (crates/outbox), no tenant data; unused by this service so far
+pass | ingest.trustiot_migrate_applied | coverage | exempt table: the migration Job's record of the files applied in this schema (crates/service-kit/sql/migration-records.sql): file names and SHA-256 hashes, no tenant data; the service role only reads it, for its readiness check (Laysi/trustiot-v2#402)
+pass | api | coverage | no HTTP API: ingest has no HTTP API besides the health endpoints (tools/openapi, SERVICES_WITHOUT_API): it takes telemetry from MQTT (Laysi/trustiot-v2#641) and bindings from the assets service's events
+pass | ingest.gateway_bindings | seed | 2 rows per tenant
+pass | postgres | session as tenant A | the kit accepts the service role's session
+pass | ingest.gateway_bindings | read as tenant A | 2 rows visible, all own, none of tenant B
+pass | ingest.gateway_bindings | read without a tenant | no row visible
+pass | ingest.gateway_bindings | update own rows as tenant A | refused (42501)
+pass | ingest.gateway_bindings | move own rows into tenant B | refused (42501)
+pass | ingest.gateway_bindings | insert into tenant B | refused (42501)
+pass | postgres | session as tenant B | the kit accepts the service role's session
+pass | ingest.gateway_bindings | read as tenant B | 2 rows visible, all own, none of tenant A
+pass | ingest.gateway_bindings | update own rows as tenant B | refused (42501)
+pass | ingest.gateway_bindings | move own rows into tenant A | refused (42501)
+pass | ingest.gateway_bindings | insert into tenant A | refused (42501)
+19 probes, 0 failed
+test tenants_are_isolated ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.41s
+
+     Running tests/gateway_bindings.rs (<host copy>/target/debug/deps/gateway_bindings-ed5996abcb6ceb88)
+
+running 1 test
+bound: [("01a16ccc-6ab1-704c-b679-e2c8c57e2a90", "01a16ccc-6b6f-76bd-b03a-e40364a79487", false)]
+after a late older binding: [("01a16ccc-6ab1-704c-b679-e2c9dcef5fdc", "01a16ccc-7735-7539-a61d-811e8bb0dc0f", false), ("01a16ccc-6ab1-704c-b679-e2c8c57e2a90", "01a16ccc-6b6f-76bd-b03a-e40364a79487", false)]
+after a newer binding: [("01a16ccc-6ab1-704c-b679-e2c9dcef5fdc", "01a16ccc-7735-7539-a61d-811e8bb0dc0f", false), ("01a16ccc-6ab1-704c-b679-e2c8c57e2a90", "01a16ccc-6b6f-76bd-b03a-e40364a79487", false), ("01a16ccc-6ab1-704c-b679-e2c9dcef5fdc", "01a16ccc-7b7c-7341-b7c7-2815ba1a5707", false)]
+dead-lettered: ("01a16ccc-7f1b-74c0-b87e-82f28ad1cfff", "assets.gateway_bound names a recorded binding with another gateway")
+test bindings_are_projected_once_and_newest_first ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 10.22s
+
+     Running tests/startup.rs (<host copy>/target/debug/deps/startup-d288160d3be370fd)
+
+running 1 test
+both reachable: /readyz 200 {"status":"ready"}
+ClickHouse unreachable: /readyz 503 {"status":"unavailable"}; logged {"check":"clickhouse","error":"cannot connect to 127.0.0.1:45743: Connection refused (os error 111)"}
+ClickHouse refuses the password: /readyz 503 {"status":"unavailable"}; logged {"check":"clickhouse","error":"ClickHouse error 516 (HTTP 403)"}
+Postgres unreachable: /readyz 503 {"status":"unavailable"}; logged {"check":"postgres","error":"timed out after 800 ms"}
+test readiness_follows_postgres_and_clickhouse ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 7.35s
+exit 0 at 15:25:19 (build host)

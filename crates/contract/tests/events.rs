@@ -17,10 +17,14 @@ use contract::events::assets::{
     DeviceCreated, DeviceDeleted, DeviceModelCreated, DeviceModelDeleted, DeviceModelUpdated,
     DeviceUpdated, GatewayBound,
 };
-use contract::events::certs::GatewayRegistered;
+use contract::events::certs::{
+    GATEWAY_CERTIFICATE_AGGREGATE, GatewayCertificateRenewed, GatewayRegistered,
+    GatewayRenewalRefused, gateway_certificate_aggregate_id,
+};
 use contract::events::identity::{
-    MEMBERSHIP_AGGREGATE, MemberRoleChanged, PlatformAdminGrant, PlatformAdminGranted,
-    TenantCreated, membership_aggregate_id,
+    AI_MODEL_ROLE_AGGREGATE, AiModelRoleAction, AiModelRoleChanged, MEMBERSHIP_AGGREGATE,
+    MemberRoleChanged, PlatformAdminGrant, PlatformAdminGranted, TenantCreated,
+    membership_aggregate_id,
 };
 use contract::{
     DecodeError, DeviceId, DeviceModelId, EncodeError, Event, EventEnvelope, GatewayBindingId,
@@ -280,6 +284,109 @@ fn gateway_registered_decodes_every_version() {
     );
 }
 
+/// `certs.gateway_certificate_renewed` (Laysi/trustiot-v2#81): a tenant event in the aggregate
+/// of the tenant and the hardware ID, written by the certs service as itself.
+#[test]
+fn gateway_certificate_renewed_decodes_every_version() {
+    let decoded = decode_fixtures::<GatewayCertificateRenewed>();
+    let names: Vec<&str> = decoded.iter().map(|(name, _)| name.as_str()).collect();
+    assert_eq!(names, ["v1"]);
+    let at = |text: &str| -> DateTime<Utc> { text.parse().expect("a time") };
+    let renewed = GatewayCertificateRenewed {
+        hardware_id: GatewayId::new("tg-0001").expect("hardware id"),
+        binding_id: "01928f6e-7a3c-7d4e-8f00-000000000b01"
+            .parse()
+            .expect("binding id"),
+        certificate_serial: "5d3b2af104c96e8b7f12d3e4c5b6a798".to_owned(),
+        ca_key_id: "1f2d4c6a8e0b3d5f7a9c1e3b5d7f9a2c4e6b8d0f2a4c6e8b0d2f4a6c8e0b2d4f".to_owned(),
+        not_before: at("2026-10-29T07:55:00Z"),
+        not_after: at("2027-01-27T08:00:00Z"),
+    };
+    assert_eq!(decoded[0].1, renewed);
+
+    let path = common::fixture_path("events/certs.gateway_certificate_renewed/v1.json");
+    let fixture: EventEnvelope =
+        serde_json::from_str(&fs::read_to_string(path).expect("read fixture")).expect("envelope");
+    let tenant: TenantId = "01928f6e-7a3c-7d4e-8f00-00000000000b"
+        .parse()
+        .expect("tenant id");
+    assert_eq!(fixture.tenant_id, Some(tenant));
+    assert_eq!(
+        fixture.actor,
+        Some(Actor::Service {
+            service: ServiceName::Certs
+        })
+    );
+
+    let envelope = EventEnvelope::new(&renewed, Some(tenant)).expect("encode");
+    assert_eq!(envelope.producer, ServiceName::Certs);
+    assert_eq!(envelope.event_type, "certs.gateway_certificate_renewed");
+    assert_eq!(
+        envelope.payload,
+        json!({
+            "hardware_id": "tg-0001",
+            "binding_id": "01928f6e-7a3c-7d4e-8f00-000000000b01",
+            "certificate_serial": "5d3b2af104c96e8b7f12d3e4c5b6a798",
+            "ca_key_id": "1f2d4c6a8e0b3d5f7a9c1e3b5d7f9a2c4e6b8d0f2a4c6e8b0d2f4a6c8e0b2d4f",
+            "not_before": "2026-10-29T07:55:00Z",
+            "not_after": "2027-01-27T08:00:00Z",
+        })
+    );
+    assert_eq!(GATEWAY_CERTIFICATE_AGGREGATE, "gateway_certificate");
+    assert_eq!(
+        gateway_certificate_aggregate_id(tenant, &renewed.hardware_id),
+        "01928f6e-7a3c-7d4e-8f00-00000000000b:tg-0001"
+    );
+}
+
+/// `certs.gateway_renewal_refused` (Laysi/trustiot-v2#81): platform-wide, one per registered
+/// hardware ID and window, with the refusals by reason.
+#[test]
+fn gateway_renewal_refused_decodes_every_version() {
+    let decoded = decode_fixtures::<GatewayRenewalRefused>();
+    let names: Vec<&str> = decoded.iter().map(|(name, _)| name.as_str()).collect();
+    assert_eq!(names, ["v1"]);
+    let at = |text: &str| -> DateTime<Utc> { text.parse().expect("a time") };
+    let refused = GatewayRenewalRefused {
+        hardware_id: GatewayId::new("tg-0001").expect("hardware id"),
+        window_start: at("2026-10-29T08:00:00Z"),
+        window_end: at("2026-10-29T09:00:00Z"),
+        refusals: 5,
+        reasons: [
+            ("challenge_unknown".to_owned(), 1),
+            ("signature_invalid".to_owned(), 4),
+        ]
+        .into(),
+    };
+    assert_eq!(decoded[0].1, refused);
+
+    let path = common::fixture_path("events/certs.gateway_renewal_refused/v1.json");
+    let fixture: EventEnvelope =
+        serde_json::from_str(&fs::read_to_string(path).expect("read fixture")).expect("envelope");
+    assert_eq!(fixture.tenant_id, None);
+    assert_eq!(
+        fixture.actor,
+        Some(Actor::Service {
+            service: ServiceName::Certs
+        })
+    );
+
+    let envelope = EventEnvelope::new(&refused, None).expect("encode");
+    assert_eq!(envelope.producer, ServiceName::Certs);
+    assert_eq!(envelope.event_type, "certs.gateway_renewal_refused");
+    assert_eq!(envelope.tenant_id, None);
+    assert_eq!(
+        envelope.payload,
+        json!({
+            "hardware_id": "tg-0001",
+            "window_start": "2026-10-29T08:00:00Z",
+            "window_end": "2026-10-29T09:00:00Z",
+            "refusals": 5,
+            "reasons": {"challenge_unknown": 1, "signature_invalid": 4},
+        })
+    );
+}
+
 /// `identity.platform_admin_granted` (Laysi/trustiot-v2#582): a platform-wide event that names
 /// the user by ID only. `v1-unknown-via` is a grant a later build may write: it decodes as
 /// `Unrecognized`, which never encodes.
@@ -330,6 +437,69 @@ fn platform_admin_granted_decodes_every_version() {
         EventEnvelope::new(&unknown, None).is_err(),
         "Unrecognized is decode only"
     );
+}
+
+/// `identity.ai_model_role_changed` (Laysi/trustiot-v2#608): a platform-wide event with the
+/// role, what was done, the version after it and the models in effect. `v1-unknown-action` is an
+/// action a later build may write: it decodes as `Unrecognized`, which never encodes.
+#[test]
+fn ai_model_role_changed_decodes_every_version() {
+    let decoded = decode_fixtures::<AiModelRoleChanged>();
+    let set = AiModelRoleChanged {
+        role: "main".to_owned(),
+        action: AiModelRoleAction::Set,
+        version: 7,
+        models: vec![
+            "anthropic/claude-sonnet-5-5".to_owned(),
+            "anthropic/claude-opus-5-5".to_owned(),
+        ],
+    };
+    // Sorted by path: `-` sorts before `.`.
+    assert_eq!(
+        decoded,
+        [
+            (
+                "v1-reset".to_owned(),
+                AiModelRoleChanged {
+                    role: "main".to_owned(),
+                    action: AiModelRoleAction::Reset,
+                    version: 8,
+                    models: vec!["anthropic/claude-opus-5-5".to_owned()],
+                }
+            ),
+            (
+                "v1-unknown-action".to_owned(),
+                AiModelRoleChanged {
+                    role: "router".to_owned(),
+                    action: AiModelRoleAction::Unrecognized,
+                    version: 9,
+                    models: vec!["openai/gpt-6-luna".to_owned()],
+                }
+            ),
+            ("v1".to_owned(), set.clone()),
+        ]
+    );
+    let envelope = EventEnvelope::new(&set, None).expect("encode");
+    assert_eq!(envelope.producer, ServiceName::Identity);
+    assert_eq!(envelope.tenant_id, None);
+    assert_eq!(
+        envelope.payload,
+        json!({
+            "role": "main",
+            "action": "set",
+            "version": 7,
+            "models": ["anthropic/claude-sonnet-5-5", "anthropic/claude-opus-5-5"]
+        })
+    );
+    let unknown = AiModelRoleChanged {
+        action: AiModelRoleAction::Unrecognized,
+        ..set
+    };
+    assert!(
+        EventEnvelope::new(&unknown, None).is_err(),
+        "Unrecognized is decode only"
+    );
+    assert_eq!(AI_MODEL_ROLE_AGGREGATE, "ai_model_role");
 }
 
 /// The device model events (Laysi/trustiot-v2#99) carry a model the gateway's configuration
@@ -433,7 +603,9 @@ fn gateway_bound_decodes_every_version() {
 
 /// The device events (Laysi/trustiot-v2#100): tenant events of the device's tenant, written by
 /// the assets service; created and updated carry the device in the gateway's own format, which
-/// the configuration accepts, and the delete names what a consumer needs to let go of it.
+/// the configuration accepts, and the delete names what a consumer needs to let go of it. Since
+/// Laysi/trustiot-v2#719 each also names the device's binding (`v1-binding.json`); the events
+/// written before it (`v1.json`) still decode, without one.
 #[test]
 fn device_events_decode_every_version() {
     let device_id: DeviceId = "01928f6e-7a3c-7d4e-8f00-000000000d01"
@@ -446,10 +618,16 @@ fn device_events_decode_every_version() {
     let hardware_id = GatewayId::new("tg-0001").expect("hardware id");
     let model_name = ModelName::new("power-meter").expect("model name");
 
+    let binding_id: GatewayBindingId = "01928f6e-7a3c-7d4e-8f00-000000000b01"
+        .parse()
+        .expect("binding id");
+
     let created = decode_fixtures::<DeviceCreated>();
     let names: Vec<&str> = created.iter().map(|(name, _)| name.as_str()).collect();
-    assert_eq!(names, ["v1"]);
-    let created = created[0].1.clone();
+    // In file name order, as `decode_fixtures` reads them: `-` sorts before `.`.
+    assert_eq!(names, ["v1-binding", "v1"]);
+    let with_binding = created[0].1.clone();
+    let created = created[1].1.clone();
     assert_eq!(
         created,
         DeviceCreated {
@@ -458,6 +636,7 @@ fn device_events_decode_every_version() {
             name: name.clone(),
             hardware_id: hardware_id.clone(),
             model_id,
+            binding_id: None,
             device: Device {
                 id: protocol::DeviceId::new(device_id.to_string()).expect("protocol id"),
                 model: model_name.clone(),
@@ -470,9 +649,25 @@ fn device_events_decode_every_version() {
         }
     );
 
+    assert_eq!(
+        with_binding,
+        DeviceCreated {
+            binding_id: Some(binding_id),
+            ..created.clone()
+        }
+    );
+
     let updated = decode_fixtures::<DeviceUpdated>();
-    assert_eq!(updated.len(), 1);
-    let updated = &updated[0].1;
+    assert_eq!(updated.len(), 2);
+    assert_eq!(updated[1].1.binding_id, None);
+    assert_eq!(
+        updated[0].1,
+        DeviceUpdated {
+            binding_id: Some(binding_id),
+            ..updated[1].1.clone()
+        }
+    );
+    let updated = &updated[1].1;
     assert_eq!(updated.device_id, device_id);
     assert_eq!(updated.revision, 2);
     assert_eq!(updated.device.transport, Transport::ModbusTcp);
@@ -498,8 +693,15 @@ fn device_events_decode_every_version() {
     }
 
     let deleted = decode_fixtures::<DeviceDeleted>();
-    assert_eq!(deleted.len(), 1);
-    let deleted = &deleted[0].1;
+    assert_eq!(deleted.len(), 2);
+    assert_eq!(
+        deleted[0].1,
+        DeviceDeleted {
+            binding_id: Some(binding_id),
+            ..deleted[1].1.clone()
+        }
+    );
+    let deleted = &deleted[1].1;
     assert_eq!(
         *deleted,
         DeviceDeleted {
@@ -507,6 +709,7 @@ fn device_events_decode_every_version() {
             name,
             hardware_id,
             model_id,
+            binding_id: None,
             revision: 2,
         }
     );
@@ -532,6 +735,23 @@ fn device_events_decode_every_version() {
             "model_id": "01928f6e-7a3c-7d4e-8f00-000000000a01",
             "revision": 2,
         })
+    );
+    let envelope = EventEnvelope::new(
+        &DeviceDeleted {
+            binding_id: Some(binding_id),
+            ..deleted.clone()
+        },
+        Some(tenant()),
+    )
+    .expect("encode");
+    assert_eq!(
+        envelope.payload["binding_id"],
+        json!("01928f6e-7a3c-7d4e-8f00-000000000b01")
+    );
+    let envelope = EventEnvelope::new(&with_binding, Some(tenant())).expect("encode");
+    assert_eq!(
+        envelope.decode::<DeviceCreated>().expect("round trip"),
+        with_binding
     );
     let envelope = EventEnvelope::new(&created, Some(tenant())).expect("encode");
     assert_eq!(envelope.event_type, "assets.device_created");

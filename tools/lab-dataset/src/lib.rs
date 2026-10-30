@@ -157,6 +157,11 @@ pub struct Loaded {
     pub version: u32,
     pub tenant: Uuid,
     pub gateway: Uuid,
+    /// The gateway binding the completion records carry (`binding_id`). The loader has no binding
+    /// table, so the ID is derived like the device and stream IDs ([`derived_id`] of kind
+    /// `binding` with an empty key): the same for a dataset, tenant and gateway, and no real
+    /// binding's.
+    pub binding: Uuid,
     /// The shift added to every time ([`TimeShift`]).
     pub shift_ms: i64,
     /// Each device key and the device ID its rows carry.
@@ -194,9 +199,10 @@ impl Loaded {
     }
 }
 
-/// The ID of a dataset's device or stream for one tenant and gateway: a UUID version 8 from the
-/// first 16 bytes of SHA-256 over the kind (`device` or `stream`), the dataset name, the tenant,
-/// the gateway and the key. The same inputs always give the same ID.
+/// The ID of a dataset's device or stream, or of its stand-in gateway binding, for one tenant and
+/// gateway: a UUID version 8 from the first 16 bytes of SHA-256 over the kind (`device`,
+/// `stream` or `binding`), the dataset name, the tenant, the gateway and the key. The same
+/// inputs always give the same ID.
 #[must_use]
 pub fn derived_id(kind: &str, dataset: &str, tenant: Uuid, gateway: Uuid, key: &str) -> Uuid {
     let mut hash = Sha256::new();
@@ -488,7 +494,7 @@ impl Dataset {
         Ok(Ids { devices, streams })
     }
 
-    /// Writes the dataset into `trustiot.telemetry` and `trustiot.batch_commits` for `target`,
+    /// Writes the dataset into `trustiot.telemetry` and `trustiot.stream_commits` for `target`,
     /// with every time moved by `shift`, as the ingest service would have written it: one INSERT
     /// per batch in arrival order, the batch's rows with their `ts`, `received_at`, stream and
     /// sequence number, then its completion record (committed at the batch's receive time),
@@ -548,6 +554,13 @@ impl Dataset {
             version: self.index.version,
             tenant: target.tenant,
             gateway: target.gateway,
+            binding: derived_id(
+                "binding",
+                &self.index.name,
+                target.tenant,
+                target.gateway,
+                "",
+            ),
             shift_ms: shift.millis(),
             devices,
             streams,
@@ -599,6 +612,7 @@ impl Dataset {
                     clickhouse
                         .commit_batch(&BatchCommit {
                             tenant_id: target.tenant,
+                            binding_id: loaded.binding,
                             gateway_id: target.gateway,
                             stream_id,
                             seq: first.batch_seq,
@@ -626,6 +640,7 @@ mod tests {
         assert_eq!(id.get_version_num(), 8);
         for other in [
             derived_id("stream", "synthetic", t1, g, "meter-1"),
+            derived_id("binding", "synthetic", t1, g, "meter-1"),
             derived_id("device", "lab", t1, g, "meter-1"),
             derived_id("device", "synthetic", t2, g, "meter-1"),
             derived_id("device", "synthetic", t1, t2, "meter-1"),

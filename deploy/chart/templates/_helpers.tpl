@@ -274,16 +274,32 @@ migration Job fills, which "trustiot.dependencySecretNames" protects in every ke
 
 {{/*
 Secrets whose keys reach services only through the chart, so no custom env may read them in any
-key: CloudNativePG's Secrets of the bundled Postgres (the CA's private key, the server key, the
-database owner's password), the password Secrets the migration Job fills (each service's database
-password and the collector's ClickHouse password; the chart hands each consumer only its own), the
-bundled ClickHouse's generated admin password Secret, the internal identity signing keys Secret
-(only the identity service mounts it), the MQTT broker's accounts Secret and server certificate
-Secret (only the broker pod uses them), and the migration accounts of an external Postgres and
+key and no Secret field of the values may name them ("trustiot.values.checkSecretRefs"): the
+chart's own ("trustiot.chartSecretNames") and the migration accounts of an external Postgres and
 ClickHouse (only the migration Job uses those).
 Returns a YAML list of names; use with fromYamlArray.
 */}}
 {{- define "trustiot.dependencySecretNames" -}}
+{{- $names := include "trustiot.chartSecretNames" . | fromYamlArray -}}
+{{- range include "trustiot.migrationSecretNames" . | fromYamlArray -}}
+{{- $names = append $names . -}}
+{{- end -}}
+{{- toYaml (uniq $names) -}}
+{{- end -}}
+
+{{/*
+The Secrets the chart itself creates, declares or has created, each of which the chart hands only
+to its own consumers: CloudNativePG's Secrets of the bundled Postgres (the CA's private key, the
+server key, the database owner's password), the password Secrets the migration Job fills (each
+service's database password and the collector's ClickHouse password; the chart hands each consumer
+only its own), the bundled ClickHouse's generated admin password Secret, the internal identity
+signing keys Secret (only the identity service mounts it), the certs service's issuing CA keys
+(only the certs pod), the MQTT broker's server certificate Secret (only the broker pod), and its
+accounts Secret (the broker pod, and each account holder's pod mounts only its own key through
+"trustiot.mqttBroker.serviceCredentials").
+Returns a YAML list of names; use with fromYamlArray.
+*/}}
+{{- define "trustiot.chartSecretNames" -}}
 {{- $names := include "trustiot.postgres.generatedSecrets" . | fromYamlArray -}}
 {{- range include "trustiot.migrate.passwordSecrets" . | fromYamlArray -}}
 {{- $names = append $names .name -}}
@@ -301,6 +317,15 @@ migration Job (through the API) may use it. */ -}}
 {{- /* The MQTT broker's service passwords and server key, whether or not the broker is enabled. */ -}}
 {{- $names = append $names (include "trustiot.mqttBroker.accountsSecret" .) -}}
 {{- $names = append $names (include "trustiot.mqttBroker.tlsSecret" .) -}}
+{{- toYaml (uniq $names) -}}
+{{- end -}}
+
+{{/*
+The migration accounts of an external Postgres and ClickHouse, while that database is external.
+Returns a YAML list of names; use with fromYamlArray.
+*/}}
+{{- define "trustiot.migrationSecretNames" -}}
+{{- $names := list -}}
 {{- if eq .Values.postgres.mode "external" -}}
 {{- with .Values.postgres.external.migrationSecret.name -}}
 {{- $names = append $names . -}}
@@ -311,7 +336,51 @@ migration Job (through the API) may use it. */ -}}
 {{- $names = append $names . -}}
 {{- end -}}
 {{- end -}}
-{{- toYaml (uniq $names) -}}
+{{- toYaml $names -}}
+{{- end -}}
+
+{{/*
+Fails when a Secret field of the values names a protected Secret ("trustiot.dependencySecretNames").
+Each field hands its Secret, or one key of it, to a pod or a gateway that the protected Secret's
+own rule does not cover: a protected name there would, for example, mount the dynsec
+administrator's password (key certs of the broker's accounts Secret) into the collector as a CA, or
+send it to an AI provider as an API key. The external migration Secrets are protected themselves,
+so their own fields are checked against the chart's Secrets only. A field is checked whenever it
+holds a name, whether or not its component is on. global.imagePullSecrets is not among them: only
+the kubelet reads those, and no container sees them.
+*/}}
+{{- define "trustiot.values.checkSecretRefs" -}}
+{{- $v := .Values -}}
+{{- $fields := list -}}
+{{- $fields = append $fields (dict "field" "ingress.direct.tlsSecret" "name" $v.ingress.direct.tlsSecret) -}}
+{{- $fields = append $fields (dict "field" "internalIdentity.signingKeySecret.name" "name" $v.internalIdentity.signingKeySecret.name) -}}
+{{- $fields = append $fields (dict "field" "postgres.external.caSecret.name" "name" $v.postgres.external.caSecret.name) -}}
+{{- $fields = append $fields (dict "field" "clickhouse.bundled.adminSecret.name" "name" $v.clickhouse.bundled.adminSecret.name) -}}
+{{- $fields = append $fields (dict "field" "clickhouse.external.caSecret.name" "name" $v.clickhouse.external.caSecret.name) -}}
+{{- $fields = append $fields (dict "field" "qdrant.external.credentialsSecret.name" "name" $v.qdrant.external.credentialsSecret.name) -}}
+{{- $fields = append $fields (dict "field" "objectStorage.credentialsSecret.name" "name" $v.objectStorage.credentialsSecret.name) -}}
+{{- $fields = append $fields (dict "field" "smtp.credentialsSecret.name" "name" $v.smtp.credentialsSecret.name) -}}
+{{- range $provider, $settings := $v.ai.providers | default dict -}}
+{{- $fields = append $fields (dict "field" (printf "ai.providers.%s.apiKeySecret.name" $provider) "name" ((($settings | default dict).apiKeySecret | default dict).name | default "")) -}}
+{{- end -}}
+{{- $fields = append $fields (dict "field" "observability.sentry.dsnSecret.name" "name" $v.observability.sentry.dsnSecret.name) -}}
+{{- with $v.observability.collector.forward -}}
+{{- $fields = append $fields (dict "field" "observability.collector.forward.authHeader.valueSecret.name" "name" .authHeader.valueSecret.name) -}}
+{{- $fields = append $fields (dict "field" "observability.collector.forward.caSecret.name" "name" .caSecret.name) -}}
+{{- end -}}
+{{- $protected := include "trustiot.dependencySecretNames" . | fromYamlArray -}}
+{{- range $fields -}}
+{{- if and .name (has .name $protected) -}}
+{{- fail (printf "%s: Secret %s is one the chart hands only to its own consumers (trustiot.dependencySecretNames in templates/_helpers.tpl); name a Secret of its own here" .field .name) -}}
+{{- end -}}
+{{- end -}}
+{{- $chartOwned := include "trustiot.chartSecretNames" . | fromYamlArray -}}
+{{- range $database := list "postgres" "clickhouse" -}}
+{{- $name := (get $v $database).external.migrationSecret.name -}}
+{{- if and $name (has $name $chartOwned) -}}
+{{- fail (printf "%s.external.migrationSecret.name: Secret %s is one the chart hands only to its own consumers (trustiot.chartSecretNames in templates/_helpers.tpl); name a Secret of its own here" $database $name) -}}
+{{- end -}}
+{{- end -}}
 {{- end -}}
 
 {{/*

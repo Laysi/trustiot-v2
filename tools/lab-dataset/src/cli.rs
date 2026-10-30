@@ -20,7 +20,7 @@ pub const USAGE: &str = "usage:
 
 load writes into the ClickHouse named by the environment:
   CLICKHOUSE_URL       http://host:port or https://host:port (no credentials in it)
-  CLICKHOUSE_USER      an account that may INSERT into trustiot.telemetry and trustiot.batch_commits
+  CLICKHOUSE_USER      an account that may INSERT into trustiot.telemetry and trustiot.stream_commits
   CLICKHOUSE_PASSWORD  its password
   CLICKHOUSE_CA_FILE   with https:// only: the CA certificate (PEM) the connection trusts
 
@@ -314,7 +314,12 @@ pub async fn run(command: Command, env: impl Fn(&str) -> Option<String>) -> Resu
             let config = Config::read(&config).map_err(|error| error.to_string())?;
             let recorder = Recorder::new(config).map_err(|error| error.to_string())?;
             let recorded = recorder
-                .run(&out, Utc::now(), stop_after(duration))
+                .run(
+                    Recorder::endpoints(),
+                    &out,
+                    Utc::now(),
+                    stop_after(duration),
+                )
                 .await
                 .map_err(|error| error.to_string())?;
             serde_json::to_string_pretty(&recorded).map_err(|error| error.to_string())

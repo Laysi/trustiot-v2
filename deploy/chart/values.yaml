@@ -234,9 +234,14 @@ services:
       maxConnections: 10
   certs:
     enabled: false
-    # 2 to 100. Each replica opens 4 more for factory registrations: 9 in all.
+    # 2 to 100. Each replica opens 4 more as its platform role (factory registrations, the
+    # binding consumer and the certificate renewal's reads, which renewal.max_concurrent keeps
+    # below 4): 9 in all.
     database:
       maxConnections: 5
+    # The certificate renewal's limits (Laysi/trustiot-v2#81) have no fields here; set
+    # TRUSTIOT__RENEWAL__* in env when the defaults do not fit (services/certs/README.md, 「換發」).
+    # Its rate limits count per replica.
     # The API (http: the CA chain and CRLs for the MQTT broker, the workstation certificate API)
     # and the MQTT broker's server certificate issuance on a port of its own (broker-certs, the
     # service's broker.listen_addr; Laysi/trustiot-v2#557). The mesh lets the ingress gateway and
@@ -258,15 +263,58 @@ services:
     # null, as for identity.
     podSecurityContext:
       fsGroup: 65533
+  # Telemetry from the gateways through the MQTT broker into ClickHouse (services/ingest, decision
+  # 8, Laysi/trustiot-v2#642). It logs in on the broker's service port as service:ingest, and the
+  # chart hands it that account's password file and the broker's address (README.md, "MQTT
+  # broker"); without mqttBroker.enabled it has no telemetry and never gets ready. Its ClickHouse
+  # account trustiot_ingest_writer, with the role trustiot_ingest alone, and its Postgres roles
+  # come from the migration Job with generated passwords (README.md, 「ingest」). It has no API: the
+  # mesh lets no caller reach it. Each gateway's batch limits (TRUSTIOT__TELEMETRY_LIMITS__*) have
+  # no fields here; set them in env when the defaults do not fit (services/ingest/README.md).
   ingest:
     enabled: false
+    # 3 to 100: one connection for the binding consumer, one for readiness, the rest for the
+    # telemetry path's stream locks, so it writes maxConnections - 2 batches at once. Each replica
+    # opens 4 more as its platform role (the binding consumer's events, readiness and the
+    # telemetry path's binding lookups): 14 in all.
+    database:
+      maxConnections: 10
+    # The broker account's password file is mode 0440, owned by root and the pod's fsGroup, so the
+    # service reads it through this group and no other user in the container can (README.md,
+    # "MQTT broker"). A group of its own, as for identity and certs. On OpenShift set fsGroup to
+    # null.
+    podSecurityContext:
+      fsGroup: 65531
   telemetry-query:
     enabled: false
     # 2 to 100. Each replica opens 2 more to read the identity service's events: 12 in all.
     database:
       maxConnections: 10
+  # Each gateway's versioned desired configuration (services/gateway-ops, decision 7,
+  # Laysi/trustiot-v2#721): generated from the assets service's events into Postgres and delivered
+  # as retained MQTT messages. It logs in on the broker's service port as service:gateway-ops, and
+  # the chart hands it that account's password file and the broker's address (README.md, "MQTT
+  # broker"); without mqttBroker.enabled no gateway gets its configuration, so the render fails.
+  # Its Postgres roles gateway_ops_app and gateway_ops_platform come from the migration Job with
+  # generated passwords (README.md, 「gateway-ops」). Its API lists a tenant's gateways with their
+  # presence (Laysi/trustiot-v2#112); the ingress reaches it only through an ingress.routes entry
+  # (README.md, 「gateway-ops」), and the mesh lets no other caller reach it.
   gateway-ops:
     enabled: false
+    # 9 to 100: 9 is the most the service role's pool uses at once with one API request (the
+    # consumer's delivery transaction, readiness' ping and migration check, the republish lock,
+    # the two publish slots, the report task, the presence task and a request;
+    # MIN_DATABASE_CONNECTIONS in services/gateway-ops/src/config.rs); a larger pool only serves
+    # more API requests at once. Each replica opens 4 more as its platform role (the consumer's
+    # events and bindings, readiness, and the delivery's and the presence task's reads): 13 in all.
+    database:
+      maxConnections: 9
+    # The broker account's password file is mode 0440, owned by root and the pod's fsGroup, so the
+    # service reads it through this group and no other user in the container can (README.md,
+    # "MQTT broker"). A group of its own, as for identity, certs and ingest. On OpenShift set
+    # fsGroup to null.
+    podSecurityContext:
+      fsGroup: 65530
   # The gateways' MQTT inside WebSocket (services/mqtt-bridge, decision 6): ingress.publicPaths.mqtt
   # on hosts.gateway reaches it without the cookie check, and it relays each connection unchanged
   # to the broker's gateway port, so it needs mqttBroker.enabled (the chart sets the address) or it
@@ -279,18 +327,18 @@ services:
   # assistant_app, calls the models through the AI gateway, and runs its tools as the asking user
   # against telemetry-query and assets (mesh.calls.assistant below). The chart sets the address of
   # each of those services from mesh.calls.assistant, and env cannot (README.md, 「AI 助理」); it
-  # does not start without the AI gateway's (services.ai-gateway.enabled and ai-gateway listed),
-  # nor without services.identity.enabled (it verifies internal identity). Its public API is the
-  # dashboards under /api/assistant (Laysi/trustiot-v2#150; the chat API is Laysi/trustiot-v2#146):
-  # a deployment that serves them adds the cookie route
+  # does not start without the AI gateway's (services.ai-gateway.enabled and ai-gateway listed).
+  # Its API serves the users' conversation threads (Laysi/trustiot-v2#645) and the dashboards
+  # (Laysi/trustiot-v2#150) under /api/assistant; it verifies internal identity tokens, so it does
+  # not start without the identity service. A deployment that serves them adds the cookie route
   # {host: app, path: /api/assistant, match: PathPrefix, service: assistant} to ingress.routes.
   assistant:
     enabled: false
-    # 2 to 100. It opens no other pool: 4 in all. The readiness check and the dashboard API's
-    # short transactions use it (a dataset run holds no connection while it calls telemetry-query);
-    # the chat API (Laysi/trustiot-v2#146) sizes it again.
+    # 4 to 100: readiness, the purge's job lock and the API's requests, the dashboard API's short
+    # transactions among them (a dataset run holds no connection while it calls telemetry-query).
+    # The purge's platform role opens 2 more (Laysi/trustiot-v2#645): 10 in all.
     database:
-      maxConnections: 4
+      maxConnections: 8
     # Sized from the dashboards' memory bounds per replica (services/assistant/README.md,
     # 「記憶體」): about 704 MiB with every bound reached at once, and the rest for the allocator.
     resources:
@@ -312,6 +360,21 @@ services:
     # 「關機」). The chart sets its shutdown.drain_timeout to drainSeconds - 10 s (300 s here);
     # 11 to 3605.
     drainSeconds: 310
+    # The API (http: the forwarding the assistant, the knowledge base and alerts call) and the
+    # admin API on a port of its own (admin, the gateway's admin.listen_addr; Laysi/trustiot-v2#607),
+    # which changes the model roles' models. The mesh lets the services that list ai-gateway in
+    # mesh.calls reach the API port only, and the identity service the admin port only (README.md,
+    # "呼叫矩陣"). The numbers are the service's defaults; keep both ports when overriding the
+    # list: the render fails without admin while the identity service is enabled. The identity
+    # service always calls the Service <release>-ai-gateway-admin on 8082, which forwards to
+    # whatever containerPort admin has; the chart sets AI_GATEWAY__ADMIN__LISTEN_ADDR to it.
+    ports:
+      - name: http
+        containerPort: 8080
+        appProtocol: http
+      - name: admin
+        containerPort: 8082
+        appProtocol: http
     # The settings pool (AI_GATEWAY__DATABASE__MAX_CONNECTIONS), 2 to 32: one short query per
     # forwarded request. It is the gateway's only pool: 4 in all. templates/_service.tpl
     # ("trustiot.service.env") passes it under the gateway's prefix, like every service's pool.
@@ -378,9 +441,13 @@ mesh:
     assets:
       - postgres
     # The certs service keeps the ledger of the certificates it signed and its CRLs in Postgres
-    # (services/certs/README.md).
+    # (services/certs/README.md). It logs in on the MQTT broker's service port as service:certs,
+    # dynamic security's administrator, and keeps the gateways' clients and roles in line with
+    # Postgres (Laysi/trustiot-v2#633); the chart hands it its broker account
+    # (Laysi/trustiot-v2#634, README.md, "MQTT broker"). Skipped while the broker is off.
     certs:
       - postgres
+      - mqtt-broker
     # The AI gateway keeps the platform administrator's changes to the model roles' models, the
     # settings generation every forwarded request checks, and the log of every change in Postgres
     # (services/ai-gateway/README.md, 「資料庫」). It refuses AI calls with 503 while Postgres
@@ -388,20 +455,26 @@ mesh:
     ai-gateway:
       - postgres
     # ClickHouse (decision 14): ingest writes telemetry, telemetry-query reads it with per-tenant
-    # read-only accounts (docs/architecture/deployment.md). telemetry-query keeps which tenants
-    # have an account in Postgres and reads the identity service's events from there as its
-    # platform role (services/telemetry-query/README.md). The MQTT broker (Laysi/trustiot-v2#84):
-    # mqtt-bridge carries the gateways' connections to its gateway port; ingest and gateway-ops
-    # log in on its service port with their broker accounts. certs, dynamic security's
-    # administrator, is added with the gateway registration (Laysi/trustiot-v2#82).
+    # read-only accounts (docs/architecture/deployment.md). ingest keeps its gateway binding
+    # projection and the stream locks in Postgres and reads the assets service's events from there
+    # as its platform role (services/ingest/README.md, Laysi/trustiot-v2#642). telemetry-query keeps
+    # which tenants have an account in Postgres and reads the identity service's events from there
+    # as its platform role (services/telemetry-query/README.md). The MQTT broker
+    # (Laysi/trustiot-v2#84): mqtt-bridge carries the gateways' connections to its gateway port;
+    # ingest and gateway-ops log in on its service port with their broker accounts, like certs
+    # above; the chart hands each its account (README.md, "MQTT broker"). gateway-ops keeps its
+    # projection and the desired configurations in Postgres and reads the assets service's events
+    # from there as its platform role (services/gateway-ops/README.md, Laysi/trustiot-v2#721).
     ingest:
       - clickhouse
       - mqtt-broker
+      - postgres
     telemetry-query:
       - clickhouse
       - postgres
     gateway-ops:
       - mqtt-broker
+      - postgres
     mqtt-bridge:
       - mqtt-broker
     # The AI assistant (Laysi/trustiot-v2#592): the AI gateway for the models; telemetry-query and
@@ -573,12 +646,14 @@ postgres:
       effective_cache_size: 384MB
       work_mem: 4MB
       maintenance_work_mem: 64MB
-      # Fits identity, assets, certs, telemetry-query, assistant and ai-gateway at one replica
-      # each while all of them roll at once (148) plus the 18 reserved connections (166), with 34
-      # to spare for the next service that uses Postgres; the render fails when the enabled
-      # services need more. Changing it restarts the bundled Postgres. The memory estimate is in
-      # README.md (「叢集內的 Postgres」).
-      max_connections: 200
+      # Fits identity, assets, certs, telemetry-query, assistant, ai-gateway, ingest and
+      # gateway-ops at one replica each while all of them roll at once (214) plus the 18 reserved
+      # connections (232), with 8 to spare; the next service or larger pool that uses Postgres
+      # raises it. The render fails when the enabled services need more. Changing it restarts the
+      # bundled Postgres (Laysi/trustiot-v2#721 raised it from 200, Laysi/trustiot-v2#645 from 220
+      # for the assistant's API and purge pools and gateway-ops' larger pool from
+      # Laysi/trustiot-v2#112). The memory estimate is in README.md (「叢集內的 Postgres」).
+      max_connections: 240
     # The image is built for arm64 only (decision 5).
     nodeSelector:
       kubernetes.io/arch: arm64
@@ -706,8 +781,10 @@ mqttBroker:
   # The services' broker passwords are generated in the cluster: the broker pod's init container,
   # which runs the migration image (arm64 only, so the chart adds kubernetes.io/arch: arm64 to
   # nodeSelector), fills the Secret <release>-mqtt-broker-accounts, which the chart declares
-  # empty, and gives the broker only their hashes. Increase this number to rotate them: the
-  # upgrade restarts the broker, whose init container generates new ones first.
+  # empty, and gives the broker only their hashes. Each service's pod mounts its own key only.
+  # Increase this number to rotate them: the upgrade restarts the broker, whose init container
+  # generates new ones first; the services keep running and read the new password from their
+  # mounted file when they reconnect (README.md, "MQTT broker", "服務的帳號").
   passwordGeneration: "1"
   # How often the broker pod's trust sidecar fetches the CA certificates and CRLs from the certs
   # service and checks the server certificate Secret; the broker reloads them when they changed.

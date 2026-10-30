@@ -265,6 +265,24 @@ pub(crate) fn rewrite_text(
     Ok(Some(NativeMessage::new(Format::AnthropicMessages, json)))
 }
 
+/// The text the chat shows of a stored message (`json`, an element of `messages`): a question's
+/// text, or the `text` blocks of an answer joined as [`parse_turn`] joins them into
+/// [`ModelTurn::text`]. Every other block (thinking, redacted thinking, tool calls and results,
+/// images) is left out. `None` when `json` is not a message.
+pub(crate) fn shown_text(json: &str) -> Option<String> {
+    let message: InputMessage = serde_json::from_str(json).ok()?;
+    Some(match message.content {
+        MessageContent::Text(text) => text,
+        MessageContent::Blocks(blocks) => blocks
+            .iter()
+            .filter_map(|block| match block {
+                ContentBlock::Text(block) => Some(block.text.as_str()),
+                _ => None,
+            })
+            .collect(),
+    })
+}
+
 fn encode(message: &InputMessage) -> Result<NativeMessage, EncodeError> {
     Ok(NativeMessage::new(
         Format::AnthropicMessages,
@@ -707,5 +725,36 @@ mod tests {
         assert_eq!(estimate, rest.div_ceil(2) + TOKENS_PER_IMAGE_ESTIMATE);
 
         assert_eq!(estimate_message("not json"), 4);
+    }
+
+    #[test]
+    fn the_chat_shows_only_the_question_and_the_answer_text() {
+        let question = InputMessage::user_text("How many meters reported?");
+        let question = serde_json::to_string(&question).expect("json");
+        assert_eq!(
+            shown_text(&question).as_deref(),
+            Some("How many meters reported?")
+        );
+
+        let answer = r#"{"role":"assistant","content":[
+            {"type":"thinking","thinking":"THINKING-MARKER","signature":"c2ln"},
+            {"type":"redacted_thinking","data":"REDACTED-MARKER"},
+            {"type":"text","text":"Twelve "},
+            {"type":"tool_use","id":"t1","name":"telemetry_latest","input":{"q":"TOOL-INPUT-MARKER"}},
+            {"type":"text","text":"meters."},
+            {"type":"server_tool_use","id":"s1","name":"web_search","input":{"q":"OTHER-MARKER"}}
+        ]}"#;
+        assert_eq!(shown_text(answer).as_deref(), Some("Twelve meters."));
+
+        let results = r#"{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1",
+            "content":[{"type":"text","text":"RESULT-MARKER"}]}]}"#;
+        assert_eq!(
+            shown_text(results).as_deref(),
+            Some(""),
+            "no text block of its own"
+        );
+
+        assert_eq!(shown_text("not json"), None);
+        assert_eq!(shown_text(r#"{"content":"no role"}"#), None);
     }
 }

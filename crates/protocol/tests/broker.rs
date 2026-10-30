@@ -4,7 +4,9 @@
 //!
 //! - every `up` channel still reaches a cloud subscriber with its QoS and retain flag, and the
 //!   last will on `up/status` is delivered;
-//! - every `down` channel still reaches the gateway;
+//! - every `down` channel still reaches the gateway, which subscribes to each by its exact topic;
+//!   `down/#` and `down/+` are refused with SUBACK 0x87 (`allowwildcardsubs false`,
+//!   Laysi/trustiot-v2#637);
 //! - a publish to a topic under the gateway's own `up/` that is not a protocol channel is
 //!   refused with PUBACK 0x87, never reaches the cloud and leaves no retained message;
 //! - the `up/#` wildcard rule this crate generated before the fix fails that same check.
@@ -27,7 +29,10 @@ use std::sync::mpsc::{Receiver, RecvTimeoutError};
 use std::time::{Duration, Instant};
 
 use protocol::GatewayId;
-use protocol::acl::{AclRule, AclType, GATEWAY_ROLE, gateway_acl_topic, gateway_role_acls};
+use protocol::acl::{
+    AclRule, AclType, GATEWAY_ALLOW_WILDCARD_SUBS, GATEWAY_ROLE, gateway_acl_topic,
+    gateway_role_acls,
+};
 use protocol::topic::{Channel, Direction, gateway_subscriptions};
 use serde_json::{Value as Json, json};
 
@@ -240,8 +245,8 @@ impl Broker {
         }
     }
 
-    /// Requires the broker to store exactly `acls` for `role`.
-    fn assert_role(&self, role: &str, acls: &[AclRule]) {
+    /// Requires the broker to store exactly `acls` and `allow_wildcard_subs` for `role`.
+    fn assert_role(&self, role: &str, allow_wildcard_subs: bool, acls: &[AclRule]) {
         let stored = self.control(&json!([{ "command": "getRole", "rolename": role }]));
         let sorted = |rules: &Json| {
             let mut rules: Vec<String> = rules
@@ -257,6 +262,11 @@ impl Broker {
             sorted(&stored[0]["data"]["role"]["acls"]),
             sorted(&serde_json::to_value(acls).unwrap()),
             "the broker stores exactly the generated rules for {role}"
+        );
+        assert_eq!(
+            stored[0]["data"]["role"]["allowwildcardsubs"],
+            json!(allow_wildcard_subs),
+            "the broker stores the wildcard subscription setting of {role}"
         );
     }
 
@@ -524,11 +534,16 @@ const GATEWAY: &str = "gw-a";
 const MARKER: &str = "trustiot/v1/gw/marker/up/telemetry";
 
 impl Setup {
-    fn start(role: &str, acls: &[AclRule]) -> Option<Self> {
+    fn start(role: &str, allow_wildcard_subs: bool, acls: &[AclRule]) -> Option<Self> {
         let broker = Broker::start()?;
-        let create = json!({ "command": "createRole", "rolename": role, "acls": acls });
+        let create = json!({
+            "command": "createRole",
+            "rolename": role,
+            "allowwildcardsubs": allow_wildcard_subs,
+            "acls": acls
+        });
         broker.control(&json!([create]));
-        broker.assert_role(role, acls);
+        broker.assert_role(role, allow_wildcard_subs, acls);
         let all = "trustiot/v1/gw/#";
         broker.control(&json!([{
             "command": "createRole",
@@ -617,7 +632,11 @@ fn non_protocol_publish_violations(setup: &Setup, watch: &Subscription) -> Vec<S
 
 #[test]
 fn the_gateway_role_allows_exactly_the_protocol_channels() {
-    let Some(setup) = Setup::start(GATEWAY_ROLE, &gateway_role_acls()) else {
+    let Some(setup) = Setup::start(
+        GATEWAY_ROLE,
+        GATEWAY_ALLOW_WILDCARD_SUBS,
+        &gateway_role_acls(),
+    ) else {
         return;
     };
     let broker = &setup.broker;
@@ -661,6 +680,36 @@ fn the_gateway_role_allows_exactly_the_protocol_channels() {
         Vec::<String>::new()
     );
 
+    // Another gateway's channels are not this gateway's: publishing to any `up` channel of
+    // gw-b, its live values (`up/live`, Laysi/trustiot-v2#121) among them, is refused with
+    // PUBACK 0x87 at QoS 1, and at QoS 0 (live values' QoS, no PUBACK) nothing reaches the
+    // cloud either; subscribing to gw-b's `up/live` is refused with SUBACK 0x87.
+    let other = GatewayId::new("gw-b").unwrap();
+    for &channel in &up {
+        let topic = channel.topic(&other);
+        let code = broker.publish(&setup.gateway, &topic, 1, false, channel.name());
+        assert_eq!(code, Some(NOT_AUTHORIZED), "{topic}");
+        broker.publish(&setup.gateway, &topic, 0, false, channel.name());
+    }
+    setup.mark();
+    assert_eq!(
+        watch.until(MARKER),
+        [],
+        "nothing for gw-b reaches the cloud"
+    );
+    // With one of its own topics in the same SUBSCRIBE: mosquitto_sub exits when every filter
+    // is refused.
+    let mut eavesdrop = broker.subscribe(
+        &setup.gateway,
+        &[
+            gateway_topic(Channel::LiveControl),
+            Channel::Live.topic(&other),
+        ],
+        None,
+    );
+    assert_eq!(eavesdrop.granted, [1, NOT_AUTHORIZED]);
+    broker.kill(&mut eavesdrop);
+
     // Dynamic security cannot refuse the retain flag on an allowed topic (README, ACL
     // section). If this fails, the broker now enforces it: update the README's decision.
     let telemetry = gateway_topic(Channel::Telemetry);
@@ -679,6 +728,19 @@ fn the_gateway_role_allows_exactly_the_protocol_channels() {
     );
     setup.mark();
     watch.until(MARKER);
+
+    // The role allows no wildcard subscription (`allowwildcardsubs false`): `down/#` and
+    // `down/+` lie within the role's `subscribePattern` rule and are still refused with SUBACK
+    // 0x87, in the same SUBSCRIBE as the exact topics that are granted.
+    let own_down = format!("trustiot/v1/gw/{GATEWAY}/down");
+    let mut filters = vec![format!("{own_down}/#")];
+    filters.extend(gateway_subscriptions(&GatewayId::new(GATEWAY).unwrap()));
+    filters.push(format!("{own_down}/+"));
+    let mut wildcards = broker.subscribe(&setup.gateway, &filters, None);
+    let mut expected = vec![NOT_AUTHORIZED; filters.len()];
+    expected[1..filters.len() - 1].fill(1);
+    assert_eq!(wildcards.granted, expected, "{filters:?}");
+    broker.kill(&mut wildcards);
 
     // The gateway receives every down channel, and its last will on up/status is delivered
     // when the connection drops.
@@ -755,7 +817,7 @@ fn the_wildcard_rule_before_the_fix_fails_the_same_check() {
             .filter(|rule| rule.acltype != AclType::PublishClientSend),
     );
     assert_eq!(legacy[0].topic, "trustiot/v1/gw/%u/up/#");
-    let Some(setup) = Setup::start("legacy-gateway", &legacy) else {
+    let Some(setup) = Setup::start("legacy-gateway", true, &legacy) else {
         return;
     };
     let watch = setup.watch_up();
@@ -782,11 +844,14 @@ fn the_wildcard_rule_before_the_fix_fails_the_same_check() {
     setup.broker.control(&json!([{
         "command": "modifyRole",
         "rolename": "legacy-gateway",
+        "allowwildcardsubs": GATEWAY_ALLOW_WILDCARD_SUBS,
         "acls": gateway_role_acls()
     }]));
-    setup
-        .broker
-        .assert_role("legacy-gateway", &gateway_role_acls());
+    setup.broker.assert_role(
+        "legacy-gateway",
+        GATEWAY_ALLOW_WILDCARD_SUBS,
+        &gateway_role_acls(),
+    );
     for topic in non_protocol_up_topics() {
         setup.broker.publish(&setup.cloud, &topic, 1, true, "");
     }

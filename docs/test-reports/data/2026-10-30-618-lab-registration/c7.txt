@@ -1,0 +1,3 @@
+2026-10-30T09:43:03.341293Z  INFO removed the session file path=/run/user/1000/trustiot-workstation/session
+logged out: the session is revoked and its file removed
+exit 0

@@ -9,6 +9,14 @@
 //! `crl.validity`, with the next CRL number. The monitor ([`crate::monitor`]) raises the alert
 //! when one has less than `crl.alert_before` left.
 //!
+//! A revocation must reach the broker without waiting for that schedule (Laysi/trustiot-v2#635):
+//! once a revocation commits, its caller gives the certificate's issuing CA a new CRL at once
+//! ([`Reissuer::after_revocation`], built on [`reissue`]). When that fails (the database is down,
+//! the replica stops), the revocation stands and the job catches up: a CA also gets a new CRL
+//! when one of its certificates was revoked after its current CRL's thisUpdate, so the
+//! revocation is listed within one `crl.check_interval` on whichever replica holds the job lock,
+//! restarted or not.
+//!
 //! A new CRL's nextUpdate lies `crl.validity` after the round that makes it and its thisUpdate
 //! [`CLOCK_SKEW_SECS`] before it, as a gateway certificate's notBefore does, so a broker whose
 //! clock runs a little behind does not see a CRL that is not valid yet (OpenSSL would then refuse
@@ -16,7 +24,14 @@
 //! at the round, with the revocation time and, when recorded, the reason. Its issuer is the issuing CA certificate's
 //! subject and its authority key identifier is that certificate's subject key identifier, which
 //! is how OpenSSL matches it to the certificates the CA signed.
+//!
+//! Every new CRL of a CA, scheduled or after a revocation, is made in one transaction that takes
+//! [`LOCK_CA_CRL`] and locks the CA's row before it reads the current number and the revoked
+//! certificates, and the upsert never lowers the number. So two of them never interleave: the
+//! later one reads what the earlier one wrote and every revocation committed before it, and its
+//! number is one higher.
 
+use std::sync::Arc;
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
@@ -26,7 +41,9 @@ use rcgen::{
 use service_kit::Context;
 use service_kit::job_lock::JobLock;
 use service_kit::tenant::{BackgroundTenantDb, TenantDbError};
-use sqlx::{PgPool, Row as _};
+use sqlx::{PgConnection, PgPool, Row as _};
+use tokio::sync::Semaphore;
+use tracing::Instrument as _;
 
 use crate::authority::{Authority, CaState, IssuingCa, unix_now};
 use crate::config::CrlSchedule;
@@ -35,6 +52,25 @@ use crate::pem;
 
 /// The job's name for its advisory lock and its log lines.
 pub const JOB: &str = "crl";
+
+/// Serializes the new CRLs of one issuing CA (`$1`, its key id) across replicas, held until the
+/// transaction ends. The row lock alone does not cover a CA that has no CRL yet; replicas of an
+/// older release, which take only the row lock, still serialize with this one once the row
+/// exists. Class `0x63726c73` ("crls"); the CA key id is hashed into the second key.
+pub const LOCK_CA_CRL: &str = "SELECT pg_advisory_xact_lock(1668443251, hashtext($1))";
+
+/// How long [`Reissuer::after_revocation`] waits at most, at most half the API port's handler
+/// timeout: a CRL job round that holds the CA's lock delays it, a stuck one must not keep the
+/// revocation's response from going out.
+pub const REISSUE_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// How many new CRLs after revocations one replica makes at a time ([`Reissuer`]). Each holds a
+/// connection of the service role's pool (default 5) while it waits for its CA's lock, so many
+/// revocations at once (a gateway with certificates of several CAs, several administrators, the
+/// suspension or unbinding of many gateways) must not take the whole pool; the others wait for a
+/// turn without a connection, within their timeout. A new CRL lists every revocation committed
+/// before it starts, so waiting costs no revocation its listing.
+pub const MAX_CONCURRENT_REISSUES: usize = 2;
 
 /// Why a round failed. Names CAs and problems, never key material.
 #[derive(Debug, thiserror::Error)]
@@ -49,6 +85,37 @@ pub enum CrlError {
     Reason { ca_key_id: String, code: i16 },
     #[error("cannot sign the CRL of CA {ca_key_id}: {problem}")]
     Sign { ca_key_id: String, problem: String },
+    #[error("CA {ca_key_id} is not a loaded issuing CA")]
+    UnknownCa { ca_key_id: String },
+    #[error("a CRL of CA {ca_key_id} with a higher number was stored meanwhile")]
+    Superseded { ca_key_id: String },
+}
+
+/// Why a CA got a new CRL, as the log line names it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Cause {
+    /// The CA had no CRL.
+    First,
+    /// Its CRL had less than `crl.renew_before` left.
+    Expiring,
+    /// The job found a certificate of the CA revoked after its CRL's thisUpdate: the new CRL
+    /// right after that revocation failed or has not happened yet.
+    Unlisted,
+    /// Right after a revocation ([`reissue`]).
+    Revocation,
+}
+
+impl Cause {
+    /// The name in the log line's `cause` field.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::First => "first",
+            Self::Expiring => "expiring",
+            Self::Unlisted => "unlisted_revocation",
+            Self::Revocation => "revocation",
+        }
+    }
 }
 
 /// A revoked certificate as a CRL lists it.
@@ -153,13 +220,22 @@ pub fn start<T>(
     });
 }
 
-/// One round at `now` (Unix seconds): every issuing CA whose certificate has not expired and
-/// whose CRL has less than `schedule.renew_before` left, or none, gets a new CRL with the next
-/// number. Returns the key ids of the CAs that got one.
+/// One round at `now` (Unix seconds): every issuing CA whose certificate has not expired gets a
+/// new CRL with the next number when it has none, when its CRL has less than
+/// `schedule.renew_before` left, or when one of its certificates that has not expired was
+/// revoked after its CRL's thisUpdate ([`Cause::Unlisted`]). Returns the key ids of the CAs that
+/// got one.
 ///
-/// Each CA's CRL is replaced in a transaction of its own that locks its row, and an upsert never
-/// lowers the number, so a round that overlaps another (the job lock bounds that, see
-/// `service_kit::job_lock`) skips or repeats work but never goes back.
+/// The last condition is how a revocation whose immediate CRL ([`reissue`]) failed reaches the
+/// CRL within one round. It compares with thisUpdate, which lies [`CLOCK_SKEW_SECS`] before the
+/// round that made the CRL, so a revocation that committed just after that round read the
+/// revoked certificates is caught even when the database's clock (which sets `revoked_at`) and
+/// this replica's differ by up to that much. The price: for that long after a revocation, every
+/// round makes one more CRL of its CA that lists nothing new.
+///
+/// Each CA's CRL is replaced in a transaction of its own (see the module documentation), so a
+/// round that overlaps another or a [`reissue`] (the job lock bounds the former, see
+/// `service_kit::job_lock`) waits for it, skips or repeats work, but never goes back.
 ///
 /// # Errors
 ///
@@ -177,85 +253,350 @@ pub async fn refresh(
             continue;
         }
         let mut tx = db.begin_without_tenant("crl-refresh").await?;
-        let current = sqlx::query(
-            "SELECT crl_number, next_update FROM certs.crls WHERE ca_key_id = $1 FOR UPDATE",
-        )
-        .bind(ca.key_id())
-        .fetch_optional(&mut *tx)
-        .await?;
-        let (number, remaining) = match &current {
-            Some(row) => {
-                let number: i64 = row.try_get("crl_number")?;
-                let next_update: DateTime<Utc> = row.try_get("next_update")?;
-                (number, Some(next_update.timestamp().saturating_sub(now)))
+        let current = lock_current(&mut tx, ca.key_id()).await?;
+        let cause = match &current {
+            None => Cause::First,
+            Some(current) if current.next_update.saturating_sub(now) <= renew_before => {
+                Cause::Expiring
             }
-            None => (0, None),
+            Some(current) => {
+                if revoked_since(&mut tx, ca.key_id(), current.this_update, now).await? {
+                    Cause::Unlisted
+                } else {
+                    continue;
+                }
+            }
         };
-        if remaining.is_some_and(|remaining| remaining > renew_before) {
-            continue;
-        }
-        let rows = sqlx::query(
-            "SELECT serial, revoked_at, revocation_reason FROM certs.issued_certificates
-             WHERE ca_key_id = $1 AND revoked_at IS NOT NULL AND not_after > $2
-             ORDER BY serial",
-        )
-        .bind(ca.key_id())
-        .bind(utc(now))
-        .fetch_all(&mut *tx)
-        .await?;
-        let mut revoked = Vec::with_capacity(rows.len());
-        for row in rows {
-            let revoked_at: DateTime<Utc> = row.try_get("revoked_at")?;
-            revoked.push(Revoked {
-                serial: row.try_get("serial")?,
-                revoked_at: revoked_at.timestamp(),
-                reason: row.try_get("revocation_reason")?,
-            });
-        }
-        let next = number.saturating_add(1);
-        let this_update = now.saturating_sub(CLOCK_SKEW_SECS);
-        let next_update =
-            now.saturating_add(i64::try_from(schedule.validity.as_secs()).unwrap_or(i64::MAX));
-        let lifetime = Duration::from_secs(
-            u64::try_from(next_update.saturating_sub(this_update)).unwrap_or(0),
-        );
-        let der = build(
-            ca,
-            u64::try_from(next).unwrap_or(1),
-            &revoked,
-            this_update,
-            lifetime,
-        )?;
-        sqlx::query(
-            "INSERT INTO certs.crls (ca_key_id, crl_number, this_update, next_update, crl)
-             VALUES ($1, $2, $3, $4, $5)
-             ON CONFLICT (ca_key_id) DO UPDATE SET
-                 crl_number = EXCLUDED.crl_number,
-                 this_update = EXCLUDED.this_update,
-                 next_update = EXCLUDED.next_update,
-                 crl = EXCLUDED.crl
-             WHERE certs.crls.crl_number < EXCLUDED.crl_number",
-        )
-        .bind(ca.key_id())
-        .bind(next)
-        .bind(utc(this_update))
-        .bind(utc(next_update))
-        .bind(&der)
-        .execute(&mut *tx)
-        .await?;
+        let number = current.as_ref().map_or(0, |current| current.number);
+        let issued = issue_locked(&mut tx, ca, number, schedule, now).await?;
         tx.commit().await?;
-        tracing::info!(
-            ca_key_id = %ca.key_id(),
-            generation = ca.generation(),
-            crl_number = next,
-            next_update,
-            revoked = revoked.len(),
-            revoked_serials = ?revoked.iter().map(|entry| hex(&entry.serial)).collect::<Vec<_>>(),
-            "issued a new CRL"
-        );
-        renewed.push(ca.key_id().to_owned());
+        if issued.stored {
+            log_issued(ca, &issued, cause);
+            renewed.push(ca.key_id().to_owned());
+        }
     }
     Ok(renewed)
+}
+
+/// What [`reissue`] did.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Reissued {
+    /// The CA has a new CRL with this number, listing this many revoked certificates.
+    Issued { crl_number: i64, revoked: usize },
+    /// The CA's certificate has expired at `now`, so has every certificate it signed: nothing
+    /// to list, and the job no longer renews its CRL either.
+    CaExpired,
+}
+
+/// Gives the issuing CA `ca_key_id` of `authority` a new CRL at `now` (Unix seconds) with the
+/// next number, whatever its current CRL's nextUpdate: what a caller does right after its
+/// revocation commits, so the CRL the broker fetches lists it without waiting for the schedule
+/// (Laysi/trustiot-v2#635). The CRL follows the same rules as [`refresh`]'s: thisUpdate
+/// [`CLOCK_SKEW_SECS`] before `now`, nextUpdate `schedule.validity` after it, every revoked
+/// certificate of the CA that has not expired at `now`. It runs in its own transaction, so it
+/// sees every revocation committed before it began; call it after the revocation's commit,
+/// never inside that transaction.
+///
+/// Each wait for one of the CA's locks (a round of the CRL job or another reissue holds them
+/// while it makes its CRL) gives up after `lock_wait` (Postgres `lock_timeout`), so a stuck
+/// holder fails this call with a database error instead of keeping its connection waiting. A CA
+/// with no CRL yet gets its first one. [`Reissuer::after_revocation`] wraps this for request
+/// handlers.
+///
+/// # Errors
+///
+/// When the CA is not one of `authority`'s issuing CAs, the database fails or a lock wait
+/// times out, the CRL cannot be signed, or a CRL with a higher number appeared meanwhile (only a
+/// replica that takes neither lock could do that).
+pub async fn reissue(
+    db: &BackgroundTenantDb,
+    authority: &Authority,
+    ca_key_id: &str,
+    schedule: &CrlSchedule,
+    now: i64,
+    lock_wait: Duration,
+) -> Result<Reissued, CrlError> {
+    let ca = authority
+        .issuing()
+        .iter()
+        .find(|ca| ca.key_id() == ca_key_id)
+        .ok_or_else(|| CrlError::UnknownCa {
+            ca_key_id: ca_key_id.to_owned(),
+        })?;
+    if ca.not_after() <= now {
+        return Ok(Reissued::CaExpired);
+    }
+    let mut tx = db.begin_without_tenant("crl-reissue").await?;
+    // Postgres reads at least 1 ms here; a value over its maximum (about 24 days) is clamped.
+    let lock_wait_ms = lock_wait
+        .as_millis()
+        .clamp(1, u128::from(i32::MAX.unsigned_abs()));
+    sqlx::query("SELECT set_config('lock_timeout', $1, true)")
+        .bind(format!("{lock_wait_ms}ms"))
+        .execute(&mut *tx)
+        .await?;
+    let number = lock_current(&mut tx, ca_key_id)
+        .await?
+        .map_or(0, |current| current.number);
+    let issued = issue_locked(&mut tx, ca, number, schedule, now).await?;
+    if !issued.stored {
+        return Err(CrlError::Superseded {
+            ca_key_id: ca_key_id.to_owned(),
+        });
+    }
+    tx.commit().await?;
+    log_issued(ca, &issued, Cause::Revocation);
+    Ok(Reissued::Issued {
+        crl_number: issued.number,
+        revoked: issued.revoked.len(),
+    })
+}
+
+/// A CA's current CRL, as the transaction that replaces it reads it.
+struct Current {
+    number: i64,
+    /// Unix seconds.
+    this_update: i64,
+    /// Unix seconds.
+    next_update: i64,
+}
+
+/// Takes [`LOCK_CA_CRL`] for `ca_key_id`, then locks its row and reads it: `None` when the CA
+/// has no CRL yet.
+async fn lock_current(tx: &mut PgConnection, ca_key_id: &str) -> Result<Option<Current>, CrlError> {
+    sqlx::query(LOCK_CA_CRL)
+        .bind(ca_key_id)
+        .execute(&mut *tx)
+        .await?;
+    let row = sqlx::query(
+        "SELECT crl_number, this_update, next_update FROM certs.crls
+         WHERE ca_key_id = $1 FOR UPDATE",
+    )
+    .bind(ca_key_id)
+    .fetch_optional(&mut *tx)
+    .await?;
+    let Some(row) = row else {
+        return Ok(None);
+    };
+    let this_update: DateTime<Utc> = row.try_get("this_update")?;
+    let next_update: DateTime<Utc> = row.try_get("next_update")?;
+    Ok(Some(Current {
+        number: row.try_get("crl_number")?,
+        this_update: this_update.timestamp(),
+        next_update: next_update.timestamp(),
+    }))
+}
+
+/// Whether a certificate of `ca_key_id` that has not expired at `now` was revoked after `since`
+/// (Unix seconds). Reads the partial index `issued_certificates_revoked`.
+async fn revoked_since(
+    tx: &mut PgConnection,
+    ca_key_id: &str,
+    since: i64,
+    now: i64,
+) -> Result<bool, CrlError> {
+    Ok(sqlx::query_scalar(
+        "SELECT EXISTS (
+             SELECT 1 FROM certs.issued_certificates
+             WHERE ca_key_id = $1 AND revoked_at IS NOT NULL AND not_after > $2
+               AND revoked_at > $3
+         )",
+    )
+    .bind(ca_key_id)
+    .bind(utc(now))
+    .bind(utc(since))
+    .fetch_one(&mut *tx)
+    .await?)
+}
+
+/// A CRL [`issue_locked`] made.
+struct Issued {
+    number: i64,
+    /// Unix seconds.
+    next_update: i64,
+    revoked: Vec<Revoked>,
+    /// Whether the upsert stored it: false only when a CRL with a higher number was already there.
+    stored: bool,
+}
+
+/// Signs and upserts the CRL of `ca` after `number` at `now`, in `tx`, which holds the CA's
+/// locks ([`lock_current`]).
+async fn issue_locked(
+    tx: &mut PgConnection,
+    ca: &IssuingCa,
+    number: i64,
+    schedule: &CrlSchedule,
+    now: i64,
+) -> Result<Issued, CrlError> {
+    let rows = sqlx::query(
+        "SELECT serial, revoked_at, revocation_reason FROM certs.issued_certificates
+         WHERE ca_key_id = $1 AND revoked_at IS NOT NULL AND not_after > $2
+         ORDER BY serial",
+    )
+    .bind(ca.key_id())
+    .bind(utc(now))
+    .fetch_all(&mut *tx)
+    .await?;
+    let mut revoked = Vec::with_capacity(rows.len());
+    for row in rows {
+        let revoked_at: DateTime<Utc> = row.try_get("revoked_at")?;
+        revoked.push(Revoked {
+            serial: row.try_get("serial")?,
+            revoked_at: revoked_at.timestamp(),
+            reason: row.try_get("revocation_reason")?,
+        });
+    }
+    let next = number.saturating_add(1);
+    let this_update = now.saturating_sub(CLOCK_SKEW_SECS);
+    let next_update =
+        now.saturating_add(i64::try_from(schedule.validity.as_secs()).unwrap_or(i64::MAX));
+    let lifetime =
+        Duration::from_secs(u64::try_from(next_update.saturating_sub(this_update)).unwrap_or(0));
+    let der = build(
+        ca,
+        u64::try_from(next).unwrap_or(1),
+        &revoked,
+        this_update,
+        lifetime,
+    )?;
+    let stored = sqlx::query(
+        "INSERT INTO certs.crls (ca_key_id, crl_number, this_update, next_update, crl)
+         VALUES ($1, $2, $3, $4, $5)
+         ON CONFLICT (ca_key_id) DO UPDATE SET
+             crl_number = EXCLUDED.crl_number,
+             this_update = EXCLUDED.this_update,
+             next_update = EXCLUDED.next_update,
+             crl = EXCLUDED.crl
+         WHERE certs.crls.crl_number < EXCLUDED.crl_number",
+    )
+    .bind(ca.key_id())
+    .bind(next)
+    .bind(utc(this_update))
+    .bind(utc(next_update))
+    .bind(&der)
+    .execute(&mut *tx)
+    .await?
+    .rows_affected()
+        == 1;
+    Ok(Issued {
+        number: next,
+        next_update,
+        revoked,
+        stored,
+    })
+}
+
+fn log_issued(ca: &IssuingCa, issued: &Issued, cause: Cause) {
+    tracing::info!(
+        ca_key_id = %ca.key_id(),
+        generation = ca.generation(),
+        crl_number = issued.number,
+        next_update = issued.next_update,
+        cause = cause.as_str(),
+        revoked = issued.revoked.len(),
+        revoked_serials = ?issued.revoked.iter().map(|entry| hex(&entry.serial)).collect::<Vec<_>>(),
+        "issued a new CRL"
+    );
+}
+
+/// [`reissue`] for request handlers: the CA state, the service role and the schedule a handler
+/// needs to give an issuing CA a new CRL right after it revoked one of its certificates.
+/// Cloning is cheap; the clones share the turns of [`MAX_CONCURRENT_REISSUES`].
+#[derive(Clone)]
+pub struct Reissuer {
+    db: BackgroundTenantDb,
+    ca: CaState,
+    schedule: CrlSchedule,
+    timeout: Duration,
+    turns: Arc<Semaphore>,
+}
+
+impl Reissuer {
+    /// New CRLs written with the service role's `db`, for the CAs of `ca` as loaded at the time,
+    /// valid as `schedule` says; each attempt bounded by `timeout` (the caller passes
+    /// [`REISSUE_TIMEOUT`], or less when its own deadline is shorter).
+    #[must_use]
+    pub fn new(
+        db: BackgroundTenantDb,
+        ca: CaState,
+        schedule: CrlSchedule,
+        timeout: Duration,
+    ) -> Self {
+        Self {
+            db,
+            ca,
+            schedule,
+            timeout,
+            turns: Arc::new(Semaphore::new(MAX_CONCURRENT_REISSUES)),
+        }
+    }
+
+    /// Call right after the revocation of `serial`, signed by `ca_key_id`, committed: gives the
+    /// CA a new CRL now ([`reissue`]) and returns whether the CA's CRL is now up to date (also
+    /// true for a CA that has expired, which needs none). It runs on a task of its own, in the
+    /// caller's span, so a caller that goes away (a client that disconnects) does not cancel it,
+    /// and gives up after the timeout. At most [`MAX_CONCURRENT_REISSUES`] run at a time on a
+    /// replica; waiting for a turn counts against the timeout. Each of its two lock waits in
+    /// Postgres gives up after a third of the time left once it has its turn, so a stuck lock
+    /// ends the statement in the database before the timeout and its connection returns to the
+    /// pool. A failure is logged as an ERROR and changes nothing for the revocation, which
+    /// stands: the CRL job lists it within one `crl.check_interval` ([`refresh`],
+    /// [`Cause::Unlisted`]). Write the revocation's own log line before calling this.
+    pub async fn after_revocation(&self, ca_key_id: &str, serial: &[u8]) -> bool {
+        self.after_revocations(ca_key_id, &[serial]).await
+    }
+
+    /// [`Reissuer::after_revocation`] for several certificates of the same CA revoked together,
+    /// for example every certificate of a gateway (Laysi/trustiot-v2#636): one new CRL lists them
+    /// all. The ERROR line's `serial` names them all, comma-separated.
+    pub async fn after_revocations(&self, ca_key_id: &str, serials: &[&[u8]]) -> bool {
+        let (db, ca, schedule, timeout, turns) = (
+            self.db.clone(),
+            self.ca.clone(),
+            self.schedule.clone(),
+            self.timeout,
+            Arc::clone(&self.turns),
+        );
+        let key_id = ca_key_id.to_owned();
+        let outcome = tokio::spawn(
+            async move {
+                let deadline = tokio::time::Instant::now() + timeout;
+                let reissued = async {
+                    // The semaphore is never closed; the turn is held until the CRL is stored.
+                    let _turn = turns.acquire().await;
+                    let left = deadline.saturating_duration_since(tokio::time::Instant::now());
+                    let authority = ca.authority().ok_or(CrlError::NoAuthority)?;
+                    reissue(&db, &authority, &key_id, &schedule, unix_now(), left / 3).await
+                };
+                match tokio::time::timeout_at(deadline, reissued).await {
+                    Ok(result) => result.map(Some),
+                    Err(_) => Ok(None),
+                }
+            }
+            .instrument(tracing::Span::current()),
+        )
+        .await;
+        let problem = match outcome {
+            Ok(Ok(Some(Reissued::Issued { .. } | Reissued::CaExpired))) => return true,
+            Ok(Ok(None)) => format!("timed out after {timeout:?}"),
+            Ok(Err(error)) => error.to_string(),
+            Err(error) => format!("the task failed: {error}"),
+        };
+        let serial = serials
+            .iter()
+            .map(|serial| hex(serial))
+            .collect::<Vec<_>>()
+            .join(",");
+        tracing::error!(
+            ca_key_id,
+            serial = %serial,
+            error = %problem,
+            check_interval = ?self.schedule.check_interval,
+            "could not issue a new CRL after a revocation; the revocation stands and the CRL job \
+             lists it within one check interval"
+        );
+        false
+    }
 }
 
 /// The current CRL (DER) of every issuing CA of `authority` whose certificate has not expired at

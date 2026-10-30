@@ -313,9 +313,10 @@ describe("every copy of a pin is updated by the same pull request", () => {
     const copies = (image: string) => new Set(pins.filter((p) => p.image === image).map((p) => p.file)).size;
     // The chart, the dev environment, services/ingest/tests and tools/migrate/tests.
     expect(copies("docker.io/clickhouse/clickhouse-server")).toBe(4);
-    // The chart, the dev environment, crates/protocol/tests, tools/migrate/tests and
-    // services/certs/tests (workstation.rs, broker.rs and broker_certificate.rs).
-    expect(copies("docker.io/library/eclipse-mosquitto")).toBe(7);
+    // The chart, the dev environment, crates/protocol/tests, crates/mqtt-client/tests,
+    // crates/testkit (the agent's test broker), tools/migrate/tests and services/certs/tests
+    // (workstation.rs, broker.rs and broker_certificate.rs).
+    expect(copies("docker.io/library/eclipse-mosquitto")).toBe(9);
     // The dashboard check image's own Containerfile is the fifth, and its PID 1 cleanup test
     // (services/dashboard-check/tests/pid1_cleanup.rs) the sixth (Laysi/trustiot-v2#150).
     expect(copies("gcr.io/distroless/cc-debian13")).toBe(6);

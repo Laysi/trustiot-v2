@@ -70,11 +70,18 @@ pub const SERVICES: &[Source] = &[
         name: "telemetry-query",
         openapi: telemetry_query::openapi,
     },
-    // The AI assistant's dashboards (Laysi/trustiot-v2#150); the chat API
-    // (Laysi/trustiot-v2#146) adds its routes to the same document.
+    // The AI assistant's conversation threads (Laysi/trustiot-v2#645; asking questions is
+    // Laysi/trustiot-v2#646) and dashboards (Laysi/trustiot-v2#150), in one document. Its calls to the AI gateway and the services its tools call are
+    // not part of the client API.
     Source {
         name: "assistant",
         openapi: assistant::openapi,
+    },
+    // A tenant's gateways with their presence and configuration versions
+    // (Laysi/trustiot-v2#112). Configurations go to gateways over MQTT, not through this API.
+    Source {
+        name: "gateway-ops",
+        openapi: gateway_ops::openapi,
     },
 ];
 
@@ -82,8 +89,8 @@ pub const SERVICES: &[Source] = &[
 /// example). Listing one here is a decision to review.
 pub const SERVICES_WITHOUT_API: &[&str] = &[
     // Takes gateway telemetry from MQTT and writes it to ClickHouse; no HTTP API besides the
-    // health endpoints (docs/architecture/deployment.md). Until Laysi/trustiot-v2#91 builds the
-    // service, the crate only holds the ClickHouse schema.
+    // health endpoints (docs/architecture/deployment.md). It talks to gateways over MQTT and to
+    // the assets service through its events (Laysi/trustiot-v2#640).
     "ingest",
     // Serves the SPA's static files (frontend/) on the app host; no API besides the health
     // endpoints (Laysi/trustiot-v2#123, services/web/README.md).

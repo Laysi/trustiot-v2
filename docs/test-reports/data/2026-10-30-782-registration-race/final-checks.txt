@@ -1,0 +1,20 @@
+fmt: ok
+    Checking certs v0.1.0 (<host copy>/src/services/certs)
+    Checking openapi v0.1.0 (<host copy>/src/tools/openapi)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.56s
+two at once, held together before the lookup: [200, 201], the same certificate, one certificate and one event
+["dup-0001", "dup-0002"] at once, held together before the insert: 201 and 409 gateway_registration.public_key_in_use; one registration, certificate and event
+["dup-0003", "dup-0004"] at once, held together before the insert: 201 and 409 gateway_registration.endorsement_key_in_use; one registration, certificate and event
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.22s
+run 1: ok, 19 test binaries, 93 tests passed, 0 failed
+run 2: ok, 19 test binaries, 93 tests passed, 0 failed
+run 3: ok, 19 test binaries, 93 tests passed, 0 failed
+run 4: ok, 19 test binaries, 93 tests passed, 0 failed
+run 5: ok, 19 test binaries, 93 tests passed, 0 failed
+run 6: ok, 19 test binaries, 93 tests passed, 0 failed
+run 7: ok, 19 test binaries, 93 tests passed, 0 failed
+run 8: ok, 19 test binaries, 93 tests passed, 0 failed
+run 9: ok, 19 test binaries, 93 tests passed, 0 failed
+run 10: ok, 19 test binaries, 93 tests passed, 0 failed
+workspace exit 0: 250 test binaries, 1991 passed, 0 failed
+exit 1 at 16:31:13 (build host, arm64 Linux VM): the command's last step, a grep for failure lines in the workspace log, found none; every check above passed

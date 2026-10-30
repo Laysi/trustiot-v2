@@ -20,10 +20,20 @@ pub const SCHEMA: Schema = Schema {
             name: "0001_assistant.sql",
             sql: include_str!("../migrations/postgres/0001_assistant.sql"),
         },
-        // The dashboards and their versions (Laysi/trustiot-v2#150).
+        // Conversation threads: titles, archiving, soft deletion and the purge's platform role,
+        // discarded rounds, the record of questions (Laysi/trustiot-v2#644).
         Migration {
-            name: "0002_dashboards.sql",
-            sql: include_str!("../migrations/postgres/0002_dashboards.sql"),
+            name: "0002_conversation_threads.sql",
+            sql: include_str!("../migrations/postgres/0002_conversation_threads.sql"),
+        },
+        // The dashboards and their versions (Laysi/trustiot-v2#150). Numbered after the
+        // conversation threads, which reached main first: before #150 merged, this file was
+        // `0002_dashboards.sql` on its branch only, which no release included, so no database a
+        // release migrated has a record of that name. A local database built from the branch
+        // stops at the migration Job (the tables exist) and is rebuilt.
+        Migration {
+            name: "0003_dashboards.sql",
+            sql: include_str!("../migrations/postgres/0003_dashboards.sql"),
         },
     ],
 };
