@@ -45,6 +45,10 @@ const MIGRATION: &str = include_str!("../migrations/postgres/0001_identity.sql")
 /// The writes on sessions that logging in and extending a session need, and their guard
 /// (Laysi/trustiot-v2#103).
 const LOGIN_MIGRATION: &str = include_str!("../migrations/postgres/0004_login.sql");
+/// The tenants and their state, which the cookie check reads with the role
+/// (Laysi/trustiot-v2#777).
+const TENANTS_MIGRATION: &str = include_str!("../migrations/postgres/0002_tenants.sql");
+const TENANT_STATE_MIGRATION: &str = include_str!("../migrations/postgres/0008_tenant_state.sql");
 /// The migration Job creates the service's schema, owned by the owner role, before it runs the
 /// migrations (tools/migrate); the tests do the same as the owner.
 const SCHEMA: &str = "CREATE SCHEMA identity";
@@ -124,7 +128,12 @@ impl Fixture {
             .execute(&mut owner)
             .await
             .expect("create the schema");
-        for migration in [MIGRATION, LOGIN_MIGRATION] {
+        for migration in [
+            MIGRATION,
+            TENANTS_MIGRATION,
+            LOGIN_MIGRATION,
+            TENANT_STATE_MIGRATION,
+        ] {
             sqlx::raw_sql(migration)
                 .execute(&mut owner)
                 .await

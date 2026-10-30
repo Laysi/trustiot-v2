@@ -12,14 +12,19 @@
 //! | `PUT …/tenant` with a `Content-Type` other than `application/json`, a body over [`MAX_BODY_BYTES`], or a body that is not `{"tenant_id": "<uuid>"}` | 400 `invalid_request` |
 //! | `PUT …/tenant` with a token that names no session (`sid`), without a usable session cookie, or when the cookie's session is not the token's session, is not the token user's, or has ended | 401 `unauthenticated`; nothing changed |
 //! | `PUT …/tenant` naming a tenant the user is not a member of, existing or not | 403 `permission_denied`, message key `session.tenant_not_member`; the session keeps its tenant |
-//! | `PUT …/tenant` naming one of the user's tenants | 200 [`CurrentSession`] as it is now: the session's next request acts in that tenant with the user's role there |
+//! | `PUT …/tenant` naming one of the user's tenants, suspended ones included | 200 [`CurrentSession`] as it is now: the session's next request acts in that tenant with the user's role there (in a suspended tenant: only at this service, see `crate::ext_authz`) |
 //! | The database failed, more membership reads are waiting than [`MEMBERSHIP_READS`] serve within [`ACQUIRE_TIMEOUT`], or the platform role has no credentials | 503 `unavailable`; nothing changed |
 //!
 //! Where each part comes from:
 //!
 //! - The user, the platform administrator flag, and the tenant with its role: the request's token,
 //!   which the cookie check signed from the session and the memberships a moment ago. The
-//!   tenant's name is read in a transaction of that tenant (row-level security).
+//!   tenant's name and state are read in a transaction of that tenant (row-level security).
+//! - Each tenant's state (Laysi/trustiot-v2#777): `active`, `suspended` or `deleted`, read with
+//!   the memberships, so the app can show the suspension page and offer the user's other
+//!   tenants. A suspended tenant stays in the list and can be switched to: the session then
+//!   reaches this service only, which the app needs to show the page, switch again or log out.
+//!   The reason is not shown; only a platform administrator reads it (`crate::tenant_state`).
 //! - The user's tenants: every membership of the token's user, read with the platform role
 //!   (memberships are tenant data, and the service role sees one tenant at a time;
 //!   `0007_preferences_and_tenant_switch.sql` lets the platform role read them, nothing more),
@@ -53,6 +58,7 @@ use crate::csrf::{CROSS_SITE_REQUEST, cross_site};
 use crate::logout::CURRENT_SESSION_PATH;
 use crate::members::MemberRole;
 use crate::session::{SessionHash, error_kind, parse_role, session_secret};
+use crate::tenant_state::TenantState;
 use crate::tenants::{error, is_json};
 
 /// Switches the request's session to another of the user's tenants.
@@ -78,17 +84,18 @@ pub const MEMBERSHIPS_PURPOSE: &str = "session-tenants";
 /// The message key of a switch to a tenant the user is not a member of.
 pub const TENANT_NOT_MEMBER: MessageKey = MessageKey::new("session.tenant_not_member");
 
-/// Every membership of `$1`, with its tenant's name when the tenant has a row, by the platform
-/// role. The user condition is the only one: the platform role sees every tenant's memberships.
-const USER_MEMBERSHIPS: &str = "SELECT m.tenant_id::text, t.name, m.tenant_role
+/// Every membership of `$1`, with its tenant's name and state when the tenant has a row, by the
+/// platform role. The user condition is the only one: the platform role sees every tenant's
+/// memberships.
+const USER_MEMBERSHIPS: &str = "SELECT m.tenant_id::text, t.name, m.tenant_role, t.state
 FROM identity.memberships AS m
 LEFT JOIN identity.tenants AS t ON t.tenant_id = m.tenant_id
 WHERE m.user_id = $1::uuid
 ORDER BY t.name NULLS LAST, m.tenant_id";
 
-/// The name of the transaction's tenant. Row-level security already limits the rows to it; the
-/// condition is repeated so the query means the same without it.
-const TENANT_NAME: &str = "SELECT name FROM identity.tenants WHERE tenant_id = $1::uuid";
+/// The name and state of the transaction's tenant. Row-level security already limits the rows
+/// to it; the condition is repeated so the query means the same without it.
+const TENANT_NAME: &str = "SELECT name, state FROM identity.tenants WHERE tenant_id = $1::uuid";
 
 /// The user's email address, if they log in by email. Users are not tenant data.
 const USER_EMAIL: &str = "SELECT email FROM identity.users WHERE id = $1::uuid";
@@ -110,6 +117,10 @@ pub struct TenantMembership {
     pub name: Option<String>,
     /// The user's role in the tenant.
     pub role: MemberRole,
+    /// The tenant's state (Laysi/trustiot-v2#777): while it is `suspended` or `deleted`, the
+    /// session reaches this service only, and every other request in the tenant answers 403
+    /// `tenant_suspended`. A tenant without a record is `active`, as the cookie check reads it.
+    pub state: TenantState,
 }
 
 /// The session of the request.
@@ -184,8 +195,8 @@ pub enum Switched {
     NoSession,
 }
 
-/// One membership row: tenant, name, role.
-type MembershipRow = (String, Option<String>, String);
+/// One membership row: tenant, name, role, state.
+type MembershipRow = (String, Option<String>, String, Option<String>);
 
 /// Reads the current session and switches its tenant: the service role's pool (the tenant API's,
 /// shared with the preferences) and, when the platform role has credentials, a reader of the
@@ -218,11 +229,16 @@ impl AccountStore {
     pub async fn current(&self, user: &UserIdentity) -> Result<CurrentSession, AccountError> {
         let tenants = self.memberships(user.user_id()).await?;
         let active_tenant = match user.tenant() {
-            Some(grant) => Some(TenantMembership {
-                tenant_id: grant.id,
-                name: self.tenant_name(user).await?,
-                role: MemberRole::of(grant.role).ok_or(AccountError::Inconsistent("token role"))?,
-            }),
+            Some(grant) => {
+                let (name, state) = self.tenant_name(user).await?;
+                Some(TenantMembership {
+                    tenant_id: grant.id,
+                    name,
+                    role: MemberRole::of(grant.role)
+                        .ok_or(AccountError::Inconsistent("token role"))?,
+                    state,
+                })
+            }
             None => None,
         };
         Ok(CurrentSession {
@@ -300,7 +316,7 @@ impl AccountStore {
             .await?;
         tx.commit().await?;
         rows.into_iter()
-            .map(|(tenant, name, role)| {
+            .map(|(tenant, name, role, state)| {
                 let role = parse_role(&role)
                     .ok()
                     .and_then(MemberRole::of)
@@ -311,23 +327,31 @@ impl AccountStore {
                         .map_err(|_| AccountError::Inconsistent("tenant id"))?,
                     name,
                     role,
+                    state: tenant_state(state.as_deref())?,
                 })
             })
             .collect()
     }
 
-    /// The name of the token's tenant, in a transaction of that tenant.
-    async fn tenant_name(&self, user: &UserIdentity) -> Result<Option<String>, AccountError> {
+    /// The name and state of the token's tenant, in a transaction of that tenant; no name and
+    /// `active` without a record.
+    async fn tenant_name(
+        &self,
+        user: &UserIdentity,
+    ) -> Result<(Option<String>, TenantState), AccountError> {
         let Some(tenant) = user.tenant_id() else {
-            return Ok(None);
+            return Ok((None, TenantState::Active));
         };
         let mut tx = self.db.begin(user).await?;
-        let name: Option<String> = sqlx::query_scalar(TENANT_NAME)
+        let row: Option<(String, String)> = sqlx::query_as(TENANT_NAME)
             .bind(tenant.to_string())
             .fetch_optional(&mut *tx)
             .await?;
         tx.commit().await?;
-        Ok(name)
+        match row {
+            Some((name, state)) => Ok((Some(name), tenant_state(Some(&state))?)),
+            None => Ok((None, TenantState::Active)),
+        }
     }
 
     /// The email address of `user`; `None` without one, or when the user no longer exists.
@@ -337,6 +361,16 @@ impl AccountStore {
             .fetch_optional(self.db.pool())
             .await?;
         Ok(email.flatten())
+    }
+}
+
+/// A tenant's state as a row holds it: `NULL` (no tenant row, only data written outside the API
+/// has one) is `active`, as the cookie check reads it (`crate::session::MEMBERSHIP`). A value
+/// the schema does not allow is refused rather than guessed.
+fn tenant_state(state: Option<&str>) -> Result<TenantState, AccountError> {
+    match state {
+        None => Ok(TenantState::Active),
+        Some(state) => TenantState::parse(state).ok_or(AccountError::Inconsistent("tenant state")),
     }
 }
 
@@ -579,6 +613,22 @@ mod tests {
     }
 
     #[test]
+    fn a_tenant_without_a_record_is_active_and_an_unknown_state_is_refused() {
+        assert_eq!(tenant_state(None).expect("no record"), TenantState::Active);
+        for state in [
+            TenantState::Active,
+            TenantState::Suspended,
+            TenantState::Deleted,
+        ] {
+            assert_eq!(tenant_state(Some(state.as_str())).expect("known"), state);
+        }
+        assert!(matches!(
+            tenant_state(Some("paused")),
+            Err(AccountError::Inconsistent("tenant state"))
+        ));
+    }
+
+    #[test]
     fn the_session_serializes_with_every_field() {
         let tenant: TenantId = TENANT.parse().expect("tenant id");
         let user: UserId = USER.parse().expect("user id");
@@ -586,6 +636,7 @@ mod tests {
             tenant_id: tenant,
             name: Some("Plant A".to_owned()),
             role: MemberRole::Editor,
+            state: TenantState::Suspended,
         };
         let session = CurrentSession {
             user_id: user,
@@ -601,7 +652,7 @@ mod tests {
                 "email": null,
                 "platform_admin": false,
                 "active_tenant": null,
-                "tenants": [{"tenant_id": TENANT, "name": "Plant A", "role": "editor"}],
+                "tenants": [{"tenant_id": TENANT, "name": "Plant A", "role": "editor", "state": "suspended"}],
             })
         );
         let switched = CurrentSession {
@@ -610,7 +661,7 @@ mod tests {
         };
         assert_eq!(
             serde_json::to_value(&switched).expect("serialize")["active_tenant"],
-            json!({"tenant_id": TENANT, "name": "Plant A", "role": "editor"})
+            json!({"tenant_id": TENANT, "name": "Plant A", "role": "editor", "state": "suspended"})
         );
     }
 

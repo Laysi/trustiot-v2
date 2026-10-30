@@ -92,6 +92,7 @@ fn grant() -> SessionGrant {
             role: TenantRole::Editor,
         }),
         platform_admin: false,
+        tenant_suspended: false,
     }
 }
 
@@ -100,6 +101,7 @@ fn routes_table() -> IngressRoutes {
         &json!([
             {"host": APP, "path": "/", "match": "PathPrefix", "service": "assets"},
             {"host": APP, "path": "/api/certs", "match": "PathPrefix", "service": "certs"},
+            {"host": APP, "path": "/api/identity", "match": "PathPrefix", "service": "identity"},
             {"host": "gw.example.com", "path": "/api/gw", "match": "PathPrefix", "service": "gateway-ops"},
         ])
         .to_string(),
@@ -215,6 +217,108 @@ async fn an_active_session_gets_one_verified_identity_for_the_routed_service() {
     );
 }
 
+/// Acceptance (Laysi/trustiot-v2#777): a session whose tenant is suspended gets 403
+/// `tenant_suspended` and no token for every other service, and a token with the
+/// `tenant_suspended` claim for this service, which the tenant-scoped endpoints refuse and the
+/// session, preference, logout and platform endpoints accept.
+#[tokio::test]
+async fn a_suspended_tenant_reaches_the_identity_service_only() {
+    let fixture = Fixture::new(Behaviour::Answer);
+    let secret = SessionSecret::from_bytes([45; 32]);
+    let suspended = SessionGrant {
+        tenant_suspended: true,
+        platform_admin: true,
+        ..grant()
+    };
+    fixture.store.add(&secret, suspended);
+    let cookie = format!("{SESSION_COOKIE}={}", secret.to_cookie_value());
+    for target in [
+        "/internal/ext-authz/api/certs/42",
+        "/internal/ext-authz/api/assistant/chat",
+        "/internal/ext-authz/",
+    ] {
+        for method in [Method::GET, Method::POST] {
+            let response = fixture
+                .check(
+                    method.clone(),
+                    target,
+                    &[("host", APP), ("cookie", &cookie)],
+                )
+                .await;
+            assert_eq!(
+                response.status(),
+                StatusCode::FORBIDDEN,
+                "{method} {target}"
+            );
+            assert!(identity_headers(&response).is_empty(), "{target}");
+            assert_eq!(
+                response
+                    .headers()
+                    .get(CACHE_CONTROL)
+                    .map(HeaderValue::as_bytes),
+                Some(b"no-store".as_slice())
+            );
+            assert_eq!(
+                body_json(response).await,
+                json!({"code": "tenant_suspended", "message_key": "error.tenant_suspended"})
+            );
+        }
+    }
+    // A route that does not exist is still `no_route`, as for any session.
+    let response = fixture
+        .check(
+            Method::GET,
+            "/internal/ext-authz/api/gw",
+            &[("host", "unknown.example.com"), ("cookie", &cookie)],
+        )
+        .await;
+    assert_eq!(
+        body_json(response).await["code"],
+        json!("permission_denied")
+    );
+
+    let response = fixture
+        .check(
+            Method::PUT,
+            "/internal/ext-authz/api/identity/v1/platform/tenants/x/state",
+            &[("host", APP), ("cookie", &cookie)],
+        )
+        .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let tokens = identity_headers(&response);
+    let [token] = tokens.as_slice() else {
+        panic!("expected exactly one identity header, got {tokens:?}");
+    };
+    let user = verifier(ServiceName::Identity)
+        .verify(token)
+        .expect("identity accepts the token");
+    assert!(user.is_tenant_suspended());
+    assert_eq!(user.tenant(), grant().tenant);
+    assert!(user.is_platform_admin());
+
+    // The same session after the tenant is resumed: every route again, without the claim.
+    fixture.store.add(
+        &secret,
+        SessionGrant {
+            platform_admin: true,
+            ..grant()
+        },
+    );
+    let response = fixture
+        .check(
+            Method::GET,
+            "/internal/ext-authz/api/certs/42",
+            &[("host", APP), ("cookie", &cookie)],
+        )
+        .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let tokens = identity_headers(&response);
+    let user = verifier(ServiceName::Certs)
+        .verify(&tokens[0])
+        .expect("certs accepts the token");
+    assert!(!user.is_tenant_suspended());
+}
+
 /// Acceptance: when the request already carries identity headers (any spelling), the allow
 /// still holds only the token this service signed.
 #[tokio::test]
@@ -228,6 +332,7 @@ async fn forged_identity_headers_never_reach_the_allow() {
             .expect("user"),
         tenant: None,
         platform_admin: true,
+        tenant_suspended: false,
     };
     let forged_signed = forger
         .issue(&other_user, ServiceName::Assets, unix_now())
@@ -530,6 +635,7 @@ async fn grants_without_a_tenant_or_with_admin_rights_are_signed_as_they_are() {
         user: UserId::from_uuid(Default::default()),
         tenant: None,
         platform_admin: true,
+        tenant_suspended: false,
     };
     fixture.store.add(&secret, admin.clone());
     let cookie = format!("{SESSION_COOKIE}={}", secret.to_cookie_value());

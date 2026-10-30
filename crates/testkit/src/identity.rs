@@ -90,6 +90,7 @@ impl TestIssuer {
             act: None,
             // As the ext_authz check signs it: the ingress gateway's request has a session.
             sid: Some(SessionId::generate()),
+            tenant_suspended: false,
         }
     }
 

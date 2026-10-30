@@ -322,7 +322,7 @@ fn padded(json: &str, size: usize) -> String {
 }
 
 fn membership(tenant: &Tenant, role: &str) -> Value {
-    json!({"tenant_id": tenant.id, "name": tenant.name, "role": role})
+    json!({"tenant_id": tenant.id, "name": tenant.name, "role": role, "state": "active"})
 }
 
 fn tenant_grant(tenant: &Tenant, role: &str) -> Value {
