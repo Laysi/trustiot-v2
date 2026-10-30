@@ -293,7 +293,7 @@ TCP 以 reset 拒絕（`connect` 立刻得到 connection refused，不等逾時�
 
 #### 這一層擋不到的
 
-- **unix socket**：nftables 只看得到 IP 封包。agent 照樣能連檔案權限允許的 unix socket，請本機服務代它做事，而那些服務送出的封包屬於它們自己的帳號，不受這些規則限制。Raspberry Pi OS 上，avahi 的 `/run/avahi-daemon/socket`（所有人可寫）與 D-Bus system bus 讓任何本機帳號請 avahi 在 LAN 上送 mDNS 查詢，依 Debian 預設的 D-Bus 設定也能發布 mDNS 記錄（依預設推論，沒有在閘道器上實測）。agent 本身不用 D-Bus 也不用 avahi（名稱解析的 `mdns4_minimal` 只處理 `.local`）。要擋住這條路得從 agent 的沙箱下手，例如 `InaccessiblePaths=-/run/dbus -/run/avahi-daemon`，而 abstract namespace 的 unix socket 不受路徑限制。這個改動要在閘道器上實測 agent 照常執行，不在 Laysi/trustiot-v2#813 的範圍內，另開 issue 處理。
+- **unix socket**：nftables 只看得到 IP 封包。agent 照樣能連檔案權限允許的 unix socket，請本機服務代它做事，而那些服務送出的封包屬於它們自己的帳號，不受這些規則限制。Raspberry Pi OS 上，avahi 的 `/run/avahi-daemon/socket`（所有人可寫）與 D-Bus system bus 讓任何本機帳號請 avahi 在 LAN 上送 mDNS 查詢，依 Debian 預設的 D-Bus 設定也能發布 mDNS 記錄（依預設推論，沒有在閘道器上實測）。agent 本身不用 D-Bus 也不用 avahi（名稱解析的 `mdns4_minimal` 只處理 `.local`）。要擋住這條路得從 agent 的沙箱下手，例如 `InaccessiblePaths=-/run/dbus -/run/avahi-daemon`，而 abstract namespace 的 unix socket 不受路徑限制。這個改動要在閘道器上實測 agent 照常執行，由 Laysi/trustiot-v2#826 處理。
 - **執行中被清掉的規則**：root 手動執行 `nft flush ruleset` 或 `nft -f /etc/nftables.conf`（不經 systemd）之後，規則的 unit 仍是 active，agent 的自動重啟（`Restart=always`）不會重新載入規則，直到重開機或 `systemctl restart trustiot-agent-egress.service`。`scripts/check-gateway.sh` 的 egress 檢查會發現。Laysi/trustiot-v2#814 改成預設拒絕之前，要讓 agent 每次啟動都重新確認規則（例如 agent unit 的 `ExecStartPre=+/usr/sbin/nft -f <規則檔>`），否則那時規則不見就等於全部放行。
 - **priority 不小於 0 的 NAT output chain**：NAT 在 filter（0）之前改寫目的地，規則看的是改寫後的位址。如果另一個 table 的 `type nat hook output` 用 0 以上的 priority，改寫就發生在規則之後，轉回本機的連線擋不到。主機規則（`/etc/nftables.conf`）的 NAT output chain 要用 `dstnat`（-100）或更小的 priority。
 

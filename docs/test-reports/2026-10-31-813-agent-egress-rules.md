@@ -2,11 +2,11 @@
 
 對應 issue：Laysi/trustiot-v2#813（父 issue Laysi/trustiot-v2#96）。這份報告記錄 nftables 規則（`edge/agent/systemd/trustiot-agent-egress.nft`）、在 agent 之前載入它的 unit（`trustiot-agent-egress.service`）與閘道器檢查（`edge/agent/scripts/check-gateway.sh`）的驗證，以及對 lab 的閘道器的唯讀檢查。
 
-結果先講：在 Debian 13 容器（與閘道器相同的 nftables 1.1.3 與 systemd 257）裡，agent 帳號連 18 種該拒絕的目的地都被規則拒絕，規則的 counter 也記到；`nobody` 與 root 連同樣的目的地全部連得上，counter 不變。agent 經網路的 DNS 伺服器解析雲端名稱並連上 443。systemd 跑兩個 unit 時，規則在 agent 的行程之前載入；`nftables.service` 的 start、reload、restart 不會讓規則在 agent 執行中消失；規則或 `/etc/nftables.conf` 載入不了、`nftables.service` 的 drop-in 不見時 agent 不啟動。檢查腳本在 lab 的閘道器上唯讀執行，找出 sshd、avahi-daemon、cloudflared 聽在所有介面。
+結果先講：在 Debian 13 容器（與閘道器相同的 nftables 1.1.3 與 systemd 257）裡，agent 帳號連 18 種該拒絕的目的地都被規則拒絕，規則的 counter 也記到；`nobody` 與 root 連同樣的目的地全部連得上，counter 不變。agent 經網路的 DNS 伺服器解析雲端名稱並連上 443。systemd 跑兩個 unit 時，規則在 agent 的行程之前載入；`nftables.service` 的 start、reload、restart 不會讓規則在 agent 執行中消失；規則或 `/etc/nftables.conf` 載入不了、`nftables.service` 的 drop-in 不見時 agent 不啟動。檢查腳本在 lab 的閘道器上唯讀執行，找出 sshd、avahi-daemon、cloudflared 聽在所有介面。測試在兩種建置主機上都通過：x86_64 Linux，以及 SELinux enforcing 的 arm64 Linux VM。後者找出三個測試本身的問題，都已修正，見「兩種建置主機」。
 
 ## 環境
 
-- **測試**：建置主機（x86_64 Linux），`cargo test -p agent --test egress --test systemd_unit`，分支 `feat/813-agent-egress-rules`。
+- **測試**：兩台建置主機，x86_64 Linux 與 arm64 Linux VM（SELinux enforcing），分支 `feat/813-agent-egress-rules`。執行 `cargo test -p agent --test egress --test systemd_unit` 與完整的 `cargo test -p agent`。
   - 容器：`edge/agent/tests/egress/Containerfile`，`debian:trixie-slim`（以 digest 釘選）加上 Debian 的 `nftables`、`iproute2`、`socat`、`dnsmasq-base`、`systemd`。nftables 1.1.3、systemd 257，和 lab 的閘道器相同。
   - 規則只載入容器自己的 network namespace（`--network none`），沒有動到建置主機的規則。網路的測試在容器裡開 IPv6 forwarding（`--sysctl`，只作用在容器自己的 namespace），讓核心加入 subnet-router anycast 位址。
 - **lab 的閘道器**（展示用閘道器）：Raspberry Pi OS Lite arm64（Debian 13.7），kernel `6.18.50+rpt-rpi-v8`，nftables 1.1.3。只做唯讀檢查：沒有寫任何檔案、沒有安裝、沒有載入規則、沒有重啟任何服務。主機名稱與位址不寫進報告。
@@ -83,7 +83,31 @@ ssh "$GATEWAY_HOST" 'cat /etc/resolv.conf; systemctl is-active systemd-resolved 
 
 把 anycast 那條規則的種類改成不會命中的 `unreachable`（規則數不變）：agent 送往 `[fd81:3::]:9` 的 datagram 成功送出（`ok`，應為 `not-permitted`），第一個測試失敗。沒有這條規則時，開了 IPv6 forwarding 的閘道器上 agent 連得到本機的 UDP 服務。
 
-最終版本（這個分支的兩個 commit）在建置主機上：`cargo fmt --all --check`、`cargo clippy --locked --workspace --all-targets -- -D warnings`、`cargo test --locked --workspace --exclude agent`、`cargo test --locked -p agent` 都通過，原始輸出見 [tests.txt](data/2026-10-31-813-agent-egress-rules/tests.txt)。
+### 兩種建置主機
+
+分支合併 main `55aa6349` 之後，在 arm64 的建置主機（Linux VM，SELinux enforcing）上第一次執行，四個測試都失敗；x86_64 的建置主機則全部通過。原因有三個，都在測試本身，規則與 unit 沒有改：
+
+- **sysfs 的掛載**
+  - 原因：`ip netns exec` 與 `ip -n` 會為 namespace 掛載一個 sysfs。podman 以 tmpfs 遮蔽 `/sys/firmware` 與 `/sys/fs/selinux`，容器的 `/sys` 因此不是完整可見，核心拒絕新的 sysfs 掛載（`Operation not permitted`；SELinux 先擋時是 `Permission denied`）。
+  - 修正：`tests/egress/lab.sh` 改以 `nsenter --net=/run/netns/peer` 進入 peer namespace。它不掛載任何東西，lab.sh 的指令也都用不到那個 namespace 的 sysfs（commit `ebb0d87b`）。
+- **SELinux 標籤**
+  - 原因：在帶標籤的 systemd 容器裡，`trustiot-agent.service` 的依賴起不來（`A dependency job for trustiot-agent.service failed`）。
+  - 修正：systemd 的容器改以 `--security-opt label=disable` 執行，仍是 rootless，仍在自己的 network namespace（同一個 commit）。
+- **restart 之後的時序**
+  - 現象：前兩點修正後，arm64 上三次完整的 agent 測試有一次失敗。systemd 的測試在 `systemctl restart nftables.service` 之後立刻執行 `nft list table inet trustiot_agent`，得到 `No such file or directory`。
+  - 原因：systemctl 只等它指名的 unit 自己的工作；`Requires=` 傳給規則 unit 與 agent 的重啟，可能還在進行。
+  - 這不是規則的空窗：同一個測試以 `InvocationID` 與時間順序確認，agent 在規則重新載入之後才啟動。
+  - 修正：restart 之後，測試先等 systemd 沒有排隊中的工作；讀替身的紀錄之前，先等替身寫入。每個等待上限 60 秒，逾時的訊息指出在等什麼（commit `2e5a4450`）。
+
+修正後的最終程式碼是 `2e5a4450`，分支已合併 main `55aa6349`：
+
+- x86_64 的建置主機：
+  - 在 `ebb0d87b` 的樹上，`cargo fmt --all --check`、`cargo clippy --locked --workspace --all-targets -- -D warnings`、`cargo test --locked -p agent`、`cargo test --locked -p repo-check`、`bun run --cwd scripts typecheck`、`bun run --cwd scripts test` 都通過。
+  - 在 `2e5a4450` 上，`egress` 再跑兩次，都通過。
+  - 合併 main 之前，`cargo test --locked --workspace --exclude agent` 也通過。
+- arm64 的建置主機：`cargo fmt --all --check`、`cargo clippy --locked -p agent --all-targets -- -D warnings` 通過，完整的 `cargo test --locked -p agent` 連跑三次都通過。
+
+原始輸出見 [tests.txt](data/2026-10-31-813-agent-egress-rules/tests.txt)。之後若再合併 main，由 PR 的 CI 驗證。
 
 ### lab 的閘道器（唯讀）
 
@@ -103,4 +127,4 @@ ssh "$GATEWAY_HOST" 'cat /etc/resolv.conf; systemctl is-active systemd-resolved 
 | 「本機服務只聽 loopback 或 unix socket」的檢查可以執行，README 寫明怎麼跑 | 通過：見「閘道器檢查」與 lab 的閘道器上的執行；用法在 `edge/agent/README.md`「連線位址的限制」 |
 | `edge/agent/README.md`「連線位址的限制」寫明核心這一層 | 通過 |
 
-閘道器上目前違反不變量的 sshd、avahi-daemon 與 cloudflared，以及在閘道器上實際安裝並載入規則，屬於映像（Laysi/trustiot-v2#809）與登入面強化（Laysi/trustiot-v2#815）。
+閘道器上目前違反不變量的 sshd、avahi-daemon 與 cloudflared，屬於映像（Laysi/trustiot-v2#809）與登入面強化（Laysi/trustiot-v2#815）。在閘道器上實際安裝並載入規則，屬於映像（Laysi/trustiot-v2#809）與延後的進階驗證（Laysi/trustiot-v2#827）。
