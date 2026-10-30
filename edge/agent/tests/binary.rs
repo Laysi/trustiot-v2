@@ -732,7 +732,11 @@ fn broken_identities() -> Vec<Breakage> {
             as Box<dyn Fn(&Files)>
     };
     vec![
-        ("no configuration file", remove("agent.toml"), "agent.toml"),
+        (
+            "no configuration file",
+            remove("agent.toml"),
+            "agent.toml: No such file",
+        ),
         (
             "no certificate",
             remove("gateway.pem"),
@@ -750,7 +754,7 @@ fn broken_identities() -> Vec<Breakage> {
                 files.write("gateway.pem", &other.cert_pem);
                 files.write("gateway.key", &other.key_pem);
             }),
-            "broker.ca",
+            "broker.ca: the gateway certificate does not pass as a client certificate",
         ),
         (
             "a key of another certificate",
