@@ -155,6 +155,50 @@ fn the_sandbox_lines_stay() {
     }
 }
 
+/// No PIN or password on the agent's command line or in its environment (Laysi/trustiot-v2#812,
+/// rebuild checklist D5): the TPM key has none (`tests/secret_inputs.rs`), and the unit passes
+/// nothing that could carry one. The command line is only the configuration's path, the one
+/// environment variable is the allocator's, and nothing else feeds the process: no environment
+/// file, no variables from the manager, no credentials, no other command run with the agent.
+#[test]
+fn the_unit_passes_no_secret_on_the_command_line_or_in_the_environment() {
+    assert_eq!(
+        single("ExecStart"),
+        format!(
+            "/usr/bin/trustiot-agent --config {}",
+            agent::config::DEFAULT_PATH
+        )
+    );
+    assert_eq!(service("Environment"), ["MALLOC_MMAP_THRESHOLD_=65536"]);
+    for absent in [
+        "EnvironmentFile",
+        "PassEnvironment",
+        "LoadCredential",
+        "LoadCredentialEncrypted",
+        "SetCredential",
+        "SetCredentialEncrypted",
+        "ImportCredential",
+        "ExecStartPre",
+        "ExecStartPost",
+        "ExecCondition",
+        "ExecReload",
+        "ExecStop",
+        "ExecStopPost",
+    ] {
+        assert!(service(absent).is_empty(), "{absent}= is set");
+    }
+    // sysusers.d has no password field; the one line is the account, with no login shell.
+    let lines: Vec<&str> = SYSUSERS
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty() && !line.starts_with('#'))
+        .collect();
+    assert_eq!(
+        lines,
+        ["u trustiot-agent - \"TrustIoT gateway agent\" /var/lib/trustiot-agent /usr/sbin/nologin"]
+    );
+}
+
 #[test]
 fn the_sandbox_allows_every_address_family_the_agent_uses() {
     // AF_UNIX: sd_notify and the journal; AF_INET and AF_INET6: the broker and

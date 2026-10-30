@@ -4,7 +4,8 @@
 //! saved, and polled after a restart without the broker; Laysi/trustiot-v2#94), the telemetry
 //! upload (subscribed to the acknowledgements, the offline buffer under `STATE_DIRECTORY`, a
 //! buffered batch sent and released by the cloud's acknowledgement; Laysi/trustiot-v2#90), and
-//! SIGTERM ending with `offline`/`shutdown`, a normal DISCONNECT and exit code 0. The test plays
+//! SIGTERM ending with `offline`/`shutdown`, a normal DISCONNECT and exit code 0; and the
+//! fail-closed start without a valid identity (Laysi/trustiot-v2#812). The test plays
 //! systemd's notification socket (an abstract Unix socket, as `NOTIFY_SOCKET=@...`) and the
 //! broker (`support::wss::InnerBroker` behind the in-process front). The `provision` subcommand
 //! (Laysi/trustiot-v2#613) is run up to where it would open the TPM: its usage errors, no TPM
@@ -78,6 +79,19 @@ impl NotifySocket {
     /// The `NOTIFY_SOCKET` value.
     fn env(&self) -> String {
         format!("@{}", self.name)
+    }
+
+    /// Every datagram that has arrived and not been read yet.
+    fn drain(&mut self) -> Vec<String> {
+        let mut buffer = vec![0_u8; 4096];
+        let mut datagrams = Vec::new();
+        loop {
+            match self.socket.try_recv(&mut buffer) {
+                Ok(len) => datagrams.push(String::from_utf8_lossy(&buffer[..len]).into_owned()),
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => return datagrams,
+                Err(error) => panic!("reading the notification socket: {error}"),
+            }
+        }
     }
 
     /// Waits for a datagram with a line that `wanted` accepts; returns the line.
@@ -766,6 +780,147 @@ async fn check_reports_the_root_crl_and_refuses_one_the_root_did_not_sign() {
         stderr.contains("refusing to start") && stderr.contains("broker.crl"),
         "{stderr}"
     );
+}
+
+/// A gateway without a finished factory registration or without a valid identity, each with
+/// what makes it so: the agent must refuse to start, and the log must say what failed.
+type Breakage = (&'static str, Box<dyn Fn(&Files)>, &'static str);
+
+fn broken_identities() -> Vec<Breakage> {
+    let remove = |name: &'static str| {
+        Box::new(move |files: &Files| std::fs::remove_file(files.path(name)).unwrap())
+            as Box<dyn Fn(&Files)>
+    };
+    vec![
+        (
+            "no configuration file",
+            remove("agent.toml"),
+            "agent.toml: No such file",
+        ),
+        (
+            "no certificate",
+            remove("gateway.pem"),
+            "reading the certificate file",
+        ),
+        (
+            "no key",
+            remove("gateway.key"),
+            "reading the private key file",
+        ),
+        (
+            "a certificate the broker CA did not issue",
+            Box::new(|files: &Files| {
+                let other = Authority::new("another CA").client(GATEWAY);
+                files.write("gateway.pem", &other.cert_pem);
+                files.write("gateway.key", &other.key_pem);
+            }),
+            "broker.ca: the gateway certificate does not pass as a client certificate",
+        ),
+        (
+            "a key of another certificate",
+            Box::new(|files: &Files| {
+                files.write(
+                    "gateway.key",
+                    &Authority::new("unrelated").client(GATEWAY).key_pem,
+                );
+            }),
+            "the private key does not belong to the certificate",
+        ),
+    ]
+}
+
+/// The fail-closed start (Laysi/trustiot-v2#812, rebuild checklist D5): a gateway without its
+/// configuration, certificate or key, or whose certificate and key the broker would refuse,
+/// does not run. The state directory holds a configuration applied before, as on a gateway
+/// whose identity was removed after it ran, and a port that accepts connections stands where
+/// the broker's front is. In every case the agent exits with 1 before `READY=1` (nothing at
+/// all reaches the notification socket), connects nowhere, does not poll the saved
+/// configuration and leaves the state directory as it was. The same files with a valid
+/// identity do all of that, so the absence is not an artefact of the test.
+#[tokio::test]
+async fn without_a_valid_identity_the_agent_never_gets_ready_connects_or_polls_a_saved_configuration()
+ {
+    let pki = TestPki::new();
+    let front = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    front.set_nonblocking(true).unwrap();
+    let port = front.local_addr().unwrap().port();
+    let saved = desired_config();
+    let gateway_with_saved_configuration = || {
+        let files = Files::new(&pki, port);
+        std::fs::write(files.path("state/desired-config.cbor"), &saved).unwrap();
+        files
+    };
+
+    for (case, break_it, reason) in broken_identities() {
+        let files = gateway_with_saved_configuration();
+        break_it(&files);
+        let mut notify = NotifySocket::new();
+        let child = agent(&files, &notify);
+        let output = bounded(
+            format!("the agent to exit ({case})"),
+            child.wait_with_output(),
+        )
+        .await
+        .unwrap();
+        let log = String::from_utf8_lossy(&output.stderr);
+        assert_eq!(output.status.code(), Some(1), "{case}: {log}");
+        assert!(
+            log.contains("refusing to start") && log.contains(reason),
+            "{case}: the log should say {reason:?}: {log}"
+        );
+        for started in [
+            "polling with the saved configuration",
+            "applied the configuration",
+            "polled",
+        ] {
+            assert!(
+                !log.contains(started),
+                "{case}: the log shows {started:?}: {log}"
+            );
+        }
+        assert_eq!(
+            notify.drain(),
+            Vec::<String>::new(),
+            "{case}: nothing may reach systemd's notification socket"
+        );
+        match front.accept() {
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {}
+            other => panic!("{case}: the agent connected to the broker's port: {other:?}"),
+        }
+        assert_eq!(
+            std::fs::read(files.path("state/desired-config.cbor")).unwrap(),
+            saved,
+            "{case}"
+        );
+        assert!(
+            !Path::new(&files.path("state/buffer")).exists(),
+            "{case}: the agent opened its offline buffer"
+        );
+    }
+
+    // The control: the same files with the identity intact.
+    let files = gateway_with_saved_configuration();
+    let mut notify = NotifySocket::new();
+    let mut child = agent(&files, &notify);
+    let mut log = Log::of(&mut child);
+    notify.wait_for("READY=1", |line| line == "READY=1").await;
+    log.wait_for(&["polling with the saved configuration", "version=1"])
+        .await;
+    bounded("a connection to the broker's port", async {
+        loop {
+            match front.accept() {
+                Ok(_) => return,
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    tokio::time::sleep(Duration::from_millis(50)).await;
+                }
+                Err(error) => panic!("accepting the agent's connection: {error}"),
+            }
+        }
+    })
+    .await;
+    terminate(&child);
+    let (success, rest) = log.exit(child).await;
+    assert!(success, "{rest}");
 }
 
 /// `trustiot-agent provision <args>` (Laysi/trustiot-v2#613), with its log at debug level.
