@@ -489,7 +489,7 @@ async fn ask(
     let stand_in = StandIn::start(model).await;
     let agent = agent(&stand_in, vec![tool], settings());
     let mut conversation = agent.start_conversation(owner.principal(), "");
-    world.store_conversation(owner, conversation.id()).await;
+    world.store_conversation(owner, &conversation).await;
     let answer = agent
         .ask(
             &mut conversation,

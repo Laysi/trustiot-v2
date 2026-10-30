@@ -44,7 +44,7 @@ use assistant::dashboards::limits::VersionBudget;
 use assistant::dashboards::runner::DatasetRunner;
 use assistant::dashboards::store::{self, Author, NewVersion, StoreError};
 use assistant::delegation::IDENTITY_TIMEOUT;
-use assistant::history::Principal;
+use assistant::history::{Conversation, Preamble, Principal, SystemPrompt};
 use assistant::model::anthropic::AnthropicGateway;
 use assistant::model::{CacheTtl, Effort};
 use assistant::tools::dashboard::{DashboardTool, WriteBounds};
@@ -420,11 +420,22 @@ impl World {
             .expect("a tenant transaction")
     }
 
-    /// A new conversation of `owner`'s, written as the agent stores one.
+    /// A new conversation of `owner`'s with nothing asked yet, stored as the service stores
+    /// one ([`World::store_conversation`]).
     pub async fn conversation(&self, owner: &Person) -> Uuid {
-        let id = Uuid::now_v7();
-        self.store_conversation(owner, id).await;
-        id
+        let preamble = Preamble::new(
+            SystemPrompt {
+                version: "test".to_owned(),
+                text: "You are a test.".to_owned(),
+            },
+            String::new(),
+            Vec::new(),
+            Effort::Medium,
+            CacheTtl::FiveMinutes,
+        );
+        let conversation = Conversation::new(owner.principal(), Arc::new(preamble));
+        self.store_conversation(owner, &conversation).await;
+        conversation.id()
     }
 
     /// Deletes `owner`'s conversation `id` through the store, as the API's `DELETE` does.
@@ -472,23 +483,14 @@ impl World {
         .expect("the platform role's pool verifies the server")
     }
 
-    /// The row of `owner`'s conversation `id` (one the agent started), written as the agent
-    /// stores one.
-    pub async fn store_conversation(&self, owner: &Person, id: Uuid) {
-        let mut admin = self.superuser().await;
-        sqlx::query(
-            "INSERT INTO assistant.conversations
-                (tenant_id, conversation_id, user_id, prompt_version, system_prompt,
-                 tenant_context, tools, effort, cache_ttl)
-            VALUES ($1::uuid, $2::uuid, $3::uuid, 'test', 'You are a test.', '', '[]',
-                'medium', '5m')",
-        )
-        .bind(owner.tenant().to_string())
-        .bind(id.to_string())
-        .bind(owner.claims.sub.to_string())
-        .execute(&mut admin)
-        .await
-        .expect("insert a conversation");
+    /// Stores `owner`'s `conversation` (one the agent started) as the service does when its first
+    /// question starts: `assistant::store::create` in a transaction of the owner's tenant.
+    pub async fn store_conversation(&self, owner: &Person, conversation: &Conversation) {
+        let mut tx = self.tx(owner).await;
+        assistant::store::create(&mut tx, conversation)
+            .await
+            .expect("store the conversation");
+        tx.commit().await.expect("commit");
     }
 
     /// A new draft in `owner`'s `conversation` with `content` as its version 1.
