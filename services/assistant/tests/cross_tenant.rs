@@ -27,7 +27,8 @@
 //! for its probes (its rows are not deleted, so the positive controls would fail);
 //! `deleted_conversations_stay_in_their_tenant` probes them by hand, the same way. A
 //! conversation's drafts are a list whose path parameter is the conversation's ID, which the
-//! suite cannot address; `tests/dashboards_api.rs` probes it by hand.
+//! suite cannot address; `a_conversations_drafts_stay_in_their_tenant` probes it by hand, with
+//! the same user in both tenants.
 //!
 //! Starts a throwaway Postgres with TLS (podman or docker); skipped without either unless `CI`
 //! is set. Run with `--nocapture` to see every probe.
@@ -41,8 +42,8 @@ use assistant::api::conversations::{
     CONVERSATION_PATH, CONVERSATIONS_PATH, DELETED_CONVERSATIONS_PATH, RESTORE_PATH,
 };
 use assistant::api::dashboards::{
-    ARCHIVE_PATH, DASHBOARD_PATH, DASHBOARDS_PATH, DATASET_RUNS_PATH, PUBLISH_PATH,
-    RESTORE_PATH as DASHBOARD_RESTORE_PATH, VERSIONS_PATH,
+    ARCHIVE_PATH, CONVERSATION_DASHBOARDS_PATH, DASHBOARD_PATH, DASHBOARDS_PATH, DATASET_RUNS_PATH,
+    PUBLISH_PATH, RESTORE_PATH as DASHBOARD_RESTORE_PATH, VERSIONS_PATH,
 };
 use contract::identity::TenantRole;
 use contract::{ServiceName, TenantId, UserId};
@@ -55,7 +56,7 @@ use testkit::isolation::Suite;
 use testkit::isolation::api::{Endpoint, Method};
 use testkit::isolation::postgres::PgStore;
 use testkit::pg_table;
-use testkit::product::{DATABASE, product_postgres};
+use testkit::product::{DATABASE, ProductPostgres, product_postgres};
 use uuid::Uuid;
 
 /// One conversation of the user `$4`: `$2` is its ID, the canary its system prompt.
@@ -150,6 +151,23 @@ SELECT tenant_id, dashboard_id, n, 'agent', 1, CASE n WHEN 1 THEN $3 ELSE $3 || 
     '<main><h1>testkit</h1></main>', created_by, gen_random_uuid()
 FROM dashboard, generate_series(1, 2) AS n";
 
+/// A draft with one version, as the `dashboard` tool writes one, in the conversation `$2` the
+/// API started in tenant `$1`: `$3` is the draft's ID, `$4` its title. The conversation's
+/// owner is the draft's creator.
+const SEED_DRAFT_IN_CONVERSATION: &str = "WITH dashboard AS (
+    INSERT INTO assistant.dashboards (tenant_id, dashboard_id, kind, conversation_id, created_by)
+    SELECT tenant_id, $3::uuid, 'draft', conversation_id, user_id
+    FROM assistant.conversations
+    WHERE tenant_id = $1::uuid AND conversation_id = $2::uuid
+    RETURNING tenant_id, dashboard_id, created_by
+)
+INSERT INTO assistant.dashboard_versions
+    (tenant_id, dashboard_id, version, origin, runtime, title, spec, page, created_by, run_id)
+SELECT tenant_id, dashboard_id, 1, 'agent', 1, $4,
+    '{\"datasets\":[{\"name\":\"testkit\",\"title\":\"Testkit\",\"description\":\"The dataset the cross-tenant suite runs.\",\"max_rows\":10,\"source\":{\"kind\":\"sql\",\"sql\":\"SELECT 1 AS one\"}}]}',
+    '<main><h1>testkit</h1></main>', created_by, gen_random_uuid()
+FROM dashboard";
+
 #[tokio::test(flavor = "multi_thread")]
 async fn tenants_are_isolated() {
     let Some(product) = product_postgres(&["assistant_app", "assistant_platform"]).await else {
@@ -242,8 +260,8 @@ async fn tenants_are_isolated() {
         .exempt_endpoint(
             "GET /api/assistant/v1/conversations/{conversation_id}/dashboards",
             "a conversation's drafts: a list whose path parameter is the conversation's ID, which \
-             the suite cannot address; tests/dashboards_api.rs tests that another tenant's admin \
-             and another member of the same tenant get 404 for it",
+             the suite cannot address; a_conversations_drafts_stay_in_their_tenant in this file \
+             probes it across tenants",
         )
         .run(Some(&service.base_url))
         .await
@@ -437,5 +455,212 @@ async fn deleted_conversations_stay_in_their_tenant() {
         "deleted list and restore: tenant A sees and restores only its own; tenant B's \
          conversation answers as a missing ID ({} {})",
         theirs.status, theirs.body
+    );
+}
+
+/// A conversation the user starts through the API, with a draft the `dashboard` tool wrote in
+/// it (seeded as the superuser); returns the conversation's and the draft's IDs.
+async fn conversation_with_draft(
+    service: &Service,
+    issuer: &TestIssuer,
+    product: &ProductPostgres,
+    user: &User,
+    title: &str,
+) -> (String, String) {
+    let created = service
+        .as_user(
+            issuer,
+            user,
+            HttpMethod::POST,
+            CONVERSATIONS_PATH,
+            Some(&json!({})),
+        )
+        .await;
+    let conversation = created.expect_status(201).json()["id"]
+        .as_str()
+        .expect("an id")
+        .to_owned();
+    let draft = Uuid::new_v4().to_string();
+    let mut admin = product.superuser().await;
+    let written = sqlx::query(SEED_DRAFT_IN_CONVERSATION)
+        .bind(user.tenant.to_string())
+        .bind(&conversation)
+        .bind(&draft)
+        .bind(title)
+        .execute(&mut admin)
+        .await
+        .expect("seed the draft")
+        .rows_affected();
+    assert_eq!(written, 1, "the draft's version");
+    (conversation, draft)
+}
+
+/// The IDs and titles in the drafts list of `conversation`, as `user` sees it.
+async fn drafts_list(
+    service: &Service,
+    issuer: &TestIssuer,
+    user: &User,
+    conversation: &str,
+) -> (String, Vec<Value>) {
+    let reply = service
+        .as_user(
+            issuer,
+            user,
+            HttpMethod::GET,
+            &conversation_path(CONVERSATION_DASHBOARDS_PATH, conversation),
+            None,
+        )
+        .await;
+    reply.expect_status(200);
+    let dashboards = reply.json()["dashboards"]
+        .as_array()
+        .expect("a list")
+        .iter()
+        .map(|dashboard| json!([dashboard["dashboard_id"], dashboard["title"]]))
+        .collect();
+    (reply.body, dashboards)
+}
+
+/// The same person in tenants A and B (an admin of each, the most privileged tenant user) has a
+/// conversation with a draft in each. In tenant A, the drafts list of B's conversation, and B's
+/// draft and its versions, answer exactly as a conversation or dashboard that does not exist and
+/// show nothing of B's, and a token without a tenant gets none of them; in tenant B the same
+/// requests see B's.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_conversations_drafts_stay_in_their_tenant() {
+    let Some(product) = product_postgres(&["assistant_app", "assistant_platform"]).await else {
+        return;
+    };
+    let issuer = TestIssuer::new();
+    let service = Service::start(&product, &issuer.jwks(), &[]).await;
+    let person = UserId::generate();
+    let in_tenant = |tenant| User {
+        tenant,
+        id: person,
+        role: TenantRole::Admin,
+    };
+    let (a, b) = (
+        in_tenant(TenantId::generate()),
+        in_tenant(TenantId::generate()),
+    );
+    let (title_a, title_b) = (
+        format!("canary-a-{}", Uuid::new_v4().simple()),
+        format!("canary-b-{}", Uuid::new_v4().simple()),
+    );
+    let (conversation_a, draft_a) =
+        conversation_with_draft(&service, &issuer, &product, &a, &title_a).await;
+    let (conversation_b, draft_b) =
+        conversation_with_draft(&service, &issuer, &product, &b, &title_b).await;
+    let b_markers = [
+        conversation_b.clone(),
+        conversation_b.replace('-', ""),
+        draft_b.clone(),
+        draft_b.replace('-', ""),
+        title_b.clone(),
+        b.tenant.to_string(),
+    ];
+    let shows_b = |text: &str| {
+        let text = text.to_lowercase();
+        b_markers
+            .iter()
+            .filter(|marker| text.contains(marker.as_str()))
+            .cloned()
+            .collect::<Vec<_>>()
+    };
+
+    // Tenant A: the drafts of A's conversation.
+    let (body, listed) = drafts_list(&service, &issuer, &a, &conversation_a).await;
+    assert_eq!(listed, [json!([draft_a, title_a])], "{body}");
+    assert!(shows_b(&body).is_empty(), "{body}");
+
+    // B's conversation and B's draft in tenant A answer as missing ones do, byte for byte.
+    let unknown = Uuid::new_v4().to_string();
+    let dashboard_path = |template: &str, id: &str| template.replace("{dashboard_id}", id);
+    let pairs = [
+        (
+            conversation_path(CONVERSATION_DASHBOARDS_PATH, &unknown),
+            conversation_path(CONVERSATION_DASHBOARDS_PATH, &conversation_b),
+        ),
+        (
+            dashboard_path(DASHBOARD_PATH, &unknown),
+            dashboard_path(DASHBOARD_PATH, &draft_b),
+        ),
+        (
+            dashboard_path(VERSIONS_PATH, &unknown),
+            dashboard_path(VERSIONS_PATH, &draft_b),
+        ),
+    ];
+    for (missing_path, theirs_path) in &pairs {
+        let missing = service
+            .as_user(&issuer, &a, HttpMethod::GET, missing_path, None)
+            .await;
+        missing.expect_error(404, "not_found", "error.not_found");
+        let theirs = service
+            .as_user(&issuer, &a, HttpMethod::GET, theirs_path, None)
+            .await;
+        assert_eq!(
+            (theirs.status, &theirs.body),
+            (missing.status, &missing.body),
+            "{theirs_path}"
+        );
+        assert!(shows_b(&theirs.body).is_empty(), "{}", theirs.body);
+    }
+
+    // Without a tenant: none of them.
+    let no_tenant = issuer.token(&{
+        let mut claims = TestIssuer::claims(ServiceName::Assistant, None);
+        claims.sub = person;
+        claims
+    });
+    for (_, path) in &pairs {
+        let reply = service
+            .call(HttpMethod::GET, path, Some(&no_tenant), None)
+            .await;
+        reply.expect_error(403, "permission_denied", "error.permission_denied");
+        assert!(shows_b(&reply.body).is_empty(), "{path}");
+    }
+
+    // Tenant B sees B's draft through each of the same routes: in its conversation's list, by its
+    // ID, and in its versions list.
+    let (body, listed) = drafts_list(&service, &issuer, &b, &conversation_b).await;
+    assert_eq!(listed, [json!([draft_b, title_b])], "{body}");
+    let opened = service
+        .as_user(
+            &issuer,
+            &b,
+            HttpMethod::GET,
+            &dashboard_path(DASHBOARD_PATH, &draft_b),
+            None,
+        )
+        .await;
+    let view = opened.expect_status(200).json();
+    assert_eq!(
+        (
+            &view["dashboard"]["dashboard_id"],
+            &view["version"]["title"]
+        ),
+        (&json!(draft_b), &json!(title_b)),
+        "{}",
+        opened.body
+    );
+    let versions = service
+        .as_user(
+            &issuer,
+            &b,
+            HttpMethod::GET,
+            &dashboard_path(VERSIONS_PATH, &draft_b),
+            None,
+        )
+        .await;
+    let listed: Vec<Value> = versions.expect_status(200).json()["versions"]
+        .as_array()
+        .expect("a list")
+        .iter()
+        .map(|version| json!([version["version"], version["title"]]))
+        .collect();
+    assert_eq!(listed, [json!([1, title_b])], "{}", versions.body);
+    println!(
+        "a conversation's drafts: tenant A lists only its own; tenant B's conversation and draft \
+         answer as missing IDs"
     );
 }
