@@ -2,11 +2,11 @@
 
 Laysi/trustiot-v2#645：AI 助理的 API 骨架（`/api/assistant/v1`）、對話串的七個端點（清單、開始、讀取、改名與封存、刪除、已刪除清單、還原），以及刪除滿 30 天的對話的排程清除（每個副本都排程，同一時間一個副本以平台角色 `assistant_platform` 分批刪除）。這份報告是驗收條件的證據：全部由下列自動化測試以 `CI=1` 實際執行，需要容器的測試沒有略過。
 
-2026-10-28 第一次執行之後，獨立安全審查提出的修正（下方「審查後的修正」，F1 到 F7）在 2026-10-29 加入，所有指令都在修正後的樹上重跑；下面的數字都是重跑的結果。複審之後又修了清除的兩個 Low 項目（下方「複審後的修正」，R1、R2），`cargo test -p assistant` 等相關的檢查在那個 commit 上重跑。
+2026-10-28 第一次執行之後，獨立安全審查提出的修正（下方「審查後的修正」，F1 到 F7）在 2026-10-29 加入，所有指令都在修正後的樹上重跑；下面的數字都是重跑的結果。複審之後又修了清除的兩個 Low 項目（下方「複審後的修正」，R1、R2），`cargo test -p assistant` 等相關的檢查在那個 commit 上重跑。2026-10-30 合併 main `e4994a2`（下方「合併 main `e4994a2`」：連線預算調高、AI 助理接上權限矩陣），所有指令都在合併後的樹上重跑；「結果」表的數字是這一次的。
 
 ## 環境
 
-- **程式碼**：分支 `feat/645-assistant-chat-api`，從 main `5dad042` 分出；完整的數字取自 commit `095e552` 的樹。之後的 `2f53f8f` 與這份報告最後的修改只改文件（這份報告、`docs/architecture/data-retention.md` 的一個標點、`deploy/chart/README.md` 的一個數字）；合併 commit `c262825` 帶進 main，在它的樹上重跑的檢查見「結果」表下方。R1、R2 的修正是 `dcbaefe`，在它的樹上重跑的檢查也在那裡。
+- **程式碼**：分支 `feat/645-assistant-chat-api`，從 main `5dad042` 分出。「結果」表的數字取自 commit `d5870e2` 的樹：合併 commit `6dae197`（main 的 `e4994a2`）加上權限矩陣的宣告；之後只有這份報告的修改。較早的執行：`095e552` 的樹（審查修正後的完整執行）、合併 commit `c262825`（main 的 `fdf7bd0`）與 R1、R2 的修正 `dcbaefe`，見「結果」表下方。
 - **機器**：本機（x86_64 Linux 工作站）。容器測試以 podman 起拋棄式 TLS Postgres，以 migration Job 套用整個產品的 schema（`testkit::product`，每個測試執行檔一個資料庫）。API 與清除的測試啟動 `assistant` 執行檔本身當子行程（`services/assistant/tests/service/mod.rs`），清除的測試同時起兩個行程。
 - **工具**：`.prototools` 與 `rust-toolchain.toml` 釘選的版本：Rust 1.99.0、Bun 1.4.2、Helm 4.3.0、kubeconform 0.8.0、cargo-deny 0.20.2、gitleaks 8.30.1。
 - **設定**：`CI=1`，所以沒有容器執行環境時測試會失敗，不會略過。不連真正的 AI 供應商：主 agent 的模型是 loopback 上回放 `tests/fixtures/` 的替身，服務設定的 AI 閘道位址沒有東西在聽（這些測試都不發問）。
@@ -48,21 +48,24 @@ git archive HEAD | tar -x -C <空目錄> && gitleaks dir --redact <空目錄>
 | --- | --- |
 | `cargo fmt --all --check` | 通過 |
 | `cargo clippy --workspace --all-targets -- -D warnings` | 通過 |
-| `CI=1 cargo test --workspace --no-fail-fast` | 242 個測試執行檔與文件測試，2062 通過、0 失敗、1 忽略（`services/assistant/src/delegation.rs` 原本就標成 `ignore` 的文件範例），1837 秒；含 `tools/sql-check` 的「SQL 不由字串組成」檢查與 `cargo test -p openapi`、`-p migrate`、`-p repo-check` |
-| `cargo test -p assistant`（同一次執行） | 單元 57、`agent` 10、`agent_logs` 2、`api` 10、`chart_connections` 1、`conversation_threads` 12、`cross_tenant` 2、`delegated_tools` 13、`history_store` 5、`purge_job` 1、`startup` 1、`telemetry_sql` 2、`tools` 7，共 123 個全部通過；文件測試 1 個忽略（同上） |
-| `cargo test -p testkit`（同一次執行） | 單元 42、`container_volumes` 2、`modbus_endpoint` 20、`modbus_example` 1、`postgres_isolation` 6、`postgres_start` 2，全部通過；其他服務的跨租戶測試（identity、assets、telemetry-query、ingest、certs）也都通過 |
-| `cargo run -p openapi -- --check` | 通過（`api/openapi.json` 有 assistant 的 7 個 operation 與它們的 schema；刪除是 204，開始對話有 429 與 `retry-after` 標頭） |
+| `CI=1 cargo test --workspace --no-fail-fast` | 275 個測試執行檔與文件測試，2519 通過、0 失敗、3 忽略（`services/assistant/src/delegation.rs` 原本就標成 `ignore` 的文件範例，與 `edge/agent` 兩個標成 `ignore` 的記憶體量測）；編譯 6 分鐘，各執行檔回報的時間加總 2167 秒。含 `tools/sql-check` 的「SQL 不由字串組成」檢查與 `cargo test -p openapi`、`-p migrate`、`-p repo-check`。執行前後 podman 的容器（8 個，都是其他工作的）與 volume（30 個）完全相同，測試沒有留下任何容器或 volume |
+| `cargo test -p assistant`（同一次執行） | 單元 57、`agent` 10、`agent_logs` 2、`api` 10、`chart_connections` 1、`conversation_threads` 12、`cross_tenant` 2、`delegated_tools` 13、`history_store` 5、`permissions` 2（新的）、`purge_job` 1、`purge_locks` 2、`startup` 1、`telemetry_sql` 2、`tools` 7，共 127 個全部通過；文件測試 1 個忽略（同上） |
+| `cargo test -p testkit`（同一次執行） | 單元 53（含 main 的 `the_matrix_covers_every_operation_of_the_api_spec`）、`container_volumes` 2、`modbus_endpoint` 20、`modbus_example` 1、`permissions` 5、`postgres_isolation` 6、`postgres_start` 2，文件測試 2，全部通過；其他服務的跨租戶測試（identity、assets、certs、telemetry-query、ingest、gateway-ops）與權限矩陣測試（identity、assets、certs、telemetry-query）也都通過 |
+| `CI=1 cargo test -p assistant --test cross_tenant -- --nocapture` | `tenants_are_isolated` 79 個探測、0 個失敗；2 個測試通過 |
+| `cargo run -p openapi -- --check` | 通過 |
 | `cargo deny --locked check` | advisories ok, bans ok, licenses ok, sources ok |
-| 前端 `api:check`、`typecheck`、`lint`、`test`、`build`、`check:dist` | 全部通過；`test` 218 通過、0 失敗（含七個新訊息鍵的 zh-TW 與 en 翻譯） |
-| `bun test deploy/chart` | 659 通過、0 失敗 |
+| 前端 `api:check`、`typecheck`、`lint`、`test`、`build`、`check:dist` | 全部通過；`test` 218 通過、0 失敗 |
+| `bun test deploy/chart` | 711 通過、0 失敗 |
 | `bun test deploy/flux` | 78 通過、0 失敗 |
-| `bun test scripts` | 1704 通過、9 略過、0 失敗（略過的是要 `TRUSTIOT_DEV_E2E` 的 podman 端對端測試） |
+| `bun test scripts` | 1711 通過、9 略過、0 失敗（略過的是要 `TRUSTIOT_DEV_E2E` 的 podman 端對端測試） |
 | `bun run --cwd scripts typecheck` | 通過 |
-| `bun scripts/ci/check-secret-handling.ts` | 沒有違規（537 個檔案、7 個容器建置檔） |
-| `bun scripts/ci/check-workflows.ts` | 沒有違規 |
+| `bun scripts/ci/check-secret-handling.ts` | 沒有違規（547 個檔案、7 個容器建置檔） |
+| `bun scripts/ci/check-workflows.ts` | 沒有違規（4 個檔案） |
 | gitleaks（分支的 commit、`git archive HEAD` 的樹） | 都沒有發現 |
 
-**合併 main 後重跑**：合併 commit `c262825`（main 的 `fdf7bd0`，帶進 Laysi/trustiot-v2#722 的 edge/agent 與 Laysi/trustiot-v2#725 的 AI 閘道管理埠 Service 與 mesh 政策）的樹上，重跑 main 的變更可能影響的檢查：`cargo fmt --all --check` 與 `cargo clippy --workspace --all-targets -- -D warnings` 通過，`cargo run -p openapi -- --check` 通過，`CI=1 cargo test -p repo-check` 28 通過，`bun test deploy/flux` 78 通過，`bun test deploy/chart` 680 通過（多出的是 #725 的 chart 測試），都是 0 失敗。上表其他的數字仍是 `095e552` 的。
+**`095e552` 的完整執行**（合併 `e4994a2` 之前，參考用）：`CI=1 cargo test --workspace --no-fail-fast` 242 個執行檔與文件測試，2062 通過、0 失敗、1 忽略；`cargo test -p assistant` 123 個通過；前端 `test` 218 通過；`bun test deploy/chart` 659、`bun test deploy/flux` 78、`bun test scripts` 1704 通過（9 略過），都是 0 失敗。
+
+**合併 main `fdf7bd0` 後重跑**：合併 commit `c262825`（main 的 `fdf7bd0`，帶進 Laysi/trustiot-v2#722 的 edge/agent 與 Laysi/trustiot-v2#725 的 AI 閘道管理埠 Service 與 mesh 政策）的樹上，重跑 main 的變更可能影響的檢查：`cargo fmt --all --check` 與 `cargo clippy --workspace --all-targets -- -D warnings` 通過，`cargo run -p openapi -- --check` 通過，`CI=1 cargo test -p repo-check` 28 通過，`bun test deploy/flux` 78 通過，`bun test deploy/chart` 680 通過（多出的是 #725 的 chart 測試），都是 0 失敗。
 
 **R1、R2 的修正後重跑**（`dcbaefe` 的樹）：`cargo fmt --all --check` 與 `cargo clippy --workspace --all-targets -- -D warnings` 通過；`CI=1 cargo test -p assistant --no-fail-fast` 單元 57、`agent` 10、`agent_logs` 2、`api` 10、`chart_connections` 1、`conversation_threads` 12、`cross_tenant` 2、`delegated_tools` 13、`history_store` 5、`purge_job` 1、`purge_locks` 2（新的）、`startup` 1、`telemetry_sql` 2、`tools` 7，共 125 個全部通過，文件測試 1 個忽略；跑了 179 秒。
 
@@ -112,6 +115,43 @@ git archive HEAD | tar -x -C <空目錄> && gitleaks dir --redact <空目錄>
 - ERROR `conversation request failed` 的 `error` 欄位只有 `database error (SQLSTATE 23505)`。
 - 沒有多存任何東西。
 - 索引以 `CONCURRENTLY` 建立與刪除，見下方 F6。
+
+## 合併 main `e4994a2`
+
+2026-10-30，GitHub 回報這個 PR 不能合併：main 從 `fdf7bd0` 前進到 `e4994a2`（22 個 commit），其中 chart 部署 ingest（Laysi/trustiot-v2#747）與 gateway-ops（Laysi/trustiot-v2#752）、testkit 的權限矩陣（Laysi/trustiot-v2#759）與 service-kit 的共用角色檢查（Laysi/trustiot-v2#768）和這個分支有關。合併 commit 是 `6dae197`，權限矩陣的宣告是 `d5870e2`。
+
+### 衝突
+
+- **平台角色的登入**：`trustiot.migrate.platformLogins` 與 `scripts/lib/product-logins.ts` 取兩邊的聯集：`assets`、`assistant`、`certs`、`gateway-ops`、`identity`、`ingest`、`telemetry-query`；`tools/migrate/tests/registry.rs` 的 `UNBOUND_PLATFORM_ROLES` 兩邊都是空的，不用改。
+- **連線預算**：見下一節。
+- **chart README、`chart.test.ts`、`docs/architecture/ci-release.md`**：兩邊的內容都留下。`ci-release.md` 的 nightly 說明裡，main 把 AI 助理的 readiness 那一句放到了 gateway-ops 之後，合併時放回 AI 助理的檢查後面，並加上清除用的 `assistant_platform`。
+
+### 連線預算
+
+`trustiot.postgres.connectionPlan` 的算法：每個服務（`database.maxConnections` + 其他連線池）×（1 個副本 + 滾動時多 1 個）。
+
+| 服務 | 每副本 | 整版滾動 |
+| --- | --- | --- |
+| `ai-gateway` | 4 + 0 = 4 | 8 |
+| `assets` | 10 + 4 = 14 | 28 |
+| `assistant` | 8 + 2 = 10（main 是 4 + 0 = 4） | 20（main 是 8） |
+| `certs` | 5 + 4 = 9 | 18 |
+| `gateway-ops` | 7 + 4 = 11 | 22 |
+| `identity` | 10 + 21 = 31 | 62 |
+| `ingest` | 10 + 4 = 14 | 28 |
+| `telemetry-query` | 10 + 2 = 12 | 24 |
+| 合計 | 105 | 210 |
+
+加上保留的 18 條是 228，超過 main 的 `max_connections` 220（main 自己是 198 + 18 = 216，餘 4 條），渲染會失敗。AI 助理的預設值不降（它的理由在這個 PR），依 Laysi/trustiot-v2#721 的做法把 `max_connections` 調到 230，餘 2 條。記憶體估算（chart README「叢集內的 Postgres」）：共享記憶體約 161 MB（每個連線槽約 70 KiB 的斜率推算）、連線 (230 + 10) × 2 = 480 MB、autovacuum 與 migration 256 MB，小計 897 MB，剩 127 MB 給 `work_mem`（同時 31 個滿額排序或 15 個滿額 hash），仍在 1Gi 以內。改 `max_connections` 會讓叢集內的 Postgres 重啟，chart README 的 AI 助理一節寫明升級到這一版會重啟一次。同時改了 values 的註解、chart README 的預算表與記憶體估算、`chart.test.ts`（228、230 與錯誤訊息的明細）與 `deploy/flux/tests/flux.test.ts`（展示環境四個 identity 副本的對照：仍是 243 條，超過 230）。`services/assistant/tests/chart_connections.rs` 只比對 AI 助理自己的預算，不用改。
+
+### 權限矩陣
+
+main 的 testkit 單元測試 `the_matrix_covers_every_operation_of_the_api_spec` 要求 `api/openapi.json` 的每個操作都列在 `docs/architecture/permissions.md`；合併後它因 AI 助理的七個操作失敗。現在：
+
+- `docs/architecture/permissions.md` 新增 `## assistant` 一節，七個操作都是「租戶 viewer」：租戶的每個角色都能用，只用得到自己的對話（擁有者由 store 檢查）。這是原本的行為，不是新的產品決定。
+- handler 改用 service-kit 的 `UserIdentity::require(Requirement::Tenant(TenantRole::Viewer), …)`。之前只檢查有沒有租戶，所以租戶裡本版本不認得的角色（`Unrecognized`）也能用；現在與沒有租戶一樣回 403 `permission_denied`，日誌是 service-kit 的 `refused to <動作>`。OpenAPI 的 403 說明改成「No tenant or no role in it」，`api/openapi.json` 與前端的 client 重新產生。
+- `services/assistant/tests/permissions.rs`：宣告與 OpenAPI、矩陣文件一致（`the_matrix_document_matches_the_declarations`），並以真的執行檔與拋棄式 Postgres 探測（`every_operation_admits_exactly_its_declared_callers_and_refusals_write_nothing`）：84 個探測、0 個失敗。沒有 token、偽造的 token、給別的服務的 token 都是 401；沒有租戶、沒有租戶的平台管理員、不認得的角色都是 403；viewer、editor、admin 與換發的 viewer token 都通過授權（清單 200，以 ID 的請求 404，沒有 `Content-Type` 的寫入 400）。探測前後對話、訊息、捨棄紀錄與提問紀錄的筆數相同。
+- testkit 這個分支加的 `World::user` 與 `pg_table!(..., owned)` 與 main 的權限矩陣自動合併，`cargo test -p testkit` 全部通過（見「結果」）。
 
 ## 審查後的修正
 
@@ -241,4 +281,5 @@ git archive HEAD | tar -x -C <空目錄> && gitleaks dir --redact <空目錄>
 | 資料庫錯誤的回應與日誌不含 Postgres 的錯誤文字 | `tests/api.rs` 的 `a_database_failure_shows_nothing_of_the_database`（唯一鍵衝突，見上） | 通過 |
 | 審查 F2 到 F6 的修正 | 上方「審查後的修正」各節 | 通過 |
 | 複審 R1、R2 的修正 | 上方「複審後的修正」各節 | 通過 |
+| 權限矩陣宣告每個新端點並通過（合併 main `e4994a2` 後的要求） | `tests/permissions.rs` 的兩個測試（84 個探測、0 個失敗，見「合併 main `e4994a2`」）與 testkit 的 `the_matrix_covers_every_operation_of_the_api_spec` | 通過 |
 | `cargo run -p openapi -- --check`、`bun run --cwd frontend api:check`、`bun run --cwd frontend test`、`cargo test -p assistant`、`cargo test -p openapi`、`bun test deploy/chart`、`cargo clippy --workspace --all-targets -- -D warnings` 通過 | 上方「結果」表 | 通過 |
