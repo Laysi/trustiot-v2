@@ -323,6 +323,7 @@ impl FakeSecrets {
             postgres: Some(pairs(postgres)),
             clickhouse_collector: collector.map(|pair| pairs(&[pair])),
             clickhouse_telemetry_query: None,
+            clickhouse_ingest: None,
         }
     }
 

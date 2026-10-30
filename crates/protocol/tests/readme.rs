@@ -7,7 +7,7 @@
     reason = "test helpers unwrap like the tests themselves (clippy.toml allows it in tests)"
 )]
 
-use protocol::acl::{GATEWAY_ROLE, gateway_role_acls};
+use protocol::acl::{GATEWAY_ALLOW_WILDCARD_SUBS, GATEWAY_ROLE, gateway_role_acls};
 use protocol::topic::{Channel, TOPIC_PREFIX};
 
 fn readme() -> String {
@@ -107,4 +107,10 @@ fn the_readme_lists_the_gateway_acl() {
     // Exactly the generated rules, in order: a rule in the README that the code does not
     // generate (such as a stale wildcard rule) fails as well as a missing one.
     assert_eq!(acl_table_rows(&readme), generated);
+}
+
+#[test]
+fn the_readme_records_the_wildcard_subscription_setting() {
+    let setting = format!("`allowwildcardsubs: {GATEWAY_ALLOW_WILDCARD_SUBS}`");
+    assert!(readme().contains(&setting), "README lacks {setting}");
 }

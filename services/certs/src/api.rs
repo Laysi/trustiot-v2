@@ -9,7 +9,7 @@ use axum::response::{IntoResponse, Response};
 use contract::{ErrorBody, ErrorCode, FieldError, MessageKey};
 use serde::Serialize;
 use serde_json::{Map, Value};
-use service_kit::identity::UserIdentity;
+use service_kit::identity::{Requirement, UserIdentity};
 
 /// Most field errors one response lists; `details.omitted_field_errors` counts the rest.
 pub(crate) const MAX_FIELD_ERRORS: usize = 10;
@@ -29,18 +29,11 @@ pub(crate) async fn no_store(mut response: Response) -> Response {
 /// The 403 to answer unless the user is a platform administrator whose token the ingress's
 /// cookie check issued: an exchanged token (`act`) means another service calls on the
 /// administrator's behalf, and issuing, revoking or registering credentials is the
-/// administrator's own act.
+/// administrator's own act. service-kit's shared check logs the refusal at INFO.
 pub(crate) fn refuse(user: &UserIdentity, action: &'static str) -> Option<Response> {
-    if user.is_platform_admin() && user.claims().act.is_none() {
-        return None;
-    }
-    tracing::info!(
-        user_id = %user.user_id(),
-        action,
-        exchanged = user.claims().act.is_some(),
-        "refused: not a platform administrator, or not the administrator's own request"
-    );
-    Some(error(ErrorBody::new(ErrorCode::PermissionDenied)))
+    user.require(Requirement::OwnPlatformAdmin, action)
+        .err()
+        .map(IntoResponse::into_response)
 }
 
 /// Whether the request has exactly one `Content-Type`, `application/json` with or without

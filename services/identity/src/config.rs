@@ -105,6 +105,13 @@ pub struct Platform {
     /// `TRUSTIOT_POSTGRES_CA_FILE`: the CA of the server certificate, the only trust anchor
     /// (crates/service-kit, "連線"); required.
     pub postgres_ca_file: PathBuf,
+    /// `TRUSTIOT_AI_GATEWAY_ADMIN_URL`: the AI gateway's admin API, `http://<host>:<port>`, which
+    /// the chart sets to the Service `<release>-ai-gateway-admin` that only this service may
+    /// reach (Laysi/trustiot-v2#607). Without it, or with an address the service cannot use
+    /// (logged at ERROR at startup), the model role routes answer 503
+    /// ([`crate::ai_model_roles`]); everything else runs as usual.
+    #[serde(default)]
+    pub ai_gateway_admin_url: Option<String>,
     /// `TRUSTIOT_SMTP_HOST`: the chart's `smtp.host`, the relay login codes are sent through.
     /// Without it the service runs, but cannot send login codes ([`crate::mail`]).
     #[serde(default)]

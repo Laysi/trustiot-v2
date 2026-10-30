@@ -27,7 +27,9 @@ use time::{Duration, OffsetDateTime};
 use tokio::io::AsyncWriteExt as _;
 use tokio::net::TcpListener;
 
+pub mod bench;
 pub mod registry;
+pub mod ssh;
 
 /// The binary under test.
 pub const BINARY: &str = env!("CARGO_BIN_EXE_trustiot-workstation");
@@ -555,6 +557,8 @@ pub struct Environment {
     pub runtime: Option<PathBuf>,
     pub home: PathBuf,
     pub log: &'static str,
+    /// `PATH`, where the fake ssh is (`ssh::FakeSsh`); none by default.
+    pub path: Option<std::ffi::OsString>,
 }
 
 impl Environment {
@@ -568,6 +572,7 @@ impl Environment {
             runtime: Some(runtime),
             home,
             log: "trace",
+            path: None,
         }
     }
 
@@ -617,6 +622,9 @@ async fn run_program(
     );
     if let Some(runtime) = &environment.runtime {
         variables.insert("XDG_RUNTIME_DIR", runtime.as_os_str());
+    }
+    if let Some(path) = &environment.path {
+        variables.insert("PATH", path.as_os_str());
     }
     let mut child = tokio::process::Command::new(program)
         .args(prefix)

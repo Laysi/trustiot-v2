@@ -29,7 +29,8 @@ use super::{FakeBroker, GATEWAY, gateway};
 
 /// The files of one gateway: the configuration and what it names. The configuration names a
 /// root CRL `root-crl.pem`, which does not exist until a test writes it. `state` is the agent's
-/// state directory (`STATE_DIRECTORY`).
+/// state directory (`STATE_DIRECTORY`), where the applied configuration and the offline buffer
+/// live.
 pub struct Files {
     dir: ScratchDir,
 }
@@ -90,6 +91,13 @@ reconnect_cap_ms = 1000
             certificate = self.path("gateway.pem"),
             key = self.path("gateway.key"),
         );
+        self.write("agent.toml", &config);
+    }
+
+    /// Adds `text` (whole TOML tables) to the end of the configuration.
+    pub fn append_config(&self, text: &str) {
+        let mut config = std::fs::read_to_string(self.path("agent.toml")).unwrap();
+        config.push_str(text);
         self.write("agent.toml", &config);
     }
 

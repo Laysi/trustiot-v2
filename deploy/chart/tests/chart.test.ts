@@ -2,9 +2,9 @@
 // Run from the repository root: bun test deploy/chart
 // Needs helm and kubeconform from .prototools; kubeconform downloads schemas on first use.
 import { describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { isAbsolute, join } from "node:path";
+import { isAbsolute, join, relative } from "node:path";
 import { checkRenderedManifests } from "../../../scripts/ci/check-secret-handling.ts";
 import { routeListProblems, sampleRequests } from "./ingress-authz.ts";
 import type { Exception, PolicyRule, RouteRule } from "./ingress-authz.ts";
@@ -277,7 +277,19 @@ const AI_GATEWAY_SETTINGS = [
   "--set-json",
   'ai.roles.test={"models":["anthropic/claude-test"]}',
 ];
-const enableAllServices = [...plannedServices.flatMap((name) => ["--set", `services.${name}.enabled=true`]), ...AI_GATEWAY_SETTINGS];
+// ingest and gateway-ops need the in-cluster MQTT broker, and the render fails without it
+// (Laysi/trustiot-v2#642, Laysi/trustiot-v2#721), so every service comes with the broker.
+const enableAllServices = [
+  ...plannedServices.flatMap((name) => ["--set", `services.${name}.enabled=true`]),
+  "--set",
+  "mqttBroker.enabled=true",
+  ...AI_GATEWAY_SETTINGS,
+];
+// Every service that renders without the broker: all but ingest and gateway-ops.
+const enableAllServicesWithoutBroker = [
+  ...enableAllServices,
+  ...["mqttBroker.enabled=false", "services.ingest.enabled=false", "services.gateway-ops.enabled=false"].flatMap((value) => ["--set", value]),
+];
 
 function kubeconform(manifests: string, kubernetesVersion: string) {
   const cache = join(tmpdir(), "trustiot-kubeconform-cache");
@@ -1415,22 +1427,29 @@ describe("values reference Secrets by name only and hold no secret material", ()
             references += 1;
             expect(names).toContain(secret.secretName ?? "");
           }
-          for (const env of pod.containers.flatMap((c) => c.env ?? [])) {
-            const ref = env.valueFrom?.secretKeyRef;
-            if (SECRET_LIKE.test(env.name)) {
-              // Secret-looking variables never carry a literal value.
-              expect(env.value, env.name).toBeUndefined();
-              expect(ref, env.name).toBeDefined();
+          for (const container of pod.containers) {
+            // Where the container mounts a Secret volume: a <name>_FILE setting may name a file
+            // there by path (the broker account's password file, Laysi/trustiot-v2#634).
+            const secretVolumes = new Set((pod.volumes ?? []).filter((v) => v.secret !== undefined).map((v) => v.name));
+            const secretDirs = (container.volumeMounts ?? []).filter((m) => secretVolumes.has(m.name as string) && m.subPath === undefined).map((m) => `${m.mountPath}/`);
+            for (const env of container.env ?? []) {
+              const ref = env.valueFrom?.secretKeyRef;
+              const fileInSecretMount = /_FILE$/.test(env.name) && typeof env.value === "string" && secretDirs.some((dir) => env.value?.startsWith(dir) && !env.value.slice(dir.length).includes("/"));
+              if (SECRET_LIKE.test(env.name) && !fileInSecretMount) {
+                // Secret-looking variables never carry a literal value.
+                expect(env.value, env.name).toBeUndefined();
+                expect(ref, env.name).toBeDefined();
+              }
+              if (!ref) continue;
+              references += 1;
+              // By name and key only. The SMTP account's references are also optional, and only
+              // they: a missing Secret must not keep the identity service, and with it the ext_authz
+              // check, from starting (the service reports it, TRUSTIOT_SMTP_AUTH_REQUIRED).
+              const smtp = env.name.startsWith("TRUSTIOT_SMTP_");
+              expect(Object.keys(ref).sort(), env.name).toEqual(smtp ? ["key", "name", "optional"] : ["key", "name"]);
+              if (smtp) expect(ref.optional, env.name).toBe(true);
+              expect(names).toContain(ref.name);
             }
-            if (!ref) continue;
-            references += 1;
-            // By name and key only. The SMTP account's references are also optional, and only
-            // they: a missing Secret must not keep the identity service, and with it the ext_authz
-            // check, from starting (the service reports it, TRUSTIOT_SMTP_AUTH_REQUIRED).
-            const smtp = env.name.startsWith("TRUSTIOT_SMTP_");
-            expect(Object.keys(ref).sort(), env.name).toEqual(smtp ? ["key", "name", "optional"] : ["key", "name"]);
-            if (smtp) expect(ref.optional, env.name).toBe(true);
-            expect(names).toContain(ref.name);
           }
         }
         expect(references).toBeGreaterThan(0);
@@ -1908,10 +1927,12 @@ describe("MQTT broker (decision 6, Laysi/trustiot-v2#84)", () => {
   const GATEWAY_PORT = 8883;
   const SERVICE_PORT = 1883;
   const brokerOn = ["--set", "mqttBroker.enabled=true"];
-  // The broker's callers in values.yaml's mesh.calls, and certs, which only calls it once it
-  // lists the broker there (Laysi/trustiot-v2#82).
+  // The broker's callers in values.yaml's mesh.calls: certs lists it since Laysi/trustiot-v2#634.
+  // certs, ingest (Laysi/trustiot-v2#642) and gateway-ops (Laysi/trustiot-v2#721) get their
+  // accounts from the chart.
   const callers = ["ingest", "gateway-ops", "mqtt-bridge", "certs"].flatMap((name) => ["--set", `services.${name}.enabled=true`]);
-  const certsCalls = ["--set-json", 'mesh.calls.certs=["postgres","mqtt-broker"]'];
+  // certs without the broker in its calls, as before Laysi/trustiot-v2#634.
+  const certsOff = ["--set-json", 'mesh.calls.certs=["postgres"]'];
   const manifests = render(SHAPES.saas, [...brokerOn, ...callers]);
   const statefulSet = find(manifests, "StatefulSet", NAME);
   const pod = podSpec(statefulSet) as PodSpec & { initContainers: Container[]; shareProcessNamespace?: boolean; nodeSelector?: Record<string, string> };
@@ -1957,7 +1978,7 @@ describe("MQTT broker (decision 6, Laysi/trustiot-v2#84)", () => {
     for (const shape of SHAPE_NAMES) {
       expect((readYaml(SHAPES[shape][0]).mqttBroker as YamlMap | undefined)?.enabled, shape).toBeUndefined();
       expect((readYaml(SHAPES[shape][1]).mqttBroker as YamlMap | undefined)?.enabled, shape).toBeUndefined();
-      const rendered = render(SHAPES[shape], enableAllServices);
+      const rendered = render(SHAPES[shape], enableAllServicesWithoutBroker);
       expect(rendered.filter((m) => m.metadata.name.includes("mqtt-broker")).map((m) => `${m.kind}/${m.metadata.name}`), shape).toEqual([]);
       // The services that list the broker in mesh.calls keep running; their calls to it are skipped.
       expect(principalsOfPolicy(rendered, "certs"), shape).not.toContain(principal("mqtt-broker"));
@@ -2079,7 +2100,7 @@ describe("MQTT broker (decision 6, Laysi/trustiot-v2#84)", () => {
   });
 
   test("the mesh admits mqtt-bridge on the gateway port and the account holders on the service port, nobody else", () => {
-    const rendered = render(SHAPES.saas, [...brokerOn, ...callers, ...certsCalls]);
+    const rendered = manifests;
     const policy = policyOf(rendered, "AuthorizationPolicy");
     expect(policy.action).toBe("ALLOW");
     expect(policy.rules as Rule[]).toEqual([
@@ -2092,8 +2113,10 @@ describe("MQTT broker (decision 6, Laysi/trustiot-v2#84)", () => {
     // HBONE hides the destination port from a NetworkPolicy: it admits the same callers'
     // pods, and ztunnel enforces the ports above. No address block: the probes need none.
     expect(networkSources(rendered)).toEqual({ components: ["certs", "gateway-ops", "ingest", "mqtt-bridge"], ipBlocks: 0 });
-    // certs gets a broker account only once it lists the broker (Laysi/trustiot-v2#82).
-    expect(principalsOfPolicy(manifests, "mqtt-broker")).not.toContain(principal("certs"));
+    // certs reaches the broker only while it lists it (values.yaml does, Laysi/trustiot-v2#634).
+    const withoutCerts = render(SHAPES.saas, [...brokerOn, ...callers, ...certsOff]);
+    expect(principalsOfPolicy(withoutCerts, "mqtt-broker")).not.toContain(principal("certs"));
+    expect(networkSources(withoutCerts).components).not.toContain("certs");
     // A service that is not one of the broker's callers fails the render, so it cannot be let in
     // by accident (and gets no account).
     for (const caller of ["assets", "telemetry-query", "knowledge"]) {
@@ -2261,7 +2284,7 @@ describe("MQTT broker (decision 6, Laysi/trustiot-v2#84)", () => {
     }
 
     // Without the broker the port's policies admit nobody, and the certificate names no Service.
-    const alone = render(SHAPES[shape], enableAllServices);
+    const alone = render(SHAPES[shape], enableAllServicesWithoutBroker);
     expect(policyOf(alone, "AuthorizationPolicy", BROKER_CERTS).rules).toBeUndefined();
     expect(policyOf(alone, "NetworkPolicy", BROKER_CERTS).ingress).toEqual([]);
     const aloneEnv = (podSpec(find(alone, "Deployment", CERTS)).containers[0]?.env ?? []).map((e) => e.name);
@@ -2314,8 +2337,8 @@ describe("MQTT broker (decision 6, Laysi/trustiot-v2#84)", () => {
       { name: "TRUSTIOT__ACCOUNTS__CA_FILE", value: "/var/run/secrets/trustiot/kube/ca.crt" },
       { name: "TRUSTIOT__ACCOUNTS__SECRET", value: ACCOUNTS },
       // The enabled account holders that list the broker: mqtt-bridge carries gateways and has no
-      // account, and certs does not list the broker by default.
-      { name: "TRUSTIOT__ACCOUNTS__SERVICES", value: "gateway-ops,ingest" },
+      // account.
+      { name: "TRUSTIOT__ACCOUNTS__SERVICES", value: "certs,gateway-ops,ingest" },
       { name: "TRUSTIOT__ACCOUNTS__GENERATION", value: "1" },
       { name: "TRUSTIOT__ACCOUNTS__DYNSEC_FILE", value: "/mosquitto/data/dynamic-security.json" },
     ]);
@@ -2339,9 +2362,9 @@ describe("MQTT broker (decision 6, Laysi/trustiot-v2#84)", () => {
     expect(declared.metadata.labels?.["trustiot.io/filled-by"]).toBe("migrate");
     expect(declared.metadata.labels?.["app.kubernetes.io/component"]).toBe("mqtt-broker");
     expect(declared.metadata.annotations?.["helm.sh/resource-policy"]).toBe("keep");
-    const withCerts = render(SHAPES.saas, [...brokerOn, ...callers, ...certsCalls]);
-    expect(containerOf(podSpec(find(withCerts, "StatefulSet", NAME)), "accounts").env?.find((e) => e.name === "TRUSTIOT__ACCOUNTS__SERVICES")?.value).toBe(
-      "certs,gateway-ops,ingest",
+    const withoutCerts = render(SHAPES.saas, [...brokerOn, ...callers, ...certsOff]);
+    expect(containerOf(podSpec(find(withoutCerts, "StatefulSet", NAME)), "accounts").env?.find((e) => e.name === "TRUSTIOT__ACCOUNTS__SERVICES")?.value).toBe(
+      "gateway-ops,ingest",
     );
   });
 
@@ -2366,7 +2389,7 @@ describe("MQTT broker (decision 6, Laysi/trustiot-v2#84)", () => {
     ).toEqual([]);
     // Declared empty, like every Secret the cluster fills (templates/passwords.yaml): no data, kept
     // on uninstall, and the CronJob's to fill.
-    const everything = render([...SHAPES.saas, SMOKE], [...enableAllServices, ...certsCalls]);
+    const everything = render([...SHAPES.saas, SMOKE], enableAllServices);
     const declared = find(everything, "Secret", TLS);
     expect(Object.keys(declared).sort()).toEqual(["apiVersion", "kind", "metadata", "type"]);
     expect((declared as Manifest & { type?: string }).type).toBe("Opaque");
@@ -2375,9 +2398,12 @@ describe("MQTT broker (decision 6, Laysi/trustiot-v2#84)", () => {
     expect(declared.metadata.annotations?.["helm.sh/resource-policy"]).toBe("keep");
     expect(find(manifests, "Secret", TLS).metadata.name).toBe(TLS);
     // No other pod names the broker's Secrets: the CronJob's pod names the server certificate
-    // Secret in its settings only (it mounts no Secret), and never the accounts Secret.
-    for (const { name, pod: other } of podsOf(everything)) {
+    // Secret in its settings only (it mounts no Secret), and never the accounts Secret; certs,
+    // ingest and gateway-ops mount their own key of the accounts Secret (Laysi/trustiot-v2#634,
+    // Laysi/trustiot-v2#642, Laysi/trustiot-v2#721, tested below) and nothing else of the broker's.
+    for (const { name, pod: found } of podsOf(everything)) {
       if (name === `StatefulSet/${NAME}`) continue;
+      const other = [`Deployment/${RELEASE}-certs`, `Deployment/${RELEASE}-ingest`, `Deployment/${RELEASE}-gateway-ops`].includes(name) ? { ...found, volumes: (found.volumes ?? []).filter((v) => v.name !== "mqtt-broker-account") } : found;
       if (name === `CronJob/${CERTIFICATE}`) {
         expect(JSON.stringify(other.volumes ?? [])).not.toContain('"secret"');
         expect(JSON.stringify(other)).not.toContain(ACCOUNTS);
@@ -2421,12 +2447,432 @@ describe("MQTT broker (decision 6, Laysi/trustiot-v2#84)", () => {
   test("custom env of a service can read neither of the broker's Secrets", () => {
     for (const [secret, key] of [
       [ACCOUNTS, "ingest"],
+      [ACCOUNTS, "certs"],
       [TLS, "tls.key"],
     ]) {
       const env = `[{"name":"STOLEN","valueFrom":{"secretKeyRef":{"name":"${secret}","key":"${key}"}}}]`;
       const result = helmTemplate(SHAPES.saas, [...brokerOn, "--set", "services.ingest.enabled=true", "--set-json", `services.ingest.env=${env}`]);
       expect({ secret, code: result.code }).toEqual({ secret, code: 1 });
       expect(result.stderr).toContain(`env reads Secret ${secret}`);
+    }
+  }, SLOW_TEST_MS);
+
+  // Laysi/trustiot-v2#634: the chart hands a service its broker account through
+  // "trustiot.mqttBroker.serviceCredentials" (templates/_mqtt-broker.tpl): its own key of the
+  // accounts Secret, mounted as a directory, and the broker's address and account in its settings.
+  const ACCOUNT_DIR = "/etc/trustiot/mqtt-broker-account";
+  const accountEnv = (service: string) => [
+    { name: "TRUSTIOT__MQTT__HOST", value: `${NAME}.${NAMESPACE}.svc` },
+    { name: "TRUSTIOT__MQTT__PORT", value: String(SERVICE_PORT) },
+    { name: "TRUSTIOT__MQTT__USERNAME", value: `service:${service}` },
+    { name: "TRUSTIOT__MQTT__PASSWORD_FILE", value: `${ACCOUNT_DIR}/${service}` },
+  ];
+  const accountVolume = (service: string) => ({ name: "mqtt-broker-account", secret: { secretName: ACCOUNTS, defaultMode: 0o440, items: [{ key: service, path: service }] } });
+  const accountMount = { name: "mqtt-broker-account", mountPath: ACCOUNT_DIR, readOnly: true };
+  const brokerEnvOf = (container: Container | undefined) => (container?.env ?? []).filter((e) => /^TRUSTIOT__MQTT__/i.test(e.name));
+  const servicePod = (rendered: Manifest[], service: string) => podSpec(find(rendered, "Deployment", `${RELEASE}-${service}`)) as PodSpec & { initContainers?: Container[] };
+  // Every pod of a render that has a volume of the accounts Secret, with the keys it selects; and
+  // every mount of such a volume, by pod and container, with its subPath if any.
+  const accountsUse = (rendered: Manifest[]) => {
+    const keys: Record<string, string[]> = {};
+    const mounts: { pod: string; container: string; subPath: unknown }[] = [];
+    for (const { name, pod: spec } of podsOf(rendered)) {
+      const volumes = (spec.volumes ?? []).filter((v) => JSON.stringify(v).includes(ACCOUNTS));
+      if (volumes.length === 0) continue;
+      keys[name] = volumes.flatMap((v) => ((v.secret as { items?: { key: string }[] } | undefined)?.items ?? [{ key: "(every key)" }]).map((item) => item.key));
+      const names = new Set(volumes.map((v) => v.name));
+      for (const container of [...(((spec as YamlMap).initContainers ?? []) as Container[]), ...spec.containers]) {
+        for (const mount of container.volumeMounts ?? []) {
+          if (names.has(mount.name as string)) mounts.push({ pod: name, container: container.name, subPath: mount.subPath });
+        }
+      }
+    }
+    return { keys, mounts };
+  };
+
+  test.each(SHAPE_NAMES)(
+    "%s: certs gets its broker account: its own key alone, mounted as a directory, the broker's address and service:certs in its settings, and the mesh lets it reach the service port only (Laysi/trustiot-v2#634)",
+    (shape) => {
+      const rendered = render(SHAPES[shape], [...brokerOn, ...callers]);
+      const certs = servicePod(rendered, "certs");
+      const container = certs.containers[0];
+      expect(brokerEnvOf(container)).toEqual(accountEnv("certs"));
+      // The key of certs and no other, from the accounts Secret, read-only, 0440 (root and the
+      // pod's fsGroup); not optional, so the pod waits for the key instead of starting without it.
+      expect((certs.volumes ?? []).filter((v) => v.name === "mqtt-broker-account")).toEqual([accountVolume("certs")]);
+      expect((certs.securityContext as YamlMap | undefined)?.fsGroup).toBe(65533);
+      expect((container?.volumeMounts ?? []).filter((m) => m.name === "mqtt-broker-account")).toEqual([accountMount]);
+      // The password file is the mounted key.
+      expect(accountEnv("certs")[3]?.value).toBe(`${accountMount.mountPath}/${accountVolume("certs").secret.items[0]?.key}`);
+      // Only the main container: the init containers never see the password.
+      for (const init of certs.initContainers ?? []) expect(JSON.stringify(init)).not.toContain("mqtt-broker-account");
+      // No other pod mounts the Secret, none through subPath, and no env of any pod reads it. A
+      // Secret field of the values cannot point another pod at it either: the field tests below
+      // ("... cannot name a protected Secret ...") render each field with its component on.
+      const use = accountsUse(rendered);
+      expect(use.keys).toEqual({
+        [`Deployment/${RELEASE}-certs`]: ["certs"],
+        [`Deployment/${RELEASE}-gateway-ops`]: ["gateway-ops"],
+        [`Deployment/${RELEASE}-ingest`]: ["ingest"],
+      });
+      expect(use.mounts).toEqual([
+        { pod: `Deployment/${RELEASE}-certs`, container: "certs", subPath: undefined },
+        { pod: `Deployment/${RELEASE}-gateway-ops`, container: "gateway-ops", subPath: undefined },
+        { pod: `Deployment/${RELEASE}-ingest`, container: "ingest", subPath: undefined },
+      ]);
+      for (const { name, pod: spec } of podsOf(rendered)) {
+        expect({ name, reads: JSON.stringify(spec).includes(`"secretKeyRef":{"name":"${ACCOUNTS}"`) }).toEqual({ name, reads: false });
+      }
+      // mqtt-bridge holds no account, so it gets neither the settings nor a password.
+      expect(brokerEnvOf(servicePod(rendered, "mqtt-bridge").containers[0])).toEqual([]);
+      // The broker's AuthorizationPolicy lets the certs ServiceAccount reach 1883 and not 8883; its
+      // NetworkPolicy admits the certs pods on 15008 (networkSources checks the port).
+      const rules = policyOf(rendered, "AuthorizationPolicy").rules as Rule[];
+      const principalsOn = (port: number) =>
+        rules.filter((rule) => (rule.to ?? []).some((to) => to.operation.ports.includes(String(port)))).flatMap((rule) => rule.from.flatMap((from) => from.source.principals));
+      expect(principalsOn(SERVICE_PORT)).toContain(principal("certs"));
+      expect(principalsOn(GATEWAY_PORT)).not.toContain(principal("certs"));
+      expect(rules.every((rule) => (rule.to ?? []).length > 0)).toBe(true);
+      expect(networkSources(rendered).components).toContain("certs");
+      // No Role but the broker's names the Secret.
+      const roles = rendered.filter((m) => m.kind === "Role" || m.kind === "ClusterRole");
+      expect(roles.filter((role) => JSON.stringify(role).includes(ACCOUNTS)).map((role) => role.metadata.name)).toEqual([NAME]);
+    },
+    SLOW_TEST_MS,
+  );
+
+  test.each(SHAPE_NAMES)("%s: without the broker, or without mqtt-broker in mesh.calls.certs, certs gets no broker settings and no Secret (Laysi/trustiot-v2#634)", (shape) => {
+    for (const [label, args] of [
+      ["broker off", ["--set", "services.certs.enabled=true"]],
+      ["broker off, every service on", enableAllServicesWithoutBroker],
+      ["certs does not list the broker", [...brokerOn, ...callers, ...certsOff]],
+    ] as const) {
+      const rendered = render(SHAPES[shape], [...args]);
+      const certs = servicePod(rendered, "certs");
+      expect({ label, env: brokerEnvOf(certs.containers[0]) }).toEqual({ label, env: [] });
+      // With the broker on, ingest still gets its own key (Laysi/trustiot-v2#642); certs gets none.
+      const use = Object.entries(accountsUse(rendered).keys).filter(([pod]) => label.startsWith("broker off") || pod.endsWith("-certs"));
+      expect({ label, use }).toEqual({ label, use: [] });
+      expect({ label, names: JSON.stringify(certs).includes(ACCOUNTS) }).toEqual({ label, names: false });
+    }
+  }, SLOW_TEST_MS);
+
+  test.each(SHAPE_NAMES)("%s: custom env cannot set the broker settings of certs, with the broker or without it (Laysi/trustiot-v2#634)", (shape) => {
+    // The template refuses them; the schema refuses a password-like name with a literal value too,
+    // so the template's own rule is checked without the schema as well.
+    for (const broker of [[...brokerOn, ...callers], ["--set", "services.certs.enabled=true"]]) {
+      for (const field of ["services.certs.env", "serviceDefaults.env"]) {
+        for (const name of ["TRUSTIOT__MQTT__HOST", "trustiot__mqtt__password_file", "TRUSTIOT__MQTT__USERNAME", "TRUSTIOT__MQTT__PORT"]) {
+          for (const schema of [[], ["--skip-schema-validation"]]) {
+            const result = helmTemplate(SHAPES[shape], [...broker, ...schema, "--set-json", `${field}=[{"name":"${name}","value":"elsewhere"}]`]);
+            expect({ broker: broker.length, field, name, schema, code: result.code }).toEqual({ broker: broker.length, field, name, schema, code: 1 });
+            if (schema.length > 0 || !/passw/i.test(name)) {
+              expect(result.stderr).toContain(`services.certs: env ${name} is set by the chart: the service's broker account is the in-cluster broker's`);
+            }
+          }
+        }
+      }
+    }
+    // Its other settings stay open, the sync's interval among them (services/certs/README.md).
+    const interval = render(SHAPES[shape], [...brokerOn, ...callers, "--set-json", 'services.certs.env=[{"name":"TRUSTIOT__DYNSEC__INTERVAL","value":"60s"}]']);
+    expect(servicePod(interval, "certs").containers[0]?.env).toContainEqual({ name: "TRUSTIOT__DYNSEC__INTERVAL", value: "60s" });
+    // A service that does not get an account keeps the name free (it reads no such setting).
+    const bridge = render(SHAPES[shape], [...brokerOn, ...callers, "--set-json", 'services.mqtt-bridge.env=[{"name":"TRUSTIOT__MQTT__HOST","value":"x"}]']);
+    expect(servicePod(bridge, "mqtt-bridge").containers[0]?.env).toContainEqual({ name: "TRUSTIOT__MQTT__HOST", value: "x" });
+  }, SLOW_TEST_MS);
+
+  test.each(SHAPE_NAMES)(
+    "%s: ingest gets its broker account through the same helper: its own key alone, mounted as a directory, service:ingest in its settings, which custom env cannot set; no other pod has its key (Laysi/trustiot-v2#642)",
+    (shape) => {
+      const rendered = render(SHAPES[shape], [...brokerOn, ...callers]);
+      const ingest = servicePod(rendered, "ingest");
+      const container = ingest.containers[0];
+      expect(brokerEnvOf(container)).toEqual(accountEnv("ingest"));
+      expect((ingest.volumes ?? []).filter((v) => v.name === "mqtt-broker-account")).toEqual([accountVolume("ingest")]);
+      // A group of its own reads the 0440 file: not certs' or identity's.
+      expect((ingest.securityContext as YamlMap | undefined)?.fsGroup).toBe(65531);
+      expect((container?.volumeMounts ?? []).filter((m) => m.name === "mqtt-broker-account")).toEqual([accountMount]);
+      for (const init of ingest.initContainers ?? []) expect(JSON.stringify(init)).not.toContain("mqtt-broker-account");
+      // The key ingest reaches only the ingest pod; no env of any pod reads the accounts Secret.
+      const use = accountsUse(rendered);
+      for (const [pod, keys] of Object.entries(use.keys)) {
+        expect({ pod, ingest: keys.includes("ingest") }).toEqual({ pod, ingest: pod === `Deployment/${RELEASE}-ingest` });
+      }
+      for (const { name, pod: spec } of podsOf(rendered)) {
+        expect({ name, reads: JSON.stringify(spec).includes(`"secretKeyRef":{"name":"${ACCOUNTS}"`) }).toEqual({ name, reads: false });
+      }
+      // The mesh lets ingest reach the broker's service port and not its gateway port.
+      const rules = policyOf(rendered, "AuthorizationPolicy").rules as Rule[];
+      const principalsOn = (port: number) =>
+        rules.filter((rule) => (rule.to ?? []).some((to) => to.operation.ports.includes(String(port)))).flatMap((rule) => rule.from.flatMap((from) => from.source.principals));
+      expect(principalsOn(SERVICE_PORT)).toContain(principal("ingest"));
+      expect(principalsOn(GATEWAY_PORT)).not.toContain(principal("ingest"));
+      // Without mqtt-broker in mesh.calls.ingest, ingest would get neither its settings nor its key
+      // and never become ready, so the render fails (security review of Laysi/trustiot-v2#721, L3).
+      for (const calls of ['["clickhouse","postgres"]', "[]"]) {
+        const unlisted = helmTemplate(SHAPES[shape], [...brokerOn, ...callers, "--set-json", `mesh.calls.ingest=${calls}`]);
+        expect({ calls, code: unlisted.code }).toEqual({ calls, code: 1 });
+        expect(unlisted.stderr).toContain("services.ingest: ingest works only through the in-cluster MQTT broker, so mesh.calls.ingest must list mqtt-broker");
+      }
+      // Without the broker ingest has no work, so the render fails instead of deploying a pod that
+      // never becomes ready (security review of Laysi/trustiot-v2#642, I-3); with the broker it
+      // renders, and with ingest off the broker is not needed.
+      for (const off of [["--set", "services.ingest.enabled=true"], ["--set", "services.ingest.enabled=true", "--set", "mqttBroker.enabled=false"]]) {
+        const result = helmTemplate(SHAPES[shape], off);
+        expect({ off, code: result.code }).toEqual({ off, code: 1 });
+        expect(result.stderr).toContain("services.ingest: ingest reads the gateways' telemetry from the in-cluster MQTT broker, so it needs mqttBroker.enabled: true");
+      }
+      expect(helmTemplate(SHAPES[shape], [...brokerOn, "--set", "services.ingest.enabled=true"]).code).toBe(0);
+      expect(helmTemplate(SHAPES[shape], ["--set", "services.ingest.enabled=false"]).code).toBe(0);
+      // Its broker settings are the chart's.
+      for (const name of ["TRUSTIOT__MQTT__HOST", "TRUSTIOT__MQTT__USERNAME", "trustiot__mqtt__port"]) {
+        const result = helmTemplate(SHAPES[shape], [...brokerOn, ...callers, "--set-json", `services.ingest.env=[{"name":"${name}","value":"elsewhere"}]`]);
+        expect({ name, code: result.code }).toEqual({ name, code: 1 });
+        expect(result.stderr).toContain(`services.ingest: env ${name} is set by the chart: the service's broker account is the in-cluster broker's`);
+      }
+      // Its telemetry limits stay open (services/ingest/README.md).
+      const limits = render(SHAPES[shape], [...brokerOn, ...callers, "--set-json", 'services.ingest.env=[{"name":"TRUSTIOT__TELEMETRY_LIMITS__BURST","value":"120"}]']);
+      expect(servicePod(limits, "ingest").containers[0]?.env).toContainEqual({ name: "TRUSTIOT__TELEMETRY_LIMITS__BURST", value: "120" });
+    },
+    SLOW_TEST_MS,
+  );
+
+  test.each(SHAPE_NAMES)(
+    "%s: gateway-ops gets its broker account through the same helper: its own key alone, mounted as a directory, service:gateway-ops in its settings, which custom env cannot set; the mesh lets it reach the broker's service port only, and no other pod has its key (Laysi/trustiot-v2#721)",
+    (shape) => {
+      const rendered = render(SHAPES[shape], [...brokerOn, ...callers]);
+      const gatewayOps = servicePod(rendered, "gateway-ops");
+      const container = gatewayOps.containers[0];
+      expect(brokerEnvOf(container)).toEqual(accountEnv("gateway-ops"));
+      expect(accountEnv("gateway-ops")).toEqual([
+        { name: "TRUSTIOT__MQTT__HOST", value: `${NAME}.${NAMESPACE}.svc` },
+        { name: "TRUSTIOT__MQTT__PORT", value: String(SERVICE_PORT) },
+        { name: "TRUSTIOT__MQTT__USERNAME", value: "service:gateway-ops" },
+        { name: "TRUSTIOT__MQTT__PASSWORD_FILE", value: "/etc/trustiot/mqtt-broker-account/gateway-ops" },
+      ]);
+      expect((gatewayOps.volumes ?? []).filter((v) => v.name === "mqtt-broker-account")).toEqual([accountVolume("gateway-ops")]);
+      // A group of its own reads the 0440 file: not that of certs, identity or ingest.
+      expect((gatewayOps.securityContext as YamlMap | undefined)?.fsGroup).toBe(65530);
+      const everything = render(SHAPES[shape], enableAllServices);
+      const groups = ["identity", "certs", "ingest"].map((service) => (servicePod(everything, service).securityContext as YamlMap | undefined)?.fsGroup);
+      expect(groups).not.toContain(65530);
+      expect((container?.volumeMounts ?? []).filter((m) => m.name === "mqtt-broker-account")).toEqual([accountMount]);
+      for (const init of gatewayOps.initContainers ?? []) expect(JSON.stringify(init)).not.toContain("mqtt-broker-account");
+      // The key gateway-ops reaches only the gateway-ops pod; no env of any pod reads the accounts Secret.
+      const use = accountsUse(rendered);
+      for (const [pod, keys] of Object.entries(use.keys)) {
+        expect({ pod, gatewayOps: keys.includes("gateway-ops") }).toEqual({ pod, gatewayOps: pod === `Deployment/${RELEASE}-gateway-ops` });
+      }
+      for (const { name, pod: spec } of podsOf(rendered)) {
+        expect({ name, reads: JSON.stringify(spec).includes(`"secretKeyRef":{"name":"${ACCOUNTS}"`) }).toEqual({ name, reads: false });
+      }
+      // The mesh lets gateway-ops reach the broker's service port and not its gateway port, and
+      // lets no caller reach gateway-ops: it has no API.
+      const rules = policyOf(rendered, "AuthorizationPolicy").rules as Rule[];
+      const principalsOn = (port: number) =>
+        rules.filter((rule) => (rule.to ?? []).some((to) => to.operation.ports.includes(String(port)))).flatMap((rule) => rule.from.flatMap((from) => from.source.principals));
+      expect(principalsOn(SERVICE_PORT)).toContain(principal("gateway-ops"));
+      expect(principalsOn(GATEWAY_PORT)).not.toContain(principal("gateway-ops"));
+      expect(networkSources(rendered).components).toContain("gateway-ops");
+      expect(principalsOfPolicy(rendered, "gateway-ops")).toEqual([]);
+      // Without mqtt-broker in mesh.calls.gateway-ops it would get neither its settings nor its key
+      // and never become ready, so the render fails (security review of Laysi/trustiot-v2#721, L3);
+      // with gateway-ops off the list does not matter.
+      for (const calls of ['["postgres"]', "[]"]) {
+        const unlisted = helmTemplate(SHAPES[shape], [...brokerOn, ...callers, "--set-json", `mesh.calls.gateway-ops=${calls}`]);
+        expect({ calls, code: unlisted.code }).toEqual({ calls, code: 1 });
+        expect(unlisted.stderr).toContain("services.gateway-ops: gateway-ops works only through the in-cluster MQTT broker, so mesh.calls.gateway-ops must list mqtt-broker");
+      }
+      expect(helmTemplate(SHAPES[shape], [...brokerOn, "--set", "services.gateway-ops.enabled=false", "--set-json", 'mesh.calls.gateway-ops=["postgres"]']).code).toBe(0);
+      // Without the broker no gateway gets its configuration and the pod never becomes ready, so
+      // the render fails; with the broker it renders, and with gateway-ops off the broker is not
+      // needed.
+      for (const off of [["--set", "services.gateway-ops.enabled=true"], ["--set", "services.gateway-ops.enabled=true", "--set", "mqttBroker.enabled=false"]]) {
+        const result = helmTemplate(SHAPES[shape], off);
+        expect({ off, code: result.code }).toEqual({ off, code: 1 });
+        expect(result.stderr).toContain("services.gateway-ops: gateway-ops delivers the gateways' configurations through the in-cluster MQTT broker, so it needs mqttBroker.enabled: true");
+      }
+      expect(helmTemplate(SHAPES[shape], [...brokerOn, "--set", "services.gateway-ops.enabled=true"]).code).toBe(0);
+      expect(helmTemplate(SHAPES[shape], ["--set", "services.gateway-ops.enabled=false"]).code).toBe(0);
+      // Its broker settings are the chart's. The schema refuses a password-like name with a
+      // literal value too, so the template's own rule is checked without the schema as well.
+      for (const name of ["TRUSTIOT__MQTT__HOST", "TRUSTIOT__MQTT__USERNAME", "trustiot__mqtt__port", "trustiot__mqtt__password_file"]) {
+        for (const schema of [[], ["--skip-schema-validation"]]) {
+          const result = helmTemplate(SHAPES[shape], [...brokerOn, ...callers, ...schema, "--set-json", `services.gateway-ops.env=[{"name":"${name}","value":"elsewhere"}]`]);
+          expect({ name, schema, code: result.code }).toEqual({ name, schema, code: 1 });
+          if (schema.length > 0 || !/passw/i.test(name)) {
+            expect(result.stderr).toContain(`services.gateway-ops: env ${name} is set by the chart: the service's broker account is the in-cluster broker's`);
+          }
+        }
+      }
+    },
+    SLOW_TEST_MS,
+  );
+
+  // The helper is the one every account holder uses: ingest joined with Laysi/trustiot-v2#642 and
+  // gateway-ops with Laysi/trustiot-v2#721, each only by adding its name to
+  // "trustiot.mqttBroker.credentialServices". A copy of the chart with that list rewritten shows
+  // that each pod gets its own key and account and nobody else's.
+  test("the helper hands every account holder its own key and nobody else's (Laysi/trustiot-v2#634)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "trustiot-chart-broker-"));
+    try {
+      const copy = join(dir, "trustiot");
+      cpSync(CHART_DIR, copy, { recursive: true, filter: (source) => relative(CHART_DIR, source).split("/")[0] !== "tests" });
+      const helpers = join(copy, "templates/_mqtt-broker.tpl");
+      const listed = '{{- $services := list "certs" "ingest" "gateway-ops" -}}';
+      const text = readFileSync(helpers, "utf8");
+      expect(text.split(listed).length).toBe(2);
+      const renderCopy = (services: string[], args: string[]) => {
+        writeFileSync(helpers, text.replace(listed, `{{- $services := list ${services.map((service) => `"${service}"`).join(" ")} -}}`));
+        return run([HELM, "template", RELEASE, copy, "--namespace", NAMESPACE, ...valuesArgs(SHAPES.saas), ...args]);
+      };
+      const holders = ["certs", "gateway-ops", "ingest"];
+      const result = renderCopy(holders, [...brokerOn, ...callers]);
+      expect(result.stderr).toBe("");
+      const rendered = parseManifests(result.stdout);
+      for (const service of holders) {
+        const pod = servicePod(rendered, service);
+        expect({ service, env: brokerEnvOf(pod.containers[0]) }).toEqual({ service, env: accountEnv(service) });
+        expect({ service, volumes: (pod.volumes ?? []).filter((v) => v.name === "mqtt-broker-account") }).toEqual({ service, volumes: [accountVolume(service)] });
+        expect({ service, mounts: (pod.containers[0]?.volumeMounts ?? []).filter((m) => m.name === "mqtt-broker-account") }).toEqual({ service, mounts: [accountMount] });
+      }
+      const use = accountsUse(rendered);
+      expect(use.keys).toEqual(Object.fromEntries(holders.map((service) => [`Deployment/${RELEASE}-${service}`, [service]])));
+      expect(use.mounts.every((mount) => mount.subPath === undefined)).toBe(true);
+      expect(use.mounts.map((mount) => mount.pod).sort()).toEqual(holders.map((service) => `Deployment/${RELEASE}-${service}`));
+      expect(brokerEnvOf(servicePod(rendered, "mqtt-bridge").containers[0])).toEqual([]);
+      // A holder that does not list the broker gets nothing, even in the list (certs: ingest and
+      // gateway-ops refuse to render without it).
+      const unlisted = parseManifests(renderCopy(holders, [...brokerOn, ...callers, "--set-json", 'mesh.calls.certs=["postgres"]']).stdout);
+      expect(Object.keys(accountsUse(unlisted).keys).sort()).toEqual([`Deployment/${RELEASE}-gateway-ops`, `Deployment/${RELEASE}-ingest`]);
+      expect(brokerEnvOf(servicePod(unlisted, "certs").containers[0])).toEqual([]);
+      // Only account holders can be in the list.
+      for (const intruder of ["mqtt-bridge", "assets"]) {
+        const refused = renderCopy([...holders, intruder], [...brokerOn, ...callers]);
+        expect({ intruder, code: refused.code }).toEqual({ intruder, code: 1 });
+        expect(refused.stderr).toContain(`trustiot.mqttBroker.credentialServices: ${intruder} holds no broker account`);
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, SLOW_TEST_MS);
+
+  // Every Secret field of the values ("trustiot.values.checkSecretRefs" in _helpers.tpl), with the
+  // settings that put its component to work, as a function of the Secret's name. Each field hands
+  // its Secret to a pod or a gateway, so a protected Secret there would, for example, mount the
+  // dynsec administrator's password (key certs of the accounts Secret) into the collector, or send
+  // it to an AI provider as an API key (security review of Laysi/trustiot-v2#634).
+  const FORWARD = ["--set", "observability.collector.forward.enabled=true", "--set", "observability.collector.forward.endpoint=https://siem.trustiot.test:4318"];
+  const EXTERNAL_POSTGRES = ["--set", "postgres.mode=external", "--set", "postgres.external.host=pg.trustiot.test"];
+  const EXTERNAL_CLICKHOUSE = ["--set", "clickhouse.mode=external", "--set", "clickhouse.external.url=https://ch.trustiot.test:8443"];
+  const PROTECTED_SECRET_FIELDS: [string, (secret: string) => string[]][] = [
+    ["ingress.direct.tlsSecret", (secret) => ["--set", "ingress.exposure=direct", "--set", `ingress.direct.tlsSecret=${secret}`]],
+    [
+      "internalIdentity.signingKeySecret.name",
+      (secret) => [
+        ...["--set", "services.identity.enabled=true", "--set", `internalIdentity.signingKeySecret.name=${secret}`],
+        ...["--set-json", 'internalIdentity.publicKeys=[{"kid":"2026-10-a","x":"jxSgv4kffdHZ1jN2sf_IVpE4VGbJdheBqhCAAqI89Q8"}]'],
+      ],
+    ],
+    ["postgres.external.caSecret.name", (secret) => [...EXTERNAL_MIGRATION, ...EXTERNAL_POSTGRES, "--set", `postgres.external.caSecret.name=${secret}`]],
+    ["clickhouse.bundled.adminSecret.name", (secret) => ["--set", `clickhouse.bundled.adminSecret.name=${secret}`]],
+    ["clickhouse.external.caSecret.name", (secret) => [...EXTERNAL_MIGRATION, ...EXTERNAL_CLICKHOUSE, "--set", `clickhouse.external.caSecret.name=${secret}`]],
+    [
+      "qdrant.external.credentialsSecret.name",
+      (secret) => [
+        ...["--set", "qdrant.mode=external", "--set", "qdrant.external.url=https://qdrant.trustiot.test:6333", "--set", `qdrant.external.credentialsSecret.name=${secret}`],
+        ...["--set", "services.knowledge.enabled=true", "--set-json", 'services.knowledge.credentials=["qdrant-read","qdrant-write"]'],
+      ],
+    ],
+    ["objectStorage.credentialsSecret.name", (secret) => ["--set", `objectStorage.credentialsSecret.name=${secret}`, "--set-json", 'services.certs.credentials=["object-storage"]']],
+    ["smtp.credentialsSecret.name", (secret) => ["--set", `smtp.credentialsSecret.name=${secret}`, "--set-json", 'services.certs.credentials=["smtp"]']],
+    ...["anthropic", "openai"].map((provider): [string, (secret: string) => string[]] => [
+      `ai.providers.${provider}.apiKeySecret.name`,
+      (secret) => [
+        ...["--set", "services.ai-gateway.enabled=true", "--set", `ai.providers.${provider}.apiKeySecret.name=${secret}`],
+        ...["--set-json", `ai.roles.test={"models":["${provider}/model-test"]}`],
+      ],
+    ]),
+    [
+      "observability.sentry.dsnSecret.name",
+      (secret) => ["--set", "observability.sentry.enabled=true", "--set", "observability.sentry.environment=test", "--set", `observability.sentry.dsnSecret.name=${secret}`],
+    ],
+    [
+      "observability.collector.forward.authHeader.valueSecret.name",
+      (secret) => [...FORWARD, "--set", "observability.collector.forward.authHeader.name=Authorization", "--set", `observability.collector.forward.authHeader.valueSecret.name=${secret}`],
+    ],
+    ["observability.collector.forward.caSecret.name", (secret) => [...FORWARD, "--set", `observability.collector.forward.caSecret.name=${secret}`]],
+    // The migration Secrets are protected themselves: checked against the chart's own Secrets.
+    [
+      "postgres.external.migrationSecret.name",
+      (secret) => [...EXTERNAL_POSTGRES, "--set", "postgres.external.caSecret.name=trustiot-pg-ca", "--set", `postgres.external.migrationSecret.name=${secret}`],
+    ],
+    [
+      "clickhouse.external.migrationSecret.name",
+      (secret) => [...EXTERNAL_CLICKHOUSE, "--set", "clickhouse.external.caSecret.name=trustiot-ch-ca", "--set", `clickhouse.external.migrationSecret.name=${secret}`],
+    ],
+  ];
+  // Protected Secrets a field could name: the broker's accounts (the dynsec administrator's
+  // password under the key certs) and the certs service's issuing CA keys.
+  const PROTECTED_SECRETS = [ACCOUNTS, `${RELEASE}-certs-ca-keys`];
+  const OWN_SECRET = "trustiot-own-secret";
+
+  test("every Secret field of the values is in the list the chart checks against its protected Secrets", () => {
+    // Each key that ends in Secret (a {name, key} map, or ingress.direct.tlsSecret's bare name);
+    // global.imagePullSecrets is not one: only the kubelet reads those.
+    const fields: string[] = [];
+    const walk = (node: unknown, path: string[]) => {
+      if (!isMap(node)) return;
+      for (const [key, value] of Object.entries(node)) {
+        if (key.endsWith("Secret")) fields.push([...path, key, ...(isMap(value) ? ["name"] : [])].join("."));
+        else walk(value, [...path, key]);
+      }
+    };
+    walk(defaults, []);
+    expect(fields.sort()).toEqual(PROTECTED_SECRET_FIELDS.map(([field]) => field).sort());
+    const helpers = readFileSync(join(CHART_DIR, "templates/_helpers.tpl"), "utf8");
+    for (const field of fields.filter((f) => !f.includes("migrationSecret") && !f.startsWith("ai.providers."))) {
+      expect({ field, checked: helpers.includes(`"field" "${field}"`) }).toEqual({ field, checked: true });
+    }
+  });
+
+  test.each(PROTECTED_SECRET_FIELDS.map(([field]) => field))(
+    "%s cannot name a protected Secret, so no pod but certs, ingest and gateway-ops gets a broker account's key (security review of Laysi/trustiot-v2#634)",
+    (field) => {
+      const settings = PROTECTED_SECRET_FIELDS.find(([name]) => name === field)?.[1];
+      if (!settings) throw new Error(`no settings for ${field}`);
+      for (const shape of SHAPE_NAMES) {
+        // A Secret of its own works, the field is in use, and only certs, ingest and gateway-ops
+        // have the accounts Secret, each its own key.
+        const rendered = render(SHAPES[shape], [...brokerOn, ...callers, ...settings(OWN_SECRET)]);
+        expect({ shape, field, used: JSON.stringify(rendered).includes(OWN_SECRET) }).toEqual({ shape, field, used: true });
+        expect({ shape, field, use: accountsUse(rendered).keys }).toEqual({
+          shape,
+          field,
+          use: {
+            [`Deployment/${RELEASE}-certs`]: ["certs"],
+            [`Deployment/${RELEASE}-gateway-ops`]: ["gateway-ops"],
+            [`Deployment/${RELEASE}-ingest`]: ["ingest"],
+          },
+        });
+        for (const secret of PROTECTED_SECRETS) {
+          const refused = helmTemplate(SHAPES[shape], [...brokerOn, ...callers, ...settings(secret)]);
+          expect({ shape, field, secret, code: refused.code }).toEqual({ shape, field, secret, code: 1 });
+          expect(refused.stderr).toContain(`${field}: Secret ${secret} is one the chart hands only to its own consumers`);
+        }
+      }
+    },
+    SLOW_TEST_MS,
+  );
+
+  test.each(SHAPE_NAMES)("%s: an external database's CA cannot share the migration account's Secret (security review of Laysi/trustiot-v2#634)", (shape) => {
+    for (const [field, args] of [
+      ["postgres.external.caSecret.name", [...EXTERNAL_POSTGRES, ...EXTERNAL_MIGRATION, "--set", "postgres.external.caSecret.name=trustiot-pg-migrate"]],
+      ["clickhouse.external.caSecret.name", [...EXTERNAL_CLICKHOUSE, ...EXTERNAL_MIGRATION, "--set", "clickhouse.external.caSecret.name=trustiot-ch-migrate"]],
+    ] as const) {
+      const refused = helmTemplate(SHAPES[shape], [...args]);
+      expect({ field, code: refused.code }).toEqual({ field, code: 1 });
+      expect(refused.stderr).toContain(`${field}: Secret trustiot-`);
     }
   }, SLOW_TEST_MS);
 
@@ -2464,19 +2910,37 @@ describe("MQTT broker (decision 6, Laysi/trustiot-v2#84)", () => {
     const template = (rendered: Manifest[], kind: string, name: string) => JSON.stringify((find(rendered, kind, name).spec as YamlMap).template);
     const before = render(SHAPES.saas, [...brokerOn, ...callers]);
     expect(template(before, "StatefulSet", NAME)).toBe(template(manifests, "StatefulSet", NAME));
+    const accountsChecksum = (rendered: Manifest[]) =>
+      (find(rendered, "StatefulSet", NAME).spec as { template: { metadata: { annotations: Record<string, string> } } }).template.metadata.annotations["checksum/mqtt-broker-accounts"];
     for (const change of [
       ["--set", "mqttBroker.resources.limits.memory=512Mi"],
       ["--set", "mqttBroker.passwordGeneration=2"],
-      certsCalls,
+      certsOff,
     ]) {
       const after = render(SHAPES.saas, [...brokerOn, ...callers, ...change]);
       expect({ change, restarted: template(after, "StatefulSet", NAME) !== template(before, "StatefulSet", NAME) }).toEqual({ change, restarted: true });
-      if (change !== certsCalls) {
+      if (change !== certsOff) {
+        // Every service keeps running, certs, ingest and gateway-ops included, which mount their
+        // account's key and read the rotated password from it at their next connection
+        // (Laysi/trustiot-v2#634, Laysi/trustiot-v2#642, Laysi/trustiot-v2#721): no generation in
+        // their pod templates.
         for (const service of ["ingest", "gateway-ops", "mqtt-bridge", "certs"]) {
           expect({ change, service, same: template(after, "Deployment", `${RELEASE}-${service}`) === template(before, "Deployment", `${RELEASE}-${service}`) }).toEqual({ change, service, same: true });
         }
       }
     }
+    // certs joining the account holders (values.yaml since Laysi/trustiot-v2#634) changes the
+    // accounts checksum, so an upgrade restarts the broker, whose init container generates its
+    // password; certs itself rolls to mount it.
+    const withoutCerts = render(SHAPES.saas, [...brokerOn, ...callers, ...certsOff]);
+    expect(accountsChecksum(before)).toMatch(/^[0-9a-f]{64}$/);
+    expect(accountsChecksum(withoutCerts)).not.toBe(accountsChecksum(before));
+    expect(template(withoutCerts, "Deployment", `${RELEASE}-certs`)).not.toBe(template(before, "Deployment", `${RELEASE}-certs`));
+    // The certs pod template names no generation and no checksum of the accounts.
+    expect(template(before, "Deployment", `${RELEASE}-certs`)).not.toContain("passwordGeneration");
+    expect(Object.keys((find(before, "Deployment", `${RELEASE}-certs`).spec as { template: { metadata: { annotations: Record<string, string> } } }).template.metadata.annotations)).toEqual([
+      "checksum/platform-config",
+    ]);
     for (const generation of ["0x10", "1234567890", "-1"]) {
       const result = helmTemplate(SHAPES.saas, [...brokerOn, "--skip-schema-validation", "--set-string", `mqttBroker.passwordGeneration=${generation}`]);
       expect({ generation, code: result.code }).toEqual({ generation, code: 1 });
@@ -2772,7 +3236,7 @@ describe("bundled Postgres (CloudNativePG, Laysi/trustiot-v2#58)", () => {
       effective_cache_size: "384MB",
       work_mem: "4MB",
       maintenance_work_mem: "64MB",
-      max_connections: "200",
+      max_connections: "230",
     });
     // The string form takes the same 10–1000 as the number (values.schema.json).
     const most = clusterSpec(render(SHAPES.saas, ["--set-string", "postgres.bundled.parameters.max_connections=1000"]));
@@ -3034,10 +3498,12 @@ describe("Postgres connection budget (Laysi/trustiot-v2#575)", () => {
   const services = defaults.services as Record<string, { database?: { maxConnections?: number } }>;
   const calls = (defaults.mesh as { calls: Record<string, string[]> }).calls;
   const postgresServices = Object.keys(calls).filter((name) => calls[name]?.includes("postgres")).sort();
-  // The gateway does not render without its providers and roles (AI_GATEWAY_SETTINGS).
+  // The gateway does not render without its providers and roles (AI_GATEWAY_SETTINGS), ingest and
+  // gateway-ops not without the MQTT broker.
   const enable = (names: readonly string[]) => [
     ...names.flatMap((name) => ["--set", `services.${name}.enabled=true`]),
     ...(names.includes("ai-gateway") ? AI_GATEWAY_SETTINGS : []),
+    ...(names.includes("ingest") || names.includes("gateway-ops") ? ["--set", "mqttBroker.enabled=true"] : []),
   ];
   // What the defaults need with every Postgres service on at one replica, computed here from the
   // budgets and values.yaml, independently of the template's arithmetic.
@@ -3046,25 +3512,29 @@ describe("Postgres connection budget (Laysi/trustiot-v2#575)", () => {
   const limit = Number((defaults.postgres as { bundled: { parameters: { max_connections: number } } }).bundled.parameters.max_connections);
 
   test("every service that uses Postgres by default has a budget and a pool size, and the numbers are the ones README.md states", () => {
-    expect(postgresServices).toEqual(["ai-gateway", "assets", "assistant", "certs", "identity", "telemetry-query"]);
+    expect(postgresServices).toEqual(["ai-gateway", "assets", "assistant", "certs", "gateway-ops", "identity", "ingest", "telemetry-query"]);
     expect(Object.keys(budgets).sort()).toEqual(postgresServices);
     expect(Object.fromEntries(postgresServices.map((name) => [name, perReplica(name)]))).toEqual({
       "ai-gateway": 4,
       assets: 14,
       assistant: 10,
       certs: 9,
+      "gateway-ops": 11,
       identity: 31,
+      ingest: 14,
       "telemetry-query": 12,
     });
     expect(reserved).toBe(18);
-    // 22 to spare for the next service that uses Postgres (README.md, 「連線預算」).
-    expect(needed).toBe(178);
-    expect(limit).toBe(200);
+    // 2 to spare (README.md, 「連線預算」): the next service that uses Postgres raises the limit.
+    // Laysi/trustiot-v2#721 raised it from 200 for gateway-ops, Laysi/trustiot-v2#645 from 220 for
+    // the assistant's API and purge pools.
+    expect(needed).toBe(228);
+    expect(limit).toBe(230);
     const readme = readFileSync(join(CHART_DIR, "README.md"), "utf8");
     for (const name of postgresServices) {
       expect(readme).toContain(`| \`${name}\` | \`${services[name]?.database?.maxConnections}\` | ${budgets[name]?.otherPools} | ${perReplica(name)} |`);
     }
-    expect(readme).toContain(`| 合計 | | | 80 | 160 |`);
+    expect(readme).toContain(`| 合計 | | | 105 | 210 |`);
   });
 
   test.each(SHAPE_NAMES)("%s: the defaults, every Postgres service and every planned service pass the check", (shape) => {
@@ -3084,7 +3554,7 @@ describe("Postgres connection budget (Laysi/trustiot-v2#575)", () => {
     expect(below.code).not.toBe(0);
     expect(below.stderr).toContain(
       `postgres.bundled.parameters.max_connections is ${needed - 1}, but ${needed} connections are needed: the services can open ${needed - reserved} while all of them roll at once ` +
-        "(per replica x pods: ai-gateway 4 x 2, assets 14 x 2, assistant 10 x 2, certs 9 x 2, identity 31 x 2, telemetry-query 12 x 2), " +
+        "(per replica x pods: ai-gateway 4 x 2, assets 14 x 2, assistant 10 x 2, certs 9 x 2, gateway-ops 11 x 2, identity 31 x 2, ingest 14 x 2, telemetry-query 12 x 2), " +
         `and ${reserved} stay reserved for superusers, CloudNativePG, the migration Job and the platform administrator bootstrap.`,
     );
     // The string form of max_connections counts the same.
@@ -3099,7 +3569,7 @@ describe("Postgres connection budget (Laysi/trustiot-v2#575)", () => {
   ] as const)("the defaults with %s fail: every replica plus the one a rolling update adds counts", (_what, args, perReplicaAfter, pods) => {
     const result = helmTemplate(SHAPES.saas, [...enable(postgresServices), ...args]);
     expect(result.code).not.toBe(0);
-    expect(result.stderr).toContain("postgres.bundled.parameters.max_connections is 200, but");
+    expect(result.stderr).toContain("postgres.bundled.parameters.max_connections is 230, but");
     expect(result.stderr).toMatch(new RegExp(`(identity|assets) ${perReplicaAfter} x ${pods}`));
     // The same values fit once max_connections is raised by what they add.
     const raised = helmTemplate(SHAPES.saas, [...enable(postgresServices), ...args, "--set", "postgres.bundled.parameters.max_connections=1000"]);
@@ -3504,6 +3974,109 @@ describe("migration Job (Laysi/trustiot-v2#60)", () => {
     const stolen = helmTemplate(SHAPES.saas, [
       ...withIdentity, "--set", "services.telemetry-query.enabled=true",
       "--set-json", `services.mqtt-bridge.env=[{"name":"STOLEN","valueFrom":{"secretKeyRef":{"name":"${secret}","key":"trustiot_telemetry_query"}}}]`,
+    ]);
+    expect(stolen.code).not.toBe(0);
+    expect(stolen.stderr).toContain(`env reads Secret ${secret}`);
+  });
+
+  test("ingest's ClickHouse account and Postgres roles: the Job generates their passwords into the service's one Secret, and only the service reads them (Laysi/trustiot-v2#642)", () => {
+    const secret = `${RELEASE}-ingest-password`;
+    const account = "trustiot_ingest_writer";
+    // Disabled (the default): no binding, so the Job keeps an existing account from logging in.
+    expect(jobEnv(manifests).map((e) => e.name)).not.toContain("TRUSTIOT__PASSWORDS__CLICKHOUSE_INGEST");
+    for (const shape of SHAPE_NAMES) {
+      const rendered = render(SHAPES[shape], ["--set", "services.ingest.enabled=true", "--set", "mqttBroker.enabled=true"]);
+      const env = jobEnv(rendered);
+      expect(env.find((e) => e.name === "TRUSTIOT__PASSWORDS__CLICKHOUSE_INGEST"), shape).toEqual({
+        name: "TRUSTIOT__PASSWORDS__CLICKHOUSE_INGEST",
+        value: `${account}=${secret}`,
+      });
+      expect(env.find((e) => e.name === "TRUSTIOT__PASSWORDS__CLICKHOUSE_COLLECTOR")?.value, shape).not.toContain(secret);
+      expect(env.find((e) => e.name === "TRUSTIOT__PASSWORDS__POSTGRES")?.value, shape).toContain(`ingest_app=${secret},ingest_platform=${secret}`);
+      // The one Secret, declared empty for the Job to fill, which the Job's Role names.
+      const declared = rendered.filter((m) => m.kind === "Secret" && m.metadata.name === secret);
+      expect(declared.length, shape).toBe(1);
+      expect((declared[0] as YamlMap).data, shape).toBeUndefined();
+      const ingest = podSpec(find(rendered, "Deployment", `${RELEASE}-ingest`)).containers[0] as Container;
+      expect(ingest.env?.filter((e) => /^TRUSTIOT__(CLICKHOUSE|DATABASE)__/.test(e.name)), shape).toEqual([
+        { name: "TRUSTIOT__DATABASE__USERNAME", value: "ingest_app" },
+        { name: "TRUSTIOT__DATABASE__PASSWORD", valueFrom: { secretKeyRef: { name: secret, key: "ingest_app" } } },
+        { name: "TRUSTIOT__DATABASE__MAX_CONNECTIONS", value: "10" },
+        { name: "TRUSTIOT__DATABASE__PLATFORM_USERNAME", value: "ingest_platform" },
+        { name: "TRUSTIOT__DATABASE__PLATFORM_PASSWORD", valueFrom: { secretKeyRef: { name: secret, key: "ingest_platform" } } },
+        { name: "TRUSTIOT__CLICKHOUSE__USERNAME", value: account },
+        { name: "TRUSTIOT__CLICKHOUSE__PASSWORD", valueFrom: { secretKeyRef: { name: secret, key: account } } },
+      ]);
+      // No other workload reads the account's password or the Secret.
+      for (const other of rendered.filter((m) => ["Deployment", "StatefulSet", "DaemonSet", "CronJob"].includes(m.kind) && m.metadata.name !== `${RELEASE}-ingest`)) {
+        expect(JSON.stringify(other), other.metadata.name).not.toContain(account);
+        expect(JSON.stringify(other), other.metadata.name).not.toContain(secret);
+      }
+    }
+    // Custom env cannot replace the account or read the Secret from another service.
+    for (const name of ["TRUSTIOT__CLICKHOUSE__USERNAME", "TRUSTIOT__CLICKHOUSE__PASSWORD"]) {
+      const result = helmTemplate(SHAPES.saas, [
+        "--set", "services.ingest.enabled=true", "--set", "mqttBroker.enabled=true",
+        "--set-json", `services.ingest.env=[{"name":"${name}","valueFrom":{"secretKeyRef":{"name":"elsewhere","key":"k"}}}]`,
+      ]);
+      expect(result.code, name).not.toBe(0);
+      expect(result.stderr, name).toContain(`env ${name} is set by the chart`);
+    }
+    const stolen = helmTemplate(SHAPES.saas, [
+      ...withIdentity, "--set", "services.ingest.enabled=true", "--set", "mqttBroker.enabled=true",
+      "--set-json", `services.mqtt-bridge.env=[{"name":"STOLEN","valueFrom":{"secretKeyRef":{"name":"${secret}","key":"${account}"}}}]`,
+    ]);
+    expect(stolen.code).not.toBe(0);
+    expect(stolen.stderr).toContain(`env reads Secret ${secret}`);
+  });
+
+  test("gateway-ops' Postgres roles: the Job generates their passwords into the service's one Secret, and only the service reads them (Laysi/trustiot-v2#721)", () => {
+    const secret = `${RELEASE}-gateway-ops-password`;
+    // Disabled (the default): no binding, so the Job keeps the roles from logging in.
+    expect(jobEnv(manifests).find((e) => e.name === "TRUSTIOT__PASSWORDS__POSTGRES")?.value ?? "").not.toContain("gateway_ops");
+    expect(manifests.filter((m) => m.kind === "Secret" && m.metadata.name === secret)).toEqual([]);
+    for (const shape of SHAPE_NAMES) {
+      const rendered = render(SHAPES[shape], ["--set", "services.gateway-ops.enabled=true", "--set", "mqttBroker.enabled=true"]);
+      const env = jobEnv(rendered);
+      expect(env.find((e) => e.name === "TRUSTIOT__PASSWORDS__POSTGRES")?.value, shape).toContain(`gateway_ops_app=${secret},gateway_ops_platform=${secret}`);
+      // No ClickHouse account: gateway-ops does not use ClickHouse.
+      expect(env.filter((e) => /^TRUSTIOT__PASSWORDS__CLICKHOUSE_/.test(e.name) && String(e.value).includes(secret)), shape).toEqual([]);
+      // The one Secret, declared empty for the Job to fill.
+      const declared = rendered.filter((m) => m.kind === "Secret" && m.metadata.name === secret);
+      expect(declared.length, shape).toBe(1);
+      expect((declared[0] as YamlMap).data, shape).toBeUndefined();
+      const gatewayOps = podSpec(find(rendered, "Deployment", `${RELEASE}-gateway-ops`));
+      const container = gatewayOps.containers[0] as Container;
+      expect(container.env?.filter((e) => /^TRUSTIOT__(CLICKHOUSE|DATABASE)__/.test(e.name)), shape).toEqual([
+        { name: "TRUSTIOT__DATABASE__USERNAME", value: "gateway_ops_app" },
+        { name: "TRUSTIOT__DATABASE__PASSWORD", valueFrom: { secretKeyRef: { name: secret, key: "gateway_ops_app" } } },
+        { name: "TRUSTIOT__DATABASE__MAX_CONNECTIONS", value: "7" },
+        { name: "TRUSTIOT__DATABASE__PLATFORM_USERNAME", value: "gateway_ops_platform" },
+        { name: "TRUSTIOT__DATABASE__PLATFORM_PASSWORD", valueFrom: { secretKeyRef: { name: secret, key: "gateway_ops_platform" } } },
+      ]);
+      // The Postgres CA and nothing of ClickHouse.
+      expect(container.env?.map((e) => e.name), shape).toContain("TRUSTIOT_POSTGRES_CA_FILE");
+      expect(JSON.stringify(gatewayOps), shape).not.toContain("clickhouse-password");
+      // No other workload reads the Secret.
+      for (const other of rendered.filter((m) => ["Deployment", "StatefulSet", "DaemonSet", "CronJob"].includes(m.kind) && m.metadata.name !== `${RELEASE}-gateway-ops`)) {
+        expect(JSON.stringify(other), other.metadata.name).not.toContain(secret);
+      }
+      // The bundled Postgres admits it on 5432.
+      const admitted = JSON.stringify(find(rendered, "NetworkPolicy", `${RELEASE}-postgres`).spec);
+      expect(admitted, shape).toContain('"app.kubernetes.io/component":"gateway-ops"');
+    }
+    // Custom env cannot replace a role or read the Secret from another service.
+    for (const name of ["TRUSTIOT__DATABASE__USERNAME", "TRUSTIOT__DATABASE__PLATFORM_PASSWORD"]) {
+      const result = helmTemplate(SHAPES.saas, [
+        "--set", "services.gateway-ops.enabled=true", "--set", "mqttBroker.enabled=true",
+        "--set-json", `services.gateway-ops.env=[{"name":"${name}","valueFrom":{"secretKeyRef":{"name":"elsewhere","key":"k"}}}]`,
+      ]);
+      expect(result.code, name).not.toBe(0);
+      expect(result.stderr, name).toContain(`env ${name} is set by the chart`);
+    }
+    const stolen = helmTemplate(SHAPES.saas, [
+      ...withIdentity, "--set", "services.gateway-ops.enabled=true", "--set", "mqttBroker.enabled=true",
+      "--set-json", `services.mqtt-bridge.env=[{"name":"STOLEN","valueFrom":{"secretKeyRef":{"name":"${secret}","key":"gateway_ops_platform"}}}]`,
     ]);
     expect(stolen.code).not.toBe(0);
     expect(stolen.stderr).toContain(`env reads Secret ${secret}`);
@@ -5095,13 +5668,13 @@ describe("service-to-service authorization (decision 27)", () => {
         // render fails.
         assistant: ["ai-gateway", "knowledge"],
         "ai-gateway": ["knowledge", "postgres"],
-        // In-cluster components are no service APIs.
-        ingest: ["clickhouse"],
+        // In-cluster components are no service APIs (ingest must list the broker, Laysi/trustiot-v2#721).
+        ingest: ["clickhouse", "mqtt-broker"],
         // Disabled services on either side are skipped, as in the mesh plan.
         "gateway-ops": ["certs"],
         certs: ["field-context"],
       };
-      const enable = [...["alerts", "knowledge", "assistant", "ai-gateway", "ingest"].flatMap((s) => ["--set", `services.${s}.enabled=true`]), ...AI_GATEWAY_SETTINGS];
+      const enable = [...["alerts", "knowledge", "assistant", "ai-gateway", "ingest"].flatMap((s) => ["--set", `services.${s}.enabled=true`]), "--set", "mqttBroker.enabled=true", ...AI_GATEWAY_SETTINGS];
       for (const shape of SHAPE_NAMES) {
         const manifests = render([...SHAPES[shape], E2E_VALUES], [...enable, "--set-json", `mesh.calls=${JSON.stringify(calls)}`]);
         expect(onBehalfCalls(manifests)).toEqual({ assets: ["alerts", "certs"], assistant: ["knowledge"] });
@@ -5220,17 +5793,21 @@ describe("service-to-service authorization (decision 27)", () => {
     });
   });
 
-  test("with the default call list only the ingress gateway and the assistant reach other services", () => {
+  test("with the default call list only the ingress gateway, the assistant and the MQTT broker reach other services", () => {
     const manifests = render(SHAPES.saas, enableAllServices);
     for (const service of plannedServices) {
       // Public paths keep identity, certs and mqtt-bridge reachable from the gateway, and the
       // SPA's static files keep web. The assistant calls the AI gateway and its tools' services
-      // (Laysi/trustiot-v2#592).
-      const expected = ["identity", "certs", "mqtt-bridge", "web"].includes(service)
-        ? [principal(GATEWAY_SA)]
-        : ["ai-gateway", "assets", "telemetry-query"].includes(service)
-          ? [principal(`${RELEASE}-assistant`)]
-          : [];
+      // (Laysi/trustiot-v2#592). The broker fetches the CA certificates and CRLs from certs (every
+      // service includes ingest, which renders only with the broker, Laysi/trustiot-v2#642).
+      const expected =
+        service === "certs"
+          ? [principal(`${RELEASE}-mqtt-broker`), principal(GATEWAY_SA)]
+          : ["identity", "mqtt-bridge", "web"].includes(service)
+            ? [principal(GATEWAY_SA)]
+            : ["ai-gateway", "assets", "telemetry-query"].includes(service)
+              ? [principal(`${RELEASE}-assistant`)]
+              : [];
       expect(principalsOf(meshPolicy(manifests, service))).toEqual(expected);
       expect(networkPolicy(manifests, service).ingress?.length).toBe(expected.length > 0 ? 2 : 1);
     }

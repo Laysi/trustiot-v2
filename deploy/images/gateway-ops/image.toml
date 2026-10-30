@@ -1,0 +1,5 @@
+# The gateway operations service (services/gateway-ops): each gateway's versioned desired
+# configuration, generated from the assets service's events and delivered as retained MQTT
+# messages (decision 7). Packed with deploy/images/rust-binary.Containerfile.
+[rust]
+package = "gateway-ops"

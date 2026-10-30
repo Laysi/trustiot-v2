@@ -332,9 +332,45 @@ pub fn gateway_certificate(
     if gateway.as_str().eq_ignore_ascii_case(BROKER_SERVER_NAME) {
         return Err(IssueError::ReservedGatewayId);
     }
+    let key = requested_key(request)?;
+    gateway_certificate_for_key(ca, &key, gateway, validity, now)
+}
+
+/// The public key registered for a gateway at the factory (DER SubjectPublicKeyInfo), once it is
+/// shown to be an ECDSA P-256 key: the renewal (Laysi/trustiot-v2#81) signs the new certificate
+/// for the registered key, never for a key the request names. The registration checked the same
+/// when it stored the key.
+///
+/// # Errors
+///
+/// [`IssueError::UnsupportedKey`] when it is not one P-256 SubjectPublicKeyInfo.
+pub fn registered_key(public_key: &[u8]) -> Result<SubjectPublicKeyInfo, IssueError> {
+    let key = SubjectPublicKeyInfo::from_der(public_key).map_err(|_| IssueError::UnsupportedKey)?;
+    if rcgen::PublicKeyData::algorithm(&key) != &PKCS_ECDSA_P256_SHA256 {
+        return Err(IssueError::UnsupportedKey);
+    }
+    Ok(key)
+}
+
+/// Signs a gateway certificate for `gateway` and `key`, as [`gateway_certificate`] does for the
+/// key of a CSR. The renewal passes the key registered at the factory ([`registered_key`]).
+///
+/// # Errors
+///
+/// As [`gateway_certificate`], but for the request checks.
+pub fn gateway_certificate_for_key(
+    ca: &IssuingCa,
+    key: &SubjectPublicKeyInfo,
+    gateway: &GatewayId,
+    validity: Duration,
+    now: i64,
+) -> Result<IssuedCertificate, IssueError> {
+    if gateway.as_str().eq_ignore_ascii_case(BROKER_SERVER_NAME) {
+        return Err(IssueError::ReservedGatewayId);
+    }
     sign(
         ca,
-        request,
+        key,
         Profile::Gateway,
         gateway.as_str().to_owned(),
         &[],
@@ -359,7 +395,7 @@ pub fn workstation_certificate(
 ) -> Result<IssuedCertificate, IssueError> {
     sign(
         ca,
-        request,
+        &requested_key(request)?,
         Profile::Workstation,
         workstation.subject(),
         &[],
@@ -384,7 +420,7 @@ pub fn broker_certificate(
 ) -> Result<IssuedCertificate, IssueError> {
     sign(
         ca,
-        request,
+        &requested_key(request)?,
         Profile::Broker,
         BROKER_SERVER_NAME.to_owned(),
         names.as_slice(),
@@ -393,16 +429,17 @@ pub fn broker_certificate(
     )
 }
 
+/// Signs a certificate of `profile` for `key` (already checked: a CSR's with proof of possession,
+/// or the key registered at the factory).
 fn sign(
     ca: &IssuingCa,
-    request: &[u8],
+    key: &SubjectPublicKeyInfo,
     profile: Profile,
     subject: String,
     names: &[String],
     validity: Duration,
     now: i64,
 ) -> Result<IssuedCertificate, IssueError> {
-    let key = requested_key(request)?;
     let validity = i64::try_from(validity.as_secs()).unwrap_or(i64::MAX);
     let not_before = now.saturating_sub(CLOCK_SKEW_SECS).max(ca.not_before());
     let not_after = now.saturating_add(validity).min(ca.not_after());
@@ -446,7 +483,7 @@ fn sign(
     params.not_before = timestamp(not_before)?;
     params.not_after = timestamp(not_after)?;
     let certificate = params
-        .signed_by(&key, ca.issuer())
+        .signed_by(key, ca.issuer())
         .map_err(|error| IssueError::Sign(error.to_string()))?;
     Ok(IssuedCertificate {
         serial,

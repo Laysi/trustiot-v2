@@ -4,22 +4,36 @@
 //! an ERROR line) when a CRL's expiry is brought near while the CRL job cannot run, and clearing
 //! it once the job renews the CRL.
 //!
-//! The service test starts a throwaway Postgres with TLS (podman or docker); skipped without
+//! The new CRL right after a revocation (Laysi/trustiot-v2#635), on the product's schema as the
+//! service role: `crl::reissue` gives the CA the next number whatever its nextUpdate; a round of
+//! the job renews a CRL that is not due when a certificate was revoked after its thisUpdate, and
+//! stops doing so once thisUpdate has passed the revocation; and many reissues and rounds at once
+//! never lower the number, skip one, or leave out a revocation committed before them. The API
+//! side (the response, the failure path) is in `tests/workstation.rs`.
+//!
+//! The database tests start a throwaway Postgres with TLS (podman or docker); skipped without
 //! either unless `CI` is set.
 
 mod support;
 
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
-use certs::crl::{self, Revoked};
+use certs::config::CrlSchedule;
+use certs::crl::{self, CrlError, Reissued, Revoked};
 use certs::http::{CHAIN_PATH, CRL_PATH};
 use certs::issue::{self, CLOCK_SKEW_SECS};
+use contract::ServiceName;
 use protocol::GatewayId;
 use rcgen::{CertificateParams, DistinguishedName, DnType, KeyPair, PKCS_ECDSA_P256_SHA256};
+use service_kit::identity::ServiceIdentity;
 use service_kit::job_lock::lock_key;
-use sqlx::Row as _;
+use service_kit::tenant::{BackgroundTenantDb, TenantDb};
+use sqlx::postgres::PgPoolOptions;
+use sqlx::{PgConnection, Row as _};
 use support::{FakeCollector, Service, TestCa, now, points, verify_client, wait_for};
-use testkit::product::{DATABASE, product_postgres};
+use testkit::product::{DATABASE, ProductPostgres, product_postgres};
 use x509_parser::certificate::X509Certificate;
 use x509_parser::extensions::ParsedExtension;
 use x509_parser::prelude::FromDer;
@@ -149,17 +163,20 @@ fn a_crl_revokes_what_it_lists_and_lapses_at_next_update() {
     println!("after the CRL's nextUpdate: {lapsed}");
 }
 
-/// The CRLs in the database: key id, number, nextUpdate (Unix seconds), thisUpdate, DER.
+/// The CRLs of the CAs `ids` in the database: key id, number, nextUpdate (Unix seconds),
+/// thisUpdate, DER. The tests of this binary share one database, each with CAs of its own.
 async fn stored(
-    product: &testkit::product::ProductPostgres,
+    product: &ProductPostgres,
+    ids: &[String],
 ) -> Vec<(String, i64, i64, i64, Vec<u8>)> {
     let mut admin = product.superuser().await;
     sqlx::query(
         "SELECT ca_key_id, crl_number,
                 extract(epoch FROM next_update)::bigint AS next_update,
                 extract(epoch FROM this_update)::bigint AS this_update, crl
-         FROM certs.crls ORDER BY ca_key_id",
+         FROM certs.crls WHERE ca_key_id = ANY($1) ORDER BY ca_key_id",
     )
+    .bind(ids)
     .fetch_all(&mut admin)
     .await
     .expect("read the CRLs")
@@ -212,7 +229,7 @@ async fn crls_are_renewed_on_schedule_and_alert_before_they_lapse() {
 
     // 1. The job gives each issuing CA its first CRL at once.
     let first = wait_for("a first CRL for both issuing CAs", || async {
-        let rows = stored(&product).await;
+        let rows = stored(&product, &ids).await;
         (rows.len() == 2).then_some(rows)
     })
     .await;
@@ -231,7 +248,7 @@ async fn crls_are_renewed_on_schedule_and_alert_before_they_lapse() {
     // 2. On schedule, each is replaced by the next number once less than renew_before is left,
     //    and not before.
     let renewed = wait_for("a scheduled renewal of both CRLs", || async {
-        let rows = stored(&product).await;
+        let rows = stored(&product, &ids).await;
         let all = ids.iter().all(|id| {
             let before = first.iter().find(|row| &row.0 == id).map(|row| row.1);
             rows.iter().any(|row| &row.0 == id && Some(row.1) > before)
@@ -289,7 +306,7 @@ async fn crls_are_renewed_on_schedule_and_alert_before_they_lapse() {
         .expect("mark the certificate revoked");
     }
     wait_for("the revoked serial in the newer CA's CRL", || async {
-        stored(&product)
+        stored(&product, &ids)
             .await
             .into_iter()
             .find(|row| row.0 == ids[1])
@@ -409,7 +426,7 @@ async fn crls_are_renewed_on_schedule_and_alert_before_they_lapse() {
             })
     })
     .await;
-    let after = stored(&product)
+    let after = stored(&product, &ids)
         .await
         .into_iter()
         .find(|row| row.0 == older)
@@ -420,4 +437,303 @@ async fn crls_are_renewed_on_schedule_and_alert_before_they_lapse() {
         after.1
     );
     drop(service);
+}
+
+// ---- the new CRL right after a revocation (Laysi/trustiot-v2#635) ----
+
+/// How long a reissue may wait for a CA's locks: generous, since in the concurrency test every
+/// reissue and round of the CA waits its turn on a loaded host.
+const LOCK_WAIT: Duration = Duration::from_secs(120);
+
+/// A schedule under which an hour-long CRL is not due: renewed below 30 minutes left.
+fn hour_schedule() -> CrlSchedule {
+    CrlSchedule {
+        check_interval: Duration::from_secs(1),
+        validity: Duration::from_secs(3600),
+        renew_before: Duration::from_secs(1800),
+        alert_before: Duration::from_secs(600),
+    }
+}
+
+/// The certs service's role as its CRL job and its handlers use it.
+fn certs_work(product: &ProductPostgres, connections: u32) -> BackgroundTenantDb {
+    TenantDb::connect_lazy_with_background(
+        product.postgres.options("certs_app", DATABASE),
+        PgPoolOptions::new().max_connections(connections),
+        ServiceIdentity::new(ServiceName::Certs),
+    )
+    .expect("the certs service role's pool")
+    .1
+}
+
+/// Revokes `serial` as the service role does (the column grant of
+/// 0002_workstation_certificates.sql, `revoked_at` from the clock at the update).
+async fn revoke(app: &mut PgConnection, serial: &[u8]) {
+    let updated = sqlx::query(
+        "UPDATE certs.issued_certificates
+         SET revoked_at = clock_timestamp(), revocation_reason = 1
+         WHERE serial = $1 AND revoked_at IS NULL",
+    )
+    .bind(serial)
+    .execute(app)
+    .await
+    .expect("revoke the certificate")
+    .rows_affected();
+    assert_eq!(updated, 1, "one certificate revoked");
+}
+
+/// Records `certificate`, then revokes it.
+async fn record_and_revoke(app: &mut PgConnection, certificate: &issue::IssuedCertificate) {
+    issue::record(app, certificate).await.expect("recorded");
+    revoke(app, &certificate.serial).await;
+}
+
+/// The CRL of the CA `ca_key_id`: number, thisUpdate (Unix seconds), DER.
+async fn only_crl(product: &ProductPostgres, ca_key_id: &str) -> (i64, i64, Vec<u8>) {
+    let rows = stored(product, &[ca_key_id.to_owned()]).await;
+    assert_eq!(rows.len(), 1, "a CRL of {ca_key_id}");
+    let (_, number, _, this_update, der) = rows.into_iter().next().expect("a CRL");
+    (number, this_update, der)
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_revocation_gets_a_new_crl_at_once_and_the_job_catches_up_on_one_it_missed() {
+    let Some(product) = product_postgres(&["certs_app"]).await else {
+        return;
+    };
+    let ca = TestCa::new(&[1]);
+    let authority = ca.authority();
+    let issuing = Arc::clone(authority.current(now()).expect("an issuing CA"));
+    let issuing_der = ca.issuing_ders().remove(0);
+    let db = certs_work(&product, 2);
+    let schedule = hour_schedule();
+    let start = now();
+
+    // The first CRL, then nothing is due.
+    let renewed = crl::refresh(&db, &authority, &schedule, start)
+        .await
+        .expect("a round");
+    assert_eq!(renewed, [issuing.key_id().to_owned()]);
+    assert!(
+        crl::refresh(&db, &authority, &schedule, start)
+            .await
+            .expect("a round")
+            .is_empty(),
+        "an hour-long CRL with no revocation is not renewed"
+    );
+    assert_eq!(only_crl(&product, issuing.key_id()).await.0, 1);
+
+    // A revocation, then the new CRL at once: the next number, listing it, with the schedule's
+    // thisUpdate and lifetime, although the current CRL is far from renew_before.
+    let mut app = product.postgres.connect("certs_app", DATABASE).await;
+    let first = issue_for(&issuing, "gw-635-first");
+    record_and_revoke(&mut app, &first).await;
+    let at = now();
+    let reissued = crl::reissue(&db, &authority, issuing.key_id(), &schedule, at, LOCK_WAIT)
+        .await
+        .expect("a new CRL");
+    assert_eq!(
+        reissued,
+        Reissued::Issued {
+            crl_number: 2,
+            revoked: 1
+        }
+    );
+    let (number, this_update, der) = only_crl(&product, issuing.key_id()).await;
+    assert_eq!(number, 2);
+    assert_eq!(this_update, at - CLOCK_SKEW_SECS);
+    assert_eq!(listed(&der), std::slice::from_ref(&first.serial));
+    let (number, lifetime) = check_crl(&der, &issuing_der);
+    assert_eq!((number.as_str(), lifetime), ("2", CLOCK_SKEW_SECS + 3600));
+    println!(
+        "reissued after the revocation: CRL 2 lists {}",
+        issue::hex(&first.serial)
+    );
+
+    // The job's catch-up: a second revocation whose new CRL never came (its caller failed). The
+    // current CRL is not due, yet the next round renews it, because the revocation is newer
+    // than its thisUpdate, and the CRL lists both.
+    let second = issue_for(&issuing, "gw-635-second");
+    record_and_revoke(&mut app, &second).await;
+    let round = now();
+    let renewed = crl::refresh(&db, &authority, &schedule, round)
+        .await
+        .expect("a round");
+    assert_eq!(renewed, [issuing.key_id().to_owned()], "caught up");
+    let (number, _, der) = only_crl(&product, issuing.key_id()).await;
+    assert_eq!(number, 3);
+    let mut expected = vec![first.serial.clone(), second.serial.clone()];
+    expected.sort();
+    assert_eq!(listed(&der), expected);
+    println!("the round after a missed reissue: CRL 3 lists both revocations");
+
+    // While a revocation is newer than the thisUpdate (the round minus the clock skew), a round
+    // renews once more; once thisUpdate has passed every revocation, rounds stop renewing.
+    let later = round + CLOCK_SKEW_SECS + 60;
+    let renewed = crl::refresh(&db, &authority, &schedule, later)
+        .await
+        .expect("a round");
+    assert_eq!(renewed.len(), 1, "the revocation was newer than thisUpdate");
+    for offset in [1, 2] {
+        assert!(
+            crl::refresh(&db, &authority, &schedule, later + offset)
+                .await
+                .expect("a round")
+                .is_empty(),
+            "thisUpdate has passed every revocation: not renewed"
+        );
+    }
+    assert_eq!(only_crl(&product, issuing.key_id()).await.0, 4);
+
+    // A key id the authority does not have is refused, and nothing changes.
+    let unknown = "0".repeat(64);
+    let refused = crl::reissue(&db, &authority, &unknown, &schedule, now(), LOCK_WAIT)
+        .await
+        .expect_err("not an issuing CA");
+    assert!(matches!(refused, CrlError::UnknownCa { .. }), "{refused}");
+    assert_eq!(only_crl(&product, issuing.key_id()).await.0, 4);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn reissues_and_rounds_at_once_never_go_back_skip_a_number_or_miss_a_revocation() {
+    const REVOCATIONS: usize = 24;
+    const ROUND_TASKS: usize = 4;
+    const ROUNDS_EACH: usize = 6;
+    let Some(product) = product_postgres(&["certs_app"]).await else {
+        return;
+    };
+    let ca = TestCa::new(&[1]);
+    let authority = Arc::new(ca.authority());
+    let issuing = Arc::clone(authority.current(now()).expect("an issuing CA"));
+    let db = certs_work(&product, 12);
+    // Every round renews every CA: as much contention with the reissues as there can be.
+    let always_due = CrlSchedule {
+        renew_before: Duration::from_secs(3600),
+        ..hour_schedule()
+    };
+    crl::refresh(&db, &authority, &always_due, now())
+        .await
+        .expect("the first CRL");
+    let certificates: Vec<_> = (0..REVOCATIONS)
+        .map(|index| issue_for(&issuing, &format!("gw-635-race-{index}")))
+        .collect();
+    {
+        let mut app = product.postgres.connect("certs_app", DATABASE).await;
+        for certificate in &certificates {
+            issue::record(&mut app, certificate)
+                .await
+                .expect("recorded");
+        }
+    }
+
+    // An observer reads the stored CRL over and over while the work runs.
+    let stop = Arc::new(AtomicBool::new(false));
+    let observer = {
+        let stop = Arc::clone(&stop);
+        let key_id = issuing.key_id().to_owned();
+        let mut admin = product.superuser().await;
+        tokio::spawn(async move {
+            let mut seen: Vec<(i64, Vec<u8>)> = Vec::new();
+            while !stop.load(Ordering::SeqCst) {
+                let row =
+                    sqlx::query("SELECT crl_number, crl FROM certs.crls WHERE ca_key_id = $1")
+                        .bind(&key_id)
+                        .fetch_one(&mut admin)
+                        .await
+                        .expect("read the CRL");
+                seen.push((row.get("crl_number"), row.get("crl")));
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+            seen
+        })
+    };
+    // Each revocation commits on a connection of its own, then reissues; rounds run alongside.
+    let mut revokers = Vec::new();
+    for certificate in certificates.clone() {
+        let (db, authority, schedule) = (db.clone(), Arc::clone(&authority), always_due.clone());
+        let mut app = product.postgres.connect("certs_app", DATABASE).await;
+        let key_id = issuing.key_id().to_owned();
+        revokers.push(tokio::spawn(async move {
+            revoke(&mut app, &certificate.serial).await;
+            let reissued = crl::reissue(&db, &authority, &key_id, &schedule, now(), LOCK_WAIT)
+                .await
+                .expect("a new CRL");
+            let Reissued::Issued { crl_number, .. } = reissued else {
+                panic!("the CA has not expired: {reissued:?}");
+            };
+            (certificate.serial, crl_number)
+        }));
+    }
+    let mut rounds = Vec::new();
+    for _ in 0..ROUND_TASKS {
+        let (db, authority, schedule) = (db.clone(), Arc::clone(&authority), always_due.clone());
+        rounds.push(tokio::spawn(async move {
+            let mut renewed = 0;
+            for _ in 0..ROUNDS_EACH {
+                renewed += crl::refresh(&db, &authority, &schedule, now())
+                    .await
+                    .expect("a round")
+                    .len();
+            }
+            renewed
+        }));
+    }
+    let mut reissued = Vec::new();
+    for revoker in revokers {
+        reissued.push(revoker.await.expect("a revocation task"));
+    }
+    let mut renewed = 0;
+    for round in rounds {
+        renewed += round.await.expect("a round task");
+    }
+    stop.store(true, Ordering::SeqCst);
+    let seen = observer.await.expect("the observer");
+
+    // Every new CRL got a number of its own, one above the last: none was dropped or reused.
+    let (last, _, der) = only_crl(&product, issuing.key_id()).await;
+    let mut numbers: Vec<i64> = reissued.iter().map(|(_, number)| *number).collect();
+    numbers.sort_unstable();
+    numbers.dedup();
+    assert_eq!(numbers.len(), REVOCATIONS, "each reissue its own number");
+    let made = i64::try_from(REVOCATIONS + renewed).expect("a count");
+    assert_eq!(last, 1 + made, "CRL 1, then one number per new CRL");
+    // The number never went back, and every CRL from a reissue's number on lists the
+    // certificate whose revocation that reissue followed.
+    for pair in seen.windows(2) {
+        assert!(
+            pair[0].0 <= pair[1].0,
+            "the number went back: {} then {}",
+            pair[0].0,
+            pair[1].0
+        );
+    }
+    for (number, crl) in &seen {
+        let listed = listed(crl);
+        for (serial, after) in &reissued {
+            if number >= after {
+                assert!(
+                    listed.contains(serial),
+                    "CRL {number} does not list {} although the reissue after its revocation \
+                     made CRL {after}",
+                    issue::hex(serial)
+                );
+            }
+        }
+    }
+    let mut expected: Vec<Vec<u8>> = certificates
+        .iter()
+        .map(|certificate| certificate.serial.clone())
+        .collect();
+    expected.sort();
+    assert_eq!(
+        listed(&der),
+        expected,
+        "the last CRL lists every revocation"
+    );
+    println!(
+        "{REVOCATIONS} reissues and {renewed} renewals by {ROUND_TASKS} concurrent round tasks: \
+         CRL numbers 2..={last} each used once; {} observed CRLs, never going back, none missing \
+         a revocation whose reissue came before it",
+        seen.len()
+    );
 }

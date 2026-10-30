@@ -134,10 +134,14 @@ const RUST_READ_FILES: ReadonlySet<string> = new Set([
   // crates/testkit/src/chart.rs: the Postgres connection budgets that the services' tests
   // (services/*/tests/chart_connections.rs) hold their pools to
   "deploy/chart/templates/_postgres.tpl",
-  // tools/migrate/tests/mqtt_broker.rs and services/certs/tests/broker_certificate.rs run the MQTT
-  // broker's configuration and its gateway listener (include_str!)
+  // tools/migrate/tests/mqtt_broker.rs, services/certs/tests/broker_certificate.rs and
+  // services/certs/tests/dynsec.rs run the MQTT broker's configuration and its gateway listener
+  // (include_str!; broker_certificate.rs only the listener)
   "deploy/chart/files/mosquitto/mosquitto.conf",
   "deploy/chart/files/mosquitto/gateway-listener.conf",
+  // crates/testkit/src/permissions.rs (include_str!): the permission matrix that the services'
+  // tests/permissions.rs hold their declarations to (Laysi/trustiot-v2#584)
+  "docs/architecture/permissions.md",
 ]);
 
 /**

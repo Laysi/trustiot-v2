@@ -10,7 +10,7 @@
 //! | Request | Response |
 //! | --- | --- |
 //! | No valid internal identity token | 401 `unauthenticated` |
-//! | A user who has not picked or joined a tenant | 403 `permission_denied` |
+//! | A user who has not picked or joined a tenant, or whose role there this build does not know | 403 `permission_denied` |
 //! | The tenant's event has not been processed yet | 404 `not_found` |
 //! | The database failed | 503 `unavailable` |
 //! | Otherwise | 200 with [`AssetsTenant`] |
@@ -22,10 +22,10 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use chrono::{DateTime, Utc};
 use contract::events::identity::TenantCreated;
-use contract::{ErrorBody, ErrorCode, TenantId};
+use contract::{ErrorBody, ErrorCode, TenantId, TenantRole};
 use outbox::{Delivery, Handler, HandlerError};
 use serde::{Deserialize, Serialize};
-use service_kit::identity::{IdentityVerifier, UserIdentity};
+use service_kit::identity::{IdentityVerifier, Requirement, UserIdentity};
 use service_kit::tenant::{TenantDb, TenantDbError};
 use sqlx::{Postgres, Transaction};
 use utoipa::ToSchema;
@@ -118,12 +118,15 @@ pub fn routes(verifier: IdentityVerifier, db: TenantDb) -> Router {
     responses(
         (status = 200, description = "The caller's tenant.", body = AssetsTenant),
         (status = 401, description = "No valid session (`unauthenticated`).", body = ErrorBody),
-        (status = 403, description = "The user has not picked or joined a tenant (`permission_denied`).", body = ErrorBody),
+        (status = 403, description = "No tenant or no role in it (`permission_denied`).", body = ErrorBody),
         (status = 404, description = "The service has not processed the tenant's creation yet (`not_found`).", body = ErrorBody),
         (status = 503, description = "The database failed (`unavailable`).", body = ErrorBody),
     )
 )]
 async fn get_tenant(State(state): State<Routes>, user: UserIdentity) -> Response {
+    if let Err(refused) = user.require(Requirement::Tenant(TenantRole::Viewer), "read the tenant") {
+        return refused.into_response();
+    }
     match read_tenant(&state.db, &user).await {
         Ok(Some(tenant)) => ([(CACHE_CONTROL, "no-store")], axum::Json(tenant)).into_response(),
         Ok(None) => error(ErrorCode::NotFound),

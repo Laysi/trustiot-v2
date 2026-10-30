@@ -171,16 +171,96 @@ export function roleSessionsSql(role: string): string {
  */
 export async function checkAssistantLogin(deps: Pick<ApiCheckDeps, "psql" | "sleep" | "now" | "limits">, deployment: string, readyReplicas: number): Promise<string> {
   if (readyReplicas < 1) throw new Error(`${deployment} has no ready replica`);
+  const { sessions, waited } = await waitForSession(deps, ASSISTANT_ROLE);
+  return `${deployment}: ${readyReplicas} ready replica(s); ${ASSISTANT_ROLE} may log in and has ${sessions} session(s) open (after ${Math.round(waited / 1000)} s)`;
+}
+
+/**
+ * Polls psql until `role` may log in and has a session open, for up to ASSISTANT_LOGIN_LIMIT_MS
+ * (`deps.limits.loginMs`); returns the session count and how long it waited, or throws with what
+ * it last saw.
+ */
+async function waitForSession(deps: Pick<ApiCheckDeps, "psql" | "sleep" | "now" | "limits">, role: string): Promise<{ sessions: number; waited: number }> {
   let sessions = 0;
-  const waited = await pollSql(deps, `a session of ${ASSISTANT_ROLE}`, deps.limits?.loginMs ?? ASSISTANT_LOGIN_LIMIT_MS, roleSessionsSql(ASSISTANT_ROLE), (out) => {
+  const waited = await pollSql(deps, `a session of ${role}`, deps.limits?.loginMs ?? ASSISTANT_LOGIN_LIMIT_MS, roleSessionsSql(role), (out) => {
     const row = out.trim();
-    if (row === "") throw new Error(`the role ${ASSISTANT_ROLE} does not exist`);
+    if (row === "") throw new Error(`the role ${role} does not exist`);
     const [login, count] = row.split("|");
     if (login !== "t" && login !== "f") throw new Error(`unexpected psql output ${JSON.stringify(row)}`);
     sessions = Number(count);
     return login === "t" && Number.isInteger(sessions) && sessions > 0;
   });
-  return `${deployment}: ${readyReplicas} ready replica(s); ${ASSISTANT_ROLE} may log in and has ${sessions} session(s) open (after ${Math.round(waited / 1000)} s)`;
+  return { sessions, waited };
+}
+
+/**
+ * ingest's Postgres logins (Laysi/trustiot-v2#642): its service role and its platform role. Its
+ * readiness opens a checked session of each (services/ingest/README.md, 「服務與設定」), so a
+ * ready ingest has a session of both.
+ */
+export const INGEST_ROLES = ["ingest_app", "ingest_platform"] as const;
+/** ingest's ClickHouse account, which the migration Job creates (tools/migrate/src/config.rs, INGEST_ACCOUNT). */
+export const INGEST_ACCOUNT = "trustiot_ingest_writer";
+/** The one role of ingest's account (services/ingest/migrations/clickhouse/0004_access.sql). */
+export const INGEST_ROLE = "trustiot_ingest";
+
+/**
+ * ingest is deployed as the chart means it (Laysi/trustiot-v2#642). `readyReplicas` is what its
+ * Deployment reports: a ready ingest answered SELECT 1 to ClickHouse as its account and holds a
+ * QoS 1 shared subscription on the MQTT broker as service:ingest (its readiness checks). Then each
+ * of INGEST_ROLES may log in and has a session (polled as for the assistant), and its ClickHouse
+ * account has INGEST_ROLE as its only default role and only role, without the right to pass it on;
+ * `clickhouse` runs SQL as the admin with the account's name as the parameter `user`. The
+ * migration Job checks the role's grants itself and stops on a difference. Returns the report line.
+ */
+export async function checkIngest(
+  deps: Pick<ApiCheckDeps, "psql" | "sleep" | "now" | "limits"> & { clickhouse: (sql: string, user: string) => Promise<string> },
+  deployment: string,
+  readyReplicas: number,
+): Promise<string> {
+  if (readyReplicas < 1) throw new Error(`${deployment} has no ready replica`);
+  const logins: string[] = [];
+  let waited = 0;
+  for (const role of INGEST_ROLES) {
+    const found = await waitForSession(deps, role);
+    logins.push(`${role} has ${found.sessions}`);
+    waited += found.waited;
+  }
+  const problems = accountProblems(INGEST_ACCOUNT, INGEST_ROLE, await deps.clickhouse(ACCOUNT_USER_SQL, INGEST_ACCOUNT), await deps.clickhouse(ACCOUNT_ROLES_SQL, INGEST_ACCOUNT));
+  if (problems.length > 0) throw new Error(problems.join("; "));
+  return `${deployment}: ${readyReplicas} ready replica(s), so it reached ClickHouse and the MQTT broker; ${logins.join(" and ")} session(s) open (after ${Math.round(waited / 1000)} s); ClickHouse user ${INGEST_ACCOUNT} has the default role ${INGEST_ROLE} only, granted without admin option`;
+}
+
+/**
+ * gateway-ops' Postgres logins (Laysi/trustiot-v2#721): its service role and its platform role. Its
+ * readiness opens a checked session of each (services/gateway-ops/README.md, 「服務與設定」), so a
+ * ready gateway-ops has a session of both.
+ */
+export const GATEWAY_OPS_ROLES = ["gateway_ops_app", "gateway_ops_platform"] as const;
+
+/**
+ * gateway-ops is deployed as the chart means it (Laysi/trustiot-v2#721). `readyReplicas` is what
+ * its Deployment reports: a ready gateway-ops has checked sessions of both Postgres roles, the
+ * migrations it expects, and a broker connection as `service:gateway-ops` whose shared
+ * subscription to the configuration reports was granted at QoS 1 (its readiness checks,
+ * services/gateway-ops/README.md, Laysi/trustiot-v2#720), so its readiness proves the broker
+ * account the chart hands it, as ingest's does. Then each of GATEWAY_OPS_ROLES may log in and has
+ * a session (polled as for the assistant). Returns the report line.
+ */
+export async function checkGatewayOps(
+  deps: Pick<ApiCheckDeps, "psql" | "sleep" | "now" | "limits">,
+  deployment: string,
+  readyReplicas: number,
+): Promise<string> {
+  if (readyReplicas < 1) throw new Error(`${deployment} has no ready replica`);
+  const logins: string[] = [];
+  let waited = 0;
+  for (const role of GATEWAY_OPS_ROLES) {
+    const found = await waitForSession(deps, role);
+    logins.push(`${role} has ${found.sessions}`);
+    waited += found.waited;
+  }
+  return `${deployment}: ${readyReplicas} ready replica(s), so it reached the MQTT broker as service:gateway-ops; ${logins.join(" and ")} session(s) open (after ${Math.round(waited / 1000)} s)`;
 }
 
 /**
@@ -195,7 +275,12 @@ export async function checkAssistantLogin(deps: Pick<ApiCheckDeps, "psql" | "sle
  * certs service from its image (CERTS_SMOKE_ENV; its test root CA comes in a values file of its
  * own, certs.ts), and the AI assistant from its image (ASSISTANT_SMOKE_ENV, Laysi/trustiot-v2#592),
  * which reaches the AI gateway, telemetry-query and assets through the chart's default
- * mesh.calls.assistant and logs in to Postgres with the password the migration Job generates.
+ * mesh.calls.assistant and logs in to Postgres with the password the migration Job generates, and
+ * ingest from its image (Laysi/trustiot-v2#642), which logs in on the MQTT broker that smoke.yaml
+ * turns on with the account the chart hands it, and to Postgres and ClickHouse with the passwords
+ * the migration Job generates (it needs no value besides its image), and gateway-ops from its image
+ * (Laysi/trustiot-v2#721), which logs in on the same broker with its own account and to Postgres
+ * with the passwords the migration Job generates (no value besides its image either).
  */
 export function apiValues(shape: string, routes: readonly IngressRoute[]): Record<string, unknown> {
   const image = (name: string) => {
@@ -216,6 +301,8 @@ export function apiValues(shape: string, routes: readonly IngressRoute[]): Recor
       "telemetry-query": { enabled: true, image: image("telemetry-query") },
       certs: { enabled: true, image: image("certs"), env: CERTS_SMOKE_ENV.map((entry) => ({ ...entry })) },
       assistant: { enabled: true, image: image("assistant"), env: ASSISTANT_SMOKE_ENV.map((entry) => ({ ...entry })) },
+      ingest: { enabled: true, image: image("ingest") },
+      "gateway-ops": { enabled: true, image: image("gateway-ops") },
     },
     ai: AI_GATEWAY_SMOKE,
     ingress: {
@@ -646,15 +733,24 @@ export const ACCOUNT_ROLES_SQL =
  * role only, without the right to pass it on. Empty when they agree.
  */
 export function tenantAccountProblems(account: string, user: string, roles: string): string[] {
+  return accountProblems(account, TENANT_READER_ROLE, user, roles);
+}
+
+/**
+ * What differs between an account that holds `role` alone, as its only default role and without
+ * the right to pass it on, and what ClickHouse answered to ACCOUNT_USER_SQL (`user`) and
+ * ACCOUNT_ROLES_SQL (`roles`). Empty when they agree.
+ */
+export function accountProblems(account: string, role: string, user: string, roles: string): string[] {
   const problems: string[] = [];
   const userRows = user.split("\n").filter((line) => line !== "");
   const roleRows = roles.split("\n").filter((line) => line !== "");
   if (userRows.length === 0) problems.push(`ClickHouse has no user ${account}`);
-  else if (userRows.length !== 1 || userRows[0] !== `${account}\t${TENANT_READER_ROLE}`) {
-    problems.push(`ClickHouse user ${account} is ${JSON.stringify(userRows)}, expected the default role ${TENANT_READER_ROLE} only`);
+  else if (userRows.length !== 1 || userRows[0] !== `${account}\t${role}`) {
+    problems.push(`ClickHouse user ${account} is ${JSON.stringify(userRows)}, expected the default role ${role} only`);
   }
-  if (userRows.length > 0 && (roleRows.length !== 1 || roleRows[0] !== `${TENANT_READER_ROLE}\t0`)) {
-    problems.push(`ClickHouse user ${account} holds the roles ${JSON.stringify(roleRows)}, expected ${TENANT_READER_ROLE} without admin option only`);
+  if (userRows.length > 0 && (roleRows.length !== 1 || roleRows[0] !== `${role}\t0`)) {
+    problems.push(`ClickHouse user ${account} holds the roles ${JSON.stringify(roleRows)}, expected ${role} without admin option only`);
   }
   return problems;
 }
@@ -814,6 +910,25 @@ export async function ingressAccess(ctx: ApiCheckContext, namespace: string, obj
 }
 
 /**
+ * SQL as the bundled ClickHouse's admin in `pod` (clickhousePodOf): the client reads the password
+ * from the file the init container wrote (CLICKHOUSE_PASSWORD_FILE), so it never leaves the pod.
+ * The SQL and the account name (the parameter `user`) are arguments; the answer holds names only
+ * and stays out of the log.
+ */
+export function clickhouseAccess(ctx: ApiCheckContext, namespace: string, pod: string): (sql: string, user: string) => Promise<string> {
+  const env = { KUBECONFIG: ctx.kubeconfig };
+  return async (sql, user) => {
+    const script = 'exec clickhouse-client --user "$CLICKHOUSE_USER" --password "$(cat "$CLICKHOUSE_PASSWORD_FILE")" --param_user="$1" --query "$2"';
+    const result = await run(
+      ctx.log,
+      [ctx.kubectl, "exec", "--namespace", namespace, pod, "-c", "clickhouse", "--", "bash", "-c", script, "clickhouse-query", user, sql],
+      { env, timeoutMs: 60_000, quiet: true },
+    );
+    return result.stdout;
+  };
+}
+
+/**
  * Runs checkTenantApi, checkTelemetryApi, checkTenantAccount and checkIngressEdges against the
  * release in `namespace`: psql through `kubectl exec` in the CloudNativePG primary, ClickHouse
  * queries through `kubectl exec` in the bundled ClickHouse's pod, requests through `kubectl
@@ -829,7 +944,6 @@ export async function runApiCheck(
   name: string,
 ): Promise<{ detail: string; platformAdmin: string }> {
   const { appHost, listener, psql, gateway } = await ingressAccess(ctx, namespace, objects, ca);
-  const env = { KUBECONFIG: ctx.kubeconfig };
   const assets = servicePortOf(objects, "assets", "http");
   const clickhousePod = clickhousePodOf(objects);
   const identity = servicePortOf(objects, "identity", "http");
@@ -845,18 +959,7 @@ export async function runApiCheck(
   const cronJob = bootstrap.cronJob.name;
   const bootstrapAdmin = (address: string) => runBootstrap(ctx, namespace, cronJob, address);
 
-  // SQL as the bundled ClickHouse's admin, in its pod: the client reads the password from the
-  // file the init container wrote (CLICKHOUSE_PASSWORD_FILE), so it never leaves the pod. The SQL
-  // and the account name are arguments; the answer holds names only and stays out of the log.
-  const clickhouse = async (sql: string, user: string): Promise<string> => {
-    const script = 'exec clickhouse-client --user "$CLICKHOUSE_USER" --password "$(cat "$CLICKHOUSE_PASSWORD_FILE")" --param_user="$1" --query "$2"';
-    const result = await run(
-      ctx.log,
-      [ctx.kubectl, "exec", "--namespace", namespace, clickhousePod, "-c", "clickhouse", "--", "bash", "-c", script, "clickhouse-query", user, sql],
-      { env, timeoutMs: 60_000, quiet: true },
-    );
-    return result.stdout;
-  };
+  const clickhouse = clickhouseAccess(ctx, namespace, clickhousePod);
 
   // The assets service without the ingress: kubectl port-forward enters its pod, so the request
   // passes neither the gateway nor the mesh's policies, only the service's own token check.

@@ -59,10 +59,12 @@ export const IMAGE_CACHE_VERSION = "v1";
  * calls through the ingress and whose tenant account it looks up in ClickHouse
  * (Laysi/trustiot-v2#539), the certs service, whose CA the smoke sets up with a test root
  * (Laysi/trustiot-v2#517), and the AI assistant, which the smoke waits for until it is ready, that
- * is logged in to Postgres as assistant_app (Laysi/trustiot-v2#592). They share one cache entry,
- * since every Rust change reaches all of them anyway (each key covers the whole workspace).
+ * is logged in to Postgres as assistant_app (Laysi/trustiot-v2#592), ingest
+ * (Laysi/trustiot-v2#642) and gateway-ops (Laysi/trustiot-v2#721), which the smoke waits for until
+ * they are ready on the MQTT broker and logged in to Postgres. They share one cache entry, since
+ * every Rust change reaches all of them anyway (each key covers the whole workspace).
  */
-export const NIGHTLY_IMAGES = ["migrate", "identity", "assets", "ai-gateway", "telemetry-query", "certs", "assistant"] as const;
+export const NIGHTLY_IMAGES = ["migrate", "identity", "assets", "ai-gateway", "telemetry-query", "certs", "assistant", "ingest", "gateway-ops"] as const;
 
 /**
  * Programs the nightly runs on the runner itself, by the image whose package builds them. An

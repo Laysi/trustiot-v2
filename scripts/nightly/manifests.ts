@@ -364,13 +364,15 @@ const PASSWORD_BINDINGS: ReadonlySet<string> = new Set([
   "TRUSTIOT__PASSWORDS__POSTGRES",
   "TRUSTIOT__PASSWORDS__CLICKHOUSE_COLLECTOR",
   "TRUSTIOT__PASSWORDS__CLICKHOUSE_TELEMETRY_QUERY",
+  "TRUSTIOT__PASSWORDS__CLICKHOUSE_INGEST",
 ]);
 
 /**
  * The Secrets the migration Job fills with the passwords it generates (Laysi/trustiot-v2#60), each
  * with the keys it writes, from the Job's TRUSTIOT__PASSWORDS__POSTGRES (`role=Secret,...`),
- * TRUSTIOT__PASSWORDS__CLICKHOUSE_COLLECTOR and TRUSTIOT__PASSWORDS__CLICKHOUSE_TELEMETRY_QUERY
- * (`account=Secret`, Laysi/trustiot-v2#539); and the bundled ClickHouse's admin
+ * TRUSTIOT__PASSWORDS__CLICKHOUSE_COLLECTOR, TRUSTIOT__PASSWORDS__CLICKHOUSE_TELEMETRY_QUERY and
+ * TRUSTIOT__PASSWORDS__CLICKHOUSE_INGEST (`account=Secret`, Laysi/trustiot-v2#539,
+ * Laysi/trustiot-v2#642); and the bundled ClickHouse's admin
  * password Secret, which the ClickHouse pod's init container fills and the Job reads
  * (Laysi/trustiot-v2#403), from TRUSTIOT__CLICKHOUSE__PASSWORD_SECRET, keyed by the account in
  * TRUSTIOT__CLICKHOUSE__USERNAME.

@@ -12,6 +12,8 @@
 | `health` | 在線狀態與 LWT `Status`、心跳 `Heartbeat`（運作指標與設備讀取統計） |
 | `live` | 即時訂閱控制 `LiveControl`、即時值 `LiveSamples` |
 | `logs` | 日誌上傳 `LogBatch`、拉取請求 `LogRequest`、拉取回應 `LogDump` |
+| `renewal` | HTTPS 憑證換發的請求與回應（`RenewalRequest`、`Challenge`、`RenewedCertificate`）、要簽的內容 `signing_input` 與格式檢查（見「憑證換發」） |
+| `provisioning` | 出廠佈建報告 `ProvisioningReport`：agent 的 `provision` 子命令印給產線工作站的 JSON（見「出廠佈建報告」） |
 
 測試：`cargo test -p protocol`。閘道器目標：先執行一次 `rustup target add aarch64-unknown-linux-gnu`，再 `cargo build --locked --target aarch64-unknown-linux-gnu -p protocol`；CI 以同樣方式在 job 中加入該目標（Laysi/trustiot-v2#67），不放進 `rust-toolchain.toml`，免得每個只做雲端服務的開發者與 CI job 都下載 aarch64 的標準函式庫。
 
@@ -108,6 +110,8 @@ Mosquitto 以 `use_identity_as_username` 把憑證 CN 當成 username，dynsec �
 | `publishClientReceive` | `trustiot/v1/gw/%u/down/#` | 是 |
 | `unsubscribePattern` | `trustiot/v1/gw/%u/down/#` | 是 |
 
+角色另外設定 `allowwildcardsubs: false`（`GATEWAY_ALLOW_WILDCARD_SUBS`，Laysi/trustiot-v2#637；Mosquitto 在沒有這個欄位時預設允許），隨 `createRole`／`modifyRole` 一起送：閘道器的 SUBSCRIBE 只要帶 `+` 或 `#`，即使落在上表 `subscribePattern` 的範圍內（`down/#`、`down/+`），broker 也回 SUBACK 0x87；閘道器只能逐一訂閱自己的每個 `down` channel（`gateway_subscriptions`，閘道器 agent 本來就這樣訂閱）。`subscribePattern` 的 `down/#` 不變：它界定可訂閱的範圍，不是授權閘道器用萬用字元。服務角色不受影響，服務要以 `+` 接收所有閘道器的頻道。已部署的 broker 由 chart 的 init container 在下次重啟時換上這個設定；不經 init container 管理的 broker 要以 `modifyRole` 帶 `allowwildcardsubs: false` 與 `acls`，再以 `getRole` 確認兩者。
+
 發布規則是每個 `up` channel 一條精確 topic（`gateway_channel_acl_topic`），不用萬用字元：`up/#` 會讓閘道器在自己的 `up/` 底下任意新增 topic，並在每個 topic 留下一則 retained 訊息，數量沒有上限（Laysi/trustiot-v2#268，驗證報告 [2026-10-11-50-verify](../../docs/test-reports/2026-10-11-50-verify.md) 的 F3）。broker 上已註冊的角色不會跟著程式更新：新增 `up` channel，或角色是以修正前的 `up/#` 規則建立的（2026-10-11 時 Laysi/trustiot-v2#82 與 Laysi/trustiot-v2#84 都還沒有實作，broker 上沒有這樣的角色），都要以 `modifyRole` 帶 `acls: gateway_role_acls()` 換掉整份 ACL，再以 `getRole` 確認；`addRoleACL` 只會加在舊規則旁邊，`up/#` 仍然有效。換掉舊規則後，還要以空 payload 的 retained 訊息清掉 `up/` 下非協定 topic 殘留的 retained 訊息。這個同步流程由 Laysi/trustiot-v2#82 實作。
 
 其餘一律依 broker 的預設拒絕。結果：閘道器只能發布到自己 `up/` 下的協定 channel（發到別台的 topic，或自己 `up/` 下不是協定 channel 的 topic，都得到 PUBACK 0x87）、只能訂閱自己的 `down/`；CN 含 `+`、`#`、`/` 的憑證 Mosquitto 不會代入 `%u`，什麼都讀不到，CA 也不會簽出這種 CN（`GatewayId` 的字元規則）。LWT 發布到 `up/status`，同樣在允許範圍內。雲端服務的身分、角色與 broker 的預設存取設定由 Laysi/trustiot-v2#84 決定；dynsec 的註冊與撤銷流程由 Laysi/trustiot-v2#82 實作。
@@ -119,7 +123,7 @@ Mosquitto 以 `use_identity_as_username` 把憑證 CN 當成 username，dynsec �
 - 實際的界限來自精確規則：同一個 topic 的新 retained 訊息會取代舊的，所以一台閘道器最多在 7 個 `up` channel 各留一則 retained 訊息，每則不超過 broker 的 maximum packet size。broker 層級的上限（maximum packet size、每個 client 的佇列與 retained 的數量和大小）由 Laysi/trustiot-v2#84 設定。
 - 雲端服務訂閱時，broker 會重播 retained 訊息（retain 旗標為 1）。在 retain 為否的 channel 上收到 retain 旗標為 1 的訊息，表示閘道器違反協定：丟棄並記錄，不能當成新資料處理，否則每次重新訂閱都會再收一次同一則舊訊息。
 
-`tests/broker.rs` 以真的 Mosquitto 2.1.2（與 `scripts/lib/stack.ts` 相同 digest 的容器，podman 或 docker；沒有容器執行環境時略過，設了 `CI` 則失敗）驗證：角色以 `gateway_role_acls()` 的 JSON 建立；每個 `up` channel 依 `Channel::delivery` 送達雲端，`up/status` 的 LWT 在斷線時送出；每個 `down` channel 送達閘道器；`up/` 下不是協定 channel 的 topic 得到 PUBACK 0x87、雲端收不到、broker 不留 retained，設在這種 topic 的 LWT 也被丟掉；修正前的 `up/#` 規則讓同一項檢查失敗，以 `modifyRole` 換掉 ACL 並清掉殘留的 retained 後通過；dynsec 確實不擋允許 topic 上的 retain 旗標。
+`tests/broker.rs` 以真的 Mosquitto 2.1.2（與 `scripts/lib/stack.ts` 相同 digest 的容器，podman 或 docker；沒有容器執行環境時略過，設了 `CI` 則失敗）驗證：角色以 `gateway_role_acls()` 與 `allowwildcardsubs: false` 的 JSON 建立，`getRole` 讀回兩者；每個 `up` channel 依 `Channel::delivery` 送達雲端，`up/status` 的 LWT 在斷線時送出；閘道器訂閱 `down/#`、`down/+` 得到 SUBACK 0x87，逐一訂閱每個 `down` channel 成功並收到訊息；`up/` 下不是協定 channel 的 topic 得到 PUBACK 0x87、雲端收不到、broker 不留 retained，設在這種 topic 的 LWT 也被丟掉；修正前的 `up/#` 規則讓同一項檢查失敗，以 `modifyRole` 換掉 ACL 並清掉殘留的 retained 後通過；dynsec 確實不擋允許 topic 上的 retain 旗標。
 
 ## 共同欄位與版本
 
@@ -144,11 +148,11 @@ Mosquitto 以 `use_identity_as_username` 把憑證 CN 當成 username，dynsec �
 
 規則：
 
-1. 序號在批次形成時編定，從 1 開始，同一串流內連續遞增、永不重複使用；序號要和緩衝一起寫入磁碟。閘道器無法得知下一個序號時（例如重裝），一律換新的串流 ID。
+1. 序號在批次形成時編定，從 1 開始，同一串流內連續遞增、永不重複使用；序號要和緩衝一起寫入磁碟。閘道器無法得知下一個序號時（例如重裝），一律換新的串流 ID。agent 每次行程啟動都換新的串流 ID，序號只存在記憶體，磁碟上的批次帶著原本的串流與序號重送（Laysi/trustiot-v2#90，[agent README](../../edge/agent/README.md)「串流與序號」）。
 2. 同一串流一次只送一批，收到確認才送下一批；確認逾時就原封不動重送同一批。
 3. 雲端以「topic 的閘道器 + 串流 ID」為單位記錄已提交的最高序號。只靠串流 ID 選高水位是錯的：閘道器可以自己取任何串流 ID。
 4. 雲端在整批落盤並寫入批次完成紀錄後才回 `committed`；序號不高於高水位的批次直接回 `duplicate`；永遠不可能接受的批次（解碼失敗、驗證失敗）回 `rejected`，雲端可用 `TelemetryBatch::peek_header` 從壞掉的 payload 取出串流與序號來回應。
-5. 緩衝的最長保存時間是 `telemetry::BUFFER_MAX_AGE_DAYS`（30 天，Laysi/trustiot-v2#92）：一批從形成起超過 30 天還沒收到確認，閘道器就丟棄它並記錄，丟棄的筆數進心跳的 `buffer`。雲端的原始資料保存期限一定比它長（至少 33 天，migration Job 拒絕更短的設定），因為串流的高水位存在批次完成紀錄裡、與原始資料一起過期：雲端已提交、但確認遺失的批次，必須在它的完成紀錄過期前重送，否則會被寫入兩次。閘道器以哪個時鐘量測批次的年齡由 Laysi/trustiot-v2#90 決定，條件是時鐘往回調整不會讓批次留得比 30 天久。理由與數字的推導見 [資料保存期限](../../docs/architecture/data-retention.md)。
+5. 緩衝的最長保存時間是 `telemetry::BUFFER_MAX_AGE_DAYS`（30 天，Laysi/trustiot-v2#92）：一批從形成起超過 30 天還沒收到確認，閘道器就丟棄它並記錄，丟棄的筆數進心跳的 `buffer`。雲端的原始資料保存期限一定比它長（至少 33 天，migration Job 拒絕更短的設定），因為串流的高水位存在批次完成紀錄裡、與原始資料一起過期：雲端已提交、但確認遺失的批次，必須在它的完成紀錄過期前重送，否則會被寫入兩次。閘道器量年齡的「現在」是系統時鐘與「啟動時的下限加上啟動以來的單調時間」兩者中較大的（下限是啟動時的系統時鐘與磁碟上最新一批的形成時間中較大的），所以時鐘往回調整不會讓批次留得比 30 天久（Laysi/trustiot-v2#90，規則與已知的限制見 [agent README](../../edge/agent/README.md)「時鐘」）。理由與數字的推導見 [資料保存期限](../../docs/architecture/data-retention.md)。
 
 `down/telemetry-ack` 的 `TelemetryAck`：`v`、`stream`、`seq`、`server_time`（雲端時鐘，閘道器可用來察覺自己的時鐘錯誤）與 `outcome`。`outcome` 是以 `status` 區分的 map：
 
@@ -237,6 +241,78 @@ Mosquitto 以 `use_identity_as_username` 把憑證 CN 當成 username，dynsec �
 - `up/log-dump` 的 `LogDump`：`request`、`part`（從 0 起）、`last`、`coverage`（`complete`、`partial`、`unavailable`：記憶體環狀緩衝是否還涵蓋整個時段）、`available_from`（緩衝中最舊一筆的時間）、`entries[]`。以 `LogDump::split` 拆成編號連續的多則，至少一則，雲端即使沒有符合的紀錄也知道涵蓋範圍。
 
 每筆 `LogEntry`：`at`、`level`（`error`、`warn`、`info`、`debug`、`trace`）、`target`（≤ 128 bytes）、`message`（≤ 4096 bytes）、`fields`（最多 32 個，名稱 ≤ 64 bytes、值 ≤ 1024 bytes）。日誌不得含個資（Laysi/trustiot#110）。
+
+## 憑證換發（HTTPS；決策 12，清單 D2）
+
+`renewal` 模組（Laysi/trustiot-v2#81）。換發不走 MQTT：憑證過期或被撤銷時 mTLS 連不上 broker，所以閘道器經 443 的 HTTPS 換發，以 TPM 金鑰證明自己。格式是 JSON（雙方各自以 `serde_json` 編解碼），本 crate 只定義型別、上限、驗證函式與要簽的內容，閘道器與雲端組出一樣的位元組。雲端的流程、錯誤表、限流與事件在 [services/certs](../../services/certs/README.md) 的「換發」。
+
+兩步都是 `POST RENEWAL_PATH`（`/certs/renew`，gateway 主機上、Exact 比對的公開路徑，chart 的 `ingress.publicPaths.certRenewal`），`Content-Type: application/json`，本文最多 `MAX_REQUEST_BYTES`（1 KiB），以本文的 `step` 區分（`RenewalRequest`）：
+
+| 步驟 | 請求 | 成功 |
+| --- | --- | --- |
+| 取挑戰 | `{"step": "challenge", "hardware_id": "tg-0001"}`（`ChallengeRequest`） | 200 `Challenge`：`{"hardware_id": "tg-0001", "purpose": "cert-renewal", "nonce": "<43 個字元>", "expires": 1761000030}` |
+| 兌換 | `{"step": "renew", "hardware_id": "tg-0001", "nonce": "<挑戰的 nonce>", "signature": "<DER 簽章的 base64>"}`（`RenewRequest`） | 201 `RenewedCertificate`：`hardware_id`、`serial`、`ca_key_id`、`not_before`、`not_after`（RFC 3339，UTC）、`certificate`、`certificate_chain`、`root_certificate`（PEM），欄位與格式和出廠登錄的回應（`contract::certs::GatewayRegistration`）相同 |
+
+- **nonce**：`NONCE_BYTES`（32）個隨機位元組，base64url、不補 `=`，剛好 `NONCE_LEN`（43）個字元；最後一個字元多出的兩個位元必須是 0，所以同一個 nonce 只有一種寫法（`is_nonce`）。
+- **用途**：`Purpose`，目前只有 `cert-renewal`；之後的用途（例如改綁）各有自己的值，一個用途的挑戰不能兌換另一個用途。
+- **到期**：`expires` 是雲端時鐘的 Unix 秒，取挑戰後 `CHALLENGE_TTL_SECS`（30 秒）。閘道器不必比對自己的時鐘，拿到就簽、就兌換。
+- **要簽的內容**（`signing_input`、`Challenge::signing_input`）由閘道器以挑戰的四個欄位自己組，不簽伺服器給的任意位元組；雲端兌換時只用自己存下的欄位重組，不用請求裡的值：
+
+  ```text
+  trustiot-v2 challenge v1\n
+  device=<硬體 ID>\n
+  purpose=<用途>\n
+  nonce=<nonce>\n
+  expires=<Unix 秒，十進位>\n
+  ```
+
+  第一行 `SIGNING_INPUT_PREFIX` 是協定與版本。閘道器的 mTLS 與換發用同一把 TPM 金鑰，這個前綴讓簽的內容不可能與 TLS 的簽章內容相同（TLS 1.3 的 CertificateVerify 以 64 個 0x20 開頭，TLS 1.2 簽的握手訊息以 0x01 開頭；[TPM 可行性驗證](../../docs/feasibility/2026-10-12-tpm-poc.md)的「換發挑戰簽章」）。欄位都不可能含換行：硬體 ID 的規則不允許、用途固定、nonce 是 base64url、到期是數字。改格式就換掉第一行的版本。
+- **簽章**：ECDSA P-256、SHA-256（TPM 簽的是內容的 SHA-256 摘要），DER 的 `ECDSA-Sig-Value`（最長 `MAX_SIGNATURE_BYTES`，72 位元組），標準 base64、補 `=`（最長 `MAX_SIGNATURE_LEN`，96 個字元；`is_signature_text` 只檢查格式，驗章在雲端）。不用 r‖s 的 64 位元組格式，以便與 CSR、TLS 共用同一套程式庫。
+- **拒絕**：一律是 M1 的錯誤本文（`contract::ErrorBody`）。閘道器只需要依 HTTP 狀態處理：429 與 503 帶 `Retry-After`（秒），等它指定的時間再從取挑戰開始；其他拒絕（400、401、403、409、410、422）以退避重試，也從取挑戰開始。取挑戰的回應不透露硬體 ID 是否登錄、綁定或除役，拒絕只在兌換時發生。
+- **相容性**：雙方都忽略不認得的欄位（與 MQTT payload 不認得的 map 鍵相同），所以較新的 agent 多送的欄位不會讓較舊的雲端拒絕換發；不認得的 `step` 或用途則拒絕。要簽的內容改變時換新的版本前綴。
+
+## 出廠佈建報告（JSON；決策 12）
+
+`provisioning` 模組（Laysi/trustiot-v2#613）。讀取端必須做的檢查見下面的「讀取端的責任」。產線工作站經 ssh 在閘道器上執行 `trustiot-agent provision`（[edge/agent](../../edge/agent/README.md)「出廠佈建」），讀它在 stdout 印的一個 JSON 物件，再自己呼叫登錄 API；工作站的憑證不到閘道器上，閘道器也不呼叫 API。報告只有公開資料。格式是 JSON（雙方各自以 `serde_json` 編解碼），本 crate 只定義型別。
+
+```json
+{
+  "version": 1,
+  "hardware_id": "tg-0001",
+  "key_handle": "0x81000100",
+  "key": {
+    "state": "present",
+    "created": true,
+    "public_key": "-----BEGIN PUBLIC KEY-----\n...",
+    "certificate_request": "-----BEGIN CERTIFICATE REQUEST-----\n..."
+  },
+  "endorsement_key": "-----BEGIN PUBLIC KEY-----\n...",
+  "ek_certificate": { "state": "for_this_key", "certificate": "-----BEGIN CERTIFICATE-----\n..." }
+}
+```
+
+| 欄位 | 內容 |
+| --- | --- |
+| `version` | `REPORT_VERSION`（1）。讀取時其他版本一律拒絕（`ReportVersion`） |
+| `hardware_id` | 子命令收到的硬體 ID（`GatewayId`），也是 CSR 的 CN |
+| `key_handle` | 金鑰的持久 handle（`KeyHandle`）：`0x` 加 8 個小寫十六進位數字，必須在 `0x81000000`–`0x81ffffff` |
+| `key` | `GatewayKey`，以 `state` 區分。`present`：`created`（這次是否新建）、`public_key`（金鑰的 SubjectPublicKeyInfo，PEM `PUBLIC KEY`，ECDSA P-256）、`certificate_request`（PKCS #10 CSR，PEM `CERTIFICATE REQUEST`：主體 `CN=<hardware_id>`、金鑰的公鑰、由 TPM 內的金鑰以 ecdsa-with-SHA256 簽章，就是登錄 API 的 `certificate_request`）。`absent`：handle 是空的，只有 `--inspect` 會回報 |
+| `endorsement_key` | TPM 的 ECC NIST P-256 背書金鑰，PEM `PUBLIC KEY`，就是登錄 API 的 `endorsement_key` |
+| `ek_certificate` | `EkCertificate`，以 `state` 區分。`for_this_key`：`certificate`（PEM `CERTIFICATE`）的 SubjectPublicKeyInfo 與 `endorsement_key` 逐 byte 相同；`absent`：TPM 沒有 EK 憑證 |
+
+- **不說「已驗證」**：欄位名稱與值都不用 verified、trusted 這類字眼。`for_this_key` 只代表 EK 憑證的公鑰是這把 EK，不驗證憑證的簽章與到製造商根的憑證鏈，不證明 TPM 是真品（信任模型見 [services/certs](../../services/certs/README.md#規則與取捨)「EK 只記錄、比對，不驗證」）。
+- **相容性**：與「憑證換發」相同，不認得的欄位略過，不認得的 `state` 或其他 `version` 拒絕。讀取端必須理解的變更提高 `REPORT_VERSION`。
+- **大小**：agent 印出的報告（含結尾換行）不超過 `MAX_REPORT_BYTES`（16 KiB，與登錄 API 的 body 上限相同）；EK 憑證最大（4096 bytes DER）、硬體 ID 最長時約是它的一半。
+
+### 讀取端的責任
+
+登錄 API 不比對 CSR 的主體：憑證的 CN 取自請求 body 的 `hardware_id`。所以讀取端（產線工作站）只有在下列各項都成立時才採用報告，否則拒絕：
+
+1. **先看結束碼**：結束碼不是 0 時丟掉 stdout，不解析。寫到一半失敗時 stdout 可能留下不完整的 JSON。
+2. **結束碼 0 不等於有報告**：`provision --help` 也以 0 結束，印的是說明。成功的定義是結束碼 0，而且 stdout 能解析成 `ProvisioningReport`。
+3. **限制讀取量**：stdout 最多讀 `MAX_REPORT_BYTES`（16 KiB），超過就拒絕，不截斷後解析。
+4. **硬體 ID 用自己的**：讀取端一律使用自己傳給 `--hardware-id` 的硬體 ID，報告的 `hardware_id` 必須與它相同；登錄時用自己的 ID，不用報告裡的。
+5. **自己檢查 CSR**：讀取端自己解析 CSR，確認三件事：主體只有一個屬性，就是等於該硬體 ID 的 CN；SubjectPublicKeyInfo 與 `public_key` 逐 byte 相同；簽章以該公鑰驗得過。
 
 ## 大小上限與拆包
 

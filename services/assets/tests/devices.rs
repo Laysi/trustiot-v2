@@ -44,6 +44,9 @@ VALUES ($1, now(), 'ws-test')";
 const INSERT_BINDING: &str =
     "INSERT INTO assets.gateway_bindings (tenant_id, binding_id, hardware_id)
 VALUES ($1::uuid, gen_random_uuid(), $2)";
+/// A gateway's current binding. `$1`: the hardware ID.
+const BINDING_OF: &str = "SELECT binding_id::text FROM assets.gateway_bindings
+WHERE hardware_id = $1 AND unbound_at IS NULL";
 /// Ends a gateway's binding, as unbinding (Laysi/trustiot-v2#115) will.
 const UNBIND: &str = "UPDATE assets.gateway_bindings SET unbound_at = now()
 WHERE hardware_id = $1 AND unbound_at IS NULL";
@@ -272,6 +275,17 @@ async fn devices_are_written_with_their_events() {
     assert_eq!(event.tenant_id, Some(tenant.to_string()));
     assert_eq!(event.envelope.producer, ServiceName::Assets);
     let payload: DeviceCreated = event.envelope.decode().expect("decode the event");
+    // Every device event names the device's binding (Laysi/trustiot-v2#719), so the gateway
+    // configuration can leave out the devices of an earlier binding of the same tenant.
+    let binding_id: String = sqlx::query_scalar(BINDING_OF)
+        .bind(&gateway)
+        .fetch_one(&mut admin)
+        .await
+        .expect("read the gateway's binding");
+    assert_eq!(
+        payload.binding_id.map(|binding| binding.to_string()),
+        Some(binding_id.clone())
+    );
     assert_eq!(payload.device_id.to_string(), device_id);
     assert_eq!(payload.revision, 1);
     assert_eq!(payload.name.as_str(), "line-1-meter");
@@ -343,6 +357,10 @@ async fn devices_are_written_with_their_events() {
     assert_eq!(event.aggregate_id, device_id);
     assert_eq!(event.aggregate_seq, 2);
     let payload: DeviceUpdated = event.envelope.decode().expect("decode the event");
+    assert_eq!(
+        payload.binding_id.map(|binding| binding.to_string()),
+        Some(binding_id.clone())
+    );
     assert_eq!(payload.revision, 2);
     assert_eq!(payload.device.transport, Transport::ModbusTcp);
     assert_eq!(payload.device.host.as_str(), "meter-1.plant.example");
@@ -394,7 +412,7 @@ async fn devices_are_written_with_their_events() {
     assert_eq!(
         event.envelope.payload,
         json!({"device_id": device_id, "name": "line-1-meter", "hardware_id": gateway,
-               "model_id": model_id, "revision": 3})
+               "model_id": model_id, "binding_id": binding_id, "revision": 3})
     );
     let gone = assets
         .call(Method::GET, &device_path, Some(&viewer), None)

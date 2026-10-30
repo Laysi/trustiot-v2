@@ -24,7 +24,7 @@
 3. **完成表不短於原始資料。** `committed_at` 不早於同一批的 `received_at`，兩張表天數相同時，完成紀錄一定比它的資料晚過期。
 4. **最高方案看得到全部保存期限，其他方案較短。** [方案與權益](../product/plans.md)：原始資料的可查期間 Starter 例 7 天、Business 例 90 天、Enterprise 平台保存期全開。資料都在，方案只限制可查期間，升級後立即看得到更早的資料（清單 B3）。保存期限因此要比 Business 長，Enterprise 才有看得到的差別。
 5. **取滿足限制的最小值。** 原始資料只拿來看近期細節與重算；長期趨勢與年增率看彙總資料（至少 13 個月，Laysi/trustiot-v2#141），不需要原始資料存一年以上。180 天是 Business 範例的兩倍、涵蓋半年的比較，也遠大於 30 天的緩衝。之前 schema 裡的 400 天是暫定值，換成 180 天後儲存量約少 55 %。
-6. **緩衝 30 天。** 現場斷網多半是幾小時到幾天，長假（例如農曆年）約 9 到 10 天；30 天涵蓋整整一個月的停機，又遠短於保存期限。超過的批次丟棄並在 heartbeat 的 `buffer` 計數（[`crates/protocol` README](../../crates/protocol/README.md)），緩衝的時間由 Laysi/trustiot-v2#90 實作，校時造成的時間跳動不能讓批次留得更久。
+6. **緩衝 30 天。** 現場斷網多半是幾小時到幾天，長假（例如農曆年）約 9 到 10 天；30 天涵蓋整整一個月的停機，又遠短於保存期限。超過的批次丟棄並在 heartbeat 的 `buffer` 計數（[`crates/protocol` README](../../crates/protocol/README.md)），閘道器量緩衝的時間時，校時造成的時間跳動不會讓批次留得更久：年齡的「現在」取系統時鐘與單調時鐘接續的時間兩者中較大的，而且永不倒退：時鐘錯誤地往前跳又調回來時，跳過的時間照樣算數（Laysi/trustiot-v2#90，[agent README](../../edge/agent/README.md)「時鐘」）。
 
 儲存量估算：2026-10-09 的實測每筆約 3.1 bytes（[可行性測試結果](../feasibility/2026-10-09-cloud-poc.md)，30 天 52 億筆 15.2 GiB）。同樣的負載存 180 天約 91 GiB，加上 merge 與系統表的 1.5 倍約 137 GiB；叢集內 ClickHouse 的磁碟大小照 `deploy/chart/values.yaml` 的 `clickhouse.bundled.storage.size` 說明估算。
 

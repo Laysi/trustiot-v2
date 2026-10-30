@@ -389,6 +389,11 @@ fn splitter_rejects_ambiguous_files() {
 /// by gateway plus stream (Laysi/trustiot-v2#639).
 const ID_MIGRATION: &str = "0012_gateway_stream_ids.sql";
 
+/// The files after the ID migration, which the upgrade test applies after it on both servers.
+/// Each must give the same schema on both and change nothing when applied again; a new file is
+/// added here once that holds for it.
+const LATER_MIGRATIONS: [&str; 1] = ["0013_tenant_id_comment.sql"];
+
 /// What the ID migration defines, as text: the trustiot relations with their DDL and columns, and
 /// the access entities of the product (names that start with trustiot_, without the bootstrap
 /// admin). Test accounts are left out, so a server with test data compares equal to one without.
@@ -444,7 +449,7 @@ async fn wait_for_telemetry_mutations(ch: &ClickHouse) {
     }
 }
 
-fn split_at_id_migration() -> (Vec<Migration>, Migration) {
+fn split_at_id_migration() -> (Vec<Migration>, Migration, Vec<Migration>) {
     let mut all = migrations();
     let at = all
         .iter()
@@ -452,14 +457,15 @@ fn split_at_id_migration() -> (Vec<Migration>, Migration) {
         .unwrap_or_else(|| panic!("{ID_MIGRATION} is missing"));
     let mut after = all.split_off(at);
     let id_migration = after.remove(0);
-    // The upgrade case is a server at 0011: the ID migration is the newest file it gets. A later
-    // file joins this test only if it must be compared the same way.
+    // The upgrade case is a server at 0011: it gets the ID migration and every later file, and
+    // each later file is listed, so a new one is looked at before it joins the comparison.
     let later: Vec<&str> = after.iter().map(|m| m.name.as_str()).collect();
-    assert!(
-        later.is_empty(),
-        "files after {ID_MIGRATION}: {later:?}; extend this test to apply them in both cases"
+    assert_eq!(
+        later, LATER_MIGRATIONS,
+        "files after {ID_MIGRATION}: check that each gives one schema on both servers and \
+         changes nothing applied again, then list it in LATER_MIGRATIONS"
     );
-    (all, id_migration)
+    (all, id_migration, after)
 }
 
 /// Laysi/trustiot-v2#639: the ID migration gives the same schema on a fresh server and on a server
@@ -473,7 +479,7 @@ fn split_at_id_migration() -> (Vec<Migration>, Migration) {
 /// which nothing was applied before.
 #[tokio::test(flavor = "current_thread")]
 async fn id_migration_gives_one_schema_on_fresh_and_upgraded_servers() {
-    let (before, id_migration) = split_at_id_migration();
+    let (before, id_migration, later) = split_at_id_migration();
 
     // A fresh server: every file, then the ID migration once more.
     let Some(fresh) = ClickHouse::start_throwaway().await else {
@@ -482,10 +488,13 @@ async fn id_migration_gives_one_schema_on_fresh_and_upgraded_servers() {
     fresh.apply_migrations().await;
     let fresh_schema = schema(&fresh).await;
     fresh.apply(&id_migration).await;
+    for migration in &later {
+        fresh.apply(migration).await;
+    }
     assert_eq!(
         schema(&fresh).await,
         fresh_schema,
-        "applying {ID_MIGRATION} again changed a fresh server"
+        "applying {ID_MIGRATION} and the later files again changed a fresh server"
     );
     drop(fresh);
 
@@ -569,13 +578,17 @@ async fn id_migration_gives_one_schema_on_fresh_and_upgraded_servers() {
         "the window before {ID_MIGRATION}"
     );
 
-    upgraded.apply(&id_migration).await;
+    for migration in std::iter::once(&id_migration).chain(&later) {
+        upgraded.apply(migration).await;
+    }
     let upgraded_schema = schema(&upgraded).await;
-    upgraded.apply(&id_migration).await;
+    for migration in std::iter::once(&id_migration).chain(&later) {
+        upgraded.apply(migration).await;
+    }
     assert_eq!(
         schema(&upgraded).await,
         upgraded_schema,
-        "applying {ID_MIGRATION} again changed an upgraded server"
+        "applying {ID_MIGRATION} and the later files again changed an upgraded server"
     );
     assert_eq!(
         upgraded_schema, fresh_schema,

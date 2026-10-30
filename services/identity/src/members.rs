@@ -49,7 +49,7 @@ use contract::events::identity::{
 use contract::{ErrorBody, ErrorCode, FieldError, MessageKey, TenantId, TenantRole, UserId};
 use outbox::Aggregate;
 use serde::{Deserialize, Serialize};
-use service_kit::identity::{IdentityVerifier, UserIdentity};
+use service_kit::identity::{IdentityVerifier, Requirement, UserIdentity};
 use service_kit::tenant::{BackgroundTenantDb, TenantDbError};
 use utoipa::ToSchema;
 
@@ -263,10 +263,11 @@ impl SetRoleError {
 /// Whether `user` may act as a platform administrator here: a platform administrator whose
 /// token the ingress's cookie check issued. An exchanged token (`act`) means another service
 /// calls on the administrator's behalf, and granting access to a tenant is the administrator's
-/// own act (as for workstation certificates, services/certs/src/workstations.rs).
+/// own act (as for workstation certificates, services/certs/src/workstations.rs). service-kit's
+/// shared check (`Requirement::OwnPlatformAdmin`), without its log.
 #[must_use]
 pub fn is_own_platform_admin(user: &UserIdentity) -> bool {
-    user.is_platform_admin() && user.claims().act.is_none()
+    user.meets(Requirement::OwnPlatformAdmin).is_ok()
 }
 
 /// Sets members' roles: with [`crate::tenants::TenantStore`], the only code in the service that
@@ -489,14 +490,8 @@ async fn set_member_role(
     body: Body,
 ) -> Response {
     // Decided from the token alone, before the body is parsed or the database read.
-    if !is_own_platform_admin(&user) {
-        tracing::info!(
-            user_id = %user.user_id(),
-            exchanged = user.claims().act.is_some(),
-            "refused to set a member's role: not a platform administrator, or not the \
-             administrator's own request"
-        );
-        return error(ErrorBody::new(ErrorCode::PermissionDenied));
+    if let Err(refused) = user.require(Requirement::OwnPlatformAdmin, "set a member's role") {
+        return refused.into_response();
     }
     let Some(tenant) = tenant
         .ok()

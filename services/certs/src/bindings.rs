@@ -366,7 +366,10 @@ impl Projection {
 
     /// A read-only transaction of the platform role for the certs service, logged with `purpose`
     /// and bounded by [`READ_STATEMENT_TIMEOUT`] and [`READ_LOCK_TIMEOUT`].
-    async fn begin(&self, purpose: &'static str) -> Result<PlatformTransaction, ReadError> {
+    pub(crate) async fn begin(
+        &self,
+        purpose: &'static str,
+    ) -> Result<PlatformTransaction, ReadError> {
         let actor = PlatformActor::service(ServiceIdentity::new(ServiceName::Certs));
         let mut tx = self.db.begin(actor, purpose).await?;
         sqlx::query(READ_ONLY).execute(&mut *tx).await?;

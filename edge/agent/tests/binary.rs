@@ -1,10 +1,17 @@
 //! The `trustiot-agent` executable as systemd runs it (Laysi/trustiot-v2#86): `--check`, the
 //! `sd_notify` messages (`READY=1` before the first connection, `STATUS=`, `WATCHDOG=1` at half
 //! of `WATCHDOG_USEC`, `STOPPING=1`), the device configuration (subscribed, applied, reported,
-//! saved, and polled after a restart without the broker; Laysi/trustiot-v2#94), and SIGTERM
-//! ending with `offline`/`shutdown`, a normal DISCONNECT and exit code 0. The test plays systemd's notification socket (an abstract Unix
-//! socket, as `NOTIFY_SOCKET=@...`) and the broker (`support::wss::InnerBroker` behind the
-//! in-process front).
+//! saved, and polled after a restart without the broker; Laysi/trustiot-v2#94), the telemetry
+//! upload (subscribed to the acknowledgements, the offline buffer under `STATE_DIRECTORY`, a
+//! buffered batch sent and released by the cloud's acknowledgement; Laysi/trustiot-v2#90), and
+//! SIGTERM ending with `offline`/`shutdown`, a normal DISCONNECT and exit code 0. The test plays
+//! systemd's notification socket (an abstract Unix socket, as `NOTIFY_SOCKET=@...`) and the
+//! broker (`support::wss::InnerBroker` behind the in-process front). The `provision` subcommand
+//! (Laysi/trustiot-v2#613) is run up to where it would open the TPM: its usage errors, no TPM
+//! device, and devices other than `/dev/tpmrm<N>`; the runs against a software TPM are
+//! `tests/provision.rs`. So is `provision install` (Laysi/trustiot-v2#617): its usage errors and
+//! help, and status 9 without an agent installation; the runs against a software TPM are
+//! `tests/provision_install.rs`.
 
 #![allow(
     clippy::unwrap_used,
@@ -14,16 +21,21 @@
 mod support;
 
 use std::os::linux::net::SocketAddrExt;
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::atomic::{AtomicU32, Ordering};
 
+use agent::clock::{GatewayClock, SystemWall};
+use agent::link::{ConnectError, Connector, LinkSettings};
+use agent::upload;
 use protocol::config::{
     ByteOrder, ConfigReport, DataPoint, DataType, DesiredConfig, Device, DeviceModel, FunctionCode,
     Host, Transport,
 };
 use protocol::health::{OfflineReason, Status};
+use protocol::telemetry::{AckOutcome, Reading, Sample, TelemetryAck, TelemetryBatch};
 use protocol::topic::Channel;
-use protocol::{ConfigVersion, DeviceId, ModelName, PointKey, V1};
+use protocol::{AgentVersion, ConfigVersion, DeviceId, ModelName, PointKey, UnixMillis, V1, Value};
 use support::wss::{Files, InnerBroker, front};
 use support::{GATEWAY, Packet, gateway, puback, publish};
 use testkit::clock::bounded;
@@ -32,6 +44,7 @@ use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader, Lines};
 use tokio::net::UnixDatagram;
 use tokio::process::ChildStderr;
 use tokio::process::{Child, Command};
+use tokio_util::sync::CancellationToken;
 
 const EXECUTABLE: &str = env!("CARGO_BIN_EXE_trustiot-agent");
 
@@ -318,9 +331,10 @@ async fn connected_the_agent_applies_its_configuration_reports_it_and_polls_it_a
     let child = agent(&files, &notify);
     notify.wait_for("READY=1", |line| line == "READY=1").await;
     let (mqtt, _) = broker.next_broker().await;
-    // The agent handles down/config, so its link subscribes to it after `online`, and only to
-    // it; `accept` checks the SUBSCRIBE.
-    let mut mqtt = mqtt.subscribing(&[Channel::Config]);
+    // The agent handles down/config (the configuration side) and down/telemetry-ack (the
+    // telemetry pipeline), so its link subscribes to both after `online`, and only to them, in
+    // one SUBSCRIBE; `accept` checks it.
+    let mut mqtt = mqtt.subscribing(&[Channel::Config, Channel::TelemetryAck]);
     let (_, session) = bounded("the connection", mqtt.accept()).await;
     // The broker delivers the retained configuration right after the SUBACK.
     let config = desired_config();
@@ -397,6 +411,14 @@ async fn connected_the_agent_applies_its_configuration_reports_it_and_polls_it_a
     let (success, log) = exit(child).await;
     assert!(success, "{log}");
     assert!(log.contains("applied the configuration"), "{log}");
+    // The offline buffer's directory, in the state directory systemd passes, only the agent's.
+    let buffer = std::fs::metadata(files.path("state/buffer")).unwrap();
+    assert!(buffer.is_dir());
+    assert_eq!(
+        std::os::unix::fs::PermissionsExt::mode(&buffer.permissions()) & 0o777,
+        0o700
+    );
+    assert!(!log.contains("cannot open the buffer directory"), "{log}");
 
     // Started again with no way to the broker, it polls the saved configuration at once. The
     // device's address is refused by the address guard, so each poll fails to connect.
@@ -412,6 +434,188 @@ async fn connected_the_agent_applies_its_configuration_reports_it_and_polls_it_a
     terminate(&child);
     let (success, rest) = log.exit(child).await;
     assert!(success, "{rest}");
+}
+
+/// A connection that never comes up.
+struct Nowhere;
+
+impl Connector for Nowhere {
+    type Stream = tokio::io::DuplexStream;
+
+    async fn connect(&self) -> Result<Self::Stream, ConnectError> {
+        std::future::pending().await
+    }
+}
+
+/// Leaves one batch of three readings in the offline buffer of the state directory `state`, as
+/// an agent does that stops before it could send them: the library's pipeline on a link that
+/// never connects, stopped, which writes the batch in memory to disk. Returns the readings.
+async fn leave_a_batch(state: &Path) -> Vec<Reading> {
+    let shutdown = CancellationToken::new();
+    let (link, _incoming, supervisor) = agent::link::link(
+        LinkSettings::new(gateway(), AgentVersion::new("0.1.0-test").unwrap()),
+        Nowhere,
+        shutdown.clone(),
+    );
+    drop(supervisor);
+    let clock = GatewayClock::new(SystemWall, state.join("no-timesync"));
+    let stop = CancellationToken::new();
+    let (handles, pipeline) = upload::pipeline(
+        upload::Settings::new(state.join(upload::BUFFER_DIRECTORY)),
+        link,
+        clock.clone(),
+        stop.clone(),
+    )
+    .unwrap();
+    let pipeline = tokio::spawn(pipeline.run());
+    let at = clock.wall();
+    let readings: Vec<Reading> = (0..3)
+        .map(|index| Reading {
+            device: DeviceId::new("meter-1").unwrap(),
+            point: PointKey::new(format!("p{index}")).unwrap(),
+            sample: Sample {
+                at,
+                value: Value::Int(index),
+            },
+            clock_synced: false,
+        })
+        .collect();
+    handles.readings.push(readings.clone());
+    stop.cancel();
+    bounded("the pipeline to write its batch to disk", pipeline)
+        .await
+        .unwrap();
+    shutdown.cancel();
+    readings
+}
+
+/// The sizes of the segment files in the offline buffer of the state directory `state`.
+fn segments(state: &Path) -> Vec<u64> {
+    std::fs::read_dir(state.join(upload::BUFFER_DIRECTORY))
+        .unwrap()
+        .map(|entry| entry.unwrap())
+        .filter(|entry| entry.file_name().to_string_lossy().ends_with(".log"))
+        .map(|entry| entry.metadata().unwrap().len())
+        .collect()
+}
+
+/// The telemetry side of the executable (Laysi/trustiot-v2#90 with Laysi/trustiot-v2#94): a
+/// batch an earlier run left in the offline buffer under `STATE_DIRECTORY` goes up on
+/// `up/telemetry` once the agent is connected, unchanged, and the cloud's acknowledgement on
+/// `down/telemetry-ack`, which the agent's dispatcher hands to the uploader, releases it: its
+/// segment is gone when the agent has stopped. Readings the executable polls itself cannot
+/// reach a device on the test machine (the address guard refuses loopback and the machine's
+/// own addresses), so `desired_config::polled_readings_go_up_as_a_batch_and_the_clouds_acknowledgement_releases_it`
+/// follows polled readings through the same pieces in process.
+#[tokio::test]
+async fn a_batch_in_the_state_directory_goes_up_and_the_clouds_acknowledgement_releases_it() {
+    let pki = TestPki::new();
+    let mut broker = InnerBroker::start(mtls_server(&pki.broker, &pki.broker_ca)).await;
+    let front = front(&pki, broker.address, |_| {}).await;
+    let files = Files::new(&pki, front.address().port());
+    let state = PathBuf::from(files.path("state"));
+    let readings = leave_a_batch(&state).await;
+    assert!(
+        segments(&state).iter().any(|len| *len > 16),
+        "the batch is on disk: {:?}",
+        segments(&state)
+    );
+
+    let notify = NotifySocket::new();
+    let mut child = agent(&files, &notify);
+    let mut log = Log::of(&mut child);
+    let (mqtt, _) = broker.next_broker().await;
+    let mut mqtt = mqtt.subscribing(&[Channel::Config, Channel::TelemetryAck]);
+    let (_, session) = bounded("the connection", mqtt.accept()).await;
+    let telemetry = Channel::Telemetry.topic(&gateway());
+    // The first heartbeat (sent once Connected) and the batch, in either order; the next
+    // heartbeat is an hour away.
+    let (mut heartbeat, mut batch) = (false, None);
+    while !(heartbeat && batch.is_some()) {
+        match bounded(
+            "the heartbeat and the telemetry batch",
+            mqtt.read_answering_pings(),
+        )
+        .await
+        {
+            Some(Packet::Publish(publish)) if publish.topic == telemetry => {
+                assert!(publish.qos == 1 && !publish.retain, "{publish:?}");
+                assert!(batch.is_none(), "one batch, sent once");
+                mqtt.send(&puback(publish.id.unwrap(), 0)).await;
+                batch = Some(TelemetryBatch::decode(&publish.payload).unwrap());
+            }
+            Some(Packet::Publish(publish))
+                if publish.topic == Channel::Heartbeat.topic(&gateway()) =>
+            {
+                heartbeat = true;
+            }
+            other => panic!("expected the heartbeat and the telemetry batch, got {other:?}"),
+        }
+    }
+    let batch = batch.unwrap();
+    assert_eq!((batch.seq.get(), batch.clock_synced), (1, false));
+    let sent: Vec<Reading> = batch
+        .series
+        .iter()
+        .flat_map(|series| {
+            series.samples.iter().map(|sample| Reading {
+                device: series.device.clone(),
+                point: series.point.clone(),
+                sample: sample.clone(),
+                clock_synced: batch.clock_synced,
+            })
+        })
+        .collect();
+    assert_eq!(sent, readings, "the readings as they were buffered");
+
+    let ack = TelemetryAck {
+        v: V1,
+        stream: batch.stream.clone(),
+        seq: batch.seq,
+        outcome: AckOutcome::Committed { records: 3 },
+        server_time: UnixMillis::from_system_time(std::time::SystemTime::now()).unwrap(),
+    };
+    mqtt.send(&publish(
+        &Channel::TelemetryAck.topic(&gateway()),
+        &protocol::encode(&ack).unwrap(),
+        1,
+        false,
+        Some(1),
+    ))
+    .await;
+    log.wait_for(&["the cloud has the batch", "seq=1", "records=3"])
+        .await;
+
+    terminate(&child);
+    // The PUBACK of the acknowledgement may still come before `offline`.
+    let offline = loop {
+        match bounded("the offline status", mqtt.read_answering_pings()).await {
+            Some(Packet::PubAck { id: 1, reason: 0 }) => {}
+            Some(Packet::Publish(publish))
+                if publish.topic == Channel::Status.topic(&gateway()) =>
+            {
+                break publish;
+            }
+            other => panic!("expected offline, got {other:?}"),
+        }
+    };
+    let Status::Offline(status) = Status::decode(&offline.payload).unwrap() else {
+        panic!("expected offline")
+    };
+    assert_eq!(
+        (status.session, status.reason),
+        (session, OfflineReason::Shutdown)
+    );
+    mqtt.send(&puback(offline.id.unwrap(), 0)).await;
+    assert_eq!(
+        bounded("the DISCONNECT", mqtt.read()).await,
+        Some(Packet::Disconnect { reason: 0 })
+    );
+    let (success, rest) = log.exit(child).await;
+    assert!(success, "{rest}");
+    // Released: the uploader deleted the segment once its only batch was acknowledged, and the
+    // stop had nothing in memory to write.
+    assert_eq!(segments(&state), Vec::<u64>::new(), "{rest}");
 }
 
 async fn check(files: &Files) -> std::process::Output {
@@ -500,4 +704,198 @@ async fn check_reports_the_root_crl_and_refuses_one_the_root_did_not_sign() {
         stderr.contains("refusing to start") && stderr.contains("broker.crl"),
         "{stderr}"
     );
+}
+
+/// `trustiot-agent provision <args>` (Laysi/trustiot-v2#613), with its log at debug level.
+fn provision(args: &[&str]) -> std::process::Output {
+    std::process::Command::new(EXECUTABLE)
+        .arg("provision")
+        .args(args)
+        .env("TRUSTIOT_AGENT_LOG", "debug")
+        .output()
+        .unwrap()
+}
+
+/// A resource manager device that cannot exist: the kernel numbers TPMs below 65536. Tests that
+/// get as far as opening the device use it, so they never touch a TPM of the machine they run on.
+const NO_TPM: &str = "/dev/tpmrm99999";
+
+/// Fails unless `output` ended with `code` and printed nothing on standard output; returns its
+/// standard error.
+fn refused(output: &std::process::Output, code: i32) -> String {
+    let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+    assert_eq!(output.status.code(), Some(code), "{stderr}");
+    assert!(
+        output.stdout.is_empty(),
+        "{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    stderr
+}
+
+#[test]
+fn provision_without_a_tpm_device_exits_3_with_nothing_on_standard_output() {
+    for extra in [&[][..], &["--inspect"], &["--handle", "0x81000200"]] {
+        let mut args = vec!["--hardware-id", "tg-0001", "--device", NO_TPM];
+        args.extend_from_slice(extra);
+        let stderr = refused(&provision(&args), 3);
+        assert!(
+            stderr.contains("cannot open the TPM device") && stderr.contains(NO_TPM),
+            "{stderr}"
+        );
+    }
+}
+
+#[test]
+fn provision_refuses_invalid_hardware_ids_handles_and_arguments_with_status_2() {
+    let long = "a".repeat(65);
+    for args in [
+        &[][..],
+        &["--hardware-id"],
+        &["--hardware-id", ""],
+        &["--hardware-id", "tg/0001"],
+        &["--hardware-id", "tg 0001"],
+        &["--hardware-id", "tg-0001;reboot"],
+        &["--hardware-id", "$(id)"],
+        &["--hardware-id", &long],
+        &["--hardware-id", "tg-0001", "--hardware-id", "tg-0002"],
+        &["--hardware-id", "tg-0001", "--handle", "0x81000001"],
+        &["--hardware-id", "tg-0001", "--handle", "0x81800000"],
+        &["--hardware-id", "tg-0001", "--handle", "0x80000001"],
+        &["--hardware-id", "tg-0001", "--handle", "0x01c0000a"],
+        &["--hardware-id", "tg-0001", "--handle", "81000100"],
+        &["--hardware-id", "tg-0001", "--handle", "0x8100010g"],
+        &["--hardware-id", "tg-0001", "--handle"],
+        &["--hardware-id", "tg-0001", "--verbose"],
+        &["--inspect"],
+        &["--hardware-id", "tg-0001", "--help"],
+        &["--help", "--inspect"],
+    ] {
+        let mut args = args.to_vec();
+        args.extend_from_slice(&["--device", NO_TPM]);
+        let stderr = refused(&provision(&args), 2);
+        assert!(
+            stderr.contains("usage: trustiot-agent provision"),
+            "{args:?}: {stderr}"
+        );
+    }
+}
+
+#[test]
+fn provision_refuses_devices_other_than_the_resource_manager_with_status_4_unopened() {
+    // /dev/null would be opened and answer the first command with nothing (status 1, a
+    // malformed response): status 4 shows the device was refused before it was opened.
+    let file = std::env::temp_dir().join(format!("tpmrm0-{}", std::process::id()));
+    std::fs::write(&file, b"").unwrap();
+    for device in [
+        "/dev/tpm0",
+        "/dev/null",
+        "/dev/tpmrm0/../tpm0",
+        file.to_str().unwrap(),
+    ] {
+        for extra in [&[][..], &["--inspect"]] {
+            let mut args = vec!["--hardware-id", "tg-0001", "--device", device];
+            args.extend_from_slice(extra);
+            let stderr = refused(&provision(&args), 4);
+            assert!(
+                stderr.contains(device) && stderr.contains("resource manager"),
+                "{stderr}"
+            );
+        }
+    }
+    let written = std::fs::read(&file).unwrap();
+    std::fs::remove_file(file).unwrap();
+    assert!(written.is_empty(), "the file was written");
+}
+
+/// `trustiot-agent provision install <args>` (Laysi/trustiot-v2#617) with empty standard input.
+fn install(args: &[&str]) -> std::process::Output {
+    std::process::Command::new(EXECUTABLE)
+        .args(["provision", "install"])
+        .args(args)
+        .stdin(Stdio::null())
+        .output()
+        .unwrap()
+}
+
+#[test]
+fn provision_install_refuses_invalid_arguments_with_status_2_and_has_its_own_help() {
+    for args in [
+        &[][..],
+        &["--hardware-id"],
+        &["--hardware-id", "tg 0001"],
+        &["--hardware-id", "$(id)"],
+        &["--hardware-id", "tg-0001", "--hardware-id", "tg-0001"],
+        &["--hardware-id", "tg-0001", "--config"],
+        &["--hardware-id", "tg-0001", "--inspect"],
+        &["--hardware-id", "tg-0001", "--help"],
+    ] {
+        let stderr = refused(&install(args), 2);
+        assert!(
+            stderr.contains("usage: trustiot-agent provision install"),
+            "{args:?}: {stderr}"
+        );
+    }
+    let output = install(&["--help"]);
+    assert_eq!(output.status.code(), Some(0));
+    let help = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        help.contains("provision install --hardware-id <id>") && help.contains("Exit status"),
+        "{help}"
+    );
+    // The service's own help names the subcommand without --config, which it refuses.
+    let top = std::process::Command::new(EXECUTABLE)
+        .arg("--help")
+        .output()
+        .expect("the agent runs");
+    assert_eq!(top.status.code(), Some(0));
+    let top = String::from_utf8_lossy(&top.stdout);
+    let line = top
+        .lines()
+        .find(|line| line.contains("provision install"))
+        .expect("the subcommand is listed");
+    assert!(!line.contains("--config"), "{line}");
+}
+
+#[test]
+fn provision_install_without_an_agent_installation_exits_9_and_writes_nothing() {
+    // Without the agent's account (this machine is not a gateway) or without its configuration
+    // (always /etc/trustiot/agent.toml), the installation cannot be used: status 9 before
+    // standard input is read.
+    let stderr = refused(&install(&["--hardware-id", "tg-0001"]), 9);
+    assert!(
+        stderr.contains("trustiot-agent") || stderr.contains("/etc/trustiot/agent.toml"),
+        "{stderr}"
+    );
+    // Whoever names the configuration decides where root writes: there is no --config.
+    let dir = testkit::mqtt::ScratchDir::new("agent-install-binary");
+    let config = dir.path().join("agent.toml");
+    let stderr = refused(
+        &install(&[
+            "--hardware-id",
+            "tg-0001",
+            "--config",
+            config.to_str().unwrap(),
+        ]),
+        2,
+    );
+    assert!(stderr.contains("--config is not accepted"), "{stderr}");
+    assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 0);
+}
+
+#[test]
+fn provision_help_and_the_agents_help_name_the_subcommand() {
+    let output = provision(&["--help"]);
+    assert_eq!(output.status.code(), Some(0));
+    let help = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        help.contains("--hardware-id <id>") && help.contains("Exit status"),
+        "{help}"
+    );
+    let output = std::process::Command::new(EXECUTABLE)
+        .arg("--help")
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(0));
+    assert!(String::from_utf8_lossy(&output.stdout).contains("trustiot-agent provision"));
 }

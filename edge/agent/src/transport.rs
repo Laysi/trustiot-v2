@@ -31,6 +31,7 @@ use tokio_tungstenite::tungstenite::protocol::WebSocketConfig;
 use tokio_tungstenite::tungstenite::{Error as WsError, Message};
 
 use crate::link::{ConnectError, ConnectStage, Connector};
+use crate::tls::InnerConfig;
 
 /// The WebSocket subprotocol of MQTT (MQTT 5 section 6).
 pub const SUBPROTOCOL: &str = "mqtt";
@@ -198,12 +199,13 @@ pub fn configure_tcp(stream: &TcpStream) -> io::Result<()> {
 }
 
 /// Opens the gateway's connection to the broker. Reuses its two TLS configurations across
-/// connections, which keeps their resumption caches.
+/// connections, which keeps their resumption caches; the inner one is replaced when the
+/// certificate is renewed ([`InnerConfig`]).
 #[derive(Clone)]
 pub struct WssConnector {
     url: CloudUrl,
     outer: Arc<ClientConfig>,
-    inner: Arc<ClientConfig>,
+    inner: InnerConfig,
 }
 
 impl std::fmt::Debug for WssConnector {
@@ -220,22 +222,27 @@ pub type BrokerStream = TlsStream<WsStream<TlsStream<TcpStream>>>;
 impl WssConnector {
     /// A connector to `url` whose inner TLS expects the broker certificate for
     /// [`tls::BROKER_NAME`](crate::tls::BROKER_NAME).
-    pub fn new(url: CloudUrl, outer: Arc<ClientConfig>, inner: Arc<ClientConfig>) -> Self {
+    pub fn new(url: CloudUrl, outer: Arc<ClientConfig>, inner: InnerConfig) -> Self {
         Self { url, outer, inner }
     }
 
     async fn tcp(&self) -> Result<TcpStream, ConnectError> {
-        let addresses: Vec<SocketAddr> =
-            tokio::net::lookup_host((self.url.host(), self.url.port()))
-                .await
-                .map_err(|error| ConnectError::new(ConnectStage::Resolve, error))?
-                .collect();
-        let stream = first_connection(addresses, TCP_CONNECT_TIMEOUT, TcpStream::connect)
-            .await
-            .map_err(|error| ConnectError::new(ConnectStage::Tcp, error))?;
-        configure_tcp(&stream).map_err(|error| ConnectError::new(ConnectStage::Tcp, error))?;
-        Ok(stream)
+        connect_tcp(self.url.host(), self.url.port()).await
     }
+}
+
+/// A TCP connection to `host`:`port`, set up as every connection of the gateway to the cloud
+/// is ([`configure_tcp`]): each resolved address in turn, each for at most 10 seconds.
+pub(crate) async fn connect_tcp(host: &str, port: u16) -> Result<TcpStream, ConnectError> {
+    let addresses: Vec<SocketAddr> = tokio::net::lookup_host((host, port))
+        .await
+        .map_err(|error| ConnectError::new(ConnectStage::Resolve, error))?
+        .collect();
+    let stream = first_connection(addresses, TCP_CONNECT_TIMEOUT, TcpStream::connect)
+        .await
+        .map_err(|error| ConnectError::new(ConnectStage::Tcp, error))?;
+    configure_tcp(&stream).map_err(|error| ConnectError::new(ConnectStage::Tcp, error))?;
+    Ok(stream)
 }
 
 /// Tries `addresses` in order, each for at most `limit`, and returns the first connection; when
@@ -295,7 +302,7 @@ impl Connector for WssConnector {
                 })?;
         let broker = crate::tls::broker_name()
             .map_err(|error| ConnectError::new(ConnectStage::InnerTls, error))?;
-        let inner = TlsConnector::from(Arc::clone(&self.inner))
+        let inner = TlsConnector::from(self.inner.current())
             .connect(broker, WsStream::new(websocket))
             .await
             .map_err(|error| ConnectError::new(ConnectStage::InnerTls, error))?;

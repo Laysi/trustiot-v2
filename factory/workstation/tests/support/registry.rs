@@ -128,6 +128,11 @@ struct Shared {
     registrations: Mutex<HashMap<String, Registered>>,
     held: Mutex<Vec<TcpStream>>,
     logouts: Mutex<u32>,
+    /// The platform-wide event log, oldest first: a `certs.gateway_registered` event for each new
+    /// registration, each after an event of another type (Laysi/trustiot-v2#616).
+    events: Mutex<Vec<serde_json::Value>>,
+    /// The query string of every event log request.
+    event_log_queries: Mutex<Vec<String>>,
 }
 
 /// The stand-in on `http://127.0.0.1:<port>`.
@@ -171,6 +176,8 @@ impl Registry {
             registrations: Mutex::new(HashMap::new()),
             held: Mutex::new(Vec::new()),
             logouts: Mutex::new(0),
+            events: Mutex::new(Vec::new()),
+            event_log_queries: Mutex::new(Vec::new()),
         });
         let listener = TcpListener::bind("127.0.0.1:0").await.expect("bound");
         let url = format!("http://{}", listener.local_addr().expect("an address"));
@@ -212,6 +219,82 @@ impl Registry {
     pub fn logouts(&self) -> u32 {
         *self.shared.logouts.lock().expect("unpoisoned")
     }
+
+    /// The query string of every event log request so far.
+    pub fn event_log_queries(&self) -> Vec<String> {
+        self.shared
+            .event_log_queries
+            .lock()
+            .expect("unpoisoned")
+            .clone()
+    }
+
+    /// Adds `count` events of another type to the event log, newer than every event so far.
+    pub fn add_other_events(&self, count: usize) {
+        let mut events = self.shared.events.lock().expect("unpoisoned");
+        for _ in 0..count {
+            let number = events.len();
+            events.push(other_event(number));
+        }
+    }
+}
+
+/// An event of another type than a registration.
+fn other_event(number: usize) -> serde_json::Value {
+    serde_json::json!({
+        "event_id": format!("0199a000-0000-7000-8000-{number:012}"),
+        "type": "identity.tenant_created",
+        "version": 1,
+        "producer": "identity",
+        "tenant_id": null,
+        "occurred_at": "2026-10-24T08:00:00Z",
+        "recorded_at": "2026-10-24T08:00:01Z",
+        "aggregate_type": "tenant",
+        "aggregate_id": format!("tenant-{number}"),
+        "aggregate_seq": 1,
+        "actor": null,
+        "payload": {},
+    })
+}
+
+/// The `certs.gateway_registered` event of a new registration.
+fn registered_event(number: usize, answer: &serde_json::Value) -> serde_json::Value {
+    serde_json::json!({
+        "event_id": format!("0199a000-0000-7000-9000-{number:012}"),
+        "type": "certs.gateway_registered",
+        "version": 1,
+        "producer": "certs",
+        "tenant_id": null,
+        "occurred_at": answer["registered_at"],
+        "recorded_at": answer["registered_at"],
+        "aggregate_type": "gateway_registration",
+        "aggregate_id": answer["hardware_id"],
+        "aggregate_seq": 1,
+        "actor": null,
+        "payload": {
+            "hardware_id": answer["hardware_id"],
+            "public_key_sha256": answer["public_key_sha256"],
+            "endorsement_key_sha256": answer["endorsement_key_sha256"],
+            "certificate_serial": answer["serial"],
+            "workstation": answer["workstation"],
+        },
+    })
+}
+
+/// One page of the event log, newest first: at most one event per page, so a reader has to
+/// follow `next_cursor` (the index of the next event, counted from the newest).
+fn event_log_page(shared: &Shared, query: &str) -> String {
+    let events = shared.events.lock().expect("unpoisoned");
+    let start: usize = query
+        .split('&')
+        .find_map(|pair| pair.strip_prefix("cursor="))
+        .map_or(0, |cursor| {
+            cursor.parse().expect("a cursor the stand-in gave")
+        });
+    let newest_first: Vec<&serde_json::Value> = events.iter().rev().collect();
+    let page: Vec<&serde_json::Value> = newest_first.iter().skip(start).take(1).copied().collect();
+    let next = (start + 1 < newest_first.len()).then(|| (start + 1).to_string());
+    serde_json::json!({ "events": page, "next_cursor": next }).to_string()
 }
 
 /// The parameters and key of a CA named `name`.
@@ -448,6 +531,12 @@ fn register(shared: &Shared, body: &[u8]) -> (u16, String) {
         "certificate_chain": format!("{certificate}{}", shared.ca_pem),
         "root_certificate": shared.root_pem,
     });
+    {
+        let mut events = shared.events.lock().expect("unpoisoned");
+        let number = events.len();
+        events.push(other_event(number));
+        events.push(registered_event(number + 1, &answer));
+    }
     registrations.insert(
         id,
         Registered {
@@ -552,6 +641,23 @@ async fn serve(shared: Arc<Shared>, mut stream: TcpStream) {
     if method == "DELETE" && path == "/api/identity/v1/sessions/current" {
         *shared.logouts.lock().expect("unpoisoned") += 1;
         answer(&shared, &mut stream, 204, "").await;
+        return;
+    }
+    if method == "GET"
+        && let Some(query) = path.strip_prefix("/api/identity/v1/platform/event-log?")
+    {
+        shared
+            .event_log_queries
+            .lock()
+            .expect("unpoisoned")
+            .push(query.to_owned());
+        if !cookie_ok {
+            let body = m1("unauthenticated", "error.unauthenticated", None, &[]);
+            answer(&shared, &mut stream, 401, &body).await;
+            return;
+        }
+        let page = event_log_page(&shared, query);
+        answer(&shared, &mut stream, 200, &page).await;
         return;
     }
     if method != "POST" || path != PATH {

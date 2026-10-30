@@ -1,6 +1,6 @@
 [package]
 name = "agent"
-description = "The TrustIoT gateway agent (decision 10): the trustiot-agent service with its MQTT 5 connection to the cloud (a 443 WebSocket with mTLS inside), its TPM identity key (decision 12), presence and heartbeat; and its Modbus reading (rebuild checklist F1, F2, F5): merged reads, a Modbus TCP and RTU-over-TCP client for the read function codes 1-4 with one shared connection per endpoint, decoding, and scaling; and polling each device on a fixed schedule with timeouts, reconnect backoff, TCP keepalive and a per-device watchdog (F4)."
+description = "The TrustIoT gateway agent (decision 10): the trustiot-agent service with its MQTT 5 connection to the cloud (a 443 WebSocket with mTLS inside), its TPM identity key (decision 12), presence and heartbeat; its client certificate renewal over HTTPS (rebuild checklist D2); and its Modbus reading (rebuild checklist F1, F2, F5): merged reads, a Modbus TCP and RTU-over-TCP client for the read function codes 1-4 with one shared connection per endpoint, decoding, and scaling; and polling each device on a fixed schedule with timeouts, reconnect backoff, TCP keepalive and a per-device watchdog (F4); and the telemetry upload (G1): per-series batching, the offline buffer in memory and on the data partition, one batch in flight until the cloud's end-to-end acknowledgement, and the gateway clock's sync state and batch age."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -26,12 +26,24 @@ path = "src/main.rs"
 # host, Zig through cargo-zigbuild when cross-compiling. tests/dependencies.rs keeps out
 # webpki-roots, rustls-native-certs, OpenSSL, aws-lc and the TPM C libraries.
 [dependencies]
+# The renewal's signature (standard base64), the renewed certificate chain written as PEM, and
+# PEM for the provisioning report (`provision`).
+base64.workspace = true
 bytes.workspace = true
 # The WebSocket's Stream and Sink, adapted to AsyncRead and AsyncWrite for the inner TLS.
 futures-util = { workspace = true, features = ["sink", "std"] }
+# The renewal endpoint's answers, read with a size limit.
+http-body-util.workspace = true
+# HTTP/1.1 to the certificate renewal endpoint over the outer TLS (`renewal::https`,
+# Laysi/trustiot-v2#83): the client side only.
+hyper = { workspace = true, features = ["client", "http1"] }
+hyper-util = { workspace = true, features = ["tokio"] }
 # getifaddrs: the gateway's own interface addresses, which the address guard refuses.
 libc.workspace = true
 protocol = { path = "../../crates/protocol" }
+# The provisioning CSR (`provision`), signed by the TPM key through rcgen's `SigningKey`: no
+# features, so neither rcgen's crypto backends nor its key generation are compiled in.
+rcgen.workspace = true
 # SHA-256 of what the TPM signs, and the check of the TPM key's test signature (`tpm`). rustls'
 # own provider, so no second crypto library.
 ring.workspace = true
@@ -40,6 +52,9 @@ ring.workspace = true
 rustls = { workspace = true, features = ["ring", "std"] }
 rustls-pki-types = { workspace = true, features = ["std"] }
 serde = { workspace = true, features = ["derive"] }
+# The renewal endpoint's JSON (`protocol::renewal`) and the provisioning report on standard
+# output (`provision`).
+serde_json.workspace = true
 # TCP keepalive's idle time, probe interval and probe count, for the MQTT connection
 # (`transport::configure_tcp`) and the Modbus connections; tokio can only switch keepalive on.
 # `all` has the last two (and their getters), no code of its own.
@@ -61,16 +76,16 @@ x509-parser.workspace = true
 [dev-dependencies]
 # This crate's own tests, with the feature that lets them reach the fake endpoint on loopback.
 agent = { path = ".", features = ["test-exempt-addresses"] }
-# PEM-encodes tampered root CRLs in the TLS unit tests.
-base64.workspace = true
-# A test CA and certificates made at test time, also for the TPM key in the TPM tests.
-rcgen = { workspace = true, features = ["crypto", "pem", "ring"] }
+# The stand-in certificate renewal endpoint (`tests/support/renewal.rs`).
+hyper = { workspace = true, features = ["http1", "server"] }
+# A test CA and certificates made at test time, also for the TPM key in the TPM tests; reads the
+# provisioning CSR back as the workstation does (`x509-parser`).
+rcgen = { workspace = true, features = ["crypto", "pem", "ring", "x509-parser"] }
 # The fake TPM's software key (`ring::signature::EcdsaKeyPair`).
 ring = { workspace = true, features = ["alloc"] }
-serde_json.workspace = true
 # The fake Modbus endpoint with fault injection (`testkit::modbus`), the paused clock, the
-# Mosquitto broker with mTLS and WebSocket front (`testkit::mqtt`), and the swtpm container
-# (`testkit::container`).
+# Mosquitto broker with mTLS and WebSocket front (`testkit::mqtt`), and the software TPM
+# (`testkit::swtpm`).
 testkit = { path = "../../crates/testkit" }
 # `process` runs the executable (tests/binary.rs).
 tokio = { workspace = true, features = ["macros", "process", "rt", "test-util"] }

@@ -1,12 +1,13 @@
 //! TrustIoT v2 ingest service: telemetry from gateways into ClickHouse, acknowledged only after
 //! the batch is on disk (decision 8, rebuild checklist I1).
 //!
-//! The service is built in steps under Laysi/trustiot-v2#91. This release
-//! (Laysi/trustiot-v2#640) is its skeleton: it starts, checks Postgres and ClickHouse for
-//! readiness, and keeps the gateway binding projection the telemetry path takes every tenant
-//! from. The telemetry path itself (MQTT, decoding, the writes and the acknowledgement) is
-//! Laysi/trustiot-v2#641.
+//! The service is built in steps under Laysi/trustiot-v2#91: the skeleton and the gateway binding
+//! projection (Laysi/trustiot-v2#640), then the telemetry path (Laysi/trustiot-v2#641). It checks
+//! Postgres, ClickHouse and the broker for readiness.
 //!
+//! - [`telemetry`]: the telemetry path: the shared subscription on every gateway's
+//!   `up/telemetry`, decoding, the tenant from the binding projection, the write under the
+//!   stream's lock with the high-water mark, and the acknowledgement.
 //! - [`bindings`]: the consumer of `assets.gateway_bound` and the lookup of a gateway's tenant.
 //! - [`clickhouse`] and [`transport`]: the ClickHouse client.
 //! - [`schema`]: the Postgres migration files this release expects, which readiness checks and
@@ -17,9 +18,7 @@
 //!   Laysi/trustiot-v2#141).
 //! - [`rollup`]: the statements on the one-minute and one-hour aggregate tables: the settings
 //!   every statement that writes a stream must carry ([`rollup::stream_settings`]) and the
-//!   reconcile the ingest service must run after an I1 rewrite (no code writes or rewrites
-//!   telemetry yet: the write path and the rewrite are Laysi/trustiot-v2#641, which takes over
-//!   that contract), the backfill the migration Job runs, and the energy query of cumulative
+//!   reconcile the telemetry path runs after every write ([`telemetry`]), the backfill the migration Job runs, and the energy query of cumulative
 //!   points.
 //!
 //! The crate also owns the ClickHouse schema in `migrations/clickhouse/`: the migration Job
@@ -33,8 +32,10 @@ pub mod config;
 pub mod retention;
 pub mod rollup;
 pub mod schema;
+pub mod telemetry;
 pub mod transport;
 
+use std::sync::Arc;
 use std::time::Duration;
 
 use axum::Router;
@@ -46,14 +47,17 @@ use service_kit::tenant::{PlatformDb, TenantDb};
 use service_kit::{BoxError, Context};
 use sqlx::postgres::PgPoolOptions;
 
-use crate::bindings::GatewayBoundHandler;
+use crate::bindings::{GatewayBindings, GatewayBoundHandler};
 use crate::clickhouse::{Account, ClickHouse};
 use crate::config::Config;
+use crate::telemetry::hooks::NoHooks;
+use crate::telemetry::limits::LimitSettings;
+use crate::telemetry::{Parts, Pipeline, Subscription};
 
 /// Connections of the platform role's pool: the consumer's reads of the assets service's events,
 /// one read-only transaction at a time, one for readiness, and two for the lookups of the
-/// telemetry path (Laysi/trustiot-v2#641, which may size it again with the chart's connection
-/// budget in Laysi/trustiot-v2#642).
+/// telemetry path (Laysi/trustiot-v2#641). The chart's connection budget counts it
+/// (deploy/chart/templates/_postgres.tpl, tests/chart_connections.rs).
 pub const PLATFORM_CONNECTIONS: u32 = 4;
 
 /// How long getting a database connection may take, opening a new one included.
@@ -61,15 +65,16 @@ pub const ACQUIRE_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// The service's startup for `service_kit::run`: opens the service role's and the platform
 /// role's pools lazily (with the session check of `crates/service-kit`), builds the ClickHouse
-/// client, and starts the consumer of `assets.gateway_bound`. Readiness passes while both roles
-/// can open a checked session, the database has every migration file this release expects
-/// ([`schema::SCHEMA`]), and ClickHouse answers the service's account. The service has no API:
-/// it serves only service-kit's health endpoints.
+/// client, starts the consumer of `assets.gateway_bound` and the telemetry path. Readiness passes
+/// while both roles can open a checked session, the database has every migration file this
+/// release expects ([`schema::SCHEMA`]), ClickHouse answers the service's account, and the broker
+/// connection is up with the telemetry subscription granted (`mqtt`). The service has no API: it
+/// serves only service-kit's health endpoints.
 ///
 /// # Errors
 ///
-/// When the database settings would not verify the server, the ClickHouse CA file is unusable,
-/// or the consumer's settings are invalid. Nothing is served then: the service exits with
+/// When the database settings would not verify the server, the ClickHouse CA file or the broker's
+/// password file is unusable, or the consumer's settings are invalid. Nothing is served then: the service exits with
 /// code 1.
 pub async fn start(context: Context<Config>) -> Result<Router, BoxError> {
     let config = context.config();
@@ -102,9 +107,31 @@ pub async fn start(context: Context<Config>) -> Result<Router, BoxError> {
         config.platform.clickhouse_ca_file.as_deref(),
         Account::new(&config.clickhouse.username, &config.clickhouse.password),
     )?;
+    let ping_clickhouse = clickhouse.clone();
     context.health().add_check("clickhouse", move || {
-        let clickhouse = clickhouse.clone();
+        let clickhouse = ping_clickhouse.clone();
         async move { clickhouse.ping().await }
+    });
+
+    let concurrency = telemetry::concurrency(config.database.max_connections);
+    let pipeline = Pipeline::start(Parts {
+        clickhouse,
+        bindings: GatewayBindings::new(&platform),
+        locks: db.pool().clone(),
+        mqtt: config.mqtt.clone(),
+        subscription: Subscription::Shared(telemetry::SHARE_GROUP.to_owned()),
+        concurrency,
+        limits: LimitSettings {
+            batches_per_minute: config.telemetry_limits.batches_per_minute,
+            burst: config.telemetry_limits.burst,
+            max_in_progress: telemetry::gateway_in_progress(concurrency),
+        },
+        hooks: Arc::new(NoHooks),
+    })?;
+    let connection = pipeline.connection();
+    context.health().add_check("mqtt", move || {
+        let result = connection.check();
+        async move { result }
     });
 
     let consumer = Consumer::new(
@@ -119,5 +146,7 @@ pub async fn start(context: Context<Config>) -> Result<Router, BoxError> {
         // serving then and the consumer's lag shows the problem.
         let _ = consumer.run(stop).await;
     });
+    let stop = context.shutdown().stopping_token();
+    context.spawn(pipeline.run(stop));
     Ok(Router::new())
 }

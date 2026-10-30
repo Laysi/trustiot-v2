@@ -24,7 +24,7 @@ use agent::ReasonCode;
 use agent::backoff::{MIN_DELAY, STABLE_AFTER};
 use agent::link::{
     self, ConnectError, ConnectStage, Connector, DownMessage, INCOMING_QUEUE, Incoming, Link,
-    LinkSettings, LinkState, PublishError, Published, REQUEST_QUEUE, Subscriptions,
+    LinkSettings, LinkState, PublishError, Published, REQUEST_QUEUE, Refusal, Subscriptions,
 };
 use protocol::health::{Heartbeat, OfflineReason, Status};
 use protocol::topic::{Channel, Direction, MIN_MAX_PACKET_BYTES};
@@ -1802,7 +1802,12 @@ async fn heartbeats_follow_every_connection_with_its_session() {
         agent::heartbeat::HeartbeatSettings {
             interval: Duration::from_secs(30),
             agent_version: AgentVersion::new("0.1.0-test").unwrap(),
-            certificate_not_after: protocol::UnixMillis::new(1_900_000_000_000),
+            certificate_not_after: tokio::sync::watch::channel(protocol::UnixMillis::new(
+                1_900_000_000_000,
+            ))
+            .1,
+            buffer: agent::upload::Stats::default(),
+            clock: agent::clock::GatewayClock::system(),
         },
         Instant::now(),
         harness.shutdown.clone(),
@@ -2512,7 +2517,12 @@ async fn a_heartbeat_that_finds_the_queue_full_is_skipped_not_delayed() {
         agent::heartbeat::HeartbeatSettings {
             interval: Duration::from_secs(30),
             agent_version: AgentVersion::new("0.1.0-test").unwrap(),
-            certificate_not_after: protocol::UnixMillis::new(1_900_000_000_000),
+            certificate_not_after: tokio::sync::watch::channel(protocol::UnixMillis::new(
+                1_900_000_000_000,
+            ))
+            .1,
+            buffer: agent::upload::Stats::default(),
+            clock: agent::clock::GatewayClock::system(),
         },
         Instant::now(),
         harness.shutdown.clone(),
@@ -2656,4 +2666,369 @@ async fn slow_writes_during_setup_do_not_use_up_the_time_for_their_acknowledgeme
             })
             .await;
     }
+}
+
+/// Settings whose credentials change when the returned sender raises the version, as
+/// certificate renewal does (Laysi/trustiot-v2#83).
+fn renewable(settings: LinkSettings) -> (LinkSettings, tokio::sync::watch::Sender<u64>) {
+    let (version, credentials) = tokio::sync::watch::channel(0);
+    (
+        LinkSettings {
+            credentials: Some(credentials),
+            ..settings
+        },
+        version,
+    )
+}
+
+/// Renewed credentials rotate the connection: it takes no new publishes, writes what it had
+/// already accepted, waits for every PUBACK, ends its session like a clean stop and reconnects
+/// at once with the new credentials. Nothing it accepted is lost.
+#[tokio::test(start_paused = true)]
+async fn renewed_credentials_rotate_the_connection_without_losing_what_it_accepted() {
+    let (settings, version) = renewable(LinkSettings {
+        inflight_limit: 2,
+        ..settings()
+    });
+    let mut harness = start(settings);
+    let mut broker = harness.broker().await;
+    let (_, first) = harness.connected(&mut broker).await;
+    // Two publishes in flight, two more waiting in the queue behind the full window.
+    let mut publishers = Vec::new();
+    for index in 0..4_u8 {
+        publishers.push(spawn_publish(
+            &harness.link,
+            Channel::Telemetry,
+            vec![index],
+        ));
+        tokio::time::sleep(Duration::from_millis(1)).await;
+    }
+    let mut written = Vec::new();
+    for _ in 0..2 {
+        let Some(Packet::Publish(publish)) = broker.read().await else {
+            panic!("expected a PUBLISH")
+        };
+        written.push(publish);
+    }
+    tokio::time::sleep(Duration::from_millis(1)).await;
+    assert_eq!((harness.link.in_flight(), harness.link.queued()), (2, 2));
+
+    version.send_replace(1);
+    tokio::time::sleep(Duration::from_millis(1)).await;
+    // From now on the connection takes nothing new.
+    refused_at_once(&harness.link, &PublishError::NotConnected, "rotating");
+    // What it accepted is still written, as the window frees up, and acknowledged.
+    for _ in 0..2 {
+        let done = written.remove(0);
+        broker.send(&puback(done.id.unwrap(), 0)).await;
+        let Some(Packet::Publish(publish)) = broker.read().await else {
+            panic!("expected a queued PUBLISH")
+        };
+        written.push(publish);
+    }
+    let payloads: Vec<Vec<u8>> = written
+        .iter()
+        .map(|publish| publish.payload.clone())
+        .collect();
+    assert_eq!(payloads, [vec![2], vec![3]]);
+    for publish in written {
+        broker.send(&puback(publish.id.unwrap(), 0)).await;
+    }
+    // Then the session ends cleanly: offline/shutdown, its PUBACK, DISCONNECT 0x00, so the
+    // broker discards the will.
+    let Some(Packet::Publish(offline)) = broker.read_answering_pings().await else {
+        panic!("expected offline/shutdown")
+    };
+    let Status::Offline(status) = Status::decode(&offline.payload).unwrap() else {
+        panic!("expected offline")
+    };
+    assert_eq!(
+        (status.session, status.reason),
+        (first.clone(), OfflineReason::Shutdown)
+    );
+    broker.send(&puback(offline.id.unwrap(), 0)).await;
+    assert_eq!(broker.read().await, Some(Packet::Disconnect { reason: 0 }));
+    assert_eq!(broker.read().await, None);
+    let ended = Instant::now();
+    for publisher in publishers {
+        assert_eq!(
+            bounded("a publisher", publisher).await.unwrap(),
+            Ok(Published::Acknowledged(ReasonCode(0))),
+            "every publish the connection accepted is acknowledged"
+        );
+    }
+
+    // The next connection follows at once, without a backoff delay.
+    let mut broker = harness.broker().await;
+    assert!(
+        Instant::now() - ended < MIN_DELAY,
+        "reconnected after a backoff"
+    );
+    let (_, second) = harness.connected(&mut broker).await;
+    assert_ne!(first, second);
+    next_publish_is_a_fresh_one(&harness, &mut broker).await;
+    assert_eq!(*harness.link.certificate_refused().borrow(), None);
+
+    // A version that changes again rotates again.
+    version.send_replace(2);
+    let Some(Packet::Publish(offline)) = broker.read_answering_pings().await else {
+        panic!("expected offline/shutdown")
+    };
+    broker.send(&puback(offline.id.unwrap(), 0)).await;
+    assert_eq!(broker.read().await, Some(Packet::Disconnect { reason: 0 }));
+    let mut broker = harness.broker().await;
+    harness.connected(&mut broker).await;
+}
+
+/// A caller that holds a place in the queue cannot hold a rotation up for longer than its
+/// deadline (two keepalive periods): the connection then ends with the will, the place's
+/// publish is refused, and the link reconnects at once.
+#[tokio::test(start_paused = true)]
+async fn a_held_permit_cannot_hold_up_a_rotation_past_its_deadline() {
+    let (settings, version) = renewable(settings());
+    let mut harness = start(settings);
+    let mut broker = harness.broker().await;
+    harness.connected(&mut broker).await;
+    let permit = bounded("a place", harness.link.reserve(Channel::Telemetry))
+        .await
+        .unwrap();
+    let rotated = Instant::now();
+    version.send_replace(1);
+    assert_eq!(
+        broker.read_answering_pings().await,
+        Some(Packet::Disconnect { reason: 0x04 })
+    );
+    let waited = Instant::now() - rotated;
+    assert!(
+        waited >= 2 * link::KEEP_ALIVE && waited < 2 * link::KEEP_ALIVE + MIN_DELAY,
+        "the rotation ended after {waited:?}"
+    );
+    assert_eq!(
+        bounded("the held place", permit.publish(vec![1])).await,
+        Err(PublishError::NotConnected)
+    );
+    let ended = Instant::now();
+    let mut broker = harness.broker().await;
+    assert!(
+        Instant::now() - ended < MIN_DELAY,
+        "reconnected after a backoff"
+    );
+    harness.connected(&mut broker).await;
+}
+
+/// A shutdown during a rotation is a plain stop: the link stops instead of reconnecting.
+#[tokio::test(start_paused = true)]
+async fn a_shutdown_during_a_rotation_stops_the_link() {
+    let (settings, version) = renewable(settings());
+    let mut harness = start(settings);
+    let mut broker = harness.broker().await;
+    harness.connected(&mut broker).await;
+    let permit = bounded("a place", harness.link.reserve(Channel::Telemetry))
+        .await
+        .unwrap();
+    version.send_replace(1);
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    harness.shutdown.cancel();
+    let Some(Packet::Publish(offline)) = broker.read_answering_pings().await else {
+        panic!("expected offline/shutdown")
+    };
+    broker.send(&puback(offline.id.unwrap(), 0)).await;
+    assert_eq!(broker.read().await, Some(Packet::Disconnect { reason: 0 }));
+    bounded("the supervisor to stop", &mut harness.supervisor)
+        .await
+        .unwrap();
+    assert_eq!(*harness.link.state().borrow(), LinkState::Stopped);
+    drop(permit);
+}
+
+/// Fails every connection attempt, with the scripted errors first.
+struct Failing {
+    failures: std::sync::Mutex<VecDeque<ConnectError>>,
+    then: fn() -> ConnectError,
+}
+
+impl Failing {
+    fn new(failures: impl IntoIterator<Item = ConnectError>, then: fn() -> ConnectError) -> Self {
+        Self {
+            failures: std::sync::Mutex::new(failures.into_iter().collect()),
+            then,
+        }
+    }
+}
+
+impl Connector for Failing {
+    type Stream = DuplexStream;
+
+    async fn connect(&self) -> Result<DuplexStream, ConnectError> {
+        let next = self.failures.lock().unwrap().pop_front();
+        Err(next.unwrap_or_else(self.then))
+    }
+}
+
+fn unreachable_error() -> ConnectError {
+    ConnectError::new(ConnectStage::Tcp, "connection refused")
+}
+
+fn silent_inner_error() -> ConnectError {
+    ConnectError::new(ConnectStage::InnerTls, "handshake cut short")
+}
+
+/// A TLS alert in the outer TLS handshake, as tokio-rustls hands it over. Anyone on the path
+/// can send one before the handshake is done.
+fn outer_alert(description: rustls::AlertDescription) -> ConnectError {
+    ConnectError::new(
+        ConnectStage::OuterTls,
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            rustls::Error::AlertReceived(description),
+        ),
+    )
+}
+
+/// A TLS alert from the broker as tokio-rustls hands it over: a rustls error inside an
+/// `io::Error`.
+fn alert(description: rustls::AlertDescription) -> ConnectError {
+    ConnectError::new(
+        ConnectStage::InnerTls,
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            rustls::Error::AlertReceived(description),
+        ),
+    )
+}
+
+/// The broker refusing the client certificate with an alert in the inner mTLS is reported at
+/// once, with the version of the credentials the attempt used; the network, the outer TLS (a
+/// certificate alert there included: it is not authenticated) and other alerts are not.
+#[tokio::test(start_paused = true)]
+async fn a_certificate_alert_is_reported_as_a_refusal_of_the_credentials_in_use() {
+    let (settings, version) = renewable(settings());
+    let shutdown = CancellationToken::new();
+    let (link, _incoming, supervisor) = link::link(
+        settings,
+        Failing::new(
+            [
+                ConnectError::new(ConnectStage::Tcp, "connection refused"),
+                ConnectError::new(ConnectStage::OuterTls, "bad certificate"),
+                outer_alert(rustls::AlertDescription::BadCertificate),
+                outer_alert(rustls::AlertDescription::CertificateRevoked),
+                alert(rustls::AlertDescription::HandshakeFailure),
+                alert(rustls::AlertDescription::CertificateExpired),
+            ],
+            unreachable_error,
+        ),
+        shutdown.clone(),
+    );
+    let supervisor = tokio::spawn(supervisor.run());
+    let mut refused = link.certificate_refused();
+    let mut state = link.state();
+    let mut failures = 0;
+    while failures < 5 {
+        bounded("a failed attempt", state.changed()).await.unwrap();
+        if matches!(*state.borrow_and_update(), LinkState::Disconnected { .. }) {
+            failures += 1;
+        }
+    }
+    assert_eq!(*refused.borrow(), None, "not the certificate's fault");
+    bounded("a refusal", refused.wait_for(Option::is_some))
+        .await
+        .unwrap();
+    assert_eq!(
+        *refused.borrow(),
+        Some(Refusal {
+            credentials: 0,
+            explicit: true
+        })
+    );
+    shutdown.cancel();
+    bounded("the supervisor to stop", supervisor).await.unwrap();
+    drop(version);
+
+    // A refusal of renewed credentials carries their version.
+    let (settings, version) = renewable(crate::settings());
+    let shutdown = CancellationToken::new();
+    let (link, _incoming, supervisor) = link::link(
+        settings,
+        Failing::new([], || alert(rustls::AlertDescription::CertificateRevoked)),
+        shutdown.clone(),
+    );
+    let supervisor = tokio::spawn(supervisor.run());
+    let mut refused = link.certificate_refused();
+    bounded(
+        "a refusal",
+        refused.wait_for(|refused| refused.is_some_and(|refused| refused.credentials == 0)),
+    )
+    .await
+    .unwrap();
+    version.send_replace(5);
+    bounded(
+        "a refusal of version 5",
+        refused.wait_for(|refused| refused.is_some_and(|refused| refused.credentials == 5)),
+    )
+    .await
+    .unwrap();
+    shutdown.cancel();
+    bounded("the supervisor to stop", supervisor).await.unwrap();
+}
+
+/// CONNACK 0x87 (the broker no longer knows the gateway) is a refusal at once; failures at the
+/// inner mTLS that say nothing are one (not explicit) only once they have lasted REFUSED_AFTER
+/// and a random part of REFUSED_JITTER, and new
+/// credentials start that time over.
+#[tokio::test(start_paused = true)]
+async fn connack_refusals_count_at_once_and_silent_inner_failures_only_after_a_while() {
+    let (settings, _version) = renewable(settings());
+    let mut harness = start(settings);
+    let mut refused = harness.link.certificate_refused();
+    let mut broker = harness.broker().await;
+    let Some(Packet::Connect(_)) = broker.read().await else {
+        panic!("expected CONNECT")
+    };
+    broker.send(&connack(0x87, &[])).await;
+    bounded("a refusal", refused.wait_for(Option::is_some))
+        .await
+        .unwrap();
+    assert!(refused.borrow().is_some_and(|refused| refused.explicit));
+    harness.shutdown.cancel();
+
+    // The longest draw: the run of failures lasts REFUSED_AFTER and (almost) all of
+    // REFUSED_JITTER before it counts.
+    let (settings, version) = renewable(LinkSettings {
+        jitter: longest,
+        ..crate::settings()
+    });
+    let wanted = link::REFUSED_AFTER + link::REFUSED_JITTER - Duration::from_secs(1);
+    let shutdown = CancellationToken::new();
+    let (link, _incoming, supervisor) = link::link(
+        settings,
+        Failing::new([], silent_inner_error),
+        shutdown.clone(),
+    );
+    let supervisor = tokio::spawn(supervisor.run());
+    let started = Instant::now();
+    let mut refused = link.certificate_refused();
+    // Bounded on the paused clock: REFUSED_AFTER, its jitter and at most one backoff delay (60 s)
+    // more.
+    let limit = link::REFUSED_AFTER + link::REFUSED_JITTER + Duration::from_secs(120);
+    tokio::time::timeout(limit, refused.wait_for(Option::is_some))
+        .await
+        .expect("a refusal after REFUSED_AFTER")
+        .unwrap();
+    let after = Instant::now() - started;
+    assert!(after >= wanted, "reported after {after:?}");
+    assert!(refused.borrow().is_some_and(|refused| !refused.explicit));
+    // New credentials get their own REFUSED_AFTER before they are blamed.
+    version.send_replace(1);
+    let renewed = Instant::now();
+    tokio::time::timeout(
+        limit,
+        refused.wait_for(|refused| refused.is_some_and(|refused| refused.credentials == 1)),
+    )
+    .await
+    .expect("a refusal of version 1")
+    .unwrap();
+    let after = Instant::now() - renewed;
+    assert!(after >= wanted, "reported after {after:?}");
+    shutdown.cancel();
+    bounded("the supervisor to stop", supervisor).await.unwrap();
 }

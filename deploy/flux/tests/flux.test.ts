@@ -788,7 +788,7 @@ describe("the demo release", () => {
   );
 
   test(
-    "with all four Postgres services on, the overlay passes the chart's connection check, which still refuses two identity replicas more (Laysi/trustiot-v2#575)",
+    "with all four Postgres services on, the overlay passes the chart's connection check, which still refuses three identity replicas more (Laysi/trustiot-v2#575)",
     () => {
       // The demo slice turns certs and telemetry-query on next to identity and assets, and Flux rolls
       // every service at once: the chart refuses values whose pools could then exceed Postgres'
@@ -803,10 +803,12 @@ describe("the demo release", () => {
         .map((m) => m.metadata.name)
         .sort();
       expect(postgresClients).toEqual(["trustiot-assets", "trustiot-certs", "trustiot-identity", "trustiot-telemetry-query"]);
-      // The control: three identity replicas are 31 x 4 instead of 31 x 2, past the default 200.
-      const more = helmTemplate([overlay, allFour], [...setLiteral, "--set", "services.identity.replicas=3"]);
+      // The control: four identity replicas are 31 x 5 instead of 31 x 2, past the default 230
+      // (Laysi/trustiot-v2#721 raised it from 200, under which three replicas were already too many,
+      // and Laysi/trustiot-v2#645 from 220).
+      const more = helmTemplate([overlay, allFour], [...setLiteral, "--set", "services.identity.replicas=4"]);
       expect(more.code).not.toBe(0);
-      expect(more.stderr).toContain("postgres.bundled.parameters.max_connections is 200, but 212 connections are needed");
+      expect(more.stderr).toContain("postgres.bundled.parameters.max_connections is 230, but 243 connections are needed");
     },
     SLOW_TEST_MS,
   );

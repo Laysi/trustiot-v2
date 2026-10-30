@@ -1,7 +1,12 @@
 //! The agent's configuration file (TOML, default [`DEFAULT_PATH`]).
 //!
-//! It holds how the gateway reaches the cloud and who it is; the device configuration
-//! (`DesiredConfig`) arrives over MQTT later (Laysi/trustiot-v2#94) and is not in this file.
+//! It holds how the gateway reaches the cloud, who it is, when it renews its certificate
+//! (`[renewal]`), and the offline buffer's limits (`[buffer]`). The device configuration
+//! (`DesiredConfig`) arrives over MQTT
+//! ([`crate::desired`]) and is not in this file, nor is the state directory where the agent
+//! keeps it and the offline buffer: that comes from systemd
+//! ([`crate::desired::store::state_directory`]), because the unit's sandbox leaves no other
+//! directory writable.
 //! Every security-relevant field (the URL, both trust lists, the certificate and the key) must be
 //! given: there are no defaults for them. Unknown keys are errors, so a misspelled key is never
 //! silently ignored; that includes `broker.name`, which earlier versions had: the broker's name
@@ -20,6 +25,9 @@
 //! certificate = "/var/lib/trustiot-agent/gateway.pem"
 //! key = { source = "tpm" }
 //! ```
+//!
+//! The certificate file must be in a directory the agent may write to (its state directory in
+//! production): certificate renewal ([`crate::renewal`]) replaces the file.
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -29,11 +37,17 @@ use serde::Deserialize;
 use crate::backoff::BackoffSettings;
 use crate::identity::{DEFAULT_TPM_DEVICE, DEFAULT_TPM_HANDLE, KeySource};
 use crate::link::DEFAULT_INFLIGHT_LIMIT;
+use crate::renewal::RenewalSettings;
 use crate::tls::BROKER_NAME;
 use crate::transport::CloudUrl;
+use crate::upload::{
+    DEFAULT_DISK_LIMIT, DEFAULT_MEMORY_LIMIT, DEFAULT_UPLOAD_INTERVAL, MAX_DISK_LIMIT,
+    MAX_MEMORY_LIMIT, MAX_UPLOAD_INTERVAL, MIN_UPLOAD_INTERVAL,
+};
 
 /// Where the agent reads its configuration unless told otherwise.
 pub const DEFAULT_PATH: &str = "/etc/trustiot/agent.toml";
+const MIB: u64 = 1024 * 1024;
 /// Bounds of `connection.heartbeat_interval_s`.
 pub const HEARTBEAT_INTERVAL_S: std::ops::RangeInclusive<u32> = 10..=3600;
 /// Bounds of `connection.reconnect_base_ms`.
@@ -42,6 +56,15 @@ pub const RECONNECT_BASE_MS: std::ops::RangeInclusive<u64> = 100..=60_000;
 pub const RECONNECT_CAP_MAX_MS: u64 = 3_600_000;
 /// Bounds of `connection.inflight_limit`.
 pub const INFLIGHT_LIMIT: std::ops::RangeInclusive<u16> = 1..=256;
+/// Bounds of `renewal.remaining_percent`. With less than a tenth of the validity left (9 days of
+/// a 90-day certificate) a failing endpoint leaves too little time to recover before the
+/// certificate expires; with more than four fifths left, a 90-day certificate would be renewed
+/// every 18 days or more often.
+pub const RENEWAL_REMAINING_PERCENT: std::ops::RangeInclusive<u8> = 10..=80;
+/// Bounds of `renewal.retry_base_s`.
+pub const RENEWAL_RETRY_BASE_S: std::ops::RangeInclusive<u64> = 1..=3600;
+/// The largest `renewal.retry_cap_s` (one day); the smallest is the base.
+pub const RENEWAL_RETRY_CAP_MAX_S: u64 = 86_400;
 /// The persistent handle range of a TPM 2.0 (TPM_HT_PERSISTENT).
 const PERSISTENT_HANDLES: std::ops::RangeInclusive<u32> = 0x8100_0000..=0x81FF_FFFF;
 
@@ -66,6 +89,22 @@ pub struct Config {
     pub reconnect: BackoffSettings,
     /// QoS 1 publishes that may wait for a PUBACK at once.
     pub inflight_limit: u16,
+    /// When to renew the client certificate, and how to retry a failed renewal.
+    pub renewal: RenewalSettings,
+    /// The offline buffer and the upload.
+    pub buffer: BufferConfig,
+}
+
+/// The `[buffer]` table: the offline buffer and the upload (Laysi/trustiot-v2#90). Its files
+/// are in the state directory ([`crate::upload::BUFFER_DIRECTORY`]), which is not configured here.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BufferConfig {
+    /// Encoded batches held in memory, in bytes.
+    pub memory_limit: usize,
+    /// Buffer files on the data partition, in bytes; 0 never writes to disk.
+    pub disk_limit: u64,
+    /// How often the collected readings become batches.
+    pub upload_interval: Duration,
 }
 
 /// Why the configuration cannot be used. The message names the file or the key.
@@ -107,6 +146,10 @@ struct Raw {
     identity: RawIdentity,
     #[serde(default)]
     connection: RawConnection,
+    #[serde(default)]
+    renewal: RawRenewal,
+    #[serde(default)]
+    buffer: RawBuffer,
 }
 
 #[derive(Deserialize)]
@@ -170,6 +213,82 @@ impl Default for RawConnection {
             reconnect_cap_ms: 60_000,
             inflight_limit: DEFAULT_INFLIGHT_LIMIT,
         }
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields, default)]
+struct RawRenewal {
+    remaining_percent: u8,
+    retry_base_s: u64,
+    retry_cap_s: u64,
+}
+
+impl Default for RawRenewal {
+    fn default() -> Self {
+        let defaults = RenewalSettings::default();
+        Self {
+            remaining_percent: defaults.remaining_percent,
+            retry_base_s: defaults.retry.base.as_secs(),
+            retry_cap_s: defaults.retry.cap.as_secs(),
+        }
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields, default)]
+struct RawBuffer {
+    memory_limit_mib: u64,
+    disk_limit_mib: u64,
+    upload_interval_s: u64,
+}
+
+impl Default for RawBuffer {
+    fn default() -> Self {
+        Self {
+            memory_limit_mib: DEFAULT_MEMORY_LIMIT as u64 / MIB,
+            disk_limit_mib: DEFAULT_DISK_LIMIT / MIB,
+            upload_interval_s: DEFAULT_UPLOAD_INTERVAL.as_secs(),
+        }
+    }
+}
+
+impl RawBuffer {
+    fn validate(self) -> Result<BufferConfig, ConfigError> {
+        let max_memory = MAX_MEMORY_LIMIT as u64 / MIB;
+        if self.memory_limit_mib > max_memory {
+            return Err(invalid(
+                "buffer.memory_limit_mib",
+                format!("must be within 0..={max_memory}"),
+            ));
+        }
+        let max_disk = MAX_DISK_LIMIT / MIB;
+        if self.disk_limit_mib > max_disk {
+            return Err(invalid(
+                "buffer.disk_limit_mib",
+                format!("must be within 0..={max_disk}"),
+            ));
+        }
+        if self.memory_limit_mib == 0 && self.disk_limit_mib == 0 {
+            // Every batch would be dropped as it is formed, even while connected.
+            return Err(invalid(
+                "buffer.memory_limit_mib",
+                "and buffer.disk_limit_mib cannot both be 0: no batch would have anywhere to wait for its acknowledgement",
+            ));
+        }
+        let interval = MIN_UPLOAD_INTERVAL.as_secs()..=MAX_UPLOAD_INTERVAL.as_secs();
+        if !interval.contains(&self.upload_interval_s) {
+            return Err(invalid(
+                "buffer.upload_interval_s",
+                format!("must be within {}..={}", interval.start(), interval.end()),
+            ));
+        }
+        Ok(BufferConfig {
+            // At most 64 MiB, checked above.
+            memory_limit: usize::try_from(self.memory_limit_mib * MIB).unwrap_or(usize::MAX),
+            disk_limit: self.disk_limit_mib * MIB,
+            upload_interval: Duration::from_secs(self.upload_interval_s),
+        })
     }
 }
 
@@ -302,6 +421,34 @@ impl Config {
                 ),
             ));
         }
+        let renewal = raw.renewal;
+        if !RENEWAL_REMAINING_PERCENT.contains(&renewal.remaining_percent) {
+            return Err(invalid(
+                "renewal.remaining_percent",
+                format!(
+                    "must be within {}..={}",
+                    RENEWAL_REMAINING_PERCENT.start(),
+                    RENEWAL_REMAINING_PERCENT.end()
+                ),
+            ));
+        }
+        if !RENEWAL_RETRY_BASE_S.contains(&renewal.retry_base_s) {
+            return Err(invalid(
+                "renewal.retry_base_s",
+                format!(
+                    "must be within {}..={}",
+                    RENEWAL_RETRY_BASE_S.start(),
+                    RENEWAL_RETRY_BASE_S.end()
+                ),
+            ));
+        }
+        if !(renewal.retry_base_s..=RENEWAL_RETRY_CAP_MAX_S).contains(&renewal.retry_cap_s) {
+            return Err(invalid(
+                "renewal.retry_cap_s",
+                format!("must be within retry_base_s..={RENEWAL_RETRY_CAP_MAX_S}"),
+            ));
+        }
+        let buffer = raw.buffer.validate()?;
         Ok(Self {
             url,
             outer_trust,
@@ -315,6 +462,14 @@ impl Config {
                 cap: Duration::from_millis(connection.reconnect_cap_ms),
             },
             inflight_limit: connection.inflight_limit,
+            renewal: RenewalSettings {
+                remaining_percent: renewal.remaining_percent,
+                retry: BackoffSettings {
+                    base: Duration::from_secs(renewal.retry_base_s),
+                    cap: Duration::from_secs(renewal.retry_cap_s),
+                },
+            },
+            buffer,
         })
     }
 }
@@ -355,6 +510,75 @@ key = { source = "tpm" }
         assert_eq!(config.reconnect, BackoffSettings::default());
         assert_eq!(config.inflight_limit, 32);
         assert_eq!(config.broker_crl, None, "no root CRL unless configured");
+        assert_eq!(config.renewal, RenewalSettings::default());
+        assert_eq!(config.renewal.remaining_percent, 33);
+        assert_eq!(
+            config.renewal.retry,
+            BackoffSettings {
+                base: Duration::from_secs(30),
+                cap: Duration::from_secs(1800)
+            }
+        );
+        assert_eq!(
+            config.buffer,
+            BufferConfig {
+                memory_limit: 16 * 1024 * 1024,
+                disk_limit: 1024 * 1024 * 1024,
+                upload_interval: Duration::from_secs(10),
+            }
+        );
+    }
+
+    #[test]
+    fn buffer_settings_are_bounded() {
+        let with = |body: &str| format!("{MINIMAL}\n[buffer]\n{body}\n");
+        let config = Config::parse(&with(
+            "memory_limit_mib = 64\ndisk_limit_mib = 0\nupload_interval_s = 1",
+        ))
+        .unwrap();
+        assert_eq!(
+            config.buffer,
+            BufferConfig {
+                memory_limit: 64 * 1024 * 1024,
+                disk_limit: 0,
+                upload_interval: Duration::from_secs(1),
+            }
+        );
+        let config = Config::parse(&with(
+            "memory_limit_mib = 0\ndisk_limit_mib = 65536\nupload_interval_s = 60",
+        ))
+        .unwrap();
+        assert_eq!(config.buffer.memory_limit, 0);
+        assert_eq!(config.buffer.disk_limit, 64 * 1024 * 1024 * 1024);
+        for (body, expected) in [
+            (
+                "memory_limit_mib = 65",
+                "buffer.memory_limit_mib: must be within 0..=64",
+            ),
+            ("memory_limit_mib = -1", "memory_limit_mib"),
+            (
+                "disk_limit_mib = 65537",
+                "buffer.disk_limit_mib: must be within 0..=65536",
+            ),
+            (
+                "upload_interval_s = 0",
+                "buffer.upload_interval_s: must be within 1..=60",
+            ),
+            ("upload_interval_s = 61", "buffer.upload_interval_s"),
+            // The state directory comes from systemd (STATE_DIRECTORY), not from this file.
+            (
+                "directory = \"/var/lib/trustiot-agent\"",
+                "unknown field `directory`",
+            ),
+            ("memory_limit = 16", "unknown field `memory_limit`"),
+            (
+                "memory_limit_mib = 0\ndisk_limit_mib = 0",
+                "buffer.memory_limit_mib: and buffer.disk_limit_mib cannot both be 0",
+            ),
+        ] {
+            let error = error_of(&with(body));
+            assert!(error.contains(expected), "{body}: {error}");
+        }
     }
 
     #[test]
@@ -365,6 +589,14 @@ key = { source = "tpm" }
         assert_eq!(
             config.broker_crl,
             Some(PathBuf::from("/var/lib/trustiot-agent/root-crl.pem"))
+        );
+        // The example says its [renewal] values are the defaults.
+        assert!(example.contains("\n[renewal]\n"));
+        assert_eq!(config.renewal, RenewalSettings::default());
+        assert_eq!(
+            config.buffer,
+            Config::parse(MINIMAL).unwrap().buffer,
+            "the example's [buffer] table lists the defaults"
         );
     }
 
@@ -512,6 +744,41 @@ key = { source = "tpm" }
             error_of(&format!("{MINIMAL}\n[connection]\nkeep_alive_s = 300\n"))
                 .contains("unknown field")
         );
+        assert!(
+            error_of(&format!("{MINIMAL}\n[renewal]\nurl = \"https://x/\"\n"))
+                .contains("unknown field")
+        );
+    }
+
+    #[test]
+    fn renewal_settings_are_bounded() {
+        let with = |body: &str| format!("{MINIMAL}\n[renewal]\n{body}\n");
+        let config = Config::parse(&with(
+            "remaining_percent = 50\nretry_base_s = 10\nretry_cap_s = 600",
+        ))
+        .unwrap();
+        assert_eq!(
+            config.renewal,
+            RenewalSettings {
+                remaining_percent: 50,
+                retry: BackoffSettings {
+                    base: Duration::from_secs(10),
+                    cap: Duration::from_secs(600)
+                },
+            }
+        );
+        for (body, key) in [
+            ("remaining_percent = 9", "remaining_percent"),
+            ("remaining_percent = 81", "remaining_percent"),
+            ("remaining_percent = -1", "remaining_percent"),
+            ("retry_base_s = 0", "retry_base_s"),
+            ("retry_base_s = 3601", "retry_base_s"),
+            ("retry_base_s = 60\nretry_cap_s = 59", "retry_cap_s"),
+            ("retry_cap_s = 86401", "retry_cap_s"),
+        ] {
+            let error = error_of(&with(body));
+            assert!(error.contains(key), "{body}: {error}");
+        }
     }
 
     #[test]

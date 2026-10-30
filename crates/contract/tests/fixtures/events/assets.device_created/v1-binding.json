@@ -1,0 +1,29 @@
+{
+  "id": "01928f6e-7a3c-7d4e-8f00-000000000611",
+  "type": "assets.device_created",
+  "version": 1,
+  "tenant_id": "01928f6e-7a3c-7d4e-8f00-00000000000b",
+  "occurred_at": "2026-10-23T10:00:00.123Z",
+  "producer": "assets",
+  "payload": {
+    "device_id": "01928f6e-7a3c-7d4e-8f00-000000000d01",
+    "revision": 1,
+    "name": "line-1-meter",
+    "hardware_id": "tg-0001",
+    "model_id": "01928f6e-7a3c-7d4e-8f00-000000000a01",
+    "binding_id": "01928f6e-7a3c-7d4e-8f00-000000000b01",
+    "device": {
+      "id": "01928f6e-7a3c-7d4e-8f00-000000000d01",
+      "model": "power-meter",
+      "transport": "rtu_over_tcp",
+      "host": "192.0.2.10",
+      "port": 8899,
+      "unit_id": 3,
+      "poll_interval_ms": 60000
+    }
+  },
+  "actor": {
+    "kind": "user",
+    "user_id": "01928f6e-7a3c-7d4e-8f00-0000000000ed"
+  }
+}

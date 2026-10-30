@@ -1,0 +1,18 @@
+{
+  "id": "01928f6e-7a3c-7d4e-8f00-000000000401",
+  "type": "identity.ai_model_role_changed",
+  "version": 1,
+  "tenant_id": null,
+  "occurred_at": "2026-10-29T08:00:00.123Z",
+  "producer": "identity",
+  "payload": {
+    "role": "main",
+    "action": "set",
+    "version": 7,
+    "models": ["anthropic/claude-sonnet-5-5", "anthropic/claude-opus-5-5"]
+  },
+  "actor": {
+    "kind": "user",
+    "user_id": "01928f6e-7a3c-7d4e-8f00-0000000000c1"
+  }
+}

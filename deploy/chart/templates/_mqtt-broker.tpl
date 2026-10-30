@@ -54,10 +54,83 @@ Returns YAML {services: [...]}; use with fromYaml.
 The Secret the chart declares empty while the broker is enabled ("trustiot.filledSecretObjects"),
 which the broker pod's accounts init container fills with one password per account holder, under
 the service's name. Only that init container may read or write it (the Role in
-templates/mqtt-broker.yaml); each service will read its own key (README.md, "MQTT broker").
+templates/mqtt-broker.yaml); each service's pod mounts its own key and no other
+("trustiot.mqttBroker.serviceCredentials"; README.md, "MQTT broker", "服務的帳號").
 */}}
 {{- define "trustiot.mqttBroker.accountsSecret" -}}
 {{- include "trustiot.componentName" (dict "root" . "name" "mqtt-broker-accounts") -}}
+{{- end -}}
+
+{{/*
+The account holders ("trustiot.mqtt-broker.callers", service) whose program reads the broker
+settings, so that the chart hands them their account ("trustiot.mqttBroker.serviceCredentials"):
+certs (Laysi/trustiot-v2#633, Laysi/trustiot-v2#634), ingest (Laysi/trustiot-v2#641,
+Laysi/trustiot-v2#642) and gateway-ops (Laysi/trustiot-v2#720, Laysi/trustiot-v2#721): every
+account holder. A service's settings deny unknown fields, so a holder joins this list in the
+change that makes its program read them; until then the broker keeps its account but the service
+gets neither the settings nor the password. Fails the render when an entry is not an account
+holder. Returns YAML {services: [...]}; use with fromYaml.
+*/}}
+{{- define "trustiot.mqttBroker.credentialServices" -}}
+{{- $services := list "certs" "ingest" "gateway-ops" -}}
+{{- $holders := (include "trustiot.mqtt-broker.callers" . | fromYaml).service.callers -}}
+{{- range $services -}}
+{{- if not (has . $holders) -}}
+{{- fail (printf "trustiot.mqttBroker.credentialServices: %s holds no broker account (trustiot.mqtt-broker.callers)" .) -}}
+{{- end -}}
+{{- end -}}
+{{- dict "services" $services | toYaml -}}
+{{- end -}}
+
+{{/* Where a service's pod mounts its broker account's password ("trustiot.mqttBroker.serviceCredentials"). */}}
+{{- define "trustiot.mqttBroker.accountDir" -}}
+/etc/trustiot/mqtt-broker-account
+{{- end -}}
+
+{{/*
+A service's broker account (Laysi/trustiot-v2#634; README.md, "MQTT broker", "服務的帳號"), for
+the service template ("trustiot.service.env", "trustiot.service.deployment"). While the broker is
+enabled, the service is in "trustiot.mqttBroker.credentialServices" and it holds an account
+("trustiot.mqttBroker.accounts": enabled, an account holder, mqtt-broker listed in mesh.calls),
+returns
+- env: the service's broker settings, which crates/mqtt-client reads as mqtt.* under the service's
+  prefix: <prefix>__MQTT__HOST, the broker Service's DNS name; <prefix>__MQTT__PORT, the service
+  port; <prefix>__MQTT__USERNAME, service:<service>; <prefix>__MQTT__PASSWORD_FILE, the file of the
+  mount below. Custom env cannot set any <prefix>__MQTT__ name of these services, with the broker
+  or without it ("trustiot.service.env"): the account is the in-cluster broker's only;
+- volume: the accounts Secret with the service's own key and no other (items), 0440 (root and the
+  pod's fsGroup, as for the issuing CA keys; the service needs an fsGroup to read it). Not
+  optional: until the broker's accounts init container has written the key (a first install, or
+  the upgrade that adds the account), the kubelet keeps the pod waiting for the volume instead of
+  starting a service that would exit for want of the file; the key stays in the Secret after that,
+  so a broker that is down later keeps no service pod from starting;
+- volumeMount: that volume, read-only, as a directory and never through subPath, which the kubelet
+  never updates: after a rotation (mqttBroker.passwordGeneration) the kubelet replaces the file,
+  and the service reads it again for its next connection, so the pod template carries no
+  generation and the service does not restart.
+and empty lists otherwise. Argument: dict "root" $ "name" <service>.
+Returns YAML {env, volumes, volumeMounts}; use with fromYaml.
+*/}}
+{{- define "trustiot.mqttBroker.serviceCredentials" -}}
+{{- $root := .root -}}
+{{- $env := list -}}
+{{- $volumes := list -}}
+{{- $mounts := list -}}
+{{- $wired := has .name (include "trustiot.mqttBroker.credentialServices" $root | fromYaml).services -}}
+{{- $holder := has .name (include "trustiot.mqttBroker.accounts" $root | fromYaml).services -}}
+{{- if and (include "trustiot.mqttBroker.enabled" $root) $wired $holder -}}
+{{- $prefix := include "trustiot.service.envPrefix" .name -}}
+{{- $dir := include "trustiot.mqttBroker.accountDir" $root -}}
+{{- $port := (include "trustiot.mqtt-broker.callers" $root | fromYaml).service.port -}}
+{{- $env = append $env (dict "name" (printf "%s__MQTT__HOST" $prefix) "value" (include "trustiot.mqttBroker.serviceHost" $root)) -}}
+{{- $env = append $env (dict "name" (printf "%s__MQTT__PORT" $prefix) "value" (toString (int $port))) -}}
+{{- $env = append $env (dict "name" (printf "%s__MQTT__USERNAME" $prefix) "value" (printf "service:%s" .name)) -}}
+{{- $env = append $env (dict "name" (printf "%s__MQTT__PASSWORD_FILE" $prefix) "value" (printf "%s/%s" $dir .name)) -}}
+{{- $secret := dict "secretName" (include "trustiot.mqttBroker.accountsSecret" $root) "defaultMode" 288 "items" (list (dict "key" .name "path" .name)) -}}
+{{- $volumes = append $volumes (dict "name" "mqtt-broker-account" "secret" $secret) -}}
+{{- $mounts = append $mounts (dict "name" "mqtt-broker-account" "mountPath" $dir "readOnly" true) -}}
+{{- end -}}
+{{- dict "env" $env "volumes" $volumes "volumeMounts" $mounts | toYaml -}}
 {{- end -}}
 
 {{/*

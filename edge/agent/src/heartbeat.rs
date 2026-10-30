@@ -1,19 +1,23 @@
-//! The basic heartbeat: a valid [`Heartbeat`] on `up/heartbeat` right after every connection
-//! and then every interval, with what the agent knows by itself: its session, version and
-//! uptime, the OS uptime and boot time, the memory of the gateway and the client certificate's
-//! expiry. Device statistics, the offline buffer, CPU, disk, temperature, throttling and boot
-//! counts are Laysi/trustiot-v2#117's and stay empty or zero until then; the clock's sync
-//! state is Laysi/trustiot-v2#90's and reads `false` (not known to be synchronized).
+//! The heartbeat: a valid [`Heartbeat`] on `up/heartbeat` right after every connection and then
+//! every interval, with what the agent knows by itself: its session, version and uptime, the OS
+//! uptime and boot time, the memory of the gateway, the client certificate's expiry, the
+//! offline buffer (`buffer`, from [`Stats`]) and whether the clock is synchronized
+//! (`clock_synced`, from [`GatewayClock::synced`], the same state the batches are marked with).
+//! Device statistics, CPU, disk, temperature, throttling and boot counts are
+//! Laysi/trustiot-v2#117's and stay empty or zero until then.
 
-use std::time::{Duration, SystemTime};
+use std::time::Duration;
 
-use protocol::health::{BufferStats, Heartbeat, SystemStats};
+use protocol::health::{Heartbeat, SystemStats};
 use protocol::topic::Channel;
 use protocol::{AgentVersion, SessionId, UnixMillis, V1};
+use tokio::sync::watch;
 use tokio::time::{Instant, sleep_until};
 use tokio_util::sync::CancellationToken;
 
+use crate::clock::GatewayClock;
 use crate::link::{Link, LinkState, PublishError};
+use crate::upload::Stats;
 
 /// What every heartbeat carries besides the session.
 #[derive(Clone, Debug)]
@@ -22,8 +26,13 @@ pub struct HeartbeatSettings {
     pub interval: Duration,
     /// This agent's release.
     pub agent_version: AgentVersion,
-    /// When the client certificate expires.
-    pub certificate_not_after: UnixMillis,
+    /// When the client certificate expires; renewal ([`crate::renewal`]) updates it, and every
+    /// heartbeat reports the value it has then.
+    pub certificate_not_after: watch::Receiver<UnixMillis>,
+    /// The offline buffer's numbers.
+    pub buffer: Stats,
+    /// The clock: `sent_at` and `clock_synced`.
+    pub clock: GatewayClock,
 }
 
 /// Sends heartbeats while the link is connected, until `shutdown` is cancelled.
@@ -124,7 +133,7 @@ pub(crate) fn build(
     meminfo: &str,
     uptime: &str,
 ) -> Heartbeat {
-    let now = UnixMillis::from_system_time(SystemTime::now()).unwrap_or(UnixMillis::new(0));
+    let now = settings.clock.wall();
     let uptime = os_uptime(uptime);
     let booted_at = UnixMillis::new(
         now.get()
@@ -153,15 +162,9 @@ pub(crate) fn build(
             agent_uptime_s: agent_uptime.as_secs(),
             agent_starts_since_boot: 0,
         },
-        buffer: BufferStats {
-            pending_records: 0,
-            pending_batches: 0,
-            oldest_pending: None,
-            disk_bytes: 0,
-            dropped_records: 0,
-        },
-        clock_synced: false,
-        cert_not_after: settings.certificate_not_after,
+        buffer: settings.buffer.snapshot(),
+        clock_synced: settings.clock.synced(),
+        cert_not_after: *settings.certificate_not_after.borrow(),
         devices: Vec::new(),
     }
 }
@@ -194,8 +197,58 @@ mod tests {
         HeartbeatSettings {
             interval: Duration::from_secs(60),
             agent_version: AgentVersion::new("0.1.0").unwrap(),
-            certificate_not_after: UnixMillis::new(1_900_000_000_000),
+            certificate_not_after: watch::channel(UnixMillis::new(1_900_000_000_000)).1,
+            buffer: Stats::default(),
+            clock: GatewayClock::new(
+                crate::clock::SystemWall,
+                std::path::PathBuf::from("/nonexistent/trustiot-agent-test/synchronized"),
+            ),
         }
+    }
+
+    #[test]
+    fn the_buffer_and_the_clock_state_come_from_their_sources() {
+        let mut settings = settings();
+        let heartbeat = build(
+            &settings,
+            SessionId::new("s-1").unwrap(),
+            Duration::ZERO,
+            "",
+            "",
+        );
+        assert_eq!(heartbeat.buffer, Stats::default().snapshot());
+        assert_eq!(heartbeat.buffer.pending_batches, 0);
+        assert!(!heartbeat.clock_synced, "timesyncd has not synchronized");
+        // A file that exists stands for timesyncd's flag; then a comparison with the cloud's
+        // time decides.
+        settings.clock =
+            GatewayClock::new(crate::clock::SystemWall, std::env::current_exe().unwrap());
+        let heartbeat = build(
+            &settings,
+            SessionId::new("s-1").unwrap(),
+            Duration::ZERO,
+            "",
+            "",
+        );
+        assert!(heartbeat.clock_synced);
+        let now = settings.clock.wall();
+        settings.clock.compare(
+            UnixMillis::new(now.get() + 3_600_000),
+            now,
+            now,
+            Duration::ZERO,
+        );
+        let heartbeat = build(
+            &settings,
+            SessionId::new("s-1").unwrap(),
+            Duration::ZERO,
+            "",
+            "",
+        );
+        assert!(
+            !heartbeat.clock_synced,
+            "the cloud's time says the clock is off"
+        );
     }
 
     #[test]
@@ -222,6 +275,21 @@ mod tests {
         );
         assert_eq!(decoded.cert_not_after.get(), 1_900_000_000_000);
         assert!(decoded.devices.is_empty());
+    }
+
+    #[test]
+    fn heartbeats_report_the_expiry_of_the_renewed_certificate() {
+        let (expiry, receiver) = watch::channel(UnixMillis::new(1_900_000_000_000));
+        let settings = HeartbeatSettings {
+            certificate_not_after: receiver,
+            ..settings()
+        };
+        let session = SessionId::new("s-1").unwrap();
+        let before = build(&settings, session.clone(), Duration::ZERO, "", "");
+        expiry.send_replace(UnixMillis::new(1_950_000_000_000));
+        let after = build(&settings, session, Duration::ZERO, "", "");
+        assert_eq!(before.cert_not_after.get(), 1_900_000_000_000);
+        assert_eq!(after.cert_not_after.get(), 1_950_000_000_000);
     }
 
     #[test]

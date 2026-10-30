@@ -304,4 +304,35 @@ mod tests {
         assert!(header.is_sensitive());
         assert_eq!(header, "Basic dTpw");
     }
+
+    #[test]
+    fn a_part_of_the_series_fits_the_request_target() {
+        // The `http` crate refuses a URI of 64 KiB or more: the request is never sent. A part of
+        // a batch's series (src/rollup.rs, `MAX_SERIES_PARAM_BYTES`) leaves room for the
+        // statement's other parameters and settings.
+        let others = 4 * 1024;
+        let part = format!(
+            "/?param_series={}",
+            "a".repeat(crate::rollup::MAX_SERIES_PARAM_BYTES + others)
+        );
+        assert!(Uri::try_from(part).is_ok());
+        let too_long = format!("/?param_series={}", "a".repeat(64 * 1024));
+        assert!(Uri::try_from(too_long).is_err());
+    }
+
+    #[test]
+    fn the_rollup_size_bound_counts_as_this_encoder_does() {
+        // src/rollup.rs splits a batch's series by this length (`MAX_SERIES_PARAM_BYTES`).
+        for text in [
+            "[('0b9c6f3e-2d4a-4c8e-9a51-6f0d2b7c1e44', 'power.L1_x~y'), ('a', 'b')]",
+            "it's \\ odd é",
+            "",
+        ] {
+            assert_eq!(
+                crate::rollup::url_encoded_len(text),
+                utf8_percent_encode(text, QUERY_VALUE).to_string().len(),
+                "{text}"
+            );
+        }
+    }
 }

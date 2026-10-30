@@ -1,0 +1,59 @@
+$ cargo test --locked -p gateway-ops -- --nocapture --test-threads=1
+# 建置主機（arm64 Linux VM），CI=1，commit 3bad6845 的樹；只留測試名稱、evidence 行與結果
+running 23 tests
+test config::tests::debug_never_prints_passwords ... ok
+test config::tests::the_broker_and_the_throttle_are_checked ... ok
+test config::tests::the_roles_must_differ_and_have_passwords ... ok
+test delivery::reports::tests::a_flooding_gateway_holds_one_place_and_cannot_crowd_out_another ... ok
+test delivery::reports::tests::a_full_inbox_gives_up_the_report_that_waited_longest ... ok
+test delivery::reports::tests::a_report_that_arrives_during_a_failed_try_supersedes_it ... ok
+test delivery::reports::tests::a_stale_report_republishes_the_latest_version ... ok
+test delivery::reports::tests::a_waiting_retry_is_replaced_by_a_new_report_of_its_gateway ... ok
+test delivery::reports::tests::failed_reports_are_retried_after_a_delay_until_the_limit ... ok
+test delivery::reports::tests::messages_that_break_the_protocol_are_refused ... ok
+test delivery::reports::tests::reports_are_recorded_only_for_generated_versions_of_the_current_binding ... ok
+test delivery::reports::tests::the_gateway_comes_from_the_topic ... ok
+test delivery::reports::tests::the_log_budget_limits_lines_per_window_and_counts_the_rest ... ok
+test delivery::schedule::tests::a_late_older_announcement_never_lowers_the_expected_version ... ok
+test delivery::schedule::tests::a_report_waits_a_throttle_so_a_flood_of_reports_is_one_publish ... ok
+test delivery::schedule::tests::a_republish_is_due_at_once_and_forces_a_merged_change ... ok
+test delivery::schedule::tests::a_retry_merges_with_what_arrived_meanwhile ... ok
+test delivery::schedule::tests::busy_gateways_wait_and_the_limit_takes_the_earliest ... ok
+test delivery::schedule::tests::ten_quick_changes_become_one_publish_of_the_latest_version ... ok
+test generate::tests::a_deletion_leaves_the_stored_version_without_the_device_and_its_unused_model ... ok
+test generate::tests::a_missing_or_misnamed_model_and_an_invalid_configuration_are_refused ... ok
+test generate::tests::devices_and_models_come_in_a_fixed_order_each_model_once ... ok
+test generate::tests::more_devices_than_a_configuration_holds_are_refused_and_a_deletion_still_trims ... ok
+test result: ok. 23 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+running 1 test
+test tenants_are_isolated ... result | subject | probe | outcome
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.42s
+running 6 tests
+test a_broker_restart_republishes_every_gateway_and_readiness_follows_the_connection ... evidence: readiness without the broker: "not connected to the mqtt broker with the apply report subscription granted"; after the restart: ready, republish runs 1 -> 2, republished publishes 4, a new subscriber got [("go-restart-a-01a187bee00f739dbaff5c3772707d03", 2), ("go-restart-b-01a187bee19f7494b859f800efa2ad34", 3)] retained
+test a_gateway_another_replica_is_publishing_waits_for_its_publish_lock ... evidence: while another session held the publish lock of the gateway: 0 publishes over 5s; after it released the lock: version Some(2) published
+test a_gateway_flooding_its_report_topic_does_not_crowd_out_another ... evidence: 500 reports of versions never generated from one gateway, then one from another: the other's recorded (Some("applied")); of the flood 136 refused after a read and 364 superseded in the inbox; none lost
+test a_replica_finding_the_republish_lock_taken_leaves_the_republish_to_its_holder ... evidence: with the lock gateway-ops/config-republish held elsewhere: republish skipped 1, runs 0, republished 0
+test apply_reports_are_recorded_under_the_topics_gateway_and_unreasonable_ones_refused ... evidence: recorded [("go-report-01a187bf31a3751a98f2f22aafdbeadc", "rejected"), ("go-report-01a187bf31a3751a98f2f22aafdbeadc", "applied")]; the same applied report 3 more times: 2 not written again, 1 replaced in the inbox; refused reasons ["version_ahead", "version_ahead", "unknown_gateway", "decode"]; stale report of version 2 -> version Some(3) published again; config_deliveries: [DeliveryRow { tenant_id: "01a187bf-31a3-751a-98f2-f22996cf09aa", version: 2, published: true, republished: false, outcome: Some("applied"), active_version: Some(2), issues: Some("[]") }, DeliveryRow { tenant_id: "01a187bf-31a3-751a-98f2-f22996cf09aa", version: 3, published: true, republished: false, outcome: None, active_version: None, issues: None }]
+test ten_quick_changes_are_published_once_retained_as_the_latest_version ... evidence: 10 announcements (versions 2..=11) within a 10s throttle -> coalesced 9, published 1 (version 11) after 10.010909243s; a new subscriber got version Some(11) retained with QoS 1; config_deliveries: [DeliveryRow { tenant_id: "01a187bf-4887-7495-bc01-f3479e35fd3f", version: 11, published: true, republished: false, outcome: None, active_version: None, issues: None }]
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 51.96s
+running 7 tests
+test a_deletion_takes_effect_while_the_configuration_cannot_be_made ... evidence: deletion while the configuration fails: versions [1, 2, 3, 4], devices per version [0, 1, 0, 1]
+test a_rebind_whose_configuration_cannot_be_made_never_keeps_the_earlier_tenants ... evidence: rebind to B with a configuration that cannot be made: versions [1, 2, 3, 4] in tenants ["A", "A", "B", "B"], devices [0, 1, 0, 1]; current() returns version 3 of tenant B with 0 devices
+test device_changes_make_versions_and_replays_make_none ... evidence: versions [1, 2, 3, 4, 5]; devices per version [0, 1, 2, 2, 1]; 5 versions after reprocessing 8 events
+test ending_the_binding_leaves_a_configuration_without_devices ... ok
+test other_tenants_and_ended_bindings_stay_out ... evidence: versions [1, 2, 3, 4, 5] in tenants ["A", "A", "B", "B", "B"]; tenant B's devices of another binding and of no binding are in none; the device without binding_id written under B's binding is in version 5; tenant A's device is in none of tenant B's
+test the_delivery_reads_the_latest_version_and_cannot_write ... ok
+test the_delivery_refuses_a_version_not_made_for_the_latest_binding ... evidence: current() of a gateway whose latest binding has no version: the latest desired configuration of gateway go-guard-01a187bfe74972ae80149eb2c8d79257 was not made for its latest binding
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 18.08s
+running 1 test
+test a_configuration_that_cannot_be_made_keeps_the_previous_version ... evidence: unknown_model {"binding_id": "01a187bf-f0fe-74bb-a9f3-ac8a0a54ba28", "error": "device 01a187bf-f18b-70a1-a0bb-4b6c56e84b8c uses model 01a187bf-f18b-70a1-a0bb-4b6bf1ab2431, which the projection does not have", "event_id": "01a187bf-f18b-70a1-a0bb-4b6d31c4e18e", "hardware_id": "go-errors-01a187bff0fe74bba9f3ac898d4496c6", "level": "ERROR", "reason": "unknown_model", "tenant_id": "01a187bf-f0fe-74bb-a9f3-ac8840e645e6"}; invalid {"binding_id": "01a187bf-f0fe-74bb-a9f3-ac8a0a54ba28", "error": "the configuration is invalid: mixed_transport at devices[1].transport", "event_id": "01a187bf-f208-70c8-aa5b-2afbdf356bac", "hardware_id": "go-errors-01a187bff0fe74bba9f3ac898d4496c6", "level": "ERROR", "reason": "invalid", "tenant_id": "01a187bf-f0fe-74bb-a9f3-ac8840e645e6"}; other tenant {"device_id": "01a187bf-f2be-7351-9e68-8c661f8356dd", "event_id": "01a187bf-f2bf-7291-8e4b-4afd9830450f", "event_type": "assets.device_created", "hardware_id": "go-errors-01a187bff0fe74bba9f3ac898d4496c6", "level": "WARN", "reason": "other_tenant", "tenant_id": "01a187bf-f2be-7351-9e68-8c6505584e0c"}; versions stay at 2
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.57s
+running 1 test
+test the_service_delivers_versions_retained_follows_the_broker_and_stops_on_sigterm ... evidence: ready; versions [1, 2] for the gateway; a new subscriber got version Some(2) retained (QoS 1); /readyz without the broker: 503 {"status":"unavailable"} (failed checks [String("mqtt")]); after the restart: ready, 2 republish runs logged, a new subscriber got version Some(2) retained; exit code Some(0) after SIGTERM
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.69s
+running 1 test
+test unknown_events_are_acknowledged_only_outside_the_followed_aggregates ... evidence: an unknown event of another aggregate acknowledged; an unknown event of a binding aggregate retried 5 polls in a row, not processed, not dead-lettered, and the binding event after it not processed
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.30s
+running 0 tests
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+exit 0 at 21:01:38 (build host, arm64 Linux VM)

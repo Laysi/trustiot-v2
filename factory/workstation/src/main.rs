@@ -1,7 +1,11 @@
 //! `trustiot-workstation`: the production workstation tool (factory/workstation/README.md).
 //!
-//! Exit codes: 0 done, 1 failed, 2 usage, and `register`'s own (10 to 19 and 75,
-//! [`workstation::register::StopKind`]). Results go to stdout, prompts and log lines to stderr
+//! Exit codes: 0 done, 1 failed, 2 usage, `register`'s own (10 to 19 and 75,
+//! [`workstation::register::StopKind`]; 20 to 23 and 27 with `--gateway`,
+//! [`workstation::pipeline::StopKind`]; 30 to 35 for the installation after it,
+//! [`workstation::install::InstallStopKind`]) and `verify`'s 24 to 26 ([`workstation::NO_EVENT_EXIT_CODE`],
+//! [`workstation::EVENT_MISMATCH_EXIT_CODE`], [`workstation::UNRECORDED_EXIT_CODE`]). Results go
+//! to stdout, prompts and log lines to stderr
 //! (`TRUSTIOT_WORKSTATION_LOG`: off, error, warn, info (default), debug or trace). Neither ever
 //! shows the login code, the session cookie, the private key or a `--headers-file` value.
 
@@ -11,20 +15,23 @@ use std::process::ExitCode;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use http::StatusCode;
+use protocol::GatewayId;
 use tracing_subscriber::filter::{LevelFilter, Targets};
 use tracing_subscriber::layer::SubscriberExt as _;
 use tracing_subscriber::util::SubscriberInitExt as _;
 use workstation::config::{self, Options, Origin};
-use workstation::http::{Client, ExtraHeaders};
+use workstation::gateway::{self, Destination, KnownHosts, SshGateway, UploadedAgent};
+use workstation::http::{Client, ExtraHeaders, printable};
 use workstation::identity::{self, KeyOrigin, WorkstationDirectory};
-use workstation::journal::Journal;
+use workstation::journal::{Journal, State};
+use workstation::pipeline::{self, Plan, Provisioned};
 use workstation::register::{self, Backoff, Gateway, InputError, Registrar, StopKind, Workstation};
-use workstation::retry;
 use workstation::secret::VerificationCode;
 use workstation::session::{
     self, Accepted, LoggedOut, SendCodeError, Session, SessionStore, VerifyError,
 };
 use workstation::{Error, files};
+use workstation::{retry, verify};
 use zeroize::Zeroizing;
 
 const USAGE: &str = "usage:
@@ -34,10 +41,16 @@ const USAGE: &str = "usage:
 [network options]
   trustiot-workstation install-certificate --certificate <file> [--dir <dir>]
   trustiot-workstation logout [--url <platform URL>] [network options]
+  trustiot-workstation register --hardware-id <id> --gateway <ssh destination> --root-sha256 <hex> \
+[--handle <hex>] [--upload-agent <file>] [--remote-sudo] [--allow-new-key] [registration options]
   trustiot-workstation register --hardware-id <id> --csr <file> --ek <file> --root-sha256 <hex> \
-[--url <platform URL>] [--dir <dir>] [--attempts <n>] [--retry-for <seconds>] [network options]
+[registration options]
+  trustiot-workstation verify --hardware-id <id> [--url <platform URL>] [--dir <dir>] \
+[network options]
+registration options: [--url <platform URL>] [--dir <dir>] [--attempts <n>] \
+[--retry-for <seconds>] [network options]
 network options: [--ca-file <file>] [--headers-file <file>] [--timeout <seconds>]
-login reads the code from the email on stdin. The guide, with register's exit codes, is
+login reads the code from the email on stdin. The guide, with the exit codes, is
 factory/workstation/README.md.";
 
 /// The options every command that calls the platform takes.
@@ -101,7 +114,8 @@ fn init_logging() -> Result<(), Error> {
         .map_err(|_| Error::Failed("cannot set up logging".to_owned()))
 }
 
-fn env(name: &str) -> Option<OsString> {
+/// A variable of the process environment, for the `config` functions that locate directories.
+fn environment_variable(name: &str) -> Option<OsString> {
     std::env::var_os(name)
 }
 
@@ -149,13 +163,16 @@ fn run(arguments: &[String]) -> Result<(), Error> {
             &allowed(&["name", "url", "dir"], true),
         )?)),
         "logout" => network(logout(&Options::parse(rest, &allowed(&["url"], true))?)),
-        "register" => network(register(&Options::parse(
+        "register" => network(register(&Options::parse_with_flags(
             rest,
             &allowed(
                 &[
                     "hardware-id",
                     "csr",
                     "ek",
+                    "gateway",
+                    "handle",
+                    "upload-agent",
                     "url",
                     "dir",
                     "root-sha256",
@@ -164,6 +181,11 @@ fn run(arguments: &[String]) -> Result<(), Error> {
                 ],
                 true,
             ),
+            &["remote-sudo", "allow-new-key"],
+        )?)),
+        "verify" => network(verify(&Options::parse(
+            rest,
+            &allowed(&["hardware-id", "url", "dir"], true),
         )?)),
         "help" | "--help" | "-h" => {
             say(USAGE);
@@ -184,7 +206,8 @@ fn network(work: impl Future<Output = Result<(), Error>>) -> Result<(), Error> {
 }
 
 fn directory(options: &Options) -> Result<WorkstationDirectory, Error> {
-    config::workstation_directory(options.optional("dir"), &env).map(WorkstationDirectory::new)
+    config::workstation_directory(options.optional("dir"), &environment_variable)
+        .map(WorkstationDirectory::new)
 }
 
 fn init(options: &Options) -> Result<(), Error> {
@@ -245,7 +268,7 @@ async fn login(options: &Options) -> Result<(), Error> {
     let origin = Origin::parse(options.required("url")?)?;
     let email = session::check_email(options.required("email")?)?;
     // Everything that can fail locally fails before a code is mailed.
-    let store = SessionStore::new(config::session_directory(&env)?);
+    let store = SessionStore::new(config::session_directory(&environment_variable)?);
     store.prepare()?;
     // The workstation keeps one session. A session of another platform is not replaced: the
     // file is the only place its cookie lives, so overwriting it would leave that session active
@@ -382,7 +405,7 @@ async fn forget_ended_session(
 async fn enroll(options: &Options) -> Result<(), Error> {
     let name = options.required("name")?;
     let directory = directory(options)?;
-    let store = SessionStore::new(config::session_directory(&env)?);
+    let store = SessionStore::new(config::session_directory(&environment_variable)?);
     let (session, client) = session_client(options, &store)?;
     let enrolled = match identity::enroll(&client, &session.cookie, &directory, name, now).await {
         Ok(enrolled) => enrolled,
@@ -440,29 +463,86 @@ fn gateway_file(options: &Options, name: &str) -> Result<(Vec<u8>, std::path::Pa
     ))
 }
 
+/// The hardware ID of `--hardware-id`.
+fn hardware_id(options: &Options) -> Result<GatewayId, Error> {
+    let text = options.required("hardware-id")?;
+    let invalid = || Error::from(InputError::HardwareId(format!("{:?}", printable(text))));
+    if !register::is_hardware_id(text) {
+        return Err(invalid());
+    }
+    GatewayId::new(text).map_err(|_| invalid())
+}
+
+/// Where the gateway's CSR and endorsement key come from.
+enum Source {
+    /// `--csr` and `--ek`.
+    Files(Gateway),
+    /// `--gateway`: `trustiot-agent provision` over ssh.
+    Ssh { ssh: SshGateway, plan: Plan },
+}
+
+/// The options only `register --gateway` takes.
+const SSH_ONLY: [&str; 4] = ["handle", "upload-agent", "remote-sudo", "allow-new-key"];
+
+fn register_source(options: &Options) -> Result<Source, Error> {
+    let Some(destination) = options.optional("gateway") else {
+        if let Some(name) = SSH_ONLY.iter().find(|name| options.given(name)) {
+            return Err(Error::Usage(format!("--{name} needs --gateway")));
+        }
+        let hardware_id = options.required("hardware-id")?;
+        let (request, request_path) = gateway_file(options, "csr")?;
+        let (endorsement_key, endorsement_path) = gateway_file(options, "ek")?;
+        let gateway =
+            Gateway::new(hardware_id, &request, &endorsement_key).map_err(|error| match error {
+                InputError::CertificateRequest(reason) => Error::BadFile {
+                    path: request_path.clone(),
+                    reason,
+                },
+                InputError::EndorsementKey(reason) => Error::BadFile {
+                    path: endorsement_path.clone(),
+                    reason,
+                },
+                other @ InputError::HardwareId(_) => other.into(),
+            })?;
+        return Ok(Source::Files(gateway));
+    };
+    if let Some(name) = ["csr", "ek"].iter().find(|name| options.given(name)) {
+        return Err(Error::Usage(format!(
+            "--{name} is for files; with --gateway the CSR and the endorsement key come from the \
+             gateway"
+        )));
+    }
+    // Every value that reaches the remote command is checked here, before anything runs.
+    let plan = Plan {
+        hardware_id: hardware_id(options)?,
+        handle: gateway::parse_handle(options.optional("handle"))?,
+        allow_new_key: options.flag("allow-new-key"),
+    };
+    let destination = Destination::parse(destination)?;
+    let known_hosts = KnownHosts::in_directory(directory(options)?.path())?;
+    let upload = config::path_option(options, "upload-agent")?
+        .map(UploadedAgent::load)
+        .transpose()?;
+    Ok(Source::Ssh {
+        ssh: SshGateway::new(
+            destination,
+            known_hosts,
+            upload,
+            options.flag("remote-sudo"),
+        ),
+        plan,
+    })
+}
+
 async fn register(options: &Options) -> Result<(), Error> {
-    let hardware_id = options.required("hardware-id")?;
-    let (request, request_path) = gateway_file(options, "csr")?;
-    let (endorsement_key, endorsement_path) = gateway_file(options, "ek")?;
-    let gateway =
-        Gateway::new(hardware_id, &request, &endorsement_key).map_err(|error| match error {
-            InputError::CertificateRequest(reason) => Error::BadFile {
-                path: request_path.clone(),
-                reason,
-            },
-            InputError::EndorsementKey(reason) => Error::BadFile {
-                path: endorsement_path.clone(),
-                reason,
-            },
-            other @ InputError::HardwareId(_) => other.into(),
-        })?;
+    let source = register_source(options)?;
     // Required, with no alternative: the root certificate of the answer becomes the gateway's
     // only trust anchor, so it is checked against the fingerprint the operator was given.
     let root_sha256 = register::parse_root_sha256(options.required("root-sha256")?)?;
     let backoff = backoff(options)?;
     let directory = directory(options)?;
     let workstation = Workstation::load(&directory, now())?;
-    let store = SessionStore::new(config::session_directory(&env)?);
+    let store = SessionStore::new(config::session_directory(&environment_variable)?);
     let (session, client) = session_client(options, &store)?;
     let journal = Journal::new(directory.path());
     let registrar = Registrar {
@@ -473,7 +553,20 @@ async fn register(options: &Options) -> Result<(), Error> {
         backoff,
         root_sha256,
     };
-    let registered = match register::register(&registrar, &gateway, now).await {
+    // With --gateway, the installation of the certificates on the gateway (step 7), reported
+    // after the registration's line.
+    let mut installed = None;
+    let result = match &source {
+        Source::Files(gateway) => register::register(&registrar, gateway, now).await,
+        Source::Ssh { ssh, plan } => pipeline::register_gateway(&registrar, ssh, plan, now)
+            .await
+            .map(|outcome| {
+                report_provisioned(ssh, plan, &outcome.provisioned);
+                installed = Some((ssh.destination().to_string(), outcome.installed));
+                outcome.registered
+            }),
+    };
+    let registered = match result {
         Ok(registered) => registered,
         Err(Error::Registration(mut stopped)) if stopped.kind == StopKind::LoginRequired => {
             // As for enroll: the platform's own 401 revokes and forgets the session; the exit
@@ -486,8 +579,9 @@ async fn register(options: &Options) -> Result<(), Error> {
         }
         Err(error) => return Err(error),
     };
-    let record = journal.record_path(gateway.hardware_id());
+    // The registration passed its checks: its hardware ID is the one sent.
     let registration = &registered.registration;
+    let record = journal.record_path(&registration.hardware_id);
     say(&format!(
         "{} hardware ID {} (serial {}, valid until {}) after {} attempt(s); recorded in {}",
         if registered.status == StatusCode::CREATED {
@@ -501,11 +595,142 @@ async fn register(options: &Options) -> Result<(), Error> {
         registered.attempts,
         record.display()
     ));
+    match installed {
+        None => Ok(()),
+        Some((destination, Ok(installed))) => {
+            let what = if installed.kept_renewed() {
+                "kept the certificate its agent renewed (newer than the registration's, for the \
+                 same TPM key) and has the root certificate"
+            } else if installed.changed() {
+                "installed the certificate chain and the root certificate"
+            } else {
+                "already had the certificate chain and the root certificate"
+            };
+            say(&format!(
+                "{destination}: {what}: {}",
+                installed.report.lines().collect::<Vec<_>>().join("; ")
+            ));
+            Ok(())
+        }
+        Some((_, Err(error))) => Err(error),
+    }
+}
+
+/// What the gateway reported, before the registration's own line.
+fn report_provisioned(ssh: &SshGateway, plan: &Plan, provisioned: &Provisioned) {
+    say(&format!(
+        "{}: the TPM key at {} was {}; public key SHA-256 {}",
+        ssh.destination(),
+        plan.handle,
+        if provisioned.key_created {
+            "created"
+        } else {
+            "already there and reused"
+        },
+        provisioned.gateway.public_key_sha256()
+    ));
+    if !provisioned.ek_certificate {
+        tell(&format!(
+            "note: the gateway's TPM has no EK certificate. {}",
+            pipeline::EK_CERTIFICATE_POLICY
+        ));
+    }
+}
+
+async fn verify(options: &Options) -> Result<(), Error> {
+    let hardware_id = hardware_id(options)?;
+    let directory = directory(options)?;
+    let journal = Journal::new(directory.path());
+    let record = journal
+        .load(hardware_id.as_str())?
+        .filter(|record| record.state == State::Registered);
+    let recorded = record
+        .as_ref()
+        .and_then(|record| record.registration.as_ref());
+    let from = verify::search_from(recorded.map(|registration| registration.registered_at));
+    let store = SessionStore::new(config::session_directory(&environment_variable)?);
+    let (session, client) = session_client(options, &store)?;
+    let search = match verify::find(&client, &session.cookie, &hardware_id, from).await {
+        Ok(search) => search,
+        Err(error) => return Err(forget_ended_session(&client, &store, &session, error).await),
+    };
+    if search.found.is_empty() {
+        let scope = match (from, search.complete) {
+            (_, false) => format!(
+                "in the newest {} events of the platform's event log (the search stops there)",
+                search.events_read
+            ),
+            (Some(from), true) => format!(
+                "in the platform's event log since {} ({} events)",
+                from.to_rfc3339(),
+                search.events_read
+            ),
+            (None, true) => format!(
+                "in the platform's event log ({} events)",
+                search.events_read
+            ),
+        };
+        return Err(Error::NoEvent(format!(
+            "no {} event of hardware ID {hardware_id} {scope}. The log records an event a few \
+             seconds after the registration: wait and run verify again. If it stays missing, run \
+             the same register command again (it is safe) and report it to a platform \
+             administrator",
+            verify::EVENT_TYPE
+        )));
+    }
+    let mut mismatched = 0_usize;
+    for found in &search.found {
+        let event = &found.registered;
+        let serial = found.serial();
+        say(&format!(
+            "{} at {}: hardware ID {hardware_id}, serial {serial}, registered by {}, public key \
+             SHA-256 {} (event {})",
+            verify::EVENT_TYPE,
+            found.occurred_at.to_rfc3339(),
+            printable(&event.workstation),
+            printable(&event.public_key_sha256),
+            found.event_id
+        ));
+        match (&record, recorded) {
+            (Some(record), Some(registration)) => {
+                if registration.serial == event.certificate_serial
+                    && record.public_key_sha256 == event.public_key_sha256
+                {
+                    say("  it matches this workstation's record (serial and public key)");
+                } else {
+                    mismatched += 1;
+                    tell(&format!(
+                        "  it does not match this workstation's record ({}): another \
+                         registration of the hardware ID; report it to a platform administrator",
+                        journal.record_path(hardware_id.as_str()).display()
+                    ));
+                }
+            }
+            _ => say("  this workstation has no registered record of the hardware ID"),
+        }
+    }
+    if recorded.is_none() {
+        return Err(Error::Unrecorded(format!(
+            "this workstation has no registered record of hardware ID {hardware_id} ({}), so the \
+             event(s) above cannot be compared with it: run verify on the workstation that \
+             registered the gateway",
+            journal.record_path(hardware_id.as_str()).display()
+        )));
+    }
+    if mismatched > 0 {
+        return Err(Error::EventMismatch(format!(
+            "{mismatched} of {} {} event(s) of hardware ID {hardware_id} do not match this \
+             workstation's record (serial and public key): the hardware ID was registered \
+             another way; report it to a platform administrator",
+            search.found.len(),
+            verify::EVENT_TYPE
+        )));
+    }
     Ok(())
 }
 
 async fn logout(options: &Options) -> Result<(), Error> {
-    let store = SessionStore::new(config::session_directory(&env)?);
+    let store = SessionStore::new(config::session_directory(&environment_variable)?);
     if store.load()?.is_none() {
         say("no session on this workstation: nothing to log out");
         return Ok(());

@@ -1,6 +1,6 @@
 # testkit
 
-服務測試用的共用工具。主角是跨租戶負向測試框架：每個服務在 `tests/` 用它證明租戶 A 讀不到、也改不了租戶 B 的資料（[決策 29](../../docs/architecture/decisions.md)「跨租戶負向測試列入每個服務的 CI」）。另外提供測試用的內部身分 token、帶 TLS 的拋棄式 Postgres 與容器工具，閘道器採集測試用的假 Modbus 端點與故障注入（M7，見[假 Modbus 端點](#假-modbus-端點)），以及閘道器連線測試用的 WebSocket 前端、測試 CA 與 Mosquitto 容器（見[MQTT 測試環境](#mqtt-測試環境)）。
+服務測試用的共用工具。主角是跨租戶負向測試框架：每個服務在 `tests/` 用它證明租戶 A 讀不到、也改不了租戶 B 的資料（[決策 29](../../docs/architecture/decisions.md)「跨租戶負向測試列入每個服務的 CI」）；以及權限矩陣：每個服務宣告每個 API 操作要求的身分，對照 OpenAPI 文件與 [docs/architecture/permissions.md](../../docs/architecture/permissions.md)，再以每種身分實際呼叫（A2，見[權限矩陣](#權限矩陣)）。另外提供測試用的內部身分 token、帶 TLS 的拋棄式 Postgres 與容器工具，閘道器採集測試用的假 Modbus 端點與故障注入（M7，見[假 Modbus 端點](#假-modbus-端點)），閘道器連線測試用的 WebSocket 前端、測試 CA 與 Mosquitto 容器（見[MQTT 測試環境](#mqtt-測試環境)），以及閘道器 TPM 測試用的軟體 TPM（見[軟體 TPM](#軟體-tpm)）。
 
 只能當 `[dev-dependencies]` 使用：`tools/repo-check` 擋下其他用法，因為 `tools/sql-check` 把本 crate 當測試程式檢查（它把巨集組好的靜態 SQL 以變數交給 sqlx）。
 
@@ -8,12 +8,14 @@
 | --- | --- |
 | `isolation` | 跨租戶負向測試：`Suite`、`Store`、`Report`、端點探測（`isolation::api`） |
 | `isolation::postgres` | Postgres 的 store：`PgStore`、`pg_table!`、`pg_view!` |
+| `permissions` | 權限矩陣：`Suite`、`Operation`、`Access`、`MATRIX`（`docs/architecture/permissions.md` 的內容）；見[權限矩陣](#權限矩陣) |
 | `identity` | `TestIssuer`：以測試行程產生的 Ed25519 金鑰簽內部身分 token；`write_jwks(path)` 寫出公鑰檔，服務的 `TRUSTIOT_INTERNAL_IDENTITY_KEYS_FILE` 指向它（與 chart 掛進 pod 的 ConfigMap 同格式） |
 | `postgres` | `tls_postgres(init)`：帶 TLS 的拋棄式 Postgres（service-kit 只接受 `verify-full`），同一個測試執行檔共用一個容器 |
 | `product` | `product_postgres(logins)`：在 `tls_postgres` 上以 migration Job 本身（`migrate::run` 與 `PRODUCT`）套用整個產品的 schema，與部署得到的一樣（Laysi/trustiot-v2#65）；見[產品 schema](#產品-schema) |
 | `container` | podman 或 docker 的容器，drop 時刪除；`unavailable(what)`：本機缺容器執行環境時略過測試，設了 `CI` 時改為失敗 |
 | `modbus` | `FakeModbus`：測試行程內的假 Modbus TCP 與 RTU-over-TCP 端點，支援站號、故障注入（`Fault`）與請求紀錄；見[假 Modbus 端點](#假-modbus-端點) |
 | `mqtt` | 閘道器到 broker 的整條路：`TestPki`、`front::WsFront`（入口與 mqtt-bridge 的替身）、`mosquitto::Mosquitto`；見[MQTT 測試環境](#mqtt-測試環境) |
+| `swtpm` | `Swtpm`：拋棄式容器裡的軟體 TPM 2.0（swtpm），`session()` 像開一次 `/dev/tpmrm0`，`tools(script)` 在容器內跑 tpm2-tools；見[軟體 TPM](#軟體-tpm) |
 | `clock` | 真實 socket 上的時間控制：`manual()` 讓暫停的 tokio 時鐘只在測試 `advance` 時前進；`bounded(what, future)` 以牆上時間限制等待；見[時間控制](#時間控制) |
 | `chart` | chart 對服務的假設：`postgres_connection_budget(service)` 讀 `deploy/chart/templates/_postgres.tpl` 的 `trustiot.postgres.connectionBudgets`（每個副本的連線預算，Laysi/trustiot-v2#575）；`pool_size_calls(src)` 列出 crate 的 `src` 裡每個 `.max_connections(...)`。用 Postgres 的服務各有一個 `tests/chart_connections.rs`，以兩者確認程式的連線池與 chart 的預算相同，加了連線池就失敗（見 [chart 的 README](../../deploy/chart/README.md)「叢集內的 Postgres」） |
 
@@ -141,6 +143,61 @@ async fn tenants_are_isolated() {
 | `an_endpoint_that_writes_across_tenants_fails` | `PUT /v1/items/{id}` 改用 migration 角色寫 | 回 200 而不是 404，而且 B 的列被改 |
 | `a_table_with_one_row_per_tenant_is_attacked_too` | 一張 `one_per_tenant` 的表，RLS 開著、再關掉 | 開著時通過；關掉時失敗，失敗寫出那張表 |
 
+## 權限矩陣
+
+A2 的「權限只在後端判斷」，以 API 層級的測試證明（Laysi/trustiot-v2#104、Laysi/trustiot-v2#584）。模組 `permissions`：服務在 `tests/permissions.rs` 以 `Operation::new("METHOD /path", Access::…)` 宣告 `openapi()` 的每個操作要求什麼，`Suite` 把宣告對照兩方，再實際呼叫服務：
+
+| 檢查 | 失敗的情況 |
+| --- | --- |
+| 宣告本身 | 不是 `METHOD /path`、同一個操作宣告兩次、`Access::Tenant(Unrecognized)`、在不拒絕換發 token 的要求上標已知落差 |
+| OpenAPI 覆蓋 | 文件裡有操作沒宣告，或宣告的操作不在文件裡；沒呼叫 `openapi(doc)` |
+| 矩陣文件 | [docs/architecture/permissions.md](../../docs/architecture/permissions.md) 的 `## <服務名稱>`（例如 `## identity`）一節，表格要剛好列出宣告的操作，「要求」與「已知落差」兩欄與宣告相同；少列、多列、重複、寫錯都失敗；沒有那一節或沒呼叫 `matrix(MATRIX)` 也失敗 |
+| 探測（`run`） | 每個操作依要求，以下列每種身分各送一次請求，沒有 body，路徑參數填新的 UUID：沒有 token、別的金鑰與金鑰 ID 簽的 token（偽造的身分標頭）、給別的服務的 token 要剛好 401 `unauthenticated`；要求拒絕的身分（沒有租戶、較低的角色、不認得的角色、沒有租戶的平台管理員、平台路由上的租戶角色、「本人」路由上換發的 token）要剛好 403 `permission_denied`；要求放行的身分不能是 401 或 403。每種要求的探測表在矩陣文件的「探測」 |
+
+| 要求 | `Access` | 矩陣文件的寫法 |
+| --- | --- | --- |
+| 公開 | `Public` | `公開` |
+| 已登入（也接受換發的 token） | `SignedIn` | `已登入` |
+| 已登入，只接受使用者自己的請求 | `OwnRequest` | `已登入，本人` |
+| 租戶內至少某個角色 | `Tenant(TenantRole::Viewer)` 等 | `租戶 viewer`、`租戶 editor`、`租戶 admin` |
+| 平台管理員本人 | `PlatformAdmin` | `平台管理員，本人` |
+
+```rust
+use contract::{ServiceName, TenantRole};
+use testkit::identity::TestIssuer;
+use testkit::permissions::{Access, MATRIX, Operation, Suite};
+
+fn suite(issuer: &TestIssuer) -> Suite<'_> {
+    Suite::new(ServiceName::Assets, issuer)
+        .openapi(serde_json::to_value(assets::openapi()).unwrap())
+        .matrix(MATRIX)
+        .operation(Operation::new("GET /api/assets/v1/devices", Access::Tenant(TenantRole::Viewer)))
+        .operation(Operation::new("PUT /api/assets/v1/platform/gateways/{hardware_id}/binding", Access::PlatformAdmin))
+}
+
+#[test]
+fn the_matrix_document_matches_the_declarations() {
+    // 不需要服務：只比對宣告、OpenAPI 與矩陣文件
+    suite(&TestIssuer::new()).check_declarations().assert_passed("the permission matrix");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn every_operation_admits_exactly_its_declared_callers() {
+    let issuer = TestIssuer::new();
+    let base_url = start_assets(&issuer).await; // 服務信任 issuer 的公鑰（write_jwks）
+    suite(&issuer).run(&base_url).await.assert_passed("the permission matrix");
+}
+```
+
+- 拒絕要由 token 決定、在讀 body 與資料庫之前：探測不帶 body，所以缺了角色檢查的路由會回 400 或 422 而不是 403，一樣失敗。放行的身分因此多半得到 400、404 或空的結果，探測不寫入資料；服務的測試可以在探測前後比對資料（例如 `services/certs/tests/permissions.rs` 比對帳本）。
+- 需要 token 以外的東西才能通過授權的操作（登出要 session cookie），以 `Operation::header(name, value)` 讓每個探測都帶上；不能用它帶會讓被拒的身分通過的憑證。
+- 已知落差：決定是「只接受本人的請求」、程式目前卻接受換發 token 的操作，以 `.accepts_exchanged_tokens("追蹤的地方")` 宣告，矩陣文件的「已知落差」欄寫 `接受換發的 token`。換發 token 的探測改為照目前的行為檢查；修好之後它失敗，提醒同時刪掉宣告與文件的那一格。
+- `/internal` 端點與服務的其他連接埠不在 `openapi()`，不在矩陣裡；它們只限叢集內呼叫，由 mesh 與 chart 的呼叫矩陣把關（見矩陣文件「不在矩陣裡的端點」）。
+- 整份 API 規格也對照矩陣文件（Laysi/trustiot-v2#585）：單元測試 `the_matrix_covers_every_operation_of_the_api_spec` 讀 `api/openapi.json`（所有服務 `openapi()` 合併的結果），每個操作都要剛好列在矩陣文件的一節，文件列的操作也都要在規格裡。登記到 `tools/openapi` 的新服務沒有接上矩陣時，`cargo test -p testkit` 就失敗。
+- 服務的角色檢查用 `crates/service-kit` 的共用函式 `UserIdentity::require(Requirement::…, "<動作>")`（見 [service-kit 的 README](../service-kit/README.md)「角色檢查」），403 的回應與日誌在每個服務都相同。
+
+[`tests/permissions.rs`](tests/permissions.rs) 是自我測試，不需要容器：一個每種要求各有一個操作的範例服務，所有檢查都在時通過；拿掉或放寬其中一個檢查時（公開路由要求 token、「本人」路由接受換發 token、editor 的檢查降成 viewer、拿掉租戶角色檢查、平台路由接受換發 token、平台路由也放行租戶 admin、已知落差被修好），剛好在那個操作與那些身分上失敗。矩陣文件的比對另以改過的文件測：要求寫錯、少列、多列、已知落差漏寫、重複列、宣告改了而文件沒改、沒有那一節都失敗。
+
 ## 擴充：ClickHouse 與 AGE
 
 `isolation::Store` 是資料庫的介面：`check_coverage`（列出服務碰得到的物件、比對宣告）、`seed`（以不受隔離限制的身分種資料並讀回）、`attack`（以攻擊者的身分、經服務實際的路徑攻擊）、`snapshot`（讀出某租戶的所有列，比對端點探測前後）。ClickHouse 的 row policy（Laysi/trustiot-v2#59，攻擊清單見 `services/ingest/tests/clickhouse.rs`）與 AGE 的每租戶角色（MS4）各實作一個 store，沿用同一套 `World`、marker、`Report` 與端點探測。目前一次 `Suite::run` 測一個 store；同時用 Postgres 與 ClickHouse 的服務各跑一次。
@@ -149,7 +206,7 @@ async fn tenants_are_isolated() {
 
 - 有參數的巢狀路徑（例如 `/v1/devices/{device_id}/points/{point_id}`）、列表路徑帶參數的端點還不支援：宣告時就失敗，請寫手動測試並以 `exempt_endpoint` 說明。
 - 平台角色（`PlatformDb`）依設計可以跨租戶，不在這裡測；它的 policy 由 service-kit 的連線檢查與審查把關。
-- 端點探測只用 admin 身分；租戶內角色（viewer、editor）的權限檢查是各服務自己的測試。
+- 端點探測只用 admin 身分；租戶內角色（viewer、editor）與平台管理員的權限由[權限矩陣](#權限矩陣)測。
 - 外洩以 marker 判斷：回應若把 id 轉成別的格式（例如 base64），就看不出來，這種端點要另外寫測試。
 - 豁免的關聯不種資料也不攻擊，豁免理由要經審查。
 
@@ -271,7 +328,7 @@ async fn the_reader_survives_a_converter() {
 
 閘道器到 broker 的整條路，給 agent 的測試用（Laysi/trustiot-v2#86）。模組 `mqtt`：
 
-- `TestPki`：測試時產生的兩個 CA，不寫進 repo。「公開」CA 簽前端的憑證（`FRONT_HOST`，即 `localhost`），是 agent 的外層信任；broker CA 是根 CA，簽 broker 的憑證（`BROKER_NAME`，即 agent 固定的 `mqtt-broker.trustiot.internal`）與閘道器的憑證（`pki.gateway(cn)`，EKU clientAuth），是 agent 的內層信任與 broker 的用戶端 CA。另有 `Authority::new(name)` 做不相干的根 CA（測拒絕用）、`Authority::issuing(name)`（這個 CA 簽的簽發 CA，pathLen 0，像正式環境的根 → 簽發 CA → broker 與閘道器憑證）、`Authority::leaf(names, usages)`（指定 EKU 的憑證，例如只有 clientAuth）、`Authority::crl(number, revoked, next_update)`（這個 CA 簽的 PEM CRL，撤銷它簽的那些 CA；nextUpdate 可以是過去的日期）、`mtls_server_with_chain(leaf, chain, client_ca)`（在 leaf 之後送出簽發 CA）、`front_tls(leaf, versions)`、`mtls_server(leaf, client_ca)`（要求用戶端憑證的 TLS 1.3 伺服器；`mtls_server_with_versions` 可指定 TLS 版本，測拒絕用）、`Authority::client_valid(cn, not_before, not_after)`（指定效期的用戶端憑證，測過期用）與 `ScratchDir`（drop 時刪除的暫存目錄，放設定與金鑰檔）。
+- `TestPki`：測試時產生的兩個 CA，不寫進 repo。「公開」CA 簽前端的憑證（`FRONT_HOST`，即 `localhost`），是 agent 的外層信任；broker CA 是根 CA，簽 broker 的憑證（`BROKER_NAME`，即 agent 固定的 `mqtt-broker.trustiot.internal`）與閘道器的憑證（`pki.gateway(cn)`，EKU clientAuth），是 agent 的內層信任與 broker 的用戶端 CA。另有 `Authority::new(name)` 做不相干的根 CA（測拒絕用）、`Authority::issuing(name)`（這個 CA 簽的簽發 CA，pathLen 0，像正式環境的根 → 簽發 CA → broker 與閘道器憑證）、`Authority::leaf(names, usages)`（指定 EKU 的憑證，例如只有 clientAuth）、`Authority::crl(number, revoked, next_update)`（這個 CA 簽的 PEM CRL，撤銷它簽的那些 CA；nextUpdate 可以是過去的日期）、`mtls_server_with_chain(leaf, chain, client_ca)`（在 leaf 之後送出簽發 CA）、`front_tls(leaf, versions)`、`mtls_server(leaf, client_ca)`（要求用戶端憑證的 TLS 1.3 伺服器；`mtls_server_with_versions` 可指定 TLS 版本，測拒絕用）、`Authority::client_valid(cn, not_before, not_after)`（指定效期的用戶端憑證，測過期用）、`Authority::client_for_key(cn, public_key, not_before, not_after)`（為既有的公鑰簽閘道器憑證，profile 同 certs 服務，效期精確到秒；憑證換發的測試用）與 `ScratchDir`（drop 時刪除的暫存目錄，放設定與金鑰檔）。
 - `front::WsFront`：測試行程內的入口與 mqtt-bridge 替身：外層 TLS（ALPN `http/1.1`，依用戶端的套件順序選）、`/mqtt` 上 subprotocol 為 `mqtt` 的 WebSocket（路徑不對回 404、沒要求 `mqtt` 回 400），再把 binary message 原樣轉給 TCP 上游（8 KiB 緩衝，與 mqtt-bridge 相同）。內層 mTLS 由閘道器直達上游，前端只看到加密的位元組。`sessions()` 記錄每條連線協商出的 TLS 版本、套件、ALPN、SNI、是否 resumption、路徑與 subprotocol；`FrontOptions` 可改成不回 subprotocol、定時送 WebSocket ping、換外層 TLS 設定（例如只有 TLS 1.2）。`stop().await` 一次切斷所有連線、不送 WebSocket close（與轉接服務當掉相同），等 listener 關閉、每條連線都結束才回來；`restart()` 先這樣停下再在同一個 port 重新開始，所以不會因為舊的 listener 還開著而 `AddrInUse`。停下時（`stop`、`restart` 或 drop）先對 listener `shutdown` 再關閉：同一個測試行程裡別的測試啟動子行程（例如 podman）時，子行程在 fork 到 exec 之間拿著所有描述子的副本，只 drop 的 listener 會繼續 listen（重新綁定 `AddrInUse`、連線照樣成功）；`shutdown` 讓 socket 本身離開 LISTEN。`Mosquitto` 挑 port 時放掉的試探 listener 也一樣處理。
 - `mosquitto::Mosquitto`：拋棄式容器裡的 Mosquitto 2.1.2（`MOSQUITTO_IMAGE`，以 multi-arch digest 釘選，與 `crates/protocol/tests/broker.rs` 相同），設定照決策 6 給閘道器的 listener：mTLS（`require_certificate`、`use_identity_as_username`、TLS 1.3）、`set_tcp_nodelay`、dynamic security 與協定的閘道器角色（`protocol::acl::gateway_role_acls`）、不允許匿名。`ciphers_tls1.3` 把 ChaCha20-Poly1305 排第一：Mosquitto 依自己的順序選套件，不設時即使閘道器把 ChaCha20 排第一也協商出 AES-256-GCM（2026-10-21 實測）。它不是 chart 的設定（`deploy/chart/files/mosquitto/mosquitto.conf`，Laysi/trustiot-v2#84）：chart 另外檢查 CRL、只接受 MQTT 5、以 username 當 client ID；`ciphers_tls1.3` 與 `set_tcp_nodelay` 兩邊相同（chart 在 2026-10-23 補上，Laysi/trustiot-v2#564）。mTLS listener 發布在主機的回送位址（`address()`）；容器內另有只用密碼的 listener，給 dynamic security 指令與雲端帳號（`CLOUD_USER`）的 `mosquitto_pub`／`mosquitto_sub` 以 `exec` 使用。憑證由環境變數傳進容器，不經過指令列。
 
@@ -290,13 +347,35 @@ broker.restart();                                              // SIGTERM 後重
 
 `Mosquitto` 的方法（`publish`、`subscribe`、`restart`、`wait_for_log`、`control`）會阻塞（它們執行容器指令），在 async 測試裡以 multi-thread runtime 加 `tokio::task::block_in_place` 呼叫，agent 的 task 才不會被卡住。`start` 先挑一個空的 port 再交給容器執行環境，中間被別人拿走時換一個 port 重試（最多 5 次）；`Subscription` 被丟掉時連容器裡的 `mosquitto_sub` 一起停掉。`publish` 回傳 PUBACK 的 reason code；`Subscription::wait_for` 略過不要的訊息、逾時時列出看到的 topic。broker 的日誌（`logs()`、`wait_for_log`）含連線的來源位址，不要原樣貼進測試報告。
 
+## 軟體 TPM
+
+閘道器的 TPM 測試用（Laysi/trustiot-v2#86、Laysi/trustiot-v2#611），模組 `swtpm`。容器裡是 swtpm（libtpms）與 tpm2-tools，測試經 swtpm 的原始指令埠（只發佈在主機的回送位址）送 TPM 2.0 指令，tpm2-tools 在容器內用來準備與檢查 TPM。
+
+- `Swtpm::start()`：一顆全新的 TPM（已做 TPM2_Startup，與閘道器的核心相同），等到它回應才回來。沒有 podman 或 docker 時回 `None`（本機略過，設了 `CI` 時失敗）；drop 時連同狀態刪除容器。
+- `swtpm.session()`：相當於一個行程開啟 `/dev/tpmrm0`。`transact(command)` 送一個完整的指令、收回完整的回應（最多 4096 bytes）；session 被丟掉時 flush 它載入的暫時物件與 session，與核心的資源管理器在行程關閉裝置（或行程死掉）時做的一樣。swtpm 一次只服務一條連線，所以所有 session 共用一條 TCP 連線，以鎖讓每個指令完整送完；兩個執行緒各拿一個 session，就像兩個行程同時使用 TPM。agent 的測試把 session 包成自己的 `TpmChannel`（`TpmTransport::Channel`）。資源管理器另外會虛擬化 handle、在物件槽不夠時換出 context，這裡沒有：libtpms 同時只能載入 3 個暫時物件（`TPM2_PT_HR_TRANSIENT_AVAIL`）。
+- `swtpm.tools(script)`：在容器內的新暫存目錄以 `sh -eu` 執行 `script`（`TPM2TOOLS_TCTI` 已指向這顆 TPM），回傳 stdout，失敗或超過 120 秒就 panic。執行前先關掉共用的連線（tpm2-tools 要自己的連線），期間持有鎖，所以不會有 session 的指令送到一半；之後的 session 指令會重新連線，TPM 的狀態不受影響。
+- `create_standard_srk()`：在 `0x81000001` 放閘道器上那種標準的 ECC SRK（`tpm2_createprimary -C o -g sha256 -G ecc256:aes128cfb`）。`persistent_handles()`、`transient_handles()` 列出 handle；`snapshot()` 是 TPM 內容的文字快照（持久、暫時與 NV 的 handle，每個持久物件的 `tpm2_readpublic`，變動的屬性，包括字典攻擊計數 `TPM2_PT_LOCKOUT_COUNTER`），用來比對一個步驟前後 TPM 有沒有變。
+- 映像以 `src/swtpm/Containerfile`（Debian trixie 的 swtpm 與 tpm2-tools，基底以 multi-arch digest 釘選）建置，build context 是空目錄，同一個行程只建一次，留在本機為 `localhost/testkit-swtpm:<Containerfile 的 SHA-256 前 8 bytes>`，下次直接沿用，不要時以 `podman rmi` 移除。apt 套件沒有釘版本，重建時可能拿到 Debian 的新修正版。
+
+```rust
+let Some(swtpm) = Swtpm::start() else { return };   // 沒有容器執行環境時略過
+swtpm.create_standard_srk();
+let mut session = swtpm.session();
+let response = session.transact(&command)?;           // 一個 TPM 2.0 指令
+let before = swtpm.snapshot();
+// ...
+assert_eq!(swtpm.snapshot(), before);
+```
+
 ## 執行
 
 ```sh
 cargo test -p testkit                       # 單元測試與容器測試（需要 podman 或 docker）
 cargo test -p testkit -- --nocapture        # 加上每個探測的報告
+cargo test -p testkit --test permissions     # 只跑權限矩陣的自我測試（不需要容器）
 cargo test -p testkit --test modbus_endpoint --test modbus_example   # 只跑假 Modbus 端點（不需要容器）
 cargo test -p agent --test transport --test broker                    # MQTT 測試環境的使用者（broker 需要容器）
+cargo test -p agent --test tpm_swtpm --test tpm_provision             # 軟體 TPM 的使用者（需要容器）
 ```
 
 沒有 podman 或 docker 時容器測試在本機略過；設了 `CI` 時改為失敗，CI 綠燈就代表真的跑過。

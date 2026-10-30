@@ -160,14 +160,24 @@ function createInputSecrets() {
 // installRelease blocks until the pods are ready, and the gateway's pod cannot start before its
 // password Secret has the key, so a separate process fills it once Helm has declared it (the
 // migration Job's part in a real install) and restarts the gateway's pod instead of waiting for
-// the kubelet's next retry.
+// the kubelet's next retry. The deleted pod can outlive the install: it goes through its preStop
+// sleep and shutdown while its replacement becomes ready, so beforeAll waits for it to go
+// (waitForDeletedPodsGone). The filler names the pods it deleted on stderr, in the test's log.
 function startPasswordFiller(): Subprocess {
   createdSecrets.push(PASSWORD_SECRET);
   const patch = secretFile("password-patch.json", JSON.stringify({ data: { [PASSWORD_KEY]: Buffer.from(randomHex(32)).toString("base64") } }));
   const commands = {
     get: kubectlArgs("get", "secret", PASSWORD_SECRET),
     patch: kubectlArgs("patch", "secret", PASSWORD_SECRET, "--type", "merge", "--patch-file", patch),
-    restart: kubectlArgs("delete", "pod", "--selector", `app.kubernetes.io/instance=${RELEASE},app.kubernetes.io/component=ai-gateway`, "--wait=false"),
+    restart: kubectlArgs(
+      "delete",
+      "pod",
+      "--selector",
+      `app.kubernetes.io/instance=${RELEASE},app.kubernetes.io/component=ai-gateway`,
+      "--wait=false",
+      "--output",
+      "name",
+    ),
   };
   const script = `const commands = JSON.parse(process.env.MESH_E2E_FILL ?? "{}");
 const deadline = Date.now() + ${FILL_TIMEOUT_MS};
@@ -178,8 +188,12 @@ while (Date.now() < deadline) {
       console.error("mesh.e2e.ts: patching the AI gateway's password Secret failed: " + patched.stderr.toString());
       process.exit(1);
     }
-    const restarted = Bun.spawnSync({ cmd: commands.restart, stdout: "ignore", stderr: "pipe" });
+    const restarted = Bun.spawnSync({ cmd: commands.restart, stdout: "pipe", stderr: "pipe" });
     if (restarted.exitCode !== 0) console.error("mesh.e2e.ts: restarting the AI gateway's pod failed: " + restarted.stderr.toString());
+    else {
+      const deleted = restarted.stdout.toString().trim().split("\\n").filter(Boolean).join(", ");
+      console.error("mesh.e2e.ts: filled the AI gateway's password Secret and deleted its pods: " + (deleted || "none yet"));
+    }
     process.exit(0);
   }
   await Bun.sleep(1000);
@@ -437,26 +451,85 @@ async function expectGatewayReachesBackends(phase: string) {
 // ---------------------------------------------------------------------------------------------
 // Pods and health checks.
 
-type PodStatus = { name: string; ready: boolean; restarts: number };
+// `deletedAt`: the pod's deletionTimestamp, set once it is deleted and still going away.
+type PodStatus = { name: string; phase: string; deletedAt?: string; ready: boolean; restarts: number };
 function podStatuses(selector: string): PodStatus[] {
   const list = JSON.parse(kubectl("get", "pods", "-l", selector, "-o", "json")) as {
-    items: { metadata: { name: string }; status: { conditions?: { type: string; status: string }[]; containerStatuses?: { restartCount: number }[] } }[];
+    items: {
+      metadata: { name: string; deletionTimestamp?: string };
+      status: { phase?: string; conditions?: { type: string; status: string }[]; containerStatuses?: { restartCount: number }[] };
+    }[];
   };
   return list.items.map((pod) => ({
     name: pod.metadata.name,
+    phase: pod.status.phase ?? "Unknown",
+    ...(pod.metadata.deletionTimestamp ? { deletedAt: pod.metadata.deletionTimestamp } : {}),
     ready: pod.status.conditions?.some((c) => c.type === "Ready" && c.status === "True") ?? false,
     restarts: (pod.status.containerStatuses ?? []).reduce((sum, c) => sum + c.restartCount, 0),
   }));
 }
+// The pods expectHealthyPods counts: the services' and the ingress gateway's.
+const countedPods = () => [
+  ...podStatuses(`${CHART_PODS},app.kubernetes.io/component in (${SERVICES.join(",")})`),
+  ...podStatuses(`gateway.networking.k8s.io/gateway-name=${GATEWAY}`),
+];
+const describePod = (pod: PodStatus) =>
+  `${pod.name} (${pod.phase}${pod.deletedAt ? `, deleted at ${pod.deletedAt}` : ""}${pod.ready ? ", ready" : ", not ready"}, ${pod.restarts} restarts)`;
 function expectHealthyPods(phase: string) {
-  const pods = [
-    ...podStatuses(`${CHART_PODS},app.kubernetes.io/component in (${SERVICES.join(",")})`),
-    ...podStatuses(`gateway.networking.k8s.io/gateway-name=${GATEWAY}`),
-  ];
+  const pods = countedPods();
   results.push({ phase, pods });
   // One pod per service plus the gateway's two replicas.
-  expect(pods.length).toBe(SERVICES.length + 2);
-  for (const pod of pods) expect(pod).toEqual({ name: pod.name, ready: true, restarts: 0 });
+  expect(pods.length, `one pod per service plus the gateway's two replicas; found ${pods.map(describePod).join("; ")}`).toBe(SERVICES.length + 2);
+  for (const pod of pods) {
+    expect({ name: pod.name, phase: pod.phase, deleted: pod.deletedAt !== undefined, ready: pod.ready, restarts: pod.restarts }).toEqual({
+      name: pod.name,
+      phase: "Running",
+      deleted: false,
+      ready: true,
+      restarts: 0,
+    });
+  }
+}
+
+// Pods of the release still going away when the install returns, such as the AI gateway's pod
+// the password filler deleted (startPasswordFiller): it goes through its preStop sleep and
+// shutdown after its replacement is ready, and `kubectl get pods` lists it until the kubelet
+// removes it, so phase 1 would count it (Laysi/trustiot-v2#730) and podIp could pick it. Kubernetes
+// sets a deleted pod's deletionTimestamp to the deletion time plus its grace period, when the
+// kubelet kills what still runs; the slack leaves the kubelet time to see that and tear the pod's
+// sandbox down on a loaded runner.
+const POD_REMOVAL_SLACK_MS = 120_000;
+// The longest terminationGracePeriodSeconds of a service's pod: the AI gateway's (preStopSleepSeconds
+// 5 s + services.ai-gateway.drainSeconds 310 s in values.yaml); beforeAll checks the rendered
+// Deployments against it. The ingress gateway's pods are Istio's, with its 30 s default.
+const LONGEST_GRACE_SECONDS = 315;
+// beforeAll's share for that wait.
+const POD_REMOVAL_BUDGET_MS = LONGEST_GRACE_SECONDS * 1000 + POD_REMOVAL_SLACK_MS;
+async function waitForDeletedPodsGone(): Promise<string[]> {
+  const deleted = countedPods().filter((pod) => pod.deletedAt !== undefined);
+  if (deleted.length === 0) return [];
+  const names = deleted.map((pod) => pod.name);
+  const lastDeadline = Math.max(...deleted.map((pod) => Date.parse(pod.deletedAt ?? "")));
+  if (Number.isNaN(lastDeadline)) throw new Error(`cannot read the deletionTimestamp of ${deleted.map(describePod).join("; ")}`);
+  const timeoutMs = lastDeadline + POD_REMOVAL_SLACK_MS - Date.now();
+  if (timeoutMs > POD_REMOVAL_BUDGET_MS) {
+    throw new Error(
+      `the deleted pods ${deleted.map(describePod).join("; ")} may take ${Math.ceil(timeoutMs / 1000)} s to go, more than ` +
+        `POD_REMOVAL_BUDGET_MS (${POD_REMOVAL_BUDGET_MS / 1000} s); a grace period grew, so raise the budget with it`,
+    );
+  }
+  const gone = () => {
+    const left = new Set(countedPods().map((pod) => pod.name));
+    return names.every((name) => !left.has(name));
+  };
+  // Checked at least once even when the deadline has already passed.
+  await waitFor(
+    `the deleted pods ${names.join(", ")} to go (grace periods end by ${new Date(lastDeadline).toISOString()}, ` +
+      `plus ${POD_REMOVAL_SLACK_MS / 1000} s for the kubelet)`,
+    gone,
+    Math.max(timeoutMs, 1_000),
+  );
+  return names;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -590,6 +663,12 @@ beforeAll(async () => {
     | (Manifest & { spec: { template: { spec: { containers: { env?: { name: string; value?: string }[] }[] } } } })
     | undefined;
   expect(aiGateway?.spec.template.spec.containers[0]?.env?.find((e) => e.name === "AI_GATEWAY__ADMIN__LISTEN_ADDR")?.value).toBe(`0.0.0.0:${ADMIN_PORT}`);
+  // A deleted service pod goes within its grace period, which POD_REMOVAL_BUDGET_MS allows for.
+  const graces = manifests
+    .filter((m) => m.kind === "Deployment" && (SERVICES as readonly string[]).includes(m.metadata.labels?.["app.kubernetes.io/component"] ?? ""))
+    .map((m) => (m as Manifest & { spec: { template: { spec: { terminationGracePeriodSeconds?: number } } } }).spec.template.spec.terminationGracePeriodSeconds ?? 30);
+  expect(graces).toHaveLength(SERVICES.length);
+  expect(Math.max(...graces), "the longest grace period of a service's pod (LONGEST_GRACE_SECONDS)").toBeLessThanOrEqual(LONGEST_GRACE_SECONDS);
   // The init container filled the signing keys before the identity pod started.
   loadSigner();
   results.push({ phase: "setup", signingKey: signer?.kid, onBehalfCalls: ON_BEHALF_CALLS });
@@ -601,8 +680,15 @@ beforeAll(async () => {
   kubectl("wait", `pod/${OUTSIDER_POD}`, `pod/${STRANGER_POD}`, "--for=condition=Ready", "--timeout=180s");
   kubectl("wait", `pod/${IMPOSTER_POD}`, "--for=condition=ContainersReady=false", "--timeout=180s");
   kubectl("wait", `pod/${IMPOSTER_POD}`, "--for=jsonpath={.status.containerStatuses[0].started}=true", "--timeout=180s");
+  const started = Date.now();
+  const removed = await waitForDeletedPodsGone();
+  if (removed.length > 0) {
+    const waitedSeconds = Math.round((Date.now() - started) / 1000);
+    results.push({ phase: "setup", deletedPodsAwaited: removed, waitedSeconds });
+    console.error(`mesh.e2e.ts: waited ${waitedSeconds} s for the deleted pods ${removed.join(", ")} to go before counting pods`);
+  }
   await openTunnel();
-}, 600_000);
+}, 600_000 + POD_REMOVAL_BUDGET_MS);
 
 afterAll(() => {
   tunnel?.kill();
