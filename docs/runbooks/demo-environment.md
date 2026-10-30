@@ -340,6 +340,26 @@ status_and_keys() {
 5. **一般成員讀不到**：以一個不是平台管理員的使用者登入（先 `trustiot-workstation logout --headers-file "$H"`，工作站一次只存一個 session），重做第 3 步與第 4 步，兩個都是 `403`（`permission_denied`）。展示環境目前只有 `bootstrap-platform-admin` 能建立使用者，它建立的都是平台管理員；建立使用者的 API 在 Laysi/trustiot-v2#105。專案擁有者在 2026-10-24 決定這一步等 Laysi/trustiot-v2#105 完成、展示環境能建立一般成員之後再做，不直接改資料庫造一個。這個行為已有自動化測試涵蓋：身分服務的 `tests/event_log.rs`（租戶的 `admin` 讀平台的操作紀錄是 403）與 certs 的 `tests/workstation.rs`（只有平台管理員能簽發與撤銷工作站憑證）。
 6. **登出**：`trustiot-workstation logout --headers-file "$H"`。第 3 到 5 步印出的那一行（狀態碼與 key，不含 cookie、標頭、網址與本文）存進 Laysi/trustiot-v2#619 的留言。
 
+## 綁定展示用閘道器與建立設備
+
+出廠登錄過的閘道器（[factory/workstation](../../factory/workstation/README.md)）在資產服務的設備池裡、沒有綁定：agent 連得上 broker，但 `online` 被拒（PUBACK 0x87），也收不到設定（「打開閘道器的資料路徑」）。綁定、型號與設備都經 app 主機的 API 建立，不改資料庫（Laysi/trustiot-v2#793）。前提：`values-demo.yaml` 有 `/api/assets` 與 `/api/gateway-ops` 的 cookie 路由（[deploy/flux/README.md](../../deploy/flux/README.md)「閘道器的綁定、型號與設備的 API」），平台管理員已在工作站登入（上一節的第 1、2 步）。請求以上一節的方式帶 Access 的 service token 與 session cookie，不帶 `Origin` 與 `Sec-Fetch-Site`（不是瀏覽器，身分服務的跨站檢查放行），寫入一律 `Content-Type: application/json`。依序：
+
+| 步驟 | 請求 | 誰 | 重跑時 |
+| --- | --- | --- | --- |
+| 1. 讀 session | `GET /api/identity/v1/sessions/current` | 平台管理員本人 | 只讀；`tenants` 列出他所屬的租戶 |
+| 2. 建立展示租戶 | `POST /api/identity/v1/tenants`，body `{"name"}` | 平台管理員本人 | **不是冪等的**：每次 201 都是一個新租戶，而且平台管理員不會自動成為成員、第 1 步看不到它。重跑前先確認沒有建過（第 1 步的 `tenants`，或以 superuser 唯讀查 `identity.tenants`）；回應遺失時不要重送，先查 |
+| 3. 自己成為成員 | `PUT /api/identity/v1/platform/tenants/<租戶 ID>/members`，body `{"email", "role": "admin"}`（email 是第 1 步回的自己的地址） | 平台管理員本人 | 冪等：角色相同時 200、什麼都不寫 |
+| 4. 切到展示租戶 | `PUT /api/identity/v1/sessions/current/tenant`，body `{"tenant_id"}` | 成員 | 冪等；之後這個 session 的每個請求都帶展示租戶與在那裡的角色 |
+| 5. 綁定閘道器 | `PUT /api/assets/v1/platform/gateways/<硬體 ID>/binding`，body `{"tenant_id"}` | 平台管理員本人 | 冪等：已綁在同一個租戶時 200、什麼都不寫；別的租戶握有時 409。先以 `GET /api/assets/v1/platform/gateways/<硬體 ID>` 確認它在設備池（404 是還沒出廠登錄） |
+| 6. 建立型號 | `POST /api/assets/v1/device-models`，body `{"name", "points"}` | 租戶 editor 以上 | 名稱重複 409 `device_model.name_taken`：先以 `GET /api/assets/v1/device-models` 找同名的型號 |
+| 7. 建立設備 | `POST /api/assets/v1/devices`，body `{"name", "hardware_id", "model_id", "transport", "host", "port", "unit_id", "poll_interval_ms"}` | 租戶 editor 以上 | 名稱重複 409 `device.name_taken`：先以 `GET /api/assets/v1/devices` 找同名的設備 |
+| 8. 確認 | `GET /api/gateway-ops/v1/gateways` | 租戶 viewer 以上 | 只讀 |
+
+- **RS485 轉換器只給一個連線**：轉換器把設備的回應送給每一條 TCP 連線（[現場限制](../requirements/field-constraints.md)），第 7 步一建立，agent 就收到設定開始輪詢，之後其他程式不能再連那個轉換器。lab 資料的錄製（Laysi/trustiot-v2#680）改從展示環境匯出。
+- **轉換器的位址不公開**：`host` 是 lab 的區網位址，只出現在請求與資產服務的資料裡，不寫進 issue、PR、測試報告或日誌的摘錄；貼進紀錄前遮掉。
+- **第 8 步的預期**：綁定之後 `presence` 先是 `unknown`，agent 下一次重連（退避最多 60 秒）後是 `online`；`desired_config_version` 在第 5 步之後就有（空的設定也有版本），第 7 步之後再往上一版，`applied_config_version` 在 agent 套用後的下一次心跳跟上。agent 的日誌（`sudo journalctl -u trustiot-agent`）有 `applied the configuration`，之後 ingest 把遙測寫進 ClickHouse。
+- **重設展示資料之後**（「重設展示資料」）：租戶、綁定、型號與設備都不在了，從第 2 步重做；certs 的登錄也不在了，閘道器要先重新出廠登錄才會回到設備池。
+
 ## 換 chart 版本
 
 改 `deploy/flux/clusters/demo/trustiot/chart.yaml` 的 PR 有兩種：release.yml 開的 deploy PR（可能同時移動 SaaS 與展示叢集），以及 `bun scripts/flux/pin-chart.ts --cluster demo --version <版本> --digest <chart digest>` 只換展示叢集的 pin PR（[deploy/flux/README.md](../../deploy/flux/README.md)「發版與回滾」與「日常變更」）。
@@ -454,6 +474,7 @@ Laysi/trustiot-v2#500（commit `26b454d`）起，入口的跨站請求檢查要 
      ```
 
      新成員回 201、改角色回 200，`previous_role` 是原本的角色；404 是沒有這個租戶，422 `member.email_unknown` 是這個 email 還沒有使用者。`role` 是 `viewer`、`editor` 或 `admin`；展示者自己要進入展示租戶時，也以這個方式把自己設為成員。每次變更都記在那個租戶的操作紀錄（`identity.member_role_changed`），成員下一個請求就帶新角色；已經在用的 app 頁面要切到這個租戶（或重新登入）才會以它為目前的租戶。
+   - 展示用閘道器的綁定、型號與設備：照「綁定展示用閘道器與建立設備」。
 9. **釋放 lab 鎖**，在重建完成之後：
 
    ```sh

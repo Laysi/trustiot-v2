@@ -235,7 +235,7 @@ bun scripts/flux/components.ts    # 重寫 gotk-components.yaml 與控制器映�
 | chart 版本 | 自己的 `chart.yaml` 與 `values-saas.yaml`；deploy PR 把它與 SaaS 一起移到新版，只動它時用 `pin-chart.ts` | 換版與 SaaS 一樣是「合併即部署、revert 即回滾」，簽章驗證也相同；代價是一個 deploy PR 可能同時動兩個叢集 |
 | values | HelmRelease 依序讀 `values-saas.yaml`、`values-demo.yaml`，最後是 SOPS 加密的 Secret `trustiot-demo-values` 的四個 key，各自以 `targetPath` 與 `literal: true` 寫進一個值：`app-host` → `hosts.app`、`gateway-host` → `hosts.gateway`、`ota-host` → `hosts.ota`、`smtp-from` → `smtp.from` | 主機名稱與寄件人不公開（[密鑰與權限](../../docs/architecture/secrets.md)「公開 repo 的資訊規則」），只在加密的 Secret 裡。加密的內容在 PR 裡看不到，所以它只能設這四個值：整份 values 的寫法能改任何設定（映像、ingress、環境變數），沒有 `literal` 時 Flux 以 Helm 的 `--set` 語法讀值，逗號就能接上另一個 `路徑=值`。Secret 帶 `reconcile.fluxcd.io/watch: Enabled`，改了就升級 |
 | 入口的 ClusterIP | 固定：`values-demo.yaml` 以 `ingress.tunnel.clusterIP` 設一個展示機 Service 網段（`10.43.0.0/16`）靜態區段裡沒被使用的位址，tunnel 的路由指向這個位址（Laysi/trustiot-v2#478）。設為 `10.43.0.80`（Laysi/trustiot-v2#480），與換到含這個欄位的 chart 版本在同一個 PR，而且在展示環境第一次部署（Laysi/trustiot-v2#467）之前；較舊的 chart 不認得這個欄位，schema 拒絕整份 values，HelmRelease 就失敗 | 入口 Service 重建後拿回同一個位址，路由不失效，舊位址也不會被別的 Service 拿走而經 tunnel 公開；ClusterIP 建立後不能改，所以要在 Service 第一次建立前設好。選法與改位址的步驟見 [chart 的 README](../chart/README.md)「固定的入口 ClusterIP」 |
-| 服務 | `values-demo.yaml` 的 `services` 逐一打開切片的服務（目前 `identity`、`assets`、`certs`，以及閘道器資料路徑的 `mqtt-bridge`、`ingest`、`gateway-ops` 與 `mqttBroker`），`ingress.routes` 列出 app 主機的 cookie 路由（目前 `/api/identity`、`/api/certs`） | 只開部署中那一版 chart 有映像的服務；切片的 issue 進了 release 後，在這裡打開（certs、閘道器的資料路徑、AI 閘道與 telemetry-query 要另設的值見下方「打開 certs」「打開閘道器的資料路徑」「打開 AI 閘道」「打開 telemetry-query」） |
+| 服務 | `values-demo.yaml` 的 `services` 逐一打開切片的服務（目前 `identity`、`assets`、`certs`，以及閘道器資料路徑的 `mqtt-bridge`、`ingest`、`gateway-ops` 與 `mqttBroker`），`ingress.routes` 列出 app 主機的 cookie 路由（目前 `/api/identity`、`/api/certs`，以及 Laysi/trustiot-v2#793 綁定閘道器、建立型號與設備用的 `/api/assets` 與看閘道器在線狀態的 `/api/gateway-ops`） | 只開部署中那一版 chart 有映像的服務；切片的 issue 進了 release 後，在這裡打開（certs、閘道器的資料路徑、AI 閘道與 telemetry-query 要另設的值見下方「打開 certs」「打開閘道器的資料路徑」「打開 AI 閘道」「打開 telemetry-query」） |
 | 外部端點 | Qdrant 的網址在 `.invalid`（RFC 6761，不會解析）；Sentry 關閉 | 切片不用知識庫，SaaS 型態的 schema 又要求外部網址；沒有展示用的 Sentry 專案，錯誤留在 ClickHouse 的日誌 |
 | 備份與磁碟 | 沒有備份；Postgres 10Gi、ClickHouse 20Gi | 里程碑「展示切片」接受展示資料遺失；一台閘道器加幾具電表的量 |
 
@@ -326,10 +326,16 @@ age-keygen 的輸出不是終端機時，私鑰寫到管線、`Public key: …` 
   - `/mqtt` 的路由不寫在 `ingress.routes`：它是 chart 固定的例外路徑（`ingress.publicPaths.mqtt`，完整路徑比對、不需要 cookie），mqtt-bridge 打開時 chart 才掛上指向它的路由，沒開時這個路徑既不路由也不免驗證（[chart 的 README](../chart/README.md)「入口 gateway」）。broker 自己沒有任何入口路由，閘道器只經 mqtt-bridge 連它。
   - 不用加 Secret：broker 的服務帳號密碼由 broker pod 的 init container 產生、服務角色與 ClickHouse 寫入帳號的密碼由 migration Job 產生，broker 的伺服器憑證由 chart 的 CronJob 產生私鑰、經 certs 簽發（2026-10-28 的儀式之後 certs 就能簽），都不經過人（[chart 的 README](../chart/README.md)「MQTT broker」）。
   - 四樣一起開，不分次：ingest 與 gateway-ops 沒有 broker 時 chart 拒絕渲染；broker 沒有 mqtt-bridge 時閘道器連不到它，只剩雲端服務的連線；mqtt-bridge 沒有 broker 時不啟動。
-  - certs 已經打開，broker 開啟後它拿到 `service:certs` 帳號，依 Postgres 同步閘道器在 broker 的 client 與角色（Laysi/trustiot-v2#633）；broker 的 trust sidecar 從 certs 取 CA 憑證與 CRL。gateway-ops 的 API 路由（`/api/gateway-ops`）不在這一步：它不在資料路徑上，給前端用，由用到它的 issue 加。
+  - certs 已經打開，broker 開啟後它拿到 `service:certs` 帳號，依 Postgres 同步閘道器在 broker 的 client 與角色（Laysi/trustiot-v2#633）；broker 的 trust sidecar 從 certs 取 CA 憑證與 CRL。gateway-ops 的 API 路由（`/api/gateway-ops`）不在這一步：它不在資料路徑上，由下一項加上。
   - chart 版本：要比 `0.0.0-rc.11` 晚。rc.11 沒有 ingest 與 gateway-ops 的映像，它的 certs 也還沒有 broker 帳號、不同步閘道器的 client（Laysi/trustiot-v2#737、Laysi/trustiot-v2#727），閘道器過不了 broker。`chart.yaml` 釘的版本不晚於 rc.11 時 `bun test deploy/flux` 失敗。依 chart README「gateway-ops」的「展示叢集」，換版與打開分兩次合併，每次只有一種中斷：先合併換版的 PR（叢集內的 Postgres 因 `max_connections` 從 200 調到 240 重啟一次），穩定後再合併打開的 PR（broker 第一次啟動、migration Job 重跑、certs 為掛上 broker 帳號滾動更新）。
   - 換到含換發端點（Laysi/trustiot-v2#81）的版本之前，先完成[展示環境 runbook](../../docs/runbooks/demo-environment.md)「換 chart 版本」的「換發端點上線」：Cloudflare 的速率限制涵蓋 `/certs/renew`，並在換版的 issue 審查這個暴露。`/mqtt` 的速率限制要在 mqtt-bridge 部署之前就套用（runbook「`/mqtt` 的速率限制」）。
   - 打開後：新的 ingest、gateway-ops 與 certs pod 停在等待掛載，直到 broker 的 init container `accounts` 寫入它們的密碼（chart README「服務的帳號」），之後自己繼續。broker 一開始沒有閘道器埠 8883，等憑證 CronJob 的下一次執行（最多 15 分鐘）填入伺服器憑證，trust sidecar 讓 broker 重啟一次帶上 8883（chart README「伺服器憑證」的「儀式之前與第一次簽發」）。之後閘道器的 agent 在自己的退避間隔內（最多 60 秒）連上。確認的步驟在 runbook「打開閘道器的資料路徑」。
+
+- **閘道器的綁定、型號與設備的 API**（Laysi/trustiot-v2#793）：資料路徑打開之後，閘道器要綁到展示租戶、有了設備才會收到設定開始輪詢，三者都以 API 建立、不改資料庫，所以 `values-demo.yaml` 加兩條 app 主機的 cookie 路由：`/api/assets` 給資產服務（平台管理員本人的綁定 `PUT /api/assets/v1/platform/gateways/<硬體 ID>/binding`，租戶 editor 以上的型號與設備，[服務的 README](../../services/assets/README.md)），`/api/gateway-ops` 給 gateway-ops 的閘道器列表（在線狀態與設定版本，租戶 viewer 以上，[服務的 README](../../services/gateway-ops/README.md)「API」）。理由與取捨：
+  - 兩個服務都驗證內部身分、每個端點都宣告了角色（[權限矩陣](../../docs/architecture/permissions.md)），寫入要求 JSON 的 `Content-Type`，跨站請求由身分服務的 cookie 檢查擋下；app 主機另在 Access 後面。不用加 Secret，也不加不需要 cookie 的路徑，Cloudflare 與 tunnel 不必改（app 主機的每個路徑本來就經 Access 送到入口）。
+  - 路由改變的是身分服務的 `TRUSTIOT_INGRESS_ROUTES`、入口的 HTTPRoute 與授權，不改 migration Job 的 spec：身分服務滾動重啟一次，其他服務不重啟。
+  - 已知的落差：入口把 session cookie 原樣轉給這兩個後端（Laysi/trustiot-v2#509，certs 的路由也一樣），後端只讀 `x-internal-identity`。
+  - 綁定與建立設備的請求與順序見[展示環境 runbook](../../docs/runbooks/demo-environment.md)「綁定展示用閘道器與建立設備」。
 
 - **打開 AI 閘道**（Laysi/trustiot-v2#536）：展示叢集部署的 chart 含 `deploy/images/ai-gateway` 之後，`values-demo.yaml` 加上下面的值，`trustiot-anthropic.sops.yaml` 已在 main 上並列在 `kustomization.yaml`（上表）。`credentials: [ai]` 是 chart 的預設，仍寫出來：`scripts/demo/flux.ts` 只從展示叢集的 values 判斷要哪些 Secret，看不到 chart 的預設。展示環境只有 Anthropic 的金鑰，所以角色只能用 `anthropic/` 的模型；角色名稱與模型由呼叫端的 issue 決定（AI 助理是 Laysi/trustiot-v2#145），沒有角色時 chart 拒絕渲染。`baseUrl` 留空是 Anthropic 自己的 API，要經 Cloudflare AI Gateway 時才設。閘道沒有呼叫端時誰都連不到它（`mesh.calls` 由呼叫端的 issue 加上），打開後確認 pod 就緒；金鑰能不能用，以 chart README「AI 閘道」的 port-forward 送一次最小的呼叫確認。
 
@@ -364,6 +370,14 @@ age-keygen 的輸出不是終端機時，私鑰寫到管線、`Public key: …` 
         path: /api/certs
         match: PathPrefix
         service: certs
+      - host: app
+        path: /api/assets
+        match: PathPrefix
+        service: assets
+      - host: app
+        path: /api/gateway-ops
+        match: PathPrefix
+        service: gateway-ops
       - host: app
         path: /api/telemetry
         match: PathPrefix
