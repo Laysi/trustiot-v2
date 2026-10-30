@@ -706,16 +706,30 @@ describe("the demo release", () => {
   // (deploy/flux/README.md, 「日常變更」). The schema of such a version accepts any service name, so
   // the overlay renders there, but the release has no image for it: the pod cannot pull, the Helm
   // upgrade times out and rolls back. certs also needs Laysi/trustiot-v2#609's connection budget.
-  const LACKING_UP_TO: Record<string, string> = { certs: "0.0.0-rc.10" };
+  // The gateway's data path (Laysi/trustiot-v2#795) needs a chart later than 0.0.0-rc.11: that
+  // version has no ingest (Laysi/trustiot-v2#747) or gateway-ops (Laysi/trustiot-v2#752) image, and
+  // its certs neither holds a broker account (Laysi/trustiot-v2#737) nor keeps the gateways' broker
+  // clients (Laysi/trustiot-v2#727), so a gateway could not get past the broker. mqtt-bridge and the
+  // broker are in rc.11, but are of no use without them; mqttBroker is a chart value, not a service.
+  const LACKING_UP_TO: Record<string, string> = {
+    certs: "0.0.0-rc.10",
+    "mqtt-bridge": "0.0.0-rc.11",
+    ingest: "0.0.0-rc.11",
+    "gateway-ops": "0.0.0-rc.11",
+    mqttBroker: "0.0.0-rc.11",
+  };
+  /** Whether the overlay switches a service, or the broker (mqttBroker), on. */
+  const switchedOn = (values: YamlMap, name: string): boolean => {
+    const entry = name === "mqttBroker" ? values.mqttBroker : isMap(values.services) ? values.services[name] : undefined;
+    return isMap(entry) && entry.enabled === true;
+  };
   /** Services the overlay switches on while the pinned chart version still lacks them. */
   const tooEarly = (values: YamlMap, tag: string): string[] =>
-    Object.entries(LACKING_UP_TO).filter(([service, last]) => {
-      const services = isMap(values.services) ? values.services : {};
-      const entry = services[service];
-      return isMap(entry) && entry.enabled === true && Bun.semver.order(tag, last) <= 0;
-    }).map(([service, last]) => `${service} is on, but the chart ${tag} is not later than ${last}`);
+    Object.entries(LACKING_UP_TO)
+      .filter(([name, last]) => switchedOn(values, name) && Bun.semver.order(tag, last) <= 0)
+      .map(([name, last]) => `${name} is on, but the chart ${tag} is not later than ${last}`);
 
-  test("a service is switched on only once the pinned chart ships it (Laysi/trustiot-v2#619)", () => {
+  test("a service is switched on only once the pinned chart ships it (Laysi/trustiot-v2#619, Laysi/trustiot-v2#795)", () => {
     const ref = spec(one("demo", "OCIRepository", "trustiot")).ref;
     const tag = isMap(ref) && typeof ref.tag === "string" ? ref.tag : "";
     expect(tag).not.toBe("");
@@ -726,6 +740,19 @@ describe("the demo release", () => {
     expect(tooEarly(certsOn, "0.0.0-rc.9")).toHaveLength(1);
     expect(tooEarly(certsOn, "0.0.0-rc.11")).toEqual([]);
     expect(tooEarly({ services: { certs: { enabled: false } } }, "0.0.0-rc.10")).toEqual([]);
+    // The data path, each switch on its own, and the broker by its own value.
+    for (const name of ["mqtt-bridge", "ingest", "gateway-ops"]) {
+      const on = { services: { [name]: { enabled: true } } };
+      expect(tooEarly(on, "0.0.0-rc.11")).toEqual([`${name} is on, but the chart 0.0.0-rc.11 is not later than 0.0.0-rc.11`]);
+      expect(tooEarly(on, "0.0.0-rc.12")).toEqual([]);
+    }
+    expect(tooEarly({ mqttBroker: { enabled: true } }, "0.0.0-rc.11")).toEqual(["mqttBroker is on, but the chart 0.0.0-rc.11 is not later than 0.0.0-rc.11"]);
+    expect(tooEarly({ mqttBroker: { enabled: false } }, "0.0.0-rc.11")).toEqual([]);
+    expect(tooEarly({ mqttBroker: { enabled: true } }, "0.0.0-rc.12")).toEqual([]);
+    // The overlay itself on the deployed rc.11: every part of the data path is refused.
+    expect(tooEarly(overlay, "0.0.0-rc.11").sort()).toEqual(
+      ["gateway-ops", "ingest", "mqtt-bridge", "mqttBroker"].map((name) => `${name} is on, but the chart 0.0.0-rc.11 is not later than 0.0.0-rc.11`),
+    );
   });
 
   test("the host check refuses any other host name, a mail address and an IP address", () => {
@@ -752,8 +779,16 @@ describe("the demo release", () => {
       expect(result.code).toBe(0);
       const objects = parseAll(result.stdout);
       const deployments = objects.filter((m) => m.kind === "Deployment").map((m) => m.metadata.name).sort();
-      expect(deployments).toEqual(["trustiot-assets", "trustiot-certs", "trustiot-identity", "trustiot-otel-collector"]);
-      for (const name of ["trustiot-assets", "trustiot-certs", "trustiot-identity"]) {
+      expect(deployments).toEqual([
+        "trustiot-assets",
+        "trustiot-certs",
+        "trustiot-gateway-ops",
+        "trustiot-identity",
+        "trustiot-ingest",
+        "trustiot-mqtt-bridge",
+        "trustiot-otel-collector",
+      ]);
+      for (const name of ["trustiot-assets", "trustiot-certs", "trustiot-gateway-ops", "trustiot-identity", "trustiot-ingest", "trustiot-mqtt-bridge"]) {
         const pod = (spec(objects.find((m) => m.kind === "Deployment" && m.metadata.name === name)!).template as { spec: { imagePullSecrets: { name: string }[] } }).spec;
         expect(pod.imagePullSecrets).toEqual([{ name: GHCR_PULL_NAME }]);
       }
@@ -772,8 +807,30 @@ describe("the demo release", () => {
         expect(matching[0]).not.toContain(privateExample["gateway-host"]!);
         expect(matching[0]).not.toContain(privateExample["ota-host"]!);
       }
-      const platform = objects.find((m) => m.kind === "ConfigMap" && m.metadata.name === "trustiot-platform")?.data as Record<string, string>;
+      // The gateway's data path (Laysi/trustiot-v2#795): the gateway host has exactly the chart's two
+      // cookie-free paths, each an Exact match to its own service, and the app and ota hosts have
+      // neither. No route names the broker: gateways reach it only through mqtt-bridge.
+      const gatewayRoutes = objects.filter((m) => m.kind === "HTTPRoute" && JSON.stringify(m.spec).includes(privateExample["gateway-host"]!));
+      expect(gatewayRoutes.map((m) => m.metadata.name)).toEqual(["trustiot-ingress-gateway"]);
+      const gatewayRules = (spec(gatewayRoutes[0]!).rules as YamlMap[]).map((rule) => ({
+        matches: (rule.matches as { path: YamlMap }[]).map((m) => m.path),
+        backends: (rule.backendRefs as YamlMap[]).map((b) => b.name),
+      }));
+      expect(gatewayRules).toEqual([
+        { matches: [{ type: "Exact", value: "/certs/renew" }], backends: ["trustiot-certs"] },
+        { matches: [{ type: "Exact", value: "/mqtt" }], backends: ["trustiot-mqtt-bridge"] },
+      ]);
+      expect(routes.filter((r) => r.includes('"value":"/mqtt"') && !r.includes(privateExample["gateway-host"]!))).toEqual([]);
+      expect(routes.filter((r) => r.includes("trustiot-mqtt-broker"))).toEqual([]);
+      // The broker, its server certificate's CronJob, and the address the bridge relays to.
+      expect(objects.some((m) => m.kind === "StatefulSet" && m.metadata.name === "trustiot-mqtt-broker")).toBe(true);
+      expect(objects.some((m) => m.kind === "CronJob" && m.metadata.name === "trustiot-mqtt-broker-certificate")).toBe(true);
+      const bridge = JSON.stringify(spec(objects.find((m) => m.kind === "Deployment" && m.metadata.name === "trustiot-mqtt-bridge")!));
+      expect(bridge).toContain('{"name":"TRUSTIOT__BROKER__ADDRESS","value":"trustiot-mqtt-broker.trustiot.svc:8883"}');
+      const platform =objects.find((m) => m.kind === "ConfigMap" && m.metadata.name === "trustiot-platform")?.data as Record<string, string>;
       expect(platform.TRUSTIOT_APP_HOST).toBe(privateExample["app-host"]);
+      // mqtt-bridge records the gateway's address from Cloudflare's header (tunnel exposure).
+      expect(platform.TRUSTIOT_CLIENT_IP_SOURCE).toBe("cf-connecting-ip");
       expect(platform.TRUSTIOT_SMTP_HOST).toBe("smtp.resend.com");
       expect(platform.TRUSTIOT_SMTP_PORT).toBe("587");
       expect(platform.TRUSTIOT_SMTP_SECURITY).toBe("starttls");
@@ -788,13 +845,13 @@ describe("the demo release", () => {
   );
 
   test(
-    "with all four Postgres services on, the overlay passes the chart's connection check, which still refuses three identity replicas more (Laysi/trustiot-v2#575)",
+    "with every Postgres service of the slice on, the overlay passes the chart's connection check, which still refuses two identity replicas more (Laysi/trustiot-v2#575)",
     () => {
-      // The demo slice turns certs and telemetry-query on next to identity and assets, and Flux rolls
-      // every service at once: the chart refuses values whose pools could then exceed Postgres'
-      // max_connections (deploy/chart/README.md, 「連線預算」).
-      const allFour: YamlMap = { services: { certs: { enabled: true }, "telemetry-query": { enabled: true } } };
-      const result = helmTemplate([overlay, allFour], setLiteral);
+      // The demo slice turns certs, ingest, gateway-ops and telemetry-query on next to identity and
+      // assets, and Flux rolls every service at once: the chart refuses values whose pools could then
+      // exceed Postgres' max_connections (deploy/chart/README.md, 「連線預算」).
+      const allOn: YamlMap = { services: { certs: { enabled: true }, "telemetry-query": { enabled: true } } };
+      const result = helmTemplate([overlay, allOn], setLiteral);
       expect(result.stderr).toBe("");
       expect(result.code).toBe(0);
       const objects = parseAll(result.stdout);
@@ -802,13 +859,19 @@ describe("the demo release", () => {
         .filter((m) => m.kind === "Deployment" && JSON.stringify(m).includes("TRUSTIOT__DATABASE__MAX_CONNECTIONS"))
         .map((m) => m.metadata.name)
         .sort();
-      expect(postgresClients).toEqual(["trustiot-assets", "trustiot-certs", "trustiot-identity", "trustiot-telemetry-query"]);
-      // The control: four identity replicas are 31 x 5 instead of 31 x 2, past the default 240
-      // (Laysi/trustiot-v2#721 raised it from 200, under which three replicas were already too many,
-      // and Laysi/trustiot-v2#645 from 220).
-      const more = helmTemplate([overlay, allFour], [...setLiteral, "--set", "services.identity.replicas=4"]);
+      expect(postgresClients).toEqual([
+        "trustiot-assets",
+        "trustiot-certs",
+        "trustiot-gateway-ops",
+        "trustiot-identity",
+        "trustiot-ingest",
+        "trustiot-telemetry-query",
+      ]);
+      // The control: three identity replicas are 31 x 4 instead of 31 x 2, past the default 240
+      // (Laysi/trustiot-v2#721 raised it from 200 and Laysi/trustiot-v2#645 from 220).
+      const more = helmTemplate([overlay, allOn], [...setLiteral, "--set", "services.identity.replicas=3"]);
       expect(more.code).not.toBe(0);
-      expect(more.stderr).toContain("postgres.bundled.parameters.max_connections is 240, but 243 connections are needed");
+      expect(more.stderr).toContain("postgres.bundled.parameters.max_connections is 240, but 266 connections are needed");
     },
     SLOW_TEST_MS,
   );
@@ -888,18 +951,26 @@ describe("the demo release", () => {
   );
 });
 
-// The MQTT broker (Laysi/trustiot-v2#84) is off in the chart's shapes. Its server certificate now
-// comes from the chart's own CronJob (Laysi/trustiot-v2#535), but turning the broker on in a
-// cluster is a change of its own, which updates this test; until then every values file and value
-// a cluster's release reads must leave it off.
-describe.each([...CLUSTERS])("the MQTT broker stays off in the %s cluster", (cluster) => {
-  test("no values file of the release sets mqttBroker, and no private value targets it", () => {
+// The MQTT broker (Laysi/trustiot-v2#84) is off in the chart's shapes. Turning it on in a cluster is
+// a change of its own, which updates this table: the demo cluster turned it on for the gateway's
+// data path (Laysi/trustiot-v2#795), in its public overlay only; the SaaS cluster still leaves it
+// off. No other values file of a release sets it (the shape copied from the chart never does), and
+// no private value targets it: what the encrypted values hold cannot be reviewed in a PR.
+const BROKER_SET_BY: Record<ClusterName, Record<string, unknown>> = {
+  saas: {},
+  demo: { "values-demo.yaml": { enabled: true } },
+};
+
+describe.each([...CLUSTERS])("the MQTT broker in the %s cluster", (cluster) => {
+  test("only the values files in the table set mqttBroker, and no private value targets it", () => {
     const data = one(cluster, "ConfigMap", "trustiot-values").data as Record<string, string>;
     expect(Object.keys(data).length).toBeGreaterThan(0);
+    const setBy: Record<string, unknown> = {};
     for (const [file, text] of Object.entries(data)) {
       const values = Bun.YAML.parse(text);
-      expect({ file, mqttBroker: isMap(values) ? values.mqttBroker : undefined }).toEqual({ file, mqttBroker: undefined });
+      if (isMap(values) && values.mqttBroker !== undefined) setBy[file] = values.mqttBroker;
     }
+    expect(setBy).toEqual(BROKER_SET_BY[cluster]);
     const release = spec(one(cluster, "HelmRelease", "trustiot"));
     expect(release.values).toBeUndefined();
     for (const entry of (release.valuesFrom ?? []) as YamlMap[]) {
