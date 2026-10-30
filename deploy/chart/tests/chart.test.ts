@@ -3519,21 +3519,21 @@ describe("Postgres connection budget (Laysi/trustiot-v2#575)", () => {
       assets: 14,
       assistant: 4,
       certs: 9,
-      "gateway-ops": 11,
+      "gateway-ops": 13,
       identity: 31,
       ingest: 14,
       "telemetry-query": 12,
     });
     expect(reserved).toBe(18);
-    // 4 to spare (README.md, 「連線預算」): the next service that uses Postgres raises the limit.
-    // Laysi/trustiot-v2#721 raised it from 200 for gateway-ops.
-    expect(needed).toBe(216);
+    // None to spare since Laysi/trustiot-v2#112 (README.md, 「連線預算」): the next service or pool
+    // that uses Postgres raises the limit. Laysi/trustiot-v2#721 raised it from 200 for gateway-ops.
+    expect(needed).toBe(220);
     expect(limit).toBe(220);
     const readme = readFileSync(join(CHART_DIR, "README.md"), "utf8");
     for (const name of postgresServices) {
       expect(readme).toContain(`| \`${name}\` | \`${services[name]?.database?.maxConnections}\` | ${budgets[name]?.otherPools} | ${perReplica(name)} |`);
     }
-    expect(readme).toContain(`| 合計 | | | 99 | 198 |`);
+    expect(readme).toContain(`| 合計 | | | 101 | 202 |`);
   });
 
   test.each(SHAPE_NAMES)("%s: the defaults, every Postgres service and every planned service pass the check", (shape) => {
@@ -3553,7 +3553,7 @@ describe("Postgres connection budget (Laysi/trustiot-v2#575)", () => {
     expect(below.code).not.toBe(0);
     expect(below.stderr).toContain(
       `postgres.bundled.parameters.max_connections is ${needed - 1}, but ${needed} connections are needed: the services can open ${needed - reserved} while all of them roll at once ` +
-        "(per replica x pods: ai-gateway 4 x 2, assets 14 x 2, assistant 4 x 2, certs 9 x 2, gateway-ops 11 x 2, identity 31 x 2, ingest 14 x 2, telemetry-query 12 x 2), " +
+        "(per replica x pods: ai-gateway 4 x 2, assets 14 x 2, assistant 4 x 2, certs 9 x 2, gateway-ops 13 x 2, identity 31 x 2, ingest 14 x 2, telemetry-query 12 x 2), " +
         `and ${reserved} stay reserved for superusers, CloudNativePG, the migration Job and the platform administrator bootstrap.`,
     );
     // The string form of max_connections counts the same.
@@ -4049,7 +4049,7 @@ describe("migration Job (Laysi/trustiot-v2#60)", () => {
       expect(container.env?.filter((e) => /^TRUSTIOT__(CLICKHOUSE|DATABASE)__/.test(e.name)), shape).toEqual([
         { name: "TRUSTIOT__DATABASE__USERNAME", value: "gateway_ops_app" },
         { name: "TRUSTIOT__DATABASE__PASSWORD", valueFrom: { secretKeyRef: { name: secret, key: "gateway_ops_app" } } },
-        { name: "TRUSTIOT__DATABASE__MAX_CONNECTIONS", value: "7" },
+        { name: "TRUSTIOT__DATABASE__MAX_CONNECTIONS", value: "9" },
         { name: "TRUSTIOT__DATABASE__PLATFORM_USERNAME", value: "gateway_ops_platform" },
         { name: "TRUSTIOT__DATABASE__PLATFORM_PASSWORD", valueFrom: { secretKeyRef: { name: secret, key: "gateway_ops_platform" } } },
       ]);

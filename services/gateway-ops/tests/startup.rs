@@ -1,8 +1,9 @@
 //! The gateway-ops binary (Laysi/trustiot-v2#719, Laysi/trustiot-v2#720): it starts on the
 //! product's schema with the roles the chart gives it and a broker, becomes ready, its consumer
 //! turns a binding and a device into stored versions and the delivery publishes the latest one
-//! retained, readiness fails while the broker is down and recovers with a republish when it is
-//! back, and SIGTERM stops it with exit code 0. No log line carries the broker password.
+//! retained, its API lists the gateway to a viewer of the tenant (Laysi/trustiot-v2#112),
+//! readiness fails while the broker is down and recovers with a republish when it is back, and
+//! SIGTERM stops it with exit code 0. No log line carries the broker password.
 //!
 //! Starts a throwaway Postgres with TLS and a Mosquitto (podman or docker); skipped without
 //! either unless `CI` is set.
@@ -11,7 +12,7 @@ mod support;
 
 use std::time::Duration;
 
-use contract::{DeviceId, TenantId};
+use contract::{DeviceId, ServiceName, TenantId, TenantRole};
 use protocol::ConfigVersion;
 use support::broker::{Broker, Gateway};
 use support::{
@@ -98,6 +99,29 @@ async fn the_service_delivers_versions_retained_follows_the_broker_and_stops_on_
         .await;
     newcomer.close().await;
     assert_eq!(retained.version, latest);
+
+    // The API (Laysi/trustiot-v2#112): a viewer of the tenant sees the gateway, not yet heard
+    // from, with its latest version; no token is a 401; both are never stored.
+    let token = service
+        .issuer
+        .tenant_token(ServiceName::GatewayOps, tenant, TenantRole::Viewer);
+    let (status, cache, body) = service
+        .get("/api/gateway-ops/v1/gateways", Some(&token))
+        .await;
+    assert_eq!(
+        (status, cache.as_deref()),
+        (200, Some("no-store")),
+        "{body}"
+    );
+    assert_eq!(
+        body["gateways"][0]["hardware_id"],
+        gateway.as_str(),
+        "{body}"
+    );
+    assert_eq!(body["gateways"][0]["presence"], "unknown", "{body}");
+    assert_eq!(body["gateways"][0]["desired_config_version"], 2, "{body}");
+    let (status, cache, _) = service.get("/api/gateway-ops/v1/gateways", None).await;
+    assert_eq!((status, cache.as_deref()), (401, Some("no-store")));
 
     // Readiness follows the broker connection.
     broker.stop();

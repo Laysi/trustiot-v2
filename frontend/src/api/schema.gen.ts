@@ -270,6 +270,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/gateway-ops/v1/gateways": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The tenant's gateways, with whether each is connected, its last report and its configuration
+         *     versions.
+         */
+        get: operations["listGateways"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/identity/v1/event-log": {
         parameters: {
             query?: never;
@@ -981,6 +1001,53 @@ export interface components {
             /** Format: date-time */
             to: string;
         };
+        /** @description A gateway bound to the caller's tenant. */
+        Gateway: {
+            /**
+             * @description The agent's release the gateway reported on its current (or last) connection; `null`
+             *     before that connection reported one.
+             * @example 1.4.0
+             */
+            agent_version?: string | null;
+            /**
+             * Format: int64
+             * @description The configuration version the gateway said it has applied, in the latest heartbeat of
+             *     its current (or last) connection; `null` before that connection sent one.
+             */
+            applied_config_version?: number | null;
+            /** @description The binding (a new one each time the gateway is bound). */
+            binding_id: components["schemas"]["GatewayBindingId"];
+            /**
+             * Format: date-time
+             * @description When it was bound.
+             */
+            bound_at: string;
+            /**
+             * Format: int64
+             * @description The latest configuration version stored for the binding (what the gateway should have);
+             *     `null` before the first one.
+             */
+            desired_config_version?: number | null;
+            /**
+             * @description The hardware ID.
+             * @example tg-0001
+             */
+            hardware_id: string;
+            /**
+             * Format: date-time
+             * @description When the service last received a status or heartbeat of the gateway's current or last
+             *     session (its last report); `null` while `unknown`.
+             */
+            last_seen_at?: string | null;
+            offline_reason?: components["schemas"]["OfflineReason"] | null;
+            /** @description Whether it is connected. */
+            presence: components["schemas"]["Presence"];
+            /**
+             * Format: date-time
+             * @description When `presence` last changed, by the service's database clock; `null` while `unknown`.
+             */
+            presence_changed_at?: string | null;
+        };
         /** @description A gateway's binding to a tenant. */
         GatewayBinding: {
             /** @description The binding: a new one every time the gateway is bound. */
@@ -1007,6 +1074,11 @@ export interface components {
          *     Serialized as a lowercase hyphenated UUID string.
          */
         GatewayBindingId: string;
+        /** @description The caller's tenant's gateways. */
+        GatewayList: {
+            /** @description By hardware ID (byte order). */
+            gateways: components["schemas"]["Gateway"][];
+        };
         /** @description A gateway's factory registration, as the service records it. */
         GatewayRegistration: {
             /** @description The issuing CA that signed the initial certificate: the SHA-256 of its public key. */
@@ -1276,6 +1348,11 @@ export interface components {
          * @enum {string}
          */
         ModelSource: "configuration" | "database";
+        /**
+         * @description Why a gateway is offline.
+         * @enum {string}
+         */
+        OfflineReason: "shutdown" | "connection_lost" | "heartbeat_timeout";
         /** @description A gateway of the device pool. */
         PoolGateway: {
             binding?: components["schemas"]["GatewayBinding"] | null;
@@ -1318,6 +1395,11 @@ export interface components {
              */
             time_zone: string;
         };
+        /**
+         * @description Whether a gateway is connected.
+         * @enum {string}
+         */
+        Presence: "online" | "offline" | "unknown";
         /** @description The range an answer covers. */
         QueryRange: {
             /**
@@ -3388,6 +3470,53 @@ export interface operations {
                 };
             };
             /** @description The database failed (`unavailable`). Nothing was revoked. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    listGateways: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The gateways bound to the caller's tenant, by hardware ID. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GatewayList"];
+                };
+            };
+            /** @description No valid session (`unauthenticated`). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No tenant or no role in it (`permission_denied`). */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The database failed, or too many requests are being answered (`unavailable`). */
             503: {
                 headers: {
                     [name: string]: unknown;

@@ -14,9 +14,11 @@
 //! where they fail.
 //!
 //! The stand-in gateway is a service account (`service:test-gateway`) whose role may read every
-//! gateway's `down/config` and publish on every `up/config-report`: the client crate speaks only
-//! to the service port, which takes passwords, and the gateway-ops service sees the same topics a
-//! gateway's certificate would give it (the gateway comes from the topic).
+//! gateway's `down/config` and publish on every `up/config-report`, `up/status` and
+//! `up/heartbeat`: the client crate speaks only to the service port, which takes passwords, and
+//! the gateway-ops service sees the same topics a gateway's certificate would give it (the
+//! gateway comes from the topic). [`RawGateway`] is the same account over a bare MQTT 5
+//! connection with a last will, which it can drop or leave half open.
 
 use std::net::TcpListener;
 use std::os::unix::fs::PermissionsExt;
@@ -233,6 +235,18 @@ impl Broker {
                         "topic": Channel::Config.filter(),
                         "allow": true,
                     },
+                    // The presence tests' stand-in gateway publishes statuses (its last will
+                    // among them) and heartbeats.
+                    {
+                        "acltype": "publishClientSend",
+                        "topic": Channel::Status.filter(),
+                        "allow": true,
+                    },
+                    {
+                        "acltype": "publishClientSend",
+                        "topic": Channel::Heartbeat.filter(),
+                        "allow": true,
+                    },
                 ],
             },
             {
@@ -337,7 +351,7 @@ impl Broker {
     }
 
     /// The stand-in gateway's broker settings.
-    fn gateway_config(&self) -> Config {
+    pub fn gateway_config(&self) -> Config {
         Config {
             host: "127.0.0.1".to_owned(),
             port: self.port,
@@ -501,5 +515,155 @@ impl Gateway {
     /// Disconnects.
     pub async fn close(self) {
         self.client.shutdown().await;
+    }
+}
+
+/// A stand-in gateway on a bare MQTT 5 connection (`rumqttc`'s packet codec only), as the
+/// agent connects: a clean start with its session's last will retained on its `up/status`
+/// (`protocol::health::Status::last_will`). It sends nothing on its own, no PINGREQ either, so
+/// between publishes the connection is silent: with a short keepalive it is a half-open
+/// connection as the broker sees one. [`RawGateway::drop_connection`] closes the socket without
+/// a DISCONNECT, as a lost connection does.
+pub struct RawGateway {
+    stream: tokio::net::TcpStream,
+    buffer: bytes::BytesMut,
+    next_packet_id: u16,
+}
+
+impl RawGateway {
+    /// Connects as the stand-in account with a client ID of its own, `keep_alive` seconds and
+    /// the last will of `session` on `gateway`'s status topic; waits for a successful CONNACK.
+    pub async fn connect(
+        broker: &Broker,
+        gateway: &GatewayId,
+        session: &protocol::SessionId,
+        keep_alive: u16,
+    ) -> Self {
+        use rumqttc::v5::mqttbytes::QoS;
+        use rumqttc::v5::mqttbytes::v5::{Connect, ConnectReturnCode, LastWill, Login, Packet};
+        use tokio::io::AsyncWriteExt as _;
+
+        let will = protocol::health::Status::last_will(session.clone())
+            .encode()
+            .expect("encode the last will");
+        let connect = Connect {
+            keep_alive,
+            client_id: format!("test-raw-{}", random_hex()),
+            clean_start: true,
+            properties: None,
+        };
+        let packet = Packet::Connect(
+            connect,
+            Some(LastWill::new(
+                Channel::Status.topic(gateway),
+                will,
+                QoS::AtLeastOnce,
+                true,
+                None,
+            )),
+            Some(Login::new(
+                GATEWAY_USERNAME,
+                broker.gateway_password.clone(),
+            )),
+        );
+        let stream = tokio::time::timeout(
+            BROKER_WAIT,
+            tokio::net::TcpStream::connect(("127.0.0.1", broker.port)),
+        )
+        .await
+        .expect("connect to the broker in time")
+        .expect("connect to the broker");
+        let mut raw = Self {
+            stream,
+            buffer: bytes::BytesMut::new(),
+            next_packet_id: 1,
+        };
+        let mut encoded = bytes::BytesMut::new();
+        packet.write(&mut encoded, None).expect("encode CONNECT");
+        raw.stream.write_all(&encoded).await.expect("send CONNECT");
+        match raw.read().await {
+            Packet::ConnAck(connack) => assert_eq!(
+                connack.code,
+                ConnectReturnCode::Success,
+                "the broker refused the raw stand-in gateway"
+            ),
+            other => panic!("expected CONNACK, got {other:?}"),
+        }
+        raw
+    }
+
+    /// The next packet from the broker, within [`MESSAGE_WAIT`].
+    async fn read(&mut self) -> rumqttc::v5::mqttbytes::v5::Packet {
+        use rumqttc::v5::mqttbytes::Error;
+        use rumqttc::v5::mqttbytes::v5::Packet;
+        use tokio::io::AsyncReadExt as _;
+
+        let deadline = tokio::time::Instant::now() + MESSAGE_WAIT;
+        loop {
+            match Packet::read(&mut self.buffer, None) {
+                Ok(packet) => return packet,
+                Err(Error::InsufficientBytes(_)) => {}
+                Err(error) => panic!("an invalid packet from the broker: {error}"),
+            }
+            let read = tokio::time::timeout_at(deadline, self.stream.read_buf(&mut self.buffer))
+                .await
+                .unwrap_or_else(|_| panic!("no packet from the broker within {MESSAGE_WAIT:?}"))
+                .expect("read from the broker");
+            assert!(read > 0, "the broker closed the raw stand-in's connection");
+        }
+    }
+
+    /// Publishes `payload` to `topic`: with QoS 1 (waiting for the PUBACK) when `acknowledged`,
+    /// else with QoS 0, as the agent sends heartbeats.
+    pub async fn publish(
+        &mut self,
+        topic: &str,
+        payload: Vec<u8>,
+        retain: bool,
+        acknowledged: bool,
+    ) {
+        use rumqttc::v5::mqttbytes::QoS;
+        use rumqttc::v5::mqttbytes::v5::{Packet, Publish};
+        use tokio::io::AsyncWriteExt as _;
+
+        let qos = if acknowledged {
+            QoS::AtLeastOnce
+        } else {
+            QoS::AtMostOnce
+        };
+        let mut publish = Publish::new(topic, qos, payload, None);
+        publish.retain = retain;
+        let packet_id = self.next_packet_id;
+        if acknowledged {
+            publish.pkid = packet_id;
+            self.next_packet_id = self.next_packet_id.wrapping_add(1).max(1);
+        }
+        let mut encoded = bytes::BytesMut::new();
+        Packet::Publish(publish)
+            .write(&mut encoded, None)
+            .expect("encode PUBLISH");
+        self.stream.write_all(&encoded).await.expect("send PUBLISH");
+        if acknowledged {
+            match self.read().await {
+                Packet::PubAck(ack) => {
+                    assert_eq!(ack.pkid, packet_id, "PUBACK of another packet");
+                    assert!(
+                        matches!(
+                            ack.reason,
+                            rumqttc::v5::mqttbytes::v5::PubAckReason::Success
+                                | rumqttc::v5::mqttbytes::v5::PubAckReason::NoMatchingSubscribers
+                        ),
+                        "the broker refused the publish to {topic}: {:?}",
+                        ack.reason
+                    );
+                }
+                other => panic!("expected PUBACK, got {other:?}"),
+            }
+        }
+    }
+
+    /// Closes the socket without a DISCONNECT: the broker publishes the last will.
+    pub fn drop_connection(self) {
+        drop(self.stream);
     }
 }

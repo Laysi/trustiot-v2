@@ -123,6 +123,17 @@
 - 探測前後比對型號與其資料點、設備、閘道器綁定與 outbox 的筆數，任何呼叫者都沒有寫入資料。
 - 綁定閘道器的 `GatewayBinder` 在開交易前再檢查一次平台管理員本人（`meets`，見 `services/assets/src/gateways/binding.rs`）。
 
+## gateway-ops
+
+`services/gateway-ops/tests/permissions.rs`。
+
+| 操作 | 要求 | 已知落差 |
+| --- | --- | --- |
+| `GET /api/gateway-ops/v1/gateways` | 租戶 viewer | |
+
+- 列表以服務角色在呼叫者租戶的交易裡讀（決策 29），只看得到該租戶的綁定、在線狀態與設定版本；跨租戶測試在 `services/gateway-ops/tests/cross_tenant.rs`（Laysi/trustiot-v2#112）。
+- 探測前後比對閘道器綁定與在線狀態的筆數，任何呼叫者都沒有寫入資料。探測用的服務程序連不到 broker（API 不需要 broker）。
+
 ## telemetry-query
 
 `services/telemetry-query/tests/permissions.rs`。

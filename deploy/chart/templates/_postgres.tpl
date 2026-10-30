@@ -209,7 +209,7 @@ these numbers differ.
   "assets": { "maxConnections": { "min": 2, "max": 100 }, "otherPools": 4 },
   "assistant": { "maxConnections": { "min": 2, "max": 100 }, "otherPools": 0 },
   "certs": { "maxConnections": { "min": 2, "max": 100 }, "otherPools": 4 },
-  "gateway-ops": { "maxConnections": { "min": 7, "max": 100 }, "otherPools": 4 },
+  "gateway-ops": { "maxConnections": { "min": 9, "max": 100 }, "otherPools": 4 },
   "identity": { "maxConnections": { "min": 3, "max": 100 }, "otherPools": 21 },
   "ingest": { "maxConnections": { "min": 3, "max": 100 }, "otherPools": 4 },
   "telemetry-query": { "maxConnections": { "min": 2, "max": 100 }, "otherPools": 2 }

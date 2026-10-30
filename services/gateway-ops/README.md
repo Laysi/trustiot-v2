@@ -1,27 +1,32 @@
 # gateway-ops（閘道器營運）
 
-每台閘道器的 desired 設定，以版本存在 Postgres（決策 7、清單 E1）。服務在 Laysi/trustiot-v2#93 底下分段實作：2026-10-29 起有服務骨架、Postgres schema、資產事件的投影與帶版本的 desired 設定（Laysi/trustiot-v2#719），以及以 MQTT retained 訊息下發設定、閘道器的套用回報與重發（Laysi/trustiot-v2#720）；映像與 chart 的部署是 Laysi/trustiot-v2#721。閘道器端的套用是 Laysi/trustiot-v2#94，上線狀態是 Laysi/trustiot-v2#112。
+每台閘道器的 desired 設定，以版本存在 Postgres（決策 7、清單 E1）。服務在 Laysi/trustiot-v2#93 底下分段實作：2026-10-29 起有服務骨架、Postgres schema、資產事件的投影與帶版本的 desired 設定（Laysi/trustiot-v2#719），以及以 MQTT retained 訊息下發設定、閘道器的套用回報與重發（Laysi/trustiot-v2#720）；映像與 chart 的部署是 Laysi/trustiot-v2#721。閘道器端的套用是 Laysi/trustiot-v2#94。2026-10-30 起也記錄每台閘道器的在線狀態，並以 API 列出租戶的閘道器（Laysi/trustiot-v2#112，清單 C3）。
 
 設定的格式與規則在 [crates/protocol](../../crates/protocol/README.md) 的「設定下發」（`DesiredConfig`）：這個服務產生的每一版都先以同一套驗證（閘道器套用前跑的那一套）檢查過，再以 crates/protocol 的編碼存下。
 
 ## 服務與設定
 
-`cargo run -p gateway-ops`（`src/main.rs`）以 `crates/service-kit` 啟動：設定、JSON 日誌、`/healthz`、`/readyz`、指標與優雅關閉（SIGTERM）都照 service-kit。服務還沒有 HTTP API，只有健康檢查的端點（`tools/openapi` 的 `SERVICES_WITHOUT_API`）。啟動時建立兩個 Postgres 連線池（都是 lazy 連線，連線前做 service-kit 的 session 檢查），連上 MQTT broker（`crates/mqtt-client`，帳號 `service:gateway-ops`），並啟動資產服務事件的消費端（訂閱名稱 `gateway-ops.assets-events`，不可改名：新名稱會從頭重讀整個事件紀錄）。broker 設定不合規則或密碼檔讀不到時，服務不啟動（exit code 1）。
+`cargo run -p gateway-ops`（`src/main.rs`）以 `crates/service-kit` 啟動：設定、JSON 日誌、`/healthz`、`/readyz`、指標與優雅關閉（SIGTERM）都照 service-kit。HTTP API 只有閘道器列表（「API」），規格在 `api/openapi.json`。啟動時建立兩個 Postgres 連線池（都是 lazy 連線，連線前做 service-kit 的 session 檢查），以兩條連線連上 MQTT broker（`crates/mqtt-client`，帳號都是 `service:gateway-ops`：一條給下發與套用回報，一條給在線狀態），讀內部身分的公鑰檔，並啟動資產服務事件的消費端（訂閱名稱 `gateway-ops.assets-events`，不可改名：新名稱會從頭重讀整個事件紀錄）。broker 設定不合規則或密碼檔讀不到時，服務不啟動（exit code 1）。
 
 readiness 在下列全部成立時才是 200：
 
 - `postgres`：服務角色與平台角色都能開出通過檢查的 session；
 - migration 檢查：資料庫有這個版本預期的每個 Postgres migration 檔（`src/schema.rs`）；
 - `mqtt`：連著 broker，而且套用回報的共享訂閱（`$share/gateway-ops/trustiot/v1/gw/+/up/config-report`）以 QoS 1 獲准。broker 斷線、重連中、訂閱被拒或只給 QoS 0 時不是 200；連上後恢復。
+- `presence`：在線狀態的連線連著 broker，狀態與心跳的兩個訂閱（「在線狀態」）都以 QoS 1 獲准；規則同 `mqtt`。
+- `internal_identity_keys`：service-kit 的 `PublishedKeys` 讀到了可用的內部身分公鑰（和其他有 API 的服務相同）。
 
 | 設定 | 環境變數 | 說明 |
 | --- | --- | --- |
 | Postgres 位置與 TLS | `TRUSTIOT_POSTGRES_HOST`、`_PORT`、`_DATABASE`、`_SSLMODE`（只接受 `verify-full`）、`_CA_FILE` | chart 設定的平台設定 |
 | 服務角色 | `TRUSTIOT__DATABASE__USERNAME`、`TRUSTIOT__DATABASE__PASSWORD` | `gateway_ops_app`；密碼來自 migration Job 產生的 Secret |
 | 平台角色 | `TRUSTIOT__DATABASE__PLATFORM_USERNAME`、`TRUSTIOT__DATABASE__PLATFORM_PASSWORD` | `gateway_ops_platform`，必須和服務角色不同 |
-| 連線數 | `TRUSTIOT__DATABASE__MAX_CONNECTIONS` | 服務角色每個 replica 的連線上限，7 到 100，預設 10。下限是服務同時會用到的最多連線數：消費端的交易 1、readiness 的 ping 與 migration 檢查同時跑 2、重發的 job lock 1、發布 2（`delivery::CONCURRENCY` 個發布名額，每個名額先拿著閘道器的發布鎖到 PUBACK，再寫紀錄，同時只用 1 條）、套用回報的記錄 1（`config.rs` 的 `MIN_DATABASE_CONNECTIONS` 逐條列出）；平台角色另外固定 4 條 |
+| 連線數 | `TRUSTIOT__DATABASE__MAX_CONNECTIONS` | 服務角色每個 replica 的連線上限，9 到 100，預設 10。下限是服務在一個 API 請求時同時會用到的最多連線數：消費端的交易 1、readiness 的 ping 與 migration 檢查同時跑 2、重發的 job lock 1、發布 2（`delivery::CONCURRENCY` 個發布名額，每個名額先拿著閘道器的發布鎖到 PUBACK，再寫紀錄，同時只用 1 條）、套用回報的記錄 1、在線狀態的寫入 1、API 請求 1（`config.rs` 的 `MIN_DATABASE_CONNECTIONS` 逐條列出）；更大的連線池只讓更多 API 請求同時進行。平台角色另外固定 4 條（下發與在線狀態的讀取共用其中 2 條） |
 | MQTT broker | `TRUSTIOT__MQTT__HOST`（必填）、`TRUSTIOT__MQTT__PORT`（選填，預設 1883）、`TRUSTIOT__MQTT__USERNAME`（必填，`service:gateway-ops`）、`TRUSTIOT__MQTT__PASSWORD_FILE`（必填） | 和 ingest 同一個形狀（`mqtt_client::Config`）；密碼只從檔案讀（broker 帳號的 Secret，migration Job 產生），不進環境變數與日誌 |
 | 合併節流 | `TRUSTIOT__DELIVERY__THROTTLE`（選填） | 同一台閘道器的變更合併成一次發布的時間窗，100ms 到 60s，預設 1s（「下發」） |
+| 心跳逾時的寬限 | `TRUSTIOT__PRESENCE__HEARTBEAT_GRACE`（選填） | 連續兩個心跳間隔之外再等的時間，1s 到 600s，預設 30s（「在線狀態」） |
+| 逾時檢查的間隔 | `TRUSTIOT__PRESENCE__SWEEP_INTERVAL`（選填） | 多久找一次心跳逾時的閘道器，1s 到 60s，預設 10s |
+| 內部身分的公鑰 | `TRUSTIOT_INTERNAL_IDENTITY_KEYS_FILE` | 身分服務發布的公鑰檔；API 以它驗證入口轉來的內部身分（chart 在身分服務啟用時給） |
 
 `mqtt` 一段是必填：下發是這個服務存在的目的，readiness 也要看 broker。chart 的 `services.gateway-ops`（Laysi/trustiot-v2#721）預設關閉，開啟時要求 `mqttBroker.enabled`，沒有 broker 就渲染失敗；chart 以 broker 的 Service 與這個服務自己的 broker 帳號填這一段，nightly 部署它並以 readiness 確認它連上 broker（見下方「部署」）。
 
@@ -39,9 +44,10 @@ schema `gateway_ops` 由 migration Job（`tools/migrate`）建立並套用 `migr
 | `device_models` | `assets.device_model_*` 的投影：名稱、revision、`protocol::config::DeviceModel` 的 JSON；刪除的型號留下 tombstone（`deleted`，沒有 `model`） | `SELECT`、`INSERT`、`UPDATE` | 無 |
 | `devices` | `assets.device_*` 的投影：閘道器的硬體 ID、型號、所屬綁定（事件的 `binding_id`）、revision、`protocol::config::Device` 的 JSON；刪除的設備同樣留 tombstone | `SELECT`、`INSERT`、`UPDATE` | 無 |
 | `desired_configs` | 每台閘道器每一版的設定：版本、所屬綁定、`bound`、編碼後的 `DesiredConfig`（`payload`）、設備數、產生它的事件；只新增，服務不改、不刪 | `SELECT`、`INSERT` | `SELECT`（`platform_access`，所有租戶） |
+| `gateway_presence` | 每個綁定一列（外鍵指向 `gateway_bindings`，在綁定的租戶）：`state`（`online`、`offline`）、目前的 MQTT `session`、離線原因（`shutdown`、`connection_lost`、`heartbeat_timeout`）、狀態改變的時間 `changed_at`、最後收到這個 session 任何訊息的時間 `last_seen_at`、agent 版本，以及最近一次心跳的時間、宣告的間隔與閘道器正在用的設定版本（`config_version`） | `SELECT`、`INSERT`、只有狀態與心跳欄位的 `UPDATE` | `SELECT`（`platform_access`，所有租戶：心跳逾時的檢查） |
 | `config_deliveries` | 每個發布過或收到回報的版本一列，在**該版本的租戶**（外鍵指向 `desired_configs`）：broker 第一次與最近一次確認（PUBACK）retained 發布的時間；閘道器對這一版最近一次的回報：`outcome`（`applied`、`rejected`）、`active_version`、`issues`（JSON 陣列）、服務收到的時間 `reported_at` | `SELECT`、`INSERT`、只有時間與回報欄位的 `UPDATE` | 無 |
 
-兩個刻意的例外是「`tenant_id` 不在索引第一欄」：`gateway_bindings_by_gateway`（閘道器目前的綁定是跨租戶的問題）與唯一索引 `desired_configs_gateway_version (hardware_id, version)`：一台閘道器的每個版本號只用一次，不管當時是哪個租戶。
+三個刻意的例外是「`tenant_id` 不在索引第一欄」：`gateway_bindings_by_gateway`（閘道器目前的綁定是跨租戶的問題）、唯一索引 `desired_configs_gateway_version (hardware_id, version)`：一台閘道器的每個版本號只用一次，不管當時是哪個租戶，以及部分索引 `gateway_presence_online (last_seen_at) WHERE state = 'online'`：心跳逾時的檢查跨租戶找最久沒消息的在線閘道器。
 
 ### 為什麼跨租戶的讀取用平台角色（決策 29）
 
@@ -194,6 +200,51 @@ meter `gateway-ops`：
 | `gateway_ops.reports.refused` | `reason`（「套用回報」的表，加上 `topic`、`retained`、`qos0`、`decode`、`unknown_outcome`） | 被拒的套用回報 |
 | `gateway_ops.reports.repeated` | 無 | 沒有再寫入的套用回報：和那一版 60 秒內寫入的回報相同（任何 replica 寫的） |
 | `gateway_ops.reports.unhandled` | `result`：`retry`、`superseded`、`lost` | 沒處理完的套用回報：資料庫錯誤後排進重試、被同一台閘道器較新的回報取代，或放棄（重試用完、收件匣滿了） |
+| `gateway_ops.presence.changes` | `state`、`reason`（`shutdown`、`connection_lost`、`heartbeat_timeout`，在線時是 `none`） | 閘道器在線狀態的改變 |
+| `gateway_ops.presence.ignored` | `reason`：`other_session`、`ended_session`、`repeated`、`older`、`replayed`、`unbound`、`cleared` | 沒有改變在線狀態的訊息（「在線狀態」的規則） |
+| `gateway_ops.presence.refused` | `refusal`：`topic`、`retained_heartbeat`、`decode`、`unknown_reason` | 碰資料庫前拒絕的狀態與心跳 |
+| `gateway_ops.presence.failures` | 無 | 在線狀態的資料庫錯誤 |
+| `gateway_ops.presence.dropped` | `reason`：`gateway_backlog`（這台閘道器已有 16 則在等）、`backlog`（全部已有 50 000 則在等） | 等待佇列滿了而丟掉的狀態與心跳 |
+
+## 在線狀態
+
+清單 C3（Laysi/trustiot-v2#112）。協定在 [crates/protocol](../../crates/protocol/README.md) 的 `health`：閘道器的 agent 連線時以 retained 發布 `up/status` 的 `online`，正常結束時發布 `offline`（`shutdown`），last will 是 `offline`（`connection_lost`）；每 60 秒發布一次 `up/heartbeat`（不 retain），MQTT keepalive 60 秒。閘道器端不需要改。
+
+- **訂閱**：在線狀態有自己的 broker 連線，以不共享的訂閱收每台閘道器的 `up/status` 與 `up/heartbeat`：每個 replica 都依 broker 送來的順序收到每台閘道器的每則訊息（每次連線後也重新收到 retained 的狀態），所以沒有 replica 只看到狀態、看不到夾在中間的心跳。broker 的角色 `service:gateway-ops` 本來就收這兩個 channel（`tools/migrate` 的 `mqtt_accounts`）。代價是每個 replica 都處理每則心跳；心跳的柵欄（下面的規則）讓第二份不再寫入。
+- **等待佇列**（`src/presence/backlog.rs`）：broker 連線只負責收訊息、檢查後放進該閘道器的佇列，不等資料庫；一個 worker 輪流從每台閘道器的佇列取一則套用。一台閘道器最多 16 則在等、全部最多 50 000 則，超過的丟掉（`gateway_ops.presence.dropped`，WARN 有額度），所以灌訊息的閘道器只丟自己的訊息，其他閘道器每輪最多多等一則。逾時檢查照自己的間隔跑，不會被訊息擠掉；檢查時把佇列裡最舊一則等待的時間加進寬限，閘道器的最新心跳還在佇列裡時不會被誤判逾時。全部的佇列滿了時，逾時的時鐘重新開始。
+- **斷線**：連線沒有 DISCONNECT 就斷掉時，broker 馬上發布 last will；半開的連線由 broker 的 keepalive 檢查在 1.5 倍 keepalive（90 秒）內發布 last will（決策 6）。服務收到後把那個 session 標成 `offline`（`connection_lost`）。
+- **心跳逾時**：每 `presence.sweep_interval` 找出在線、但同一個 session 已經「兩個宣告的心跳間隔（最多 3600 秒，沒宣告時 60 秒）＋ `presence.heartbeat_grace`」沒有任何消息的閘道器，標成 `offline`（`heartbeat_timeout`），預設 150 秒。這是後備：broker 連線還在但 agent 不再回報，或 last will 遺失（broker 重啟時連同 retained 狀態一起遺失）。只有服務聽得到心跳的時間才算：在線狀態的 broker 連線或資料庫恢復後，重新等滿整段逾時，服務自己斷線不會讓所有閘道器看起來離線。逾時的寫入以條件更新（狀態、session 與 `last_seen_at` 都沒變）進行，所以和同時到的心跳不會互相覆蓋，多個 replica 一起檢查也只寫一次。
+- **規則**（`src/presence/rules.rs`，每則訊息在鎖住閘道器那一列的交易裡套用，依連線送來的順序）：
+  - 第一則訊息建立那一列。
+  - 新 session 的 `online` 或心跳取代舊 session；舊 session 晚到的 `offline` 或心跳不理（`other_session`），所以重新連線後舊連線的 last will 不會把閘道器標成離線。
+  - 同一個 session 以 `shutdown` 或 `connection_lost` 結束後，它的 `online` 與心跳不理（`ended_session`）：broker 重送 retained 的舊 `online` 不會讓閘道器復活。
+  - 被心跳逾時標成離線的 session 再送心跳時回到 `online`；之後同一個 session 的 last will 或 `shutdown` 只改離線原因。
+  - 重複的 `online` 與 `offline` 不再寫入（`repeated`）。
+  - 心跳的柵欄：同一個 session 的心跳，`sent_at`（閘道器的時鐘）不比那一列記的最新一則新時不寫（相同是 `repeated`，較舊是 `older`）：別的 replica 已經寫過，或落後的 replica 晚到的舊心跳不會把設定版本或間隔倒回去。新的 session 從沒有柵欄開始。
+  - replica 之間：落後的 replica 可能在別的 replica 寫了新 session 之後，才套用舊 session 的 `online`，讓那一列暫時回到舊 session；它自己的訊息流後面就有新 session 的訊息，趕上之後那一列就對了（`rules.rs` 的單元測試列舉兩個 replica 的所有交錯順序）。落後的 replica 若丟了那些訊息，舊 session 由心跳逾時結束，新 session 的下一則心跳讓閘道器回到在線。
+- **未綁定的閘道器**：讀不到目前綁定的閘道器不記錄（`gateway_ops.presence.ignored{reason=unbound}`）；未綁定的閘道器沒有 broker 角色，本來就發布不了（決策 6）。寫入的交易在 share lock 下再確認一次綁定還有效，所以在讀綁定與寫入之間被解綁、改綁到別的租戶的閘道器，不會寫進原租戶那一列（也算 `unbound`）；投影本身落後於 broker 角色的切換時，這段時間的訊息照投影當時的綁定記。綁定結束後那一列留在原租戶，列表不再列出它。
+- **retained 的重播**：訂閱時 broker 重送的 retained 狀態，不建立綁定的第一列（`replayed`）：它可能是前一個綁定時期留下的。第一列由下一則即時的狀態或心跳建立（心跳每 60 秒一次）。
+- **拒絕**：topic 不是閘道器的 `up/status` 或 `up/heartbeat`、retain 的心跳、解不開或不合協定規則的 payload、這個版本不認得的離線原因，都在碰資料庫前拒絕，WARN 有額度。空的 `up/status`（清掉的 retained 訊息）不代表任何事，不理（`cleared`）。
+- **資料庫錯誤**：記 WARN，之後 5 秒（`presence::RETRY_DELAY`）不碰資料庫，訊息照樣排進佇列（超過上限的丟掉），逾時的時鐘重新開始。資料庫裡不合規則的列記 ERROR。
+- **事件**：每次狀態改變記一行 INFO `gateway presence changed`（`hardware_id`、`tenant_id`、`binding_id`、`state`、`offline_reason`、`session`）並加 `gateway_ops.presence.changes`。這還不是 outbox 事件：migration Job 要求每個 outbox 的生產者至少有一個消費端，而目前沒有服務要跟著在線狀態走；告警（Laysi/trustiot-v2#118）要用時再加 `gateway_ops.gateway_presence_changed` 事件。
+
+## API
+
+`GET /api/gateway-ops/v1/gateways`（`src/gateways.rs`；權限矩陣在 [docs/architecture/permissions.md](../../docs/architecture/permissions.md) 的「gateway-ops」）：呼叫者租戶的 viewer 以上（`UserIdentity::require`），回應 `Cache-Control: no-store`。以服務角色在呼叫者租戶的交易裡讀（決策 29），列出租戶目前綁著的每台閘道器（`gateway_bindings` 裡 `unbound_at` 是空的綁定）：
+
+| 欄位 | 內容 |
+| --- | --- |
+| `hardware_id`、`binding_id`、`bound_at` | 閘道器與綁定 |
+| `presence` | `online`、`offline`，綁定之後還沒收到任何狀態或心跳時是 `unknown` |
+| `offline_reason`、`presence_changed_at` | 離線原因與狀態改變的時間 |
+| `last_seen_at` | 最後回報時間：最後收到目前 session 任何狀態或心跳的時間 |
+| `agent_version` | agent 在目前（或最後一次）連線宣告的版本 |
+| `applied_config_version` | 已套用的設定版本：閘道器在目前（或最後一次）連線的最近一次心跳宣告正在用的版本；這次連線還沒送心跳時是 `null`（新的連線不沿用上一次連線的心跳欄位） |
+| `desired_config_version` | 這個綁定最新的 desired 版本；和 `applied_config_version` 不同時代表閘道器還沒套用最新設定 |
+
+一台閘道器同時只有一個目前綁定（資產服務的規則），所以每台閘道器一列。列表不分頁：一個租戶的閘道器數量在展示切片的規模內；租戶的閘道器多到需要時再加分頁。
+
+API 和背景工作共用服務角色的連線池；同時讀取的請求最多是連線池扣掉背景工作最多用到的連線（`gateways::request_slots`，連線池 9 條時是 1 個），再多的請求馬上回 503 `unavailable`，不去搶在線狀態與下發要用的連線。
 
 ## 解綁
 
@@ -221,15 +272,15 @@ meter `gateway-ops`：
 映像是 `deploy/images/gateway-ops`（`image.toml`，arm64，以 `deploy/images/rust-binary.Containerfile` 打包），release.yml 發佈、chart 以 digest 固定（[deploy/images/README.md](../../deploy/images/README.md)）。chart 的 `services.gateway-ops`（Laysi/trustiot-v2#721，細節在 [chart README](../../deploy/chart/README.md) 的「gateway-ops」）：
 
 - 預設 `enabled: false`；開啟時 `mqttBroker.enabled` 也必須是 `true`，否則渲染失敗：設定只經叢集內的 broker 下發。
-- `mesh.calls.gateway-ops` 預設 `[mqtt-broker, postgres]`：mesh 只放行它連 broker 的服務埠 1883；沒有任何服務能呼叫它（它沒有 API）。
-- 上表的 Postgres 設定由 chart 給：`gateway_ops_app` 與 `gateway_ops_platform` 的密碼由 migration Job 在叢集內產生，放在 Secret `<release>-gateway-ops-password`，只有這個服務的 pod 讀得到；`TRUSTIOT__DATABASE__MAX_CONNECTIONS` 是 `services.gateway-ops.database.maxConnections`（chart 預設 `7`，即下限，更大的連線池用不到），連同平台角色的 4 條算進 chart 的連線預算（`tests/chart_connections.rs` 比對程式與預算）。
+- `mesh.calls.gateway-ops` 預設 `[mqtt-broker, postgres]`：mesh 只放行它連 broker 的服務埠 1883。API 只有入口連得到，而且要部署在 `ingress.routes` 加一條 `{host: app, path: /api/gateway-ops, service: gateway-ops}`（chart 預設沒有）；它驗證內部身分，所以和其他有 API 的服務一樣需要身分服務啟用。
+- 上表的 Postgres 設定由 chart 給：`gateway_ops_app` 與 `gateway_ops_platform` 的密碼由 migration Job 在叢集內產生，放在 Secret `<release>-gateway-ops-password`，只有這個服務的 pod 讀得到；`TRUSTIOT__DATABASE__MAX_CONNECTIONS` 是 `services.gateway-ops.database.maxConnections`（chart 預設 `9`，即下限，更大的連線池只讓更多 API 請求同時進行），連同平台角色的 4 條算進 chart 的連線預算（`tests/chart_connections.rs` 比對程式與預算）。
 - broker 帳號 `service:gateway-ops`：chart 給 `TRUSTIOT__MQTT__HOST`、`_PORT`（1883）、`_USERNAME`、`_PASSWORD_FILE`（`/etc/trustiot/mqtt-broker-account/gateway-ops`，只掛這個服務自己的 key，0440，pod 的 `fsGroup` 預設 65530），密碼由 broker 的 init container 在叢集內產生；輪替時服務不重啟，下一次連線重讀密碼檔。服務讀這些設定的程式在 Laysi/trustiot-v2#720。
 - 這些變數都保留給 chart，自訂 `env` 不能設定。
 - nightly 的 smoke 以兩份 values 連同 broker 部署它，確認它就緒（readiness 包括以 `service:gateway-ops` 連上 broker、套用回報的共享訂閱以 QoS 1 獲准，所以這也證明 chart 交給它的 broker 帳號能用）、兩個角色都有連線。
 
 ## 測試
 
-需要 podman 或 docker：測試起一個有 TLS 的 Postgres，以 migration Job 套用整個產品的 schema（`testkit::product`）；下發的測試另起一個 Mosquitto（`tests/support/broker.rs`：和 chart 相同的連線設定、沒有 persistence，帳號與 ACL 取自 migration Job 的 `migrate::mqtt_accounts`，再加一個讀所有 `down/config`、能發布 `up/config-report` 的替身閘道器帳號）。沒有容器執行環境時本機跳過，設了 `CI` 時失敗。
+需要 podman 或 docker：測試起一個有 TLS 的 Postgres，以 migration Job 套用整個產品的 schema（`testkit::product`）；下發的測試另起一個 Mosquitto（`tests/support/broker.rs`：和 chart 相同的連線設定、沒有 persistence，帳號與 ACL 取自 migration Job 的 `migrate::mqtt_accounts`，再加一個讀所有 `down/config`、能發布 `up/config-report`、`up/status` 與 `up/heartbeat` 的替身閘道器帳號；在線狀態的測試以 `RawGateway` 直接送 MQTT 封包，自己決定 keepalive、last will 與何時斷線）。沒有容器執行環境時本機跳過，設了 `CI` 時失敗。
 
 ```sh
 cargo test -p gateway-ops
@@ -243,6 +294,9 @@ cargo test -p gateway-ops
 | `tests/desired_config.rs` | 新增、修改設備各產生一版，payload 以 crates/protocol 解碼並驗證；同內容、晚到的舊 revision 與整段重播（`Replay::Reprocess`）不產生版本；刪除的設備從下一版消失；別的租戶、先前綁定、綁定不明的設備不在任何設定裡，沒有 `binding_id` 的事件取事件之前的綁定；改綁到別的租戶時版本照樣遞增、不帶舊租戶的設備，新租戶的設定產生不出來時存一版沒有設備的設定；設定產生不出來時刪除仍然生效；解綁存一版沒有設備的設定、只存一次；讀取介面回最新版本、拒絕不屬於最新綁定的版本，平台角色不能寫入，另一個租戶的服務角色讀不到 |
 | `tests/generation_errors.rs` | 未知型號、違反規則、型號被刪除時不產生版本、ERROR 帶閘道器與原因、上一版不變；型號送到後產生下一版；別的租戶的設備事件記 WARN |
 | `tests/unknown_events.rs` | 這個版本不認得的事件：不在追蹤的 aggregate 時確認並往下走；在型號、設備或綁定的 aggregate 時每次 poll 都重試，不確認、不進 dead letter，後面的事件等著 |
-| `tests/cross_tenant.rs` | 服務角色對五張表的跨租戶負向測試（決策 29，crates/testkit），以及每個碰得到的關聯都有宣告 |
-| `tests/startup.rs` | 真的 binary 以 chart 給的角色與 broker 帳號啟動、ready，訂閱把綁定與設備事件變成版本，消費端的通知讓最新版本以 retained 送出；broker 停掉時 `/readyz` 不是 200（失敗的檢查是 `mqtt`），broker 重啟後恢復並重發；SIGTERM 以 0 結束；stdout、stderr 都不含 broker 密碼 |
+| `src/presence/rules.rs`、`src/presence/store.rs`、`src/presence/backlog.rs`、`src/presence/mod.rs`、`src/gateways.rs` 的單元測試 | 在線狀態的每條規則，包括心跳的柵欄與兩個 replica 的所有交錯順序都停在單一 replica 的結果；等待佇列輪流取、每台閘道器保持順序、上限與最舊一則的時間；API 的同時請求數；宣告的心跳間隔的範圍；topic、retain、解不開的 payload 與未知原因被拒，空的狀態不理；逾時的時鐘在暫停與重新連線後重新開始 |
+| `tests/presence.rs` | 真的 broker 與 Postgres：斷線後 last will 把閘道器標成 `connection_lost`（印出量到的時間，必須小於 1.5 倍的 keepalive），半開的連線在 broker 的 keepalive 檢查後同樣離線；舊 session 晚到的 last will 不理；未綁定的閘道器不記錄；壞掉的狀態被拒；心跳停了之後在「兩個間隔＋寬限」之後才標成 `heartbeat_timeout`，再來的心跳讓它回到在線；API 在第一則狀態前列 `unknown`，之後列出在線狀態、最後回報時間、已套用與最新的設定版本，另一個租戶的列表是空的；訂閱前就在 broker 上的 retained 狀態不建立列，下一則即時心跳才建立；一台閘道器連送 2000 則心跳時，另一台斷線的 last will 不必等它們處理完；寫入前綁定已經結束時什麼都不寫 |
+| `tests/permissions.rs` | 權限矩陣（A2）：API 的宣告和 OpenAPI 文件、矩陣文件一致；真的 binary 對每一種呼叫者只放行宣告的那些，探測不寫入任何列 |
+| `tests/cross_tenant.rs` | 服務角色對六張表的跨租戶負向測試（決策 29，crates/testkit），每個碰得到的關聯都有宣告，以及 API 的列表只列呼叫者租戶的閘道器 |
+| `tests/startup.rs` | 真的 binary 以 chart 給的角色與 broker 帳號啟動、ready，訂閱把綁定與設備事件變成版本，消費端的通知讓最新版本以 retained 送出；租戶的 viewer 從 API 看到閘道器（還沒有狀態）與最新版本，沒有 token 是 401；broker 停掉時 `/readyz` 不是 200（失敗的檢查包括 `mqtt` 與 `presence`），broker 重啟後恢復並重發；SIGTERM 以 0 結束；stdout、stderr 都不含 broker 密碼 |
 | `tests/chart_connections.rs` | chart 的連線預算（`trustiot.postgres.connectionBudgets`）與程式開的連線池一致：平台角色的 `PLATFORM_CONNECTIONS`、服務角色的 `database.max_connections` 範圍；多一個連線池時失敗 |
