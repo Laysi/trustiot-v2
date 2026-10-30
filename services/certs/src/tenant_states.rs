@@ -116,7 +116,19 @@ pub fn snapshot(delivery: &Delivery) -> Result<Option<Snapshot>, HandlerError> {
     } else {
         // Another event: a membership's, a user's, an AI model role's. A tenant's state changes
         // only through `identity.tenant_state_changed` (crates/contract), so another event of
-        // the tenant aggregate states none either.
+        // the tenant aggregate states none either. One this build does not know is still worth a
+        // WARN: if a newer identity service ever moved a state change to a new event type, this
+        // consumer would miss it. Retrying it instead would let any harmless new tenant event
+        // stop every renewal.
+        if delivery.aggregate.kind() == TENANT_AGGREGATE {
+            tracing::warn!(
+                event_type = envelope.event_type.as_str(),
+                event_version = envelope.version,
+                tenant_id = ?delivery.tenant(),
+                event_id = %envelope.id,
+                "skipped an unknown event of a tenant"
+            );
+        }
         return Ok(None);
     };
     let Some(tenant) = delivery.tenant() else {
@@ -328,5 +340,21 @@ mod tests {
             snapshot(&delivery(&role, Some(tenant), "membership")).expect("read"),
             None
         );
+        // An event type of the tenant aggregate this build does not know: skipped with a WARN,
+        // not retried (a harmless new tenant event must not stop every renewal).
+        assert_eq!(
+            snapshot(&delivery(&Renamed {}, Some(tenant), TENANT_AGGREGATE)).expect("read"),
+            None
+        );
+    }
+
+    /// An event type of the tenant aggregate no build knows yet.
+    #[derive(Serialize, Deserialize)]
+    struct Renamed {}
+
+    impl Event for Renamed {
+        const TYPE: &'static str = "identity.tenant_renamed";
+        const VERSION: u32 = 1;
+        const PRODUCER: ServiceName = ServiceName::Identity;
     }
 }

@@ -260,7 +260,8 @@ pub fn reads_as_suspended(stored: Option<TenantStatus>) -> bool {
 }
 
 /// Stores `tenant`'s status read at `version`, unless the stored version is the same or newer;
-/// returns whether it was stored. A late or replayed older state therefore never overwrites a
+/// returns whether it was stored. Two exceptions: a stored `deleted` is final, and a stored
+/// `unrecognized` takes a known status at the same version (a replay after an upgrade). A late or replayed older state therefore never overwrites a
 /// newer one, and the row stays locked until the transaction ends, so a concurrent store waits and
 /// then compares against this one.
 ///

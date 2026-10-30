@@ -21,8 +21,15 @@
 -- The service reads every state but `active`, and a tenant without a row, as suspended: it does
 -- not renew their gateways' certificates (fail closed, the user's decision of 2026-10-30). A
 -- build before this file treats the two new values as a broken row and refuses the renewal too
--- (503), so after rolling the service back a deleted or unrecognized tenant still gets nothing;
--- only a tenant without a row reads as active again, as it did before this release.
+-- (503), so after rolling the service back a deleted or unrecognized tenant still gets nothing.
+-- But that build reads a tenant without a row as active again and has no consumer of the
+-- identity service's events: the table stays as it was, and a tenant suspended while the older
+-- build runs keeps renewing until the service rolls forward (its subscription then resumes
+-- where it stopped).
+--
+-- The constraint swap locks the table, which the renewal reads: wait at most 5 seconds for
+-- other holders, then fail the Job rather than queue every renewal behind it.
+SET LOCAL lock_timeout = '5s';
 ALTER TABLE certs.tenant_statuses
     DROP CONSTRAINT tenant_statuses_status_check,
     ADD CONSTRAINT tenant_statuses_status_check

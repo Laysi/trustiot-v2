@@ -468,9 +468,9 @@ trustiot-workstation register --hardware-id <硬體 ID> --csr gateway.csr --ek e
 - `identity.tenant_created`（`contract::events::identity::TenantCreated`）：狀態 `active`、版本 1。
 - `identity.tenant_state_changed`（`TenantStateChanged`）：payload 的 `state` 與 `state_version`（第一次變更是 2，之後每次加一）。不存 `reason`：換發只看是否停權。
 - 兩者都在事件的租戶交易裡以 `certs_app` 呼叫 `store_tenant_status`。租戶取自 envelope（身分服務寫入時 RLS 已檢查），不取自 payload。每次處理記一行 INFO `applied a tenant state`（`tenant_id`、`status`、`version`、`event_type`、`event_id`、`stored`；`stored` 是 `false` 表示版本不比已存的新）。
-- 身分服務的其他事件（成員、使用者、AI 模型角色）略過：租戶的狀態只經 `identity.tenant_state_changed` 改變（`crates/contract`）。
+- 身分服務的其他事件（成員、使用者、AI 模型角色）略過：租戶的狀態只經 `identity.tenant_state_changed` 改變（`crates/contract`）。aggregate 是 `tenant`、但這個版本不認得的事件類型也略過（不重試：重試會讓任何無害的新租戶事件擋住全平台的換發），但記一行 WARN `skipped an unknown event of a tenant`（`event_type`、`event_version`、`tenant_id`、`event_id`）；身分服務在租戶 aggregate 加新的事件類型時，要檢查這個消費端。
 
-錯誤分類與綁定的消費端不同，租戶事件的任何失敗都**重試，不進 dead letter**：
+錯誤分類與綁定的消費端不同，處理租戶事件的任何失敗都**重試，處理常式不送進 dead letter**（`crates/outbox` 本身仍會把解不開的信封、信封與 log 的租戶不一致、連續 panic 三次的事件送進 dead letter，那時那次變更就遺失了：`certs.outbox_dead_letter` 裡訂閱 `certs.identity-events` 的任何一列都要告警處理）。反過來，一個永遠處理不了的租戶事件會讓全平台的換發都回 503，直到有人處理：升級到處理得了它的版本，或以 `store_tenant_status` 在該租戶的交易寫入正確的狀態，再以 `outbox::replay_from` 從那個事件之後接著處理。lag（`outbox.consumer.lag.age`，訂閱 `certs.identity-events`）也要告警。
 
 | 情況 | 處理 |
 | --- | --- |
@@ -479,7 +479,7 @@ trustiot-workstation register --hardware-id <硬體 ID> --csr gateway.csr --ek e
 
 租戶狀態改變時不觸發 broker 權限的同步，也不撤銷憑證：停權之後的 dynsec 期望狀態、撤銷與斷線是 Laysi/trustiot-v2#108。這裡只讓不是正常的租戶換發不到新憑證。
 
-**降版**：降回不認得 `deleted`、`unrecognized` 的版本時，舊版本把這兩種值當成壞掉的列，換發回 503 而不簽發；舊版本把沒有紀錄的租戶讀成正常，所以降版期間只有還沒收到任何租戶事件的租戶會失去 fail closed。
+**降版**：降回不認得 `deleted`、`unrecognized` 的版本時，舊版本把這兩種值當成壞掉的列，換發回 503 而不簽發。但舊版本把沒有紀錄的租戶讀成正常，也沒有身分服務事件的消費端，表停在降版當下：降版期間停權或刪除的租戶仍讀成正常、照樣換發，直到再升級（訂閱從停下的位置接著處理）。所以降版期間避免停權，或盡快升回。
 
 ### 讀取介面
 

@@ -154,7 +154,8 @@ pub async fn start(context: Context<Config>) -> Result<Router, BoxError> {
     )?;
     // Not part of readiness: the CRLs and the CA chain the MQTT broker reads must keep being
     // served while the platform role cannot log in; a registration answers 503 then, and the
-    // consumer of the assets service's events retries (its lag shows it).
+    // consumers of the assets and identity services' events retry (their lag shows it, and the
+    // renewal answers 503).
     let platform = PlatformDb::connect_lazy(
         config.platform_role().connect_options(),
         PgPoolOptions::new()
