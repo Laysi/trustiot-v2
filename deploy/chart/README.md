@@ -945,7 +945,7 @@ broker 的權限全部在 dynamic security，預設拒絕：`defaultACLAccess` �
 - pod 共用 process namespace（`shareProcessNamespace: true`），每個容器都是同一個 UID：sidecar 只能對同一個使用者的行程送訊號。它以 `/proc/<pid>/comm` 找 `mosquitto`，並等 `/proc/<pid>/status` 的 `SigCgt` 顯示 broker 已經處理 SIGHUP 才送（在那之前 SIGHUP 會讓它結束）。
 - 代價：共用 process namespace 時同一個 pod 的容器看得到彼此的行程與 `/proc/<pid>/root`。這個 pod 的三個容器本來就掛同一個資料磁碟區與伺服器憑證，init container 結束後 pod 裡沒有 token，所以沒有多給誰權限。
 
-重新載入不中斷連線，也表示 CRL 更新之後，已經連線的被撤銷閘道器不會斷線，直到它重連；撤銷時主動踢掉它由 Laysi/trustiot-v2#82 處理。另外，以憑證登入的 client 不經 dynamic security 的帳密檢查（Mosquitto 2.1.2 的 `src/handle_connect.c`），所以停用 client（`disableClient`）擋不住持有效憑證的閘道器重連：撤銷要靠 CRL，再刪除 client 或拿掉它的角色（Laysi/trustiot-v2#82）。
+重新載入不中斷連線，也表示 CRL 更新之後，已經連線的被撤銷閘道器不會斷線，直到它重連；撤銷閘道器時由 certs 刪除它的 dynsec client，Mosquitto 同時斷開它（Laysi/trustiot-v2#636，[services/certs/README.md](../../services/certs/README.md) 的「閘道器憑證的撤銷」）。另外，以憑證登入的 client 不經 dynamic security 的帳密檢查（Mosquitto 2.1.2 的 `src/handle_connect.c`），所以停用 client（`disableClient`）擋不住持有效憑證的閘道器重連：撤銷要靠 CRL，再刪除 client 或拿掉它的角色（Laysi/trustiot-v2#636 刪除 client；`services/certs/tests/dynsec.rs` 也證明停用的 client 以憑證重連後照樣能發布）。
 
 ### 伺服器憑證
 

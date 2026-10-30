@@ -90,8 +90,10 @@
 | `POST /api/certs/v1/workstation-certificates` | 平台管理員，本人 | |
 | `POST /api/certs/v1/workstation-certificates/{serial}/revoke` | 平台管理員，本人 | |
 | `POST /api/certs/v1/gateway-registrations` | 平台管理員，本人 | |
+| `POST /api/certs/v1/gateways/{hardware_id}/revoke` | 平台管理員，本人 | |
 
 - 出廠登錄另外要求產線工作站的憑證與簽章（D1，`services/certs/README.md`）；矩陣只管使用者的身分，工作站簽章的拒絕在 `tests/registration.rs`。
+- 閘道器憑證的撤銷（Laysi/trustiot-v2#636）只看平台管理員的身分，不屬於任何租戶；被拒絕的呼叫不撤銷任何憑證、不發 CRL、不動 broker，`tests/gateway_revocation.rs` 比對帳本與各 CA 的 CRL 編號。
 - 探測前後比對工作站憑證與出廠登錄的帳本，任何呼叫者都沒有寫入資料（Laysi/trustiot-v2#584 的留言：viewer 與 editor 呼叫簽發與撤銷得 403、不寫入任何資料）。
 
 ## assets
