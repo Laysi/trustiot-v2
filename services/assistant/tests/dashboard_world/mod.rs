@@ -361,6 +361,14 @@ pub fn unlimited(_: DashboardKind) -> Result<(), Limited> {
     Ok(())
 }
 
+/// The server process of `tx`'s session, for [`World::wait_until_blocking`].
+pub async fn backend_pid(tx: &mut TenantTransaction) -> i32 {
+    sqlx::query_scalar("SELECT pg_backend_pid()")
+        .fetch_one(&mut **tx)
+        .await
+        .expect("the session's process")
+}
+
 /// Ends `tx`: commits it when `result` is `Ok`, rolls it back otherwise.
 pub async fn finish<T>(
     tx: TenantTransaction,
@@ -445,6 +453,40 @@ impl World {
             .await
             .expect("delete the conversation");
         tx.commit().await.expect("commit");
+    }
+
+    /// Restores `owner`'s deleted conversation `id` through the store, as the API's restore does.
+    pub async fn restore_conversation(&self, owner: &Person, id: Uuid) {
+        let mut tx = self.tx(owner).await;
+        assistant::store::restore(&mut tx, owner.principal(), id)
+            .await
+            .expect("restore the conversation");
+        tx.commit().await.expect("commit");
+    }
+
+    /// Waits until another session waits for a lock that the session `holder` (its
+    /// [`backend_pid`]) holds; `what` names the waiting statement in the failure.
+    pub async fn wait_until_blocking(&self, holder: i32, what: &str) {
+        let mut admin = self.superuser().await;
+        let started = Instant::now();
+        loop {
+            let blocks: bool = sqlx::query_scalar(
+                "SELECT EXISTS (
+                    SELECT 1 FROM pg_stat_activity WHERE $1 = ANY (pg_blocking_pids(pid)))",
+            )
+            .bind(holder)
+            .fetch_one(&mut admin)
+            .await
+            .expect("read the lock waits");
+            if blocks {
+                return;
+            }
+            assert!(
+                started.elapsed() < WAIT,
+                "{what} did not wait for the row lock within {WAIT:?}"
+            );
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
     }
 
     /// Moves the deletion of the deleted conversation `id` back to `deleted_at`, behind the

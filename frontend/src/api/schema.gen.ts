@@ -4309,7 +4309,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description No such conversation of the caller's (`not_found`): another user's is the same as none. */
+            /** @description No such conversation of the caller's, or it is deleted (`not_found`): another user's is the same as none. */
             404: {
                 headers: {
                     [name: string]: unknown;

@@ -9,8 +9,10 @@
 //!
 //! - a saved dashboard: every member of the tenant ([`Access::Member`]);
 //! - a draft: its conversation's owner only ([`Access::Owner`]), decided in exactly one place,
-//!   [`conversation_access`]. Laysi/trustiot-v2#644 (soft-deleted conversations) adds
-//!   `AND deleted_at IS NULL` to its one statement, and Laysi/trustiot-v2#650 (shared readers)
+//!   [`conversation_access`], and only while the conversation is not deleted: a deleted
+//!   conversation's drafts are hidden from every function here, the tool's writes included,
+//!   like a conversation that does not exist, until its owner restores the conversation. A
+//!   saved dashboard published from one stays visible. Laysi/trustiot-v2#650 (shared readers)
 //!   adds a reader's access there;
 //! - a dashboard the caller cannot see is [`StoreError::NotFound`], the same as one that does
 //!   not exist.
@@ -46,12 +48,24 @@
 //! (`admit`, [`super::limits::VersionBudget`] in the API) only after every check passed, just
 //! before they write, so a refused request counts nothing.
 //!
-//! A draft's conversation is read without a row lock: the service role cannot lock
-//! conversations (it has no UPDATE on them). A conversation purged while a version is written
-//! cannot leave anything behind: the purge's cascade waits for the dashboard's row lock, and a
-//! new draft's foreign key check waits for the purge. Laysi/trustiot-v2#644, which adds soft
-//! delete and gives the role a column UPDATE on conversations, locks the conversation
-//! (`FOR SHARE`) in [`conversation_access`] for writes.
+//! The writes of a draft, and of a version taken from one (the tool's three writes,
+//! [`publish`], and [`restore`] of a draft), lock the draft's conversation `FOR SHARE`
+//! ([`ConversationLock::Share`]) until their transaction ends, and the reads lock nothing.
+//! The conversations' delete (`crate::store::delete`) locks the row `FOR NO KEY UPDATE`,
+//! which waits for that lock: a conversation is never deleted between the check and the commit
+//! of a write, and a write that waited for a delete finds no conversation
+//! ([`StoreError::NotFound`]). The delete answers 409 while a question is running, so today
+//! the lock matters for a question past its deadline, and for every caller that writes a draft
+//! outside a question. A delete waits at most for one such transaction, which writes and
+//! commits: the tool opens it only after its datasets ran and the checker answered, and no
+//! transaction here spans either. No caller may hold a conversation's row lock across a
+//! question either (the conversations' own writes are short transactions): the tool's write
+//! would wait for it until the tool's time limit.
+//!
+//! A conversation purged while a version is written cannot leave anything behind: the purge's
+//! cascade waits for the dashboard's row lock, and a new draft's foreign key check waits for
+//! the purge. The purge removes only conversations deleted for 30 days, whose rows the
+//! `FOR SHARE` statement never returns, so it never locks one the purge holds.
 
 use std::time::Duration;
 
@@ -80,12 +94,25 @@ pub const MAX_VERSIONS: u32 = 10_000;
 /// The most dashboards or versions in one page of a list.
 pub const PAGE_SIZE: u32 = 50;
 
-/// `$1` tenant, `$2` conversation: its owner. The one statement that decides who sees a
-/// conversation's drafts ([`conversation_access`]). Laysi/trustiot-v2#644 adds
-/// `AND deleted_at IS NULL`.
-const CONVERSATION_OWNER: &str = "SELECT user_id::text AS user_id
+/// `$1` tenant, `$2` conversation: its owner, unless it is deleted. The one statement that
+/// decides who sees a conversation's drafts ([`conversation_access`]): a deleted conversation's
+/// drafts are hidden like a conversation that does not exist, until its owner restores it.
+macro_rules! conversation_owner {
+    () => {
+        "SELECT user_id::text AS user_id
 FROM assistant.conversations
-WHERE tenant_id = $1::uuid AND conversation_id = $2::uuid";
+WHERE tenant_id = $1::uuid AND conversation_id = $2::uuid AND deleted_at IS NULL"
+    };
+}
+
+/// [`conversation_owner!`], for a read: no row lock.
+const CONVERSATION_OWNER: &str = conversation_owner!();
+
+/// [`conversation_owner!`], locking the row `FOR SHARE` until the transaction ends, for a
+/// write of a draft or of a version taken from one ([`ConversationLock::Share`]). A row whose
+/// `deleted_at` is set is not locked: Postgres locks only the rows the condition returns, and
+/// checks the condition again on the newest row after waiting for one.
+const CONVERSATION_OWNER_FOR_SHARE: &str = concat!(conversation_owner!(), "\nFOR SHARE");
 
 /// `$1` tenant, `$2` dashboard: the row, locked for a write.
 const LOCK_DASHBOARD: &str = "SELECT dashboard_id::text AS dashboard_id, kind,
@@ -682,7 +709,7 @@ pub async fn fork(
     let saved = lock(tx, tenant, saved_id)
         .await?
         .ok_or(StoreError::NotFound)?;
-    visible(tx, author.principal, &saved).await?;
+    visible(tx, author.principal, &saved, ConversationLock::None).await?;
     if saved.kind != DashboardKind::Saved {
         return Err(StoreError::SavedRequired);
     }
@@ -766,7 +793,7 @@ pub async fn publish(
     let draft = lock(tx, tenant, draft_id)
         .await?
         .ok_or(StoreError::NotFound)?;
-    let access = visible(tx, requester.principal, &draft).await?;
+    let access = visible(tx, requester.principal, &draft, ConversationLock::Share).await?;
     editor(user)?;
     if draft.kind != DashboardKind::Draft {
         return Err(StoreError::DraftRequired);
@@ -854,7 +881,7 @@ pub async fn restore(
     let row = lock(tx, tenant, dashboard_id)
         .await?
         .ok_or(StoreError::NotFound)?;
-    let access = visible(tx, requester.principal, &row).await?;
+    let access = visible(tx, requester.principal, &row, ConversationLock::Share).await?;
     if !permissions(row.kind, access, requester.role).can_restore {
         return Err(match row.kind {
             DashboardKind::Saved => StoreError::EditorRequired,
@@ -921,7 +948,7 @@ pub async fn set_archived(
     let row = lock(tx, tenant, dashboard_id)
         .await?
         .ok_or(StoreError::NotFound)?;
-    let access = visible(tx, requester.principal, &row).await?;
+    let access = visible(tx, requester.principal, &row, ConversationLock::None).await?;
     editor(user)?;
     if !permissions(row.kind, access, requester.role).can_archive {
         return Err(StoreError::SavedRequired);
@@ -1091,7 +1118,7 @@ pub async fn list_drafts(
     cursor: Option<ListCursor>,
 ) -> Result<DashboardList, StoreError> {
     check_tenant(tx, reader.tenant_id)?;
-    conversation_access(tx, reader, conversation_id)
+    conversation_access(tx, reader, conversation_id, ConversationLock::None)
         .await?
         .ok_or(StoreError::NotFound)?;
     let rows = sqlx::query(LIST_DRAFTS)
@@ -1105,9 +1132,21 @@ pub async fn list_drafts(
     dashboard_page(&rows)
 }
 
+/// Whether [`conversation_access`] locks the conversation's row.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ConversationLock {
+    /// A read: the conversation as the statement's snapshot sees it.
+    None,
+    /// A write of a draft, or of a version taken from one: the row stays locked `FOR SHARE`
+    /// until the transaction ends, so the conversation cannot be deleted before the write
+    /// commits, and a write that waited for a delete finds no conversation.
+    Share,
+}
+
 /// How `reader` may see the drafts of `conversation_id`: [`Access::Owner`] for its owner,
-/// `None` for anyone else and for a conversation that does not exist. The one place that
-/// decides who sees a draft.
+/// `None` for anyone else, for a deleted conversation and for one that does not exist. The one
+/// place that decides who sees a draft. With [`ConversationLock::Share`] it locks the
+/// conversation's row until the transaction ends (see the module's documentation).
 ///
 /// # Errors
 ///
@@ -1116,8 +1155,13 @@ pub async fn conversation_access(
     tx: &mut TenantTransaction,
     reader: Principal,
     conversation_id: Uuid,
+    lock: ConversationLock,
 ) -> Result<Option<Access>, StoreError> {
-    let Some(row) = sqlx::query(CONVERSATION_OWNER)
+    let statement = match lock {
+        ConversationLock::None => CONVERSATION_OWNER,
+        ConversationLock::Share => CONVERSATION_OWNER_FOR_SHARE,
+    };
+    let Some(row) = sqlx::query(statement)
         .bind(reader.tenant_id.to_string())
         .bind(conversation_id.to_string())
         .fetch_optional(&mut **tx)
@@ -1129,21 +1173,31 @@ pub async fn conversation_access(
     Ok((owner == reader.user_id).then_some(Access::Owner))
 }
 
-/// How `reader` sees the dashboard `row`; [`StoreError::NotFound`] when they cannot.
+/// How `reader` sees the dashboard `row`; [`StoreError::NotFound`] when they cannot. `lock`
+/// applies to a draft's conversation; a saved dashboard reads no conversation.
 async fn visible(
     tx: &mut TenantTransaction,
     reader: Principal,
     row: &Stored,
+    lock: ConversationLock,
 ) -> Result<Access, StoreError> {
-    access(tx, reader, row.kind, row.conversation_id).await
+    access(tx, reader, row.kind, row.conversation_id, lock).await
 }
 
+/// [`visible`] for a read.
 async fn visible_summary(
     tx: &mut TenantTransaction,
     reader: Principal,
     dashboard: &DashboardSummary,
 ) -> Result<Access, StoreError> {
-    access(tx, reader, dashboard.kind, dashboard.conversation_id).await
+    access(
+        tx,
+        reader,
+        dashboard.kind,
+        dashboard.conversation_id,
+        ConversationLock::None,
+    )
+    .await
 }
 
 async fn access(
@@ -1151,26 +1205,28 @@ async fn access(
     reader: Principal,
     kind: DashboardKind,
     conversation_id: Option<Uuid>,
+    lock: ConversationLock,
 ) -> Result<Access, StoreError> {
     match kind {
         DashboardKind::Saved => Ok(Access::Member),
         DashboardKind::Draft => {
             let conversation =
                 conversation_id.ok_or(StoreError::Corrupt("a draft without a conversation"))?;
-            conversation_access(tx, reader, conversation)
+            conversation_access(tx, reader, conversation, lock)
                 .await?
                 .ok_or(StoreError::NotFound)
         }
     }
 }
 
-/// The conversation must be `principal`'s: the tool writes only drafts of its own conversation.
+/// The conversation must be `principal`'s and not deleted: the tool writes only drafts of its
+/// own conversation. Locks the conversation's row `FOR SHARE` until the transaction ends.
 async fn require_owner(
     tx: &mut TenantTransaction,
     principal: Principal,
     conversation_id: Uuid,
 ) -> Result<(), StoreError> {
-    match conversation_access(tx, principal, conversation_id).await? {
+    match conversation_access(tx, principal, conversation_id, ConversationLock::Share).await? {
         Some(Access::Owner) => Ok(()),
         _ => Err(StoreError::NotFound),
     }

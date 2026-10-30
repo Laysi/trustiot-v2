@@ -19,6 +19,9 @@
 //!   answer and its connection), and one tenant holds at most its share; telemetry-query's refusals reach
 //!   the user only as closed keys, never as its text.
 //! - Opening a dashboard and running all its datasets calls no model.
+//! - A conversation deleted through the API takes its drafts with it from every route, with the
+//!   same 404 as a dashboard that does not exist, until it is restored; the saved dashboards
+//!   published from it stay.
 //!
 //! Starts a throwaway Postgres with TLS (podman or docker); skipped without either unless `CI`
 //! is set.
@@ -2529,4 +2532,142 @@ async fn opening_a_dashboard_and_running_all_its_datasets_calls_no_model() {
         assert!(!text.contains(&sql), "a log line has the SQL");
         assert!(!text.contains(&content.page), "a log line has the page");
     }
+}
+
+/// One answer as a test compares them: status, `cache-control`, `content-type` and body.
+type Seen = (u16, Option<String>, Option<String>, String);
+
+/// The draft `id` of `conversation` through every dashboards route, by route: each request is
+/// valid for the draft as `a_deleted_conversations_drafts_answer_404_until_it_is_restored` made
+/// it (its latest version is 2, a draft of a saved dashboard at version 1), so only the
+/// conversation's deletion makes any of them a 404.
+async fn every_draft_route(
+    base: &str,
+    token: &str,
+    conversation: Uuid,
+    id: DashboardId,
+) -> Vec<(&'static str, Seen)> {
+    let requests: [(&str, Method, String, Option<Value>); 8] = [
+        ("GET drafts", Method::GET, drafts(conversation), None),
+        ("GET dashboard", Method::GET, dashboard(id), None),
+        ("GET versions", Method::GET, action(id, "versions"), None),
+        (
+            "POST dataset-runs",
+            Method::POST,
+            action(id, "dataset-runs"),
+            Some(run_body(1, DATASETS[0])),
+        ),
+        (
+            "POST restore",
+            Method::POST,
+            action(id, "restore"),
+            Some(json!({"from_version": 1, "base_version": 2})),
+        ),
+        (
+            "POST publish",
+            Method::POST,
+            action(id, "publish"),
+            Some(json!({"version": 2})),
+        ),
+        ("PUT archive", Method::PUT, action(id, "archive"), None),
+        (
+            "DELETE archive",
+            Method::DELETE,
+            action(id, "archive"),
+            None,
+        ),
+    ];
+    let mut seen = Vec::new();
+    for (route, method, path, body) in requests {
+        let answer = call(base, method, &path, Some(token), body.as_ref()).await;
+        seen.push((
+            route,
+            (
+                answer.status,
+                answer.header("cache-control").map(str::to_owned),
+                answer.header("content-type").map(str::to_owned),
+                answer.text,
+            ),
+        ));
+    }
+    seen
+}
+
+/// A conversation deleted through the API takes its drafts with it from every dashboards route:
+/// each answers the same 404, byte for byte, as for a dashboard and a conversation that do not
+/// exist, and changes nothing. Restored through the API, the drafts are back unchanged. The
+/// saved dashboard published from the conversation stays in the tenant's list throughout.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_deleted_conversations_drafts_answer_404_until_it_is_restored() {
+    let Some(Setup { world, api, .. }) = setup(RunCaps::default()).await else {
+        return;
+    };
+    let base = api.url.as_str();
+    let owner = world.person(TenantId::generate(), TenantRole::Editor);
+    let token = world.token(&owner);
+    let (conversation, draft, saved) = world.saved(&owner, &Content::new("Saved")).await;
+    world
+        .write_draft(
+            &owner,
+            conversation,
+            draft,
+            1,
+            None,
+            &Content::new("Second"),
+        )
+        .await
+        .expect("the draft's version 2");
+    let read = |path: String| {
+        let token = token.clone();
+        async move { call(base, Method::GET, &path, Some(&token), None).await }
+    };
+    let before = (
+        read(dashboard(draft)).await,
+        read(action(draft, "versions")).await,
+        read(drafts(conversation)).await,
+    );
+    for answer in [&before.0, &before.1, &before.2] {
+        assert_eq!(answer.status, 200, "{answer:?}");
+    }
+    let saved_list = read(DASHBOARDS.to_owned()).await;
+    assert!(
+        saved_list.text.contains(&saved.to_string()),
+        "{saved_list:?}"
+    );
+    let versions = version_count(&world, draft).await;
+
+    let conversation_path = format!("/api/assistant/v1/conversations/{conversation}");
+    let deleted = call(base, Method::DELETE, &conversation_path, Some(&token), None).await;
+    assert_eq!(deleted.status, 204, "{deleted:?}");
+    let hidden = every_draft_route(base, &token, conversation, draft).await;
+    let missing = every_draft_route(base, &token, Uuid::new_v4(), DashboardId::generate()).await;
+    assert_eq!(hidden, missing);
+    for (route, (status, cache_control, _, _)) in &hidden {
+        assert_eq!(*status, 404, "{route}");
+        assert_eq!(cache_control.as_deref(), Some("no-store"), "{route}");
+    }
+    assert_eq!(version_count(&world, draft).await, versions);
+    assert_eq!(read(DASHBOARDS.to_owned()).await.text, saved_list.text);
+    assert_eq!(read(dashboard(saved)).await.status, 200);
+
+    let restored = call(
+        base,
+        Method::POST,
+        &format!("{conversation_path}/restore"),
+        Some(&token),
+        Some(&json!({})),
+    )
+    .await;
+    assert_eq!(restored.status, 200, "{restored:?}");
+    let after = (
+        read(dashboard(draft)).await,
+        read(action(draft, "versions")).await,
+        read(drafts(conversation)).await,
+    );
+    assert_eq!(
+        (after.0.text, after.1.text, after.2.text),
+        (before.0.text, before.1.text, before.2.text),
+        "the drafts are back unchanged"
+    );
+    assert_eq!(read(DASHBOARDS.to_owned()).await.text, saved_list.text);
 }

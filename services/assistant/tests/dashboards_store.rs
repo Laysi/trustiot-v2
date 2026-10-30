@@ -14,6 +14,9 @@
 //! - The conversation purge's own round removes an expired conversation's drafts with all their
 //!   versions and keeps what was published, unchanged; a draft another session holds keeps its
 //!   conversation for a round, and the round's counts and log line are the conversations' only.
+//! - A deleted conversation's drafts are `NotFound` to every function until its owner restores
+//!   it; what was published from them stays. A draft's write and the conversation's delete wait
+//!   for each other's transaction, and the one that waited sees the other's outcome.
 //!
 //! Starts a throwaway Postgres with TLS (podman or docker); skipped without either unless `CI`
 //! is set.
@@ -26,7 +29,7 @@ use assistant::purge::{self, Round};
 use chrono::{TimeDelta, Utc};
 use contract::api::dashboard::public::{DashboardKind, SavedBase, VersionOrigin};
 use contract::{DashboardId, TenantId, TenantRole};
-use dashboard_world::{Content, Person, World, finish, unlimited, world};
+use dashboard_world::{Content, Person, World, backend_pid, finish, unlimited, world};
 use sqlx::{Connection as _, Row};
 use support::Capture;
 use uuid::Uuid;
@@ -1504,58 +1507,290 @@ async fn concurrent_writes_of_one_draft_queue_and_the_later_one_conflicts() {
     );
 }
 
+/// The IDs of the tenant's saved dashboards, archived ones too, as `reader` lists them.
+async fn saved_ids(world: &World, reader: &Person) -> Vec<DashboardId> {
+    let mut tx = world.tx(reader).await;
+    let listed = store::list_saved(&mut tx, reader.principal(), true, None)
+        .await
+        .expect("list the saved dashboards");
+    tx.rollback().await.expect("roll back");
+    listed
+        .dashboards
+        .iter()
+        .map(|dashboard| dashboard.dashboard_id)
+        .collect()
+}
+
+/// Asserts that every function of the store refuses `owner` the draft `draft` of the deleted
+/// `conversation` with [`StoreError::NotFound`], as for a draft that does not exist, also where
+/// it would otherwise succeed or refuse with another error: each call is valid for the draft
+/// as it was before the deletion (its latest version is 2, a draft of a saved dashboard at its
+/// version 1). `other_saved` is a saved dashboard at version 1 that the conversation has no
+/// draft of.
+async fn assert_hidden(
+    world: &World,
+    owner: &Person,
+    conversation: Uuid,
+    draft: DashboardId,
+    other_saved: DashboardId,
+) {
+    let user = world.user(owner);
+    let content = Content::new("Hidden");
+    let mut tx = world.tx(owner).await;
+    let outcomes: [(&str, Result<(), StoreError>); 10] = [
+        (
+            "open",
+            store::open(&mut tx, owner.principal(), draft, None)
+                .await
+                .map(|_| ()),
+        ),
+        (
+            "versions",
+            store::versions(&mut tx, owner.principal(), draft, None)
+                .await
+                .map(|_| ()),
+        ),
+        (
+            "dataset",
+            store::dataset(&mut tx, owner.principal(), draft, 1, "daily")
+                .await
+                .map(|_| ()),
+        ),
+        (
+            "list_drafts",
+            store::list_drafts(&mut tx, owner.principal(), conversation, None)
+                .await
+                .map(|_| ()),
+        ),
+        (
+            "write_draft",
+            store::write_draft(
+                &mut tx,
+                owner.author(),
+                conversation,
+                draft,
+                2,
+                None,
+                &content.version(),
+            )
+            .await
+            .map(|_| ()),
+        ),
+        (
+            "create_draft",
+            store::create_draft(&mut tx, owner.author(), conversation, &content.version())
+                .await
+                .map(|_| ()),
+        ),
+        (
+            "fork",
+            store::fork(
+                &mut tx,
+                owner.author(),
+                conversation,
+                other_saved,
+                1,
+                &content.version(),
+            )
+            .await
+            .map(|_| ()),
+        ),
+        (
+            "publish",
+            store::publish(&mut tx, &user, draft, 2, unlimited)
+                .await
+                .map(|_| ()),
+        ),
+        (
+            "restore",
+            store::restore(&mut tx, &user, draft, 1, 2, unlimited)
+                .await
+                .map(|_| ()),
+        ),
+        (
+            "set_archived",
+            store::set_archived(&mut tx, &user, draft, true)
+                .await
+                .map(|_| ()),
+        ),
+    ];
+    tx.rollback().await.expect("roll back");
+    for (operation, outcome) in outcomes {
+        assert!(
+            matches!(outcome, Err(StoreError::NotFound)),
+            "{operation}: {outcome:?}"
+        );
+    }
+}
+
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "needs assistant.conversations.deleted_at (Laysi/trustiot-v2#644): un-ignore when it lands"]
 async fn a_soft_deleted_conversations_drafts_are_hidden_until_it_is_restored() {
     let Some(world) = world().await else { return };
     let tenant = TenantId::generate();
     let owner = world.person(tenant, TenantRole::Editor);
     let member = world.person(tenant, TenantRole::Viewer);
+    // The conversation's draft, published as a saved dashboard and written again since: a
+    // draft of a saved dashboard, with two versions.
     let (conversation, draft, saved) = world.saved(&owner, &Content::new("Saved")).await;
+    world
+        .write_draft(
+            &owner,
+            conversation,
+            draft,
+            1,
+            None,
+            &Content::new("Second"),
+        )
+        .await
+        .expect("the draft's version 2");
+    let (_, _, other_saved) = world.saved(&owner, &Content::new("Other")).await;
+    let draft_rows = dashboard_rows(&world, draft).await;
+    let saved_rows = dashboard_rows(&world, saved).await;
+    let listed = saved_ids(&world, &member).await;
+    assert!(listed.contains(&saved), "{listed:?}");
 
-    let set_deleted = |deleted: bool| {
-        let world = &world;
-        async move {
-            let mut admin = world.superuser().await;
-            sqlx::query(
-                "UPDATE assistant.conversations
-                SET deleted_at = CASE WHEN $2 THEN now() END
-                WHERE conversation_id = $1::uuid",
-            )
-            .bind(conversation.to_string())
-            .bind(deleted)
-            .execute(&mut admin)
-            .await
-            .expect("mark the conversation");
-        }
-    };
-    set_deleted(true).await;
+    // Deleted as the API deletes it: every function hides the draft, and changes nothing.
+    world.delete_conversation(&owner, conversation).await;
+    assert_hidden(&world, &owner, conversation, draft, other_saved).await;
+    assert_eq!(dashboard_rows(&world, draft).await, draft_rows);
+    // What was published from it stays, for every member of the tenant.
+    assert_eq!(dashboard_rows(&world, saved).await, saved_rows);
+    assert_eq!(saved_ids(&world, &member).await, listed);
+    for reader in [&owner, &member] {
+        let mut tx = world.tx(reader).await;
+        let opened = store::open(&mut tx, reader.principal(), saved, None).await;
+        tx.rollback().await.expect("roll back");
+        let opened = opened.expect("the saved dashboard stays");
+        assert_eq!(
+            (opened.version.version, opened.version.title.as_str()),
+            (1, "Saved")
+        );
+    }
+
+    // Restored, the draft is back as it was, and the tool writes to it again.
+    world.restore_conversation(&owner, conversation).await;
     let mut tx = world.tx(&owner).await;
-    let hidden = store::open(&mut tx, owner.principal(), draft, None).await;
-    let listed = store::list_drafts(&mut tx, owner.principal(), conversation, None).await;
-    let written = store::write_draft(
-        &mut tx,
+    let back = store::open(&mut tx, owner.principal(), draft, None).await;
+    let drafts = store::list_drafts(&mut tx, owner.principal(), conversation, None).await;
+    tx.rollback().await.expect("roll back");
+    let back = back.expect("the draft is back");
+    assert_eq!(
+        (
+            back.version.version,
+            back.version.title.as_str(),
+            back.access
+        ),
+        (2, "Second", Access::Owner)
+    );
+    let drafts: Vec<DashboardId> = drafts
+        .expect("the conversation's drafts")
+        .dashboards
+        .iter()
+        .map(|dashboard| dashboard.dashboard_id)
+        .collect();
+    assert_eq!(drafts, [draft]);
+    assert_eq!(dashboard_rows(&world, draft).await, draft_rows);
+    assert_eq!(dashboard_rows(&world, saved).await, saved_rows);
+    let written = world
+        .write_draft(&owner, conversation, draft, 2, None, &Content::new("Third"))
+        .await
+        .expect("the draft's version 3");
+    assert_eq!(written.version, 3);
+}
+
+/// A draft's write holds its conversation until it commits: the conversation's delete waits for
+/// that one transaction and then hides the draft with the version just written, and a write
+/// that waited for a delete finds no conversation and writes nothing. (The tool opens that
+/// transaction only after its datasets ran and the check answered: tests/dashboard_tool.rs.)
+#[tokio::test(flavor = "multi_thread")]
+async fn a_conversations_delete_and_a_drafts_write_wait_for_each_other() {
+    let Some(world) = world().await else { return };
+    let owner = world.person(TenantId::generate(), TenantRole::Editor);
+
+    // The write first: the delete waits for its commit.
+    let conversation = world.conversation(&owner).await;
+    let draft = world
+        .create_draft(&owner, conversation, &Content::new("Draft"))
+        .await
+        .dashboard_id;
+    let mut writing = world.tx(&owner).await;
+    let writer = backend_pid(&mut writing).await;
+    store::write_draft(
+        &mut writing,
         owner.author(),
         conversation,
         draft,
         1,
         None,
-        &Content::new("x").version(),
+        &Content::new("Second").version(),
     )
-    .await;
+    .await
+    .expect("the write");
+    let mut deleting = world.tx(&owner).await;
+    let principal = owner.principal();
+    let delete = tokio::spawn(async move {
+        let deleted = assistant::store::delete(&mut deleting, principal, conversation).await;
+        if deleted.is_ok() {
+            deleting.commit().await.expect("commit the delete");
+        }
+        deleted.map(|_| ())
+    });
+    world
+        .wait_until_blocking(writer, "the conversation's delete")
+        .await;
+    assert!(!delete.is_finished(), "the delete waits for the write");
+    writing.commit().await.expect("commit the write");
+    tokio::time::timeout(dashboard_world::WAIT, delete)
+        .await
+        .expect("the delete ends once the write committed")
+        .expect("the task")
+        .expect("the delete");
+    assert_eq!(dashboard_rows(&world, draft).await.1.len(), 2);
+    let mut tx = world.tx(&owner).await;
+    let hidden = store::open(&mut tx, owner.principal(), draft, None).await;
     tx.rollback().await.expect("roll back");
     assert!(matches!(hidden, Err(StoreError::NotFound)), "{hidden:?}");
-    assert!(matches!(listed, Err(StoreError::NotFound)), "{listed:?}");
-    assert!(matches!(written, Err(StoreError::NotFound)), "{written:?}");
-    // What was published stays.
-    let mut tx = world.tx(&member).await;
-    let opened = store::open(&mut tx, member.principal(), saved, None).await;
-    tx.rollback().await.expect("roll back");
-    opened.expect("the saved dashboard stays");
 
-    set_deleted(false).await;
-    let mut tx = world.tx(&owner).await;
-    let back = store::open(&mut tx, owner.principal(), draft, None).await;
-    tx.rollback().await.expect("roll back");
-    back.expect("the draft is back");
+    // The delete first: the write waits for its commit, then finds no conversation.
+    let conversation = world.conversation(&owner).await;
+    let draft = world
+        .create_draft(&owner, conversation, &Content::new("Draft"))
+        .await
+        .dashboard_id;
+    let before = dashboard_rows(&world, draft).await;
+    let mut deleting = world.tx(&owner).await;
+    let deleter = backend_pid(&mut deleting).await;
+    assistant::store::delete(&mut deleting, owner.principal(), conversation)
+        .await
+        .expect("the delete");
+    let mut writing = world.tx(&owner).await;
+    let author = owner.author();
+    let write = tokio::spawn(async move {
+        let content = Content::new("Late");
+        let written = store::write_draft(
+            &mut writing,
+            author,
+            conversation,
+            draft,
+            1,
+            None,
+            &content.version(),
+        )
+        .await;
+        finish(writing, written).await
+    });
+    world
+        .wait_until_blocking(deleter, "the draft's write")
+        .await;
+    deleting.commit().await.expect("commit the delete");
+    let written = tokio::time::timeout(dashboard_world::WAIT, write)
+        .await
+        .expect("the write ends once the delete committed")
+        .expect("the task");
+    assert!(matches!(written, Err(StoreError::NotFound)), "{written:?}");
+    assert_eq!(
+        dashboard_rows(&world, draft).await,
+        before,
+        "nothing written"
+    );
 }

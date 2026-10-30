@@ -14,7 +14,9 @@
 //!   rebase onto a newer saved version needs this question to have read that version;
 //! - failed datasets are problems (SQL refusals with `telemetry_sql`'s hints), a revoked session
 //!   ends the call, and a question with too little time left does not start a write;
-//! - a question runs each dataset (source and `max_rows`) once.
+//! - a question runs each dataset (source and `max_rows`) once;
+//! - a conversation deleted while a write waits for the check is deleted at once, and the write
+//!   is then refused like a dashboard that does not exist.
 //!
 //! Starts a throwaway Postgres with TLS (podman or docker); skipped without either unless `CI`
 //! is set.
@@ -36,14 +38,15 @@ use assistant::tools::dashboard::{
     CALL_LIMIT, DATASETS_TIMEOUT, DashboardTool, MAX_WRITES_PER_QUESTION, SAVE_TIMEOUT, WriteBounds,
 };
 use assistant::tools::{Tool, ToolContent, ToolContext, ToolError, ToolOutput};
+use axum::http::Method;
 use check_stand_in::CheckStandIn;
 use contract::api::dashboard::check::Problem;
 use contract::api::dashboard::public::DashboardKind;
 use contract::api::dashboard::spec::MAX_PAGE_BYTES;
 use contract::{DashboardId, ServiceName, TenantId, TenantRole};
 use dashboard_world::{
-    Content, Peers, Person, Question, SQL_PATH, STATISTICS_PATH, World, dashboard_tool,
-    dashboard_tool_on, dashboard_tool_with, spec, telemetry_client, world,
+    Content, Peers, Person, Question, SQL_PATH, STATISTICS_PATH, World, call as api_call,
+    dashboard_tool, dashboard_tool_on, dashboard_tool_with, spec, telemetry_client, world,
 };
 use serde_json::{Value, json};
 use support::Capture;
@@ -1546,4 +1549,60 @@ async fn datasets_still_running_at_the_bound_are_problems_and_the_rest_is_kept()
         unfinished.len(),
         "only the datasets that did not finish ran again: {unfinished:?}"
     );
+}
+
+/// A conversation deleted while the tool's write waits for the check: the API's delete does not
+/// wait for the write (which opens its transaction only after the check answered) and answers
+/// at once, within the API's lock timeout; the write then finds no conversation, is refused
+/// with the same closed text as a dashboard that does not exist, and saves nothing.
+#[tokio::test]
+async fn a_write_to_a_conversation_deleted_meanwhile_is_refused_like_a_missing_dashboard() {
+    let Some(setup) = setup().await else {
+        return;
+    };
+    let id = first_version(&setup, "Mine").await;
+    let missing = refused(
+        call(
+            &setup.tool,
+            &setup.own_question(),
+            edit(DashboardId::generate(), 1, "Mine", "Other"),
+        )
+        .await,
+    );
+    let checks = setup.check.requests().len();
+    let held = setup.check.hold("Held");
+    let write = tokio::spawn({
+        let tool = Arc::clone(&setup.tool);
+        let question = setup.own_question();
+        async move { call(&tool, &question, edit(id, 1, "Mine", "Held")).await }
+    });
+    setup.check.wait_requests(checks + 1).await;
+
+    let api = setup.world.api(&setup.peers, RunCaps::default()).await;
+    let token = setup.world.token(&setup.owner);
+    let conversation = format!("/api/assistant/v1/conversations/{}", setup.conversation);
+    let deleted = api_call(&api.url, Method::DELETE, &conversation, Some(&token), None).await;
+    assert_eq!(deleted.status, 204, "{}", deleted.text);
+    assert!(!write.is_finished(), "the write still waits for the check");
+
+    held.release();
+    let refusal = refused(
+        tokio::time::timeout(dashboard_world::WAIT, write)
+            .await
+            .expect("the write ends once the check answered")
+            .expect("the task"),
+    );
+    assert_eq!(refusal, missing);
+
+    // Restored, the draft has only the version written before.
+    let restored = api_call(
+        &api.url,
+        Method::POST,
+        &format!("{conversation}/restore"),
+        Some(&token),
+        Some(&json!({})),
+    )
+    .await;
+    assert_eq!(restored.status, 200, "{}", restored.text);
+    assert_eq!(setup.latest(&setup.owner, id).await, (1, page("Mine")));
 }

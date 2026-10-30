@@ -227,7 +227,7 @@ async fn list_saved(
         (status = 400, description = "An unknown parameter or a bad cursor (`invalid_request`).", body = ErrorBody),
         (status = 401, description = "No valid session (`unauthenticated`).", body = ErrorBody),
         (status = 403, description = "No tenant or no role in it (`permission_denied`).", body = ErrorBody),
-        (status = 404, description = "No such conversation of the caller's (`not_found`): another user's is the same as none.", body = ErrorBody),
+        (status = 404, description = "No such conversation of the caller's, or it is deleted (`not_found`): another user's is the same as none.", body = ErrorBody),
         (status = 503, description = "The database failed (`unavailable`).", body = ErrorBody),
     )
 )]
