@@ -4,7 +4,7 @@ Laysi/trustiot-v2#778：certs 新增第二個 outbox 消費端（訂閱 `certs.i
 
 ## 環境
 
-- **程式碼**：分支 `feat/778-certs-tenant-state`，以 main `6afacf1f` 為基礎，之後 rebase 到 main `34d863c6`（只多一份測試報告）。容器測試在第一個 commit（rebase 後是 `2f625e91`）上執行；第二個 commit（`029e3333`）只改 migration 的 `lock_timeout`、一行 WARN 與文件，之後以下方「指令」的全部檢查在最後的樹上重跑。
+- **程式碼**：分支 `feat/778-certs-tenant-state`，以 main `6afacf1f` 為基礎，之後 rebase 到 main `34d863c6`（只多一份測試報告）。容器測試在第一個 commit（rebase 後是 `2f625e91`）上執行；第二個 commit（`029e3333`）只改 migration 的 `lock_timeout`、一行 WARN 與文件，之後以下方「指令」的 Rust 檢查在建置主機上重跑：`cargo fmt --all --check`、clippy 沒有警告，`CI=1 cargo test --locked --workspace --exclude agent` 的 202 個測試執行檔全部通過、0 失敗。`bun test scripts` 與 `cargo deny` 在建置主機缺少 helm 與 cargo-deny，改在本機（x86_64 Linux）執行：`bun test scripts` 抓到 `scripts/tests/product-logins.test.ts` 還寫著 certs 只消費 `assets`，修正後 1711 通過、0 失敗；`cargo deny --locked check` 的 advisories、bans、licenses、sources 都是 ok。
 - **機器**：建置主機（arm64 Linux VM），經檢查佇列執行。容器測試由 podman 起 `testkit::product` 的拋棄式 TLS Postgres，以 migration Job 的程式套用整個產品的 schema（含 `0007_tenant_state_events.sql`），再以真的 `certs` 執行檔（服務角色 `certs_app`、平台角色 `certs_platform`）處理事件與換發請求；租戶以身分服務自己的程式碼（`identity::tenants::TenantStore::create`）建立。
 - **工具**：`.prototools` 與 `rust-toolchain.toml` 釘選的版本。
 - **設定**：`CI=1`。
