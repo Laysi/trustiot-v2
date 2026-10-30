@@ -5,10 +5,9 @@
 //! [`RunCaps::new`]'s `wait` for one and is refused after it. Opening a dashboard in the browser
 //! and the `dashboard` tool share one [`RunCaps`], so a question cannot run around the caps.
 //!
-//! The runs of all tenants together hold at most [`MAX_RUNS_IN_FLIGHT`] places of this replica,
-//! taken in the order asked for after the tenant's slot and within the same wait: each run holds
-//! telemetry-query's answer and the result read from it until it is done, so the places bound the
-//! memory the runs take ([`super::runner`]). A tenant holds at most [`CONCURRENT_RUNS`] of them.
+//! A run holds its slot until it has its result; a slot holds no memory. The memory a run's
+//! answer and result take is reserved from the replica's [`super::memory`] once telemetry-query
+//! has answered ([`super::runner`]), so runs waiting for telemetry-query hold none of it.
 //!
 //! The caps keep one tenant from using up telemetry-query's quota (120 requests a minute per
 //! tenant) with dashboards alone: two replicas together stay within it. They are per replica,
@@ -29,14 +28,10 @@ pub const RUNS_PER_MINUTE: usize = 60;
 /// The most runs of a tenant at a time, per replica.
 pub const CONCURRENT_RUNS: usize = 2;
 
-/// How long a run waits for one of its tenant's [`CONCURRENT_RUNS`] slots and then for a place
-/// among the [`MAX_RUNS_IN_FLIGHT`], both together: a dashboard's page starts all its datasets at
-/// once, so a third waits for the first two instead of failing.
+/// How long a run waits for one of its tenant's [`CONCURRENT_RUNS`] slots: a dashboard's page
+/// starts all its datasets at once, so a third waits for the first two instead of failing. Once
+/// telemetry-query has answered, a run waits as long again for memory for the answer.
 pub const CONCURRENT_WAIT: Duration = Duration::from_secs(10);
-
-/// The most runs of all tenants at a time, per replica: four tenants at their
-/// [`CONCURRENT_RUNS`].
-pub const MAX_RUNS_IN_FLIGHT: usize = 8;
 
 /// The window [`RUNS_PER_MINUTE`] counts in.
 const WINDOW: Duration = Duration::from_secs(60);
@@ -54,12 +49,10 @@ pub struct Limited {
     pub retry_after: Duration,
 }
 
-/// A run admitted by the caps: it holds one of the tenant's slots and one of the replica's
-/// places until it is dropped.
+/// A run admitted by the caps: it holds one of the tenant's slots until it is dropped.
 #[derive(Debug)]
 pub struct RunPermit {
     _slot: OwnedSemaphorePermit,
-    _place: OwnedSemaphorePermit,
 }
 
 /// The caps of one replica, shared by every dataset run in it.
@@ -69,8 +62,6 @@ pub struct RunCaps {
     wait: Duration,
     clock: Clock,
     tenants: Mutex<HashMap<TenantId, TenantRuns>>,
-    /// The places of all tenants' runs.
-    places: Arc<Semaphore>,
 }
 
 /// One tenant's runs: when the runs of the last minute started, and its slots.
@@ -103,14 +94,13 @@ impl std::fmt::Debug for RunCaps {
             .field("per_minute", &self.per_minute)
             .field("concurrent", &self.concurrent)
             .field("wait", &self.wait)
-            .field("places", &self.places.available_permits())
             .finish_non_exhaustive()
     }
 }
 
 impl Default for RunCaps {
-    /// The service's caps: [`RUNS_PER_MINUTE`], [`CONCURRENT_RUNS`], [`CONCURRENT_WAIT`],
-    /// [`MAX_RUNS_IN_FLIGHT`], the system clock.
+    /// The service's caps: [`RUNS_PER_MINUTE`], [`CONCURRENT_RUNS`], [`CONCURRENT_WAIT`], the
+    /// system clock.
     fn default() -> Self {
         Self::new(
             RUNS_PER_MINUTE,
@@ -123,8 +113,8 @@ impl Default for RunCaps {
 
 impl RunCaps {
     /// Caps of `per_minute` runs started in any minute and `concurrent` at a time per tenant,
-    /// where a run waits up to `wait` for a slot and a place; [`MAX_RUNS_IN_FLIGHT`] places.
-    /// Both counts are at least one.
+    /// where a run waits up to `wait` for a slot (and, once telemetry-query answered, as long
+    /// for memory). Both counts are at least one.
     #[must_use]
     pub fn new(per_minute: usize, concurrent: usize, wait: Duration, clock: Clock) -> Self {
         Self {
@@ -133,36 +123,28 @@ impl RunCaps {
             wait,
             clock,
             tenants: Mutex::new(HashMap::new()),
-            places: Arc::new(Semaphore::new(MAX_RUNS_IN_FLIGHT)),
         }
     }
 
-    /// These caps with `places` runs of all tenants at a time (at least one): tests use few.
+    /// How long a run waits for a slot, and for memory once telemetry-query answered.
     #[must_use]
-    pub fn with_runs_in_flight(mut self, places: usize) -> Self {
-        self.places = Arc::new(Semaphore::new(places.max(1)));
-        self
+    pub fn wait(&self) -> Duration {
+        self.wait
     }
 
     /// Admits a run of `tenant`: counts it in the minute, then waits for one of the tenant's
-    /// slots and then for one of the replica's places, both within the wait. A run refused
-    /// while waiting is not counted.
+    /// slots within the wait. A run refused while waiting is not counted.
     ///
     /// # Errors
     ///
     /// [`Limited`] when the tenant started [`RUNS_PER_MINUTE`] runs in the last minute (try
-    /// again when the oldest leaves it), or no slot or place came free within the wait (try again
-    /// in a second).
+    /// again when the oldest leaves it), or no slot came free within the wait (try again in a
+    /// second).
     pub async fn admit(&self, tenant: TenantId) -> Result<RunPermit, Limited> {
         let (slots, ticket) = self.count(tenant)?;
         let deadline = tokio::time::Instant::now() + self.wait;
-        if let Some(slot) = acquire(slots, deadline).await
-            && let Some(place) = acquire(Arc::clone(&self.places), deadline).await
-        {
-            return Ok(RunPermit {
-                _slot: slot,
-                _place: place,
-            });
+        if let Some(slot) = acquire(slots, deadline).await {
+            return Ok(RunPermit { _slot: slot });
         }
         self.uncount(tenant, ticket);
         Err(Limited {
@@ -328,61 +310,6 @@ mod tests {
             .await
             .expect("the waiting run")
             .expect("it got the slot");
-    }
-
-    /// The runs of all tenants share the replica's places: with three, a third tenant's run
-    /// waits while two tenants hold them, is refused after the wait without being counted, and
-    /// gets a place once one comes free.
-    #[tokio::test]
-    async fn the_runs_of_all_tenants_share_the_places_in_flight() {
-        let (clock, _) = manual_clock();
-        let caps = RunCaps::new(RUNS_PER_MINUTE, CONCURRENT_RUNS, Duration::ZERO, clock)
-            .with_runs_in_flight(3);
-        let (first, second, third) = (tenant(), tenant(), tenant());
-        let one = caps.admit(first).await.expect("a place");
-        let _two = caps.admit(first).await.expect("a place");
-        let _three = caps.admit(second).await.expect("a place");
-        assert_eq!(
-            caps.admit(third).await.expect_err("every place taken"),
-            Limited {
-                retry_after: Duration::from_secs(1)
-            }
-        );
-        {
-            let tenants = caps.tenants.lock().expect("not poisoned");
-            assert!(
-                tenants
-                    .get(&third)
-                    .is_none_or(|runs| runs.started.is_empty()),
-                "the refused run was not counted"
-            );
-        }
-        drop(one);
-        let _four = caps.admit(third).await.expect("a place came free");
-
-        // A run waiting for a place gets the one that comes free.
-        let (clock, _) = manual_clock();
-        let caps = Arc::new(
-            RunCaps::new(
-                RUNS_PER_MINUTE,
-                CONCURRENT_RUNS,
-                Duration::from_secs(3600),
-                clock,
-            )
-            .with_runs_in_flight(1),
-        );
-        let held = caps.admit(first).await.expect("a place");
-        let waiting = tokio::spawn({
-            let caps = Arc::clone(&caps);
-            async move { caps.admit(second).await.map(drop) }
-        });
-        tokio::task::yield_now().await;
-        assert!(!waiting.is_finished(), "the place is still held");
-        drop(held);
-        waiting
-            .await
-            .expect("the waiting run")
-            .expect("it got the place");
     }
 
     #[test]

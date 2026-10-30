@@ -8,6 +8,8 @@
 //! - [`runner`]: dataset runs at telemetry-query as the caller, within the caps of [`caps`],
 //!   flattened by [`flatten`] for semantic sources.
 //! - [`checker`]: the dashboard check, which passes a page before the tool writes it.
+//! - [`memory`]: the replica's memory for dataset results, in bytes, shared by the runs, the
+//!   API's answers and the tool's writes.
 //! - [`limits`]: the other limits of one replica (the tool's writes per tenant).
 //! - The public API over both: [`crate::api`].
 //!
@@ -20,5 +22,6 @@ pub mod caps;
 pub mod checker;
 pub mod flatten;
 pub mod limits;
+pub mod memory;
 pub mod runner;
 pub mod store;

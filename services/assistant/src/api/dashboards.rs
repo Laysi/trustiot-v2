@@ -35,12 +35,12 @@
 use std::time::Duration;
 
 use axum::Router;
-use axum::body::Body;
+use axum::body::{Body, Bytes};
 use axum::extract::rejection::{PathRejection, QueryRejection};
 use axum::extract::{Path, Query, State};
-use axum::http::header::RETRY_AFTER;
+use axum::http::header::{CACHE_CONTROL, CONTENT_TYPE, RETRY_AFTER};
 use axum::http::{HeaderMap, HeaderValue, StatusCode};
-use axum::response::Response;
+use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post, put};
 use contract::api::dashboard::public::{
     ARCHIVED, ArchiveState, DATASET_FAILED, DATASET_UNKNOWN, DRAFT_REQUIRED, DashboardList,
@@ -57,7 +57,7 @@ use uuid::Uuid;
 
 use super::{ApiError, ApiState, begin, commit, error, ok, parse_id, read_body, requester};
 use crate::callee::{Caller, Operation};
-use crate::dashboards::runner::RunError;
+use crate::dashboards::runner::{HeldResult, RunError};
 use crate::dashboards::store::{self, ListCursor, Requester, StoreError, VersionCursor};
 use crate::delegation::OnBehalfOf;
 
@@ -471,7 +471,7 @@ async fn set_archived(
         (status = 403, description = "No tenant or no role in it (`permission_denied`); the range lies wholly before the caller's queryable period (`quota_exceeded`, `telemetry.outside_queryable_period`, `details.earliest`).", body = ErrorBody),
         (status = 404, description = "No such dashboard the caller can see (`not_found`), or no such version (`dashboard.version_not_found`).", body = ErrorBody),
         (status = 422, description = "No such dataset (`dashboard.dataset_unknown`); more rows than the dataset allows (`dashboard.dataset_too_many_rows`, `details.max`); a result over 2 MiB (`dashboard.dataset_result_too_large`); a query telemetry-query refuses now (`dashboard.dataset_refused`); a query too heavy (`telemetry.query_too_heavy`) or with too many points (`telemetry.too_many_points`, `details.max`) (`validation_failed`).", body = ErrorBody),
-        (status = 429, description = "The tenant ran 60 datasets in the last minute or has 2 running in this replica (`dashboard.runs_limited`, with `Retry-After`), or its query quota is used up (`dashboard.query_quota_exhausted`) (`rate_limited`).", body = ErrorBody),
+        (status = 429, description = "The tenant ran 60 datasets in the last minute, has 2 running in this replica, or this replica's memory for results had no room for the answer within the wait (`dashboard.runs_limited`, with `Retry-After`), or its query quota is used up (`dashboard.query_quota_exhausted`) (`rate_limited`).", body = ErrorBody),
         (status = 503, description = "The tenant's telemetry account is not ready (`telemetry.account_not_ready`), or the run failed (`dashboard.dataset_failed`) (`unavailable`).", body = ErrorBody),
         (status = 504, description = "The query ran longer than the tenant's limit (`timeout`, `dashboard.dataset_timeout`).", body = ErrorBody),
     )
@@ -522,10 +522,26 @@ async fn run_dataset(
         run_id: None,
         conversation_id: None,
     };
+    // The answer's body holds the result's memory until it has been written or dropped.
     match api.runner.run(&caller, &dataset).await {
-        Ok(result) => Ok(ok(StatusCode::OK, &result)),
+        Ok(result) => Ok(held_result(result)),
         Err(failure) => Ok(run_error(&failure)),
     }
+}
+
+/// The 200 of a run: the result's JSON as the body, as `axum::Json` writes it, holding the
+/// result's reserved memory until the server has written the body or dropped it (a client that
+/// went away, or reads slowly, keeps it only as long as the body is held).
+fn held_result(result: HeldResult) -> Response {
+    (
+        StatusCode::OK,
+        [
+            (CONTENT_TYPE, "application/json"),
+            (CACHE_CONTROL, "no-store"),
+        ],
+        Body::from(Bytes::from_owner(result)),
+    )
+        .into_response()
 }
 
 /// The 429 of a publish or restore that would add a version past the user's or the tenant's

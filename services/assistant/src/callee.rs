@@ -22,8 +22,10 @@
 //! its question's delegation ([`ToolContext::caller`]); a dashboard's dataset run
 //! ([`crate::dashboards::runner`]) calls with the request's identity when a user opens the
 //! dashboard, or with the question's delegation when the `dashboard` tool runs it. Dataset runs
-//! read the answer themselves through [`Callee::post_answer`], with the same transport, token
-//! handling, body limits and logs, and [`refusal_of`] for a 422.
+//! read the answer themselves in two steps, [`Callee::send_answer`] and then
+//! [`Callee::read_answer`], with the same transport, token handling, body limits and logs, and
+//! [`refusal_of`] for a 422: between the steps a run knows the status and the declared length,
+//! and reserves the memory it will read into ([`crate::dashboards::memory`]).
 
 use std::fmt;
 use std::time::Duration;
@@ -120,7 +122,7 @@ impl ToolContext {
     }
 }
 
-/// How a service answered a [`Callee::post_answer`].
+/// How a service answered, read by [`Callee::read_answer`].
 #[derive(Debug, PartialEq, Eq)]
 pub enum Answer {
     /// A 2xx status and its body, at most the call's limit.
@@ -130,7 +132,8 @@ pub enum Answer {
     Status { status: u16, body: Option<Vec<u8>> },
 }
 
-/// Why a [`Callee::post_answer`] got no answer. Logged by the callee with its kind only.
+/// Why a [`Callee::send_answer`] or [`Callee::read_answer`] got no answer. Logged by the callee
+/// with its kind only.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum CallFailure {
     /// The delegation gave no token: [`DelegationError`].
@@ -145,6 +148,29 @@ pub enum CallFailure {
     /// The request could not be built or sent, or the connection failed.
     #[error("the call failed")]
     Transport,
+}
+
+/// A service's answer whose status and headers are in and whose body is not read yet
+/// ([`Callee::send_answer`]). Dropping it closes the connection without reading the body.
+#[derive(Debug)]
+pub struct Pending {
+    response: reqwest::Response,
+}
+
+impl Pending {
+    /// Whether the status is 2xx: [`Callee::read_answer`] then reads up to the caller's limit,
+    /// otherwise up to [`MAX_REFUSAL_BYTES`].
+    #[must_use]
+    pub fn is_success(&self) -> bool {
+        self.response.status().is_success()
+    }
+
+    /// The length the answer declares for its body (`Content-Length`), if any. The body is never
+    /// longer: a longer one fails the read.
+    #[must_use]
+    pub fn declared_length(&self) -> Option<u64> {
+        self.response.content_length()
+    }
 }
 
 /// One service the tools call as the user.
@@ -349,24 +375,41 @@ impl Callee {
         Err(post_error(&request, status))
     }
 
-    /// Sends `body` as JSON to `path` for `caller` and returns how the service answered: the
-    /// success body, at most `max_success_bytes`, or the error status with its body when that is
-    /// at most [`MAX_REFUSAL_BYTES`]. Nothing of the answer is interpreted or logged; a failed
-    /// call and an error status are logged with the kind and the status class only, as for the
-    /// tools' calls. For callers that read the error answers themselves (dataset runs): they
-    /// read only what they expect, with [`refusal_of`] for a 422 refusal.
+    /// Sends `body` as JSON to `path` for `caller` and returns the answer once its status and
+    /// headers are in, with its body not read yet: the first of the two steps of a call whose
+    /// caller reads the answer itself (dataset runs), the second being [`Callee::read_answer`].
+    /// A failed call is logged with its kind only, as for the tools' calls.
     ///
     /// # Errors
     ///
-    /// [`CallFailure`]: no token, a timeout, a success body over the limit, a failed transport.
-    pub async fn post_answer<B: Serialize>(
+    /// [`CallFailure`]: no token, a timeout, a failed transport.
+    pub async fn send_answer<B: Serialize>(
         &self,
         caller: &Caller<'_>,
         path: &str,
         body: &B,
+    ) -> Result<Pending, CallFailure> {
+        let response = self.send_json(caller, path, body).await?;
+        Ok(Pending { response })
+    }
+
+    /// Reads the answer of [`Callee::send_answer`] for `caller`: the success body, at most
+    /// `max_success_bytes`, or the error status with its body when that is at most
+    /// [`MAX_REFUSAL_BYTES`]. Nothing of the answer is interpreted or logged; a failed read and
+    /// an error status are logged with the kind and the status class only, as for the tools'
+    /// calls. The caller reads only what it expects of an error answer, with [`refusal_of`] for
+    /// a 422 refusal.
+    ///
+    /// # Errors
+    ///
+    /// [`CallFailure`]: a timeout, a success body over the limit, a failed transport.
+    pub async fn read_answer(
+        &self,
+        caller: &Caller<'_>,
+        pending: Pending,
         max_success_bytes: usize,
     ) -> Result<Answer, CallFailure> {
-        let response = self.send_json(caller, path, body).await?;
+        let response = pending.response;
         let status = response.status().as_u16();
         if response.status().is_success() {
             return read_limited(response, max_success_bytes)
@@ -580,24 +623,29 @@ pub(crate) fn status_class(status: u16) -> &'static str {
 
 /// The body of `response`, at most `limit` bytes; otherwise the kind of failure, for the logs:
 /// `too_large`, `timeout` or `transport`.
+///
+/// What it holds while it reads is what [`crate::dashboards::memory::read_bytes`] counts: a body
+/// that declares its length is read into a buffer of that length (it is never longer: the
+/// client fails a longer one), and one declaring more than `limit` is refused unread; without a
+/// declared length the buffer grows by doubling, never past `limit`.
 pub(crate) async fn read_limited(
     mut response: reqwest::Response,
     limit: usize,
 ) -> Result<Vec<u8>, &'static str> {
-    let limit_u64 = u64::try_from(limit).unwrap_or(u64::MAX);
-    if response
-        .content_length()
-        .is_some_and(|length| length > limit_u64)
-    {
-        return Err("too_large");
-    }
-    let mut body = Vec::new();
+    let declared = match response.content_length().map(usize::try_from) {
+        Some(Ok(length)) if length <= limit => Some(length),
+        Some(_) => return Err("too_large"),
+        None => None,
+    };
+    let mut body = Vec::with_capacity(declared.unwrap_or(0));
     loop {
         match response.chunk().await {
             Ok(Some(chunk)) => {
-                if body.len().saturating_add(chunk.len()) > limit {
+                let needed = body.len().saturating_add(chunk.len());
+                if needed > limit {
                     return Err("too_large");
                 }
+                grow_within(&mut body, needed, limit);
                 body.extend_from_slice(&chunk);
             }
             Ok(None) => return Ok(body),
@@ -607,11 +655,41 @@ pub(crate) async fn read_limited(
     }
 }
 
+/// Makes room in `body` for `needed` bytes (at most `limit`): twice the capacity, or what is
+/// needed when that is more, but never past `limit`.
+fn grow_within(body: &mut Vec<u8>, needed: usize, limit: usize) {
+    if needed > body.capacity() {
+        let grown = body.capacity().saturating_mul(2).max(needed).min(limit);
+        body.reserve_exact(grown - body.len());
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use serde_json::json;
 
     use super::*;
+
+    #[test]
+    fn a_body_without_a_declared_length_grows_by_doubling_up_to_the_limit() {
+        let limit = 1000;
+        let mut body: Vec<u8> = Vec::new();
+        let mut capacities = Vec::new();
+        for _ in 0..10 {
+            let needed = body.len() + 90;
+            grow_within(&mut body, needed, limit);
+            body.extend_from_slice(&[0; 90]);
+            capacities.push(body.capacity());
+        }
+        assert_eq!(body.len(), 900);
+        assert!(
+            capacities
+                .windows(2)
+                .all(|pair| pair[1] == pair[0] || pair[1] == (2 * pair[0]).min(limit)),
+            "{capacities:?}"
+        );
+        assert_eq!(body.capacity(), limit, "never past the limit");
+    }
 
     #[test]
     fn statuses_are_logged_by_class() {

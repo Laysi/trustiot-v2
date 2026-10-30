@@ -28,7 +28,9 @@ use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use assistant::dashboards::checker::{CHECK_CALL_TIMEOUT, Checker};
+use assistant::dashboards::caps::{CONCURRENT_RUNS, RUNS_PER_MINUTE, RunCaps};
+use assistant::dashboards::checker::{CHECK_CALL_TIMEOUT, Checker, check_bytes};
+use assistant::dashboards::runner::DatasetRunner;
 use assistant::dashboards::store;
 use assistant::tools::dashboard::{
     DATASETS_TIMEOUT, DashboardTool, MAX_WRITES_PER_QUESTION, SAVE_TIMEOUT, WriteBounds,
@@ -41,7 +43,7 @@ use contract::api::dashboard::spec::MAX_PAGE_BYTES;
 use contract::{DashboardId, ServiceName, TenantId, TenantRole};
 use dashboard_world::{
     Content, Peers, Person, Question, SQL_PATH, STATISTICS_PATH, World, dashboard_tool,
-    dashboard_tool_with, spec, world,
+    dashboard_tool_on, dashboard_tool_with, spec, telemetry_client, world,
 };
 use serde_json::{Value, json};
 use support::Capture;
@@ -757,69 +759,217 @@ async fn the_checks_of_all_tenants_share_the_places() {
     assert_eq!(json_of(&first)["saved"], true, "{}", text(&first, 0));
 }
 
-/// The writes of all tenants share the replica's places for writes in progress: with one, a
-/// write of another tenant waits up to the bound this test sets and is then `check_busy`
-/// without running a dataset or reaching the check, and is not counted against its question.
+/// A write takes its memory from the replica's budget for results, within its tenant's share,
+/// and holds nothing once it ended:
+/// - with the share taken, a write that reuses its question's results is `check_busy` at once:
+///   it runs nothing, reaches no check and is not counted against its question;
+/// - with room for its results and their values but not for its check, it is `check_busy` after
+///   its datasets ran, still without reaching the check, and is counted;
+/// - a new question's datasets refused for memory once telemetry-query answered are
+///   `runs_limited` problems;
+/// - once the memory is free, the question writes until its limit, which the counted write
+///   took one of.
 #[tokio::test]
-async fn the_writes_of_all_tenants_share_the_places_in_flight() {
+async fn a_write_takes_its_memory_within_its_tenants_share() {
     let Some(setup) = setup().await else {
         return;
     };
-    let wait = Duration::from_secs(1);
-    let tool = dashboard_tool_with(
+    // No waits: a write or run without memory is refused at once.
+    let caps = RunCaps::new(
+        RUNS_PER_MINUTE,
+        CONCURRENT_RUNS,
+        Duration::ZERO,
+        Arc::new(std::time::Instant::now),
+    );
+    let runner = Arc::new(DatasetRunner::new(
+        Some(telemetry_client(&setup.peers)),
+        caps,
+    ));
+    let tool = dashboard_tool_on(
         &setup.world,
-        &setup.peers.url,
+        Arc::clone(&runner),
         Checker::new(&setup.check.url, CHECK_CALL_TIMEOUT).expect("a checker"),
         WriteBounds {
-            write_wait: wait,
-            writes_in_flight: 1,
+            write_wait: Duration::ZERO,
+            memory_wait: Duration::ZERO,
             ..WriteBounds::default()
         },
     );
-    let held = setup.check.hold("Held");
-    let first = tokio::spawn({
-        let tool = Arc::clone(&tool);
-        let question = setup.own_question();
-        async move { call(&tool, &question, new_dashboard("Held")).await }
-    });
-    setup.check.wait_requests(1).await;
-    let runs = setup.peers.calls().len();
-    let other = setup.world.person(TenantId::generate(), TenantRole::Editor);
-    let conversation = setup.world.conversation(&other).await;
-    let question = setup.question(&other, conversation);
-    let started = Instant::now();
-    let output = call(&tool, &question, new_dashboard("Other"))
-        .await
-        .expect("the write");
-    let result = json_of(&output);
-    assert_eq!(result["saved"], false, "{result}");
-    assert_eq!(result["problems"][0]["kind"], "check_busy", "{result}");
-    assert!(started.elapsed() >= wait, "it waited for a place");
-    assert_eq!(
-        setup.check.requests().len(),
-        1,
-        "it never reached the check"
-    );
-    assert_eq!(setup.peers.calls().len(), runs, "it ran no dataset");
-    held.release();
-    let first = first.await.expect("the first write").expect("the write");
-    assert_eq!(json_of(&first)["saved"], true, "{}", text(&first, 0));
+    let memory = runner.memory();
+    let tenant = setup.owner.tenant();
+    let question = setup.own_question();
+    let busy = |output: &ToolOutput, kind: &str| {
+        let result = json_of(output);
+        assert_eq!(result["saved"], false, "{result}");
+        assert!(
+            result["problems"]
+                .as_array()
+                .is_some_and(|problems| problems.iter().all(|problem| problem["kind"] == kind)),
+            "{result}"
+        );
+    };
 
-    // The busy write was not counted: the question still has all its writes.
-    let output = call(&tool, &question, new_dashboard("Other"))
+    let output = call(&tool, &question, new_dashboard("Memory"))
         .await
         .expect("the write");
     assert_eq!(json_of(&output)["saved"], true, "{}", text(&output, 0));
     let id: DashboardId =
         serde_json::from_value(json_of(&output)["dashboard_id"].clone()).expect("an ID");
-    let mut heading = "Other".to_owned();
-    for base in 1..MAX_WRITES_PER_QUESTION {
-        let next = format!("Other {}", base + 1);
+    assert_eq!(memory.used(), 0, "a write holds nothing once it ended");
+    let (runs, checks) = (setup.peers.calls().len(), setup.check.requests().len());
+
+    // The share taken: busy before anything ran.
+    let taken = memory
+        .reserve(tenant, memory.per_tenant(), Duration::ZERO)
+        .await
+        .expect("an idle replica");
+    let output = call(&tool, &question, edit(id, 1, "Memory", "Memory 2"))
+        .await
+        .expect("the write");
+    busy(&output, "check_busy");
+    assert_eq!(setup.peers.calls().len(), runs, "it ran no dataset");
+    assert_eq!(setup.check.requests().len(), checks, "it reached no check");
+    drop(taken);
+
+    // Room for the results and their values, not for the check: busy after the datasets.
+    let room = check_bytes(0) / 2;
+    let taken = memory
+        .reserve(tenant, memory.per_tenant() - room, Duration::ZERO)
+        .await
+        .expect("an idle replica");
+    let output = call(&tool, &question, edit(id, 1, "Memory", "Memory 2"))
+        .await
+        .expect("the write");
+    busy(&output, "check_busy");
+    assert_eq!(
+        setup.peers.calls().len(),
+        runs,
+        "its datasets' results were reused"
+    );
+    assert_eq!(setup.check.requests().len(), checks, "it reached no check");
+    assert_eq!(
+        memory.held_by(tenant),
+        memory.per_tenant() - room,
+        "the busy write gave back what it held"
+    );
+
+    // A new question's runs, refused for memory once telemetry-query answered.
+    let rest = memory
+        .reserve(tenant, room, Duration::ZERO)
+        .await
+        .expect("the rest of the share");
+    let output = call(&tool, &setup.own_question(), new_dashboard("Fresh"))
+        .await
+        .expect("the write");
+    busy(&output, "runs_limited");
+    assert!(
+        setup.peers.calls().len() > runs,
+        "its runs called telemetry-query"
+    );
+    drop((taken, rest));
+
+    // The counted write took one of the question's writes: 4 more, then the limit.
+    let mut heading = "Memory".to_owned();
+    for base in 1..MAX_WRITES_PER_QUESTION - 1 {
+        let next = format!("Memory {}", base + 1);
         let output = call(&tool, &question, edit(id, base, &heading, &next))
             .await
             .expect("the write");
         assert_eq!(json_of(&output)["saved"], true, "{}", text(&output, 0));
         heading = next;
+    }
+    let refused_write = call(
+        &tool,
+        &question,
+        edit(id, MAX_WRITES_PER_QUESTION - 1, &heading, "One more"),
+    )
+    .await;
+    assert!(
+        refused(refused_write).contains("6 times"),
+        "the question used its writes"
+    );
+    assert_eq!(memory.used(), 0, "every write gave back its memory");
+}
+
+/// A write whose datasets wait for telemetry-query holds only its tenant's slots, not the
+/// replica's memory: while two tenants' writes wait for slow answers, a third tenant's write
+/// runs, is checked and saves without waiting.
+#[tokio::test]
+async fn slow_writes_of_other_tenants_do_not_keep_a_write_busy() {
+    let Some(setup) = setup().await else {
+        return;
+    };
+    let tool = dashboard_tool_with(
+        &setup.world,
+        &setup.peers.url,
+        Checker::new(&setup.check.url, CHECK_CALL_TIMEOUT).expect("a checker"),
+        // No wait: a write that could not go on at once would be `check_busy`.
+        WriteBounds {
+            write_wait: Duration::ZERO,
+            ..WriteBounds::default()
+        },
+    );
+    let gate = Arc::new(tokio::sync::Semaphore::new(0));
+    let held: Arc<Mutex<Vec<TenantId>>> = Arc::new(Mutex::new(Vec::new()));
+    setup.peers.script({
+        let (gate, held) = (Arc::clone(&gate), Arc::clone(&held));
+        Arc::new(move |call: dashboard_world::TelemetryCall| {
+            let gate = Arc::clone(&gate);
+            let hold = call.tenant().is_some_and(|tenant| {
+                held.lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .contains(&tenant)
+            });
+            Box::pin(async move {
+                if hold {
+                    gate.acquire().await.expect("the gate stays open").forget();
+                }
+                None
+            })
+        })
+    });
+    let mut slow = Vec::new();
+    for title in ["Slow one", "Slow two"] {
+        let person = setup.world.person(TenantId::generate(), TenantRole::Editor);
+        let conversation = setup.world.conversation(&person).await;
+        held.lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push(person.tenant());
+        let question = setup.question(&person, conversation);
+        let tool = Arc::clone(&tool);
+        slow.push((
+            person.tenant(),
+            tokio::spawn(async move { call(&tool, &question, new_dashboard(title)).await }),
+        ));
+    }
+    let deadline = Instant::now() + dashboard_world::WAIT;
+    while !slow.iter().all(|(tenant, _)| {
+        setup
+            .peers
+            .calls()
+            .iter()
+            .any(|call| call.tenant() == Some(*tenant))
+    }) {
+        assert!(
+            Instant::now() < deadline,
+            "the slow writes did not reach telemetry-query"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+
+    let output = call(&tool, &setup.own_question(), new_dashboard("Third"))
+        .await
+        .expect("the write");
+    assert_eq!(json_of(&output)["saved"], true, "{}", text(&output, 0));
+
+    gate.add_permits(64);
+    for (_, write) in slow {
+        let output = tokio::time::timeout(dashboard_world::WAIT, write)
+            .await
+            .expect("the slow writes end once released")
+            .expect("the write")
+            .expect("the write");
+        assert_eq!(json_of(&output)["saved"], true, "{}", text(&output, 0));
     }
 }
 

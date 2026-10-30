@@ -3842,7 +3842,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description The tenant ran 60 datasets in the last minute or has 2 running in this replica (`dashboard.runs_limited`, with `Retry-After`), or its query quota is used up (`dashboard.query_quota_exhausted`) (`rate_limited`). */
+            /** @description The tenant ran 60 datasets in the last minute, has 2 running in this replica, or this replica's memory for results had no room for the answer within the wait (`dashboard.runs_limited`, with `Retry-After`), or its query quota is used up (`dashboard.query_quota_exhausted`) (`rate_limited`). */
             429: {
                 headers: {
                     [name: string]: unknown;

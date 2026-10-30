@@ -21,6 +21,9 @@ ai-clients = { path = "../../crates/ai-clients" }
 axum = { workspace = true, features = ["http1", "json", "query", "tokio"] }
 # Tool result images are checked to be base64 before they go to the model.
 base64.workspace = true
+# A dataset run's result as JSON, shared without a copy by the API's answer body (which holds the
+# result's reserved memory until the body is written or dropped) and the tool's result cache.
+bytes.workspace = true
 # The telemetry tools check the model's times and the queryable period before they call.
 chrono = { workspace = true, features = ["alloc", "now"] }
 # Tenant and user IDs, the internal identity token a tool calls with, service names.
@@ -63,6 +66,9 @@ telemetry-query = { path = "../telemetry-query" }
 # identity a question's delegation starts from), and the cross-tenant suite.
 testkit = { path = "../../crates/testkit" }
 tokio = { workspace = true, features = ["macros", "net", "rt-multi-thread", "sync", "time"] }
+# Calls the public API's routes in the test process, so a test decides when it reads an
+# answer's body (tests/dashboards_api.rs).
+tower = { workspace = true, features = ["util"] }
 # Captures the log events the tests check.
 tracing-subscriber = { workspace = true, features = ["registry", "std"] }
 # Random test passwords and container names (tests/dashboard_acceptance.rs and the ClickHouse

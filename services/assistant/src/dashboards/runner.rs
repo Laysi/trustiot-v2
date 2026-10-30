@@ -10,10 +10,16 @@
 //!   `POST /api/telemetry/v1/statistics` or `/usage` and is flattened ([`super::flatten`]).
 //! - Caps per tenant and replica ([`super::caps`]): every run, the tool's included, is counted
 //!   before it calls. No result is kept or reused: every run reads again.
-//! - Memory: a run reads at most [`MAX_READ_BYTES`] of telemetry-query's answer, and a SQL
-//!   answer's rows only within what a result may hold ([`MAX_COLUMNS`] columns, `max_rows`
-//!   rows, one scalar per cell), so what a run holds follows from the result's bounds rather
-//!   than from how small the answer's cells are. The caps' places bound how many runs hold it.
+//! - Memory ([`super::memory`]): while telemetry-query runs the query, a run holds only its
+//!   tenant's slot. Once the answer's status and headers are in, it reserves what reading and
+//!   parsing that answer may hold ([`answer_bytes`], from the declared length when there is
+//!   one), waiting up to the caps' wait, and is [`RunError::Limited`] after it, without reading
+//!   the body. A run reads at most [`MAX_READ_BYTES`] of the answer, and the rows only within
+//!   what a result may hold ([`MAX_COLUMNS`] columns of one scalar each for SQL, `max_rows`
+//!   rows for every source), so what it holds follows from the result's bounds rather than from
+//!   how small the answer's cells are. Once the result is checked, the run keeps only its JSON
+//!   and the reservation of its length: a [`HeldResult`], whose holder (the API's answer body,
+//!   a write of the `dashboard` tool) releases both when it drops it.
 //! - Nothing telemetry-query writes reaches the caller or the logs except the closed values of
 //!   [`RunError`]: the keys of `public::FORWARDED_TELEMETRY_KEYS` with their typed details.
 //!   Calls are logged by [`Callee`] with the kind and status class only.
@@ -23,6 +29,7 @@ use std::fmt;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use bytes::Bytes;
 use chrono::{DateTime, FixedOffset, Utc};
 use contract::api::dashboard::public::{
     DATASET_FAILED, DATASET_REFUSED, DATASET_RESULT_TOO_LARGE, DATASET_TIMEOUT,
@@ -42,9 +49,12 @@ use serde_json::value::RawValue;
 use serde_json::{Number, Value};
 
 use super::caps::RunCaps;
-use super::flatten::{self, Table};
+use super::flatten::{self, Mismatch, Table};
 use super::limits::json_len;
-use crate::callee::{Answer, CallFailure, Callee, Caller, refusal_of};
+use super::memory::{
+    ALLOCATION_BYTES, Reservation, ResultMemory, VALUE_BYTES, VEC_BYTES, body_bytes, read_bytes,
+};
+use crate::callee::{Answer, CallFailure, Callee, Caller, MAX_REFUSAL_BYTES, Pending, refusal_of};
 use crate::tools::DelegationError;
 use crate::tools::semantic::{STATISTICS_PATH, USAGE_PATH};
 
@@ -52,6 +62,27 @@ use crate::tools::semantic::{STATISTICS_PATH, USAGE_PATH};
 /// semantic answer carries more than its table shows and a SQL answer its SQL. The result
 /// itself is held to [`MAX_RESULT_BYTES`].
 pub const MAX_READ_BYTES: usize = 2 * MAX_RESULT_BYTES;
+
+/// What a run holds besides the answer, the rows and the result's JSON: the columns, the
+/// result's meta and the parser's state.
+const RUN_OVERHEAD_BYTES: usize = 64 << 10;
+
+/// What one row of a statistics or usage table may hold besides its text values: the row's
+/// vector of at most 16 cells, the outer vector's share (grown by doubling) and at most 7 short
+/// strings of up to 128 bytes each (the device ID, the data point key, a status and times), each
+/// with its allocation.
+const SEMANTIC_ROW_BYTES: usize = 2 << 10;
+
+/// What parsing a statistics or usage answer into its typed form may hold, per byte of the
+/// answer: the smallest JSON of a series or a row takes fewer bytes than the struct it becomes,
+/// and the vectors holding them grow by doubling (`flatten`'s
+/// `typed_answers_take_at_most_the_parse_factor` checks the factor against the types).
+pub const SEMANTIC_PARSE_FACTOR: usize = flatten::PARSE_FACTOR;
+
+/// What parsing an error answer of at most [`MAX_REFUSAL_BYTES`] may hold, per byte: it is parsed
+/// into JSON values (at most one per two bytes, each in a vector grown by doubling and with an
+/// allocation), and its details are copied once.
+const REFUSAL_PARSE_FACTOR: usize = 2 * (VALUE_BYTES + ALLOCATION_BYTES);
 
 /// telemetry-query's key for a range wholly before the tenant's queryable period.
 const OUTSIDE_QUERYABLE_PERIOD: &str = "telemetry.outside_queryable_period";
@@ -62,20 +93,50 @@ const TOO_MANY_POINTS: &str = "telemetry.too_many_points";
 /// telemetry-query's key for a tenant whose ClickHouse account is not created yet.
 const ACCOUNT_NOT_READY: &str = "telemetry.account_not_ready";
 
-/// Runs datasets at telemetry-query within the caps. One per process, shared by the API and the
-/// `dashboard` tool.
+/// Runs datasets at telemetry-query within the caps and the replica's memory for results. One
+/// per process, shared by the API and the `dashboard` tool.
 #[derive(Debug)]
 pub struct DatasetRunner {
     telemetry: Option<Callee>,
     caps: Arc<RunCaps>,
+    memory: ResultMemory,
+}
+
+/// A run's result as its JSON, holding the memory reserved for it until it is dropped. The JSON
+/// is the [`DatasetResult`] the API answers with, exactly as `axum::Json` writes it.
+#[derive(Debug)]
+pub struct HeldResult {
+    json: Bytes,
+    memory: Reservation,
+}
+
+impl HeldResult {
+    /// The result's JSON.
+    #[must_use]
+    pub fn json(&self) -> &Bytes {
+        &self.json
+    }
+
+    /// The JSON and its reservation, for a holder that keeps them apart.
+    #[must_use]
+    pub fn into_parts(self) -> (Bytes, Reservation) {
+        (self.json, self.memory)
+    }
+}
+
+impl AsRef<[u8]> for HeldResult {
+    fn as_ref(&self) -> &[u8] {
+        &self.json
+    }
 }
 
 /// Why a run gave no result: a closed set, each with its M1 answer
 /// ([`RunError::to_error_body`]).
 #[derive(Clone, Debug, PartialEq, thiserror::Error)]
 pub enum RunError {
-    /// The tenant's caps: 60 runs a minute or 2 at a time, per replica. 429
-    /// `dashboard.runs_limited` with `Retry-After`.
+    /// The tenant's caps (60 runs a minute or 2 at a time, per replica), or no memory for the
+    /// answer within the caps' wait ([`super::memory`]). 429 `dashboard.runs_limited` with
+    /// `Retry-After`.
     #[error("the tenant's dataset runs are limited for now")]
     Limited { retry_after: Duration },
     /// telemetry-query's quota for the tenant is used up (`rate_limited`). 429
@@ -211,13 +272,28 @@ impl TelemetryError {
 
 impl DatasetRunner {
     /// A runner calling telemetry-query through `telemetry` (`None` when the deployment gives
-    /// no `telemetry_query.url`: every run then fails), within `caps`.
+    /// no `telemetry_query.url`: every run then fails), within `caps` and the service's
+    /// [`ResultMemory`].
     #[must_use]
     pub fn new(telemetry: Option<Callee>, caps: RunCaps) -> Self {
         Self {
             telemetry,
             caps: Arc::new(caps),
+            memory: ResultMemory::default(),
         }
+    }
+
+    /// This runner with `memory` instead of the service's: tests use small ones.
+    #[must_use]
+    pub fn with_memory(mut self, memory: ResultMemory) -> Self {
+        self.memory = memory;
+        self
+    }
+
+    /// The replica's memory for results, which the `dashboard` tool's writes share.
+    #[must_use]
+    pub fn memory(&self) -> &ResultMemory {
+        &self.memory
     }
 
     /// Whether runs can reach telemetry-query (`telemetry_query.url` is set).
@@ -227,8 +303,12 @@ impl DatasetRunner {
     }
 
     /// Runs `dataset` as `caller`: within the caps of `caller.tenant_id`, then at
-    /// telemetry-query with a fresh token from `caller.delegation`. Holds no database
-    /// connection; read the dataset from the store and end that transaction first.
+    /// telemetry-query with a fresh token from `caller.delegation`, reserving the replica's
+    /// memory once telemetry-query has answered. Holds no database connection; read the dataset
+    /// from the store and end that transaction first.
+    ///
+    /// A run refused by the caps is not counted in the minute and calls nothing; a run refused
+    /// for memory called telemetry-query (and used its quota), so it stays counted.
     ///
     /// # Errors
     ///
@@ -237,7 +317,7 @@ impl DatasetRunner {
         &self,
         caller: &Caller<'_>,
         dataset: &Dataset,
-    ) -> Result<DatasetResult, RunError> {
+    ) -> Result<HeldResult, RunError> {
         let Some(telemetry) = &self.telemetry else {
             return Err(RunError::Failed);
         };
@@ -250,23 +330,38 @@ impl DatasetRunner {
                 })?;
         let started = Instant::now();
         let max_rows = dataset.max_rows.min(MAX_DATASET_ROWS);
-        let (columns, rows, queried_at, source) = match &dataset.source {
+        let kind = dataset.source.kind();
+        let pending = match &dataset.source {
             DatasetSource::Sql { sql } => {
                 let body = RunSql {
                     sql: sql.clone(),
                     max_rows: Some(max_rows),
                 };
-                let answer = telemetry
-                    .post_answer(caller, RunSql::ROUTE, &body, MAX_READ_BYTES)
+                telemetry.send_answer(caller, RunSql::ROUTE, &body).await
+            }
+            DatasetSource::TelemetryStatistics { request } => {
+                telemetry
+                    .send_answer(caller, STATISTICS_PATH, request)
                     .await
-                    .map_err(call_failure)?;
-                let body = answered(SourceKind::Sql, max_rows, answer)?;
+            }
+            DatasetSource::TelemetryUsage { request } => {
+                telemetry.send_answer(caller, USAGE_PATH, request).await
+            }
+        }
+        .map_err(call_failure)?;
+        let mut memory = self.reserve(caller, kind, &pending, max_rows).await?;
+        let answer = telemetry
+            .read_answer(caller, pending, MAX_READ_BYTES)
+            .await
+            .map_err(call_failure)?;
+        let body = answered(kind, max_rows, answer)?;
+        let (columns, rows, queried_at, source) = match &dataset.source {
+            DatasetSource::Sql { .. } => {
                 let answer = sql_answer(&body, max_rows).inspect_err(|error| {
                     if *error == RunError::Failed {
                         telemetry.log_failure(caller, "invalid_response", Some(200));
                     }
                 })?;
-                drop(body);
                 (
                     answer.columns,
                     answer.rows,
@@ -276,41 +371,18 @@ impl DatasetRunner {
                     },
                 )
             }
-            DatasetSource::TelemetryStatistics { request } => {
-                let table = semantic(
-                    telemetry,
-                    caller,
-                    SourceKind::TelemetryStatistics,
-                    request,
-                    max_rows,
-                )
-                .await?;
+            DatasetSource::TelemetryStatistics { request }
+            | DatasetSource::TelemetryUsage { request } => {
+                let table = semantic(telemetry, caller, kind, request, &body, max_rows)?;
                 let queried_at = table.range.queried_at;
-                (
-                    table.columns,
-                    table.rows,
-                    queried_at,
-                    SourceMeta::TelemetryStatistics { range: table.range },
-                )
-            }
-            DatasetSource::TelemetryUsage { request } => {
-                let table = semantic(
-                    telemetry,
-                    caller,
-                    SourceKind::TelemetryUsage,
-                    request,
-                    max_rows,
-                )
-                .await?;
-                let queried_at = table.range.queried_at;
-                (
-                    table.columns,
-                    table.rows,
-                    queried_at,
-                    SourceMeta::TelemetryUsage { range: table.range },
-                )
+                let source = match kind {
+                    SourceKind::TelemetryUsage => SourceMeta::TelemetryUsage { range: table.range },
+                    _ => SourceMeta::TelemetryStatistics { range: table.range },
+                };
+                (table.columns, table.rows, queried_at, source)
             }
         };
+        drop(body);
         let result = DatasetResult {
             dataset: dataset.name.clone(),
             columns,
@@ -322,46 +394,160 @@ impl DatasetRunner {
                 source,
             },
         };
-        checked(result, max_rows).inspect_err(|error| {
+        let length = checked(&result, max_rows).inspect_err(|error| {
             if *error == RunError::Failed {
                 telemetry.log_failure(caller, "invalid_response", Some(200));
             }
+        })?;
+        // Measured first, so the JSON is allocated once at its length.
+        let mut json = Vec::with_capacity(length);
+        serde_json::to_writer(&mut json, &result).map_err(|_| RunError::Failed)?;
+        drop(result);
+        memory.shrink_to(json.len());
+        Ok(HeldResult {
+            json: Bytes::from(json),
+            memory,
         })
+    }
+
+    /// Reserves what reading and parsing `pending` may hold ([`answer_bytes`]) for the
+    /// caller's tenant, waiting up to the caps' wait.
+    async fn reserve(
+        &self,
+        caller: &Caller<'_>,
+        kind: SourceKind,
+        pending: &Pending,
+        max_rows: u32,
+    ) -> Result<Reservation, RunError> {
+        let bytes = answer_bytes(
+            kind,
+            pending.is_success(),
+            pending.declared_length(),
+            max_rows,
+        );
+        match self
+            .memory
+            .reserve(caller.tenant_id, bytes, self.caps.wait())
+            .await
+        {
+            Some(reservation) => Ok(reservation),
+            None => {
+                tracing::info!(
+                    tenant_id = %caller.tenant_id,
+                    bytes,
+                    "a dataset run waited too long for memory for telemetry-query's answer"
+                );
+                Err(RunError::Limited {
+                    retry_after: Duration::from_secs(1),
+                })
+            }
+        }
     }
 }
 
-/// Sends a semantic dataset's stored request unchanged and flattens the answer.
-async fn semantic(
+/// The memory a run reserves once telemetry-query has answered with the status and headers of
+/// `success` and `declared` (the body's declared length, if any), before it reads the body:
+/// what reading it may hold ([`read_bytes`]), what parsing it into the run's table may hold,
+/// and the result's JSON. Upper estimates from the limits, not measurements.
+///
+/// - An error answer is read up to [`MAX_REFUSAL_BYTES`] and parsed as JSON.
+/// - A SQL answer's rows: at most `max_rows` (and one per 3 bytes of the answer), each a vector
+///   of [`MAX_COLUMNS`] values allocated at the answer's width; each string cell an allocation;
+///   the text of the cells and the parser's scratch, each at most the answer's size.
+/// - A statistics or usage answer: its typed form ([`SEMANTIC_PARSE_FACTOR`] per byte), the
+///   parser's scratch, and the table's `max_rows` rows ([`SEMANTIC_ROW_BYTES`] each) and text
+///   values (at most the answer's size).
+/// - Then the result's JSON, at most [`MAX_RESULT_BYTES`].
+#[must_use]
+pub fn answer_bytes(
+    kind: SourceKind,
+    success: bool,
+    declared: Option<u64>,
+    max_rows: u32,
+) -> usize {
+    if !success {
+        return read_bytes(declared, MAX_REFUSAL_BYTES).saturating_add(
+            REFUSAL_PARSE_FACTOR.saturating_mul(body_bytes(declared, MAX_REFUSAL_BYTES)),
+        );
+    }
+    let read = read_bytes(declared, MAX_READ_BYTES);
+    let body = body_bytes(declared, MAX_READ_BYTES);
+    if body == 0 && declared.is_some() {
+        // An answer that declares more than the limit is refused unread; an empty one is
+        // refused too, as no answer.
+        return read;
+    }
+    let max_rows = usize::try_from(max_rows.min(MAX_DATASET_ROWS)).unwrap_or(usize::MAX);
+    let parsed = match kind {
+        SourceKind::Sql => {
+            let rows = max_rows.min(body / 3 + 1);
+            let row = 2 * VEC_BYTES + ALLOCATION_BYTES + MAX_COLUMNS * VALUE_BYTES;
+            let strings = (rows * MAX_COLUMNS).min(body / 4 + 1);
+            rows * row + strings * ALLOCATION_BYTES + 2 * body
+        }
+        SourceKind::TelemetryStatistics | SourceKind::TelemetryUsage => {
+            SEMANTIC_PARSE_FACTOR * body + body + max_rows * SEMANTIC_ROW_BYTES + body
+        }
+    };
+    read.saturating_add(parsed)
+        .saturating_add(MAX_RESULT_BYTES)
+        .saturating_add(RUN_OVERHEAD_BYTES)
+}
+
+/// The most [`answer_bytes`] gives for any answer to a run of at most `MAX_DATASET_ROWS` rows:
+/// the largest a run reserves.
+#[must_use]
+pub fn largest_answer_bytes() -> usize {
+    [
+        SourceKind::Sql,
+        SourceKind::TelemetryStatistics,
+        SourceKind::TelemetryUsage,
+    ]
+    .into_iter()
+    .flat_map(|kind| {
+        [
+            None,
+            Some(u64::try_from(MAX_READ_BYTES).unwrap_or(u64::MAX)),
+        ]
+        .into_iter()
+        .flat_map(move |declared| {
+            [true, false]
+                .into_iter()
+                .map(move |success| answer_bytes(kind, success, declared, MAX_DATASET_ROWS))
+        })
+    })
+    .max()
+    .unwrap_or(usize::MAX)
+}
+
+/// Flattens a semantic dataset's answer `body` to its stored `request`.
+fn semantic(
     telemetry: &Callee,
     caller: &Caller<'_>,
     kind: SourceKind,
     request: &SemanticRequest,
+    body: &[u8],
     max_rows: u32,
 ) -> Result<Table, RunError> {
-    let path = match kind {
-        SourceKind::TelemetryUsage => USAGE_PATH,
-        _ => STATISTICS_PATH,
-    };
-    let answer = telemetry
-        .post_answer(caller, path, request, MAX_READ_BYTES)
-        .await
-        .map_err(call_failure)?;
-    let body = answered(kind, max_rows, answer)?;
+    let max = usize::try_from(max_rows).unwrap_or(usize::MAX);
     let table = match kind {
-        SourceKind::TelemetryUsage => flatten::usage(request, &body),
-        _ => flatten::statistics(request, &body),
+        SourceKind::TelemetryUsage => flatten::usage(request, body, max),
+        _ => flatten::statistics(request, body, max),
     };
-    table.map_err(|_| {
-        telemetry.log_failure(caller, "invalid_response", Some(200));
-        RunError::Failed
+    table.map_err(|mismatch| match mismatch {
+        Mismatch::TooManyRows => RunError::TooManyRows { max: max_rows },
+        Mismatch::Unparseable | Mismatch::Series | Mismatch::Interval => {
+            telemetry.log_failure(caller, "invalid_response", Some(200));
+            RunError::Failed
+        }
     })
 }
 
-/// The result when its shape is a dashboard's and it fits: more rows than `max_rows` is
-/// [`RunError::TooManyRows`]; a column name or cell a dashboard cannot use is
+/// The length of the result's JSON when its shape is a dashboard's and it fits: more rows than
+/// `max_rows` is [`RunError::TooManyRows`]; a column name or cell a dashboard cannot use is
 /// [`RunError::Refused`] (the query needs `AS` or a conversion); a table that does not add up
 /// is [`RunError::Failed`]; more than [`MAX_RESULT_BYTES`] is [`RunError::TooLarge`].
-fn checked(result: DatasetResult, max_rows: u32) -> Result<DatasetResult, RunError> {
+fn checked(result: &DatasetResult, max_rows: u32) -> Result<usize, RunError> {
     match result.validate(max_rows) {
         Ok(()) => {}
         Err(ResultError::TooManyRows) => return Err(RunError::TooManyRows { max: max_rows }),
@@ -375,10 +561,11 @@ fn checked(result: DatasetResult, max_rows: u32) -> Result<DatasetResult, RunErr
             | ResultError::FixedColumns,
         ) => return Err(RunError::Failed),
     }
-    if json_len(&result) > MAX_RESULT_BYTES {
+    let length = json_len(result);
+    if length > MAX_RESULT_BYTES {
         return Err(RunError::TooLarge);
     }
-    Ok(result)
+    Ok(length)
 }
 
 /// A SQL answer as a run reads it: the fields of telemetry-query's

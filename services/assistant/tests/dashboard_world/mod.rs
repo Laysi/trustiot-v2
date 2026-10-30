@@ -311,12 +311,6 @@ pub fn dashboard_tool_with(
     checker: Checker,
     bounds: WriteBounds,
 ) -> Arc<DashboardTool> {
-    let (_, background) = TenantDb::connect_lazy_with_background(
-        world.product.postgres.options("assistant_app", DATABASE),
-        PgPoolOptions::new().max_connections(4),
-        ServiceIdentity::new(ServiceName::Assistant),
-    )
-    .expect("the service role's pool verifies the server");
     let telemetry = Callee::new(
         ServiceName::TelemetryQuery,
         telemetry_url,
@@ -324,6 +318,22 @@ pub fn dashboard_tool_with(
     )
     .expect("a client for telemetry-query");
     let runner = Arc::new(DatasetRunner::new(Some(telemetry), RunCaps::default()));
+    dashboard_tool_on(world, runner, checker, bounds)
+}
+
+/// [`dashboard_tool_with`] running datasets with `runner`, whose memory the test looks at.
+pub fn dashboard_tool_on(
+    world: &World,
+    runner: Arc<DatasetRunner>,
+    checker: Checker,
+    bounds: WriteBounds,
+) -> Arc<DashboardTool> {
+    let (_, background) = TenantDb::connect_lazy_with_background(
+        world.product.postgres.options("assistant_app", DATABASE),
+        PgPoolOptions::new().max_connections(4),
+        ServiceIdentity::new(ServiceName::Assistant),
+    )
+    .expect("the service role's pool verifies the server");
     DashboardTool::with_bounds(background, runner, checker, bounds)
 }
 
@@ -535,28 +545,12 @@ impl World {
     /// [`World::api`], without the token exchange when `exchange` is false (a deployment
     /// without `identity.exchange_url`).
     pub async fn api_with(&self, peers: &Peers, caps: RunCaps, exchange: bool) -> Api {
-        let telemetry = Callee::new(
-            ServiceName::TelemetryQuery,
-            &peers.url,
-            Duration::from_secs(60),
-        )
-        .expect("a client for telemetry-query's stand-in");
-        let runner = Arc::new(DatasetRunner::new(Some(telemetry), caps));
-        let identity = InternalClient::<service::Identity>::new(&peers.url, IDENTITY_TIMEOUT)
-            .expect("a client for the exchange's stand-in");
-        let state = ApiState {
-            verifier: self.issuer.verifier(ServiceName::Assistant),
-            db: self.db.clone(),
-            on_behalf: exchange.then(|| OnBehalf::new(identity)),
-            runner: Arc::clone(&runner),
-            versions: Arc::new(VersionBudget::default()),
-        };
+        let runner = Arc::new(DatasetRunner::new(Some(telemetry_client(peers)), caps));
+        let routes = self.routes(peers, Arc::clone(&runner), exchange);
         let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
         let address = listener.local_addr().expect("local address");
         let task = tokio::spawn(async move {
-            axum::serve(listener, api::routes(state))
-                .await
-                .expect("serve the API");
+            axum::serve(listener, routes).await.expect("serve the API");
         });
         Api {
             url: format!("http://{address}"),
@@ -564,6 +558,30 @@ impl World {
             task,
         }
     }
+
+    /// The public API's routes with `runner`, calling the stand-in `peers`, for a test that calls
+    /// them in this process and decides when it reads an answer's body.
+    pub fn routes(&self, peers: &Peers, runner: Arc<DatasetRunner>, exchange: bool) -> Router {
+        let identity = InternalClient::<service::Identity>::new(&peers.url, IDENTITY_TIMEOUT)
+            .expect("a client for the exchange's stand-in");
+        api::routes(ApiState {
+            verifier: self.issuer.verifier(ServiceName::Assistant),
+            db: self.db.clone(),
+            on_behalf: exchange.then(|| OnBehalf::new(identity)),
+            runner,
+            versions: Arc::new(VersionBudget::default()),
+        })
+    }
+}
+
+/// A client for telemetry-query's stand-in among `peers`.
+pub fn telemetry_client(peers: &Peers) -> Callee {
+    Callee::new(
+        ServiceName::TelemetryQuery,
+        &peers.url,
+        Duration::from_secs(60),
+    )
+    .expect("a client for telemetry-query's stand-in")
 }
 
 /// The public API served in the test process.

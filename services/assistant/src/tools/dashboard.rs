@@ -18,12 +18,30 @@
 //!   a pass the version is written ([`store`]). Anything else is up to [`MAX_PROBLEMS`]
 //!   structured problems of closed kinds, each with fixed English, and nothing is written.
 //!
-//! Per tenant and replica, one write at a time runs its datasets, its check and its save, and
-//! of all tenants' writes at most [`MAX_WRITES_IN_FLIGHT`] at a time: a write waits for its
-//! tenant's slot and then for a place, both within [`WRITE_WAIT`], and is then `check_busy`,
-//! not counted against the question. So one tenant has one check in flight at a time and holds
-//! the results of one write, and the replica holds the results of at most
-//! [`MAX_WRITES_IN_FLIGHT`] writes; the checker client adds a limit on the checks of all tenants
+//! Per tenant and replica, one write at a time runs its datasets, its check and its save: a
+//! write waits up to [`WRITE_WAIT`] for its tenant's write in progress, and is then
+//! `check_busy`, not counted against the question. That holds for all members of the tenant:
+//! one member's slow write keeps the other members' writes waiting, and then `check_busy`.
+//!
+//! The memory a write holds comes from the replica's [`crate::dashboards::memory`], shared with
+//! the dataset runs and the API's answers, and is reserved before it is used, always after the
+//! tenant's slot and before the checker's place:
+//!
+//! - the JSON of the results it reuses from the question's earlier writes, within the rest of
+//!   [`WRITE_WAIT`]; without it the write is `check_busy`, has run nothing and is not counted
+//!   against the question;
+//! - each dataset run's, which comes with its result ([`DatasetRunner::run`]); a run refused
+//!   for memory is a `runs_limited` problem;
+//! - once the datasets ran, the results' values ([`values_bytes`]) and then the check's request
+//!   body and verdict ([`check_bytes`]), within [`MEMORY_WAIT`] for both; without them the
+//!   write is `check_busy` and counted (its datasets ran, and their results are kept for the
+//!   question's next write).
+//!
+//! A write holds what it reserved until it ends, and gives all of it back when it ends early.
+//! Every wait is bounded and the order is fixed; the one wait while holding memory that is not a
+//! memory wait, a write's next dataset waiting for its tenant's run slot while the write holds
+//! the results of its earlier ones, is bounded by the caps' wait. So writes and runs cannot wait
+//! on each other for ever. The checker client adds a limit on the checks of all tenants
 //! ([`crate::dashboards::checker::MAX_CHECKS_IN_FLIGHT`]).
 //!
 //! Per question (keyed by the run): at most [`MAX_WRITES_PER_QUESTION`] writes reach the dataset
@@ -51,35 +69,40 @@
 //! the request the tool sent, and values from the tool's own data. The logs carry no title, SQL
 //! or page.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
+use bytes::Bytes;
 use contract::api::dashboard::RuntimeVersion;
 use contract::api::dashboard::check::{
-    self, CheckReport, CheckRequest, Locale, MAX_PROBLEMS, MarkReport, Problem, SizeLimit,
+    self, CheckReport, CheckRequest, Locale, MAX_CHECK_REQUEST_BYTES, MAX_PROBLEMS, MarkReport,
+    Problem, SizeLimit,
 };
 use contract::api::dashboard::names::Ref;
 use contract::api::dashboard::public::{
     DashboardKind, DashboardList, DashboardSummary, VersionCreated,
 };
-use contract::api::dashboard::result::DatasetResult;
+use contract::api::dashboard::result::{
+    DatasetResult, MAX_COLUMNS, MAX_DATASET_ROWS, MAX_RESULT_BYTES,
+};
 use contract::api::dashboard::spec::{
-    Computation, Constant, Dataset, MAX_CONTENT_BYTES, MAX_DESCRIPTION_CHARS, MAX_PAGE_BYTES,
-    MAX_TIME_ZONE_LEN, MAX_TITLE_CHARS, Spec, SpecError, SpecProblem, validate_version,
+    Computation, Constant, Dataset, MAX_CONTENT_BYTES, MAX_DATASETS, MAX_DESCRIPTION_CHARS,
+    MAX_PAGE_BYTES, MAX_TIME_ZONE_LEN, MAX_TITLE_CHARS, Spec, SpecError, SpecProblem,
+    validate_version,
 };
 use contract::{DashboardId, TenantId};
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
 use service_kit::tenant::{BackgroundTenantDb, TenantTransaction};
-use tokio::sync::Semaphore;
 use tokio::time::Instant;
 use uuid::Uuid;
 
-use crate::dashboards::checker::{CheckOutcome, Checker, Unavailable};
-use crate::dashboards::limits::{self, KeyedSlots};
-use crate::dashboards::runner::{DatasetRunner, RunError, TelemetryError};
+use crate::dashboards::checker::{CheckOutcome, Checker, Unavailable, check_bytes};
+use crate::dashboards::limits::{KeyedSlots, json_len};
+use crate::dashboards::memory::{ALLOCATION_BYTES, Reservation, VALUE_BYTES, VEC_BYTES};
+use crate::dashboards::runner::{DatasetRunner, HeldResult, RunError, TelemetryError};
 use crate::dashboards::store::{self, Author, NewVersion, StoreError};
 use crate::model::BoxFuture;
 use crate::tools::{
@@ -99,9 +122,14 @@ pub const DATASETS_TIMEOUT: Duration = Duration::from_secs(120);
 /// How long saving a checked version may take: one transaction of the tenant.
 pub const SAVE_TIMEOUT: Duration = Duration::from_secs(30);
 
-/// How long a write waits for its tenant's write in progress (per replica) before it is
-/// `check_busy`: most writes take a few seconds (cached datasets and the check).
+/// How long a write waits for its tenant's write in progress (per replica), and then for memory
+/// for the results it reuses, before it is `check_busy`: most writes take a few seconds (cached
+/// datasets and the check).
 pub const WRITE_WAIT: Duration = Duration::from_secs(30);
+
+/// How long a write waits in all, once its datasets ran, for memory for its results' values and
+/// its check before it is `check_busy`.
+pub const MEMORY_WAIT: Duration = Duration::from_secs(30);
 
 /// Added to the phases' bounds in a call's time limit, for the work between them (merging, the
 /// formula check, building the check request).
@@ -138,11 +166,6 @@ pub const MAX_CACHED_BYTES: usize = 64 << 20;
 /// The share of [`MAX_CACHED_BYTES`] one tenant's questions may hold together: a quarter, room
 /// for 7 of a write's 8 results at their largest (2 MiB each).
 pub const MAX_CACHED_BYTES_PER_TENANT: usize = MAX_CACHED_BYTES / 4;
-
-/// The most writes of all tenants past their tenant's slot at a time, per replica: each holds its
-/// datasets' results until it ends, so this bounds what the writes hold. As many as the checks in
-/// flight, so a write that reaches its check never waits there for a place.
-pub const MAX_WRITES_IN_FLIGHT: usize = crate::dashboards::checker::MAX_CHECKS_IN_FLIGHT;
 
 /// The most saved dashboard versions a question remembers having read; a rebase onto one it
 /// forgot is refused until it reads it again.
@@ -214,7 +237,11 @@ const NOT_SAVED_NOTE: &str = "Nothing was saved. Fix the problems and call write
 the same base_version; the user still sees the previous version.";
 
 /// A dataset's run: its result's JSON, shared with the question's cache, or why it failed.
-type RunOutcome = Result<Arc<[u8]>, RunError>;
+type RunOutcome = Result<Bytes, RunError>;
+
+/// What a write's reading of a result's JSON back into values holds besides the cells, the rows
+/// and the text: the columns and the meta.
+const VALUES_OVERHEAD_BYTES: usize = 8 << 10;
 
 /// The tool.
 pub struct DashboardTool {
@@ -224,8 +251,6 @@ pub struct DashboardTool {
     bounds: WriteBounds,
     /// One write per tenant past validation.
     writes: KeyedSlots<TenantId>,
-    /// The places of all tenants' writes past their tenant's slot.
-    places: Arc<Semaphore>,
     questions: Mutex<Questions>,
 }
 
@@ -234,11 +259,11 @@ pub struct DashboardTool {
 pub struct WriteBounds {
     /// Until the write's datasets have run: [`DATASETS_TIMEOUT`].
     pub datasets_timeout: Duration,
-    /// For the tenant's write in progress and then a place: [`WRITE_WAIT`].
+    /// For the tenant's write in progress and then memory for the results it reuses:
+    /// [`WRITE_WAIT`].
     pub write_wait: Duration,
-    /// The writes of all tenants past their tenant's slot at a time (at least one):
-    /// [`MAX_WRITES_IN_FLIGHT`].
-    pub writes_in_flight: usize,
+    /// For memory for the values and the check once the datasets ran: [`MEMORY_WAIT`].
+    pub memory_wait: Duration,
 }
 
 impl Default for WriteBounds {
@@ -246,7 +271,7 @@ impl Default for WriteBounds {
         Self {
             datasets_timeout: DATASETS_TIMEOUT,
             write_wait: WRITE_WAIT,
-            writes_in_flight: MAX_WRITES_IN_FLIGHT,
+            memory_wait: MEMORY_WAIT,
         }
     }
 }
@@ -273,20 +298,21 @@ impl DashboardTool {
             checker,
             bounds,
             writes: KeyedSlots::new(1),
-            places: Arc::new(Semaphore::new(bounds.writes_in_flight.max(1))),
             questions: Mutex::new(Questions::default()),
         })
     }
 
-    /// The time limit of one call: the wait for the tenant's write in progress and a place, the
-    /// bound until the datasets have run, the check's ([`Checker::timeout`]) and the save's
-    /// ([`SAVE_TIMEOUT`]), and a margin. Each phase ends on its own bound with a result the model
-    /// can act on, so this limit is a backstop; the question's deadline still ends a call first.
+    /// The time limit of one call: the wait for the tenant's write in progress and memory, the
+    /// bound until the datasets have run, the wait for memory after them, the check's
+    /// ([`Checker::timeout`]) and the save's ([`SAVE_TIMEOUT`]), and a margin. Each phase ends on
+    /// its own bound with a result the model can act on, so this limit is a backstop; the
+    /// question's deadline still ends a call first.
     #[must_use]
     pub fn call_limit(&self) -> Duration {
         self.bounds
             .write_wait
             .saturating_add(self.bounds.datasets_timeout)
+            .saturating_add(self.bounds.memory_wait)
             .saturating_add(self.checker.timeout())
             .saturating_add(SAVE_TIMEOUT)
             .saturating_add(CALL_MARGIN)
@@ -506,7 +532,8 @@ check its series, point keys, period and interval.";
 fn unavailable_problem(reason: Unavailable) -> WriteProblem {
     let hint = match reason {
         Unavailable::Busy => {
-            "The page checker is busy. Call write again with the same input in a few seconds."
+            "Dashboards are busy right now. Call write again with the same input in a few \
+             seconds."
         }
         Unavailable::Unreachable
         | Unavailable::Timeout
@@ -771,7 +798,7 @@ struct Question {
     saved_reads: VecDeque<(DashboardId, u32)>,
     expires: Instant,
     /// The JSON of the question's dataset results, by [`result_key`].
-    results: HashMap<String, Arc<[u8]>>,
+    results: HashMap<String, Bytes>,
     used: u64,
 }
 
@@ -852,7 +879,7 @@ impl Questions {
     /// question's results, then its earlier ones as they fit, all within the tenant's share; a
     /// result larger than the share is not kept. To make room, the tenant's least recently
     /// writing other questions give way first, then, for the whole cache, those of any tenant.
-    fn keep(&mut self, run_id: Uuid, latest: Vec<(String, Arc<[u8]>)>) {
+    fn keep(&mut self, run_id: Uuid, latest: Vec<(String, Bytes)>) {
         let Some(question) = self.by_run.get_mut(&run_id) else {
             return;
         };
@@ -863,7 +890,7 @@ impl Questions {
             .map(|(key, json)| entry_size(key, json))
             .sum();
         self.uncount(tenant, earlier_size);
-        let mut results: HashMap<String, Arc<[u8]>> = HashMap::new();
+        let mut results: HashMap<String, Bytes> = HashMap::new();
         let mut size = 0_usize;
         for (key, json) in latest.into_iter().chain(earlier) {
             let entry = entry_size(&key, &json);
@@ -943,6 +970,70 @@ impl Questions {
 /// The key a dataset's result is reused under: what it runs.
 fn result_key(dataset: &Dataset) -> String {
     serde_json::to_string(&(&dataset.source, dataset.max_rows)).unwrap_or_default()
+}
+
+/// The results of the question's earlier writes a write reuses, by [`result_key`], and the
+/// memory their JSON takes, reserved for the write.
+struct Reused {
+    results: HashMap<String, Bytes>,
+    memory: Reservation,
+}
+
+/// A write's datasets that all ran: each one's result as JSON, in the order of the datasets, and
+/// the memory they hold, released when this is dropped.
+struct Ran {
+    json: Vec<Bytes>,
+    _memory: Vec<Reservation>,
+}
+
+/// What reading a result's JSON of `json_len` bytes back into a [`DatasetResult`] may hold, for a
+/// dataset of at most `max_rows` rows: its cells (at most one per two bytes of the JSON, and
+/// `max_rows` × `MAX_COLUMNS`) in rows grown by doubling, each with an allocation for its text;
+/// the rows' vectors (at most one per three bytes, and `max_rows`); the text and the parser's
+/// scratch (each at most the JSON's size); the columns and the meta. An upper estimate from the
+/// limits, not a measurement.
+#[must_use]
+pub fn values_bytes(json_len: usize, max_rows: u32) -> usize {
+    let max_rows = usize::try_from(max_rows.min(MAX_DATASET_ROWS)).unwrap_or(usize::MAX);
+    let cells = (json_len / 2 + 1).min(max_rows.saturating_mul(MAX_COLUMNS));
+    let rows = (json_len / 3 + 1).min(max_rows);
+    cells
+        .saturating_mul(2 * VALUE_BYTES + ALLOCATION_BYTES)
+        .saturating_add(rows.saturating_mul(2 * VEC_BYTES + ALLOCATION_BYTES))
+        .saturating_add(json_len.saturating_mul(2))
+        .saturating_add(VALUES_OVERHEAD_BYTES)
+}
+
+/// The most a write of the `dashboard` tool reserves at once, after its datasets ran: the
+/// values of `MAX_DATASETS` results at the largest ([`values_bytes`]) and a check of the largest
+/// request ([`check_bytes`]). Before its datasets ran it holds less: their JSON, at most
+/// `MAX_RESULT_BYTES` each.
+#[must_use]
+pub fn largest_write_bytes() -> usize {
+    let values = values_bytes(MAX_RESULT_BYTES, MAX_DATASET_ROWS).saturating_mul(MAX_DATASETS);
+    values.saturating_add(check_bytes(MAX_CHECK_REQUEST_BYTES))
+}
+
+/// The values of a write's results, from their JSON in the order of `spec`'s datasets; a result
+/// run for (or under) another name answers for its dataset. A result that does not read back is
+/// a `dataset_failed` problem.
+fn read_back(spec: &Spec, json: &[Bytes]) -> Result<Vec<DatasetResult>, Vec<WriteProblem>> {
+    let mut results = Vec::with_capacity(json.len());
+    let mut problems = Vec::new();
+    for (dataset, json) in spec.datasets.iter().zip(json) {
+        match serde_json::from_slice::<DatasetResult>(json) {
+            Ok(mut result) => {
+                result.dataset.clone_from(&dataset.name);
+                results.push(result);
+            }
+            Err(_) => problems.push(run_problem(&dataset.name, &RunError::Failed)),
+        }
+    }
+    if problems.is_empty() {
+        Ok(results)
+    } else {
+        Err(problems)
+    }
 }
 
 /// Where a write goes.
@@ -1179,20 +1270,41 @@ impl DashboardTool {
             return Ok(not_saved(vec![unavailable_problem(Unavailable::Busy)]));
         };
         let left = self.bounds.write_wait.saturating_sub(waiting.elapsed());
-        let Some(_place) = limits::take(Arc::clone(&self.places), left).await else {
-            tracing::info!(
-                run_id = %context.run_id,
-                conversation_id = %context.conversation_id,
-                tenant_id = %context.principal.tenant_id,
-                "the dashboard tool's write waited too long for a place among the writes in \
-                 progress"
-            );
+        let Some(reused) = self.reused(context, &spec, Instant::now() + left).await else {
+            // Nothing ran: not counted against the question.
             return Ok(not_saved(vec![unavailable_problem(Unavailable::Busy)]));
         };
         // The waits do not count against the bound for the datasets.
         let datasets_by = datasets_by + waiting.elapsed();
         self.count_write(context)?;
-        let results = match self.run_datasets(context, &spec, datasets_by).await? {
+        let ran = match self
+            .run_datasets(context, &spec, datasets_by, reused)
+            .await?
+        {
+            Ok(ran) => ran,
+            Err(problems) => {
+                log_refused(context, &target, &problems);
+                return Ok(not_saved(problems));
+            }
+        };
+        // The datasets ran, so from here a write without memory counts against the question;
+        // their results are kept for its next write.
+        let memory_by = Instant::now() + self.bounds.memory_wait;
+        let needed = spec
+            .datasets
+            .iter()
+            .zip(&ran.json)
+            .map(|(dataset, json)| values_bytes(json.len(), dataset.max_rows))
+            .fold(0, usize::saturating_add);
+        let Some(_values) = self.reserve(context, needed, memory_by).await else {
+            let problems = vec![unavailable_problem(Unavailable::Busy)];
+            log_refused(context, &target, &problems);
+            return Ok(not_saved(problems));
+        };
+        let results = read_back(&spec, &ran.json);
+        // The cache keeps the JSON for the question's next write, within its own budget.
+        drop(ran);
+        let results = match results {
             Ok(results) => results,
             Err(problems) => {
                 log_refused(context, &target, &problems);
@@ -1211,6 +1323,14 @@ impl DashboardTool {
             datasets: results,
             locale,
             tz,
+        };
+        let Some(_check) = self
+            .reserve(context, check_bytes(json_len(&request)), memory_by)
+            .await
+        else {
+            let problems = vec![unavailable_problem(Unavailable::Busy)];
+            log_refused(context, &target, &problems);
+            return Ok(not_saved(problems));
         };
         let marks = match self.checker.check(context, &request).await {
             CheckOutcome::Passed(report) => own_marks(&request, &report),
@@ -1403,19 +1523,11 @@ impl DashboardTool {
         })
     }
 
-    /// Runs every dataset of `spec` as the asking user, two at a time (the tenant's concurrent
-    /// runs): each source (with its `max_rows`) once, reusing the results of this question's
-    /// earlier writes. Runs still going at `deadline` are dropped and are `dataset_timeout`
-    /// problems; the results that came back are kept for the question's next write. Each result
-    /// is held as its JSON from when its run ends, and read back as values for the write once
-    /// all have run. `Ok(Err(problems))` when one or more failed.
-    async fn run_datasets(
-        &self,
-        context: &ToolContext,
-        spec: &Spec,
-        deadline: Instant,
-    ) -> Result<Result<Vec<DatasetResult>, Vec<WriteProblem>>, ToolError> {
-        let mut outcomes: HashMap<String, RunOutcome> = {
+    /// The results of the question's earlier writes that `spec` reuses, with the memory their
+    /// JSON takes reserved for this write until `by`; `None` (logged) when it could not be.
+    async fn reused(&self, context: &ToolContext, spec: &Spec, by: Instant) -> Option<Reused> {
+        let keys: HashSet<String> = spec.datasets.iter().map(result_key).collect();
+        let results: HashMap<String, Bytes> = {
             let questions = self
                 .questions
                 .lock()
@@ -1427,11 +1539,62 @@ impl DashboardTool {
                     question
                         .results
                         .iter()
-                        .map(|(key, json)| (key.clone(), Ok(Arc::clone(json))))
+                        .filter(|(key, _)| keys.contains(*key))
+                        .map(|(key, json)| (key.clone(), json.clone()))
                         .collect()
                 })
                 .unwrap_or_default()
         };
+        let bytes = results.values().map(Bytes::len).sum();
+        let memory = self.reserve(context, bytes, by).await?;
+        Some(Reused { results, memory })
+    }
+
+    /// `bytes` of the replica's memory for the question's tenant, waiting until `by`; `None`
+    /// (logged) after it.
+    async fn reserve(
+        &self,
+        context: &ToolContext,
+        bytes: usize,
+        by: Instant,
+    ) -> Option<Reservation> {
+        let wait = by.saturating_duration_since(Instant::now());
+        let reserved = self
+            .runner
+            .memory()
+            .reserve(context.principal.tenant_id, bytes, wait)
+            .await;
+        if reserved.is_none() {
+            tracing::info!(
+                run_id = %context.run_id,
+                conversation_id = %context.conversation_id,
+                tenant_id = %context.principal.tenant_id,
+                bytes,
+                "the dashboard tool's write waited too long for memory"
+            );
+        }
+        reserved
+    }
+
+    /// Runs every dataset of `spec` as the asking user, two at a time (the tenant's concurrent
+    /// runs): each source (with its `max_rows`) once, reusing the results of this question's
+    /// earlier writes (`reused`). Runs still going at `deadline` are dropped and are
+    /// `dataset_timeout` problems; the results that came back are kept for the question's next
+    /// write. Each result is held as its JSON, with its memory, from when its run ends until the
+    /// write has read it back. `Ok(Err(problems))` when one or more failed.
+    async fn run_datasets(
+        &self,
+        context: &ToolContext,
+        spec: &Spec,
+        deadline: Instant,
+        reused: Reused,
+    ) -> Result<Result<Ran, Vec<WriteProblem>>, ToolError> {
+        let mut memory = vec![reused.memory];
+        let mut outcomes: HashMap<String, RunOutcome> = reused
+            .results
+            .into_iter()
+            .map(|(key, json)| (key, Ok(json)))
+            .collect();
         let keys: Vec<String> = spec.datasets.iter().map(result_key).collect();
         let mut to_run: Vec<usize> = Vec::new();
         for (index, key) in keys.iter().enumerate() {
@@ -1443,21 +1606,13 @@ impl DashboardTool {
         // Two workers take the next dataset to run as each finishes one, and keep every outcome
         // as it comes, so a deadline that drops the runs still going loses none that finished.
         let next = AtomicUsize::new(0);
-        let finished: Mutex<Vec<(usize, RunOutcome)>> =
+        let finished: Mutex<Vec<(usize, Result<HeldResult, RunError>)>> =
             Mutex::new(Vec::with_capacity(to_run.len()));
         let worker = {
             let (next, finished, to_run, caller) = (&next, &finished, &to_run, &caller);
             move || async move {
                 while let Some(&index) = to_run.get(next.fetch_add(1, Ordering::Relaxed)) {
-                    let outcome = self
-                        .runner
-                        .run(caller, &spec.datasets[index])
-                        .await
-                        .and_then(|result| {
-                            serde_json::to_vec(&result)
-                                .map(Arc::from)
-                                .map_err(|_| RunError::Failed)
-                        });
+                    let outcome = self.runner.run(caller, &spec.datasets[index]).await;
                     if matches!(outcome, Err(RunError::Revoked)) {
                         return Err(ToolError::Revoked);
                     }
@@ -1482,6 +1637,11 @@ impl DashboardTool {
             .into_inner()
             .unwrap_or_else(PoisonError::into_inner)
         {
+            let outcome = outcome.map(|held| {
+                let (json, reservation) = held.into_parts();
+                memory.push(reservation);
+                json
+            });
             outcomes.insert(keys[index].clone(), outcome);
         }
         let unfinished = if timed_out {
@@ -1489,23 +1649,16 @@ impl DashboardTool {
         } else {
             RunError::Failed
         };
-        let mut results = Vec::with_capacity(spec.datasets.len());
-        let mut latest: Vec<(String, Arc<[u8]>)> = Vec::new();
+        let mut json = Vec::with_capacity(spec.datasets.len());
+        let mut latest: Vec<(String, Bytes)> = Vec::new();
         let mut problems = Vec::new();
         for (dataset, key) in spec.datasets.iter().zip(&keys) {
             match outcomes.get(key) {
-                Some(Ok(json)) => {
+                Some(Ok(result)) => {
                     if !latest.iter().any(|(kept, _)| kept == key) {
-                        latest.push((key.clone(), Arc::clone(json)));
+                        latest.push((key.clone(), result.clone()));
                     }
-                    match serde_json::from_slice::<DatasetResult>(json) {
-                        Ok(mut result) => {
-                            // A result run for (or under) another name answers for this dataset.
-                            result.dataset.clone_from(&dataset.name);
-                            results.push(result);
-                        }
-                        Err(_) => problems.push(run_problem(&dataset.name, &RunError::Failed)),
-                    }
+                    json.push(result.clone());
                 }
                 Some(Err(error)) => problems.push(run_problem(&dataset.name, error)),
                 None => problems.push(run_problem(&dataset.name, &unfinished)),
@@ -1520,7 +1673,10 @@ impl DashboardTool {
             questions.keep(context.run_id, latest);
         }
         if problems.is_empty() {
-            Ok(Ok(results))
+            Ok(Ok(Ran {
+                json,
+                _memory: memory,
+            }))
         } else {
             Ok(Err(problems))
         }
@@ -2239,10 +2395,10 @@ mod tests {
     }
 
     /// Results of the given keys, each with `len` bytes of JSON (the cache does not read it).
-    fn results(items: &[(&str, usize)]) -> Vec<(String, Arc<[u8]>)> {
+    fn results(items: &[(&str, usize)]) -> Vec<(String, Bytes)> {
         items
             .iter()
-            .map(|(key, len)| ((*key).to_owned(), Arc::from(vec![b' '; *len])))
+            .map(|(key, len)| ((*key).to_owned(), Bytes::from(vec![b' '; *len])))
             .collect()
     }
 
@@ -2494,5 +2650,78 @@ mod tests {
                 "{unusable}"
             );
         }
+    }
+
+    /// The values of a result are bounded by its JSON when it is small, and by the dataset's
+    /// rows and the columns a result may have when it is large.
+    #[test]
+    fn a_results_values_are_reserved_from_its_json_and_rows() {
+        let small = values_bytes(1000, MAX_DATASET_ROWS);
+        assert!(small >= 2 * 1000 + VALUES_OVERHEAD_BYTES, "{small}");
+        assert!(small < 128 << 10, "a small result reserves little: {small}");
+        let largest = values_bytes(MAX_RESULT_BYTES, MAX_DATASET_ROWS);
+        let cells = usize::try_from(MAX_DATASET_ROWS).expect("fits") * MAX_COLUMNS;
+        assert!(largest >= cells * (2 * VALUE_BYTES + ALLOCATION_BYTES) + 2 * MAX_RESULT_BYTES);
+        assert_eq!(
+            values_bytes(MAX_RESULT_BYTES, MAX_DATASET_ROWS + 1),
+            largest,
+            "max_rows is at most MAX_DATASET_ROWS"
+        );
+        assert!(values_bytes(MAX_RESULT_BYTES, 10) < largest);
+    }
+
+    /// The largest write and its tenant's two largest runs fit one tenant's share at once, so
+    /// even the largest write can finish on an idle replica: while its datasets run it holds
+    /// their JSON, then their values with the JSON, then the values and its check, and the
+    /// tenant's two runs (the write's own, or the browser's) may hold theirs all the while.
+    #[tokio::test]
+    async fn a_worst_case_write_fits_a_tenants_share() {
+        use crate::dashboards::caps::CONCURRENT_RUNS;
+        use crate::dashboards::memory::{RESULT_MEMORY_PER_TENANT, ResultMemory};
+        use crate::dashboards::runner::largest_answer_bytes;
+
+        let run = largest_answer_bytes();
+        let json = MAX_DATASETS * MAX_RESULT_BYTES;
+        let values = MAX_DATASETS * values_bytes(MAX_RESULT_BYTES, MAX_DATASET_ROWS);
+        let check = check_bytes(MAX_CHECK_REQUEST_BYTES);
+        assert_eq!(largest_write_bytes(), values + check);
+        let peak = (json + values).max(largest_write_bytes()) + CONCURRENT_RUNS * run;
+        assert!(
+            peak <= RESULT_MEMORY_PER_TENANT,
+            "the largest write and runs need {} MiB, a share is {} MiB",
+            peak >> 20,
+            RESULT_MEMORY_PER_TENANT >> 20
+        );
+
+        let memory = ResultMemory::default();
+        let tenant = TenantId::from_uuid(Uuid::now_v7());
+        let reserve = |bytes: usize| {
+            let memory = memory.clone();
+            async move {
+                memory
+                    .reserve(tenant, bytes, Duration::ZERO)
+                    .await
+                    .unwrap_or_else(|| panic!("{bytes} bytes did not fit"))
+            }
+        };
+        let mut runs = Vec::new();
+        for _ in 0..CONCURRENT_RUNS {
+            runs.push(reserve(run).await);
+        }
+        let held_json = reserve(json).await;
+        let held_values = reserve(values).await;
+        drop(held_json);
+        let held_check = reserve(check).await;
+        assert!(memory.held_by(tenant) <= memory.per_tenant());
+        // Another tenant's largest write fits beside it.
+        let other = TenantId::from_uuid(Uuid::now_v7());
+        assert!(
+            memory
+                .reserve(other, largest_write_bytes(), Duration::ZERO)
+                .await
+                .is_some()
+        );
+        drop((runs, held_values, held_check));
+        assert_eq!(memory.held_by(tenant), 0);
     }
 }

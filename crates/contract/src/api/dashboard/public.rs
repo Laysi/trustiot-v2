@@ -263,8 +263,9 @@ pub const DATASET_REFUSED: MessageKey = MessageKey::new("dashboard.dataset_refus
 pub const DATASET_TIMEOUT: MessageKey = MessageKey::new("dashboard.dataset_timeout");
 /// 503 `unavailable`: the run failed for a reason the user cannot change.
 pub const DATASET_FAILED: MessageKey = MessageKey::new("dashboard.dataset_failed");
-/// 429 `rate_limited`: the tenant ran 60 datasets in the last minute, or 2 are running; the
-/// response carries `Retry-After`.
+/// 429 `rate_limited`: the tenant ran 60 datasets in the last minute, or 2 are running, or the
+/// assistant's memory for results had no room for the answer; the response carries
+/// `Retry-After`.
 pub const RUNS_LIMITED: MessageKey = MessageKey::new("dashboard.runs_limited");
 /// 429 `rate_limited`: the tenant's ClickHouse quota or concurrent queries are used up.
 pub const QUERY_QUOTA_EXHAUSTED: MessageKey = MessageKey::new("dashboard.query_quota_exhausted");

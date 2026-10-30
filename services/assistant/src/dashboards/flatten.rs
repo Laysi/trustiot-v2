@@ -5,7 +5,11 @@
 //! The answer is read into this module's own types, which take only what the table shows, as
 //! numbers, booleans, times and closed names; the series must be the request's, in its order,
 //! so the only text in the table is the request's own device IDs and data point keys and the
-//! readings' text values.
+//! readings' text values. The table stops at the run's `max_rows`: one more row is
+//! [`Mismatch::TooManyRows`], before it is built.
+//!
+//! Parsed, an answer takes at most [`PARSE_FACTOR`] times its size: what a run reserves for it
+//! (`super::runner::answer_bytes`).
 
 use chrono::{DateTime, FixedOffset, SecondsFormat};
 use contract::api::dashboard::result::{ResultColumn, SemanticRange, semantic_columns};
@@ -13,6 +17,12 @@ use contract::api::dashboard::spec::{SemanticInterval, SemanticRequest, SourceKi
 use serde::Deserialize;
 use serde_json::{Number, Value};
 use uuid::Uuid;
+
+/// The most memory the typed form of an answer takes per byte of its JSON: the smallest JSON of
+/// a series or a row (unknown members and absent optional ones left out) against twice the
+/// struct it becomes, since the vectors holding them grow by doubling, and an allocation for each
+/// string. `typed_answers_take_at_most_the_parse_factor` checks it against the types.
+pub const PARSE_FACTOR: usize = 8;
 
 /// A flattened answer.
 #[derive(Debug, PartialEq)]
@@ -31,6 +41,9 @@ pub enum Mismatch {
     Series,
     #[error("the answer's interval is not the request's")]
     Interval,
+    /// The table would have more rows than the run's `max_rows`.
+    #[error("the answer has more rows than the dataset allows")]
+    TooManyRows,
 }
 
 /// A reading, as telemetry-query writes it (`history::Reading`).
@@ -193,12 +206,17 @@ struct Usage {
     series: Vec<SeriesUsage>,
 }
 
-/// The table of a statistics answer `body` to `request`.
+/// The table of a statistics answer `body` to `request`, of at most `max_rows` rows.
 ///
 /// # Errors
 ///
-/// [`Mismatch`] when the body is not a statistics answer to the request.
-pub fn statistics(request: &SemanticRequest, body: &[u8]) -> Result<Table, Mismatch> {
+/// [`Mismatch`] when the body is not a statistics answer to the request, or its table has more
+/// than `max_rows` rows.
+pub fn statistics(
+    request: &SemanticRequest,
+    body: &[u8],
+    max_rows: usize,
+) -> Result<Table, Mismatch> {
     let answer: Statistics = serde_json::from_slice(body).map_err(|_| Mismatch::Unparseable)?;
     check(
         request,
@@ -209,7 +227,15 @@ pub fn statistics(request: &SemanticRequest, body: &[u8]) -> Result<Table, Misma
             .map(|series| (series.device_id, series.point.as_str())),
     )?;
     let total = answer.range.interval == SemanticInterval::Total;
-    let mut rows = Vec::new();
+    let count: usize = if total {
+        answer.series.len()
+    } else {
+        answer.series.iter().map(|series| series.rows.len()).sum()
+    };
+    if count > max_rows {
+        return Err(Mismatch::TooManyRows);
+    }
+    let mut rows = Vec::with_capacity(count);
     for series in &answer.series {
         let (device_id, point) = (Value::from(series.device_id.to_string()), &series.point);
         if total {
@@ -257,12 +283,13 @@ pub fn statistics(request: &SemanticRequest, body: &[u8]) -> Result<Table, Misma
     })
 }
 
-/// The table of a usage answer `body` to `request`.
+/// The table of a usage answer `body` to `request`, of at most `max_rows` rows.
 ///
 /// # Errors
 ///
-/// [`Mismatch`] when the body is not a usage answer to the request.
-pub fn usage(request: &SemanticRequest, body: &[u8]) -> Result<Table, Mismatch> {
+/// [`Mismatch`] when the body is not a usage answer to the request, or its table has more than
+/// `max_rows` rows.
+pub fn usage(request: &SemanticRequest, body: &[u8], max_rows: usize) -> Result<Table, Mismatch> {
     let answer: Usage = serde_json::from_slice(body).map_err(|_| Mismatch::Unparseable)?;
     check(
         request,
@@ -273,7 +300,15 @@ pub fn usage(request: &SemanticRequest, body: &[u8]) -> Result<Table, Mismatch> 
             .map(|series| (series.device_id, series.point.as_str())),
     )?;
     let total = answer.range.interval == SemanticInterval::Total;
-    let mut rows = Vec::new();
+    let count: usize = if total {
+        answer.series.len()
+    } else {
+        answer.series.iter().map(|series| series.rows.len()).sum()
+    };
+    if count > max_rows {
+        return Err(Mismatch::TooManyRows);
+    }
+    let mut rows = Vec::with_capacity(count);
     for series in &answer.series {
         let (device_id, point) = (Value::from(series.device_id.to_string()), &series.point);
         if total {
@@ -425,6 +460,15 @@ mod tests {
 
     const DEVICE: &str = "0190a5b2-7c3d-7e4f-8a1b-2c3d4e5f6a7b";
 
+    /// Tables of at most 100 rows.
+    fn statistics_of(request: &SemanticRequest, body: &[u8]) -> Result<Table, Mismatch> {
+        statistics(request, body, 100)
+    }
+
+    fn usage_of(request: &SemanticRequest, body: &[u8]) -> Result<Table, Mismatch> {
+        usage(request, body, 100)
+    }
+
     fn bucket_answer(device_id: &str, point: &str) -> Value {
         json!({
             "range": range("1h"),
@@ -460,7 +504,7 @@ mod tests {
     fn the_answer_must_be_for_the_requests_series_and_interval() {
         let asked = request("1h", &[(DEVICE, "power")]);
         let body = |answer: &Value| serde_json::to_vec(answer).expect("JSON");
-        let table = statistics(&asked, &body(&bucket_answer(DEVICE, "power"))).expect("a table");
+        let table = statistics_of(&asked, &body(&bucket_answer(DEVICE, "power"))).expect("a table");
         assert_eq!(
             table.rows,
             vec![vec![
@@ -476,11 +520,11 @@ mod tests {
             ]]
         );
         assert_eq!(
-            statistics(&asked, &body(&bucket_answer(DEVICE, "energy"))),
+            statistics_of(&asked, &body(&bucket_answer(DEVICE, "energy"))),
             Err(Mismatch::Series)
         );
         assert_eq!(
-            statistics(
+            statistics_of(
                 &asked,
                 &body(&bucket_answer(
                     "0190a5b2-7c3d-7e4f-8a1b-2c3d4e5f6a7c",
@@ -490,7 +534,7 @@ mod tests {
             Err(Mismatch::Series)
         );
         assert_eq!(
-            statistics(
+            statistics_of(
                 &request("1d", &[(DEVICE, "power")]),
                 &body(&bucket_answer(DEVICE, "power"))
             ),
@@ -499,18 +543,133 @@ mod tests {
         let mut two = bucket_answer(DEVICE, "power");
         let series = two["series"][0].clone();
         two["series"].as_array_mut().expect("an array").push(series);
-        assert_eq!(statistics(&asked, &body(&two)), Err(Mismatch::Series));
+        assert_eq!(statistics_of(&asked, &body(&two)), Err(Mismatch::Series));
         // A status this build does not know, a usage answer, or not JSON.
         let mut unknown = bucket_answer(DEVICE, "power");
         unknown["series"][0]["status"] = json!("partial");
         assert_eq!(
-            statistics(&asked, &body(&unknown)),
+            statistics_of(&asked, &body(&unknown)),
             Err(Mismatch::Unparseable)
         );
         assert_eq!(
-            usage(&asked, &body(&bucket_answer(DEVICE, "power"))),
+            usage_of(&asked, &body(&bucket_answer(DEVICE, "power"))),
             Err(Mismatch::Unparseable)
         );
-        assert_eq!(statistics(&asked, b"<html>"), Err(Mismatch::Unparseable));
+        assert_eq!(statistics_of(&asked, b"<html>"), Err(Mismatch::Unparseable));
+    }
+
+    #[test]
+    fn a_table_stops_at_the_runs_max_rows() {
+        let asked = request("1h", &[(DEVICE, "power")]);
+        let mut answer = bucket_answer(DEVICE, "power");
+        let row = answer["series"][0]["rows"][0].clone();
+        answer["series"][0]["rows"] = json!([row.clone(), row.clone(), row]);
+        let body = serde_json::to_vec(&answer).expect("JSON");
+        assert_eq!(
+            statistics(&asked, &body, 3).map(|table| table.rows.len()),
+            Ok(3)
+        );
+        assert_eq!(statistics(&asked, &body, 2), Err(Mismatch::TooManyRows));
+        // The series are checked first: another series is a mismatch, not too many rows.
+        assert_eq!(
+            statistics(&request("1h", &[(DEVICE, "energy")]), &body, 2),
+            Err(Mismatch::Series)
+        );
+        // A total has one row per series.
+        let mut total = bucket_answer(DEVICE, "power");
+        total["range"] = range("total");
+        let body = serde_json::to_vec(&total).expect("JSON");
+        let asked = request("total", &[(DEVICE, "power")]);
+        assert_eq!(
+            statistics(&asked, &body, 1).map(|table| table.rows.len()),
+            Ok(1)
+        );
+        assert_eq!(statistics(&asked, &body, 0), Err(Mismatch::TooManyRows));
+    }
+
+    /// [`PARSE_FACTOR`] holds for the smallest JSON of every element the answers hold many of:
+    /// twice the struct (its vector grows by doubling) and an allocation for each string with a
+    /// character in it, against the JSON's length. Every candidate that parses is checked, so a
+    /// shorter form the parser accepts (a UUID without hyphens, a time without seconds) counts.
+    #[test]
+    fn typed_answers_take_at_most_the_parse_factor() {
+        fn check<T: serde::de::DeserializeOwned>(candidates: &[(&str, usize)]) -> usize {
+            let mut parsed = 0;
+            for (json, strings) in candidates {
+                if serde_json::from_str::<T>(json).is_err() {
+                    continue;
+                }
+                parsed += 1;
+                let held = 2 * size_of::<T>()
+                    + strings * (crate::dashboards::memory::ALLOCATION_BYTES + 1);
+                assert!(
+                    held <= PARSE_FACTOR * json.len(),
+                    "{} of {} bytes holds {held}",
+                    std::any::type_name::<T>(),
+                    json.len()
+                );
+            }
+            parsed
+        }
+        let times = [
+            "2026-10-01T00:00:00Z",
+            "2026-10-01 00:00:00Z",
+            "2026-10-01T00:00Z",
+        ];
+        let ids = [DEVICE, "0190a5b27c3d7e4f8a1b2c3d4e5f6a7b"];
+        let mut rows = Vec::new();
+        let mut usage_rows = Vec::new();
+        for time in times {
+            for (last, strings) in [
+                (r#"{"type":"int","value":0}"#, 0),
+                (r#"{"type":"float"}"#, 0),
+                (r#"{"type":"float","value":null}"#, 0),
+                (r#"{"type":"string","value":"a"}"#, 1),
+            ] {
+                rows.push((
+                    format!(r#"{{"time":"{time}","count":0,"last":{last}}}"#),
+                    strings,
+                ));
+            }
+            usage_rows.push((
+                format!(
+                    r#"{{"time":"{time}","usage":0,"readings":0,"drops":0,"after_gap":false,"suspicious_steps":0}}"#
+                ),
+                0,
+            ));
+        }
+        let mut series = Vec::new();
+        let mut usage_series = Vec::new();
+        for id in ids {
+            for (point, strings) in [("", 0), ("a", 1)] {
+                series.push((
+                    format!(
+                        r#"{{"device_id":"{id}","point":"{point}","status":"ok","count":0,"numeric_count":0,"rows":[]}}"#
+                    ),
+                    strings,
+                ));
+                usage_series.push((
+                    format!(
+                        r#"{{"device_id":"{id}","point":"{point}","status":"ok","drops":0,"readings":0,"baseline":false,"gaps":0,"suspicious_steps":0,"skipped_cells":0,"rows":[]}}"#
+                    ),
+                    strings,
+                ));
+            }
+        }
+        fn as_refs(all: &[(String, usize)]) -> Vec<(&str, usize)> {
+            all.iter()
+                .map(|(json, strings)| (json.as_str(), *strings))
+                .collect()
+        }
+        assert!(check::<StatisticsRow>(&as_refs(&rows)) > 0, "a row parses");
+        assert!(check::<UsageRow>(&as_refs(&usage_rows)) > 0, "a row parses");
+        assert!(
+            check::<SeriesStatistics>(&as_refs(&series)) > 0,
+            "a series parses"
+        );
+        assert!(
+            check::<SeriesUsage>(&as_refs(&usage_series)) > 0,
+            "a series parses"
+        );
     }
 }

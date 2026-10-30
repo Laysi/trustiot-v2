@@ -292,7 +292,7 @@ services:
     database:
       maxConnections: 4
     # Sized from the dashboards' memory bounds per replica (services/assistant/README.md,
-    # 「記憶體」): about 550 MiB with every bound reached at once, and the rest for the allocator.
+    # 「記憶體」): about 704 MiB with every bound reached at once, and the rest for the allocator.
     resources:
       requests:
         memory: 128Mi

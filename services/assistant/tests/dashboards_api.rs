@@ -7,14 +7,16 @@
 //! - The role comes from the request's token: a viewer cannot publish, restore a saved
 //!   dashboard or archive; a draft is its conversation's owner's, and anyone else in the tenant
 //!   or outside it gets the same 404 as for a dashboard that does not exist.
-//! - Versions: each write adds one, old ones stay readable, a restore adds a copy, and publishing
-//!   over a saved dashboard that changed is a 409, judged by the base of the version published,
-//!   which a restored copy keeps.
+//! - Versions: each write adds one, old ones stay readable, a restore adds a version that points
+//!   at the content it restores, and publishing over a saved dashboard that changed is a 409,
+//!   judged by the base of the version published, which a restore keeps.
 //! - Dataset runs act as the viewer: the token telemetry-query gets is the viewer's, with the
 //!   viewer's tenant and role. More rows than the dataset allows is refused with the limit; the
 //!   caps refuse the 61st run in a minute and a third at a time per tenant while other tenants
-//!   run, and the `dashboard` tool's runs count against the same caps; telemetry-query's
-//!   refusals reach the user only as closed keys, never as its text.
+//!   run, and the `dashboard` tool's runs count against the same caps; a run waiting for
+//!   telemetry-query holds no memory, an answer holds its result's memory until its body is
+//!   written or dropped, and one tenant holds at most its share; telemetry-query's refusals reach
+//!   the user only as closed keys, never as its text.
 //! - Opening a dashboard and running all its datasets calls no model.
 //!
 //! Starts a throwaway Postgres with TLS (podman or docker); skipped without either unless `CI`
@@ -29,21 +31,24 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use assistant::callee::{Caller, Operation};
 use assistant::dashboards::caps::{CONCURRENT_RUNS, Clock, RUNS_PER_MINUTE, RunCaps};
+use assistant::dashboards::runner::DatasetRunner;
 use assistant::model::BoxFuture as ModelFuture;
 use assistant::tools::{Delegation, DelegationError};
 use axum::http::Method;
+use axum::http::header::CONTENT_TYPE;
 use contract::api::dashboard::spec::Dataset;
 use contract::{
-    Actor, DashboardId, InternalClaims, InternalToken, ServiceName, TenantGrant, TenantId,
-    TenantRole,
+    Actor, DashboardId, INTERNAL_IDENTITY_HEADER, InternalClaims, InternalToken, ServiceName,
+    TenantGrant, TenantId, TenantRole,
 };
 use dashboard_world::{
     Answer, Binary, Content, DATASETS, Peers, Person, SQL_PATH, STATISTICS_PATH, Script,
-    TelemetryCall, USAGE_PATH, World, call, call_raw, spec, world,
+    TelemetryCall, USAGE_PATH, World, call, call_raw, spec, telemetry_client, world,
 };
 use serde_json::{Value, json};
 use testkit::identity::TestIssuer;
 use tokio::sync::Semaphore;
+use tower::ServiceExt as _;
 use uuid::Uuid;
 
 const DASHBOARDS: &str = "/api/assistant/v1/dashboards";
@@ -1786,6 +1791,208 @@ async fn the_caps_refuse_the_61st_run_in_a_minute_and_a_third_at_a_time_per_tena
     }
     let refused = run(&tool_user, tool_saved).await.expect("the run");
     assert_error(&refused, 429, "rate_limited", "dashboard.runs_limited");
+}
+
+/// A run waiting for telemetry-query's answer holds only its tenant's slot, not the replica's
+/// memory: while four tenants have both of their runs waiting for slow answers (as many runs as
+/// the replica once allowed in all), a fifth tenant's run is answered at once.
+#[tokio::test(flavor = "multi_thread")]
+async fn slow_answers_of_other_tenants_do_not_stop_a_run() {
+    let (clock, _) = manual_clock();
+    // No wait for a slot: a run that could not start at once would be refused.
+    let caps = RunCaps::new(RUNS_PER_MINUTE, CONCURRENT_RUNS, Duration::ZERO, clock);
+    let Some(Setup { world, peers, api }) = setup(caps).await else {
+        return;
+    };
+    let base = api.url.clone();
+    let gate = Arc::new(Semaphore::new(0));
+    let held = Arc::new(Mutex::new(HashSet::new()));
+    peers.script(holding(&gate, &held));
+    let run = |person: &Person, saved: DashboardId| {
+        let (base, token, path) = (
+            base.clone(),
+            world.token(person),
+            action(saved, "dataset-runs"),
+        );
+        tokio::spawn(async move {
+            call(
+                &base,
+                Method::POST,
+                &path,
+                Some(&token),
+                Some(&run_body(1, "daily")),
+            )
+            .await
+        })
+    };
+    let mut waiting = Vec::new();
+    for _ in 0..4 {
+        let (viewer, saved) = tenant_with_dashboard(&world).await;
+        held.lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .insert(viewer.tenant());
+        for _ in 0..CONCURRENT_RUNS {
+            waiting.push(run(&viewer, saved));
+        }
+    }
+    peers.wait_calls(4 * CONCURRENT_RUNS).await;
+
+    let (free, free_saved) = tenant_with_dashboard(&world).await;
+    let answer = run(&free, free_saved).await.expect("the run");
+    assert_eq!(answer.status, 200, "{answer:?}");
+
+    gate.add_permits(4 * CONCURRENT_RUNS);
+    for running in waiting {
+        let answer = tokio::time::timeout(dashboard_world::WAIT, running)
+            .await
+            .expect("the held runs end once released")
+            .expect("the run");
+        assert_eq!(answer.status, 200, "{answer:?}");
+    }
+}
+
+/// A run's answer holds the result's memory until its body has been written or dropped, not
+/// only while the run goes on: an answer whose body is not read yet keeps the body's length
+/// reserved for the tenant; reading the body and letting it go, or dropping the answer unread,
+/// gives it back. Served over TCP, the memory is back once the client has the whole body.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_run_answer_holds_its_memory_until_its_body_is_written_or_dropped() {
+    let Some(Setup { world, peers, api }) = setup(RunCaps::default()).await else {
+        return;
+    };
+    let runner = Arc::new(DatasetRunner::new(
+        Some(telemetry_client(&peers)),
+        RunCaps::default(),
+    ));
+    let routes = world.routes(&peers, Arc::clone(&runner), true);
+    let (viewer, saved) = tenant_with_dashboard(&world).await;
+    let memory = runner.memory();
+    let request = || {
+        axum::http::Request::builder()
+            .method(Method::POST)
+            .uri(action(saved, "dataset-runs"))
+            .header(INTERNAL_IDENTITY_HEADER, world.token(&viewer))
+            .header(CONTENT_TYPE, "application/json")
+            .body(axum::body::Body::from(
+                serde_json::to_vec(&run_body(1, "daily")).expect("JSON"),
+            ))
+            .expect("a request")
+    };
+
+    let answer = routes.clone().oneshot(request()).await.expect("an answer");
+    assert_eq!(answer.status(), 200);
+    let held = memory.held_by(viewer.tenant());
+    assert!(held > 0, "the unread answer holds the result's memory");
+    assert_eq!(memory.used(), held);
+    let body = axum::body::to_bytes(answer.into_body(), usize::MAX)
+        .await
+        .expect("the body");
+    assert_eq!(held, body.len(), "it holds the body's length");
+    let result: Value = serde_json::from_slice(&body).expect("JSON");
+    assert_eq!(result["dataset"], "daily");
+    drop(body);
+    assert_eq!(memory.used(), 0, "the body read and let go");
+
+    let answer = routes.clone().oneshot(request()).await.expect("an answer");
+    assert_eq!(answer.status(), 200);
+    assert!(memory.held_by(viewer.tenant()) > 0);
+    drop(answer);
+    assert_eq!(memory.used(), 0, "the answer dropped unread");
+
+    // Served over TCP: once the client has the whole body, the server has written it.
+    let (other, other_saved) = tenant_with_dashboard(&world).await;
+    let answer = call(
+        &api.url,
+        Method::POST,
+        &action(other_saved, "dataset-runs"),
+        Some(&world.token(&other)),
+        Some(&run_body(1, "daily")),
+    )
+    .await;
+    assert_eq!(answer.status, 200, "{answer:?}");
+    let deadline = Instant::now() + dashboard_world::WAIT;
+    while api.runner.memory().used() > 0 {
+        assert!(
+            Instant::now() < deadline,
+            "the server did not give the memory back after writing the body"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+}
+
+/// One tenant holds at most its share of the replica's memory: with its share taken (by its
+/// answers not yet read, or a write), the tenant's run is refused once telemetry-query answered,
+/// 429 `dashboard.runs_limited` with `Retry-After: 1`, without reading the answer, and it stays
+/// counted in the minute because it used telemetry-query; another tenant runs meanwhile, and
+/// the tenant runs again once its memory is free.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_tenant_holds_at_most_its_share_and_a_run_refused_for_memory_is_counted() {
+    let (clock, _) = manual_clock();
+    // Two runs a minute, so the count shows; no waits.
+    let caps = RunCaps::new(2, CONCURRENT_RUNS, Duration::ZERO, clock);
+    let Some(Setup { world, peers, api }) = setup(caps).await else {
+        return;
+    };
+    let memory = api.runner.memory();
+    let (busy, busy_saved) = tenant_with_dashboard(&world).await;
+    let (other, other_saved) = tenant_with_dashboard(&world).await;
+    let run = |person: &Person, saved: DashboardId| {
+        let (base, token, path) = (
+            api.url.clone(),
+            world.token(person),
+            action(saved, "dataset-runs"),
+        );
+        async move {
+            call(
+                &base,
+                Method::POST,
+                &path,
+                Some(&token),
+                Some(&run_body(1, "daily")),
+            )
+            .await
+        }
+    };
+    let calls_of = |tenant: TenantId| {
+        peers
+            .calls()
+            .iter()
+            .filter(|call| call.tenant() == Some(tenant))
+            .count()
+    };
+
+    let taken = memory
+        .reserve(busy.tenant(), memory.per_tenant() - 1, Duration::ZERO)
+        .await
+        .expect("an idle replica");
+    let refused = run(&busy, busy_saved).await;
+    assert_error(&refused, 429, "rate_limited", "dashboard.runs_limited");
+    assert_eq!(refused.header("retry-after"), Some("1"));
+    assert_eq!(refused.json()["details"], json!({"retry_after": 1}));
+    assert_eq!(calls_of(busy.tenant()), 1, "it called telemetry-query");
+    assert_eq!(
+        memory.held_by(busy.tenant()),
+        memory.per_tenant() - 1,
+        "the refused run holds nothing"
+    );
+
+    let answer = run(&other, other_saved).await;
+    assert_eq!(answer.status, 200, "another tenant runs: {answer:?}");
+
+    drop(taken);
+    let answer = run(&busy, busy_saved).await;
+    assert_eq!(
+        answer.status, 200,
+        "the tenant's memory is free: {answer:?}"
+    );
+    let limited = run(&busy, busy_saved).await;
+    assert_error(&limited, 429, "rate_limited", "dashboard.runs_limited");
+    assert_eq!(
+        limited.header("retry-after"),
+        Some("60"),
+        "the run refused for memory counted in the minute"
+    );
+    assert_eq!(memory.used(), 0);
 }
 
 #[tokio::test(flavor = "multi_thread")]
