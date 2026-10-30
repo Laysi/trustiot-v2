@@ -21,6 +21,9 @@
 
   "security.cross_site_request": "這個請求來自其他網站，已被擋下。請直接開啟 TrustIoT 後再試一次。",
   "tenant.name_invalid": "名稱需為 1 到 {max} 個字元。",
+  "tenant.state_invalid": "請選擇停權或恢復。",
+  "tenant.suspension_reason_invalid": "停權時請選擇原因（資安或濫用、欠費、合約終止）；恢復時不要選原因。",
+  "tenant.state_final": "這個組織已因合約終止停權或已刪除，無法恢復或變更。",
   "telemetry.query_invalid": "歷史資料查詢缺少設定，或設定的格式不正確。",
   "telemetry.device_id_invalid": "設備 ID 的格式不正確。",
   "telemetry.time_zone_invalid": "請選擇有效的時區。",

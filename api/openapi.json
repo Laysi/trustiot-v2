@@ -1989,6 +1989,14 @@
         ],
         "type": "object"
       },
+      "RequestedTenantState": {
+        "description": "The states a request may ask for, for the API spec only: `deleted` is not set through this\nAPI, so the request schema does not offer it (`parse_body` reads the body's text).",
+        "enum": [
+          "active",
+          "suspended"
+        ],
+        "type": "string"
+      },
       "Resolution": {
         "description": "The aggregate table a request reads.",
         "enum": [
@@ -2617,6 +2625,30 @@
         ],
         "type": "object"
       },
+      "SetTenantState": {
+        "description": "The body of `PUT /api/identity/v1/platform/tenants/{tenant_id}/state`. Unknown fields are\nignored.",
+        "properties": {
+          "reason": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/SuspensionReason",
+                "description": "Why the tenant is suspended: required with `suspended`, absent or null with `active`."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "state": {
+            "$ref": "#/components/schemas/RequestedTenantState",
+            "description": "`suspended` to suspend the tenant (or change the reason of its suspension), `active` to\nresume it. `deleted` is not set through this API (422)."
+          }
+        },
+        "required": [
+          "state"
+        ],
+        "type": "object"
+      },
       "Statistics": {
         "description": "Statistics of each series.",
         "properties": {
@@ -2685,6 +2717,15 @@
         ],
         "type": "object"
       },
+      "SuspensionReason": {
+        "description": "Why a tenant is suspended, as the API takes and returns it.",
+        "enum": [
+          "security_or_abuse",
+          "non_payment",
+          "contract_terminated"
+        ],
+        "type": "string"
+      },
       "SwitchTenant": {
         "additionalProperties": false,
         "description": "The body of `PUT /api/identity/v1/sessions/current/tenant`.",
@@ -2751,6 +2792,56 @@
           "tenant_id",
           "name",
           "role"
+        ],
+        "type": "object"
+      },
+      "TenantState": {
+        "description": "A tenant's lifecycle state, as the API returns it.",
+        "enum": [
+          "active",
+          "suspended",
+          "deleted"
+        ],
+        "type": "string"
+      },
+      "TenantStateSnapshot": {
+        "description": "A tenant's state, its reason and its version.",
+        "properties": {
+          "reason": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/SuspensionReason",
+                "description": "Why the tenant is suspended; null when it is active. Only a terminated contract is\ndeleted, so a deleted tenant keeps `contract_terminated`."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "state": {
+            "$ref": "#/components/schemas/TenantState",
+            "description": "The state."
+          },
+          "state_changed_at": {
+            "description": "When the tenant got this state (its creation time while it was never changed), by the\ndatabase clock.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "state_version": {
+            "description": "The version of this state: 1 when the tenant was created, one more with every change of\nthe state or the reason. The `identity.tenant_state_changed` event of the change carries\nthe same number.",
+            "format": "int64",
+            "type": "integer"
+          },
+          "tenant_id": {
+            "$ref": "#/components/schemas/TenantId",
+            "description": "The tenant."
+          }
+        },
+        "required": [
+          "tenant_id",
+          "state",
+          "state_version",
+          "state_changed_at"
         ],
         "type": "object"
       },
@@ -6254,6 +6345,198 @@
           }
         },
         "summary": "Sets a user's role in a tenant, creating the membership when the user has none there.\nPlatform administrators only, in their own request.",
+        "tags": [
+          "identity"
+        ]
+      }
+    },
+    "/api/identity/v1/platform/tenants/{tenant_id}/state": {
+      "get": {
+        "operationId": "getPlatformTenantState",
+        "parameters": [
+          {
+            "description": "The tenant's ID.",
+            "in": "path",
+            "name": "tenant_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TenantStateSnapshot"
+                }
+              }
+            },
+            "description": "The tenant's state, reason and version."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The tenant ID is not a UUID (`invalid_request`)."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No valid session (`unauthenticated`)."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Not a platform administrator, or not the administrator's own request: another service exchanged the token (`permission_denied`)."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No tenant has the ID (`not_found`)."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The database failed (`unavailable`)."
+          }
+        },
+        "summary": "Reads a tenant's state, reason and version. Platform administrators only, in their own\nrequest.",
+        "tags": [
+          "identity"
+        ]
+      },
+      "put": {
+        "operationId": "setPlatformTenantState",
+        "parameters": [
+          {
+            "description": "The tenant's ID.",
+            "in": "path",
+            "name": "tenant_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetTenantState"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TenantStateSnapshot"
+                }
+              }
+            },
+            "description": "The tenant has the state: when the state or the reason changed, the version went up by one and `identity.tenant_state_changed` was written in the same transaction; when the tenant already had them, nothing was written."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The tenant ID is not a UUID, the `Content-Type` is not `application/json`, or the body is over 4096 bytes or not a JSON object with a string `state` and a string or null `reason` (`invalid_request`)."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No valid session (`unauthenticated`)."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Not a platform administrator, or not the administrator's own request: another service exchanged the token (`permission_denied`)."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No tenant has the ID; nothing was written (`not_found`)."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The tenant's contract was terminated or it is deleted, which is final (`conflict`, `tenant.state_final`); nothing was written and the version is unchanged."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The state is not `active` or `suspended` (`/state`, `tenant.state_invalid`), or a suspension has no known reason or a resumption has one (`/reason`, `tenant.suspension_reason_invalid`) (`validation_failed`). Nothing was written."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The database failed; nothing was written (`unavailable`)."
+          }
+        },
+        "summary": "Suspends a tenant with a reason, changes the reason of its suspension, or resumes it.\nPlatform administrators only, in their own request.",
         "tags": [
           "identity"
         ]

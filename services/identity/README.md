@@ -8,7 +8,7 @@
 - 有 ext_authz 端點與內部身分簽發。
 - 有 token 交換：服務代表使用者呼叫另一個服務時，拿自己收到的 token 換一張受眾是對方的 token（見 [token 交換](#token-交換代表使用者呼叫)，Laysi/trustiot-v2#106，2026-10-21）。
 - **email 驗證碼登入、登出與登出所有裝置**（Laysi/trustiot-v2#103，2026-10-21，見[登入](#登入)）：這是建立 session 的唯一方式，沒有密碼登入、公開註冊，任何版本都沒有假登入；驗證碼經 chart `smtp.*` 的 relay 寄出。使用者與 email 目前由擁有者角色寫入（[測試工具怎麼建立 session](#測試工具怎麼建立-session)），沒有管理使用者的 API。
-- 一個對外的 HTTP API：平台管理者建立租戶，同一個交易寫出 `identity.tenant_created` 事件（見[租戶](#租戶)，Laysi/trustiot-v2#65，2026-10-14）；平台管理者設定既有使用者在租戶裡的角色，同一個交易寫出 `identity.member_role_changed` 事件（見[成員](#成員)，Laysi/trustiot-v2#583，2026-10-23）；規格在 `api/openapi.json`（`tools/openapi`）。
+- 一個對外的 HTTP API：平台管理者建立租戶，同一個交易寫出 `identity.tenant_created` 事件（見[租戶](#租戶)，Laysi/trustiot-v2#65，2026-10-14）；平台管理者設定既有使用者在租戶裡的角色，同一個交易寫出 `identity.member_role_changed` 事件（見[成員](#成員)，Laysi/trustiot-v2#583，2026-10-23）；平台管理者停權（記錄原因）與恢復租戶，同一個交易寫出帶狀態快照與版本的 `identity.tenant_state_changed` 事件（見[租戶狀態](#租戶狀態)，Laysi/trustiot-v2#776，2026-10-30）；規格在 `api/openapi.json`（`tools/openapi`）。
 - 平台管理者讀取、修改與重設 AI 閘道的模型角色：身分服務檢查權限之後轉給 AI 閘道的管理 API，每次變更寫出全平台事件 `identity.ai_model_role_changed`（見[AI 模型角色](#ai-模型角色)，Laysi/trustiot-v2#608，2026-10-29）。
 - 已登入的使用者讀取目前的 session（使用者、目前的租戶與角色、所屬的租戶）、把 session 切換到自己所屬的另一個租戶，並讀取與修改自己的偏好（介面語言、AI 回答語言、時區、主題）（Laysi/trustiot-v2#497，2026-10-23，見[目前的 session 與切換租戶](#目前的-session-與切換租戶)與[偏好設定](#偏好設定)）。
 - 映像見下方[映像](#映像)；chart 的 `services.identity.enabled` 預設仍是 `false`。nightly 的 smoke 從 Laysi/trustiot-v2#65 起啟用它與資產服務，經入口建立租戶；其餘啟用工作在 Laysi/trustiot-v2#77。
@@ -224,6 +224,40 @@ ext_authz 每個請求都查資料庫，所以被撤銷的 session 下一個請�
 - 新租戶的 ID 由服務產生（UUIDv7），租戶的列與 `identity.tenant_created`（`crates/contract` 的 `events::identity::TenantCreated`，aggregate `tenant`/租戶 ID，事件帶租戶，`actor` 是建立它的平台管理者）在**同一個新租戶的 RLS 交易**裡寫入（`outbox::publish_as`），一起 commit 或一起放棄：有租戶就一定有事件，沒有租戶就沒有事件（`tests/tenants.rs` 撤銷寫 outbox 的權限後證明 503 且沒有留下列）。其他服務從這個事件建立自己的租戶資料，第一個是[資產服務](../assets/README.md)。
 - 成功時記一行 INFO `created a tenant`，帶 `user_id` 與 `tenant_id`；租戶名稱可能是公司名，不寫日誌，事件也不帶名稱（要名稱的服務以後經 API 取得）。
 
+## 租戶狀態
+
+每個租戶有一個狀態（Laysi/trustiot-v2#776，清單 B1，`src/tenant_state.rs`）：`active`（正常）、`suspended`（停權，一定帶原因：`security_or_abuse` 資安或濫用、`non_payment` 欠費、`contract_terminated` 合約終止）或 `deleted`（合約終止後刪除，Laysi/trustiot-v2#109；這裡只定義狀態，沒有 API 設定它）。平台管理者（A2）以 `PUT /api/identity/v1/platform/tenants/{tenant_id}/state` 停權或恢復，以 `GET` 同一個路徑讀目前的狀態。body 是 `{"state": "suspended", "reason": "<原因>"}` 或 `{"state": "active"}`；兩者都回 `{"tenant_id", "state", "reason", "state_version", "state_changed_at"}`。
+
+| 請求 | 回應 |
+| --- | --- |
+| 沒有有效的內部身分 token | 401 `unauthenticated` |
+| 不是平台管理者（租戶的 `admin` 也不是），或 token 帶 `act` | 403 `permission_denied`，在讀 body 與資料庫之前判斷（body 不讀進記憶體） |
+| 租戶 ID 不是 UUID | 400 `invalid_request` |
+| `PUT`：`Content-Type` 不是 `application/json`（可帶參數），或沒有 `Content-Type` | 400 `invalid_request` |
+| `PUT`：body 超過 4096 位元組（`MAX_BODY_BYTES`），或不是帶字串 `state`、字串或 `null` 的 `reason` 的 JSON 物件 | 400 `invalid_request` |
+| `PUT`：`state` 不是 `active` 或 `suspended`（`deleted` 也不行）；停權沒有三種原因之一，或恢復帶了原因 | 422 `validation_failed`，欄位 `/state`（`tenant.state_invalid`）、`/reason`（`tenant.suspension_reason_invalid`） |
+| 沒有這個租戶 | 404 `not_found`，什麼都沒寫 |
+| `PUT`：租戶已因合約終止停權或已刪除，而請求會改變它 | 409 `conflict`，訊息 key `tenant.state_final`；什麼都沒寫，版本不變 |
+| 資料庫出錯或拒絕交易 | 503 `unavailable`，什麼都沒寫 |
+| `GET` | 200，目前的狀態 |
+| `PUT`：狀態或原因改變了 | 200，新的狀態（版本加一），並寫出事件 |
+| `PUT`：租戶本來就是這個狀態與原因 | 200，原本的狀態；什麼都不寫、不發事件 |
+
+2026-10-30 的決定（Laysi/trustiot-v2#107 拆分時）：
+
+- **版本**：`state_version` 在建立租戶時是 1（`identity.tenant_created` 就代表「正常、沒有原因、版本 1」），之後狀態或原因每改變一次剛好加一；停權中換原因也升版本，同狀態同原因不寫入。`state_changed_at` 是進入這個狀態的時間（由 trigger 在改變時以資料庫的 `clock_timestamp()` 設定，沒改變時保持原值，任何寫入者都設不了別的時間；從沒改過時是建立時間），只給人看，順序以版本為準。
+- **事件帶快照**：每次改變在同一個交易寫 `identity.tenant_state_changed`（`crates/contract` 的 `events::identity::TenantStateChanged`），payload 是改變後的 `{state, reason, state_version}`；信封的租戶是這個租戶，`actor` 是平台管理者，aggregate 是 `tenant` 加租戶 ID（與 `identity.tenant_created` 同一個，所以依寫入順序送達）。消費端只保留版本較大的快照（[crates/outbox](../../crates/outbox/README.md) 的「通知模式」），從頭重播就能重建每個租戶的狀態，不必呼叫這個服務。狀態與原因的列舉都有 `Unrecognized`，舊版本的消費端解得開新值，要當成不是 `active` 處理。事件層把它記進該租戶的操作紀錄，後台以 `GET /api/identity/v1/platform/tenants/{tenant_id}/event-log` 看得到。
+- **合約終止與 `deleted` 不能恢復**（清單 B1「合約終止不恢復」）：已因 `contract_terminated` 停權的租戶不能恢復、也不能換成其他原因，只能（由 Laysi/trustiot-v2#109）變成 `deleted`；只有合約終止的租戶會變成 `deleted`，並保留原因 `contract_terminated`；`deleted` 不再改變。
+- 只接受平台管理者本人的請求，與[成員](#成員)相同。
+- 這裡只改狀態：每次請求的停權檢查、certs 的訂閱與後台的「處理中」在 Laysi/trustiot-v2#107 的其他子 issue，下游的撤銷與踢線在 Laysi/trustiot-v2#108。
+
+實作：
+
+- 交易以**路徑的租戶**開（`BackgroundTenantDb`，見[資料庫](#資料庫)），以 `SELECT ... FOR NO KEY UPDATE` 鎖住租戶的列（更新不改鍵，這就是更新本身要的鎖），所以同一個租戶的請求依序執行，每個請求都以前一個留下的狀態判斷：同時送出的相同停權只產生一個新版本、一個事件。交易開頭設 `lock_timeout` 5 秒（`LOCK_TIMEOUT`），等鎖超過就回 503。讀取也在路徑租戶的交易裡，不上鎖。
+- **資料庫也擋**（`0008_tenant_state.sql`）：`state` 與 `suspension_reason` 有 CHECK（`active` 沒有原因、`suspended` 一定有原因、`deleted` 的原因一定是 `contract_terminated`）；trigger `tenants_state_guard` 對任何寫入者（包括服務角色）拒絕「狀態或原因改變時版本不是剛好加一、沒改變時版本變了」、「離開合約終止或 `deleted`（合約終止只能變成 `deleted`）」與「不是合約終止的租戶變成 `deleted`」，以 42501 拒絕，並由它設定 `state_changed_at`。服務角色只多了 `state`、`suspension_reason`、`state_version` 三欄的 `UPDATE`；它的 `INSERT` 縮成 `tenant_id`、`name` 兩欄，所以新租戶一定從「正常、版本 1」開始。
+- 每次改變記一行 INFO `changed a tenant's state`，帶平台管理者的 `user_id`、`tenant_id`、前後的狀態與原因、新版本；拒絕記 INFO `refused to change a tenant's state` 或 `refused to read a tenant's state`，帶 `user_id` 與 `exchanged`。
+- 路由：與其他身分服務的 API 一樣在 `/api/identity` 的 cookie 路由底下，跨站請求由 ext_authz 擋下，服務另外要求 JSON 的 `Content-Type`（見[租戶](#租戶)）。
+
 ## 成員
 
 平台管理者（A2）以 `PUT /api/identity/v1/platform/tenants/{tenant_id}/members` 設定既有使用者在租戶裡的角色（`src/members.rs`，Laysi/trustiot-v2#583）：使用者還不是成員時建立成員資格，已經是成員時改角色。body 是 `{"email", "role"}`，`role` 是 `viewer`、`editor` 或 `admin`。
@@ -392,7 +426,7 @@ schema `identity`，DDL 在 `migrations/postgres/`，由 migration Job（Laysi/t
 | 角色 | 權限 |
 | --- | --- |
 | `identity_owner`（migration 角色） | 擁有 schema 與所有表 |
-| `identity_app`（服務角色） | `identity.users`、`identity.memberships`、`identity.sessions` 的 `SELECT`；`identity.memberships` 的 `INSERT`（只限 `tenant_id`、`user_id`、`tenant_role` 三欄）與 `tenant_role` 一欄的 `UPDATE`（設定成員角色，`0005_member_roles.sql`；不能刪除成員資格，不能改租戶、使用者與建立時間，RLS 只放行交易的租戶）；`identity.sessions` 的 `INSERT`（只限 `id`、`token_hash`、`user_id`、`active_tenant_id`、`expires_at` 五欄：建立時間一律是資料庫的預設 `now()`，7 天上限才從真正的建立時間算起）與 `expires_at`、`revoked_at` 兩欄的 `UPDATE`（登入、延長、登出；不能刪除、不能改使用者與建立時間，trigger 另擋超過 7 天與撤銷後復原）與 `active_tenant_id` 一欄的 `UPDATE`（切換租戶，Laysi/trustiot-v2#497）；`identity.preferences` 的 `SELECT`、只限 `user_id` 的 `INSERT` 與 `language`、`ai_language`、`time_zone`、`theme` 四欄的 `UPDATE`；`identity.login_codes` 的 `SELECT`、`INSERT`、`DELETE` 與 `attempts`、`consumed_at`、`invalidated_at` 三欄的 `UPDATE`；`identity.tenants` 的 `SELECT`、`INSERT`；outbox 的寫入權限（`outbox_event` 的 `INSERT`、`outbox_aggregate` 的 `SELECT`、`INSERT`、`UPDATE`，由 migration Job 授權，見 [crates/outbox](../../crates/outbox/README.md)）；兩張表都有 RLS，它只碰得到目前租戶的事件與聚合。事件紀錄：`event_log` 的 `SELECT`、`INSERT`（RLS），`platform_event_log` 的 `INSERT`，outbox 消費端的表（Job 授權） |
+| `identity_app`（服務角色） | `identity.users`、`identity.memberships`、`identity.sessions` 的 `SELECT`；`identity.memberships` 的 `INSERT`（只限 `tenant_id`、`user_id`、`tenant_role` 三欄）與 `tenant_role` 一欄的 `UPDATE`（設定成員角色，`0005_member_roles.sql`；不能刪除成員資格，不能改租戶、使用者與建立時間，RLS 只放行交易的租戶）；`identity.sessions` 的 `INSERT`（只限 `id`、`token_hash`、`user_id`、`active_tenant_id`、`expires_at` 五欄：建立時間一律是資料庫的預設 `now()`，7 天上限才從真正的建立時間算起）與 `expires_at`、`revoked_at` 兩欄的 `UPDATE`（登入、延長、登出；不能刪除、不能改使用者與建立時間，trigger 另擋超過 7 天與撤銷後復原）與 `active_tenant_id` 一欄的 `UPDATE`（切換租戶，Laysi/trustiot-v2#497）；`identity.preferences` 的 `SELECT`、只限 `user_id` 的 `INSERT` 與 `language`、`ai_language`、`time_zone`、`theme` 四欄的 `UPDATE`；`identity.login_codes` 的 `SELECT`、`INSERT`、`DELETE` 與 `attempts`、`consumed_at`、`invalidated_at` 三欄的 `UPDATE`；`identity.tenants` 的 `SELECT`、只限 `tenant_id`、`name` 兩欄的 `INSERT`（建立租戶，`0008_tenant_state.sql` 起；之前是整張表）與 `state`、`suspension_reason`、`state_version` 三欄的 `UPDATE`（停權與恢復，Laysi/trustiot-v2#776；trigger 另擋版本不是剛好加一、離開合約終止或 `deleted` 與不是合約終止就刪除，並設定 `state_changed_at`，見[租戶狀態](#租戶狀態)）；outbox 的寫入權限（`outbox_event` 的 `INSERT`、`outbox_aggregate` 的 `SELECT`、`INSERT`、`UPDATE`，由 migration Job 授權，見 [crates/outbox](../../crates/outbox/README.md)）；兩張表都有 RLS，它只碰得到目前租戶的事件與聚合。事件紀錄：`event_log` 的 `SELECT`、`INSERT`（RLS），`platform_event_log` 的 `INSERT`，outbox 消費端的表（Job 授權） |
 | `identity_platform`（平台角色） | 事件紀錄的消費端以它讀 `CONSUMES` 每個產生端的 `outbox_event`（Job 授權），後台以它讀 `event_log`（`platform_access` policy，只有 `FOR SELECT`）與 `platform_event_log` 的 `SELECT`；列出使用者所屬的租戶時以它讀 `memberships` 與 `tenants`（`platform_access` policy，只有 `FOR SELECT`，Laysi/trustiot-v2#497，見[目前的 session 與切換租戶](#目前的-session-與切換租戶)）；沒有寫入權限，也碰不到 `sessions` 與 `preferences`。chart 綁它的密碼（`trustiot.migrate.platformLogins`，2026-10-21 起，Laysi/trustiot-v2#130） |
 
 | 表 | 內容 | RLS |
@@ -401,7 +435,7 @@ schema `identity`，DDL 在 `migrations/postgres/`，由 migration Job（Laysi/t
 | `login_codes` | 驗證碼的雜湊、使用者、建立與到期時間、嘗試次數、消耗與作廢時間（見[登入](#登入)） | 無：登入時還沒有 session 與租戶，不是租戶資料 |
 | `memberships` | `(tenant_id, user_id)` 與角色 `tenant_role`（`viewer`、`editor`、`admin`；不叫 `role`，因為 `tools/sql-check` 把 `UPDATE` 這個名稱的欄位當成切換資料庫角色而拒絕） | 照 `crates/service-kit/sql/tenant-table.sql` 的 `tenant_isolation`，另有只給 `identity_platform` 的 `platform_access FOR SELECT` |
 | `sessions` | `token_hash`、使用者、`active_tenant_id`、建立、到期與撤銷時間 | 無 |
-| `tenants` | 租戶 ID（整個主鍵）、名稱（1–100 個字元）、建立時間 | 照 `tenant-table.sql` 的 `tenant_isolation`，另有只給 `identity_platform` 的 `platform_access FOR SELECT` |
+| `tenants` | 租戶 ID（整個主鍵）、名稱（1–100 個字元）、建立時間；狀態 `state`、停權原因 `suspension_reason`、版本 `state_version`、進入目前狀態的時間 `state_changed_at`（`0008_tenant_state.sql`，見[租戶狀態](#租戶狀態)） | 照 `tenant-table.sql` 的 `tenant_isolation`，另有只給 `identity_platform` 的 `platform_access FOR SELECT` |
 | `preferences` | 使用者（主鍵，外鍵到 `users`，`ON DELETE CASCADE`）、`language`、`ai_language`、`time_zone`、`theme`，各有 CHECK（`0007_preferences_and_tenant_switch.sql`，見[偏好設定](#偏好設定)） | 無：偏好屬於使用者，不是租戶資料 |
 | `outbox_event`、`outbox_aggregate` | 這個服務寫出的事件與每個聚合的序號（由 Job 建立，見 [crates/outbox](../../crates/outbox/README.md)）；`tenant` 聚合屬於該租戶 | outbox 範本的 policy（`outbox-event.sql`、`outbox-aggregate.sql`） |
 | `event_log` | 租戶事件的紀錄（`0003_event_log.sql`，見[事件層與操作紀錄](#事件層與操作紀錄)）：信封的欄位、aggregate、`actor_user_id` 或 `actor_service`、`payload`、`recorded_at`；主鍵 `(tenant_id, event_id)` | `tenant_isolation`，另有只給 `identity_platform` 的 `platform_access FOR SELECT` |
@@ -417,6 +451,8 @@ schema `identity`，DDL 在 `migrations/postgres/`，由 migration Job（Laysi/t
 建立租戶是第二個例外：新租戶的交易沒有請求可以提供租戶（token 是平台管理者的，沒有那個租戶）。`TenantStore` 有自己的連線池（服務角色 2 條連線，`POOL_CONNECTIONS`，和 session 查詢的連線池分開，大量建立租戶不會佔走 ext_authz 等著用的連線），私下持有它的 `BackgroundTenantDb`；唯一的方法 `create` 自己產生租戶 ID，所以請求無法選擇交易的租戶，handler 也拿不到 `BackgroundTenantDb`。同一個連線池給 handler 的 `TenantDb`（`TenantStore::connect_lazy_shared`）交給使用者自己的帳號 API 共用：它只能以請求 token 的租戶開交易。
 
 設定成員角色是第三個例外（Laysi/trustiot-v2#583），也是唯一以**請求指定、但 token 沒有的租戶**開交易的地方：平台管理者的 token 沒有那個租戶，交易的租戶取自路徑。`MemberStore` 由 `TenantStore::members` 產生，共用同一個連線池與 `BackgroundTenantDb`（兩者都是平台管理者少量的寫入，不另外佔每個副本的連線數），並私下持有它；唯一的方法 `set_role` 在開交易之前先確認是平台管理者本人的請求（`is_own_platform_admin`：平台管理者，而且 token 沒有 `act`），handler 在讀 body 之前也先判斷一次，所以其他人無法讓服務在任何租戶開交易。交易裡只做三件事：確認租戶存在、以 email 找使用者（`users` 不是租戶資料）、寫那一筆成員資格與事件；RLS 讓它碰不到其他租戶的列。
+
+讀取與設定租戶狀態是同一類的例外（Laysi/trustiot-v2#776）：`TenantStateStore` 由 `TenantStore::states` 產生，共用同一個連線池與 `BackgroundTenantDb` 並私下持有；兩個方法 `read`、`set` 在開交易之前先確認是平台管理者本人的請求（`Requirement::OwnPlatformAdmin`），handler 在讀 body 之前也先判斷一次。交易裡只讀、鎖、改路徑租戶的那一列並寫事件。
 
 ## 連線池
 
@@ -445,7 +481,7 @@ schema `identity`，DDL 在 `migrations/postgres/`，由 migration Job（Laysi/t
 | 連線池 | 誰用 | 連線數 |
 | --- | --- | --- |
 | ext_authz（`PgSessionStore`） | ext_authz 檢查、保溫工作、session 延長 | `TRUSTIOT__DATABASE__MAX_CONNECTIONS`，預設 10 |
-| 租戶（`tenants::POOL_CONNECTIONS`） | 租戶 API、設定成員角色；使用者自己的帳號（讀取目前的 session、切換租戶、偏好，見[目前的 session 與切換租戶](#目前的-session-與切換租戶)與[偏好設定](#偏好設定)）的查詢 | 2 |
+| 租戶（`tenants::POOL_CONNECTIONS`） | 租戶 API、設定成員角色、租戶狀態的讀取與停權、恢復；使用者自己的帳號（讀取目前的 session、切換租戶、偏好，見[目前的 session 與切換租戶](#目前的-session-與切換租戶)與[偏好設定](#偏好設定)）的查詢 | 2 |
 | 登入請求（`login::POOL_CONNECTIONS`） | `verify_code`、登出、登出所有裝置 | 4 |
 | 寄信（`login::SEND_POOL_CONNECTIONS`） | 發驗證碼的 worker（發碼、作廢沒寄出的驗證碼）、每小時刪除舊的驗證碼 | 2 |
 | run 委派（`delegation::POOL_CONNECTIONS`） | 建立 run 委派與每次換 token 時查 session 與成員資格（見[agent 執行期間的委派](#agent-執行期間的委派)） | 4 |

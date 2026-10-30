@@ -29,6 +29,8 @@
 //! - [`delegation`]: run delegations, for an agent run that acts for its user longer than the
 //!   request's token lives (Laysi/trustiot-v2#551).
 //! - [`tenants`]: creating tenants, and the event that announces them.
+//! - [`tenant_state`]: platform administrators suspending and resuming tenants, and the versioned
+//!   event that carries each new state (Laysi/trustiot-v2#776).
 //! - [`members`]: platform administrators setting users' roles in tenants, and the event that
 //!   records each change.
 //! - [`event_log`]: the event layer: recording every producer's events, and reading them.
@@ -59,6 +61,7 @@ pub mod members;
 pub mod preferences;
 pub mod schema;
 pub mod session;
+pub mod tenant_state;
 pub mod tenants;
 
 use axum::Router;
@@ -93,6 +96,8 @@ use crate::tenants::TenantStore;
 #[openapi(
     paths(
         tenants::create_tenant,
+        tenant_state::get_tenant_state,
+        tenant_state::set_tenant_state,
         members::set_member_role,
         login::log_in,
         logout::log_out,
@@ -183,11 +188,12 @@ pub async fn start(context: Context<Config>) -> Result<Router, BoxError> {
         async move { store.ping().await }
     });
     MigrationCheck::new(&schema::SCHEMA, store.pool().clone()).register(context.health());
-    // The tenant API's pool also serves setting members' roles (`members`) and the signed-in
-    // user's own account (`accounts`) (README, "連線池").
+    // The tenant API's pool also serves setting members' roles (`members`), tenants' states
+    // (`states`) and the signed-in user's own account (`accounts`) (README, "連線池").
     let (tenants, accounts) =
         TenantStore::connect_lazy_shared(config.postgres().connect_options())?;
     let members = tenants.members();
+    let states = tenants.states();
     let log = start_event_log(&context)?;
     // Requests to the service's own API come through the ingress gateway like any other, with a
     // token the ext_authz check signed for `identity`.
@@ -255,6 +261,7 @@ pub async fn start(context: Context<Config>) -> Result<Router, BoxError> {
         ))
         .merge(tenants::routes(verifier.clone(), tenants))
         .merge(members::routes(verifier.clone(), members))
+        .merge(tenant_state::routes(verifier.clone(), states))
         .merge(model_roles)
         .merge(event_log::routes(verifier, log.map(|(log, _)| log))))
 }

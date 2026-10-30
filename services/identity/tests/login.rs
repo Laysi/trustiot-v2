@@ -1358,6 +1358,11 @@ async fn there_is_no_password_login_sign_up_or_fake_login() {
                 "/api/identity/v1/platform/tenants/{tenant_id}/members".to_owned(),
                 vec!["put".to_owned()]
             ),
+            // Platform administrators read, suspend and resume a tenant (Laysi/trustiot-v2#776).
+            (
+                "/api/identity/v1/platform/tenants/{tenant_id}/state".to_owned(),
+                vec!["get".to_owned(), "put".to_owned()]
+            ),
             // The user's own preferences (Laysi/trustiot-v2#497).
             (
                 "/api/identity/v1/preferences".to_owned(),

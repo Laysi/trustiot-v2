@@ -8,7 +8,7 @@
 | `publish`、`publish_as`、`write` | 在呼叫端的交易內寫入事件（`publish_as` 另記誰做了變更） |
 | `Consumer`、`Handler` | 讀取產生端的事件、依序交給 handler、記錄進度 |
 | `replay_from` | 把訂閱移到指定位置重新讀取 |
-| `notify` | 通知模式：只存比目前更新的版本 |
+| `notify` | 通知模式：消費端只保留版本較大的狀態 |
 | `lag` | 落後量指標 `outbox.consumer.lag`、`outbox.consumer.lag.age` |
 
 範例服務 `src/bin/outbox-example.rs` 在同一個行程裡當產生端與消費端，整合測試以它做為真的行程來測當機與指標。
@@ -40,7 +40,7 @@ tx.commit().await?;
 - `publish` 只接受交易（`&mut Transaction`），不能在交易外寫事件。交易回滾，事件與它的序號一起消失。
 - 人經 API 做的變更用 `publish_as`，多帶一個 `contract::event::Actor`：`Actor::User { user_id }`（請求的使用者，`UserIdentity::user_id()`）或服務自己的工作 `Actor::Service { service }`。它寫進信封的 `actor`，身分服務的事件紀錄（操作紀錄，K2）以它記下「誰」（[services/identity](../../services/identity/README.md) 的「事件層與操作紀錄」，Laysi/trustiot-v2#130）。`publish` 不帶 actor。
 - 每個事件屬於一個聚合（`Aggregate`：種類加 ID，例如 `tenant` 加租戶 ID）。同一聚合的事件依寫入順序送達，不同聚合之間不保證順序。寫入時會鎖住該聚合在 `outbox_aggregate` 的列直到交易結束，同一聚合的寫入因此排隊；`REPEATABLE READ` 以上的隔離層級則會以序列化錯誤失敗，由呼叫端重試整筆交易。
-- `Published::aggregate_seq` 是事件在聚合內的序號（1、2、3…），通知模式拿它當版本。
+- `Published::aggregate_seq` 是事件在聚合內的序號（1、2、3…）。通知模式的版本由產生端決定：可以是業務資料自己的版本欄（例如租戶的 `state_version`），也可以是這個序號（見[通知模式](#通知模式b1)）。
 - 聚合屬於它的事件的租戶，或屬於平台（全平台事件）：第一筆事件決定。之後別的租戶（或平台角色）為它寫事件，資料庫以 SQLSTATE 42501 拒絕，該聚合的序號不變（見[聚合的租戶隔離](#聚合的租戶隔離laysitrustiot-v24132026-10-15)）。所以聚合 ID 要是服務自己產生、全平台唯一的值（例如 UUID），不能是租戶自己選的值（例如租戶輸入的序號）；要用這種值時，在前面加上租戶 ID。
 
 ### 消費端
@@ -104,7 +104,7 @@ context.spawn(async move {
 
 代價：讀取上限是整個 Postgres 叢集最舊的「有交易 ID」的交易。任何服務的長時間寫入交易（含 handler 寫入後才做慢的事）都會讓所有訂閱停在它之前，直到它結束；唯讀交易（例如 pg_dump）沒有交易 ID，不受影響。所以：
 
-- handler 先做慢的讀取（例如通知模式呼叫內部 API），再寫入；寫入到 commit 之間要短。
+- handler 先做慢的讀取（例如呼叫其他服務的 API），再寫入；寫入到 commit 之間要短。
 - 寫事件的交易不要包著外部呼叫。
 - lag 指標會反映這種停滯：已 commit 但讀不到的事件也計入。長寫入交易自己的事件在它 commit 前不算。影響範圍與監控見[長寫入交易與 prepared transaction](#長寫入交易與-prepared-transaction)。
 
@@ -131,13 +131,15 @@ tx.commit().await?;
 
 ## 通知模式（B1）
 
-事件只代表「這個聚合變了」，消費端讀產生端的目前狀態收斂，不依賴事件內容：
+事件帶狀態快照與版本，消費端只保留版本較大的快照，不依賴事件到達的順序（2026-10-30 使用者決定，Laysi/trustiot-v2#107 拆分時；第一個用到的是租戶狀態，Laysi/trustiot-v2#776）：
 
-1. 產生端的內部 API 回傳目前狀態，與 `outbox::aggregate_version` 讀到的版本，兩者在同一個快照讀（單一查詢，或 `REPEATABLE READ` 交易）。版本比狀態晚讀，會把舊狀態標成新版本。
-2. 消費端 handler 先呼叫 API（讀取，不佔交易 ID），再以 `notify::store_if_newer(tx, scope, 聚合, 版本)` 判斷：版本比已存的新才寫入，否則什麼都不做。這一列會鎖到交易結束，同時處理同一聚合的副本會排隊再比較。
-3. 可選：`notify::stored_version` 不小於 `delivery.aggregate_seq` 時，已存的狀態已經包含這個事件，可以不呼叫 API。
+1. 產生端在改變狀態的同一筆交易寫事件，payload 是改變**之後**的完整狀態與它的版本（例如 `identity.tenant_state_changed` 的 `{state, reason, state_version}`）。版本每次改變遞增、不重複、不倒退：可以是業務資料自己的版本欄（租戶的 `state_version`，資料庫的 trigger 保證每次改變剛好加一），也可以是 `Published::aggregate_seq`。狀態沒變就不寫事件。
+2. 消費端 handler 以 `notify::store_if_newer(tx, scope, 聚合, 事件的版本)` 判斷：版本比已存的新才寫入快照，否則什麼都不做。這一列會鎖到交易結束，同時處理同一聚合的副本會排隊再比較。
+3. 從頭重播產生端的紀錄就能重建每個聚合的狀態：每次改變都有一個事件，版本最大的那個就是目前的狀態。所以消費端不必（也不應）在處理事件時呼叫產生端的 API。
 
-晚到的事件、重播的舊事件、副本競爭都只會讀到目前狀態或被版本擋下，不會用舊狀態蓋掉新的（測試 `a_stale_reading_never_overwrites_a_newer_one`、`late_and_replayed_events_converge_on_the_current_state`）。
+晚到的事件、重播的舊事件、副本競爭都會被版本擋下，不會用舊狀態蓋掉新的。不採用「事件只說聚合變了、消費端呼叫產生端的內部 API 讀目前狀態」：目前沒有不帶使用者身分的服務對服務讀取路徑（呼叫端身分的驗證是 Laysi/trustiot-v2#509），而事件帶快照讓重播不依賴產生端在線。代價是事件的 payload 就是合約：快照的欄位照 [`crates/contract`](../contract/README.md) 的演進規則只增不改，消費端不認得的列舉值要當成最保守的狀態處理（例如租戶狀態的 `Unrecognized` 讀成停權）。
+
+`notify` 本身不限定版本從哪裡來，所以「讀產生端目前狀態」的作法仍然可行（產生端以 `outbox::aggregate_version` 在讀狀態的同一個快照讀版本），本 crate 的測試 `a_stale_reading_never_overwrites_a_newer_one`、`late_and_replayed_events_converge_on_the_current_state` 以它驗證版本比較本身；新的消費端照上面的作法。
 
 ## 失敗處理
 

@@ -71,6 +71,8 @@
 | `GET /api/identity/v1/event-log` | 租戶 admin | |
 | `POST /api/identity/v1/tenants` | 平台管理員，本人 | |
 | `PUT /api/identity/v1/platform/tenants/{tenant_id}/members` | 平台管理員，本人 | |
+| `GET /api/identity/v1/platform/tenants/{tenant_id}/state` | 平台管理員，本人 | |
+| `PUT /api/identity/v1/platform/tenants/{tenant_id}/state` | 平台管理員，本人 | |
 | `GET /api/identity/v1/platform/tenants/{tenant_id}/event-log` | 平台管理員，本人 | |
 | `GET /api/identity/v1/platform/event-log` | 平台管理員，本人 | |
 | `GET /api/identity/v1/platform/ai/model-roles` | 平台管理員，本人 | |
@@ -79,6 +81,7 @@
 
 - 登出（`DELETE .../sessions/current`）撤銷的是請求 cookie 的那個 session，沒有 cookie 得 401；探測帶一個格式正確、但不屬於任何 session 的 cookie。
 - 兩條平台操作紀錄路由在 Laysi/trustiot-v2#584 改為拒絕換發的 token（之前接受）。
+- 租戶狀態的讀取與停權、恢復（`.../tenants/{tenant_id}/state`，Laysi/trustiot-v2#776）從一開始就只接受平台管理員本人的請求：停權與恢復是平台管理員的動作，不讓其他服務代為進行。拒絕在讀 body 與資料庫之前；`services/identity/tests/tenant_state.rs` 另外證明被拒的呼叫者沒有改到任何租戶的狀態、版本與事件。
 - `POST /api/identity/v1/tenants` 與 `DELETE /api/identity/v1/sessions` 在 Laysi/trustiot-v2#760 改為只接受本人的請求（2026-10-30 決定；之前都接受換發的 token）：建立租戶是平台管理員的動作，登出所有裝置會結束使用者所有的 session，都不讓其他服務代為進行。兩者在解析 body 與讀資料庫之前拒絕，不寫入任何資料；`tests/permissions.rs` 的 `an_exchanged_token_creates_no_tenant_and_revokes_no_session` 證明沒有建立租戶、沒有撤銷 session。
 
 ## certs

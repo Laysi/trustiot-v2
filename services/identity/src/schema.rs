@@ -57,6 +57,11 @@ pub const SCHEMA: Schema = Schema {
             name: "0007_preferences_and_tenant_switch.sql",
             sql: include_str!("../migrations/postgres/0007_preferences_and_tenant_switch.sql"),
         },
+        // The tenant's state, suspension reason and state version (Laysi/trustiot-v2#776).
+        Migration {
+            name: "0008_tenant_state.sql",
+            sql: include_str!("../migrations/postgres/0008_tenant_state.sql"),
+        },
     ],
 };
 
