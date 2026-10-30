@@ -24,7 +24,7 @@
 
 1. **出不去**：部署要讓 pod 沒有任何 egress（DNS 也沒有，NetworkPolicy `egress: []`）、沒有 ServiceAccount token、沒有 Secret，環境變數裡沒有任何憑證；服務自己也不送任何東西出去：沒有 OpenTelemetry 匯出（`telemetry.otlp_endpoint` 有設定就拒絕啟動），沒有 Sentry，沒有資料庫，日誌只寫 stdout。瀏覽器的旗標再讓它自己不連任何地方（名稱一律解析失敗、所有請求都走一個解析不到的 proxy），所有請求都先經過攔截，只回映像裡的檔案。
 2. **只有 assistant 進得來**：部署要以 mesh 的授權只讓 assistant 呼叫 API 埠；請求不帶使用者身分，服務也不驗證身分。
-3. **檢查之間不留東西**：每次檢查用新的瀏覽器行程與新的目錄，結束時（不論正常、失敗、逾時或請求被中斷）整個 process group 用 SIGKILL 殺掉。服務是容器的 PID 1 時，還會以 `kill(-1, SIGKILL)` 殺掉 PID namespace 裡其他所有行程並回收，直到 `/proc` 裡只剩服務自己：不論行程的狀態，離開 process group 的行程跑不掉，主執行緒已結束而其他執行緒還在跑的行程（`/proc` 顯示為 zombie）也跑不掉；期限內還在的就是清理失敗。對所有行程送訊號只在 PID 1 做得到（程式上需要一個只有 PID 1 才建得出來的憑證，送出前再確認一次），不是 PID 1 時不會走到。另外清空工作目錄、`/dev/shm`、`/dev/mqueue`，清空 `/dev/termination-log`，刪掉所有 System V 的共享記憶體、訊息佇列與 semaphore。pod 的 volume 與 IPC namespace 在容器重啟後還在，所以啟動時也做一次。瀏覽器在 pod 裡寫得了的也只有這些：根檔案系統唯讀，唯一的 volume 是工作目錄（`/tmp`），瀏覽器的 profile、`HOME`、`TMPDIR`、XDG 目錄，以及由它們決定的 fontconfig 快取與使用者字型目錄，都在這次檢查自己的目錄裡；核心的 keyring（`add_key`、`keyctl`）被 RuntimeDefault 的 seccomp 拒絕。這一點防的是跨租戶：一個頁面若能留下行程或檔案，就能讀到之後別的租戶的檢查資料，再從自己下一次檢查的判定（例如 script 錯誤訊息）帶出去。
+3. **檢查之間不留東西**：每次檢查用新的瀏覽器行程與新的目錄，結束時（不論正常、失敗、逾時或請求被中斷）整個 process group 用 SIGKILL 殺掉。服務必須是容器的 PID 1（設定 `cleanup` 的預設 `container`，chart 也明確設定這個值）：不是 PID 1 就拒絕啟動，例如 pod 共用 process namespace（`shareProcessNamespace`）或容器前面有 init 行程時，不會退而只清瀏覽器；只清瀏覽器的 `browser` 只給容器外的執行用，在容器裡也拒絕啟動（見「設定」）。它以 `kill(-1, SIGKILL)` 殺掉 PID namespace 裡其他所有行程並回收，直到 `/proc` 裡只剩服務自己：不論行程的狀態，離開 process group 的行程跑不掉，主執行緒已結束而其他執行緒還在跑的行程（`/proc` 顯示為 zombie）也跑不掉；期限內還在的就是清理失敗。對所有行程送訊號只在 PID 1 做得到（程式上需要一個只有 PID 1 才建得出來的憑證，送出前再確認一次），不是 PID 1 時不會走到。另外清空工作目錄、`/dev/shm`、`/dev/mqueue`，清空 `/dev/termination-log`，刪掉所有 System V 的共享記憶體、訊息佇列與 semaphore。pod 的 volume 與 IPC namespace 在容器重啟後還在，所以啟動時也做一次。瀏覽器在 pod 裡寫得了的也只有這些：根檔案系統唯讀，唯一的 volume 是工作目錄（`/tmp`），瀏覽器的 profile、`HOME`、`TMPDIR`、XDG 目錄，以及由它們決定的 fontconfig 快取與使用者字型目錄，都在這次檢查自己的目錄裡；核心的 keyring（`add_key`、`keyctl`）被 RuntimeDefault 的 seccomp 拒絕。這一點防的是跨租戶：一個頁面若能留下行程或檔案，就能讀到之後別的租戶的檢查資料，再從自己下一次檢查的判定（例如 script 錯誤訊息）帶出去。
 4. **服務本身碰不到**：服務啟動時設 `PR_SET_DUMPABLE` 為 0，同一個使用者的行程（瀏覽器）不能 ptrace 它，也讀不到它的 `/proc/<pid>/mem`、`fd`、`environ`。瀏覽器只拿到 fd 0–2（`/dev/null`）與 3、4 兩條 pipe，環境變數只有指向它自己目錄的 `HOME`、`TMPDIR`、`XDG_CONFIG_HOME`、`XDG_CACHE_HOME`；它的 OOM 分數調到 1000，記憶體不夠時核心先殺瀏覽器。
 5. **比對不被頁面的 script 騙**：比對程式在沙箱 frame 的 isolated world 執行，頁面的 script 改寫 DOM 原型或全域物件影響不到它；畫完的條件也由服務在 isolated world 自己確認，不相信 runtime 的 `rendered`。比對的輸入（請求的資料）以呼叫的參數直接送進 isolated world，不經過頁面。這只對頁面的 script 成立，判定的可信度以 renderer 為限：Chromium 沒有自己的沙箱，攻破 renderer 的程式與 isolated world、binding 在同一個行程裡，能讓自己這一次的檢查通過，也就是讓自己的頁面存成新版本。它碰不到別次的檢查（第 3 點），也出不了 pod（第 1 點）。
 6. **判定只帶得出有限的東西**：判定裡來自頁面的只有 script 錯誤訊息（第一行、移除控制與不可見字元、最多 200 字元）與字面數字（只有數字與分隔符號），其餘都來自請求自己的資料；服務回傳前以 `CheckVerdict::validate` 確認，assistant 收到後再確認一次。
@@ -33,6 +33,7 @@
 
 - 頁面的程式可以連到同一個 pod 裡服務自己的 API（loopback），送自己的檢查請求。它只拿得到自己送的頁面的判定，最多佔滿等候佇列，讓這段時間的其他檢查收到 503（每次最多 15 秒）。
 - 頁面的程式可以對 PID 1 送 SIGTERM，讓服務關閉並重啟。這只影響可用性。
+- 容器在檢查進行中結束時（例如記憶體不足被殺），Kubernetes 會把 `/dev/termination-log` 最多 4 KiB 的內容放進 pod 的狀態（`lastState.terminated.message`）。清理在每次檢查之後與啟動時清空這個檔案，但檢查進行中結束的那一次，這次檢查的資料可能留在 pod 的狀態裡，直到容器再次結束或 pod 被刪掉。讀得到的只有能讀這個 namespace 裡 pod 的人（平台的維運）；租戶與其他服務讀不到，之後的檢查也讀不到。
 - 清理失敗時服務會結束（見「清理失敗」）；刻意做出刪不掉的檔案（例如超過路徑長度上限的深層目錄）會讓它重啟後拒絕啟動，直到刪掉 pod 換新的 volume。這同樣只影響可用性，不會讓資料留到下一次檢查。
 - 使用者瀏覽器裡沙箱的外送缺口不屬於這個服務，見 Laysi/trustiot-v2#699。
 
@@ -148,6 +149,7 @@
 | `TRUSTIOT__CHROMIUM` | `/usr/lib/chromium/chromium-headless-shell` | 瀏覽器的執行檔本身（不是 `/usr/bin` 下的 shell 包裝） |
 | `TRUSTIOT__SITE_DIR` | `/srv/www` | 前端建置的目錄，裡面有 `sandbox/` |
 | `TRUSTIOT__WORK_DIR` | `/tmp` | 瀏覽器唯一能寫的目錄；chart 掛記憶體的 `emptyDir` |
+| `TRUSTIOT__CLEANUP` | `container` | 檢查之間的清理範圍（「威脅模型」第 3 點）。`container` 清整個容器，服務必須是容器的 PID 1（Linux），不是就拒絕啟動；chart 固定設這個值，`env` 改不了。`browser` 只清瀏覽器自己的 process group 與目錄，只給容器外的執行（開發、測試）用：在容器的 PID 1 裡，或有任何在容器裡的跡象（不是初始的 PID namespace、Docker 或 Podman 留在根目錄的標記檔、`container` 或 Kubernetes 的環境變數）時拒絕啟動，所以容器裡不是 PID 1 時兩個值都啟動不了。沒有關掉清理的值 |
 | `TRUSTIOT__QUEUE__MAX_WAITING` | `2` | 見「上限」 |
 | `TRUSTIOT__QUEUE__MAX_WAIT` | `10s` | 見「上限」 |
 
@@ -155,5 +157,5 @@ service-kit 的 `http.*`、`shutdown.*`、`telemetry.log_filter` 照常；`telem
 
 ## 測試
 
-- `cargo test -p dashboard-check`：設定、沙箱檔案與 header、CDP 的 pipe 傳輸（拆開的訊息、過大的訊息、關閉）、請求攔截與導向的判定、host 頁回報只採信主 world、例外的歸屬、判定的合併與訊息的清理、端點（一次一個、佇列、逾時、請求中斷取消檢查、錯誤不帶細節）、瀏覽器行程（以假的瀏覽器確認旗標、環境、pipe 與整個 process group 被殺掉）、清理（深層與鎖住的目錄、不跟隨 symbolic link；不是 PID 1 時碰不到對所有行程的訊號，單元測試的建置只計數、不送出）。不需要 Chromium。
-- `cargo test -p dashboard-check --test pid1_cleanup`（只在 Linux，需要 podman 或 docker，沒有時略過，設了 `CI` 則失敗）：把測試自己的執行檔放進容器當 PID 1（唯讀根目錄、UID 65532、沒有 capability、沒有網路），起一個主執行緒結束、另一個執行緒繼續寫計數的行程，先確認它在 `/proc` 顯示為 zombie 而計數還在增加，清理後確認 `/proc` 只剩 PID 1。
+- `cargo test -p dashboard-check`：設定、沙箱檔案與 header、CDP 的 pipe 傳輸（拆開的訊息、過大的訊息、關閉）、請求攔截與導向的判定、host 頁回報只採信主 world、例外的歸屬、判定的合併與訊息的清理、端點（一次一個、佇列、逾時、請求中斷取消檢查、錯誤不帶細節）、瀏覽器行程（以假的瀏覽器確認旗標、環境、pipe 與整個 process group 被殺掉）、清理（深層與鎖住的目錄、不跟隨 symbolic link；不是 PID 1 時碰不到對所有行程的訊號，單元測試的建置只計數、不送出；`cleanup` 是 `container` 而不是 PID 1、或是 `browser` 而是 PID 1 或有容器的跡象時拒絕）。不需要 Chromium。
+- `cargo test -p dashboard-check --test pid1_cleanup`（只在 Linux，需要 podman 或 docker，沒有時略過，設了 `CI` 則失敗）：把測試自己的執行檔放進容器當 PID 1（唯讀根目錄、UID 65532、沒有 capability、沒有網路），起一個主執行緒結束、另一個執行緒繼續寫計數的行程，先確認它在 `/proc` 顯示為 zombie 而計數還在增加，清理後確認 `/proc` 只剩 PID 1；也確認 PID 1 拒絕 `cleanup` 的 `browser`。

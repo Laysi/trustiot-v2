@@ -15,7 +15,12 @@ therefore gives the pod nothing that leads out of it or to another service:
   mount, no init container (the migration wait's init container needs the API server);
 - its /tmp, the only place Chromium writes, is a memory-backed emptyDir;
 - the restricted Pod Security settings stay as serviceDefaults sets them, and nothing runs as
-  root (neither runAsNonRoot false in the container nor runAsUser 0).
+  root (neither runAsNonRoot false in the container nor runAsUser 0);
+- the service is its container's PID 1, which the cleanup between checks needs to kill every
+  other process and empty the pod's shared memory and IPC objects: the chart sets
+  TRUSTIOT__CLEANUP=container ("trustiot.dashboardCheck.env"), with which the service refuses
+  to start anywhere else, and the pod neither shares its process namespace nor the node's
+  processes, IPC or network.
 "trustiot.dashboardCheck.checkConfig" refuses values that would undo any of the per-pod parts.
 */}}
 
@@ -53,6 +58,16 @@ Returns YAML {<annotation>: <value>}; use with fromYaml.
 {{- end -}}
 
 {{/*
+The env the chart sets for the dashboard check, after OTEL_SERVICE_NAME. The cleanup between
+checks must cover the whole container (services/dashboard-check/README.md, 「威脅模型」 point 3),
+so the service refuses to start unless it is its container's PID 1; env cannot change it.
+Returns a YAML list; use with fromYamlArray.
+*/}}
+{{- define "trustiot.dashboardCheck.env" -}}
+{{- list (dict "name" "TRUSTIOT__CLEANUP" "value" "container") | toYaml -}}
+{{- end -}}
+
+{{/*
 Refuses settings of services.dashboard-check that would give its pod a way to the outside, a
 secret or more privileges (see the comment at the top of this file). Renders nothing.
 Argument: dict "root" $ "config" <effective settings>.
@@ -60,6 +75,17 @@ Argument: dict "root" $ "config" <effective settings>.
 {{- define "trustiot.dashboardCheck.checkConfig" -}}
 {{- $config := .config -}}
 {{- $why := "the pod runs pages a model wrote (services/dashboard-check/README.md, 「威脅模型」)" -}}
+{{- /* The template renders none of these pod fields; refusing them keeps it that way should one
+ever be passed through. */ -}}
+{{- range $field, $what := dict "shareProcessNamespace" "would make another process PID 1, and the service cleans the whole container between checks only as PID 1" "hostPID" "would share the node's processes" "hostIPC" "would share the node's IPC objects" "hostNetwork" "would put the pod on the node's network, past its NetworkPolicy" -}}
+{{- if hasKey $config $field -}}
+{{- fail (printf "services.dashboard-check.%s must stay unset: it %s, and %s" $field $what $why) -}}
+{{- end -}}
+{{- end -}}
+{{- $chartEnv := list -}}
+{{- range include "trustiot.dashboardCheck.env" .root | fromYamlArray -}}
+{{- $chartEnv = append $chartEnv (upper .name) -}}
+{{- end -}}
 {{- if $config.automountServiceAccountToken -}}
 {{- fail (printf "services.dashboard-check.automountServiceAccountToken must be false: %s, and a token would let such a page call the Kubernetes API" $why) -}}
 {{- end -}}
@@ -72,6 +98,9 @@ Argument: dict "root" $ "config" <effective settings>.
 {{- end -}}
 {{- if regexMatch "(?i)^TRUSTIOT__TELEMETRY__OTLP_ENDPOINT$" .name -}}
 {{- fail (printf "services.dashboard-check: env %s: the service sends no telemetry, because its pod has no egress; it logs to stdout only" .name) -}}
+{{- end -}}
+{{- if has (upper .name) $chartEnv -}}
+{{- fail (printf "services.dashboard-check: env %s is set by the chart: the service cleans the whole container between checks, which it can only as the container's PID 1, and refuses to start otherwise" .name) -}}
 {{- end -}}
 {{- end -}}
 {{- $pod := $config.podSecurityContext | default dict -}}

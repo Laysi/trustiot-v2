@@ -646,11 +646,11 @@ curl -sS -D - -X POST "http://127.0.0.1:18080/internal/roles/main/v1/messages" \
 | 連出 | 沒有：NetworkPolicy 是 `policyTypes: [Ingress, Egress]`、`egress: []`，DNS 也不行；pod 帶 `ambient.istio.io/dns-capture: "false"`，名稱查詢不經 ztunnel 的 DNS proxy，直接被 NetworkPolicy 擋下 | 不限制 |
 | 誰能呼叫 | 只有 `assistant`（AuthorizationPolicy 與 NetworkPolicy 都只放行它，加上節點的探針）；入口沒有路由 | `mesh.calls` 與入口路由 |
 | 它呼叫誰 | 沒有：不送遙測（只寫 stdout），不換 token，`mesh.calls.dashboard-check` 列了被呼叫端就渲染失敗 | `mesh.calls` 與 collector |
-| 設定與密鑰 | 只有 `OTEL_SERVICE_NAME` 與 `services.dashboard-check.env`；沒有平台 ConfigMap、`credentials`、Secret、CA 與公鑰；設定 `credentials`、從 Secret 讀 env 或設 `TRUSTIOT__TELEMETRY__OTLP_ENDPOINT` 都讓渲染失敗 | 見「chart 與服務的約定」 |
+| 設定與密鑰 | 只有 `OTEL_SERVICE_NAME`、`TRUSTIOT__CLEANUP: container` 與 `services.dashboard-check.env`；沒有平台 ConfigMap、`credentials`、Secret、CA 與公鑰；設定 `credentials`、從 Secret 讀 env、設 `TRUSTIOT__TELEMETRY__OTLP_ENDPOINT` 或 `TRUSTIOT__CLEANUP` 都讓渲染失敗 | 見「chart 與服務的約定」 |
 | ServiceAccount token | 沒有；`automountServiceAccountToken: true` 讓渲染失敗 | 沒有 |
 | init container | 沒有（等 migration 要連 API server，它也不用資料庫）；migration 狀態的 RoleBinding 不含它 | 等 migration 完成 |
 | `/tmp` | 記憶體 emptyDir（`medium: Memory`），上限 `tmpSizeLimit`（預設 `128Mi`），算進記憶體上限 | 磁碟 emptyDir |
-| 安全設定 | restricted；把 `runAsNonRoot`（pod 或容器）、seccomp、`readOnlyRootFilesystem`、`allowPrivilegeEscalation`、`privileged` 或 capabilities 改寬，或把 `runAsUser` 設成 0，都讓渲染失敗 | restricted，可覆寫 |
+| 安全設定 | restricted；把 `runAsNonRoot`（pod 或容器）、seccomp、`readOnlyRootFilesystem`、`allowPrivilegeEscalation`、`privileged` 或 capabilities 改寬，或把 `runAsUser` 設成 0，都讓渲染失敗；`shareProcessNamespace`、`hostPID`、`hostIPC`、`hostNetwork` 有設定也讓渲染失敗。服務要是容器的 PID 1 才能在檢查之間清掉整個容器，不是就拒絕啟動（`TRUSTIOT__CLEANUP: container`，[services/dashboard-check/README.md](../../services/dashboard-check/README.md)「威脅模型」第 3 點） | restricted，可覆寫 |
 | 資源 | requests `100m`、`128Mi`，limits `1`、`512Mi`：一次只做一個檢查，每次一個新的 Chromium | `serviceDefaults.resources` |
 
 - 預設關閉。SaaS 叢集要在叢集自己的 values 與 `assistant` 一起開啟（[deploy/flux/README.md](../flux/README.md)）；地端維持關閉，AI 儀表板在 SaaS 之後才到地端（決策 33）。
