@@ -152,6 +152,9 @@ main 的 testkit 單元測試 `the_matrix_covers_every_operation_of_the_api_spec
 - handler 改用 service-kit 的 `UserIdentity::require(Requirement::Tenant(TenantRole::Viewer), …)`。之前只檢查有沒有租戶，所以租戶裡本版本不認得的角色（`Unrecognized`）也能用；現在與沒有租戶一樣回 403 `permission_denied`，日誌是 service-kit 的 `refused to <動作>`。OpenAPI 的 403 說明改成「No tenant or no role in it」，`api/openapi.json` 與前端的 client 重新產生。
 - `services/assistant/tests/permissions.rs`：宣告與 OpenAPI、矩陣文件一致（`the_matrix_document_matches_the_declarations`），並以真的執行檔與拋棄式 Postgres 探測（`every_operation_admits_exactly_its_declared_callers_and_refusals_write_nothing`）：84 個探測、0 個失敗。沒有 token、偽造的 token、給別的服務的 token 都是 401；沒有租戶、沒有租戶的平台管理員、不認得的角色都是 403；viewer、editor、admin 與換發的 viewer token 都通過授權（清單 200，以 ID 的請求 404，沒有 `Content-Type` 的寫入 400）。探測前後對話、訊息、捨棄紀錄與提問紀錄的筆數相同。
 - testkit 這個分支加的 `World::user` 與 `pg_table!(..., owned)` 與 main 的權限矩陣自動合併，`cargo test -p testkit` 全部通過（見「結果」）。
+
+## 合併 main `e7cf92e`
+
 - 之後又合併 main `e7cf92e`（Laysi/trustiot-v2#769，certs 撤銷閘道的憑證）：合併 commit `f380ff0`。衝突只有生成檔 `api/openapi.json`，依合併後的程式碼以 `cargo run -p openapi` 重新產生；前端的 API client 以 `bun run --cwd frontend api:generate` 重新產生，結果與合併的內容相同，沒有改動。在合併 commit 上重跑的檢查：`cargo fmt --all --check`、`cargo clippy --workspace --all-targets -- -D warnings` 與 `cargo run -p openapi -- --check` 通過；前端 `api:check`、`typecheck` 通過，`test` 218 通過、0 失敗；`CI=1 cargo test -p testkit` 91 通過、0 失敗（含權限矩陣）；`CI=1 cargo test -p certs` 92 通過、0 失敗；`CI=1 cargo test -p assistant` 127 通過、0 失敗、1 個文件測試忽略（同上）；`cargo test -p repo-check` 28 通過、0 失敗；`bun test deploy/chart` 711 通過、0 失敗。
 
 ## 審查後的修正
