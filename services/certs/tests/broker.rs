@@ -740,7 +740,7 @@ async fn no_broker_certificate_before_the_issuing_ca_has_its_first_crl() {
 /// eclipse-mosquitto:2.1.2-alpine, pinned to the multi-arch index digest, as in
 /// `crates/protocol/tests/broker.rs` and the local dev environment; Renovate updates every copy
 /// in one pull request.
-const MOSQUITTO_IMAGE: &str = "docker.io/library/eclipse-mosquitto:2.1.2-alpine@sha256:38c0da4f2ef84284d47b3b3eeea1cb3bdeabe81ee10caf0cd5c5ff61ee3ea408";
+const MOSQUITTO_IMAGE: &str = "docker.io/library/eclipse-mosquitto:2.1.2-alpine@sha256:860aeb5d63ce509508f6dcfb2bc8a1c1dd2bc60555b562b45ce90e52d8dabb0f";
 
 /// Where the test puts the broker's files inside the container.
 const BROKER_DIR: &str = "/run/trustiot";
