@@ -933,6 +933,8 @@ async fn polled_readings_go_up_as_a_batch_and_the_clouds_acknowledgement_release
         Handlers {
             config: inbox,
             telemetry_ack: handles.acks.clone(),
+            // No live lease here: tests/live.rs has them.
+            live: agent::live::leases().0,
         },
     ));
     let (polls_sender, mut polls) = mpsc::unbounded_channel();

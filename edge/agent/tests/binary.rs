@@ -331,10 +331,11 @@ async fn connected_the_agent_applies_its_configuration_reports_it_and_polls_it_a
     let child = agent(&files, &notify);
     notify.wait_for("READY=1", |line| line == "READY=1").await;
     let (mqtt, _) = broker.next_broker().await;
-    // The agent handles down/config (the configuration side) and down/telemetry-ack (the
-    // telemetry pipeline), so its link subscribes to both after `online`, and only to them, in
-    // one SUBSCRIBE; `accept` checks it.
-    let mut mqtt = mqtt.subscribing(&[Channel::Config, Channel::TelemetryAck]);
+    // The agent handles down/config (the configuration side), down/telemetry-ack (the
+    // telemetry pipeline) and down/live-control (the live leases), so its link subscribes to
+    // them after `online`, and only to them, in one SUBSCRIBE; `accept` checks it.
+    let mut mqtt =
+        mqtt.subscribing(&[Channel::Config, Channel::TelemetryAck, Channel::LiveControl]);
     let (_, session) = bounded("the connection", mqtt.accept()).await;
     // The broker delivers the retained configuration right after the SUBACK.
     let config = desired_config();
@@ -525,7 +526,8 @@ async fn a_batch_in_the_state_directory_goes_up_and_the_clouds_acknowledgement_r
     let mut child = agent(&files, &notify);
     let mut log = Log::of(&mut child);
     let (mqtt, _) = broker.next_broker().await;
-    let mut mqtt = mqtt.subscribing(&[Channel::Config, Channel::TelemetryAck]);
+    let mut mqtt =
+        mqtt.subscribing(&[Channel::Config, Channel::TelemetryAck, Channel::LiveControl]);
     let (_, session) = bounded("the connection", mqtt.accept()).await;
     let telemetry = Channel::Telemetry.topic(&gateway());
     // The first heartbeat (sent once Connected) and the batch, in either order; the next

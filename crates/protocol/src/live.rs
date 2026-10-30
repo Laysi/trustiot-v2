@@ -29,6 +29,10 @@ pub const MIN_LIVE_INTERVAL_MS: u32 = 100;
 pub const MAX_LIVE_INTERVAL_MS: u32 = 60_000;
 /// Longest lease without renewal, in seconds.
 pub const MAX_LIVE_TTL_S: u32 = 600;
+/// Most leases a gateway keeps at once. A `start` or `renew` of a lease the gateway does not
+/// hold, while it holds this many that have not ended, is ignored; renewing one it holds always
+/// works. Bounds the gateway's memory and the extra polling whatever the cloud sends.
+pub const MAX_LIVE_LEASES: usize = 64;
 
 /// `down/live-control`: starts, renews or stops one lease.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

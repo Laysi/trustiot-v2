@@ -7,9 +7,9 @@
 //! the link's progress. A subscribed channel nobody takes messages from would acknowledge them
 //! and lose them (a retained configuration, for one), so the link subscribes to exactly the
 //! channels [`subscriptions`] lists, each with its handler in [`Handlers`]: `config` to the
-//! configuration side ([`crate::desired`]), `telemetry-ack` to the uploader ([`crate::upload`]).
-//! Each later issue adds its channel there together with its handler: log-request
-//! (Laysi/trustiot-v2#185), live-control (Laysi/trustiot-v2#121).
+//! configuration side ([`crate::desired`]), `telemetry-ack` to the uploader ([`crate::upload`]),
+//! `live-control` to the live leases ([`crate::live`], applied at once). Each later issue adds
+//! its channel there together with its handler: log-request (Laysi/trustiot-v2#185).
 
 use protocol::telemetry::TelemetryAck;
 use protocol::topic::Channel;
@@ -17,6 +17,7 @@ use tokio::time::Instant;
 
 use crate::desired::Inbox;
 use crate::link::{Incoming, Subscriptions};
+use crate::live::Leases;
 use crate::upload::Acks;
 
 /// How often an undecodable message is logged at most.
@@ -24,8 +25,10 @@ const LOG_EVERY: std::time::Duration = std::time::Duration::from_secs(60);
 
 /// The channels that have a handler, for [`crate::link::LinkSettings::subscriptions`].
 pub fn subscriptions() -> Subscriptions {
-    Subscriptions::new([Channel::Config, Channel::TelemetryAck])
-        .unwrap_or_else(|error| unreachable!("config and telemetry-ack are down channels: {error}"))
+    Subscriptions::new([Channel::Config, Channel::TelemetryAck, Channel::LiveControl])
+        .unwrap_or_else(|error| {
+            unreachable!("config, telemetry-ack and live-control are down channels: {error}")
+        })
 }
 
 /// Where each channel's messages go.
@@ -35,11 +38,13 @@ pub struct Handlers {
     pub config: Inbox,
     /// `down/telemetry-ack`, decoded, to the uploader.
     pub telemetry_ack: Acks,
+    /// `down/live-control`, decoded and applied to the live leases at once.
+    pub live: Leases,
 }
 
 /// Takes every message from `incoming` until the link has stopped, and hands it to its handler
 /// without waiting.
-pub async fn run(mut incoming: Incoming, handlers: Handlers) {
+pub async fn run(mut incoming: Incoming, mut handlers: Handlers) {
     let mut undecodable = 0_u64;
     let mut logged: Option<Instant> = None;
     while let Some(message) = incoming.recv().await {
@@ -55,6 +60,7 @@ pub async fn run(mut incoming: Incoming, handlers: Handlers) {
                     }
                 }
             },
+            Channel::LiveControl => handlers.live.deliver(&message.payload),
             // The link delivers only the channels it subscribed to, which all have a handler.
             channel => tracing::warn!(?channel, "no handler for a message; dropped"),
         }
