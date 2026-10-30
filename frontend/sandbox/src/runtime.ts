@@ -80,9 +80,11 @@ const FLAGS = ["data-tq-flag", "data-tq-flag-pseudo", "data-tq-flag-hide"] as co
 export const MAX_RECHECK_DELAY_MS = 1000;
 
 /**
- * After this many rechecks in a row that each had to rewrite a value the page put back wrong, the
- * page is hidden for good: a page fighting the comparison cannot keep flashing wrong numbers. A
- * page that settles, or keeps updating with correct values, never reaches it.
+ * After more than this many comparisons in a row that each had to rewrite a value the page showed,
+ * the page is hidden and no longer compared (fail closed): a page fighting the comparison cannot
+ * keep flashing wrong numbers. Rechecks and data refreshes count alike, so a page that draws a value
+ * it cannot back on every refresh reaches it too; only a comparison with nothing to rewrite starts
+ * the count again, so a page that keeps updating with correct values never reaches it.
  */
 export const MAX_CORRECTION_ROUNDS = 10;
 
@@ -180,11 +182,11 @@ export function startRuntime(env: RuntimeEnvironment): Runtime {
   let recheck: number | undefined;
   /** When a burst of page changes began; the forced recheck runs within MAX_RECHECK_DELAY_MS of it. */
   let recheckBy = 0;
-  /** Consecutive rechecks that each had to rewrite a value the page put back wrong. */
+  /** Consecutive comparisons (rechecks and data refreshes) that each had to rewrite a shown value. */
   let correctionStreak = 0;
   /** The elements the last display-time comparison flagged. */
   let flagged: Element[] = [];
-  /** The display-time comparison can no longer show the page safely: it stays hidden for good. */
+  /** The display-time comparison can no longer show the page safely: it is hidden and not compared again. */
   let comparisonFailed = false;
 
   // --- the page API ------------------------------------------------------------------------
@@ -682,8 +684,11 @@ export function startRuntime(env: RuntimeEnvironment): Runtime {
 
   /**
    * The display-time comparison. It runs in the page's realm; the realm's built-ins are frozen
-   * (harden.ts), so the only way a page changes the result is by changing the DOM, which this
-   * re-reads. If it still throws, nothing of the page is shown, for good.
+   * (harden.ts) and the DOM functions were captured before the page ran (dom.ts), so replacing them
+   * does not change what it computes from a given DOM. What it does with the result (corrected text,
+   * flags, the hidden document) lives in the page's own document: it corrects and flags there, and
+   * is not an enforcement boundary; enforcing the outcome is the host page's job
+   * (Laysi/trustiot-v2#462). If it throws, the document is hidden and no longer compared.
    */
   const showChecked = () => {
     if (comparisonFailed) return;
@@ -732,8 +737,9 @@ export function startRuntime(env: RuntimeEnvironment): Runtime {
         if (root !== null) flag(root, "data-tq-flag-hide");
       }
     }
-    // A page that keeps putting back values the runtime corrected is hidden for good; one that
-    // settles, or keeps updating with correct values (nothing to rewrite), is not.
+    // A page whose comparisons keep having to rewrite a value (put back after a correction, or drawn
+    // again on each refresh) is hidden and no longer compared; one that settles, or keeps updating
+    // with correct values (nothing to rewrite), is not.
     if (rewritten > 0) {
       if (++correctionStreak > MAX_CORRECTION_ROUNDS) {
         hideForGood();

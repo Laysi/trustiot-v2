@@ -218,8 +218,9 @@ runtime 收到 `data` 後呼叫 `render(tq)`：
 
 - **檢查（`compare.js`）**：定義 `globalThis.tqCompare(input)`，同步回傳判定。輸入是 `CompareInput`（`protocol.ts`）：`runtime`、`spec`（公開部分）、`datasets`（結果）、`locale`、`tz`，以 zod 解析（解析失敗丟出例外）。輸入一律由呼叫端提供，從不讀頁面或 runtime 的狀態；比對程式自己解析參照、計算公式、格式化。輸出是判定（`CheckVerdict`）：通過時 `{verdict: "passed", report: {marks}}`，否則 `{verdict: "failed", problems}`。CDP 才看得到的問題（`not_rendered`、`script_error`、`navigated`、`requested`、封閉的 shadow root、`timeout` 的時限）由檢查服務補上。檢查服務以 CDP 在沙箱 frame 建立 isolated world 後注入並呼叫它：isolated world 的全域物件與原型是自己的，頁面改寫 DOM 原型或全域物件騙不到它。
 - **檢視（runtime 內建）**：runtime 在頁面的 script 執行**之前**保存原始的 DOM 函式並凍結這個 realm 的內建物件（`harden`，見「頁面 API」），每次畫完後在頁面的 realm 比對：對不到資料或不相符的文字標記換成「—」並加上 `data-tq-flag`，不相符的圖形標記加上 `data-tq-flag`，標記以外的數字換成「—」，`::before`、`::after`、`::marker` 有問題的元素加上 `data-tq-flag-pseudo`（關掉產生的內容），不支援的內容加上 `data-tq-flag-hide`（隱藏），超過上限時整份文件隱藏；樣式在 `sandbox.css`。每次比對先清掉上一次的標示（之後畫對了就不再標示）。runtime 一律當成有版面比對，所以 frame 沒有版面時（例如 host 以 `display: none` 藏起 frame）每個標記都判不符；host 要暫時藏起 frame 時用 `visibility: hidden`。
-  - **保證**：runtime 載入之後，頁面的 script 不論做什麼，都改不了這次比對的結果，唯一的例外是改 DOM，而改了的 DOM 比對下一次就看得到。比對與它呼叫的每一段（文字、格式化、時間、幾何、內建的 d3-format）都只讀凍結後的內建物件，所以頁面換掉 `Intl`、`Math`、`Number`、`String`、`RegExp`、`Array`、`Set`、`Map` 或它們原型上的方法都沒有用（`harden` 擋下），頁面自己的 `tq.text` 與比對因此一定算出同一個、正確的字串。
-  - **持續改動有上限**：畫完後的 DOM 變動（tooltip、計時器）靜止後再比對一次；頁面若一直改個不停，從第一次改動起最多 `MAX_RECHECK_DELAY_MS`（1000 ms）內一定再比對一次，不會被無限延後。一直把 runtime 改正的值又改回錯的，連續 `MAX_CORRECTION_ROUNDS`（10）次之後整份文件隱藏，不再比對（fail closed）；一直以正確的值更新的頁面則沒有東西要改正，會一直正常顯示。
+  - **保證**：比對算出的結果不受頁面換掉內建物件或 DOM 函式影響。比對與它呼叫的每一段（文字、格式化、時間、幾何、內建的 d3-format）只讀凍結後的內建物件，以及 runtime 在頁面 script 執行前保存的 DOM 函式（含讀方框與 `getScreenCTM` 矩陣的 getter），所以頁面換掉 `Intl`、`Math`、`Number`、`String`、`RegExp`、`Array`、`Set`、`Map`、它們原型上的方法、各種迭代器與 generator 的原型，或 DOM 原型上的函式都沒有用（`harden` 與 `captureDom` 擋下）：對同一份 DOM，頁面自己的 `tq.text` 與比對一定算出同一個、正確的字串。頁面改了 DOM，下一次比對就看得到。
+  - **不是強制的邊界**：檢視時的比對只在頁面自己的文件裡改正與標示。換成「—」、各種標示、整份文件隱藏與之後不再比對，都是頁面自己的文件與計時器裡的狀態，頁面的 script 碰得到，所以這次比對不能當成擋住錯誤數字的邊界。要讓比對的結果確實生效（例如沒有乾淨的比對結果就不顯示 frame）是外層頁面的責任，在 Laysi/trustiot-v2#462 處理。發布與否一律以檢查服務在 isolated world 的判定為準（「威脅模型」第 5 點）。
+  - **持續改動有上限**：畫完後的 DOM 變動（tooltip、計時器）靜止後再比對一次；頁面若一直改個不停，從第一次改動起最多 `MAX_RECHECK_DELAY_MS`（1000 ms）內就再比對一次，不會因為一直改動而被延後（這個上限用的是頁面所在視窗的計時器，同樣不是強制的邊界）。需要改正的比對連續超過 `MAX_CORRECTION_ROUNDS`（10）次時，整份文件隱藏，之後不再比對（fail closed）：重新比對與資料更新都算，所以不論是頁面把改正的值又改回錯的，還是每次資料更新都畫出一個對不到資料的值，都會被隱藏；只有一次沒有東西要改正的比對才重新計數，所以一直以正確的值更新的頁面會一直正常顯示。
   - 比對本身丟出例外時（理論上頁面讓它用到的東西壞掉），整份文件從此隱藏，也不再比對。這個結果只用來顯示，從不當作判定：判定一律以檢查服務在 isolated world 的比對為準（「威脅模型」第 5 點）。
 
 ## 檢查服務的流程
@@ -252,16 +253,16 @@ runtime 收到 `data` 後呼叫 `render(tq)`：
 - `bun run --cwd frontend test` 跑：
   - `src/protocol.test.ts`：讀 `crates/contract/tests/fixtures/dashboard/` 的固定樣本（由 Rust 型別寫出），確認每個都能解析且不遺失欄位、`publicSpec` 與 Rust 的 `Spec::public` 相同、參照的測試向量答案一致、判定與沙箱訊息拒絕封閉集合以外的內容。
   - `src/formula.test.ts`：共用的計算語言測試向量，以及位置、長度與求值的細節。
-  - `test/runtime.test.ts`：頁面的載入、畫完的訊息、頁面 API、檢視模式的比對與標示，包括一直改回錯值的頁面會在上限內被隱藏、一直以正確值更新的頁面會繼續顯示。
-  - `test/harden.test.ts`：在 `node:vm` 的獨立 realm 裡凍結內建物件（像瀏覽器的 frame 一樣有自己的內建物件），確認在呼叫時才查內建的比對不受頁面替換影響、覆寫繼承屬性的合法寫法仍可用、全域物件仍可擴充、重複呼叫安全，以及凍結後 d3 仍能畫比例尺、nice、扇形與格式化。
+  - `test/runtime.test.ts`：頁面的載入、畫完的訊息、頁面 API、檢視模式的比對與標示，包括一直改回錯值的頁面會在上限內被隱藏、一直以正確值更新的頁面會繼續顯示，以及改動比靜止期間還頻繁、從不靜止的頁面仍在 `MAX_RECHECK_DELAY_MS` 的上限下被重新比對、改正（拿掉上限時這個測試會失敗）。
+  - `test/harden.test.ts`：在 `node:vm` 的獨立 realm 裡凍結內建物件（像瀏覽器的 frame 一樣有自己的內建物件），確認在呼叫時才查內建的比對不受頁面替換影響、覆寫繼承屬性的合法寫法在 strict mode 仍可用、一份 well-known 內建物件清單（含沒有全域名稱的迭代器、generator 與 async function 原型）全部凍結、全域物件仍可擴充、重複呼叫安全，以及凍結後 d3 仍能畫比例尺、nice、扇形與格式化。
   - `test/format.test.ts`：數字、時間、布林與 `null` 的格式化，以及被拒絕的格式。
   - `test/time.test.ts`：結果裡的時間、時間點換成檢視者時區、刻度參照的時間文字。
   - `test/values.test.ts`：參照的值與頁面看到的值；Rust 寫出的 `verdict-passed.json` 每個標記的值都等於從 `check-request.json` 解析出的值。
   - `test/geometry.test.ts`：比例、直線、軸範圍與 `d3.arc` 扇形角度的計算。
-  - `test/compare.test.ts`：比對的每條規則（計算樣式與動畫用替身）、判定的去重與上限、文字與 CSS `content` 的讀法。
+  - `test/compare.test.ts`：比對的每條規則（計算樣式、動畫與螢幕矩陣用替身），包括顏色 alpha 的各種寫法、透明度、變形、逐字擺放、字距與圓餅圖的等比，以及判定的去重與上限、文字與 CSS `content` 的讀法。
   - `test/source.test.ts`：沙箱原始碼不用 `innerHTML`、`eval`、網路 API 與導向，只在 runtime 一處把字串變成程式（頁面 script），只 import 鎖定版本的 d3 模組。
   - `test/build.test.ts`：建置正好寫出 `SandboxFile` 的檔案與 host 頁，每個 script 都是獨立的 classic script，沒有 source map 與網路 API。
-  - `test/dom.test.ts`：事先保存的 DOM 函式不受頁面之後的改寫影響、動畫的計數。
+  - `test/dom.test.ts`：事先保存的 DOM 函式（含方框與螢幕矩陣的 getter）不受頁面之後的改寫影響、動畫的計數。
   - `test/host.test.ts`：host adapter 只接受自己 frame、opaque origin、格式正確的訊息，`ready` 後才送 `init` 與 `data`，第二次 `ready` 或 `load` 視為導向。
   - `test/check-host.test.ts`：`tqCheckHost.start` 拒絕不合格的請求、只執行一次，回報的種類、順序與訊息處理，frame 的大小。
   - `test/fixtures.test.ts`：固定樣本的檔案與預期判定都合格，`unit` 案例在 happy-dom 裡得到預期的判定。

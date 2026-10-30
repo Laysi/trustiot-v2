@@ -94,20 +94,28 @@ describe("harden", () => {
 
   test("a page cannot replace a method on a frozen prototype, but can still shadow it on its own objects", async () => {
     const context = await hardenedRealm();
-    const result = evaluate<{ prototypeUnchanged: boolean; ownShadow: string; genuineUnaffected: string }>(
+    const result = evaluate<{
+      strict: boolean;
+      prototypeUnchanged: boolean;
+      ownShadow: string;
+      genuineUnaffected: string;
+    }>(
       context,
       `
-      harden();
       "use strict";
+      // The directive is the body's first statement, so the body is strict: a plain call has no this.
+      const strict = (function () { return this === undefined; })();
+      harden();
       const genuine = String.prototype.toUpperCase;
       try { String.prototype.toUpperCase = () => "X"; } catch {}
       const prototypeUnchanged = String.prototype.toUpperCase === genuine && "ab".toUpperCase() === "AB";
       // A wrapper object may shadow the method on itself (the override mistake stays fixed).
       const wrapper = Object.create(String.prototype);
       wrapper.toUpperCase = () => "shadowed";
-      return { prototypeUnchanged, ownShadow: wrapper.toUpperCase(), genuineUnaffected: "cd".toUpperCase() };
+      return { strict, prototypeUnchanged, ownShadow: wrapper.toUpperCase(), genuineUnaffected: "cd".toUpperCase() };
     `,
     );
+    expect(result.strict).toBe(true);
     expect(result.prototypeUnchanged).toBe(true);
     expect(result.ownShadow).toBe("shadowed");
     expect(result.genuineUnaffected).toBe("CD");
@@ -118,9 +126,9 @@ describe("harden", () => {
     const result = evaluate<Record<string, unknown>>(
       context,
       `
-      harden();
       "use strict";
-      const out = {};
+      harden();
+      const out = { strict: (function () { return this === undefined; })() };
       const ok = (name, fn) => { try { out[name] = fn(); } catch (e) { out[name] = "threw: " + e.message; } };
       ok("objectToString", () => { const o = {}; o.toString = () => "x"; return o.toString(); });
       ok("errorName", () => { const e = new Error("m"); e.name = "Custom"; e.message = "mm"; return e.name + "/" + e.message; });
@@ -133,6 +141,7 @@ describe("harden", () => {
     `,
     );
     expect(result).toEqual({
+      strict: true,
       objectToString: "x",
       errorName: "Custom/mm",
       classMethod: "A",
@@ -179,6 +188,71 @@ describe("harden", () => {
       arrayIterator: true,
       globalExtensible: true,
     });
+  });
+
+  test("freezes every well-known intrinsic, those no global names included", async () => {
+    const context = await hardenedRealm();
+    const result = evaluate<{ missing: string[]; notFrozen: string[] }>(
+      context,
+      `
+      // Reached before harden runs, the way a page would reach them.
+      const proto = Object.getPrototypeOf;
+      const wellKnown = {
+        "%Object.prototype%": Object.prototype,
+        "%Function.prototype%": Function.prototype,
+        "%Array.prototype%": Array.prototype,
+        "%Array%": Array,
+        "%String.prototype%": String.prototype,
+        "%Number.prototype%": Number.prototype,
+        "%Boolean.prototype%": Boolean.prototype,
+        "%Symbol.prototype%": Symbol.prototype,
+        "%BigInt.prototype%": BigInt.prototype,
+        "%Date.prototype%": Date.prototype,
+        "%RegExp.prototype%": RegExp.prototype,
+        "%Error.prototype%": Error.prototype,
+        "%TypeError.prototype%": TypeError.prototype,
+        "%RangeError.prototype%": RangeError.prototype,
+        "%Map.prototype%": Map.prototype,
+        "%Set.prototype%": Set.prototype,
+        "%WeakMap.prototype%": WeakMap.prototype,
+        "%WeakSet.prototype%": WeakSet.prototype,
+        "%Promise.prototype%": Promise.prototype,
+        "%ArrayBuffer.prototype%": ArrayBuffer.prototype,
+        "%DataView.prototype%": DataView.prototype,
+        "%TypedArray.prototype%": proto(Uint8Array.prototype),
+        "%Float64Array.prototype%": Float64Array.prototype,
+        "%Math%": Math,
+        "%JSON%": JSON,
+        "%Reflect%": Reflect,
+        "%Intl%": Intl,
+        "%Intl.NumberFormat.prototype%": Intl.NumberFormat.prototype,
+        "%Intl.DateTimeFormat.prototype%": Intl.DateTimeFormat.prototype,
+        "%Intl.PluralRules.prototype%": Intl.PluralRules.prototype,
+        "%IteratorPrototype%": proto(proto([][Symbol.iterator]())),
+        "%ArrayIteratorPrototype%": proto([][Symbol.iterator]()),
+        "%MapIteratorPrototype%": proto(new Map()[Symbol.iterator]()),
+        "%SetIteratorPrototype%": proto(new Set()[Symbol.iterator]()),
+        "%StringIteratorPrototype%": proto(""[Symbol.iterator]()),
+        "%RegExpStringIteratorPrototype%": proto("".matchAll(/(?:)/g)),
+        "%GeneratorFunction.prototype%": proto(function* () {}),
+        "%GeneratorPrototype%": proto(proto((function* () {})())),
+        "%AsyncGeneratorFunction.prototype%": proto(async function* () {}),
+        "%AsyncGeneratorPrototype%": proto(proto((async function* () {})())),
+        "%AsyncIteratorPrototype%": proto(proto(proto((async function* () {})()))),
+        "%AsyncFunction.prototype%": proto(async () => {}),
+      };
+      if (typeof Iterator === "function") {
+        wellKnown["%Iterator%"] = Iterator;
+        wellKnown["%IteratorHelperPrototype%"] = proto([][Symbol.iterator]().map((value) => value));
+        wellKnown["%WrapForValidIteratorPrototype%"] = proto(Iterator.from({ next: () => ({ done: true }) }));
+      }
+      harden();
+      const missing = Object.keys(wellKnown).filter((name) => wellKnown[name] == null);
+      const notFrozen = Object.keys(wellKnown).filter((name) => wellKnown[name] != null && !Object.isFrozen(wellKnown[name]));
+      return { missing, notFrozen };
+    `,
+    );
+    expect(result).toEqual({ missing: [], notFrozen: [] });
   });
 
   test("locks the global bindings of the intrinsics but leaves other globals and new ones free", async () => {
