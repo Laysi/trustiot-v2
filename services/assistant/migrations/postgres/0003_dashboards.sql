@@ -32,6 +32,11 @@
 -- ready until every file is applied unchanged, so a database that applied an earlier draft of
 -- this file stops at the migration instead of serving with it.
 
+-- Fail fast, not queue the service's reads behind an ALTER's lock; the Job fails and retries.
+-- The constraint below and the drafts' foreign key lock assistant.conversations, which the
+-- service reads and writes on every request.
+SET LOCAL lock_timeout = '5s';
+
 -- A conversation and its owner, for the drafts' foreign key below: the primary key already makes
 -- each conversation unique, and this adds only its owner, so a draft names its conversation and
 -- that conversation's owner together.
