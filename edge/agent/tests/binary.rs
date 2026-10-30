@@ -911,7 +911,7 @@ async fn without_a_valid_identity_the_agent_never_gets_ready_connects_or_polls_a
             match front.accept() {
                 Ok(_) => return,
                 Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
-                    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                    tokio::time::sleep(Duration::from_millis(50)).await;
                 }
                 Err(error) => panic!("accepting the agent's connection: {error}"),
             }
