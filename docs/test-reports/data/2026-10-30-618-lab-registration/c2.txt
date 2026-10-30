@@ -1,0 +1,7 @@
+2026-10-30T09:41:47.050284Z  INFO the gateway reported its key hardware_id="tg-lab-0001" key_created=false ek_certificate=true public_key_sha256="2914ee8b4921c5da755b61f4b01486d3feb2427d45455a397721c437361184e2"
+2026-10-30T09:41:47.053921Z  INFO registering a gateway hardware_id="tg-lab-0001" origin=https://<app 主機名稱>
+2026-10-30T09:41:47.221132Z  INFO registered the gateway hardware_id="tg-lab-0001" status=201 serial=5756b62458c56803416c03789c6c22ae attempts=1
+<GW>: the TPM key at 0x81000100 was already there and reused; public key SHA-256 2914ee8b4921c5da755b61f4b01486d3feb2427d45455a397721c437361184e2
+registered hardware ID tg-lab-0001 (serial 5756b62458c56803416c03789c6c22ae, valid until 2027-01-28T09:41:47+00:00) after 1 attempt(s); recorded in ~/.local/share/trustiot-workstation/registrations/tg-lab-0001.json
+trustiot-workstation: hardware ID tg-lab-0001 is registered (recorded), but its certificates are not installed on the gateway: sudo -n on the gateway ended with 1 and sudo -n -l does not allow the ssh user to run trustiot-agent provision install without a password, so sudo did not run the agent: sudo: trustiot-agent: command not found. The ssh user needs a sudoers rule that runs exactly `trustiot-agent provision install --hardware-id <hardware ID>` without a password (the gateway's side is Laysi/trustiot-v2#219), and trustiot-agent must be on sudo's secure_path. Running the same command again cannot help until the gateway's sudo configuration is fixed
+exit 33
