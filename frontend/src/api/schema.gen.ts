@@ -2096,6 +2096,12 @@ export interface components {
             name: string | null;
             /** @description The user's role in the tenant. */
             role: components["schemas"]["MemberRole"];
+            /**
+             * @description The tenant's state (Laysi/trustiot-v2#777): while it is `suspended` or `deleted`, the
+             *     session reaches this service only, and every other request in the tenant answers 403
+             *     `tenant_suspended`. A tenant without a record is `active`, as the cookie check reads it.
+             */
+            state: components["schemas"]["TenantState"];
             /** @description The tenant. */
             tenant_id: components["schemas"]["TenantId"];
         };

@@ -6,7 +6,9 @@
 //! | Outcome | Response | What the gateway does |
 //! | --- | --- | --- |
 //! | A cross-site request ([`crate::csrf`]), decided before the session is looked up | 403 `permission_denied`, message key `security.cross_site_request` | Returns this response to the client |
-//! | Active session, routed request | 200 with exactly one `x-internal-identity`: a token this service just signed for the route's service | Replaces any client copy of the header with this one and forwards the request |
+//! | Active session, routed request, the session's tenant active (or none) | 200 with exactly one `x-internal-identity`: a token this service just signed for the route's service |
+//! | Active session whose tenant is suspended or deleted, routed to this service | 200 as above, the token with the `tenant_suspended` claim: the user can still read the session, switch tenants, log out and change preferences, and a platform administrator can still resume the tenant; this service's tenant-scoped endpoints refuse the claim themselves |
+//! | Active session whose tenant is suspended or deleted, routed to any other service | 403 `tenant_suspended`; no token is signed | Replaces any client copy of the header with this one and forwards the request |
 //! | No, repeated, malformed, unknown, expired or revoked session cookie | 401 `unauthenticated` | Returns this response to the client |
 //! | Active session, but no cookie route matches the host and path | 403 `permission_denied` | Returns this response to the client |
 //! | The session store failed, was busy, or did not answer within [`CHECK_DEADLINE`]; or no signing key may sign now ([`crate::issuer::IssueError::NoSigningKey`]) | 503 `unavailable` | Treats a 5xx as an error and answers its own 503 (`statusOnError`) |
@@ -27,7 +29,7 @@ use axum::http::header::{CACHE_CONTROL, HOST};
 use axum::http::{HeaderMap, HeaderName, HeaderValue, Method, StatusCode, Uri};
 use axum::response::{IntoResponse, Response};
 use axum::routing::any;
-use contract::{ErrorBody, ErrorCode, INTERNAL_IDENTITY_HEADER, InternalToken};
+use contract::{ErrorBody, ErrorCode, INTERNAL_IDENTITY_HEADER, InternalToken, ServiceName};
 
 use crate::audience::IngressRoutes;
 use crate::csrf::{CROSS_SITE_REQUEST, cross_site};
@@ -101,6 +103,11 @@ impl<S: SessionStore> ExtAuthz<S> {
         else {
             return Decision::NoRoute;
         };
+        // A suspended tenant reaches this service only (checklist B1, Laysi/trustiot-v2#777): no
+        // other service ever gets a token for it, so none has to know about suspensions.
+        if grant.tenant_suspended && audience != ServiceName::Identity {
+            return Decision::TenantSuspended;
+        }
         match self.issuer.issue(&grant, audience, (self.clock)()) {
             Ok(token) => Decision::Allow(token),
             Err(error) => {
@@ -171,6 +178,9 @@ enum Decision {
     Unauthenticated(&'static str),
     /// 403: an active session, but no cookie route for the request.
     NoRoute,
+    /// 403 `tenant_suspended`: the session's tenant is suspended or deleted, and the request
+    /// goes to another service than this one.
+    TenantSuspended,
     /// 503: the check could not be completed.
     Unavailable,
 }
@@ -182,6 +192,7 @@ impl Decision {
             Self::CrossSite(_) => Some("cross_site_request"),
             Self::Unauthenticated(reason) => Some(reason),
             Self::NoRoute => Some("no_route"),
+            Self::TenantSuspended => Some("tenant_suspended"),
         }
     }
 }
@@ -212,6 +223,7 @@ impl IntoResponse for Decision {
             ),
             Self::Unauthenticated(_) => error(ErrorCode::Unauthenticated),
             Self::NoRoute => error(ErrorCode::PermissionDenied),
+            Self::TenantSuspended => error(ErrorCode::TenantSuspended),
             Self::Unavailable => error(ErrorCode::Unavailable),
         }
     }
