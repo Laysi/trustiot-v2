@@ -696,7 +696,7 @@ curl -sS -D - -X POST "http://127.0.0.1:18080/internal/roles/main/v1/messages" \
 - **關閉**：`services.gateway-ops.enabled: false` 時下一次 Job 讓 `gateway_ops_app`、`gateway_ops_platform` 不能登入，broker 移除 `service:gateway-ops` 這個帳號（它離開了帳號持有者的清單）；Secret 與資料留著（`keep`）；broker 上已經 retained 的設定訊息不因此清除。
 - nightly 的 smoke 測試開啟 gateway-ops 與 broker，確認 pod 就緒（它的 readiness 包括以 `service:gateway-ops` 連上 broker 並獲准共享訂閱，所以這也證明 chart 交給它的 broker 帳號能用）、兩個 Postgres 角色都有連線（`scripts/nightly/smoke.ts`）。nightly 的程式不讀任何 pod 的日誌（`scripts/nightly/diagnostics.test.ts`），所以 broker 端的登入紀錄不在 nightly 驗證。叢集裡沒有綁定的閘道器，所以它不下發任何設定。
 - **展示叢集**：chart 只提供開關。建議分兩次換版，讓每次只有一種中斷：
-  1. 依 [deploy/flux/README.md](../flux/README.md) 的換版流程換到含這一版的 chart，gateway-ops 先不開。這一步叢集內的 Postgres 因 `max_connections` 改成 220 重啟一次。
+  1. 依 [deploy/flux/README.md](../flux/README.md) 的換版流程換到含這一版的 chart，gateway-ops 先不開。這一步叢集內的 Postgres 因 `max_connections` 改變重啟一次（加入 gateway-ops 時調到 220，之後的版本是 240；從 `0.0.0-rc.11` 的 200 換上來也一樣）。
   2. 確認第 1 步穩定後，另一次在 `values-demo.yaml` 打開 `services.gateway-ops.enabled`（broker 還沒開時一起打開 `mqttBroker.enabled`，否則渲染失敗）。這一步 broker 的帳號持有者多了 gateway-ops，broker StatefulSet 的 pod template 改變、broker 重啟一次，連著的閘道器與 ingest 斷線後重連（見「MQTT broker」的「服務的帳號」）；migration Job 重跑以建立 `gateway_ops_app`、`gateway_ops_platform`，用 Postgres 的服務跟著 Job 滾動更新。
 
   Laysi/trustiot-v2#795 照這個順序做：第 1 步是 `0.0.0-rc.12` 的換版，第 2 步在同一個變更打開 broker、mqtt-bridge、ingest 與 gateway-ops（[deploy/flux/README.md](../flux/README.md)「打開閘道器的資料路徑」）。

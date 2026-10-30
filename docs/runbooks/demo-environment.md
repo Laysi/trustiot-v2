@@ -83,7 +83,8 @@ Laysi/trustiot-v2#795：MQTT broker、mqtt-bridge、ingest 與 gateway-ops 一�
 1. **前提**：
    - 部署中的 chart 比 `0.0.0-rc.11` 晚（`bun test deploy/flux` 也檢查）。換到那一版是另一個 PR，先合併、確認穩定（「換 chart 版本」）；那一版含換發端點，所以先完成「換發端點上線」。
    - Cloudflare 的 `/mqtt` 速率限制已套用（「`/mqtt` 的速率限制」），讀回 ruleset 確認：mqtt-bridge 一部署，`/mqtt` 就經 Bypass 對網際網路開放。
-   - 記憶體：這一步新增 broker（requests 64Mi，加上 trust sidecar）、mqtt-bridge、ingest 與 gateway-ops（各 requests 32Mi、limits 256Mi）。2026-10-30 打開之前，展示機 `free -m` 的 available 是 3104 MiB，節點的 memory requests 合計 2420Mi（可配置 7543Mi）。
+   - 記憶體：這一步新增 broker（requests 64Mi，加上 trust sidecar）、mqtt-bridge、ingest 與 gateway-ops（各 requests 32Mi、limits 256Mi）。打開前在展示機上 `free -m`，量測結果記在 issue。
+   - 本機的信任：入口的 NetworkPolicy 放行節點自己（`ingress.tunnel.allowedSources`），所以展示機上任何本機行程都能直接連入口、自帶 `Host` 與 `CF-Connecting-IP`，`/mqtt` 與 `/certs/renew` 在本機繞得過 Cloudflare 的速率限制與 mqtt-bridge 的每來源上限。展示機的本機使用者等同受信任（與 SaaS 主機相同的假設，deploy/chart/README.md「入口 gateway」的「入口 pod 的埠」）。
 2. **合併後確認**（只讀，不取 lab 鎖）：
    - `flux.ts status`：HelmRelease 最新一筆是 `deployed`；`trustiot-mqtt-broker-0`、`trustiot-mqtt-bridge-*`、`trustiot-ingest-*`、`trustiot-gateway-ops-*` 與重新滾動的 `trustiot-certs-*` 都 Running 且 ready，migration Job 是 `Succeeded`。新的 ingest、gateway-ops 與 certs pod 先停在 `ContainerCreating`（等 broker 的 init container `accounts` 寫入密碼）是正常的，broker 起來後自己繼續；停超過幾分鐘時照 deploy/chart/README.md「服務的帳號」看 `accounts` 的日誌。
    - broker 的伺服器憑證：憑證 CronJob 每 15 分鐘執行一次，第一次執行填入 Secret（Job 的日誌 `wrote a new server certificate and key for the broker`），trust sidecar 讓 broker 重啟一次帶上 8883。確認 `kubectl -n trustiot logs trustiot-mqtt-broker-0 -c mosquitto` 有 8883 的 listen socket，`-c trust` 沒有錯誤。CRL：`-c trust` 的日誌沒有 `does not reload the trust files` 或 CRL 的錯誤；以 port-forward 讀 certs 的 `/internal/certs/v1/crl.pem`（「簽發 CA 的儀式」第 5 步的做法）也可以。
@@ -94,23 +95,31 @@ Laysi/trustiot-v2#795：MQTT broker、mqtt-bridge、ingest 與 gateway-ops 一�
      ssh "$DEMO_SSH_HOST" 'set -eu
        d=$(mktemp -d "${XDG_RUNTIME_DIR:?}/broker-check.XXXXXX")
        pf=""
-       cleanup() { if [ -n "$pf" ]; then kill "$pf" 2>/dev/null || true; fi; rm -rf "$d"; }
-       trap cleanup EXIT
-       sudo k3s kubectl -n trustiot port-forward pod/trustiot-mqtt-broker-0 18883:8883 >"$d/pf.log" 2>&1 &
+       stop() { if [ -n "$pf" ]; then sudo -n kill "$pf" 2>/dev/null || true; wait "$pf" 2>/dev/null || true; pf=""; fi; }
+       trap "stop; rm -rf \"\$d\"" EXIT
+       # sudo runs it as root, so only root can stop it; timeout ends it even if stop never runs.
+       sudo -n timeout 120 k3s kubectl -n trustiot port-forward pod/trustiot-mqtt-broker-0 18883:8883 >"$d/pf.log" 2>&1 &
        pf=$!
        for i in $(seq 1 60); do grep -q "Forwarding from" "$d/pf.log" && break; sleep 1; done
        grep -q "Forwarding from" "$d/pf.log" || { echo "the port-forward did not start" >&2; exit 1; }
        openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -subj "/CN=tg-unregistered-0001" -days 1 -keyout "$d/k.pem" -out "$d/c.pem" 2>/dev/null
        echo "--- a self-signed client certificate"
-       timeout 20 openssl s_client -connect 127.0.0.1:18883 -tls1_3 -ign_eof -servername mqtt-broker.trustiot.internal -cert "$d/c.pem" -key "$d/k.pem" </dev/null 2>&1 | grep -E "alert|^CONNECTED" || true
+       timeout 20 openssl s_client -connect 127.0.0.1:18883 -tls1_3 -ign_eof -servername mqtt-broker.trustiot.internal -cert "$d/c.pem" -key "$d/k.pem" </dev/null >"$d/self-signed.txt" 2>&1 || true
+       grep -E "alert|^CONNECTED" "$d/self-signed.txt" || true
        echo "--- no client certificate"
-       timeout 20 openssl s_client -connect 127.0.0.1:18883 -tls1_3 -ign_eof -servername mqtt-broker.trustiot.internal </dev/null 2>&1 | grep -E "alert|^CONNECTED" || true'
+       timeout 20 openssl s_client -connect 127.0.0.1:18883 -tls1_3 -ign_eof -servername mqtt-broker.trustiot.internal </dev/null >"$d/none.txt" 2>&1 || true
+       grep -E "alert|^CONNECTED" "$d/none.txt" || true
+       stop
+       if ss -ltnH "sport = :18883" | grep -q .; then echo "FAIL: something still listens on 18883" >&2; exit 1; fi
+       grep -q "alert unknown ca" "$d/self-signed.txt" || { echo "FAIL: the broker did not refuse the self-signed certificate" >&2; exit 1; }
+       grep -q "alert certificate required" "$d/none.txt" || { echo "FAIL: the broker did not refuse a connection without a certificate" >&2; exit 1; }
+       echo "PASS: both refused; the port-forward is closed"'
      ```
 
-     預期兩次都先 `CONNECTED`（TCP 連上），接著是 broker 回的 TLS alert：自簽的憑證是 `alert unknown ca`（OpenSSL 的 alert 48），沒有憑證是 `alert certificate required`（116）。TLS 1.3 的用戶端憑證在用戶端送完握手之後才被檢查，所以要 `-ign_eof` 讓 `s_client` 等 broker 的回應。這裡不給根憑證，`s_client` 不檢查 broker 的憑證，結果只看 broker 是否拒絕。登錄過的憑證連得上，由上一項閘道器的日誌證明。
+     最後一行是 `PASS` 才算通過：兩次都先 `CONNECTED`（TCP 連上），接著是 broker 回的 TLS alert，自簽的憑證是 `alert unknown ca`（OpenSSL 的 alert 48），沒有憑證是 `alert certificate required`（116），而且 port-forward 已經結束、18883 沒有 listener。port-forward 以 root 執行（sudo），一般使用者的 `kill` 停不了它，所以以 `sudo -n kill` 停，並以 `timeout 120` 保證它自己結束：它把展示機的 loopback 直接接到 broker 的 8883，繞過 mesh 與 mqtt-bridge 的限制（broker 的 mTLS 仍然把關），不能留著。TLS 1.3 的用戶端憑證在用戶端送完握手之後才被檢查，所以要 `-ign_eof` 讓 `s_client` 等 broker 的回應。這裡不給根憑證，`s_client` 不檢查 broker 的憑證，結果只看 broker 是否拒絕。登錄過的憑證連得上，由上一項閘道器的日誌證明。
    - 記憶體：`free -m` 與 `sudo k3s kubectl top pod -n trustiot`，結果記在 issue，放得下才算完成。
    - `tunnel.ts check --stage 2`：`/mqtt` 的升級現在由 mqtt-bridge 回 101（curl 等到 `--max-time` 才結束，算通過）。
-3. **退回**：revert 打開的 PR。mqtt-bridge 關掉後 `/mqtt` 不再路由，閘道器回到 404 退避；broker 的 PVC、帳號與伺服器憑證的 Secret 留著（`keep`），之後再打開時接回。
+3. **退回**：revert 打開的 PR。要把 chart 退回 `0.0.0-rc.11` 或更早時，先 revert 打開的 PR、確認套用，再 revert 換版的 PR：順序反過來時 `bun test deploy/flux` 失敗，而 GitHub 不會擋下紅燈的合併，合併下去 Helm 會為沒有映像的 ingest 與 gateway-ops 等到逾時後 rollback 並重試，展示環境中斷好幾次。打開這個 PR 本身也一樣：合併前確認它最新 commit 的 CI 是在含新版 pin 的 main 上通過的。mqtt-bridge 關掉後 `/mqtt` 不再路由，閘道器回到 404 退避；broker 的 PVC、帳號與伺服器憑證的 Secret 留著（`keep`），之後再打開時接回。
 
 ## 簽發 CA 的儀式
 
