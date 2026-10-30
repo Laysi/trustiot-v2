@@ -3,7 +3,9 @@
 //! (Laysi/trustiot-v2#79) it produces outbox events (`certs.gateway_registered`, platform-wide),
 //! so its schema gets the outbox producer's tables and policies; since Laysi/trustiot-v2#632 it
 //! also consumes the assets service's events (`tools/migrate/src/registry.rs` lists it as a
-//! consumer of `assets`), so the Job creates the consumer's tables too.
+//! consumer of `assets`), so the Job creates the consumer's tables too; since
+//! Laysi/trustiot-v2#778 it consumes the identity service's events as well, for each tenant's
+//! state.
 //!
 //! Two crates compile this file: the service, whose readiness check
 //! ([`service_kit::migrations::MigrationCheck`]) keeps failing until the database has every
@@ -42,6 +44,10 @@ pub const SCHEMA: Schema = Schema {
         Migration {
             name: "0006_certificate_renewal.sql",
             sql: include_str!("../migrations/postgres/0006_certificate_renewal.sql"),
+        },
+        Migration {
+            name: "0007_tenant_state_events.sql",
+            sql: include_str!("../migrations/postgres/0007_tenant_state_events.sql"),
         },
     ],
 };
