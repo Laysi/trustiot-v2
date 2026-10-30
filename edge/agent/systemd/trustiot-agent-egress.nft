@@ -1,0 +1,59 @@
+#!/usr/sbin/nft -f
+# Kernel-level egress rules for the agent's account (edge/agent/README.md, section
+# "連線位址的限制", Laysi/trustiot-v2#813). Installed as
+# /usr/share/trustiot-agent/trustiot-agent-egress.nft and loaded by
+# trustiot-agent-egress.service before trustiot-agent.service starts.
+#
+# The agent's address guard (src/modbus/address.rs) refuses these destinations before it
+# connects, from what getifaddrs shows; this layer refuses them in the kernel whatever the route:
+# addresses added with `ip route add local`, a NAT output rule that sends a connection back to
+# the gateway, and every account-owned socket, not only the Modbus client.
+#
+# Only this table is replaced, in one transaction: the first line creates it when it is missing so
+# that the `delete` cannot fail, and nft applies the whole file atomically, so a reload never
+# leaves a moment without the rules. Nothing else in the ruleset is touched.
+#
+# Other tables may add more rules for the account (the allowlist with a default drop,
+# Laysi/trustiot-v2#814): a packet passes only when every output base chain accepts it, so a
+# refusal here holds whatever another table allows.
+
+table inet trustiot_agent
+delete table inet trustiot_agent
+
+table inet trustiot_agent {
+	chain output {
+		# Priority filter (0) runs after the NAT output hook (-100), so a destination rewritten by
+		# a NAT rule is checked as rewritten.
+		type filter hook output priority filter; policy accept;
+
+		# A positive match on the socket's owner: packets without a socket (the kernel's own TCP
+		# resets and ICMP errors, including the ones the refusals below send back to the agent)
+		# do not match and pass. The account name is resolved when the file is loaded, so a
+		# missing account makes the load fail.
+		meta skuid "trustiot-agent" jump agent
+	}
+
+	chain agent {
+		# The gateway itself: 127.0.0.0/8, ::1, the addresses of every interface and every
+		# address the local routing table holds (`ip route add local`). 0.0.0.0 and :: are
+		# included: the kernel sends a connection to them to the loopback address.
+		fib daddr type local counter goto refuse comment "local"
+		# 255.255.255.255 and every IPv4 subnet's broadcast address.
+		fib daddr type broadcast counter goto refuse comment "broadcast"
+		# 224.0.0.0/4 and ff00::/8.
+		fib daddr type multicast counter goto refuse comment "multicast"
+		# Cloud instance metadata services (AWS, GCP, Azure IMDS; the IPv6 one of AWS). Only
+		# these two: the others (100.100.100.200, 168.63.129.16, 169.254.170.2) matter only on a
+		# gateway that runs as a cloud VM.
+		ip daddr 169.254.169.254 counter goto refuse comment "metadata"
+		ip6 daddr fd00:ec2::254 counter goto refuse comment "metadata"
+	}
+
+	chain refuse {
+		# A reset for TCP, so the connect fails at once with "connection refused" instead of
+		# waiting for its timeout; an ICMP error for everything else (the send itself fails with
+		# "operation not permitted" either way).
+		meta l4proto tcp reject with tcp reset
+		reject with icmpx admin-prohibited
+	}
+}
