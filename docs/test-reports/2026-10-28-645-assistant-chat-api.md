@@ -2,7 +2,7 @@
 
 Laysi/trustiot-v2#645：AI 助理的 API 骨架（`/api/assistant/v1`）、對話串的七個端點（清單、開始、讀取、改名與封存、刪除、已刪除清單、還原），以及刪除滿 30 天的對話的排程清除（每個副本都排程，同一時間一個副本以平台角色 `assistant_platform` 分批刪除）。這份報告是驗收條件的證據：全部由下列自動化測試以 `CI=1` 實際執行，需要容器的測試沒有略過。
 
-2026-10-28 第一次執行之後，獨立安全審查提出的修正（下方「審查後的修正」，F1 到 F7）在 2026-10-29 加入，所有指令都在修正後的樹上重跑；下面的數字都是重跑的結果。複審之後又修了清除的兩個 Low 項目（下方「複審後的修正」，R1、R2），`cargo test -p assistant` 等相關的檢查在那個 commit 上重跑。2026-10-30 合併 main `e4994a2`（下方「合併 main `e4994a2`」：連線預算調高、AI 助理接上權限矩陣），所有指令都在合併後的樹上重跑；「結果」表的數字是這一次的。
+2026-10-28 第一次執行之後，獨立安全審查提出的修正（下方「審查後的修正」，F1 到 F7）在 2026-10-29 加入，所有指令都在修正後的樹上重跑；下面的數字都是重跑的結果。複審之後又修了清除的兩個 Low 項目（下方「複審後的修正」，R1、R2），`cargo test -p assistant` 等相關的檢查在那個 commit 上重跑。2026-10-30 合併 main `e4994a2`（下方「合併 main `e4994a2`」：連線預算調高、AI 助理接上權限矩陣），所有指令都在合併後的樹上重跑；「結果」表的數字是這一次的。之後合併 main `e7cf92e` 與 `fff5500` 時重跑的檢查，在各自的一節。
 
 ## 環境
 
@@ -156,6 +156,59 @@ main 的 testkit 單元測試 `the_matrix_covers_every_operation_of_the_api_spec
 ## 合併 main `e7cf92e`
 
 - 之後又合併 main `e7cf92e`（Laysi/trustiot-v2#769，certs 撤銷閘道的憑證）：合併 commit `f380ff0`。衝突只有生成檔 `api/openapi.json`，依合併後的程式碼以 `cargo run -p openapi` 重新產生；前端的 API client 以 `bun run --cwd frontend api:generate` 重新產生，結果與合併的內容相同，沒有改動。在合併 commit 上重跑的檢查：`cargo fmt --all --check`、`cargo clippy --workspace --all-targets -- -D warnings` 與 `cargo run -p openapi -- --check` 通過；前端 `api:check`、`typecheck` 通過，`test` 218 通過、0 失敗；`CI=1 cargo test -p testkit` 91 通過、0 失敗（含權限矩陣）；`CI=1 cargo test -p certs` 92 通過、0 失敗；`CI=1 cargo test -p assistant` 127 通過、0 失敗、1 個文件測試忽略（同上）；`cargo test -p repo-check` 28 通過、0 失敗；`bun test deploy/chart` 711 通過、0 失敗。
+
+## 合併 main `fff5500`
+
+2026-10-30，main 前進到 `fff5500`，帶進 gateway-ops 的在線狀態與它的 API（Laysi/trustiot-v2#112，PR Laysi/trustiot-v2#772）。合併 commit 是 `7f67aba`（tree `f3716471`）。
+
+### 衝突
+
+- **`tools/openapi/src/lib.rs`**：`SERVICES` 兩邊新加的來源都留下，這個分支的 `assistant` 與 main 的 `gateway-ops`，各帶自己的註解；`SERVICES_WITHOUT_API` 兩者都不列。
+- **`deploy/chart/values.yaml`**：留下 main 的 gateway-ops 說明（連線池 9、在線狀態的工作、它的 API 與入口）與這個分支的 AI 助理設定；`max_connections` 的註解依合併後的數字重寫（見下一節）。
+- **`deploy/chart/tests/chart.test.ts`**：逐行合併。gateway-ops 每副本 13、migration Job 的 `MAX_CONNECTIONS` 9（自動合併）、AI 助理每副本 10，README 合計列、`needed`、`limit` 與拒絕訊息的明細都改成合併後的數字。
+- **`deploy/chart/README.md`**：預算表留下兩邊的列並更新合計列，`max_connections` 的參數列與預算摘要改成合併後的數字。`services.<name>.database.maxConnections` 那一列 main 還寫 gateway-ops 預設 `7`（7–100），實際已是 9，合併時一併改成 `9`（9–100）。
+- 自動合併、沒有衝突的：`api/openapi.json`（依合併後的程式以 `cargo run -p openapi` 重新產生，內容相同）、前端的 API client（`api:generate` 重新產生，內容相同）、`Cargo.lock`（以 `--locked` 建置）、`docs/architecture/permissions.md`（`## assistant` 與 main 的 `## gateway-ops` 都在）、前端的 zh-TW 與 en 語系檔（兩者都能解析，前端測試通過）。
+
+### 連線預算
+
+`trustiot.postgres.connectionPlan` 的算法同前：每個服務（`database.maxConnections` + 其他連線池）×（1 個副本 + 滾動時多 1 個）。
+
+| 服務 | 每副本 | 整版滾動 |
+| --- | --- | --- |
+| `ai-gateway` | 4 + 0 = 4 | 8 |
+| `assets` | 10 + 4 = 14 | 28 |
+| `assistant` | 8 + 2 = 10 | 20 |
+| `certs` | 5 + 4 = 9 | 18 |
+| `gateway-ops` | 9 + 4 = 13（這個分支先前是 7 + 4 = 11） | 26 |
+| `identity` | 10 + 21 = 31 | 62 |
+| `ingest` | 10 + 4 = 14 | 28 |
+| `telemetry-query` | 10 + 2 = 12 | 24 |
+| 合計 | 107 | 214 |
+
+加上保留的 18 條是 232，超過這個分支的 `max_connections` 230（main 自己是 202 + 18 = 220，剛好等於它的 220）。AI 助理與 gateway-ops 的預設值都不降，`max_connections` 調到 240，餘 8 條：每次改這個值都會讓叢集內的 Postgres 重啟，所以不再只留 2、3 條。從 main 的角度，這個 PR 把它從 220 調到 240，chart README 與 values 的歷史這樣寫。
+
+記憶體估算（chart README「叢集內的 Postgres」，同一套公式與參數）：共享記憶體約 162 MB（200 實測 159 MB，每個連線槽約 70 KiB 推算）、連線 (240 + 10) × 2 = 500 MB、autovacuum 與 migration 4 × 64 = 256 MB，小計 918 MB，剩 106 MB 給 `work_mem`（同時 26 個滿額排序或 13 個滿額 hash），仍在 1Gi 以內；比 220 多約 42 MB。
+
+同時改了 values 的註解、chart README 的預算表、合計、餘裕、AI 助理一節與記憶體估算、`chart.test.ts`（232、240、拒絕訊息的明細、Cluster 的參數與兩個超量案例的 `is 240, but`）與 `deploy/flux/tests/flux.test.ts`（展示環境四個 identity 副本的對照仍是 243 條，超過 240）。各服務的 `tests/chart_connections.rs` 只比對自己的預算，不用改；`services/assistant/README.md` 沒有受影響的數字。
+
+### 檢查
+
+在 tree `f3716471`（即合併 commit `7f67aba` 的 tree）上，開發工作站（x86_64 Linux）：
+
+| 指令 | 結果 |
+| --- | --- |
+| `cargo fmt --all --check` | 通過 |
+| `cargo clippy --workspace --all-targets --locked -- -D warnings` | 通過 |
+| `cargo run -p openapi -- --check` | 通過（`api/openapi.json is up to date`） |
+| `CI=1 cargo test --locked -p assistant -p gateway-ops -p testkit -p openapi -p repo-check --no-fail-fast` | 334 通過、0 失敗、1 個文件測試忽略：assistant 127、gateway-ops 71、testkit 91（含權限矩陣）、openapi 17、repo-check 28 |
+| `CI=1 cargo test --locked -p assistant --test cross_tenant -- --nocapture` | 2 通過、0 失敗；`tenants_are_isolated` 79 個探測、0 個失敗 |
+| 前端 `api:check`、`typecheck`、`lint`、`build`、`check:dist` | 通過 |
+| 前端 `test` | 252 通過、0 失敗 |
+| `bun test deploy/chart` | 711 通過、0 失敗 |
+| `bun test deploy/flux` | 78 通過、0 失敗 |
+| `bun run --cwd scripts typecheck` | 通過 |
+
+測試前後 podman 的容器與 volume 數相同。
 
 ## 審查後的修正
 
