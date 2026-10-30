@@ -80,6 +80,23 @@ trustiot-agent provision install --hardware-id <id>
 
 執行緒：連線（TLS 握手與 MQTT）在自己的執行緒、單執行緒的 tokio runtime 上跑，因為完整的內層握手要在 rustls 的同步簽章呼叫裡等 TPM 約 70 ms（[TPM 測試](../../docs/feasibility/2026-10-12-tpm-poc.md)），這樣只卡住這條執行緒；心跳、systemd watchdog 的通知、訊號、`down` 訊息的分派、設定的套用、Modbus 輪詢（每台設備一個工作）與遙測的上傳在另一個兩條執行緒的 runtime 上；緩衝的磁碟 I/O 在 tokio 的 blocking 執行緒上。
 
+### 沒有完成出廠登錄或沒有有效憑證就不運作（fail-closed）
+
+舊系統的 agent 沒完成註冊也照常運作（Laysi/trustiot#119）；這個 agent 反過來（rebuild checklist D5，Laysi/trustiot-v2#812）。下列任何一項不成立，agent 在通知 systemd 之前就以結束碼 1 結束，日誌寫 `refusing to start` 與出問題的鍵；它不送 `READY=1`（也不送任何其他通知）、不開任何連線、不讀狀態目錄裡上次套用的設備設定（`desired-config.cbor`）、不輪詢任何設備、不開離線緩衝：
+
+- 設定檔存在、每個鍵都合法（沒有設定檔就是還沒完成出廠登錄）；
+- `identity.certificate` 的憑證鏈與 `identity.key` 的私鑰都在，私鑰與憑證的公鑰相同（TPM 的金鑰還要能以空密碼簽出測試簽章，見「TPM 簽章」）；
+- 憑證鏈以 webpki 的用戶端憑證檢查驗得到 `broker.ca` 的根，用途（EKU、key usage）也是 broker 會接受的；
+- `broker.ca` 只有根 CA，`broker.crl` 在的話要由這些根簽章。
+
+這些檢查都在讀狀態目錄、建立 runtime 與 systemd 的通知之前（`src/setup.rs` 的 `Setup::new`，`src/main.rs`），所以已經套用過設備設定的閘道器在憑證或私鑰被拿掉、換掉之後也不會繼續輪詢設備或連線。systemd 依 `Restart=always` 在一分鐘內重啟再試（見「systemd」），出廠登錄補齊（`provision install`）之後下一次啟動就正常運作。
+
+**例外：只有時間不對的憑證照樣啟動。** 憑證已過期或還沒生效時（以閘道器的時鐘判斷），只記一筆警告、寫出 notBefore 與 notAfter，照常連線。這是刻意的：閘道器的時鐘可能是錯的，拒絕啟動會把時鐘的問題變成停機；而真的過期時 broker 會拒絕這張憑證，agent 收到拒絕就走 `/certs/renew` 換發（Laysi/trustiot-v2#83，見「憑證換發」），換發也以同一把 TPM 金鑰、同一條信任鏈證明身分。例外的邊界只在時間：別的 CA 簽的、用途不對的、私鑰不符的憑證，不論時間都拒絕啟動，換發也救不了它們。
+
+**TPM 金鑰沒有密碼，agent 也不收任何密碼。** 金鑰以空密碼（empty auth）使用，設了密碼的金鑰在啟動時的測試簽章就失敗（Laysi/trustiot#121 的 PIN 經命令列外洩因此沒有對應物）。執行檔與兩個子命令只認得各自 `--help` 列出的參數，沒有 PIN、密碼或授權值的參數，未知的參數以結束碼 2 拒絕；設定檔的 `identity.key` 沒有這類欄位，未知的欄位拒絕啟動；agent 只讀 `NOTIFY_SOCKET`、`WATCHDOG_USEC`、`WATCHDOG_PID`、`STATE_DIRECTORY`、`TRUSTIOT_AGENT_LOG`、`JOURNAL_STREAM` 這幾個環境變數，不讀整個環境，也不啟動其他程式；unit 的命令列只有設定檔的路徑，環境變數只有 `MALLOC_MMAP_THRESHOLD_`，沒有 `EnvironmentFile`、`PassEnvironment` 或 credentials，sysusers 的帳號沒有密碼欄位也不能登入。
+
+測試：`tests/binary.rs` 的 `without_a_valid_identity_the_agent_never_gets_ready_connects_or_polls_a_saved_configuration` 以真的執行檔、通知 socket、狀態目錄裡的設備設定與一個會接受連線的 port 驗證上面五種情況（沒有設定檔、沒有憑證、沒有私鑰、別的 CA 簽的憑證、別張憑證的私鑰），並以完整的身分對照：同一組檔案會送 `READY=1`、以存下的設定輪詢、連到那個 port。`--check` 的同類拒絕與過期憑證的警告在同一個檔案（`check_accepts_a_working_configuration_and_refuses_a_key_of_another_certificate`、`check_refuses_a_certificate_the_broker_ca_did_not_issue`、`an_expired_certificate_only_warns_because_the_clock_may_be_wrong`、`check_reports_the_root_crl_and_refuses_one_the_root_did_not_sign`），設了密碼的 TPM 金鑰在 `tests/tpm_swtpm.rs`；不收密碼的部分是 `tests/secret_inputs.rs`（參數、設定檔、讀取的環境變數、不啟動其他程式）與 `tests/systemd_unit.rs` 的 `the_unit_passes_no_secret_on_the_command_line_or_in_the_environment`。
+
 ## 連線（WebSocket 內的 mTLS、MQTT 5）
 
 只有一種連線方式，SaaS 與地端相同（[決策 6](../../docs/architecture/decisions.md)、[部署](../../docs/architecture/deployment.md)）：
@@ -668,8 +685,9 @@ cargo test -p agent --test transport                    # 整條連線在行程�
 cargo test -p agent --test upload                       # 遙測上傳，對腳本化的雲端與停住的時鐘：斷線一小時、強制結束後的重送與新串流、上限與丟棄、時鐘、確認的每一種結果、壞掉的紀錄
 cargo test -p agent --test broker                       # 對 Mosquitto 容器（podman 或 docker）：mTLS、retained、0x87、will、broker 與轉接重啟後重連、遙測批次與確認的來回
 cargo test -p agent --test renewal                      # 憑證換發，對替代的 HTTPS 換發端點：被拒時換發並重連、429／503 的 Retry-After、外層 TLS 的 alert 不觸發換發；對 Mosquitto 容器：到期前換發不掉訊息、過期後換發
-cargo test -p agent --test binary                       # 執行檔：--check（含根 CRL 的狀態）、sd_notify、訂閱設定與 telemetry-ack、套用設定、重開後以存下的設定輪詢、狀態目錄裡的批次送出並由確認拿掉、SIGTERM；provision 的參數錯誤、沒有 TPM 裝置、非 /dev/tpmrm 的裝置
+cargo test -p agent --test binary                       # 執行檔：--check（含根 CRL 的狀態）、沒有完成出廠登錄或沒有有效憑證時不運作（不送 READY=1、不連線、不輪詢存下的設定）、sd_notify、訂閱設定與 telemetry-ack、套用設定、重開後以存下的設定輪詢、狀態目錄裡的批次送出並由確認拿掉、SIGTERM；provision 的參數錯誤、沒有 TPM 裝置、非 /dev/tpmrm 的裝置
 cargo test -p agent --test systemd_unit                 # unit 檔與 systemd-analyze
+cargo test -p agent --test secret_inputs                # 不收 PIN 或密碼：參數、設定檔的欄位、讀取的環境變數、不啟動其他程式
 cargo test -p agent --test dependencies                 # 閘道器建置的相依
 cargo test -p agent --test modbus_address_guard         # 正式路徑（Endpoints::new、TcpConnection::new）拒絕閘道器本機與 metadata 位址，假端點收不到連線
 cargo test -p agent --test modbus_fake_endpoint         # 對 testkit 假端點：型別、合併讀取、每種故障
