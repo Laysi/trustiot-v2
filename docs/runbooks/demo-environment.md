@@ -97,26 +97,32 @@ Laysi/trustiot-v2#795：MQTT broker、mqtt-bridge、ingest 與 gateway-ops 一�
        pf=""
        stop() { if [ -n "$pf" ]; then sudo -n kill "$pf" 2>/dev/null || true; wait "$pf" 2>/dev/null || true; pf=""; fi; }
        trap "stop; rm -rf \"\$d\"" EXIT
-       # sudo runs it as root, so only root can stop it; timeout ends it even if stop never runs.
-       sudo -n timeout 120 k3s kubectl -n trustiot port-forward pod/trustiot-mqtt-broker-0 18883:8883 >"$d/pf.log" 2>&1 &
-       pf=$!
-       for i in $(seq 1 60); do grep -q "Forwarding from" "$d/pf.log" && break; sleep 1; done
-       grep -q "Forwarding from" "$d/pf.log" || { echo "the port-forward did not start" >&2; exit 1; }
+       closed() { if ss -ltnH "sport = :18883" | grep -q .; then echo "FAIL: something still listens on 18883" >&2; exit 1; fi; }
+       # handshake <name> [s_client options]: one handshake through its own port-forward, closed afterwards.
+       handshake() {
+         name=$1; shift
+         closed
+         # sudo runs it as root, so only root can stop it; timeout ends it even if stop never runs.
+         sudo -n timeout 120 k3s kubectl -n trustiot port-forward pod/trustiot-mqtt-broker-0 18883:8883 >"$d/pf-$name.log" 2>&1 &
+         pf=$!
+         for i in $(seq 1 60); do grep -q "Forwarding from" "$d/pf-$name.log" && break; sleep 1; done
+         grep -q "Forwarding from" "$d/pf-$name.log" || { echo "the port-forward did not start" >&2; exit 1; }
+         timeout 20 openssl s_client -connect 127.0.0.1:18883 -tls1_3 -ign_eof -servername mqtt-broker.trustiot.internal "$@" </dev/null >"$d/$name.txt" 2>&1 || true
+         grep -E "alert|^CONNECTED" "$d/$name.txt" || true
+         stop
+         closed
+       }
        openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -subj "/CN=tg-unregistered-0001" -days 1 -keyout "$d/k.pem" -out "$d/c.pem" 2>/dev/null
        echo "--- a self-signed client certificate"
-       timeout 20 openssl s_client -connect 127.0.0.1:18883 -tls1_3 -ign_eof -servername mqtt-broker.trustiot.internal -cert "$d/c.pem" -key "$d/k.pem" </dev/null >"$d/self-signed.txt" 2>&1 || true
-       grep -E "alert|^CONNECTED" "$d/self-signed.txt" || true
+       handshake self-signed -cert "$d/c.pem" -key "$d/k.pem"
        echo "--- no client certificate"
-       timeout 20 openssl s_client -connect 127.0.0.1:18883 -tls1_3 -ign_eof -servername mqtt-broker.trustiot.internal </dev/null >"$d/none.txt" 2>&1 || true
-       grep -E "alert|^CONNECTED" "$d/none.txt" || true
-       stop
-       if ss -ltnH "sport = :18883" | grep -q .; then echo "FAIL: something still listens on 18883" >&2; exit 1; fi
+       handshake none
        grep -q "alert unknown ca" "$d/self-signed.txt" || { echo "FAIL: the broker did not refuse the self-signed certificate" >&2; exit 1; }
        grep -q "alert certificate required" "$d/none.txt" || { echo "FAIL: the broker did not refuse a connection without a certificate" >&2; exit 1; }
        echo "PASS: both refused; the port-forward is closed"'
      ```
 
-     最後一行是 `PASS` 才算通過：兩次都先 `CONNECTED`（TCP 連上），接著是 broker 回的 TLS alert，自簽的憑證是 `alert unknown ca`（OpenSSL 的 alert 48），沒有憑證是 `alert certificate required`（116），而且 port-forward 已經結束、18883 沒有 listener。port-forward 以 root 執行（sudo），一般使用者的 `kill` 停不了它，所以以 `sudo -n kill` 停，並以 `timeout 120` 保證它自己結束：它把展示機的 loopback 直接接到 broker 的 8883，繞過 mesh 與 mqtt-bridge 的限制（broker 的 mTLS 仍然把關），不能留著。TLS 1.3 的用戶端憑證在用戶端送完握手之後才被檢查，所以要 `-ign_eof` 讓 `s_client` 等 broker 的回應。這裡不給根憑證，`s_client` 不檢查 broker 的憑證，結果只看 broker 是否拒絕。登錄過的憑證連得上，由上一項閘道器的日誌證明。
+     最後一行是 `PASS` 才算通過：兩次都先 `CONNECTED`（TCP 連上），接著是 broker 回的 TLS alert，自簽的憑證是 `alert unknown ca`（OpenSSL 的 alert 48），沒有憑證是 `alert certificate required`（116），而且 port-forward 已經結束、18883 沒有 listener。每次握手各開一個 port-forward：broker 拒絕握手後重設連線，`kubectl port-forward` 接著以 `error: lost connection to pod` 結束，同一個 port-forward 上的第二次握手只會得到 `Connection refused`（Laysi/trustiot-v2#795 第一次實測時遇到）。port-forward 以 root 執行（sudo），一般使用者的 `kill` 停不了它，所以以 `sudo -n kill` 停，並以 `timeout 120` 保證它自己結束：它把展示機的 loopback 直接接到 broker 的 8883，繞過 mesh 與 mqtt-bridge 的限制（broker 的 mTLS 仍然把關），不能留著。TLS 1.3 的用戶端憑證在用戶端送完握手之後才被檢查，所以要 `-ign_eof` 讓 `s_client` 等 broker 的回應。這裡不給根憑證，`s_client` 不檢查 broker 的憑證，結果只看 broker 是否拒絕。登錄過的憑證連得上，由上一項閘道器的日誌證明。
    - 記憶體：`free -m` 與 `sudo k3s kubectl top pod -n trustiot`，結果記在 issue，放得下才算完成。
    - `tunnel.ts check --stage 2`：`/mqtt` 的升級現在由 mqtt-bridge 回 101（curl 等到 `--max-time` 才結束，算通過）。
 3. **退回**：revert 打開的 PR。要把 chart 退回 `0.0.0-rc.11` 或更早時，先 revert 打開的 PR、確認套用，再 revert 換版的 PR：順序反過來時 `bun test deploy/flux` 失敗，而 GitHub 不會擋下紅燈的合併，合併下去 Helm 會為沒有映像的 ingest 與 gateway-ops 等到逾時後 rollback 並重試，展示環境中斷好幾次。打開這個 PR 本身也一樣：合併前確認它最新 commit 的 CI 是在含新版 pin 的 main 上通過的。mqtt-bridge 關掉後 `/mqtt` 不再路由，閘道器回到 404 退避；broker 的 PVC、帳號與伺服器憑證的 Secret 留著（`keep`），之後再打開時接回。
