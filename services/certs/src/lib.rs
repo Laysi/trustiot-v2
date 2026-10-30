@@ -39,6 +39,10 @@
 //! - [`dynsec`]: the MQTT broker's gateway permissions (Laysi/trustiot-v2#633), kept in line
 //!   with the registrations, certificates and bindings by dynamic-security commands on the
 //!   broker's service port.
+//! - [`gateways`]: revoking a gateway's certificates (Laysi/trustiot-v2#636): the ledger, a new
+//!   CRL of each issuing CA concerned, then the broker sync drops the gateway's permissions and
+//!   its connection; the platform administrators' API and the function the suspension and
+//!   unbinding call.
 //! - [`ceremony`]: the offline root's certificates, for the `certs-ca` tool.
 //! - [`schema`]: the migration files this release expects; [`config`]: the settings.
 //!
@@ -54,6 +58,7 @@ pub mod ceremony;
 pub mod config;
 pub mod crl;
 pub mod dynsec;
+pub mod gateways;
 pub mod http;
 pub mod issue;
 pub mod monitor;
@@ -100,9 +105,10 @@ pub const PLATFORM_CONNECTIONS: u32 = 4;
     paths(
         workstations::issue_certificate,
         workstations::revoke_certificate,
-        registrations::register_gateway
+        registrations::register_gateway,
+        gateways::revoke_gateway
     ),
-    tags((name = "certs", description = "Workstation certificates and factory registration from the issuing CA (services/certs)."))
+    tags((name = "certs", description = "Workstation certificates, factory registration and gateway revocation from the issuing CA (services/certs)."))
 )]
 struct ApiDoc;
 
@@ -222,6 +228,10 @@ pub async fn start(context: Context<Config>) -> Result<Router, BoxError> {
         config.crl.clone(),
         crl::REISSUE_TIMEOUT.min(context.request_timeout() / 2),
     );
+    // Decision 6's three steps for a gateway (Laysi/trustiot-v2#636): the ledger, a new CRL
+    // from the same reissuer (they share its turns), then the broker sync.
+    let gateway_revocation =
+        gateways::GatewayRevocation::new(db.pool().clone(), crls.clone(), broker_sync.clone());
     let api = workstations::routes(
         verifier.clone(),
         db.pool().clone(),
@@ -229,6 +239,7 @@ pub async fn start(context: Context<Config>) -> Result<Router, BoxError> {
         config.workstation.validity,
         crls,
     );
+    let gateways = gateways::routes(verifier.clone(), gateway_revocation);
     let registrations = registrations::routes(
         verifier,
         platform,
@@ -240,6 +251,7 @@ pub async fn start(context: Context<Config>) -> Result<Router, BoxError> {
     Ok(http::routes(ca, db.pool().clone())
         .merge(api)
         .merge(registrations)
+        .merge(gateways)
         .merge(renewal))
 }
 

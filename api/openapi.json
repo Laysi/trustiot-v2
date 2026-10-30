@@ -1648,7 +1648,7 @@
         "type": "string"
       },
       "RevocationReason": {
-        "description": "A reason a workstation certificate can be revoked for: the RFC 5280 CRLReason codes that\napply to an end entity, without `certificateHold` (a revocation here is final).",
+        "description": "A reason a workstation or gateway certificate can be revoked for: the RFC 5280 CRLReason codes\nthat apply to an end entity, without `certificateHold` (a revocation here is final).",
         "enum": [
           "unspecified",
           "key_compromise",
@@ -1658,6 +1658,24 @@
           "privilege_withdrawn"
         ],
         "type": "string"
+      },
+      "RevokeGateway": {
+        "additionalProperties": false,
+        "description": "The body of `POST /api/certs/v1/gateways/{hardware_id}/revoke` (Laysi/trustiot-v2#636): revokes\nevery certificate of the gateway that is neither revoked nor expired. Unknown fields are\nrefused.",
+        "properties": {
+          "reason": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/RevocationReason",
+                "description": "Why they are revoked, the same for each. Absent leaves the reason out of the CRL, as RFC\n5280 recommends over `unspecified`. `key_compromise` also ends the gateway's renewals\nfor good: its registered key is not trusted any more."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "type": "object"
       },
       "RevokeWorkstationCertificate": {
         "additionalProperties": false,
@@ -1675,6 +1693,76 @@
             ]
           }
         },
+        "type": "object"
+      },
+      "RevokedGateway": {
+        "description": "What `POST /api/certs/v1/gateways/{hardware_id}/revoke` revoked.",
+        "properties": {
+          "hardware_id": {
+            "description": "The gateway's hardware ID.",
+            "type": "string"
+          },
+          "revoked": {
+            "description": "The certificates revoked by this request, by serial number; at least one. Certificates\nrevoked before, or expired, are not in it.",
+            "items": {
+              "$ref": "#/components/schemas/RevokedGatewayCertificate"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "hardware_id",
+          "revoked"
+        ],
+        "type": "object"
+      },
+      "RevokedGatewayCertificate": {
+        "description": "A gateway certificate this request revoked, as the ledger now records it.",
+        "properties": {
+          "ca_key_id": {
+            "description": "The issuing CA that signed it: the SHA-256 of its public key, 64 lower-case hex digits.",
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "not_after": {
+            "description": "When it would have expired; its CA's CRLs list it until then.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "not_before": {
+            "description": "When it became valid.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "revocation_reason": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/RevocationReason",
+                "description": "Why it was revoked, when a reason was given."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "revoked_at": {
+            "description": "When it was revoked.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "serial": {
+            "description": "The serial number, lower-case hex.",
+            "pattern": "^[0-9a-f]{2,40}$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "serial",
+          "ca_key_id",
+          "not_before",
+          "not_after",
+          "revoked_at"
+        ],
         "type": "object"
       },
       "Series": {
@@ -4089,6 +4177,128 @@
         ]
       }
     },
+    "/api/certs/v1/gateways/{hardware_id}/revoke": {
+      "post": {
+        "operationId": "revokeGateway",
+        "parameters": [
+          {
+            "description": "The gateway's hardware ID, as registered at the factory.",
+            "in": "path",
+            "name": "hardware_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RevokeGateway"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RevokedGateway"
+                }
+              }
+            },
+            "description": "Revoked now, each certificate listed with its serial number. Before this response the ledger records the revocations and each of their issuing CAs gets a CRL that lists them (should that fail, the CRL job lists them within one check interval, default 5 minutes), and the broker is asked to drop the gateway's permissions, which also disconnects it. The broker refuses the certificates in the TLS handshake once it has loaded the new CRL, within one trust interval (default 30 seconds). A renewal may later give the gateway a new certificate if it is still bound, unless the reason is `key_compromise`, which ends its renewals for good."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The `Content-Type` is not `application/json`, the body is larger than 1 KiB (`gateway_revocation.body_too_large`), or it is not a JSON object (`gateway_revocation.body_invalid`) (`invalid_request`)."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No valid session (`unauthenticated`)."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Not a platform administrator (`permission_denied`)."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No gateway is registered with this hardware ID (`not_found`)."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The gateway has no certificate that is neither revoked nor expired (`conflict`, `gateway_revocation.no_valid_certificate`). Nothing changed."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "An unknown field (`gateway_revocation.unknown_field`), or a reason that is not one of the listed ones (`gateway_revocation.reason_invalid`) (`validation_failed`). Nothing was revoked."
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The revocation's task failed (`internal`). Whether anything was revoked is unknown; calling again tells (409 when it was)."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The database failed (`unavailable`). Most likely nothing was revoked; should the connection have broken while committing, the revocation may stand without its new CRL and broker step, which the CRL job and the next whole comparison catch up. Calling again tells (409 when it was revoked)."
+          }
+        },
+        "summary": "Revokes every certificate of a gateway that is neither revoked nor expired: decision 6's\nthree steps, see the module's documentation.",
+        "tags": [
+          "certs"
+        ]
+      }
+    },
     "/api/certs/v1/workstation-certificates": {
       "post": {
         "operationId": "issueWorkstationCertificate",
@@ -5995,7 +6205,7 @@
       "name": "assets"
     },
     {
-      "description": "Workstation certificates and factory registration from the issuing CA (services/certs).",
+      "description": "Workstation certificates, factory registration and gateway revocation from the issuing CA (services/certs).",
       "name": "certs"
     },
     {

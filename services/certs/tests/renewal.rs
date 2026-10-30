@@ -542,9 +542,10 @@ async fn renewal_issues_for_the_registered_key_and_refuses_the_rest() {
     // The endpoint decides once the consumer's lag is known; until then it answers 503.
     wait_for_bindings_lag(&collector).await;
 
-    // Acceptance 1: the gateway's only certificate is revoked; the renewal does not look at it.
+    // Acceptance 1: the gateway's only certificate is revoked; the renewal does not look at it
+    // (any reason but keyCompromise, which ends renewals: Laysi/trustiot-v2#636).
     sqlx::query(
-        "UPDATE certs.issued_certificates SET revoked_at = now(), revocation_reason = 1
+        "UPDATE certs.issued_certificates SET revoked_at = now(), revocation_reason = 4
          WHERE profile = 'gateway' AND subject = 'rn-ok'",
     )
     .execute(&mut admin)

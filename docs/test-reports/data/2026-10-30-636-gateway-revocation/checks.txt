@@ -1,0 +1,22 @@
+    Checking openapi v0.1.0 (<host copy>/src/tools/openapi)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.38s
+api/openapi.json is up to date
+$ bun tools/api-client.ts --check
+$ tsc --noEmit --project tsconfig.json
+$ biome ci .
+Checked 80 files in 26ms. No fixes applied.
+ 218 pass
+ 0 fail
+ 615 expect() calls
+Ran 218 tests across 17 files. [1.70s]
+binaries-ok 248
+test results_over_the_limits_become_a_request_to_narrow ... ok
+test error::tests::message_keys_are_validated ... ok
+test error::tests::only_transient_codes_are_retryable ... ok
+test error::tests::display_names_code_and_key_only ... ok
+test error::tests::malformed_key_literal_panics_outside_const - should panic ... ok
+test error::tests::wire_values_status_and_default_keys_follow_the_code ... ok
+test error::tests::internal_errors_never_carry_details ... ok
+test crates/contract/src/error.rs - error::message_key (line 239) ... ok
+test crates/contract/src/error.rs - error::message_key (line 246) - compile fail ... ok
+passed 1960 failed 0

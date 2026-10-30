@@ -31,6 +31,7 @@
 //! later one reads what the earlier one wrote and every revocation committed before it, and its
 //! number is one higher.
 
+use std::sync::Arc;
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
@@ -41,6 +42,7 @@ use service_kit::Context;
 use service_kit::job_lock::JobLock;
 use service_kit::tenant::{BackgroundTenantDb, TenantDbError};
 use sqlx::{PgConnection, PgPool, Row as _};
+use tokio::sync::Semaphore;
 use tracing::Instrument as _;
 
 use crate::authority::{Authority, CaState, IssuingCa, unix_now};
@@ -61,6 +63,14 @@ pub const LOCK_CA_CRL: &str = "SELECT pg_advisory_xact_lock(1668443251, hashtext
 /// timeout: a CRL job round that holds the CA's lock delays it, a stuck one must not keep the
 /// revocation's response from going out.
 pub const REISSUE_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// How many new CRLs after revocations one replica makes at a time ([`Reissuer`]). Each holds a
+/// connection of the service role's pool (default 5) while it waits for its CA's lock, so many
+/// revocations at once (a gateway with certificates of several CAs, several administrators, the
+/// suspension or unbinding of many gateways) must not take the whole pool; the others wait for a
+/// turn without a connection, within their timeout. A new CRL lists every revocation committed
+/// before it starts, so waiting costs no revocation its listing.
+pub const MAX_CONCURRENT_REISSUES: usize = 2;
 
 /// Why a round failed. Names CAs and problems, never key material.
 #[derive(Debug, thiserror::Error)]
@@ -491,13 +501,14 @@ fn log_issued(ca: &IssuingCa, issued: &Issued, cause: Cause) {
 
 /// [`reissue`] for request handlers: the CA state, the service role and the schedule a handler
 /// needs to give an issuing CA a new CRL right after it revoked one of its certificates.
-/// Cloning is cheap.
+/// Cloning is cheap; the clones share the turns of [`MAX_CONCURRENT_REISSUES`].
 #[derive(Clone)]
 pub struct Reissuer {
     db: BackgroundTenantDb,
     ca: CaState,
     schedule: CrlSchedule,
     timeout: Duration,
+    turns: Arc<Semaphore>,
 }
 
 impl Reissuer {
@@ -516,6 +527,7 @@ impl Reissuer {
             ca,
             schedule,
             timeout,
+            turns: Arc::new(Semaphore::new(MAX_CONCURRENT_REISSUES)),
         }
     }
 
@@ -523,29 +535,40 @@ impl Reissuer {
     /// CA a new CRL now ([`reissue`]) and returns whether the CA's CRL is now up to date (also
     /// true for a CA that has expired, which needs none). It runs on a task of its own, in the
     /// caller's span, so a caller that goes away (a client that disconnects) does not cancel it,
-    /// and gives up after the timeout. Each of its two lock waits in Postgres gives up after a
-    /// third of the timeout, so a stuck lock ends the statement in the database before the
-    /// timeout and its connection returns to the pool. A failure is logged as an ERROR and
-    /// changes nothing for the revocation, which stands: the CRL job lists it within one
-    /// `crl.check_interval` ([`refresh`], [`Cause::Unlisted`]). Write the revocation's own log
-    /// line before calling this.
+    /// and gives up after the timeout. At most [`MAX_CONCURRENT_REISSUES`] run at a time on a
+    /// replica; waiting for a turn counts against the timeout. Each of its two lock waits in
+    /// Postgres gives up after a third of the time left once it has its turn, so a stuck lock
+    /// ends the statement in the database before the timeout and its connection returns to the
+    /// pool. A failure is logged as an ERROR and changes nothing for the revocation, which
+    /// stands: the CRL job lists it within one `crl.check_interval` ([`refresh`],
+    /// [`Cause::Unlisted`]). Write the revocation's own log line before calling this.
     pub async fn after_revocation(&self, ca_key_id: &str, serial: &[u8]) -> bool {
-        let (db, ca, schedule, timeout) = (
+        self.after_revocations(ca_key_id, &[serial]).await
+    }
+
+    /// [`Reissuer::after_revocation`] for several certificates of the same CA revoked together,
+    /// for example every certificate of a gateway (Laysi/trustiot-v2#636): one new CRL lists them
+    /// all. The ERROR line's `serial` names them all, comma-separated.
+    pub async fn after_revocations(&self, ca_key_id: &str, serials: &[&[u8]]) -> bool {
+        let (db, ca, schedule, timeout, turns) = (
             self.db.clone(),
             self.ca.clone(),
             self.schedule.clone(),
             self.timeout,
+            Arc::clone(&self.turns),
         );
         let key_id = ca_key_id.to_owned();
         let outcome = tokio::spawn(
             async move {
-                let authority = ca.authority().ok_or(CrlError::NoAuthority)?;
-                match tokio::time::timeout(
-                    timeout,
-                    reissue(&db, &authority, &key_id, &schedule, unix_now(), timeout / 3),
-                )
-                .await
-                {
+                let deadline = tokio::time::Instant::now() + timeout;
+                let reissued = async {
+                    // The semaphore is never closed; the turn is held until the CRL is stored.
+                    let _turn = turns.acquire().await;
+                    let left = deadline.saturating_duration_since(tokio::time::Instant::now());
+                    let authority = ca.authority().ok_or(CrlError::NoAuthority)?;
+                    reissue(&db, &authority, &key_id, &schedule, unix_now(), left / 3).await
+                };
+                match tokio::time::timeout_at(deadline, reissued).await {
                     Ok(result) => result.map(Some),
                     Err(_) => Ok(None),
                 }
@@ -559,9 +582,14 @@ impl Reissuer {
             Ok(Err(error)) => error.to_string(),
             Err(error) => format!("the task failed: {error}"),
         };
+        let serial = serials
+            .iter()
+            .map(|serial| hex(serial))
+            .collect::<Vec<_>>()
+            .join(",");
         tracing::error!(
             ca_key_id,
-            serial = %hex(serial),
+            serial = %serial,
             error = %problem,
             check_interval = ?self.schedule.check_interval,
             "could not issue a new CRL after a revocation; the revocation stands and the CRL job \

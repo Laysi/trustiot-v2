@@ -207,6 +207,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/certs/v1/gateways/{hardware_id}/revoke": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Revokes every certificate of a gateway that is neither revoked nor expired: decision 6's
+         *     three steps, see the module's documentation.
+         */
+        post: operations["revokeGateway"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/certs/v1/workstation-certificates": {
         parameters: {
             query?: never;
@@ -1399,17 +1419,58 @@ export interface components {
          */
         Resolution: "1m" | "1h";
         /**
-         * @description A reason a workstation certificate can be revoked for: the RFC 5280 CRLReason codes that
-         *     apply to an end entity, without `certificateHold` (a revocation here is final).
+         * @description A reason a workstation or gateway certificate can be revoked for: the RFC 5280 CRLReason codes
+         *     that apply to an end entity, without `certificateHold` (a revocation here is final).
          * @enum {string}
          */
         RevocationReason: "unspecified" | "key_compromise" | "affiliation_changed" | "superseded" | "cessation_of_operation" | "privilege_withdrawn";
+        /**
+         * @description The body of `POST /api/certs/v1/gateways/{hardware_id}/revoke` (Laysi/trustiot-v2#636): revokes
+         *     every certificate of the gateway that is neither revoked nor expired. Unknown fields are
+         *     refused.
+         */
+        RevokeGateway: {
+            reason?: components["schemas"]["RevocationReason"] | null;
+        };
         /**
          * @description The body of `POST /api/certs/v1/workstation-certificates/{serial}/revoke`. Unknown fields are
          *     refused.
          */
         RevokeWorkstationCertificate: {
             reason?: components["schemas"]["RevocationReason"] | null;
+        };
+        /** @description What `POST /api/certs/v1/gateways/{hardware_id}/revoke` revoked. */
+        RevokedGateway: {
+            /** @description The gateway's hardware ID. */
+            hardware_id: string;
+            /**
+             * @description The certificates revoked by this request, by serial number; at least one. Certificates
+             *     revoked before, or expired, are not in it.
+             */
+            revoked: components["schemas"]["RevokedGatewayCertificate"][];
+        };
+        /** @description A gateway certificate this request revoked, as the ledger now records it. */
+        RevokedGatewayCertificate: {
+            /** @description The issuing CA that signed it: the SHA-256 of its public key, 64 lower-case hex digits. */
+            ca_key_id: string;
+            /**
+             * Format: date-time
+             * @description When it would have expired; its CA's CRLs list it until then.
+             */
+            not_after: string;
+            /**
+             * Format: date-time
+             * @description When it became valid.
+             */
+            not_before: string;
+            revocation_reason?: components["schemas"]["RevocationReason"] | null;
+            /**
+             * Format: date-time
+             * @description When it was revoked.
+             */
+            revoked_at: string;
+            /** @description The serial number, lower-case hex. */
+            serial: string;
         };
         /** @description A data point's series. */
         Series: {
@@ -3069,6 +3130,105 @@ export interface operations {
                 };
             };
             /** @description No issuing CA is loaded or can sign yet (`gateway_registration.ca_not_ready`), or the database failed (`unavailable`). Nothing was registered. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    revokeGateway: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The gateway's hardware ID, as registered at the factory. */
+                hardware_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RevokeGateway"];
+            };
+        };
+        responses: {
+            /** @description Revoked now, each certificate listed with its serial number. Before this response the ledger records the revocations and each of their issuing CAs gets a CRL that lists them (should that fail, the CRL job lists them within one check interval, default 5 minutes), and the broker is asked to drop the gateway's permissions, which also disconnects it. The broker refuses the certificates in the TLS handshake once it has loaded the new CRL, within one trust interval (default 30 seconds). A renewal may later give the gateway a new certificate if it is still bound, unless the reason is `key_compromise`, which ends its renewals for good. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RevokedGateway"];
+                };
+            };
+            /** @description The `Content-Type` is not `application/json`, the body is larger than 1 KiB (`gateway_revocation.body_too_large`), or it is not a JSON object (`gateway_revocation.body_invalid`) (`invalid_request`). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No valid session (`unauthenticated`). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Not a platform administrator (`permission_denied`). */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No gateway is registered with this hardware ID (`not_found`). */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The gateway has no certificate that is neither revoked nor expired (`conflict`, `gateway_revocation.no_valid_certificate`). Nothing changed. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description An unknown field (`gateway_revocation.unknown_field`), or a reason that is not one of the listed ones (`gateway_revocation.reason_invalid`) (`validation_failed`). Nothing was revoked. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The revocation's task failed (`internal`). Whether anything was revoked is unknown; calling again tells (409 when it was). */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The database failed (`unavailable`). Most likely nothing was revoked; should the connection have broken while committing, the revocation may stand without its new CRL and broker step, which the CRL job and the next whole comparison catch up. Calling again tells (409 when it was revoked). */
             503: {
                 headers: {
                     [name: string]: unknown;
