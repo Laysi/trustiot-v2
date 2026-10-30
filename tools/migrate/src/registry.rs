@@ -228,13 +228,15 @@ pub const PRODUCT: Registry = Registry {
         // deploy/chart/templates/_migrate.tpl). identity's event log and assets' device pool read
         // these events. Reads assets' events as the same platform role (Laysi/trustiot-v2#632):
         // every `assets.gateway_bound` gives the service a gateway's tenant, for the renewal and
-        // the broker's permissions.
+        // the broker's permissions. Reads identity's events too (Laysi/trustiot-v2#778):
+        // `identity.tenant_created` and `identity.tenant_state_changed` give it each tenant's
+        // state, and the renewal refuses every tenant that is not active.
         Service {
             name: certs_schema::SCHEMA.service,
             platform_role: true,
             outbox: Outbox {
                 producer: certs_schema::SCHEMA.outbox_producer,
-                consumes: &["assets"],
+                consumes: &["assets", "identity"],
             },
             migrations: certs_schema::SCHEMA.migrations,
         },

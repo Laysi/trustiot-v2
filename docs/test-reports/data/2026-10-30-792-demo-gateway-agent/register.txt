@@ -1,0 +1,17 @@
+# 工作站（協調者執行，平台管理員的 email 驗證碼由負責人在自己的終端機輸入），2026-10-30。
+# <GW> 是工作站 ~/.ssh/config 裡這台閘道器的 Host；<app 主機名稱> 是展示環境的 app 主機名稱。
+$ trustiot-workstation register --hardware-id tg-lab-0001 --gateway <GW> --root-sha256 "$ROOT" --remote-sudo --headers-file "$H"
+2026-10-30T10:12:33.360942Z  INFO the gateway reported its key hardware_id="tg-lab-0001" key_created=false ek_certificate=true public_key_sha256="2914ee8b4921c5da755b61f4b01486d3feb2427d45455a397721c437361184e2"
+2026-10-30T10:12:33.363274Z  INFO registering a gateway hardware_id="tg-lab-0001" origin=https://<app 主機名稱>
+2026-10-30T10:12:33.580887Z  INFO registered the gateway hardware_id="tg-lab-0001" status=200 serial=5756b62458c56803416c03789c6c22ae attempts=1
+<GW>: the TPM key at 0x81000100 was already there and reused; public key SHA-256 2914ee8b4921c5da755b61f4b01486d3feb2427d45455a397721c437361184e2
+the platform already had the registration of hardware ID tg-lab-0001 (serial 5756b62458c56803416c03789c6c22ae, valid until 2027-01-28T09:41:47+00:00) after 1 attempt(s); recorded in ~/.local/share/trustiot-workstation/registrations/tg-lab-0001.json
+<GW>: installed the certificate chain and the root certificate: /var/lib/trustiot-agent/gateway.pem: written; /etc/trustiot/broker-ca.pem: written
+register exit 0
+
+$ trustiot-workstation verify --hardware-id tg-lab-0001 --headers-file "$H"
+certs.gateway_registered at 2026-10-30T09:41:47.165+00:00: hardware ID tg-lab-0001, serial 5756b62458c56803416c03789c6c22ae, registered by lab-coordinator-1, public key SHA-256 2914ee8b4921c5da755b61f4b01486d3feb2427d45455a397721c437361184e2 (event 01a18c2f-d41d-74be-a3db-bbd7ce9483d6)
+  it matches this workstation's record (serial and public key)
+verify exit 0
+
+# 執行時段：2026-10-30T10:12:31Z–10:12:35Z；之後 10:12:39Z logout。

@@ -136,6 +136,7 @@ fn request_claims(audience: ServiceName, iat: i64) -> InternalClaims {
         platform_admin: false,
         act: None,
         sid: Some(SESSION.parse().expect("session id")),
+        tenant_suspended: false,
     }
 }
 
@@ -348,6 +349,7 @@ async fn a_delegation_outlives_the_request_token_and_exchanges_for_minute_tokens
                     sub: ServiceName::Assistant
                 }),
                 sid: None,
+                tenant_suspended: false,
             }
         );
     }
@@ -485,6 +487,54 @@ async fn role_changes_show_in_the_next_token_and_a_removed_member_is_refused() {
     create(&routes, &request_token(unix_now()), &create_body(&key, 600))
         .await
         .assert_error(StatusCode::FORBIDDEN, "permission_denied");
+}
+
+/// Acceptance (Laysi/trustiot-v2#777): once the delegation's tenant is suspended, the next
+/// exchange and a new delegation are refused with 403 `tenant_suspended`; after it is resumed,
+/// the next exchange works again. A token with the `tenant_suspended` claim starts no delegation
+/// and costs no database read.
+#[tokio::test]
+async fn a_suspended_tenant_stops_the_next_exchange_until_it_is_resumed() {
+    let store = FakeStore::active();
+    let key = run_key(9);
+    let routes = router(&store, assistant_calls(), unix_now);
+    let delegation = create(&routes, &request_token(unix_now()), &create_body(&key, 600))
+        .await
+        .delegation();
+
+    store.set(Ok(Standing::TenantSuspended));
+    exchange_with(&routes, &delegation, &key, ServiceName::Certs)
+        .await
+        .assert_error(StatusCode::FORBIDDEN, "tenant_suspended");
+    create(&routes, &request_token(unix_now()), &create_body(&key, 600))
+        .await
+        .assert_error(StatusCode::FORBIDDEN, "tenant_suspended");
+
+    store.set(Ok(Standing::Active {
+        tenant: grant(TenantRole::Editor),
+        platform_admin: false,
+    }));
+    let token = exchange_with(&routes, &delegation, &key, ServiceName::Certs)
+        .await
+        .token();
+    let user = verifier(ServiceName::Certs)
+        .verify(token.expose())
+        .expect("valid token");
+    assert!(!user.is_tenant_suspended());
+
+    let asked = store.asked().len();
+    let suspended_request = sign_token(&InternalClaims {
+        tenant_suspended: true,
+        ..request_claims(ServiceName::Assistant, unix_now())
+    });
+    create(&routes, &suspended_request, &create_body(&key, 600))
+        .await
+        .assert_error(StatusCode::FORBIDDEN, "tenant_suspended");
+    assert_eq!(
+        store.asked().len(),
+        asked,
+        "refused before the store is read"
+    );
 }
 
 /// Acceptance (one hop): a token from an exchange, of either kind, starts no delegation and is

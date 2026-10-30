@@ -16,7 +16,8 @@ const UNIT: &str = include_str!("../systemd/trustiot-agent.service");
 const SYSUSERS: &str = include_str!("../systemd/trustiot-agent.sysusers");
 const ACCOUNT: &str = "trustiot-agent";
 /// The highest `systemd-analyze security` exposure allowed; the unit scores 1.5 on 2026-10-21
-/// (what is left: network access, the TPM device, the tss group, /proc/meminfo).
+/// (what is left: network access, the TPM device, the tss group, /proc/meminfo), and still 1.5
+/// with netlink sockets allowed on 2026-10-31.
 const MAX_EXPOSURE: f64 = 2.0;
 
 /// The unit's settings: section, then key, then every value in order (a key may repeat).
@@ -120,7 +121,10 @@ fn the_sandbox_lines_stay() {
         ("PrivateTmp", "yes"),
         ("DevicePolicy", "closed"),
         ("DeviceAllow", "/dev/tpmrm0 rw"),
-        ("RestrictAddressFamilies", "AF_UNIX AF_INET AF_INET6"),
+        (
+            "RestrictAddressFamilies",
+            "AF_UNIX AF_INET AF_INET6 AF_NETLINK",
+        ),
         ("MemoryDenyWriteExecute", "yes"),
         ("ConfigurationDirectory", "trustiot"),
         ("StateDirectory", "trustiot-agent"),
@@ -148,6 +152,21 @@ fn the_sandbox_lines_stay() {
         // PrivateDevices hides the TPM, ProcSubset=pid hides /proc/meminfo, PrivateUsers drops
         // the tss group; each would break the agent.
         assert!(service(absent).is_empty(), "{absent}= breaks the agent");
+    }
+}
+
+#[test]
+fn the_sandbox_allows_every_address_family_the_agent_uses() {
+    // AF_UNIX: sd_notify and the journal; AF_INET and AF_INET6: the broker and
+    // the Modbus devices; AF_NETLINK: getifaddrs, with which the Modbus address guard
+    // (src/modbus/address.rs, Interfaces::read) reads the gateway's own addresses before every
+    // connection. Without AF_NETLINK it refuses every connection (Laysi/trustiot-v2#805);
+    // src/modbus/address.rs runs that read under this line when a systemd user manager is there.
+    let line = single("RestrictAddressFamilies");
+    let allowed: Vec<&str> = line.split_whitespace().collect();
+    assert!(!line.starts_with('~'), "an allow list, not a deny list");
+    for family in ["AF_UNIX", "AF_INET", "AF_INET6", "AF_NETLINK"] {
+        assert!(allowed.contains(&family), "{family} is missing: {line}");
     }
 }
 

@@ -21,6 +21,9 @@
 
   "security.cross_site_request": "This request came from another site and was blocked. Open TrustIoT directly and try again.",
   "tenant.name_invalid": "Enter a name of 1 to {max} characters.",
+  "tenant.state_invalid": "Choose to suspend or resume the organization.",
+  "tenant.suspension_reason_invalid": "Choose a reason to suspend (security or abuse, non-payment, contract terminated); resuming takes no reason.",
+  "tenant.state_final": "This organization's contract was terminated or it was deleted, so it can't be resumed or changed.",
   "telemetry.query_invalid": "The history query is missing a setting or has one in the wrong format.",
   "telemetry.device_id_invalid": "This device ID is not valid.",
   "telemetry.time_zone_invalid": "Choose a valid time zone.",

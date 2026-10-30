@@ -1,0 +1,16 @@
+# docs/runbooks/demo-environment.md, 「打開閘道器的資料路徑」 step 2, the unregistered-certificate check,
+# as fixed in this change (one port-forward per handshake). Run once on the demo machine; times are UTC.
+start 2026-10-30T12:24:27Z
+--- a self-signed client certificate
+CONNECTED(00000003)
+2086C33EFFFF0000:error:0A000418:SSL routines:ssl3_read_bytes:tlsv1 alert unknown ca:ssl/record/rec_layer_s3.c:918:SSL alert number 48
+--- no client certificate
+CONNECTED(00000003)
+20C6F731FFFF0000:error:0A00045C:SSL routines:ssl3_read_bytes:tlsv13 alert certificate required:ssl/record/rec_layer_s3.c:918:SSL alert number 116
+PASS: both refused; the port-forward is closed
+exit=0
+end 2026-10-30T12:24:34Z
+# afterwards on the demo machine: listeners on 18883
+0
+# afterwards on the demo machine: port-forward processes for trustiot-mqtt-broker
+0

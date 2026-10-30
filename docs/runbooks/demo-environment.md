@@ -45,7 +45,7 @@
 
 ## 部署
 
-2026-10-22 的狀態：平台元件已與 repo 對齊（`scripts/demo/platform.ts`，Laysi/trustiot-v2#465）；Flux 已裝在展示叢集（Laysi/trustiot-v2#467，[測試報告](../test-reports/2026-10-22-467-demo-flux-install.md)），HelmRelease 釘在 chart `0.0.0-rc.10`，打開的服務是 `identity` 與 `assets`；tunnel 的路由已照「架構」的「路由」切到入口的固定 ClusterIP（第 2 段，Laysi/trustiot-v2#469）。2026-10-28 起 main 把展示叢集釘在 chart `0.0.0-rc.11`（第一個含 certs 的版本），換版前先對齊了 istiod（Laysi/trustiot-v2#619，見「換 chart 版本」）。之後展示環境的內容都由 main 決定：開 PR 改 `deploy/flux/clusters/demo/`，合併後 Flux 套用（GitRepository 每分鐘讀一次 main）。不要在叢集上直接改 Flux 管理的物件，下一次同步會改回去（[deploy/flux/README.md](../../deploy/flux/README.md)「日常操作」）。
+2026-10-22 的狀態：平台元件已與 repo 對齊（`scripts/demo/platform.ts`，Laysi/trustiot-v2#465）；Flux 已裝在展示叢集（Laysi/trustiot-v2#467，[測試報告](../test-reports/2026-10-22-467-demo-flux-install.md)），HelmRelease 釘在 chart `0.0.0-rc.10`，打開的服務是 `identity` 與 `assets`；tunnel 的路由已照「架構」的「路由」切到入口的固定 ClusterIP（第 2 段，Laysi/trustiot-v2#469）。2026-10-28 起 main 把展示叢集釘在 chart `0.0.0-rc.11`（第一個含 certs 的版本），換版前先對齊了 istiod（Laysi/trustiot-v2#619，見「換 chart 版本」）。2026-10-30 起釘在 `0.0.0-rc.12`（含 certs 的換發端點，以及 ingest、gateway-ops 的映像），換版前 istiod 的 values 與 rc.11 相同、不必對齊（Laysi/trustiot-v2#795）。之後展示環境的內容都由 main 決定：開 PR 改 `deploy/flux/clusters/demo/`，合併後 Flux 套用（GitRepository 每分鐘讀一次 main）。不要在叢集上直接改 Flux 管理的物件，下一次同步會改回去（[deploy/flux/README.md](../../deploy/flux/README.md)「日常操作」）。
 
 會寫入展示機或叢集的步驟，都由有展示機 SSH 權限的維運人員在持有 lab 鎖（展示機的 `~/e2e.lock`）時執行。腳本照 [scripts/README.md](../../scripts/README.md)「展示機（`demo/`）」的規則先印出計畫與確認碼，加上 `--apply --confirm <確認碼>` 才動手；本文寫成手動指令的步驟（重設展示資料、輪替 deploy key 與 age 金鑰）也要先取得 lab 鎖，鎖的擁有者寫成 `Laysi/trustiot-v2#<issue> <UTC 時間> demo <步驟>`，`<issue>` 是這次工作的 issue。
 
@@ -75,6 +75,57 @@ bun scripts/demo/tunnel.ts route-origin --ssh-host "$DEMO_SSH_HOST" # 路由該�
 4. **PR**：照 [deploy/flux/README.md](../../deploy/flux/README.md)「日常變更」的「打開切片的服務」改 `values-demo.yaml`，Secret 的 SOPS 檔一起加進來並列進 `kustomization.yaml`。`bun test deploy/flux` 以 HEAD 的 chart 渲染，不是部署中的版本；兩者的 values 欄位不同時，另以部署中的版本 `helm template` 確認。審查後合併。
 5. **確認**：用 Postgres 的服務會改變 migration Job 的 spec，Job 重跑，每個服務跟著滾動重啟一次（[deploy/chart/README.md](../../deploy/chart/README.md)「migration Job」的「Job 何時再跑」），展示環境短暫中斷，所以不要排在展示前。以 `flux.ts status` 確認 HelmRelease 最新一筆是 `deployed`、每個 Deployment available，再跑 `tunnel.ts check --stage 2`，以受邀的帳號在瀏覽器走一次這個服務的功能。
 6. **退回**：revert 這個 PR。服務關掉後下一次 Job 讓它的登入角色 `NOLOGIN`，資料與它的密碼 Secret 留著（deploy/chart/README.md「migration Job」的「產生的密碼」）。
+
+### 打開閘道器的資料路徑
+
+Laysi/trustiot-v2#795：MQTT broker、mqtt-bridge、ingest 與 gateway-ops 一起打開（值與理由在 [deploy/flux/README.md](../../deploy/flux/README.md)「打開閘道器的資料路徑」）。照上面的順序，另外：
+
+1. **前提**：
+   - 部署中的 chart 比 `0.0.0-rc.11` 晚（`bun test deploy/flux` 也檢查）。換到那一版是另一個 PR，先合併、確認穩定（「換 chart 版本」）；那一版含換發端點，所以先完成「換發端點上線」。
+   - Cloudflare 的 `/mqtt` 速率限制已套用（「`/mqtt` 的速率限制」），讀回 ruleset 確認：mqtt-bridge 一部署，`/mqtt` 就經 Bypass 對網際網路開放。
+   - 記憶體：這一步新增 broker（requests 64Mi，加上 trust sidecar）、mqtt-bridge、ingest 與 gateway-ops（各 requests 32Mi、limits 256Mi）。打開前在展示機上 `free -m`，量測結果記在 issue。
+   - 本機的信任：入口的 NetworkPolicy 放行節點自己（`ingress.tunnel.allowedSources`），所以展示機上任何本機行程都能直接連入口、自帶 `Host` 與 `CF-Connecting-IP`，`/mqtt` 與 `/certs/renew` 在本機繞得過 Cloudflare 的速率限制與 mqtt-bridge 的每來源上限。展示機的本機使用者等同受信任（與 SaaS 主機相同的假設，deploy/chart/README.md「入口 gateway」的「入口 pod 的埠」）。
+2. **合併後確認**（只讀，不取 lab 鎖）：
+   - `flux.ts status`：HelmRelease 最新一筆是 `deployed`；`trustiot-mqtt-broker-0`、`trustiot-mqtt-bridge-*`、`trustiot-ingest-*`、`trustiot-gateway-ops-*` 與重新滾動的 `trustiot-certs-*` 都 Running 且 ready，migration Job 是 `Succeeded`。新的 ingest、gateway-ops 與 certs pod 先停在 `ContainerCreating`（等 broker 的 init container `accounts` 寫入密碼）是正常的，broker 起來後自己繼續；停超過幾分鐘時照 deploy/chart/README.md「服務的帳號」看 `accounts` 的日誌。
+   - broker 的伺服器憑證：憑證 CronJob 每 15 分鐘執行一次，第一次執行填入 Secret（Job 的日誌 `wrote a new server certificate and key for the broker`），trust sidecar 讓 broker 重啟一次帶上 8883。確認 `kubectl -n trustiot logs trustiot-mqtt-broker-0 -c mosquitto` 有 8883 的 listen socket，`-c trust` 沒有錯誤。CRL：`-c trust` 的日誌沒有 `does not reload the trust files` 或 CRL 的錯誤；以 port-forward 讀 certs 的 `/internal/certs/v1/crl.pem`（「簽發 CA 的儀式」第 5 步的做法）也可以。
+   - 閘道器：在 lab 的閘道器上 `sudo journalctl -u trustiot-agent --since <合併時間>`（只讀）。agent 在自己的退避間隔內（最多 60 秒）重連，依序出現 `connected to the broker`（內層 mTLS 完成、CONNACK 0）；閘道器還沒綁定時接著是 `the broker refused the online status: 0x87 (not authorized)`，這是預期的：還沒綁定的閘道器連得上 broker，但不能發布或訂閱（services/certs/README.md「broker 權限」）。mqtt-bridge 的日誌同時有 `relaying a gateway connection`。
+   - 未登錄的憑證連不上：在展示機上以 port-forward 連 broker 的 8883（不經 mesh，只到 broker 自己的 TLS 檢查），用一張當場產生、自簽的用戶端憑證，以及不帶憑證，各握手一次，兩次都要被 broker 以 TLS alert 拒絕；做完關掉 port-forward、刪掉暫存檔：
+
+     ```sh
+     ssh "$DEMO_SSH_HOST" 'set -eu
+       d=$(mktemp -d "${XDG_RUNTIME_DIR:?}/broker-check.XXXXXX")
+       pf=""
+       stop() { if [ -n "$pf" ]; then sudo -n kill "$pf" 2>/dev/null || true; wait "$pf" 2>/dev/null || true; pf=""; fi; }
+       trap "stop; rm -rf \"\$d\"" EXIT
+       closed() { if ss -ltnH "sport = :18883" | grep -q .; then echo "FAIL: something still listens on 18883" >&2; exit 1; fi; }
+       # handshake <name> [s_client options]: one handshake through its own port-forward, closed afterwards.
+       handshake() {
+         name=$1; shift
+         closed
+         # sudo runs it as root, so only root can stop it; timeout ends it even if stop never runs.
+         sudo -n timeout 120 k3s kubectl -n trustiot port-forward pod/trustiot-mqtt-broker-0 18883:8883 >"$d/pf-$name.log" 2>&1 &
+         pf=$!
+         for i in $(seq 1 60); do grep -q "Forwarding from" "$d/pf-$name.log" && break; sleep 1; done
+         grep -q "Forwarding from" "$d/pf-$name.log" || { echo "the port-forward did not start" >&2; exit 1; }
+         timeout 20 openssl s_client -connect 127.0.0.1:18883 -tls1_3 -ign_eof -servername mqtt-broker.trustiot.internal "$@" </dev/null >"$d/$name.txt" 2>&1 || true
+         grep -E "alert|^CONNECTED" "$d/$name.txt" || true
+         stop
+         closed
+       }
+       openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -subj "/CN=tg-unregistered-0001" -days 1 -keyout "$d/k.pem" -out "$d/c.pem" 2>/dev/null
+       echo "--- a self-signed client certificate"
+       handshake self-signed -cert "$d/c.pem" -key "$d/k.pem"
+       echo "--- no client certificate"
+       handshake none
+       grep -q "alert unknown ca" "$d/self-signed.txt" || { echo "FAIL: the broker did not refuse the self-signed certificate" >&2; exit 1; }
+       grep -q "alert certificate required" "$d/none.txt" || { echo "FAIL: the broker did not refuse a connection without a certificate" >&2; exit 1; }
+       echo "PASS: both refused; the port-forward is closed"'
+     ```
+
+     最後一行是 `PASS` 才算通過：兩次都先 `CONNECTED`（TCP 連上），接著是 broker 回的 TLS alert，自簽的憑證是 `alert unknown ca`（OpenSSL 的 alert 48），沒有憑證是 `alert certificate required`（116），而且 port-forward 已經結束、18883 沒有 listener。每次握手各開一個 port-forward：broker 拒絕握手後重設連線，`kubectl port-forward` 接著以 `error: lost connection to pod` 結束，同一個 port-forward 上的第二次握手只會得到 `Connection refused`（Laysi/trustiot-v2#795 第一次實測時遇到）。port-forward 以 root 執行（sudo），一般使用者的 `kill` 停不了它，所以以 `sudo -n kill` 停，並以 `timeout 120` 保證它自己結束：它把展示機的 loopback 直接接到 broker 的 8883，繞過 mesh 與 mqtt-bridge 的限制（broker 的 mTLS 仍然把關），不能留著。TLS 1.3 的用戶端憑證在用戶端送完握手之後才被檢查，所以要 `-ign_eof` 讓 `s_client` 等 broker 的回應。這裡不給根憑證，`s_client` 不檢查 broker 的憑證，結果只看 broker 是否拒絕。登錄過的憑證連得上，由上一項閘道器的日誌證明。
+   - 記憶體：`free -m` 與 `sudo k3s kubectl top pod -n trustiot`，結果記在 issue，放得下才算完成。
+   - `tunnel.ts check --stage 2`：`/mqtt` 的升級現在由 mqtt-bridge 回 101（curl 等到 `--max-time` 才結束，算通過）。
+3. **退回**：revert 打開的 PR。要把 chart 退回 `0.0.0-rc.11` 或更早時，先 revert 打開的 PR、確認套用，再 revert 換版的 PR：順序反過來時 `bun test deploy/flux` 失敗，而 GitHub 不會擋下紅燈的合併，合併下去 Helm 會為沒有映像的 ingest 與 gateway-ops 等到逾時後 rollback 並重試，展示環境中斷好幾次。打開這個 PR 本身也一樣：合併前確認它最新 commit 的 CI 是在含新版 pin 的 main 上通過的。mqtt-bridge 關掉後 `/mqtt` 不再路由，閘道器回到 404 退避；broker 的 PVC、帳號與伺服器憑證的 Secret 留著（`keep`），之後再打開時接回。
 
 ## 簽發 CA 的儀式
 
@@ -295,6 +346,26 @@ status_and_keys() {
 5. **一般成員讀不到**：以一個不是平台管理員的使用者登入（先 `trustiot-workstation logout --headers-file "$H"`，工作站一次只存一個 session），重做第 3 步與第 4 步，兩個都是 `403`（`permission_denied`）。展示環境目前只有 `bootstrap-platform-admin` 能建立使用者，它建立的都是平台管理員；建立使用者的 API 在 Laysi/trustiot-v2#105。專案擁有者在 2026-10-24 決定這一步等 Laysi/trustiot-v2#105 完成、展示環境能建立一般成員之後再做，不直接改資料庫造一個。這個行為已有自動化測試涵蓋：身分服務的 `tests/event_log.rs`（租戶的 `admin` 讀平台的操作紀錄是 403）與 certs 的 `tests/workstation.rs`（只有平台管理員能簽發與撤銷工作站憑證）。
 6. **登出**：`trustiot-workstation logout --headers-file "$H"`。第 3 到 5 步印出的那一行（狀態碼與 key，不含 cookie、標頭、網址與本文）存進 Laysi/trustiot-v2#619 的留言。
 
+## 綁定展示用閘道器與建立設備
+
+出廠登錄過的閘道器（[factory/workstation](../../factory/workstation/README.md)）在資產服務的設備池裡、沒有綁定：agent 連得上 broker，但 `online` 被拒（PUBACK 0x87），也收不到設定（「打開閘道器的資料路徑」）。綁定、型號與設備都經 app 主機的 API 建立，不改資料庫（Laysi/trustiot-v2#793）。前提：`values-demo.yaml` 有 `/api/assets` 與 `/api/gateway-ops` 的 cookie 路由（[deploy/flux/README.md](../../deploy/flux/README.md)「閘道器的綁定、型號與設備的 API」），平台管理員已在工作站登入（上一節的第 1、2 步）。請求以上一節的方式帶 Access 的 service token 與 session cookie，不帶 `Origin` 與 `Sec-Fetch-Site`（不是瀏覽器，身分服務的跨站檢查放行），寫入一律 `Content-Type: application/json`。依序：
+
+| 步驟 | 請求 | 誰 | 重跑時 |
+| --- | --- | --- | --- |
+| 1. 讀 session | `GET /api/identity/v1/sessions/current` | 平台管理員本人 | 只讀；`tenants` 列出他所屬的租戶 |
+| 2. 建立展示租戶 | `POST /api/identity/v1/tenants`，body `{"name"}` | 平台管理員本人 | **不是冪等的**：每次 201 都是一個新租戶，而且平台管理員不會自動成為成員、第 1 步看不到它。重跑前先確認沒有建過（第 1 步的 `tenants`，或以 superuser 唯讀查 `identity.tenants`）；回應遺失時不要重送，先查 |
+| 3. 自己成為成員 | `PUT /api/identity/v1/platform/tenants/<租戶 ID>/members`，body `{"email", "role": "admin"}`（email 是第 1 步回的自己的地址） | 平台管理員本人 | 冪等：角色相同時 200、什麼都不寫 |
+| 4. 切到展示租戶 | `PUT /api/identity/v1/sessions/current/tenant`，body `{"tenant_id"}` | 成員 | 冪等；之後這個 session 的每個請求都帶展示租戶與在那裡的角色 |
+| 5. 綁定閘道器 | `PUT /api/assets/v1/platform/gateways/<硬體 ID>/binding`，body `{"tenant_id"}` | 平台管理員本人 | 冪等：已綁在同一個租戶時 200、什麼都不寫；別的租戶握有時 409。先以 `GET /api/assets/v1/platform/gateways/<硬體 ID>` 確認它在設備池（404 是還沒出廠登錄）。剛建立的租戶回 422 `gateway_binding.tenant_unknown`：資產服務還沒收到 `identity.tenant_created`，等幾秒以同一個 `tenant_id` 重送，**不要**重做第 2 步（`GET /api/assets/v1/tenant` 回 200 之後就收到了） |
+| 6. 建立型號 | `POST /api/assets/v1/device-models`，body `{"name", "points"}` | 租戶 editor 以上 | 名稱重複 409 `device_model.name_taken`：先以 `GET /api/assets/v1/device-models` 找同名的型號。503 `device_model.tenant_not_ready` 同第 5 步的 422：等幾秒重送，不要重做第 2 步 |
+| 7. 建立設備 | `POST /api/assets/v1/devices`，body `{"name", "hardware_id", "model_id", "transport", "host", "port", "unit_id", "poll_interval_ms"}` | 租戶 editor 以上 | 名稱重複 409 `device.name_taken`：先以 `GET /api/assets/v1/devices` 找同名的設備 |
+| 8. 確認 | `GET /api/gateway-ops/v1/gateways` | 租戶 viewer 以上 | 只讀 |
+
+- **RS485 轉換器只給一個連線**：轉換器把設備的回應送給每一條 TCP 連線（[現場限制](../requirements/field-constraints.md)），第 7 步一建立，agent 就收到設定開始輪詢，之後其他程式不能再連那個轉換器。lab 資料的錄製（Laysi/trustiot-v2#680）改從展示環境匯出。
+- **轉換器的位址不公開**：`host` 是 lab 的區網位址，只出現在請求與資產服務的資料裡，不寫進 issue、PR、測試報告或日誌的摘錄；貼進紀錄前遮掉。
+- **第 8 步的預期**：綁定之後 `presence` 先是 `unknown`，agent 下一次重連（退避最多 60 秒）後是 `online`；`desired_config_version` 在第 5 步之後就有（空的設定也有版本），第 7 步之後再往上一版，`applied_config_version` 在 agent 套用後的下一次心跳跟上。agent 的日誌（`sudo journalctl -u trustiot-agent`）有 `applied the configuration`，之後 ingest 把遙測寫進 ClickHouse。
+- **重設展示資料之後**（「重設展示資料」）：租戶、綁定、型號與設備都不在了，從第 2 步重做；certs 的登錄也不在了，閘道器要先重新出廠登錄才會回到設備池。
+
 ## 換 chart 版本
 
 改 `deploy/flux/clusters/demo/trustiot/chart.yaml` 的 PR 有兩種：release.yml 開的 deploy PR（可能同時移動 SaaS 與展示叢集），以及 `bun scripts/flux/pin-chart.ts --cluster demo --version <版本> --digest <chart digest>` 只換展示叢集的 pin PR（[deploy/flux/README.md](../../deploy/flux/README.md)「發版與回滾」與「日常變更」）。
@@ -321,7 +392,7 @@ Laysi/trustiot-v2#500（commit `26b454d`）起，入口的跨站請求檢查要 
 
 換版時 migration Job 重跑，每個服務與 ClickHouse（init container 用 migration 映像）都重啟一次（[deploy/chart/README.md](../../deploy/chart/README.md)「叢集內的 ClickHouse」），展示環境短暫中斷，不要排在展示前。
 
-**換發端點上線**：certs 打開之後，chart 為 gateway 主機名稱的 `/certs/renew` 掛著指向 certs 的路由，tunnel 也讓這個路徑略過 Access（「架構」）。換發端點由 Laysi/trustiot-v2#81 實作（services/certs/README.md 的「換發」）；釘的 chart 還不含它時，certs 對這個路徑回 404。一旦釘的 chart 含 Laysi/trustiot-v2#81 的換發端點，這個路徑就經既有的 Bypass 對網際網路開放，展示環境這邊不必再改任何東西。所以換到第一個含 Laysi/trustiot-v2#81 的版本之前，下面兩件都完成才合併 pin PR：
+**換發端點上線**：certs 打開之後，chart 為 gateway 主機名稱的 `/certs/renew` 掛著指向 certs 的路由，tunnel 也讓這個路徑略過 Access（「架構」）。換發端點由 Laysi/trustiot-v2#81 實作（services/certs/README.md 的「換發」）；釘的 chart 還不含它時，certs 對這個路徑回 404。一旦釘的 chart 含 Laysi/trustiot-v2#81 的換發端點，這個路徑就經既有的 Bypass 對網際網路開放，展示環境這邊不必再改任何東西。換發端點在 2026-10-29 進了 main（PR Laysi/trustiot-v2#734），`0.0.0-rc.11` 沒有它，之後的第一個候選版就有；這次換版與暴露的審查在 Laysi/trustiot-v2#795。所以換到第一個含 Laysi/trustiot-v2#81 的版本之前，下面兩件都完成才合併 pin PR：
 
 1. **前提條件：入口的速率限制涵蓋 `/certs/renew`**。照「`/mqtt` 的速率限制」最後一段改那條規則，讀回 ruleset 確認，再從工作站在 10 秒內連續送 41 次 `POST /certs/renew`（本文空的即可，certs 回 400 或 404，不碰資料庫），第 41 次起得到 Cloudflare 的 429（`server: cloudflare`），等 10 秒後再送一次，不再是 Cloudflare 的 429。理由：換發端點自己只有每個副本的限流，任何人都能以捏造的硬體 ID 用完它的全域限流，讓每台閘道器取挑戰都得到 429，包括憑證已過期、只能經這個端點恢復的閘道器；以來源 IP 計數只能在入口做（services/certs/README.md「換發」的「規則與取捨」）。
 2. 在換版的 issue 審查這個暴露（端點自己的驗證與限流、`check --stage 2` 對它的預期），確認後才合併。
@@ -409,6 +480,7 @@ Laysi/trustiot-v2#500（commit `26b454d`）起，入口的跨站請求檢查要 
      ```
 
      新成員回 201、改角色回 200，`previous_role` 是原本的角色；404 是沒有這個租戶，422 `member.email_unknown` 是這個 email 還沒有使用者。`role` 是 `viewer`、`editor` 或 `admin`；展示者自己要進入展示租戶時，也以這個方式把自己設為成員。每次變更都記在那個租戶的操作紀錄（`identity.member_role_changed`），成員下一個請求就帶新角色；已經在用的 app 頁面要切到這個租戶（或重新登入）才會以它為目前的租戶。
+   - 展示用閘道器的綁定、型號與設備：照「綁定展示用閘道器與建立設備」。
 9. **釋放 lab 鎖**，在重建完成之後：
 
    ```sh

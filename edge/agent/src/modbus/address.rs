@@ -11,6 +11,8 @@
 
 use std::io;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
+use std::sync::{Mutex, PoisonError};
+use std::time::{Duration, Instant};
 
 use tokio::net::TcpStream;
 
@@ -22,6 +24,12 @@ const METADATA_V4: Ipv4Addr = Ipv4Addr::new(169, 254, 169, 254);
 const METADATA_V6: Ipv6Addr = Ipv6Addr::new(0xfd00, 0x0ec2, 0, 0, 0, 0, 0, 0x0254);
 /// Most resolved addresses a refusal lists.
 const MAX_LISTED: usize = 8;
+/// How often at most the warning that the interface addresses cannot be read is logged.
+const LOG_EVERY: Duration = Duration::from_secs(60);
+
+/// The warning that the interface addresses cannot be read, for every connection of the
+/// process: the cause (such as a sandbox that refuses netlink sockets) is the same for all.
+static UNREADABLE: Mutex<Throttled> = Mutex::new(Throttled::new());
 
 /// Why an address is refused.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -218,12 +226,7 @@ impl AddressGuard {
                 "the host resolved to no address".to_owned(),
             ));
         }
-        let interfaces = Interfaces::read().map_err(|error| {
-            ReadError::Connect(format!(
-                "reading the gateway's interface addresses failed, so no address is allowed: \
-                 {error}"
-            ))
-        })?;
+        let interfaces = read_interfaces(Interfaces::read, &UNREADABLE, Instant::now())?;
         let allowed: Vec<SocketAddr> = resolved
             .iter()
             .map(|address| canonical(*address))
@@ -270,6 +273,65 @@ impl AddressGuard {
     pub(crate) fn with_hooks(mut self, hooks: std::sync::Arc<hooks::Hooks>) -> Self {
         self.hooks = Some(hooks);
         self
+    }
+}
+
+/// The gateway's interface addresses from `read`. A failure refuses the connection and logs a
+/// warning through `unreadable`: at the default level, the polling loop shows only that reads
+/// failed, and this failure refuses every connection (Laysi/trustiot-v2#805).
+fn read_interfaces(
+    read: impl FnOnce() -> io::Result<Interfaces>,
+    unreadable: &Mutex<Throttled>,
+    now: Instant,
+) -> Result<Interfaces, ReadError> {
+    read().map_err(|error| {
+        let due = unreadable
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .tick(now);
+        if let Some(suppressed) = due {
+            tracing::warn!(
+                %error,
+                errno = error.raw_os_error(),
+                suppressed,
+                "cannot read the gateway's interface addresses, so every Modbus TCP connection is \
+                 refused until it can (a sandbox that refuses netlink sockets causes this)"
+            );
+        }
+        ReadError::Connect(format!(
+            "reading the gateway's interface addresses failed, so no address is allowed: {error}"
+        ))
+    })
+}
+
+/// Counts occurrences and says when one should be logged: the first, then at most once per
+/// [`LOG_EVERY`], with the count of those held back since the last one logged.
+#[derive(Debug)]
+struct Throttled {
+    logged: Option<Instant>,
+    suppressed: u64,
+}
+
+impl Throttled {
+    const fn new() -> Self {
+        Self {
+            logged: None,
+            suppressed: 0,
+        }
+    }
+
+    /// `Some(occurrences held back since the last one logged)` when this one at `now` may be
+    /// logged.
+    fn tick(&mut self, now: Instant) -> Option<u64> {
+        if self
+            .logged
+            .is_some_and(|logged| now.saturating_duration_since(logged) < LOG_EVERY)
+        {
+            self.suppressed = self.suppressed.saturating_add(1);
+            return None;
+        }
+        self.logged = Some(now);
+        Some(std::mem::take(&mut self.suppressed))
     }
 }
 
@@ -602,6 +664,130 @@ mod tests {
             "{}",
             refused_detail(&resolved)
         );
+    }
+
+    /// The unit the gateway runs the agent with.
+    const UNIT: &str = include_str!("../../systemd/trustiot-agent.service");
+    /// The test that reads the interfaces, run again inside the unit's sandbox.
+    const READ_TEST: &str = "modbus::address::tests::the_gateways_interfaces_can_be_read";
+
+    /// Runs [`READ_TEST`] from this test executable as a transient unit of the user's systemd
+    /// manager, with `RestrictAddressFamilies=families`; whether it passed.
+    fn read_test_passes_with(families: &str) -> bool {
+        let output = std::process::Command::new("systemd-run")
+            .args(["--user", "--wait", "--pipe", "--quiet", "--collect"])
+            .arg(format!("--property=RestrictAddressFamilies={families}"))
+            .arg("--")
+            .arg(std::env::current_exe().unwrap())
+            .args(["--exact", READ_TEST, "--test-threads=1"])
+            .env("LC_ALL", "C")
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        // A filter that matched nothing passes too, so the one test must have run.
+        output.status.success() && stdout.contains("test result: ok. 1 passed")
+    }
+
+    /// Whether the user's systemd manager starts transient units.
+    fn user_manager() -> bool {
+        std::process::Command::new("systemd-run")
+            .args(["--user", "--wait", "--quiet", "--collect", "--", "true"])
+            .output()
+            .is_ok_and(|output| output.status.success())
+    }
+
+    /// Laysi/trustiot-v2#805: glibc's getifaddrs opens a netlink socket, so the guard cannot
+    /// read the interfaces, and refuses every connection, when the unit's
+    /// `RestrictAddressFamilies=` leaves out `AF_NETLINK`. This runs the read under the unit's
+    /// line through `systemd-run --user`. Without a user manager it skips, also with `CI` set:
+    /// CI's runners are not known to have one, and `tests/systemd_unit.rs` checks the line
+    /// itself everywhere. It skips too when leaving `AF_NETLINK` out does not break the read
+    /// (a manager that does not apply the restriction), since then it could not fail.
+    #[test]
+    fn the_interfaces_can_be_read_in_the_units_sandbox() {
+        let families = UNIT
+            .lines()
+            .find_map(|line| line.trim().strip_prefix("RestrictAddressFamilies="))
+            .expect("the unit sets RestrictAddressFamilies=");
+        if !user_manager() {
+            eprintln!(
+                "skipped: no systemd user manager runs transient units here (systemd-run --user)"
+            );
+            return;
+        }
+        let without_netlink: Vec<&str> = families
+            .split_whitespace()
+            .filter(|family| *family != "AF_NETLINK")
+            .collect();
+        if read_test_passes_with(&without_netlink.join(" ")) {
+            eprintln!(
+                "skipped: the interfaces can be read without AF_NETLINK here, so the \
+                 restriction is not applied or not needed"
+            );
+            return;
+        }
+        assert!(
+            read_test_passes_with(families),
+            "the address guard cannot read the interfaces under RestrictAddressFamilies={families}"
+        );
+    }
+
+    /// Captured log lines.
+    #[derive(Clone, Default)]
+    struct Captured(std::sync::Arc<Mutex<Vec<u8>>>);
+
+    impl io::Write for Captured {
+        fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for Captured {
+        type Writer = Self;
+
+        fn make_writer(&'a self) -> Self::Writer {
+            self.clone()
+        }
+    }
+
+    #[test]
+    fn unreadable_interfaces_refuse_and_warn_at_most_once_a_minute() {
+        let captured = Captured::default();
+        let subscriber = tracing_subscriber::fmt()
+            .with_writer(captured.clone())
+            .with_ansi(false)
+            .with_max_level(tracing::Level::INFO)
+            .finish();
+        let _guard = tracing::subscriber::set_default(subscriber);
+        let throttle = Mutex::new(Throttled::new());
+        let start = Instant::now();
+        // EAFNOSUPPORT, what getifaddrs returns when netlink sockets are refused.
+        let unsupported = || Err(io::Error::from_raw_os_error(libc::EAFNOSUPPORT));
+        for seconds in [0, 30, 59, 60, 61] {
+            let refused =
+                read_interfaces(unsupported, &throttle, start + Duration::from_secs(seconds));
+            assert!(
+                matches!(&refused, Err(ReadError::Connect(detail)) if detail.contains("os error 97")),
+                "{refused:?}"
+            );
+        }
+        let logged = String::from_utf8(captured.0.lock().unwrap().clone()).unwrap();
+        let lines: Vec<&str> = logged.lines().collect();
+        assert_eq!(lines.len(), 2, "{logged}");
+        for (line, suppressed) in lines.iter().zip(["suppressed=0", "suppressed=2"]) {
+            assert!(line.contains(" WARN "), "{line}");
+            assert!(line.contains("errno=97"), "{line}");
+            assert!(line.contains("os error 97"), "{line}");
+            assert!(line.contains(suppressed), "{line}");
+        }
+        // A successful read logs nothing.
+        assert!(read_interfaces(|| Ok(site()), &throttle, start).is_ok());
+        assert_eq!(captured.0.lock().unwrap().len(), logged.len());
     }
 
     #[test]

@@ -13,8 +13,10 @@
 //!   on every attempt (an invalid hardware ID, no tenant, values the table refuses) is
 //!   dead-lettered, so it cannot hold up the bindings after it; anything else is retried.
 //! - [`store_tenant_status`] stores a tenant's status only when its version is newer than the
-//!   stored one (rebuild checklist B1). Nothing calls it yet but the tests:
-//!   Laysi/trustiot-v2#107 and Laysi/trustiot-v2#108 connect the tenant's real status.
+//!   stored one (rebuild checklist B1). The consumer of the identity service's events
+//!   ([`crate::tenant_states`], Laysi/trustiot-v2#778) calls it for every tenant state event.
+//!   Every status but `active`, and a tenant without a row, reads as suspended
+//!   ([`reads_as_suspended`]).
 //! - [`Projection`] reads both across tenants as the platform role, read only, with an audit log
 //!   line for every read: the renewal has no tenant identity, and the broker sync compares every
 //!   gateway.
@@ -23,6 +25,7 @@ use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 use contract::events::assets::{GATEWAY_BINDING_AGGREGATE, GatewayBound};
+use contract::events::identity::TenantState;
 use contract::{GatewayBindingId, ServiceName, TenantId};
 use outbox::{Delivery, Handler, HandlerError};
 use protocol::GatewayId;
@@ -52,13 +55,20 @@ ON CONFLICT DO NOTHING";
 
 /// A tenant's status, replacing the stored one only when `$3` is a newer version; returns a row
 /// when it was stored. `$1` tenant, `$2` status. Row-level security limits it to the
-/// transaction's tenant.
+/// transaction's tenant. Two exceptions to "newer only": a `deleted` tenant keeps its row
+/// whatever comes later (the state is final, `contract::events::identity::TenantState::Deleted`),
+/// and an `unrecognized` row takes a known state at the same version, so that replaying the
+/// events after an upgrade replaces a state an older build did not know with the one the new
+/// build reads.
 const STORE_STATUS: &str =
     "INSERT INTO certs.tenant_statuses AS stored (tenant_id, status, version)
 VALUES ($1::uuid, $2, $3)
 ON CONFLICT (tenant_id) DO UPDATE
     SET status = EXCLUDED.status, version = EXCLUDED.version, updated_at = now()
-    WHERE stored.version < EXCLUDED.version
+    WHERE stored.status <> 'deleted'
+        AND (stored.version < EXCLUDED.version
+            OR (stored.version = EXCLUDED.version AND stored.status = 'unrecognized'
+                AND EXCLUDED.status <> 'unrecognized'))
 RETURNING 1";
 
 /// The binding of `$1` (a hardware ID) whose event is the latest in the log, and whether it
@@ -188,26 +198,70 @@ fn is_refused_value(sqlstate: &str) -> bool {
     sqlstate.starts_with("22") || sqlstate == CHECK_VIOLATION
 }
 
-/// A tenant's status.
+/// A tenant's status as this service stores it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TenantStatus {
-    /// The tenant's gateways may renew their certificates and use the broker.
+    /// The tenant's gateways may renew their certificates.
     Active,
     /// The tenant is suspended (Laysi/trustiot-v2#107): its gateways may not.
     Suspended,
+    /// The tenant's contract ended and its data is being or was deleted (Laysi/trustiot-v2#109).
+    /// Final: the stored row never changes again.
+    Deleted,
+    /// A state a newer identity service wrote that this build does not know
+    /// (`contract::events::identity::TenantState::Unrecognized`): treated as suspended.
+    Unrecognized,
 }
 
 impl TenantStatus {
-    fn as_str(self) -> &'static str {
+    /// The status as the table stores it.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
         match self {
             Self::Active => "active",
             Self::Suspended => "suspended",
+            Self::Deleted => "deleted",
+            Self::Unrecognized => "unrecognized",
+        }
+    }
+
+    /// The status of a stored row; `None` for a value the table does not allow.
+    #[must_use]
+    pub fn parse(stored: &str) -> Option<Self> {
+        [
+            Self::Active,
+            Self::Suspended,
+            Self::Deleted,
+            Self::Unrecognized,
+        ]
+        .into_iter()
+        .find(|status| status.as_str() == stored)
+    }
+
+    /// The status a tenant state of the identity service's events stores as.
+    #[must_use]
+    pub fn from_event(state: TenantState) -> Self {
+        match state {
+            TenantState::Active => Self::Active,
+            TenantState::Suspended => Self::Suspended,
+            TenantState::Deleted => Self::Deleted,
+            TenantState::Unrecognized => Self::Unrecognized,
         }
     }
 }
 
+/// Whether a tenant whose stored status is `stored` (`None` when this service has no row for it)
+/// counts as suspended: every status but `active`, and no row at all (fail closed, the user's
+/// decision of 2026-10-30, Laysi/trustiot-v2#778). A tenant without a row is one whose
+/// `identity.tenant_created` has not been applied yet, or that does not exist.
+#[must_use]
+pub fn reads_as_suspended(stored: Option<TenantStatus>) -> bool {
+    stored != Some(TenantStatus::Active)
+}
+
 /// Stores `tenant`'s status read at `version`, unless the stored version is the same or newer;
-/// returns whether it was stored. A late or replayed older state therefore never overwrites a
+/// returns whether it was stored. Two exceptions: a stored `deleted` is final, and a stored
+/// `unrecognized` takes a known status at the same version (a replay after an upgrade). A late or replayed older state therefore never overwrites a
 /// newer one, and the row stays locked until the transaction ends, so a concurrent store waits and
 /// then compares against this one.
 ///
@@ -340,8 +394,9 @@ impl Projection {
             .collect()
     }
 
-    /// Whether `tenant` is suspended. A tenant this service has no status for is active.
-    /// `purpose` names the caller in the audit log.
+    /// Whether `tenant` counts as suspended ([`reads_as_suspended`]): every status but
+    /// `active`, and a tenant this service has no status for. `purpose` names the caller in the
+    /// audit log.
     ///
     /// # Errors
     ///
@@ -357,11 +412,10 @@ impl Projection {
             .fetch_optional(&mut *tx)
             .await?;
         tx.commit().await?;
-        match status.as_deref() {
-            None | Some("active") => Ok(false),
-            Some("suspended") => Ok(true),
-            Some(_) => Err(ReadError::Corrupt),
-        }
+        let stored = status
+            .map(|status| TenantStatus::parse(&status).ok_or(ReadError::Corrupt))
+            .transpose()?;
+        Ok(reads_as_suspended(stored))
     }
 
     /// A read-only transaction of the platform role for the certs service, logged with `purpose`
@@ -429,7 +483,33 @@ mod tests {
 
     #[test]
     fn statuses_are_stored_as_the_table_names_them() {
-        assert_eq!(TenantStatus::Active.as_str(), "active");
-        assert_eq!(TenantStatus::Suspended.as_str(), "suspended");
+        for (status, stored) in [
+            (TenantStatus::Active, "active"),
+            (TenantStatus::Suspended, "suspended"),
+            (TenantStatus::Deleted, "deleted"),
+            (TenantStatus::Unrecognized, "unrecognized"),
+        ] {
+            assert_eq!(status.as_str(), stored);
+            assert_eq!(TenantStatus::parse(stored), Some(status));
+        }
+        assert_eq!(TenantStatus::parse("Active"), None);
+        assert_eq!(TenantStatus::parse(""), None);
+    }
+
+    #[test]
+    fn only_a_stored_active_status_is_not_suspended() {
+        assert!(!reads_as_suspended(Some(TenantStatus::Active)));
+        for stored in [
+            None,
+            Some(TenantStatus::Suspended),
+            Some(TenantStatus::Deleted),
+            Some(TenantStatus::Unrecognized),
+        ] {
+            assert!(reads_as_suspended(stored), "{stored:?}");
+        }
+        assert_eq!(
+            TenantStatus::from_event(TenantState::Unrecognized),
+            TenantStatus::Unrecognized
+        );
     }
 }

@@ -49,6 +49,9 @@
 //! administrator as the actor) in one transaction of the platform role, so the event exists
 //! exactly when the registration does. A repeated registration writes nothing but the nonce, so
 //! retrying after a lost response neither signs another certificate nor writes another event.
+//! Registrations of the same hardware ID run one after the other ([`LOCK_REGISTRATION`]), so
+//! two identical ones that arrive at once get the same answers as one after the other: 201,
+//! then 200 with the same certificate.
 //! Every response carries `cache-control: no-store`. Each registration logs one INFO line with
 //! the administrator's user id, the workstation, the hardware ID, the serial number and the CA
 //! key id; never the CSR, the keys or the certificate.
@@ -122,6 +125,18 @@ const NONCE_RETENTION_SECS: i64 = WORKSTATION_CLOCK_SKEW_SECS + 60;
 
 /// Names the platform role's transactions in its INFO log line (`platform database access`).
 const PURPOSE: &str = "gateway-registration";
+
+/// Serializes the registrations of one hardware ID (`$1`), held until the transaction ends
+/// (Laysi/trustiot-v2#782). A registration takes it before it looks the hardware ID up, so a
+/// concurrent registration of the same hardware ID has either committed before that lookup,
+/// which then finds it (a repeat or a mismatch), or waits until this transaction ends. Without
+/// it, READ COMMITTED let the second of two identical registrations miss the first in the
+/// lookup and then see it committed in the public key check, answering `public_key_in_use`
+/// instead of the repeat's 200. Class `0x67777267` ("gwrg"), apart from the other two-key
+/// classes of this service ([`issue::LOCK_WORKSTATION`], [`crate::crl::LOCK_CA_CRL`],
+/// [`crate::gateways::LOCK_GATEWAY_CERTIFICATES`]); the hardware ID is hashed into the second
+/// key, so a hash collision only makes two registrations wait for each other.
+pub const LOCK_REGISTRATION: &str = "SELECT pg_advisory_xact_lock(1735881319, hashtext($1))";
 
 /// The body is larger than [`MAX_BODY_BYTES`] (400); `details.max_bytes`.
 pub const BODY_TOO_LARGE: MessageKey = MessageKey::new("gateway_registration.body_too_large");
@@ -693,9 +708,11 @@ async fn register_gateway(
         Ok(registration) => registration,
         Err(refused) => return error(refused),
     };
-    // One retry: a concurrent registration of the same hardware ID, public key or endorsement
-    // key makes the first attempt's insert fail (23505) and roll back; the second finds the
-    // committed row and answers as for a repeat or a conflict.
+    // One retry: a concurrent registration of another hardware ID with the same public key or
+    // endorsement key makes the first attempt's insert fail (23505) and roll back; the second
+    // finds the committed row and answers 409 as for a key in use. Registrations of the same
+    // hardware ID wait for each other on `LOCK_REGISTRATION` instead; a 23505 on the hardware ID
+    // would end the same way, the retry finding the row and answering as for a repeat.
     let mut outcome = register(&state, &user, &authority, &signed, &registration).await;
     if matches!(outcome, Err(Failure::Race)) {
         outcome = register(&state, &user, &authority, &signed, &registration).await;
@@ -793,6 +810,15 @@ async fn register(
         .await
         .map_err(|e: TenantDbError| database(&e))?;
     check_ledger(&mut tx, signed).await?;
+    // Held until commit: no other registration of this hardware ID commits between the lookup
+    // and the key check below, so a key found in use there belongs to another hardware ID. Taken
+    // before the nonce's statement, so a registration waiting here holds no row locks of expired
+    // nonces that registrations of other hardware IDs would wait for.
+    sqlx::query(LOCK_REGISTRATION)
+        .bind(registration.hardware_id.as_str())
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| sql(&e))?;
     // The DELETE runs although nothing reads it: a data-modifying statement in WITH without
     // RETURNING "will be executed nonetheless"
     // (https://www.postgresql.org/docs/current/queries-with.html#QUERIES-WITH-MODIFYING). It
@@ -1193,6 +1219,34 @@ mod tests {
             Err(WorkstationRefusal::Malformed)
         );
         assert_eq!(decode_base64("AA-_", 3), Err(WorkstationRefusal::Malformed));
+    }
+
+    #[test]
+    fn the_registration_lock_has_a_class_of_its_own() {
+        let class = |statement: &str| -> i64 {
+            statement
+                .split_once('(')
+                .and_then(|(_, rest)| rest.split_once(','))
+                .and_then(|(class, _)| class.trim().parse().ok())
+                .unwrap_or_else(|| panic!("no class in {statement:?}"))
+        };
+        assert_eq!(class(LOCK_REGISTRATION), 0x6777_7267);
+        assert_eq!(
+            class(issue::LOCK_WORKSTATION),
+            class(issue::LOCK_WORKSTATION_SHARED)
+        );
+        let mut classes = [
+            LOCK_REGISTRATION,
+            issue::LOCK_WORKSTATION,
+            crate::crl::LOCK_CA_CRL,
+            crate::gateways::LOCK_GATEWAY_CERTIFICATES,
+        ]
+        .map(class);
+        classes.sort_unstable();
+        assert!(
+            classes.windows(2).all(|pair| pair[0] != pair[1]),
+            "{classes:?}"
+        );
     }
 
     #[test]

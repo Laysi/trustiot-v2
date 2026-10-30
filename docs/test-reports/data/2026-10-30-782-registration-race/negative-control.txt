@@ -1,0 +1,5 @@
+thread 'registration_is_idempotent_and_needs_a_workstation_and_an_administrator' (2702076) panicked at services/certs/tests/support/mod.rs:549:9:
+both registrations of gw-0004 waiting for its registration lock: not within 120s
+test registration_is_idempotent_and_needs_a_workstation_and_an_administrator ... FAILED
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 4 filtered out; finished in 122.91s
+exit 101 at 16:33:54 (build host, arm64 Linux VM)

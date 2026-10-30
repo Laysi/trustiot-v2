@@ -1,0 +1,257 @@
+## find
+## tmp
+## journal
+Oct 30 17:41:13 <gateway> sshd-session[906]: Accepted publickey for <ssh 帳號> from ::1 port 36950 ssh2: ED25519 SHA256:<工作站的 ssh 金鑰>
+Oct 30 17:41:13 <gateway> sshd-session[906]: pam_unix(sshd:session): session opened for user <ssh 帳號>(uid=1000) by <ssh 帳號>(uid=0)
+Oct 30 17:41:13 <gateway> systemd-logind[578]: New session 4 of user <ssh 帳號>.
+Oct 30 17:41:13 <gateway> systemd[1]: Created slice user-1000.slice - User Slice of UID 1000.
+Oct 30 17:41:13 <gateway> systemd[1]: Starting user-runtime-dir@1000.service - User Runtime Directory /run/user/1000...
+Oct 30 17:41:13 <gateway> systemd[1]: Finished user-runtime-dir@1000.service - User Runtime Directory /run/user/1000.
+Oct 30 17:41:13 <gateway> systemd[1]: Starting user@1000.service - User Manager for UID 1000...
+Oct 30 17:41:13 <gateway> (systemd)[911]: pam_unix(systemd-user:session): session opened for user <ssh 帳號>(uid=1000) by <ssh 帳號>(uid=0)
+Oct 30 17:41:13 <gateway> systemd-logind[578]: New session 5 of user <ssh 帳號>.
+Oct 30 17:41:13 <gateway> systemd[911]: Queued start job for default target default.target.
+Oct 30 17:41:13 <gateway> systemd[911]: Created slice app.slice - User Application Slice.
+Oct 30 17:41:13 <gateway> systemd[911]: Reached target paths.target - Paths.
+Oct 30 17:41:13 <gateway> systemd[911]: Reached target timers.target - Timers.
+Oct 30 17:41:13 <gateway> systemd[911]: Starting dbus.socket - D-Bus User Message Bus Socket...
+Oct 30 17:41:13 <gateway> systemd[911]: Listening on dirmngr.socket - GnuPG network certificate management daemon.
+Oct 30 17:41:13 <gateway> systemd[911]: Listening on gpg-agent-browser.socket - GnuPG cryptographic agent and passphrase cache (access for web browsers).
+Oct 30 17:41:13 <gateway> systemd[911]: Listening on gpg-agent-extra.socket - GnuPG cryptographic agent and passphrase cache (restricted).
+Oct 30 17:41:13 <gateway> systemd[911]: Starting gpg-agent-ssh.socket - GnuPG cryptographic agent (ssh-agent emulation)...
+Oct 30 17:41:13 <gateway> systemd[911]: Starting gpg-agent.socket - GnuPG cryptographic agent and passphrase cache...
+Oct 30 17:41:13 <gateway> systemd[911]: Listening on keyboxd.socket - GnuPG public key management service.
+Oct 30 17:41:13 <gateway> systemd[911]: Starting ssh-agent.socket - OpenSSH Agent socket...
+Oct 30 17:41:13 <gateway> systemd[911]: Listening on gpg-agent-ssh.socket - GnuPG cryptographic agent (ssh-agent emulation).
+Oct 30 17:41:13 <gateway> systemd[911]: Listening on gpg-agent.socket - GnuPG cryptographic agent and passphrase cache.
+Oct 30 17:41:13 <gateway> systemd[911]: Listening on dbus.socket - D-Bus User Message Bus Socket.
+Oct 30 17:41:13 <gateway> systemd[911]: Listening on ssh-agent.socket - OpenSSH Agent socket.
+Oct 30 17:41:13 <gateway> systemd[911]: Reached target sockets.target - Sockets.
+Oct 30 17:41:13 <gateway> systemd[911]: Reached target basic.target - Basic System.
+Oct 30 17:41:13 <gateway> systemd[1]: Started user@1000.service - User Manager for UID 1000.
+Oct 30 17:41:13 <gateway> systemd[911]: Started mpris-proxy.service - Bluetooth mpris proxy.
+Oct 30 17:41:13 <gateway> systemd[911]: Reached target default.target - Main User Target.
+Oct 30 17:41:13 <gateway> systemd[911]: Startup finished in 385ms.
+Oct 30 17:41:13 <gateway> systemd[1]: Started session-4.scope - Session 4 of User <ssh 帳號>.
+Oct 30 17:41:13 <gateway> systemd[911]: Created slice session.slice - User Core Session Slice.
+Oct 30 17:41:13 <gateway> systemd[911]: Starting dbus.service - D-Bus User Message Bus...
+Oct 30 17:41:13 <gateway> systemd[911]: Started dbus.service - D-Bus User Message Bus.
+Oct 30 17:41:13 <gateway> sudo[942]:    <ssh 帳號> : PWD=~ ; USER=root ; COMMAND=/usr/bin/tpm2_getcap handles-persistent
+Oct 30 17:41:13 <gateway> sudo[942]: pam_unix(sudo:session): session opened for user root(uid=0) by <ssh 帳號>(uid=1000)
+Oct 30 17:41:13 <gateway> sudo[942]: pam_unix(sudo:session): session closed for user root
+Oct 30 17:41:13 <gateway> sudo[945]:    <ssh 帳號> : PWD=~ ; USER=root ; COMMAND=/usr/bin/tpm2_readpublic -c 0x81000100
+Oct 30 17:41:13 <gateway> sudo[945]: pam_unix(sudo:session): session opened for user root(uid=0) by <ssh 帳號>(uid=1000)
+Oct 30 17:41:13 <gateway> sudo[945]: pam_unix(sudo:session): session closed for user root
+Oct 30 17:41:13 <gateway> sudo[949]:    <ssh 帳號> : PWD=~ ; USER=root ; COMMAND=/usr/bin/tpm2_getcap properties-fixed
+Oct 30 17:41:13 <gateway> sudo[949]: pam_unix(sudo:session): session opened for user root(uid=0) by <ssh 帳號>(uid=1000)
+Oct 30 17:41:13 <gateway> sudo[949]: pam_unix(sudo:session): session closed for user root
+Oct 30 17:41:13 <gateway> sshd-session[938]: Received disconnect from ::1 port 36950:11: disconnected by user
+Oct 30 17:41:13 <gateway> sshd-session[938]: Disconnected from user <ssh 帳號> ::1 port 36950
+Oct 30 17:41:13 <gateway> sshd-session[906]: pam_unix(sshd:session): session closed for user <ssh 帳號>
+Oct 30 17:41:13 <gateway> systemd[1]: session-4.scope: Deactivated successfully.
+Oct 30 17:41:13 <gateway> systemd-logind[578]: Session 4 logged out. Waiting for processes to exit.
+Oct 30 17:41:13 <gateway> systemd-logind[578]: Removed session 4.
+Oct 30 17:41:24 <gateway> systemd[1]: Stopping user@1000.service - User Manager for UID 1000...
+Oct 30 17:41:24 <gateway> systemd[911]: Activating special unit exit.target...
+Oct 30 17:41:24 <gateway> systemd[911]: Stopped target default.target - Main User Target.
+Oct 30 17:41:24 <gateway> systemd[911]: Stopping mpris-proxy.service - Bluetooth mpris proxy...
+Oct 30 17:41:24 <gateway> mpris-proxy[931]: org.bluez appeared
+Oct 30 17:41:24 <gateway> mpris-proxy[931]: Bluetooth Adapter /org/bluez/hci0 found
+Oct 30 17:41:24 <gateway> mpris-proxy[931]: Bluetooth Adapter /org/bluez/hci0 removed
+Oct 30 17:41:24 <gateway> mpris-proxy[931]: org.bluez disappeared
+Oct 30 17:41:24 <gateway> systemd[911]: Stopped mpris-proxy.service - Bluetooth mpris proxy.
+Oct 30 17:41:24 <gateway> systemd[911]: Stopping dbus.service - D-Bus User Message Bus...
+Oct 30 17:41:24 <gateway> systemd[911]: Stopped dbus.service - D-Bus User Message Bus.
+Oct 30 17:41:24 <gateway> systemd[911]: Removed slice session.slice - User Core Session Slice.
+Oct 30 17:41:24 <gateway> systemd[911]: Stopped target basic.target - Basic System.
+Oct 30 17:41:24 <gateway> systemd[911]: Stopped target paths.target - Paths.
+Oct 30 17:41:24 <gateway> systemd[911]: Stopped target sockets.target - Sockets.
+Oct 30 17:41:24 <gateway> systemd[911]: Stopped target timers.target - Timers.
+Oct 30 17:41:24 <gateway> systemd[911]: Closed dbus.socket - D-Bus User Message Bus Socket.
+Oct 30 17:41:24 <gateway> systemd[911]: Closed dirmngr.socket - GnuPG network certificate management daemon.
+Oct 30 17:41:24 <gateway> systemd[911]: Closed gpg-agent-browser.socket - GnuPG cryptographic agent and passphrase cache (access for web browsers).
+Oct 30 17:41:24 <gateway> systemd[911]: Closed gpg-agent-extra.socket - GnuPG cryptographic agent and passphrase cache (restricted).
+Oct 30 17:41:24 <gateway> systemd[911]: Stopping gpg-agent-ssh.socket - GnuPG cryptographic agent (ssh-agent emulation)...
+Oct 30 17:41:24 <gateway> systemd[911]: Stopping gpg-agent.socket - GnuPG cryptographic agent and passphrase cache...
+Oct 30 17:41:24 <gateway> systemd[911]: Closed keyboxd.socket - GnuPG public key management service.
+Oct 30 17:41:24 <gateway> systemd[911]: Stopping ssh-agent.socket - OpenSSH Agent socket...
+Oct 30 17:41:24 <gateway> systemd[911]: Closed gpg-agent-ssh.socket - GnuPG cryptographic agent (ssh-agent emulation).
+Oct 30 17:41:24 <gateway> systemd[911]: Closed gpg-agent.socket - GnuPG cryptographic agent and passphrase cache.
+Oct 30 17:41:24 <gateway> systemd[911]: Closed ssh-agent.socket - OpenSSH Agent socket.
+Oct 30 17:41:24 <gateway> systemd[911]: Removed slice app.slice - User Application Slice.
+Oct 30 17:41:24 <gateway> systemd[911]: Reached target shutdown.target - Shutdown.
+Oct 30 17:41:24 <gateway> systemd[911]: Finished systemd-exit.service - Exit the Session.
+Oct 30 17:41:24 <gateway> systemd[911]: Reached target exit.target - Exit the Session.
+Oct 30 17:41:24 <gateway> (sd-pam)[913]: pam_unix(systemd-user:session): session closed for user <ssh 帳號>
+Oct 30 17:41:24 <gateway> systemd-logind[578]: Removed session 5.
+Oct 30 17:41:24 <gateway> systemd[1]: user@1000.service: Deactivated successfully.
+Oct 30 17:41:24 <gateway> systemd[1]: Stopped user@1000.service - User Manager for UID 1000.
+Oct 30 17:41:24 <gateway> systemd[1]: Stopping user-runtime-dir@1000.service - User Runtime Directory /run/user/1000...
+Oct 30 17:41:24 <gateway> systemd[1]: run-user-1000.mount: Deactivated successfully.
+Oct 30 17:41:24 <gateway> systemd[1]: user-runtime-dir@1000.service: Deactivated successfully.
+Oct 30 17:41:24 <gateway> systemd[1]: Stopped user-runtime-dir@1000.service - User Runtime Directory /run/user/1000.
+Oct 30 17:41:24 <gateway> systemd[1]: Removed slice user-1000.slice - User Slice of UID 1000.
+Oct 30 17:41:26 <gateway> sshd-session[971]: Accepted publickey for <ssh 帳號> from ::1 port 55402 ssh2: ED25519 SHA256:<工作站的 ssh 金鑰>
+Oct 30 17:41:26 <gateway> sshd-session[971]: pam_unix(sshd:session): session opened for user <ssh 帳號>(uid=1000) by <ssh 帳號>(uid=0)
+Oct 30 17:41:26 <gateway> systemd[1]: Created slice user-1000.slice - User Slice of UID 1000.
+Oct 30 17:41:26 <gateway> systemd[1]: Starting user-runtime-dir@1000.service - User Runtime Directory /run/user/1000...
+Oct 30 17:41:26 <gateway> systemd-logind[578]: New session 6 of user <ssh 帳號>.
+Oct 30 17:41:26 <gateway> systemd[1]: Finished user-runtime-dir@1000.service - User Runtime Directory /run/user/1000.
+Oct 30 17:41:26 <gateway> systemd[1]: Starting user@1000.service - User Manager for UID 1000...
+Oct 30 17:41:26 <gateway> (systemd)[976]: pam_unix(systemd-user:session): session opened for user <ssh 帳號>(uid=1000) by <ssh 帳號>(uid=0)
+Oct 30 17:41:26 <gateway> systemd-logind[578]: New session 7 of user <ssh 帳號>.
+Oct 30 17:41:27 <gateway> systemd[976]: Queued start job for default target default.target.
+Oct 30 17:41:27 <gateway> systemd[976]: Created slice app.slice - User Application Slice.
+Oct 30 17:41:27 <gateway> systemd[976]: Reached target paths.target - Paths.
+Oct 30 17:41:27 <gateway> systemd[976]: Reached target timers.target - Timers.
+Oct 30 17:41:27 <gateway> systemd[976]: Starting dbus.socket - D-Bus User Message Bus Socket...
+Oct 30 17:41:27 <gateway> systemd[976]: Listening on dirmngr.socket - GnuPG network certificate management daemon.
+Oct 30 17:41:27 <gateway> systemd[976]: Listening on gpg-agent-browser.socket - GnuPG cryptographic agent and passphrase cache (access for web browsers).
+Oct 30 17:41:27 <gateway> systemd[976]: Listening on gpg-agent-extra.socket - GnuPG cryptographic agent and passphrase cache (restricted).
+Oct 30 17:41:27 <gateway> systemd[976]: Starting gpg-agent-ssh.socket - GnuPG cryptographic agent (ssh-agent emulation)...
+Oct 30 17:41:27 <gateway> systemd[976]: Starting gpg-agent.socket - GnuPG cryptographic agent and passphrase cache...
+Oct 30 17:41:27 <gateway> systemd[976]: Listening on keyboxd.socket - GnuPG public key management service.
+Oct 30 17:41:27 <gateway> systemd[976]: Starting ssh-agent.socket - OpenSSH Agent socket...
+Oct 30 17:41:27 <gateway> systemd[976]: Listening on dbus.socket - D-Bus User Message Bus Socket.
+Oct 30 17:41:27 <gateway> systemd[976]: Listening on gpg-agent.socket - GnuPG cryptographic agent and passphrase cache.
+Oct 30 17:41:27 <gateway> systemd[976]: Listening on gpg-agent-ssh.socket - GnuPG cryptographic agent (ssh-agent emulation).
+Oct 30 17:41:27 <gateway> systemd[976]: Listening on ssh-agent.socket - OpenSSH Agent socket.
+Oct 30 17:41:27 <gateway> systemd[976]: Reached target sockets.target - Sockets.
+Oct 30 17:41:27 <gateway> systemd[976]: Reached target basic.target - Basic System.
+Oct 30 17:41:27 <gateway> systemd[1]: Started user@1000.service - User Manager for UID 1000.
+Oct 30 17:41:27 <gateway> systemd[976]: Started mpris-proxy.service - Bluetooth mpris proxy.
+Oct 30 17:41:27 <gateway> systemd[976]: Reached target default.target - Main User Target.
+Oct 30 17:41:27 <gateway> systemd[976]: Startup finished in 297ms.
+Oct 30 17:41:27 <gateway> systemd[1]: Started session-6.scope - Session 6 of User <ssh 帳號>.
+Oct 30 17:41:27 <gateway> systemd[976]: Created slice session.slice - User Core Session Slice.
+Oct 30 17:41:27 <gateway> systemd[976]: Starting dbus.service - D-Bus User Message Bus...
+Oct 30 17:41:27 <gateway> systemd[976]: Started dbus.service - D-Bus User Message Bus.
+Oct 30 17:41:46 <gateway> sudo[1009]:    <ssh 帳號> : PWD=~ ; USER=root ; COMMAND=/tmp/tmp.dMSKXUHsvl/trustiot-agent provision --hardware-id tg-lab-0001 --handle 0x81000100 --inspect
+Oct 30 17:41:46 <gateway> sudo[1009]: pam_unix(sudo:session): session opened for user root(uid=0) by <ssh 帳號>(uid=1000)
+Oct 30 17:41:47 <gateway> sudo[1009]: pam_unix(sudo:session): session closed for user root
+Oct 30 17:41:47 <gateway> sshd-session[1002]: Received disconnect from ::1 port 55402:11: disconnected by user
+Oct 30 17:41:47 <gateway> sshd-session[1002]: Disconnected from user <ssh 帳號> ::1 port 55402
+Oct 30 17:41:47 <gateway> sshd-session[971]: pam_unix(sshd:session): session closed for user <ssh 帳號>
+Oct 30 17:41:47 <gateway> systemd[1]: session-6.scope: Deactivated successfully.
+Oct 30 17:41:47 <gateway> systemd-logind[578]: Session 6 logged out. Waiting for processes to exit.
+Oct 30 17:41:47 <gateway> systemd-logind[578]: Removed session 6.
+Oct 30 17:41:47 <gateway> sshd-session[1016]: Accepted publickey for <ssh 帳號> from ::1 port 45812 ssh2: ED25519 SHA256:<工作站的 ssh 金鑰>
+Oct 30 17:41:47 <gateway> sshd-session[1016]: pam_unix(sshd:session): session opened for user <ssh 帳號>(uid=1000) by <ssh 帳號>(uid=0)
+Oct 30 17:41:47 <gateway> systemd-logind[578]: New session 8 of user <ssh 帳號>.
+Oct 30 17:41:47 <gateway> systemd[1]: Started session-8.scope - Session 8 of User <ssh 帳號>.
+Oct 30 17:41:48 <gateway> sshd-session[1024]: Received disconnect from ::1 port 45812:11: disconnected by user
+Oct 30 17:41:48 <gateway> sshd-session[1024]: Disconnected from user <ssh 帳號> ::1 port 45812
+Oct 30 17:41:48 <gateway> sshd-session[1016]: pam_unix(sshd:session): session closed for user <ssh 帳號>
+Oct 30 17:41:48 <gateway> systemd[1]: session-8.scope: Deactivated successfully.
+Oct 30 17:41:48 <gateway> systemd-logind[578]: Session 8 logged out. Waiting for processes to exit.
+Oct 30 17:41:48 <gateway> systemd-logind[578]: Removed session 8.
+Oct 30 17:41:58 <gateway> systemd[1]: Stopping user@1000.service - User Manager for UID 1000...
+Oct 30 17:41:58 <gateway> systemd[976]: Activating special unit exit.target...
+Oct 30 17:41:58 <gateway> systemd[976]: Stopped target default.target - Main User Target.
+Oct 30 17:41:58 <gateway> systemd[976]: Stopping mpris-proxy.service - Bluetooth mpris proxy...
+Oct 30 17:41:58 <gateway> mpris-proxy[996]: org.bluez appeared
+Oct 30 17:41:58 <gateway> mpris-proxy[996]: Bluetooth Adapter /org/bluez/hci0 found
+Oct 30 17:41:58 <gateway> mpris-proxy[996]: Bluetooth Adapter /org/bluez/hci0 removed
+Oct 30 17:41:58 <gateway> mpris-proxy[996]: org.bluez disappeared
+Oct 30 17:41:58 <gateway> systemd[976]: Stopped mpris-proxy.service - Bluetooth mpris proxy.
+Oct 30 17:41:58 <gateway> systemd[976]: Stopping dbus.service - D-Bus User Message Bus...
+Oct 30 17:41:58 <gateway> systemd[976]: Stopped dbus.service - D-Bus User Message Bus.
+Oct 30 17:41:58 <gateway> systemd[976]: Removed slice session.slice - User Core Session Slice.
+Oct 30 17:41:58 <gateway> systemd[976]: Stopped target basic.target - Basic System.
+Oct 30 17:41:58 <gateway> systemd[976]: Stopped target paths.target - Paths.
+Oct 30 17:41:58 <gateway> systemd[976]: Stopped target sockets.target - Sockets.
+Oct 30 17:41:58 <gateway> systemd[976]: Stopped target timers.target - Timers.
+Oct 30 17:41:58 <gateway> systemd[976]: Closed dbus.socket - D-Bus User Message Bus Socket.
+Oct 30 17:41:58 <gateway> systemd[976]: Closed dirmngr.socket - GnuPG network certificate management daemon.
+Oct 30 17:41:58 <gateway> systemd[976]: Closed gpg-agent-browser.socket - GnuPG cryptographic agent and passphrase cache (access for web browsers).
+Oct 30 17:41:58 <gateway> systemd[976]: Closed gpg-agent-extra.socket - GnuPG cryptographic agent and passphrase cache (restricted).
+Oct 30 17:41:58 <gateway> systemd[976]: Stopping gpg-agent-ssh.socket - GnuPG cryptographic agent (ssh-agent emulation)...
+Oct 30 17:41:58 <gateway> systemd[976]: Stopping gpg-agent.socket - GnuPG cryptographic agent and passphrase cache...
+Oct 30 17:41:58 <gateway> systemd[976]: Closed keyboxd.socket - GnuPG public key management service.
+Oct 30 17:41:58 <gateway> systemd[976]: Stopping ssh-agent.socket - OpenSSH Agent socket...
+Oct 30 17:41:58 <gateway> systemd[976]: Closed gpg-agent-ssh.socket - GnuPG cryptographic agent (ssh-agent emulation).
+Oct 30 17:41:58 <gateway> systemd[976]: Closed gpg-agent.socket - GnuPG cryptographic agent and passphrase cache.
+Oct 30 17:41:58 <gateway> systemd[976]: Closed ssh-agent.socket - OpenSSH Agent socket.
+Oct 30 17:41:58 <gateway> systemd[976]: Removed slice app.slice - User Application Slice.
+Oct 30 17:41:58 <gateway> systemd[976]: Reached target shutdown.target - Shutdown.
+Oct 30 17:41:58 <gateway> systemd[976]: Finished systemd-exit.service - Exit the Session.
+Oct 30 17:41:58 <gateway> systemd[976]: Reached target exit.target - Exit the Session.
+Oct 30 17:41:58 <gateway> (sd-pam)[978]: pam_unix(systemd-user:session): session closed for user <ssh 帳號>
+Oct 30 17:41:58 <gateway> systemd-logind[578]: Removed session 7.
+Oct 30 17:41:58 <gateway> systemd[1]: user@1000.service: Deactivated successfully.
+Oct 30 17:41:58 <gateway> systemd[1]: Stopped user@1000.service - User Manager for UID 1000.
+Oct 30 17:41:58 <gateway> systemd[1]: Stopping user-runtime-dir@1000.service - User Runtime Directory /run/user/1000...
+Oct 30 17:41:58 <gateway> systemd[1]: run-user-1000.mount: Deactivated successfully.
+Oct 30 17:41:58 <gateway> systemd[1]: user-runtime-dir@1000.service: Deactivated successfully.
+Oct 30 17:41:58 <gateway> systemd[1]: Stopped user-runtime-dir@1000.service - User Runtime Directory /run/user/1000.
+Oct 30 17:41:58 <gateway> systemd[1]: Removed slice user-1000.slice - User Slice of UID 1000.
+Oct 30 17:41:58 <gateway> systemd[1]: user-1000.slice: Consumed 1.288s CPU time.
+Oct 30 17:42:05 <gateway> sshd-session[1048]: Accepted publickey for <ssh 帳號> from ::1 port 46592 ssh2: ED25519 SHA256:<工作站的 ssh 金鑰>
+Oct 30 17:42:05 <gateway> sshd-session[1048]: pam_unix(sshd:session): session opened for user <ssh 帳號>(uid=1000) by <ssh 帳號>(uid=0)
+Oct 30 17:42:05 <gateway> systemd[1]: Created slice user-1000.slice - User Slice of UID 1000.
+Oct 30 17:42:05 <gateway> systemd[1]: Starting user-runtime-dir@1000.service - User Runtime Directory /run/user/1000...
+Oct 30 17:42:05 <gateway> systemd-logind[578]: New session 9 of user <ssh 帳號>.
+Oct 30 17:42:05 <gateway> systemd[1]: Finished user-runtime-dir@1000.service - User Runtime Directory /run/user/1000.
+Oct 30 17:42:05 <gateway> systemd[1]: Starting user@1000.service - User Manager for UID 1000...
+Oct 30 17:42:05 <gateway> (systemd)[1053]: pam_unix(systemd-user:session): session opened for user <ssh 帳號>(uid=1000) by <ssh 帳號>(uid=0)
+Oct 30 17:42:05 <gateway> systemd-logind[578]: New session 10 of user <ssh 帳號>.
+Oct 30 17:42:05 <gateway> systemd[1053]: Queued start job for default target default.target.
+Oct 30 17:42:05 <gateway> systemd[1053]: Created slice app.slice - User Application Slice.
+Oct 30 17:42:05 <gateway> systemd[1053]: Reached target paths.target - Paths.
+Oct 30 17:42:05 <gateway> systemd[1053]: Reached target timers.target - Timers.
+Oct 30 17:42:05 <gateway> systemd[1053]: Starting dbus.socket - D-Bus User Message Bus Socket...
+Oct 30 17:42:05 <gateway> systemd[1053]: Listening on dirmngr.socket - GnuPG network certificate management daemon.
+Oct 30 17:42:05 <gateway> systemd[1053]: Listening on gpg-agent-browser.socket - GnuPG cryptographic agent and passphrase cache (access for web browsers).
+Oct 30 17:42:05 <gateway> systemd[1053]: Listening on gpg-agent-extra.socket - GnuPG cryptographic agent and passphrase cache (restricted).
+Oct 30 17:42:05 <gateway> systemd[1053]: Starting gpg-agent-ssh.socket - GnuPG cryptographic agent (ssh-agent emulation)...
+Oct 30 17:42:05 <gateway> systemd[1053]: Starting gpg-agent.socket - GnuPG cryptographic agent and passphrase cache...
+Oct 30 17:42:05 <gateway> systemd[1053]: Listening on keyboxd.socket - GnuPG public key management service.
+Oct 30 17:42:05 <gateway> systemd[1053]: Starting ssh-agent.socket - OpenSSH Agent socket...
+Oct 30 17:42:05 <gateway> systemd[1053]: Listening on dbus.socket - D-Bus User Message Bus Socket.
+Oct 30 17:42:05 <gateway> systemd[1053]: Listening on gpg-agent-ssh.socket - GnuPG cryptographic agent (ssh-agent emulation).
+Oct 30 17:42:05 <gateway> systemd[1053]: Listening on gpg-agent.socket - GnuPG cryptographic agent and passphrase cache.
+Oct 30 17:42:05 <gateway> systemd[1053]: Listening on ssh-agent.socket - OpenSSH Agent socket.
+Oct 30 17:42:05 <gateway> systemd[1053]: Reached target sockets.target - Sockets.
+Oct 30 17:42:05 <gateway> systemd[1053]: Reached target basic.target - Basic System.
+Oct 30 17:42:05 <gateway> systemd[1]: Started user@1000.service - User Manager for UID 1000.
+Oct 30 17:42:05 <gateway> systemd[1053]: Started mpris-proxy.service - Bluetooth mpris proxy.
+Oct 30 17:42:05 <gateway> systemd[1053]: Reached target default.target - Main User Target.
+Oct 30 17:42:05 <gateway> systemd[1053]: Startup finished in 321ms.
+Oct 30 17:42:05 <gateway> systemd[1]: Started session-9.scope - Session 9 of User <ssh 帳號>.
+Oct 30 17:42:05 <gateway> systemd[1053]: Created slice session.slice - User Core Session Slice.
+Oct 30 17:42:05 <gateway> systemd[1053]: Starting dbus.service - D-Bus User Message Bus...
+Oct 30 17:42:05 <gateway> systemd[1053]: Started dbus.service - D-Bus User Message Bus.
+Oct 30 17:42:30 <gateway> sudo[1086]:    <ssh 帳號> : PWD=~ ; USER=root ; COMMAND=/tmp/tmp.Vd3TdFXqrd/trustiot-agent provision --hardware-id tg-lab-0001 --handle 0x81000100 --inspect
+Oct 30 17:42:30 <gateway> sudo[1086]: pam_unix(sudo:session): session opened for user root(uid=0) by <ssh 帳號>(uid=1000)
+Oct 30 17:42:31 <gateway> sudo[1086]: pam_unix(sudo:session): session closed for user root
+Oct 30 17:42:31 <gateway> sshd-session[1079]: Received disconnect from ::1 port 46592:11: disconnected by user
+Oct 30 17:42:31 <gateway> sshd-session[1079]: Disconnected from user <ssh 帳號> ::1 port 46592
+Oct 30 17:42:31 <gateway> sshd-session[1048]: pam_unix(sshd:session): session closed for user <ssh 帳號>
+Oct 30 17:42:31 <gateway> systemd[1]: session-9.scope: Deactivated successfully.
+Oct 30 17:42:31 <gateway> systemd-logind[578]: Session 9 logged out. Waiting for processes to exit.
+Oct 30 17:42:31 <gateway> systemd-logind[578]: Removed session 9.
+Oct 30 17:42:32 <gateway> sshd-session[1093]: Accepted publickey for <ssh 帳號> from ::1 port 40526 ssh2: ED25519 SHA256:<工作站的 ssh 金鑰>
+Oct 30 17:42:32 <gateway> sshd-session[1093]: pam_unix(sshd:session): session opened for user <ssh 帳號>(uid=1000) by <ssh 帳號>(uid=0)
+Oct 30 17:42:32 <gateway> systemd-logind[578]: New session 11 of user <ssh 帳號>.
+Oct 30 17:42:32 <gateway> systemd[1]: Started session-11.scope - Session 11 of User <ssh 帳號>.
+Oct 30 17:42:32 <gateway> sshd-session[1101]: Received disconnect from ::1 port 40526:11: disconnected by user
+Oct 30 17:42:32 <gateway> sshd-session[1101]: Disconnected from user <ssh 帳號> ::1 port 40526
+Oct 30 17:42:32 <gateway> sshd-session[1093]: pam_unix(sshd:session): session closed for user <ssh 帳號>
+Oct 30 17:42:32 <gateway> systemd[1]: session-11.scope: Deactivated successfully.
+Oct 30 17:42:32 <gateway> systemd-logind[578]: Session 11 logged out. Waiting for processes to exit.
+Oct 30 17:42:32 <gateway> systemd-logind[578]: Removed session 11.
+Oct 30 17:42:40 <gateway> sshd-session[1108]: Accepted publickey for <ssh 帳號> from ::1 port 55366 ssh2: ED25519 SHA256:<工作站的 ssh 金鑰>
+Oct 30 17:42:40 <gateway> sshd-session[1108]: pam_unix(sshd:session): session opened for user <ssh 帳號>(uid=1000) by <ssh 帳號>(uid=0)
+Oct 30 17:42:40 <gateway> systemd-logind[578]: New session 12 of user <ssh 帳號>.
+Oct 30 17:42:40 <gateway> systemd[1]: Started session-12.scope - Session 12 of User <ssh 帳號>.
+Oct 30 17:42:40 <gateway> sudo[1118]:    <ssh 帳號> : PWD=~ ; USER=root ; COMMAND=/usr/bin/find / -xdev -newer /tmp/trustiot-618-mark -type f
+Oct 30 17:42:40 <gateway> sudo[1118]: pam_unix(sudo:session): session opened for user root(uid=0) by <ssh 帳號>(uid=1000)
+Oct 30 17:42:43 <gateway> sudo[1118]: pam_unix(sudo:session): session closed for user root
+Oct 30 17:42:43 <gateway> sudo[1123]:    <ssh 帳號> : PWD=~ ; USER=root ; COMMAND=/usr/bin/journalctl --since '2026-10-30 09:41:13 UTC' --no-pager
+Oct 30 17:42:43 <gateway> sudo[1123]: pam_unix(sudo:session): session opened for user root(uid=0) by <ssh 帳號>(uid=1000)
+## handles
+- 0x81000001
+- 0x81000100
+## files
+ls: cannot access '/var/lib/trustiot-agent': No such file or directory
+ls: cannot access '/etc/trustiot': No such file or directory

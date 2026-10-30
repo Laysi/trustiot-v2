@@ -25,10 +25,15 @@
 //!   ([`crate::bindings::Projection`]'s audited transaction), verifies the signature with the
 //!   registered key over the signing input rebuilt from the stored challenge, and only then looks
 //!   at the gateway's state. An unregistered hardware ID gets the same 401 as a wrong signature.
-//! - **No decision on stale bindings.** While the consumer of the assets service's events has no
-//!   current lag measurement, or its oldest unprocessed event is older than
-//!   `renewal.max_consumer_lag`, both steps answer 503: a gateway unbound or moved a moment ago
-//!   must not renew under its old binding.
+//! - **No decision on stale bindings or tenant states.** While either consumer (the assets
+//!   service's events for the bindings, the identity service's for the tenant states,
+//!   Laysi/trustiot-v2#778) has no current lag measurement, or its oldest unprocessed event is
+//!   older than `renewal.max_consumer_lag`, both steps answer 503: a gateway unbound or moved a
+//!   moment ago must not renew under its old binding, nor a tenant suspended a moment ago under
+//!   its old state.
+//! - **Only an active tenant renews.** A tenant suspended, deleted, in a state this build does
+//!   not know, or without any state stored (its `identity.tenant_created` not applied yet) is
+//!   refused alike (`crate::bindings::reads_as_suspended`).
 //! - **Issued exactly with its event.** The certificate is signed for the registered key (never a
 //!   key the request names) and recorded in the ledger in a transaction of the gateway's tenant,
 //!   with the tenant event `certs.gateway_certificate_renewed`. Earlier certificates stay valid
@@ -86,7 +91,7 @@ use x509_parser::x509::{AlgorithmIdentifier, SubjectPublicKeyInfo};
 
 use crate::api;
 use crate::authority::{Authority, CaState};
-use crate::bindings::Projection;
+use crate::bindings::{Projection, TenantStatus, reads_as_suspended};
 use crate::config::RenewalLimits;
 use crate::dynsec::BrokerSync;
 use crate::gateways;
@@ -192,8 +197,29 @@ LEFT JOIN LATERAL (
 LEFT JOIN certs.tenant_statuses AS status ON status.tenant_id = binding.tenant_id
 WHERE registration.hardware_id = $1";
 
-/// The current lag of the consumer of the assets service's events (`outbox::Consumer::lag`).
+/// The current lag of the consumers the renewal decides on (`outbox::Consumer::lag`), combined
+/// with [`slowest`].
 pub type LagReading = Arc<dyn Fn() -> Option<Lag> + Send + Sync>;
+
+/// The lag of several consumers as one: unknown when any is unknown, otherwise the oldest
+/// waiting event of all and the events of all together. [`bindings_current`] then holds only
+/// when it holds for each of them.
+#[must_use]
+pub fn slowest(lags: impl IntoIterator<Item = Option<Lag>>) -> Option<Lag> {
+    lags.into_iter().try_fold(
+        Lag {
+            events: 0,
+            oldest_age: None,
+        },
+        |all, lag| {
+            let lag = lag?;
+            Some(Lag {
+                events: all.events.saturating_add(lag.events),
+                oldest_age: all.oldest_age.max(lag.oldest_age),
+            })
+        },
+    )
+}
 
 /// What the endpoint needs from the service's startup.
 pub struct Parts {
@@ -206,7 +232,7 @@ pub struct Parts {
     pub platform: PlatformDb,
     /// The issuing CAs.
     pub ca: CaState,
-    /// The lag of the consumer that keeps the bindings.
+    /// The lag of the consumers that keep the bindings and the tenant states ([`slowest`]).
     pub lag: LagReading,
     /// `renewal.*`.
     pub limits: RenewalLimits,
@@ -653,7 +679,9 @@ struct Gateway {
     key_compromised: bool,
     /// Its tenant and binding while its latest binding holds.
     binding: Option<(TenantId, GatewayBindingId)>,
-    /// Whether that binding's tenant is suspended.
+    /// That binding's tenant's stored status; `None` when there is none.
+    status: Option<TenantStatus>,
+    /// Whether that tenant counts as suspended (`crate::bindings::reads_as_suspended`).
     suspended: bool,
 }
 
@@ -862,6 +890,7 @@ impl Routes {
             key_compromised = gateway.key_compromised,
             tenant_id = tenant_id.as_deref(),
             binding_id = binding_id.as_deref(),
+            tenant_status = gateway.status.map_or("none", TenantStatus::as_str),
             tenant_suspended = gateway.suspended,
             "read a gateway for a certificate renewal"
         );
@@ -995,17 +1024,16 @@ fn gateway(row: &sqlx::postgres::PgRow) -> Result<Gateway, String> {
         None
     };
     let status: Option<String> = row.try_get("status").map_err(read)?;
-    let suspended = match status.as_deref() {
-        None | Some("active") => false,
-        Some("suspended") => true,
-        Some(_) => return Err("a stored tenant status breaks the rules".to_owned()),
-    };
+    let status = status
+        .map(|status| TenantStatus::parse(&status).ok_or("a stored tenant status breaks the rules"))
+        .transpose()?;
     Ok(Gateway {
         public_key: row.try_get("public_key").map_err(read)?,
         decommissioned: row.try_get("decommissioned").map_err(read)?,
         key_compromised: row.try_get("key_compromised").map_err(read)?,
         binding,
-        suspended,
+        status,
+        suspended: reads_as_suspended(status),
     })
 }
 
@@ -1054,6 +1082,30 @@ mod tests {
             events,
             oldest_age: oldest_age.map(Duration::from_secs),
         })
+    }
+
+    #[test]
+    fn the_slowest_consumer_decides() {
+        let max = Duration::from_secs(60);
+        assert_eq!(slowest([lag(0, None), lag(0, None)]), lag(0, None));
+        assert_eq!(slowest([lag(2, Some(5)), lag(3, Some(9))]), lag(5, Some(9)));
+        assert_eq!(slowest([lag(0, None), lag(1, Some(4))]), lag(1, Some(4)));
+        assert_eq!(slowest([lag(1, Some(4)), None]), None);
+        assert_eq!(slowest([None, lag(0, None)]), None);
+        assert_eq!(
+            slowest([lag(u32::MAX, None), lag(1, None)]),
+            lag(u32::MAX, None)
+        );
+        // One consumer past the limit refuses, whatever the other.
+        assert!(!bindings_current(
+            slowest([lag(0, None), lag(1, Some(61))]),
+            max
+        ));
+        assert!(!bindings_current(slowest([lag(0, None), None]), max));
+        assert!(bindings_current(
+            slowest([lag(0, None), lag(1, Some(60))]),
+            max
+        ));
     }
 
     #[test]

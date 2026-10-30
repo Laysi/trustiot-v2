@@ -68,7 +68,7 @@ proto 的 shim 偶爾會把自己的訊息寫進 stdout（例如另一個 proto 
 | Postgres（CloudNativePG 加 AGE） | `postgres.mode` | `bundled`：單一 instance 的 CloudNativePG Cluster、AGE extension 與 NetworkPolicy（見「叢集內的 Postgres」）；CloudNativePG operator 與 CRD 是叢集層級的平台元件，由 [deploy/cloudnative-pg](../cloudnative-pg/README.md) 安裝，不在 chart 裡。`external` 已接到平台設定。含 AGE 的映像在 [deploy/images/postgres](../images/postgres/README.md)，由 release.yml 發佈。每個服務的角色與 migration 由 migration Job 處理 | Laysi/trustiot-v2#134（備份與 PITR） |
 | migration Job | `migrate.enabled` | 完成（預設開）：每個服務的 Postgres migration、ClickHouse DDL、服務角色與 collector 的 ClickHouse 帳號；每個服務的 pod 以 init container 等它完成才啟動（見「migration Job」） | Laysi/trustiot-v2#60；第一個 outbox 生產端在 Laysi/trustiot-v2#65，每租戶的 AGE 角色在 Laysi/trustiot-v2#176 |
 | ClickHouse | `clickhouse.mode` | `bundled`：單節點 StatefulSet，bootstrap 管理帳號的密碼在叢集內產生（見「叢集內的 ClickHouse」）；`external` 已接到平台設定。schema、帳號與 row policy 由 migration Job 以 SQL 套用 | 管理帳號密碼的輪替見 docs/runbooks/secrets.md |
-| MQTT broker（Mosquitto） | `mqttBroker.enabled` | 完成（預設關，只有 nightly 的 `tests/values/smoke.yaml` 開啟）：單一副本的 StatefulSet，閘道器埠 8883（TLS 1.3、只信任我們的 CA、CRL）只放行 mqtt-bridge，服務埠 1883 只放行有 broker 帳號的服務；dynamic security 預設拒絕，服務的密碼在叢集內產生；伺服器憑證的私鑰由 CronJob 在叢集內產生、經 certs 服務簽發，過了效期一半就換發（Laysi/trustiot-v2#535）；SQLite 持久化（見「MQTT broker」） | 閘道器帳號的登記與撤銷在 Laysi/trustiot-v2#82 |
+| MQTT broker（Mosquitto） | `mqttBroker.enabled` | 完成（預設關；nightly 的 `tests/values/smoke.yaml` 與展示叢集開啟，展示叢集自 Laysi/trustiot-v2#795）：單一副本的 StatefulSet，閘道器埠 8883（TLS 1.3、只信任我們的 CA、CRL）只放行 mqtt-bridge，服務埠 1883 只放行有 broker 帳號的服務；dynamic security 預設拒絕，服務的密碼在叢集內產生；伺服器憑證的私鑰由 CronJob 在叢集內產生、經 certs 服務簽發，過了效期一半就換發（Laysi/trustiot-v2#535）；SQLite 持久化（見「MQTT broker」） | 閘道器帳號的登記與撤銷在 Laysi/trustiot-v2#82 |
 | Qdrant | `qdrant.mode` | `external` 已接到平台設定；`bundled` 尚未加入 | Laysi/trustiot-v2#194 |
 | 物件儲存、SMTP、AI 端點 | `objectStorage.*`、`smtp.*`、`ai.*` | 一律外部，設定已接到平台設定 | Laysi/trustiot-v2#133、Laysi/trustiot-v2#169、Laysi/trustiot-v2#139 |
 | OpenTelemetry collector 與 OTLP 轉送 | `observability.collector.enabled` | 完成（預設開）：收服務的 OTLP、遮蔽後把日誌與 trace 寫進 ClickHouse 的 `trustiot_logs`，可轉送到 SIEM（見「OpenTelemetry collector」）。帳號由 migration Job 以 SQL 建立；指標先收下丟棄 | Laysi/trustiot-v2#183（指標存放與 Grafana）、Laysi/trustiot-v2#63（服務間授權要放行 collector） |
@@ -473,7 +473,7 @@ chart 產生下列物件：
 | `postgres.bundled.parameters.effective_cache_size` | `384MB` | 查詢規劃用的快取估計，不實際配置記憶體 |
 | `postgres.bundled.parameters.work_mem` | `4MB` | 每個排序或 hash 的上限，一個查詢可能用好幾份 |
 | `postgres.bundled.parameters.maintenance_work_mem` | `64MB` | VACUUM、建索引用 |
-| `postgres.bundled.parameters.max_connections` | `240` | 10–1000；`bundled` 時 chart 檢查：啟用的服務在整版滾動時所有連線池的加總，加上保留給 superuser、CloudNativePG、migration Job 與第一位平台管理員的 bootstrap 的 18 條，不能超過它，超過就渲染失敗。預設值放得下八個用 Postgres 的服務各一個副本（232 條，還有 8 條餘裕），記憶體估算在 1Gi 以內；改這個值會讓叢集內的 Postgres 重啟；算法、每個服務的數字與估算見「叢集內的 Postgres」的連線預算 |
+| `postgres.bundled.parameters.max_connections` | `240` | 10–1000；`bundled` 時 chart 檢查：啟用的服務在整版滾動時所有連線池的加總，加上保留給 superuser、CloudNativePG、migration Job 與第一位平台管理員的 bootstrap 的 18 條，不能超過它，超過就渲染失敗。預設值放得下八個用 Postgres 的服務各一個副本（236 條，還有 4 條餘裕），記憶體估算在 1Gi 以內；改這個值會讓叢集內的 Postgres 重啟；算法、每個服務的數字與估算見「叢集內的 Postgres」的連線預算 |
 | `postgres.bundled.nodeSelector` | `kubernetes.io/arch: arm64` | 映像只有 arm64（決策 5） |
 | `postgres.bundled.tolerations` | `[]` | |
 | `postgres.bundled.operator.namespace` | `cnpg-system` | CloudNativePG operator 所在的 namespace；NetworkPolicy 只放行它的 pod 連 Postgres pod 的 8000（instance manager） |
@@ -509,7 +509,7 @@ chart 產生下列物件：
 | `clickhouse.external.migrationSecret.name` | `""`，`external` 且 Job 開啟時必填 | 有 access management 權限的帳號的帳密所在的既有 Secret（叢集內 ClickHouse 的管理帳號在叢集內產生，見「叢集內的 ClickHouse」），只給 migration Job |
 | `clickhouse.external.migrationSecret.usernameKey` | `username` | |
 | `clickhouse.external.migrationSecret.passwordKey` | `password` | |
-| `mqttBroker.enabled` | `false` | 部署叢集內的 MQTT broker（Mosquitto，決策 6），見「MQTT broker」。兩份 values 與 `deploy/flux` 都不開（flux 的測試檢查兩個叢集），目前只有 nightly 的 `tests/values/smoke.yaml` 開啟。伺服器憑證不必事先準備：chart 宣告空的 Secret，憑證 CronJob 在 certs 服務能簽章之後填入，在那之前 broker 不開閘道器埠（見「MQTT broker」的「伺服器憑證」） |
+| `mqttBroker.enabled` | `false` | 部署叢集內的 MQTT broker（Mosquitto，決策 6），見「MQTT broker」。兩份 values 與 SaaS 叢集都不開；nightly 的 `tests/values/smoke.yaml` 與展示叢集的 `values-demo.yaml`（Laysi/trustiot-v2#795）開啟，flux 的測試檢查每個叢集由哪個檔設定它。伺服器憑證不必事先準備：chart 宣告空的 Secret，憑證 CronJob 在 certs 服務能簽章之後填入，在那之前 broker 不開閘道器埠（見「MQTT broker」的「伺服器憑證」） |
 | `mqttBroker.image.repository` | `docker.io/library/eclipse-mosquitto` | |
 | `mqttBroker.image.tag` | `2.1.2-alpine` | 實際版本由 digest 決定 |
 | `mqttBroker.image.digest` | 見 `values.yaml` | 必填（版本固定），multi-arch index 的 digest，含 arm64；tag 與 digest 必須與 `crates/protocol/tests/broker.rs`、`tools/migrate/tests/mqtt_broker.rs` 和 `scripts/lib/stack.ts` 相同（chart 測試比對）。換版本前先讀新版的 SIGHUP、CRL 與 dynamic security 行為，「MQTT broker」一節的做法依賴 2.1.2 的原始碼 |
@@ -697,8 +697,10 @@ curl -sS -D - -X POST "http://127.0.0.1:18080/internal/roles/main/v1/messages" \
 - **關閉**：`services.gateway-ops.enabled: false` 時下一次 Job 讓 `gateway_ops_app`、`gateway_ops_platform` 不能登入，broker 移除 `service:gateway-ops` 這個帳號（它離開了帳號持有者的清單）；Secret 與資料留著（`keep`）；broker 上已經 retained 的設定訊息不因此清除。
 - nightly 的 smoke 測試開啟 gateway-ops 與 broker，確認 pod 就緒（它的 readiness 包括以 `service:gateway-ops` 連上 broker 並獲准共享訂閱，所以這也證明 chart 交給它的 broker 帳號能用）、兩個 Postgres 角色都有連線（`scripts/nightly/smoke.ts`）。nightly 的程式不讀任何 pod 的日誌（`scripts/nightly/diagnostics.test.ts`），所以 broker 端的登入紀錄不在 nightly 驗證。叢集裡沒有綁定的閘道器，所以它不下發任何設定。
 - **展示叢集**：chart 只提供開關。建議分兩次換版，讓每次只有一種中斷：
-  1. 依 [deploy/flux/README.md](../flux/README.md) 的換版流程換到含這一版的 chart，gateway-ops 先不開。這一步叢集內的 Postgres 因 `max_connections` 改成 220 重啟一次。
+  1. 依 [deploy/flux/README.md](../flux/README.md) 的換版流程換到含這一版的 chart，gateway-ops 先不開。這一步叢集內的 Postgres 因 `max_connections` 改變重啟一次（加入 gateway-ops 時調到 220，之後的版本是 240；從 `0.0.0-rc.11` 的 200 換上來也一樣）。
   2. 確認第 1 步穩定後，另一次在 `values-demo.yaml` 打開 `services.gateway-ops.enabled`（broker 還沒開時一起打開 `mqttBroker.enabled`，否則渲染失敗）。這一步 broker 的帳號持有者多了 gateway-ops，broker StatefulSet 的 pod template 改變、broker 重啟一次，連著的閘道器與 ingest 斷線後重連（見「MQTT broker」的「服務的帳號」）；migration Job 重跑以建立 `gateway_ops_app`、`gateway_ops_platform`，用 Postgres 的服務跟著 Job 滾動更新。
+
+  Laysi/trustiot-v2#795 照這個順序做：第 1 步是 `0.0.0-rc.12` 的換版，第 2 步在同一個變更打開 broker、mqtt-bridge、ingest 與 gateway-ops（[deploy/flux/README.md](../flux/README.md)「打開閘道器的資料路徑」）。
 
 ## migration Job
 
@@ -803,14 +805,14 @@ operator 依 Cluster 再產生：pod 與 PVC `<cluster>-1`；Service `<cluster>-
 | `assistant` | `8` | 2 | 10 | 20 |
 | `certs` | `5` | 4 | 9 | 18 |
 | `gateway-ops` | `9` | 4 | 13 | 26 |
-| `identity` | `10` | 21 | 31 | 62 |
+| `identity` | `10` | 23 | 33 | 66 |
 | `ingest` | `10` | 4 | 14 | 28 |
 | `telemetry-query` | `10` | 2 | 12 | 24 |
-| 合計 | | | 107 | 214 |
+| 合計 | | | 109 | 218 |
 
 - `ai-gateway`：只有設定的連線池（Laysi/trustiot-v2#605），每個轉送請求一次短查詢；沒有其他連線池。它的程式不依賴 `crates/testkit`（`contract` 不能進它的依賴樹），所以 `services/ai-gateway/tests/chart_connections.rs` 自己讀同一段 JSON。
-- `assets`：平台角色的連線池（`PLATFORM_CONNECTIONS`）：讀身分服務與 certs 事件的兩個消費端各一條、就緒檢查一條、平台管理員讀設備池一條。`telemetry-query`：平台角色讀身分服務事件的連線池（`EVENT_READER_CONNECTIONS`）。`certs`：平台角色的連線池（`PLATFORM_CONNECTIONS`）：出廠登錄、讀資產服務事件的消費端、綁定與租戶狀態的跨租戶讀取共用（Laysi/trustiot-v2#632 起）。
-- `identity`：以 `identity_app` 連線的租戶、登入、寄信、run 委派與事件紀錄連線池共 16 條，以 `identity_platform` 連線的事件紀錄連線池 5 條（消費的產生端數加 2；certs 在 2026-10-23 加入後是 3 個產生端），見 [services/identity/README.md](../../services/identity/README.md) 的「連線池」。
+- `assets`：平台角色的連線池（`PLATFORM_CONNECTIONS`）：讀身分服務與 certs 事件的兩個消費端各一條、就緒檢查一條、平台管理員讀設備池一條。`telemetry-query`：平台角色讀身分服務事件的連線池（`EVENT_READER_CONNECTIONS`）。`certs`：平台角色的連線池（`PLATFORM_CONNECTIONS`）：出廠登錄、讀資產服務事件與身分服務事件的兩個消費端（後者 Laysi/trustiot-v2#778 起）、綁定與租戶狀態的跨租戶讀取共用（Laysi/trustiot-v2#632 起）。
+- `identity`：以 `identity_app` 連線的租戶、登入、寄信、run 委派與事件紀錄連線池共 17 條，以 `identity_platform` 連線的事件紀錄連線池 6 條（消費端數加 2：3 個產生端的事件紀錄，加上 2026-10-30 起讀 certs 停權確認的消費端，Laysi/trustiot-v2#779），見 [services/identity/README.md](../../services/identity/README.md) 的「連線池」。
 - `assistant`：服務角色 `assistant_app` 的連線池給 readiness 的兩項檢查、清除排程的 job lock 與 API 的請求（每個請求一個短交易）；平台角色 `assistant_platform` 的連線池（`PLATFORM_CONNECTIONS`，2 條）給清除的交易與 readiness 各一條（Laysi/trustiot-v2#645）。
 - `ingest`：主要連線池一條給綁定的消費端、一條給 readiness，其餘給寫入流程的串流鎖，所以範圍從 3 起；平台角色 `ingest_platform` 的連線池（`PLATFORM_CONNECTIONS`）4 條：消費端讀資產服務的事件、readiness、寫入路徑查綁定（Laysi/trustiot-v2#642，見 [services/ingest/README.md](../../services/ingest/README.md) 的「服務與設定」）。
 - `gateway-ops`：主要連線池的下限 9 是服務在一個 API 請求時同時會用到的最多連線數：消費端的下發交易 1、readiness 的 ping 與 migration 檢查 2、重發的 job lock 1、兩個發布名額 2、套用回報的記錄 1、在線狀態的寫入 1、API 請求 1（`services/gateway-ops/src/config.rs` 的 `MIN_DATABASE_CONNECTIONS`），所以範圍從 9 起，chart 預設也是 9（更大的連線池只讓更多 API 請求同時進行）；平台角色 `gateway_ops_platform` 的連線池（`PLATFORM_CONNECTIONS`）4 條：消費端讀資產服務的事件與閘道器的綁定、readiness、下發流程與在線狀態共用的兩個讀取（Laysi/trustiot-v2#721，見 [services/gateway-ops/README.md](../../services/gateway-ops/README.md) 的「服務與設定」）。
@@ -826,7 +828,7 @@ operator 依 Cluster 再產生：pod 與 PVC `<cluster>-1`；Service `<cluster>-
 | migration Job | 2 | 它以 owner 開的一條 session，與檢查角色密碼時的一次登入（`tools/migrate/src/postgres.rs`） |
 | 第一位平台管理員的 bootstrap | 1 | 操作者從 CronJob `<release>-platform-admin-bootstrap` 建立的 Job（`templates/platform-admin-bootstrap.yaml`、[docs/runbooks/platform-admin.md](../../docs/runbooks/platform-admin.md)），以 owner 開一條 session（`tools/migrate/src/platform_admin.rs`）；操作者可能在換版時執行它 |
 
-所以預設值、`values-saas.yaml`、`values-onprem.yaml` 與展示環境（`deploy/flux/clusters/demo/trustiot/values-demo.yaml`）在八個服務（`ai-gateway`、`assets`、`assistant`、`certs`、`gateway-ops`、`identity`、`ingest`、`telemetry-query`）全開時需要 214 + 18 = 232 條；`max_connections` 預設 240（Laysi/trustiot-v2#605 從 160 調到 200，Laysi/trustiot-v2#721 加入 gateway-ops 時再調到 220；Laysi/trustiot-v2#112 把 gateway-ops 的連線池從 7 調到 9 之後 220 沒有餘裕，Laysi/trustiot-v2#645 的 assistant 又加上 API 與清除的連線池，所以調到 240），還有 8 條餘裕。下一個用 Postgres 的服務或更大的連線池要調高 `max_connections`，並依下方的記憶體估算確認 1Gi 還夠。**改 `max_connections` 會讓叢集內的 Postgres 重啟**（PostgreSQL 只在啟動時讀這個參數，CloudNativePG 套用時重啟 instance）：單一 instance 時服務的連線中斷到 Postgres 重新就緒為止，服務照連線池的設定重連；所以這個值隨 chart 的升級變更時，升級會帶一次 Postgres 的短暫中斷，安排在可以接受中斷的時段。只換一個服務、或只開部分服務時需要的更少。2026-10-23 之前預設是 100，四個服務全開時整版滾動會超過（Laysi/trustiot-v2#497 的安全審查 F3）。
+所以預設值、`values-saas.yaml`、`values-onprem.yaml` 與展示環境（`deploy/flux/clusters/demo/trustiot/values-demo.yaml`）在八個服務（`ai-gateway`、`assets`、`assistant`、`certs`、`gateway-ops`、`identity`、`ingest`、`telemetry-query`）全開時需要 218 + 18 = 236 條；`max_connections` 預設 240（Laysi/trustiot-v2#605 從 160 調到 200，Laysi/trustiot-v2#721 加入 gateway-ops 時再調到 220；Laysi/trustiot-v2#112 把 gateway-ops 的連線池從 7 調到 9 之後 220 沒有餘裕，Laysi/trustiot-v2#645 的 assistant 又加上 API 與清除的連線池，所以調到 240），還有 4 條餘裕（Laysi/trustiot-v2#779 讓身分服務的事件紀錄連線池為停權確認的消費端各多一條，每副本 31 條變成 33 條）。下一個用 Postgres 的服務或更大的連線池要調高 `max_connections`，並依下方的記憶體估算確認 1Gi 還夠。**改 `max_connections` 會讓叢集內的 Postgres 重啟**（PostgreSQL 只在啟動時讀這個參數，CloudNativePG 套用時重啟 instance）：單一 instance 時服務的連線中斷到 Postgres 重新就緒為止，服務照連線池的設定重連；所以這個值隨 chart 的升級變更時，升級會帶一次 Postgres 的短暫中斷，安排在可以接受中斷的時段。只換一個服務、或只開部分服務時需要的更少。2026-10-23 之前預設是 100，四個服務全開時整版滾動會超過（Laysi/trustiot-v2#497 的安全審查 F3）。
 
 **程式與預算的綁定**：預算是 JSON，Helm 以 `fromJson` 讀，用 Postgres 的服務各有一個 Rust 測試（`services/<服務>/tests/chart_connections.rs`）以 `crates/testkit` 的 `chart::postgres_connection_budget` 讀同一段文字，比對程式的常數（其他連線池、`database.maxConnections` 接受的範圍），並以 `chart::pool_size_calls` 列出程式裡每個 `.max_connections(...)`：連線池變大、或多了一個連線池而預算沒跟著改，測試就失敗。身分服務的測試比對預算與服務自己的 `connections_per_replica()`（它的 README「連線池」的數字也由單元測試對到同一個加總），`database.maxConnections` 範圍內的每個值都要相同，並另外列出 `start` 開連線池的每個呼叫：多呼叫一次既有的建構函式就多一個連線池，`.max_connections(...)` 的清單看不出來（Laysi/trustiot-v2#497）。主要連線池的預設值由 chart 傳入，程式裡的預設值不影響部署。
 
@@ -875,7 +877,7 @@ bootstrap 管理帳號只給 migration Job 用，密碼在叢集內產生，沒�
 
 ## MQTT broker
 
-`mqttBroker.enabled: true` 部署 `templates/mqtt-broker.yaml`（決策 6，Laysi/trustiot-v2#84），雲端唯一的 MQTT broker：閘道器經入口 gateway 與 mqtt-bridge 連到它，雲端服務在叢集內連它。預設關：兩份 values 與 `deploy/flux` 都不開（`deploy/flux` 的測試檢查 SaaS 與展示叢集都沒有設定 `mqttBroker`），目前只有 nightly 的 `tests/values/smoke.yaml` 開啟。
+`mqttBroker.enabled: true` 部署 `templates/mqtt-broker.yaml`（決策 6，Laysi/trustiot-v2#84），雲端唯一的 MQTT broker：閘道器經入口 gateway 與 mqtt-bridge 連到它，雲端服務在叢集內連它。預設關：兩份 values 與 SaaS 叢集都不開；開啟的是 nightly 的 `tests/values/smoke.yaml`，以及展示叢集為了閘道器的資料路徑在 `values-demo.yaml` 開啟（Laysi/trustiot-v2#795，連同 mqtt-bridge、ingest 與 gateway-ops）。`deploy/flux` 的測試檢查 SaaS 叢集沒有設定 `mqttBroker`、展示叢集只在 `values-demo.yaml` 設定它，而且沒有私有 values 指到它。
 
 - 一個副本的 StatefulSet `<release>-mqtt-broker`，Mosquitto 2.1（`mqttBroker.image`，以 digest 固定）。資料在 PVC `data-<release>-mqtt-broker-0`（`/mosquitto/data`）：SQLite 的 session、排隊與 retained 訊息、dynamic security 檔與信任檔；StatefulSet 刪除或縮容時保留 PVC。
 - ClusterIP Service `<release>-mqtt-broker` 只開 `mqtt-gateways`（8883）與 `mqtt-services`（1883），兩種部署形態相同，沒有 nodePort，任何入口路由都不能指向它（`ingress.routes` 寫了就渲染失敗）。chart 測試檢查兩份 values 的渲染結果；nightly 在 k3d 上檢查部署後的每個 Service 都是沒有 node port、外部 IP 與 load balancer 位址的 ClusterIP，也沒有任何 Route 指向 broker 的 Service。

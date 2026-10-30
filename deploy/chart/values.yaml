@@ -613,8 +613,8 @@ postgres:
       work_mem: 4MB
       maintenance_work_mem: 64MB
       # Fits identity, assets, certs, telemetry-query, assistant, ai-gateway, ingest and
-      # gateway-ops at one replica each while all of them roll at once (214) plus the 18 reserved
-      # connections (232), with 8 to spare; the next service or larger pool that uses Postgres
+      # gateway-ops at one replica each while all of them roll at once (218) plus the 18 reserved
+      # connections (236), with 4 to spare; the next service or larger pool that uses Postgres
       # raises it. The render fails when the enabled services need more. Changing it restarts the
       # bundled Postgres (Laysi/trustiot-v2#721 raised it from 200, Laysi/trustiot-v2#645 from 220
       # for the assistant's API and purge pools and gateway-ops' larger pool from
