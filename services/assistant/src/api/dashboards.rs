@@ -14,13 +14,17 @@
 //! | `PUT`, `DELETE /api/assistant/v1/dashboards/{dashboard_id}/archive` | editor and up (a saved dashboard) | 200 [`ArchiveState`] |
 //! | `POST /api/assistant/v1/dashboards/{dashboard_id}/dataset-runs` | whoever can see it, run as the caller | 200 [`DatasetResult`] |
 //!
-//! Who sees what and who may change what is the store's ([`store`]); a dashboard the caller
-//! cannot see answers the same 404 as one that does not exist. Errors (M1):
+//! Every handler first requires the role its operation needs, with service-kit's
+//! `UserIdentity::require` (the permission matrix, docs/architecture/permissions.md, section
+//! `## assistant`): a refusal answers its 403 `permission_denied` with `cache-control: no-store`
+//! and is logged at INFO as `refused to <action>`. Who sees what and who may change what is then
+//! the store's ([`store`], which checks the editor role again); a dashboard the caller cannot
+//! see answers the same 404 as one that does not exist. Errors (M1):
 //!
 //! | Request | Response |
 //! | --- | --- |
 //! | No valid internal identity token | 401 `unauthenticated` |
-//! | No tenant, or a role this build does not know | 403 `permission_denied` |
+//! | No tenant, a role this build does not know, or a role below the one the operation requires (editor to publish, archive and unarchive; viewer for the rest) | 403 `permission_denied`, from the token alone before the body or the database |
 //! | An ID that is not a UUID, or a dashboard the caller cannot see | 404 `not_found` |
 //! | A query string with an unknown parameter or a bad value, a bad `cursor` | 400 `invalid_request` |
 //! | A body that is not `application/json`, over 4 KiB, or not exactly the request (unknown fields refused) | 400 `invalid_request` |
@@ -58,7 +62,7 @@ use contract::api::dashboard::result::DatasetResult;
 use contract::{DashboardId, ErrorBody, ErrorCode, TenantId, TenantRole};
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
-use service_kit::identity::{IdentityVerifier, OnBehalf, UserIdentity};
+use service_kit::identity::{IdentityVerifier, OnBehalf, Requirement, UserIdentity};
 use service_kit::tenant::TenantDb;
 
 use super::held_body::HeldBody;
@@ -68,7 +72,6 @@ use crate::dashboards::limits::VersionBudget;
 use crate::dashboards::runner::{DatasetRunner, HeldResult, RunError};
 use crate::dashboards::store::{self, ListCursor, Requester, StoreError, VersionCursor};
 use crate::delegation::OnBehalfOf;
-use crate::history::Principal;
 
 /// The largest request body: the bodies are a few numbers and a name.
 pub const MAX_BODY_BYTES: usize = 4 * 1024;
@@ -186,7 +189,7 @@ async fn list_saved(
     query: Result<Query<ListQuery>, QueryRejection>,
 ) -> Response {
     const ACTION: &str = "list dashboards";
-    let requester = match requester(&user, ACTION) {
+    let requester = match requester(&user, TenantRole::Viewer, ACTION) {
         Ok(requester) => requester,
         Err(refused) => return refused,
     };
@@ -235,7 +238,7 @@ async fn list_drafts(
     query: Result<Query<PageQuery>, QueryRejection>,
 ) -> Response {
     const ACTION: &str = "list a conversation's dashboards";
-    let requester = match requester(&user, ACTION) {
+    let requester = match requester(&user, TenantRole::Viewer, ACTION) {
         Ok(requester) => requester,
         Err(refused) => return refused,
     };
@@ -287,7 +290,7 @@ async fn get_dashboard(
     query: Result<Query<ViewQuery>, QueryRejection>,
 ) -> Response {
     const ACTION: &str = "read a dashboard";
-    let requester = match requester(&user, ACTION) {
+    let requester = match requester(&user, TenantRole::Viewer, ACTION) {
         Ok(requester) => requester,
         Err(refused) => return refused,
     };
@@ -343,7 +346,7 @@ async fn list_versions(
     query: Result<Query<PageQuery>, QueryRejection>,
 ) -> Response {
     const ACTION: &str = "list a dashboard's versions";
-    let requester = match requester(&user, ACTION) {
+    let requester = match requester(&user, TenantRole::Viewer, ACTION) {
         Ok(requester) => requester,
         Err(refused) => return refused,
     };
@@ -385,7 +388,7 @@ async fn list_versions(
         (status = 201, description = "The saved dashboard and its new version.", body = VersionCreated),
         (status = 400, description = "The body is not JSON, over 4 KiB, or not exactly the request (`invalid_request`).", body = ErrorBody),
         (status = 401, description = "No valid session (`unauthenticated`).", body = ErrorBody),
-        (status = 403, description = "No tenant, a viewer (`dashboard.editor_required`), or not the conversation's owner (`dashboard.owner_required`) (`permission_denied`).", body = ErrorBody),
+        (status = 403, description = "No tenant, or a role below editor (`permission_denied`); not the draft's conversation's owner (`permission_denied`, `dashboard.owner_required`).", body = ErrorBody),
         (status = 404, description = "No such dashboard the caller can see (`not_found`), or no such version (`dashboard.version_not_found`).", body = ErrorBody),
         (status = 409, description = "The saved dashboard's latest version is not the one the draft's version is based on (`dashboard.saved_changed`, `details.latest`), is archived (`dashboard.archived`), or has 10,000 versions (`dashboard.too_many_versions`) (`conflict`).", body = ErrorBody),
         (status = 422, description = "Not a draft (`validation_failed`, `dashboard.draft_required`).", body = ErrorBody),
@@ -401,7 +404,7 @@ async fn publish(
     body: Body,
 ) -> Response {
     const ACTION: &str = "publish a dashboard";
-    let requester = match requester(&user, ACTION) {
+    let requester = match requester(&user, TenantRole::Editor, ACTION) {
         Ok(requester) => requester,
         Err(refused) => return refused,
     };
@@ -417,7 +420,7 @@ async fn publish(
         Err(refused) => return refused,
     };
     let admit = |kind| api.dashboards.versions.admit(requester.principal, kind);
-    let published = store::publish(&mut tx, requester, dashboard_id, request.version, admit).await;
+    let published = store::publish(&mut tx, &user, dashboard_id, request.version, admit).await;
     if let Err(StoreError::Limited { retry_after }) = published {
         // Rolled back: the store wrote nothing before it asked.
         drop(tx);
@@ -441,7 +444,7 @@ async fn publish(
         (status = 201, description = "The dashboard's new version, a copy of `from_version`.", body = VersionCreated),
         (status = 400, description = "The body is not JSON, over 4 KiB, or not exactly the request (`invalid_request`).", body = ErrorBody),
         (status = 401, description = "No valid session (`unauthenticated`).", body = ErrorBody),
-        (status = 403, description = "No tenant, a viewer restoring a saved dashboard (`dashboard.editor_required`), or someone other than a draft's conversation owner (`dashboard.owner_required`) (`permission_denied`).", body = ErrorBody),
+        (status = 403, description = "No tenant or no role in it (`permission_denied`); a viewer restoring a saved dashboard (`permission_denied`, `dashboard.editor_required`), or someone other than a draft's conversation owner (`permission_denied`, `dashboard.owner_required`).", body = ErrorBody),
         (status = 404, description = "No such dashboard the caller can see (`not_found`), or no such version (`dashboard.version_not_found`).", body = ErrorBody),
         (status = 409, description = "`base_version` is not the latest (`dashboard.version_conflict`, `details.latest`), the content of `from_version` is the latest version's (`dashboard.restore_unchanged`), the dashboard is archived (`dashboard.archived`), or it has 10,000 versions (`dashboard.too_many_versions`) (`conflict`).", body = ErrorBody),
         (status = 429, description = "The user added 10 versions by publishing and restoring in the last minute, or the tenant's users 30 to its saved dashboards (30 more to its drafts), in this replica (`rate_limited`, `dashboard.versions_limited`, `details.retry_after`, with `Retry-After`). Only a request that passed every other check counts. Nothing was written.", body = ErrorBody),
@@ -456,7 +459,7 @@ async fn restore(
     body: Body,
 ) -> Response {
     const ACTION: &str = "restore a dashboard";
-    let requester = match requester(&user, ACTION) {
+    let requester = match requester(&user, TenantRole::Viewer, ACTION) {
         Ok(requester) => requester,
         Err(refused) => return refused,
     };
@@ -473,7 +476,7 @@ async fn restore(
     };
     let restored = store::restore(
         &mut tx,
-        requester,
+        &user,
         dashboard_id,
         request.from_version,
         request.base_version,
@@ -507,7 +510,7 @@ async fn restore(
     responses(
         (status = 200, description = "The dashboard is archived.", body = ArchiveState),
         (status = 401, description = "No valid session (`unauthenticated`).", body = ErrorBody),
-        (status = 403, description = "No tenant, or a viewer (`permission_denied`, `dashboard.editor_required`).", body = ErrorBody),
+        (status = 403, description = "No tenant, or a role below editor (`permission_denied`).", body = ErrorBody),
         (status = 404, description = "No such dashboard the caller can see (`not_found`).", body = ErrorBody),
         (status = 422, description = "A draft (`validation_failed`, `dashboard.saved_required`).", body = ErrorBody),
         (status = 503, description = "The database failed (`unavailable`). Nothing was written.", body = ErrorBody),
@@ -531,7 +534,7 @@ async fn archive(
     responses(
         (status = 200, description = "The dashboard is not archived.", body = ArchiveState),
         (status = 401, description = "No valid session (`unauthenticated`).", body = ErrorBody),
-        (status = 403, description = "No tenant, or a viewer (`permission_denied`, `dashboard.editor_required`).", body = ErrorBody),
+        (status = 403, description = "No tenant, or a role below editor (`permission_denied`).", body = ErrorBody),
         (status = 404, description = "No such dashboard the caller can see (`not_found`).", body = ErrorBody),
         (status = 422, description = "A draft (`validation_failed`, `dashboard.saved_required`).", body = ErrorBody),
         (status = 503, description = "The database failed (`unavailable`). Nothing was written.", body = ErrorBody),
@@ -556,7 +559,7 @@ async fn set_archived(
     } else {
         "unarchive a dashboard"
     };
-    let requester = match requester(&user, action) {
+    let requester = match requester(&user, TenantRole::Editor, action) {
         Ok(requester) => requester,
         Err(refused) => return refused,
     };
@@ -567,7 +570,7 @@ async fn set_archived(
         Ok(tx) => tx,
         Err(refused) => return refused,
     };
-    let changed = store::set_archived(&mut tx, requester, dashboard_id, archived).await;
+    let changed = store::set_archived(&mut tx, &user, dashboard_id, archived).await;
     let state = match finish(tx, changed).await {
         Ok(state) => state,
         Err(failure) => return dashboard_failure(&user, Some(dashboard_id), action, &failure),
@@ -611,7 +614,7 @@ async fn run_dataset(
     body: Body,
 ) -> Response {
     const ACTION: &str = "run a dashboard's dataset";
-    let requester = match requester(&user, ACTION) {
+    let requester = match requester(&user, TenantRole::Viewer, ACTION) {
         Ok(requester) => requester,
         Err(refused) => return refused,
     };
@@ -729,30 +732,25 @@ fn run_error(failure: &RunError) -> Response {
     response
 }
 
-/// The requester of a request: its user, tenant and role. Every route needs at least viewer;
-/// the 403 is answered when the token has no tenant or a role this build does not know.
+/// The requester of a request, once it has at least the role `needed` in its tenant: the
+/// operation's row of the permission matrix (docs/architecture/permissions.md, section
+/// `## assistant`), checked with service-kit's `UserIdentity::require` before the body or the
+/// database. A refusal is its 403 `permission_denied` with `cache-control: no-store`, logged at
+/// INFO as `refused to <action>`.
 #[allow(
     clippy::result_large_err,
     reason = "the error is the response to answer at once"
 )]
-fn requester(user: &UserIdentity, action: &'static str) -> Result<Requester, Response> {
-    match user.tenant() {
-        Some(grant) if grant.role.includes(TenantRole::Viewer) => Ok(Requester {
-            principal: Principal {
-                tenant_id: grant.id,
-                user_id: user.user_id(),
-            },
-            role: grant.role,
-        }),
-        _ => {
-            tracing::info!(
-                user_id = %user.user_id(),
-                action,
-                "refused: no tenant or no known role in it"
-            );
-            Err(error(ErrorBody::new(ErrorCode::PermissionDenied)))
-        }
+fn requester(
+    user: &UserIdentity,
+    needed: TenantRole,
+    action: &'static str,
+) -> Result<Requester, Response> {
+    if let Err(refused) = user.require(Requirement::Tenant(needed), action) {
+        return Err(refused.into_response());
     }
+    // A tenant requirement that passed means a tenant; answer the same refusal regardless.
+    Requester::of(user).ok_or_else(|| error(ErrorBody::new(ErrorCode::PermissionDenied)))
 }
 
 /// The path's dashboard ID; `None` (answered with [`not_found`]) when it is not a UUID.

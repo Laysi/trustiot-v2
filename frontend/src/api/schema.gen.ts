@@ -4564,7 +4564,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description No tenant, or a viewer (`permission_denied`, `dashboard.editor_required`). */
+            /** @description No tenant, or a role below editor (`permission_denied`). */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -4632,7 +4632,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description No tenant, or a viewer (`permission_denied`, `dashboard.editor_required`). */
+            /** @description No tenant, or a role below editor (`permission_denied`). */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -4812,7 +4812,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description No tenant, a viewer (`dashboard.editor_required`), or not the conversation's owner (`dashboard.owner_required`) (`permission_denied`). */
+            /** @description No tenant, or a role below editor (`permission_denied`); not the draft's conversation's owner (`permission_denied`, `dashboard.owner_required`). */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -4911,7 +4911,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description No tenant, a viewer restoring a saved dashboard (`dashboard.editor_required`), or someone other than a draft's conversation owner (`dashboard.owner_required`) (`permission_denied`). */
+            /** @description No tenant or no role in it (`permission_denied`); a viewer restoring a saved dashboard (`permission_denied`, `dashboard.editor_required`), or someone other than a draft's conversation owner (`permission_denied`, `dashboard.owner_required`). */
             403: {
                 headers: {
                     [name: string]: unknown;

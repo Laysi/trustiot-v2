@@ -42,7 +42,7 @@ use assistant::dashboards::caps::{Limited, RunCaps};
 use assistant::dashboards::checker::Checker;
 use assistant::dashboards::limits::VersionBudget;
 use assistant::dashboards::runner::DatasetRunner;
-use assistant::dashboards::store::{self, Author, NewVersion, Requester, StoreError};
+use assistant::dashboards::store::{self, Author, NewVersion, StoreError};
 use assistant::delegation::IDENTITY_TIMEOUT;
 use assistant::history::Principal;
 use assistant::model::anthropic::AnthropicGateway;
@@ -209,13 +209,6 @@ impl Person {
         Principal {
             tenant_id: self.tenant(),
             user_id: self.claims.sub,
-        }
-    }
-
-    pub fn requester(&self) -> Requester {
-        Requester {
-            principal: self.principal(),
-            role: self.role(),
         }
     }
 
@@ -565,7 +558,7 @@ impl World {
     ) -> Result<VersionCreated, StoreError> {
         let mut tx = self.tx(person).await;
         let published =
-            store::publish(&mut tx, person.requester(), draft, version, unlimited).await;
+            store::publish(&mut tx, &self.user(person), draft, version, unlimited).await;
         finish(tx, published).await
     }
 

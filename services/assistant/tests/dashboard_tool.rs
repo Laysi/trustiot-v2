@@ -1208,7 +1208,7 @@ async fn a_saved_dashboard_becomes_this_conversations_draft_once() {
 
     // An archived saved dashboard is not taken.
     let mut tx = setup.world.tx(&editor).await;
-    store::set_archived(&mut tx, editor.requester(), saved, true)
+    store::set_archived(&mut tx, &setup.world.user(&editor), saved, true)
         .await
         .expect("archive");
     tx.commit().await.expect("commit");

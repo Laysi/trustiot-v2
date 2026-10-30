@@ -395,8 +395,13 @@ async fn the_requests_role_decides_who_publishes_restores_and_archives() {
         json!({"can_publish": false, "can_restore": true, "can_archive": false})
     );
 
-    // A viewer publishes nothing, and restores and archives no saved dashboard.
-    let refusals = [
+    // A viewer publishes nothing, and restores and archives no saved dashboard. Publishing and
+    // archiving require editor at the handler (the permission matrix), so a viewer is refused
+    // from the token alone, before any lookup: a dashboard that does not exist gets the same
+    // 403. Restoring requires viewer there, since a draft's owner restores it with any role;
+    // the store refuses a viewer's restore of a saved dashboard it can see.
+    let missing = DashboardId::generate();
+    let token_refusals = [
         (
             Method::POST,
             action(draft, "publish"),
@@ -404,21 +409,41 @@ async fn the_requests_role_decides_who_publishes_restores_and_archives() {
         ),
         (
             Method::POST,
-            action(saved, "restore"),
-            Some(json!({"from_version": 1, "base_version": 1})),
+            action(missing, "publish"),
+            Some(json!({"version": 1})),
         ),
         (Method::PUT, action(saved, "archive"), None),
         (Method::DELETE, action(saved, "archive"), None),
+        (Method::PUT, action(missing, "archive"), None),
+        (Method::DELETE, action(missing, "archive"), None),
     ];
-    for (method, path, body) in &refusals {
+    for (method, path, body) in &token_refusals {
         let answer = call(base, method.clone(), path, Some(&as_viewer), body.as_ref()).await;
-        assert_error(
-            &answer,
-            403,
-            "permission_denied",
-            "dashboard.editor_required",
-        );
+        assert_error(&answer, 403, "permission_denied", "error.permission_denied");
     }
+    let answer = call(
+        base,
+        Method::POST,
+        &action(saved, "restore"),
+        Some(&as_viewer),
+        Some(&json!({"from_version": 1, "base_version": 1})),
+    )
+    .await;
+    assert_error(
+        &answer,
+        403,
+        "permission_denied",
+        "dashboard.editor_required",
+    );
+    let answer = call(
+        base,
+        Method::POST,
+        &action(missing, "restore"),
+        Some(&as_viewer),
+        Some(&json!({"from_version": 1, "base_version": 1})),
+    )
+    .await;
+    assert_not_found(&answer);
     assert_eq!(version_count(&world, saved).await, 1);
     assert_eq!(version_count(&world, draft).await, 1);
 
@@ -481,12 +506,7 @@ async fn the_requests_role_decides_who_publishes_restores_and_archives() {
         Some(&json!({"version": 3})),
     )
     .await;
-    assert_error(
-        &answer,
-        403,
-        "permission_denied",
-        "dashboard.editor_required",
-    );
+    assert_error(&answer, 403, "permission_denied", "error.permission_denied");
 
     // The kinds: a saved dashboard is not published, a draft is not archived.
     let as_editor = world.token(&editor);
@@ -994,7 +1014,7 @@ async fn versions_added_by_publishing_and_restoring_are_limited_per_user_and_ten
             &refused,
             403,
             "permission_denied",
-            "dashboard.editor_required",
+            "error.permission_denied",
         );
     }
     let erin_draft = draft_with_two_versions(&world, &erin).await;

@@ -36,8 +36,13 @@
 //! the row holding the content restored (`content_version`; a restore of a restore points at the
 //! same row, so a reference is one step), and every read takes a version's content from that row.
 //! So only the tool's writes and publishing store content. Who may publish, restore and archive is checked here,
-//! from the [`Requester`]'s role and [`Access`], with the same rule the API shows as
-//! [`Permissions`] ([`permissions`]). Publishing and restoring ask the caller's budget
+//! from the request's verified identity and [`Access`], with the same rule the API shows as
+//! [`Permissions`] ([`permissions`]). The API's handler has already required the role the
+//! operation needs (`UserIdentity::require`, the permission matrix in
+//! docs/architecture/permissions.md, section `## assistant`); the store checks the editor role of
+//! publishing and archiving again with service-kit's `UserIdentity::meets`, which logs nothing,
+//! and takes the role [`permissions`] reads from the same identity ([`Requester::of`]).
+//! Publishing and restoring ask the caller's budget
 //! (`admit`, [`super::limits::VersionBudget`] in the API) only after every check passed, just
 //! before they write, so a refused request counts nothing.
 //!
@@ -60,6 +65,7 @@ use contract::api::dashboard::public::{
 };
 use contract::api::dashboard::spec::{Dataset, Spec, SpecError, validate_version};
 use contract::{DashboardId, TenantId, TenantRole, UserId};
+use service_kit::identity::{Requirement, UserIdentity};
 use service_kit::tenant::TenantTransaction;
 use sqlx::Row;
 use sqlx::postgres::PgRow;
@@ -325,7 +331,7 @@ pub enum StoreError {
     /// The content cannot be stored as it is (U+0000 in text).
     #[error("the content cannot be stored: {0}")]
     Unstorable(&'static str),
-    /// The transaction is for another tenant than the caller's.
+    /// The transaction is for another tenant than the caller's, or the caller has none.
     #[error("the transaction's tenant is not the caller's")]
     WrongTenant,
     /// A stored row does not read back as a dashboard.
@@ -361,11 +367,43 @@ pub enum Access {
     Member,
 }
 
-/// A user of the public API: who, and the role the request's identity carries in the tenant.
+/// A user of the API: who, and the role the request's identity carries in the tenant.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Requester {
     pub principal: Principal,
     pub role: TenantRole,
+}
+
+impl Requester {
+    /// The requester of `user`'s request: the user in the token's tenant, with the token's role
+    /// there (a role this build does not know grants nothing in [`permissions`]). `None` without
+    /// a tenant.
+    #[must_use]
+    pub fn of(user: &UserIdentity) -> Option<Self> {
+        let grant = user.tenant()?;
+        Some(Self {
+            principal: Principal {
+                tenant_id: grant.id,
+                user_id: user.user_id(),
+            },
+            role: grant.role,
+        })
+    }
+}
+
+/// The store's second check that `user` is an editor or admin in the token's tenant, after the
+/// handler's `require`: service-kit's rule, without its log ([`StoreError::EditorRequired`]).
+fn editor(user: &UserIdentity) -> Result<(), StoreError> {
+    user.meets(Requirement::Tenant(TenantRole::Editor))
+        .map_err(|_| StoreError::EditorRequired)
+}
+
+/// The requester of `user`'s request, in the transaction's tenant ([`StoreError::WrongTenant`]
+/// without a tenant or in another one).
+fn requester_in(tx: &TenantTransaction, user: &UserIdentity) -> Result<Requester, StoreError> {
+    let requester = Requester::of(user).ok_or(StoreError::WrongTenant)?;
+    check_tenant(tx, requester.principal.tenant_id)?;
+    Ok(requester)
 }
 
 /// The user and question a tool's write belongs to.
@@ -701,8 +739,10 @@ pub async fn fork(
 /// draft's next version then starts from the version written when `version` is the draft's
 /// latest; after the first publish of an older version it starts from none.
 ///
-/// Checked in this order: the draft can be seen ([`StoreError::NotFound`]); the requester is an
-/// editor or admin ([`StoreError::EditorRequired`]); it is a draft
+/// `user` is the request's verified identity; the transaction must be its tenant's
+/// ([`StoreError::WrongTenant`]). Checked in this order: the draft can be seen
+/// ([`StoreError::NotFound`]); `user` is an editor or admin, the second check after the
+/// handler's (`UserIdentity::meets`, [`StoreError::EditorRequired`]); it is a draft
 /// ([`StoreError::DraftRequired`]); the requester owns its conversation
 /// ([`StoreError::OwnerRequired`]); the version exists ([`StoreError::VersionNotFound`]); the
 /// saved dashboard is not archived ([`StoreError::Archived`]) and its latest version is the one
@@ -716,20 +756,18 @@ pub async fn fork(
 /// As above; a database failure.
 pub async fn publish(
     tx: &mut TenantTransaction,
-    requester: Requester,
+    user: &UserIdentity,
     draft_id: DashboardId,
     version: u32,
     admit: impl FnOnce(DashboardKind) -> Result<(), Limited>,
 ) -> Result<VersionCreated, StoreError> {
+    let requester = requester_in(tx, user)?;
     let tenant = requester.principal.tenant_id;
-    check_tenant(tx, tenant)?;
     let draft = lock(tx, tenant, draft_id)
         .await?
         .ok_or(StoreError::NotFound)?;
     let access = visible(tx, requester.principal, &draft).await?;
-    if !requester.role.includes(TenantRole::Editor) {
-        return Err(StoreError::EditorRequired);
-    }
+    editor(user)?;
     if draft.kind != DashboardKind::Draft {
         return Err(StoreError::DraftRequired);
     }
@@ -789,10 +827,12 @@ pub async fn publish(
 /// in a draft is based on the version `from_version` is based on (or none), and the draft's next
 /// version starts from it too.
 ///
-/// Checked in this order: the dashboard can be seen ([`StoreError::NotFound`]); for a saved
-/// dashboard the requester is an editor or admin ([`StoreError::EditorRequired`]), for a draft
-/// the requester owns its conversation ([`StoreError::OwnerRequired`]); `from_version` exists
-/// ([`StoreError::VersionNotFound`]); the dashboard is not archived ([`StoreError::Archived`]);
+/// `user` is the request's verified identity; the transaction must be its tenant's
+/// ([`StoreError::WrongTenant`]). Checked in this order: the dashboard can be seen
+/// ([`StoreError::NotFound`]); for a saved dashboard the token's role is editor or admin
+/// ([`permissions`], [`StoreError::EditorRequired`]), for a draft `user` owns its conversation
+/// ([`StoreError::OwnerRequired`]); `from_version` exists ([`StoreError::VersionNotFound`]); the
+/// dashboard is not archived ([`StoreError::Archived`]);
 /// `base_version` is the latest ([`StoreError::VersionConflict`]); `from_version`'s content is
 /// not the latest version's ([`StoreError::Unchanged`]); it has room for one more
 /// ([`StoreError::TooManyVersions`]). Then `admit` is asked, with the dashboard's kind, whether
@@ -803,14 +843,14 @@ pub async fn publish(
 /// As above; a database failure.
 pub async fn restore(
     tx: &mut TenantTransaction,
-    requester: Requester,
+    user: &UserIdentity,
     dashboard_id: DashboardId,
     from_version: u32,
     base_version: u32,
     admit: impl FnOnce(DashboardKind) -> Result<(), Limited>,
 ) -> Result<VersionCreated, StoreError> {
+    let requester = requester_in(tx, user)?;
     let tenant = requester.principal.tenant_id;
-    check_tenant(tx, tenant)?;
     let row = lock(tx, tenant, dashboard_id)
         .await?
         .ok_or(StoreError::NotFound)?;
@@ -861,8 +901,10 @@ pub async fn restore(
 /// Archives (`archived` true) or unarchives a saved dashboard. Archiving an archived one keeps
 /// its archive time; unarchiving one that is not archived changes nothing.
 ///
-/// Checked in this order: the dashboard can be seen ([`StoreError::NotFound`]); the requester
-/// is an editor or admin ([`StoreError::EditorRequired`]); it is a saved dashboard
+/// `user` is the request's verified identity; the transaction must be its tenant's
+/// ([`StoreError::WrongTenant`]). Checked in this order: the dashboard can be seen
+/// ([`StoreError::NotFound`]); `user` is an editor or admin, the second check after the
+/// handler's (`UserIdentity::meets`, [`StoreError::EditorRequired`]); it is a saved dashboard
 /// ([`StoreError::SavedRequired`]).
 ///
 /// # Errors
@@ -870,19 +912,17 @@ pub async fn restore(
 /// As above; a database failure.
 pub async fn set_archived(
     tx: &mut TenantTransaction,
-    requester: Requester,
+    user: &UserIdentity,
     dashboard_id: DashboardId,
     archived: bool,
 ) -> Result<ArchiveState, StoreError> {
+    let requester = requester_in(tx, user)?;
     let tenant = requester.principal.tenant_id;
-    check_tenant(tx, tenant)?;
     let row = lock(tx, tenant, dashboard_id)
         .await?
         .ok_or(StoreError::NotFound)?;
     let access = visible(tx, requester.principal, &row).await?;
-    if !requester.role.includes(TenantRole::Editor) {
-        return Err(StoreError::EditorRequired);
-    }
+    editor(user)?;
     if !permissions(row.kind, access, requester.role).can_archive {
         return Err(StoreError::SavedRequired);
     }
