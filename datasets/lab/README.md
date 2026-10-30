@@ -2,7 +2,7 @@
 
 lab 實機錄下的資料集的索引與標註（功能重建清單 M7）：供 AI 開發、警報回測、補送與分析回歸使用。資料集本身放物件儲存，這裡只放索引與標註，例如每段資料的來源、時間範圍、物件儲存位置，以及插入的人工異常片段與預期的觸發結果。唯一的例外是合成 fixture（[`synthetic/`](synthetic/)）：它很小、內容固定，資料檔直接進版控。
 
-讀索引、檢查資料、載入 ClickHouse 與錄製的程式是 [`tools/lab-dataset`](../../tools/lab-dataset/README.md)（Laysi/trustiot-v2#679）。
+讀索引、檢查資料、載入 ClickHouse、錄製與從 ClickHouse 匯出的程式是 [`tools/lab-dataset`](../../tools/lab-dataset/README.md)（Laysi/trustiot-v2#679）。
 
 ## 目錄結構
 
@@ -257,10 +257,14 @@ CLICKHOUSE_URL=http://127.0.0.1:18123 CLICKHOUSE_USER=<帳號> CLICKHOUSE_PASSWO
 
 `https://` 的 ClickHouse 另外設 `CLICKHOUSE_CA_FILE`（只信任這個 CA）。選項見 `cargo run -p lab-dataset -- --help`：`--device <key>=<uuid>` 指定設備 ID，`--shift-ms` 指定確切的位移，`--end-before <now|時間>` 加 `--align-s`（預設 86400）取整段的位移。載入結果（與 `Loaded` 相同，含位移後的人工異常片段）以 JSON 印到標準輸出。
 
-錄製見下一節：
+錄製與匯出見後面兩節：
 
 ```sh
 cargo run --release -p lab-dataset -- record <repo 外的設定檔> --out <repo 外的目錄> [--duration-s <秒>]
+
+# 帳密同樣只從環境變數讀；讀取帳號見「匯出」
+cargo run --release -p lab-dataset -- export <repo 外的設定檔> --tenant <租戶 UUID> --gateway <閘道器 ID> \
+  --from <起> --to <止> --out <repo 外的目錄>
 ```
 
 ## 錄製
@@ -316,6 +320,112 @@ interval_s = 60
 - 分段檔在批次之間切開：下一批會讓檔案超過 `segment_bytes` 時先關檔（單一批次比上限大時自成一個分段）。
 
 **限制：載入時每批一次 INSERT。** 載入工具照 ingest 的方式一批一次 INSERT，ClickHouse 每次 INSERT 產生一個 part。10 秒一批時，30 天的錄製約 259,200 批，載入工具不間斷地送出這麼多 INSERT，背景 merge 跟不上時，同一個 partition（遙測窄表依 `received_at` 的月份分）的 part 數超過 `parts_to_delay_insert` 會被延遲，超過 `parts_to_throw_insert` 會被拒絕（`TOO_MANY_PARTS`），載入在中途失敗（已寫入的批次留著，見「只載一次」）。目前不做緩解；錄長期資料時可以把 `batch_s` 拉長（60 秒時 30 天約 43,200 批）。若仍不夠，之後的選項是載入工具控制送出速度，或把連續幾批合成一次 INSERT（後者會讓「一批一個 part」不再成立，materialized view 看到的 INSERT 節奏也跟著改變）。
+
+## 匯出
+
+`lab-dataset export` 把一個租戶的一台閘道器在指定時間範圍內送上來的資料，從 ClickHouse 的遙測窄表（`trustiot.telemetry`）與批次完成表（`trustiot.stream_commits`）讀回成本頁格式的資料集（索引加分段檔），是 `load` 的反向。第一版 lab 資料集就是用它從展示環境匯出展示用閘道器送上來的資料（Laysi/trustiot-v2#680）。
+
+```sh
+CLICKHOUSE_URL=<url> CLICKHOUSE_USER=<讀取帳號> CLICKHOUSE_PASSWORD=<密碼> \
+  cargo run --release -p lab-dataset -- export <repo 外的設定檔> \
+  --tenant <租戶 UUID> --gateway <閘道器 ID> \
+  --from 2026-10-30T16:08:00.000Z --to 2026-11-13T16:08:00.000Z --out <repo 外的目錄>
+```
+
+- **時間範圍**：`--from` 含、`--to` 不含，依 ingest 的接收時間 `received_at`（與分區、保存期限同一欄），寫法與索引的時間相同（UTC、毫秒、`Z`）。同一批的列共用一個 `received_at`，所以範圍不會切開一批；串流可以從任何序號開始，只是之後要連續。
+- **時間保持原樣**：不位移，寫出的 `ts`、`received_at` 就是 ClickHouse 裡的值（`load` 才位移）。
+- **寫到哪**：`<--out>/<設定檔的 name>/`，必須還不存在；讀完、全部檢查過才開始寫檔，所以被拒絕的匯出不留下檔案。寫完以 `Dataset::open`（與 `check` 相同）檢查整份資料集，並把筆數、批次數、未完成的批次數、略過的重複列與時間範圍以 JSON 印到標準輸出。讀到的列都先放在記憶體裡，列數多時記憶體跟著增加。
+- **只發 SELECT**：只有兩個靜態的 `SELECT`，租戶、閘道器、串流與時間以查詢參數綁定，不組 SQL 字串（`tools/sql-check`）。時間範圍每小時一次查詢，一次查詢的結果不能超過 16 MiB（HTTP client 的上限），超過時回報錯誤，不會寫出殘缺的資料集。
+
+### 讀取帳號
+
+遙測表與完成表都有 `deny_by_default` row policy：沒有被其他 policy 點名的帳號一列也讀不到，**包括管理帳號**（[services/ingest](../../services/ingest/README.md)「租戶隔離」）。所以匯出要用被 policy 點名的帳號，讀到 0 列時指令報錯、不寫出資料集（可能是範圍內沒有資料，也可能是帳號沒有被點名）。三種現成的帳號都不適合：
+
+- 管理帳號：讀到 0 列。
+- 租戶的唯讀帳號：只能讀三個租戶 view，沒有 `stream_id`、`batch_seq`，也沒有完成表。
+- 服務的寫入帳號（`trustiot_ingest_writer`）：讀得到，但同時有 `INSERT` 與 `ALTER DELETE`，匯出用不到，不要把這種權限放在匯出的指令列上。
+
+建議由管理者建一個只讀的帳號，匯出完就刪（密碼依 [docs/architecture/secrets.md](../../docs/architecture/secrets.md) 處理，不經指令參數）。下面是範例，兩條 policy 把帳號限制在一個租戶：
+
+```sql
+CREATE USER <讀取帳號> IDENTIFIED WITH sha256_password BY '<密碼>';
+GRANT SELECT ON trustiot.telemetry TO <讀取帳號>;
+GRANT SELECT ON trustiot.stream_commits TO <讀取帳號>;
+CREATE ROW POLICY lab_export ON trustiot.telemetry AS PERMISSIVE FOR SELECT
+  USING tenant_id = toUUID('<租戶 UUID>') TO <讀取帳號>;
+CREATE ROW POLICY lab_export ON trustiot.stream_commits AS PERMISSIVE FOR SELECT
+  USING tenant_id = toUUID('<租戶 UUID>') TO <讀取帳號>;
+
+-- 匯出完成後
+DROP ROW POLICY lab_export ON trustiot.telemetry, trustiot.stream_commits;
+DROP USER <讀取帳號>;
+```
+
+讀得到遙測表、卻沒被完成表的 policy 點名的帳號，會讓每一批都看起來沒有完成紀錄；指令在範圍內一筆完成紀錄都讀不到時報錯，不寫出「全部未完成」的資料集。
+
+### 設定檔
+
+ClickHouse 裡沒有設備的型號、轉換器與站號、輪詢間隔，也沒有資料點的 `kind`、`unit`、`wraps_at`，所以由設定檔提供，並把每台設備對應到它的 UUID。格式就是「錄製」的設定檔：`[[models]]` 與 `[[devices]]` 的寫法相同（資料點的型別同樣由 `data_type`、`scale`、`offset` 推出，暫存器的欄位照錄製的規則檢查但匯出不用它們），每台設備多一個 `id`，也就是它在 `trustiot.telemetry` 的 `device_id`。錄製的設定檔加上 `id` 就可以直接用於匯出：`host`、`port`、`batch_s` 會被接受並忽略。設定檔與 `--out` 一樣放在 repo 外，索引仍然只有邏輯代號與站號，不寫位址、主機名稱或 port。
+
+```toml
+name = "lab"                       # 資料集名稱：輸出目錄與索引的 name
+description = "一句話說明"
+segment_bytes = 67108864           # 分段檔的上限（1024 到 64 MiB，預設 64 MiB）
+
+[[converters]]                     # 只需要邏輯代號
+key = "rs485-a"
+
+[[streams]]                        # 可省略：閘道器自己取的串流 ID 對應成索引的代號
+key = "live"
+id = "<閘道器的串流 ID>"
+description = "一句話說明"          # 可省略
+
+[[models]]
+name = "transmitter"
+points = [
+  { key = "temperature", function_code = 4, address = 0, data_type = "i16", scale = 0.1, kind = "gauge", unit = "degC" },
+  { key = "humidity", function_code = 4, address = 1, data_type = "u16", scale = 0.1, kind = "gauge", unit = "%RH" },
+]
+
+[[devices]]
+key = "sensor-1"
+id = "00000000-0000-4000-8000-000000000001"    # 這台設備在 ClickHouse 的 device_id
+model = "transmitter"
+converter = "rs485-a"
+unit = 1
+interval_s = 60
+
+[[devices]]
+key = "sensor-2"
+id = "00000000-0000-4000-8000-000000000002"
+model = "transmitter"
+converter = "rs485-a"
+unit = 2
+interval_s = 60
+```
+
+- **串流的代號**：ClickHouse 的 `stream_id` 是閘道器自己取的文字，索引的代號只能是小寫英文、數字與 `-`，也不該把閘道器的 ID 寫進公開的 repo。`[[streams]]` 列出的串流用它的 `key`；沒列的串流依第一批抵達的先後叫 `stream-1`、`stream-2`……（不與列出的代號重複）。索引不寫串流的原始 ID，也不寫閘道器 ID、租戶 ID 與設備 UUID。
+- **完成紀錄**：每個串流以 `seq` 在 `[最小序號, 最大序號]` 內查一次完成表（鍵是閘道器加串流加序號）。有完成紀錄的批次是已完成，沒有的列進該分段的 `uncommitted`。
+- **一批的順序**：ClickHouse 不保留一批裡的讀值順序，所以每一批依設定檔裡設備與資料點的順序、再依讀值時間排列。批次依接收時間排列，同一時間的批次依串流 ID、序號排列。
+
+### 真實資料違反 format 1 的規則時
+
+合成 fixture 與錄製工具寫出的資料都守規則，從正在運轉的 ingest 讀回的資料不一定。匯出對下列情況有固定的處理，其餘不符合 format 1 的地方由最後的 `Dataset::open` 擋下。所有「拒絕」都在寫任何檔案之前發生，訊息指出是哪個串流、批次、設備與資料點。
+
+| 情況 | 處理 |
+| --- | --- |
+| 同一批裡同一個設備、資料點、讀值時間有多筆，值相同（例如 ingest 重寫一批、舊的列還沒刪掉） | 留一筆，列入 JSON 的 `repeated_rows_dropped` |
+| 同一筆讀值出現在較早的批次與後來的批次（補送重複），值相同 | 留最早抵達的一筆，後來的丟掉，同樣列入 `repeated_rows_dropped` |
+| 同一個設備、資料點、讀值時間有多筆，值不同 | 拒絕：不替資料決定哪一個對 |
+| 一批的列有不同的 `received_at`（同一個串流的序號從頭來過、或同一批寫了兩次） | 拒絕：縮小 `--from`、`--to` 避開其中一個 |
+| 已完成的批次，去掉同批的重複列之後，筆數不等於完成紀錄的 `row_count` | 拒絕：這批可能不完整 |
+| 同一批有兩筆 `row_count` 不同的完成紀錄 | 拒絕 |
+| 一個串流的批次依接收時間排列後序號不連續、重複或倒退 | 拒絕：format 1 要求序號連續（與 [protocol](../../crates/protocol/README.md)「遙測與確認」規則 1 相同）；從缺口之後開始匯出，或先修資料 |
+| 一批的列全是較早批次已有的讀值 | 拒絕：資料集沒有空批次，序號會跳號 |
+| 設定檔沒有列出的設備或資料點 | 拒絕：資料集要含閘道器送來的全部資料，請把它加進設定檔（不靜默略過） |
+| 值的型別與設定檔推出的資料點型別不同、浮點數不是有限的數、計數器的值不在 `0` 到 `wraps_at - 1`、文字超過 1024 bytes | 拒絕：通常是設定檔的 `data_type`、`scale`、`offset` 或 `wraps_at` 寫錯 |
+| 範圍內沒有任何一批有完成紀錄 | 拒絕：見「讀取帳號」 |
+| 讀到 0 列 | 拒絕：見「讀取帳號」 |
 
 ## 合成 fixture
 

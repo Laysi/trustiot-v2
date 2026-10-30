@@ -22,9 +22,11 @@
 mod support;
 
 use std::os::linux::net::SocketAddrExt;
+use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::atomic::{AtomicU32, Ordering};
+use std::time::Duration;
 
 use agent::clock::{GatewayClock, SystemWall};
 use agent::link::{ConnectError, Connector, LinkSettings};
@@ -504,6 +506,63 @@ async fn leave_a_batch(state: &Path) -> Vec<Reading> {
     readings
 }
 
+/// Whether a lock this process took on the file `path` is still held, by this process or by a
+/// child's copy of the handle (`/proc/locks` names the process that took a lock, and the file
+/// as `<major>:<minor>:<inode>`). Only the inode is compared: on btrfs the device there is the
+/// file system's, not the subvolume's that `stat` reports.
+fn locked(path: &Path) -> bool {
+    let inode = format!(":{}", std::fs::metadata(path).unwrap().ino());
+    let pid = std::process::id().to_string();
+    std::fs::read_to_string("/proc/locks")
+        .unwrap()
+        .lines()
+        .any(|line| {
+            let fields: Vec<&str> = line.split_whitespace().collect();
+            fields.windows(2).any(|pair| {
+                pair[0] == pid && pair[1].matches(':').count() == 2 && pair[1].ends_with(&inode)
+            })
+        })
+}
+
+/// Waits until no lock this process took on the directory `dir` is held any more, without
+/// taking it.
+///
+/// Laysi/trustiot-v2#817: the test's own pipeline has held the buffer directory's lock, and a
+/// child that another test of this executable spawned meanwhile keeps a copy of every
+/// descriptor until it executes its program, so the lock can outlive the pipeline for as long
+/// as a loaded machine holds that child back. The agent started next would then find its
+/// buffer directory locked and try again only after `buffer::DISK_RETRY`. Waiting here takes no
+/// lock (a lock taken to check would be copied the same way), and once no copy holds it, no
+/// child created later can get one.
+async fn unlocked(dir: &Path) {
+    bounded(
+        format!(
+            "the lock of {} to be released (a child process keeps a copy until it executes \
+             its program)",
+            dir.display()
+        ),
+        async {
+            while locked(dir) {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        },
+    )
+    .await;
+}
+
+/// The lock check that [`unlocked`] waits with sees a directory's `flock` while it is held, and
+/// not after.
+#[tokio::test]
+async fn the_lock_check_sees_a_directorys_lock() {
+    let scratch = testkit::mqtt::ScratchDir::new("agent-binary-lock");
+    let handle = std::fs::File::open(scratch.path()).unwrap();
+    assert!(!locked(scratch.path()));
+    handle.try_lock().unwrap();
+    assert!(locked(scratch.path()));
+    drop(handle);
+    unlocked(scratch.path()).await;
+}
+
 /// The sizes of the segment files in the offline buffer of the state directory `state`.
 fn segments(state: &Path) -> Vec<u64> {
     std::fs::read_dir(state.join(upload::BUFFER_DIRECTORY))
@@ -530,6 +589,7 @@ async fn a_batch_in_the_state_directory_goes_up_and_the_clouds_acknowledgement_r
     let files = Files::new(&pki, front.address().port());
     let state = PathBuf::from(files.path("state"));
     let readings = leave_a_batch(&state).await;
+    unlocked(&state.join(upload::BUFFER_DIRECTORY)).await;
     assert!(
         segments(&state).iter().any(|len| *len > 16),
         "the batch is on disk: {:?}",

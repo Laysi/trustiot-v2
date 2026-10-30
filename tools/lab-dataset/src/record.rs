@@ -19,9 +19,8 @@
 //! when the batch closed: what ingest would have stamped with no network delay and no outage.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::fs::{self, File};
+use std::fs;
 use std::future::Future;
-use std::io::{BufWriter, Write as _};
 use std::ops::ControlFlow;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -40,13 +39,13 @@ use protocol::{
     ConfigVersion, DeviceId, Message, ModelName, PointKey, Seq, StreamId, UnixMillis, V1,
 };
 use serde::{Deserialize, Serialize};
-use sha2::{Digest as _, Sha256};
 use tokio::sync::{mpsc, watch};
 use tokio::task::JoinSet;
 use tokio::time::{Instant, MissedTickBehavior};
 
 use crate::index::{self, MAX_SEGMENT_BYTES, PointKind, ValueType, check_key};
-use crate::{Dataset, Error, INDEX_FILE, time};
+use crate::writer::{Header, Row, SegmentWriter};
+use crate::{Dataset, Error, time};
 
 /// The stream every recorded batch belongs to.
 pub const STREAM: &str = "live";
@@ -503,7 +502,10 @@ fn plan(config: &Config) -> Result<(Vec<Planned>, Vec<index::Device>), String> {
     Ok((planned, index_devices))
 }
 
-fn plan_point(model: &str, point: &PointConfig) -> Result<(DataPoint, index::Point), String> {
+pub(crate) fn plan_point(
+    model: &str,
+    point: &PointConfig,
+) -> Result<(DataPoint, index::Point), String> {
     let at = || format!("model `{model}`, point `{}`", point.key);
     if !index::is_point_key(&point.key) {
         return Err(format!("{}: not a point key", at()));
@@ -613,70 +615,14 @@ impl Former {
     }
 }
 
-/// One line of a segment file, in the field order of `datasets/lab/README.md`.
-#[derive(Serialize)]
-struct Line<'a> {
-    stream: &'a str,
-    batch_seq: u64,
-    received_at: &'a str,
-    device: &'a str,
-    point: &'a str,
-    ts: String,
-    value_type: &'static str,
-    value: serde_json::Value,
-}
-
-/// A segment file being written.
-struct OpenSegment {
-    key: String,
-    location: String,
-    file: BufWriter<File>,
-    path: PathBuf,
-    hash: Sha256,
-    bytes: u64,
-    rows: u64,
-    reading_time: Option<(DateTime<Utc>, DateTime<Utc>)>,
-    receive_time: Option<(DateTime<Utc>, DateTime<Utc>)>,
-    first_batch: u64,
-    last_batch: u64,
-    series: BTreeMap<(String, String), u64>,
-}
-
-/// A closed segment's index entry.
-struct SegmentEntry {
-    key: String,
-    location: String,
-    bytes: u64,
-    sha256: String,
-    rows: u64,
-    reading_time: (DateTime<Utc>, DateTime<Utc>),
-    receive_time: (DateTime<Utc>, DateTime<Utc>),
-    batches: (u64, u64),
-    series: BTreeMap<(String, String), u64>,
-}
-
-fn widen(
-    range: Option<(DateTime<Utc>, DateTime<Utc>)>,
-    time: DateTime<Utc>,
-) -> Option<(DateTime<Utc>, DateTime<Utc>)> {
-    Some(range.map_or((time, time), |(start, end)| {
-        (start.min(time), end.max(time))
-    }))
-}
-
-/// Writes segment files and the index. Batches are numbered here, consecutively from 1, so that
-/// a batch whose every reading was dropped leaves no gap in the stream.
+/// Numbers the recorder's batches and hands them to the shared segment writer. Batches are
+/// numbered here, consecutively from 1, so that a batch whose every reading was dropped leaves
+/// no gap in the stream.
 struct Writer {
-    dir: PathBuf,
+    inner: SegmentWriter,
     name: String,
-    description: String,
-    batch_s: u32,
-    limit: u64,
-    devices: Vec<index::Device>,
     /// Each point's type and wrap value.
     declared: BTreeMap<(String, String), (ValueType, Option<u64>)>,
-    segments: Vec<SegmentEntry>,
-    open: Option<OpenSegment>,
     next_batch: u64,
     dropped: u64,
 }
@@ -694,16 +640,23 @@ impl Writer {
                 })
             })
             .collect();
-        Self {
-            dir: dir.to_path_buf(),
+        let header = Header {
             name: config.name.clone(),
             description: config.description.clone(),
-            batch_s: config.batch_s,
-            limit: config.segment_bytes,
-            devices,
+            origin: "Recorded by `lab-dataset record` (Laysi/trustiot-v2#679)".to_owned(),
+            streams: vec![(
+                STREAM.to_owned(),
+                format!(
+                    "Batches as the recorder formed them, every {} s",
+                    config.batch_s
+                ),
+            )],
+            segment_bytes: config.segment_bytes,
+        };
+        Self {
+            inner: SegmentWriter::new(dir, header, devices),
+            name: config.name.clone(),
             declared,
-            segments: Vec::new(),
-            open: None,
             next_batch: 1,
             dropped: 0,
         }
@@ -740,9 +693,6 @@ impl Writer {
     }
 
     fn write(&mut self, batch: &TelemetryBatch, received_at: DateTime<Utc>) -> Result<(), Error> {
-        let received_text = time::format(received_at);
-        let batch_seq = self.next_batch;
-        let mut text = String::new();
         let mut rows = Vec::new();
         for series in &batch.series {
             for sample in &series.samples {
@@ -751,291 +701,42 @@ impl Writer {
                     self.dropped += 1;
                     continue;
                 };
-                let ts = utc(sample.at.get())?;
-                let line = Line {
-                    stream: STREAM,
-                    batch_seq,
-                    received_at: &received_text,
+                rows.push(Row {
                     device,
                     point,
-                    ts: time::format(ts),
+                    ts: utc(sample.at.get())?,
                     value_type,
                     value,
-                };
-                let json = serde_json::to_string(&line)
-                    .map_err(|error| Error::Record(format!("cannot encode a line: {error}")))?;
-                text.push_str(&json);
-                text.push('\n');
-                rows.push((device.to_owned(), point.to_owned(), ts));
+                });
             }
         }
         if rows.is_empty() {
             return Ok(());
         }
-        let length = u64::try_from(text.len()).unwrap_or(u64::MAX);
-        if length > MAX_SEGMENT_BYTES {
-            return Err(Error::Record(format!(
-                "batch {batch_seq} is {length} bytes, more than a segment holds"
-            )));
-        }
-        if self
-            .open
-            .as_ref()
-            .is_some_and(|open| open.bytes + length > self.limit)
-        {
-            self.close_segment()?;
-        }
-        if self.open.is_none() {
-            self.open_segment(batch_seq)?;
-        }
-        let open = self
-            .open
-            .as_mut()
-            .ok_or_else(|| Error::Record("internal: segment".to_owned()))?;
-        open.file
-            .write_all(text.as_bytes())
-            .map_err(|error| Error::Io {
-                path: open.path.display().to_string(),
-                message: error.to_string(),
-            })?;
-        open.hash.update(text.as_bytes());
-        open.bytes += length;
-        open.last_batch = batch_seq;
-        for (device, point, ts) in rows {
-            open.rows += 1;
-            open.reading_time = widen(open.reading_time, ts);
-            *open.series.entry((device, point)).or_default() += 1;
-        }
-        open.receive_time = widen(open.receive_time, received_at);
+        self.inner
+            .write_batch(STREAM, self.next_batch, received_at, &rows, true)?;
         self.next_batch += 1;
         Ok(())
     }
 
-    fn open_segment(&mut self, first_batch: u64) -> Result<(), Error> {
-        let key = format!("part-{:04}", self.segments.len() + 1);
-        let location = format!("segments/{key}.jsonl");
-        let path = self.dir.join(&location);
-        let file = File::create_new(&path).map_err(|error| Error::Io {
-            path: path.display().to_string(),
-            message: error.to_string(),
-        })?;
-        self.open = Some(OpenSegment {
-            key,
-            location,
-            file: BufWriter::new(file),
-            path,
-            hash: Sha256::new(),
-            bytes: 0,
-            rows: 0,
-            reading_time: None,
-            receive_time: None,
-            first_batch,
-            last_batch: first_batch,
-            series: BTreeMap::new(),
-        });
-        Ok(())
-    }
-
-    /// Closes the open segment and rewrites the index with every closed one, so that a recording
-    /// that stops abruptly keeps a valid index of what it finished.
-    fn close_segment(&mut self) -> Result<(), Error> {
-        let Some(open) = self.open.take() else {
-            return Ok(());
-        };
-        let io = |error: std::io::Error| Error::Io {
-            path: open.path.display().to_string(),
-            message: error.to_string(),
-        };
-        let file = open
-            .file
-            .into_inner()
-            .map_err(|error| io(error.into_error()))?;
-        file.sync_all().map_err(io)?;
-        let (Some(reading_time), Some(receive_time)) = (open.reading_time, open.receive_time)
-        else {
-            return Err(Error::Record("internal: an empty segment".to_owned()));
-        };
-        self.segments.push(SegmentEntry {
-            key: open.key,
-            location: open.location,
-            bytes: open.bytes,
-            sha256: hex(&open.hash.finalize()),
-            rows: open.rows,
-            reading_time,
-            receive_time,
-            batches: (open.first_batch, open.last_batch),
-            series: open.series,
-        });
-        self.write_index()
-    }
-
-    fn index_path(&self) -> PathBuf {
-        self.dir.join(INDEX_FILE)
-    }
-
-    fn write_index(&self) -> Result<(), Error> {
-        let text = self.index_text();
-        let path = self.index_path();
-        let temporary = self.dir.join(format!("{INDEX_FILE}.partial"));
-        let io = |error: std::io::Error| Error::Io {
-            path: path.display().to_string(),
-            message: error.to_string(),
-        };
-        let mut file = File::create(&temporary).map_err(io)?;
-        file.write_all(text.as_bytes()).map_err(io)?;
-        file.sync_all().map_err(io)?;
-        fs::rename(&temporary, &path).map_err(io)
-    }
-
-    fn finish(mut self) -> Result<Recorded, Error> {
-        self.close_segment()?;
-        if self.segments.is_empty() {
+    fn finish(self) -> Result<Recorded, Error> {
+        let finished = self.inner.finish()?;
+        if finished.segments == 0 {
             return Err(Error::Record(
                 "nothing was read: no device answered with a value".to_owned(),
             ));
         }
-        let start = self.segments.iter().map(|s| s.reading_time.0).min();
-        let end = self.segments.iter().map(|s| s.receive_time.1).max();
         Ok(Recorded {
-            dataset: self.name.clone(),
-            index: self.index_path(),
-            segments: self.segments.len(),
-            rows: self.segments.iter().map(|s| s.rows).sum(),
-            batches: self.next_batch - 1,
+            dataset: self.name,
+            index: finished.index,
+            segments: finished.segments,
+            rows: finished.rows,
+            batches: finished.batches,
             dropped_readings: self.dropped,
-            start: start.map(time::format).unwrap_or_default(),
-            end: end.map(time::format).unwrap_or_default(),
+            start: finished.start.map(time::format).unwrap_or_default(),
+            end: finished.end.map(time::format).unwrap_or_default(),
         })
     }
-
-    fn index_text(&self) -> String {
-        let mut text = String::new();
-        let mut line = |line: String| {
-            text.push_str(&line);
-            text.push('\n');
-        };
-        line(
-            "# Recorded by `lab-dataset record` (Laysi/trustiot-v2#679); the format is in"
-                .to_owned(),
-        );
-        line("# datasets/lab/README.md. Converters appear only by their logical keys.".to_owned());
-        line(String::new());
-        line(format!("format = {}", index::FORMAT));
-        line(format!("name = {}", quote(&self.name)));
-        line("version = 1".to_owned());
-        line(format!("description = {}", quote(&self.description)));
-        line(String::new());
-        line("[[streams]]".to_owned());
-        line(format!("key = {}", quote(STREAM)));
-        line(format!(
-            "description = {}",
-            quote(&format!(
-                "Batches as the recorder formed them, every {} s",
-                self.batch_s
-            ))
-        ));
-        for device in &self.devices {
-            line(String::new());
-            line("[[devices]]".to_owned());
-            line(format!("key = {}", quote(&device.key)));
-            line(format!("model = {}", quote(&device.model)));
-            if let Some(converter) = &device.converter {
-                line(format!("converter = {}", quote(converter)));
-            }
-            line(format!("unit = {}", device.unit));
-            line(format!("interval_s = {}", device.interval_s));
-            line("points = [".to_owned());
-            for point in &device.points {
-                let mut fields = vec![
-                    format!("key = {}", quote(&point.key)),
-                    format!("type = {}", quote(point.value_type.as_str())),
-                    format!("kind = {}", quote(point_kind(point.kind))),
-                ];
-                if let Some(unit) = &point.unit {
-                    fields.push(format!("unit = {}", quote(unit)));
-                }
-                if let Some(wraps_at) = point.wraps_at {
-                    fields.push(format!("wraps_at = {wraps_at}"));
-                }
-                line(format!("  {{ {} }},", fields.join(", ")));
-            }
-            line("]".to_owned());
-        }
-        for segment in &self.segments {
-            let range = |(start, end): (DateTime<Utc>, DateTime<Utc>)| {
-                format!(
-                    "{{ start = {}, end = {} }}",
-                    quote(&time::format(start)),
-                    quote(&time::format(end))
-                )
-            };
-            line(String::new());
-            line("[[segments]]".to_owned());
-            line(format!("key = {}", quote(&segment.key)));
-            line(format!("location = {}", quote(&segment.location)));
-            line(format!("bytes = {}", segment.bytes));
-            line(format!("sha256 = {}", quote(&segment.sha256)));
-            line(format!("rows = {}", segment.rows));
-            line(format!("reading_time = {}", range(segment.reading_time)));
-            line(format!("receive_time = {}", range(segment.receive_time)));
-            line(format!(
-                "batches = [{{ stream = {}, first = {}, last = {} }}]",
-                quote(STREAM),
-                segment.batches.0,
-                segment.batches.1
-            ));
-            line("series = [".to_owned());
-            for ((device, point), rows) in &segment.series {
-                line(format!(
-                    "  {{ device = {}, point = {}, rows = {rows} }},",
-                    quote(device),
-                    quote(point)
-                ));
-            }
-            line("]".to_owned());
-        }
-        text
-    }
-}
-
-const fn point_kind(kind: PointKind) -> &'static str {
-    match kind {
-        PointKind::Gauge => "gauge",
-        PointKind::Cumulative => "cumulative",
-        PointKind::State => "state",
-    }
-}
-
-/// A one-line TOML basic string: quotation marks, backslashes and control characters escaped.
-fn quote(text: &str) -> String {
-    use std::fmt::Write as _;
-    let mut quoted = String::with_capacity(text.len() + 2);
-    quoted.push('"');
-    for character in text.chars() {
-        match character {
-            '"' => quoted.push_str("\\\""),
-            '\\' => quoted.push_str("\\\\"),
-            '\n' => quoted.push_str("\\n"),
-            '\t' => quoted.push_str("\\t"),
-            '\r' => quoted.push_str("\\r"),
-            control if control.is_control() => {
-                let _ = write!(quoted, "\\u{:04X}", u32::from(control));
-            }
-            other => quoted.push(other),
-        }
-    }
-    quoted.push('"');
-    quoted
-}
-
-fn hex(bytes: &[u8]) -> String {
-    bytes
-        .iter()
-        .fold(String::with_capacity(64), |mut hex, byte| {
-            use std::fmt::Write as _;
-            let _ = write!(hex, "{byte:02x}");
-            hex
-        })
 }
 
 #[cfg(test)]
@@ -1245,14 +946,5 @@ interval_s = 60
                 ("power_kw", ValueType::Float),
             ]
         );
-    }
-
-    #[test]
-    fn quoting_escapes() {
-        let text = "a \"b\"\n\\ \u{7f}\u{1} \u{3a3}";
-        let quoted = quote(text);
-        assert_eq!(quoted, "\"a \\\"b\\\"\\n\\\\ \\u007F\\u0001 \u{3a3}\"");
-        let parsed: toml::Table = toml::from_str(&format!("x = {quoted}")).unwrap();
-        assert_eq!(parsed["x"].as_str(), Some(text));
     }
 }

@@ -1,0 +1,2 @@
+EXP817-B 20000 drop-then-reopen rounds in 12.948415633s while 108846 children were spawned: 0 reopens refused with WouldBlock; longest reopen 6.677308ms; first: None
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 363 filtered out; finished in 12.95s
