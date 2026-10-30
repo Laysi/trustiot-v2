@@ -235,7 +235,7 @@ bun scripts/flux/components.ts    # 重寫 gotk-components.yaml 與控制器映�
 | chart 版本 | 自己的 `chart.yaml` 與 `values-saas.yaml`；deploy PR 把它與 SaaS 一起移到新版，只動它時用 `pin-chart.ts` | 換版與 SaaS 一樣是「合併即部署、revert 即回滾」，簽章驗證也相同；代價是一個 deploy PR 可能同時動兩個叢集 |
 | values | HelmRelease 依序讀 `values-saas.yaml`、`values-demo.yaml`，最後是 SOPS 加密的 Secret `trustiot-demo-values` 的四個 key，各自以 `targetPath` 與 `literal: true` 寫進一個值：`app-host` → `hosts.app`、`gateway-host` → `hosts.gateway`、`ota-host` → `hosts.ota`、`smtp-from` → `smtp.from` | 主機名稱與寄件人不公開（[密鑰與權限](../../docs/architecture/secrets.md)「公開 repo 的資訊規則」），只在加密的 Secret 裡。加密的內容在 PR 裡看不到，所以它只能設這四個值：整份 values 的寫法能改任何設定（映像、ingress、環境變數），沒有 `literal` 時 Flux 以 Helm 的 `--set` 語法讀值，逗號就能接上另一個 `路徑=值`。Secret 帶 `reconcile.fluxcd.io/watch: Enabled`，改了就升級 |
 | 入口的 ClusterIP | 固定：`values-demo.yaml` 以 `ingress.tunnel.clusterIP` 設一個展示機 Service 網段（`10.43.0.0/16`）靜態區段裡沒被使用的位址，tunnel 的路由指向這個位址（Laysi/trustiot-v2#478）。設為 `10.43.0.80`（Laysi/trustiot-v2#480），與換到含這個欄位的 chart 版本在同一個 PR，而且在展示環境第一次部署（Laysi/trustiot-v2#467）之前；較舊的 chart 不認得這個欄位，schema 拒絕整份 values，HelmRelease 就失敗 | 入口 Service 重建後拿回同一個位址，路由不失效，舊位址也不會被別的 Service 拿走而經 tunnel 公開；ClusterIP 建立後不能改，所以要在 Service 第一次建立前設好。選法與改位址的步驟見 [chart 的 README](../chart/README.md)「固定的入口 ClusterIP」 |
-| 服務 | `values-demo.yaml` 的 `services` 逐一打開切片的服務（目前 `identity`、`assets`、`certs`），`ingress.routes` 列出 app 主機的 cookie 路由（目前 `/api/identity`、`/api/certs`） | 只開部署中那一版 chart 有映像的服務；切片的 issue 進了 release 後，在這裡打開（certs、AI 閘道與 telemetry-query 要另設的值見下方「打開 certs」「打開 AI 閘道」「打開 telemetry-query」） |
+| 服務 | `values-demo.yaml` 的 `services` 逐一打開切片的服務（目前 `identity`、`assets`、`certs`），`ingress.routes` 列出 app 主機的 cookie 路由（目前 `/api/identity`、`/api/certs`） | 只開部署中那一版 chart 有映像的服務；切片的 issue 進了 release 後，在這裡打開（certs、AI 閘道、telemetry-query 與 assistant 要另設的值見下方「打開 certs」「打開 AI 閘道」「打開 telemetry-query」「打開 assistant」） |
 | 外部端點 | Qdrant 的網址在 `.invalid`（RFC 6761，不會解析）；Sentry 關閉 | 切片不用知識庫，SaaS 型態的 schema 又要求外部網址；沒有展示用的 Sentry 專案，錯誤留在 ClickHouse 的日誌 |
 | 備份與磁碟 | 沒有備份；Postgres 10Gi、ClickHouse 20Gi | 里程碑「展示切片」接受展示資料遺失；一台閘道器加幾具電表的量 |
 
@@ -359,6 +359,33 @@ age-keygen 的輸出不是終端機時，私鑰寫到管線、`Public key: …` 
         path: /api/telemetry
         match: PathPrefix
         service: telemetry-query
+  ```
+
+- **打開 assistant**（Laysi/trustiot-v2#647）：展示叢集部署的 chart 要含 `deploy/images/assistant`（Laysi/trustiot-v2#592）與它的對話串 API 和清除用的資料庫角色 `assistant_platform`（2026-10-30 合併的 Laysi/trustiot-v2#645）：更早的版本沒有 `/api/assistant/v1` 與這個角色。`bun test deploy/flux` 以 HEAD 的 chart 渲染，不看 `chart.yaml` 釘的版本，所以釘著較早的版本時渲染照樣通過，但部署的映像沒有這個 API，路由回 404。先照下方「換版」換到含 Laysi/trustiot-v2#645 的版本，這個變更在換版之後才合併。換到這一版會讓叢集內的 Postgres 重啟一次（`max_connections` 調高，[chart 的 README](../chart/README.md)「AI 助理」的「連線預算」），排在展示之前。`values-demo.yaml` 加上下面兩個值：打開服務，加一條 app 主機的 cookie 路由 `/api/assistant`（對話串的 API `/api/assistant/v1`，[服務的 README](../../services/assistant/README.md)「API」）。不用加 Secret：`assistant_app` 與 `assistant_platform` 的密碼由 migration Job 在叢集裡產生（`<release>-assistant-password`），模型的金鑰只在 AI 閘道的 `trustiot-anthropic`。assistant 需要三件事，缺一不可：
+  - **AI 閘道已打開**：沒有 AI 閘道時 assistant 拒絕啟動（上方「打開 AI 閘道」；`mesh.calls.assistant` 的預設值已列 `ai-gateway`，不用改）。
+  - **`ai.roles` 有 assistant 用的角色**：assistant 以 `TRUSTIOT__AI_GATEWAY__ROLE`（服務設定的 `ai_gateway.role`）選角色，預設 `main`。「打開 AI 閘道」的例子已有 `main`；改用別的角色名稱時，在 `services.assistant.env` 設 `TRUSTIOT__AI_GATEWAY__ROLE`，並確認 `ai.roles` 有同名的角色。assistant 啟動時只檢查角色名稱的格式，角色在 AI 閘道存不存在要到提問時才知道（提問 API 在 Laysi/trustiot-v2#646），所以現在只能靠這一步檢查。
+  - **身分服務已打開**：assistant 以身分服務的公鑰驗證 token（展示叢集本來就開著）。時序查詢與資產服務是它的工具要呼叫的服務：資產服務已開；`telemetry-query` 沒打開時 assistant 只是少掉時序的工具（上方「打開 telemetry-query」）。
+
+  `ingress.routes` 是清單，Helm 會整個取代：下面照 `values-demo.yaml` 目前的兩條路由加上第三條；已經打開 telemetry-query 等其他服務的路由時一併保留。路由的 `host: app` 是 `hosts.app` 這個欄位的名稱，不是主機名稱。打開前在展示機上 `free -h` 確認記憶體還放得下（記憶體上限是 chart 預設的 256Mi）。打開後確認 pod 就緒（readiness 要 `assistant_app` 與 `assistant_platform` 都登得進 Postgres、有這一版的 migration，所以就緒也代表 migration Job 建好了兩個角色），再以一個租戶成員的 session 呼叫 `GET /api/assistant/v1/conversations`：回 200 與 `{"conversations":[],"next_cursor":null}`（沒有開始過對話時）；不帶 cookie 回 401 `unauthenticated`，沒有租戶的平台管理員回 403 `permission_denied`。這一版還不能提問（Laysi/trustiot-v2#646）。nightly 每晚以同樣的服務與路由部署，並經入口把這些與開始、列出、刪除、還原對話、另一個成員看不到它、以及 assistant 只收受眾是自己的 token 都呼叫一次（[CI 與發版](../../docs/architecture/ci-release.md)「nightly.yml」第 11 項的第 10 步）。
+
+  ```yaml
+  services:
+    assistant:
+      enabled: true
+  ingress:
+    routes:                      # 整個清單：連同 values-demo.yaml 已有的路由
+      - host: app
+        path: /api/identity
+        match: PathPrefix
+        service: identity
+      - host: app
+        path: /api/certs
+        match: PathPrefix
+        service: certs
+      - host: app
+        path: /api/assistant
+        match: PathPrefix
+        service: assistant
   ```
 
 - **換版**：同 SaaS（上方「發版與回滾」），或以 `pin-chart.ts` 只換展示叢集。合併之前先照[展示環境 runbook](../../docs/runbooks/demo-environment.md)「換 chart 版本」比對新舊版本的 `deploy/istio/istiod-values.yaml`，有改就先對齊 istiod。

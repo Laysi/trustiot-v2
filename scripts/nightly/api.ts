@@ -15,6 +15,11 @@
 // system.users and system.role_grants, as the bundled ClickHouse's admin inside its pod: the
 // password stays in the pod, and only the account's name and role reach the log.
 //
+// The assistant's conversation API (Laysi/trustiot-v2#647) runs through the same ingress, with no
+// question asked (the smoke's AI gateway has no real key): a member starts, lists, deletes and
+// restores a conversation, another member of the tenant never sees it (404), and the assistant
+// reached directly takes the member's token addressed to it but not the one for the assets service.
+//
 // Then the edges of the MS0 completion criteria (Laysi/trustiot-v2#77), with the real services:
 // a stolen identity header, a genuine token the identity service signed for the tenant's member
 // (taken from its ext_authz answer through a port-forward that bypasses the ingress), which the
@@ -82,18 +87,29 @@ export interface IngressRoute {
   [key: string]: unknown;
 }
 
+/** The assistant's conversation API (services/assistant/src/api/conversations.rs, CONVERSATIONS_PATH). */
+export const ASSISTANT_CONVERSATIONS_PATH = "/api/assistant/v1/conversations";
+/** One conversation of it (CONVERSATION_PATH); `{conversation_id}` is a UUID. */
+export const ASSISTANT_CONVERSATION_PATH = "/api/assistant/v1/conversations/{conversation_id}";
+/** Restoring a deleted conversation (RESTORE_PATH). */
+export const ASSISTANT_RESTORE_PATH = "/api/assistant/v1/conversations/{conversation_id}/restore";
+/** The caller's deleted conversations that can still be restored (DELETED_CONVERSATIONS_PATH). */
+export const ASSISTANT_DELETED_PATH = "/api/assistant/v1/deleted-conversations";
+
 /**
  * The cookie routes the check needs: the identity service's tenant API, the assets service's API
  * and the telemetry-query service's history API (Laysi/trustiot-v2#539). The same routes a
  * deployment sets to serve the SPA (deploy/flux/README.md, 「展示叢集」). Also the certs service's
  * workstation certificate API, which certs.ts calls (Laysi/trustiot-v2#517; services/certs/README.md,
- * 「簽發、撤銷與換發」).
+ * 「簽發、撤銷與換發」), and the assistant's chat API (Laysi/trustiot-v2#647), which the chart has
+ * no default route for.
  */
 export const API_ROUTES: readonly IngressRoute[] = [
   { host: "app", path: "/api/identity", match: "PathPrefix", service: "identity" },
   { host: "app", path: "/api/assets", match: "PathPrefix", service: "assets" },
   { host: "app", path: "/api/telemetry", match: "PathPrefix", service: "telemetry-query" },
   { host: "app", path: "/api/certs", match: "PathPrefix", service: "certs" },
+  { host: "app", path: "/api/assistant", match: "PathPrefix", service: "assistant" },
 ];
 
 /**
@@ -108,8 +124,9 @@ export const CERTS_SMOKE_ENV = [{ name: "TRUSTIOT__CRL__CHECK_INTERVAL", value: 
  * The AI assistant's settings the smoke adds (Laysi/trustiot-v2#592): the model role of
  * AI_GATEWAY_SMOKE, the only one the smoke's AI gateway has. The chart sets the addresses of the
  * gateway and the tools' services from mesh.calls.assistant; the assistant calls none of them
- * before a question, and it has no API yet (Laysi/trustiot-v2#146), so the smoke only waits for it
- * to be ready.
+ * before a question. The smoke asks none (its AI gateway has no real key): it waits for the
+ * assistant to be ready, then calls its conversation API through the ingress (checkAssistantApi,
+ * Laysi/trustiot-v2#647).
  */
 export const ASSISTANT_SMOKE_ENV = [{ name: "TRUSTIOT__AI_GATEWAY__ROLE", value: "smoke" }] as const;
 
@@ -275,7 +292,8 @@ export async function checkGatewayOps(
  * certs service from its image (CERTS_SMOKE_ENV; its test root CA comes in a values file of its
  * own, certs.ts), and the AI assistant from its image (ASSISTANT_SMOKE_ENV, Laysi/trustiot-v2#592),
  * which reaches the AI gateway, telemetry-query and assets through the chart's default
- * mesh.calls.assistant and logs in to Postgres with the password the migration Job generates, and
+ * mesh.calls.assistant and logs in to Postgres with the password the migration Job generates (its
+ * cookie route is one of API_ROUTES, Laysi/trustiot-v2#647), and
  * ingest from its image (Laysi/trustiot-v2#642), which logs in on the MQTT broker that smoke.yaml
  * turns on with the account the chart hands it, and to Postgres and ClickHouse with the passwords
  * the migration Job generates (it needs no value besides its image), and gateway-ops from its image
@@ -320,15 +338,17 @@ export const IDENTITY_HEADER = "x-internal-identity";
  * service hands the ingress for the member's GET of the tenant, asked for at its ext_authz endpoint
  * past the ingress (`sendToIdentity`). It stands for a token an attacker stole: signed with the
  * deployment's own key, valid for a minute. Throws, without the token, unless the answer is 200
- * with exactly one identity header.
+ * with exactly one identity header. `path` is the request the token is for (its route decides
+ * the audience): the assets service's tenant unless given.
  */
 export async function stealIdentityToken(
   sendToIdentity: (request: RawRequest) => Promise<RawResponse>,
   appHost: string,
   session: TestSession,
+  path: string = ASSETS_TENANT_PATH,
 ): Promise<string> {
   const answer = await sendToIdentity({
-    target: `${EXT_AUTHZ_PREFIX}${ASSETS_TENANT_PATH}`,
+    target: `${EXT_AUTHZ_PREFIX}${path}`,
     hostHeader: appHost,
     headers: [["cookie", `${SESSION_COOKIE}=${session.cookie}`]],
   });
@@ -701,6 +721,180 @@ export async function checkTelemetryApi(deps: Omit<ApiCheckDeps, "psql" | "boots
   );
 }
 
+/** ASSISTANT_CONVERSATION_PATH for `conversation`. */
+export function assistantConversationPath(conversation: string): string {
+  return ASSISTANT_CONVERSATION_PATH.replace("{conversation_id}", uuid(conversation));
+}
+
+/** ASSISTANT_RESTORE_PATH for `conversation`. */
+export function assistantRestorePath(conversation: string): string {
+  return ASSISTANT_RESTORE_PATH.replace("{conversation_id}", uuid(conversation));
+}
+
+/** What checkAssistantApi needs besides the gateway: a second member, the assistant without the ingress, and tokens. */
+export interface AssistantCheckDeps {
+  /** Runs SQL as the database superuser (the second member's rows; the SQL stays out of the log). */
+  psql: (sql: string) => Promise<string>;
+  /** Sends one request to the ingress gateway. */
+  send: (request: RawRequest) => Promise<RawResponse>;
+  /** Sends one request straight to the assistant, past the ingress and the mesh's policies. */
+  sendToAssistant: (request: RawRequest) => Promise<RawResponse>;
+  /** A fresh genuine token of the tenant's member for the audience of the route `path` has (stealIdentityToken). */
+  steal: (path: string) => Promise<string>;
+  log: (line: string) => void;
+  sleep?: (ms: number) => Promise<void>;
+  now?: () => number;
+  limits?: ApiCheckDeps["limits"];
+}
+
+/** Throws, naming `step`, unless `response` has `status` and, when given, the ErrorBody `code`. */
+function expectAnswer(step: string, response: RawResponse, status: number, code?: string): void {
+  if (response.status === status && (code === undefined || errorCode(response.body) === code)) return;
+  throw new Error(`${step} answered ${summary(response)}, expected ${status}${code === undefined ? "" : ` ${code}`}`);
+}
+
+/** The conversation IDs of a list answer (`conversations[].id`); throws naming `step` when the body is no such list. */
+function listedIds(step: string, response: RawResponse): string[] {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(response.body);
+  } catch {
+    throw new Error(`${step} answered ${response.status} with ${response.body.slice(0, 200)}, which is not JSON`);
+  }
+  const list = typeof parsed === "object" && parsed !== null ? (parsed as { conversations?: unknown }).conversations : undefined;
+  if (!Array.isArray(list)) throw new Error(`${step} answered ${response.status} with ${response.body.slice(0, 200)}, expected {"conversations": [...]}`);
+  return list.map((entry) => (typeof entry === "object" && entry !== null && typeof (entry as { id?: unknown }).id === "string" ? (entry as { id: string }).id : ""));
+}
+
+/** The `id` of a conversation answer; throws naming `step` unless it is `expected` (when given) or a UUID. */
+function conversationId(step: string, response: RawResponse, expected?: string): string {
+  let id: unknown;
+  try {
+    id = (JSON.parse(response.body) as { id?: unknown }).id;
+  } catch {
+    id = undefined;
+  }
+  if (typeof id !== "string" || !UUID.test(id) || (expected !== undefined && id !== expected)) {
+    throw new Error(`${step} answered ${response.status} with ${response.body.slice(0, 200)}, expected a conversation${expected === undefined ? "" : ` with ID ${expected}`}`);
+  }
+  return id;
+}
+
+/**
+ * The assistant's conversation API through the ingress (Laysi/trustiot-v2#647), after
+ * checkTenantApi made the tenant and its member A (services/assistant/README.md, 「API」). No
+ * question is asked: the smoke's AI gateway has no real key.
+ *
+ * 1. The route and the cookie check reach the service: the administrator has no tenant (403
+ *    permission_denied from the assistant, which checked the token's signature and audience).
+ *    Before that the gateway may answer 404, 503 or Istio's own 403, none with the ErrorBody code.
+ * 2. No cookie: 401 unauthenticated at the gateway.
+ * 3. A starts a conversation (201, once: a retry would start a second one) and lists it.
+ * 4. Member B of the same tenant (a viewer, made with SQL) reads it: 404 not_found, and B's list
+ *    does not have it (only the owner sees a conversation, tenant administrators included).
+ * 5. A deletes it (204): A's read is 404, the deleted list has it, A restores it (200) and reads it.
+ * 6. Straight to the assistant past the ingress: the genuine token of A for the assistant is
+ *    accepted (200, the control), the one for the assets service is refused (401 unauthenticated),
+ *    because the assistant accepts only tokens addressed to it.
+ *
+ * Every failure names the step, the status and the code, never a cookie or a token. Returns the
+ * report line; throws with what was awaited or what differed.
+ */
+export async function checkAssistantApi(deps: AssistantCheckDeps, appHost: string, made: TenantApiResult): Promise<string> {
+  const routeMs = deps.limits?.routeMs ?? ROUTE_LIMIT_MS;
+  const cookieHeader = (session: TestSession): [string, string] => ["cookie", `${SESSION_COOKIE}=${session.cookie}`];
+  const get = (target: string, session?: TestSession): RawRequest => ({
+    target,
+    hostHeader: appHost,
+    headers: session === undefined ? [] : [cookieHeader(session)],
+  });
+  const write = (target: string, method: "POST", session: TestSession): RawRequest => ({
+    target,
+    method,
+    hostHeader: appHost,
+    headers: [cookieHeader(session), ["content-type", "application/json"]],
+    body: "{}",
+  });
+  const del = (target: string, session: TestSession): RawRequest => ({ target, method: "DELETE", hostHeader: appHost, headers: [cookieHeader(session)] });
+  const a = made.member;
+
+  // 1. The route and the cookie check reach the service. A success for a user without a tenant is
+  //    a broken check, so it fails at once.
+  const routed = await pollUntil(
+    deps,
+    "the ingress to pass the administrator's cookie to the assistant (403 permission_denied)",
+    routeMs,
+    get(ASSISTANT_CONVERSATIONS_PATH, made.admin),
+    (r) => r.status === 403 && errorCode(r.body) === "permission_denied",
+    (r) => r.status < 200 || r.status >= 300,
+  );
+  deps.log(`the ingress routes ${ASSISTANT_CONVERSATIONS_PATH} after ${Math.round(routed.waitedMs / 1000)} s`);
+
+  // 2. No cookie: the identity service rejects the request at the gateway.
+  expectAnswer(`GET ${ASSISTANT_CONVERSATIONS_PATH} without a cookie`, await deps.send(get(ASSISTANT_CONVERSATIONS_PATH)), 401, "unauthenticated");
+
+  // 3. Member A starts a conversation and sees it in the list.
+  const started = await deps.send(write(ASSISTANT_CONVERSATIONS_PATH, "POST", a));
+  expectAnswer(`POST ${ASSISTANT_CONVERSATIONS_PATH} as the tenant's member`, started, 201);
+  const id = conversationId(`POST ${ASSISTANT_CONVERSATIONS_PATH} as the tenant's member`, started);
+  const conversation = assistantConversationPath(id);
+  deps.log(`the tenant's member started conversation ${id} through the ingress`);
+  const listed = await deps.send(get(ASSISTANT_CONVERSATIONS_PATH, a));
+  expectAnswer(`GET ${ASSISTANT_CONVERSATIONS_PATH} as its owner`, listed, 200);
+  if (!listedIds(`GET ${ASSISTANT_CONVERSATIONS_PATH} as its owner`, listed).includes(id)) {
+    throw new Error(`GET ${ASSISTANT_CONVERSATIONS_PATH} as its owner answered 200 without the conversation ${id} it started`);
+  }
+
+  // 4. Member B of the same tenant: not found, and not in B's list.
+  const b = newSession();
+  await deps.psql(memberSessionSql(b, made.tenantId));
+  deps.log(`added a session for viewer ${b.userId} of tenant ${made.tenantId}`);
+  expectAnswer(`GET ${conversation} as another member of the tenant`, await deps.send(get(conversation, b)), 404, "not_found");
+  const others = await deps.send(get(ASSISTANT_CONVERSATIONS_PATH, b));
+  expectAnswer(`GET ${ASSISTANT_CONVERSATIONS_PATH} as another member of the tenant`, others, 200);
+  if (listedIds(`GET ${ASSISTANT_CONVERSATIONS_PATH} as another member of the tenant`, others).includes(id)) {
+    throw new Error(`GET ${ASSISTANT_CONVERSATIONS_PATH} as another member of the tenant listed the conversation ${id} of its owner`);
+  }
+
+  // 5. Delete, read, the deleted list, restore, read.
+  const deleted = await deps.send(del(conversation, a));
+  expectAnswer(`DELETE ${conversation} as its owner`, deleted, 204);
+  if (deleted.body !== "") throw new Error(`DELETE ${conversation} as its owner answered 204 with a body: ${deleted.body.slice(0, 200)}`);
+  expectAnswer(`GET ${conversation} after the delete`, await deps.send(get(conversation, a)), 404, "not_found");
+  const trash = await deps.send(get(ASSISTANT_DELETED_PATH, a));
+  expectAnswer(`GET ${ASSISTANT_DELETED_PATH} as its owner`, trash, 200);
+  if (!listedIds(`GET ${ASSISTANT_DELETED_PATH} as its owner`, trash).includes(id)) {
+    throw new Error(`GET ${ASSISTANT_DELETED_PATH} as its owner answered 200 without the deleted conversation ${id}`);
+  }
+  const restored = await deps.send(write(assistantRestorePath(id), "POST", a));
+  expectAnswer(`POST ${ASSISTANT_RESTORE_PATH} as its owner`, restored, 200);
+  conversationId(`POST ${ASSISTANT_RESTORE_PATH} as its owner`, restored, id);
+  const again = await deps.send(get(conversation, a));
+  expectAnswer(`GET ${conversation} after the restore`, again, 200);
+  conversationId(`GET ${conversation} after the restore`, again, id);
+
+  // 6. The assistant without the ingress accepts only tokens addressed to it.
+  const direct = (token: string): RawRequest => ({ target: ASSISTANT_CONVERSATIONS_PATH, hostHeader: appHost, headers: [[IDENTITY_HEADER, token]] });
+  const control = await deps.sendToAssistant(direct(await deps.steal(ASSISTANT_CONVERSATIONS_PATH)));
+  if (control.status !== 200) {
+    throw new Error(
+      `the assistant, called past the ingress with the member's genuine token for it, answered ${summary(control)}; ` +
+        "it must accept it (200), or the wrong-audience check below proves nothing",
+    );
+  }
+  const wrongAudience = await deps.sendToAssistant(direct(await deps.steal(ASSETS_TENANT_PATH)));
+  expectAnswer("the assistant, called past the ingress with the member's genuine token for the assets service,", wrongAudience, 401, "unauthenticated");
+
+  return (
+    `the route answered the administrator after ${Math.round(routed.waitedMs / 1000)} s; ` +
+    `POST ${ASSISTANT_CONVERSATIONS_PATH} as the tenant's member: 201, and the conversation is in its list; ` +
+    "another member of the tenant: 404 not_found and no entry in its list; " +
+    "delete 204, read 404 not_found, in the deleted list, restore 200, read 200; " +
+    "without a cookie: 401 unauthenticated; the administrator without a tenant: 403 permission_denied; " +
+    "straight to the assistant, the member's token for it 200 and its token for the assets service 401 unauthenticated"
+  );
+}
+
 /** Prefix of every tenant's ClickHouse account (services/telemetry-query/src/accounts.rs, ACCOUNT_PREFIX). */
 export const TENANT_ACCOUNT_PREFIX = "trustiot_tenant_account_";
 /** The one role of a tenant's account (services/ingest/migrations/clickhouse/0004_access.sql). */
@@ -929,7 +1123,7 @@ export function clickhouseAccess(ctx: ApiCheckContext, namespace: string, pod: s
 }
 
 /**
- * Runs checkTenantApi, checkTelemetryApi, checkTenantAccount and checkIngressEdges against the
+ * Runs checkTenantApi, checkTelemetryApi, checkTenantAccount, checkIngressEdges and checkAssistantApi against the
  * release in `namespace`: psql through `kubectl exec` in the CloudNativePG primary, ClickHouse
  * queries through `kubectl exec` in the bundled ClickHouse's pod, requests through `kubectl
  * port-forward` to the ingress gateway's Service (`ca`: the certificate the smoke made for an
@@ -947,6 +1141,7 @@ export async function runApiCheck(
   const assets = servicePortOf(objects, "assets", "http");
   const clickhousePod = clickhousePodOf(objects);
   const identity = servicePortOf(objects, "identity", "http");
+  const assistant = servicePortOf(objects, "assistant", "http");
 
   // The platform administrator bootstrap: the chart's CronJob, as the migration Job's account.
   const bootstrap = bootstrapCronJobOf(objects);
@@ -967,6 +1162,8 @@ export async function runApiCheck(
   // The identity service without the ingress, for a genuine token to steal: its ext_authz endpoint
   // is under /internal, which the ingress never routes.
   const authz = new PortForward(ctx, namespace, `service/${identity.service}`, identity.port, undefined);
+  // The assistant without the ingress, to show it takes only tokens addressed to it.
+  const assistantDirect = new PortForward(ctx, namespace, `service/${assistant.service}`, assistant.port, undefined);
   try {
     await gateway.open();
     const made = await checkTenantApi({ psql, bootstrapAdmin, send: (request) => gateway.send(request), log: (line) => ctx.log.line(line) }, appHost, name);
@@ -986,11 +1183,24 @@ export async function runApiCheck(
       listener.port,
       made,
     );
-    return { detail: `${made.detail}; ${telemetry}; ${account}; ${edges}`, platformAdmin: made.admin.userId };
+    await assistantDirect.open();
+    const conversations = await checkAssistantApi(
+      {
+        psql,
+        send: (request) => gateway.send(request),
+        sendToAssistant: (request) => assistantDirect.send(request),
+        steal: (path) => stealIdentityToken((request) => authz.send(request), appHost, made.member, path),
+        log: (line) => ctx.log.line(line),
+      },
+      appHost,
+      made,
+    );
+    return { detail: `${made.detail}; ${telemetry}; ${account}; ${edges}; ${conversations}`, platformAdmin: made.admin.userId };
   } finally {
     gateway.close();
     direct.close();
     authz.close();
+    assistantDirect.close();
   }
 }
 

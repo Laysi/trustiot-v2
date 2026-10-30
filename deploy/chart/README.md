@@ -180,13 +180,14 @@ SPA 的靜態檔（`services.web`，Laysi/trustiot-v2#123，決定於 2026-10-21
 
 `Host` 帶埠號（Laysi/trustiot-v2#255，決定於 2026-10-11）：入口**接受** `Host` 帶埠號，例如閘道器送 `Host: gw.example.com:443`。Istio 的路由本來就把 `<主機>` 與 `<主機>:<任何埠>` 視為同一個主機，但例外的授權規則原本只列主機名稱，帶埠號時例外不成立，憑證換發與 MQTT 會回 401。現在例外規則同時列 `<主機>` 與 `<主機>:*`，與路由的比對方式一致：例外只在它自己的主機成立，`app` 主機帶埠號照樣要 cookie。閘道器韌體不必為此特別處理 `Host`；WebSocket 函式庫或客戶網路的代理放進埠號（預設的 443 或其他埠）都可以。Cloudflare Tunnel 轉發的 `Host` 沒有埠號，SaaS 原本就不受影響。這也是 Laysi/trustiot-v2#77（真身分服務與閘道器的端到端驗證）要沿用的約定。2026-10-15 由 Laysi/trustiot-v2#77 確認：入口把客戶端的 `Host` 原樣（帶埠號也一樣）交給 cookie 檢查（`tests/e2e/ingress.e2e.ts` 以替身觀察），真的身分服務去掉埠號找路由、資產服務照常回應（nightly 的 API 檢查，`scripts/nightly/api.ts`）。
 
-需要 cookie 的路由（`ingress.routes`）：`host` 是 `app`、`gateway` 或 `ota`；`path` 是 `/` 或與例外路徑同樣格式的路徑，不能在 `/internal` 底下；`match` 是 `PathPrefix` 或 `Exact`；`service` 必須是已啟用的服務，`port` 是它的埠名（預設 `http`）。同一個主機不能有兩條相同路徑，也不能與例外路徑相同。`services.web` 開啟時，`hosts.app` 的路由只能是 `/api`、`/auth` 或在它們底下。例如資產服務的 API，以及 certs 服務給平台管理員簽發與撤銷工作站憑證的 API（Laysi/trustiot-v2#534，見 `services/certs/README.md` 的「工作站憑證」）：
+需要 cookie 的路由（`ingress.routes`）：`host` 是 `app`、`gateway` 或 `ota`；`path` 是 `/` 或與例外路徑同樣格式的路徑，不能在 `/internal` 底下；`match` 是 `PathPrefix` 或 `Exact`；`service` 必須是已啟用的服務，`port` 是它的埠名（預設 `http`）。同一個主機不能有兩條相同路徑，也不能與例外路徑相同。`services.web` 開啟時，`hosts.app` 的路由只能是 `/api`、`/auth` 或在它們底下。例如資產服務的 API、certs 服務給平台管理員簽發與撤銷工作站憑證的 API（Laysi/trustiot-v2#534，見 `services/certs/README.md` 的「工作站憑證」），以及 AI 助理的聊天 API（Laysi/trustiot-v2#647，見「AI 助理」）：
 
 ```yaml
 ingress:
   routes:
     - {host: app, path: /api/assets, match: PathPrefix, service: assets}
     - {host: app, path: /api/certs, match: PathPrefix, service: certs}
+    - {host: app, path: /api/assistant, match: PathPrefix, service: assistant}
 ```
 
 與身分服務的約定（Laysi/trustiot-v2#61 實作，細節見 `services/identity/README.md`）：入口以 `<pathPrefix><原始路徑>` 呼叫身分服務，`pathPrefix` 是 `/internal/ext-authz`，只帶 `cookie`、`origin` 與 `sec-fetch-site`（另有 Host、方法、路徑與 Authorization）。
@@ -633,7 +634,7 @@ curl -sS -D - -X POST "http://127.0.0.1:18080/internal/roles/main/v1/messages" \
 
 ## AI 助理
 
-`services.assistant`（`services/assistant`，決策 31，Laysi/trustiot-v2#592）是 AI 助理的主 agent：經 AI 閘道呼叫模型，工具以提問的使用者身分呼叫時序查詢與資產服務的 API（決策 27 的代表使用者呼叫），對話以服務角色 `assistant_app` 存在 Postgres。它的 API 是使用者的對話串（`/api/assistant/v1`，Laysi/trustiot-v2#645，見 [services/assistant/README.md](../../services/assistant/README.md)「API」），入口的路由是 Laysi/trustiot-v2#647；它以身分服務的公鑰驗證內部身分 token，所以與資產服務一樣，身分服務沒有開啟時它拒絕啟動（`TRUSTIOT_INTERNAL_IDENTITY_KEYS_FILE` 只在身分服務開啟時設定）。
+`services.assistant`（`services/assistant`，決策 31，Laysi/trustiot-v2#592）是 AI 助理的主 agent：經 AI 閘道呼叫模型，工具以提問的使用者身分呼叫時序查詢與資產服務的 API（決策 27 的代表使用者呼叫），對話以服務角色 `assistant_app` 存在 Postgres。它的 API 是使用者的對話串（`/api/assistant/v1`，Laysi/trustiot-v2#645，見 [services/assistant/README.md](../../services/assistant/README.md)「API」），chart 沒有預設的入口路由，部署要在 `ingress.routes` 加一條 app 主機的 `/api/assistant`（`PathPrefix`，`service: assistant`；見「入口 gateway」的「需要 cookie 的路由」，Laysi/trustiot-v2#647）：nightly 以這條路由經入口呼叫對話串的 API（`scripts/nightly/api.ts` 的 `checkAssistantApi`），展示叢集照 [deploy/flux/README.md](../flux/README.md)「打開 assistant」加；它以身分服務的公鑰驗證內部身分 token，所以與資產服務一樣，身分服務沒有開啟時它拒絕啟動（`TRUSTIOT_INTERNAL_IDENTITY_KEYS_FILE` 只在身分服務開啟時設定）。
 
 預設的 `mesh.calls.assistant` 是 `[ai-gateway, telemetry-query, assets, postgres]`。chart 從這份清單產生它要呼叫的每個位址，所以它只會被指向 mesh 放行的服務（`templates/_assistant.tpl` 的 `trustiot.assistant.env`）：
 
