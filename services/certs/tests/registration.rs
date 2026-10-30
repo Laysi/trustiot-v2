@@ -8,7 +8,10 @@
 //! - The API (a throwaway Postgres with TLS and the real binary): a new hardware ID is
 //!   registered with its initial gateway certificate and one `certs.gateway_registered` event; a
 //!   repeat returns the same record and certificate and writes nothing (acceptance 1, 5), also
-//!   when two arrive at once; a changed public key or endorsement key is refused (acceptance 2);
+//!   when two arrive at once, held together before the lookup by hardware ID
+//!   (Laysi/trustiot-v2#782); two new hardware IDs with the same public key or endorsement key,
+//!   held together before the insert, get one 201 and one 409 through the unique violation and
+//!   the retry; a changed public key or endorsement key is refused (acceptance 2);
 //!   a decommissioned hardware ID is refused and never freed (acceptance 3); a request without
 //!   the workstation's signature or without a platform administrator registers nothing
 //!   (acceptance 4); a gateway certificate cannot act as a workstation (acceptance 6); a
@@ -35,8 +38,8 @@ use certs::issue::{self, WORKSTATION_PURPOSE_DER, WORKSTATION_SUBJECT_PREFIX, Wo
 use certs::pem;
 use certs::registrations::{
     DECOMMISSIONED, ENDORSEMENT_KEY_IN_USE, ENDORSEMENT_KEY_MISMATCH, ENDORSEMENT_KEY_UNSUPPORTED,
-    PUBLIC_KEY_IN_USE, PUBLIC_KEY_MISMATCH, REGISTRATIONS_PATH, WORKSTATION_REFUSED,
-    WorkstationRefusal, verify_workstation,
+    LOCK_REGISTRATION, PUBLIC_KEY_IN_USE, PUBLIC_KEY_MISMATCH, REGISTRATIONS_PATH,
+    WORKSTATION_REFUSED, WorkstationRefusal, verify_workstation,
 };
 use certs::workstations::CERTIFICATES_PATH;
 use contract::certs::{
@@ -54,6 +57,7 @@ use rcgen::{
 use rustls_pki_types::CertificateDer;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
+use sqlx::PgConnection;
 use sqlx::Row as _;
 use support::{Reply, Service, TestCa, now, wait_for};
 use testkit::identity::TestIssuer;
@@ -558,6 +562,58 @@ async fn totals(product: &ProductPostgres) -> (i64, i64, i64) {
 const WAITING_REVOCATIONS: &str = "SELECT count(*) FROM pg_locks
     WHERE locktype = 'advisory' AND classid = 1953983347 AND NOT granted";
 
+/// Sessions waiting for the registration lock of one of the hardware IDs `$1`
+/// (`registrations::LOCK_REGISTRATION`: its class, and the hardware ID hashed into the second
+/// key).
+const WAITING_REGISTRATIONS: &str = "SELECT count(*) FROM pg_locks
+    WHERE locktype = 'advisory' AND classid = 1735881319 AND objsubid = 2 AND NOT granted
+      AND objid IN (SELECT hashtext(id)::oid FROM unnest($1::text[]) AS id)";
+
+/// Sessions waiting to insert into the registrations table while they hold the registration
+/// lock of one of the hardware IDs `$1`: past the lookup by hardware ID and the key check,
+/// before the insert.
+const WAITING_INSERTS: &str = "SELECT count(*) FROM pg_locks AS waiting
+    WHERE waiting.locktype = 'relation' AND NOT waiting.granted
+      AND waiting.relation = 'certs.gateway_registrations'::regclass
+      AND EXISTS (
+          SELECT 1 FROM pg_locks AS held
+          WHERE held.pid = waiting.pid AND held.granted AND held.locktype = 'advisory'
+            AND held.classid = 1735881319 AND held.objsubid = 2
+            AND held.objid IN (SELECT hashtext(id)::oid FROM unnest($1::text[]) AS id))";
+
+/// What the database holds for the hardware IDs `$1`: registrations, gateway certificates,
+/// registration events.
+const TOTALS_OF: &str = "SELECT
+    (SELECT count(*) FROM certs.gateway_registrations WHERE hardware_id = ANY($1)),
+    (SELECT count(*) FROM certs.issued_certificates
+     WHERE profile = 'gateway' AND subject = ANY($1)),
+    (SELECT count(*) FROM certs.outbox_event
+     WHERE event_type = 'certs.gateway_registered' AND aggregate_id = ANY($1))";
+
+/// Ends the superuser transaction `holding`, and the locks it holds, once `waiting` (one of
+/// the queries above) counts both requests of `hardware_ids`.
+async fn release_when_both_wait(
+    product: &ProductPostgres,
+    mut holding: PgConnection,
+    what: &str,
+    waiting: &'static str,
+    hardware_ids: &[&str],
+) {
+    wait_for(what, || async move {
+        let sessions: i64 = sqlx::query_scalar(waiting)
+            .bind(hardware_ids)
+            .fetch_one(&mut product.superuser().await)
+            .await
+            .expect("read pg_locks");
+        (sessions == 2).then_some(())
+    })
+    .await;
+    sqlx::raw_sql("ROLLBACK")
+        .execute(&mut holding)
+        .await
+        .expect("release the locks");
+}
+
 /// A request that must register nothing: what it is, its token, its workstation headers, the
 /// expected status and `details.reason` (empty: none).
 type RefusalCase = (
@@ -881,19 +937,107 @@ async fn registration_is_idempotent_and_needs_a_workstation_and_an_administrator
         assert_eq!(message_key(&reply), "gateway_registration.body_invalid");
     }
 
-    // Two registrations of a new hardware ID at once: one registers, the other gets the same
-    // record; one certificate, one event.
+    // Two registrations of a new hardware ID at once (Laysi/trustiot-v2#782): a transaction holds
+    // the hardware ID's registration lock until both requests wait for it, past the workstation's
+    // ledger check and before the nonce and the lookup by hardware ID. Released together, one
+    // registers and the other gets the same record and certificate, as if it came second; one
+    // certificate, one event. Without the lock, the second could miss the first in the lookup,
+    // then see it committed in the key check and answer 409 `public_key_in_use`.
     let (_, concurrent) = new_gateway("gw-0004");
-    let (left, right) = tokio::join!(
+    let mut holding = product.superuser().await;
+    sqlx::raw_sql("BEGIN")
+        .execute(&mut holding)
+        .await
+        .expect("begin");
+    sqlx::query(LOCK_REGISTRATION)
+        .bind("gw-0004")
+        .execute(&mut holding)
+        .await
+        .expect("take the registration lock of gw-0004");
+    let (left, right, ()) = tokio::join!(
         workstation.register(&concurrent),
-        workstation.register(&concurrent)
+        workstation.register(&concurrent),
+        release_when_both_wait(
+            &product,
+            holding,
+            "both registrations of gw-0004 waiting for its registration lock",
+            WAITING_REGISTRATIONS,
+            &["gw-0004"],
+        )
     );
     let mut statuses = [left.status, right.status];
     statuses.sort_unstable();
     assert_eq!(statuses, [200, 201], "{} / {}", left.body, right.body);
     assert_eq!(left.json()["serial"], right.json()["serial"]);
+    assert_eq!(left.json()["certificate"], right.json()["certificate"]);
     assert_eq!(totals(&product).await, (2, 2, 2));
-    println!("two at once: {statuses:?}, one certificate and one event");
+    println!(
+        "two at once, held together before the lookup: {statuses:?}, the same certificate, one \
+         certificate and one event"
+    );
+
+    // Two new hardware IDs with the same public key at once, then two with the same endorsement
+    // key (Laysi/trustiot-v2#782): a transaction's SHARE lock on the registrations table holds
+    // both inserts until both requests wait for it, each past its lookup and key check. Released
+    // together, the second insert breaks the key's uniqueness (23505), its attempt rolls back,
+    // and the retry answers as for a request that came second: 409 with the key in use, nothing
+    // of it kept. Their hardware IDs (`dup-*`) stay out of the `gw-*` totals.
+    let (_, shared_key) = new_gateway("dup-0001");
+    let mut same_key = shared_key.clone();
+    same_key["hardware_id"] = json!("dup-0002");
+    same_key["endorsement_key"] = json!(endorsement_key());
+    let (_, shared_endorsement) = new_gateway("dup-0003");
+    let (_, mut same_endorsement) = new_gateway("dup-0004");
+    same_endorsement["endorsement_key"] = shared_endorsement["endorsement_key"].clone();
+    for (first, second, in_use) in [
+        (&shared_key, &same_key, PUBLIC_KEY_IN_USE),
+        (
+            &shared_endorsement,
+            &same_endorsement,
+            ENDORSEMENT_KEY_IN_USE,
+        ),
+    ] {
+        let ids = [first, second].map(|body| body["hardware_id"].as_str().expect("an id"));
+        let mut holding = product.superuser().await;
+        sqlx::raw_sql("BEGIN")
+            .execute(&mut holding)
+            .await
+            .expect("begin");
+        sqlx::raw_sql("LOCK TABLE certs.gateway_registrations IN SHARE MODE")
+            .execute(&mut holding)
+            .await
+            .expect("hold the registrations' inserts");
+        let (one, other, ()) = tokio::join!(
+            workstation.register(first),
+            workstation.register(second),
+            release_when_both_wait(
+                &product,
+                holding,
+                "both registrations waiting to insert",
+                WAITING_INSERTS,
+                &ids,
+            )
+        );
+        let (registered, refused) = if one.status == 201 {
+            (one, other)
+        } else {
+            (other, one)
+        };
+        assert_eq!(registered.status, 201, "{}", registered.body);
+        assert_eq!(refused.status, 409, "{}", refused.body);
+        assert_eq!(message_key(&refused), in_use.as_str());
+        let kept: (i64, i64, i64) = sqlx::query_as(TOTALS_OF)
+            .bind(ids.as_slice())
+            .fetch_one(&mut product.superuser().await)
+            .await
+            .expect("count");
+        assert_eq!(kept, (1, 1, 1), "{ids:?}");
+        println!(
+            "{ids:?} at once, held together before the insert: 201 and 409 {}; one registration, \
+             certificate and event",
+            in_use.as_str()
+        );
+    }
 
     // Acceptance 3: a decommissioned hardware ID stays taken. The decommissioning API is
     // Laysi/trustiot-v2#115; here the superuser sets the column, the one change the table allows.
@@ -1000,13 +1144,13 @@ async fn registration_is_idempotent_and_needs_a_workstation_and_an_administrator
     println!("a revoked workstation: 403 revoked; totals (2, 2, 2)");
 
     // The service's stdout reaches the test through a reader thread, so a line can arrive after
-    // its response does.
-    let lines = wait_for("both registration log lines", || async {
+    // its response does. Four registrations: gw-0001, gw-0004 and one of each `dup-*` pair.
+    let lines = wait_for("the four registration log lines", || async {
         let lines = service.stdout.messages("registered a gateway");
-        (lines.len() >= 2).then_some(lines)
+        (lines.len() >= 4).then_some(lines)
     })
     .await;
-    assert_eq!(lines.len(), 2);
+    assert_eq!(lines.len(), 4);
     for line in &lines {
         for secret in ["certificate_request", "BEGIN"] {
             assert!(!line.to_string().contains(secret), "{line}");
