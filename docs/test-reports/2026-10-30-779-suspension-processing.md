@@ -24,6 +24,7 @@ bun install --cwd frontend --frozen-lockfile
 bun run --cwd frontend api:check
 bun install --cwd scripts --frozen-lockfile
 bun test deploy/chart
+bun test deploy/flux
 ```
 
 驗收證據可以單獨重跑：
@@ -42,11 +43,12 @@ cargo test -p contract --test events tenant_state_applied
 | `cargo clippy --locked --workspace --all-targets -- -D warnings` | 通過，沒有警告 |
 | `cargo run --locked -p openapi -- --check` | `api/openapi.json is up to date` |
 | `CI=1 cargo test --locked -p identity --test state_applied` | 1 個通過、0 失敗 |
-| `CI=1 cargo test --locked --no-fail-fast --workspace --exclude agent` | 2028 個通過、0 失敗、1 個 ignored（256 個測試執行檔）。其中 `identity` 的 `tests/state_applied.rs`（下表）、`tests/tenant_state.rs`、`tests/cross_tenant.rs`（服務角色新的欄位 UPDATE 仍只碰得到交易的租戶）、`tests/chart_connections.rs` 與連線池的單元測試（每個消費端在兩個池各有一條連線）、`tenant_state` 的單元測試（`status` 的規則、OpenAPI 的 `TenantStatus`），`contract` 的 `tenant_state_applied_decodes_every_version`（fixture 解碼、偽造的生產者被拒），以及 `migrate` 的測試都通過 |
+| `CI=1 cargo test --locked --no-fail-fast --workspace --exclude agent` | 2028 個通過、0 失敗、1 個 ignored（256 組 `test result`）。其中 `identity` 的 `tests/state_applied.rs`（下表）、`tests/tenant_state.rs`、`tests/cross_tenant.rs`（服務角色新的欄位 UPDATE 仍只碰得到交易的租戶）、`tests/chart_connections.rs` 與連線池的單元測試（每個消費端在兩個池各有一條連線）、`tenant_state` 的單元測試（`status` 的規則、OpenAPI 的 `TenantStatus`），`contract` 的 `tenant_state_applied_decodes_every_version`（fixture 解碼、偽造的生產者被拒），以及 `migrate` 的測試都通過 |
 | `bun run --cwd frontend api:check` | 通過（committed 的 API client 與 `api/openapi.json` 一致） |
 | `bun test deploy/chart` | 711 個通過、0 失敗（連線預算：identity 每個副本 33 條，所有服務同時滾動更新時需要 236 條，上限 240） |
+| `bun test deploy/flux` | 78 個通過、0 失敗（展示叢集的 overlay 開啟展示切片的每個 Postgres 服務仍通過連線檢查；identity 多兩個副本時需要 274 條而被拒） |
 
-Rust 的檢查在建置主機（arm64 Linux VM）上執行，`exit 0 at 20:05:25 (build host)`（整個 workspace）與 `exit 0 at 18:29:57 (build host)`（openapi、`migrate`、`api:check`）。`bun test deploy/chart` 在建置主機（x86_64 Linux）上執行：第一次 710 個通過、1 個失敗（下段的第一個問題），修正後重跑「Postgres connection budget」的 9 個測試全部通過。
+Rust 的檢查在建置主機（arm64 Linux VM）上執行，都在最後的程式碼上：`cargo fmt`、`cargo clippy`、`openapi -- --check` 與 `tests/state_applied.rs` 在同一次執行裡各自 exit 0（那次執行整體是 `exit 1 at 19:43:13 (build host)`，原因是下面說的 workspace 失敗）；整個 workspace 重跑 `exit 0 at 20:05:25 (build host)`。`api:check` 在加上安全審查的修正之前執行（`exit 0 at 18:29:57 (build host)`），那個修正沒有改 API 型別，`openapi -- --check` 之後仍通過。`bun test deploy/chart` 與 `bun test deploy/flux` 在建置主機（x86_64 Linux）上執行，後者在 rebase 到 main `d4bf9bf1` 之後；`bun test deploy/chart` 第一次 710 個通過、1 個失敗（下段的第一個問題），修正後重跑「Postgres connection budget」的 9 個測試全部通過。
 
 整個 workspace 的前一次執行（同一個樹）回報 `error: 1 target failed`，但輸出裡沒有任何失敗的測試或 panic；當時的輸出過濾沒有留下是哪個執行檔，原因不明。同一個樹重跑一次全部通過（上表）。
 
@@ -67,7 +69,7 @@ Rust 的檢查在建置主機（arm64 Linux VM）上執行，`exit 0 at 20:05:25
 | 11 | 資料庫的規則：`identity_app` 把確認的版本改小、改成 0 得 42501（trigger），超過 `state_version` 得 23514（CHECK），在 A 的交易裡改 B 的列 0 列；superuser 改小也得 42501 |
 | 12 | 日誌有 `certs applied a tenant's state` 與三種拒絕的 WARN |
 
-開發中的執行找到兩個問題，都已修正並由上面的執行涵蓋：`deploy/chart/tests/chart.test.ts` 的「identity 多兩個副本」案例仍預期每個副本 31 條連線（改成 33）；安全審查指出版本超前的確認進死信後，若在租戶真的到了那個版本之後被重播會被接受，所以加上「確認寫在租戶進入該版本之後」的條件（`stored_at` 晚於 `state_changed_at`）與步驟 8 的重播測試。
+開發中的執行找到三個問題，都已修正並由上面的執行涵蓋：`deploy/chart/tests/chart.test.ts` 的「identity 多兩個副本」案例仍預期每個副本 31 條連線（改成 33），`deploy/flux/tests/flux.test.ts` 的同類對照仍預期 266 條（改成 274）；安全審查指出版本超前的確認進死信後，若在租戶真的到了那個版本之後被重播會被接受，所以加上「確認寫在租戶進入該版本之後」的條件（`stored_at` 晚於 `state_changed_at`）與步驟 8 的重播測試。
 
 ## 結論
 
