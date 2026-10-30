@@ -1,6 +1,6 @@
 //! The `lab-dataset` command: checks a dataset, loads it into a ClickHouse given by the
-//! environment, or records one from Modbus devices. Credentials come only from the environment,
-//! never from arguments (docs/architecture/secrets.md, rule 3).
+//! environment, exports one out of it, or records one from Modbus devices. Credentials come only
+//! from the environment, never from arguments (docs/architecture/secrets.md, rule 3).
 
 use std::path::PathBuf;
 use std::time::Duration;
@@ -9,6 +9,7 @@ use chrono::{DateTime, TimeDelta, Utc};
 use serde::Serialize;
 use uuid::Uuid;
 
+use crate::export::{self, Exporter};
 use crate::record::{Config, Recorder};
 use crate::{ClickHouse, Dataset, Target, TimeShift, time};
 
@@ -16,17 +17,27 @@ pub const USAGE: &str = "usage:
   lab-dataset check <index.toml>
   lab-dataset load <index.toml> --tenant <uuid> --gateway <uuid> [--device <key>=<uuid>]...
                    [--shift-ms <ms> | --end-before <now|time> [--align-s <seconds>]]
+  lab-dataset export <config.toml> --tenant <uuid> --gateway <id> --from <time> --to <time>
+                     --out <dir>
   lab-dataset record <config.toml> --out <dir> [--duration-s <seconds>]
 
-load writes into the ClickHouse named by the environment:
+load and export use the ClickHouse named by the environment:
   CLICKHOUSE_URL       http://host:port or https://host:port (no credentials in it)
-  CLICKHOUSE_USER      an account that may INSERT into trustiot.telemetry and trustiot.stream_commits
+  CLICKHOUSE_USER      load: an account that may INSERT into trustiot.telemetry and
+                       trustiot.stream_commits; export: an account with SELECT on both tables
+                       and a row policy that names it (see datasets/lab/README.md)
   CLICKHOUSE_PASSWORD  its password
   CLICKHOUSE_CA_FILE   with https:// only: the CA certificate (PEM) the connection trusts
 
 --end-before moves the dataset by whole multiples of --align-s (default 86400, one day) so that
 its last time falls at or just before the given time; --shift-ms moves it by exactly that much.
 Without either, the dataset's own times are written.
+
+export reads the batches of the gateway whose rows were received from --from up to, not
+including, --to (times like 2026-10-30T16:08:00.000Z, UTC) and writes the dataset to
+<dir>/<name>/, which must not exist yet. Times are written as stored. The configuration lists
+the devices and their IDs (it is the recording configuration plus an `id` per device). It sends
+only SELECT statements, and fails when the account reads no rows.
 
 record polls the devices of the configuration (it names converter addresses: keep it outside
 the repository) and writes the dataset to <dir>/<name>/, which must not exist yet, until
@@ -64,6 +75,15 @@ pub enum Command {
         devices: Vec<(String, Uuid)>,
         shift: Shift,
     },
+    Export {
+        config: PathBuf,
+        tenant: Uuid,
+        /// The gateway's ID as the protocol defines it (text).
+        gateway: String,
+        from: DateTime<Utc>,
+        to: DateTime<Utc>,
+        out: PathBuf,
+    },
     Record {
         config: PathBuf,
         out: PathBuf,
@@ -95,9 +115,65 @@ pub fn parse(args: &[String]) -> Result<Command, String> {
         "check" if rest.is_empty() => Ok(Command::Check { index }),
         "check" => Err("check takes only the index file".to_owned()),
         "load" => parse_load(index, rest),
+        "export" => parse_export(index, rest),
         "record" => parse_record(index, rest),
         other => Err(format!("unknown command `{other}`")),
     }
+}
+
+fn parse_export(config: PathBuf, rest: &[String]) -> Result<Command, String> {
+    let (mut tenant, mut gateway, mut from, mut to, mut out) = (None, None, None, None, None);
+    let mut options = rest.iter();
+    while let Some(flag) = options.next() {
+        let value = options
+            .next()
+            .ok_or_else(|| format!("{flag} needs a value"))?;
+        let given = |set: bool| {
+            if set {
+                Err(format!("{flag} is given twice"))
+            } else {
+                Ok(())
+            }
+        };
+        match flag.as_str() {
+            "--tenant" => {
+                given(tenant.is_some())?;
+                tenant = Some(uuid(flag, value)?);
+            }
+            "--gateway" => {
+                given(gateway.is_some())?;
+                protocol::GatewayId::new(value.as_str())
+                    .map_err(|error| format!("--gateway: {error}"))?;
+                gateway = Some(value.clone());
+            }
+            "--from" => {
+                given(from.is_some())?;
+                from = Some(time::parse(value).map_err(|error| format!("--from: {error}"))?);
+            }
+            "--to" => {
+                given(to.is_some())?;
+                to = Some(time::parse(value).map_err(|error| format!("--to: {error}"))?);
+            }
+            "--out" => {
+                given(out.is_some())?;
+                out = Some(PathBuf::from(value));
+            }
+            other => return Err(format!("unknown option `{other}`")),
+        }
+    }
+    let from = from.ok_or("--from is required")?;
+    let to = to.ok_or("--to is required")?;
+    if from >= to {
+        return Err("--from must be before --to".to_owned());
+    }
+    Ok(Command::Export {
+        config,
+        tenant: tenant.ok_or("--tenant is required")?,
+        gateway: gateway.ok_or("--gateway is required")?,
+        from,
+        to,
+        out: out.ok_or("--out is required")?,
+    })
 }
 
 fn parse_record(config: PathBuf, rest: &[String]) -> Result<Command, String> {
@@ -234,6 +310,23 @@ fn parse_load(index: PathBuf, rest: &[String]) -> Result<Command, String> {
     })
 }
 
+/// The ClickHouse the environment names: the URL, the account and its password, and for
+/// `https://` the one CA it trusts. Nothing here comes from the command line.
+fn clickhouse_from(env: &impl Fn(&str) -> Option<String>) -> Result<ClickHouse, String> {
+    let required = |name: &str| {
+        env(name)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| format!("{name} is not set"))
+    };
+    let url = required(URL_ENV)?;
+    let user = required(USER_ENV)?;
+    let password = required(PASSWORD_ENV)?;
+    let ca_file = env(CA_FILE_ENV)
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from);
+    ClickHouse::new(&url, &user, &password, ca_file.as_deref()).map_err(|error| error.to_string())
+}
+
 /// What `check` prints.
 #[derive(Serialize)]
 struct Summary<'a> {
@@ -275,19 +368,7 @@ pub async fn run(command: Command, env: impl Fn(&str) -> Option<String>) -> Resu
             devices,
             shift,
         } => {
-            let required = |name: &str| {
-                env(name)
-                    .filter(|value| !value.is_empty())
-                    .ok_or_else(|| format!("{name} is not set"))
-            };
-            let url = required(URL_ENV)?;
-            let user = required(USER_ENV)?;
-            let password = required(PASSWORD_ENV)?;
-            let ca_file = env(CA_FILE_ENV)
-                .filter(|value| !value.is_empty())
-                .map(PathBuf::from);
-            let clickhouse = ClickHouse::new(&url, &user, &password, ca_file.as_deref())
-                .map_err(|error| error.to_string())?;
+            let clickhouse = clickhouse_from(&env)?;
             let dataset = Dataset::open(&index).map_err(|error| error.to_string())?;
             let shift = match shift {
                 Shift::By(shift) => shift,
@@ -305,6 +386,24 @@ pub async fn run(command: Command, env: impl Fn(&str) -> Option<String>) -> Resu
                 .await
                 .map_err(|error| error.to_string())?;
             serde_json::to_string_pretty(&loaded).map_err(|error| error.to_string())
+        }
+        Command::Export {
+            config,
+            tenant,
+            gateway,
+            from,
+            to,
+            out,
+        } => {
+            // The configuration and the arguments are checked before the environment is read.
+            let config = export::Config::read(&config).map_err(|error| error.to_string())?;
+            let exporter = Exporter::new(&config).map_err(|error| error.to_string())?;
+            let clickhouse = clickhouse_from(&env)?;
+            let exported = exporter
+                .run(&clickhouse, tenant, &gateway, from, to, &out)
+                .await
+                .map_err(|error| error.to_string())?;
+            serde_json::to_string_pretty(&exported).map_err(|error| error.to_string())
         }
         Command::Record {
             config,
@@ -337,6 +436,8 @@ mod tests {
 
     const T: &str = "00000000-0000-0000-0000-00000000000a";
     const G: &str = "00000000-0000-0000-0000-00000000000b";
+    const F: &str = "2026-10-30T16:08:00.000Z";
+    const U: &str = "2026-10-31T16:08:00.000Z";
 
     #[test]
     fn load_options() {
@@ -408,6 +509,25 @@ mod tests {
     }
 
     #[test]
+    fn export_options() {
+        assert_eq!(
+            parse(&args(&format!(
+                "export lab.toml --tenant {T} --gateway gw-1 --from 2026-10-30T16:08:00.000Z \
+                 --to 2026-11-13T16:08:00.000Z --out exports"
+            )))
+            .unwrap(),
+            Command::Export {
+                config: PathBuf::from("lab.toml"),
+                tenant: Uuid::parse_str(T).unwrap(),
+                gateway: "gw-1".to_owned(),
+                from: time::parse("2026-10-30T16:08:00.000Z").unwrap(),
+                to: time::parse("2026-11-13T16:08:00.000Z").unwrap(),
+                out: PathBuf::from("exports"),
+            }
+        );
+    }
+
+    #[test]
     fn help() {
         assert_eq!(parse(&args("--help")).unwrap(), Command::Help);
         assert_eq!(parse(&args("help")).unwrap(), Command::Help);
@@ -450,6 +570,56 @@ mod tests {
                 "unknown option",
             ),
             (&format!("load i --tenant {T} --gateway"), "needs a value"),
+            (
+                &format!("export c.toml --gateway g --from {F} --to {U} --out o"),
+                "--tenant is required",
+            ),
+            (
+                &format!("export c.toml --tenant {T} --from {F} --to {U} --out o"),
+                "--gateway is required",
+            ),
+            (
+                &format!("export c.toml --tenant {T} --gateway g --to {U} --out o"),
+                "--from is required",
+            ),
+            (
+                &format!("export c.toml --tenant {T} --gateway g --from {F} --out o"),
+                "--to is required",
+            ),
+            (
+                &format!("export c.toml --tenant {T} --gateway g --from {F} --to {U}"),
+                "--out is required",
+            ),
+            (
+                &format!("export c.toml --tenant {T} --gateway g --from {U} --to {F} --out o"),
+                "before --to",
+            ),
+            (
+                &format!("export c.toml --tenant {T} --gateway g --from {F} --to {F} --out o"),
+                "before --to",
+            ),
+            (
+                &format!(
+                    "export c.toml --tenant {T} --gateway g --from yesterday --to {U} --out o"
+                ),
+                "--from",
+            ),
+            (
+                &format!("export c.toml --tenant {T} --gateway bad/id --from {F} --to {U} --out o"),
+                "--gateway",
+            ),
+            (
+                &format!(
+                    "export c.toml --tenant {T} --gateway g --from {F} --to {U} --out o --out p"
+                ),
+                "twice",
+            ),
+            (
+                &format!(
+                    "export c.toml --tenant {T} --gateway g --from {F} --to {U} --out o --password x"
+                ),
+                "unknown option",
+            ),
             ("record c.toml", "--out is required"),
             ("record c.toml --out a --out b", "twice"),
             ("record c.toml --out a --duration-s 0", "positive"),

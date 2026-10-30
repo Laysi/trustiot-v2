@@ -1,7 +1,8 @@
 //! Lab datasets (checklist M7, Laysi/trustiot-v2#679): the index format of `datasets/lab/`, its
-//! validation, and the loader that writes a dataset into ClickHouse's telemetry table the way the
-//! ingest service writes it. The format, the versioning rules and how a test loads a dataset are
-//! in `datasets/lab/README.md`; the crate's own notes are in its README.
+//! validation, the loader that writes a dataset into ClickHouse's telemetry table the way the
+//! ingest service writes it, the recorder, and the exporter that reads a gateway's rows back
+//! out of ClickHouse as a dataset. The format, the versioning rules and how a test loads a
+//! dataset are in `datasets/lab/README.md`; the crate's own notes are in its README.
 //!
 //! ```no_run
 //! # async fn example(url: &str, user: &str, password: &str) -> Result<(), lab_dataset::Error> {
@@ -22,10 +23,12 @@
 pub mod anomaly;
 pub mod cli;
 pub mod clickhouse;
+pub mod export;
 pub mod index;
 pub mod record;
 pub mod segment;
 pub mod time;
+mod writer;
 
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::path::{Path, PathBuf};
@@ -89,6 +92,8 @@ pub enum Error {
     Anomaly(String),
     #[error("record: {0}")]
     Record(String),
+    #[error("export: {0}")]
+    Export(String),
     #[error("target: {0}")]
     Target(String),
     #[error("time: {0}")]
