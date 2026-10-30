@@ -6,9 +6,9 @@
 //! | Outcome | Response | What the gateway does |
 //! | --- | --- | --- |
 //! | A cross-site request ([`crate::csrf`]), decided before the session is looked up | 403 `permission_denied`, message key `security.cross_site_request` | Returns this response to the client |
-//! | Active session, routed request, the session's tenant active (or none) | 200 with exactly one `x-internal-identity`: a token this service just signed for the route's service |
-//! | Active session whose tenant is suspended or deleted, routed to this service | 200 as above, the token with the `tenant_suspended` claim: the user can still read the session, switch tenants, log out and change preferences, and a platform administrator can still resume the tenant; this service's tenant-scoped endpoints refuse the claim themselves |
-//! | Active session whose tenant is suspended or deleted, routed to any other service | 403 `tenant_suspended`; no token is signed | Replaces any client copy of the header with this one and forwards the request |
+//! | Active session, routed request, the session's tenant active (or none) | 200 with exactly one `x-internal-identity`: a token this service just signed for the route's service | Replaces any client copy of the header with this one and forwards the request |
+//! | Active session whose tenant is suspended or deleted, routed to this service | 200 as above, the token with the `tenant_suspended` claim: the user can still read the session, switch tenants, log out and change preferences, and a platform administrator can still resume the tenant; this service's tenant-scoped endpoints refuse the claim themselves | Replaces any client copy of the header with this one and forwards the request |
+//! | Active session whose tenant is suspended or deleted, routed to any other service | 403 `tenant_suspended`; no token is signed | Returns this response to the client |
 //! | No, repeated, malformed, unknown, expired or revoked session cookie | 401 `unauthenticated` | Returns this response to the client |
 //! | Active session, but no cookie route matches the host and path | 403 `permission_denied` | Returns this response to the client |
 //! | The session store failed, was busy, or did not answer within [`CHECK_DEADLINE`]; or no signing key may sign now ([`crate::issuer::IssueError::NoSigningKey`]) | 503 `unavailable` | Treats a 5xx as an error and answers its own 503 (`statusOnError`) |
