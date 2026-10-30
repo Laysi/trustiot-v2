@@ -20,14 +20,15 @@ Istio 的 ext_authz provider（`deploy/istio/istiod-values.yaml`）對每個需�
 | 回應 | 情況 | 入口 |
 | --- | --- | --- |
 | 403 `permission_denied`，訊息 key `security.cross_site_request` | 跨站請求（見下方[跨站請求](#跨站請求csrf)），在讀 cookie、查 session 之前判斷，所以沒有 session 時也是這個回應 | 原樣交給用戶端 |
-| 200，剛好一個 `x-internal-identity`，`cache-control: no-store` | session 有效，原始請求的主機與路徑對得到一條 cookie 路由 | 以這個值覆寫用戶端帶來的同名標頭，轉給後端 |
+| 200，剛好一個 `x-internal-identity`，`cache-control: no-store` | session 有效，原始請求的主機與路徑對得到一條 cookie 路由；session 目前的租戶被停權或已刪除時，只有路由的服務是身分服務自己（受眾 `identity`）才是這個回應，token 帶 `tenant_suspended`（見[停權時的每次請求檢查](#停權時的每次請求檢查)） | 以這個值覆寫用戶端帶來的同名標頭，轉給後端 |
 | 401 `unauthenticated` | 沒有 session cookie、有兩個以上、格式不對；session 不存在、過期、已撤銷或使用者已刪除 | 原樣交給用戶端 |
 | 403 `permission_denied` | session 有效，但路由表對不到這個請求 | 原樣交給用戶端 |
+| 403 `tenant_suspended` | session 有效、對得到路由，但 session 目前的租戶被停權或已刪除，而路由的服務不是身分服務；不簽 token | 原樣交給用戶端 |
 | 503 `unavailable` | 資料庫出錯、0.4 秒內查不完，或同時在查的請求太多（見[連線池](#連線池)） | 把 5xx 當成錯誤，回自己的 503（`statusOnError`） |
 
 - 200 只能由剛簽好的 token 組成（程式裡的 `Decision::Allow` 沒有 token 就建不出來）。原因：ext_authz 回 200 卻沒帶 `x-internal-identity` 時，入口會把用戶端自己帶的同名標頭轉給後端（[2026-10-10 PoC](../../docs/feasibility/2026-10-10-edge-poc.md)）。
 - 拒絕的回應一律不帶身分標頭，body 是 `contract::ErrorBody`，也帶 `cache-control: no-store`。
-- 401 與 403 以 INFO 記一行 `denied the ext_authz check`，`reason` 是 `cross_site_request`（另帶 `header`：判斷依據是 `sec-fetch-site` 還是 `origin`）、`no_session_cookie`、`repeated_session_cookie`、`malformed_session_cookie`、`no_active_session` 或 `no_route`；日誌不寫 cookie、session 雜湊、token 或 `Origin` 的值。
+- 401 與 403 以 INFO 記一行 `denied the ext_authz check`，`reason` 是 `cross_site_request`（另帶 `header`：判斷依據是 `sec-fetch-site` 還是 `origin`）、`no_session_cookie`、`repeated_session_cookie`、`malformed_session_cookie`、`no_active_session`、`no_route` 或 `tenant_suspended`；日誌不寫 cookie、session 雜湊、token 或 `Origin` 的值。
 - 每個檢查最多等 0.4 秒（`CHECK_DEADLINE`），比入口的 0.5 秒短，所以入口一定拿得到服務自己的回答；到了就回 503（fail closed）。查詢本身在背景跑完，開到一半的資料庫連線留給下一個檢查（見[連線池](#連線池)）。
 
 ### 跨站請求（CSRF）
@@ -49,10 +50,10 @@ SPA 與 API 同源（決策 2），SPA 自己送的請求一律是同源；別�
 JWS compact serialization，格式與驗證規則在 [`crates/service-kit` 的「內部身分」](../../crates/service-kit/README.md)：
 
 - 保護標頭剛好是 `{"alg":"EdDSA","typ":"internal-identity+jwt","kid":"<kid>"}`，Ed25519 簽章。
-- payload 是 `contract::InternalClaims`：`iss` 一律 `identity`；`sub` 是使用者；`aud` 是請求要去的服務；`iat` 是簽發時間，`exp = iat + 60`；`tenant` 是 session 目前的租戶與使用者在那裡的角色（沒有選租戶、或已不是成員時省略）；`platform_admin` 是平台管理者（A2）；`sid` 是 session 的 ID（Laysi/trustiot-v2#551 起），只有身分服務用它把 [run 委派](#agent-執行期間的委派)綁在 session 上，其他服務忽略它，換出的 token 不帶。session ID 不是 credential：cookie 裡的是另一個隨機值，資料庫只存它的雜湊。
+- payload 是 `contract::InternalClaims`：`iss` 一律 `identity`；`sub` 是使用者；`aud` 是請求要去的服務；`iat` 是簽發時間，`exp = iat + 60`；`tenant` 是 session 目前的租戶與使用者在那裡的角色（沒有選租戶、或已不是成員時省略）；`platform_admin` 是平台管理者（A2）；`sid` 是 session 的 ID（Laysi/trustiot-v2#551 起），只有身分服務用它把 [run 委派](#agent-執行期間的委派)綁在 session 上，其他服務忽略它，換出的 token 不帶；`tenant_suspended` 只在 `tenant` 的租戶被停權或已刪除時出現（值是 `true`，Laysi/trustiot-v2#777），只有給身分服務自己的 token 會帶（見[停權時的每次請求檢查](#停權時的每次請求檢查)）。session ID 不是 credential：cookie 裡的是另一個隨機值，資料庫只存它的雜湊。
 - 效期 60 秒（`TOKEN_LIFETIME_SECS`）：token 在效期內是受眾服務的 bearer credential，所以要短；輪替也要等驗證端接受的最長效期（300 秒）。
 
-角色每個請求都從 `memberships` 重新讀：改角色或移除成員，下一個請求就生效，不必等 session 過期。
+角色與租戶的狀態每個請求都從 `memberships` 與 `tenants` 重新讀（同一個查詢、同一個租戶交易）：改角色、移除成員、停權或恢復，下一個請求就生效，不必等 session 過期。
 
 ### 受眾（`aud`）
 
@@ -74,10 +75,11 @@ token 交換在自己的埠（`exchange.listen_addr`，預設 `0.0.0.0:8082`，c
 1. 以 `ExchangeVerifier` 驗證 token：與每個服務的驗證端相同（簽章、`kid`、`typ`、發行者、效期與時間），只是受眾可以是任何服務。沒有公鑰 503，其他失敗 401。先驗 token 再讀本文，沒有有效 token 的請求看不出本文對不對。
 2. 本文不是這個請求、服務名稱不認得（`ai-gateway` 不在 `ServiceName`）400。
 3. token 帶 `act`，也就是本身是換來的：403 `permission_denied`。只換一跳。
+   - token 帶 `tenant_suspended`：403 `tenant_suspended`（Laysi/trustiot-v2#777）。這種 token 只有身分服務自己拿得到，它不代表使用者呼叫別的服務；這一步是第二道防線。
 4. 「token 的受眾 → `audience`」不在呼叫清單上 403 `permission_denied`。ztunnel 不把呼叫端的身分交給應用程式，所以呼叫端以 token 的受眾認定。以某個服務為受眾的 token 不只那個服務拿得到，清單上可以呼叫它的服務也換得到一張，所以清單只套用在入口 gateway 的請求簽出、沒有 `act` 的 token 上：A 可以呼叫 B、B 可以呼叫 C 時，A 拿換來的 B token 換不到 C 的（第 3 步）。代價是 B 以換來的 token 被呼叫時，不能再代表同一個使用者呼叫 C；多跳的鏈要先能驗證呼叫端的工作負載，記在 Laysi/trustiot-v2#509。
 5. 簽一張新 token：`sub`、`tenant`、`platform_admin` 與原 token 相同，`aud` 是 `audience`，`act` 是 `{"sub": "<原 token 的受眾>"}`（RFC 8693 的 actor），`iat` 是現在，`exp` 是原 token 的 `exp` 與現在加 60 秒取早者；剩不到 1 秒時不簽，回 401。沒有可以簽章的金鑰 503。
 
-成功回 200 `{"token": "<token>"}`，所有回應都帶 `cache-control: no-store`。換 token 不查資料庫。日誌：換到記 DEBUG（呼叫端與受眾）；401、503 記 WARN，欄位是原因（驗證端的 `reason`、`expires_too_soon`、`no_keys`、`no_signing_key`）；403 記 WARN，`reason` 是 `already_exchanged`（帶呼叫端、`act` 的服務與受眾）或 `not_listed`（帶呼叫端與受眾，通常是 `mesh.calls` 少了這條呼叫）；400 記 INFO。token、使用者與本文都不進日誌。
+成功回 200 `{"token": "<token>"}`，所有回應都帶 `cache-control: no-store`。換 token 不查資料庫，所以停權之前簽出的 token 在剩下的效期（最多 60 秒）內仍換得到。日誌：換到記 DEBUG（呼叫端與受眾）；401、503 記 WARN，欄位是原因（驗證端的 `reason`、`expires_too_soon`、`no_keys`、`no_signing_key`）；403 記 WARN，`reason` 是 `already_exchanged`（帶呼叫端、`act` 的服務與受眾）或 `not_listed`（帶呼叫端與受眾，通常是 `mesh.calls` 少了這條呼叫）；`tenant_suspended` 的 403 記 INFO（帶呼叫端與受眾）；400 記 INFO。token、使用者與本文都不進日誌。
 
 還沒處理、記在 Laysi/trustiot-v2#509 的：多跳呼叫要的呼叫端工作負載驗證；入口 gateway 把 session cookie 轉給身分服務以外的後端；`ExchangeVerifier` 是 `crates/service-kit` 的公開型別；token 交換沒有並行上限，每次呼叫都換一張新的 token、不重用；金鑰撤銷還在傳播時，不拒絕以已撤銷世代的金鑰簽的 token（`TRUSTIOT_IDENTITY_REVOKE_BEFORE_GENERATION` 只管簽章）。
 
@@ -89,9 +91,9 @@ token 交換在自己的埠（`exchange.listen_addr`，預設 `0.0.0.0:8082`，c
 
 Laysi/trustiot-v2#551（2026-10-23 決定，決策 27 的補充）：AI 助理的主 agent 回答一個問題時，可能跑上好幾分鐘，每次工具呼叫都要以使用者的身分呼叫其他服務，但請求帶來的 token 只活 60 秒，token 交換換出的 token 也不會比它晚到期。這時持有者（目前只有 `assistant`，`delegation::HOLDERS`，加一個要改程式並審查，不是設定）在請求的 token 還有效時建立一個 run 委派，之後每次呼叫前用它換一張 60 秒的 token。契約是 `contract::api::identity::CreateRunDelegation` 與 `ExchangeRunDelegation`，呼叫端用 `crates/service-kit` 的 `RunDelegations`；程式在 `src/delegation.rs`。兩個路徑都在 token 交換的埠（8082），mesh 與 NetworkPolicy 和 token 交換相同。
 
-**建立**：`POST /internal/run-delegations`，`x-internal-identity` 帶入口 gateway 的請求簽給持有者的 token，本文 `{"run_id", "key", "lifetime_secs"}`（最多 1 KiB）。`key` 是持有者為這次 run 產生的 Ed25519 公鑰（base64url），私鑰只留在持有者的行程裡。依序：token 驗不過 401、沒有公鑰 503；本文不對、效期不在 1–900 秒、`key` 不是可用的 Ed25519 公鑰（含 small-order 點）400；token 帶 `act` 403（只換一跳）；token 的受眾不是持有者 403；token 沒有 `sid`（#551 之前簽的）401；session 已撤銷、過期或使用者已刪除 401，使用者已不是 token 租戶的成員 403，資料庫失敗 503。成功回 200 `{"delegation", "expires_at"}`。
+**建立**：`POST /internal/run-delegations`，`x-internal-identity` 帶入口 gateway 的請求簽給持有者的 token，本文 `{"run_id", "key", "lifetime_secs"}`（最多 1 KiB）。`key` 是持有者為這次 run 產生的 Ed25519 公鑰（base64url），私鑰只留在持有者的行程裡。依序：token 驗不過 401、沒有公鑰 503；本文不對、效期不在 1–900 秒、`key` 不是可用的 Ed25519 公鑰（含 small-order 點）400；token 帶 `act` 403（只換一跳）；token 的受眾不是持有者 403；token 沒有 `sid`（#551 之前簽的）401；token 帶 `tenant_suspended` 403 `tenant_suspended`（不查資料庫）；session 已撤銷、過期或使用者已刪除 401，使用者已不是 token 租戶的成員 403，租戶現在被停權或已刪除 403 `tenant_suspended`（Laysi/trustiot-v2#777），資料庫失敗 503。成功回 200 `{"delegation", "expires_at"}`。
 
-**換 token**：`POST /internal/run-delegations/token`，`x-internal-identity` 帶委派，本文 `{"audience", "iat", "proof"}`，`proof` 是 run 私鑰對 `run_proof_message(委派, audience, iat)` 的簽章，`iat` 要在現在的 ±30 秒內（`RUN_PROOF_WINDOW_SECS`）。依序：委派的 MAC 驗不過 401、還沒讀到簽章金鑰檔 503；過期、`iat` 在未來超過 5 秒、或效期超過 900 秒（即使 MAC 正確）401；本文不對 400；proof 過期或驗不過 401；持有者已不在 `HOLDERS` 403；呼叫清單沒有「持有者 → `audience`」403；**每次都重查**：session 不再有效 401，使用者已不是委派租戶的成員 403，資料庫失敗 503。成功回 200 `{"token"}`：和 token 交換換出的形狀相同（`sub`、委派的租戶與**現在**的角色、現在的 `platform_admin`、`act` 是持有者、沒有 `sid`），`iat` 是現在，`exp` 是現在加 60 秒與委派到期取早者。被呼叫端不用改任何東西。
+**換 token**：`POST /internal/run-delegations/token`，`x-internal-identity` 帶委派，本文 `{"audience", "iat", "proof"}`，`proof` 是 run 私鑰對 `run_proof_message(委派, audience, iat)` 的簽章，`iat` 要在現在的 ±30 秒內（`RUN_PROOF_WINDOW_SECS`）。依序：委派的 MAC 驗不過 401、還沒讀到簽章金鑰檔 503；過期、`iat` 在未來超過 5 秒、或效期超過 900 秒（即使 MAC 正確）401；本文不對 400；proof 過期或驗不過 401；持有者已不在 `HOLDERS` 403；呼叫清單沒有「持有者 → `audience`」403；**每次都重查**：session 不再有效 401，使用者已不是委派租戶的成員 403，委派的租戶被停權或已刪除 403 `tenant_suspended`（Laysi/trustiot-v2#777；成員資格與租戶狀態是同一個查詢），資料庫失敗 503。成功回 200 `{"token"}`：和 token 交換換出的形狀相同（`sub`、委派的租戶與**現在**的角色、現在的 `platform_admin`、`act` 是持有者、沒有 `sid`），`iat` 是現在，`exp` 是現在加 60 秒與委派到期取早者。被呼叫端不用改任何東西。
 
 **格式**：委派是 `trd1.<payload>.<mac>`，payload 是 `DelegationClaims`（`sub`、`sid`、`tenant`、`holder`、`run`、`key`、`iat`、`exp`）的 JSON，MAC 是 HMAC-SHA-256，金鑰是當下簽章的那把 Ed25519 私鑰對標籤 `trustiot-run-delegation-key:v1` 的 HMAC-SHA-256（和驗證碼的金鑰同樣的導出方式、不同的標籤，`src/issuer.rs`）。只有身分服務有簽章金鑰，所以只有它做得出、驗得了委派；它不是 JWS，任何服務的驗證端與 token 交換都不接受它。驗證時接受簽章金鑰檔裡每一把沒被撤銷的金鑰導出的 MAC，所以換簽章金鑰不影響進行中的 run；調 `revokeBeforeGeneration` 撤銷一代時，以那代簽的委派立即失效。委派不存在資料庫，換 token 只讀 session 與成員資格。
 
@@ -102,7 +104,7 @@ Laysi/trustiot-v2#551（2026-10-23 決定，決策 27 的補充）：AI 助理�
 - 只換一跳：換出的 token 帶 `act`，兩個路徑與 token 交換都不接受帶 `act` 的 token。
 - 只到呼叫清單（`mesh.calls`）上持有者可以呼叫的服務。
 
-**撤銷**：登出、登出所有裝置、session 被撤銷、session 過期或使用者被刪除之後，下一次換 token 就回 401；使用者被移出委派的租戶，下一次回 403；角色改變時下一張 token 帶新角色、平台管理者旗標也重讀。已經換出的 token 在剩下的效期（最多 60 秒）內仍有效，和入口簽的 token 相同。
+**撤銷**：登出、登出所有裝置、session 被撤銷、session 過期或使用者被刪除之後，下一次換 token 就回 401；使用者被移出委派的租戶，下一次回 403；租戶被停權，下一次回 403 `tenant_suspended`，恢復之後同一個委派（還沒到期時）又換得到；角色改變時下一張 token 帶新角色、平台管理者旗標也重讀。已經換出的 token 在剩下的效期（最多 60 秒）內仍有效，和入口簽的 token 相同。
 
 **威脅模型**：
 
@@ -113,7 +115,7 @@ Laysi/trustiot-v2#551（2026-10-23 決定，決策 27 的補充）：AI 助理�
 
 **連線池**：查 session 與成員資格用自己的連線池（`delegation::POOL_CONNECTIONS` 4 條，取得連線最多等 5 秒，每次查詢最多 5 秒，同時最多 64 個在等，多的立即回 503），和 ext_authz 的分開：大量換 token 不會讓每個請求都要的 cookie 檢查等連線。成員資格是租戶資料，以委派裡的租戶開 RLS 交易讀（`BackgroundTenantDb`，只在這個查詢裡用）；那個租戶來自身分服務自己簽的委派，建立時查過成員資格，不是請求給的。
 
-**日誌**：建立記 INFO（持有者、run、效期）；換到記 DEBUG（持有者、受眾、run）；session 不再有效、委派到期、使用者不再是成員記 INFO（run 照預期結束）；其他 401、403 記 WARN（原因如 `invalid_delegation`、`invalid_proof`、`stale_proof`、`not_listed`）；503 記 WARN。委派、proof、公鑰、token 與使用者都不進日誌。
+**日誌**：建立記 INFO（持有者、run、效期）；換到記 DEBUG（持有者、受眾、run）；session 不再有效、委派到期、使用者不再是成員、租戶被停權（`reason` 是 `tenant_suspended`）記 INFO（run 照預期結束）；其他 401、403 記 WARN（原因如 `invalid_delegation`、`invalid_proof`、`stale_proof`、`not_listed`）；503 記 WARN。委派、proof、公鑰、token 與使用者都不進日誌。
 
 ## session
 
@@ -249,7 +251,7 @@ ext_authz 每個請求都查資料庫，所以被撤銷的 session 下一個請�
 - **事件帶快照**：每次改變在同一個交易寫 `identity.tenant_state_changed`（`crates/contract` 的 `events::identity::TenantStateChanged`），payload 是改變後的 `{state, reason, state_version}`；信封的租戶是這個租戶，`actor` 是平台管理者，aggregate 是 `tenant` 加租戶 ID（與 `identity.tenant_created` 同一個，所以依寫入順序送達）。消費端只保留版本較大的快照（[crates/outbox](../../crates/outbox/README.md) 的「通知模式」），從頭重播就能重建每個租戶的狀態，不必呼叫這個服務。狀態與原因的列舉都有 `Unrecognized`，舊版本的消費端解得開新值，要當成不是 `active` 處理。事件層把它記進該租戶的操作紀錄，後台以 `GET /api/identity/v1/platform/tenants/{tenant_id}/event-log` 看得到。
 - **合約終止與 `deleted` 不能恢復**（清單 B1「合約終止不恢復」）：已因 `contract_terminated` 停權的租戶不能恢復、也不能換成其他原因，只能（由 Laysi/trustiot-v2#109）變成 `deleted`；只有合約終止的租戶會變成 `deleted`，並保留原因 `contract_terminated`；`deleted` 不再改變。
 - 只接受平台管理者本人的請求，與[成員](#成員)相同。
-- 這裡只改狀態：每次請求的停權檢查、certs 的訂閱在 Laysi/trustiot-v2#107 的其他子 issue，下游的撤銷與踢線在 Laysi/trustiot-v2#108；後台的「處理中」見下一節。
+- 每次請求的停權檢查見下方[停權時的每次請求檢查](#停權時的每次請求檢查)（Laysi/trustiot-v2#777），後台的「處理中」見[停權的處理中](#停權的處理中)（Laysi/trustiot-v2#779）；certs 的訂閱在 Laysi/trustiot-v2#778，下游的撤銷與踢線在 Laysi/trustiot-v2#108。
 
 實作：
 
@@ -258,9 +260,23 @@ ext_authz 每個請求都查資料庫，所以被撤銷的 session 下一個請�
 - 每次改變記一行 INFO `changed a tenant's state`，帶平台管理者的 `user_id`、`tenant_id`、前後的狀態與原因、新版本；拒絕記 INFO `refused to change a tenant's state` 或 `refused to read a tenant's state`，帶 `user_id` 與 `exchanged`。
 - 路由：與其他身分服務的 API 一樣在 `/api/identity` 的 cookie 路由底下，跨站請求由 ext_authz 擋下，服務另外要求 JSON 的 `Content-Type`（見[租戶](#租戶)）。
 
+### 停權時的每次請求檢查
+
+停權與刪除在下一個請求就生效（Laysi/trustiot-v2#777，清單 B1「每次請求檢查停權」）：`suspended` 與 `deleted` 一樣處理，以下都稱「停權」。
+
+- **ext_authz 讀狀態**：`PgSessionStore` 讀成員角色的同一個查詢、同一個租戶 RLS 交易，也讀租戶的 `state`（`src/session.rs` 的 `MEMBERSHIP`），沒有快取。路由的服務不是身分服務時回 403 `tenant_suspended`、不簽 token；是身分服務時照常簽，token 帶 `tenant_suspended`，讓身分服務自己的端點決定。
+- **服務端**：`crates/service-kit` 的 `Requirement::Tenant` 遇到帶 `tenant_suspended` 的 token 回 403 `tenant_suspended`，和 `permission_denied` 分開，在比對角色之前判斷（[service-kit README](../../crates/service-kit/README.md) 的「角色檢查」）。身分服務裡需要租戶的端點（例如租戶的事件紀錄）因此回 403 `tenant_suspended`；`OwnRequest` 與 `OwnPlatformAdmin` 不看這個 claim。
+- **run 委派**：建立與每次換 token 都回 403 `tenant_suspended`（見[agent 執行期間的委派](#agent-執行期間的委派)）；`RunDelegations` 與 `OnBehalf` 把這個代碼照傳給使用者。token 交換拒絕帶這個 claim 的 token。
+- **停權時照常可用**：讀目前的 session（每個租戶帶 `state`）、切換租戶、登出、登出所有裝置與偏好設定；平台管理者的平台端點在身分服務裡照常可用，所以目前租戶被停權的平台管理者仍能恢復它（`tests/tenant_suspension.rs` 實測）。
+- **代價**：
+  - 平台管理者的目前租戶被停權時，其他服務（例如 assets 的閘道器綁定、certs 的出廠登錄）的平台端點也回 403 `tenant_suspended`，因為 ext_authz 不簽給它們 token；要先切換到另一個租戶（或恢復這個租戶）才能用。只屬於這個租戶的平台管理者在恢復之前用不了它們；租戶已刪除時，要由 Laysi/trustiot-v2#109 處理成員資格。
+  - 已經簽出的內部身分 token 在剩下的效期內（最多 60 秒，`TOKEN_LIFETIME_SECS`，驗證端另有 5 秒時鐘誤差）仍被受眾服務接受，也仍換得到 token 交換的 token；run 委派每次換 token 都重查，不受這一條影響。
+  - 沒有 `tenants` 列的成員資格（只有直接寫表的測試與本機資料會有，建立租戶一定寫這一列）當作 `active`：停權要有這一列，狀態 API 對沒有列的租戶回 404。資料庫裡出現這版不認得的狀態時，ext_authz 回 503（fail closed）。
+- **日誌**：ext_authz 的拒絕記在 `denied the ext_authz check`，`reason` 是 `tenant_suspended`；服務端的拒絕記在 service-kit 的 `refused to <動作>`，`reason` 是 `tenant_suspended`。
+
 ### 停權的處理中
 
-停權時後台先顯示「處理中」，certs 確認已踢線、CRL 已生效才顯示「已停權」（清單 B1，Laysi/trustiot-v2#779，`src/state_applied.rs`）。上面兩個 API 的回應都帶 `status`（`TenantStatus`）：
+停權時後台先顯示「處理中」，certs 確認已踢線、CRL 已生效才顯示「已停權」（清單 B1，Laysi/trustiot-v2#779，`src/state_applied.rs`）。[租戶狀態](#租戶狀態)的兩個 API 的回應都帶 `status`（`TenantStatus`）：
 
 | `state` | certs 確認過的版本 | `status` |
 | --- | --- | --- |
@@ -366,7 +382,8 @@ ext_authz 每個請求都查資料庫，所以被撤銷的 session 下一個請�
 | `PUT …/tenant`，使用者所屬的租戶 | 200，回應同 `GET`（切換之後的樣子）；這個 session 的下一個請求起以那個租戶、以使用者在那裡的角色執行 |
 | 資料庫出錯、讀成員資格等了 5 秒還輪不到（見[連線池](#連線池)），或平台角色沒有帳密 | 503 `unavailable`，什麼都沒改 |
 
-- **內容從哪裡來**：使用者、平台管理者旗標，以及目前的租戶與角色，取自請求的 token（剛由 cookie 檢查從 session 與成員資格簽出）；租戶名稱在那個租戶的 RLS 交易裡讀。`active_tenant` 是 `null` 表示 session 不在任何租戶：還沒選過，或使用者已不是那個租戶的成員。`tenants` 是使用者所有的成員資格，依名稱排序；`email` 是 `null` 表示使用者不以 email 登入。`role` 是 `viewer`、`editor` 或 `admin`。
+- **內容從哪裡來**：使用者、平台管理者旗標，以及目前的租戶與角色，取自請求的 token（剛由 cookie 檢查從 session 與成員資格簽出）；租戶名稱在那個租戶的 RLS 交易裡讀。`active_tenant` 是 `null` 表示 session 不在任何租戶：還沒選過，或使用者已不是那個租戶的成員。`tenants` 是使用者所有的成員資格，依名稱排序；`email` 是 `null` 表示使用者不以 email 登入。`role` 是 `viewer`、`editor` 或 `admin`。`active_tenant` 與 `tenants` 的每個租戶都帶 `state`（`active`、`suspended` 或 `deleted`，Laysi/trustiot-v2#777，[租戶狀態](#租戶狀態)），畫面以它說明為什麼其他功能不能用（Laysi/trustiot-v2#780）；停權的原因不在這裡，只有平台管理者讀得到。租戶沒有 `tenants` 的列時是 `active`，資料庫裡出現這版不認得的狀態時回 503。
+- **停權時照常可用**：讀這個 session、切換租戶（包括切到被停權的租戶，切過去之後其他服務一樣回 403 `tenant_suspended`）、登出與偏好設定都不需要租戶，停權不影響它們（見[停權時的每次請求檢查](#停權時的每次請求檢查)）。
 - **列出所屬的租戶要跨租戶讀**：`memberships` 是租戶資料，服務角色一次只看得到一個租戶，而連線檢查不讓服務角色有以使用者為條件的 policy 或 `SECURITY DEFINER` 函式（決策 29）。所以這裡照決策 29 跨租戶操作的作法，以平台角色 `identity_platform` 讀：`0007_preferences_and_tenant_switch.sql` 給它 `memberships` 與 `tenants` 的 `SELECT` 與只有 `FOR SELECT` 的 `platform_access` policy，沒有寫入權限；查詢在 `PlatformDb` 的 `READ ONLY` 交易裡、條件只有已驗證的 token 的使用者，不取自請求的本文、路徑或查詢字串（`PlatformActor::service`，用途 `session-tenants`，啟動時以 INFO 記一行 `platform database reader`；每個交易記 DEBUG，service-kit 的那一行只有用途，這裡另記一行 `reading a user's memberships with the platform role` 帶 `user_id`，不帶 email）。用的是事件紀錄的平台角色連線池，同時最多 2 個（見[連線池](#連線池)）。沒有給平台角色帳密時這組 API 回 503（啟動時記 WARN），chart 一律給。取捨：平台角色因此看得到每個租戶的成員資格與名稱（它原本就讀得到每個租戶的事件紀錄）；另一種作法是由 trigger 維護一張不受 RLS 保護的「使用者→租戶」投影表，等於把成員資格搬到 RLS 之外，沒有採用。
 - **切換**：目標必須在上面讀出的成員資格裡，然後把請求帶來的那個 session 的 `active_tenant_id` 指向它：以 cookie 的雜湊與 token 的 `sid`（cookie 檢查簽出 token 的那個 session）一起找，而且要屬於 token 的使用者、還沒撤銷或過期（資料庫的時鐘）。使用者其他的 session、別人的 session 都不受影響；同一個使用者的另一個 session 的 cookie 配上這個 token 也改不到（401）。服務角色只多了 `sessions.active_tenant_id` 一欄的 `UPDATE`（0004 的 trigger 不管這一欄：撤銷或過期的 session 指向哪個租戶都還是結束的）。
 - **指標本身不給權限**：cookie 檢查每個請求都在那個租戶的 RLS 交易裡重讀 `memberships`（決策 13），所以切換之後才被移除的成員資格（即使只晚一瞬間）讓 session 不在任何租戶，角色也一律是使用者當下在那裡的角色。平台管理者不是成員就不能切換到那個租戶。
@@ -612,7 +629,7 @@ curl -i -H 'Host: localhost' -H 'Cookie: __Host-trustiot-session=<seed 印出的
 CARGO_BUILD_JOBS=2 cargo test -p identity
 ```
 
-`tests/ext_authz.rs` 需要 podman 或 docker：起一個帶 TLS 的暫時 Postgres（與 `crates/service-kit` 的測試共用同一份支援程式），每個測試建自己的資料庫、套用 migration、以 `identity_app` 啟動真的 binary（它與 `tests/adversarial.rs` 只套用 `0001_identity.sql` 與 `0004_login.sql`，並代替 Job 寫入這一版每個檔案的紀錄，`tests/support/mod.rs` 的 `record_release_migrations`，readiness 的 migration 檢查才會通過；沒有給平台角色的帳密，所以事件紀錄關閉，ext_authz 不受影響）。`tests/tenants.rs`、`tests/members.rs`、`tests/login.rs`、`tests/event_log.rs`、`tests/platform_admin.rs`、`tests/ai_model_roles.rs`、`tests/cross_tenant.rs`（[crates/testkit](../../crates/testkit/README.md) 的跨租戶負向測試）與 `tests/permissions.rs`（權限矩陣）用 testkit 的 TLS Postgres，schema 由 migration Job 的程式套用（`testkit::product`）。沒有容器時都略過，設了 `CI` 時改為失敗。
+`tests/ext_authz.rs` 需要 podman 或 docker：起一個帶 TLS 的暫時 Postgres（與 `crates/service-kit` 的測試共用同一份支援程式），每個測試建自己的資料庫、套用 migration、以 `identity_app` 啟動真的 binary（它與 `tests/adversarial.rs` 只套用 `0001_identity.sql`、`0002_tenants.sql`、`0004_login.sql` 與 `0008_tenant_state.sql`：cookie 檢查讀成員角色時也讀租戶的狀態，並代替 Job 寫入這一版每個檔案的紀錄，`tests/support/mod.rs` 的 `record_release_migrations`，readiness 的 migration 檢查才會通過；沒有給平台角色的帳密，所以事件紀錄關閉，ext_authz 不受影響）。`tests/tenants.rs`、`tests/members.rs`、`tests/login.rs`、`tests/event_log.rs`、`tests/platform_admin.rs`、`tests/ai_model_roles.rs`、`tests/cross_tenant.rs`（[crates/testkit](../../crates/testkit/README.md) 的跨租戶負向測試）、`tests/permissions.rs`（權限矩陣）與 `tests/tenant_suspension.rs`（停權）用 testkit 的 TLS Postgres，schema 由 migration Job 的程式套用（`testkit::product`）。沒有容器時都略過，設了 `CI` 時改為失敗。
 
 | 測試 | 驗證 |
 | --- | --- |
@@ -648,6 +665,7 @@ CARGO_BUILD_JOBS=2 cargo test -p identity
 | `tests/ai_model_roles.rs` | Laysi/trustiot-v2#608，真的服務、migration Job 套用的產品 schema，與測試起的假 AI 閘道管理 API（記下收到的每個請求，照 AI 閘道的規則回答，或依步驟回指定的狀態、或一直不回）：沒有 token 401，租戶 `admin`、沒有租戶的使用者、帶 `act` 的 token 在三條路由都 403，假 AI 閘道什麼都沒收到；平台管理者讀取、修改、重設得到假 AI 閘道的內容，假 AI 閘道收到的 `ai-gateway-actor` 是 token 的使用者（用戶端偽造的被換掉），沒有 cookie、token、`Authorization`，body 只有兩個欄位；協定不符、未知的供應商、重複的模型 422 各帶自己的 key，什麼都沒改；舊版本 409 帶現在的版本，沒有的角色 404；每次變更在 outbox 寫一筆沒有租戶、actor 是平台管理者的事件，後台的操作紀錄看得到，重設沒有存模型的角色不寫；跨站（ext_authz 與 handler 都擋）、非 JSON 的 `Content-Type`、0 或 9 個模型、超過 16 KiB、負的版本、不可能存在的角色名稱都在送出前拒絕；500、502、504、AI 閘道的 503、未知的錯誤碼、讀不懂的 2xx 時，修改與重設都回 504 `ai_model_role.outcome_unknown`（從不回 503）、讀取回 503，每個寫入剛好送一次、不寫事件；撤銷平台角色寫 outbox 的權限時變更仍回 200 並記 ERROR；假 AI 閘道不回時 4 個變更等著、第 5 個立刻 503 不送出、ext_authz 照常回 200，等著的在 client 的時間上限之後回 504 `ai_model_role.outcome_unknown`；沒有設定與連不上的位址三條路由都 503；日誌沒有 cookie、token 或偽造的 actor |
 | `tests/migrations.rs` | 真的服務與 migration Job 套用的產品 schema（Laysi/trustiot-v2#402）：Job 寫的紀錄就是 `src/schema.rs` 預期的清單（outbox 的兩個範本與 `migrations/postgres/` 的每個檔案），服務 ready 並記 INFO；以 superuser 拿掉 `0002_tenants.sql` 的紀錄時，新的行程 503，ERROR 日誌的 `missing` 寫出它，已經通過的行程維持 ready；紀錄回來後同一個行程轉為 ready；`outbox-aggregate.sql` 的 SHA-256 不同時 503，`changed` 寫出它；`identity_app` 讀得到自己的紀錄、讀不到 `trustiot_migrate.applied` 與 `assets` 的紀錄，也不能新增、修改、刪除自己的紀錄 |
 | `tests/account.rs` | 真的服務與產品 schema（含平台角色），每個請求先經這個服務的 ext_authz（Laysi/trustiot-v2#497）：目前的 session 顯示使用者、目前租戶與角色、依名稱排序的所屬租戶，沒有別人與非所屬租戶的資料；切換到所屬租戶後回應、資料庫與下一個請求的 token 都是新租戶與那裡的角色（角色變更也立即生效：直接改資料表，或由平台管理者經[成員](#成員)的 API 設定），同一使用者的另一個 session 與別人的 session 不變；切到存在但不屬於自己、與不存在的租戶回一樣的 403，session 不變；token 與 cookie 不是同一個 session、別人的 cookie 或 token、沒有 cookie 都改不到任何 session；切換之後被移除成員資格時 session 不在任何租戶；檢查之後才被撤銷的 session 401；兩個寫入的跨站請求被 cookie 檢查擋下（`cross-site`、`same-site`、別的 `Origin`），帶著 token 送到處理常式也再擋一次（含 `Sec-Fetch-Site: none` 與重複的標頭）；別的服務換來的 token（`act`）讀寫都 403、沒有 `sid` 的 token 不能切換、非 JSON 的 body 400、沒有 token 或給別的服務的 token 401，都什麼都沒改，而同源的 JSON 請求成功；大小上限以補了空白的合法 body 測：剛好 1024 bytes 200，1025 bytes 與多 1100 bytes 的 400（或連線在讀完之前被關掉）且什麼都沒改；檢查之後才過期（資料庫的時鐘，沒有撤銷）的 session 401 且不變；偏好的預設值、部分修改、`{}`、另一個使用者先存了自己的偏好，之後每次修改他的那一列都不變、16 種不在允許清單的值 422 且同一請求的合法欄位也不套用、`null`、未知欄位、陣列與想指定別的使用者的 body 400、使用者已刪除 401；`identity_app` 只能改 session 的 `active_tenant_id` 與偏好的四欄、CHECK 擋下清單外的值、沒有租戶時仍看不到成員資格與租戶，`identity_platform` 只能跨租戶讀成員資格與租戶名稱、不能寫、碰不到 session 與偏好（42501）；日誌沒有租戶名稱、email、cookie 與偏好的值 |
+| `tests/tenant_suspension.rs` | Laysi/trustiot-v2#777，真的服務、migration Job 套用的產品 schema，路由有身分服務、assets 與 assistant：停權之前每個 session 都通過；平台管理者經 API 停權之後，同一個 session 的下一個請求在 cookie 檢查就對 assets 與 assistant 回 403 `tenant_suspended`（GET 與 POST、管理者與平台管理者都一樣，沒有身分標頭），給身分服務的 token 帶 `tenant_suspended`，租戶的事件紀錄回 403 `tenant_suspended`，run 委派的建立與換 token 都回 403 `tenant_suspended`；讀 session（租戶帶 `suspended`）、修改偏好、切換到另一個租戶（那裡照常通過）、登出照常可用，切回被停權的租戶後又被擋下；目前租戶被停權的平台管理者讀得到狀態並恢復它；恢復之後下一個請求都通過，停權前建立的委派又換得到 token；`deleted` 的租戶同樣被擋下、session 顯示 `deleted`、切換到別的租戶照常可用；日誌有 `tenant_suspended` 的拒絕、沒有 credential |
 | `tests/cross_tenant.rs` | 產品 schema（`testkit::product`）上，服務角色讀不到也改不了其他租戶的 `memberships`、`tenants`（每個租戶一列）、`outbox_event` 與 `outbox_aggregate`（讀、無租戶讀、更新、搬移、插入五種探測；`outbox_aggregate` 在 2026-10-15 前豁免，Laysi/trustiot-v2#413 起照租戶表測）與 `event_log`（種子是 `assets` 的設備型號事件：每個產生端的事件都在這張表、受同一個 RLS），服務角色碰得到的每個關聯都已宣告：`users`、`sessions`、`login_codes`、`trustiot_migrate_applied`、`platform_event_log` 與消費端的表不是租戶資料而豁免；真的服務上，一個租戶的 `admin` 呼叫 `GET /api/identity/v1/event-log` 只看得到自己租戶的事件、沒有租戶時看不到任何事件；`GET /api/identity/v1/sessions/current` 以租戶的 token 只顯示自己租戶的名稱、沒有租戶時什麼都不顯示（Laysi/trustiot-v2#497）；`preferences` 是使用者的設定、不是租戶資料而豁免；建立租戶、登入、兩個登出與偏好的 API 不讀租戶資料，切換租戶只回呼叫者自己所屬的租戶（同 `GET /api/identity/v1/sessions/current`），只動呼叫者自己的 session，探測的 token 指不到它（由 `tests/account.rs` 涵蓋）、平台路徑（兩個事件紀錄與設定成員角色）只給平台管理者，都豁免，設定成員角色的隔離由 `tests/members.rs` 測 |
 | `src/event_log.rs` | 查詢參數（時間轉成 UTC、`from` 不早於 `to`、`limit` 的範圍、壞的 cursor）、cursor 到微秒來回不失真、`actor` 寫成哪個欄位（不認得的種類重試）、訂閱名稱；兩條平台路徑只放行平台管理者本人的請求：assistant 或 assets 換發的平台管理者 token 與租戶 `admin` 都 403（Laysi/trustiot-v2#584） |
 | `tests/permissions.rs` | [權限矩陣](../../docs/architecture/permissions.md)（Laysi/trustiot-v2#584）：`openapi()` 的每個操作都宣告了要求，宣告與 OpenAPI 文件、矩陣文件的 `## identity` 一節逐列相同（不需要資料庫）；真的服務與產品 schema 上，每個操作以沒有 token、偽造的 token、給別的服務的 token、每種租戶角色、沒有租戶、平台管理者、換發的 token 各呼叫一次，只有要求放行的呼叫者通過授權，其餘剛好 401 或 403；建立租戶接受換發 token 的已知落差照目前的行為檢查，修正後失敗 |

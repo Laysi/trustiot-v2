@@ -297,6 +297,8 @@ impl Issuer {
             // The session the request came with, so a delegation can be bound to it
             // (`crate::delegation`).
             sid: Some(grant.session),
+            // Only with a tenant: the claim describes the token's tenant.
+            tenant_suspended: grant.tenant.is_some() && grant.tenant_suspended,
         };
         self.sign_claims(&claims, now)
     }
@@ -724,7 +726,43 @@ mod tests {
                 role: TenantRole::Editor,
             }),
             platform_admin: true,
+            tenant_suspended: false,
         }
+    }
+
+    #[test]
+    fn a_suspended_tenant_is_named_in_the_token_and_only_with_a_tenant() {
+        let issuer = issuer(1, &[(1, "2026-10-a")]);
+        let keys = keys(&[(1, "2026-10-a")]);
+        let verify = |grant: &SessionGrant| {
+            let token = issuer
+                .issue(grant, ServiceName::Identity, unix_now())
+                .expect("token");
+            let payload = segment(token.expose(), 1);
+            let user = IdentityVerifier::new(ServiceName::Identity, keys.clone())
+                .verify(token.expose())
+                .expect("identity accepts its token");
+            (payload, user)
+        };
+        let (payload, user) = verify(&grant());
+        assert!(payload.get("tenant_suspended").is_none(), "{payload}");
+        assert!(!user.is_tenant_suspended());
+
+        let suspended = SessionGrant {
+            tenant_suspended: true,
+            ..grant()
+        };
+        let (payload, user) = verify(&suspended);
+        assert_eq!(payload["tenant_suspended"], json!(true));
+        assert!(user.is_tenant_suspended());
+        assert_eq!(user.tenant(), grant().tenant);
+
+        let no_tenant = SessionGrant {
+            tenant: None,
+            ..suspended
+        };
+        let (payload, _) = verify(&no_tenant);
+        assert!(payload.get("tenant_suspended").is_none(), "{payload}");
     }
 
     fn segment(token: &str, index: usize) -> Value {

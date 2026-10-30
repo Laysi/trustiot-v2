@@ -77,6 +77,24 @@ const CERTS_PLATFORM_ON_ASSETS_EVENTS: &str = "SELECT
     has_table_privilege('certs_platform', 'assets.outbox_event',
         'INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER'),
     has_schema_privilege('certs_platform', 'assets', 'CREATE')";
+/// The relations of schema identity the certs service's platform role can do anything with
+/// (Laysi/trustiot-v2#778): it reads identity's events for the tenant states, nothing else.
+const CERTS_PLATFORM_IN_IDENTITY: &str = "SELECT c.relname::text FROM pg_class c
+    JOIN pg_namespace n ON n.oid = c.relnamespace
+    WHERE n.nspname = 'identity' AND c.relkind IN ('r', 'p', 'v', 'm', 'f')
+      AND has_table_privilege('certs_platform', c.oid,
+          'SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER')
+    ORDER BY 1";
+/// What it may do with identity's events: read them, and no write of any kind.
+const CERTS_PLATFORM_ON_IDENTITY_EVENTS: &str = "SELECT
+    has_table_privilege('certs_platform', 'identity.outbox_event', 'SELECT'),
+    has_table_privilege('certs_platform', 'identity.outbox_event',
+        'INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER'),
+    has_schema_privilege('certs_platform', 'identity', 'CREATE')";
+/// The roles the identity outbox's read policy names.
+const IDENTITY_EVENT_READERS: &str = "SELECT array_to_string(polroles::regrole[], ',')
+    FROM pg_policy WHERE polrelid = 'identity.outbox_event'::regclass
+        AND polname = 'consumer_read'";
 /// The certs service's consumer tables and its copy of the bindings and tenant statuses
 /// (Laysi/trustiot-v2#632), with whether row-level security is on.
 const CERTS_CONSUMER_TABLES: &str = "SELECT c.relname::text, c.relrowsecurity FROM pg_class c
@@ -337,6 +355,43 @@ async fn a_fresh_database_gets_every_migration_once() {
         rights,
         (true, false, false),
         "certs_platform: SELECT on assets.outbox_event, no write, no CREATE in assets"
+    );
+    // The certs service reads identity's events too (Laysi/trustiot-v2#778), for each tenant's
+    // state: its entry in src/registry.rs has `consumes: &["assets", "identity"]`. The other
+    // readers are identity's event log, assets (`identity.tenant_created`) and telemetry-query
+    // (each tenant's ClickHouse account).
+    let readers: String = sqlx::query_scalar(IDENTITY_EVENT_READERS)
+        .fetch_one(&mut admin)
+        .await
+        .expect("read the identity outbox's read policy");
+    let mut readers: Vec<&str> = readers.split(',').collect();
+    readers.sort_unstable();
+    assert_eq!(
+        readers,
+        [
+            "assets_platform",
+            "certs_platform",
+            "identity_platform",
+            "telemetry_query_platform"
+        ]
+    );
+    let reachable: Vec<String> = sqlx::query_scalar(CERTS_PLATFORM_IN_IDENTITY)
+        .fetch_all(&mut admin)
+        .await
+        .expect("read certs_platform's rights in identity");
+    assert_eq!(
+        reachable,
+        ["outbox_event"],
+        "certs_platform in schema identity"
+    );
+    let rights: (bool, bool, bool) = sqlx::query_as(CERTS_PLATFORM_ON_IDENTITY_EVENTS)
+        .fetch_one(&mut admin)
+        .await
+        .expect("read certs_platform's rights on identity.outbox_event");
+    assert_eq!(
+        rights,
+        (true, false, false),
+        "certs_platform: SELECT on identity.outbox_event, no write, no CREATE in identity"
     );
     // The consumer's bookkeeping, where its subscription is recorded once the service runs, and
     // the two tenant tables of 0005_gateway_bindings.sql under row-level security.

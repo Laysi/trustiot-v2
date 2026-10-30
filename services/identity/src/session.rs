@@ -5,7 +5,8 @@
 //! secret, so a copy of the sessions table cannot be replayed as cookies, and there is no session
 //! signing key that could be hard-coded or leak (docs/requirements/rebuild-checklist.md A1).
 //! Everything about the session (user, tenant, expiry, revocation, role) is read from the
-//! database on every check, so logout, revocation and role changes apply to the next request.
+//! database on every check, so logout, revocation, role changes and a suspension of the tenant
+//! apply to the next request.
 //!
 //! Lifetime (services/identity/README.md, "session 的期限"): a session created by logging in
 //! ([`crate::login`]) expires [`SESSION_IDLE_LIFETIME`] after its last use, and never later than
@@ -33,6 +34,8 @@ use sqlx::pool::PoolConnection;
 use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
 use tokio::sync::Semaphore;
 use tokio::task::JoinSet;
+
+use crate::tenant_state::TenantState;
 
 /// The session cookie. The `__Host-` prefix makes browsers accept it only when it was set by this
 /// host over HTTPS with `Path=/` and no `Domain`, so a sibling subdomain cannot plant or overwrite
@@ -285,6 +288,11 @@ pub struct SessionGrant {
     pub tenant: Option<TenantGrant>,
     /// Whether the user is a platform administrator (A2).
     pub platform_admin: bool,
+    /// Whether the session's tenant is suspended or deleted (checklist B1,
+    /// Laysi/trustiot-v2#777), read with the role; `false` without a tenant. The cookie check
+    /// then refuses every route but the identity service's own, and signs that one with the
+    /// `tenant_suspended` claim.
+    pub tenant_suspended: bool,
 }
 
 /// Why the store could not answer. The ext_authz check answers 503 for all of them, which the
@@ -353,10 +361,17 @@ WHERE id = $1::uuid AND revoked_at IS NULL AND expires_at > now()
     AND LEAST(now() + make_interval(secs => $2), created_at + make_interval(secs => $3))
         > expires_at";
 
-/// The user's role in the transaction's tenant. Row-level security already limits the rows to
-/// that tenant; the tenant condition is repeated so the query means the same without it.
-pub(crate) const MEMBERSHIP_ROLE: &str = "SELECT tenant_role FROM identity.memberships
-WHERE tenant_id = $1::uuid AND user_id = $2::uuid";
+/// The user's role in the transaction's tenant and the tenant's state (Laysi/trustiot-v2#777),
+/// read together, so a suspension applies from the next request on like a role change.
+/// Row-level security already limits both tables to that tenant; the tenant condition is
+/// repeated so the query means the same without it. A membership whose tenant has no row (only
+/// data written outside the API has one) reads as active: suspending a tenant needs its row (the
+/// state API answers 404 without one), and the service role cannot delete a row, so no suspended
+/// tenant ever loses it.
+pub(crate) const MEMBERSHIP: &str = "SELECT m.tenant_role, t.state
+FROM identity.memberships AS m
+LEFT JOIN identity.tenants AS t ON t.tenant_id = m.tenant_id
+WHERE m.tenant_id = $1::uuid AND m.user_id = $2::uuid";
 
 /// Names the work in the kit's DEBUG log of each tenant transaction.
 const MEMBERSHIP_PURPOSE: &str = "ext-authz-membership";
@@ -543,11 +558,21 @@ impl PgSessionStore {
                 let tenant: TenantId = tenant
                     .parse()
                     .map_err(|_| StoreError::Inconsistent("tenant id"))?;
-                self.role(tenant, user)
-                    .await?
-                    .map(|role| TenantGrant { id: tenant, role })
+                self.membership(tenant, user).await?.map(|membership| {
+                    (
+                        TenantGrant {
+                            id: tenant,
+                            role: membership.role,
+                        },
+                        membership.suspended,
+                    )
+                })
             }
             None => None,
+        };
+        let (tenant, tenant_suspended) = match tenant {
+            Some((grant, suspended)) => (Some(grant), suspended),
+            None => (None, false),
         };
         // After the check's own queries, so the extension never takes a connection they need.
         if due {
@@ -558,6 +583,7 @@ impl PgSessionStore {
             user,
             tenant,
             platform_admin,
+            tenant_suspended,
         }))
     }
 
@@ -601,16 +627,21 @@ impl PgSessionStore {
         });
     }
 
-    /// The user's role in `tenant`, or `None` when they are not a member (any more).
-    async fn role(&self, tenant: TenantId, user: UserId) -> Result<Option<TenantRole>, StoreError> {
+    /// The user's role in `tenant` and whether `tenant` is suspended, or `None` when they are
+    /// not a member (any more).
+    async fn membership(
+        &self,
+        tenant: TenantId,
+        user: UserId,
+    ) -> Result<Option<Membership>, StoreError> {
         let mut tx = self.memberships.begin(tenant, MEMBERSHIP_PURPOSE).await?;
-        let role: Option<String> = sqlx::query_scalar(MEMBERSHIP_ROLE)
+        let row: Option<MembershipRow> = sqlx::query_as(MEMBERSHIP)
             .bind(tenant.to_string())
             .bind(user.to_string())
             .fetch_optional(&mut *tx)
             .await?;
         tx.commit().await?;
-        role.map(|role| parse_role(&role)).transpose()
+        row.map(Membership::from_row).transpose()
     }
 }
 
@@ -722,6 +753,34 @@ pub(crate) fn error_kind(error: &sqlx::Error) -> String {
     }
 }
 
+/// One row of [`MEMBERSHIP`]: the role, and the tenant's state (`NULL` without a tenant row).
+pub(crate) type MembershipRow = (String, Option<String>);
+
+/// A user's membership of one tenant as [`MEMBERSHIP`] reads it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Membership {
+    /// The user's role in the tenant.
+    pub(crate) role: TenantRole,
+    /// Whether the tenant is suspended or deleted: any state but `active`.
+    pub(crate) suspended: bool,
+}
+
+impl Membership {
+    /// Reads a [`MEMBERSHIP`] row. A role or state the schema does not allow is refused, never
+    /// guessed: the check answers 503 (fail closed), as for any inconsistent row.
+    pub(crate) fn from_row((role, state): MembershipRow) -> Result<Self, StoreError> {
+        let suspended = match state.as_deref().map(TenantState::parse) {
+            None => false,
+            Some(Some(state)) => state != TenantState::Active,
+            Some(None) => return Err(StoreError::Inconsistent("tenant state")),
+        };
+        Ok(Self {
+            role: parse_role(&role)?,
+            suspended,
+        })
+    }
+}
+
 /// The roles the schema allows. Anything else is refused rather than issued: an unknown role
 /// would reach services as [`TenantRole::Unrecognized`].
 pub(crate) fn parse_role(role: &str) -> Result<TenantRole, StoreError> {
@@ -740,6 +799,42 @@ mod tests {
     use super::*;
 
     const SECRET: [u8; 32] = [7; 32];
+
+    #[test]
+    fn a_membership_row_is_suspended_unless_its_tenant_is_active() {
+        let row = |role: &str, state: Option<&str>| {
+            Membership::from_row((role.to_owned(), state.map(str::to_owned)))
+        };
+        assert_eq!(
+            row("editor", Some("active")).expect("active"),
+            Membership {
+                role: TenantRole::Editor,
+                suspended: false
+            }
+        );
+        for state in ["suspended", "deleted"] {
+            assert_eq!(
+                row("admin", Some(state)).expect(state),
+                Membership {
+                    role: TenantRole::Admin,
+                    suspended: true
+                }
+            );
+        }
+        // No tenant row: never suspended (see MEMBERSHIP).
+        assert!(!row("viewer", None).expect("no tenant row").suspended);
+        // Values the schema forbids are refused, not guessed.
+        for (role, state) in [
+            ("viewer", Some("Suspended")),
+            ("viewer", Some("")),
+            ("owner", Some("active")),
+        ] {
+            assert!(
+                matches!(row(role, state), Err(StoreError::Inconsistent(_))),
+                "{role} {state:?}"
+            );
+        }
+    }
 
     #[test]
     fn a_store_error_logs_the_tenant_db_message_once() {

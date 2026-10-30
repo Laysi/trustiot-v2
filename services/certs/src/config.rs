@@ -382,13 +382,14 @@ pub struct RenewalLimits {
     pub global_interval: Duration,
     /// `TRUSTIOT__RENEWAL__MAX_CONCURRENT`: requests whose database work runs at once per
     /// replica; default 2, 1 to one less than the platform role's pool
-    /// ([`crate::PLATFORM_CONNECTIONS`]), so the factory registration and the consumer of the
-    /// assets service's events always find a connection.
+    /// ([`crate::PLATFORM_CONNECTIONS`]), so the factory registration and the consumers of the
+    /// assets and identity services' events always find a connection.
     #[serde(default = "default_max_concurrent")]
     pub max_concurrent: u32,
-    /// `TRUSTIOT__RENEWAL__MAX_CONSUMER_LAG`: the endpoint answers 503 while the oldest event the
-    /// consumer of the assets service's events has not processed is older than this, or its lag
-    /// is unknown; default 60 seconds, 1 second to 1 hour.
+    /// `TRUSTIOT__RENEWAL__MAX_CONSUMER_LAG`: the endpoint answers 503 while the oldest event
+    /// either consumer (the assets service's events, the identity service's tenant events) has
+    /// not processed is older than this, or either lag is unknown; default 60 seconds, 1 second
+    /// to 1 hour.
     #[serde(
         default = "default_max_consumer_lag",
         deserialize_with = "service_kit::config::duration"

@@ -408,6 +408,7 @@ dependencies = [
  "contract",
  "getrandom 0.4.3",
  "humantime",
+ "identity",
  "migrate",
  "mqtt-client",
  "opentelemetry",

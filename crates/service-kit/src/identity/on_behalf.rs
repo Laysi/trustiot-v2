@@ -160,8 +160,10 @@ impl OnBehalf {
 pub enum OnBehalfError {
     /// The identity service did not exchange the request's token for one addressed to the
     /// callee. M1: `timeout` or `unavailable` when the identity service was too slow or could not
-    /// be reached, otherwise `internal`: a refused exchange is a fault of the deployment or of
-    /// this service, so the user gets neither `permission_denied` nor `unauthenticated`.
+    /// be reached, `tenant_suspended` when it refused because the user's tenant is suspended or
+    /// deleted (Laysi/trustiot-v2#777: the user is meant to learn that), otherwise `internal`: a
+    /// refused exchange is a fault of the deployment or of this service, so the user gets neither
+    /// `permission_denied` nor `unauthenticated`.
     #[error("the identity service did not exchange the request's token for {audience}")]
     Exchange {
         /// The service the token was for.
@@ -181,7 +183,9 @@ impl OnBehalfError {
     pub fn code(&self) -> ErrorCode {
         match self {
             Self::Exchange { source, .. } => match source.code() {
-                code @ (ErrorCode::Timeout | ErrorCode::Unavailable) => code,
+                code @ (ErrorCode::Timeout
+                | ErrorCode::Unavailable
+                | ErrorCode::TenantSuspended) => code,
                 _ => ErrorCode::Internal,
             },
             Self::Call(error) => error.code(),
@@ -249,7 +253,8 @@ mod tests {
     }
 
     /// The identity service's exchange: certs gets a token, alerts is not on the call list,
-    /// knowledge finds the identity service without keys.
+    /// knowledge finds the identity service without keys, gateway-ops finds the user's tenant
+    /// suspended.
     async fn exchange(
         State(seen): State<Seen>,
         headers: HeaderMap,
@@ -267,6 +272,7 @@ mod tests {
             Some("certs") => axum::Json(json!({"token": "exchanged.for.certs"})).into_response(),
             Some("alerts") => refuse(ErrorCode::PermissionDenied),
             Some("knowledge") => refuse(ErrorCode::Unavailable),
+            Some("gateway-ops") => refuse(ErrorCode::TenantSuspended),
             _ => refuse(ErrorCode::InvalidRequest),
         }
     }
@@ -300,6 +306,7 @@ mod tests {
     endpoint!(CertsMissing, service::Certs, "/internal/missing");
     endpoint!(AlertsDevices, service::Alerts, "/internal/devices");
     endpoint!(KnowledgeDevices, service::Knowledge, "/internal/devices");
+    endpoint!(GatewayOpsDevices, service::GatewayOps, "/internal/devices");
 
     /// One server stands in for the identity service and every callee.
     async fn serve(seen: Seen) -> String {
@@ -391,6 +398,22 @@ mod tests {
             .await
             .expect_err("unavailable");
         assert_eq!(error.code(), ErrorCode::Unavailable);
+
+        // The user's tenant is suspended: the user is told so, as the identity service said.
+        let error = on_behalf
+            .call(
+                &client::<service::GatewayOps>(&base_url),
+                &GatewayOpsDevices,
+                &user,
+            )
+            .await
+            .expect_err("suspended");
+        assert_eq!(error.code(), ErrorCode::TenantSuspended);
+        assert_eq!(
+            error.to_error_body(),
+            ErrorBody::new(ErrorCode::TenantSuspended)
+        );
+        assert_eq!(error.into_response().status(), StatusCode::FORBIDDEN);
         assert!(
             seen.calls
                 .lock()

@@ -284,7 +284,7 @@ async fn routes(context: &Context<Config>, config: &Config) -> Router {
 ```
 
 - `IdentityVerifier::new(受眾, 公鑰)`：受眾是服務自己的 `ServiceName`，寫在程式裡，不從設定讀。公鑰是 `PublishedKeys::watch` 讀到並持續更新的那一組（下方「公鑰與輪替」）；測試可以直接給一組 `IdentityKeys`。
-- handler 加上 `UserIdentity` 參數就要求這個請求帶有效的 token；沒通過的請求不會進 handler，直接回 401。`UserIdentity` 提供 `user_id()`、`tenant()`、`tenant_id()`、`is_platform_admin()` 與完整的 `claims()`。
+- handler 加上 `UserIdentity` 參數就要求這個請求帶有效的 token；沒通過的請求不會進 handler，直接回 401。`UserIdentity` 提供 `user_id()`、`tenant()`、`tenant_id()`、`is_platform_admin()`、`is_tenant_suspended()`（token 的租戶被停權或已刪除，Laysi/trustiot-v2#777）與完整的 `claims()`。
 - router 的 state 必須能以 `FromRef` 取出 `IdentityVerifier`，忘了放 verifier 的 handler 無法編譯。
 - 需要 token 但不經 axum 的地方用 `IdentityVerifier::verify_headers(&HeaderMap)` 或 `verify(&str)`。
 - 範例服務的 `GET /v1/whoami` 是可以執行的例子。
@@ -359,10 +359,11 @@ async fn delete_device(user: UserIdentity) -> Response {
 | `Requirement` | 放行 | 拒絕的 `reason` |
 | --- | --- | --- |
 | `OwnRequest` | 使用者自己經入口的請求 | `exchanged_token`：帶 `act`，其他服務換發的 token |
-| `Tenant(role)` | token 的租戶裡至少 `role`（admin 包含 editor，editor 包含 viewer）；換發的 token 也可以 | `no_tenant`（平台管理員沒有租戶也是）、`unrecognized_role`（本版本不認得的角色，`TenantRole::Unrecognized` 不授予任何權限）、`role_too_low` |
+| `Tenant(role)` | token 的租戶裡至少 `role`（admin 包含 editor，editor 包含 viewer），而且租戶沒有被停權；換發的 token 也可以 | `no_tenant`（平台管理員沒有租戶也是）、`tenant_suspended`（token 帶 `tenant_suspended`，在比對角色之前判斷）、`unrecognized_role`（本版本不認得的角色，`TenantRole::Unrecognized` 不授予任何權限）、`role_too_low` |
 | `OwnPlatformAdmin` | 平台管理員本人的請求 | `not_platform_admin`、`exchanged_token` |
 
-- 拒絕一律是同一個回應 `PermissionDenied`：403，body 是 M1 的 `{"code":"permission_denied","message_key":"error.permission_denied"}`，帶 `cache-control: no-store`，呼叫端看不出原因。
+- 拒絕一律是 `PermissionDenied`：403，body 是 M1 的 `{"code":"permission_denied","message_key":"error.permission_denied"}`，帶 `cache-control: no-store`，呼叫端看不出原因。唯一的例外是 `tenant_suspended`：body 是 `{"code":"tenant_suspended","message_key":"error.tenant_suspended"}`，讓畫面說明租戶被停權，而不是說使用者沒有權限（Laysi/trustiot-v2#777）。
+- 停權（清單 B1）：身分服務的 ext_authz 不簽給其他服務停權租戶的 token（直接回 403 `tenant_suspended`），只有給身分服務自己的 token 帶 `tenant_suspended`；所以其他服務通常看不到這個 claim，只有停權前簽出、還在 60 秒效期內的 token 會通過。`OwnRequest` 與 `OwnPlatformAdmin` 不看它：這兩種要求不靠租戶。細節在 [services/identity/README.md](../../services/identity/README.md) 的「停權時的每次請求檢查」。
 - 日誌是一行 INFO `refused to <action>`，欄位 `user_id`、`tenant_id`、`action`、`reason`、`exchanged`、`actor`（換發 token 的服務）；不記 token。
 - 「已登入」不需要檢查：只有驗證過的 token 才有 `UserIdentity`。
 - `UserIdentity::meets(requirement)` 是同一個判斷、不記日誌也不產生回應，給 store 在開交易前的第二道檢查（例如 assets 的閘道器綁定、身分服務的成員角色）；`UserIdentity::is_exchanged()` 回答 token 是否帶 `act`。
@@ -410,7 +411,7 @@ async fn device_certs(State(state): State<AppState>, user: UserIdentity) -> Resu
 - 身分服務只替 chart 依 `mesh.calls` 列出的呼叫換 token（`TRUSTIOT_ON_BEHALF_CALLS`）：要代表使用者呼叫一個服務，把它加進 `mesh.calls`，chart 同時讓本服務連得到對方與身分服務的 `token-exchange` 埠（[chart README](../../deploy/chart/README.md) 的「服務間授權（mesh）」）。
 - 只換一跳：清單套用在入口 gateway 簽給本服務的 token 上，換來的 token 帶 `act`，身分服務不再換它（403）。所以本服務以換來的 token 被呼叫時，不能再代表同一個使用者往下呼叫；多跳的鏈要等呼叫端的工作負載驗證（Laysi/trustiot-v2#509）。
 - 換來的 token 不會比請求的 token 晚到期，最多 60 秒；請求快到期時（剩不到 1 秒）換不到。
-- `OnBehalfError` 實作 `IntoResponse`，回 M1：交換失敗（`Exchange`）只有 `timeout`、`unavailable` 照傳，其他一律 `internal`，並記一筆 ERROR，欄位是呼叫端、受眾與身分服務回的代碼，提示檢查 `mesh.calls` 或請求的剩餘效期；呼叫對方失敗（`Call`）照 `CallError::code()`，例如對方的 `not_found` 原樣傳遞。token 不進日誌。
+- `OnBehalfError` 實作 `IntoResponse`，回 M1：交換失敗（`Exchange`）只有 `timeout`、`unavailable` 與 `tenant_suspended`（使用者的租戶被停權，Laysi/trustiot-v2#777）照傳，其他一律 `internal`，並記一筆 ERROR，欄位是呼叫端、受眾與身分服務回的代碼，提示檢查 `mesh.calls` 或請求的剩餘效期；呼叫對方失敗（`Call`）照 `CallError::code()`，例如對方的 `not_found` 原樣傳遞。token 不進日誌。
 - 身分服務自己用 `ExchangeVerifier` 驗證交換請求帶的 token：與 `IdentityVerifier` 做同樣的檢查，只是接受任何受眾。只有 token 交換可以用它；其他地方一律用 `IdentityVerifier`，受眾是自己。它目前是公開型別，其他服務也拿得到，限制它只給身分服務記在 Laysi/trustiot-v2#509。
 
 ### agent 執行期間的委派（`RunDelegations`）
@@ -430,7 +431,7 @@ let devices = run.call(&state.assets, &ListDevices { /* ... */ }).await?;
 - 只有身分服務列為持有者的服務（目前只有 `assistant`）建立得了委派；其他服務拿到 403。
 - `start` 為每個 run 以作業系統的 CSPRNG 產生一把 Ed25519 金鑰，公鑰交給身分服務綁進委派，私鑰只留在 `RunDelegation` 裡（drop 時清零）；每次換 token 都以它簽 `run_proof_message(委派, 受眾, 現在)`。所以委派本身外洩（日誌、存下的 run）換不到 token。`RunDelegation` 不能序列化，`Debug` 只顯示 run、持有者與到期時間；clone 共用同一把金鑰，run 裡的平行工作可以同時呼叫。run 結束就 drop。
 - 效期 1–900 秒（`RUN_DELEGATION_MAX_LIFETIME_SECS`），以整秒計，超出時 `start` 不送請求就回 `Lifetime`。到期後換不到 token，要以使用者的新請求重新開始。
-- 身分服務每次換 token 都重查：session 結束（登出、撤銷、過期）後回 `unauthenticated`，使用者被移出租戶後回 `permission_denied`，改角色時下一張 token 就帶新角色。`RunDelegationError` 實作 `IntoResponse`：建立與換 token 被拒時把 `unauthenticated`、`permission_denied` 照傳給使用者（記 INFO，run 照預期結束），`timeout`、`unavailable` 照傳，其他一律 `internal`（記 ERROR）；呼叫對方失敗（`Call`）照 `CallError::code()`。`permission_denied` 也可能是 `mesh.calls` 少了這條呼叫，身分服務的 WARN 日誌寫出 `not_listed`。
+- 身分服務每次換 token 都重查：session 結束（登出、撤銷、過期）後回 `unauthenticated`，使用者被移出租戶後回 `permission_denied`，租戶被停權或已刪除後回 `tenant_suspended`（Laysi/trustiot-v2#777；恢復之後同一個委派又換得到），改角色時下一張 token 就帶新角色。`RunDelegationError` 實作 `IntoResponse`：建立與換 token 被拒時把 `unauthenticated`、`permission_denied`、`tenant_suspended` 照傳給使用者（記 INFO，run 照預期結束），`timeout`、`unavailable` 照傳，其他一律 `internal`（記 ERROR）；呼叫對方失敗（`Call`）照 `CallError::code()`。`permission_denied` 也可能是 `mesh.calls` 少了這條呼叫，身分服務的 WARN 日誌寫出 `not_listed`。
 - 受眾只到 `mesh.calls` 上本服務可以呼叫的服務，和 `OnBehalf` 同一份清單；換出的 token 帶 `act`，對方不能再換。
 
 ### 背景工作沒有使用者身分

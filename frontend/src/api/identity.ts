@@ -11,10 +11,13 @@ type Spec = components["schemas"];
 // The identity service's bodies (services/identity/README.md), each bound to the generated type
 // so a change in api/openapi.json fails `typecheck` (lib/type-binding.ts).
 const MemberRoleSchema = z.enum(["viewer", "editor", "admin"]);
+// Read but not yet shown: the suspension screens are Laysi/trustiot-v2#780.
+const TenantStateSchema = z.enum(["active", "suspended", "deleted"]);
 const TenantMembershipSchema = z.object({
   tenant_id: z.string(),
   name: z.string().nullable(),
   role: MemberRoleSchema,
+  state: TenantStateSchema,
 });
 const CurrentSessionSchema = z.object({
   user_id: z.string(),

@@ -57,6 +57,7 @@ fn grant() -> SessionGrant {
             role: TenantRole::Viewer,
         }),
         platform_admin: false,
+        tenant_suspended: false,
     }
 }
 

@@ -62,6 +62,7 @@ fn claims(audience: ServiceName, iat: i64, exp: i64) -> InternalClaims {
         platform_admin: true,
         act: None,
         sid: None,
+        tenant_suspended: false,
     }
 }
 
@@ -271,6 +272,39 @@ async fn an_exchanged_token_is_never_exchanged_again() {
             .await
             .assert_error(StatusCode::FORBIDDEN, "permission_denied");
     }
+}
+
+/// Laysi/trustiot-v2#777: a token of a suspended tenant (which only this service gets) is never
+/// exchanged, even along a listed call, and the caller learns why.
+#[tokio::test]
+async fn a_token_of_a_suspended_tenant_is_never_exchanged() {
+    let router = exchange(&json!({"identity": ["assets"], "assets": ["certs"]}));
+    let now = unix_now();
+    for audience in [ServiceName::Identity, ServiceName::Assets] {
+        let suspended = InternalClaims {
+            tenant_suspended: true,
+            ..claims(audience, now, now + 60)
+        };
+        let token = signer()
+            .sign_claims(&suspended, now)
+            .expect("sign")
+            .expose()
+            .to_owned();
+        let callee = if audience == ServiceName::Identity {
+            "assets"
+        } else {
+            "certs"
+        };
+        exchange_for(&router, &token, callee)
+            .await
+            .assert_error(StatusCode::FORBIDDEN, "tenant_suspended");
+    }
+    // The same user's token without the claim goes through.
+    let active = token(ServiceName::Assets, now, now + 60);
+    assert_eq!(
+        exchange_for(&router, &active, "certs").await.status,
+        StatusCode::OK
+    );
 }
 
 #[test]
