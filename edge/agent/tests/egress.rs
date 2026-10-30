@@ -787,6 +787,26 @@ fn property(lab: &Lab, unit: &str, name: &str) -> String {
     lab.ok(&format!("systemctl show --property={name} --value {unit}"))
 }
 
+/// Waits until systemd has no queued jobs. `systemctl restart` returns when the job of the unit
+/// it names finishes, while the restarts it propagates to the units that require that unit may
+/// still be running.
+fn settle(lab: &Lab) {
+    lab.ok(
+        "for i in $(seq 600); do [ \"$(systemctl list-jobs --no-legend | wc -l)\" = 0 ] && exit 0; \
+         sleep 0.1; done; echo 'systemd still had queued jobs after 60 s' >&2; exit 1",
+    );
+}
+
+/// Waits until the stand-in agent has recorded `count` probes. With `Type=exec`, systemctl returns
+/// as soon as the stand-in runs, possibly before it wrote its probe.
+fn await_probes(lab: &Lab, count: usize) {
+    lab.ok(&format!(
+        "for i in $(seq 600); do \
+         [ \"$(cat /var/lib/trustiot-agent/probes 2> /dev/null | wc -l)\" -ge {count} ] && exit 0; \
+         sleep 0.1; done; echo 'the stand-in did not record {count} probes within 60 s' >&2; exit 1"
+    ));
+}
+
 #[test]
 fn the_rules_are_in_force_before_the_agent_starts_and_a_failed_load_keeps_it_stopped() {
     let Some(lab) = systemd_lab() else {
@@ -814,6 +834,7 @@ fn the_rules_are_in_force_before_the_agent_starts_and_a_failed_load_keeps_it_sto
         "nftables.service ran at {flushed}, the rules loaded at {loaded}, the agent started at \
          {started}"
     );
+    await_probes(&lab, 1);
     assert_eq!(lab.ok("cat /var/lib/trustiot-agent/probes"), "refused");
 
     // nftables.service flushes the whole ruleset (Debian's /etc/nftables.conf begins with
@@ -862,6 +883,7 @@ fn the_rules_are_in_force_before_the_agent_starts_and_a_failed_load_keeps_it_sto
     let egress_before = property(&lab, egress, "InvocationID");
     let agent_before = property(&lab, agent, "InvocationID");
     lab.ok("systemctl restart nftables.service");
+    settle(&lab);
     lab.ok("nft list table inet trustiot_agent > /dev/null");
     for (unit, before) in [(egress, &egress_before), (agent, &agent_before)] {
         assert_eq!(
@@ -885,6 +907,8 @@ fn the_rules_are_in_force_before_the_agent_starts_and_a_failed_load_keeps_it_sto
         reloaded <= restarted,
         "the agent restarted at {restarted}, before the rules loaded again at {reloaded}"
     );
+    // The restarted stand-in has recorded its probe before the stop.
+    await_probes(&lab, 2);
     lab.ok("systemctl stop nftables.service");
     assert_eq!(property(&lab, egress, "ActiveState"), "inactive");
     assert_eq!(
@@ -953,5 +977,6 @@ fn the_rules_are_in_force_before_the_agent_starts_and_a_failed_load_keeps_it_sto
          && systemctl reset-failed {egress}"
     ));
     lab.ok(&format!("systemctl start {agent}"));
+    await_probes(&lab, 1);
     assert_eq!(lab.ok("cat /var/lib/trustiot-agent/probes"), "refused");
 }
