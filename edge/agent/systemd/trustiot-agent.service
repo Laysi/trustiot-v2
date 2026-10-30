@@ -60,7 +60,9 @@ ProtectClock=yes
 ProtectHostname=yes
 # Not ProcSubset=pid: the heartbeat reads /proc/meminfo and /proc/uptime.
 ProtectProc=invisible
-RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+# AF_NETLINK: the Modbus address guard reads the gateway's interface addresses with
+# getifaddrs, which opens a netlink socket; without it every Modbus connection is refused.
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
 RestrictNamespaces=yes
 RestrictRealtime=yes
 RestrictSUIDSGID=yes
