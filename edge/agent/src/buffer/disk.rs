@@ -200,7 +200,7 @@ pub(crate) struct DiskStore {
     dir: PathBuf,
     /// The buffer directory, opened and exclusively locked (`flock`) for as long as this store
     /// exists: one store per directory, whatever the process.
-    _lock: File,
+    _lock: DirLock,
     segments: BTreeMap<u64, Segment>,
     writer: Option<Writer>,
     /// The number of the next segment; `u64::MAX` when none is left.
@@ -311,12 +311,153 @@ fn make_private(dir: &Path, before: &fs::Metadata) {
     }
 }
 
+/// The open handle on a buffer directory that holds the directory's exclusive lock
+/// ([`prepare_dir`]); the kernel releases the lock when the handle is closed.
+#[derive(Debug)]
+struct DirLock {
+    _handle: File,
+    /// Tests only: the directory's device and inode, under which [`test_locks`] counts the lock
+    /// as held by a store of this process.
+    #[cfg(test)]
+    key: (u64, u64),
+}
+
+impl DirLock {
+    /// Takes the exclusive lock on `handle`, the open directory `dir`, without waiting: while
+    /// another handle holds it, this fails at once with `WouldBlock`.
+    #[cfg(not(test))]
+    fn take(handle: File, dir: &Path, _key: (u64, u64)) -> io::Result<Self> {
+        try_lock(&handle, dir)?;
+        Ok(Self { _handle: handle })
+    }
+}
+
+/// `flock(LOCK_EX | LOCK_NB)` on the open directory `dir`.
+fn try_lock(handle: &File, dir: &Path) -> io::Result<()> {
+    match handle.try_lock() {
+        Ok(()) => Ok(()),
+        Err(fs::TryLockError::WouldBlock) => Err(io::Error::new(
+            io::ErrorKind::WouldBlock,
+            format!(
+                "{} is in use by another agent (it holds the directory's lock)",
+                dir.display()
+            ),
+        )),
+        Err(fs::TryLockError::Error(error)) => Err(io::Error::new(
+            error.kind(),
+            format!("{}: cannot lock: {error}", dir.display()),
+        )),
+    }
+}
+
+/// Tests only (Laysi/trustiot-v2#817): a test that drops a store and opens its directory again
+/// must not fail because another test of the same process spawned a child meanwhile. A child
+/// gets a copy of every descriptor of the process when it is created (`clone`, also through
+/// `posix_spawn`) and keeps it until it executes its program, which closes them
+/// (`O_CLOEXEC`); a copy of a store's handle keeps the directory's lock (an `flock` belongs to
+/// the open file, not to one descriptor), so a store dropped in that window still holds the
+/// lock until the child's `exec`, which a loaded machine can delay for a long time.
+///
+/// So in tests a lock that no store of this process holds is waited for, up to
+/// [`test_locks::LIMIT`], while one a live store holds still fails at once with `WouldBlock`,
+/// as it always does outside tests: [`test_locks::HELD`] records which directories the stores
+/// of this process have locked.
+#[cfg(test)]
+mod test_locks {
+    use std::collections::BTreeSet;
+    use std::fs::File;
+    use std::io;
+    use std::path::Path;
+    use std::sync::{Mutex, MutexGuard, PoisonError};
+    use std::time::{Duration, Instant};
+
+    use super::{DirLock, try_lock};
+
+    /// The directories (device and inode) whose lock a store of this process holds. A store
+    /// is added under this mutex together with taking the lock, and removed before its handle
+    /// is closed, so a lock that is taken while no entry names its directory is not a store's.
+    pub(super) static HELD: Mutex<BTreeSet<(u64, u64)>> = Mutex::new(BTreeSet::new());
+
+    /// How long a lock held outside this process's stores is waited for. Generous on purpose
+    /// (as `testkit::clock::WAIT_LIMIT`): a child usually executes within microseconds, but a
+    /// loaded machine can hold it back far longer, and a wait that ends early only turns a slow
+    /// run into a false failure.
+    pub(super) const LIMIT: Duration = Duration::from_secs(60);
+
+    /// How often the lock is tried again while it is waited for.
+    const RETRY: Duration = Duration::from_millis(5);
+
+    fn held() -> MutexGuard<'static, BTreeSet<(u64, u64)>> {
+        HELD.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    impl DirLock {
+        /// As outside tests, except that a lock no store of this process holds is waited for
+        /// (see the module).
+        pub(super) fn take(handle: File, dir: &Path, key: (u64, u64)) -> io::Result<Self> {
+            Self::take_within(handle, dir, key, LIMIT)
+        }
+
+        /// [`DirLock::take`], waiting at most `limit` for a lock no store of this process
+        /// holds.
+        pub(super) fn take_within(
+            handle: File,
+            dir: &Path,
+            key: (u64, u64),
+            limit: Duration,
+        ) -> io::Result<Self> {
+            let started = Instant::now();
+            loop {
+                {
+                    let mut stores = held();
+                    match try_lock(&handle, dir) {
+                        Ok(()) => {
+                            stores.insert(key);
+                            return Ok(Self {
+                                _handle: handle,
+                                key,
+                            });
+                        }
+                        Err(error)
+                            if error.kind() != io::ErrorKind::WouldBlock
+                                || stores.contains(&key) =>
+                        {
+                            return Err(error);
+                        }
+                        Err(_) if started.elapsed() >= limit => {
+                            return Err(io::Error::new(
+                                io::ErrorKind::WouldBlock,
+                                format!(
+                                    "waited {limit:?} for the lock of {}, which no store of this \
+                                     process holds (a child process that has not executed its \
+                                     program yet, or another process)",
+                                    dir.display()
+                                ),
+                            ));
+                        }
+                        Err(_) => {}
+                    }
+                }
+                std::thread::sleep(RETRY);
+            }
+        }
+    }
+
+    impl Drop for DirLock {
+        fn drop(&mut self) {
+            // Before the handle closes (fields drop after this), so an open that finds the lock
+            // still taken in between waits for it instead of failing.
+            held().remove(&self.key);
+        }
+    }
+}
+
 /// Opens `dir` as the buffer directory: creates it with mode 0700 when it is missing (its parent
 /// must exist), makes an existing one private ([`make_private`]), and takes an exclusive lock
 /// on it, returned as the handle that holds it. The lock is `flock(2)` on the directory itself
 /// (no lock file to create, follow or clean up); the kernel releases it when the handle is
 /// closed, also when the process dies.
-fn prepare_dir(dir: &Path) -> io::Result<File> {
+fn prepare_dir(dir: &Path) -> io::Result<DirLock> {
     match fs::symlink_metadata(dir) {
         Ok(metadata) if metadata.file_type().is_dir() => make_private(dir, &metadata),
         Ok(_) => {
@@ -343,20 +484,7 @@ fn prepare_dir(dir: &Path) -> io::Result<File> {
             dir.display()
         )));
     }
-    match handle.try_lock() {
-        Ok(()) => Ok(handle),
-        Err(fs::TryLockError::WouldBlock) => Err(io::Error::new(
-            io::ErrorKind::WouldBlock,
-            format!(
-                "{} is in use by another agent (it holds the directory's lock)",
-                dir.display()
-            ),
-        )),
-        Err(fs::TryLockError::Error(error)) => Err(io::Error::new(
-            error.kind(),
-            format!("{}: cannot lock: {error}", dir.display()),
-        )),
-    }
+    DirLock::take(handle, dir, (after.dev(), after.ino()))
 }
 
 /// Whether `file` starts with this format's segment header: the magic, the version, and four
@@ -606,7 +734,7 @@ impl DiskStore {
 
     /// An empty store on the locked directory `dir`, whose new segments start at
     /// `next_segment`.
-    fn new(dir: &Path, lock: File, next_segment: u64, target: u64) -> Self {
+    fn new(dir: &Path, lock: DirLock, next_segment: u64, target: u64) -> Self {
         Self {
             dir: dir.to_owned(),
             _lock: lock,
@@ -1875,6 +2003,41 @@ mod tests {
         assert_eq!(error.kind(), io::ErrorKind::WouldBlock, "{error}");
         drop(first);
         DiskStore::open(&dir, 1 << 20, usize::MAX).unwrap();
+    }
+
+    /// Laysi/trustiot-v2#817: a child process keeps a copy of a dropped store's handle, and so
+    /// the directory's lock, which no store of this process holds any more. Tests wait for such
+    /// a lock ([`test_locks`]) instead of failing as for a store's lock (above), and open the
+    /// directory once the child has closed its copy.
+    #[test]
+    fn in_tests_a_lock_that_a_child_process_keeps_is_waited_for() {
+        let scratch = scratch();
+        let dir = scratch.path().join("buffer");
+        let (store, _) = DiskStore::open(&dir, 1 << 20, usize::MAX).unwrap();
+        // `cat` holds the copy as its standard output, until its input ends.
+        let (input, input_end) = io::pipe().unwrap();
+        let mut child = std::process::Command::new("cat")
+            .stdin(input)
+            .stdout(store._lock._handle.try_clone().unwrap())
+            .spawn()
+            .unwrap();
+        drop(store);
+
+        let handle = File::open(&dir).unwrap();
+        let metadata = handle.metadata().unwrap();
+        let key = (metadata.dev(), metadata.ino());
+        let error = DirLock::take_within(handle, &dir, key, std::time::Duration::ZERO).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::WouldBlock, "{error}");
+        assert!(
+            error.to_string().contains("no store of this process holds"),
+            "{error}"
+        );
+
+        let reopen =
+            std::thread::spawn(move || DiskStore::open(&dir, 1 << 20, usize::MAX).map(drop));
+        drop(input_end);
+        child.wait().unwrap();
+        reopen.join().unwrap().unwrap();
     }
 
     /// Independent review, second round, info 1: a stop that comes while the directory is read
