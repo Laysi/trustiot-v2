@@ -282,7 +282,7 @@
       "description": "Gateway certificate authority (decision 12, Laysi/trustiot-v2#78): the issuing CA keys are generated in the cluster by the certs pod's init container; an operator signs their requests with the offline root (services/certs/README.md). Certificates only, as one-line base64 DER: never a private key.",
       "type": "object",
       "additionalProperties": false,
-      "required": ["keyGeneration", "removeKeysBeforeGeneration", "rootCertificate", "issuingCertificates"],
+      "required": ["keyGeneration", "removeKeysBeforeGeneration", "rootCertificate", "issuingCertificates", "rootCrl"],
       "properties": {
         "keyGeneration": {
           "description": "Increase it to add an issuing CA key; at least 1 and at least removeKeysBeforeGeneration. Only goes up.",
@@ -310,6 +310,13 @@
           "type": "array",
           "maxItems": 4,
           "items": { "type": "string", "maxLength": 16384, "pattern": "^MII[A-Za-z0-9+/]+={0,2}$" }
+        },
+        "rootCrl": {
+          "description": "The root CRL's DER in base64 on one line (the body of its PEM X509 CRL); empty until a root ceremony signs one. The chart checks that it starts like a v2 CRL; the certs service checks the root's signature.",
+          "oneOf": [
+            { "type": "string", "maxLength": 0 },
+            { "type": "string", "maxLength": 32768, "pattern": "^MI[GHI][A-Za-z0-9+/]+={0,2}$" }
+          ]
         }
       }
     },

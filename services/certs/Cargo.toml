@@ -45,6 +45,8 @@ protocol = { path = "../../crates/protocol" }
 # Signs certificates and CRLs; `x509-parser` reads the issuing CA certificates as issuers,
 # `zeroize` wipes the root key's PKCS#8 copy in certs-ca.
 rcgen = { workspace = true, features = ["crypto", "pem", "ring", "x509-parser", "zeroize"] }
+# The root CRL's checks, the same the gateway agent applies (src/root_crl.rs).
+root-crl = { path = "../../crates/root-crl" }
 rustls-pki-types = { workspace = true, features = ["std"] }
 serde = { workspace = true, features = ["derive"] }
 # The workstation certificate API reads its JSON bodies field by field, to name each problem.

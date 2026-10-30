@@ -5,20 +5,23 @@ Gateway certificate authority helpers (decision 12, Laysi/trustiot-v2#78; servic
 
 {{/*
 The certs service's CA objects, as YAML {secret, secretKey, requests, certificates, generation,
-removeBefore, root, issuing}; use with fromYaml.
+removeBefore, root, issuing, rootCrl}; use with fromYaml.
 - secret: the Secret templates/passwords.yaml declares empty while the certs service is enabled
   ("trustiot.filledSecretObjects"), which the certs pod's init container fills with the issuing CA
   keys (secretKey, a JSON document) and only the certs service's main container mounts;
 - requests: the ConfigMap templates/certs-ca.yaml declares empty, which the init container fills
   with each key's certificate signing request for the offline root ceremony;
 - certificates: the ConfigMap templates/certs-ca.yaml renders from certificateAuthority
-  (root.pem, issuing.pem: public certificates only), which the certs service mounts;
+  (root.pem, issuing.pem, root-crl.pem: public certificates and the root CRL only), which the
+  certs service mounts;
 - generation, removeBefore: certificateAuthority.keyGeneration and removeKeysBeforeGeneration as
   exact decimal digits; the render fails when the generation is below the removal, since no key
   could sign then;
 - root, issuing: certificateAuthority.rootCertificate (a list of none or one) and
   issuingCertificates, each certificate's DER in base64 on one line, checked by
-  "trustiot.certs.checkCertificates"; templates/certs-ca.yaml prints them as PEM.
+  "trustiot.certs.checkCertificates"; templates/certs-ca.yaml prints them as PEM;
+- rootCrl: certificateAuthority.rootCrl (a list of none or one), the root CRL's DER in base64 on
+  one line, checked by "trustiot.certs.checkRootCrl"; templates/certs-ca.yaml prints it as PEM.
 */}}
 {{- define "trustiot.certs.ca" -}}
 {{- $v := .Values.certificateAuthority -}}
@@ -40,6 +43,8 @@ removeBefore, root, issuing}; use with fromYaml.
 {{- include "trustiot.certs.checkCertificates" (dict "certificates" $root "key" "certificateAuthority.rootCertificate" "max" 1) -}}
 {{- $issuing := $v.issuingCertificates -}}
 {{- include "trustiot.certs.checkCertificates" (dict "certificates" $issuing "key" "certificateAuthority.issuingCertificates" "max" 4) -}}
+{{- include "trustiot.certs.checkRootCrl" $v.rootCrl -}}
+{{- $rootCrl := ternary (list $v.rootCrl) (list) (not (empty $v.rootCrl)) -}}
 {{- $ca := dict "generation" $generation "removeBefore" $remove -}}
 {{- $_ := set $ca "secret" (include "trustiot.componentName" (dict "root" . "name" "certs-ca-keys")) -}}
 {{- $_ := set $ca "secretKey" "issuing-ca-keys.json" -}}
@@ -47,7 +52,35 @@ removeBefore, root, issuing}; use with fromYaml.
 {{- $_ := set $ca "certificates" (include "trustiot.componentName" (dict "root" . "name" "certs-ca-certificates")) -}}
 {{- $_ := set $ca "root" $root -}}
 {{- $_ := set $ca "issuing" $issuing -}}
+{{- $_ := set $ca "rootCrl" $rootCrl -}}
 {{- toYaml $ca -}}
+{{- end -}}
+
+{{/*
+Checks certificateAuthority.rootCrl (the argument): empty (no root CRL yet), or one CRL's DER in
+base64 on one line (values hold no line breaks, templates/values-check.yaml) of at most 32768
+characters, so its PEM stays well below the 64 KiB the gateway agent and the certs service read
+(crates/root-crl), and the template prints only base64 characters from it. The decoded bytes must
+start like a v2 CRL: a SEQUENCE holding a SEQUENCE (tbsCertList) that starts with the version
+INTEGER 1 and then the signature AlgorithmIdentifier SEQUENCE. A certificate's tbsCertificate
+starts with the [0] version tag instead, and a private key (PKCS#8 or SEC 1) with an INTEGER, so
+neither renders. The certs service checks the signature and the rest (services/certs/README.md,
+「根 CRL」); a CRL without the version (v1) has no CRL number, which it requires anyway.
+*/}}
+{{- define "trustiot.certs.checkRootCrl" -}}
+{{- $crl := . -}}
+{{- if not (kindIs "string" $crl) -}}
+{{- fail "certificateAuthority.rootCrl must be a string: one root CRL's DER in base64 on one line, or empty" -}}
+{{- end -}}
+{{- if $crl -}}
+{{- $valid := and (le (len $crl) 32768) (regexMatch "^[A-Za-z0-9+/]+={0,2}$" $crl) (eq (mod (len $crl) 4) 0) -}}
+{{- if $valid -}}
+{{- $valid = regexMatch "^30(81[0-9a-f]{2}|82[0-9a-f]{4})30(81[0-9a-f]{2}|82[0-9a-f]{4}|[0-7][0-9a-f])02010130" (printf "%x" (b64dec $crl)) -}}
+{{- end -}}
+{{- if not $valid -}}
+{{- fail "certificateAuthority.rootCrl must be one root CRL's DER in base64 on one line (the body of its PEM \"X509 CRL\", at most 32768 characters; services/certs/README.md, 「根 CRL」); a certificate or a private key never goes here" -}}
+{{- end -}}
+{{- end -}}
 {{- end -}}
 
 {{/*
@@ -105,8 +138,9 @@ container port by name; the policies match the container port.
 
 {{/*
 Env entries only the certs service gets, set by the chart (custom env cannot repeat a name):
-TRUSTIOT__CA__KEYS_FILE, TRUSTIOT__CA__ROOT_CERTIFICATE_FILE and TRUSTIOT__CA__CERTIFICATES_FILE,
-the files of the mounts above, which the service reads again when they change; and for the MQTT
+TRUSTIOT__CA__KEYS_FILE, TRUSTIOT__CA__ROOT_CERTIFICATE_FILE, TRUSTIOT__CA__CERTIFICATES_FILE and
+TRUSTIOT__CA__ROOT_CRL_FILE, the files of the mounts above, which the service reads again when
+they change; and for the MQTT
 broker's server certificate (Laysi/trustiot-v2#557) TRUSTIOT__BROKER__LISTEN_ADDR, the
 broker-certs port of services.certs.ports, so the service listens where the Service and the
 policies point ("trustiot.mesh.certsPorts"), and, while the broker runs,
@@ -121,6 +155,7 @@ Returns a YAML list; use with fromYamlArray.
 {{- $env := list (dict "name" "TRUSTIOT__CA__KEYS_FILE" "value" (printf "%s/%s" (include "trustiot.certs.keysDir" .) $ca.secretKey)) -}}
 {{- $env = append $env (dict "name" "TRUSTIOT__CA__ROOT_CERTIFICATE_FILE" "value" (printf "%s/root.pem" $certificates)) -}}
 {{- $env = append $env (dict "name" "TRUSTIOT__CA__CERTIFICATES_FILE" "value" (printf "%s/issuing.pem" $certificates)) -}}
+{{- $env = append $env (dict "name" "TRUSTIOT__CA__ROOT_CRL_FILE" "value" (printf "%s/root-crl.pem" $certificates)) -}}
 {{- $ports := include "trustiot.mesh.certsPorts" . | fromYaml -}}
 {{- if $ports.broker -}}
 {{- $env = append $env (dict "name" "TRUSTIOT__BROKER__LISTEN_ADDR" "value" (printf "0.0.0.0:%d" (int $ports.broker))) -}}

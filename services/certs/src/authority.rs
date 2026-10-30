@@ -26,6 +26,7 @@ use zeroize::Zeroizing;
 
 use crate::config::CaFiles;
 use crate::pem;
+use crate::root_crl::{self, RootCrl, RootCrlFile};
 
 /// Largest certificate file read: a root and a few issuing CA certificates are a few KiB.
 const MAX_CERTIFICATE_FILE_BYTES: u64 = 256 * 1024;
@@ -456,8 +457,8 @@ fn read_limited(path: &Path, limit: u64) -> Result<Zeroizing<String>, LoadError>
     Ok(text)
 }
 
-/// The authority as last loaded, shared by the CRL job, the monitor and the HTTP handlers, and
-/// reloaded when the files change.
+/// The authority as last loaded, and the root CRL adopted with it, shared by the CRL job, the
+/// monitor and the HTTP handlers, and reloaded when the files change.
 #[derive(Clone, Debug, Default)]
 pub struct CaState {
     inner: Arc<RwLock<Loaded>>,
@@ -468,6 +469,14 @@ struct Loaded {
     authority: Option<Arc<Authority>>,
     problem: Option<String>,
     fingerprint: Option<[u8; 32]>,
+    /// The root CRL adopted, always checked against the root of `authority`: both change under
+    /// one lock, so a reader never sees a root CRL with a root it was not checked against.
+    root_crl: Option<Arc<RootCrl>>,
+    /// Why the root CRL file cannot be adopted, while it cannot.
+    root_crl_problem: Option<String>,
+    /// SHA-256 of what the root CRL file held when it was last read; `None` when it could not
+    /// be read (it is read again at every tick then) or before the first read.
+    root_crl_fingerprint: Option<[u8; 32]>,
 }
 
 impl CaState {
@@ -505,6 +514,45 @@ impl CaState {
     #[must_use]
     pub fn authority(&self) -> Option<Arc<Authority>> {
         self.read().authority.clone()
+    }
+
+    /// The root CRL adopted, if any: what gateways get (Laysi/trustiot-v2#831, #832). Signed by
+    /// the root of [`CaState::authority`] and in the format the agent accepts; it may have
+    /// expired, and gateways still use it then (services/certs/README.md, 「根 CRL」).
+    #[must_use]
+    pub fn root_crl(&self) -> Option<Arc<RootCrl>> {
+        self.read().root_crl.clone()
+    }
+
+    /// The authority and the root CRL adopted with it, read at once: the root CRL, if any, was
+    /// checked against this authority's root.
+    #[must_use]
+    pub fn authority_and_root_crl(&self) -> (Option<Arc<Authority>>, Option<Arc<RootCrl>>) {
+        let loaded = self.read();
+        (loaded.authority.clone(), loaded.root_crl.clone())
+    }
+
+    /// Why the root CRL file cannot be adopted, while it cannot (`certs.root_crl.invalid`).
+    #[must_use]
+    pub fn root_crl_problem(&self) -> Option<String> {
+        self.read().root_crl_problem.clone()
+    }
+
+    /// Logs at `now` what needs the operators about the root CRL, as the monitor does at every
+    /// check: an ERROR while the root CRL file cannot be adopted (naming the root CRL kept, if
+    /// any), and a WARN while the adopted root CRL has less than 60 days left or has expired.
+    /// Nothing while there is no root CRL yet, which is normal before the first root ceremony
+    /// that signs one.
+    pub fn log_root_crl(&self, now: i64) {
+        let loaded = self.read();
+        if let Some(problem) = &loaded.root_crl_problem {
+            log_root_crl_problem(problem, loaded.root_crl.as_deref());
+        }
+        if let Some(crl) = &loaded.root_crl
+            && crl.expiring(now)
+        {
+            log_root_crl_expiring(crl, now);
+        }
     }
 
     /// `Ok` when an issuing CA can sign at `now`; otherwise why not.
@@ -545,15 +593,70 @@ impl CaState {
         }
     }
 
-    /// Reads the files again and, when they changed, builds a new authority. Returns whether
-    /// the authority changed.
+    /// Reads the files again and, when they changed, builds a new authority; when the root CRL
+    /// file or the authority changed, checks the root CRL again against the authority's root
+    /// ([`RootCrl::check`]). Returns whether the authority changed.
+    ///
+    /// A root CRL file that cannot be adopted (unreadable, not the agent's format, not signed by
+    /// the root, no number or nextUpdate) is logged at ERROR, once per problem, and the root CRL
+    /// adopted before stays while it was checked against the same root: it is still a valid
+    /// root CRL, and gateways keep the one with the highest number anyway. Otherwise there is
+    /// none. An empty file means no root CRL yet.
     pub fn reload(&self, files: &CaFiles, now: i64) -> bool {
         let fingerprint = fingerprint(files);
-        if fingerprint.is_some() && fingerprint == self.read().fingerprint {
+        let root_crl_file = files
+            .root_crl_file
+            .as_deref()
+            .map(|path| (path, root_crl::read(path)));
+        let root_crl_fingerprint = root_crl_fingerprint(root_crl_file.as_ref());
+        let (authority_same, root_crl_same) = {
+            let loaded = self.read();
+            (
+                fingerprint.is_some() && fingerprint == loaded.fingerprint,
+                root_crl_fingerprint.is_some()
+                    && root_crl_fingerprint == loaded.root_crl_fingerprint,
+            )
+        };
+        if authority_same && root_crl_same {
             return false;
         }
-        let loaded = Authority::load(files, now);
+        let loaded = (!authority_same).then(|| Authority::load(files, now));
         let mut state = self.inner.write().unwrap_or_else(PoisonError::into_inner);
+        let changed = loaded.is_some_and(|loaded| state.apply(fingerprint, loaded, now));
+        if changed || !root_crl_same {
+            state.root_crl_fingerprint = root_crl_fingerprint;
+            state.adopt_root_crl(root_crl_file, &files.root_certificate_file, now);
+        }
+        changed
+    }
+
+    fn read(&self) -> std::sync::RwLockReadGuard<'_, Loaded> {
+        self.inner.read().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// A state holding `authority`, for tests and tools.
+    #[must_use]
+    pub fn of(authority: Authority) -> Self {
+        let state = Self::default();
+        state
+            .inner
+            .write()
+            .unwrap_or_else(PoisonError::into_inner)
+            .authority = Some(Arc::new(authority));
+        state
+    }
+}
+
+impl Loaded {
+    /// Takes the result of loading the CA files with `fingerprint`; returns whether the
+    /// authority changed. A failed load keeps the previous authority.
+    fn apply(
+        &mut self,
+        fingerprint: Option<[u8; 32]>,
+        loaded: Result<Authority, LoadError>,
+        now: i64,
+    ) -> bool {
+        let state = self;
         state.fingerprint = fingerprint;
         match loaded {
             Ok(authority) => {
@@ -580,21 +683,113 @@ impl CaState {
         }
     }
 
-    fn read(&self) -> std::sync::RwLockReadGuard<'_, Loaded> {
-        self.inner.read().unwrap_or_else(PoisonError::into_inner)
+    /// Adopts what the root CRL file held (`None`: no root CRL file is configured), checked
+    /// against the current authority's root (read from `root_file`, which errors name), as
+    /// [`CaState::reload`] describes.
+    fn adopt_root_crl(
+        &mut self,
+        file: Option<(&Path, Result<RootCrlFile, String>)>,
+        root_file: &Path,
+        now: i64,
+    ) {
+        let Some((path, read)) = file else {
+            self.root_crl = None;
+            self.root_crl_problem = None;
+            return;
+        };
+        let checked = read.and_then(|content| match content {
+            RootCrlFile::Empty => Ok(None),
+            RootCrlFile::Content(bytes) => match &self.authority {
+                Some(authority) => RootCrl::check(&bytes, authority.root_der(), root_file)
+                    .map(Some)
+                    .map_err(|reason| format!("{}: {reason}", path.display())),
+                None => Err(format!(
+                    "{}: no root certificate is loaded to check it against",
+                    path.display()
+                )),
+            },
+        });
+        match checked {
+            Ok(None) => {
+                if self.root_crl.is_some() || self.root_crl_problem.is_some() {
+                    tracing::info!(
+                        "the root CRL file is empty, so gateways get no root CRL \
+                         (services/certs/README.md, 「根 CRL」)"
+                    );
+                }
+                self.root_crl = None;
+                self.root_crl_problem = None;
+            }
+            Ok(Some(crl)) => {
+                tracing::info!(
+                    number = %crl.number(),
+                    this_update = %humantime_seconds(crl.this_update()),
+                    next_update = %humantime_seconds(crl.next_update()),
+                    expired = crl.expired(now),
+                    "adopted the root CRL"
+                );
+                if crl.expiring(now) {
+                    log_root_crl_expiring(&crl, now);
+                }
+                self.root_crl = Some(Arc::new(crl));
+                self.root_crl_problem = None;
+            }
+            Err(problem) => {
+                let same_root = self.root_crl.as_ref().is_some_and(|crl| {
+                    self.authority
+                        .as_ref()
+                        .is_some_and(|authority| crl.checked_against(authority.root_der()))
+                });
+                if !same_root {
+                    self.root_crl = None;
+                }
+                // Once per problem here; the monitor repeats it at every check.
+                if self.root_crl_problem.as_deref() != Some(problem.as_str()) {
+                    log_root_crl_problem(&problem, self.root_crl.as_deref());
+                }
+                self.root_crl_problem = Some(problem);
+            }
+        }
     }
+}
 
-    /// A state holding `authority`, for tests and tools.
-    #[must_use]
-    pub fn of(authority: Authority) -> Self {
-        let state = Self::default();
-        state
-            .inner
-            .write()
-            .unwrap_or_else(PoisonError::into_inner)
-            .authority = Some(Arc::new(authority));
-        state
+/// The SHA-256 over what the root CRL file held (`None` when the file cannot be read, so it is
+/// read again at every tick; a constant when no file is configured).
+fn root_crl_fingerprint(file: Option<&(&Path, Result<RootCrlFile, String>)>) -> Option<[u8; 32]> {
+    let mut digest = Sha256::new();
+    match file {
+        None => digest.update(b"not configured"),
+        Some((_, Ok(RootCrlFile::Empty))) => digest.update(b"empty"),
+        Some((_, Ok(RootCrlFile::Content(bytes)))) => {
+            digest.update(b"content");
+            digest.update(bytes);
+        }
+        Some((_, Err(_))) => return None,
     }
+    Some(digest.finalize().into())
+}
+
+/// The ERROR while the root CRL file cannot be adopted; `kept` is the root CRL still adopted.
+fn log_root_crl_problem(problem: &str, kept: Option<&RootCrl>) {
+    tracing::error!(
+        problem = %problem,
+        kept_number = kept.map(RootCrl::number),
+        "cannot adopt the root CRL in the CA certificates ConfigMap; gateways get the root CRL \
+         kept, if any (services/certs/README.md, 「根 CRL」)"
+    );
+}
+
+/// The WARN while the adopted root CRL has less than 60 days left or has expired.
+fn log_root_crl_expiring(crl: &RootCrl, now: i64) {
+    tracing::warn!(
+        number = %crl.number(),
+        next_update = %humantime_seconds(crl.next_update()),
+        remaining_seconds = crl.remaining(now),
+        expired = crl.expired(now),
+        "the root CRL expires in less than 60 days or has expired; gateways keep using it, so \
+         sign the next one at a root ceremony and set certificateAuthority.rootCrl \
+         (services/certs/README.md, 「根 CRL」)"
+    );
 }
 
 /// The SHA-256 over the three files' contents, or `None` when one cannot be read (the load then
