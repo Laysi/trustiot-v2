@@ -354,7 +354,7 @@ chart 產生下列物件：
 | `services.<name>.env` | 接在 `serviceDefaults.env` 後面，名稱不能重複。`TRUSTIOT_` 後面接英數字、`SENTRY_`、`OTEL_` 開頭的名稱（不分大小寫）保留給 chart，避免覆寫平台設定與 chart 給的密鑰；`TRUSTIOT__`（兩個底線）開頭的名稱不在保留範圍。名稱像密鑰（含 SECRET、PASSW、PASSPHRASE、PWD、TOKEN、API_KEY、DSN、PRIVATE、CREDENTIAL，或以 `_KEY` 結尾，不分大小寫）的變數只能用 `valueFrom.secretKeyRef`，不能用字面值或 ConfigMap 等其他來源；每一項只能有 `value` 或一個 `valueFrom` 來源。任何變數都不能讀 values 指定的依賴帳密與 Sentry DSN（同一個 Secret 的同一個 key），依賴帳密要改列在 `credentials`。`ai-gateway` 的設定前綴是 `AI_GATEWAY`（見「AI 閘道」），所以它另外保留 `AI_GATEWAY_` 後接英數字（平台設定與設定檔的名稱）、`AI_GATEWAY__PROVIDERS__`、`AI_GATEWAY__ROLES__` 開頭的名稱，以及它的 ConfigMap 裡的每個變數：供應商、金鑰變數、端點與模型只能來自 `ai`，container 的 `env` 會蓋過 ConfigMap；`AI_GATEWAY__ADMIN__` 開頭的名稱也保留給 chart（管理 API 的監聽位址，見「服務間授權（mesh）」的「AI 閘道的管理埠」） |
 | `services.<name>.credentials` | 只給這個服務的依賴帳密，可列 `qdrant-read`、`qdrant-write`、`object-storage`、`smtp`、`ai`，變數見「密鑰的環境變數」；不能放在 `serviceDefaults`，避免每個服務都拿到。`identity` 預設列 `smtp`：它用 `smtp` 的 relay 寄登入驗證碼（`services/identity/README.md`）。`ai` 只能給 `ai-gateway`（決策 28），`ai-gateway` 預設就列 `ai`，拿掉時開啟它會渲染失敗（閘道沒有金鑰不啟動）；`qdrant-read` 與 `qdrant-write` 只能給 `knowledge`，因為 Qdrant 查詢的租戶條件由知識庫服務加上（docs/architecture/rag.md） |
 | `services.<name>.database` | 用 Postgres（`mesh.calls` 列出 `postgres`）的服務的連線設定；不能放在 `serviceDefaults` |
-| `services.<name>.database.maxConnections` | 服務主要連線池的大小，chart 以 `TRUSTIOT__DATABASE__MAX_CONNECTIONS` 傳入（`ai-gateway` 是 `AI_GATEWAY__DATABASE__MAX_CONNECTIONS`；自訂 `env` 不能設定這個變數）。`identity` 預設 `10`（3–100，它常駐 3 條）、`assets` 與 `telemetry-query` 預設 `10`（2–100）、`ingest` 預設 `10`（3–100）、`certs` 預設 `5`（2–100）、`gateway-ops` 預設 `7`（7–100）、`assistant` 預設 `8`（4–100）、`ai-gateway` 預設 `4`（2–32），範圍外渲染失敗。用 Postgres 的服務一定要有；所有服務在整版滾動時的連線加總超過 `postgres.bundled.parameters.max_connections` 時渲染失敗，見「叢集內的 Postgres」的連線預算 |
+| `services.<name>.database.maxConnections` | 服務主要連線池的大小，chart 以 `TRUSTIOT__DATABASE__MAX_CONNECTIONS` 傳入（`ai-gateway` 是 `AI_GATEWAY__DATABASE__MAX_CONNECTIONS`；自訂 `env` 不能設定這個變數）。`identity` 預設 `10`（3–100，它常駐 3 條）、`assets` 與 `telemetry-query` 預設 `10`（2–100）、`ingest` 預設 `10`（3–100）、`certs` 預設 `5`（2–100）、`gateway-ops` 預設 `9`（9–100）、`assistant` 預設 `8`（4–100）、`ai-gateway` 預設 `4`（2–32），範圍外渲染失敗。用 Postgres 的服務一定要有；所有服務在整版滾動時的連線加總超過 `postgres.bundled.parameters.max_connections` 時渲染失敗，見「叢集內的 Postgres」的連線預算 |
 | `services.<name>.resources` | 逐欄覆寫資源設定 |
 | `services.<name>.podSecurityContext` | 逐欄覆寫；限制同 `serviceDefaults` |
 | `services.<name>.podSecurityContext.fsGroup` | 只有 `identity`（`65532`）、`certs`（`65533`）與 `ingest`（`65531`）有預設值：簽章金鑰檔、簽發 CA 金鑰檔與 broker 帳號的密碼檔的權限是 0440、屬於 root 與這個群組，服務以群組身分讀它，容器裡其他使用者讀不到（見「內部身分」、「閘道器憑證 CA」與「MQTT broker」的「服務的帳號」）；三者不同，其他 pod 都不在這三個群組。OpenShift 設成 `null`，由 restricted-v2 SCC 從 namespace 的範圍指派；其他平台拿掉它，服務會讀不到金鑰而一直不就緒 |
@@ -472,7 +472,7 @@ chart 產生下列物件：
 | `postgres.bundled.parameters.effective_cache_size` | `384MB` | 查詢規劃用的快取估計，不實際配置記憶體 |
 | `postgres.bundled.parameters.work_mem` | `4MB` | 每個排序或 hash 的上限，一個查詢可能用好幾份 |
 | `postgres.bundled.parameters.maintenance_work_mem` | `64MB` | VACUUM、建索引用 |
-| `postgres.bundled.parameters.max_connections` | `230` | 10–1000；`bundled` 時 chart 檢查：啟用的服務在整版滾動時所有連線池的加總，加上保留給 superuser、CloudNativePG、migration Job 與第一位平台管理員的 bootstrap 的 18 條，不能超過它，超過就渲染失敗。預設值放得下八個用 Postgres 的服務各一個副本（228 條，還有 2 條餘裕），記憶體估算在 1Gi 以內；改這個值會讓叢集內的 Postgres 重啟；算法、每個服務的數字與估算見「叢集內的 Postgres」的連線預算 |
+| `postgres.bundled.parameters.max_connections` | `240` | 10–1000；`bundled` 時 chart 檢查：啟用的服務在整版滾動時所有連線池的加總，加上保留給 superuser、CloudNativePG、migration Job 與第一位平台管理員的 bootstrap 的 18 條，不能超過它，超過就渲染失敗。預設值放得下八個用 Postgres 的服務各一個副本（232 條，還有 8 條餘裕），記憶體估算在 1Gi 以內；改這個值會讓叢集內的 Postgres 重啟；算法、每個服務的數字與估算見「叢集內的 Postgres」的連線預算 |
 | `postgres.bundled.nodeSelector` | `kubernetes.io/arch: arm64` | 映像只有 arm64（決策 5） |
 | `postgres.bundled.tolerations` | `[]` | |
 | `postgres.bundled.operator.namespace` | `cnpg-system` | CloudNativePG operator 所在的 namespace；NetworkPolicy 只放行它的 pod 連 Postgres pod 的 8000（instance manager） |
@@ -652,7 +652,7 @@ curl -sS -D - -X POST "http://127.0.0.1:18080/internal/roles/main/v1/messages" \
 - 少了時序查詢或資產服務的位址時 AI 助理少掉那些工具；少了 `TRUSTIOT__IDENTITY__EXCHANGE_URL` 時沒有任何工具；少了 `TRUSTIOT__AI_GATEWAY__URL`（AI 閘道沒有開啟或清單沒列）時它拒絕啟動。渲染不因此失敗，與 `mqtt-bridge` 相同：只開部分服務的測試與 values 要能渲染。
 - 它以 `TRUSTIOT__AI_GATEWAY__ROLE` 選模型角色（預設 `main`），角色要在 `ai.roles`；其他設定（模型、預算、工具上限、資料庫連線池）見 [services/assistant/README.md](../../services/assistant/README.md)「設定」，以 `services.assistant.env` 設定。
 - readiness 只檢查 `assistant_app` 與 `assistant_platform` 登得進 Postgres（清除登不進去時看得到）、有身分服務的公鑰、資料庫有這一版的 migration，不呼叫 AI 閘道或其他服務，所以 nightly 沒有供應商金鑰也能等它就緒；工具在叢集內真的呼叫成功要等提問的 API（Laysi/trustiot-v2#646）。
-- **連線預算**：每個副本 8 + 2 = 10 條，整版滾動 20 條；API 的請求與清除的平台角色（Laysi/trustiot-v2#645）讓它從 4 條變成 10 條，`postgres.bundled.parameters.max_connections` 因此從 220 調到 230。這個預設值不論 AI 助理開不開都套用，所以**升級到這一版會讓叢集內的 Postgres 重啟一次**（見「叢集內的 Postgres」的「連線預算」）。
+- **連線預算**：每個副本 8 + 2 = 10 條，整版滾動 20 條；API 的請求與清除的平台角色（Laysi/trustiot-v2#645）讓它從 4 條變成 10 條，`postgres.bundled.parameters.max_connections` 因此從 220 調到 240（同時容下 Laysi/trustiot-v2#112 調大的 gateway-ops 連線池）。這個預設值不論 AI 助理開不開都套用，所以**升級到這一版會讓叢集內的 Postgres 重啟一次**（見「叢集內的 Postgres」的「連線預算」）。
 
 ## ingest
 
@@ -677,21 +677,21 @@ curl -sS -D - -X POST "http://127.0.0.1:18080/internal/roles/main/v1/messages" \
 
 ## gateway-ops
 
-`services.gateway-ops`（`services/gateway-ops`，決策 7，清單 E1，Laysi/trustiot-v2#721）由資產服務的事件產生每台閘道器帶版本的 desired 設定，存在 Postgres，並經 MQTT broker 以 retained 訊息下發、收閘道器的套用回報。它沒有 API，只有健康檢查的埠；呼叫矩陣裡沒有任何呼叫端連得到它（它的 AuthorizationPolicy 沒有規則，只有 kubelet 的探針從節點連健康埠）。程式、設定與版本規則見 [services/gateway-ops/README.md](../../services/gateway-ops/README.md)。
+`services.gateway-ops`（`services/gateway-ops`，決策 7，清單 E1，Laysi/trustiot-v2#721）由資產服務的事件產生每台閘道器帶版本的 desired 設定，存在 Postgres，並經 MQTT broker 以 retained 訊息下發、收閘道器的套用回報；它也從閘道器的狀態與心跳記錄在線狀態，並以 API `GET /api/gateway-ops/v1/gateways` 列出租戶的閘道器（Laysi/trustiot-v2#112）。chart 預設沒有轉到它的入口路由：要讓前端讀這個 API，部署在 `ingress.routes` 加一條 `{host: app, path: /api/gateway-ops, service: gateway-ops}`，入口因此獲准連它（見「入口 gateway」）；呼叫矩陣裡沒有其他呼叫端連得到它，kubelet 的探針從節點連健康埠。它驗證內部身分，所以和其他有 API 的服務一樣需要身分服務啟用（`TRUSTIOT_INTERNAL_IDENTITY_KEYS_FILE`，見「內部身分」）。程式、設定與版本規則見 [services/gateway-ops/README.md](../../services/gateway-ops/README.md)。
 
 預設的 `mesh.calls.gateway-ops` 是 `[mqtt-broker, postgres]`。chart 給它的設定，自訂 `env` 都不能設定：
 
 | 變數 | 值 | 條件 |
 | --- | --- | --- |
 | `TRUSTIOT__DATABASE__USERNAME`、`_PASSWORD`、`_PLATFORM_USERNAME`、`_PLATFORM_PASSWORD` | `gateway_ops_app` 與 `gateway_ops_platform`，密碼是 Secret `<release>-gateway-ops-password` 的同名 key（見「migration Job」的「服務的資料庫帳號」） | 清單列了 `postgres` |
-| `TRUSTIOT__DATABASE__MAX_CONNECTIONS` | `services.gateway-ops.database.maxConnections`（預設 `7`，7–100，見「連線預算」） | 清單列了 `postgres` |
+| `TRUSTIOT__DATABASE__MAX_CONNECTIONS` | `services.gateway-ops.database.maxConnections`（預設 `9`，9–100，見「連線預算」） | 清單列了 `postgres` |
 | `TRUSTIOT__MQTT__HOST`、`_PORT`、`_USERNAME`、`_PASSWORD_FILE` | broker 的服務埠與帳號 `service:gateway-ops`，密碼檔掛在 `/etc/trustiot/mqtt-broker-account/gateway-ops`（見「MQTT broker」的「服務的帳號」） | 清單列了 `mqtt-broker`（gateway-ops 開啟時 `mqttBroker.enabled` 必須是 `true`，見下方「就緒」） |
 
 - **broker 的權限**：`service:gateway-ops` 的角色由 broker 的 init container 依 `tools/migrate/src/mqtt_accounts.rs` 的 `SERVICES` 設定：接收閘道器的 `up/status`、`up/heartbeat`、`up/config-report`、`up/live`、`up/log-dump`，發布 `down/config`、`down/live-control`、`down/log-request`（見「MQTT broker」的「服務的帳號」那張表）。它不是 dynamic security 的管理者（2026-10-23 決定，只有 certs 是）。mesh 只放行它連 broker 的服務埠 1883，不放行閘道器埠 8883。
 - **資料庫角色**：`gateway_ops_app` 在事件所屬租戶的交易裡寫投影與設定，受 row-level security 限制；`gateway_ops_platform` 只在 `READ ONLY` 交易裡跨租戶讀閘道器目前的綁定與最新的設定，並讀資產服務的事件（決策 29，見 services/gateway-ops/README.md「為什麼跨租戶的讀取用平台角色」）。兩者的密碼都由 migration Job 在叢集內產生，沒有人建立或看到。`bundled` 時 `<release>-postgres` 的 NetworkPolicy 放行它的 pod 連 5432。
-- **就緒**：readiness 要兩個 Postgres 角色的 session、這一版的 migration 都在，以及 broker 的連線（Laysi/trustiot-v2#720）。設定只經叢集內的 broker 下發，沒有 broker 就沒有閘道器拿得到設定，所以 `services.gateway-ops.enabled: true` 而 `mqttBroker.enabled` 不是 `true` 時渲染失敗（`services.gateway-ops: gateway-ops delivers the gateways' configurations through the in-cluster MQTT broker, so it needs mqttBroker.enabled: true`），不會部署一個永遠不就緒的 pod。同樣的理由，gateway-ops 開啟時 `mesh.calls.gateway-ops` 必須列 `mqtt-broker`，否則渲染失敗（`services.gateway-ops: gateway-ops works only through the in-cluster MQTT broker, so mesh.calls.gateway-ops must list mqtt-broker`）。broker 的 init container 還沒寫入 `gateway-ops` 的密碼時，新的 pod 停在等待掛載（見「MQTT broker」的「服務的帳號」）。
+- **就緒**：readiness 要兩個 Postgres 角色的 session、這一版的 migration 都在、broker 的兩條連線（下發的 `mqtt` 與在線狀態的 `presence`，Laysi/trustiot-v2#720、Laysi/trustiot-v2#112），以及可用的內部身分公鑰。設定只經叢集內的 broker 下發，沒有 broker 就沒有閘道器拿得到設定，所以 `services.gateway-ops.enabled: true` 而 `mqttBroker.enabled` 不是 `true` 時渲染失敗（`services.gateway-ops: gateway-ops delivers the gateways' configurations through the in-cluster MQTT broker, so it needs mqttBroker.enabled: true`），不會部署一個永遠不就緒的 pod。同樣的理由，gateway-ops 開啟時 `mesh.calls.gateway-ops` 必須列 `mqtt-broker`，否則渲染失敗（`services.gateway-ops: gateway-ops works only through the in-cluster MQTT broker, so mesh.calls.gateway-ops must list mqtt-broker`）。broker 的 init container 還沒寫入 `gateway-ops` 的密碼時，新的 pod 停在等待掛載（見「MQTT broker」的「服務的帳號」）。
 - **副本**：資產服務事件的消費端以訂閱的鎖讓同一時間只有一個副本處理事件（services/gateway-ops/README.md「版本」），所以多開副本不會多產生版本，只是備援；預設一個副本。
-- **連線預算**：每個副本 7 + 4 = 11 條，整版滾動 22 條；加入它時 `postgres.bundled.parameters.max_connections` 從 200 調到 220，**升級到這一版會讓叢集內的 Postgres 重啟一次**（見「叢集內的 Postgres」的「連線預算」）。
+- **連線預算**：每個副本 9 + 4 = 13 條，整版滾動 26 條（Laysi/trustiot-v2#112 為在線狀態與 API 從 7 + 4 調高）；加入它時 `postgres.bundled.parameters.max_connections` 從 200 調到 220，**升級到這一版會讓叢集內的 Postgres 重啟一次**（見「叢集內的 Postgres」的「連線預算」）。
 - **輪替**：Postgres 的密碼隨 `migrate.passwordGeneration`（gateway-ops 跟著 Job 滾動更新）；broker 的密碼隨 `mqttBroker.passwordGeneration`，gateway-ops 不重啟，下一次重連讀新的密碼檔。
 - **關閉**：`services.gateway-ops.enabled: false` 時下一次 Job 讓 `gateway_ops_app`、`gateway_ops_platform` 不能登入，broker 移除 `service:gateway-ops` 這個帳號（它離開了帳號持有者的清單）；Secret 與資料留著（`keep`）；broker 上已經 retained 的設定訊息不因此清除。
 - nightly 的 smoke 測試開啟 gateway-ops 與 broker，確認 pod 就緒（它的 readiness 包括以 `service:gateway-ops` 連上 broker 並獲准共享訂閱，所以這也證明 chart 交給它的 broker 帳號能用）、兩個 Postgres 角色都有連線（`scripts/nightly/smoke.ts`）。nightly 的程式不讀任何 pod 的日誌（`scripts/nightly/diagnostics.test.ts`），所以 broker 端的登入紀錄不在 nightly 驗證。叢集裡沒有綁定的閘道器，所以它不下發任何設定。
@@ -801,18 +801,18 @@ operator 依 Cluster 再產生：pod 與 PVC `<cluster>-1`；Service `<cluster>-
 | `assets` | `10` | 4 | 14 | 28 |
 | `assistant` | `8` | 2 | 10 | 20 |
 | `certs` | `5` | 4 | 9 | 18 |
-| `gateway-ops` | `7` | 4 | 11 | 22 |
+| `gateway-ops` | `9` | 4 | 13 | 26 |
 | `identity` | `10` | 21 | 31 | 62 |
 | `ingest` | `10` | 4 | 14 | 28 |
 | `telemetry-query` | `10` | 2 | 12 | 24 |
-| 合計 | | | 105 | 210 |
+| 合計 | | | 107 | 214 |
 
 - `ai-gateway`：只有設定的連線池（Laysi/trustiot-v2#605），每個轉送請求一次短查詢；沒有其他連線池。它的程式不依賴 `crates/testkit`（`contract` 不能進它的依賴樹），所以 `services/ai-gateway/tests/chart_connections.rs` 自己讀同一段 JSON。
 - `assets`：平台角色的連線池（`PLATFORM_CONNECTIONS`）：讀身分服務與 certs 事件的兩個消費端各一條、就緒檢查一條、平台管理員讀設備池一條。`telemetry-query`：平台角色讀身分服務事件的連線池（`EVENT_READER_CONNECTIONS`）。`certs`：平台角色的連線池（`PLATFORM_CONNECTIONS`）：出廠登錄、讀資產服務事件的消費端、綁定與租戶狀態的跨租戶讀取共用（Laysi/trustiot-v2#632 起）。
 - `identity`：以 `identity_app` 連線的租戶、登入、寄信、run 委派與事件紀錄連線池共 16 條，以 `identity_platform` 連線的事件紀錄連線池 5 條（消費的產生端數加 2；certs 在 2026-10-23 加入後是 3 個產生端），見 [services/identity/README.md](../../services/identity/README.md) 的「連線池」。
 - `assistant`：服務角色 `assistant_app` 的連線池給 readiness 的兩項檢查、清除排程的 job lock 與 API 的請求（每個請求一個短交易）；平台角色 `assistant_platform` 的連線池（`PLATFORM_CONNECTIONS`，2 條）給清除的交易與 readiness 各一條（Laysi/trustiot-v2#645）。
 - `ingest`：主要連線池一條給綁定的消費端、一條給 readiness，其餘給寫入流程的串流鎖，所以範圍從 3 起；平台角色 `ingest_platform` 的連線池（`PLATFORM_CONNECTIONS`）4 條：消費端讀資產服務的事件、readiness、寫入路徑查綁定（Laysi/trustiot-v2#642，見 [services/ingest/README.md](../../services/ingest/README.md) 的「服務與設定」）。
-- `gateway-ops`：主要連線池的下限 7 是服務同時會用到的最多連線數：消費端的下發交易 1、readiness 的 ping 與 migration 檢查 2、重發的 job lock 1、兩個發布名額 2、套用回報的記錄 1（`services/gateway-ops/src/config.rs` 的 `MIN_DATABASE_CONNECTIONS`），所以範圍從 7 起，chart 預設也是 7（更大的連線池用不到）；平台角色 `gateway_ops_platform` 的連線池（`PLATFORM_CONNECTIONS`）4 條：消費端讀資產服務的事件與閘道器的綁定、readiness、下發流程的兩個讀取（Laysi/trustiot-v2#721，見 [services/gateway-ops/README.md](../../services/gateway-ops/README.md) 的「服務與設定」）。
+- `gateway-ops`：主要連線池的下限 9 是服務在一個 API 請求時同時會用到的最多連線數：消費端的下發交易 1、readiness 的 ping 與 migration 檢查 2、重發的 job lock 1、兩個發布名額 2、套用回報的記錄 1、在線狀態的寫入 1、API 請求 1（`services/gateway-ops/src/config.rs` 的 `MIN_DATABASE_CONNECTIONS`），所以範圍從 9 起，chart 預設也是 9（更大的連線池只讓更多 API 請求同時進行）；平台角色 `gateway_ops_platform` 的連線池（`PLATFORM_CONNECTIONS`）4 條：消費端讀資產服務的事件與閘道器的綁定、readiness、下發流程與在線狀態共用的兩個讀取（Laysi/trustiot-v2#721，見 [services/gateway-ops/README.md](../../services/gateway-ops/README.md) 的「服務與設定」）。
 - 之後開始用 Postgres 的服務要在預算加上它的連線池、在 values 給它 `database.maxConnections`，檢查自動算進去；`max_connections` 不夠時，依下方的記憶體估算調整。
 
 **保留的連線**（`trustiot.postgres.reservedConnections`，共 18 條，依 CloudNativePG 1.30.1 的原始碼與 PostgreSQL 18 的預設值）：
@@ -825,7 +825,7 @@ operator 依 Cluster 再產生：pod 與 PVC `<cluster>-1`；Service `<cluster>-
 | migration Job | 2 | 它以 owner 開的一條 session，與檢查角色密碼時的一次登入（`tools/migrate/src/postgres.rs`） |
 | 第一位平台管理員的 bootstrap | 1 | 操作者從 CronJob `<release>-platform-admin-bootstrap` 建立的 Job（`templates/platform-admin-bootstrap.yaml`、[docs/runbooks/platform-admin.md](../../docs/runbooks/platform-admin.md)），以 owner 開一條 session（`tools/migrate/src/platform_admin.rs`）；操作者可能在換版時執行它 |
 
-所以預設值、`values-saas.yaml`、`values-onprem.yaml` 與展示環境（`deploy/flux/clusters/demo/trustiot/values-demo.yaml`）在八個服務（`ai-gateway`、`assets`、`assistant`、`certs`、`gateway-ops`、`identity`、`ingest`、`telemetry-query`）全開時需要 210 + 18 = 228 條；`max_connections` 預設 230（Laysi/trustiot-v2#605 從 160 調到 200，Laysi/trustiot-v2#721 加入 gateway-ops 時再調到 220，Laysi/trustiot-v2#645 的 assistant 加上 API 與清除的連線池後調到 230），還有 2 條餘裕。下一個用 Postgres 的服務要調高 `max_connections`，並依下方的記憶體估算確認 1Gi 還夠。**改 `max_connections` 會讓叢集內的 Postgres 重啟**（PostgreSQL 只在啟動時讀這個參數，CloudNativePG 套用時重啟 instance）：單一 instance 時服務的連線中斷到 Postgres 重新就緒為止，服務照連線池的設定重連；所以這個值隨 chart 的升級變更時，升級會帶一次 Postgres 的短暫中斷，安排在可以接受中斷的時段。只換一個服務、或只開部分服務時需要的更少。2026-10-23 之前預設是 100，四個服務全開時整版滾動會超過（Laysi/trustiot-v2#497 的安全審查 F3）。
+所以預設值、`values-saas.yaml`、`values-onprem.yaml` 與展示環境（`deploy/flux/clusters/demo/trustiot/values-demo.yaml`）在八個服務（`ai-gateway`、`assets`、`assistant`、`certs`、`gateway-ops`、`identity`、`ingest`、`telemetry-query`）全開時需要 214 + 18 = 232 條；`max_connections` 預設 240（Laysi/trustiot-v2#605 從 160 調到 200，Laysi/trustiot-v2#721 加入 gateway-ops 時再調到 220；Laysi/trustiot-v2#112 把 gateway-ops 的連線池從 7 調到 9 之後 220 沒有餘裕，Laysi/trustiot-v2#645 的 assistant 又加上 API 與清除的連線池，所以調到 240），還有 8 條餘裕。下一個用 Postgres 的服務或更大的連線池要調高 `max_connections`，並依下方的記憶體估算確認 1Gi 還夠。**改 `max_connections` 會讓叢集內的 Postgres 重啟**（PostgreSQL 只在啟動時讀這個參數，CloudNativePG 套用時重啟 instance）：單一 instance 時服務的連線中斷到 Postgres 重新就緒為止，服務照連線池的設定重連；所以這個值隨 chart 的升級變更時，升級會帶一次 Postgres 的短暫中斷，安排在可以接受中斷的時段。只換一個服務、或只開部分服務時需要的更少。2026-10-23 之前預設是 100，四個服務全開時整版滾動會超過（Laysi/trustiot-v2#497 的安全審查 F3）。
 
 **程式與預算的綁定**：預算是 JSON，Helm 以 `fromJson` 讀，用 Postgres 的服務各有一個 Rust 測試（`services/<服務>/tests/chart_connections.rs`）以 `crates/testkit` 的 `chart::postgres_connection_budget` 讀同一段文字，比對程式的常數（其他連線池、`database.maxConnections` 接受的範圍），並以 `chart::pool_size_calls` 列出程式裡每個 `.max_connections(...)`：連線池變大、或多了一個連線池而預算沒跟著改，測試就失敗。身分服務的測試比對預算與服務自己的 `connections_per_replica()`（它的 README「連線池」的數字也由單元測試對到同一個加總），`database.maxConnections` 範圍內的每個值都要相同，並另外列出 `start` 開連線池的每個呼叫：多呼叫一次既有的建構函式就多一個連線池，`.max_connections(...)` 的清單看不出來（Laysi/trustiot-v2#497）。主要連線池的預設值由 chart 傳入，程式裡的預設值不影響部署。
 
@@ -837,15 +837,15 @@ operator 依 Cluster 再產生：pod 與 PVC `<cluster>-1`；Service `<cluster>-
         + 同時以滿額執行的排序數 × work_mem（hash 是 work_mem × hash_mem_multiplier）
 ```
 
-| 項目 | 參數與出處 | `max_connections` 230 | 先前的 220 | 200 | 原本的 160 |
+| 項目 | 參數與出處 | `max_connections` 240 | 先前的 220 | 200 | 原本的 160 |
 | --- | --- | --- | --- | --- | --- |
-| 共享記憶體（含 `shared_buffers`、每個連線槽的 PGPROC 與 lock table） | PostgreSQL 18.6 的 `postgres -C shared_memory_size`，以上面的參數算（2026-10-24，在 `deploy/images/postgres` 的基底 `ghcr.io/cloudnative-pg/postgresql:18.6-minimal-trixie`（固定的 digest）的 initdb 資料目錄上執行，100、160、200 分別是 152、157、159 MB；AGE 的共享記憶體不在內，很小）。每多一個連線槽約 70 KiB；220 與 230 以這個斜率推算（未實測） | 約 161 MB | 約 160 MB | 159 MB | 157 MB |
-| 每條連線的固定開銷 | 2 MiB：Andres Freund 的量測（[Measuring the Memory Overhead of a Postgres Connection](https://blog.anarazel.de/2020/10/07/measuring-the-memory-overhead-of-a-postgres-connection/)，2020-10-07）是一條跑過簡單 OLTP 查詢的連線約 1.3 MiB（私有記憶體加 page table，huge pages 開啟）；不用 huge pages 時每個行程再多一份 page table，對應約 160 MB 共享記憶體、4 KiB 的頁約 0.3 MiB；加上 TLS 與我們的 catalog，取整到 2 MiB。所有連線槽都開滿，加上約 10 個背景行程（checkpointer、background writer、WAL writer、archiver、autovacuum launcher、logical replication launcher、PostgreSQL 18 的 I/O worker 3 個） | (230 + 10) × 2 = 480 MB | (220 + 10) × 2 = 460 MB | (200 + 10) × 2 = 420 MB | (160 + 10) × 2 = 340 MB |
+| 共享記憶體（含 `shared_buffers`、每個連線槽的 PGPROC 與 lock table） | PostgreSQL 18.6 的 `postgres -C shared_memory_size`，以上面的參數算（2026-10-24，在 `deploy/images/postgres` 的基底 `ghcr.io/cloudnative-pg/postgresql:18.6-minimal-trixie`（固定的 digest）的 initdb 資料目錄上執行，100、160、200 分別是 152、157、159 MB；AGE 的共享記憶體不在內，很小）。每多一個連線槽約 70 KiB；220 與 240 以這個斜率推算（未實測） | 約 162 MB | 約 160 MB | 159 MB | 157 MB |
+| 每條連線的固定開銷 | 2 MiB：Andres Freund 的量測（[Measuring the Memory Overhead of a Postgres Connection](https://blog.anarazel.de/2020/10/07/measuring-the-memory-overhead-of-a-postgres-connection/)，2020-10-07）是一條跑過簡單 OLTP 查詢的連線約 1.3 MiB（私有記憶體加 page table，huge pages 開啟）；不用 huge pages 時每個行程再多一份 page table，對應約 160 MB 共享記憶體、4 KiB 的頁約 0.3 MiB；加上 TLS 與我們的 catalog，取整到 2 MiB。所有連線槽都開滿，加上約 10 個背景行程（checkpointer、background writer、WAL writer、archiver、autovacuum launcher、logical replication launcher、PostgreSQL 18 的 I/O worker 3 個） | (240 + 10) × 2 = 500 MB | (220 + 10) × 2 = 460 MB | (200 + 10) × 2 = 420 MB | (160 + 10) × 2 = 340 MB |
 | autovacuum 與 migration | 3 個 autovacuum worker 加 migration Job 建索引，各用滿 `maintenance_work_mem` | 4 × 64 = 256 MB | 256 MB | 256 MB | 256 MB |
-| 小計 | | 897 MB | 876 MB | 835 MB | 753 MB |
-| 剩給 `work_mem` | 1024 MB 減小計 | 127 MB：同時 31 個滿額排序，或 15 個滿額 hash | 148 MB：同時 37 個滿額排序，或 18 個滿額 hash | 189 MB：同時 47 個滿額排序，或 23 個滿額 hash | 271 MB：67 個滿額排序，或 33 個滿額 hash |
+| 小計 | | 918 MB | 876 MB | 835 MB | 753 MB |
+| 剩給 `work_mem` | 1024 MB 減小計 | 106 MB：同時 26 個滿額排序，或 13 個滿額 hash | 148 MB：同時 37 個滿額排序，或 18 個滿額 hash | 189 MB：同時 47 個滿額排序，或 23 個滿額 hash | 271 MB：67 個滿額排序，或 33 個滿額 hash |
 
-結論：調到 200 後，固定的部分比 160 多 82 MB（共享記憶體 2 MB、連線槽 80 MB），仍有 189 MB 給查詢的排序與 hash；再調到 220（Laysi/trustiot-v2#721）又多約 41 MB，仍有 148 MB；調到 230（Laysi/trustiot-v2#645）再多約 21 MB，仍有 127 MB。服務的查詢是以索引查少量資料的 OLTP，排序只配置實際需要的大小，很少用到 `work_mem` 的上限；Postgres 的 CPU 上限又是 2 core。若要求「每條連線同時跑一個滿額排序」也放得下，230 需要 897 + 230 × 4 = 1817 MB、220 需要 876 + 220 × 4 = 1756 MB、200 需要 835 + 200 × 4 = 1635 MB，都超過 1Gi；160 也要 1393 MB、2026-10-23 之前的 100 也要 1028 MB，同樣超過，所以這個上限從來不是這樣估的。cgroup 也計入 Postgres 讀檔的 page cache，但那可以回收，不會讓 Postgres 被 OOM kill。
+結論：調到 200 後，固定的部分比 160 多 82 MB（共享記憶體 2 MB、連線槽 80 MB），仍有 189 MB 給查詢的排序與 hash；再調到 220（Laysi/trustiot-v2#721）又多約 41 MB，仍有 148 MB；調到 240（Laysi/trustiot-v2#645，連同 Laysi/trustiot-v2#112 調大的 gateway-ops 連線池）再多約 42 MB，仍有 106 MB。服務的查詢是以索引查少量資料的 OLTP，排序只配置實際需要的大小，很少用到 `work_mem` 的上限；Postgres 的 CPU 上限又是 2 core。若要求「每條連線同時跑一個滿額排序」也放得下，240 需要 918 + 240 × 4 = 1878 MB、220 需要 876 + 220 × 4 = 1756 MB、200 需要 835 + 200 × 4 = 1635 MB，都超過 1Gi；160 也要 1393 MB、2026-10-23 之前的 100 也要 1028 MB，同樣超過，所以這個上限從來不是這樣估的。cgroup 也計入 Postgres 讀檔的 page cache，但那可以回收，不會讓 Postgres 被 OOM kill。
 
 **`external` 模式**：chart 不檢查加總，`max_connections` 由客戶設定；它至少要是上面算出的「需要的連線」，扣掉 CloudNativePG 的 12 條、加上客戶自己的監控與管理連線。chart 仍檢查每個服務的 `database.maxConnections` 在它接受的範圍內。
 

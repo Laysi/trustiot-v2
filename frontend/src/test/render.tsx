@@ -2,12 +2,14 @@ import type { QueryClient } from "@tanstack/react-query";
 import { render } from "@testing-library/react";
 import { createMemoryRouter, type RouteObject } from "react-router";
 
+import type { DeviceApi } from "../api/devices.ts";
 import type { IdentityApi } from "../api/identity.ts";
 import { App, type AppDependencies } from "../app/App.tsx";
 import { LOGIN_PATH, loginPath } from "../app/paths.ts";
 import { createQueryClient } from "../app/query-client.ts";
 import { ROUTES } from "../app/routes.tsx";
 import { DEFAULT_PREFERENCES, type Preferences, type PreferencesStore } from "../preferences/preferences.ts";
+import { FakeDeviceServer } from "./fake-devices.ts";
 import { FakeIdentity, type FakeTenant, type FakeUser } from "./fake-identity.ts";
 
 /** Preferences held in memory; `saved` lists every save. */
@@ -70,7 +72,10 @@ export function renderAt(
     routes?: RouteObject[];
     preferences?: PreferencesStore;
     identity?: IdentityApi;
+    /** The assets and telemetry endpoints; an empty `FakeDeviceServer` unless the test passes one. */
+    devices?: DeviceApi;
     languages?: readonly string[];
+    browserZone?: string;
     queryClient?: QueryClient;
   } = {},
 ) {
@@ -89,8 +94,9 @@ export function renderAt(
     queryClient,
     preferences: options.preferences ?? memoryPreferences({ language: "en" }),
     identity: options.identity ?? signedInBrowser().browser,
+    devices: options.devices ?? new FakeDeviceServer().api(),
     languages: options.languages ?? ["en-US"],
-    browserZone: "UTC",
+    browserZone: options.browserZone ?? "UTC",
     matchMedia: lightMedia(),
   };
   return { router, deps, queryClient, ...render(<App router={router} deps={deps} />) };

@@ -515,6 +515,8 @@ async fn a_batch_goes_up_through_mosquitto_and_the_clouds_acknowledgement_releas
             // Nothing publishes a configuration in this test.
             config: agent::desired::inbox().0,
             telemetry_ack: handles.acks.clone(),
+            // Nor a live lease.
+            live: agent::live::leases().0,
         },
     ));
     let now = agent::modbus::Clock::now(&clock);

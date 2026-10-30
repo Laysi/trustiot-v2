@@ -1,20 +1,28 @@
 //! Cross-tenant negative tests (decision 29, crates/testkit; Laysi/trustiot-v2#719 acceptance 5,
-//! Laysi/trustiot-v2#720): the gateway operations service's Postgres role cannot read or change
-//! another tenant's bindings, models, devices, configurations or their publishes and reports,
-//! and every relation the role can reach is declared. The schema is the product's, applied by the migration Job (`testkit::product`).
+//! Laysi/trustiot-v2#720, Laysi/trustiot-v2#112): the gateway operations service's Postgres role
+//! cannot read or change another tenant's bindings, models, devices, configurations, their
+//! publishes and reports, or gateways' presence, every relation the role can reach is declared,
+//! and the API's gateway list shows the caller's tenant's gateways only. The schema is the
+//! product's, applied by the migration Job (`testkit::product`); the API runs in process on it.
 //!
 //! The suite probes the service role, which keeps the projection and writes configurations in
 //! the event's tenant. The platform role reads every tenant's bindings and configurations by
 //! design (the consumer's reads of a gateway's binding and latest version, and the delivery's
-//! reads, through the tables' `platform_access` policies, SELECT only);
+//! reads, and the presence task's reads of a gateway's binding and of overdue gateways, through
+//! the tables' `platform_access` policies, SELECT only);
 //! `tests/desired_config.rs` checks that it cannot write a configuration.
 //!
 //! Starts a throwaway Postgres with TLS (podman or docker); skipped without either unless `CI`
 //! is set. Run with `--nocapture` to see every probe.
 
 use contract::ServiceName;
+use gateway_ops::gateways::GATEWAYS_PATH;
+use service_kit::identity::ServiceIdentity;
+use service_kit::tenant::TenantDb;
+use sqlx::postgres::PgPoolOptions;
 use testkit::identity::TestIssuer;
 use testkit::isolation::Suite;
+use testkit::isolation::api::Endpoint;
 use testkit::isolation::postgres::PgStore;
 use testkit::pg_table;
 use testkit::product::{DATABASE, product_postgres};
@@ -52,6 +60,18 @@ INSERT INTO gateway_ops.config_deliveries
     (tenant_id, hardware_id, version, first_published_at, last_published_at)
 SELECT tenant_id, hardware_id, version, now(), now() FROM config";
 
+/// One gateway's presence: its binding (the foreign key's parent) is written in the same
+/// statement. `$2` is the binding ID, the canary the gateway's hardware ID.
+const SEED_PRESENCE: &str = "WITH binding AS (
+    INSERT INTO gateway_ops.gateway_bindings
+        (tenant_id, binding_id, hardware_id, bound_at, position_tx, position_id)
+    VALUES ($1::uuid, $2::uuid, $3, now(), 1, 1)
+    RETURNING tenant_id, binding_id, hardware_id
+)
+INSERT INTO gateway_ops.gateway_presence
+    (tenant_id, binding_id, hardware_id, state, session, changed_at, last_seen_at)
+SELECT tenant_id, binding_id, hardware_id, 'online', 's1', now(), now() FROM binding";
+
 const CONSUMER_TABLE: &str = "the outbox consumer's bookkeeping (crates/outbox): subscription \
      positions and processed or failed event IDs, no tenant data; the consumer reads and writes \
      it in transactions without a tenant";
@@ -77,6 +97,10 @@ async fn tenants_are_isolated() {
         "gateway_ops.config_deliveries",
         seed = SEED_DELIVERY
     ))
+    .table(pg_table!(
+        "gateway_ops.gateway_presence",
+        seed = SEED_PRESENCE
+    ))
     .exempt("gateway_ops.outbox_subscription", CONSUMER_TABLE)
     .exempt("gateway_ops.outbox_inbox", CONSUMER_TABLE)
     .exempt("gateway_ops.outbox_dead_letter", CONSUMER_TABLE)
@@ -93,13 +117,34 @@ async fn tenants_are_isolated() {
          (Laysi/trustiot-v2#402)",
     );
 
+    // The API in process, on the same database, with the issuer's keys.
+    let (db, _) = TenantDb::connect_lazy_with_background(
+        product.postgres.options("gateway_ops_app", DATABASE),
+        PgPoolOptions::new().max_connections(4),
+        ServiceIdentity::new(ServiceName::GatewayOps),
+    )
+    .expect("the gateway-ops service role's pool");
+    let router = gateway_ops::gateways::routes(issuer.verifier(ServiceName::GatewayOps), db, 4);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind the API");
+    let base_url = format!(
+        "http://{}",
+        listener.local_addr().expect("the API's address")
+    );
+    tokio::spawn(async move {
+        axum::serve(listener, router).await.expect("serve the API");
+    });
+
     Suite::new(ServiceName::GatewayOps, &issuer, store)
-        .without_api(
-            "gateway-ops has no HTTP API besides the health endpoints so far (tools/openapi, \
-             SERVICES_WITHOUT_API): it takes models, devices and bindings from the assets \
-             service's events and delivers configurations over MQTT (Laysi/trustiot-v2#720)",
-        )
-        .run(None)
+        .openapi(serde_json::to_value(gateway_ops::openapi()).expect("the OpenAPI document"))
+        // Each gateway is listed by its current binding; the presence rows are listed with
+        // theirs (tests/presence.rs checks the presence fields).
+        .endpoint(Endpoint::list(
+            GATEWAYS_PATH,
+            "gateway_ops.gateway_bindings",
+        ))
+        .run(Some(&base_url))
         .await
         .assert_isolated();
 }

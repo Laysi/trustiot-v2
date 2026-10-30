@@ -39,6 +39,7 @@ use protocol::{DeviceId, Issue, IssueCode};
 use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
 
+use crate::live::{DeviceLive, Watcher};
 use crate::modbus::endpoint::{Endpoints, SharedConnection};
 use crate::modbus::pdu::Read;
 use crate::modbus::plan::PlanError;
@@ -165,6 +166,7 @@ pub struct Fleet {
     settings: Settings,
     clock: SharedClock,
     sink: Arc<dyn Sink>,
+    live: Watcher,
     running: HashMap<DeviceId, Running>,
 }
 
@@ -213,8 +215,18 @@ impl Fleet {
             settings,
             clock,
             sink,
+            live: Watcher::none(),
             running: HashMap::new(),
         }
+    }
+
+    /// Polls a device faster while a live lease of `live` asks for it (rebuild checklist I3,
+    /// [`crate::live`]); without this no lease ever covers a device. Applies to the tasks
+    /// started from now on, so set it before the first [`Fleet::apply`].
+    #[must_use]
+    pub fn with_live(mut self, live: Watcher) -> Self {
+        self.live = live;
+        self
     }
 
     /// Polls exactly the devices of `plan` from now on (see the module documentation). Must be
@@ -271,6 +283,7 @@ impl Fleet {
                 id.clone(),
                 planned.reader,
                 polling::poll_period(&planned.device),
+                self.live.device(id.clone()),
                 connection,
                 SharedClockRef(Arc::clone(&self.clock)),
                 self.settings,
@@ -389,18 +402,24 @@ impl Disconnect for Stoppable {
 }
 
 /// Polls one device until its task is aborted.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "everything one device's task owns; a struct would only rename it"
+)]
 async fn poll_device(
     id: DeviceId,
     reader: DeviceReader,
     period: Duration,
+    mut live: DeviceLive,
     mut connection: Stoppable,
     clock: SharedClockRef,
     settings: Settings,
     sink: Arc<dyn Sink>,
 ) {
-    polling::run(
+    polling::run_live(
         &reader,
         period,
+        &mut live,
         &mut connection,
         &clock,
         &settings,

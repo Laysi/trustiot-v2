@@ -942,6 +942,7 @@ name = "gateway-ops"
 version = "0.1.0"
 dependencies = [
  "axum",
+ "bytes",
  "cbor4ii",
  "chrono",
  "contract",
@@ -951,6 +952,7 @@ dependencies = [
  "outbox",
  "protocol",
  "reqwest",
+ "rumqttc",
  "serde",
  "serde_json",
  "service-kit",
@@ -961,6 +963,7 @@ dependencies = [
  "tokio-util",
  "tracing",
  "tracing-subscriber",
+ "utoipa",
  "uuid",
 ]
 
@@ -1758,6 +1761,7 @@ dependencies = [
  "assistant",
  "certs",
  "contract",
+ "gateway-ops",
  "identity",
  "serde_json",
  "telemetry-query",

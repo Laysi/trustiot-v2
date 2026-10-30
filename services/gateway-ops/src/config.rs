@@ -15,8 +15,10 @@ use service_kit::postgres::{PostgresConfig, SslMode};
 /// - 1 for the republish job's lock (`service_kit::job_lock`), held for a whole republish;
 /// - [`crate::delivery::CONCURRENCY`] (2) for the publish slots, each holding a gateway's publish
 ///   lock until the PUBACK and then writing its record, one connection at a time;
-/// - 1 for the report task, which records one apply report at a time.
-pub const MIN_DATABASE_CONNECTIONS: u32 = 7;
+/// - 1 for the report task, which records one apply report at a time;
+/// - 1 for the presence task, which writes one status, heartbeat or timeout at a time;
+/// - 1 for the API's requests, one transaction each.
+pub const MIN_DATABASE_CONNECTIONS: u32 = 9;
 
 /// Most connections of the service role's pool per replica.
 pub const MAX_DATABASE_CONNECTIONS: u32 = 100;
@@ -27,8 +29,20 @@ pub const MIN_THROTTLE: Duration = Duration::from_millis(100);
 /// Longest coalescing window of the delivery ([`Delivery::throttle`]).
 pub const MAX_THROTTLE: Duration = Duration::from_secs(60);
 
-/// The service's settings: the platform settings the chart sets, the database roles, the broker
-/// and the delivery.
+/// Shortest grace of the heartbeat timeout ([`Presence::heartbeat_grace`]).
+pub const MIN_HEARTBEAT_GRACE: Duration = Duration::from_secs(1);
+
+/// Longest grace of the heartbeat timeout ([`Presence::heartbeat_grace`]).
+pub const MAX_HEARTBEAT_GRACE: Duration = Duration::from_secs(600);
+
+/// Shortest interval of the heartbeat timeout's search ([`Presence::sweep_interval`]).
+pub const MIN_SWEEP_INTERVAL: Duration = Duration::from_secs(1);
+
+/// Longest interval of the heartbeat timeout's search ([`Presence::sweep_interval`]).
+pub const MAX_SWEEP_INTERVAL: Duration = Duration::from_secs(60);
+
+/// The service's settings: the platform settings the chart sets, the database roles, the broker,
+/// the delivery and the presence task.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Config {
@@ -44,6 +58,59 @@ pub struct Config {
     /// `delivery.*`: how configurations are delivered. Optional.
     #[serde(default)]
     pub delivery: Delivery,
+    /// `presence.*`: the heartbeat timeout. Optional.
+    #[serde(default)]
+    pub presence: Presence,
+}
+
+/// `presence.*` (README.md, "在線狀態").
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Presence {
+    /// `TRUSTIOT__PRESENCE__HEARTBEAT_GRACE`: added to two of a gateway's announced heartbeat
+    /// intervals before a gateway whose heartbeats stopped is offline (`heartbeat_timeout`). From
+    /// [`MIN_HEARTBEAT_GRACE`] to [`MAX_HEARTBEAT_GRACE`]; default 30 s, so 150 s for the agent's
+    /// 60 s interval.
+    #[serde(
+        default = "default_heartbeat_grace",
+        deserialize_with = "service_kit::config::duration"
+    )]
+    pub heartbeat_grace: Duration,
+    /// `TRUSTIOT__PRESENCE__SWEEP_INTERVAL`: how often the overdue gateways are looked for. From
+    /// [`MIN_SWEEP_INTERVAL`] to [`MAX_SWEEP_INTERVAL`]; default 10 s.
+    #[serde(
+        default = "default_sweep_interval",
+        deserialize_with = "service_kit::config::duration"
+    )]
+    pub sweep_interval: Duration,
+}
+
+impl Default for Presence {
+    fn default() -> Self {
+        Self {
+            heartbeat_grace: default_heartbeat_grace(),
+            sweep_interval: default_sweep_interval(),
+        }
+    }
+}
+
+impl Presence {
+    /// The presence task's settings.
+    #[must_use]
+    pub fn settings(&self) -> crate::presence::Settings {
+        crate::presence::Settings {
+            heartbeat_grace: self.heartbeat_grace,
+            sweep_interval: self.sweep_interval,
+        }
+    }
+}
+
+const fn default_heartbeat_grace() -> Duration {
+    Duration::from_secs(30)
+}
+
+const fn default_sweep_interval() -> Duration {
+    Duration::from_secs(10)
 }
 
 /// `delivery.*`.
@@ -87,6 +154,9 @@ pub struct Platform {
     pub postgres_sslmode: SslMode,
     /// `TRUSTIOT_POSTGRES_CA_FILE`: the CA of the server certificate, the only trust anchor.
     pub postgres_ca_file: PathBuf,
+    /// `TRUSTIOT_INTERNAL_IDENTITY_KEYS_FILE`: the identity service's public keys, which verify
+    /// the internal identity token of the API's requests (crates/service-kit, "身分").
+    pub internal_identity_keys_file: PathBuf,
 }
 
 /// `database.*`: the service role (`gateway_ops_app`), which keeps the projection and writes the
@@ -207,6 +277,18 @@ impl Validate for Config {
                 format!("must be between {MIN_THROTTLE:?} and {MAX_THROTTLE:?}"),
             ));
         }
+        if !(MIN_HEARTBEAT_GRACE..=MAX_HEARTBEAT_GRACE).contains(&self.presence.heartbeat_grace) {
+            return Err(Invalid::new(
+                "presence.heartbeat_grace",
+                format!("must be between {MIN_HEARTBEAT_GRACE:?} and {MAX_HEARTBEAT_GRACE:?}"),
+            ));
+        }
+        if !(MIN_SWEEP_INTERVAL..=MAX_SWEEP_INTERVAL).contains(&self.presence.sweep_interval) {
+            return Err(Invalid::new(
+                "presence.sweep_interval",
+                format!("must be between {MIN_SWEEP_INTERVAL:?} and {MAX_SWEEP_INTERVAL:?}"),
+            ));
+        }
         Ok(())
     }
 }
@@ -223,6 +305,7 @@ mod tests {
                 postgres_database: "trustiot".to_owned(),
                 postgres_sslmode: SslMode::VerifyFull,
                 postgres_ca_file: PathBuf::from("/etc/ca.pem"),
+                internal_identity_keys_file: PathBuf::from("/etc/keys.json"),
             },
             database: Database {
                 username: "gateway_ops_app".to_owned(),
@@ -238,6 +321,7 @@ mod tests {
                 password_file: PathBuf::from("/etc/trustiot/mqtt/gateway-ops"),
             },
             delivery: Delivery::default(),
+            presence: Presence::default(),
         }
     }
 
@@ -283,6 +367,35 @@ mod tests {
         for throttle in [MIN_THROTTLE, MAX_THROTTLE] {
             let mut good = config();
             good.delivery.throttle = throttle;
+            assert!(good.validate().is_ok());
+        }
+    }
+
+    #[test]
+    fn the_presence_settings_are_checked() {
+        for grace in [Duration::from_millis(999), Duration::from_secs(601)] {
+            let mut bad = config();
+            bad.presence.heartbeat_grace = grace;
+            assert_eq!(
+                bad.validate().expect_err("out of bounds").key,
+                "presence.heartbeat_grace"
+            );
+        }
+        for interval in [Duration::from_millis(999), Duration::from_secs(61)] {
+            let mut bad = config();
+            bad.presence.sweep_interval = interval;
+            assert_eq!(
+                bad.validate().expect_err("out of bounds").key,
+                "presence.sweep_interval"
+            );
+        }
+        for (grace, interval) in [
+            (MIN_HEARTBEAT_GRACE, MIN_SWEEP_INTERVAL),
+            (MAX_HEARTBEAT_GRACE, MAX_SWEEP_INTERVAL),
+        ] {
+            let mut good = config();
+            good.presence.heartbeat_grace = grace;
+            good.presence.sweep_interval = interval;
             assert!(good.validate().is_ok());
         }
     }

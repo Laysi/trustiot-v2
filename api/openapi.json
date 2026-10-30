@@ -986,6 +986,92 @@
         ],
         "type": "object"
       },
+      "Gateway": {
+        "description": "A gateway bound to the caller's tenant.",
+        "properties": {
+          "agent_version": {
+            "description": "The agent's release the gateway reported on its current (or last) connection; `null`\nbefore that connection reported one.",
+            "example": "1.4.0",
+            "maxLength": 64,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "applied_config_version": {
+            "description": "The configuration version the gateway said it has applied, in the latest heartbeat of\nits current (or last) connection; `null` before that connection sent one.",
+            "format": "int64",
+            "minimum": 1,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "binding_id": {
+            "$ref": "#/components/schemas/GatewayBindingId",
+            "description": "The binding (a new one each time the gateway is bound)."
+          },
+          "bound_at": {
+            "description": "When it was bound.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "desired_config_version": {
+            "description": "The latest configuration version stored for the binding (what the gateway should have);\n`null` before the first one.",
+            "format": "int64",
+            "minimum": 1,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "hardware_id": {
+            "description": "The hardware ID.",
+            "example": "tg-0001",
+            "maxLength": 64,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$",
+            "type": "string"
+          },
+          "last_seen_at": {
+            "description": "When the service last received a status or heartbeat of the gateway's current or last\nsession (its last report); `null` while `unknown`.",
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "offline_reason": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/OfflineReason",
+                "description": "Why it is offline; `null` unless `presence` is `offline`."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "presence": {
+            "$ref": "#/components/schemas/Presence",
+            "description": "Whether it is connected."
+          },
+          "presence_changed_at": {
+            "description": "When `presence` last changed, by the service's database clock; `null` while `unknown`.",
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "hardware_id",
+          "binding_id",
+          "bound_at",
+          "presence"
+        ],
+        "type": "object"
+      },
       "GatewayBinding": {
         "description": "A gateway's binding to a tenant.",
         "properties": {
@@ -1022,6 +1108,22 @@
         "description": "One binding of a gateway to a tenant (rebuild checklist D3, Laysi/trustiot-v2#101), made\nby the assets service. A gateway gets a new one every time it is bound, so a binding and\nits events always belong to one tenant.\n\nSerialized as a lowercase hyphenated UUID string.",
         "format": "uuid",
         "type": "string"
+      },
+      "GatewayList": {
+        "description": "The caller's tenant's gateways.",
+        "properties": {
+          "gateways": {
+            "description": "By hardware ID (byte order).",
+            "items": {
+              "$ref": "#/components/schemas/Gateway"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "gateways"
+        ],
+        "type": "object"
       },
       "GatewayRegistration": {
         "description": "A gateway's factory registration, as the service records it.",
@@ -1601,6 +1703,15 @@
         ],
         "type": "string"
       },
+      "OfflineReason": {
+        "description": "Why a gateway is offline.",
+        "enum": [
+          "shutdown",
+          "connection_lost",
+          "heartbeat_timeout"
+        ],
+        "type": "string"
+      },
       "PoolGateway": {
         "description": "A gateway of the device pool.",
         "properties": {
@@ -1696,6 +1807,15 @@
           "theme"
         ],
         "type": "object"
+      },
+      "Presence": {
+        "description": "Whether a gateway is connected.",
+        "enum": [
+          "online",
+          "offline",
+          "unknown"
+        ],
+        "type": "string"
       },
       "QueryRange": {
         "description": "The range an answer covers.",
@@ -5377,6 +5497,57 @@
         ]
       }
     },
+    "/api/gateway-ops/v1/gateways": {
+      "get": {
+        "operationId": "listGateways",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GatewayList"
+                }
+              }
+            },
+            "description": "The gateways bound to the caller's tenant, by hardware ID."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No valid session (`unauthenticated`)."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No tenant or no role in it (`permission_denied`)."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The database failed, or too many requests are being answered (`unavailable`)."
+          }
+        },
+        "summary": "The tenant's gateways, with whether each is connected, its last report and its configuration\nversions.",
+        "tags": [
+          "gateway-ops"
+        ]
+      }
+    },
     "/api/identity/v1/event-log": {
       "get": {
         "operationId": "getTenantEventLog",
@@ -7096,6 +7267,10 @@
     {
       "description": "Workstation certificates, factory registration and gateway revocation from the issuing CA (services/certs).",
       "name": "certs"
+    },
+    {
+      "description": "Gateways' presence and configurations (services/gateway-ops).",
+      "name": "gateway-ops"
     },
     {
       "description": "Sessions, users and tenants (services/identity).",

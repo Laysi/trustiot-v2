@@ -293,6 +293,9 @@ pub struct Parts {
     pub locks: PgPool,
     /// The coalescing window (`delivery.throttle`).
     pub throttle: Duration,
+    /// Bounds the platform-role reads, [`CONCURRENCY`] permits shared with the presence task
+    /// (`crate::presence`), so both together never use more of `crate::PLATFORM_CONNECTIONS`.
+    pub reads: Arc<Semaphore>,
 }
 
 /// Why the delivery could not start.
@@ -327,8 +330,8 @@ struct Inner {
     wake: Notify,
     /// Wakes those waiting for a busy gateway.
     idle: Notify,
-    /// Bounds the platform-role reads.
-    reads: Semaphore,
+    /// Bounds the platform-role reads (shared with the presence task).
+    reads: Arc<Semaphore>,
     /// The publish slots: bounds the publishes in progress, scheduled and republished together,
     /// and so the service-role connections they hold.
     publishes: Semaphore,
@@ -431,7 +434,7 @@ impl Delivery {
             }),
             wake: Notify::new(),
             idle: Notify::new(),
-            reads: Semaphore::new(CONCURRENCY),
+            reads: parts.reads,
             publishes: Semaphore::new(CONCURRENCY),
             connection: Connection::default(),
             counters: Counters::default(),

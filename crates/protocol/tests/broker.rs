@@ -680,6 +680,36 @@ fn the_gateway_role_allows_exactly_the_protocol_channels() {
         Vec::<String>::new()
     );
 
+    // Another gateway's channels are not this gateway's: publishing to any `up` channel of
+    // gw-b, its live values (`up/live`, Laysi/trustiot-v2#121) among them, is refused with
+    // PUBACK 0x87 at QoS 1, and at QoS 0 (live values' QoS, no PUBACK) nothing reaches the
+    // cloud either; subscribing to gw-b's `up/live` is refused with SUBACK 0x87.
+    let other = GatewayId::new("gw-b").unwrap();
+    for &channel in &up {
+        let topic = channel.topic(&other);
+        let code = broker.publish(&setup.gateway, &topic, 1, false, channel.name());
+        assert_eq!(code, Some(NOT_AUTHORIZED), "{topic}");
+        broker.publish(&setup.gateway, &topic, 0, false, channel.name());
+    }
+    setup.mark();
+    assert_eq!(
+        watch.until(MARKER),
+        [],
+        "nothing for gw-b reaches the cloud"
+    );
+    // With one of its own topics in the same SUBSCRIBE: mosquitto_sub exits when every filter
+    // is refused.
+    let mut eavesdrop = broker.subscribe(
+        &setup.gateway,
+        &[
+            gateway_topic(Channel::LiveControl),
+            Channel::Live.topic(&other),
+        ],
+        None,
+    );
+    assert_eq!(eavesdrop.granted, [1, NOT_AUTHORIZED]);
+    broker.kill(&mut eavesdrop);
+
     // Dynamic security cannot refuse the retain flag on an allowed topic (README, ACL
     // section). If this fails, the broker now enforces it: update the README's decision.
     let telemetry = gateway_topic(Channel::Telemetry);

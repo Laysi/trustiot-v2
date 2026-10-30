@@ -35,6 +35,7 @@ use service_kit::identity::ServiceIdentity;
 use service_kit::tenant::{BackgroundTenantDb, PlatformDb, TenantDb};
 use sqlx::PgConnection;
 use sqlx::postgres::PgPoolOptions;
+use testkit::identity::TestIssuer;
 use testkit::postgres::TEST_PASSWORD;
 use testkit::product::{DATABASE, ProductPostgres};
 
@@ -592,24 +593,44 @@ impl Output {
     }
 }
 
+/// Writes `jwks` to a file of its own under Cargo's temporary directory for these tests and
+/// returns its path.
+fn keys_file(jwks: &str) -> std::path::PathBuf {
+    static NEXT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+    let name = format!(
+        "gateway-ops-jwks-{}-{}.json",
+        std::process::id(),
+        NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    );
+    let path = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(name);
+    std::fs::write(&path, jwks).expect("write the keys file");
+    path
+}
+
 /// The gateway-ops service running as a child process.
 pub struct Service {
     child: Child,
     pub stdout: Output,
     pub stderr: Output,
     health: SocketAddr,
+    /// The API's address.
+    pub api: SocketAddr,
+    /// Signs the internal identity tokens the service accepts.
+    pub issuer: TestIssuer,
 }
 
 impl Service {
     /// Starts the service on free local ports against `product` and the broker `mqtt`, with the
-    /// roles the chart gives it and a coalescing window of `throttle`, and waits until it
-    /// listens. The environment is otherwise empty, so the developer's own variables cannot leak
-    /// in.
+    /// roles the chart gives it, a coalescing window of `throttle` and the public keys of a new
+    /// test issuer, and waits until it listens. The environment is otherwise empty, so the
+    /// developer's own variables cannot leak in.
     pub async fn start(
         product: &ProductPostgres,
         mqtt: &mqtt_client::Config,
         throttle: &str,
     ) -> Self {
+        let issuer = TestIssuer::new();
+        let keys_file = keys_file(&issuer.jwks());
         let mut child = Command::new(GATEWAY_OPS)
             .env_clear()
             .env("TRUSTIOT__MQTT__HOST", &mqtt.host)
@@ -629,6 +650,7 @@ impl Service {
             )
             .env("TRUSTIOT__DATABASE__PLATFORM_PASSWORD", TEST_PASSWORD)
             .envs(product.platform_env())
+            .env("TRUSTIOT_INTERNAL_IDENTITY_KEYS_FILE", &keys_file)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -651,16 +673,42 @@ impl Service {
             );
             tokio::time::sleep(Duration::from_millis(50)).await;
         };
-        let health = listening["fields"]["health_address"]
-            .as_str()
-            .and_then(|address| address.parse().ok())
-            .unwrap_or_else(|| panic!("no health_address in {listening}"));
+        let address = |field: &str| -> SocketAddr {
+            listening["fields"][field]
+                .as_str()
+                .and_then(|address| address.parse().ok())
+                .unwrap_or_else(|| panic!("no {field} in {listening}"))
+        };
+        let (health, api) = (address("health_address"), address("address"));
         Self {
             child,
             stdout,
             stderr,
             health,
+            api,
+            issuer,
         }
+    }
+
+    /// `GET` of the API path `path` with `token` as the internal identity token (none when
+    /// `None`): the status, the `cache-control` header and the body.
+    pub async fn get(&self, path: &str, token: Option<&str>) -> (u16, Option<String>, Value) {
+        let mut request = reqwest::Client::new()
+            .get(format!("http://{}{path}", self.api))
+            .timeout(Duration::from_secs(30));
+        if let Some(token) = token {
+            request = request.header(contract::INTERNAL_IDENTITY_HEADER, token);
+        }
+        let response = request.send().await.expect("call the API");
+        let status = response.status().as_u16();
+        let cache = response
+            .headers()
+            .get("cache-control")
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_owned);
+        let text = response.text().await.expect("read the API's response");
+        let body = serde_json::from_str(&text).unwrap_or(Value::Null);
+        (status, cache, body)
     }
 
     /// `GET /readyz`: the status and the body.

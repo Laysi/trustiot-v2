@@ -13,6 +13,7 @@ assets = { path = "../../services/assets" }
 assistant = { path = "../../services/assistant" }
 certs = { path = "../../services/certs" }
 contract = { path = "../../crates/contract" }
+gateway-ops = { path = "../../services/gateway-ops" }
 identity = { path = "../../services/identity" }
 telemetry-query = { path = "../../services/telemetry-query" }
 serde_json.workspace = true

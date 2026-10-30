@@ -1,0 +1,180 @@
+# Run 1 (07:49 to 08:16): cargo fmt --all --check; cargo clippy --locked --workspace --all-targets -- -D warnings;
+# cargo test --locked --workspace --exclude agent (result lines, identical lines counted by uniq -c; the filter also
+# matched test names that contain "failed"); cargo test --locked -p agent; aarch64 builds of protocol and agent;
+# cargo run -p openapi -- --check. Compile progress lines removed.
+07:49:41
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 15.94s
+CLIPPY-OK
+      1 test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.06s
+      1 test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.87s
+      1 test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.94s
+      1 test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.77s
+      1 test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 7.09s
+      1 test result: ok. 51 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.22s
+      1 test result: ok. 52 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.20s
+      4 test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+      1 test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+      1 test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 12.93s
+      1 test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 15.45s
+      1 test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 19.75s
+      1 test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.92s
+      1 test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.01s
+      1 test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.05s
+      1 test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.48s
+      1 test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 59.07s
+      2 test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+      1 test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+      1 test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.00s
+      1 test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.70s
+      1 test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 24.65s
+      1 test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.18s
+      1 test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.62s
+      1 test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.25s
+      1 test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.02s
+      1 test result: ok. 75 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+      1 test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+      1 test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+      1 test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.11s
+      1 test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.42s
+      1 test result: ok. 84 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.75s
+      1 test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+      1 test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 11.19s
+      1 test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 15.00s
+      1 test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 19.67s
+      1 test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.25s
+      1 test result: ok. 92 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.09s
+      1 test results_over_the_limits_become_a_request_to_narrow ... ok
+      1 test sql_api::tests::a_failed_account_check_is_unavailable_whatever_the_code ... ok
+WS-OK
+     Running unittests src/lib.rs (<host copy>/target/debug/deps/agent-045327fb9b889c9e)
+test buffer::disk::tests::a_failed_write_closes_the_segment_and_the_next_needs_a_new_one ... ok
+test buffer::tests::a_failed_sync_at_the_stop_reports_its_batches_as_lost ... ok
+test buffer::tests::a_stop_tries_a_disk_that_failed_to_open_earlier ... ok
+test buffer::tests::a_stop_opens_a_disk_that_failed_before_for_appends_only ... ok
+test modbus::tests::a_failed_connect_is_one_request_and_skips_the_rest ... ok
+test renewal::tests::a_failed_write_leaves_the_old_certificate_file ... ok
+test renewal::tests::failed_attempts_back_off_and_obey_retry_after ... ok
+test result: ok. 355 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.68s
+     Running unittests src/main.rs (<host copy>/target/debug/deps/trustiot_agent-91ff7813038fb494)
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/binary.rs (<host copy>/target/debug/deps/binary-7a0efb065b9350c9)
+test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.03s
+     Running tests/broker.rs (<host copy>/target/debug/deps/broker-2f52ed1fa25c5b73)
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.71s
+     Running tests/dependencies.rs (<host copy>/target/debug/deps/dependencies-c0d18c898c259b4c)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.15s
+     Running tests/desired_config.rs (<host copy>/target/debug/deps/desired_config-4d3f5fe73f000d58)
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+     Running tests/link.rs (<host copy>/target/debug/deps/link-2a114b22751d044c)
+test result: ok. 56 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+     Running tests/live.rs (<host copy>/target/debug/deps/live-a95fef3fc9efebab)
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+     Running tests/liveness.rs (<host copy>/target/debug/deps/liveness-f2eec25d2f0e3421)
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/modbus_address_guard.rs (<host copy>/target/debug/deps/modbus_address_guard-ce086de2136cc313)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/modbus_fake_endpoint.rs (<host copy>/target/debug/deps/modbus_fake_endpoint-131e798a38e806b8)
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+     Running tests/modbus_rtu_converter.rs (<host copy>/target/debug/deps/modbus_rtu_converter-00c38c9075213a70)
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+     Running tests/modbus_rtu_framing.rs (<host copy>/target/debug/deps/modbus_rtu_framing-c4a03d9c3cf510f1)
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/modbus_tcp_framing.rs (<host copy>/target/debug/deps/modbus_tcp_framing-788aaa0ab155bf10)
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/polling_recovery.rs (<host copy>/target/debug/deps/polling_recovery-364b2c73420b086b)
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/provision.rs (<host copy>/target/debug/deps/provision-482a5a21bb171aff)
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.79s
+     Running tests/provision_install.rs (<host copy>/target/debug/deps/provision_install-e4de74a3ef61ede5)
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.18s
+     Running tests/renewal.rs (<host copy>/target/debug/deps/renewal-6401e8c5bc598762)
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 21.84s
+     Running tests/systemd_unit.rs (<host copy>/target/debug/deps/systemd_unit-0b73ea83d5dced08)
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.07s
+     Running tests/tpm_endorsement.rs (<host copy>/target/debug/deps/tpm_endorsement-3e5199c6bb096152)
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.44s
+     Running tests/tpm_provision.rs (<host copy>/target/debug/deps/tpm_provision-1451f2d4551c6866)
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.74s
+     Running tests/tpm_swtpm.rs (<host copy>/target/debug/deps/tpm_swtpm-1556f054f96efed7)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.91s
+     Running tests/transport.rs (<host copy>/target/debug/deps/transport-5effc6883186ba10)
+test result: ok. 19 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.42s
+     Running tests/upload.rs (<host copy>/target/debug/deps/upload-9d6a0ce51b3f44ff)
+test result: ok. 18 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.12s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+AGENT-OK
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 5.67s
+warning: `agent` (bin "trustiot-agent") generated 1 warning
+    Finished `release` profile [optimized] target(s) in 29.67s
+api/openapi.json is up to date
+ALL-OK
+08:16:05
+exit 0 at 08:16:07 (build host)
+
+# Run 2 (08:16 to 08:17), after the fix for leases that come and go quickly: cargo fmt --all --check;
+# cargo clippy --locked -p agent -p protocol --all-targets -- -D warnings; cargo test --locked -p agent --lib polling;
+# cargo test --locked -p agent --test live --test upload --test desired_config --test binary; aarch64 build of agent
+# (zigbuild, release). The linker warning is Zig's, about an optimization flag; it is not from this change.
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 5.86s
+CLIPPY-OK
+test polling::tests::due_times_are_whole_periods_from_the_start ... ok
+test polling::tests::settings_have_defaults_and_ranges ... ok
+test polling::tests::a_live_poll_across_a_regular_due_time_is_its_regular_poll ... ok
+test polling::tests::a_lease_adds_polls_at_its_interval_and_the_regular_ones_keep_their_rate ... ok
+test polling::tests::a_lease_no_faster_than_the_poll_interval_adds_no_poll ... ok
+test polling::tests::the_backoff_doubles_up_to_its_maximum ... ok
+test polling::tests::leases_that_come_and_go_quickly_do_not_poll_faster_than_their_interval ... ok
+test polling::tests::the_schedule_does_not_drift_over_an_hour ... ok
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 350 filtered out; finished in 0.04s
+test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.03s
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+test result: ok. 18 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.10s
+warning: linker stderr: ignoring deprecated linker optimization setting '1'
+  |
+  = note: `#[warn(linker_messages)]` on by default
+
+warning: `agent` (bin "trustiot-agent") generated 1 warning
+    Finished `release` profile [optimized] target(s) in 20.21s
+ALL-OK
+exit 0 at 08:17:27 (build host)
+
+# Run 3 (08:24), after the final rule (a new live schedule starts no sooner than one interval after the device's
+# last poll): cargo fmt --all --check; cargo clippy --locked -p agent --all-targets -- -D warnings;
+# cargo test --locked -p agent --lib (live and polling lines shown); cargo test --locked -p agent --test live
+# --test upload --test desired_config --test binary --test broker; cargo test -p agent --test live five more times.
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 6.66s
+CLIPPY-OK
+test live::tests::a_device_loop_wakes_on_a_change_and_never_once_the_leases_are_gone ... ok
+test live::tests::a_lease_covers_its_devices_until_it_ends ... ok
+test live::tests::renew_extends_stop_ends_and_the_shortest_interval_counts ... ok
+test live::tests::a_payload_that_does_not_decode_is_ignored ... ok
+test live::tests::an_unknown_operation_changes_nothing ... ok
+test live::tests::readings_become_one_series_per_point_and_unsendable_values_are_left_out ... ok
+test liveness::tests::the_connection_task_gets_a_deadline_before_it_starts ... ok
+test liveness::tests::a_long_backoff_keeps_the_watchdog_fed ... ok
+test liveness::tests::a_wait_past_its_deadline_stops_the_watchdog_and_says_why ... ok
+test liveness::tests::a_blocked_connection_thread_stops_the_watchdog ... ok
+test live::tests::at_most_max_live_leases_are_kept ... ok
+test polling::tests::a_lease_no_faster_than_the_poll_interval_adds_no_poll ... ok
+test polling::tests::a_live_poll_across_a_regular_due_time_is_its_regular_poll ... ok
+test polling::tests::a_new_lease_waits_one_interval_after_the_last_poll ... ok
+test polling::tests::a_lease_adds_polls_at_its_interval_and_the_regular_ones_keep_their_rate ... ok
+test polling::tests::due_times_are_whole_periods_from_the_start ... ok
+test polling::tests::settings_have_defaults_and_ranges ... ok
+test polling::tests::the_backoff_doubles_up_to_its_maximum ... ok
+test polling::tests::leases_that_come_and_go_quickly_do_not_poll_faster_than_their_interval ... ok
+test polling::tests::the_schedule_does_not_drift_over_an_hour ... ok
+test result: ok. 357 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.70s
+test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.03s
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.98s
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 18 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.10s
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+ALL-OK
+exit 0 at 08:24:57 (build host)
