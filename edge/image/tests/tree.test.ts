@@ -3,7 +3,35 @@ import { afterAll, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { compareTrees, walk } from "../src/tree.ts";
+import { type Entry, compareTrees, resolveInImage, walk } from "../src/tree.ts";
+
+describe("links resolved inside the image", () => {
+  const entry = (type: Entry["type"], link?: string): Entry => ({ type, mode: 0o644, uid: 0, gid: 0, size: 0, mtimeMs: 0, ...(link ? { link } : {}) });
+  const entries = new Map<string, Entry>([
+    ["/usr/lib/udev/rules.d/80-real.rules", entry("file")],
+    ["/etc/udev/rules.d/90-abs.rules", entry("link", "/usr/lib/udev/rules.d/80-real.rules")],
+    ["/etc/udev/rules.d/91-rel.rules", entry("link", "../../../usr/lib/udev/rules.d/80-real.rules")],
+    ["/etc/udev/rules.d/92-chain.rules", entry("link", "90-abs.rules")],
+    ["/etc/udev/rules.d/93-null.rules", entry("link", "/dev/null")],
+    ["/etc/udev/rules.d/94-loop.rules", entry("link", "95-loop.rules")],
+    ["/etc/udev/rules.d/95-loop.rules", entry("link", "94-loop.rules")],
+    ["/etc/udev/rules.d/96-gone.rules", entry("link", "/opt/missing.rules")],
+    ["/etc/udev/rules.d/97-escape.rules", entry("link", "../../../../../../home/host/x.rules")],
+  ]);
+
+  test("follows absolute, relative and chained links within the tree", () => {
+    for (const name of ["90-abs", "91-rel", "92-chain"]) expect(resolveInImage(entries, `/etc/udev/rules.d/${name}.rules`)).toBe("/usr/lib/udev/rules.d/80-real.rules");
+    expect(resolveInImage(entries, "/etc/udev/rules.d/93-null.rules")).toBe("/dev/null");
+    expect(resolveInImage(entries, "/usr/lib/udev/rules.d/80-real.rules")).toBe("/usr/lib/udev/rules.d/80-real.rules");
+  });
+
+  test("gives up on loops and targets outside the tree, never reaching the host", () => {
+    expect(resolveInImage(entries, "/etc/udev/rules.d/94-loop.rules")).toBeUndefined();
+    expect(resolveInImage(entries, "/etc/udev/rules.d/96-gone.rules")).toBeUndefined();
+    // ".." stops at the image's root, as it does for the kernel inside a chroot.
+    expect(resolveInImage(entries, "/etc/udev/rules.d/97-escape.rules")).toBeUndefined();
+  });
+});
 
 const dir = mkdtempSync(join(tmpdir(), "image-tree-"));
 afterAll(() => rmSync(dir, { recursive: true, force: true }));

@@ -24,6 +24,7 @@ import {
   parseDpkgOwners,
   parseFstab,
   parseSshdDump,
+  sshdAdmitsProblems,
   sshdMatchLines,
   sshdProblems,
   sudoersFile,
@@ -31,6 +32,31 @@ import {
   tpmDeviceTreeProblems,
 } from "../files.ts";
 import { aarch64ElfProblem, authorizedKeys, keyFingerprint, parsePublicKeys } from "../inputs.ts";
+import {
+  CONSOLE_INSTANCES,
+  DENIED_USB_CLASSES,
+  DENIED_USB_DRIVERS,
+  LOGIND_DROP_IN,
+  LOGIND_EXPECTED,
+  MASKED_CONSOLE_UNITS,
+  MASKED_GENERATORS,
+  MASKED_SSH_SOCKETS,
+  PANIC_ARGUMENT,
+  OVERRIDING_RULES_DIRS,
+  SULOGIN_UNITS,
+  UNIT_DIRS,
+  USB_DENY_RULES,
+  effectiveSection,
+  initramfsPanicProblems,
+  legacyStartupScript,
+  lockedPassword,
+  logindDropIn,
+  readsTerminal,
+  rulesWithLastRule,
+  rulesWritingAuthorized,
+  unitOfFile,
+  usbDenyRules,
+} from "../login.ts";
 import {
   BOOT_CODE_BYTES,
   compareTables,
@@ -45,6 +71,7 @@ import {
 import {
   ADMIN_USER,
   AGENT_SYSTEMD_FILES,
+  AGENT_USER,
   DATA,
   IMAGE_PACKAGES,
   KNOWN_FINDINGS,
@@ -55,7 +82,7 @@ import {
   SOURCE_USER,
   TPM_OVERLAY,
 } from "../pins.ts";
-import { compareTrees, isText, manifest, textProblems, walk } from "../tree.ts";
+import { compareTrees, isText, manifest, resolveInImage, textProblems, walk } from "../tree.ts";
 import { Chroot, Ext4Mount, PATHS, extractPartition, installTools, run, sha256File, step } from "./common.ts";
 
 const W = PATHS.work;
@@ -364,6 +391,10 @@ async function main(): Promise<void> {
       for (const connection of SSHD_TEST_CONNECTIONS) {
         const dump = parseSshdDump((await chroot.run(["sshd", "-T", "-h", "/tmp/sshd-test-key", "-C", connection])).stdout);
         problems.push(...sshdProblems(dump).map((p) => `${connection}: ${p}`));
+        problems.push(...sshdAdmitsProblems(dump, [AGENT_USER, "root", SOURCE_USER]).map((p) => `${connection}: ${p}`));
+        // For the report: who sshd -T lets log in on this connection, and how.
+        const decided = ["allowusers", "denyusers", "authenticationmethods"].map((key) => `${key} ${(dump.get(key) ?? ["(none)"]).join(" ")}`);
+        console.log(`sshd -T -C ${connection}: ${decided.join("; ")}`);
       }
       const configs = ["/etc/ssh/sshd_config", ...[...newTree.keys()].filter((p) => p.startsWith("/etc/ssh/sshd_config.d/"))];
       for (const path of configs) {
@@ -377,7 +408,7 @@ async function main(): Promise<void> {
       if (await Bun.file(join(ROOT, "etc/ssh/sshd_config.d/rename_user.conf")).exists()) problems.push("rename_user.conf is still there");
       return {
         problems,
-        detail: `sshd -G and sshd -T for ${SSHD_TEST_CONNECTIONS.length} connections (${ADMIN_USER}, root, pi): permitrootlogin no, passwordauthentication no, kbdinteractiveauthentication no, authenticationmethods publickey, allowusers ${ADMIN_USER}; no Match block`,
+        detail: `sshd -G and sshd -T for ${SSHD_TEST_CONNECTIONS.length} connections (${ADMIN_USER}, root, pi, ${AGENT_USER}): permitrootlogin no, passwordauthentication no, kbdinteractiveauthentication no, authenticationmethods publickey, allowusers ${ADMIN_USER} (admits neither ${AGENT_USER}, root nor pi); no Match block`,
       };
     });
 
@@ -448,6 +479,167 @@ async function main(): Promise<void> {
       return { problems, detail: `masked: ${[...cloudUnits, ...MASKED_SETUP_UNITS].join(", ")}; /etc/cloud/cloud-init.disabled; no ${REMOVED_BOOT_FILES.join(", ")} on the boot partition` };
     });
 
+    // Laysi/trustiot-v2#815: README.md, section 「登入面」.
+    step("login surface: consoles and USB");
+    await check("no login prompt or shell on the screen or the serial console", async () => {
+      const problems: string[] = [];
+      for (const unit of [...MASKED_CONSOLE_UNITS, ...CONSOLE_INSTANCES]) {
+        const state = await isEnabled(chroot, unit);
+        if (state !== "masked") problems.push(`${unit} is ${state || "unknown"}, expected masked`);
+      }
+      // Every service a unit file or drop-in connects to a terminal: masked, or sulogin.
+      const terminal = new Set<string>();
+      const forced: string[] = [];
+      const sulogin = new Set<string>(SULOGIN_UNITS);
+      for (const [path, entry] of newTree) {
+        const unit = unitOfFile(path);
+        if (unit === undefined) continue;
+        // The sulogin units are trusted for what the vendor file runs; any other file (an override
+        // in /etc, a drop-in, a link) could change ExecStart= to a shell.
+        if ((sulogin.has(unit) || unit === "*") && path !== `/usr/lib/systemd/system/${unit}` && !(unit === "*" && entry.type !== "file")) {
+          if (sulogin.has(unit)) problems.push(`${path} configures ${unit}; only the vendor unit file is expected`);
+        }
+        if (entry.type !== "file") continue;
+        const text = await readFile(join(ROOT, path), "utf8");
+        if (readsTerminal(text)) terminal.add(unit);
+        if (unit === "*" && /^\s*ExecStart\s*=/m.test(text)) problems.push(`${path} sets ExecStart= for every service`);
+      }
+      // SYSTEMD_SULOGIN_FORCE can come from a unit, a drop-in, an EnvironmentFile= or the manager's
+      // DefaultEnvironment=/ManagerEnvironment=: no text file of the configuration may name it
+      // (systemd-sulogin-shell itself is a binary and reads it).
+      for (const [path, entry] of newTree) {
+        if (entry.type !== "file" || !/^\/(etc|usr\/lib\/systemd|usr\/local\/lib\/systemd)\//.test(path)) continue;
+        const bytes = await readFile(join(ROOT, path));
+        if (isText(bytes) && bytes.includes("SYSTEMD_SULOGIN_FORCE")) forced.push(path);
+      }
+      // A unit linked in from outside the unit directories would not be read above.
+      for (const [path, entry] of newTree) {
+        if (entry.type !== "link" || unitOfFile(path) === undefined || entry.link === "/dev/null") continue;
+        const target = entry.link?.startsWith("/") ? entry.link : join(dirname(path), entry.link ?? "");
+        if (!UNIT_DIRS.some((dir) => target.startsWith(`${dir}/`))) problems.push(`${path} links to ${target}, outside the unit directories`);
+      }
+      // Scripts sysv-generator and rc-local-generator would start at boot.
+      for (const path of delta.added) if (legacyStartupScript(path)) problems.push(`${path} was added: a script started at boot outside the checked units`);
+      if (terminal.has("*")) problems.push("a service.d drop-in connects every service to a terminal");
+      terminal.delete("*");
+      for (const unit of [...terminal].sort()) {
+        if (sulogin.has(unit)) continue;
+        const state = await isEnabled(chroot, unit);
+        if (state !== "masked") problems.push(`${unit} reads a terminal and is ${state || "unknown"}, expected masked`);
+      }
+      for (const unit of SULOGIN_UNITS) {
+        const text = await readFile(join(ROOT, "usr/lib/systemd/system", unit), "utf8").catch(() => "");
+        if (!/^ExecStart=-?\/usr\/lib\/systemd\/systemd-sulogin-shell /m.test(text)) problems.push(`${unit} does not run systemd-sulogin-shell`);
+      }
+      if (forced.length > 0) problems.push(`SYSTEMD_SULOGIN_FORCE (sulogin starts a shell for a locked root) is set in ${forced.join(", ")}`);
+      const root = parseColonFile(await readFile(join(ROOT, "etc/shadow"), "utf8")).find((f) => f[0] === "root");
+      if (!lockedPassword(root?.[1])) problems.push(`root's password field is ${JSON.stringify(root?.[1])}: sulogin would ask for it instead of refusing`);
+      const logind = effectiveSection((await chroot.run(["systemd-analyze", "cat-config", "systemd/logind.conf"])).stdout, "Login");
+      for (const [key, value] of Object.entries(LOGIND_EXPECTED)) {
+        if (logind.get(key) !== value) problems.push(`logind ${key} is ${logind.get(key) ?? "not set"}, expected ${value}`);
+      }
+      if ((await readFile(join(ROOT, LOGIND_DROP_IN), "utf8").catch(() => "")) !== logindDropIn()) problems.push(`${LOGIND_DROP_IN} differs from the expected file`);
+      return {
+        problems,
+        detail:
+          `masked: ${MASKED_CONSOLE_UNITS.join(", ")} (and ${CONSOLE_INSTANCES.length} instances); every service whose unit reads a terminal (StandardInput=tty*, TTYPath=, or an Exec*= naming a getty, sulogin, sh -i or a terminal device) is masked except ` +
+          `${SULOGIN_UNITS.join(", ")} (sulogin, root locked, no SYSTEMD_SULOGIN_FORCE in /etc or the systemd directories); no unit linked in from elsewhere, no added init.d or rc.local script; logind ${Object.entries(LOGIND_EXPECTED).map(([k, v]) => `${k}=${v}`).join(" ")}`,
+      };
+    });
+
+    await check("a failed boot reboots instead of opening the initramfs shell", async () => {
+      const problems: string[] = [];
+      const cmdline = parseCmdline(await mtype(boot, "cmdline.txt"));
+      const panics = cmdline.filter((t) => t.startsWith("panic="));
+      if (panics.length !== 1 || panics[0] !== PANIC_ARGUMENT) problems.push(`cmdline.txt has ${panics.join(" ") || "no panic="}, expected ${PANIC_ARGUMENT}`);
+      const listed = (await run(["mdir", "-b", "-i", boot, "::"], { env: MTOOLS_ENV })).stdout.split("\n").map((l) => l.trim());
+      const initramfs = listed.filter((l) => /^::\/initramfs[^/]*$/i.test(l)).map((l) => l.slice(3));
+      if (initramfs.length === 0) problems.push("the boot partition has no initramfs: the check no longer knows what to look at");
+      for (const name of initramfs) {
+        await rm(join(ROOT, "tmp/initramfs"), { recursive: true, force: true });
+        await mkdir(join(ROOT, "tmp/initramfs"));
+        await mfetch(boot, name, join(ROOT, "tmp/initramfs.img"));
+        await chroot.run(["unmkinitramfs", "/tmp/initramfs.img", "/tmp/initramfs"]);
+        const [init, functions] = await Promise.all(
+          ["tmp/initramfs/init", "tmp/initramfs/scripts/functions"].map((p) => readFile(join(ROOT, p), "utf8").catch(() => "")),
+        );
+        problems.push(...initramfsPanicProblems(init ?? "", functions ?? "").map((p) => `${name}: ${p}`));
+        await rm(join(ROOT, "tmp/initramfs"), { recursive: true, force: true });
+        await rm(join(ROOT, "tmp/initramfs.img"), { force: true });
+      }
+      return { problems, detail: `cmdline.txt ${PANIC_ARGUMENT}; ${initramfs.join(", ")}: init reads panic=, panic() reboots before any shell` };
+    });
+
+    await check("USB keyboards and storage get no driver", async () => {
+      const problems: string[] = [];
+      const installed = await readFile(join(ROOT, USB_DENY_RULES), "utf8").catch(() => "");
+      if (installed !== usbDenyRules()) problems.push(`${USB_DENY_RULES} differs from the expected rules`);
+      problems.push(...expectInfo(USB_DENY_RULES, await fileInfo(join(ROOT, USB_DENY_RULES)), 0o644, 0, 0));
+      const verify = await chroot.run(["udevadm", "verify", "--resolve-names=never", USB_DENY_RULES], { okCodes: [0, 1] });
+      if (verify.code !== 0) problems.push(`udevadm verify: ${(verify.stdout + verify.stderr).trim().slice(-500)}`);
+      // A file (or link) of the same name in an earlier directory would replace the rules (udev(7)).
+      const name = USB_DENY_RULES.slice(USB_DENY_RULES.lastIndexOf("/") + 1);
+      for (const dir of OVERRIDING_RULES_DIRS) if (newTree.has(`${dir}/${name}`)) problems.push(`${dir}/${name} overrides the rules`);
+      // No other rule may authorize what these deauthorize.
+      const rules = new Map<string, string>();
+      for (const [path, entry] of newTree) {
+        if (!/^\/(etc|usr\/lib|usr\/local\/lib)\/udev\/rules\.d\/[^/]+\.rules$/.test(path)) continue;
+        if (entry.type === "file") rules.set(path, await readFile(join(ROOT, path), "utf8"));
+        else if (entry.type === "link") {
+          // udev loads a linked rules file too: follow the link inside the image (never on the
+          // host), and treat a target that cannot be read there as a problem, except /dev/null,
+          // which masks a rules file of that name.
+          const target = resolveInImage(newTree, path);
+          if (target === "/dev/null") continue;
+          if (target === undefined || newTree.get(target)?.type !== "file") problems.push(`${path} links to something the check cannot read`);
+          else rules.set(path, await readFile(join(ROOT, target), "utf8"));
+        } else problems.push(`${path} is neither a file nor a link`);
+      }
+      const writers = rulesWritingAuthorized(rules);
+      if (writers.join(" ") !== USB_DENY_RULES) problems.push(`rules files writing "authorized": ${writers.join(", ") || "none"}, expected only ${USB_DENY_RULES}`);
+      const before = rulesWithLastRule(rules).filter((path) => path.slice(path.lastIndexOf("/") + 1) < name);
+      if (before.length > 0) problems.push(`last_rule in ${before.join(", ")}, which udev reads before ${name}`);
+      // For the record: these drivers are built into each kernel, which is why rules and not module blocks.
+      const builtIn: string[] = [];
+      for (const [path, entry] of newTree) {
+        const kernel = /^\/usr\/lib\/modules\/([^/]+)\/modules\.builtin$/.exec(path)?.[1];
+        if (!kernel || entry.type !== "file") continue;
+        const text = await readFile(join(ROOT, path), "utf8");
+        const named = DENIED_USB_DRIVERS.filter((d) => !d.includes("*") && new RegExp(`/${d}\\.ko$`, "m").test(text));
+        builtIn.push(`${kernel}: ${named.join(", ") || "none"}`);
+      }
+      return {
+        problems,
+        detail: `interface classes ${DENIED_USB_CLASSES.map((c) => `${c.code} (${c.name})`).join(", ")} and drivers ${DENIED_USB_DRIVERS.join(", ")} deauthorized on add and bind; udevadm verify passes; not overridden from ${OVERRIDING_RULES_DIRS.join(" or ")}; no other rule writes "authorized", none read before it sets last_rule; built in: ${builtIn.join("; ")}`,
+      };
+    });
+
+    await check("sshd has no local socket (only SSH over the network)", async () => {
+      const problems: string[] = [];
+      for (const generator of MASKED_GENERATORS) {
+        const entry = newTree.get(generator);
+        if (entry?.type !== "link" || entry.link !== "/dev/null") problems.push(`${generator} is not a link to /dev/null`);
+      }
+      for (const unit of MASKED_SSH_SOCKETS) {
+        const state = await isEnabled(chroot, unit);
+        if (state !== "masked") problems.push(`${unit} is ${state || "unknown"}, expected masked`);
+      }
+      // Any other unit that puts sshd on a local socket: a Listen*= path, abstract name or vsock
+      // address in a socket unit whose service (Service=, or the socket's own name) runs sshd.
+      for (const [path, entry] of newTree) {
+        if (entry.type !== "file" || !/^\/(etc|usr\/local\/lib|usr\/lib)\/systemd\/system\/[^/]+\.socket$/.test(path)) continue;
+        const text = await readFile(join(ROOT, path), "utf8");
+        if (!/^\s*Listen(Stream|SequentialPacket|Datagram)\s*=\s*([/@]|vsock:)/m.test(text)) continue;
+        const unit = path.slice(path.lastIndexOf("/") + 1);
+        const named = /^\s*Service\s*=\s*(\S+)\s*$/m.exec(text)?.[1];
+        const candidates = named ? [named] : [unit.replace(/\.socket$/, "@.service"), unit.replace(/\.socket$/, ".service")];
+        let service = "";
+        for (const dir of UNIT_DIRS) for (const candidate of candidates) service += await readFile(join(ROOT, dir.slice(1), candidate), "utf8").catch(() => "");
+        if (/sshd/.test(service) && (await isEnabled(chroot, unit)) !== "masked") problems.push(`${unit} puts sshd on a local socket`);
+      }
+      return { problems, detail: `${MASKED_GENERATORS.join(", ")} -> /dev/null; masked: ${MASKED_SSH_SOCKETS.join(", ")}` };
+    });
+
     step("secrets and LAN names");
     await check("no private keys, secrets or LAN names in what the build changed", async () => {
       const problems: string[] = [];
@@ -460,7 +652,10 @@ async function main(): Promise<void> {
         "/etc/cloud/cloud-init.disabled",
         `/home/${ADMIN_USER}/.ssh/authorized_keys`,
         ...AGENT_SYSTEMD_FILES.map((file) => file.image),
+        LOGIND_DROP_IN,
+        USB_DENY_RULES,
       ]);
+      const fromRepo = new Set<string>(AGENT_SYSTEMD_FILES.map((file) => file.image));
       let scanned = 0;
       for (const path of [...delta.added, ...delta.changed]) {
         if (newTree.get(path)?.type !== "file") continue;
@@ -469,7 +664,9 @@ async function main(): Promise<void> {
         await writeFile(join(deltaDir, "root", path), bytes);
         scanned++;
         if (!isText(bytes)) continue;
-        const lan = ownFiles.has(path) || /^\/(etc|home|root|var\/lib\/trustiot-agent)\//.test(path);
+        // The agent's files are copies of edge/agent/systemd (checked byte for byte above), public
+        // and reviewed there; the egress rules name the addresses they refuse on purpose.
+        const lan = !fromRepo.has(path) && (ownFiles.has(path) || /^\/(etc|home|root|var\/lib\/trustiot-agent)\//.test(path));
         problems.push(...textProblems(path, bytes.toString("utf8"), lan));
       }
       // Boot partition: every file that differs from the source's.
