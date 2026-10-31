@@ -293,9 +293,11 @@ impl IntoResponse for StartError {
 /// request's user, tenant and role, never anyone else's. The exchanged token expires with the
 /// request's.
 ///
-/// Every failed exchange is [`DelegationError::Unavailable`]: the request's token was verified
+/// A failed exchange is [`DelegationError::Unavailable`]: the request's token was verified
 /// moments ago, so a refusal is a fault of the deployment (service-kit logs it at ERROR), not a
-/// revoked user.
+/// revoked user. The exception is a tenant suspended or deleted since
+/// ([`DelegationError::TenantSuspended`], Laysi/trustiot-v2#777), which the user is meant to
+/// learn, as service-kit's `OnBehalfError` passes it on.
 #[derive(Clone, Copy)]
 pub struct OnBehalfOf<'a> {
     pub on_behalf: &'a OnBehalf,
@@ -317,7 +319,10 @@ impl Delegation for OnBehalfOf<'_> {
             self.on_behalf
                 .token_for(self.user, audience)
                 .await
-                .map_err(|_| DelegationError::Unavailable)
+                .map_err(|error| match error.code() {
+                    ErrorCode::TenantSuspended => DelegationError::TenantSuspended,
+                    _ => DelegationError::Unavailable,
+                })
         })
     }
 

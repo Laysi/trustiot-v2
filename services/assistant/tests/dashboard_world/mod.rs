@@ -850,6 +850,8 @@ struct PeerState {
     script: Mutex<Option<Script>>,
     /// The rows of a SQL answer.
     sql_rows: AtomicUsize,
+    /// The code the token exchange refuses with, once set.
+    exchange_refusal: Mutex<Option<ErrorCode>>,
 }
 
 /// The stand-in identity service and telemetry-query.
@@ -879,6 +881,7 @@ impl Peers {
             unexpected: Mutex::new(Vec::new()),
             script: Mutex::new(None),
             sql_rows: AtomicUsize::new(3),
+            exchange_refusal: Mutex::new(None),
         });
         let router = Router::new()
             .route(ExchangeToken::ROUTE, post(exchange))
@@ -904,6 +907,11 @@ impl Peers {
     /// Answers telemetry calls with `script` from now on.
     pub fn script(&self, script: Script) {
         *lock(&self.state.script) = Some(script);
+    }
+
+    /// Refuses every token exchange with `code` from now on (`None`: exchanges again).
+    pub fn refuse_exchanges(&self, code: Option<ErrorCode>) {
+        *lock(&self.state.exchange_refusal) = code;
     }
 
     /// The rows a SQL answer has from now on.
@@ -968,6 +976,9 @@ async fn exchange(
     };
     let caller = user.claims().clone();
     lock(&state.exchanged).push(caller.clone());
+    if let Some(code) = *lock(&state.exchange_refusal) {
+        return refuse(code);
+    }
     let iat = unix_now();
     let claims = InternalClaims {
         iss: ServiceName::Identity,

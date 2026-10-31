@@ -49,8 +49,8 @@ use axum::http::header::CONTENT_TYPE;
 use contract::api::dashboard::result::{DatasetResult, MAX_RESULT_BYTES};
 use contract::api::dashboard::spec::Dataset;
 use contract::{
-    Actor, DashboardId, INTERNAL_IDENTITY_HEADER, InternalClaims, InternalToken, ServiceName,
-    TenantGrant, TenantId, TenantRole,
+    Actor, DashboardId, ErrorCode, INTERNAL_IDENTITY_HEADER, InternalClaims, InternalToken,
+    ServiceName, TenantGrant, TenantId, TenantRole,
 };
 use dashboard_world::{
     Answer, Binary, Content, DATASETS, Peers, Person, SQL_PATH, STATISTICS_PATH, Script,
@@ -2601,6 +2601,58 @@ async fn telemetry_querys_refusals_reach_the_user_only_as_closed_keys() {
             "only the caps say when to retry"
         );
     }
+}
+
+/// The identity service refuses a run's exchange because the caller's tenant was suspended or
+/// deleted after the request passed the ingress (Laysi/trustiot-v2#777): the user is told so, as
+/// service-kit's `OnBehalfError` tells it. Any other refusal is still a failed run.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_tenant_suspended_during_the_request_is_told_and_nothing_is_called() {
+    let Some(world) = world().await else { return };
+    let peers = Peers::start(Arc::clone(&world.issuer)).await;
+    let api = world.api(&peers, RunCaps::default()).await;
+    let viewer = world.person(TenantId::generate(), TenantRole::Viewer);
+    let editor = world.person(viewer.tenant(), TenantRole::Editor);
+    let (_, _, saved) = world.saved(&editor, &Content::new("Suspended")).await;
+    for (refusal, status, code, key) in [
+        (
+            ErrorCode::TenantSuspended,
+            403,
+            "tenant_suspended",
+            "error.tenant_suspended",
+        ),
+        (
+            ErrorCode::PermissionDenied,
+            503,
+            "unavailable",
+            "dashboard.dataset_failed",
+        ),
+    ] {
+        peers.refuse_exchanges(Some(refusal));
+        let answer = call(
+            &api.url,
+            Method::POST,
+            &action(saved, "dataset-runs"),
+            Some(&world.token(&viewer)),
+            Some(&run_body(1, "daily")),
+        )
+        .await;
+        assert_error(&answer, status, code, key);
+    }
+    assert_eq!(peers.exchanged().len(), 2);
+    assert!(peers.calls().is_empty());
+    // Once the exchange gives a token again, the same request runs.
+    peers.refuse_exchanges(None);
+    let answer = call(
+        &api.url,
+        Method::POST,
+        &action(saved, "dataset-runs"),
+        Some(&world.token(&viewer)),
+        Some(&run_body(1, "daily")),
+    )
+    .await;
+    assert_eq!(answer.status, 200, "{answer:?}");
+    assert_eq!(peers.calls().len(), 1);
 }
 
 #[tokio::test(flavor = "multi_thread")]

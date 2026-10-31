@@ -160,7 +160,9 @@ impl From<DelegationError> for ToolError {
     fn from(error: DelegationError) -> Self {
         match error {
             DelegationError::Revoked => Self::Revoked,
-            DelegationError::NotConfigured | DelegationError::Unavailable => Self::Failed,
+            DelegationError::NotConfigured
+            | DelegationError::Unavailable
+            | DelegationError::TenantSuspended => Self::Failed,
         }
     }
 }
@@ -211,6 +213,13 @@ pub enum DelegationError {
     /// The identity service did not answer in time or failed.
     #[error("the identity service is unavailable")]
     Unavailable,
+    /// The identity service refused the exchange because the user's tenant is suspended or
+    /// deleted (Laysi/trustiot-v2#777). Only a request's own exchange
+    /// ([`crate::delegation::OnBehalfOf`]) reports it, so the API can tell the user, as
+    /// service-kit's `OnBehalfError` does; a question's run takes that refusal as
+    /// [`DelegationError::Unavailable`].
+    #[error("the user's tenant is suspended")]
+    TenantSuspended,
 }
 
 /// The delegation of a run that has none.

@@ -531,7 +531,7 @@ fn run_problem(dataset: &str, error: &RunError) -> WriteProblem {
             "The organisation's telemetry cannot be queried yet. Tell the user; do not call \
              write again in this question.",
         ),
-        RunError::Revoked | RunError::Failed => WriteProblem::new(
+        RunError::Revoked | RunError::Failed | RunError::TenantSuspended => WriteProblem::new(
             "dataset_failed",
             "The dataset could not be run for a reason outside your control. You may call write \
              once more; if it fails again, tell the user the dashboard could not be saved.",

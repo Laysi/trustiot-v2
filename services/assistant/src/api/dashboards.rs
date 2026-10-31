@@ -25,6 +25,7 @@
 //! | --- | --- |
 //! | No valid internal identity token | 401 `unauthenticated` |
 //! | No tenant, a role this build does not know, or a role below the one the operation requires (editor to publish, archive and unarchive; viewer for the rest) | 403 `permission_denied`, from the token alone before the body or the database |
+//! | The caller's tenant is suspended or deleted (Laysi/trustiot-v2#777): the token says so, or the identity service refuses a dataset run's token exchange for it | 403 `tenant_suspended` |
 //! | An ID that is not a UUID, or a dashboard the caller cannot see | 404 `not_found` |
 //! | A query string with an unknown parameter or a bad value, a bad `cursor` | 400 `invalid_request` |
 //! | A body that is not `application/json`, over 4 KiB, or not exactly the request (unknown fields refused) | 400 `invalid_request` |
@@ -598,7 +599,7 @@ async fn set_archived(
         (status = 200, description = "The dataset's table, read with the caller's tenant, role and queryable period.", body = DatasetResult),
         (status = 400, description = "The body is not JSON, over 4 KiB, or not exactly the request (`invalid_request`).", body = ErrorBody),
         (status = 401, description = "No valid session (`unauthenticated`).", body = ErrorBody),
-        (status = 403, description = "No tenant or no role in it (`permission_denied`); the range lies wholly before the caller's queryable period (`quota_exceeded`, `telemetry.outside_queryable_period`, `details.earliest`).", body = ErrorBody),
+        (status = 403, description = "No tenant or no role in it (`permission_denied`); the caller's tenant is suspended or deleted (`tenant_suspended`); the range lies wholly before the caller's queryable period (`quota_exceeded`, `telemetry.outside_queryable_period`, `details.earliest`).", body = ErrorBody),
         (status = 404, description = "No such dashboard the caller can see (`not_found`), or no such version (`dashboard.version_not_found`).", body = ErrorBody),
         (status = 422, description = "No such dataset (`dashboard.dataset_unknown`); more rows than the dataset allows (`dashboard.dataset_too_many_rows`, `details.max`); a result over 2 MiB (`dashboard.dataset_result_too_large`); a query telemetry-query refuses now (`dashboard.dataset_refused`); a query too heavy (`telemetry.query_too_heavy`) or with too many points (`telemetry.too_many_points`, `details.max`) (`validation_failed`).", body = ErrorBody),
         (status = 429, description = "The tenant ran 60 datasets in the last minute, has 2 running in this replica, or this replica's memory for results had no room for the answer within the wait (`dashboard.runs_limited`, with `Retry-After`), or its query quota is used up (`dashboard.query_quota_exhausted`) (`rate_limited`).", body = ErrorBody),

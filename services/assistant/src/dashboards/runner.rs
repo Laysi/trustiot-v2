@@ -193,6 +193,11 @@ pub enum RunError {
     /// the question). 503 `dashboard.dataset_failed` for the API.
     #[error("the user's delegation was revoked")]
     Revoked,
+    /// The identity service refused the request's exchange: the caller's tenant is suspended or
+    /// deleted (Laysi/trustiot-v2#777). 403 `tenant_suspended` for the API; only the API's runs
+    /// get it ([`DelegationError::TenantSuspended`]).
+    #[error("the user's tenant is suspended")]
+    TenantSuspended,
     /// Anything else: telemetry-query is not configured or failed, an answer that is not what
     /// was asked for, no token. 503 `dashboard.dataset_failed`.
     #[error("the run failed")]
@@ -262,6 +267,7 @@ impl RunError {
             }
             Self::Timeout => keyed(ErrorCode::Timeout, DATASET_TIMEOUT),
             Self::Revoked | Self::Failed => keyed(ErrorCode::Unavailable, DATASET_FAILED),
+            Self::TenantSuspended => ErrorBody::new(ErrorCode::TenantSuspended),
             Self::Telemetry(error) => error.to_error_body(),
         }
     }
@@ -973,6 +979,7 @@ fn error_body(body: Option<&[u8]>) -> Option<ErrorBody> {
 fn call_failure(failure: CallFailure) -> RunError {
     match failure {
         CallFailure::Token(DelegationError::Revoked) => RunError::Revoked,
+        CallFailure::Token(DelegationError::TenantSuspended) => RunError::TenantSuspended,
         CallFailure::Token(DelegationError::NotConfigured | DelegationError::Unavailable)
         | CallFailure::Transport => RunError::Failed,
         CallFailure::Timeout => RunError::Timeout,
@@ -1337,6 +1344,12 @@ mod tests {
                 json!({}),
             ),
             (
+                RunError::TenantSuspended,
+                ErrorCode::TenantSuspended,
+                "error.tenant_suspended",
+                json!({}),
+            ),
+            (
                 RunError::Telemetry(TelemetryError::OutsideQueryablePeriod {
                     earliest: DateTime::parse_from_rfc3339("2025-10-26T08:00:00+08:00")
                         .expect("time"),
@@ -1402,6 +1415,10 @@ mod tests {
         assert_eq!(
             call_failure(CallFailure::Token(DelegationError::NotConfigured)),
             RunError::Failed
+        );
+        assert_eq!(
+            call_failure(CallFailure::Token(DelegationError::TenantSuspended)),
+            RunError::TenantSuspended
         );
         assert_eq!(call_failure(CallFailure::Transport), RunError::Failed);
         assert_eq!(call_failure(CallFailure::Timeout), RunError::Timeout);
