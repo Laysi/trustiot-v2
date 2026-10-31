@@ -519,7 +519,7 @@ export async function smokeShape(ctx: SmokeContext, shape: Shape): Promise<Shape
         return runIsolationCheck({ kubeconfig: ctx.kubeconfig, kubectl: ctx.kubectl, log: ctx.log, repoRoot: ctx.repoRoot }, namespace, objects);
       })) &&
       (await check(
-        "through the ingress, a new tenant reaches the assets service and, with its ClickHouse account, the telemetry API; the assistant's conversation API answers its owner only, and a stolen identity header never gets through, and Host ports and normalized paths reach it (Laysi/trustiot-v2#65, #77, #539, #647)",
+        "through the ingress, a new tenant reaches the assets service and, with its ClickHouse account, the telemetry API; the assistant's conversation API answers its owner only and its dashboard list is empty for the new tenant, a stolen identity header never gets through, and Host ports and normalized paths reach it (Laysi/trustiot-v2#65, #77, #539, #647, #150)",
         async () => {
           const checked = await runApiCheck(ctx, namespace, parseManifests(manifest), ingressCa, `nightly smoke ${shape.name}`);
           platformAdmin = checked.platformAdmin;

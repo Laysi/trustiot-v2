@@ -32,9 +32,9 @@
 // with a token addressed to it (200 with the tenant), so the identity service resolves the
 // audience from the Host and path the gateway hands it, not from what the client wrote.
 //
-// The AI assistant's dashboard API (Laysi/trustiot-v2#150) is its first public one: the member
-// lists the new tenant's dashboards through the ingress (GET /api/assistant/v1/dashboards, 200
-// with none and cache-control: no-store); without a cookie the ingress answers 401.
+// The assistant's dashboard API (Laysi/trustiot-v2#150) runs through the same ingress: the member
+// lists the new tenant's dashboards (GET /api/assistant/v1/dashboards, 200 with none and
+// cache-control: no-store); without a cookie the ingress answers 401.
 //
 // The platform administrator is made the way an operator makes the first one
 // (Laysi/trustiot-v2#582; docs/runbooks/platform-admin.md): a Job from the chart's suspended
