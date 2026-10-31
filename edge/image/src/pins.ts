@@ -122,4 +122,10 @@ export const TPM_OVERLAY = "tpm-slb9670-ce0";
 export const AGENT_SYSTEMD_FILES = [
   { repo: "trustiot-agent.service", image: "/usr/lib/systemd/system/trustiot-agent.service" },
   { repo: "trustiot-agent.sysusers", image: "/usr/lib/sysusers.d/trustiot-agent.conf" },
+  // The agent account's egress rules, the unit that loads them before the agent starts and the
+  // nftables.service drop-in that keeps them loaded (Laysi/trustiot-v2#813). The unit and the
+  // drop-in name these paths, so they follow edge/agent/README.md, 「出口規則」.
+  { repo: "trustiot-agent-egress.service", image: "/usr/lib/systemd/system/trustiot-agent-egress.service" },
+  { repo: "trustiot-agent-egress.nft", image: "/usr/share/trustiot-agent/trustiot-agent-egress.nft" },
+  { repo: "nftables-reload.conf", image: "/usr/lib/systemd/system/nftables.service.d/trustiot-agent-egress.conf" },
 ] as const;

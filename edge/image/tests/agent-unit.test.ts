@@ -43,7 +43,23 @@ describe("agent unit", () => {
     // A new unit or rule file there is something the agent may require: list it in
     // AGENT_SYSTEMD_FILES (src/pins.ts), with what else it needs in the image.
     expect(readdirSync(SYSTEMD).toSorted()).toEqual(AGENT_SYSTEMD_FILES.map((file) => file.repo).toSorted());
-    for (const file of AGENT_SYSTEMD_FILES) expect(file.image).toMatch(/^\/usr\/lib\/(systemd\/system|sysusers\.d)\/[a-z0-9.-]+$/);
+    // Vendor locations only, never /etc: units and their drop-ins, sysusers, the agent's own data.
+    for (const file of AGENT_SYSTEMD_FILES) {
+      expect(file.image).toMatch(/^\/usr\/(lib\/(systemd\/system(\/[a-z0-9.@-]+\.d)?|sysusers\.d)|share\/trustiot-agent)\/[a-z0-9.-]+$/);
+    }
+  });
+
+  test("every file an installed unit names under /usr is installed at that path", () => {
+    // The egress unit and the nftables.service drop-in name the rules file and the drop-in by
+    // absolute path: installed anywhere else, the egress unit fails and the agent does not start.
+    const installed = new Set<string>(AGENT_SYSTEMD_FILES.map((file) => file.image));
+    const named = AGENT_SYSTEMD_FILES.flatMap(({ repo }) =>
+      [...readFileSync(join(SYSTEMD, repo), "utf8").matchAll(/\/usr\/(share\/trustiot-agent|lib\/systemd\/system\/[a-z0-9.@-]+\.d)\/[a-z0-9.-]*[a-z0-9]/g)].map(
+        (m) => `${repo}: ${m[0]}`,
+      ),
+    );
+    expect(named.length).toBeGreaterThan(0);
+    for (const entry of named) expect(`${entry} ${installed.has(entry.split(": ")[1] ?? "")}`).toBe(`${entry} true`);
   });
 
   test("every TrustIoT unit it depends on is installed too", () => {
