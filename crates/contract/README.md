@@ -7,7 +7,7 @@
 | `error` | M1 錯誤格式：`ErrorBody`、`ErrorCode`、`MessageKey`、`FieldError` |
 | `id` | `TenantId`、`UserId`、`EventId`、`DeviceModelId`、`GatewayBindingId`（Laysi/trustiot-v2#101）、`DeviceId`（Laysi/trustiot-v2#100）、`DashboardId`（Laysi/trustiot-v2#150）：新 ID 一律 UUIDv7（[可搬移規則 3](../../docs/architecture/deployment.md)） |
 | `event` | `Event` trait 與事件信封 `EventEnvelope` |
-| `events` | 事件本身，每個產生端服務一個子模組；目前有 `events::identity::TenantCreated`（`identity.tenant_created`，Laysi/trustiot-v2#65）、`MemberRoleChanged`（`identity.member_role_changed`，Laysi/trustiot-v2#583）、`events::identity::PlatformAdminGranted`（`identity.platform_admin_granted`，全平台事件，payload 只有使用者 ID 與 `via`，Laysi/trustiot-v2#582）、`events::identity::AiModelRoleChanged`（`identity.ai_model_role_changed`，全平台事件：平台管理者修改或重設 AI 閘道的模型角色，payload 是角色、`set` 或 `reset`、新版本與生效的模型，Laysi/trustiot-v2#608），以及設備型號的 `events::assets::DeviceModelCreated`、`DeviceModelUpdated`、`DeviceModelDeleted`（`assets.device_model_{created,updated,deleted}`，Laysi/trustiot-v2#99；型號本身是 `protocol::config::DeviceModel`，閘道器設定用的同一個格式），以及出廠登錄的 `events::certs::GatewayRegistered`（`certs.gateway_registered`，Laysi/trustiot-v2#79；全平台事件，沒有租戶），以及憑證換發的 `events::certs::GatewayCertificateRenewed`（`certs.gateway_certificate_renewed`，Laysi/trustiot-v2#81；租戶事件，aggregate 是租戶與硬體 ID）與 `GatewayRenewalRefused`（`certs.gateway_renewal_refused`；全平台事件，已登錄的硬體 ID 每個時間窗一筆，帶被拒的次數與原因），以及閘道器綁定的 `events::assets::GatewayBound`（`assets.gateway_bound`，Laysi/trustiot-v2#101；綁定 ID 與硬體 ID，租戶在信封上，actor 是做綁定的平台管理員），以及設備的 `events::assets::DeviceCreated`、`DeviceUpdated`、`DeviceDeleted`（`assets.device_{created,updated,deleted}`，Laysi/trustiot-v2#100；建立與更新帶 `protocol::config::Device`，閘道器設定的格式；刪除只帶設備 ID、名稱、硬體 ID、型號 ID 與最後的版本；2026-10-29 起三個事件都多了選填的 `binding_id`，設備所屬的綁定，Laysi/trustiot-v2#719） |
+| `events` | 事件本身，每個產生端服務一個子模組；目前有 `events::identity::TenantCreated`（`identity.tenant_created`，Laysi/trustiot-v2#65）、`MemberRoleChanged`（`identity.member_role_changed`，Laysi/trustiot-v2#583）、`TenantStateChanged`（`identity.tenant_state_changed`，Laysi/trustiot-v2#776；租戶事件，payload 是改變後的狀態快照 `{state, reason, state_version}`，消費端只保留版本較大的，狀態與原因的列舉都有 `Unrecognized`）、`events::identity::PlatformAdminGranted`（`identity.platform_admin_granted`，全平台事件，payload 只有使用者 ID 與 `via`，Laysi/trustiot-v2#582）、`events::identity::AiModelRoleChanged`（`identity.ai_model_role_changed`，全平台事件：平台管理者修改或重設 AI 閘道的模型角色，payload 是角色、`set` 或 `reset`、新版本與生效的模型，Laysi/trustiot-v2#608），以及設備型號的 `events::assets::DeviceModelCreated`、`DeviceModelUpdated`、`DeviceModelDeleted`（`assets.device_model_{created,updated,deleted}`，Laysi/trustiot-v2#99；型號本身是 `protocol::config::DeviceModel`，閘道器設定用的同一個格式），以及出廠登錄的 `events::certs::GatewayRegistered`（`certs.gateway_registered`，Laysi/trustiot-v2#79；全平台事件，沒有租戶），以及憑證換發的 `events::certs::GatewayCertificateRenewed`（`certs.gateway_certificate_renewed`，Laysi/trustiot-v2#81；租戶事件，aggregate 是租戶與硬體 ID）與 `GatewayRenewalRefused`（`certs.gateway_renewal_refused`；全平台事件，已登錄的硬體 ID 每個時間窗一筆，帶被拒的次數與原因），以及停權的確認 `events::certs::TenantStateApplied`（`certs.tenant_state_applied`，Laysi/trustiot-v2#779；租戶事件，payload 只有 certs 已套用的租戶狀態版本 `state_version`，身分服務只保留較大的版本，由 Laysi/trustiot-v2#108 發出），以及閘道器綁定的 `events::assets::GatewayBound`（`assets.gateway_bound`，Laysi/trustiot-v2#101；綁定 ID 與硬體 ID，租戶在信封上，actor 是做綁定的平台管理員），以及設備的 `events::assets::DeviceCreated`、`DeviceUpdated`、`DeviceDeleted`（`assets.device_{created,updated,deleted}`，Laysi/trustiot-v2#100；建立與更新帶 `protocol::config::Device`，閘道器設定的格式；刪除只帶設備 ID、名稱、硬體 ID、型號 ID 與最後的版本；2026-10-29 起三個事件都多了選填的 `binding_id`，設備所屬的綁定，Laysi/trustiot-v2#719） |
 | `identity` | 內部身分標頭 `x-internal-identity`、claims `InternalClaims`、遮蔽內容的 `InternalToken` |
 | `client` | 內部 API 的 `Endpoint` 與有型別的 client `InternalClient<S>` |
 | `api` | 內部 API 本身，每個提供 API 的服務一個子模組；目前有 `api::identity::ExchangeToken`（身分服務的 token 交換，Laysi/trustiot-v2#106）與 `CreateRunDelegation`、`ExchangeRunDelegation`（agent run 的委派，Laysi/trustiot-v2#551），以及 telemetry-query 的 `api::telemetry_query::RunSql`（AI 寫的唯讀 SQL，Laysi/trustiot-v2#143：回應 `SqlResult`，拒絕是封閉的 `SqlRefusal` 類別，新版本的類別解碼成 `Unrecognized`）；`api::dashboard` 是儀表板（Laysi/trustiot-v2#150）在 assistant、`dashboard-check` 與前端沙箱之間共用的型別，見下方「儀表板」 |
@@ -45,7 +45,7 @@
 | `validation_failed` | 422 | 格式正確但違反規則；`field_errors` 指出欄位 |
 | `unauthenticated` | 401 | session 或內部身分 token 缺少、無效或過期；前端導回登入 |
 | `permission_denied` | 403 | 身分有效但沒有權限 |
-| `tenant_suspended` | 403 | 租戶已停權（B1）；前端只顯示停權說明頁 |
+| `tenant_suspended` | 403 | 租戶已停權或已刪除（B1）；前端只顯示停權說明頁。入口的 cookie 檢查、`Requirement::Tenant`、token 交換與 run 委派回這個代碼（Laysi/trustiot-v2#777） |
 | `quota_exceeded` | 403 | 方案上限或配額用完（B2、B3）；前端提供升級，重試無效 |
 | `not_found` | 404 | 資源不存在，或呼叫者的租戶看不到 |
 | `conflict` | 409 | 與目前狀態衝突，例如重複或同時修改 |
@@ -93,10 +93,11 @@
 | 換到 | 200 | `ExchangedToken` `{"token"}`：同一個使用者、租戶、角色與平台管理員旗標，受眾是 `audience`，`act` 是呼叫端，`iat` 是現在，到期是原 token 的到期與 60 秒後取早者 |
 | 沒有 token、token 無效或過期、1 秒內就到期 | 401 | `unauthenticated` |
 | 呼叫端不能代表使用者呼叫 `audience`，或 token 本身是換來的（帶 `act`） | 403 | `permission_denied` |
+| token 帶 `tenant_suspended` | 403 | `tenant_suspended` |
 | 本文不是這個請求，或服務名稱不認得（含 `ai-gateway`，它不在 `ServiceName`） | 400 | `invalid_request` |
 | 還沒有公鑰或簽章金鑰 | 503 | `unavailable` |
 
-回應一律 `cache-control: no-store`。`ExchangedToken` 只能反序列化，沒有 `Serialize`，token 照樣是遮蔽內容的 `InternalToken`。經 `OnBehalf` 呼叫時，交換失敗是 `OnBehalfError::Exchange`：回給上游的代碼只有 `timeout`、`unavailable` 照傳，其他（含 403 與 401）一律 `internal`，因為那是部署的呼叫清單或本服務的問題，不是使用者的錯，同時記一筆 ERROR（呼叫端、受眾、身分服務回的代碼）。
+回應一律 `cache-control: no-store`。`ExchangedToken` 只能反序列化，沒有 `Serialize`，token 照樣是遮蔽內容的 `InternalToken`。經 `OnBehalf` 呼叫時，交換失敗是 `OnBehalfError::Exchange`：回給上游的代碼只有 `timeout`、`unavailable` 與 `tenant_suspended` 照傳，其他（含 `permission_denied` 與 401）一律 `internal`，因為那是部署的呼叫清單或本服務的問題，不是使用者的錯，同時記一筆 ERROR（呼叫端、受眾、身分服務回的代碼）。
 
 每種失敗都是 `CallError`，`code()` 給出要回給上游的 M1 代碼，`to_error_body()` 給出整個 body：
 
@@ -126,6 +127,7 @@ client 每次失敗都記一筆日誌，欄位有 `peer`、`route`（路由樣�
 | 建立 | 200 | `RunDelegationCreated` `{"delegation", "expires_at"}` |
 | 沒有 token、token 無效或過期、沒有 `sid`、session 已不有效 | 401 | `unauthenticated` |
 | token 是換來的（帶 `act`）、呼叫端不能持有委派、使用者已不是 token 租戶的成員 | 403 | `permission_denied` |
+| token 帶 `tenant_suspended`，或租戶現在被停權或已刪除 | 403 | `tenant_suspended` |
 | 本文不是這個請求、`key` 不是可用的 Ed25519 公鑰、效期超出範圍 | 400 | `invalid_request` |
 | 還沒有公鑰或簽章金鑰、資料庫失敗 | 503 | `unavailable` |
 
@@ -136,10 +138,11 @@ client 每次失敗都記一筆日誌，欄位有 `peer`、`route`（路由樣�
 | 換到 | 200 | `ExchangedToken` `{"token"}`：使用者、委派的租戶與現在的角色、現在的平台管理員旗標，受眾是 `audience`，`act` 是持有者，`iat` 是現在，到期是 60 秒後與委派到期取早者 |
 | 沒有委派、委派無效、過期或效期超過上限；proof 無效或超出時間窗；session 已不有效 | 401 | `unauthenticated` |
 | 持有者不能呼叫 `audience`、使用者已不是委派租戶的成員 | 403 | `permission_denied` |
+| 委派的租戶現在被停權或已刪除 | 403 | `tenant_suspended` |
 | 本文不是這個請求，或服務名稱不認得 | 400 | `invalid_request` |
 | 還沒有簽章金鑰、資料庫失敗 | 503 | `unavailable` |
 
-回應一律 `cache-control: no-store`。委派對呼叫端是不透明的字串，`RunDelegationCreated` 只能反序列化，委派照樣是遮蔽內容的 `InternalToken`，只放在 `x-internal-identity` 送到換 token 的路徑。和 `OnBehalf` 不同，`RunDelegations` 把身分服務回的 `unauthenticated`、`permission_denied` 照傳給使用者：被拒絕的是使用者的 session 或成員資格，不是部署的問題。
+回應一律 `cache-control: no-store`。委派對呼叫端是不透明的字串，`RunDelegationCreated` 只能反序列化，委派照樣是遮蔽內容的 `InternalToken`，只放在 `x-internal-identity` 送到換 token 的路徑。和 `OnBehalf` 不同，`RunDelegations` 把身分服務回的 `unauthenticated`、`permission_denied`、`tenant_suspended` 照傳給使用者：被拒絕的是使用者的 session、成員資格或租戶，不是部署的問題。
 
 ### AI 的唯讀 SQL（`api::telemetry_query::RunSql`）
 
@@ -227,6 +230,7 @@ payload 經身分服務的事件紀錄給租戶的管理員看，並隨租戶的
 | `platform_admin` | 是否為平台管理員（A2），與租戶角色無關；缺少時視為 `false` |
 | `act` | 選填，只有 token 交換換出的 token 有：`{"sub": "<服務>"}`，替使用者呼叫 `aud` 的服務（RFC 8693 的 actor，`Actor`）。入口 gateway 的請求簽出的 token 沒有它；身分服務不再換帶 `act` 的 token（Laysi/trustiot-v2#106） |
 | `sid` | 選填，只有入口 gateway 的請求簽出的 token 有：使用者登入的 session 的 ID（`SessionId`），身分服務以它把 run 委派綁在 session 上（Laysi/trustiot-v2#551）。其他服務不必看它；它不是 credential，cookie 的值與它無關。換出的 token 沒有它 |
+| `tenant_suspended` | 選填，只在 `tenant` 的租戶被停權或已刪除時出現，值是 `true`；缺少時視為 `false`（Laysi/trustiot-v2#777）。入口 gateway 只把帶它的 token 簽給身分服務，其他服務的請求在入口就回 403 `tenant_suspended`；需要租戶的端點（`Requirement::Tenant`）以 403 `tenant_suspended` 拒絕帶它的 token，token 交換與 run 委派也拒絕它 |
 
 - claim 的名稱沿用 JWT（RFC 7519），claims 可以直接當 JWT payload。
 - 驗證端忽略不認得的 claim，所以新 claim 只能是選填。

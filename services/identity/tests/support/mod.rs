@@ -853,8 +853,9 @@ VALUES ($1, $2, $3)";
 /// Stands in for the migration Job's records in a database these tests set up by hand: creates
 /// `identity.trustiot_migrate_applied` from service-kit's template and records every file the
 /// identity image expects (`identity::schema::SCHEMA`), so the service's `migrations` readiness
-/// check passes. These tests apply only `0001_identity.sql` and `0004_login.sql`, which is all
-/// the ext_authz check and extending sessions need; the readiness check itself runs against the
+/// check passes. These tests apply only `0001_identity.sql`, `0002_tenants.sql`,
+/// `0004_login.sql` and `0008_tenant_state.sql`, which is all the ext_authz check (the role and
+/// the tenant's state) and extending sessions need; the readiness check itself runs against the
 /// real Job in tests/migrations.rs. Run it as the schema's owner.
 pub async fn record_release_migrations(owner: &mut sqlx::PgConnection) {
     sqlx::raw_sql(RECORDS_FUNCTION)

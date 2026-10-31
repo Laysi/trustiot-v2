@@ -17,7 +17,8 @@
 //! port of its own that the mesh opens to the broker alone.
 //!
 //! - [`authority`]: the root certificate, the issuing CA keys the pod's init container keeps in a
-//!   Secret, and the issuing CA certificates the root signed; reloaded when the files change.
+//!   Secret, and the issuing CA certificates the root signed; reloaded when the files change,
+//!   with the [`root_crl`] checked against that root (Laysi/trustiot-v2#830).
 //! - [`issue`]: gateway and workstation certificates from CSRs, and the ledger of what was
 //!   signed.
 //! - [`crl`]: the CRL job and the CRLs it keeps; [`monitor`]: the gauges and the alert.
@@ -33,6 +34,10 @@
 //!   (Laysi/trustiot-v2#632), kept from the assets service's `assets.gateway_bound` by an outbox
 //!   consumer and read across tenants as the platform role, for the renewal
 //!   (Laysi/trustiot-v2#81) and the broker's permissions (Laysi/trustiot-v2#633).
+//! - [`tenant_states`]: each tenant's state (Laysi/trustiot-v2#778), kept in the same table of
+//!   [`bindings`] from the identity service's `identity.tenant_created` and
+//!   `identity.tenant_state_changed` by a second outbox consumer; the renewal refuses every
+//!   tenant that is not active, a tenant without a state included.
 //! - [`renewal`]: the gateway certificate renewal (Laysi/trustiot-v2#81) on the public path
 //!   `/certs/renew`: a challenge, the TPM signature over it, the gateway's binding and tenant
 //!   status, rate limits, and the tenant event `certs.gateway_certificate_renewed`.
@@ -65,7 +70,9 @@ pub mod monitor;
 pub mod pem;
 pub mod registrations;
 pub mod renewal;
+pub mod root_crl;
 pub mod schema;
+pub mod tenant_states;
 pub mod workstations;
 
 use std::sync::Arc;
@@ -85,14 +92,16 @@ use crate::authority::CaState;
 use crate::bindings::{GatewayBoundHandler, Projection};
 use crate::config::Config;
 use crate::dynsec::SyncAfterBinding;
+use crate::tenant_states::TenantStateHandler;
 
 /// How long getting a database connection may take, opening a new one included.
 pub const ACQUIRE_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Connections of the platform role's pool per replica, shared by short transactions: factory
 /// registrations, one transaction each at the pace of a production line; the polls of the
-/// consumer of the assets service's events and its lag measurement, one read-only transaction at
-/// a time each; and the reads of [`bindings::Projection`]. The renewal ([`renewal`]) takes at most
+/// consumers of the assets service's and the identity service's events and their lag
+/// measurements, one read-only transaction at a time each; and the reads of
+/// [`bindings::Projection`]. The renewal ([`renewal`]) takes at most
 /// `renewal.max_concurrent` of them at a time (its reads and refusal counts, one transaction at a
 /// time per request; the setting is at most one less than this), and its report of ended refusal
 /// windows one now and then. A transaction that cannot get a connection within
@@ -122,10 +131,10 @@ pub fn openapi() -> utoipa::openapi::OpenApi {
 /// The service's startup for `service_kit::run`: opens the service role's pool lazily (with the
 /// session check of `crates/service-kit`), loads the CA files and follows them, starts the CRL
 /// job and the monitor, follows the identity service's public keys file, opens the platform
-/// role's pool lazily for [`registrations`] and the consumer of the assets service's events
-/// ([`bindings`]), starts the broker's gateway permission sync when a broker is configured
-/// ([`dynsec`]; registrations, renewals and applied bindings ask it to sync their gateway), starts
-/// that consumer, serves the endpoints of [`http`], [`workstations`], [`registrations`] and
+/// role's pool lazily for [`registrations`], the consumer of the assets service's events
+/// ([`bindings`]) and the consumer of the identity service's events ([`tenant_states`]), starts
+/// the broker's gateway permission sync when a broker is configured ([`dynsec`]; registrations,
+/// renewals and applied bindings ask it to sync their gateway), starts both consumers, serves the endpoints of [`http`], [`workstations`], [`registrations`] and
 /// [`renewal`] (which also reports its refusal counts), and serves [`broker`] on its own port
 /// (`broker.listen_addr`). Readiness passes while the role can open a checked
 /// session, the service has a usable set of public keys, and the database has every migration
@@ -147,7 +156,8 @@ pub async fn start(context: Context<Config>) -> Result<Router, BoxError> {
     )?;
     // Not part of readiness: the CRLs and the CA chain the MQTT broker reads must keep being
     // served while the platform role cannot log in; a registration answers 503 then, and the
-    // consumer of the assets service's events retries (its lag shows it).
+    // consumers of the assets and identity services' events retry (their lag shows it, and the
+    // renewal answers 503).
     let platform = PlatformDb::connect_lazy(
         config.platform_role().connect_options(),
         PgPoolOptions::new()
@@ -182,11 +192,25 @@ pub async fn start(context: Context<Config>) -> Result<Router, BoxError> {
         ConsumerConfig::new(bindings::SUBSCRIPTION, bindings::SOURCE_SCHEMA)?,
         SyncAfterBinding::new(GatewayBoundHandler, broker_sync.clone()),
     );
-    // The renewal refuses while this consumer's lag is unknown or too high.
+    // Each tenant's state from the identity service's events (Laysi/trustiot-v2#778), read from
+    // the start of its log. It changes no broker permission (Laysi/trustiot-v2#108 decides
+    // that), so it does not ask the broker sync for anything.
+    let tenants_consumer = Consumer::new(
+        &platform,
+        background.clone(),
+        ConsumerConfig::new(tenant_states::SUBSCRIPTION, tenant_states::SOURCE_SCHEMA)?,
+        TenantStateHandler,
+    );
+    // The renewal refuses while either consumer's lag is unknown or too high.
     let bindings_lag = bindings_consumer.clone();
+    let tenants_lag = tenants_consumer.clone();
     let stop = context.shutdown().stopping_token();
     context.spawn(async move {
         let _ = bindings_consumer.run(stop).await;
+    });
+    let stop = context.shutdown().stopping_token();
+    context.spawn(async move {
+        let _ = tenants_consumer.run(stop).await;
     });
 
     let ca = CaState::watch(&context, config.ca.clone());
@@ -202,7 +226,7 @@ pub async fn start(context: Context<Config>) -> Result<Router, BoxError> {
         background: background.clone(),
         platform: platform.clone(),
         ca: ca.clone(),
-        lag: Arc::new(move || bindings_lag.lag()),
+        lag: Arc::new(move || renewal::slowest([bindings_lag.lag(), tenants_lag.lag()])),
         limits: config.renewal.clone(),
         validity: config.gateway.validity,
         broker_sync: broker_sync.clone(),

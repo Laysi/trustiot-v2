@@ -45,6 +45,7 @@ use unicode_properties::general_category::UnicodeGeneralCategory;
 use utoipa::ToSchema;
 
 use crate::members::{MemberStore, is_own_platform_admin};
+use crate::tenant_state::TenantStateStore;
 
 /// The route, as the ingress gateway forwards it (no prefix is stripped).
 pub const TENANTS_PATH: &str = "/api/identity/v1/tenants";
@@ -236,6 +237,12 @@ impl TenantStore {
     /// adding connections to every replica's budget (README, "連線池").
     pub(crate) fn members(&self) -> MemberStore {
         MemberStore::new(self.db.clone())
+    }
+
+    /// The store that reads and sets tenants' states (Laysi/trustiot-v2#776), on this store's
+    /// pool for the same reason as [`TenantStore::members`].
+    pub(crate) fn states(&self) -> TenantStateStore {
+        TenantStateStore::new(self.db.clone())
     }
 
     /// Creates a tenant named `name` for the platform administrator `admin`: a new tenant ID,

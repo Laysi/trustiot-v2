@@ -9,10 +9,13 @@ use std::sync::{Arc, PoisonError, RwLock};
 use std::time::Duration;
 
 use super::{IdentityKeys, InvalidKeys};
-use crate::Context;
+use crate::{Context, periodic};
 
 /// How often a service reads the keys file again.
 pub const RELOAD_INTERVAL: Duration = Duration::from_secs(5);
+
+/// The name of the periodic reload in logs.
+const RELOAD_JOB: &str = "internal-identity-keys-reload";
 
 /// The name of the readiness check [`PublishedKeys::watch`] adds: it fails until the service has
 /// a usable set.
@@ -95,19 +98,21 @@ impl PublishedKeys {
                 }
             }
         });
-        let shutdown = context.shutdown().clone();
+        // A reload that panics is logged and the next one runs (`periodic`). Readers take the
+        // value of a poisoned lock, and `KeysFile::reload` records what it loaded only after it
+        // replaced the keys, so a reload cut off half-way is done again next time. Only this
+        // schedule locks the file's state; tokio's mutex holds it across the read.
+        let file = Arc::new(tokio::sync::Mutex::new(file));
         let watched = keys.clone();
-        context.spawn(async move {
-            let mut every = tokio::time::interval(RELOAD_INTERVAL);
-            every.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-            every.tick().await;
-            loop {
-                tokio::select! {
-                    () = shutdown.stopping() => return,
-                    _ = every.tick() => file.reload(&watched).await,
-                }
-            }
-        });
+        context.spawn(periodic::run_every(
+            RELOAD_JOB,
+            RELOAD_INTERVAL,
+            context.shutdown().clone(),
+            move || {
+                let (file, keys) = (Arc::clone(&file), watched.clone());
+                async move { file.lock().await.reload(&keys).await }
+            },
+        ));
         keys
     }
 }

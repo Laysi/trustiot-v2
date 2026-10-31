@@ -13,22 +13,34 @@
 //!   every hardware ID, registered or not, so it tells nothing. A redemption deletes the row
 //!   before any check, so a challenge is redeemed at most once whatever the outcome. Every insert
 //!   removes long-expired rows, and the rate limits bound the inserts, so the table stays small.
-//! - **Rate limits come first** ([`limiter`]): right after the body is read, before the other
-//!   checks and any database work, per replica: per hardware ID over both steps, and for all
-//!   hardware IDs together per step, so a flood of challenge requests leaves the redemptions
-//!   their turns. Past a limit the answer is 429 with `Retry-After`, logged at DEBUG only, so
-//!   the INFO lines of the refusals after the limits (stale bindings, no CA) are no more than
-//!   the limits let through. At most `renewal.max_concurrent` requests per replica do database
-//!   work at once; a request that waits longer than [`PERMIT_WAIT`] for its turn gets 503.
+//! - **Global rate limits come first** ([`limiter`]): right after the body is read, before the
+//!   other checks and any database work, per replica, for all hardware IDs together per step, so
+//!   a flood of challenge requests leaves the redemptions their turns. Past a limit the answer is
+//!   429 with `Retry-After`, logged at DEBUG only, so the INFO lines of the refusals after the
+//!   limits (stale bindings, no CA) are no more than the limits let through.
+//! - **The hardware ID's own limit waits for the signature** (Laysi/trustiot-v2#801): anyone
+//!   can name a hardware ID, so only a redemption whose signature holds for the registered key
+//!   counts against it. Requests that name a gateway's hardware ID without its key cannot make
+//!   that gateway wait; only a flood past a global limit can, and it makes every gateway on the
+//!   replica wait. Past this limit the answer is 429 too, with its own reason
+//!   (`gateway_rate_limited`), logged at INFO and counted, since only the key's holder gets it.
+//! - **Database work is bounded.** At most `renewal.max_concurrent` requests per replica do
+//!   database work at once; a request that waits longer than [`PERMIT_WAIT`] for its turn gets
+//!   503.
 //! - **The decision reads one snapshot.** The redemption reads the registration, the gateway's
 //!   current binding and its tenant's status in one read-only statement of the platform role
 //!   ([`crate::bindings::Projection`]'s audited transaction), verifies the signature with the
 //!   registered key over the signing input rebuilt from the stored challenge, and only then looks
 //!   at the gateway's state. An unregistered hardware ID gets the same 401 as a wrong signature.
-//! - **No decision on stale bindings.** While the consumer of the assets service's events has no
-//!   current lag measurement, or its oldest unprocessed event is older than
-//!   `renewal.max_consumer_lag`, both steps answer 503: a gateway unbound or moved a moment ago
-//!   must not renew under its old binding.
+//! - **No decision on stale bindings or tenant states.** While either consumer (the assets
+//!   service's events for the bindings, the identity service's for the tenant states,
+//!   Laysi/trustiot-v2#778) has no current lag measurement, or its oldest unprocessed event is
+//!   older than `renewal.max_consumer_lag`, both steps answer 503: a gateway unbound or moved a
+//!   moment ago must not renew under its old binding, nor a tenant suspended a moment ago under
+//!   its old state.
+//! - **Only an active tenant renews.** A tenant suspended, deleted, in a state this build does
+//!   not know, or without any state stored (its `identity.tenant_created` not applied yet) is
+//!   refused alike (`crate::bindings::reads_as_suspended`).
 //! - **Issued exactly with its event.** The certificate is signed for the registered key (never a
 //!   key the request names) and recorded in the ledger in a transaction of the gateway's tenant,
 //!   with the tenant event `certs.gateway_certificate_renewed`. Earlier certificates stay valid
@@ -39,9 +51,11 @@
 //! - **Refusals leave a trace without letting traffic grow the log.** Every refusal is a log line
 //!   (hardware ID, step, reason; never the nonce or the signature) and `certs.renewal.refused`
 //!   with the reason. Refusals of a registered hardware ID that carry a decision (an unknown,
-//!   mismatched or expired challenge, a wrong signature, the gateway's state) are counted per
-//!   window, and each window becomes one platform-wide `certs.gateway_renewal_refused`
-//!   ([`refusals`]).
+//!   mismatched or expired challenge, a wrong signature, the hardware ID's own rate limit, the
+//!   gateway's state) are counted per window, and each window becomes one platform-wide
+//!   `certs.gateway_renewal_refused` ([`refusals`]). The challenge and signature reasons need no
+//!   key, so anyone who knows a registered hardware ID can make its window's event; README.md,
+//!   "換發", "規則與取捨", says why they still count (Laysi/trustiot-v2#801).
 
 mod limiter;
 mod refusals;
@@ -86,7 +100,7 @@ use x509_parser::x509::{AlgorithmIdentifier, SubjectPublicKeyInfo};
 
 use crate::api;
 use crate::authority::{Authority, CaState};
-use crate::bindings::Projection;
+use crate::bindings::{Projection, TenantStatus, reads_as_suspended};
 use crate::config::RenewalLimits;
 use crate::dynsec::BrokerSync;
 use crate::gateways;
@@ -192,8 +206,29 @@ LEFT JOIN LATERAL (
 LEFT JOIN certs.tenant_statuses AS status ON status.tenant_id = binding.tenant_id
 WHERE registration.hardware_id = $1";
 
-/// The current lag of the consumer of the assets service's events (`outbox::Consumer::lag`).
+/// The current lag of the consumers the renewal decides on (`outbox::Consumer::lag`), combined
+/// with [`slowest`].
 pub type LagReading = Arc<dyn Fn() -> Option<Lag> + Send + Sync>;
+
+/// The lag of several consumers as one: unknown when any is unknown, otherwise the oldest
+/// waiting event of all and the events of all together. [`bindings_current`] then holds only
+/// when it holds for each of them.
+#[must_use]
+pub fn slowest(lags: impl IntoIterator<Item = Option<Lag>>) -> Option<Lag> {
+    lags.into_iter().try_fold(
+        Lag {
+            events: 0,
+            oldest_age: None,
+        },
+        |all, lag| {
+            let lag = lag?;
+            Some(Lag {
+                events: all.events.saturating_add(lag.events),
+                oldest_age: all.oldest_age.max(lag.oldest_age),
+            })
+        },
+    )
+}
 
 /// What the endpoint needs from the service's startup.
 pub struct Parts {
@@ -206,7 +241,7 @@ pub struct Parts {
     pub platform: PlatformDb,
     /// The issuing CAs.
     pub ca: CaState,
-    /// The lag of the consumer that keeps the bindings.
+    /// The lag of the consumers that keep the bindings and the tenant states ([`slowest`]).
     pub lag: LagReading,
     /// `renewal.*`.
     pub limits: RenewalLimits,
@@ -292,8 +327,10 @@ impl Step {
 enum Reason {
     /// 400 or 422: the body.
     Invalid,
-    /// 429, with the seconds to wait.
+    /// 429, with the seconds to wait: a global limit, before anything was trusted.
     RateLimited(u64),
+    /// 429, with the seconds to wait: the hardware ID's own limit, after its signature held.
+    GatewayRateLimited(u64),
     /// 503: every turn is taken.
     Busy,
     /// 503: the bindings may be stale.
@@ -325,6 +362,7 @@ impl Reason {
         match self {
             Self::Invalid => "invalid_request",
             Self::RateLimited(_) => "rate_limited",
+            Self::GatewayRateLimited(_) => "gateway_rate_limited",
             Self::Busy => "busy",
             Self::BindingsStale => "bindings_stale",
             Self::CaNotReady => "ca_not_ready",
@@ -341,8 +379,9 @@ impl Reason {
     }
 
     /// Whether the refusal is counted for the hardware ID ([`refusals`]): the ones a decision
-    /// about the redemption made. Rate limits, overload and malformed requests are not; they
-    /// come before any database work and say nothing about the gateway.
+    /// about the redemption made. The global rate limits, overload and malformed requests are
+    /// not; they come before any database work and say nothing about the gateway. The hardware
+    /// ID's own limit is: only the holder of its registered key reaches it.
     const fn counted(self) -> bool {
         matches!(
             self,
@@ -350,6 +389,7 @@ impl Reason {
                 | Self::ChallengeMismatch
                 | Self::ChallengeExpired
                 | Self::SignatureInvalid
+                | Self::GatewayRateLimited(_)
                 | Self::Decommissioned
                 | Self::KeyCompromised
                 | Self::NotBound
@@ -367,7 +407,7 @@ impl Reason {
                 ErrorBody::new(ErrorCode::InvalidRequest),
                 None,
             ),
-            Self::RateLimited(seconds) => (
+            Self::RateLimited(seconds) | Self::GatewayRateLimited(seconds) => (
                 StatusCode::TOO_MANY_REQUESTS,
                 ErrorBody::new(ErrorCode::RateLimited),
                 Some(seconds),
@@ -511,15 +551,11 @@ async fn renew(State(state): State<Routes>, headers: HeaderMap, body: Body) -> R
         Err(refused) => return state.invalid(refused),
     };
     let (step, hardware_id) = (request.step(), request.hardware_id().clone());
-    // The limits first: every refusal after them is an INFO line, so over the limits a flood of
-    // made-up hardware IDs is answered without one, whatever else is wrong.
-    let limited = request.limited_step();
-    if let Err(wait) = state
-        .limiter
-        .check(limited, hardware_id.as_str(), Instant::now())
-    {
-        let seconds = wait.as_secs() + u64::from(wait.subsec_nanos() > 0);
-        let reason = Reason::RateLimited(seconds.max(1));
+    // The global limits first: every refusal after them is an INFO line, so over the limits a
+    // flood of made-up hardware IDs is answered without one, whatever else is wrong. The hardware
+    // ID's own limit comes after its signature held (`Routes::redeem`).
+    if let Err(wait) = state.limiter.admit(request.limited_step(), Instant::now()) {
+        let reason = Reason::RateLimited(retry_seconds(wait));
         return state.refuse(step, &hardware_id, reason).await;
     }
     if !bindings_current((state.lag)(), state.limits.max_consumer_lag) {
@@ -653,7 +689,9 @@ struct Gateway {
     key_compromised: bool,
     /// Its tenant and binding while its latest binding holds.
     binding: Option<(TenantId, GatewayBindingId)>,
-    /// Whether that binding's tenant is suspended.
+    /// That binding's tenant's stored status; `None` when there is none.
+    status: Option<TenantStatus>,
+    /// Whether that tenant counts as suspended (`crate::bindings::reads_as_suspended`).
     suspended: bool,
 }
 
@@ -802,6 +840,13 @@ impl Routes {
         if !signature_holds(&gateway.public_key, signature, &input) {
             return Err(Reason::SignatureInvalid);
         }
+        // Only now does the hardware ID's own limit count: requests that name it without the
+        // registered key cannot use it up (Laysi/trustiot-v2#801). It bounds the certificates
+        // and the decisions one key gets, whatever the gateway's state.
+        let turn = self
+            .limiter
+            .admit_verified(hardware_id.as_str(), Instant::now())
+            .map_err(|wait| Reason::GatewayRateLimited(retry_seconds(wait)))?;
         if gateway.decommissioned {
             return Err(Reason::Decommissioned);
         }
@@ -817,8 +862,16 @@ impl Routes {
         if gateway.suspended {
             return Err(Reason::TenantSuspended);
         }
-        self.issue(authority, hardware_id, &key, tenant, binding)
-            .await
+        let issued = self
+            .issue(authority, hardware_id, &key, tenant, binding)
+            .await;
+        if matches!(issued, Err(Reason::Unavailable | Reason::CaNotReady)) {
+            // A failure on the service's side is not a renewal the gateway made: it gets its turn
+            // back, so retrying after `Retry-After` does not run into its own limit (unless
+            // another redemption of it went through meanwhile: `Limiter::refund_verified`).
+            self.limiter.refund_verified(hardware_id.as_str(), turn);
+        }
+        issued
     }
 
     /// Reads the gateway's registration, latest binding and tenant status in one read-only
@@ -862,6 +915,7 @@ impl Routes {
             key_compromised = gateway.key_compromised,
             tenant_id = tenant_id.as_deref(),
             binding_id = binding_id.as_deref(),
+            tenant_status = gateway.status.map_or("none", TenantStatus::as_str),
             tenant_suspended = gateway.suspended,
             "read a gateway for a certificate renewal"
         );
@@ -995,17 +1049,16 @@ fn gateway(row: &sqlx::postgres::PgRow) -> Result<Gateway, String> {
         None
     };
     let status: Option<String> = row.try_get("status").map_err(read)?;
-    let suspended = match status.as_deref() {
-        None | Some("active") => false,
-        Some("suspended") => true,
-        Some(_) => return Err("a stored tenant status breaks the rules".to_owned()),
-    };
+    let status = status
+        .map(|status| TenantStatus::parse(&status).ok_or("a stored tenant status breaks the rules"))
+        .transpose()?;
     Ok(Gateway {
         public_key: row.try_get("public_key").map_err(read)?,
         decommissioned: row.try_get("decommissioned").map_err(read)?,
         key_compromised: row.try_get("key_compromised").map_err(read)?,
         binding,
-        suspended,
+        status,
+        suspended: reads_as_suspended(status),
     })
 }
 
@@ -1024,6 +1077,11 @@ fn signature_holds(public_key: &[u8], signature: &[u8], input: &[u8]) -> bool {
             input,
         )
         .is_ok()
+}
+
+/// `Retry-After` for a limiter's `wait`: whole seconds, rounded up, at least 1.
+fn retry_seconds(wait: Duration) -> u64 {
+    (wait.as_secs() + u64::from(wait.subsec_nanos() > 0)).max(1)
 }
 
 /// Logs a database failure while doing `what`; [`Reason::Unavailable`].
@@ -1057,6 +1115,30 @@ mod tests {
     }
 
     #[test]
+    fn the_slowest_consumer_decides() {
+        let max = Duration::from_secs(60);
+        assert_eq!(slowest([lag(0, None), lag(0, None)]), lag(0, None));
+        assert_eq!(slowest([lag(2, Some(5)), lag(3, Some(9))]), lag(5, Some(9)));
+        assert_eq!(slowest([lag(0, None), lag(1, Some(4))]), lag(1, Some(4)));
+        assert_eq!(slowest([lag(1, Some(4)), None]), None);
+        assert_eq!(slowest([None, lag(0, None)]), None);
+        assert_eq!(
+            slowest([lag(u32::MAX, None), lag(1, None)]),
+            lag(u32::MAX, None)
+        );
+        // One consumer past the limit refuses, whatever the other.
+        assert!(!bindings_current(
+            slowest([lag(0, None), lag(1, Some(61))]),
+            max
+        ));
+        assert!(!bindings_current(slowest([lag(0, None), None]), max));
+        assert!(bindings_current(
+            slowest([lag(0, None), lag(1, Some(60))]),
+            max
+        ));
+    }
+
+    #[test]
     fn decisions_wait_for_a_current_and_short_lag() {
         let max = Duration::from_secs(60);
         assert!(!bindings_current(None, max), "an unknown lag refuses");
@@ -1078,6 +1160,7 @@ mod tests {
             Reason::ChallengeMismatch,
             Reason::ChallengeExpired,
             Reason::SignatureInvalid,
+            Reason::GatewayRateLimited(1),
             Reason::Decommissioned,
             Reason::KeyCompromised,
             Reason::NotBound,
@@ -1094,6 +1177,7 @@ mod tests {
                 "challenge_mismatch",
                 "challenge_expired",
                 "signature_invalid",
+                "gateway_rate_limited",
                 "decommissioned",
                 "key_compromised",
                 "not_bound",
@@ -1103,6 +1187,7 @@ mod tests {
         // Every 429 and 503 says when to come back; the others do not.
         for reason in [
             Reason::RateLimited(7),
+            Reason::GatewayRateLimited(7),
             Reason::Busy,
             Reason::BindingsStale,
             Reason::CaNotReady,
@@ -1117,6 +1202,12 @@ mod tests {
             );
         }
         assert_eq!(Reason::RateLimited(7).answer().2, Some(7));
+        assert_eq!(Reason::GatewayRateLimited(9).answer().2, Some(9));
+        // Both limits answer alike: the gateway only needs the status and `Retry-After`.
+        assert_eq!(
+            Reason::GatewayRateLimited(1).answer().1,
+            Reason::RateLimited(1).answer().1
+        );
         let (status, body, _) = Reason::ChallengeExpired.answer();
         assert_eq!(status, StatusCode::GONE);
         assert_eq!(body.message_key(), &CHALLENGE_EXPIRED);

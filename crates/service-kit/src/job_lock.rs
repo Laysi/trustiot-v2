@@ -21,14 +21,13 @@
 
 use std::fmt::Display;
 use std::future::Future;
-use std::panic::{AssertUnwindSafe, catch_unwind};
-use std::task::Poll;
 use std::time::Duration;
 
 use sqlx::pool::PoolConnection;
 use sqlx::{Connection, PgConnection, PgPool, Postgres};
 use tokio::time::{Instant, MissedTickBehavior};
 
+use crate::periodic::{Panicked, catch_panic};
 use crate::shutdown::Shutdown;
 
 /// How often a running job's lock session is pinged by default.
@@ -287,25 +286,6 @@ impl JobLock {
             }
         }
     }
-}
-
-/// A job panicked. The panic payload is deliberately not kept.
-struct Panicked;
-
-/// Awaits `future`, turning a panic while it is polled into `Err(Panicked)`.
-async fn catch_panic<Fut: Future>(future: Fut) -> Result<Fut::Output, Panicked> {
-    let mut future = Box::pin(future);
-    std::future::poll_fn(|context| {
-        match catch_unwind(AssertUnwindSafe(|| future.as_mut().poll(context))) {
-            Ok(Poll::Pending) => Poll::Pending,
-            Ok(Poll::Ready(output)) => Poll::Ready(Ok(output)),
-            Err(payload) => {
-                drop(payload);
-                Poll::Ready(Err(Panicked))
-            }
-        }
-    })
-    .await
 }
 
 /// A held job lock.

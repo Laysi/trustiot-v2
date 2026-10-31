@@ -30,6 +30,80 @@ impl Event for TenantCreated {
     const PRODUCER: ServiceName = ServiceName::Identity;
 }
 
+/// A tenant's state, its suspension reason or both changed (Laysi/trustiot-v2#776, checklist
+/// B1): a platform administrator suspended the tenant with a reason, changed the reason of a
+/// suspension, or resumed it. Setting the state and reason the tenant already has writes no
+/// event.
+///
+/// The payload is a snapshot of the state after the change, with its version: a consumer keeps
+/// the snapshot with the larger [`TenantStateChanged::state_version`] and ignores the others
+/// (`crates/outbox`, "通知模式"), so a late or replayed event never overwrites a newer state,
+/// and replaying the identity service's log from the start rebuilds every tenant's state. The
+/// version starts at 1 when the tenant is created, which [`TenantCreated`] stands for (active,
+/// no reason, version 1), and goes up by exactly one with every change; it is not the
+/// aggregate's sequence number, which [`TenantCreated`] also advances.
+///
+/// The identity service writes it in the transaction that changes the tenant, in that tenant's
+/// row-level security context, so the envelope's `tenant_id` is the tenant and consumers take
+/// the tenant from there, never from the payload. The envelope's `actor` is the platform
+/// administrator who made the change. The aggregate is [`TENANT_AGGREGATE`] with the tenant ID,
+/// the same as [`TenantCreated`], so a tenant's events arrive in the order they were written.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TenantStateChanged {
+    /// The state after the change.
+    pub state: TenantState,
+    /// Why the tenant is suspended; `None` when it is active. A deleted tenant keeps the reason
+    /// it had.
+    #[serde(default)]
+    pub reason: Option<SuspensionReason>,
+    /// The version of this state: 2 for the first change after the tenant was created, then one
+    /// more with each change.
+    pub state_version: i64,
+}
+
+impl Event for TenantStateChanged {
+    const TYPE: &'static str = "identity.tenant_state_changed";
+    const VERSION: u32 = 1;
+    const PRODUCER: ServiceName = ServiceName::Identity;
+}
+
+/// A tenant's lifecycle state ([`TenantStateChanged::state`]). Only add variants, never rename
+/// one: a consumer built before a variant existed decodes it as [`TenantState::Unrecognized`]
+/// instead of failing, and must treat it as not active (fail closed).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TenantState {
+    /// The tenant works normally.
+    Active,
+    /// The tenant is suspended: every access is cut off (checklist B1); the reason says why.
+    Suspended,
+    /// The tenant's contract ended and its data is being or was deleted (Laysi/trustiot-v2#109).
+    /// Final: a deleted tenant never becomes active again.
+    Deleted,
+    /// A state this build does not know, written by a newer producer. Decode only: serializing
+    /// it fails, so it never reaches an outbox.
+    #[serde(other, skip_serializing)]
+    Unrecognized,
+}
+
+/// Why a tenant is suspended ([`TenantStateChanged::reason`]). Only add variants, never rename
+/// one: a consumer built before a variant existed decodes it as
+/// [`SuspensionReason::Unrecognized`] instead of failing.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SuspensionReason {
+    /// A security incident or abuse.
+    SecurityOrAbuse,
+    /// Unpaid invoices.
+    NonPayment,
+    /// The contract was terminated. Final: such a tenant is never resumed (checklist B1).
+    ContractTerminated,
+    /// A reason this build does not know, written by a newer producer. Decode only: serializing
+    /// it fails, so it never reaches an outbox.
+    #[serde(other, skip_serializing)]
+    Unrecognized,
+}
+
 /// The aggregate kind of membership events; the aggregate ID is [`membership_aggregate_id`]: the
 /// tenant ID and the user ID, so one user's memberships in different tenants are different
 /// aggregates (an aggregate belongs to the tenant of its first event, crates/outbox).

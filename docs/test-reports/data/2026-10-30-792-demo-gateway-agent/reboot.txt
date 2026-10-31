@@ -1,0 +1,23 @@
+# lab 的閘道器，2026-10-30。重開機後的 agent 日誌在 journal-after-reboot.txt（UTC）。
+== 重開機前
+$ cat /proc/sys/kernel/random/boot_id; uptime -s; date -u; sudo systemctl reboot
+b870ddc3-5607-4076-bc10-f6bad023538d
+2026-10-30 17:33:34
+     Active: active (running) since Fri 2026-10-30 18:13:13 CST; 2min 25s ago
+     Main PID: 1897 (trustiot-agent)
+Fri 30 Oct 10:15:39 UTC 2026
+
+== 重開機後（ssh 約 30 秒後回來）
+Fri 30 Oct 10:16:13 UTC 2026
+56586149-aa0f-455c-91e9-60150118f515
+2026-10-30 18:15:37
+enabled
+active
+     Active: active (running) since Fri 2026-10-30 18:15:48 CST; 24s ago
+     Main PID: 777 (trustiot-agent)
+     Status: "gateway tg-lab-0001: disconnected (connecting failed at WebSocket upgrade: the upgrade was answered with HTTP 404 Not Found); retrying in 27 s"
+NRestarts=0
+ActiveEnterTimestamp=Fri 2026-10-30 18:15:48 CST
+cloudflared-ssh: active
+- 0x81000001
+- 0x81000100

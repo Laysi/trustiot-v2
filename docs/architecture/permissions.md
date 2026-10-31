@@ -10,7 +10,7 @@
 
 做法與 [chart 的呼叫矩陣](../../deploy/chart/README.md)（由 `deploy/chart/tests/chart.test.ts` 對照）相同。各服務怎麼接上、探測的細節在 [crates/testkit 的 README](../../crates/testkit/README.md)「權限矩陣」。
 
-服務的 handler 以 `crates/service-kit` 的共用檢查判斷要求（Laysi/trustiot-v2#585）：`UserIdentity::require(Requirement::…, "<動作>")` 在 handler 一開始、讀 body 與資料庫之前呼叫，拒絕時回 403 `permission_denied`（`cache-control: no-store`，不論原因都是同一個回應），並在 INFO 記一行 `refused to <動作>`，帶使用者、租戶、原因（`no_tenant`、`unrecognized_role`、`role_too_low`、`not_platform_admin`、`exchanged_token`）與換發 token 的服務，不記 token。store 在開交易前的第二道檢查用不記日誌的 `UserIdentity::meets`。「已登入」不需要檢查：只有驗證過的 token 才有 `UserIdentity`。做法見 [crates/service-kit 的 README](../../crates/service-kit/README.md)。
+服務的 handler 以 `crates/service-kit` 的共用檢查判斷要求（Laysi/trustiot-v2#585）：`UserIdentity::require(Requirement::…, "<動作>")` 在 handler 一開始、讀 body 與資料庫之前呼叫，拒絕時回 403 `permission_denied`（`cache-control: no-store`，不論原因都是同一個回應），並在 INFO 記一行 `refused to <動作>`，帶使用者、租戶、原因（`no_tenant`、`tenant_suspended`、`unrecognized_role`、`role_too_low`、`not_platform_admin`、`exchanged_token`）與換發 token 的服務，不記 token。例外是租戶被停權或已刪除（清單 B1，Laysi/trustiot-v2#777）：需要租戶角色的要求回 403 `tenant_suspended`，不是 `permission_denied`；身分服務的 cookie 檢查對身分服務以外的服務直接回這個代碼、不簽 token（[services/identity](../../services/identity/README.md) 的「停權時的每次請求檢查」）。本矩陣的探測都在正常的租戶。store 在開交易前的第二道檢查用不記日誌的 `UserIdentity::meets`。「已登入」不需要檢查：只有驗證過的 token 才有 `UserIdentity`。做法見 [crates/service-kit 的 README](../../crates/service-kit/README.md)。
 
 ## 要求
 
@@ -71,6 +71,8 @@
 | `GET /api/identity/v1/event-log` | 租戶 admin | |
 | `POST /api/identity/v1/tenants` | 平台管理員，本人 | |
 | `PUT /api/identity/v1/platform/tenants/{tenant_id}/members` | 平台管理員，本人 | |
+| `GET /api/identity/v1/platform/tenants/{tenant_id}/state` | 平台管理員，本人 | |
+| `PUT /api/identity/v1/platform/tenants/{tenant_id}/state` | 平台管理員，本人 | |
 | `GET /api/identity/v1/platform/tenants/{tenant_id}/event-log` | 平台管理員，本人 | |
 | `GET /api/identity/v1/platform/event-log` | 平台管理員，本人 | |
 | `GET /api/identity/v1/platform/ai/model-roles` | 平台管理員，本人 | |
@@ -79,6 +81,7 @@
 
 - 登出（`DELETE .../sessions/current`）撤銷的是請求 cookie 的那個 session，沒有 cookie 得 401；探測帶一個格式正確、但不屬於任何 session 的 cookie。
 - 兩條平台操作紀錄路由在 Laysi/trustiot-v2#584 改為拒絕換發的 token（之前接受）。
+- 租戶狀態的讀取與停權、恢復（`.../tenants/{tenant_id}/state`，Laysi/trustiot-v2#776）從一開始就只接受平台管理員本人的請求：停權與恢復是平台管理員的動作，不讓其他服務代為進行。拒絕在讀 body 與資料庫之前；`services/identity/tests/tenant_state.rs` 另外證明被拒的呼叫者沒有改到任何租戶的狀態、版本與事件。
 - `POST /api/identity/v1/tenants` 與 `DELETE /api/identity/v1/sessions` 在 Laysi/trustiot-v2#760 改為只接受本人的請求（2026-10-30 決定；之前都接受換發的 token）：建立租戶是平台管理員的動作，登出所有裝置會結束使用者所有的 session，都不讓其他服務代為進行。兩者在解析 body 與讀資料庫之前拒絕，不寫入任何資料；`tests/permissions.rs` 的 `an_exchanged_token_creates_no_tenant_and_revokes_no_session` 證明沒有建立租戶、沒有撤銷 session。
 
 ## certs

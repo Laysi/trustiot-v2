@@ -635,6 +635,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/identity/v1/platform/tenants/{tenant_id}/state": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Reads a tenant's state, reason and version. Platform administrators only, in their own
+         *     request.
+         */
+        get: operations["getPlatformTenantState"];
+        /**
+         * Suspends a tenant with a reason, changes the reason of its suspension, or resumes it.
+         *     Platform administrators only, in their own request.
+         */
+        put: operations["setPlatformTenantState"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/identity/v1/preferences": {
         parameters: {
             query?: never;
@@ -2268,6 +2292,12 @@ export interface components {
             hardware_id: string;
         };
         /**
+         * @description The states a request may ask for, for the API spec only: `deleted` is not set through this
+         *     API, so the request schema does not offer it (`parse_body` reads the body's text).
+         * @enum {string}
+         */
+        RequestedTenantState: "active" | "suspended";
+        /**
          * @description The aggregate table a request reads.
          * @enum {string}
          */
@@ -2561,6 +2591,18 @@ export interface components {
              */
             models: string[];
         };
+        /**
+         * @description The body of `PUT /api/identity/v1/platform/tenants/{tenant_id}/state`. Unknown fields are
+         *     ignored.
+         */
+        SetTenantState: {
+            reason?: components["schemas"]["SuspensionReason"] | null;
+            /**
+             * @description `suspended` to suspend the tenant (or change the reason of its suspension), `active` to
+             *     resume it. `deleted` is not set through this API (422).
+             */
+            state: components["schemas"]["RequestedTenantState"];
+        };
         /** @description Statistics of each series. */
         Statistics: {
             range: components["schemas"]["QueryRange"];
@@ -2592,6 +2634,11 @@ export interface components {
              */
             time: string;
         };
+        /**
+         * @description Why a tenant is suspended, as the API takes and returns it.
+         * @enum {string}
+         */
+        SuspensionReason: "security_or_abuse" | "non_payment" | "contract_terminated";
         /** @description The body of `PUT /api/identity/v1/sessions/current/tenant`. */
         SwitchTenant: {
             /** @description One of the user's tenants. */
@@ -2625,9 +2672,54 @@ export interface components {
             name: string | null;
             /** @description The user's role in the tenant. */
             role: components["schemas"]["MemberRole"];
+            /**
+             * @description The tenant's state (Laysi/trustiot-v2#777): while it is `suspended` or `deleted`, the
+             *     session reaches this service only, and every other request in the tenant answers 403
+             *     `tenant_suspended`. A tenant without a record is `active`, as the cookie check reads it.
+             */
+            state: components["schemas"]["TenantState"];
             /** @description The tenant. */
             tenant_id: components["schemas"]["TenantId"];
         };
+        /**
+         * @description A tenant's lifecycle state, as the API returns it.
+         * @enum {string}
+         */
+        TenantState: "active" | "suspended" | "deleted";
+        /** @description A tenant's state, its reason and its version. */
+        TenantStateSnapshot: {
+            reason?: components["schemas"]["SuspensionReason"] | null;
+            /** @description The state. */
+            state: components["schemas"]["TenantState"];
+            /**
+             * Format: date-time
+             * @description When the tenant got this state (its creation time while it was never changed), by the
+             *     database clock.
+             */
+            state_changed_at: string;
+            /**
+             * Format: int64
+             * @description The version of this state: 1 when the tenant was created, one more with every change of
+             *     the state or the reason. The `identity.tenant_state_changed` event of the change carries
+             *     the same number.
+             */
+            state_version: number;
+            /**
+             * @description What the back office shows (Laysi/trustiot-v2#779): `processing` while the tenant is
+             *     suspended or deleted and the certs service has not yet confirmed that it applied this
+             *     version (gateways disconnected, CRL in effect); otherwise the state. Show how long a
+             *     tenant has been processing from `state_changed_at`.
+             */
+            status: components["schemas"]["TenantStatus"];
+            /** @description The tenant. */
+            tenant_id: components["schemas"]["TenantId"];
+        };
+        /**
+         * @description What the back office shows of a tenant's state (Laysi/trustiot-v2#779): the state, except that a
+         *     suspension or deletion the certs service has not yet confirmed is still processing.
+         * @enum {string}
+         */
+        TenantStatus: "active" | "processing" | "suspended" | "deleted";
         /**
          * @description The interface's colors.
          * @enum {string}
@@ -5995,6 +6087,164 @@ export interface operations {
                 };
             };
             /** @description The email is not an address (`/email`, `member.email_invalid`), no user has it (`/email`, `member.email_unknown`; no user is created), or the role is not `viewer`, `editor` or `admin` (`/role`, `member.role_invalid`) (`validation_failed`). Nothing was written. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The database failed; nothing was written (`unavailable`). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    getPlatformTenantState: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The tenant's ID. */
+                tenant_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The tenant's state, reason and version. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TenantStateSnapshot"];
+                };
+            };
+            /** @description The tenant ID is not a UUID (`invalid_request`). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No valid session (`unauthenticated`). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Not a platform administrator, or not the administrator's own request: another service exchanged the token (`permission_denied`). */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No tenant has the ID (`not_found`). */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The database failed (`unavailable`). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    setPlatformTenantState: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The tenant's ID. */
+                tenant_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SetTenantState"];
+            };
+        };
+        responses: {
+            /** @description The tenant has the state: when the state or the reason changed, the version went up by one and `identity.tenant_state_changed` was written in the same transaction; when the tenant already had them, nothing was written. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TenantStateSnapshot"];
+                };
+            };
+            /** @description The tenant ID is not a UUID, the `Content-Type` is not `application/json`, or the body is over 4096 bytes or not a JSON object with a string `state` and a string or null `reason` (`invalid_request`). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No valid session (`unauthenticated`). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Not a platform administrator, or not the administrator's own request: another service exchanged the token (`permission_denied`). */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No tenant has the ID; nothing was written (`not_found`). */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The tenant's contract was terminated or it is deleted, which is final (`conflict`, `tenant.state_final`); nothing was written and the version is unchanged. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The state is not `active` or `suspended` (`/state`, `tenant.state_invalid`), or a suspension has no known reason or a resumption has one (`/reason`, `tenant.suspension_reason_invalid`) (`validation_failed`). Nothing was written. */
             422: {
                 headers: {
                     [name: string]: unknown;

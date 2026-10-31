@@ -194,8 +194,8 @@ Per service that may use Postgres, what one replica opens at most:
                                    Laysi/trustiot-v2#645)
                   certs            PLATFORM_CONNECTIONS (its platform role)
                   identity         the tenant, login, login send, delegation and event log pools
-                                   as identity_app (16), and the event log's pool as
-                                   identity_platform, its consumed producers plus 2 (5)
+                                   as identity_app (17), and the event log's pool as
+                                   identity_platform, its consumers plus 2 (6)
                   gateway-ops      PLATFORM_CONNECTIONS (its platform role; Laysi/trustiot-v2#721)
                   ingest           PLATFORM_CONNECTIONS (its platform role; Laysi/trustiot-v2#642)
                   telemetry-query  EVENT_READER_CONNECTIONS (its platform role)
@@ -211,7 +211,7 @@ these numbers differ.
   "assistant": { "maxConnections": { "min": 4, "max": 100 }, "otherPools": 2 },
   "certs": { "maxConnections": { "min": 2, "max": 100 }, "otherPools": 4 },
   "gateway-ops": { "maxConnections": { "min": 9, "max": 100 }, "otherPools": 4 },
-  "identity": { "maxConnections": { "min": 3, "max": 100 }, "otherPools": 21 },
+  "identity": { "maxConnections": { "min": 3, "max": 100 }, "otherPools": 23 },
   "ingest": { "maxConnections": { "min": 3, "max": 100 }, "otherPools": 4 },
   "telemetry-query": { "maxConnections": { "min": 2, "max": 100 }, "otherPools": 2 }
 }

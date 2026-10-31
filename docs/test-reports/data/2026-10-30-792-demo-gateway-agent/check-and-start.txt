@@ -1,0 +1,65 @@
+# lab 的閘道器，2026-10-30。閘道器沒有持久的 journal，重開機前的日誌是當時讀出的輸出（時間是閘道器的時區 +08:00，即 UTC 10:13:13 起）。
+$ date -u; sudo openssl x509 ...（裝上的檔案）
+Fri 30 Oct 10:13:02 UTC 2026
+-rw-r--r--  1 root root  696 Oct 30 18:12 /etc/trustiot/broker-ca.pem
+-rw-r--r--  1 trustiot-agent trustiot-agent 1393 Oct 30 18:12 /var/lib/trustiot-agent/gateway.pem
+168ddf29951ea9fb7f3820b50df49941c2ad1404e732fd07a1424f345faabd0c  /var/lib/trustiot-agent/gateway.pem
+78dc564f6e1cffc81b6c3f2f279f1e65f8713d85e68fe8ffb2e22826b91d0441  /etc/trustiot/broker-ca.pem
+subject=CN=TrustIoT Demo Gateway Root CA 1
+sha256 Fingerprint=C7:65:CF:FA:3F:5A:DE:1B:DC:88:2D:19:DB:75:67:B5:FE:E0:7F:D2:C8:C5:1F:DD:11:1B:9B:D7:D6:6D:F9:4B
+subject=CN=tg-lab-0001
+issuer=CN=TrustIoT Demo Gateway Issuing CA G1 2026-10-28
+serial=5756B62458C56803416C03789C6C22AE
+notBefore=Oct 30 09:36:47 2026 GMT
+notAfter=Jan 28 09:41:47 2027 GMT
+
+$ sudo trustiot-agent --check; echo "exit $?"
+ok: gateway tg-lab-0001, certificate valid until 2027-01-28T09:41:47Z, configuration /etc/trustiot/agent.toml
+2026-10-30T10:13:02.720802Z  INFO trustiot_agent: no root CRL yet: the broker's certificate chain is not checked for revocation path=/var/lib/trustiot-agent/root-crl.pem
+exit 0
+
+$ sudo tpm2_getcap handles-persistent
+- 0x81000001
+- 0x81000100
+
+$ echo "start: $(date -u +%FT%TZ)"; sudo systemctl enable --now trustiot-agent.service
+start: 2026-10-30T10:13:12Z
+Created symlink '/etc/systemd/system/multi-user.target.wants/trustiot-agent.service' → '/usr/lib/systemd/system/trustiot-agent.service'.
+enable exit 0
+
+# 75 秒後
+now: 2026-10-30T10:14:28Z
+enabled
+active
+     Active: active (running) since Fri 2026-10-30 18:13:13 CST; 1min 15s ago
+     Status: "gateway tg-lab-0001: disconnected (connecting failed at WebSocket upgrade: the upgrade was answered with HTTP 404 Not Found); retrying in 39 s"
+
+$ sudo journalctl -u trustiot-agent --since "-2min" --no-pager -o short-iso-precise
+2026-10-30T18:13:13.777988+08:00 <gateway> systemd[1]: Starting trustiot-agent.service - TrustIoT gateway agent...
+2026-10-30T18:13:13.970852+08:00 <gateway> trustiot-agent[1897]:  INFO trustiot_agent: no root CRL yet: the broker's certificate chain is not checked for revocation path=/var/lib/trustiot-agent/root-crl.pem
+2026-10-30T18:13:13.971644+08:00 <gateway> trustiot-agent[1897]:  INFO agent::upload: telemetry batches use a new stream stream=6e556d1ae49f04ddc002eb9ae6021aa6 first_seq=1
+2026-10-30T18:13:13.971644+08:00 <gateway> trustiot-agent[1897]:  INFO agent::renewal: certificate renewal is scheduled not_after=2027-01-28T09:41:47Z due=2026-12-29T17:27:55Z
+2026-10-30T18:13:13.971644+08:00 <gateway> trustiot-agent[1897]:  INFO trustiot_agent: trustiot-agent started gateway=tg-lab-0001 version="0.1.0"
+2026-10-30T18:13:13.971984+08:00 <gateway> systemd[1]: Started trustiot-agent.service - TrustIoT gateway agent.
+2026-10-30T18:13:13.972311+08:00 <gateway> trustiot-agent[1897]:  INFO agent::upload: opened the buffer directory; batches found there are sent first batches=0 records=0 bytes=0 removed_temporary=0
+2026-10-30T18:13:13.972510+08:00 <gateway> trustiot-agent[1897]:  INFO agent::desired: no configuration saved yet; polling nothing until the cloud's configuration arrives
+2026-10-30T18:13:14.518526+08:00 <gateway> trustiot-agent[1897]:  WARN agent::link: the connection to the cloud failed error=connecting failed at WebSocket upgrade: the upgrade was answered with HTTP 404 Not Found retry_in_ms=897 failures=1
+2026-10-30T18:13:15.656080+08:00 <gateway> trustiot-agent[1897]:  WARN agent::link: the connection to the cloud failed error=connecting failed at WebSocket upgrade: the upgrade was answered with HTTP 404 Not Found retry_in_ms=963 failures=2
+2026-10-30T18:13:17.252997+08:00 <gateway> trustiot-agent[1897]:  WARN agent::link: the connection to the cloud failed error=connecting failed at WebSocket upgrade: the upgrade was answered with HTTP 404 Not Found retry_in_ms=507 failures=3
+2026-10-30T18:13:17.908365+08:00 <gateway> trustiot-agent[1897]:  WARN agent::link: the connection to the cloud failed error=connecting failed at WebSocket upgrade: the upgrade was answered with HTTP 404 Not Found retry_in_ms=3590 failures=4
+2026-10-30T18:13:22.007977+08:00 <gateway> trustiot-agent[1897]:  WARN agent::link: the connection to the cloud failed error=connecting failed at WebSocket upgrade: the upgrade was answered with HTTP 404 Not Found retry_in_ms=10920 failures=5
+2026-10-30T18:13:33.031167+08:00 <gateway> trustiot-agent[1897]:  WARN agent::link: the connection to the cloud failed error=connecting failed at WebSocket upgrade: the upgrade was answered with HTTP 404 Not Found retry_in_ms=21026 failures=6
+2026-10-30T18:13:54.542937+08:00 <gateway> trustiot-agent[1897]:  WARN agent::link: the connection to the cloud failed error=connecting failed at WebSocket upgrade: the upgrade was answered with HTTP 404 Not Found retry_in_ms=39205 failures=7
+
+# 工作站以同樣的 WebSocket 升級探測（docs/runbooks/demo-environment.md 的 curl），10:14:40 UTC
+HTTP/1.1 404 Not Found
+Content-Length: 0
+Server: cloudflare
+Upgrade: websocket
+Server-Timing: cfEdge;dur=31,cfOrigin;dur=108
+CF-RAY: a529a7873ac9d2fd-NRT
+
+# 展示叢集（唯讀，namespace trustiot）
+httproute trustiot-ingress-gateway: [{"path":{"type":"Exact","value":"/certs/renew"}}] -> trustiot-certs:8080
+pods: assets、certs、clickhouse、identity、ingress-istio ×2、otel-collector、postgres（沒有 mqtt-broker、ingest、gateway-ops）
+helmrelease trustiot: chart trustiot@0.0.0-rc.11

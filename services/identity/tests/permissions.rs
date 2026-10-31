@@ -44,6 +44,12 @@ fn suite(issuer: &TestIssuer) -> Suite<'_> {
             "PUT /api/identity/v1/platform/tenants/{tenant_id}/members",
         ))
         .operation(platform(
+            "GET /api/identity/v1/platform/tenants/{tenant_id}/state",
+        ))
+        .operation(platform(
+            "PUT /api/identity/v1/platform/tenants/{tenant_id}/state",
+        ))
+        .operation(platform(
             "GET /api/identity/v1/platform/tenants/{tenant_id}/event-log",
         ))
         .operation(platform("GET /api/identity/v1/platform/event-log"))

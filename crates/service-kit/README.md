@@ -10,6 +10,7 @@
 | `http` | 請求 span 與存取日誌、handler 逾時、panic 轉成 500 |
 | `telemetry` | JSON 日誌、trace id、OTLP 匯出（日誌、trace、指標）、敏感欄位遮蔽 |
 | `job_lock` | 排程工作同一時間只在一個副本執行 |
+| `periodic` | 每個副本各自執行、不取鎖的週期性工作（例如重讀掛載的檔案），panic 後下個週期照常再跑 |
 | `postgres` | Postgres 連線一律 `verify-full`；新連線先檢查角色與 RLS 設定，不安全就拒用 |
 | `migrations` | 服務映像預期的 migration 清單，與資料庫的紀錄比對的 readiness 檢查 |
 | `identity` | 驗證內部身分 token、取得請求的使用者身分（`contract` feature） |
@@ -231,6 +232,35 @@ server 端可以在持有者不知情時結束鎖的 session：網路分割時�
 4. key 由 `lock_key(service, job)` 以 64 bit FNV-1a 從固定命名空間、服務名稱與工作名稱算出。這個算法永遠不能改，否則滾動更新期間新舊 pod 算出不同 key，會同時執行同一個工作。改服務或工作的名稱也等於換一把鎖。
 5. 工作執行期間佔用 pool 的一條連線。
 
+## 每副本的週期性工作（`periodic`）
+
+每個副本都要自己做、不必和其他副本互斥的週期性工作，例如重讀掛載的檔案（內部身分公鑰、身分服務的簽章金鑰、certs 的 CA 檔案），用 `periodic` 排程，不要自己寫 `interval` 迴圈：
+
+```rust
+use service_kit::periodic;
+
+let file = Arc::new(tokio::sync::Mutex::new(file));
+context.spawn(periodic::run_every(
+    "keys-reload",
+    Duration::from_secs(5),
+    context.shutdown().clone(),
+    move || {
+        let (file, keys) = (Arc::clone(&file), keys.clone());
+        async move { file.lock().await.reload(&keys).await }
+    },
+));
+```
+
+- `run_every(名稱, 週期, shutdown, job)` 的 job 和 `run_periodically` 一樣是回傳 future 的 closure，future 擁有它用到的東西；每次執行之間要保留的狀態放在 `Arc` 後面（上例的 `tokio::sync::Mutex`，只有這個排程會鎖它）。不用 async closure（`AsyncFnMut`）：它回傳的 future 借用 closure，以它寫成的排程在 Rust 1.99 交給 `tokio::spawn` 時編譯失敗（`implementation of Send is not general enough`）。`run_blocking_every(名稱, 週期, shutdown, job)` 的 job 是同步的 `Fn`，每次在 `spawn_blocking` 的執行緒上跑，給同步讀檔或其他阻塞 I/O 的工作用，不占 async worker。
+- 第一次在呼叫後一個週期執行：服務通常在開始服務前自己先跑一次（例如啟動時先讀一次檔案），之後才交給排程。直到 `Shutdown::stopping` 為止；收尾開始時還在跑的那一次會跑完，除非被 drain timeout 切斷。週期是 0 會 panic。
+- 工作 panic 時不結束排程：panic 被攔下，記一行 ERROR `periodic job panicked; it runs again next period`，欄位 `job` 是名稱，不含 panic 訊息，下一個週期照常再跑。這一行 ERROR 是告警的依據。`run_blocking_every` 的 panic 發生在阻塞執行緒上，回到 async 端是 `JoinError`，一樣只記這一行，不會在 async 端重新 panic。panic hook 另外記的那行 `thread panicked` 仍含位置與 panic 訊息（見[日誌與 trace](#日誌與-trace)）。`panic = "abort"` 的建置不受影響，行程仍會結束。
+- 為什麼需要它：`Context::spawn` 的背景工作 panic 時只有那個 task 結束，行程照常運作、readiness 照常是 ready，除了 `thread panicked` 之外沒有其他痕跡；重讀檔案的迴圈因此會永久停止，要等 pod 重啟才會讀到新的檔案（Laysi/trustiot-v2#841）。選「排程繼續」而不是「readiness 失敗或結束行程」的理由與[排程工作](#排程工作job_lock)相同。
+- 和 `JobLock::run_periodically` 的差別：`run_periodically` 每個週期先取 Postgres advisory lock，只有拿到鎖的副本執行，工作回傳 `Result`，失敗記 WARN，panic 的 ERROR 是 `scheduled job panicked; it runs again next period`；`periodic` 不取鎖、不需要資料庫，每個副本都執行，工作自己處理錯誤（例如壞檔時保留上一份可用的並記 WARN），kit 只處理 panic。兩者攔 panic 的程式是同一份。
+- 規則：panic 之後讀者與下一次執行都要能用。
+  1. 讀者不能因為 lock 被 poison 而 panic：工作寫入、handler 讀取的 `std::sync` lock，讀取時一律 `unwrap_or_else(PoisonError::into_inner)`，拿到的是 panic 前最後完整寫入的值。
+  2. 一次在中途 panic 的執行，不能讓之後的執行以為已經做完：先換上新值，再記下「已載入」的標記（例如檔案內容或指紋）；或者像 certs 那樣，在指紋與新值寫在同一個 lock 內、無法調換順序時，下一次執行發現 lock 被 poison 就忘掉指紋、全部重讀，並清掉 poison（`CaState::periodic_reload`）。
+  3. 新值整組替換，讀者看到的不是舊的一組就是新的一組，不會是一半。
+
 ## 內部身分（`identity`）
 
 入口 gateway 驗過 cookie 後，身分服務為每個請求簽一個短效的內部身分 token，放在 `x-internal-identity` 標頭交給後端（[決策 27](../../docs/architecture/decisions.md)、功能重建清單 A4）。每個服務自己驗證簽章、簽發者、受眾與效期，只信簽章，不信任何其他關於呼叫者的資訊。本模組在 `contract` feature 後面；簽發 token 是[身分服務](../../services/identity/README.md)的工作。
@@ -284,7 +314,7 @@ async fn routes(context: &Context<Config>, config: &Config) -> Router {
 ```
 
 - `IdentityVerifier::new(受眾, 公鑰)`：受眾是服務自己的 `ServiceName`，寫在程式裡，不從設定讀。公鑰是 `PublishedKeys::watch` 讀到並持續更新的那一組（下方「公鑰與輪替」）；測試可以直接給一組 `IdentityKeys`。
-- handler 加上 `UserIdentity` 參數就要求這個請求帶有效的 token；沒通過的請求不會進 handler，直接回 401。`UserIdentity` 提供 `user_id()`、`tenant()`、`tenant_id()`、`is_platform_admin()` 與完整的 `claims()`。
+- handler 加上 `UserIdentity` 參數就要求這個請求帶有效的 token；沒通過的請求不會進 handler，直接回 401。`UserIdentity` 提供 `user_id()`、`tenant()`、`tenant_id()`、`is_platform_admin()`、`is_tenant_suspended()`（token 的租戶被停權或已刪除，Laysi/trustiot-v2#777）與完整的 `claims()`。
 - router 的 state 必須能以 `FromRef` 取出 `IdentityVerifier`，忘了放 verifier 的 handler 無法編譯。
 - 需要 token 但不經 axum 的地方用 `IdentityVerifier::verify_headers(&HeaderMap)` 或 `verify(&str)`。
 - 範例服務的 `GET /v1/whoami` 是可以執行的例子。
@@ -359,10 +389,11 @@ async fn delete_device(user: UserIdentity) -> Response {
 | `Requirement` | 放行 | 拒絕的 `reason` |
 | --- | --- | --- |
 | `OwnRequest` | 使用者自己經入口的請求 | `exchanged_token`：帶 `act`，其他服務換發的 token |
-| `Tenant(role)` | token 的租戶裡至少 `role`（admin 包含 editor，editor 包含 viewer）；換發的 token 也可以 | `no_tenant`（平台管理員沒有租戶也是）、`unrecognized_role`（本版本不認得的角色，`TenantRole::Unrecognized` 不授予任何權限）、`role_too_low` |
+| `Tenant(role)` | token 的租戶裡至少 `role`（admin 包含 editor，editor 包含 viewer），而且租戶沒有被停權；換發的 token 也可以 | `no_tenant`（平台管理員沒有租戶也是）、`tenant_suspended`（token 帶 `tenant_suspended`，在比對角色之前判斷）、`unrecognized_role`（本版本不認得的角色，`TenantRole::Unrecognized` 不授予任何權限）、`role_too_low` |
 | `OwnPlatformAdmin` | 平台管理員本人的請求 | `not_platform_admin`、`exchanged_token` |
 
-- 拒絕一律是同一個回應 `PermissionDenied`：403，body 是 M1 的 `{"code":"permission_denied","message_key":"error.permission_denied"}`，帶 `cache-control: no-store`，呼叫端看不出原因。
+- 拒絕一律是 `PermissionDenied`：403，body 是 M1 的 `{"code":"permission_denied","message_key":"error.permission_denied"}`，帶 `cache-control: no-store`，呼叫端看不出原因。唯一的例外是 `tenant_suspended`：body 是 `{"code":"tenant_suspended","message_key":"error.tenant_suspended"}`，讓畫面說明租戶被停權，而不是說使用者沒有權限（Laysi/trustiot-v2#777）。
+- 停權（清單 B1）：身分服務的 ext_authz 不簽給其他服務停權租戶的 token（直接回 403 `tenant_suspended`），只有給身分服務自己的 token 帶 `tenant_suspended`；所以其他服務通常看不到這個 claim，只有停權前簽出、還在 60 秒效期內的 token 會通過。`OwnRequest` 與 `OwnPlatformAdmin` 不看它：這兩種要求不靠租戶。細節在 [services/identity/README.md](../../services/identity/README.md) 的「停權時的每次請求檢查」。
 - 日誌是一行 INFO `refused to <action>`，欄位 `user_id`、`tenant_id`、`action`、`reason`、`exchanged`、`actor`（換發 token 的服務）；不記 token。
 - 「已登入」不需要檢查：只有驗證過的 token 才有 `UserIdentity`。
 - `UserIdentity::meets(requirement)` 是同一個判斷、不記日誌也不產生回應，給 store 在開交易前的第二道檢查（例如 assets 的閘道器綁定、身分服務的成員角色）；`UserIdentity::is_exchanged()` 回答 token 是否帶 `act`。
@@ -410,7 +441,7 @@ async fn device_certs(State(state): State<AppState>, user: UserIdentity) -> Resu
 - 身分服務只替 chart 依 `mesh.calls` 列出的呼叫換 token（`TRUSTIOT_ON_BEHALF_CALLS`）：要代表使用者呼叫一個服務，把它加進 `mesh.calls`，chart 同時讓本服務連得到對方與身分服務的 `token-exchange` 埠（[chart README](../../deploy/chart/README.md) 的「服務間授權（mesh）」）。
 - 只換一跳：清單套用在入口 gateway 簽給本服務的 token 上，換來的 token 帶 `act`，身分服務不再換它（403）。所以本服務以換來的 token 被呼叫時，不能再代表同一個使用者往下呼叫；多跳的鏈要等呼叫端的工作負載驗證（Laysi/trustiot-v2#509）。
 - 換來的 token 不會比請求的 token 晚到期，最多 60 秒；請求快到期時（剩不到 1 秒）換不到。
-- `OnBehalfError` 實作 `IntoResponse`，回 M1：交換失敗（`Exchange`）只有 `timeout`、`unavailable` 照傳，其他一律 `internal`，並記一筆 ERROR，欄位是呼叫端、受眾與身分服務回的代碼，提示檢查 `mesh.calls` 或請求的剩餘效期；呼叫對方失敗（`Call`）照 `CallError::code()`，例如對方的 `not_found` 原樣傳遞。token 不進日誌。
+- `OnBehalfError` 實作 `IntoResponse`，回 M1：交換失敗（`Exchange`）只有 `timeout`、`unavailable` 與 `tenant_suspended`（使用者的租戶被停權，Laysi/trustiot-v2#777）照傳，其他一律 `internal`，並記一筆 ERROR，欄位是呼叫端、受眾與身分服務回的代碼，提示檢查 `mesh.calls` 或請求的剩餘效期；呼叫對方失敗（`Call`）照 `CallError::code()`，例如對方的 `not_found` 原樣傳遞。token 不進日誌。
 - 身分服務自己用 `ExchangeVerifier` 驗證交換請求帶的 token：與 `IdentityVerifier` 做同樣的檢查，只是接受任何受眾。只有 token 交換可以用它；其他地方一律用 `IdentityVerifier`，受眾是自己。它目前是公開型別，其他服務也拿得到，限制它只給身分服務記在 Laysi/trustiot-v2#509。
 
 ### agent 執行期間的委派（`RunDelegations`）
@@ -430,7 +461,7 @@ let devices = run.call(&state.assets, &ListDevices { /* ... */ }).await?;
 - 只有身分服務列為持有者的服務（目前只有 `assistant`）建立得了委派；其他服務拿到 403。
 - `start` 為每個 run 以作業系統的 CSPRNG 產生一把 Ed25519 金鑰，公鑰交給身分服務綁進委派，私鑰只留在 `RunDelegation` 裡（drop 時清零）；每次換 token 都以它簽 `run_proof_message(委派, 受眾, 現在)`。所以委派本身外洩（日誌、存下的 run）換不到 token。`RunDelegation` 不能序列化，`Debug` 只顯示 run、持有者與到期時間；clone 共用同一把金鑰，run 裡的平行工作可以同時呼叫。run 結束就 drop。
 - 效期 1–900 秒（`RUN_DELEGATION_MAX_LIFETIME_SECS`），以整秒計，超出時 `start` 不送請求就回 `Lifetime`。到期後換不到 token，要以使用者的新請求重新開始。
-- 身分服務每次換 token 都重查：session 結束（登出、撤銷、過期）後回 `unauthenticated`，使用者被移出租戶後回 `permission_denied`，改角色時下一張 token 就帶新角色。`RunDelegationError` 實作 `IntoResponse`：建立與換 token 被拒時把 `unauthenticated`、`permission_denied` 照傳給使用者（記 INFO，run 照預期結束），`timeout`、`unavailable` 照傳，其他一律 `internal`（記 ERROR）；呼叫對方失敗（`Call`）照 `CallError::code()`。`permission_denied` 也可能是 `mesh.calls` 少了這條呼叫，身分服務的 WARN 日誌寫出 `not_listed`。
+- 身分服務每次換 token 都重查：session 結束（登出、撤銷、過期）後回 `unauthenticated`，使用者被移出租戶後回 `permission_denied`，租戶被停權或已刪除後回 `tenant_suspended`（Laysi/trustiot-v2#777；恢復之後同一個委派又換得到），改角色時下一張 token 就帶新角色。`RunDelegationError` 實作 `IntoResponse`：建立與換 token 被拒時把 `unauthenticated`、`permission_denied`、`tenant_suspended` 照傳給使用者（記 INFO，run 照預期結束），`timeout`、`unavailable` 照傳，其他一律 `internal`（記 ERROR）；呼叫對方失敗（`Call`）照 `CallError::code()`。`permission_denied` 也可能是 `mesh.calls` 少了這條呼叫，身分服務的 WARN 日誌寫出 `not_listed`。
 - 受眾只到 `mesh.calls` 上本服務可以呼叫的服務，和 `OnBehalf` 同一份清單；換出的 token 帶 `act`，對方不能再換。
 
 ### 背景工作沒有使用者身分
@@ -598,7 +629,7 @@ async fn device_names(db: &TenantDb, user: &UserIdentity) -> Result<Vec<String>,
 
 | 指令 | 內容 | 需要 |
 | --- | --- | --- |
-| `cargo test -p service-kit --lib` | 單元測試：設定與平台設定、遮蔽、日誌格式、health、kit 的錯誤回應、lock key；migration 清單的比對（缺少、hash 不同、資料庫較新）、日誌內容與只記一次、通過後不再查詢（`--lib migrations` 只跑這部分）；內部身分的每一項檢查、公鑰設定與輪替（`--lib identity` 只跑這部分） | 無 |
+| `cargo test -p service-kit --lib` | 單元測試：設定與平台設定、遮蔽、日誌格式、health、kit 的錯誤回應、lock key；migration 清單的比對（缺少、hash 不同、資料庫較新）、日誌內容與只記一次、通過後不再查詢（`--lib migrations` 只跑這部分）；每副本的週期性工作 panic 後下個週期照常再跑、只記一行不含 panic 訊息的 ERROR、收尾時停止（`--lib periodic` 只跑這部分）；內部身分的每一項檢查、公鑰設定與輪替（`--lib identity` 只跑這部分） | 無 |
 | `cargo test -p service-kit --doc` | 文件範例，含證明背景工作拿不到使用者身分的 compile-fail 測試 | 無 |
 | `cargo test -p service-kit --test identity` | 範例服務的 `/v1/whoami`：偽造簽章、過期、受眾不符、缺標頭都回 401 `unauthenticated`，輪替期間新舊 `kid` 都通過，無法使用的公鑰設定讓服務拒絕啟動；token 與公鑰不進日誌 | 無 |
 | `cargo test -p service-kit --test lifecycle` | 範例服務的啟動、health（健康埠只有 `/healthz`、`/readyz`，其他路徑 404）、SIGTERM 與 SIGINT 收尾（兩個埠的 readiness 一致）、設定錯誤與埠被占用，用真的行程、訊號與 HTTP | 無 |

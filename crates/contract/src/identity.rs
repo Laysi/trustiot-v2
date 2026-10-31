@@ -57,6 +57,16 @@ pub struct InternalClaims {
     /// ignore it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sid: Option<SessionId>,
+    /// Whether the token's tenant is suspended or deleted (checklist B1, Laysi/trustiot-v2#777).
+    /// The identity service reads the tenant's state with the role on every request and signs a
+    /// token of a suspended tenant for itself only, so the user can still read their session,
+    /// switch tenants, log out and change preferences there, and a platform administrator can
+    /// still resume a tenant; every other route is refused at the ingress with 403
+    /// `tenant_suspended`. Tenant-scoped endpoints refuse a token with it the same way
+    /// (`service_kit::identity::Requirement::Tenant`). Absent means `false`; never `true`
+    /// without a tenant.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub tenant_suspended: bool,
 }
 
 /// The `act` claim of an exchanged token: who acts for the user.
@@ -190,7 +200,29 @@ mod tests {
             platform_admin: false,
             act: None,
             sid: None,
+            tenant_suspended: false,
         }
+    }
+
+    #[test]
+    fn the_suspension_claim_round_trips_and_is_omitted_when_false() {
+        let mut suspended = claims();
+        suspended.tenant_suspended = true;
+        let value = serde_json::to_value(&suspended).expect("serialize");
+        assert_eq!(value["tenant_suspended"], json!(true));
+        assert_eq!(
+            serde_json::from_value::<InternalClaims>(value).expect("deserialize"),
+            suspended
+        );
+        // An active tenant's token, and one from an identity service before
+        // Laysi/trustiot-v2#777, has no member; absent reads as `false`.
+        let value = serde_json::to_value(claims()).expect("serialize");
+        assert!(value.get("tenant_suspended").is_none(), "{value}");
+        assert!(
+            !serde_json::from_value::<InternalClaims>(value)
+                .expect("deserialize")
+                .tenant_suspended
+        );
     }
 
     #[test]

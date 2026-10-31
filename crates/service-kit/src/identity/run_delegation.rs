@@ -278,7 +278,8 @@ impl RunDelegationError {
     /// The M1 code to answer with. A refusal of the identity service passes on what it means
     /// for the user: `unauthenticated` when the session ended (logout, revocation, expiry) or the
     /// delegation expired, `permission_denied` when the user is no longer a member of the tenant
-    /// (or the deployment's call list lacks the call, which its ERROR log line tells apart);
+    /// (or the deployment's call list lacks the call, which its ERROR log line tells apart),
+    /// `tenant_suspended` when the tenant is suspended or deleted (Laysi/trustiot-v2#777);
     /// `timeout` and `unavailable` pass through; anything else is `internal`, a fault of this
     /// service or of the deployment.
     #[must_use]
@@ -289,7 +290,11 @@ impl RunDelegationError {
             // credential failed); here the credential is the user's, so it passes on.
             Self::Start { source } | Self::Exchange { source, .. } => {
                 match source.peer_error().map(ErrorBody::code) {
-                    Some(code @ (ErrorCode::Unauthenticated | ErrorCode::PermissionDenied)) => code,
+                    Some(
+                        code @ (ErrorCode::Unauthenticated
+                        | ErrorCode::PermissionDenied
+                        | ErrorCode::TenantSuspended),
+                    ) => code,
                     _ => match source.code() {
                         code @ (ErrorCode::Timeout | ErrorCode::Unavailable) => code,
                         _ => ErrorCode::Internal,
@@ -326,7 +331,9 @@ impl RunDelegationError {
         };
         let holder = holder.map(ServiceName::as_str);
         match self.code() {
-            ErrorCode::Unauthenticated | ErrorCode::PermissionDenied => tracing::info!(
+            ErrorCode::Unauthenticated
+            | ErrorCode::PermissionDenied
+            | ErrorCode::TenantSuspended => tracing::info!(
                 run = %run,
                 holder,
                 audience,
@@ -405,8 +412,9 @@ mod tests {
         axum::Json(json!({"delegation": "delegation.for.run", "expires_at": 42})).into_response()
     }
 
-    /// certs: a token; alerts: the session ended; knowledge: not a member; assets: unavailable;
-    /// anything else: a request this service should not have made.
+    /// certs: a token; alerts: the session ended; knowledge: not a member; gateway-ops: the
+    /// tenant is suspended; assets: unavailable; anything else: a request this service should not
+    /// have made.
     async fn exchange(
         State(seen): State<Seen>,
         headers: HeaderMap,
@@ -420,6 +428,7 @@ mod tests {
             Some("certs") => axum::Json(json!({"token": "token.for.certs"})).into_response(),
             Some("alerts") => refuse(ErrorCode::Unauthenticated),
             Some("knowledge") => refuse(ErrorCode::PermissionDenied),
+            Some("gateway-ops") => refuse(ErrorCode::TenantSuspended),
             Some("assets") => refuse(ErrorCode::Unavailable),
             _ => refuse(ErrorCode::InvalidRequest),
         }
@@ -585,6 +594,11 @@ mod tests {
             (
                 ServiceName::Knowledge,
                 ErrorCode::PermissionDenied,
+                StatusCode::FORBIDDEN,
+            ),
+            (
+                ServiceName::GatewayOps,
+                ErrorCode::TenantSuspended,
                 StatusCode::FORBIDDEN,
             ),
             (

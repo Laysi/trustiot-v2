@@ -557,6 +557,12 @@ certificateAuthority:
   # The issuing CA certificates the root signed, one per key, each its DER in base64 on one line
   # (public); at most 4. The service picks up a change without a restart.
   issuingCertificates: []
+  # The root CRL the offline root signs at each ceremony, listing revoked issuing CAs: its DER in
+  # base64 on one line, the body of its PEM "X509 CRL" (public). The certs service adopts it once
+  # the root above signed it, picks up a new one without a restart, hands it to gateways, and
+  # alerts while it has less than 60 days left (services/certs/README.md, 「根 CRL」). Empty until
+  # the first ceremony that signs one: gateways then check no issuing CA's revocation.
+  rootCrl: ""
 
 # Migration Job (tools/migrate, Laysi/trustiot-v2#60): applies every service's Postgres
 # migrations and the ClickHouse DDL with the migration role, creates the service roles and the
@@ -647,8 +653,8 @@ postgres:
       work_mem: 4MB
       maintenance_work_mem: 64MB
       # Fits identity, assets, certs, telemetry-query, assistant, ai-gateway, ingest and
-      # gateway-ops at one replica each while all of them roll at once (214) plus the 18 reserved
-      # connections (232), with 8 to spare; the next service or larger pool that uses Postgres
+      # gateway-ops at one replica each while all of them roll at once (218) plus the 18 reserved
+      # connections (236), with 4 to spare; the next service or larger pool that uses Postgres
       # raises it. The render fails when the enabled services need more. Changing it restarts the
       # bundled Postgres (Laysi/trustiot-v2#721 raised it from 200, Laysi/trustiot-v2#645 from 220
       # for the assistant's API and purge pools and gateway-ops' larger pool from

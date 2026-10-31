@@ -249,7 +249,7 @@ impl Delivery {
 ///
 /// Keep the time between the handler's first write and the commit short: from its first write
 /// a transaction holds back the read horizon of every consumer in the Postgres cluster (see the
-/// README). Do slow reads, such as an internal API call in notification mode, before writing.
+/// README). Do slow reads, such as a call to another service, before writing.
 ///
 /// A panic in [`Handler::begin`] or [`Handler::handle`] does not stop the consumer. The
 /// consumer catches it, rolls the delivery's transaction back, logs an ERROR without the panic

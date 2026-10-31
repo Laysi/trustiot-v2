@@ -40,6 +40,19 @@ ingress:
       path: /api/certs
       match: PathPrefix
       service: certs
+    # The assets service's API (services/assets/README.md): the platform administrator binds the
+    # demo gateway to the demo tenant, and a member of that tenant creates its device model and
+    # device (Laysi/trustiot-v2#793).
+    - host: app
+      path: /api/assets
+      match: PathPrefix
+      service: assets
+    # The gateway-ops list of the tenant's gateways, with presence and configuration versions
+    # (services/gateway-ops/README.md, 「API」; Laysi/trustiot-v2#793).
+    - host: app
+      path: /api/gateway-ops
+      match: PathPrefix
+      service: gateway-ops
 
 # The slice's services are switched on here, one by one, as their issues land in a release
 # (deploy/flux/README.md, 「展示叢集」). A service is on only while the deployed chart
@@ -54,6 +67,23 @@ services:
   # (docs/runbooks/demo-environment.md, 「簽發 CA 的儀式」).
   certs:
     enabled: true
+  # The gateway's data path (Laysi/trustiot-v2#795): mqtt-bridge takes the gateway's MQTT over
+  # WebSocket on the gateway host's /mqtt (the chart's cookie-free public path `mqtt`, routed only
+  # while mqtt-bridge is on) and relays it to the broker below; ingest writes the telemetry to
+  # ClickHouse; gateway-ops tracks presence and delivers the configurations. No cookie route and no
+  # Secret: the broker accounts and the database passwords are generated in the cluster.
+  mqtt-bridge:
+    enabled: true
+  ingest:
+    enabled: true
+  gateway-ops:
+    enabled: true
+
+# The MQTT broker (deploy/chart/README.md, 「MQTT broker」). Its server certificate is issued in
+# the cluster by the certs service's issuing CA above, and certs keeps the gateways' broker
+# clients in step with Postgres (Laysi/trustiot-v2#633).
+mqttBroker:
+  enabled: true
 
 # The demo's own gateway CA (Laysi/trustiot-v2#619), set by the ceremony on 2026-10-28
 # (docs/runbooks/demo-environment.md, 「簽發 CA 的儀式」). Both are public: each is the

@@ -45,6 +45,8 @@ protocol = { path = "../../crates/protocol" }
 # Signs certificates and CRLs; `x509-parser` reads the issuing CA certificates as issuers,
 # `zeroize` wipes the root key's PKCS#8 copy in certs-ca.
 rcgen = { workspace = true, features = ["crypto", "pem", "ring", "x509-parser", "zeroize"] }
+# The root CRL's checks, the same the gateway agent applies (src/root_crl.rs).
+root-crl = { path = "../../crates/root-crl" }
 rustls-pki-types = { workspace = true, features = ["std"] }
 serde = { workspace = true, features = ["derive"] }
 # The workstation certificate API reads its JSON bodies field by field, to name each problem.
@@ -66,6 +68,11 @@ x509-parser = { workspace = true, features = ["verify"] }
 zeroize.workspace = true
 
 [dev-dependencies]
+# Creates tenants through the identity service's own code, the producer of
+# `identity.tenant_created`, in tests/tenant_states.rs.
+identity = { path = "../identity" }
+# A pseudo-terminal as certs-ca's stdin, which it must refuse (tests/ceremony_root_crl.rs).
+libc.workspace = true
 # The MQTT broker's certificate issuer (`migrate mqtt-broker-certificate`, Laysi/trustiot-v2#535)
 # against this service's broker port in tests/broker_certificate.rs.
 migrate = { path = "../../tools/migrate" }

@@ -12,6 +12,7 @@
 //! | A token the ingress gateway's request brought (no `act`, with `sid`) to a service in [`HOLDERS`], whose session is active and whose user is still a member of the token's tenant; a run ID, an Ed25519 public key and a lifetime of 1 to [`MAX_LIFETIME_SECS`] seconds | 200 `{"delegation", "expires_at"}` |
 //! | No, repeated or invalid token; no `sid`; the session is not active | 401 `unauthenticated` |
 //! | The token has `act`, its audience is not in [`HOLDERS`], or the user is no longer a member of its tenant | 403 `permission_denied` |
+//! | The token's tenant is suspended or deleted: its `tenant_suspended` claim, or the state read now (Laysi/trustiot-v2#777) | 403 `tenant_suspended` |
 //! | The body is not the request, the key is not a usable Ed25519 public key, or the lifetime is out of range | 400 `invalid_request` |
 //! | No public keys or no signing key yet, or the database failed | 503 `unavailable` |
 //!
@@ -24,6 +25,7 @@
 //! | A delegation this service signed with a key that is not revoked, current and no longer-lived than [`MAX_LIFETIME_SECS`]; a valid proof within [`RUN_PROOF_WINDOW_SECS`]; the call list lets the holder call the audience; the session is still active and the user still a member of the delegation's tenant | 200 `{"token"}`: the user, the tenant with the role read now, the platform administrator flag read now, `act` naming the holder, issued now, expiring in [`TOKEN_LIFETIME_SECS`] or with the delegation, whichever is earlier |
 //! | No, repeated or invalid delegation; expired, issued in the future or longer-lived than the cap; invalid or stale proof; the session is not active | 401 `unauthenticated` |
 //! | The holder may not hold a delegation (any more), the call list does not let it call the audience, or the user is no longer a member of the tenant | 403 `permission_denied` |
+//! | The delegation's tenant is suspended or deleted now (Laysi/trustiot-v2#777) | 403 `tenant_suspended` |
 //! | The body is not the request | 400 `invalid_request` |
 //! | No signing keys read yet, or the database failed | 503 `unavailable` |
 //!
@@ -72,7 +74,7 @@ use tokio::sync::Semaphore;
 
 use crate::exchange::OnBehalfCalls;
 use crate::issuer::{IssueError, Issuer, TOKEN_LIFETIME_SECS};
-use crate::session::{MEMBERSHIP_ROLE, StoreError, parse_role};
+use crate::session::{MEMBERSHIP, Membership, MembershipRow, StoreError};
 
 /// Longest lifetime of a delegation, in seconds: [`RUN_DELEGATION_MAX_LIFETIME_SECS`] (15
 /// minutes). A delegation that claims a longer one is refused even with a valid MAC.
@@ -233,6 +235,9 @@ pub enum Standing {
     NoSession,
     /// The session is active, but the user is no longer a member of the tenant.
     NotMember,
+    /// The session is active and the user a member, but the tenant is suspended or deleted
+    /// (Laysi/trustiot-v2#777).
+    TenantSuspended,
 }
 
 /// Reads where a delegation's user stands. [`PgDelegationStore`] is the real one; tests use
@@ -313,17 +318,18 @@ impl PgDelegationStore {
             });
         };
         let mut tx = self.memberships.begin(tenant, MEMBERSHIP_PURPOSE).await?;
-        let role: Option<String> = sqlx::query_scalar(MEMBERSHIP_ROLE)
+        let row: Option<MembershipRow> = sqlx::query_as(MEMBERSHIP)
             .bind(tenant.to_string())
             .bind(user.to_string())
             .fetch_optional(&mut *tx)
             .await?;
         tx.commit().await?;
-        match role {
-            Some(role) => Ok(Standing::Active {
+        match row.map(Membership::from_row).transpose()? {
+            Some(membership) if membership.suspended => Ok(Standing::TenantSuspended),
+            Some(membership) => Ok(Standing::Active {
                 tenant: Some(TenantGrant {
                     id: tenant,
-                    role: parse_role(&role)?,
+                    role: membership.role,
                 }),
                 platform_admin,
             }),
@@ -424,11 +430,19 @@ impl<S: DelegationStore> RunDelegations<S> {
             return Outcome::unauthenticated("no_session_claim", run);
         };
         let tenant = subject.tenant_id();
+        // The ext_authz check never signs a holder's token of a suspended tenant; refused all the
+        // same, without a database read.
+        if tenant.is_some() && subject.tenant_suspended {
+            return Outcome::tenant_suspended(subject.aud, None, run);
+        }
         match self.store.standing(session, subject.sub, tenant).await {
             Ok(Standing::Active { .. }) => {}
             Ok(Standing::NoSession) => return Outcome::unauthenticated("no_active_session", run),
             Ok(Standing::NotMember) => {
                 return Outcome::forbidden("not_a_member", subject.aud, None, run);
+            }
+            Ok(Standing::TenantSuspended) => {
+                return Outcome::tenant_suspended(subject.aud, None, run);
             }
             Err(error) => return Outcome::store_failed(&error),
         }
@@ -523,6 +537,9 @@ impl<S: DelegationStore> RunDelegations<S> {
                     run,
                 );
             }
+            Ok(Standing::TenantSuspended) => {
+                return Outcome::tenant_suspended(claims.holder, Some(request.audience), run);
+            }
             Err(error) => return Outcome::store_failed(&error),
         };
         // The store answers after its own wait: the token is issued at the time it is signed.
@@ -541,6 +558,7 @@ impl<S: DelegationStore> RunDelegations<S> {
             platform_admin,
             act: Some(Actor { sub: claims.holder }),
             sid: None,
+            tenant_suspended: false,
         };
         match self.issuer.sign_claims(&token_claims, now) {
             Ok(token) => Outcome::Exchanged {
@@ -629,6 +647,13 @@ enum Outcome {
         audience: Option<ServiceName>,
         run: Option<RunId>,
     },
+    /// 403 `tenant_suspended`: the tenant is suspended or deleted; the services and the run go
+    /// to the log only.
+    TenantSuspended {
+        holder: ServiceName,
+        audience: Option<ServiceName>,
+        run: Option<RunId>,
+    },
     /// 400; the reason goes to the log only.
     InvalidRequest(&'static str),
     /// 503; the reason goes to the log only.
@@ -654,14 +679,27 @@ impl Outcome {
         }
     }
 
+    const fn tenant_suspended(
+        holder: ServiceName,
+        audience: Option<ServiceName>,
+        run: Option<RunId>,
+    ) -> Self {
+        Self::TenantSuspended {
+            holder,
+            audience,
+            run,
+        }
+    }
+
     fn store_failed(error: &StoreError) -> Self {
         tracing::warn!(%error, "could not read the standing of a run delegation's user");
         Self::Unavailable("database")
     }
 
     /// Never the token, the delegation, the proof, the key or the user: the services, the run
-    /// and the reason. A session that ended or a member who was removed stops a run as intended
-    /// (INFO); anything else means a fault or someone using what is not theirs (WARN).
+    /// and the reason. A session that ended, a member who was removed or a suspended tenant stops
+    /// a run as intended (INFO); anything else means a fault or someone using what is not theirs
+    /// (WARN).
     fn log(&self) {
         match self {
             Self::Created {
@@ -720,6 +758,17 @@ impl Outcome {
                     );
                 }
             }
+            Self::TenantSuspended {
+                holder,
+                audience,
+                run,
+            } => tracing::info!(
+                reason = "tenant_suspended",
+                holder = holder.as_str(),
+                audience = audience.map(ServiceName::as_str),
+                run = run.map(|run| run.to_string()),
+                "refused a run delegation: its tenant is suspended"
+            ),
             Self::InvalidRequest(reason) => tracing::info!(
                 reason,
                 "refused a run delegation request: the body is not the request"
@@ -760,6 +809,7 @@ impl IntoResponse for Outcome {
                 .into_response(),
             Self::Unauthenticated { .. } => error(ErrorCode::Unauthenticated),
             Self::Forbidden { .. } => error(ErrorCode::PermissionDenied),
+            Self::TenantSuspended { .. } => error(ErrorCode::TenantSuspended),
             Self::InvalidRequest(_) => error(ErrorCode::InvalidRequest),
             Self::Unavailable(_) => error(ErrorCode::Unavailable),
         }

@@ -1045,6 +1045,15 @@ describe("gateway certificate authority (decision 12, Laysi/trustiot-v2#78)", ()
       .map((m) => ({ name: `${m.kind}/${m.metadata.name}`, pod: m.kind === "CronJob" ? cronPod(m) : podSpec(m) }));
   // A stand-in for a certificate's DER in base64: "MII", a two-byte length, as a certificate has.
   const certificate = (fill: string) => `MII${fill.repeat(149)}`;
+  // The DER of something that starts like a v2 CRL, as the chart checks it: a SEQUENCE (two-byte
+  // length) holding the tbsCertList SEQUENCE, the version INTEGER 1 and the signature
+  // AlgorithmIdentifier (ecdsa-with-SHA384), then filler. The certs service checks the rest.
+  const crlDer = (fill: number) =>
+    Buffer.concat([
+      Buffer.from("3082012c308201030201013" + "00a06082a8648ce3d040303", "hex"),
+      Buffer.alloc(288, fill),
+    ]);
+  const rootCrl = (fill = 0x41) => crlDer(fill).toString("base64");
 
   test("while the certs service is off, nothing of the CA is rendered, but the values are checked", () => {
     const others = plannedServices.filter((name) => name !== "certs").flatMap((name) => ["--set", `services.${name}.enabled=true`]);
@@ -1128,6 +1137,7 @@ describe("gateway certificate authority (decision 12, Laysi/trustiot-v2#78)", ()
         { name: "TRUSTIOT__CA__KEYS_FILE", value: "/etc/trustiot/certs-ca-keys/issuing-ca-keys.json" },
         { name: "TRUSTIOT__CA__ROOT_CERTIFICATE_FILE", value: "/etc/trustiot/certs-ca/root.pem" },
         { name: "TRUSTIOT__CA__CERTIFICATES_FILE", value: "/etc/trustiot/certs-ca/issuing.pem" },
+        { name: "TRUSTIOT__CA__ROOT_CRL_FILE", value: "/etc/trustiot/certs-ca/root-crl.pem" },
       ]);
       // It uses Postgres (values.yaml mesh.calls): its own role and password.
       expect((certs.containers[0]?.env ?? []).find((e) => e.name === "TRUSTIOT__DATABASE__USERNAME")?.value).toBe("certs_app");
@@ -1167,11 +1177,59 @@ describe("gateway certificate authority (decision 12, Laysi/trustiot-v2#78)", ()
     ]);
     const data = (find(manifests, "ConfigMap", CERTIFICATES) as Manifest & { data: Record<string, string> }).data;
     const pem = (der: string) => `-----BEGIN CERTIFICATE-----\n${(der.match(/.{1,64}/g) ?? []).join("\n")}\n-----END CERTIFICATE-----\n`;
-    expect(data).toEqual({ "root.pem": pem(root), "issuing.pem": issuing.map(pem).join("") });
+    expect(data).toEqual({ "root.pem": pem(root), "issuing.pem": issuing.map(pem).join(""), "root-crl.pem": "" });
     // Before the ceremony both files are empty: the service starts but cannot sign.
     const empty = (find(render(SHAPES.saas, withCerts), "ConfigMap", CERTIFICATES) as Manifest & { data: Record<string, string> }).data;
-    expect(empty).toEqual({ "root.pem": "", "issuing.pem": "" });
+    expect(empty).toEqual({ "root.pem": "", "issuing.pem": "", "root-crl.pem": "" });
   });
+
+  test("the root CRL comes from the values as PEM into the same ConfigMap, and only a CRL does (Laysi/trustiot-v2#830)", () => {
+    const crl = rootCrl();
+    const manifests = render(SHAPES.saas, [...withCerts, "--set", `certificateAuthority.rootCrl=${crl}`]);
+    const data = (find(manifests, "ConfigMap", CERTIFICATES) as Manifest & { data: Record<string, string> }).data;
+    expect(data["root-crl.pem"]).toBe(`-----BEGIN X509 CRL-----\n${(crl.match(/.{1,64}/g) ?? []).join("\n")}\n-----END X509 CRL-----\n`);
+    // The PEM decodes back to the bytes of the value.
+    const body = (data["root-crl.pem"] ?? "").replace(/-----[A-Z0-9 ]+-----|\n/g, "");
+    expect(Buffer.from(body, "base64").equals(crlDer(0x41))).toBe(true);
+    // A certificate, a private key, PEM text, base64 that does not decode to a v2 CRL, or a CRL
+    // longer than the limit: the render fails, with the schema and with the template's own check.
+    const certificateDer = Buffer.concat([Buffer.from("3082012c30820113a003020102", "hex"), Buffer.alloc(290, 0x41)]).toString("base64");
+    const pkcs8 = `MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQg${"A".repeat(40)}`;
+    const v1 = Buffer.concat([Buffer.from("3082012c3082010330", "hex"), Buffer.alloc(296, 0x41)]).toString("base64");
+    const long = Buffer.concat([Buffer.from("308260003082600002010130", "hex"), Buffer.alloc(24_600, 0x41)]).toString("base64");
+    for (const [what, value, schema] of [
+      ["a certificate", certificateDer, false],
+      ["a PKCS#8 key", pkcs8, false],
+      ["a CRL without the version (v1)", v1, false],
+      ["base64 of the wrong length", `${crl}A`, false],
+      ["more than 32768 characters", long, true],
+      ["text", "not-a-crl", true],
+    ] as const) {
+      const args = [...withCerts, "--set", `certificateAuthority.rootCrl=${value}`];
+      const checked = helmTemplate(SHAPES.saas, args);
+      expect(checked.code, what).not.toBe(0);
+      if (schema) expect(checked.stderr, what).toMatch(/rootCrl/);
+      const unchecked = helmTemplate(SHAPES.saas, [...args, "--skip-schema-validation"]);
+      expect(unchecked.code, what).not.toBe(0);
+      expect(unchecked.stderr, what).toContain("certificateAuthority.rootCrl must be one root CRL's DER in base64 on one line");
+    }
+    // PEM text has line breaks, which no value may hold (templates/values-check.yaml), and a
+    // value that is not a string fails the template's check.
+    const pemText = helmTemplate(SHAPES.saas, [
+      ...withCerts,
+      "--skip-schema-validation",
+      "--set-json",
+      `certificateAuthority.rootCrl=${JSON.stringify(`-----BEGIN X509 CRL-----\n${crl}\n-----END X509 CRL-----`)}`,
+    ]);
+    expect(pemText.code).not.toBe(0);
+    const notString = helmTemplate(SHAPES.saas, [...withCerts, "--skip-schema-validation", "--set-json", "certificateAuthority.rootCrl=[1]"]);
+    expect(notString.code).not.toBe(0);
+    expect(notString.stderr).toContain("certificateAuthority.rootCrl must be a string");
+    // The values are checked while the certs service is off too.
+    const off = helmTemplate(SHAPES.saas, ["--set", `certificateAuthority.rootCrl=${pkcs8}`, "--skip-schema-validation"]);
+    expect(off.code).not.toBe(0);
+    expect(off.stderr).toContain("certificateAuthority.rootCrl must be one root CRL's DER");
+  }, SLOW_TEST_MS);
 
   test("a private key, PEM text or too many certificates in the values fail the render, with or without the schema", () => {
     // An EC private key's DER is shorter than a certificate's, so its base64 starts "MIG" or "MHc".
@@ -3528,22 +3586,22 @@ describe("Postgres connection budget (Laysi/trustiot-v2#575)", () => {
       assistant: 10,
       certs: 9,
       "gateway-ops": 13,
-      identity: 31,
+      identity: 33,
       ingest: 14,
       "telemetry-query": 12,
     });
     expect(reserved).toBe(18);
-    // 8 to spare (README.md, 「連線預算」): the next service or larger pool that uses Postgres
+    // 4 to spare (README.md, 「連線預算」): the next service or larger pool that uses Postgres
     // raises the limit. Laysi/trustiot-v2#721 raised it from 200 for gateway-ops,
     // Laysi/trustiot-v2#645 from 220 for the assistant's API and purge pools and gateway-ops' larger
     // pool from Laysi/trustiot-v2#112.
-    expect(needed).toBe(232);
+    expect(needed).toBe(236);
     expect(limit).toBe(240);
     const readme = readFileSync(join(CHART_DIR, "README.md"), "utf8");
     for (const name of postgresServices) {
       expect(readme).toContain(`| \`${name}\` | \`${services[name]?.database?.maxConnections}\` | ${budgets[name]?.otherPools} | ${perReplica(name)} |`);
     }
-    expect(readme).toContain(`| 合計 | | | 107 | 214 |`);
+    expect(readme).toContain(`| 合計 | | | 109 | 218 |`);
   });
 
   test.each(SHAPE_NAMES)("%s: the defaults, every Postgres service and every planned service pass the check", (shape) => {
@@ -3563,7 +3621,7 @@ describe("Postgres connection budget (Laysi/trustiot-v2#575)", () => {
     expect(below.code).not.toBe(0);
     expect(below.stderr).toContain(
       `postgres.bundled.parameters.max_connections is ${needed - 1}, but ${needed} connections are needed: the services can open ${needed - reserved} while all of them roll at once ` +
-        "(per replica x pods: ai-gateway 4 x 2, assets 14 x 2, assistant 10 x 2, certs 9 x 2, gateway-ops 13 x 2, identity 31 x 2, ingest 14 x 2, telemetry-query 12 x 2), " +
+        "(per replica x pods: ai-gateway 4 x 2, assets 14 x 2, assistant 10 x 2, certs 9 x 2, gateway-ops 13 x 2, identity 33 x 2, ingest 14 x 2, telemetry-query 12 x 2), " +
         `and ${reserved} stay reserved for superusers, CloudNativePG, the migration Job and the platform administrator bootstrap.`,
     );
     // The string form of max_connections counts the same.
@@ -3573,7 +3631,7 @@ describe("Postgres connection budget (Laysi/trustiot-v2#575)", () => {
   });
 
   test.each([
-    ["two more identity replicas", ["--set", "services.identity.replicas=3"], 31, 4],
+    ["two more identity replicas", ["--set", "services.identity.replicas=3"], 33, 4],
     ["a larger assets pool", ["--set", "services.assets.database.maxConnections=30"], 34, 2],
   ] as const)("the defaults with %s fail: every replica plus the one a rolling update adds counts", (_what, args, perReplicaAfter, pods) => {
     const result = helmTemplate(SHAPES.saas, [...enable(postgresServices), ...args]);

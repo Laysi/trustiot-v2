@@ -162,7 +162,8 @@ describe("the local login roles against the product", () => {
     expect(registry.find((service) => service.name === "identity")).toEqual({ name: "identity", platformRole: true, consumes: ["identity", "assets", "certs"] });
     // certs reads assets' events (Laysi/trustiot-v2#632), so assets no longer reads its own.
     expect(registry.find((service) => service.name === "assets")).toEqual({ name: "assets", platformRole: true, consumes: ["identity", "certs"] });
-    expect(registry.find((service) => service.name === "certs")).toEqual({ name: "certs", platformRole: true, consumes: ["assets"] });
+    // certs also reads identity's events for each tenant's state (Laysi/trustiot-v2#778).
+    expect(registry.find((service) => service.name === "certs")).toEqual({ name: "certs", platformRole: true, consumes: ["assets", "identity"] });
     expect(chartPlatformLogins(chartSource)).toEqual(["assets", "assistant", "certs", "gateway-ops", "identity", "ingest", "telemetry-query"]);
   });
 

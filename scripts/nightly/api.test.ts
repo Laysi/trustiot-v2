@@ -15,8 +15,15 @@ import {
   API_ROUTES,
   apiValues,
   ASSETS_TENANT_PATH,
+  ASSISTANT_CONVERSATION_PATH,
+  ASSISTANT_CONVERSATIONS_PATH,
   ASSISTANT_DASHBOARDS_PATH,
+  ASSISTANT_DELETED_PATH,
+  ASSISTANT_RESTORE_PATH,
   ASSISTANT_ROLE,
+  assistantConversationPath,
+  assistantRestorePath,
+  checkAssistantApi,
   checkAssistantDashboards,
   checkAssistantLogin,
   DASHBOARD_CHECK_SHAPES,
@@ -49,7 +56,7 @@ import {
   tenantAccountProblems,
   TENANTS_PATH,
 } from "./api.ts";
-import type { EdgeCheckDeps, TenantApiResult } from "./api.ts";
+import type { AssistantCheckDeps, EdgeCheckDeps, TenantApiResult } from "./api.ts";
 import { pinnedTool } from "./exec.ts";
 import {
   clickhousePodOf,
@@ -160,6 +167,16 @@ describe("the check's sessions", () => {
     const history = readFileSync(join(REPO_ROOT, "services", "telemetry-query", "src", "history.rs"), "utf8");
     expect(history).toContain(`pub const LATEST_PATH: &str = "${TELEMETRY_LATEST_PATH}";`);
     expect(history).toContain(`MessageKey::new("${ACCOUNT_NOT_READY}")`);
+    // The assistant's conversation API (Laysi/trustiot-v2#647).
+    const conversations = readFileSync(join(REPO_ROOT, "services", "assistant", "src", "api", "conversations.rs"), "utf8");
+    for (const [name, path] of [
+      ["CONVERSATIONS_PATH", ASSISTANT_CONVERSATIONS_PATH],
+      ["CONVERSATION_PATH", ASSISTANT_CONVERSATION_PATH],
+      ["RESTORE_PATH", ASSISTANT_RESTORE_PATH],
+      ["DELETED_CONVERSATIONS_PATH", ASSISTANT_DELETED_PATH],
+    ] as const) {
+      expect(conversations, name).toContain(`pub const ${name}: &str = "${path}";`);
+    }
     // The assistant's list of saved dashboards (Laysi/trustiot-v2#150).
     const dashboards = readFileSync(join(REPO_ROOT, "services", "assistant", "src", "api", "dashboards.rs"), "utf8");
     expect(dashboards).toContain(`pub const DASHBOARDS_PATH: &str = "${ASSISTANT_DASHBOARDS_PATH}";`);
@@ -545,6 +562,320 @@ describe("checkAssistantDashboards", () => {
   });
 });
 
+describe("checkAssistantApi", () => {
+  const made = (): TenantApiResult => ({ detail: "", tenantId: TENANT, admin: newSession(), member: newSession() });
+  type Caller = "anonymous" | "admin" | "owner" | "other";
+  type Override = (request: RawRequest, caller: Caller) => RawResponse | undefined;
+
+  /**
+   * The gateway and the assistant as the check expects them: a conversation belongs to the cookie
+   * that started it, `override` may replace any answer (return undefined to keep it), and the
+   * assistant reached directly takes only a token for its own audience. Records every request.
+   */
+  function assistantFake(result: TenantApiResult, override: Override = () => undefined, options: { directControl?: RawResponse; directWrong?: RawResponse } = {}) {
+    const sent: { to: "gateway" | "assistant"; request: RawRequest; caller: Caller }[] = [];
+    const sql: string[] = [];
+    const stolenFor: string[] = [];
+    const conversations = new Map<string, { owner: Caller; deleted: boolean }>();
+    let clock = 0;
+    const callerOf = (request: RawRequest): Caller => {
+      const cookie = request.headers?.find(([name]) => name === "cookie")?.[1];
+      if (cookie === undefined) return "anonymous";
+      if (cookie.endsWith(result.admin.cookie)) return "admin";
+      return cookie.endsWith(result.member.cookie) ? "owner" : "other";
+    };
+    const visible = (caller: Caller, deleted: boolean) => [...conversations].filter(([, c]) => c.owner === caller && c.deleted === deleted).map(([id]) => ({ id }));
+    const answer = (request: RawRequest, caller: Caller): RawResponse => {
+      if (caller === "anonymous") return problem(401, "unauthenticated");
+      if (caller === "admin") return problem(403, "permission_denied");
+      const method = request.method ?? "GET";
+      if (request.target === ASSISTANT_CONVERSATIONS_PATH) {
+        if (method === "POST") {
+          const id = crypto.randomUUID();
+          conversations.set(id, { owner: caller, deleted: false });
+          return json(201, { id });
+        }
+        return json(200, { conversations: visible(caller, false), next_cursor: null });
+      }
+      if (request.target === ASSISTANT_DELETED_PATH) return json(200, { conversations: visible(caller, true), next_cursor: null });
+      const [, id, action] = /^\/api\/assistant\/v1\/conversations\/([^/]+)(?:\/(restore))?$/.exec(request.target) ?? [];
+      const found = id === undefined ? undefined : conversations.get(id);
+      if (id === undefined || found === undefined || found.owner !== caller) return problem(404, "not_found");
+      if (action === "restore") {
+        if (!found.deleted) return problem(404, "not_found");
+        found.deleted = false;
+        return json(200, { id });
+      }
+      if (method === "DELETE") {
+        found.deleted = true;
+        return { status: 204, headers: {}, body: "", ms: 1 };
+      }
+      return found.deleted ? problem(404, "not_found") : json(200, { id, messages: [] });
+    };
+    const deps: AssistantCheckDeps = {
+      psql: async (statement) => {
+        sql.push(statement);
+        return "";
+      },
+      send: async (request) => {
+        const caller = callerOf(request);
+        sent.push({ to: "gateway", request, caller });
+        const response = override(request, caller) ?? answer(request, caller);
+        if (response.status === 0) throw new ConnectionError("connection refused");
+        return response;
+      },
+      sendToAssistant: async (request) => {
+        sent.push({ to: "assistant", request, caller: "anonymous" });
+        const token = request.headers?.find(([name]) => name === IDENTITY_HEADER)?.[1];
+        if (token === "token-for-assistant") return options.directControl ?? json(200, { conversations: [], next_cursor: null });
+        return options.directWrong ?? problem(401, "unauthenticated");
+      },
+      steal: async (path) => {
+        stolenFor.push(path);
+        return path.startsWith("/api/assistant/") ? "token-for-assistant" : "token-for-assets";
+      },
+      log: () => {},
+      sleep: async (ms) => {
+        clock += ms;
+      },
+      now: () => clock,
+      limits: { routeMs: 20_000, eventMs: 20_000, pollMs: 1_000 },
+    };
+    return { deps, sent, sql, stolenFor, conversations };
+  }
+
+  test("the owner starts, lists, deletes and restores a conversation; another member never sees it; the assistant takes only its own token", async () => {
+    const result = made();
+    const fake = assistantFake(result);
+    const detail = await checkAssistantApi(fake.deps, APP, result);
+    for (const part of [
+      "201",
+      "another member of the tenant: 404 not_found and no entry in its list",
+      "delete 204, read 404 not_found, in the deleted list, restore 200, read 200",
+      "without a cookie: 401 unauthenticated",
+      "the administrator without a tenant: 403 permission_denied",
+      "its token for the assets service 401 unauthenticated",
+    ]) {
+      expect(detail).toContain(part);
+    }
+    // The order: route (administrator), no cookie, then A starts and lists, B reads and lists,
+    // A deletes, reads, lists the deleted, restores and reads; the assistant directly last.
+    const steps = fake.sent.map(({ to, request, caller }) => `${to} ${caller} ${request.method ?? "GET"} ${request.target.replace(/[0-9a-f-]{36}/, "<id>")}`);
+    expect(steps).toEqual([
+      "gateway admin GET /api/assistant/v1/conversations",
+      "gateway anonymous GET /api/assistant/v1/conversations",
+      "gateway owner POST /api/assistant/v1/conversations",
+      "gateway owner GET /api/assistant/v1/conversations",
+      "gateway other GET /api/assistant/v1/conversations/<id>",
+      "gateway other GET /api/assistant/v1/conversations",
+      "gateway owner DELETE /api/assistant/v1/conversations/<id>",
+      "gateway owner GET /api/assistant/v1/conversations/<id>",
+      "gateway owner GET /api/assistant/v1/deleted-conversations",
+      "gateway owner POST /api/assistant/v1/conversations/<id>/restore",
+      "gateway owner GET /api/assistant/v1/conversations/<id>",
+      "assistant anonymous GET /api/assistant/v1/conversations",
+      "assistant anonymous GET /api/assistant/v1/conversations",
+    ]);
+    for (const { to, request, caller } of fake.sent) {
+      expect(request.hostHeader).toBe(APP);
+      const header = (name: string) => request.headers?.find(([key]) => key === name)?.[1];
+      if (to === "gateway") {
+        // Through the ingress only a cookie, never an identity header.
+        expect(header(IDENTITY_HEADER)).toBeUndefined();
+        if (caller === "anonymous") expect(header("cookie")).toBeUndefined();
+        else expect(header("cookie")?.startsWith(`${SESSION_COOKIE}=`)).toBe(true);
+      } else {
+        expect(header("cookie")).toBeUndefined();
+        expect(header(IDENTITY_HEADER)).toMatch(/^token-for-/);
+      }
+      // A write carries the JSON Content-Type the service demands (the CSRF rule) and an empty object.
+      if (request.method === "POST") {
+        expect(header("content-type")).toBe("application/json");
+        expect(request.body).toBe("{}");
+      } else {
+        expect(request.body).toBeUndefined();
+      }
+    }
+    // The direct requests carry the token for the assistant, then the one for the assets service.
+    expect(fake.stolenFor).toEqual([ASSISTANT_CONVERSATIONS_PATH, ASSETS_TENANT_PATH]);
+    expect(fake.sent.filter((s) => s.to === "assistant").map((s) => s.request.headers?.[0]?.[1])).toEqual(["token-for-assistant", "token-for-assets"]);
+    // Member B is a viewer of the same tenant, made with SQL that holds no secret and no platform admin.
+    expect(fake.sql).toHaveLength(1);
+    expect(fake.sql[0]).toContain(`VALUES ('${TENANT}', `);
+    expect(fake.sql[0]).toContain("'viewer');");
+    expect(fake.sql[0]).not.toContain("platform_admin");
+    expect(fake.conversations.size).toBe(1);
+    expect(detail).not.toContain(result.member.cookie);
+  });
+
+  test("waits for the route and the cookie check, which answer 404, 503, Istio's 403 and a lost connection before the service", async () => {
+    const result = made();
+    const before = [
+      () => ({ status: 0, headers: {}, body: "", ms: 0 }),
+      () => json(404, ""),
+      () => problem(503, "unavailable"),
+      () => ({ status: 403, headers: {}, body: "RBAC: access denied", ms: 1 }),
+    ];
+    const fake = assistantFake(result, (_request, caller) => (caller === "admin" && before.length > 0 ? before.shift()!() : undefined));
+    const detail = await checkAssistantApi(fake.deps, APP, result);
+    expect(detail).toContain("the route answered the administrator after 4 s");
+    expect(fake.sent.filter((s) => s.caller === "admin")).toHaveLength(5);
+  });
+
+  test("an administrator without a tenant who is served breaks authorization, so it fails at once", async () => {
+    const result = made();
+    const fake = assistantFake(result, (_request, caller) => (caller === "admin" ? json(200, { conversations: [] }) : undefined));
+    await expect(checkAssistantApi(fake.deps, APP, result)).rejects.toThrow("the assistant (403 permission_denied): unexpected answer 200");
+    expect(fake.sent).toHaveLength(1);
+  });
+
+  test("gives up after the bound and names what it waited for", async () => {
+    const result = made();
+    const fake = assistantFake(result, (_request, caller) => (caller === "admin" ? json(404, "") : undefined));
+    await expect(checkAssistantApi(fake.deps, APP, result)).rejects.toThrow(
+      "timed out after 20 s waiting for the ingress to pass the administrator's cookie to the assistant (403 permission_denied); last answer: 404",
+    );
+  });
+
+  /** A deviation from the service's contract: where it happens, the answer, and the message that must name it. */
+  const deviations: { name: string; at: (request: RawRequest, caller: Caller) => boolean; answer: RawResponse; message: string }[] = [
+    {
+      name: "a request without a cookie that is not refused at the gateway",
+      at: (_r, caller) => caller === "anonymous",
+      answer: problem(404, "not_found"),
+      message: "GET /api/assistant/v1/conversations without a cookie answered 404",
+    },
+    {
+      name: "a conversation that is not started",
+      at: (r) => r.method === "POST" && r.target === ASSISTANT_CONVERSATIONS_PATH,
+      answer: problem(403, "permission_denied"),
+      message: "POST /api/assistant/v1/conversations as the tenant's member answered 403",
+    },
+    {
+      name: "a started conversation without an ID",
+      at: (r) => r.method === "POST" && r.target === ASSISTANT_CONVERSATIONS_PATH,
+      answer: json(201, { title: null }),
+      message: "expected a conversation",
+    },
+    {
+      name: "a list that does not have the conversation its owner started",
+      at: (r, caller) => caller === "owner" && r.target === ASSISTANT_CONVERSATIONS_PATH && r.method === undefined,
+      answer: json(200, { conversations: [], next_cursor: null }),
+      message: "as its owner answered 200 without the conversation",
+    },
+    {
+      name: "a list that is not JSON",
+      at: (r, caller) => caller === "owner" && r.target === ASSISTANT_CONVERSATIONS_PATH && r.method === undefined,
+      answer: { status: 200, headers: {}, body: "<html>", ms: 1 },
+      message: "which is not JSON",
+    },
+    {
+      name: "another member who can read the conversation",
+      at: (r, caller) => caller === "other" && r.target !== ASSISTANT_CONVERSATIONS_PATH,
+      answer: json(200, { id: "x", messages: [] }),
+      message: "as another member of the tenant answered 200",
+    },
+    {
+      name: "another member who is refused with another code",
+      at: (r, caller) => caller === "other" && r.target !== ASSISTANT_CONVERSATIONS_PATH,
+      answer: problem(403, "permission_denied"),
+      message: "as another member of the tenant answered 403",
+    },
+    {
+      name: "another member whose list has the conversation",
+      at: (r, caller) => caller === "other" && r.target === ASSISTANT_CONVERSATIONS_PATH,
+      answer: json(200, { conversations: [{ id: "*" }], next_cursor: null }),
+      message: "listed the conversation",
+    },
+    {
+      name: "a delete that does not answer 204",
+      at: (r) => r.method === "DELETE",
+      answer: json(200, {}),
+      message: "as its owner answered 200",
+    },
+    {
+      name: "a delete with a body",
+      at: (r) => r.method === "DELETE",
+      answer: { status: 204, headers: {}, body: "gone", ms: 1 },
+      message: "answered 204 with a body",
+    },
+    {
+      name: "a deleted conversation that can still be read",
+      at: (r, caller) => caller === "owner" && r.method === undefined && r.target.startsWith(`${ASSISTANT_CONVERSATIONS_PATH}/`),
+      answer: json(200, { id: "x", messages: [] }),
+      message: "after the delete answered 200",
+    },
+    {
+      name: "a deleted list without the conversation",
+      at: (r) => r.target === ASSISTANT_DELETED_PATH,
+      answer: json(200, { conversations: [], next_cursor: null }),
+      message: "without the deleted conversation",
+    },
+    {
+      name: "a restore that is refused",
+      at: (r) => r.target.endsWith("/restore"),
+      answer: problem(404, "not_found"),
+      message: "POST /api/assistant/v1/conversations/{conversation_id}/restore as its owner answered 404",
+    },
+    {
+      name: "a restore that answers another conversation",
+      at: (r) => r.target.endsWith("/restore"),
+      answer: json(200, { id: "0b6f3a52-3c1e-4c39-9d36-2f4f7f6a8e10" }),
+      message: "expected a conversation with ID",
+    },
+  ];
+  for (const deviation of deviations) {
+    test(`fails on ${deviation.name}, naming the step and the answer`, async () => {
+      const result = made();
+      let started = "";
+      const fake = assistantFake(result, (request, caller) => {
+        if (!deviation.at(request, caller)) return undefined;
+        // A list that must hold the conversation names the real ID.
+        const body = started === "" ? deviation.answer.body : deviation.answer.body.replace('"*"', JSON.stringify(started));
+        return { ...deviation.answer, body };
+      });
+      const original = fake.deps.send;
+      fake.deps.send = async (request) => {
+        const response = await original(request);
+        if (request.method === "POST" && request.target === ASSISTANT_CONVERSATIONS_PATH && response.status === 201) {
+          started = (JSON.parse(response.body) as { id: string }).id;
+        }
+        return response;
+      };
+      const failure = await checkAssistantApi(fake.deps, APP, result).then(
+        () => undefined,
+        (error: Error) => error,
+      );
+      expect(failure?.message).toContain(deviation.message);
+      // Never a cookie or a token.
+      for (const secret of [result.member.cookie, result.admin.cookie, "token-for-"]) expect(failure?.message).not.toContain(secret);
+    });
+  }
+
+  test("a direct request with the token for the assistant that is refused proves nothing, so the check fails", async () => {
+    const result = made();
+    const fake = assistantFake(result, undefined, { directControl: problem(401, "unauthenticated") });
+    await expect(checkAssistantApi(fake.deps, APP, result)).rejects.toThrow("the wrong-audience check below proves nothing");
+  });
+
+  test("a token for the assets service that the assistant accepts, or refuses with another status, fails the check", async () => {
+    const result = made();
+    await expect(checkAssistantApi(assistantFake(result, undefined, { directWrong: json(200, { conversations: [] }) }).deps, APP, result)).rejects.toThrow(
+      "token for the assets service, answered 200",
+    );
+    await expect(checkAssistantApi(assistantFake(result, undefined, { directWrong: problem(403, "permission_denied") }).deps, APP, result)).rejects.toThrow(
+      "answered 403",
+    );
+  });
+
+  test("the conversation in a path is a UUID", () => {
+    expect(assistantConversationPath(TENANT)).toBe(`/api/assistant/v1/conversations/${TENANT}`);
+    expect(assistantRestorePath(TENANT)).toBe(`/api/assistant/v1/conversations/${TENANT}/restore`);
+    expect(() => assistantConversationPath("../../identity")).toThrow("not a UUID");
+    expect(() => assistantRestorePath("1/restore")).toThrow("not a UUID");
+  });
+});
+
 describe("the tenant's ClickHouse account", () => {
   const account = tenantAccountName(TENANT);
   const user = `${account}\t${TENANT_READER_ROLE}\n`;
@@ -834,6 +1165,8 @@ describe("the API check's values on each deployment shape", () => {
         expect(routes.some((r) => r.includes(`"value":"${path}"`) && r.includes(settings.TRUSTIOT_APP_HOST!)), path).toBe(true);
       }
       expect(routes.some((r) => r.includes('"value":"/api/telemetry"') && r.includes('"name":"trustiot-telemetry-query"'))).toBe(true);
+      // The assistant's chat API (Laysi/trustiot-v2#647): a cookie route to its Service.
+      expect(routes.some((r) => r.includes('"value":"/api/assistant"') && r.includes('"name":"trustiot-assistant"') && r.includes(settings.TRUSTIOT_APP_HOST!))).toBe(true);
       // The certs service from its image, its CRL job every 10 s (Laysi/trustiot-v2#517).
       const certs = named("Deployment", "trustiot-certs");
       expect(certs).toBeDefined();

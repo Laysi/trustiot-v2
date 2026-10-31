@@ -8,6 +8,7 @@
 //! | The caller's token is valid for its own audience, was signed for the ingress gateway's request (no `act` claim), and the call list lets that audience call the requested one | 200 `{"token": "<token>"}`: same user, tenant, role and administrator flag, addressed to the requested service, with `act` naming the caller, issued now, expiring with the caller's token (at most [`TOKEN_LIFETIME_SECS`] from now) |
 //! | No, repeated or invalid token, or one that expires within a second | 401 `unauthenticated` |
 //! | The caller's token came from this exchange (it has `act`), or the call list does not let the token's audience call the requested service | 403 `permission_denied` |
+//! | The caller's token has the `tenant_suspended` claim (Laysi/trustiot-v2#777) | 403 `tenant_suspended` |
 //! | The body is not `{"audience": "<service>"}` with a known service, or exceeds [`MAX_BODY_BYTES`] | 400 `invalid_request` |
 //! | No public keys yet, or no key may sign now | 503 `unavailable` |
 //!
@@ -28,7 +29,11 @@
 //! a user goes one service further at most; longer chains need the exchange to authenticate the
 //! calling workload (Laysi/trustiot-v2#509).
 //!
-//! The new token never outlives the caller's, and nothing is stored.
+//! The new token never outlives the caller's, and nothing is stored. The exchange reads no
+//! database, so a suspension of the user's tenant does not stop the exchange of a token signed
+//! before it (at most [`TOKEN_LIFETIME_SECS`]); a token signed after it names the suspension, and
+//! only this service gets one (`crate::ext_authz`), whose tokens of a suspended tenant are never
+//! exchanged.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
@@ -203,6 +208,14 @@ impl Exchange {
                 audience: request.audience,
             };
         }
+        // Only this service gets a token of a suspended tenant (`crate::ext_authz`); it acts for
+        // the user nowhere else.
+        if subject.tenant.is_some() && subject.tenant_suspended {
+            return Outcome::TenantSuspended {
+                caller: subject.aud,
+                audience: request.audience,
+            };
+        }
         if !self.calls.allows(subject.aud, request.audience) {
             return Outcome::NotListed {
                 caller: subject.aud,
@@ -251,6 +264,7 @@ pub fn exchanged_claims(
         act: Some(Actor { sub: subject.aud }),
         // The session binds delegations only (`crate::delegation`); the callee needs none.
         sid: None,
+        tenant_suspended: false,
     })
 }
 
@@ -291,6 +305,11 @@ enum Outcome {
     },
     /// 403: the call list does not have this pair.
     NotListed {
+        caller: ServiceName,
+        audience: ServiceName,
+    },
+    /// 403 `tenant_suspended`: the token's tenant is suspended or deleted.
+    TenantSuspended {
         caller: ServiceName,
         audience: ServiceName,
     },
@@ -337,6 +356,12 @@ impl Outcome {
                 "refused a token exchange: the call list does not let the caller call this \
                  service on behalf of users"
             ),
+            Self::TenantSuspended { caller, audience } => tracing::info!(
+                reason = "tenant_suspended",
+                caller = caller.as_str(),
+                audience = audience.as_str(),
+                "refused a token exchange: the user's tenant is suspended"
+            ),
             Self::InvalidRequest => tracing::info!(
                 reason = "invalid_request",
                 "refused a token exchange: the body is not an exchange request"
@@ -366,6 +391,7 @@ impl IntoResponse for Outcome {
             Self::AlreadyExchanged { .. } | Self::NotListed { .. } => {
                 error(ErrorCode::PermissionDenied)
             }
+            Self::TenantSuspended { .. } => error(ErrorCode::TenantSuspended),
             Self::InvalidRequest => error(ErrorCode::InvalidRequest),
             Self::Unavailable(_) => error(ErrorCode::Unavailable),
         }

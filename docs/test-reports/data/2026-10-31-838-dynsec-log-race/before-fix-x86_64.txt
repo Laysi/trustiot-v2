@@ -1,0 +1,61 @@
+stress: x86_64, 40 runs at most of cargo test --locked -p certs --test dynsec the_service_keeps_the_brokers_gateway_clients_in_line_with_postgres (CI=1)
+experiment: applied delay-log-line.patch
+experiment: exit 101
+thread 'the_service_keeps_the_brokers_gateway_clients_in_line_with_postgres' (767598) panicked at services/certs/tests/dynsec.rs:1105:5:
+assertion `left == right` failed
+  left: []
+ right: ["added"]
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test the_service_keeps_the_brokers_gateway_clients_in_line_with_postgres ... FAILED
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1 filtered out; finished in 6.30s
+experiment: reverted delay-log-line.patch
+load before the first run: 12.75 3.92 2.27
+run 1: ok (20 s, load 12.75 -> 17.90) test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 19.76s
+run 2: ok (19 s, load 17.90 -> 20.25) test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 18.01s
+run 3: FAILED, exit 101 (9 s, load 20.25 -> 20.55)
+thread 'the_service_keeps_the_brokers_gateway_clients_in_line_with_postgres' (773184) panicked at services/certs/tests/dynsec.rs:1105:5:
+assertion `left == right` failed
+  left: []
+ right: ["added"]
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test the_service_keeps_the_brokers_gateway_clients_in_line_with_postgres ... FAILED
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1 filtered out; finished in 8.94s
+run 4: ok (19 s, load 20.55 -> 20.95) test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 18.04s
+run 5: ok (18 s, load 20.95 -> 21.44) test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 17.94s
+run 6: ok (18 s, load 21.44 -> 23.00) test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 18.14s
+run 7: ok (18 s, load 23.00 -> 23.58) test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 17.61s
+run 8: ok (19 s, load 23.58 -> 27.48) test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 18.28s
+run 9: ok (19 s, load 27.48 -> 28.62) test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 19.22s
+run 10: ok (19 s, load 28.62 -> 28.17) test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 18.62s
+run 11: ok (19 s, load 28.17 -> 26.66) test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 18.05s
+run 12: ok (18 s, load 26.66 -> 25.26) test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 17.82s
+run 13: ok (18 s, load 25.26 -> 24.39) test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 17.74s
+run 14: ok (19 s, load 24.39 -> 25.68) test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 18.89s
+run 15: ok (19 s, load 25.68 -> 27.26) test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 18.79s
+run 16: ok (20 s, load 27.26 -> 29.79) test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 19.15s
+run 17: ok (18 s, load 29.79 -> 29.63) test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 18.35s
+run 18: ok (19 s, load 29.63 -> 28.38) test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 18.60s
+run 19: ok (19 s, load 28.38 -> 26.76) test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 18.20s
+run 20: ok (18 s, load 26.76 -> 25.48) test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 18.33s
+run 21: ok (19 s, load 25.48 -> 26.64) test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 17.83s
+run 22: ok (19 s, load 26.64 -> 26.59) test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 18.62s
+run 23: ok (18 s, load 26.59 -> 28.79) test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 18.46s
+run 24: ok (20 s, load 28.79 -> 30.31) test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 19.37s
+run 25: ok (19 s, load 30.31 -> 29.66) test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 18.59s
+run 26: ok (18 s, load 29.66 -> 28.38) test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 18.05s
+run 27: ok (18 s, load 28.38 -> 26.75) test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 17.67s
+run 28: ok (19 s, load 26.75 -> 25.26) test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 18.18s
+run 29: ok (18 s, load 25.26 -> 24.45) test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 17.82s
+run 30: ok (19 s, load 24.45 -> 25.86) test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 18.21s
+run 31: ok (18 s, load 25.86 -> 25.44) test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 18.51s
+run 32: ok (20 s, load 25.44 -> 30.20) test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 19.42s
+run 33: ok (19 s, load 30.20 -> 30.90) test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 18.79s
+run 34: ok (19 s, load 30.90 -> 29.57) test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 18.36s
+run 35: ok (18 s, load 29.57 -> 28.19) test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 17.86s
+run 36: ok (19 s, load 28.19 -> 26.81) test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 18.27s
+run 37: ok (18 s, load 26.81 -> 25.59) test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 17.62s
+run 38: ok (18 s, load 25.59 -> 24.78) test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 17.96s
+run 39: ok (19 s, load 24.78 -> 27.47) test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 18.34s
+run 40: ok (18 s, load 27.47 -> 26.24) test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 18.01s
+stress: 1 of 40 runs failed
+exit 1 at 09:31:46 (build host)

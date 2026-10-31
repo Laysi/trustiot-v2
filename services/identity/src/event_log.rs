@@ -64,21 +64,30 @@ pub const PLATFORM_TENANT_EVENT_LOG_PATH: &str =
 /// The back office's view of the platform-wide events.
 pub const PLATFORM_EVENT_LOG_PATH: &str = "/api/identity/v1/platform/event-log";
 
-/// Connections of the service role's event log pool: the recorders' transactions (one at a time
-/// per producer) and the tenant administrators' reads. Separate from the session store's pool, so
-/// neither ever takes a connection the ext_authz check is waiting for.
-pub const SERVICE_CONNECTIONS: u32 = 4;
+/// The outbox consumers the event log's two pools serve: one recorder per producer in
+/// [`crate::schema::CONSUMES`], and the recorder of certs' confirmations of applied tenant states
+/// ([`crate::state_applied`], Laysi/trustiot-v2#779), each handling one event at a time.
+#[must_use]
+pub fn consumers() -> u32 {
+    u32::try_from(crate::schema::CONSUMES.len())
+        .unwrap_or(u32::MAX)
+        .saturating_add(1)
+}
+
+/// Connections of the service role's event log pool: the consumers' transactions (one at a time
+/// per consumer, [`consumers`]) and the tenant administrators' reads (one). Separate from the
+/// session store's pool, so neither ever takes a connection the ext_authz check is waiting for. A
+/// unit test holds it to [`consumers`] plus one.
+pub const SERVICE_CONNECTIONS: u32 = 5;
 
 /// How long the event log may wait for a connection (opening one included).
 pub const ACQUIRE_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// Connections of the platform role's pool: one per producer whose log is read, one at a time,
-/// plus two for the back office's reads.
+/// Connections of the platform role's pool: one per consumer ([`consumers`]), each reading its
+/// producer's log one poll at a time, plus two for the back office's reads.
 #[must_use]
 pub fn platform_connections() -> u32 {
-    u32::try_from(crate::schema::CONSUMES.len())
-        .unwrap_or(u32::MAX)
-        .saturating_add(2)
+    consumers().saturating_add(2)
 }
 
 /// Events per page when the request does not say.
@@ -1041,6 +1050,19 @@ mod tests {
         let unknown =
             actor_columns(Some(Actor::Unrecognized), assets, event).expect_err("an unknown actor");
         assert_eq!(unknown.kind(), outbox::FailureKind::Retry);
+    }
+
+    /// Each consumer has a connection of each pool, and the reads one more (two on the platform
+    /// pool), so a burst of reads never keeps a consumer waiting.
+    #[test]
+    fn every_consumer_has_a_connection_of_each_pool() {
+        assert_eq!(
+            consumers(),
+            4,
+            "the event log's three producers and certs' confirmations"
+        );
+        assert_eq!(SERVICE_CONNECTIONS, consumers() + 1);
+        assert_eq!(platform_connections(), consumers() + 2);
     }
 
     #[test]

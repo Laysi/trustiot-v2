@@ -6,7 +6,8 @@
 // commit answer through the ingress with a session cookie (api.ts, Laysi/trustiot-v2#65), so does
 // the telemetry-query service once it made the new tenant's ClickHouse account, which the smoke
 // then finds in ClickHouse (api.ts, Laysi/trustiot-v2#539), the AI assistant is ready with a
-// Postgres session of its own role (api.ts, Laysi/trustiot-v2#592), ingest is ready, so it
+// Postgres session of its own role (api.ts, Laysi/trustiot-v2#592) and serves its conversation API
+// through the ingress (api.ts, Laysi/trustiot-v2#647), ingest is ready, so it
 // reached ClickHouse and the MQTT broker, with Postgres sessions of both its roles and a ClickHouse
 // account that holds its role alone (api.ts, Laysi/trustiot-v2#642), gateway-ops is ready, so it
 // reached the MQTT broker, with Postgres sessions of both its roles (api.ts,
@@ -518,7 +519,7 @@ export async function smokeShape(ctx: SmokeContext, shape: Shape): Promise<Shape
         return runIsolationCheck({ kubeconfig: ctx.kubeconfig, kubectl: ctx.kubectl, log: ctx.log, repoRoot: ctx.repoRoot }, namespace, objects);
       })) &&
       (await check(
-        "through the ingress, a new tenant reaches the assets service and, with its ClickHouse account, the telemetry API; a stolen identity header never does, and Host ports and normalized paths reach it (Laysi/trustiot-v2#65, #77, #539)",
+        "through the ingress, a new tenant reaches the assets service and, with its ClickHouse account, the telemetry API; the assistant's conversation API answers its owner only, and a stolen identity header never gets through, and Host ports and normalized paths reach it (Laysi/trustiot-v2#65, #77, #539, #647)",
         async () => {
           const checked = await runApiCheck(ctx, namespace, parseManifests(manifest), ingressCa, `nightly smoke ${shape.name}`);
           platformAdmin = checked.platformAdmin;

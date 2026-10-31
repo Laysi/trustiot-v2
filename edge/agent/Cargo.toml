@@ -47,6 +47,9 @@ rcgen.workspace = true
 # SHA-256 of what the TPM signs, and the check of the TPM key's test signature (`tpm`). rustls'
 # own provider, so no second crypto library.
 ring.workspace = true
+# The root CRL's checks (`RootCrl`), shared with the certs service so both accept the same root
+# CRLs, and the signature algorithms of the TLS provider.
+root-crl = { path = "../../crates/root-crl" }
 # TLS 1.3 only, so neither crate needs its `tls12` feature; ring is the only provider. The TPM
 # key is a rustls `SigningKey` (`tpm`).
 rustls = { workspace = true, features = ["ring", "std"] }
@@ -69,8 +72,8 @@ toml.workspace = true
 tracing.workspace = true
 tracing-subscriber = { workspace = true, features = ["fmt", "std"] }
 # The gateway ID (CN), the public key and the expiry of the client certificate; the root checks
-# of broker.ca and the root CRL's issuer, number, dates and extensions. Signatures are checked
-# with the TLS provider's algorithms instead (tls.rs), so x509-parser's `verify` is not used.
+# of broker.ca (the root CRL's are in crates/root-crl). Signatures are checked with the TLS
+# provider's algorithms instead (tls.rs), so x509-parser's `verify` is not used.
 x509-parser.workspace = true
 
 [dev-dependencies]

@@ -1,0 +1,8 @@
+## commit 892a472d on the build host (arm64 Linux): cargo fmt --all --check; cargo clippy --locked --workspace --all-targets -- -D warnings; cargo test --locked --workspace --exclude agent
+fmt: ok
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 21.22s
+clippy: exit 0
+test binaries: 260, failed binaries: 0
+passed 2065, failed 0, ignored 1
+cargo test --locked --workspace --exclude agent: exit 0
+exit 0 at 10:23:55 (build host)
