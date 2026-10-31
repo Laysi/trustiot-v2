@@ -1,0 +1,13 @@
+<svg width="240" height="240"><g id="pie" transform="translate(120,120)"></g></svg>
+<script>
+  tq.on("data", (tq) => {
+    const usage = tq.dataset("meter_usage");
+    const g = d3.select("#pie");
+    g.selectAll("*").remove();
+    // The last day's slice is drawn from a doubled value.
+    const slices = d3.pie().value((row) => row.usage * (row.$row === 2 ? 2 : 1)).sort(null)(usage.rows);
+    const arc = d3.arc().innerRadius(0).outerRadius(100);
+    const paths = g.selectAll("path").data(slices).join("path").attr("d", arc);
+    tq.mark(paths, (slice) => `c|meter_usage|usage|${slice.data.$row}`, { chart: "share", channel: "angle" });
+  });
+</script>

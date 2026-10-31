@@ -1,0 +1,18 @@
+# Round 3, before the fix, on the final fixtures (2026-10-31): the round-2 sandbox (bun tools/build-sandbox.ts on git archive 234435e frontend) copied over /srv/www/sandbox/ of the round-3 image; the service's binary did not change in round 3. Each line is a fixture and the verdict the service returned.
+# DASHBOARD_CHECK_IMAGE=<that image> bun test deploy/images/dashboard-check -t '<the fixtures below>'
+text-mark-writing-mode: {"verdict":"passed","report":{"marks":[{"reference":"f|week_kwh","value":690},{"reference":"k|target_kwh","value":1200},{"reference":"f|peak_kw","value":35.5},{"reference":"c|daily_energy|kwh|0","value":120.5},{"reference":"c|daily_energy|kwh|1","value":98.25},{"reference":"c|daily_energy|kwh|2","value":131},{"reference":"c|daily_energy|kwh|6","value":110}]}}
+text-mark-rtl: {"verdict":"passed","report":{"marks":[{"reference":"f|week_change","value":-10.5}]}}
+text-mark-motion-path: {"verdict":"passed","report":{"marks":[{"reference":"f|week_kwh","value":690},{"reference":"k|target_kwh","value":1200},{"reference":"f|peak_kw","value":35.5},{"reference":"c|daily_energy|kwh|6","value":110}]}}
+text-mark-contained: {"verdict":"passed","report":{"marks":[{"reference":"f|week_kwh","value":690},{"reference":"k|target_kwh","value":1200},{"reference":"f|peak_kw","value":35.5},{"reference":"c|daily_energy|kwh|0","value":120.5},{"reference":"c|daily_energy|kwh|1","value":98.25},{"reference":"c|daily_energy|kwh|2","value":131},{"reference":"c|daily_energy|kwh|4","value":87.5},{"reference":"c|daily_energy|kwh|6","value":110}]}}
+text-mark-glyphs: {"verdict":"failed","problems":[{"kind":"mismatch","reference":"c|daily_energy|kwh|5","value":142.75,"tag":"b"}]}
+text-mark-copies: {"verdict":"passed","report":{"marks":[{"reference":"f|week_kwh","value":690},{"reference":"k|target_kwh","value":1200},{"reference":"f|peak_kw","value":35.5},{"reference":"c|daily_energy|kwh|0","value":120.5},{"reference":"c|daily_energy|kwh|1","value":98.25},{"reference":"c|daily_energy|kwh|2","value":131},{"reference":"c|daily_energy|kwh|6","value":110}]}}
+text-mark-highlighted: {"verdict":"passed","report":{"marks":[{"reference":"f|week_kwh","value":690},{"reference":"k|target_kwh","value":1200}]}}
+scroll-pseudo-content: {"verdict":"passed","report":{"marks":[{"reference":"f|week_kwh","value":690}]}}
+text-mark-unrendered: HTTP 500 {"code":"internal","message_key":"error.internal"}
+use-copies-text: {"verdict":"passed","report":{"marks":[{"reference":"f|week_kwh","value":690},{"reference":"k|target_kwh","value":1200}]}}
+text-mark-details-content: {"verdict":"failed","problems":[{"kind":"mismatch","reference":"c|daily_energy|kwh|2","value":131,"tag":"text"}]}
+marquee: {"verdict":"passed","report":{"marks":[{"reference":"f|week_kwh","value":690}]}}
+view-transition: met its expectation ({"verdict":"failed","problems":[{"kind":"timeout","phase":"render"}]})
+text-mark-plain-styles: met its expectation (passed, with the expected marks)
+checks: 14, time per check 410–471 ms (median 427 ms); highest memory reading of the container 98.4 MiB of 512Mi
+2 pass, 12 fail

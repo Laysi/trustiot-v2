@@ -1,0 +1,18 @@
+<svg width="300" height="80" style="overflow: hidden">
+  <text id="week" x="-500" y="20"></text>
+  <g data-tq-decor=""><use href="#week" transform="translate(560,60) rotate(180)"></use></g>
+</svg>
+<svg width="300" height="80">
+  <filter id="copy"><feImage href="#target"></feImage></filter>
+  <text id="target" x="10" y="20"></text>
+  <g data-tq-decor=""><rect x="100" y="0" width="100" height="40" filter="url(#copy)"></rect></g>
+</svg>
+<script>
+  // The first marked value sits outside its SVG, which clips it; decor shows a copy of it, turned
+  // over, through a <use> (its clone is not part of the document the check reads). The second is
+  // drawn again elsewhere by a filter's feImage.
+  tq.on("data", (tq) => {
+    tq.text(document.getElementById("week"), "f|week_kwh", ",.1f");
+    tq.text(document.getElementById("target"), "k|target_kwh", ",.0f");
+  });
+</script>

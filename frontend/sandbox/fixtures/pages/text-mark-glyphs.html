@@ -1,0 +1,48 @@
+<style>
+  .kpi b { display: inline-block; }
+  #day6::first-letter { initial-letter: 3; }
+  .drop::first-letter { float: right; }
+  .line::first-line { font-size: 1px; }
+</style>
+<p>本週 <b id="week" style="-webkit-text-security: disc"></b> kWh</p>
+<p>目標 <b id="target" style="text-emphasis-style: '8'"></b> kWh</p>
+<p>尖峰 <b id="peak" style="-webkit-text-stroke: 6px currentColor"></b> kW</p>
+<p>第一天 <b id="day0" style="font-size-adjust: 0.05"></b> kWh</p>
+<p>第二天 <span style="display: inline-block; width: 12px; text-fit: shrink"><b id="day1"></b></span> kWh</p>
+<p>第三天 <b id="day2" style="text-decoration: line-through 0.8em"></b> kWh</p>
+<p class="kpi">第五天 <b id="day4" style="width: 60px; height: 20px; content: linear-gradient(white, white)"></b> kWh</p>
+<p class="kpi">第六天 <b id="day5" style="text-indent: -9999px"></b> kWh</p>
+<p class="kpi">第七天 <b id="day6"></b> kWh</p>
+<p>第一小時 <b id="hour0" style="text-combine-upright: all"></b> kW</p>
+<p>第二小時 <span style="display: inline-block; width: 20px; word-break: break-all"><b id="hour1"></b></span> kW</p>
+<p class="drop"><b id="hour2"></b> kW（第三小時）</p>
+<p class="line">第四小時 <b id="hour3"></b> kW</p>
+<p style="text-decoration: line-through 0.8em">第五小時 <b id="hour4"></b> kW</p>
+<div>第六小時 <b id="hour5" style="display: block; text-indent: 9999px"></b> kW</div>
+<p>占比 <b id="share"></b></p>
+<script>
+  // Each number but the last keeps its textContent but is drawn as other glyphs: masked as dots,
+  // overlaid with other characters, stroked into blobs, shrunk to nothing, struck through, replaced
+  // by an image, moved out of its box, enlarged as a drop cap, combined (refused though it has no
+  // effect in horizontal text), broken over several lines, or restyled by an ancestor's
+  // ::first-letter (its first digit moved to the end) or ::first-line (shrunk), struck through by
+  // an ancestor's decoration, or indented out of sight. The last is plain and passes.
+  tq.on("data", (tq) => {
+    tq.text(document.getElementById("week"), "f|week_kwh", ",.1f");
+    tq.text(document.getElementById("target"), "k|target_kwh", ",.0f");
+    tq.text(document.getElementById("peak"), "f|peak_kw", ",.2f");
+    tq.text(document.getElementById("day0"), "c|daily_energy|kwh|0", ",.2f");
+    tq.text(document.getElementById("day1"), "c|daily_energy|kwh|1", ",.2f");
+    tq.text(document.getElementById("day2"), "c|daily_energy|kwh|2", ",.2f");
+    tq.text(document.getElementById("day4"), "c|daily_energy|kwh|4", ",.2f");
+    tq.text(document.getElementById("day5"), "c|daily_energy|kwh|5", ",.2f");
+    tq.text(document.getElementById("day6"), "c|daily_energy|kwh|6", ",.2f");
+    tq.text(document.getElementById("hour0"), "c|hourly_power|kw|0", ",.2f");
+    tq.text(document.getElementById("hour1"), "c|hourly_power|kw|1", ",.2f");
+    tq.text(document.getElementById("hour2"), "c|hourly_power|kw|2", ",.2f");
+    tq.text(document.getElementById("hour3"), "c|hourly_power|kw|3", ",.2f");
+    tq.text(document.getElementById("hour4"), "c|hourly_power|kw|4", ",.2f");
+    tq.text(document.getElementById("hour5"), "c|hourly_power|kw|5", ",.2f");
+    tq.text(document.getElementById("share"), "f|first_day_share", ".1%");
+  });
+</script>

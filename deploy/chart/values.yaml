@@ -331,14 +331,24 @@ services:
   # against telemetry-query and assets (mesh.calls.assistant below). The chart sets the address of
   # each of those services from mesh.calls.assistant, and env cannot (README.md, 「AI 助理」); it
   # does not start without the AI gateway's (services.ai-gateway.enabled and ai-gateway listed).
-  # Its API serves the users' conversation threads (Laysi/trustiot-v2#645); it verifies internal
-  # identity tokens, so it does not start without the identity service.
+  # Its API serves the users' conversation threads (Laysi/trustiot-v2#645) and the dashboards
+  # (Laysi/trustiot-v2#150) under /api/assistant; it verifies internal identity tokens, so it does
+  # not start without the identity service. A deployment that serves them adds the cookie route
+  # {host: app, path: /api/assistant, match: PathPrefix, service: assistant} to ingress.routes.
   assistant:
     enabled: false
-    # 4 to 100: readiness, the purge's job lock and the API's requests. The purge's platform
-    # role opens 2 more (Laysi/trustiot-v2#645): 10 in all.
+    # 4 to 100: readiness, the purge's job lock and the API's requests, the dashboard API's short
+    # transactions among them (a dataset run holds no connection while it calls telemetry-query).
+    # The purge's platform role opens 2 more (Laysi/trustiot-v2#645): 10 in all.
     database:
       maxConnections: 8
+    # Sized from the dashboards' memory bounds per replica (services/assistant/README.md,
+    # 「記憶體」): about 704 MiB with every bound reached at once, and the rest for the allocator.
+    resources:
+      requests:
+        memory: 128Mi
+      limits:
+        memory: 768Mi
   # The AI gateway (services/ai-gateway, decisions 15 and 28): the providers, model roles and limits
   # come from `ai` below. Only the AI assistant, the knowledge base and alerts may call it
   # (mesh.calls; README.md, "服務間授權（mesh）").
@@ -379,6 +389,27 @@ services:
     enabled: false
   knowledge:
     enabled: false
+  # The dashboard check (services/dashboard-check, Laysi/trustiot-v2#150): runs each dashboard page
+  # the AI assistant is about to publish in a fresh headless Chromium and compares it with the
+  # data. The pages are a model's, so only the assistant may call it (mesh.calls.assistant below)
+  # and its pod opens no connection at all, DNS included, and gets no ServiceAccount token, no
+  # Secret, no platform settings and no init container; the render fails on values that would undo
+  # that (README.md, 「儀表板檢查」). A SaaS cluster turns it on together with the assistant (its
+  # own values, like every service); on-prem leaves it off, because the AI dashboards come there
+  # after SaaS (decision 33).
+  dashboard-check:
+    enabled: false
+    # One check at a time, each in a new Chromium (about 100 MiB at its peak in the image test,
+    # deploy/images/dashboard-check/README.md); /tmp is in memory and counts against the limit.
+    resources:
+      requests:
+        cpu: 100m
+        memory: 128Mi
+      limits:
+        cpu: "1"
+        memory: 512Mi
+    # Chromium's profile and shared memory files of the check in progress (a memory-backed volume).
+    tmpSizeLimit: 128Mi
 
 # Service-to-service authorization (decision 27). ztunnel adds mTLS to every connection and each
 # service has its own ServiceAccount; a service accepts connections only from the callers listed
@@ -393,7 +424,8 @@ mesh:
   # keys under `services`, the in-cluster components `clickhouse` (bundled mode), `otel-collector`
   # and `mqtt-broker` (mqttBroker.enabled), or `postgres`. Each service's issue adds the internal APIs it calls. Calls
   # involving a disabled service or a component that is not deployed are skipped. The chart adds
-  # the telemetry calls itself: every service to the collector, the collector to ClickHouse.
+  # the telemetry calls itself: every service but dashboard-check to the collector, the
+  # collector to ClickHouse.
   # `postgres` (bundled or external) is how a service declares that it uses Postgres: only those
   # services get the server's CA file and, bundled, reach the Postgres pods (README.md).
   # A call from one service to another (ai-gateway aside) is also a call on behalf of users: the
@@ -451,12 +483,14 @@ mesh:
     # The AI assistant (Laysi/trustiot-v2#592): the AI gateway for the models; telemetry-query and
     # assets for its tools, which call them as the asking user, so it also reaches the identity
     # service's token exchange and the exchange grants exactly these audiences (README.md,
-    # 「代表使用者呼叫」); Postgres for its conversations (services/assistant/README.md).
+    # 「代表使用者呼叫」); Postgres for its conversations (services/assistant/README.md); the
+    # dashboard check for the pages it publishes, without a user's token (Laysi/trustiot-v2#150).
     assistant:
       - ai-gateway
       - telemetry-query
       - assets
       - postgres
+      - dashboard-check
 
 # Internal identity (decision 27): for every request that passes the cookie check, the identity
 # service signs a short-lived token for the backend, and every service verifies it with the

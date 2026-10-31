@@ -1,0 +1,17 @@
+<style>
+  .kpi b { display: inline-block; }
+</style>
+<p class="kpi">本週 <b id="week" style="offset-path: ray(270deg); offset-distance: 0"></b> kWh</p>
+<p class="kpi">目標 <b id="target" style="offset-path: path('M0,0 H1'); offset-rotate: 180deg"></b> kWh</p>
+<div style="offset-path: ray(180deg); offset-distance: 0"><p>尖峰 <b id="peak"></b> kW</p></div>
+<p>第七天 <b id="day6"></b> kWh</p>
+<script>
+  // Each number but the last is turned over by a CSS motion path, on the mark or an ancestor;
+  // transform, rotate and scale stay none.
+  tq.on("data", (tq) => {
+    tq.text(document.getElementById("week"), "f|week_kwh", ",.1f");
+    tq.text(document.getElementById("target"), "k|target_kwh", ",.0f");
+    tq.text(document.getElementById("peak"), "f|peak_kw", ",.2f");
+    tq.text(document.getElementById("day6"), "c|daily_energy|kwh|6", ",.2f");
+  });
+</script>

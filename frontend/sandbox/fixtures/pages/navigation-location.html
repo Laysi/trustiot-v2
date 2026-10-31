@@ -1,0 +1,7 @@
+<p>本週 <b id="week"></b> kWh</p>
+<script>
+  tq.on("data", (tq) => {
+    tq.text(document.getElementById("week"), "f|week_kwh", ",.1f");
+    location.href = "https://dashboard.invalid/";
+  });
+</script>

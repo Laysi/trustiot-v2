@@ -1,0 +1,24 @@
+<style>
+  .faded { opacity: 0.3; }
+</style>
+<p>本週 <b id="week" style="color: lab(50 20 30 / 0)"></b> kWh</p>
+<p>目標 <b id="target" style="color: oklch(0.5 0.1 120 / 0.05)"></b> kWh</p>
+<p>尖峰 <b id="peak" style="-webkit-text-fill-color: transparent"></b> kW</p>
+<p class="faded">第一天 <b id="day0" style="opacity: 0.3"></b> kWh</p>
+<p>第二天 <b id="day1" style="filter: opacity(0.05)"></b> kWh</p>
+<svg width="240" height="40"><text id="day2" x="10" y="24" fill="currentColor" fill-opacity="0.05"></text></svg>
+<p>第五天 <b id="day4" style="color: color(display-p3 0 0 0 / 0.02)"></b> kWh</p>
+<p>第六天 <b id="day5" style="color: rgb(0 0 0 / 40%)"></b> kWh</p>
+<script>
+  // Every number but the last is painted too faint to be seen; textContent carries each of them.
+  tq.on("data", (tq) => {
+    tq.text(document.getElementById("week"), "f|week_kwh", ",.1f");
+    tq.text(document.getElementById("target"), "k|target_kwh", ",.0f");
+    tq.text(document.getElementById("peak"), "f|peak_kw", ",.2f");
+    tq.text(document.getElementById("day0"), "c|daily_energy|kwh|0", ",.2f");
+    tq.text(document.getElementById("day1"), "c|daily_energy|kwh|1", ",.2f");
+    tq.text(document.getElementById("day2"), "c|daily_energy|kwh|2", ",.2f");
+    tq.text(document.getElementById("day4"), "c|daily_energy|kwh|4", ",.2f");
+    tq.text(document.getElementById("day5"), "c|daily_energy|kwh|5", ",.2f");
+  });
+</script>

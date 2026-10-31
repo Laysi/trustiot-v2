@@ -1,7 +1,7 @@
 //! The assistant's settings (README.md, 「設定」): where the AI gateway is, the model call, the
 //! token budget of a question, the limits of tool calls, the database logins of the service role
-//! and of the purge's platform role, the purge's schedule, and the public keys the API verifies
-//! identity tokens with.
+//! and of the purge's platform role, the purge's schedule, the dashboard check's address, and the
+//! public keys the API verifies identity tokens with.
 //! They come from `TRUSTIOT__*` variables (the platform settings from `TRUSTIOT_*`) or the TOML
 //! file named by `TRUSTIOT_CONFIG_FILE`, through service-kit, and are checked at startup. Error
 //! messages name keys, never values.
@@ -66,6 +66,11 @@ pub struct Config {
     /// The assets service: the device model tool.
     #[serde(default)]
     pub assets: Peer,
+    /// The dashboard check (services/dashboard-check): the `dashboard` tool has every page
+    /// checked there before it writes a version. Without it (or without `telemetry_query.url`)
+    /// there is no `dashboard` tool.
+    #[serde(default)]
+    pub dashboard_check: DashboardCheck,
     /// The scheduled purge of conversations deleted more than 30 days ago.
     #[serde(default)]
     pub purge: Purge,
@@ -77,7 +82,7 @@ pub struct Config {
 pub struct Platform {
     /// `TRUSTIOT_INTERNAL_IDENTITY_KEYS_FILE`: the file with the public keys internal identity
     /// tokens are verified with (the chart's ConfigMap volume), read again while the service
-    /// runs.
+    /// runs. The client API (`crate::api`) verifies every request's token with them.
     pub internal_identity_keys_file: PathBuf,
     /// `TRUSTIOT_POSTGRES_HOST`.
     pub postgres_host: String,
@@ -107,8 +112,9 @@ pub struct Database {
     pub platform_password: String,
     /// `TRUSTIOT__DATABASE__MAX_CONNECTIONS`: most connections of the service role's pool per
     /// replica, from [`MIN_DATABASE_CONNECTIONS`] to [`MAX_DATABASE_CONNECTIONS`]. Default 8:
-    /// the two readiness checks, the purge's job lock, and five requests at a time, each of which
-    /// holds one connection for one short transaction. The platform role's pool has
+    /// the two readiness checks, the purge's job lock, and five requests or `dashboard` tool
+    /// writes at a time, each of which holds one connection for one short transaction (a dataset
+    /// run holds none while it calls telemetry-query). The platform role's pool has
     /// [`crate::PLATFORM_CONNECTIONS`] more.
     #[serde(default = "default_max_connections")]
     pub max_connections: u32,
@@ -196,6 +202,12 @@ pub const MIN_RUN_LIFETIME: Duration = Duration::from_secs(120);
 /// The longest: the identity service's limit (`RUN_DELEGATION_MAX_LIFETIME_SECS`, 900 s).
 pub const MAX_RUN_LIFETIME: Duration =
     Duration::from_secs(contract::api::identity::RUN_DELEGATION_MAX_LIFETIME_SECS as u64);
+/// The shortest run delegation with the `dashboard` tool (`dashboard_check.url` set): one whole
+/// call of it ([`crate::tools::dashboard::CALL_LIMIT`], 335 s) and the time the question ends
+/// before its delegation expires ([`crate::delegation::RUN_END_MARGIN`], 30 s), 365 seconds. A
+/// shorter delegation would end every question before its dashboard write could finish.
+pub const MIN_RUN_LIFETIME_WITH_DASHBOARDS: Duration =
+    crate::tools::dashboard::CALL_LIMIT.saturating_add(crate::delegation::RUN_END_MARGIN);
 
 /// The identity service's token exchange port.
 #[derive(Debug, Deserialize)]
@@ -232,6 +244,17 @@ fn default_run_lifetime() -> Duration {
 pub struct Peer {
     /// `http://<host>[:<port>]`, the service's Kubernetes Service; ztunnel encrypts the hop.
     /// Without it the service's tools are left out.
+    #[serde(default)]
+    pub url: Option<String>,
+}
+
+/// `dashboard_check.*`: the dashboard check service. It is called as the assistant, not as the
+/// user: the request carries no identity, and the mesh lets only the assistant call it.
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DashboardCheck {
+    /// `TRUSTIOT__DASHBOARD_CHECK__URL`: `http://<host>[:<port>]`, the service's Kubernetes
+    /// Service (the chart sets it from `mesh.calls`).
     #[serde(default)]
     pub url: Option<String>,
 }
@@ -505,6 +528,30 @@ impl Validate for Config {
                 "must be whole seconds between 2 and 15 minutes",
             ));
         }
+        if let Some(url) = &self.dashboard_check.url {
+            check_service_url(url)
+                .map_err(|message| Invalid::new("dashboard_check.url", message))?;
+            if self.tools.max_text_bytes < crate::tools::dashboard::MIN_TEXT_BYTES {
+                return Err(Invalid::new(
+                    "tools.max_text_bytes",
+                    "must be at least 64 KiB when dashboard_check.url is set: the dashboard \
+                     tool hands the model a whole dashboard",
+                ));
+            }
+            if self.identity.run_lifetime < MIN_RUN_LIFETIME_WITH_DASHBOARDS {
+                return Err(Invalid::new(
+                    "identity.run_lifetime",
+                    format!(
+                        "must be at least {} seconds when dashboard_check.url is set: one whole \
+                         dashboard tool call ({} s) and the {} s a question ends before its \
+                         delegation expires",
+                        MIN_RUN_LIFETIME_WITH_DASHBOARDS.as_secs(),
+                        crate::tools::dashboard::CALL_LIMIT.as_secs(),
+                        crate::delegation::RUN_END_MARGIN.as_secs(),
+                    ),
+                ));
+            }
+        }
         for (key, peer) in [
             ("telemetry_query.url", &self.telemetry_query),
             ("assets.url", &self.assets),
@@ -632,6 +679,7 @@ mod tests {
             identity: Identity::default(),
             telemetry_query: Peer::default(),
             assets: Peer::default(),
+            dashboard_check: DashboardCheck::default(),
             purge: Purge::default(),
         }
     }
@@ -672,6 +720,58 @@ mod tests {
         bad_telemetry.identity.exchange_url = Some("http://identity:8082".into());
         bad_telemetry.telemetry_query.url = Some("telemetry-query:8080".into());
         assert_eq!(key_of(&bad_telemetry), Err("telemetry_query.url".into()));
+    }
+
+    /// The check is called as the assistant, so it needs no exchange; its address follows the
+    /// same rules, and the tool's results need room for a whole dashboard.
+    #[test]
+    fn the_dashboard_check_is_a_plain_http_origin_and_needs_room_for_a_dashboard() {
+        let mut check = config();
+        check.dashboard_check.url = Some("http://trustiot-dashboard-check:8080".into());
+        assert_eq!(key_of(&check), Ok(()));
+        for bad in [
+            "https://trustiot-dashboard-check:8080",
+            "http://trustiot-dashboard-check:8080/internal/dashboard-check/v1/check",
+            "http://user:secret@trustiot-dashboard-check:8080",
+            "trustiot-dashboard-check:8080",
+        ] {
+            let mut invalid = config();
+            invalid.dashboard_check.url = Some(bad.into());
+            assert_eq!(key_of(&invalid), Err("dashboard_check.url".into()), "{bad}");
+        }
+        check.tools.max_text_bytes = crate::tools::dashboard::MIN_TEXT_BYTES - 1;
+        assert_eq!(key_of(&check), Err("tools.max_text_bytes".into()));
+        check.dashboard_check.url = None;
+        assert_eq!(key_of(&check), Ok(()));
+    }
+
+    /// With the `dashboard` tool, a question's delegation leaves room for one whole call of it
+    /// before the question ends; without the tool, two minutes stay enough.
+    #[test]
+    fn a_dashboard_check_needs_a_run_lifetime_with_room_for_one_dashboard_call() {
+        assert_eq!(MIN_RUN_LIFETIME_WITH_DASHBOARDS, Duration::from_secs(365));
+        let mut check = config();
+        check.dashboard_check.url = Some("http://trustiot-dashboard-check:8080".into());
+        for (lifetime, valid) in [
+            (MAX_RUN_LIFETIME, true),
+            (MIN_RUN_LIFETIME_WITH_DASHBOARDS, true),
+            (
+                MIN_RUN_LIFETIME_WITH_DASHBOARDS - Duration::from_secs(1),
+                false,
+            ),
+            (MIN_RUN_LIFETIME, false),
+        ] {
+            check.identity.run_lifetime = lifetime;
+            let expected = if valid {
+                Ok(())
+            } else {
+                Err("identity.run_lifetime".to_owned())
+            };
+            assert_eq!(key_of(&check), expected, "{lifetime:?}");
+        }
+        check.dashboard_check.url = None;
+        check.identity.run_lifetime = MIN_RUN_LIFETIME;
+        assert_eq!(key_of(&check), Ok(()));
     }
 
     fn all_but_assets(all: &Config) -> Config {
@@ -744,6 +844,10 @@ mod tests {
                 "http://telemetry-query:8080",
             ),
             ("TRUSTIOT__ASSETS__URL", "http://assets:8080"),
+            (
+                "TRUSTIOT__DASHBOARD_CHECK__URL",
+                "http://dashboard-check:8080",
+            ),
         ]
         .map(|(name, value)| {
             (
@@ -764,6 +868,10 @@ mod tests {
             Some("http://telemetry-query:8080")
         );
         assert_eq!(config.assets.url.as_deref(), Some("http://assets:8080"));
+        assert_eq!(
+            config.dashboard_check.url.as_deref(),
+            Some("http://dashboard-check:8080")
+        );
         assert_eq!(config.database.max_connections, 6);
         assert_eq!(
             config.platform.internal_identity_keys_file,

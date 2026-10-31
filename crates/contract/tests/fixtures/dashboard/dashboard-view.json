@@ -1,0 +1,123 @@
+{
+  "dashboard": {
+    "conversation_id": "0190a5b2-0000-7000-8000-0000000000c1",
+    "created_at": "2026-10-26T01:00:00Z",
+    "created_by": "0190a5b2-0000-7000-8000-000000000001",
+    "dashboard_id": "0190a5b2-0000-7000-8000-0000000000d1",
+    "kind": "draft",
+    "latest_version": 3,
+    "saved": {
+      "dashboard_id": "0190a5b2-0000-7000-8000-0000000000d0",
+      "version": 7
+    },
+    "title": "本週用電",
+    "updated_at": "2026-10-26T01:05:00Z"
+  },
+  "permissions": {
+    "can_archive": false,
+    "can_publish": true,
+    "can_restore": true
+  },
+  "version": {
+    "created_at": "2026-10-26T01:05:00Z",
+    "created_by": "0190a5b2-0000-7000-8000-000000000001",
+    "description": "Daily energy and this week's usage against the target.",
+    "origin": "agent",
+    "page": "<style>\n  .kpi { font: 600 32px/1.2 system-ui; }\n  .bar { fill: steelblue; }\n</style>\n<h1>每日用電 <span id=\"line\"></span></h1>\n<p>本週 <span id=\"week\" class=\"kpi\"></span> kWh，目標 <span id=\"target\"></span> kWh</p>\n<svg id=\"chart\" width=\"480\" height=\"240\"></svg>\n<script>\n  tq.on(\"data\", () => {\n    tq.text(document.getElementById(\"line\"), \"k|line_name\");\n    tq.text(document.getElementById(\"week\"), \"f|week_kwh\", \",.1f\");\n    tq.text(document.getElementById(\"target\"), \"k|target_kwh\", \",.0f\");\n    const daily = tq.dataset(\"daily_energy\");\n    const svg = d3.select(\"#chart\");\n    svg.selectAll(\"*\").remove();\n    const x = d3.scaleBand(daily.rows.map((row) => row.day), [40, 470]).padding(0.2);\n    const y = d3.scaleLinear([0, d3.max(daily.rows, (row) => row.kwh) ?? 0], [210, 10]).nice();\n    tq.axis(svg.append(\"g\").attr(\"transform\", \"translate(0,210)\").node(), d3.axisBottom(x),\n      { dataset: \"daily_energy\", column: \"day\", format: \"%m/%d\" });\n    tq.axis(svg.append(\"g\").attr(\"transform\", \"translate(40,0)\").node(), d3.axisLeft(y),\n      { dataset: \"daily_energy\", column: \"kwh\", format: \",.0f\" });\n    svg.append(\"g\").selectAll(\"rect\").data(daily.rows.filter((row) => row.kwh !== null)).join(\"rect\")\n      .attr(\"class\", \"bar\")\n      .attr(\"x\", (row) => x(row.day)).attr(\"width\", x.bandwidth())\n      .attr(\"y\", (row) => y(row.kwh)).attr(\"height\", (row) => y(0) - y(row.kwh))\n      .each(function (row) {\n        tq.mark(this, `c|daily_energy|kwh|${row.$row}`, { chart: \"daily\", channel: \"height\" });\n      });\n  });\n</script>\n",
+    "runtime": 1,
+    "spec": {
+      "computations": [
+        {
+          "formula": "sum(meter_usage.usage)",
+          "name": "week_kwh",
+          "title": "This week",
+          "unit": "kWh"
+        },
+        {
+          "formula": "sum(meter_usage.usage) * 0.494",
+          "name": "carbon_kg",
+          "title": "Emissions",
+          "unit": "kgCO2e"
+        },
+        {
+          "formula": "daily_energy.kwh[0] / sum(daily_energy.kwh)",
+          "name": "first_day_share",
+          "title": "Share of the first day"
+        }
+      ],
+      "constants": [
+        {
+          "name": "target_kwh",
+          "note": "The target the user gave on 2026-10-26.",
+          "title": "Weekly target",
+          "unit": "kWh",
+          "value": 1200.0
+        },
+        {
+          "name": "line_name",
+          "title": "Line",
+          "value": "Line 2"
+        }
+      ],
+      "datasets": [
+        {
+          "description": "Energy per local day over the last seven days, from the hourly cells.",
+          "max_rows": 8,
+          "name": "daily_energy",
+          "source": {
+            "kind": "sql",
+            "sql": "SELECT toDate(bucket, 'Asia/Taipei') AS day, round(sum(avg_value), 3) AS kwh FROM trustiot.tenant_telemetry_1h WHERE point = 'energy' AND bucket >= now() - INTERVAL 7 DAY GROUP BY day ORDER BY day"
+          },
+          "title": "每日用電"
+        },
+        {
+          "description": "Statistics of the two meters' power over the last seven days.",
+          "max_rows": 2,
+          "name": "meter_stats",
+          "source": {
+            "kind": "telemetry_statistics",
+            "request": {
+              "interval": "total",
+              "period": "last_7_days",
+              "series": [
+                {
+                  "device_id": "0190a5b2-7c3d-7e4f-8a1b-2c3d4e5f6a7b",
+                  "point": "power"
+                },
+                {
+                  "device_id": "0190a5b2-7c3d-7e4f-8a1b-2c3d4e5f6a7c",
+                  "point": "power"
+                }
+              ],
+              "tz": "Asia/Taipei"
+            }
+          },
+          "title": "Power over the last 7 days"
+        },
+        {
+          "description": "The main meter's energy usage per local day of this week.",
+          "max_rows": 7,
+          "name": "meter_usage",
+          "source": {
+            "kind": "telemetry_usage",
+            "request": {
+              "from": "2026-10-19T00:00:00+08:00",
+              "interval": "1d",
+              "series": [
+                {
+                  "device_id": "0190a5b2-7c3d-7e4f-8a1b-2c3d4e5f6a7b",
+                  "point": "energy"
+                }
+              ],
+              "to": "2026-10-26T00:00:00+08:00",
+              "tz": "Asia/Taipei"
+            }
+          },
+          "title": "Usage per day this week"
+        }
+      ]
+    },
+    "title": "本週用電",
+    "version": 3
+  }
+}

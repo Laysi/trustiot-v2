@@ -5,8 +5,8 @@
 //!
 //! - Readiness passes once `assistant_app` logs in, the service has the identity service's
 //!   public keys and the database has every migration file this release expects, without the AI
-//!   gateway or any service the tools call: none of them listens here, and the service calls none
-//!   of them before a question.
+//!   gateway or any service the tools or a dataset run call: none of them listens here, and the
+//!   service calls none of them before a question or a dataset run.
 //! - It stays unready while either role cannot log in, and while its migration record is missing.
 //!
 //! Starts a throwaway Postgres with TLS (podman or docker); skipped without either unless `CI`
@@ -143,6 +143,7 @@ impl Service {
             .env("TRUSTIOT__IDENTITY__EXCHANGE_URL", closed_origin())
             .env("TRUSTIOT__TELEMETRY_QUERY__URL", closed_origin())
             .env("TRUSTIOT__ASSETS__URL", closed_origin())
+            .env("TRUSTIOT__DASHBOARD_CHECK__URL", closed_origin())
             .envs(product.platform_env())
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
@@ -247,14 +248,16 @@ async fn ready_once_the_service_role_logs_in_on_the_current_schema() {
     };
     let mut admin = product.superuser().await;
 
-    // 1. The role logs in and every file is there: ready, with its five tools and the run
-    //    delegation, while neither the AI gateway nor any service the tools call listens.
+    // 1. The role logs in and every file is there: ready, with its six tools, the run
+    //    delegation and the dataset runs, while neither the AI gateway nor any service the
+    //    tools or a run call listens.
     let ready = Service::spawn(&product, TEST_PASSWORD).await;
     ready.wait_readiness(200).await;
     ready.wait_logged(COMPLETE).await;
     let built = ready.wait_logged("assistant ready").await;
-    assert_eq!(built["fields"]["tools"], 5, "{built}");
+    assert_eq!(built["fields"]["tools"], 6, "{built}");
     assert_eq!(built["fields"]["delegation"], true, "{built}");
+    assert_eq!(built["fields"]["dataset_runs"], true, "{built}");
     // No line carries the password.
     assert!(!ready.stdout.text().contains(TEST_PASSWORD));
     assert!(!ready.stderr.text().contains(TEST_PASSWORD));

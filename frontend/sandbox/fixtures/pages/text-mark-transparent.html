@@ -1,0 +1,7 @@
+<p>本週 <b id="week" style="color: transparent"></b> kWh</p>
+<script>
+  // The number is painted in a transparent colour, so it is not seen; textContent carries it.
+  tq.on("data", (tq) => {
+    tq.text(document.getElementById("week"), "f|week_kwh", ",.1f");
+  });
+</script>

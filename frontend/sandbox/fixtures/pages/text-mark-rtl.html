@@ -1,0 +1,15 @@
+<p>變化 <b id="own" style="display: inline-block; direction: rtl"></b> kWh</p>
+<p dir="rtl">變化 <span id="inherited"></span> kWh</p>
+<div style="direction: rtl"><p>變化 <strong id="ancestor" style="direction: ltr"></strong> kWh</p></div>
+<p>שבוע <em id="unisolated" style="unicode-bidi: normal !important"></em> kWh</p>
+<p>שבוע <i id="isolated"></i> kWh</p>
+<script>
+  // A negative value under a right-to-left direction (its own, inherited or an ancestor's) or no
+  // longer isolated from the right-to-left text before it: the minus sign is drawn after the
+  // digits. The last mark keeps the isolation the sandbox's styles give every mark and passes.
+  tq.on("data", (tq) => {
+    for (const id of ["own", "inherited", "ancestor", "unisolated", "isolated"]) {
+      tq.text(document.getElementById(id), "f|week_change", ",.1f");
+    }
+  });
+</script>

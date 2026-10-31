@@ -19,6 +19,7 @@ import {
   imageNameProblem,
   imagePlatformProblems,
   isMap,
+  missingSbomPackages,
   keylessVerifyArgs,
   parseImageToml,
   parsePlan,
@@ -160,6 +161,27 @@ describe("parseImageToml", () => {
     expect(parseImageToml("x", '[rust]\npackage = "x"\n[static]\nproject = "apps/site-2"\n', "f").staticSite).toBe("apps/site-2");
   });
 
+  test("reads the image's own Containerfile and the packages its SBOM must list", () => {
+    const source = [
+      "[rust]",
+      'package = "dashboard-check"',
+      'containerfile = "Containerfile"',
+      "[static]",
+      'project = "frontend"',
+      "[sbom]",
+      'packages = ["chromium-headless-shell", "libstdc++6", "fonts-dejavu-core"]',
+      "",
+    ].join("\n");
+    expect(parseImageToml("dashboard-check", source, "f")).toEqual({
+      kind: "rust",
+      name: "dashboard-check",
+      package: "dashboard-check",
+      containerfile: "deploy/images/dashboard-check/Containerfile",
+      staticSite: "frontend",
+      sbomPackages: ["chromium-headless-shell", "libstdc++6", "fonts-dejavu-core"],
+    });
+  });
+
   test.each([
     ["not TOML", "[rust", "cannot parse TOML"],
     ["no [rust] table", 'package = "x"\n', "unknown key(s) package"],
@@ -175,6 +197,13 @@ describe("parseImageToml", () => {
     ["a static project with a dot segment", '[rust]\npackage = "x"\n[static]\nproject = "a/./b"\n', "[static] project must be"],
     ["a static project with a trailing slash", '[rust]\npackage = "x"\n[static]\nproject = "frontend/"\n', "[static] project must be"],
     ["a static table on its own", '[static]\nproject = "frontend"\n', "missing the [rust] table"],
+    ["a Containerfile elsewhere", '[rust]\npackage = "x"\ncontainerfile = "../web/Containerfile"\n', 'containerfile must be "Containerfile"'],
+    ["a Containerfile flag", '[rust]\npackage = "x"\ncontainerfile = true\n', 'containerfile must be "Containerfile"'],
+    ["an sbom key that is not a table", 'sbom = ["x"]\n\n[rust]\npackage = "x"\n', "[sbom] must be a table"],
+    ["an empty sbom list", '[rust]\npackage = "x"\n[sbom]\npackages = []\n', "[sbom] packages must be"],
+    ["a repeated sbom package", '[rust]\npackage = "x"\n[sbom]\npackages = ["ab", "ab"]\n', "[sbom] packages must be"],
+    ["an sbom package with a version", '[rust]\npackage = "x"\n[sbom]\npackages = ["ab@1"]\n', "[sbom] packages must be"],
+    ["a misspelt sbom key", '[rust]\npackage = "x"\n[sbom]\npackage = ["ab"]\n', "unknown key(s) package in [sbom]"],
   ])("rejects %s", (_label, source, message) => {
     expect(() => parseImageToml("x", source, "deploy/images/x/image.toml")).toThrow(message);
   });
@@ -243,8 +272,30 @@ describe("discoverImages", () => {
     }
   });
 
+  test("lists a Rust image packed with its own Containerfile", () => {
+    const root = layout({
+      "deploy/images/x/image.toml": '[rust]\npackage = "x"\ncontainerfile = "Containerfile"\n',
+      "deploy/images/x/Containerfile": `FROM docker.io/library/debian:13@${DIGEST_A} AS base\nFROM base\nCOPY x /x\n`,
+    });
+    try {
+      expect(discoverImages(root)).toEqual([{ kind: "rust", name: "x", package: "x", containerfile: "deploy/images/x/Containerfile" }]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test.each([
     ["both files", { "deploy/images/x/image.toml": '[rust]\npackage = "x"\n', "deploy/images/x/Containerfile": "FROM scratch\n" }, "has both"],
+    [
+      "an image.toml naming a missing Containerfile",
+      { "deploy/images/x/image.toml": '[rust]\npackage = "x"\ncontainerfile = "Containerfile"\n' },
+      "x/image.toml: [rust] containerfile names Containerfile, which the directory does not have",
+    ],
+    [
+      "a Rust image's own Containerfile with an unpinned base",
+      { "deploy/images/x/image.toml": '[rust]\npackage = "x"\ncontainerfile = "Containerfile"\n', "deploy/images/x/Containerfile": "FROM debian:13\n" },
+      "x/Containerfile: `FROM debian:13` is not pinned",
+    ],
     ["neither file", { "deploy/images/x/notes.md": "" }, "add image.toml"],
     ["an invalid directory name", { "deploy/images/Bad_Name/Containerfile": "FROM scratch\n" }, "directory name is the image name"],
     ["the reserved name", { "deploy/images/charts/Containerfile": "FROM scratch\n" }, "reserved"],
@@ -266,6 +317,16 @@ describe("discoverImages", () => {
     expect(images).toContainEqual({ kind: "rust", name: "identity", package: "identity" });
     // Laysi/trustiot-v2#123: the web service ships with the SPA's build output.
     expect(images).toContainEqual({ kind: "rust", name: "web", package: "web", staticSite: "frontend" });
+    // Laysi/trustiot-v2#150: the dashboard check ships with Debian's headless Chromium and the
+    // same frontend build's sandbox files.
+    expect(images).toContainEqual({
+      kind: "rust",
+      name: "dashboard-check",
+      package: "dashboard-check",
+      containerfile: "deploy/images/dashboard-check/Containerfile",
+      staticSite: "frontend",
+      sbomPackages: ["chromium-headless-shell", "chromium-common"],
+    });
   });
 });
 
@@ -373,6 +434,40 @@ describe("parsePlan", () => {
       const doc = JSON.parse(JSON.stringify(plan));
       doc.images[0].staticSite = staticSite;
       expect(() => parsePlan(JSON.stringify(doc)), String(staticSite)).toThrow("invalid static project");
+    }
+  });
+
+  test("round-trips a Rust image with its own Containerfile and SBOM packages, and rejects a tampered one", () => {
+    const image = planImage(
+      {
+        kind: "rust",
+        name: "dashboard-check",
+        package: "dashboard-check",
+        containerfile: "deploy/images/dashboard-check/Containerfile",
+        staticSite: "frontend",
+        sbomPackages: ["chromium-headless-shell"],
+      },
+      "1.2.0-rc.1",
+    );
+    const plan = samplePlan({ images: [image] });
+    expect(parsePlan(JSON.stringify(plan))).toEqual(plan);
+    expect(rustSpec(parsePlan(JSON.stringify(plan)).images[0]!)).toEqual({
+      kind: "rust",
+      name: "dashboard-check",
+      package: "dashboard-check",
+      containerfile: "deploy/images/dashboard-check/Containerfile",
+      staticSite: "frontend",
+      sbomPackages: ["chromium-headless-shell"],
+    });
+    for (const containerfile of ["deploy/images/web/Containerfile", "deploy/images/dashboard-check/../web/Containerfile", "", 1]) {
+      const doc = JSON.parse(JSON.stringify(plan));
+      doc.images[0].containerfile = containerfile;
+      expect(() => parsePlan(JSON.stringify(doc)), String(containerfile)).toThrow("unexpected Containerfile");
+    }
+    for (const sbomPackages of [[], ["a b"], ["ab", "ab"], "chromium-headless-shell"]) {
+      const doc = JSON.parse(JSON.stringify(plan));
+      doc.images[0].sbomPackages = sbomPackages;
+      expect(() => parsePlan(JSON.stringify(doc)), String(sbomPackages)).toThrow("invalid SBOM package list");
     }
   });
 
@@ -560,6 +655,14 @@ describe("summarizeSpdx", () => {
     expect(
       summarizeSpdx({ spdxVersion: "SPDX-2.3", packages: [{ name: "serde", versionInfo: "1.0.0" }, { name: "base-files" }] }),
     ).toEqual({ spdxVersion: "SPDX-2.3", packages: ["serde@1.0.0", "base-files"] });
+  });
+
+  test("missingSbomPackages names the required packages an SBOM does not list", () => {
+    const listed = ["dashboard-check@0.1.0", "chromium-headless-shell@156.0.8078.47-1~deb13u1", "libc6@2.41-12", "base-files"];
+    expect(missingSbomPackages(listed, [])).toEqual([]);
+    expect(missingSbomPackages(listed, ["chromium-headless-shell", "base-files", "libc6"])).toEqual([]);
+    // A prefix of a listed name is not that name.
+    expect(missingSbomPackages(listed, ["chromium-common", "chromium", "libc"])).toEqual(["chromium-common", "chromium", "libc"]);
   });
 
   test("rejects other documents and empty SBOMs", () => {

@@ -27,8 +27,8 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::post;
 use contract::{TenantId, UserId};
-use serde_json::Value;
 use serde_json::value::RawValue;
+use serde_json::{Value, json};
 use tokio::net::TcpListener;
 use tokio::task::JoinHandle;
 
@@ -50,6 +50,55 @@ pub fn fixture(name: &str) -> String {
 /// `step_tool_use.json` for step `step`.
 pub fn tool_step(step: usize) -> String {
     fixture("step_tool_use.json").replace("__STEP__", &format!("{step:04}"))
+}
+
+/// A model step that calls `calls`, made from the recorded step: its thinking, then these tool
+/// calls.
+pub fn step(index: usize, calls: &[(&str, Value)]) -> String {
+    let mut message: Value = serde_json::from_str(&tool_step(index)).expect("the fixture is JSON");
+    let content = message["content"].as_array_mut().expect("content");
+    content.retain(|block| block["type"] != "tool_use");
+    for (call, (name, input)) in calls.iter().enumerate() {
+        content.push(json!({
+            "type": "tool_use",
+            "id": format!("toolu_{index:04}_{call}"),
+            "name": name,
+            "input": input,
+        }));
+    }
+    message.to_string()
+}
+
+/// One tool result: whether it is an error, and its text.
+#[derive(Debug)]
+pub struct ToolResult {
+    pub is_error: bool,
+    pub text: String,
+}
+
+/// The tool results of the last message of `request`.
+pub fn tool_results(request: &Recorded) -> Vec<ToolResult> {
+    let body = request.json();
+    let last = body["messages"]
+        .as_array()
+        .and_then(|messages| messages.last())
+        .cloned()
+        .expect("a message");
+    last["content"]
+        .as_array()
+        .expect("blocks")
+        .iter()
+        .filter(|block| block["type"] == "tool_result")
+        .map(|block| ToolResult {
+            is_error: block["is_error"].as_bool().unwrap_or(false),
+            text: block["content"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|part| part["text"].as_str())
+                .collect(),
+        })
+        .collect()
 }
 
 /// What the stand-in got.
