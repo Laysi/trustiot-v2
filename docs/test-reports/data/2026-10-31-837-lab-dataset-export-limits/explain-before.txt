@@ -1,0 +1,31 @@
+Output: stream_id, batch_seq, toString(device_id), point, toUnixTimestamp64Milli(ts), toUnixTimestamp64Milli(received_at), toString(value_type), value_float, value_int, value_bool, value_string
+
+Sorting (Sorting for ORDER BY)
+│  Sort description: received_at ASC, stream_id ASC, batch_seq ASC, toString(device_id) ASC, point ASC, ts ASC
+└──ReadFromMergeTree (trustiot.telemetry)
+      Read type: Default
+      Parts: 1 | Granules: 38
+      Output: received_at, stream_id, batch_seq, toString(device_id), point, ts, toString(value_type), value_float, value_int, value_bool, value_string
+      Prewhere filter
+      Prewhere filter column:  tenant_id = '00000000-0000-0000-0000-00000005ca1e' AND gateway_id = 'scale-gateway' AND received_at < '2026-10-14 03:00:00.000' AND received_at >= '2026-10-14 02:00:00.000'
+      Indexes:
+        Min-Max
+          Keys:
+            received_at
+          Condition: and((received_at in (-Inf, '1791946800')), (received_at in ['1791943200', +Inf)))
+          Parts: 1/5
+          Granules: 38/55
+        Partition
+          Keys:
+            toYYYYMM(received_at)
+          Condition: and((toYYYYMM(received_at) in (-Inf, 202610]), (toYYYYMM(received_at) in [202610, +Inf)))
+          Parts: 1/1
+          Granules: 38/38
+        PrimaryKey
+          Keys:
+            tenant_id
+          Condition: (tenant_id in ['00000000-0000-0000-0000-00000005ca1e', '00000000-0000-0000-0000-00000005ca1e'])
+          Parts: 1/1
+          Granules: 38/38
+          Search Algorithm: binary search
+        Ranges: 1

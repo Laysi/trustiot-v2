@@ -30,7 +30,7 @@ pub mod segment;
 pub mod time;
 mod writer;
 
-use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, TimeDelta, Utc};
@@ -268,12 +268,39 @@ impl Dataset {
             index,
             anomalies,
         };
-        // Every segment, and no reading twice across segments.
-        let mut seen = HashSet::new();
+        // Every segment, and no reading twice across segments. The readings are remembered by
+        // the position of their device and point in the index, not by the two texts: the set
+        // holds every reading of the dataset, so its entry size sets the check's memory
+        // (Laysi/trustiot-v2#837).
+        let series: HashMap<(&str, &str), u32> = dataset
+            .index
+            .devices
+            .iter()
+            .flat_map(|device| {
+                device
+                    .points
+                    .iter()
+                    .map(move |point| (device.key.as_str(), point.key.as_str()))
+            })
+            .zip(0..)
+            .collect();
+        let mut seen: HashSet<(u32, DateTime<Utc>)> = HashSet::new();
         let mut readings = Vec::new();
         for segment in &dataset.index.segments {
             for reading in dataset.read_segment(segment)? {
-                if !seen.insert((reading.device.clone(), reading.point.clone(), reading.ts)) {
+                // `read_segment` refused a device or point the index does not declare.
+                let position = series
+                    .get(&(reading.device.as_str(), reading.point.as_str()))
+                    .copied()
+                    .ok_or_else(|| Error::Segment {
+                        segment: segment.key.clone(),
+                        line: None,
+                        message: format!(
+                            "{}/{} is not in the index",
+                            reading.device, reading.point
+                        ),
+                    })?;
+                if !seen.insert((position, reading.ts)) {
                     return Err(Error::Segment {
                         segment: segment.key.clone(),
                         line: None,
