@@ -6,12 +6,13 @@
 //! No gateway is needed: the throwaway Debian 13 container of `tests/egress.rs` (the same image,
 //! from `tests/egress/Containerfile`) stands in for it, with the executable this crate builds
 //! copied in. The first test runs the executable directly, as root, in the container's network
-//! namespace with `tests/egress/lab.sh`'s network and the Laysi/trustiot-v2#813 rules loaded: each
-//! list replaces the sets, a chain shaped like Laysi/trustiot-v2#865's default deny then lets the
-//! agent's account reach exactly the listed destinations, and a refused or failed request leaves
-//! the whole ruleset as it was. The second runs systemd as PID 1 with the units installed as the
-//! image installs them: only the agent's account can connect, and the instance runs as a dynamic
-//! account whose only capability is `CAP_NET_ADMIN`.
+//! namespace with `tests/egress/lab.sh`'s network and the Laysi/trustiot-v2#813 rules loaded:
+//! without the default deny's table a list fails and creates nothing; with a default deny shaped
+//! like Laysi/trustiot-v2#865's loaded, each list replaces the sets and the agent's account
+//! reaches exactly the listed destinations; a refused or failed request leaves the whole ruleset
+//! as it was. The second runs systemd as PID 1 with the units installed as the image installs
+//! them: only the agent's account can connect, and the instance runs as a dynamic account whose
+//! only capability is `CAP_NET_ADMIN`.
 //!
 //! The container needs podman or docker (a skip locally, a failure with `CI` set). The systemd
 //! test needs podman and skips, also with `CI` set, when systemd does not come up in the
@@ -55,10 +56,11 @@ const SELINUX_OFF: &str = "label=disable";
 /// How long systemd in the container may take to finish booting. It takes a second or two.
 const BOOT_BOUND: Duration = Duration::from_secs(120);
 
-/// A chain shaped like Laysi/trustiot-v2#865's default deny, which this issue leaves out: the
-/// agent's account reaches over TCP only the destinations in the sets. The test loads it into the
-/// component's table, where a rule can use the sets.
-const DEFAULT_DENY: &str = "table inet trustiot_agent_allow {
+/// The TCP part of a default deny shaped like Laysi/trustiot-v2#865's, which this issue leaves out:
+/// the agent's account reaches over TCP only the destinations in the sets (what it does with other
+/// protocols and DNS is Laysi/trustiot-v2#865's). Its chains are in the component's table, where a
+/// rule can use the sets.
+const DEFAULT_DENY_CHAINS: &str = "table inet trustiot_agent_allow {
     chain output {
         type filter hook output priority filter + 10; policy accept;
         meta skuid \"trustiot-agent\" meta l4proto tcp jump agent
@@ -70,6 +72,12 @@ const DEFAULT_DENY: &str = "table inet trustiot_agent_allow {
     }
 }
 ";
+
+/// The default deny's file: the table and the sets as [`Allowlist::declarations`] declares them
+/// (the component never creates them), then the chains.
+fn default_deny() -> String {
+    format!("{}{DEFAULT_DENY_CHAINS}", Allowlist::declarations())
+}
 
 /// The image of `tests/egress.rs`, built once per process and Containerfile content (with the
 /// same tag, so the two test files share it), from an empty build context.
@@ -290,6 +298,26 @@ impl Lab {
         self.listing("list ruleset")
     }
 
+    /// Loads the default deny's file ([`default_deny`]).
+    fn load_default_deny(&self) {
+        self.put("/root/default-deny.nft", default_deny().as_bytes());
+        self.ok("nft -f /root/default-deny.nft");
+    }
+
+    /// Whether the component's table exists.
+    fn table_exists(&self) -> bool {
+        self.sh(&format!("nft list table inet {TABLE}"))
+            .status
+            .success()
+    }
+
+    /// The default deny's two chains.
+    fn chains(&self) -> String {
+        ["output", "agent"]
+            .map(|chain| self.listing(&format!("list chain inet {TABLE} {chain}")))
+            .join("\n")
+    }
+
     /// Every table but the component's.
     fn other_tables(&self) -> String {
         let ours = format!("table inet {TABLE}");
@@ -342,33 +370,39 @@ fn each_list_replaces_the_sets_and_nothing_else_changes() {
             && others.contains("table inet host_rules {"),
         "{others}"
     );
-    assert!(
-        !lab.sh(&format!("nft list table inet {TABLE}"))
-            .status
-            .success(),
-        "the table exists before the first list"
-    );
-
-    // The first list creates the table with the two sets, and nothing else.
+    // Without the default deny's table the component creates nothing: a list fails, so an applied
+    // list always lands in the sets of a loaded default deny.
     let first = list(&[("10.81.3.1", 443), ("fd81:3::1", 443), ("192.0.2.10", 502)]);
+    let before = lab.ruleset();
+    let (code, answer) = lab.request(first.encode().as_bytes());
+    assert_eq!(code, Some(1), "{answer}");
+    assert!(answer.starts_with("failed: nft "), "{answer}");
+    assert_eq!(lab.ruleset(), before);
+    assert!(!lab.table_exists(), "the component created the table");
+    eprintln!("evidence: no default deny loaded: exit {code:?}, {answer}; no table was created");
+
+    // The default deny's file declares the table and the sets and loads the chains that use them.
+    lab.load_default_deny();
+    let chains = lab.chains();
+
+    // The first list fills the sets and changes nothing else.
     assert_eq!(
         lab.request(first.encode().as_bytes()),
         (Some(0), "ok 3".to_owned())
     );
     lab.assert_sets(&first, "after the first list");
     let table = lab.ok(&format!("nft list table inet {TABLE}"));
+    eprintln!("evidence: the table after the first list:\n{table}");
     assert_eq!(table.matches("\tset ").count(), 2, "{table}");
-    assert!(!table.contains("chain"), "{table}");
     assert!(
         table.contains("type ipv4_addr . inet_service") && table.contains("size 4096"),
         "{table}"
     );
+    assert_eq!(lab.chains(), chains);
     assert_eq!(lab.other_tables(), others);
 
-    // With a chain shaped like Laysi/trustiot-v2#865's default deny using the sets, the agent's
-    // account reaches over TCP exactly the listed destinations; other accounts are not affected.
-    lab.put("/root/default-deny.nft", DEFAULT_DENY.as_bytes());
-    lab.ok("nft -f /root/default-deny.nft");
+    // With that default deny, the agent's account reaches over TCP exactly the listed
+    // destinations; other accounts are not affected.
     for (address, port, expected) in [
         ("10.81.3.1", 443, "ok"),
         ("10.81.3.1", 80, "refused"),
@@ -380,8 +414,10 @@ fn each_list_replaces_the_sets_and_nothing_else_changes() {
             expected,
             "agent to {address} {port} with the first list"
         );
+        eprintln!("evidence: first list, agent to {address} port {port}: {expected}");
     }
     assert_eq!(lab.probe("other", "10.81.3.1", 80), "ok");
+    eprintln!("evidence: first list, nobody to 10.81.3.1 port 80: ok");
 
     // A changed list replaces the sets: what left is closed, what came is open, and the chain
     // that uses the sets is still there.
@@ -402,6 +438,7 @@ fn each_list_replaces_the_sets_and_nothing_else_changes() {
             expected,
             "agent to {address} {port} with the second list"
         );
+        eprintln!("evidence: second list, agent to {address} port {port}: {expected}");
     }
     assert_eq!(lab.other_tables(), others);
 
@@ -482,21 +519,24 @@ fn each_list_replaces_the_sets_and_nothing_else_changes() {
         assert_eq!(code, Some(2), "{what}: {answer}");
         assert!(answer.starts_with("refused: "), "{what}: {answer}");
         assert_eq!(lab.ruleset(), before, "{what} changed the ruleset");
+        eprintln!("evidence: {what}: exit {code:?}, {answer}; the ruleset is unchanged");
     }
     lab.assert_sets(&second, "after the refused requests");
 
-    // A valid list that nft cannot apply changes nothing either, not even the set whose part of
-    // the transaction came first: here fieldbus6 exists with another type, so the flush and the
-    // new elements of fieldbus4 do not apply.
+    // A valid list that the kernel cannot apply changes nothing either, not even the set whose
+    // part of the transaction came first: here fieldbus6 holds at most one element, so the kernel
+    // refuses the second IPv6 destination, and the flush and the new elements of fieldbus4,
+    // earlier in the same transaction, do not apply.
     lab.ok(&format!(
         "nft delete table inet {TABLE} \
          && nft add table inet {TABLE} \
          && nft add set inet {TABLE} {SET_V4} '{{ type ipv4_addr . inet_service; size 4096; }}' \
          && nft add element inet {TABLE} {SET_V4} '{{ 10.81.3.1 . 80 }}' \
-         && nft add set inet {TABLE} {SET_V6} '{{ type ipv6_addr; }}'"
+         && nft add set inet {TABLE} {SET_V6} '{{ type ipv6_addr . inet_service; size 1; }}'"
     ));
+    let two_v6 = list(&[("10.81.3.1", 443), ("fd81:3::1", 443), ("fd81:3::1", 80)]);
     let before = lab.ruleset();
-    let (code, answer) = lab.request(first.encode().as_bytes());
+    let (code, answer) = lab.request(two_v6.encode().as_bytes());
     assert_eq!(code, Some(1), "{answer}");
     assert!(answer.starts_with("failed: nft "), "{answer}");
     assert_eq!(lab.ruleset(), before);
@@ -504,15 +544,28 @@ fn each_list_replaces_the_sets_and_nothing_else_changes() {
         lab.elements(SET_V4),
         BTreeSet::from(["10.81.3.1 . 80".to_owned()])
     );
+    eprintln!(
+        "evidence: two IPv6 destinations for a fieldbus6 of size 1: exit {code:?}, {answer}; \
+         the ruleset is unchanged, fieldbus4 still holds only 10.81.3.1 . 80"
+    );
 
-    // Once the table is gone (`nft flush ruleset`, a reload of nftables.service), the next list
-    // creates it again.
+    // Once the table is gone (`nft flush ruleset`, a reload of nftables.service), a list fails and
+    // creates nothing, until the default deny's file is loaded again.
     lab.ok(&format!("nft delete table inet {TABLE}"));
+    let (code, answer) = lab.request(first.encode().as_bytes());
+    assert_eq!(code, Some(1), "{answer}");
+    assert!(!lab.table_exists(), "the component created the table");
+    lab.load_default_deny();
     assert_eq!(
         lab.request(first.encode().as_bytes()),
         (Some(0), "ok 3".to_owned())
     );
-    lab.assert_sets(&first, "after the table was deleted");
+    lab.assert_sets(&first, "after the default deny was loaded again");
+    assert_eq!(lab.chains(), chains);
+    eprintln!(
+        "evidence: table deleted: exit {code:?}, {answer}, no table created; after the default \
+         deny was loaded again: ok 3"
+    );
 
     // A full list replaces a full list of other destinations in one transaction, and an empty
     // list empties both sets.
@@ -525,13 +578,23 @@ fn each_list_replaces_the_sets_and_nothing_else_changes() {
             (Some(0), format!("ok {MAX_ENTRIES}"))
         );
         lab.assert_sets(&full, "after a full list");
+        let first = full.iter().next().unwrap();
+        eprintln!(
+            "evidence: a full list from {} ({} bytes): ok {MAX_ENTRIES}, the sets hold exactly it",
+            first.address(),
+            full.encode().len()
+        );
     }
     assert_eq!(
         lab.request(Allowlist::default().encode().as_bytes()),
         (Some(0), "ok 0".to_owned())
     );
     lab.assert_sets(&Allowlist::default(), "after the empty list");
+    assert_eq!(lab.chains(), chains);
     assert_eq!(lab.other_tables(), others);
+    eprintln!(
+        "evidence: the empty list: ok 0, both sets empty; the other tables never changed:\n{others}"
+    );
 }
 
 /// systemd as PID 1 in the container, with the units and the executable installed as the image
@@ -644,10 +707,32 @@ fn only_the_agents_account_reaches_the_component_which_holds_only_cap_net_admin(
         lab.ok("stat -c '%U %G %a' /run/trustiot-agent-allowlist"),
         "root root 755"
     );
+    eprintln!(
+        "evidence: without the agent's group the socket did not start; with it: {}",
+        lab.ok(&format!(
+            "stat -c '%n %U %G %a' /run/trustiot-agent-allowlist {SOCKET}"
+        ))
+    );
 
-    // The agent's account sends a list and gets the answer; the sets hold it.
+    // Before the default deny's table exists, the instance answers that nft failed and creates
+    // nothing, under the same sandbox.
     let first = list(&[("10.81.3.1", 502), ("fd81:3::1", 8886)]);
     lab.put("/root/first", first.encode().as_bytes());
+    let early = send(&lab, "agent", "/root/first");
+    let early = String::from_utf8_lossy(&early.stdout).into_owned();
+    assert!(early.starts_with("failed: nft "), "{early}");
+    assert!(!lab.table_exists(), "the component created the table");
+    eprintln!(
+        "evidence: through the socket, before the table exists: {}",
+        early.trim_end()
+    );
+    lab.put(
+        "/root/declarations.nft",
+        Allowlist::declarations().as_bytes(),
+    );
+    lab.ok("nft -f /root/declarations.nft");
+
+    // The agent's account sends a list and gets the answer; the sets hold it.
     let sent = send(&lab, "agent", "/root/first");
     assert_eq!(
         String::from_utf8_lossy(&sent.stdout),
@@ -669,6 +754,10 @@ fn only_the_agents_account_reaches_the_component_which_holds_only_cap_net_admin(
     );
     assert!(other.stdout.is_empty());
     lab.assert_sets(&first, "after another account tried");
+    eprintln!(
+        "evidence: the agent's account got \"ok 2\"; nobody got: {}",
+        String::from_utf8_lossy(&other.stderr).trim()
+    );
 
     // A refused request through the socket: the answer and the journal say why; the sets stay.
     let bad_request = b"trustiot-agent-allowlist v1\n10.81.3.1 4196\nflush ruleset\nend\n";
@@ -701,6 +790,7 @@ fn only_the_agents_account_reaches_the_component_which_holds_only_cap_net_admin(
             .any(|line| line.contains(&format!("-{uid}.service")) && line.contains("applied")),
         "no instance of UID {uid}: {journal}"
     );
+    eprintln!("evidence: the journal (the agent's UID is {uid}):\n{journal}");
 
     // One instance at a time: while a client keeps one busy, another connection is closed
     // without an answer and changes nothing; once the first ends, the second goes through.
@@ -724,6 +814,10 @@ fn only_the_agents_account_reaches_the_component_which_holds_only_cap_net_admin(
     let after = send(&lab, "agent", "/root/second");
     assert_eq!(String::from_utf8_lossy(&after.stdout), "ok 1\n");
     lab.assert_sets(&second, "after the busy instance ended");
+    eprintln!(
+        "evidence: while one instance ran, a second connection got no answer and the sets \
+         stayed; after it ended the same request got \"ok 1\""
+    );
 
     // What the instance runs with: replace the executable for one connection with one that
     // reports its credentials and tries to write outside its private /tmp.
@@ -734,6 +828,7 @@ fn only_the_agents_account_reaches_the_component_which_holds_only_cap_net_admin(
     lab.ok("systemctl daemon-reload");
     let report = send(&lab, "agent", "/root/second");
     let report = String::from_utf8_lossy(&report.stdout).into_owned();
+    eprintln!("evidence: what an instance runs with:\n{report}");
     let field = |name: &str| -> Vec<String> {
         report
             .lines()

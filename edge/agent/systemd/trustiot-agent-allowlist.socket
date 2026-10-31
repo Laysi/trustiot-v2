@@ -31,3 +31,10 @@ Accept=yes
 # answer and the client tries again, so lists are applied in the order their instances start and
 # a client cannot pile up instances.
 MaxConnections=1
+# At most 10 wake-ups of the listening socket in 2 s; more pause it for the rest of the window
+# (connections wait in the backlog) instead of starting instances or logging dropped connections,
+# so a client that connects in a loop writes a bounded amount to the journal. Below
+# TriggerLimitBurst= (200 for Accept=yes), which would put the socket into a failed state instead.
+# The agent sends a list only when its configuration or a resolution changes.
+PollLimitIntervalSec=2s
+PollLimitBurst=10

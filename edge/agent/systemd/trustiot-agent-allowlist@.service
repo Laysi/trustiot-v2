@@ -6,7 +6,7 @@
 # request is untrusted input: the executable takes nothing but a list of addresses and ports and
 # writes the nft commands itself (src/allowlist.rs). This unit bounds what the process could do
 # beyond that: a dynamic account that owns no file and is not root, CAP_NET_ADMIN as its only
-# capability, a read-only file system but for its private /tmp, no IP socket, a time limit.
+# capability, a read-only file system but for its private /tmp, no socket but netlink, a time limit.
 # Compare trustiot-agent-egress.service, which runs as root with the same single capability: it
 # loads a fixed file from the image and reads nothing from the agent.
 
@@ -52,12 +52,15 @@ ProtectClock=yes
 ProtectHostname=yes
 ProtectProc=invisible
 ProcSubset=pid
-# AF_UNIX: the connection it is handed; AF_NETLINK: nft. No IP socket, and no IP packet from the
-# unit's processes either (IPAddressDeny=). Neither PrivateNetwork= nor PrivateUsers=: the sets
-# are in the gateway's network namespace, which nft changes with the capability of the gateway's
-# user namespace.
-RestrictAddressFamilies=AF_UNIX AF_NETLINK
+# AF_NETLINK for nft, and no other socket: the connection and the journal stream are handed to it
+# open, which this does not restrict, so it cannot open a unix socket (D-Bus, avahi) or an IP
+# socket, and no IP packet leaves the unit's processes either (IPAddressDeny=). Neither
+# PrivateNetwork= nor PrivateUsers=: the sets are in the gateway's network namespace, which nft
+# changes with the capability of the gateway's user namespace.
+RestrictAddressFamilies=AF_NETLINK
 IPAddressDeny=any
+# The component and nft.
+TasksMax=4
 RestrictNamespaces=yes
 RestrictRealtime=yes
 RestrictSUIDSGID=yes

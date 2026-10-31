@@ -80,16 +80,23 @@ fn handle() -> Reply {
             return Reply::Refused(error.to_string());
         }
     };
+    // The log names the list by its digest rather than writing up to 4096 destinations for every
+    // request; `nft list table inet trustiot_agent_allow` shows what the sets hold.
     match apply(&list.nft_script()) {
         Ok(()) => {
             let (v4, v6) = list.families();
-            eprintln!("applied {} destinations ({v4} IPv4, {v6} IPv6)", list.len());
+            eprintln!(
+                "applied {} destinations ({v4} IPv4, {v6} IPv6), list sha256 {}",
+                list.len(),
+                list.digest()
+            );
             Reply::Applied(list.len())
         }
         Err(failure) => {
             eprintln!(
-                "did not apply a list of {} destinations; the sets are unchanged: {}",
+                "did not apply a list of {} destinations (sha256 {}); the sets are unchanged: {}",
                 list.len(),
+                list.digest(),
                 failure.detail
             );
             Reply::Failed(failure.reason)

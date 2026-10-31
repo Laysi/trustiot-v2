@@ -419,8 +419,8 @@ const ALLOWLIST_SERVICE: &str = include_str!("../systemd/trustiot-agent-allowlis
 /// Where the image installs the component (the service's `ExecStart=`).
 const ALLOWLIST_EXECUTABLE: &str = "/usr/libexec/trustiot-agent/allowlist";
 /// The highest `systemd-analyze security` exposure allowed for an instance of the component; it
-/// scores 1.1 on 2026-10-31 (what is left: CAP_NET_ADMIN and its ambient grant, netlink and local
-/// sockets, the gateway's network namespace and accounts, the root directory, the clock device).
+/// scores 1.1 on 2026-10-31 (what is left: CAP_NET_ADMIN and its ambient grant, netlink sockets,
+/// the gateway's network namespace and accounts, the root directory, the clock device).
 const ALLOWLIST_MAX_EXPOSURE: f64 = 1.5;
 
 #[test]
@@ -439,6 +439,11 @@ fn only_the_agents_group_reaches_the_allowlist_socket() {
         // One instance per connection, one at a time.
         ("Accept", "yes"),
         ("MaxConnections", "1"),
+        // A client that connects in a loop is slowed down, not answered with a failed socket:
+        // the poll limit pauses the socket well below the trigger limit (200 in 2 s for
+        // Accept=yes), which would fail it.
+        ("PollLimitIntervalSec", "2s"),
+        ("PollLimitBurst", "10"),
     ] {
         assert_eq!(
             section.get(key).map(Vec::as_slice),
@@ -446,7 +451,15 @@ fn only_the_agents_group_reaches_the_allowlist_socket() {
             "{key}="
         );
     }
-    assert_eq!(section.len(), 8, "a new setting needs a check: {section:?}");
+    assert_eq!(
+        section.len(),
+        10,
+        "a new setting needs a check: {section:?}"
+    );
+    assert!(
+        !section.contains_key("TriggerLimitBurst"),
+        "the default trigger limit stays above the poll limit"
+    );
     assert!(
         !socket.contains_key("Install"),
         "the agent's unit pulls the socket in (Laysi/trustiot-v2#865)"
@@ -500,8 +513,10 @@ fn the_allowlist_component_holds_only_cap_net_admin_as_a_dynamic_account() {
         ("ProtectHostname", "yes"),
         ("ProtectProc", "invisible"),
         ("ProcSubset", "pid"),
-        ("RestrictAddressFamilies", "AF_UNIX AF_NETLINK"),
+        // Netlink for nft; the connection and the journal stream are handed to it open.
+        ("RestrictAddressFamilies", "AF_NETLINK"),
         ("IPAddressDeny", "any"),
+        ("TasksMax", "4"),
         ("RestrictNamespaces", "yes"),
         ("RestrictRealtime", "yes"),
         ("RestrictSUIDSGID", "yes"),
@@ -549,7 +564,7 @@ fn the_allowlist_component_holds_only_cap_net_admin_as_a_dynamic_account() {
     }
     assert_eq!(
         section.len(),
-        36,
+        37,
         "a new setting needs a check: {section:?}"
     );
 

@@ -406,9 +406,11 @@ fn the_agent_reads_only_the_listed_environment_variables_and_starts_no_process()
 
 /// The allowlist component holds `CAP_NET_ADMIN` and reads its request from the agent, which may
 /// be compromised. It reads no environment variable, and the one program it starts is nft, by
-/// absolute path, with an empty environment and the script as standard input: its only items
-/// outside the agent's lists are `process::Command` and `process::Stdio` for that, and libc's
-/// `O_TMPFILE` for the script file (README.md, "fieldbus 放行集合").
+/// absolute path, with an empty environment, fixed arguments and the script as standard input:
+/// its only items outside the agent's lists are `process::Command` and `process::Stdio` for that,
+/// and of libc only `O_TMPFILE`, for the script file. It opens no file by name but the directory
+/// of that unnamed file, and its code is this one file (README.md, "fieldbus 放行集合"). Like the
+/// agent's scan, this reads source text: a tripwire for an honest change, which review backs up.
 #[test]
 fn the_allowlist_component_starts_only_nft_and_reads_nothing() {
     let path = Path::new(env!("CARGO_MANIFEST_DIR")).join(ALLOWLIST_SOURCE);
@@ -420,19 +422,68 @@ fn the_allowlist_component_starts_only_nft_and_reads_nothing() {
     );
     assert_eq!(variables_read(&code), Vec::<String>::new());
     let tokens = tokens(&code);
-    let started = tokens
+    let count = |sequence: &[&str]| {
+        tokens
+            .windows(sequence.len())
+            .filter(|window| {
+                window
+                    .iter()
+                    .zip(sequence)
+                    .all(|(token, item)| token == item)
+            })
+            .count()
+    };
+    // libc: its own list, narrower than the agent's.
+    let libc_items: BTreeSet<&str> = tokens
         .windows(3)
-        .filter(|window| window[0] == "Command" && window[1] == "::" && window[2] == "new")
-        .count();
-    assert_eq!(started, 1, "one place starts a program");
+        .filter(|window| window[0] == "libc" && window[1] == "::")
+        .map(|window| window[2].as_str())
+        .collect();
+    assert_eq!(libc_items, BTreeSet::from(["O_TMPFILE"]));
+    // One program, with fixed arguments: no other `.arg(` or `.args(`.
+    assert_eq!(
+        count(&["Command", "::", "new"]),
+        1,
+        "one place starts a program"
+    );
+    assert_eq!(count(&[".", "arg", "("]), 0);
+    assert_eq!(count(&[".", "args", "("]), 1);
     for expected in [
         "const NFT: &str = \"/usr/sbin/nft\";",
         "Command::new(NFT)",
         ".args([\"-f\", \"-\"])",
         ".env_clear()",
+        "const SCRIPT_DIRECTORY: &str = \"/tmp\";",
+        ".custom_flags(libc::O_TMPFILE)",
     ] {
         assert!(code.contains(expected), "{expected}");
     }
+    // Files: one `open`, the unnamed script file in the private /tmp; nothing read or written by
+    // name, and no other source pulled in.
+    assert_eq!(count(&[".", "open", "("]), 1);
+    assert_eq!(count(&["OpenOptions", "::", "new"]), 1);
+    for denied in [
+        "File",
+        "read_to_string",
+        "read_dir",
+        "read_link",
+        "create",
+        "create_new",
+        "remove_file",
+        "rename",
+        "include",
+        "include_str",
+        "include_bytes",
+        "mod",
+        "path",
+    ] {
+        assert!(
+            !tokens.iter().any(|token| token == denied),
+            "the component names {denied}"
+        );
+    }
+    assert_eq!(count(&["fs", "::"]), 1, "std::fs only for OpenOptions");
+    assert_eq!(count(&["fs", "::", "OpenOptions"]), 1);
 
     // It takes no argument, and with one it reads nothing and applies nothing.
     for arguments in [

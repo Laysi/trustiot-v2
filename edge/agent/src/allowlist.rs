@@ -9,8 +9,10 @@
 //! (`systemd/trustiot-agent-allowlist.socket`, `systemd/trustiot-agent-allowlist@.service`). It
 //! shares this module with the agent, so both sides read and write the same format. It treats a
 //! request as untrusted: it takes nothing but a list in the format below ([`Allowlist::parse`]),
-//! refuses the whole list when any part of it is anything else, and replaces the contents of its
-//! two sets in one nftables transaction ([`Allowlist::nft_script`]). The commands it hands to nft
+//! refuses the whole list when any part of it is anything else, and replaces the contents of the
+//! two sets in one nftables transaction ([`Allowlist::nft_script`]); the table and the sets belong
+//! to the default deny's file, which declares them ([`Allowlist::declarations`]), and the
+//! component fails rather than create them. The commands it hands to nft
 //! are fixed text around the parsed addresses and ports, written by `Display`: no byte of the
 //! request reaches nft. `README.md`, section "fieldbus 放行集合", has the interface, the permission
 //! boundary and the threat model.
@@ -260,6 +262,17 @@ impl Allowlist {
         (v4, self.destinations.len() - v4)
     }
 
+    /// The SHA-256 of the list's request ([`Self::encode`]) in lowercase hex: one list has one
+    /// request, so the component's log names the list it applied and the agent can log the same
+    /// value for the list it sent.
+    pub fn digest(&self) -> String {
+        ring::digest::digest(&ring::digest::SHA256, self.encode().as_bytes())
+            .as_ref()
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect()
+    }
+
     /// The request that carries this list.
     pub fn encode(&self) -> String {
         let mut request = format!("{HEADER}\n");
@@ -329,13 +342,16 @@ impl Allowlist {
     /// The nftables commands that make the two sets hold exactly this list, as one file for
     /// `nft -f`, which applies a file as one transaction: all of it or none of it.
     ///
-    /// The table and the sets are created when they are missing ([`Self::declarations`]); when
-    /// they exist as declared, that changes nothing, and when a set exists with another type the
-    /// transaction fails and nothing changes. Then both sets are flushed and filled. Nothing
-    /// else is named: no other table, set, chain or rule. Every byte that does not come from
-    /// this function's fixed text comes from an [`IpAddr`] or a `u16` written by `Display`.
+    /// Both sets are flushed and filled. The script neither creates nor declares anything: the
+    /// table and the sets come from the file that loads the default deny (Laysi/trustiot-v2#865,
+    /// with [`Self::declarations`]). When they are missing (no default deny loaded, or
+    /// `nft flush ruleset` removed it), or a set cannot take the elements, the transaction fails
+    /// and nothing changes; an applied list therefore always lands in the sets of a loaded
+    /// default deny. Nothing else is named: no other table, set, chain or rule. Every byte that
+    /// does not come from this function's fixed text comes from an [`IpAddr`] or a `u16`
+    /// written by `Display`.
     pub fn nft_script(&self) -> String {
-        let mut script = Self::declarations();
+        let mut script = String::new();
         for set in [SET_V4, SET_V6] {
             script.push_str(&format!("flush set inet {TABLE} {set}\n"));
         }
@@ -358,10 +374,10 @@ impl Allowlist {
         script
     }
 
-    /// The table and the two sets as the component creates them. Another file that declares
-    /// them (Laysi/trustiot-v2#865's default deny) must use the same declarations: nft keeps an
-    /// existing set when a declaration matches it and leaves its elements alone, and fails the
-    /// whole load when the type differs.
+    /// The table and the two sets, as the file that loads the default deny
+    /// (Laysi/trustiot-v2#865) declares them; the component itself never creates them. Loading
+    /// these again keeps existing sets and their elements, and fails the whole load when a set
+    /// exists with another type.
     pub fn declarations() -> String {
         format!(
             "add table inet {TABLE}\n\
@@ -666,10 +682,7 @@ mod tests {
         let list = Allowlist::parse(request(&["10.0.0.5 502", "fd00:: 8886"]).as_bytes()).unwrap();
         assert_eq!(
             list.nft_script(),
-            "add table inet trustiot_agent_allow\n\
-             add set inet trustiot_agent_allow fieldbus4 { type ipv4_addr . inet_service; size 4096; }\n\
-             add set inet trustiot_agent_allow fieldbus6 { type ipv6_addr . inet_service; size 4096; }\n\
-             flush set inet trustiot_agent_allow fieldbus4\n\
+            "flush set inet trustiot_agent_allow fieldbus4\n\
              flush set inet trustiot_agent_allow fieldbus6\n\
              add element inet trustiot_agent_allow fieldbus4 { 10.0.0.5 . 502 }\n\
              add element inet trustiot_agent_allow fieldbus6 { fd00:: . 8886 }\n"
@@ -677,12 +690,23 @@ mod tests {
         // An empty list only flushes.
         assert_eq!(
             Allowlist::default().nft_script(),
-            format!(
-                "{}flush set inet trustiot_agent_allow fieldbus4\n\
-                 flush set inet trustiot_agent_allow fieldbus6\n",
-                Allowlist::declarations()
-            )
+            "flush set inet trustiot_agent_allow fieldbus4\n\
+             flush set inet trustiot_agent_allow fieldbus6\n"
         );
+        // The declarations, which the default deny's file uses and the script never does.
+        assert_eq!(
+            Allowlist::declarations(),
+            "add table inet trustiot_agent_allow\n\
+             add set inet trustiot_agent_allow fieldbus4 { type ipv4_addr . inet_service; size 4096; }\n\
+             add set inet trustiot_agent_allow fieldbus6 { type ipv6_addr . inet_service; size 4096; }\n"
+        );
+        // One digest per list, whatever order the destinations came in.
+        let mut destinations: Vec<Destination> = list.iter().copied().collect();
+        destinations.reverse();
+        let reversed = Allowlist::new(destinations).unwrap();
+        assert_eq!(reversed.digest(), list.digest());
+        assert_eq!(list.digest().len(), 64);
+        assert_ne!(Allowlist::default().digest(), list.digest());
         // A long list is spread over several commands of the one file.
         let many: Vec<Destination> = (0..600_u32)
             .map(|index| {
@@ -695,9 +719,7 @@ mod tests {
         // Every line of any script is one of these shapes.
         for line in script.lines() {
             assert!(
-                line.starts_with("add table inet trustiot_agent_allow")
-                    || line.starts_with("add set inet trustiot_agent_allow fieldbus")
-                    || line.starts_with("flush set inet trustiot_agent_allow fieldbus")
+                line.starts_with("flush set inet trustiot_agent_allow fieldbus")
                     || line.starts_with("add element inet trustiot_agent_allow fieldbus4 { 10."),
                 "{line}"
             );
