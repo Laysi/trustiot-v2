@@ -219,12 +219,17 @@ async function main(): Promise<void> {
       problems.push(...crypttabProblems(await readFile(join(ROOT, "etc/crypttab"), "utf8").catch(() => "")));
       // The units systemd makes from /etc/crypttab and /etc/fstab at boot, made here by the image's
       // own generators (the fstab generator's into a directory of its own, which systemd-analyze
-      // verify below does not read).
+      // verify below does not read). The fstab generator skips every device entry when /sys is
+      // read-only, as in the tool container, unless SYSTEMD_SYSFS_CHECK=0 (parse_fstab_one() and
+      // sysfs_check() in src/fstab-generator/fstab-generator.c of systemd v257, read 2026-10-31 at
+      // https://github.com/systemd/systemd/blob/v257/src/fstab-generator/fstab-generator.c).
       const generatorDirs = { "systemd-cryptsetup-generator": "run/systemd/generator", "systemd-fstab-generator": "run/trustiot-check/fstab-generator" };
       for (const [generator, dir] of Object.entries(generatorDirs)) {
         await rm(join(ROOT, dir), { recursive: true, force: true });
         await mkdir(join(ROOT, dir), { recursive: true });
-        await chroot.run([`/usr/lib/systemd/system-generators/${generator}`, `/${dir}`, `/${dir}.early`, `/${dir}.late`], { env: { SYSTEMD_PROC_CMDLINE: "" } });
+        await chroot.run([`/usr/lib/systemd/system-generators/${generator}`, `/${dir}`, `/${dir}.early`, `/${dir}.late`], {
+          env: { SYSTEMD_PROC_CMDLINE: "", SYSTEMD_SYSFS_CHECK: "0" },
+        });
       }
       // The volume and the unlocked volume each get the device timeout (DATA.deviceTimeout), so the
       // first boot's setup has the time it needs.

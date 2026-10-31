@@ -119,7 +119,7 @@ LUKS 標頭因此只有一個 keyslot 與一個 `systemd-tpm2` token（`tpm2-pcr
 
 ### 解不開時（fail closed）
 
-- `headless=true`：`systemd-cryptsetup` 絕不詢問密碼。TPM 不在時它等 TPM 出現，等不到（token 的逾時）就失敗；換了 TPM 或 TPM 被清除時解封失敗，立刻結束；`TimeoutStartSec=2min` 是上限。
+- `headless=true`：`systemd-cryptsetup` 絕不詢問密碼，volume 也沒有密碼 keyslot 可以退回。TPM 不在時，setup 先等 `/dev/tpmrm0` 出現（systemd 預設等 device 的 90 秒），`systemd-cryptsetup` 再等 TPM 30 秒（crypttab 預設的 `token-timeout=`），等不到就失敗（開機測試的日誌：`Timed out waiting for security device` 後 `No passphrase or recovery key registered.`）；換了 TPM 或 TPM 被清除時解封失敗（`Failed to unseal secret using TPM2: State not recoverable`），一秒內結束；`TimeoutStartSec=2min` 是上限。
 - `nofail`（crypttab 與 fstab 都有）：開機照常完成，ssh 可以登入診斷；資料分割區不掛上。
 - agent 不啟動：drop-in `files/data/trustiot-agent-data.conf` 給 agent 的 unit `RequiresMountsFor=/var/lib/trustiot-agent`（unit 的 `StateDirectory=` 本來就隱含它）與 `AssertPathIsMountPoint=/var/lib/trustiot-agent`：掛載失敗時 agent 的啟動因相依失敗而取消；就算有人手動啟動，掛載點不是掛載點時 assert 失敗，agent 不會把資料寫到 root。
 - 這裡只做到「不掛上、不啟動」，不清除也不重新格式化（Laysi/trustiot-v2#867）。
