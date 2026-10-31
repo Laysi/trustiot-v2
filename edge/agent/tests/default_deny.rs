@@ -72,6 +72,8 @@ const ALLOWLIST_INSTALLED: &str = "/usr/libexec/trustiot-agent/allowlist";
 const NAMESERVER: &str = "10.81.3.1";
 const SECOND_NAMESERVER: &str = "10.81.3.53";
 const SECOND_NAMESERVER6: &str = "fd81:3::53";
+/// A host beyond the site (RFC 5737), the final destination of a source-routed probe.
+const FAR_AWAY: &str = "192.0.2.99";
 
 /// The systemd container runs without an SELinux label, as in `tests/egress.rs`.
 const SELINUX_OFF: &str = "label=disable";
@@ -204,7 +206,8 @@ impl Lab {
         };
         // The capabilities of tests/egress.rs's network container, for the same reasons. /tmp,
         // where the executables create their script files, is a tmpfs as in the systemd
-        // container, rather than the image's overlay.
+        // container, rather than the image's overlay. NET_RAW only for the source-route probe,
+        // which hands it to one probe's process.
         let lab = Self::run(
             runtime,
             &[
@@ -217,7 +220,7 @@ impl Lab {
                 "--cap-drop",
                 "ALL",
                 "--cap-add",
-                "NET_ADMIN,SYS_ADMIN,SETUID,SETGID,NET_BIND_SERVICE,CHOWN,FOWNER,DAC_OVERRIDE",
+                "NET_ADMIN,SYS_ADMIN,SETUID,SETGID,NET_BIND_SERVICE,CHOWN,FOWNER,DAC_OVERRIDE,NET_RAW",
                 "--security-opt",
                 "no-new-privileges",
                 "--entrypoint",
@@ -410,12 +413,48 @@ impl Lab {
 
     /// Packets the default deny's refusal counted.
     fn denied(&self) -> u64 {
+        self.counter("default deny")
+    }
+
+    /// The packets the default deny's rule with this comment counted.
+    fn counter(&self, comment: &str) -> u64 {
         self.ok(&format!(
-            "set -o pipefail; nft list chain inet {TABLE} agent | grep 'comment \"default deny\"' \
+            "set -o pipefail; nft list chain inet {TABLE} agent | grep 'comment \"{comment}\"' \
              | sed -E 's/.*counter packets ([0-9]+) .*/\\1/'"
         ))
         .parse()
         .unwrap()
+    }
+
+    /// Sends one UDP datagram as `who` to port 53 of `FAR_AWAY`, loosely source-routed (IPv4
+    /// option LSRR, which an unprivileged socket may set) through the nameserver: the header's
+    /// destination is the nameserver, the real one is in the option. What `lab probe` reports,
+    /// and socat's error output. With `net_raw` the probe's process holds `CAP_NET_RAW`: some
+    /// kernels refuse the option to a socket without it, some do not.
+    fn source_routed(&self, who: &str, net_raw: bool) -> (String, String) {
+        let account = match who {
+            "agent" => "setpriv --reuid=trustiot-agent --regid=trustiot-agent --clear-groups",
+            _ => "setpriv --reuid=nobody --regid=nogroup --clear-groups",
+        };
+        let caps = if net_raw {
+            " --inh-caps=+net_raw --ambient-caps=+net_raw"
+        } else {
+            ""
+        };
+        // LSRR (0x83), length 7, pointer 4, the first hop 10.81.3.1 (0a 51 03 01), end of list.
+        let output = self.sh(&format!(
+            "printf x | timeout 60 {account}{caps} socat -u - \
+             UDP4-DATAGRAM:{FAR_AWAY}:53,ip-options=x8307040a51030100"
+        ));
+        let error = String::from_utf8_lossy(&output.stderr).into_owned();
+        let outcome = if output.status.success() {
+            "ok"
+        } else if error.contains("Operation not permitted") {
+            "not-permitted"
+        } else {
+            "error"
+        };
+        (outcome.to_owned(), error)
     }
 
     /// Packets the Laysi/trustiot-v2#813 refusals counted, all rules together.
@@ -701,6 +740,35 @@ fn the_agents_account_reaches_only_the_allowlist_the_cloud_and_its_nameservers()
         "a Laysi/trustiot-v2#813 refusal counted a probe of the default deny"
     );
 
+    // A source route through the nameserver: the header names the nameserver's port 53, which
+    // the DNS allowance accepts, but the datagram is for another host. This kernel may refuse the
+    // option itself to an account without CAP_NET_RAW (recorded, not required); with it, as on a
+    // kernel that lets every account set it, nobody's datagram leaves and the default deny
+    // refuses the agent's, as it refuses the same host without the route.
+    assert_eq!(lab.probe("agent", "udp", FAR_AWAY, 53), "not-permitted");
+    let (outcome, error) = lab.source_routed("other", false);
+    eprintln!(
+        "evidence: nobody without CAP_NET_RAW, UDP {FAR_AWAY}:53 source-routed: {outcome} {}",
+        error.trim()
+    );
+    let (outcome, error) = lab.source_routed("other", true);
+    assert_eq!(outcome, "ok", "nobody: {error}");
+    let options = lab.counter("IP options");
+    let (outcome, error) = lab.source_routed("agent", true);
+    assert_eq!(outcome, "not-permitted", "agent: {error}");
+    assert!(
+        error.contains("sendto") || error.contains("write"),
+        "refused on sending, not on setting the option: {error}"
+    );
+    assert!(
+        lab.counter("IP options") > options,
+        "the IP options rule did not count it"
+    );
+    eprintln!(
+        "evidence: refused: agent (with CAP_NET_RAW) to UDP {FAR_AWAY}:53 source-routed through \
+         the nameserver: not-permitted, counted by the IP options rule; nobody: ok"
+    );
+
     // The DNS allowance follows /etc/resolv.conf: another nameserver is refused until the
     // executable runs, then allowed, and the old one is refused.
     lab.resolv_conf(&format!(
@@ -737,6 +805,24 @@ fn the_agents_account_reaches_only_the_allowlist_the_cloud_and_its_nameservers()
     eprintln!(
         "evidence: three nameservers, IPv6 first: {log}; the fourth (10.81.3.1) stays refused"
     );
+    // A full set replaced by another full set, in the one transaction.
+    for (contents, expected) in [
+        (
+            "nameserver 192.0.2.1\nnameserver 192.0.2.2\nnameserver 192.0.2.3\n",
+            ["192.0.2.1", "192.0.2.2", "192.0.2.3"],
+        ),
+        (
+            "nameserver 192.0.2.4\nnameserver 192.0.2.5\nnameserver 192.0.2.6\n",
+            ["192.0.2.4", "192.0.2.5", "192.0.2.6"],
+        ),
+    ] {
+        lab.resolv_conf(contents);
+        let (code, log) = lab.nameservers();
+        assert_eq!(code, Some(0), "{log}");
+        assert_eq!(lab.elements(nameservers::SET_V4), set(&expected));
+        assert!(lab.elements(nameservers::SET_V6).is_empty());
+    }
+    eprintln!("evidence: three IPv4 nameservers replaced by three others");
     // No file: no nameserver, as for glibc.
     lab.ok(&format!("rm {}", nameservers::RESOLV_CONF));
     let (code, log) = lab.nameservers();

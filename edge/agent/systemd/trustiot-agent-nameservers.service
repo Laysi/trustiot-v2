@@ -33,7 +33,7 @@ AmbientCapabilities=CAP_NET_ADMIN
 NoNewPrivileges=yes
 ProtectSystem=strict
 ProtectHome=yes
-# The script file (O_TMPFILE) is created here.
+# The executable writes no file (the nft script is in memory).
 PrivateTmp=yes
 PrivateDevices=yes
 PrivateIPC=yes

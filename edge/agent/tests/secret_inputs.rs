@@ -547,7 +547,9 @@ fn the_allowlist_component_starts_only_nft_and_reads_nothing() {
 /// nftables.service (README.md, "連線位址的限制"). It reads no environment variable and one file
 /// by name, root's `/etc/resolv.conf` (the constant of `agent::nameservers`), and the one program
 /// it starts is nft, as the allowlist component starts it: by absolute path, with an empty
-/// environment, fixed arguments and the script as standard input from an unnamed file. Its code
+/// environment, fixed arguments and the script as standard input from an anonymous file in
+/// memory (`memfd_create`, not the allowlist component's `O_TMPFILE`: it also runs outside a
+/// unit with a private `/tmp`). Its code
 /// is this one file and the parsing module. Like the scans above, a tripwire on source text.
 #[test]
 fn the_nameserver_executable_starts_only_nft_and_reads_only_resolv_conf() {
@@ -555,7 +557,12 @@ fn the_nameserver_executable_starts_only_nft_and_reads_only_resolv_conf() {
     let code = before_tests(&std::fs::read_to_string(manifest.join(NAMESERVERS_SOURCE)).unwrap());
     assert_eq!(
         violations(&code),
-        ["process::Command", "process::Stdio", "libc::O_TMPFILE"],
+        [
+            "process::Command",
+            "process::Stdio",
+            "libc::memfd_create",
+            "libc::MFD_CLOEXEC"
+        ],
         "a new item needs a reason here"
     );
     assert_eq!(variables_read(&code), Vec::<String>::new());
@@ -576,12 +583,15 @@ fn the_nameserver_executable_starts_only_nft_and_reads_only_resolv_conf() {
         .filter(|window| window[0] == "libc" && window[1] == "::")
         .map(|window| window[2].as_str())
         .collect();
-    assert_eq!(libc_items, BTreeSet::from(["O_TMPFILE"]));
+    assert_eq!(libc_items, BTreeSet::from(["MFD_CLOEXEC", "memfd_create"]));
     assert_eq!(
         count(&["Command", "::", "new"]),
         1,
         "one place starts a program"
     );
+    // The two unsafe blocks are the memory file's: the call and taking ownership of its result.
+    assert_eq!(count(&["unsafe", "{"]), 2);
+    assert_eq!(count(&["from_raw_fd", "("]), 1);
     assert_eq!(count(&[".", "arg", "("]), 0);
     assert_eq!(count(&[".", "args", "("]), 1);
     for expected in [
@@ -589,16 +599,16 @@ fn the_nameserver_executable_starts_only_nft_and_reads_only_resolv_conf() {
         "Command::new(NFT)",
         ".args([\"-f\", \"-\"])",
         ".env_clear()",
-        "const SCRIPT_DIRECTORY: &str = \"/tmp\";",
-        ".custom_flags(libc::O_TMPFILE)",
+        "libc::memfd_create(c\"trustiot-agent-nameservers\".as_ptr(), libc::MFD_CLOEXEC)",
         "File::open(RESOLV_CONF)",
     ] {
         assert!(code.contains(expected), "{expected}");
     }
-    // Files: resolv.conf by name and the unnamed script file; nothing written by name.
+    // Files: resolv.conf by name and the script in memory; nothing opened or written by name
+    // but resolv.conf.
     assert_eq!(count(&["File", "::", "open", "("]), 1);
-    assert_eq!(count(&[".", "open", "("]), 1);
-    assert_eq!(count(&["OpenOptions", "::", "new"]), 1);
+    assert_eq!(count(&[".", "open", "("]), 0);
+    assert_eq!(count(&["OpenOptions"]), 0);
     for denied in [
         "read_to_string",
         "read_dir",

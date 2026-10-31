@@ -13,16 +13,17 @@
 //!
 //! It takes no arguments and reads no environment variable and nothing the agent can write. The
 //! only program it starts is nft, by absolute path, with an empty environment; nft reads the
-//! script from an unnamed temporary file ([`apply`]), so it always gets the whole script.
+//! script from an anonymous file in memory ([`apply`]), so it always gets the whole script and
+//! needs no writable file system.
 
 #![allow(
     clippy::print_stderr,
     reason = "the log goes to standard error, which systemd sends to the journal"
 )]
 
-use std::fs::{File, OpenOptions};
+use std::fs::File;
 use std::io::{self, Read, Seek, SeekFrom, Write};
-use std::os::unix::fs::OpenOptionsExt;
+use std::os::fd::FromRawFd;
 use std::process::Command;
 use std::process::ExitCode;
 use std::process::Stdio;
@@ -31,9 +32,6 @@ use agent::nameservers::{MAX_FILE_BYTES, Nameservers, RESOLV_CONF};
 
 /// nft, where Debian's nftables package installs it.
 const NFT: &str = "/usr/sbin/nft";
-
-/// Where the script file is created, unnamed (the unit's private `/tmp`).
-const SCRIPT_DIRECTORY: &str = "/tmp";
 
 /// How many times the file is read and applied before a file that keeps changing is given up on.
 const ROUNDS: usize = 10;
@@ -111,17 +109,14 @@ fn read() -> io::Result<Vec<u8>> {
     Ok(contents)
 }
 
-/// Has nft apply `script` as one transaction. The script goes into an unnamed file (`O_TMPFILE`)
-/// that is complete before nft starts, so nft never sees a part of it (for example only the
-/// flush of the sets) when this process is stopped while it writes.
+/// Has nft apply `script` as one transaction. The script goes into an anonymous file in memory
+/// ([`memory_file`]) that is complete before nft starts, so nft never sees a part of it (for
+/// example only the flush of the sets) when this process is stopped while it writes. No file
+/// system is needed: the agent's `ExecStartPre=+` and nftables.service run it with the gateway's
+/// own `/tmp`, which may be read-only or lack `O_TMPFILE`.
 fn apply(script: &str) -> Result<(), String> {
-    let mut file = OpenOptions::new()
-        .read(true)
-        .write(true)
-        .mode(0o600)
-        .custom_flags(libc::O_TMPFILE)
-        .open(SCRIPT_DIRECTORY)
-        .map_err(|error| format!("creating the script file failed: {error}"))?;
+    let mut file =
+        memory_file().map_err(|error| format!("creating the script file failed: {error}"))?;
     file.write_all(script.as_bytes())
         .and_then(|()| file.seek(SeekFrom::Start(0)))
         .map_err(|error| format!("writing the script file failed: {error}"))?;
@@ -148,4 +143,19 @@ fn apply(script: &str) -> Result<(), String> {
         errors.push_str(" ...");
     }
     Err(format!("nft {}: {errors}", output.status))
+}
+
+/// An anonymous file in memory (`memfd_create(2)`), closed on exec: nft gets a duplicate of it as
+/// standard input.
+#[allow(unsafe_code, reason = "memfd_create(2) has no safe wrapper in std")]
+fn memory_file() -> io::Result<File> {
+    // SAFETY: the name is a NUL-terminated literal that outlives the call; there is no other
+    // input.
+    let fd =
+        unsafe { libc::memfd_create(c"trustiot-agent-nameservers".as_ptr(), libc::MFD_CLOEXEC) };
+    if fd < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    // SAFETY: memfd_create returned a new descriptor that nothing else owns or closes.
+    Ok(unsafe { File::from_raw_fd(fd) })
 }
