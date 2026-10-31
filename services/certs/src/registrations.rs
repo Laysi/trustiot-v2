@@ -52,6 +52,9 @@
 //! Registrations of the same hardware ID run one after the other ([`LOCK_REGISTRATION`]), so
 //! two identical ones that arrive at once get the same answers as one after the other: 201,
 //! then 200 with the same certificate.
+//! Both answers carry the root certificate and the root CRL adopted with it, if any
+//! ([`CaState::authority_and_root_crl`], one snapshot, so the CRL in an answer was checked
+//! against the root in that same answer; Laysi/trustiot-v2#832).
 //! Every response carries `cache-control: no-store`. Each registration logs one INFO line with
 //! the administrator's user id, the workstation, the hardware ID, the serial number and the CA
 //! key id; never the CSR, the keys or the certificate.
@@ -100,6 +103,7 @@ use crate::issue::{
     WORKSTATION_SUBJECT_PREFIX, WorkstationName,
 };
 use crate::pem;
+use crate::root_crl::RootCrl;
 
 /// The collection, as the ingress gateway forwards it (no prefix is stripped).
 pub const REGISTRATIONS_PATH: &str = "/api/certs/v1/gateway-registrations";
@@ -679,7 +683,10 @@ async fn register_gateway(
     ) {
         return error(ErrorBody::new(ErrorCode::InvalidRequest).with_message_key(BODY_INVALID));
     }
-    let Some(authority) = state.ca.authority() else {
+    // One snapshot: the root CRL, if any, was checked against this authority's root, so the
+    // answer never carries a root CRL with a root it was not checked against.
+    let (authority, root_crl) = state.ca.authority_and_root_crl();
+    let Some(authority) = authority else {
         tracing::warn!("refused a gateway registration: no issuing CA is loaded");
         return error(not_ready());
     };
@@ -713,9 +720,13 @@ async fn register_gateway(
     // finds the committed row and answers 409 as for a key in use. Registrations of the same
     // hardware ID wait for each other on `LOCK_REGISTRATION` instead; a 23505 on the hardware ID
     // would end the same way, the retry finding the row and answering as for a repeat.
-    let mut outcome = register(&state, &user, &authority, &signed, &registration).await;
+    let anchor = Anchor {
+        authority: &authority,
+        root_crl: root_crl.as_deref(),
+    };
+    let mut outcome = register(&state, &user, anchor, &signed, &registration).await;
     if matches!(outcome, Err(Failure::Race)) {
-        outcome = register(&state, &user, &authority, &signed, &registration).await;
+        outcome = register(&state, &user, anchor, &signed, &registration).await;
     }
     match outcome {
         Ok((status, view)) => {
@@ -791,15 +802,37 @@ fn sql(error: &sqlx::Error) -> Failure {
     database(error)
 }
 
+/// The authority an answer is built from and the root CRL adopted with it, read at once
+/// ([`CaState::authority_and_root_crl`]).
+#[derive(Clone, Copy)]
+struct Anchor<'a> {
+    authority: &'a Authority,
+    /// The root CRL adopted, checked against `authority`'s root; `None` while there is none.
+    root_crl: Option<&'a RootCrl>,
+}
+
+impl Anchor<'_> {
+    /// The answer's `root_certificate`: the root of the authority, PEM.
+    fn root_certificate(&self) -> String {
+        pem::encode(pem::CERTIFICATE, self.authority.root_der())
+    }
+
+    /// The answer's `root_crl`: the PEM the agent loads, or `None` (the field is absent).
+    fn root_crl(&self) -> Option<String> {
+        self.root_crl.map(|crl| crl.pem().to_owned())
+    }
+}
+
 /// One attempt, in one transaction of the platform role: the workstation's ledger row, the
 /// nonce, then a repeat, a conflict or a new registration.
 async fn register(
     state: &Routes,
     user: &UserIdentity,
-    authority: &Authority,
+    anchor: Anchor<'_>,
     signed: &SignedBy,
     registration: &Registration,
 ) -> Result<(StatusCode, GatewayRegistration), Failure> {
+    let authority = anchor.authority;
     let Some(actor) = PlatformActor::admin(user) else {
         // `refuse` let only platform administrators through.
         return Err(ErrorBody::new(ErrorCode::PermissionDenied).into());
@@ -861,7 +894,7 @@ async fn register(
     .await
     .map_err(|e| sql(&e))?;
     if let Some(row) = existing {
-        let answer = repeat(registration, &endorsement_key_sha256, &row, authority);
+        let answer = repeat(registration, &endorsement_key_sha256, &row, anchor);
         // The nonce is spent either way.
         tx.commit().await.map_err(|e| database(&e))?;
         return answer;
@@ -956,7 +989,8 @@ async fn register(
                 pem::encode(pem::CERTIFICATE, &issued.der),
                 pem::encode(pem::CERTIFICATE, &issued.issuer_der)
             ),
-            root_certificate: pem::encode(pem::CERTIFICATE, authority.root_der()),
+            root_certificate: anchor.root_certificate(),
+            root_crl: anchor.root_crl(),
         },
     ))
 }
@@ -999,13 +1033,13 @@ async fn check_ledger(tx: &mut PlatformTransaction, signed: &SignedBy) -> Result
 
 /// The answer to a registration of a hardware ID that is already registered: the first
 /// registration when the keys are the same and it is active, a conflict otherwise. The root
-/// certificate is the current one of `authority`, and the chain's issuing CA the one of
-/// `authority` that signed the certificate ([`certificate_chain`]).
+/// certificate and the root CRL are the current ones of `anchor`, and the chain's issuing CA the
+/// one of its authority that signed the certificate ([`certificate_chain`]).
 fn repeat(
     registration: &Registration,
     endorsement_key_sha256: &[u8; 32],
     row: &PgRow,
-    authority: &Authority,
+    anchor: Anchor<'_>,
 ) -> Result<(StatusCode, GatewayRegistration), Failure> {
     let read = |e: sqlx::Error| database(&e);
     let decommissioned: bool = row.try_get("decommissioned").map_err(read)?;
@@ -1036,8 +1070,9 @@ fn repeat(
             not_before: row.try_get("not_before").map_err(read)?,
             not_after: row.try_get("not_after").map_err(read)?,
             certificate: pem::encode(pem::CERTIFICATE, &certificate),
-            certificate_chain: certificate_chain(authority, &ca_key_id, &certificate),
-            root_certificate: pem::encode(pem::CERTIFICATE, authority.root_der()),
+            certificate_chain: certificate_chain(anchor.authority, &ca_key_id, &certificate),
+            root_certificate: anchor.root_certificate(),
+            root_crl: anchor.root_crl(),
             ca_key_id,
         },
     ))

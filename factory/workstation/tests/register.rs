@@ -507,6 +507,8 @@ async fn an_answer_that_is_not_this_gateways_registration_is_not_recorded() {
         Tamper::ForeignIssuer,
         Tamper::ChainLeaf,
         Tamper::ChainWithoutIssuer,
+        Tamper::ForeignRootCrl,
+        Tamper::RootCrlNotPem,
     ] {
         let fixture = Fixture::start("tampered", vec![Action::Tamper(tamper)]).await;
         let gateway = GatewayFiles::new(&fixture.scratch, "gw");
@@ -593,6 +595,52 @@ async fn a_root_certificate_other_than_the_given_fingerprint_is_not_recorded() {
         .expect("readable")
         .expect("a record");
     assert_eq!(record.state, State::Registered);
+}
+
+#[tokio::test]
+async fn the_root_crl_of_the_answer_is_recorded_and_a_newer_one_replaces_it() {
+    // Laysi/trustiot-v2#832: none while the platform has adopted none, then the platform's
+    // current one with each answer, repeats included.
+    let fixture = Fixture::start("root-crl", Vec::new()).await;
+    let gateway = GatewayFiles::new(&fixture.scratch, "gw");
+    let load = || {
+        fixture
+            .journal()
+            .load("gw-crl-00001")
+            .expect("readable")
+            .expect("a record")
+            .registration
+            .expect("registered")
+            .root_crl
+    };
+    let result = fixture.register("gw-crl-00001", &gateway, &[]).await;
+    assert_eq!(result.code, Some(0), "{}", result.output());
+    assert_eq!(load(), None);
+
+    let third = fixture.registry.adopt_root_crl(3);
+    let result = fixture.register("gw-crl-00001", &gateway, &[]).await;
+    assert_eq!(result.code, Some(0), "{}", result.output());
+    assert_eq!(load().as_deref(), Some(third.as_str()));
+
+    let fourth = fixture.registry.adopt_root_crl(4);
+    let result = fixture.register("gw-crl-00001", &gateway, &[]).await;
+    assert_eq!(result.code, Some(0), "{}", result.output());
+    assert_eq!(load().as_deref(), Some(fourth.as_str()));
+    assert_eq!(answered(&fixture.registry), vec![201, 200, 200]);
+
+    // An answer whose root CRL the root did not sign leaves the record as it was.
+    fixture
+        .registry
+        .push(vec![Action::Tamper(Tamper::ForeignRootCrl)]);
+    let result = fixture.register("gw-crl-00001", &gateway, &[]).await;
+    assert_eq!(
+        result.code,
+        Some(i32::from(StopKind::ResponseMismatch.exit_code())),
+        "{}",
+        result.output()
+    );
+    assert!(result.stderr.contains("root_crl"), "{}", result.stderr);
+    assert_eq!(load().as_deref(), Some(fourth.as_str()));
 }
 
 #[tokio::test]

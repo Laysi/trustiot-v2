@@ -606,8 +606,16 @@ async fn register(options: &Options) -> Result<(), Error> {
             } else {
                 "already had the certificate chain and the root certificate"
             };
+            let crl = match (installed.root_crl, installed.kept_newer_root_crl()) {
+                (false, _) => {
+                    "; the registration has no root CRL (the platform has none yet), so none \
+                     was sent"
+                }
+                (true, true) => "; it kept its root CRL, newer than the registration's",
+                (true, false) => "; it has the registration's root CRL",
+            };
             say(&format!(
-                "{destination}: {what}: {}",
+                "{destination}: {what}{crl}: {}",
                 installed.report.lines().collect::<Vec<_>>().join("; ")
             ));
             Ok(())

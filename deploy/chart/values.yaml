@@ -85,6 +85,9 @@ ingress:
     healthCheck: /healthz
     # hosts.gateway -> certs (gateways renew certificates with a TPM signature, decision 12)
     certRenewal: /certs/renew
+    # hosts.gateway -> certs (gateways fetch the root CRL, public and signed by the offline root;
+    # GET and HEAD only, services/certs/README.md, 「端點」)
+    rootCrl: /certs/root-crl
     # hosts.gateway -> mqtt-bridge (MQTT inside WebSocket)
     mqtt: /mqtt
   # Routes that need the cookie: {host: app|gateway|ota, path, match: PathPrefix|Exact,

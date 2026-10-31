@@ -1171,8 +1171,15 @@
             "type": "string"
           },
           "root_certificate": {
-            "description": "The root CA certificate, PEM: the gateway's only trust anchor for the MQTT broker's\nserver certificate (services/certs/README.md, \"閘道器對 broker 伺服器憑證的信任\"). The\nroot CRL (Laysi/trustiot-v2#560) can join it here as a new field.",
+            "description": "The root CA certificate, PEM: the gateway's only trust anchor for the MQTT broker's\nserver certificate (services/certs/README.md, \"閘道器對 broker 伺服器憑證的信任\").",
             "type": "string"
+          },
+          "root_crl": {
+            "description": "The root CRL the service has adopted, one PEM block `X509 CRL` in lines of 64: signed by\n`root_certificate` (checked against that same root when it was adopted), with a CRL\nnumber, in the format the gateway agent accepts as `broker.crl` (services/certs/README.md,\n\"根 CRL\"; Laysi/trustiot-v2#832). It may have expired; gateways still use it then. A first\nregistration and a repeat both carry the one adopted when they are answered. Absent (never\n`null`) while the service has adopted none: the gateway then does not check revocation\nuntil it gets one.",
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "serial": {
             "description": "The serial number of the initial certificate, lower-case hex.",

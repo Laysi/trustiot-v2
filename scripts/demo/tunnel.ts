@@ -873,7 +873,9 @@ function websocketArgs(): string[] {
 /**
  * The paths that bypass Access: the chart's cookie-free paths on the gateway host name
  * (deploy/chart/templates/_ingress.tpl, the public path table; deploy/chart/values.yaml
- * ingress.publicPaths), each one exact. The ota host name has none in the chart, so all of it stays
+ * ingress.publicPaths), each one exact, except the root CRL (/certs/root-crl,
+ * Laysi/trustiot-v2#831), which stays behind Access until the gateway agent fetches it
+ * (Laysi/trustiot-v2#563 adds it here). The ota host name has none in the chart, so all of it stays
  * behind Access until the chart gives the OTA client a cookie-free path.
  */
 export const BYPASS_PATHS: Record<"gateway" | "ota", string[]> = { gateway: ["/certs/renew", "/mqtt"], ota: [] };

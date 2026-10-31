@@ -55,7 +55,9 @@
 //!   gateway's state) are counted per window, and each window becomes one platform-wide
 //!   `certs.gateway_renewal_refused` ([`refusals`]). The challenge and signature reasons need no
 //!   key, so anyone who knows a registered hardware ID can make its window's event; README.md,
-//!   "換發", "規則與取捨", says why they still count (Laysi/trustiot-v2#801).
+//!   "換發", "規則與取捨", says why they still count (Laysi/trustiot-v2#801). They are counted
+//!   apart, per day, so that traffic writes at most one event per registered gateway and day
+//!   (Laysi/trustiot-v2#847); the reasons after the signature keep `renewal.refusal_window`.
 
 mod limiter;
 mod refusals;
@@ -378,23 +380,31 @@ impl Reason {
         }
     }
 
-    /// Whether the refusal is counted for the hardware ID ([`refusals`]): the ones a decision
-    /// about the redemption made. The global rate limits, overload and malformed requests are
-    /// not; they come before any database work and say nothing about the gateway. The hardware
-    /// ID's own limit is: only the holder of its registered key reaches it.
-    const fn counted(self) -> bool {
-        matches!(
-            self,
+    /// Whether the refusal is counted for the hardware ID ([`refusals`]), and in which
+    /// category: the ones a decision about the redemption made. The global rate limits,
+    /// overload and malformed requests are not; they come before any database work and say
+    /// nothing about the gateway. The challenge and signature reasons come before the signature
+    /// held, so they need no key ([`refusals::Category::Unverified`]); the hardware ID's own
+    /// limit and the gateway's state only reach the holder of its registered key
+    /// ([`refusals::Category::Verified`]).
+    const fn counted(self) -> Option<refusals::Category> {
+        match self {
             Self::ChallengeUnknown
-                | Self::ChallengeMismatch
-                | Self::ChallengeExpired
-                | Self::SignatureInvalid
-                | Self::GatewayRateLimited(_)
-                | Self::Decommissioned
-                | Self::KeyCompromised
-                | Self::NotBound
-                | Self::TenantSuspended
-        )
+            | Self::ChallengeMismatch
+            | Self::ChallengeExpired
+            | Self::SignatureInvalid => Some(refusals::Category::Unverified),
+            Self::GatewayRateLimited(_)
+            | Self::Decommissioned
+            | Self::KeyCompromised
+            | Self::NotBound
+            | Self::TenantSuspended => Some(refusals::Category::Verified),
+            Self::Invalid
+            | Self::RateLimited(_)
+            | Self::Busy
+            | Self::BindingsStale
+            | Self::CaNotReady
+            | Self::Unavailable => None,
+        }
     }
 
     /// The status, the body and the `Retry-After` seconds of the answer. M1 has no code for 410,
@@ -739,11 +749,12 @@ impl Routes {
                 "refused a certificate renewal request"
             );
         }
-        if reason.counted() {
+        if let Some(category) = reason.counted() {
             match refusals::count(
                 &self.platform,
                 hardware_id,
                 reason.as_str(),
+                category,
                 self.limits.refusal_window,
             )
             .await
@@ -1149,7 +1160,8 @@ mod tests {
 
     #[test]
     fn only_decisions_about_the_redemption_are_counted() {
-        let counted: Vec<&str> = [
+        use refusals::Category::{Unverified, Verified};
+        let counted: Vec<(&str, refusals::Category)> = [
             Reason::Invalid,
             Reason::RateLimited(1),
             Reason::Busy,
@@ -1167,21 +1179,22 @@ mod tests {
             Reason::TenantSuspended,
         ]
         .into_iter()
-        .filter(|reason| reason.counted())
-        .map(Reason::as_str)
+        .filter_map(|reason| Some((reason.as_str(), reason.counted()?)))
         .collect();
+        // The unverified ones are exactly those the CHECK of
+        // `certs.renewal_unverified_refusals` admits (0008_unverified_renewal_refusals.sql).
         assert_eq!(
             counted,
             [
-                "challenge_unknown",
-                "challenge_mismatch",
-                "challenge_expired",
-                "signature_invalid",
-                "gateway_rate_limited",
-                "decommissioned",
-                "key_compromised",
-                "not_bound",
-                "tenant_suspended"
+                ("challenge_unknown", Unverified),
+                ("challenge_mismatch", Unverified),
+                ("challenge_expired", Unverified),
+                ("signature_invalid", Unverified),
+                ("gateway_rate_limited", Verified),
+                ("decommissioned", Verified),
+                ("key_compromised", Verified),
+                ("not_bound", Verified),
+                ("tenant_suspended", Verified)
             ]
         );
         // Every 429 and 503 says when to come back; the others do not.

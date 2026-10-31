@@ -1,0 +1,5 @@
+crlNumber=0x02
+lastUpdate=Oct 31 11:16:53 2026 GMT
+nextUpdate=Dec  5 11:16:53 2027 GMT
+issuer=CN=TrustIoT CRL check test root
+SHA2-256 Fingerprint=79:F9:7C:A6:D8:C6:FD:69:07:ED:55:EE:87:27:93:9A:8F:4D:3C:0D:61:AD:CB:B1:A3:47:1F:FE:98:78:03:8C

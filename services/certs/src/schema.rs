@@ -49,5 +49,9 @@ pub const SCHEMA: Schema = Schema {
             name: "0007_tenant_state_events.sql",
             sql: include_str!("../migrations/postgres/0007_tenant_state_events.sql"),
         },
+        Migration {
+            name: "0008_unverified_renewal_refusals.sql",
+            sql: include_str!("../migrations/postgres/0008_unverified_renewal_refusals.sql"),
+        },
     ],
 };

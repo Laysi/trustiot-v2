@@ -175,6 +175,7 @@ Returns YAML {public: [...], routes: [...]}; each item has host, hostname, path,
   (dict "key" "login" "host" "app" "service" "identity")
   (dict "key" "healthCheck" "host" "app" "service" "identity")
   (dict "key" "certRenewal" "host" "gateway" "service" "certs")
+  (dict "key" "rootCrl" "host" "gateway" "service" "certs")
   (dict "key" "mqtt" "host" "gateway" "service" "mqtt-bridge") -}}
 {{- $exact := include "trustiot.ingress.exactPathPattern" . -}}
 {{- $seen := list -}}
