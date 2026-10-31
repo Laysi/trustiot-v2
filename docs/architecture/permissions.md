@@ -166,7 +166,19 @@
 | `DELETE /api/assistant/v1/conversations/{conversation_id}` | 租戶 viewer | |
 | `POST /api/assistant/v1/conversations/{conversation_id}/restore` | 租戶 viewer | |
 | `GET /api/assistant/v1/deleted-conversations` | 租戶 viewer | |
+| `GET /api/assistant/v1/conversations/{conversation_id}/dashboards` | 租戶 viewer | |
+| `GET /api/assistant/v1/dashboards` | 租戶 viewer | |
+| `GET /api/assistant/v1/dashboards/{dashboard_id}` | 租戶 viewer | |
+| `GET /api/assistant/v1/dashboards/{dashboard_id}/versions` | 租戶 viewer | |
+| `POST /api/assistant/v1/dashboards/{dashboard_id}/dataset-runs` | 租戶 viewer | |
+| `POST /api/assistant/v1/dashboards/{dashboard_id}/restore` | 租戶 viewer | |
+| `POST /api/assistant/v1/dashboards/{dashboard_id}/publish` | 租戶 editor | |
+| `PUT /api/assistant/v1/dashboards/{dashboard_id}/archive` | 租戶 editor | |
+| `DELETE /api/assistant/v1/dashboards/{dashboard_id}/archive` | 租戶 editor | |
 
-- 對話只屬於開始它的使用者（Laysi/trustiot-v2#645）：租戶的每個角色都可以呼叫，但只用得到自己的對話，租戶 admin 也看不到別人的；這由 store 以租戶加使用者檢查，不是角色（`tests/api.rs` 的同租戶其他使用者、`tests/cross_tenant.rs` 的跨租戶）。
-- 在 Laysi/trustiot-v2#585 的共用檢查之前，這些操作只檢查有沒有租戶，帶本版本不認得的角色（`Unrecognized`）的 token 也能用；現在要求租戶 viewer。
-- 探測不帶 body 也不帶 `Content-Type`，所以放行的身分開始對話與還原都停在「寫入要 JSON」的 400；探測前後比對對話、訊息、捨棄紀錄與提問紀錄的筆數，任何呼叫者都沒有寫入資料。
+- 對話與它的儀表板草稿只屬於開始對話的使用者（Laysi/trustiot-v2#645、Laysi/trustiot-v2#150），已儲存的儀表板屬於租戶：租戶的每個角色都可以呼叫對話的操作，但只用得到自己的對話與草稿，租戶 admin 也看不到別人的；已儲存的儀表板則是租戶的每個成員都看得到。這由 store 以租戶加使用者檢查，不是角色（`tests/api.rs` 與 `tests/dashboards_api.rs` 的同租戶其他使用者、`tests/cross_tenant.rs` 的跨租戶）。
+- 在 Laysi/trustiot-v2#585 的共用檢查之前，對話的操作只檢查有沒有租戶，帶本版本不認得的角色（`Unrecognized`）的 token 也能用；現在要求租戶 viewer。
+- 發布草稿、封存與取消封存已儲存的儀表板要求租戶 editor：發布只適用草稿、封存只適用已儲存的儀表板，兩者都只有 editor 與 admin 可以做，所以 handler 只憑 token 就拒絕 viewer，在查詢儀表板之前，不存在的儀表板也是同一個 403，不透露任何儀表板。還原只要求 viewer：草稿的擁有者不論角色都可以還原自己的草稿；還原已儲存的儀表板要 editor，由 store 看過儀表板的種類之後再檢查（403 `dashboard.editor_required`）。發布與封存的 editor 在 store 以 `UserIdentity::meets` 再檢查一次（`services/assistant/src/dashboards/store.rs`）。
+- 探測不帶 body 也不帶 `Content-Type`，所以放行的身分開始對話、還原、發布與執行資料集都停在「寫入要 JSON」的 400，封存與取消封存找不到隨機 ID 的儀表板得 404；探測前後比對對話、訊息、捨棄紀錄、提問紀錄、儀表板與儀表板版本的筆數，任何呼叫者都沒有寫入資料。
+- 探測不會連到其他服務：測試把身分服務的 token 換發、telemetry-query、assets 與儀表板檢查服務的位址都指向只計算連線數的本機埠，探測後斷言每個都沒有連線。被拒的呼叫者在讀任何東西之前就得 403，放行的資料集執行在換發 token 與查詢之前就因為沒有 body 得 400。
+- 換發的 token 依「租戶 R」的定義可以呼叫（探測通過授權）。目前沒有服務拿得到給助理的換發 token：身分服務只沿著 chart 的 `mesh.calls`（`TRUSTIOT_ON_BEHALF_CALLS`）換發，chart 的 values 沒有任何服務把 assistant 列為被呼叫者；助理自己持有的委派換到的是給它呼叫的服務（telemetry-query、assets）的 token，不是給助理的。日後有服務要代使用者呼叫助理，要先在 `mesh.calls` 加上這一條，屆時一併檢查這些操作是否該只接受本人的請求。

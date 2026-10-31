@@ -1,0 +1,9 @@
+<style>
+  .unit::after { content: " / 42"; }
+  .count::before { content: counter(list-item) ". "; }
+</style>
+<p>本週 <b id="week" class="unit"></b></p>
+<p class="count">清單</p>
+<script>
+  tq.on("data", (tq) => tq.text(document.getElementById("week"), "f|week_kwh", ",.1f"));
+</script>

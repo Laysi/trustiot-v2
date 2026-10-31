@@ -114,7 +114,8 @@ subjects:
 {{- end }}
 {{- $services := list }}
 {{- range $name, $entry := .Values.services }}
-{{- if $entry.enabled }}
+{{- /* The dashboard check has no init container and no token (_dashboard-check.tpl). */}}
+{{- if and $entry.enabled (not (include "trustiot.dashboardCheck.is" $name)) }}
 {{- $services = append $services $name }}
 {{- end }}
 {{- end }}

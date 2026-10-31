@@ -1,0 +1,15 @@
+The image run with the chart's settings (UID 65532, read-only root, /tmp a 128m tmpfs, no capability, no-new-privileges, 512m).
+
+Before (localhost/trustiot-e2e/dashboard-check:e397c9d, the branch's base), behind docker run --init: it starts, without the whole-container cleanup
+{"timestamp":"2026-10-30T04:50:25.755875Z","level":"INFO","service":"dashboard-check","target":"dashboard_check","message":"dashboard check ready","fields":{"browser":"HeadlessChrome/156.0.8078.47","whole_container_cleanup":false,"max_waiting":2,"max_wait_ms":10000}}
+
+After (localhost/trustiot-e2e/dashboard-check:hardening-y, the code of 553d267):
+--init:
+exit code 1
+{"timestamp":"2026-10-30T05:11:31.856747Z","level":"ERROR","service":"dashboard-check","target":"service_kit::service","message":"startup failed","fields":{"error":"cleanup `container` needs the service to be PID 1 of its container on Linux, and it is not (a pod that shares its process namespace, or a container started with an init process, puts another process there); only a run outside a container may set TRUSTIOT__CLEANUP=browser"}}
+--init, TRUSTIOT__CLEANUP=browser:
+exit code 1
+{"timestamp":"2026-10-30T05:11:32.091220Z","level":"ERROR","service":"dashboard-check","target":"service_kit::service","message":"startup failed","fields":{"error":"cleanup `browser` is for a run outside a container, but the service runs in one (a PID namespace of its own); in a container the service must be PID 1 and clean the whole container"}}
+PID 1, TRUSTIOT__CLEANUP=browser:
+exit code 1
+{"timestamp":"2026-10-30T05:11:32.329124Z","level":"ERROR","service":"dashboard-check","target":"service_kit::service","message":"startup failed","fields":{"error":"cleanup `browser` is for a run outside a container, but the service is its container's PID 1, which cleans the whole container: leave TRUSTIOT__CLEANUP unset"}}

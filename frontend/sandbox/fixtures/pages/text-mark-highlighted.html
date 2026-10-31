@@ -1,0 +1,25 @@
+<style>
+  #week::selection { color: transparent; background: transparent; }
+  ::highlight(lead) { color: transparent; }
+</style>
+<p>本週 <b id="week"></b> kWh</p>
+<p>目標 <b id="target"></b> kWh</p>
+<script>
+  // The first digit of each value is painted transparent: one through the selection the page makes
+  // and a ::selection style, one through a custom highlight. textContent is unchanged.
+  tq.on("data", (tq) => {
+    const week = document.getElementById("week");
+    const target = document.getElementById("target");
+    tq.text(week, "f|week_kwh", ",.1f");
+    tq.text(target, "k|target_kwh", ",.0f");
+    const selected = document.createRange();
+    selected.setStart(week.firstChild, 0);
+    selected.setEnd(week.firstChild, 1);
+    getSelection().removeAllRanges();
+    getSelection().addRange(selected);
+    const lead = new Range();
+    lead.setStart(target.firstChild, 0);
+    lead.setEnd(target.firstChild, 1);
+    CSS.highlights.set("lead", new Highlight(lead));
+  });
+</script>

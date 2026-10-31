@@ -1,0 +1,4 @@
+confirmed: process 6 shows State "Z (zombie)" while its thread 7 ("S (sleeping)") keeps running (heartbeat 2 -> 4)
+cleanup: Ok(()); processes left: [(6, Some("Z (zombie)"))]
+FAIL: the cleanup left processes or failed
+exit code: 1

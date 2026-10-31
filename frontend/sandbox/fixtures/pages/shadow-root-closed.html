@@ -1,0 +1,10 @@
+<p>本週 <b id="week"></b> kWh</p>
+<div id="host"></div>
+<script>
+  let attached = false;
+  tq.on("data", (tq) => {
+    tq.text(document.getElementById("week"), "f|week_kwh", ",.1f");
+    if (!attached) document.getElementById("host").attachShadow({ mode: "closed" }).append("隱藏的內容");
+    attached = true;
+  });
+</script>

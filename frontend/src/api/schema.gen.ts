@@ -233,6 +233,23 @@ export interface paths {
         patch: operations["updateConversation"];
         trace?: never;
     };
+    "/api/assistant/v1/conversations/{conversation_id}/dashboards": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** A conversation's drafts, for its owner. */
+        get: operations["listConversationDashboards"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/assistant/v1/conversations/{conversation_id}/restore": {
         parameters: {
             query?: never;
@@ -247,6 +264,139 @@ export interface paths {
          *     within 30 days of the deletion.
          */
         post: operations["restoreConversation"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/assistant/v1/dashboards": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The tenant's saved dashboards. */
+        get: operations["listDashboards"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/assistant/v1/dashboards/{dashboard_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * One dashboard with one version (the latest without `version`) and what the caller may do
+         *     with it.
+         */
+        get: operations["getDashboard"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/assistant/v1/dashboards/{dashboard_id}/archive": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Archives a saved dashboard: it leaves the tenant's list (unless archived ones are asked for)
+         *     and takes no new version until it is unarchived. Archiving it again keeps the first time.
+         */
+        put: operations["archiveDashboard"];
+        post?: never;
+        /** Unarchives a saved dashboard. */
+        delete: operations["unarchiveDashboard"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/assistant/v1/dashboards/{dashboard_id}/dataset-runs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Runs one dataset of one version as the caller and returns its table. Nothing is kept: every
+         *     run reads again.
+         */
+        post: operations["runDashboardDataset"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/assistant/v1/dashboards/{dashboard_id}/publish": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Publishes a version of a draft into the tenant's saved dashboards: the first time as a new
+         *     saved dashboard, later as the next version of the draft's saved dashboard, when that one's
+         *     latest version is the one the published version is based on.
+         */
+        post: operations["publishDashboard"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/assistant/v1/dashboards/{dashboard_id}/restore": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Adds a copy of an older version as the dashboard's next version. */
+        post: operations["restoreDashboard"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/assistant/v1/dashboards/{dashboard_id}/versions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** A dashboard's versions, the newest first, without their spec and page. */
+        get: operations["listDashboardVersions"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -902,6 +1052,432 @@ export interface components {
             tenants: components["schemas"]["TenantMembership"][];
             /** @description The signed-in user. */
             user_id: components["schemas"]["UserId"];
+        };
+        /** @description Whether a saved dashboard is archived, after `PUT` or `DELETE …/archive`. */
+        DashboardArchiveState: {
+            /** Format: date-time */
+            archived_at?: string | null;
+            dashboard_id: components["schemas"]["DashboardId"];
+        };
+        /**
+         * @description What a column holds.
+         * @enum {string}
+         */
+        DashboardColumnType: "number" | "text" | "time" | "bool";
+        /**
+         * @description A named number computed from the datasets' results with a formula
+         *     ([`super::formula`]).
+         */
+        DashboardComputation: {
+            /** @description At most `formula::MAX_FORMULA_BYTES` bytes. */
+            formula: string;
+            name: string;
+            title: string;
+            unit?: string | null;
+        };
+        /**
+         * @description A named fixed value the page shows, with where it comes from: a target, a tariff, an
+         *     emission factor, or text with digits in it (a line's name, a standard's number) that the
+         *     page must not write as a literal.
+         */
+        DashboardConstant: {
+            name: string;
+            /** @description Where the value comes from, at most [`MAX_NOTE_CHARS`] characters. */
+            note?: string | null;
+            title: string;
+            unit?: string | null;
+            value: components["schemas"]["DashboardConstantValue"];
+        };
+        /** @description A constant's value. */
+        DashboardConstantValue: number | string;
+        /** @description A named query whose result the page shows. */
+        DashboardDataset: {
+            /** @description What the data is and how it is computed, 1 to [`MAX_DESCRIPTION_CHARS`] characters. */
+            description: string;
+            /**
+             * Format: int32
+             * @description The most rows the dataset may return, 1 to [`MAX_DATASET_ROWS`]. A run that returns more
+             *     is refused, never cut short.
+             */
+            max_rows: number;
+            name: string;
+            source: components["schemas"]["DashboardDatasetSource"];
+            /** @description 1 to [`MAX_TITLE_CHARS`] characters. */
+            title: string;
+        };
+        /**
+         * @description One run of one dataset.
+         *
+         *     Internal callers (the check) accept fields they do not know, so fields are only ever added
+         *     as optional ones (this crate's `README.md`, 「內部 API」).
+         */
+        DashboardDatasetResult: {
+            /** @description The columns, in order. */
+            columns: components["schemas"]["DashboardResultColumn"][];
+            /** @description The dataset's name in the spec. */
+            dataset: string;
+            meta: components["schemas"]["DashboardResultMeta"];
+            /**
+             * Format: int32
+             * @description `rows.len()`.
+             */
+            row_count: number;
+            /** @description The rows, each an array of cells in column order. */
+            rows: (number | string | boolean | null)[][];
+        };
+        /** @description Runs one dataset of one version as the caller. */
+        DashboardDatasetRunRequest: {
+            /** @description The dataset's name in that version's spec. */
+            dataset: string;
+            /** Format: int32 */
+            version: number;
+        };
+        /** @description Where a dataset's rows come from. */
+        DashboardDatasetSource: {
+            /** @enum {string} */
+            kind: "sql";
+            sql: string;
+        } | {
+            /** @enum {string} */
+            kind: "telemetry_statistics";
+            request: components["schemas"]["DashboardSemanticRequest"];
+        } | {
+            /** @enum {string} */
+            kind: "telemetry_usage";
+            request: components["schemas"]["DashboardSemanticRequest"];
+        };
+        /**
+         * Format: uuid
+         * @description A dashboard of the assistant (Laysi/trustiot-v2#150): a conversation's draft or a saved
+         *     one in the tenant's list; its versions are numbered within it.
+         *
+         *     Serialized as a lowercase hyphenated UUID string.
+         */
+        DashboardId: string;
+        /**
+         * @description Whether a dashboard is a conversation's draft or a saved one in the tenant's list.
+         * @enum {string}
+         */
+        DashboardKind: "draft" | "saved";
+        /** @description A page of dashboards, the most recently updated first. */
+        DashboardList: {
+            dashboards: components["schemas"]["DashboardSummary"][];
+            /** @description The `cursor` for the next page; absent on the last. */
+            next_cursor?: string | null;
+        };
+        /**
+         * @description What the caller may do with the dashboard, decided by the server from the request's role
+         *     and the caller's relation to the dashboard; the UI shows only the actions allowed here.
+         */
+        DashboardPermissions: {
+            /** @description A saved dashboard and the caller is an editor or admin. */
+            can_archive: boolean;
+            /** @description A draft, and the caller is an editor or admin who owns its conversation. */
+            can_publish: boolean;
+            /**
+             * @description A saved dashboard and the caller is an editor or admin; or a draft and the caller owns
+             *     its conversation.
+             */
+            can_restore: boolean;
+        };
+        /**
+         * @description Publishes a draft's version: the first time as a new saved dashboard, then as a new version
+         *     of the draft's saved dashboard (refused with 409 `dashboard.saved_changed` unless that one's
+         *     latest version is the one the published version is based on: an older version of the
+         *     draft, or a restored copy of one, keeps the base it was written on, and a version written
+         *     before the draft was first published is based on none).
+         */
+        DashboardPublishRequest: {
+            /**
+             * Format: int32
+             * @description The draft's version the user looked at; a newer one the tool wrote since is not
+             *     published by this request.
+             */
+            version: number;
+        };
+        /**
+         * @description The SQL endpoint's `queryable_from`: per telemetry view, the time from which the answer
+         *     holds every row.
+         */
+        DashboardQueryablePeriod: {
+            /**
+             * Format: date-time
+             * @description `trustiot.tenant_telemetry`, the raw readings.
+             */
+            tenant_telemetry: string;
+            /**
+             * Format: date-time
+             * @description `trustiot.tenant_telemetry_1h`, the one-hour cells.
+             */
+            tenant_telemetry_1h: string;
+            /**
+             * Format: date-time
+             * @description `trustiot.tenant_telemetry_1m`, the one-minute cells.
+             */
+            tenant_telemetry_1m: string;
+        };
+        /**
+         * @description Restores an older version as a new one (refused with 409 `dashboard.restore_unchanged` when
+         *     its content is the latest version's).
+         */
+        DashboardRestoreRequest: {
+            /**
+             * Format: int32
+             * @description The latest version the user saw; refused with 409 `dashboard.version_conflict` when the
+             *     dashboard has a newer one.
+             */
+            base_version: number;
+            /**
+             * Format: int32
+             * @description The version to restore.
+             */
+            from_version: number;
+        };
+        /** @description One column of a [`DatasetResult`]. */
+        DashboardResultColumn: {
+            /** @description The column's name ([`is_column_name`]); a formula and a reference name it. */
+            name: string;
+            type: components["schemas"]["DashboardColumnType"];
+        };
+        /** @description When and how a dataset ran. */
+        DashboardResultMeta: {
+            /**
+             * Format: int32
+             * @description How long the run took, in milliseconds, as the assistant measured it.
+             */
+            duration_ms: number;
+            /**
+             * Format: date-time
+             * @description When the query ran, with the offset its source gave: UTC for SQL, the request's time zone
+             *     for a semantic source.
+             */
+            queried_at: string;
+            source: components["schemas"]["DashboardSourceMeta"];
+        };
+        /**
+         * Format: int32
+         * @description The version of the sandbox runtime a dashboard version was checked with and runs with: the
+         *     page API (`window.tq`), the formula language, d3 and the check rules
+         *     (`frontend/sandbox/README.md`). Each version's files are kept unchanged, so a dashboard keeps
+         *     working when a newer runtime ships. Serialized as a number, `1` for the first.
+         */
+        DashboardRuntime: number;
+        /**
+         * @description The saved dashboard a draft was taken from or published to, and its version the draft's
+         *     latest version is based on.
+         */
+        DashboardSavedBase: {
+            dashboard_id: components["schemas"]["DashboardId"];
+            /**
+             * Format: int32
+             * @description Absent when the draft's latest version is based on none of the saved dashboard's
+             *     versions: it was written before the draft was first published (other than the version
+             *     published), or restored from such a version. Publishing it is refused until the
+             *     assistant merges the saved dashboard's latest version into the draft.
+             */
+            version?: number | null;
+        };
+        /**
+         * @description The bucket length of a semantic request: telemetry-query's `BucketInterval`.
+         * @enum {string}
+         */
+        DashboardSemanticInterval: "1m" | "5m" | "15m" | "1h" | "1d" | "1w" | "1mo" | "total";
+        /**
+         * @description The `range` of a statistics or usage answer (Laysi/trustiot-v2#142), field for field, so the
+         *     assistant reads it straight from the response; `services/telemetry-query/tests` checks that
+         *     the two stay alike.
+         */
+        DashboardSemanticRange: {
+            /**
+             * Format: date-time
+             * @description The start of the queryable period of the table read.
+             */
+            earliest: string;
+            /** @description Whether the range ends after the request's time, so its last bucket is not complete. */
+            ends_after_now: boolean;
+            /**
+             * Format: date-time
+             * @description The range read: `from` inclusive, `to` exclusive, in `tz`.
+             */
+            from: string;
+            interval: components["schemas"]["DashboardSemanticInterval"];
+            /**
+             * Format: date-time
+             * @description When the request was answered.
+             */
+            queried_at: string;
+            resolution: components["schemas"]["DashboardSemanticResolution"];
+            /** Format: date-time */
+            to: string;
+            /** @description Whether `from` was moved to the start of the queryable period. */
+            truncated: boolean;
+            /** @description The time zone the buckets follow. */
+            tz: string;
+        };
+        /**
+         * @description The request body of telemetry-query's statistics and usage APIs (Laysi/trustiot-v2#142),
+         *     stored as the model wrote it and sent unchanged at every run, so a relative `period` such as
+         *     `last_7_days` always reads the latest range. `from` and `to` keep the offset they were
+         *     written with. `services/telemetry-query/tests` checks that this type and the API's own
+         *     request type accept the same bodies.
+         */
+        DashboardSemanticRequest: {
+            /**
+             * Format: date-time
+             * @description The range's start, RFC 3339 with an offset (inclusive).
+             */
+            from?: string | null;
+            interval?: components["schemas"]["DashboardSemanticInterval"];
+            /**
+             * @description A relative period: `today`, `yesterday`, `this_week`, `last_week`, `this_month`,
+             *     `last_month`, `this_year`, `last_year`, `last_<N>_days` (1 to 366) or `last_<N>_hours`
+             *     (1 to 72). Either this or `from` and `to`.
+             */
+            period?: string | null;
+            /** @description 1 to [`MAX_SERIES`] distinct series. */
+            series: components["schemas"]["DashboardSemanticSeries"][];
+            /**
+             * Format: date-time
+             * @description The range's end, RFC 3339 with an offset (exclusive).
+             */
+            to?: string | null;
+            /**
+             * @description An IANA time zone name, such as `Asia/Taipei`. Only its form is checked here; the API
+             *     checks the name when the dataset first runs.
+             */
+            tz: string;
+        };
+        /**
+         * @description The aggregate table a semantic answer read.
+         * @enum {string}
+         */
+        DashboardSemanticResolution: "1m" | "1h";
+        /** @description One data point of one device in a semantic request. */
+        DashboardSemanticSeries: {
+            device_id: components["schemas"]["DeviceId"];
+            /**
+             * @description The data point key: 1 to 128 letters, digits, `.`, `_` or `-`, starting with a letter or
+             *     digit.
+             */
+            point: string;
+        };
+        /** @description What the source said about the data's range. */
+        DashboardSourceMeta: {
+            /** @enum {string} */
+            kind: "sql";
+            queryable_from: components["schemas"]["DashboardQueryablePeriod"];
+        } | {
+            /** @enum {string} */
+            kind: "telemetry_statistics";
+            range: components["schemas"]["DashboardSemanticRange"];
+        } | {
+            /** @enum {string} */
+            kind: "telemetry_usage";
+            range: components["schemas"]["DashboardSemanticRange"];
+        };
+        /** @description A version's datasets, computations and constants. */
+        DashboardSpec: {
+            /** @description At most [`MAX_COMPUTATIONS`]. */
+            computations?: components["schemas"]["DashboardComputation"][];
+            /** @description At most [`MAX_CONSTANTS`]. */
+            constants?: components["schemas"]["DashboardConstant"][];
+            /** @description 1 to [`MAX_DATASETS`]. */
+            datasets: components["schemas"]["DashboardDataset"][];
+        };
+        /** @description One dashboard in a list, and the dashboard part of a [`DashboardView`]. */
+        DashboardSummary: {
+            /**
+             * Format: date-time
+             * @description When it was archived; absent while it is not. Only saved dashboards are archived.
+             */
+            archived_at?: string | null;
+            /**
+             * Format: uuid
+             * @description A draft's conversation.
+             */
+            conversation_id?: string | null;
+            /** Format: date-time */
+            created_at: string;
+            /** @description Who made the dashboard: a draft's conversation owner, or a saved one's first publisher. */
+            created_by: components["schemas"]["UserId"];
+            dashboard_id: components["schemas"]["DashboardId"];
+            kind: components["schemas"]["DashboardKind"];
+            /** Format: int32 */
+            latest_version: number;
+            saved?: components["schemas"]["DashboardSavedBase"] | null;
+            /** @description The latest version's title. */
+            title: string;
+            /**
+             * Format: date-time
+             * @description When the latest version was written.
+             */
+            updated_at: string;
+        };
+        /** @description One version of a dashboard, whole. Versions are only ever added. */
+        DashboardVersion: {
+            /** Format: date-time */
+            created_at: string;
+            /**
+             * @description Who asked for it: the conversation's owner for [`VersionOrigin::Agent`], the user who
+             *     published or restored otherwise.
+             */
+            created_by: components["schemas"]["UserId"];
+            description?: string | null;
+            origin: components["schemas"]["DashboardVersionOrigin"];
+            /**
+             * @description The page: an HTML fragment with its scripts, run only inside the sandbox
+             *     (`frontend/sandbox/README.md`).
+             */
+            page: string;
+            /**
+             * Format: int32
+             * @description For [`VersionOrigin::Restore`], the version restored.
+             */
+            restored_from?: number | null;
+            /**
+             * @description The runtime the page was checked with and runs with; a restored or published version
+             *     keeps its source's.
+             */
+            runtime: components["schemas"]["DashboardRuntime"];
+            spec: components["schemas"]["DashboardSpec"];
+            title: string;
+            /** Format: int32 */
+            version: number;
+        };
+        /** @description A version written by publish or restore. */
+        DashboardVersionCreated: {
+            dashboard_id: components["schemas"]["DashboardId"];
+            /** Format: int32 */
+            version: number;
+        };
+        /** @description A page of versions, the newest first. */
+        DashboardVersionList: {
+            next_cursor?: string | null;
+            versions: components["schemas"]["DashboardVersionSummary"][];
+        };
+        /**
+         * @description How a version came to be.
+         * @enum {string}
+         */
+        DashboardVersionOrigin: "agent" | "publish" | "restore";
+        /** @description One version in a [`VersionList`]: without its spec and page. */
+        DashboardVersionSummary: {
+            /** Format: date-time */
+            created_at: string;
+            created_by: components["schemas"]["UserId"];
+            origin: components["schemas"]["DashboardVersionOrigin"];
+            /** Format: int32 */
+            restored_from?: number | null;
+            runtime: components["schemas"]["DashboardRuntime"];
+            title: string;
+            /** Format: int32 */
+            version: number;
+        };
+        /** @description `GET /dashboards/{dashboard_id}`. */
+        DashboardView: {
+            dashboard: components["schemas"]["DashboardSummary"];
+            permissions: components["schemas"]["DashboardPermissions"];
+            version: components["schemas"]["DashboardVersion"];
         };
         /**
          * @description Whether a series had readings in the range.
@@ -3783,6 +4359,77 @@ export interface operations {
             };
         };
     };
+    listConversationDashboards: {
+        parameters: {
+            query?: {
+                /** @description The `next_cursor` of the page before. */
+                cursor?: string;
+            };
+            header?: never;
+            path: {
+                /** @description The conversation's ID. */
+                conversation_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The conversation's drafts, the most recently updated first, 50 a page. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DashboardList"];
+                };
+            };
+            /** @description An unknown parameter or a bad cursor (`invalid_request`). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No valid session (`unauthenticated`). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No tenant or no role in it (`permission_denied`). */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No such conversation of the caller's, or it is deleted (`not_found`): another user's is the same as none. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The database failed (`unavailable`). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
     restoreConversation: {
         parameters: {
             query?: never;
@@ -3846,6 +4493,633 @@ export interface operations {
                 };
             };
             /** @description The database failed (`unavailable`); nothing changed. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    listDashboards: {
+        parameters: {
+            query?: {
+                /** @description Archived ones too; without it only the ones not archived. */
+                include_archived?: boolean;
+                /** @description The `next_cursor` of the page before. */
+                cursor?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The saved dashboards, the most recently updated first, 50 a page. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DashboardList"];
+                };
+            };
+            /** @description An unknown parameter, a bad value or a bad cursor (`invalid_request`). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No valid session (`unauthenticated`). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No tenant or no role in it (`permission_denied`). */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The database failed (`unavailable`). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    getDashboard: {
+        parameters: {
+            query?: {
+                /** @description The version; the latest without it. */
+                version?: number;
+            };
+            header?: never;
+            path: {
+                /** @description The dashboard's ID. */
+                dashboard_id: components["schemas"]["DashboardId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The dashboard, the version and the caller's permissions (for the UI; every write checks them again). */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DashboardView"];
+                };
+            };
+            /** @description An unknown parameter or a bad version (`invalid_request`). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No valid session (`unauthenticated`). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No tenant or no role in it (`permission_denied`). */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No such dashboard the caller can see (`not_found`), or no such version (`dashboard.version_not_found`). */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The database failed (`unavailable`). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    archiveDashboard: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The saved dashboard's ID. */
+                dashboard_id: components["schemas"]["DashboardId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The dashboard is archived. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DashboardArchiveState"];
+                };
+            };
+            /** @description No valid session (`unauthenticated`). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No tenant, or a role below editor (`permission_denied`). */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No such dashboard the caller can see (`not_found`). */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description A draft (`validation_failed`, `dashboard.saved_required`). */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The database failed (`unavailable`). Nothing was written. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    unarchiveDashboard: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The saved dashboard's ID. */
+                dashboard_id: components["schemas"]["DashboardId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The dashboard is not archived. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DashboardArchiveState"];
+                };
+            };
+            /** @description No valid session (`unauthenticated`). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No tenant, or a role below editor (`permission_denied`). */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No such dashboard the caller can see (`not_found`). */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description A draft (`validation_failed`, `dashboard.saved_required`). */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The database failed (`unavailable`). Nothing was written. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    runDashboardDataset: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The dashboard's ID. */
+                dashboard_id: components["schemas"]["DashboardId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DashboardDatasetRunRequest"];
+            };
+        };
+        responses: {
+            /** @description The dataset's table, read with the caller's tenant, role and queryable period. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DashboardDatasetResult"];
+                };
+            };
+            /** @description The body is not JSON, over 4 KiB, or not exactly the request (`invalid_request`). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No valid session (`unauthenticated`). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No tenant or no role in it (`permission_denied`); the caller's tenant is suspended or deleted (`tenant_suspended`); the range lies wholly before the caller's queryable period (`quota_exceeded`, `telemetry.outside_queryable_period`, `details.earliest`). */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No such dashboard the caller can see (`not_found`), or no such version (`dashboard.version_not_found`). */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No such dataset (`dashboard.dataset_unknown`); more rows than the dataset allows (`dashboard.dataset_too_many_rows`, `details.max`); a result over 2 MiB (`dashboard.dataset_result_too_large`); a query telemetry-query refuses now (`dashboard.dataset_refused`); a query too heavy (`telemetry.query_too_heavy`) or with too many points (`telemetry.too_many_points`, `details.max`) (`validation_failed`). */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The tenant ran 60 datasets in the last minute, has 2 running in this replica, or this replica's memory for results had no room for the answer within the wait (`dashboard.runs_limited`, with `Retry-After`), or its query quota is used up (`dashboard.query_quota_exhausted`) (`rate_limited`). */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The tenant's telemetry account is not ready (`telemetry.account_not_ready`), or the run failed (`dashboard.dataset_failed`) (`unavailable`). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The query ran longer than the tenant's limit (`timeout`, `dashboard.dataset_timeout`). */
+            504: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    publishDashboard: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The draft's ID. */
+                dashboard_id: components["schemas"]["DashboardId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DashboardPublishRequest"];
+            };
+        };
+        responses: {
+            /** @description The saved dashboard and its new version. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DashboardVersionCreated"];
+                };
+            };
+            /** @description The body is not JSON, over 4 KiB, or not exactly the request (`invalid_request`). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No valid session (`unauthenticated`). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No tenant, or a role below editor (`permission_denied`); not the draft's conversation's owner (`permission_denied`, `dashboard.owner_required`). */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No such dashboard the caller can see (`not_found`), or no such version (`dashboard.version_not_found`). */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The saved dashboard's latest version is not the one the draft's version is based on (`dashboard.saved_changed`, `details.latest`), is archived (`dashboard.archived`), or has 10,000 versions (`dashboard.too_many_versions`) (`conflict`). */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Not a draft (`validation_failed`, `dashboard.draft_required`). */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The user added 10 versions by publishing and restoring in the last minute, or the tenant's users 30 to its saved dashboards (30 more to its drafts), in this replica (`rate_limited`, `dashboard.versions_limited`, `details.retry_after`, with `Retry-After`). Only a request that passed every other check counts. Nothing was written. */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The database failed (`unavailable`). Nothing was written. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    restoreDashboard: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The dashboard's ID. */
+                dashboard_id: components["schemas"]["DashboardId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DashboardRestoreRequest"];
+            };
+        };
+        responses: {
+            /** @description The dashboard's new version, a copy of `from_version`. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DashboardVersionCreated"];
+                };
+            };
+            /** @description The body is not JSON, over 4 KiB, or not exactly the request (`invalid_request`). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No valid session (`unauthenticated`). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No tenant or no role in it (`permission_denied`); a viewer restoring a saved dashboard (`permission_denied`, `dashboard.editor_required`), or someone other than a draft's conversation owner (`permission_denied`, `dashboard.owner_required`). */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No such dashboard the caller can see (`not_found`), or no such version (`dashboard.version_not_found`). */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description `base_version` is not the latest (`dashboard.version_conflict`, `details.latest`), the content of `from_version` is the latest version's (`dashboard.restore_unchanged`), the dashboard is archived (`dashboard.archived`), or it has 10,000 versions (`dashboard.too_many_versions`) (`conflict`). */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The user added 10 versions by publishing and restoring in the last minute, or the tenant's users 30 to its saved dashboards (30 more to its drafts), in this replica (`rate_limited`, `dashboard.versions_limited`, `details.retry_after`, with `Retry-After`). Only a request that passed every other check counts. Nothing was written. */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The database failed (`unavailable`). Nothing was written. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    listDashboardVersions: {
+        parameters: {
+            query?: {
+                /** @description The `next_cursor` of the page before. */
+                cursor?: string;
+            };
+            header?: never;
+            path: {
+                /** @description The dashboard's ID. */
+                dashboard_id: components["schemas"]["DashboardId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The versions, the newest first, 50 a page. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DashboardVersionList"];
+                };
+            };
+            /** @description An unknown parameter or a bad cursor (`invalid_request`). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No valid session (`unauthenticated`). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No tenant or no role in it (`permission_denied`). */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No such dashboard the caller can see (`not_found`). */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The database failed (`unavailable`). */
             503: {
                 headers: {
                     [name: string]: unknown;

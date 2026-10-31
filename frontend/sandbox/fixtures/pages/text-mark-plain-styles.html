@@ -1,0 +1,45 @@
+<style>
+  .card { contain: layout; overflow: hidden; border-radius: 8px; box-shadow: 0 1px 3px rgb(0 0 0 / 20%); padding: 8px 12px; width: 280px; }
+  .kpi { font: 600 28px / 1.2 system-ui, sans-serif; font-variant-numeric: tabular-nums; letter-spacing: 0.02em; }
+  .label { text-transform: uppercase; color: var(--tq-muted); font-size: 12px; }
+  .lead { text-indent: 2em; }
+  .scroll { overflow-x: auto; width: 320px; }
+  td { padding: 2px 8px; text-align: right; white-space: nowrap; }
+  .faded { filter: opacity(0.9); }
+</style>
+<div class="card">
+  <div class="label">week energy</div>
+  <div class="kpi"><span id="week"></span> <small>kWh</small></div>
+  <div class="label">vs. target <b id="target"></b> kWh</div>
+</div>
+<p class="lead">最後一天比第一天 <b id="change"></b> kWh，今日尖峰 <b id="peak" class="faded"></b> kW。</p>
+<details open><summary>每日</summary>
+  <div class="scroll">
+    <table>
+      <tbody>
+        <tr><td id="day0d"></td><td id="day0"></td></tr>
+        <tr><td id="day1d"></td><td id="day1"></td></tr>
+      </tbody>
+    </table>
+  </div>
+</details>
+<svg width="320" height="60" viewBox="0 0 320 60" style="overflow: hidden">
+  <g transform="translate(10,40)"><text id="share" font-size="14" text-anchor="start" style="paint-order: stroke; stroke: none"></text></g>
+</svg>
+<script>
+  // Legitimate styles on and around text marks: a card with layout containment and overflow hidden
+  // (the marks fit inside), tabular figures, upper-case labels, a paragraph indent, a negative value,
+  // a slightly faded value, a horizontally scrolling table in an open <details>, and SVG text in a
+  // clipped SVG. Every mark passes.
+  tq.on("data", (tq) => {
+    tq.text(document.getElementById("week"), "f|week_kwh", ",.1f");
+    tq.text(document.getElementById("target"), "k|target_kwh", ",.0f");
+    tq.text(document.getElementById("change"), "f|week_change", "+,.1f");
+    tq.text(document.getElementById("peak"), "f|peak_kw", ",.2f");
+    tq.text(document.getElementById("day0d"), "c|daily_energy|day|0", "%m/%d");
+    tq.text(document.getElementById("day0"), "c|daily_energy|kwh|0", ",.2f");
+    tq.text(document.getElementById("day1d"), "c|daily_energy|day|1", "%m/%d");
+    tq.text(document.getElementById("day1"), "c|daily_energy|kwh|1", ",.2f");
+    tq.text(document.getElementById("share"), "f|first_day_share", ".1%");
+  });
+</script>

@@ -1,0 +1,14 @@
+<svg id="chart" width="480" height="240"></svg>
+<script>
+  tq.on("data", (tq) => {
+    const svg = d3.select("#chart");
+    svg.selectAll("*").remove();
+    // A domain that no value in the column comes near: the ticks above the data are made up.
+    const y = d3.scaleLinear([0, 5000], [210, 10]);
+    tq.axis(svg.append("g").attr("transform", "translate(40,0)").node(), d3.axisLeft(y), {
+      dataset: "daily_energy",
+      column: "kwh",
+      format: ",.0f",
+    });
+  });
+</script>

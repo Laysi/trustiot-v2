@@ -1,0 +1,8 @@
+<p>本週 <b id="week"></b> kWh</p>
+<form action="https://dashboard.invalid/" method="get"><button type="submit">送出</button></form>
+<script>
+  tq.on("data", (tq) => {
+    tq.text(document.getElementById("week"), "f|week_kwh", ",.1f");
+    document.querySelector("form").requestSubmit();
+  });
+</script>

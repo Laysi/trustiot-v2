@@ -5,18 +5,18 @@
 | 模組 | 內容 |
 | --- | --- |
 | `error` | M1 錯誤格式：`ErrorBody`、`ErrorCode`、`MessageKey`、`FieldError` |
-| `id` | `TenantId`、`UserId`、`EventId`、`DeviceModelId`、`GatewayBindingId`（Laysi/trustiot-v2#101）、`DeviceId`（Laysi/trustiot-v2#100）：新 ID 一律 UUIDv7（[可搬移規則 3](../../docs/architecture/deployment.md)） |
+| `id` | `TenantId`、`UserId`、`EventId`、`DeviceModelId`、`GatewayBindingId`（Laysi/trustiot-v2#101）、`DeviceId`（Laysi/trustiot-v2#100）、`DashboardId`（Laysi/trustiot-v2#150）：新 ID 一律 UUIDv7（[可搬移規則 3](../../docs/architecture/deployment.md)） |
 | `event` | `Event` trait 與事件信封 `EventEnvelope` |
 | `events` | 事件本身，每個產生端服務一個子模組；目前有 `events::identity::TenantCreated`（`identity.tenant_created`，Laysi/trustiot-v2#65）、`MemberRoleChanged`（`identity.member_role_changed`，Laysi/trustiot-v2#583）、`TenantStateChanged`（`identity.tenant_state_changed`，Laysi/trustiot-v2#776；租戶事件，payload 是改變後的狀態快照 `{state, reason, state_version}`，消費端只保留版本較大的，狀態與原因的列舉都有 `Unrecognized`）、`events::identity::PlatformAdminGranted`（`identity.platform_admin_granted`，全平台事件，payload 只有使用者 ID 與 `via`，Laysi/trustiot-v2#582）、`events::identity::AiModelRoleChanged`（`identity.ai_model_role_changed`，全平台事件：平台管理者修改或重設 AI 閘道的模型角色，payload 是角色、`set` 或 `reset`、新版本與生效的模型，Laysi/trustiot-v2#608），以及設備型號的 `events::assets::DeviceModelCreated`、`DeviceModelUpdated`、`DeviceModelDeleted`（`assets.device_model_{created,updated,deleted}`，Laysi/trustiot-v2#99；型號本身是 `protocol::config::DeviceModel`，閘道器設定用的同一個格式），以及出廠登錄的 `events::certs::GatewayRegistered`（`certs.gateway_registered`，Laysi/trustiot-v2#79；全平台事件，沒有租戶），以及憑證換發的 `events::certs::GatewayCertificateRenewed`（`certs.gateway_certificate_renewed`，Laysi/trustiot-v2#81；租戶事件，aggregate 是租戶與硬體 ID）與 `GatewayRenewalRefused`（`certs.gateway_renewal_refused`；全平台事件，已登錄的硬體 ID 每個時間窗一筆，帶被拒的次數與原因；Laysi/trustiot-v2#847 起不需要金鑰的原因另以一天的時間窗計，所以同一個硬體 ID 的兩筆時間窗可能重疊；分類只看 `reasons` 的鍵，之前的事件兩類混在一筆），以及停權的確認 `events::certs::TenantStateApplied`（`certs.tenant_state_applied`，Laysi/trustiot-v2#779；租戶事件，payload 只有 certs 已套用的租戶狀態版本 `state_version`，身分服務只保留較大的版本，由 Laysi/trustiot-v2#108 發出），以及閘道器綁定的 `events::assets::GatewayBound`（`assets.gateway_bound`，Laysi/trustiot-v2#101；綁定 ID 與硬體 ID，租戶在信封上，actor 是做綁定的平台管理員），以及設備的 `events::assets::DeviceCreated`、`DeviceUpdated`、`DeviceDeleted`（`assets.device_{created,updated,deleted}`，Laysi/trustiot-v2#100；建立與更新帶 `protocol::config::Device`，閘道器設定的格式；刪除只帶設備 ID、名稱、硬體 ID、型號 ID 與最後的版本；2026-10-29 起三個事件都多了選填的 `binding_id`，設備所屬的綁定，Laysi/trustiot-v2#719） |
 | `identity` | 內部身分標頭 `x-internal-identity`、claims `InternalClaims`、遮蔽內容的 `InternalToken` |
 | `client` | 內部 API 的 `Endpoint` 與有型別的 client `InternalClient<S>` |
-| `api` | 內部 API 本身，每個提供 API 的服務一個子模組；目前有 `api::identity::ExchangeToken`（身分服務的 token 交換，Laysi/trustiot-v2#106）與 `CreateRunDelegation`、`ExchangeRunDelegation`（agent run 的委派，Laysi/trustiot-v2#551），以及 telemetry-query 的 `api::telemetry_query::RunSql`（AI 寫的唯讀 SQL，Laysi/trustiot-v2#143：回應 `SqlResult`，拒絕是封閉的 `SqlRefusal` 類別，新版本的類別解碼成 `Unrecognized`） |
+| `api` | 內部 API 本身，每個提供 API 的服務一個子模組；目前有 `api::identity::ExchangeToken`（身分服務的 token 交換，Laysi/trustiot-v2#106）與 `CreateRunDelegation`、`ExchangeRunDelegation`（agent run 的委派，Laysi/trustiot-v2#551），以及 telemetry-query 的 `api::telemetry_query::RunSql`（AI 寫的唯讀 SQL，Laysi/trustiot-v2#143：回應 `SqlResult`，拒絕是封閉的 `SqlRefusal` 類別，新版本的類別解碼成 `Unrecognized`）；`api::dashboard` 是儀表板（Laysi/trustiot-v2#150）在 assistant、`dashboard-check` 與前端沙箱之間共用的型別，見下方「儀表板」 |
 | `certs` | certs 服務的用戶端 API：平台管理員簽發與撤銷工作站憑證的請求與回應（`IssueWorkstationCertificate`、`RevokeWorkstationCertificate`、`RevocationReason`、`WorkstationCertificate`，Laysi/trustiot-v2#534），以及生產工作站的出廠登錄（`RegisterGateway`、`GatewayRegistration`、工作站請求簽章的標頭名稱與 `workstation_signing_input`，Laysi/trustiot-v2#79）。經入口以 cookie 呼叫，不是內部 API；請求拒絕不認得的欄位，讓送出主體、延伸欄位或效期的用戶端立刻知道這些由 CA 決定。profile 與步驟見 [certs README](../../services/certs/README.md) 的「工作站憑證」與「出廠登錄」 |
 | `service` | `ServiceName` 與型別層級的服務標記（`service::Identity` 等） |
 | `openapi` | `SharedSchemas`：每個服務規格共用的 OpenAPI schema（M1 錯誤格式） |
 | `json` | 不含文件內容的 JSON 錯誤 `JsonError`：serde 的訊息會引用值，日誌不得含個資（M2） |
 
-測試：`cargo test -p contract`。OpenAPI 與事件的固定樣本在 `tests/fixtures/`。
+測試：`cargo test -p contract`。OpenAPI、事件與儀表板的固定樣本在 `tests/fixtures/`。
 
 ## 錯誤格式（M1）
 
@@ -156,11 +156,29 @@ client 每次失敗都記一筆日誌，欄位有 `peer`、`route`（路由樣�
 | 沒有 `act`、`act` 不是可以執行 SQL 的服務、沒有租戶 | 403 | `permission_denied` |
 | 租戶的帳號還沒建立 | 404 | `not_found` |
 | 本文不是這個請求、`max_rows` 超出範圍 | 400 | `invalid_request` |
-| 租戶的查詢額度暫時用完 | 429 | `rate_limited` |
+| 租戶的查詢額度暫時用完，或租戶在跑與在等的 SQL 檢查已達上限 | 429 | `rate_limited` |
 | 帳號不是服務建立的樣子、資料庫失敗 | 503 | `unavailable` |
 | 查詢超過帳號的時間上限 | 504 | `timeout` |
 
 拒絕的 `details` 是這個 API 的一部分，不只是錯誤訊息：呼叫端（助理）把它解碼成 `SqlRefusal`，再變成給模型的固定提示。所以 `class`、`SqlClause` 與 `QueryErrorKind` 都是封閉的清單，新版本增加的值在舊的呼叫端解碼成 `Unrecognized`；欄位只有數字、這個模組的固定名稱，或 SQL 裡通過識別字規則的名稱，從不帶 ClickHouse 的錯誤內文或 SQL 的其他部分。
+
+### 儀表板（`api::dashboard`）
+
+Laysi/trustiot-v2#150 的儀表板由三方共用這些型別：assistant（存版本、執行資料集、公開 API）、`dashboard-check`（發布前檢查）與 `frontend/sandbox`（runtime 與比對）。決定見 [AI 助理與 AI 閘道](../../docs/architecture/ai-assistant.md)「儀表板」，runtime、postMessage 協定、檢查規則與檢查流程見 [frontend/sandbox](../../frontend/sandbox/README.md)。
+
+| 子模組 | 內容 |
+| --- | --- |
+| `spec` | 一個版本的資料集（SQL，或原樣存下的 statistics／usage 請求）、計算與常數，以及不需要 I/O 的驗證：名稱、數量與大小上限（頁面 40 KiB、spec 加頁面 56 KiB、資料集 8 個、計算與常數各 32 個、每個資料集最多 2,000 列）、公式對得到資料集與欄位；`Spec::public` 是頁面與檢查看得到的部分，不含查詢 |
+| `names` | 名稱規則與參照（`c\|資料集\|欄\|列`、`f\|計算`、`k\|常數`、`m\|資料集\|欄位`、`t\|資料集\|欄\|刻度值`），每個參照只有一種寫法 |
+| `formula` | 計算語言的文法、解析、驗證與求值；前端以 TypeScript 實作同一個語言，兩邊跑同一份測試向量 |
+| `result` | 一次資料集執行的結果（欄位與型別、列、查詢時間與範圍），以及 statistics 與 usage 回應攤平成一張表的固定欄位 |
+| `public` | 公開 API（`/api/assistant/v1`）的請求與回應本文與 `dashboard.` message key；請求拒絕不認得的欄位，也沒有放 SQL 或頁面的欄位 |
+| `check` | assistant 呼叫 `dashboard-check` 的請求與判定：通過時回每個標記的值，不通過時回最多 20 個封閉類別的問題，每個類別有固定的英文提示 |
+| `sandbox` | 沙箱檔案的路徑與 response header（CSP、CORP 等），檢查服務與 `services/web`（Laysi/trustiot-v2#462）共用 |
+
+檢查 API 不經內部身分 token（檢查服務沒有金鑰也沒有 ServiceAccount token，只靠 mesh 的授權政策限定 assistant），所以只有型別與路徑常數，沒有 `Endpoint`，也不進 `api/openapi.json`。內部 API 的型別照「內部 API」的相容規則不拒絕不認得的欄位；模型與瀏覽器送來的 spec 與公開 API 的請求則拒絕。
+
+`tests/dashboard.rs` 由 Rust 型別寫出 `tests/fixtures/dashboard/` 的固定樣本（spec、各來源的結果、檢查請求、兩種判定），型別改了而樣本沒更新就失敗（`CONTRACT_UPDATE_FIXTURES=1` 重寫後檢查差異）；同一個目錄的 `formula-vectors.json` 與 `reference-vectors.json` 是手寫的共用測試向量。前端的 `frontend/sandbox/src/protocol.test.ts` 讀同一批檔案。
 
 ## 事件
 

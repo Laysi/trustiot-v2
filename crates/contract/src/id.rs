@@ -106,6 +106,11 @@ uuid_id!(
     DeviceId
 );
 uuid_id!(
+    /// A dashboard of the assistant (Laysi/trustiot-v2#150): a conversation's draft or a saved
+    /// one in the tenant's list; its versions are numbered within it.
+    DashboardId
+);
+uuid_id!(
     /// One binding of a gateway to a tenant (rebuild checklist D3, Laysi/trustiot-v2#101), made
     /// by the assets service. A gateway gets a new one every time it is bound, so a binding and
     /// its events always belong to one tenant.
